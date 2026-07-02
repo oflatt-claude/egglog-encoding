@@ -46,7 +46,9 @@ impl RuleBuilderOps for BridgeRuleBuilderOps<'_> {
         entries: &[QueryEntry],
         is_subsumed: Option<bool>,
     ) -> Result<()> {
-        self.inner.query_table(func, entries, is_subsumed).map(|_| ())
+        self.inner
+            .query_table(func, entries, is_subsumed)
+            .map(|_| ())
     }
 
     fn query_prim(
@@ -148,7 +150,7 @@ impl Backend for EGraph {
     }
 
     fn for_each_dyn(&self, table: FunctionId, f: &mut dyn for<'r> FnMut(ScanEntry<'r>)) {
-        EGraph::for_each(self, table, |e| f(e));
+        EGraph::for_each(self, table, f);
     }
 
     fn for_each_while_dyn(
@@ -156,7 +158,7 @@ impl Backend for EGraph {
         table: FunctionId,
         f: &mut dyn for<'r> FnMut(ScanEntry<'r>) -> bool,
     ) {
-        EGraph::for_each_while(self, table, |e| f(e));
+        EGraph::for_each_while(self, table, f);
     }
 
     fn get_canon_repr(&self, val: Value, ty: ColumnTy) -> Value {

@@ -5,7 +5,9 @@
 use egglog::EGraph;
 
 fn flowlog_egraph() -> EGraph {
-    EGraph::with_backend(Box::new(egglog_experimental_flowlog::EGraph::new_interpret()))
+    EGraph::with_backend(Box::new(
+        egglog_experimental_flowlog::EGraph::new_interpret(),
+    ))
 }
 
 #[test]

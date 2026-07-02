@@ -39,10 +39,10 @@ pub use egglog_add_primitive::add_primitive_with_validator;
 use egglog_ast::generic_ast::{Change, GenericExpr, Literal};
 use egglog_ast::span::Span;
 use egglog_ast::util::ListDisplay;
+use egglog_backend_trait::RuleBuilderOps;
 /// The pluggable backend interface. Re-exported so downstream crates can
 /// implement their own backend (see [`EGraph::with_backend`]).
 pub use egglog_backend_trait::{Backend, BackendExt};
-use egglog_backend_trait::RuleBuilderOps;
 use egglog_bridge::{ColumnTy, QueryEntry};
 use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
@@ -3001,7 +3001,9 @@ impl<'a> BackendRule<'a> {
                             self.rb.lookup(
                                 f,
                                 &args,
-                                Box::new(move || format!("{span}: lookup of function {name} failed")),
+                                Box::new(move || {
+                                    format!("{span}: lookup of function {name} failed")
+                                }),
                             )
                         }
                         ResolvedCall::Primitive(p) => {
@@ -3013,11 +3015,13 @@ impl<'a> BackendRule<'a> {
                                 p,
                                 &args,
                                 ty,
-                                Box::new(move || format!("{span}: call of primitive {name} failed")),
+                                Box::new(move || {
+                                    format!("{span}: call of primitive {name} failed")
+                                }),
                             )
                         }
                     };
-                    self.entries.insert(v, y.into());
+                    self.entries.insert(v, y);
                 }
                 core::GenericCoreAction::LetAtomTerm(span, v, x) => {
                     let v = core::GenericAtomTerm::Var(span.clone(), v.clone());
@@ -3041,9 +3045,7 @@ impl<'a> BackendRule<'a> {
                         let args = self.args(args);
                         match change {
                             Change::Delete => self.rb.remove(f, &args),
-                            Change::Subsume if can_subsume => {
-                                self.rb.subsume(f, &args).unwrap()
-                            }
+                            Change::Subsume if can_subsume => self.rb.subsume(f, &args).unwrap(),
                             Change::Subsume => {
                                 return Err(Error::SubsumeMergeError(name, span.clone()));
                             }

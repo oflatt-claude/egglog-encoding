@@ -104,7 +104,11 @@ pub trait Backend: Send + Sync {
 
     /// Iterate rows in `table`, stopping early when `f` returns `false`.
     /// Object-safe form; prefer the [`Backend::for_each_while`] sugar.
-    fn for_each_while_dyn(&self, table: FunctionId, f: &mut dyn for<'r> FnMut(ScanEntry<'r>) -> bool);
+    fn for_each_while_dyn(
+        &self,
+        table: FunctionId,
+        f: &mut dyn for<'r> FnMut(ScanEntry<'r>) -> bool,
+    );
 
     // -- direct access ------------------------------------------------------
 
@@ -293,7 +297,9 @@ impl<B: Backend + ?Sized> BackendExt for B {
         let mut f = Some(f);
         let mut out: Option<R> = None;
         let mutated = self.with_execution_state_tracked_dyn(&mut |es| {
-            let f = f.take().expect("with_execution_state_tracked closure called once");
+            let f = f
+                .take()
+                .expect("with_execution_state_tracked closure called once");
             out = Some(f(es));
         });
         (
@@ -377,8 +383,12 @@ pub trait RuleBuilderOps {
 
     /// RHS: look up `func(entries)` with the function's configured default on
     /// miss.
-    fn lookup(&mut self, func: FunctionId, entries: &[QueryEntry], panic_msg: PanicMsg)
-        -> QueryEntry;
+    fn lookup(
+        &mut self,
+        func: FunctionId,
+        entries: &[QueryEntry],
+        panic_msg: PanicMsg,
+    ) -> QueryEntry;
 
     /// RHS: subsume the row keyed by `entries` in `func`.
     fn subsume(&mut self, func: FunctionId, entries: &[QueryEntry]) -> Result<()>;

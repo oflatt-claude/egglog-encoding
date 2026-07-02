@@ -451,7 +451,10 @@ impl Backend for EGraph {
         let output_is_unit = config.schema.last().is_some_and(|t| match t {
             ColumnTy::Base(bv) => {
                 // `()` is pre-registered in `with_mode`, so this never panics.
-                *bv == self.db.base_values().get_ty_by_id(std::any::TypeId::of::<()>())
+                *bv == self
+                    .db
+                    .base_values()
+                    .get_ty_by_id(std::any::TypeId::of::<()>())
             }
             _ => false,
         });
