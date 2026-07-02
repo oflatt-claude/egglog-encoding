@@ -1,0 +1,45 @@
+# A FlowLog (differential-dataflow) backend for egglog, living OUTSIDE the
+# egglog crate — it depends only on the public `egglog-backend-trait` SPI plus
+# the neutral `egglog-core-relations`. This is the worked example that a third
+# party can implement their own egglog backend against the `Backend` trait.
+#
+# It is its own workspace (empty `[workspace]` table below) so its heavy,
+# edition-2021 differential-dataflow / timely / flowlog-rs dependency tree does
+# not leak into the edition-2024 egglog workspace.
+[package]
+name = "egglog-experimental-flowlog"
+version = "0.1.0"
+edition = "2021"
+description = "A FlowLog (differential-dataflow)-backed egglog Backend, as an out-of-tree example of the egglog-backend-trait SPI."
+license = "MIT"
+publish = false
+
+[workspace]
+
+[dependencies]
+anyhow = "1"
+egglog-backend-trait = { path = "../../egglog/egglog-backend-trait" }
+egglog-core-relations = { path = "../../egglog/core-relations" }
+egglog-numeric-id = { path = "../../egglog/numeric-id" }
+hashbrown = "0.16"
+log = "0.4"
+dyn-clone = "1.0.17"
+# flowlog-runtime: the generated incremental engine's string interning / txn
+# state / differential-dataflow re-exports. Pinned git rev (reproducible).
+flowlog-runtime = { git = "https://github.com/flowlog-rs/flowlog", rev = "fb0eeb1e9989a24478459a2bfbe3192d8475eb7d" }
+# Raw differential-dataflow + timely, used in-process by `dd_native.rs`.
+differential-dataflow = "=0.24.0"
+timely = "=0.30.0"
+# `--wcoj` worst-case-optimal join operators: vendored + one-line-patched
+# `differential-dogs3` (pins the SAME dd 0.24.0 / timely 0.30.0).
+differential-dogs3 = { path = "vendor/differential-dogs3" }
+serde = { version = "1", features = ["derive", "rc"] }
+
+[build-dependencies]
+# Compiles the bundled `transitive_step.dl` into a Rust module at build time.
+flowlog-build = { git = "https://github.com/flowlog-rs/flowlog", rev = "fb0eeb1e9989a24478459a2bfbe3192d8475eb7d" }
+
+[dev-dependencies]
+# The frontend, so the integration test can run real `.egg` files on the
+# FlowLog backend via `egglog::EGraph::with_backend(..)`.
+egglog = { path = "../../egglog", default-features = false }
