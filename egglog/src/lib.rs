@@ -39,6 +39,10 @@ pub use egglog_add_primitive::add_primitive_with_validator;
 use egglog_ast::generic_ast::{Change, GenericExpr, Literal};
 use egglog_ast::span::Span;
 use egglog_ast::util::ListDisplay;
+/// The pluggable backend interface. Re-exported so downstream crates can
+/// implement their own backend (see [`EGraph::with_backend`]).
+pub use egglog_backend_trait::{Backend, BackendExt};
+use egglog_backend_trait::RuleBuilderOps;
 use egglog_bridge::{ColumnTy, QueryEntry};
 use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
@@ -284,7 +288,7 @@ dyn_clone::clone_trait_object!(ExtensionStateValue);
 
 #[derive(Clone)]
 pub struct EGraph {
-    backend: egglog_bridge::EGraph,
+    backend: Box<dyn egglog_backend_trait::Backend>,
     pub parser: Parser,
     names: check_shadowing::Names,
     /// pushed_egraph forms a linked list of pushed egraphs.
@@ -395,10 +399,22 @@ impl Debug for Function {
 
 impl Default for EGraph {
     fn default() -> Self {
+        Self::with_backend(Box::new(egglog_bridge::EGraph::default()))
+    }
+}
+
+impl EGraph {
+    /// Construct an `EGraph` backed by the given [`Backend`] implementation.
+    ///
+    /// [`EGraph::default`] uses the in-memory reference backend
+    /// (`egglog_bridge::EGraph`); downstream crates can supply their own
+    /// backend (e.g. a differential-dataflow engine) by implementing
+    /// [`Backend`] and passing it here.
+    pub fn with_backend(backend: Box<dyn Backend>) -> Self {
         let mut parser = Parser::default();
         let proof_state = EncodingState::new(&mut parser.symbol_gen);
         let mut eg = Self {
-            backend: Default::default(),
+            backend,
             parser,
             names: Default::default(),
             pushed_egraph: Default::default(),
@@ -746,7 +762,7 @@ impl EGraph {
     ) -> Result<egglog_bridge::MergeFn, Error> {
         match expr {
             GenericExpr::Lit(_, literal) => {
-                let val = literal_to_value(&self.backend, literal);
+                let val = literal_to_value(self.backend.base_values(), literal);
                 Ok(egglog_bridge::MergeFn::Const(val))
             }
             GenericExpr::Var(span, resolved_var) => match resolved_var.name.as_str() {
@@ -776,17 +792,24 @@ impl EGraph {
                             "expected string literal after `unstable-fn`".into(),
                         ));
                     };
+                    let panic_id = self
+                        .backend
+                        .action_registry()
+                        .read()
+                        .unwrap()
+                        .default_panic_id();
+                    let bridge = self
+                        .backend
+                        .as_any()
+                        .downcast_ref::<egglog_bridge::EGraph>()
+                        .expect("`unstable-fn` is only supported on the reference bridge backend");
                     let resolved = resolve_function_container_target_with_context(
-                        &self.backend,
+                        bridge,
                         &self.functions,
                         &self.type_info,
                         name,
                         p,
-                        self.backend
-                            .action_registry()
-                            .read()
-                            .unwrap()
-                            .default_panic_id(),
+                        panic_id,
                     )?;
                     translated_args[0] =
                         egglog_bridge::MergeFn::Const(self.backend.base_values().get(resolved));
@@ -827,7 +850,7 @@ impl EGraph {
             schema: input
                 .iter()
                 .chain([&output])
-                .map(|sort| sort.column_ty(&self.backend))
+                .map(|sort| sort.column_ty(self.backend.base_values()))
                 .collect(),
             default: match decl.subtype {
                 FunctionSubtype::Constructor => DefaultVal::FreshId,
@@ -1614,8 +1637,13 @@ impl EGraph {
                         "unstable-fn over `{name}` was applied in a context where its wrapped \
                          function is not valid for this call site, if in a rule, add :naive."
                     ));
+                    let bridge = self
+                        .backend
+                        .as_any()
+                        .downcast_ref::<egglog_bridge::EGraph>()
+                        .expect("`unstable-fn` is only supported on the reference bridge backend");
                     let resolved_function = resolve_function_container_target_with_context(
-                        &self.backend,
+                        bridge,
                         &self.functions,
                         &self.type_info,
                         name,
@@ -1705,7 +1733,7 @@ impl EGraph {
             ext_id,
             &[arg],
             egglog_bridge::ColumnTy::Base(unit_id),
-            || "this function will never panic".to_string(),
+            Box::new(|| "this function will never panic".to_string()),
         );
 
         let id = translator.build();
@@ -1770,11 +1798,12 @@ impl EGraph {
             true, // global query: Read context (may read the DB)
         );
         translator.query(&query, true);
-        translator
-            .rb
-            .call_external_func(ext_id, &[], egglog_bridge::ColumnTy::Id, || {
-                "this function will never panic".to_string()
-            });
+        translator.rb.call_external_func(
+            ext_id,
+            &[],
+            egglog_bridge::ColumnTy::Id,
+            Box::new(|| "this function will never panic".to_string()),
+        );
         let id = translator.build();
         let run_result = self.backend.run_rules(&[id]);
         self.backend.free_rule(id);
@@ -2124,7 +2153,12 @@ impl EGraph {
 
         let num_facts = parsed_contents.len();
 
-        let table_action = egglog_bridge::TableAction::new(&self.backend, func.backend_id);
+        let bridge = self
+            .backend
+            .as_any()
+            .downcast_ref::<egglog_bridge::EGraph>()
+            .expect("loading facts from a file requires the reference bridge backend");
+        let table_action = egglog_bridge::TableAction::new(bridge, func.backend_id);
 
         if function_type.subtype != FunctionSubtype::Constructor {
             self.backend.with_execution_state(|es| {
@@ -2753,7 +2787,7 @@ fn resolve_function_container_target_with_context(
 }
 
 struct BackendRule<'a> {
-    rb: egglog_bridge::RuleBuilder<'a>,
+    rb: Box<dyn RuleBuilderOps + 'a>,
     entries: HashMap<core::ResolvedAtomTerm, QueryEntry>,
     functions: &'a IndexMap<String, Function>,
     type_info: &'a TypeInfo,
@@ -2766,7 +2800,7 @@ struct BackendRule<'a> {
 
 impl<'a> BackendRule<'a> {
     fn new(
-        rb: egglog_bridge::RuleBuilder<'a>,
+        rb: Box<dyn RuleBuilderOps + 'a>,
         functions: &'a IndexMap<String, Function>,
         type_info: &'a TypeInfo,
         requires_read_context: bool,
@@ -2811,10 +2845,11 @@ impl<'a> BackendRule<'a> {
         self.entries
             .entry(x.clone())
             .or_insert_with(|| match x {
-                core::GenericAtomTerm::Var(_, v) => self
-                    .rb
-                    .new_var_named(v.sort.column_ty(self.rb.egraph()), &v.name),
-                core::GenericAtomTerm::Literal(_, l) => literal_to_entry(self.rb.egraph(), l),
+                core::GenericAtomTerm::Var(_, v) => {
+                    let ty = v.sort.column_ty(self.rb.base_values());
+                    self.rb.new_var_named(ty, &v.name)
+                }
+                core::GenericAtomTerm::Literal(_, l) => literal_to_entry(self.rb.base_values(), l),
                 core::GenericAtomTerm::Global(..) => {
                     panic!("Globals should have been desugared")
                 }
@@ -2852,8 +2887,13 @@ impl<'a> BackendRule<'a> {
                 "unstable-fn over `{name}` was applied in a context where its wrapped \
                  function is not valid for this call site, if in a rule, add :naive."
             ));
+            let bridge = self
+                .rb
+                .backend_any()
+                .and_then(|a| a.downcast_ref::<egglog_bridge::EGraph>())
+                .expect("`unstable-fn` is only supported on the reference bridge backend");
             let resolved = resolve_function_container_target_with_context(
-                self.rb.egraph(),
+                bridge,
                 self.functions,
                 self.type_info,
                 name,
@@ -2862,14 +2902,11 @@ impl<'a> BackendRule<'a> {
             )
             .unwrap_or_else(|err| panic!("{err}"));
 
-            qe_args[0] = self.rb.egraph().base_value_constant(resolved);
+            qe_args[0] = base_constant(self.rb.base_values(), resolved);
         }
 
-        (
-            resolved_id,
-            qe_args,
-            prim.output().column_ty(self.rb.egraph()),
-        )
+        let output_ty = prim.output().column_ty(self.rb.base_values());
+        (resolved_id, qe_args, output_ty)
     }
 
     fn args<'b>(
@@ -2919,7 +2956,7 @@ impl<'a> BackendRule<'a> {
                         true => None,
                         false => Some(false),
                     };
-                    atom_ids.push(self.rb.query_table(f, &args, is_subsumed).unwrap());
+                    atom_ids.push(self.rb.query_table_branch(f, &args, is_subsumed).unwrap());
                 }
                 ResolvedCall::Primitive(p) => {
                     return Err(Error::BackendError(format!(
@@ -2961,18 +2998,23 @@ impl<'a> BackendRule<'a> {
                             let f = self.func(f);
                             let args = self.args(args);
                             let span = span.clone();
-                            self.rb.lookup(f, &args, move || {
-                                format!("{span}: lookup of function {name} failed")
-                            })
+                            self.rb.lookup(
+                                f,
+                                &args,
+                                Box::new(move || format!("{span}: lookup of function {name} failed")),
+                            )
                         }
                         ResolvedCall::Primitive(p) => {
                             let name = p.name().to_owned();
                             let ctx = self.action_context();
                             let (p, args, ty) = self.prim(p, args, ctx);
                             let span = span.clone();
-                            self.rb.call_external_func(p, &args, ty, move || {
-                                format!("{span}: call of primitive {name} failed")
-                            })
+                            self.rb.call_external_func(
+                                p,
+                                &args,
+                                ty,
+                                Box::new(move || format!("{span}: call of primitive {name} failed")),
+                            )
                         }
                     };
                     self.entries.insert(v, y.into());
@@ -2999,7 +3041,9 @@ impl<'a> BackendRule<'a> {
                         let args = self.args(args);
                         match change {
                             Change::Delete => self.rb.remove(f, &args),
-                            Change::Subsume if can_subsume => self.rb.subsume(f, &args),
+                            Change::Subsume if can_subsume => {
+                                self.rb.subsume(f, &args).unwrap()
+                            }
                             Change::Subsume => {
                                 return Err(Error::SubsumeMergeError(name, span.clone()));
                             }
@@ -3018,7 +3062,9 @@ impl<'a> BackendRule<'a> {
     }
 
     fn build(self) -> egglog_bridge::RuleId {
-        self.rb.build()
+        self.rb
+            .build()
+            .unwrap_or_else(|err| panic!("rule build failed: {err}"))
     }
 }
 
@@ -3085,23 +3131,32 @@ fn common_branch_vars(branches: &[Vec<ast::ResolvedFact>]) -> Vec<ResolvedVar> {
     common.into_values().collect()
 }
 
-fn literal_to_entry(egraph: &egglog_bridge::EGraph, l: &Literal) -> QueryEntry {
-    match l {
-        Literal::Int(x) => egraph.base_value_constant::<i64>(*x),
-        Literal::Float(x) => egraph.base_value_constant::<sort::F>(x.into()),
-        Literal::String(x) => egraph.base_value_constant::<sort::S>(sort::S::new(x.clone())),
-        Literal::Bool(x) => egraph.base_value_constant::<bool>(*x),
-        Literal::Unit => egraph.base_value_constant::<()>(()),
+/// Build a [`QueryEntry`] constant for a typed base value, given the backend's
+/// [`BaseValues`] registry.
+fn base_constant<T: core_relations::BaseValue>(base_values: &BaseValues, x: T) -> QueryEntry {
+    QueryEntry::Const {
+        val: base_values.get(x),
+        ty: ColumnTy::Base(base_values.get_ty::<T>()),
     }
 }
 
-fn literal_to_value(egraph: &egglog_bridge::EGraph, l: &Literal) -> Value {
+fn literal_to_entry(base_values: &BaseValues, l: &Literal) -> QueryEntry {
     match l {
-        Literal::Int(x) => egraph.base_values().get::<i64>(*x),
-        Literal::Float(x) => egraph.base_values().get::<sort::F>(x.into()),
-        Literal::String(x) => egraph.base_values().get::<sort::S>(sort::S::new(x.clone())),
-        Literal::Bool(x) => egraph.base_values().get::<bool>(*x),
-        Literal::Unit => egraph.base_values().get::<()>(()),
+        Literal::Int(x) => base_constant::<i64>(base_values, *x),
+        Literal::Float(x) => base_constant::<sort::F>(base_values, x.into()),
+        Literal::String(x) => base_constant::<sort::S>(base_values, sort::S::new(x.clone())),
+        Literal::Bool(x) => base_constant::<bool>(base_values, *x),
+        Literal::Unit => base_constant::<()>(base_values, ()),
+    }
+}
+
+fn literal_to_value(base_values: &BaseValues, l: &Literal) -> Value {
+    match l {
+        Literal::Int(x) => base_values.get::<i64>(*x),
+        Literal::Float(x) => base_values.get::<sort::F>(x.into()),
+        Literal::String(x) => base_values.get::<sort::S>(sort::S::new(x.clone())),
+        Literal::Bool(x) => base_values.get::<bool>(*x),
+        Literal::Unit => base_values.get::<()>(()),
     }
 }
 

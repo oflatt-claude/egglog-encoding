@@ -1,5 +1,6 @@
 use crate::ast::FunctionSubtype;
 use crate::termdag::{TermDag, TermId};
+use egglog_backend_trait::BackendExt;
 use crate::util::{HashMap, HashSet};
 use crate::{ArcSort, EGraph, Value};
 

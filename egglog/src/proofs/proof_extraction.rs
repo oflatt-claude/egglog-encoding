@@ -1,5 +1,6 @@
 use crate::ast::FunctionSubtype;
 use crate::proofs::proof_encoding::ProofInstrumentor;
+use egglog_backend_trait::BackendExt;
 use crate::proofs::proof_extractor::extract_root;
 use crate::proofs::proof_format::{Justification, ProofId, ProofStore, proof_store_from_term};
 use crate::{RawValues, Read, ResolvedCall, TermDag};
