@@ -9,6 +9,7 @@
 
 use egglog::{
     ArcSort, CommandOutput, EGraph, Error, TermDag, TermId, TypeError, UserDefinedCommand, Value,
+    Write,
     ast::Expr,
     extract::{Extractor, TreeAdditiveCostModel},
     sort::S,
@@ -45,7 +46,7 @@ impl UserDefinedCommand for KeepBestCommand {
 
         // Step 4: re-insert the optimal tuples. Evaluate each extracted term
         // via eval_expr so that constructor sub-terms are re-created bottom-up,
-        // then stage all target-table inserts in one with_full_state call.
+        // then stage all target-table inserts in one update call.
         let mut rows_to_insert: Vec<(String, Vec<Value>)> = Vec::new();
         for (table_name, extracted_rows, termdag) in &extracted {
             for term_ids in extracted_rows {
@@ -54,11 +55,24 @@ impl UserDefinedCommand for KeepBestCommand {
             }
         }
 
-        egraph.with_full_state(|mut state| {
+        egraph.update(|mut state| {
             for (table_name, values) in &rows_to_insert {
-                egglog::Write::insert(&mut state, table_name, values.iter().copied());
+                let (output, inputs) = values
+                    .split_last()
+                    .expect("keep-best: table row has at least an output column");
+                // Function tables set the output at the key; constructor and
+                // relation tables mint the enode and union it with the output.
+                match state.set(table_name, egglog::RawValues(inputs.to_vec()), *output) {
+                    Ok(()) => {}
+                    Err(Error::ApiError(egglog::ApiError::WrongSubtype { .. })) => {
+                        let eclass = state.add(table_name, egglog::RawValues(inputs.to_vec()))?;
+                        state.union(eclass, *output)?;
+                    }
+                    Err(e) => return Err(e),
+                }
             }
-        });
+            Ok(())
+        })?;
 
         Ok(vec![])
     }
@@ -89,8 +103,8 @@ fn collect_and_extract(
             .collect();
 
         let mut raw_rows: Vec<Vec<Value>> = Vec::new();
-        egraph.function_for_each(table_name, |row| {
-            raw_rows.push(row.vals.to_vec());
+        crate::for_each_full_row(egraph, table_name, |vals| {
+            raw_rows.push(vals.to_vec());
         })?;
 
         let extractor = Extractor::compute_costs_from_rootsorts(

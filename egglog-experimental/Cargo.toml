@@ -17,9 +17,11 @@ default = ["bin"]
 bin = ["egglog/bin"]
 
 [dependencies]
-egglog = { git = "https://github.com/egraphs-good/egglog.git", rev = "5294cdc66a7b90a9a1480cb2d930f2ee5785c8dd", default-features = false }
-egglog-ast = { git = "https://github.com/egraphs-good/egglog.git", rev = "5294cdc66a7b90a9a1480cb2d930f2ee5785c8dd", default-features = false }
-egglog-reports = { git = "https://github.com/egraphs-good/egglog.git", rev = "5294cdc66a7b90a9a1480cb2d930f2ee5785c8dd", default-features = false }
+# Point at the LOCAL egglog fork (../egglog) so experimental tracks this repo's
+# egglog (including the Backend-trait work), per the monorepo's intent.
+egglog = { path = "../egglog", default-features = false }
+egglog-ast = { path = "../egglog/egglog-ast", default-features = false }
+egglog-reports = { path = "../egglog/egglog-reports", default-features = false }
 
 num = "0.4.3"
 lazy_static = "1.4"

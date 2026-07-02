@@ -107,6 +107,30 @@ pub fn new_experimental_egraph() -> EGraph {
     egraph
 }
 
+/// Iterate over every row of a table, passing each full row (input columns
+/// followed by the output column) to `f`. Works for function, constructor,
+/// and relation tables.
+pub(crate) fn for_each_full_row(
+    egraph: &EGraph,
+    name: &str,
+    mut f: impl FnMut(&[Value]),
+) -> Result<(), Error> {
+    match egraph.function_entries(name, |e: FunctionEntry<'_>| {
+        let mut row: Vec<Value> = e.inputs.to_vec();
+        row.push(e.output);
+        f(&row);
+    }) {
+        Err(Error::ApiError(ApiError::WrongSubtype { .. })) => {
+            egraph.constructor_enodes(name, |e: Enode<'_>| {
+                let mut row: Vec<Value> = e.children.to_vec();
+                row.push(e.eclass);
+                f(&row);
+            })
+        }
+        other => other,
+    }
+}
+
 // Create a parser with experimental macros
 pub fn experimental_parser() -> Parser {
     let mut parser = Parser::default();
