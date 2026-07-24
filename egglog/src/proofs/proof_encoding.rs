@@ -1527,6 +1527,14 @@ impl<'a> ProofInstrumentor<'a> {
                 } else {
                     Some((self.uf_name(name), None))
                 };
+                // Non-container eq-sorts get an auxiliary union-find (declared by
+                // `declare_sort`). Record it via `:internal-aux-uf` so a re-parse
+                // restores `aux_uf_parent` for extraction's `find_canonical`.
+                let aux_uf = if is_container {
+                    None
+                } else {
+                    Some(self.aux_uf_name(name))
+                };
                 // Every sort (containers included) records its `<Sort>Proof`
                 // table via `:internal-proof-func` so container rebuild can
                 // recover the per-container proof tables without a per-container
@@ -1561,6 +1569,7 @@ impl<'a> ProofInstrumentor<'a> {
                     presort_and_args: presort_and_args.clone(),
                     uf: uf_name,
                     proof_func,
+                    aux_uf,
                     unionable: *unionable,
                     container_rebuild,
                     // The Proof sort (which carries :internal-proof-names) is

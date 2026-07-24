@@ -518,6 +518,7 @@ impl EGraph {
                 presort_and_args,
                 uf,
                 proof_func,
+                aux_uf,
                 container_rebuild,
                 proof_constructors,
                 unionable,
@@ -542,6 +543,11 @@ impl EGraph {
                     self.proof_state
                         .proof_func_parent
                         .insert(name.clone(), pf.clone());
+                }
+                if let Some(aux) = aux_uf {
+                    self.proof_state
+                        .aux_uf_parent
+                        .insert(name.clone(), aux.clone());
                 }
                 // The Proof sort records the global proof constructors; restore
                 // them into proof_state so container rebuild can recover them
@@ -568,6 +574,7 @@ impl EGraph {
                     presort_and_args: presort_and_args.clone(),
                     uf: uf.clone(),
                     proof_func: proof_func.clone(),
+                    aux_uf: aux_uf.clone(),
                     container_rebuild: container_rebuild.clone(),
                     proof_constructors: proof_constructors.clone(),
                     unionable: *unionable,

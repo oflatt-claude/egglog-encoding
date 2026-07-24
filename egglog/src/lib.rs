@@ -1997,6 +1997,7 @@ impl EGraph {
                 name,
                 uf,
                 proof_func,
+                aux_uf,
                 proof_constructors,
                 ..
             } => {
@@ -2005,6 +2006,13 @@ impl EGraph {
                     self.proof_state
                         .uf_parent
                         .insert(name.clone(), uf_ctor.clone());
+                }
+                // Restore the auxiliary union-find so extraction's `find_canonical`
+                // can resolve hash-consed ids that lost a same-iteration collision.
+                if let Some(aux) = aux_uf {
+                    self.proof_state
+                        .aux_uf_parent
+                        .insert(name.clone(), aux.clone());
                 }
                 // If the sort has a :internal-proof-func field, store the mapping for proof lookup.
                 // This annotation is set by proof instrumentation and consumed here.

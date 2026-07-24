@@ -428,11 +428,11 @@ impl ProofInstrumentor<'_> {
 
         format!(
             "
-(sort {proof_list_sort})
-(sort {ast_sort}) ;; wrap sorts in this for proofs
+(sort {proof_list_sort} :internal-aux-uf {aux_list})
+(sort {ast_sort} :internal-aux-uf {aux_ast}) ;; wrap sorts in this for proofs
 ;; The proof datatype records the global proof constructor names so container
 ;; rebuild can recover them on re-parse (see ContainerRebuildSpec).
-(sort {proof_datatype} :internal-proof-names {congr_constructor} {congr_all_constructor} {eq_trans_constructor} {eq_sym_constructor} {container_normalize_constructor} {fiat_constructor})
+(sort {proof_datatype} :internal-proof-names {congr_constructor} {congr_all_constructor} {eq_trans_constructor} {eq_sym_constructor} {container_normalize_constructor} {fiat_constructor} :internal-aux-uf {aux_proof})
 
 ;; Auxiliary union-finds for the proof/AST/proof-list id sorts: a hash-consed
 ;; node table's `:merge` records same-iteration duplicate ids here.
