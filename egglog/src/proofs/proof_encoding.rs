@@ -82,15 +82,29 @@ impl EncodingState {
 /// Thin wrapper around an [`EGraph`] for the term encoding
 pub(crate) struct ProofInstrumentor<'a> {
     pub(crate) egraph: &'a mut EGraph,
+    /// Within a single instrumented action block, maps a subterm (by its printed
+    /// form) to the local variable already built for it. A top-level action's
+    /// minted temporaries now run as one immediate local-scope block with no
+    /// merge between statements, so a repeated subterm's second `set-if-empty`
+    /// would not see the first's (unmerged) insert and would mint a duplicate;
+    /// reusing the first build keeps structural dedup. Reset at each block.
+    subterm_memo: HashMap<String, String>,
 }
 
 impl<'a> ProofInstrumentor<'a> {
+    pub(crate) fn new(egraph: &'a mut EGraph) -> Self {
+        Self {
+            egraph,
+            subterm_memo: HashMap::default(),
+        }
+    }
+
     /// Make a term state and use it to instrument the code.
     pub(crate) fn add_term_encoding(
         egraph: &'a mut EGraph,
         program: Vec<ResolvedNCommand>,
     ) -> Result<Vec<Command>, Error> {
-        Self { egraph }.add_term_encoding_helper(program)
+        Self::new(egraph).add_term_encoding_helper(program)
     }
 
     pub(crate) fn lower_inputs(
@@ -1168,11 +1182,19 @@ impl<'a> ProofInstrumentor<'a> {
             ResolvedExpr::Lit(_, lit) => format!("{lit}"),
             ResolvedExpr::Var(_, resolved_var) => resolved_var.name.clone(),
             ResolvedExpr::Call(_, resolved_call, args) => {
+                // Reuse an identical subterm already built in this block (see
+                // `subterm_memo`): the block runs with no merge between statements,
+                // so a repeated subterm's second `set-if-empty` would not dedup
+                // against the first's (unmerged) insert and would mint a duplicate.
+                let memo_key = expr.to_string();
+                if let Some(cached) = self.subterm_memo.get(&memo_key) {
+                    return cached.clone();
+                }
                 let args = args
                     .iter()
                     .map(|arg| self.instrument_action_expr(arg, res, proof, nat_conn))
                     .collect::<Vec<_>>();
-                match resolved_call {
+                let built = match resolved_call {
                     ResolvedCall::Func(func_type) => {
                         if func_type.subtype == FunctionSubtype::Custom {
                             // Proof normal form bans looking up custom functions in
@@ -1181,17 +1203,18 @@ impl<'a> ProofInstrumentor<'a> {
                             // FD view (see `lookup_global`). This is the only custom
                             // lookup allowed here.
                             if self.egraph.type_info.is_global(&func_type.name) {
-                                return self.lookup_global(&func_type.name, res);
+                                self.lookup_global(&func_type.name, res)
+                            } else {
+                                panic!(
+                                    "Found a function lookup in actions, should have been prevented by typechecking"
+                                )
                             }
-                            panic!(
-                                "Found a function lookup in actions, should have been prevented by typechecking"
-                            );
+                        } else {
+                            let (add_code, fv) =
+                                self.add_term_and_view(func_type, &args, proof, nat_conn);
+                            res.extend(add_code);
+                            fv
                         }
-                        let (add_code, fv) =
-                            self.add_term_and_view(func_type, &args, proof, nat_conn);
-                        res.extend(add_code);
-
-                        fv
                     }
                     ResolvedCall::Primitive(specialized_primitive) => {
                         let prim_name = specialized_primitive.name().to_string();
@@ -1235,7 +1258,9 @@ impl<'a> ProofInstrumentor<'a> {
                     ResolvedCall::Values(_) => {
                         panic!("tuple-output (`values`) functions are not supported in proofs")
                     }
-                }
+                };
+                self.subterm_memo.insert(memo_key, built.clone());
+                built
             }
         }
     }
@@ -1436,6 +1461,9 @@ impl<'a> ProofInstrumentor<'a> {
         res: &mut Vec<Command>,
     ) -> Result<(), Error> {
         log::trace!("Term encoding for {command}");
+        // Each command's instrumentation is one action block; start it with an
+        // empty subterm memo so dedup never reuses a variable from another block.
+        self.subterm_memo.clear();
         match &command {
             ResolvedNCommand::Sort {
                 span,
@@ -1510,7 +1538,17 @@ impl<'a> ProofInstrumentor<'a> {
                 let instrumented = self
                     .instrument_action(action, &Justification::Fiat, &mut nat_conn)
                     .join("\n");
-                res.extend(self.parse_program(&instrumented));
+                // Run the minted temporaries as one immediate local-scope action
+                // block instead of a sequence of top-level `let`s: `remove_globals`
+                // would otherwise turn every minted `let` into its own function
+                // table (see the local-action grouping in `parse_program_as_actions`).
+                res.extend(self.parse_program_as_local_actions(&instrumented));
+            }
+            // The encoder only ever receives the source program, which never
+            // contains a `CoreActions` block (that variant is produced here); pass
+            // any through unchanged.
+            ResolvedNCommand::CoreActions(_) => {
+                res.push(command.to_command().make_unresolved());
             }
             ResolvedNCommand::Check(span, facts) => {
                 let (instrumented, _lookups, _proof) = self.instrument_facts(facts);

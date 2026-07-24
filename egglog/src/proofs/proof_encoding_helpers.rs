@@ -123,6 +123,36 @@ impl ProofInstrumentor<'_> {
         res.unwrap()
     }
 
+    /// Like [`Self::parse_program`], but groups each maximal run of consecutive
+    /// top-level actions into a single [`Command::Actions`] block. Those blocks
+    /// run once with a shared local scope, so their minted `let` temporaries stay
+    /// local instead of each becoming a global function table under
+    /// `remove_globals`. Non-action commands are passed through in place, so any
+    /// ordering against surrounding declarations is preserved.
+    pub(crate) fn parse_program_as_local_actions(&mut self, input: &str) -> Vec<Command> {
+        use crate::ast::GenericActions;
+        let mut out: Vec<Command> = vec![];
+        let mut pending: Vec<crate::ast::Action> = vec![];
+        let flush = |pending: &mut Vec<crate::ast::Action>, out: &mut Vec<Command>| {
+            if !pending.is_empty() {
+                out.push(Command::Actions(GenericActions::new(std::mem::take(
+                    pending,
+                ))));
+            }
+        };
+        for command in self.parse_program(input) {
+            match command {
+                Command::Action(action) => pending.push(action),
+                other => {
+                    flush(&mut pending, &mut out);
+                    out.push(other);
+                }
+            }
+        }
+        flush(&mut pending, &mut out);
+        out
+    }
+
     /// Build a proof list (`pnil`, then `pcons` folds) by minting a fresh id
     /// per node and asserting the row, emitting the mints onto `stmts` and
     /// returning the final list's var.

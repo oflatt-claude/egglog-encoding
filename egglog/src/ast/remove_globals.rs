@@ -129,6 +129,14 @@ impl GlobalRemover<'_> {
                 }
                 _ => vec![GenericNCommand::CoreAction(remove_globals_action(action))],
             },
+            // A local-scope action block: rewrite references to real globals, but
+            // leave the block's own `let`s as local bindings (do not hoist them to
+            // functions the way top-level lets are hoisted above).
+            GenericNCommand::CoreActions(actions) => {
+                vec![GenericNCommand::CoreActions(
+                    actions.visit_actions(&mut remove_globals_action),
+                )]
+            }
             GenericNCommand::NormRule { rule } => {
                 // A map from the global variables in actions to their new names
                 // in the query.

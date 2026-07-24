@@ -117,6 +117,11 @@ where
         rule: GenericRule<Head, Leaf>,
     },
     CoreAction(GenericAction<Head, Leaf>),
+    /// A block of actions run once, immediately, with a shared *local* scope:
+    /// `let`s bind local variables (slots) rather than global functions. Used by
+    /// the term/proof encoding for a top-level action's minted temporaries so
+    /// they do not each become their own table.
+    CoreActions(GenericActions<Head, Leaf>),
     Extract(Span, GenericExpr<Head, Leaf>, GenericExpr<Head, Leaf>),
     RunSchedule(GenericSchedule<Head, Leaf>),
     PrintOverallStatistics(Span, Option<String>),
@@ -212,6 +217,7 @@ where
                 GenericCommand::PrintOverallStatistics(span.clone(), file.clone())
             }
             GenericNCommand::CoreAction(action) => GenericCommand::Action(action.clone()),
+            GenericNCommand::CoreActions(actions) => GenericCommand::Actions(actions.clone()),
             GenericNCommand::Extract(span, expr, variants) => {
                 GenericCommand::Extract(span.clone(), expr.clone(), variants.clone())
             }
@@ -274,6 +280,7 @@ where
             | GenericNCommand::AddRuleset(..)
             | GenericNCommand::UnstableCombinedRuleset(..)
             | GenericNCommand::CoreAction(..)
+            | GenericNCommand::CoreActions(..)
             | GenericNCommand::Extract(..)
             | GenericNCommand::PrintOverallStatistics(..)
             | GenericNCommand::PrintFunction(..)
@@ -328,6 +335,9 @@ where
             }
             GenericNCommand::CoreAction(action) => {
                 GenericNCommand::CoreAction(action.visit_exprs(f))
+            }
+            GenericNCommand::CoreActions(actions) => {
+                GenericNCommand::CoreActions(actions.visit_exprs(f))
             }
             GenericNCommand::Extract(span, expr, variants) => {
                 GenericNCommand::Extract(span, expr.visit_exprs(f), variants.visit_exprs(f))
@@ -917,6 +927,9 @@ where
     /// (let xplusone (Add (Var "x") (Num 1)))
     /// ```
     Action(GenericAction<Head, Leaf>),
+    /// A block of actions run once with a shared local scope (see
+    /// [`GenericNCommand::CoreActions`]).
+    Actions(GenericActions<Head, Leaf>),
     /// `extract` a datatype from the egraph, choosing
     /// the smallest representative.
     /// By default, each constructor costs 1 to extract
@@ -1037,6 +1050,12 @@ where
                 write!(f, "(datatype {name} {})", ListDisplay(variants, " "))
             }
             GenericCommand::Action(a) => write!(f, "{a}"),
+            GenericCommand::Actions(actions) => {
+                for a in &actions.0 {
+                    writeln!(f, "{a}")?;
+                }
+                Ok(())
+            }
             GenericCommand::Extract(_span, expr, variants) => {
                 write!(f, "(extract {expr} {variants})")
             }
@@ -2008,6 +2027,7 @@ where
                 GenericCommand::BiRewrite(fun(name), rewrite)
             }
             GenericCommand::Action(action) => GenericCommand::Action(action),
+            GenericCommand::Actions(actions) => GenericCommand::Actions(actions),
             GenericCommand::Extract(span, expr, variants) => {
                 GenericCommand::Extract(span, expr, variants)
             }
@@ -2113,6 +2133,7 @@ where
                 },
             ),
             GenericCommand::Action(action) => GenericCommand::Action(action.visit_exprs(f)),
+            GenericCommand::Actions(actions) => GenericCommand::Actions(actions.visit_exprs(f)),
             GenericCommand::Extract(span, expr1, expr2) => {
                 GenericCommand::Extract(span, expr1.visit_exprs(f), expr2.visit_exprs(f))
             }
@@ -2248,6 +2269,9 @@ where
             GenericCommand::Action(action) => {
                 GenericCommand::Action(action.map_symbols(head, leaf))
             }
+            GenericCommand::Actions(actions) => {
+                GenericCommand::Actions(actions.map_symbols(head, leaf))
+            }
             GenericCommand::Extract(span, expr, variants) => GenericCommand::Extract(
                 span,
                 expr.map_symbols(head, leaf),
@@ -2322,6 +2346,7 @@ where
                 rule: rule.visit_actions(f),
             },
             GenericCommand::Action(action) => GenericCommand::Action(f(action)),
+            GenericCommand::Actions(actions) => GenericCommand::Actions(actions.visit_actions(f)),
             GenericCommand::Fail(span, cmds) => GenericCommand::Fail(
                 span,
                 cmds.into_iter()

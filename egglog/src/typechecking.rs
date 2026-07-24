@@ -587,6 +587,14 @@ impl EGraph {
                     Context::Full,
                 )?)
             }
+            NCommand::CoreActions(actions) => {
+                ResolvedNCommand::CoreActions(self.type_info.typecheck_standalone_actions(
+                    symbol_gen,
+                    actions,
+                    &Default::default(),
+                    Context::Full,
+                )?)
+            }
             NCommand::Extract(span, expr, variants) => {
                 // A tuple-output function returns more than one value, so it can't be extracted as a
                 // single term; surface a clear error instead of a confusing arity mismatch.

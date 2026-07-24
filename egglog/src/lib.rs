@@ -2081,6 +2081,12 @@ impl EGraph {
                     self.eval_actions(&ResolvedActions::new(vec![action.clone()]))?;
                 }
             },
+            // A local-scope action block: run all actions once, immediately, in a
+            // single `eval_actions` call so their `let`s stay local (no per-temporary
+            // global tables).
+            ResolvedNCommand::CoreActions(actions) => {
+                self.eval_actions(&actions)?;
+            }
             ResolvedNCommand::Extract(span, expr, variants) => {
                 let sort = expr.output_type();
 
@@ -2240,7 +2246,7 @@ impl EGraph {
             }
 
             ResolvedNCommand::ProveExists(span, resolved_call) => {
-                let mut instrument = ProofInstrumentor { egraph: self };
+                let mut instrument = ProofInstrumentor::new(self);
                 let (proof_store, proof_id) =
                     instrument
                         .prove_exists(&resolved_call)
