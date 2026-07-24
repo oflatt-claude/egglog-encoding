@@ -149,6 +149,17 @@ impl<'a> ProofInstrumentor<'a> {
         }
     }
 
+    /// The natural (as-built) id of `key`: `key`'s [`NatEntry::natural`] if it was
+    /// a canonicalized constructor term, otherwise `key` itself (leaves and body
+    /// matches have no entry). Used to pin an edge proof to the enode the rule
+    /// built rather than the deduped e-class, whose AST may float.
+    fn natural_of(nat_conn: &NatConn, key: &str) -> String {
+        nat_conn
+            .get(key)
+            .map(|e| e.natural.clone())
+            .unwrap_or_else(|| key.to_string())
+    }
+
     /// Mark two things as equal, adding proof if proofs are enabled.
     /// Emits any proof-relation mints onto `stmts` and returns the `(set @UF ...)`
     /// action, which the caller must emit after `stmts`.
@@ -199,13 +210,8 @@ impl<'a> ProofInstrumentor<'a> {
         // the *natural* forms (ASTs pinned to the enode the rule built), then route
         // each deduped e-class to a shared natural form and orient the edge to
         // `larger = smaller` with proof-of-max/min.
-        let nat_of = |info: &Option<NatEntry>, dedup: &str| {
-            info.as_ref()
-                .map(|e| e.natural.clone())
-                .unwrap_or_else(|| dedup.to_string())
-        };
-        let lhs_nat = nat_of(&lhs_info, lhs);
-        let rhs_nat = nat_of(&rhs_info, rhs);
+        let lhs_nat = Self::natural_of(nat_conn, lhs);
+        let rhs_nat = Self::natural_of(nat_conn, rhs);
 
         let base_proof = self.edge_proof(
             stmts,
@@ -437,14 +443,11 @@ impl<'a> ProofInstrumentor<'a> {
         );
         let term_proof_ctor = self.term_proof_name(&sort_name);
         res.push(format!("(set ({term_proof_ctor} {fv_nat}) {nat_prf})"));
-        let target_entry = nat_conn.get(target).cloned();
-        let target_nat = target_entry
-            .as_ref()
-            .map(|e| e.natural.clone())
-            .unwrap_or_else(|| target.to_string());
+        let target_nat = Self::natural_of(nat_conn, target);
+        let target_conn = nat_conn.get(target).and_then(|e| e.connector.clone());
         let edge = self.edge_proof(res, &sort_ast, &target_nat, &fv_nat, justification);
         let to_dedup = self.mint(res, &trans, &format!("{edge} {nat_to_dedup}"), &proof_sort);
-        let view_proof = match target_entry.as_ref().and_then(|e| e.connector.clone()) {
+        let view_proof = match target_conn {
             Some(conn) => {
                 let sc = self.mint(res, &sym, &conn, &proof_sort);
                 self.mint(res, &trans, &format!("{sc} {to_dedup}"), &proof_sort)

@@ -162,18 +162,11 @@ row — identity-on-miss makes it its own representative.
 ## Union in a rule
 
 A `union` of two e-classes writes one `UF_<Sort>` edge from the larger endpoint
-to the smaller. `(union x y)` over two bound variables lowers to:
-
-```text
-(set (UF_Math (ordering-max x y)) (values (ordering-min x y) ()))
-```
-
-`ordering-max`/`ordering-min` pick the endpoints deterministically (see
-[Data structures](#union-find)); the second value column carries the edge's proof
-(`()` in term mode). Each operand that is itself a term is built first (as in
-[Building a term](#building-a-term)) to obtain its e-class. In proof mode this is
-the whole story for `union` — both operands are built and canonicalized so an
-equality proof can be threaded through each step (see
+to the smaller (the exact row and its `ordering-max`/`ordering-min` convention
+are in [Union-find](#union-find)). Each operand that is itself a term is built
+first (as in [Building a term](#building-a-term)) to obtain its e-class. In proof
+mode this is the whole story for `union` — both operands are built and
+canonicalized so an equality proof can be threaded through each step (see
 [Building nested terms with proofs](#building-nested-terms-with-proofs)).
 
 ## Optimization: building a union operand into an e-class
