@@ -69,6 +69,7 @@ const RESERVED_KEYWORDS: &[&str] = &[
     "print-stats",
     "include",
     "fail",
+    "actions",
     "prove",
     "prove-exists",
     // actions
@@ -989,6 +990,15 @@ impl Parser {
                     cs.extend(self.parse_command(subcommand)?);
                 }
                 vec![Command::Fail(span, cs)]
+            }
+            "actions" => {
+                // A block of actions run once with a shared local scope (see
+                // `GenericCommand::Actions`).
+                let mut acts = vec![];
+                for action in tail {
+                    acts.extend(self.parse_action(action)?);
+                }
+                vec![Command::Actions(GenericActions::new(acts))]
             }
             _ => self
                 .parse_action(sexp)?

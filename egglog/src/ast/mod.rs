@@ -1051,10 +1051,11 @@ where
             }
             GenericCommand::Action(a) => write!(f, "{a}"),
             GenericCommand::Actions(actions) => {
+                writeln!(f, "(actions")?;
                 for a in &actions.0 {
-                    writeln!(f, "{a}")?;
+                    writeln!(f, "   {a}")?;
                 }
-                Ok(())
+                write!(f, ")")
             }
             GenericCommand::Extract(_span, expr, variants) => {
                 write!(f, "(extract {expr} {variants})")
