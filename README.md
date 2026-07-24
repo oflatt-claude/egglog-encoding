@@ -29,6 +29,7 @@ make python-nits    # Python hygiene only
 make rust-nits      # rustfmt check and Clippy only
 make proof-tests    # proof-focused subset of the workspace tests
 make benchmark-smoke
+make nightly        # benchmark every endpoint and publish nightly/output/
 make update-snapshots
 make format         # apply Ruff and rustfmt formatting
 ```
@@ -356,6 +357,31 @@ network runtime cannot load, the initial static report remains readable and
 only retargeting is unavailable. The HTML contains the full cache, including
 machine-local paths and provenance, so treat it as potentially sensitive when
 sharing it.
+
+### Nightly
+
+`make nightly` benchmarks every backend/treatment endpoint on the current
+checkout and on the latest `main`, accumulating them all in the ordinary report
+cache, and copies the resulting interactive page and its cache to
+`nightly/output/index.html` and `index.jsonl`:
+
+```bash
+make nightly
+uv run --locked python scripts/nightly_bench.py /path/to/output  # alternate output directory
+```
+
+Endpoints are labelled by target (`branch` / `main`) and commit hash, so the
+page's dropdown can compare any two of them and it is clear which commit each
+side is; endpoints with identical binaries collapse to one option. The page
+opens on proof overhead of the current checkout. Populating is best effort: an
+endpoint that fails to build or run drops one dropdown option rather than
+failing the run, and the output directory is only overwritten after a
+successful run. Edit `TARGETS` and `ENDPOINTS` in `scripts/nightly_bench.py` to
+change what is measured.
+
+The [egraphs-good nightly service](https://nightly.cs.washington.edu) checks out
+this repository, runs `make nightly`, and serves `nightly/output/`, matching the
+`report=` entry in the nightly configuration.
 
 ### CPU profiling
 

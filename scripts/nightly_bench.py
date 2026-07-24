@@ -1,31 +1,28 @@
 #!/usr/bin/env python3
 """Generate the egglog-encoding nightly benchmark webpage.
 
-Runs the public benchmark entrypoint (``bench.py``) once per available
-backend/treatment endpoint, on the current checkout and on the latest ``main``,
-accumulating every endpoint in one report cache. eval-live's interactive report
-discovers its dropdown from every cached endpoint, so the page can compare any
-two of them. Each endpoint is labelled by target (``branch`` / ``main``) and
-commit hash, so it is clear which commit each side is.
+Runs the public benchmark entrypoint (``bench.py``) once per backend/treatment
+endpoint, on the current checkout and on the latest ``main``, accumulating every
+endpoint in the ordinary report cache. eval-live's interactive report discovers
+its dropdown from every cached endpoint, so the page can compare any two of
+them — including branch against main. Each endpoint is labelled by target
+(``branch`` / ``main``) and commit hash, so it is clear which commit each side
+is.
 
-The page opens on branch-vs-main proof mode (both commit hashes side by side);
-when the two checkouts share a binary — identical code — that comparison is
-degenerate, so it falls back to proof overhead (``proofs`` vs ``off``) on the
-branch. The page is written to ``nightly/output/index.html`` with the raw cache
-beside it as ``index.jsonl``.
+The last run writes the page, opening on proof overhead of the current
+checkout. Its cache and page are copied to ``nightly/output/`` only after that
+run succeeds, so a failed run leaves the previously published page in place.
 
 The egraphs-good nightly service (``nightly.cs.washington.edu``) checks out this
 repository, runs ``make nightly``, and serves that directory, matching
 ``report=`` in the nightly configuration.
-
-The output directory defaults to ``<repo>/nightly/output`` and may be overridden
-with a single positional argument.
 """
 
 from __future__ import annotations
 
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 from collections.abc import Sequence
@@ -33,24 +30,26 @@ from pathlib import Path
 
 type Target = tuple[str, str]  # (label, source) for bench.py's label=source syntax
 type Endpoint = tuple[str, str]  # (backend, treatment)
-type Selection = tuple[Target, Endpoint]
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BENCH_SCRIPT = REPO_ROOT / "bench.py"
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "nightly" / "output"
 
-# Checkouts whose endpoints populate the report, each with a stable label so the
-# dropdown shows which commit an endpoint belongs to. Endpoint identity is
-# (binary, backend, treatment), so a branch that matches main byte-for-byte
-# collapses to one endpoint per config; the two diverge once the code differs.
-BRANCH: Target = ("branch", ".")
-MAIN: Target = ("main", "@origin/main")
-TARGETS: tuple[Target, ...] = (BRANCH, MAIN)
+# bench.py's default report cache, shared with every other local invocation, and
+# the page --open derives from it.
+REPORT_PATH = REPO_ROOT / ".reports.jsonl"
+PAGE_PATH = REPO_ROOT / ".reports.html"
 
-# Every backend/treatment endpoint bench.py can run: the dd backend runs only
-# term and proofs, and proof-extraction is main-only.
+# Checkouts to measure, each with a stable label so the dropdown shows which
+# commit an endpoint belongs to. Endpoint identity is (binary, backend,
+# treatment), so a branch matching main byte-for-byte collapses to one endpoint
+# per config; the two diverge once the code differs.
+BRANCH: Target = ("branch", ".")
+TARGETS: tuple[Target, ...] = (BRANCH, ("main", "@origin/main"))
+
+# Every endpoint bench.py can run: dd runs only term and proofs, and
+# proof-extraction is main-only.
 ENDPOINTS: tuple[Endpoint, ...] = (
-    ("main", "off"),
     ("main", "term"),
     ("main", "proofs"),
     ("main", "proof-extraction"),
@@ -58,95 +57,70 @@ ENDPOINTS: tuple[Endpoint, ...] = (
     ("dd", "proofs"),
 )
 
-# Baseline every endpoint is measured against.
+# Every endpoint is measured against ordinary mode on its own checkout, so the
+# page opens on proof overhead of the branch.
 BASELINE: Endpoint = ("main", "off")
-
-# The comparison the page opens on, best match first. Branch vs main at equal
-# treatment shows both commit hashes at once; it is rejected when the two share
-# a binary, so fall back to proof overhead on the branch.
-HEADLINE_CANDIDATE: Selection = (BRANCH, ("main", "proofs"))
-HEADLINE_BASELINES: tuple[Selection, ...] = (
-    (MAIN, ("main", "proofs")),
-    (BRANCH, BASELINE),
-)
+HEADLINE: Endpoint = ("main", "proofs")
 
 
-def _command(report_path: Path, candidate: Selection, baseline: Selection, *, open_report: bool) -> list[str]:
-    """Build the bench.py comparison of candidate vs baseline."""
+def _run(target: Target, endpoint: Endpoint, *, open_report: bool) -> int:
+    """Benchmark one endpoint against the baseline on the same checkout."""
 
-    (cand_label, cand_source), (cand_backend, cand_treatment) = candidate
-    (base_label, base_source), (base_backend, base_treatment) = baseline
+    label, source = target
+    backend, treatment = endpoint
+    baseline_backend, baseline_treatment = BASELINE
     command = [
         sys.executable,
         str(BENCH_SCRIPT),
         "--target",
-        f"{cand_label}={cand_source}",
+        f"{label}={source}",
         "--backend",
-        cand_backend,
+        backend,
         "--treatment",
-        cand_treatment,
+        treatment,
         "--compare-target",
-        f"{base_label}={base_source}",
+        f"{label}={source}",
         "--compare-backend",
-        base_backend,
+        baseline_backend,
         "--compare-treatment",
-        base_treatment,
-        "--report",
-        str(report_path),
+        baseline_treatment,
+        # Per-file tables make a long run's progress legible.
+        "--detail",
+        "files",
+        *(["--open"] if open_report else []),
     ]
-    if open_report:
-        command.append("--open")
-    return command
-
-
-def _run(command: list[str], env: dict[str, str]) -> int:
-    """Run one bench.py comparison, streaming its output, and return its status."""
-
     print(f"nightly: {' '.join(shlex.quote(part) for part in command)}", file=sys.stderr)
+    # Keep the headless nightly host from launching bench.py's best-effort browser.
+    env = {**os.environ, "BROWSER": "true"}
     return subprocess.run(command, cwd=REPO_ROOT, env=env, check=False).returncode
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Populate the endpoint cache and write ``<output_dir>/index.html``."""
+    """Populate the endpoint cache and publish ``<output_dir>/index.html``."""
 
     args = tuple(sys.argv[1:] if argv is None else argv)
     if len(args) > 1:
-        print(f"usage: {Path(__file__).name} [output_dir]", file=sys.stderr)
+        print("usage: nightly_bench.py [output_dir]", file=sys.stderr)
         return 2
     output_dir = Path(args[0]).expanduser().resolve() if args else DEFAULT_OUTPUT_DIR
-    output_dir.mkdir(parents=True, exist_ok=True)
-    report_path = output_dir / "index.jsonl"
-    page_path = output_dir / "index.html"
 
-    # Start from fresh data, but leave any previous page in place: --open
-    # overwrites index.html atomically only on success, so a failed run keeps
-    # the last good page.
-    report_path.unlink(missing_ok=True)
-
-    # Neutralize bench.py's best-effort browser launch on headless nightly hosts.
-    env = {**os.environ, "BROWSER": "true"}
-
-    # Populate the cache with every endpoint. This is best effort: a combination
-    # that fails to build or run just drops one dropdown option instead of
-    # failing the whole nightly.
+    # Populate the dropdown with every endpoint. A combination that fails to
+    # build or run drops one option instead of failing the whole nightly.
     for target in TARGETS:
         for endpoint in ENDPOINTS:
-            if endpoint == BASELINE:
-                continue  # cached as the compare side of every other endpoint
-            status = _run(_command(report_path, (target, endpoint), (target, BASELINE), open_report=False), env)
-            if status != 0:
-                print(f"nightly: skipped {target[0]} {endpoint[0]}/{endpoint[1]} (exit {status})", file=sys.stderr)
+            if _run(target, endpoint, open_report=False) != 0:
+                print(f"nightly: skipped {target[0]} {endpoint[0]}/{endpoint[1]}", file=sys.stderr)
 
-    # Render the page, opening on the first headline comparison that succeeds.
-    for baseline in HEADLINE_BASELINES:
-        status = _run(_command(report_path, HEADLINE_CANDIDATE, baseline, open_report=True), env)
-        if status == 0 and page_path.is_file():
-            print(f"nightly: wrote report to {page_path}", file=sys.stderr)
-            return 0
-        (base_label, _source), (backend, treatment) = baseline
-        print(f"nightly: headline vs {base_label} {backend}/{treatment} unavailable (exit {status})", file=sys.stderr)
-    print("nightly: no headline comparison produced a report", file=sys.stderr)
-    return 1
+    # The whole cache is now populated, so this last run re-renders it as the
+    # page. Its rows are already cached, so it only rebuilds the report.
+    if _run(BRANCH, HEADLINE, open_report=True) != 0 or not PAGE_PATH.is_file():
+        print("nightly: benchmark did not produce a report", file=sys.stderr)
+        return 1
+    output_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(PAGE_PATH, output_dir / "index.html")
+    shutil.copyfile(REPORT_PATH, output_dir / "index.jsonl")
+    print(f"nightly: wrote report to {output_dir / 'index.html'}", file=sys.stderr)
+    return 0
 
 
 if __name__ == "__main__":
