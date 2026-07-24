@@ -682,32 +682,44 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
 /// user-provided `:internal-uf`, see `tests/uf-extraction.egg`), resolved with a
 /// one-hop scan.
 pub(crate) fn find_canonical(egraph: &EGraph, value: Value, sort: &ArcSort) -> Value {
-    let Some(uf_name) = egraph.proof_state.uf_parent.get(sort.name()) else {
-        return value;
-    };
+    if let Some(uf_name) = egraph.proof_state.uf_parent.get(sort.name())
+        && let Some(uf_func) = egraph.functions.get(uf_name)
+    {
+        let canonical = if uf_func.schema.input.len() == 1 {
+            egraph
+                .backend
+                .lookup_id(uf_func.backend_id, &[value])
+                .unwrap_or(value)
+        } else {
+            // Two-key `(child, parent)` relation: one-hop lookup.
+            let mut canonical = value;
+            egraph
+                .backend
+                .for_each(uf_func.backend_id, |row: egglog_bridge::ScanEntry| {
+                    if row.vals[0] == value {
+                        canonical = row.vals[1];
+                    }
+                });
+            canonical
+        };
+        if canonical != value {
+            return canonical;
+        }
+    }
 
-    let Some(uf_func) = egraph.functions.get(uf_name) else {
-        return value;
-    };
-
-    if uf_func.schema.input.len() == 1 {
+    // Fall back to the auxiliary union-find: a term/proof id that lost a
+    // same-iteration `set-if-empty` collision has no row of its own, but `AuxUF`
+    // maps it to the surviving (structurally identical) id.
+    if let Some(aux_name) = egraph.proof_state.aux_uf_parent.get(sort.name())
+        && let Some(aux_func) = egraph.functions.get(aux_name)
+    {
         return egraph
             .backend
-            .lookup_id(uf_func.backend_id, &[value])
+            .lookup_id(aux_func.backend_id, &[value])
             .unwrap_or(value);
     }
 
-    // Two-key `(child, parent)` relation: one-hop lookup.
-    let mut canonical = value;
-    egraph
-        .backend
-        .for_each(uf_func.backend_id, |row: egglog_bridge::ScanEntry| {
-            if row.vals[0] == value {
-                canonical = row.vals[1];
-            }
-        });
-
-    canonical
+    value
 }
 
 impl Function {

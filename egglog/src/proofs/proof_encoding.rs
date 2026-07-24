@@ -65,6 +65,12 @@ pub(crate) struct EncodingState {
     /// whole-database baseline) instead of `:unsafe-seminaive`, so tests can
     /// assert the two produce the same database.
     pub force_proof_naive: bool,
+    /// True while emitting the body of a `:merge` block. Node interning there
+    /// must use `get-fresh!` + `set` rather than `set-if-empty`, because
+    /// `set-if-empty` reads its table and that read is unavailable inside a merge's
+    /// execution state (only the pure mint + write is). The occasional duplicate
+    /// id this produces is folded away by the node table's own `AuxUF` merge.
+    pub in_merge: bool,
 }
 
 impl EncodingState {
@@ -82,6 +88,7 @@ impl EncodingState {
             proof_testing: false,
             verify_proofs: true,
             force_proof_naive: false,
+            in_merge: false,
         }
     }
 }
@@ -298,6 +305,11 @@ impl<'a> ProofInstrumentor<'a> {
         let sym = self.proof_names().eq_sym_constructor.clone();
         let proof_sort = self.proof_sort();
         let mut mints = vec![];
+        // This composes proof nodes inside the `:merge` body, so intern via
+        // `get-fresh!` + `set` (not `set-if-empty`, whose table read is unavailable
+        // here). Restore afterward so surrounding action contexts still hash-cons.
+        let saved = self.egraph.proof_state.in_merge;
+        self.egraph.proof_state.in_merge = true;
         let displaced_pf = match carried {
             CarriedProofs::KeyToParent => {
                 let sym_pf = self.mint(&mut mints, &sym, "hi_pf_", &proof_sort);
@@ -308,6 +320,7 @@ impl<'a> ProofInstrumentor<'a> {
                 self.mint(&mut mints, &trans, &format!("hi_pf_ {sym_pf}"), &proof_sort)
             }
         };
+        self.egraph.proof_state.in_merge = saved;
         let mints_str = mints.join("\n                  ");
         format!(
             "((let hi_pf_ (proof-of-max old0 old1 new0 new1))
@@ -413,6 +426,10 @@ impl<'a> ProofInstrumentor<'a> {
 
         let mut body_code = vec![];
         let mut idx = 0usize;
+        // The body mints term/proof nodes inside the view's `:merge`, so intern via
+        // `get-fresh!` + `set` (see `hash_cons` / `in_merge`).
+        let saved_in_merge = self.egraph.proof_state.in_merge;
+        self.egraph.proof_state.in_merge = true;
         let merged = self.instrument_merge_body(
             &merge.result,
             &mut body_code,
@@ -436,6 +453,7 @@ impl<'a> ProofInstrumentor<'a> {
         } else {
             "()".to_string()
         };
+        self.egraph.proof_state.in_merge = saved_in_merge;
         let value = format!("(values {merged} {row_proof})");
         if body_code.is_empty() {
             value
@@ -828,11 +846,10 @@ impl<'a> ProofInstrumentor<'a> {
         )
     }
 
-    /// Mint a fresh id of `out_sort` and assert the relation row
-    /// `({name} {args_joined} <fresh>)`, appending the `let`/`set` onto `stmts`
-    /// and returning the fresh variable. Terms and proofs are relations rather
-    /// than constructors, so an id is minted explicitly here rather than by a
-    /// constructor call; every minted id keeps its row (nothing is merged away).
+    /// Intern the term/proof/AST/proof-list node `{name}(args_joined)` and return
+    /// its id. Every such node table is hash-consed (see [`Self::hash_cons`]), so
+    /// building the same node twice reuses one id instead of piling up
+    /// `get-fresh!` copies.
     pub(crate) fn mint(
         &mut self,
         stmts: &mut Vec<String>,
@@ -840,20 +857,14 @@ impl<'a> ProofInstrumentor<'a> {
         args_joined: &str,
         out_sort: &str,
     ) -> String {
-        let v = self.fresh_var();
-        // The generic `get-fresh!` takes the target sort as a string literal so it
-        // types its output without per-sort primitives (its runtime ignores the arg).
-        let get_fresh = crate::proofs::proof_fresh::GET_FRESH_PRIM_NAME;
-        stmts.push(format!("(let {v} ({get_fresh} \"{out_sort}\"))"));
-        stmts.push(format!("(set ({name} {args_joined} {v}) ())"));
-        v
+        self.hash_cons(stmts, name, args_joined, out_sort)
     }
 
-    /// Hash-cons a term-node row into the children-keyed table `{name}`: mint a
-    /// fresh *candidate* id and `set-if-empty` it, so an already-interned term
-    /// returns its existing id (no `get-fresh!` copies). `args_joined` are the
-    /// table's key columns (children). Returns the interned id. On a same-iteration
-    /// collision the table's `:merge` records the discarded candidate in `AuxUF`.
+    /// Intern the node `{name}(args_joined)` into its children-keyed table and
+    /// return its id. In a normal context this hash-conses via `set-if-empty`
+    /// (dedup, no `get-fresh!` copies); inside a `:merge` body (`in_merge`), where
+    /// `set-if-empty`'s table read is unavailable, it falls back to `get-fresh!` +
+    /// `set` and lets the table's `AuxUF` merge fold any duplicate away.
     pub(crate) fn hash_cons(
         &mut self,
         stmts: &mut Vec<String>,
@@ -861,8 +872,14 @@ impl<'a> ProofInstrumentor<'a> {
         args_joined: &str,
         out_sort: &str,
     ) -> String {
-        let cand = self.fresh_var();
         let get_fresh = crate::proofs::proof_fresh::GET_FRESH_PRIM_NAME;
+        if self.egraph.proof_state.in_merge {
+            let v = self.fresh_var();
+            stmts.push(format!("(let {v} ({get_fresh} \"{out_sort}\"))"));
+            stmts.push(format!("(set ({name} {args_joined}) {v})"));
+            return v;
+        }
+        let cand = self.fresh_var();
         stmts.push(format!("(let {cand} ({get_fresh} \"{out_sort}\"))"));
         let set_if_empty = crate::proofs::proof_fresh::set_if_empty_prim_name(name);
         let v = self.fresh_var();
