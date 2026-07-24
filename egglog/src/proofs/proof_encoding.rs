@@ -103,35 +103,14 @@ impl<'a> ProofInstrumentor<'a> {
     ) -> Result<Vec<ResolvedNCommand>, Error> {
         let mut lowered = Vec::with_capacity(program.len());
         for command in program {
-            match command {
-                ResolvedNCommand::Input { span, name, file } => {
-                    lowered.extend(
-                        Self::input_actions(egraph, &span, &name, &file)?
-                            .into_iter()
-                            .map(ResolvedNCommand::CoreAction),
-                    );
-                }
-                // For proof checking, a `begin` block's actions establish their
-                // terms as ordinary top-level actions run in order: the block's
-                // local `let`s inline into what follows, and re-binding the same
-                // name across blocks is fine because they run sequentially. This
-                // is the proof-check program only; execution keeps the local block.
-                ResolvedNCommand::CoreActions(actions) => {
-                    lowered.extend(actions.0.into_iter().map(ResolvedNCommand::CoreAction));
-                }
-                // `(let a (begin ... e))`: the scaffolding actions plus binding the
-                // global `a` to the trailing value `e`.
-                ResolvedNCommand::LetBegin(span, name, actions) => {
-                    let mut acts = actions.0;
-                    let Some(ResolvedAction::Expr(_, value)) = acts.pop() else {
-                        unreachable!("(let _ (begin ...)) must end with an expression")
-                    };
-                    lowered.extend(acts.into_iter().map(ResolvedNCommand::CoreAction));
-                    lowered.push(ResolvedNCommand::CoreAction(GenericAction::Let(
-                        span, name, value,
-                    )));
-                }
-                _ => lowered.push(command),
+            if let ResolvedNCommand::Input { span, name, file } = &command {
+                lowered.extend(
+                    Self::input_actions(egraph, span, name, file)?
+                        .into_iter()
+                        .map(ResolvedNCommand::CoreAction),
+                );
+            } else {
+                lowered.push(command);
             }
         }
         Ok(lowered)
@@ -1680,20 +1659,12 @@ impl<'a> ProofInstrumentor<'a> {
                     .join("\n");
                 res.extend(self.parse_program_as_local_actions(&instrumented));
             }
-            // A source-level `begin` block (also how `remove_globals` lowers a
-            // `(let a (begin ...))`): instrument its actions and run them as one
-            // local-scope block, exactly like a top-level action.
-            ResolvedNCommand::CoreActions(actions) => {
-                let mut nat_conn = NatConn::default();
-                let instrumented = self
-                    .instrument_actions(&actions.0, &Justification::Fiat, &mut nat_conn)
-                    .join("\n");
-                res.extend(self.parse_program_as_local_actions(&instrumented));
-            }
-            // Expanded by `remove_globals` (which runs before term encoding) into a
-            // function + `CoreActions`.
-            ResolvedNCommand::LetBegin(..) => {
-                unreachable!("LetBegin is removed by remove_globals")
+            // A user-written `begin` block (or its `let`-begin expansion) is
+            // rejected by `command_supports_proof_encoding` before the encoder
+            // runs, so only this encoder's own generated blocks exist under the
+            // encoding — and those are produced here, never re-encoded.
+            ResolvedNCommand::CoreActions(..) | ResolvedNCommand::LetBegin(..) => {
+                unreachable!("user `begin` blocks are unsupported under the term/proof encoding")
             }
             ResolvedNCommand::Check(span, facts) => {
                 let (instrumented, _lookups, _proof) = self.instrument_facts(facts);

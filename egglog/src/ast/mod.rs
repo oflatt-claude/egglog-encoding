@@ -120,7 +120,8 @@ where
     /// A block of actions run once, immediately, with a shared *local* scope:
     /// `let`s bind local variables (slots) rather than global functions. Used by
     /// the term/proof encoding for a top-level action's minted temporaries so
-    /// they do not each become their own table.
+    /// they do not each become their own table. A user-written block is reported
+    /// unsupported under that encoding (see `ProofEncodingUnsupportedReason`).
     CoreActions(GenericActions<Head, Leaf>),
     /// `(let <var> (begin <action>* <expr>))`: run the block once with a shared
     /// local scope, then bind the *global* `<var>` to the trailing `<expr>` (the
