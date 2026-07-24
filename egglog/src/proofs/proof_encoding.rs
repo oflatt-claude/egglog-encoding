@@ -36,6 +36,12 @@ enum CarriedProofs {
 #[derive(Clone)]
 pub(crate) struct EncodingState {
     pub uf_parent: HashMap<String, String>,
+    /// Maps sort name -> its auxiliary union-find `AuxUF_<Sort>`. Distinct from
+    /// `uf_parent`'s normal `UF_<Sort>`: the hash-consed term tables record here,
+    /// via their `:merge`, that two same-iteration-minted ids denote the same
+    /// term, so proof extraction can recover the canonical term without polluting
+    /// the normal union-find (which carries only real `union`s).
+    pub aux_uf_parent: HashMap<String, String>,
     /// Maps sort name -> proof function name (set from :internal-proof-func annotation).
     pub proof_func_parent: HashMap<String, String>,
     /// Maps container sort name -> the name of its registered container-rebuild
@@ -65,6 +71,7 @@ impl EncodingState {
     pub(crate) fn new(symbol_gen: &mut SymbolGen) -> Self {
         Self {
             uf_parent: HashMap::default(),
+            aux_uf_parent: HashMap::default(),
             proof_func_parent: HashMap::default(),
             container_rebuild_name: HashMap::default(),
             container_rebuild_proof_name: HashMap::default(),
@@ -320,6 +327,7 @@ impl<'a> ProofInstrumentor<'a> {
     fn declare_sort_eq(&mut self, sort_name: &str) -> Vec<Command> {
         let proofs = self.proofs_enabled();
         let uf_name = self.uf_name(sort_name);
+        let aux_uf_name = self.aux_uf_name(sort_name);
         let proof_type = self.proof_type_str().to_string();
         let fresh_name = self.egraph.parser.symbol_gen.fresh("uf_path_compress");
         let path_compress_ruleset_name = self.proof_names().path_compress_ruleset_name.clone();
@@ -355,6 +363,7 @@ impl<'a> ProofInstrumentor<'a> {
         let code = format!(
             "{proof_tables}
              (function {uf_name} ({sort_name}) ({sort_name} {proof_type}) :merge {uf_merge} :unextractable :internal-hidden :internal-identity-vals 1)
+             (function {aux_uf_name} ({sort_name}) {sort_name} :merge (ordering-min old new) :unextractable :internal-hidden :internal-identity-vals 1)
              (rule ((= (values {b} {pb}) ({uf_name} {a}))
                     (= (values {c} {pc}) ({uf_name} {b}))
                     (!= {b} {c}))
@@ -537,15 +546,36 @@ impl<'a> ProofInstrumentor<'a> {
             format!("(sort {fresh_sort})")
         };
         // The term relation is a term node (`:internal-term-node`): its rows are
-        // reconstructed by proof extraction, with the minted id as the last input.
+        // reconstructed by proof extraction. It is *hash-consed* on its children:
+        // built with `set-if-empty` (get-or-insert) so identical terms share one
+        // row/id rather than piling up `get-fresh!` copies. Because `set-if-empty`
+        // only sees the previous iteration's committed rows, two rules that build
+        // the same term in one iteration each insert a distinct candidate id; the
+        // key then collides at merge time and the `:merge` records `new -> old` in
+        // the sort's auxiliary union-find `AuxUF_<view_sort>` (keeping the smaller
+        // id), so proof extraction can recover that the two ids are the same term.
         // The deferred delete/subsume markers are keyed on children with no output,
-        // so they are plain `Unit` relations (not term nodes) — the encoding mints
-        // no e-class there and extraction never reads them as terms.
+        // so they are plain `Unit` relations (not term nodes).
+        let aux_uf = self.aux_uf_name(&view_sort);
+        // Single-output function, so the merge binds `old`/`new` (not `old0`/`new0`).
+        let term_merge = format!(
+            "((set ({aux_uf} (ordering-max old new)) (ordering-min old new)) (ordering-min old new))"
+        );
+        // A real eq-sort's `AuxUF_<Sort>` is declared by `declare_sort_eq`; a custom
+        // function's throwaway `fresh_sort` id-sort has none, so declare it here.
+        let aux_uf_decl = if output_is_eclass {
+            String::new()
+        } else {
+            format!(
+                "(function {aux_uf} ({view_sort}) {view_sort} :merge (ordering-min old new) :unextractable :internal-hidden :internal-identity-vals 1)"
+            )
+        };
         self.parse_program(&format!(
             "
             {fresh_sort_decl}
+            {aux_uf_decl}
             {to_ast_view_sort}
-            (function {name} ({term_sorts} {view_sort}) Unit :no-merge :internal-hidden :internal-term-node)
+            (function {name} ({term_sorts}) {view_sort} :merge {term_merge} :internal-hidden :internal-term-node :internal-identity-vals 1)
             {view_decl}
             (function {to_delete_name} ({in_sorts}) Unit :no-merge :internal-hidden)
             (function {subsumed_name} ({in_sorts}) Unit :no-merge :internal-hidden)
@@ -610,7 +640,9 @@ impl<'a> ProofInstrumentor<'a> {
                         "()".to_string()
                     };
                     // Term row (`x`'s e-class is e's) + the FD view `() -> (val, proof)`.
-                    res.push(format!("(set ({} {e_value}) ())", func_type.name));
+                    // The nullary term table `(x) -> id` stores the aliased value
+                    // directly as its output; no `set-if-empty` (there is only one).
+                    res.push(format!("(set ({}) {e_value})", func_type.name));
                     res.push(self.update_fd_view(&func_type.name, &[], &e_value, &proof));
                     return res;
                 }
@@ -817,6 +849,27 @@ impl<'a> ProofInstrumentor<'a> {
         v
     }
 
+    /// Hash-cons a term-node row into the children-keyed table `{name}`: mint a
+    /// fresh *candidate* id and `set-if-empty` it, so an already-interned term
+    /// returns its existing id (no `get-fresh!` copies). `args_joined` are the
+    /// table's key columns (children). Returns the interned id. On a same-iteration
+    /// collision the table's `:merge` records the discarded candidate in `AuxUF`.
+    pub(crate) fn hash_cons(
+        &mut self,
+        stmts: &mut Vec<String>,
+        name: &str,
+        args_joined: &str,
+        out_sort: &str,
+    ) -> String {
+        let cand = self.fresh_var();
+        let get_fresh = crate::proofs::proof_fresh::GET_FRESH_PRIM_NAME;
+        stmts.push(format!("(let {cand} ({get_fresh} \"{out_sort}\"))"));
+        let set_if_empty = crate::proofs::proof_fresh::set_if_empty_prim_name(name);
+        let v = self.fresh_var();
+        stmts.push(format!("(let {v} ({set_if_empty} {args_joined} {cand}))"));
+        v
+    }
+
     /// Read an encoded global's value from its FD view `() -> (val, proof)`, for a
     /// global reference `(x)` appearing in an action. `set-if-empty` returns the
     /// stored e-class (a global is `set` before it is used, so the fresh fallback is
@@ -900,7 +953,7 @@ impl<'a> ProofInstrumentor<'a> {
         justification: &Justification,
         view_sort: &str,
     ) -> String {
-        let fv = self.mint(
+        let fv = self.hash_cons(
             res,
             &func_type.name,
             &ListDisplay(args, " ").to_string(),
@@ -935,7 +988,9 @@ impl<'a> ProofInstrumentor<'a> {
     ) -> String {
         let view = self.view_name(&func_type.name);
         let set_if_empty = crate::proofs::proof_fresh::set_if_empty_prim_name(&view);
-        let fv = self.mint(
+        // Hash-cons the term node (children-keyed `set-if-empty`) so identical
+        // terms reuse one id instead of piling up `get-fresh!` copies.
+        let fv = self.hash_cons(
             res,
             &func_type.name,
             &ListDisplay(args, " ").to_string(),

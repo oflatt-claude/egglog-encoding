@@ -487,6 +487,16 @@ impl EGraph {
                         (resolved.name.clone(), ft.input.clone(), ft.outputs.clone());
                     crate::proofs::proof_fresh::register_set_if_empty(self, &name, input, outputs);
                 }
+                // Hash-consed term-node tables (`:internal-term-node`) are built the
+                // same way: `set-if-empty` interns a term keyed on its children so
+                // identical terms dedup instead of piling up `get-fresh!` copies.
+                if resolved.internal_term_node
+                    && let ResolvedCall::Func(ft) = &resolved.resolved_schema
+                {
+                    let (name, input, outputs) =
+                        (resolved.name.clone(), ft.input.clone(), ft.outputs.clone());
+                    crate::proofs::proof_fresh::register_set_if_empty(self, &name, input, outputs);
+                }
                 // If this is a let binding, add it to global_sorts
                 // This preserves bahavior for lets after desugaring
                 if resolved.internal_let {

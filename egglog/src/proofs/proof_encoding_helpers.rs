@@ -115,6 +115,28 @@ impl ProofInstrumentor<'_> {
         }
     }
 
+    /// The auxiliary union-find `AuxUF_<sort>` for term-node ids. A hash-consed
+    /// term table's `:merge` records `new -> old` here when two same-iteration
+    /// inserts collide on the same children, so proof extraction can recover the
+    /// canonical term. Separate from [`Self::uf_name`] so it never mixes with the
+    /// normal union-find's real `union`s.
+    pub(crate) fn aux_uf_name(&mut self, sort: &str) -> String {
+        if let Some(name) = self.egraph.proof_state.aux_uf_parent.get(sort) {
+            name.clone()
+        } else {
+            let fresh_name = self
+                .egraph
+                .parser
+                .symbol_gen
+                .fresh(&format!("AuxUF_{sort}"));
+            self.egraph
+                .proof_state
+                .aux_uf_parent
+                .insert(sort.to_string(), fresh_name.clone());
+            fresh_name
+        }
+    }
+
     pub(crate) fn parse_program(&mut self, input: &str) -> Vec<Command> {
         self.egraph.parser.ensure_no_reserved_symbols = false;
         let res = self.egraph.parser.get_program_from_string(None, input);

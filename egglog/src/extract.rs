@@ -723,10 +723,10 @@ impl Function {
         self.decl.term_constructor.is_some() && self.schema.outputs.len() > 1
     }
 
-    /// A term/proof/AST/proof-list node relation created by the term/proof
-    /// encoding, marked `:internal-term-node`. Its rows are reconstructed during
-    /// extraction with the minted id as the last input column and the earlier
-    /// inputs as the term's children. Views (which carry `term_constructor` and a
+    /// A term/proof/AST/proof-list node table created by the term/proof encoding,
+    /// marked `:internal-term-node`. It is hash-consed on its children: keyed on
+    /// the children with the interned id in its output column, so extraction reads
+    /// it like a constructor. Views (which carry `term_constructor` and a
     /// non-`Unit` output) and plain bookkeeping relations such as the
     /// delete/subsume markers are unmarked, so extraction never reads them as
     /// terms.
@@ -734,10 +734,11 @@ impl Function {
         self.decl.internal_term_node
     }
 
-    /// True when the id is the last input column (old-form views and encoding
-    /// relations), rather than a real output column.
+    /// True when the id is the last input column (old-form views), rather than a
+    /// real output column. Hash-consed term-node tables keep the id in the output
+    /// column, so they are not included here.
     fn id_is_last_input(&self) -> bool {
-        (self.decl.term_constructor.is_some() && !self.is_fd_view()) || self.is_relation_term()
+        self.decl.term_constructor.is_some() && !self.is_fd_view()
     }
 
     /// For view tables (with term_constructor), the effective output sort is the last input column
