@@ -2087,6 +2087,11 @@ impl EGraph {
             ResolvedNCommand::CoreActions(actions) => {
                 self.eval_actions(&actions)?;
             }
+            // Expanded by `remove_globals` into a function + `CoreActions` before
+            // a command is run.
+            ResolvedNCommand::LetBegin(..) => {
+                unreachable!("LetBegin is removed by remove_globals")
+            }
             ResolvedNCommand::Extract(span, expr, variants) => {
                 let sort = expr.output_type();
 

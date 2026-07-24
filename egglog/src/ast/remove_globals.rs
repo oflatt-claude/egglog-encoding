@@ -137,6 +137,53 @@ impl GlobalRemover<'_> {
                     actions.visit_actions(&mut remove_globals_action),
                 )]
             }
+            // `(let a (begin ...))`: declare `a` as a global function (like a
+            // top-level `let`), then run the block as one local-scope
+            // `CoreActions` ending by setting the function to the block's
+            // trailing value expression. The block's own `let`s stay local.
+            GenericNCommand::LetBegin(span, name, actions) => {
+                let mut acts = actions.0;
+                let value = match acts.pop() {
+                    Some(GenericAction::Expr(_, e)) => e,
+                    _ => panic!("`(let _ (begin ...))` must end with an expression"),
+                };
+                let ty = value.output_type();
+                let resolved_call = ResolvedCall::Func(FuncType {
+                    name: name.name.clone(),
+                    subtype: FunctionSubtype::Custom,
+                    input: vec![],
+                    outputs: vec![ty.clone()],
+                });
+                let func_decl = ResolvedFunctionDecl {
+                    name: name.name,
+                    subtype: FunctionSubtype::Custom,
+                    schema: Schema {
+                        input: vec![],
+                        outputs: vec![ty.name().to_owned()],
+                    },
+                    resolved_schema: resolved_call.clone(),
+                    merge: None,
+                    cost: None,
+                    unextractable: true,
+                    internal_hidden: false,
+                    internal_let: true,
+                    span: span.clone(),
+                    term_constructor: None,
+                    identity_vals: None,
+                    internal_term_node: false,
+                };
+                let mut new_acts: Vec<_> = acts.into_iter().map(remove_globals_action).collect();
+                new_acts.push(GenericAction::Set(
+                    span,
+                    resolved_call,
+                    vec![],
+                    remove_globals_expr(value),
+                ));
+                vec![
+                    GenericNCommand::Function(func_decl),
+                    GenericNCommand::CoreActions(GenericActions(new_acts)),
+                ]
+            }
             GenericNCommand::NormRule { rule } => {
                 // A map from the global variables in actions to their new names
                 // in the query.

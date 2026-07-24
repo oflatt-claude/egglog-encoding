@@ -73,6 +73,11 @@ impl Names {
                 }
                 Ok(())
             }
+            // Expanded by `remove_globals` into a function + `CoreActions` before
+            // this runs.
+            ResolvedNCommand::LetBegin(..) => {
+                unreachable!("LetBegin is removed by remove_globals")
+            }
             ResolvedNCommand::Check(_span, query) => {
                 let mut inner = self.clone();
                 inner.check_shadowing_query(query)
