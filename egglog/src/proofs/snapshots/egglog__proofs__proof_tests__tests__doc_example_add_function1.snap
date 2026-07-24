@@ -1,6 +1,5 @@
 ---
 source: egglog/src/proofs/proof_tests.rs
-assertion_line: 492
 expression: snapshot
 ---
 (ruleset __parent)
@@ -32,11 +31,11 @@ expression: snapshot
        (!= __v4 __v6))
       ((set (__AddView c0_ c1_) (values __v6 ())))
         :ruleset __rebuilding :name "__rebuild_rule" :internal-include-subsumed)
-(function __v8 () Math :no-merge :unextractable :internal-let)
-(set (__v8) (get-fresh! "Math"))
-(set (Add 1 2 (__v8)) ())
-(function __v9 () Math :no-merge :unextractable :internal-let)
-(set (__v9) (set-if-empty-__AddView! 1 2 (__v8) ()))
+(begin
+   (let __v8 (get-fresh! "Math"))
+   (set (Add 1 2 __v8) ())
+   (let __v9 (set-if-empty-__AddView! 1 2 __v8 ()))
+)
 (rule ((= (values __v10 __v11) (__AddView a b)))
       ((let __v13 (get-fresh! "Math"))
        (set (Add a b __v13) ())
