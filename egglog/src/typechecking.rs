@@ -602,11 +602,9 @@ impl EGraph {
                     &Default::default(),
                     Context::Full,
                 )?;
-                // `symbol_gen`'s borrow ends above (last use), so whole-`self`
-                // methods are callable below.
                 self.ensure_global_name_prefix(span, name)?;
-                // The parser guarantees a trailing value expression; its type is
-                // the global's type.
+                // The parser guarantees a trailing expression; its type is the
+                // global's.
                 let Some(ResolvedAction::Expr(_, value)) = resolved.0.last() else {
                     unreachable!("(let _ (begin ...)) must end with an expression")
                 };

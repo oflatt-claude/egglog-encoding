@@ -73,8 +73,6 @@ impl Names {
                 }
                 Ok(())
             }
-            // Expanded by `remove_globals` into a function + `CoreActions` before
-            // this runs.
             ResolvedNCommand::LetBegin(..) => {
                 unreachable!("LetBegin is removed by remove_globals")
             }

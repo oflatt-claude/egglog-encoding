@@ -1,21 +1,11 @@
-//! Common-subexpression prepass for the term/proof encoding.
+//! Common-subexpression elimination over action scopes.
 //!
-//! Within one action scope, a constructor application that occurs more than once
-//! is bound to a shared `let` and its occurrences rewritten to that variable:
+//! Within one scope, a constructor application occurring more than once is bound
+//! to a shared `let` and its occurrences rewritten to that variable:
 //!
 //! ```text
 //! (Foo (Bar x) (Bar x))   ⟶   (let c (Bar x)) (Foo c c)
 //! ```
-//!
-//! The encoding builds a `let`-bound constructor once and shares it (its e-class
-//! and, in proof mode, its natural node and connector) across references, so the
-//! application is interned once instead of per occurrence.
-//!
-//! This is a purely syntactic pass over resolved commands with no encoder state.
-//! [`cse_program`] runs it over a whole program before term encoding: a rule
-//! head is rewritten in place (already a local scope), and a top-level action
-//! becomes a [`GenericNCommand::CoreActions`] block so the hoisted `let`s stay
-//! local instead of becoming a global function (and hence a table) apiece.
 
 use crate::{
     ast::{
@@ -27,10 +17,10 @@ use crate::{
 };
 use egglog_ast::generic_ast::GenericExpr;
 
-/// Apply the prepass to every action scope in `program`.
+/// Apply [`cse_actions`] to every action scope in `program`.
 ///
-/// Rule heads keep their shape; a top-level action whose scope gained shared
-/// `let`s becomes a `CoreActions` block (see the module docs).
+/// A rule head keeps its shape; a top-level action that gains shared `let`s
+/// becomes a [`GenericNCommand::CoreActions`] block, so they stay local.
 pub(crate) fn cse_program(
     program: Vec<ResolvedNCommand>,
     fresh: &mut SymbolGen,
@@ -44,8 +34,7 @@ pub(crate) fn cse_program(
             }
             GenericNCommand::CoreAction(action) => {
                 let deduped = cse_actions(std::slice::from_ref(&action), fresh);
-                // Nothing shared: keep the plain action so the common case is
-                // untouched (and no block is introduced).
+                // Nothing shared: keep the plain action.
                 if deduped.len() == 1 {
                     GenericNCommand::CoreAction(deduped.into_iter().next().unwrap())
                 } else {
@@ -141,8 +130,8 @@ fn cse_action(
 }
 
 /// Rewrite one expression bottom-up, replacing each repeated constructor
-/// application with a shared `let`-bound variable (creating the `let` on first
-/// encounter). Its key is the *original* s-expr, matching the count.
+/// application with a shared `let`-bound variable. Keyed by the original s-expr,
+/// matching `counts`.
 fn cse_expr(
     expr: &ResolvedExpr,
     counts: &HashMap<String, usize>,

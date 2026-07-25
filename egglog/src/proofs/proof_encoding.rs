@@ -1503,11 +1503,10 @@ impl<'a> ProofInstrumentor<'a> {
         justification: &Justification,
         nat_conn: &mut NatConn,
     ) -> Vec<String> {
-        // Repeated constructor applications were already bound to shared `let`s by
-        // the CSE prepass (`proof_cse`, run before term encoding). Normalize union
-        // operands to variables and build each freshly-constructed union operand
-        // directly into the other operand's e-class (see proof_encoding.md, "Union
-        // in a rule").
+        // Repeated constructor applications are already shared `let`s (see
+        // `ast::cse`). Normalize union operands to variables, then build each
+        // freshly-constructed union operand directly into the other operand's
+        // e-class (see proof_encoding.md, "Union in a rule").
         let normalized = self.normalize_union_operands(actions);
         let (construct_into, dropped) = Self::plan_construct_into(&normalized);
         let mut res = vec![];
@@ -1784,12 +1783,9 @@ impl<'a> ProofInstrumentor<'a> {
             ResolvedNCommand::NormRule { rule } => {
                 res.extend(self.instrument_rule(rule));
             }
-            // A top-level action, or a block of them produced by the CSE prepass
-            // (`proof_cse`). Grouping the instrumented result as one immediate
-            // local-scope block keeps every minted `let` (and every hoisted CSE
-            // `let`) a local slot instead of a global function/table, which
-            // `remove_globals` would otherwise create per temporary. See
-            // `parse_program_as_local_actions`.
+            // A top-level action, or a block of them from `ast::cse`. The
+            // instrumented result runs as one local-scope block so the minted
+            // temporaries stay local (see `parse_program_as_local_actions`).
             ResolvedNCommand::CoreAction(_) | ResolvedNCommand::CoreActions(_) => {
                 let actions: &[ResolvedAction] = match command {
                     ResolvedNCommand::CoreAction(action) => std::slice::from_ref(action),
@@ -1802,9 +1798,6 @@ impl<'a> ProofInstrumentor<'a> {
                     .join("\n");
                 res.extend(self.parse_program_as_local_actions(&instrumented));
             }
-            // `remove_globals` expands `let`-begin into a function declaration plus
-            // a `CoreActions` block before term encoding, and a user-written one is
-            // rejected by `command_supports_proof_encoding` before that.
             ResolvedNCommand::LetBegin(..) => {
                 unreachable!("LetBegin is removed by remove_globals")
             }
@@ -1928,8 +1921,8 @@ impl<'a> ProofInstrumentor<'a> {
 /// global-let's `(set (g) e)`), a `let`, or a top-level expression over
 /// non-container sorts builds and dedups terms via `set-if-empty` without
 /// merging e-classes or deferring work, so no maintenance rebuild is needed
-/// after it — this is what stops N global-let `set`s (or N `begin` blocks) from
-/// each triggering a rebuild (quadratic). A block skips when all its actions do.
+/// after it — this is what stops N global-let `set`s from each triggering a
+/// rebuild (quadratic). A block skips when all of its actions do.
 /// Everything else still rebuilds: `union` merges e-classes, `delete`/`subsume`
 /// defer work to the maintenance ruleset, and a container-valued action needs
 /// the (`:naive`) container rebuild to recanonicalize it — all need the
@@ -1941,8 +1934,6 @@ fn command_skips_rebuild(command: &ResolvedNCommand) -> bool {
     }
     fn action_skips_rebuild(action: &ResolvedAction) -> bool {
         match action {
-            // A `let` binding a constructor application builds and dedups it via
-            // `set-if-empty`, exactly like a top-level expression.
             ResolvedAction::Expr(_, e) | ResolvedAction::Let(_, _, e) => !touches_container(e),
             ResolvedAction::Set(_, _, args, rhs) => !args
                 .iter()
@@ -1956,10 +1947,6 @@ fn command_skips_rebuild(command: &ResolvedNCommand) -> bool {
         | ResolvedNCommand::NormRule { .. }
         | ResolvedNCommand::Sort { .. } => true,
         ResolvedNCommand::CoreAction(action) => action_skips_rebuild(action),
-        // A `begin` block runs its actions in one go, so it needs no maintenance
-        // rebuild exactly when none of them do. Without this, the blocks the CSE
-        // prepass introduces would each force a rebuild — the quadratic cost this
-        // check exists to avoid.
         ResolvedNCommand::CoreActions(actions) => actions.0.iter().all(action_skips_rebuild),
         _ => false,
     }

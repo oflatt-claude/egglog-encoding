@@ -124,11 +124,8 @@ impl ProofInstrumentor<'_> {
     }
 
     /// Like [`Self::parse_program`], but groups each maximal run of consecutive
-    /// top-level actions into a single [`Command::Actions`] block. Those blocks
-    /// run once with a shared local scope, so their minted `let` temporaries stay
-    /// local instead of each becoming a global function table under
-    /// `remove_globals`. Non-action commands are passed through in place, so any
-    /// ordering against surrounding declarations is preserved.
+    /// top-level actions into one [`Command::Actions`] block. Non-action commands
+    /// pass through in place, preserving order.
     pub(crate) fn parse_program_as_local_actions(&mut self, input: &str) -> Vec<Command> {
         use crate::ast::GenericActions;
         let mut out: Vec<Command> = vec![];
@@ -537,7 +534,7 @@ pub enum ProofEncodingUnsupportedReason {
     #[error("tuple-output functions are not supported by the term/proof encoding.")]
     TupleOutputFunction,
     #[error(
-        "a user-written `begin` block (or `(let <var> (begin ...))`) is not supported by the term/proof encoding. Proof checking models top-level actions individually, so a block's local bindings have no checkable representation; write the actions at the top level instead."
+        "a user-written `begin` block (or `(let <var> (begin ...))`) is not supported by the term/proof encoding, which models top-level actions individually. Write the actions at the top level instead."
     )]
     UserWrittenBeginBlock,
     #[error(

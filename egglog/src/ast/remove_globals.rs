@@ -129,18 +129,14 @@ impl GlobalRemover<'_> {
                 }
                 _ => vec![GenericNCommand::CoreAction(remove_globals_action(action))],
             },
-            // A local-scope action block: rewrite references to real globals, but
-            // leave the block's own `let`s as local bindings (do not hoist them to
-            // functions the way top-level lets are hoisted above).
+            // Rewrite global references but leave the block's own `let`s local.
             GenericNCommand::CoreActions(actions) => {
                 vec![GenericNCommand::CoreActions(
                     actions.visit_actions(&mut remove_globals_action),
                 )]
             }
-            // `(let a (begin ...))`: declare `a` as a global function (like a
-            // top-level `let`), then run the block as one local-scope
-            // `CoreActions` ending by setting the function to the block's
-            // trailing value expression. The block's own `let`s stay local.
+            // Declare `a` as a global function, then run the block, ending by
+            // setting the function to the block's trailing value.
             GenericNCommand::LetBegin(span, name, actions) => {
                 let mut acts = actions.0;
                 let value = match acts.pop() {

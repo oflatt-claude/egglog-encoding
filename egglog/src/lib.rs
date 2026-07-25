@@ -2081,14 +2081,10 @@ impl EGraph {
                     self.eval_actions(&ResolvedActions::new(vec![action.clone()]))?;
                 }
             },
-            // A local-scope action block: run all actions once, immediately, in a
-            // single `eval_actions` call so their `let`s stay local (no per-temporary
-            // global tables).
+            // One `eval_actions` call, so the block's `let`s stay local.
             ResolvedNCommand::CoreActions(actions) => {
                 self.eval_actions(&actions)?;
             }
-            // Expanded by `remove_globals` into a function + `CoreActions` before
-            // a command is run.
             ResolvedNCommand::LetBegin(..) => {
                 unreachable!("LetBegin is removed by remove_globals")
             }
@@ -2639,10 +2635,9 @@ impl EGraph {
                 self.names.check_shadowing(command)?;
             }
 
-            // Bind repeated constructor applications to shared `let`s before
-            // encoding, so each is interned once (see `proofs::proof_cse`).
+            // Share repeated constructor applications (see `ast::cse`).
             let deduped =
-                proofs::proof_cse::cse_program(typechecked_no_globals, &mut self.parser.symbol_gen);
+                ast::cse::cse_program(typechecked_no_globals, &mut self.parser.symbol_gen);
 
             let term_encoding_added = ProofInstrumentor::add_term_encoding(self, deduped)?;
             let mut new_typechecked = vec![];

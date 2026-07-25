@@ -1,4 +1,5 @@
 pub mod check_shadowing;
+pub mod cse;
 pub mod desugar;
 mod expr;
 mod parse;
@@ -118,16 +119,12 @@ where
     },
     CoreAction(GenericAction<Head, Leaf>),
     /// A block of actions run once, immediately, with a shared *local* scope:
-    /// `let`s bind local variables (slots) rather than global functions. Used by
-    /// the term/proof encoding for a top-level action's minted temporaries so
-    /// they do not each become their own table. A user-written block is reported
-    /// unsupported under that encoding (see `ProofEncodingUnsupportedReason`).
+    /// `let`s bind local variables rather than global functions. A user-written
+    /// block is unsupported under the term/proof encoding.
     CoreActions(GenericActions<Head, Leaf>),
-    /// `(let <var> (begin <action>* <expr>))`: run the block once with a shared
-    /// local scope, then bind the *global* `<var>` to the trailing `<expr>` (the
-    /// last element of `actions`, an `Expr` action). `remove_globals` expands it
-    /// into a function declaration plus a [`GenericNCommand::CoreActions`] block
-    /// that sets the function, so the block's scaffolding `let`s stay local.
+    /// `(let <var> (begin <action>* <expr>))`: run the block with a shared local
+    /// scope, then bind the *global* `<var>` to the trailing `<expr>`. The last
+    /// action must be an `Expr`.
     LetBegin(Span, Leaf, GenericActions<Head, Leaf>),
     Extract(Span, GenericExpr<Head, Leaf>, GenericExpr<Head, Leaf>),
     RunSchedule(GenericSchedule<Head, Leaf>),
