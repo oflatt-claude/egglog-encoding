@@ -2639,8 +2639,12 @@ impl EGraph {
                 self.names.check_shadowing(command)?;
             }
 
-            let term_encoding_added =
-                ProofInstrumentor::add_term_encoding(self, typechecked_no_globals)?;
+            // Bind repeated constructor applications to shared `let`s before
+            // encoding, so each is interned once (see `proofs::proof_cse`).
+            let deduped =
+                proofs::proof_cse::cse_program(typechecked_no_globals, &mut self.parser.symbol_gen);
+
+            let term_encoding_added = ProofInstrumentor::add_term_encoding(self, deduped)?;
             let mut new_typechecked = vec![];
             for new_cmd in term_encoding_added {
                 let desugared =

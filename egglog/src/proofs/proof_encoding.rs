@@ -1496,135 +1496,6 @@ impl<'a> ProofInstrumentor<'a> {
         }
     }
 
-    /// Count each constructor sub-application (by its s-expr form) in `expr`.
-    fn count_ctor_subexprs(expr: &ResolvedExpr, counts: &mut HashMap<String, usize>) {
-        if let GenericExpr::Call(_, call, args) = expr {
-            for arg in args {
-                Self::count_ctor_subexprs(arg, counts);
-            }
-            if matches!(call, ResolvedCall::Func(ft) if ft.subtype == FunctionSubtype::Constructor)
-            {
-                *counts.entry(expr.to_string()).or_default() += 1;
-            }
-        }
-    }
-
-    /// Count constructor sub-applications across one action's expressions.
-    fn count_action_ctors(action: &ResolvedAction, counts: &mut HashMap<String, usize>) {
-        match action {
-            ResolvedAction::Let(_, _, e) | ResolvedAction::Expr(_, e) => {
-                Self::count_ctor_subexprs(e, counts)
-            }
-            ResolvedAction::Set(_, _, args, val) => {
-                args.iter()
-                    .for_each(|a| Self::count_ctor_subexprs(a, counts));
-                Self::count_ctor_subexprs(val, counts);
-            }
-            ResolvedAction::Union(_, a, b) => {
-                Self::count_ctor_subexprs(a, counts);
-                Self::count_ctor_subexprs(b, counts);
-            }
-            ResolvedAction::Change(_, _, _, args) => {
-                args.iter()
-                    .for_each(|a| Self::count_ctor_subexprs(a, counts));
-            }
-            ResolvedAction::Panic(..) => {}
-        }
-    }
-
-    /// Common-subexpression prepass over one action scope: bind each constructor
-    /// application that appears more than once to a shared `let` and replace its
-    /// occurrences with that variable, so the encoder interns it once. Purely
-    /// syntactic; the encoder already builds a `let`-bound constructor once and
-    /// shares it (its e-class and, in proof mode, its natural node) across
-    /// references. Combined with running a top-level action's instrumentation as
-    /// one local-scope block, the shared `let`s stay local rather than becoming a
-    /// global function/table per hoisted subterm.
-    fn cse_actions(&mut self, actions: &[ResolvedAction]) -> Vec<ResolvedAction> {
-        let mut counts: HashMap<String, usize> = HashMap::default();
-        for action in actions {
-            Self::count_action_ctors(action, &mut counts);
-        }
-        if counts.values().all(|&c| c < 2) {
-            return actions.to_vec();
-        }
-        let mut cache: HashMap<String, ResolvedVar> = HashMap::default();
-        let mut out = vec![];
-        for action in actions {
-            let rewritten = self.cse_action(action, &counts, &mut cache, &mut out);
-            out.push(rewritten);
-        }
-        out
-    }
-
-    /// Rewrite one action, hoisting its repeated constructor sub-applications
-    /// (per `counts`) into shared `let`s pushed onto `out` before it.
-    fn cse_action(
-        &mut self,
-        action: &ResolvedAction,
-        counts: &HashMap<String, usize>,
-        cache: &mut HashMap<String, ResolvedVar>,
-        out: &mut Vec<ResolvedAction>,
-    ) -> ResolvedAction {
-        let mut go = |this: &mut Self, e: &ResolvedExpr| this.cse_expr(e, counts, cache, out);
-        match action {
-            ResolvedAction::Let(span, v, e) => {
-                ResolvedAction::Let(span.clone(), v.clone(), go(self, e))
-            }
-            ResolvedAction::Expr(span, e) => ResolvedAction::Expr(span.clone(), go(self, e)),
-            ResolvedAction::Set(span, call, args, val) => {
-                let args = args.iter().map(|a| go(self, a)).collect();
-                let val = go(self, val);
-                ResolvedAction::Set(span.clone(), call.clone(), args, val)
-            }
-            ResolvedAction::Union(span, a, b) => {
-                ResolvedAction::Union(span.clone(), go(self, a), go(self, b))
-            }
-            ResolvedAction::Change(span, change, call, args) => {
-                let args = args.iter().map(|a| go(self, a)).collect();
-                ResolvedAction::Change(span.clone(), *change, call.clone(), args)
-            }
-            ResolvedAction::Panic(..) => action.clone(),
-        }
-    }
-
-    /// Rewrite one expression bottom-up, replacing each repeated constructor
-    /// application with a shared `let`-bound variable (creating the `let` on
-    /// first encounter). Its key is the *original* s-expr, matching the count.
-    fn cse_expr(
-        &mut self,
-        expr: &ResolvedExpr,
-        counts: &HashMap<String, usize>,
-        cache: &mut HashMap<String, ResolvedVar>,
-        out: &mut Vec<ResolvedAction>,
-    ) -> ResolvedExpr {
-        let GenericExpr::Call(span, call, args) = expr else {
-            return expr.clone();
-        };
-        let new_args = args
-            .iter()
-            .map(|a| self.cse_expr(a, counts, cache, out))
-            .collect();
-        let rewritten = GenericExpr::Call(span.clone(), call.clone(), new_args);
-        let is_ctor =
-            matches!(call, ResolvedCall::Func(ft) if ft.subtype == FunctionSubtype::Constructor);
-        if !is_ctor || counts.get(&expr.to_string()).copied().unwrap_or(0) < 2 {
-            return rewritten;
-        }
-        let key = expr.to_string();
-        if let Some(v) = cache.get(&key) {
-            return GenericExpr::Var(span.clone(), v.clone());
-        }
-        let var = ResolvedVar {
-            name: self.egraph.parser.symbol_gen.fresh("cse"),
-            sort: expr.output_type(),
-            is_global_ref: false,
-        };
-        out.push(ResolvedAction::Let(span.clone(), var.clone(), rewritten));
-        cache.insert(key, var.clone());
-        GenericExpr::Var(span.clone(), var)
-    }
-
     /// In proof mode, rule_proof justifies the actions taken.
     fn instrument_actions(
         &mut self,
@@ -1632,13 +1503,12 @@ impl<'a> ProofInstrumentor<'a> {
         justification: &Justification,
         nat_conn: &mut NatConn,
     ) -> Vec<String> {
-        // CSE the scope first so a repeated constructor application is built once
-        // (also the dedup that keeps a local-scope `begin` block correct without an
-        // intermediate merge). Then normalize union operands to variables and build
-        // each freshly-constructed union operand directly into the other operand's
-        // e-class (see proof_encoding.md, "Union in a rule").
-        let deduped = self.cse_actions(actions);
-        let normalized = self.normalize_union_operands(&deduped);
+        // Repeated constructor applications were already bound to shared `let`s by
+        // the CSE prepass (`proof_cse`, run before term encoding). Normalize union
+        // operands to variables and build each freshly-constructed union operand
+        // directly into the other operand's e-class (see proof_encoding.md, "Union
+        // in a rule").
+        let normalized = self.normalize_union_operands(actions);
         let (construct_into, dropped) = Self::plan_construct_into(&normalized);
         let mut res = vec![];
         for (i, action) in normalized.iter().enumerate() {
@@ -1914,28 +1784,29 @@ impl<'a> ProofInstrumentor<'a> {
             ResolvedNCommand::NormRule { rule } => {
                 res.extend(self.instrument_rule(rule));
             }
-            ResolvedNCommand::CoreAction(action) => {
+            // A top-level action, or a block of them produced by the CSE prepass
+            // (`proof_cse`). Grouping the instrumented result as one immediate
+            // local-scope block keeps every minted `let` (and every hoisted CSE
+            // `let`) a local slot instead of a global function/table, which
+            // `remove_globals` would otherwise create per temporary. See
+            // `parse_program_as_local_actions`.
+            ResolvedNCommand::CoreAction(_) | ResolvedNCommand::CoreActions(_) => {
+                let actions: &[ResolvedAction] = match command {
+                    ResolvedNCommand::CoreAction(action) => std::slice::from_ref(action),
+                    ResolvedNCommand::CoreActions(actions) => &actions.0,
+                    _ => unreachable!("guarded by the match arm"),
+                };
                 let mut nat_conn = NatConn::default();
-                // `instrument_actions` CSE-dedups the scope; grouping the result as
-                // one immediate local-scope block then keeps every minted `let`
-                // (and every hoisted CSE `let`) a local slot instead of a global
-                // function/table (which `remove_globals` would otherwise create per
-                // temporary). See `parse_program_as_local_actions`.
                 let instrumented = self
-                    .instrument_actions(
-                        std::slice::from_ref(action),
-                        &Justification::Fiat,
-                        &mut nat_conn,
-                    )
+                    .instrument_actions(actions, &Justification::Fiat, &mut nat_conn)
                     .join("\n");
                 res.extend(self.parse_program_as_local_actions(&instrumented));
             }
-            // A user-written `begin` block (or its `let`-begin expansion) is
-            // rejected by `command_supports_proof_encoding` before the encoder
-            // runs, so only this encoder's own generated blocks exist under the
-            // encoding — and those are produced here, never re-encoded.
-            ResolvedNCommand::CoreActions(..) | ResolvedNCommand::LetBegin(..) => {
-                unreachable!("user `begin` blocks are unsupported under the term/proof encoding")
+            // `remove_globals` expands `let`-begin into a function declaration plus
+            // a `CoreActions` block before term encoding, and a user-written one is
+            // rejected by `command_supports_proof_encoding` before that.
+            ResolvedNCommand::LetBegin(..) => {
+                unreachable!("LetBegin is removed by remove_globals")
             }
             ResolvedNCommand::Check(span, facts) => {
                 let (instrumented, _lookups, _proof) = self.instrument_facts(facts);
@@ -2054,10 +1925,11 @@ impl<'a> ProofInstrumentor<'a> {
 /// Whether no maintenance rebuild is needed after `command`.
 ///
 /// Declarations (sorts, functions, rules) run no actions. A `set` (including a
-/// global-let's `(set (g) e)`) or a top-level expression over non-container
-/// sorts builds and dedups terms via `set-if-empty` without merging e-classes
-/// or deferring work, so no maintenance rebuild is needed after it — this is
-/// what stops N global-let `set`s from each triggering a rebuild (quadratic).
+/// global-let's `(set (g) e)`), a `let`, or a top-level expression over
+/// non-container sorts builds and dedups terms via `set-if-empty` without
+/// merging e-classes or deferring work, so no maintenance rebuild is needed
+/// after it — this is what stops N global-let `set`s (or N `begin` blocks) from
+/// each triggering a rebuild (quadratic). A block skips when all its actions do.
 /// Everything else still rebuilds: `union` merges e-classes, `delete`/`subsume`
 /// defer work to the maintenance ruleset, and a container-valued action needs
 /// the (`:naive`) container rebuild to recanonicalize it — all need the
@@ -2067,15 +1939,28 @@ fn command_skips_rebuild(command: &ResolvedNCommand) -> bool {
         e.output_type().is_eq_container_sort()
             || matches!(e, ResolvedExpr::Call(_, _, args) if args.iter().any(touches_container))
     }
+    fn action_skips_rebuild(action: &ResolvedAction) -> bool {
+        match action {
+            // A `let` binding a constructor application builds and dedups it via
+            // `set-if-empty`, exactly like a top-level expression.
+            ResolvedAction::Expr(_, e) | ResolvedAction::Let(_, _, e) => !touches_container(e),
+            ResolvedAction::Set(_, _, args, rhs) => !args
+                .iter()
+                .chain(std::iter::once(rhs))
+                .any(touches_container),
+            _ => false,
+        }
+    }
     match command {
         ResolvedNCommand::Function(..)
         | ResolvedNCommand::NormRule { .. }
         | ResolvedNCommand::Sort { .. } => true,
-        ResolvedNCommand::CoreAction(ResolvedAction::Expr(_, e)) => !touches_container(e),
-        ResolvedNCommand::CoreAction(ResolvedAction::Set(_, _, args, rhs)) => !args
-            .iter()
-            .chain(std::iter::once(rhs))
-            .any(touches_container),
+        ResolvedNCommand::CoreAction(action) => action_skips_rebuild(action),
+        // A `begin` block runs its actions in one go, so it needs no maintenance
+        // rebuild exactly when none of them do. Without this, the blocks the CSE
+        // prepass introduces would each force a rebuild — the quadratic cost this
+        // check exists to avoid.
+        ResolvedNCommand::CoreActions(actions) => actions.0.iter().all(action_skips_rebuild),
         _ => false,
     }
 }
