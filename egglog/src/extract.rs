@@ -710,6 +710,16 @@ pub(crate) fn find_canonical(egraph: &EGraph, value: Value, sort: &ArcSort) -> V
     // Fall back to the auxiliary union-find: a term/proof id that lost a
     // same-iteration `set-if-empty` collision has no row of its own, but `AuxUF`
     // maps it to the surviving (structurally identical) id.
+    find_aux_canonical(egraph, value, sort)
+}
+
+/// Resolve a term/proof id through the sort's auxiliary union-find
+/// `AuxUF_<Sort>` only: an id that lost a same-iteration `set-if-empty`
+/// collision has no row of its own, and `AuxUF` maps it to the surviving,
+/// *structurally identical* id. Unlike [`find_canonical`] this never crosses a
+/// real `union`, so it preserves the node's term shape — which is what proof
+/// extraction needs.
+pub(crate) fn find_aux_canonical(egraph: &EGraph, value: Value, sort: &ArcSort) -> Value {
     if let Some(aux_name) = egraph.proof_state.aux_uf_parent.get(sort.name())
         && let Some(aux_func) = egraph.functions.get(aux_name)
     {
@@ -718,7 +728,6 @@ pub(crate) fn find_canonical(egraph: &EGraph, value: Value, sort: &ArcSort) -> V
             .lookup_id(aux_func.backend_id, &[value])
             .unwrap_or(value);
     }
-
     value
 }
 

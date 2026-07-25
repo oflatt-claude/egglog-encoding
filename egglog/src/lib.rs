@@ -2487,7 +2487,7 @@ impl EGraph {
             .collect();
 
         // Proof tables: `Fiat` from the `Proof` sort's `:internal-proof-names`,
-        // the term-id sort's AST constructor by its `(<sort> <Ast>) -> Unit`
+        // the term-id sort's AST constructor by its `(<sort>) -> <Ast>`
         // signature, and (constructors only) `<Sort>Proof` from the term-id
         // sort's `:internal-proof-func`.
         let proof_tables = proofs.then(|| {
@@ -2500,10 +2500,9 @@ impl EGraph {
                 .values()
                 .find(|g| {
                     g.decl.internal_hidden
-                        && g.schema.input.len() == 2
+                        && g.schema.input.len() == 1
                         && g.schema.input[0].name() == term_id_sort
-                        && g.schema.input[1].name() == ast_sort
-                        && g.schema.output().name() == "Unit"
+                        && g.schema.output().name() == ast_sort
                 })
                 .unwrap_or_else(|| panic!("no AST constructor for sort {term_id_sort}"))
                 .backend_id;
@@ -2525,13 +2524,13 @@ impl EGraph {
             batch.push((f_id, frow));
 
             let view_proof = if let Some((ast_id, fiat_id, proof_func_id)) = proof_tables {
-                // Fiat proof of the base fact: `@Fiat(ast(fv), ast(fv))`.
-                let a1 = self.backend.fresh_id();
-                batch.push((ast_id, vec![fv, a1, unit_val]));
-                let a2 = self.backend.fresh_id();
-                batch.push((ast_id, vec![fv, a2, unit_val]));
+                // Fiat proof of the base fact: `@Fiat(ast(fv), ast(fv))`. The AST and
+                // proof tables are hash-consed (children key, id in the output
+                // column), so `ast(fv)` is interned once and reused for both sides.
+                let ast = self.backend.fresh_id();
+                batch.push((ast_id, vec![fv, ast]));
                 let pf = self.backend.fresh_id();
-                batch.push((fiat_id, vec![a1, a2, pf, unit_val]));
+                batch.push((fiat_id, vec![ast, ast, pf]));
                 if let Some(proof_func_id) = proof_func_id {
                     batch.push((proof_func_id, vec![fv, pf]));
                 }

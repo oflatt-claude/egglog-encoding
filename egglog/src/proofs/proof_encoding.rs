@@ -1021,13 +1021,19 @@ impl<'a> ProofInstrumentor<'a> {
         canon
     }
 
-    /// Proof-mode constructors: build the *natural* term (children at their
-    /// as-built ids) and the *canonical* term (children at their view-deduped
-    /// ids), connect them with a `Congr` chain over the changed children, then
-    /// `set-if-empty` to the view's deduped e-class and stitch on the view-dedup
-    /// edge. Return the deduped e-class (so parents and views stay canonical)
-    /// and record `(natural, connector : natural = deduped)` in `nat_conn` for
-    /// the parent's `Congr` and the root `union`.
+    /// Proof-mode constructors: intern the *natural* term (children at their
+    /// as-built ids), prove `natural = f(deduped children)` with a `Congr` chain
+    /// over the changed children, then `set-if-empty` that pair into the view to
+    /// get the deduped e-class. Return the deduped e-class (so parents and views
+    /// stay canonical) and record `(natural, connector : natural = deduped)` in
+    /// `nat_conn` for the parent's `Congr` and the root `union`.
+    ///
+    /// The natural node is the *only* id this interns, and it is what seeds the
+    /// view: interning a second node at the deduped children would, whenever the
+    /// two children lists coincide at runtime, mint two candidate ids for one key
+    /// in one iteration — the term table's `:merge` keeps the smaller while the
+    /// view is seeded with the other, leaving the view's e-class with no term row
+    /// (so its shape is no longer pinned to what the rule head built).
     fn add_constructor_with_proof(
         &mut self,
         res: &mut Vec<String>,
@@ -1057,11 +1063,8 @@ impl<'a> ProofInstrumentor<'a> {
         let nat_args: Vec<String> = children.iter().map(|(_, n, _)| n.clone()).collect();
         let dedup_args: Vec<String> = children.iter().map(|(d, _, _)| d.clone()).collect();
 
-        // `fv_nat` stays *unseeded* (only `fv_can` is written to the view) so it is
-        // never pulled into the view's congruence `:merge`; its `@Rule` endpoint
-        // therefore keeps the as-built shape the rule head produced. `fv_can` is
-        // always a separate node (even when no child changed) with the reflexive
-        // proof `fv_can = fv_can`, exempt from the rule-head check.
+        // `fv_nat` is the node at the as-built children, so its `@Rule` endpoint
+        // keeps the shape the rule head produced.
         let fv_nat = self.mint(
             res,
             &func_type.name,
@@ -1081,22 +1084,11 @@ impl<'a> ProofInstrumentor<'a> {
                 );
             }
         }
-        let fv_can = self.mint(
-            res,
-            &func_type.name,
-            &ListDisplay(&dedup_args, " ").to_string(),
-            view_sort,
-        );
-        let sym_ntd = self.mint(res, &sym, &nat_to_dedup_term, &proof_sort);
-        let can_prf = self.mint(
-            res,
-            &trans,
-            &format!("{sym_ntd} {nat_to_dedup_term}"),
-            &proof_sort,
-        );
-
-        // Anchor both term proofs, dedup `fv_can` to the view e-class, and read the
-        // view's stored proof (`dedup = f(children)`).
+        // Anchor the natural term's proof, then seed the view with
+        // `(fv_nat, nat_to_dedup_term)` — a row proof whose RHS is `f(children)`,
+        // as every view reader requires — and read back the row's committed proof
+        // (`dedup = f(children)`; the fallback is the seed, so a fresh row's
+        // connector collapses to reflexive).
         let dedup = self.fresh_var();
         let vprf = self.fresh_var();
         let view_proof = crate::proofs::proof_fresh::view_proof_prim_name(&view);
@@ -1105,13 +1097,10 @@ impl<'a> ProofInstrumentor<'a> {
             "(set ({term_proof_constructor} {fv_nat}) {nat_prf})"
         ));
         res.push(format!(
-            "(set ({term_proof_constructor} {fv_can}) {can_prf})"
+            "(let {dedup} ({set_if_empty} {dedup_args} {fv_nat} {nat_to_dedup_term}))"
         ));
         res.push(format!(
-            "(let {dedup} ({set_if_empty} {dedup_args} {fv_can} {can_prf}))"
-        ));
-        res.push(format!(
-            "(let {vprf} ({view_proof} {dedup_args} {can_prf}))"
+            "(let {vprf} ({view_proof} {dedup_args} {nat_to_dedup_term}))"
         ));
 
         // connector `fv_nat = dedup` = Trans(nat_to_dedup, Sym(dedup = f(children))).
