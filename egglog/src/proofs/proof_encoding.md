@@ -417,26 +417,54 @@ two edge proofs with `Trans` in proof mode):
 
 ## Keeping the view canonical
 
-For each constructor, the encoding fans out one rebuild rule per rebuildable
-column. `Add`'s `i64` children are not eq-sorts, so its only rule re-canonicalizes
-the **e-class** column: when the e-class has a `UF_<Sort>` parent, re-`set` the row
-with the leader (the view's `:merge` keeps the smaller).
+Each view gets one *rebuild index* per distinct eq-sort among its columns,
+covering that sort's children **and** its e-class:
 
 ```text
-(rule ((= (values e pe) (AddView c0 c1))
-       (= (values leader ple) (UF_Math e))
-       (!= e leader))
-      ((set (AddView c0 c1) (values leader ())))
-        :ruleset rebuilding :name "rebuild_rule" :internal-include-subsumed)
+(index MulOcc_Math MulView (any 0 1 2))
 ```
 
-A rule for an **eq-sort child** instead re-keys the row: it `set`s the view at the
-canonicalized children and deletes the stale row (proof mode composes a `Congr` at
-that child index). Because `UF_<Sort>` has no row for a canonical term
-(identity-on-miss), a column already at its leader simply does not match, so no
-self-loops or default lookups are needed. Subsumption markers
-(`to_subsume_<Constructor>`) are likewise re-keyed to their leaders so a subsumed
-row stays subsumed after its children move.
+`MulOcc_Math` is an ordinary declared index (the `index` command): for every view
+row and every listed column, that column's value followed by the whole row. It
+answers "which rows mention this term", which is what a rebuild needs and what a
+native rebuild finds through its own such index.
+
+One rule per sort then drives the rebuild from a `UF_<Sort>` edge rather than by
+matching the view:
+
+```text
+(rule ((= (values leader plf) (UF_Math follower))
+       (!= follower leader)
+       (MulOcc_Math follower c0 c1 e pf))
+      ((let c0_canon_ (UF_Math_canon c0 c0))
+       (let c1_canon_ (UF_Math_canon c1 c1))
+       (let e_canon_ (UF_Math_canon e e))
+       (delete (MulView c0 c1))
+       (set (MulView c0_canon_ c1_canon_) (values e_canon_ ())))
+        :ruleset rebuilding :unsafe-seminaive :name "rebuild_rule" :internal-include-subsumed)
+```
+
+The index atom binds the whole row, so nothing else need be read, and the action
+re-canonicalizes *every* eq-sort column at once — including the e-class, which
+therefore needs no rule of its own. One firing yields the fully canonical row, so
+two children moving in the same iteration fire twice with the same result rather
+than each leaving a differently half-rewritten row behind.
+
+`UF_<Sort>_canon` is the row's leader column read by term, with the term itself
+as the fallback, so a column already at its leader canonicalizes to itself. In
+proof mode a sibling `UF_<Sort>_canon_proof` supplies each step's proof —
+reflexive for a column that did not move — and the rule folds one `Congr` per
+column onto the row proof. Reading `UF_<Sort>` in the action is what makes the
+rule `:unsafe-seminaive`; the driving `UF_<Sort>` delta in the body is what makes
+that read sound.
+
+The row is deleted before being re-inserted, because when only the e-class moved
+the canonical key equals the old one.
+
+Container columns are not indexed — they carry no `UF_<Sort>` row to drive a
+lookup — and keep the per-column `:naive` rule below. Subsumption markers
+(`to_subsume_<Constructor>`) are re-keyed to their leaders by their own
+per-column rules, so a subsumed row stays subsumed after its children move.
 
 # Globals
 

@@ -235,8 +235,7 @@ impl IndexBase for ColumnIndex {
         for (i, key) in vals.iter().enumerate() {
             // An index over several columns posts a row under each value it
             // holds; a value sitting in more than one of those columns must
-            // still post the row once. The scan is over the indexed columns
-            // only (one of them in the common case, so no work at all).
+            // still post the row once.
             if vals[..i].contains(key) {
                 continue;
             }

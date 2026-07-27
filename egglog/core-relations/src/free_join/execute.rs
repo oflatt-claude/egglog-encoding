@@ -752,9 +752,7 @@ impl TrieNode {
     }
 
     /// The occurrence index over this node's subset, built once per node (see
-    /// [`TrieNode::cached_occurrence`]). Without the cache this is rebuilt on
-    /// every entry into the probing stage — once per outer binding — which makes
-    /// each probe cost the size of the subset rather than of its result.
+    /// [`TrieNode::cached_occurrence`]).
     fn get_cached_occurrence_index(&self, cols: &[ColumnId], info: &TableInfo) -> Arc<ColumnIndex> {
         let build = || {
             Arc::new(ColumnIndex::build_for_subset(

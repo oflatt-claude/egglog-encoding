@@ -78,9 +78,7 @@ pub(crate) struct SingleScanSpec {
     pub atom: AtomId,
     pub column: ColumnId,
     /// Set when this scan binds the atom's occurrence variable: the columns to
-    /// read disjunctively. `column` is then only the first of them, which is not
-    /// enough on its own — and a bare column cannot say whether it means "the
-    /// variable sitting at this column" or "a value occurring in the set".
+    /// read disjunctively. `column` is then only the first of them.
     pub occurrence_cols: Option<SmallVec<[ColumnId; 4]>>,
     pub cs: Vec<Constraint>,
 }

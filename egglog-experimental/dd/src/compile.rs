@@ -146,8 +146,7 @@ pub struct ReadKey {
     pub mode: ReadMode,
     /// Zero for an ordinary read. Otherwise this stream is the *occurrence view*
     /// of `func`: one row per (value, base row) for each value the base row holds
-    /// in a column whose bit is set here, deduplicated per row. A bitmask rather
-    /// than a column list so a read key stays `Copy`.
+    /// in a column whose bit is set here, deduplicated per row.
     pub occurrence_cols: u64,
 }
 

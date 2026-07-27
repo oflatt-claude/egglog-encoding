@@ -464,9 +464,10 @@ impl<'outer, 'a> QueryBuilder<'outer, 'a> {
     }
 
     /// Add an atom that additionally binds `occurrence_var` to a value occurring
-    /// in *some* one of `occurrence_cols` — the query form of an occurrence index
-    /// (see [`Atom::occurrence`]). `vars` covers the table's columns as in
-    /// [`Self::add_atom`]; `occurrence_var` is not one of them.
+    /// in *some* one of `occurrence_cols`. `vars` covers the table's columns as in
+    /// [`Self::add_atom`]; `occurrence_var` is not one of them, and the columns
+    /// are read disjunctively — unlike a variable repeated across them, which
+    /// constrains them to be equal.
     ///
     /// The atom can only be probed, so `occurrence_var` must be bound elsewhere
     /// in the query: scanning this atom would have to yield one binding per
@@ -542,11 +543,6 @@ pub enum QueryError {
     #[error("occurrence atom on table {table:?} lists no columns to index")]
     EmptyOccurrenceIndex { table: TableId },
 
-    #[error(
-        "occurrence variable of the atom on table {table:?} is not bound by any other atom, so the atom can only be scanned"
-    )]
-    UnboundOccurrenceVar { table: TableId },
-
     #[error("table {table:?} expected {expected:?} columns but got {got:?}")]
     BadArity {
         table: TableId,
@@ -587,8 +583,7 @@ impl RuleBuilder<'_, '_> {
 
     /// An occurrence atom can only be probed, so every occurrence variable must
     /// be a column of some *other* atom that binds it first (see
-    /// [`Atom::occurrence`]). Wrong results rather than an error would be the
-    /// alternative, so this fails loudly.
+    /// [`Atom::occurrence`]).
     fn assert_occurrence_vars_bound(&self) {
         let atoms = &self.qb.query.atoms;
         for (id, atom) in atoms.iter() {
