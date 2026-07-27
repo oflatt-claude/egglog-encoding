@@ -1,9 +1,7 @@
 use std::hash::Hasher;
 
 use crate::Context;
-use crate::proofs::proof_container_rebuild::{
-    register_container_rebuild_from_spec, register_uf_canon,
-};
+use crate::proofs::proof_container_rebuild::register_container_rebuild_from_spec;
 use crate::{
     core::{CoreActionContext, CoreRule, GenericActionsExt, QueryConstraints, ResolvedCall},
     *,
@@ -569,12 +567,6 @@ impl EGraph {
                 // is re-parsed.
                 if let Some(spec) = container_rebuild {
                     register_container_rebuild_from_spec(self, name, spec);
-                }
-                // An eq-sort under the encoding registers the single-term
-                // canonicalization primitives its rebuild rules call, derived
-                // from its `@UF_<S>` table.
-                if let Some((uf_ctor, _uf_index)) = uf {
-                    register_uf_canon(self, name, uf_ctor, proof_func.is_some());
                 }
                 ResolvedNCommand::Sort {
                     span: span.clone(),

@@ -486,9 +486,9 @@ with the leader (the view's `:merge` keeps the smaller).
         :ruleset rebuilding :name "rebuild_rule" :internal-include-subsumed)
 ```
 
-The **eq-sort children** are handled by a single rule per distinct child sort,
-driven by a `UF_<Sort>` edge rather than by matching the view. Each view gets one
-hidden *rebuild index* per distinct child eq-sort,
+A rule for an **eq-sort child** is driven by a `UF_<Sort>` edge rather than by
+matching the view. Each view gets one hidden *rebuild index* per distinct child
+eq-sort,
 
 ```text
 (function MulIndex_Math (Math Math Math) Unit :merge old :internal-hidden :unextractable)
@@ -497,33 +497,32 @@ hidden *rebuild index* per distinct child eq-sort,
 holding, for every view row, one entry per `Math` child: that child first, then
 the row's whole key. Leading with the child makes "which rows mention this term"
 a key-prefix lookup — the same access pattern a native rebuild uses when it walks
-the e-nodes referencing a changed e-class. The rule joins a `UF_Math` edge
-against the index to reach those rows:
+the e-nodes referencing a changed e-class. One rule per indexed child position
+joins a `UF_Math` edge against the index; here, position 0 of `Mul`:
 
 ```text
 (rule ((= (values leader plf) (UF_Math follower))
        (!= follower leader)
-       (MulIndex_Math follower c0 c1)
-       (= (values e pe) (MulView c0 c1)))
-      ((let c0_canon_ (UF_Math_canon c0 c0))
-       (let c1_canon_ (UF_Math_canon c1 c1))
-       (set (MulView c0_canon_ c1_canon_) (values e ()))
-       (set (MulIndex_Math c0_canon_ c0_canon_ c1_canon_) ())
-       (set (MulIndex_Math c1_canon_ c0_canon_ c1_canon_) ())
-       (delete (MulView c0 c1))
-       (delete (MulIndex_Math c0 c0 c1))
-       (delete (MulIndex_Math c1 c0 c1)))
+       (MulIndex_Math follower follower c1))
+      ((let e (view-col0-MulView follower c1))
+       (set (MulView leader c1) (values e ()))
+       (set (MulIndex_Math leader leader c1) ())
+       (set (MulIndex_Math c1 leader c1) ())
+       (delete (MulView follower c1))
+       (delete (MulIndex_Math follower follower c1))
+       (delete (MulIndex_Math c1 follower c1)))
         :ruleset rebuilding :unsafe-seminaive :name "rebuild_rule" :internal-include-subsumed)
 ```
 
-`UF_<Sort>_canon` is the row's leader column read by term, with the term itself
-as the fallback — so a child already at its leader canonicalizes to itself. The
-action re-canonicalizes *every* eq-sort child, so one firing fixes the whole row
-instead of one column of it; in proof mode it folds one `Congr` per child onto
-the row proof, and the steps for children that did not move are reflexive and
-collapse in the proof simplifier. Reading `UF_<Sort>` in the action is what makes
-the rule `:unsafe-seminaive`; the driving `UF_<Sort>` delta in the body is what
-makes that read sound.
+The moved term is bound at a known position, so its leader is a plain
+substitution and proof mode composes a single `Congr` at that position from
+`plf`, the edge proof the body already bound.
+
+The index entry also binds the row's key, so the row's value tuple is read in the
+*action* (`view-col<i>-<View>`) instead of joining the view as a third body atom.
+Those readers take no fallback: an absent key halts the rule, exactly as a failing
+body join would. Reading the view in the action is what makes the rule
+`:unsafe-seminaive`.
 
 The index is maintained wherever a view row is written or deleted, so it tracks
 the view exactly. Container children are not indexed — they have no `UF_<Sort>`
