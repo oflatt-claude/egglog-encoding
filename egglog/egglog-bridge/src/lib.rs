@@ -363,6 +363,14 @@ impl EGraph {
     /// Names, not ids: primitives are registered while the program is typechecked,
     /// before the tables exist. Every declared read target must therefore be
     /// declared *before* the table whose merge calls `func`.
+    ///
+    /// Read dependencies must stay acyclic — a cycle cannot be stratified, and
+    /// [`DependencyGraph::add_table`] rejects one. For the term/proof encoding this
+    /// holds because a `:merge` body can only build constructor applications and
+    /// call primitives: a custom-function lookup in an action is rejected up front
+    /// (`ProofEncodingUnsupportedReason::FunctionLookupInAction`), which is what
+    /// rules out two custom functions whose merges intern into each other. Relaxing
+    /// that restriction would make a cycle constructible here.
     pub fn declare_external_func_table_deps(
         &mut self,
         func: ExternalFunctionId,
