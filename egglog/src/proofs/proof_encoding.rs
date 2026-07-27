@@ -87,12 +87,16 @@ pub(crate) struct ProofInstrumentor<'a> {
 }
 
 impl<'a> ProofInstrumentor<'a> {
+    pub(crate) fn new(egraph: &'a mut EGraph) -> Self {
+        Self { egraph }
+    }
+
     /// Make a term state and use it to instrument the code.
     pub(crate) fn add_term_encoding(
         egraph: &'a mut EGraph,
         program: Vec<ResolvedNCommand>,
     ) -> Result<Vec<Command>, Error> {
-        Self { egraph }.add_term_encoding_helper(program)
+        Self::new(egraph).add_term_encoding_helper(program)
     }
 
     pub(crate) fn lower_inputs(
@@ -1432,17 +1436,18 @@ impl<'a> ProofInstrumentor<'a> {
                             // FD view (see `lookup_global`). This is the only custom
                             // lookup allowed here.
                             if self.egraph.type_info.is_global(&func_type.name) {
-                                return self.lookup_global(&func_type.name, res);
+                                self.lookup_global(&func_type.name, res)
+                            } else {
+                                panic!(
+                                    "Found a function lookup in actions, should have been prevented by typechecking"
+                                )
                             }
-                            panic!(
-                                "Found a function lookup in actions, should have been prevented by typechecking"
-                            );
+                        } else {
+                            let (add_code, fv) =
+                                self.add_term_and_view(func_type, &args, proof, nat_conn);
+                            res.extend(add_code);
+                            fv
                         }
-                        let (add_code, fv) =
-                            self.add_term_and_view(func_type, &args, proof, nat_conn);
-                        res.extend(add_code);
-
-                        fv
                     }
                     ResolvedCall::Primitive(specialized_primitive) => {
                         let prim_name = specialized_primitive.name().to_string();
@@ -1498,7 +1503,8 @@ impl<'a> ProofInstrumentor<'a> {
         justification: &Justification,
         nat_conn: &mut NatConn,
     ) -> Vec<String> {
-        // Normalize union operands to variables, then build each
+        // Repeated constructor applications are already shared `let`s (see
+        // `ast::cse`). Normalize union operands to variables, then build each
         // freshly-constructed union operand directly into the other operand's
         // e-class (see proof_encoding.md, "Union in a rule").
         let normalized = self.normalize_union_operands(actions);
@@ -1777,16 +1783,23 @@ impl<'a> ProofInstrumentor<'a> {
             ResolvedNCommand::NormRule { rule } => {
                 res.extend(self.instrument_rule(rule));
             }
-            ResolvedNCommand::CoreAction(action) => {
+            // A top-level action, or a block of them from `ast::cse`. The
+            // instrumented result runs as one local-scope block so the minted
+            // temporaries stay local (see `parse_program_as_local_actions`).
+            ResolvedNCommand::CoreAction(_) | ResolvedNCommand::CoreActions(_) => {
+                let actions: &[ResolvedAction] = match command {
+                    ResolvedNCommand::CoreAction(action) => std::slice::from_ref(action),
+                    ResolvedNCommand::CoreActions(actions) => &actions.0,
+                    _ => unreachable!("guarded by the match arm"),
+                };
                 let mut nat_conn = NatConn::default();
                 let instrumented = self
-                    .instrument_actions(
-                        std::slice::from_ref(action),
-                        &Justification::Fiat,
-                        &mut nat_conn,
-                    )
+                    .instrument_actions(actions, &Justification::Fiat, &mut nat_conn)
                     .join("\n");
-                res.extend(self.parse_program(&instrumented));
+                res.extend(self.parse_program_as_local_actions(&instrumented));
+            }
+            ResolvedNCommand::LetBegin(..) => {
+                unreachable!("LetBegin is removed by remove_globals")
             }
             ResolvedNCommand::Check(span, facts) => {
                 let (instrumented, _lookups, _proof) = self.instrument_facts(facts);
@@ -1905,10 +1918,11 @@ impl<'a> ProofInstrumentor<'a> {
 /// Whether no maintenance rebuild is needed after `command`.
 ///
 /// Declarations (sorts, functions, rules) run no actions. A `set` (including a
-/// global-let's `(set (g) e)`) or a top-level expression over non-container
-/// sorts builds and dedups terms via `set-if-empty` without merging e-classes
-/// or deferring work, so no maintenance rebuild is needed after it — this is
-/// what stops N global-let `set`s from each triggering a rebuild (quadratic).
+/// global-let's `(set (g) e)`), a `let`, or a top-level expression over
+/// non-container sorts builds and dedups terms via `set-if-empty` without
+/// merging e-classes or deferring work, so no maintenance rebuild is needed
+/// after it — this is what stops N global-let `set`s from each triggering a
+/// rebuild (quadratic). A block skips when all of its actions do.
 /// Everything else still rebuilds: `union` merges e-classes, `delete`/`subsume`
 /// defer work to the maintenance ruleset, and a container-valued action needs
 /// the (`:naive`) container rebuild to recanonicalize it — all need the
@@ -1918,15 +1932,22 @@ fn command_skips_rebuild(command: &ResolvedNCommand) -> bool {
         e.output_type().is_eq_container_sort()
             || matches!(e, ResolvedExpr::Call(_, _, args) if args.iter().any(touches_container))
     }
+    fn action_skips_rebuild(action: &ResolvedAction) -> bool {
+        match action {
+            ResolvedAction::Expr(_, e) | ResolvedAction::Let(_, _, e) => !touches_container(e),
+            ResolvedAction::Set(_, _, args, rhs) => !args
+                .iter()
+                .chain(std::iter::once(rhs))
+                .any(touches_container),
+            _ => false,
+        }
+    }
     match command {
         ResolvedNCommand::Function(..)
         | ResolvedNCommand::NormRule { .. }
         | ResolvedNCommand::Sort { .. } => true,
-        ResolvedNCommand::CoreAction(ResolvedAction::Expr(_, e)) => !touches_container(e),
-        ResolvedNCommand::CoreAction(ResolvedAction::Set(_, _, args, rhs)) => !args
-            .iter()
-            .chain(std::iter::once(rhs))
-            .any(touches_container),
+        ResolvedNCommand::CoreAction(action) => action_skips_rebuild(action),
+        ResolvedNCommand::CoreActions(actions) => actions.0.iter().all(action_skips_rebuild),
         _ => false,
     }
 }

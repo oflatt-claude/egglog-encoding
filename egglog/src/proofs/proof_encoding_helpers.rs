@@ -123,6 +123,33 @@ impl ProofInstrumentor<'_> {
         res.unwrap()
     }
 
+    /// Like [`Self::parse_program`], but groups each maximal run of consecutive
+    /// top-level actions into one [`Command::Actions`] block. Non-action commands
+    /// pass through in place, preserving order.
+    pub(crate) fn parse_program_as_local_actions(&mut self, input: &str) -> Vec<Command> {
+        use crate::ast::GenericActions;
+        let mut out: Vec<Command> = vec![];
+        let mut pending: Vec<crate::ast::Action> = vec![];
+        let flush = |pending: &mut Vec<crate::ast::Action>, out: &mut Vec<Command>| {
+            if !pending.is_empty() {
+                out.push(Command::Actions(GenericActions::new(std::mem::take(
+                    pending,
+                ))));
+            }
+        };
+        for command in self.parse_program(input) {
+            match command {
+                Command::Action(action) => pending.push(action),
+                other => {
+                    flush(&mut pending, &mut out);
+                    out.push(other);
+                }
+            }
+        }
+        flush(&mut pending, &mut out);
+        out
+    }
+
     /// Build a proof list (`pnil`, then `pcons` folds) by minting a fresh id
     /// per node and asserting the row, emitting the mints onto `stmts` and
     /// returning the final list's var.
@@ -507,6 +534,10 @@ pub enum ProofEncodingUnsupportedReason {
     #[error("tuple-output functions are not supported by the term/proof encoding.")]
     TupleOutputFunction,
     #[error(
+        "a user-written `begin` block (or `(let <var> (begin ...))`) is not supported by the term/proof encoding, which models top-level actions individually. Write the actions at the top level instead."
+    )]
+    UserWrittenBeginBlock,
+    #[error(
         "a `:merge` action block (actions before the result value) is not supported by the term/proof encoding."
     )]
     MergeActionBlock,
@@ -653,6 +684,18 @@ fn command_supports_proof_encoding_impl(
         && schema.is_tuple_output()
     {
         return Err(ProofEncodingUnsupportedReason::TupleOutputFunction);
+    }
+
+    // A user-written `begin` block keeps its bindings local, but proof checking
+    // models top-level actions one at a time, so those locals have no checkable
+    // representation. The encoding's own generated blocks are unaffected: they are
+    // produced after this check, and proof checking runs against the pre-encoding
+    // program.
+    if matches!(
+        command,
+        crate::ast::GenericCommand::Actions(..) | crate::ast::GenericCommand::LetBegin(..)
+    ) {
+        return Err(ProofEncodingUnsupportedReason::UserWrittenBeginBlock);
     }
 
     // The conflict check for an eq-sort output needs union-find leaders (raw id

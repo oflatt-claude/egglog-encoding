@@ -3,6 +3,7 @@ source: egglog/tests/files.rs
 expression: snapshot
 ---
 before-proofs.egg
+begin-block.egg
 bignum.egg
 complex-merge-prim.egg
 container-rebuild.egg
