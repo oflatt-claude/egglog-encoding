@@ -7,6 +7,10 @@
 //! proof mode, prove the rebuild). Also holds the encoder-side spec bookkeeping
 //! ([`ProofInstrumentor::build_container_rebuild_spec`] and the primitive-name
 //! lookups).
+//!
+//! The eq-sort counterparts `uf_canon` / `uf_canon_proof` ([`register_uf_canon`])
+//! live here too: they canonicalize one eq-sort term against its `@UF` table,
+//! letting the rebuild rules canonicalize a whole row in their action.
 
 use super::proof_encoding::ProofInstrumentor;
 use crate::exec_state::{Internal, RegistrySealed};
@@ -29,6 +33,101 @@ fn mint_proof_row(
     let row: Vec<Value> = args.iter().copied().chain([out, unit]).collect();
     action.insert(state.raw_exec_state(), row.into_iter());
     out
+}
+
+/// Name of an eq-sort's `uf_canon` primitive, derived from its `@UF_<S>` table
+/// name. Both the encoder and the typechecker compute it the same way, so the
+/// desugared program needs no extra annotation to find it.
+pub(crate) fn uf_canon_prim_name(uf_name: &str) -> String {
+    format!("{uf_name}_canon")
+}
+
+/// Name of an eq-sort's `uf_canon_proof` primitive. See [`uf_canon_prim_name`].
+pub(crate) fn uf_canon_proof_prim_name(uf_name: &str) -> String {
+    format!("{uf_name}_canon_proof")
+}
+
+/// Register an eq-sort's single-term canonicalization primitives, so a rebuild
+/// rule can canonicalize a child in its action:
+///
+/// * `uf_canon : (S S) -> S` — `(term fallback)`, the term's `@UF_<S>` leader, or
+///   `fallback` when it has no row. Callers pass the term itself, making this
+///   leader-or-self.
+/// * `uf_canon_proof : (S Proof) -> Proof` (proof mode) — `(term fallback)`, the
+///   `@UF_<S>` row's proof `term = leader`, or `fallback`. Callers pass the
+///   reflexive `<S>Proof(term)`.
+///
+/// Both are the generic view-column read over the two-output `@UF_<S>` table, so
+/// each backend services them against its own storage. They read `@UF_<S>`, so
+/// they are only sound in the action of a rule whose body joins the driving
+/// `@UF` delta. Called from the eq-sort's Sort command in typechecking, so they
+/// exist both during encoding and on re-parse.
+pub(crate) fn register_uf_canon(
+    eg: &mut EGraph,
+    sort_name: &str,
+    uf_name: &str,
+    proofs_enabled: bool,
+) {
+    let Some(sort) = eg.get_sort_by_name(sort_name).cloned() else {
+        return;
+    };
+    let canon = UfCanonCol {
+        name: uf_canon_prim_name(uf_name),
+        key_sort: sort.clone(),
+        out_sort: sort.clone(),
+    };
+    let table = uf_name.to_string();
+    eg.add_backend_op_primitive(canon, WriteState::valid_contexts(), move |backend, _| {
+        backend.register_view_column_read(table.clone(), 1, 0)
+    });
+
+    // The proof column is only meaningful in proof mode; in term mode `@UF_<S>`
+    // carries `Unit` there and no rebuild rule reads it.
+    if proofs_enabled {
+        let proof_sort: ArcSort = std::sync::Arc::new(EqSort {
+            name: eg.proof_state.proof_names.proof_datatype.clone(),
+        });
+        let canon_proof = UfCanonCol {
+            name: uf_canon_proof_prim_name(uf_name),
+            key_sort: sort,
+            out_sort: proof_sort,
+        };
+        let table = uf_name.to_string();
+        eg.add_backend_op_primitive(
+            canon_proof,
+            WriteState::valid_contexts(),
+            move |backend, _| backend.register_view_column_read(table.clone(), 1, 1),
+        );
+    }
+}
+
+/// One column of an eq-sort's `@UF_<S>` row, read by term with a fallback (see
+/// [`register_uf_canon`]).
+#[derive(Clone)]
+struct UfCanonCol {
+    name: String,
+    key_sort: ArcSort,
+    out_sort: ArcSort,
+}
+
+impl Primitive for UfCanonCol {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        // (term fallback) -> column
+        SimpleTypeConstraint::new(
+            &self.name,
+            vec![
+                self.key_sort.clone(),
+                self.out_sort.clone(),
+                self.out_sort.clone(),
+            ],
+            span.clone(),
+        )
+        .into_box()
+    }
 }
 
 /// Register a container sort's rebuild primitives from its

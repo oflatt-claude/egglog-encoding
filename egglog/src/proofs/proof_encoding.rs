@@ -98,6 +98,19 @@ enum CarriedProofs {
     EclassToTerm,
 }
 
+/// A materialized rebuild index on one function's view, covering the view's key
+/// columns of a single eq-sort. The table is `(term, <all key columns>) -> Unit`
+/// and holds one row per indexed key column, with that column's term leading.
+/// `positions` are those key-column indices. Leading with the term makes "which
+/// rows mention this term" a key-prefix lookup, which is how the `@UF`-driven
+/// rebuild rule finds the rows it must re-canonicalize.
+#[derive(Clone)]
+pub(crate) struct ViewIndex {
+    pub name: String,
+    pub sort_name: String,
+    pub positions: Vec<usize>,
+}
+
 // TODO refactor so that encoding state is optional on the e-graph, ProofNames not optional on EncodingState. Then we don't have to clone proof names everywhere.
 #[derive(Clone)]
 pub(crate) struct EncodingState {
@@ -117,6 +130,9 @@ pub(crate) struct EncodingState {
     /// Maps container sort name -> the name of its registered proof-producing
     /// container-rebuild primitive (`ContainerRebuildProof`). Proof mode only.
     pub container_rebuild_proof_name: HashMap<String, String>,
+    /// Function name -> the materialized rebuild indexes on its view, one per
+    /// distinct eq-sort among the view's key columns (see [`ViewIndex`]).
+    pub view_index: HashMap<String, Vec<ViewIndex>>,
     pub term_header_added: bool,
     // TODO this is very ugly- we should separate out a typechecking struct
     // since we didn't need an entire e-graph
@@ -141,6 +157,7 @@ impl EncodingState {
             proof_func_parent: HashMap::default(),
             container_rebuild_name: HashMap::default(),
             container_rebuild_proof_name: HashMap::default(),
+            view_index: HashMap::default(),
             term_header_added: false,
             original_typechecking: None,
             proofs_enabled: false,
@@ -513,7 +530,6 @@ impl<'a> ProofInstrumentor<'a> {
         let proof_sort = self.proof_sort();
         let trans = self.proof_names().eq_trans_constructor.clone();
         let sym = self.proof_names().eq_sym_constructor.clone();
-        let view = self.view_name(&ctor_name);
         let (dedup_args, fv_nat, nat_prf, nat_to_dedup) = self.build_natural_with_congr(
             res,
             &ctor_name,
@@ -539,10 +555,7 @@ impl<'a> ProofInstrumentor<'a> {
         // the target. Emitting `(F dedup_args target)` would add the guest's
         // shape to `target`'s term relation, making `target`'s `@Ast` ambiguous
         // during proof reconstruction (which reads term rows, not views).
-        let dedup_disp = ListDisplay(&dedup_args, " ").to_string();
-        res.push(format!(
-            "(set ({view} {dedup_disp}) (values {target} {view_proof}))"
-        ));
+        res.push(self.update_fd_view(&ctor_name, &dedup_args, target, &view_proof));
         res.push(format!("(let {guest} {target})"));
         let sv = self.mint(res, &sym, &view_proof, &proof_sort);
         let guest_conn = self.mint(res, &trans, &format!("{nat_to_dedup} {sv}"), &proof_sort);
@@ -758,6 +771,9 @@ impl<'a> ProofInstrumentor<'a> {
         let view_name = self.view_name(&fdecl.name);
         let in_sorts = ListDisplay(schema.input.clone(), " ");
         let fresh_sort = self.egraph.parser.symbol_gen.fresh("view");
+        // Register the rebuild indexes before instrumenting any view write for
+        // this function, so every write site can emit its index maintenance.
+        let index_decls = self.declare_view_indexes(fdecl);
         let delete_rule = self.delete_and_subsume(fdecl);
         let to_delete_name = self.delete_name(&fdecl.name);
         let subsumed_name = self.subsumed_name(&fdecl.name);
@@ -880,6 +896,7 @@ impl<'a> ProofInstrumentor<'a> {
             {view_decl}
             (function {to_delete_name} ({in_sorts}) Unit :no-merge :internal-hidden)
             (function {subsumed_name} ({in_sorts}) Unit :no-merge :internal-hidden)
+            {index_decls}
             {delete_rule}",
         ))
     }
@@ -1098,8 +1115,9 @@ impl<'a> ProofInstrumentor<'a> {
     }
 
     /// Write a row into a functional-dependency view
-    /// `(set (@FView children) (values eclass proof))`. Re-setting an existing `children` key with a
-    /// different `eclass` triggers the view's `:merge`.
+    /// `(set (@FView children) (values eclass proof))`, plus the row's rebuild-index
+    /// entries. Re-setting an existing `children` key with a different `eclass`
+    /// triggers the view's `:merge`.
     pub(super) fn update_fd_view(
         &mut self,
         fname: &str,
@@ -1108,10 +1126,113 @@ impl<'a> ProofInstrumentor<'a> {
         proof: &str,
     ) -> String {
         let view_name = self.view_name(fname);
+        let index_inserts = self.view_index_inserts(fname, children);
         format!(
-            "(set ({view_name} {}) (values {value} {proof}))",
+            "(set ({view_name} {}) (values {value} {proof}))\n{index_inserts}",
             ListDisplay(children, " ")
         )
+    }
+
+    /// Declare one materialized rebuild index per distinct eq-sort among a view's
+    /// key columns, record them in [`EncodingState::view_index`], and return the
+    /// declarations. Container key columns get none: they carry no `@UF` row to
+    /// drive a lookup and are canonicalized structurally instead.
+    ///
+    /// Must run before any view write for this function is instrumented, so the
+    /// metadata is present when [`Self::view_index_inserts`] /
+    /// [`Self::view_index_deletes`] are consulted.
+    fn declare_view_indexes(&mut self, fdecl: &ResolvedFunctionDecl) -> String {
+        let types = fdecl.resolved_schema.view_types();
+        let n_keys = types.len() - 1;
+        let key_sorts = types[..n_keys]
+            .iter()
+            .map(|t| t.name().to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let mut by_sort: Vec<(String, Vec<usize>)> = Vec::new();
+        for i in Self::view_index_positions(&types, n_keys) {
+            let sort = types[i].name().to_string();
+            match by_sort.iter_mut().find(|(s, _)| *s == sort) {
+                Some((_, positions)) => positions.push(i),
+                None => by_sort.push((sort, vec![i])),
+            }
+        }
+        let mut decls = String::new();
+        let mut entries = Vec::new();
+        for (sort_name, positions) in by_sort {
+            let index_name = self
+                .egraph
+                .parser
+                .symbol_gen
+                .fresh(&format!("{}Index_{sort_name}", fdecl.name));
+            decls.push_str(&format!(
+                "(function {index_name} ({sort_name} {key_sorts}) Unit :merge old :internal-hidden :unextractable)\n"
+            ));
+            entries.push(ViewIndex {
+                name: index_name,
+                sort_name,
+                positions,
+            });
+        }
+        self.egraph
+            .proof_state
+            .view_index
+            .insert(fdecl.name.clone(), entries);
+        decls
+    }
+
+    /// The view key positions that get a rebuild index: the non-container
+    /// eq-sort ones. Every such position is indexed, including the first, since
+    /// the rebuild rule is driven by an `@UF` delta on any child.
+    fn view_index_positions(types: &[ArcSort], n_keys: usize) -> Vec<usize> {
+        (0..n_keys)
+            .filter(|&i| !types[i].is_eq_container_sort() && types[i].is_eq_sort())
+            .collect()
+    }
+
+    /// [`Self::view_index_inserts`], appended to `res` only when the view has
+    /// indexes (so a view with no eq-sort children emits no blank statement).
+    fn push_view_index_inserts(&mut self, res: &mut Stmts, fname: &str, key: &[String]) {
+        let inserts = self.view_index_inserts(fname, key);
+        if !inserts.is_empty() {
+            res.push(inserts);
+        }
+    }
+
+    /// Insert a view row into each of its rebuild indexes: one entry per indexed
+    /// key column, `(set (<index> key[pos] <whole key>) ())`. `key` is the view's
+    /// key columns (the children).
+    pub(super) fn view_index_inserts(&mut self, fname: &str, key: &[String]) -> String {
+        self.view_index_ops(fname, key, |name, term, whole| {
+            format!("(set ({name} {term} {whole}) ())")
+        })
+    }
+
+    /// Remove a view row from each of its rebuild indexes, mirroring
+    /// [`Self::view_index_inserts`]. Emitted wherever a view row is deleted.
+    pub(super) fn view_index_deletes(&mut self, fname: &str, key: &[String]) -> String {
+        self.view_index_ops(fname, key, |name, term, whole| {
+            format!("(delete ({name} {term} {whole}))")
+        })
+    }
+
+    fn view_index_ops(
+        &mut self,
+        fname: &str,
+        key: &[String],
+        op: impl Fn(&str, &str, &str) -> String,
+    ) -> String {
+        let Some(indexes) = self.egraph.proof_state.view_index.get(fname).cloned() else {
+            return String::new();
+        };
+        let whole = format!("{}", ListDisplay(key, " "));
+        let mut out = Vec::new();
+        for vi in &indexes {
+            for &pos in &vi.positions {
+                out.push(op(&vi.name, &key[pos], &whole));
+            }
+        }
+        out.join("\n")
     }
 
     /// Intern the term/proof/AST/proof-list node `{name}(args_joined)` and return
@@ -1285,6 +1406,8 @@ impl<'a> ProofInstrumentor<'a> {
             "(let {canon} ({set_if_empty} {} {fv} ()))",
             ListDisplay(args, " ")
         ));
+        // `set-if-empty` writes the view row itself, so index its key here.
+        self.push_view_index_inserts(res, &func_type.name, args);
         canon
     }
 
@@ -1384,13 +1507,16 @@ impl<'a> ProofInstrumentor<'a> {
         let dedup = self.fresh_var();
         let vprf = self.fresh_var();
         let view_proof = crate::proofs::proof_fresh::view_proof_prim_name(&view);
-        let dedup_args = ListDisplay(&dedup_args, " ");
         res.push(format!(
             "(set ({term_proof_constructor} {fv_nat}) {nat_prf})"
         ));
         res.push(format!(
-            "(let {dedup} ({set_if_empty} {dedup_args} {fv_nat} {nat_to_dedup_term}))"
+            "(let {dedup} ({set_if_empty} {} {fv_nat} {nat_to_dedup_term}))",
+            ListDisplay(&dedup_args, " ")
         ));
+        // `set-if-empty` writes the view row itself, so index its key here.
+        self.push_view_index_inserts(res, &func_type.name, &dedup_args);
+        let dedup_args = ListDisplay(&dedup_args, " ");
         res.push(format!(
             "(let {vprf} ({view_proof} {dedup_args} {nat_to_dedup_term}))"
         ));
