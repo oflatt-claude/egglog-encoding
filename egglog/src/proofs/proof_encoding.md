@@ -117,8 +117,11 @@ then falls back to the real union-find, whose leader may be a differently-shaped
 term.
 
 Inside a `:merge` body, node interning falls back to `get-fresh!` plus a plain
-`set`: `set-if-empty` performs a table read, which a merge's execution state does
-not provide. Any duplicate that creates is folded away by the same `AuxUF` merge.
+`set`, because `set-if-empty` reads the table it interns into. Merges run a whole
+stratum at once, with every table in it taken out of the database for the
+duration, and a merge's write targets are dependency-linked into its own stratum
+— so exactly the tables it would intern into are unreadable. Any duplicate the
+blind `set` creates is folded away by the same `AuxUF` merge.
 
 The term table carries `:internal-term-node`: its rows are term nodes, which
 proof extraction reconstructs. The deferred-deletion helpers are plain `Unit`

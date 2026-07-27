@@ -31,10 +31,13 @@ pub(crate) struct NatEntry {
 /// handed.
 pub(crate) struct Stmts {
     code: Vec<String>,
-    /// Interning inside a `:merge` body must use `get-fresh!` + `set`:
-    /// `set-if-empty` reads its table, and that read is unavailable in a merge's
-    /// execution state (only the pure mint + write is). The occasional duplicate
-    /// id this produces is folded away by the node table's own `AuxUF` merge.
+    /// Interning inside a `:merge` body must use `get-fresh!` + `set`, because
+    /// `set-if-empty` reads the table it interns into. Merges run a whole
+    /// stratum at once, with every table in it taken out of the database for the
+    /// duration; a merge's write targets are dependency-linked into its own
+    /// stratum, so exactly the tables it would intern into are unreadable. A
+    /// blind `set` only writes, and the duplicate ids it leaves behind are folded
+    /// away by the node table's own `AuxUF` merge.
     in_merge: bool,
 }
 
@@ -1127,8 +1130,8 @@ impl<'a> ProofInstrumentor<'a> {
 
     /// Intern the node `{name}(args_joined)` into its children-keyed table and
     /// return its id. In a normal-mode sink this hash-conses via `set-if-empty`
-    /// (dedup, no `get-fresh!` copies); in a merge-body sink, where
-    /// `set-if-empty`'s table read is unavailable, it falls back to `get-fresh!` +
+    /// (dedup, no `get-fresh!` copies); in a merge-body sink, where that read is
+    /// unavailable (see [`Stmts::in_merge`]), it falls back to `get-fresh!` +
     /// `set` and lets the table's `AuxUF` merge fold any duplicate away.
     pub(crate) fn hash_cons(
         &mut self,
