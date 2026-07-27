@@ -137,6 +137,10 @@ pub struct TableInfo {
     pub(crate) table: WrappedTable,
     pub(crate) indexes: IndexCatalog<SmallVec<[ColumnId; 4]>, HashIndex>,
     pub(crate) column_indexes: IndexCatalog<ColumnId, HashColumnIndex>,
+    /// Occurrence ("any-of") indexes: a `ColumnIndex` over a *set* of columns,
+    /// mapping each value appearing in any of them to the rows containing it.
+    /// The disjunctive counterpart to `indexes`, which keys on the whole tuple.
+    pub(crate) occurrence_indexes: IndexCatalog<SmallVec<[ColumnId; 4]>, HashColumnIndex>,
 }
 
 impl TableInfo {
@@ -175,6 +179,7 @@ impl Clone for TableInfo {
             table: self.table.dyn_clone(),
             indexes: deep_clone_map(&self.indexes, self.table.as_ref()),
             column_indexes: deep_clone_map(&self.column_indexes, self.table.as_ref()),
+            occurrence_indexes: deep_clone_map(&self.occurrence_indexes, self.table.as_ref()),
         }
     }
 }
@@ -630,6 +635,9 @@ impl Database {
                 info.column_indexes.update(|_, ti| {
                     Arc::get_mut(ti).unwrap().reset();
                 });
+                info.occurrence_indexes.update(|_, ti| {
+                    Arc::get_mut(ti).unwrap().reset();
+                });
                 info.indexes.update(|_, ti| {
                     Arc::get_mut(ti).unwrap().reset();
                 });
@@ -741,6 +749,7 @@ impl Database {
             table,
             indexes: IndexCatalog::new(),
             column_indexes: IndexCatalog::new(),
+            occurrence_indexes: IndexCatalog::new(),
         });
         self.deps.add_table(res, read_deps, write_deps);
         res
@@ -876,6 +885,11 @@ impl Database {
         // reset them eagerly here so that the next `merge_all` sees the same
         // "indexes are resettable" state it expects after a successful merge.
         info.column_indexes.update(|_, ti| {
+            if let Some(arc) = Arc::get_mut(ti) {
+                arc.reset();
+            }
+        });
+        info.occurrence_indexes.update(|_, ti| {
             if let Some(arc) = Arc::get_mut(ti) {
                 arc.reset();
             }

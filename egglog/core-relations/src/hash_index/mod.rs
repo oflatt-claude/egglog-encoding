@@ -232,7 +232,14 @@ impl IndexBase for ColumnIndex {
     }
     fn add_row(&mut self, vals: &[Value], row: RowId) {
         // SAFETY: everything in `table` comes from `subsets`.
-        for key in vals {
+        for (i, key) in vals.iter().enumerate() {
+            // An index over several columns posts a row under each value it
+            // holds; a value sitting in more than one of those columns must
+            // still post the row once. The scan is over the indexed columns
+            // only (one of them in the common case, so no work at all).
+            if vals[..i].contains(key) {
+                continue;
+            }
             let shard = self.shard_data.get_shard_mut(key, &mut self.shards);
             unsafe {
                 shard
