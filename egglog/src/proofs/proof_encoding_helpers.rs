@@ -10,7 +10,7 @@ use crate::{
         ResolvedExprExt, ResolvedFact, Schedule, Span,
     },
     core::ResolvedCall,
-    proofs::proof_encoding::{ProofInstrumentor, Stmts},
+    proofs::proof_encoding::ProofInstrumentor,
     util::{FreshGen, HashMap, HashSet, SymbolGen},
 };
 
@@ -175,7 +175,11 @@ impl ProofInstrumentor<'_> {
     /// Build a proof list (`pnil`, then `pcons` folds) by minting a fresh id
     /// per node and asserting the row, emitting the mints onto `stmts` and
     /// returning the final list's var.
-    pub(crate) fn format_prooflist(&mut self, stmts: &mut Stmts, proofs: &[String]) -> String {
+    pub(crate) fn format_prooflist(
+        &mut self,
+        stmts: &mut Vec<String>,
+        proofs: &[String],
+    ) -> String {
         let pcons = self.proof_names().pcons.clone();
         let pnil = self.proof_names().pnil.clone();
         let proof_list_sort = self.proof_names().proof_list_sort.clone();

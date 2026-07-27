@@ -116,12 +116,14 @@ row of its own through `AuxUF` first, which preserves the node's shape, and only
 then falls back to the real union-find, whose leader may be a differently-shaped
 term.
 
-Inside a `:merge` body, node interning falls back to `get-fresh!` plus a plain
-`set`, because `set-if-empty` reads the table it interns into. Merges run a whole
-stratum at once, with every table in it taken out of the database for the
-duration, and a merge's write targets are dependency-linked into its own stratum
-— so exactly the tables it would intern into are unreadable. Any duplicate the
-blind `set` creates is folded away by the same `AuxUF` merge.
+A `:merge` body interns the same way. Merges run a whole stratum at once, with
+every table in the stratum taken out of the database for the duration, so
+`set-if-empty`'s table read would fail if its target shared the stratum. It never
+does: `set-if-empty` declares a read dependency on its target
+(`egglog_bridge::EGraph::declare_external_func_table_deps`), and the backend's
+dependency graph places a reader strictly above what it reads — the target is
+merged in an earlier stratum and is back in the database when the reader's merge
+runs.
 
 The term table carries `:internal-term-node`: its rows are term nodes, which
 proof extraction reconstructs. The deferred-deletion helpers are plain `Unit`
