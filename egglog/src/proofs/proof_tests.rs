@@ -71,6 +71,71 @@ mod tests {
         }
     }
 
+    /// Every view row must carry its rebuild-index entries. The single
+    /// `@UF`-driven rebuild rule reaches the rows mentioning a term only through
+    /// that index, so a row missing its entries is never re-canonicalized and
+    /// silently stays stale.
+    #[test]
+    fn rebuild_index_covers_every_view_row() {
+        use crate::util::HashSet;
+        use egglog_backend_trait::BackendExt;
+
+        let files = [
+            "tests/calc.egg",
+            "tests/integer_math.egg",
+            "tests/web-demo/eqsat-basic.egg",
+            "tests/web-demo/unification-points-to.egg",
+        ];
+
+        for file in files {
+            let source = std::fs::read_to_string(file)
+                .unwrap_or_else(|e| panic!("couldn't read {file}: {e}"));
+            let mut egraph = crate::EGraph::new_with_proofs();
+            egraph
+                .parse_and_run_program(Some(file.to_string()), &source)
+                .unwrap_or_else(|e| panic!("{file} failed: {e}"));
+
+            let view_index = egraph.proof_state.view_index.clone();
+            for (fname, indexes) in &view_index {
+                let Some(view_name) = egraph.proof_state.proof_names.view_name.get(fname) else {
+                    continue;
+                };
+                let Some(view) = egraph.functions.get(view_name) else {
+                    continue;
+                };
+                let (view_id, n_keys) = (view.backend_id, view.schema.input.len());
+                let mut keys = Vec::new();
+                egraph.backend.for_each_while(view_id, |row| {
+                    keys.push(row.vals[..n_keys].to_vec());
+                    true
+                });
+
+                for vi in indexes {
+                    let Some(index) = egraph.functions.get(&vi.name) else {
+                        continue;
+                    };
+                    let mut entries = HashSet::default();
+                    egraph.backend.for_each_while(index.backend_id, |row| {
+                        entries.insert(row.vals[..n_keys + 1].to_vec());
+                        true
+                    });
+                    for key in &keys {
+                        for &pos in &vi.positions {
+                            let mut want = vec![key[pos]];
+                            want.extend_from_slice(key);
+                            assert!(
+                                entries.contains(&want),
+                                "{file}: {} row {key:?} is missing its {} entry at position {pos}",
+                                view_name,
+                                vi.name,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// A user rule marked `:naive` must stay `:naive` through proof encoding;
     /// dropping it would silently switch the rule to seminaive evaluation.
     #[test]

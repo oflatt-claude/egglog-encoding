@@ -165,4 +165,4 @@ expression: proof_snapshot
           (x3 (Var "b3"))
           t2)))
     (Fiat (= () ())))
-  (substitution (@v834 t3) (@v833 t0)))
+  (substitution (@v840 t0) (@v841 t3)))
