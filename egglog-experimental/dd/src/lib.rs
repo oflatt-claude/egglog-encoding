@@ -197,6 +197,10 @@ pub(crate) struct ViewOp {
     pub(crate) out_arity: usize,
     /// Output column to read (view-column read only).
     pub(crate) col_idx: usize,
+    /// Whether the reader takes a trailing fallback argument used when the key is
+    /// absent. A fallback-free reader has no answer for an absent key, so the DD
+    /// path reports it rather than inventing one.
+    pub(crate) has_fallback: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -232,6 +236,34 @@ impl Default for EGraph {
 }
 
 impl EGraph {
+    /// Register a view-column reader the DD interpreter intercepts (the db-path
+    /// external function only panics). `has_fallback` selects the reader's
+    /// absent-key behavior; see [`ViewOp::has_fallback`].
+    fn register_view_column_op(
+        &mut self,
+        view_name: String,
+        n_keys: usize,
+        col_idx: usize,
+        has_fallback: bool,
+    ) -> ExternalFunctionId {
+        let id = Backend::new_panic(
+            self,
+            format!("view-column read for `{view_name}` reached the db path; DD must intercept it"),
+        );
+        self.view_column_read_ops.insert(
+            id,
+            ViewOp {
+                view_name,
+                n_keys,
+                // A view-column reader never inserts, so out_arity is unused.
+                out_arity: 0,
+                col_idx,
+                has_fallback,
+            },
+        );
+        id
+    }
+
     /// Construct a fresh Differential Dataflow backend. Rule bodies run on the
     /// in-process DD join; body primitives and head actions are applied
     /// host-side into the mirror. Pass this backend to
@@ -1042,11 +1074,14 @@ impl<'a> MergeTransaction<'a> {
         let view = self.view_op_table(op)?;
         let n_keys = op.n_keys;
         let key: Row = args[..n_keys].into();
-        let fallback = args[n_keys];
-        Ok(match self.current_row(view, n_keys, &key) {
-            Some(current) => current.values[op.col_idx],
-            None => fallback,
-        })
+        match self.current_row(view, n_keys, &key) {
+            Some(current) => Ok(current.values[op.col_idx]),
+            None if op.has_fallback => Ok(args[n_keys]),
+            None => Err(anyhow!(
+                "view-column lookup on `{}` found no row for its key",
+                op.view_name
+            )),
+        }
     }
 
     fn view_op_table(&self, op: &ViewOp) -> Result<FunctionId> {
@@ -2620,6 +2655,7 @@ impl Backend for EGraph {
                 n_keys,
                 out_arity,
                 col_idx: 0,
+                has_fallback: false,
             },
         );
         id
@@ -2631,21 +2667,16 @@ impl Backend for EGraph {
         n_keys: usize,
         col_idx: usize,
     ) -> ExternalFunctionId {
-        let id = Backend::new_panic(
-            self,
-            format!("view-column read for `{view_name}` reached the db path; DD must intercept it"),
-        );
-        self.view_column_read_ops.insert(
-            id,
-            ViewOp {
-                view_name,
-                n_keys,
-                // A view-column reader never inserts, so out_arity is unused.
-                out_arity: 0,
-                col_idx,
-            },
-        );
-        id
+        self.register_view_column_op(view_name, n_keys, col_idx, true)
+    }
+
+    fn register_view_column_lookup(
+        &mut self,
+        view_name: String,
+        n_keys: usize,
+        col_idx: usize,
+    ) -> ExternalFunctionId {
+        self.register_view_column_op(view_name, n_keys, col_idx, false)
     }
 
     // -- capability flags ---------------------------------------------------

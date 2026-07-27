@@ -690,11 +690,18 @@ fn view_column_read_apply(
         .get(&op.view_name)
         .ok_or_else(|| anyhow!("view-column read view `{}` is not registered", op.view_name))?;
     let keys = &args[..op.n_keys];
-    let fallback = args[op.n_keys];
-    Ok(match lookup_existing(eg, view, keys, index) {
-        Some(values) => Value::new(values[op.col_idx]),
-        None => fallback,
-    })
+    match lookup_existing(eg, view, keys, index) {
+        Some(values) => Ok(Value::new(values[op.col_idx])),
+        None if op.has_fallback => Ok(args[op.n_keys]),
+        // A fallback-free lookup halts the rule on the reference backend. This
+        // interpreter has no way to abandon one action mid-flight, so report it
+        // instead of inventing a value; callers only use it where another table
+        // already witnesses the row.
+        None => Err(anyhow!(
+            "view-column lookup on `{}` found no row for its key",
+            op.view_name
+        )),
+    }
 }
 
 #[cfg(test)]

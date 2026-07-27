@@ -427,6 +427,22 @@ pub trait Backend: Send + Sync {
         ))
     }
 
+    /// Like [`Backend::register_view_column_read`], but with no fallback:
+    /// `(keys) -> column`, and an absent key halts the rule that called it. Lets a
+    /// rule read a row it has already established exists — via another table that
+    /// tracks the view — without joining the view itself, and without inventing a
+    /// value for a row that is not there. The default registers a panic.
+    fn register_view_column_lookup(
+        &mut self,
+        view_name: String,
+        _n_keys: usize,
+        _col_idx: usize,
+    ) -> ExternalFunctionId {
+        self.new_panic(format!(
+            "this backend does not support view-column lookups for view `{view_name}`"
+        ))
+    }
+
     // -- diagnostics --------------------------------------------------------
 
     /// Set the verbosity of the per-iteration timing report.

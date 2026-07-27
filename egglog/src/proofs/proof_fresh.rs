@@ -34,6 +34,13 @@ pub(crate) fn view_proof_prim_name(view_name: &str) -> String {
     format!("view-proof-{view_name}")
 }
 
+/// Deterministic name of an FD view's fallback-free reader for output column
+/// `col`: `(keys) -> column`, halting the calling rule when the key is absent.
+/// See [`set_if_empty_prim_name`] for why the prefix carries no internal marker.
+pub(crate) fn view_col_prim_name(view_name: &str, col: usize) -> String {
+    format!("view-col{col}-{view_name}")
+}
+
 /// Register an FD view's `set-if-empty` primitive and (in proof mode) its
 /// proof-column reader, so the encoding can canonicalize a freshly-built term
 /// to the view's canonical e-class at insertion time. `out_sorts` is the view's
@@ -65,7 +72,7 @@ pub(crate) fn register_set_if_empty(
     if out_sorts.len() >= 2 {
         let view_proof = ViewProof {
             name: view_proof_prim_name(view_name),
-            key_sorts,
+            key_sorts: key_sorts.clone(),
             proof_sort: out_sorts[1].clone(),
         };
         let name = view_name.to_string();
@@ -76,6 +83,42 @@ pub(crate) fn register_set_if_empty(
             // backend itself stays proof-agnostic (a generic view-column read).
             move |backend, _| backend.register_view_column_read(name.clone(), n_keys, 1),
         );
+    }
+
+    // Fallback-free readers, one per output column, for a rule that has already
+    // established the row exists and only needs its values (see
+    // `Backend::register_view_column_lookup`).
+    for (col, out) in out_sorts.iter().enumerate() {
+        let view_col = ViewCol {
+            name: view_col_prim_name(view_name, col),
+            key_sorts: key_sorts.clone(),
+            out_sort: out.clone(),
+        };
+        let name = view_name.to_string();
+        eg.add_backend_op_primitive(view_col, WriteState::valid_contexts(), move |backend, _| {
+            backend.register_view_column_lookup(name.clone(), n_keys, col)
+        });
+    }
+}
+
+/// Reads one output column of an FD view by key, with no fallback: an absent key
+/// halts the calling rule (see [`view_col_prim_name`]).
+#[derive(Clone)]
+struct ViewCol {
+    name: String,
+    key_sorts: Vec<ArcSort>,
+    out_sort: ArcSort,
+}
+
+impl Primitive for ViewCol {
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        // (keys…) -> column
+        let mut sig = self.key_sorts.clone();
+        sig.push(self.out_sort.clone());
+        SimpleTypeConstraint::new(&self.name, sig, span.clone()).into_box()
     }
 }
 

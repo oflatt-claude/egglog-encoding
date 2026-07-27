@@ -248,15 +248,25 @@ impl ProofInstrumentor<'_> {
         let keys_str = format!("{}", ListDisplay(key_vars, " "));
         let index_deletes = self.view_index_deletes(&fdecl.name, key_vars);
 
-        // Body: an `@UF_<S>` edge on the referenced term, the index entry naming a
-        // row that mentions it, and that row's value tuple.
+        // Body: an `@UF_<S>` edge on the referenced term, and the index entry
+        // naming a row that mentions it. The index already binds the row's key, so
+        // the row's value tuple is read in the action rather than joined here —
+        // one fewer atom to search. Those reads are fallback-free: if the row is
+        // gone they halt the rule, exactly as a body join would fail to match.
         let follower = self.fresh_var();
         let leader = self.fresh_var();
         let leader_pf = self.fresh_var();
         let uf_name = self.uf_name(&vi.sort_name);
         let uf_atom = format!("(= (values {leader} {leader_pf}) ({uf_name} {follower}))");
         let index_atom = format!("({} {follower} {keys_str})", vi.name);
-        let (query_view, value_var, view_prf) = self.query_fd_view(&fdecl.name, key_vars);
+        let value_var = self.fresh_var();
+        let view_prf = self.fresh_var();
+        let mut row_reads = Stmts::new();
+        let col = |i| crate::proofs::proof_fresh::view_col_prim_name(&view_name, i);
+        row_reads.push(format!("(let {value_var} ({} {keys_str}))", col(0)));
+        if proofs {
+            row_reads.push(format!("(let {view_prf} ({} {keys_str}))", col(1)));
+        }
 
         // Action: canonicalize every eq-sort key column, folding its congruence
         // step onto the row proof. Other columns carry over unchanged.
@@ -295,9 +305,10 @@ impl ProofInstrumentor<'_> {
         }
         let pf_arg = if proofs { proof_acc } else { "()".to_string() };
         let updated_view = self.update_fd_view(&fdecl.name, &updated, &value_var, &pf_arg);
-        let facts = format!("{uf_atom}\n(!= {follower} {leader})\n{index_atom}\n{query_view}");
+        let facts = format!("{uf_atom}\n(!= {follower} {leader})\n{index_atom}");
         let actions = format!(
-            "{}\n{updated_view}\n(delete ({view_name} {keys_str}))\n{index_deletes}",
+            "{}\n{}\n{updated_view}\n(delete ({view_name} {keys_str}))\n{index_deletes}",
+            row_reads.join("\n                      "),
             lets.join("\n                      ")
         );
         self.rebuild_rule(&facts, &actions, RebuildEval::UnsafeSeminaive)

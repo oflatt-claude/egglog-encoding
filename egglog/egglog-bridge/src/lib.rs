@@ -384,6 +384,26 @@ impl EGraph {
         )))
     }
 
+    /// Fallback-free view-column read: `(keys) -> column`. Returning `None` on an
+    /// absent key halts the calling rule, so a caller that cannot name a
+    /// meaningful default simply does nothing for that row.
+    pub fn register_view_column_lookup(
+        &mut self,
+        view_name: String,
+        n_keys: usize,
+        col_idx: usize,
+    ) -> ExternalFunctionId {
+        let registry = self.action_registry.clone();
+        self.register_external_func(Box::new(make_external_func(
+            move |state: &mut ExecutionState, args: &[Value]| {
+                let registry = registry.read().unwrap();
+                let action = registry.lookup_table(&view_name)?.clone();
+                let vals = action.lookup_values(state, &args[..n_keys])?;
+                Some(vals[col_idx])
+            },
+        )))
+    }
+
     pub fn free_external_func(&mut self, func: ExternalFunctionId) {
         // A cached panic with more than one reference is kept alive (just
         // decrement); one at its last reference — or any func that is not a
