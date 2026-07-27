@@ -25,9 +25,9 @@ expression: proof_snapshot
   (premises
     (Congr
       (= t1 (g* (IConst) (IConst)))
-      (Congr (= t1 (g* (IConst) t0)) (Fiat (= t1 t1)) prf0 0)
+      (Congr (= t1 (g* t0 (IConst))) (Fiat (= t1 t1)) prf0 1)
       prf0
-      1))
+      0))
   (substitution (@rewrite_var__2 t1) (a (IConst))))
 (Fiat (= () ()))
 (Fiat (= () ()))

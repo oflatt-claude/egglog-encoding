@@ -134,7 +134,9 @@ impl ProofInstrumentor<'_> {
             .cloned()
             .unwrap_or_default();
         for vi in &indexes {
-            rules.push_str(&self.eq_sort_rebuild_rule(fdecl, &key_vars, &types, vi));
+            for pos in vi.positions.clone() {
+                rules.push_str(&self.eq_sort_rebuild_rule(fdecl, &key_vars, vi, pos));
+            }
         }
         // FD view value column (see [`Self::fd_value_rebuild_rule`]). A
         // constructor/global's value *is* its e-class; a custom function's
@@ -225,93 +227,74 @@ impl ProofInstrumentor<'_> {
         self.rebuild_rule(&facts, &actions, RebuildEval::Naive)
     }
 
-    /// The single rule that canonicalizes every eq-sort child of a view row, for
-    /// the child sort `vi` indexes.
+    /// The rebuild rule for eq-sort child position `pos`, reached through `vi`'s
+    /// index.
     ///
-    /// An `@UF_<S>` edge on some term is joined against `vi`'s index to reach the
-    /// rows mentioning that term by key lookup — the same access pattern a native
-    /// rebuild uses when it walks the e-nodes referencing a changed e-class. The
-    /// action then re-canonicalizes *all* the row's eq-sort children with
-    /// `uf_canon`, so one firing fixes the whole row rather than one column of it.
-    /// In proof mode it folds one `@Congr` per eq-sort child onto the row proof;
-    /// the steps for children that did not move are reflexive and collapse in the
-    /// proof simplifier.
+    /// An `@UF_<S>` edge on some term is joined against the index to find the rows
+    /// holding that term at `pos` — a key-prefix lookup, the same access pattern a
+    /// native rebuild uses when it walks the e-nodes referencing a changed
+    /// e-class, rather than matching the view once per row. Binding the moved term
+    /// at a known position makes its leader a static substitution, so the action
+    /// re-keys the row and (proof mode) composes one `@Congr` at `pos` from the
+    /// edge proof the body already bound — no per-child union-find reads and no
+    /// reflexive steps for children that did not move.
+    ///
+    /// The row's value tuple is read in the action rather than joined in the body:
+    /// the index entry already binds the key, and the reads are fallback-free, so
+    /// a row that is gone halts the rule exactly as a failing body join would.
     fn eq_sort_rebuild_rule(
         &mut self,
         fdecl: &ResolvedFunctionDecl,
         key_vars: &[String],
-        types: &[ArcSort],
         vi: &ViewIndex,
+        pos: usize,
     ) -> String {
         let proofs = self.proofs_enabled();
         let view_name = self.view_name(&fdecl.name);
-        let keys_str = format!("{}", ListDisplay(key_vars, " "));
-        let index_deletes = self.view_index_deletes(&fdecl.name, key_vars);
+        let uf_name = self.uf_name(&vi.sort_name);
 
-        // Body: an `@UF_<S>` edge on the referenced term, and the index entry
-        // naming a row that mentions it. The index already binds the row's key, so
-        // the row's value tuple is read in the action rather than joined here —
-        // one fewer atom to search. Those reads are fallback-free: if the row is
-        // gone they halt the rule, exactly as a body join would fail to match.
+        // The moved term occupies key position `pos`, so it is the same variable in
+        // the `@UF` edge and in the index entry.
         let follower = self.fresh_var();
         let leader = self.fresh_var();
         let leader_pf = self.fresh_var();
-        let uf_name = self.uf_name(&vi.sort_name);
+        let mut keys = key_vars.to_vec();
+        keys[pos] = follower.clone();
+        let keys_str = format!("{}", ListDisplay(&keys, " "));
+        let index_deletes = self.view_index_deletes(&fdecl.name, &keys);
         let uf_atom = format!("(= (values {leader} {leader_pf}) ({uf_name} {follower}))");
         let index_atom = format!("({} {follower} {keys_str})", vi.name);
+
         let value_var = self.fresh_var();
         let view_prf = self.fresh_var();
-        let mut row_reads = Stmts::new();
+        let mut actions = Stmts::new();
         let col = |i| crate::proofs::proof_fresh::view_col_prim_name(&view_name, i);
-        row_reads.push(format!("(let {value_var} ({} {keys_str}))", col(0)));
-        if proofs {
-            row_reads.push(format!("(let {view_prf} ({} {keys_str}))", col(1)));
-        }
+        actions.push(format!("(let {value_var} ({} {keys_str}))", col(0)));
+        let pf_arg = if proofs {
+            actions.push(format!("(let {view_prf} ({} {keys_str}))", col(1)));
+            let congr = self.proof_names().congr_constructor.clone();
+            let proof_sort = self.proof_sort();
+            self.mint(
+                &mut actions,
+                &congr,
+                &format!("{view_prf} {pos} {leader_pf}"),
+                &proof_sort,
+            )
+        } else {
+            "()".to_string()
+        };
+        let mut updated = keys.clone();
+        updated[pos] = leader.clone();
+        actions.push(self.update_fd_view(&fdecl.name, &updated, &value_var, &pf_arg));
+        actions.push(format!("(delete ({view_name} {keys_str}))"));
+        actions.push(index_deletes);
 
-        // Action: canonicalize every eq-sort key column, folding its congruence
-        // step onto the row proof. Other columns carry over unchanged.
-        let mut lets = Stmts::new();
-        let mut updated = key_vars.to_vec();
-        let mut proof_acc = view_prf;
-        for j in 0..key_vars.len() {
-            if !types[j].is_eq_sort() || types[j].is_eq_container_sort() {
-                continue;
-            }
-            let canon = format!("c{j}_canon_");
-            let cj = &key_vars[j];
-            let uf_j = self.uf_name(types[j].name());
-            let canon_prim = crate::proofs::proof_container_rebuild::uf_canon_prim_name(&uf_j);
-            // Fallback `cj`: a child with no `@UF` row is already a root.
-            lets.push(format!("(let {canon} ({canon_prim} {cj} {cj}))"));
-            if proofs {
-                let proof_prim =
-                    crate::proofs::proof_container_rebuild::uf_canon_proof_prim_name(&uf_j);
-                let congr = self.proof_names().congr_constructor.clone();
-                let proof_sort = self.proof_sort();
-                // Fallback: the reflexive `cj = cj`, anchored when `cj` was built.
-                let term_proof = self.term_proof_name(types[j].name());
-                let refl_pf = self.fresh_var();
-                let step_pf = self.fresh_var();
-                lets.push(format!("(let {refl_pf} ({term_proof} {cj}))"));
-                lets.push(format!("(let {step_pf} ({proof_prim} {cj} {refl_pf}))"));
-                proof_acc = self.mint(
-                    &mut lets,
-                    &congr,
-                    &format!("{proof_acc} {j} {step_pf}"),
-                    &proof_sort,
-                );
-            }
-            updated[j] = canon;
-        }
-        let pf_arg = if proofs { proof_acc } else { "()".to_string() };
-        let updated_view = self.update_fd_view(&fdecl.name, &updated, &value_var, &pf_arg);
         let facts = format!("{uf_atom}\n(!= {follower} {leader})\n{index_atom}");
-        let actions = format!(
-            "{}\n{}\n{updated_view}\n(delete ({view_name} {keys_str}))\n{index_deletes}",
-            row_reads.join("\n                      "),
-            lets.join("\n                      ")
-        );
-        self.rebuild_rule(&facts, &actions, RebuildEval::UnsafeSeminaive)
+        self.rebuild_rule(
+            &facts,
+            &actions.join("\n                      "),
+            RebuildEval::UnsafeSeminaive,
+        )
     }
 
     /// One rule that canonicalizes an FD view's stale value column.

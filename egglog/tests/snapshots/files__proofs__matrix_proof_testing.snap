@@ -63,8 +63,8 @@ expression: proof_snapshot
 (let t2 (MMul t0 t1))
 (let prop0 (= t2 t2))
 (let t3 (Kron (NamedMat "A") (NamedMat "B")))
-(let t4 (MMul (NamedMat "B") (Id (NamedDim "m"))))
-(let t5 (MMul (Id (NamedDim "n")) (NamedMat "A")))
+(let t4 (MMul (Id (NamedDim "n")) (NamedMat "A")))
+(let t5 (MMul (NamedMat "B") (Id (NamedDim "m"))))
 (let t6 (ncols (Id (NamedDim "n"))))
 (let t7 (A (Id (NamedDim "n"))))
 (let t8 (nrows (Id (NamedDim "m"))))
@@ -127,16 +127,16 @@ expression: proof_snapshot
   (Congr
       (= t2 t3)
       (Congr
-        (= t2 (Kron (NamedMat "A") t4))
+        (= t2 (Kron t4 (NamedMat "B")))
         (Rule
-          (= t2 (Kron t5 t4))
+          (= t2 (Kron t4 t5))
           (name
             "(rewrite (MMul (Kron A B) (Kron C D)) (Kron (MMul A C) (MMul B D)) :when ((= (ncols A) (nrows C)) (= (ncols B) (nrows D))))")
           t9
           t10)
         (Rule
-          (= t5 (NamedMat "A"))
-          (name "(rewrite (MMul (Id n) A) A)")
+          (= t5 (NamedMat "B"))
+          (name "(rewrite (MMul A (Id n)) A)")
           (premises
             (Rule
               (= t5 t5)
@@ -145,13 +145,13 @@ expression: proof_snapshot
               t9
               t10))
           (substitution
-            (@rewrite_var__10 t5)
-            (A (NamedMat "A"))
-            (n (NamedDim "n"))))
-        0)
+            (n (NamedDim "m"))
+            (@rewrite_var__11 t5)
+            (A (NamedMat "B"))))
+        1)
       (Rule
-        (= t4 (NamedMat "B"))
-        (name "(rewrite (MMul A (Id n)) A)")
+        (= t4 (NamedMat "A"))
+        (name "(rewrite (MMul (Id n) A) A)")
         (premises
           (Rule
             (= t4 t4)
@@ -159,6 +159,6 @@ expression: proof_snapshot
               "(rewrite (MMul (Kron A B) (Kron C D)) (Kron (MMul A C) (MMul B D)) :when ((= (ncols A) (nrows C)) (= (ncols B) (nrows D))))")
             t9
             t10))
-        (substitution (n (NamedDim "m")) (@rewrite_var__11 t4) (A (NamedMat "B"))))
-      1))
+        (substitution (@rewrite_var__10 t4) (A (NamedMat "A")) (n (NamedDim "n"))))
+      0))
 (Trans prop0 prf0 (Sym (= t3 t2) prf0))
