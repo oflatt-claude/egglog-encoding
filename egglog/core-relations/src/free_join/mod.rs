@@ -980,6 +980,35 @@ fn get_column_index_from_tableinfo(table_info: &TableInfo, col: ColumnId) -> Has
     index
 }
 
+/// Get and refresh an occurrence index over `cols`: a `ColumnIndex` keyed on the
+/// whole set, so each value appearing in *any* of `cols` maps to the rows holding
+/// it. This is the structure `SortedWritesTable::rebuild_index` uses to find the
+/// rows referencing a changed value; [`get_index_from_tableinfo`] over the same
+/// columns is its conjunctive counterpart, keyed on the whole tuple.
+pub(crate) fn get_occurrence_index_from_tableinfo(
+    table_info: &TableInfo,
+    cols: &[ColumnId],
+) -> HashColumnIndex {
+    let index: Arc<_> = table_info
+        .occurrence_indexes
+        .get_or_insert(cols.into(), || {
+            Arc::new(ResettableOnceLock::new(Index::new(
+                cols.to_vec(),
+                ColumnIndex::new(),
+            )))
+        });
+    index.get_or_update(|index| {
+        index.refresh(table_info.table.as_ref());
+    });
+    debug_assert!(
+        !index
+            .get()
+            .unwrap()
+            .needs_refresh(table_info.table.as_ref())
+    );
+    index
+}
+
 #[derive(Clone)]
 pub struct ColumnCardEst<'a> {
     db: &'a Database,

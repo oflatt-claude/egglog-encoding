@@ -39,7 +39,7 @@ use crate::{
 
 use super::{
     ActionId, AtomId, Database, HashColumnIndex, HashIndex, TableInfo, Variable,
-    get_column_index_from_tableinfo,
+    get_column_index_from_tableinfo, get_occurrence_index_from_tableinfo,
     plan::{JoinHeader, JoinStage, Plan},
     with_pool_set,
 };
@@ -857,6 +857,22 @@ impl<'a> JoinState<'a> {
 
         let table_id = atoms[atom].table;
         let info = &self.db.tables[table_id];
+        // An occurrence atom indexes several columns but is probed with a single
+        // value (the one occurring in any of them), so it takes the column-index
+        // path regardless of how many columns it covers.
+        if atoms[atom]
+            .occurrence
+            .as_ref()
+            .is_some_and(|occ| occ.cols.as_slice() == cols.as_slice())
+        {
+            return Prober {
+                node: trie_node,
+                ix: DynamicIndex::CachedColumn {
+                    intersect_outer: None,
+                    table: get_occurrence_index_from_tableinfo(info, &cols),
+                },
+            };
+        }
         let dyn_index = if subset.size() <= SMALL_RESIDUAL && cols.len() == 1 {
             DynamicIndex::SparseColumn(SparseColumnIndex::new(
                 info.table.as_ref(),

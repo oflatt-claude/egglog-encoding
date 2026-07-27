@@ -527,6 +527,7 @@ fn update_hypergraph(
         var_columns,
         constraints: ProcessedConstraints::dummy(),
         table: TableId::dummy(),
+        occurrence: None,
     });
 
     // Update variable occurrences to include the covering atom
@@ -1603,8 +1604,21 @@ fn compile_stage(
         }
     }
 
+    // An occurrence subatom covers several columns disjunctively, so it cannot be
+    // collapsed to `vars[0]` the way a repeated variable can (whose columns an
+    // `Eq` constraint holds equal). Such a stage takes the fused path below,
+    // which keeps the whole column set and probes the occurrence index.
+    let has_occurrence_subatom = iter::once(&cover)
+        .chain(filters.iter().map(|(x, _)| x))
+        .any(|subatom| {
+            ctx.atoms[subatom.atom]
+                .occurrence
+                .as_ref()
+                .is_some_and(|occ| occ.cols.as_slice() == subatom.vars.as_slice())
+        });
+
     // Only do this if it's a join of more than one relations
-    if vars.len() == 1 && !filters.is_empty() {
+    if vars.len() == 1 && !filters.is_empty() && !has_occurrence_subatom {
         let scans = SmallVec::<[SingleScanSpec; 3]>::from_iter(
             iter::once(&cover)
                 .chain(filters.iter().map(|(x, _)| x))
