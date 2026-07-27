@@ -1,0 +1,10 @@
+---
+source: egglog/tests/files.rs
+expression: snapshot_content_across_treatments
+---
+3
+((Add 0)
+ (Num 3)
+ (dirty 3)
+ (edge 3)
+ (touched 3))

@@ -319,6 +319,12 @@ impl EGraph {
 
         for atom in &rule.core.body.atoms {
             match atom.head {
+                RuleBodyCall::IndexTable { .. } => {
+                    bail!(
+                        "DD backend cannot add rule {:?}: index atoms need an occurrence index, which it does not maintain",
+                        rule.name
+                    );
+                }
                 RuleBodyCall::Table { id, .. } => {
                     if atom.args.len() > dd_native::W {
                         bail!(

@@ -496,6 +496,10 @@ pub enum ProofEncodingUnsupportedReason {
     #[error("primitive operation lacks a validator function")]
     PrimitiveWithoutValidator,
     #[error(
+        "a declared index names a user function, which the term/proof encoding replaces with a view whose columns differ; the encoding does not yet rewrite index declarations"
+    )]
+    IndexDeclaration,
+    #[error(
         "action contains a function lookup. Finding the output of a function is only supported in queries."
     )]
     FunctionLookupInAction,
@@ -677,6 +681,12 @@ fn command_supports_proof_encoding_impl(
         && rule.body.iter().any(fact_has_eq_sort_primitive_result)
     {
         return Err(ProofEncodingUnsupportedReason::NaiveEqSortPrimitiveFact);
+    }
+    // A declared index refers to a function's columns by position. The encoding
+    // rewrites that function into a view with a different shape, so the
+    // declaration would silently point at the wrong columns.
+    if matches!(command, crate::ast::GenericCommand::Index { .. }) {
+        return Err(ProofEncodingUnsupportedReason::IndexDeclaration);
     }
     // Tuple-output functions store multiple value columns, which the term/proof encoding (built
     // around single-output constructor views) does not model.

@@ -492,10 +492,13 @@ impl RuleBuilder<'_> {
         func: FunctionId,
         entries: &[QueryEntry],
         indexed: QueryEntry,
-        cols: &[ColumnId],
+        cols: &[usize],
     ) -> Result<AtomId> {
         let atom = self.query_table(func, entries, None)?;
-        self.query.atoms[atom.index()].occurrence = Some((indexed, SmallVec::from_slice(cols)));
+        self.query.atoms[atom.index()].occurrence = Some((
+            indexed,
+            cols.iter().copied().map(ColumnId::from_usize).collect(),
+        ));
         Ok(atom)
     }
 

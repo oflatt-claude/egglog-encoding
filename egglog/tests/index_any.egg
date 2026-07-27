@@ -1,0 +1,45 @@
+;; A declared index is a read-only relation over the rows of a function: each
+;; value appearing in any of the listed columns, followed by the whole row. It
+;; is the "which rows mention this value" lookup, which no ordinary atom
+;; expresses -- repeating a variable across columns would instead constrain
+;; those columns to be equal.
+
+(datatype Math (Num i64) (Add Math Math))
+(function edge (Math Math) Math :merge old)
+
+;; Columns 0 and 1 are the inputs, column 2 the output: all three are indexed,
+;; so a value is found wherever it sits in the row.
+(index EdgeOcc edge (any 0 1 2))
+
+(relation dirty (Math))
+(relation touched (Math Math Math))
+
+(let $a (Num 1))
+(let $b (Num 2))
+(let $c (Num 3))
+(set (edge $a $b) $c)
+(set (edge $b $c) $a)
+;; Both endpoints are the same value, and the row must still be reported once.
+(set (edge $c $c) $c)
+
+(rule ((dirty x) (EdgeOcc x p q r))
+      ((touched p q r)))
+
+;; (Num 2) sits at an input of the first row and at an input of the second.
+(dirty $b)
+(run 1)
+(check (touched $a $b $c))
+(check (touched $b $c $a))
+(fail (check (touched $c $c $c)))
+
+;; (Num 1) sits at an input of the first row and at the *output* of the second.
+(dirty $a)
+(run 1)
+(check (touched $a $b $c))
+(check (touched $b $c $a))
+
+;; (Num 3) appears in every row, twice over in the third.
+(dirty $c)
+(run 1)
+(check (touched $c $c $c))
+(print-size touched)

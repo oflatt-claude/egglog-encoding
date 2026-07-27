@@ -1873,6 +1873,7 @@ impl<'a> ProofInstrumentor<'a> {
             }
             ResolvedNCommand::Pop(..)
             | ResolvedNCommand::Push(..)
+            | ResolvedNCommand::Index { .. }
             | ResolvedNCommand::AddRuleset(..)
             | ResolvedNCommand::Output { .. }
             | ResolvedNCommand::UnstableCombinedRuleset(..)

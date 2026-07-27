@@ -2033,6 +2033,12 @@ impl EGraph {
                 self.declare_function(&fdecl)?;
                 log::info!("Declared {} {}.", fdecl.subtype, fdecl.name)
             }
+            ResolvedNCommand::Index { name, function, .. } => {
+                // Nothing to build: the backend creates the occurrence index the
+                // first time a rule probes it. Typechecking already registered
+                // the relation the atoms resolve against.
+                log::info!("Declared index {name} over {function}.");
+            }
             ResolvedNCommand::AddRuleset(_span, name) => {
                 self.add_ruleset(name.clone());
                 log::info!("Declared ruleset {name}.");
@@ -3383,15 +3389,34 @@ impl<'a> BackendRule<'a> {
         include_subsumed: bool,
     ) -> Result<(), Error> {
         for atom in &query.atoms {
+            let read = if include_subsumed {
+                ReadMode::All
+            } else {
+                ReadMode::Live
+            };
             let (head, args) = match &atom.head {
+                // An atom on a declared index reads the rows of the indexed
+                // function, reached through the value its first argument binds.
+                ResolvedCall::Func(f) if self.type_info.indexes.contains_key(&f.name) => {
+                    let index = self.type_info.indexes[&f.name].clone();
+                    let indexed = self
+                        .type_info
+                        .get_func_type(&index.function)
+                        .expect("index target checked at declaration")
+                        .clone();
+                    (
+                        RuleBodyCall::IndexTable {
+                            id: self.func(&indexed),
+                            any_of: index.any_of,
+                            read,
+                        },
+                        self.args(&atom.args)?,
+                    )
+                }
                 ResolvedCall::Func(f) => (
                     RuleBodyCall::Table {
                         id: self.func(f),
-                        read: if include_subsumed {
-                            ReadMode::All
-                        } else {
-                            ReadMode::Live
-                        },
+                        read,
                     },
                     self.args(&atom.args)?,
                 ),

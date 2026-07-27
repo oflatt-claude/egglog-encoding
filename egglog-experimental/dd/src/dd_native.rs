@@ -181,6 +181,11 @@ pub fn plan_join(rule: &RuleSpec) -> Result<JoinPlan, String> {
 
     for atom in &rule.core.body.atoms {
         match atom.head {
+            // Index atoms need an occurrence index over the mirror, which this
+            // backend does not maintain.
+            RuleBodyCall::IndexTable { .. } => {
+                return Err("index atoms are not supported by this backend".to_string());
+            }
             RuleBodyCall::Table { id, read } => {
                 if atom.args.len() > W {
                     return Err(format!("atom arity {} > W {}", atom.args.len(), W));
