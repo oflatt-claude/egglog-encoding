@@ -3,14 +3,12 @@
 //! that execute requested deletes/subsumptions. (`@UF` path compression stays
 //! in [`super::proof_encoding`].)
 
-use super::proof_encoding::ProofInstrumentor;
+use super::proof_encoding::{ProofInstrumentor, ViewIndex};
 use crate::typechecking::FuncType;
 use crate::*;
 
 /// Which FD-view value column [`ProofInstrumentor::fd_value_rebuild_rule`] rebuilds.
 enum ValueRebuild {
-    /// The value is the term's e-class (constructors and globals).
-    Eclass,
     /// A custom function's eq-sort output at child index `out_idx`.
     CustomOutput { out_idx: usize },
     /// A custom function's eq-container output at child index `out_idx`,
@@ -102,7 +100,9 @@ impl ProofInstrumentor<'_> {
         // One rule per rebuildable key column (re-keys the row via set + delete).
         for (i, ty) in types[..n_keys].iter().enumerate() {
             let is_container = ty.is_eq_container_sort();
-            if !is_container && !ty.is_eq_sort() {
+            // Eq-sort children are handled by the index-driven rule below, which
+            // fixes the whole row in one firing.
+            if !is_container {
                 continue;
             }
             let ci = child(i);
@@ -150,28 +150,7 @@ impl ProofInstrumentor<'_> {
                     (canon_fact, String::new(), "()".to_string(), String::new())
                 }
             } else {
-                let uf_name = self.uf_name(ty.name());
-                let uf_prf = self.fresh_var();
-                let canon_fact = format!("(= (values {canon} {uf_prf}) ({uf_name} {ci}))");
-                if proofs {
-                    let congr = self.proof_names().congr_constructor.clone();
-                    let proof_sort = self.proof_sort();
-                    let mut lets = vec![];
-                    let new_pf = self.mint(
-                        &mut lets,
-                        &congr,
-                        &format!("{view_prf} {i} {uf_prf}"),
-                        &proof_sort,
-                    );
-                    (
-                        canon_fact,
-                        lets.join("\n                             "),
-                        new_pf,
-                        String::new(),
-                    )
-                } else {
-                    (canon_fact, String::new(), "()".to_string(), String::new())
-                }
+                unreachable!("non-container children take the index-driven rule")
             };
             let mut updated = key_vars.clone();
             updated[i] = canon.clone();
@@ -186,8 +165,18 @@ impl ProofInstrumentor<'_> {
         // constructor/global's value *is* its e-class; a custom function's
         // eq-sort or eq-container output takes the delete-then-reinsert path.
         // A base-sort custom output never goes stale, so nothing is emitted.
+        for vi in self
+            .egraph
+            .proof_state
+            .view_index
+            .get(&fdecl.name)
+            .cloned()
+            .unwrap_or_default()
+        {
+            rules.push_str(&self.indexed_rebuild_rule(fdecl, &key_vars, &types, &vi));
+        }
         if output_is_eclass {
-            rules.push_str(&self.fd_value_rebuild_rule(fdecl, &key_vars, ValueRebuild::Eclass));
+            // Covered by the index rule above, which indexes the e-class column too.
         } else if fdecl.subtype == FunctionSubtype::Custom && !self.is_encoded_global(fdecl) {
             if types[n - 1].is_eq_sort() {
                 rules.push_str(&self.fd_value_rebuild_rule(
@@ -204,6 +193,135 @@ impl ProofInstrumentor<'_> {
             }
         }
         self.parse_program(&rules)
+    }
+
+    /// The rebuild rule for one child eq-sort, driven by an `@UF_<S>` edge joined
+    /// against that sort's declared index.
+    ///
+    /// The index reaches every row mentioning the moved term — at any child
+    /// position or at the e-class — by lookup rather than by matching the view,
+    /// and its atom binds the whole row, so nothing else need be read. The action
+    /// then re-canonicalizes *every* eq-sort column with `uf_canon`, so one firing
+    /// yields the fully canonical row. Two children moving in the same iteration
+    /// therefore fire twice with the same result, rather than each producing a
+    /// differently half-rewritten row for a later pass to merge.
+    ///
+    /// `uf_canon` reads `@UF_<S>` in the action, which is what makes the rule
+    /// `:unsafe-seminaive`; the driving `@UF` delta in the body is what makes that
+    /// read sound.
+    fn indexed_rebuild_rule(
+        &mut self,
+        fdecl: &ResolvedFunctionDecl,
+        key_vars: &[String],
+        types: &[ArcSort],
+        vi: &ViewIndex,
+    ) -> String {
+        use crate::proofs::proof_container_rebuild::{
+            uf_canon_prim_name, uf_canon_proof_prim_name,
+        };
+        let proofs = self.proofs_enabled();
+        let view_name = self.view_name(&fdecl.name);
+        let keys_str = format!("{}", ListDisplay(key_vars, " "));
+        let n_keys = key_vars.len();
+
+        let follower = self.fresh_var();
+        let leader = self.fresh_var();
+        let leader_pf = self.fresh_var();
+        let eclass = format!("e{}_", n_keys);
+        let row_pf = self.fresh_var();
+        let uf_name = self.uf_name(&vi.sort_name);
+        let uf_atom = format!("(= (values {leader} {leader_pf}) ({uf_name} {follower}))");
+        // The index relation is `(value, children…, eclass, proof)`.
+        let index_atom = format!("({} {follower} {keys_str} {eclass} {row_pf})", vi.name);
+
+        // Canonicalize every eq-sort column, folding its congruence step onto the
+        // row proof. A column that did not move canonicalizes to itself and its
+        // step is reflexive, which the proof simplifier drops.
+        let mut lets: Vec<String> = Vec::new();
+        let mut updated = key_vars.to_vec();
+        let mut proof_acc = row_pf.clone();
+        for j in 0..n_keys {
+            if types[j].is_eq_container_sort() || !types[j].is_eq_sort() {
+                continue;
+            }
+            let cj = &key_vars[j];
+            let uf_j = self.uf_name(types[j].name());
+            let canon = format!("c{j}_canon_");
+            lets.push(format!(
+                "(let {canon} ({} {cj} {cj}))",
+                uf_canon_prim_name(&uf_j)
+            ));
+            if proofs {
+                let term_proof = self.term_proof_name(types[j].name());
+                let refl = self.fresh_var();
+                let step = self.fresh_var();
+                let congr = self.proof_names().congr_constructor.clone();
+                let proof_sort = self.proof_sort();
+                lets.push(format!("(let {refl} ({term_proof} {cj}))"));
+                lets.push(format!(
+                    "(let {step} ({} {cj} {refl}))",
+                    uf_canon_proof_prim_name(&uf_j)
+                ));
+                proof_acc = self.mint(
+                    &mut lets,
+                    &congr,
+                    &format!("{proof_acc} {j} {step}"),
+                    &proof_sort,
+                );
+            }
+            updated[j] = canon;
+        }
+        // The e-class moves the other way round: the row proof reads `eclass =
+        // f(children)`, so a new leader composes as `Trans(Sym(eclass = leader), …)`.
+        let out_ty = &types[n_keys];
+        let value_var = if out_ty.is_eq_sort() && !out_ty.is_eq_container_sort() {
+            let uf_out = self.uf_name(out_ty.name());
+            let canon = format!("e{n_keys}_canon_");
+            lets.push(format!(
+                "(let {canon} ({} {eclass} {eclass}))",
+                uf_canon_prim_name(&uf_out)
+            ));
+            if proofs {
+                let term_proof = self.term_proof_name(out_ty.name());
+                let refl = self.fresh_var();
+                let step = self.fresh_var();
+                let sym = self.proof_names().eq_sym_constructor.clone();
+                let trans = self.proof_names().eq_trans_constructor.clone();
+                let proof_sort = self.proof_sort();
+                lets.push(format!("(let {refl} ({term_proof} {eclass}))"));
+                lets.push(format!(
+                    "(let {step} ({} {eclass} {refl}))",
+                    uf_canon_proof_prim_name(&uf_out)
+                ));
+                let sym_pf = self.mint(&mut lets, &sym, &step, &proof_sort);
+                proof_acc = self.mint(
+                    &mut lets,
+                    &trans,
+                    &format!("{sym_pf} {proof_acc}"),
+                    &proof_sort,
+                );
+            }
+            canon
+        } else {
+            eclass.clone()
+        };
+
+        let pf_arg = if proofs { proof_acc } else { "()".to_string() };
+        let updated_view = self.update_fd_view(&fdecl.name, &updated, &value_var, &pf_arg);
+        let facts = format!("{uf_atom}\n(!= {follower} {leader})\n{index_atom}");
+        // Delete before re-inserting. When only the e-class moved the canonical
+        // key equals the old one, so deleting afterwards would drop the row it
+        // just wrote; deleting first lets the insert win, as the custom-output
+        // value rebuild already does.
+        let actions = format!(
+            "{}\n(delete ({view_name} {keys_str}))\n{updated_view}",
+            lets.join("\n                      ")
+        );
+        let ruleset = self.proof_names().rebuilding_ruleset_name.clone();
+        let fresh_name = self.egraph.parser.symbol_gen.fresh("rebuild_rule");
+        format!(
+            "(rule ({facts})\n     ({actions})\n     :ruleset {ruleset} :unsafe-seminaive :name \"{fresh_name}\" :internal-include-subsumed)\n"
+        )
     }
 
     /// One rule that canonicalizes an FD view's stale value column.
@@ -238,17 +356,6 @@ impl ProofInstrumentor<'_> {
             let proof_sort = self.proof_sort();
             let mut lets = vec![];
             let pf = match kind {
-                ValueRebuild::Eclass => {
-                    let sym = self.proof_names().eq_sym_constructor.clone();
-                    let trans = self.proof_names().eq_trans_constructor.clone();
-                    let sym_pf = self.mint(&mut lets, &sym, &uf_prf, &proof_sort);
-                    self.mint(
-                        &mut lets,
-                        &trans,
-                        &format!("{sym_pf} {view_prf}"),
-                        &proof_sort,
-                    )
-                }
                 ValueRebuild::CustomOutput { out_idx } => {
                     let congr = self.proof_names().congr_constructor.clone();
                     self.mint(
@@ -266,7 +373,6 @@ impl ProofInstrumentor<'_> {
         };
         let set_canon = self.update_fd_view(&fdecl.name, key_vars, &canon, &pf_arg);
         let actions = match kind {
-            ValueRebuild::Eclass => format!("{proof_lets}\n{set_canon}"),
             ValueRebuild::CustomOutput { .. } => {
                 let view_name = self.view_name(&fdecl.name);
                 let keys_str = ListDisplay(key_vars, " ").to_string();

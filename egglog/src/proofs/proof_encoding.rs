@@ -34,6 +34,15 @@ enum CarriedProofs {
     EclassToTerm,
 }
 
+/// A declared index on a function's view, covering the view columns of one
+/// eq-sort — its children and its e-class. An `@UF` edge on a term reaches every
+/// row mentioning it at any of them.
+#[derive(Clone)]
+pub(crate) struct ViewIndex {
+    pub name: String,
+    pub sort_name: String,
+}
+
 // TODO refactor so that encoding state is optional on the e-graph, ProofNames not optional on EncodingState. Then we don't have to clone proof names everywhere.
 #[derive(Clone)]
 pub(crate) struct EncodingState {
@@ -47,6 +56,9 @@ pub(crate) struct EncodingState {
     /// Maps container sort name -> the name of its registered proof-producing
     /// container-rebuild primitive (`ContainerRebuildProof`). Proof mode only.
     pub container_rebuild_proof_name: HashMap<String, String>,
+    /// Function name -> the rebuild indexes declared on its view, one per
+    /// distinct eq-sort among the view's columns (see [`ViewIndex`]).
+    pub view_index: HashMap<String, Vec<ViewIndex>>,
     pub term_header_added: bool,
     // TODO this is very ugly- we should separate out a typechecking struct
     // since we didn't need an entire e-graph
@@ -70,6 +82,7 @@ impl EncodingState {
             proof_func_parent: HashMap::default(),
             container_rebuild_name: HashMap::default(),
             container_rebuild_proof_name: HashMap::default(),
+            view_index: HashMap::default(),
             term_header_added: false,
             original_typechecking: None,
             proofs_enabled: false,
@@ -675,6 +688,7 @@ impl<'a> ProofInstrumentor<'a> {
         let view_name = self.view_name(&fdecl.name);
         let in_sorts = ListDisplay(schema.input.clone(), " ");
         let fresh_sort = self.egraph.parser.symbol_gen.fresh("view");
+        let index_decls = self.declare_view_indexes(fdecl);
         let delete_rule = self.delete_and_subsume(fdecl);
         let to_delete_name = self.delete_name(&fdecl.name);
         let subsumed_name = self.subsumed_name(&fdecl.name);
@@ -774,6 +788,7 @@ impl<'a> ProofInstrumentor<'a> {
             {to_ast_view_sort}
             (function {name} ({term_sorts} {view_sort}) Unit :no-merge :internal-hidden :internal-term-node)
             {view_decl}
+            {index_decls}
             (function {to_delete_name} ({in_sorts}) Unit :no-merge :internal-hidden)
             (function {subsumed_name} ({in_sorts}) Unit :no-merge :internal-hidden)
             {delete_rule}",
@@ -1315,6 +1330,52 @@ impl<'a> ProofInstrumentor<'a> {
             },
         );
         dedup
+    }
+
+    /// Declare one index per distinct eq-sort among a view's columns, so an `@UF`
+    /// edge on a term reaches the rows mentioning it by lookup instead of by
+    /// matching the view once per column. The e-class column is indexed too, so a
+    /// stale e-class is found the same way. Containers are excluded: they carry
+    /// no `@UF` row and are canonicalized structurally.
+    fn declare_view_indexes(&mut self, fdecl: &ResolvedFunctionDecl) -> String {
+        let types = fdecl.resolved_schema.view_types();
+        // Children *and* the e-class. When only the e-class moves the canonical
+        // key equals the old one, so the rebuild rule deletes the old row before
+        // re-inserting rather than after (see `indexed_rebuild_rule`).
+        let mut by_sort: Vec<(String, Vec<usize>)> = Vec::new();
+        for (i, ty) in types.iter().enumerate() {
+            if ty.is_eq_container_sort() || !ty.is_eq_sort() {
+                continue;
+            }
+            let sort = ty.name().to_string();
+            match by_sort.iter_mut().find(|(s, _)| *s == sort) {
+                Some((_, positions)) => positions.push(i),
+                None => by_sort.push((sort, vec![i])),
+            }
+        }
+        let view_name = self.view_name(&fdecl.name);
+        let mut decls = String::new();
+        let mut entries = Vec::new();
+        for (sort_name, positions) in by_sort {
+            let index_name = self
+                .egraph
+                .parser
+                .symbol_gen
+                .fresh(&format!("{}Occ_{sort_name}", fdecl.name));
+            decls.push_str(&format!(
+                "(index {index_name} {view_name} (any {}))\n",
+                ListDisplay(&positions, " ")
+            ));
+            entries.push(ViewIndex {
+                name: index_name,
+                sort_name,
+            });
+        }
+        self.egraph
+            .proof_state
+            .view_index
+            .insert(fdecl.name.clone(), entries);
+        decls
     }
 
     /// Query a functional-dependency view by its `children` key, binding fresh

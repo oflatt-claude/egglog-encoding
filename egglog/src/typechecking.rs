@@ -603,6 +603,14 @@ impl EGraph {
                     self.proof_state
                         .uf_parent
                         .insert(name.clone(), uf_ctor.clone());
+                    // The rebuild rules canonicalize a term in their action
+                    // through these, derived from the sort's `@UF_<S>` table.
+                    crate::proofs::proof_container_rebuild::register_uf_canon(
+                        self,
+                        name,
+                        uf_ctor,
+                        proof_func.is_some(),
+                    );
                 }
                 if let Some(pf) = proof_func {
                     self.proof_state
