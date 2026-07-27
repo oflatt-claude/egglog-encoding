@@ -181,10 +181,49 @@ pub fn plan_join(rule: &RuleSpec) -> Result<JoinPlan, String> {
 
     for atom in &rule.core.body.atoms {
         match atom.head {
-            // Index atoms need an occurrence index over the mirror, which this
-            // backend does not maintain.
-            RuleBodyCall::IndexTable { .. } => {
-                return Err("index atoms are not supported by this backend".to_string());
+            // An index atom reads the occurrence view of `id`: the leading arg is
+            // the occurring value, then the base row. The relation's own unit
+            // output trails the args and is not part of the view.
+            RuleBodyCall::IndexTable {
+                id,
+                ref any_of,
+                read,
+            } => {
+                if let Some(col) = any_of.iter().find(|c| **c >= u64::BITS as usize) {
+                    return Err(format!(
+                        "index column {col} is beyond the {} a read key can track",
+                        u64::BITS
+                    ));
+                }
+                let occurrence_cols = any_of.iter().fold(0u64, |m, c| m | (1u64 << c));
+                if occurrence_cols == 0 {
+                    return Err("index atom lists no columns".to_string());
+                }
+                let view_args = atom
+                    .args
+                    .split_last()
+                    .map(|(_unit, rest)| rest)
+                    .unwrap_or(&atom.args);
+                if view_args.len() > W {
+                    return Err(format!("atom arity {} > W {}", view_args.len(), W));
+                }
+                let slots = view_args
+                    .iter()
+                    .map(Slot::from_term)
+                    .collect::<Result<Vec<_>, _>>()?;
+                for s in &slots {
+                    if let Slot::Var(v) = s {
+                        body_vars.insert(*v);
+                    }
+                }
+                atoms.push(PlanAtom {
+                    read_key: ReadKey {
+                        func: id,
+                        mode: read,
+                        occurrence_cols,
+                    },
+                    slots,
+                });
             }
             RuleBodyCall::Table { id, read } => {
                 if atom.args.len() > W {
@@ -204,6 +243,7 @@ pub fn plan_join(rule: &RuleSpec) -> Result<JoinPlan, String> {
                     read_key: ReadKey {
                         func: id,
                         mode: read,
+                        occurrence_cols: 0,
                     },
                     slots,
                 });
@@ -821,6 +861,7 @@ mod tests {
 
     fn live(func: FunctionId) -> ReadKey {
         ReadKey {
+            occurrence_cols: 0,
             func,
             mode: ReadMode::Live,
         }
