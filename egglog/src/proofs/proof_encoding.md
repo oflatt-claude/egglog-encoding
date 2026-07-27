@@ -359,6 +359,12 @@ mirroring the construction side.
 
 # Rebuilding
 
+Rebuilding is entirely the encoding's job. Because the encoding removes every
+`union` and declares every table as a plain function (never a constructor),
+nothing it lowers reaches the backend's own union-find, so the backend's native
+rebuilding — including its container rebuilding — never runs. The frontend
+asserts this via `egglog_bridge::EGraph::forbid_native_rebuild`.
+
 Between the original program's commands, the encoding runs maintenance rules that
 restore the invariants egglog normally maintains during rebuilding:
 

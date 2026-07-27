@@ -603,6 +603,10 @@ impl EGraph {
     /// Enable the term/proof encoding pipeline with `typechecker` as the head of
     /// the re-typechecking chain.
     fn enable_term_encoding(&mut self, typechecker: EGraph) {
+        // The encoding removes every `union` and declares no constructor, so
+        // nothing it lowers can stage a union in the backend's own union-find:
+        // all equality reasoning runs as ordinary encoded rules.
+        self.backend.forbid_native_rebuild();
         self.proof_state.original_typechecking = Some(Box::new(typechecker));
     }
 

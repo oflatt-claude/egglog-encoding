@@ -146,6 +146,8 @@ pub struct EGraph {
     /// [`WriteState`] / [`FullState`] can resolve table actions at
     /// invoke time. Mutated in place from [`add_table`](EGraph::add_table).
     action_registry: Arc<std::sync::RwLock<ActionRegistry>>,
+    /// See [`EGraph::forbid_native_rebuild`].
+    forbid_native_rebuild: bool,
 }
 
 pub type Result<T> = std::result::Result<T, anyhow::Error>;
@@ -212,6 +214,7 @@ impl Default for EGraph {
             panic_func_ids,
             report_level: Default::default(),
             action_registry,
+            forbid_native_rebuild: false,
         }
     }
 }
@@ -790,6 +793,19 @@ impl EGraph {
         &self.action_registry
     }
 
+    /// Assert that nothing ever stages a union into this EGraph's union-find.
+    ///
+    /// A caller that resolves equality itself — e.g. the egglog crate's
+    /// term/proof encoding, which maintains its own union-find as ordinary
+    /// function tables — declares no `MergeFn::UnionId` table and emits no
+    /// union action, so the native union-find stays empty and rebuilding has
+    /// nothing to do. Setting this turns a violation of that contract into a
+    /// panic when rebuilding runs, instead of a silent divergence between the
+    /// two notions of equality.
+    pub fn forbid_native_rebuild(&mut self) {
+        self.forbid_native_rebuild = true;
+    }
+
     /// Run the given rules, returning whether the database changed.
     ///
     /// If the given rules are malformed, this method can return an error.
@@ -833,6 +849,14 @@ impl EGraph {
     }
 
     fn rebuild(&mut self) -> Result<()> {
+        // Only reachable once the union-find has grown; see
+        // [`EGraph::forbid_native_rebuild`].
+        assert!(
+            !self.forbid_native_rebuild,
+            "native rebuild ran on an EGraph that forbids it: {} unions reached the native \
+             union-find, but all equality reasoning was supposed to be done by ordinary rules",
+            self.db.get_table(self.uf_table).len()
+        );
         let do_parallel = rayon::current_num_threads() > 1;
         if self.db.get_table(self.uf_table).rebuilder(&[]).is_some() {
             // The UF implementation supports "native"  rebuilding.
