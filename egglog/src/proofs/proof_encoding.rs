@@ -25,6 +25,67 @@ pub(crate) struct NatEntry {
     pub connector: Option<String>,
 }
 
+/// A buffer of generated egglog statements, tagged with the interning mode of
+/// the context they are emitted into. Every emitter appends to one of these, so
+/// [`ProofInstrumentor::hash_cons`] picks its interning form from the sink it is
+/// handed.
+pub(crate) struct Stmts {
+    code: Vec<String>,
+    /// Interning inside a `:merge` body must use `get-fresh!` + `set`:
+    /// `set-if-empty` reads its table, and that read is unavailable in a merge's
+    /// execution state (only the pure mint + write is). The occasional duplicate
+    /// id this produces is folded away by the node table's own `AuxUF` merge.
+    in_merge: bool,
+}
+
+impl Stmts {
+    /// A sink for an ordinary action context, where node interning hash-conses.
+    pub(crate) fn new() -> Self {
+        Self {
+            code: Vec::new(),
+            in_merge: false,
+        }
+    }
+
+    /// A sink for the body of a `:merge` block (see [`Stmts::in_merge`]).
+    pub(crate) fn merge_body() -> Self {
+        Self {
+            code: Vec::new(),
+            in_merge: true,
+        }
+    }
+
+    pub(crate) fn push(&mut self, stmt: String) {
+        self.code.push(stmt);
+    }
+}
+
+impl std::ops::Deref for Stmts {
+    type Target = [String];
+
+    fn deref(&self) -> &[String] {
+        &self.code
+    }
+}
+
+impl IntoIterator for Stmts {
+    type Item = String;
+    type IntoIter = std::vec::IntoIter<String>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.code.into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a Stmts {
+    type Item = &'a String;
+    type IntoIter = std::slice::Iter<'a, String>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.code.iter()
+    }
+}
+
 /// Which way a pair-valued table's carried proofs point, selecting the
 /// displaced-edge composition in [`ProofInstrumentor::ordered_union_merge`].
 enum CarriedProofs {
@@ -67,12 +128,6 @@ pub(crate) struct EncodingState {
     /// whole-database baseline) instead of `:unsafe-seminaive`, so tests can
     /// assert the two produce the same database.
     pub force_proof_naive: bool,
-    /// True while emitting the body of a `:merge` block. Node interning there
-    /// must use `get-fresh!` + `set` rather than `set-if-empty`, because
-    /// `set-if-empty` reads its table and that read is unavailable inside a merge's
-    /// execution state (only the pure mint + write is). The occasional duplicate
-    /// id this produces is folded away by the node table's own `AuxUF` merge.
-    pub in_merge: bool,
 }
 
 impl EncodingState {
@@ -90,7 +145,6 @@ impl EncodingState {
             proof_testing: false,
             verify_proofs: true,
             force_proof_naive: false,
-            in_merge: false,
         }
     }
 }
@@ -137,7 +191,7 @@ impl<'a> ProofInstrumentor<'a> {
     /// justifications (merge bodies contain no `union` actions).
     fn edge_proof(
         &mut self,
-        stmts: &mut Vec<String>,
+        stmts: &mut Stmts,
         to_ast: &str,
         a: &str,
         b: &str,
@@ -183,7 +237,7 @@ impl<'a> ProofInstrumentor<'a> {
     /// action, which the caller must emit after `stmts`.
     pub(crate) fn union(
         &mut self,
-        stmts: &mut Vec<String>,
+        stmts: &mut Stmts,
         type_name: &str,
         lhs: &str,
         rhs: &str,
@@ -407,7 +461,7 @@ impl<'a> ProofInstrumentor<'a> {
     /// row also carries the proof `target = F(args)`.
     fn instrument_construct_into(
         &mut self,
-        res: &mut Vec<String>,
+        res: &mut Stmts,
         expr: &ResolvedExpr,
         target: &str,
         guest: &str,
@@ -537,12 +591,9 @@ impl<'a> ProofInstrumentor<'a> {
         let trans = self.proof_names().eq_trans_constructor.clone();
         let sym = self.proof_names().eq_sym_constructor.clone();
         let proof_sort = self.proof_sort();
-        let mut mints = vec![];
-        // This composes proof nodes inside the `:merge` body, so intern via
-        // `get-fresh!` + `set` (not `set-if-empty`, whose table read is unavailable
-        // here). Restore afterward so surrounding action contexts still hash-cons.
-        let saved = self.egraph.proof_state.in_merge;
-        self.egraph.proof_state.in_merge = true;
+        // These proof nodes are composed inside the `:merge` body, so they are
+        // interned in merge mode (see [`Stmts::merge_body`]).
+        let mut mints = Stmts::merge_body();
         let displaced_pf = match carried {
             CarriedProofs::KeyToParent => {
                 let sym_pf = self.mint(&mut mints, &sym, "hi_pf_", &proof_sort);
@@ -553,7 +604,6 @@ impl<'a> ProofInstrumentor<'a> {
                 self.mint(&mut mints, &trans, &format!("hi_pf_ {sym_pf}"), &proof_sort)
             }
         };
-        self.egraph.proof_state.in_merge = saved;
         let mints_str = mints.join("\n                  ");
         format!(
             "((let hi_pf_ (proof-of-max old0 old1 new0 new1))
@@ -599,7 +649,7 @@ impl<'a> ProofInstrumentor<'a> {
         let (compressed_proof_lets, compressed_proof) = if proofs {
             let trans = self.proof_names().eq_trans_constructor.clone();
             let proof_sort = self.proof_sort();
-            let mut mints = vec![];
+            let mut mints = Stmts::new();
             let pf = self.mint(&mut mints, &trans, &format!("{pb} {pc}"), &proof_sort);
             (mints.join("\n                    "), pf)
         } else {
@@ -657,12 +707,10 @@ impl<'a> ProofInstrumentor<'a> {
             .as_ref()
             .expect("custom FD view requires a :merge");
 
-        let mut body_code = vec![];
+        // The body mints term/proof nodes inside the view's `:merge`, so it is
+        // interned in merge mode (see [`Stmts::merge_body`]).
+        let mut body_code = Stmts::merge_body();
         let mut idx = 0usize;
-        // The body mints term/proof nodes inside the view's `:merge`, so intern via
-        // `get-fresh!` + `set` (see `hash_cons` / `in_merge`).
-        let saved_in_merge = self.egraph.proof_state.in_merge;
-        self.egraph.proof_state.in_merge = true;
         let merged = self.instrument_merge_body(
             &merge.result,
             &mut body_code,
@@ -686,7 +734,6 @@ impl<'a> ProofInstrumentor<'a> {
         } else {
             "()".to_string()
         };
-        self.egraph.proof_state.in_merge = saved_in_merge;
         let value = format!("(values {merged} {row_proof})");
         if body_code.is_empty() {
             value
@@ -839,15 +886,13 @@ impl<'a> ProofInstrumentor<'a> {
     fn instrument_action(
         &mut self,
         action: &ResolvedAction,
+        res: &mut Stmts,
         justification: &Justification,
         nat_conn: &mut NatConn,
-    ) -> Vec<String> {
-        let mut res = vec![];
-
+    ) {
         match action {
             ResolvedAction::Let(_span, v, generic_expr) => {
-                let v2 =
-                    self.instrument_action_expr(generic_expr, &mut res, justification, nat_conn);
+                let v2 = self.instrument_action_expr(generic_expr, res, justification, nat_conn);
                 // Carry the canonicalization info onto the let-bound name. `v2` is
                 // the built term's deduped e-class var, keyed in `nat_conn` by that
                 // fresh var; without this, a later reference to `v.name` (e.g. the
@@ -873,20 +918,10 @@ impl<'a> ProofInstrumentor<'a> {
                 // arity for x's term relation (its output is the eclass, so it has
                 // no separate output column).
                 if generic_exprs.is_empty() && self.egraph.type_info.is_global(&func_type.name) {
-                    let e_value = self.instrument_action_expr(
-                        generic_expr,
-                        &mut res,
-                        justification,
-                        nat_conn,
-                    );
+                    let e_value =
+                        self.instrument_action_expr(generic_expr, res, justification, nat_conn);
                     let proof = if self.proofs_enabled() {
-                        self.global_value_proof(
-                            &mut res,
-                            func_type,
-                            &e_value,
-                            justification,
-                            nat_conn,
-                        )
+                        self.global_value_proof(res, func_type, &e_value, justification, nat_conn)
                     } else {
                         "()".to_string()
                     };
@@ -895,17 +930,15 @@ impl<'a> ProofInstrumentor<'a> {
                     // directly as its output; no `set-if-empty` (there is only one).
                     res.push(format!("(set ({}) {e_value})", func_type.name));
                     res.push(self.update_fd_view(&func_type.name, &[], &e_value, &proof));
-                    return res;
+                    return;
                 }
 
                 let mut exprs = vec![];
                 for e in generic_exprs.iter().chain(std::iter::once(generic_expr)) {
-                    exprs.push(self.instrument_action_expr(e, &mut res, justification, nat_conn));
+                    exprs.push(self.instrument_action_expr(e, res, justification, nat_conn));
                 }
 
-                let (add_code, _fv) =
-                    self.add_term_and_view(func_type, &exprs, justification, nat_conn);
-                res.extend(add_code);
+                self.add_term_and_view(res, func_type, &exprs, justification, nat_conn);
             }
             ResolvedAction::Change(_span, change, h, generic_exprs) => {
                 if let ResolvedCall::Func(func_type) = h {
@@ -915,7 +948,7 @@ impl<'a> ProofInstrumentor<'a> {
                     };
                     let children = generic_exprs
                         .iter()
-                        .map(|e| self.instrument_action_expr(e, &mut res, justification, nat_conn))
+                        .map(|e| self.instrument_action_expr(e, res, justification, nat_conn))
                         .collect::<Vec<_>>();
 
                     // The marker is a `Unit` relation, so insert a row keyed on the
@@ -934,24 +967,20 @@ impl<'a> ProofInstrumentor<'a> {
                 // A union whose operand is a freshly-built constructor term is
                 // optimized upstream in `instrument_actions`; this arm handles
                 // the remaining general unions.
-                let v1 =
-                    self.instrument_action_expr(generic_expr, &mut res, justification, nat_conn);
-                let v2 =
-                    self.instrument_action_expr(generic_expr1, &mut res, justification, nat_conn);
+                let v1 = self.instrument_action_expr(generic_expr, res, justification, nat_conn);
+                let v2 = self.instrument_action_expr(generic_expr1, res, justification, nat_conn);
                 let ot = generic_expr.output_type();
                 let type_name = ot.name();
-                let unioned = self.union(&mut res, type_name, &v1, &v2, justification, nat_conn);
+                let unioned = self.union(res, type_name, &v1, &v2, justification, nat_conn);
                 res.push(unioned);
             }
             ResolvedAction::Panic(..) => {
                 res.push(format!("{action}"));
             }
             ResolvedAction::Expr(_span, generic_expr) => {
-                self.instrument_action_expr(generic_expr, &mut res, justification, nat_conn);
+                self.instrument_action_expr(generic_expr, res, justification, nat_conn);
             }
         }
-
-        res
     }
 
     /// Build the proof term that justifies a freshly-created term `fv`
@@ -963,7 +992,7 @@ impl<'a> ProofInstrumentor<'a> {
     /// table (the base the container rebuild composes from).
     fn anchor_container_term_proof(
         &mut self,
-        stmts: &mut Vec<String>,
+        stmts: &mut Stmts,
         fv: &str,
         csort: &str,
         justification: &Justification,
@@ -981,7 +1010,7 @@ impl<'a> ProofInstrumentor<'a> {
 
     pub(super) fn term_proof_for_justification(
         &mut self,
-        stmts: &mut Vec<String>,
+        stmts: &mut Stmts,
         fv: &str,
         to_ast: &str,
         justification: &Justification,
@@ -1043,7 +1072,7 @@ impl<'a> ProofInstrumentor<'a> {
     /// self-justifying and a global alias is already established.
     fn global_value_proof(
         &mut self,
-        res: &mut Vec<String>,
+        res: &mut Stmts,
         func_type: &FuncType,
         e_value: &str,
         justification: &Justification,
@@ -1088,7 +1117,7 @@ impl<'a> ProofInstrumentor<'a> {
     /// `get-fresh!` copies.
     pub(crate) fn mint(
         &mut self,
-        stmts: &mut Vec<String>,
+        stmts: &mut Stmts,
         name: &str,
         args_joined: &str,
         out_sort: &str,
@@ -1097,19 +1126,19 @@ impl<'a> ProofInstrumentor<'a> {
     }
 
     /// Intern the node `{name}(args_joined)` into its children-keyed table and
-    /// return its id. In a normal context this hash-conses via `set-if-empty`
-    /// (dedup, no `get-fresh!` copies); inside a `:merge` body (`in_merge`), where
+    /// return its id. In a normal-mode sink this hash-conses via `set-if-empty`
+    /// (dedup, no `get-fresh!` copies); in a merge-body sink, where
     /// `set-if-empty`'s table read is unavailable, it falls back to `get-fresh!` +
     /// `set` and lets the table's `AuxUF` merge fold any duplicate away.
     pub(crate) fn hash_cons(
         &mut self,
-        stmts: &mut Vec<String>,
+        stmts: &mut Stmts,
         name: &str,
         args_joined: &str,
         out_sort: &str,
     ) -> String {
         let get_fresh = crate::proofs::proof_fresh::GET_FRESH_PRIM_NAME;
-        if self.egraph.proof_state.in_merge {
+        if stmts.in_merge {
             let v = self.fresh_var();
             stmts.push(format!("(let {v} ({get_fresh} \"{out_sort}\"))"));
             stmts.push(format!("(set ({name} {args_joined}) {v})"));
@@ -1128,7 +1157,7 @@ impl<'a> ProofInstrumentor<'a> {
     /// stored e-class (a global is `set` before it is used, so the fresh fallback is
     /// dead code that only fires on a malformed program). The value read is already
     /// the view's canonical e-class, so no natural/deduped connector is recorded.
-    fn lookup_global(&mut self, name: &str, res: &mut Vec<String>) -> String {
+    fn lookup_global(&mut self, name: &str, res: &mut Stmts) -> String {
         let view = self.view_name(name);
         let set_if_empty = crate::proofs::proof_fresh::set_if_empty_prim_name(&view);
         let get_fresh = crate::proofs::proof_fresh::GET_FRESH_PRIM_NAME;
@@ -1158,18 +1187,18 @@ impl<'a> ProofInstrumentor<'a> {
         self.proof_names().proof_datatype.clone()
     }
 
-    /// Return some code adding to the term and view tables, and a variable for
-    /// the created term. For constructors, `args` excludes the eclass of the
-    /// resulting term (it may not exist yet); for custom functions, `args`
+    /// Emit the code adding to the term and view tables onto `res`, returning a
+    /// variable for the created term. For constructors, `args` excludes the eclass
+    /// of the resulting term (it may not exist yet); for custom functions, `args`
     /// includes all arguments, output included.
     fn add_term_and_view(
         &mut self,
+        res: &mut Stmts,
         func_type: &FuncType,
         args: &[String],
         justification: &Justification,
         nat_conn: &mut NatConn,
-    ) -> (Vec<String>, String) {
-        let mut res = vec![];
+    ) -> String {
         let view_sort = self
             .egraph
             .proof_state
@@ -1179,28 +1208,27 @@ impl<'a> ProofInstrumentor<'a> {
             .expect("term sort recorded in term_and_view")
             .clone();
 
-        let var = if func_type.subtype != FunctionSubtype::Constructor {
-            self.add_custom_row(&mut res, func_type, args, justification, &view_sort)
+        if func_type.subtype != FunctionSubtype::Constructor {
+            self.add_custom_row(res, func_type, args, justification, &view_sort)
         } else if !self.egraph.proof_state.proofs_enabled {
-            self.add_constructor_term_only(&mut res, func_type, args, &view_sort)
+            self.add_constructor_term_only(res, func_type, args, &view_sort)
         } else {
             self.add_constructor_with_proof(
-                &mut res,
+                res,
                 func_type,
                 args,
                 justification,
                 nat_conn,
                 &view_sort,
             )
-        };
-        (res, var)
+        }
     }
 
     /// Custom functions: mint the term-relation row and record its term proof.
     /// No canonicalization threading.
     fn add_custom_row(
         &mut self,
-        res: &mut Vec<String>,
+        res: &mut Stmts,
         func_type: &FuncType,
         args: &[String],
         justification: &Justification,
@@ -1234,7 +1262,7 @@ impl<'a> ProofInstrumentor<'a> {
     /// canonical).
     fn add_constructor_term_only(
         &mut self,
-        res: &mut Vec<String>,
+        res: &mut Stmts,
         func_type: &FuncType,
         args: &[String],
         view_sort: &str,
@@ -1265,7 +1293,7 @@ impl<'a> ProofInstrumentor<'a> {
     /// [`Self::instrument_construct_into`].
     fn build_natural_with_congr(
         &mut self,
-        res: &mut Vec<String>,
+        res: &mut Stmts,
         fname: &str,
         view_sort: &str,
         args: &[String],
@@ -1321,7 +1349,7 @@ impl<'a> ProofInstrumentor<'a> {
     /// (so its shape is no longer pinned to what the rule head built).
     fn add_constructor_with_proof(
         &mut self,
-        res: &mut Vec<String>,
+        res: &mut Stmts,
         func_type: &FuncType,
         args: &[String],
         justification: &Justification,
@@ -1415,7 +1443,7 @@ impl<'a> ProofInstrumentor<'a> {
     fn instrument_merge_body(
         &mut self,
         expr: &ResolvedExpr,
-        res: &mut Vec<String>,
+        res: &mut Stmts,
         fname: &str,
         idx: &mut usize,
         nat_conn: &mut NatConn,
@@ -1440,9 +1468,7 @@ impl<'a> ProofInstrumentor<'a> {
                     "new1".to_string(),
                     my_idx,
                 );
-                let (code, fv) = self.add_term_and_view(func_type, &arg_vars, &just, nat_conn);
-                res.extend(code);
-                fv
+                self.add_term_and_view(res, func_type, &arg_vars, &just, nat_conn)
             }
             // A container-producing primitive (e.g. `set-intersect`): build the
             // container over the recursively-built args and anchor a term-free
@@ -1482,7 +1508,7 @@ impl<'a> ProofInstrumentor<'a> {
     fn instrument_action_expr(
         &mut self,
         expr: &ResolvedExpr,
-        res: &mut Vec<String>,
+        res: &mut Stmts,
         proof: &Justification,
         nat_conn: &mut NatConn,
     ) -> String {
@@ -1510,10 +1536,7 @@ impl<'a> ProofInstrumentor<'a> {
                                 )
                             }
                         } else {
-                            let (add_code, fv) =
-                                self.add_term_and_view(func_type, &args, proof, nat_conn);
-                            res.extend(add_code);
-                            fv
+                            self.add_term_and_view(res, func_type, &args, proof, nat_conn)
                         }
                     }
                     ResolvedCall::Primitive(specialized_primitive) => {
@@ -1569,14 +1592,14 @@ impl<'a> ProofInstrumentor<'a> {
         actions: &[ResolvedAction],
         justification: &Justification,
         nat_conn: &mut NatConn,
-    ) -> Vec<String> {
+    ) -> Stmts {
         // Repeated constructor applications are already shared `let`s (see
         // `ast::cse`). Normalize union operands to variables, then build each
         // freshly-constructed union operand directly into the other operand's
         // e-class (see proof_encoding.md, "Union in a rule").
         let normalized = self.normalize_union_operands(actions);
         let (construct_into, dropped) = Self::plan_construct_into(&normalized);
-        let mut res = vec![];
+        let mut res = Stmts::new();
         for (i, action) in normalized.iter().enumerate() {
             if dropped.contains(&i) {
                 continue;
@@ -1593,7 +1616,7 @@ impl<'a> ProofInstrumentor<'a> {
                         nat_conn,
                     );
                 }
-                _ => res.extend(self.instrument_action(action, justification, nat_conn)),
+                _ => self.instrument_action(action, &mut res, justification, nat_conn),
             }
         }
         res
@@ -1661,7 +1684,7 @@ impl<'a> ProofInstrumentor<'a> {
                     {ruleset_opt} {eval_opt}
                     :name \"{name}\")",
             ListDisplay(facts, " "),
-            ListDisplay(actions, " "),
+            ListDisplay(&actions, " "),
         );
         self.parse_program(&instrumented)
     }
@@ -1904,7 +1927,7 @@ impl<'a> ProofInstrumentor<'a> {
             }
             ResolvedNCommand::Extract(span, expr, variants) => {
                 // Instrument the expressions to use view tables (like actions, not facts)
-                let mut action_stmts = vec![];
+                let mut action_stmts = Stmts::new();
                 let mut nat_conn = NatConn::default();
                 let instrumented_expr = self.instrument_action_expr(
                     expr,

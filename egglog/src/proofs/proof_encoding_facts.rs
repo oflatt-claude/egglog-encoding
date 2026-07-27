@@ -3,7 +3,7 @@
 //! proof for the rule's proof list.
 
 use super::proof_checker::is_container_side_condition;
-use super::proof_encoding::ProofInstrumentor;
+use super::proof_encoding::{ProofInstrumentor, Stmts};
 use crate::proofs::proof_encoding_helpers::Justification;
 use crate::typechecking::FuncType;
 use crate::*;
@@ -17,7 +17,7 @@ impl ProofInstrumentor<'_> {
         &mut self,
         fact: &ResolvedFact,
         res: &mut Vec<String>,
-        action_lookups: &mut Vec<String>,
+        action_lookups: &mut Stmts,
     ) -> String {
         // A container side condition: a fact that builds a container with a
         // primitive (`(= xs (vec-of e))`, `(= (set-of a) (set-of b))`, or a bare
@@ -131,7 +131,7 @@ impl ProofInstrumentor<'_> {
         &mut self,
         expr: &ResolvedExpr,
         res: &mut Vec<String>,
-        action_lookups: &mut Vec<String>,
+        action_lookups: &mut Stmts,
     ) -> (String, String) {
         match expr {
             ResolvedExpr::Lit(_, lit) => {
@@ -286,9 +286,9 @@ impl ProofInstrumentor<'_> {
     pub(super) fn instrument_facts(
         &mut self,
         facts: &[ResolvedFact],
-    ) -> (Vec<String>, Vec<String>, String) {
+    ) -> (Vec<String>, Stmts, String) {
         let mut res = vec![];
-        let mut action_lookups = vec![];
+        let mut action_lookups = Stmts::new();
         let mut proof = vec![];
 
         for fact in facts.iter() {
@@ -309,12 +309,7 @@ impl ProofInstrumentor<'_> {
 
     /// Mint a reflexive `Fiat` proof `value = value` for a term of `sort_name`
     /// (two identical ASTs under a `Fiat`), appending the mints to `stmts`.
-    fn reflexive_fiat_proof(
-        &mut self,
-        stmts: &mut Vec<String>,
-        sort_name: &str,
-        value: &str,
-    ) -> String {
+    fn reflexive_fiat_proof(&mut self, stmts: &mut Stmts, sort_name: &str, value: &str) -> String {
         let to_ast = self
             .proof_names()
             .sort_to_ast_constructor
