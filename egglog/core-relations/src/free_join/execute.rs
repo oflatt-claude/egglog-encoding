@@ -865,10 +865,23 @@ impl<'a> JoinState<'a> {
             .as_ref()
             .is_some_and(|occ| occ.cols.as_slice() == cols.as_slice())
         {
+            // The cached index covers the whole table, so its result has to be cut
+            // back to the rows this atom is currently scanning — otherwise the
+            // probe also returns rows the atom's constraints (a seminaive
+            // timestamp bound among them) have already excluded.
+            let whole_table = info.table.all();
+            let Subset::Dense(range) = *subset else {
+                panic!(
+                    "an occurrence atom needs a dense subset to intersect against; \
+                     a subset-local occurrence index is not built yet"
+                )
+            };
+            let needs_intersect =
+                !(whole_table.is_dense() && subset.bounds() == whole_table.bounds());
             return Prober {
                 node: trie_node,
                 ix: DynamicIndex::CachedColumn {
-                    intersect_outer: None,
+                    intersect_outer: needs_intersect.then_some(range),
                     table: get_occurrence_index_from_tableinfo(info, &cols),
                 },
             };
