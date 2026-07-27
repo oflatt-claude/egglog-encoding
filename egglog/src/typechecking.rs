@@ -604,6 +604,38 @@ impl EGraph {
                     Context::Full,
                 )?)
             }
+            NCommand::CoreActions(actions) => {
+                ResolvedNCommand::CoreActions(self.type_info.typecheck_standalone_actions(
+                    symbol_gen,
+                    actions,
+                    &Default::default(),
+                    Context::Full,
+                )?)
+            }
+            NCommand::LetBegin(span, name, actions) => {
+                let resolved = self.type_info.typecheck_standalone_actions(
+                    symbol_gen,
+                    actions,
+                    &Default::default(),
+                    Context::Full,
+                )?;
+                self.ensure_global_name_prefix(span, name)?;
+                // The parser guarantees a trailing expression; its type is the
+                // global's.
+                let Some(ResolvedAction::Expr(_, value)) = resolved.0.last() else {
+                    unreachable!("(let _ (begin ...)) must end with an expression")
+                };
+                let sort = value.output_type();
+                self.type_info
+                    .global_sorts
+                    .insert(name.clone(), sort.clone());
+                let resolved_var = ResolvedVar {
+                    name: name.clone(),
+                    sort,
+                    is_global_ref: false,
+                };
+                ResolvedNCommand::LetBegin(span.clone(), resolved_var, resolved)
+            }
             NCommand::Extract(span, expr, variants) => {
                 // A tuple-output function returns more than one value, so it can't be extracted as a
                 // single term; surface a clear error instead of a confusing arity mismatch.

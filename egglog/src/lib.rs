@@ -2093,6 +2093,13 @@ impl EGraph {
                     self.eval_actions(&ResolvedActions::new(vec![action.clone()]))?;
                 }
             },
+            // One `eval_actions` call, so the block's `let`s stay local.
+            ResolvedNCommand::CoreActions(actions) => {
+                self.eval_actions(&actions)?;
+            }
+            ResolvedNCommand::LetBegin(..) => {
+                unreachable!("LetBegin is removed by remove_globals")
+            }
             ResolvedNCommand::Extract(span, expr, variants) => {
                 let sort = expr.output_type();
 
@@ -2252,7 +2259,7 @@ impl EGraph {
             }
 
             ResolvedNCommand::ProveExists(span, resolved_call) => {
-                let mut instrument = ProofInstrumentor { egraph: self };
+                let mut instrument = ProofInstrumentor::new(self);
                 let (proof_store, proof_id) =
                     instrument
                         .prove_exists(&resolved_call)
@@ -2638,8 +2645,11 @@ impl EGraph {
                 self.names.check_shadowing(command)?;
             }
 
-            let term_encoding_added =
-                ProofInstrumentor::add_term_encoding(self, typechecked_no_globals)?;
+            // Share repeated constructor applications (see `ast::cse`).
+            let deduped =
+                ast::cse::cse_program(typechecked_no_globals, &mut self.parser.symbol_gen);
+
+            let term_encoding_added = ProofInstrumentor::add_term_encoding(self, deduped)?;
             let mut new_typechecked = vec![];
             for new_cmd in term_encoding_added {
                 let desugared =

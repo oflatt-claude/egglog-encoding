@@ -1,4 +1,5 @@
 pub mod check_shadowing;
+pub mod cse;
 pub mod desugar;
 mod expr;
 mod parse;
@@ -122,6 +123,14 @@ where
         rule: GenericRule<Head, Leaf>,
     },
     CoreAction(GenericAction<Head, Leaf>),
+    /// A block of actions run once, immediately, with a shared *local* scope:
+    /// `let`s bind local variables rather than global functions. A user-written
+    /// block is unsupported under the term/proof encoding.
+    CoreActions(GenericActions<Head, Leaf>),
+    /// `(let <var> (begin <action>* <expr>))`: run the block with a shared local
+    /// scope, then bind the *global* `<var>` to the trailing `<expr>`. The last
+    /// action must be an `Expr`.
+    LetBegin(Span, Leaf, GenericActions<Head, Leaf>),
     Extract(Span, GenericExpr<Head, Leaf>, GenericExpr<Head, Leaf>),
     RunSchedule(GenericSchedule<Head, Leaf>),
     PrintOverallStatistics(Span, Option<String>),
@@ -219,6 +228,10 @@ where
                 GenericCommand::PrintOverallStatistics(span.clone(), file.clone())
             }
             GenericNCommand::CoreAction(action) => GenericCommand::Action(action.clone()),
+            GenericNCommand::CoreActions(actions) => GenericCommand::Actions(actions.clone()),
+            GenericNCommand::LetBegin(span, name, actions) => {
+                GenericCommand::LetBegin(span.clone(), name.clone(), actions.clone())
+            }
             GenericNCommand::Extract(span, expr, variants) => {
                 GenericCommand::Extract(span.clone(), expr.clone(), variants.clone())
             }
@@ -281,6 +294,8 @@ where
             | GenericNCommand::AddRuleset(..)
             | GenericNCommand::UnstableCombinedRuleset(..)
             | GenericNCommand::CoreAction(..)
+            | GenericNCommand::CoreActions(..)
+            | GenericNCommand::LetBegin(..)
             | GenericNCommand::Extract(..)
             | GenericNCommand::PrintOverallStatistics(..)
             | GenericNCommand::PrintFunction(..)
@@ -337,6 +352,12 @@ where
             }
             GenericNCommand::CoreAction(action) => {
                 GenericNCommand::CoreAction(action.visit_exprs(f))
+            }
+            GenericNCommand::CoreActions(actions) => {
+                GenericNCommand::CoreActions(actions.visit_exprs(f))
+            }
+            GenericNCommand::LetBegin(span, name, actions) => {
+                GenericNCommand::LetBegin(span, name, actions.visit_exprs(f))
             }
             GenericNCommand::Extract(span, expr, variants) => {
                 GenericNCommand::Extract(span, expr.visit_exprs(f), variants.visit_exprs(f))
@@ -931,6 +952,11 @@ where
     /// (let xplusone (Add (Var "x") (Num 1)))
     /// ```
     Action(GenericAction<Head, Leaf>),
+    /// A block of actions run once with a shared local scope (see
+    /// [`GenericNCommand::CoreActions`]).
+    Actions(GenericActions<Head, Leaf>),
+    /// `(let <var> (begin ...))` (see [`GenericNCommand::LetBegin`]).
+    LetBegin(Span, Leaf, GenericActions<Head, Leaf>),
     /// `extract` a datatype from the egraph, choosing
     /// the smallest representative.
     /// By default, each constructor costs 1 to extract
@@ -1051,6 +1077,20 @@ where
                 write!(f, "(datatype {name} {})", ListDisplay(variants, " "))
             }
             GenericCommand::Action(a) => write!(f, "{a}"),
+            GenericCommand::Actions(actions) => {
+                writeln!(f, "(begin")?;
+                for a in &actions.0 {
+                    writeln!(f, "   {a}")?;
+                }
+                write!(f, ")")
+            }
+            GenericCommand::LetBegin(_, name, actions) => {
+                writeln!(f, "(let {name} (begin")?;
+                for a in &actions.0 {
+                    writeln!(f, "   {a}")?;
+                }
+                write!(f, "))")
+            }
             GenericCommand::Extract(_span, expr, variants) => {
                 write!(f, "(extract {expr} {variants})")
             }
@@ -2028,6 +2068,10 @@ where
                 GenericCommand::BiRewrite(fun(name), rewrite)
             }
             GenericCommand::Action(action) => GenericCommand::Action(action),
+            GenericCommand::Actions(actions) => GenericCommand::Actions(actions),
+            GenericCommand::LetBegin(span, name, actions) => {
+                GenericCommand::LetBegin(span, name, actions)
+            }
             GenericCommand::Extract(span, expr, variants) => {
                 GenericCommand::Extract(span, expr, variants)
             }
@@ -2133,6 +2177,10 @@ where
                 },
             ),
             GenericCommand::Action(action) => GenericCommand::Action(action.visit_exprs(f)),
+            GenericCommand::Actions(actions) => GenericCommand::Actions(actions.visit_exprs(f)),
+            GenericCommand::LetBegin(span, name, actions) => {
+                GenericCommand::LetBegin(span, name, actions.visit_exprs(f))
+            }
             GenericCommand::Extract(span, expr1, expr2) => {
                 GenericCommand::Extract(span, expr1.visit_exprs(f), expr2.visit_exprs(f))
             }
@@ -2270,6 +2318,12 @@ where
             GenericCommand::Action(action) => {
                 GenericCommand::Action(action.map_symbols(head, leaf))
             }
+            GenericCommand::Actions(actions) => {
+                GenericCommand::Actions(actions.map_symbols(head, leaf))
+            }
+            GenericCommand::LetBegin(span, name, actions) => {
+                GenericCommand::LetBegin(span, leaf(name), actions.map_symbols(head, leaf))
+            }
             GenericCommand::Extract(span, expr, variants) => GenericCommand::Extract(
                 span,
                 expr.map_symbols(head, leaf),
@@ -2344,6 +2398,10 @@ where
                 rule: rule.visit_actions(f),
             },
             GenericCommand::Action(action) => GenericCommand::Action(f(action)),
+            GenericCommand::Actions(actions) => GenericCommand::Actions(actions.visit_actions(f)),
+            GenericCommand::LetBegin(span, name, actions) => {
+                GenericCommand::LetBegin(span, name, actions.visit_actions(f))
+            }
             GenericCommand::Fail(span, cmds) => GenericCommand::Fail(
                 span,
                 cmds.into_iter()

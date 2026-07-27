@@ -1,4 +1,5 @@
 /target/
+/nightly/
 /.reports*.jsonl
 /.reports*.html
 /.profiles/

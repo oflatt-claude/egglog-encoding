@@ -69,6 +69,7 @@ const RESERVED_KEYWORDS: &[&str] = &[
     "print-stats",
     "include",
     "fail",
+    "begin",
     "prove",
     "prove-exists",
     // actions
@@ -996,6 +997,43 @@ impl Parser {
                     cs.extend(self.parse_command(subcommand)?);
                 }
                 vec![Command::Fail(span, cs)]
+            }
+            "begin" => {
+                // A block of actions run once with a shared local scope (see
+                // `GenericCommand::Actions`).
+                let mut acts = vec![];
+                for action in tail {
+                    acts.extend(self.parse_action(action)?);
+                }
+                vec![Command::Actions(GenericActions::new(acts))]
+            }
+            // `(let <name> (begin <action>* <expr>))` binds a global to the value
+            // of a local-scope block (see `GenericCommand::LetBegin`); any other
+            // `let` stays an ordinary action.
+            "let"
+                if matches!(
+                    tail,
+                    [_, Sexp::List(items, _)]
+                        if matches!(items.first(), Some(Sexp::Atom(h, _)) if h == "begin")
+                ) =>
+            {
+                let [name, Sexp::List(items, _)] = tail else {
+                    unreachable!("guarded by the `matches!` above")
+                };
+                let binding_span = name.span();
+                let binding = name.expect_atom("binding name")?;
+                self.ensure_symbol_not_reserved(&binding, &binding_span)?;
+                let mut acts = vec![];
+                for action in &items[1..] {
+                    acts.extend(self.parse_action(action)?);
+                }
+                if !matches!(acts.last(), Some(Action::Expr(..))) {
+                    return error!(
+                        span,
+                        "the body of (let <name> (begin ...)) must end with an expression"
+                    );
+                }
+                vec![Command::LetBegin(span, binding, GenericActions::new(acts))]
             }
             _ => self
                 .parse_action(sexp)?
