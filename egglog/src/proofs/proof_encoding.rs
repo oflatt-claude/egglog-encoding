@@ -34,14 +34,13 @@ enum CarriedProofs {
     EclassToTerm,
 }
 
-/// A declared index on a function's view, covering the view columns of a single
-/// eq-sort. `positions` index the view's row (its children, then its e-class);
-/// an `@UF` edge on a term reaches every row mentioning it at any of them.
+/// A declared index on a function's view, covering the view columns of one
+/// eq-sort — its children and its e-class. An `@UF` edge on a term reaches every
+/// row mentioning it at any of them.
 #[derive(Clone)]
 pub(crate) struct ViewIndex {
     pub name: String,
     pub sort_name: String,
-    pub positions: Vec<usize>,
 }
 
 // TODO refactor so that encoding state is optional on the e-graph, ProofNames not optional on EncodingState. Then we don't have to clone proof names everywhere.
@@ -1370,7 +1369,6 @@ impl<'a> ProofInstrumentor<'a> {
             entries.push(ViewIndex {
                 name: index_name,
                 sort_name,
-                positions,
             });
         }
         self.egraph

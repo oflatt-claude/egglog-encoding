@@ -9,8 +9,6 @@ use crate::*;
 
 /// Which FD-view value column [`ProofInstrumentor::fd_value_rebuild_rule`] rebuilds.
 enum ValueRebuild {
-    /// The value is the term's e-class (constructors and globals).
-    Eclass,
     /// A custom function's eq-sort output at child index `out_idx`.
     CustomOutput { out_idx: usize },
     /// A custom function's eq-container output at child index `out_idx`,
@@ -234,10 +232,7 @@ impl ProofInstrumentor<'_> {
         let uf_name = self.uf_name(&vi.sort_name);
         let uf_atom = format!("(= (values {leader} {leader_pf}) ({uf_name} {follower}))");
         // The index relation is `(value, children…, eclass, proof)`.
-        let index_atom = format!(
-            "({} {follower} {keys_str} {eclass} {row_pf})",
-            vi.name
-        );
+        let index_atom = format!("({} {follower} {keys_str} {eclass} {row_pf})", vi.name);
 
         // Canonicalize every eq-sort column, folding its congruence step onto the
         // row proof. A column that did not move canonicalizes to itself and its
@@ -361,17 +356,6 @@ impl ProofInstrumentor<'_> {
             let proof_sort = self.proof_sort();
             let mut lets = vec![];
             let pf = match kind {
-                ValueRebuild::Eclass => {
-                    let sym = self.proof_names().eq_sym_constructor.clone();
-                    let trans = self.proof_names().eq_trans_constructor.clone();
-                    let sym_pf = self.mint(&mut lets, &sym, &uf_prf, &proof_sort);
-                    self.mint(
-                        &mut lets,
-                        &trans,
-                        &format!("{sym_pf} {view_prf}"),
-                        &proof_sort,
-                    )
-                }
                 ValueRebuild::CustomOutput { out_idx } => {
                     let congr = self.proof_names().congr_constructor.clone();
                     self.mint(
@@ -389,7 +373,6 @@ impl ProofInstrumentor<'_> {
         };
         let set_canon = self.update_fd_view(&fdecl.name, key_vars, &canon, &pf_arg);
         let actions = match kind {
-            ValueRebuild::Eclass => format!("{proof_lets}\n{set_canon}"),
             ValueRebuild::CustomOutput { .. } => {
                 let view_name = self.view_name(&fdecl.name);
                 let keys_str = ListDisplay(key_vars, " ").to_string();

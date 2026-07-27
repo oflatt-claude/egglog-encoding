@@ -632,18 +632,21 @@ impl ColumnIndex {
     /// Build a single-column index for `subset` of `table`. Picks between a
     /// sort-based bulk path and a per-row scan based on subset size: large
     /// subsets amortize the sort overhead, small ones avoid the buffer copy.
+    /// Build an index over just `subset`, mapping each value appearing in any of
+    /// `cols` to the rows of `subset` holding it. With one column this is the
+    /// usual per-column index; with several it is an occurrence index.
     pub(crate) fn build_for_subset(
         table: WrappedTableRef,
         subset: SubsetRef,
-        col: ColumnId,
+        cols: &[ColumnId],
     ) -> ColumnIndex {
         const SORT_BULK_THRESHOLD: usize = 512;
         let mut res = ColumnIndex::new();
-        if subset.size() >= SORT_BULK_THRESHOLD {
-            res.rebuild_full(&[col], table, subset);
+        if subset.size() >= SORT_BULK_THRESHOLD || cols.len() != 1 {
+            res.rebuild_full(cols, table, subset);
         } else {
             res.reserve_for_n_rows(subset.size());
-            table.for_each_col(subset, col, &mut |row_id, val| {
+            table.for_each_col(subset, cols[0], &mut |row_id, val| {
                 res.add_row(&[val], row_id);
             });
         }
