@@ -49,12 +49,19 @@ impl ProofInstrumentor<'_> {
                 // TODO this could actually be arbitrary pretty easily, it's just nested functions that are hard.
                 ResolvedExpr::Var(_span3, v),
             ) => {
+                // Variables and constants don't need subproofs, but nested calls
+                // do (as in the constructor arm below).
                 let mut new_args = vec![];
-                let mut arg_proofs = vec![];
+                let mut arg_proofs: Vec<Option<String>> = vec![];
                 for arg in args {
-                    let (var, proof) = self.instrument_fact_expr(arg, res, action_lookups);
-                    new_args.push(var);
-                    arg_proofs.push(proof);
+                    if matches!(arg, ResolvedExpr::Var(_, _) | ResolvedExpr::Lit(_, _)) {
+                        new_args.push(arg.to_string());
+                        arg_proofs.push(None);
+                    } else {
+                        let (var, proof) = self.instrument_fact_expr(arg, res, action_lookups);
+                        new_args.push(var);
+                        arg_proofs.push(Some(proof));
+                    }
                 }
 
                 let view_name = self.view_name(head.name());
@@ -73,12 +80,14 @@ impl ProofInstrumentor<'_> {
                     let proof_sort = self.proof_sort();
                     let mut proof = proof_var;
                     for (i, arg_proof) in arg_proofs.into_iter().enumerate() {
-                        proof = self.mint(
-                            action_lookups,
-                            &congr,
-                            &format!("{proof} {i} {arg_proof}"),
-                            &proof_sort,
-                        );
+                        if let Some(arg_proof) = arg_proof {
+                            proof = self.mint(
+                                action_lookups,
+                                &congr,
+                                &format!("{proof} {i} {arg_proof}"),
+                                &proof_sort,
+                            );
+                        }
                     }
                     proof
                 } else {
