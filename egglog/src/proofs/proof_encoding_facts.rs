@@ -95,6 +95,19 @@ impl ProofInstrumentor<'_> {
                 }
             }
             ResolvedFact::Eq(_span, left_expr, right_expr) => {
+                // In proof normal form a call appears only as `(= var (call …))`.
+                // The variable's proof is its reflexive term proof, so the
+                // composition below collapses to the call's own proof — skip
+                // both the lookup and the two nodes rather than minting a
+                // `Trans(Sym(refl), p)` for the simplifier to undo.
+                if self.egraph.proof_state.proofs_enabled
+                    && let ResolvedExpr::Var(_, left_var) = left_expr
+                    && matches!(right_expr, ResolvedExpr::Call(..))
+                {
+                    let (v2, p2) = self.instrument_fact_expr(right_expr, res, action_lookups);
+                    res.push(format!("(= {} {v2})", left_var.name));
+                    return p2;
+                }
                 let (v1, p1) = self.instrument_fact_expr(left_expr, res, action_lookups);
                 let (v2, p2) = self.instrument_fact_expr(right_expr, res, action_lookups);
                 res.push(format!("(= {v1} {v2})"));

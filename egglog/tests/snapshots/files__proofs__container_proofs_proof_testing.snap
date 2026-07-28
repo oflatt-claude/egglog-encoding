@@ -94,7 +94,7 @@ expression: proof_snapshot
       ((MapGet w))
          )")
   (premises (Fiat (= t1 t1)) (Fiat (= (Z) (Z))) (Fiat (= (S (Z)) (S (Z)))))
-  (substitution (m t0) (@v800 (Z)) (w (S (Z)))))
+  (substitution (m t0) (w (S (Z))) (@v787 (Z))))
 (let t0 (multiset-of (S (Z)) (Z) (Z)))
 (let t1 (HasMS t0))
 (Rule
@@ -195,5 +195,5 @@ expression: proof_snapshot
       ((OutWrap w))
          )")
       (premises (Fiat (= (HasElem (Z)) (HasElem (Z)))) (Eval) (Fiat (= t0 t0)))
-      (substitution (a (Z)) (@v1543 (vec-of (Z) (Z))) (w t0))))
-  (substitution (@v1568 (Z)) (@v1569 (Z)) (@v1570 (vec-of (Z) (Z)))))
+      (substitution (a (Z)) (w t0) (@v1511 (vec-of (Z) (Z))))))
+  (substitution (@v1535 (vec-of (Z) (Z))) (@v1533 (Z)) (@v1534 (Z))))
