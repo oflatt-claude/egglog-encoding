@@ -379,8 +379,77 @@ impl RawProofStore {
             term_to_proof: HashMap::default(),
             proof_to_term: HashMap::default(),
         };
+        store.parse_nested_first(term);
         let parsed = store.parse_proof(term);
         (store, parsed)
+    }
+
+    /// Parse the proofs nested in `term_id` deepest first, on an explicit stack,
+    /// visiting them in the order [`Self::parse_proof`] would. It then finds each
+    /// one already parsed, so a deep proof does not need a deep call stack.
+    fn parse_nested_first(&mut self, term_id: TermId) {
+        // `false` means the term's nested proofs still have to be pushed.
+        let mut stack = vec![(term_id, false)];
+        let mut seen: HashSet<TermId> = HashSet::default();
+        while let Some((id, nested_pushed)) = stack.pop() {
+            if nested_pushed {
+                self.parse_proof(id);
+                continue;
+            }
+            if !seen.insert(id) {
+                continue;
+            }
+            stack.push((id, true));
+            // Reversed, so popping visits them in `parse_proof_inner`'s order.
+            stack.extend(
+                self.nested_proofs(id)
+                    .into_iter()
+                    .rev()
+                    .map(|nested| (nested, false)),
+            );
+        }
+    }
+
+    /// The proof terms [`Self::parse_proof_inner`] recurses into, in order. A
+    /// malformed term reports none, leaving the diagnostic to the parse itself.
+    fn nested_proofs(&self, term_id: TermId) -> Vec<TermId> {
+        let Term::App(head, args) = self.term_dag.get(term_id) else {
+            return vec![];
+        };
+        let names = &self.names;
+        match args.len() {
+            6 if *head == names.rule_constructor => {
+                let mut nested = self.list_elements(args[1]);
+                nested.extend(self.list_elements(args[2]));
+                nested
+            }
+            4 if *head == names.merge_fn_idx_constructor => vec![args[1], args[2]],
+            3 if *head == names.merge_fn_row_constructor => vec![args[1], args[2]],
+            3 if *head == names.congr_constructor => vec![args[0], args[2]],
+            2 if *head == names.eq_trans_constructor || *head == names.congr_all_constructor => {
+                vec![args[0], args[1]]
+            }
+            1 if *head == names.eq_sym_constructor
+                || *head == names.container_normalize_constructor =>
+            {
+                vec![args[0]]
+            }
+            _ => vec![],
+        }
+    }
+
+    /// The proofs consed onto a proof list, front to back.
+    fn list_elements(&self, list_term: TermId) -> Vec<TermId> {
+        let mut elements = vec![];
+        let mut cell = list_term;
+        while let Term::App(head, args) = self.term_dag.get(cell)
+            && *head == self.names.pcons
+            && args.len() == 2
+        {
+            elements.push(args[0]);
+            cell = args[1];
+        }
+        elements
     }
 
     fn parse_proof(&mut self, term_id: TermId) -> RawProofId {
@@ -462,30 +531,27 @@ impl RawProofStore {
         self.add_proof(proof)
     }
 
+    /// Walks the cons spine with a loop, not recursion: a premise list is as long
+    /// as the firing has premises and bridges, which is unbounded.
     fn parse_proof_list(&mut self, list_term: TermId) -> Vec<RawProofId> {
-        let term = self.term_dag.get(list_term).clone();
-        match term {
-            Term::App(head, args) => {
-                if head == self.names.pnil {
-                    assert!(args.is_empty(), "pnil should not have arguments");
-                    Vec::new()
-                } else if head == self.names.pcons {
-                    assert!(args.len() == 2, "pcons should have 2 arguments");
-                    let head_proof = self.parse_proof(args[0]);
-                    let rest = self.parse_proof_list(args[1]);
-                    let mut list = Vec::with_capacity(rest.len() + 1);
-                    list.push(head_proof);
-                    list.extend(rest);
-                    list
-                } else {
-                    panic!(
-                        "expected proof list constructor, got {head}. Proof parsing assumes valid proofs."
-                    );
-                }
+        let mut list = Vec::new();
+        let mut cell = list_term;
+        loop {
+            let term = self.term_dag.get(cell).clone();
+            let Term::App(head, args) = term else {
+                panic!("expected proof list, got {term:?}. Proof parsing assumes valid proofs.")
+            };
+            if head == self.names.pnil {
+                assert!(args.is_empty(), "pnil should not have arguments");
+                return list;
             }
-            other => {
-                panic!("expected proof list, got {other:?}. Proof parsing assumes valid proofs.")
-            }
+            assert!(
+                head == self.names.pcons,
+                "expected proof list constructor, got {head}. Proof parsing assumes valid proofs."
+            );
+            assert!(args.len() == 2, "pcons should have 2 arguments");
+            list.push(self.parse_proof(args[0]));
+            cell = args[1];
         }
     }
 

@@ -274,28 +274,43 @@ the natural node's term proof and the guest's view-row proof. That subsumes the
 "Available now" 9->7 collapse for this shape — the rows that collapse there are
 among the three deleted here — so it was not taken separately.
 
-#### Not carried: the largest proof fixture
+#### The proof got deep, so reading it stopped recursing
 
-`egglog-experimental`'s `eggcc-2mm-pass1` proof test regresses from passing (33 s)
-to a stack overflow in `ProofExtractor::extract`. The bridge premises are a cons
-list, and extracting one costs a frame per cell, so the extracted proof term's
-depth goes from a measured maximum of **15** frames on that fixture to over
-**2000**. The corpus in `egglog/tests` is unaffected (206 pass, and the run is
-*faster* than before: 9.3 s against 13.2 s).
-
-The depth is inherent to the cumulative list: resolving a build site needs every
+The bridge premises are a cons list, so on `egglog-experimental`'s
+`eggcc-2mm-pass1` proof test the extracted proof term's depth went from a measured
+maximum of **15** to over **2000**, and the fixture died of a stack overflow. The
+depth is inherent to the cumulative list: resolving a build site needs every
 bridge in its subtree, and the subtree's bridges are a front block of the list, so
-the list cannot be shortened without losing them. Two ways out, neither taken
-here:
+the list cannot be shortened without losing them. Note the budget: a test runs on
+a spawned thread, so the whole read is working inside 2 MiB, not the main thread's
+8 MiB.
 
-* Record each build site's **connector** as its own row and have a parent name
-  its children's connector rows instead of their bridges. Then a row's extra
-  premises are (own bridge + one per child), so the list is short and the depth
-  per level is a small constant. It costs one row per build site, dropping the
-  saving from `k+5 -> 3` to `k+5 -> k+4`; the flat case (the commute rule) is
-  unaffected at 6.
-* Make `ProofExtractor::extract` iterate the list spine instead of recursing.
-  This helps every proof, not just this one, and does not change what is emitted.
+Fixed on the reading side, not in the encoding, so nothing a firing emits changes
+and the row counts above stand. Both readers of the extracted term now drive
+themselves from an explicit stack:
+
+* `RootExtractor` (`proof_extractor.rs`) resolves one child at a time from a stack
+  of frames, each recording which reconstruction its node is trying.
+* `RawProofStore` parses the nested proofs of a term deepest first
+  (`parse_nested_first`), so `parse_proof` finds each one already parsed;
+  `parse_proof_list` also loops down the cons spine rather than recursing.
+
+Measured with a per-routine stack probe on that fixture: parsing peaked at 2.3 MiB
+before the change and, like `convert_raw_proof`, `simplify` and `check_proof`,
+stays under 256 KiB after. The fixture passes again in 201 s (33 s before phase
+2b; the extra time is the larger proof, not the fix), and the `egglog/tests`
+corpus is unchanged at 206 passing in 9.4 s — still faster than the 13.2 s before
+phase 2b.
+
+Not needed, so not taken: recording each build site's **connector** as its own row
+and having a parent name its children's connector rows instead of their bridges.
+That bounds the list structurally but costs one row per build site, dropping the
+saving from `k+5 -> 3` to `k+5 -> k+4`.
+
+Still recursive, and unchanged here: `check_proof` descends per proof node, which
+a synthetic chain of ~2000 rule firings overflows. That shape is nothing the
+corpus or this fixture reaches — both leave it two orders of magnitude of headroom
+— but it is the next thing to give.
 
 ## Standing rules
 
