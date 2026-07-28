@@ -140,6 +140,10 @@ pub(crate) struct ProofInstrumentor<'a> {
     /// variable name. Names are globally fresh, so entries never collide across
     /// the generated programs.
     reflexive: HashSet<String>,
+    /// Table reads not emitted yet, keyed by the proof variable they bind.
+    /// [`Self::mint`] emits one when a row first reads it, so a proof no
+    /// composition keeps costs no read.
+    pending_lookups: HashMap<String, String>,
 }
 
 impl<'a> ProofInstrumentor<'a> {
@@ -148,6 +152,7 @@ impl<'a> ProofInstrumentor<'a> {
             egraph,
             head_premises: None,
             reflexive: HashSet::default(),
+            pending_lookups: HashMap::default(),
         }
     }
 
@@ -1273,6 +1278,32 @@ impl<'a> ProofInstrumentor<'a> {
         self.mint(stmts, &congr, &format!("{acc} {idx} {step}"), &proof_sort)
     }
 
+    /// Hold back `stmt`, the statement binding `proof`, until a minted row reads
+    /// `proof`. A proof that no row ends up reading is never bound, and
+    /// [`Self::drop_pending_lookups`] discards it.
+    pub(crate) fn defer_lookup(&mut self, proof: &str, stmt: String) {
+        self.pending_lookups.insert(proof.to_string(), stmt);
+    }
+
+    /// Discard the lookups still held back, whose proofs nothing read.
+    pub(crate) fn drop_pending_lookups(&mut self) {
+        self.pending_lookups.clear();
+    }
+
+    /// Emit the deferred lookups `args_joined` reads, keeping each binding ahead
+    /// of the statement reading it.
+    fn emit_pending_lookups(&mut self, stmts: &mut Vec<String>, args_joined: &str) {
+        if self.pending_lookups.is_empty() {
+            return;
+        }
+        for arg in args_joined.split_whitespace() {
+            let arg = arg.trim_matches(|c| c == '(' || c == ')');
+            if let Some(stmt) = self.pending_lookups.remove(arg) {
+                stmts.push(stmt);
+            }
+        }
+    }
+
     /// Mint a fresh id of `out_sort` and assert the relation row
     /// `({name} {args_joined} <fresh>)`, appending the `let`/`set` onto `stmts`
     /// and returning the fresh variable. Terms and proofs are relations rather
@@ -1285,6 +1316,7 @@ impl<'a> ProofInstrumentor<'a> {
         args_joined: &str,
         out_sort: &str,
     ) -> String {
+        self.emit_pending_lookups(stmts, args_joined);
         let v = self.fresh_var();
         // The generic `get-fresh!` takes the target sort as a string literal so it
         // types its output without per-sort primitives (its runtime ignores the arg).
@@ -1492,9 +1524,6 @@ impl<'a> ProofInstrumentor<'a> {
     ) -> String {
         let view = self.view_name(&func_type.name);
         let set_if_empty = crate::proofs::proof_fresh::set_if_empty_prim_name(&view);
-        let proof_sort = self.proof_sort();
-        let trans = self.proof_names().eq_trans_constructor.clone();
-        let sym = self.proof_names().eq_sym_constructor.clone();
         let term_proof_constructor = self.term_proof_name(func_type.output().name());
 
         // `fv_nat` stays *unseeded* (only `fv_can` is written to the view) so it is
@@ -1525,8 +1554,8 @@ impl<'a> ProofInstrumentor<'a> {
         );
         let can_prf = match &to_dedup {
             Some(chain) => {
-                let sym_ntd = self.mint(res, &sym, chain, &proof_sort);
-                self.mint(res, &trans, &format!("{sym_ntd} {chain}"), &proof_sort)
+                let sym_ntd = self.mint_sym(res, chain);
+                self.mint_trans(res, &sym_ntd, chain)
             }
             None => {
                 let asts = asts.as_ref().expect("a rule proof mints AST endpoints");
@@ -1561,8 +1590,8 @@ impl<'a> ProofInstrumentor<'a> {
             // connector `fv_nat = dedup` = Trans(nat_to_dedup, Sym(dedup = f(children))).
             // `sym_vprf` reads the `vprf` let, so it must follow the statements above.
             Some(chain) => {
-                let sym_vprf = self.mint(res, &sym, &vprf, &proof_sort);
-                Connector::Node(self.mint(res, &trans, &format!("{chain} {sym_vprf}"), &proof_sort))
+                let sym_vprf = self.mint_sym(res, &vprf);
+                Connector::Node(self.mint_trans(res, chain, &sym_vprf))
             }
             None => Connector::Role(
                 justification

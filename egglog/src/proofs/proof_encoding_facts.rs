@@ -146,10 +146,14 @@ impl ProofInstrumentor<'_> {
                         // present when the rule fires. Fetch it directly in the
                         // action (the rule is then `:unsafe-seminaive`, see
                         // instrument_rule) instead of as a body join — one fewer
-                        // join per eq-sort body variable. Callers that don't
-                        // build a proof (run :until, check) discard these.
-                        action_lookups
-                            .push(format!("(let {fresh_proof} ({term_proof_name} {var}))"));
+                        // join per eq-sort body variable. Deferred because the
+                        // proof is reflexive, so the composition asking for it
+                        // often drops it; callers that don't build a proof
+                        // (run :until, check) discard these.
+                        self.defer_lookup(
+                            &fresh_proof,
+                            format!("(let {fresh_proof} ({term_proof_name} {var}))"),
+                        );
                         // A term proof is the term's reflexive anchor.
                         self.mark_reflexive(&fresh_proof);
                         fresh_proof
@@ -258,12 +262,12 @@ impl ProofInstrumentor<'_> {
     }
 
     /// Return the instrumented query and a proof that it matched.
-    /// Returns `(body_facts, action_lookups, proof)`. Eq-sort variables'
-    /// `term_proof` fetches are emitted into `action_lookups` as
-    /// `(let p (term_proof v))` lines for the caller to splice into the
-    /// rule's actions (the rule is then `:unsafe-seminaive`). Callers
-    /// that don't build a proof (`run :until`, `check`) discard the
-    /// lookups and the proof.
+    /// Returns `(body_facts, action_lookups, proof)`. An eq-sort variable's
+    /// `term_proof` fetch is emitted into `action_lookups` as a
+    /// `(let p (term_proof v))` line only if a minted row reads it, for the
+    /// caller to splice into the rule's actions (the rule is then
+    /// `:unsafe-seminaive`). Callers that don't build a proof (`run :until`,
+    /// `check`) discard the lookups and the proof.
     pub(super) fn instrument_facts(
         &mut self,
         facts: &[ResolvedFact],
@@ -285,6 +289,9 @@ impl ProofInstrumentor<'_> {
         } else {
             String::new()
         };
+        // Whatever is still deferred here reached no row: the composition that
+        // asked for it collapsed, so the body never needs to read it.
+        self.drop_pending_lookups();
         (res, action_lookups, proof_list)
     }
 

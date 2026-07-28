@@ -119,6 +119,14 @@ exactly one bridge, so the split is structural. The chain depth is bounded by
 sites per head rather than by cumulative bridges, which is what made the flat
 list grow.
 
+One constraint the fused row inherits: a body variable's premise proof is a
+deferred `<S>Proof` read (see below), emitted by `mint` when a row first names it
+and dropped when `instrument_facts` returns — today the `PCons` that consumes it
+is minted there. Inlining moves that first read to the head's first-site row, so
+the fused row must go through `mint` and the drop must move to after the head is
+instrumented. Get it wrong and the head names an unbound variable, which fails at
+rule creation.
+
 ### Sequenced plan from here
 
 1. ~~**Index proof extraction.**~~ Done — see "Extraction rescanned every
@@ -440,8 +448,20 @@ payload-free failures, 3540 bridges of which 288 move the term.
 Two sites still mint raw `Sym`/`Trans` that the set cannot help: `@UF` path
 compression and `ordered_union_merge` compose runtime-bound proofs, and
 `global_value_proof` builds `Trans(Sym c, c)`, which is reflexive but not by any
-of the four identities. `add_constructor_with_proof`'s non-rule-head branch is
-the one place a further collapse is available — see "Available now" below.
+of the four identities.
+
+`add_constructor_with_proof` mints through the smart constructors as well, so its
+`can_prf = Trans (Sym chain) chain` and `connector = Trans chain (Sym vprf)`
+collapse to `chain` and `Sym vprf` whenever the `Congr` chain is empty — 3 rows
+per such build. Only the non-rule-head paths reach it (a rule head takes the
+roled branch instead), so the two `rewrite` fixtures are unchanged at 4 and 11
+proof rows; a top-level `(let x (Add (Num 1) (Num 2)))` goes from 19 to 13.
+
+A body variable's `<S>Proof` read is deferred until a minted row reads it. Since
+the read is reflexive, the composition that asked for it often collapses, and the
+lookup then costs nothing rather than one dead table read per match: over
+`egglog/tests`, `--proofs --mode desugar` emits 3157 reads where it used to emit
+4995, of which 1838 had no consumer.
 
 ## Standing rules
 
@@ -521,34 +541,17 @@ re-enabling it after encoding.
 
 ## Available now, independent of the phases
 
-**Finish collapsing the skeleton the encoder knows is the identity.** Phase 2b
-deletes these composites from rule heads outright and the smart constructors now
-take two of the four everywhere else, so what is left applies only to
-top-level actions (`Fiat`) and merge bodies. Whether `build_natural_with_congr`
-emits a `Congr` chain at all is decided at encoding time — a child contributes a
-step only if it has a `NatConn` connector — and with no chain, `nat_to_dedup`
-*is* the natural node's reflexive term proof:
+**Site the top-level actions.** All four skeleton composites the encoder
+statically knows are the identity now collapse before minting, on every path, so
+what is left on the paths phase 2b leaves alone — top-level actions (`Fiat`) and
+merge bodies — is the composites over a non-empty `Congr` chain, which are not
+identities. Deleting those needs phase 2b's roled rows, and top-level actions are
+**not sited yet** rather than unsiteable: the design gives them a program-site
+index, the same mechanism extended from rule heads to top-level forms. Merge
+bodies (`MergeIdx`) need nothing — they already mint no `@Ast` at all.
 
-| emitted | with no chain | taken |
-| --- | --- | --- |
-| `can_prf = Trans (Sym chain) chain` | `nat_prf` (`fv_can` spells the same application) | no |
-| `connector = Trans chain (Sym vprf)` | `Sym vprf` | no |
-| `to_dedup = Trans edge chain` | `edge` | yes |
-| `guest_conn = Trans chain (Sym view_proof)` | `Sym view_proof` | yes |
+Two sites mint rows nothing ever consumes:
 
-The two untaken rows are `add_constructor_with_proof`'s, which still mints
-`Sym`/`Trans` directly; routing them through `mint_sym`/`mint_trans` is the whole
-change. Top-level actions are also **not sited yet** rather than unsiteable: the
-design gives them a program-site index, the same mechanism extended from rule
-heads to top-level forms. Merge bodies (`MergeIdx`) need nothing — they already
-mint no `@Ast` at all.
-
-Three sites mint rows or reads nothing ever consumes:
-
-* A body variable's `<S>Proof` read is emitted whether or not the fact that asked
-  for it keeps the proof, so a `(= var (call …))` atom — the shape whose
-  composition the reflexive collapse deletes — now leaves a dead
-  `(let p (<S>Proof var))`. No row, but a lookup per match.
 * `lookup_global` (`proof_encoding.rs`) mints 2 `Ast` + 1 `Fiat` + a wasted
   fresh id per firing, as fallback arguments to `set-if-empty` that a
   well-formed program never uses.
