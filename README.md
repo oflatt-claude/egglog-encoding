@@ -381,7 +381,10 @@ change what is measured.
 
 The [egraphs-good nightly service](https://nightly.cs.washington.edu) checks out
 this repository, runs `make nightly`, and serves `nightly/output/`, matching the
-`report=` entry in the nightly configuration.
+`report=` entry in the nightly configuration. That runner has no uv package
+available, so `make nightly` first installs a pinned uv into `.uv/` when uv is
+missing from `PATH` (uv then downloads its own CPython). Bump `UV_VERSION` in
+the `Makefile` to move that pin.
 
 ### CPU profiling
 
