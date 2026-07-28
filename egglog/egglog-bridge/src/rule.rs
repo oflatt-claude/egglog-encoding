@@ -480,15 +480,10 @@ impl RuleBuilder<'_> {
     /// Add a table atom that additionally binds `indexed` to a value occurring in
     /// *some* one of `cols`, serviced by an occurrence index over those columns.
     ///
-    /// This is the "which rows mention this value" access pattern. It differs
-    /// from repeating a variable across `cols`, which instead constrains those
-    /// columns to be equal. `cols` are the function's own column indices, and
-    /// `indexed` is not one of `entries`.
-    ///
-    /// The atom can only be probed, so `indexed` must be bound elsewhere in the
-    /// query. `is_subsumed` constrains the subsumption column exactly as it does
-    /// for [`Self::query_table`], so an index reads the same rows the function
-    /// itself would.
+    /// `cols` are the function's own column indices and `indexed` is not one of
+    /// `entries`. The atom can only be probed, so `indexed` must be bound
+    /// elsewhere in the query. `is_subsumed` applies as in [`Self::query_table`],
+    /// so an index reads the same rows the function would.
     pub fn query_table_by_occurrence(
         &mut self,
         func: FunctionId,

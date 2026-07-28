@@ -866,16 +866,13 @@ where
     /// (index AddOcc AddView (any 0 1 2))
     /// ```
     ///
-    /// `AddOcc` is a read-only relation holding, for every row of `AddView` and
-    /// every listed column, that column's value followed by the whole row. Its
-    /// rows are exactly the live rows of `AddView`, so it changes no results —
-    /// only how fast a rule that looks up rows by a contained value runs. The
-    /// database maintains it; `set` and `delete` on it are errors.
+    /// `AddOcc` is a read-only, database-maintained relation holding, for every
+    /// row of `AddView` and every listed column, that column's value followed by
+    /// the whole row. It changes no results, only the cost of finding rows by a
+    /// contained value; writing to it is an error.
     ///
-    /// `any` reads the columns disjunctively: one entry per distinct value in
-    /// them, so a value in two of a row's columns still yields one entry. This
-    /// is the "which rows mention this value" lookup, and differs from repeating
-    /// a variable across those columns, which constrains them to be equal.
+    /// `any` reads the columns disjunctively — one entry per distinct value — the
+    /// "which rows mention this value" lookup no ordinary atom expresses.
     Index {
         span: Span,
         name: String,

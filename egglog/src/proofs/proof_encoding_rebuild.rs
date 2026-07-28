@@ -100,8 +100,7 @@ impl ProofInstrumentor<'_> {
         // One rule per rebuildable key column (re-keys the row via set + delete).
         for (i, ty) in types[..n_keys].iter().enumerate() {
             let is_container = ty.is_eq_container_sort();
-            // Eq-sort children are handled by the index-driven rule below, which
-            // fixes the whole row in one firing.
+            // Eq-sort children take the index-driven rule below.
             if !is_container {
                 continue;
             }
@@ -196,19 +195,11 @@ impl ProofInstrumentor<'_> {
     }
 
     /// The rebuild rule for one child eq-sort, driven by an `@UF_<S>` edge joined
-    /// against that sort's declared index.
+    /// against that sort's declared index, whose atom binds the whole row.
     ///
-    /// The index reaches every row mentioning the moved term — at any child
-    /// position or at the e-class — by lookup rather than by matching the view,
-    /// and its atom binds the whole row, so nothing else need be read. The action
-    /// then re-canonicalizes *every* eq-sort column with `uf_canon`, so one firing
-    /// yields the fully canonical row. Two children moving in the same iteration
-    /// therefore fire twice with the same result, rather than each producing a
-    /// differently half-rewritten row for a later pass to merge.
-    ///
-    /// `uf_canon` reads `@UF_<S>` in the action, which is what makes the rule
-    /// `:unsafe-seminaive`; the driving `@UF` delta in the body is what makes that
-    /// read sound.
+    /// The action re-canonicalizes every eq-sort column, so one firing yields the
+    /// fully canonical row. It reads `@UF_<S>` there, which is why the rule is
+    /// `:unsafe-seminaive`; the driving delta in the body makes that read sound.
     fn indexed_rebuild_rule(
         &mut self,
         fdecl: &ResolvedFunctionDecl,
@@ -235,8 +226,7 @@ impl ProofInstrumentor<'_> {
         let index_atom = format!("({} {follower} {keys_str} {eclass} {row_pf})", vi.name);
 
         // Canonicalize every eq-sort column, folding its congruence step onto the
-        // row proof. A column that did not move canonicalizes to itself and its
-        // step is reflexive, which the proof simplifier drops.
+        // row proof. An unmoved column canonicalizes to itself, reflexively.
         let mut lets: Vec<String> = Vec::new();
         let mut updated = key_vars.to_vec();
         let mut proof_acc = row_pf.clone();
@@ -271,12 +261,9 @@ impl ProofInstrumentor<'_> {
             }
             updated[j] = canon;
         }
-        // Only an e-class is canonicalized here, and it moves the other way round
-        // from a child: the row proof reads `eclass = f(children)`, so a new leader
-        // composes as `Trans(Sym(eclass = leader), …)`. A custom function's value
-        // column is an ordinary output, not an e-class — that composition would be
-        // wrong for it, so it keeps [`Self::fd_value_rebuild_rule`], which rewrites
-        // it by `Congr` at its position.
+        // An e-class moves the other way round from a child: the row proof reads
+        // `eclass = f(children)`, so a new leader composes as `Trans(Sym …)`. A
+        // custom function's output is not an e-class and keeps its own rule.
         let out_ty = &types[n_keys];
         let value_var = if self.output_is_eclass(fdecl)
             && out_ty.is_eq_sort()
@@ -316,10 +303,8 @@ impl ProofInstrumentor<'_> {
         let pf_arg = if proofs { proof_acc } else { "()".to_string() };
         let updated_view = self.update_fd_view(&fdecl.name, &updated, &value_var, &pf_arg);
         let facts = format!("{uf_atom}\n(!= {follower} {leader})\n{index_atom}");
-        // Delete before re-inserting. When only the e-class moved the canonical
-        // key equals the old one, so deleting afterwards would drop the row it
-        // just wrote; deleting first lets the insert win, as the custom-output
-        // value rebuild already does.
+        // Delete before re-inserting: when only the e-class moved the canonical
+        // key equals the old one, so deleting after would drop the new row.
         let actions = format!(
             "{}\n(delete ({view_name} {keys_str}))\n{updated_view}",
             lets.join("\n                      ")

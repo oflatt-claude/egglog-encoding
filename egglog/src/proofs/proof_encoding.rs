@@ -1333,18 +1333,12 @@ impl<'a> ProofInstrumentor<'a> {
     }
 
     /// Declare one index per distinct eq-sort among a view's columns, so an `@UF`
-    /// edge on a term reaches the rows mentioning it by lookup instead of by
-    /// matching the view once per column. The e-class column is indexed too, so a
-    /// stale e-class is found the same way. Containers are excluded: they carry
-    /// no `@UF` row and are canonicalized structurally.
+    /// edge on a term reaches the rows mentioning it by lookup rather than by
+    /// matching the view. Containers carry no `@UF` row and are excluded.
     fn declare_view_indexes(&mut self, fdecl: &ResolvedFunctionDecl) -> String {
         let types = fdecl.resolved_schema.view_types();
-        // Children, plus the value column when it is an e-class. When only the
-        // e-class moves the canonical key equals the old one, so the rebuild rule
-        // deletes the old row before re-inserting rather than after (see
-        // `indexed_rebuild_rule`). A custom function's value column is an ordinary
-        // output, rebuilt by its own rule, so indexing it would only invite the
-        // whole-row rule to rewrite it with an e-class's proof shape.
+        // A custom function's value column is an ordinary output with its own
+        // rebuild rule, so only an e-class is indexed alongside the children.
         let indexable = if self.output_is_eclass(fdecl) {
             types.len()
         } else {

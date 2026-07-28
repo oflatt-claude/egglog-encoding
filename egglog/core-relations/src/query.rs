@@ -1006,8 +1006,7 @@ pub(crate) struct Atom {
     /// The variable is not a column of `table`, so it is absent from
     /// `var_columns`; the columns are read disjunctively, unlike a variable
     /// repeated across columns, which constrains them to be equal. It can only be
-    /// *probed*: some other atom must bind the variable first, since scanning
-    /// this atom would have to yield one binding per distinct occurring value.
+    /// *probed* — another atom must bind it first.
     pub(crate) occurrence: Option<Occurrence>,
 }
 

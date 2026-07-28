@@ -43,21 +43,17 @@ pub(crate) fn uf_canon_proof_prim_name(uf_name: &str) -> String {
     format!("{uf_name}_canon_proof")
 }
 
-/// Register an eq-sort's single-term canonicalization primitives, so a rebuild
-/// rule can canonicalize a term in its action:
+/// Register an eq-sort's canonicalization primitives, for a rebuild rule to
+/// canonicalize a term in its action:
 ///
-/// * `uf_canon : (S S) -> S` — `(term fallback)`, the term's `@UF_<S>` leader, or
-///   `fallback` when it has no row. Callers pass the term itself, making it
-///   leader-or-self.
-/// * `uf_canon_proof : (S Proof) -> Proof` (proof mode) — the `@UF_<S>` row's
-///   proof `term = leader`, or `fallback`. Callers pass the reflexive
-///   `<S>Proof(term)`.
+/// * `uf_canon : (S S) -> S` — `(term fallback)`: the term's `@UF_<S>` leader, or
+///   `fallback`. Callers pass the term, making it leader-or-self.
+/// * `uf_canon_proof : (S Proof) -> Proof` (proof mode) — the row's proof
+///   `term = leader`, or `fallback`, for which callers pass the reflexive proof.
 ///
-/// Both are the generic view-column read over the two-output `@UF_<S>` table, so
-/// every backend services them against its own storage. They read `@UF_<S>`, so
-/// they are sound only in the action of a rule whose body joins the driving
-/// `@UF` delta. Called from the sort's Sort command, so they exist both during
-/// encoding and on re-parse.
+/// Both read `@UF_<S>`, so they are sound only in the action of a rule whose body
+/// joins the driving delta. Registered from the sort's Sort command, so they
+/// survive re-parse.
 pub(crate) fn register_uf_canon(
     eg: &mut EGraph,
     sort_name: &str,
