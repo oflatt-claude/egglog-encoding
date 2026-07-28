@@ -366,10 +366,14 @@ impl Run {
     }
 }
 
-// Cross-treatment agreement is suspended for these while `ast::cse` is off for
-// the proof-encoding rework (grep `PROOF_REWORK_IN_PROGRESS`). Without that
-// prepass the term encoding makes less progress per iteration, so a bounded
-// schedule lands on a different e-graph than the native treatment does.
+// KNOWN BUG, suspended so the rework can proceed (grep `PROOF_REWORK_IN_PROGRESS`).
+// Turning off the `ast::cse` prepass makes the term encoding disagree with the
+// native treatment on `integer_math.egg`: after `(run 4)` native reaches
+// `(Add 331)` and the term encoding only `(Add 121)`. `(run N)` means N
+// iterations under either treatment, so the counts must match exactly — the
+// term encoding is not faithfully executing the schedule, and CSE was masking
+// it. Fix before re-enabling CSE; do not accept a snapshot recording the
+// divergence.
 const CROSS_TREATMENT_SNAPSHOT_DISABLED_FILES: &[&str] = &["integer_math.egg"];
 
 fn cross_treatment_snapshot_disabled(path: &Path) -> bool {
