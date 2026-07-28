@@ -1011,11 +1011,8 @@ impl<'a> ProofInstrumentor<'a> {
             ..
         }) = nat_conn.get(e_value).cloned()
         {
-            let proof_sort = self.proof_sort();
-            let sym = self.proof_names().eq_sym_constructor.clone();
-            let trans = self.proof_names().eq_trans_constructor.clone();
-            let sym_conn = self.mint(res, &sym, &connector, &proof_sort);
-            self.mint(res, &trans, &format!("{sym_conn} {connector}"), &proof_sort)
+            let sym_conn = self.mint_sym(res, &connector);
+            self.mint_trans(res, &sym_conn, &connector)
         } else {
             let to_ast = self.fname_to_ast_name(&func_type.name).to_string();
             self.term_proof_for_justification(res, e_value, &to_ast, justification)
@@ -1318,9 +1315,6 @@ impl<'a> ProofInstrumentor<'a> {
     ) -> String {
         let view = self.view_name(&func_type.name);
         let set_if_empty = crate::proofs::proof_fresh::set_if_empty_prim_name(&view);
-        let proof_sort = self.proof_sort();
-        let trans = self.proof_names().eq_trans_constructor.clone();
-        let sym = self.proof_names().eq_sym_constructor.clone();
         let term_proof_constructor = self.term_proof_name(func_type.output().name());
 
         // `fv_nat` stays *unseeded* (only `fv_can` is written to the view) so it is
@@ -1342,13 +1336,8 @@ impl<'a> ProofInstrumentor<'a> {
             &ListDisplay(&dedup_args, " ").to_string(),
             view_sort,
         );
-        let sym_ntd = self.mint(res, &sym, &nat_to_dedup_term, &proof_sort);
-        let can_prf = self.mint(
-            res,
-            &trans,
-            &format!("{sym_ntd} {nat_to_dedup_term}"),
-            &proof_sort,
-        );
+        let sym_ntd = self.mint_sym(res, &nat_to_dedup_term);
+        let can_prf = self.mint_trans(res, &sym_ntd, &nat_to_dedup_term);
 
         // Anchor both term proofs, dedup `fv_can` to the view e-class, and read the
         // view's stored proof (`dedup = f(children)`).
@@ -1371,13 +1360,8 @@ impl<'a> ProofInstrumentor<'a> {
 
         // connector `fv_nat = dedup` = Trans(nat_to_dedup, Sym(dedup = f(children))).
         // `sym_vprf` reads the `vprf` let, so it must follow the statements above.
-        let sym_vprf = self.mint(res, &sym, &vprf, &proof_sort);
-        let connector = self.mint(
-            res,
-            &trans,
-            &format!("{nat_to_dedup_term} {sym_vprf}"),
-            &proof_sort,
-        );
+        let sym_vprf = self.mint_sym(res, &vprf);
+        let connector = self.mint_trans(res, &nat_to_dedup_term, &sym_vprf);
 
         nat_conn.insert(
             dedup.clone(),

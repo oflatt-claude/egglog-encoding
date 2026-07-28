@@ -23,4 +23,4 @@ expression: proof_snapshot
   (= (@ExistsConstructor16) (@ExistsConstructor16))
   (name "@prove_exists_rule16")
   (premises prf0 (Fiat (= (Val 2) (Val 2))) prf0 prf0 (Fiat (= () ())))
-  (substitution (@v610 (Val 1)) (@v608 (Val 2)) (@v607 (Val 1)) (@v609 (Val 1))))
+  (substitution (@v556 (Val 1)) (@v554 (Val 2)) (@v555 (Val 1)) (@v553 (Val 1))))
