@@ -20,12 +20,62 @@ use crate::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SiteIndex(pub usize);
 
-/// A conclusion site together with which way round a proof states it.
+/// Which proposition *about* a conclusion site a rule proof states.
+///
+/// Only [`SiteRole::AsWritten`] is a conclusion of the head. A head that builds
+/// a term also needs the same term over its children's representatives and the
+/// edges between the two, which are composed from the site's own equality;
+/// proof conversion synthesizes that composition from the role, the site, and
+/// the rule proof's trailing bridge premises (see
+/// [`crate::proofs::proof_head_skeleton`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SiteRole {
+    /// The site's own equality, over the terms the head wrote.
+    AsWritten,
+    /// `t = t` for a build site's term with every built child replaced by the
+    /// e-class its view interned it into.
+    CanonicalReflexive,
+    /// `written = interned` for a build site.
+    Connector,
+    /// A construct-into guest's view-row proof: the target's e-class equals the
+    /// guest's term over its children's representatives.
+    GuestView,
+    /// A construct-into guest's connector: the guest as written equals the
+    /// target's e-class.
+    GuestConnector,
+    /// A `union`'s union-find edge, `larger = smaller`, routed through the
+    /// operands' written forms.
+    UnionEdge,
+    /// A global's stored value proof: `value = value`, routed through the
+    /// written form of the term it aliases.
+    GlobalValue,
+}
+
+impl SiteRole {
+    /// Every role, in the order [`Self::code`] numbers them.
+    const ALL: [SiteRole; 7] = [
+        SiteRole::AsWritten,
+        SiteRole::CanonicalReflexive,
+        SiteRole::Connector,
+        SiteRole::GuestView,
+        SiteRole::GuestConnector,
+        SiteRole::UnionEdge,
+        SiteRole::GlobalValue,
+    ];
+
+    fn code(self) -> usize {
+        Self::ALL.iter().position(|r| *r == self).unwrap()
+    }
+}
+
+/// A conclusion site, which way round a proof states it, and which of the
+/// site's propositions the proof states.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SiteRef {
     pub index: SiteIndex,
     /// The proof concludes `rhs = lhs` for a site whose equality is `lhs = rhs`.
     pub reversed: bool,
+    pub role: SiteRole,
 }
 
 impl SiteRef {
@@ -34,6 +84,7 @@ impl SiteRef {
         Self {
             index,
             reversed: false,
+            role: SiteRole::AsWritten,
         }
     }
 
@@ -42,15 +93,22 @@ impl SiteRef {
         Self {
             index,
             reversed: true,
+            role: SiteRole::AsWritten,
         }
     }
 
-    /// The integer a rule proof's site column stores. Index and direction share
-    /// one column because a `union`'s direction is only known once the ids being
-    /// unioned are compared, so the encoder must be able to compute the whole
-    /// column value with one primitive call.
+    /// The same reference stating `role` instead.
+    pub(crate) fn with_role(self, role: SiteRole) -> Self {
+        Self { role, ..self }
+    }
+
+    /// The integer a rule proof's site column stores. Index, direction and role
+    /// share one column because a `union`'s direction is only known once the ids
+    /// being unioned are compared, so the encoder must be able to compute the
+    /// whole column value with one primitive call.
     pub(crate) fn encode(self) -> i64 {
-        self.index.0 as i64 * 2 + self.reversed as i64
+        let oriented = self.index.0 * 2 + self.reversed as usize;
+        (oriented * SiteRole::ALL.len() + self.role.code()) as i64
     }
 
     /// Read back [`Self::encode`]. Panics on a value that names no site.
@@ -59,9 +117,12 @@ impl SiteRef {
             raw >= 0,
             "rule proof was emitted without a conclusion site (site column {raw})"
         );
+        let raw = raw as usize;
+        let oriented = raw / SiteRole::ALL.len();
         Self {
-            index: SiteIndex(raw as usize / 2),
-            reversed: raw % 2 == 1,
+            index: SiteIndex(oriented / 2),
+            reversed: oriented % 2 == 1,
+            role: SiteRole::ALL[raw % SiteRole::ALL.len()],
         }
     }
 

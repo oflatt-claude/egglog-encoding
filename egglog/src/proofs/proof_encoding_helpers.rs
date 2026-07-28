@@ -10,7 +10,10 @@ use crate::{
         ResolvedExprExt, ResolvedFact, Schedule, Span,
     },
     core::ResolvedCall,
-    proofs::{proof_encoding::ProofInstrumentor, proof_sites::SiteRef},
+    proofs::{
+        proof_encoding::ProofInstrumentor,
+        proof_sites::{SiteRef, SiteRole},
+    },
     util::{FreshGen, HashMap, HashSet, SymbolGen},
 };
 
@@ -49,16 +52,40 @@ pub(crate) struct EncodingNames {
     pub(crate) term_proof_name: HashMap<String, String>,
 }
 
-/// Packages proof information for instrumenting actions.
-/// We may not know yet what terms we are instrumenting, so the justification leaves
-/// that information to be filled in later.
-/// This is only used internally in this file, it's not part of the proof format.
+/// The conclusion-site column of a rule proof: an `i64` naming the site of the
+/// rule head the proof is about, encoded by [`SiteRef::encode`].
+#[derive(Clone)]
+pub(crate) enum SiteColumn {
+    /// A site fixed at encoding time.
+    Static(SiteRef),
+    /// An `i64`-valued expression selecting between the two orientations of one
+    /// role, for a `union` whose direction is only known once the ids being
+    /// unioned are compared.
+    Runtime(String, SiteRole),
+    /// No site: reading such a proof back panics, so a mint site the encoder
+    /// forgot to place fails loudly instead of silently claiming site 0.
+    Missing,
+}
+
+impl SiteColumn {
+    /// The column value as an egglog expression.
+    fn expr(&self) -> String {
+        match self {
+            SiteColumn::Static(site) => site.encode().to_string(),
+            SiteColumn::Runtime(expr, _) => expr.clone(),
+            SiteColumn::Missing => "-1".to_string(),
+        }
+    }
+}
+
+/// Packages proof information for instrumenting actions. We may not know yet what
+/// terms we are instrumenting, so the justification leaves that information to be
+/// filled in later. Internal to the encoder, not part of the proof format.
 #[derive(Clone)]
 pub(crate) enum Justification {
-    /// Rule-name expression, proof-list expression, and the conclusion-site
-    /// column: an `i64`-valued expression naming the site of the rule head the
-    /// proof concludes at, encoded by [`SiteRef::encode`].
-    Rule(String, String, String),
+    /// Rule-name expression, body-premise-list expression, and the conclusion site
+    /// the proof is about.
+    Rule(String, String, SiteColumn),
     Fiat,
     /// Term-free merge justification for a merge-body subexpression: function
     /// name, the two premise (view) proof expressions, and the pre-order index of
@@ -74,26 +101,52 @@ pub(crate) enum Justification {
 }
 
 impl Justification {
-    /// The site column of a rule proof that no conclusion site names. Reading it
-    /// back panics, so a mint site the encoder forgot to place fails loudly
-    /// instead of silently claiming site 0.
-    pub(crate) const NO_SITE: &'static str = "-1";
-
-    /// The same justification concluding at `site`, an `i64`-valued expression
-    /// (see [`SiteRef::encode`]). Only a rule justification names a site;
-    /// anything else is returned unchanged.
-    pub(crate) fn at_site_expr(&self, site: &str) -> Justification {
+    /// The same justification about `site`. Only a rule justification names a
+    /// site; anything else is returned unchanged.
+    pub(crate) fn at_column(&self, site: SiteColumn) -> Justification {
         match self {
             Justification::Rule(name, proofs, _) => {
-                Justification::Rule(name.clone(), proofs.clone(), site.to_string())
+                Justification::Rule(name.clone(), proofs.clone(), site)
             }
             other => other.clone(),
         }
     }
 
-    /// [`Self::at_site_expr`] for a site fixed at encoding time.
+    /// [`Self::at_column`] for a site fixed at encoding time.
     pub(crate) fn at_site(&self, site: SiteRef) -> Justification {
-        self.at_site_expr(&site.encode().to_string())
+        self.at_column(SiteColumn::Static(site))
+    }
+
+    /// The site this justification is about, when it is a rule justification with
+    /// a site fixed at encoding time. Naming another of the site's propositions
+    /// by [`SiteRole`] needs one.
+    pub(crate) fn static_site(&self) -> Option<SiteRef> {
+        match self {
+            Justification::Rule(_, _, SiteColumn::Static(site)) => Some(*site),
+            _ => None,
+        }
+    }
+
+    /// The site column's egglog expression, for the `Rule` row's site column.
+    pub(crate) fn site_expr(&self) -> String {
+        match self {
+            Justification::Rule(_, _, site) => site.expr(),
+            _ => SiteColumn::Missing.expr(),
+        }
+    }
+
+    /// Whether the proof is composed from the head's interned subterms, and so
+    /// has to record their view-row proofs. Only a proof stating the head's own
+    /// conclusion is not — which is most of them, so keeping their premise lists
+    /// bare keeps the extracted proof from reaching every subterm the firing
+    /// happened to build.
+    pub(crate) fn needs_bridges(&self) -> bool {
+        let role = match self {
+            Justification::Rule(_, _, SiteColumn::Static(site)) => site.role,
+            Justification::Rule(_, _, SiteColumn::Runtime(_, role)) => *role,
+            _ => return false,
+        };
+        role != SiteRole::AsWritten
     }
 }
 
@@ -458,9 +511,11 @@ impl ProofInstrumentor<'_> {
 
 ;; Fiat justification for globals and primitives, gives two terms t1 = t2 for the proposition being justified
 (function {fiat_constructor} ({ast_sort} {ast_sort} {proof_datatype}) Unit :no-merge :internal-hidden :internal-term-node)
-;; name of rule, one proof per fact in the query, proposition being proven t1 = t2,
-;; and the conclusion site of the rule head the proposition comes from
-(function {rule_constructor} (String {proof_list_sort} {ast_sort} {ast_sort} i64 {proof_datatype}) Unit :no-merge :internal-hidden :internal-term-node)
+;; name of rule, one proof per fact in the query, that same list extended with one
+;; *bridge* premise per subterm the head interned (so the extension is exactly the
+;; leading difference between the two lists), proposition being proven t1 = t2, and
+;; the conclusion site of the rule head the proposition is about
+(function {rule_constructor} (String {proof_list_sort} {proof_list_sort} {ast_sort} {ast_sort} i64 {proof_datatype}) Unit :no-merge :internal-hidden :internal-term-node)
 
 ;; term-free merge justification for an FD custom-function view subexpression:
 ;; name of function, two premise proofs, and the pre-order index of the merge-body

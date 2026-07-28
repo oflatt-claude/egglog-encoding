@@ -35,12 +35,13 @@ This rework generalizes that from merge bodies to rule bodies.
 
 ## Design
 
-* **Rule proof:** `RuleN(body premises …, interned-subterm view proofs …)` plus
-  a conclusion-site index, split at `rule.body.len()`. Homogeneous `Proof`
-  columns only. The subterm view proofs are **not optional** — see the
-  canonicalization bridge under phase 2b: a head that interns a subterm into an
-  existing e-class needs that e-class's row proof, which is neither a site of
-  the head nor one of its premises. They are already read at no row cost.
+* **Rule proof:** `RuleN(body premises, those premises extended with the
+  interned subterms' view proofs, conclusion site + role)`. Homogeneous `Proof`
+  columns only, and the two lists share cells so recording both costs no rows.
+  The subterm view proofs are **not optional** — see the canonicalization bridge
+  below: a head that interns a subterm into an existing e-class needs that
+  e-class's row proof, which is neither a site of the head nor one of its
+  premises. They are already read at no row cost.
 * **No `@Ast`.** Conclusions are derived, so terms need not be stored.
 * **No per-rule constructors.** Typed columns were only needed to carry
   computed base values; those are derivable, so the constructor stays generic
@@ -58,29 +59,19 @@ This rework generalizes that from merge bodies to rule bodies.
 A head interns each constructor application into its view. When `set-if-empty`
 returns an **existing** e-class, that e-class's term row may spell a different
 term than the head wrote; the proof they are equal came from some other rule's
-firing, so it is neither a site of this head nor one of its premises. Phase 2b
-measured 240 such bridges over the corpus that genuinely move the term, and
-deleting the chain fails 28 of 206 tests with `transitivity requires matching
-middle terms`.
+firing, so it is neither a site of this head nor one of its premises. Deleting
+that chain without carrying it fails 28 of 206 tests with `transitivity requires
+matching middle terms`.
 
 The proofs needed are the interned subterms' view-row proofs, which the encoder
 already reads as `view-proof-<View>` at no row cost. They become trailing
-premises of `RuleN`, split from the body premises at `rule.body.len()`. The
-subterms are the head's constructor applications, so the arity is static.
+premises of `RuleN`; see the phase 2b result for how they are recorded and how a
+read that found no row is told apart from a real bridge.
 
 The lookups cannot be hoisted to the front of the action: an outer view's key is
 built from its children's *deduped* ids (`fv_can = mint(func, dedup_args)`), so
 interning is bottom-up and interleaved with construction. Only what is done with
 the result changes.
-
-One wrinkle: for a **newly** interned subterm the view row's proof is the node
-this firing is creating, so passing it as its own premise is circular — and
-circular at emission time too, since a node's id is minted after its arguments.
-`view-proof` is a `(keys, fallback) -> proof` read, so pass a distinguished
-sentinel as the fallback: a real proof back means emit the bridge, the sentinel
-means the row spells what the head wrote and there is none. That is also the
-discriminator for a build site needing three different propositions
-(as-written reflexive, canonical reflexive, the bridge).
 
 ### One canonical site enumeration
 
@@ -101,7 +92,7 @@ skeleton is still present to compare against.
 | 0 | one canonical `conclusion_sites`; `process_actions` returns site-indexed propositions | done — zero snapshot changes |
 | 1 | reconstructor runs *beside* the skeleton, differentially asserted | done — see below |
 | 2a | rule proof carries a conclusion-site index; the conclusion is derived from it instead of from the stored `Ast` columns | done — zero snapshot changes |
-| 2b | stop emitting the RHS `Congr`/`Trans`/`Sym` skeleton; reconstruction synthesizes it | **blocked** — see below |
+| 2b | stop emitting the RHS `Congr`/`Trans`/`Sym` skeleton; reconstruction synthesizes it | done — zero snapshot changes; see below |
 | 3 | drop `@Ast` | ditto |
 | 4 | rebuilding → `RebuildN` | ditto |
 | 5 | re-enable CSE after encoding, repair term mode, re-measure | nothing left behind the switch |
@@ -216,104 +207,95 @@ measured. Phase 3 will pull in the other direction: dropping the `Ast` columns
 merges nodes that differ only there, and since same rule + same premises + same
 site forces the same conclusion, that merge is sound.
 
-### Phase 2b result: blocked
+### Phase 2b result
 
-`(rule name, premise proofs, conclusion-site index)` determines a rule proof's
-conclusion — phase 2a measured that, and it still holds (0 of 13392 stamped sites
-disagree). It does **not** determine the skeleton, because part of the skeleton
-states equalities the head never concludes.
+The head's `Congr`/`Trans`/`Sym` skeleton is gone from every rule head. What a
+firing writes is one `Rule` row per proof it *stores* — a term proof, a view row,
+a union-find edge — and proof conversion rebuilds the composition around it
+(`proof_head_skeleton.rs`).
 
-#### The canonicalization bridge
+Three pieces make that work.
 
-A head that builds a term interns each subterm into its view. When
-`set-if-empty` returns an **existing** e-class, that e-class's term row may hold
-a *differently shaped* term — the two shapes are equal in the e-graph, but they
-are different terms, and a proof has to say so. That proof is the bridge the
-`Congr` chain in `build_natural_with_congr` folds onto the natural node, and it
-comes from whichever *other* rule firing made the two shapes equal. No site of
-the head under construction names it, and it is not among that head's premises.
+**A role on the site column.** A build site needs three propositions the head
+does not conclude — the term as written, the same term over its children's
+representatives, and the edge between them — so `SiteRef` gains a `SiteRole`
+and `encode` packs `(index, direction, role)` into the one `i64` column. The
+roles are `AsWritten` (the head's own conclusion, the only one phase 2a had),
+`CanonicalReflexive`, `Connector`, `GuestView`, `GuestConnector`, `UnionEdge` and
+`GlobalValue`. Conversion decodes the role and builds that role's composition;
+the `Ast` columns are reused from the site's own conclusion, so a roled row costs
+no extra AST rows.
 
-Minimal reproducer — pinned by
-`head_canonicalization_bridge_is_load_bearing` in `proof_tests.rs`:
+**One shared lowering plan.** `HeadPlan` (union-operand normalization plus the
+construct-into plan) moved out of the encoder into `proof_head_skeleton.rs`, and
+`build_sites` derives from it, per site, the build sites of the site's children,
+which union a guest is built into, and the order the head builds them. The
+encoder and conversion both read it, so neither mirrors the other — the same
+discipline as `conclusion_sites`.
 
-```
-(datatype Math (Add Math Math) (Neg Math) (Num i64))
-(rewrite (Add a b) (Add b a) :ruleset commute :name "commute")
-(rule ((= x (Add a b))) ((Neg (Add b a))) :ruleset wrap :name "wrap")
-(let $e (Add (Num 1) (Num 2)))
-(run commute 1)
-(run wrap 1)
-(prove (Neg (Add (Num 2) (Num 1))))
-```
+**Bridge premises, and how "no bridge" is told apart.** `Rule` gains a second
+`ProofList` column: the body premise list extended with the view-row proof of each
+subterm the head interned, newest first. The two lists *share cells* — the
+extension is consed onto the body list — so recording both costs no rows and
+their length difference is exactly the bridge count. The discriminator the design
+called for turned out not to need a distinguished sentinel: a row the head's own
+`set-if-empty` seeded is absent when `view-proof` reads it, so the read returns
+its fallback, a proof *about the term as written*. Only a proof whose rhs **is**
+the canonical term states which e-class the canonical term was interned into, so
+`bridge.rhs == canonical` is the test, and it is right whichever way the fallback
+is chosen.
 
-`commute` builds `(Add b a)` into `$e`'s e-class, so that e-class's term row
-still reads `(Add (Num 1) (Num 2))`. `wrap` then builds `(Add b a)`, interns it,
-gets that same e-class, and emits
+Two things were needed to keep this from dragging the whole proof in:
 
-```text
-(Congr (= (Neg (Add (Num 2) (Num 1))) (Neg (Add (Num 1) (Num 2))))
-       (Rule (= (Neg (Add (Num 2) (Num 1))) (Neg (Add (Num 2) (Num 1)))) (name "wrap") …)
-       (Sym (= (Add (Num 2) (Num 1)) (Add (Num 1) (Num 2)))
-            (Rule … (name "commute") …))
-       0)
-```
+* Only a *roled* row records bridges. A term-proof anchor states the head's own
+  conclusion, needs none, and keeps the bare body list.
+* Conversion converts only the bridges the requested role is composed from
+  (`sites_needed`). Converting the whole list made every row reach every subterm
+  the firing happened to build.
 
-The child is `commute`'s proof. `wrap`'s premises are `(= x (Add a b))` alone.
+Measured over the `proofs/` corpus: 206 tests pass with zero changed snapshots and
+zero changed shared snapshots. `proof_reconstruct_check` reports 13392 nodes —
+the same as phase 2a — with 0 `stamped_wrong` and 0 payload-free failures, and
+counts 3540 canonicalization bridges of which 288 move the term. The bridge
+counter now fires inside the synthesis rather than on an emitted `Congr` chain,
+so it counts *applied* bridges rather than chain steps; the numbers are not
+comparable with the 2082/240 phase 2b measured.
 
-#### How much of the skeleton this is
+Rows written per rule firing, from `--proofs --mode desugar`:
 
-`proof_reconstruct_check` now also counts these bridges, reporting
-`PROOF-HEAD-BRIDGE … load_bearing=` per step and
-`head_bridges{,_load_bearing}` in `ReconstructStats`. Over the `proofs/` corpus:
+| rule | proof rows | `@Ast` rows |
+| --- | --- | --- |
+| `(rewrite (Add a b) (Add b a))` | 9 -> 6 | 4 -> 2 |
+| `(rewrite (Mul a (Add b c)) (Add (Mul a b) (Mul a c)))` | 22 -> 13 | 8 -> 6 |
 
-| head canonicalization bridges | steps |
-| --- | --- |
-| child proof reflexive — the step is the identity on terms | 2082 |
-| child proof moves the term — the step is the only thing stating it | 240 |
+The commute firing's six are the two the body premise needs (`Sym`, `Trans`), the
+two-cell premise list (`PNil`, `PCons`), and the two `Rule` rows the head stores:
+the natural node's term proof and the guest's view-row proof. That subsumes the
+"Available now" 9->7 collapse for this shape — the rows that collapse there are
+among the three deleted here — so it was not taken separately.
 
-Deleting the chain (`nat_to_dedup := nat_prf`) fails **28 of the 206** `proofs/`
-tests, all at conversion time with
-`transitivity requires matching middle terms`: the view row's proof no longer
-ends at the term the row's children spell, so nothing composes with it.
+#### Not carried: the largest proof fixture
 
-#### What a working 2b has to carry
+`egglog-experimental`'s `eggcc-2mm-pass1` proof test regresses from passing (33 s)
+to a stack overflow in `ProofExtractor::extract`. The bridge premises are a cons
+list, and extracting one costs a frame per cell, so the extracted proof term's
+depth goes from a measured maximum of **15** frames on that fixture to over
+**2000**. The corpus in `egglog/tests` is unaffected (206 pass, and the run is
+*faster* than before: 9.3 s against 13.2 s).
 
-The bridge's runtime input is the *view-row proof of each interned subterm* —
-which the encoder already reads (`view-proof-<View>`), and which costs no row.
-So the shape that reaches one emitted row per conclusion is
-`RuleN(body premises … , subterm view proofs …)`: conversion splits the list at
-`rule.body.len()`, replays the head for the as-written terms, and folds a `Congr`
-per moved child and a `Sym` per interned subterm — the same synthesis
-`RebuildN` is planned to do in phase 4. That widens the premise list and needs a
-discriminator for the three propositions one build site needs (as-written
-reflexive, canonical reflexive, and the bridge itself), so it is a design change,
-not a deletion.
+The depth is inherent to the cumulative list: resolving a build site needs every
+bridge in its subtree, and the subtree's bridges are a front block of the list, so
+the list cannot be shortened without losing them. Two ways out, neither taken
+here:
 
-#### Confirmed unchanged: a nested argument of `change`
-
-`change` contributes no sites, so a nested constructor argument is built with the
-`-1` sentinel. Reading such a proof does not report a checker error — it panics in
-`SiteRef::decode` (`rule proof was emitted without a conclusion site`). Reached
-whenever the nested term is new, e.g. `(rule ((Seed x)) ((delete (F (Num 3)))))`
-followed by `(prove (Num 3))`. This is phase 2a's behavior, unchanged.
-
-#### Second blocker: the snapshot gate is coupled to mint counts
-
-Independently of the above, **"zero changed proof snapshots" cannot hold for any
-phase that changes how many proof nodes a firing mints.** Seven `proofs/`
-snapshots print rule-body variables that `proof_normal_form.rs` names with
-`symbol_gen.fresh("v")` — the same hint, and therefore the same counter, that
-`ProofInstrumentor::fresh_var` mints proof-node variables from. Emit one node
-fewer and every later `@vNNN` shifts:
-
-```text
--  (substitution (@v637 t0) (@v638 t3))
-+  (substitution (@v587 t0) (@v588 t3))
-```
-
-Measured by applying a provably output-equivalent reduction (below): 7 snapshots
-changed, and in all 7 the diff is only this renumbering. Giving the encoder its
-own hint decouples them, at the cost of one deliberate re-bless of those 7.
+* Record each build site's **connector** as its own row and have a parent name
+  its children's connector rows instead of their bridges. Then a row's extra
+  premises are (own bridge + one per child), so the list is short and the depth
+  per level is a small constant. It costs one row per build site, dropping the
+  saving from `k+5 -> 3` to `k+5 -> k+4`; the flat case (the commute rule) is
+  unaffected at 6.
+* Make `ProofExtractor::extract` iterate the list spine instead of recursing.
+  This helps every proof, not just this one, and does not change what is emitted.
 
 ## Standing rules
 
@@ -393,7 +375,11 @@ re-enabling it after encoding.
 
 ## Available now, independent of the phases
 
-**Collapse the skeleton the encoder statically knows is the identity.** Whether
+**Collapse the skeleton the encoder statically knows is the identity.** Phase 2b
+deletes these four composites from rule heads outright, so what follows applies
+only to the paths it leaves alone — top-level actions (`Fiat`) and merge bodies
+(`MergeIdx`), which state their own conclusions and so cannot be collapsed into a
+site. Whether
 `build_natural_with_congr` emits a `Congr` chain at all is decided at encoding
 time — a child contributes a step only if it has a `NatConn` connector. With no
 chain, `nat_to_dedup` *is* the natural node's reflexive term proof, so four
@@ -407,10 +393,11 @@ composites reduce to a node the encoder already has:
 | `guest_conn = Trans chain (Sym view_proof)` | `Sym view_proof` |
 
 Output-equivalent by construction: `simplify` already rewrites exactly these
-(`opt_reflexive_trans`, `opt_reflexive_sym`). Measured: a `rewrite` firing goes
-from 9 proof rows to 7, a nested `(rewrite (Mul a (Add b c)) (Add (Mul a b) (Mul
-a c)))` firing drops 6. The only thing standing in the way is the fresh-name
-coupling above — all 7 snapshot diffs it produces are `@vNNN` renumbering.
+(`opt_reflexive_trans`, `opt_reflexive_sym`). Measured on rule heads before phase
+2b: a `rewrite` firing went from 9 proof rows to 7, a nested `(rewrite (Mul a (Add
+b c)) (Add (Mul a b) (Mul a c)))` firing dropped 6. Phase 2b reaches 6 and 13 on
+those two, by deleting the same rows and more, so the collapse was not taken
+separately.
 
 Two sites mint rows nothing ever reads:
 

@@ -1,21 +1,36 @@
 use crate::{
     ResolvedCall, Term, TermDag, TermId,
-    ast::{FunctionSubtype, GenericNCommand, ResolvedExpr, ResolvedFact, ResolvedNCommand},
+    ast::{
+        FunctionSubtype, GenericNCommand, ResolvedExpr, ResolvedFact, ResolvedNCommand,
+        ResolvedRule,
+    },
     proofs::{
         proof_checker::{
             ProofCheckError, ProofCheckErrorKind, eval_expr_with_subst, gather_globals,
             process_actions, run_merge,
         },
         proof_encoding_helpers::EncodingNames,
-        proof_reconstruct_check,
-        proof_sites::SiteRef,
+        proof_head_skeleton::{
+            BuildSites, FiringRecord, HeadPlan, HeadSkeleton, build_sites, sites_needed,
+        },
+        proof_sites::{SiteIndex, SiteRef},
     },
     typechecking::{FuncType, PrimitiveValidator},
     util::{HashMap, HashSet, IEntry, IndexMap, IndexSet, SymbolGen},
 };
 use egglog_ast::generic_ast::Literal;
 use egglog_numeric_id::{DenseIdMap, NumericId, define_id};
-use std::fmt;
+use std::{fmt, rc::Rc};
+
+/// The rule the proof names, which the encoder guarantees is in the program.
+fn rule_named<'a>(prog: &'a [ResolvedNCommand], rule_name: &str) -> &'a ResolvedRule {
+    prog.iter()
+        .find_map(|cmd| match cmd {
+            ResolvedNCommand::NormRule { rule } if rule.name == rule_name => Some(rule),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("could not find rule with name {rule_name}"))
+}
 
 define_id!(
     RawProofId,
@@ -137,12 +152,25 @@ pub(crate) fn proof_store_from_term(
 enum RawProof {
     /// Equalities added at the top level are justified by fiat.
     Fiat(TermId, TermId),
-    /// Given a rule name and proofs for each premise, produces a proof of a grounded equality t1 = t2 from the body of the rule.
-    /// The subsitution is implicit- in [`ProofTerm`] they are explicit.
-    /// The last field is the head conclusion site the equality comes from, encoded
-    /// by [`SiteRef::encode`]; conversion derives the equality from it and the
-    /// stored `t1`/`t2` record the same equality.
-    Rule(String, Vec<RawProofId>, TermId, TermId, i64),
+    /// Given a rule name and proofs for each premise, produces a proof of a
+    /// grounded equality from the head of the rule. The substitution is implicit —
+    /// in [`Justification::Rule`] it is explicit.
+    ///
+    /// The second list is the first extended with one *bridge* premise per subterm
+    /// the head interned — the view-row proof that says which e-class it landed in
+    /// — newest first, so the lists' leading difference is exactly the bridges.
+    /// The site names which of the head's conclusions the proof is about and which
+    /// of that site's propositions it states ([`SiteRef::encode`]); conversion
+    /// derives the equality from those and the bridges, so the stored `t1`/`t2`
+    /// are ignored.
+    Rule(
+        String,
+        Vec<RawProofId>,
+        Vec<RawProofId>,
+        TermId,
+        TermId,
+        i64,
+    ),
     /// A term-free merge proof: given proofs `f(…, old) = f(…, old)` and
     /// `f(…, new) = f(…, new)`, the index `idx` identifies which subexpression of the
     /// merge body this justifies (a pre-order index over the body tree). The
@@ -197,6 +225,21 @@ pub struct ProofStore {
     /// these heads over literals is a self-evident value, so the checker accepts a
     /// reflexive `Fiat` over it ([`ProofStore::reflexive_value_term`]).
     pub(super) prim_value_constructors: HashSet<String>,
+    /// Rule name -> how its head lowers.
+    head_plans: HashMap<String, Rc<BuildSites>>,
+    /// Structural sharing for the proofs conversion synthesizes.
+    synthesized: HashMap<SynthKey, ProofId>,
+}
+
+/// What a synthesized proof is, for sharing one node per distinct value.
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub(crate) enum SynthKey {
+    /// A rule head's own conclusion: the rule, which of its sites, and the
+    /// premises that fix the substitution.
+    Rule(String, SiteRef, Vec<ProofId>),
+    Sym(ProofId),
+    Trans(ProofId, ProofId),
+    Congr(ProofId, usize, ProofId),
 }
 
 impl fmt::Debug for ProofStore {
@@ -363,11 +406,12 @@ impl RawProofStore {
             assert!(args.len() == 2, "fiat constructor should have 2 args");
             RawProof::Fiat(args[0], args[1])
         } else if head == self.names.rule_constructor {
-            assert!(args.len() == 5, "rule constructor should have 5 args");
+            assert!(args.len() == 6, "rule constructor should have 6 args");
             let name = self.parse_string(args[0]);
             let premises = self.parse_proof_list(args[1]);
-            let site = self.parse_int(args[4]);
-            RawProof::Rule(name, premises, args[2], args[3], site)
+            let with_bridges = self.parse_proof_list(args[2]);
+            let site = self.parse_int(args[5]);
+            RawProof::Rule(name, premises, with_bridges, args[3], args[4], site)
         } else if head == self.names.merge_fn_idx_constructor {
             assert!(args.len() == 4, "merge-idx constructor should have 4 args");
             let function = self.parse_string(args[0]);
@@ -478,14 +522,6 @@ impl RawProofStore {
         RawProofId::from_usize(self.store.len() - 1)
     }
 
-    /// Follow a chain of [`RawProof::Congr`] steps down to the proof it extends.
-    fn congr_chain_base(&self, mut proof: RawProofId) -> &RawProof {
-        while let RawProof::Congr(base, _, _) = &self.store[proof.index()] {
-            proof = *base;
-        }
-        &self.store[proof.index()]
-    }
-
     fn unwrap_ast(&self, term_id: TermId) -> TermId {
         let term = self.term_dag.get(term_id).clone();
         let Term::App(_, args) = term else {
@@ -537,6 +573,19 @@ impl ProofStore {
         &self.id_to_proof[proof_id]
     }
 
+    /// Add a proof, sharing one node per distinct `key`. The e-graph
+    /// hash-conses its own proof rows, so the proofs conversion rebuilds in their
+    /// place must be shared too — otherwise a subproof reached along several paths
+    /// becomes a fresh copy per path, and the proof unfolds into a tree.
+    pub(super) fn push_shared_proof(&mut self, key: SynthKey, proof: Proof) -> ProofId {
+        if let Some(&id) = self.synthesized.get(&key) {
+            return id;
+        }
+        let id = self.id_to_proof.push(proof);
+        self.synthesized.insert(key, id);
+        id
+    }
+
     /// Get a string representation of the proof with the given id.
     /// The string representation is a pretty-printed s-expression block with
     /// let bindings for sub-proofs and sub-terms.
@@ -562,6 +611,8 @@ impl ProofStore {
             id_to_proof: DenseIdMap::new(),
             container_normalizers,
             prim_value_constructors,
+            head_plans: HashMap::default(),
+            synthesized: HashMap::default(),
         };
         let globals = gather_globals(prog, &mut store.term_dag)
             .unwrap_or_else(|_| panic!("failed to gather globals from program"));
@@ -667,12 +718,31 @@ impl ProofStore {
                 ),
                 justification: Justification::Fiat,
             },
-            RawProof::Rule(name, premise_proofs, _lhs, _rhs, raw_site) => {
+            RawProof::Rule(name, premise_proofs, with_bridges, _lhs, _rhs, raw_site) => {
                 let site = SiteRef::decode(*raw_site);
                 let converted_premises: Vec<ProofId> = premise_proofs
                     .iter()
                     .map(|pid| self.convert_raw_proof(prog, globals, raw_store, *pid))
                     .collect();
+                // The two lists share a tail, so their leading difference is the
+                // bridges — recorded newest first, since a subterm's view-row proof
+                // is only readable once the subterm is interned. Only the ones the
+                // requested proof is composed from are read: converting the rest
+                // would pull in every proof the firing happened to pass over.
+                let planned = self.head_plan(prog, name);
+                let bridge_count = with_bridges.len() - premise_proofs.len();
+                let mut bridges: HashMap<SiteIndex, ProofId> = HashMap::default();
+                for needed in sites_needed(&planned, site) {
+                    let Some(position) = planned.bridge_position(needed) else {
+                        continue;
+                    };
+                    let Some(index) = bridge_count.checked_sub(position + 1) else {
+                        continue;
+                    };
+                    let converted =
+                        self.convert_raw_proof(prog, globals, raw_store, with_bridges[index]);
+                    bridges.insert(needed, converted);
+                }
 
                 // Rebuild/canonicalization can rewrite a matched custom-function-fact
                 // premise `(= (f args) v)` into a non-reflexive natural->canonical
@@ -705,22 +775,19 @@ impl ProofStore {
                     })
                     .collect();
 
-                let mut substitution =
-                    self.compute_rule_substitution(prog, name, &converted_premises);
-                let proposition =
-                    self.rule_site_conclusion(prog, globals, name, &substitution, site);
-                // remove globals from the substitution, since they are not necessary
-                substitution.retain(|var, _term_id| globals.get(var).is_none());
-
-                Proof {
-                    proposition,
-                    justification: Justification::Rule {
-                        name: name.clone(),
-                        premise_proofs: converted_premises,
-                        substitution,
-                        site,
-                    },
-                }
+                let substitution = self.compute_rule_substitution(prog, name, &converted_premises);
+                let skeleton = self.head_skeleton(
+                    prog,
+                    globals,
+                    name,
+                    &converted_premises,
+                    bridges,
+                    &substitution,
+                    planned,
+                );
+                let proof_id = skeleton.role(self, site);
+                self.proof_id.insert(raw_proof.clone(), proof_id);
+                return proof_id;
             }
             RawProof::MergeFnIdx(function, old_raw, new_raw, idx) => {
                 let old_proof_id = self.convert_raw_proof(prog, globals, raw_store, *old_raw);
@@ -784,18 +851,6 @@ impl ProofStore {
             RawProof::Congr(proof_raw, child_index, child_raw) => {
                 let base_id = self.convert_raw_proof(prog, globals, raw_store, *proof_raw);
                 let child_id = self.convert_raw_proof(prog, globals, raw_store, *child_raw);
-                if proof_reconstruct_check::enabled()
-                    && let RawProof::Rule(name, _, _, _, raw_site) =
-                        raw_store.congr_chain_base(*proof_raw)
-                {
-                    let child = &self.id_to_proof[child_id];
-                    proof_reconstruct_check::record_head_bridge(
-                        prog,
-                        name,
-                        SiteRef::decode(*raw_site),
-                        child.lhs() == child.rhs(),
-                    );
-                }
                 let base_lhs = self.id_to_proof[base_id].lhs();
                 let base_rhs = self.id_to_proof[base_id].rhs();
                 let child_rhs = self.id_to_proof[child_id].rhs();
@@ -844,36 +899,59 @@ impl ProofStore {
         proof_id
     }
 
-    /// The proposition a rule proof concludes: replay the rule's head under the
-    /// substitution its premises determine and read `site`.
+    /// How `rule_name`'s head lowers, and its build sites. A property of the rule
+    /// text, so it is computed once per rule.
+    fn head_plan(&mut self, prog: &[ResolvedNCommand], rule_name: &str) -> Rc<BuildSites> {
+        if let Some(planned) = self.head_plans.get(rule_name) {
+            return planned.clone();
+        }
+        let rule = rule_named(prog, rule_name);
+        let mut minted = 0usize;
+        let mut fresh = || {
+            minted += 1;
+            format!("@union-operand-{minted}")
+        };
+        let plan = HeadPlan::new(&rule.head.0, &mut fresh);
+        let planned = Rc::new(build_sites(&plan));
+        self.head_plans
+            .insert(rule_name.to_string(), planned.clone());
+        planned
+    }
+
+    /// The proofs one firing of `rule_name`'s head produced: replay the head under
+    /// the substitution the body premises determine, then rebuild the composition
+    /// its term construction needed from the bridge premises.
     ///
-    /// Panics if the rule is not in `prog`, if its head does not replay, or if
-    /// `site` is not one of its conclusion sites.
-    fn rule_site_conclusion(
+    /// Panics if the rule is not in `prog` or if its head does not replay.
+    #[allow(clippy::too_many_arguments)]
+    fn head_skeleton(
         &mut self,
         prog: &[ResolvedNCommand],
         globals: &HashMap<String, TermId>,
         rule_name: &str,
+        body_premises: &[ProofId],
+        bridges: HashMap<SiteIndex, ProofId>,
         substitution: &IndexMap<String, TermId>,
-        site: SiteRef,
-    ) -> Proposition {
-        let Some(rule) = prog.iter().find_map(|cmd| match cmd {
-            ResolvedNCommand::NormRule { rule } if rule.name == rule_name => Some(rule),
-            _ => None,
-        }) else {
-            panic!("could not find rule with name {rule_name}");
-        };
+        planned: Rc<BuildSites>,
+    ) -> Rc<HeadSkeleton> {
+        let rule = rule_named(prog, rule_name);
         let actions: Vec<_> = rule.head.0.iter().collect();
         let mut bindings = globals.clone();
         bindings.extend(substitution.iter().map(|(var, term)| (var.clone(), *term)));
         let ctx = process_actions(rule_name, bindings, &actions, &mut self.term_dag)
             .unwrap_or_else(|err| panic!("rule {rule_name}'s head did not replay: {err}"));
-        let prop = ctx
-            .site_propositions
-            .iter()
-            .find_map(|(index, prop)| (*index == site.index).then_some(prop))
-            .unwrap_or_else(|| panic!("rule {rule_name} has no conclusion site {}", site.index.0));
-        site.orient(prop)
+        // A global's value is in every substitution, so recording it in the proof
+        // would only repeat the program.
+        let mut recorded = substitution.clone();
+        recorded.retain(|var, _term| globals.get(var).is_none());
+        HeadSkeleton::new(FiringRecord {
+            rule_name,
+            build_sites: planned,
+            site_props: ctx.site_propositions,
+            body_premises: body_premises.to_vec(),
+            bridges,
+            substitution: recorded,
+        })
     }
 
     /// For a given rule and premise proofs, compute the substitution used in the rule application.

@@ -1,10 +1,9 @@
 #[doc = include_str!("proof_encoding.md")]
-use crate::proofs::proof_encoding_helpers::{EncodingNames, Justification};
-use crate::proofs::proof_sites::{ActionSites, ExprSites, SiteIndex, SiteRef, action_sites};
+use crate::proofs::proof_encoding_helpers::{EncodingNames, Justification, SiteColumn};
+use crate::proofs::proof_head_skeleton::{ConstructInto, HeadPlan, constructor_operand};
+use crate::proofs::proof_sites::{ActionSites, ExprSites, SiteIndex, SiteRef, SiteRole};
 use crate::typechecking::FuncType;
-use crate::util::HashSet;
 use crate::*;
-use egglog_ast::generic_ast::GenericExpr;
 
 /// Term-construction side channel (proof mode): maps a built term's canonical
 /// e-class var to `(natural e-class var, connector proof var)`, where the
@@ -23,18 +22,42 @@ pub(crate) type NatConn = HashMap<String, NatEntry>;
 #[derive(Clone)]
 pub(crate) struct NatEntry {
     pub natural: String,
-    pub connector: Option<String>,
+    pub connector: Option<Connector>,
 }
 
-/// A planned construct-into: the guest's constructor is built into `target`'s
-/// e-class instead of a fresh one, and the `union` that said so is dropped.
-struct ConstructInto {
-    /// The variable holding the e-class the guest is built into.
-    target: String,
-    /// The dropped `union`'s conclusion site, oriented the way the guest's view
-    /// row states it (`target = guest`).
-    edge: SiteRef,
+/// How a built term's connector proof `natural = canonical` is named.
+#[derive(Clone)]
+pub(crate) enum Connector {
+    /// A proof node the encoding already minted.
+    Node(String),
+    /// A rule head's, named by site and role. The head's own conclusion at the
+    /// site determines it (see [`crate::proofs::proof_head_skeleton`]), so a row
+    /// is minted only where the encoding stores the proof.
+    Role(SiteRef, Asts),
 }
+
+/// A constructor's *natural* node — children at their as-built ids — and the
+/// proofs about it. Shared by [`ProofInstrumentor::add_constructor_with_proof`]
+/// and [`ProofInstrumentor::instrument_construct_into`].
+struct Natural {
+    /// The children at their deduped ids, the view's key.
+    dedup_args: Vec<String>,
+    /// The natural node's id.
+    fv_nat: String,
+    /// `fv_nat = fv_nat`, the head's own conclusion here.
+    nat_prf: String,
+    /// The AST endpoints `nat_prf` was minted over, reused by the site's other
+    /// proofs. `None` for a term-free merge justification.
+    asts: Option<Asts>,
+    /// `fv_nat = f(deduped children)`: one `Congr` per canonicalized child.
+    /// `None` in a rule head, where proof conversion folds it instead.
+    to_dedup: Option<String>,
+}
+
+/// The two AST endpoints a site's `Rule` row was minted over. Every other proof
+/// about the same site reuses them, so naming one costs no AST rows.
+#[derive(Clone)]
+pub(crate) struct Asts(String, String);
 
 /// Which way a pair-valued table's carried proofs point, selecting the
 /// displaced-edge composition in [`ProofInstrumentor::ordered_union_merge`].
@@ -108,11 +131,19 @@ impl EncodingState {
 /// Thin wrapper around an [`EGraph`] for the term encoding
 pub(crate) struct ProofInstrumentor<'a> {
     pub(crate) egraph: &'a mut EGraph,
+    /// While instrumenting a rule head: the rule proof's premise list as it
+    /// stands — the body premises, plus one bridge premise per subterm the head
+    /// has interned so far. `None` everywhere else, where a proof records its own
+    /// conclusion and needs no bridges.
+    head_premises: Option<String>,
 }
 
 impl<'a> ProofInstrumentor<'a> {
     pub(crate) fn new(egraph: &'a mut EGraph) -> Self {
-        Self { egraph }
+        Self {
+            egraph,
+            head_premises: None,
+        }
     }
 
     /// Make a term state and use it to instrument the code.
@@ -153,27 +184,135 @@ impl<'a> ProofInstrumentor<'a> {
         b: &str,
         justification: &Justification,
     ) -> String {
+        self.edge_proof_with_asts(stmts, to_ast, a, b, justification)
+            .0
+    }
+
+    /// [`Self::edge_proof`], also returning the AST endpoints it minted (`None`
+    /// for a term-free merge justification, which has none).
+    fn edge_proof_with_asts(
+        &mut self,
+        stmts: &mut Vec<String>,
+        to_ast: &str,
+        a: &str,
+        b: &str,
+        justification: &Justification,
+    ) -> (String, Option<Asts>) {
         let ast_sort = self.proof_names().ast_sort.clone();
         let proof_sort = self.proof_sort();
-        let a1 = self.mint(stmts, to_ast, a, &ast_sort);
-        let a2 = self.mint(stmts, to_ast, b, &ast_sort);
         match justification {
-            Justification::Rule(rule_name, proof_list, site) => {
-                let rule = self.proof_names().rule_constructor.clone();
-                self.mint(
-                    stmts,
-                    &rule,
-                    &format!("{rule_name} {proof_list} {a1} {a2} {site}"),
-                    &proof_sort,
-                )
+            Justification::Rule(..) => {
+                let a1 = self.mint(stmts, to_ast, a, &ast_sort);
+                let a2 = self.mint(stmts, to_ast, b, &ast_sort);
+                let asts = Asts(a1, a2);
+                let proof = self.rule_row(stmts, justification, &asts);
+                (proof, Some(asts))
             }
             Justification::Fiat => {
+                let a1 = self.mint(stmts, to_ast, a, &ast_sort);
+                let a2 = self.mint(stmts, to_ast, b, &ast_sort);
                 let fiat = self.proof_names().fiat_constructor.clone();
-                self.mint(stmts, &fiat, &format!("{a1} {a2}"), &proof_sort)
+                let proof = self.mint(stmts, &fiat, &format!("{a1} {a2}"), &proof_sort);
+                (proof, Some(Asts(a1, a2)))
             }
             Justification::MergeIdx(..) | Justification::MergeRow(..) => panic!(
                 "Merge functions do not include union actions, so proof should not be by merge"
             ),
+        }
+    }
+
+    /// Mint the `Rule` row `justification` names, over already-minted AST
+    /// endpoints. Proof conversion derives the proposition from the site column
+    /// alone, so the AST columns only keep distinct rows distinct (phase 3 of the
+    /// rework drops them).
+    fn rule_row(
+        &mut self,
+        stmts: &mut Vec<String>,
+        justification: &Justification,
+        Asts(a1, a2): &Asts,
+    ) -> String {
+        let Justification::Rule(rule_name, body_premises, _) = justification else {
+            panic!("only a rule justification mints a Rule row");
+        };
+        // Inside a rule head the second list is the first extended with the
+        // bridges recorded so far; it shares the body list's cells, so recording
+        // both costs no rows and their length difference is the bridge count.
+        let with_bridges = match self.head_premises.clone() {
+            Some(extended) if justification.needs_bridges() => extended,
+            _ => body_premises.clone(),
+        };
+        let site = justification.site_expr();
+        let rule = self.proof_names().rule_constructor.clone();
+        let proof_sort = self.proof_sort();
+        self.mint(
+            stmts,
+            &rule,
+            &format!("{rule_name} {body_premises} {with_bridges} {a1} {a2} {site}"),
+            &proof_sort,
+        )
+    }
+
+    /// Name one of a site's other propositions (see [`SiteRole`]) with a single
+    /// `Rule` row, reusing the AST endpoints the site's own conclusion minted.
+    /// Proof conversion rebuilds the composition this replaces.
+    fn roled_proof(
+        &mut self,
+        stmts: &mut Vec<String>,
+        justification: &Justification,
+        role: SiteRole,
+        asts: &Asts,
+    ) -> String {
+        let site = justification
+            .static_site()
+            .expect("a roled proof needs a site fixed at encoding time")
+            .with_role(role);
+        let roled = justification.at_site(site);
+        self.rule_row(stmts, &roled, asts)
+    }
+
+    /// Record a subterm's view-row proof as a bridge premise of the rule proofs
+    /// minted from here on. Only a subterm at a conclusion site is recorded, since
+    /// only those are the sites proof conversion enumerates; a subterm the head
+    /// concludes nothing about (a nested `change` argument) has no readable proof
+    /// anyway. Outside a rule head nothing reads the premise list.
+    fn record_bridge(
+        &mut self,
+        stmts: &mut Vec<String>,
+        justification: &Justification,
+        view_proof: &str,
+    ) {
+        if justification.static_site().is_none() {
+            return;
+        }
+        let Some(current) = self.head_premises.clone() else {
+            return;
+        };
+        let pcons = self.proof_names().pcons.clone();
+        let list_sort = self.proof_names().proof_list_sort.clone();
+        let next = self.mint(
+            stmts,
+            &pcons,
+            &format!("{view_proof} {current}"),
+            &list_sort,
+        );
+        self.head_premises = Some(next);
+    }
+
+    /// A built term's connector proof as a proof node, minting the `Rule` row for
+    /// a roled one. Only the sites that *store* a connector need a row; everywhere
+    /// else proof conversion rebuilds it.
+    fn connector_node(
+        &mut self,
+        stmts: &mut Vec<String>,
+        justification: &Justification,
+        connector: &Connector,
+    ) -> String {
+        match connector {
+            Connector::Node(node) => node.clone(),
+            Connector::Role(site, asts) => {
+                let roled = justification.at_site(*site);
+                self.rule_row(stmts, &roled, asts)
+            }
         }
     }
 
@@ -246,7 +385,7 @@ impl<'a> ProofInstrumentor<'a> {
                 &to_ast_constructor,
                 &larger,
                 &smaller,
-                &justification.at_site_expr(&oriented),
+                &justification.at_column(SiteColumn::Runtime(oriented, SiteRole::AsWritten)),
             );
             return format!("(set ({uf_name} {larger}) (values {smaller} {proof}))");
         }
@@ -258,6 +397,29 @@ impl<'a> ProofInstrumentor<'a> {
         // `larger = smaller` with proof-of-max/min.
         let lhs_nat = Self::natural_of(nat_conn, lhs);
         let rhs_nat = Self::natural_of(nat_conn, rhs);
+
+        // In a rule head the whole composition below is determined by the site and
+        // the operands' bridge premises, so one row records it. `proof-of-max`
+        // picks the orientation the union-find's `larger = smaller` edge needs.
+        if matches!(justification, Justification::Rule(..)) {
+            let oriented = format!(
+                "(proof-of-max {lhs} {} {rhs} {})",
+                SiteRef::forward(site)
+                    .with_role(SiteRole::UnionEdge)
+                    .encode(),
+                SiteRef::reversed(site)
+                    .with_role(SiteRole::UnionEdge)
+                    .encode()
+            );
+            let edge = self.edge_proof(
+                stmts,
+                &to_ast_constructor,
+                &lhs_nat,
+                &rhs_nat,
+                &justification.at_column(SiteColumn::Runtime(oriented, SiteRole::UnionEdge)),
+            );
+            return format!("(set ({uf_name} {larger}) (values {smaller} {edge}))");
+        }
 
         // Built over the operands in source order, so it states the site forwards.
         let base_proof = self.edge_proof(
@@ -273,6 +435,8 @@ impl<'a> ProofInstrumentor<'a> {
         // The shared natural form is the canonicalized side's natural (pinned
         // AST), so the Trans goes through it rather than through the deduped
         // e-class.
+        let lhs_conn = lhs_conn.map(|c| self.connector_node(stmts, justification, &c));
+        let rhs_conn = rhs_conn.map(|c| self.connector_node(stmts, justification, &c));
         let (lhs_to_shared, rhs_to_shared) = if let Some(rc) = &rhs_conn {
             let lhs_to = if let Some(lc) = &lhs_conn {
                 let sym_lc = self.mint(stmts, &sym, lc, &proof_sort);
@@ -306,162 +470,6 @@ impl<'a> ProofInstrumentor<'a> {
         format!("(set ({uf_name} {larger}) (values {smaller} {edge}))")
     }
 
-    /// The `(FuncType, args)` of a constructor-application expression, else `None`.
-    fn constructor_operand(expr: &ResolvedExpr) -> Option<(&FuncType, &[ResolvedExpr])> {
-        match expr {
-            ResolvedExpr::Call(_, ResolvedCall::Func(func_type), args)
-                if func_type.subtype == FunctionSubtype::Constructor =>
-            {
-                Some((func_type, args.as_slice()))
-            }
-            _ => None,
-        }
-    }
-
-    /// Lift each constructor-application `union` operand into a preceding `let`,
-    /// so every union operand is a variable and the inline and let-bound shapes
-    /// coincide before [`Self::plan_construct_into`] runs.
-    ///
-    /// Each output action keeps the [`ActionSites`] of the action it came from, so
-    /// every conclusion the encoder emits still names a site of the head as
-    /// written — lifting an operand shifts no index.
-    fn normalize_union_operands(
-        &mut self,
-        actions: &[ResolvedAction],
-    ) -> Vec<(ResolvedAction, ActionSites)> {
-        let mut out = vec![];
-        for (action, sites) in actions.iter().zip(action_sites(actions)) {
-            match action {
-                ResolvedAction::Union(span, lhs, rhs) => {
-                    let ActionSites { own, operands } = sites;
-                    let [lhs_sites, rhs_sites] = <[ExprSites; 2]>::try_from(operands)
-                        .expect("a union contributes sites for both operands");
-                    let lhs = self.lift_union_operand(lhs.clone(), &lhs_sites, &mut out);
-                    let rhs = self.lift_union_operand(rhs.clone(), &rhs_sites, &mut out);
-                    out.push((
-                        ResolvedAction::Union(span.clone(), lhs, rhs),
-                        ActionSites {
-                            own,
-                            operands: vec![lhs_sites, rhs_sites],
-                        },
-                    ));
-                }
-                other => out.push((other.clone(), sites)),
-            }
-        }
-        out
-    }
-
-    /// If `operand` is a constructor application, bind it to a fresh `let`
-    /// (pushed onto `out` carrying `sites`) and return a variable referencing it;
-    /// otherwise return `operand` unchanged.
-    fn lift_union_operand(
-        &mut self,
-        operand: ResolvedExpr,
-        sites: &ExprSites,
-        out: &mut Vec<(ResolvedAction, ActionSites)>,
-    ) -> ResolvedExpr {
-        if Self::constructor_operand(&operand).is_none() {
-            return operand;
-        }
-        let span = operand.span();
-        let var = ResolvedVar {
-            name: self.egraph.parser.symbol_gen.fresh("union_operand"),
-            sort: operand.output_type(),
-            is_global_ref: false,
-        };
-        out.push((
-            ResolvedAction::Let(span.clone(), var.clone(), operand),
-            ActionSites {
-                own: None,
-                operands: vec![sites.clone()],
-            },
-        ));
-        GenericExpr::Var(span, var)
-    }
-
-    /// Plan the construct-into optimization over normalized actions (union
-    /// operands are variables). Returns a map from each guest variable — whose
-    /// constructor is built into the target's e-class instead of a fresh one — to
-    /// its [`ConstructInto`], and the set of union action indices it makes
-    /// redundant.
-    ///
-    /// Conservative: only a `union` of two distinct, not-yet-touched variables
-    /// where at least one is a constructor-`let` is optimized. The guest is the
-    /// later-defined constructor operand (so the target's e-class is already
-    /// bound where the guest is built); a matched (un-`let`) variable is always
-    /// an eligible target.
-    fn plan_construct_into(
-        actions: &[(ResolvedAction, ActionSites)],
-    ) -> (HashMap<String, ConstructInto>, HashSet<usize>) {
-        let mut all_def: HashMap<String, usize> = HashMap::default();
-        let mut ctor_def: HashMap<String, usize> = HashMap::default();
-        for (i, (action, _)) in actions.iter().enumerate() {
-            if let ResolvedAction::Let(_, v, expr) = action {
-                all_def.insert(v.name.clone(), i);
-                if Self::constructor_operand(expr).is_some() {
-                    ctor_def.insert(v.name.clone(), i);
-                }
-            }
-        }
-
-        let mut construct_into: HashMap<String, ConstructInto> = HashMap::default();
-        let mut dropped: HashSet<usize> = HashSet::default();
-        let mut used: HashSet<String> = HashSet::default();
-        for (i, (action, sites)) in actions.iter().enumerate() {
-            let ResolvedAction::Union(_, lhs, rhs) = action else {
-                continue;
-            };
-            let (GenericExpr::Var(_, va), GenericExpr::Var(_, vb)) = (lhs, rhs) else {
-                continue;
-            };
-            let (a, b) = (va.name.clone(), vb.name.clone());
-            if a == b {
-                // Union of a variable with itself is a no-op.
-                dropped.insert(i);
-                continue;
-            }
-            if used.contains(&a) || used.contains(&b) {
-                // Keep chains of optimized unions out of scope for now.
-                continue;
-            }
-            let (guest, target) = match (ctor_def.get(&a), ctor_def.get(&b)) {
-                (Some(&ia), Some(&ib)) => {
-                    if ia >= ib {
-                        (a.clone(), b)
-                    } else {
-                        (b, a.clone())
-                    }
-                }
-                (Some(_), None) => (a.clone(), b),
-                (None, Some(_)) => (b, a.clone()),
-                (None, None) => continue,
-            };
-            // The target's e-class must be bound where the guest is built: a
-            // matched variable always is; a `let` must precede the guest's.
-            let guest_idx = ctor_def[&guest];
-            if let Some(&target_idx) = all_def.get(&target)
-                && target_idx >= guest_idx
-            {
-                continue;
-            }
-            // Dropping the union leaves its equality as the guest's view-row
-            // proof, stated `target = guest`. The site states it `lhs = rhs`, so
-            // it is reversed exactly when the guest is the union's lhs.
-            let edge = SiteRef {
-                index: sites
-                    .own
-                    .expect("a union contributes a site for its equality"),
-                reversed: guest == a,
-            };
-            used.insert(guest.clone());
-            used.insert(target.clone());
-            construct_into.insert(guest, ConstructInto { target, edge });
-            dropped.insert(i);
-        }
-        (construct_into, dropped)
-    }
-
     /// Lower a construct-into guest `(let guest (F args))`: point its view value
     /// at `plan.target`'s e-class with a plain `set` (a collision with an existing
     /// `F(args)` unions the two via the view's `:merge`), and bind `guest` to it
@@ -480,7 +488,7 @@ impl<'a> ProofInstrumentor<'a> {
         sites: &ExprSites,
     ) {
         let target = plan.target.as_str();
-        let (func_type, args) = Self::constructor_operand(expr)
+        let (func_type, args) = constructor_operand(expr)
             .expect("construct-into guest must be a constructor application");
         let ctor_name = func_type.name.clone();
         let child_vals: Vec<String> = args
@@ -521,7 +529,13 @@ impl<'a> ProofInstrumentor<'a> {
         let trans = self.proof_names().eq_trans_constructor.clone();
         let sym = self.proof_names().eq_sym_constructor.clone();
         let view = self.view_name(&ctor_name);
-        let (dedup_args, fv_nat, nat_prf, nat_to_dedup) = self.build_natural_with_congr(
+        let Natural {
+            dedup_args,
+            fv_nat,
+            nat_prf,
+            asts,
+            to_dedup: nat_to_dedup,
+        } = self.build_natural_with_congr(
             res,
             &ctor_name,
             &view_sort,
@@ -533,20 +547,33 @@ impl<'a> ProofInstrumentor<'a> {
         res.push(format!("(set ({term_proof_ctor} {fv_nat}) {nat_prf})"));
         let target_nat = Self::natural_of(nat_conn, target);
         let target_conn = nat_conn.get(target).and_then(|e| e.connector.clone());
-        let edge = self.edge_proof(
-            res,
-            &sort_ast,
-            &target_nat,
-            &fv_nat,
-            &justification.at_site(plan.edge),
-        );
-        let to_dedup = self.mint(res, &trans, &format!("{edge} {nat_to_dedup}"), &proof_sort);
-        let view_proof = match target_conn {
-            Some(conn) => {
-                let sc = self.mint(res, &sym, &conn, &proof_sort);
-                self.mint(res, &trans, &format!("{sc} {to_dedup}"), &proof_sort)
+        let view_proof = match &nat_to_dedup {
+            Some(chain) => {
+                let edge = self.edge_proof(
+                    res,
+                    &sort_ast,
+                    &target_nat,
+                    &fv_nat,
+                    &justification.at_site(plan.edge),
+                );
+                let to_dedup = self.mint(res, &trans, &format!("{edge} {chain}"), &proof_sort);
+                match target_conn.clone() {
+                    Some(conn) => {
+                        let conn = self.connector_node(res, justification, &conn);
+                        let sc = self.mint(res, &sym, &conn, &proof_sort);
+                        self.mint(res, &trans, &format!("{sc} {to_dedup}"), &proof_sort)
+                    }
+                    None => to_dedup,
+                }
             }
-            None => to_dedup,
+            // The dropped union's site plus the guest's bridge premises determine
+            // the whole composition, so one row records it and the edge proof it
+            // is built from needs no row of its own.
+            None => {
+                let asts = asts.as_ref().expect("a rule proof mints AST endpoints");
+                let roled = justification.at_site(plan.edge.with_role(SiteRole::GuestView));
+                self.rule_row(res, &roled, asts)
+            }
         };
         // The guest's term keeps its own id (`fv_nat`); only the view VALUE uses
         // the target. Emitting `(F dedup_args target)` would add the guest's
@@ -557,8 +584,16 @@ impl<'a> ProofInstrumentor<'a> {
             "(set ({view} {dedup_disp}) (values {target} {view_proof}))"
         ));
         res.push(format!("(let {guest} {target})"));
-        let sv = self.mint(res, &sym, &view_proof, &proof_sort);
-        let guest_conn = self.mint(res, &trans, &format!("{nat_to_dedup} {sv}"), &proof_sort);
+        let guest_conn = match &nat_to_dedup {
+            Some(chain) => {
+                let sv = self.mint(res, &sym, &view_proof, &proof_sort);
+                Connector::Node(self.mint(res, &trans, &format!("{chain} {sv}"), &proof_sort))
+            }
+            None => Connector::Role(
+                plan.edge.with_role(SiteRole::GuestConnector),
+                asts.expect("a rule proof mints AST endpoints"),
+            ),
+        };
         nat_conn.insert(
             guest.to_string(),
             NatEntry {
@@ -928,12 +963,14 @@ impl<'a> ProofInstrumentor<'a> {
                         sites.operands.first(),
                     );
                     let proof = if self.proofs_enabled() {
+                        let row_site = sites.own.expect("a set contributes a site for its row");
                         self.global_value_proof(
                             &mut res,
                             func_type,
                             &e_value,
                             justification,
                             nat_conn,
+                            row_site,
                         )
                     } else {
                         "()".to_string()
@@ -1071,45 +1108,57 @@ impl<'a> ProofInstrumentor<'a> {
         to_ast: &str,
         justification: &Justification,
     ) -> String {
+        self.term_proof_with_asts(stmts, fv, to_ast, justification)
+            .0
+    }
+
+    /// [`Self::term_proof_for_justification`], also returning the AST endpoints it
+    /// minted (`None` for a term-free merge justification, which has none).
+    fn term_proof_with_asts(
+        &mut self,
+        stmts: &mut Vec<String>,
+        fv: &str,
+        to_ast: &str,
+        justification: &Justification,
+    ) -> (String, Option<Asts>) {
         let ast_sort = self.proof_names().ast_sort.clone();
         let proof_sort = self.proof_sort();
         match justification {
-            Justification::Rule(rule_name, rule_proof, site) => {
+            Justification::Rule(..) => {
                 let a1 = self.mint(stmts, to_ast, fv, &ast_sort);
                 let a2 = self.mint(stmts, to_ast, fv, &ast_sort);
-                let rule = self.proof_names().rule_constructor.clone();
-                self.mint(
-                    stmts,
-                    &rule,
-                    &format!("{rule_name} {rule_proof} {a1} {a2} {site}"),
-                    &proof_sort,
-                )
+                let asts = Asts(a1, a2);
+                let proof = self.rule_row(stmts, justification, &asts);
+                (proof, Some(asts))
             }
             Justification::Fiat => {
                 let a1 = self.mint(stmts, to_ast, fv, &ast_sort);
                 let a2 = self.mint(stmts, to_ast, fv, &ast_sort);
                 let fiat = self.proof_names().fiat_constructor.clone();
-                self.mint(stmts, &fiat, &format!("{a1} {a2}"), &proof_sort)
+                let proof = self.mint(stmts, &fiat, &format!("{a1} {a2}"), &proof_sort);
+                (proof, Some(Asts(a1, a2)))
             }
             // Term-free: no AST minted (`fv`/`to_ast` unused). The checker
             // reconstructs the conclusion from the merge body + premise outputs.
             Justification::MergeIdx(fn_name, p1, p2, idx) => {
                 let merge_idx = self.proof_names().merge_fn_idx_constructor.clone();
-                self.mint(
+                let proof = self.mint(
                     stmts,
                     &merge_idx,
                     &format!("\"{fn_name}\" {p1} {p2} {idx}"),
                     &proof_sort,
-                )
+                );
+                (proof, None)
             }
             Justification::MergeRow(fn_name, p1, p2) => {
                 let merge_row = self.proof_names().merge_fn_row_constructor.clone();
-                self.mint(
+                let proof = self.mint(
                     stmts,
                     &merge_row,
                     &format!("\"{fn_name}\" {p1} {p2}"),
                     &proof_sort,
-                )
+                );
+                (proof, None)
             }
         }
     }
@@ -1133,17 +1182,30 @@ impl<'a> ProofInstrumentor<'a> {
         e_value: &str,
         justification: &Justification,
         nat_conn: &NatConn,
+        row_site: SiteIndex,
     ) -> String {
         if let Some(NatEntry {
             connector: Some(connector),
             ..
         }) = nat_conn.get(e_value).cloned()
         {
-            let proof_sort = self.proof_sort();
-            let sym = self.proof_names().eq_sym_constructor.clone();
-            let trans = self.proof_names().eq_trans_constructor.clone();
-            let sym_conn = self.mint(res, &sym, &connector, &proof_sort);
-            self.mint(res, &trans, &format!("{sym_conn} {connector}"), &proof_sort)
+            match connector {
+                Connector::Node(connector) => {
+                    let proof_sort = self.proof_sort();
+                    let sym = self.proof_names().eq_sym_constructor.clone();
+                    let trans = self.proof_names().eq_trans_constructor.clone();
+                    let sym_conn = self.mint(res, &sym, &connector, &proof_sort);
+                    self.mint(res, &trans, &format!("{sym_conn} {connector}"), &proof_sort)
+                }
+                // A rule head setting a global: the site plus the value's bridge
+                // premises determine the proof, so one row records it.
+                Connector::Role(..) => {
+                    let to_ast = self.fname_to_ast_name(&func_type.name).to_string();
+                    let roled = justification
+                        .at_site(SiteRef::forward(row_site).with_role(SiteRole::GlobalValue));
+                    self.edge_proof(res, &to_ast, e_value, e_value, &roled)
+                }
+            }
         } else {
             let to_ast = self.fname_to_ast_name(&func_type.name).to_string();
             self.term_proof_for_justification(res, e_value, &to_ast, justification)
@@ -1320,12 +1382,7 @@ impl<'a> ProofInstrumentor<'a> {
         canon
     }
 
-    /// Mint a constructor's *natural* node (children at their as-built ids) and
-    /// build a `Congr` chain proving `fv_nat = f(deduped children)`. Returns
-    /// `(deduped children, fv_nat, nat_prf, nat_to_dedup)`, where `nat_prf` is
-    /// `fv_nat`'s term proof (the caller anchors it) and `nat_to_dedup` is the
-    /// chain. Shared by [`Self::add_constructor_with_proof`] and
-    /// [`Self::instrument_construct_into`].
+    /// Mint a constructor's natural node and the proofs about it.
     fn build_natural_with_congr(
         &mut self,
         res: &mut Vec<String>,
@@ -1334,12 +1391,12 @@ impl<'a> ProofInstrumentor<'a> {
         args: &[String],
         justification: &Justification,
         nat_conn: &NatConn,
-    ) -> (Vec<String>, String, String, String) {
+    ) -> Natural {
         let to_ast = self.fname_to_ast_name(fname).to_string();
         let congr = self.proof_names().congr_constructor.clone();
         let proof_sort = self.proof_sort();
         // Each arg is a child's deduped id; look up its natural id + connector.
-        let children: Vec<(String, String, Option<String>)> = args
+        let children: Vec<(String, String, Option<Connector>)> = args
             .iter()
             .map(|a| match nat_conn.get(a) {
                 Some(e) => (a.clone(), e.natural.clone(), e.connector.clone()),
@@ -1354,19 +1411,24 @@ impl<'a> ProofInstrumentor<'a> {
             &ListDisplay(&nat_args, " ").to_string(),
             view_sort,
         );
-        let nat_prf = self.term_proof_for_justification(res, &fv_nat, &to_ast, justification);
-        let mut nat_to_dedup = nat_prf.clone();
-        for (i, (_, _, conn)) in children.iter().enumerate() {
-            if let Some(conn) = conn {
-                nat_to_dedup = self.mint(
-                    res,
-                    &congr,
-                    &format!("{nat_to_dedup} {i} {conn}"),
-                    &proof_sort,
-                );
+        let (nat_prf, asts) = self.term_proof_with_asts(res, &fv_nat, &to_ast, justification);
+        let in_rule_head = justification.static_site().is_some();
+        let mut to_dedup = (!in_rule_head).then(|| nat_prf.clone());
+        if let Some(chain) = &mut to_dedup {
+            for (i, (_, _, conn)) in children.clone().iter().enumerate() {
+                if let Some(conn) = conn {
+                    let conn = self.connector_node(res, justification, conn);
+                    *chain = self.mint(res, &congr, &format!("{chain} {i} {conn}"), &proof_sort);
+                }
             }
         }
-        (dedup_args, fv_nat, nat_prf, nat_to_dedup)
+        Natural {
+            dedup_args,
+            fv_nat,
+            nat_prf,
+            asts,
+            to_dedup,
+        }
     }
 
     /// Proof-mode constructors: build the *natural* term (children at their
@@ -1397,7 +1459,7 @@ impl<'a> ProofInstrumentor<'a> {
         // therefore keeps the as-built shape the rule head produced. `fv_can` is
         // always a separate node (even when no child changed) with the reflexive
         // proof `fv_can = fv_can`, exempt from the rule-head check.
-        let (dedup_args, fv_nat, nat_prf, nat_to_dedup_term) = self.build_natural_with_congr(
+        let natural = self.build_natural_with_congr(
             res,
             &func_type.name,
             view_sort,
@@ -1405,19 +1467,29 @@ impl<'a> ProofInstrumentor<'a> {
             justification,
             nat_conn,
         );
+        let Natural {
+            dedup_args,
+            fv_nat,
+            nat_prf,
+            asts,
+            to_dedup,
+        } = natural;
         let fv_can = self.mint(
             res,
             &func_type.name,
             &ListDisplay(&dedup_args, " ").to_string(),
             view_sort,
         );
-        let sym_ntd = self.mint(res, &sym, &nat_to_dedup_term, &proof_sort);
-        let can_prf = self.mint(
-            res,
-            &trans,
-            &format!("{sym_ntd} {nat_to_dedup_term}"),
-            &proof_sort,
-        );
+        let can_prf = match &to_dedup {
+            Some(chain) => {
+                let sym_ntd = self.mint(res, &sym, chain, &proof_sort);
+                self.mint(res, &trans, &format!("{sym_ntd} {chain}"), &proof_sort)
+            }
+            None => {
+                let asts = asts.as_ref().expect("a rule proof mints AST endpoints");
+                self.roled_proof(res, justification, SiteRole::CanonicalReflexive, asts)
+            }
+        };
 
         // Anchor both term proofs, dedup `fv_can` to the view e-class, and read the
         // view's stored proof (`dedup = f(children)`).
@@ -1437,16 +1509,26 @@ impl<'a> ProofInstrumentor<'a> {
         res.push(format!(
             "(let {vprf} ({view_proof} {dedup_args} {can_prf}))"
         ));
+        // The read misses on a row this action just seeded, returning the fallback:
+        // a proof about the term as written rather than about the canonical one,
+        // which is how conversion tells "no bridge" from a real one.
+        self.record_bridge(res, justification, &vprf);
 
-        // connector `fv_nat = dedup` = Trans(nat_to_dedup, Sym(dedup = f(children))).
-        // `sym_vprf` reads the `vprf` let, so it must follow the statements above.
-        let sym_vprf = self.mint(res, &sym, &vprf, &proof_sort);
-        let connector = self.mint(
-            res,
-            &trans,
-            &format!("{nat_to_dedup_term} {sym_vprf}"),
-            &proof_sort,
-        );
+        let connector = match &to_dedup {
+            // connector `fv_nat = dedup` = Trans(nat_to_dedup, Sym(dedup = f(children))).
+            // `sym_vprf` reads the `vprf` let, so it must follow the statements above.
+            Some(chain) => {
+                let sym_vprf = self.mint(res, &sym, &vprf, &proof_sort);
+                Connector::Node(self.mint(res, &trans, &format!("{chain} {sym_vprf}"), &proof_sort))
+            }
+            None => Connector::Role(
+                justification
+                    .static_site()
+                    .expect("a rule proof names a site")
+                    .with_role(SiteRole::Connector),
+                asts.expect("a rule proof mints AST endpoints"),
+            ),
+        };
 
         nat_conn.insert(
             dedup.clone(),
@@ -1634,7 +1716,7 @@ impl<'a> ProofInstrumentor<'a> {
                 // This node's own conclusion is `t = t` for the term it builds.
                 let proof = &match sites {
                     Some(sites) => proof.at_site(SiteRef::forward(sites.index)),
-                    None => proof.at_site_expr(Justification::NO_SITE),
+                    None => proof.at_column(SiteColumn::Missing),
                 };
                 match resolved_call {
                     ResolvedCall::Func(func_type) => {
@@ -1679,6 +1761,7 @@ impl<'a> ProofInstrumentor<'a> {
                                     connector: Some(conn),
                                 }) if container_proof && asort.is_eq_sort() => {
                                     let uf = self.uf_name(asort.name());
+                                    let conn = self.connector_node(res, proof, &conn);
                                     res.push(format!("(set ({uf} {natural}) (values {a} {conn}))"));
                                     build_args.push(natural);
                                 }
@@ -1716,19 +1799,20 @@ impl<'a> ProofInstrumentor<'a> {
         // `ast::cse`). Normalize union operands to variables, then build each
         // freshly-constructed union operand directly into the other operand's
         // e-class (see proof_encoding.md, "Union in a rule").
-        let normalized = self.normalize_union_operands(actions);
-        let (construct_into, dropped) = Self::plan_construct_into(&normalized);
+        let symbol_gen = &mut self.egraph.parser.symbol_gen;
+        let mut fresh = || symbol_gen.fresh("union_operand");
+        let plan = HeadPlan::new(actions, &mut fresh);
         let mut res = vec![];
-        for (i, (action, sites)) in normalized.iter().enumerate() {
-            if dropped.contains(&i) {
+        for (i, (action, sites)) in plan.actions.iter().enumerate() {
+            if plan.dropped.contains(&i) {
                 continue;
             }
             match action {
-                ResolvedAction::Let(_, v, expr) if construct_into.contains_key(&v.name) => {
+                ResolvedAction::Let(_, v, expr) if plan.construct_into.contains_key(&v.name) => {
                     self.instrument_construct_into(
                         &mut res,
                         expr,
-                        &construct_into[&v.name],
+                        &plan.construct_into[&v.name],
                         &v.name,
                         justification,
                         nat_conn,
@@ -1767,7 +1851,7 @@ impl<'a> ProofInstrumentor<'a> {
         let proof = Justification::Rule(
             rule_name_var.clone(),
             proof_var.clone(),
-            Justification::NO_SITE.to_string(),
+            SiteColumn::Missing,
         );
         let reads_in_rhs = !action_lookups.is_empty();
         // The looked-up proofs feed `proof_str`, so bind them before the proof list.
@@ -1784,7 +1868,16 @@ impl<'a> ProofInstrumentor<'a> {
             "".to_string()
         };
 
+        // Every subterm the head interns records its view-row proof as a bridge
+        // premise (see `record_bridge`), so the list the rule proofs name grows as
+        // the actions run.
+        self.head_premises = self
+            .egraph
+            .proof_state
+            .proofs_enabled
+            .then(|| proof_var.clone());
         let actions = self.instrument_actions(&rule.head.0, &proof, &mut nat_conn);
+        self.head_premises = None;
         let name = &rule.name;
         let ruleset_opt = if rule.ruleset.is_empty() {
             "".to_string()

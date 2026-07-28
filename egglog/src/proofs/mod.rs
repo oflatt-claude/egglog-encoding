@@ -8,6 +8,7 @@ pub(crate) mod proof_extraction;
 pub(crate) mod proof_extractor;
 pub(crate) mod proof_format;
 pub(crate) mod proof_fresh;
+pub(crate) mod proof_head_skeleton;
 pub(crate) mod proof_normal_form;
 pub(crate) mod proof_reconstruct_check;
 pub(crate) mod proof_simplification;

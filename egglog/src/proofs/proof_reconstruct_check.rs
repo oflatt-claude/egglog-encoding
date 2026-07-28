@@ -27,12 +27,12 @@ use std::sync::OnceLock;
 
 use crate::{
     TermId,
-    ast::{FunctionSubtype, ResolvedExpr, ResolvedFact, ResolvedNCommand, ResolvedRule},
+    ast::{ResolvedExpr, ResolvedFact, ResolvedRule},
     core::ResolvedCall,
     proofs::{
         proof_checker::{eval_expr_with_subst, is_container_side_condition, process_actions},
         proof_format::{ProofId, ProofStore, Proposition},
-        proof_sites::{SiteConclusion, SiteRef, conclusion_sites},
+        proof_sites::{SiteRef, conclusion_sites},
     },
     util::{HashMap, IndexMap, SymbolGen},
 };
@@ -447,46 +447,24 @@ pub(super) fn record(
     }
 }
 
-/// Record one canonicalization bridge, if `site` of `rule_name` names a
-/// constructor the head builds — a `Congr` step over any other kind of site
-/// belongs to rebuilding, not to the head.
-pub(super) fn record_head_bridge(
-    prog: &[ResolvedNCommand],
-    rule_name: &str,
-    site: SiteRef,
-    child_is_reflexive: bool,
-) {
-    let Some(rule) = prog.iter().find_map(|cmd| match cmd {
-        ResolvedNCommand::NormRule { rule } if rule.name == rule_name => Some(rule),
-        _ => None,
-    }) else {
-        return;
-    };
-    let sites = conclusion_sites(rule.head.0.iter());
-    let builds_constructor = matches!(
-        sites.get(site.index.0).map(|s| &s.conclusion),
-        Some(SiteConclusion::Reflexive(expr))
-            if matches!(
-                expr.as_ref(),
-                ResolvedExpr::Call(_, ResolvedCall::Func(func), _)
-                    if func.subtype == FunctionSubtype::Constructor
-            )
-    );
-    if !builds_constructor {
+/// Record one canonicalization bridge: a subterm the head interned landed in an
+/// e-class whose row spells a different term, so the proof has to say the two are
+/// equal. `moved` is false when the e-class's term is the one the head wrote, in
+/// which case the bridge is the identity on terms.
+pub(crate) fn record_head_bridge(rule_name: &str, moved: bool) {
+    if !enabled() {
         return;
     }
     STATS.with(|stats| {
         let mut stats = stats.borrow_mut();
         stats.head_bridges += 1;
-        if !child_is_reflexive {
+        if moved {
             stats.head_bridges_load_bearing += 1;
         }
     });
     if env_enabled() {
         log::info!(
-            "PROOF-HEAD-BRIDGE site={} load_bearing={} rule={}",
-            site.index.0,
-            !child_is_reflexive,
+            "PROOF-HEAD-BRIDGE load_bearing={moved} rule={}",
             one_line(rule_name),
         );
     }
