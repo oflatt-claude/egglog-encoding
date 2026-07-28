@@ -182,6 +182,21 @@ Two sites mint rows nothing ever reads:
   the *function* branch consumes, so every non-trivial argument of a body
   primitive mints 2 `Ast` + 1 `Fiat` that are unreachable.
 
+## Deferred: the `check_shadowing` per-rule clone
+
+`check_shadowing.rs` clones its whole name map once per rule
+(`let mut inner = self.clone()`), so name-checking costs
+`tables x (15us + 50ns x rules)` — an O(rules x tables) cross term paid once at
+load. A rollback log removes it, and it is measurably worth ~12% of
+proof-mode `luminal-llama` **on main**.
+
+It is **not** worth taking on this branch yet: measured here it is ~1% slower
+(8.03s vs 7.93s over three runs each, tight and non-overlapping). The likely
+reason is that CSE is off, so the hoisted global tables that make the cross
+term large are not being created. Revisit in phase 5 once CSE is back and the
+table count returns to normal — and re-measure rather than trusting either
+number.
+
 ## Measurement caveats
 
 * **While CSE is off, bounded-schedule programs understate work done**, so a
