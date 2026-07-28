@@ -346,13 +346,7 @@ impl EGraph {
                 let registry = registry.read().unwrap();
                 let action = registry.lookup_table(&view_name)?.clone();
                 let keys = &args[..n_keys];
-                if let Some(vals) = action.lookup_values(state, keys) {
-                    // Already canonicalized: reuse the committed eclass and skip
-                    // the insert, so the fresh id never enters the table.
-                    return Some(vals[0]);
-                }
-                action.insert(state, args.iter().copied());
-                Some(args[n_keys])
+                Some(action.lookup_or_insert_vals(state, keys, &args[n_keys..]))
             },
         )))
     }
@@ -2002,6 +1996,31 @@ impl TableAction {
             }
             None => self.lookup(state, key),
         }
+    }
+
+    /// Get-or-insert with caller-supplied value columns, reading this batch's
+    /// own pending inserts.
+    ///
+    /// Returns the first value column of the row for `key`: the committed row's
+    /// if the key is present, the pending row's if an earlier call in this same
+    /// action batch already inserted it, and otherwise `vals`' first entry after
+    /// staging `(key, vals)`. Unlike a `lookup_values` + `insert` pair, two calls
+    /// with the same key in one batch agree.
+    pub fn lookup_or_insert_vals(
+        &self,
+        state: &mut ExecutionState,
+        key: &[Value],
+        vals: &[Value],
+    ) -> Value {
+        let timestamp = MergeVal::Constant(Value::from_usize(state.read_counter(self.timestamp)));
+        let mut merge_vals = SmallVec::<[MergeVal; 4]>::new();
+        merge_vals.extend(vals.iter().map(|v| MergeVal::Constant(*v)));
+        merge_vals.push(timestamp);
+        if self.table_math.subsume {
+            merge_vals.push(MergeVal::Constant(NOT_SUBSUMED));
+        }
+        state.predict_val(self.table, key, merge_vals.iter().copied())
+            [self.table_math.ret_val_col()]
     }
 
     /// Insert a row into this table.

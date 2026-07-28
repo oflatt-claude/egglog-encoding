@@ -17,36 +17,26 @@ expression: proof_snapshot
     (b (g* (AConst) (AConst)))
     (c t0)))
 (let t0 (g* (inv (aConst)) (aConst)))
-(let t1 (g* (g* (bConst) t0) (inv (bConst))))
-(let t2 (g* t0 (inv (bConst))))
-(let t3 (premises (Fiat (= t1 t1))))
-(let t4 (substitution (@rewrite_var__ t1) (a (bConst)) (b t0) (c (inv (bConst)))))
+(let t1 (g* (bConst) t0))
+(let t2 (g* t1 (inv (bConst))))
 (Congr
-  (= t1 (g* (bConst) (inv (bConst))))
+  (= t2 (g* (bConst) (inv (bConst))))
+  (Fiat (= t2 t2))
   (Rule
-    (= t1 (g* (bConst) t2))
-    (name "(birewrite (g* (g* a b) c) (g* a (g* b c)))=>")
-    t3
-    t4)
-  (Rule
-    (= t2 (inv (bConst)))
-    (name "(rewrite (g* $I a) a)")
+    (= t1 (bConst))
+    (name "(rewrite (g* a $I) a)")
     (premises
       (Congr
-        (= t2 (g* (IConst) (inv (bConst))))
-        (Rule
-          (= t2 t2)
-          (name "(birewrite (g* (g* a b) c) (g* a (g* b c)))=>")
-          t3
-          t4)
+        (= t1 (g* (bConst) (IConst)))
+        (Fiat (= t1 t1))
         (Rule
           (= t0 (IConst))
           (name "(rewrite (g* (inv a) a) $I)")
           (premises (Fiat (= t0 t0)))
           (substitution (@rewrite_var__4 t0) (a (aConst))))
-        0))
-    (substitution (@rewrite_var__2 t2) (a (inv (bConst)))))
-  1)
+        1))
+    (substitution (@rewrite_var__3 t1) (a (bConst))))
+  0)
 (let t0 (g* (bConst) (inv (bConst))))
 (Rule
   (= t0 (IConst))

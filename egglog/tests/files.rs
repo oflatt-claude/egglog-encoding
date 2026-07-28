@@ -282,7 +282,7 @@ impl Run {
                 insta::assert_snapshot!(snapshot_name, proof_snapshot);
             }
 
-            if !self.requires_proofs() && !cross_treatment_snapshot_disabled(&self.path) {
+            if !self.requires_proofs() {
                 let shared_snapshot =
                     CommandOutput::snapshot_non_proof_stable_under_proof_encoding(outputs);
                 if !shared_snapshot.is_empty() {
@@ -360,26 +360,8 @@ impl Run {
         &self,
         snapshot_content_across_treatments: &str,
     ) -> bool {
-        !snapshot_content_across_treatments.is_empty()
-            && !self.proof_testing
-            && !cross_treatment_snapshot_disabled(&self.path)
+        !snapshot_content_across_treatments.is_empty() && !self.proof_testing
     }
-}
-
-// KNOWN BUG, suspended so the rework can proceed (grep `PROOF_REWORK_IN_PROGRESS`).
-// Turning off the `ast::cse` prepass makes the term encoding disagree with the
-// native treatment on `integer_math.egg`: after `(run 4)` native reaches
-// `(Add 331)` and the term encoding only `(Add 121)`. `(run N)` means N
-// iterations under either treatment, so the counts must match exactly — the
-// term encoding is not faithfully executing the schedule, and CSE was masking
-// it. Fix before re-enabling CSE; do not accept a snapshot recording the
-// divergence.
-const CROSS_TREATMENT_SNAPSHOT_DISABLED_FILES: &[&str] = &["integer_math.egg"];
-
-fn cross_treatment_snapshot_disabled(path: &Path) -> bool {
-    CROSS_TREATMENT_SNAPSHOT_DISABLED_FILES
-        .iter()
-        .any(|file| path.ends_with(file))
 }
 
 fn manual_proof_disable_reason(path: &Path) -> Option<&'static str> {

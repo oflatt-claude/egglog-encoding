@@ -136,24 +136,40 @@ recognizes neither the container head nor a non-eq container as a value. The
 same program with an eq-container builds fine. No corpus file does this, so it
 is invisible today; a `(Vec i64)`/`(Map String i64)` *read* in a body is fine.
 
-## Known blocker: the `begin`-block / CSE defect
+## Resolved: the `begin`-block / CSE defect
 
 CSE runs *before* proof encoding and reshapes rule heads, so the encoder and
-the proof checker see different heads and a site index assigned by one does not
-resolve on the other. Proof encoding should run early enough that later passes
-need not know proofs exist, so CSE moves after it; until then it is off.
+the proof checker would see different heads. Proof encoding should run early
+enough that later passes need not know proofs exist, so CSE is off until it can
+run on the encoded program instead.
 
-Turning it off exposed a **pre-existing correctness bug**: with CSE disabled,
-`integer_math.egg` (`(run 4)`) reaches `(Add 331)` natively and `(Add 121)`
-under term encoding. `(run N)` is N iterations under either treatment, so the
-counts must match. PR #35 (which merged the local `begin` block together with
-the CSE prepass) records this in its own Correctness section — *"a naive block
-without dedup regressed it; CSE fixes it"*. So CSE has been masking a defect in
-the local-block change, not supplying something of its own.
+Turning it off exposed a **read-your-writes bug in the bridge**, which CSE had
+been masking since PR #35. `register_set_if_empty` looked its key up in the
+*committed* table and, on a miss, *staged* an insert, so two calls with the same
+key inside one action batch both missed and both inserted — minting two
+e-classes for one term. Native `lookup_or_insert` reads through the batch's
+predicted rows, so the treatments disagreed and the term encoding ran exactly
+one iteration behind. `integer_math.egg` (`(run 4)`) showed it as `(Add 331)`
+native versus `(Add 121)` term-encoded, because it never saturates and the lag
+compounds. Minimal reproducer:
 
-This must be fixed in phase 5, because moving CSE after encoding removes the
-masking. The cross-treatment check is suspended for `integer_math.egg` by name
-in `tests/files.rs`; do not accept a snapshot recording the divergence.
+```
+(datatype Math (Sub Math Math) (Const i64))
+(rewrite (Sub a a) (Const 0))
+(let $e (Sub (Const 2) (Const 2)))
+(run 1)
+(print-size Const)
+```
+
+Only duplicates *within one top-level action block* were affected: a duplicate
+minted by a rule head is repaired by that same iteration's rebuild, since the
+schedule runs before it rebuilds.
+
+Fixed by routing `set-if-empty` through `TableAction::lookup_or_insert_vals`,
+which uses `predict_val` as native already does. The fix is strictly stronger
+than CSE — it dedups cases CSE's syntactic per-scope pass misses — so CSE is a
+pure optimization again and phase 5 has no correctness work left, only
+re-enabling it after encoding.
 
 ## Available now, independent of the phases
 
