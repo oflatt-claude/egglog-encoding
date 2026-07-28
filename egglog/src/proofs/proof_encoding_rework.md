@@ -99,16 +99,15 @@ skeleton is still present to compare against.
 
 ### Sequenced plan from here
 
-1. **Index proof extraction.** `extract_eq` rescans every candidate function's
-   every row once per extracted node, so extraction is O(nodes x rows). Build the
-   output-value index once per run. This is pre-existing, not caused by the
-   rework — phase 2b only raised the node count enough to expose it.
+1. ~~**Index proof extraction.**~~ Done — see "Extraction rescanned every
+   candidate table once per node" below. `eggcc_2mm_pass1` went from 201 s to
+   32 s at unchanged peak RSS.
 2. **Then decide about connectors, not before.** The cumulative bridge list
    costs no rows (the two lists share cells) but grows with nesting. Giving each
    build site its own connector row bounds it to `children + 1`, at one row per
-   site — flat `rewrite` unchanged at 6, nested ~14 instead of 13. Only pay that
-   if step 1 leaves deep terms expensive; if extraction goes linear the depth
-   stops mattering.
+   site — flat `rewrite` unchanged at 6, nested ~14 instead of 13. Step 1 is in
+   and the fixture is no longer extraction-bound, so this is not urgent; measure
+   before paying for it.
 3. **Port the two collapses dropped when this branch was cut.** Both were
    implemented and verified on `reduce-proof-writes`: fused `Rule0..Rule4`
    carrying premises inline (`b347bb5`, removes `PNil` + `PCons`) and the
@@ -366,14 +365,15 @@ and peak child RSS:
 
 | | before | after |
 | --- | --- | --- |
-| `egglog-experimental --test files` (46 tests) | 200.4 s / 5.36 GB | 29.3 s / 4.29 GB |
+| `egglog-experimental --test files` (46 tests) | 200.4 s / 5.36 GB | 28.8-29.3 s / 4.29-5.17 GB |
 | `proofs/eggcc_2mm_pass1_proof_testing` alone | 202.8 s / 3.26 GB | 31.6 s / 3.29 GB |
-| `egglog --test files 'proofs/'` (206 tests) | 9.16 s / 6.06 GB | 9.1 s / 6.0 GB |
+| `egglog --test files 'proofs/'` (206 tests) | 9.16 s / 6.06 GB | 8.96-9.22 s / 5.90-6.07 GB |
 
-Only functions the search actually consults are read, and the index dies with the
-`RootExtractor`, so the heavy fixture's peak RSS moves under 1%. The small corpus
-is unchanged either way: its tables are too small for the rescan to have
-dominated.
+Read the whole-suite RSS as unchanged: it is the peak of whichever tests happen
+to overlap, and the heavy one now finishes early. The single-fixture row is the
+one to trust, and it moves under 1% — only functions the search actually consults
+are read, and the index dies with the `RootExtractor`. The small corpus is
+unchanged either way: its tables are too small for the rescan to have dominated.
 
 ## Standing rules
 

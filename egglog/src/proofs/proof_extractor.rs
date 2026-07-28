@@ -2,8 +2,9 @@ use crate::ast::FunctionSubtype;
 use crate::extract::find_canonical;
 use crate::termdag::{TermDag, TermId};
 use crate::util::{HashMap, HashSet};
-use crate::{ArcSort, EGraph, Value};
+use crate::{ArcSort, EGraph, Function, Value};
 use egglog_backend_trait::BackendExt;
+use std::ops::Range;
 
 /// A node of the search: a value together with the sort it is reconstructed at.
 type Key = (Value, String);
@@ -21,6 +22,7 @@ type Key = (Value, String);
 struct RootExtractor {
     cache: HashMap<Key, Option<TermId>>,
     active: HashSet<Key>,
+    scanned: ScannedRows,
 }
 
 /// What the frame on top of the stack needs from the driver.
@@ -70,10 +72,105 @@ struct EqStage {
     unscanned: usize,
     /// The function `rows` and `row` come from.
     func: usize,
-    /// Matching rows of `func` not yet tried.
-    rows: std::vec::IntoIter<Vec<Value>>,
+    /// Positions in that function's [`FunctionRows`] ordering, holding the rows
+    /// that match the node's value and have not been tried yet.
+    rows: Range<usize>,
     /// The row being reconstructed, with the child terms resolved so far.
     row: Option<(Vec<Value>, Vec<TermId>)>,
+}
+
+/// The non-subsumed rows of one function, grouped by the value in its
+/// extraction output column.
+///
+/// A group's rows are in lexicographic order, so which row a search picks does
+/// not depend on the backend's row iteration order — see `prove_exists`.
+struct FunctionRows {
+    /// Row width; zero when the function has no rows.
+    arity: usize,
+    /// The rows, concatenated in the order the backend yielded them.
+    vals: Vec<Value>,
+    /// Row numbers into `vals`, ordered by output value and then by row
+    /// contents, so each group is a contiguous run.
+    order: Vec<u32>,
+    /// Where each output value's group sits in `order`.
+    groups: HashMap<Value, Range<usize>>,
+}
+
+impl FunctionRows {
+    fn build(egraph: &EGraph, func: &Function) -> Self {
+        let output_idx = func.extraction_output_index();
+        let mut arity = 0;
+        let mut vals = Vec::new();
+        egraph
+            .backend
+            .for_each(func.backend_id, |row: egglog_bridge::ScanEntry| {
+                if !row.subsumed {
+                    arity = row.vals.len();
+                    vals.extend_from_slice(row.vals);
+                }
+            });
+        vals.shrink_to_fit();
+
+        let count = if arity == 0 { 0 } else { vals.len() / arity };
+        let mut order: Vec<u32> = (0..count as u32).collect();
+        order.sort_unstable_by(|&a, &b| {
+            let a = &vals[a as usize * arity..][..arity];
+            let b = &vals[b as usize * arity..][..arity];
+            // Group by output value; order a group lexicographically by whole row.
+            a[output_idx].cmp(&b[output_idx]).then_with(|| a.cmp(b))
+        });
+
+        let mut groups: HashMap<Value, Range<usize>> = HashMap::default();
+        let mut start = 0;
+        while start < order.len() {
+            let value = vals[order[start] as usize * arity + output_idx];
+            let mut end = start + 1;
+            while end < order.len() && vals[order[end] as usize * arity + output_idx] == value {
+                end += 1;
+            }
+            groups.insert(value, start..end);
+            start = end;
+        }
+
+        Self {
+            arity,
+            vals,
+            order,
+            groups,
+        }
+    }
+
+    /// The row at `position` in the ordering.
+    fn row(&self, position: usize) -> &[Value] {
+        let start = self.order[position] as usize * self.arity;
+        &self.vals[start..start + self.arity]
+    }
+
+    /// Where the rows holding `value` in the output column sit in the ordering.
+    fn group(&self, value: Value) -> Range<usize> {
+        self.groups.get(&value).cloned().unwrap_or(0..0)
+    }
+}
+
+/// Every function the search has read so far, keyed by its index in
+/// `EGraph::functions`. Scoped to one extraction run.
+#[derive(Default)]
+struct ScannedRows(HashMap<usize, FunctionRows>);
+
+impl ScannedRows {
+    /// The rows of `func`, reading them from the backend on first use.
+    fn scan(&mut self, egraph: &EGraph, index: usize, func: &Function) -> &FunctionRows {
+        self.0
+            .entry(index)
+            .or_insert_with(|| FunctionRows::build(egraph, func))
+    }
+
+    /// The rows of a function [`Self::scan`] has already read.
+    fn rows(&self, index: usize) -> &FunctionRows {
+        self.0
+            .get(&index)
+            .expect("the function whose rows are being tried was scanned")
+    }
 }
 
 /// How a frame's state machine continues after one turn.
@@ -91,17 +188,27 @@ impl EqStage {
         Self {
             unscanned: 0,
             func: 0,
-            rows: Vec::new().into_iter(),
+            rows: 0..0,
             row: None,
         }
     }
 
-    /// The next row to try for `value` at `sort`, scanning further functions once
-    /// the current one's rows run out.
-    fn next_row(&mut self, egraph: &EGraph, value: Value, sort: &ArcSort) -> Option<Vec<Value>> {
+    /// The next row to try for `value` at `sort`, moving on to further functions
+    /// once the current one's matching rows run out.
+    ///
+    /// Rows come back lexicographically smallest first, so the reconstruction the
+    /// search settles on does not depend on the backend's (possibly
+    /// nondeterministic) row iteration order — see `prove_exists`.
+    fn next_row(
+        &mut self,
+        egraph: &EGraph,
+        scanned: &mut ScannedRows,
+        value: Value,
+        sort: &ArcSort,
+    ) -> Option<Vec<Value>> {
         loop {
-            if let Some(row) = self.rows.next() {
-                return Some(row);
+            if let Some(position) = self.rows.next() {
+                return Some(scanned.rows(self.func).row(position).to_vec());
             }
 
             let (_, func) = egraph.functions.get_index(self.unscanned)?;
@@ -118,20 +225,7 @@ impl EqStage {
                 continue;
             }
 
-            let output_idx = func.extraction_output_index();
-            let mut matching_rows = Vec::new();
-            egraph
-                .backend
-                .for_each(func.backend_id, |row: egglog_bridge::ScanEntry| {
-                    if !row.subsumed && row.vals[output_idx] == value {
-                        matching_rows.push(row.vals.to_vec());
-                    }
-                });
-            // Reconstruct from the lexicographically-smallest matching row so the
-            // chosen term does not depend on the backend's (possibly nondeterministic)
-            // row iteration order — see `prove_exists`.
-            matching_rows.sort();
-            self.rows = matching_rows.into_iter();
+            self.rows = scanned.scan(egraph, self.func, func).group(value);
         }
     }
 }
@@ -142,6 +236,7 @@ impl Frame {
     fn advance(
         &mut self,
         egraph: &EGraph,
+        scanned: &mut ScannedRows,
         termdag: &mut TermDag,
         resumed: Option<Option<TermId>>,
     ) -> Step {
@@ -216,7 +311,7 @@ impl Frame {
                                 ))
                             }
                         }
-                        None => match eq.next_row(egraph, self.value, &self.sort) {
+                        None => match eq.next_row(egraph, scanned, self.value, &self.sort) {
                             Some(row) => {
                                 eq.row = Some((row, Vec::new()));
                                 continue;
@@ -253,6 +348,7 @@ impl RootExtractor {
         Self {
             cache: Default::default(),
             active: Default::default(),
+            scanned: Default::default(),
         }
     }
 
@@ -292,7 +388,7 @@ impl RootExtractor {
             let step = stack
                 .last_mut()
                 .expect("the loop returns as soon as the stack empties")
-                .advance(egraph, termdag, resumed.take());
+                .advance(egraph, &mut self.scanned, termdag, resumed.take());
             match step {
                 Step::Need(value, sort) => match self.begin(value, sort) {
                     Begin::Push(frame) => stack.push(frame),
