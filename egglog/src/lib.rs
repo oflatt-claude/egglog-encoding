@@ -3395,6 +3395,16 @@ impl<'a> BackendRule<'a> {
         let Some(core::GenericAtomTerm::Var(span, value)) = atom.args.first() else {
             return Ok(());
         };
+        // The value may sit at a column of this very atom, which both binds it and
+        // makes the occurrence redundant — the atom is then an ordinary one.
+        if atom
+            .args
+            .iter()
+            .skip(1)
+            .any(|arg| matches!(arg, core::GenericAtomTerm::Var(_, v) if v.name == value.name))
+        {
+            return Ok(());
+        }
         let bound_elsewhere = query.atoms.iter().any(|other| {
             !std::ptr::eq(other, atom)
                 && !matches!(&other.head,

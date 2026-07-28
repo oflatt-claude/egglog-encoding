@@ -870,12 +870,17 @@ impl<'a> JoinState<'a> {
         }
     }
 
+    /// The index a scan of `atom` by `cols` reads. `occurrence` says which of the
+    /// two questions the probe asks — whether the value sits at those columns, or
+    /// occurs among them — which `cols` alone cannot express (an ordinary
+    /// variable repeated across exactly the indexed columns looks identical).
     fn get_index(
         &self,
         atoms: &Arc<DenseIdMap<AtomId, Atom>>,
         atom: AtomId,
         binding_info: &mut BindingInfo,
         cols: impl Iterator<Item = ColumnId>,
+        occurrence: bool,
     ) -> Prober {
         let cols = SmallVec::<[ColumnId; 4]>::from_iter(cols);
         let trie_node = binding_info.subsets.unwrap_val(atom);
@@ -886,33 +891,7 @@ impl<'a> JoinState<'a> {
         // An occurrence atom indexes several columns but is probed with a single
         // value (the one occurring in any of them), so it takes the column-index
         // path regardless of how many columns it covers.
-        // The column set is what marks an occurrence probe: an atom's occurrence
-        // variable is indexed by exactly its occurrence columns, and every other
-        // variable of that atom by the single column it occupies. Probing by one
-        // of those columns for an ordinary variable is therefore an ordinary
-        // probe, and falls through.
-        //
-        // A probe spanning the occurrence columns *and more* is the one case the
-        // set cannot express: it wants rows where the value occurs among some
-        // columns and another variable sits at a further one, which no single
-        // index answers — a tuple index over the union would read the occurrence
-        // columns conjunctively and quietly drop rows. Generic join does not
-        // produce such a probe; refuse it rather than answer it wrongly.
-        if let Some(occ) = atoms[atom].occurrence.as_ref()
-            && occ.cols.len() < cols.len()
-            && occ.cols.iter().all(|c| cols.contains(c))
-        {
-            panic!(
-                "unsupported plan: an occurrence atom is probed by {cols:?}, which spans \
-                 its indexed columns {:?} and others",
-                occ.cols
-            );
-        }
-        if atoms[atom]
-            .occurrence
-            .as_ref()
-            .is_some_and(|occ| occ.cols.as_slice() == cols.as_slice())
-        {
+        if occurrence {
             let all_cacheable = cols.iter().all(|col| {
                 !info
                     .spec
@@ -1006,7 +985,7 @@ impl<'a> JoinState<'a> {
         atom: AtomId,
         col: ColumnId,
     ) -> Prober {
-        self.get_index(atoms, atom, binding_info, iter::once(col))
+        self.get_index(atoms, atom, binding_info, iter::once(col), false)
     }
 
     /// The index a generic-join scan reads: the occurrence index over the whole
@@ -1019,7 +998,9 @@ impl<'a> JoinState<'a> {
         scan: &SingleScanSpec,
     ) -> Prober {
         match &scan.occurrence_cols {
-            Some(cols) => self.get_index(atoms, scan.atom, binding_info, cols.iter().copied()),
+            Some(cols) => {
+                self.get_index(atoms, scan.atom, binding_info, cols.iter().copied(), true)
+            }
             None => self.get_column_index(atoms, binding_info, scan.atom, scan.column),
         }
     }
@@ -1605,6 +1586,7 @@ impl<'a> JoinState<'a> {
                                 spec.to_index.atom,
                                 binding_info,
                                 spec.to_index.vars.iter().copied(),
+                                spec.occurrence_cols.is_some(),
                             ),
                         )
                     })
@@ -1789,6 +1771,7 @@ impl<'a> JoinState<'a> {
                             spec.to_index.atom,
                             binding_info,
                             spec.to_index.vars.iter().copied(),
+                            spec.occurrence_cols.is_some(),
                         )
                     })
                     .collect::<SmallVec<[Prober; 4]>>();

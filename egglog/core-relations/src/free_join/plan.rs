@@ -71,6 +71,11 @@ pub(crate) struct ScanSpec {
     pub to_index: SubAtom,
     // Only yield rows where the given constraints match.
     pub constraints: Vec<Constraint>,
+    /// Set when this scan reaches the atom through its occurrence variable: the
+    /// columns to read disjunctively. Distinguishes the two questions a probe can
+    /// ask — "which rows hold this value at this column" and "which rows mention
+    /// it among these columns" — which the column set alone cannot.
+    pub occurrence_cols: Option<SmallVec<[ColumnId; 4]>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -157,6 +162,19 @@ pub(crate) enum JoinStage {
         bind: SmallVec<[(ColumnId, Variable); 2]>,
         to_intersect: Vec<(ScanSpec, SmallVec<[ColumnId; 2]>)>,
     },
+}
+
+/// The occurrence columns this subatom reads, if it is the atom's occurrence
+/// variable rather than one of its column variables.
+fn occurrence_cols_of(
+    atoms: &DenseIdMap<AtomId, Atom>,
+    subatom: &SubAtom,
+) -> Option<SmallVec<[ColumnId; 4]>> {
+    atoms[subatom.atom]
+        .occurrence
+        .as_ref()
+        .filter(|occ| occ.cols.as_slice() == subatom.vars.as_slice())
+        .map(|occ| occ.cols.clone())
 }
 
 /// Merge every `FusedIntersect { to_intersect: [] }` into the first earlier such stage on the
@@ -935,6 +953,11 @@ fn plan_single_bag(
                                             vars: smallvec![],
                                         },
                                         constraints: vec![],
+                                        // This path merges subatoms across an
+                                        // atom's variables, which an occurrence
+                                        // read cannot share; such a query is
+                                        // planned without decomposition.
+                                        occurrence_cols: None,
                                     },
                                     smallvec![],
                                 ));
@@ -1621,11 +1644,7 @@ fn compile_stage(
                     // A subatom whose columns are the atom's occurrence set binds
                     // the occurrence variable, so the scan reads them
                     // disjunctively instead of collapsing to `vars[0]`.
-                    let occurrence_cols = ctx.atoms[atom]
-                        .occurrence
-                        .as_ref()
-                        .filter(|occ| occ.cols.as_slice() == subatom.vars.as_slice())
-                        .map(|occ| occ.cols.clone());
+                    let occurrence_cols = occurrence_cols_of(&ctx.atoms, subatom);
                     SingleScanSpec {
                         atom,
                         column: subatom.vars[0],
@@ -1645,6 +1664,7 @@ fn compile_stage(
     let atom = cover.atom;
 
     let cover_spec = ScanSpec {
+        occurrence_cols: occurrence_cols_of(&ctx.atoms, &cover),
         to_index: cover,
         constraints: take_atom_constraints_if_new(ctx, state, atom),
     };
@@ -1667,6 +1687,7 @@ fn compile_stage(
     for (subatom, key_spec) in filters {
         let atom = subatom.atom;
         let scan = ScanSpec {
+            occurrence_cols: occurrence_cols_of(&ctx.atoms, &subatom),
             to_index: subatom,
             constraints: take_atom_constraints_if_new(ctx, state, atom),
         };
