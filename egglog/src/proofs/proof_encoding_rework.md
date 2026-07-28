@@ -187,6 +187,12 @@ site forces the same conclusion, that merge is sound.
 
 * **No `proofs/` test may fail at any phase.** That corpus is the only oracle
   for "same user-facing proof format".
+* **View row counts must not move.** The `print-size` output in
+  `files__shared_snapshot_*.snap` is the e-graph itself; this rework touches
+  only proof tables, so any change there is a bug, not churn to bless. Proof
+  *node* counts may move — the hash-consing key changes as columns come and go —
+  but a view count changing means the e-graph diverged. Across phases 0–2a,
+  zero shared snapshots changed; keep it that way.
 * **Term mode may break**, and is repaired in phase 5.
 * Everything switched off for the rework hangs off `PROOF_REWORK_IN_PROGRESS`
   so the set is greppable from one place.
