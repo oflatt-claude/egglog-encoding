@@ -14,7 +14,10 @@ use crate::{
         ResolvedNCommand,
     },
     core::ResolvedCall,
-    proofs::proof_format::{Justification, ProofId, ProofStore, Proposition},
+    proofs::{
+        proof_format::{Justification, ProofId, ProofStore, Proposition},
+        proof_sites::{SiteConclusion, SiteIndex, conclusion_sites},
+    },
     typechecking::FuncType,
     util::{HashMap, HashSet, IndexMap, SymbolGen},
 };
@@ -47,6 +50,9 @@ pub(crate) struct ActionContext {
     pub var_bindings: HashMap<String, TermId>,
     /// Propositions (equalities) implied by the actions
     pub propositions: HashSet<Proposition>,
+    /// The proposition each conclusion site concludes, in the canonical order of
+    /// [`conclusion_sites`]. Every entry is also in `propositions`.
+    pub site_propositions: Vec<(SiteIndex, Proposition)>,
 }
 
 /// Gathers all global CoreActions from a program.
@@ -100,6 +106,10 @@ pub(crate) fn run_merge(
 ///    - Reflexive equalities for all subterms
 ///    - Ground equalities from union statements (bidirectional)
 ///    - Reflexive equalities from set statements
+/// 3. The proposition each of the actions' [`conclusion_sites`] concludes.
+///
+/// Each site is resolved under the bindings in effect at its action, so a `let`
+/// binds only for the sites that follow it.
 pub(crate) fn process_actions(
     rule_name: &str,
     mut bindings: HashMap<String, TermId>,
@@ -107,57 +117,47 @@ pub(crate) fn process_actions(
     term_dag: &mut TermDag,
 ) -> Result<ActionContext, ProofCheckError> {
     let mut propositions = HashSet::default();
+    let sites = conclusion_sites(actions.iter().copied());
+    let mut site_propositions = Vec::with_capacity(sites.len());
+    let mut next_site = 0;
 
-    // Single pass: process all actions, accumulating bindings and propositions
-    for action in actions {
-        match action {
-            GenericAction::Let(_, var, expr) => {
-                // Evaluate the expression and collect propositions
-                let (term_id, new_props) =
-                    eval_expr_with_subst(rule_name, expr, term_dag, &bindings)?;
-                bindings.insert(var.name.clone(), term_id);
-                propositions.extend(new_props);
-            }
-            GenericAction::Union(_, lhs_expr, rhs_expr) => {
-                // Union creates ground equalities
-                let (lhs_term, lhs_props) =
-                    eval_expr_with_subst(rule_name, lhs_expr, term_dag, &bindings)?;
-                let (rhs_term, rhs_props) =
-                    eval_expr_with_subst(rule_name, rhs_expr, term_dag, &bindings)?;
+    for (index, action) in actions.iter().enumerate() {
+        while let Some(site) = sites.get(next_site).filter(|site| site.action == index) {
+            let prop = match &site.conclusion {
+                SiteConclusion::Reflexive(expr) => {
+                    let (term, new_props) =
+                        eval_expr_with_subst(rule_name, expr, term_dag, &bindings)?;
+                    propositions.extend(new_props);
+                    Proposition::new(term, term)
+                }
+                SiteConclusion::Equality(lhs_expr, rhs_expr) => {
+                    let (lhs_term, lhs_props) =
+                        eval_expr_with_subst(rule_name, lhs_expr, term_dag, &bindings)?;
+                    let (rhs_term, rhs_props) =
+                        eval_expr_with_subst(rule_name, rhs_expr, term_dag, &bindings)?;
+                    propositions.extend(lhs_props);
+                    propositions.extend(rhs_props);
+                    // A union implies its equality in both directions; the site
+                    // names the one written.
+                    propositions.insert(Proposition::new(lhs_term, rhs_term));
+                    propositions.insert(Proposition::new(rhs_term, lhs_term));
+                    Proposition::new(lhs_term, rhs_term)
+                }
+            };
+            site_propositions.push((site.index, prop));
+            next_site += 1;
+        }
 
-                // Collect propositions from evaluating both sides
-                propositions.extend(lhs_props);
-                propositions.extend(rhs_props);
-                // Store both directions of the equality
-                propositions.insert(Proposition::new(lhs_term, rhs_term));
-                propositions.insert(Proposition::new(rhs_term, lhs_term));
-            }
-            GenericAction::Set(_, func, args, rhs) => {
-                // Set creates reflexive equality for the resulting term
-                let mut all_args = args.to_vec();
-                all_args.push(rhs.clone());
-                let call_expr = ResolvedExpr::Call(crate::ast::Span::Panic, func.clone(), all_args);
-                let (_term, new_props) =
-                    eval_expr_with_subst(rule_name, &call_expr, term_dag, &bindings)?;
-                propositions.extend(new_props);
-            }
-            GenericAction::Expr(_, expr) => {
-                // Expr creates reflexive equality for its result
-                let (_, new_props) = eval_expr_with_subst(rule_name, expr, term_dag, &bindings)?;
-                propositions.extend(new_props);
-            }
-            GenericAction::Panic(_, _) => {
-                // Panics do not create propositions
-            }
-            GenericAction::Change(_, _, _, _) => {
-                // Changes do not create propositions
-            }
+        if let GenericAction::Let(_, var, expr) = action {
+            let (term_id, _) = eval_expr_with_subst(rule_name, expr, term_dag, &bindings)?;
+            bindings.insert(var.name.clone(), term_id);
         }
     }
 
     Ok(ActionContext {
         var_bindings: bindings,
         propositions,
+        site_propositions,
     })
 }
 
@@ -1288,6 +1288,19 @@ impl ProofStore {
         // Check if the claimed equality is in the propositions
         if action_ctx.propositions.contains(claimed) {
             return Ok(());
+        }
+
+        for (site, (index, prop)) in conclusion_sites(rule.head.0.iter())
+            .iter()
+            .zip(&action_ctx.site_propositions)
+        {
+            log::debug!(
+                "rule '{rule_name}' site {} concludes {} = {} at {}",
+                index.0,
+                format_term(&self.term_dag, prop.lhs()),
+                format_term(&self.term_dag, prop.rhs()),
+                site.location(),
+            );
         }
 
         Err(ProofCheckErrorKind::RuleHeadMismatch {

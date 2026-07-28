@@ -1,11 +1,14 @@
 #[cfg(test)]
 mod tests {
     use crate::ast::{
-        Literal, ResolvedAction, ResolvedCommand, ResolvedExpr, RuleEvalMode,
-        sanitize_internal_names,
+        GenericAction, GenericNCommand, Literal, ResolvedAction, ResolvedCommand, ResolvedExpr,
+        RuleEvalMode, sanitize_internal_names,
     };
     use crate::core::ResolvedCall;
+    use crate::proofs::proof_checker::process_actions;
     use crate::proofs::proof_extraction::ProveExistsError;
+    use crate::proofs::proof_sites::{ConclusionSite, SiteConclusion, SiteIndex, conclusion_sites};
+    use crate::util::{HashMap, HashSet};
     use crate::{
         CommandOutput, EGraph, Error, ProofEncodingUnsupportedReason, TermDag, TermId,
         add_primitive_with_validator,
@@ -14,6 +17,218 @@ mod tests {
     fn term_encode(source: &str) -> Vec<ResolvedCommand> {
         let mut egraph = crate::EGraph::new_with_term_encoding();
         egraph.resolve_program(None, source).unwrap()
+    }
+
+    /// Render what each site concludes, in the order it was enumerated.
+    fn describe_sites(sites: &[ConclusionSite<'_>]) -> Vec<String> {
+        sites
+            .iter()
+            .map(|site| match &site.conclusion {
+                SiteConclusion::Reflexive(expr) => format!("exists {expr}"),
+                SiteConclusion::Equality(lhs, rhs) => format!("equal {lhs} {rhs}"),
+            })
+            .collect()
+    }
+
+    /// The site descriptions a rule head must produce, derived independently of
+    /// `conclusion_sites`: actions in order, each contributing the pre-order of
+    /// its expressions, and a `union` also contributing its equality first.
+    fn expected_site_descriptions(actions: &[ResolvedAction]) -> Vec<String> {
+        fn preorder(expr: &ResolvedExpr, out: &mut Vec<String>) {
+            out.push(format!("exists {expr}"));
+            if let ResolvedExpr::Call(_, _, args) = expr {
+                for arg in args {
+                    preorder(arg, out);
+                }
+            }
+        }
+        let mut out = vec![];
+        for action in actions {
+            match action {
+                GenericAction::Let(_, _, expr) | GenericAction::Expr(_, expr) => {
+                    preorder(expr, &mut out)
+                }
+                GenericAction::Union(_, lhs, rhs) => {
+                    out.push(format!("equal {lhs} {rhs}"));
+                    preorder(lhs, &mut out);
+                    preorder(rhs, &mut out);
+                }
+                GenericAction::Set(span, func, args, value) => {
+                    let mut row = args.to_vec();
+                    row.push(value.clone());
+                    let row = ResolvedExpr::Call(span.clone(), func.clone(), row);
+                    out.push(format!("exists {row}"));
+                    for arg in args {
+                        preorder(arg, &mut out);
+                    }
+                    preorder(value, &mut out);
+                }
+                GenericAction::Panic(..) | GenericAction::Change(..) => {}
+            }
+        }
+        out
+    }
+
+    /// Stand a distinct constant in for every variable a rule head reads but
+    /// does not itself bind, so the head can be processed without a match.
+    fn head_input_bindings(
+        actions: &[ResolvedAction],
+        term_dag: &mut TermDag,
+    ) -> HashMap<String, TermId> {
+        fn read(expr: &ResolvedExpr, bound: &HashSet<String>, inputs: &mut Vec<String>) {
+            expr.visit_vars(&mut |_, var| {
+                if !bound.contains(&var.name) && !inputs.contains(&var.name) {
+                    inputs.push(var.name.clone());
+                }
+            });
+        }
+        let mut bound: HashSet<String> = HashSet::default();
+        let mut inputs = vec![];
+        for action in actions {
+            match action {
+                GenericAction::Let(_, var, expr) => {
+                    read(expr, &bound, &mut inputs);
+                    bound.insert(var.name.clone());
+                }
+                GenericAction::Expr(_, expr) => read(expr, &bound, &mut inputs),
+                GenericAction::Union(_, lhs, rhs) => {
+                    read(lhs, &bound, &mut inputs);
+                    read(rhs, &bound, &mut inputs);
+                }
+                GenericAction::Set(_, _, args, value) => {
+                    for arg in args {
+                        read(arg, &bound, &mut inputs);
+                    }
+                    read(value, &bound, &mut inputs);
+                }
+                GenericAction::Panic(..) | GenericAction::Change(..) => {}
+            }
+        }
+        inputs
+            .into_iter()
+            .map(|name| {
+                let term = term_dag.app(name.clone(), vec![]);
+                (name, term)
+            })
+            .collect()
+    }
+
+    /// A rule head's conclusion sites are the one enumeration the proof checker
+    /// and the proof encoder both index into, so nothing may recompute the
+    /// order. Pin it: the sites are exactly the pre-order of each action's
+    /// expressions (plus one equality per `union`), they are numbered densely
+    /// from zero, and processing the head resolves each of them, in that same
+    /// order, to a proposition the head implies.
+    #[test]
+    fn conclusion_sites_index_every_rule_head_proposition() {
+        let source = r#"
+            (datatype Math (Num i64) (Add Math Math) (Neg Math))
+            (relation Seen (Math))
+            (function Cost (Math) i64 :no-merge)
+
+            (Add (Num 1) (Num 2))
+
+            (rule ((= e (Add a b)))
+                  ((union e (Add b a)))
+                  :name "commute")
+
+            (rule ((= e (Add a b)))
+                  ((let inner (Neg a))
+                   (let outer (Add inner b))
+                   (union e outer)
+                   (Seen outer))
+                  :name "nest")
+
+            (rule ((= e (Num n)))
+                  ((set (Cost e) 1))
+                  :name "cost")
+
+            (run 2)
+            (prove (= (Add (Num 1) (Num 2)) (Add (Num 2) (Num 1))))
+        "#;
+
+        let mut egraph = EGraph::new_with_proofs();
+        egraph.parse_and_run_program(None, source).unwrap();
+
+        let rules: Vec<_> = egraph
+            .proof_check_program
+            .iter()
+            .filter_map(|cmd| match cmd {
+                GenericNCommand::NormRule { rule } => Some(rule),
+                _ => None,
+            })
+            .collect();
+        let names: Vec<_> = rules.iter().map(|rule| rule.name.as_str()).collect();
+        for expected in ["commute", "nest", "cost"] {
+            assert!(
+                names.contains(&expected),
+                "rule '{expected}' not in {names:?}"
+            );
+        }
+
+        for rule in rules {
+            let actions = &rule.head.0;
+            let sites = conclusion_sites(actions.iter());
+            let described = describe_sites(&sites);
+
+            assert_eq!(
+                described,
+                expected_site_descriptions(actions),
+                "rule '{}' enumerates the wrong conclusion sites",
+                rule.name
+            );
+            assert_eq!(
+                described,
+                describe_sites(&conclusion_sites(actions.iter())),
+                "rule '{}' enumerates its conclusion sites differently each time",
+                rule.name
+            );
+            for (position, site) in sites.iter().enumerate() {
+                assert_eq!(
+                    site.index,
+                    SiteIndex(position),
+                    "rule '{}' site indices are not dense and in order",
+                    rule.name
+                );
+            }
+
+            let mut term_dag = TermDag::default();
+            let inputs = head_input_bindings(actions, &mut term_dag);
+            let action_refs: Vec<_> = actions.iter().collect();
+            let ctx = process_actions(&rule.name, inputs.clone(), &action_refs, &mut term_dag)
+                .unwrap_or_else(|e| panic!("rule '{}' head did not process: {e}", rule.name));
+
+            assert_eq!(
+                ctx.site_propositions.len(),
+                sites.len(),
+                "rule '{}' resolved a different number of sites than it enumerates",
+                rule.name
+            );
+            for (site, (index, prop)) in sites.iter().zip(&ctx.site_propositions) {
+                let site_name = format!("rule '{}' site {}", rule.name, index.0);
+                assert_eq!(site.index, *index, "{site_name} resolved out of order");
+                assert!(
+                    ctx.propositions.contains(prop),
+                    "{site_name} concluded a proposition the head does not imply"
+                );
+                match &site.conclusion {
+                    SiteConclusion::Reflexive(_) => {
+                        assert_eq!(prop.lhs(), prop.rhs(), "{site_name} is not reflexive")
+                    }
+                    // An equality site concludes its operands in the order written.
+                    SiteConclusion::Equality(ResolvedExpr::Var(_, var), _)
+                        if inputs.contains_key(&var.name) =>
+                    {
+                        assert_eq!(
+                            Some(prop.lhs()),
+                            inputs.get(&var.name).copied(),
+                            "{site_name} concluded its operands in the wrong order"
+                        )
+                    }
+                    SiteConclusion::Equality(..) => {}
+                }
+            }
+        }
     }
 
     /// The proof encoder reads body variables' `term_proof`s from the RHS via
