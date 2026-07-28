@@ -97,6 +97,39 @@ skeleton is still present to compare against.
 | 4 | rebuilding → `RebuildN` | ditto |
 | 5 | re-enable CSE after encoding, repair term mode, re-measure | nothing left behind the switch |
 
+### Sequenced plan from here
+
+1. **Index proof extraction.** `extract_eq` rescans every candidate function's
+   every row once per extracted node, so extraction is O(nodes x rows). Build the
+   output-value index once per run. This is pre-existing, not caused by the
+   rework — phase 2b only raised the node count enough to expose it.
+2. **Then decide about connectors, not before.** The cumulative bridge list
+   costs no rows (the two lists share cells) but grows with nesting. Giving each
+   build site its own connector row bounds it to `children + 1`, at one row per
+   site — flat `rewrite` unchanged at 6, nested ~14 instead of 13. Only pay that
+   if step 1 leaves deep terms expensive; if extraction goes linear the depth
+   stops mattering.
+3. **Port the two collapses dropped when this branch was cut.** Both were
+   implemented and verified on `reduce-proof-writes`: fused `Rule0..Rule4`
+   carrying premises inline (`b347bb5`, removes `PNil` + `PCons`) and the
+   reflexive `Sym`/`Trans` collapse (`0b79259`, `6dd5366`). Together they take a
+   `rewrite` firing from 6 rows to 2. Note the fused arity must also cover the
+   bridges, which is the same change as step 2 — decide them together.
+4. **Phase 3, `@Ast`.** Narrower than first scoped: merge bodies already mint
+   none, and top-level actions need a program-site index first.
+5. **Phases 4 and 5.** `RebuildN`; then re-enable CSE after encoding, repair
+   term mode, re-measure.
+
+Row budget for `(rewrite (Add a b) (Add b a))`: 13 at the branch point, 8 today
+(6 proof + 2 `@Ast`), 2 if all of the above lands.
+
+**Open question, unresolved.** Nobody has traced how the bridge list reaches
+~2000 cells on `eggcc_2mm_pass1`. A single head's list is bounded by its own
+nesting, since the interned subterms are statically known — so either those
+generated heads are far deeper than expected, or the depth accumulates across
+chained firings. It matters: if it is cross-firing, bounding the per-head list
+buys much less than step 2 assumes.
+
 ### Why phase 2 is split
 
 Adding the index and deleting the emission are separable, and each fails
@@ -312,6 +345,36 @@ a synthetic chain of ~2000 rule firings overflows. That shape is nothing the
 corpus or this fixture reaches — both leave it two orders of magnitude of headroom
 — but it is the next thing to give.
 
+#### Extraction rescanned every candidate table once per node
+
+The 201 s above was not the cost of reading a bigger proof; it was the bigger
+proof multiplied by a pre-existing rescan. `RootExtractor`'s `Stage::Eq` search
+ran a full `for_each` over every candidate function's rows *per extracted node*
+and sorted the matches, so extraction cost `O(nodes x rows)`. Phase 2b raised the
+node count enough to make that term dominate.
+
+Each candidate function is now read once per extraction run into `ScannedRows`:
+its non-subsumed rows concatenated into one `Vec<Value>`, a permutation ordering
+them by output value and then by whole row, and a map from output value to that
+group's range in the permutation. The search takes rows from the group instead of
+rescanning. A group is still in whole-row lexicographic order, so the row it picks
+is the one the per-node sort picked; the `proofs/` snapshots are the oracle for
+that, and none moved.
+
+Measured `--release` on a 128-core box at load ~23, wall time of the test phase
+and peak child RSS:
+
+| | before | after |
+| --- | --- | --- |
+| `egglog-experimental --test files` (46 tests) | 200.4 s / 5.36 GB | 29.3 s / 4.29 GB |
+| `proofs/eggcc_2mm_pass1_proof_testing` alone | 202.8 s / 3.26 GB | 31.6 s / 3.29 GB |
+| `egglog --test files 'proofs/'` (206 tests) | 9.16 s / 6.06 GB | 9.1 s / 6.0 GB |
+
+Only functions the search actually consults are read, and the index dies with the
+`RootExtractor`, so the heavy fixture's peak RSS moves under 1%. The small corpus
+is unchanged either way: its tables are too small for the rescan to have
+dominated.
+
 ## Standing rules
 
 * **No `proofs/` test may fail at any phase.** That corpus is the only oracle
@@ -392,9 +455,10 @@ re-enabling it after encoding.
 
 **Collapse the skeleton the encoder statically knows is the identity.** Phase 2b
 deletes these four composites from rule heads outright, so what follows applies
-only to the paths it leaves alone — top-level actions (`Fiat`) and merge bodies
-(`MergeIdx`), which state their own conclusions and so cannot be collapsed into a
-site. Whether
+only to the paths it leaves alone — top-level actions (`Fiat`), which are **not
+sited yet** rather than unsiteable: the design gives them a program-site index,
+the same mechanism extended from rule heads to top-level forms. Merge bodies
+(`MergeIdx`) need nothing — they already mint no `@Ast` at all. Whether
 `build_natural_with_congr` emits a `Congr` chain at all is decided at encoding
 time — a child contributes a step only if it has a `NatConn` connector. With no
 chain, `nat_to_dedup` *is* the natural node's reflexive term proof, so four
