@@ -257,5 +257,5 @@ expression: proof_snapshot
           (t2 (Type "struct s")))))
     (Fiat (= () ())))
   (substitution
-    (@v3442 (expr-points-to (Expr "u")))
-    (@v3443 (expr-points-to (Expr "sp")))))
+    (@v (expr-points-to (Expr "u")))
+    (@v1 (expr-points-to (Expr "sp")))))

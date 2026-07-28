@@ -35,8 +35,12 @@ This rework generalizes that from merge bodies to rule bodies.
 
 ## Design
 
-* **Rule proof:** `RuleN(p1 … pN)` plus a conclusion-site index. Homogeneous
-  `Proof` columns only.
+* **Rule proof:** `RuleN(body premises …, interned-subterm view proofs …)` plus
+  a conclusion-site index, split at `rule.body.len()`. Homogeneous `Proof`
+  columns only. The subterm view proofs are **not optional** — see the
+  canonicalization bridge under phase 2b: a head that interns a subterm into an
+  existing e-class needs that e-class's row proof, which is neither a site of
+  the head nor one of its premises. They are already read at no row cost.
 * **No `@Ast`.** Conclusions are derived, so terms need not be stored.
 * **No per-rule constructors.** Typed columns were only needed to carry
   computed base values; those are derivable, so the constructor stays generic
@@ -286,6 +290,12 @@ own hint decouples them, at the cost of one deliberate re-bless of those 7.
 
 * **No `proofs/` test may fail at any phase.** That corpus is the only oracle
   for "same user-facing proof format".
+* **A phase may change how many proof nodes it mints without moving a
+  snapshot.** `fresh_var` has its own `SymbolGen` hint, separate from the `"v"`
+  that `proof_normal_form` gives rule-body variables — those names are printed
+  in a proof's `substitution`, so a shared counter made every mint-count change
+  rewrite unrelated proof output. Verified by doubling every temporary and
+  observing zero snapshot changes. Keep them separate.
 * **View row counts must not move.** The `print-size` output in
   `files__shared_snapshot_*.snap` is the e-graph itself; this rework touches
   only proof tables, so any change there is a bug, not churn to bless. Proof

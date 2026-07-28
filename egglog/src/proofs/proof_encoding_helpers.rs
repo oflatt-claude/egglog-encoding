@@ -379,8 +379,16 @@ impl ProofInstrumentor<'_> {
         }
     }
 
+    /// A fresh name for an encoder temporary.
+    ///
+    /// Deliberately a different hint from the `"v"` that `proofs::proof_normal_form`
+    /// gives a rule's body variables. [`SymbolGen`] counts per hint, so sharing one
+    /// would make every body variable's number depend on how many temporaries the
+    /// encoder happened to mint — and those names are printed in a proof's
+    /// `substitution`, so changing the number of minted proof nodes would rewrite
+    /// unrelated proof output.
     pub(crate) fn fresh_var(&mut self) -> String {
-        self.egraph.parser.symbol_gen.fresh("v")
+        self.egraph.parser.symbol_gen.fresh("pv")
     }
 
     /// Header string for proof encoding, defining sorts and constructors.
