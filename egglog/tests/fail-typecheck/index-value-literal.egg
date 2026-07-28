@@ -1,0 +1,6 @@
+;; An index atom is probed by the value it is looked up by, so that value has
+;; to be a variable another atom binds -- a literal has nothing to probe from.
+(function w (i64 i64) i64 :merge old)
+(index WOcc w (any 0 1))
+(relation r (i64))
+(rule ((r y) (WOcc 5 p q s)) ((r p)))

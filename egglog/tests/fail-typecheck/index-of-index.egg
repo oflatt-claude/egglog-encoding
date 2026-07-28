@@ -1,0 +1,6 @@
+;; An index is a read-only view of a function's rows, not a function of its
+;; own, so there is nothing for a second index to read.
+(datatype M (N i64))
+(constructor lnk (M M) M)
+(index LnkOcc lnk (any 0 1))
+(index Nested LnkOcc (any 0))

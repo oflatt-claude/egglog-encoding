@@ -486,10 +486,10 @@ impl<'outer, 'a> QueryBuilder<'outer, 'a> {
             return Err(QueryError::EmptyOccurrenceIndex { table: table_id });
         }
         if let Some(col) = occurrence_cols.iter().find(|c| c.index() >= arity) {
-            return Err(QueryError::BadArity {
+            return Err(QueryError::OccurrenceColumnOutOfRange {
                 table: table_id,
-                expected: arity,
-                got: col.index() + 1,
+                column: col.index(),
+                arity,
             });
         }
         let atom_id = self.add_atom(table_id, vars, cs)?;
@@ -562,6 +562,13 @@ pub enum QueryError {
         "occurrence atom on table {table:?} also binds its indexed value at column {column}, which is not one of the indexed columns"
     )]
     OccurrenceVarAtUnindexedColumn { table: TableId, column: usize },
+
+    #[error("occurrence atom indexes column {column} of table {table:?}, which has arity {arity}")]
+    OccurrenceColumnOutOfRange {
+        table: TableId,
+        column: usize,
+        arity: usize,
+    },
 
     #[error("table {table:?} expected {expected:?} columns but got {got:?}")]
     BadArity {

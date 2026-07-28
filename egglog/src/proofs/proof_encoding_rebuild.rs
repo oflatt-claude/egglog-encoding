@@ -99,57 +99,50 @@ impl ProofInstrumentor<'_> {
         let mut rules = String::new();
         // One rule per rebuildable key column (re-keys the row via set + delete).
         for (i, ty) in types[..n_keys].iter().enumerate() {
-            let is_container = ty.is_eq_container_sort();
             // Eq-sort children take the index-driven rule below.
-            if !is_container {
+            if !ty.is_eq_container_sort() {
                 continue;
             }
             let ci = child(i);
             let canon = format!("c{i}_canon_");
             let (query_view, value_var, view_prf) = self.query_fd_view(&fdecl.name, &key_vars);
-            // Canonicalize the column with the container rebuild primitive or a `@UF`
-            // lookup, and build the proof pieces. Container-reading rules are `:naive`
-            // (the primitive reads `@UF` tables the rule doesn't join on).
-            let (canon_fact, proof_lets, pf_arg, cproof_set) = if is_container {
-                let value_prim = self.container_rebuild_prim(ty);
-                let canon_fact = format!("(= {canon} ({value_prim} {ci}))");
-                if proofs {
-                    let congr = self.proof_names().congr_constructor.clone();
-                    let trans = self.proof_names().eq_trans_constructor.clone();
-                    let sym = self.proof_names().eq_sym_constructor.clone();
-                    let proof_sort = self.proof_sort();
-                    let proof_prim = self.container_rebuild_proof_prim(ty);
-                    let rebuild_pf = self.fresh_var();
-                    let cproof = self.term_proof_name(ty.name());
-                    // proof_lets: bind the container rebuild proof, then mint the congr proof.
-                    let mut lets = vec![format!("(let {rebuild_pf} ({proof_prim} {ci}))")];
-                    let new_pf = self.mint(
-                        &mut lets,
-                        &congr,
-                        &format!("{view_prf} {i} {rebuild_pf}"),
-                        &proof_sort,
-                    );
-                    // cproof_set: mint (Sym rebuild_pf), (Trans .. rebuild_pf), then record it.
-                    let mut cproof_stmts = vec![];
-                    let sym_pf = self.mint(&mut cproof_stmts, &sym, &rebuild_pf, &proof_sort);
-                    let trans_pf = self.mint(
-                        &mut cproof_stmts,
-                        &trans,
-                        &format!("{sym_pf} {rebuild_pf}"),
-                        &proof_sort,
-                    );
-                    cproof_stmts.push(format!("(set ({cproof} {canon}) {trans_pf})"));
-                    (
-                        canon_fact,
-                        lets.join("\n                             "),
-                        new_pf,
-                        cproof_stmts.join("\n                             "),
-                    )
-                } else {
-                    (canon_fact, String::new(), "()".to_string(), String::new())
-                }
+            // Container-reading rules are `:naive` (the primitive reads `@UF`
+            // tables the rule doesn't join on).
+            let value_prim = self.container_rebuild_prim(ty);
+            let canon_fact = format!("(= {canon} ({value_prim} {ci}))");
+            let (proof_lets, pf_arg, cproof_set) = if proofs {
+                let congr = self.proof_names().congr_constructor.clone();
+                let trans = self.proof_names().eq_trans_constructor.clone();
+                let sym = self.proof_names().eq_sym_constructor.clone();
+                let proof_sort = self.proof_sort();
+                let proof_prim = self.container_rebuild_proof_prim(ty);
+                let rebuild_pf = self.fresh_var();
+                let cproof = self.term_proof_name(ty.name());
+                // proof_lets: bind the container rebuild proof, then mint the congr proof.
+                let mut lets = vec![format!("(let {rebuild_pf} ({proof_prim} {ci}))")];
+                let new_pf = self.mint(
+                    &mut lets,
+                    &congr,
+                    &format!("{view_prf} {i} {rebuild_pf}"),
+                    &proof_sort,
+                );
+                // cproof_set: mint (Sym rebuild_pf), (Trans .. rebuild_pf), then record it.
+                let mut cproof_stmts = vec![];
+                let sym_pf = self.mint(&mut cproof_stmts, &sym, &rebuild_pf, &proof_sort);
+                let trans_pf = self.mint(
+                    &mut cproof_stmts,
+                    &trans,
+                    &format!("{sym_pf} {rebuild_pf}"),
+                    &proof_sort,
+                );
+                cproof_stmts.push(format!("(set ({cproof} {canon}) {trans_pf})"));
+                (
+                    lets.join("\n                             "),
+                    new_pf,
+                    cproof_stmts.join("\n                             "),
+                )
             } else {
-                unreachable!("non-container children take the index-driven rule")
+                (String::new(), "()".to_string(), String::new())
             };
             let mut updated = key_vars.clone();
             updated[i] = canon.clone();
@@ -158,7 +151,7 @@ impl ProofInstrumentor<'_> {
             let actions = format!(
                 "{proof_lets}\n{updated_view}\n{cproof_set}\n(delete ({view_name} {keys_str}))"
             );
-            rules.push_str(&self.rebuild_rule(&facts, &actions, is_container));
+            rules.push_str(&self.rebuild_rule(&facts, &actions, /* naive */ true));
         }
         // FD view value column (see [`Self::fd_value_rebuild_rule`]). A
         // constructor/global's value *is* its e-class; a custom function's

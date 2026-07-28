@@ -92,6 +92,30 @@
 (check (selfcol $a $b $c))
 (fail (check (selfcol $b $b $c)))
 
+;; One index atom's probe value can come from the row another index atom
+;; binds; only a value bound by nothing but a probe is unusable.
+(relation chained (Math Math Math))
+(rule ((dirty x) (EdgeOcc x p q r) (EdgeOcc r ca cb cc))
+      ((chained ca cb cc)))
+
+;; A variable at exactly the indexed columns still means those columns are
+;; equal. The occurrence is `x`, and reading `p` disjunctively instead would
+;; report rows whose two inputs differ.
+(relation twocol (Math Math))
+(index EdgeIn edge (any 0 1))
+(rule ((dirty x) (EdgeIn x p p r)) ((twocol p r)))
+
+(set (edge $b $b) $a)
+(run 1)
+;; $b reaches edge($a,$b)=$c, whose output $c reaches every row holding $c.
+(check (chained $a $b $c))
+(check (chained $b $c $a))
+(check (chained $c $c $c))
+;; edge($b,$b)=$a is the only row with equal inputs that mentions $b.
+(check (twocol $b $a))
+(fail (check (twocol $a $c)))
+(fail (check (twocol $c $a)))
+
 ;; --- An index reads the same rows the function itself would ---------------
 
 ;; Subsumption is one of those rows' properties, so an ordinary rule must not

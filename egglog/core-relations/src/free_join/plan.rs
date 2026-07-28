@@ -163,16 +163,22 @@ pub(crate) enum JoinStage {
     },
 }
 
-/// The occurrence columns this subatom reads, if it is the atom's occurrence
-/// variable rather than one of its column variables.
+/// The occurrence columns this subatom reads, given the variables `vars` the
+/// stage binds from it, if it stands for the atom's occurrence variable rather
+/// than one of its column variables.
+///
+/// Columns alone do not tell the two apart: a variable repeated across exactly
+/// the indexed columns leaves the same footprint but constrains them to be
+/// equal, where the occurrence variable reads them disjunctively.
 fn occurrence_cols_of(
     atoms: &DenseIdMap<AtomId, Atom>,
     subatom: &SubAtom,
+    vars: &[Variable],
 ) -> Option<SmallVec<[ColumnId; 4]>> {
     atoms[subatom.atom]
         .occurrence
         .as_ref()
-        .filter(|occ| occ.cols.as_slice() == subatom.vars.as_slice())
+        .filter(|occ| vars.contains(&occ.var) && occ.cols.as_slice() == subatom.vars.as_slice())
         .map(|occ| occ.cols.clone())
 }
 
@@ -1640,10 +1646,9 @@ fn compile_stage(
                 .chain(filters.iter().map(|(x, _)| x))
                 .map(|subatom| {
                     let atom = subatom.atom;
-                    // A subatom whose columns are the atom's occurrence set binds
-                    // the occurrence variable, so the scan reads them
-                    // disjunctively instead of collapsing to `vars[0]`.
-                    let occurrence_cols = occurrence_cols_of(&ctx.atoms, subatom);
+                    // A subatom standing for the atom's occurrence variable is
+                    // read disjunctively instead of collapsing to `vars[0]`.
+                    let occurrence_cols = occurrence_cols_of(&ctx.atoms, subatom, &vars);
                     SingleScanSpec {
                         atom,
                         column: subatom.vars[0],
@@ -1663,13 +1668,13 @@ fn compile_stage(
     let atom = cover.atom;
 
     let cover_spec = ScanSpec {
-        occurrence_cols: occurrence_cols_of(&ctx.atoms, &cover),
+        occurrence_cols: occurrence_cols_of(&ctx.atoms, &cover, &vars),
         to_index: cover,
         constraints: take_atom_constraints_if_new(ctx, state, atom),
     };
 
     let mut bind = SmallVec::new();
-    for var in vars {
+    for &var in &vars {
         // Scanning a cover binds each variable from the column it occupies; an
         // occurrence variable has none, so a plan that covers it is unsupported.
         let col = ctx.atoms[atom].get_col(var).unwrap_or_else(|| {
@@ -1685,7 +1690,7 @@ fn compile_stage(
     for (subatom, key_spec) in filters {
         let atom = subatom.atom;
         let scan = ScanSpec {
-            occurrence_cols: occurrence_cols_of(&ctx.atoms, &subatom),
+            occurrence_cols: occurrence_cols_of(&ctx.atoms, &subatom, &vars),
             to_index: subatom,
             constraints: take_atom_constraints_if_new(ctx, state, atom),
         };

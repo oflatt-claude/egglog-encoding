@@ -1,0 +1,6 @@
+---
+source: egglog/tests/files.rs
+expression: err_msg
+---
+In 6:1-29 of index-of-index.egg: (index Nested LnkOcc (any 0))
+Index Nested indexes LnkOcc, which is itself an index. An index reads the rows of a function.

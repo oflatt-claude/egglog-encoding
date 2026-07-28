@@ -3391,8 +3391,17 @@ impl<'a> BackendRule<'a> {
         atom: &core::GenericAtom<ResolvedCall, ResolvedVar>,
         query: &core::Query<ResolvedCall, ResolvedVar>,
     ) -> Result<(), Error> {
-        let Some(core::GenericAtomTerm::Var(span, value)) = atom.args.first() else {
-            return Ok(());
+        let (span, value) = match atom.args.first() {
+            Some(core::GenericAtomTerm::Var(span, value)) => (span, value),
+            Some(core::GenericAtomTerm::Literal(span, lit)) => {
+                return Err(TypeError::IndexValueIsLiteral(
+                    index.name.clone(),
+                    lit.to_string(),
+                    span.clone(),
+                )
+                .into());
+            }
+            _ => return Ok(()),
         };
         // The value may sit at a column of this very atom, which both binds it and
         // makes the occurrence redundant — the atom is then an ordinary one.
@@ -3404,15 +3413,21 @@ impl<'a> BackendRule<'a> {
         {
             return Ok(());
         }
-        let bound_elsewhere = query.atoms.iter().any(|other| {
-            !std::ptr::eq(other, atom)
-                && !matches!(&other.head,
-                    ResolvedCall::Func(f) if self.type_info.indexes.contains_key(&f.name))
-                && other.args.iter().any(
+        // An index atom probes by its leading argument rather than binding it,
+        // so only the row it reads counts as a binding.
+        let binds_value =
+            |other: &core::GenericAtom<ResolvedCall, ResolvedVar>| {
+                let skip = usize::from(matches!(&other.head,
+                ResolvedCall::Func(f) if self.type_info.indexes.contains_key(&f.name)));
+                other.args.iter().skip(skip).any(
                     |arg| matches!(arg, core::GenericAtomTerm::Var(_, v) if v.name == value.name),
                 )
-        });
-        if bound_elsewhere {
+            };
+        if query
+            .atoms
+            .iter()
+            .any(|other| !std::ptr::eq(other, atom) && binds_value(other))
+        {
             return Ok(());
         }
         Err(

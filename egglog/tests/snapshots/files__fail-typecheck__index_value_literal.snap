@@ -1,0 +1,6 @@
+---
+source: egglog/tests/files.rs
+expression: err_msg
+---
+In 6:20-20 of index-value-literal.egg: 5
+Index WOcc is looked up by the literal 5. An index atom is probed by a variable bound elsewhere in the query.

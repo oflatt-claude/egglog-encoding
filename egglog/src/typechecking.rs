@@ -495,6 +495,15 @@ impl EGraph {
                 span.clone(),
             ));
         }
+        // An index registers a func type but no function, so indexing one would
+        // leave nothing to read at rule-build time.
+        if self.type_info.indexes.contains_key(function) {
+            return Err(TypeError::IndexOfIndex(
+                name.to_owned(),
+                function.to_owned(),
+                span.clone(),
+            ));
+        }
         let ft = self
             .type_info
             .get_func_type(function)
@@ -1555,6 +1564,14 @@ pub enum TypeError {
     IndexValueUnbound(String, String, Span),
     #[error("{1}\nIndex {0} is maintained by the database and cannot be written to")]
     IndexIsReadOnly(String, Span),
+    #[error(
+        "{2}\nIndex {0} indexes {1}, which is itself an index. An index reads the rows of a function."
+    )]
+    IndexOfIndex(String, String, Span),
+    #[error(
+        "{2}\nIndex {0} is looked up by the literal {1}. An index atom is probed by a variable bound elsewhere in the query."
+    )]
+    IndexValueIsLiteral(String, String, Span),
     #[error("{1}\nUnbound symbol {0}")]
     Unbound(String, Span),
     #[error(

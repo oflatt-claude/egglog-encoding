@@ -674,7 +674,7 @@ impl Parser {
                     }
                     vec![Command::Index {
                         span,
-                        name: name.expect_atom("index name")?,
+                        name: self.parse_name(name, "index name")?,
                         function: function.expect_atom("indexed function name")?,
                         any_of: map_fallible(cols, self, |_, sexp| {
                             sexp.expect_uint("index column")
@@ -1568,5 +1568,19 @@ mod tests {
         let t = r#"(f (xxxx a 3) 4.0 (H "hello"))"#;
         let e = parser.get_expr_from_string(None, s).unwrap();
         assert_eq!(format!("{e}"), t);
+    }
+
+    /// An index is callable as a relation, so its name takes the same
+    /// reserved-word check as a function's.
+    #[test]
+    fn index_name_is_a_definition_name() {
+        let mut parser = Parser::default();
+        let err = parser
+            .get_program_from_string(None, "(index input lnk (any 0 1))")
+            .unwrap_err();
+        assert!(
+            format!("{err}").contains("`input` is a command"),
+            "unexpected error: {err}"
+        );
     }
 }
