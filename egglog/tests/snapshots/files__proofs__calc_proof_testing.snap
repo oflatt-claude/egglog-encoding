@@ -12,15 +12,15 @@ expression: proof_snapshot
   (name "(birewrite (g* (g* a b) c) (g* a (g* b c)))=>")
   (premises (Fiat (= t1 t1)))
   (substitution
-    (c t0)
+    (@rewrite_var__ t1)
     (a (g* (AConst) (AConst)))
     (b (g* (AConst) (AConst)))
-    (@rewrite_var__ t1)))
+    (c t0)))
 (let t0 (g* (inv (aConst)) (aConst)))
 (let t1 (g* (g* (bConst) t0) (inv (bConst))))
 (let t2 (g* t0 (inv (bConst))))
 (let t3 (premises (Fiat (= t1 t1))))
-(let t4 (substitution (c (inv (bConst))) (a (bConst)) (b t0) (@rewrite_var__ t1)))
+(let t4 (substitution (@rewrite_var__ t1) (a (bConst)) (b t0) (c (inv (bConst)))))
 (Congr
   (= t1 (g* (bConst) (inv (bConst))))
   (Rule
@@ -52,4 +52,4 @@ expression: proof_snapshot
   (= t0 (IConst))
   (name "(rewrite (g* a (inv a)) $I)")
   (premises (Fiat (= t0 t0)))
-  (substitution (a (bConst)) (@rewrite_var__5 t0)))
+  (substitution (@rewrite_var__5 t0) (a (bConst))))

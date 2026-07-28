@@ -83,7 +83,7 @@ expression: proof_snapshot
          )")
                   t0
                   (substitution)))
-              (substitution (x (N 1)) (@rewrite_var__ (Id (N 1)))))
+              (substitution (@rewrite_var__ (Id (N 1))) (x (N 1))))
             0)
           (Rule
             (= (Id (N 2)) (N 2))
@@ -97,10 +97,10 @@ expression: proof_snapshot
          )")
                 t0
                 (substitution)))
-            (substitution (x (N 2)) (@rewrite_var__ (Id (N 2)))))
+            (substitution (@rewrite_var__ (Id (N 2))) (x (N 2))))
           1))
       0))
-  (substitution (@v831 t3) (@v829 (N 1)) (@v830 (N 2))))
+  (substitution (@v829 (N 1)) (@v830 (N 2)) (@v831 t3)))
 (let t0 (Add (Num 51) (Num 52)))
 (let t1 (Add (Num 52) (Num 51)))
 (let t2 (premises (Fiat (= (Go) (Go)))))
@@ -232,7 +232,7 @@ expression: proof_snapshot
          )")
                   t0
                   (substitution)))
-              (substitution (x (N 11)) (@rewrite_var__ (Id (N 11)))))
+              (substitution (@rewrite_var__ (Id (N 11))) (x (N 11))))
             0)
           (Rule
             (= (Id (N 12)) (N 12))
@@ -246,10 +246,10 @@ expression: proof_snapshot
          )")
                 t0
                 (substitution)))
-            (substitution (x (N 12)) (@rewrite_var__ (Id (N 12)))))
+            (substitution (@rewrite_var__ (Id (N 12))) (x (N 12))))
           1))
       0))
-  (substitution (@v929 (N 11)) (@v928 (N 11)) (@v930 (N 12)) (@v931 t3)))
+  (substitution (@v928 (N 11)) (@v929 (N 11)) (@v930 (N 12)) (@v931 t3)))
 (let t0 (premises (Fiat (= (Go) (Go)))))
 (let prf0
   (Rule
@@ -340,15 +340,15 @@ expression: proof_snapshot
          )")
                 t0
                 (substitution)))
-            (substitution (x (N 22)) (@rewrite_var__ (Id (N 22)))))
+            (substitution (@rewrite_var__ (Id (N 22))) (x (N 22))))
           0))
       0))
   (substitution
-    (@v988 (N 23))
-    (@v987 (N 22))
+    (@v985 (N 21))
     (@v986 (N 23))
-    (@v989 t3)
-    (@v985 (N 21))))
+    (@v987 (N 22))
+    (@v988 (N 23))
+    (@v989 t3)))
 (let t0 (premises (Fiat (= (Go) (Go)))))
 (let prf0
   (Rule
@@ -375,7 +375,7 @@ expression: proof_snapshot
            )")
                   t0
                   (substitution)))
-              (substitution (x (N 31)) (@rewrite_var__ (Id (N 31))))))
+              (substitution (@rewrite_var__ (Id (N 31))) (x (N 31)))))
 (Rule
   (= (@ExistsConstructor4) (@ExistsConstructor4))
   (name "@prove_exists_rule4")
@@ -418,7 +418,7 @@ expression: proof_snapshot
         prf1
         1)
       0))
-  (substitution (@v1052 t3) (@v1050 (N 31)) (@v1049 (N 31)) (@v1051 (N 32))))
+  (substitution (@v1049 (N 31)) (@v1050 (N 31)) (@v1051 (N 32)) (@v1052 t3)))
 (let t0 (premises (Fiat (= (Go) (Go)))))
 (let prf0
   (Rule
@@ -522,7 +522,7 @@ expression: proof_snapshot
          )")
                 t0
                 (substitution)))
-            (substitution (x (N 41)) (@rewrite_var__ (Id (N 41)))))
+            (substitution (@rewrite_var__ (Id (N 41))) (x (N 41))))
           0)
         1)
       0))

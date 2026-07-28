@@ -9,7 +9,7 @@ expression: proof_snapshot
   (= (@ExistsConstructor) (@ExistsConstructor))
   (name "@prove_exists_rule")
   (premises prf0 (Fiat (= (Z) (Z))) prf0 (Eval) (Fiat (= t1 t1)))
-  (substitution (@v98 (S (Z))) (@v97 (Z)) (@v99 t0) (@v96 (S (Z)))))
+  (substitution (@v96 (S (Z))) (@v97 (Z)) (@v98 (S (Z))) (@v99 t0)))
 (let t0 (pair (Z) (S (Z))))
 (let t1 (HasPair t0))
 (Rule
@@ -20,7 +20,7 @@ expression: proof_snapshot
     (Fiat (= (S (Z)) (S (Z))))
     (Eval)
     (Fiat (= t1 t1)))
-  (substitution (@v221 (S (Z))) (@v222 t0) (@v220 (Z))))
+  (substitution (@v220 (Z)) (@v221 (S (Z))) (@v222 t0)))
 (let t0 (vec-of (Z) (S (Z))))
 (let t1 (HasVec t0))
 (Rule
@@ -31,7 +31,7 @@ expression: proof_snapshot
     (Fiat (= (S (Z)) (S (Z))))
     (Eval)
     (Fiat (= t1 t1)))
-  (substitution (@v336 t0) (@v335 (S (Z))) (@v334 (Z))))
+  (substitution (@v334 (Z)) (@v335 (S (Z))) (@v336 t0)))
 (let t0 (map-of (Z) (S (Z))))
 (let t1 (HasMap t0))
 (Rule
@@ -42,7 +42,7 @@ expression: proof_snapshot
     (Fiat (= (S (Z)) (S (Z))))
     (Eval)
     (Fiat (= t1 t1)))
-  (substitution (@v452 (Z)) (@v454 t0) (@v453 (S (Z)))))
+  (substitution (@v452 (Z)) (@v453 (S (Z))) (@v454 t0)))
 (let prf0 (Fiat (= (Z) (Z))))
 (let t0 (multiset-of (S (Z)) (Z) (Z)))
 (let t1 (HasMS t0))
@@ -50,7 +50,7 @@ expression: proof_snapshot
   (= (@ExistsConstructor4) (@ExistsConstructor4))
   (name "@prove_exists_rule4")
   (premises prf0 (Fiat (= (S (Z)) (S (Z)))) prf0 (Eval) (Fiat (= t1 t1)))
-  (substitution (@v569 t0) (@v567 (S (Z))) (@v568 (Z)) (@v566 (Z))))
+  (substitution (@v566 (Z)) (@v567 (S (Z))) (@v568 (Z)) (@v569 t0)))
 (let t0 (vec-of (Z) (S (Z))))
 (let t1 (HasVec t0))
 (Rule
@@ -94,7 +94,7 @@ expression: proof_snapshot
       ((MapGet w))
          )")
   (premises (Fiat (= t1 t1)) (Fiat (= (Z) (Z))) (Fiat (= (S (Z)) (S (Z)))))
-  (substitution (m t0) (w (S (Z))) (@v870 (Z))))
+  (substitution (m t0) (@v870 (Z)) (w (S (Z)))))
 (let t0 (multiset-of (S (Z)) (Z) (Z)))
 (let t1 (HasMS t0))
 (Rule
@@ -116,7 +116,7 @@ expression: proof_snapshot
       ((PFirst a))
          )")
   (premises (Fiat (= t1 t1)) (Fiat (= (Z) (Z))))
-  (substitution (a (Z)) (p t0)))
+  (substitution (p t0) (a (Z))))
 (Rule
   (= (QVecLen 2) (QVecLen 2))
   (name
@@ -196,4 +196,4 @@ expression: proof_snapshot
          )")
       (premises (Fiat (= (HasElem (Z)) (HasElem (Z)))) (Eval) (Fiat (= t0 t0)))
       (substitution (a (Z)) (w t0) (@v1706 (vec-of (Z) (Z))))))
-  (substitution (@v1732 (Z)) (@v1731 (Z)) (@v1733 (vec-of (Z) (Z)))))
+  (substitution (@v1731 (Z)) (@v1732 (Z)) (@v1733 (vec-of (Z) (Z)))))

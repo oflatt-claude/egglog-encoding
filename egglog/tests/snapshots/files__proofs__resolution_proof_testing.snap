@@ -9,7 +9,7 @@ expression: proof_snapshot
             (= t0 (negate (p 0)))
             (name "(rewrite (myor a $False) a)")
             (premises (Fiat (= t0 t0)))
-            (substitution (a (negate (p 0))) (@rewrite_var__5 t0))))
+            (substitution (@rewrite_var__5 t0) (a (negate (p 0))))))
 (let t1 (myor (p 2) t0))
 (let t2 (myor (negate (p 2)) (FalseConst)))
 (let prop0 (= (TrueConst) t2))
@@ -32,7 +32,7 @@ expression: proof_snapshot
                           (= t2 (negate (p 2)))
                           (name "(rewrite (myor a $False) a)")
                           (premises prf3)
-                          (substitution (a (negate (p 2))) (@rewrite_var__5 t2))))
+                          (substitution (@rewrite_var__5 t2) (a (negate (p 2))))))
 (Rule
   (= (p 0) (FalseConst))
   (name
@@ -73,7 +73,7 @@ expression: proof_snapshot
                   0))
               (Trans (= (TrueConst) (negate (p 2))) prf2 prf4)
               0))
-          (substitution (bs (FalseConst)) (a (p 2)) (as (negate (p 0))))))))
+          (substitution (a (p 2)) (as (negate (p 0))) (bs (FalseConst)))))))
   (substitution (p (p 0))))
 (let t0 (myor (negate (p 2)) (FalseConst)))
 (let t1 (myor (p 1) t0))
@@ -92,7 +92,7 @@ expression: proof_snapshot
           (= t0 (negate (p 2)))
           (name "(rewrite (myor a $False) a)")
           (premises (Fiat (= t0 t0)))
-          (substitution (a (negate (p 2))) (@rewrite_var__5 t0))))
+          (substitution (@rewrite_var__5 t0) (a (negate (p 2))))))
       (Rule
         (= t0 (TrueConst))
         (name "(rewrite (myor $False a) a)")

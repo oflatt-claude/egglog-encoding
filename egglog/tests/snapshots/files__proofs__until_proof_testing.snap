@@ -14,10 +14,10 @@ expression: proof_snapshot
                 (name "(birewrite (g* (g* a b) c) (g* a (g* b c)))=>")
                 (premises (Fiat (= t0 t0)))
                 (substitution
-                  (c (g* (AConst) (AConst)))
+                  (@rewrite_var__ t0)
                   (a (AConst))
                   (b (AConst))
-                  (@rewrite_var__ t0))))
+                  (c (g* (AConst) (AConst))))))
             (substitution (@rewrite_var__4 t0))))
 (Rule
   (= t1 (IConst))
