@@ -97,6 +97,28 @@ skeleton is still present to compare against.
 | 4 | rebuilding → `RebuildN` | ditto |
 | 5 | re-enable CSE after encoding, repair term mode, re-measure | nothing left behind the switch |
 
+### Premises inline on the first site, chained after that
+
+A head emits one `Rule` row per conclusion site, and every site shares the same
+body premises — only the bridges differ, and they accumulate (0, 1, 2 across the
+three sites of a nested `rewrite`). So a fused arity is not one `N` per rule, nor
+one per site. Instead:
+
+* **First site:** premises inline as columns. Arity is the body-fact count,
+  statically known and small. No list is built at all.
+* **Later sites:** name the previous site's row plus their own one bridge. The
+  link is a row we were emitting anyway, so chaining costs nothing extra.
+
+This removes `PNil`/`PCons` entirely from a rule head: flat `rewrite` 4 rows ->
+**2**, nested 11 -> **7**.
+
+It also restores the discriminator that plain inlining would have destroyed.
+Conversion currently recovers the bridge count from the two lists' length
+difference; here the first row's arity gives the premise count and each link adds
+exactly one bridge, so the split is structural. The chain depth is bounded by
+sites per head rather than by cumulative bridges, which is what made the flat
+list grow.
+
 ### Sequenced plan from here
 
 1. ~~**Index proof extraction.**~~ Done — see "Extraction rescanned every
