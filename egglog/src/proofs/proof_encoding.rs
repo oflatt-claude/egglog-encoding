@@ -136,6 +136,10 @@ pub(crate) struct ProofInstrumentor<'a> {
     /// has interned so far. `None` everywhere else, where a proof records its own
     /// conclusion and needs no bridges.
     head_premises: Option<String>,
+    /// Proof variables the encoder knows prove `t = t`, keyed by the emitted
+    /// variable name. Names are globally fresh, so entries never collide across
+    /// the generated programs.
+    reflexive: HashSet<String>,
 }
 
 impl<'a> ProofInstrumentor<'a> {
@@ -143,6 +147,7 @@ impl<'a> ProofInstrumentor<'a> {
         Self {
             egraph,
             head_premises: None,
+            reflexive: HashSet::default(),
         }
     }
 
@@ -360,7 +365,6 @@ impl<'a> ProofInstrumentor<'a> {
             .get(type_name)
             .unwrap()
             .clone();
-        let proof_sort = self.proof_sort();
 
         // Natural id + connector (`natural = deduped`) for each operand, if it was
         // a canonicalized constructor term. Leaves / body matches have neither.
@@ -430,8 +434,6 @@ impl<'a> ProofInstrumentor<'a> {
             &justification.at_site(SiteRef::forward(site)),
         );
 
-        let sym = self.proof_names().eq_sym_constructor.clone();
-        let trans = self.proof_names().eq_trans_constructor.clone();
         // The shared natural form is the canonicalized side's natural (pinned
         // AST), so the Trans goes through it rather than through the deduped
         // e-class.
@@ -439,22 +441,17 @@ impl<'a> ProofInstrumentor<'a> {
         let rhs_conn = rhs_conn.map(|c| self.connector_node(stmts, justification, &c));
         let (lhs_to_shared, rhs_to_shared) = if let Some(rc) = &rhs_conn {
             let lhs_to = if let Some(lc) = &lhs_conn {
-                let sym_lc = self.mint(stmts, &sym, lc, &proof_sort);
-                self.mint(
-                    stmts,
-                    &trans,
-                    &format!("{sym_lc} {base_proof}"),
-                    &proof_sort,
-                )
+                let sym_lc = self.mint_sym(stmts, lc);
+                self.mint_trans(stmts, &sym_lc, &base_proof)
             } else {
                 base_proof.clone()
             };
-            let rhs_to = self.mint(stmts, &sym, rc, &proof_sort);
+            let rhs_to = self.mint_sym(stmts, rc);
             (lhs_to, rhs_to)
         } else {
             let lc = lhs_conn.as_ref().unwrap();
-            let lhs_to = self.mint(stmts, &sym, lc, &proof_sort);
-            let rhs_to = self.mint(stmts, &sym, &base_proof, &proof_sort);
+            let lhs_to = self.mint_sym(stmts, lc);
+            let rhs_to = self.mint_sym(stmts, &base_proof);
             (lhs_to, rhs_to)
         };
         let max_pf = self.fresh_var();
@@ -465,8 +462,8 @@ impl<'a> ProofInstrumentor<'a> {
         stmts.push(format!(
             "(let {min_pf} (proof-of-min {lhs} {lhs_to_shared} {rhs} {rhs_to_shared}))"
         ));
-        let sym_min = self.mint(stmts, &sym, &min_pf, &proof_sort);
-        let edge = self.mint(stmts, &trans, &format!("{max_pf} {sym_min}"), &proof_sort);
+        let sym_min = self.mint_sym(stmts, &min_pf);
+        let edge = self.mint_trans(stmts, &max_pf, &sym_min);
         format!("(set ({uf_name} {larger}) (values {smaller} {edge}))")
     }
 
@@ -525,9 +522,6 @@ impl<'a> ProofInstrumentor<'a> {
             .get(&sort_name)
             .expect("sort AST")
             .clone();
-        let proof_sort = self.proof_sort();
-        let trans = self.proof_names().eq_trans_constructor.clone();
-        let sym = self.proof_names().eq_sym_constructor.clone();
         let view = self.view_name(&ctor_name);
         let Natural {
             dedup_args,
@@ -556,12 +550,12 @@ impl<'a> ProofInstrumentor<'a> {
                     &fv_nat,
                     &justification.at_site(plan.edge),
                 );
-                let to_dedup = self.mint(res, &trans, &format!("{edge} {chain}"), &proof_sort);
+                let to_dedup = self.mint_trans(res, &edge, chain);
                 match target_conn.clone() {
                     Some(conn) => {
                         let conn = self.connector_node(res, justification, &conn);
-                        let sc = self.mint(res, &sym, &conn, &proof_sort);
-                        self.mint(res, &trans, &format!("{sc} {to_dedup}"), &proof_sort)
+                        let sc = self.mint_sym(res, &conn);
+                        self.mint_trans(res, &sc, &to_dedup)
                     }
                     None => to_dedup,
                 }
@@ -586,8 +580,8 @@ impl<'a> ProofInstrumentor<'a> {
         res.push(format!("(let {guest} {target})"));
         let guest_conn = match &nat_to_dedup {
             Some(chain) => {
-                let sv = self.mint(res, &sym, &view_proof, &proof_sort);
-                Connector::Node(self.mint(res, &trans, &format!("{chain} {sv}"), &proof_sort))
+                let sv = self.mint_sym(res, &view_proof);
+                Connector::Node(self.mint_trans(res, chain, &sv))
             }
             None => Connector::Role(
                 plan.edge.with_role(SiteRole::GuestConnector),
@@ -639,18 +633,15 @@ impl<'a> ProofInstrumentor<'a> {
                   (values (ordering-min old0 new0) ()))"
             );
         }
-        let trans = self.proof_names().eq_trans_constructor.clone();
-        let sym = self.proof_names().eq_sym_constructor.clone();
-        let proof_sort = self.proof_sort();
         let mut mints = vec![];
         let displaced_pf = match carried {
             CarriedProofs::KeyToParent => {
-                let sym_pf = self.mint(&mut mints, &sym, "hi_pf_", &proof_sort);
-                self.mint(&mut mints, &trans, &format!("{sym_pf} lo_pf_"), &proof_sort)
+                let sym_pf = self.mint_sym(&mut mints, "hi_pf_");
+                self.mint_trans(&mut mints, &sym_pf, "lo_pf_")
             }
             CarriedProofs::EclassToTerm => {
-                let sym_pf = self.mint(&mut mints, &sym, "lo_pf_", &proof_sort);
-                self.mint(&mut mints, &trans, &format!("hi_pf_ {sym_pf}"), &proof_sort)
+                let sym_pf = self.mint_sym(&mut mints, "lo_pf_");
+                self.mint_trans(&mut mints, "hi_pf_", &sym_pf)
             }
         };
         let mints_str = mints.join("\n                  ");
@@ -1124,11 +1115,13 @@ impl<'a> ProofInstrumentor<'a> {
         let ast_sort = self.proof_names().ast_sort.clone();
         let proof_sort = self.proof_sort();
         match justification {
+            // Both AST endpoints wrap the same `fv`, so these prove `fv = fv`.
             Justification::Rule(..) => {
                 let a1 = self.mint(stmts, to_ast, fv, &ast_sort);
                 let a2 = self.mint(stmts, to_ast, fv, &ast_sort);
                 let asts = Asts(a1, a2);
                 let proof = self.rule_row(stmts, justification, &asts);
+                self.mark_reflexive(&proof);
                 (proof, Some(asts))
             }
             Justification::Fiat => {
@@ -1136,6 +1129,7 @@ impl<'a> ProofInstrumentor<'a> {
                 let a2 = self.mint(stmts, to_ast, fv, &ast_sort);
                 let fiat = self.proof_names().fiat_constructor.clone();
                 let proof = self.mint(stmts, &fiat, &format!("{a1} {a2}"), &proof_sort);
+                self.mark_reflexive(&proof);
                 (proof, Some(Asts(a1, a2)))
             }
             // Term-free: no AST minted (`fv`/`to_ast` unused). The checker
@@ -1227,6 +1221,56 @@ impl<'a> ProofInstrumentor<'a> {
             "(set ({view_name} {}) (values {value} {proof}))",
             ListDisplay(children, " ")
         )
+    }
+
+    /// Record that `proof` proves `t = t`, which the `mint_*` constructors use
+    /// to drop the steps composed onto it.
+    pub(crate) fn mark_reflexive(&mut self, proof: &str) {
+        self.reflexive.insert(proof.to_string());
+    }
+
+    /// Whether `proof` is known to prove `t = t`.
+    fn is_reflexive(&self, proof: &str) -> bool {
+        self.reflexive.contains(proof)
+    }
+
+    /// `Sym(proof)`, or `proof` itself when it is reflexive.
+    pub(crate) fn mint_sym(&mut self, stmts: &mut Vec<String>, proof: &str) -> String {
+        if self.is_reflexive(proof) {
+            return proof.to_string();
+        }
+        let sym = self.proof_names().eq_sym_constructor.clone();
+        let proof_sort = self.proof_sort();
+        self.mint(stmts, &sym, proof, &proof_sort)
+    }
+
+    /// `Trans(lhs, rhs)`, dropping whichever side is reflexive.
+    pub(crate) fn mint_trans(&mut self, stmts: &mut Vec<String>, lhs: &str, rhs: &str) -> String {
+        if self.is_reflexive(lhs) {
+            return rhs.to_string();
+        }
+        if self.is_reflexive(rhs) {
+            return lhs.to_string();
+        }
+        let trans = self.proof_names().eq_trans_constructor.clone();
+        let proof_sort = self.proof_sort();
+        self.mint(stmts, &trans, &format!("{lhs} {rhs}"), &proof_sort)
+    }
+
+    /// `Congr(acc, idx, step)`, or `acc` when `step` is reflexive.
+    pub(crate) fn mint_congr(
+        &mut self,
+        stmts: &mut Vec<String>,
+        acc: &str,
+        idx: usize,
+        step: &str,
+    ) -> String {
+        if self.is_reflexive(step) {
+            return acc.to_string();
+        }
+        let congr = self.proof_names().congr_constructor.clone();
+        let proof_sort = self.proof_sort();
+        self.mint(stmts, &congr, &format!("{acc} {idx} {step}"), &proof_sort)
     }
 
     /// Mint a fresh id of `out_sort` and assert the relation row
@@ -1393,8 +1437,6 @@ impl<'a> ProofInstrumentor<'a> {
         nat_conn: &NatConn,
     ) -> Natural {
         let to_ast = self.fname_to_ast_name(fname).to_string();
-        let congr = self.proof_names().congr_constructor.clone();
-        let proof_sort = self.proof_sort();
         // Each arg is a child's deduped id; look up its natural id + connector.
         let children: Vec<(String, String, Option<Connector>)> = args
             .iter()
@@ -1413,15 +1455,16 @@ impl<'a> ProofInstrumentor<'a> {
         );
         let (nat_prf, asts) = self.term_proof_with_asts(res, &fv_nat, &to_ast, justification);
         let in_rule_head = justification.static_site().is_some();
-        let mut to_dedup = (!in_rule_head).then(|| nat_prf.clone());
-        if let Some(chain) = &mut to_dedup {
-            for (i, (_, _, conn)) in children.clone().iter().enumerate() {
+        let to_dedup = (!in_rule_head).then(|| {
+            let mut chain = nat_prf.clone();
+            for (i, (_, _, conn)) in children.iter().enumerate() {
                 if let Some(conn) = conn {
                     let conn = self.connector_node(res, justification, conn);
-                    *chain = self.mint(res, &congr, &format!("{chain} {i} {conn}"), &proof_sort);
+                    chain = self.mint_congr(res, &chain, i, &conn);
                 }
             }
-        }
+            chain
+        });
         Natural {
             dedup_args,
             fv_nat,

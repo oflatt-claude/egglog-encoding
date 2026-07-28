@@ -105,22 +105,26 @@ skeleton is still present to compare against.
 2. **Then decide about connectors, not before.** The cumulative bridge list
    costs no rows (the two lists share cells) but grows with nesting. Giving each
    build site its own connector row bounds it to `children + 1`, at one row per
-   site — flat `rewrite` unchanged at 6, nested ~14 instead of 13. Step 1 is in
+   site — flat `rewrite` unchanged at 4, nested ~12 instead of 11. Step 1 is in
    and the fixture is no longer extraction-bound, so this is not urgent; measure
    before paying for it.
 3. **Port the two collapses dropped when this branch was cut.** Both were
-   implemented and verified on `reduce-proof-writes`: fused `Rule0..Rule4`
-   carrying premises inline (`b347bb5`, removes `PNil` + `PCons`) and the
-   reflexive `Sym`/`Trans` collapse (`0b79259`, `6dd5366`). Together they take a
-   `rewrite` firing from 6 rows to 2. Note the fused arity must also cover the
-   bridges, which is the same change as step 2 — decide them together.
+   implemented and verified on `reduce-proof-writes`.
+   * ~~The reflexive `Sym`/`Trans` collapse (`0b79259`, `6dd5366`, `fc1aada`).~~
+     Done — see "The encoder applies the reflexive identities itself" below. A
+     flat `rewrite` firing went from 6 proof rows to 4, a nested one from 13 to
+     11, with zero snapshot changes.
+   * Fused `Rule0..Rule4` carrying premises inline (`b347bb5`, removes `PNil` +
+     `PCons`), taking a `rewrite` firing from 4 rows to 2. The fused arity must
+     also cover the bridges, which is the same change as step 2 — decide them
+     together.
 4. **Phase 3, `@Ast`.** Narrower than first scoped: merge bodies already mint
    none, and top-level actions need a program-site index first.
 5. **Phases 4 and 5.** `RebuildN`; then re-enable CSE after encoding, repair
    term mode, re-measure.
 
-Row budget for `(rewrite (Add a b) (Add b a))`: 13 at the branch point, 8 today
-(6 proof + 2 `@Ast`), 2 if all of the above lands.
+Row budget for `(rewrite (Add a b) (Add b a))`: 13 at the branch point, 6 today
+(4 proof + 2 `@Ast`), 2 if all of the above lands.
 
 **Open question, unresolved.** Nobody has traced how the bridge list reaches
 ~2000 cells on `eggcc_2mm_pass1`. A single head's list is bounded by its own
@@ -375,6 +379,48 @@ one to trust, and it moves under 1% — only functions the search actually consu
 are read, and the index dies with the `RootExtractor`. The small corpus is
 unchanged either way: its tables are too small for the rescan to have dominated.
 
+### The encoder applies the reflexive identities itself
+
+`simplify` rewrites `Sym(p) -> p` when `p` proves `t = t`, `Trans(refl, p) -> p`,
+`Trans(p, refl) -> p` and `Congr(p, i, refl) -> p`, so a step composed onto a
+reflexive proof was minted and then discarded. The encoder knows statically which
+proofs are reflexive, so it applies those identities before minting and never
+emits the node.
+
+`ProofInstrumentor` carries a `reflexive` set of emitted proof-variable names —
+`fresh_var` names are globally fresh, so entries never collide across generated
+programs — and `mint_sym` / `mint_trans` / `mint_congr` consult it. Two things
+enter the set: a body variable's `<S>Proof` read, and `term_proof_with_asts`'s
+`Rule` / `Fiat` result, whose two AST endpoints both wrap the same value.
+`edge_proof_with_asts` mints its endpoints over two *different* values, so its
+rows stay out.
+
+What collapses on a rule head is the body-premise composition. In proof normal
+form a matched call appears as `(= var (call …))`, whose fact proof was
+`Trans(Sym(var_proof), call_proof)` with `var_proof` the variable's reflexive
+term proof; both nodes go. Every other rule-head site was already deleted by
+phase 2b, which replaces the composition with a roled row. The remaining collapses
+are on the paths phase 2b leaves alone — top-level actions and merge bodies.
+
+Rows written per rule firing, from `--proofs --mode desugar`:
+
+| rule | proof rows | `@Ast` rows |
+| --- | --- | --- |
+| `(rewrite (Add a b) (Add b a))` | 6 -> 4 | 2 |
+| `(rewrite (Mul a (Add b c)) (Add (Mul a b) (Mul a c)))` | 13 -> 11 | 6 |
+
+206 `proofs/` tests pass with zero changed snapshots and zero changed shared
+snapshots, as predicted: the deleted nodes are exactly the ones `simplify` was
+already removing, so the printed proof is byte-identical.
+`proof_reconstruct_check` is unmoved too — 13392 nodes, 0 `stamped_wrong`, 0
+payload-free failures, 3540 bridges of which 288 move the term.
+
+Two sites still mint raw `Sym`/`Trans` that the set cannot help: `@UF` path
+compression and `ordered_union_merge` compose runtime-bound proofs, and
+`global_value_proof` builds `Trans(Sym c, c)`, which is reflexive but not by any
+of the four identities. `add_constructor_with_proof`'s non-rule-head branch is
+the one place a further collapse is available — see "Available now" below.
+
 ## Standing rules
 
 * **No `proofs/` test may fail at any phase.** That corpus is the only oracle
@@ -453,33 +499,34 @@ re-enabling it after encoding.
 
 ## Available now, independent of the phases
 
-**Collapse the skeleton the encoder statically knows is the identity.** Phase 2b
-deletes these four composites from rule heads outright, so what follows applies
-only to the paths it leaves alone — top-level actions (`Fiat`), which are **not
-sited yet** rather than unsiteable: the design gives them a program-site index,
-the same mechanism extended from rule heads to top-level forms. Merge bodies
-(`MergeIdx`) need nothing — they already mint no `@Ast` at all. Whether
-`build_natural_with_congr` emits a `Congr` chain at all is decided at encoding
-time — a child contributes a step only if it has a `NatConn` connector. With no
-chain, `nat_to_dedup` *is* the natural node's reflexive term proof, so four
-composites reduce to a node the encoder already has:
+**Finish collapsing the skeleton the encoder knows is the identity.** Phase 2b
+deletes these composites from rule heads outright and the smart constructors now
+take two of the four everywhere else, so what is left applies only to
+top-level actions (`Fiat`) and merge bodies. Whether `build_natural_with_congr`
+emits a `Congr` chain at all is decided at encoding time — a child contributes a
+step only if it has a `NatConn` connector — and with no chain, `nat_to_dedup`
+*is* the natural node's reflexive term proof:
 
-| emitted | with no chain |
-| --- | --- |
-| `can_prf = Trans (Sym chain) chain` | `nat_prf` (`fv_can` spells the same application) |
-| `connector = Trans chain (Sym vprf)` | `Sym vprf` |
-| `to_dedup = Trans edge chain` | `edge` |
-| `guest_conn = Trans chain (Sym view_proof)` | `Sym view_proof` |
+| emitted | with no chain | taken |
+| --- | --- | --- |
+| `can_prf = Trans (Sym chain) chain` | `nat_prf` (`fv_can` spells the same application) | no |
+| `connector = Trans chain (Sym vprf)` | `Sym vprf` | no |
+| `to_dedup = Trans edge chain` | `edge` | yes |
+| `guest_conn = Trans chain (Sym view_proof)` | `Sym view_proof` | yes |
 
-Output-equivalent by construction: `simplify` already rewrites exactly these
-(`opt_reflexive_trans`, `opt_reflexive_sym`). Measured on rule heads before phase
-2b: a `rewrite` firing went from 9 proof rows to 7, a nested `(rewrite (Mul a (Add
-b c)) (Add (Mul a b) (Mul a c)))` firing dropped 6. Phase 2b reaches 6 and 13 on
-those two, by deleting the same rows and more, so the collapse was not taken
-separately.
+The two untaken rows are `add_constructor_with_proof`'s, which still mints
+`Sym`/`Trans` directly; routing them through `mint_sym`/`mint_trans` is the whole
+change. Top-level actions are also **not sited yet** rather than unsiteable: the
+design gives them a program-site index, the same mechanism extended from rule
+heads to top-level forms. Merge bodies (`MergeIdx`) need nothing — they already
+mint no `@Ast` at all.
 
-Two sites mint rows nothing ever reads:
+Three sites mint rows or reads nothing ever consumes:
 
+* A body variable's `<S>Proof` read is emitted whether or not the fact that asked
+  for it keeps the proof, so a `(= var (call …))` atom — the shape whose
+  composition the reflexive collapse deletes — now leaves a dead
+  `(let p (<S>Proof var))`. No row, but a lookup per match.
 * `lookup_global` (`proof_encoding.rs`) mints 2 `Ast` + 1 `Fiat` + a wasted
   fresh id per firing, as fallback arguments to `set-if-empty` that a
   well-formed program never uses.

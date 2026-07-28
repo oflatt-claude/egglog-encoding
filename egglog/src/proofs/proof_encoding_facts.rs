@@ -69,16 +69,9 @@ impl ProofInstrumentor<'_> {
                 ));
 
                 if self.egraph.proof_state.proofs_enabled {
-                    let congr = self.proof_names().congr_constructor.clone();
-                    let proof_sort = self.proof_sort();
                     let mut proof = proof_var;
                     for (i, arg_proof) in arg_proofs.into_iter().enumerate() {
-                        proof = self.mint(
-                            action_lookups,
-                            &congr,
-                            &format!("{proof} {i} {arg_proof}"),
-                            &proof_sort,
-                        );
+                        proof = self.mint_congr(action_lookups, &proof, i, &arg_proof);
                     }
                     proof
                 } else {
@@ -90,16 +83,8 @@ impl ProofInstrumentor<'_> {
                 let (v2, p2) = self.instrument_fact_expr(right_expr, res, action_lookups);
                 res.push(format!("(= {v1} {v2})"));
                 if self.egraph.proof_state.proofs_enabled {
-                    let sym = self.proof_names().eq_sym_constructor.clone();
-                    let trans = self.proof_names().eq_trans_constructor.clone();
-                    let proof_sort = self.proof_sort();
-                    let sym_pf = self.mint(action_lookups, &sym, &p1, &proof_sort);
-                    self.mint(
-                        action_lookups,
-                        &trans,
-                        &format!("{sym_pf} {p2}"),
-                        &proof_sort,
-                    )
+                    let sym_pf = self.mint_sym(action_lookups, &p1);
+                    self.mint_trans(action_lookups, &sym_pf, &p2)
                 } else {
                     "()".to_string()
                 }
@@ -165,6 +150,8 @@ impl ProofInstrumentor<'_> {
                         // build a proof (run :until, check) discard these.
                         action_lookups
                             .push(format!("(let {fresh_proof} ({term_proof_name} {var}))"));
+                        // A term proof is the term's reflexive anchor.
+                        self.mark_reflexive(&fresh_proof);
                         fresh_proof
                     } else {
                         self.reflexive_fiat_proof(action_lookups, resolved_var.sort.name(), var)
@@ -209,17 +196,11 @@ impl ProofInstrumentor<'_> {
                                 "(= (values {fv} {view_proof_var}) ({view_name} {args_str}))"
                             ));
                             if self.proofs_enabled() {
-                                let congr = self.proof_names().congr_constructor.clone();
-                                let proof_sort = self.proof_sort();
                                 let mut proof = view_proof_var;
                                 for (i, arg_proof) in arg_proofs.into_iter().enumerate() {
                                     if let Some(arg_proof) = arg_proof {
-                                        proof = self.mint(
-                                            action_lookups,
-                                            &congr,
-                                            &format!("{proof} {i} {arg_proof}"),
-                                            &proof_sort,
-                                        );
+                                        proof =
+                                            self.mint_congr(action_lookups, &proof, i, &arg_proof);
                                     }
                                 }
                                 proof
