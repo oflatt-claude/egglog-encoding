@@ -1339,11 +1339,19 @@ impl<'a> ProofInstrumentor<'a> {
     /// no `@UF` row and are canonicalized structurally.
     fn declare_view_indexes(&mut self, fdecl: &ResolvedFunctionDecl) -> String {
         let types = fdecl.resolved_schema.view_types();
-        // Children *and* the e-class. When only the e-class moves the canonical
-        // key equals the old one, so the rebuild rule deletes the old row before
-        // re-inserting rather than after (see `indexed_rebuild_rule`).
+        // Children, plus the value column when it is an e-class. When only the
+        // e-class moves the canonical key equals the old one, so the rebuild rule
+        // deletes the old row before re-inserting rather than after (see
+        // `indexed_rebuild_rule`). A custom function's value column is an ordinary
+        // output, rebuilt by its own rule, so indexing it would only invite the
+        // whole-row rule to rewrite it with an e-class's proof shape.
+        let indexable = if self.output_is_eclass(fdecl) {
+            types.len()
+        } else {
+            types.len() - 1
+        };
         let mut by_sort: Vec<(String, Vec<usize>)> = Vec::new();
-        for (i, ty) in types.iter().enumerate() {
+        for (i, ty) in types[..indexable].iter().enumerate() {
             if ty.is_eq_container_sort() || !ty.is_eq_sort() {
                 continue;
             }

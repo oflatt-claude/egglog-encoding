@@ -3383,6 +3383,35 @@ impl<'a> BackendRule<'a> {
         args.into_iter().map(|term| self.entry(term)).collect()
     }
 
+    /// An index atom is probed, never scanned, so the value it is looked up by
+    /// must be bound by another atom of the same query. Reported here, where the
+    /// rule is still in view, rather than left to fail deeper down.
+    fn check_index_value_is_bound(
+        &self,
+        index: &crate::typechecking::FuncType,
+        atom: &core::GenericAtom<ResolvedCall, ResolvedVar>,
+        query: &core::Query<ResolvedCall, ResolvedVar>,
+    ) -> Result<(), Error> {
+        let Some(core::GenericAtomTerm::Var(span, value)) = atom.args.first() else {
+            return Ok(());
+        };
+        let bound_elsewhere = query.atoms.iter().any(|other| {
+            !std::ptr::eq(other, atom)
+                && !matches!(&other.head,
+                    ResolvedCall::Func(f) if self.type_info.indexes.contains_key(&f.name))
+                && other.args.iter().any(
+                    |arg| matches!(arg, core::GenericAtomTerm::Var(_, v) if v.name == value.name),
+                )
+        });
+        if bound_elsewhere {
+            return Ok(());
+        }
+        Err(
+            TypeError::IndexValueUnbound(index.name.clone(), value.name.clone(), span.clone())
+                .into(),
+        )
+    }
+
     fn query(
         &mut self,
         query: &core::Query<ResolvedCall, ResolvedVar>,
@@ -3398,6 +3427,7 @@ impl<'a> BackendRule<'a> {
                 // An atom on a declared index reads the rows of the indexed
                 // function, reached through the value its first argument binds.
                 ResolvedCall::Func(f) if self.type_info.indexes.contains_key(&f.name) => {
+                    self.check_index_value_is_bound(f, atom, query)?;
                     let index = self.type_info.indexes[&f.name].clone();
                     let indexed = self
                         .type_info
@@ -3445,8 +3475,28 @@ impl<'a> BackendRule<'a> {
         Ok(())
     }
 
+    /// A declared index is a view the database maintains, not a table anyone
+    /// writes, so an action naming one is rejected rather than left to fail on a
+    /// backend table that was never created for it.
+    fn reject_index_write(&self, call: &ResolvedCall, span: &Span) -> Result<(), Error> {
+        if let ResolvedCall::Func(f) = call
+            && self.type_info.indexes.contains_key(&f.name)
+        {
+            return Err(TypeError::IndexIsReadOnly(f.name.clone(), span.clone()).into());
+        }
+        Ok(())
+    }
+
     fn actions(&mut self, actions: &core::ResolvedCoreActions) -> Result<(), Error> {
         for action in &actions.0 {
+            match action {
+                core::GenericCoreAction::Let(span, _, f, _)
+                | core::GenericCoreAction::Set(span, f, _, _)
+                | core::GenericCoreAction::Change(span, _, f, _) => {
+                    self.reject_index_write(f, span)?;
+                }
+                _ => {}
+            }
             match action {
                 core::GenericCoreAction::Let(span, v, f, args) => {
                     let (call, args) = match f {

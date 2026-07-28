@@ -1549,6 +1549,12 @@ pub enum TypeError {
     IndexColumnOutOfRange(String, usize, usize, Span),
     #[error("{3}\nIndex {0} mixes columns of sort {1} and {2}; an index reads one sort")]
     IndexColumnSortMismatch(String, String, String, Span),
+    #[error(
+        "{2}\nIndex {0} is looked up by {1}, which no other atom binds. An index atom is probed, so its value must be bound elsewhere in the query."
+    )]
+    IndexValueUnbound(String, String, Span),
+    #[error("{1}\nIndex {0} is maintained by the database and cannot be written to")]
+    IndexIsReadOnly(String, Span),
     #[error("{1}\nUnbound symbol {0}")]
     Unbound(String, Span),
     #[error(

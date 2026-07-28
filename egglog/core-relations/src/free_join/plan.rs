@@ -431,8 +431,9 @@ fn next_var_to_eliminate(
         .map(|(var, vinfo)| {
             let subquery_vars = atoms
                 .iter()
-                // every atom that contains this variable
-                .filter(|(_, atom)| atom.get_col(var).is_some())
+                // every atom that contains this variable, as a column or as the
+                // value an occurrence index is read by
+                .filter(|(_, atom)| atom.binds(var))
                 // every variable of those atoms
                 .flat_map(|(_, atom)| atom.vars());
 
@@ -448,16 +449,19 @@ fn next_var_to_eliminate(
             let size_estimation = vinfo
                 .occurrences
                 .iter()
-                .filter_map(|occ| {
+                .flat_map(|occ| {
                     let atom = &atoms[occ.atom];
                     let table = atom.table;
                     if table.is_dummy() {
-                        return None;
+                        return SmallVec::<[ColUniqueness; 4]>::new();
                     }
-                    let col = atom.get_col(var).unwrap();
+                    // An occurrence variable is not a column of its atom, so it is
+                    // estimated from the columns it can occur in.
                     // TODO: plan header before query decomposition so we know the exact
                     // subset we are handling
-                    Some(col_est.col_uniqueness(table, col))
+                    atom.columns_bound_by(var)
+                        .map(|col| col_est.col_uniqueness(table, col))
+                        .collect()
                 })
                 .fold(ColUniqueness::default(), |a, b| a.join(&b));
             ((occ, size_estimation), var, subquery_vars)

@@ -66,7 +66,7 @@ fn build_rule(egraph: &mut EGraph, rule: RuleSpec) -> Result<RuleId> {
             RuleBodyCall::Table { id, read } => {
                 builder.query_table(*id, &entries, read.is_subsumed())?;
             }
-            RuleBodyCall::IndexTable { id, any_of, .. } => {
+            RuleBodyCall::IndexTable { id, any_of, read } => {
                 // An index is declared as the relation `(value, row…) -> Unit`, so
                 // its atom carries the occurring value, the indexed function's row,
                 // and the relation's own unit output. Only the row belongs to the
@@ -77,7 +77,13 @@ fn build_rule(egraph: &mut EGraph, rule: RuleSpec) -> Result<RuleId> {
                 let (_unit, row) = rest
                     .split_last()
                     .expect("an index atom carries the relation's unit output");
-                builder.query_table_by_occurrence(*id, row, indexed.clone(), any_of)?;
+                builder.query_table_by_occurrence(
+                    *id,
+                    row,
+                    indexed.clone(),
+                    any_of,
+                    read.is_subsumed(),
+                )?;
             }
             RuleBodyCall::Primitive { id, output, .. } => {
                 builder.query_prim(*id, &entries, *output)?;

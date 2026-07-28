@@ -43,3 +43,35 @@
 (run 1)
 (check (touched $c $c $c))
 (print-size touched)
+
+;; --- Rules that earlier planner work got wrong ---------------------------
+
+(relation seed (Math Math))
+(relation triple (Math Math Math))
+(relation viaboth (Math Math Math))
+(relation selfcol (Math Math Math))
+
+;; Three body atoms: the query planner must see the edge between the atom
+;; binding the value and the index atom, rather than treating them as
+;; disconnected (or failing to plan the rule at all).
+(rule ((dirty x) (EdgeOcc x p q r) (seed p r))
+      ((triple p q r)))
+
+;; The cover binds two variables of the index atom at once — the occurring
+;; value and another column — so the index must not be reused across frames
+;; with a stale subset.
+(rule ((seed p x) (EdgeOcc x p q r))
+      ((viaboth p q r)))
+
+;; The occurring value also sits at one of the indexed columns. The occurrence
+;; is then implied, and the atom means the same as an ordinary row match.
+(rule ((dirty x) (EdgeOcc x x q r))
+      ((selfcol x q r)))
+
+(seed $a $c)
+(run 1)
+;; edge($a,$b)=$c is the only row; $a occurs at column 0 and $c at column 2.
+(check (triple $a $b $c))
+(check (viaboth $a $b $c))
+(check (selfcol $a $b $c))
+(fail (check (selfcol $b $b $c)))

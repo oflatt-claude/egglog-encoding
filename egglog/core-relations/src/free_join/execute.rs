@@ -831,6 +831,7 @@ impl BindingInfo {
         {
             node.cached_subsets.take();
             node.cached_children.take();
+            node.cached_occurrence.take();
             node.subset = subset;
             return;
         }
@@ -885,6 +886,11 @@ impl<'a> JoinState<'a> {
         // An occurrence atom indexes several columns but is probed with a single
         // value (the one occurring in any of them), so it takes the column-index
         // path regardless of how many columns it covers.
+        // The column set is what marks an occurrence probe: an atom's occurrence
+        // variable is indexed by exactly its occurrence columns, and every other
+        // variable of that atom by the single column it occupies. Probing by one
+        // of those columns for an ordinary variable is therefore an ordinary
+        // probe, and falls through.
         if atoms[atom]
             .occurrence
             .as_ref()
@@ -1436,7 +1442,7 @@ impl<'a> JoinState<'a> {
                                     return;
                                 }
                             }
-                            if sub.size() <= 16 {
+                            if sub.size() <= 16 || main_spec.occurrence_cols.is_some() {
                                 let main_sub = refine_subset(
                                     sub.to_owned(pool),
                                     &main_spec.cs,

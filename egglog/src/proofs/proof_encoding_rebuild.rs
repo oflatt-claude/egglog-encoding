@@ -271,10 +271,17 @@ impl ProofInstrumentor<'_> {
             }
             updated[j] = canon;
         }
-        // The e-class moves the other way round: the row proof reads `eclass =
-        // f(children)`, so a new leader composes as `Trans(Sym(eclass = leader), …)`.
+        // Only an e-class is canonicalized here, and it moves the other way round
+        // from a child: the row proof reads `eclass = f(children)`, so a new leader
+        // composes as `Trans(Sym(eclass = leader), …)`. A custom function's value
+        // column is an ordinary output, not an e-class — that composition would be
+        // wrong for it, so it keeps [`Self::fd_value_rebuild_rule`], which rewrites
+        // it by `Congr` at its position.
         let out_ty = &types[n_keys];
-        let value_var = if out_ty.is_eq_sort() && !out_ty.is_eq_container_sort() {
+        let value_var = if self.output_is_eclass(fdecl)
+            && out_ty.is_eq_sort()
+            && !out_ty.is_eq_container_sort()
+        {
             let uf_out = self.uf_name(out_ty.name());
             let canon = format!("e{n_keys}_canon_");
             lets.push(format!(

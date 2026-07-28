@@ -493,7 +493,24 @@ impl<'outer, 'a> QueryBuilder<'outer, 'a> {
             });
         }
         let atom_id = self.add_atom(table_id, vars, cs)?;
-        let cols = SmallVec::from_slice(occurrence_cols);
+        let cols: SmallVec<[ColumnId; 4]> = SmallVec::from_slice(occurrence_cols);
+        // The variable may also sit at a column of this atom. If that column is
+        // one of `cols`, the occurrence constraint is implied — the value provably
+        // occurs — and the atom is just an ordinary one, which is also the only
+        // reading the planner can serve: two footholds for one variable in one
+        // atom would have a stage probe that atom twice.
+        if let Some(col) = self.query.atoms[atom_id]
+            .var_columns
+            .get_col(occurrence_var)
+        {
+            if cols.contains(&col) {
+                return Ok(atom_id);
+            }
+            return Err(QueryError::OccurrenceVarAtUnindexedColumn {
+                table: table_id,
+                column: col.index(),
+            });
+        }
         self.query.atoms[atom_id].occurrence = Some(Occurrence {
             var: occurrence_var,
             cols: cols.clone(),
@@ -542,6 +559,11 @@ pub enum QueryError {
 
     #[error("occurrence atom on table {table:?} lists no columns to index")]
     EmptyOccurrenceIndex { table: TableId },
+
+    #[error(
+        "occurrence atom on table {table:?} also binds its indexed value at column {column}, which is not one of the indexed columns"
+    )]
+    OccurrenceVarAtUnindexedColumn { table: TableId, column: usize },
 
     #[error("table {table:?} expected {expected:?} columns but got {got:?}")]
     BadArity {
@@ -602,6 +624,27 @@ impl RuleBuilder<'_, '_> {
         }
     }
 
+    /// Plan a query containing an occurrence atom whole, with generic join.
+    ///
+    /// Tree decomposition and the free-join planners reason about an atom's
+    /// variables through its columns, and an occurrence variable has none, so
+    /// they cannot see the edge between such an atom and the one binding its
+    /// value: decomposition panics on it, and the other planners map its columns
+    /// back to the wrong variables. Applied here rather than when the atom is
+    /// added, so a later [`QueryBuilder::set_plan_strategy`] cannot undo it.
+    fn force_whole_query_generic_join(&mut self) {
+        if self
+            .qb
+            .query
+            .atoms
+            .iter()
+            .any(|(_, atom)| atom.occurrence.is_some())
+        {
+            self.qb.query.no_decomp = true;
+            self.qb.query.plan_strategy = PlanStrategy::Gj;
+        }
+    }
+
     fn build_symbol_map(&self) -> SymbolMap {
         let var_info = &self.qb.query.var_info;
         SymbolMap {
@@ -624,6 +667,7 @@ impl RuleBuilder<'_, '_> {
 
     pub fn build_with_description(mut self, desc: impl Into<String>) -> RuleId {
         self.assert_occurrence_vars_bound();
+        self.force_whole_query_generic_join();
         let var_info = &self.qb.query.var_info;
         let symbol_map = self.build_symbol_map();
         // Generate an id for our actions and slot them in.
@@ -980,6 +1024,25 @@ pub(crate) struct Occurrence {
 impl Atom {
     pub(crate) fn vars(&self) -> impl Iterator<Item = Variable> + '_ {
         self.var_columns.vars()
+    }
+
+    /// Whether this atom constrains `var`, either at a column or as the value its
+    /// occurrence index is read by (see [`Atom::occurrence`]).
+    pub(crate) fn binds(&self, var: Variable) -> bool {
+        self.var_columns.get_col(var).is_some() || self.occurrence_of(var).is_some()
+    }
+
+    /// The columns `var` can take a value from: the one it occupies, or every
+    /// column of the occurrence set when it is the occurrence variable.
+    pub(crate) fn columns_bound_by(&self, var: Variable) -> impl Iterator<Item = ColumnId> + '_ {
+        let col = self.var_columns.get_col(var);
+        let occ = self.occurrence_of(var);
+        col.into_iter()
+            .chain(occ.into_iter().flat_map(|o| o.cols.iter().copied()))
+    }
+
+    fn occurrence_of(&self, var: Variable) -> Option<&Occurrence> {
+        self.occurrence.as_ref().filter(|occ| occ.var == var)
     }
 
     pub(crate) fn get_var(&self, col: ColumnId) -> Option<Variable> {

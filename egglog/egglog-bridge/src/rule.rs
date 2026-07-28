@@ -486,15 +486,18 @@ impl RuleBuilder<'_> {
     /// `indexed` is not one of `entries`.
     ///
     /// The atom can only be probed, so `indexed` must be bound elsewhere in the
-    /// query; see `core_relations::Atom::occurrence`.
+    /// query. `is_subsumed` constrains the subsumption column exactly as it does
+    /// for [`Self::query_table`], so an index reads the same rows the function
+    /// itself would.
     pub fn query_table_by_occurrence(
         &mut self,
         func: FunctionId,
         entries: &[QueryEntry],
         indexed: QueryEntry,
         cols: &[usize],
+        is_subsumed: Option<bool>,
     ) -> Result<AtomId> {
-        let atom = self.query_table(func, entries, None)?;
+        let atom = self.query_table(func, entries, is_subsumed)?;
         self.query.atoms[atom.index()].occurrence = Some((
             indexed,
             cols.iter().copied().map(ColumnId::from_usize).collect(),

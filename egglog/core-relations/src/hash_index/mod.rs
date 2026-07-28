@@ -282,7 +282,12 @@ impl IndexBase for ColumnIndex {
             let mut split = IdVec::<ShardId, TaggedRowBuffer>::default();
             split.resize_with(shard_data.n_shards(), || TaggedRowBuffer::new(1));
             for (row_id, keys) in buf.iter() {
-                for key in keys {
+                for (i, key) in keys.iter().enumerate() {
+                    // As in `add_row`: a value in more than one of the indexed
+                    // columns still posts its row once.
+                    if keys[..i].contains(key) {
+                        continue;
+                    }
                     shard_data
                         .get_shard_mut(*key, &mut split)
                         .add_row(row_id, &[*key]);
@@ -628,9 +633,6 @@ impl ColumnIndex {
         }
     }
 
-    /// Build a single-column index for `subset` of `table`. Picks between a
-    /// sort-based bulk path and a per-row scan based on subset size: large
-    /// subsets amortize the sort overhead, small ones avoid the buffer copy.
     /// Build an index over just `subset`, mapping each value appearing in any of
     /// `cols` to the rows of `subset` holding it. With one column this is the
     /// usual per-column index; with several it is an occurrence index.
