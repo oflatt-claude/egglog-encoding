@@ -67,10 +67,31 @@ skeleton is still present to compare against.
 | --- | --- | --- |
 | 0 | one canonical `conclusion_sites`; `process_actions` returns site-indexed propositions | done — zero snapshot changes |
 | 1 | reconstructor runs *beside* the skeleton, differentially asserted | done — see below |
-| 2 | switch rule proofs to `RuleN` + site index; delete RHS skeleton emission | printed proofs byte-identical |
+| 2a | rule proof carries a conclusion-site index; the conclusion is derived from it instead of from the stored `Ast` columns | zero snapshot changes |
+| 2b | stop emitting the RHS `Congr`/`Trans`/`Sym` skeleton; reconstruction synthesizes it | zero snapshot changes |
 | 3 | drop `@Ast` | ditto |
 | 4 | rebuilding → `RebuildN` | ditto |
 | 5 | re-enable CSE after encoding, repair term mode, re-measure | nothing left behind the switch |
+
+### Why phase 2 is split
+
+Adding the index and deleting the emission are separable, and each fails
+differently. 2a proves the encoder and the reconstructor agree on *which* site
+a proof came from, while the old conclusion is still there to disagree with.
+Only then does 2b remove the skeleton, so a failure there is unambiguously
+about synthesis rather than about indexing.
+
+Two hazards recorded from phase 0, both about assigning the index:
+
+* The encoder emits **post-order** (`instrument_action_expr` builds children
+  before the node) while sites are numbered **pre-order**, so it must look up
+  the index of the node it is at rather than run a counter.
+* `plan_construct_into` **drops `union` actions** it optimizes into a view row,
+  so the site index must be captured before that pass runs.
+
+And one from phase 1: 262 conclusions are the **reverse** of their site's
+equality, so the emitted form needs either `Sym` of the site or a direction
+bit. A bare index cannot name them.
 
 ### Phase 1 result
 
