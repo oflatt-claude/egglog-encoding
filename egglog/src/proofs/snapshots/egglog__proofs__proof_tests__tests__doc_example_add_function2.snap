@@ -6,7 +6,7 @@ expression: snapshot
 (ruleset ___rebuilding)
 (ruleset ___rebuilding_cleanup)
 (ruleset ___delete_subsume_ruleset)
-(sort ___view)
+(sort ___view :internal-aux-uf ___AuxUF____view)
 (function ___AuxUF____view (___view) ___view :merge (ordering-min old new) :unextractable :internal-hidden :internal-identity-vals 1)
 (function add (i64 i64 i64) ___view :merge ((set (___AuxUF____view (ordering-max old new)) (ordering-min old new)) (ordering-min old new)) :unextractable :internal-hidden :internal-identity-vals 1 :internal-term-node)
 (function ___addView (i64 i64) (i64 Unit) :merge (values old0 ()) :unextractable :internal-term-constructor add :internal-identity-vals 1)

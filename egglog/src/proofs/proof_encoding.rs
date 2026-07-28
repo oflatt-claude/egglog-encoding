@@ -770,13 +770,17 @@ impl<'a> ProofInstrumentor<'a> {
                 "(function {view_name} ({in_sorts}) ({out_type} {proof_type}) :no-merge :internal-term-constructor {name}{view_flags} :internal-identity-vals 1)"
             )
         };
+        let aux_uf = self.aux_uf_name(&view_sort);
         // `fresh_sort` is the term's e-class sort only for a custom function whose
         // output is a distinct value (see `view_sort` above); a constructor/global
-        // reuses its output sort, leaving `fresh_sort` unused.
+        // reuses its output sort, leaving `fresh_sort` unused. It carries
+        // `:internal-aux-uf` for the same reason an eq-sort does: so a re-parsed
+        // encoded program restores `aux_uf_parent` and extraction can still resolve
+        // a hash-cons collision on this sort's ids.
         let fresh_sort_decl = if output_is_eclass {
             String::new()
         } else {
-            format!("(sort {fresh_sort})")
+            format!("(sort {fresh_sort} :internal-aux-uf {aux_uf})")
         };
         // The term relation is a term node (`:internal-term-node`): its rows are
         // reconstructed by proof extraction. It is *hash-consed* on its children:
@@ -789,7 +793,6 @@ impl<'a> ProofInstrumentor<'a> {
         // id), so proof extraction can recover that the two ids are the same term.
         // The deferred delete/subsume markers are keyed on children with no output,
         // so they are plain `Unit` relations (not term nodes).
-        let aux_uf = self.aux_uf_name(&view_sort);
         // Single-output function, so the merge binds `old`/`new` (not `old0`/`new0`).
         let term_merge = format!(
             "((set ({aux_uf} (ordering-max old new)) (ordering-min old new)) (ordering-min old new))"
