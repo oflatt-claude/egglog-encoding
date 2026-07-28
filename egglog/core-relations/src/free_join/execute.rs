@@ -870,10 +870,8 @@ impl<'a> JoinState<'a> {
         }
     }
 
-    /// The index a scan of `atom` by `cols` reads. `occurrence` says which of the
-    /// two questions the probe asks — whether the value sits at those columns, or
-    /// occurs among them — which `cols` alone cannot express (an ordinary
-    /// variable repeated across exactly the indexed columns looks identical).
+    /// The index a scan of `atom` by `cols` reads. `occurrence` selects the
+    /// disjunctive reading of `cols` (see [`Atom::occurrence`]).
     fn get_index(
         &self,
         atoms: &Arc<DenseIdMap<AtomId, Atom>>,

@@ -495,10 +495,8 @@ impl<'outer, 'a> QueryBuilder<'outer, 'a> {
         let atom_id = self.add_atom(table_id, vars, cs)?;
         let cols: SmallVec<[ColumnId; 4]> = SmallVec::from_slice(occurrence_cols);
         // The variable may also sit at a column of this atom. If that column is
-        // one of `cols`, the occurrence constraint is implied — the value provably
-        // occurs — and the atom is just an ordinary one, which is also the only
-        // reading the planner can serve: two footholds for one variable in one
-        // atom would have a stage probe that atom twice.
+        // one of `cols` the value provably occurs, so the constraint is implied
+        // and the atom is an ordinary one.
         if let Some(col) = self.query.atoms[atom_id]
             .var_columns
             .get_col(occurrence_var)
@@ -629,9 +627,8 @@ impl RuleBuilder<'_, '_> {
     /// Tree decomposition and the free-join planners reason about an atom's
     /// variables through its columns, and an occurrence variable has none, so
     /// they cannot see the edge between such an atom and the one binding its
-    /// value: decomposition panics on it, and the other planners map its columns
-    /// back to the wrong variables. Applied here rather than when the atom is
-    /// added, so a later [`QueryBuilder::set_plan_strategy`] cannot undo it.
+    /// value. Applied at build, so [`QueryBuilder::set_plan_strategy`] cannot
+    /// override it.
     fn force_whole_query_generic_join(&mut self) {
         if self
             .qb

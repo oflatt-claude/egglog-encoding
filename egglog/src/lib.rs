@@ -3384,8 +3384,7 @@ impl<'a> BackendRule<'a> {
     }
 
     /// An index atom is probed, never scanned, so the value it is looked up by
-    /// must be bound by another atom of the same query. Reported here, where the
-    /// rule is still in view, rather than left to fail deeper down.
+    /// must be bound elsewhere in the query.
     fn check_index_value_is_bound(
         &self,
         index: &crate::typechecking::FuncType,
@@ -3485,9 +3484,8 @@ impl<'a> BackendRule<'a> {
         Ok(())
     }
 
-    /// A declared index is a view the database maintains, not a table anyone
-    /// writes, so an action naming one is rejected rather than left to fail on a
-    /// backend table that was never created for it.
+    /// A declared index is a view the database maintains, so an action writing
+    /// to one is rejected.
     fn reject_index_write(&self, call: &ResolvedCall, span: &Span) -> Result<(), Error> {
         if let ResolvedCall::Func(f) = call
             && self.type_info.indexes.contains_key(&f.name)

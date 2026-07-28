@@ -72,9 +72,7 @@ pub(crate) struct ScanSpec {
     // Only yield rows where the given constraints match.
     pub constraints: Vec<Constraint>,
     /// Set when this scan reaches the atom through its occurrence variable: the
-    /// columns to read disjunctively. Distinguishes the two questions a probe can
-    /// ask — "which rows hold this value at this column" and "which rows mention
-    /// it among these columns" — which the column set alone cannot.
+    /// columns to read disjunctively (see [`Atom::occurrence`]).
     pub occurrence_cols: Option<SmallVec<[ColumnId; 4]>>,
 }
 
@@ -83,7 +81,8 @@ pub(crate) struct SingleScanSpec {
     pub atom: AtomId,
     pub column: ColumnId,
     /// Set when this scan binds the atom's occurrence variable: the columns to
-    /// read disjunctively. `column` is then only the first of them.
+    /// read disjunctively (see [`Atom::occurrence`]). `column` is then only the
+    /// first of them.
     pub occurrence_cols: Option<SmallVec<[ColumnId; 4]>>,
     pub cs: Vec<Constraint>,
 }
@@ -1671,9 +1670,8 @@ fn compile_stage(
 
     let mut bind = SmallVec::new();
     for var in vars {
-        // Scanning a cover binds each variable from the column it occupies. An
-        // occurrence variable has none — it would have to yield one binding per
-        // distinct occurring value — so a plan that covers it is unsupported.
+        // Scanning a cover binds each variable from the column it occupies; an
+        // occurrence variable has none, so a plan that covers it is unsupported.
         let col = ctx.atoms[atom].get_col(var).unwrap_or_else(|| {
             panic!(
                 "unsupported plan: {var:?} is bound by scanning an atom where it \
