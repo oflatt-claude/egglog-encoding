@@ -487,9 +487,8 @@ impl EGraph {
                         (resolved.name.clone(), ft.input.clone(), ft.outputs.clone());
                     crate::proofs::proof_fresh::register_set_if_empty(self, &name, input, outputs);
                 }
-                // Hash-consed term-node tables (`:internal-term-node`) are built the
-                // same way: `set-if-empty` interns a term keyed on its children so
-                // identical terms dedup instead of piling up `get-fresh!` copies.
+                // Term-node tables (`:internal-term-node`) need the same primitive:
+                // they are hash-consed, interned by `set-if-empty` on their children.
                 if resolved.internal_term_node
                     && let ResolvedCall::Func(ft) = &resolved.resolved_schema
                 {

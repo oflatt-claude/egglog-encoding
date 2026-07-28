@@ -673,7 +673,8 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
 }
 
 /// Find the canonical representative of a value using the sort's `:internal-uf`
-/// union-find, or return the value unchanged if the sort has none.
+/// union-find, falling back to [`find_aux_canonical`] and finally to the value
+/// unchanged.
 ///
 /// The encoding's union-find is a function keyed by the element
 /// (`UF_<Sort> : (S) -> (S, {Unit|Proof})`). Rebuild saturates path compression,
@@ -707,9 +708,6 @@ pub(crate) fn find_canonical(egraph: &EGraph, value: Value, sort: &ArcSort) -> V
         }
     }
 
-    // Fall back to the auxiliary union-find: a term/proof id that lost a
-    // same-iteration `set-if-empty` collision has no row of its own, but `AuxUF`
-    // maps it to the surviving (structurally identical) id.
     find_aux_canonical(egraph, value, sort)
 }
 
@@ -756,8 +754,7 @@ impl Function {
     }
 
     /// True when the id is the last input column (old-form views), rather than a
-    /// real output column. Hash-consed term-node tables keep the id in the output
-    /// column, so they are not included here.
+    /// real output column.
     fn id_is_last_input(&self) -> bool {
         self.decl.term_constructor.is_some() && !self.is_fd_view()
     }

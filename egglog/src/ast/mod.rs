@@ -101,8 +101,7 @@ where
         proof_func: Option<String>,
         /// The auxiliary union-find `AuxUF_<E>` for this sort, carried as the
         /// `:internal-aux-uf` annotation so a re-parsed encoded program restores
-        /// `proof_state.aux_uf_parent` (used by extraction's `find_canonical` to
-        /// resolve a hash-consed id that lost a same-iteration collision).
+        /// `proof_state.aux_uf_parent`.
         aux_uf: Option<String>,
         /// For container sorts under the term/proof encoding: the spec for the
         /// container's rebuild primitives (see [`ContainerRebuildSpec`]), carried
@@ -654,8 +653,7 @@ where
         proof_func: Option<String>,
         /// The auxiliary union-find `AuxUF_<E>` for this sort, carried as the
         /// `:internal-aux-uf` annotation so a re-parsed encoded program restores
-        /// `proof_state.aux_uf_parent` (used by extraction's `find_canonical` to
-        /// resolve a hash-consed id that lost a same-iteration collision).
+        /// `proof_state.aux_uf_parent`.
         aux_uf: Option<String>,
         /// For container sorts under the term/proof encoding: the spec for the
         /// container's rebuild primitives (see [`ContainerRebuildSpec`]), carried

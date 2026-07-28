@@ -604,8 +604,7 @@ impl EGraph {
     /// the re-typechecking chain.
     fn enable_term_encoding(&mut self, typechecker: EGraph) {
         // The encoding removes every `union` and declares no constructor, so
-        // nothing it lowers can stage a union in the backend's own union-find:
-        // all equality reasoning runs as ordinary encoded rules.
+        // nothing it lowers can stage a union in the backend's own union-find.
         self.backend.forbid_native_rebuild();
         self.proof_state.original_typechecking = Some(Box::new(typechecker));
     }
@@ -2011,8 +2010,6 @@ impl EGraph {
                         .uf_parent
                         .insert(name.clone(), uf_ctor.clone());
                 }
-                // Restore the auxiliary union-find so extraction's `find_canonical`
-                // can resolve hash-consed ids that lost a same-iteration collision.
                 if let Some(aux) = aux_uf {
                     self.proof_state
                         .aux_uf_parent
@@ -2535,9 +2532,8 @@ impl EGraph {
             batch.push((f_id, frow));
 
             let view_proof = if let Some((ast_id, fiat_id, proof_func_id)) = proof_tables {
-                // Fiat proof of the base fact: `@Fiat(ast(fv), ast(fv))`. The AST and
-                // proof tables are hash-consed (children key, id in the output
-                // column), so `ast(fv)` is interned once and reused for both sides.
+                // Fiat proof of the base fact: `@Fiat(ast(fv), ast(fv))`. The AST
+                // table is hash-consed, so `ast(fv)` is one id used on both sides.
                 let ast = self.backend.fresh_id();
                 batch.push((ast_id, vec![fv, ast]));
                 let pf = self.backend.fresh_id();

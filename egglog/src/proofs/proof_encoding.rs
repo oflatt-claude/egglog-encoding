@@ -38,11 +38,9 @@ enum CarriedProofs {
 #[derive(Clone)]
 pub(crate) struct EncodingState {
     pub uf_parent: HashMap<String, String>,
-    /// Maps sort name -> its auxiliary union-find `AuxUF_<Sort>`. Distinct from
-    /// `uf_parent`'s normal `UF_<Sort>`: the hash-consed term tables record here,
-    /// via their `:merge`, that two same-iteration-minted ids denote the same
-    /// term, so proof extraction can recover the canonical term without polluting
-    /// the normal union-find (which carries only real `union`s).
+    /// Maps sort name -> its auxiliary union-find `AuxUF_<Sort>`, which relates
+    /// ids denoting the same term rather than real `union`s (see
+    /// `ProofInstrumentor::aux_uf_name`).
     pub aux_uf_parent: HashMap<String, String>,
     /// Maps sort name -> proof function name (set from :internal-proof-func annotation).
     pub proof_func_parent: HashMap<String, String>,
@@ -416,12 +414,8 @@ impl<'a> ProofInstrumentor<'a> {
             .collect();
 
         if !self.proofs_enabled() {
-            // Intern the guest's node *at* `target` rather than at a fresh
-            // candidate: the term table is hash-consed on children with the id in
-            // its output column, so this is what puts `F(args)` in `target`'s
-            // e-class. If the key was already interned as another id, the table's
-            // `:merge` records the two as the same term in `AuxUF` — which they
-            // are, since the view below unions them anyway.
+            // Writing the guest's node at `target` rather than a fresh candidate
+            // is what puts `F(args)` in `target`'s e-class.
             res.push(format!(
                 "(set ({ctor_name} {}) {target})",
                 ListDisplay(&child_vals, " ")
@@ -472,9 +466,9 @@ impl<'a> ProofInstrumentor<'a> {
             None => to_dedup,
         };
         // The guest's term keeps its own id (`fv_nat`); only the view VALUE uses
-        // the target. Emitting `(F dedup_args target)` would add the guest's
-        // shape to `target`'s term relation, making `target`'s `@Ast` ambiguous
-        // during proof reconstruction (which reads term rows, not views).
+        // the target. Emitting `(F dedup_args target)` would give `target` a
+        // second shape, making its `@Ast` ambiguous during proof reconstruction
+        // (which reads term rows, not views).
         let dedup_disp = ListDisplay(&dedup_args, " ").to_string();
         res.push(format!(
             "(set ({view} {dedup_disp}) (values {target} {view_proof}))"
@@ -774,25 +768,17 @@ impl<'a> ProofInstrumentor<'a> {
         // `fresh_sort` is the term's e-class sort only for a custom function whose
         // output is a distinct value (see `view_sort` above); a constructor/global
         // reuses its output sort, leaving `fresh_sort` unused. It carries
-        // `:internal-aux-uf` for the same reason an eq-sort does: so a re-parsed
-        // encoded program restores `aux_uf_parent` and extraction can still resolve
-        // a hash-cons collision on this sort's ids.
+        // `:internal-aux-uf` for the same reason an eq-sort does.
         let fresh_sort_decl = if output_is_eclass {
             String::new()
         } else {
             format!("(sort {fresh_sort} :internal-aux-uf {aux_uf})")
         };
-        // The term relation is a term node (`:internal-term-node`): its rows are
-        // reconstructed by proof extraction. It is *hash-consed* on its children:
-        // built with `set-if-empty` (get-or-insert) so identical terms share one
-        // row/id rather than piling up `get-fresh!` copies. Because `set-if-empty`
-        // only sees the previous iteration's committed rows, two rules that build
-        // the same term in one iteration each insert a distinct candidate id; the
-        // key then collides at merge time and the `:merge` records `new -> old` in
-        // the sort's auxiliary union-find `AuxUF_<view_sort>` (keeping the smaller
-        // id), so proof extraction can recover that the two ids are the same term.
-        // The deferred delete/subsume markers are keyed on children with no output,
-        // so they are plain `Unit` relations (not term nodes).
+        // The term table is a term node (`:internal-term-node`) hash-consed on its
+        // children, its `:merge` folding a same-iteration duplicate id into
+        // `AuxUF_<view_sort>` (see proof_encoding.md, "Term table and view"). The
+        // deferred delete/subsume markers hold no id, so they are plain `Unit`
+        // relations (not term nodes).
         // Single-output function, so the merge binds `old`/`new` (not `old0`/`new0`).
         let term_merge = format!(
             "((set ({aux_uf} (ordering-max old new)) (ordering-min old new)) (ordering-min old new))"
@@ -1050,9 +1036,7 @@ impl<'a> ProofInstrumentor<'a> {
     }
 
     /// Intern the term/proof/AST/proof-list node `{name}(args_joined)` and return
-    /// its id. Every such node table is hash-consed (see [`Self::hash_cons`]), so
-    /// building the same node twice reuses one id instead of piling up
-    /// `get-fresh!` copies.
+    /// its id. Alias of [`Self::hash_cons`].
     pub(crate) fn mint(
         &mut self,
         stmts: &mut Vec<String>,
@@ -1064,14 +1048,13 @@ impl<'a> ProofInstrumentor<'a> {
     }
 
     /// Intern the node `{name}(args_joined)` into its children-keyed table and
-    /// return its id: mint a candidate with `get-fresh!` and let `set-if-empty`
-    /// return the already-interned id on a hit, so identical nodes share one id
-    /// instead of piling up `get-fresh!` copies.
+    /// return its id, so identical nodes share one id. Emits a `get-fresh!`
+    /// candidate and a `set-if-empty`, which returns the already-interned id on a
+    /// hit.
     ///
-    /// This works inside a `:merge` body too: `set-if-empty` declares a read
-    /// dependency on the table it interns into, which the backend's dependency
-    /// graph uses to merge that table in an earlier stratum — so the read still
-    /// sees it (see `egglog_bridge::EGraph::declare_external_func_table_deps`).
+    /// Usable inside a `:merge` body: `set-if-empty` declares a read dependency on
+    /// the table it interns into, so the backend merges that table in an earlier
+    /// stratum (see `egglog_bridge::EGraph::declare_external_func_table_deps`).
     pub(crate) fn hash_cons(
         &mut self,
         stmts: &mut Vec<String>,
@@ -1205,8 +1188,6 @@ impl<'a> ProofInstrumentor<'a> {
     ) -> String {
         let view = self.view_name(&func_type.name);
         let set_if_empty = crate::proofs::proof_fresh::set_if_empty_prim_name(&view);
-        // Hash-cons the term node (children-keyed `set-if-empty`) so identical
-        // terms reuse one id instead of piling up `get-fresh!` copies.
         let fv = self.hash_cons(
             res,
             &func_type.name,
@@ -1276,13 +1257,6 @@ impl<'a> ProofInstrumentor<'a> {
     /// get the deduped e-class. Return the deduped e-class (so parents and views
     /// stay canonical) and record `(natural, connector : natural = deduped)` in
     /// `nat_conn` for the parent's `Congr` and the root `union`.
-    ///
-    /// The natural node is the *only* id this interns, and it is what seeds the
-    /// view: interning a second node at the deduped children would, whenever the
-    /// two children lists coincide at runtime, mint two candidate ids for one key
-    /// in one iteration — the term table's `:merge` keeps the smaller while the
-    /// view is seeded with the other, leaving the view's e-class with no term row
-    /// (so its shape is no longer pinned to what the rule head built).
     fn add_constructor_with_proof(
         &mut self,
         res: &mut Vec<String>,
@@ -1313,7 +1287,10 @@ impl<'a> ProofInstrumentor<'a> {
         // `(fv_nat, nat_to_dedup_term)` — a row proof whose RHS is `f(children)`,
         // as every view reader requires — and read back the row's committed proof
         // (`dedup = f(children)`; the fallback is the seed, so a fresh row's
-        // connector collapses to reflexive).
+        // connector collapses to reflexive). The natural node must be the seed, and
+        // the only node interned here: interning a second one at the deduped
+        // children can leave the view's e-class with no term row (see
+        // proof_encoding.md, "Building nested terms with proofs").
         let dedup = self.fresh_var();
         let vprf = self.fresh_var();
         let view_proof = crate::proofs::proof_fresh::view_proof_prim_name(&view);
@@ -1532,7 +1509,8 @@ impl<'a> ProofInstrumentor<'a> {
         // Repeated constructor applications are already shared `let`s (see
         // `ast::cse`). Normalize union operands to variables, then build each
         // freshly-constructed union operand directly into the other operand's
-        // e-class (see proof_encoding.md, "Union in a rule").
+        // e-class (see proof_encoding.md, "Optimization: building a union operand
+        // into an e-class").
         let normalized = self.normalize_union_operands(actions);
         let (construct_into, dropped) = Self::plan_construct_into(&normalized);
         let mut res = Vec::new();
@@ -1760,8 +1738,8 @@ impl<'a> ProofInstrumentor<'a> {
                     Some((self.uf_name(name), None))
                 };
                 // Non-container eq-sorts get an auxiliary union-find (declared by
-                // `declare_sort`). Record it via `:internal-aux-uf` so a re-parse
-                // restores `aux_uf_parent` for extraction's `find_canonical`.
+                // `declare_sort`), recorded via `:internal-aux-uf` so a re-parse
+                // restores `aux_uf_parent`.
                 let aux_uf = if is_container {
                     None
                 } else {

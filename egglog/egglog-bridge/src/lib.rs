@@ -140,10 +140,7 @@ pub struct EGraph {
     // Lookups are by a small integer id, so a `BTreeMap` is more than fast enough.
     panic_func_ids: BTreeMap<ExternalFunctionId, String>,
     /// Tables each external function touches when invoked, declared at
-    /// registration (see [`EGraph::declare_external_func_table_deps`]). A
-    /// primitive called from a `:merge` body contributes these to the calling
-    /// table's dependency graph entry, so the tables it reads are merged in an
-    /// earlier stratum and are still readable when the merge runs.
+    /// registration (see [`EGraph::declare_external_func_table_deps`]).
     // `BTreeMap`, not `HashMap`, for the same reason as `panic_func_ids`: it adds
     // no randomly-seeded hasher, so the seed sequence of the other hash tables —
     // and with it the row iteration order proof extraction reads — is unchanged.
@@ -167,10 +164,9 @@ struct CachedPanic {
     references: usize,
 }
 
-/// The tables an external function reads and writes when invoked, named rather
-/// than resolved to a [`TableId`]: a primitive is registered while the program is
-/// typechecked, before the tables it targets are created. Names are resolved
-/// against the [`ActionRegistry`] when a merge referencing the function is built.
+/// The tables an external function reads and writes when invoked, by name (see
+/// [`EGraph::declare_external_func_table_deps`]). Names are resolved against the
+/// [`ActionRegistry`] when a merge referencing the function is built.
 #[derive(Clone, Default)]
 struct ExternalFuncTableDeps {
     reads: Vec<String>,
@@ -353,24 +349,20 @@ impl EGraph {
 
     /// Declare the tables `func` touches when invoked, by function name.
     ///
-    /// A `:merge` body may call an external function, and the bridge otherwise
-    /// has no way to know which tables that call reaches. Declaring them folds
-    /// those tables into the calling table's dependency-graph entry, which places
-    /// a reading table strictly above what it reads: the read targets merge in an
-    /// earlier stratum and so are still present in the database when the reader's
-    /// merge runs, and the write targets get a pre-allocated mutation buffer.
+    /// A `:merge` body calling `func` folds these tables into the calling table's
+    /// dependency-graph entry, which places a reading table strictly above what it
+    /// reads: the read targets merge in an earlier stratum and so are still present
+    /// in the database when the reader's merge runs, and the write targets get a
+    /// pre-allocated mutation buffer.
     ///
     /// Names, not ids: primitives are registered while the program is typechecked,
     /// before the tables exist. Every declared read target must therefore be
     /// declared *before* the table whose merge calls `func`.
     ///
     /// Read dependencies must stay acyclic — a cycle cannot be stratified, and
-    /// [`DependencyGraph::add_table`] rejects one. For the term/proof encoding this
-    /// holds because a `:merge` body can only build constructor applications and
-    /// call primitives: a custom-function lookup in an action is rejected up front
-    /// (`ProofEncodingUnsupportedReason::FunctionLookupInAction`), which is what
-    /// rules out two custom functions whose merges intern into each other. Relaxing
-    /// that restriction would make a cycle constructible here.
+    /// `DependencyGraph::add_table` rejects one. (The term/proof encoding stays
+    /// acyclic because a `:merge` body can only build constructor applications and
+    /// call primitives; a custom-function lookup in an action is rejected up front.)
     pub fn declare_external_func_table_deps(
         &mut self,
         func: ExternalFunctionId,
@@ -431,9 +423,8 @@ impl EGraph {
                 Some(args[n_keys])
             },
         )));
-        // The op both reads (the get-or-insert lookup) and writes (the insert on a
-        // miss) its target, so a merge that interns through it must sit above the
-        // target's stratum.
+        // The op both reads (the lookup) and writes (the insert on a miss) its
+        // target.
         self.declare_external_func_table_deps(id, [target.clone()], [target]);
         id
     }
@@ -880,13 +871,12 @@ impl EGraph {
 
     /// Assert that nothing ever stages a union into this EGraph's union-find.
     ///
-    /// A caller that resolves equality itself — e.g. the egglog crate's
-    /// term/proof encoding, which maintains its own union-find as ordinary
-    /// function tables — declares no `MergeFn::UnionId` table and emits no
-    /// union action, so the native union-find stays empty and rebuilding has
-    /// nothing to do. Setting this turns a violation of that contract into a
-    /// panic when rebuilding runs, instead of a silent divergence between the
-    /// two notions of equality.
+    /// For a caller that resolves equality itself (e.g. the egglog crate's
+    /// term/proof encoding): with no `MergeFn::UnionId` table and no union
+    /// action, the native union-find stays empty and rebuilding has nothing to
+    /// do. Setting this turns a violation of that contract into a panic when
+    /// rebuilding runs, instead of a silent divergence between the two notions
+    /// of equality.
     pub fn forbid_native_rebuild(&mut self) {
         self.forbid_native_rebuild = true;
     }

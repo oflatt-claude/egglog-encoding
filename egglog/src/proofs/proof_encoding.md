@@ -205,9 +205,9 @@ A `union` of two e-classes writes one `UF_<Sort>` edge from the larger endpoint
 to the smaller (the exact row and its `ordering-max`/`ordering-min` convention
 are in [Union-find](#union-find)). Each operand that is itself a term is built
 first (as in [Building a term](#building-a-term)) to obtain its e-class. In proof
-mode this is the whole story for `union` — both operands are built and
-canonicalized so an equality proof can be threaded through each step (see
-[Building nested terms with proofs](#building-nested-terms-with-proofs)).
+mode the edge also carries an equality proof, threaded through each operand's
+construction
+(see [Building nested terms with proofs](#building-nested-terms-with-proofs)).
 
 ## Optimization: building a union operand into an e-class
 

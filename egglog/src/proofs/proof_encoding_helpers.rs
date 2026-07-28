@@ -403,10 +403,8 @@ impl ProofInstrumentor<'_> {
         let pcons = names.pcons;
         let pnil = names.pnil;
 
-        // Each proof/AST/proof-list node table is hash-consed on its arguments
-        // (built with `set-if-empty`, id in its output column), so identical nodes
-        // dedup instead of piling up `get-fresh!` copies. A same-iteration
-        // collision folds `new -> old` into the id sort's auxiliary union-find.
+        // A hash-consed node table's `:merge` folds a same-iteration duplicate id
+        // into its id sort's auxiliary union-find.
         let aux_proof = self.aux_uf_name(&proof_datatype);
         let aux_list = self.aux_uf_name(&proof_list_sort);
         let aux_ast = self.aux_uf_name(&ast_sort);
