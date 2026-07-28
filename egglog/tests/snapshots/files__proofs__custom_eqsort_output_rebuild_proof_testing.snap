@@ -16,4 +16,4 @@ expression: proof_snapshot
     (premises
       (Trans (= t0 t0) (Sym (= t0 t1) prf0) prf0)
       (Fiat (= (Num 2) (Num 2))))
-    (substitution (@n (Num 2)) (k (Num 1)) (o (Num 2)))))
+    (substitution (k (Num 1)) (@n (Num 2)) (o (Num 2)))))

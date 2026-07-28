@@ -8,7 +8,7 @@ use crate::{
         proof_encoding_helpers::EncodingNames,
     },
     typechecking::{FuncType, PrimitiveValidator},
-    util::{HEntry, HashMap, HashSet, IndexSet, SymbolGen},
+    util::{HashMap, HashSet, IEntry, IndexMap, IndexSet, SymbolGen},
 };
 use egglog_ast::generic_ast::Literal;
 use egglog_numeric_id::{DenseIdMap, NumericId, define_id};
@@ -268,7 +268,8 @@ pub enum Justification {
     Rule {
         name: String,
         premise_proofs: Vec<ProofId>,
-        substitution: HashMap<String, TermId>,
+        /// Ordered by where each variable first occurs in the rule body.
+        substitution: IndexMap<String, TermId>,
     },
     /// Given two proofs f(c1, c2, ..., old) = f(c1, c2, ..., old) and f(c1, c2, ..., new) = f(c1, c2, ..., new),
     /// proves either:
@@ -822,13 +823,15 @@ impl ProofStore {
     /// For a given rule and premise proofs, compute the substitution used in the rule application.
     /// The proof has enough information to compute the substitution, we do it here
     /// for convenience.
+    ///
+    /// Entries come out in the order the variables first occur in the rule body.
     fn compute_rule_substitution(
         &self,
         prog: &[ResolvedNCommand],
         rule_name: &str,
         premise_proofs: &[ProofId],
-    ) -> HashMap<String, TermId> {
-        let substitution = HashMap::default();
+    ) -> IndexMap<String, TermId> {
+        let substitution = IndexMap::default();
 
         let Some(rule) = prog.iter().find_map(|cmd| match cmd {
             ResolvedNCommand::NormRule { rule } if rule.name == rule_name => Some(rule),
@@ -864,7 +867,7 @@ impl ProofStore {
         &self,
         fact: &ResolvedFact,
         proof_id: ProofId,
-        subst: &mut HashMap<String, TermId>,
+        subst: &mut IndexMap<String, TermId>,
     ) {
         let proof = &self.id_to_proof[proof_id];
         match fact {
@@ -896,13 +899,13 @@ impl ProofStore {
                     );
                 }
 
-                // bind last child to v
-                let var_child_term = children.last().unwrap();
-                self.add_to_subst(subst, &v.name, *var_child_term);
-                // unify other args
+                // unify the arguments before binding v to the last child, so the
+                // substitution records the variables in the order the fact writes them
                 for (arg_expr, child_term) in args.iter().zip(children.iter()) {
                     self.unify_expr(arg_expr, *child_term, subst);
                 }
+                let var_child_term = children.last().unwrap();
+                self.add_to_subst(subst, &v.name, *var_child_term);
             }
             ResolvedFact::Eq(_, lhs_expr, rhs_expr) => {
                 self.unify_expr(lhs_expr, proof.lhs(), subst);
@@ -914,12 +917,12 @@ impl ProofStore {
         }
     }
 
-    fn add_to_subst(&self, subst: &mut HashMap<String, TermId>, var: &str, term_id: TermId) {
+    fn add_to_subst(&self, subst: &mut IndexMap<String, TermId>, var: &str, term_id: TermId) {
         match subst.entry(var.to_string()) {
-            HEntry::Vacant(entry) => {
+            IEntry::Vacant(entry) => {
                 entry.insert(term_id);
             }
-            HEntry::Occupied(entry) => {
+            IEntry::Occupied(entry) => {
                 if *entry.get() != term_id {
                     panic!(
                         "conflicting substitutions for variable {}: {:?} vs {:?}",
@@ -936,7 +939,7 @@ impl ProofStore {
         &self,
         expr: &ResolvedExpr,
         term_id: TermId,
-        substitution: &mut HashMap<String, TermId>,
+        substitution: &mut IndexMap<String, TermId>,
     ) {
         match expr {
             ResolvedExpr::Lit(_, _lit) => (),
