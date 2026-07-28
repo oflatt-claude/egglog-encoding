@@ -16,6 +16,7 @@ use crate::{
     core::ResolvedCall,
     proofs::{
         proof_format::{Justification, ProofId, ProofStore, Proposition},
+        proof_reconstruct_check,
         proof_sites::{SiteConclusion, SiteIndex, conclusion_sites},
     },
     typechecking::FuncType,
@@ -702,6 +703,18 @@ impl ProofStore {
                     proof.proposition(),
                     name,
                 )?;
+
+                if proof_reconstruct_check::enabled() {
+                    proof_reconstruct_check::record(
+                        self,
+                        rule,
+                        name,
+                        premise_proofs,
+                        &ctx.global_bindings,
+                        &working_subst,
+                        proof.proposition(),
+                    );
+                }
 
                 Ok(Proposition::new(proof.lhs(), proof.rhs()))
             }

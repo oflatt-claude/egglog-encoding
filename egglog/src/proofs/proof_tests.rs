@@ -7,6 +7,7 @@ mod tests {
     use crate::core::ResolvedCall;
     use crate::proofs::proof_checker::process_actions;
     use crate::proofs::proof_extraction::ProveExistsError;
+    use crate::proofs::proof_reconstruct_check;
     use crate::proofs::proof_sites::{ConclusionSite, SiteConclusion, SiteIndex, conclusion_sites};
     use crate::util::{HashMap, HashSet};
     use crate::{
@@ -228,6 +229,65 @@ mod tests {
                     SiteConclusion::Equality(..) => {}
                 }
             }
+        }
+    }
+
+    /// A rule's conclusion is reconstructible: replaying its head reaches the
+    /// conclusion the proof records at one of the head's conclusion sites, and
+    /// the substitution the replay needs can be rebuilt without reading any
+    /// value the proof carries — computed base values and container values are
+    /// recomputed with the primitives' validators.
+    ///
+    /// Each case below binds a value that today reaches the substitution only
+    /// through an `@Ast` payload.
+    #[test]
+    fn rule_conclusions_reconstruct_without_carried_values() {
+        let cases = [
+            // a computed String
+            r#"(relation Strings (String String))
+               (Strings "hello" "world")
+               (rule ((Strings a b) (= res (+ a " " b)))
+                     ((Strings "found" "hello world")) :name "concat")
+               (run 1)
+               (prove (Strings "found" "hello world"))"#,
+            // a non-eq container matched in the body and read
+            r#"(sort IVec (Vec i64))
+               (relation HasVec (IVec))
+               (relation VLen (i64))
+               (HasVec (vec-of 1 2 3))
+               (rule ((HasVec v) (= n (vec-length v))) ((VLen n)) :name "vec-len")
+               (run 1)
+               (prove (VLen 3))"#,
+            // a non-eq container matched in the body and read
+            r#"(sort SMap (Map String i64))
+               (relation HasMap (SMap))
+               (relation MapVal (i64))
+               (HasMap (map-insert (map-empty) "a" 7))
+               (rule ((HasMap m) (= v (map-get m "a"))) ((MapVal v)) :name "map-get")
+               (run 1)
+               (prove (MapVal 7))"#,
+        ];
+
+        for source in cases {
+            proof_reconstruct_check::begin();
+            let mut egraph = EGraph::new_with_proofs();
+            let result = egraph.parse_and_run_program(None, source);
+            let stats = proof_reconstruct_check::end();
+
+            result.unwrap_or_else(|e| panic!("{source}\nfailed: {e}"));
+            assert!(stats.nodes > 0, "{source}\nchecked no rule proofs");
+            assert_eq!(
+                stats.unmatched, 0,
+                "{source}\nno conclusion site reproduced the recorded conclusion"
+            );
+            assert_eq!(
+                stats.payload_free_fails, 0,
+                "{source}\nthe substitution could not be rebuilt without carried values"
+            );
+            assert!(
+                stats.recomputed_vars > 0,
+                "{source}\nno value was recomputed, so the case proves nothing"
+            );
         }
     }
 

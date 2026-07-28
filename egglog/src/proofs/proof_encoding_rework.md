@@ -66,11 +66,46 @@ skeleton is still present to compare against.
 | Phase | Work | Gate |
 | --- | --- | --- |
 | 0 | one canonical `conclusion_sites`; `process_actions` returns site-indexed propositions | done — zero snapshot changes |
-| 1 | reconstructor runs *beside* the skeleton, differentially asserted | corpus-wide agreement, nothing deleted |
+| 1 | reconstructor runs *beside* the skeleton, differentially asserted | done — see below |
 | 2 | switch rule proofs to `RuleN` + site index; delete RHS skeleton emission | printed proofs byte-identical |
 | 3 | drop `@Ast` | ditto |
 | 4 | rebuilding → `RebuildN` | ditto |
 | 5 | re-enable CSE after encoding, repair term mode, re-measure | nothing left behind the switch |
+
+### Phase 1 result
+
+`proof_reconstruct_check.rs` replays every checked `Rule` node's head and
+reports which conclusion sites reproduce the conclusion the proof records. It
+runs under `EGGLOG_PROOF_RECONSTRUCT_CHECK=1` (logging one line per node at
+`info`) and under the `rule_conclusions_reconstruct_without_carried_values`
+test. Over the `proofs/` corpus, 13438 nodes:
+
+| sites reproducing the conclusion | nodes |
+| --- | --- |
+| 1 | 12530 |
+| 2 | 334 |
+| 3 | 304 |
+| 4 | 6 |
+| 6 | 2 |
+| 0, but one site's reverse | 262 |
+| 0 in either direction | 0 |
+
+Nothing is unreconstructible. The two shapes that are not one-to-one:
+
+* **Reversed unions (262).** Every one is a `union` head whose proof records
+  the equality the other way round. Confirms that the reverse direction must
+  come out as `Sym` of a site — a site index alone cannot name it.
+* **Several sites, same proposition (646).** In every case the conclusion is
+  reflexive (`t = t`), concluded at several head positions — a repeated
+  subexpression, or a `union` whose operands substitute to the same term. Any
+  of those indices resolves to the same proposition, so the index disambiguates
+  the *position*, not the meaning. No non-reflexive conclusion was ever
+  ambiguous.
+
+The same run rebuilds each substitution without reading any premise proof that
+exists only to carry a value, recomputing those variables from the rule body
+with `prim.validator()`. It agreed with the recorded substitution, variable for
+variable, on all 13438 nodes.
 
 ## Standing rules
 
@@ -82,15 +117,24 @@ skeleton is still present to compare against.
 
 ## Open questions
 
-* **Is `reflexive_fiat_proof`'s payload derivable?** It is the one site whose
-  `Ast` argument is a runtime value rather than an id. Its sort set includes
-  non-eq containers (`(Vec i64)`, `(Map String i64)`, and `UnstableFn`, whose
-  `is_eq_container_sort` ignores the output sort), so if derivability fails
-  there is no cheap typed-column fallback. **Gate on phase 1:** reconstruct
-  `tests/proofs/bind-prim-result.egg` without its `Ast` payloads before
-  starting phase 3.
+* ~~**Is `reflexive_fiat_proof`'s payload derivable?**~~ Answered by phase 1,
+  for everything the corpus reaches. `bind-prim-result.egg`'s `res` recomputes
+  to `"hello world"` through `prim.validator()`; a `(Vec i64)` and a
+  `(Map String i64)` matched in a rule body and read (`vec-length`, `map-get`)
+  recompute the same way. Still untested: `UnstableFn`, which no corpus rule
+  binds.
 * Which primitives lack a `validator()` — expected to be none that reach the
   encoder, given the support gate.
+
+## Adjacent defect: non-eq containers built in a rule head
+
+Pre-existing, unrelated to the rework, but it bounds the phase-1 answer above.
+`(rule ((Seed v)) ((Built (vec-of v))))` for `(sort IVec (Vec i64))` passes
+`file_supports_proofs` and then panics in the checker — `Fiat proof claims
+10 = 10, which is not established by globals`, because `reflexive_value_term`
+recognizes neither the container head nor a non-eq container as a value. The
+same program with an eq-container builds fine. No corpus file does this, so it
+is invisible today; a `(Vec i64)`/`(Map String i64)` *read* in a body is fine.
 
 ## Known blocker: the `begin`-block / CSE defect
 

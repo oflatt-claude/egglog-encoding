@@ -849,7 +849,10 @@ impl ProofStore {
         current_subst
     }
 
-    fn unify_fact(
+    /// Bind the fact's variables from the term its premise proof proves. A
+    /// primitive call contributes no bindings of its own — the value it computes
+    /// is read off the proof instead.
+    pub(super) fn unify_fact(
         &self,
         fact: &ResolvedFact,
         proof_id: ProofId,
