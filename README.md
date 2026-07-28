@@ -381,7 +381,13 @@ change what is measured.
 
 The [egraphs-good nightly service](https://nightly.cs.washington.edu) checks out
 this repository, runs `make nightly`, and serves `nightly/output/`, matching the
-`report=` entry in the nightly configuration.
+`report=` entry in the nightly configuration. Two things that runner does not
+provide, `make nightly` arranges itself: it installs a pinned uv into `.uv/`
+when uv is missing from `PATH` (uv then downloads its own CPython; bump
+`UV_VERSION` in the `Makefile` to move that pin), and it installs rustup when
+the box has none. The runner also leaves rustup's `~/.cargo/bin` off `PATH`,
+which would leave cargo resolving to Ubuntu's — too old for
+`rust-toolchain.toml`'s pin — so `nightly_bench.py` puts those shims first.
 
 ### CPU profiling
 

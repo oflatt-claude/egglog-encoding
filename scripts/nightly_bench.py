@@ -62,6 +62,21 @@ ENDPOINTS: tuple[Endpoint, ...] = (
 BASELINE: Endpoint = ("main", "off")
 HEADLINE: Endpoint = ("main", "proofs")
 
+# The nightly host leaves rustup's shim directory off PATH, so cargo resolves to
+# Ubuntu's, which predates rust-toolchain.toml's pin; only rustup honours that
+# pin. Putting the shims first makes cargo fetch the pinned toolchain.
+CARGO_BIN_DIR = Path.home() / ".cargo" / "bin"
+
+
+def _bench_env() -> dict[str, str]:
+    """bench.py's environment: rustup's cargo first, and no browser launch."""
+
+    path = os.environ.get("PATH", "").split(os.pathsep)
+    if str(CARGO_BIN_DIR) not in path:
+        path.insert(0, str(CARGO_BIN_DIR))
+    # Keep the headless nightly host from launching bench.py's best-effort browser.
+    return {**os.environ, "PATH": os.pathsep.join(path), "BROWSER": "true"}
+
 
 def _run(target: Target, endpoint: Endpoint, *, open_report: bool) -> int:
     """Benchmark one endpoint against the baseline on the same checkout."""
@@ -90,9 +105,7 @@ def _run(target: Target, endpoint: Endpoint, *, open_report: bool) -> int:
         *(["--open"] if open_report else []),
     ]
     print(f"nightly: {' '.join(shlex.quote(part) for part in command)}", file=sys.stderr)
-    # Keep the headless nightly host from launching bench.py's best-effort browser.
-    env = {**os.environ, "BROWSER": "true"}
-    return subprocess.run(command, cwd=REPO_ROOT, env=env, check=False).returncode
+    return subprocess.run(command, cwd=REPO_ROOT, env=_bench_env(), check=False).returncode
 
 
 def main(argv: Sequence[str] | None = None) -> int:
