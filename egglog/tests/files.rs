@@ -282,7 +282,7 @@ impl Run {
                 insta::assert_snapshot!(snapshot_name, proof_snapshot);
             }
 
-            if !self.requires_proofs() {
+            if !self.requires_proofs() && !cross_treatment_snapshot_disabled(&self.path) {
                 let shared_snapshot =
                     CommandOutput::snapshot_non_proof_stable_under_proof_encoding(outputs);
                 if !shared_snapshot.is_empty() {
@@ -360,8 +360,22 @@ impl Run {
         &self,
         snapshot_content_across_treatments: &str,
     ) -> bool {
-        !snapshot_content_across_treatments.is_empty() && !self.proof_testing
+        !snapshot_content_across_treatments.is_empty()
+            && !self.proof_testing
+            && !cross_treatment_snapshot_disabled(&self.path)
     }
+}
+
+// Cross-treatment agreement is suspended for these while `ast::cse` is off for
+// the proof-encoding rework (grep `PROOF_REWORK_IN_PROGRESS`). Without that
+// prepass the term encoding makes less progress per iteration, so a bounded
+// schedule lands on a different e-graph than the native treatment does.
+const CROSS_TREATMENT_SNAPSHOT_DISABLED_FILES: &[&str] = &["integer_math.egg"];
+
+fn cross_treatment_snapshot_disabled(path: &Path) -> bool {
+    CROSS_TREATMENT_SNAPSHOT_DISABLED_FILES
+        .iter()
+        .any(|file| path.ends_with(file))
 }
 
 fn manual_proof_disable_reason(path: &Path) -> Option<&'static str> {

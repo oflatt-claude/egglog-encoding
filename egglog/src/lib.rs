@@ -295,6 +295,19 @@ impl std::fmt::Display for CommandOutput {
     }
 }
 
+/// The single switch for everything turned off while the proof encoding is
+/// reworked. Grep for it to find each disabled pass or test.
+///
+/// Proof encoding is meant to run early, so that later passes need not know
+/// proofs exist. `ast::cse` currently runs *before* it and reshapes rule heads,
+/// which leaves the encoder looking at a different head from the one the proof
+/// checker replays — so a conclusion-site index assigned by one does not
+/// resolve to the same site in the other. CSE stays off until it can run on the
+/// encoded program instead.
+///
+/// Set to `false` and repair what falls out before the rework lands.
+pub(crate) const PROOF_REWORK_IN_PROGRESS: bool = true;
+
 /// The main interface for an e-graph in egglog.
 ///
 /// An [`EGraph`] maintains a collection of equivalence classes of terms and provides
@@ -2642,8 +2655,11 @@ impl EGraph {
             }
 
             // Share repeated constructor applications (see `ast::cse`).
-            let deduped =
-                ast::cse::cse_program(typechecked_no_globals, &mut self.parser.symbol_gen);
+            let deduped = if PROOF_REWORK_IN_PROGRESS {
+                typechecked_no_globals
+            } else {
+                ast::cse::cse_program(typechecked_no_globals, &mut self.parser.symbol_gen)
+            };
 
             let term_encoding_added = ProofInstrumentor::add_term_encoding(self, deduped)?;
             let mut new_typechecked = vec![];
