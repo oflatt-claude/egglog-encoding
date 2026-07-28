@@ -11,7 +11,7 @@
 use super::proof_encoding::ProofInstrumentor;
 use crate::exec_state::{Internal, RegistrySealed};
 use crate::*;
-use egglog_backend_trait::CounterId;
+use egglog_backend_trait::{CounterId, GuardedMintArg, GuardedMintSpec, GuardedMintStep};
 use egglog_bridge::TableAction;
 use egglog_numeric_id::NumericId;
 
@@ -41,6 +41,16 @@ pub(crate) fn uf_canon_prim_name(uf_name: &str) -> String {
 /// Name of an eq-sort's `uf_canon_proof` primitive. See [`uf_canon_prim_name`].
 pub(crate) fn uf_canon_proof_prim_name(uf_name: &str) -> String {
     format!("{uf_name}_canon_proof")
+}
+
+/// Name of an eq-sort's `uf_congr_step` primitive. See [`uf_canon_prim_name`].
+pub(crate) fn uf_congr_step_prim_name(uf_name: &str) -> String {
+    format!("{uf_name}_congr_step")
+}
+
+/// Name of an eq-sort's `uf_sym_trans_step` primitive. See [`uf_canon_prim_name`].
+pub(crate) fn uf_sym_trans_step_prim_name(uf_name: &str) -> String {
+    format!("{uf_name}_sym_trans_step")
 }
 
 /// Register an eq-sort's single-term canonicalization primitives, so a rebuild
@@ -87,12 +97,107 @@ pub(crate) fn register_uf_canon(
         eg.add_backend_op_primitive(
             UfCanonCol {
                 name: uf_canon_proof_prim_name(uf_name),
-                key_sort: sort,
-                out_sort: proof_sort,
+                key_sort: sort.clone(),
+                out_sort: proof_sort.clone(),
             },
             WriteState::valid_contexts(),
             move |backend, _| backend.register_view_column_read(table.clone(), 1, 1),
         );
+        register_uf_congr_steps(eg, sort, proof_sort, uf_name);
+    }
+}
+
+/// Register an eq-sort's two guarded congruence-step primitives, which fold one
+/// column's `@UF_<S>` move onto a row proof:
+///
+/// * `uf_congr_step : (Proof S i64) -> Proof` — `(acc term pos)`, `Congr(acc,
+///   pos, term = leader)` for a child at index `pos`.
+/// * `uf_sym_trans_step : (Proof S) -> Proof` — `(acc term)`,
+///   `Trans(Sym(term = leader), acc)` for a row's e-class.
+///
+/// Both return `acc` untouched when `term` has no `@UF_<S>` row: the step it
+/// would compose is reflexive, so the row proof is already the one wanted, and
+/// nothing is minted. Like [`register_uf_canon`] they read `@UF_<S>`, so they
+/// are sound only in the action of a rule whose body joins the driving `@UF`
+/// delta.
+fn register_uf_congr_steps(eg: &mut EGraph, sort: ArcSort, proof_sort: ArcSort, uf_name: &str) {
+    let Some(i64_sort) = eg.get_sort_by_name("i64").cloned() else {
+        return;
+    };
+    let names = &eg.proof_state.proof_names;
+    let congr = names.congr_constructor.clone();
+    let sym = names.eq_sym_constructor.clone();
+    let trans = names.eq_trans_constructor.clone();
+    // The `@UF_<S>` row is `(term) -> (leader, term = leader)`, so the step both
+    // primitives compose is its output column 1.
+    let guard = |steps| GuardedMintSpec {
+        guard_table: uf_name.to_string(),
+        guard_col: 1,
+        steps,
+    };
+
+    let spec = guard(vec![GuardedMintStep {
+        table: congr,
+        args: vec![
+            GuardedMintArg::Acc,
+            GuardedMintArg::Extra(0),
+            GuardedMintArg::Step,
+        ],
+    }]);
+    eg.add_backend_op_primitive(
+        GuardedStep {
+            name: uf_congr_step_prim_name(uf_name),
+            key_sort: sort.clone(),
+            proof_sort: proof_sort.clone(),
+            pos_sort: Some(i64_sort),
+        },
+        WriteState::valid_contexts(),
+        move |backend, _| backend.register_guarded_mint(spec.clone()),
+    );
+
+    let spec = guard(vec![
+        GuardedMintStep {
+            table: sym,
+            args: vec![GuardedMintArg::Step],
+        },
+        GuardedMintStep {
+            table: trans,
+            args: vec![GuardedMintArg::Prev, GuardedMintArg::Acc],
+        },
+    ]);
+    eg.add_backend_op_primitive(
+        GuardedStep {
+            name: uf_sym_trans_step_prim_name(uf_name),
+            key_sort: sort,
+            proof_sort,
+            pos_sort: None,
+        },
+        WriteState::valid_contexts(),
+        move |backend, _| backend.register_guarded_mint(spec.clone()),
+    );
+}
+
+/// One eq-sort's guarded congruence step (see [`register_uf_congr_steps`]).
+/// `pos_sort` is `Some` for the child form, which takes the child index.
+#[derive(Clone)]
+struct GuardedStep {
+    name: String,
+    key_sort: ArcSort,
+    proof_sort: ArcSort,
+    pos_sort: Option<ArcSort>,
+}
+
+impl Primitive for GuardedStep {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        // (acc term [pos]) -> acc
+        let mut sig = vec![self.proof_sort.clone(), self.key_sort.clone()];
+        sig.extend(self.pos_sort.clone());
+        sig.push(self.proof_sort.clone());
+        SimpleTypeConstraint::new(&self.name, sig, span.clone()).into_box()
     }
 }
 

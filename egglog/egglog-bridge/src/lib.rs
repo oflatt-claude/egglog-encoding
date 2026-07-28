@@ -216,6 +216,57 @@ impl Default for EGraph {
     }
 }
 
+/// Where one argument column of a [`GuardedMintStep`] row comes from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GuardedMintArg {
+    /// The op's `acc` argument (argument 0).
+    Acc,
+    /// Output column `guard_col` of the guard row.
+    Step,
+    /// The id minted by the preceding step; invalid in the first step.
+    Prev,
+    /// The op's extra argument at index `i`, counting after `acc` and the key.
+    Extra(usize),
+}
+
+/// One relation row minted by a [`GuardedMintSpec`]: a fresh id is appended to
+/// `args`, followed by the relation's unit output.
+#[derive(Clone, Debug)]
+pub struct GuardedMintStep {
+    pub table: String,
+    pub args: Vec<GuardedMintArg>,
+}
+
+/// A chain of relation rows to mint, but only when a guard row exists.
+///
+/// See [`EGraph::register_guarded_mint`]. `guard_table` is keyed by a single
+/// column and `guard_col` selects the output column of its row that the steps
+/// refer to as [`GuardedMintArg::Step`].
+#[derive(Clone, Debug)]
+pub struct GuardedMintSpec {
+    pub guard_table: String,
+    pub guard_col: usize,
+    pub steps: Vec<GuardedMintStep>,
+}
+
+impl GuardedMintArg {
+    /// Resolve this argument against a guarded mint's call arguments (`acc`, the
+    /// guard key, then the extras), the guard row's step value, and the
+    /// preceding step's minted id.
+    ///
+    /// Panics if the spec names [`GuardedMintArg::Prev`] in its first step or an
+    /// out-of-range [`GuardedMintArg::Extra`].
+    pub fn resolve(self, args: &[Value], step: Value, prev: Option<Value>) -> Value {
+        match self {
+            GuardedMintArg::Acc => args[0],
+            GuardedMintArg::Step => step,
+            GuardedMintArg::Prev => prev.expect("a guarded mint's first step has no previous id"),
+            // `args` is `(acc, key, extra…)`, so extra `i` sits at `i + 2`.
+            GuardedMintArg::Extra(i) => args[i + 2],
+        }
+    }
+}
+
 /// Properties of a function added to an [`EGraph`].
 pub struct FunctionConfig {
     /// The function's schema: `n_keys` key (input) columns followed by [`FunctionConfig::n_vals`]
@@ -353,6 +404,42 @@ impl EGraph {
                 }
                 action.insert(state, args.iter().copied());
                 Some(args[n_keys])
+            },
+        )))
+    }
+
+    /// Register a guarded mint op: `(acc, key, extra…) -> id`. Looks up
+    /// `(spec.guard_table key)`; with no row it returns `acc` and mints nothing,
+    /// otherwise it mints one fresh id per [`GuardedMintStep`] in order, inserts
+    /// each step's row, and returns the last id. Serviced over this backend's db
+    /// tables.
+    pub fn register_guarded_mint(&mut self, spec: GuardedMintSpec) -> ExternalFunctionId {
+        let registry = self.action_registry.clone();
+        let id_counter = self.id_counter;
+        self.register_external_func(Box::new(make_external_func(
+            move |state: &mut ExecutionState, args: &[Value]| {
+                let registry = registry.read().unwrap();
+                let guard = registry.lookup_table(&spec.guard_table)?.clone();
+                // No guard row: the chain would be redundant, so pass `acc` through.
+                let Some(guard_row) = guard.lookup_values(state, &args[1..2]) else {
+                    return Some(args[0]);
+                };
+                let step = guard_row[spec.guard_col];
+                let unit = state.base_values().get::<()>(());
+                let mut prev = None;
+                for mint in &spec.steps {
+                    let table = registry.lookup_table(&mint.table)?.clone();
+                    let out = Value::from_usize(state.inc_counter(id_counter));
+                    let row: Vec<Value> = mint
+                        .args
+                        .iter()
+                        .map(|arg| arg.resolve(args, step, prev))
+                        .chain([out, unit])
+                        .collect();
+                    table.insert(state, row.into_iter());
+                    prev = Some(out);
+                }
+                prev.or(Some(args[0]))
             },
         )))
     }

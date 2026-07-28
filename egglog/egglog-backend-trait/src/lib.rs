@@ -96,8 +96,8 @@ mod backend_impl;
 // ---------------------------------------------------------------------------
 
 pub use egglog_bridge::{
-    ActionRegistry, ColumnTy, DefaultVal, FunctionConfig, FunctionId, MergeAction, MergeFn, RuleId,
-    ScanEntry,
+    ActionRegistry, ColumnTy, DefaultVal, FunctionConfig, FunctionId, GuardedMintArg,
+    GuardedMintSpec, GuardedMintStep, MergeAction, MergeFn, RuleId, ScanEntry,
 };
 pub use egglog_core_relations::{
     BaseValue, BaseValueId, BaseValues, ContainerValue, ContainerValues, CounterId, ExecutionState,
@@ -427,6 +427,24 @@ pub trait Backend: Send + Sync {
     ) -> ExternalFunctionId {
         self.new_panic(format!(
             "this backend does not support view-column reads for view `{view_name}`"
+        ))
+    }
+
+    /// Register a guarded mint op: `(acc, key, extra…) -> id`. Returns the
+    /// [`ExternalFunctionId`] its call sites resolve to. Semantics at invoke:
+    /// look up `(spec.guard_table key)`; if no row exists return `acc`
+    /// unchanged, minting nothing. Otherwise mint one fresh id per
+    /// [`GuardedMintStep`] in order, inserting each step's row, and return the
+    /// last id.
+    ///
+    /// This lets a caller skip a chain of rows that a present-guard row would
+    /// have made redundant, without a second rule. The default registers a
+    /// panic, so a backend that cannot service it fails with a clear message
+    /// rather than silently.
+    fn register_guarded_mint(&mut self, spec: GuardedMintSpec) -> ExternalFunctionId {
+        self.new_panic(format!(
+            "this backend does not support guarded mints against `{}`",
+            spec.guard_table
         ))
     }
 

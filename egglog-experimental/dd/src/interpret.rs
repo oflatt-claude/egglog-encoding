@@ -31,7 +31,8 @@ use anyhow::{anyhow, Result};
 use egglog_ast::core::{GenericAtom, GenericAtomTerm, GenericCoreAction, GenericCoreActions};
 use egglog_ast::generic_ast::Change;
 use egglog_backend_trait::{
-    FunctionId, ReadMode, RuleActionCall, RuleBodyCall, RuleSpec, RuleValue, RuleVar, Value,
+    FunctionId, GuardedMintSpec, ReadMode, RuleActionCall, RuleBodyCall, RuleSpec, RuleValue,
+    RuleVar, Value,
 };
 use egglog_numeric_id::NumericId;
 use hashbrown::{HashMap, HashSet};
@@ -530,6 +531,8 @@ fn apply_head(
                             Some(set_if_empty_apply(eg, &op, &arguments, lookup_index)?)
                         } else if let Some(op) = eg.view_column_read_ops.get(id).cloned() {
                             Some(view_column_read_apply(eg, &op, &arguments, lookup_index)?)
+                        } else if let Some(spec) = eg.guarded_mint_ops.get(id).cloned() {
+                            Some(guarded_mint_apply(eg, &spec, &arguments, lookup_index)?)
                         } else {
                             eg.eval_prim_internal(*id, &arguments)?
                         }
@@ -703,6 +706,52 @@ fn set_if_empty_apply(
     let full: Row = args[..end].iter().map(|v| v.rep()).collect();
     eg.insert_live_row(view, full);
     Ok(args[op.n_keys])
+}
+
+/// Service a guarded mint against the mirror: with no `(guard_table key)` row
+/// return the `acc` arg untouched, otherwise mint one fresh id per step and
+/// insert each step's row, returning the last id. Writes immediately (like
+/// [`lookup_or_create`]) so a later lookup in the same iteration sees the rows.
+fn guarded_mint_apply(
+    eg: &mut EGraph,
+    spec: &GuardedMintSpec,
+    args: &[Value],
+    index: &mut LookupIndex,
+) -> Result<Value> {
+    let guard = *eg.table_ids.get(&spec.guard_table).ok_or_else(|| {
+        anyhow!(
+            "guarded mint table `{}` is not registered",
+            spec.guard_table
+        )
+    })?;
+    let Some(values) = lookup_existing(eg, guard, &args[1..2], index) else {
+        return Ok(args[0]);
+    };
+    let step = Value::new(values[spec.guard_col]);
+    // Each minted relation row is `(args… fresh_id ())`.
+    let unit = eg.db.base_values().get::<()>(()).rep();
+    let mut prev = None;
+    for mint in &spec.steps {
+        let table = *eg
+            .table_ids
+            .get(&mint.table)
+            .ok_or_else(|| anyhow!("guarded mint target `{}` is not registered", mint.table))?;
+        let out = eg.fresh_id_internal();
+        let row: Row = mint
+            .args
+            .iter()
+            .map(|arg| arg.resolve(args, step, prev).rep())
+            .chain([out, unit])
+            .collect();
+        let n_keys = eg.n_keys(table);
+        index
+            .entry(table)
+            .or_default()
+            .insert(row[..n_keys].into(), row[n_keys..].into());
+        eg.insert_live_row(table, row);
+        prev = Some(Value::new(out));
+    }
+    Ok(prev.unwrap_or(args[0]))
 }
 
 /// Service the term encoder's view-column read against the mirror: output column

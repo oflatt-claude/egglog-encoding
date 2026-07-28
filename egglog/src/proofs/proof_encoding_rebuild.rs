@@ -217,7 +217,7 @@ impl ProofInstrumentor<'_> {
         vi: &ViewIndex,
     ) -> String {
         use crate::proofs::proof_container_rebuild::{
-            uf_canon_prim_name, uf_canon_proof_prim_name,
+            uf_canon_prim_name, uf_congr_step_prim_name, uf_sym_trans_step_prim_name,
         };
         let proofs = self.proofs_enabled();
         let view_name = self.view_name(&fdecl.name);
@@ -252,22 +252,12 @@ impl ProofInstrumentor<'_> {
                 uf_canon_prim_name(&uf_j)
             ));
             if proofs {
-                let term_proof = self.term_proof_name(types[j].name());
-                let refl = self.fresh_var();
-                let step = self.fresh_var();
-                let congr = self.proof_names().congr_constructor.clone();
-                let proof_sort = self.proof_sort();
-                lets.push(format!("(let {refl} ({term_proof} {cj}))"));
+                let next = self.fresh_var();
                 lets.push(format!(
-                    "(let {step} ({} {cj} {refl}))",
-                    uf_canon_proof_prim_name(&uf_j)
+                    "(let {next} ({} {proof_acc} {cj} {j}))",
+                    uf_congr_step_prim_name(&uf_j)
                 ));
-                proof_acc = self.mint(
-                    &mut lets,
-                    &congr,
-                    &format!("{proof_acc} {j} {step}"),
-                    &proof_sort,
-                );
+                proof_acc = next;
             }
             updated[j] = canon;
         }
@@ -289,24 +279,12 @@ impl ProofInstrumentor<'_> {
                 uf_canon_prim_name(&uf_out)
             ));
             if proofs {
-                let term_proof = self.term_proof_name(out_ty.name());
-                let refl = self.fresh_var();
-                let step = self.fresh_var();
-                let sym = self.proof_names().eq_sym_constructor.clone();
-                let trans = self.proof_names().eq_trans_constructor.clone();
-                let proof_sort = self.proof_sort();
-                lets.push(format!("(let {refl} ({term_proof} {eclass}))"));
+                let next = self.fresh_var();
                 lets.push(format!(
-                    "(let {step} ({} {eclass} {refl}))",
-                    uf_canon_proof_prim_name(&uf_out)
+                    "(let {next} ({} {proof_acc} {eclass}))",
+                    uf_sym_trans_step_prim_name(&uf_out)
                 ));
-                let sym_pf = self.mint(&mut lets, &sym, &step, &proof_sort);
-                proof_acc = self.mint(
-                    &mut lets,
-                    &trans,
-                    &format!("{sym_pf} {proof_acc}"),
-                    &proof_sort,
-                );
+                proof_acc = next;
             }
             canon
         } else {

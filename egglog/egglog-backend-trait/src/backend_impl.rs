@@ -16,8 +16,9 @@ use egglog_ast::core::{GenericAtomTerm, GenericCoreAction};
 
 use crate::{
     Backend, BaseValues, ColumnTy, ContainerValues, ExecutionState, ExternalFunction,
-    ExternalFunctionId, FunctionConfig, FunctionId, IterationReport, ReportLevel, RuleActionCall,
-    RuleBodyCall, RuleId, RuleSetRun, RuleSpec, RuleValue, RuleVar, ScanEntry, Value,
+    ExternalFunctionId, FunctionConfig, FunctionId, GuardedMintSpec, IterationReport, ReportLevel,
+    RuleActionCall, RuleBodyCall, RuleId, RuleSetRun, RuleSpec, RuleValue, RuleVar, ScanEntry,
+    Value,
 };
 
 fn rule_entry(
@@ -265,6 +266,10 @@ impl Backend for EGraph {
         col_idx: usize,
     ) -> ExternalFunctionId {
         EGraph::register_view_column_read(self, view_name, n_keys, col_idx)
+    }
+
+    fn register_guarded_mint(&mut self, spec: GuardedMintSpec) -> ExternalFunctionId {
+        EGraph::register_guarded_mint(self, spec)
     }
 
     fn set_report_level(&mut self, level: ReportLevel) {

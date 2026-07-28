@@ -27,4 +27,4 @@ expression: proof_snapshot
           0)
         0)
       0))
-  (substitution (@v66 (b)) (@rewrite_var__1 t1) (@v67 (vec-of (vec-of (b))))))
+  (substitution (@rewrite_var__1 t1) (@v55 (b)) (@v56 (vec-of (vec-of (b))))))

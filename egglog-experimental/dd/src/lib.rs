@@ -28,8 +28,9 @@ use egglog_ast::core::{GenericAtomTerm, GenericCoreAction};
 use egglog_backend_trait::{
     Backend, BaseValues, ColumnTy, ContainerMergeFn, ContainerValues, CounterId, DefaultVal,
     ExecutionState, ExternalFunction, ExternalFunctionId, FunctionConfig, FunctionId,
-    IterationReport, MergeAction, MergeFn, PreMergeTiming, ReportLevel, RuleActionCall,
-    RuleBodyCall, RuleId, RuleSetRun, RuleSpec, RuleValue, RuleVar, ScanEntry, Value,
+    GuardedMintSpec, IterationReport, MergeAction, MergeFn, PreMergeTiming, ReportLevel,
+    RuleActionCall, RuleBodyCall, RuleId, RuleSetRun, RuleSpec, RuleValue, RuleVar, ScanEntry,
+    Value,
 };
 use egglog_core_relations::Database;
 use egglog_numeric_id::NumericId;
@@ -184,6 +185,8 @@ pub struct EGraph {
     pub(crate) set_if_empty_ops: HashMap<ExternalFunctionId, ViewOp>,
     /// View-column reader ops, keyed like `set_if_empty_ops`.
     pub(crate) view_column_read_ops: HashMap<ExternalFunctionId, ViewOp>,
+    /// Guarded mint ops, keyed like `set_if_empty_ops`.
+    pub(crate) guarded_mint_ops: HashMap<ExternalFunctionId, GuardedMintSpec>,
 }
 
 /// A term-encoding view op (`set-if-empty` or view-column read) the DD interpreter
@@ -265,6 +268,7 @@ impl EGraph {
             table_ids: HashMap::new(),
             set_if_empty_ops: HashMap::new(),
             view_column_read_ops: HashMap::new(),
+            guarded_mint_ops: HashMap::new(),
         }
     }
 
@@ -2670,6 +2674,18 @@ impl Backend for EGraph {
         id
     }
 
+    fn register_guarded_mint(&mut self, spec: GuardedMintSpec) -> ExternalFunctionId {
+        let id = Backend::new_panic(
+            self,
+            format!(
+                "guarded mint against `{}` reached the db path; DD must intercept it",
+                spec.guard_table
+            ),
+        );
+        self.guarded_mint_ops.insert(id, spec);
+        id
+    }
+
     // -- capability flags ---------------------------------------------------
 
     fn requires_term_encoding(&self) -> bool {
@@ -2724,6 +2740,7 @@ impl Backend for EGraph {
             table_ids: self.table_ids.clone(),
             set_if_empty_ops: self.set_if_empty_ops.clone(),
             view_column_read_ops: self.view_column_read_ops.clone(),
+            guarded_mint_ops: self.guarded_mint_ops.clone(),
         })
     }
 
