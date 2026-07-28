@@ -232,6 +232,39 @@ mod tests {
         }
     }
 
+    /// A rule head that builds a term over a subterm whose e-class already holds
+    /// a differently-shaped term needs a canonicalization bridge whose child
+    /// proof moves the term, and that child comes from another rule's firing. So
+    /// the bridge states an equality the head does not conclude: no conclusion
+    /// site names it, and it cannot be reconstructed from the rule, its premises
+    /// and a site index.
+    #[test]
+    fn head_canonicalization_bridge_is_load_bearing() {
+        let source = r#"
+            (datatype Math (Add Math Math) (Neg Math) (Num i64))
+            (ruleset commute)
+            (ruleset wrap)
+            (rewrite (Add a b) (Add b a) :ruleset commute :name "commute")
+            (rule ((= x (Add a b))) ((Neg (Add b a))) :ruleset wrap :name "wrap")
+            (let $e (Add (Num 1) (Num 2)))
+            (run commute 1)
+            (run wrap 1)
+            (prove (Neg (Add (Num 2) (Num 1))))"#;
+
+        proof_reconstruct_check::begin();
+        let mut egraph = EGraph::new_with_proofs();
+        let result = egraph.parse_and_run_program(None, source);
+        let stats = proof_reconstruct_check::end();
+
+        result.unwrap();
+        assert!(
+            stats.head_bridges_load_bearing > 0,
+            "expected a bridge whose child proof moves the term, got {} of {}",
+            stats.head_bridges_load_bearing,
+            stats.head_bridges,
+        );
+    }
+
     /// A rule's conclusion is reconstructible: replaying its head reaches the
     /// conclusion the proof records at one of the head's conclusion sites, and
     /// the substitution the replay needs can be rebuilt without reading any

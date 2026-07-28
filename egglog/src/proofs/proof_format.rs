@@ -7,6 +7,7 @@ use crate::{
             process_actions, run_merge,
         },
         proof_encoding_helpers::EncodingNames,
+        proof_reconstruct_check,
         proof_sites::SiteRef,
     },
     typechecking::{FuncType, PrimitiveValidator},
@@ -477,6 +478,14 @@ impl RawProofStore {
         RawProofId::from_usize(self.store.len() - 1)
     }
 
+    /// Follow a chain of [`RawProof::Congr`] steps down to the proof it extends.
+    fn congr_chain_base(&self, mut proof: RawProofId) -> &RawProof {
+        while let RawProof::Congr(base, _, _) = &self.store[proof.index()] {
+            proof = *base;
+        }
+        &self.store[proof.index()]
+    }
+
     fn unwrap_ast(&self, term_id: TermId) -> TermId {
         let term = self.term_dag.get(term_id).clone();
         let Term::App(_, args) = term else {
@@ -775,6 +784,18 @@ impl ProofStore {
             RawProof::Congr(proof_raw, child_index, child_raw) => {
                 let base_id = self.convert_raw_proof(prog, globals, raw_store, *proof_raw);
                 let child_id = self.convert_raw_proof(prog, globals, raw_store, *child_raw);
+                if proof_reconstruct_check::enabled()
+                    && let RawProof::Rule(name, _, _, _, raw_site) =
+                        raw_store.congr_chain_base(*proof_raw)
+                {
+                    let child = &self.id_to_proof[child_id];
+                    proof_reconstruct_check::record_head_bridge(
+                        prog,
+                        name,
+                        SiteRef::decode(*raw_site),
+                        child.lhs() == child.rhs(),
+                    );
+                }
                 let base_lhs = self.id_to_proof[base_id].lhs();
                 let base_rhs = self.id_to_proof[base_id].rhs();
                 let child_rhs = self.id_to_proof[child_id].rhs();

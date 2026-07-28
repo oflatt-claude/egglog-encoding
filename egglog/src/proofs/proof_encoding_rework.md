@@ -68,7 +68,7 @@ skeleton is still present to compare against.
 | 0 | one canonical `conclusion_sites`; `process_actions` returns site-indexed propositions | done — zero snapshot changes |
 | 1 | reconstructor runs *beside* the skeleton, differentially asserted | done — see below |
 | 2a | rule proof carries a conclusion-site index; the conclusion is derived from it instead of from the stored `Ast` columns | done — zero snapshot changes |
-| 2b | stop emitting the RHS `Congr`/`Trans`/`Sym` skeleton; reconstruction synthesizes it | zero snapshot changes |
+| 2b | stop emitting the RHS `Congr`/`Trans`/`Sym` skeleton; reconstruction synthesizes it | **blocked** — see below |
 | 3 | drop `@Ast` | ditto |
 | 4 | rebuilding → `RebuildN` | ditto |
 | 5 | re-enable CSE after encoding, repair term mode, re-measure | nothing left behind the switch |
@@ -183,6 +183,105 @@ measured. Phase 3 will pull in the other direction: dropping the `Ast` columns
 merges nodes that differ only there, and since same rule + same premises + same
 site forces the same conclusion, that merge is sound.
 
+### Phase 2b result: blocked
+
+`(rule name, premise proofs, conclusion-site index)` determines a rule proof's
+conclusion — phase 2a measured that, and it still holds (0 of 13392 stamped sites
+disagree). It does **not** determine the skeleton, because part of the skeleton
+states equalities the head never concludes.
+
+#### The canonicalization bridge
+
+A head that builds a term interns each subterm into its view. When
+`set-if-empty` returns an **existing** e-class, that e-class's term row may hold
+a *differently shaped* term — the two shapes are equal in the e-graph, but they
+are different terms, and a proof has to say so. That proof is the bridge the
+`Congr` chain in `build_natural_with_congr` folds onto the natural node, and it
+comes from whichever *other* rule firing made the two shapes equal. No site of
+the head under construction names it, and it is not among that head's premises.
+
+Minimal reproducer — pinned by
+`head_canonicalization_bridge_is_load_bearing` in `proof_tests.rs`:
+
+```
+(datatype Math (Add Math Math) (Neg Math) (Num i64))
+(rewrite (Add a b) (Add b a) :ruleset commute :name "commute")
+(rule ((= x (Add a b))) ((Neg (Add b a))) :ruleset wrap :name "wrap")
+(let $e (Add (Num 1) (Num 2)))
+(run commute 1)
+(run wrap 1)
+(prove (Neg (Add (Num 2) (Num 1))))
+```
+
+`commute` builds `(Add b a)` into `$e`'s e-class, so that e-class's term row
+still reads `(Add (Num 1) (Num 2))`. `wrap` then builds `(Add b a)`, interns it,
+gets that same e-class, and emits
+
+```text
+(Congr (= (Neg (Add (Num 2) (Num 1))) (Neg (Add (Num 1) (Num 2))))
+       (Rule (= (Neg (Add (Num 2) (Num 1))) (Neg (Add (Num 2) (Num 1)))) (name "wrap") …)
+       (Sym (= (Add (Num 2) (Num 1)) (Add (Num 1) (Num 2)))
+            (Rule … (name "commute") …))
+       0)
+```
+
+The child is `commute`'s proof. `wrap`'s premises are `(= x (Add a b))` alone.
+
+#### How much of the skeleton this is
+
+`proof_reconstruct_check` now also counts these bridges, reporting
+`PROOF-HEAD-BRIDGE … load_bearing=` per step and
+`head_bridges{,_load_bearing}` in `ReconstructStats`. Over the `proofs/` corpus:
+
+| head canonicalization bridges | steps |
+| --- | --- |
+| child proof reflexive — the step is the identity on terms | 2082 |
+| child proof moves the term — the step is the only thing stating it | 240 |
+
+Deleting the chain (`nat_to_dedup := nat_prf`) fails **28 of the 206** `proofs/`
+tests, all at conversion time with
+`transitivity requires matching middle terms`: the view row's proof no longer
+ends at the term the row's children spell, so nothing composes with it.
+
+#### What a working 2b has to carry
+
+The bridge's runtime input is the *view-row proof of each interned subterm* —
+which the encoder already reads (`view-proof-<View>`), and which costs no row.
+So the shape that reaches one emitted row per conclusion is
+`RuleN(body premises … , subterm view proofs …)`: conversion splits the list at
+`rule.body.len()`, replays the head for the as-written terms, and folds a `Congr`
+per moved child and a `Sym` per interned subterm — the same synthesis
+`RebuildN` is planned to do in phase 4. That widens the premise list and needs a
+discriminator for the three propositions one build site needs (as-written
+reflexive, canonical reflexive, and the bridge itself), so it is a design change,
+not a deletion.
+
+#### Confirmed unchanged: a nested argument of `change`
+
+`change` contributes no sites, so a nested constructor argument is built with the
+`-1` sentinel. Reading such a proof does not report a checker error — it panics in
+`SiteRef::decode` (`rule proof was emitted without a conclusion site`). Reached
+whenever the nested term is new, e.g. `(rule ((Seed x)) ((delete (F (Num 3)))))`
+followed by `(prove (Num 3))`. This is phase 2a's behavior, unchanged.
+
+#### Second blocker: the snapshot gate is coupled to mint counts
+
+Independently of the above, **"zero changed proof snapshots" cannot hold for any
+phase that changes how many proof nodes a firing mints.** Seven `proofs/`
+snapshots print rule-body variables that `proof_normal_form.rs` names with
+`symbol_gen.fresh("v")` — the same hint, and therefore the same counter, that
+`ProofInstrumentor::fresh_var` mints proof-node variables from. Emit one node
+fewer and every later `@vNNN` shifts:
+
+```text
+-  (substitution (@v637 t0) (@v638 t3))
++  (substitution (@v587 t0) (@v588 t3))
+```
+
+Measured by applying a provably output-equivalent reduction (below): 7 snapshots
+changed, and in all 7 the diff is only this renumbering. Giving the encoder its
+own hint decouples them, at the cost of one deliberate re-bless of those 7.
+
 ## Standing rules
 
 * **No `proofs/` test may fail at any phase.** That corpus is the only oracle
@@ -254,6 +353,25 @@ pure optimization again and phase 5 has no correctness work left, only
 re-enabling it after encoding.
 
 ## Available now, independent of the phases
+
+**Collapse the skeleton the encoder statically knows is the identity.** Whether
+`build_natural_with_congr` emits a `Congr` chain at all is decided at encoding
+time — a child contributes a step only if it has a `NatConn` connector. With no
+chain, `nat_to_dedup` *is* the natural node's reflexive term proof, so four
+composites reduce to a node the encoder already has:
+
+| emitted | with no chain |
+| --- | --- |
+| `can_prf = Trans (Sym chain) chain` | `nat_prf` (`fv_can` spells the same application) |
+| `connector = Trans chain (Sym vprf)` | `Sym vprf` |
+| `to_dedup = Trans edge chain` | `edge` |
+| `guest_conn = Trans chain (Sym view_proof)` | `Sym view_proof` |
+
+Output-equivalent by construction: `simplify` already rewrites exactly these
+(`opt_reflexive_trans`, `opt_reflexive_sym`). Measured: a `rewrite` firing goes
+from 9 proof rows to 7, a nested `(rewrite (Mul a (Add b c)) (Add (Mul a b) (Mul
+a c)))` firing drops 6. The only thing standing in the way is the fresh-name
+coupling above — all 7 snapshot diffs it produces are `@vNNN` renumbering.
 
 Two sites mint rows nothing ever reads:
 

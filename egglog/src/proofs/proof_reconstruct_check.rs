@@ -10,10 +10,16 @@
 //! (`@Ast` payloads for body primitives and container side conditions), which is
 //! what a term-free rule justification would have to do.
 //!
+//! Alongside that, [`record_head_bridge`] counts the canonicalization bridges a
+//! rule head emits — the `Congr` steps moving a term it built onto its children's
+//! canonical e-classes — and how many of them state an equality the head does not
+//! conclude, which is what a site index cannot name.
+//!
 //! The check observes; it never changes what the checker accepts. It is off
 //! unless `EGGLOG_PROOF_RECONSTRUCT_CHECK=1`, which also logs one
-//! `PROOF-RECONSTRUCT` line per node at `info`, or unless a test enables it
-//! with [`begin`] and reads the counters back with [`end`].
+//! `PROOF-RECONSTRUCT` line per node and one `PROOF-HEAD-BRIDGE` line per bridge
+//! at `info`, or unless a test enables it with [`begin`] and reads the counters
+//! back with [`end`].
 
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
@@ -21,12 +27,12 @@ use std::sync::OnceLock;
 
 use crate::{
     TermId,
-    ast::{ResolvedExpr, ResolvedFact, ResolvedRule},
+    ast::{FunctionSubtype, ResolvedExpr, ResolvedFact, ResolvedNCommand, ResolvedRule},
     core::ResolvedCall,
     proofs::{
         proof_checker::{eval_expr_with_subst, is_container_side_condition, process_actions},
         proof_format::{ProofId, ProofStore, Proposition},
-        proof_sites::{SiteRef, conclusion_sites},
+        proof_sites::{SiteConclusion, SiteRef, conclusion_sites},
     },
     util::{HashMap, IndexMap, SymbolGen},
 };
@@ -60,6 +66,13 @@ pub(crate) struct ReconstructStats {
     /// Nodes whose stamped site does not reproduce the conclusion the way it
     /// says. Deriving the conclusion from a site is only sound while this is 0.
     pub stamped_wrong: usize,
+    /// Canonicalization bridges: `Congr` steps moving a constructor the head
+    /// built onto its children's canonical e-classes.
+    pub head_bridges: usize,
+    /// Bridges whose child proof is not reflexive, so the step changes the term.
+    /// Those steps state an equality the head does not conclude, so a site index
+    /// cannot name them.
+    pub head_bridges_load_bearing: usize,
 }
 
 thread_local! {
@@ -430,6 +443,51 @@ pub(super) fn record(
             status(&derived),
             show_sites(store, rule, rule_name, recorded_subst.clone()),
             one_line(&rule.to_string()),
+        );
+    }
+}
+
+/// Record one canonicalization bridge, if `site` of `rule_name` names a
+/// constructor the head builds — a `Congr` step over any other kind of site
+/// belongs to rebuilding, not to the head.
+pub(super) fn record_head_bridge(
+    prog: &[ResolvedNCommand],
+    rule_name: &str,
+    site: SiteRef,
+    child_is_reflexive: bool,
+) {
+    let Some(rule) = prog.iter().find_map(|cmd| match cmd {
+        ResolvedNCommand::NormRule { rule } if rule.name == rule_name => Some(rule),
+        _ => None,
+    }) else {
+        return;
+    };
+    let sites = conclusion_sites(rule.head.0.iter());
+    let builds_constructor = matches!(
+        sites.get(site.index.0).map(|s| &s.conclusion),
+        Some(SiteConclusion::Reflexive(expr))
+            if matches!(
+                expr.as_ref(),
+                ResolvedExpr::Call(_, ResolvedCall::Func(func), _)
+                    if func.subtype == FunctionSubtype::Constructor
+            )
+    );
+    if !builds_constructor {
+        return;
+    }
+    STATS.with(|stats| {
+        let mut stats = stats.borrow_mut();
+        stats.head_bridges += 1;
+        if !child_is_reflexive {
+            stats.head_bridges_load_bearing += 1;
+        }
+    });
+    if env_enabled() {
+        log::info!(
+            "PROOF-HEAD-BRIDGE site={} load_bearing={} rule={}",
+            site.index.0,
+            !child_is_reflexive,
+            one_line(rule_name),
         );
     }
 }
