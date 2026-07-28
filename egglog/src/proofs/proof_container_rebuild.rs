@@ -110,16 +110,16 @@ pub(crate) fn register_uf_canon(
 /// Register an eq-sort's two guarded congruence-step primitives, which fold one
 /// column's `@UF_<S>` move onto a row proof:
 ///
-/// * `uf_congr_step : (Proof S i64) -> Proof` — `(acc term pos)`, `Congr(acc,
-///   pos, term = leader)` for a child at index `pos`.
-/// * `uf_sym_trans_step : (Proof S) -> Proof` — `(acc term)`,
+/// * `uf_congr_step : (Proof S i64 S) -> Proof` — `(acc term pos canon)`,
+///   `Congr(acc, pos, term = leader)` for a child at index `pos`.
+/// * `uf_sym_trans_step : (Proof S S) -> Proof` — `(acc term canon)`,
 ///   `Trans(Sym(term = leader), acc)` for a row's e-class.
 ///
-/// Both return `acc` untouched when `term` has no `@UF_<S>` row: the step it
-/// would compose is reflexive, so the row proof is already the one wanted, and
-/// nothing is minted. Like [`register_uf_canon`] they read `@UF_<S>`, so they
-/// are sound only in the action of a rule whose body joins the driving `@UF`
-/// delta.
+/// `canon` is the caller's `uf_canon` result for `term`. Both return `acc`
+/// untouched, minting nothing, when `term` equals it or has no `@UF_<S>` row:
+/// the step they would compose is reflexive, so the row proof is already the one
+/// wanted. Like [`register_uf_canon`] they read `@UF_<S>`, so they are sound
+/// only in the action of a rule whose body joins the driving `@UF` delta.
 fn register_uf_congr_steps(eg: &mut EGraph, sort: ArcSort, proof_sort: ArcSort, uf_name: &str) {
     let Some(i64_sort) = eg.get_sort_by_name("i64").cloned() else {
         return;
@@ -130,20 +130,24 @@ fn register_uf_congr_steps(eg: &mut EGraph, sort: ArcSort, proof_sort: ArcSort, 
     let trans = names.eq_trans_constructor.clone();
     // The `@UF_<S>` row is `(term) -> (leader, term = leader)`, so the step both
     // primitives compose is its output column 1.
-    let guard = |steps| GuardedMintSpec {
+    let guard = |steps, canon_arg| GuardedMintSpec {
         guard_table: uf_name.to_string(),
         guard_col: 1,
         steps,
+        skip_when_key_equals: Some(canon_arg),
     };
 
-    let spec = guard(vec![GuardedMintStep {
-        table: congr,
-        args: vec![
-            GuardedMintArg::Acc,
-            GuardedMintArg::Extra(0),
-            GuardedMintArg::Step,
-        ],
-    }]);
+    let spec = guard(
+        vec![GuardedMintStep {
+            table: congr,
+            args: vec![
+                GuardedMintArg::Acc,
+                GuardedMintArg::Extra(0),
+                GuardedMintArg::Step,
+            ],
+        }],
+        1,
+    );
     eg.add_backend_op_primitive(
         GuardedStep {
             name: uf_congr_step_prim_name(uf_name),
@@ -155,16 +159,19 @@ fn register_uf_congr_steps(eg: &mut EGraph, sort: ArcSort, proof_sort: ArcSort, 
         move |backend, _| backend.register_guarded_mint(spec.clone()),
     );
 
-    let spec = guard(vec![
-        GuardedMintStep {
-            table: sym,
-            args: vec![GuardedMintArg::Step],
-        },
-        GuardedMintStep {
-            table: trans,
-            args: vec![GuardedMintArg::Prev, GuardedMintArg::Acc],
-        },
-    ]);
+    let spec = guard(
+        vec![
+            GuardedMintStep {
+                table: sym,
+                args: vec![GuardedMintArg::Step],
+            },
+            GuardedMintStep {
+                table: trans,
+                args: vec![GuardedMintArg::Prev, GuardedMintArg::Acc],
+            },
+        ],
+        0,
+    );
     eg.add_backend_op_primitive(
         GuardedStep {
             name: uf_sym_trans_step_prim_name(uf_name),
@@ -193,9 +200,10 @@ impl Primitive for GuardedStep {
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        // (acc term [pos]) -> acc
+        // (acc term [pos] canon) -> acc
         let mut sig = vec![self.proof_sort.clone(), self.key_sort.clone()];
         sig.extend(self.pos_sort.clone());
+        sig.push(self.key_sort.clone());
         sig.push(self.proof_sort.clone());
         SimpleTypeConstraint::new(&self.name, sig, span.clone()).into_box()
     }

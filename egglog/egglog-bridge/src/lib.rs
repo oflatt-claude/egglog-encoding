@@ -247,6 +247,11 @@ pub struct GuardedMintSpec {
     pub guard_table: String,
     pub guard_col: usize,
     pub steps: Vec<GuardedMintStep>,
+    /// Index of an extra argument holding the key's canonical value. When set
+    /// and the key already equals it, the op returns `acc` without reading
+    /// `guard_table` at all: the caller has established that the guard row can
+    /// only justify a reflexive step.
+    pub skip_when_key_equals: Option<usize>,
 }
 
 impl GuardedMintArg {
@@ -418,6 +423,11 @@ impl EGraph {
         let id_counter = self.id_counter;
         self.register_external_func(Box::new(make_external_func(
             move |state: &mut ExecutionState, args: &[Value]| {
+                if let Some(i) = spec.skip_when_key_equals
+                    && args[1] == args[i + 2]
+                {
+                    return Some(args[0]);
+                }
                 let registry = registry.read().unwrap();
                 let guard = registry.lookup_table(&spec.guard_table)?.clone();
                 // No guard row: the chain would be redundant, so pass `acc` through.

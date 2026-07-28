@@ -718,6 +718,12 @@ fn guarded_mint_apply(
     args: &[Value],
     index: &mut LookupIndex,
 ) -> Result<Value> {
+    if spec
+        .skip_when_key_equals
+        .is_some_and(|i| args[1] == args[i + 2])
+    {
+        return Ok(args[0]);
+    }
     let guard = *eg.table_ids.get(&spec.guard_table).ok_or_else(|| {
         anyhow!(
             "guarded mint table `{}` is not registered",

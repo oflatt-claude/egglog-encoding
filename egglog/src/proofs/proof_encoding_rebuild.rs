@@ -235,8 +235,9 @@ impl ProofInstrumentor<'_> {
         let index_atom = format!("({} {follower} {keys_str} {eclass} {row_pf})", vi.name);
 
         // Canonicalize every eq-sort column, folding its congruence step onto the
-        // row proof. A column that did not move canonicalizes to itself and its
-        // step is reflexive, which the proof simplifier drops.
+        // row proof. A column that did not move canonicalizes to itself, and its
+        // guarded step leaves the row proof alone rather than composing a
+        // reflexive one.
         let mut lets: Vec<String> = Vec::new();
         let mut updated = key_vars.to_vec();
         let mut proof_acc = row_pf.clone();
@@ -254,7 +255,7 @@ impl ProofInstrumentor<'_> {
             if proofs {
                 let next = self.fresh_var();
                 lets.push(format!(
-                    "(let {next} ({} {proof_acc} {cj} {j}))",
+                    "(let {next} ({} {proof_acc} {cj} {j} {canon}))",
                     uf_congr_step_prim_name(&uf_j)
                 ));
                 proof_acc = next;
@@ -281,7 +282,7 @@ impl ProofInstrumentor<'_> {
             if proofs {
                 let next = self.fresh_var();
                 lets.push(format!(
-                    "(let {next} ({} {proof_acc} {eclass}))",
+                    "(let {next} ({} {proof_acc} {eclass} {canon}))",
                     uf_sym_trans_step_prim_name(&uf_out)
                 ));
                 proof_acc = next;

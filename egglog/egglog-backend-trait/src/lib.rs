@@ -437,10 +437,9 @@ pub trait Backend: Send + Sync {
     /// [`GuardedMintStep`] in order, inserting each step's row, and return the
     /// last id.
     ///
-    /// This lets a caller skip a chain of rows that a present-guard row would
-    /// have made redundant, without a second rule. The default registers a
-    /// panic, so a backend that cannot service it fails with a clear message
-    /// rather than silently.
+    /// This lets a caller make a chain of rows conditional on the guard within a
+    /// single rule action. The default registers a panic, so a backend that
+    /// cannot service it fails with a clear message rather than silently.
     fn register_guarded_mint(&mut self, spec: GuardedMintSpec) -> ExternalFunctionId {
         self.new_panic(format!(
             "this backend does not support guarded mints against `{}`",
