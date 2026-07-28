@@ -3,9 +3,11 @@ use crate::{
     ast::{FunctionSubtype, GenericNCommand, ResolvedExpr, ResolvedFact, ResolvedNCommand},
     proofs::{
         proof_checker::{
-            ProofCheckError, ProofCheckErrorKind, eval_expr_with_subst, gather_globals, run_merge,
+            ProofCheckError, ProofCheckErrorKind, eval_expr_with_subst, gather_globals,
+            process_actions, run_merge,
         },
         proof_encoding_helpers::EncodingNames,
+        proof_sites::SiteRef,
     },
     typechecking::{FuncType, PrimitiveValidator},
     util::{HashMap, HashSet, IEntry, IndexMap, IndexSet, SymbolGen},
@@ -136,7 +138,10 @@ enum RawProof {
     Fiat(TermId, TermId),
     /// Given a rule name and proofs for each premise, produces a proof of a grounded equality t1 = t2 from the body of the rule.
     /// The subsitution is implicit- in [`ProofTerm`] they are explicit.
-    Rule(String, Vec<RawProofId>, TermId, TermId),
+    /// The last field is the head conclusion site the equality comes from, encoded
+    /// by [`SiteRef::encode`]; conversion derives the equality from it and the
+    /// stored `t1`/`t2` record the same equality.
+    Rule(String, Vec<RawProofId>, TermId, TermId, i64),
     /// A term-free merge proof: given proofs `f(…, old) = f(…, old)` and
     /// `f(…, new) = f(…, new)`, the index `idx` identifies which subexpression of the
     /// merge body this justifies (a pre-order index over the body tree). The
@@ -270,6 +275,9 @@ pub enum Justification {
         premise_proofs: Vec<ProofId>,
         /// Ordered by where each variable first occurs in the rule body.
         substitution: IndexMap<String, TermId>,
+        /// The head conclusion site the [`Proposition`] comes from: replaying the
+        /// head under `substitution` and reading this site reproduces it.
+        site: SiteRef,
     },
     /// Given two proofs f(c1, c2, ..., old) = f(c1, c2, ..., old) and f(c1, c2, ..., new) = f(c1, c2, ..., new),
     /// proves either:
@@ -354,10 +362,11 @@ impl RawProofStore {
             assert!(args.len() == 2, "fiat constructor should have 2 args");
             RawProof::Fiat(args[0], args[1])
         } else if head == self.names.rule_constructor {
-            assert!(args.len() == 4, "rule constructor should have 4 args");
+            assert!(args.len() == 5, "rule constructor should have 5 args");
             let name = self.parse_string(args[0]);
             let premises = self.parse_proof_list(args[1]);
-            RawProof::Rule(name, premises, args[2], args[3])
+            let site = self.parse_int(args[4]);
+            RawProof::Rule(name, premises, args[2], args[3], site)
         } else if head == self.names.merge_fn_idx_constructor {
             assert!(args.len() == 4, "merge-idx constructor should have 4 args");
             let function = self.parse_string(args[0]);
@@ -450,6 +459,13 @@ impl RawProofStore {
             other => {
                 panic!("expected non-negative integer literal for congruence index, got {other:?}")
             }
+        }
+    }
+
+    fn parse_int(&self, term_id: TermId) -> i64 {
+        match self.term_dag.get(term_id) {
+            Term::Lit(Literal::Int(i)) => *i,
+            other => panic!("expected integer literal in proof term, got {other:?}"),
         }
     }
 
@@ -642,7 +658,8 @@ impl ProofStore {
                 ),
                 justification: Justification::Fiat,
             },
-            RawProof::Rule(name, premise_proofs, lhs, rhs) => {
+            RawProof::Rule(name, premise_proofs, _lhs, _rhs, raw_site) => {
+                let site = SiteRef::decode(*raw_site);
                 let converted_premises: Vec<ProofId> = premise_proofs
                     .iter()
                     .map(|pid| self.convert_raw_proof(prog, globals, raw_store, *pid))
@@ -681,18 +698,18 @@ impl ProofStore {
 
                 let mut substitution =
                     self.compute_rule_substitution(prog, name, &converted_premises);
+                let proposition =
+                    self.rule_site_conclusion(prog, globals, name, &substitution, site);
                 // remove globals from the substitution, since they are not necessary
                 substitution.retain(|var, _term_id| globals.get(var).is_none());
 
                 Proof {
-                    proposition: Proposition::new(
-                        raw_store.unwrap_ast(*lhs),
-                        raw_store.unwrap_ast(*rhs),
-                    ),
+                    proposition,
                     justification: Justification::Rule {
                         name: name.clone(),
                         premise_proofs: converted_premises,
                         substitution,
+                        site,
                     },
                 }
             }
@@ -804,6 +821,38 @@ impl ProofStore {
         let proof_id = self.id_to_proof.push(proof);
         self.proof_id.insert(raw_proof.clone(), proof_id);
         proof_id
+    }
+
+    /// The proposition a rule proof concludes: replay the rule's head under the
+    /// substitution its premises determine and read `site`.
+    ///
+    /// Panics if the rule is not in `prog`, if its head does not replay, or if
+    /// `site` is not one of its conclusion sites.
+    fn rule_site_conclusion(
+        &mut self,
+        prog: &[ResolvedNCommand],
+        globals: &HashMap<String, TermId>,
+        rule_name: &str,
+        substitution: &IndexMap<String, TermId>,
+        site: SiteRef,
+    ) -> Proposition {
+        let Some(rule) = prog.iter().find_map(|cmd| match cmd {
+            ResolvedNCommand::NormRule { rule } if rule.name == rule_name => Some(rule),
+            _ => None,
+        }) else {
+            panic!("could not find rule with name {rule_name}");
+        };
+        let actions: Vec<_> = rule.head.0.iter().collect();
+        let mut bindings = globals.clone();
+        bindings.extend(substitution.iter().map(|(var, term)| (var.clone(), *term)));
+        let ctx = process_actions(rule_name, bindings, &actions, &mut self.term_dag)
+            .unwrap_or_else(|err| panic!("rule {rule_name}'s head did not replay: {err}"));
+        let prop = ctx
+            .site_propositions
+            .iter()
+            .find_map(|(index, prop)| (*index == site.index).then_some(prop))
+            .unwrap_or_else(|| panic!("rule {rule_name} has no conclusion site {}", site.index.0));
+        site.orient(prop)
     }
 
     /// For a given rule and premise proofs, compute the substitution used in the rule application.
@@ -1088,6 +1137,7 @@ impl ProofStore {
                 name,
                 premise_proofs,
                 substitution,
+                site: _,
             } => {
                 let equality = make_equality(dag, proof.lhs(), proof.rhs());
                 let name_literal = dag.lit(Literal::String(name.clone()));

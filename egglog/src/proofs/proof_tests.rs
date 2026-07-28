@@ -281,6 +281,10 @@ mod tests {
                 "{source}\nno conclusion site reproduced the recorded conclusion"
             );
             assert_eq!(
+                stats.stamped_wrong, 0,
+                "{source}\nthe site the encoder stamped does not reproduce the conclusion"
+            );
+            assert_eq!(
                 stats.payload_free_fails, 0,
                 "{source}\nthe substitution could not be rebuilt without carried values"
             );
@@ -456,9 +460,9 @@ mod tests {
         let rule_name_var = rule_name_vars[0];
 
         // Proof constructors are relations, so each `Rule` proof is emitted as a
-        // `(set (@Rule <rule-name> <proof-list> <ast> <ast> <id>) ())` action, not a
-        // call expression. Count those set actions and check they reuse the hoisted
-        // rule-name variable as their first argument.
+        // `(set (@Rule <rule-name> <proof-list> <ast> <ast> <site> <id>) ())` action,
+        // not a call expression. Count those set actions and check they reuse the
+        // hoisted rule-name variable as their first argument.
         let rule_uses = rule
             .head
             .0

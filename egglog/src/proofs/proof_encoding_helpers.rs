@@ -10,7 +10,7 @@ use crate::{
         ResolvedExprExt, ResolvedFact, Schedule, Span,
     },
     core::ResolvedCall,
-    proofs::proof_encoding::ProofInstrumentor,
+    proofs::{proof_encoding::ProofInstrumentor, proof_sites::SiteRef},
     util::{FreshGen, HashMap, HashSet, SymbolGen},
 };
 
@@ -53,8 +53,12 @@ pub(crate) struct EncodingNames {
 /// We may not know yet what terms we are instrumenting, so the justification leaves
 /// that information to be filled in later.
 /// This is only used internally in this file, it's not part of the proof format.
+#[derive(Clone)]
 pub(crate) enum Justification {
-    Rule(String, String), // rule-name expression and proof-list expression
+    /// Rule-name expression, proof-list expression, and the conclusion-site
+    /// column: an `i64`-valued expression naming the site of the rule head the
+    /// proof concludes at, encoded by [`SiteRef::encode`].
+    Rule(String, String, String),
     Fiat,
     /// Term-free merge justification for a merge-body subexpression: function
     /// name, the two premise (view) proof expressions, and the pre-order index of
@@ -67,6 +71,30 @@ pub(crate) enum Justification {
     /// reconstructed during proof conversion by running the whole merge body on
     /// the premise outputs; no AST/children needed.
     MergeRow(String, String, String),
+}
+
+impl Justification {
+    /// The site column of a rule proof that no conclusion site names. Reading it
+    /// back panics, so a mint site the encoder forgot to place fails loudly
+    /// instead of silently claiming site 0.
+    pub(crate) const NO_SITE: &'static str = "-1";
+
+    /// The same justification concluding at `site`, an `i64`-valued expression
+    /// (see [`SiteRef::encode`]). Only a rule justification names a site;
+    /// anything else is returned unchanged.
+    pub(crate) fn at_site_expr(&self, site: &str) -> Justification {
+        match self {
+            Justification::Rule(name, proofs, _) => {
+                Justification::Rule(name.clone(), proofs.clone(), site.to_string())
+            }
+            other => other.clone(),
+        }
+    }
+
+    /// [`Self::at_site_expr`] for a site fixed at encoding time.
+    pub(crate) fn at_site(&self, site: SiteRef) -> Justification {
+        self.at_site_expr(&site.encode().to_string())
+    }
 }
 
 impl EncodingNames {
@@ -422,8 +450,9 @@ impl ProofInstrumentor<'_> {
 
 ;; Fiat justification for globals and primitives, gives two terms t1 = t2 for the proposition being justified
 (function {fiat_constructor} ({ast_sort} {ast_sort} {proof_datatype}) Unit :no-merge :internal-hidden :internal-term-node)
-;; name of rule, one proof per fact in the query, proposition being proven t1 = t2
-(function {rule_constructor} (String {proof_list_sort} {ast_sort} {ast_sort} {proof_datatype}) Unit :no-merge :internal-hidden :internal-term-node)
+;; name of rule, one proof per fact in the query, proposition being proven t1 = t2,
+;; and the conclusion site of the rule head the proposition comes from
+(function {rule_constructor} (String {proof_list_sort} {ast_sort} {ast_sort} i64 {proof_datatype}) Unit :no-merge :internal-hidden :internal-term-node)
 
 ;; term-free merge justification for an FD custom-function view subexpression:
 ;; name of function, two premise proofs, and the pre-order index of the merge-body

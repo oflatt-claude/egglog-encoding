@@ -64,6 +64,7 @@ pub use proofs::proof_encoding_helpers::{
 /// Read-only proof reconstruction API.
 pub mod proof {
     pub use crate::proofs::proof_format::{Justification, Proof, ProofId, ProofStore, Proposition};
+    pub use crate::proofs::proof_sites::{SiteIndex, SiteRef};
 }
 use scheduler::{SchedulerId, SchedulerRecord};
 pub use serialize::{SerializeConfig, SerializeOutput, SerializedNode};

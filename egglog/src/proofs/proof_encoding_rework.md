@@ -67,7 +67,7 @@ skeleton is still present to compare against.
 | --- | --- | --- |
 | 0 | one canonical `conclusion_sites`; `process_actions` returns site-indexed propositions | done — zero snapshot changes |
 | 1 | reconstructor runs *beside* the skeleton, differentially asserted | done — see below |
-| 2a | rule proof carries a conclusion-site index; the conclusion is derived from it instead of from the stored `Ast` columns | zero snapshot changes |
+| 2a | rule proof carries a conclusion-site index; the conclusion is derived from it instead of from the stored `Ast` columns | done — zero snapshot changes |
 | 2b | stop emitting the RHS `Congr`/`Trans`/`Sym` skeleton; reconstruction synthesizes it | zero snapshot changes |
 | 3 | drop `@Ast` | ditto |
 | 4 | rebuilding → `RebuildN` | ditto |
@@ -127,6 +127,61 @@ The same run rebuilds each substitution without reading any premise proof that
 exists only to carry a value, recomputing those variables from the rule body
 with `prim.validator()`. It agreed with the recorded substitution, variable for
 variable, on all 13438 nodes.
+
+The 13438 is that commit's count; the `set-if-empty` read-your-writes fix
+(below) shares a duplicated subterm, so the same measurement over the corpus now
+reaches 13248 nodes.
+
+### Phase 2a result
+
+`Rule` gains a fifth column, an `i64` holding `SiteRef::encode()` — the site
+index and a direction bit packed as `2 * index + reversed`. Conversion decodes
+it, replays the head under the substitution the premises determine, and takes
+the proposition from that site, ignoring the `Ast` columns (still emitted,
+removed in phase 3).
+
+One packed column rather than an index plus a `Sym` wrapper, or an index plus a
+separate direction column, because **a `union`'s direction is not known at
+encoding time**: the `@UF` edge runs `ordering-max = ordering-min`, so which
+operand is on the left depends on the ids the firing sees. The encoder emits
+`(proof-of-max lhs <forward> rhs <reversed>)` — the existing orient primitive is
+typed `(T, P, T, P) -> P` for any `P`, so it selects between two `i64`s by the
+same value ordering `ordering-max` uses. A `Sym` wrapper would have changed the
+emitted proof, which phase 2a must not do.
+
+The three hazards:
+
+* **Post-order emission.** `action_sites` returns the same numbering as
+  `conclusion_sites` (one walk, two views of it) shaped like the head: per
+  action, the site of its own conclusion plus an `ExprSites` tree per operand.
+  The instrumenter carries the node's `ExprSites` down as it recurses, so it
+  reads its index rather than counting.
+* **`normalize_union_operands` and `plan_construct_into`.** Sites are computed
+  on the head *as written*, before normalization, and each output action carries
+  the `ActionSites` of the action it came from — lifting a union operand into a
+  `let` shifts no index. `plan_construct_into` records the dropped union's site
+  in the plan, oriented `target = guest` (reversed exactly when the guest is the
+  union's lhs), which is the direction the guest's view row states it.
+* **Reversed conclusions.** 558 of the emitted stamps are reversed: the 274
+  where no site matches forwards, plus 284 where the reversed stamp lands on a
+  site whose proposition is reflexive anyway.
+
+`proof_reconstruct_check` now also reports whether the stamped site reproduces
+the recorded conclusion. Over the `proofs/` corpus, 13392 nodes:
+
+| stamped site | nodes |
+| --- | --- |
+| reproduces the conclusion, and is the only site that does | 12632 |
+| reproduces it, alongside other sites | 760 |
+| does not reproduce it | 0 |
+
+13392 against the baseline's 13248: the site column is part of `RawProof`'s
+hash-consing key, so two `Rule` nodes built at different head positions that
+used to share a node now do not. All 144 extra nodes land in the
+several-matching-sites bucket — they are the repeated-subexpression case phase 1
+measured. Phase 3 will pull in the other direction: dropping the `Ast` columns
+merges nodes that differ only there, and since same rule + same premises + same
+site forces the same conclusion, that merge is sound.
 
 ## Standing rules
 

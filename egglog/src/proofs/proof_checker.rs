@@ -648,6 +648,7 @@ impl ProofStore {
                 name,
                 premise_proofs,
                 substitution,
+                site,
             } => {
                 // Find the rule in the program
                 let rule = program
@@ -713,6 +714,7 @@ impl ProofStore {
                         &ctx.global_bindings,
                         &working_subst,
                         proof.proposition(),
+                        *site,
                     );
                 }
 

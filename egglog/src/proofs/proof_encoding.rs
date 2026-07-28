@@ -1,5 +1,6 @@
 #[doc = include_str!("proof_encoding.md")]
 use crate::proofs::proof_encoding_helpers::{EncodingNames, Justification};
+use crate::proofs::proof_sites::{ActionSites, ExprSites, SiteIndex, SiteRef, action_sites};
 use crate::typechecking::FuncType;
 use crate::util::HashSet;
 use crate::*;
@@ -23,6 +24,16 @@ pub(crate) type NatConn = HashMap<String, NatEntry>;
 pub(crate) struct NatEntry {
     pub natural: String,
     pub connector: Option<String>,
+}
+
+/// A planned construct-into: the guest's constructor is built into `target`'s
+/// e-class instead of a fresh one, and the `union` that said so is dropped.
+struct ConstructInto {
+    /// The variable holding the e-class the guest is built into.
+    target: String,
+    /// The dropped `union`'s conclusion site, oriented the way the guest's view
+    /// row states it (`target = guest`).
+    edge: SiteRef,
 }
 
 /// Which way a pair-valued table's carried proofs point, selecting the
@@ -147,12 +158,12 @@ impl<'a> ProofInstrumentor<'a> {
         let a1 = self.mint(stmts, to_ast, a, &ast_sort);
         let a2 = self.mint(stmts, to_ast, b, &ast_sort);
         match justification {
-            Justification::Rule(rule_name, proof_list) => {
+            Justification::Rule(rule_name, proof_list, site) => {
                 let rule = self.proof_names().rule_constructor.clone();
                 self.mint(
                     stmts,
                     &rule,
-                    &format!("{rule_name} {proof_list} {a1} {a2}"),
+                    &format!("{rule_name} {proof_list} {a1} {a2} {site}"),
                     &proof_sort,
                 )
             }
@@ -180,6 +191,10 @@ impl<'a> ProofInstrumentor<'a> {
     /// Mark two things as equal, adding proof if proofs are enabled.
     /// Emits any proof-relation mints onto `stmts` and returns the `(set @UF ...)`
     /// action, which the caller must emit after `stmts`.
+    ///
+    /// `site` is the head's conclusion site for this equality, whose two sides are
+    /// `lhs` and `rhs` in that order.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn union(
         &mut self,
         stmts: &mut Vec<String>,
@@ -188,6 +203,7 @@ impl<'a> ProofInstrumentor<'a> {
         rhs: &str,
         justification: &Justification,
         nat_conn: &NatConn,
+        site: SiteIndex,
     ) -> String {
         let uf_name = self.uf_name(type_name);
         let smaller = format!("(ordering-min {lhs} {rhs})");
@@ -217,8 +233,21 @@ impl<'a> ProofInstrumentor<'a> {
         // Neither operand was a canonicalized constructor term (no connector), so
         // both e-classes' ASTs are stable: build the edge proof directly over them.
         if lhs_conn.is_none() && rhs_conn.is_none() {
-            let proof =
-                self.edge_proof(stmts, &to_ast_constructor, &larger, &smaller, justification);
+            // The edge runs `larger = smaller`, so it states the site forwards
+            // exactly when `lhs` is the larger id. `proof-of-max` selects by the
+            // same value ordering as `ordering-max`, over `i64` site columns here.
+            let oriented = format!(
+                "(proof-of-max {lhs} {} {rhs} {})",
+                SiteRef::forward(site).encode(),
+                SiteRef::reversed(site).encode()
+            );
+            let proof = self.edge_proof(
+                stmts,
+                &to_ast_constructor,
+                &larger,
+                &smaller,
+                &justification.at_site_expr(&oriented),
+            );
             return format!("(set ({uf_name} {larger}) (values {smaller} {proof}))");
         }
 
@@ -230,12 +259,13 @@ impl<'a> ProofInstrumentor<'a> {
         let lhs_nat = Self::natural_of(nat_conn, lhs);
         let rhs_nat = Self::natural_of(nat_conn, rhs);
 
+        // Built over the operands in source order, so it states the site forwards.
         let base_proof = self.edge_proof(
             stmts,
             &to_ast_constructor,
             &lhs_nat,
             &rhs_nat,
-            justification,
+            &justification.at_site(SiteRef::forward(site)),
         );
 
         let sym = self.proof_names().eq_sym_constructor.clone();
@@ -291,28 +321,45 @@ impl<'a> ProofInstrumentor<'a> {
     /// Lift each constructor-application `union` operand into a preceding `let`,
     /// so every union operand is a variable and the inline and let-bound shapes
     /// coincide before [`Self::plan_construct_into`] runs.
-    fn normalize_union_operands(&mut self, actions: &[ResolvedAction]) -> Vec<ResolvedAction> {
+    ///
+    /// Each output action keeps the [`ActionSites`] of the action it came from, so
+    /// every conclusion the encoder emits still names a site of the head as
+    /// written — lifting an operand shifts no index.
+    fn normalize_union_operands(
+        &mut self,
+        actions: &[ResolvedAction],
+    ) -> Vec<(ResolvedAction, ActionSites)> {
         let mut out = vec![];
-        for action in actions {
+        for (action, sites) in actions.iter().zip(action_sites(actions)) {
             match action {
                 ResolvedAction::Union(span, lhs, rhs) => {
-                    let lhs = self.lift_union_operand(lhs.clone(), &mut out);
-                    let rhs = self.lift_union_operand(rhs.clone(), &mut out);
-                    out.push(ResolvedAction::Union(span.clone(), lhs, rhs));
+                    let ActionSites { own, operands } = sites;
+                    let [lhs_sites, rhs_sites] = <[ExprSites; 2]>::try_from(operands)
+                        .expect("a union contributes sites for both operands");
+                    let lhs = self.lift_union_operand(lhs.clone(), &lhs_sites, &mut out);
+                    let rhs = self.lift_union_operand(rhs.clone(), &rhs_sites, &mut out);
+                    out.push((
+                        ResolvedAction::Union(span.clone(), lhs, rhs),
+                        ActionSites {
+                            own,
+                            operands: vec![lhs_sites, rhs_sites],
+                        },
+                    ));
                 }
-                other => out.push(other.clone()),
+                other => out.push((other.clone(), sites)),
             }
         }
         out
     }
 
     /// If `operand` is a constructor application, bind it to a fresh `let`
-    /// (pushed onto `out`) and return a variable referencing it; otherwise
-    /// return `operand` unchanged.
+    /// (pushed onto `out` carrying `sites`) and return a variable referencing it;
+    /// otherwise return `operand` unchanged.
     fn lift_union_operand(
         &mut self,
         operand: ResolvedExpr,
-        out: &mut Vec<ResolvedAction>,
+        sites: &ExprSites,
+        out: &mut Vec<(ResolvedAction, ActionSites)>,
     ) -> ResolvedExpr {
         if Self::constructor_operand(&operand).is_none() {
             return operand;
@@ -323,14 +370,21 @@ impl<'a> ProofInstrumentor<'a> {
             sort: operand.output_type(),
             is_global_ref: false,
         };
-        out.push(ResolvedAction::Let(span.clone(), var.clone(), operand));
+        out.push((
+            ResolvedAction::Let(span.clone(), var.clone(), operand),
+            ActionSites {
+                own: None,
+                operands: vec![sites.clone()],
+            },
+        ));
         GenericExpr::Var(span, var)
     }
 
     /// Plan the construct-into optimization over normalized actions (union
-    /// operands are variables). Returns a map `guest -> target` — the guest's
-    /// constructor is built into the target's e-class instead of a fresh one —
-    /// and the set of union action indices it makes redundant.
+    /// operands are variables). Returns a map from each guest variable — whose
+    /// constructor is built into the target's e-class instead of a fresh one — to
+    /// its [`ConstructInto`], and the set of union action indices it makes
+    /// redundant.
     ///
     /// Conservative: only a `union` of two distinct, not-yet-touched variables
     /// where at least one is a constructor-`let` is optimized. The guest is the
@@ -338,11 +392,11 @@ impl<'a> ProofInstrumentor<'a> {
     /// bound where the guest is built); a matched (un-`let`) variable is always
     /// an eligible target.
     fn plan_construct_into(
-        actions: &[ResolvedAction],
-    ) -> (HashMap<String, String>, HashSet<usize>) {
+        actions: &[(ResolvedAction, ActionSites)],
+    ) -> (HashMap<String, ConstructInto>, HashSet<usize>) {
         let mut all_def: HashMap<String, usize> = HashMap::default();
         let mut ctor_def: HashMap<String, usize> = HashMap::default();
-        for (i, action) in actions.iter().enumerate() {
+        for (i, (action, _)) in actions.iter().enumerate() {
             if let ResolvedAction::Let(_, v, expr) = action {
                 all_def.insert(v.name.clone(), i);
                 if Self::constructor_operand(expr).is_some() {
@@ -351,10 +405,10 @@ impl<'a> ProofInstrumentor<'a> {
             }
         }
 
-        let mut construct_into: HashMap<String, String> = HashMap::default();
+        let mut construct_into: HashMap<String, ConstructInto> = HashMap::default();
         let mut dropped: HashSet<usize> = HashSet::default();
         let mut used: HashSet<String> = HashSet::default();
-        for (i, action) in actions.iter().enumerate() {
+        for (i, (action, sites)) in actions.iter().enumerate() {
             let ResolvedAction::Union(_, lhs, rhs) = action else {
                 continue;
             };
@@ -374,13 +428,13 @@ impl<'a> ProofInstrumentor<'a> {
             let (guest, target) = match (ctor_def.get(&a), ctor_def.get(&b)) {
                 (Some(&ia), Some(&ib)) => {
                     if ia >= ib {
-                        (a, b)
+                        (a.clone(), b)
                     } else {
-                        (b, a)
+                        (b, a.clone())
                     }
                 }
-                (Some(_), None) => (a, b),
-                (None, Some(_)) => (b, a),
+                (Some(_), None) => (a.clone(), b),
+                (None, Some(_)) => (b, a.clone()),
                 (None, None) => continue,
             };
             // The target's e-class must be bound where the guest is built: a
@@ -391,34 +445,51 @@ impl<'a> ProofInstrumentor<'a> {
             {
                 continue;
             }
+            // Dropping the union leaves its equality as the guest's view-row
+            // proof, stated `target = guest`. The site states it `lhs = rhs`, so
+            // it is reversed exactly when the guest is the union's lhs.
+            let edge = SiteRef {
+                index: sites
+                    .own
+                    .expect("a union contributes a site for its equality"),
+                reversed: guest == a,
+            };
             used.insert(guest.clone());
             used.insert(target.clone());
-            construct_into.insert(guest, target);
+            construct_into.insert(guest, ConstructInto { target, edge });
             dropped.insert(i);
         }
         (construct_into, dropped)
     }
 
     /// Lower a construct-into guest `(let guest (F args))`: point its view value
-    /// at `target`'s e-class with a plain `set` (a collision with an existing
-    /// `F(args)` unions the two via the view's `:merge`), and bind `guest` to
-    /// `target` so later uses share the representative. In proof mode the view
-    /// row also carries the proof `target = F(args)`.
+    /// at `plan.target`'s e-class with a plain `set` (a collision with an existing
+    /// `F(args)` unions the two via the view's `:merge`), and bind `guest` to it
+    /// so later uses share the representative. In proof mode the view row also
+    /// carries the proof `target = F(args)`, which concludes the dropped union's
+    /// site (`plan.edge`).
+    #[allow(clippy::too_many_arguments)]
     fn instrument_construct_into(
         &mut self,
         res: &mut Vec<String>,
         expr: &ResolvedExpr,
-        target: &str,
+        plan: &ConstructInto,
         guest: &str,
         justification: &Justification,
         nat_conn: &mut NatConn,
+        sites: &ExprSites,
     ) {
+        let target = plan.target.as_str();
         let (func_type, args) = Self::constructor_operand(expr)
             .expect("construct-into guest must be a constructor application");
         let ctor_name = func_type.name.clone();
         let child_vals: Vec<String> = args
             .iter()
-            .map(|arg| self.instrument_action_expr(arg, res, justification, nat_conn))
+            .enumerate()
+            .map(|(i, arg)| {
+                let arg_sites = sites.operands.get(i);
+                self.instrument_action_expr(arg, res, justification, nat_conn, arg_sites)
+            })
             .collect();
 
         if !self.proofs_enabled() {
@@ -455,14 +526,20 @@ impl<'a> ProofInstrumentor<'a> {
             &ctor_name,
             &view_sort,
             &child_vals,
-            justification,
+            &justification.at_site(SiteRef::forward(sites.index)),
             nat_conn,
         );
         let term_proof_ctor = self.term_proof_name(&sort_name);
         res.push(format!("(set ({term_proof_ctor} {fv_nat}) {nat_prf})"));
         let target_nat = Self::natural_of(nat_conn, target);
         let target_conn = nat_conn.get(target).and_then(|e| e.connector.clone());
-        let edge = self.edge_proof(res, &sort_ast, &target_nat, &fv_nat, justification);
+        let edge = self.edge_proof(
+            res,
+            &sort_ast,
+            &target_nat,
+            &fv_nat,
+            &justification.at_site(plan.edge),
+        );
         let to_dedup = self.mint(res, &trans, &format!("{edge} {nat_to_dedup}"), &proof_sort);
         let view_proof = match target_conn {
             Some(conn) => {
@@ -797,18 +874,27 @@ impl<'a> ProofInstrumentor<'a> {
 
     // Actions need to be instrumented to add to the view
     // as well as to the terms tables.
+    //
+    // `sites` names the conclusion sites of `action`, so every proof minted here
+    // records which of them it concludes.
     fn instrument_action(
         &mut self,
         action: &ResolvedAction,
         justification: &Justification,
         nat_conn: &mut NatConn,
+        sites: &ActionSites,
     ) -> Vec<String> {
         let mut res = vec![];
 
         match action {
             ResolvedAction::Let(_span, v, generic_expr) => {
-                let v2 =
-                    self.instrument_action_expr(generic_expr, &mut res, justification, nat_conn);
+                let v2 = self.instrument_action_expr(
+                    generic_expr,
+                    &mut res,
+                    justification,
+                    nat_conn,
+                    sites.operands.first(),
+                );
                 // Carry the canonicalization info onto the let-bound name. `v2` is
                 // the built term's deduped e-class var, keyed in `nat_conn` by that
                 // fresh var; without this, a later reference to `v.name` (e.g. the
@@ -839,6 +925,7 @@ impl<'a> ProofInstrumentor<'a> {
                         &mut res,
                         justification,
                         nat_conn,
+                        sites.operands.first(),
                     );
                     let proof = if self.proofs_enabled() {
                         self.global_value_proof(
@@ -858,12 +945,28 @@ impl<'a> ProofInstrumentor<'a> {
                 }
 
                 let mut exprs = vec![];
-                for e in generic_exprs.iter().chain(std::iter::once(generic_expr)) {
-                    exprs.push(self.instrument_action_expr(e, &mut res, justification, nat_conn));
+                for (i, e) in generic_exprs
+                    .iter()
+                    .chain(std::iter::once(generic_expr))
+                    .enumerate()
+                {
+                    exprs.push(self.instrument_action_expr(
+                        e,
+                        &mut res,
+                        justification,
+                        nat_conn,
+                        sites.operands.get(i),
+                    ));
                 }
 
-                let (add_code, _fv) =
-                    self.add_term_and_view(func_type, &exprs, justification, nat_conn);
+                // The row `(f args… value)` is the `set`'s own conclusion.
+                let row_site = sites.own.expect("a set contributes a site for its row");
+                let (add_code, _fv) = self.add_term_and_view(
+                    func_type,
+                    &exprs,
+                    &justification.at_site(SiteRef::forward(row_site)),
+                    nat_conn,
+                );
                 res.extend(add_code);
             }
             ResolvedAction::Change(_span, change, h, generic_exprs) => {
@@ -872,9 +975,12 @@ impl<'a> ProofInstrumentor<'a> {
                         Change::Delete => self.delete_name(&func_type.name),
                         Change::Subsume => self.subsumed_name(&func_type.name),
                     };
+                    // `change` concludes nothing, so it has no sites to name.
                     let children = generic_exprs
                         .iter()
-                        .map(|e| self.instrument_action_expr(e, &mut res, justification, nat_conn))
+                        .map(|e| {
+                            self.instrument_action_expr(e, &mut res, justification, nat_conn, None)
+                        })
                         .collect::<Vec<_>>();
 
                     // The marker is a `Unit` relation, so insert a row keyed on the
@@ -893,20 +999,40 @@ impl<'a> ProofInstrumentor<'a> {
                 // A union whose operand is a freshly-built constructor term is
                 // optimized upstream in `instrument_actions`; this arm handles
                 // the remaining general unions.
-                let v1 =
-                    self.instrument_action_expr(generic_expr, &mut res, justification, nat_conn);
-                let v2 =
-                    self.instrument_action_expr(generic_expr1, &mut res, justification, nat_conn);
+                let v1 = self.instrument_action_expr(
+                    generic_expr,
+                    &mut res,
+                    justification,
+                    nat_conn,
+                    sites.operands.first(),
+                );
+                let v2 = self.instrument_action_expr(
+                    generic_expr1,
+                    &mut res,
+                    justification,
+                    nat_conn,
+                    sites.operands.get(1),
+                );
                 let ot = generic_expr.output_type();
                 let type_name = ot.name();
-                let unioned = self.union(&mut res, type_name, &v1, &v2, justification, nat_conn);
+                let site = sites
+                    .own
+                    .expect("a union contributes a site for its equality");
+                let unioned =
+                    self.union(&mut res, type_name, &v1, &v2, justification, nat_conn, site);
                 res.push(unioned);
             }
             ResolvedAction::Panic(..) => {
                 res.push(format!("{action}"));
             }
             ResolvedAction::Expr(_span, generic_expr) => {
-                self.instrument_action_expr(generic_expr, &mut res, justification, nat_conn);
+                self.instrument_action_expr(
+                    generic_expr,
+                    &mut res,
+                    justification,
+                    nat_conn,
+                    sites.operands.first(),
+                );
             }
         }
 
@@ -948,14 +1074,14 @@ impl<'a> ProofInstrumentor<'a> {
         let ast_sort = self.proof_names().ast_sort.clone();
         let proof_sort = self.proof_sort();
         match justification {
-            Justification::Rule(rule_name, rule_proof) => {
+            Justification::Rule(rule_name, rule_proof, site) => {
                 let a1 = self.mint(stmts, to_ast, fv, &ast_sort);
                 let a2 = self.mint(stmts, to_ast, fv, &ast_sort);
                 let rule = self.proof_names().rule_constructor.clone();
                 self.mint(
                     stmts,
                     &rule,
-                    &format!("{rule_name} {rule_proof} {a1} {a2}"),
+                    &format!("{rule_name} {rule_proof} {a1} {a2} {site}"),
                     &proof_sort,
                 )
             }
@@ -1481,12 +1607,17 @@ impl<'a> ProofInstrumentor<'a> {
     }
 
     // Add to view and term tables, returning a variable for the created term.
+    //
+    // `sites` names this expression's conclusion site and those of its operands;
+    // it is `None` where the expression concludes nothing the head records (a
+    // `change` argument, or an `extract` expression outside any rule).
     fn instrument_action_expr(
         &mut self,
         expr: &ResolvedExpr,
         res: &mut Vec<String>,
         proof: &Justification,
         nat_conn: &mut NatConn,
+        sites: Option<&ExprSites>,
     ) -> String {
         match expr {
             ResolvedExpr::Lit(_, lit) => format!("{lit}"),
@@ -1494,8 +1625,17 @@ impl<'a> ProofInstrumentor<'a> {
             ResolvedExpr::Call(_, resolved_call, args) => {
                 let args = args
                     .iter()
-                    .map(|arg| self.instrument_action_expr(arg, res, proof, nat_conn))
+                    .enumerate()
+                    .map(|(i, arg)| {
+                        let arg_sites = sites.and_then(|s| s.operands.get(i));
+                        self.instrument_action_expr(arg, res, proof, nat_conn, arg_sites)
+                    })
                     .collect::<Vec<_>>();
+                // This node's own conclusion is `t = t` for the term it builds.
+                let proof = &match sites {
+                    Some(sites) => proof.at_site(SiteRef::forward(sites.index)),
+                    None => proof.at_site_expr(Justification::NO_SITE),
+                };
                 match resolved_call {
                     ResolvedCall::Func(func_type) => {
                         if func_type.subtype == FunctionSubtype::Custom {
@@ -1579,23 +1719,26 @@ impl<'a> ProofInstrumentor<'a> {
         let normalized = self.normalize_union_operands(actions);
         let (construct_into, dropped) = Self::plan_construct_into(&normalized);
         let mut res = vec![];
-        for (i, action) in normalized.iter().enumerate() {
+        for (i, (action, sites)) in normalized.iter().enumerate() {
             if dropped.contains(&i) {
                 continue;
             }
             match action {
                 ResolvedAction::Let(_, v, expr) if construct_into.contains_key(&v.name) => {
-                    let target = construct_into[&v.name].clone();
                     self.instrument_construct_into(
                         &mut res,
                         expr,
-                        &target,
+                        &construct_into[&v.name],
                         &v.name,
                         justification,
                         nat_conn,
+                        sites
+                            .operands
+                            .first()
+                            .expect("a let contributes sites for its expression"),
                     );
                 }
-                _ => res.extend(self.instrument_action(action, justification, nat_conn)),
+                _ => res.extend(self.instrument_action(action, justification, nat_conn, sites)),
             }
         }
         res
@@ -1619,7 +1762,13 @@ impl<'a> ProofInstrumentor<'a> {
         } else {
             "()".to_string()
         };
-        let proof = Justification::Rule(rule_name_var.clone(), proof_var.clone());
+        // Every mint site replaces the site column with the conclusion site it is
+        // at; the placeholder is unreadable, so a site left unset fails loudly.
+        let proof = Justification::Rule(
+            rule_name_var.clone(),
+            proof_var.clone(),
+            Justification::NO_SITE.to_string(),
+        );
         let reads_in_rhs = !action_lookups.is_empty();
         // The looked-up proofs feed `proof_str`, so bind them before the proof list.
         let action_lookups_str = ListDisplay(&action_lookups, "\n                    ");
@@ -1904,12 +2053,14 @@ impl<'a> ProofInstrumentor<'a> {
                     &mut action_stmts,
                     &Justification::Fiat,
                     &mut nat_conn,
+                    None,
                 );
                 let instrumented_variants = self.instrument_action_expr(
                     variants,
                     &mut action_stmts,
                     &Justification::Fiat,
                     &mut nat_conn,
+                    None,
                 );
 
                 // Add any action statements needed to set up the expressions

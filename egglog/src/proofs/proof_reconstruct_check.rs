@@ -1,12 +1,14 @@
-//! Phase-1 experiment: is a rule's conclusion reconstructible from its premises?
+//! Is a rule's conclusion reconstructible from its premises, and does the site
+//! the encoder stamped name it?
 //!
 //! For every [`Justification::Rule`](super::proof_format::Justification::Rule)
 //! proof the checker accepts, replay the rule head and report which of its
-//! [`conclusion_sites`] reproduce the conclusion the proof records. The head is
-//! replayed twice: once under the substitution the proof carries, and once under
-//! a substitution rebuilt without consulting any premise proof that only carries
-//! a value (`@Ast` payloads for body primitives and container side conditions),
-//! which is what a term-free rule justification would have to do.
+//! [`conclusion_sites`] reproduce the conclusion the proof records, and whether
+//! the [`SiteRef`] the proof carries is among them. The head is replayed twice:
+//! once under the substitution the proof carries, and once under a substitution
+//! rebuilt without consulting any premise proof that only carries a value
+//! (`@Ast` payloads for body primitives and container side conditions), which is
+//! what a term-free rule justification would have to do.
 //!
 //! The check observes; it never changes what the checker accepts. It is off
 //! unless `EGGLOG_PROOF_RECONSTRUCT_CHECK=1`, which also logs one
@@ -24,7 +26,7 @@ use crate::{
     proofs::{
         proof_checker::{eval_expr_with_subst, is_container_side_condition, process_actions},
         proof_format::{ProofId, ProofStore, Proposition},
-        proof_sites::conclusion_sites,
+        proof_sites::{SiteRef, conclusion_sites},
     },
     util::{HashMap, IndexMap, SymbolGen},
 };
@@ -50,6 +52,14 @@ pub(crate) struct ReconstructStats {
     /// Variables the payload-free substitution bound by recomputing a body
     /// primitive instead of reading a premise proof's term.
     pub recomputed_vars: usize,
+    /// Nodes whose stamped site reproduces the conclusion and is the only site
+    /// that does, in either direction.
+    pub stamped_unique: usize,
+    /// Nodes whose stamped site reproduces the conclusion, alongside others.
+    pub stamped_among_several: usize,
+    /// Nodes whose stamped site does not reproduce the conclusion the way it
+    /// says. Deriving the conclusion from a site is only sound while this is 0.
+    pub stamped_wrong: usize,
 }
 
 thread_local! {
@@ -96,15 +106,27 @@ struct SiteMatch {
     exact: Vec<usize>,
     /// Sites concluding it reversed, i.e. reachable by one `Sym`.
     sym: Vec<usize>,
+    /// Whether the site the proof was stamped with, read in the direction it
+    /// names, concludes the claim.
+    stamped_ok: bool,
 }
 
-/// Replay `rule`'s head under `subst` and report which sites conclude `claimed`.
+impl SiteMatch {
+    /// Sites reproducing the claim in either direction.
+    fn matching(&self) -> usize {
+        self.exact.len() + self.sym.len()
+    }
+}
+
+/// Replay `rule`'s head under `subst` and report which sites conclude `claimed`,
+/// `stamped` among them.
 fn match_sites(
     store: &mut ProofStore,
     rule: &ResolvedRule,
     rule_name: &str,
     subst: HashMap<String, TermId>,
     claimed: &Proposition,
+    stamped: SiteRef,
 ) -> Result<SiteMatch, String> {
     let actions: Vec<_> = rule.head.0.iter().collect();
     let ctx = process_actions(rule_name, subst, &actions, &mut store.term_dag)
@@ -113,12 +135,16 @@ fn match_sites(
         sites: ctx.site_propositions.len(),
         exact: Vec::new(),
         sym: Vec::new(),
+        stamped_ok: false,
     };
     for (index, prop) in &ctx.site_propositions {
         if prop == claimed {
             result.exact.push(index.0);
         } else if prop.lhs == claimed.rhs && prop.rhs == claimed.lhs {
             result.sym.push(index.0);
+        }
+        if *index == stamped.index {
+            result.stamped_ok = stamped.orient(prop) == *claimed;
         }
     }
     Ok(result)
@@ -280,7 +306,9 @@ fn payload_free_substitution(
 
 /// Record one `Rule` proof node: which of the rule's conclusion sites reproduce
 /// the conclusion the proof records, under the recorded substitution and under a
-/// payload-free one.
+/// payload-free one, and whether `stamped` — the site the encoder tagged the
+/// proof with — is one of them.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn record(
     store: &mut ProofStore,
     rule: &ResolvedRule,
@@ -289,15 +317,30 @@ pub(super) fn record(
     globals: &HashMap<String, TermId>,
     recorded_subst: &HashMap<String, TermId>,
     claimed: &Proposition,
+    stamped: SiteRef,
 ) {
-    let recorded = match_sites(store, rule, rule_name, recorded_subst.clone(), claimed);
+    let recorded = match_sites(
+        store,
+        rule,
+        rule_name,
+        recorded_subst.clone(),
+        claimed,
+        stamped,
+    );
     let payload_free = payload_free_substitution(store, rule, rule_name, premise_proofs, globals);
     let disagreeing: Vec<&String> = recorded_subst
         .iter()
         .filter(|(var, term)| payload_free.subst.get(*var) != Some(*term))
         .map(|(var, _)| var)
         .collect();
-    let derived = match_sites(store, rule, rule_name, payload_free.subst.clone(), claimed);
+    let derived = match_sites(
+        store,
+        rule,
+        rule_name,
+        payload_free.subst.clone(),
+        claimed,
+        stamped,
+    );
 
     let (sites, exact, sym) = match &recorded {
         Ok(m) => (m.sites, m.exact.len(), m.sym.len()),
@@ -321,6 +364,11 @@ pub(super) fn record(
                 stats.unmatched += 1;
             }
         }
+        match &recorded {
+            Ok(m) if m.stamped_ok && m.matching() == 1 => stats.stamped_unique += 1,
+            Ok(m) if m.stamped_ok => stats.stamped_among_several += 1,
+            _ => stats.stamped_wrong += 1,
+        }
         if payload_free_ok {
             stats.payload_free_agrees += 1;
         } else {
@@ -334,11 +382,14 @@ pub(super) fn record(
     }
     let status = |m: &Result<SiteMatch, String>| match m {
         Ok(m) => format!(
-            "exact={} sym={} at={:?}{:?}",
+            "exact={} sym={} at={:?}{:?} stamped={}{} stamped_ok={}",
             m.exact.len(),
             m.sym.len(),
             m.exact,
-            m.sym
+            m.sym,
+            stamped.index.0,
+            if stamped.reversed { "-sym" } else { "" },
+            m.stamped_ok,
         ),
         Err(err) => format!("exact=err sym=err at={}", one_line(err)),
     };
@@ -364,7 +415,8 @@ pub(super) fn record(
         ),
         one_line(rule_name),
     );
-    if exact != 1 || !payload_free_ok {
+    let stamped_ok = recorded.as_ref().is_ok_and(|m| m.stamped_ok);
+    if exact != 1 || !payload_free_ok || !stamped_ok {
         log::info!(
             "PROOF-RECONSTRUCT-DETAIL claimed={} = {} | recorded-subst: {} | \
              payload-free-subst: {} | failure: {:?} | disagreeing: {:?} | derived-{} | \

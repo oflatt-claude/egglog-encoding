@@ -366,6 +366,7 @@ impl Proof {
                 name: _,
                 premise_proofs: _,
                 substitution,
+                site: _,
             } => {
                 for term_id in substitution.values_mut() {
                     *term_id = f(*term_id);
