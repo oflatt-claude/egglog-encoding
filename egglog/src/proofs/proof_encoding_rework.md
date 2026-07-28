@@ -53,6 +53,35 @@ This rework generalizes that from merge bodies to rule bodies.
   historical union-find state.
 * The UF rule keeps explicit `Trans` for now.
 
+### Carrying the canonicalization bridge
+
+A head interns each constructor application into its view. When `set-if-empty`
+returns an **existing** e-class, that e-class's term row may spell a different
+term than the head wrote; the proof they are equal came from some other rule's
+firing, so it is neither a site of this head nor one of its premises. Phase 2b
+measured 240 such bridges over the corpus that genuinely move the term, and
+deleting the chain fails 28 of 206 tests with `transitivity requires matching
+middle terms`.
+
+The proofs needed are the interned subterms' view-row proofs, which the encoder
+already reads as `view-proof-<View>` at no row cost. They become trailing
+premises of `RuleN`, split from the body premises at `rule.body.len()`. The
+subterms are the head's constructor applications, so the arity is static.
+
+The lookups cannot be hoisted to the front of the action: an outer view's key is
+built from its children's *deduped* ids (`fv_can = mint(func, dedup_args)`), so
+interning is bottom-up and interleaved with construction. Only what is done with
+the result changes.
+
+One wrinkle: for a **newly** interned subterm the view row's proof is the node
+this firing is creating, so passing it as its own premise is circular — and
+circular at emission time too, since a node's id is minted after its arguments.
+`view-proof` is a `(keys, fallback) -> proof` read, so pass a distinguished
+sentinel as the fallback: a real proof back means emit the bridge, the sentinel
+means the row spells what the head wrote and there is none. That is also the
+discriminator for a build site needing three different propositions
+(as-written reflexive, canonical reflexive, the bridge).
+
 ### One canonical site enumeration
 
 `proof_sites.rs` defines `SiteIndex`, `SiteConclusion` and `conclusion_sites`.
