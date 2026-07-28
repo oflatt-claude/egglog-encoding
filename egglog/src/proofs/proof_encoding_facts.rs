@@ -4,7 +4,7 @@
 
 use super::proof_checker::is_container_side_condition;
 use super::proof_encoding::ProofInstrumentor;
-use crate::proofs::proof_encoding_helpers::Justification;
+use crate::proofs::proof_encoding_helpers::{Justification, MAX_FUSED_PREMISES, RulePremises};
 use crate::typechecking::FuncType;
 use crate::*;
 
@@ -289,7 +289,7 @@ impl ProofInstrumentor<'_> {
     pub(super) fn instrument_facts(
         &mut self,
         facts: &[ResolvedFact],
-    ) -> (Vec<String>, Vec<String>, String) {
+    ) -> (Vec<String>, Vec<String>, RulePremises) {
         let mut res = vec![];
         let mut action_lookups = vec![];
         let mut proof = vec![];
@@ -302,12 +302,16 @@ impl ProofInstrumentor<'_> {
         // The prooflist mints are actions (emitted into `action_lookups` before
         // the proof binding). Only proof mode consumes the prooflist; in term
         // mode it is discarded, so skip the mints to keep `action_lookups` empty.
-        let proof_list = if self.proofs_enabled() {
-            self.format_prooflist(&mut action_lookups, &proof)
+        // A short premise list is folded into the `Rule` node itself, so only a
+        // long one is materialized.
+        let premises = if !self.proofs_enabled() {
+            RulePremises::Inline(vec![])
+        } else if proof.len() <= MAX_FUSED_PREMISES {
+            RulePremises::Inline(proof)
         } else {
-            String::new()
+            RulePremises::List(self.format_prooflist(&mut action_lookups, &proof))
         };
-        (res, action_lookups, proof_list)
+        (res, action_lookups, premises)
     }
 
     /// Mint a reflexive `Fiat` proof `value = value` for a term of `sort_name`

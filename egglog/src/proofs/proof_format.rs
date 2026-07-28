@@ -352,6 +352,20 @@ impl RawProofStore {
         let proof = if head == self.names.fiat_constructor {
             assert!(args.len() == 2, "fiat constructor should have 2 args");
             RawProof::Fiat(args[0], args[1])
+        } else if let Some(arity) = self.names.rule_fused.iter().position(|name| *name == head) {
+            // `Rulek` carries its k premises inline: name, premises, then the
+            // two AST sides.
+            assert!(
+                args.len() == arity + 3,
+                "{head} should have {} args",
+                arity + 3
+            );
+            let name = self.parse_string(args[0]);
+            let premises = args[1..arity + 1]
+                .iter()
+                .map(|arg| self.parse_proof(*arg))
+                .collect();
+            RawProof::Rule(name, premises, args[arity + 1], args[arity + 2])
         } else if head == self.names.rule_constructor {
             assert!(args.len() == 4, "rule constructor should have 4 args");
             let name = self.parse_string(args[0]);

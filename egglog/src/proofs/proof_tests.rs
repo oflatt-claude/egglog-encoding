@@ -140,7 +140,10 @@ mod tests {
         "#;
 
         let mut egraph = EGraph::new_with_proofs();
-        let rule_constructor = egraph.proof_state.proof_names.rule_constructor.clone();
+        // A rule proof is emitted with the plain constructor or, when its
+        // premises are few enough to be carried inline, a fused one.
+        let mut rule_constructors = egraph.proof_state.proof_names.rule_fused.clone();
+        rule_constructors.push(egraph.proof_state.proof_names.rule_constructor.clone());
         let commands = egraph.resolve_program(None, source).unwrap();
         let rule = commands
             .iter()
@@ -190,7 +193,7 @@ mod tests {
             .iter()
             .filter(|action| match action {
                 ResolvedAction::Set(_, ResolvedCall::Func(func), args, _)
-                    if func.name == rule_constructor =>
+                    if rule_constructors.contains(&func.name) =>
                 {
                     assert!(
                         matches!(

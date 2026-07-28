@@ -1,5 +1,5 @@
 #[doc = include_str!("proof_encoding.md")]
-use crate::proofs::proof_encoding_helpers::{EncodingNames, Justification};
+use crate::proofs::proof_encoding_helpers::{EncodingNames, Justification, RulePremises};
 use crate::typechecking::FuncType;
 use crate::util::HashSet;
 use crate::*;
@@ -154,12 +154,12 @@ impl<'a> ProofInstrumentor<'a> {
         let a1 = self.mint(stmts, to_ast, a, &ast_sort);
         let a2 = self.mint(stmts, to_ast, b, &ast_sort);
         match justification {
-            Justification::Rule(rule_name, proof_list) => {
-                let rule = self.proof_names().rule_constructor.clone();
+            Justification::Rule(rule_name, premises) => {
+                let (rule, args) = self.rule_node(premises);
                 self.mint(
                     stmts,
                     &rule,
-                    &format!("{rule_name} {proof_list} {a1} {a2}"),
+                    &format!("{rule_name} {args}{a1} {a2}"),
                     &proof_sort,
                 )
             }
@@ -942,14 +942,14 @@ impl<'a> ProofInstrumentor<'a> {
         let proof_sort = self.proof_sort();
         match justification {
             // Both AST sides come from the same `fv`, so these prove `fv = fv`.
-            Justification::Rule(rule_name, rule_proof) => {
+            Justification::Rule(rule_name, premises) => {
                 let a1 = self.mint(stmts, to_ast, fv, &ast_sort);
                 let a2 = self.mint(stmts, to_ast, fv, &ast_sort);
-                let rule = self.proof_names().rule_constructor.clone();
+                let (rule, args) = self.rule_node(premises);
                 let proof = self.mint(
                     stmts,
                     &rule,
-                    &format!("{rule_name} {rule_proof} {a1} {a2}"),
+                    &format!("{rule_name} {args}{a1} {a2}"),
                     &proof_sort,
                 );
                 self.mark_reflexive(&proof);
@@ -1044,6 +1044,23 @@ impl<'a> ProofInstrumentor<'a> {
     /// and returning the fresh variable. Terms and proofs are relations rather
     /// than constructors, so an id is minted explicitly here rather than by a
     /// constructor call; every minted id keeps its row (nothing is merged away).
+    /// The constructor and leading argument text for a rule proof node: the
+    /// fused arity when the premises are inline, else the plain constructor
+    /// applied to the built list. The returned text is empty or ends in a
+    /// space, so a caller can concatenate the two AST arguments after it.
+    pub(crate) fn rule_node(&self, premises: &RulePremises) -> (String, String) {
+        match premises {
+            RulePremises::Inline(proofs) => (
+                self.proof_names().rule_fused[proofs.len()].clone(),
+                proofs.iter().map(|p| format!("{p} ")).collect(),
+            ),
+            RulePremises::List(list) => (
+                self.proof_names().rule_constructor.clone(),
+                format!("{list} "),
+            ),
+        }
+    }
+
     /// Record that `proof` proves `t = t`.
     pub(crate) fn mark_reflexive(&mut self, proof: &str) {
         self.reflexive.insert(proof.to_string());
@@ -1652,23 +1669,20 @@ impl<'a> ProofInstrumentor<'a> {
         let mut nat_conn = NatConn::default();
         // term_proofs are fetched as action-side lookups (see instrument_facts),
         // so a rule with any needs a Read/Full action context (`eval_opt` below).
-        let (facts, action_lookups, proof_str) = self.instrument_facts(&rule.body);
-        let proof_var = self.fresh_var();
+        let (facts, action_lookups, premises) = self.instrument_facts(&rule.body);
         let rule_name_var = if self.egraph.proof_state.proofs_enabled {
             self.egraph.parser.symbol_gen.fresh("rule_name")
         } else {
             "()".to_string()
         };
-        let proof = Justification::Rule(rule_name_var.clone(), proof_var.clone());
+        let proof = Justification::Rule(rule_name_var.clone(), premises);
         let reads_in_rhs = !action_lookups.is_empty();
         // The looked-up proofs feed `proof_str`, so bind them before the proof list.
         let action_lookups_str = ListDisplay(&action_lookups, "\n                    ");
         let proof_var_binding = if self.egraph.proof_state.proofs_enabled {
             format!(
                 "(let {rule_name_var} \"{}\")
-                 {action_lookups_str}
-                 (let {proof_var}
-                          {proof_str})",
+                 {action_lookups_str}",
                 rule.name
             )
         } else {

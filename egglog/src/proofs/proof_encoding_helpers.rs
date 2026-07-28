@@ -15,6 +15,9 @@ use crate::{
 };
 
 /// Holds all the names used in proof encoding.
+/// The largest premise count that gets its own fused `Rule` constructor.
+pub(crate) const MAX_FUSED_PREMISES: usize = 4;
+
 /// We need fresh names that don't collide with user-defined names.
 /// All of these names should be generated with the single global [`SymbolGen`].
 #[derive(Clone)]
@@ -24,6 +27,10 @@ pub(crate) struct EncodingNames {
     pub(crate) proof_datatype: String,
     pub(crate) fiat_constructor: String,
     pub(crate) rule_constructor: String,
+    /// Fused rule constructors, `rule_fused[k]` taking `k` premise proofs
+    /// inline instead of a proof list. A proof list is only built for a rule
+    /// with more than [`MAX_FUSED_PREMISES`] premises.
+    pub(crate) rule_fused: Vec<String>,
     pub(crate) merge_fn_idx_constructor: String,
     pub(crate) merge_fn_row_constructor: String,
     pub(crate) eq_trans_constructor: String,
@@ -53,8 +60,17 @@ pub(crate) struct EncodingNames {
 /// We may not know yet what terms we are instrumenting, so the justification leaves
 /// that information to be filled in later.
 /// This is only used internally in this file, it's not part of the proof format.
+/// How a rule's premises reach its proof node: inline when there are few
+/// enough for a fused constructor, else as a built proof list.
+#[derive(Clone)]
+pub(crate) enum RulePremises {
+    Inline(Vec<String>),
+    List(String),
+}
+
+#[derive(Clone)]
 pub(crate) enum Justification {
-    Rule(String, String), // rule-name expression and proof-list expression
+    Rule(String, RulePremises), // rule-name expression and its premises
     Fiat,
     /// Term-free merge justification for a merge-body subexpression: function
     /// name, the two premise (view) proof expressions, and the pre-order index of
@@ -77,6 +93,9 @@ impl EncodingNames {
             proof_datatype: symbol_gen.fresh("Proof"),
             fiat_constructor: symbol_gen.fresh("Fiat"),
             rule_constructor: symbol_gen.fresh("Rule"),
+            rule_fused: (0..=MAX_FUSED_PREMISES)
+                .map(|k| symbol_gen.fresh(&format!("Rule{k}")))
+                .collect(),
             merge_fn_idx_constructor: symbol_gen.fresh("MergeIdx"),
             merge_fn_row_constructor: symbol_gen.fresh("MergeRow"),
             eq_trans_constructor: symbol_gen.fresh("Trans"),
@@ -383,6 +402,25 @@ impl ProofInstrumentor<'_> {
             }
         }
         let to_ast_str = to_ast_constructors.join("\n");
+        // Fused rule constructors take their premises inline, so a rule with at
+        // most MAX_FUSED_PREMISES of them builds no proof list at all.
+        let rule_fused_decls = {
+            let names = self.proof_names();
+            let (proof, ast) = (names.proof_datatype.clone(), names.ast_sort.clone());
+            names
+                .rule_fused
+                .iter()
+                .enumerate()
+                .map(|(k, name)| {
+                    let premises = vec![proof.as_str(); k].join(" ");
+                    let sep = if k == 0 { "" } else { " " };
+                    format!(
+                        "(function {name} (String{sep}{premises} {ast} {ast} {proof}) Unit :no-merge :internal-hidden :internal-term-node)"
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
 
         let EncodingNames {
             ref proof_list_sort,
@@ -424,6 +462,7 @@ impl ProofInstrumentor<'_> {
 (function {fiat_constructor} ({ast_sort} {ast_sort} {proof_datatype}) Unit :no-merge :internal-hidden :internal-term-node)
 ;; name of rule, one proof per fact in the query, proposition being proven t1 = t2
 (function {rule_constructor} (String {proof_list_sort} {ast_sort} {ast_sort} {proof_datatype}) Unit :no-merge :internal-hidden :internal-term-node)
+{rule_fused_decls}
 
 ;; term-free merge justification for an FD custom-function view subexpression:
 ;; name of function, two premise proofs, and the pre-order index of the merge-body
