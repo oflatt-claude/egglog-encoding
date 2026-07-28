@@ -1,6 +1,7 @@
 .PHONY: \
 	check nits test python-check python-nits rust-check rust-nits \
-	proof-tests benchmark-smoke nightly nightly-uv update-snapshots format \
+	proof-tests benchmark-smoke nightly nightly-uv nightly-rustup \
+	update-snapshots format \
 	python-lock python-format-check python-lint python-typecheck python-test \
 	rust-format-check rust-clippy rust-test
 
@@ -12,6 +13,10 @@ BENCHMARK_SMOKE_REPORT ?= /tmp/egglog-encoding-bench-smoke.jsonl
 UV_VERSION ?= 0.11.30
 UV_BOOTSTRAP_DIR ?= $(CURDIR)/.uv/$(UV_VERSION)
 NIGHTLY_UV = $(shell command -v uv || echo $(UV_BOOTSTRAP_DIR)/uv)
+
+# Ubuntu's cargo predates rust-toolchain.toml's pin, so the nightly needs
+# rustup's shims; scripts/nightly_bench.py puts them first on PATH.
+CARGO_HOME_DIR ?= $(HOME)/.cargo
 
 # Full validation is hygiene followed by tests.
 check: nits test
@@ -73,13 +78,19 @@ benchmark-smoke:
 # interactive report to nightly/output/. The egraphs-good nightly service
 # (nightly.cs.washington.edu) runs this target and serves that directory,
 # matching `report=` in the nightly configuration.
-nightly: nightly-uv
+nightly: nightly-uv nightly-rustup
 	$(NIGHTLY_UV) run --locked python scripts/nightly_bench.py
 
 nightly-uv:
 	@command -v uv >/dev/null || test -x "$(UV_BOOTSTRAP_DIR)/uv" || \
 		curl -LsSf https://astral.sh/uv/$(UV_VERSION)/install.sh \
 			| env UV_INSTALL_DIR="$(UV_BOOTSTRAP_DIR)" UV_NO_MODIFY_PATH=1 sh
+
+nightly-rustup:
+	@test -x "$(CARGO_HOME_DIR)/bin/rustup" || \
+		curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+			| env CARGO_HOME="$(CARGO_HOME_DIR)" sh -s -- \
+				-y --no-modify-path --default-toolchain none
 
 update-snapshots:
 	uv run --locked pytest -q --snapshot-update --snapshot-details
