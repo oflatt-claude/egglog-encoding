@@ -97,11 +97,18 @@ impl EncodingState {
 /// Thin wrapper around an [`EGraph`] for the term encoding
 pub(crate) struct ProofInstrumentor<'a> {
     pub(crate) egraph: &'a mut EGraph,
+    /// Proof variables the encoder knows prove `t = t`. Keyed by the emitted
+    /// variable name, which is globally fresh, so entries never collide across
+    /// rules.
+    reflexive: HashSet<String>,
 }
 
 impl<'a> ProofInstrumentor<'a> {
     pub(crate) fn new(egraph: &'a mut EGraph) -> Self {
-        Self { egraph }
+        Self {
+            egraph,
+            reflexive: HashSet::default(),
+        }
     }
 
     /// Make a term state and use it to instrument the code.
@@ -1046,6 +1053,55 @@ impl<'a> ProofInstrumentor<'a> {
     /// and returning the fresh variable. Terms and proofs are relations rather
     /// than constructors, so an id is minted explicitly here rather than by a
     /// constructor call; every minted id keeps its row (nothing is merged away).
+    /// Record that `proof` proves `t = t`.
+    pub(crate) fn mark_reflexive(&mut self, proof: &str) {
+        self.reflexive.insert(proof.to_string());
+    }
+
+    /// Whether `proof` is known to prove `t = t`.
+    pub(crate) fn is_reflexive(&self, proof: &str) -> bool {
+        self.reflexive.contains(proof)
+    }
+
+    /// `Sym(proof)`, or `proof` itself when it is reflexive.
+    pub(crate) fn mint_sym(&mut self, stmts: &mut Vec<String>, proof: &str) -> String {
+        if self.is_reflexive(proof) {
+            return proof.to_string();
+        }
+        let sym = self.proof_names().eq_sym_constructor.clone();
+        let proof_sort = self.proof_sort();
+        self.mint(stmts, &sym, proof, &proof_sort)
+    }
+
+    /// `Trans(lhs, rhs)`, dropping whichever side is reflexive.
+    pub(crate) fn mint_trans(&mut self, stmts: &mut Vec<String>, lhs: &str, rhs: &str) -> String {
+        if self.is_reflexive(lhs) {
+            return rhs.to_string();
+        }
+        if self.is_reflexive(rhs) {
+            return lhs.to_string();
+        }
+        let trans = self.proof_names().eq_trans_constructor.clone();
+        let proof_sort = self.proof_sort();
+        self.mint(stmts, &trans, &format!("{lhs} {rhs}"), &proof_sort)
+    }
+
+    /// `Congr(acc, idx, step)`, or `acc` when `step` is reflexive.
+    pub(crate) fn mint_congr(
+        &mut self,
+        stmts: &mut Vec<String>,
+        acc: &str,
+        idx: usize,
+        step: &str,
+    ) -> String {
+        if self.is_reflexive(step) {
+            return acc.to_string();
+        }
+        let congr = self.proof_names().congr_constructor.clone();
+        let proof_sort = self.proof_sort();
+        self.mint(stmts, &congr, &format!("{acc} {idx} {step}"), &proof_sort)
+    }
+
     pub(crate) fn mint(
         &mut self,
         stmts: &mut Vec<String>,
@@ -1210,8 +1266,6 @@ impl<'a> ProofInstrumentor<'a> {
         nat_conn: &NatConn,
     ) -> (Vec<String>, String, String, String) {
         let to_ast = self.fname_to_ast_name(fname).to_string();
-        let congr = self.proof_names().congr_constructor.clone();
-        let proof_sort = self.proof_sort();
         // Each arg is a child's deduped id; look up its natural id + connector.
         let children: Vec<(String, String, Option<String>)> = args
             .iter()
@@ -1232,12 +1286,7 @@ impl<'a> ProofInstrumentor<'a> {
         let mut nat_to_dedup = nat_prf.clone();
         for (i, (_, _, conn)) in children.iter().enumerate() {
             if let Some(conn) = conn {
-                nat_to_dedup = self.mint(
-                    res,
-                    &congr,
-                    &format!("{nat_to_dedup} {i} {conn}"),
-                    &proof_sort,
-                );
+                nat_to_dedup = self.mint_congr(res, &nat_to_dedup, i, conn);
             }
         }
         (dedup_args, fv_nat, nat_prf, nat_to_dedup)

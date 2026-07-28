@@ -20,7 +20,7 @@ expression: proof_snapshot
     (Fiat (= (S (Z)) (S (Z))))
     (Eval)
     (Fiat (= t1 t1)))
-  (substitution (@v204 (S (Z))) (@v205 t0) (@v203 (Z))))
+  (substitution (@v202 t0) (@v201 (S (Z))) (@v200 (Z))))
 (let t0 (vec-of (Z) (S (Z))))
 (let t1 (HasVec t0))
 (Rule
@@ -31,7 +31,7 @@ expression: proof_snapshot
     (Fiat (= (S (Z)) (S (Z))))
     (Eval)
     (Fiat (= t1 t1)))
-  (substitution (@v312 (S (Z))) (@v311 (Z)) (@v313 t0)))
+  (substitution (@v307 (S (Z))) (@v308 t0) (@v306 (Z))))
 (let t0 (map-of (Z) (S (Z))))
 (let t1 (HasMap t0))
 (Rule
@@ -42,7 +42,7 @@ expression: proof_snapshot
     (Fiat (= (S (Z)) (S (Z))))
     (Eval)
     (Fiat (= t1 t1)))
-  (substitution (@v424 (S (Z))) (@v425 t0) (@v423 (Z))))
+  (substitution (@v416 (Z)) (@v417 (S (Z))) (@v418 t0)))
 (let prf0 (Fiat (= (Z) (Z))))
 (let t0 (multiset-of (S (Z)) (Z) (Z)))
 (let t1 (HasMS t0))
@@ -50,7 +50,7 @@ expression: proof_snapshot
   (= (@ExistsConstructor4) (@ExistsConstructor4))
   (name "@prove_exists_rule4")
   (premises prf0 (Fiat (= (S (Z)) (S (Z)))) prf0 (Eval) (Fiat (= t1 t1)))
-  (substitution (@v533 (Z)) (@v532 (S (Z))) (@v534 t0) (@v531 (Z))))
+  (substitution (@v522 (Z)) (@v524 (Z)) (@v523 (S (Z))) (@v525 t0)))
 (let t0 (vec-of (Z) (S (Z))))
 (let t1 (HasVec t0))
 (Rule
@@ -94,7 +94,7 @@ expression: proof_snapshot
       ((MapGet w))
          )")
   (premises (Fiat (= t1 t1)) (Fiat (= (Z) (Z))) (Fiat (= (S (Z)) (S (Z)))))
-  (substitution (m t0) (w (S (Z))) (@v787 (Z))))
+  (substitution (m t0) (@v775 (Z)) (w (S (Z)))))
 (let t0 (multiset-of (S (Z)) (Z) (Z)))
 (let t1 (HasMS t0))
 (Rule
@@ -195,5 +195,5 @@ expression: proof_snapshot
       ((OutWrap w))
          )")
       (premises (Fiat (= (HasElem (Z)) (HasElem (Z)))) (Eval) (Fiat (= t0 t0)))
-      (substitution (a (Z)) (w t0) (@v1511 (vec-of (Z) (Z))))))
-  (substitution (@v1535 (vec-of (Z) (Z))) (@v1533 (Z)) (@v1534 (Z))))
+      (substitution (a (Z)) (@v1498 (vec-of (Z) (Z))) (w t0))))
+  (substitution (@v1520 (Z)) (@v1521 (Z)) (@v1522 (vec-of (Z) (Z)))))

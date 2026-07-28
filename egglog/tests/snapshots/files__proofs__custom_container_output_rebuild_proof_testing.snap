@@ -49,4 +49,4 @@ expression: proof_snapshot
     (Fiat (= (N 1) (N 1)))
     (Fiat (= (N 3) (N 3)))
     (Eval))
-  (substitution (@v169 (N 1)) (@v170 (N 3)) (@n1 t0)))
+  (substitution (@v168 (N 1)) (@v169 (N 3)) (@n1 t0)))
