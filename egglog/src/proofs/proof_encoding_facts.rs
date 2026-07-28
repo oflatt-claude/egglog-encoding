@@ -324,9 +324,6 @@ impl ProofInstrumentor<'_> {
             .get(sort_name)
             .unwrap()
             .clone();
-        let proof = self.term_proof_for_justification(stmts, value, &to_ast, &Justification::Fiat);
-        // Both sides of the fiat are the same term, so it proves `value = value`.
-        self.mark_reflexive(&proof);
-        proof
+        self.term_proof_for_justification(stmts, value, &to_ast, &Justification::Fiat)
     }
 }
