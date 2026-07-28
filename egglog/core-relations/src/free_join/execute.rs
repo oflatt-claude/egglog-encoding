@@ -891,6 +891,23 @@ impl<'a> JoinState<'a> {
         // variable of that atom by the single column it occupies. Probing by one
         // of those columns for an ordinary variable is therefore an ordinary
         // probe, and falls through.
+        //
+        // A probe spanning the occurrence columns *and more* is the one case the
+        // set cannot express: it wants rows where the value occurs among some
+        // columns and another variable sits at a further one, which no single
+        // index answers — a tuple index over the union would read the occurrence
+        // columns conjunctively and quietly drop rows. Generic join does not
+        // produce such a probe; refuse it rather than answer it wrongly.
+        if let Some(occ) = atoms[atom].occurrence.as_ref()
+            && occ.cols.len() < cols.len()
+            && occ.cols.iter().all(|c| cols.contains(c))
+        {
+            panic!(
+                "unsupported plan: an occurrence atom is probed by {cols:?}, which spans \
+                 its indexed columns {:?} and others",
+                occ.cols
+            );
+        }
         if atoms[atom]
             .occurrence
             .as_ref()

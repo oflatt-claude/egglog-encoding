@@ -175,3 +175,32 @@ fn column_index_posts_a_row_once_per_distinct_value() {
     // Column 0 was not indexed.
     assert!(rows_for(0).is_empty());
 }
+
+/// The parallel index build must deduplicate a row's repeated value the same way
+/// the serial one does. A table large enough to cross
+/// `parallelize_index_construction` takes a different code path, so it needs its
+/// own coverage.
+#[test]
+fn parallel_column_index_posts_a_row_once_per_distinct_value() {
+    const N: usize = 25_000;
+    let mut rows: Vec<Vec<_>> = (0..N)
+        .map(|i| vec![v(i), v(i + 1_000_000), v(i + 2_000_000)])
+        .collect();
+    // One row holding the same value in both indexed columns.
+    let dup = v(999_999);
+    rows[5] = vec![v(5), dup, dup];
+    let table = WrappedTable::new(fill_table(rows, 1, None, |old, new| {
+        assert_eq!(old, new, "no conflicts in this test");
+        None
+    }));
+
+    let mut index = Index::new(vec![ColumnId::new(1), ColumnId::new(2)], ColumnIndex::new());
+    index.refresh(table.as_ref());
+
+    let mut got = Vec::new();
+    index
+        .get_subset(&dup)
+        .expect("the duplicated value is indexed")
+        .offsets(|row_id| got.push(row_id.index()));
+    assert_eq!(got, vec![5], "one entry, not one per column");
+}

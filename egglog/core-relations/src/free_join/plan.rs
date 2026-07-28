@@ -1651,7 +1651,16 @@ fn compile_stage(
 
     let mut bind = SmallVec::new();
     for var in vars {
-        bind.push((ctx.atoms[atom].get_col(var).unwrap(), var));
+        // Scanning a cover binds each variable from the column it occupies. An
+        // occurrence variable has none — it would have to yield one binding per
+        // distinct occurring value — so a plan that covers it is unsupported.
+        let col = ctx.atoms[atom].get_col(var).unwrap_or_else(|| {
+            panic!(
+                "unsupported plan: {var:?} is bound by scanning an atom where it \
+                 occupies no column"
+            )
+        });
+        bind.push((col, var));
     }
 
     let mut to_intersect = Vec::with_capacity(filters.len());
