@@ -10,9 +10,7 @@ use crate::{
             process_actions, run_merge,
         },
         proof_encoding_helpers::{EncodingNames, SharedEnd},
-        proof_head_skeleton::{
-            BuildSites, Firing, HeadPlan, build_sites, congr, sites_needed, sym, trans,
-        },
+        proof_head_skeleton::{Firing, HeadPlan, congr, sites_needed, sym, trans},
         proof_sites::{SiteIndex, SiteRef},
     },
     typechecking::{FuncType, PrimitiveValidator},
@@ -257,7 +255,7 @@ pub struct ProofStore {
     /// reflexive `Fiat` over it ([`ProofStore::reflexive_value_term`]).
     pub(super) prim_value_constructors: HashSet<String>,
     /// Rule name -> how its head lowers.
-    head_plans: HashMap<String, Rc<BuildSites>>,
+    head_plans: HashMap<String, Rc<HeadPlan>>,
     /// Structural sharing for the proofs conversion synthesizes.
     synthesized: HashMap<SynthKey, ProofId>,
 }
@@ -1092,11 +1090,11 @@ impl ProofStore {
         proof_id
     }
 
-    /// How `rule_name`'s head lowers, and its build sites. A property of the rule
-    /// text, so it is computed once per rule.
-    fn head_plan(&mut self, prog: &[ResolvedNCommand], rule_name: &str) -> Rc<BuildSites> {
-        if let Some(planned) = self.head_plans.get(rule_name) {
-            return planned.clone();
+    /// How `rule_name`'s head lowers. A property of the rule text, so it is
+    /// computed once per rule.
+    fn head_plan(&mut self, prog: &[ResolvedNCommand], rule_name: &str) -> Rc<HeadPlan> {
+        if let Some(plan) = self.head_plans.get(rule_name) {
+            return plan.clone();
         }
         let rule = rule_named(prog, rule_name);
         let mut minted = 0usize;
@@ -1104,11 +1102,9 @@ impl ProofStore {
             minted += 1;
             format!("@union-operand-{minted}")
         };
-        let plan = HeadPlan::new(&rule.head.0, &mut fresh);
-        let planned = Rc::new(build_sites(&plan));
-        self.head_plans
-            .insert(rule_name.to_string(), planned.clone());
-        planned
+        let plan = Rc::new(HeadPlan::new(&rule.head.0, &mut fresh));
+        self.head_plans.insert(rule_name.to_string(), plan.clone());
+        plan
     }
 
     /// What each conclusion site of `rule_name`'s head concludes under

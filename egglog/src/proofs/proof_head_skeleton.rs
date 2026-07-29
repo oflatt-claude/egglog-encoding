@@ -36,7 +36,8 @@ pub(crate) struct ConstructInto {
     pub edge: SiteRef,
 }
 
-/// A rule head as the encoder lowers it.
+/// A rule head as the encoder lowers it, and the build sites that lowering
+/// composes its proofs from.
 pub(crate) struct HeadPlan {
     /// The head with every constructor-application `union` operand lifted into a
     /// preceding `let`, each action carrying the [`ActionSites`] of the action it
@@ -46,6 +47,11 @@ pub(crate) struct HeadPlan {
     pub construct_into: HashMap<String, ConstructInto>,
     /// Indices into [`Self::actions`] of the `union`s the plan makes redundant.
     pub dropped: HashSet<usize>,
+    /// Per conclusion site whose lowering composes anything, what it composes
+    /// from. See [`build_sites`] for the numbering.
+    builds: HashMap<SiteIndex, Build>,
+    /// The build sites that record a bridge premise, in construction order.
+    bridge_order: Vec<SiteIndex>,
 }
 
 impl HeadPlan {
@@ -55,11 +61,22 @@ impl HeadPlan {
     pub(crate) fn new(actions: &[ResolvedAction], fresh: &mut dyn FnMut() -> String) -> Self {
         let lowered = normalize_union_operands(actions, fresh);
         let (construct_into, dropped) = plan_construct_into(&lowered);
-        HeadPlan {
+        let mut plan = HeadPlan {
             actions: lowered,
             construct_into,
             dropped,
-        }
+            builds: HashMap::default(),
+            bridge_order: Vec::new(),
+        };
+        build_sites(&mut plan);
+        plan
+    }
+
+    /// Where `site`'s bridge premise sits in a rule proof's bridge list, counted
+    /// from the list's end (the list is consed onto as the head builds, so the
+    /// oldest bridge is last). `None` for a site that records no bridge.
+    pub(crate) fn bridge_position(&self, site: SiteIndex) -> Option<usize> {
+        self.bridge_order.iter().position(|s| *s == site)
     }
 }
 
@@ -235,30 +252,26 @@ fn action_operands(action: &ResolvedAction) -> Box<dyn Iterator<Item = &Resolved
     }
 }
 
-/// Where a build site's children come from, and what it is built into.
+/// What one conclusion site's composite proofs are composed from. Only a site
+/// whose lowering composes something has one.
 #[derive(Clone)]
-struct BuildSite {
-    /// Per child, in order: the build site its value comes from, or `None` when
-    /// the child is a leaf the head did not build.
-    children: Vec<Option<SiteIndex>>,
-    /// Set when the site is a construct-into guest: the dropped `union`'s site,
-    /// oriented `target = guest`, and the target's build site if the head built
-    /// it too.
-    guest_of: Option<(SiteRef, Option<SiteIndex>)>,
-}
-
-/// A head's build sites, indexed the way a rule proof names them.
-#[derive(Clone, Default)]
-pub(crate) struct BuildSites {
-    sites: HashMap<SiteIndex, BuildSite>,
-    /// A dropped `union`'s site -> the guest built into its other operand.
-    guest_at_union: HashMap<SiteIndex, SiteIndex>,
-    /// A kept `union`'s site -> its two operands' build sites.
-    unions: HashMap<SiteIndex, (Option<SiteIndex>, Option<SiteIndex>)>,
-    /// A global `set`'s row site -> the build site of the value it aliases.
-    globals: HashMap<SiteIndex, Option<SiteIndex>>,
-    /// The build sites that record a bridge premise, in construction order.
-    bridge_order: Vec<SiteIndex>,
+enum Build {
+    /// A constructor application the head builds.
+    Term {
+        /// Per child, in order: the build site its value comes from, or `None`
+        /// when the child is a leaf the head did not build.
+        children: Vec<Option<SiteIndex>>,
+        /// Set when the site is a construct-into guest: the dropped `union`'s
+        /// site, oriented `target = guest`, and the target's build site if the
+        /// head built it too.
+        guest_of: Option<(SiteRef, Option<SiteIndex>)>,
+    },
+    /// A `union` the plan keeps: its two operands' build sites.
+    Union([Option<SiteIndex>; 2]),
+    /// A `union` the plan dropped: the guest built into its other operand.
+    Guest(SiteIndex),
+    /// A global `set`: the build site of the value it aliases.
+    Global(Option<SiteIndex>),
 }
 
 /// Index `plan`'s build sites: actions in order, and within an action the
@@ -269,8 +282,9 @@ pub(crate) struct BuildSites {
 /// A construct-into guest records no bridge: its representative is the target's
 /// e-class, which the dropped `union`'s site already names, so the encoder reads
 /// no view-row proof for it.
-pub(crate) fn build_sites(plan: &HeadPlan) -> BuildSites {
-    let mut out = BuildSites::default();
+fn build_sites(plan: &mut HeadPlan) {
+    let mut builds: HashMap<SiteIndex, Build> = HashMap::default();
+    let mut bridge_order: Vec<SiteIndex> = Vec::new();
     // A `let`-bound name -> the build site whose value it holds.
     let mut bound: HashMap<String, SiteIndex> = HashMap::default();
     for (at, (action, sites)) in plan.actions.iter().enumerate() {
@@ -285,19 +299,26 @@ pub(crate) fn build_sites(plan: &HeadPlan) -> BuildSites {
             .zip(&sites.operands)
             .map(|(expr, site)| {
                 let mut next = site.0;
-                walk_build_sites(expr, &mut next, guest.is_some(), &bound, &mut out)
+                walk_build_sites(
+                    expr,
+                    &mut next,
+                    guest.is_some(),
+                    &bound,
+                    &mut builds,
+                    &mut bridge_order,
+                )
             })
             .collect();
         match action {
             ResolvedAction::Let(_, v, _) => {
                 if let Some(site) = values[0] {
-                    if let Some(plan) = guest {
-                        let target = bound.get(&plan.target).copied();
-                        out.sites
-                            .get_mut(&site)
-                            .expect("a construct-into guest is a build site")
-                            .guest_of = Some((plan.edge, target));
-                        out.guest_at_union.insert(plan.edge.index, site);
+                    if let Some(into) = guest {
+                        let target = bound.get(&into.target).copied();
+                        let Some(Build::Term { guest_of, .. }) = builds.get_mut(&site) else {
+                            panic!("a construct-into guest is a build site");
+                        };
+                        *guest_of = Some((into.edge, target));
+                        builds.insert(into.edge.index, Build::Guest(site));
                     }
                     bound.insert(v.name.clone(), site);
                 }
@@ -306,16 +327,17 @@ pub(crate) fn build_sites(plan: &HeadPlan) -> BuildSites {
                 let own = sites
                     .own
                     .expect("a union contributes a site for its equality");
-                out.unions.insert(own, (values[0], values[1]));
+                builds.insert(own, Build::Union([values[0], values[1]]));
             }
             ResolvedAction::Set(_, _, args, _) if args.is_empty() => {
                 let own = sites.own.expect("a set contributes a site for its row");
-                out.globals.insert(own, values[0]);
+                builds.insert(own, Build::Global(values[0]));
             }
             _ => {}
         }
     }
-    out
+    plan.builds = builds;
+    plan.bridge_order = bridge_order;
 }
 
 /// Record the build sites of `expr`'s constructor applications, post-order, and
@@ -327,7 +349,8 @@ fn walk_build_sites(
     next: &mut usize,
     skip_root: bool,
     bound: &HashMap<String, SiteIndex>,
-    out: &mut BuildSites,
+    builds: &mut HashMap<SiteIndex, Build>,
+    bridge_order: &mut Vec<SiteIndex>,
 ) -> Option<SiteIndex> {
     let index = SiteIndex(*next);
     *next += 1;
@@ -341,20 +364,20 @@ fn walk_build_sites(
     };
     let children: Vec<Option<SiteIndex>> = args
         .iter()
-        .map(|arg| walk_build_sites(arg, next, false, bound, out))
+        .map(|arg| walk_build_sites(arg, next, false, bound, builds, bridge_order))
         .collect();
     // A primitive or a global lookup builds nothing itself, though a constructor
     // argument of it is still built.
     constructor_operand(expr)?;
-    out.sites.insert(
+    builds.insert(
         index,
-        BuildSite {
+        Build::Term {
             children,
             guest_of: None,
         },
     );
     if !skip_root {
-        out.bridge_order.push(index);
+        bridge_order.push(index);
     }
     Some(index)
 }
@@ -362,57 +385,42 @@ fn walk_build_sites(
 /// The build sites a proof about `site` is composed from — the ones whose
 /// bridge premises conversion has to read. A proof stating only the head's own
 /// conclusion needs none.
-pub(crate) fn sites_needed(sites: &BuildSites, site: SiteRef) -> Vec<SiteIndex> {
+pub(crate) fn sites_needed(plan: &HeadPlan, site: SiteRef) -> Vec<SiteIndex> {
     let mut out = vec![];
-    match site.role {
-        SiteRole::AsWritten => {}
-        SiteRole::CanonicalReflexive | SiteRole::Connector => closure(sites, site.index, &mut out),
-        SiteRole::GuestView | SiteRole::GuestConnector => {
-            if let Some(&guest) = sites.guest_at_union.get(&site.index) {
-                closure(sites, guest, &mut out);
-            }
+    let mut from = |start: Option<SiteIndex>| {
+        if let Some(start) = start {
+            closure(plan, start, &mut out);
         }
-        SiteRole::UnionEdge => {
-            let (lhs, rhs) = sites
-                .unions
-                .get(&site.index)
-                .copied()
-                .unwrap_or((None, None));
-            for operand in [lhs, rhs].into_iter().flatten() {
-                closure(sites, operand, &mut out);
-            }
+    };
+    match (site.role, plan.builds.get(&site.index)) {
+        (SiteRole::AsWritten, _) => {}
+        (SiteRole::CanonicalReflexive | SiteRole::Connector, _) => from(Some(site.index)),
+        (SiteRole::GuestView | SiteRole::GuestConnector, Some(Build::Guest(guest))) => {
+            from(Some(*guest))
         }
-        SiteRole::GlobalValue => {
-            if let Some(Some(value)) = sites.globals.get(&site.index).copied() {
-                closure(sites, value, &mut out);
-            }
+        (SiteRole::UnionEdge, Some(Build::Union(operands))) => {
+            let operands = *operands;
+            operands.into_iter().for_each(from);
         }
+        (SiteRole::GlobalValue, Some(Build::Global(value))) => from(*value),
+        _ => {}
     }
     out
 }
 
-fn closure(sites: &BuildSites, site: SiteIndex, out: &mut Vec<SiteIndex>) {
+fn closure(plan: &HeadPlan, site: SiteIndex, out: &mut Vec<SiteIndex>) {
     if out.contains(&site) {
         return;
     }
     out.push(site);
-    let Some(build) = sites.sites.get(&site) else {
+    let Some(Build::Term { children, guest_of }) = plan.builds.get(&site) else {
         return;
     };
-    for child in build.children.iter().flatten() {
-        closure(sites, *child, out);
+    for child in children.iter().flatten() {
+        closure(plan, *child, out);
     }
-    if let Some((_, Some(target))) = build.guest_of {
-        closure(sites, target, out);
-    }
-}
-
-impl BuildSites {
-    /// Where `site`'s bridge premise sits in a rule proof's bridge list, counted
-    /// from the list's end (the list is consed onto as the head builds, so the
-    /// oldest bridge is last). `None` for a site that records no bridge.
-    pub(crate) fn bridge_position(&self, site: SiteIndex) -> Option<usize> {
-        self.bridge_order.iter().position(|s| *s == site)
+    if let Some((_, Some(target))) = *guest_of {
+        closure(plan, target, out);
     }
 }
 
@@ -424,7 +432,7 @@ impl BuildSites {
 /// node — with a copy of the substitution — per site per firing.
 pub(crate) struct Firing<'a> {
     pub rule_name: &'a str,
-    pub sites: &'a BuildSites,
+    pub plan: &'a HeadPlan,
     /// The head's as-written propositions, in `conclusion_sites` order.
     pub site_props: Vec<(SiteIndex, Proposition)>,
     /// The premises the rule body matched, one per body fact.
@@ -442,7 +450,7 @@ pub(crate) struct Firing<'a> {
 impl<'a> Firing<'a> {
     pub(crate) fn new(
         rule_name: &'a str,
-        sites: &'a BuildSites,
+        plan: &'a HeadPlan,
         site_props: Vec<(SiteIndex, Proposition)>,
         body_premises: Vec<ProofId>,
         bridges: HashMap<SiteIndex, ProofId>,
@@ -450,7 +458,7 @@ impl<'a> Firing<'a> {
     ) -> Self {
         Firing {
             rule_name,
-            sites,
+            plan,
             site_props,
             body_premises,
             bridges,
@@ -472,26 +480,35 @@ impl<'a> Firing<'a> {
                 self.recorded(site)
             }
             SiteRole::GuestView | SiteRole::GuestConnector => {
-                let guest = *self
-                    .sites
-                    .guest_at_union
-                    .get(&site.index)
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "rule {}'s union at site {} builds no guest",
-                            self.rule_name, site.index.0
-                        )
-                    });
+                let Some(Build::Guest(guest)) = self.plan.builds.get(&site.index) else {
+                    panic!(
+                        "rule {}'s union at site {} builds no guest",
+                        self.rule_name, site.index.0
+                    );
+                };
+                let guest = *guest;
                 self.resolve(store, guest);
                 self.recorded(site)
             }
             SiteRole::UnionEdge => {
-                let operands = self.sites.unions[&site.index];
+                let Some(Build::Union(operands)) = self.plan.builds.get(&site.index) else {
+                    panic!(
+                        "rule {}'s site {} is not a union the plan kept",
+                        self.rule_name, site.index.0
+                    );
+                };
+                let operands = *operands;
                 self.union_edge(store, site.index, operands);
                 self.recorded(site)
             }
             SiteRole::GlobalValue => {
-                let value = self.sites.globals[&site.index];
+                let Some(Build::Global(value)) = self.plan.builds.get(&site.index) else {
+                    panic!(
+                        "rule {}'s site {} is not a global's row",
+                        self.rule_name, site.index.0
+                    );
+                };
+                let value = *value;
                 self.global_value(store, site.index, value);
                 self.recorded(site)
             }
@@ -554,16 +571,19 @@ impl<'a> Firing<'a> {
         if let Some(&connector) = self.resolved.get(&site) {
             return connector;
         }
-        let build = self.sites.sites[&site].clone();
+        let Some(Build::Term { children, guest_of }) = self.plan.builds.get(&site) else {
+            panic!("rule {}'s site {} builds no term", self.rule_name, site.0);
+        };
+        let (children, guest_of) = (children.clone(), *guest_of);
 
         let mut to_canonical = self.base(store, site, false);
-        for (i, child) in build.children.iter().enumerate() {
+        for (i, child) in children.iter().enumerate() {
             let Some(child) = *child else { continue };
             let child = self.resolve(store, child);
             to_canonical = congr(store, to_canonical, i, child);
         }
 
-        let connector = match build.guest_of {
+        let connector = match guest_of {
             Some((edge, target)) => {
                 let view = self.guest_view(store, edge, target, to_canonical);
                 let back = sym(store, view);
@@ -653,9 +673,9 @@ impl<'a> Firing<'a> {
         &mut self,
         store: &mut ProofStore,
         union: SiteIndex,
-        operands: (Option<SiteIndex>, Option<SiteIndex>),
+        operands: [Option<SiteIndex>; 2],
     ) {
-        let (lhs, rhs) = operands;
+        let [lhs, rhs] = operands;
         let base = self.base(store, union, false);
         let lhs_conn = lhs.map(|s| self.resolve(store, s));
         let rhs_conn = rhs.map(|s| self.resolve(store, s));
