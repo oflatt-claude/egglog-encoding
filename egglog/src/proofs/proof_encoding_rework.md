@@ -985,9 +985,8 @@ fixed pair.
 
 206 `proofs/` tests pass with zero changed snapshots and zero changed shared
 snapshots, the whole workspace and `egglog-experimental --test files` are green,
-and `proof_reconstruct_check` is unmoved: 14426 nodes, 0 `stamped_ok=false`, 0
-`payload_free=disagrees`, 3540 bridges of which 288 move the term (on 14426 rather
-than the 13392 this document had been recording — see the measurement caveat).
+and `proof_reconstruct_check` is unmoved: 13392 nodes, 0 `stamped_ok=false`, 0
+`payload_free=disagrees`, 3540 bridges of which 288 move the term.
 
 **Both shapes are exercised, so the byte-identical output is agreement.** The
 corpus parses 22 `DisplacedSharedLhs` nodes and 676 `DisplacedSharedRhs` — 676 on
@@ -1385,15 +1384,10 @@ number.
   row per collision, that move. Diff the `(print-size)` block alone: a whole-output
   diff is dominated by timings and rule ordering and looks nondeterministic
   everywhere.
-* **`proof_reconstruct_check`'s corpus node count is 14426, not the 13392 this
-  document records from phase 2a onwards.** Measured as
+* **Count the harness's nodes with a trailing space: `grep -c "PROOF-RECONSTRUCT "`.**
+  The corpus node count is **13392**, as recorded from phase 2a onwards. Run
   `RUST_LOG=info EGGLOG_PROOF_RECONSTRUCT_CHECK=1 cargo test --release -p egglog
-  --test files 'proofs/' -- --nocapture`, counting `PROOF-RECONSTRUCT` lines, it is
-  14426 — at `a932b22`, at `7ffbfbd` and after the merge-collision pack alike, over
-  repeated runs, with no interleaved lines and 7148 of them from the native
-  treatment against 7278 from `desugar`. The bridge counters reproduce the recorded
-  3540 / 288 exactly, and the node figure is identical at all three commits, so the
-  disagreement is in how the figure was taken, not in the encoding. The
-  `ReconstructStats` counters are thread-local while the corpus runs a thread per
-  test, so a figure summed from them can undercount, where the log lines cannot: use
-  14426 and the command above, and read the measurement for whether it *moves*.
+  --test files 'proofs/' -- --nocapture`. Without the trailing space the pattern also
+  matches the `PROOF-RECONSTRUCT-DETAIL` lines, of which there are 1034, giving
+  14426 — and since the overcount is deterministic it reproduces across commits and
+  looks like a stable baseline. Read the measurement for whether it *moves*.
