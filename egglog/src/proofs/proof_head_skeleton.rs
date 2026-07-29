@@ -20,7 +20,7 @@ use crate::{
     proofs::{
         proof_format::{Justification, Proof, ProofId, ProofStore, Proposition, SynthKey},
         proof_reconstruct_check,
-        proof_sites::{ActionSites, ExprSites, SiteIndex, SiteRef, SiteRole, action_sites},
+        proof_sites::{ActionSites, SiteIndex, SiteRef, SiteRole, action_sites},
     },
     typechecking::FuncType,
     util::{HashMap, HashSet, IndexMap},
@@ -91,15 +91,15 @@ fn normalize_union_operands(
         match action {
             ResolvedAction::Union(span, lhs, rhs) => {
                 let ActionSites { own, operands } = sites;
-                let [lhs_sites, rhs_sites] = <[ExprSites; 2]>::try_from(operands)
+                let [lhs_site, rhs_site] = <[SiteIndex; 2]>::try_from(operands)
                     .expect("a union contributes sites for both operands");
-                let lhs = lift_union_operand(lhs.clone(), &lhs_sites, &mut out, fresh);
-                let rhs = lift_union_operand(rhs.clone(), &rhs_sites, &mut out, fresh);
+                let lhs = lift_union_operand(lhs.clone(), lhs_site, &mut out, fresh);
+                let rhs = lift_union_operand(rhs.clone(), rhs_site, &mut out, fresh);
                 out.push((
                     ResolvedAction::Union(span.clone(), lhs, rhs),
                     ActionSites {
                         own,
-                        operands: vec![lhs_sites, rhs_sites],
+                        operands: vec![lhs_site, rhs_site],
                     },
                 ));
             }
@@ -110,11 +110,11 @@ fn normalize_union_operands(
 }
 
 /// If `operand` is a constructor application, bind it to a fresh `let` (pushed
-/// onto `out` carrying `sites`) and return a variable referencing it; otherwise
+/// onto `out` carrying `site`) and return a variable referencing it; otherwise
 /// return `operand` unchanged.
 fn lift_union_operand(
     operand: ResolvedExpr,
-    sites: &ExprSites,
+    site: SiteIndex,
     out: &mut Vec<(ResolvedAction, ActionSites)>,
     fresh: &mut dyn FnMut() -> String,
 ) -> ResolvedExpr {
@@ -131,7 +131,7 @@ fn lift_union_operand(
         ResolvedAction::Let(span.clone(), var.clone(), operand),
         ActionSites {
             own: None,
-            operands: vec![sites.clone()],
+            operands: vec![site],
         },
     ));
     GenericExpr::Var(span, var)
@@ -281,12 +281,16 @@ pub(crate) fn build_sites(plan: &HeadPlan) -> BuildSites {
             ResolvedAction::Let(_, v, _) => plan.construct_into.get(&v.name),
             _ => None,
         };
-        for (expr, expr_sites) in action_operands(action).zip(&sites.operands) {
-            walk_build_sites(expr, expr_sites, guest.is_some(), &bound, &mut out);
-        }
+        let values: Vec<Option<SiteIndex>> = action_operands(action)
+            .zip(&sites.operands)
+            .map(|(expr, site)| {
+                let mut next = site.0;
+                walk_build_sites(expr, &mut next, guest.is_some(), &bound, &mut out)
+            })
+            .collect();
         match action {
-            ResolvedAction::Let(_, v, expr) => {
-                if let Some(site) = value_site(expr, sites.operands.first(), &bound) {
+            ResolvedAction::Let(_, v, _) => {
+                if let Some(site) = values[0] {
                     if let Some(plan) = guest {
                         let target = bound.get(&plan.target).copied();
                         out.sites
@@ -298,20 +302,15 @@ pub(crate) fn build_sites(plan: &HeadPlan) -> BuildSites {
                     bound.insert(v.name.clone(), site);
                 }
             }
-            ResolvedAction::Union(_, lhs, rhs) => {
+            ResolvedAction::Union(..) => {
                 let own = sites
                     .own
                     .expect("a union contributes a site for its equality");
-                let operands = (
-                    value_site(lhs, sites.operands.first(), &bound),
-                    value_site(rhs, sites.operands.get(1), &bound),
-                );
-                out.unions.insert(own, operands);
+                out.unions.insert(own, (values[0], values[1]));
             }
-            ResolvedAction::Set(_, _, args, value) if args.is_empty() => {
+            ResolvedAction::Set(_, _, args, _) if args.is_empty() => {
                 let own = sites.own.expect("a set contributes a site for its row");
-                out.globals
-                    .insert(own, value_site(value, sites.operands.first(), &bound));
+                out.globals.insert(own, values[0]);
             }
             _ => {}
         }
@@ -319,58 +318,45 @@ pub(crate) fn build_sites(plan: &HeadPlan) -> BuildSites {
     out
 }
 
-/// Record `expr`'s constructor applications post-order. `skip_root` leaves out
-/// the top node, whose build the caller handles (a construct-into guest).
+/// Record the build sites of `expr`'s constructor applications, post-order, and
+/// return the build site `expr`'s value comes from. `next` is the pre-order site
+/// cursor, positioned at `expr`'s own site. `skip_root` leaves the top node out
+/// of the bridge order, its build being the caller's (a construct-into guest).
 fn walk_build_sites(
     expr: &ResolvedExpr,
-    sites: &ExprSites,
+    next: &mut usize,
     skip_root: bool,
     bound: &HashMap<String, SiteIndex>,
     out: &mut BuildSites,
-) {
-    let Some((_, args)) = constructor_operand(expr) else {
-        // A primitive or a global lookup builds nothing itself, but a
-        // constructor argument of it is still built.
-        if let ResolvedExpr::Call(_, _, args) = expr {
-            for (arg, arg_sites) in args.iter().zip(&sites.operands) {
-                walk_build_sites(arg, arg_sites, false, bound, out);
-            }
-        }
-        return;
+) -> Option<SiteIndex> {
+    let index = SiteIndex(*next);
+    *next += 1;
+    let ResolvedExpr::Call(_, _, args) = expr else {
+        // A variable's value comes from the build site it was bound to; a
+        // literal comes from none.
+        return match expr {
+            ResolvedExpr::Var(_, v) => bound.get(&v.name).copied(),
+            _ => None,
+        };
     };
-    for (arg, arg_sites) in args.iter().zip(&sites.operands) {
-        walk_build_sites(arg, arg_sites, false, bound, out);
-    }
-    let children = args
+    let children: Vec<Option<SiteIndex>> = args
         .iter()
-        .zip(&sites.operands)
-        .map(|(arg, arg_sites)| value_site(arg, Some(arg_sites), bound))
+        .map(|arg| walk_build_sites(arg, next, false, bound, out))
         .collect();
+    // A primitive or a global lookup builds nothing itself, though a constructor
+    // argument of it is still built.
+    constructor_operand(expr)?;
     out.sites.insert(
-        sites.index,
+        index,
         BuildSite {
             children,
             guest_of: None,
         },
     );
     if !skip_root {
-        out.bridge_order.push(sites.index);
+        out.bridge_order.push(index);
     }
-}
-
-/// The build site an expression's value comes from, if the head built it: the
-/// expression's own site when it is a constructor application, or the site the
-/// variable it names was bound to.
-fn value_site(
-    expr: &ResolvedExpr,
-    sites: Option<&ExprSites>,
-    bound: &HashMap<String, SiteIndex>,
-) -> Option<SiteIndex> {
-    match expr {
-        ResolvedExpr::Var(_, v) => bound.get(&v.name).copied(),
-        _ if constructor_operand(expr).is_some() => Some(sites?.index),
-        _ => None,
-    }
+    Some(index)
 }
 
 /// The build sites a proof about `site` is composed from — the ones whose

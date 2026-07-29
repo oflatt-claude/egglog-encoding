@@ -1,7 +1,7 @@
 #[doc = include_str!("proof_encoding.md")]
 use crate::proofs::proof_encoding_helpers::{EncodingNames, Justification, SharedEnd, SiteColumn};
 use crate::proofs::proof_head_skeleton::{ConstructInto, HeadPlan, constructor_operand};
-use crate::proofs::proof_sites::{ActionSites, ExprSites, SiteIndex, SiteRef, SiteRole};
+use crate::proofs::proof_sites::{ActionSites, SiteIndex, SiteRef, SiteRole};
 use crate::typechecking::FuncType;
 use crate::*;
 
@@ -149,6 +149,12 @@ pub(crate) struct ProofInstrumentor<'a> {
     /// A group is emitted where its proof is first read, so a proof no statement
     /// reads costs neither a read nor a row (see [`Self::defer_lookup`]).
     pending_lookups: HashMap<String, Pending>,
+    /// The conclusion site of the expression [`Self::instrument_action_expr`] is
+    /// about to walk. The action walkers point it at each operand they evaluate;
+    /// it then advances in pre-order, the order [`conclusion_sites`] numbers in.
+    /// `None` while walking an expression that names no site, such as a `change`
+    /// argument.
+    site_cursor: Option<SiteIndex>,
 }
 
 /// Statements held back until something reads the proof they bind.
@@ -166,7 +172,15 @@ impl<'a> ProofInstrumentor<'a> {
             head_chain: None,
             reflexive: HashSet::default(),
             pending_lookups: HashMap::default(),
+            site_cursor: None,
         }
+    }
+
+    /// The site of the expression being walked, advancing the cursor past it.
+    fn take_site(&mut self) -> Option<SiteIndex> {
+        let site = self.site_cursor?;
+        self.site_cursor = Some(SiteIndex(site.0 + 1));
+        Some(site)
     }
 
     /// Make a term state and use it to instrument the code.
@@ -516,19 +530,17 @@ impl<'a> ProofInstrumentor<'a> {
         guest: &str,
         justification: &Justification,
         nat_conn: &mut NatConn,
-        sites: &ExprSites,
+        site: SiteIndex,
     ) {
         let target = plan.target.as_str();
         let (func_type, args) = constructor_operand(expr)
             .expect("construct-into guest must be a constructor application");
         let ctor_name = func_type.name.clone();
+        // The guest's own site is `site`; its operands' follow in pre-order.
+        self.site_cursor = Some(SiteIndex(site.0 + 1));
         let child_vals: Vec<String> = args
             .iter()
-            .enumerate()
-            .map(|(i, arg)| {
-                let arg_sites = sites.operands.get(i);
-                self.instrument_action_expr(arg, res, justification, nat_conn, arg_sites)
-            })
+            .map(|arg| self.instrument_action_expr(arg, res, justification, nat_conn))
             .collect();
 
         if !self.proofs_enabled() {
@@ -567,7 +579,7 @@ impl<'a> ProofInstrumentor<'a> {
             &ctor_name,
             &view_sort,
             &child_vals,
-            &justification.at_site(SiteRef::forward(sites.index)),
+            &justification.at_site(SiteRef::forward(site)),
             nat_conn,
         );
         let term_proof_ctor = self.term_proof_name(&sort_name);
@@ -944,13 +956,9 @@ impl<'a> ProofInstrumentor<'a> {
 
         match action {
             ResolvedAction::Let(_span, v, generic_expr) => {
-                let v2 = self.instrument_action_expr(
-                    generic_expr,
-                    &mut res,
-                    justification,
-                    nat_conn,
-                    sites.operands.first(),
-                );
+                self.site_cursor = sites.operands.first().copied();
+                let v2 =
+                    self.instrument_action_expr(generic_expr, &mut res, justification, nat_conn);
                 // Carry the canonicalization info onto the let-bound name. `v2` is
                 // the built term's deduped e-class var, keyed in `nat_conn` by that
                 // fresh var; without this, a later reference to `v.name` (e.g. the
@@ -976,12 +984,12 @@ impl<'a> ProofInstrumentor<'a> {
                 // arity for x's term relation (its output is the eclass, so it has
                 // no separate output column).
                 if generic_exprs.is_empty() && self.egraph.type_info.is_global(&func_type.name) {
+                    self.site_cursor = sites.operands.first().copied();
                     let e_value = self.instrument_action_expr(
                         generic_expr,
                         &mut res,
                         justification,
                         nat_conn,
-                        sites.operands.first(),
                     );
                     let proof = if self.proofs_enabled() {
                         let row_site = sites.own.expect("a set contributes a site for its row");
@@ -1008,13 +1016,8 @@ impl<'a> ProofInstrumentor<'a> {
                     .chain(std::iter::once(generic_expr))
                     .enumerate()
                 {
-                    exprs.push(self.instrument_action_expr(
-                        e,
-                        &mut res,
-                        justification,
-                        nat_conn,
-                        sites.operands.get(i),
-                    ));
+                    self.site_cursor = sites.operands.get(i).copied();
+                    exprs.push(self.instrument_action_expr(e, &mut res, justification, nat_conn));
                 }
 
                 // The row `(f args… value)` is the `set`'s own conclusion.
@@ -1034,11 +1037,10 @@ impl<'a> ProofInstrumentor<'a> {
                         Change::Subsume => self.subsumed_name(&func_type.name),
                     };
                     // `change` concludes nothing, so it has no sites to name.
+                    self.site_cursor = None;
                     let children = generic_exprs
                         .iter()
-                        .map(|e| {
-                            self.instrument_action_expr(e, &mut res, justification, nat_conn, None)
-                        })
+                        .map(|e| self.instrument_action_expr(e, &mut res, justification, nat_conn))
                         .collect::<Vec<_>>();
 
                     // The marker is a `Unit` relation, so insert a row keyed on the
@@ -1057,20 +1059,12 @@ impl<'a> ProofInstrumentor<'a> {
                 // A union whose operand is a freshly-built constructor term is
                 // optimized upstream in `instrument_actions`; this arm handles
                 // the remaining general unions.
-                let v1 = self.instrument_action_expr(
-                    generic_expr,
-                    &mut res,
-                    justification,
-                    nat_conn,
-                    sites.operands.first(),
-                );
-                let v2 = self.instrument_action_expr(
-                    generic_expr1,
-                    &mut res,
-                    justification,
-                    nat_conn,
-                    sites.operands.get(1),
-                );
+                self.site_cursor = sites.operands.first().copied();
+                let v1 =
+                    self.instrument_action_expr(generic_expr, &mut res, justification, nat_conn);
+                self.site_cursor = sites.operands.get(1).copied();
+                let v2 =
+                    self.instrument_action_expr(generic_expr1, &mut res, justification, nat_conn);
                 let ot = generic_expr.output_type();
                 let type_name = ot.name();
                 let site = sites
@@ -1084,13 +1078,8 @@ impl<'a> ProofInstrumentor<'a> {
                 res.push(format!("{action}"));
             }
             ResolvedAction::Expr(_span, generic_expr) => {
-                self.instrument_action_expr(
-                    generic_expr,
-                    &mut res,
-                    justification,
-                    nat_conn,
-                    sites.operands.first(),
-                );
+                self.site_cursor = sites.operands.first().copied();
+                self.instrument_action_expr(generic_expr, &mut res, justification, nat_conn);
             }
         }
 
@@ -1805,32 +1794,27 @@ impl<'a> ProofInstrumentor<'a> {
 
     // Add to view and term tables, returning a variable for the created term.
     //
-    // `sites` names this expression's conclusion site and those of its operands;
-    // it is `None` where the expression concludes nothing the head records (a
-    // `change` argument, or an `extract` expression outside any rule).
+    // The expression's conclusion site comes from [`Self::site_cursor`], which
+    // this walk advances in pre-order.
     fn instrument_action_expr(
         &mut self,
         expr: &ResolvedExpr,
         res: &mut Vec<String>,
         proof: &Justification,
         nat_conn: &mut NatConn,
-        sites: Option<&ExprSites>,
     ) -> String {
+        let site = self.take_site();
         match expr {
             ResolvedExpr::Lit(_, lit) => format!("{lit}"),
             ResolvedExpr::Var(_, resolved_var) => resolved_var.name.clone(),
             ResolvedExpr::Call(_, resolved_call, args) => {
                 let args = args
                     .iter()
-                    .enumerate()
-                    .map(|(i, arg)| {
-                        let arg_sites = sites.and_then(|s| s.operands.get(i));
-                        self.instrument_action_expr(arg, res, proof, nat_conn, arg_sites)
-                    })
+                    .map(|arg| self.instrument_action_expr(arg, res, proof, nat_conn))
                     .collect::<Vec<_>>();
                 // This node's own conclusion is `t = t` for the term it builds.
-                let proof = &match sites {
-                    Some(sites) => proof.at_site(SiteRef::forward(sites.index)),
+                let proof = &match site {
+                    Some(site) => proof.at_site(SiteRef::forward(site)),
                     None => proof.at_column(SiteColumn::Missing),
                 };
                 match resolved_call {
@@ -1934,15 +1918,16 @@ impl<'a> ProofInstrumentor<'a> {
                         &v.name,
                         justification,
                         nat_conn,
-                        sites
+                        *sites
                             .operands
                             .first()
-                            .expect("a let contributes sites for its expression"),
+                            .expect("a let contributes a site for its expression"),
                     );
                 }
                 _ => res.extend(self.instrument_action(action, justification, nat_conn, sites)),
             }
         }
+        self.site_cursor = None;
         res
     }
 
@@ -2262,14 +2247,12 @@ impl<'a> ProofInstrumentor<'a> {
                     &mut action_stmts,
                     &Justification::Fiat,
                     &mut nat_conn,
-                    None,
                 );
                 let instrumented_variants = self.instrument_action_expr(
                     variants,
                     &mut action_stmts,
                     &Justification::Fiat,
                     &mut nat_conn,
-                    None,
                 );
 
                 // Add any action statements needed to set up the expressions

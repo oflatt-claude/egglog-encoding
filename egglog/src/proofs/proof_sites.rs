@@ -167,26 +167,19 @@ impl ConclusionSite<'_> {
     }
 }
 
-/// The sites of an expression's nodes, mirroring the expression's shape.
-#[derive(Debug, Clone)]
-pub(crate) struct ExprSites {
-    /// The site for the expression itself.
-    pub index: SiteIndex,
-    /// One entry per operand, in order. Empty for a variable or a literal.
-    pub operands: Vec<ExprSites>,
-}
-
-/// The sites one action contributes, in the action's own shape.
+/// Where one action's sites start. An expression's sites are the pre-order run
+/// beginning at the operand's own site, so a walk that visits the expression's
+/// nodes in the same order recovers every index by counting.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ActionSites {
     /// The action's own conclusion: a `union`'s equality or a `set`'s row.
     /// `let`, `expr`, `panic` and `change` have none.
     pub own: Option<SiteIndex>,
-    /// One entry per expression the action evaluates, in the order
+    /// The site of each expression the action evaluates, in the order
     /// [`conclusion_sites`] visits them: a `union`'s two operands, a `set`'s
     /// arguments then its value, a `let`'s or `expr`'s single expression.
     /// Empty for `panic` and `change`.
-    pub operands: Vec<ExprSites>,
+    pub operands: Vec<SiteIndex>,
 }
 
 /// Enumerate the conclusion sites of a rule head, in canonical order: actions in
@@ -269,25 +262,25 @@ fn set_row_expr(
     ResolvedExpr::Call(span, func.clone(), row)
 }
 
-/// Push a site for `expr` and, in pre-order, one for each of its subexpressions.
+/// Push a site for `expr` and, in pre-order, one for each of its
+/// subexpressions. Returns `expr`'s own site.
 fn push_expr_sites<'a>(
     sites: &mut Vec<ConclusionSite<'a>>,
     at: usize,
     expr: &'a ResolvedExpr,
-) -> ExprSites {
+) -> SiteIndex {
     let index = push_site(
         sites,
         at,
         expr.span(),
         SiteConclusion::Reflexive(Cow::Borrowed(expr)),
     );
-    let mut operands = Vec::new();
     if let ResolvedExpr::Call(_, _, args) = expr {
         for arg in args {
-            operands.push(push_expr_sites(sites, at, arg));
+            push_expr_sites(sites, at, arg);
         }
     }
-    ExprSites { index, operands }
+    index
 }
 
 fn push_site<'a>(
