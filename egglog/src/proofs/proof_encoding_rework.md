@@ -633,6 +633,25 @@ What 4b trips over when `indexed_rebuild_rule` starts emitting these:
 * The steps a firing writes must be exactly the columns whose `Congr` the chain
   mints, in ascending column order. Leaving out the reflexive ones is sound and
   saves nothing, since `simplify` already removes them.
+### The container rebuild anchor was minted twice
+
+Two places built `Trans(Sym p, p)` over the same rebuild proof `p` and wrote it
+to `<CSort>Proof(rebuilt)`: the `ContainerRebuildProof` primitive, and both
+generated container rebuild rules (the container-child arm of `rebuilding_rules`
+and `fd_container_value_rebuild_rule`). The rules bind `p` by calling the
+primitive, so the primitive's row always landed first, and `<CSort>Proof` is
+`:merge old` — the rules' row was always discarded.
+
+Dropping the rules' copy saves 1 `Sym` + 1 `Trans` row per container-rebuild
+firing. Dumping every table after the run: `container-set-collapse` goes 117
+rows -> 109 over its four firings, `custom-container-output-rebuild` 78 -> 74
+over its two, with every other table — `<CSort>Proof` included — unchanged, and
+zero snapshot changes.
+
+The primitive's copy is the one to keep: it recurses, so it anchors *nested*
+rebuilt containers, which the rules never did. Deleting it instead (keeping the
+rules') fails `container-reorder-proofs` and
+`nested-container-dirty-propagation` on the missing inner anchor.
 
 ## Refactor to do before this lands
 
