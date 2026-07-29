@@ -572,6 +572,54 @@ per-base-sort form; and both depend on the canonical-program decision, since the
 encoder's site counter would have to live after `remove_globals` while
 `lower_inputs` runs before it.
 
+## Refactor to do before this lands
+
+The diff has grown parallel structures that must agree: `proof_sites.rs`,
+`proof_head_skeleton.rs`, `proof_reconstruct_check.rs`, the arity family. Every
+phase has needed a written warning about which of them the next change would
+drift from.
+
+Collapse them into **one traversal of the head, parameterized by
+`Option<bindings>`** (bindings being a proof per variable):
+
+* **no bindings** — you are the encoder: emit `Rule_k` / `RuleLink` rows naming
+  positions.
+* **bindings present** — you are the reconstructor: build `Congr` / `Trans` /
+  `Sym` directly.
+
+The agreement stops being a contract and becomes the same code, and the replay
+path becomes main's existing logic, so the conceptual delta against main shrinks
+to "and if you have no bindings yet, emit a row instead". That should let
+`proof_head_skeleton.rs`, the differential harness, and `conclusion_sites` as a
+standalone enumeration all go away — positions fall out of the shared walk.
+
+The detail to settle first: the two modes return different things (statement
+text versus `TermId`s in a `TermDag`), so either the traversal is generic over a
+sink or it returns an enum. Prototype on `build_natural_with_congr` before
+converting everything.
+
+## Bugs found, not yet fixed
+
+* **`convert_raw_proof` silently truncates the premise list.** It zips the
+  converted premises against a `reflex_mask` built from the *checker's* rule, and
+  `zip` stops at the shorter side. For a rule with a global in its head the
+  encoder emits one premise more than the checker's copy has body facts — because
+  `remove_globals` hoists the global into a new body fact — and the extra one is
+  silently dropped. It lands correctly only because `remove_globals` appends
+  rather than splices. The comment above it claims "the checker rejects any count
+  mismatch"; the checker cannot, because the zip destroys the evidence first. The
+  dropped premise is converted before being discarded, so it is unverified work
+  thrown away on every firing of such a rule. Not a soundness hole today (the
+  checker recomputes the global from the program's own `let`), but it must not be
+  relied on.
+* **Rule-head site indices agree across the two programs for a real reason**,
+  worth stating as a test rather than leaving as luck: `remove_globals` maps a
+  head global `Var` to a fresh `Var`, and `push_expr_sites` gives every node a
+  site including `Var`s, so the substitution is exactly site-preserving.
+  Top-level actions have no such property — `Let` becomes `Function` + `Set`,
+  adding a site and shifting every later index — which is why the canonical
+  program decision cannot be skipped.
+
 ## Standing rules
 
 * **No `proofs/` test may fail at any phase.** That corpus is the only oracle
@@ -588,7 +636,12 @@ encoder's site counter would have to live after `remove_globals` while
   *node* counts may move — the hash-consing key changes as columns come and go —
   but a view count changing means the e-graph diverged. Across phases 0–2a,
   zero shared snapshots changed; keep it that way.
-* **Term mode may break**, and is repaired in phase 5.
+* **Term mode has not in fact broken.** The only thing behind
+  `PROOF_REWORK_IN_PROGRESS` is the CSE prepass, and the workspace — including
+  the term-encoding treatments — has been green at every phase. The one real
+  term-mode divergence was fixed properly (the `set-if-empty` read-your-writes
+  bug) rather than papered over. So phase 5 is "decide what to do about CSE",
+  not "repair term mode".
 * Everything switched off for the rework hangs off `PROOF_REWORK_IN_PROGRESS`
   so the set is greppable from one place.
 
