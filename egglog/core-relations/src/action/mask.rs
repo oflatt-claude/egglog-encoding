@@ -105,6 +105,11 @@ impl Mask {
     pub(crate) fn count_ones(&self) -> usize {
         self.data.count_ones(..)
     }
+
+    /// The offsets that are still active, in ascending order.
+    pub(crate) fn ones(&self) -> impl Iterator<Item = usize> + '_ {
+        self.data.ones()
+    }
 }
 
 pub(crate) enum IterResult<T> {

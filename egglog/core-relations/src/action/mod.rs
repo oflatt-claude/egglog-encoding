@@ -445,6 +445,24 @@ impl<'a> ExecutionState<'a> {
         self.changed = true;
     }
 
+    /// Stage a batch of mutations against a single table.
+    ///
+    /// `mutate` receives the table's mutation buffer directly. The buffer lookup
+    /// and the "this table changed" notification happen once for the whole
+    /// batch, so they cost nothing per row.
+    fn stage_batch<R>(
+        &mut self,
+        table: TableId,
+        mutate: impl FnOnce(&mut dyn MutationBuffer) -> R,
+    ) -> R {
+        self.buffers
+            .lazy_init(table, || self.db.table_info[table].table.new_buffer());
+        let res = mutate(&mut *self.buffers.buffers[table]);
+        self.buffers.notify_list.notify(table);
+        self.changed = true;
+        res
+    }
+
     /// Stage a removal of the given row from `table` if it is present.
     ///
     /// If you are using `egglog`, consider using `egglog_bridge::TableAction`.
@@ -593,6 +611,37 @@ impl<'a> ExecutionState<'a> {
     pub fn should_stop(&self) -> bool {
         self.stop_match.load(Ordering::Acquire)
     }
+}
+
+/// Row-sized scratch space, reused across the rows of one instruction so a
+/// per-row gather does not allocate.
+type RowScratch = SmallVec<[Value; 12]>;
+
+/// Resolve `args` against `bindings` once, so gathering a row costs no
+/// per-column variable lookup.
+fn row_sources<'a>(
+    args: &[QueryEntry],
+    bindings: &'a Bindings,
+) -> SmallVec<[ValueSource<'a, Value>; 12]> {
+    args.iter()
+        .map(|entry| match entry {
+            QueryEntry::Var(v) => ValueSource::Slice(&bindings[*v]),
+            QueryEntry::Const(c) => ValueSource::Const(*c),
+        })
+        .collect()
+}
+
+fn source_at(source: &ValueSource<'_, Value>, idx: usize) -> Value {
+    match source {
+        ValueSource::Const(c) => *c,
+        ValueSource::Slice(slice) => slice[idx],
+    }
+}
+
+/// Overwrite `out` with lane `idx` of `sources`.
+fn gather_row(sources: &[ValueSource<'_, Value>], idx: usize, out: &mut RowScratch) {
+    out.clear();
+    out.extend(sources.iter().map(|source| source_at(source, idx)));
 }
 
 impl ExecutionState<'_> {
@@ -772,10 +821,13 @@ impl ExecutionState<'_> {
                 *mask = lookup_result;
             }
             Instr::Insert { table, vals } => {
-                for_each_binding_with_mask!(mask, vals.as_slice(), bindings, |iter| {
-                    iter.for_each(|vals| {
-                        self.stage_insert(*table, vals.as_slice());
-                    })
+                let sources = row_sources(vals, bindings);
+                let mut row = RowScratch::new();
+                self.stage_batch(*table, |buf| {
+                    for idx in mask.ones() {
+                        gather_row(&sources, idx, &mut row);
+                        buf.stage_insert(&row);
+                    }
                 });
             }
             Instr::InsertIfEq { table, l, r, vals } => match (l, r) {
@@ -810,10 +862,13 @@ impl ExecutionState<'_> {
                 }
             },
             Instr::Remove { table, args } => {
-                for_each_binding_with_mask!(mask, args.as_slice(), bindings, |iter| {
-                    iter.for_each(|args| {
-                        self.stage_remove(*table, args.as_slice());
-                    })
+                let sources = row_sources(args, bindings);
+                let mut row = RowScratch::new();
+                self.stage_batch(*table, |buf| {
+                    for idx in mask.ones() {
+                        gather_row(&sources, idx, &mut row);
+                        buf.stage_remove(&row);
+                    }
                 });
             }
             Instr::External { func, args, dst } => {

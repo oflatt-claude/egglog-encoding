@@ -367,10 +367,11 @@ impl EGraph {
                 let registry = registry.read().unwrap();
                 let action = registry.lookup_table(&view_name)?.clone();
                 let fallback = args[n_keys];
-                Some(match action.lookup_values(state, &args[..n_keys]) {
-                    Some(vals) => vals[col_idx],
-                    None => fallback,
-                })
+                Some(
+                    action
+                        .lookup_value_col(state, &args[..n_keys], col_idx)
+                        .unwrap_or(fallback),
+                )
             },
         )))
     }
@@ -1852,6 +1853,20 @@ impl TableAction {
         self.table_math.n_vals()
     }
 
+    /// Look up value column `col_idx` for `key`, or `None` if the key is absent.
+    /// This is a pure read and never inserts a default row.
+    pub fn lookup_value_col(
+        &self,
+        state: &ExecutionState,
+        key: &[Value],
+        col_idx: usize,
+    ) -> Option<Value> {
+        state.get_table(self.table).get_row_column(
+            key,
+            ColumnId::from_usize(self.table_math.num_keys() + col_idx),
+        )
+    }
+
     /// Look up all output columns for `key`. This is a pure read and never
     /// inserts a default row.
     pub fn lookup_values(&self, state: &ExecutionState, key: &[Value]) -> Option<Vec<Value>> {
@@ -2019,8 +2034,12 @@ impl TableAction {
         if self.table_math.subsume {
             merge_vals.push(MergeVal::Constant(NOT_SUBSUMED));
         }
-        state.predict_val(self.table, key, merge_vals.iter().copied())
-            [self.table_math.ret_val_col()]
+        state.predict_col(
+            self.table,
+            key,
+            merge_vals.iter().copied(),
+            ColumnId::from_usize(self.table_math.ret_val_col()),
+        )
     }
 
     /// Insert a row into this table.
