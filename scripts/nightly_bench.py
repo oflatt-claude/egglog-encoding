@@ -47,14 +47,13 @@ PAGE_PATH = REPO_ROOT / ".reports.html"
 BRANCH: Target = ("branch", ".")
 TARGETS: tuple[Target, ...] = (BRANCH, ("main", "@origin/main"))
 
-# Every endpoint bench.py can run: dd runs only term and proofs, and
-# proof-extraction is main-only.
+# Endpoints to measure, all on the main backend: proof-extraction is main-only,
+# and the differential-dataflow backend's endpoints — ("dd", "term") and
+# ("dd", "proofs") — are disabled for now. Re-add them here to measure dd again.
 ENDPOINTS: tuple[Endpoint, ...] = (
     ("main", "term"),
     ("main", "proofs"),
     ("main", "proof-extraction"),
-    ("dd", "term"),
-    ("dd", "proofs"),
 )
 
 # Every endpoint is measured against ordinary mode on its own checkout, so the
