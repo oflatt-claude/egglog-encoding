@@ -16,7 +16,7 @@ use crate::{
     core::ResolvedCall,
     proofs::{
         proof_format::{Justification, ProofId, ProofStore, Proposition},
-        proof_sites::{SiteConclusion, SiteIndex, conclusion_sites},
+        proof_sites::{SiteConclusion, SiteIndex, SiteRef, conclusion_sites},
     },
     typechecking::FuncType,
     util::{HashMap, HashSet, IndexMap, SymbolGen},
@@ -153,6 +153,15 @@ pub(crate) fn process_actions(
             bindings.insert(var.name.clone(), term_id);
         }
     }
+    // The loop above advances only while a site names the action it is looking at,
+    // so a site out of action order would stall it and drop every later site
+    // silently, leaving `site_propositions` short and misaligned with the site
+    // indices the encoder stamped.
+    assert_eq!(
+        next_site,
+        sites.len(),
+        "rule '{rule_name}' left conclusion sites unresolved"
+    );
 
     Ok(ActionContext {
         var_bindings: bindings,
@@ -647,7 +656,7 @@ impl ProofStore {
                 name,
                 premise_proofs,
                 substitution,
-                site: _,
+                site,
             } => {
                 // Find the rule in the program
                 let rule = program
@@ -702,6 +711,7 @@ impl ProofStore {
                     &working_subst,
                     proof.proposition(),
                     name,
+                    *site,
                 )?;
 
                 Ok(Proposition::new(proof.lhs(), proof.rhs()))
@@ -1277,6 +1287,7 @@ impl ProofStore {
         subst_with_globals: &HashMap<String, TermId>,
         claimed: &Proposition,
         rule_name: &str,
+        site: SiteRef,
     ) -> Result<(), ProofCheckError> {
         // Use process_actions to get propositions from the rule head
         // Note: process_actions expects global variable bindings, but substitution
@@ -1286,18 +1297,15 @@ impl ProofStore {
         let bindings = subst_with_globals.clone();
         let action_ctx = process_actions(rule_name, bindings, &action_refs, &mut self.term_dag)?;
 
-        // Check if the claimed equality is in the propositions
-        if action_ctx.propositions.contains(claimed) {
+        // The proof names the site it concludes at, so check that site rather than
+        // merely that the head concludes the claim somewhere: `propositions` holds a
+        // reflexive equality for every subterm of every head expression and both
+        // directions of every `union`, so it would accept a proof stamped with one
+        // site whose proposition belongs to another.
+        if let Some((_, prop)) = action_ctx.site_propositions.get(site.index.0)
+            && site.orient(prop) == *claimed
+        {
             return Ok(());
-        }
-
-        for (index, prop) in &action_ctx.site_propositions {
-            log::debug!(
-                "rule '{rule_name}' site {} concludes {} = {}",
-                index.0,
-                format_term(&self.term_dag, prop.lhs()),
-                format_term(&self.term_dag, prop.rhs()),
-            );
         }
 
         Err(ProofCheckErrorKind::RuleHeadMismatch {

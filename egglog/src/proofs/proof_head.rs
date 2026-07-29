@@ -71,9 +71,8 @@ impl HeadPlan {
         plan
     }
 
-    /// Where `site`'s bridge premise sits in a rule proof's bridge list, counted
-    /// from the list's end (the list is consed onto as the head builds, so the
-    /// oldest bridge is last). `None` for a site that records no bridge.
+    /// Where `site`'s bridge premise sits in a rule proof's bridge list, which is
+    /// in construction order. `None` for a site that records no bridge.
     pub(crate) fn bridge_position(&self, site: SiteIndex) -> Option<usize> {
         self.bridge_order.iter().position(|s| *s == site)
     }
@@ -617,11 +616,8 @@ impl<'a> Firing<'a> {
     /// The view-row proof recorded for `site`, when it says the interned term
     /// landed in an e-class whose own term is spelled differently.
     ///
-    /// A row the head's own `set-if-empty` seeded is absent when the encoder reads
-    /// it, so the read returns its fallback — a proof about the term as written,
-    /// not about the canonical one. That is the discriminator: only a proof whose
-    /// right-hand side *is* the canonical term states which e-class the canonical
-    /// term was interned into.
+    /// `None` for a site with no bridge recorded: a row minted before the head
+    /// reached the subterm it is about has nothing to name yet.
     fn bridge(
         &self,
         store: &mut ProofStore,
@@ -629,7 +625,18 @@ impl<'a> Firing<'a> {
         canonical: TermId,
     ) -> Option<ProofId> {
         let bridge = *self.bridges.get(&site)?;
-        (store.get(bridge).rhs() == canonical).then_some(bridge)
+        // Every proof this read can return — an existing row's, a rebuilt row's, a
+        // construct-into guest view, or the encoder's `can_prf` fallback — ends at
+        // the canonical term. A bridge that does not is one aligned to the wrong
+        // site, which would otherwise compose into a proof of the wrong equality.
+        assert_eq!(
+            store.get(bridge).rhs(),
+            canonical,
+            "rule {}'s bridge for site {} does not end at the canonical term",
+            self.rule_name,
+            site.0
+        );
+        Some(bridge)
     }
 
     /// A construct-into guest's view-row proof: the target's e-class equals the
