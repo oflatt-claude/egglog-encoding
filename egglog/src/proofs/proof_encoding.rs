@@ -1,9 +1,6 @@
 #[doc = include_str!("proof_encoding.md")]
 use crate::proofs::proof_encoding_helpers::{EncodingNames, Justification, SiteColumn};
-use crate::proofs::proof_head_skeleton::{
-    BuiltTerm, ConstructInto, HeadPlan, HeadSink, compose_built_term, compose_guest_view,
-    congr_chain, constructor_operand,
-};
+use crate::proofs::proof_head_skeleton::{ConstructInto, HeadPlan, constructor_operand};
 use crate::proofs::proof_sites::{ActionSites, ExprSites, SiteIndex, SiteRef, SiteRole};
 use crate::typechecking::FuncType;
 use crate::*;
@@ -49,42 +46,9 @@ struct Natural {
     fv_nat: String,
     /// `fv_nat = fv_nat`, the head's own conclusion here.
     nat_prf: String,
-    /// Per child, in order, the proof `child natural = child deduped`, or `None`
-    /// where the child needed no canonicalization.
-    child_connectors: Vec<Option<String>>,
-}
-
-/// The encoder's [`HeadSink`]: a proof is the variable naming the row that binds
-/// it. A rule head composes nothing — it stores one row per [`SiteRole`] and
-/// proof conversion rebuilds the composition from it.
-struct EncoderSink<'i, 'e, 'r> {
-    inst: &'i mut ProofInstrumentor<'e>,
-    res: &'r mut Vec<String>,
-    justification: &'r Justification,
-}
-
-impl HeadSink for EncoderSink<'_, '_, '_> {
-    type Proof = String;
-
-    fn composes(&self) -> bool {
-        self.justification.static_site().is_none()
-    }
-
-    fn roled(&mut self, role: SiteRole) -> String {
-        self.inst.roled_proof(self.res, self.justification, role)
-    }
-
-    fn congr(&mut self, acc: String, index: usize, step: String) -> String {
-        self.inst.mint_congr(&acc, index, &step)
-    }
-
-    fn sym(&mut self, proof: String) -> String {
-        self.inst.mint_sym(&proof)
-    }
-
-    fn trans(&mut self, left: String, right: String) -> String {
-        self.inst.mint_trans(&left, &right)
-    }
+    /// `fv_nat = f(deduped children)`: one `Congr` per canonicalized child.
+    /// `None` in a rule head, where proof conversion folds it instead.
+    to_dedup: Option<String>,
 }
 
 /// Which way a pair-valued table's carried proofs point, selecting the
@@ -593,37 +557,23 @@ impl<'a> ProofInstrumentor<'a> {
             .expect("sort AST")
             .clone();
         let view = self.view_name(&ctor_name);
-        let sited = justification.at_site(SiteRef::forward(sites.index));
-        // A rule head stores a row per role instead of composing; see `EncoderSink`.
-        let composes = sited.static_site().is_none();
         let Natural {
             dedup_args,
             fv_nat,
             nat_prf,
-            child_connectors,
+            to_dedup: nat_to_dedup,
         } = self.build_natural_with_congr(
             res,
             &ctor_name,
             &view_sort,
             &child_vals,
-            &sited,
+            &justification.at_site(SiteRef::forward(sites.index)),
             nat_conn,
         );
         let term_proof_ctor = self.term_proof_name(&sort_name);
         res.push(format!("(set ({term_proof_ctor} {fv_nat}) {nat_prf})"));
         let target_nat = Self::natural_of(nat_conn, target);
         let target_conn = nat_conn.get(target).and_then(|e| e.connector.clone());
-        let nat_to_dedup = composes.then(|| {
-            congr_chain(
-                &mut EncoderSink {
-                    inst: self,
-                    res,
-                    justification,
-                },
-                nat_prf.clone(),
-                &child_connectors,
-            )
-        });
         let view_proof = match &nat_to_dedup {
             Some(chain) => {
                 let edge = self.edge_proof(
@@ -633,19 +583,15 @@ impl<'a> ProofInstrumentor<'a> {
                     &fv_nat,
                     &justification.at_site(plan.edge),
                 );
-                let target_conn = target_conn
-                    .clone()
-                    .map(|conn| self.connector_node(res, justification, &conn));
-                compose_guest_view(
-                    &mut EncoderSink {
-                        inst: self,
-                        res,
-                        justification,
-                    },
-                    edge,
-                    chain.clone(),
-                    target_conn,
-                )
+                let to_dedup = self.mint_trans(&edge, chain);
+                match target_conn.clone() {
+                    Some(conn) => {
+                        let conn = self.connector_node(res, justification, &conn);
+                        let sc = self.mint_sym(&conn);
+                        self.mint_trans(&sc, &to_dedup)
+                    }
+                    None => to_dedup,
+                }
             }
             // The dropped union's site plus the guest's bridge premises determine
             // the whole composition, so one row records it and the edge proof it
@@ -1593,24 +1539,22 @@ impl<'a> ProofInstrumentor<'a> {
             view_sort,
         );
         let nat_prf = self.term_proof_for_justification(res, &fv_nat, &to_ast, justification);
-        // A rule head stores a row per role instead of composing, so it reads no
-        // connector: naming one would mint the row the roled shape replaces.
-        let child_connectors = if justification.static_site().is_some() {
-            vec![None; children.len()]
-        } else {
-            children
-                .iter()
-                .map(|(_, _, conn)| {
-                    conn.as_ref()
-                        .map(|conn| self.connector_node(res, justification, conn))
-                })
-                .collect()
-        };
+        let in_rule_head = justification.static_site().is_some();
+        let to_dedup = (!in_rule_head).then(|| {
+            let mut chain = nat_prf.clone();
+            for (i, (_, _, conn)) in children.iter().enumerate() {
+                if let Some(conn) = conn {
+                    let conn = self.connector_node(res, justification, conn);
+                    chain = self.mint_congr(&chain, i, &conn);
+                }
+            }
+            chain
+        });
         Natural {
             dedup_args,
             fv_nat,
             nat_prf,
-            child_connectors,
+            to_dedup,
         }
     }
 
@@ -1651,7 +1595,7 @@ impl<'a> ProofInstrumentor<'a> {
             dedup_args,
             fv_nat,
             nat_prf,
-            child_connectors,
+            to_dedup,
         } = natural;
         let fv_can = self.mint(
             res,
@@ -1659,49 +1603,46 @@ impl<'a> ProofInstrumentor<'a> {
             &ListDisplay(&dedup_args, " ").to_string(),
             view_sort,
         );
+        let can_prf = match &to_dedup {
+            Some(chain) => {
+                let sym_ntd = self.mint_sym(chain);
+                self.mint_trans(&sym_ntd, chain)
+            }
+            None => self.roled_proof(res, justification, SiteRole::CanonicalReflexive),
+        };
+
+        // Anchor both term proofs, dedup `fv_can` to the view e-class, and read the
+        // view's stored proof (`dedup = f(children)`).
+        let dedup = self.fresh_var();
+        let vprf = self.fresh_var();
         let view_proof = crate::proofs::proof_fresh::view_proof_prim_name(&view);
-        let dedup_args = ListDisplay(&dedup_args, " ").to_string();
-        let mut dedup = None;
-        let BuiltTerm { connector, .. } = compose_built_term(
-            &mut EncoderSink {
-                inst: self,
-                res,
-                justification,
-            },
-            nat_prf.clone(),
-            &child_connectors,
-            // Anchor both term proofs, dedup `fv_can` to the view e-class, and read
-            // the view's stored proof (`dedup = f(children)`). The read misses on a
-            // row this action just seeded, returning the fallback: a proof about the
-            // term as written rather than about the canonical one, which is how
-            // conversion tells "no bridge" from a real one.
-            |sink, _to_canonical, can_prf| {
-                let interned = sink.inst.fresh_var();
-                let vprf = sink.inst.fresh_var();
-                // The four statements below read `can_prf` directly, not through a mint.
-                sink.inst.flush_lookups(sink.res, can_prf);
-                sink.res.push(format!(
-                    "(set ({term_proof_constructor} {fv_nat}) {nat_prf})"
-                ));
-                sink.res.push(format!(
-                    "(set ({term_proof_constructor} {fv_can}) {can_prf})"
-                ));
-                sink.res.push(format!(
-                    "(let {interned} ({set_if_empty} {dedup_args} {fv_can} {can_prf}))"
-                ));
-                sink.res.push(format!(
-                    "(let {vprf} ({view_proof} {dedup_args} {can_prf}))"
-                ));
-                sink.inst.record_bridge(justification, &vprf);
-                dedup = Some(interned);
-                Some(vprf)
-            },
-        );
-        let dedup = dedup.expect("the term is always interned");
-        // A rule head's connector is a row minted only where something reads it,
-        // so it stays a role reference rather than a proof the head emitted.
-        let connector = match connector {
-            Some(node) => Connector::Node(node),
+        let dedup_args = ListDisplay(&dedup_args, " ");
+        // The three statements below read `can_prf` directly, not through a mint.
+        self.flush_lookups(res, &can_prf);
+        res.push(format!(
+            "(set ({term_proof_constructor} {fv_nat}) {nat_prf})"
+        ));
+        res.push(format!(
+            "(set ({term_proof_constructor} {fv_can}) {can_prf})"
+        ));
+        res.push(format!(
+            "(let {dedup} ({set_if_empty} {dedup_args} {fv_can} {can_prf}))"
+        ));
+        res.push(format!(
+            "(let {vprf} ({view_proof} {dedup_args} {can_prf}))"
+        ));
+        // The read misses on a row this action just seeded, returning the fallback:
+        // a proof about the term as written rather than about the canonical one,
+        // which is how conversion tells "no bridge" from a real one.
+        self.record_bridge(justification, &vprf);
+
+        let connector = match &to_dedup {
+            // connector `fv_nat = dedup` = Trans(nat_to_dedup, Sym(dedup = f(children))).
+            // `sym_vprf` reads the `vprf` let, so it lands after the statements above.
+            Some(chain) => {
+                let sym_vprf = self.mint_sym(&vprf);
+                Connector::Node(self.mint_trans(chain, &sym_vprf))
+            }
             None => Connector::Role(
                 justification
                     .static_site()

@@ -949,6 +949,9 @@ rules') fails `container-reorder-proofs` and
 
 ## Refactor to do before this lands
 
+Prototyped and rejected — see "Prototype result" below. What follows is the
+proposal as it stood.
+
 The diff has grown parallel structures that must agree: `proof_sites.rs`,
 `proof_head_skeleton.rs`, `proof_reconstruct_check.rs`, the arity family. Every
 phase has needed a written warning about which of them the next change would
@@ -972,6 +975,129 @@ The detail to settle first: the two modes return different things (statement
 text versus `TermId`s in a `TermDag`), so either the traversal is generic over a
 sink or it returns an enum. Prototype on `build_natural_with_congr` before
 converting everything.
+
+### Prototype result: don't do it
+
+Prototyped on `build_natural_with_congr` and its two callers, plus the matching
+halves of `proof_head_skeleton`. It works — 206 `proofs/` tests, zero snapshot
+changes, byte-identical generated encodings, `proof_reconstruct_check` unmoved —
+and it is **+310/-136, net +174 lines**, taking the branch's diff against main
+from +5822/-780 to +6014/-798. It is `b7b3028`, kept as evidence and reverted in
+the commit after; only the `congr` cleanup below survives.
+
+**Sink-generic, not enum-returning.** A `HeadSink` trait with
+`type Proof` (`String` for the encoder, `ProofId` for conversion) and
+`congr`/`sym`/`trans`, plus free `congr_chain`, `compose_built_term` and
+`compose_guest_view` written once. The enum alternative — one `Composed`
+type holding either — is strictly worse: it moves the dispatch to a runtime
+match at every step, every function then needs the union of both contexts, and
+nothing stops a proof from one mode reaching the other. The three composites
+line up exactly, and the encoder's `mint_congr`/`mint_sym`/`mint_trans` already
+have the trait's signatures.
+
+**Why it does not pay. The two modes never run on the same head.** The plan
+frames this as one traversal with the bindings selecting the behaviour, but
+there are *three* modes, not two:
+
+| bindings | site | who | what it does |
+| --- | --- | --- | --- |
+| yes | — | proof conversion | folds `Congr`/`Trans`/`Sym` |
+| no | yes | encoder, in a rule head | emits one row per role, folds **nothing** |
+| no | no | encoder, top-level action or merge body | folds `Congr`/`Trans`/`Sym` |
+
+`build_natural_with_congr`'s fold is guarded by `!in_rule_head`, so it runs only
+in the third mode; `Builder::resolve`'s fold runs only in the first. (The
+discriminator is `justification.static_site()`, so a *`change` argument* inside a
+rule head takes the composing branch too — its sites are `None`, hence the
+`-1` site column — but every composite it folds is deferred and nothing reads
+them, so it writes no skeleton rows either.) They are alternatives selected by
+"is this a rule head", not two views of one firing. So
+the shared code buys tidiness — the same shape written once — and **collapses no
+contract**: nothing requires a top-level action's composition and a rule head's
+reconstruction to agree, and if one changed the other would still be a valid
+proof. The contracts that do have to hold are elsewhere (below).
+
+**A concrete regression the unification hits.** Making the shared function
+produce the rule-head mode's connector through the sink — `roled(Connector)` —
+costs **2 extra `RuleLink` rows per firing** of
+`(rewrite (Mul a (Add b c)) (Add (Mul a b) (Mul a c)))`: 7 -> 9. Today a rule
+head's connector is a `Connector::Role`, a row minted lazily by `connector_node`
+only where something reads it, and in a rule head nothing does. The shared
+traversal is eager, so it mints them. Keeping the row lazy means the sink cannot
+produce the connector at all, so `BuiltTerm::connector` becomes `Option`, the
+caller re-introduces the `match`, and `StoreSink::roled` becomes an
+`unreachable!()` — a trait method one implementor can never satisfy.
+
+**What the shared bodies cost.** `congr_chain` is 7 lines of body,
+`compose_built_term` 23, `compose_guest_view` 8 — **38 lines shared**, behind a
+25-line trait and 61 lines of sink (`StoreSink` 28, `EncoderSink` 33), the
+latter re-borrowing `(&mut ProofInstrumentor, &mut Vec<String>,
+&Justification)` at three call sites. The call sites did not shrink either: the
+encoder's gained an `Option` match on the connector and a `dedup` smuggled out
+of the `intern` closure. The abstraction overhead dominates whenever the shared
+body is under ~10 lines, which two of these three are, and the third is only
+23 because it absorbed a branch that then had to be re-exposed as an `Option`.
+
+**What a full conversion would touch, and what it would buy.** The remaining
+pairs are the same shape and the same size: `Builder::union_edge` against the
+tail of `ProofInstrumentor::union` (about 12 shareable lines, both gated on the
+same rule-head branch), and `Builder::global_value` against `global_value_proof`
+(2 lines, and not shareable as written — `global_value_proof` deliberately uses
+raw `mint` rather than `mint_sym`/`mint_trans`, because its `Trans(Sym c, c)` is
+reflexive but not by any of the four identities the collapse knows). `base`
+against `rule_row` is not a pair at all: one builds a node carrying a
+proposition, the other emits a row that carries none. Extrapolating the
+prototype, a full conversion is another +150 to +250 lines for perhaps 20 more
+shared ones.
+
+**What can actually be deleted, and what cannot.**
+
+* `proof_head_skeleton.rs` — **cannot**, and the unification does not help. Of
+  its 823 lines, 429 are `HeadPlan`/`build_sites`/`sites_needed` — the static
+  analysis of *which* positions exist, which the unification does not touch and
+  which the encoder has no equivalent of, because it discovers the same facts
+  dynamically from `nat_conn` and `record_bridge`. The other 364 are the
+  composition, and unification moves those into shared functions rather than
+  deleting them.
+* `conclusion_sites` — **cannot.** `proof_checker::process_actions` and
+  `check_rule_produces_equality` read it independently of the encoder, and the
+  reconstructor takes its `written` terms from `process_actions` wholesale
+  rather than building them, so positions do not fall out of any walk the
+  encoder could share. Making them fall out means the reconstructor gains leaf
+  evaluation — re-implementing `eval_expr_with_subst` inside the walk.
+* The differential harness — **can**, but on its own terms: it is an experiment
+  whose questions (phases 1 and 2a) are answered, and it costs nothing to delete
+  once the branch lands. It does not depend on the unification either way.
+
+**The contract worth single-sourcing instead.** What the encoder and conversion
+really have to agree on is the *position bookkeeping*, and only two pieces of it
+are still written twice:
+
+* the order the encoder calls `record_bridge` versus `BuildSites::bridge_order`;
+* the encoder's "was this child built" (`nat_conn.get(arg)`) versus
+  `BuildSites::children`.
+
+Both are answers `build_sites` already computes statically. Having the encoder
+read `BuildSites` — rather than rediscover it — is a smaller, differently-shaped
+refactor that collapses a real contract, and it does not touch the composition
+at all. That is the one worth doing.
+
+**Kept from the prototype.** `proof_head_skeleton::congr` now derives its own
+proposition — `lhs` from the base, `rhs` by `replace_term_child` on the base's
+right-hand side — instead of taking both terms from the caller. That is what
+`convert_raw_proof`'s `RawProof::Congr` arm already did, so the arithmetic was
+written twice; both call sites (`resolve` and `expand_rebuild`) shed it, and
+`Resolved` collapses to the connector alone because `interned` was only there to
+feed it. Net −16 lines, zero snapshot changes,
+`proof_reconstruct_check` unmoved: 13392 nodes, 0 `stamped_ok=false`, 0
+`payload_free=disagrees`, 3540 bridges of which 288 move the term.
+
+**One thing the plan got wrong, beyond the framing.** It says the refactor makes
+"the replay path become main's existing logic". It cannot: main's encoder emits
+the whole skeleton from a rule head, and this branch's entire premise is that a
+rule head emits *nothing to compose*. Unifying the encoder with the
+reconstructor is unifying a thing with its own absence — which is why the shared
+function needs a `composes()` flag whose false branch shares no code at all.
 
 ## Bugs found, not yet fixed
 

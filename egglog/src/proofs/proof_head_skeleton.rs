@@ -457,142 +457,6 @@ struct Firing {
     bridges: HashMap<SiteIndex, ProofId>,
 }
 
-/// One side of a built term's proof composition: the encoder, which names a
-/// proof by the variable it emits, and proof conversion, which names one by its
-/// node in a [`ProofStore`].
-pub(crate) trait HeadSink {
-    /// How this side names a proof.
-    type Proof: Clone;
-
-    /// Whether this side composes the skeleton at all. A rule head does not: it
-    /// records one row per [`SiteRole`] it stores and leaves the composition to
-    /// proof conversion.
-    fn composes(&self) -> bool;
-
-    /// The proof this side names for a role it does not compose. Only reached
-    /// when [`Self::composes`] is false, and only for a role whose row is always
-    /// stored — a role whose row is minted on first read stays with the caller.
-    fn roled(&mut self, role: SiteRole) -> Self::Proof;
-
-    /// `Congr(acc, index, step)`, rewriting `acc`'s right-hand side at `index`.
-    fn congr(&mut self, acc: Self::Proof, index: usize, step: Self::Proof) -> Self::Proof;
-    /// `Sym(proof)`.
-    fn sym(&mut self, proof: Self::Proof) -> Self::Proof;
-    /// `Trans(left, right)`.
-    fn trans(&mut self, left: Self::Proof, right: Self::Proof) -> Self::Proof;
-}
-
-/// The proofs a built constructor term needs beyond the head's own conclusion
-/// at that position.
-pub(crate) struct BuiltTerm<P> {
-    /// `canonical = canonical`.
-    pub canonical_reflexive: P,
-    /// `written = interned`: the edge to the e-class the term was interned into.
-    /// `None` on a side that records the position instead of composing, whose
-    /// row for it is minted only where something reads it.
-    pub connector: Option<P>,
-}
-
-/// `written = canonical`: the term as written equals the same term over its
-/// children's representatives, one `Congr` per child that needed one.
-pub(crate) fn congr_chain<S: HeadSink>(
-    sink: &mut S,
-    own: S::Proof,
-    child_connectors: &[Option<S::Proof>],
-) -> S::Proof {
-    let mut chain = own;
-    for (index, connector) in child_connectors.iter().enumerate() {
-        if let Some(connector) = connector {
-            chain = sink.congr(chain, index, connector.clone());
-        }
-    }
-    chain
-}
-
-/// Compose the proofs a built constructor term needs, from the head's own
-/// conclusion at that position and its children's connectors.
-///
-/// `intern` interns the canonical term, taking the two proofs composed so far —
-/// the [`congr_chain`], and [`BuiltTerm::canonical_reflexive`], the one the
-/// interning row carries — and answers with the interning row's proof when the
-/// row states an e-class the canonical term is not itself spelled by. Answering
-/// `None` leaves the term its own representative.
-pub(crate) fn compose_built_term<S: HeadSink>(
-    sink: &mut S,
-    own: S::Proof,
-    child_connectors: &[Option<S::Proof>],
-    intern: impl FnOnce(&mut S, Option<&S::Proof>, &S::Proof) -> Option<S::Proof>,
-) -> BuiltTerm<S::Proof> {
-    if !sink.composes() {
-        let canonical_reflexive = sink.roled(SiteRole::CanonicalReflexive);
-        intern(sink, None, &canonical_reflexive);
-        return BuiltTerm {
-            canonical_reflexive,
-            connector: None,
-        };
-    }
-    let to_canonical = congr_chain(sink, own, child_connectors);
-    let back = sink.sym(to_canonical.clone());
-    let canonical_reflexive = sink.trans(back, to_canonical.clone());
-    let connector = match intern(sink, Some(&to_canonical), &canonical_reflexive) {
-        Some(row) => {
-            let back = sink.sym(row);
-            sink.trans(to_canonical, back)
-        }
-        None => to_canonical,
-    };
-    BuiltTerm {
-        canonical_reflexive,
-        connector: Some(connector),
-    }
-}
-
-/// A construct-into guest's view-row proof: the target's e-class equals the
-/// guest's term over its children's representatives.
-pub(crate) fn compose_guest_view<S: HeadSink>(
-    sink: &mut S,
-    edge: S::Proof,
-    to_canonical: S::Proof,
-    target_connector: Option<S::Proof>,
-) -> S::Proof {
-    let to_dedup = sink.trans(edge, to_canonical);
-    match target_connector {
-        Some(connector) => {
-            let back = sink.sym(connector);
-            sink.trans(back, to_dedup)
-        }
-        None => to_dedup,
-    }
-}
-
-/// Proof conversion's [`HeadSink`]: a proof is a node, and a congruence's
-/// right-hand side follows from the terms the store already holds.
-pub(super) struct StoreSink<'a>(pub &'a mut ProofStore);
-
-impl HeadSink for StoreSink<'_> {
-    type Proof = ProofId;
-
-    fn composes(&self) -> bool {
-        true
-    }
-
-    fn roled(&mut self, role: SiteRole) -> ProofId {
-        unreachable!("proof conversion composes {role:?} rather than naming a row for it")
-    }
-
-    fn congr(&mut self, acc: ProofId, index: usize, step: ProofId) -> ProofId {
-        congr(self.0, acc, index, step)
-    }
-
-    fn sym(&mut self, proof: ProofId) -> ProofId {
-        sym(self.0, proof)
-    }
-
-    fn trans(&mut self, left: ProofId, right: ProofId) -> ProofId {
-        trans(self.0, left, right)
-    }
-}
-
 /// The proofs one firing of a rule head produced, keyed the way the e-graph names
 /// them.
 ///
@@ -751,43 +615,41 @@ impl Builder<'_> {
             return connector;
         }
         let build = self.firing.sites.sites[&site].clone();
-        let base = self.base(store, site, false);
-        let child_connectors: Vec<Option<ProofId>> = build
-            .children
-            .iter()
-            .map(|child| child.map(|child| self.resolve(store, child)))
-            .collect();
 
-        let built = compose_built_term(
-            &mut StoreSink(store),
-            base,
-            &child_connectors,
-            |sink, to_canonical, _reflexive| {
-                let to_canonical = *to_canonical.expect("proof conversion composes the chain");
-                match build.guest_of {
-                    Some((edge, target)) => {
-                        Some(self.guest_view(sink.0, edge, target, to_canonical))
-                    }
-                    None => {
-                        let canonical = sink.0.get(to_canonical).rhs();
-                        self.bridge(sink.0, site, canonical)
-                    }
-                }
-            },
-        );
-
-        let connector = built
-            .connector
-            .expect("proof conversion composes the connector");
-        if let Some((edge, _)) = build.guest_of {
-            self.state.roles.insert(
-                (edge.index, SiteRole::GuestConnector, edge.reversed),
-                connector,
-            );
+        let mut to_canonical = self.base(store, site, false);
+        for (i, child) in build.children.iter().enumerate() {
+            let Some(child) = *child else { continue };
+            let child = self.resolve(store, child);
+            to_canonical = congr(store, to_canonical, i, child);
         }
+
+        let connector = match build.guest_of {
+            Some((edge, target)) => {
+                let view = self.guest_view(store, edge, target, to_canonical);
+                let back = sym(store, view);
+                let connector = trans(store, to_canonical, back);
+                self.state.roles.insert(
+                    (edge.index, SiteRole::GuestConnector, edge.reversed),
+                    connector,
+                );
+                connector
+            }
+            None => {
+                let canonical = store.get(to_canonical).rhs();
+                match self.bridge(store, site, canonical) {
+                    Some(bridge) => {
+                        let back = sym(store, bridge);
+                        trans(store, to_canonical, back)
+                    }
+                    None => to_canonical,
+                }
+            }
+        };
+
+        let canonical_reflexive = reflexivize(store, to_canonical);
         self.state.roles.insert(
             (site, SiteRole::CanonicalReflexive, false),
-            built.canonical_reflexive,
+            canonical_reflexive,
         );
         self.state
             .roles
@@ -830,8 +692,15 @@ impl Builder<'_> {
         to_canonical: ProofId,
     ) -> ProofId {
         let edge_proof = self.base(store, edge.index, edge.reversed);
-        let target = target.map(|target| self.resolve(store, target));
-        let view = compose_guest_view(&mut StoreSink(store), edge_proof, to_canonical, target);
+        let to_dedup = trans(store, edge_proof, to_canonical);
+        let view = match target {
+            Some(target) => {
+                let target = self.resolve(store, target);
+                let back = sym(store, target);
+                trans(store, back, to_dedup)
+            }
+            None => to_dedup,
+        };
         self.state
             .roles
             .insert((edge.index, SiteRole::GuestView, edge.reversed), view);
