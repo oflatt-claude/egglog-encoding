@@ -412,14 +412,13 @@ mod tests {
 
         let mut egraph = EGraph::new_with_proofs();
         let commands = egraph.resolve_program(None, source).unwrap();
-        // Both rule proof shapes: premises inline, and a later site chained onto
-        // an earlier one.
+        // Only the rows carrying premises inline name the rule; a later site's
+        // link reads the name off the row it chains onto.
         let names = &egraph.proof_state.proof_names;
         let rule_constructors: HashSet<String> = names
             .rule_fused_declared
             .iter()
             .map(|arity| names.fused_rule(*arity))
-            .chain([names.rule_link_constructor.clone()])
             .collect();
         let rule = commands
             .iter()
@@ -460,9 +459,9 @@ mod tests {
         let rule_name_var = rule_name_vars[0];
 
         // Proof constructors are relations, so each rule proof is emitted as a
-        // `(set (@Rule_2 <rule-name> <premises> <ast> <ast> <site> <id>) ())` action,
-        // not a call expression. Count those set actions and check they reuse the
-        // hoisted rule-name variable as their first argument.
+        // `(set (@Rule_1 <rule-name> <premise> <site> <id>) ())` action — the rule
+        // has one body fact — not a call expression. Count those set actions and
+        // check they reuse the hoisted rule-name variable as their first argument.
         let rule_uses = rule
             .head
             .0

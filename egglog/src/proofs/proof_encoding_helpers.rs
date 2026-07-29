@@ -694,8 +694,10 @@ impl ProofInstrumentor<'_> {
 ;; *bridge* premise recorded since: the view-row proof of the subterm the head
 ;; interned, saying which e-class it landed in. `<site>` is the conclusion site
 ;; of the head the proof is about; proof conversion derives the proposition from
-;; it, so no term is stored.
-(function {rule_link_constructor} (String {proof_datatype} {proof_datatype} i64 {proof_datatype}) Unit :no-merge :internal-hidden :internal-term-node)
+;; it, so no term is stored. The rule name is not repeated either: it is read off
+;; the `Rule_<k>` row ending the chain.
+;;   (RuleLink <previous site's proof> <bridge proof> <site>)
+(function {rule_link_constructor} ({proof_datatype} {proof_datatype} i64 {proof_datatype}) Unit :no-merge :internal-hidden :internal-term-node)
 
 ;; One firing of a view's index-driven rebuild rule, packing the whole
 ;; composition it justifies into a single row, in a constructor declared per

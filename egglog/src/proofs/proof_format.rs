@@ -493,10 +493,10 @@ impl RawProofStore {
                 panic!("expected a rule proof term. Proof parsing assumes valid proofs.");
             };
             if *head == self.names.rule_link_constructor {
-                assert!(args.len() == 4, "{head} should have 4 args");
-                site.get_or_insert(args[3]);
-                bridges.push(args[2]);
-                cell = args[1];
+                assert!(args.len() == 3, "{head} should have 3 args");
+                site.get_or_insert(args[2]);
+                bridges.push(args[1]);
+                cell = args[0];
                 continue;
             }
             let Some(arity) = self.names.fused_rule_arity(head) else {

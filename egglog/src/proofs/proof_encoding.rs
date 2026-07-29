@@ -298,10 +298,10 @@ impl<'a> ProofInstrumentor<'a> {
         prev: &str,
         bridge: usize,
     ) -> String {
-        let Justification::Rule(rule_name, _, _) = justification else {
-            panic!("only a rule justification mints a rule proof row");
-        };
-        let rule_name = rule_name.clone();
+        assert!(
+            matches!(justification, Justification::Rule(..)),
+            "only a rule justification mints a rule proof row"
+        );
         let site = justification.site_expr();
         let bridge = self.head_chain.as_ref().expect("in a rule head").bridges[bridge].clone();
         let link = self.proof_names().rule_link_constructor.clone();
@@ -309,7 +309,7 @@ impl<'a> ProofInstrumentor<'a> {
         self.mint(
             stmts,
             &link,
-            &format!("{rule_name} {prev} {bridge} {site}"),
+            &format!("{prev} {bridge} {site}"),
             &proof_sort,
         )
     }
