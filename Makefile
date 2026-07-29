@@ -69,6 +69,11 @@ benchmark-smoke:
 nightly:
 	uv run --locked python scripts/nightly_bench.py
 
+# The nightly run as it happens on the nightly host, but at one round and leaving
+# nightly/output/ alone, so it can be tried locally.
+nightly-local:
+	uv run --locked python scripts/nightly_bench.py --no-publish --rounds 1
+
 update-snapshots:
 	uv run --locked pytest -q --snapshot-update --snapshot-details
 
