@@ -9,7 +9,7 @@ use crate::{
             ProofCheckError, ProofCheckErrorKind, eval_expr_with_subst, gather_globals,
             process_actions, run_merge,
         },
-        proof_encoding_helpers::EncodingNames,
+        proof_encoding_helpers::{EncodingNames, SharedEnd},
         proof_head_skeleton::{
             BuildSites, FiringRecord, HeadPlan, HeadSkeleton, build_sites, congr, sites_needed,
             sym, trans,
@@ -217,6 +217,18 @@ enum RawProof {
         /// field of its own: an e-class can legitimately equal one of its own
         /// children's terms.
         eclass: Option<RawProofId>,
+    },
+    /// The `@UF` edge one merge collision displaces, packing the composition it
+    /// justifies into a single row. Expanded by
+    /// [`ProofStore::expand_displaced`].
+    Displaced {
+        /// The larger side's carried proof.
+        hi: RawProofId,
+        /// The smaller side's carried proof, the side the edge now points at.
+        lo: RawProofId,
+        /// Which endpoint the two carried proofs have in common, hence which of
+        /// them the composition reverses.
+        shared: SharedEnd,
     },
     /// Given a proof that `t1 = c` for a container term `c`, produces a proof of
     /// `t1 = normalize(c)` — the container's canonicalization (reorder/dedup/
@@ -458,6 +470,7 @@ impl RawProofStore {
             2 if *head == names.eq_trans_constructor || *head == names.congr_all_constructor => {
                 vec![args[0], args[1]]
             }
+            2 if names.displaced_shared_end(head).is_some() => vec![args[0], args[1]],
             1 if *head == names.eq_sym_constructor
                 || *head == names.container_normalize_constructor =>
             {
@@ -577,6 +590,11 @@ impl RawProofStore {
             let old_proof = self.parse_proof(args[1]);
             let new_proof = self.parse_proof(args[2]);
             RawProof::MergeFnRow(function, old_proof, new_proof)
+        } else if let Some(shared) = self.names.displaced_shared_end(&head) {
+            assert!(args.len() == 2, "{head} should have 2 args");
+            let hi = self.parse_proof(args[0]);
+            let lo = self.parse_proof(args[1]);
+            RawProof::Displaced { hi, lo, shared }
         } else if head == self.names.eq_trans_constructor {
             assert!(args.len() == 2, "trans constructor should have 2 args");
             let left = self.parse_proof(args[0]);
@@ -1037,6 +1055,13 @@ impl ProofStore {
                 self.proof_id.insert(raw_proof.clone(), expanded_id);
                 return expanded_id;
             }
+            RawProof::Displaced { hi, lo, shared } => {
+                let hi_id = self.convert_raw_proof(prog, globals, raw_store, *hi);
+                let lo_id = self.convert_raw_proof(prog, globals, raw_store, *lo);
+                let expanded_id = self.expand_displaced(hi_id, lo_id, *shared);
+                self.proof_id.insert(raw_proof.clone(), expanded_id);
+                return expanded_id;
+            }
             RawProof::ContainerNormalize(inner_raw) => {
                 let inner_id = self.convert_raw_proof(prog, globals, raw_store, *inner_raw);
                 let inner_lhs = self.id_to_proof[inner_id].lhs();
@@ -1366,6 +1391,24 @@ impl ProofStore {
         trans(self, back, current)
     }
 
+    /// Expand a displaced edge ([`RawProof::Displaced`]) into the composition it
+    /// packs: the two carried proofs joined at the endpoint they share, with the
+    /// one pointing the wrong way reversed, proving `hi = lo`.
+    ///
+    /// Panics unless they do share that endpoint.
+    fn expand_displaced(&mut self, hi: ProofId, lo: ProofId, shared: SharedEnd) -> ProofId {
+        match shared {
+            SharedEnd::Lhs => {
+                let back = sym(self, hi);
+                trans(self, back, lo)
+            }
+            SharedEnd::Rhs => {
+                let back = sym(self, lo);
+                trans(self, hi, back)
+            }
+        }
+    }
+
     pub(super) fn replace_term_child(
         &mut self,
         term_id: TermId,
@@ -1547,10 +1590,11 @@ impl Proof {
     }
 }
 
-/// A [`RawProof::Rebuild`] expands to exactly the `Congr`/`Sym`/`Trans` chain a
-/// rebuild rule spells across rows today. The chains here are written out by
-/// hand rather than generated, so they are an oracle rather than a second copy
-/// of [`ProofStore::expand_rebuild`].
+/// A packed row — a [`RawProof::Rebuild`] or a [`RawProof::Displaced`] — expands
+/// to exactly the `Congr`/`Sym`/`Trans` composition the generated rule or merge
+/// body used to spell across rows. The compositions here are written out by hand
+/// rather than generated, so they are an oracle rather than a second copy of the
+/// expansions.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1614,26 +1658,34 @@ mod tests {
         /// Convert and simplify both proofs in one store, and require that they
         /// are the same tree, proving `expected`.
         fn assert_agree(&self, rebuild: RawProofId, chain: RawProofId, expected: &Proposition) {
-            let mut store = ProofStore::new(
-                self.raw.term_dag.clone(),
-                HashMap::default(),
-                HashSet::default(),
-            );
-            let prog = vec![];
-            let globals = HashMap::default();
-            let mut convert = |id| {
-                let converted = store.convert_raw_proof(&prog, &globals, &self.raw, id);
-                store.simplify(converted)
-            };
-            let (rebuild, chain) = (convert(rebuild), convert(chain));
-            assert_eq!(store.get(chain).proposition(), expected);
-            assert!(
-                same_proof(&store, rebuild, chain),
-                "the expanded rebuild\n{}\nis not the chain it packs\n{}",
-                store.proof_to_string(rebuild),
-                store.proof_to_string(chain),
-            );
+            assert_agree(&self.raw, rebuild, chain, expected);
         }
+    }
+
+    /// Convert and simplify both proofs in one store, and require that they are
+    /// the same tree, proving `expected`.
+    fn assert_agree(
+        raw: &RawProofStore,
+        packed: RawProofId,
+        chain: RawProofId,
+        expected: &Proposition,
+    ) {
+        let mut store =
+            ProofStore::new(raw.term_dag.clone(), HashMap::default(), HashSet::default());
+        let prog = vec![];
+        let globals = HashMap::default();
+        let mut convert = |id| {
+            let converted = store.convert_raw_proof(&prog, &globals, raw, id);
+            store.simplify(converted)
+        };
+        let (packed, chain) = (convert(packed), convert(chain));
+        assert_eq!(store.get(chain).proposition(), expected);
+        assert!(
+            same_proof(&store, packed, chain),
+            "the expanded row\n{}\nis not the composition it packs\n{}",
+            store.proof_to_string(packed),
+            store.proof_to_string(chain),
+        );
     }
 
     /// A leaf proof of `lhs = rhs`, spelled the way an extracted `Fiat` row is
@@ -1835,6 +1887,112 @@ mod tests {
                 .expect("spawn")
                 .join()
                 .expect("a deep rebuild chain should parse");
+        }
+    }
+
+    /// A displaced-edge row over two carried proofs, spelled as the extracted
+    /// term of a [`EncodingNames::displaced_proof`] row.
+    fn displaced_term(
+        raw: &mut RawProofStore,
+        hi: TermId,
+        lo: TermId,
+        shared: SharedEnd,
+    ) -> TermId {
+        let head = raw.names.displaced_proof(shared).to_string();
+        raw.term_dag.app(head, vec![hi, lo])
+    }
+
+    /// One merge collision, meeting at `shared`: the larger side's carried proof,
+    /// the smaller side's, and the `hi = lo` the displaced edge has to state.
+    fn collision(
+        raw: &mut RawProofStore,
+        shared: SharedEnd,
+    ) -> (RawProofId, RawProofId, Proposition) {
+        let leaf = |raw: &mut RawProofStore, name: &str| raw.term_dag.app(name.into(), vec![]);
+        let hi_term = leaf(raw, "hi");
+        let lo_term = leaf(raw, "lo");
+        let shared_term = leaf(raw, "shared");
+        let (hi, lo) = match shared {
+            SharedEnd::Lhs => (
+                fiat(raw, shared_term, hi_term),
+                fiat(raw, shared_term, lo_term),
+            ),
+            SharedEnd::Rhs => (
+                fiat(raw, hi_term, shared_term),
+                fiat(raw, lo_term, shared_term),
+            ),
+        };
+        (hi, lo, Proposition::new(hi_term, lo_term))
+    }
+
+    /// Either way the carried proofs point, the row expands to the `Sym` + `Trans`
+    /// pair a merge body used to write, proving that the displaced side equals the
+    /// kept one.
+    #[test]
+    fn displaced_expands_to_the_pair_it_packs() {
+        for shared in [SharedEnd::Lhs, SharedEnd::Rhs] {
+            let mut raw = empty_store();
+            let (hi, lo, expected) = collision(&mut raw, shared);
+            let displaced = raw.add_proof(RawProof::Displaced { hi, lo, shared });
+            let pair = match shared {
+                SharedEnd::Lhs => {
+                    let back = raw.add_proof(RawProof::Sym(hi));
+                    raw.add_proof(RawProof::Trans(back, lo))
+                }
+                SharedEnd::Rhs => {
+                    let back = raw.add_proof(RawProof::Sym(lo));
+                    raw.add_proof(RawProof::Trans(hi, back))
+                }
+            };
+            assert_agree(&raw, displaced, pair, &expected);
+        }
+    }
+
+    /// Both carried proofs nest. Getting that wrong here costs no correctness —
+    /// `parse_proof` recurses on whatever it was not handed — but it costs the
+    /// stack, which is what `parse_nested_first` exists to spend on the heap
+    /// instead.
+    #[test]
+    fn a_displaced_rows_nested_proofs_are_its_two_carried_proofs() {
+        let mut raw = empty_store();
+        let hi = fiat_term(&mut raw, "hi");
+        let lo = fiat_term(&mut raw, "lo");
+        for shared in [SharedEnd::Lhs, SharedEnd::Rhs] {
+            let term = displaced_term(&mut raw, hi, lo, shared);
+            assert_eq!(
+                raw.nested_proofs(term),
+                vec![hi, lo],
+                "a {shared:?}-sharing displaced row nests both carried proofs"
+            );
+        }
+    }
+
+    /// A chain of displaced edges — one collision's proof carried into the next —
+    /// parses without recursing per link, on a stack far too small to hold one
+    /// frame per link, through either carried proof.
+    #[test]
+    fn a_deep_displaced_chain_parses_without_a_deep_stack() {
+        for shared in [SharedEnd::Lhs, SharedEnd::Rhs] {
+            for through_lo in [false, true] {
+                std::thread::Builder::new()
+                    .stack_size(512 * 1024)
+                    .spawn(move || {
+                        let mut raw = empty_store();
+                        let leaf = fiat_term(&mut raw, "carried");
+                        let mut chain = leaf;
+                        for _ in 0..50_000 {
+                            chain = if through_lo {
+                                displaced_term(&mut raw, leaf, chain, shared)
+                            } else {
+                                displaced_term(&mut raw, chain, leaf, shared)
+                            };
+                        }
+                        RawProofStore::from_extracted(&raw.names, raw.term_dag.clone(), chain);
+                    })
+                    .expect("spawn")
+                    .join()
+                    .expect("a deep displaced chain should parse");
+            }
         }
     }
 }

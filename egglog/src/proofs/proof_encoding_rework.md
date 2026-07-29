@@ -63,7 +63,10 @@ This rework generalizes that from merge bodies to rule bodies.
   each canonicalized column's `@UF` proof as a premise beside the column it is
   about. Recording them as premises — rather than looking them up later — is
   what makes rebuilding reconstructible without historical union-find state.
-* The UF rule keeps explicit `Trans` for now.
+* **Merge collisions:** `DisplacedSharedLhs(hi, lo)` / `DisplacedSharedRhs(hi, lo)`,
+  the two colliding rows' carried proofs in one row per collision, with the `Sym`
+  and the `Trans` composing them reconstructed. Which endpoint the carried proofs
+  share is fixed by the merge site, so it is the constructor rather than a column.
 
 ### Carrying the canonicalization bridge
 
@@ -207,7 +210,8 @@ One snapshot did move, in *term* mode: `doc_example_add_function1` renumbers its
      `Fiat`, and then deleting the `Ast` sort. All three wait on the
      canonical-program decision the `Fiat`/`lower_inputs` note above describes.
 5. **Phases 4 and 5.** ~~`RebuildN`~~ — 4a, 4b and 4c are all in; a rebuild
-   firing writes one row. What is left is phase 5: re-enable CSE after encoding,
+   firing writes one row, and so does a merge collision (see "A merge collision
+   writes one proof row"). What is left is phase 5: re-enable CSE after encoding,
    repair term mode, re-measure.
 
 Row budget for `(rewrite (Add a b) (Add b a))`: 13 at the branch point, 2 today
@@ -927,6 +931,106 @@ What the remaining work inherits:
 * Anything enumerating the declared proof constructors now has two arity families
   to cover, keyed by `RebuildShape` rather than by a step count.
 
+### A merge collision writes one proof row
+
+Every `:merge` that unions two members of one e-class wrote a `Sym` and a `Trans`
+per collision. Both now ride one packed row, the same way phase 4c folded the
+rebuild rule's e-class move in.
+
+**The two shapes are mirror images, and the mirror is load-bearing.** Read off
+the encoding of `(datatype Math (Num i64) (Add Math Math))` +
+`(rewrite (Add a b) (Add b a))`, with `hi_pf_`/`lo_pf_` the carried proofs of the
+larger and smaller side:
+
+| `:merge` | its carried proof proves | the collision needs | so it composed |
+| --- | --- | --- | --- |
+| `@UF_Math` (`CarriedProofs::KeyToParent`) | `key = parent` — both start at the key | `hi = lo` | `Trans (Sym hi_pf_) lo_pf_` |
+| `@NumView` / `@AddView` (`EclassToTerm`) | `eclass = f(children)` — both end at the term | `hi = lo` | `Trans hi_pf_ (Sym lo_pf_)` |
+
+Both conclude the same thing — the displaced larger side equals the kept smaller
+one. What differs is which endpoint the two carried proofs have in common, hence
+which of them the composition reverses. So one constructor with a fixed
+expansion would be wrong for one of the two sites.
+
+**Two constructors, and the direction is *not* derivable.**
+`DisplacedSharedLhs` / `DisplacedSharedRhs`, both
+`(Proof Proof Proof) -> Unit`, off two fresh names in `EncodingNames::new`. There
+is no arity dimension: a collision has exactly two carried proofs, so unlike
+`Rule_k` and `Rebuild_<k>` there is no family, and the declarations go in
+`proof_header` beside `MergeIdx`/`MergeRow` rather than with a first use.
+
+Recovering the direction at conversion time by joining at whichever endpoint
+matches is unsound, which is why the shape carries it: when the two carried
+proofs prove the *same* proposition — which nothing excludes, since
+`ordering-max`/`ordering-min` may select two different proofs of one equality —
+both endpoints match and the two compositions prove different things,
+`Trans(Sym p, q) : b = b` against `Trans(p, Sym q) : a = a`. A sentinel `i64`
+direction column would be sound but buys nothing: `CarriedProofs` is fixed when
+the merge body is generated, exactly as `output_is_eclass` is for `RebuildEq_<k>`.
+
+Rows written per collision:
+
+| `:merge` | before | after |
+| --- | --- | --- |
+| `@UF_Math` (`Sym` on the left) | 2 | 1 |
+| `@AddView` / `@NumView` (`Sym` on the right) | 2 | 1 |
+
+Statically over the 109 `egglog/tests` files that encode under proofs, the proof
+rows inside `:merge` blocks go **2920 -> 1472**: 1459 `Sym` + 1459 `Trans` + 2
+`Congr` becomes 1448 `Displaced*` (1091 view, 357 `@UF`) + 11 `Sym` + 11 `Trans`
++ 2 `Congr`. The remainder is not a miss — every surviving `Sym`/`Trans` inside a
+`:merge` is in a *custom function* view's body (`instrument_merge_body`, e.g.
+`complex-merge-func`'s `@fView`), which composes a `Congr` chain rather than this
+fixed pair.
+
+206 `proofs/` tests pass with zero changed snapshots and zero changed shared
+snapshots, the whole workspace and `egglog-experimental --test files` are green,
+and `proof_reconstruct_check` is unmoved: 14426 nodes, 0 `stamped_ok=false`, 0
+`payload_free=disagrees`, 3540 bridges of which 288 move the term (on 14426 rather
+than the 13392 this document had been recording — see the measurement caveat).
+
+**Both shapes are exercised, so the byte-identical output is agreement.** The
+corpus parses 22 `DisplacedSharedLhs` nodes and 676 `DisplacedSharedRhs` — 676 on
+three consecutive runs and 675 on another, since these *are* the rows a collision
+writes, so the count is one of the ones the six nondeterministic files move.
+
+**Mutations.** Giving either shape the other's composition fails on
+`proof_head_skeleton::trans`'s middle-term assertion — inverting the `Lhs` shape
+fails 8 of the 206 `proofs/` tests, inverting the `Rhs` shape 58, both with
+`transitivity requires matching middle terms` — and
+`displaced_expands_to_the_pair_it_packs` fails either way against the
+hand-written pair.
+
+**`nested_proofs` is again invisible to the corpus.** Deleting the entry leaves
+all 206 green, exactly as 4b and 4c found: today's collision chains are short
+enough for `parse_proof_inner` to recurse through. It is held by the same two
+unit tests as `Rebuild`'s —
+`a_displaced_rows_nested_proofs_are_its_two_carried_proofs` fails naming the
+cause, and `a_deep_displaced_chain_parses_without_a_deep_stack` overflows a
+512 KiB stack on 50 000 chained collisions, for both shapes and through either
+carried proof.
+
+**This one moves real time — in Merge, and only there.**
+`math-microbenchmark.egg` against `a932b22`, both `main/proofs`, 14 rounds per
+endpoint:
+
+| | baseline (95% CI) | candidate (95% CI) | delta |
+| --- | --- | --- | --- |
+| wall | 5.40–5.74 s | 5.22–5.33 s | 0.917–0.978x |
+| peak RSS | 1.1 GiB | 1.1 GiB | 0.972–0.982x |
+| Merge | 2.13–2.26 s | 1.94–2.00 s | -219 ms |
+| Apply | 1.88–2.02 s | 1.92–1.94 s | -16.8 ms |
+| Search | 1.16–1.25 s | 1.14–1.17 s | -52.4 ms |
+
+Merge is the win and the only phase whose intervals are disjoint: -219 ms, 74% of
+the wall-time change, which is where the view merge bodies fire. **Apply is
+unmoved** — its intervals overlap almost entirely, and a merge body is not on the
+apply path. Read Search's -52 ms as noise for the same reason. A first run at 6
+rounds agreed directionally (Merge -256 ms) but its baseline interval was 5.23-6.06 s
+wide, so the wall-time ratio then included 1; the box was at load 31-50 of 128
+cores with another benchmark running throughout, so take the ratios rather than
+the absolute seconds.
+
 ### The container rebuild anchor was minted twice
 
 Two places built `Trans(Sym p, p)` over the same rebuild proof `p` and wrote it
@@ -1229,7 +1333,9 @@ deferred too". Three claims made there were wrong: the count was 447 unnamed
 deferred group, so self-containment was not the obstacle; and the `(panic …)`
 heads, which the count made look like the prize, cost nothing at runtime,
 because a panic head never fires. The rows a firing actually wrote were in merge
-bodies.
+bodies — packed since, see "A merge collision writes one proof row". What is left
+in a `:merge` is a custom function's own body, whose composites are a `Congr`
+chain over the merged term rather than a fixed pair.
 
 ## Deferred: the `check_shadowing` per-rule clone
 
@@ -1279,3 +1385,15 @@ number.
   row per collision, that move. Diff the `(print-size)` block alone: a whole-output
   diff is dominated by timings and rule ordering and looks nondeterministic
   everywhere.
+* **`proof_reconstruct_check`'s corpus node count is 14426, not the 13392 this
+  document records from phase 2a onwards.** Measured as
+  `RUST_LOG=info EGGLOG_PROOF_RECONSTRUCT_CHECK=1 cargo test --release -p egglog
+  --test files 'proofs/' -- --nocapture`, counting `PROOF-RECONSTRUCT` lines, it is
+  14426 — at `a932b22`, at `7ffbfbd` and after the merge-collision pack alike, over
+  repeated runs, with no interleaved lines and 7148 of them from the native
+  treatment against 7278 from `desugar`. The bridge counters reproduce the recorded
+  3540 / 288 exactly, and the node figure is identical at all three commits, so the
+  disagreement is in how the figure was taken, not in the encoding. The
+  `ReconstructStats` counters are thread-local while the corpus runs a thread per
+  test, so a figure summed from them can undercount, where the log lines cannot: use
+  14426 and the command above, and read the measurement for whether it *moves*.

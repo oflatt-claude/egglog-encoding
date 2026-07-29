@@ -46,6 +46,11 @@ pub(crate) struct EncodingNames {
     pub(crate) rebuild_declared: HashSet<RebuildShape>,
     pub(crate) merge_fn_idx_constructor: String,
     pub(crate) merge_fn_row_constructor: String,
+    /// The displaced-edge proof for a collision whose carried proofs share their
+    /// left-hand side ([`SharedEnd::Lhs`]).
+    pub(crate) displaced_shared_lhs_constructor: String,
+    /// Its [`SharedEnd::Rhs`] counterpart.
+    pub(crate) displaced_shared_rhs_constructor: String,
     pub(crate) eq_trans_constructor: String,
     pub(crate) eq_sym_constructor: String,
     pub(crate) congr_constructor: String,
@@ -85,6 +90,17 @@ impl RebuildShape {
     pub(crate) fn columns(self) -> usize {
         1 + 2 * self.steps + usize::from(self.eclass)
     }
+}
+
+/// Which endpoint the two carried proofs of a merge collision have in common,
+/// hence which of them the displaced edge's composition reverses. Either way the
+/// composition proves `hi = lo`.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) enum SharedEnd {
+    /// Both prove `shared = side`, so the composition is `Trans(Sym(hi), lo)`.
+    Lhs,
+    /// Both prove `side = shared`, so the composition is `Trans(hi, Sym(lo))`.
+    Rhs,
 }
 
 /// The conclusion-site column of a rule proof: an `i64` naming the site of the
@@ -230,6 +246,23 @@ impl EncodingNames {
         })
     }
 
+    /// The displaced-edge proof constructor for carried proofs meeting at
+    /// `shared`.
+    pub(crate) fn displaced_proof(&self, shared: SharedEnd) -> &str {
+        match shared {
+            SharedEnd::Lhs => &self.displaced_shared_lhs_constructor,
+            SharedEnd::Rhs => &self.displaced_shared_rhs_constructor,
+        }
+    }
+
+    /// Where `head`'s carried proofs meet, when it is one of
+    /// [`Self::displaced_proof`]'s constructors.
+    pub(crate) fn displaced_shared_end(&self, head: &str) -> Option<SharedEnd> {
+        [SharedEnd::Lhs, SharedEnd::Rhs]
+            .into_iter()
+            .find(|shared| head == self.displaced_proof(*shared))
+    }
+
     pub(crate) fn new(symbol_gen: &mut SymbolGen) -> Self {
         Self {
             ast_sort: symbol_gen.fresh("Ast"),
@@ -243,6 +276,8 @@ impl EncodingNames {
             rebuild_declared: HashSet::default(),
             merge_fn_idx_constructor: symbol_gen.fresh("MergeIdx"),
             merge_fn_row_constructor: symbol_gen.fresh("MergeRow"),
+            displaced_shared_lhs_constructor: symbol_gen.fresh("DisplacedSharedLhs"),
+            displaced_shared_rhs_constructor: symbol_gen.fresh("DisplacedSharedRhs"),
             eq_trans_constructor: symbol_gen.fresh("Trans"),
             eq_sym_constructor: symbol_gen.fresh("Sym"),
             congr_constructor: symbol_gen.fresh("Congr"),
@@ -624,6 +659,8 @@ impl ProofInstrumentor<'_> {
             ref rule_link_constructor,
             ref merge_fn_idx_constructor,
             ref merge_fn_row_constructor,
+            ref displaced_shared_lhs_constructor,
+            ref displaced_shared_rhs_constructor,
             ref eq_trans_constructor,
             ref eq_sym_constructor,
             ref congr_constructor,
@@ -671,6 +708,18 @@ impl ProofInstrumentor<'_> {
 ;; proposition by a different tree. The e-class proof is a column of its own
 ;; rather than a step, since it composes on the left instead of at a child
 ;; position, and it is the raw `old = new` step: the expansion applies the `Sym`.
+
+;; The `@UF` edge one merge collision displaces, packing the composition it
+;; justifies into a single row: the larger side's carried proof, then the smaller
+;; side's, proving `larger = smaller`.
+;;   (DisplacedSharedLhs <hi proof> <lo proof>)   ;; both prove `shared = side`
+;;   (DisplacedSharedRhs <hi proof> <lo proof>)   ;; both prove `side = shared`
+;; Which endpoint the carried proofs share is fixed by the merge site, so it is
+;; part of the constructor rather than a column, and it cannot be recovered from
+;; the proofs: when both prove the same proposition, the two compositions differ.
+;; Neither carries a `Sym`; the expansion applies it to whichever side needs it.
+(function {displaced_shared_lhs_constructor} ({proof_datatype} {proof_datatype} {proof_datatype}) Unit :no-merge :internal-hidden :internal-term-node)
+(function {displaced_shared_rhs_constructor} ({proof_datatype} {proof_datatype} {proof_datatype}) Unit :no-merge :internal-hidden :internal-term-node)
 
 ;; term-free merge justification for an FD custom-function view subexpression:
 ;; name of function, two premise proofs, and the pre-order index of the merge-body

@@ -1,5 +1,5 @@
 #[doc = include_str!("proof_encoding.md")]
-use crate::proofs::proof_encoding_helpers::{EncodingNames, Justification, SiteColumn};
+use crate::proofs::proof_encoding_helpers::{EncodingNames, Justification, SharedEnd, SiteColumn};
 use crate::proofs::proof_head_skeleton::{ConstructInto, HeadPlan, constructor_operand};
 use crate::proofs::proof_sites::{ActionSites, ExprSites, SiteIndex, SiteRef, SiteRole};
 use crate::typechecking::FuncType;
@@ -653,10 +653,9 @@ impl<'a> ProofInstrumentor<'a> {
     /// The shared `:merge` block for a collision that unions two members of one
     /// e-class: keep `(ordering-min old0 new0)` with the smaller side's carried
     /// proof, and `set` the displaced larger side's `@UF` edge to the smaller
-    /// with a composed proof of `larger = smaller`. The composition depends on
-    /// which way the two carried proofs point (see [`CarriedProofs`]):
-    /// `key = parent` proofs compose as `Trans (Sym hi_pf_) lo_pf_`,
-    /// `eclass = f(children)` proofs as `Trans hi_pf_ (Sym lo_pf_)`.
+    /// with a proof of `larger = smaller`. That proof is one packed row naming
+    /// both carried proofs, in the constructor for the endpoint they share (see
+    /// [`CarriedProofs`]); proof conversion applies the `Sym` and the `Trans`.
     fn ordered_union_merge(&mut self, uf_name: &str, carried: CarriedProofs) -> String {
         if !self.proofs_enabled() {
             return format!(
@@ -664,19 +663,14 @@ impl<'a> ProofInstrumentor<'a> {
                   (values (ordering-min old0 new0) ()))"
             );
         }
-        let mut mints = vec![];
-        let displaced_pf = match carried {
-            CarriedProofs::KeyToParent => {
-                let sym_pf = self.mint_sym("hi_pf_");
-                self.mint_trans(&sym_pf, "lo_pf_")
-            }
-            CarriedProofs::EclassToTerm => {
-                let sym_pf = self.mint_sym("lo_pf_");
-                self.mint_trans("hi_pf_", &sym_pf)
-            }
+        let shared = match carried {
+            CarriedProofs::KeyToParent => SharedEnd::Lhs,
+            CarriedProofs::EclassToTerm => SharedEnd::Rhs,
         };
-        // The `@UF` row below reads the composition directly, not through a mint.
-        self.flush_lookups(&mut mints, &displaced_pf);
+        let displaced = self.proof_names().displaced_proof(shared).to_string();
+        let proof_sort = self.proof_sort();
+        let mut mints = vec![];
+        let displaced_pf = self.mint(&mut mints, &displaced, "hi_pf_ lo_pf_", &proof_sort);
         let mints_str = mints.join("\n                  ");
         format!(
             "((let hi_pf_ (proof-of-max old0 old1 new0 new1))
