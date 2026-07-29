@@ -49,12 +49,15 @@ TARGETS: tuple[Target, ...] = (BRANCH, ("main", "@origin/main"))
 
 # Every endpoint bench.py can run: dd runs only term and proofs, and
 # proof-extraction is main-only.
+#
+# The dd endpoints are commented out while the proof encoding is reworked. Put
+# them back when it lands.
 ENDPOINTS: tuple[Endpoint, ...] = (
     ("main", "term"),
     ("main", "proofs"),
     ("main", "proof-extraction"),
-    ("dd", "term"),
-    ("dd", "proofs"),
+    # ("dd", "term"),
+    # ("dd", "proofs"),
 )
 
 # Every endpoint is measured against ordinary mode on its own checkout, so the
