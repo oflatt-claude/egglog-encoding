@@ -16,7 +16,6 @@ use crate::{
     core::ResolvedCall,
     proofs::{
         proof_format::{Justification, ProofId, ProofStore, Proposition},
-        proof_reconstruct_check,
         proof_sites::{SiteConclusion, SiteIndex, conclusion_sites},
     },
     typechecking::FuncType,
@@ -145,7 +144,7 @@ pub(crate) fn process_actions(
                     Proposition::new(lhs_term, rhs_term)
                 }
             };
-            site_propositions.push((site.index, prop));
+            site_propositions.push((SiteIndex(next_site), prop));
             next_site += 1;
         }
 
@@ -648,7 +647,7 @@ impl ProofStore {
                 name,
                 premise_proofs,
                 substitution,
-                site,
+                site: _,
             } => {
                 // Find the rule in the program
                 let rule = program
@@ -704,19 +703,6 @@ impl ProofStore {
                     proof.proposition(),
                     name,
                 )?;
-
-                if proof_reconstruct_check::enabled() {
-                    proof_reconstruct_check::record(
-                        self,
-                        rule,
-                        name,
-                        premise_proofs,
-                        &ctx.global_bindings,
-                        &working_subst,
-                        proof.proposition(),
-                        *site,
-                    );
-                }
 
                 Ok(Proposition::new(proof.lhs(), proof.rhs()))
             }
@@ -1305,16 +1291,12 @@ impl ProofStore {
             return Ok(());
         }
 
-        for (site, (index, prop)) in conclusion_sites(rule.head.0.iter())
-            .iter()
-            .zip(&action_ctx.site_propositions)
-        {
+        for (index, prop) in &action_ctx.site_propositions {
             log::debug!(
-                "rule '{rule_name}' site {} concludes {} = {} at {}",
+                "rule '{rule_name}' site {} concludes {} = {}",
                 index.0,
                 format_term(&self.term_dag, prop.lhs()),
                 format_term(&self.term_dag, prop.rhs()),
-                site.location(),
             );
         }
 

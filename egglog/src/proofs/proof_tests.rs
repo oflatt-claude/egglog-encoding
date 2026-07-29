@@ -7,7 +7,6 @@ mod tests {
     use crate::core::ResolvedCall;
     use crate::proofs::proof_checker::process_actions;
     use crate::proofs::proof_extraction::ProveExistsError;
-    use crate::proofs::proof_reconstruct_check;
     use crate::proofs::proof_sites::{ConclusionSite, SiteConclusion, SiteIndex, conclusion_sites};
     use crate::util::{HashMap, HashSet};
     use crate::{
@@ -184,15 +183,6 @@ mod tests {
                 "rule '{}' enumerates its conclusion sites differently each time",
                 rule.name
             );
-            for (position, site) in sites.iter().enumerate() {
-                assert_eq!(
-                    site.index,
-                    SiteIndex(position),
-                    "rule '{}' site indices are not dense and in order",
-                    rule.name
-                );
-            }
-
             let mut term_dag = TermDag::default();
             let inputs = head_input_bindings(actions, &mut term_dag);
             let action_refs: Vec<_> = actions.iter().collect();
@@ -205,9 +195,15 @@ mod tests {
                 "rule '{}' resolved a different number of sites than it enumerates",
                 rule.name
             );
-            for (site, (index, prop)) in sites.iter().zip(&ctx.site_propositions) {
+            for (position, (site, (index, prop))) in
+                sites.iter().zip(&ctx.site_propositions).enumerate()
+            {
                 let site_name = format!("rule '{}' site {}", rule.name, index.0);
-                assert_eq!(site.index, *index, "{site_name} resolved out of order");
+                assert_eq!(
+                    *index,
+                    SiteIndex(position),
+                    "{site_name} resolved out of order"
+                );
                 assert!(
                     ctx.propositions.contains(prop),
                     "{site_name} concluded a proposition the head does not imply"
@@ -232,49 +228,12 @@ mod tests {
         }
     }
 
-    /// A rule head that builds a term over a subterm whose e-class already holds
-    /// a differently-shaped term needs a canonicalization bridge whose child
-    /// proof moves the term, and that child comes from another rule's firing. So
-    /// the bridge states an equality the head does not conclude: no conclusion
-    /// site names it, and it cannot be reconstructed from the rule, its premises
-    /// and a site index.
+    /// A rule proof records no terms, so a body variable bound to a value the
+    /// body computed — a primitive's result, a container's — reaches the
+    /// checker only by replaying the rule. Each case below binds one that way
+    /// and proves a conclusion that needs it.
     #[test]
-    fn head_canonicalization_bridge_is_load_bearing() {
-        let source = r#"
-            (datatype Math (Add Math Math) (Neg Math) (Num i64))
-            (ruleset commute)
-            (ruleset wrap)
-            (rewrite (Add a b) (Add b a) :ruleset commute :name "commute")
-            (rule ((= x (Add a b))) ((Neg (Add b a))) :ruleset wrap :name "wrap")
-            (let $e (Add (Num 1) (Num 2)))
-            (run commute 1)
-            (run wrap 1)
-            (prove (Neg (Add (Num 2) (Num 1))))"#;
-
-        proof_reconstruct_check::begin();
-        let mut egraph = EGraph::new_with_proofs();
-        let result = egraph.parse_and_run_program(None, source);
-        let stats = proof_reconstruct_check::end();
-
-        result.unwrap();
-        assert!(
-            stats.head_bridges_load_bearing > 0,
-            "expected a bridge whose child proof moves the term, got {} of {}",
-            stats.head_bridges_load_bearing,
-            stats.head_bridges,
-        );
-    }
-
-    /// A rule's conclusion is reconstructible: replaying its head reaches the
-    /// conclusion the proof records at one of the head's conclusion sites, and
-    /// the substitution the replay needs can be rebuilt without reading any
-    /// value the proof carries — computed base values and container values are
-    /// recomputed with the primitives' validators.
-    ///
-    /// Each case below binds a value that today reaches the substitution only
-    /// through an `@Ast` payload.
-    #[test]
-    fn rule_conclusions_reconstruct_without_carried_values() {
+    fn rule_proofs_check_with_computed_body_values() {
         let cases = [
             // a computed String
             r#"(relation Strings (String String))
@@ -302,29 +261,10 @@ mod tests {
         ];
 
         for source in cases {
-            proof_reconstruct_check::begin();
             let mut egraph = EGraph::new_with_proofs();
-            let result = egraph.parse_and_run_program(None, source);
-            let stats = proof_reconstruct_check::end();
-
-            result.unwrap_or_else(|e| panic!("{source}\nfailed: {e}"));
-            assert!(stats.nodes > 0, "{source}\nchecked no rule proofs");
-            assert_eq!(
-                stats.unmatched, 0,
-                "{source}\nno conclusion site reproduced the recorded conclusion"
-            );
-            assert_eq!(
-                stats.stamped_wrong, 0,
-                "{source}\nthe site the encoder stamped does not reproduce the conclusion"
-            );
-            assert_eq!(
-                stats.payload_free_fails, 0,
-                "{source}\nthe substitution could not be rebuilt without carried values"
-            );
-            assert!(
-                stats.recomputed_vars > 0,
-                "{source}\nno value was recomputed, so the case proves nothing"
-            );
+            egraph
+                .parse_and_run_program(None, source)
+                .unwrap_or_else(|e| panic!("{source}\nfailed: {e}"));
         }
     }
 

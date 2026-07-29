@@ -19,7 +19,6 @@ use crate::{
     core::ResolvedCall,
     proofs::{
         proof_format::{Justification, Proof, ProofId, ProofStore, Proposition, SynthKey},
-        proof_reconstruct_check,
         proof_sites::{ActionSites, SiteIndex, SiteRef, SiteRole, action_sites},
     },
     typechecking::FuncType,
@@ -632,13 +631,7 @@ impl<'a> Firing<'a> {
         canonical: TermId,
     ) -> Option<ProofId> {
         let bridge = *self.bridges.get(&site)?;
-        let prop = store.get(bridge).proposition();
-        if prop.rhs != canonical {
-            return None;
-        }
-        let moved = prop.lhs != prop.rhs;
-        proof_reconstruct_check::record_head_bridge(self.rule_name, moved);
-        Some(bridge)
+        (store.get(bridge).rhs() == canonical).then_some(bridge)
     }
 
     /// A construct-into guest's view-row proof: the target's e-class equals the

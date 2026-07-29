@@ -146,25 +146,12 @@ pub(crate) enum SiteConclusion<'a> {
     Equality(&'a ResolvedExpr, &'a ResolvedExpr),
 }
 
-/// One position in a rule head that the head concludes a proposition at.
+/// One position in a rule head that the head concludes a proposition at. A
+/// site's [`SiteIndex`] is its position in [`conclusion_sites`]' output.
 pub(crate) struct ConclusionSite<'a> {
-    /// Position in the head's canonical site order.
-    pub index: SiteIndex,
     /// Position of this site's action in the head.
     pub action: usize,
-    /// Where the site is in the source, for diagnostics.
-    pub span: Span,
     pub conclusion: SiteConclusion<'a>,
-}
-
-impl ConclusionSite<'_> {
-    /// The site's source location, or `<generated>` when it has no source text.
-    pub fn location(&self) -> String {
-        match &self.span {
-            Span::Panic => "<generated>".to_string(),
-            span => span.to_string(),
-        }
-    }
 }
 
 /// Where one action's sites start. An expression's sites are the pre-order run
@@ -210,13 +197,8 @@ fn walk<'a>(
                 own: None,
                 operands: vec![push_expr_sites(&mut sites, at, expr)],
             },
-            GenericAction::Union(span, lhs, rhs) => {
-                let own = push_site(
-                    &mut sites,
-                    at,
-                    span.clone(),
-                    SiteConclusion::Equality(lhs, rhs),
-                );
+            GenericAction::Union(_, lhs, rhs) => {
+                let own = push_site(&mut sites, at, SiteConclusion::Equality(lhs, rhs));
                 let lhs_sites = push_expr_sites(&mut sites, at, lhs);
                 let rhs_sites = push_expr_sites(&mut sites, at, rhs);
                 ActionSites {
@@ -226,12 +208,7 @@ fn walk<'a>(
             }
             GenericAction::Set(span, func, args, value) => {
                 let row = set_row_expr(span.clone(), func, args, value);
-                let own = push_site(
-                    &mut sites,
-                    at,
-                    span.clone(),
-                    SiteConclusion::Reflexive(Cow::Owned(row)),
-                );
+                let own = push_site(&mut sites, at, SiteConclusion::Reflexive(Cow::Owned(row)));
                 let mut operands = Vec::with_capacity(args.len() + 1);
                 for arg in args {
                     operands.push(push_expr_sites(&mut sites, at, arg));
@@ -269,12 +246,7 @@ fn push_expr_sites<'a>(
     at: usize,
     expr: &'a ResolvedExpr,
 ) -> SiteIndex {
-    let index = push_site(
-        sites,
-        at,
-        expr.span(),
-        SiteConclusion::Reflexive(Cow::Borrowed(expr)),
-    );
+    let index = push_site(sites, at, SiteConclusion::Reflexive(Cow::Borrowed(expr)));
     if let ResolvedExpr::Call(_, _, args) = expr {
         for arg in args {
             push_expr_sites(sites, at, arg);
@@ -286,14 +258,11 @@ fn push_expr_sites<'a>(
 fn push_site<'a>(
     sites: &mut Vec<ConclusionSite<'a>>,
     at: usize,
-    span: Span,
     conclusion: SiteConclusion<'a>,
 ) -> SiteIndex {
     let index = SiteIndex(sites.len());
     sites.push(ConclusionSite {
-        index,
         action: at,
-        span,
         conclusion,
     });
     index

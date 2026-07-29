@@ -10,7 +10,6 @@ pub(crate) mod proof_format;
 pub(crate) mod proof_fresh;
 pub(crate) mod proof_head_skeleton;
 pub(crate) mod proof_normal_form;
-pub(crate) mod proof_reconstruct_check;
 pub(crate) mod proof_simplification;
 pub(crate) mod proof_sites;
 pub(crate) mod proof_tests;
