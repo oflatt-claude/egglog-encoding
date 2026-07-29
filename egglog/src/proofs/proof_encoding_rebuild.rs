@@ -193,6 +193,12 @@ impl ProofInstrumentor<'_> {
     /// `uf_canon` reads `@UF_<S>` in the action, which is what makes the rule
     /// `:unsafe-seminaive` (or `:naive` under the test knob); the driving `@UF`
     /// delta in the body is what makes that read sound.
+    ///
+    /// In proof mode the whole row's congruence composition is one
+    /// [`rebuild_proof`](super::proof_encoding_helpers::EncodingNames::rebuild_proof)
+    /// row carrying each canonicalized column beside its step proof, so a firing
+    /// writes one row there rather than one per column. Rebuilding the e-class
+    /// keeps its own `Sym`/`Trans` pair.
     fn indexed_rebuild_rule(
         &mut self,
         fdecl: &ResolvedFunctionDecl,
@@ -218,12 +224,14 @@ impl ProofInstrumentor<'_> {
         // The index relation is `(value, children…, eclass, proof)`.
         let index_atom = format!("({} {follower} {keys_str} {eclass} {row_pf})", vi.name);
 
-        // Canonicalize every eq-sort column, folding its congruence step onto the
-        // row proof. A column that did not move canonicalizes to itself and its
-        // step is reflexive, which the proof simplifier drops.
+        // Canonicalize every eq-sort column. A column that did not move
+        // canonicalizes to itself and its step is reflexive, which the proof
+        // simplifier drops.
         let mut lets: Vec<String> = Vec::new();
         let mut updated = key_vars.to_vec();
-        let mut proof_acc = row_pf.clone();
+        // One `<column> <step proof>` pair per canonicalized column, in ascending
+        // column order — the order the packed row's expansion composes them in.
+        let mut steps: Vec<String> = Vec::new();
         for j in 0..n_keys {
             if types[j].is_eq_container_sort() || !types[j].is_eq_sort() {
                 continue;
@@ -239,21 +247,25 @@ impl ProofInstrumentor<'_> {
                 let term_proof = self.term_proof_name(types[j].name());
                 let refl = self.fresh_var();
                 let step = self.fresh_var();
-                let congr = self.proof_names().congr_constructor.clone();
-                let proof_sort = self.proof_sort();
                 lets.push(format!("(let {refl} ({term_proof} {cj}))"));
                 lets.push(format!(
                     "(let {step} ({} {cj} {refl}))",
                     uf_canon_proof_prim_name(&uf_j)
                 ));
-                proof_acc = self.mint(
-                    &mut lets,
-                    &congr,
-                    &format!("{proof_acc} {j} {step}"),
-                    &proof_sort,
-                );
+                steps.push(format!("{j} {step}"));
             }
             updated[j] = canon;
+        }
+        // The whole row's congruence composition is one row: the step proofs and
+        // the columns they are about, packed together.
+        let mut decls = String::new();
+        let mut proof_acc = row_pf.clone();
+        if !steps.is_empty() {
+            let (rebuild, decl) = self.rebuild_proof_constructor(steps.len());
+            decls = decl;
+            let proof_sort = self.proof_sort();
+            let args = format!("{row_pf} {}", ListDisplay(&steps, " "));
+            proof_acc = self.mint(&mut lets, &rebuild, &args, &proof_sort);
         }
         // Only an e-class is canonicalized here, and it moves the other way round
         // from a child: the row proof reads `eclass = f(children)`, so a new leader
@@ -312,7 +324,7 @@ impl ProofInstrumentor<'_> {
         let fresh_name = self.egraph.parser.symbol_gen.fresh("rebuild_rule");
         let eval_opt = self.rhs_read_eval_opt();
         format!(
-            "(rule ({facts})\n     ({actions})\n     :ruleset {ruleset} {eval_opt} :name \"{fresh_name}\" :internal-include-subsumed)\n"
+            "{decls}(rule ({facts})\n     ({actions})\n     :ruleset {ruleset} {eval_opt} :name \"{fresh_name}\" :internal-include-subsumed)\n"
         )
     }
 

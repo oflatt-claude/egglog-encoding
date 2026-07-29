@@ -59,10 +59,10 @@ This rework generalizes that from merge bodies to rule bodies.
   generated actions. It depends on the canonical-program decision, since
   `lower_inputs` runs before `remove_globals` and the encoder's site counter
   would live after it.
-* **Rebuilding:** `RebuildN(old_row_proof, e1 … ek)`, carrying the moved
-  columns' `@UF` proofs as premises. Recording them as premises — rather than
-  looking them up later — is what makes rebuilding reconstructible without
-  historical union-find state.
+* **Rebuilding:** `Rebuild_k(old_row_proof, col_1, e_1, … col_k, e_k)`, carrying
+  each canonicalized column's `@UF` proof as a premise beside the column it is
+  about. Recording them as premises — rather than looking them up later — is
+  what makes rebuilding reconstructible without historical union-find state.
 * The UF rule keeps explicit `Trans` for now.
 
 ### Carrying the canonicalization bridge
@@ -107,7 +107,8 @@ skeleton is still present to compare against.
 | 3a | drop the rule proofs' two `Ast` columns | done — zero snapshot changes; see below |
 | 3b | the rest of `@Ast`: site the top-level actions, per-base-sort `Fiat`, delete the `Ast` sort | ditto |
 | 4a | the `Rebuild` raw-proof variant and its expansion, nothing emitted | done — zero snapshot changes; see below |
-| 4b | rebuilding → `RebuildN`: emit it from the rebuild rules | ditto |
+| 4b | rebuilding → `RebuildN`: emit it from the rebuild rules | done — zero snapshot changes; see below |
+| 4c | fold the e-class `Sym`/`Trans` pair into the packed row | ditto |
 | 5 | re-enable CSE after encoding, repair term mode, re-measure | nothing left behind the switch |
 
 ### Premises inline on the first site, chained after that
@@ -205,8 +206,9 @@ One snapshot did move, in *term* mode: `doc_example_add_function1` renumbers its
    * **3b, everything else.** Siting the top-level actions, a per-base-sort
      `Fiat`, and then deleting the `Ast` sort. All three wait on the
      canonical-program decision the `Fiat`/`lower_inputs` note above describes.
-5. **Phases 4 and 5.** `RebuildN`; then re-enable CSE after encoding, repair
-   term mode, re-measure.
+5. **Phases 4 and 5.** ~~`RebuildN`~~ — 4a and 4b are in; 4c folds the e-class
+   step into the packed row. Then re-enable CSE after encoding, repair term
+   mode, re-measure.
 
 Row budget for `(rewrite (Add a b) (Add b a))`: 13 at the branch point, 2 today
 (2 proof + 0 `@Ast`).
@@ -686,6 +688,82 @@ What 4b trips over when `indexed_rebuild_rule` starts emitting these:
 * The steps a firing writes must be exactly the columns whose `Congr` the chain
   mints, in ascending column order. Leaving out the reflexive ones is sound and
   saves nothing, since `simplify` already removes them.
+
+### Phase 4b result
+
+`indexed_rebuild_rule` emits the packed row. A firing writes one
+`Rebuild_<k>(row, col, step, …)` instead of one `Congr` per canonicalized column,
+and keeps the e-class's `Sym` + `Trans` pair (phase 4c folds that in).
+
+**The columns ride as literals beside their proofs.** `Rebuild_<k>` is
+`(Proof (i64 Proof)^k) -> Proof`: the row proof, then a column literal and a step
+proof per step. Which column a step is about is a compile-time constant of the
+generated rule, so a literal costs nothing at runtime, and the alternative — a
+head naming the rebuilt-column *set* — would mint a constructor per distinct
+column set rather than per arity. `rule_columns`-style structural discrimination
+cannot work here: the steps are homogeneous, so nothing in the row's shape says
+which column a proof is about.
+
+Arity family, so the four `Rule_k` rules apply: `EncodingNames` holds one fresh
+`rebuild_prefix` and `rebuild_proof(k)` derives `{prefix}_{k}` from it — a
+per-arity `symbol_gen.fresh` would be unrecoverable in the `desugar` treatment's
+fresh `EGraph`. Unlike a rule's premise count, a view's step count is not known
+before the view's own rules are generated, so the declaration goes out with the
+first rule that uses it rather than in a header pass. A step-free view (`Num`,
+whose only child is an `i64`) emits no row at all rather than a `Rebuild_0`.
+
+Rows written per firing of the `AddView` rebuild in
+`(rewrite (Add a b) (Add b a))`, counted as table rows after a run that fires it
+once — 51 tuples before, 50 after, `@Congr` 2 -> 0 and `@Rebuild_2` 0 -> 1:
+
+| | before | after |
+| --- | --- | --- |
+| `AddView` rebuild (2 eq-sort children + e-class) | 4 | 3 |
+| `NumView` rebuild (no eq-sort children) | 2 | 2 |
+
+The generated action is now
+
+```
+(let c0_canon_ (@UF_Math_canon c0_ c0_))   (let pv14 (@UF_Math_canon_proof c0_ …))
+(let c1_canon_ (@UF_Math_canon c1_ c1_))   (let pv16 (@UF_Math_canon_proof c1_ …))
+(set (@Rebuild_2 pv12 0 pv14 1 pv16 pv17) ())
+(let e2_canon_ (@UF_Math_canon e2_ e2_))   (let pv19 (@UF_Math_canon_proof e2_ …))
+(set (@Sym pv19 pv20) ())  (set (@Trans pv20 pv17 pv21) ())
+```
+
+206 `proofs/` tests pass with zero changed snapshots and zero changed shared
+snapshots, and the whole workspace is green. `proof_reconstruct_check` is
+unmoved: 13392 nodes, 0 `stamped_ok=false`, 0 `payload_free=disagrees`, 3540
+bridges of which 288 move the term. The corpus parses 1140 `Rebuild` nodes (238
+one-step, 900 two-step, 2 three-step), so the byte-identical output is
+agreement, not absence.
+
+**`nested_proofs` does not yet fail on any fixture, and is in anyway.** Deleting
+the entry leaves the corpus and `eggcc_2mm_pass1` green — today's rebuild chains
+are short enough for `parse_proof_inner` to recurse through them. It is the one
+hazard the snapshots cannot police, so it is held by
+`a_deep_rebuild_chain_parses_without_a_deep_stack`: 50 000 chained rebuilds
+parsed on a 512 KiB stack, which overflows without the entry.
+`a_rebuild_rows_nested_proofs_are_its_row_and_its_steps` fails the same mutation
+gracefully, naming the cause.
+
+The literal columns *are* policed by the corpus: emitting `0` for every step
+fails it with `rebuild step 0 does not start at that child of the row`.
+
+What 4c trips over, folding the e-class step in:
+
+* The e-class step is not a column, so it cannot join the `(i64, Proof)` pairs —
+  it needs either its own arity dimension (`Rebuild_<k>` vs `RebuildEq_<k>`, two
+  families off the one prefix) or a sentinel column that `parse_proof_inner`
+  reads into the `eclass` field. `expand_rebuild` already takes it as a separate
+  field, so only the spelling is open.
+* It composes on the *left*, and its `Sym` is what makes the composition
+  well-typed. `proof_head_skeleton::trans`'s middle-term assertion is the check
+  that catches getting that backwards; phase 4a mutation-checked it.
+* `output_is_eclass` decides at rule-generation time whether the pair exists, so
+  the two shapes are distinguishable statically — the same fact that makes the
+  column list a compile-time constant here.
+
 ### The container rebuild anchor was minted twice
 
 Two places built `Trans(Sym p, p)` over the same rebuild proof `p` and wrote it

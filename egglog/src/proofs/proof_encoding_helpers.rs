@@ -35,6 +35,13 @@ pub(crate) struct EncodingNames {
     /// A later conclusion site of the same head: the previous site's rule proof
     /// plus this site's one canonicalization bridge.
     pub(crate) rule_link_constructor: String,
+    /// Prefix of the rebuild proofs packing one view-rebuild firing's congruence
+    /// steps: step count `k`'s constructor is [`Self::rebuild_proof`]. Derived
+    /// from one name for the same reason as [`Self::rule_fused_prefix`].
+    pub(crate) rebuild_prefix: String,
+    /// The step counts [`ProofInstrumentor::rebuild_proof_constructor`] has
+    /// declared.
+    pub(crate) rebuild_declared: HashSet<usize>,
     pub(crate) merge_fn_idx_constructor: String,
     pub(crate) merge_fn_row_constructor: String,
     pub(crate) eq_trans_constructor: String,
@@ -171,6 +178,20 @@ impl EncodingNames {
             .ok()
     }
 
+    /// The rebuild proof constructor packing `steps` congruence steps.
+    pub(crate) fn rebuild_proof(&self, steps: usize) -> String {
+        format!("{}_{steps}", self.rebuild_prefix)
+    }
+
+    /// The step count `head` packs, when it is one of [`Self::rebuild_proof`]'s
+    /// constructors.
+    pub(crate) fn rebuild_proof_steps(&self, head: &str) -> Option<usize> {
+        head.strip_prefix(&self.rebuild_prefix)?
+            .strip_prefix('_')?
+            .parse()
+            .ok()
+    }
+
     pub(crate) fn new(symbol_gen: &mut SymbolGen) -> Self {
         Self {
             ast_sort: symbol_gen.fresh("Ast"),
@@ -179,6 +200,8 @@ impl EncodingNames {
             rule_fused_prefix: symbol_gen.fresh("Rule"),
             rule_fused_declared: HashSet::default(),
             rule_link_constructor: symbol_gen.fresh("RuleLink"),
+            rebuild_prefix: symbol_gen.fresh("Rebuild"),
+            rebuild_declared: HashSet::default(),
             merge_fn_idx_constructor: symbol_gen.fresh("MergeIdx"),
             merge_fn_row_constructor: symbol_gen.fresh("MergeRow"),
             eq_trans_constructor: symbol_gen.fresh("Trans"),
@@ -294,6 +317,31 @@ impl ProofInstrumentor<'_> {
         }
         let decls = decls.join("\n");
         self.parse_program(&decls)
+    }
+
+    /// The rebuild proof constructor packing `steps` congruence steps, together
+    /// with its declaration — empty once some program has declared it.
+    ///
+    /// A view's step count is a property of its schema, so unlike a rule's
+    /// premise count it is not known before the view's rules are generated; the
+    /// declaration is emitted with the first rule that uses it.
+    pub(crate) fn rebuild_proof_constructor(&mut self, steps: usize) -> (String, String) {
+        let name = self.proof_names().rebuild_proof(steps);
+        if !self
+            .egraph
+            .proof_state
+            .proof_names
+            .rebuild_declared
+            .insert(steps)
+        {
+            return (name, String::new());
+        }
+        let proof = self.proof_names().proof_datatype.clone();
+        let columns: String = (0..steps).map(|_| format!(" i64 {proof}")).collect();
+        let decl = format!(
+            "(function {name} ({proof}{columns} {proof}) Unit :no-merge :internal-hidden :internal-term-node)\n"
+        );
+        (name, decl)
     }
 
     /// Header commands for term encoding, setting up rulesets.
@@ -567,6 +615,15 @@ impl ProofInstrumentor<'_> {
 ;; of the head the proof is about; proof conversion derives the proposition from
 ;; it, so no term is stored.
 (function {rule_link_constructor} (String {proof_datatype} {proof_datatype} i64 {proof_datatype}) Unit :no-merge :internal-hidden :internal-term-node)
+
+;; One firing of a view's index-driven rebuild rule, packing the congruence steps
+;; it composes onto the row proof into a single row, in a `Rebuild_<k>` declared
+;; per step count (see `rebuild_proof_constructor`):
+;;   (Rebuild_<k> <row proof> <column> <step proof> ...)
+;; The columns are literals fixed when the rule is generated; a parser seeing only
+;; the row cannot recover them from the proofs. They are in ascending order, which
+;; the expansion relies on: a `Congr` at a different nesting proves the same
+;; proposition by a different tree.
 
 ;; term-free merge justification for an FD custom-function view subexpression:
 ;; name of function, two premise proofs, and the pre-order index of the merge-body
