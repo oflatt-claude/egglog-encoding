@@ -1,4 +1,4 @@
-//! How a rule head lowers, and the proof skeleton that lowering needs.
+//! How a rule head lowers, and the proofs that lowering composes.
 //!
 //! A head that builds a term needs more proofs than it concludes: the term as
 //! the head wrote it, the same term over its children's representatives, and the
@@ -47,7 +47,7 @@ pub(crate) struct HeadPlan {
     /// Indices into [`Self::actions`] of the `union`s the plan makes redundant.
     pub dropped: HashSet<usize>,
     /// Per conclusion site whose lowering composes anything, what it composes
-    /// from. See [`build_sites`] for the numbering.
+    /// from.
     builds: HashMap<SiteIndex, Build>,
     /// The build sites that record a bridge premise, in construction order.
     bridge_order: Vec<SiteIndex>,
@@ -423,12 +423,10 @@ fn closure(plan: &HeadPlan, site: SiteIndex, out: &mut Vec<SiteIndex>) {
     }
 }
 
-/// One firing of a rule head, and the proofs asking about its sites has built so
-/// far.
+/// One firing of a rule head, and the proofs asked of it so far.
 ///
-/// A firing writes a few of the propositions its sites have, so nothing is built
-/// until [`Self::role`] asks for it: materializing the rest would cost a proof
-/// node — with a copy of the substitution — per site per firing.
+/// A firing states only a few of the propositions its sites have, so nothing is
+/// built until [`Self::role`] asks for it.
 pub(crate) struct Firing<'a> {
     pub rule_name: &'a str,
     pub plan: &'a HeadPlan,

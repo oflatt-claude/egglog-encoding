@@ -1,6 +1,6 @@
 #[doc = include_str!("proof_encoding.md")]
 use crate::proofs::proof_encoding_helpers::{EncodingNames, Justification, SharedEnd, SiteColumn};
-use crate::proofs::proof_head_skeleton::{ConstructInto, HeadPlan, constructor_operand};
+use crate::proofs::proof_head::{ConstructInto, HeadPlan, constructor_operand};
 use crate::proofs::proof_sites::{ActionSites, SiteIndex, SiteRef, SiteRole};
 use crate::typechecking::FuncType;
 use crate::*;
@@ -30,7 +30,7 @@ pub(crate) enum Connector {
     /// A proof node the encoding already minted.
     Node(String),
     /// A rule head's, named by site and role. The head's own conclusion at the
-    /// site determines it (see [`crate::proofs::proof_head_skeleton`]), so a row
+    /// site determines it (see [`crate::proofs::proof_head`]), so a row
     /// is minted only where the encoding stores the proof.
     Role(SiteRef),
 }
@@ -149,10 +149,10 @@ pub(crate) struct ProofInstrumentor<'a> {
     /// reads costs neither a read nor a row (see [`Self::defer_lookup`]).
     pending_lookups: HashMap<String, Pending>,
     /// The conclusion site of the expression [`Self::instrument_action_expr`] is
-    /// about to walk. The action walkers point it at each operand they evaluate;
-    /// it then advances in pre-order, the order [`conclusion_sites`] numbers in.
-    /// `None` while walking an expression that names no site, such as a `change`
-    /// argument.
+    /// about to walk, advancing in pre-order as it descends — the order
+    /// [`crate::proofs::proof_sites::conclusion_sites`] numbers in. An action walker points it
+    /// at each operand it evaluates, or sets it to `None` for an expression that
+    /// names no site, such as a `change` argument.
     site_cursor: Option<SiteIndex>,
 }
 

@@ -27,7 +27,7 @@ pub struct SiteIndex(pub usize);
 /// edges between the two, which are composed from the site's own equality;
 /// proof conversion synthesizes that composition from the role, the site, and
 /// the rule proof's trailing bridge premises (see
-/// [`crate::proofs::proof_head_skeleton`]).
+/// [`crate::proofs::proof_head`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SiteRole {
     /// The site's own equality, over the terms the head wrote.

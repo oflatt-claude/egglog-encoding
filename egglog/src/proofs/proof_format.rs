@@ -10,7 +10,7 @@ use crate::{
             process_actions, run_merge,
         },
         proof_encoding_helpers::{EncodingNames, SharedEnd},
-        proof_head_skeleton::{Firing, HeadPlan, congr, sites_needed, sym, trans},
+        proof_head::{Firing, HeadPlan, congr, sites_needed, sym, trans},
         proof_sites::{SiteIndex, SiteRef},
     },
     typechecking::{FuncType, PrimitiveValidator},
