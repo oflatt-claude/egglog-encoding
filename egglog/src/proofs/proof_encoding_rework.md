@@ -636,12 +636,13 @@ converting everything.
   *node* counts may move — the hash-consing key changes as columns come and go —
   but a view count changing means the e-graph diverged. Across phases 0–2a,
   zero shared snapshots changed; keep it that way.
-* **Term mode has not in fact broken.** The only thing behind
-  `PROOF_REWORK_IN_PROGRESS` is the CSE prepass, and the workspace — including
-  the term-encoding treatments — has been green at every phase. The one real
-  term-mode divergence was fixed properly (the `set-if-empty` read-your-writes
-  bug) rather than papered over. So phase 5 is "decide what to do about CSE",
-  not "repair term mode".
+* **Correctness is not lost at any phase.** Not "term mode may break and is
+  repaired later" — every phase keeps the whole workspace green, term-encoding
+  treatments included. That has held so far: the only thing behind
+  `PROOF_REWORK_IN_PROGRESS` is the CSE prepass, and the one real term-mode
+  divergence was fixed at its root (the `set-if-empty` read-your-writes bug)
+  rather than suppressed. Phase 5 is "decide what to do about CSE", not "repair
+  term mode".
 * Everything switched off for the rework hangs off `PROOF_REWORK_IN_PROGRESS`
   so the set is greppable from one place.
 
@@ -738,8 +739,11 @@ number.
 
 ## Measurement caveats
 
-* **While CSE is off, bounded-schedule programs understate work done**, so a
-  `(run N)` file is not comparable against main.
+* **CSE being off makes the branch look *worse*, not better.** With the
+  `set-if-empty` fix in, the treatments agree tuple-for-tuple, so a bounded
+  `(run N)` does the same work either way. What differs is that the candidate
+  interns a repeated subterm twice and dedups it, where the baseline's CSE
+  builds it once — so every measured win is achieved carrying that handicap.
 * `egglog/tests/files.rs` and `egglog-experimental/dd/tests/files.rs` write the
   same shared snapshot file with different metadata headers, so each rewrites
   the other's on every run.
