@@ -123,7 +123,7 @@ impl ProofInstrumentor<'_> {
                 let proof_code = if self.egraph.proof_state.proofs_enabled {
                     let lit_sort = literal_sort(lit);
                     let lit_str = format!("{lit}");
-                    self.reflexive_fiat_proof(action_lookups, lit_sort.name(), &lit_str)
+                    self.reflexive_fiat_proof(lit_sort.name(), &lit_str)
                 } else {
                     "()".to_string()
                 };
@@ -152,13 +152,13 @@ impl ProofInstrumentor<'_> {
                         // (run :until, check) discard these.
                         self.defer_lookup(
                             &fresh_proof,
-                            format!("(let {fresh_proof} ({term_proof_name} {var}))"),
+                            vec![format!("(let {fresh_proof} ({term_proof_name} {var}))")],
                         );
                         // A term proof is the term's reflexive anchor.
                         self.mark_reflexive(&fresh_proof);
                         fresh_proof
                     } else {
-                        self.reflexive_fiat_proof(action_lookups, resolved_var.sort.name(), var)
+                        self.reflexive_fiat_proof(resolved_var.sort.name(), var)
                     },
                 )
             }
@@ -244,11 +244,7 @@ impl ProofInstrumentor<'_> {
                         } else {
                             // Base primitives produce a literal result; a
                             // reflexive `Fiat` over a literal is checker-valid.
-                            self.reflexive_fiat_proof(
-                                action_lookups,
-                                specialized_primitive.output().name(),
-                                &fv,
-                            )
+                            self.reflexive_fiat_proof(specialized_primitive.output().name(), &fv)
                         };
 
                         (fv.clone(), proof)
@@ -262,13 +258,15 @@ impl ProofInstrumentor<'_> {
     }
 
     /// Return the instrumented query, the mints its premise proofs need, and one
-    /// premise proof per fact. An eq-sort variable's `term_proof` fetch is
-    /// deferred: it is emitted as a `(let p (term_proof v))` line only when a
-    /// minted row reads it, into `action_lookups` when that row is one of these
-    /// mints and into the head's own actions when it is a rule proof row. Either
-    /// way the caller splices it into the rule's actions, which makes the rule
-    /// `:unsafe-seminaive`. Callers that don't build a proof (`run :until`,
-    /// `check`) discard the lookups and the premises, and must
+    /// premise proof per fact.
+    ///
+    /// The two reflexive premise proofs are deferred: an eq-sort variable's
+    /// `term_proof` fetch and a base value's `Fiat` triple are emitted only when
+    /// a minted row reads them — into `action_lookups` when that row is one of
+    /// these mints, and into the head's own actions when it is a rule proof row.
+    /// Either way the caller splices them into the rule's actions, which makes
+    /// the rule `:unsafe-seminaive`. Callers that don't build a proof
+    /// (`run :until`, `check`) discard the lookups and the premises, and must
     /// [`ProofInstrumentor::drop_pending_lookups`].
     pub(super) fn instrument_facts(
         &mut self,
@@ -285,20 +283,25 @@ impl ProofInstrumentor<'_> {
         (res, action_lookups, premises)
     }
 
-    /// Mint a reflexive `Fiat` proof `value = value` for a term of `sort_name`
-    /// (two identical ASTs under a `Fiat`), appending the mints to `stmts`.
-    fn reflexive_fiat_proof(
-        &mut self,
-        stmts: &mut Vec<String>,
-        sort_name: &str,
-        value: &str,
-    ) -> String {
+    /// A reflexive `Fiat` proof `value = value` for a term of `sort_name` (two
+    /// identical ASTs under a `Fiat`).
+    ///
+    /// The three mints are deferred, so they are emitted only if some row names
+    /// the proof: the proof is reflexive, so the composition that asked for it
+    /// usually drops it (see [`ProofInstrumentor::mint_trans`]), and then no row
+    /// mentions it. `value` is bound by the query, so the mints are free to move
+    /// to wherever the first reader is.
+    fn reflexive_fiat_proof(&mut self, sort_name: &str, value: &str) -> String {
         let to_ast = self
             .proof_names()
             .sort_to_ast_constructor
             .get(sort_name)
             .unwrap()
             .clone();
-        self.term_proof_for_justification(stmts, value, &to_ast, &Justification::Fiat)
+        let mut group = vec![];
+        let proof =
+            self.term_proof_for_justification(&mut group, value, &to_ast, &Justification::Fiat);
+        self.defer_lookup(&proof, group);
+        proof
     }
 }

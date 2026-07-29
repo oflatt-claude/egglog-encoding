@@ -145,10 +145,10 @@ pub(crate) struct ProofInstrumentor<'a> {
     /// variable name. Names are globally fresh, so entries never collide across
     /// the generated programs.
     reflexive: HashSet<String>,
-    /// Table reads not emitted yet, keyed by the proof variable they bind.
-    /// [`Self::mint`] emits one when a row first reads it, so a proof no
-    /// composition keeps costs no read.
-    pending_lookups: HashMap<String, String>,
+    /// Statements not emitted yet, keyed by the proof variable the group binds.
+    /// [`Self::mint`] emits a group when a row first reads its proof, so a proof
+    /// no composition keeps costs neither a read nor a row.
+    pending_lookups: HashMap<String, Vec<String>>,
 }
 
 impl<'a> ProofInstrumentor<'a> {
@@ -1272,19 +1272,21 @@ impl<'a> ProofInstrumentor<'a> {
         self.mint(stmts, &congr, &format!("{acc} {idx} {step}"), &proof_sort)
     }
 
-    /// Hold back `stmt`, the statement binding `proof`, until a minted row reads
-    /// `proof`. A proof that no row ends up reading is never bound, and
-    /// [`Self::drop_pending_lookups`] discards it.
-    pub(crate) fn defer_lookup(&mut self, proof: &str, stmt: String) {
-        self.pending_lookups.insert(proof.to_string(), stmt);
+    /// Hold back `group`, the statements binding `proof`, until a minted row
+    /// reads `proof`. A proof that no row ends up reading is never bound, and
+    /// [`Self::drop_pending_lookups`] discards it. `group` must be
+    /// self-contained: it is emitted as a block, so anything it names other than
+    /// `proof` has to be bound outside it.
+    pub(crate) fn defer_lookup(&mut self, proof: &str, group: Vec<String>) {
+        self.pending_lookups.insert(proof.to_string(), group);
     }
 
-    /// Discard the lookups still held back, whose proofs nothing read.
+    /// Discard the statements still held back, whose proofs nothing read.
     pub(crate) fn drop_pending_lookups(&mut self) {
         self.pending_lookups.clear();
     }
 
-    /// Emit the deferred lookups `args_joined` reads, keeping each binding ahead
+    /// Emit the deferred groups `args_joined` reads, keeping each binding ahead
     /// of the statement reading it.
     fn emit_pending_lookups(&mut self, stmts: &mut Vec<String>, args_joined: &str) {
         if self.pending_lookups.is_empty() {
@@ -1292,10 +1294,20 @@ impl<'a> ProofInstrumentor<'a> {
         }
         for arg in args_joined.split_whitespace() {
             let arg = arg.trim_matches(|c| c == '(' || c == ')');
-            if let Some(stmt) = self.pending_lookups.remove(arg) {
-                stmts.push(stmt);
+            if let Some(group) = self.pending_lookups.remove(arg) {
+                stmts.extend(group);
             }
         }
+    }
+
+    /// Bind a fresh id of `sort`, asserting nothing about it.
+    fn fresh_id(&mut self, stmts: &mut Vec<String>, sort: &str) -> String {
+        let v = self.fresh_var();
+        // The generic `get-fresh!` takes the target sort as a string literal so it
+        // types its output without per-sort primitives (its runtime ignores the arg).
+        let get_fresh = crate::proofs::proof_fresh::GET_FRESH_PRIM_NAME;
+        stmts.push(format!("(let {v} ({get_fresh} \"{sort}\"))"));
+        v
     }
 
     /// Mint a fresh id of `out_sort` and assert the relation row
@@ -1311,11 +1323,7 @@ impl<'a> ProofInstrumentor<'a> {
         out_sort: &str,
     ) -> String {
         self.emit_pending_lookups(stmts, args_joined);
-        let v = self.fresh_var();
-        // The generic `get-fresh!` takes the target sort as a string literal so it
-        // types its output without per-sort primitives (its runtime ignores the arg).
-        let get_fresh = crate::proofs::proof_fresh::GET_FRESH_PRIM_NAME;
-        stmts.push(format!("(let {v} ({get_fresh} \"{out_sort}\"))"));
+        let v = self.fresh_id(stmts, out_sort);
         stmts.push(format!("(set ({name} {args_joined} {v}) ())"));
         v
     }
@@ -1325,25 +1333,26 @@ impl<'a> ProofInstrumentor<'a> {
     /// stored e-class (a global is `set` before it is used, so the fresh fallback is
     /// dead code that only fires on a malformed program). The value read is already
     /// the view's canonical e-class, so no natural/deduped connector is recorded.
+    ///
+    /// The signature requires the fallback pair, so both are bare fresh ids: no
+    /// row says anything about either, since nothing ever reads them.
     fn lookup_global(&mut self, name: &str, res: &mut Vec<String>) -> String {
         let view = self.view_name(name);
         let set_if_empty = crate::proofs::proof_fresh::set_if_empty_prim_name(&view);
-        let get_fresh = crate::proofs::proof_fresh::GET_FRESH_PRIM_NAME;
         let view_sort = self
             .proof_names()
             .fn_to_term_sort
             .get(name)
             .expect("term sort recorded in term_and_view")
             .clone();
-        let fresh_e = self.fresh_var();
-        res.push(format!("(let {fresh_e} ({get_fresh} \"{view_sort}\"))"));
-        let vx = self.fresh_var();
+        let fresh_e = self.fresh_id(res, &view_sort);
         let fallback_proof = if self.proofs_enabled() {
-            let to_ast = self.fname_to_ast_name(name).to_string();
-            self.term_proof_for_justification(res, &fresh_e, &to_ast, &Justification::Fiat)
+            let proof_sort = self.proof_sort();
+            self.fresh_id(res, &proof_sort)
         } else {
             "()".to_string()
         };
+        let vx = self.fresh_var();
         res.push(format!(
             "(let {vx} ({set_if_empty} {fresh_e} {fallback_proof}))"
         ));

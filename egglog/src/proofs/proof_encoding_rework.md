@@ -573,6 +573,59 @@ per-base-sort form; and both depend on the canonical-program decision, since the
 encoder's site counter would have to live after `remove_globals` while
 `lower_inputs` runs before it.
 
+### A body `Fiat` is deferred, like the `<S>Proof` read beside it
+
+The reflexive `Fiat` a body fact mints for a literal, a base-sort variable or a
+base-output primitive result was minted eagerly and then thrown away by the
+`mint_*` constructor that asked for it — the proof is reflexive, so `Trans` /
+`Congr` drop the step and no row is left naming it.
+
+`pending_lookups` already solved this shape for the `<S>Proof` reads, holding one
+statement per proof; it now holds a **statement list**, so the whole triple (two
+`@Ast` mints plus the `Fiat`) is deferred as one block. `mint` stays the single
+chokepoint: it flushes the groups named by the whitespace-separated tokens of the
+row it is about to write, so a binding is still emitted strictly before its first
+reader, and `drop_pending_lookups` at the end of each caller discards whatever
+reached no row. The value a deferred group wraps is bound by the query, so the
+group is free to move to wherever that first reader is — including into the head's
+own actions when the reader is a rule proof row carrying the premise inline.
+
+Over `egglog/tests`, `--proofs --mode desugar` emits **245** `Fiat` triples inside
+rule heads where it used to emit **476**: 231 of them, 49%, reached no row.
+Corpus-wide (rule heads and top-level actions together) 2133 `Fiat` rows become
+1823 and 4266 `@Ast` rows become 3646 — the 231 plus the 79 below. No `Fiat` row
+that any statement fails to name is left.
+
+Rows written per rule firing, from `--proofs --mode desugar`:
+
+| rule | proof rows | `@Ast` rows |
+| --- | --- | --- |
+| `(rewrite (Add a b) (Add b a))` | 2 | 0 |
+| `r1` of `tests/proofs/bind-prim-result.egg` | 4 -> 3 | 4 -> 2 |
+
+The plain `rewrite` is byte-identical: its one body premise is an eq-sort
+variable, whose `term_proof` read was already deferred. `r1`'s body is
+`(Strings a b)` and `(= res (+ a " " b))`; the second fact fiats both operands and
+then `Trans (Sym lhs) rhs` keeps only the primitive result's, so the `res` triple
+was pure waste. The surviving triple is the premise the two `Rule_2` rows carry.
+
+`lookup_global` handed `set-if-empty` a freshly minted `Fiat` triple as the
+fallback proof it never uses. The signature still needs the fallback pair, so both
+halves are now bare `get-fresh!` ids with no row about them: 3 rows + 3 ids per
+occurrence become 0 rows + 2 ids, 79 triples over the corpus. A header-minted
+shared constant was considered and dropped — reading one costs a table lookup per
+occurrence where `get-fresh!` is a counter bump, and sharing an e-class would
+alias two globals on exactly the malformed program the fallback exists for.
+Every one of the 79 is in a top-level action, not a rule head: `remove_globals`
+hoists a rule's global references into body facts, so `lookup_global` is only
+reached from actions written at top level.
+
+206 `proofs/` tests pass with zero changed snapshots and zero changed shared
+snapshots — a proof no row names cannot appear in an extracted proof, so this is
+neutral by construction. `proof_reconstruct_check` is unmoved: 13392 nodes, 0
+`stamped_ok=false`, 0 payload-free failures, 3540 bridges of which 288 move the
+term.
+
 ### Phase 4a result
 
 `RawProof::Rebuild { row, steps, eclass }` and its expansion are in; nothing
@@ -794,14 +847,22 @@ identities. Deleting those needs phase 2b's roled rows, and top-level actions ar
 index, the same mechanism extended from rule heads to top-level forms. Merge
 bodies (`MergeIdx`) need nothing — they already mint no `@Ast` at all.
 
-Two sites mint rows nothing ever consumes:
+~~Two sites mint rows nothing ever consumes.~~ Both taken — see "A body `Fiat`
+is deferred, like the `<S>Proof` read beside it". `lookup_global`'s dead
+`set-if-empty` fallback is now a pair of bare fresh ids, and a body fact's
+reflexive `Fiat` is deferred until a row names it, which covers the unreachable
+`Fiat` an `arg_proofs` entry used to mint for a body primitive's argument.
 
-* `lookup_global` (`proof_encoding.rs`) mints 2 `Ast` + 1 `Fiat` + a wasted
-  fresh id per firing, as fallback arguments to `set-if-empty` that a
-  well-formed program never uses.
-* The body-primitive branch of `instrument_fact` builds `arg_proofs` that only
-  the *function* branch consumes, so every non-trivial argument of a body
-  primitive mints 2 `Ast` + 1 `Fiat` that are unreachable.
+**What is left at those sites is the `Congr`/`Sym`/`Trans` a body premise
+composes over *view* proofs.** The `reflexive` set cannot collapse those — their
+operands are runtime view-row proofs, not statically reflexive — and deferring
+them is not the same trick, since the group a `mint` emits has to be
+self-contained. Over `egglog/tests`, `--proofs --mode desugar` emits 322 such
+composite rows that no statement names; 100 are in rule heads and 96 of those are
+heads that conclude nothing at all (`(panic …)`), which write no rule proof row
+for the premise composition to feed. The rest are top-level blocks and merge
+bodies. Deleting them wants the premise composition built lazily, the same shape
+as this slice one level up.
 
 ## Deferred: the `check_shadowing` per-rule clone
 
