@@ -17,10 +17,8 @@ The egraphs-good nightly service (``nightly.cs.washington.edu``) checks out this
 repository, runs ``make nightly``, and serves that directory, matching
 ``report=`` in the nightly configuration.
 
-``--no-publish`` leaves that directory alone and reports the page where the run
-already wrote it, for trying the nightly out locally; ``--branch-only``,
-``--rounds`` and file arguments cut a local run down to something quick.
-``make nightly-local`` is all four together.
+``nightly/output/`` is git-ignored, so this runs the same way locally as it does
+on the host. ``make nightly-local`` is that run at ``--rounds 1``.
 """
 
 from __future__ import annotations
@@ -72,14 +70,7 @@ BASELINE: Endpoint = ("main", "off")
 HEADLINE: Endpoint = ("main", "proofs")
 
 
-def _run(
-    target: Target,
-    endpoint: Endpoint,
-    *,
-    open_report: bool,
-    rounds: int | None = None,
-    files: Sequence[str] = (),
-) -> int:
+def _run(target: Target, endpoint: Endpoint, *, open_report: bool, rounds: int | None) -> int:
     """Benchmark one endpoint against the baseline on the same checkout."""
 
     label, source = target
@@ -105,7 +96,6 @@ def _run(
         "files",
         *(["--rounds", str(rounds)] if rounds is not None else []),
         *(["--open"] if open_report else []),
-        *files,
     ]
     print(f"nightly: {' '.join(shlex.quote(part) for part in command)}", file=sys.stderr)
     # Keep the headless nightly host from launching bench.py's best-effort browser.
@@ -124,46 +114,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=DEFAULT_OUTPUT_DIR,
         help="directory to publish index.html and index.jsonl into",
     )
-    parser.add_argument(
-        "--no-publish",
-        action="store_true",
-        help="leave the output directory alone; report the page where the run wrote it",
-    )
-    parser.add_argument(
-        "--branch-only",
-        action="store_true",
-        help="measure only this checkout, skipping the build of origin/main",
-    )
     parser.add_argument("--rounds", type=int, help="rounds per endpoint/file, passed to bench.py")
-    # A flag rather than a second positional, which argparse would fill from
-    # `output_dir` first.
-    parser.add_argument(
-        "--files",
-        nargs="+",
-        default=(),
-        metavar="FILE",
-        help="egglog files to benchmark, in place of bench.py's default set",
-    )
     args = parser.parse_args(list(argv) if argv is not None else None)
     output_dir = args.output_dir.expanduser().resolve()
-    targets = (BRANCH,) if args.branch_only else TARGETS
-    passthrough = {"rounds": args.rounds, "files": tuple(args.files)}
 
     # Populate the dropdown with every endpoint. A combination that fails to
     # build or run drops one option instead of failing the whole nightly.
-    for target in targets:
+    for target in TARGETS:
         for endpoint in ENDPOINTS:
-            if _run(target, endpoint, open_report=False, **passthrough) != 0:
+            if _run(target, endpoint, open_report=False, rounds=args.rounds) != 0:
                 print(f"nightly: skipped {target[0]} {endpoint[0]}/{endpoint[1]}", file=sys.stderr)
 
     # The whole cache is now populated, so this last run re-renders it as the
     # page. Its rows are already cached, so it only rebuilds the report.
-    if _run(BRANCH, HEADLINE, open_report=True, **passthrough) != 0 or not PAGE_PATH.is_file():
+    if _run(BRANCH, HEADLINE, open_report=True, rounds=args.rounds) != 0 or not PAGE_PATH.is_file():
         print("nightly: benchmark did not produce a report", file=sys.stderr)
         return 1
-    if args.no_publish:
-        print(f"nightly: report at {PAGE_PATH} (not published)", file=sys.stderr)
-        return 0
     output_dir.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(PAGE_PATH, output_dir / "index.html")
     shutil.copyfile(REPORT_PATH, output_dir / "index.jsonl")

@@ -69,10 +69,10 @@ benchmark-smoke:
 nightly:
 	uv run --locked python scripts/nightly_bench.py
 
-# The nightly run as it happens on the nightly host, but at one round and leaving
-# nightly/output/ alone, so it can be tried locally.
+# The nightly host's run at one round, for trying it locally. nightly/output/ is
+# git-ignored, so this writes it just as the host does.
 nightly-local:
-	uv run --locked python scripts/nightly_bench.py --no-publish --rounds 1
+	uv run --locked python scripts/nightly_bench.py --rounds 1
 
 update-snapshots:
 	uv run --locked pytest -q --snapshot-update --snapshot-details
