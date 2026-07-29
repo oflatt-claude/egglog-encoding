@@ -1334,10 +1334,8 @@ impl ProofStore {
                 );
             }
             previous = Some(position);
-            let lhs = self.id_to_proof[current].lhs();
             let base = self.id_to_proof[current].rhs();
             let child_lhs = self.id_to_proof[step].lhs();
-            let child_rhs = self.id_to_proof[step].rhs();
             let base_child = match self.term_dag.get(base) {
                 Term::App(_, children) => children.get(position).copied(),
                 other => panic!("a rebuild's row proof should prove an application, got {other:?}"),
@@ -1347,8 +1345,7 @@ impl ProofStore {
                 Some(child_lhs),
                 "rebuild step {position} does not start at that child of the row"
             );
-            let rhs = self.replace_term_child(base, position, child_rhs);
-            current = congr(self, current, position, step, lhs, rhs);
+            current = congr(self, current, position, step);
         }
         let Some(eclass) = eclass else {
             return current;
