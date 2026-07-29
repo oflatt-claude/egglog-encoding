@@ -106,7 +106,8 @@ skeleton is still present to compare against.
 | 2b | stop emitting the RHS `Congr`/`Trans`/`Sym` skeleton; reconstruction synthesizes it | done — zero snapshot changes; see below |
 | 3a | drop the rule proofs' two `Ast` columns | done — zero snapshot changes; see below |
 | 3b | the rest of `@Ast`: site the top-level actions, per-base-sort `Fiat`, delete the `Ast` sort | ditto |
-| 4 | rebuilding → `RebuildN` | ditto |
+| 4a | the `Rebuild` raw-proof variant and its expansion, nothing emitted | done — zero snapshot changes; see below |
+| 4b | rebuilding → `RebuildN`: emit it from the rebuild rules | ditto |
 | 5 | re-enable CSE after encoding, repair term mode, re-measure | nothing left behind the switch |
 
 ### Premises inline on the first site, chained after that
@@ -571,6 +572,67 @@ sited, so `Fiat` remains the encoding for anything written in source; `Fiat` is
 per-base-sort form; and both depend on the canonical-program decision, since the
 encoder's site counter would have to live after `remove_globals` while
 `lower_inputs` runs before it.
+
+### Phase 4a result
+
+`RawProof::Rebuild { row, steps, eclass }` and its expansion are in; nothing
+emits it yet, so no generated rule and no snapshot moved.
+
+The variant is a *re-packing*, not a reconstruction. A rebuild rule already
+records exactly the proof ids the composition needs — it just spreads them over
+`m + 2` rows — so conversion is a purely local expansion of one raw node, with
+no head replay, no substitution and no site machinery. That matters because a
+generated rebuild rule is not in `proof_check_program` at all: anything
+program-dependent, as the `Rule` arm is, would panic looking itself up.
+
+Three things the shape settles:
+
+* **Positions are explicit.** The eq-sort non-container columns are not
+  `0..k-1`, and `steps` records `(column, proof)` so conversion never
+  recomputes the schema. `expand_rebuild` asserts each step starts at the child
+  it names, which is the same condition `check_proof`'s
+  `CongruenceChildMismatch` enforces later.
+* **The e-class is a field, not a term-matched step.** It composes on the lhs
+  (`Trans(Sym(eclass), …)`), and it cannot be found by matching terms: an
+  e-class can legitimately equal one of its own children's terms —
+  `(rewrite (Add a Zero) a)` leaves the row `a = Add(a, Zero)` — so a search
+  would rewrite the wrong thing.
+* **Order is part of the contract.** The fold runs in ascending position, which
+  is the order `indexed_rebuild_rule`'s chain composes in, and `expand_rebuild`
+  asserts it. A `Congr` at a different nesting order proves the same
+  proposition by a different tree, so a reordering would change the printed
+  proof.
+
+A reflexive step is folded like any other and dropped by `simplify`, exactly as
+the emitted chain's reflexive `Congr` is today.
+
+`proof_head_skeleton::trans` now asserts matching middle terms, as the
+`RawProof::Trans` arm always has. It was the one composition point that could
+build a malformed proposition silently and only fail later in `check_proof`.
+It does not fire anywhere on the corpus.
+
+The signal, since nothing exercises the variant end to end yet: three unit tests
+in `proof_format.rs` build a `Rebuild` node and, beside it, the hand-written
+`Congr`/`Sym`/`Trans` chain over the *same* premises, and require the converted
+proofs to be the same tree after `simplify`. The expansion is deterministic and
+local, so that is exact rather than statistical. Mutation-checked — vec index
+instead of the recorded column trips the child assertion, a descending fold
+diverges structurally, and composing the e-class on the rhs trips the new
+middle-term assertion.
+
+What 4b trips over when `indexed_rebuild_rule` starts emitting these:
+
+* The constructor needs a name in `EncodingNames` and a declaration in
+  `proof_header`, plus an arm in `parse_proof_inner` and a matching entry in
+  `nested_proofs`.
+* A row is not a flat proof list. Which columns a step is about, and whether
+  there is an e-class step at all, are fixed when the rule is generated but
+  unknown to a parser that sees only the head — so they have to be carried,
+  either as literal columns beside the proofs or by making the head name the
+  rebuilt-column set.
+* The steps a firing writes must be exactly the columns whose `Congr` the chain
+  mints, in ascending column order. Leaving out the reflexive ones is sound and
+  saves nothing, since `simplify` already removes them.
 
 ## Refactor to do before this lands
 

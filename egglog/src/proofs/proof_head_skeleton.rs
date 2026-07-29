@@ -776,7 +776,8 @@ impl Builder<'_> {
     }
 }
 
-fn sym(store: &mut ProofStore, proof: ProofId) -> ProofId {
+/// `Sym(p)`: `p : a = b` reversed to `b = a`.
+pub(super) fn sym(store: &mut ProofStore, proof: ProofId) -> ProofId {
     let prop = store.get(proof).proposition().clone();
     store.push_shared_proof(
         SynthKey::Sym(proof),
@@ -787,9 +788,15 @@ fn sym(store: &mut ProofStore, proof: ProofId) -> ProofId {
     )
 }
 
-fn trans(store: &mut ProofStore, left: ProofId, right: ProofId) -> ProofId {
+/// `Trans(left, right)`. Panics unless the two meet at the same middle term.
+pub(super) fn trans(store: &mut ProofStore, left: ProofId, right: ProofId) -> ProofId {
     let lhs = store.get(left).lhs();
     let rhs = store.get(right).rhs();
+    assert_eq!(
+        store.get(left).rhs(),
+        store.get(right).lhs(),
+        "transitivity requires matching middle terms"
+    );
     store.push_shared_proof(
         SynthKey::Trans(left, right),
         Proof {
@@ -799,7 +806,9 @@ fn trans(store: &mut ProofStore, left: ProofId, right: ProofId) -> ProofId {
     )
 }
 
-fn congr(
+/// `Congr(base, child_index, child_proof)` proving `lhs = rhs`, which the caller
+/// computes: it already knows the term the rewritten child lands in.
+pub(super) fn congr(
     store: &mut ProofStore,
     base: ProofId,
     child_index: usize,
