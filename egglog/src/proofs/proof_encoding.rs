@@ -314,18 +314,18 @@ impl<'a> ProofInstrumentor<'a> {
         )
     }
 
-    /// Name one of a site's other propositions (see [`SiteRole`]) with a single
+    /// Name a site's [`SiteRole::CanonicalReflexive`] proposition with a single
     /// `Rule` row. Proof conversion rebuilds the composition this replaces.
-    fn roled_proof(
+    /// Panics unless the site is fixed at encoding time.
+    fn canonical_reflexive_proof(
         &mut self,
         stmts: &mut Vec<String>,
         justification: &Justification,
-        role: SiteRole,
     ) -> String {
         let site = justification
             .static_site()
             .expect("a roled proof needs a site fixed at encoding time")
-            .with_role(role);
+            .with_role(SiteRole::CanonicalReflexive);
         let roled = justification.at_site(site);
         self.rule_row(stmts, &roled)
     }
@@ -1584,7 +1584,7 @@ impl<'a> ProofInstrumentor<'a> {
                 let sym_ntd = self.mint_sym(chain);
                 self.mint_trans(&sym_ntd, chain)
             }
-            None => self.roled_proof(res, justification, SiteRole::CanonicalReflexive),
+            None => self.canonical_reflexive_proof(res, justification),
         };
 
         // Anchor both term proofs, dedup `fv_can` to the view e-class, and read the
