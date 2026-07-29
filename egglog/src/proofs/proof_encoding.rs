@@ -1889,8 +1889,7 @@ impl<'a> ProofInstrumentor<'a> {
         justification: &Justification,
         nat_conn: &mut NatConn,
     ) -> Vec<String> {
-        // Repeated constructor applications are already shared `let`s (see
-        // `ast::cse`). Normalize union operands to variables, then build each
+        // Normalize union operands to variables, then build each
         // freshly-constructed union operand directly into the other operand's
         // e-class (see proof_encoding.md, "Union in a rule").
         let symbol_gen = &mut self.egraph.parser.symbol_gen;
@@ -2183,9 +2182,9 @@ impl<'a> ProofInstrumentor<'a> {
             ResolvedNCommand::NormRule { rule } => {
                 res.extend(self.instrument_rule(rule));
             }
-            // A top-level action, or a block of them from `ast::cse`. The
-            // instrumented result runs as one local-scope block so the minted
-            // temporaries stay local (see `parse_program_as_local_actions`).
+            // A top-level action, or a block of them. The instrumented result
+            // runs as one local-scope block so the minted temporaries stay
+            // local (see `parse_program_as_local_actions`).
             ResolvedNCommand::CoreAction(_) | ResolvedNCommand::CoreActions(_) => {
                 let actions: &[ResolvedAction] = match command {
                     ResolvedNCommand::CoreAction(action) => std::slice::from_ref(action),
