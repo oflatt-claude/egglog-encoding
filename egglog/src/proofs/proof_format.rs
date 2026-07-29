@@ -897,8 +897,20 @@ impl ProofStore {
                         .unwrap_or_else(|| panic!("could not find rule with name {name}"));
                     rule.body.iter().map(is_custom_func_fact).collect()
                 };
-                // Premises are in body-fact order, one per fact (the checker rejects
-                // any count mismatch), so zip pairs each with its fact's decision.
+                // Premises are in body-fact order, so each pairs with its own fact's
+                // decision. There may be more premises than facts: `remove_globals`
+                // appends a lookup fact per global the rule mentions, and the encoder
+                // records a premise for each, while `prog` is the program from before
+                // that pass. Those extras are exactly the trailing ones, so dropping
+                // them is what pairs the rest correctly — but a *shorter* premise list
+                // would misalign the mask silently, so require the encoder's count to
+                // cover the body.
+                assert!(
+                    converted_premises.len() >= reflex_mask.len(),
+                    "rule {name} recorded {} premises for a body of {} facts",
+                    converted_premises.len(),
+                    reflex_mask.len()
+                );
                 let converted_premises: Vec<ProofId> = converted_premises
                     .into_iter()
                     .zip(reflex_mask)
