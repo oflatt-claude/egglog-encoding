@@ -71,7 +71,7 @@ impl ProofInstrumentor<'_> {
                 if self.egraph.proof_state.proofs_enabled {
                     let mut proof = proof_var;
                     for (i, arg_proof) in arg_proofs.into_iter().enumerate() {
-                        proof = self.mint_congr(action_lookups, &proof, i, &arg_proof);
+                        proof = self.mint_congr(&proof, i, &arg_proof);
                     }
                     proof
                 } else {
@@ -83,8 +83,8 @@ impl ProofInstrumentor<'_> {
                 let (v2, p2) = self.instrument_fact_expr(right_expr, res, action_lookups);
                 res.push(format!("(= {v1} {v2})"));
                 if self.egraph.proof_state.proofs_enabled {
-                    let sym_pf = self.mint_sym(action_lookups, &p1);
-                    self.mint_trans(action_lookups, &sym_pf, &p2)
+                    let sym_pf = self.mint_sym(&p1);
+                    self.mint_trans(&sym_pf, &p2)
                 } else {
                     "()".to_string()
                 }
@@ -153,6 +153,7 @@ impl ProofInstrumentor<'_> {
                         self.defer_lookup(
                             &fresh_proof,
                             vec![format!("(let {fresh_proof} ({term_proof_name} {var}))")],
+                            "",
                         );
                         // A term proof is the term's reflexive anchor.
                         self.mark_reflexive(&fresh_proof);
@@ -203,8 +204,7 @@ impl ProofInstrumentor<'_> {
                                 let mut proof = view_proof_var;
                                 for (i, arg_proof) in arg_proofs.into_iter().enumerate() {
                                     if let Some(arg_proof) = arg_proof {
-                                        proof =
-                                            self.mint_congr(action_lookups, &proof, i, &arg_proof);
+                                        proof = self.mint_congr(&proof, i, &arg_proof);
                                     }
                                 }
                                 proof
@@ -260,12 +260,14 @@ impl ProofInstrumentor<'_> {
     /// Return the instrumented query, the mints its premise proofs need, and one
     /// premise proof per fact.
     ///
-    /// The two reflexive premise proofs are deferred: an eq-sort variable's
-    /// `term_proof` fetch and a base value's `Fiat` triple are emitted only when
-    /// a minted row reads them — into `action_lookups` when that row is one of
-    /// these mints, and into the head's own actions when it is a rule proof row.
-    /// Either way the caller splices them into the rule's actions, which makes
-    /// the rule `:unsafe-seminaive`. Callers that don't build a proof
+    /// Only the mints nothing can defer come back in the second component: the
+    /// `Eval` marker of a container side condition and an eq-sort primitive
+    /// result's `term_proof` fetch. Everything else a premise proof is built
+    /// from — the reflexive lookups, and the `Congr`/`Sym`/`Trans` composing
+    /// them — is deferred, and lands wherever the premise is first read, which
+    /// for a rule is the head's own actions. Either component makes the rule
+    /// `:unsafe-seminaive`. A head that names no premise (`(panic …)`) reads
+    /// none of it, so none of it is emitted; callers that build no proof at all
     /// (`run :until`, `check`) discard the lookups and the premises, and must
     /// [`ProofInstrumentor::drop_pending_lookups`].
     pub(super) fn instrument_facts(
@@ -301,7 +303,7 @@ impl ProofInstrumentor<'_> {
         let mut group = vec![];
         let proof =
             self.term_proof_for_justification(&mut group, value, &to_ast, &Justification::Fiat);
-        self.defer_lookup(&proof, group);
+        self.defer_lookup(&proof, group, "");
         proof
     }
 }

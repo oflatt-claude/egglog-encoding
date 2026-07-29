@@ -628,6 +628,79 @@ neutral by construction. `proof_reconstruct_check` is unmoved: 13392 nodes, 0
 `stamped_ok=false`, 0 payload-free failures, 3540 bridges of which 288 move the
 term.
 
+### The skeleton composites are deferred too
+
+`mint_sym` / `mint_trans` / `mint_congr` register a deferred group instead of
+emitting; nothing composed onto a proof no statement reads is written. Over
+`egglog/tests`, `--proofs --mode desugar` goes from **13258** composite
+`Congr`/`Sym`/`Trans` rows to **12516**, and no unread one is left:
+
+| where | before | after |
+| --- | --- | --- |
+| top-level action blocks | 7823 | 7277 |
+| merge blocks | 2912 | 2898 |
+| rule heads | 1980 | 1949 |
+| `(panic …)` rule heads | 151 | 0 |
+| generated rebuild / `@UF` rules | 392 | 392 |
+
+**Only the three composites defer.** Every other `mint` writes a row that is
+load-bearing on its own — a term relation row, a `Rule_k` / `RuleLink` /
+`Rebuild` / `MergeIdx` / `Fiat` the encoding stores and reads back — so
+deferring it would only postpone a row that is always taken. The composites are
+the only ones whose sole product is a proof id for a *reader* to name.
+
+**A group does not have to be self-contained.** `defer_lookup` takes the
+variables the group reads, and a flush emits those groups first, so groups
+reference each other and each is emitted once, wherever it is first read. That
+is what lets a `Congr` chain defer as a chain rather than as one nested block:
+nesting breaks as soon as an operand is named twice, because the second naming
+would reference a binding buried inside a group that may itself be dropped.
+
+**Five statements read a proof without minting a row**, and each flushes
+explicitly: `union`'s `proof-of-max`/`proof-of-min` pair and its `@UF` row,
+`instrument_construct_into`'s view row, `ordered_union_merge`'s `@UF` row,
+`add_constructor_with_proof`'s `can_prf` (term proof + `set-if-empty` +
+`view-proof`), and the element `@UF` row a container-building primitive writes.
+Three others take only eager mints and need nothing: `update_fd_view` (every
+caller passes a `mint` result), the natural term proof, and
+`anchor_container_term_proof`. Missing one is loud rather than silent — the
+container `@UF` row was missed first time round and failed 12 tests with
+`Unbound symbol @pv125`.
+
+`drop_pending_lookups` grew from three call sites to five: a top-level action
+block and a custom function's merge body each build a term whose connector
+nothing goes on to compose with.
+
+**Fresh-name numbering does not move at all.** `fresh_id` runs where the mint is
+requested, not where it is emitted, so a dropped row leaves a gap rather than
+renumbering: over `eggcc-2mm.egg`, 320 `@pv` names disappear from the desugared
+program and not one of the remaining 38689 is renamed.
+
+**Runtime rows, and what the static count does not tell you.** A `(panic …)`
+head never fires, so all 151 of its rows were free at runtime — that column of
+the table buys nothing but generated program text. The rows that were really
+being written come from merge bodies (once per collision) and top-level blocks
+(once). Over `eggcc-2mm.egg`, three runs each: `@Sym` 92830/92510/92641 ->
+87059/87510/87612 (-5.7%), `@Trans` 91168/90697/90969 -> 85060/85723/85860
+(-5.9%), `@Congr` unmoved, all tables together -0.32%. Its merge blocks lost
+only 10 statements statically, which is where the ~10k rows come from. Over the
+146 corpus files that run deterministically, `@Sym` 1836 -> 1655, `@Trans`
+1345 -> 1253, `@Congr` unchanged.
+
+`eggcc_2mm_pass1` is flat: 24.63/25.07/25.13 s -> 25.14/25.16/25.15 s. 0.3%
+fewer rows is not a measurable time.
+
+206 `proofs/` tests pass with zero changed snapshots and zero changed shared
+snapshots, and the whole workspace plus `egglog-experimental --test files` is
+green. `proof_reconstruct_check` is unmoved: 13392 nodes, 0 `stamped_ok=false`,
+0 `payload_free=disagrees`, 3540 bridges of which 288 move the term.
+
+**A deferred row is unreachable, not merely unread.** Proof tables are
+`:internal-hidden :unextractable`, and every occurrence of the three composites
+in the generated program is inside a `(set …)` — no rule body joins on one, so
+the only way to a proof row is to follow a named id, and `RawProofStore` parses
+only what the extracted proof term reaches.
+
 ### Phase 4a result
 
 `RawProof::Rebuild { row, steps, eclass }` and its expansion are in; nothing
@@ -931,7 +1004,9 @@ converting everything.
   that `proof_normal_form` gives rule-body variables — those names are printed
   in a proof's `substitution`, so a shared counter made every mint-count change
   rewrite unrelated proof output. Verified by doubling every temporary and
-  observing zero snapshot changes. Keep them separate.
+  observing zero snapshot changes. Keep them separate. A phase that stops
+  *emitting* an already-requested mint does not even renumber the temporaries:
+  `fresh_id` runs where the mint is asked for, so the dropped name leaves a gap.
 * **View row counts must not move.** The `print-size` output in
   `files__shared_snapshot_*.snap` is the e-graph itself; this rework touches
   only proof tables, so any change there is a bug, not churn to bless. Proof
@@ -1021,16 +1096,14 @@ is deferred, like the `<S>Proof` read beside it". `lookup_global`'s dead
 reflexive `Fiat` is deferred until a row names it, which covers the unreachable
 `Fiat` an `arg_proofs` entry used to mint for a body primitive's argument.
 
-**What is left at those sites is the `Congr`/`Sym`/`Trans` a body premise
-composes over *view* proofs.** The `reflexive` set cannot collapse those — their
-operands are runtime view-row proofs, not statically reflexive — and deferring
-them is not the same trick, since the group a `mint` emits has to be
-self-contained. Over `egglog/tests`, `--proofs --mode desugar` emits 322 such
-composite rows that no statement names; 100 are in rule heads and 96 of those are
-heads that conclude nothing at all (`(panic …)`), which write no rule proof row
-for the premise composition to feed. The rest are top-level blocks and merge
-bodies. Deleting them wants the premise composition built lazily, the same shape
-as this slice one level up.
+~~**What is left at those sites is the `Congr`/`Sym`/`Trans` a body premise
+composes over *view* proofs.**~~ Taken — see "The skeleton composites are
+deferred too". Three claims made there were wrong: the count was 447 unnamed
+(742 counting the chains behind them), not 322; a group *can* reference another
+deferred group, so self-containment was not the obstacle; and the `(panic …)`
+heads, which the count made look like the prize, cost nothing at runtime,
+because a panic head never fires. The rows a firing actually wrote were in merge
+bodies.
 
 ## Deferred: the `check_shadowing` per-rule clone
 
@@ -1059,3 +1132,13 @@ number.
   the other's on every run.
 * `INSTA_UPDATE=always` masks cross-treatment disagreement, because each suite
   simply rewrites the file. Only a clean re-run is meaningful.
+* **Six corpus files do not reproduce their own row counts.** `eggcc-2mm`,
+  `hardboiled_conv1d_32`, `integer_math`, `math-microbenchmark`,
+  `math-microbenchmark-mini` and `web-demo/eqsolve` give different table sizes
+  on two runs of the *same* binary — `math-microbenchmark`'s `@Sym` moves by
+  ~3000 and `eggcc-2mm`'s `@SmallerView` by a couple of rows. They are also the
+  six largest, so a single before/after pair over them shows swings in both
+  directions that have nothing to do with the change. Compare a mean over
+  repeated runs, or restrict to the other 146 files. The snapshots are not
+  affected: what the tests assert is stable, only the internal table
+  populations are not.

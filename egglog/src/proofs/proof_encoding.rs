@@ -146,9 +146,17 @@ pub(crate) struct ProofInstrumentor<'a> {
     /// the generated programs.
     reflexive: HashSet<String>,
     /// Statements not emitted yet, keyed by the proof variable the group binds.
-    /// [`Self::mint`] emits a group when a row first reads its proof, so a proof
-    /// no composition keeps costs neither a read nor a row.
-    pending_lookups: HashMap<String, Vec<String>>,
+    /// A group is emitted where its proof is first read, so a proof no statement
+    /// reads costs neither a read nor a row (see [`Self::defer_lookup`]).
+    pending_lookups: HashMap<String, Pending>,
+}
+
+/// Statements held back until something reads the proof they bind.
+struct Pending {
+    stmts: Vec<String>,
+    /// Whitespace-separated variables `stmts` reads, so the groups binding those
+    /// still deferred are emitted first.
+    reads: String,
 }
 
 impl<'a> ProofInstrumentor<'a> {
@@ -461,19 +469,23 @@ impl<'a> ProofInstrumentor<'a> {
         let rhs_conn = rhs_conn.map(|c| self.connector_node(stmts, justification, &c));
         let (lhs_to_shared, rhs_to_shared) = if let Some(rc) = &rhs_conn {
             let lhs_to = if let Some(lc) = &lhs_conn {
-                let sym_lc = self.mint_sym(stmts, lc);
-                self.mint_trans(stmts, &sym_lc, &base_proof)
+                let sym_lc = self.mint_sym(lc);
+                self.mint_trans(&sym_lc, &base_proof)
             } else {
                 base_proof.clone()
             };
-            let rhs_to = self.mint_sym(stmts, rc);
+            let rhs_to = self.mint_sym(rc);
             (lhs_to, rhs_to)
         } else {
             let lc = lhs_conn.as_ref().unwrap();
-            let lhs_to = self.mint_sym(stmts, lc);
-            let rhs_to = self.mint_sym(stmts, &base_proof);
+            let lhs_to = self.mint_sym(lc);
+            let rhs_to = self.mint_sym(&base_proof);
             (lhs_to, rhs_to)
         };
+        // `proof-of-max`/`min` read the two sides directly rather than through a
+        // mint, so bind them here.
+        self.flush_lookups(stmts, &lhs_to_shared);
+        self.flush_lookups(stmts, &rhs_to_shared);
         let max_pf = self.fresh_var();
         stmts.push(format!(
             "(let {max_pf} (proof-of-max {lhs} {lhs_to_shared} {rhs} {rhs_to_shared}))"
@@ -482,8 +494,10 @@ impl<'a> ProofInstrumentor<'a> {
         stmts.push(format!(
             "(let {min_pf} (proof-of-min {lhs} {lhs_to_shared} {rhs} {rhs_to_shared}))"
         ));
-        let sym_min = self.mint_sym(stmts, &min_pf);
-        let edge = self.mint_trans(stmts, &max_pf, &sym_min);
+        let sym_min = self.mint_sym(&min_pf);
+        let edge = self.mint_trans(&max_pf, &sym_min);
+        // The `@UF` row below is the caller's, not a mint of ours.
+        self.flush_lookups(stmts, &edge);
         format!("(set ({uf_name} {larger}) (values {smaller} {edge}))")
     }
 
@@ -569,12 +583,12 @@ impl<'a> ProofInstrumentor<'a> {
                     &fv_nat,
                     &justification.at_site(plan.edge),
                 );
-                let to_dedup = self.mint_trans(res, &edge, chain);
+                let to_dedup = self.mint_trans(&edge, chain);
                 match target_conn.clone() {
                     Some(conn) => {
                         let conn = self.connector_node(res, justification, &conn);
-                        let sc = self.mint_sym(res, &conn);
-                        self.mint_trans(res, &sc, &to_dedup)
+                        let sc = self.mint_sym(&conn);
+                        self.mint_trans(&sc, &to_dedup)
                     }
                     None => to_dedup,
                 }
@@ -592,14 +606,16 @@ impl<'a> ProofInstrumentor<'a> {
         // shape to `target`'s term relation, making the term proof reconstruction
         // picks for `target` ambiguous (it reads term rows, not views).
         let dedup_disp = ListDisplay(&dedup_args, " ").to_string();
+        // The view row below carries the proof directly, not through a mint.
+        self.flush_lookups(res, &view_proof);
         res.push(format!(
             "(set ({view} {dedup_disp}) (values {target} {view_proof}))"
         ));
         res.push(format!("(let {guest} {target})"));
         let guest_conn = match &nat_to_dedup {
             Some(chain) => {
-                let sv = self.mint_sym(res, &view_proof);
-                Connector::Node(self.mint_trans(res, chain, &sv))
+                let sv = self.mint_sym(&view_proof);
+                Connector::Node(self.mint_trans(chain, &sv))
             }
             None => Connector::Role(plan.edge.with_role(SiteRole::GuestConnector)),
         };
@@ -651,14 +667,16 @@ impl<'a> ProofInstrumentor<'a> {
         let mut mints = vec![];
         let displaced_pf = match carried {
             CarriedProofs::KeyToParent => {
-                let sym_pf = self.mint_sym(&mut mints, "hi_pf_");
-                self.mint_trans(&mut mints, &sym_pf, "lo_pf_")
+                let sym_pf = self.mint_sym("hi_pf_");
+                self.mint_trans(&sym_pf, "lo_pf_")
             }
             CarriedProofs::EclassToTerm => {
-                let sym_pf = self.mint_sym(&mut mints, "lo_pf_");
-                self.mint_trans(&mut mints, "hi_pf_", &sym_pf)
+                let sym_pf = self.mint_sym("lo_pf_");
+                self.mint_trans("hi_pf_", &sym_pf)
             }
         };
+        // The `@UF` row below reads the composition directly, not through a mint.
+        self.flush_lookups(&mut mints, &displaced_pf);
         let mints_str = mints.join("\n                  ");
         format!(
             "((let hi_pf_ (proof-of-max old0 old1 new0 new1))
@@ -769,6 +787,9 @@ impl<'a> ProofInstrumentor<'a> {
             &mut idx,
             &mut nat_conn,
         );
+        // The merge body's outermost term records a connector nothing composes
+        // with; whatever is still deferred reached no statement.
+        self.drop_pending_lookups();
         let row_proof = if self.egraph.proof_state.proofs_enabled {
             let fresh = self.term_proof_for_justification(
                 &mut body_code,
@@ -1234,17 +1255,21 @@ impl<'a> ProofInstrumentor<'a> {
     }
 
     /// `Sym(proof)`, or `proof` itself when it is reflexive.
-    pub(crate) fn mint_sym(&mut self, stmts: &mut Vec<String>, proof: &str) -> String {
+    ///
+    /// Deferred, like the other two composites: a skeleton step is emitted only
+    /// where something reads it, and a head that concludes nothing writes none.
+    pub(crate) fn mint_sym(&mut self, proof: &str) -> String {
         if self.is_reflexive(proof) {
             return proof.to_string();
         }
         let sym = self.proof_names().eq_sym_constructor.clone();
         let proof_sort = self.proof_sort();
-        self.mint(stmts, &sym, proof, &proof_sort)
+        self.mint_deferred(&sym, proof, &proof_sort)
     }
 
-    /// `Trans(lhs, rhs)`, dropping whichever side is reflexive.
-    pub(crate) fn mint_trans(&mut self, stmts: &mut Vec<String>, lhs: &str, rhs: &str) -> String {
+    /// `Trans(lhs, rhs)`, dropping whichever side is reflexive. Deferred, see
+    /// [`Self::mint_sym`].
+    pub(crate) fn mint_trans(&mut self, lhs: &str, rhs: &str) -> String {
         if self.is_reflexive(lhs) {
             return rhs.to_string();
         }
@@ -1253,32 +1278,37 @@ impl<'a> ProofInstrumentor<'a> {
         }
         let trans = self.proof_names().eq_trans_constructor.clone();
         let proof_sort = self.proof_sort();
-        self.mint(stmts, &trans, &format!("{lhs} {rhs}"), &proof_sort)
+        self.mint_deferred(&trans, &format!("{lhs} {rhs}"), &proof_sort)
     }
 
-    /// `Congr(acc, idx, step)`, or `acc` when `step` is reflexive.
-    pub(crate) fn mint_congr(
-        &mut self,
-        stmts: &mut Vec<String>,
-        acc: &str,
-        idx: usize,
-        step: &str,
-    ) -> String {
+    /// `Congr(acc, idx, step)`, or `acc` when `step` is reflexive. Deferred, see
+    /// [`Self::mint_sym`].
+    pub(crate) fn mint_congr(&mut self, acc: &str, idx: usize, step: &str) -> String {
         if self.is_reflexive(step) {
             return acc.to_string();
         }
         let congr = self.proof_names().congr_constructor.clone();
         let proof_sort = self.proof_sort();
-        self.mint(stmts, &congr, &format!("{acc} {idx} {step}"), &proof_sort)
+        self.mint_deferred(&congr, &format!("{acc} {idx} {step}"), &proof_sort)
     }
 
-    /// Hold back `group`, the statements binding `proof`, until a minted row
-    /// reads `proof`. A proof that no row ends up reading is never bound, and
-    /// [`Self::drop_pending_lookups`] discards it. `group` must be
-    /// self-contained: it is emitted as a block, so anything it names other than
-    /// `proof` has to be bound outside it.
-    pub(crate) fn defer_lookup(&mut self, proof: &str, group: Vec<String>) {
-        self.pending_lookups.insert(proof.to_string(), group);
+    /// Hold back `group`, the statements binding `proof`, until something reads
+    /// `proof`. A proof that nothing ends up reading is never bound, and
+    /// [`Self::drop_pending_lookups`] discards it.
+    ///
+    /// `reads` lists the variables `group` names besides `proof`, whitespace
+    /// separated. Any of them still deferred is emitted first, so a group need
+    /// not be self-contained: only what is bound outside the deferral machinery
+    /// altogether — a query variable, or a statement already emitted — has to be
+    /// in scope where the flush lands.
+    pub(crate) fn defer_lookup(&mut self, proof: &str, group: Vec<String>, reads: &str) {
+        self.pending_lookups.insert(
+            proof.to_string(),
+            Pending {
+                stmts: group,
+                reads: reads.to_string(),
+            },
+        );
     }
 
     /// Discard the statements still held back, whose proofs nothing read.
@@ -1286,8 +1316,16 @@ impl<'a> ProofInstrumentor<'a> {
         self.pending_lookups.clear();
     }
 
-    /// Emit the deferred groups `args_joined` reads, keeping each binding ahead
-    /// of the statement reading it.
+    /// Emit the deferred group binding `var`, for a reader that does not go
+    /// through [`Self::mint`] — a statement built by `format!` rather than as a
+    /// row of its own.
+    fn flush_lookups(&mut self, stmts: &mut Vec<String>, var: &str) {
+        self.emit_pending_lookups(stmts, var);
+    }
+
+    /// Emit the deferred groups `args_joined` reads, and transitively the groups
+    /// those read, keeping each binding ahead of the statement reading it. A
+    /// group is emitted at most once, wherever it is first read.
     fn emit_pending_lookups(&mut self, stmts: &mut Vec<String>, args_joined: &str) {
         if self.pending_lookups.is_empty() {
             return;
@@ -1295,7 +1333,8 @@ impl<'a> ProofInstrumentor<'a> {
         for arg in args_joined.split_whitespace() {
             let arg = arg.trim_matches(|c| c == '(' || c == ')');
             if let Some(group) = self.pending_lookups.remove(arg) {
-                stmts.extend(group);
+                self.emit_pending_lookups(stmts, &group.reads);
+                stmts.extend(group.stmts);
             }
         }
     }
@@ -1325,6 +1364,17 @@ impl<'a> ProofInstrumentor<'a> {
         self.emit_pending_lookups(stmts, args_joined);
         let v = self.fresh_id(stmts, out_sort);
         stmts.push(format!("(set ({name} {args_joined} {v}) ())"));
+        v
+    }
+
+    /// [`Self::mint`], held back until something reads the fresh variable (see
+    /// [`Self::defer_lookup`]). The id is still allocated here, so a row that no
+    /// reader ever asks for costs a counter bump and nothing else.
+    fn mint_deferred(&mut self, name: &str, args_joined: &str, out_sort: &str) -> String {
+        let mut group = vec![];
+        let v = self.fresh_id(&mut group, out_sort);
+        group.push(format!("(set ({name} {args_joined} {v}) ())"));
+        self.defer_lookup(&v, group, args_joined);
         v
     }
 
@@ -1495,7 +1545,7 @@ impl<'a> ProofInstrumentor<'a> {
             for (i, (_, _, conn)) in children.iter().enumerate() {
                 if let Some(conn) = conn {
                     let conn = self.connector_node(res, justification, conn);
-                    chain = self.mint_congr(res, &chain, i, &conn);
+                    chain = self.mint_congr(&chain, i, &conn);
                 }
             }
             chain
@@ -1555,8 +1605,8 @@ impl<'a> ProofInstrumentor<'a> {
         );
         let can_prf = match &to_dedup {
             Some(chain) => {
-                let sym_ntd = self.mint_sym(res, chain);
-                self.mint_trans(res, &sym_ntd, chain)
+                let sym_ntd = self.mint_sym(chain);
+                self.mint_trans(&sym_ntd, chain)
             }
             None => self.roled_proof(res, justification, SiteRole::CanonicalReflexive),
         };
@@ -1567,6 +1617,8 @@ impl<'a> ProofInstrumentor<'a> {
         let vprf = self.fresh_var();
         let view_proof = crate::proofs::proof_fresh::view_proof_prim_name(&view);
         let dedup_args = ListDisplay(&dedup_args, " ");
+        // The three statements below read `can_prf` directly, not through a mint.
+        self.flush_lookups(res, &can_prf);
         res.push(format!(
             "(set ({term_proof_constructor} {fv_nat}) {nat_prf})"
         ));
@@ -1586,10 +1638,10 @@ impl<'a> ProofInstrumentor<'a> {
 
         let connector = match &to_dedup {
             // connector `fv_nat = dedup` = Trans(nat_to_dedup, Sym(dedup = f(children))).
-            // `sym_vprf` reads the `vprf` let, so it must follow the statements above.
+            // `sym_vprf` reads the `vprf` let, so it lands after the statements above.
             Some(chain) => {
-                let sym_vprf = self.mint_sym(res, &vprf);
-                Connector::Node(self.mint_trans(res, chain, &sym_vprf))
+                let sym_vprf = self.mint_sym(&vprf);
+                Connector::Node(self.mint_trans(chain, &sym_vprf))
             }
             None => Connector::Role(
                 justification
@@ -1831,6 +1883,9 @@ impl<'a> ProofInstrumentor<'a> {
                                 }) if container_proof && asort.is_eq_sort() => {
                                     let uf = self.uf_name(asort.name());
                                     let conn = self.connector_node(res, proof, &conn);
+                                    // The `@UF` row reads the connector directly,
+                                    // not through a mint.
+                                    self.flush_lookups(res, &conn);
                                     res.push(format!("(set ({uf} {natural}) (values {a} {conn}))"));
                                     build_args.push(natural);
                                 }
@@ -1940,9 +1995,9 @@ impl<'a> ProofInstrumentor<'a> {
             .then(HeadChain::default);
         let actions = self.instrument_actions(&rule.head.0, &proof, &mut nat_conn);
         self.head_chain = None;
-        // A body variable's term-proof read is emitted by the first row naming it,
-        // which may be a head row; whatever is still deferred reached no row, so
-        // the rule never needs to read it.
+        // A premise proof and the lookups under it are emitted by the first
+        // statement naming them, which is a head row; whatever is still deferred
+        // reached none, so the rule never needs to compute it.
         self.drop_pending_lookups();
         let name = &rule.name;
         let ruleset_opt = if rule.ruleset.is_empty() {
@@ -2170,6 +2225,9 @@ impl<'a> ProofInstrumentor<'a> {
                 let instrumented = self
                     .instrument_actions(actions, &Justification::Fiat, &mut nat_conn)
                     .join("\n");
+                // A term built here records a connector nothing may go on to
+                // compose with; whatever is still deferred reached no statement.
+                self.drop_pending_lookups();
                 res.extend(self.parse_program_as_local_actions(&instrumented));
             }
             ResolvedNCommand::LetBegin(..) => {
