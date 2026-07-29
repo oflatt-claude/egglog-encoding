@@ -22,7 +22,9 @@ type Key = (Value, String);
 struct RootExtractor {
     cache: HashMap<Key, Option<TermId>>,
     active: HashSet<Key>,
-    scanned: ScannedRows,
+    /// Every function the search has read so far, keyed by its index in
+    /// `EGraph::functions`. Scoped to one extraction run.
+    scanned: HashMap<usize, FunctionRows>,
 }
 
 /// What the frame on top of the stack needs from the driver.
@@ -152,37 +154,6 @@ impl FunctionRows {
     }
 }
 
-/// Every function the search has read so far, keyed by its index in
-/// `EGraph::functions`. Scoped to one extraction run.
-#[derive(Default)]
-struct ScannedRows(HashMap<usize, FunctionRows>);
-
-impl ScannedRows {
-    /// The rows of `func`, reading them from the backend on first use.
-    fn scan(&mut self, egraph: &EGraph, index: usize, func: &Function) -> &FunctionRows {
-        self.0
-            .entry(index)
-            .or_insert_with(|| FunctionRows::build(egraph, func))
-    }
-
-    /// The rows of a function [`Self::scan`] has already read.
-    fn rows(&self, index: usize) -> &FunctionRows {
-        self.0
-            .get(&index)
-            .expect("the function whose rows are being tried was scanned")
-    }
-}
-
-/// How a frame's state machine continues after one turn.
-enum Turn {
-    /// Move to this stage and take another turn.
-    Enter(Stage),
-    /// Hand this step back to the driver.
-    Yield(Step),
-    /// The exact reconstruction failed; try the canonical representative.
-    FallBack,
-}
-
 impl EqStage {
     fn new() -> Self {
         Self {
@@ -202,13 +173,16 @@ impl EqStage {
     fn next_row(
         &mut self,
         egraph: &EGraph,
-        scanned: &mut ScannedRows,
+        scanned: &mut HashMap<usize, FunctionRows>,
         value: Value,
         sort: &ArcSort,
     ) -> Option<Vec<Value>> {
         loop {
             if let Some(position) = self.rows.next() {
-                return Some(scanned.rows(self.func).row(position).to_vec());
+                let rows = scanned
+                    .get(&self.func)
+                    .expect("the function whose rows are being tried was scanned");
+                return Some(rows.row(position).to_vec());
             }
 
             let (_, func) = egraph.functions.get_index(self.unscanned)?;
@@ -225,7 +199,10 @@ impl EqStage {
                 continue;
             }
 
-            self.rows = scanned.scan(egraph, self.func, func).group(value);
+            self.rows = scanned
+                .entry(self.func)
+                .or_insert_with(|| FunctionRows::build(egraph, func))
+                .group(value);
         }
     }
 }
@@ -236,48 +213,48 @@ impl Frame {
     fn advance(
         &mut self,
         egraph: &EGraph,
-        scanned: &mut ScannedRows,
+        scanned: &mut HashMap<usize, FunctionRows>,
         termdag: &mut TermDag,
         resumed: Option<Option<TermId>>,
     ) -> Step {
         let mut child = resumed;
         loop {
-            let turn = match &mut self.stage {
+            match &mut self.stage {
                 Stage::Start => {
                     if self.sort.is_container_sort() {
-                        Turn::Enter(Stage::Container {
+                        self.stage = Stage::Container {
                             elements: self
                                 .sort
                                 .inner_values(egraph.backend.container_values(), self.value),
                             children: Vec::new(),
-                        })
+                        };
                     } else if self.sort.is_eq_sort() {
-                        Turn::Enter(Stage::Eq(EqStage::new()))
+                        self.stage = Stage::Eq(EqStage::new());
                     } else {
-                        Turn::Yield(Step::Done(Some(self.sort.reconstruct_termdag_base(
+                        return Step::Done(Some(self.sort.reconstruct_termdag_base(
                             egraph.backend.base_values(),
                             self.value,
                             termdag,
-                        ))))
+                        )));
                     }
                 }
                 // An element with no term sinks the whole container.
-                Stage::Container { .. } if matches!(child, Some(None)) => Turn::FallBack,
+                Stage::Container { .. } if matches!(child, Some(None)) => {
+                    return self.fall_back(egraph);
+                }
                 Stage::Container { elements, children } => {
                     if let Some(Some(term)) = child.take() {
                         children.push(term);
                     }
-                    match elements.get(children.len()) {
-                        Some((sort, value)) => Turn::Yield(Step::Need(*value, sort.clone())),
-                        None => {
-                            Turn::Yield(Step::Done(Some(self.sort.reconstruct_termdag_container(
-                                egraph.backend.container_values(),
-                                self.value,
-                                termdag,
-                                std::mem::take(children),
-                            ))))
-                        }
-                    }
+                    return match elements.get(children.len()) {
+                        Some((sort, value)) => Step::Need(*value, sort.clone()),
+                        None => Step::Done(Some(self.sort.reconstruct_termdag_container(
+                            egraph.backend.container_values(),
+                            self.value,
+                            termdag,
+                            std::mem::take(children),
+                        ))),
+                    };
                 }
                 Stage::Eq(eq) => {
                     match child.take() {
@@ -298,48 +275,43 @@ impl Frame {
                                 .functions
                                 .get_index(eq.func)
                                 .expect("the pending row's function");
-                            if children.len() == func.extraction_num_children() {
-                                Turn::Yield(Step::Done(Some(termdag.app(
+                            return if children.len() == func.extraction_num_children() {
+                                Step::Done(Some(termdag.app(
                                     func.extraction_term_name().to_string(),
                                     std::mem::take(children),
-                                ))))
+                                )))
                             } else {
                                 let index = children.len();
-                                Turn::Yield(Step::Need(
-                                    row[index],
-                                    func.schema.input[index].clone(),
-                                ))
-                            }
+                                Step::Need(row[index], func.schema.input[index].clone())
+                            };
                         }
                         None => match eq.next_row(egraph, scanned, self.value, &self.sort) {
-                            Some(row) => {
-                                eq.row = Some((row, Vec::new()));
-                                continue;
-                            }
-                            None => Turn::FallBack,
+                            Some(row) => eq.row = Some((row, Vec::new())),
+                            None => return self.fall_back(egraph),
                         },
                     }
                 }
-                Stage::Canonical => Turn::Yield(Step::Done(
-                    child
-                        .take()
-                        .expect("the canonical representative was resolved"),
-                )),
-            };
-
-            match turn {
-                Turn::Enter(stage) => self.stage = stage,
-                Turn::Yield(step) => return step,
-                Turn::FallBack => {
-                    let canonical = find_canonical(egraph, self.value, &self.sort);
-                    if canonical == self.value {
-                        return Step::Done(None);
-                    }
-                    self.stage = Stage::Canonical;
-                    return Step::Need(canonical, self.sort.clone());
+                Stage::Canonical => {
+                    return Step::Done(
+                        child
+                            .take()
+                            .expect("the canonical representative was resolved"),
+                    );
                 }
             }
         }
+    }
+
+    /// Give up on reconstructing this node exactly and wait on the canonical
+    /// representative's term instead, or report no term when the node already is
+    /// the representative.
+    fn fall_back(&mut self, egraph: &EGraph) -> Step {
+        let canonical = find_canonical(egraph, self.value, &self.sort);
+        if canonical == self.value {
+            return Step::Done(None);
+        }
+        self.stage = Stage::Canonical;
+        Step::Need(canonical, self.sort.clone())
     }
 }
 
