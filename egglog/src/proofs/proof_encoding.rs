@@ -17,12 +17,11 @@ use crate::*;
 pub(crate) type NatConn = HashMap<String, NatEntry>;
 
 /// A [`NatConn`] entry: a built term's natural (as-built) id and the connector
-/// proof `natural = canonical` (`None` when the term needed no
-/// canonicalization).
+/// proof `natural = canonical`.
 #[derive(Clone)]
 pub(crate) struct NatEntry {
     pub natural: String,
-    pub connector: Option<Connector>,
+    pub connector: Connector,
 }
 
 /// How a built term's connector proof `natural = canonical` is named.
@@ -410,10 +409,8 @@ impl<'a> ProofInstrumentor<'a> {
 
         // Natural id + connector (`natural = deduped`) for each operand, if it was
         // a canonicalized constructor term. Leaves / body matches have neither.
-        let lhs_info = nat_conn.get(lhs).cloned();
-        let rhs_info = nat_conn.get(rhs).cloned();
-        let lhs_conn = lhs_info.as_ref().and_then(|e| e.connector.clone());
-        let rhs_conn = rhs_info.as_ref().and_then(|e| e.connector.clone());
+        let lhs_conn = nat_conn.get(lhs).map(|e| e.connector.clone());
+        let rhs_conn = nat_conn.get(rhs).map(|e| e.connector.clone());
 
         // Neither operand was a canonicalized constructor term (no connector), so
         // both e-classes' ASTs are stable: build the edge proof directly over them.
@@ -585,7 +582,7 @@ impl<'a> ProofInstrumentor<'a> {
         let term_proof_ctor = self.term_proof_name(&sort_name);
         res.push(format!("(set ({term_proof_ctor} {fv_nat}) {nat_prf})"));
         let target_nat = Self::natural_of(nat_conn, target);
-        let target_conn = nat_conn.get(target).and_then(|e| e.connector.clone());
+        let target_conn = nat_conn.get(target).map(|e| e.connector.clone());
         let view_proof = match &nat_to_dedup {
             Some(chain) => {
                 let edge = self.edge_proof(
@@ -635,7 +632,7 @@ impl<'a> ProofInstrumentor<'a> {
             guest.to_string(),
             NatEntry {
                 natural: fv_nat,
-                connector: Some(guest_conn),
+                connector: guest_conn,
             },
         );
     }
@@ -1181,11 +1178,7 @@ impl<'a> ProofInstrumentor<'a> {
         nat_conn: &NatConn,
         row_site: SiteIndex,
     ) -> String {
-        if let Some(NatEntry {
-            connector: Some(connector),
-            ..
-        }) = nat_conn.get(e_value).cloned()
-        {
+        if let Some(NatEntry { connector, .. }) = nat_conn.get(e_value).cloned() {
             match connector {
                 Connector::Node(connector) => {
                     let proof_sort = self.proof_sort();
@@ -1509,7 +1502,7 @@ impl<'a> ProofInstrumentor<'a> {
         let children: Vec<(String, String, Option<Connector>)> = args
             .iter()
             .map(|a| match nat_conn.get(a) {
-                Some(e) => (a.clone(), e.natural.clone(), e.connector.clone()),
+                Some(e) => (a.clone(), e.natural.clone(), Some(e.connector.clone())),
                 None => (a.clone(), a.clone(), None),
             })
             .collect();
@@ -1638,7 +1631,7 @@ impl<'a> ProofInstrumentor<'a> {
             dedup.clone(),
             NatEntry {
                 natural: fv_nat,
-                connector: Some(connector),
+                connector,
             },
         );
         dedup
@@ -1855,12 +1848,11 @@ impl<'a> ProofInstrumentor<'a> {
                         let mut build_args = Vec::with_capacity(args.len());
                         for (a, asort) in args.iter().zip(specialized_primitive.input()) {
                             match nat_conn.get(a).cloned() {
-                                Some(NatEntry {
-                                    natural,
-                                    connector: Some(conn),
-                                }) if container_proof && asort.is_eq_sort() => {
+                                Some(NatEntry { natural, connector })
+                                    if container_proof && asort.is_eq_sort() =>
+                                {
                                     let uf = self.uf_name(asort.name());
-                                    let conn = self.connector_node(res, proof, &conn);
+                                    let conn = self.connector_node(res, proof, &connector);
                                     // The `@UF` row reads the connector directly,
                                     // not through a mint.
                                     self.flush_lookups(res, &conn);
