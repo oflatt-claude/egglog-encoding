@@ -1,5 +1,4 @@
 pub mod check_shadowing;
-pub mod cse;
 pub mod desugar;
 mod expr;
 mod parse;
