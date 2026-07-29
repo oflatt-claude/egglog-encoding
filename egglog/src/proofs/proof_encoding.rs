@@ -1947,11 +1947,7 @@ impl<'a> ProofInstrumentor<'a> {
         let eval_opt = if rule.eval_mode.is_naive() {
             ":naive"
         } else if reads_in_rhs {
-            if self.egraph.proof_state.force_proof_naive {
-                ":naive"
-            } else {
-                ":unsafe-seminaive"
-            }
+            self.rhs_read_eval_opt()
         } else {
             ""
         };

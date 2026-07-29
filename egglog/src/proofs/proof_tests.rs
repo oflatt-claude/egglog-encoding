@@ -328,10 +328,11 @@ mod tests {
         }
     }
 
-    /// The proof encoder reads body variables' `term_proof`s from the RHS via
-    /// `:unsafe-seminaive` lookups. Assert this produces the same database as
-    /// the safe baseline (the same rules annotated `:naive`), for a hardcoded
-    /// handful of files (running it across all tests would be too slow).
+    /// The encoding reads `@UF` and `term_proof` from rule actions under
+    /// `:unsafe-seminaive` — in user rule heads and in the indexed rebuild
+    /// rule. Assert this produces the same database as the safe baseline (the
+    /// same rules annotated `:naive`), for a hardcoded handful of files
+    /// (running it across all tests would be too slow).
     #[test]
     fn unsafe_seminaive_matches_naive() {
         let files = [
@@ -345,7 +346,6 @@ mod tests {
             let source = std::fs::read_to_string(file)
                 .unwrap_or_else(|e| panic!("couldn't read {file}: {e}"));
 
-            // Guard against a vacuous comparison: the two encodings must differ.
             let encode = |naive: bool| -> String {
                 let mut egraph = crate::EGraph::new_with_proofs();
                 egraph.proof_state.force_proof_naive = naive;
@@ -357,9 +357,28 @@ mod tests {
                     .collect::<Vec<_>>()
                     .join("\n")
             };
+
+            // Guard against a vacuous comparison: both `:unsafe-seminaive`
+            // sites must be present, and the knob must flip every one of them,
+            // since a rule left `:unsafe-seminaive` runs identically on both
+            // sides. Only the rebuild rules carry `:internal-include-subsumed`.
+            let unsafe_encoding = encode(false);
+            let (rebuild, rule_head): (Vec<&str>, Vec<&str>) = unsafe_encoding
+                .lines()
+                .filter(|line| line.contains(":unsafe-seminaive"))
+                .partition(|line| line.contains(":internal-include-subsumed"));
             assert!(
-                encode(false).contains(":unsafe-seminaive") && encode(false) != encode(true),
-                "expected {file} to exercise the `:unsafe-seminaive` encoding path"
+                !rule_head.is_empty(),
+                "expected {file} to encode a rule head `:unsafe-seminaive`"
+            );
+            assert!(
+                !rebuild.is_empty(),
+                "expected {file} to encode the rebuild rule `:unsafe-seminaive`"
+            );
+            assert!(
+                !encode(true).contains(":unsafe-seminaive"),
+                "`force_proof_naive` left `:unsafe-seminaive` in {file}, so the \
+                 comparison does not cover those rules"
             );
 
             // `print-size` summarizes the whole database (per-function row

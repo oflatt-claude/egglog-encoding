@@ -207,8 +207,8 @@ impl ProofInstrumentor<'_> {
     /// differently half-rewritten row for a later pass to merge.
     ///
     /// `uf_canon` reads `@UF_<S>` in the action, which is what makes the rule
-    /// `:unsafe-seminaive`; the driving `@UF` delta in the body is what makes that
-    /// read sound.
+    /// `:unsafe-seminaive` (or `:naive` under the test knob); the driving `@UF`
+    /// delta in the body is what makes that read sound.
     fn indexed_rebuild_rule(
         &mut self,
         fdecl: &ResolvedFunctionDecl,
@@ -326,8 +326,9 @@ impl ProofInstrumentor<'_> {
         );
         let ruleset = self.proof_names().rebuilding_ruleset_name.clone();
         let fresh_name = self.egraph.parser.symbol_gen.fresh("rebuild_rule");
+        let eval_opt = self.rhs_read_eval_opt();
         format!(
-            "(rule ({facts})\n     ({actions})\n     :ruleset {ruleset} :unsafe-seminaive :name \"{fresh_name}\" :internal-include-subsumed)\n"
+            "(rule ({facts})\n     ({actions})\n     :ruleset {ruleset} {eval_opt} :name \"{fresh_name}\" :internal-include-subsumed)\n"
         )
     }
 

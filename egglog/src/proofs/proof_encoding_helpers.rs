@@ -397,6 +397,17 @@ impl ProofInstrumentor<'_> {
         self.egraph.proof_state.proofs_enabled
     }
 
+    /// The evaluation-mode option for a generated rule that reads the database
+    /// in its action: `:unsafe-seminaive`, or `:naive` (the safe whole-database
+    /// baseline) under the `force_proof_naive` test knob.
+    pub(crate) fn rhs_read_eval_opt(&self) -> &'static str {
+        if self.egraph.proof_state.force_proof_naive {
+            ":naive"
+        } else {
+            ":unsafe-seminaive"
+        }
+    }
+
     /// Returns the proof output type: `Proof` when proofs are enabled, `Unit` otherwise.
     pub(crate) fn proof_type_str(&self) -> &str {
         if self.proofs_enabled() {
