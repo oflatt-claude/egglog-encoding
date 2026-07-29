@@ -112,6 +112,16 @@ fn run_merge_subexpr(
     .into())
 }
 
+/// A rule proof's premises and bridges, as terms, gathered across the chain of
+/// conclusion sites it is the last of.
+struct RuleColumns {
+    name: String,
+    /// One per body fact of the rule.
+    premises: Vec<TermId>,
+    /// One per subterm the head interned before this site, in construction order.
+    bridges: Vec<TermId>,
+}
+
 /// A proof straight from the e-graph, not exposed to users.
 struct RawProofStore {
     term_dag: TermDag,
@@ -156,13 +166,12 @@ enum RawProof {
     /// grounded equality from the head of the rule. The substitution is implicit —
     /// in [`Justification::Rule`] it is explicit.
     ///
-    /// The second list is the first extended with one *bridge* premise per subterm
-    /// the head interned — the view-row proof that says which e-class it landed in
-    /// — newest first, so the lists' leading difference is exactly the bridges.
-    /// The site names which of the head's conclusions the proof is about and which
-    /// of that site's propositions it states ([`SiteRef::encode`]); conversion
-    /// derives the equality from those and the bridges, so the stored `t1`/`t2`
-    /// are ignored.
+    /// The second list holds one *bridge* premise per subterm the head interned —
+    /// the view-row proof that says which e-class it landed in — in construction
+    /// order. The site names which of the head's conclusions the proof is about
+    /// and which of that site's propositions it states ([`SiteRef::encode`]);
+    /// conversion derives the equality from those and the bridges, so the stored
+    /// `t1`/`t2` are ignored.
     Rule(
         String,
         Vec<RawProofId>,
@@ -417,12 +426,13 @@ impl RawProofStore {
             return vec![];
         };
         let names = &self.names;
+        if names.fused_rule_arity(head).is_some() || *head == names.rule_link_constructor {
+            let RuleColumns {
+                premises, bridges, ..
+            } = self.rule_columns(term_id);
+            return premises.into_iter().chain(bridges).collect();
+        }
         match args.len() {
-            6 if *head == names.rule_constructor => {
-                let mut nested = self.list_elements(args[1]);
-                nested.extend(self.list_elements(args[2]));
-                nested
-            }
             4 if *head == names.merge_fn_idx_constructor => vec![args[1], args[2]],
             3 if *head == names.merge_fn_row_constructor => vec![args[1], args[2]],
             3 if *head == names.congr_constructor => vec![args[0], args[2]],
@@ -438,18 +448,44 @@ impl RawProofStore {
         }
     }
 
-    /// The proofs consed onto a proof list, front to back.
-    fn list_elements(&self, list_term: TermId) -> Vec<TermId> {
-        let mut elements = vec![];
-        let mut cell = list_term;
-        while let Term::App(head, args) = self.term_dag.get(cell)
-            && *head == self.names.pcons
-            && args.len() == 2
-        {
-            elements.push(args[0]);
-            cell = args[1];
+    /// Read a rule proof's columns, walking the chain of later-site links with a
+    /// loop rather than recursion: a head chains one link per conclusion site.
+    ///
+    /// The premises and the bridges are told apart structurally rather than by
+    /// counting: the row ending the chain carries every premise inline, and each
+    /// link adds exactly one bridge.
+    fn rule_columns(&self, term_id: TermId) -> RuleColumns {
+        let mut bridges = vec![];
+        let mut cell = term_id;
+        loop {
+            let Term::App(head, args) = self.term_dag.get(cell) else {
+                panic!("expected a rule proof term. Proof parsing assumes valid proofs.");
+            };
+            if *head == self.names.rule_link_constructor {
+                assert!(args.len() == 6, "{head} should have 6 args");
+                bridges.push(args[2]);
+                cell = args[1];
+                continue;
+            }
+            let Some(arity) = self.names.fused_rule_arity(head) else {
+                panic!(
+                    "expected a rule proof constructor, got {head}. Proof parsing assumes valid proofs."
+                );
+            };
+            assert!(
+                args.len() == arity + 4,
+                "{head} should have {} args",
+                arity + 4
+            );
+            // Recorded newest first, since a subterm's view-row proof is only
+            // readable once the subterm is interned.
+            bridges.reverse();
+            return RuleColumns {
+                name: self.parse_string(args[0]),
+                premises: args[1..arity + 1].to_vec(),
+                bridges,
+            };
         }
-        elements
     }
 
     fn parse_proof(&mut self, term_id: TermId) -> RawProofId {
@@ -474,13 +510,21 @@ impl RawProofStore {
         let proof = if head == self.names.fiat_constructor {
             assert!(args.len() == 2, "fiat constructor should have 2 args");
             RawProof::Fiat(args[0], args[1])
-        } else if head == self.names.rule_constructor {
-            assert!(args.len() == 6, "rule constructor should have 6 args");
-            let name = self.parse_string(args[0]);
-            let premises = self.parse_proof_list(args[1]);
-            let with_bridges = self.parse_proof_list(args[2]);
-            let site = self.parse_int(args[5]);
-            RawProof::Rule(name, premises, with_bridges, args[3], args[4], site)
+        } else if self.names.fused_rule_arity(&head).is_some()
+            || head == self.names.rule_link_constructor
+        {
+            let RuleColumns {
+                name,
+                premises,
+                bridges,
+            } = self.rule_columns(term_id);
+            // The last three columns are the same on both shapes.
+            let [lhs, rhs, site] = args[args.len() - 3..] else {
+                unreachable!("a rule proof has at least three columns")
+            };
+            let premises = premises.iter().map(|arg| self.parse_proof(*arg)).collect();
+            let bridges = bridges.iter().map(|arg| self.parse_proof(*arg)).collect();
+            RawProof::Rule(name, premises, bridges, lhs, rhs, self.parse_int(site))
         } else if head == self.names.merge_fn_idx_constructor {
             assert!(args.len() == 4, "merge-idx constructor should have 4 args");
             let function = self.parse_string(args[0]);
@@ -529,30 +573,6 @@ impl RawProofStore {
         };
 
         self.add_proof(proof)
-    }
-
-    /// Walks the cons spine with a loop, not recursion: a premise list is as long
-    /// as the firing has premises and bridges, which is unbounded.
-    fn parse_proof_list(&mut self, list_term: TermId) -> Vec<RawProofId> {
-        let mut list = Vec::new();
-        let mut cell = list_term;
-        loop {
-            let term = self.term_dag.get(cell).clone();
-            let Term::App(head, args) = term else {
-                panic!("expected proof list, got {term:?}. Proof parsing assumes valid proofs.")
-            };
-            if head == self.names.pnil {
-                assert!(args.is_empty(), "pnil should not have arguments");
-                return list;
-            }
-            assert!(
-                head == self.names.pcons,
-                "expected proof list constructor, got {head}. Proof parsing assumes valid proofs."
-            );
-            assert!(args.len() == 2, "pcons should have 2 arguments");
-            list.push(self.parse_proof(args[0]));
-            cell = args[1];
-        }
     }
 
     fn parse_string(&self, term_id: TermId) -> String {
@@ -784,29 +804,27 @@ impl ProofStore {
                 ),
                 justification: Justification::Fiat,
             },
-            RawProof::Rule(name, premise_proofs, with_bridges, _lhs, _rhs, raw_site) => {
+            RawProof::Rule(name, premise_proofs, bridge_proofs, _lhs, _rhs, raw_site) => {
                 let site = SiteRef::decode(*raw_site);
                 let converted_premises: Vec<ProofId> = premise_proofs
                     .iter()
                     .map(|pid| self.convert_raw_proof(prog, globals, raw_store, *pid))
                     .collect();
-                // The two lists share a tail, so their leading difference is the
-                // bridges — recorded newest first, since a subterm's view-row proof
-                // is only readable once the subterm is interned. Only the ones the
-                // requested proof is composed from are read: converting the rest
-                // would pull in every proof the firing happened to pass over.
+                // The bridges are in the order the head builds, which is the order
+                // `bridge_position` numbers them; a site built after this proof's
+                // row has no bridge recorded yet. Only the ones the requested proof
+                // is composed from are read: converting the rest would pull in
+                // every proof the firing happened to pass over.
                 let planned = self.head_plan(prog, name);
-                let bridge_count = with_bridges.len() - premise_proofs.len();
                 let mut bridges: HashMap<SiteIndex, ProofId> = HashMap::default();
                 for needed in sites_needed(&planned, site) {
                     let Some(position) = planned.bridge_position(needed) else {
                         continue;
                     };
-                    let Some(index) = bridge_count.checked_sub(position + 1) else {
+                    let Some(raw) = bridge_proofs.get(position) else {
                         continue;
                     };
-                    let converted =
-                        self.convert_raw_proof(prog, globals, raw_store, with_bridges[index]);
+                    let converted = self.convert_raw_proof(prog, globals, raw_store, *raw);
                     bridges.insert(needed, converted);
                 }
 

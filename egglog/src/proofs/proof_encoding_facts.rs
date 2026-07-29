@@ -261,38 +261,28 @@ impl ProofInstrumentor<'_> {
         }
     }
 
-    /// Return the instrumented query and a proof that it matched.
-    /// Returns `(body_facts, action_lookups, proof)`. An eq-sort variable's
-    /// `term_proof` fetch is emitted into `action_lookups` as a
-    /// `(let p (term_proof v))` line only if a minted row reads it, for the
-    /// caller to splice into the rule's actions (the rule is then
-    /// `:unsafe-seminaive`). Callers that don't build a proof (`run :until`,
-    /// `check`) discard the lookups and the proof.
+    /// Return the instrumented query, the mints its premise proofs need, and one
+    /// premise proof per fact. An eq-sort variable's `term_proof` fetch is
+    /// deferred: it is emitted as a `(let p (term_proof v))` line only when a
+    /// minted row reads it, into `action_lookups` when that row is one of these
+    /// mints and into the head's own actions when it is a rule proof row. Either
+    /// way the caller splices it into the rule's actions, which makes the rule
+    /// `:unsafe-seminaive`. Callers that don't build a proof (`run :until`,
+    /// `check`) discard the lookups and the premises, and must
+    /// [`ProofInstrumentor::drop_pending_lookups`].
     pub(super) fn instrument_facts(
         &mut self,
         facts: &[ResolvedFact],
-    ) -> (Vec<String>, Vec<String>, String) {
+    ) -> (Vec<String>, Vec<String>, Vec<String>) {
         let mut res = vec![];
         let mut action_lookups = vec![];
-        let mut proof = vec![];
+        let mut premises = vec![];
 
         for fact in facts.iter() {
             let f_proof = self.instrument_fact(fact, &mut res, &mut action_lookups);
-            proof.push(f_proof);
+            premises.push(f_proof);
         }
-
-        // The prooflist mints are actions (emitted into `action_lookups` before
-        // the proof binding). Only proof mode consumes the prooflist; in term
-        // mode it is discarded, so skip the mints to keep `action_lookups` empty.
-        let proof_list = if self.proofs_enabled() {
-            self.format_prooflist(&mut action_lookups, &proof)
-        } else {
-            String::new()
-        };
-        // Whatever is still deferred here reached no row: the composition that
-        // asked for it collapsed, so the body never needs to read it.
-        self.drop_pending_lookups();
-        (res, action_lookups, proof_list)
+        (res, action_lookups, premises)
     }
 
     /// Mint a reflexive `Fiat` proof `value = value` for a term of `sort_name`

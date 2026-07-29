@@ -35,19 +35,30 @@ This rework generalizes that from merge bodies to rule bodies.
 
 ## Design
 
-* **Rule proof:** `RuleN(body premises, those premises extended with the
-  interned subterms' view proofs, conclusion site + role)`. Homogeneous `Proof`
-  columns only, and the two lists share cells so recording both costs no rows.
-  The subterm view proofs are **not optional** — see the canonicalization bridge
-  below: a head that interns a subterm into an existing e-class needs that
-  e-class's row proof, which is neither a site of the head nor one of its
-  premises. They are already read at no row cost.
+* **Rule proof:** `Rule_k(body premises, conclusion site + role)` for a head's
+  first sites, and `RuleLink(previous site's proof, one interned subterm's view
+  proof, conclusion site + role)` for the later ones. Homogeneous `Proof` columns
+  only, and every link is a row the head emits anyway, so nothing is written to
+  carry the premises. The subterm view proofs are **not optional** — see the
+  canonicalization bridge below: a head that interns a subterm into an existing
+  e-class needs that e-class's row proof, which is neither a site of the head nor
+  one of its premises. They are already read at no row cost.
 * **No `@Ast`.** Conclusions are derived, so terms need not be stored.
 * **No per-rule constructors.** Typed columns were only needed to carry
   computed base values; those are derivable, so the constructor stays generic
   and no per-rule table is created.
 * **Fiat** splits by where the value lives: a program-site index for anything
-  written in source, an input-row index for `(input …)`-loaded facts.
+  written in source, an input-row index for `(input …)`-loaded facts. The input
+  case needs no new index kind — `lower_inputs` already turns each CSV row into
+  an ordinary top-level action in the checker's program, and both readers walk
+  the file identically, so row *k* is the *k*-th lowered site; `native_input`
+  only needs the site offset of its own `(input …)` command. That takes it from
+  2 `@Ast` + 1 `Fiat` per CSV row to one row, and it is the dominant `@Ast`
+  population on CSV-heavy fixtures — invisible to `--mode desugar` counting,
+  because `native_input` mints straight into the backend rather than through
+  generated actions. It depends on the canonical-program decision, since
+  `lower_inputs` runs before `remove_globals` and the encoder's site counter
+  would live after it.
 * **Rebuilding:** `RebuildN(old_row_proof, e1 … ek)`, carrying the moved
   columns' `@UF` proofs as premises. Recording them as premises — rather than
   looking them up later — is what makes rebuilding reconstructible without
@@ -64,9 +75,9 @@ that chain without carrying it fails 28 of 206 tests with `transitivity requires
 matching middle terms`.
 
 The proofs needed are the interned subterms' view-row proofs, which the encoder
-already reads as `view-proof-<View>` at no row cost. They become trailing
-premises of `RuleN`; see the phase 2b result for how they are recorded and how a
-read that found no row is told apart from a real bridge.
+already reads as `view-proof-<View>` at no row cost. Each becomes the bridge
+column of a `RuleLink`; see the phase 2b result for how a read that found no row
+is told apart from a real bridge.
 
 The lookups cannot be hoisted to the front of the action: an outer view's key is
 built from its children's *deduped* ids (`fv_can = mint(func, dedup_args)`), so
@@ -99,69 +110,117 @@ skeleton is still present to compare against.
 
 ### Premises inline on the first site, chained after that
 
-A head emits one `Rule` row per conclusion site, and every site shares the same
-body premises — only the bridges differ, and they accumulate (0, 1, 2 across the
-three sites of a nested `rewrite`). So a fused arity is not one `N` per rule, nor
-one per site. Instead:
+Done — `ProofList`, `PNil` and `PCons` are gone from the encoding entirely.
 
-* **First site:** premises inline as columns. Arity is the body-fact count,
-  statically known and small. No list is built at all.
-* **Later sites:** name the previous site's row plus their own one bridge. The
-  link is a row we were emitting anyway, so chaining costs nothing extra.
+A head emits one rule proof row per conclusion site, and every site shares the
+same body premises — only the bridges differ, and they accumulate (0, 1, 2 across
+the three sites of a nested `rewrite`). So a fused arity is not one `N` per rule,
+nor one per site:
 
-This removes `PNil`/`PCons` entirely from a rule head: flat `rewrite` 4 rows ->
-**2**, nested 11 -> **7**.
+* **A row needing no bridge** carries the premises inline as columns:
+  `Rule_k(name, p1 … pk, t1, t2, site)`. `k` is the body-fact count.
+* **A row needing bridges** is `RuleLink(name, prev, bridge, t1, t2, site)`,
+  naming a row of the same head that already carries the premises and every
+  earlier bridge. A head mints the row at level `i` just before recording the
+  bridge that opens level `i+1` (`can_prf` then `record_bridge`, both in
+  `add_constructor_with_proof`), so the link is always a row it was emitting
+  anyway — verified by probe over the whole corpus and `egglog-experimental`: the
+  chain never has a gap to fill.
 
-It also restores the discriminator that plain inlining would have destroyed.
-Conversion currently recovers the bridge count from the two lists' length
-difference; here the first row's arity gives the premise count and each link adds
-exactly one bridge, so the split is structural. The chain depth is bounded by
-sites per head rather than by cumulative bridges, which is what made the flat
-list grow.
+Conversion tells premises from bridges structurally rather than by length
+arithmetic: `rule_columns` walks the chain, each link contributing one bridge and
+the row ending it every premise — with a loop, since a chain is as long as the
+head has bridge-recording sites.
 
-One constraint the fused row inherits: a body variable's premise proof is a
-deferred `<S>Proof` read (see below), emitted by `mint` when a row first names it
-and dropped when `instrument_facts` returns — today the `PCons` that consumes it
-is minted there. Inlining moves that first read to the head's first-site row, so
-the fused row must go through `mint` and the drop must move to after the head is
-instrumented. Get it wrong and the head names an unbound variable, which fails at
-rule creation.
+**Arity family, uncapped.** `Rule_k` is declared per premise count the program
+actually uses, ahead of the program's own commands (`rule_arity_header`), so no
+list fallback is needed and a wide rule does not pay for one. Measured premise
+counts: over `egglog/tests` the arities used are 0–11, over
+`egglog-experimental` 0–23, at most ~17 distinct per program — so the family
+costs a handful of empty relations, while a cap of 4 would have cost the
+23-premise rule 21 extra rows per firing. The names are derived from one fresh
+prefix (`{prefix}_{k}`) rather than generated per arity, because the `desugar`
+treatment re-parses a printed program with a fresh `EGraph` that never encoded
+the rules and so must recover the same names.
+
+Two constraints the inline row inherits:
+
+* A body variable's premise proof is a deferred `<S>Proof` read (see below),
+  emitted by `mint` when a row first names it. Inlining moves that first read to a
+  head row, so the inline row goes through `mint` and `drop_pending_lookups` moved
+  out of `instrument_facts` to each caller's end — after the head is
+  instrumented, for a rule. Get it wrong and the head names an unbound variable,
+  which fails at rule creation.
+* The proof list used to be minted into `action_lookups`, which made
+  `action_lookups` non-empty for every proof-mode rule and so decided
+  `:unsafe-seminaive`. With no list, that flag reads `proofs_enabled` directly —
+  a proof-mode head reads the database regardless.
+
+Rows written per rule firing, from `--proofs --mode desugar`:
+
+| rule | proof rows | `@Ast` rows |
+| --- | --- | --- |
+| `(rewrite (Add a b) (Add b a))` | 4 -> 2 | 2 |
+| `(rewrite (Mul a (Add b c)) (Add (Mul a b) (Mul a c)))` | 11 -> 7 | 6 |
+
+The commute firing's two are the whole head: the built term's proof and the
+guest's view-row proof, both `Rule_1` over the one body premise. The nested
+firing's seven are the body premise's `Congr`, four inline rows and two links.
+
+206 `proofs/` tests pass with zero changed snapshots and zero changed shared
+snapshots. `proof_reconstruct_check` is unmoved: 13392 nodes, 0 `stamped_wrong`,
+0 payload-free failures, 3540 bridges of which 288 move the term. The node count
+holding is the point — the hash-consing key is rebuilt from a different row
+shape, and it hash-conses to exactly the same set.
+
+One snapshot did move, in *term* mode: `doc_example_add_function1` renumbers its
+`__pv` temporaries by one, because `instrument_rule` no longer burns a
+`fresh_var` naming the proof list. Nothing else in it changes.
 
 ### Sequenced plan from here
 
 1. ~~**Index proof extraction.**~~ Done — see "Extraction rescanned every
    candidate table once per node" below. `eggcc_2mm_pass1` went from 201 s to
    32 s at unchanged peak RSS.
-2. **Then decide about connectors, not before.** The cumulative bridge list
-   costs no rows (the two lists share cells) but grows with nesting. Giving each
-   build site its own connector row bounds it to `children + 1`, at one row per
-   site — flat `rewrite` unchanged at 4, nested ~12 instead of 11. Step 1 is in
-   and the fixture is no longer extraction-bound, so this is not urgent; measure
-   before paying for it.
+2. ~~**Then decide about connectors, not before.**~~ Moot. The cumulative bridge
+   *list* is gone: each later site names the previous site's row plus its own one
+   bridge, so nesting adds no cells to bound and per-site connector rows would buy
+   nothing.
 3. **Port the two collapses dropped when this branch was cut.** Both were
-   implemented and verified on `reduce-proof-writes`.
+   implemented and verified on `reduce-proof-writes`, and both are now in.
    * ~~The reflexive `Sym`/`Trans` collapse (`0b79259`, `6dd5366`, `fc1aada`).~~
      Done — see "The encoder applies the reflexive identities itself" below. A
      flat `rewrite` firing went from 6 proof rows to 4, a nested one from 13 to
      11, with zero snapshot changes.
-   * Fused `Rule0..Rule4` carrying premises inline (`b347bb5`, removes `PNil` +
-     `PCons`), taking a `rewrite` firing from 4 rows to 2. The fused arity must
-     also cover the bridges, which is the same change as step 2 — decide them
-     together.
+   * ~~Fused rule constructors carrying premises inline (`b347bb5`).~~ Done — see
+     "Premises inline on the first site, chained after that". Uncapped rather than
+     `Rule0..Rule4`, and the bridges chain instead of joining the fused arity, so
+     step 2 folded into it. Flat `rewrite` 4 rows -> 2, nested 11 -> 7.
 4. **Phase 3, `@Ast`.** Narrower than first scoped: merge bodies already mint
-   none, and top-level actions need a program-site index first.
+   none, and top-level actions need a program-site index first. Note what phase 3
+   now has to touch: `Rule_k`'s two `Ast` columns sit between the premises and the
+   site, so dropping them changes every arity's declaration and the
+   `args.len() - 3` slice `rule_columns` reads the trailing columns with. And the
+   merge it predicts — rows differing only in their `Ast` columns hash-consing
+   together — is now visible in the link chain too, since a link's `prev` is a
+   full row.
 5. **Phases 4 and 5.** `RebuildN`; then re-enable CSE after encoding, repair
    term mode, re-measure.
 
-Row budget for `(rewrite (Add a b) (Add b a))`: 13 at the branch point, 6 today
-(4 proof + 2 `@Ast`), 2 if all of the above lands.
+Row budget for `(rewrite (Add a b) (Add b a))`: 13 at the branch point, 4 today
+(2 proof + 2 `@Ast`), 2 once phase 3 lands.
 
-**Open question, unresolved.** Nobody has traced how the bridge list reaches
-~2000 cells on `eggcc_2mm_pass1`. A single head's list is bounded by its own
-nesting, since the interned subterms are statically known — so either those
-generated heads are far deeper than expected, or the depth accumulates across
-chained firings. It matters: if it is cross-firing, bounding the per-head list
-buys much less than step 2 assumes.
+**Answered: how the bridge list got so long.** Within one firing, not across
+firings. Probing `head_chain` at the end of every head: over `egglog/tests` the
+largest head records **71** bridges, and over `egglog-experimental` one generated
+head — a `(rule () …)` with an empty body — records **3350**. Those heads really
+are that deep.
+
+So the chain does not make the extracted proof shallower: that head chains 3350
+links, the same order as the cons spine it replaces, and reading it still relies
+on the explicit-stack parse from phase 2b. What it removes is the *rows*: 3351
+`PNil`/`PCons` writes per firing become zero, since every link is a `Rule` row the
+head was emitting anyway.
 
 ### Why phase 2 is split
 
@@ -309,7 +368,8 @@ called for turned out not to need a distinguished sentinel: a row the head's own
 its fallback, a proof *about the term as written*. Only a proof whose rhs **is**
 the canonical term states which e-class the canonical term was interned into, so
 `bridge.rhs == canonical` is the test, and it is right whichever way the fallback
-is chosen.
+is chosen. (The two-list carrier is superseded — see "Premises inline on the
+first site, chained after that" — but the discriminator is unchanged.)
 
 Two things were needed to keep this from dragging the whole proof in:
 

@@ -7,7 +7,7 @@ use crate::{
     EGraph, TypeInfo, Value,
     ast::{
         Command, Expr, Fact, GenericCommand, ResolvedAction, ResolvedCommand, ResolvedExpr,
-        ResolvedExprExt, ResolvedFact, Schedule, Span,
+        ResolvedExprExt, ResolvedFact, ResolvedNCommand, Schedule, Span,
     },
     core::ResolvedCall,
     proofs::{
@@ -22,11 +22,19 @@ use crate::{
 /// All of these names should be generated with the single global [`SymbolGen`].
 #[derive(Clone)]
 pub(crate) struct EncodingNames {
-    pub(crate) proof_list_sort: String,
     pub(crate) ast_sort: String,
     pub(crate) proof_datatype: String,
     pub(crate) fiat_constructor: String,
-    pub(crate) rule_constructor: String,
+    /// Prefix of the rule proofs carrying their body premises inline: premise
+    /// count `k`'s constructor is [`Self::fused_rule`]. Derived from one name
+    /// rather than generated per arity, so that re-parsing a desugared program
+    /// recovers the same names without having encoded the rules again.
+    pub(crate) rule_fused_prefix: String,
+    /// The premise counts [`ProofInstrumentor::rule_arity_header`] has declared.
+    pub(crate) rule_fused_declared: HashSet<usize>,
+    /// A later conclusion site of the same head: the previous site's rule proof
+    /// plus this site's one canonicalization bridge.
+    pub(crate) rule_link_constructor: String,
     pub(crate) merge_fn_idx_constructor: String,
     pub(crate) merge_fn_row_constructor: String,
     pub(crate) eq_trans_constructor: String,
@@ -38,8 +46,6 @@ pub(crate) struct EncodingNames {
     /// For a given function symbol, the name of the function that converts to the AST type.
     pub(crate) sort_to_ast_constructor: HashMap<String, String>,
     pub(crate) fn_to_term_sort: HashMap<String, String>,
-    pub(crate) pcons: String,
-    pub(crate) pnil: String,
     // Ruleset names
     pub(crate) path_compress_ruleset_name: String,
     pub(crate) rebuilding_ruleset_name: String,
@@ -83,9 +89,9 @@ impl SiteColumn {
 /// filled in later. Internal to the encoder, not part of the proof format.
 #[derive(Clone)]
 pub(crate) enum Justification {
-    /// Rule-name expression, body-premise-list expression, and the conclusion site
-    /// the proof is about.
-    Rule(String, String, SiteColumn),
+    /// Rule-name expression, one premise-proof expression per body fact, and the
+    /// conclusion site the proof is about.
+    Rule(String, Vec<String>, SiteColumn),
     Fiat,
     /// Term-free merge justification for a merge-body subexpression: function
     /// name, the two premise (view) proof expressions, and the pre-order index of
@@ -136,9 +142,9 @@ impl Justification {
     }
 
     /// Whether the proof is composed from the head's interned subterms, and so
-    /// has to record their view-row proofs. Only a proof stating the head's own
-    /// conclusion is not — which is most of them, so keeping their premise lists
-    /// bare keeps the extracted proof from reaching every subterm the firing
+    /// has to name their view-row proofs. Only a proof stating the head's own
+    /// conclusion is not — which is most of them, so leaving those out of the
+    /// chain keeps the extracted proof from reaching every subterm the firing
     /// happened to build.
     pub(crate) fn needs_bridges(&self) -> bool {
         let role = match self {
@@ -151,13 +157,28 @@ impl Justification {
 }
 
 impl EncodingNames {
+    /// The rule proof constructor carrying `arity` premise proofs inline.
+    pub(crate) fn fused_rule(&self, arity: usize) -> String {
+        format!("{}_{arity}", self.rule_fused_prefix)
+    }
+
+    /// The premise count `head` carries inline, when it is one of
+    /// [`Self::fused_rule`]'s constructors.
+    pub(crate) fn fused_rule_arity(&self, head: &str) -> Option<usize> {
+        head.strip_prefix(&self.rule_fused_prefix)?
+            .strip_prefix('_')?
+            .parse()
+            .ok()
+    }
+
     pub(crate) fn new(symbol_gen: &mut SymbolGen) -> Self {
         Self {
-            proof_list_sort: symbol_gen.fresh("ProofList"),
             ast_sort: symbol_gen.fresh("Ast"),
             proof_datatype: symbol_gen.fresh("Proof"),
             fiat_constructor: symbol_gen.fresh("Fiat"),
-            rule_constructor: symbol_gen.fresh("Rule"),
+            rule_fused_prefix: symbol_gen.fresh("Rule"),
+            rule_fused_declared: HashSet::default(),
+            rule_link_constructor: symbol_gen.fresh("RuleLink"),
             merge_fn_idx_constructor: symbol_gen.fresh("MergeIdx"),
             merge_fn_row_constructor: symbol_gen.fresh("MergeRow"),
             eq_trans_constructor: symbol_gen.fresh("Trans"),
@@ -168,8 +189,6 @@ impl EncodingNames {
             eval_constructor: symbol_gen.fresh("Eval"),
             sort_to_ast_constructor: HashMap::default(),
             fn_to_term_sort: HashMap::default(),
-            pcons: symbol_gen.fresh("PCons"),
-            pnil: symbol_gen.fresh("PNil"),
             path_compress_ruleset_name: symbol_gen.fresh("parent"),
             rebuilding_ruleset_name: symbol_gen.fresh("rebuilding"),
             rebuilding_cleanup_ruleset_name: symbol_gen.fresh("rebuilding_cleanup"),
@@ -231,28 +250,50 @@ impl ProofInstrumentor<'_> {
         out
     }
 
-    /// Build a proof list (`pnil`, then `pcons` folds) by minting a fresh id
-    /// per node and asserting the row, emitting the mints onto `stmts` and
-    /// returning the final list's var.
-    pub(crate) fn format_prooflist(
-        &mut self,
-        stmts: &mut Vec<String>,
-        proofs: &[String],
-    ) -> String {
-        let pcons = self.proof_names().pcons.clone();
-        let pnil = self.proof_names().pnil.clone();
-        let proof_list_sort = self.proof_names().proof_list_sort.clone();
-
-        let mut prooflist = self.mint(stmts, &pnil, "", &proof_list_sort);
-        for proof in proofs.iter().rev() {
-            prooflist = self.mint(
-                stmts,
-                &pcons,
-                &format!("{proof} {prooflist}"),
-                &proof_list_sort,
-            );
+    /// Declarations for the fused rule constructors `program`'s rules need but
+    /// that no earlier program declared. A rule's premise count is its body-fact
+    /// count, so the arities a program uses are known before it is encoded; these
+    /// are emitted ahead of the program's own commands.
+    pub(crate) fn rule_arity_header(&mut self, program: &[ResolvedNCommand]) -> Vec<Command> {
+        fn collect(commands: &[ResolvedNCommand], out: &mut Vec<usize>) {
+            for command in commands {
+                match command {
+                    ResolvedNCommand::NormRule { rule } => out.push(rule.body.len()),
+                    ResolvedNCommand::Fail(_, nested) => collect(nested, out),
+                    _ => {}
+                }
+            }
         }
-        prooflist
+        let mut arities = vec![];
+        collect(program, &mut arities);
+        arities.sort_unstable();
+        arities.dedup();
+
+        let mut decls = vec![];
+        for arity in arities {
+            if !self
+                .egraph
+                .proof_state
+                .proof_names
+                .rule_fused_declared
+                .insert(arity)
+            {
+                continue;
+            }
+            let names = self.proof_names();
+            let name = names.fused_rule(arity);
+            let (proof, ast) = (names.proof_datatype.clone(), names.ast_sort.clone());
+            let premises = vec![proof.as_str(); arity].join(" ");
+            let sep = if arity == 0 { "" } else { " " };
+            decls.push(format!(
+                "(function {name} (String{sep}{premises} {ast} {ast} i64 {proof}) Unit :no-merge :internal-hidden :internal-term-node)"
+            ));
+        }
+        if decls.is_empty() {
+            return vec![];
+        }
+        let decls = decls.join("\n");
+        self.parse_program(&decls)
     }
 
     /// Header commands for term encoding, setting up rulesets.
@@ -474,11 +515,10 @@ impl ProofInstrumentor<'_> {
         let to_ast_str = to_ast_constructors.join("\n");
 
         let EncodingNames {
-            ref proof_list_sort,
             ref ast_sort,
             ref proof_datatype,
             ref fiat_constructor,
-            ref rule_constructor,
+            ref rule_link_constructor,
             ref merge_fn_idx_constructor,
             ref merge_fn_row_constructor,
             ref eq_trans_constructor,
@@ -487,35 +527,34 @@ impl ProofInstrumentor<'_> {
             ref congr_all_constructor,
             ref container_normalize_constructor,
             ref eval_constructor,
-            ref pcons,
-            ref pnil,
             ..
         } = *self.proof_names();
 
         format!(
             "
-(sort {proof_list_sort})
 (sort {ast_sort}) ;; wrap sorts in this for proofs
 ;; The proof datatype records the global proof constructor names so container
 ;; rebuild can recover them on re-parse (see ContainerRebuildSpec).
 (sort {proof_datatype} :internal-proof-names {congr_constructor} {congr_all_constructor} {eq_trans_constructor} {eq_sym_constructor} {container_normalize_constructor} {fiat_constructor})
 
-;; Proof/AST/ProofList terms are relations, not constructors: the encoding mints
-;; a fresh id (`get-fresh!`) and asserts the row, so congruent duplicates are
-;; kept (never merged away) rather than relying on native congruence. The final
-;; column of each relation is the minted output id.
-(function {pcons} ({proof_datatype} {proof_list_sort} {proof_list_sort}) Unit :no-merge :internal-hidden :internal-term-node)
-(function {pnil} ({proof_list_sort}) Unit :no-merge :internal-hidden :internal-term-node)
+;; Proof/AST terms are relations, not constructors: the encoding mints a fresh id
+;; (`get-fresh!`) and asserts the row, so congruent duplicates are kept (never
+;; merged away) rather than relying on native congruence. The final column of each
+;; relation is the minted output id.
 
 {to_ast_str}
 
 ;; Fiat justification for globals and primitives, gives two terms t1 = t2 for the proposition being justified
 (function {fiat_constructor} ({ast_sort} {ast_sort} {proof_datatype}) Unit :no-merge :internal-hidden :internal-term-node)
-;; name of rule, one proof per fact in the query, that same list extended with one
-;; *bridge* premise per subterm the head interned (so the extension is exactly the
-;; leading difference between the two lists), proposition being proven t1 = t2, and
-;; the conclusion site of the rule head the proposition is about
-(function {rule_constructor} (String {proof_list_sort} {proof_list_sort} {ast_sort} {ast_sort} i64 {proof_datatype}) Unit :no-merge :internal-hidden :internal-term-node)
+;; A rule proof's first conclusion site carries its premises inline, in a
+;; `Rule_<k>` declared per premise count (see `rule_arity_header`):
+;;   (Rule_<k> <rule name> <one proof per body fact> t1 t2 <site>)
+;; A later site of the same head names the previous site's proof — which carries
+;; the shared premises and the bridges recorded before it — plus the one
+;; *bridge* premise recorded since: the view-row proof of the subterm the head
+;; interned, saying which e-class it landed in. `t1`/`t2` are the proposition
+;; being proven and `<site>` the conclusion site of the head it is about.
+(function {rule_link_constructor} (String {proof_datatype} {proof_datatype} {ast_sort} {ast_sort} i64 {proof_datatype}) Unit :no-merge :internal-hidden :internal-term-node)
 
 ;; term-free merge justification for an FD custom-function view subexpression:
 ;; name of function, two premise proofs, and the pre-order index of the merge-body

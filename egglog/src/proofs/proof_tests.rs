@@ -452,8 +452,16 @@ mod tests {
         "#;
 
         let mut egraph = EGraph::new_with_proofs();
-        let rule_constructor = egraph.proof_state.proof_names.rule_constructor.clone();
         let commands = egraph.resolve_program(None, source).unwrap();
+        // Both rule proof shapes: premises inline, and a later site chained onto
+        // an earlier one.
+        let names = &egraph.proof_state.proof_names;
+        let rule_constructors: HashSet<String> = names
+            .rule_fused_declared
+            .iter()
+            .map(|arity| names.fused_rule(*arity))
+            .chain([names.rule_link_constructor.clone()])
+            .collect();
         let rule = commands
             .iter()
             .find_map(|command| match command {
@@ -492,8 +500,8 @@ mod tests {
         );
         let rule_name_var = rule_name_vars[0];
 
-        // Proof constructors are relations, so each `Rule` proof is emitted as a
-        // `(set (@Rule <rule-name> <proof-list> <ast> <ast> <site> <id>) ())` action,
+        // Proof constructors are relations, so each rule proof is emitted as a
+        // `(set (@Rule_2 <rule-name> <premises> <ast> <ast> <site> <id>) ())` action,
         // not a call expression. Count those set actions and check they reuse the
         // hoisted rule-name variable as their first argument.
         let rule_uses = rule
@@ -502,7 +510,7 @@ mod tests {
             .iter()
             .filter(|action| match action {
                 ResolvedAction::Set(_, ResolvedCall::Func(func), args, _)
-                    if func.name == rule_constructor =>
+                    if rule_constructors.contains(&func.name) =>
                 {
                     assert!(
                         matches!(
@@ -524,6 +532,34 @@ mod tests {
         EGraph::new_with_proofs()
             .parse_and_run_program(None, source)
             .expect("hoisted rule-name proof should pass the checker");
+    }
+
+    /// A rule proof carries its premises inline, in a constructor declared per
+    /// premise count ahead of the program that needs it. A program run in pieces
+    /// must therefore declare the arities each piece introduces, not just the
+    /// first.
+    #[test]
+    fn rule_premise_arities_are_declared_per_program() {
+        let mut egraph = EGraph::new_with_proofs();
+        egraph
+            .parse_and_run_program(
+                None,
+                "(datatype Math (Add Math Math) (Num i64))
+                 (rewrite (Add a b) (Add b a))",
+            )
+            .unwrap();
+        // Two body facts, so a premise count the first program never declared.
+        egraph
+            .parse_and_run_program(
+                None,
+                "(relation Seed (Math))
+                 (rule ((Seed x) (= x (Add a b))) ((union x (Add b (Add a b)))))
+                 (Seed (Add (Num 1) (Num 2)))
+                 (run 2)
+                 (prove (= (Add (Num 1) (Num 2))
+                           (Add (Num 2) (Add (Num 1) (Num 2)))))",
+            )
+            .unwrap();
     }
 
     #[test]

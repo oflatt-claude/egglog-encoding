@@ -128,14 +128,27 @@ impl EncodingState {
     }
 }
 
+/// The canonicalization bridges a rule head has recorded, and the rule proof
+/// rows a later site can chain its own onto.
+#[derive(Default)]
+struct HeadChain {
+    /// The view-row proof of each subterm the head has interned, in construction
+    /// order.
+    bridges: Vec<String>,
+    /// `rows[i]` names a rule proof of this head whose bridge premises are
+    /// `bridges[..i]`. Every site shares the head's body premises, so any row at
+    /// a level serves as the next level's link — and a head mints one before
+    /// recording the bridge that opens the level above, so no level is ever
+    /// missing.
+    rows: Vec<String>,
+}
+
 /// Thin wrapper around an [`EGraph`] for the term encoding
 pub(crate) struct ProofInstrumentor<'a> {
     pub(crate) egraph: &'a mut EGraph,
-    /// While instrumenting a rule head: the rule proof's premise list as it
-    /// stands — the body premises, plus one bridge premise per subterm the head
-    /// has interned so far. `None` everywhere else, where a proof records its own
-    /// conclusion and needs no bridges.
-    head_premises: Option<String>,
+    /// Set while instrumenting a rule head; `None` everywhere else, where a proof
+    /// records its own conclusion and needs no bridges.
+    head_chain: Option<HeadChain>,
     /// Proof variables the encoder knows prove `t = t`, keyed by the emitted
     /// variable name. Names are globally fresh, so entries never collide across
     /// the generated programs.
@@ -150,7 +163,7 @@ impl<'a> ProofInstrumentor<'a> {
     pub(crate) fn new(egraph: &'a mut EGraph) -> Self {
         Self {
             egraph,
-            head_premises: None,
+            head_chain: None,
             reflexive: HashSet::default(),
             pending_lookups: HashMap::default(),
         }
@@ -231,33 +244,88 @@ impl<'a> ProofInstrumentor<'a> {
         }
     }
 
-    /// Mint the `Rule` row `justification` names, over already-minted AST
+    /// Mint the rule proof row `justification` names, over already-minted AST
     /// endpoints. Proof conversion derives the proposition from the site column
     /// alone, so the AST columns only keep distinct rows distinct (phase 3 of the
     /// rework drops them).
+    ///
+    /// A row needing no bridge premise carries the body premises inline; one
+    /// needing them chains onto a row that already names all but the newest, so
+    /// the bridges cost no rows of their own.
     fn rule_row(
+        &mut self,
+        stmts: &mut Vec<String>,
+        justification: &Justification,
+        asts: &Asts,
+    ) -> String {
+        let want = if justification.needs_bridges() {
+            self.head_chain.as_ref().map_or(0, |c| c.bridges.len())
+        } else {
+            0
+        };
+        let proof = match want.checked_sub(1) {
+            None => self.inline_rule_row(stmts, justification, asts),
+            // A head records a bridge only just after minting the row at the
+            // level below it, so the row to chain onto is always already there.
+            Some(bridge) => {
+                let prev = self.head_chain.as_ref().expect("in a rule head").rows[bridge].clone();
+                self.link_rule_row(stmts, justification, &prev, bridge, asts)
+            }
+        };
+        if let Some(chain) = &mut self.head_chain {
+            match chain.rows.get_mut(want) {
+                Some(row) => *row = proof.clone(),
+                None => chain.rows.push(proof.clone()),
+            }
+        }
+        proof
+    }
+
+    /// A rule proof row carrying the head's body premises as columns.
+    fn inline_rule_row(
         &mut self,
         stmts: &mut Vec<String>,
         justification: &Justification,
         Asts(a1, a2): &Asts,
     ) -> String {
-        let Justification::Rule(rule_name, body_premises, _) = justification else {
-            panic!("only a rule justification mints a Rule row");
+        let Justification::Rule(rule_name, premises, _) = justification else {
+            panic!("only a rule justification mints a rule proof row");
         };
-        // Inside a rule head the second list is the first extended with the
-        // bridges recorded so far; it shares the body list's cells, so recording
-        // both costs no rows and their length difference is the bridge count.
-        let with_bridges = match self.head_premises.clone() {
-            Some(extended) if justification.needs_bridges() => extended,
-            _ => body_premises.clone(),
-        };
+        let (rule_name, premises) = (rule_name.clone(), premises.clone());
         let site = justification.site_expr();
-        let rule = self.proof_names().rule_constructor.clone();
+        let rule = self.proof_names().fused_rule(premises.len());
         let proof_sort = self.proof_sort();
+        let premises = premises.iter().map(|p| format!("{p} ")).collect::<String>();
         self.mint(
             stmts,
             &rule,
-            &format!("{rule_name} {body_premises} {with_bridges} {a1} {a2} {site}"),
+            &format!("{rule_name} {premises}{a1} {a2} {site}"),
+            &proof_sort,
+        )
+    }
+
+    /// A rule proof row naming `prev` — a row of the same head, carrying the body
+    /// premises and every earlier bridge — plus bridge `bridge`.
+    fn link_rule_row(
+        &mut self,
+        stmts: &mut Vec<String>,
+        justification: &Justification,
+        prev: &str,
+        bridge: usize,
+        Asts(a1, a2): &Asts,
+    ) -> String {
+        let Justification::Rule(rule_name, _, _) = justification else {
+            panic!("only a rule justification mints a rule proof row");
+        };
+        let rule_name = rule_name.clone();
+        let site = justification.site_expr();
+        let bridge = self.head_chain.as_ref().expect("in a rule head").bridges[bridge].clone();
+        let link = self.proof_names().rule_link_constructor.clone();
+        let proof_sort = self.proof_sort();
+        self.mint(
+            stmts,
+            &link,
+            &format!("{rule_name} {prev} {bridge} {a1} {a2} {site}"),
             &proof_sort,
         )
     }
@@ -284,28 +352,14 @@ impl<'a> ProofInstrumentor<'a> {
     /// minted from here on. Only a subterm at a conclusion site is recorded, since
     /// only those are the sites proof conversion enumerates; a subterm the head
     /// concludes nothing about (a nested `change` argument) has no readable proof
-    /// anyway. Outside a rule head nothing reads the premise list.
-    fn record_bridge(
-        &mut self,
-        stmts: &mut Vec<String>,
-        justification: &Justification,
-        view_proof: &str,
-    ) {
+    /// anyway. Outside a rule head nothing reads the bridges.
+    fn record_bridge(&mut self, justification: &Justification, view_proof: &str) {
         if justification.static_site().is_none() {
             return;
         }
-        let Some(current) = self.head_premises.clone() else {
-            return;
-        };
-        let pcons = self.proof_names().pcons.clone();
-        let list_sort = self.proof_names().proof_list_sort.clone();
-        let next = self.mint(
-            stmts,
-            &pcons,
-            &format!("{view_proof} {current}"),
-            &list_sort,
-        );
-        self.head_premises = Some(next);
+        if let Some(chain) = &mut self.head_chain {
+            chain.bridges.push(view_proof.to_string());
+        }
     }
 
     /// A built term's connector proof as a proof node, minting the `Rule` row for
@@ -1584,7 +1638,7 @@ impl<'a> ProofInstrumentor<'a> {
         // The read misses on a row this action just seeded, returning the fallback:
         // a proof about the term as written rather than about the canonical one,
         // which is how conversion tells "no bridge" from a real one.
-        self.record_bridge(res, justification, &vprf);
+        self.record_bridge(justification, &vprf);
 
         let connector = match &to_dedup {
             // connector `fv_nat = dedup` = Trans(nat_to_dedup, Sym(dedup = f(children))).
@@ -1909,10 +1963,7 @@ impl<'a> ProofInstrumentor<'a> {
         // stale entries keyed by repeated user let names (e.g. `new-e`) from
         // earlier rules/merges, referencing out-of-scope vars.
         let mut nat_conn = NatConn::default();
-        // term_proofs are fetched as action-side lookups (see instrument_facts),
-        // so a rule with any needs a Read/Full action context (`eval_opt` below).
-        let (facts, action_lookups, proof_str) = self.instrument_facts(&rule.body);
-        let proof_var = self.fresh_var();
+        let (facts, action_lookups, premises) = self.instrument_facts(&rule.body);
         let rule_name_var = if self.egraph.proof_state.proofs_enabled {
             self.egraph.parser.symbol_gen.fresh("rule_name")
         } else {
@@ -1920,20 +1971,16 @@ impl<'a> ProofInstrumentor<'a> {
         };
         // Every mint site replaces the site column with the conclusion site it is
         // at; the placeholder is unreadable, so a site left unset fails loudly.
-        let proof = Justification::Rule(
-            rule_name_var.clone(),
-            proof_var.clone(),
-            SiteColumn::Missing,
-        );
-        let reads_in_rhs = !action_lookups.is_empty();
-        // The looked-up proofs feed `proof_str`, so bind them before the proof list.
+        let proof = Justification::Rule(rule_name_var.clone(), premises, SiteColumn::Missing);
+        // A proof-mode head reads the database: it looks up the body variables'
+        // term proofs and interns each subterm it builds, so it needs a Read/Full
+        // action context (`eval_opt` below).
+        let reads_in_rhs = self.egraph.proof_state.proofs_enabled;
         let action_lookups_str = ListDisplay(&action_lookups, "\n                    ");
-        let proof_var_binding = if self.egraph.proof_state.proofs_enabled {
+        let proof_prelude = if self.egraph.proof_state.proofs_enabled {
             format!(
                 "(let {rule_name_var} \"{}\")
-                 {action_lookups_str}
-                 (let {proof_var}
-                          {proof_str})",
+                 {action_lookups_str}",
                 rule.name
             )
         } else {
@@ -1941,15 +1988,19 @@ impl<'a> ProofInstrumentor<'a> {
         };
 
         // Every subterm the head interns records its view-row proof as a bridge
-        // premise (see `record_bridge`), so the list the rule proofs name grows as
-        // the actions run.
-        self.head_premises = self
+        // premise (see `record_bridge`), so the bridges the rule proofs name
+        // accumulate as the actions run.
+        self.head_chain = self
             .egraph
             .proof_state
             .proofs_enabled
-            .then(|| proof_var.clone());
+            .then(HeadChain::default);
         let actions = self.instrument_actions(&rule.head.0, &proof, &mut nat_conn);
-        self.head_premises = None;
+        self.head_chain = None;
+        // A body variable's term-proof read is emitted by the first row naming it,
+        // which may be a head row; whatever is still deferred reached no row, so
+        // the rule never needs to read it.
+        self.drop_pending_lookups();
         let name = &rule.name;
         let ruleset_opt = if rule.ruleset.is_empty() {
             "".to_string()
@@ -1972,7 +2023,7 @@ impl<'a> ProofInstrumentor<'a> {
         };
         let instrumented = format!(
             "(rule ({})
-                   ({proof_var_binding}
+                   ({proof_prelude}
                     {})
                     {ruleset_opt} {eval_opt}
                     :name \"{name}\")",
@@ -2005,7 +2056,8 @@ impl<'a> ProofInstrumentor<'a> {
             ResolvedSchedule::Run(span, config) => {
                 let new_run = match config.until {
                     Some(ref facts) => {
-                        let (instrumented, _lookups, _proof) = self.instrument_facts(facts);
+                        let (instrumented, _lookups, _premises) = self.instrument_facts(facts);
+                        self.drop_pending_lookups();
                         let instrumented_facts = self.parse_facts(&instrumented);
                         Schedule::Run(
                             span.clone(),
@@ -2185,7 +2237,8 @@ impl<'a> ProofInstrumentor<'a> {
                 unreachable!("LetBegin is removed by remove_globals")
             }
             ResolvedNCommand::Check(span, facts) => {
-                let (instrumented, _lookups, _proof) = self.instrument_facts(facts);
+                let (instrumented, _lookups, _premises) = self.instrument_facts(facts);
+                self.drop_pending_lookups();
                 res.push(Command::Check(
                     span.clone(),
                     self.parse_facts(&instrumented),
@@ -2287,6 +2340,10 @@ impl<'a> ProofInstrumentor<'a> {
                 res.extend(self.parse_program(&proof_header));
             }
             self.egraph.proof_state.term_header_added = true;
+        }
+        if self.egraph.proof_state.proofs_enabled {
+            let arities = self.rule_arity_header(&program);
+            res.extend(arities);
         }
 
         for command in program {
