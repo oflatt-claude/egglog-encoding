@@ -29,7 +29,7 @@ make python-nits    # Python hygiene only
 make rust-nits      # rustfmt check and Clippy only
 make proof-tests    # proof-focused subset of the workspace tests
 make benchmark-smoke
-make nightly        # benchmark every endpoint and publish nightly/output/
+make nightly        # benchmark the nightly endpoints and publish nightly/output/
 make update-snapshots
 make format         # apply Ruff and rustfmt formatting
 ```
@@ -360,10 +360,11 @@ sharing it.
 
 ### Nightly
 
-`make nightly` benchmarks every backend/treatment endpoint on the current
-checkout and on the latest `main`, accumulating them all in the ordinary report
-cache, and copies the resulting interactive page and its cache to
-`nightly/output/index.html` and `index.jsonl`:
+`make nightly` benchmarks each endpoint in `ENDPOINTS` — the main backend's
+`term`, `proofs`, and `proof-extraction`, with the `dd` backend disabled for
+now — on the current checkout and on the latest `main`, accumulating them all in
+the ordinary report cache, and copies the resulting interactive page and its
+cache to `nightly/output/index.html` and `index.jsonl`:
 
 ```bash
 make nightly
@@ -381,7 +382,13 @@ change what is measured.
 
 The [egraphs-good nightly service](https://nightly.cs.washington.edu) checks out
 this repository, runs `make nightly`, and serves `nightly/output/`, matching the
-`report=` entry in the nightly configuration.
+`report=` entry in the nightly configuration. Two things that runner does not
+provide, `make nightly` arranges itself: it installs a pinned uv into `.uv/`
+when uv is missing from `PATH` (uv then downloads its own CPython; bump
+`UV_VERSION` in the `Makefile` to move that pin), and it installs rustup when
+the box has none. The runner also leaves rustup's `~/.cargo/bin` off `PATH`,
+which would leave cargo resolving to Ubuntu's — too old for
+`rust-toolchain.toml`'s pin — so `nightly_bench.py` puts those shims first.
 
 ### CPU profiling
 
