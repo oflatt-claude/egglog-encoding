@@ -108,7 +108,7 @@ skeleton is still present to compare against.
 | 3b | the rest of `@Ast`: site the top-level actions, per-base-sort `Fiat`, delete the `Ast` sort | ditto |
 | 4a | the `Rebuild` raw-proof variant and its expansion, nothing emitted | done — zero snapshot changes; see below |
 | 4b | rebuilding → `RebuildN`: emit it from the rebuild rules | done — zero snapshot changes; see below |
-| 4c | fold the e-class `Sym`/`Trans` pair into the packed row | ditto |
+| 4c | fold the e-class `Sym`/`Trans` pair into the packed row | done — zero snapshot changes; see below |
 | 5 | re-enable CSE after encoding, repair term mode, re-measure | nothing left behind the switch |
 
 ### Premises inline on the first site, chained after that
@@ -206,9 +206,9 @@ One snapshot did move, in *term* mode: `doc_example_add_function1` renumbers its
    * **3b, everything else.** Siting the top-level actions, a per-base-sort
      `Fiat`, and then deleting the `Ast` sort. All three wait on the
      canonical-program decision the `Fiat`/`lower_inputs` note above describes.
-5. **Phases 4 and 5.** ~~`RebuildN`~~ — 4a and 4b are in; 4c folds the e-class
-   step into the packed row. Then re-enable CSE after encoding, repair term
-   mode, re-measure.
+5. **Phases 4 and 5.** ~~`RebuildN`~~ — 4a, 4b and 4c are all in; a rebuild
+   firing writes one row. What is left is phase 5: re-enable CSE after encoding,
+   repair term mode, re-measure.
 
 Row budget for `(rewrite (Add a b) (Add b a))`: 13 at the branch point, 2 today
 (2 proof + 0 `@Ast`).
@@ -710,7 +710,9 @@ per-arity `symbol_gen.fresh` would be unrecoverable in the `desugar` treatment's
 fresh `EGraph`. Unlike a rule's premise count, a view's step count is not known
 before the view's own rules are generated, so the declaration goes out with the
 first rule that uses it rather than in a header pass. A step-free view (`Num`,
-whose only child is an `i64`) emits no row at all rather than a `Rebuild_0`.
+whose only child is an `i64`) emits no row at all rather than a `Rebuild_0` —
+superseded by 4c, which gives such a view a `RebuildEq_0` when its output is an
+e-class.
 
 Rows written per firing of the `AddView` rebuild in
 `(rewrite (Add a b) (Add b a))`, counted as table rows after a run that fires it
@@ -763,6 +765,94 @@ What 4c trips over, folding the e-class step in:
 * `output_is_eclass` decides at rule-generation time whether the pair exists, so
   the two shapes are distinguishable statically — the same fact that makes the
   column list a compile-time constant here.
+
+### Phase 4c result
+
+A view-rebuild firing writes **one** proof row. The e-class's `Sym` + `Trans`
+pair is gone; its canonicalization step rides the packed row.
+
+**A second arity family, not a sentinel column.** `RebuildEq_<k>` is
+`(Proof (i64 Proof)^k Proof) -> Proof` — the plain shape with the e-class proof
+appended — off its own `symbol_gen.fresh("RebuildEq")` in `EncodingNames::new`,
+beside `Rebuild_<k>`'s. The sentinel alternative (column `-1` in the existing
+family) was rejected on two counts: it overloads a channel that otherwise means
+exactly "child position", so `parse_index`'s non-negative check would have to be
+given up and the peel-before-the-fold ordering invariant held by a branch rather
+than by the shape; and it buys nothing, because `output_is_eclass` is a
+rule-generation-time fact, so the two shapes are statically distinguishable
+anyway. It costs no extra declarations in practice — the family a view uses is
+determined by its schema, so what used to be `Rebuild_<k>` declarations is now
+mostly `RebuildEq_<k>` ones.
+
+The two prefixes are safe to have one be a prefix of the other: the step count is
+separated by `_`, and `RebuildEq`'s `Eq` stands exactly where that `_` would be,
+so `rebuild_proof_shape` gets the same answer whichever it tries first.
+
+**The row carries the raw step, not its `Sym`.** `expand_rebuild` composes
+`Trans(Sym(eclass), fold)`, so the column holds the `@UF_<S>_canon_proof` result
+as it stands. Handing it the `Sym`'d proof instead fails 62 of the 206 `proofs/`
+tests on `transitivity requires matching middle terms` — the assertion phase 4a
+added for exactly this.
+
+Rows written per firing, on `(datatype Math (Num i64) (Add Math Math))` +
+`(rewrite (Add a b) (Add b a))`:
+
+| | 4a | 4b | 4c |
+| --- | --- | --- | --- |
+| `AddView` rebuild (2 eq-sort children + e-class) | 4 | 3 | 1 |
+| `NumView` rebuild (no eq-sort children, e-class) | 2 | 2 | 1 |
+
+A view with neither eq-sort children nor an e-class output still writes nothing.
+The generated action is now
+
+```
+(let c0_canon_ (@UF_Math_canon c0_ c0_))   (let @pv27 (@UF_Math_canon_proof c0_ …))
+(let c1_canon_ (@UF_Math_canon c1_ c1_))   (let @pv29 (@UF_Math_canon_proof c1_ …))
+(let e2_canon_ (@UF_Math_canon e2_ e2_))   (let @pv31 (@UF_Math_canon_proof e2_ …))
+(set (@RebuildEq_2 @pv25 0 @pv27 1 @pv29 @pv31 @pv32) ())
+```
+
+206 `proofs/` tests pass with zero changed snapshots and zero changed shared
+snapshots, and the whole workspace is green. `proof_reconstruct_check` is
+unmoved: 13392 nodes, 0 `stamped_ok=false`, 0 `payload_free=disagrees`, 3540
+bridges of which 288 move the term.
+
+**The new shape is exercised, so the byte-identical output is agreement.** The
+corpus parses 1268 `Rebuild` nodes, 1264 of them carrying an e-class: 128
+zero-step (4b wrote no row for these at all), 238 one-step, 896 two-step and 2
+three-step, plus 4 two-step nodes with no e-class. The four are
+`merge_during_rebuild`'s custom function, whose value column is an output rather
+than an e-class and so keeps `fd_value_rebuild_rule` — the only fixture keeping
+the plain `Rebuild_<k>` family alive.
+
+**The corpus polices reading the column, but not nesting it.** Dropping the
+e-class in `parse_proof_inner` fails 50 tests (48 on the middle-term assertion, 2
+on `rebuild step 1 does not start at that child of the row`). Dropping it from
+`nested_proofs` instead leaves all 206 green, exactly as 4b found for the row and
+step entries — so the e-class field is covered by the same two unit tests, now
+run over both shapes: `a_deep_rebuild_chain_parses_without_a_deep_stack` chains
+50 000 links through the e-class field as well as through the row proof, and
+overflows a 512 KiB stack without the entry.
+
+The extracted proof term also got *shallower* per rebuild link, so nothing about
+`check_proof`'s remaining recursion gets worse: a `Sym` + `Trans` pair over the
+row proof is two levels, the packed row is one.
+
+What the remaining work inherits:
+
+* **Phase 5's CSE.** Re-enabled after encoding, CSE sees a rebuild rule head that
+  is a run of `let`s and one wide `set`. There is nothing left in it to share, and
+  the `get-fresh!` binding the row's id must stay per-firing — the packing has
+  already taken what CSE could have found here.
+* **The head-traversal refactor.** It does not reach the rebuild path.
+  `expand_rebuild` is a local re-packing, not a head replay: a generated rebuild
+  rule is not in `proof_check_program` at all, so there is no head to walk under
+  `Option<bindings>`. It is now the *only* place the whole rebuild composition is
+  written down, so it stays outside that unification rather than being folded in.
+* **Phase 3b.** Untouched — a rebuild firing mints no `@Ast`, and `expand_rebuild`
+  reads none.
+* Anything enumerating the declared proof constructors now has two arity families
+  to cover, keyed by `RebuildShape` rather than by a step count.
 
 ### The container rebuild anchor was minted twice
 

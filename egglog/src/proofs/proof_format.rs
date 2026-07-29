@@ -385,12 +385,6 @@ pub enum Justification {
     Eval,
 }
 
-/// How many columns a rebuild proof row carrying `steps` steps has: the row
-/// proof, then a column literal and a step proof per step.
-fn rebuild_args(steps: usize) -> usize {
-    1 + 2 * steps
-}
-
 impl RawProofStore {
     /// After extracting a proof from the e-graph, convert it to a [`RawProof`].
     pub(crate) fn from_extracted(
@@ -449,11 +443,12 @@ impl RawProofStore {
             } = self.rule_columns(term_id);
             return premises.into_iter().chain(bridges).collect();
         }
-        if let Some(steps) = names.rebuild_proof_steps(head)
-            && args.len() == rebuild_args(steps)
+        if let Some(shape) = names.rebuild_proof_shape(head)
+            && args.len() == shape.columns()
         {
             return std::iter::once(args[0])
-                .chain((0..steps).map(|step| args[2 + 2 * step]))
+                .chain((0..shape.steps).map(|step| args[2 + 2 * step]))
+                .chain(shape.eclass.then(|| args[shape.columns() - 1]))
                 .collect();
         }
         match args.len() {
@@ -550,14 +545,14 @@ impl RawProofStore {
             let premises = premises.iter().map(|arg| self.parse_proof(*arg)).collect();
             let bridges = bridges.iter().map(|arg| self.parse_proof(*arg)).collect();
             RawProof::Rule(name, premises, bridges, self.parse_int(site))
-        } else if let Some(count) = self.names.rebuild_proof_steps(&head) {
+        } else if let Some(shape) = self.names.rebuild_proof_shape(&head) {
             assert!(
-                args.len() == rebuild_args(count),
+                args.len() == shape.columns(),
                 "{head} should have {} args",
-                rebuild_args(count)
+                shape.columns()
             );
             let row = self.parse_proof(args[0]);
-            let steps = (0..count)
+            let steps = (0..shape.steps)
                 .map(|step| {
                     (
                         self.parse_index(args[1 + 2 * step]),
@@ -565,13 +560,10 @@ impl RawProofStore {
                     )
                 })
                 .collect();
-            // The rebuild rule composes an e-class move as its own `Sym`/`Trans`
-            // pair, so no row states one.
-            RawProof::Rebuild {
-                row,
-                steps,
-                eclass: None,
-            }
+            let eclass = shape
+                .eclass
+                .then(|| self.parse_proof(args[shape.columns() - 1]));
+            RawProof::Rebuild { row, steps, eclass }
         } else if head == self.names.merge_fn_idx_constructor {
             assert!(args.len() == 4, "merge-idx constructor should have 4 args");
             let function = self.parse_string(args[0]);
@@ -1553,6 +1545,7 @@ impl Proof {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::proofs::proof_encoding_helpers::RebuildShape;
     use crate::util::SymbolGen;
 
     /// One firing of a rebuild rule over a four-child view row, as the premises
@@ -1751,15 +1744,25 @@ mod tests {
         }
     }
 
-    /// A rebuild row over `row`, one step per `(column, step)` pair, spelled as
-    /// the extracted term of a [`EncodingNames::rebuild_proof`] row.
-    fn rebuild_term(raw: &mut RawProofStore, row: TermId, steps: &[(i64, TermId)]) -> TermId {
-        let head = raw.names.rebuild_proof(steps.len());
+    /// A rebuild row over `row`, one step per `(column, step)` pair and the
+    /// e-class's own step when its view has one, spelled as the extracted term
+    /// of a [`EncodingNames::rebuild_proof`] row.
+    fn rebuild_term(
+        raw: &mut RawProofStore,
+        row: TermId,
+        steps: &[(i64, TermId)],
+        eclass: Option<TermId>,
+    ) -> TermId {
+        let head = raw.names.rebuild_proof(RebuildShape {
+            steps: steps.len(),
+            eclass: eclass.is_some(),
+        });
         let mut args = vec![row];
         for &(column, step) in steps {
             args.push(raw.term_dag.lit(Literal::Int(column)));
             args.push(step);
         }
+        args.extend(eclass);
         raw.term_dag.app(head, args)
     }
 
@@ -1772,37 +1775,57 @@ mod tests {
     }
 
     /// The columns are literals, so a reader has to skip them to find the
-    /// proofs. Getting that wrong here costs no correctness — `parse_proof`
-    /// recurses on whatever it was not handed — but it costs the stack, which
-    /// is what `parse_nested_first` exists to spend on the heap instead.
+    /// proofs, and the e-class's is past the last of them. Getting that wrong
+    /// here costs no correctness — `parse_proof` recurses on whatever it was
+    /// not handed — but it costs the stack, which is what `parse_nested_first`
+    /// exists to spend on the heap instead.
     #[test]
     fn a_rebuild_rows_nested_proofs_are_its_row_and_its_steps() {
         let mut raw = empty_store();
         let row = fiat_term(&mut raw, "row");
         let first = fiat_term(&mut raw, "first");
         let second = fiat_term(&mut raw, "second");
-        let term = rebuild_term(&mut raw, row, &[(0, first), (2, second)]);
-        assert_eq!(raw.nested_proofs(term), vec![row, first, second]);
+        let eclass = fiat_term(&mut raw, "eclass");
+        let steps = [(0, first), (2, second)];
+        let term = rebuild_term(&mut raw, row, &steps, None);
+        assert_eq!(
+            raw.nested_proofs(term),
+            vec![row, first, second],
+            "a rebuild row nests its row proof and its step proofs"
+        );
+        let term = rebuild_term(&mut raw, row, &steps, Some(eclass));
+        assert_eq!(
+            raw.nested_proofs(term),
+            vec![row, first, second, eclass],
+            "and the e-class proof after them, when it has one"
+        );
     }
 
-    /// A chain of rebuilds — each firing's row proof being the previous
-    /// firing's — parses without recursing per link, on a stack far too small
-    /// to hold one frame per link.
+    /// A chain of rebuilds parses without recursing per link, on a stack far
+    /// too small to hold one frame per link — through either proof field a link
+    /// can chain on.
     #[test]
     fn a_deep_rebuild_chain_parses_without_a_deep_stack() {
-        std::thread::Builder::new()
-            .stack_size(512 * 1024)
-            .spawn(|| {
-                let mut raw = empty_store();
-                let step = fiat_term(&mut raw, "step");
-                let mut chain = fiat_term(&mut raw, "row");
-                for _ in 0..50_000 {
-                    chain = rebuild_term(&mut raw, chain, &[(0, step)]);
-                }
-                RawProofStore::from_extracted(&raw.names, raw.term_dag.clone(), chain);
-            })
-            .expect("spawn")
-            .join()
-            .expect("a deep rebuild chain should parse");
+        for through_eclass in [false, true] {
+            std::thread::Builder::new()
+                .stack_size(512 * 1024)
+                .spawn(move || {
+                    let mut raw = empty_store();
+                    let step = fiat_term(&mut raw, "step");
+                    let leaf = fiat_term(&mut raw, "row");
+                    let mut chain = leaf;
+                    for _ in 0..50_000 {
+                        chain = if through_eclass {
+                            rebuild_term(&mut raw, leaf, &[(0, step)], Some(chain))
+                        } else {
+                            rebuild_term(&mut raw, chain, &[(0, step)], None)
+                        };
+                    }
+                    RawProofStore::from_extracted(&raw.names, raw.term_dag.clone(), chain);
+                })
+                .expect("spawn")
+                .join()
+                .expect("a deep rebuild chain should parse");
+        }
     }
 }

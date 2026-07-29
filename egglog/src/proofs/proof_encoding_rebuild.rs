@@ -4,6 +4,7 @@
 //! in [`super::proof_encoding`].)
 
 use super::proof_encoding::{ProofInstrumentor, ViewIndex};
+use super::proof_encoding_helpers::RebuildShape;
 use crate::typechecking::FuncType;
 use crate::*;
 
@@ -194,11 +195,11 @@ impl ProofInstrumentor<'_> {
     /// `:unsafe-seminaive` (or `:naive` under the test knob); the driving `@UF`
     /// delta in the body is what makes that read sound.
     ///
-    /// In proof mode the whole row's congruence composition is one
+    /// In proof mode a firing writes one
     /// [`rebuild_proof`](super::proof_encoding_helpers::EncodingNames::rebuild_proof)
-    /// row carrying each canonicalized column beside its step proof, so a firing
-    /// writes one row there rather than one per column. Rebuilding the e-class
-    /// keeps its own `Sym`/`Trans` pair.
+    /// row: each canonicalized column beside its step proof, plus the e-class's
+    /// own step when the view's output is an e-class. A view with neither writes
+    /// no proof row.
     fn indexed_rebuild_rule(
         &mut self,
         fdecl: &ResolvedFunctionDecl,
@@ -256,17 +257,6 @@ impl ProofInstrumentor<'_> {
             }
             updated[j] = canon;
         }
-        // The whole row's congruence composition is one row: the step proofs and
-        // the columns they are about, packed together.
-        let mut decls = String::new();
-        let mut proof_acc = row_pf.clone();
-        if !steps.is_empty() {
-            let (rebuild, decl) = self.rebuild_proof_constructor(steps.len());
-            decls = decl;
-            let proof_sort = self.proof_sort();
-            let args = format!("{row_pf} {}", ListDisplay(&steps, " "));
-            proof_acc = self.mint(&mut lets, &rebuild, &args, &proof_sort);
-        }
         // Only an e-class is canonicalized here, and it moves the other way round
         // from a child: the row proof reads `eclass = f(children)`, so a new leader
         // composes as `Trans(Sym(eclass = leader), …)`. A custom function's value
@@ -274,6 +264,7 @@ impl ProofInstrumentor<'_> {
         // wrong for it, so it keeps [`Self::fd_value_rebuild_rule`], which rewrites
         // it by `Congr` at its position.
         let out_ty = &types[n_keys];
+        let mut eclass_step = None;
         let value_var = if self.output_is_eclass(fdecl)
             && out_ty.is_eq_sort()
             && !out_ty.is_eq_container_sort()
@@ -288,26 +279,36 @@ impl ProofInstrumentor<'_> {
                 let term_proof = self.term_proof_name(out_ty.name());
                 let refl = self.fresh_var();
                 let step = self.fresh_var();
-                let sym = self.proof_names().eq_sym_constructor.clone();
-                let trans = self.proof_names().eq_trans_constructor.clone();
-                let proof_sort = self.proof_sort();
                 lets.push(format!("(let {refl} ({term_proof} {eclass}))"));
                 lets.push(format!(
                     "(let {step} ({} {eclass} {refl}))",
                     uf_canon_proof_prim_name(&uf_out)
                 ));
-                let sym_pf = self.mint(&mut lets, &sym, &step, &proof_sort);
-                proof_acc = self.mint(
-                    &mut lets,
-                    &trans,
-                    &format!("{sym_pf} {proof_acc}"),
-                    &proof_sort,
-                );
+                // The packed row takes the step as it stands: its expansion is
+                // what applies the `Sym`.
+                eclass_step = Some(step);
             }
             canon
         } else {
             eclass.clone()
         };
+
+        let mut decls = String::new();
+        let mut proof_acc = row_pf.clone();
+        let shape = RebuildShape {
+            steps: steps.len(),
+            eclass: eclass_step.is_some(),
+        };
+        if shape.steps > 0 || shape.eclass {
+            let (rebuild, decl) = self.rebuild_proof_constructor(shape);
+            decls = decl;
+            let proof_sort = self.proof_sort();
+            let args: Vec<String> = std::iter::once(row_pf.clone())
+                .chain(steps)
+                .chain(eclass_step)
+                .collect();
+            proof_acc = self.mint(&mut lets, &rebuild, &args.join(" "), &proof_sort);
+        }
 
         let pf_arg = if proofs { proof_acc } else { "()".to_string() };
         let updated_view = self.update_fd_view(&fdecl.name, &updated, &value_var, &pf_arg);

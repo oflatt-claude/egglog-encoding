@@ -35,13 +35,15 @@ pub(crate) struct EncodingNames {
     /// A later conclusion site of the same head: the previous site's rule proof
     /// plus this site's one canonicalization bridge.
     pub(crate) rule_link_constructor: String,
-    /// Prefix of the rebuild proofs packing one view-rebuild firing's congruence
-    /// steps: step count `k`'s constructor is [`Self::rebuild_proof`]. Derived
-    /// from one name for the same reason as [`Self::rule_fused_prefix`].
+    /// Prefix of the rebuild proofs for a view whose output is not an e-class:
+    /// step count `k`'s constructor is [`Self::rebuild_proof`]. Derived from one
+    /// name for the same reason as [`Self::rule_fused_prefix`].
     pub(crate) rebuild_prefix: String,
-    /// The step counts [`ProofInstrumentor::rebuild_proof_constructor`] has
-    /// declared.
-    pub(crate) rebuild_declared: HashSet<usize>,
+    /// Prefix of the rebuild proofs for a view whose output is an e-class, which
+    /// the firing canonicalizes as well.
+    pub(crate) rebuild_eq_prefix: String,
+    /// The shapes [`ProofInstrumentor::rebuild_proof_constructor`] has declared.
+    pub(crate) rebuild_declared: HashSet<RebuildShape>,
     pub(crate) merge_fn_idx_constructor: String,
     pub(crate) merge_fn_row_constructor: String,
     pub(crate) eq_trans_constructor: String,
@@ -63,6 +65,26 @@ pub(crate) struct EncodingNames {
     pub(crate) to_delete_name: HashMap<String, String>,
     pub(crate) subsumed_name: HashMap<String, String>,
     pub(crate) term_proof_name: HashMap<String, String>,
+}
+
+/// What one view-rebuild firing's packed proof row carries. Both components are
+/// fixed by the view's schema when its rebuild rule is generated, so they are
+/// part of the constructor's name rather than of its columns.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct RebuildShape {
+    /// How many child columns were canonicalized.
+    pub(crate) steps: usize,
+    /// Whether the e-class was canonicalized as well, which only a view whose
+    /// output is an e-class does.
+    pub(crate) eclass: bool,
+}
+
+impl RebuildShape {
+    /// The constructor's column count: the row proof, a column literal beside a
+    /// step proof per step, then the e-class proof when there is one.
+    pub(crate) fn columns(self) -> usize {
+        1 + 2 * self.steps + usize::from(self.eclass)
+    }
 }
 
 /// The conclusion-site column of a rule proof: an `i64` naming the site of the
@@ -178,18 +200,34 @@ impl EncodingNames {
             .ok()
     }
 
-    /// The rebuild proof constructor packing `steps` congruence steps.
-    pub(crate) fn rebuild_proof(&self, steps: usize) -> String {
-        format!("{}_{steps}", self.rebuild_prefix)
+    /// The rebuild proof constructor packing `shape`.
+    pub(crate) fn rebuild_proof(&self, shape: RebuildShape) -> String {
+        let prefix = if shape.eclass {
+            &self.rebuild_eq_prefix
+        } else {
+            &self.rebuild_prefix
+        };
+        format!("{prefix}_{}", shape.steps)
     }
 
-    /// The step count `head` packs, when it is one of [`Self::rebuild_proof`]'s
+    /// The shape `head` packs, when it is one of [`Self::rebuild_proof`]'s
     /// constructors.
-    pub(crate) fn rebuild_proof_steps(&self, head: &str) -> Option<usize> {
-        head.strip_prefix(&self.rebuild_prefix)?
-            .strip_prefix('_')?
-            .parse()
-            .ok()
+    pub(crate) fn rebuild_proof_shape(&self, head: &str) -> Option<RebuildShape> {
+        // The order the prefixes are tried in does not matter: one is the other
+        // followed by `Eq`, which stands where the step count's `_` would be.
+        let steps = |prefix: &str| -> Option<usize> {
+            head.strip_prefix(prefix)?.strip_prefix('_')?.parse().ok()
+        };
+        if let Some(steps) = steps(&self.rebuild_eq_prefix) {
+            return Some(RebuildShape {
+                steps,
+                eclass: true,
+            });
+        }
+        Some(RebuildShape {
+            steps: steps(&self.rebuild_prefix)?,
+            eclass: false,
+        })
     }
 
     pub(crate) fn new(symbol_gen: &mut SymbolGen) -> Self {
@@ -201,6 +239,7 @@ impl EncodingNames {
             rule_fused_declared: HashSet::default(),
             rule_link_constructor: symbol_gen.fresh("RuleLink"),
             rebuild_prefix: symbol_gen.fresh("Rebuild"),
+            rebuild_eq_prefix: symbol_gen.fresh("RebuildEq"),
             rebuild_declared: HashSet::default(),
             merge_fn_idx_constructor: symbol_gen.fresh("MergeIdx"),
             merge_fn_row_constructor: symbol_gen.fresh("MergeRow"),
@@ -319,27 +358,32 @@ impl ProofInstrumentor<'_> {
         self.parse_program(&decls)
     }
 
-    /// The rebuild proof constructor packing `steps` congruence steps, together
-    /// with its declaration — empty once some program has declared it.
+    /// The rebuild proof constructor packing `shape`, together with its
+    /// declaration — empty once some program has declared it.
     ///
-    /// A view's step count is a property of its schema, so unlike a rule's
-    /// premise count it is not known before the view's rules are generated; the
+    /// A view's shape is a property of its schema, so unlike a rule's premise
+    /// count it is not known before the view's rules are generated; the
     /// declaration is emitted with the first rule that uses it.
-    pub(crate) fn rebuild_proof_constructor(&mut self, steps: usize) -> (String, String) {
-        let name = self.proof_names().rebuild_proof(steps);
+    pub(crate) fn rebuild_proof_constructor(&mut self, shape: RebuildShape) -> (String, String) {
+        let name = self.proof_names().rebuild_proof(shape);
         if !self
             .egraph
             .proof_state
             .proof_names
             .rebuild_declared
-            .insert(steps)
+            .insert(shape)
         {
             return (name, String::new());
         }
         let proof = self.proof_names().proof_datatype.clone();
-        let columns: String = (0..steps).map(|_| format!(" i64 {proof}")).collect();
+        let steps: String = (0..shape.steps).map(|_| format!(" i64 {proof}")).collect();
+        let eclass = if shape.eclass {
+            format!(" {proof}")
+        } else {
+            String::new()
+        };
         let decl = format!(
-            "(function {name} ({proof}{columns} {proof}) Unit :no-merge :internal-hidden :internal-term-node)\n"
+            "(function {name} ({proof}{steps}{eclass} {proof}) Unit :no-merge :internal-hidden :internal-term-node)\n"
         );
         (name, decl)
     }
@@ -616,14 +660,17 @@ impl ProofInstrumentor<'_> {
 ;; it, so no term is stored.
 (function {rule_link_constructor} (String {proof_datatype} {proof_datatype} i64 {proof_datatype}) Unit :no-merge :internal-hidden :internal-term-node)
 
-;; One firing of a view's index-driven rebuild rule, packing the congruence steps
-;; it composes onto the row proof into a single row, in a `Rebuild_<k>` declared
-;; per step count (see `rebuild_proof_constructor`):
-;;   (Rebuild_<k> <row proof> <column> <step proof> ...)
+;; One firing of a view's index-driven rebuild rule, packing the whole
+;; composition it justifies into a single row, in a constructor declared per
+;; shape (see `rebuild_proof_constructor`):
+;;   (Rebuild_<k>   <row proof> <column> <step proof> ...)
+;;   (RebuildEq_<k> <row proof> <column> <step proof> ... <e-class proof>)
 ;; The columns are literals fixed when the rule is generated; a parser seeing only
 ;; the row cannot recover them from the proofs. They are in ascending order, which
 ;; the expansion relies on: a `Congr` at a different nesting proves the same
-;; proposition by a different tree.
+;; proposition by a different tree. The e-class proof is a column of its own
+;; rather than a step, since it composes on the left instead of at a child
+;; position, and it is the raw `old = new` step: the expansion applies the `Sym`.
 
 ;; term-free merge justification for an FD custom-function view subexpression:
 ;; name of function, two premise proofs, and the pre-order index of the merge-body
