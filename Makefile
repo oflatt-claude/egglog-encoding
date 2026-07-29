@@ -79,7 +79,7 @@ benchmark-smoke:
 # (nightly.cs.washington.edu) runs this target and serves that directory,
 # matching `report=` in the nightly configuration.
 nightly: nightly-uv nightly-rustup
-	$(NIGHTLY_UV) run --locked python scripts/nightly_bench.py
+	CARGO_HOME="$(CARGO_HOME_DIR)" $(NIGHTLY_UV) run --locked python scripts/nightly_bench.py
 
 nightly-uv:
 	@command -v uv >/dev/null || test -x "$(UV_BOOTSTRAP_DIR)/uv" || \
@@ -95,7 +95,7 @@ nightly-rustup:
 # The nightly host's run at one round, for trying it locally. nightly/output/ is
 # git-ignored, so this writes it just as the host does.
 nightly-local: nightly-uv nightly-rustup
-	$(NIGHTLY_UV) run --locked python scripts/nightly_bench.py --rounds 1
+	CARGO_HOME="$(CARGO_HOME_DIR)" $(NIGHTLY_UV) run --locked python scripts/nightly_bench.py --rounds 1
 
 update-snapshots:
 	uv run --locked pytest -q --snapshot-update --snapshot-details

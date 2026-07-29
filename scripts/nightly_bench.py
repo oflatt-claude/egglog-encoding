@@ -67,16 +67,19 @@ HEADLINE: Endpoint = ("main", "proofs")
 
 # The nightly host leaves rustup's shim directory off PATH, so cargo resolves to
 # Ubuntu's, which predates rust-toolchain.toml's pin; only rustup honours that
-# pin. Putting the shims first makes cargo fetch the pinned toolchain.
-CARGO_BIN_DIR = Path.home() / ".cargo" / "bin"
+# pin. Putting the shims first makes cargo fetch the pinned toolchain. `CARGO_HOME`
+# follows the Makefile's CARGO_HOME_DIR, which is where it installs rustup.
+CARGO_BIN_DIR = Path(os.environ.get("CARGO_HOME") or Path.home() / ".cargo") / "bin"
 
 
 def _bench_env() -> dict[str, str]:
     """bench.py's environment: rustup's cargo first, and no browser launch."""
 
-    path = os.environ.get("PATH", "").split(os.pathsep)
-    if str(CARGO_BIN_DIR) not in path:
-        path.insert(0, str(CARGO_BIN_DIR))
+    # Prepend unconditionally: already being *somewhere* on PATH is not enough,
+    # since a directory holding a distro cargo can precede it and still win.
+    shims = str(CARGO_BIN_DIR)
+    path = [entry for entry in os.environ.get("PATH", "").split(os.pathsep) if entry != shims]
+    path.insert(0, shims)
     # Keep the headless nightly host from launching bench.py's best-effort browser.
     return {**os.environ, "PATH": os.pathsep.join(path), "BROWSER": "true"}
 
