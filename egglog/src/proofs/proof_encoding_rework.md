@@ -1142,3 +1142,14 @@ number.
   repeated runs, or restrict to the other 146 files. The snapshots are not
   affected: what the tests assert is stable, only the internal table
   populations are not.
+
+  The variance is confined to how many times a merge function runs, not to what
+  the run computes. Over three runs of `math-microbenchmark.egg` under
+  `--term-encoding --proofs`, `(print-size)` is byte-identical and every rule's
+  `num matches` agrees exactly (1716352 in total); only the timing lines and the
+  hash-ordered rule report differ. So the e-graph reaches the same fixed point by
+  a different number of collisions, and a measurement keyed to user tables or to
+  match counts is reproducible even on these six — it is the proof tables, one
+  row per collision, that move. Diff the `(print-size)` block alone: a whole-output
+  diff is dominated by timings and rule ordering and looks nondeterministic
+  everywhere.
