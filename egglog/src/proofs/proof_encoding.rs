@@ -33,7 +33,7 @@ pub(crate) enum Connector {
     /// A rule head's, named by site and role. The head's own conclusion at the
     /// site determines it (see [`crate::proofs::proof_head_skeleton`]), so a row
     /// is minted only where the encoding stores the proof.
-    Role(SiteRef, Asts),
+    Role(SiteRef),
 }
 
 /// A constructor's *natural* node — children at their as-built ids — and the
@@ -46,18 +46,10 @@ struct Natural {
     fv_nat: String,
     /// `fv_nat = fv_nat`, the head's own conclusion here.
     nat_prf: String,
-    /// The AST endpoints `nat_prf` was minted over, reused by the site's other
-    /// proofs. `None` for a term-free merge justification.
-    asts: Option<Asts>,
     /// `fv_nat = f(deduped children)`: one `Congr` per canonicalized child.
     /// `None` in a rule head, where proof conversion folds it instead.
     to_dedup: Option<String>,
 }
-
-/// The two AST endpoints a site's `Rule` row was minted over. Every other proof
-/// about the same site reuses them, so naming one costs no AST rows.
-#[derive(Clone)]
-pub(crate) struct Asts(String, String);
 
 /// Which way a pair-valued table's carried proofs point, selecting the
 /// displaced-edge composition in [`ProofInstrumentor::ordered_union_merge`].
@@ -196,9 +188,10 @@ impl<'a> ProofInstrumentor<'a> {
         Ok(lowered)
     }
 
-    /// Mint a `Rule` or `Fiat` proof of the equality `a = b` over the two
-    /// endpoints' ASTs, appending the mints to `stmts`. Panics on merge
-    /// justifications (merge bodies contain no `union` actions).
+    /// Mint a `Rule` or `Fiat` proof of the equality `a = b`, appending the mints
+    /// to `stmts`. Only `Fiat` names the two endpoints' ASTs; a rule proof's
+    /// proposition comes from its site. Panics on merge justifications (merge
+    /// bodies contain no `union` actions).
     fn edge_proof(
         &mut self,
         stmts: &mut Vec<String>,
@@ -207,36 +200,15 @@ impl<'a> ProofInstrumentor<'a> {
         b: &str,
         justification: &Justification,
     ) -> String {
-        self.edge_proof_with_asts(stmts, to_ast, a, b, justification)
-            .0
-    }
-
-    /// [`Self::edge_proof`], also returning the AST endpoints it minted (`None`
-    /// for a term-free merge justification, which has none).
-    fn edge_proof_with_asts(
-        &mut self,
-        stmts: &mut Vec<String>,
-        to_ast: &str,
-        a: &str,
-        b: &str,
-        justification: &Justification,
-    ) -> (String, Option<Asts>) {
-        let ast_sort = self.proof_names().ast_sort.clone();
-        let proof_sort = self.proof_sort();
         match justification {
-            Justification::Rule(..) => {
-                let a1 = self.mint(stmts, to_ast, a, &ast_sort);
-                let a2 = self.mint(stmts, to_ast, b, &ast_sort);
-                let asts = Asts(a1, a2);
-                let proof = self.rule_row(stmts, justification, &asts);
-                (proof, Some(asts))
-            }
+            Justification::Rule(..) => self.rule_row(stmts, justification),
             Justification::Fiat => {
+                let ast_sort = self.proof_names().ast_sort.clone();
+                let proof_sort = self.proof_sort();
                 let a1 = self.mint(stmts, to_ast, a, &ast_sort);
                 let a2 = self.mint(stmts, to_ast, b, &ast_sort);
                 let fiat = self.proof_names().fiat_constructor.clone();
-                let proof = self.mint(stmts, &fiat, &format!("{a1} {a2}"), &proof_sort);
-                (proof, Some(Asts(a1, a2)))
+                self.mint(stmts, &fiat, &format!("{a1} {a2}"), &proof_sort)
             }
             Justification::MergeIdx(..) | Justification::MergeRow(..) => panic!(
                 "Merge functions do not include union actions, so proof should not be by merge"
@@ -244,32 +216,25 @@ impl<'a> ProofInstrumentor<'a> {
         }
     }
 
-    /// Mint the rule proof row `justification` names, over already-minted AST
-    /// endpoints. Proof conversion derives the proposition from the site column
-    /// alone, so the AST columns only keep distinct rows distinct (phase 3 of the
-    /// rework drops them).
+    /// Mint the rule proof row `justification` names. Proof conversion derives the
+    /// proposition from the site column alone, so the row stores no terms.
     ///
     /// A row needing no bridge premise carries the body premises inline; one
     /// needing them chains onto a row that already names all but the newest, so
     /// the bridges cost no rows of their own.
-    fn rule_row(
-        &mut self,
-        stmts: &mut Vec<String>,
-        justification: &Justification,
-        asts: &Asts,
-    ) -> String {
+    fn rule_row(&mut self, stmts: &mut Vec<String>, justification: &Justification) -> String {
         let want = if justification.needs_bridges() {
             self.head_chain.as_ref().map_or(0, |c| c.bridges.len())
         } else {
             0
         };
         let proof = match want.checked_sub(1) {
-            None => self.inline_rule_row(stmts, justification, asts),
+            None => self.inline_rule_row(stmts, justification),
             // A head records a bridge only just after minting the row at the
             // level below it, so the row to chain onto is always already there.
             Some(bridge) => {
                 let prev = self.head_chain.as_ref().expect("in a rule head").rows[bridge].clone();
-                self.link_rule_row(stmts, justification, &prev, bridge, asts)
+                self.link_rule_row(stmts, justification, &prev, bridge)
             }
         };
         if let Some(chain) = &mut self.head_chain {
@@ -286,7 +251,6 @@ impl<'a> ProofInstrumentor<'a> {
         &mut self,
         stmts: &mut Vec<String>,
         justification: &Justification,
-        Asts(a1, a2): &Asts,
     ) -> String {
         let Justification::Rule(rule_name, premises, _) = justification else {
             panic!("only a rule justification mints a rule proof row");
@@ -299,7 +263,7 @@ impl<'a> ProofInstrumentor<'a> {
         self.mint(
             stmts,
             &rule,
-            &format!("{rule_name} {premises}{a1} {a2} {site}"),
+            &format!("{rule_name} {premises}{site}"),
             &proof_sort,
         )
     }
@@ -312,7 +276,6 @@ impl<'a> ProofInstrumentor<'a> {
         justification: &Justification,
         prev: &str,
         bridge: usize,
-        Asts(a1, a2): &Asts,
     ) -> String {
         let Justification::Rule(rule_name, _, _) = justification else {
             panic!("only a rule justification mints a rule proof row");
@@ -325,27 +288,25 @@ impl<'a> ProofInstrumentor<'a> {
         self.mint(
             stmts,
             &link,
-            &format!("{rule_name} {prev} {bridge} {a1} {a2} {site}"),
+            &format!("{rule_name} {prev} {bridge} {site}"),
             &proof_sort,
         )
     }
 
     /// Name one of a site's other propositions (see [`SiteRole`]) with a single
-    /// `Rule` row, reusing the AST endpoints the site's own conclusion minted.
-    /// Proof conversion rebuilds the composition this replaces.
+    /// `Rule` row. Proof conversion rebuilds the composition this replaces.
     fn roled_proof(
         &mut self,
         stmts: &mut Vec<String>,
         justification: &Justification,
         role: SiteRole,
-        asts: &Asts,
     ) -> String {
         let site = justification
             .static_site()
             .expect("a roled proof needs a site fixed at encoding time")
             .with_role(role);
         let roled = justification.at_site(site);
-        self.rule_row(stmts, &roled, asts)
+        self.rule_row(stmts, &roled)
     }
 
     /// Record a subterm's view-row proof as a bridge premise of the rule proofs
@@ -373,9 +334,9 @@ impl<'a> ProofInstrumentor<'a> {
     ) -> String {
         match connector {
             Connector::Node(node) => node.clone(),
-            Connector::Role(site, asts) => {
+            Connector::Role(site) => {
                 let roled = justification.at_site(*site);
-                self.rule_row(stmts, &roled, asts)
+                self.rule_row(stmts, &roled)
             }
         }
     }
@@ -586,7 +547,6 @@ impl<'a> ProofInstrumentor<'a> {
             dedup_args,
             fv_nat,
             nat_prf,
-            asts,
             to_dedup: nat_to_dedup,
         } = self.build_natural_with_congr(
             res,
@@ -623,15 +583,14 @@ impl<'a> ProofInstrumentor<'a> {
             // the whole composition, so one row records it and the edge proof it
             // is built from needs no row of its own.
             None => {
-                let asts = asts.as_ref().expect("a rule proof mints AST endpoints");
                 let roled = justification.at_site(plan.edge.with_role(SiteRole::GuestView));
-                self.rule_row(res, &roled, asts)
+                self.rule_row(res, &roled)
             }
         };
         // The guest's term keeps its own id (`fv_nat`); only the view VALUE uses
         // the target. Emitting `(F dedup_args target)` would add the guest's
-        // shape to `target`'s term relation, making `target`'s `@Ast` ambiguous
-        // during proof reconstruction (which reads term rows, not views).
+        // shape to `target`'s term relation, making the term proof reconstruction
+        // picks for `target` ambiguous (it reads term rows, not views).
         let dedup_disp = ListDisplay(&dedup_args, " ").to_string();
         res.push(format!(
             "(set ({view} {dedup_disp}) (values {target} {view_proof}))"
@@ -642,10 +601,7 @@ impl<'a> ProofInstrumentor<'a> {
                 let sv = self.mint_sym(res, &view_proof);
                 Connector::Node(self.mint_trans(res, chain, &sv))
             }
-            None => Connector::Role(
-                plan.edge.with_role(SiteRole::GuestConnector),
-                asts.expect("a rule proof mints AST endpoints"),
-            ),
+            None => Connector::Role(plan.edge.with_role(SiteRole::GuestConnector)),
         };
         nat_conn.insert(
             guest.to_string(),
@@ -1158,60 +1114,44 @@ impl<'a> ProofInstrumentor<'a> {
         to_ast: &str,
         justification: &Justification,
     ) -> String {
-        self.term_proof_with_asts(stmts, fv, to_ast, justification)
-            .0
-    }
-
-    /// [`Self::term_proof_for_justification`], also returning the AST endpoints it
-    /// minted (`None` for a term-free merge justification, which has none).
-    fn term_proof_with_asts(
-        &mut self,
-        stmts: &mut Vec<String>,
-        fv: &str,
-        to_ast: &str,
-        justification: &Justification,
-    ) -> (String, Option<Asts>) {
-        let ast_sort = self.proof_names().ast_sort.clone();
         let proof_sort = self.proof_sort();
         match justification {
-            // Both AST endpoints wrap the same `fv`, so these prove `fv = fv`.
+            // The site's own conclusion is `fv = fv` (`fv`/`to_ast` unused: the
+            // proposition comes from the site).
             Justification::Rule(..) => {
-                let a1 = self.mint(stmts, to_ast, fv, &ast_sort);
-                let a2 = self.mint(stmts, to_ast, fv, &ast_sort);
-                let asts = Asts(a1, a2);
-                let proof = self.rule_row(stmts, justification, &asts);
+                let proof = self.rule_row(stmts, justification);
                 self.mark_reflexive(&proof);
-                (proof, Some(asts))
+                proof
             }
+            // Both AST endpoints wrap the same `fv`, so this proves `fv = fv`.
             Justification::Fiat => {
+                let ast_sort = self.proof_names().ast_sort.clone();
                 let a1 = self.mint(stmts, to_ast, fv, &ast_sort);
                 let a2 = self.mint(stmts, to_ast, fv, &ast_sort);
                 let fiat = self.proof_names().fiat_constructor.clone();
                 let proof = self.mint(stmts, &fiat, &format!("{a1} {a2}"), &proof_sort);
                 self.mark_reflexive(&proof);
-                (proof, Some(Asts(a1, a2)))
+                proof
             }
             // Term-free: no AST minted (`fv`/`to_ast` unused). The checker
             // reconstructs the conclusion from the merge body + premise outputs.
             Justification::MergeIdx(fn_name, p1, p2, idx) => {
                 let merge_idx = self.proof_names().merge_fn_idx_constructor.clone();
-                let proof = self.mint(
+                self.mint(
                     stmts,
                     &merge_idx,
                     &format!("\"{fn_name}\" {p1} {p2} {idx}"),
                     &proof_sort,
-                );
-                (proof, None)
+                )
             }
             Justification::MergeRow(fn_name, p1, p2) => {
                 let merge_row = self.proof_names().merge_fn_row_constructor.clone();
-                let proof = self.mint(
+                self.mint(
                     stmts,
                     &merge_row,
                     &format!("\"{fn_name}\" {p1} {p2}"),
                     &proof_sort,
-                );
-                (proof, None)
+                )
             }
         }
     }
@@ -1539,7 +1479,7 @@ impl<'a> ProofInstrumentor<'a> {
             &ListDisplay(&nat_args, " ").to_string(),
             view_sort,
         );
-        let (nat_prf, asts) = self.term_proof_with_asts(res, &fv_nat, &to_ast, justification);
+        let nat_prf = self.term_proof_for_justification(res, &fv_nat, &to_ast, justification);
         let in_rule_head = justification.static_site().is_some();
         let to_dedup = (!in_rule_head).then(|| {
             let mut chain = nat_prf.clone();
@@ -1555,7 +1495,6 @@ impl<'a> ProofInstrumentor<'a> {
             dedup_args,
             fv_nat,
             nat_prf,
-            asts,
             to_dedup,
         }
     }
@@ -1597,7 +1536,6 @@ impl<'a> ProofInstrumentor<'a> {
             dedup_args,
             fv_nat,
             nat_prf,
-            asts,
             to_dedup,
         } = natural;
         let fv_can = self.mint(
@@ -1611,10 +1549,7 @@ impl<'a> ProofInstrumentor<'a> {
                 let sym_ntd = self.mint_sym(res, chain);
                 self.mint_trans(res, &sym_ntd, chain)
             }
-            None => {
-                let asts = asts.as_ref().expect("a rule proof mints AST endpoints");
-                self.roled_proof(res, justification, SiteRole::CanonicalReflexive, asts)
-            }
+            None => self.roled_proof(res, justification, SiteRole::CanonicalReflexive),
         };
 
         // Anchor both term proofs, dedup `fv_can` to the view e-class, and read the
@@ -1652,7 +1587,6 @@ impl<'a> ProofInstrumentor<'a> {
                     .static_site()
                     .expect("a rule proof names a site")
                     .with_role(SiteRole::Connector),
-                asts.expect("a rule proof mints AST endpoints"),
             ),
         };
 

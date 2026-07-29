@@ -218,8 +218,8 @@ by a `Congr` chain over any canonicalized children (see
 Crucially, the guest's term keeps **its own** minted id — the view *value* is
 `ab_canon`, but the term-relation row stays on the guest's natural node. Proof
 reconstruction reads term rows (not views), so writing the guest's shape under
-`ab_canon` would give that e-class two shapes and make its `@Ast` ambiguous;
-keeping the term on its own id avoids that.
+`ab_canon` would give that e-class two shapes and make the term reconstruction
+picks for it ambiguous; keeping the term on its own id avoids that.
 
 ## Building nested terms with proofs
 
@@ -242,11 +242,11 @@ The head first **flattens** to one constructor application per step:
 ```
 
 The body match binds `a b c rewrite_var` and yields the rule's premise proof,
-collected into a one-element list `prems = (PCons body_proof (PNil))`; every proof
-minted below is justified by `(Rule rule_name prems lhs rhs site)`, where `site`
-names the position in the head the equality is concluded at (see
-`proof_sites.rs`). Term, AST, and proof nodes are all relations, so a new node is
-a fresh id plus a row `set` (written inline below — e.g. `(Rule …)` means "mint a
+carried inline as `prems`; every proof minted below is justified by
+`(Rule rule_name prems site)`, where `site` names the position in the head the
+equality is concluded at (see `proof_sites.rs`) and is what the proposition is
+derived from. Term, AST, and proof nodes are all relations, so a new node is a
+fresh id plus a row `set` (written inline below — e.g. `(Rule …)` means "mint a
 proof id and `set` its `Rule` row").
 
 For each subterm we track up to three ids and the proofs between them:
@@ -271,7 +271,7 @@ child to rewrite: `d' = d`, and the connector is just the view proof.
 ;; natural d = (Add b c), with its `d = d` rule proof
 (let d (get-fresh! "Math"))
 (set (Add b c d) ())
-(let d_prf (Rule rule_name prems (AstMath d) (AstMath d) site_d))
+(let d_prf (Rule rule_name prems site_d))
 (set (MathProof d) d_prf)
 
 ;; intern (Add b c); d' is the representative the view returns
@@ -289,7 +289,7 @@ child to rewrite: `d' = d`, and the connector is just the view proof.
 ;; natural e = (Add a d), over d's as-built id
 (let e (get-fresh! "Math"))
 (set (Add a d e) ())
-(let e_prf (Rule rule_name prems (AstMath e) (AstMath e) site_e))
+(let e_prf (Rule rule_name prems site_e))
 (set (MathProof e) e_prf)
 
 ;; e' = (Add a d'): rewrite child 1 (d -> d')
@@ -308,7 +308,7 @@ Same shape with one child: rewrite `e -> e''` at index 0.
 ```text
 (let f (get-fresh! "Math"))
 (set (Neg e f) ())
-(let f_prf (Rule rule_name prems (AstMath f) (AstMath f) site_f))
+(let f_prf (Rule rule_name prems site_f))
 (set (MathProof f) f_prf)
 
 (let f_to_f' (Congr f_prf 0 e_to_e''))                   ;; f' = (Neg e''), `f = f'`
@@ -325,7 +325,7 @@ with the `f = f''` connector gives `rewrite_var = f''`. The edge is oriented to
 the union-find's `larger -> smaller` convention with `proof-of-max`/`proof-of-min`.
 
 ```text
-(let rw_to_f (Rule rule_name prems (AstMath rewrite_var) (AstMath f) site_union))
+(let rw_to_f (Rule rule_name prems site_union))
 (let rw_to_f'' (Trans rw_to_f f_to_f''))                 ;; `rewrite_var = f''`
 (set (UF_Math (ordering-max rewrite_var f''))
      (values (ordering-min rewrite_var f'') <rw_to_f'' oriented via proof-of-max/min>))

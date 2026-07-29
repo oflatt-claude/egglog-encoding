@@ -11,8 +11,8 @@ which premise proofs — and the connecting skeleton (`Congr` / `Trans` / `Sym`)
 is **reconstructed during proof conversion** rather than materialized as rows
 while rules run.
 
-Today a rule that builds a term and unions it writes nine proof rows per
-firing plus four `@Ast` rows. The target is one row.
+At the branch point a rule that builds a term and unions it wrote nine proof
+rows per firing plus four `@Ast` rows. The target is one row.
 
 ## Why this is possible
 
@@ -104,7 +104,8 @@ skeleton is still present to compare against.
 | 1 | reconstructor runs *beside* the skeleton, differentially asserted | done — see below |
 | 2a | rule proof carries a conclusion-site index; the conclusion is derived from it instead of from the stored `Ast` columns | done — zero snapshot changes |
 | 2b | stop emitting the RHS `Congr`/`Trans`/`Sym` skeleton; reconstruction synthesizes it | done — zero snapshot changes; see below |
-| 3 | drop `@Ast` | ditto |
+| 3a | drop the rule proofs' two `Ast` columns | done — zero snapshot changes; see below |
+| 3b | the rest of `@Ast`: site the top-level actions, per-base-sort `Fiat`, delete the `Ast` sort | ditto |
 | 4 | rebuilding → `RebuildN` | ditto |
 | 5 | re-enable CSE after encoding, repair term mode, re-measure | nothing left behind the switch |
 
@@ -118,8 +119,8 @@ the three sites of a nested `rewrite`). So a fused arity is not one `N` per rule
 nor one per site:
 
 * **A row needing no bridge** carries the premises inline as columns:
-  `Rule_k(name, p1 … pk, t1, t2, site)`. `k` is the body-fact count.
-* **A row needing bridges** is `RuleLink(name, prev, bridge, t1, t2, site)`,
+  `Rule_k(name, p1 … pk, site)`. `k` is the body-fact count.
+* **A row needing bridges** is `RuleLink(name, prev, bridge, site)`,
   naming a row of the same head that already carries the premises and every
   earlier bridge. A head mints the row at level `i` just before recording the
   bridge that opens level `i+1` (`can_prf` then `record_bridge`, both in
@@ -197,18 +198,17 @@ One snapshot did move, in *term* mode: `doc_example_add_function1` renumbers its
      `Rule0..Rule4`, and the bridges chain instead of joining the fused arity, so
      step 2 folded into it. Flat `rewrite` 4 rows -> 2, nested 11 -> 7.
 4. **Phase 3, `@Ast`.** Narrower than first scoped: merge bodies already mint
-   none, and top-level actions need a program-site index first. Note what phase 3
-   now has to touch: `Rule_k`'s two `Ast` columns sit between the premises and the
-   site, so dropping them changes every arity's declaration and the
-   `args.len() - 3` slice `rule_columns` reads the trailing columns with. And the
-   merge it predicts — rows differing only in their `Ast` columns hash-consing
-   together — is now visible in the link chain too, since a link's `prev` is a
-   full row.
+   none, and top-level actions need a program-site index first. Split at the
+   point where a canonical-program decision becomes necessary:
+   * ~~**3a, the rule proofs' `Ast` columns.**~~ Done — see "Phase 3a result".
+   * **3b, everything else.** Siting the top-level actions, a per-base-sort
+     `Fiat`, and then deleting the `Ast` sort. All three wait on the
+     canonical-program decision the `Fiat`/`lower_inputs` note above describes.
 5. **Phases 4 and 5.** `RebuildN`; then re-enable CSE after encoding, repair
    term mode, re-measure.
 
-Row budget for `(rewrite (Add a b) (Add b a))`: 13 at the branch point, 4 today
-(2 proof + 2 `@Ast`), 2 once phase 3 lands.
+Row budget for `(rewrite (Add a b) (Add b a))`: 13 at the branch point, 2 today
+(2 proof + 0 `@Ast`).
 
 **Answered: how the bridge list got so long.** Within one firing, not across
 firings. Probing `head_chain` at the end of every head: over `egglog/tests` the
@@ -328,9 +328,9 @@ the recorded conclusion. Over the `proofs/` corpus, 13392 nodes:
 hash-consing key, so two `Rule` nodes built at different head positions that
 used to share a node now do not. All 144 extra nodes land in the
 several-matching-sites bucket — they are the repeated-subexpression case phase 1
-measured. Phase 3 will pull in the other direction: dropping the `Ast` columns
-merges nodes that differ only there, and since same rule + same premises + same
-site forces the same conclusion, that merge is sound.
+measured. (This section also predicted phase 3 would pull the count back down by
+merging nodes that differ only in their `Ast` columns. It did not — the count is
+unmoved; see "Phase 3a result".)
 
 ### Phase 2b result
 
@@ -522,6 +522,55 @@ the read is reflexive, the composition that asked for it often collapses, and th
 lookup then costs nothing rather than one dead table read per match: over
 `egglog/tests`, `--proofs --mode desugar` emits 3157 reads where it used to emit
 4995, of which 1838 had no consumer.
+
+### Phase 3a result
+
+The two `Ast` columns are gone from `Rule_k` and from `RuleLink`. A rule proof row
+is now `Rule_k(name, p1 … pk, site)` / `RuleLink(name, prev, bridge, site)`, and a
+rule head mints **no `@Ast` rows at all**.
+
+Conversion-neutral by inspection rather than by validation: since phase 2b the
+conclusion has come from site + role + bridges, and `convert_raw_proof` bound the
+two columns to `_lhs`/`_rhs` and never read them. `Fiat` is untouched and is now
+the only reader of an `Ast`, via `unwrap_ast`.
+
+Rows written per rule firing, from `--proofs --mode desugar`:
+
+| rule | proof rows | `@Ast` rows |
+| --- | --- | --- |
+| `(rewrite (Add a b) (Add b a))` | 2 | 2 -> 0 |
+| `(rewrite (Mul a (Add b c)) (Add (Mul a b) (Mul a c)))` | 7 | 6 -> 0 |
+
+206 `proofs/` tests pass with zero changed snapshots and zero changed shared
+snapshots.
+
+**The predicted node-count fall did not happen.** `proof_reconstruct_check` is
+unmoved: 13392 nodes, 0 `stamped_ok=false`, 0 `payload_free=disagrees`, 3540
+bridges of which 288 move the term. Two reasons, one verified and one inferred:
+
+* The harness counts *converted* nodes, and `push_shared_proof` keys a rule proof
+  on `SynthKey::Rule(name, site, premises)` — no AST component — so the columns
+  never distinguished a converted node.
+* They did not distinguish a *raw* node either. The AST endpoints were a function
+  of `(name, premises, site)`: the premises fix the substitution (the payload-free
+  replay agrees on all 13392 nodes), the substitution fixes every natural node the
+  head builds, a natural node is never interned so its extracted term is unique,
+  and a roled row reuses its site's own endpoints. Two raw rows agreeing on the
+  remaining columns therefore always agreed on the ASTs, so dropping them merges
+  nothing. Not separately instrumented — the raw store size was not measured.
+
+The trailing-column hazard is handled by shrinking the read, not reordering:
+`rule_columns` now returns the site alongside the premises and bridges, reading it
+at the index each shape's own arity assertion fixes (`args[arity + 1]` /
+`args[3]`). `parse_proof_inner` no longer slices from the end of a row whose width
+depends on the arity.
+
+What 3b still has to answer, none of it started here: top-level actions are not
+sited, so `Fiat` remains the encoding for anything written in source; `Fiat` is
+`(Ast Ast Proof)`, so the `Ast` sort cannot be deleted until it is replaced by a
+per-base-sort form; and both depend on the canonical-program decision, since the
+encoder's site counter would have to live after `remove_globals` while
+`lower_inputs` runs before it.
 
 ## Standing rules
 

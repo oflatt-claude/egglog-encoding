@@ -282,11 +282,11 @@ impl ProofInstrumentor<'_> {
             }
             let names = self.proof_names();
             let name = names.fused_rule(arity);
-            let (proof, ast) = (names.proof_datatype.clone(), names.ast_sort.clone());
+            let proof = names.proof_datatype.clone();
             let premises = vec![proof.as_str(); arity].join(" ");
             let sep = if arity == 0 { "" } else { " " };
             decls.push(format!(
-                "(function {name} (String{sep}{premises} {ast} {ast} i64 {proof}) Unit :no-merge :internal-hidden :internal-term-node)"
+                "(function {name} (String{sep}{premises} i64 {proof}) Unit :no-merge :internal-hidden :internal-term-node)"
             ));
         }
         if decls.is_empty() {
@@ -548,13 +548,14 @@ impl ProofInstrumentor<'_> {
 (function {fiat_constructor} ({ast_sort} {ast_sort} {proof_datatype}) Unit :no-merge :internal-hidden :internal-term-node)
 ;; A rule proof's first conclusion site carries its premises inline, in a
 ;; `Rule_<k>` declared per premise count (see `rule_arity_header`):
-;;   (Rule_<k> <rule name> <one proof per body fact> t1 t2 <site>)
+;;   (Rule_<k> <rule name> <one proof per body fact> <site>)
 ;; A later site of the same head names the previous site's proof — which carries
 ;; the shared premises and the bridges recorded before it — plus the one
 ;; *bridge* premise recorded since: the view-row proof of the subterm the head
-;; interned, saying which e-class it landed in. `t1`/`t2` are the proposition
-;; being proven and `<site>` the conclusion site of the head it is about.
-(function {rule_link_constructor} (String {proof_datatype} {proof_datatype} {ast_sort} {ast_sort} i64 {proof_datatype}) Unit :no-merge :internal-hidden :internal-term-node)
+;; interned, saying which e-class it landed in. `<site>` is the conclusion site
+;; of the head the proof is about; proof conversion derives the proposition from
+;; it, so no term is stored.
+(function {rule_link_constructor} (String {proof_datatype} {proof_datatype} i64 {proof_datatype}) Unit :no-merge :internal-hidden :internal-term-node)
 
 ;; term-free merge justification for an FD custom-function view subexpression:
 ;; name of function, two premise proofs, and the pre-order index of the merge-body

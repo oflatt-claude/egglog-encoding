@@ -112,14 +112,17 @@ fn run_merge_subexpr(
     .into())
 }
 
-/// A rule proof's premises and bridges, as terms, gathered across the chain of
-/// conclusion sites it is the last of.
+/// A rule proof's columns, gathered across the chain of conclusion sites it is
+/// the last of.
 struct RuleColumns {
     name: String,
     /// One per body fact of the rule.
     premises: Vec<TermId>,
     /// One per subterm the head interned before this site, in construction order.
     bridges: Vec<TermId>,
+    /// The conclusion site of the row asked about, as an `i64` term
+    /// ([`SiteRef::encode`]); the rows further down the chain state earlier sites.
+    site: TermId,
 }
 
 /// A proof straight from the e-graph, not exposed to users.
@@ -170,16 +173,9 @@ enum RawProof {
     /// the view-row proof that says which e-class it landed in — in construction
     /// order. The site names which of the head's conclusions the proof is about
     /// and which of that site's propositions it states ([`SiteRef::encode`]);
-    /// conversion derives the equality from those and the bridges, so the stored
-    /// `t1`/`t2` are ignored.
-    Rule(
-        String,
-        Vec<RawProofId>,
-        Vec<RawProofId>,
-        TermId,
-        TermId,
-        i64,
-    ),
+    /// conversion derives the equality from those and the bridges, so the row
+    /// stores no terms.
+    Rule(String, Vec<RawProofId>, Vec<RawProofId>, i64),
     /// A term-free merge proof: given proofs `f(…, old) = f(…, old)` and
     /// `f(…, new) = f(…, new)`, the index `idx` identifies which subexpression of the
     /// merge body this justifies (a pre-order index over the body tree). The
@@ -453,16 +449,19 @@ impl RawProofStore {
     ///
     /// The premises and the bridges are told apart structurally rather than by
     /// counting: the row ending the chain carries every premise inline, and each
-    /// link adds exactly one bridge.
+    /// link adds exactly one bridge. The site returned is the outermost row's,
+    /// read at the index that row's own asserted arity fixes.
     fn rule_columns(&self, term_id: TermId) -> RuleColumns {
         let mut bridges = vec![];
+        let mut site = None;
         let mut cell = term_id;
         loop {
             let Term::App(head, args) = self.term_dag.get(cell) else {
                 panic!("expected a rule proof term. Proof parsing assumes valid proofs.");
             };
             if *head == self.names.rule_link_constructor {
-                assert!(args.len() == 6, "{head} should have 6 args");
+                assert!(args.len() == 4, "{head} should have 4 args");
+                site.get_or_insert(args[3]);
                 bridges.push(args[2]);
                 cell = args[1];
                 continue;
@@ -473,9 +472,9 @@ impl RawProofStore {
                 );
             };
             assert!(
-                args.len() == arity + 4,
+                args.len() == arity + 2,
                 "{head} should have {} args",
-                arity + 4
+                arity + 2
             );
             // Recorded newest first, since a subterm's view-row proof is only
             // readable once the subterm is interned.
@@ -484,6 +483,7 @@ impl RawProofStore {
                 name: self.parse_string(args[0]),
                 premises: args[1..arity + 1].to_vec(),
                 bridges,
+                site: *site.get_or_insert(args[arity + 1]),
             };
         }
     }
@@ -517,14 +517,11 @@ impl RawProofStore {
                 name,
                 premises,
                 bridges,
+                site,
             } = self.rule_columns(term_id);
-            // The last three columns are the same on both shapes.
-            let [lhs, rhs, site] = args[args.len() - 3..] else {
-                unreachable!("a rule proof has at least three columns")
-            };
             let premises = premises.iter().map(|arg| self.parse_proof(*arg)).collect();
             let bridges = bridges.iter().map(|arg| self.parse_proof(*arg)).collect();
-            RawProof::Rule(name, premises, bridges, lhs, rhs, self.parse_int(site))
+            RawProof::Rule(name, premises, bridges, self.parse_int(site))
         } else if head == self.names.merge_fn_idx_constructor {
             assert!(args.len() == 4, "merge-idx constructor should have 4 args");
             let function = self.parse_string(args[0]);
@@ -804,7 +801,7 @@ impl ProofStore {
                 ),
                 justification: Justification::Fiat,
             },
-            RawProof::Rule(name, premise_proofs, bridge_proofs, _lhs, _rhs, raw_site) => {
+            RawProof::Rule(name, premise_proofs, bridge_proofs, raw_site) => {
                 let site = SiteRef::decode(*raw_site);
                 let converted_premises: Vec<ProofId> = premise_proofs
                     .iter()
