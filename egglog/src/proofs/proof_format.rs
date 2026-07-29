@@ -11,8 +11,7 @@ use crate::{
         },
         proof_encoding_helpers::{EncodingNames, SharedEnd},
         proof_head_skeleton::{
-            BuildSites, FiringRecord, HeadPlan, HeadSkeleton, build_sites, congr, sites_needed,
-            sym, trans,
+            BuildSites, Firing, HeadPlan, build_sites, congr, sites_needed, sym, trans,
         },
         proof_sites::{SiteIndex, SiteRef},
     },
@@ -942,16 +941,20 @@ impl ProofStore {
                     .collect();
 
                 let substitution = self.compute_rule_substitution(prog, name, &converted_premises);
-                let skeleton = self.head_skeleton(
-                    prog,
-                    globals,
+                let site_props = self.replay_head(prog, globals, name, &substitution);
+                // A global's value is in every substitution, so recording it in the
+                // proof would only repeat the program.
+                let mut recorded = substitution.clone();
+                recorded.retain(|var, _term| globals.get(var).is_none());
+                let mut firing = Firing::new(
                     name,
-                    &converted_premises,
+                    &planned,
+                    site_props,
+                    converted_premises,
                     bridges,
-                    &substitution,
-                    planned,
+                    recorded,
                 );
-                let proof_id = skeleton.role(self, site);
+                let proof_id = firing.role(self, site);
                 self.proof_id.insert(raw_proof.clone(), proof_id);
                 return proof_id;
             }
@@ -1108,40 +1111,24 @@ impl ProofStore {
         planned
     }
 
-    /// The proofs one firing of `rule_name`'s head produced: replay the head under
-    /// the substitution the body premises determine, then rebuild the composition
-    /// its term construction needed from the bridge premises.
+    /// What each conclusion site of `rule_name`'s head concludes under
+    /// `substitution`, in `conclusion_sites` order.
     ///
     /// Panics if the rule is not in `prog` or if its head does not replay.
-    #[allow(clippy::too_many_arguments)]
-    fn head_skeleton(
+    fn replay_head(
         &mut self,
         prog: &[ResolvedNCommand],
         globals: &HashMap<String, TermId>,
         rule_name: &str,
-        body_premises: &[ProofId],
-        bridges: HashMap<SiteIndex, ProofId>,
         substitution: &IndexMap<String, TermId>,
-        planned: Rc<BuildSites>,
-    ) -> Rc<HeadSkeleton> {
+    ) -> Vec<(SiteIndex, Proposition)> {
         let rule = rule_named(prog, rule_name);
         let actions: Vec<_> = rule.head.0.iter().collect();
         let mut bindings = globals.clone();
         bindings.extend(substitution.iter().map(|(var, term)| (var.clone(), *term)));
-        let ctx = process_actions(rule_name, bindings, &actions, &mut self.term_dag)
-            .unwrap_or_else(|err| panic!("rule {rule_name}'s head did not replay: {err}"));
-        // A global's value is in every substitution, so recording it in the proof
-        // would only repeat the program.
-        let mut recorded = substitution.clone();
-        recorded.retain(|var, _term| globals.get(var).is_none());
-        HeadSkeleton::new(FiringRecord {
-            rule_name,
-            build_sites: planned,
-            site_props: ctx.site_propositions,
-            body_premises: body_premises.to_vec(),
-            bridges,
-            substitution: recorded,
-        })
+        process_actions(rule_name, bindings, &actions, &mut self.term_dag)
+            .unwrap_or_else(|err| panic!("rule {rule_name}'s head did not replay: {err}"))
+            .site_propositions
     }
 
     /// For a given rule and premise proofs, compute the substitution used in the rule application.

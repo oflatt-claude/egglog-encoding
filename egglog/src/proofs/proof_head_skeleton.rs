@@ -11,8 +11,6 @@
 //! [`HeadPlan`] is the one description of how a head lowers, read by the encoder
 //! and by conversion alike, so neither mirrors the other.
 
-use std::{cell::RefCell, rc::Rc};
-
 use crate::{
     TermId,
     ast::{
@@ -432,10 +430,15 @@ impl BuildSites {
     }
 }
 
-/// What one firing of a rule head recorded.
-pub(crate) struct FiringRecord<'a> {
+/// One firing of a rule head, and the proofs asking about its sites has built so
+/// far.
+///
+/// A firing writes a few of the propositions its sites have, so nothing is built
+/// until [`Self::role`] asks for it: materializing the rest would cost a proof
+/// node — with a copy of the substitution — per site per firing.
+pub(crate) struct Firing<'a> {
     pub rule_name: &'a str,
-    pub build_sites: Rc<BuildSites>,
+    pub sites: &'a BuildSites,
     /// The head's as-written propositions, in `conclusion_sites` order.
     pub site_props: Vec<(SiteIndex, Proposition)>,
     /// The premises the rule body matched, one per body fact.
@@ -444,77 +447,36 @@ pub(crate) struct FiringRecord<'a> {
     /// build site.
     pub bridges: HashMap<SiteIndex, ProofId>,
     pub substitution: IndexMap<String, TermId>,
-}
-
-/// A firing, owned so a [`HeadSkeleton`] can be cached across the rows the firing
-/// wrote.
-struct Firing {
-    rule_name: String,
-    sites: Rc<BuildSites>,
-    site_props: Vec<(SiteIndex, Proposition)>,
-    body_premises: Vec<ProofId>,
-    substitution: IndexMap<String, TermId>,
-    bridges: HashMap<SiteIndex, ProofId>,
-}
-
-/// The proofs one firing of a rule head produced, keyed the way the e-graph names
-/// them.
-///
-/// Built on demand: a firing writes a few of the propositions its sites have, and
-/// materializing the rest would cost a proof node — with a copy of the
-/// substitution — per site per firing.
-pub(crate) struct HeadSkeleton {
-    firing: Firing,
-    state: RefCell<State>,
-}
-
-#[derive(Default)]
-struct State {
-    roles: HashMap<(SiteIndex, SiteRole, bool), ProofId>,
+    /// The proofs built so far, by the site reference each states.
+    built: HashMap<(SiteIndex, SiteRole, bool), ProofId>,
     /// A build site -> its connector, `written = interned`.
     resolved: HashMap<SiteIndex, ProofId>,
 }
 
-impl HeadSkeleton {
-    /// Record one firing. Nothing is built until [`Self::role`] asks for it.
-    pub(crate) fn new(record: FiringRecord) -> Rc<Self> {
-        let bridges = record.bridges;
-        Rc::new(HeadSkeleton {
-            firing: Firing {
-                rule_name: record.rule_name.to_string(),
-                sites: record.build_sites.clone(),
-                site_props: record.site_props,
-                body_premises: record.body_premises,
-                substitution: record.substitution,
-                bridges,
-            },
-            state: RefCell::new(State::default()),
-        })
+impl<'a> Firing<'a> {
+    pub(crate) fn new(
+        rule_name: &'a str,
+        sites: &'a BuildSites,
+        site_props: Vec<(SiteIndex, Proposition)>,
+        body_premises: Vec<ProofId>,
+        bridges: HashMap<SiteIndex, ProofId>,
+        substitution: IndexMap<String, TermId>,
+    ) -> Self {
+        Firing {
+            rule_name,
+            sites,
+            site_props,
+            body_premises,
+            bridges,
+            substitution,
+            built: HashMap::default(),
+            resolved: HashMap::default(),
+        }
     }
 
     /// The proof the e-graph stored for `site`, stated the way `site` states it.
-    pub(crate) fn role(&self, store: &mut ProofStore, site: SiteRef) -> ProofId {
-        let mut state = self.state.borrow_mut();
-        Builder {
-            firing: &self.firing,
-            state: &mut state,
-        }
-        .role(store, site)
-    }
-}
-
-struct Builder<'a> {
-    firing: &'a Firing,
-    state: &'a mut State,
-}
-
-impl Builder<'_> {
-    fn role(&mut self, store: &mut ProofStore, site: SiteRef) -> ProofId {
-        if let Some(&id) = self
-            .state
-            .roles
-            .get(&(site.index, site.role, site.reversed))
-        {
+    pub(crate) fn role(&mut self, store: &mut ProofStore, site: SiteRef) -> ProofId {
+        if let Some(&id) = self.built.get(&(site.index, site.role, site.reversed)) {
             return id;
         }
         match site.role {
@@ -525,26 +487,25 @@ impl Builder<'_> {
             }
             SiteRole::GuestView | SiteRole::GuestConnector => {
                 let guest = *self
-                    .firing
                     .sites
                     .guest_at_union
                     .get(&site.index)
                     .unwrap_or_else(|| {
                         panic!(
                             "rule {}'s union at site {} builds no guest",
-                            self.firing.rule_name, site.index.0
+                            self.rule_name, site.index.0
                         )
                     });
                 self.resolve(store, guest);
                 self.recorded(site)
             }
             SiteRole::UnionEdge => {
-                let operands = self.firing.sites.unions[&site.index];
+                let operands = self.sites.unions[&site.index];
                 self.union_edge(store, site.index, operands);
                 self.recorded(site)
             }
             SiteRole::GlobalValue => {
-                let value = self.firing.sites.globals[&site.index];
+                let value = self.sites.globals[&site.index];
                 self.global_value(store, site.index, value);
                 self.recorded(site)
             }
@@ -554,13 +515,12 @@ impl Builder<'_> {
     /// A role the resolution above must have recorded.
     fn recorded(&self, site: SiteRef) -> ProofId {
         *self
-            .state
-            .roles
+            .built
             .get(&(site.index, site.role, site.reversed))
             .unwrap_or_else(|| {
                 panic!(
                     "rule {}'s head builds no {:?} proof at site {}",
-                    self.firing.rule_name, site.role, site.index.0
+                    self.rule_name, site.role, site.index.0
                 )
             })
     }
@@ -569,7 +529,7 @@ impl Builder<'_> {
     /// shares one node.
     fn base(&mut self, store: &mut ProofStore, site: SiteIndex, reversed: bool) -> ProofId {
         let key = (site, SiteRole::AsWritten, reversed);
-        if let Some(&id) = self.state.roles.get(&key) {
+        if let Some(&id) = self.built.get(&key) {
             return id;
         }
         let reference = SiteRef {
@@ -578,43 +538,37 @@ impl Builder<'_> {
             role: SiteRole::AsWritten,
         };
         let proposition = self
-            .firing
             .site_props
             .iter()
             .find_map(|(index, prop)| (*index == site).then(|| reference.orient(prop)))
-            .unwrap_or_else(|| {
-                panic!(
-                    "rule {} has no conclusion site {}",
-                    self.firing.rule_name, site.0
-                )
-            });
+            .unwrap_or_else(|| panic!("rule {} has no conclusion site {}", self.rule_name, site.0));
         let id = store.push_shared_proof(
             SynthKey::Rule(
-                self.firing.rule_name.clone(),
+                self.rule_name.to_string(),
                 reference,
-                self.firing.body_premises.clone(),
+                self.body_premises.clone(),
             ),
             Proof {
                 proposition,
                 justification: Justification::Rule {
-                    name: self.firing.rule_name.clone(),
-                    premise_proofs: self.firing.body_premises.clone(),
-                    substitution: self.firing.substitution.clone(),
+                    name: self.rule_name.to_string(),
+                    premise_proofs: self.body_premises.clone(),
+                    substitution: self.substitution.clone(),
                     site: reference,
                 },
             },
         );
-        self.state.roles.insert(key, id);
+        self.built.insert(key, id);
         id
     }
 
     /// Resolve a build site: fold one `Congr` per built child onto the site's own
     /// conclusion, then settle which e-class the interned term landed in.
     fn resolve(&mut self, store: &mut ProofStore, site: SiteIndex) -> ProofId {
-        if let Some(&connector) = self.state.resolved.get(&site) {
+        if let Some(&connector) = self.resolved.get(&site) {
             return connector;
         }
-        let build = self.firing.sites.sites[&site].clone();
+        let build = self.sites.sites[&site].clone();
 
         let mut to_canonical = self.base(store, site, false);
         for (i, child) in build.children.iter().enumerate() {
@@ -628,7 +582,7 @@ impl Builder<'_> {
                 let view = self.guest_view(store, edge, target, to_canonical);
                 let back = sym(store, view);
                 let connector = trans(store, to_canonical, back);
-                self.state.roles.insert(
+                self.built.insert(
                     (edge.index, SiteRole::GuestConnector, edge.reversed),
                     connector,
                 );
@@ -647,14 +601,13 @@ impl Builder<'_> {
         };
 
         let canonical_reflexive = reflexivize(store, to_canonical);
-        self.state.roles.insert(
+        self.built.insert(
             (site, SiteRole::CanonicalReflexive, false),
             canonical_reflexive,
         );
-        self.state
-            .roles
+        self.built
             .insert((site, SiteRole::Connector, false), connector);
-        self.state.resolved.insert(site, connector);
+        self.resolved.insert(site, connector);
         connector
     }
 
@@ -672,13 +625,13 @@ impl Builder<'_> {
         site: SiteIndex,
         canonical: TermId,
     ) -> Option<ProofId> {
-        let bridge = *self.firing.bridges.get(&site)?;
+        let bridge = *self.bridges.get(&site)?;
         let prop = store.get(bridge).proposition();
         if prop.rhs != canonical {
             return None;
         }
         let moved = prop.lhs != prop.rhs;
-        proof_reconstruct_check::record_head_bridge(&self.firing.rule_name, moved);
+        proof_reconstruct_check::record_head_bridge(self.rule_name, moved);
         Some(bridge)
     }
 
@@ -701,8 +654,7 @@ impl Builder<'_> {
             }
             None => to_dedup,
         };
-        self.state
-            .roles
+        self.built
             .insert((edge.index, SiteRole::GuestView, edge.reversed), view);
         view
     }
@@ -743,8 +695,7 @@ impl Builder<'_> {
         for (reversed, max_pf, min_pf) in [(false, lhs_to, rhs_to), (true, rhs_to, lhs_to)] {
             let back = sym(store, min_pf);
             let edge = trans(store, max_pf, back);
-            self.state
-                .roles
+            self.built
                 .insert((union, SiteRole::UnionEdge, reversed), edge);
         }
     }
@@ -755,8 +706,7 @@ impl Builder<'_> {
         let value = value.expect("a roled global proof needs a built value");
         let connector = self.resolve(store, value);
         let proof = reflexivize(store, connector);
-        self.state
-            .roles
+        self.built
             .insert((row, SiteRole::GlobalValue, false), proof);
     }
 }
