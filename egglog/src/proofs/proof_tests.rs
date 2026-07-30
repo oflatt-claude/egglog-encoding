@@ -145,7 +145,12 @@ mod tests {
                 IndexMap::default(),
                 Box::new(|_store, _position| None),
             );
-            let columns: Vec<_> = firing.proofs(&mut store).iter().flatten().copied().collect();
+            let columns: Vec<_> = firing
+                .proofs(&mut store)
+                .iter()
+                .flatten()
+                .copied()
+                .collect();
             let stated: HashSet<_> = columns
                 .into_iter()
                 .map(|proof| store.get(proof).proposition().clone())
