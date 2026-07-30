@@ -165,6 +165,193 @@ mod tests {
         }
     }
 
+    /// The encoder names each rule proof row by the column its walk of the head
+    /// is at, and proof conversion reads that column out of the array [`Firing`]
+    /// builds by walking the same head. The two walks agree only by claiming
+    /// columns the same way, which nothing checks short of running a proof end to
+    /// end. Pin it: every column an encoded head writes names a proof the walk
+    /// produces.
+    #[test]
+    fn every_column_an_encoded_head_writes_is_one_the_walk_produces() {
+        let source = r#"
+            (datatype Math (Num i64) (Add Math Math) (Neg Math))
+            (relation Seen (Math))
+            (function Cost (Math) i64 :no-merge)
+            (let g (Num 7))
+
+            (Add (Num 1) (Num 2))
+
+            (rule ((= e (Add a b)))
+                  ((union e (Add b a)))
+                  :name "commute")
+
+            (rule ((= e (Add a b)))
+                  ((let inner (Neg a))
+                   (let outer (Add inner b))
+                   (union e outer)
+                   (Seen outer))
+                  :name "nest")
+
+            (rule ((= e (Num n)))
+                  ((set (Cost e) 1))
+                  :name "cost")
+
+            ;; A head reading a global, so `remove_globals` appends a body fact.
+            (rule ((Seen s))
+                  ((Seen (Add s g)))
+                  :name "with_global")
+
+            ;; A `union` of two matched variables: neither operand is built, so
+            ;; the orientation reads both endpoints' own conclusions.
+            (rule ((= e (Add a b)) (= f (Add b a)))
+                  ((union e f))
+                  :name "matched_union")
+
+            ;; A second `union` on an already-optimized variable stays a `union`,
+            ;; with a connector on each operand, so the orientation reads two
+            ;; composed columns.
+            (rule ((Seen s))
+                  ((let p (Neg s))
+                   (union p s)
+                   (union p (Add s s)))
+                  :name "chained_union")
+        "#;
+
+        // Nothing above runs, so the columns below are read by this test alone
+        // rather than by proof conversion firing the rules.
+        //
+        // The rules as the checker replays them: the heads [`Firing`] walks.
+        let mut checker = EGraph::new_with_proofs();
+        checker.parse_and_run_program(None, source).unwrap();
+        let written: HashMap<&str, &crate::ast::ResolvedRule> = checker
+            .proof_check_program
+            .iter()
+            .filter_map(|cmd| match cmd {
+                GenericNCommand::NormRule { rule } => Some((rule.name.as_str(), rule)),
+                _ => None,
+            })
+            .collect();
+
+        let mut encoder = EGraph::new_with_proofs();
+        let commands = encoder.resolve_program(None, source).unwrap();
+        let names = encoder.proof_state.proof_names.clone();
+
+        let mut covered: Vec<(&str, usize)> = vec![];
+        for command in &commands {
+            let ResolvedCommand::Rule { rule } = command else {
+                continue;
+            };
+            let Some(walked) = written.get(rule.name.as_str()) else {
+                continue;
+            };
+            // Every rule proof row the head writes: `(set (Rule_k … col fresh) ())`
+            // or `(set (RuleLink prev bridge col fresh) ())`. The column sits just
+            // ahead of the minted id, as a literal or as the `proof-of-max` over
+            // the two columns a `union` orients between.
+            let columns: Vec<i64> = rule
+                .head
+                .0
+                .iter()
+                .filter_map(|action| match action {
+                    ResolvedAction::Set(_, ResolvedCall::Func(func), args, _)
+                        if names.fused_rule_arity(&func.name).is_some()
+                            || func.name == names.rule_link_constructor =>
+                    {
+                        args.get(args.len().checked_sub(2)?)
+                    }
+                    _ => None,
+                })
+                .flat_map(|column| {
+                    let mut out = vec![];
+                    int_literals(column, &mut out);
+                    out
+                })
+                .collect();
+            if columns.is_empty() {
+                continue;
+            }
+
+            let actions = &walked.head.0;
+            let mut term_dag = TermDag::default();
+            let inputs = head_input_bindings(actions, &mut term_dag);
+            let mut minted = 0usize;
+            let mut fresh = || {
+                minted += 1;
+                format!("@union-operand-{minted}")
+            };
+            let plan = HeadPlan::new(actions, &mut fresh);
+            let mut store = ProofStore::new(term_dag, HashMap::default(), HashSet::default());
+            let mut firing = Firing::new(
+                &walked.name,
+                &plan,
+                inputs,
+                vec![],
+                IndexMap::default(),
+                Box::new(|_store, _position| None),
+            );
+            let filled: Vec<bool> = firing
+                .proofs(&mut store)
+                .iter()
+                .map(Option::is_some)
+                .collect();
+
+            let mut named = 0usize;
+            for column in &columns {
+                // `-1` is the encoder's placeholder for a position the head
+                // concludes nothing about, whose proof nothing reads back.
+                if *column < 0 {
+                    continue;
+                }
+                let column = *column as usize;
+                assert!(
+                    filled.get(column).copied().unwrap_or(false),
+                    "rule '{}' writes column {column}, which its head walk does not \
+                     produce (columns filled: {filled:?})",
+                    rule.name
+                );
+                named += 1;
+            }
+            covered.push((rule.name.as_str(), named));
+        }
+
+        // Guard against a vacuous pass: every rule above must write a numbered
+        // column, so a head that stops writing them fails here rather than
+        // silently dropping out of the check.
+        for expected in [
+            "commute",
+            "nest",
+            "cost",
+            "with_global",
+            "matched_union",
+            "chained_union",
+        ] {
+            let named = covered
+                .iter()
+                .find(|(name, _)| *name == expected)
+                .map(|(_, named)| *named)
+                .unwrap_or_else(|| {
+                    panic!("rule '{expected}' wrote no rule proof row: {covered:?}")
+                });
+            assert!(
+                named > 0,
+                "rule '{expected}' wrote only unnumbered columns: {covered:?}"
+            );
+        }
+    }
+
+    /// Every integer literal in `expr`, in order.
+    fn int_literals(expr: &ResolvedExpr, out: &mut Vec<i64>) {
+        match expr {
+            ResolvedExpr::Lit(_, Literal::Int(n)) => out.push(*n),
+            ResolvedExpr::Call(_, _, args) => {
+                for arg in args {
+                    int_literals(arg, out);
+                }
+            }
+            ResolvedExpr::Lit(..) | ResolvedExpr::Var(..) => {}
+        }
+    }
+
     /// What a rule head concludes, derived independently of the walk that
     /// produces its proofs: every call it evaluates exists, and every `union`
     /// holds in both directions.
