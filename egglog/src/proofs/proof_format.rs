@@ -10,7 +10,7 @@ use crate::{
             process_actions, run_merge,
         },
         proof_encoding_helpers::{EncodingNames, SharedEnd},
-        proof_head::{Firing, HeadPlan, congr, sites_needed, sym, trans},
+        proof_head::{Firing, HeadPlan, congr, sym, trans},
         proof_sites::{SiteIndex, SiteRef},
     },
     typechecking::{FuncType, PrimitiveValidator},
@@ -877,23 +877,7 @@ impl ProofStore {
                     .iter()
                     .map(|pid| self.convert_raw_proof(prog, globals, raw_store, *pid))
                     .collect();
-                // The bridges are in the order the head builds, which is the order
-                // `bridge_position` numbers them; a site built after this proof's
-                // row has no bridge recorded yet. Only the ones the requested proof
-                // is composed from are read: converting the rest would pull in
-                // every proof the firing happened to pass over.
                 let planned = self.head_plan(prog, name);
-                let mut bridges: HashMap<SiteIndex, ProofId> = HashMap::default();
-                for needed in sites_needed(&planned, site) {
-                    let Some(position) = planned.bridge_position(needed) else {
-                        continue;
-                    };
-                    let Some(raw) = bridge_proofs.get(position) else {
-                        continue;
-                    };
-                    let converted = self.convert_raw_proof(prog, globals, raw_store, *raw);
-                    bridges.insert(needed, converted);
-                }
 
                 // Rebuild/canonicalization can rewrite a matched custom-function-fact
                 // premise `(= (f args) v)` into a non-reflexive natural->canonical
@@ -945,13 +929,21 @@ impl ProofStore {
                 // proof would only repeat the program.
                 let mut recorded = substitution.clone();
                 recorded.retain(|var, _term| globals.get(var).is_none());
+                // The bridges are in the order the head builds, which is the order
+                // the plan numbers them; a site built after this proof's row has no
+                // bridge recorded yet. Each is converted only where the composition
+                // reads it: converting the rest would pull in every proof the
+                // firing happened to pass over.
                 let mut firing = Firing::new(
                     name,
                     &planned,
                     site_props,
                     converted_premises,
-                    bridges,
                     recorded,
+                    Box::new(|store: &mut ProofStore, position| {
+                        let raw = *bridge_proofs.get(position)?;
+                        Some(store.convert_raw_proof(prog, globals, raw_store, raw))
+                    }),
                 );
                 let proof_id = firing.role(self, site);
                 self.proof_id.insert(raw_proof.clone(), proof_id);
