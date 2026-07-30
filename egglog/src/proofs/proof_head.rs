@@ -11,7 +11,7 @@
 //! column indexes straight into what comes back.
 //!
 //! [`HeadPlan`] is the head as the encoder lowers it, read by both walks. The
-//! compositions themselves are written once, over [`HeadProofs`]: this walk
+//! compositions themselves are written once, over [`ProofAlgebra`]: this walk
 //! applies them to proof nodes, and the encoder to the proof variables it emits
 //! wherever it composes rather than records — a top-level action or a merge
 //! body. [`ProofSite`] is which of the two the encoder is doing.
@@ -390,11 +390,11 @@ impl<'a> Firing<'a> {
         // A primitive or a global lookup builds nothing itself, though a
         // constructor argument of it is still built.
         constructor_operand(expr)?;
-        let to_canonical = canonicalize(store, own, steps);
-        let canonical_reflexive = reflexive(store, to_canonical);
+        let to_canonical = store.canonicalize(own, steps);
+        let canonical_reflexive = store.reflexive(to_canonical);
         self.proofs.push(Some(canonical_reflexive));
         let connector = match self.bridge(store, to_canonical) {
-            Some(bridge) => connect(store, to_canonical, bridge),
+            Some(bridge) => store.connect(to_canonical, bridge),
             None => to_canonical,
         };
         self.proofs.push(Some(connector));
@@ -415,7 +415,7 @@ impl<'a> Firing<'a> {
         let steps = self.args(store, args);
         let term = self.eval(store, expr);
         let own = self.own(store, Proposition::new(term, term));
-        let to_canonical = canonicalize(store, own, steps);
+        let to_canonical = store.canonicalize(own, steps);
         let target_term = *self.bindings.get(target).unwrap_or_else(|| {
             panic!(
                 "rule {}'s construct-into target {target} is unbound",
@@ -424,9 +424,9 @@ impl<'a> Firing<'a> {
         });
         let edge = self.own(store, Proposition::new(target_term, term));
         let target_connector = self.connectors.get(target).copied();
-        let view = guest_view(store, edge, to_canonical, target_connector);
+        let view = store.guest_view(edge, to_canonical, target_connector);
         self.proofs.push(Some(view));
-        let connector = connect(store, to_canonical, view);
+        let connector = store.connect(to_canonical, view);
         self.proofs.push(Some(connector));
         Some(connector)
     }
@@ -454,7 +454,7 @@ impl<'a> Firing<'a> {
         operands: (Option<ProofId>, Option<ProofId>),
     ) {
         let (lhs, rhs) = operands;
-        let (lhs_to, rhs_to) = union_to_shared(store, own, lhs, rhs);
+        let (lhs_to, rhs_to) = store.union_to_shared(own, lhs, rhs);
         for (max_pf, min_pf) in [(lhs_to, rhs_to), (rhs_to, lhs_to)] {
             let back = sym(store, min_pf);
             let edge = trans(store, max_pf, back);
@@ -515,14 +515,22 @@ impl<'a> Firing<'a> {
     }
 }
 
-/// Somewhere the equality axioms can be applied to a rule head's proofs.
+/// Layer 1: the equality axioms, plus the four compositions a head's lowering
+/// builds out of them.
 ///
-/// A head's lowering composes the same way whether its proofs are nodes proof
-/// conversion builds or variables the encoder emits, so the compositions below are
-/// written against this rather than against either. A rule head is the exception:
-/// there the encoder writes one row per proof and leaves the composing to
-/// conversion, so it applies nothing.
-pub(super) trait HeadProofs {
+/// Walking a head bottom-up and applying [`Self::canonicalize`],
+/// [`Self::reflexive`], [`Self::connect`] and [`Self::guest_view`] — with
+/// [`Self::union_to_shared`] for a `union`'s two orientations — is the whole of
+/// layer 1. The algebra is written once here and interpreted twice: for
+/// [`ProofStore`] a proof is a node, so applying it builds the proof; for
+/// [`ProofInstrumentor`] a proof is the name of an emitted variable, so applying
+/// it writes the composition into the encoding. Same algebra, evaluated while
+/// replaying a skeleton or while lowering.
+///
+/// A rule head is where neither happens: layer 2 writes one row per stored proof
+/// and leaves the composing to conversion, so nothing here is applied (see the
+/// *Proofs* part of `proof_encoding.md`).
+pub(super) trait ProofAlgebra {
     type Proof: Clone;
 
     /// `p : a = b` reversed to `b = a`.
@@ -531,9 +539,89 @@ pub(super) trait HeadProofs {
     fn trans(&mut self, left: Self::Proof, right: Self::Proof) -> Self::Proof;
     /// `base`'s right-hand side with the child at `child` rewritten by `step`.
     fn congr(&mut self, base: Self::Proof, child: usize, step: Self::Proof) -> Self::Proof;
+
+    /// The proof that a term the head wrote equals the same term over its
+    /// children's representatives: one `congr` per child the head built.
+    fn canonicalize(
+        &mut self,
+        own: Self::Proof,
+        children: impl IntoIterator<Item = (usize, Self::Proof)>,
+    ) -> Self::Proof {
+        let mut to_canonical = own;
+        for (child, step) in children {
+            to_canonical = self.congr(to_canonical, child, step);
+        }
+        to_canonical
+    }
+
+    /// `t = t` for the term `to_canonical` reaches.
+    fn reflexive(&mut self, to_canonical: Self::Proof) -> Self::Proof {
+        let back = self.sym(to_canonical.clone());
+        self.trans(back, to_canonical)
+    }
+
+    /// A built term's connector, from the term as written to the e-class the head
+    /// interned it into: `dedup` states that e-class equals the canonical term, so
+    /// the connector runs through the canonical term and back.
+    fn connect(&mut self, to_canonical: Self::Proof, dedup: Self::Proof) -> Self::Proof {
+        let back = self.sym(dedup);
+        self.trans(to_canonical, back)
+    }
+
+    /// Both operands of a `union` routed to one shared term, so the union-find
+    /// edge can be composed in either orientation. `own` states the union's own
+    /// conclusion `lhs = rhs`, and an operand's connector is present when the head
+    /// built that operand; at least one of them must have been.
+    fn union_to_shared(
+        &mut self,
+        own: Self::Proof,
+        lhs: Option<Self::Proof>,
+        rhs: Option<Self::Proof>,
+    ) -> (Self::Proof, Self::Proof) {
+        match rhs {
+            Some(rhs) => {
+                let lhs_to = match lhs {
+                    Some(lhs) => {
+                        let back = self.sym(lhs);
+                        self.trans(back, own)
+                    }
+                    None => own,
+                };
+                let rhs_to = self.sym(rhs);
+                (lhs_to, rhs_to)
+            }
+            None => {
+                let lhs = lhs.expect("one operand of the union was built");
+                let lhs_to = self.sym(lhs);
+                let rhs_to = self.sym(own);
+                (lhs_to, rhs_to)
+            }
+        }
+    }
+
+    /// A construct-into guest's view-row proof: the target's e-class equals the
+    /// guest's term over its children's representatives. `edge` is the dropped
+    /// `union`'s equality stated `target = guest`, and `target` the target's own
+    /// connector when the head built it too.
+    fn guest_view(
+        &mut self,
+        edge: Self::Proof,
+        to_canonical: Self::Proof,
+        target: Option<Self::Proof>,
+    ) -> Self::Proof {
+        let to_dedup = self.trans(edge, to_canonical);
+        match target {
+            Some(target) => {
+                let back = self.sym(target);
+                self.trans(back, to_dedup)
+            }
+            None => to_dedup,
+        }
+    }
 }
 
-impl HeadProofs for ProofStore {
+/// Applying the algebra builds the proof.
+impl ProofAlgebra for ProofStore {
     type Proof = ProofId;
 
     fn sym(&mut self, proof: ProofId) -> ProofId {
@@ -549,7 +637,9 @@ impl HeadProofs for ProofStore {
     }
 }
 
-impl HeadProofs for ProofInstrumentor<'_> {
+/// Applying the algebra emits the proof: each step is a row, named by the
+/// variable it binds.
+impl ProofAlgebra for ProofInstrumentor<'_> {
     type Proof = String;
 
     fn sym(&mut self, proof: String) -> String {
@@ -562,89 +652,6 @@ impl HeadProofs for ProofInstrumentor<'_> {
 
     fn congr(&mut self, base: String, child: usize, step: String) -> String {
         self.mint_congr(&base, child, &step)
-    }
-}
-
-/// The proof that a term the head wrote equals the same term over its
-/// children's representatives: one `Congr` per child the head built.
-pub(super) fn canonicalize<M: HeadProofs>(
-    proofs: &mut M,
-    own: M::Proof,
-    children: impl IntoIterator<Item = (usize, M::Proof)>,
-) -> M::Proof {
-    let mut to_canonical = own;
-    for (child, step) in children {
-        to_canonical = proofs.congr(to_canonical, child, step);
-    }
-    to_canonical
-}
-
-/// `t = t` for the term `to_canonical` reaches.
-pub(super) fn reflexive<M: HeadProofs>(proofs: &mut M, to_canonical: M::Proof) -> M::Proof {
-    let back = proofs.sym(to_canonical.clone());
-    proofs.trans(back, to_canonical)
-}
-
-/// A built term's connector, from the term as written to the e-class the head
-/// interned it into: `dedup` states that e-class equals the canonical term, so the
-/// connector runs through the canonical term and back.
-pub(super) fn connect<M: HeadProofs>(
-    proofs: &mut M,
-    to_canonical: M::Proof,
-    dedup: M::Proof,
-) -> M::Proof {
-    let back = proofs.sym(dedup);
-    proofs.trans(to_canonical, back)
-}
-
-/// Both operands of a `union` routed to one shared term, so the union-find edge
-/// can be composed in either orientation. `own` states the union's own
-/// conclusion `lhs = rhs`, and an operand's connector is present when the head
-/// built that operand; at least one of them must have been.
-pub(super) fn union_to_shared<M: HeadProofs>(
-    proofs: &mut M,
-    own: M::Proof,
-    lhs: Option<M::Proof>,
-    rhs: Option<M::Proof>,
-) -> (M::Proof, M::Proof) {
-    match rhs {
-        Some(rhs) => {
-            let lhs_to = match lhs {
-                Some(lhs) => {
-                    let back = proofs.sym(lhs);
-                    proofs.trans(back, own)
-                }
-                None => own,
-            };
-            let rhs_to = proofs.sym(rhs);
-            (lhs_to, rhs_to)
-        }
-        None => {
-            let lhs = lhs.expect("one operand of the union was built");
-            let lhs_to = proofs.sym(lhs);
-            let rhs_to = proofs.sym(own);
-            (lhs_to, rhs_to)
-        }
-    }
-}
-
-/// A construct-into guest's view-row proof: the target's e-class equals the
-/// guest's term over its children's representatives. `edge` is the dropped
-/// `union`'s equality stated `target = guest`, and `target` the target's own
-/// connector when the head built it too.
-pub(super) fn guest_view<M: HeadProofs>(
-    proofs: &mut M,
-    edge: M::Proof,
-    to_canonical: M::Proof,
-    target: Option<M::Proof>,
-) -> M::Proof {
-    let to_dedup = proofs.trans(edge, to_canonical);
-    match target {
-        Some(target) => {
-            let back = proofs.sym(target);
-            proofs.trans(back, to_dedup)
-        }
-        None => to_dedup,
     }
 }
 

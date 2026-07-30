@@ -565,7 +565,7 @@ ordering as `ordering-max`.
 
 Layer 2 needs a rule head to use as the format. Where there is none, the encoder
 applies the same four operations itself and writes the composition out. The
-operations are written once, over the `HeadProofs` trait in
+operations are written once, over the `ProofAlgebra` trait in
 [`crate::proofs::proof_head`], and implemented twice: for the encoder, where a
 "proof" is the name of an emitted variable, and for proof conversion, where it is
 a node in the proof store. Those are one algebra run at two times — while

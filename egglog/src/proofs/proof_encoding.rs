@@ -1,9 +1,6 @@
 #[doc = include_str!("proof_encoding.md")]
 use crate::proofs::proof_encoding_helpers::{EncodingNames, HeadColumn, Justification, SharedEnd};
-use crate::proofs::proof_head::{
-    HeadPlan, ProofSite, canonicalize, connect, constructor_operand, guest_view, reflexive,
-    union_to_shared,
-};
+use crate::proofs::proof_head::{HeadPlan, ProofAlgebra, ProofSite, constructor_operand};
 use crate::typechecking::FuncType;
 use crate::*;
 
@@ -519,7 +516,7 @@ impl<'a> ProofInstrumentor<'a> {
             .connector
             .as_ref()
             .map(|c| self.connector_node(stmts, &Justification::Fiat, c));
-        let (lhs_to_shared, rhs_to_shared) = union_to_shared(self, base_proof, lhs_conn, rhs_conn);
+        let (lhs_to_shared, rhs_to_shared) = self.union_to_shared(base_proof, lhs_conn, rhs_conn);
         // `proof-of-max`/`min` read the two sides directly rather than through a
         // mint, so bind them here.
         self.emit_pending_group(stmts, &lhs_to_shared);
@@ -616,7 +613,7 @@ impl<'a> ProofInstrumentor<'a> {
                     .connector
                     .as_ref()
                     .map(|conn| self.connector_node(res, justification, conn));
-                guest_view(self, edge, chain.clone(), target_conn)
+                self.guest_view(edge, chain.clone(), target_conn)
             }
             // The guest's columns plus its bridge premises determine the whole
             // composition, so one row records it and the edge proof it is built
@@ -638,7 +635,7 @@ impl<'a> ProofInstrumentor<'a> {
         ));
         res.push(format!("(let {guest} {target_id})"));
         let guest_conn = match &nat_to_dedup {
-            Some(chain) => Connector::Node(connect(self, chain.clone(), view_proof.clone())),
+            Some(chain) => Connector::Node(self.connect(chain.clone(), view_proof.clone())),
             None => Connector::Column(columns.expect("a rule head's guest is numbered") + 3),
         };
         Operand::built(target_id.clone(), fv_nat, guest_conn)
@@ -1486,7 +1483,7 @@ impl<'a> ProofInstrumentor<'a> {
                     steps.push((i, self.connector_node(res, justification, conn)));
                 }
             }
-            canonicalize(self, nat_prf.clone(), steps)
+            self.canonicalize(nat_prf.clone(), steps)
         });
         Natural {
             dedup_args,
@@ -1539,7 +1536,7 @@ impl<'a> ProofInstrumentor<'a> {
             view_sort,
         );
         let can_prf = match &to_dedup {
-            Some(chain) => reflexive(self, chain.clone()),
+            Some(chain) => self.reflexive(chain.clone()),
             // One row records the composition proof conversion rebuilds.
             None => {
                 let composed = justification.at(HeadColumn::composed(canonical_column));
@@ -1575,7 +1572,7 @@ impl<'a> ProofInstrumentor<'a> {
         let connector = match &to_dedup {
             // connector `fv_nat = dedup` = Trans(nat_to_dedup, Sym(dedup = f(children))).
             // `sym_vprf` reads the `vprf` let, so it lands after the statements above.
-            Some(chain) => Connector::Node(connect(self, chain.clone(), vprf.clone())),
+            Some(chain) => Connector::Node(self.connect(chain.clone(), vprf.clone())),
             None => Connector::Column(connector_column.expect("a rule head's terms are numbered")),
         };
         Operand::built(dedup, fv_nat, connector)
