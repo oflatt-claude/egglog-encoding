@@ -111,24 +111,26 @@ pub(crate) enum HeadColumn {
     /// A proof the head's lowering composes at a column, from the head's interned
     /// subterms, whose view-row proofs the row must carry as bridge premises.
     Composed(String),
-    /// No column: reading such a proof back panics, so a mint the encoder
-    /// forgot to number fails loudly instead of silently claiming column 0.
-    Missing,
+    /// A rule row the walk gave no column: the placeholder before the encoder
+    /// fills one in, and a position inside a head that concludes nothing. It
+    /// renders as `-1`, which reading a proof back panics on, so a mint the
+    /// encoder forgot to number fails loudly instead of claiming column 0.
+    Unnumbered,
 }
 
 impl HeadColumn {
-    /// [`HeadColumn::Own`] at `column`, or [`HeadColumn::Missing`] outside a rule
-    /// head.
+    /// [`HeadColumn::Own`] at `column`, or [`HeadColumn::Unnumbered`] where the
+    /// site composes instead of numbering.
     pub(crate) fn own(column: Option<usize>) -> HeadColumn {
-        column.map_or(HeadColumn::Missing, |column| {
+        column.map_or(HeadColumn::Unnumbered, |column| {
             HeadColumn::Own(column.to_string())
         })
     }
 
-    /// [`HeadColumn::Composed`] at `column`, or [`HeadColumn::Missing`] outside a
-    /// rule head.
+    /// [`HeadColumn::Composed`] at `column`, or [`HeadColumn::Unnumbered`] where
+    /// the site composes instead of numbering.
     pub(crate) fn composed(column: Option<usize>) -> HeadColumn {
-        column.map_or(HeadColumn::Missing, |column| {
+        column.map_or(HeadColumn::Unnumbered, |column| {
             HeadColumn::Composed(column.to_string())
         })
     }
@@ -137,7 +139,7 @@ impl HeadColumn {
     fn expr(&self) -> String {
         match self {
             HeadColumn::Own(expr) | HeadColumn::Composed(expr) => expr.clone(),
-            HeadColumn::Missing => "-1".to_string(),
+            HeadColumn::Unnumbered => "-1".to_string(),
         }
     }
 }
@@ -177,21 +179,11 @@ impl Justification {
         }
     }
 
-    /// Whether this justification names a proof of the rule head being walked.
-    /// False outside a head, and at a position the walk does not number — a
-    /// `change` argument, which the head concludes nothing about.
-    pub(crate) fn names_column(&self) -> bool {
-        matches!(
-            self,
-            Justification::Rule(_, _, HeadColumn::Own(_) | HeadColumn::Composed(_))
-        )
-    }
-
     /// The egglog expression for the `Rule` row's column.
     pub(crate) fn column_expr(&self) -> String {
         match self {
             Justification::Rule(_, _, column) => column.expr(),
-            _ => HeadColumn::Missing.expr(),
+            _ => HeadColumn::Unnumbered.expr(),
         }
     }
 

@@ -1,7 +1,8 @@
 #[doc = include_str!("proof_encoding.md")]
 use crate::proofs::proof_encoding_helpers::{EncodingNames, HeadColumn, Justification, SharedEnd};
 use crate::proofs::proof_head::{
-    HeadPlan, canonicalize, connect, constructor_operand, guest_view, reflexive, union_to_shared,
+    HeadPlan, ProofSite, canonicalize, connect, constructor_operand, guest_view, reflexive,
+    union_to_shared,
 };
 use crate::typechecking::FuncType;
 use crate::*;
@@ -192,10 +193,9 @@ pub(crate) struct ProofInstrumentor<'a> {
     /// A group is emitted where its proof is first read; a proof nothing reads is
     /// never emitted at all (see [`Self::defer_lookup`]).
     pending_lookups: HashMap<String, Pending>,
-    /// The next free column of the rule head being walked (see
-    /// [`crate::proofs::proof_head`]). `None` outside a head, and while walking a
-    /// position the head concludes nothing about — a `change` argument.
-    columns: Option<usize>,
+    /// Which layer the statements being emitted belong to: a rule head's
+    /// skeleton, or a composition written out here.
+    site: ProofSite,
 }
 
 /// Statements held back until something reads the proof they bind.
@@ -222,16 +222,8 @@ impl<'a> ProofInstrumentor<'a> {
             head_chain: None,
             reflexive: HashSet::default(),
             pending_lookups: HashMap::default(),
-            columns: None,
+            site: ProofSite::Composed,
         }
-    }
-
-    /// Reserve the next `count` columns of the head being walked and return the
-    /// first, or `None` where the walk numbers nothing.
-    fn take_columns(&mut self, count: usize) -> Option<usize> {
-        let first = self.columns?;
-        self.columns = Some(first + count);
-        Some(first)
     }
 
     /// Make a term state and use it to instrument the code.
@@ -374,12 +366,12 @@ impl<'a> ProofInstrumentor<'a> {
     }
 
     /// Record a subterm's view-row proof as a bridge premise of the rule proofs
-    /// minted from here on. Only a subterm the walk numbers is recorded, since
-    /// only those are the proofs conversion rebuilds; a subterm the head concludes
-    /// nothing about (a nested `change` argument) has no readable proof anyway.
-    /// Outside a rule head nothing reads the bridges.
-    fn record_bridge(&mut self, justification: &Justification, view_proof: &str) {
-        if !justification.names_column() {
+    /// minted from here on. Only a skeleton site records one: a composing site
+    /// has already used the proof, and nothing later reads a bridge it would push
+    /// here — a subterm the head concludes nothing about (a nested `change`
+    /// argument) is not in the array conversion rebuilds.
+    fn record_bridge(&mut self, view_proof: &str) {
+        if self.site.composes() {
             return;
         }
         if let Some(chain) = &mut self.head_chain {
@@ -429,10 +421,10 @@ impl<'a> ProofInstrumentor<'a> {
         // `larger = smaller` (`()` in term mode).
         let proof = if !self.egraph.proof_state.proofs_enabled {
             "()".to_string()
-        } else if matches!(justification, Justification::Rule(..)) {
-            self.head_union_edge(stmts, lhs, rhs, justification, columns)
-        } else {
+        } else if self.site.composes() {
             self.composed_union_edge(stmts, type_name, lhs, rhs, &larger, &smaller)
+        } else {
+            self.skeleton_union_edge(stmts, lhs, rhs, justification, columns)
         };
         format!("(set ({uf_name} {larger}) (values {smaller} {proof}))")
     }
@@ -440,7 +432,7 @@ impl<'a> ProofInstrumentor<'a> {
     /// The `larger = smaller` proof a `union` in a rule head stores in `@UF`. The
     /// column and the operands' bridge premises determine the whole composition,
     /// so one row records it.
-    fn head_union_edge(
+    fn skeleton_union_edge(
         &mut self,
         stmts: &mut Vec<String>,
         lhs: &Operand,
@@ -448,26 +440,25 @@ impl<'a> ProofInstrumentor<'a> {
         justification: &Justification,
         columns: Option<usize>,
     ) -> String {
-        let column = columns.map_or(HeadColumn::Missing, |first| {
-            // The union-find edge, in each direction. `proof-of-max` picks the one
-            // the `larger = smaller` edge needs, by the same value ordering as
-            // `ordering-max`, over the two `i64` columns.
-            let oriented = format!(
-                "(proof-of-max {} {} {} {})",
-                lhs.value,
-                first + 1,
-                rhs.value,
-                first + 2
-            );
-            // Neither operand was a canonicalized constructor term (no connector),
-            // so both e-classes' ASTs are stable and the edge is the head's own
-            // conclusion; otherwise it is composed from the operands' natural forms.
-            if lhs.connector.is_none() && rhs.connector.is_none() {
-                HeadColumn::Own(oriented)
-            } else {
-                HeadColumn::Composed(oriented)
-            }
-        });
+        let first = columns.expect("a rule head's unions are numbered");
+        // The union-find edge, in each direction. `proof-of-max` picks the one
+        // the `larger = smaller` edge needs, by the same value ordering as
+        // `ordering-max`, over the two `i64` columns.
+        let oriented = format!(
+            "(proof-of-max {} {} {} {})",
+            lhs.value,
+            first + 1,
+            rhs.value,
+            first + 2
+        );
+        // Neither operand was a canonicalized constructor term (no connector),
+        // so both e-classes' ASTs are stable and the edge is the head's own
+        // conclusion; otherwise it is composed from the operands' natural forms.
+        let column = if lhs.connector.is_none() && rhs.connector.is_none() {
+            HeadColumn::Own(oriented)
+        } else {
+            HeadColumn::Composed(oriented)
+        };
         self.rule_row(stmts, &justification.at(column))
     }
 
@@ -574,7 +565,7 @@ impl<'a> ProofInstrumentor<'a> {
             .collect();
         // The guest's own conclusion, the dropped union's edge, the view row it
         // writes, and its connector.
-        let columns = self.take_columns(4);
+        let columns = self.site.take_columns(4);
         let target_id = &target.value;
 
         if !self.proofs_enabled() {
@@ -986,7 +977,7 @@ impl<'a> ProofInstrumentor<'a> {
                     FunctionSubtype::Constructor,
                     "`set` on a constructor should have been rejected by typechecking"
                 );
-                let columns = self.take_columns(2);
+                let columns = self.site.take_columns(2);
 
                 // Global definition `(set (x) e)`: x is a nullary `:internal-let`
                 // function aliasing e. Store e's value+proof directly in x's FD view
@@ -1020,13 +1011,15 @@ impl<'a> ProofInstrumentor<'a> {
                         Change::Delete => self.delete_name(&func_type.name),
                         Change::Subsume => self.subsumed_name(&func_type.name),
                     };
-                    // `change` concludes nothing, so its arguments claim no column.
-                    let numbering = self.columns.take();
+                    // `change` concludes nothing, so its arguments hold no column
+                    // for conversion to read back: they compose like a top-level
+                    // action, and the head's numbering resumes after them.
+                    let head = std::mem::replace(&mut self.site, ProofSite::Composed);
                     let children = generic_exprs
                         .iter()
                         .map(|e| self.instrument_action_expr(e, &mut res, justification, scope))
                         .collect::<Vec<_>>();
-                    self.columns = numbering;
+                    self.site = head;
 
                     // The marker is a `Unit` relation, so insert a row keyed on the
                     // children with `set` (rather than a constructor application).
@@ -1048,7 +1041,7 @@ impl<'a> ProofInstrumentor<'a> {
                 let v2 = self.instrument_action_expr(generic_expr1, &mut res, justification, scope);
                 let ot = generic_expr.output_type();
                 let type_name = ot.name();
-                let columns = self.take_columns(3);
+                let columns = self.site.take_columns(3);
                 let unioned = self.union(&mut res, type_name, &v1, &v2, justification, columns);
                 res.push(unioned);
             }
@@ -1486,8 +1479,7 @@ impl<'a> ProofInstrumentor<'a> {
             view_sort,
         );
         let nat_prf = self.term_proof_for_justification(res, &fv_nat, &to_ast, justification);
-        let in_rule_head = justification.names_column();
-        let to_dedup = (!in_rule_head).then(|| {
+        let to_dedup = self.site.composes().then(|| {
             let mut steps = vec![];
             for (i, arg) in args.iter().enumerate() {
                 if let Some(conn) = &arg.connector {
@@ -1538,8 +1530,8 @@ impl<'a> ProofInstrumentor<'a> {
         } = natural;
         // The term over its children's representatives, then the connector to the
         // e-class it interns into, follow the own conclusion the caller numbered.
-        let canonical_column = self.take_columns(1);
-        let connector_column = self.take_columns(1);
+        let canonical_column = self.site.take_columns(1);
+        let connector_column = self.site.take_columns(1);
         let fv_can = self.mint(
             res,
             &func_type.name,
@@ -1578,7 +1570,7 @@ impl<'a> ProofInstrumentor<'a> {
         // The read misses on a row this action just seeded, returning the fallback:
         // a proof about the term as written rather than about the canonical one,
         // which is how conversion tells "no bridge" from a real one.
-        self.record_bridge(justification, &vprf);
+        self.record_bridge(&vprf);
 
         let connector = match &to_dedup {
             // connector `fv_nat = dedup` = Trans(nat_to_dedup, Sym(dedup = f(children))).
@@ -1759,7 +1751,7 @@ impl<'a> ProofInstrumentor<'a> {
                     .map(|arg| self.instrument_action_expr(arg, res, proof, scope))
                     .collect::<Vec<_>>();
                 // This node's own conclusion is `t = t` for the term it builds.
-                let proof = &proof.at(HeadColumn::own(self.take_columns(1)));
+                let proof = &proof.at(HeadColumn::own(self.site.take_columns(1)));
                 match resolved_call {
                     ResolvedCall::Func(func_type) => {
                         if func_type.subtype == FunctionSubtype::Custom {
@@ -1844,9 +1836,12 @@ impl<'a> ProofInstrumentor<'a> {
         let symbol_gen = &mut self.egraph.parser.symbol_gen;
         let mut fresh = || symbol_gen.fresh("union_operand");
         let plan = HeadPlan::new(actions, &mut fresh);
-        // Only a rule head's proofs are named by column; everywhere else the
-        // encoder composes them itself.
-        self.columns = matches!(justification, Justification::Rule(..)).then_some(0);
+        // A rule head is a format proof conversion can replay, so its proofs are
+        // named by column; everywhere else the encoder composes them itself.
+        self.site = match justification {
+            Justification::Rule(..) => ProofSite::Skeleton { next_column: 0 },
+            _ => ProofSite::Composed,
+        };
         let mut scope = Scope::default();
         let mut res = vec![];
         for (i, action) in plan.actions.iter().enumerate() {
@@ -1869,7 +1864,7 @@ impl<'a> ProofInstrumentor<'a> {
                 _ => res.extend(self.instrument_action(action, justification, &mut scope)),
             }
         }
-        self.columns = None;
+        self.site = ProofSite::Composed;
         res
     }
 
@@ -1889,7 +1884,7 @@ impl<'a> ProofInstrumentor<'a> {
         };
         // Every mint site replaces the placeholder with the column the walk is at;
         // the placeholder is unreadable, so a column left unset fails loudly.
-        let proof = Justification::Rule(rule_name_var.clone(), premises, HeadColumn::Missing);
+        let proof = Justification::Rule(rule_name_var.clone(), premises, HeadColumn::Unnumbered);
         // A proof-mode head reads the database: it looks up the body variables'
         // term proofs and interns each subterm it builds, so it needs a Read/Full
         // action context (`eval_opt` below).

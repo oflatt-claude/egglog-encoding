@@ -13,7 +13,8 @@
 //! [`HeadPlan`] is the head as the encoder lowers it, read by both walks. The
 //! compositions themselves are written once, over [`HeadProofs`]: this walk
 //! applies them to proof nodes, and the encoder to the proof variables it emits
-//! wherever it composes rather than records — a top-level action or a merge body.
+//! wherever it composes rather than records — a top-level action or a merge
+//! body. [`ProofSite`] is which of the two the encoder is doing.
 
 use crate::{
     TermId,
@@ -30,6 +31,39 @@ use crate::{
     typechecking::FuncType,
     util::{HashMap, HashSet, IndexMap},
 };
+
+/// Which of the encoding's two layers the encoder is lowering under.
+///
+/// Layer 1 composes each proof where it is needed and writes every step out.
+/// Layer 2 keeps the same walk but, having the rule head to replay, numbers the
+/// proofs by column and writes a row only where the e-graph stores one. Every
+/// site that has to know which layer it is in asks this (see the *Proofs* part
+/// of `proof_encoding.md`).
+pub(crate) enum ProofSite {
+    /// No rule head to replay: a top-level action, a merge body, or a position
+    /// inside a head that concludes nothing — a `change` argument.
+    Composed,
+    /// A rule head, whose next unclaimed column is `next_column`.
+    Skeleton { next_column: usize },
+}
+
+impl ProofSite {
+    /// Whether the proofs here are composed on the spot rather than numbered.
+    pub(crate) fn composes(&self) -> bool {
+        matches!(self, ProofSite::Composed)
+    }
+
+    /// Reserve the next `count` columns and answer with the first, or `None`
+    /// where the site composes instead of numbering.
+    pub(crate) fn take_columns(&mut self, count: usize) -> Option<usize> {
+        let ProofSite::Skeleton { next_column } = self else {
+            return None;
+        };
+        let first = *next_column;
+        *next_column += count;
+        Some(first)
+    }
+}
 
 /// A rule head as the encoder lowers it.
 pub(crate) struct HeadPlan {
