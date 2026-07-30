@@ -1,6 +1,8 @@
 #[doc = include_str!("proof_encoding.md")]
 use crate::proofs::proof_encoding_helpers::{EncodingNames, Justification, SharedEnd, SiteColumn};
-use crate::proofs::proof_head::{ConstructInto, HeadPlan, constructor_operand};
+use crate::proofs::proof_head::{
+    ConstructInto, HeadPlan, canonicalize, connect, constructor_operand, guest_view, reflexive,
+};
 use crate::proofs::proof_sites::{ActionSites, column, site_column};
 use crate::typechecking::FuncType;
 use crate::*;
@@ -48,15 +50,6 @@ struct Natural {
     /// `fv_nat = f(deduped children)`: one `Congr` per canonicalized child.
     /// `None` in a rule head, where proof conversion folds it instead.
     to_dedup: Option<String>,
-}
-
-/// Which way a pair-valued table's carried proofs point, selecting the
-/// displaced-edge composition in [`ProofInstrumentor::ordered_union_merge`].
-enum CarriedProofs {
-    /// `@UF` rows: the carried proof proves `key = parent`.
-    KeyToParent,
-    /// Congruence views: the carried proof proves `eclass = f(children)`.
-    EclassToTerm,
 }
 
 /// A declared index on a function's view, covering the view columns of one
@@ -595,15 +588,10 @@ impl<'a> ProofInstrumentor<'a> {
                     &fv_nat,
                     &justification.at(plan.union_site, plan.edge_column()),
                 );
-                let to_dedup = self.mint_trans(&edge, chain);
-                match target_conn.clone() {
-                    Some(conn) => {
-                        let conn = self.connector_node(res, justification, &conn);
-                        let sc = self.mint_sym(&conn);
-                        self.mint_trans(&sc, &to_dedup)
-                    }
-                    None => to_dedup,
-                }
+                let target_conn = target_conn
+                    .clone()
+                    .map(|conn| self.connector_node(res, justification, &conn));
+                guest_view(self, edge, chain.clone(), target_conn)
             }
             // The dropped union's site plus the guest's bridge premises determine
             // the whole composition, so one row records it and the edge proof it
@@ -625,10 +613,7 @@ impl<'a> ProofInstrumentor<'a> {
         ));
         res.push(format!("(let {guest} {target})"));
         let guest_conn = match &nat_to_dedup {
-            Some(chain) => {
-                let sv = self.mint_sym(&view_proof);
-                Connector::Node(self.mint_trans(chain, &sv))
-            }
+            Some(chain) => Connector::Node(connect(self, chain.clone(), view_proof.clone())),
             None => Connector::Column(plan.union_site, column::GUEST_CONNECTOR),
         };
         nat_conn.insert(
@@ -666,19 +651,15 @@ impl<'a> ProofInstrumentor<'a> {
     /// e-class: keep `(ordering-min old0 new0)` with the smaller side's carried
     /// proof, and `set` the displaced larger side's `@UF` edge to the smaller
     /// with a proof of `larger = smaller`. That proof is one packed row naming
-    /// both carried proofs, in the constructor for the endpoint they share (see
-    /// [`CarriedProofs`]); proof conversion applies the `Sym` and the `Trans`.
-    fn ordered_union_merge(&mut self, uf_name: &str, carried: CarriedProofs) -> String {
+    /// both carried proofs, in the constructor for the endpoint `shared` names;
+    /// proof conversion applies the `Sym` and the `Trans`.
+    fn ordered_union_merge(&mut self, uf_name: &str, shared: SharedEnd) -> String {
         if !self.proofs_enabled() {
             return format!(
                 "((set ({uf_name} (ordering-max old0 new0)) (values (ordering-min old0 new0) ()))
                   (values (ordering-min old0 new0) ()))"
             );
         }
-        let shared = match carried {
-            CarriedProofs::KeyToParent => SharedEnd::Lhs,
-            CarriedProofs::EclassToTerm => SharedEnd::Rhs,
-        };
         let displaced = self.proof_names().displaced_proof(shared).to_string();
         let proof_sort = self.proof_sort();
         let mut mints = vec![];
@@ -722,7 +703,8 @@ impl<'a> ProofInstrumentor<'a> {
         } else {
             String::new()
         };
-        let uf_merge = self.ordered_union_merge(&uf_name, CarriedProofs::KeyToParent);
+        // An `@UF` row's carried proof proves `key = parent`, so both share their lhs.
+        let uf_merge = self.ordered_union_merge(&uf_name, SharedEnd::Lhs);
         // path compression: a->b (pb: a=b), b->c (pc: b=c)  =>  a->c (Trans pb pc: a=c)
         let (compressed_proof_lets, compressed_proof) = if proofs {
             let trans = self.proof_names().eq_trans_constructor.clone();
@@ -888,7 +870,9 @@ impl<'a> ProofInstrumentor<'a> {
             // Two rows conflicting on the same children are congruent: keep the
             // smaller eclass and union the two eclasses in the sort's `@UF`.
             let uf_name = self.uf_name(schema.output());
-            let congruence_merge = self.ordered_union_merge(&uf_name, CarriedProofs::EclassToTerm);
+            // A view's carried proof proves `eclass = f(children)`, so both share
+            // their rhs.
+            let congruence_merge = self.ordered_union_merge(&uf_name, SharedEnd::Rhs);
             format!(
                 "(function {view_name} ({in_sorts}) ({out_type} {proof_type}) :merge {congruence_merge} :internal-term-constructor {name}{view_flags} :internal-identity-vals 1)"
             )
@@ -1531,14 +1515,13 @@ impl<'a> ProofInstrumentor<'a> {
         let nat_prf = self.term_proof_for_justification(res, &fv_nat, &to_ast, justification);
         let in_rule_head = justification.static_site().is_some();
         let to_dedup = (!in_rule_head).then(|| {
-            let mut chain = nat_prf.clone();
+            let mut steps = vec![];
             for (i, (_, _, conn)) in children.iter().enumerate() {
                 if let Some(conn) = conn {
-                    let conn = self.connector_node(res, justification, conn);
-                    chain = self.mint_congr(&chain, i, &conn);
+                    steps.push((i, self.connector_node(res, justification, conn)));
                 }
             }
-            chain
+            canonicalize(self, nat_prf.clone(), steps)
         });
         Natural {
             dedup_args,
@@ -1594,10 +1577,7 @@ impl<'a> ProofInstrumentor<'a> {
             view_sort,
         );
         let can_prf = match &to_dedup {
-            Some(chain) => {
-                let sym_ntd = self.mint_sym(chain);
-                self.mint_trans(&sym_ntd, chain)
-            }
+            Some(chain) => reflexive(self, chain.clone()),
             None => self.canonical_reflexive_proof(res, justification),
         };
 
@@ -1629,10 +1609,7 @@ impl<'a> ProofInstrumentor<'a> {
         let connector = match &to_dedup {
             // connector `fv_nat = dedup` = Trans(nat_to_dedup, Sym(dedup = f(children))).
             // `sym_vprf` reads the `vprf` let, so it lands after the statements above.
-            Some(chain) => {
-                let sym_vprf = self.mint_sym(&vprf);
-                Connector::Node(self.mint_trans(chain, &sym_vprf))
-            }
+            Some(chain) => Connector::Node(connect(self, chain.clone(), vprf.clone())),
             None => Connector::Column(
                 justification
                     .static_site()

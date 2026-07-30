@@ -13,6 +13,11 @@
 //! The numbering itself comes from [`crate::proofs::proof_sites`]; the walks here
 //! re-derive its order by counting and check the count against that module's site
 //! list.
+//!
+//! The compositions themselves are written once, over [`HeadProofs`]: proof
+//! conversion applies them to proof nodes, and the encoder to the proof variables
+//! it emits wherever it composes rather than records — a top-level action or a
+//! merge body.
 
 use crate::{
     TermId,
@@ -21,6 +26,7 @@ use crate::{
     },
     core::ResolvedCall,
     proofs::{
+        proof_encoding::ProofInstrumentor,
         proof_format::{Justification, Proof, ProofId, ProofStore, Proposition, SynthKey},
         proof_sites::{ActionSites, action_sites, column, decode, site_column},
     },
@@ -594,22 +600,22 @@ impl<'a> Firing<'a> {
         let (_, args) = constructor_operand(expr).expect("filtered to a constructor application");
         let guest_of = plan.guest_of(site);
 
-        let mut to_canonical = self.base(store, site, false);
+        let own = self.base(store, site, false);
+        let mut steps = vec![];
         let mut next = site + 1;
         for (i, arg) in args.iter().enumerate() {
             let child = plan.value_site(arg, next);
             next += site_count(arg);
             let Some(child) = child else { continue };
-            let child = self.resolve(store, child);
-            to_canonical = congr(store, to_canonical, i, child);
+            steps.push((i, self.resolve(store, child)));
         }
+        let to_canonical = canonicalize(store, own, steps);
 
         let connector = match guest_of {
             Some((into, target)) => {
                 let union = into.union_site;
                 let view = self.guest_view(store, into, target, to_canonical);
-                let back = sym(store, view);
-                let connector = trans(store, to_canonical, back);
+                let connector = connect(store, to_canonical, view);
                 self.built
                     .insert((union, column::GUEST_CONNECTOR), connector);
                 connector
@@ -617,16 +623,13 @@ impl<'a> Firing<'a> {
             None => {
                 let canonical = store.get(to_canonical).rhs();
                 match self.bridge(store, site, canonical) {
-                    Some(bridge) => {
-                        let back = sym(store, bridge);
-                        trans(store, to_canonical, back)
-                    }
+                    Some(bridge) => connect(store, to_canonical, bridge),
                     None => to_canonical,
                 }
             }
         };
 
-        let canonical_reflexive = reflexivize(store, to_canonical);
+        let canonical_reflexive = reflexive(store, to_canonical);
         self.built
             .insert((site, column::CANONICAL_REFLEXIVE), canonical_reflexive);
         self.built.insert((site, column::CONNECTOR), connector);
@@ -670,16 +673,9 @@ impl<'a> Firing<'a> {
         target: Option<usize>,
         to_canonical: ProofId,
     ) -> ProofId {
-        let edge_proof = self.base(store, into.union_site, into.guest_is_lhs);
-        let to_dedup = trans(store, edge_proof, to_canonical);
-        let view = match target {
-            Some(target) => {
-                let target = self.resolve(store, target);
-                let back = sym(store, target);
-                trans(store, back, to_dedup)
-            }
-            None => to_dedup,
-        };
+        let edge = self.base(store, into.union_site, into.guest_is_lhs);
+        let target = target.map(|target| self.resolve(store, target));
+        let view = guest_view(store, edge, to_canonical, target);
         self.built
             .insert((into.union_site, column::GUEST_VIEW), view);
         view
@@ -728,8 +724,110 @@ impl<'a> Firing<'a> {
     fn global_value(&mut self, store: &mut ProofStore, row: usize, value: Option<usize>) {
         let value = value.expect("a composed global proof needs a built value");
         let connector = self.resolve(store, value);
-        let proof = reflexivize(store, connector);
+        let proof = reflexive(store, connector);
         self.built.insert((row, column::GLOBAL_VALUE), proof);
+    }
+}
+
+/// Somewhere the equality axioms can be applied to a rule head's proofs.
+///
+/// A head's lowering composes the same way whether its proofs are nodes proof
+/// conversion builds or variables the encoder emits, so the compositions below are
+/// written against this rather than against either. A rule head is the exception:
+/// there the encoder writes one row per proof and leaves the composing to
+/// conversion, so it applies nothing.
+pub(super) trait HeadProofs {
+    type Proof: Clone;
+
+    /// `p : a = b` reversed to `b = a`.
+    fn sym(&mut self, proof: Self::Proof) -> Self::Proof;
+    /// `a = b` and `b = c` joined into `a = c`.
+    fn trans(&mut self, left: Self::Proof, right: Self::Proof) -> Self::Proof;
+    /// `base`'s right-hand side with the child at `child` rewritten by `step`.
+    fn congr(&mut self, base: Self::Proof, child: usize, step: Self::Proof) -> Self::Proof;
+}
+
+impl HeadProofs for ProofStore {
+    type Proof = ProofId;
+
+    fn sym(&mut self, proof: ProofId) -> ProofId {
+        sym(self, proof)
+    }
+
+    fn trans(&mut self, left: ProofId, right: ProofId) -> ProofId {
+        trans(self, left, right)
+    }
+
+    fn congr(&mut self, base: ProofId, child: usize, step: ProofId) -> ProofId {
+        congr(self, base, child, step)
+    }
+}
+
+impl HeadProofs for ProofInstrumentor<'_> {
+    type Proof = String;
+
+    fn sym(&mut self, proof: String) -> String {
+        self.mint_sym(&proof)
+    }
+
+    fn trans(&mut self, left: String, right: String) -> String {
+        self.mint_trans(&left, &right)
+    }
+
+    fn congr(&mut self, base: String, child: usize, step: String) -> String {
+        self.mint_congr(&base, child, &step)
+    }
+}
+
+/// The proof that the term a build site wrote equals the same term over its
+/// children's representatives: one `Congr` per child the head built.
+pub(super) fn canonicalize<M: HeadProofs>(
+    proofs: &mut M,
+    own: M::Proof,
+    children: impl IntoIterator<Item = (usize, M::Proof)>,
+) -> M::Proof {
+    let mut to_canonical = own;
+    for (child, step) in children {
+        to_canonical = proofs.congr(to_canonical, child, step);
+    }
+    to_canonical
+}
+
+/// `t = t` for the term `to_canonical` reaches.
+pub(super) fn reflexive<M: HeadProofs>(proofs: &mut M, to_canonical: M::Proof) -> M::Proof {
+    let back = proofs.sym(to_canonical.clone());
+    proofs.trans(back, to_canonical)
+}
+
+/// A build site's connector, from the term as written to the e-class the head
+/// interned it into: `dedup` states that e-class equals the canonical term, so the
+/// connector runs through the canonical term and back.
+pub(super) fn connect<M: HeadProofs>(
+    proofs: &mut M,
+    to_canonical: M::Proof,
+    dedup: M::Proof,
+) -> M::Proof {
+    let back = proofs.sym(dedup);
+    proofs.trans(to_canonical, back)
+}
+
+/// A construct-into guest's view-row proof: the target's e-class equals the
+/// guest's term over its children's representatives. `edge` is the dropped
+/// `union`'s equality stated `target = guest`, and `target` the target's own
+/// connector when the head built it too.
+pub(super) fn guest_view<M: HeadProofs>(
+    proofs: &mut M,
+    edge: M::Proof,
+    to_canonical: M::Proof,
+    target: Option<M::Proof>,
+) -> M::Proof {
+    let to_dedup = proofs.trans(edge, to_canonical);
+    match target {
+        Some(target) => {
+            let back = proofs.sym(target);
+            proofs.trans(back, to_dedup)
+        }
+        None => to_dedup,
     }
 }
 
@@ -786,10 +884,4 @@ pub(super) fn congr(
             },
         },
     )
-}
-
-/// `Trans(Sym(p), p)`: `p : a = b` reflexivized to `b = b`.
-fn reflexivize(store: &mut ProofStore, proof: ProofId) -> ProofId {
-    let back = sym(store, proof);
-    trans(store, back, proof)
 }
