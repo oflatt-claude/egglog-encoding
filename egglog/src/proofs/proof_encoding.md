@@ -149,7 +149,7 @@ The running example's `rewrite` matches `(Add a b)` into `rewrite_var` and build
         :name "(rewrite (Add a b) (Add b a))")
 ```
 
-No fresh e-class and no `@UF_Math` edge: the view is simply `set` to point at the
+No fresh e-class and no `@UF_Math` edge: the view is `set` to point at the
 target, so `(Add b a)` *is* `rewrite_var`. If `(Add b a)` already exists under a
 different e-class, the plain `set` collides on the children key and the view's
 congruence `:merge` unions the two — exactly the edge the explicit union would
@@ -390,12 +390,12 @@ collisions, containers — is stated against layer 1.
 
 ## Layer 1: building the proof as the rule runs
 
-Layer 1 is the obvious encoding: alongside every row a rule head writes, it
-writes the proof of the equality that row asserts, composing `@Congr`, `@Trans`,
-and `@Sym` into rows as it goes. **The encoder does not do this for a rule head**
-— the snippets in this section are illustrative, not dumps. It is still the
-design layer 2 is an optimization of, and the encoder runs exactly this
-composition wherever there is no rule head to replay (see
+Layer 1 keeps the proof and the row together: alongside every row a rule head
+writes, it writes the proof of the equality that row asserts, composing
+`@Congr`, `@Trans`, and `@Sym` into rows as it goes. **The encoder does not do
+this for a rule head** — the snippets in this section are illustrative, not
+dumps. It is still the design layer 2 is an optimization of, and the encoder
+runs exactly this composition wherever there is no rule head to replay (see
 [Where layer 1 is still emitted](#where-layer-1-is-still-emitted)).
 
 Three things force its shape.
