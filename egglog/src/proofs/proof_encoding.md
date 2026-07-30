@@ -445,6 +445,93 @@ term to the e-class it interned into; and state a guest's view row from the
 dropped union's edge. Walking a head bottom-up and applying those four is the
 whole of layer 1.
 
+### A nested term, level by level
+
+The example above has one level. What the three forces cost becomes visible when
+a head builds a term over a term. Take
+
+```text
+(let f (Neg (Add a (Add b c))))
+(union rewrite_var f)
+```
+
+with `a`, `b`, `c` matched by the body. Flatten it first, so every constructor
+application is its own action and every operand is a variable:
+
+```text
+(let d (Add b c))
+(let e (Add a d))
+(let f (Neg e))
+(union rewrite_var f)
+```
+
+Now walk it bottom-up, carrying at each level a proof from the id the head built
+to the canonical id the view interned. That proof is what lets the *next* level
+up use canonical children while still concluding something about the term as
+written. `set-if-empty` below is the primitive that returns a view's existing
+representative, or installs the given id and proof when the shape is new.
+
+**`(let d (Add b c))`.** Both children are body variables, already canonical, so
+there is no congruence step — the natural node is the only one built:
+
+```text
+(let d (get-fresh! "Math"))
+(set (Add b c d) ())
+(let d-prf (rule-proof rule_name prems))              ;; d = d
+(let (values d' d-to-d'-prf) (set-if-empty (@AddView b c) d d-prf))
+```
+
+**`(let e (Add a d))`.** The child `d` moved, so this level needs both nodes. The
+natural node is over `d`; the canonical one over `d'`; `@Congr` at the child's
+position carries the first to the second:
+
+```text
+(let e (get-fresh! "Math"))
+(set (Add a d e) ())
+(let e-prf (rule-proof rule_name prems))              ;; e = e
+
+(let e' (get-fresh! "Math"))                          ;; the same term over canonical children
+(set (Add a d' e') ())
+(let e-to-e'-prf (@Congr e-prf 1 d-to-d'-prf))        ;; e = e'
+(let e'-prf (@Trans (@Sym e-to-e'-prf) e-to-e'-prf))  ;; e' = e'
+
+(let (values e'' e'-to-e''-prf) (set-if-empty (@AddView a d') e' e'-prf))
+(let e-to-e''-prf (@Trans e-to-e'-prf e'-to-e''-prf)) ;; e = e'', for the level above
+```
+
+**`(let f (Neg e))`.** Identical shape, one level up, with `e-to-e''-prf` as the
+congruence step:
+
+```text
+(let f (get-fresh! "Math"))
+(set (Neg e f) ())
+(let f-prf (rule-proof rule_name prems))              ;; f = f
+
+(let f' (get-fresh! "Math"))
+(set (Neg e'' f') ())
+(let f-to-f'-prf (@Congr f-prf 0 e-to-e''-prf))       ;; f = f'
+(let f'-prf (@Trans (@Sym f-to-f'-prf) f-to-f'-prf))  ;; f' = f'
+
+(let (values f'' f'-to-f''-prf) (set-if-empty (@NegView e'') f' f'-prf))
+(let f-to-f''-prf (@Trans f-to-f'-prf f'-to-f''-prf)) ;; f = f''
+```
+
+**`(union rewrite_var f)`.** The union is stated over the term as written, then
+carried to the representative the view actually holds:
+
+```text
+(let rewrite_var-to-f (rule-proof rule_name prems))                    ;; rewrite_var = f
+(let rewrite_var-to-f'' (@Trans rewrite_var-to-f f-to-f''-prf))
+(set (@UF_Math rewrite_var) (values f'' rewrite_var-to-f''))
+```
+
+Three levels, and only four rows outlive the firing: the three view rows and the
+`@UF_Math` edge. Everything else is proof — two nodes per level where a child
+moved, plus a `@Congr`, a `@Sym` and two `@Trans` to thread them. That ratio is
+what [layer 2](#layer-2-proof-skeletons) removes: the walk above is a function of
+the head and the substitution, so it need not be written into the database at
+all.
+
 ## Layer 2: proof skeletons
 
 Layer 1 writes a row for every proof it composes. Almost none of them are ever
