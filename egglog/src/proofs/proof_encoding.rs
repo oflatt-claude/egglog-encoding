@@ -1,5 +1,5 @@
 #[doc = include_str!("proof_encoding.md")]
-use crate::proofs::proof_encoding_helpers::{EncodingNames, HeadColumn, Justification, SharedEnd};
+use crate::proofs::proof_encoding_helpers::{EncodingNames, HeadColumn, Justification, Skeleton};
 use crate::proofs::proof_head::{
     HeadLayout, HeadPlan, HeadPosition, HeadProof, HeadRun, ProofAlgebra, ProofSite,
     constructor_operand,
@@ -679,28 +679,35 @@ impl<'a> ProofInstrumentor<'a> {
     /// e-class: keep `(ordering-min old0 new0)` with the smaller side's carried
     /// proof, and `set` the displaced larger side's `@UF` edge to the smaller
     /// with a proof of `larger = smaller`. That proof is one packed row naming
-    /// both carried proofs, in the constructor for the endpoint `shared` names;
-    /// proof conversion applies the `Sym` and the `Trans`.
-    fn ordered_union_merge(&mut self, uf_name: &str, shared: SharedEnd) -> String {
+    /// both carried proofs, standing for `composition` over them — the larger
+    /// side's is column 0 and the smaller side's column 1.
+    ///
+    /// Returns the packed constructor's declaration, which the caller must emit
+    /// ahead of the block, and the block itself.
+    fn ordered_union_merge(&mut self, uf_name: &str, composition: Skeleton) -> (String, String) {
         if !self.proofs_enabled() {
-            return format!(
-                "((set ({uf_name} (ordering-max old0 new0)) (values (ordering-min old0 new0) ()))
+            return (
+                String::new(),
+                format!(
+                    "((set ({uf_name} (ordering-max old0 new0)) (values (ordering-min old0 new0) ()))
                   (values (ordering-min old0 new0) ()))"
+                ),
             );
         }
-        let displaced = self.proof_names().displaced_proof(shared).to_string();
+        let (displaced, decl) = self.packed_proof_constructor(&composition);
         let proof_sort = self.proof_sort();
         let mut mints = vec![];
         let displaced_pf = self.mint(&mut mints, &displaced, "hi_pf_ lo_pf_", &proof_sort);
         let mints_str = mints.join("\n                  ");
-        format!(
+        let merge = format!(
             "((let hi_pf_ (proof-of-max old0 old1 new0 new1))
               (let lo_pf_ (proof-of-min old0 old1 new0 new1))
               {mints_str}
               (set ({uf_name} (ordering-max old0 new0))
                    (values (ordering-min old0 new0) {displaced_pf}))
               (values (ordering-min old0 new0) lo_pf_))"
-        )
+        );
+        (decl, merge)
     }
 
     /// Declare a sort's union-find `@UF : (S) -> (S, {Unit|Proof})`, mapping each
@@ -731,8 +738,10 @@ impl<'a> ProofInstrumentor<'a> {
         } else {
             String::new()
         };
-        // An `@UF` row's carried proof proves `key = parent`, so both share their lhs.
-        let uf_merge = self.ordered_union_merge(&uf_name, SharedEnd::Lhs);
+        // An `@UF` row's carried proof proves `key = parent`, so both share their
+        // lhs and it is the larger side's that the composition reverses.
+        let (packed_decl, uf_merge) =
+            self.ordered_union_merge(&uf_name, Skeleton::Hole(0).sym().trans(Skeleton::Hole(1)));
         // path compression: a->b (pb: a=b), b->c (pc: b=c)  =>  a->c (Trans pb pc: a=c)
         let (compressed_proof_lets, compressed_proof) = if proofs {
             let trans = self.proof_names().eq_trans_constructor.clone();
@@ -745,7 +754,7 @@ impl<'a> ProofInstrumentor<'a> {
         };
 
         let code = format!(
-            "{proof_tables}
+            "{packed_decl}{proof_tables}
              (function {uf_name} ({sort_name}) ({sort_name} {proof_type}) :merge {uf_merge} :unextractable :internal-hidden :internal-identity-vals 1)
              (rule ((= (values {b} {pb}) ({uf_name} {a}))
                     (= (values {c} {pc}) ({uf_name} {b}))
@@ -887,13 +896,17 @@ impl<'a> ProofInstrumentor<'a> {
         // Every encoded function uses the FD pair-valued view `(children) ->
         // (output, {Unit|Proof})` keyed on children only; the branches below
         // differ in how the `:merge` resolves a children-key collision.
+        let mut packed_decl = String::new();
         let view_decl = if output_is_eclass {
             // Two rows conflicting on the same children are congruent: keep the
             // smaller eclass and union the two eclasses in the sort's `@UF`.
             let uf_name = self.uf_name(schema.output());
             // A view's carried proof proves `eclass = f(children)`, so both share
-            // their rhs.
-            let congruence_merge = self.ordered_union_merge(&uf_name, SharedEnd::Rhs);
+            // their rhs and it is the smaller side's that the composition
+            // reverses.
+            let (decl, congruence_merge) = self
+                .ordered_union_merge(&uf_name, Skeleton::Hole(0).trans(Skeleton::Hole(1).sym()));
+            packed_decl = decl;
             format!(
                 "(function {view_name} ({in_sorts}) ({out_type} {proof_type}) :merge {congruence_merge} :internal-term-constructor {name}{view_flags} :internal-identity-vals 1)"
             )
@@ -937,7 +950,7 @@ impl<'a> ProofInstrumentor<'a> {
             {fresh_sort_decl}
             {to_ast_view_sort}
             (function {name} ({term_sorts} {view_sort}) Unit :no-merge :internal-hidden :internal-term-node)
-            {view_decl}
+            {packed_decl}{view_decl}
             {index_decls}
             (function {to_delete_name} ({in_sorts}) Unit :no-merge :internal-hidden)
             (function {subsumed_name} ({in_sorts}) Unit :no-merge :internal-hidden)

@@ -8,8 +8,8 @@ use crate::{
         proof_checker::{
             ProofCheckError, ProofCheckErrorKind, eval_expr_with_subst, gather_globals, run_merge,
         },
-        proof_encoding_helpers::{EncodingNames, SharedEnd},
-        proof_head::{Firing, HeadPlan, congr, sym, trans},
+        proof_encoding_helpers::{EncodingNames, Skeleton},
+        proof_head::{Firing, HeadPlan},
     },
     typechecking::{FuncType, PrimitiveValidator},
     util::{HashMap, HashSet, IEntry, IndexMap, IndexSet, SymbolGen},
@@ -200,32 +200,6 @@ enum RawProof {
     /// Desugared by [`ProofStore::from_raw`] into positional
     /// [`Justification::Congr`] steps computed against the actual term.
     CongrAll(RawProofId, RawProofId),
-    /// One firing of a view's rebuild rule, packing the composition it justifies
-    /// into a single row. Expanded by [`ProofStore::expand_rebuild`].
-    Rebuild {
-        /// The view row as it stood, `old_eclass = f(old_0 … old_{n-1})`.
-        row: RawProofId,
-        /// Per canonicalized child column, its position in the row's term and a
-        /// proof `old_j = new_j`, in ascending position.
-        steps: Vec<(usize, RawProofId)>,
-        /// `old_eclass = new_eclass`, when the view's output is an e-class. It
-        /// composes on the left rather than at a child position, so it is a
-        /// field of its own: an e-class can legitimately equal one of its own
-        /// children's terms.
-        eclass: Option<RawProofId>,
-    },
-    /// The `@UF` edge one merge collision displaces, packing the composition it
-    /// justifies into a single row. Expanded by
-    /// [`ProofStore::expand_displaced`].
-    Displaced {
-        /// The larger side's carried proof.
-        hi: RawProofId,
-        /// The smaller side's carried proof, the side the edge now points at.
-        lo: RawProofId,
-        /// Which endpoint the two carried proofs have in common, hence which of
-        /// them the composition reverses.
-        shared: SharedEnd,
-    },
     /// Given a proof that `t1 = c` for a container term `c`, produces a proof of
     /// `t1 = normalize(c)` — the container's canonicalization (reorder/dedup/
     /// merge), which a structural `Congr` chain can't express.
@@ -449,12 +423,13 @@ impl RawProofStore {
             } = self.rule_columns(term_id);
             return premises.into_iter().chain(bridges).collect();
         }
-        if let Some(shape) = names.rebuild_proof_shape(head)
-            && args.len() == shape.columns()
+        if let Some(skeleton) = names.packed_skeleton(head)
+            && args.len() == skeleton.width()
         {
-            return std::iter::once(args[0])
-                .chain((0..shape.steps).map(|step| args[2 + 2 * step]))
-                .chain(shape.eclass.then(|| args[shape.columns() - 1]))
+            return skeleton
+                .proof_columns()
+                .into_iter()
+                .map(|column| args[column])
                 .collect();
         }
         match args.len() {
@@ -464,7 +439,6 @@ impl RawProofStore {
             2 if *head == names.eq_trans_constructor || *head == names.congr_all_constructor => {
                 vec![args[0], args[1]]
             }
-            2 if names.displaced_shared_end(head).is_some() => vec![args[0], args[1]],
             1 if *head == names.eq_sym_constructor
                 || *head == names.container_normalize_constructor =>
             {
@@ -540,6 +514,26 @@ impl RawProofStore {
         self.parse_proof(term_id)
     }
 
+    /// The composition `skeleton` states, over the columns of the packed row
+    /// `args`: a hole's column holds its proof, and a congruence's index column
+    /// the child position it rewrites.
+    fn instantiate(&mut self, skeleton: &Skeleton, args: &[TermId]) -> RawProofId {
+        let proof = match skeleton {
+            Skeleton::Hole(column) => return self.child_proof(args[*column]),
+            Skeleton::Sym(inner) => RawProof::Sym(self.instantiate(inner, args)),
+            Skeleton::Trans(left, right) => {
+                let left = self.instantiate(left, args);
+                RawProof::Trans(left, self.instantiate(right, args))
+            }
+            Skeleton::Congr(base, index, child) => {
+                let base = self.instantiate(base, args);
+                let child_index = self.parse_index(args[*index]);
+                RawProof::Congr(base, child_index, self.instantiate(child, args))
+            }
+        };
+        self.add_proof(proof)
+    }
+
     fn parse_proof_inner(&mut self, term_id: TermId) -> RawProofId {
         let term = self.term_dag.get(term_id).clone();
         let Term::App(head, args) = term else {
@@ -547,6 +541,15 @@ impl RawProofStore {
                 "Expected proof term to be an app, got {term:?}. Proof parsing assumes valid proofs."
             );
         };
+
+        if let Some(skeleton) = self.names.packed_skeleton(&head) {
+            assert!(
+                args.len() == skeleton.width(),
+                "{head} should have {} args",
+                skeleton.width()
+            );
+            return self.instantiate(&skeleton, &args);
+        }
 
         let proof = if head == self.names.fiat_constructor {
             assert!(args.len() == 2, "fiat constructor should have 2 args");
@@ -563,25 +566,6 @@ impl RawProofStore {
             let premises = premises.iter().map(|arg| self.child_proof(*arg)).collect();
             let bridges = bridges.iter().map(|arg| self.child_proof(*arg)).collect();
             RawProof::Rule(name, premises, bridges, self.parse_int(column))
-        } else if let Some(shape) = self.names.rebuild_proof_shape(&head) {
-            assert!(
-                args.len() == shape.columns(),
-                "{head} should have {} args",
-                shape.columns()
-            );
-            let row = self.child_proof(args[0]);
-            let steps = (0..shape.steps)
-                .map(|step| {
-                    (
-                        self.parse_index(args[1 + 2 * step]),
-                        self.child_proof(args[2 + 2 * step]),
-                    )
-                })
-                .collect();
-            let eclass = shape
-                .eclass
-                .then(|| self.child_proof(args[shape.columns() - 1]));
-            RawProof::Rebuild { row, steps, eclass }
         } else if head == self.names.merge_fn_idx_constructor {
             assert!(args.len() == 4, "merge-idx constructor should have 4 args");
             let function = self.parse_string(args[0]);
@@ -595,11 +579,6 @@ impl RawProofStore {
             let old_proof = self.child_proof(args[1]);
             let new_proof = self.child_proof(args[2]);
             RawProof::MergeFnRow(function, old_proof, new_proof)
-        } else if let Some(shared) = self.names.displaced_shared_end(&head) {
-            assert!(args.len() == 2, "{head} should have 2 args");
-            let hi = self.child_proof(args[0]);
-            let lo = self.child_proof(args[1]);
-            RawProof::Displaced { hi, lo, shared }
         } else if head == self.names.eq_trans_constructor {
             assert!(args.len() == 2, "trans constructor should have 2 args");
             let left = self.child_proof(args[0]);
@@ -1011,6 +990,7 @@ impl ProofStore {
                 let base_lhs = self.id_to_proof[base_id].lhs();
                 let base_rhs = self.id_to_proof[base_id].rhs();
                 let child_rhs = self.id_to_proof[child_id].rhs();
+                self.assert_congr_starts_at_child(base_rhs, *child_index, child_id);
                 let rhs = self.replace_term_child(base_rhs, *child_index, child_rhs);
 
                 Proof {
@@ -1026,30 +1006,6 @@ impl ProofStore {
                 let base_id = self.convert_raw_proof(prog, globals, raw_store, *proof_raw);
                 let child_id = self.convert_raw_proof(prog, globals, raw_store, *child_raw);
                 let expanded_id = self.expand_congr_all(base_id, child_id);
-                self.proof_id.insert(raw_proof.clone(), expanded_id);
-                return expanded_id;
-            }
-            RawProof::Rebuild { row, steps, eclass } => {
-                let row_id = self.convert_raw_proof(prog, globals, raw_store, *row);
-                let step_ids: Vec<(usize, ProofId)> = steps
-                    .iter()
-                    .map(|(position, step)| {
-                        (
-                            *position,
-                            self.convert_raw_proof(prog, globals, raw_store, *step),
-                        )
-                    })
-                    .collect();
-                let eclass_id =
-                    (*eclass).map(|e| self.convert_raw_proof(prog, globals, raw_store, e));
-                let expanded_id = self.expand_rebuild(row_id, &step_ids, eclass_id);
-                self.proof_id.insert(raw_proof.clone(), expanded_id);
-                return expanded_id;
-            }
-            RawProof::Displaced { hi, lo, shared } => {
-                let hi_id = self.convert_raw_proof(prog, globals, raw_store, *hi);
-                let lo_id = self.convert_raw_proof(prog, globals, raw_store, *lo);
-                let expanded_id = self.expand_displaced(hi_id, lo_id, *shared);
                 self.proof_id.insert(raw_proof.clone(), expanded_id);
                 return expanded_id;
             }
@@ -1289,66 +1245,20 @@ impl ProofStore {
         current
     }
 
-    /// Expand a rebuild ([`RawProof::Rebuild`]) into the composition it packs: a
-    /// [`Justification::Congr`] per step, folded onto the row proof in ascending
-    /// child position, then `Trans(Sym(eclass), …)` when the row's e-class moved
-    /// as well.
-    ///
-    /// Panics if the steps are not in ascending position, if a step does not
-    /// start at the child it names, or if the e-class proof does not meet the
-    /// row's left-hand side.
-    fn expand_rebuild(
-        &mut self,
-        row: ProofId,
-        steps: &[(usize, ProofId)],
-        eclass: Option<ProofId>,
-    ) -> ProofId {
-        let mut current = row;
-        let mut previous: Option<usize> = None;
-        for &(position, step) in steps {
-            if let Some(previous) = previous {
-                assert!(
-                    previous < position,
-                    "rebuild steps must be in ascending child position, got {previous} then {position}"
-                );
-            }
-            previous = Some(position);
-            let base = self.id_to_proof[current].rhs();
-            let child_lhs = self.id_to_proof[step].lhs();
-            let base_child = match self.term_dag.get(base) {
-                Term::App(_, children) => children.get(position).copied(),
-                other => panic!("a rebuild's row proof should prove an application, got {other:?}"),
-            };
-            assert_eq!(
-                base_child,
-                Some(child_lhs),
-                "rebuild step {position} does not start at that child of the row"
-            );
-            current = congr(self, current, position, step);
-        }
-        let Some(eclass) = eclass else {
-            return current;
+    /// A congruence step's middle-term check, the counterpart of the one
+    /// [`crate::proofs::proof_head::trans`] makes: the child the step rewrites
+    /// has to be the child it starts at. Panics otherwise.
+    fn assert_congr_starts_at_child(&self, base: TermId, child_index: usize, child: ProofId) {
+        let child_lhs = self.id_to_proof[child].lhs();
+        let base_child = match self.term_dag.get(base) {
+            Term::App(_, children) => children.get(child_index).copied(),
+            other => panic!("congruence requires an application term, got {other:?}"),
         };
-        let back = sym(self, eclass);
-        trans(self, back, current)
-    }
-
-    /// Expand a displaced edge ([`RawProof::Displaced`]) into the composition it
-    /// packs: the two carried proofs joined at the endpoint they share, with the
-    /// one pointing the wrong way reversed, proving `hi = lo`.
-    ///
-    /// Panics unless they do share that endpoint.
-    fn expand_displaced(&mut self, hi: ProofId, lo: ProofId, shared: SharedEnd) -> ProofId {
-        match shared {
-            SharedEnd::Lhs => {
-                let back = sym(self, hi);
-                trans(self, back, lo)
-            }
-            SharedEnd::Rhs => {
-                let back = sym(self, lo);
-                trans(self, hi, back)
-            }
-        }
+        assert_eq!(
+            base_child,
+            Some(child_lhs),
+            "congruence step {child_index} does not start at that child"
+        );
     }
 
     pub(super) fn replace_term_child(
@@ -1531,27 +1441,25 @@ impl Proof {
     }
 }
 
-/// A packed row — a [`RawProof::Rebuild`] or a [`RawProof::Displaced`] — expands
-/// to exactly the `Congr`/`Sym`/`Trans` composition it stands for. The
+/// A packed row unpacks to exactly the composition its skeleton states. The
 /// compositions below are written out by hand rather than generated, so they are
-/// an oracle rather than a second copy of the expansions.
+/// an oracle rather than a second copy of the instantiation.
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::proofs::proof_encoding_helpers::RebuildShape;
     use crate::util::SymbolGen;
 
-    /// One firing of a rebuild rule over a four-child view row, as the premises
-    /// the rule records: the row proof `e_old = f(old0 old1 old2 old3)`, a step
+    /// One firing of a rebuild rule over a four-child view row, as the proofs
+    /// the rule packs: the row proof `e_old = f(old0 old1 old2 old3)`, a step
     /// per child column (column 3's is reflexive — that column did not move),
     /// and the e-class's own move `e_old = e_new`.
     struct Firing {
         raw: RawProofStore,
-        row: RawProofId,
+        row: TermId,
         /// `old_j = new_j`, per column.
-        steps: Vec<RawProofId>,
+        steps: Vec<TermId>,
         /// `e_old = e_new`.
-        eclass: RawProofId,
+        eclass: TermId,
         old: Vec<TermId>,
         /// Each column's canonical form; column 3's is its old one.
         new: Vec<TermId>,
@@ -1574,9 +1482,11 @@ mod tests {
             let e_new = leaf(&mut raw, "e_new".to_string());
 
             let row_term = raw.term_dag.app("f".to_string(), old.clone());
-            let row = fiat(&mut raw, e_old, row_term);
-            let steps = (0..4).map(|j| fiat(&mut raw, old[j], new[j])).collect();
-            let eclass = fiat(&mut raw, e_old, e_new);
+            let row = fiat_term(&mut raw, e_old, row_term);
+            let steps = (0..4)
+                .map(|j| fiat_term(&mut raw, old[j], new[j]))
+                .collect();
+            let eclass = fiat_term(&mut raw, e_old, e_new);
             Firing {
                 raw,
                 row,
@@ -1595,9 +1505,14 @@ mod tests {
             Proposition::new(lhs, rhs)
         }
 
+        /// The proof of one of this firing's columns.
+        fn proof(&mut self, column: TermId) -> RawProofId {
+            self.raw.parse_proof(column)
+        }
+
         /// [`assert_agree`] over this firing's store.
-        fn assert_agree(&self, rebuild: RawProofId, chain: RawProofId, expected: &Proposition) {
-            assert_agree(&self.raw, rebuild, chain, expected);
+        fn assert_agree(&self, packed: RawProofId, chain: RawProofId, expected: &Proposition) {
+            assert_agree(&self.raw, packed, chain, expected);
         }
     }
 
@@ -1621,7 +1536,7 @@ mod tests {
         assert_eq!(store.get(chain).proposition(), expected);
         assert!(
             same_proof(&store, packed, chain),
-            "the expanded row\n{}\nis not the composition it packs\n{}",
+            "the unpacked row\n{}\nis not the composition it packs\n{}",
             store.proof_to_string(packed),
             store.proof_to_string(chain),
         );
@@ -1629,15 +1544,22 @@ mod tests {
 
     /// A leaf proof of `lhs = rhs`, spelled the way an extracted `Fiat` row is
     /// (each endpoint wrapped in an `Ast` constructor).
-    fn fiat(raw: &mut RawProofStore, lhs: TermId, rhs: TermId) -> RawProofId {
+    fn fiat_term(raw: &mut RawProofStore, lhs: TermId, rhs: TermId) -> TermId {
         let lhs = raw.term_dag.app("Ast".to_string(), vec![lhs]);
         let rhs = raw.term_dag.app("Ast".to_string(), vec![rhs]);
-        raw.add_proof(RawProof::Fiat(lhs, rhs))
+        let head = raw.names.fiat_constructor.clone();
+        raw.term_dag.app(head, vec![lhs, rhs])
+    }
+
+    /// A reflexive `Fiat` row over a nullary term, as an extracted proof term.
+    fn leaf_proof_term(raw: &mut RawProofStore, name: &str) -> TermId {
+        let value = raw.term_dag.app(name.to_string(), vec![]);
+        fiat_term(raw, value, value)
     }
 
     /// Whether two proofs are the same tree. Their ids differ by construction:
-    /// the chain's nodes are minted per raw node, the rebuild's by the synthesis
-    /// helpers' own hash-consing.
+    /// the chain's nodes are minted per raw node, the packed row's by the
+    /// synthesis helpers' own hash-consing.
     fn same_proof(store: &ProofStore, left: ProofId, right: ProofId) -> bool {
         let (left, right) = (store.get(left), store.get(right));
         if left.proposition != right.proposition {
@@ -1671,70 +1593,7 @@ mod tests {
         }
     }
 
-    /// Columns 0 and 2 move, and so does the e-class; column 3's step is
-    /// reflexive.
-    #[test]
-    fn rebuild_expands_to_the_chain_it_packs() {
-        let mut firing = Firing::new();
-        let (row, eclass) = (firing.row, firing.eclass);
-        let steps = firing.steps.clone();
-        let rebuild = firing.raw.add_proof(RawProof::Rebuild {
-            row,
-            steps: vec![(0, steps[0]), (2, steps[2]), (3, steps[3])],
-            eclass: Some(eclass),
-        });
-
-        let at_0 = firing.raw.add_proof(RawProof::Congr(row, 0, steps[0]));
-        let at_2 = firing.raw.add_proof(RawProof::Congr(at_0, 2, steps[2]));
-        let at_3 = firing.raw.add_proof(RawProof::Congr(at_2, 3, steps[3]));
-        let back = firing.raw.add_proof(RawProof::Sym(eclass));
-        let chain = firing.raw.add_proof(RawProof::Trans(back, at_3));
-
-        let children = vec![firing.new[0], firing.old[1], firing.new[2], firing.old[3]];
-        let expected = firing.concludes(firing.e_new, children);
-        firing.assert_agree(rebuild, chain, &expected);
-    }
-
-    /// A view whose output is not an e-class: only child columns move.
-    #[test]
-    fn rebuild_without_an_eclass_step_expands_to_the_chain() {
-        let mut firing = Firing::new();
-        let row = firing.row;
-        let steps = firing.steps.clone();
-        let rebuild = firing.raw.add_proof(RawProof::Rebuild {
-            row,
-            steps: vec![(1, steps[1]), (3, steps[3])],
-            eclass: None,
-        });
-
-        let at_1 = firing.raw.add_proof(RawProof::Congr(row, 1, steps[1]));
-        let chain = firing.raw.add_proof(RawProof::Congr(at_1, 3, steps[3]));
-
-        let children = vec![firing.old[0], firing.new[1], firing.old[2], firing.old[3]];
-        let expected = firing.concludes(firing.e_old, children);
-        firing.assert_agree(rebuild, chain, &expected);
-    }
-
-    /// Only the e-class moved, so the fold contributes nothing.
-    #[test]
-    fn rebuild_with_no_child_steps_expands_to_the_chain() {
-        let mut firing = Firing::new();
-        let (row, eclass) = (firing.row, firing.eclass);
-        let rebuild = firing.raw.add_proof(RawProof::Rebuild {
-            row,
-            steps: vec![],
-            eclass: Some(eclass),
-        });
-
-        let back = firing.raw.add_proof(RawProof::Sym(eclass));
-        let chain = firing.raw.add_proof(RawProof::Trans(back, row));
-
-        let children = firing.old.clone();
-        let expected = firing.concludes(firing.e_new, children);
-        firing.assert_agree(rebuild, chain, &expected);
-    }
-
-    /// An empty store whose names are the ones a rebuild row is spelled with.
+    /// An empty store whose names are the ones a packed row is spelled with.
     fn empty_store() -> RawProofStore {
         RawProofStore {
             term_dag: TermDag::default(),
@@ -1745,34 +1604,150 @@ mod tests {
         }
     }
 
-    /// A rebuild row over `row`, one step per `(column, step)` pair and the
-    /// e-class's own step when its view has one, spelled as the extracted term
-    /// of a [`EncodingNames::rebuild_proof`] row.
-    fn rebuild_term(
-        raw: &mut RawProofStore,
-        row: TermId,
-        steps: &[(i64, TermId)],
-        eclass: Option<TermId>,
-    ) -> TermId {
-        let head = raw.names.rebuild_proof(RebuildShape {
-            steps: steps.len(),
-            eclass: eclass.is_some(),
-        });
-        let mut args = vec![row];
-        for &(column, step) in steps {
-            args.push(raw.term_dag.lit(Literal::Int(column)));
-            args.push(step);
-        }
-        args.extend(eclass);
-        raw.term_dag.app(head, args)
+    /// A packed row over `columns`, spelled as the extracted term of the
+    /// constructor standing for `skeleton`.
+    fn packed_term(raw: &mut RawProofStore, skeleton: &Skeleton, columns: Vec<TermId>) -> TermId {
+        assert_eq!(columns.len(), skeleton.width(), "one term per column");
+        let head = raw.names.packed_proof(skeleton);
+        raw.term_dag.app(head, columns)
     }
 
-    /// A reflexive `Fiat` row over a nullary term, as an extracted proof term.
-    fn fiat_term(raw: &mut RawProofStore, name: &str) -> TermId {
-        let value = raw.term_dag.app(name.to_string(), vec![]);
-        let ast = raw.term_dag.app("Ast".to_string(), vec![value]);
-        let head = raw.names.fiat_constructor.clone();
-        raw.term_dag.app(head, vec![ast, ast])
+    /// [`RawProofStore::from_extracted`]'s parse of one packed row.
+    fn parse(raw: &mut RawProofStore, term: TermId) -> RawProofId {
+        raw.parse_nested_first(term);
+        raw.parse_proof(term)
+    }
+
+    /// An integer column of a packed row.
+    fn column(raw: &mut RawProofStore, value: i64) -> TermId {
+        raw.term_dag.lit(Literal::Int(value))
+    }
+
+    /// The skeleton a view rebuild that canonicalized `steps` child columns
+    /// packs, over the layout `indexed_rebuild_rule` writes.
+    fn rebuild_skeleton(steps: &[usize], eclass: bool) -> Skeleton {
+        let mut skeleton = Skeleton::Hole(0);
+        for step in 0..steps.len() {
+            skeleton = skeleton.congr(1 + 2 * step, Skeleton::Hole(2 + 2 * step));
+        }
+        if eclass {
+            skeleton = Skeleton::Hole(1 + 2 * steps.len()).sym().trans(skeleton);
+        }
+        skeleton
+    }
+
+    /// A rebuild row's columns: the row proof, then each step's child position
+    /// beside its proof, then the e-class's own step when it has one.
+    fn rebuild_columns(
+        raw: &mut RawProofStore,
+        row: TermId,
+        steps: &[(usize, TermId)],
+        eclass: Option<TermId>,
+    ) -> Vec<TermId> {
+        let mut columns = vec![row];
+        for &(position, step) in steps {
+            columns.push(column(raw, position as i64));
+            columns.push(step);
+        }
+        columns.extend(eclass);
+        columns
+    }
+
+    /// One rebuild row, packed and parsed.
+    fn rebuild(
+        raw: &mut RawProofStore,
+        row: TermId,
+        steps: &[(usize, TermId)],
+        eclass: Option<TermId>,
+    ) -> RawProofId {
+        let positions: Vec<usize> = steps.iter().map(|&(position, _)| position).collect();
+        let skeleton = rebuild_skeleton(&positions, eclass.is_some());
+        let columns = rebuild_columns(raw, row, steps, eclass);
+        let term = packed_term(raw, &skeleton, columns);
+        parse(raw, term)
+    }
+
+    /// Columns 0 and 2 move, and so does the e-class; column 3's step is
+    /// reflexive.
+    #[test]
+    fn rebuild_unpacks_to_the_chain_it_packs() {
+        let mut firing = Firing::new();
+        let (row, eclass) = (firing.row, firing.eclass);
+        let steps = firing.steps.clone();
+        let packed = rebuild(
+            &mut firing.raw,
+            row,
+            &[(0, steps[0]), (2, steps[2]), (3, steps[3])],
+            Some(eclass),
+        );
+
+        let row = firing.proof(row);
+        let (step0, step2, step3) = (
+            firing.proof(steps[0]),
+            firing.proof(steps[2]),
+            firing.proof(steps[3]),
+        );
+        let eclass = firing.proof(eclass);
+        let at_0 = firing.raw.add_proof(RawProof::Congr(row, 0, step0));
+        let at_2 = firing.raw.add_proof(RawProof::Congr(at_0, 2, step2));
+        let at_3 = firing.raw.add_proof(RawProof::Congr(at_2, 3, step3));
+        let back = firing.raw.add_proof(RawProof::Sym(eclass));
+        let chain = firing.raw.add_proof(RawProof::Trans(back, at_3));
+
+        let children = vec![firing.new[0], firing.old[1], firing.new[2], firing.old[3]];
+        let expected = firing.concludes(firing.e_new, children);
+        firing.assert_agree(packed, chain, &expected);
+    }
+
+    /// A view whose output is not an e-class: only child columns move.
+    #[test]
+    fn rebuild_without_an_eclass_step_unpacks_to_the_chain() {
+        let mut firing = Firing::new();
+        let row = firing.row;
+        let steps = firing.steps.clone();
+        let packed = rebuild(&mut firing.raw, row, &[(1, steps[1]), (3, steps[3])], None);
+
+        let row = firing.proof(row);
+        let (step1, step3) = (firing.proof(steps[1]), firing.proof(steps[3]));
+        let at_1 = firing.raw.add_proof(RawProof::Congr(row, 1, step1));
+        let chain = firing.raw.add_proof(RawProof::Congr(at_1, 3, step3));
+
+        let children = vec![firing.old[0], firing.new[1], firing.old[2], firing.old[3]];
+        let expected = firing.concludes(firing.e_old, children);
+        firing.assert_agree(packed, chain, &expected);
+    }
+
+    /// Only the e-class moved, so the fold contributes nothing.
+    #[test]
+    fn rebuild_with_no_child_steps_unpacks_to_the_chain() {
+        let mut firing = Firing::new();
+        let (row, eclass) = (firing.row, firing.eclass);
+        let packed = rebuild(&mut firing.raw, row, &[], Some(eclass));
+
+        let row = firing.proof(row);
+        let eclass = firing.proof(eclass);
+        let back = firing.raw.add_proof(RawProof::Sym(eclass));
+        let chain = firing.raw.add_proof(RawProof::Trans(back, row));
+
+        let children = firing.old.clone();
+        let expected = firing.concludes(firing.e_new, children);
+        firing.assert_agree(packed, chain, &expected);
+    }
+
+    /// A step that names a child it does not start at is rejected rather than
+    /// minting a proof of an equality nothing established.
+    #[test]
+    #[should_panic(expected = "congruence step 1 does not start at that child")]
+    fn a_rebuild_step_at_the_wrong_child_is_rejected() {
+        let mut firing = Firing::new();
+        let (row, steps) = (firing.row, firing.steps.clone());
+        let packed = rebuild(&mut firing.raw, row, &[(1, steps[0])], None);
+        let mut store = ProofStore::new(
+            firing.raw.term_dag.clone(),
+            HashMap::default(),
+            HashSet::default(),
+        );
+        store.convert_raw_proof(&vec![], &HashMap::default(), &firing.raw, packed);
     }
 
     /// The columns are literals, so a reader has to skip them to find the
@@ -1783,23 +1758,24 @@ mod tests {
     #[test]
     fn a_rebuild_rows_nested_proofs_are_its_row_and_its_steps() {
         let mut raw = empty_store();
-        let row = fiat_term(&mut raw, "row");
-        let first = fiat_term(&mut raw, "first");
-        let second = fiat_term(&mut raw, "second");
-        let eclass = fiat_term(&mut raw, "eclass");
+        let row = leaf_proof_term(&mut raw, "row");
+        let first = leaf_proof_term(&mut raw, "first");
+        let second = leaf_proof_term(&mut raw, "second");
+        let eclass = leaf_proof_term(&mut raw, "eclass");
         let steps = [(0, first), (2, second)];
-        let term = rebuild_term(&mut raw, row, &steps, None);
-        assert_eq!(
-            raw.nested_proofs(term),
-            vec![row, first, second],
-            "a rebuild row nests its row proof and its step proofs"
-        );
-        let term = rebuild_term(&mut raw, row, &steps, Some(eclass));
-        assert_eq!(
-            raw.nested_proofs(term),
-            vec![row, first, second, eclass],
-            "and the e-class proof after them, when it has one"
-        );
+        for (with_eclass, expected) in [
+            (None, vec![row, first, second]),
+            (Some(eclass), vec![row, first, second, eclass]),
+        ] {
+            let skeleton = rebuild_skeleton(&[0, 2], with_eclass.is_some());
+            let columns = rebuild_columns(&mut raw, row, &steps, with_eclass);
+            let term = packed_term(&mut raw, &skeleton, columns);
+            assert_eq!(
+                raw.nested_proofs(term),
+                expected,
+                "a rebuild row nests its row proof, its step proofs and its e-class proof"
+            );
+        }
     }
 
     /// A chain of rebuilds parses without recursing per link, on a stack far
@@ -1812,15 +1788,18 @@ mod tests {
                 .stack_size(512 * 1024)
                 .spawn(move || {
                     let mut raw = empty_store();
-                    let step = fiat_term(&mut raw, "step");
-                    let leaf = fiat_term(&mut raw, "row");
+                    let step = leaf_proof_term(&mut raw, "step");
+                    let leaf = leaf_proof_term(&mut raw, "row");
+                    let skeleton = rebuild_skeleton(&[0], through_eclass);
                     let mut chain = leaf;
                     for _ in 0..50_000 {
-                        chain = if through_eclass {
-                            rebuild_term(&mut raw, leaf, &[(0, step)], Some(chain))
+                        let (row, eclass) = if through_eclass {
+                            (leaf, Some(chain))
                         } else {
-                            rebuild_term(&mut raw, chain, &[(0, step)], None)
+                            (chain, None)
                         };
+                        let columns = rebuild_columns(&mut raw, row, &[(0, step)], eclass);
+                        chain = packed_term(&mut raw, &skeleton, columns);
                     }
                     RawProofStore::from_extracted(&raw.names, raw.term_dag.clone(), chain);
                 })
@@ -1830,55 +1809,56 @@ mod tests {
         }
     }
 
-    /// A displaced-edge row over two carried proofs, spelled as the extracted
-    /// term of a [`EncodingNames::displaced_proof`] row.
-    fn displaced_term(
-        raw: &mut RawProofStore,
-        hi: TermId,
-        lo: TermId,
-        shared: SharedEnd,
-    ) -> TermId {
-        let head = raw.names.displaced_proof(shared).to_string();
-        raw.term_dag.app(head, vec![hi, lo])
+    /// The two compositions a merge collision packs, by which endpoint its two
+    /// carried proofs share: the larger side's is column 0 and the smaller
+    /// side's column 1, and whichever points the wrong way is reversed.
+    fn displaced_skeletons() -> [Skeleton; 2] {
+        [
+            Skeleton::Hole(0).sym().trans(Skeleton::Hole(1)),
+            Skeleton::Hole(0).trans(Skeleton::Hole(1).sym()),
+        ]
     }
 
-    /// One merge collision, meeting at `shared`: the larger side's carried proof,
+    /// One merge collision under `skeleton`: the larger side's carried proof,
     /// the smaller side's, and the `hi = lo` the displaced edge has to state.
-    fn collision(
-        raw: &mut RawProofStore,
-        shared: SharedEnd,
-    ) -> (RawProofId, RawProofId, Proposition) {
+    fn collision(raw: &mut RawProofStore, skeleton: &Skeleton) -> (TermId, TermId, Proposition) {
         let leaf = |raw: &mut RawProofStore, name: &str| raw.term_dag.app(name.into(), vec![]);
         let hi_term = leaf(raw, "hi");
         let lo_term = leaf(raw, "lo");
         let shared_term = leaf(raw, "shared");
-        let (hi, lo) = match shared {
-            SharedEnd::Lhs => (
-                fiat(raw, shared_term, hi_term),
-                fiat(raw, shared_term, lo_term),
-            ),
-            SharedEnd::Rhs => (
-                fiat(raw, hi_term, shared_term),
-                fiat(raw, lo_term, shared_term),
-            ),
+        // The skeleton reverses whichever side does not already run `hi -> lo`.
+        let shared_on_the_left =
+            matches!(skeleton, Skeleton::Trans(left, _) if matches!(**left, Skeleton::Sym(_)));
+        let (hi, lo) = if shared_on_the_left {
+            (
+                fiat_term(raw, shared_term, hi_term),
+                fiat_term(raw, shared_term, lo_term),
+            )
+        } else {
+            (
+                fiat_term(raw, hi_term, shared_term),
+                fiat_term(raw, lo_term, shared_term),
+            )
         };
         (hi, lo, Proposition::new(hi_term, lo_term))
     }
 
-    /// Either way the carried proofs point, the row expands to the `Sym` + `Trans`
+    /// Either way the carried proofs point, the row unpacks to the `Sym` + `Trans`
     /// pair it packs, proving that the displaced side equals the kept one.
     #[test]
-    fn displaced_expands_to_the_pair_it_packs() {
-        for shared in [SharedEnd::Lhs, SharedEnd::Rhs] {
+    fn displaced_unpacks_to_the_pair_it_packs() {
+        for skeleton in displaced_skeletons() {
             let mut raw = empty_store();
-            let (hi, lo, expected) = collision(&mut raw, shared);
-            let displaced = raw.add_proof(RawProof::Displaced { hi, lo, shared });
-            let pair = match shared {
-                SharedEnd::Lhs => {
+            let (hi, lo, expected) = collision(&mut raw, &skeleton);
+            let term = packed_term(&mut raw, &skeleton, vec![hi, lo]);
+            let displaced = parse(&mut raw, term);
+            let (hi, lo) = (raw.parse_proof(hi), raw.parse_proof(lo));
+            let pair = match &skeleton {
+                Skeleton::Trans(left, _) if matches!(**left, Skeleton::Sym(_)) => {
                     let back = raw.add_proof(RawProof::Sym(hi));
                     raw.add_proof(RawProof::Trans(back, lo))
                 }
-                SharedEnd::Rhs => {
+                _ => {
                     let back = raw.add_proof(RawProof::Sym(lo));
                     raw.add_proof(RawProof::Trans(hi, back))
                 }
@@ -1892,14 +1872,14 @@ mod tests {
     #[test]
     fn a_displaced_rows_nested_proofs_are_its_two_carried_proofs() {
         let mut raw = empty_store();
-        let hi = fiat_term(&mut raw, "hi");
-        let lo = fiat_term(&mut raw, "lo");
-        for shared in [SharedEnd::Lhs, SharedEnd::Rhs] {
-            let term = displaced_term(&mut raw, hi, lo, shared);
+        let hi = leaf_proof_term(&mut raw, "hi");
+        let lo = leaf_proof_term(&mut raw, "lo");
+        for skeleton in displaced_skeletons() {
+            let term = packed_term(&mut raw, &skeleton, vec![hi, lo]);
             assert_eq!(
                 raw.nested_proofs(term),
                 vec![hi, lo],
-                "a {shared:?}-sharing displaced row nests both carried proofs"
+                "a displaced row nests both carried proofs"
             );
         }
     }
@@ -1909,20 +1889,22 @@ mod tests {
     /// frame per link, through either carried proof.
     #[test]
     fn a_deep_displaced_chain_parses_without_a_deep_stack() {
-        for shared in [SharedEnd::Lhs, SharedEnd::Rhs] {
+        for skeleton in displaced_skeletons() {
             for through_lo in [false, true] {
+                let skeleton = skeleton.clone();
                 std::thread::Builder::new()
                     .stack_size(512 * 1024)
                     .spawn(move || {
                         let mut raw = empty_store();
-                        let leaf = fiat_term(&mut raw, "carried");
+                        let leaf = leaf_proof_term(&mut raw, "carried");
                         let mut chain = leaf;
                         for _ in 0..50_000 {
-                            chain = if through_lo {
-                                displaced_term(&mut raw, leaf, chain, shared)
+                            let columns = if through_lo {
+                                vec![leaf, chain]
                             } else {
-                                displaced_term(&mut raw, chain, leaf, shared)
+                                vec![chain, leaf]
                             };
+                            chain = packed_term(&mut raw, &skeleton, columns);
                         }
                         RawProofStore::from_extracted(&raw.names, raw.term_dag.clone(), chain);
                     })
@@ -1930,6 +1912,28 @@ mod tests {
                     .join()
                     .expect("a deep displaced chain should parse");
             }
+        }
+    }
+
+    /// Every composition a packed row can stand for is recovered from the
+    /// constructor's name, so the encoder and unpacking cannot drift apart.
+    #[test]
+    fn a_packed_constructors_name_spells_its_skeleton() {
+        let names = EncodingNames::new(&mut SymbolGen::new("test".to_string()));
+        let mut skeletons = displaced_skeletons().to_vec();
+        for steps in 0..4 {
+            for eclass in [false, true] {
+                let positions: Vec<usize> = (0..steps).map(|step| 2 * step).collect();
+                skeletons.push(rebuild_skeleton(&positions, eclass));
+            }
+        }
+        for skeleton in skeletons {
+            let head = names.packed_proof(&skeleton);
+            assert_eq!(
+                names.packed_skeleton(&head),
+                Some(skeleton.clone()),
+                "{head} should spell {skeleton:?}"
+            );
         }
     }
 }

@@ -32,22 +32,15 @@ pub(crate) struct EncodingNames {
     /// A later proof of the same head: the previous column's rule proof plus one
     /// canonicalization bridge.
     pub(crate) rule_link_constructor: String,
-    /// Prefix of the rebuild proofs for a view whose output is not an e-class:
-    /// step count `k`'s constructor is [`Self::rebuild_proof`]. Derived from one
-    /// name for the same reason as [`Self::rule_fused_prefix`].
-    pub(crate) rebuild_prefix: String,
-    /// Prefix of the rebuild proofs for a view whose output is an e-class, which
-    /// the firing canonicalizes as well.
-    pub(crate) rebuild_eq_prefix: String,
-    /// The shapes [`ProofInstrumentor::rebuild_proof_constructor`] has declared.
-    pub(crate) rebuild_declared: HashSet<RebuildShape>,
+    /// Prefix of the packed proof constructors, whose name spells the
+    /// [`Skeleton`] its row stands for. Derived from one name for the same
+    /// reason as [`Self::rule_fused_prefix`].
+    pub(crate) packed_prefix: String,
+    /// The skeletons [`ProofInstrumentor::packed_proof_constructor`] has
+    /// declared.
+    pub(crate) packed_declared: HashSet<Skeleton>,
     pub(crate) merge_fn_idx_constructor: String,
     pub(crate) merge_fn_row_constructor: String,
-    /// The displaced-edge proof for a collision whose carried proofs share their
-    /// left-hand side ([`SharedEnd::Lhs`]).
-    pub(crate) displaced_shared_lhs_constructor: String,
-    /// Its [`SharedEnd::Rhs`] counterpart.
-    pub(crate) displaced_shared_rhs_constructor: String,
     pub(crate) eq_trans_constructor: String,
     pub(crate) eq_sym_constructor: String,
     pub(crate) congr_constructor: String,
@@ -69,35 +62,136 @@ pub(crate) struct EncodingNames {
     pub(crate) term_proof_name: HashMap<String, String>,
 }
 
-/// What one view-rebuild firing's packed proof row carries. Both components are
-/// fixed by the view's schema when its rebuild rule is generated, so they are
-/// part of the constructor's name rather than of its columns.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct RebuildShape {
-    /// How many child columns were canonicalized.
-    pub(crate) steps: usize,
-    /// Whether the e-class was canonicalized as well, which only a view whose
-    /// output is an e-class does.
-    pub(crate) eclass: bool,
+/// The composition one packed proof row stands for, written over the row's own
+/// columns: a [`Skeleton::Hole`] is the proof in a column, and
+/// [`Skeleton::Congr`]'s middle field the column holding that step's child
+/// position. Every column is named exactly once, so the skeleton is also the
+/// row's layout.
+///
+/// A packed constructor's name spells its skeleton
+/// ([`EncodingNames::packed_proof`]), so the site writing the row and the
+/// unpacking that reads it work from one statement of the composition.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub(crate) enum Skeleton {
+    /// The proof in the named column.
+    Hole(usize),
+    Sym(Box<Skeleton>),
+    Trans(Box<Skeleton>, Box<Skeleton>),
+    /// The child position is the `i64` in the named column.
+    Congr(Box<Skeleton>, usize, Box<Skeleton>),
 }
 
-impl RebuildShape {
-    /// The constructor's column count: the row proof, a column literal beside a
-    /// step proof per step, then the e-class proof when there is one.
-    pub(crate) fn columns(self) -> usize {
-        1 + 2 * self.steps + usize::from(self.eclass)
+impl Skeleton {
+    pub(crate) fn sym(self) -> Skeleton {
+        Skeleton::Sym(Box::new(self))
     }
-}
 
-/// Which endpoint the two carried proofs of a merge collision have in common,
-/// hence which of them the displaced edge's composition reverses. Either way the
-/// composition proves `hi = lo`.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub(crate) enum SharedEnd {
-    /// Both prove `shared = side`, so the composition is `Trans(Sym(hi), lo)`.
-    Lhs,
-    /// Both prove `side = shared`, so the composition is `Trans(hi, Sym(lo))`.
-    Rhs,
+    pub(crate) fn trans(self, rhs: Skeleton) -> Skeleton {
+        Skeleton::Trans(Box::new(self), Box::new(rhs))
+    }
+
+    /// This composition with one more congruence step, rewriting the child at
+    /// the position in column `index` by the proof `child` reaches.
+    pub(crate) fn congr(self, index: usize, child: Skeleton) -> Skeleton {
+        Skeleton::Congr(Box::new(self), index, Box::new(child))
+    }
+
+    /// How many columns the row has.
+    pub(crate) fn width(&self) -> usize {
+        match self {
+            Skeleton::Hole(column) => column + 1,
+            Skeleton::Sym(inner) => inner.width(),
+            Skeleton::Trans(left, right) => left.width().max(right.width()),
+            Skeleton::Congr(base, index, child) => base.width().max(index + 1).max(child.width()),
+        }
+    }
+
+    /// The columns holding a proof, ascending.
+    pub(crate) fn proof_columns(&self) -> Vec<usize> {
+        let mut columns = vec![];
+        self.collect_columns(&mut columns, &mut vec![]);
+        columns.sort_unstable();
+        columns
+    }
+
+    fn collect_columns(&self, proofs: &mut Vec<usize>, indexes: &mut Vec<usize>) {
+        match self {
+            Skeleton::Hole(column) => proofs.push(*column),
+            Skeleton::Sym(inner) => inner.collect_columns(proofs, indexes),
+            Skeleton::Trans(left, right) => {
+                left.collect_columns(proofs, indexes);
+                right.collect_columns(proofs, indexes);
+            }
+            Skeleton::Congr(base, index, child) => {
+                base.collect_columns(proofs, indexes);
+                indexes.push(*index);
+                child.collect_columns(proofs, indexes);
+            }
+        }
+    }
+
+    /// The name suffix spelling this skeleton: its nodes in prefix order, one
+    /// `_`-separated token each — `sym`, `trans`, `congr`, `p<column>` for a
+    /// hole, and `i<column>` for a congruence's child-position column.
+    fn spelling(&self) -> String {
+        let mut tokens = vec![];
+        self.spell(&mut tokens);
+        tokens.join("_")
+    }
+
+    fn spell(&self, tokens: &mut Vec<String>) {
+        match self {
+            Skeleton::Hole(column) => tokens.push(format!("p{column}")),
+            Skeleton::Sym(inner) => {
+                tokens.push("sym".to_string());
+                inner.spell(tokens);
+            }
+            Skeleton::Trans(left, right) => {
+                tokens.push("trans".to_string());
+                left.spell(tokens);
+                right.spell(tokens);
+            }
+            Skeleton::Congr(base, index, child) => {
+                tokens.push("congr".to_string());
+                base.spell(tokens);
+                tokens.push(format!("i{index}"));
+                child.spell(tokens);
+            }
+        }
+    }
+
+    /// The skeleton [`Self::spelling`] writes as `spelling`, or `None` when that
+    /// is not a spelling of one naming each of its columns exactly once.
+    fn from_spelling(spelling: &str) -> Option<Skeleton> {
+        let mut tokens = spelling.split('_');
+        let skeleton = Skeleton::read(&mut tokens)?;
+        if tokens.next().is_some() {
+            return None;
+        }
+        let (mut proofs, mut indexes) = (vec![], vec![]);
+        skeleton.collect_columns(&mut proofs, &mut indexes);
+        proofs.append(&mut indexes);
+        proofs.sort_unstable();
+        (proofs == (0..proofs.len()).collect::<Vec<_>>()).then_some(skeleton)
+    }
+
+    fn read<'a>(tokens: &mut impl Iterator<Item = &'a str>) -> Option<Skeleton> {
+        let column = |token: &str, tag: char| token.strip_prefix(tag)?.parse().ok();
+        let token = tokens.next()?;
+        match token {
+            "sym" => Some(Skeleton::read(tokens)?.sym()),
+            "trans" => {
+                let left = Skeleton::read(tokens)?;
+                Some(left.trans(Skeleton::read(tokens)?))
+            }
+            "congr" => {
+                let base = Skeleton::read(tokens)?;
+                let index = column(tokens.next()?, 'i')?;
+                Some(base.congr(index, Skeleton::read(tokens)?))
+            }
+            token => Some(Skeleton::Hole(column(token, 'p')?)),
+        }
+    }
 }
 
 /// Which proof of a rule head a row states: the column naming its position in
@@ -208,51 +302,23 @@ impl EncodingNames {
             .ok()
     }
 
-    /// The rebuild proof constructor packing `shape`.
-    pub(crate) fn rebuild_proof(&self, shape: RebuildShape) -> String {
-        let prefix = if shape.eclass {
-            &self.rebuild_eq_prefix
-        } else {
-            &self.rebuild_prefix
-        };
-        format!("{prefix}_{}", shape.steps)
+    /// The packed proof constructor whose row stands for `skeleton`. Panics
+    /// unless the name spells the skeleton back, since that is all unpacking
+    /// has to go on.
+    pub(crate) fn packed_proof(&self, skeleton: &Skeleton) -> String {
+        let name = format!("{}_{}", self.packed_prefix, skeleton.spelling());
+        assert_eq!(
+            self.packed_skeleton(&name).as_ref(),
+            Some(skeleton),
+            "{name} does not spell {skeleton:?}"
+        );
+        name
     }
 
-    /// The shape `head` packs, when it is one of [`Self::rebuild_proof`]'s
-    /// constructors.
-    pub(crate) fn rebuild_proof_shape(&self, head: &str) -> Option<RebuildShape> {
-        // The order the prefixes are tried in does not matter: one is the other
-        // followed by `Eq`, which stands where the step count's `_` would be.
-        let steps = |prefix: &str| -> Option<usize> {
-            head.strip_prefix(prefix)?.strip_prefix('_')?.parse().ok()
-        };
-        if let Some(steps) = steps(&self.rebuild_eq_prefix) {
-            return Some(RebuildShape {
-                steps,
-                eclass: true,
-            });
-        }
-        Some(RebuildShape {
-            steps: steps(&self.rebuild_prefix)?,
-            eclass: false,
-        })
-    }
-
-    /// The displaced-edge proof constructor for carried proofs meeting at
-    /// `shared`.
-    pub(crate) fn displaced_proof(&self, shared: SharedEnd) -> &str {
-        match shared {
-            SharedEnd::Lhs => &self.displaced_shared_lhs_constructor,
-            SharedEnd::Rhs => &self.displaced_shared_rhs_constructor,
-        }
-    }
-
-    /// Where `head`'s carried proofs meet, when it is one of
-    /// [`Self::displaced_proof`]'s constructors.
-    pub(crate) fn displaced_shared_end(&self, head: &str) -> Option<SharedEnd> {
-        [SharedEnd::Lhs, SharedEnd::Rhs]
-            .into_iter()
-            .find(|shared| head == self.displaced_proof(*shared))
+    /// The composition `head`'s row stands for, when it is one of
+    /// [`Self::packed_proof`]'s constructors.
+    pub(crate) fn packed_skeleton(&self, head: &str) -> Option<Skeleton> {
+        Skeleton::from_spelling(head.strip_prefix(&self.packed_prefix)?.strip_prefix('_')?)
     }
 
     pub(crate) fn new(symbol_gen: &mut SymbolGen) -> Self {
@@ -263,13 +329,10 @@ impl EncodingNames {
             rule_fused_prefix: symbol_gen.fresh("Rule"),
             rule_fused_declared: HashSet::default(),
             rule_link_constructor: symbol_gen.fresh("RuleLink"),
-            rebuild_prefix: symbol_gen.fresh("Rebuild"),
-            rebuild_eq_prefix: symbol_gen.fresh("RebuildEq"),
-            rebuild_declared: HashSet::default(),
+            packed_prefix: symbol_gen.fresh("Packed"),
+            packed_declared: HashSet::default(),
             merge_fn_idx_constructor: symbol_gen.fresh("MergeIdx"),
             merge_fn_row_constructor: symbol_gen.fresh("MergeRow"),
-            displaced_shared_lhs_constructor: symbol_gen.fresh("DisplacedSharedLhs"),
-            displaced_shared_rhs_constructor: symbol_gen.fresh("DisplacedSharedRhs"),
             eq_trans_constructor: symbol_gen.fresh("Trans"),
             eq_sym_constructor: symbol_gen.fresh("Sym"),
             congr_constructor: symbol_gen.fresh("Congr"),
@@ -385,32 +448,35 @@ impl ProofInstrumentor<'_> {
         self.parse_program(&decls)
     }
 
-    /// The rebuild proof constructor packing `shape`, together with its
+    /// The packed proof constructor standing for `skeleton`, together with its
     /// declaration — empty once some program has declared it.
     ///
-    /// A view's shape is a property of its schema, so unlike a rule's premise
-    /// count it is not known before the view's rules are generated; the
-    /// declaration is emitted with the first rule that uses it.
-    pub(crate) fn rebuild_proof_constructor(&mut self, shape: RebuildShape) -> (String, String) {
-        let name = self.proof_names().rebuild_proof(shape);
+    /// The skeleton is a property of the site packing the row, not of the proof
+    /// format, so the declaration is emitted with the first commands using it.
+    pub(crate) fn packed_proof_constructor(&mut self, skeleton: &Skeleton) -> (String, String) {
+        let name = self.proof_names().packed_proof(skeleton);
         if !self
             .egraph
             .proof_state
             .proof_names
-            .rebuild_declared
-            .insert(shape)
+            .packed_declared
+            .insert(skeleton.clone())
         {
             return (name, String::new());
         }
         let proof = self.proof_names().proof_datatype.clone();
-        let steps: String = (0..shape.steps).map(|_| format!(" i64 {proof}")).collect();
-        let eclass = if shape.eclass {
-            format!(" {proof}")
-        } else {
-            String::new()
-        };
+        let proof_columns = skeleton.proof_columns();
+        let columns: String = (0..skeleton.width())
+            .map(|column| {
+                if proof_columns.contains(&column) {
+                    format!("{proof} ")
+                } else {
+                    "i64 ".to_string()
+                }
+            })
+            .collect();
         let decl = format!(
-            "(function {name} ({proof}{steps}{eclass} {proof}) Unit :no-merge :internal-hidden :internal-term-node)\n"
+            "(function {name} ({columns}{proof}) Unit :no-merge :internal-hidden :internal-term-node)\n"
         );
         (name, decl)
     }
@@ -650,8 +716,6 @@ impl ProofInstrumentor<'_> {
             ref rule_link_constructor,
             ref merge_fn_idx_constructor,
             ref merge_fn_row_constructor,
-            ref displaced_shared_lhs_constructor,
-            ref displaced_shared_rhs_constructor,
             ref eq_trans_constructor,
             ref eq_sym_constructor,
             ref congr_constructor,
@@ -690,29 +754,17 @@ impl ProofInstrumentor<'_> {
 ;;   (RuleLink <earlier column's proof> <bridge proof> <column>)
 (function {rule_link_constructor} ({proof_datatype} {proof_datatype} i64 {proof_datatype}) Unit :no-merge :internal-hidden :internal-term-node)
 
-;; One firing of a view's index-driven rebuild rule, packing the whole
-;; composition it justifies into a single row, in a constructor declared per
-;; shape (see `rebuild_proof_constructor`):
-;;   (Rebuild_<k>   <row proof> <column> <step proof> ...)
-;;   (RebuildEq_<k> <row proof> <column> <step proof> ... <e-class proof>)
-;; The columns are literals fixed when the rule is generated; a parser seeing only
-;; the row cannot recover them from the proofs. They are in ascending order, which
-;; the expansion relies on: a `Congr` at a different nesting proves the same
-;; proposition by a different tree. The e-class proof is a column of its own
-;; rather than a step, since it composes on the left instead of at a child
-;; position, and it is the raw `old = new` step: the expansion applies the `Sym`.
-
-;; The `@UF` edge one merge collision displaces, packing the composition it
-;; justifies into a single row: the larger side's carried proof, then the smaller
-;; side's, proving `larger = smaller`.
-;;   (DisplacedSharedLhs <hi proof> <lo proof>)   ;; both prove `shared = side`
-;;   (DisplacedSharedRhs <hi proof> <lo proof>)   ;; both prove `side = shared`
-;; Which endpoint the carried proofs share is fixed by the merge site, so it is
-;; part of the constructor rather than a column, and it cannot be recovered from
-;; the proofs: when both prove the same proposition, the two compositions differ.
-;; Neither carries a `Sym`; the expansion applies it to whichever side needs it.
-(function {displaced_shared_lhs_constructor} ({proof_datatype} {proof_datatype} {proof_datatype}) Unit :no-merge :internal-hidden :internal-term-node)
-(function {displaced_shared_rhs_constructor} ({proof_datatype} {proof_datatype} {proof_datatype}) Unit :no-merge :internal-hidden :internal-term-node)
+;; A site with a fixed composition rather than a rule head — a view rebuild, a
+;; merge collision — writes one packed row standing for the whole composition,
+;; in a constructor declared where the row is written (see
+;; `packed_proof_constructor`). The name spells the composition over the row's
+;; own columns, in prefix order: `sym`, `trans`, `congr`, `p<n>` for the proof in
+;; column n, and `i<n>` for the child position in column n. So
+;;   (Packed_trans_sym_p0_p1 <hi proof> <lo proof>)
+;; is the `@UF` edge a merge collision displaces, where both carried proofs share
+;; their left-hand side, and
+;;   (Packed_congr_p0_i1_p2 <row proof> <column> <step proof>)
+;; is a view rebuild that canonicalized one child column.
 
 ;; term-free merge justification for an FD custom-function view subexpression:
 ;; name of function, two premise proofs, and the pre-order index of the merge-body

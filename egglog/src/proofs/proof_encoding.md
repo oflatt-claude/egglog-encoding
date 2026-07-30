@@ -358,22 +358,22 @@ See [`crate::proofs::proof_container_rebuild`] for the rebuild primitives, and
 With proofs enabled, the encoding first emits a header defining the proof format
 (see [`crate::proofs::proof_format`] and `proof_encoding_helpers.rs`): the
 `@Proof` and `@Ast` sorts, one `@Ast<Sort>` per sort, and the proof-node
-relations `@Fiat`, `@RuleLink`, `@DisplacedSharedLhs`/`@DisplacedSharedRhs`,
-`@MergeIdx`, `@MergeRow`, `@Trans`, `@Sym`, `@Congr`, `@CongrAll`,
-`@ContainerNormalize`, `@Eval` — each a `(function … Unit :no-merge)`, not a
-constructor, so a proof node is a fresh id plus a row. Two further families are
-*arity-fused*, their column count fixed by the site rather than by the format, so
-each shape is declared just before the commands needing it: `@Rule_<k>`, a rule
-proof carrying its `k` body premises inline, and `@Rebuild_<k>`/`@RebuildEq_<k>`,
-one firing of a view's rebuild rule.
+relations `@Fiat`, `@RuleLink`, `@MergeIdx`, `@MergeRow`, `@Trans`, `@Sym`,
+`@Congr`, `@CongrAll`, `@ContainerNormalize`, `@Eval` — each a
+`(function … Unit :no-merge)`, not a constructor, so a proof node is a fresh id
+plus a row. Two further families have their column count fixed by the site rather
+than by the format, so each shape is declared just before the commands needing
+it: `@Rule_<k>`, a rule proof carrying its `k` body premises inline, and
+`@Packed_<skeleton>`, one row standing for a whole composition (see
+[Packed rows](#packed-rows)).
 
 Each sort also gets `(function @<Sort>Proof (<Sort>) @Proof :merge old)`,
 recording for each term `t` a proof of `t = t` (oldest kept), and the union-find
 and view proof columns become real:
 
 ```text
-(function @UF_Math (Math) (Math @Proof) :merge (… @DisplacedSharedLhs …) …)
-(function @AddView (Math Math) (Math @Proof) :merge (… @DisplacedSharedRhs …) …)
+(function @UF_Math (Math) (Math @Proof) :merge (… @Packed_trans_sym_p0_p1 …) …)
+(function @AddView (Math Math) (Math @Proof) :merge (… @Packed_trans_p0_sym_p1 …) …)
 ```
 
 If term `k` has parent `p`, `(@UF_Math k)` returns `(values p proof)` where
@@ -701,30 +701,40 @@ proofs, not proofs of anything the head concludes.
 Three more sites record instead of composing, each with a fixed format rather
 than a rule head, so one row stands for a whole composition.
 
-**A view rebuild** writes one `@Rebuild_<k>`/`@RebuildEq_<k>` row: the row proof,
-then each canonicalized column's position beside its step proof, then the
-e-class's own step when the view's output is an e-class. In proof mode the rebuild
-rule of [Keeping the view canonical](#keeping-the-view-canonical) reads a step
-proof per column and packs them:
+A site with no rule head to replay says what its row stands for by writing a
+**skeleton** — a proof term over the row's own columns, spelled into the
+constructor's name in prefix order: `sym`, `trans`, `congr`, `p<n>` for the proof
+in column n, and `i<n>` for the child position in column n. Unpacking reads the
+skeleton back off the name and substitutes the row's columns into it, so there is
+one statement of the composition rather than one at each end.
+
+**A view rebuild** writes one row whose columns are the row proof, then each
+canonicalized column's position beside its step proof, then the e-class's own step
+when the view's output is an e-class. In proof mode the rebuild rule of
+[Keeping the view canonical](#keeping-the-view-canonical) reads a step proof per
+column and packs them:
 
 ```text
 (let c0_canon_ (@UF_Math_canon c0_ c0_))
 (let c0_term (@MathProof c0_))
 (let c0_step (@UF_Math_canon_proof c0_ c0_term))
 … same for c1_ and e2_ …
-(set (@RebuildEq_2 pf 0 c0_step 1 c1_step e2_step out) ())
+(set (@Packed_trans_sym_p5_congr_congr_p0_i1_p2_i3_p4
+        pf 0 c0_step 1 c1_step e2_step out) ())
 ```
 
 `@UF_<Sort>_canon_proof` supplies each step's proof, reflexive for a column that
-did not move. Conversion expands the row into the `@Congr` chain it stands for.
+did not move. The e-class's step composes on the left rather than at a child
+position, since an e-class can equal one of its own children's terms.
 
 **A merge collision** — two rows colliding on one key in a `@UF` or view
-`:merge` — writes one `@DisplacedSharedLhs` or `@DisplacedSharedRhs` row for the
-edge it displaces. `proof-of-max`/`proof-of-min` pair each carried proof with the
-larger and smaller side. The two share an endpoint, and which endpoint decides
-which of them the composition reverses; either way it proves `larger = smaller`.
-The union-find's carried proofs share their left-hand side and the view's their
-right, which is why there are two constructors.
+`:merge` — writes one packed row for the edge it displaces.
+`proof-of-max`/`proof-of-min` pair each carried proof with the larger and smaller
+side. The two share an endpoint, and which endpoint decides which of them the
+composition reverses; either way it proves `larger = smaller`. The union-find's
+carried proofs share their left-hand side, giving
+`@Packed_trans_sym_p0_p1`, and the view's their right, giving
+`@Packed_trans_p0_sym_p1`.
 
 **A custom function's view merge** writes one `@MergeRow` naming the function and
 the two colliding rows' proofs; the conclusion is recovered by running the merge

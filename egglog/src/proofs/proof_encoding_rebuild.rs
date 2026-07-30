@@ -4,7 +4,7 @@
 //! in [`super::proof_encoding`].)
 
 use super::proof_encoding::{ProofInstrumentor, ViewIndex};
-use super::proof_encoding_helpers::RebuildShape;
+use super::proof_encoding_helpers::Skeleton;
 use crate::typechecking::FuncType;
 use crate::*;
 
@@ -178,7 +178,7 @@ impl ProofInstrumentor<'_> {
     /// delta in the body is what makes that read sound.
     ///
     /// In proof mode a firing writes one
-    /// [`rebuild_proof`](super::proof_encoding_helpers::EncodingNames::rebuild_proof)
+    /// [`packed_proof`](super::proof_encoding_helpers::EncodingNames::packed_proof)
     /// row, or none at all when nothing was canonicalized and the view's output
     /// is not an e-class.
     fn indexed_rebuild_rule(
@@ -211,9 +211,9 @@ impl ProofInstrumentor<'_> {
         // simplifier drops.
         let mut lets: Vec<String> = Vec::new();
         let mut updated = key_vars.to_vec();
-        // One `<column> <step proof>` pair per canonicalized column, in ascending
-        // column order — the order the packed row's expansion composes them in.
-        let mut steps: Vec<String> = Vec::new();
+        // The child position and step proof of each canonicalized column, in
+        // ascending position — the order the composition applies them in.
+        let mut steps: Vec<(usize, String)> = Vec::new();
         for j in 0..n_keys {
             if types[j].is_eq_container_sort() || !types[j].is_eq_sort() {
                 continue;
@@ -234,7 +234,7 @@ impl ProofInstrumentor<'_> {
                     "(let {step} ({} {cj} {refl}))",
                     uf_canon_proof_prim_name(&uf_j)
                 ));
-                steps.push(format!("{j} {step}"));
+                steps.push((j, step));
             }
             updated[j] = canon;
         }
@@ -274,21 +274,27 @@ impl ProofInstrumentor<'_> {
             eclass.clone()
         };
 
+        // Lay the row out and state its composition together: the row proof,
+        // then each step's child position beside its proof, then the e-class's
+        // own step.
         let mut decls = String::new();
         let mut proof_acc = row_pf.clone();
-        let shape = RebuildShape {
-            steps: steps.len(),
-            eclass: eclass_step.is_some(),
-        };
-        if shape.steps > 0 || shape.eclass {
-            let (rebuild, decl) = self.rebuild_proof_constructor(shape);
+        let mut args = vec![row_pf.clone()];
+        let mut skeleton = Skeleton::Hole(0);
+        for (child, step) in steps {
+            args.push(child.to_string());
+            args.push(step);
+            skeleton = skeleton.congr(args.len() - 2, Skeleton::Hole(args.len() - 1));
+        }
+        if let Some(step) = eclass_step {
+            args.push(step);
+            skeleton = Skeleton::Hole(args.len() - 1).sym().trans(skeleton);
+        }
+        if args.len() > 1 {
+            let (packed, decl) = self.packed_proof_constructor(&skeleton);
             decls = decl;
             let proof_sort = self.proof_sort();
-            let args: Vec<String> = std::iter::once(row_pf.clone())
-                .chain(steps)
-                .chain(eclass_step)
-                .collect();
-            proof_acc = self.mint(&mut lets, &rebuild, &args.join(" "), &proof_sort);
+            proof_acc = self.mint(&mut lets, &packed, &args.join(" "), &proof_sort);
         }
 
         let pf_arg = if proofs { proof_acc } else { "()".to_string() };
