@@ -5,13 +5,11 @@ mod tests {
         RuleEvalMode, sanitize_internal_names,
     };
     use crate::core::ResolvedCall;
-    use crate::proofs::proof_checker::process_actions;
+    use crate::proofs::proof_checker::eval_expr_with_subst;
     use crate::proofs::proof_extraction::ProveExistsError;
-    use crate::proofs::proof_head::site_conclusions;
-    use crate::proofs::proof_sites::{
-        ConclusionSite, SiteConclusion, action_sites, conclusion_sites,
-    };
-    use crate::util::{HashMap, HashSet};
+    use crate::proofs::proof_format::{ProofStore, Proposition};
+    use crate::proofs::proof_head::{Firing, HeadPlan};
+    use crate::util::{HashMap, HashSet, IndexMap};
     use crate::{
         CommandOutput, EGraph, Error, ProofEncodingUnsupportedReason, TermDag, TermId,
         add_primitive_with_validator,
@@ -20,56 +18,6 @@ mod tests {
     fn term_encode(source: &str) -> Vec<ResolvedCommand> {
         let mut egraph = crate::EGraph::new_with_term_encoding();
         egraph.resolve_program(None, source).unwrap()
-    }
-
-    /// Render what each site concludes, in the order it was enumerated.
-    fn describe_sites(sites: &[ConclusionSite<'_>]) -> Vec<String> {
-        sites
-            .iter()
-            .map(|site| match &site.conclusion {
-                SiteConclusion::Reflexive(expr) => format!("exists {expr}"),
-                SiteConclusion::Equality(lhs, rhs) => format!("equal {lhs} {rhs}"),
-            })
-            .collect()
-    }
-
-    /// The site descriptions a rule head must produce, derived independently of
-    /// `conclusion_sites`: actions in order, each contributing the pre-order of
-    /// its expressions, and a `union` also contributing its equality first.
-    fn expected_site_descriptions(actions: &[ResolvedAction]) -> Vec<String> {
-        fn preorder(expr: &ResolvedExpr, out: &mut Vec<String>) {
-            out.push(format!("exists {expr}"));
-            if let ResolvedExpr::Call(_, _, args) = expr {
-                for arg in args {
-                    preorder(arg, out);
-                }
-            }
-        }
-        let mut out = vec![];
-        for action in actions {
-            match action {
-                GenericAction::Let(_, _, expr) | GenericAction::Expr(_, expr) => {
-                    preorder(expr, &mut out)
-                }
-                GenericAction::Union(_, lhs, rhs) => {
-                    out.push(format!("equal {lhs} {rhs}"));
-                    preorder(lhs, &mut out);
-                    preorder(rhs, &mut out);
-                }
-                GenericAction::Set(span, func, args, value) => {
-                    let mut row = args.to_vec();
-                    row.push(value.clone());
-                    let row = ResolvedExpr::Call(span.clone(), func.clone(), row);
-                    out.push(format!("exists {row}"));
-                    for arg in args {
-                        preorder(arg, &mut out);
-                    }
-                    preorder(value, &mut out);
-                }
-                GenericAction::Panic(..) | GenericAction::Change(..) => {}
-            }
-        }
-        out
     }
 
     /// Stand a distinct constant in for every variable a rule head reads but
@@ -116,14 +64,12 @@ mod tests {
             .collect()
     }
 
-    /// A rule head's conclusion sites are the one enumeration proof conversion
-    /// and the proof encoder both index into, so nothing may recompute the
-    /// order. Pin it: the sites are exactly the pre-order of each action's
-    /// expressions (plus one equality per `union`), and replaying the head
-    /// resolves each of them, in that same order, to a proposition the head
-    /// implies.
+    /// A rule head's proofs are the flat array the encoder names positions of and
+    /// proof conversion rebuilds, so the array has to reach everything the head
+    /// concludes — nothing may be left with no column to be named by. Pin it:
+    /// walking each head states every proposition processing that head derives.
     #[test]
-    fn conclusion_sites_index_every_rule_head_proposition() {
+    fn walking_a_rule_head_states_every_proposition_it_concludes() {
         let source = r#"
             (datatype Math (Num i64) (Add Math Math) (Neg Math))
             (relation Seen (Math))
@@ -147,7 +93,7 @@ mod tests {
                   :name "cost")
 
             ;; A `union` neither of whose operands is a matched variable, so the
-            ;; orientation check has to read both operands' own sites.
+            ;; orientation check has to read both operands' own conclusions.
             (rule ((Seen s))
                   ((union (Neg s) (Add s s)))
                   :name "both_built")
@@ -177,62 +123,112 @@ mod tests {
 
         for rule in rules {
             let actions = &rule.head.0;
-            let sites = conclusion_sites(actions.iter());
-            let described = describe_sites(&sites);
-
-            assert_eq!(
-                described,
-                expected_site_descriptions(actions),
-                "rule '{}' enumerates the wrong conclusion sites",
-                rule.name
-            );
-            let per_action = action_sites(actions.iter());
             let mut term_dag = TermDag::default();
             let inputs = head_input_bindings(actions, &mut term_dag);
-            let action_refs: Vec<_> = actions.iter().collect();
-            let ctx = process_actions(&rule.name, inputs.clone(), &action_refs, &mut term_dag)
-                .unwrap_or_else(|e| panic!("rule '{}' head did not process: {e}", rule.name));
-            let concluded = site_conclusions(&rule.name, inputs.clone(), actions, &mut term_dag)
-                .unwrap_or_else(|e| panic!("rule '{}' head did not replay: {e}", rule.name));
 
-            assert_eq!(
-                concluded.len(),
-                sites.len(),
-                "rule '{}' resolved a different number of sites than it enumerates",
-                rule.name
+            let mut minted = 0usize;
+            let mut fresh = || {
+                minted += 1;
+                format!("@union-operand-{minted}")
+            };
+            let plan = HeadPlan::new(actions, &mut fresh);
+            let mut store = ProofStore::new(term_dag, HashMap::default(), HashSet::default());
+            let expected = head_conclusions(&rule.name, actions, inputs.clone(), &mut store);
+            // No premises and no bridges: every term the head builds stays its own
+            // representative, so each column states the head's conclusion there
+            // rather than one about an e-class it interned into.
+            let mut firing = Firing::new(
+                &rule.name,
+                &plan,
+                inputs,
+                vec![],
+                IndexMap::default(),
+                Box::new(|_store, _position| None),
             );
-            for (index, (site, prop)) in sites.iter().zip(&concluded).enumerate() {
-                let site_name = format!("rule '{}' site {}", rule.name, index);
+            let columns: Vec<_> = firing.proofs(&mut store).iter().flatten().copied().collect();
+            let stated: HashSet<_> = columns
+                .into_iter()
+                .map(|proof| store.get(proof).proposition().clone())
+                .collect();
+            for (what, prop) in expected {
                 assert!(
-                    ctx.propositions.contains(prop),
-                    "{site_name} concluded a proposition the head does not imply"
+                    stated.contains(&prop),
+                    "rule '{}' concludes {what}, which no column of its head states",
+                    rule.name
                 );
-                match &site.conclusion {
-                    SiteConclusion::Reflexive(_) => {
-                        assert_eq!(prop.lhs(), prop.rhs(), "{site_name} is not reflexive")
-                    }
-                    // An equality site concludes its operands in the order
-                    // written. Each operand's own site is reflexive over the term
-                    // that operand evaluates to, so those pin the orientation
-                    // whatever the operands are written as.
-                    SiteConclusion::Equality(..) => {
-                        let [lhs_site, rhs_site] = per_action[site.action].operands[..] else {
-                            panic!("{site_name}: a union numbers both its operands");
-                        };
-                        assert_eq!(
-                            prop.lhs(),
-                            concluded[lhs_site].lhs(),
-                            "{site_name} did not conclude its lhs operand on the left"
-                        );
-                        assert_eq!(
-                            prop.rhs(),
-                            concluded[rhs_site].lhs(),
-                            "{site_name} did not conclude its rhs operand on the right"
-                        );
-                    }
-                }
             }
         }
+    }
+
+    /// What a rule head concludes, derived independently of the walk that
+    /// produces its proofs: every call it evaluates exists, and every `union`
+    /// holds in both directions.
+    fn head_conclusions(
+        rule_name: &str,
+        actions: &[ResolvedAction],
+        mut bindings: HashMap<String, TermId>,
+        store: &mut ProofStore,
+    ) -> Vec<(String, Proposition)> {
+        fn eval(
+            rule_name: &str,
+            expr: &ResolvedExpr,
+            bindings: &HashMap<String, TermId>,
+            store: &mut ProofStore,
+        ) -> TermId {
+            eval_expr_with_subst(rule_name, expr, &mut store.term_dag, bindings)
+                .unwrap_or_else(|e| panic!("rule '{rule_name}' head did not evaluate: {e}"))
+                .0
+        }
+        fn exists(
+            rule_name: &str,
+            expr: &ResolvedExpr,
+            bindings: &HashMap<String, TermId>,
+            store: &mut ProofStore,
+            out: &mut Vec<(String, Proposition)>,
+        ) {
+            let ResolvedExpr::Call(_, _, args) = expr else {
+                return;
+            };
+            for arg in args {
+                exists(rule_name, arg, bindings, store, out);
+            }
+            let term = eval(rule_name, expr, bindings, store);
+            out.push((format!("that {expr} exists"), Proposition::new(term, term)));
+        }
+
+        let mut out = vec![];
+        for action in actions {
+            match action {
+                GenericAction::Let(_, var, expr) => {
+                    exists(rule_name, expr, &bindings, store, &mut out);
+                    let term = eval(rule_name, expr, &bindings, store);
+                    bindings.insert(var.name.clone(), term);
+                }
+                GenericAction::Expr(_, expr) => exists(rule_name, expr, &bindings, store, &mut out),
+                GenericAction::Union(_, lhs, rhs) => {
+                    exists(rule_name, lhs, &bindings, store, &mut out);
+                    exists(rule_name, rhs, &bindings, store, &mut out);
+                    let lhs_term = eval(rule_name, lhs, &bindings, store);
+                    let rhs_term = eval(rule_name, rhs, &bindings, store);
+                    out.push((
+                        format!("{lhs} = {rhs}"),
+                        Proposition::new(lhs_term, rhs_term),
+                    ));
+                    out.push((
+                        format!("{rhs} = {lhs}"),
+                        Proposition::new(rhs_term, lhs_term),
+                    ));
+                }
+                GenericAction::Set(span, func, args, value) => {
+                    let mut row = args.to_vec();
+                    row.push(value.clone());
+                    let row = ResolvedExpr::Call(span.clone(), func.clone(), row);
+                    exists(rule_name, &row, &bindings, store, &mut out);
+                }
+                GenericAction::Panic(..) | GenericAction::Change(..) => {}
+            }
+        }
+        out
     }
 
     /// A rule proof records no terms, so a body variable bound to a value the
@@ -419,7 +415,7 @@ mod tests {
 
         let mut egraph = EGraph::new_with_proofs();
         let commands = egraph.resolve_program(None, source).unwrap();
-        // Only the rows carrying premises inline name the rule; a later site's
+        // Only the rows carrying premises inline name the rule; a later column's
         // link reads the name off the row it chains onto.
         let names = &egraph.proof_state.proof_names;
         let rule_constructors: HashSet<String> = names
@@ -466,7 +462,7 @@ mod tests {
         let rule_name_var = rule_name_vars[0];
 
         // Proof constructors are relations, so each rule proof is emitted as a
-        // `(set (@Rule_1 <rule-name> <premise> <site> <id>) ())` action — the rule
+        // `(set (@Rule_1 <rule-name> <premise> <column> <id>) ())` action — the rule
         // has one body fact — not a call expression. Count those set actions and
         // check they reuse the hoisted rule-name variable as their first argument.
         let rule_uses = rule

@@ -1,83 +1,46 @@
-//! How a rule head lowers, and the proofs that lowering composes.
+//! How a rule head lowers, and the flat array of proofs that lowering produces.
 //!
 //! A head that builds a term needs more proofs than it concludes: the term as
 //! the head wrote it, the same term over its children's representatives, and the
-//! edges between them. The e-graph records only the head's own conclusions, each
-//! naming the column of the site it stands for; the composition is rebuilt here,
-//! at conversion time, from that column, the substitution, and the rule proof's
-//! trailing *bridge* premises — the view-row proof of each subterm the head
-//! interned.
+//! edges between them. One walk of the head produces them all, in a fixed order,
+//! so a proof is named by nothing but its position in that array — its *column*.
+//! The encoder walks a head to lower it, naming each row it emits by the column
+//! the walk is at; [`Firing`] walks the same head to rebuild the array from the
+//! substitution, the body premises, and the rule proof's trailing *bridge*
+//! premises — the view-row proof of each subterm the head interned. A row's
+//! column indexes straight into what comes back.
 //!
-//! [`HeadPlan`] is the head as the encoder lowers it, read by the encoder and by
-//! conversion alike; what a site composes from is read off that head's syntax.
-//! The numbering itself comes from [`crate::proofs::proof_sites`]; the walks here
-//! re-derive its order by counting and check the count against that module's site
-//! list.
-//!
-//! The compositions themselves are written once, over [`HeadProofs`]: proof
-//! conversion applies them to proof nodes, and the encoder to the proof variables
-//! it emits wherever it composes rather than records — a top-level action or a
-//! merge body.
+//! [`HeadPlan`] is the head as the encoder lowers it, read by both walks. The
+//! compositions themselves are written once, over [`HeadProofs`]: this walk
+//! applies them to proof nodes, and the encoder to the proof variables it emits
+//! wherever it composes rather than records — a top-level action or a merge body.
 
 use crate::{
-    TermDag, TermId,
+    TermId,
     ast::{
         FunctionSubtype, GenericAction, GenericExpr, ResolvedAction, ResolvedExpr, ResolvedExprExt,
-        ResolvedVar,
+        ResolvedVar, Span,
     },
     core::ResolvedCall,
     proofs::{
-        proof_checker::{ProofCheckError, eval_expr_with_subst},
+        proof_checker::eval_expr_with_subst,
         proof_encoding::ProofInstrumentor,
         proof_format::{Justification, Proof, ProofId, ProofStore, Proposition, SynthKey},
-        proof_sites::{
-            ActionSites, SiteConclusion, action_sites, column, conclusion_sites, decode,
-            site_column,
-        },
     },
     typechecking::FuncType,
     util::{HashMap, HashSet, IndexMap},
 };
 
-/// A planned construct-into: the guest's constructor is built into `target`'s
-/// e-class instead of a fresh one, and the `union` that said so is dropped.
-pub(crate) struct ConstructInto {
-    /// The variable holding the e-class the guest is built into.
-    pub target: String,
-    /// The dropped `union`'s conclusion site.
-    pub union_site: usize,
-    /// Whether the guest is that `union`'s left operand, so the guest's view row
-    /// states the site's equality reversed (`target = guest`).
-    pub guest_is_lhs: bool,
-}
-
-impl ConstructInto {
-    /// The column of the dropped `union`'s equality, oriented the way the guest's
-    /// view row states it.
-    pub(crate) fn edge_column(&self) -> usize {
-        if self.guest_is_lhs {
-            column::OWN_REVERSED
-        } else {
-            column::OWN
-        }
-    }
-}
-
-/// A rule head as the encoder lowers it, and the site numbering both the encoder
-/// and proof conversion read it by.
+/// A rule head as the encoder lowers it.
 pub(crate) struct HeadPlan {
     /// The head with every constructor-application `union` operand lifted into a
-    /// preceding `let`, each action carrying the [`ActionSites`] of the action it
-    /// came from.
-    pub actions: Vec<(ResolvedAction, ActionSites)>,
-    /// Guest variable -> where its constructor is built instead.
-    pub construct_into: HashMap<String, ConstructInto>,
+    /// preceding `let`.
+    pub actions: Vec<ResolvedAction>,
+    /// Guest variable -> the variable holding the e-class its constructor is
+    /// built into, instead of a fresh one.
+    pub construct_into: HashMap<String, String>,
     /// Indices into [`Self::actions`] of the `union`s the plan makes redundant.
     pub dropped: HashSet<usize>,
-    /// The build sites that record a bridge premise, in construction order.
-    bridge_order: Vec<usize>,
-    /// A `let`-bound name -> the build site whose value it holds.
-    bound: HashMap<String, usize>,
 }
 
 impl HeadPlan {
@@ -85,106 +48,13 @@ impl HeadPlan {
     /// matters, so a consumer that wants the shape rather than the code can
     /// supply a local counter.
     pub(crate) fn new(actions: &[ResolvedAction], fresh: &mut dyn FnMut() -> String) -> Self {
-        let lowered = normalize_union_operands(actions, fresh);
-        let (construct_into, dropped) = plan_construct_into(&lowered);
-        let mut plan = HeadPlan {
-            actions: lowered,
+        let actions = normalize_union_operands(actions, fresh);
+        let (construct_into, dropped) = plan_construct_into(&actions);
+        HeadPlan {
+            actions,
             construct_into,
             dropped,
-            bridge_order: Vec::new(),
-            bound: HashMap::default(),
-        };
-        index_builds(&mut plan);
-        plan
-    }
-
-    /// Where `site`'s bridge premise sits in a rule proof's bridge list, which is
-    /// in construction order. `None` for a site that records no bridge.
-    fn bridge_position(&self, site: usize) -> Option<usize> {
-        self.bridge_order.iter().position(|s| *s == site)
-    }
-
-    /// Each expression an action the plan keeps evaluates, with the site it
-    /// starts at.
-    fn operands(&self) -> impl Iterator<Item = (&ResolvedExpr, usize)> {
-        self.actions
-            .iter()
-            .enumerate()
-            .filter(|(at, _)| !self.dropped.contains(at))
-            .flat_map(|(_, (action, sites))| {
-                action_operands(action).zip(sites.operands.iter().copied())
-            })
-    }
-
-    /// The expression the head evaluates at `site`.
-    fn expr_at(&self, site: usize) -> Option<&ResolvedExpr> {
-        self.operands()
-            .find_map(|(expr, start)| expr_at(expr, start, site))
-    }
-
-    /// The action whose own conclusion is `site`, with that action's sites.
-    fn concluding(&self, site: usize) -> Option<&(ResolvedAction, ActionSites)> {
-        self.actions
-            .iter()
-            .enumerate()
-            .find(|(at, (_, sites))| !self.dropped.contains(at) && sites.own == Some(site))
-            .map(|(_, entry)| entry)
-    }
-
-    /// The build site whose value `expr`, positioned at `site`, holds: a
-    /// variable's is the one it was bound to, a constructor application's is its
-    /// own, and anything else holds no built value.
-    fn value_site(&self, expr: &ResolvedExpr, site: usize) -> Option<usize> {
-        match expr {
-            ResolvedExpr::Var(_, v) => self.bound.get(&v.name).copied(),
-            _ => constructor_operand(expr).map(|_| site),
         }
-    }
-
-    /// The dropped `union` whose guest the head builds at `site`, oriented
-    /// `target = guest`, and the target's own build site.
-    fn guest_of(&self, site: usize) -> Option<(&ConstructInto, Option<usize>)> {
-        self.actions.iter().find_map(|(action, sites)| {
-            let ResolvedAction::Let(_, v, _) = action else {
-                return None;
-            };
-            let into = self.construct_into.get(&v.name)?;
-            (sites.operands.first().copied() == Some(site))
-                .then(|| (into, self.bound.get(&into.target).copied()))
-        })
-    }
-
-    /// The build site of the guest the `union` at `site` was dropped for.
-    fn guest_at(&self, site: usize) -> Option<usize> {
-        let (guest, _) = self
-            .construct_into
-            .iter()
-            .find(|(_, into)| into.union_site == site)?;
-        self.bound.get(guest).copied()
-    }
-
-    /// The build sites the `union` at `site` unions, in the order written.
-    fn union_operands(&self, site: usize) -> Option<[Option<usize>; 2]> {
-        let (action, sites) = self.concluding(site)?;
-        let ResolvedAction::Union(_, lhs, rhs) = action else {
-            return None;
-        };
-        let [lhs_site, rhs_site] = <[usize; 2]>::try_from(sites.operands.clone()).ok()?;
-        Some([
-            self.value_site(lhs, lhs_site),
-            self.value_site(rhs, rhs_site),
-        ])
-    }
-
-    /// The build site of the value the global `set` at `site` stores.
-    fn global_value(&self, site: usize) -> Option<usize> {
-        let (action, sites) = self.concluding(site)?;
-        let ResolvedAction::Set(_, _, args, value) = action else {
-            return None;
-        };
-        args.is_empty()
-            .then(|| self.value_site(value, *sites.operands.first()?))
-            .flatten()
     }
 }
 
@@ -200,47 +70,46 @@ pub(crate) fn constructor_operand(expr: &ResolvedExpr) -> Option<(&FuncType, &[R
     }
 }
 
+/// The row a `set` writes, as a call the head can evaluate: a custom function
+/// stores its output as the last argument.
+fn set_row_expr(
+    span: &Span,
+    func: &ResolvedCall,
+    args: &[ResolvedExpr],
+    value: &ResolvedExpr,
+) -> ResolvedExpr {
+    let mut row = args.to_vec();
+    row.push(value.clone());
+    ResolvedExpr::Call(span.clone(), func.clone(), row)
+}
+
 /// Lift each constructor-application `union` operand into a preceding `let`, so
 /// every union operand is a variable and the inline and let-bound shapes coincide
 /// before [`plan_construct_into`] runs.
-///
-/// Each output action keeps the [`ActionSites`] of the action it came from, so
-/// every conclusion the encoder emits still names a site of the head as
-/// written — lifting an operand shifts no index.
 fn normalize_union_operands(
     actions: &[ResolvedAction],
     fresh: &mut dyn FnMut() -> String,
-) -> Vec<(ResolvedAction, ActionSites)> {
+) -> Vec<ResolvedAction> {
     let mut out = vec![];
-    for (action, sites) in actions.iter().zip(action_sites(actions)) {
+    for action in actions {
         match action {
             ResolvedAction::Union(span, lhs, rhs) => {
-                let ActionSites { own, operands } = sites;
-                let [lhs_site, rhs_site] = <[usize; 2]>::try_from(operands)
-                    .expect("a union contributes sites for both operands");
-                let lhs = lift_union_operand(lhs.clone(), lhs_site, &mut out, fresh);
-                let rhs = lift_union_operand(rhs.clone(), rhs_site, &mut out, fresh);
-                out.push((
-                    ResolvedAction::Union(span.clone(), lhs, rhs),
-                    ActionSites {
-                        own,
-                        operands: vec![lhs_site, rhs_site],
-                    },
-                ));
+                let lhs = lift_union_operand(lhs.clone(), &mut out, fresh);
+                let rhs = lift_union_operand(rhs.clone(), &mut out, fresh);
+                out.push(ResolvedAction::Union(span.clone(), lhs, rhs));
             }
-            other => out.push((other.clone(), sites)),
+            other => out.push(other.clone()),
         }
     }
     out
 }
 
 /// If `operand` is a constructor application, bind it to a fresh `let` (pushed
-/// onto `out` carrying `site`) and return a variable referencing it; otherwise
-/// return `operand` unchanged.
+/// onto `out`) and return a variable referencing it; otherwise return `operand`
+/// unchanged.
 fn lift_union_operand(
     operand: ResolvedExpr,
-    site: usize,
-    out: &mut Vec<(ResolvedAction, ActionSites)>,
+    out: &mut Vec<ResolvedAction>,
     fresh: &mut dyn FnMut() -> String,
 ) -> ResolvedExpr {
     if constructor_operand(&operand).is_none() {
@@ -252,32 +121,24 @@ fn lift_union_operand(
         sort: operand.output_type(),
         is_global_ref: false,
     };
-    out.push((
-        ResolvedAction::Let(span.clone(), var.clone(), operand),
-        ActionSites {
-            own: None,
-            operands: vec![site],
-        },
-    ));
+    out.push(ResolvedAction::Let(span.clone(), var.clone(), operand));
     GenericExpr::Var(span, var)
 }
 
 /// Plan the construct-into optimization over normalized actions (union operands
 /// are variables). Returns a map from each guest variable — whose constructor is
-/// built into the target's e-class instead of a fresh one — to its
-/// [`ConstructInto`], and the set of union action indices it makes redundant.
+/// built into the target's e-class instead of a fresh one — to the target
+/// variable, and the set of union action indices it makes redundant.
 ///
 /// Conservative: only a `union` of two distinct, not-yet-touched variables where
 /// at least one is a constructor-`let` is optimized. The guest is the
 /// later-defined constructor operand (so the target's e-class is already bound
 /// where the guest is built); a matched (un-`let`) variable is always an eligible
 /// target.
-fn plan_construct_into(
-    actions: &[(ResolvedAction, ActionSites)],
-) -> (HashMap<String, ConstructInto>, HashSet<usize>) {
+fn plan_construct_into(actions: &[ResolvedAction]) -> (HashMap<String, String>, HashSet<usize>) {
     let mut all_def: HashMap<String, usize> = HashMap::default();
     let mut ctor_def: HashMap<String, usize> = HashMap::default();
-    for (i, (action, _)) in actions.iter().enumerate() {
+    for (i, action) in actions.iter().enumerate() {
         if let ResolvedAction::Let(_, v, expr) = action {
             all_def.insert(v.name.clone(), i);
             if constructor_operand(expr).is_some() {
@@ -286,10 +147,10 @@ fn plan_construct_into(
         }
     }
 
-    let mut construct_into: HashMap<String, ConstructInto> = HashMap::default();
+    let mut construct_into: HashMap<String, String> = HashMap::default();
     let mut dropped: HashSet<usize> = HashSet::default();
     let mut used: HashSet<String> = HashSet::default();
-    for (i, (action, sites)) in actions.iter().enumerate() {
+    for (i, action) in actions.iter().enumerate() {
         let ResolvedAction::Union(_, lhs, rhs) = action else {
             continue;
         };
@@ -326,211 +187,58 @@ fn plan_construct_into(
         {
             continue;
         }
-        // Dropping the union leaves its equality as the guest's view-row proof,
-        // stated `target = guest`. The site states it `lhs = rhs`, so it is
-        // reversed exactly when the guest is the union's lhs.
-        let union_site = sites
-            .own
-            .expect("a union contributes a site for its equality");
-        let guest_is_lhs = guest == a;
         used.insert(guest.clone());
         used.insert(target.clone());
-        construct_into.insert(
-            guest,
-            ConstructInto {
-                target,
-                union_site,
-                guest_is_lhs,
-            },
-        );
+        construct_into.insert(guest, target);
         dropped.insert(i);
     }
     (construct_into, dropped)
 }
 
-/// The expressions an action evaluates, in the order [`action_sites`] lists
-/// them. `change` and `panic` contribute none — `change` concludes nothing, so
-/// its arguments name no site.
-fn action_operands(action: &ResolvedAction) -> Box<dyn Iterator<Item = &ResolvedExpr> + '_> {
-    match action {
-        ResolvedAction::Let(_, _, expr) | ResolvedAction::Expr(_, expr) => {
-            Box::new(std::iter::once(expr))
-        }
-        ResolvedAction::Union(_, lhs, rhs) => Box::new([lhs, rhs].into_iter()),
-        ResolvedAction::Set(_, _, args, value) => {
-            Box::new(args.iter().chain(std::iter::once(value)))
-        }
-        ResolvedAction::Change(..) | ResolvedAction::Panic(..) => Box::new(std::iter::empty()),
-    }
-}
-
-/// How many conclusion sites `expr` occupies: one per node, in pre-order.
-fn site_count(expr: &ResolvedExpr) -> usize {
-    match expr {
-        ResolvedExpr::Call(_, _, args) => 1 + args.iter().map(site_count).sum::<usize>(),
-        _ => 1,
-    }
-}
-
-/// The subexpression of `expr` — which starts at site `start` — at site `want`.
-fn expr_at(expr: &ResolvedExpr, start: usize, want: usize) -> Option<&ResolvedExpr> {
-    if start == want {
-        return Some(expr);
-    }
-    let ResolvedExpr::Call(_, _, args) = expr else {
-        return None;
-    };
-    let mut next = start + 1;
-    for arg in args {
-        let end = next + site_count(arg);
-        if want < end {
-            return expr_at(arg, next, want);
-        }
-        next = end;
-    }
-    None
-}
-
-/// Number `plan`'s bridge premises and its `let` bindings: actions in order, and
-/// within an action the post-order of its constructor applications (children
-/// before the node), which is the order the encoder builds them and therefore the
-/// order a rule proof's trailing bridge premises are recorded in.
+/// One firing of a rule head, and the flat array of proofs its lowering produces.
 ///
-/// A construct-into guest records no bridge: its representative is the target's
-/// e-class, which the dropped `union`'s site already names, so the encoder reads
-/// no view-row proof for it.
-fn index_builds(plan: &mut HeadPlan) {
-    let mut bridge_order: Vec<usize> = Vec::new();
-    let mut bound: HashMap<String, usize> = HashMap::default();
-    for (at, (action, sites)) in plan.actions.iter().enumerate() {
-        if plan.dropped.contains(&at) {
-            continue;
-        }
-        let is_guest = matches!(action, ResolvedAction::Let(_, v, _)
-            if plan.construct_into.contains_key(&v.name));
-        let operands: Vec<&ResolvedExpr> = action_operands(action).collect();
-        assert_eq!(
-            operands.len(),
-            sites.operands.len(),
-            "an action's operands must match the sites numbered for it"
-        );
-        let mut values = Vec::with_capacity(operands.len());
-        for (expr, site) in operands.into_iter().zip(&sites.operands) {
-            values.push(record_bridges(
-                expr,
-                *site,
-                is_guest,
-                &bound,
-                &mut bridge_order,
-            ));
-        }
-        if let ResolvedAction::Let(_, v, _) = action
-            && let Some(site) = values[0]
-        {
-            bound.insert(v.name.clone(), site);
-        }
-    }
-    plan.bridge_order = bridge_order;
-    plan.bound = bound;
-}
-
-/// Record the bridge premises `expr`'s constructor applications write, post-order,
-/// and return the build site `expr`'s value comes from. `expr` starts at site
-/// `site`. `skip_root` leaves the top node out of the bridge order, its build
-/// being a construct-into guest's.
-fn record_bridges(
-    expr: &ResolvedExpr,
-    site: usize,
-    skip_root: bool,
-    bound: &HashMap<String, usize>,
-    bridge_order: &mut Vec<usize>,
-) -> Option<usize> {
-    let ResolvedExpr::Call(_, _, args) = expr else {
-        // A variable's value comes from the build site it was bound to; a
-        // literal comes from none.
-        return match expr {
-            ResolvedExpr::Var(_, v) => bound.get(&v.name).copied(),
-            _ => None,
-        };
-    };
-    let mut next = site + 1;
-    for arg in args {
-        record_bridges(arg, next, false, bound, bridge_order);
-        next += site_count(arg);
-    }
-    // A primitive or a global lookup builds nothing itself, though a constructor
-    // argument of it is still built.
-    constructor_operand(expr)?;
-    if !skip_root {
-        bridge_order.push(site);
-    }
-    Some(site)
-}
-
-/// What the head's conclusion sites conclude under `bindings`, indexed by site.
+/// The array is built by walking the head bottom-up: an action's operands before
+/// the action, a term's children before the term, so every proof a later column
+/// composes from is already in hand. Each position claims a fixed run of columns,
+/// which the encoder's walk of the same head must claim the same way:
 ///
-/// Each site is resolved under the bindings in effect at its action, so a `let`
-/// binds only for the sites that follow it.
+/// - a term the head builds: its own conclusion, that conclusion over the
+///   children's representatives, and the connector to the e-class it interned
+///   into — except a construct-into guest, whose run is its own conclusion, the
+///   dropped `union`'s edge, the view row it writes, and its connector;
+/// - any other call: its own conclusion;
+/// - a `union`: its equality, then the union-find edge in each direction, routed
+///   through whichever operands the head built;
+/// - a `set`: its row, then the stored-value proof of a global row.
 ///
-/// Errors if the head does not evaluate under `bindings`.
-pub(crate) fn site_conclusions(
-    rule_name: &str,
-    mut bindings: HashMap<String, TermId>,
-    actions: &[ResolvedAction],
-    term_dag: &mut TermDag,
-) -> Result<Vec<Proposition>, ProofCheckError> {
-    let sites = conclusion_sites(actions);
-    let mut conclusions = Vec::with_capacity(sites.len());
-    let mut bound_through = 0;
-    for site in sites {
-        while bound_through < site.action {
-            if let GenericAction::Let(_, var, expr) = &actions[bound_through] {
-                let (term, _) = eval_expr_with_subst(rule_name, expr, term_dag, &bindings)?;
-                bindings.insert(var.name.clone(), term);
-            }
-            bound_through += 1;
-        }
-        conclusions.push(match &site.conclusion {
-            SiteConclusion::Reflexive(expr) => {
-                let (term, _) = eval_expr_with_subst(rule_name, expr, term_dag, &bindings)?;
-                Proposition::new(term, term)
-            }
-            SiteConclusion::Equality(lhs, rhs) => {
-                let (lhs, _) = eval_expr_with_subst(rule_name, lhs, term_dag, &bindings)?;
-                let (rhs, _) = eval_expr_with_subst(rule_name, rhs, term_dag, &bindings)?;
-                Proposition::new(lhs, rhs)
-            }
-        });
-    }
-    Ok(conclusions)
-}
-
-/// One firing of a rule head, and the proofs asked of it so far.
-///
-/// A firing states only a few of the propositions its sites have, so nothing is
-/// built until [`Self::column`] asks for it.
+/// A position whose head does not produce a proof still holds its column, so the
+/// numbering follows the walk rather than what either side emits.
 pub(crate) struct Firing<'a> {
     rule_name: &'a str,
     plan: &'a HeadPlan,
-    /// The head's as-written propositions, indexed by site.
-    site_props: Vec<Proposition>,
     /// The premises the rule body matched, one per body fact.
     body_premises: Vec<ProofId>,
+    substitution: IndexMap<String, TermId>,
     /// The view-row proof the head recorded at a bridge position, converted on
     /// demand. `None` for a position the requesting rule proof row does not carry.
     bridge_at: Box<dyn FnMut(&mut ProofStore, usize) -> Option<ProofId> + 'a>,
-    substitution: IndexMap<String, TermId>,
-    /// The proofs built so far, by the site and column each states.
-    built: HashMap<(usize, usize), ProofId>,
-    /// A build site -> its connector, `written = interned`.
-    resolved: HashMap<usize, ProofId>,
+    /// What the head's variables stand for, as the walk binds them.
+    bindings: HashMap<String, TermId>,
+    /// A variable holding a term the head built -> that term's connector.
+    connectors: HashMap<String, ProofId>,
+    /// How many bridge premises the walk has asked for.
+    bridges_read: usize,
+    proofs: Vec<Option<ProofId>>,
+    walked: bool,
 }
 
 impl<'a> Firing<'a> {
+    /// `bindings` must resolve every variable the head reads: the globals plus
+    /// the body's substitution.
     pub(crate) fn new(
         rule_name: &'a str,
         plan: &'a HeadPlan,
-        site_props: Vec<Proposition>,
+        bindings: HashMap<String, TermId>,
         body_premises: Vec<ProofId>,
         substitution: IndexMap<String, TermId>,
         bridge_at: Box<dyn FnMut(&mut ProofStore, usize) -> Option<ProofId> + 'a>,
@@ -538,80 +246,215 @@ impl<'a> Firing<'a> {
         Firing {
             rule_name,
             plan,
-            site_props,
             body_premises,
-            bridge_at,
             substitution,
-            built: HashMap::default(),
-            resolved: HashMap::default(),
+            bridge_at,
+            bindings,
+            connectors: HashMap::default(),
+            bridges_read: 0,
+            proofs: vec![],
+            walked: false,
         }
+    }
+
+    /// The proofs the head's lowering produces, by column. Empty at a column the
+    /// walk numbers but the head produces no proof for.
+    pub(crate) fn proofs(&mut self, store: &mut ProofStore) -> &[Option<ProofId>] {
+        if !self.walked {
+            self.walked = true;
+            self.walk(store);
+        }
+        &self.proofs
     }
 
     /// The proof the e-graph stored in the column `raw` names.
-    ///
-    /// A site's first two columns are the head's own conclusion there, in each
-    /// direction. Which proofs its other two are is read off what the head does
-    /// at the site: a built term's canonical-reflexive and connector, a dropped
-    /// `union`'s guest view row and guest connector, a kept `union`'s edge in each
-    /// direction, or a global row's stored value proof.
     pub(crate) fn column(&mut self, store: &mut ProofStore, raw: i64) -> ProofId {
-        let (site, offset) = decode(raw);
-        if let Some(&id) = self.built.get(&(site, offset)) {
-            return id;
-        }
-        if offset < column::FIRST_COMPOSED {
-            return self.base(store, site, offset == column::OWN_REVERSED);
-        }
-        if let Some(guest) = self.plan.guest_at(site) {
-            self.resolve(store, guest);
-        } else if self
-            .plan
-            .expr_at(site)
-            .is_some_and(|expr| constructor_operand(expr).is_some())
-        {
-            self.resolve(store, site);
-        } else if let Some(operands) = self.plan.union_operands(site) {
-            self.union_edge(store, site, operands);
-        } else {
-            self.global_value(store, site, self.plan.global_value(site));
-        }
-        self.recorded(site, offset)
+        let rule_name = self.rule_name;
+        let column = usize::try_from(raw).unwrap_or_else(|_| {
+            panic!("rule {rule_name} proof was emitted without a column ({raw})")
+        });
+        self.proofs(store)
+            .get(column)
+            .copied()
+            .flatten()
+            .unwrap_or_else(|| {
+                panic!("rule {rule_name}'s head produces no proof at column {column}")
+            })
     }
 
-    /// A column the resolution above must have recorded.
-    fn recorded(&self, site: usize, offset: usize) -> ProofId {
-        *self.built.get(&(site, offset)).unwrap_or_else(|| {
+    /// Walk the head, filling the array.
+    fn walk(&mut self, store: &mut ProofStore) {
+        for (at, action) in self.plan.actions.iter().enumerate() {
+            if self.plan.dropped.contains(&at) {
+                continue;
+            }
+            match action {
+                GenericAction::Let(_, var, expr) => {
+                    let connector = match self.plan.construct_into.get(&var.name) {
+                        Some(target) => self.guest(store, expr, target),
+                        None => self.expr(store, expr),
+                    };
+                    let term = self.eval(store, expr);
+                    self.bindings.insert(var.name.clone(), term);
+                    if let Some(connector) = connector {
+                        self.connectors.insert(var.name.clone(), connector);
+                    }
+                }
+                GenericAction::Expr(_, expr) => {
+                    self.expr(store, expr);
+                }
+                GenericAction::Union(_, lhs, rhs) => {
+                    let lhs_connector = self.expr(store, lhs);
+                    let rhs_connector = self.expr(store, rhs);
+                    let lhs_term = self.eval(store, lhs);
+                    let rhs_term = self.eval(store, rhs);
+                    let own = self.own(store, Proposition::new(lhs_term, rhs_term));
+                    match (lhs_connector, rhs_connector) {
+                        // Nothing was built, so both endpoints' terms are the
+                        // ones the head concluded over and the edge is that
+                        // conclusion, in whichever direction the union-find asks
+                        // for.
+                        (None, None) => {
+                            self.own(store, Proposition::new(lhs_term, rhs_term));
+                            self.own(store, Proposition::new(rhs_term, lhs_term));
+                        }
+                        operands => self.union_edge(store, own, operands),
+                    }
+                }
+                GenericAction::Set(span, func, args, value) => {
+                    for arg in args {
+                        self.expr(store, arg);
+                    }
+                    let stored = self.expr(store, value);
+                    let row = set_row_expr(span, func, args, value);
+                    let row_term = self.eval(store, &row);
+                    self.own(store, Proposition::new(row_term, row_term));
+                    // A global row's value equals itself, routed through the
+                    // written form of the term it aliases.
+                    match stored {
+                        Some(connector) => {
+                            let proof = reflexive(store, connector);
+                            self.proofs.push(Some(proof));
+                        }
+                        None => self.proofs.push(None),
+                    }
+                }
+                GenericAction::Change(..) | GenericAction::Panic(..) => {}
+            }
+        }
+    }
+
+    /// Walk `expr`, and answer with its connector when it holds a term the head
+    /// built.
+    fn expr(&mut self, store: &mut ProofStore, expr: &ResolvedExpr) -> Option<ProofId> {
+        let ResolvedExpr::Call(_, _, args) = expr else {
+            // A variable's value comes from wherever it was bound; a literal
+            // holds no built term.
+            return match expr {
+                ResolvedExpr::Var(_, var) => self.connectors.get(&var.name).copied(),
+                _ => None,
+            };
+        };
+        let steps = self.args(store, args);
+        let term = self.eval(store, expr);
+        let own = self.own(store, Proposition::new(term, term));
+        // A primitive or a global lookup builds nothing itself, though a
+        // constructor argument of it is still built.
+        constructor_operand(expr)?;
+        let to_canonical = canonicalize(store, own, steps);
+        let canonical_reflexive = reflexive(store, to_canonical);
+        self.proofs.push(Some(canonical_reflexive));
+        let connector = match self.bridge(store, to_canonical) {
+            Some(bridge) => connect(store, to_canonical, bridge),
+            None => to_canonical,
+        };
+        self.proofs.push(Some(connector));
+        Some(connector)
+    }
+
+    /// Walk a construct-into guest, whose constructor is built into `target`'s
+    /// e-class: the dropped `union`'s edge stands in for the interning row, and
+    /// the guest's view row states that e-class equals the guest's term.
+    fn guest(
+        &mut self,
+        store: &mut ProofStore,
+        expr: &ResolvedExpr,
+        target: &str,
+    ) -> Option<ProofId> {
+        let (_, args) =
+            constructor_operand(expr).expect("a construct-into guest is a constructor application");
+        let steps = self.args(store, args);
+        let term = self.eval(store, expr);
+        let own = self.own(store, Proposition::new(term, term));
+        let to_canonical = canonicalize(store, own, steps);
+        let target_term = *self.bindings.get(target).unwrap_or_else(|| {
             panic!(
-                "rule {}'s head builds no column {offset} proof at site {site}",
+                "rule {}'s construct-into target {target} is unbound",
                 self.rule_name
             )
-        })
+        });
+        let edge = self.own(store, Proposition::new(target_term, term));
+        let target_connector = self.connectors.get(target).copied();
+        let view = guest_view(store, edge, to_canonical, target_connector);
+        self.proofs.push(Some(view));
+        let connector = connect(store, to_canonical, view);
+        self.proofs.push(Some(connector));
+        Some(connector)
     }
 
-    /// The head's own conclusion at `site`, cached so every composite over it
-    /// shares one node.
-    fn base(&mut self, store: &mut ProofStore, site: usize, reversed: bool) -> ProofId {
-        let offset = if reversed {
-            column::OWN_REVERSED
-        } else {
-            column::OWN
-        };
-        if let Some(&id) = self.built.get(&(site, offset)) {
-            return id;
+    /// Walk a call's arguments, keeping the connector of each one holding a term
+    /// the head built, at the position it sits in the call.
+    fn args(&mut self, store: &mut ProofStore, args: &[ResolvedExpr]) -> Vec<(usize, ProofId)> {
+        let mut steps = vec![];
+        for (index, arg) in args.iter().enumerate() {
+            if let Some(connector) = self.expr(store, arg) {
+                steps.push((index, connector));
+            }
         }
-        let concluded = self
-            .site_props
-            .get(site)
-            .unwrap_or_else(|| panic!("rule {} has no conclusion site {}", self.rule_name, site));
-        let proposition = if reversed {
-            Proposition::new(concluded.rhs, concluded.lhs)
-        } else {
-            concluded.clone()
+        steps
+    }
+
+    /// A `union`'s union-find edge, routed through the operands' written forms so
+    /// both endpoints' proofs end at one shared term. Which endpoint is on the
+    /// left is decided at run time by the value ordering the union-find uses, so
+    /// both orientations are recorded.
+    fn union_edge(
+        &mut self,
+        store: &mut ProofStore,
+        own: ProofId,
+        operands: (Option<ProofId>, Option<ProofId>),
+    ) {
+        let (lhs, rhs) = operands;
+        let (lhs_to, rhs_to) = match rhs {
+            Some(rhs) => {
+                let lhs_to = match lhs {
+                    Some(lhs) => {
+                        let back = sym(store, lhs);
+                        trans(store, back, own)
+                    }
+                    None => own,
+                };
+                (lhs_to, sym(store, rhs))
+            }
+            None => {
+                let lhs = lhs.expect("one operand of the union was built");
+                (sym(store, lhs), sym(store, own))
+            }
         };
+        for (max_pf, min_pf) in [(lhs_to, rhs_to), (rhs_to, lhs_to)] {
+            let back = sym(store, min_pf);
+            let edge = trans(store, max_pf, back);
+            self.proofs.push(Some(edge));
+        }
+    }
+
+    /// The head's own conclusion at the next column.
+    fn own(&mut self, store: &mut ProofStore, proposition: Proposition) -> ProofId {
+        let column = self.proofs.len() as i64;
         let id = store.push_shared_proof(
             SynthKey::Rule(
                 self.rule_name.to_string(),
-                site_column(site, offset),
+                column,
                 self.body_premises.clone(),
             ),
             Proof {
@@ -623,150 +466,38 @@ impl<'a> Firing<'a> {
                 },
             },
         );
-        self.built.insert((site, offset), id);
+        self.proofs.push(Some(id));
         id
     }
 
-    /// Resolve a build site: fold one `Congr` per built child onto the site's own
-    /// conclusion, then settle which e-class the interned term landed in.
-    fn resolve(&mut self, store: &mut ProofStore, site: usize) -> ProofId {
-        if let Some(&connector) = self.resolved.get(&site) {
-            return connector;
-        }
-        let plan = self.plan;
-        let expr = plan
-            .expr_at(site)
-            .filter(|expr| constructor_operand(expr).is_some())
-            .unwrap_or_else(|| panic!("rule {}'s site {} builds no term", self.rule_name, site));
-        let (_, args) = constructor_operand(expr).expect("filtered to a constructor application");
-        let guest_of = plan.guest_of(site);
-
-        let own = self.base(store, site, false);
-        let mut steps = vec![];
-        let mut next = site + 1;
-        for (i, arg) in args.iter().enumerate() {
-            let child = plan.value_site(arg, next);
-            next += site_count(arg);
-            let Some(child) = child else { continue };
-            steps.push((i, self.resolve(store, child)));
-        }
-        let to_canonical = canonicalize(store, own, steps);
-
-        let connector = match guest_of {
-            Some((into, target)) => {
-                let union = into.union_site;
-                let view = self.guest_view(store, into, target, to_canonical);
-                let connector = connect(store, to_canonical, view);
-                self.built
-                    .insert((union, column::GUEST_CONNECTOR), connector);
-                connector
-            }
-            None => {
-                let canonical = store.get(to_canonical).rhs();
-                match self.bridge(store, site, canonical) {
-                    Some(bridge) => connect(store, to_canonical, bridge),
-                    None => to_canonical,
-                }
-            }
-        };
-
-        let canonical_reflexive = reflexive(store, to_canonical);
-        self.built
-            .insert((site, column::CANONICAL_REFLEXIVE), canonical_reflexive);
-        self.built.insert((site, column::CONNECTOR), connector);
-        self.resolved.insert(site, connector);
-        connector
+    /// The term `expr` evaluates to under the bindings in effect.
+    fn eval(&mut self, store: &mut ProofStore, expr: &ResolvedExpr) -> TermId {
+        eval_expr_with_subst(self.rule_name, expr, &mut store.term_dag, &self.bindings)
+            .unwrap_or_else(|err| panic!("rule {}'s head did not replay: {err}", self.rule_name))
+            .0
     }
 
-    /// The view-row proof recorded for `site`, when it says the interned term
-    /// landed in an e-class whose own term is spelled differently.
+    /// The view-row proof recorded for the term the walk just built, when it says
+    /// the interned term landed in an e-class whose own term is spelled
+    /// differently.
     ///
-    /// `None` for a site with no bridge recorded: a row minted before the head
+    /// `None` for a term with no bridge recorded: a row minted before the head
     /// reached the subterm it is about has nothing to name yet.
-    fn bridge(
-        &mut self,
-        store: &mut ProofStore,
-        site: usize,
-        canonical: TermId,
-    ) -> Option<ProofId> {
-        let position = self.plan.bridge_position(site)?;
+    fn bridge(&mut self, store: &mut ProofStore, to_canonical: ProofId) -> Option<ProofId> {
+        let position = self.bridges_read;
+        self.bridges_read += 1;
         let bridge = (self.bridge_at)(store, position)?;
         // Every proof this read can return — an existing row's, a rebuilt row's, a
         // construct-into guest view, or the encoder's `can_prf` fallback — ends at
         // the canonical term. A bridge that does not is one aligned to the wrong
-        // site, which would otherwise compose into a proof of the wrong equality.
+        // term, which would otherwise compose into a proof of the wrong equality.
         assert_eq!(
             store.get(bridge).rhs(),
-            canonical,
-            "rule {}'s bridge for site {} does not end at the canonical term",
-            self.rule_name,
-            site
+            store.get(to_canonical).rhs(),
+            "rule {}'s bridge {position} does not end at the canonical term",
+            self.rule_name
         );
         Some(bridge)
-    }
-
-    /// A construct-into guest's view-row proof: the target's e-class equals the
-    /// guest's term over its children's representatives.
-    fn guest_view(
-        &mut self,
-        store: &mut ProofStore,
-        into: &ConstructInto,
-        target: Option<usize>,
-        to_canonical: ProofId,
-    ) -> ProofId {
-        let edge = self.base(store, into.union_site, into.guest_is_lhs);
-        let target = target.map(|target| self.resolve(store, target));
-        let view = guest_view(store, edge, to_canonical, target);
-        self.built
-            .insert((into.union_site, column::GUEST_VIEW), view);
-        view
-    }
-
-    /// A kept `union`'s union-find edge, routed through the operands' written forms
-    /// so both endpoints' proofs end at one shared term. Which endpoint is on the
-    /// left is decided at run time by the value ordering the union-find uses, so
-    /// both orientations are recorded.
-    fn union_edge(&mut self, store: &mut ProofStore, union: usize, operands: [Option<usize>; 2]) {
-        let [lhs, rhs] = operands;
-        let base = self.base(store, union, false);
-        let lhs_conn = lhs.map(|s| self.resolve(store, s));
-        let rhs_conn = rhs.map(|s| self.resolve(store, s));
-        let (lhs_to, rhs_to) = match rhs_conn {
-            Some(rhs_conn) => {
-                let lhs_to = match lhs_conn {
-                    Some(lhs_conn) => {
-                        let back = sym(store, lhs_conn);
-                        trans(store, back, base)
-                    }
-                    None => base,
-                };
-                let rhs_to = sym(store, rhs_conn);
-                (lhs_to, rhs_to)
-            }
-            None => {
-                let lhs_conn = lhs_conn.expect("one operand of the union was built");
-                let lhs_to = sym(store, lhs_conn);
-                let rhs_to = sym(store, base);
-                (lhs_to, rhs_to)
-            }
-        };
-        for (offset, max_pf, min_pf) in [
-            (column::UNION_EDGE, lhs_to, rhs_to),
-            (column::UNION_EDGE_REVERSED, rhs_to, lhs_to),
-        ] {
-            let back = sym(store, min_pf);
-            let edge = trans(store, max_pf, back);
-            self.built.insert((union, offset), edge);
-        }
-    }
-
-    /// A global's stored value proof: the value equals itself, routed through the
-    /// written form of the term it aliases.
-    fn global_value(&mut self, store: &mut ProofStore, row: usize, value: Option<usize>) {
-        let value = value.expect("a composed global proof needs a built value");
-        let connector = self.resolve(store, value);
-        let proof = reflexive(store, connector);
-        self.built.insert((row, column::GLOBAL_VALUE), proof);
     }
 }
 
@@ -820,7 +551,7 @@ impl HeadProofs for ProofInstrumentor<'_> {
     }
 }
 
-/// The proof that the term a build site wrote equals the same term over its
+/// The proof that a term the head wrote equals the same term over its
 /// children's representatives: one `Congr` per child the head built.
 pub(super) fn canonicalize<M: HeadProofs>(
     proofs: &mut M,
@@ -840,7 +571,7 @@ pub(super) fn reflexive<M: HeadProofs>(proofs: &mut M, to_canonical: M::Proof) -
     proofs.trans(back, to_canonical)
 }
 
-/// A build site's connector, from the term as written to the e-class the head
+/// A built term's connector, from the term as written to the e-class the head
 /// interned it into: `dedup` states that e-class equals the canonical term, so the
 /// connector runs through the canonical term and back.
 pub(super) fn connect<M: HeadProofs>(

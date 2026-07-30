@@ -10,10 +10,7 @@ use crate::{
         ResolvedExprExt, ResolvedFact, ResolvedNCommand, Schedule, Span,
     },
     core::ResolvedCall,
-    proofs::{
-        proof_encoding::ProofInstrumentor,
-        proof_sites::{column, site_column},
-    },
+    proofs::proof_encoding::ProofInstrumentor,
     util::{FreshGen, HashMap, HashSet, SymbolGen},
 };
 
@@ -32,8 +29,8 @@ pub(crate) struct EncodingNames {
     pub(crate) rule_fused_prefix: String,
     /// The premise counts [`ProofInstrumentor::rule_arity_header`] has declared.
     pub(crate) rule_fused_declared: HashSet<usize>,
-    /// A later conclusion site of the same head: the previous site's rule proof
-    /// plus this site's one canonicalization bridge.
+    /// A later proof of the same head: the previous column's rule proof plus one
+    /// canonicalization bridge.
     pub(crate) rule_link_constructor: String,
     /// Prefix of the rebuild proofs for a view whose output is not an e-class:
     /// step count `k`'s constructor is [`Self::rebuild_proof`]. Derived from one
@@ -103,48 +100,57 @@ pub(crate) enum SharedEnd {
     Rhs,
 }
 
-/// The conclusion-site column of a rule proof: an `i64` naming which proof of
-/// which site of the rule head the row is, encoded by [`site_column`].
+/// Which proof of a rule head a row states: the column naming its position in
+/// the head's flat array of proofs (see [`crate::proofs::proof_head`]), as an
+/// `i64`-valued egglog expression.
 #[derive(Clone)]
-pub(crate) enum SiteColumn {
-    /// A site and column offset both fixed at encoding time.
-    At(usize, usize),
-    /// An `i64`-valued expression selecting between the two directions of one of
-    /// a site's proofs, for a `union` whose direction is only known once the ids
-    /// being unioned are compared. The offset is the forward one.
-    Runtime(String, usize),
-    /// No site: reading such a proof back panics, so a mint site the encoder
-    /// forgot to place fails loudly instead of silently claiming site 0.
+pub(crate) enum HeadColumn {
+    /// The head's own conclusion at a column, which is composed from nothing and
+    /// so carries the body premises inline.
+    Own(String),
+    /// A proof the head's lowering composes at a column, from the head's interned
+    /// subterms, whose view-row proofs the row must carry as bridge premises.
+    Composed(String),
+    /// No column: reading such a proof back panics, so a mint the encoder
+    /// forgot to number fails loudly instead of silently claiming column 0.
     Missing,
 }
 
-impl SiteColumn {
+impl HeadColumn {
+    /// [`HeadColumn::Own`] at `column`, or [`HeadColumn::Missing`] outside a rule
+    /// head.
+    pub(crate) fn own(column: Option<usize>) -> HeadColumn {
+        column.map_or(HeadColumn::Missing, |column| {
+            HeadColumn::Own(column.to_string())
+        })
+    }
+
+    /// [`HeadColumn::Composed`] at `column`, or [`HeadColumn::Missing`] outside a
+    /// rule head.
+    pub(crate) fn composed(column: Option<usize>) -> HeadColumn {
+        column.map_or(HeadColumn::Missing, |column| {
+            HeadColumn::Composed(column.to_string())
+        })
+    }
+
     /// The column value as an egglog expression.
     fn expr(&self) -> String {
         match self {
-            SiteColumn::At(site, offset) => site_column(*site, *offset).to_string(),
-            SiteColumn::Runtime(expr, _) => expr.clone(),
-            SiteColumn::Missing => "-1".to_string(),
-        }
-    }
-
-    /// Which of the site's proofs the column names.
-    fn offset(&self) -> Option<usize> {
-        match self {
-            SiteColumn::At(_, offset) | SiteColumn::Runtime(_, offset) => Some(*offset),
-            SiteColumn::Missing => None,
+            HeadColumn::Own(expr) | HeadColumn::Composed(expr) => expr.clone(),
+            HeadColumn::Missing => "-1".to_string(),
         }
     }
 }
 
-/// What justifies the proofs the encoder mints for an action. The conclusion site
-/// is left as a [`SiteColumn`], filled in per mint site once the encoder knows
-/// which term it is at. Internal to the encoder, not part of the proof format.
+/// What justifies the proofs the encoder mints for an action. Which proof of the
+/// head a mint states is left as a [`HeadColumn`], filled in once the encoder's
+/// walk knows the column it is at. Internal to the encoder, not part of the proof
+/// format.
 #[derive(Clone)]
 pub(crate) enum Justification {
-    /// Rule-name expression, one premise-proof expression per body fact, and the
-    /// conclusion site the proof is about.
-    Rule(String, Vec<String>, SiteColumn),
+    /// Rule-name expression, one premise-proof expression per body fact, and
+    /// which of the head's proofs is being stated.
+    Rule(String, Vec<String>, HeadColumn),
     Fiat,
     /// Term-free merge justification for a merge-body subexpression: function
     /// name, the two premise (view) proof expressions, and the pre-order index of
@@ -160,37 +166,32 @@ pub(crate) enum Justification {
 }
 
 impl Justification {
-    /// The same justification about `site`. Only a rule justification names a
-    /// site; anything else is returned unchanged.
-    pub(crate) fn at_column(&self, site: SiteColumn) -> Justification {
+    /// The same justification about `column`. Only a rule justification names a
+    /// column; anything else is returned unchanged.
+    pub(crate) fn at(&self, column: HeadColumn) -> Justification {
         match self {
             Justification::Rule(name, proofs, _) => {
-                Justification::Rule(name.clone(), proofs.clone(), site)
+                Justification::Rule(name.clone(), proofs.clone(), column)
             }
             other => other.clone(),
         }
     }
 
-    /// [`Self::at_column`] for a site and column offset fixed at encoding time.
-    pub(crate) fn at(&self, site: usize, offset: usize) -> Justification {
-        self.at_column(SiteColumn::At(site, offset))
+    /// Whether this justification names a proof of the rule head being walked.
+    /// False outside a head, and at a position the walk does not number — a
+    /// `change` argument, which the head concludes nothing about.
+    pub(crate) fn names_column(&self) -> bool {
+        matches!(
+            self,
+            Justification::Rule(_, _, HeadColumn::Own(_) | HeadColumn::Composed(_))
+        )
     }
 
-    /// The site this justification is about, when it is a rule justification with
-    /// a site fixed at encoding time. Naming another of the site's proofs needs
-    /// one.
-    pub(crate) fn static_site(&self) -> Option<usize> {
+    /// The egglog expression for the `Rule` row's column.
+    pub(crate) fn column_expr(&self) -> String {
         match self {
-            Justification::Rule(_, _, SiteColumn::At(site, _)) => Some(*site),
-            _ => None,
-        }
-    }
-
-    /// The site column's egglog expression, for the `Rule` row's site column.
-    pub(crate) fn site_expr(&self) -> String {
-        match self {
-            Justification::Rule(_, _, site) => site.expr(),
-            _ => SiteColumn::Missing.expr(),
+            Justification::Rule(_, _, column) => column.expr(),
+            _ => HeadColumn::Missing.expr(),
         }
     }
 
@@ -198,12 +199,7 @@ impl Justification {
     /// has to name their view-row proofs as bridge premises. False for a proof
     /// stating the head's own conclusion, which is composed from nothing.
     pub(crate) fn needs_bridges(&self) -> bool {
-        match self {
-            Justification::Rule(_, _, site) => site
-                .offset()
-                .is_some_and(|off| off >= column::FIRST_COMPOSED),
-            _ => false,
-        }
+        matches!(self, Justification::Rule(_, _, HeadColumn::Composed(_)))
     }
 }
 

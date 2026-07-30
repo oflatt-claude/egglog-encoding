@@ -122,7 +122,7 @@ constructor), plus `AstMath` (one `Ast<Sort>` per sort) and:
 
 Three of those pack a whole composition into one row, so the thing they justify
 costs a single row rather than a tree of `Trans`/`Sym`/`Congr` nodes:
-`RuleLink` extends a rule proof to a later conclusion site of the same head, and
+`RuleLink` extends a rule proof to a later proof of the same head, and
 `DisplacedSharedLhs`/`DisplacedSharedRhs` stand for the edge one merge collision
 displaces. Two further families are *arity-fused*: their column count depends on
 the rule they are for, so each shape is declared ahead of the commands that need
@@ -223,7 +223,7 @@ Only one operand needs to be a constructor application; a `union` of two matched
 variables keeps the plain `UF_<Sort>` edge above.
 
 **In proof mode** the view row carries a single rule proof row stating the
-union site's *guest view* proposition, `ab_canon = (Add b a)` over the guest's
+dropped union's *guest view* proposition, `ab_canon = (Add b a)` over the guest's
 canonical children; proof conversion rebuilds the composition it stands for (see
 [Building nested terms with proofs](#building-nested-terms-with-proofs)).
 Crucially, the guest's term keeps **its own** minted id — the view *value* is
@@ -245,21 +245,23 @@ a correct equality proof. Trace this rule:
 
 The body match binds `a b c rewrite_var` and yields the rule's premise proof,
 carried inline as `prems`. Every proof minted below is a rule proof
-`(Rule_1 rule_name prems site)`, where `site` is one integer naming a position in
-the rule head *together with which of that position's proofs the row states* —
-see `proof_sites.rs`. The site is the whole conclusion: nothing about the
-proposition is stored. Term, AST, and proof nodes are all relations, so a new
-node is a fresh id plus a row `set` (written inline below — `(Rule_1 …)` means
-"mint a proof id and `set` its `Rule_1` row").
+`(Rule_1 rule_name prems column)`, where `column` is one integer: the position of
+this proof in the flat array one walk of the head produces (see `proof_head.rs`),
+spelled `col(…)` below to say what sits there. That column is the whole
+conclusion — nothing about the proposition is stored.
+
+Term, AST, and proof nodes are all relations, so a new node is a fresh id plus a
+row `set` (written inline below — `(Rule_1 …)` means "mint a proof id and `set`
+its `Rule_1` row").
 
 Each subterm gets **two** term nodes:
 
 - **`e`** — the *natural* term, over its children's as-built ids. Its proof is
-  the site's `as-written` row, so it stays about the shape the head wrote. `e` is
+  the `as-written` row, so it stays about the shape the head wrote. `e` is
   deliberately never interned, so the view's congruence cannot move it.
 - **`e'`** — the same term over **canonical children** (each child replaced by
   the e-class its view interned it into), minted even when no child moved. Its
-  proof is the site's `canonical-reflexive` row, `e' = e'`.
+  proof is the `canonical-reflexive` row, `e' = e'`.
 
 `set-if-empty` interns `e'` and returns the view's representative `e''`;
 `view-proof-<View>` then reads the proof the view stored for it. That view-row
@@ -270,9 +272,9 @@ carrying the premises inline, that row is a `RuleLink` naming the row below it
 plus the one bridge recorded since.
 
 No `Congr`, `Trans` or `Sym` row is emitted anywhere in a rule head. Each such
-composition is fixed by the site column and the bridges the rule proof carries, so
+composition is fixed by the column and the bridges the rule proof carries, so
 proof conversion rebuilds it from those (see `proof_head.rs`). Only a
-top-level action — justified by `Fiat`, with no site to name — spells the
+top-level action — justified by `Fiat`, with no column to name — spells the
 composition out in rows.
 
 ### Innermost — `(Add b c)`
@@ -283,11 +285,11 @@ there is no bridge: both rows carry the premises inline.
 ```text
 (let d (get-fresh! "Math"))                       ;; natural
 (set (Add b c d) ())
-(let d_prf (Rule_1 rule_name prems site(Add b c):as-written))
+(let d_prf (Rule_1 rule_name prems col(Add b c : as-written)))
 
 (let d' (get-fresh! "Math"))                      ;; canonical children
 (set (Add b c d') ())
-(let d'_prf (Rule_1 rule_name prems site(Add b c):canonical-reflexive))
+(let d'_prf (Rule_1 rule_name prems col(Add b c : canonical-reflexive)))
 
 (set (MathProof d) d_prf)
 (set (MathProof d') d'_prf)
@@ -304,11 +306,11 @@ canonical one over `d''`. One bridge has been recorded, so the canonical row is 
 ```text
 (let e (get-fresh! "Math"))
 (set (Add a d e) ())
-(let e_prf (Rule_1 rule_name prems site(Add a …):as-written))
+(let e_prf (Rule_1 rule_name prems col(Add a … : as-written)))
 
 (let e' (get-fresh! "Math"))
 (set (Add a d'' e') ())
-(let e'_prf (RuleLink e_prf bridge_d site(Add a …):canonical-reflexive))
+(let e'_prf (RuleLink e_prf bridge_d col(Add a … : canonical-reflexive)))
 
 (set (MathProof e) e_prf)
 (set (MathProof e') e'_prf)
@@ -321,25 +323,25 @@ canonical one over `d''`. One bridge has been recorded, so the canonical row is 
 `(Neg …)` is the `union`'s only constructor operand, so it is built *into*
 `rewrite_var`'s e-class (see
 [the construct-into optimization](#optimization-building-a-union-operand-into-an-e-class)):
-the view `set` replaces the union, and it stores the union site's `guest-view`
+the view `set` replaces the union, and it stores the dropped union's `guest-view`
 row rather than a fresh e-class's reflexive one. So this level mints one term
 node, not two.
 
 ```text
 (let f (get-fresh! "Math"))
 (set (Neg e f) ())
-(let f_prf (Rule_1 rule_name prems site(Neg …):as-written))
+(let f_prf (Rule_1 rule_name prems col(Neg … : as-written)))
 (set (MathProof f) f_prf)
 
-(let guest_prf (RuleLink e'_prf bridge_e site(union):guest-view))
+(let guest_prf (RuleLink e'_prf bridge_e col(union : guest-view)))
 (set (NegView e'') (values rewrite_var guest_prf))
 ```
 
 A `union` of two matched variables has no guest to build into, and writes the
-`UF_<Sort>` edge with one rule proof row at the union site. The edge runs
-`larger = smaller`, so which way round the site is stated is only known once the
-ids are compared: that row's site column is computed at run time by
-`proof-of-max` over the two orientations' encodings.
+`UF_<Sort>` edge with one rule proof row. The edge runs `larger = smaller`, so
+which way round it is stated is only known once the ids are compared: that row's
+column is computed at run time by `proof-of-max` over the two orientations'
+columns.
 
 The discipline is the same at every level: build the natural term, build the same
 term over the children's representatives, intern the latter to learn its
@@ -391,7 +393,7 @@ This checks that the representatives of `(Add 1 2)` and `(Add 2 1)` are the same
 e-class. In proof mode the read also binds the view's proof (`p1`, `p2`); a plain
 `check` discards it, while a rule body or `prove` uses it: the fact's proof is the
 view's proof composed with a `Congr` for each child that carries its own subproof.
-Unlike a head, a body has no conclusion site to name, so it spells those `Congr`
+Unlike a head, a body has no column to name, so it spells those `Congr`
 rows out.
 
 # Rebuilding
