@@ -310,6 +310,14 @@ impl<'a> ProofInstrumentor<'a> {
             }
         };
         if let Some(chain) = &mut self.head_chain {
+            // Overwrite this level's row, or open the level above the last one. A
+            // bridge recorded without a row minted at its own level would push
+            // here at the wrong index instead.
+            assert!(
+                want <= chain.rows.len(),
+                "rule proof row for bridge level {want} with only {} levels minted",
+                chain.rows.len()
+            );
             match chain.rows.get_mut(want) {
                 Some(row) => *row = proof.clone(),
                 None => chain.rows.push(proof.clone()),
@@ -970,7 +978,14 @@ impl<'a> ProofInstrumentor<'a> {
                     exprs.push(self.instrument_action_expr(e, &mut res, justification, scope));
                 }
                 // The row `(f args… value)` is the `set`'s own conclusion; a global
-                // row's stored value follows it.
+                // row's stored value follows it. Building a constructor claims two
+                // more columns than that, so a `set` on one would misnumber every
+                // later column rather than fail.
+                assert_ne!(
+                    func_type.subtype,
+                    FunctionSubtype::Constructor,
+                    "`set` on a constructor should have been rejected by typechecking"
+                );
                 let columns = self.take_columns(2);
 
                 // Global definition `(set (x) e)`: x is a nullary `:internal-let`

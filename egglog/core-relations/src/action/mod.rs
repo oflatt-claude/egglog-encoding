@@ -448,8 +448,8 @@ impl<'a> ExecutionState<'a> {
     /// Stage a batch of mutations against a single table, `mutate` receiving the
     /// table's mutation buffer directly and returning how many rows it staged.
     ///
-    /// The table is notified as changed once for the whole batch, unconditionally,
-    /// so `mutate` must stage at least one row.
+    /// A batch that stages at least one row notifies the table as changed, once
+    /// for the whole batch; one that stages none leaves it untouched.
     fn stage_batch(
         &mut self,
         table: TableId,
@@ -458,9 +458,10 @@ impl<'a> ExecutionState<'a> {
         self.buffers
             .lazy_init(table, || self.db.table_info[table].table.new_buffer());
         let staged = mutate(&mut *self.buffers.buffers[table]);
-        debug_assert!(staged > 0, "a batch that stages nothing must not notify");
-        self.buffers.notify_list.notify(table);
-        self.changed = true;
+        if staged > 0 {
+            self.buffers.notify_list.notify(table);
+            self.changed = true;
+        }
     }
 
     /// Stage a removal of the given row from `table` if it is present.

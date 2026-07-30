@@ -528,6 +528,17 @@ impl RawProofStore {
         proof_id
     }
 
+    /// [`Self::parse_proof`] for one of the term's own nested proofs, which
+    /// [`Self::parse_nested_first`] has already parsed. A child that pre-pass
+    /// misses recurses from here instead, at the call depth it exists to avoid.
+    fn child_proof(&mut self, term_id: TermId) -> RawProofId {
+        debug_assert!(
+            self.term_to_proof.contains_key(&term_id),
+            "proof child {term_id:?} was not visited before its parent"
+        );
+        self.parse_proof(term_id)
+    }
+
     fn parse_proof_inner(&mut self, term_id: TermId) -> RawProofId {
         let term = self.term_dag.get(term_id).clone();
         let Term::App(head, args) = term else {
@@ -548,8 +559,8 @@ impl RawProofStore {
                 bridges,
                 column,
             } = self.rule_columns(term_id);
-            let premises = premises.iter().map(|arg| self.parse_proof(*arg)).collect();
-            let bridges = bridges.iter().map(|arg| self.parse_proof(*arg)).collect();
+            let premises = premises.iter().map(|arg| self.child_proof(*arg)).collect();
+            let bridges = bridges.iter().map(|arg| self.child_proof(*arg)).collect();
             RawProof::Rule(name, premises, bridges, self.parse_int(column))
         } else if let Some(shape) = self.names.rebuild_proof_shape(&head) {
             assert!(
@@ -557,63 +568,63 @@ impl RawProofStore {
                 "{head} should have {} args",
                 shape.columns()
             );
-            let row = self.parse_proof(args[0]);
+            let row = self.child_proof(args[0]);
             let steps = (0..shape.steps)
                 .map(|step| {
                     (
                         self.parse_index(args[1 + 2 * step]),
-                        self.parse_proof(args[2 + 2 * step]),
+                        self.child_proof(args[2 + 2 * step]),
                     )
                 })
                 .collect();
             let eclass = shape
                 .eclass
-                .then(|| self.parse_proof(args[shape.columns() - 1]));
+                .then(|| self.child_proof(args[shape.columns() - 1]));
             RawProof::Rebuild { row, steps, eclass }
         } else if head == self.names.merge_fn_idx_constructor {
             assert!(args.len() == 4, "merge-idx constructor should have 4 args");
             let function = self.parse_string(args[0]);
-            let old_proof = self.parse_proof(args[1]);
-            let new_proof = self.parse_proof(args[2]);
+            let old_proof = self.child_proof(args[1]);
+            let new_proof = self.child_proof(args[2]);
             let idx = self.parse_index(args[3]);
             RawProof::MergeFnIdx(function, old_proof, new_proof, idx)
         } else if head == self.names.merge_fn_row_constructor {
             assert!(args.len() == 3, "merge-row constructor should have 3 args");
             let function = self.parse_string(args[0]);
-            let old_proof = self.parse_proof(args[1]);
-            let new_proof = self.parse_proof(args[2]);
+            let old_proof = self.child_proof(args[1]);
+            let new_proof = self.child_proof(args[2]);
             RawProof::MergeFnRow(function, old_proof, new_proof)
         } else if let Some(shared) = self.names.displaced_shared_end(&head) {
             assert!(args.len() == 2, "{head} should have 2 args");
-            let hi = self.parse_proof(args[0]);
-            let lo = self.parse_proof(args[1]);
+            let hi = self.child_proof(args[0]);
+            let lo = self.child_proof(args[1]);
             RawProof::Displaced { hi, lo, shared }
         } else if head == self.names.eq_trans_constructor {
             assert!(args.len() == 2, "trans constructor should have 2 args");
-            let left = self.parse_proof(args[0]);
-            let right = self.parse_proof(args[1]);
+            let left = self.child_proof(args[0]);
+            let right = self.child_proof(args[1]);
             RawProof::Trans(left, right)
         } else if head == self.names.eq_sym_constructor {
             assert!(args.len() == 1, "sym constructor should have 1 arg");
-            let inner = self.parse_proof(args[0]);
+            let inner = self.child_proof(args[0]);
             RawProof::Sym(inner)
         } else if head == self.names.container_normalize_constructor {
             assert!(
                 args.len() == 1,
                 "container-normalize constructor should have 1 arg"
             );
-            let inner = self.parse_proof(args[0]);
+            let inner = self.child_proof(args[0]);
             RawProof::ContainerNormalize(inner)
         } else if head == self.names.congr_constructor {
             assert!(args.len() == 3, "congr constructor should have 3 args");
-            let proof = self.parse_proof(args[0]);
+            let proof = self.child_proof(args[0]);
             let child_index = self.parse_index(args[1]);
-            let child_proof = self.parse_proof(args[2]);
+            let child_proof = self.child_proof(args[2]);
             RawProof::Congr(proof, child_index, child_proof)
         } else if head == self.names.congr_all_constructor {
             assert!(args.len() == 2, "congr-all constructor should have 2 args");
-            let proof = self.parse_proof(args[0]);
-            let child_proof = self.parse_proof(args[1]);
+            let proof = self.child_proof(args[0]);
+            let child_proof = self.child_proof(args[1]);
             RawProof::CongrAll(proof, child_proof)
         } else if head == self.names.eval_constructor {
             assert!(args.is_empty(), "eval constructor should have no args");

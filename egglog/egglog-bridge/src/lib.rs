@@ -342,13 +342,21 @@ impl EGraph {
         &mut self,
         view_name: String,
         n_keys: usize,
-        _out_arity: usize,
+        out_arity: usize,
     ) -> ExternalFunctionId {
         let registry = self.action_registry.clone();
         self.register_external_func(Box::new(make_external_func(
             move |state: &mut ExecutionState, args: &[Value]| {
                 let registry = registry.read().unwrap();
                 let action = registry.lookup_table(&view_name)?.clone();
+                // Too few vals and the row is staged short of its value columns;
+                // too many and the surplus lands on the timestamp.
+                debug_assert_eq!(
+                    args.len(),
+                    n_keys + out_arity,
+                    "set-if-empty on view `{view_name}` takes {n_keys} keys and \
+                     {out_arity} values"
+                );
                 let keys = &args[..n_keys];
                 Some(action.lookup_or_insert_vals(state, keys, &args[n_keys..]))
             },
@@ -1865,6 +1873,14 @@ impl TableAction {
         key: &[Value],
         col_idx: usize,
     ) -> Option<Value> {
+        // The timestamp column sits right after the value columns, so an
+        // out-of-range `col_idx` would read one of the table's own bookkeeping
+        // columns back as a value.
+        debug_assert!(
+            col_idx < self.table_math.n_vals(),
+            "value column {col_idx} is past this table's {} value columns",
+            self.table_math.n_vals()
+        );
         state.get_table(self.table).get_row_column(
             key,
             ColumnId::from_usize(self.table_math.num_keys() + col_idx),
