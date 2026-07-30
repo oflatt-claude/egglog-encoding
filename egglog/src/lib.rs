@@ -954,7 +954,7 @@ impl EGraph {
         }
     }
 
-    /// Lower a resolved `:merge` (a value-producing action block) to a backend [`MergeFn`], keeping
+    /// Lower a resolved `:merge` (a value-producing action block) to a backend [`egglog_bridge::MergeFn`], keeping
     /// the existing merge interpreter. The `result` produces the merged value(s); any `actions` run
     /// first as effects.
     /// `self_ref` names the function this merge belongs to and its (peeked) backend id,
@@ -999,7 +999,7 @@ impl EGraph {
         })
     }
 
-    /// Lower a single resolved merge action to a backend [`MergeAction`]. Supports `set`, `let`, and
+    /// Lower a single resolved merge action to a backend [`egglog_bridge::MergeAction`]. Supports `set`, `let`, and
     /// `union`; other actions (`delete`/`panic`/`extract`/...) are not meaningful during a merge.
     fn translate_merge_action(
         &self,
@@ -3004,7 +3004,7 @@ impl EGraph {
     }
 
     /// Run a pattern query: bind the variables in `vars` against
-    /// `facts` and return one [`HashMap`] per match, keyed by variable
+    /// `facts` and return one `HashMap` per match, keyed by variable
     /// name. Values stay raw — convert via [`EGraph::value_to_base`].
     ///
     /// With zero vars, returns at most one empty map (so `.len()` is 1

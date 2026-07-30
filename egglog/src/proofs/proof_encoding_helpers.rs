@@ -625,7 +625,7 @@ impl ProofInstrumentor<'_> {
     }
 
     /// Header string for proof encoding, defining sorts and constructors.
-    /// Correspondings to [`RawProof`] in the Rust code.
+    /// Correspondings to `RawProof` in [`crate::proofs::proof_format`].
     pub(crate) fn proof_header(&mut self) -> String {
         let mut to_ast_constructors = Vec::new();
         // need to build a Ast{lit} for each lit sort in self

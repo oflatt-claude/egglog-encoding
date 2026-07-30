@@ -1092,11 +1092,13 @@ fn fuse_last_stage(
 ///
 /// For example, in the following, looking up of `r` can be lifted up before `z`
 ///
+/// ```text
 /// for x in R isec S:
 ///  R = R[x]; S = S[x]
 ///  for z in R:
 ///   if r in Mat[x]:
 ///     yield
+/// ```
 fn loop_lifting(stages: JoinStages) -> JoinStages {
     let mut instrs = Arc::unwrap_or_clone(stages.instrs);
     for i in 1..instrs.len() {

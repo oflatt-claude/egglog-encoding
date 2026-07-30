@@ -80,7 +80,7 @@ pub const W: usize = 48;
 /// A fixed-width relation or binding row flowing through the DD dataflow. Input
 /// rows store relation columns in the low slots. Intermediate binding columns
 /// are assigned by the current `ProjectionPlan` stage, and captured outputs
-/// repack surviving variables into the low slots in [`JoinPlan::var_order`].
+/// repack surviving variables into the low slots in [`JoinPlan`]'s variable order.
 ///
 /// A NEWTYPE over `[u32; W]` (rather than the bare array) because timely's
 /// `ExchangeData` bound required by DD joins is
@@ -451,7 +451,7 @@ pub struct FusedDdJoin {
     /// The fused rules in caller-supplied build order. The sorted rule-index list
     /// identifies the ruleset cache entry but does not reorder these outputs.
     rules: Vec<FusedRule>,
-    /// Current epoch (monotonic; advanced once per [`step`]).
+    /// Current epoch (monotonic; advanced once per [`FusedDdJoin::step`]).
     epoch: u32,
 }
 

@@ -67,7 +67,8 @@ pub(crate) enum Ruleset {
 pub type NCommand = GenericNCommand<String, String>;
 /// [`ResolvedNCommand`] is another specialization of [`GenericNCommand`], which
 /// adds the type information to heads and leaves of commands.
-/// [`TypeInfo::typecheck_command`] turns an [`NCommand`] into a [`ResolvedNCommand`].
+/// [`EGraph::typecheck_command`](crate::EGraph::typecheck_command) turns an
+/// [`NCommand`] into a [`ResolvedNCommand`].
 pub(crate) type ResolvedNCommand = GenericNCommand<ResolvedCall, ResolvedVar>;
 
 /// A [`NCommand`] is a desugared [`Command`], where syntactic sugars

@@ -1006,7 +1006,7 @@ impl<'a> JoinState<'a> {
     /// Runs the free join plan, starting with the header.
     ///
     /// A bit about the `instr_order` parameter: This defines the order in which the [`JoinStage`]
-    /// instructions will run. We want to support cached [`SinglePlan`]s that may be based on stale
+    /// instructions will run. We want to support cached [`SinglePlan`](crate::free_join::plan::SinglePlan)s that may be based on stale
     /// ordering information. `instr_order` allows us to specify a new ordering of the instructions
     /// without mutating the plan itself: `run_plan` simply executes
     /// `plan.stages.instrs[instr_order[i]]` at stage `i`.

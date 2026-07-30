@@ -3,7 +3,7 @@
 	proof-tests benchmark-smoke nightly nightly-local nightly-uv nightly-rustup \
 	update-snapshots format \
 	python-lock python-format-check python-lint python-typecheck python-test \
-	rust-format-check rust-clippy rust-test
+	rust-format-check rust-clippy rust-doc-links rust-test
 
 BENCHMARK_SMOKE_REPORT ?= /tmp/egglog-encoding-bench-smoke.jsonl
 
@@ -47,7 +47,7 @@ python-test:
 
 rust-check: rust-nits rust-test
 
-rust-nits: rust-format-check rust-clippy
+rust-nits: rust-format-check rust-clippy rust-doc-links
 
 rust-format-check:
 	cargo fmt --all -- --check
@@ -59,6 +59,12 @@ rust-test:
 rust-clippy:
 	cargo clippy --workspace --all-targets -- -D warnings
 	cargo clippy -p egglog-experimental --features dd-backend --all-targets -- -D warnings
+
+# Clippy does not resolve doc links, and plain `cargo doc` skips the private
+# items most of this codebase documents, so a rename leaves stale links behind
+# unless rustdoc is run over them too.
+rust-doc-links:
+	RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --document-private-items --workspace
 
 # This is a name-filtered subset of rust-test, useful for proof iteration.
 proof-tests:

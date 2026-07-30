@@ -239,7 +239,7 @@ pub fn run_iteration(eg: &mut EGraph, rules: &[(usize, RuleSpec)]) -> Result<Ite
 
 /// Compute every rule's binding envs in ONE fused pass: the whole atom-bearing
 /// ruleset's body joins run on a SINGLE shared timely worker
-/// ([`dd_native::FusedDdJoin`]) clocked once this iteration, then each rule's
+/// ([`crate::dd_native::FusedDdJoin`]) clocked once this iteration, then each rule's
 /// host-side body primitives are re-run over its own bindings. Atom-less rules
 /// (`(rule () …)`) have no input relation to drive the DD dataflow, so they are
 /// fired once host-side. Returns a `Vec<Vec<Env>>` parallel to `rules` (same
