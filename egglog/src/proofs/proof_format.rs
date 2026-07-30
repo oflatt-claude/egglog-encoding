@@ -914,12 +914,13 @@ impl ProofStore {
                 };
                 // Premises are in body-fact order, so each pairs with its own fact's
                 // decision. There may be more premises than facts: `remove_globals`
-                // appends a lookup fact per global the rule mentions, and the encoder
-                // records a premise for each, while `prog` is the program from before
-                // that pass. Those extras are exactly the trailing ones, so dropping
-                // them is what pairs the rest correctly — but a *shorter* premise list
-                // would misalign the mask silently, so require the encoder's count to
-                // cover the body.
+                // appends a lookup fact per global the rule's *head* mentions, and the
+                // encoder records a premise for each, while `prog` is the program from
+                // before that pass. Those extras are exactly the trailing ones, so
+                // dropping them is what pairs the rest correctly — but a *shorter*
+                // premise list would misalign the mask silently, so require the
+                // encoder's count to cover the body (see
+                // `rule_premises_cover_the_written_body_facts`).
                 assert!(
                     converted_premises.len() >= reflex_mask.len(),
                     "rule {name} recorded {} premises for a body of {} facts",
