@@ -8,8 +8,10 @@
 //! substitution, and the rule proof's trailing *bridge* premises — the view-row
 //! proof of each subterm the head interned.
 //!
-//! [`HeadPlan`] is the one description of how a head lowers, read by the encoder
-//! and by conversion alike, so neither mirrors the other.
+//! [`HeadPlan`] is the one description of what each of a head's sites composes
+//! from, read by the encoder and by conversion alike. The numbering itself comes
+//! from [`crate::proofs::proof_sites`]; the walks here re-derive its order by
+//! counting and check the count against that module's site list.
 
 use crate::{
     TermId,
@@ -293,7 +295,14 @@ fn build_sites(plan: &mut HeadPlan) {
             ResolvedAction::Let(_, v, _) => plan.construct_into.get(&v.name),
             _ => None,
         };
-        let values: Vec<Option<SiteIndex>> = action_operands(action)
+        let operands: Vec<&ResolvedExpr> = action_operands(action).collect();
+        assert_eq!(
+            operands.len(),
+            sites.operands.len(),
+            "an action's operands must match the sites numbered for it"
+        );
+        let values: Vec<Option<SiteIndex>> = operands
+            .into_iter()
             .zip(&sites.operands)
             .map(|(expr, site)| {
                 let mut next = site.0;
@@ -427,16 +436,16 @@ fn closure(plan: &HeadPlan, site: SiteIndex, out: &mut Vec<SiteIndex>) {
 /// A firing states only a few of the propositions its sites have, so nothing is
 /// built until [`Self::role`] asks for it.
 pub(crate) struct Firing<'a> {
-    pub rule_name: &'a str,
-    pub plan: &'a HeadPlan,
+    rule_name: &'a str,
+    plan: &'a HeadPlan,
     /// The head's as-written propositions, in `conclusion_sites` order.
-    pub site_props: Vec<(SiteIndex, Proposition)>,
+    site_props: Vec<(SiteIndex, Proposition)>,
     /// The premises the rule body matched, one per body fact.
-    pub body_premises: Vec<ProofId>,
+    body_premises: Vec<ProofId>,
     /// The view-row proof of each interned subterm the composition needs, by
     /// build site.
-    pub bridges: HashMap<SiteIndex, ProofId>,
-    pub substitution: IndexMap<String, TermId>,
+    bridges: HashMap<SiteIndex, ProofId>,
+    substitution: IndexMap<String, TermId>,
     /// The proofs built so far, by the site reference each states.
     built: HashMap<(SiteIndex, SiteRole, bool), ProofId>,
     /// A build site -> its connector, `written = interned`.

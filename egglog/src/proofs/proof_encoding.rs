@@ -159,9 +159,18 @@ pub(crate) struct ProofInstrumentor<'a> {
 /// Statements held back until something reads the proof they bind.
 struct Pending {
     stmts: Vec<String>,
-    /// Whitespace-separated variables `stmts` reads, so the groups binding those
-    /// still deferred are emitted first.
-    reads: String,
+    /// The variables `stmts` reads, so the groups binding those still deferred
+    /// are emitted first.
+    reads: Vec<String>,
+}
+
+/// The variables a joined argument string names: its whitespace-separated
+/// tokens, with any wrapping parentheses stripped so a primitive call reads as
+/// the variables inside it.
+fn read_vars(args_joined: &str) -> impl Iterator<Item = &str> {
+    args_joined
+        .split_whitespace()
+        .map(|arg| arg.trim_matches(|c| c == '(' || c == ')'))
 }
 
 impl<'a> ProofInstrumentor<'a> {
@@ -1108,6 +1117,12 @@ impl<'a> ProofInstrumentor<'a> {
         stmts.push(format!("(set ({cproof} {fv}) {proof_var})"));
     }
 
+    /// A proof of `fv = fv` under `justification`, appending its mints to `stmts`.
+    ///
+    /// The caller must be at a site whose own conclusion is reflexive: a rule
+    /// justification's proof states whatever its site column says and is marked
+    /// reflexive regardless, so calling this at an equality site — a `union`'s —
+    /// would have the compositions built on it silently drop a real proof.
     pub(super) fn term_proof_for_justification(
         &mut self,
         stmts: &mut Vec<String>,
@@ -1272,17 +1287,17 @@ impl<'a> ProofInstrumentor<'a> {
     /// `proof`. A proof that nothing ends up reading is never bound, and
     /// [`Self::drop_pending_lookups`] discards it.
     ///
-    /// `reads` lists the variables `group` names besides `proof`, whitespace
-    /// separated. Any of them still deferred is emitted first, so a group need
-    /// not be self-contained: only what is bound outside the deferral machinery
-    /// altogether — a query variable, or a statement already emitted — has to be
-    /// in scope where the flush lands.
+    /// `reads` is the joined argument string naming the variables `group` uses
+    /// besides `proof`. Any of them still deferred is emitted first, so a group
+    /// need not be self-contained: only what is bound outside the deferral
+    /// machinery altogether — a query variable, or a statement already emitted —
+    /// has to be in scope where the flush lands.
     pub(crate) fn defer_lookup(&mut self, proof: &str, group: Vec<String>, reads: &str) {
         self.pending_lookups.insert(
             proof.to_string(),
             Pending {
                 stmts: group,
-                reads: reads.to_string(),
+                reads: read_vars(reads).map(str::to_owned).collect(),
             },
         );
     }
@@ -1296,7 +1311,7 @@ impl<'a> ProofInstrumentor<'a> {
     /// through [`Self::mint`] — a statement built by `format!` rather than as a
     /// row of its own.
     fn flush_lookups(&mut self, stmts: &mut Vec<String>, var: &str) {
-        self.emit_pending_lookups(stmts, var);
+        self.emit_pending_group(stmts, var);
     }
 
     /// Emit the deferred groups `args_joined` reads, and transitively the groups
@@ -1306,13 +1321,20 @@ impl<'a> ProofInstrumentor<'a> {
         if self.pending_lookups.is_empty() {
             return;
         }
-        for arg in args_joined.split_whitespace() {
-            let arg = arg.trim_matches(|c| c == '(' || c == ')');
-            if let Some(group) = self.pending_lookups.remove(arg) {
-                self.emit_pending_lookups(stmts, &group.reads);
-                stmts.extend(group.stmts);
-            }
+        for var in read_vars(args_joined) {
+            self.emit_pending_group(stmts, var);
         }
+    }
+
+    /// [`Self::emit_pending_lookups`] for the group bound to one variable.
+    fn emit_pending_group(&mut self, stmts: &mut Vec<String>, var: &str) {
+        let Some(group) = self.pending_lookups.remove(var) else {
+            return;
+        };
+        for read in &group.reads {
+            self.emit_pending_group(stmts, read);
+        }
+        stmts.extend(group.stmts);
     }
 
     /// Bind a fresh id of `sort`, asserting nothing about it.
@@ -1931,6 +1953,9 @@ impl<'a> ProofInstrumentor<'a> {
         // stale entries keyed by repeated user let names (e.g. `new-e`) from
         // earlier rules/merges, referencing out-of-scope vars.
         let mut nat_conn = NatConn::default();
+        // Same scope for the reflexive-proof names: they are globally fresh, so
+        // keeping earlier rules' would be harmless but unbounded.
+        self.reflexive.clear();
         let (facts, action_lookups, premises) = self.instrument_facts(&rule.body);
         let rule_name_var = if self.egraph.proof_state.proofs_enabled {
             self.egraph.parser.symbol_gen.fresh("rule_name")

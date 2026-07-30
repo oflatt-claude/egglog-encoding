@@ -445,22 +445,22 @@ impl<'a> ExecutionState<'a> {
         self.changed = true;
     }
 
-    /// Stage a batch of mutations against a single table.
+    /// Stage a batch of mutations against a single table, `mutate` receiving the
+    /// table's mutation buffer directly and returning how many rows it staged.
     ///
-    /// `mutate` receives the table's mutation buffer directly. The buffer lookup
-    /// and the "this table changed" notification happen once for the whole
-    /// batch, so they cost nothing per row.
-    fn stage_batch<R>(
+    /// The table is notified as changed once for the whole batch, unconditionally,
+    /// so `mutate` must stage at least one row.
+    fn stage_batch(
         &mut self,
         table: TableId,
-        mutate: impl FnOnce(&mut dyn MutationBuffer) -> R,
-    ) -> R {
+        mutate: impl FnOnce(&mut dyn MutationBuffer) -> usize,
+    ) {
         self.buffers
             .lazy_init(table, || self.db.table_info[table].table.new_buffer());
-        let res = mutate(&mut *self.buffers.buffers[table]);
+        let staged = mutate(&mut *self.buffers.buffers[table]);
+        debug_assert!(staged > 0, "a batch that stages nothing must not notify");
         self.buffers.notify_list.notify(table);
         self.changed = true;
-        res
     }
 
     /// Stage a removal of the given row from `table` if it is present.
@@ -613,12 +613,17 @@ impl<'a> ExecutionState<'a> {
     }
 }
 
-/// Row-sized scratch space, reused across the rows of one instruction so a
-/// per-row gather does not allocate.
+/// Scratch space holding one gathered row, reused across the rows of one
+/// instruction.
 type RowScratch = SmallVec<[Value; 12]>;
 
-/// Resolve `args` against `bindings` once, so gathering a row costs no
-/// per-column variable lookup.
+/// Where each column of a row comes from: one entry per element of `args`, in
+/// order.
+///
+/// A variable's entry borrows its whole binding slice, so [`gather_row`] indexes
+/// it by lane. Every such slice must therefore be at least as long as the mask
+/// the lanes come from; a shorter one panics rather than silently truncating the
+/// batch.
 fn row_sources<'a>(
     args: &[QueryEntry],
     bindings: &'a Bindings,
@@ -638,7 +643,8 @@ fn source_at(source: &ValueSource<'_, Value>, idx: usize) -> Value {
     }
 }
 
-/// Overwrite `out` with lane `idx` of `sources`.
+/// Overwrite `out` with lane `idx` of `sources`. Panics if any source slice is
+/// shorter than `idx + 1` (see [`row_sources`]).
 fn gather_row(sources: &[ValueSource<'_, Value>], idx: usize, out: &mut RowScratch) {
     out.clear();
     out.extend(sources.iter().map(|source| source_at(source, idx)));
@@ -824,10 +830,13 @@ impl ExecutionState<'_> {
                 let sources = row_sources(vals, bindings);
                 let mut row = RowScratch::new();
                 self.stage_batch(*table, |buf| {
+                    let mut staged = 0;
                     for idx in mask.ones() {
                         gather_row(&sources, idx, &mut row);
                         buf.stage_insert(&row);
+                        staged += 1;
                     }
+                    staged
                 });
             }
             Instr::InsertIfEq { table, l, r, vals } => match (l, r) {
@@ -865,10 +874,13 @@ impl ExecutionState<'_> {
                 let sources = row_sources(args, bindings);
                 let mut row = RowScratch::new();
                 self.stage_batch(*table, |buf| {
+                    let mut staged = 0;
                     for idx in mask.ones() {
                         gather_row(&sources, idx, &mut row);
                         buf.stage_remove(&row);
+                        staged += 1;
                     }
+                    staged
                 });
             }
             Instr::External { func, args, dst } => {

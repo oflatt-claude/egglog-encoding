@@ -17,7 +17,7 @@ use crate::{
 };
 
 /// A conclusion site's position in its rule head's canonical site order.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SiteIndex(pub usize);
 
 /// Which proposition *about* a conclusion site a rule proof states.

@@ -330,10 +330,14 @@ impl EGraph {
 
     /// Register the term encoder's `set-if-empty` canonicalize op for the FD
     /// view table named `view_name` (`n_keys` key columns), returning the
-    /// [`ExternalFunctionId`] its mint sites resolve to. At invoke: look up
-    /// `(view keys)`; if a row exists return its first output (the eclass);
-    /// otherwise insert `(keys, trailing-default-columns)` and return the first
-    /// default column. Serviced over this backend's db view table.
+    /// [`ExternalFunctionId`] its mint sites resolve to.
+    ///
+    /// Invoked as `(keys…, vals…)`, it returns the view's first output column
+    /// (the e-class) for `keys`: the existing row's when the key is present, and
+    /// otherwise the first of `vals` after staging `(keys, vals)`. A second
+    /// invocation with the same key inside one action batch sees the first one's
+    /// staged row, so the two agree — see
+    /// [`TableAction::lookup_or_insert_vals`].
     pub fn register_set_if_empty(
         &mut self,
         view_name: String,

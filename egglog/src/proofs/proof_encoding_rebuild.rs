@@ -329,12 +329,10 @@ impl ProofInstrumentor<'_> {
         )
     }
 
-    /// One rule that canonicalizes an FD view's stale value column.
+    /// One rule that canonicalizes an FD view's stale value column. A view whose
+    /// value *is* an e-class needs no rule of its own — the whole-row rebuild
+    /// canonicalizes that column too (see [`Self::indexed_rebuild_rule`]).
     ///
-    /// * [`ValueRebuild::Eclass`] (constructors/globals): the value *is* the
-    ///   e-class, so re-`set` the same key and let the congruence `:merge` keep the
-    ///   min. The row proof `canon = f(children)` is `Trans(Sym(key = leader), key =
-    ///   f(children))`.
     /// * [`ValueRebuild::CustomOutput`] (a custom function's eq-sort output):
     ///   `delete` the stale row first, so the re-`set` inserts without re-running
     ///   the user merge. The row proof rewrites the output child by `Congr` at its

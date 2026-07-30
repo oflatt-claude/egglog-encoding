@@ -7,7 +7,9 @@ mod tests {
     use crate::core::ResolvedCall;
     use crate::proofs::proof_checker::process_actions;
     use crate::proofs::proof_extraction::ProveExistsError;
-    use crate::proofs::proof_sites::{ConclusionSite, SiteConclusion, SiteIndex, conclusion_sites};
+    use crate::proofs::proof_sites::{
+        ConclusionSite, SiteConclusion, SiteIndex, action_sites, conclusion_sites,
+    };
     use crate::util::{HashMap, HashSet};
     use crate::{
         CommandOutput, EGraph, Error, ProofEncodingUnsupportedReason, TermDag, TermId,
@@ -143,6 +145,12 @@ mod tests {
                   ((set (Cost e) 1))
                   :name "cost")
 
+            ;; A `union` neither of whose operands is a matched variable, so the
+            ;; orientation check has to read both operands' own sites.
+            (rule ((Seen s))
+                  ((union (Neg s) (Add s s)))
+                  :name "both_built")
+
             (run 2)
             (prove (= (Add (Num 1) (Num 2)) (Add (Num 2) (Num 1))))
         "#;
@@ -159,7 +167,7 @@ mod tests {
             })
             .collect();
         let names: Vec<_> = rules.iter().map(|rule| rule.name.as_str()).collect();
-        for expected in ["commute", "nest", "cost"] {
+        for expected in ["commute", "nest", "cost", "both_built"] {
             assert!(
                 names.contains(&expected),
                 "rule '{expected}' not in {names:?}"
@@ -177,12 +185,7 @@ mod tests {
                 "rule '{}' enumerates the wrong conclusion sites",
                 rule.name
             );
-            assert_eq!(
-                described,
-                describe_sites(&conclusion_sites(actions.iter())),
-                "rule '{}' enumerates its conclusion sites differently each time",
-                rule.name
-            );
+            let per_action = action_sites(actions.iter());
             let mut term_dag = TermDag::default();
             let inputs = head_input_bindings(actions, &mut term_dag);
             let action_refs: Vec<_> = actions.iter().collect();
@@ -212,17 +215,25 @@ mod tests {
                     SiteConclusion::Reflexive(_) => {
                         assert_eq!(prop.lhs(), prop.rhs(), "{site_name} is not reflexive")
                     }
-                    // An equality site concludes its operands in the order written.
-                    SiteConclusion::Equality(ResolvedExpr::Var(_, var), _)
-                        if inputs.contains_key(&var.name) =>
-                    {
+                    // An equality site concludes its operands in the order
+                    // written. Each operand's own site is reflexive over the term
+                    // that operand evaluates to, so those pin the orientation
+                    // whatever the operands are written as.
+                    SiteConclusion::Equality(..) => {
+                        let [lhs_site, rhs_site] = per_action[site.action].operands[..] else {
+                            panic!("{site_name}: a union numbers both its operands");
+                        };
                         assert_eq!(
-                            Some(prop.lhs()),
-                            inputs.get(&var.name).copied(),
-                            "{site_name} concluded its operands in the wrong order"
-                        )
+                            prop.lhs(),
+                            ctx.site_propositions[lhs_site.0].1.lhs(),
+                            "{site_name} did not conclude its lhs operand on the left"
+                        );
+                        assert_eq!(
+                            prop.rhs(),
+                            ctx.site_propositions[rhs_site.0].1.lhs(),
+                            "{site_name} did not conclude its rhs operand on the right"
+                        );
                     }
-                    SiteConclusion::Equality(..) => {}
                 }
             }
         }
@@ -506,6 +517,14 @@ mod tests {
                  (rewrite (Add a b) (Add b a))",
             )
             .unwrap();
+        assert!(
+            !egraph
+                .proof_state
+                .proof_names
+                .rule_fused_declared
+                .contains(&2),
+            "the first program has no two-premise rule, so it must not declare that arity"
+        );
         // Two body facts, so a premise count the first program never declared.
         egraph
             .parse_and_run_program(
@@ -518,6 +537,99 @@ mod tests {
                            (Add (Num 2) (Add (Num 1) (Num 2)))))",
             )
             .unwrap();
+        assert!(
+            egraph
+                .proof_state
+                .proof_names
+                .rule_fused_declared
+                .contains(&2),
+            "the second program's two-premise rule should have declared that arity"
+        );
+    }
+
+    /// The encoder records one premise per body fact of the rule *after*
+    /// `remove_globals` appends a lookup fact per global the head mentions, while
+    /// the proof checker replays the rule as written, without those facts. Proof
+    /// conversion pairs premises with written facts by position, so the premise
+    /// count must cover the written body — the extras are exactly the trailing
+    /// ones.
+    #[test]
+    fn rule_premises_cover_the_written_body_facts() {
+        let source = r#"
+            (datatype Math (Add Math Math) (Num i64))
+            (relation Seen (Math))
+            (let g (Num 7))
+            ;; One written body fact, and a head that reads a global.
+            (rule ((Seen x)) ((Seen (Add x g))) :name "with_global")
+            ;; Two written body facts and no global.
+            (rule ((Seen x) (= x (Add a b))) ((Seen a)) :name "without_global")
+            (Seen (Num 1))
+            (run 2)
+            (prove (Seen (Add (Num 1) (Num 7))))
+        "#;
+
+        // The rules as the checker replays them: before `remove_globals`.
+        let mut checker = EGraph::new_with_proofs();
+        checker.parse_and_run_program(None, source).unwrap();
+        let written: HashMap<String, usize> = checker
+            .proof_check_program
+            .iter()
+            .filter_map(|cmd| match cmd {
+                GenericNCommand::NormRule { rule } => Some((rule.name.clone(), rule.body.len())),
+                _ => None,
+            })
+            .collect();
+
+        // The rules as the encoder emits them: the premise count is the arity of
+        // the `Rule_<k>` constructor each head writes.
+        let mut encoder = EGraph::new_with_proofs();
+        let commands = encoder.resolve_program(None, source).unwrap();
+        let names = encoder.proof_state.proof_names.clone();
+        let mut recorded: HashMap<String, usize> = HashMap::default();
+        for command in &commands {
+            let ResolvedCommand::Rule { rule } = command else {
+                continue;
+            };
+            if !written.contains_key(&rule.name) {
+                continue;
+            }
+            let premises = rule
+                .head
+                .0
+                .iter()
+                .filter_map(|action| match action {
+                    ResolvedAction::Set(_, ResolvedCall::Func(func), _, _) => {
+                        names.fused_rule_arity(&func.name)
+                    }
+                    _ => None,
+                })
+                .max()
+                .unwrap_or_else(|| panic!("rule '{}' wrote no inline rule proof", rule.name));
+            recorded.insert(rule.name.clone(), premises);
+        }
+
+        // Holds for every rule the checker replays, including the one `prove`
+        // generates.
+        for (name, premises) in &recorded {
+            let facts = written[name];
+            assert!(
+                *premises >= facts,
+                "rule '{name}' recorded {premises} premises for a body of {facts} written facts"
+            );
+        }
+        // Pin both sides of the inequality, so neither half can drift unnoticed:
+        // the global reference adds exactly one trailing lookup fact, and a rule
+        // without one records exactly its written facts.
+        assert_eq!(
+            recorded.get("with_global").copied(),
+            Some(written["with_global"] + 1),
+            "a head reading a global should record one extra premise"
+        );
+        assert_eq!(
+            recorded.get("without_global").copied(),
+            Some(written["without_global"]),
+            "a rule mentioning no global should record one premise per written fact"
+        );
     }
 
     #[test]
