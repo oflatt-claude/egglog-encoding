@@ -1,7 +1,7 @@
 #[doc = include_str!("proof_encoding.md")]
 use crate::proofs::proof_encoding_helpers::{EncodingNames, Justification, SharedEnd, SiteColumn};
 use crate::proofs::proof_head::{ConstructInto, HeadPlan, constructor_operand};
-use crate::proofs::proof_sites::{ActionSites, SiteIndex, SiteRef, SiteRole};
+use crate::proofs::proof_sites::{ActionSites, column, site_column};
 use crate::typechecking::FuncType;
 use crate::*;
 
@@ -29,10 +29,10 @@ pub(crate) struct NatEntry {
 pub(crate) enum Connector {
     /// A proof node the encoding already minted.
     Node(String),
-    /// A rule head's, named by site and role. The head's own conclusion at the
+    /// A rule head's, named by a site's column. The head's own conclusion at the
     /// site determines it (see [`crate::proofs::proof_head`]), so a row
     /// is minted only where the encoding stores the proof.
-    Role(SiteRef),
+    Column(usize, usize),
 }
 
 /// A constructor's *natural* node — children at their as-built ids — and the
@@ -153,7 +153,7 @@ pub(crate) struct ProofInstrumentor<'a> {
     /// [`crate::proofs::proof_sites::conclusion_sites`] numbers in. An action walker points it
     /// at each operand it evaluates, or sets it to `None` for an expression that
     /// names no site, such as a `change` argument.
-    site_cursor: Option<SiteIndex>,
+    site_cursor: Option<usize>,
 }
 
 /// Statements held back until something reads the proof they bind.
@@ -185,9 +185,9 @@ impl<'a> ProofInstrumentor<'a> {
     }
 
     /// The site of the expression being walked, advancing the cursor past it.
-    fn take_site(&mut self) -> Option<SiteIndex> {
+    fn take_site(&mut self) -> Option<usize> {
         let site = self.site_cursor?;
-        self.site_cursor = Some(SiteIndex(site.0 + 1));
+        self.site_cursor = Some(site + 1);
         Some(site)
     }
 
@@ -322,7 +322,7 @@ impl<'a> ProofInstrumentor<'a> {
         )
     }
 
-    /// Name a site's [`SiteRole::CanonicalReflexive`] proposition with a single
+    /// Name a site's [`column::CANONICAL_REFLEXIVE`] proposition with a single
     /// `Rule` row. Proof conversion rebuilds the composition this replaces.
     /// Panics unless the site is fixed at encoding time.
     fn canonical_reflexive_proof(
@@ -332,10 +332,9 @@ impl<'a> ProofInstrumentor<'a> {
     ) -> String {
         let site = justification
             .static_site()
-            .expect("a roled proof needs a site fixed at encoding time")
-            .with_role(SiteRole::CanonicalReflexive);
-        let roled = justification.at_site(site);
-        self.rule_row(stmts, &roled)
+            .expect("a composed proof needs a site fixed at encoding time");
+        let composed = justification.at(site, column::CANONICAL_REFLEXIVE);
+        self.rule_row(stmts, &composed)
     }
 
     /// Record a subterm's view-row proof as a bridge premise of the rule proofs
@@ -353,8 +352,8 @@ impl<'a> ProofInstrumentor<'a> {
     }
 
     /// A built term's connector proof as a proof node, minting the `Rule` row for
-    /// a roled one. Only the sites that *store* a connector need a row; everywhere
-    /// else proof conversion rebuilds it.
+    /// one named by a column. Only the sites that *store* a connector need a row;
+    /// everywhere else proof conversion rebuilds it.
     fn connector_node(
         &mut self,
         stmts: &mut Vec<String>,
@@ -363,9 +362,9 @@ impl<'a> ProofInstrumentor<'a> {
     ) -> String {
         match connector {
             Connector::Node(node) => node.clone(),
-            Connector::Role(site) => {
-                let roled = justification.at_site(*site);
-                self.rule_row(stmts, &roled)
+            Connector::Column(site, offset) => {
+                let composed = justification.at(*site, *offset);
+                self.rule_row(stmts, &composed)
             }
         }
     }
@@ -396,7 +395,7 @@ impl<'a> ProofInstrumentor<'a> {
         rhs: &str,
         justification: &Justification,
         nat_conn: &NatConn,
-        site: SiteIndex,
+        site: usize,
     ) -> String {
         let uf_name = self.uf_name(type_name);
         let smaller = format!("(ordering-min {lhs} {rhs})");
@@ -428,15 +427,15 @@ impl<'a> ProofInstrumentor<'a> {
             // same value ordering as `ordering-max`, over `i64` site columns here.
             let oriented = format!(
                 "(proof-of-max {lhs} {} {rhs} {})",
-                SiteRef::forward(site).encode(),
-                SiteRef::reversed(site).encode()
+                site_column(site, column::OWN),
+                site_column(site, column::OWN_REVERSED)
             );
             let proof = self.edge_proof(
                 stmts,
                 &to_ast_constructor,
                 &larger,
                 &smaller,
-                &justification.at_column(SiteColumn::Runtime(oriented, SiteRole::AsWritten)),
+                &justification.at_column(SiteColumn::Runtime(oriented, column::OWN)),
             );
             return format!("(set ({uf_name} {larger}) (values {smaller} {proof}))");
         }
@@ -455,19 +454,15 @@ impl<'a> ProofInstrumentor<'a> {
         if matches!(justification, Justification::Rule(..)) {
             let oriented = format!(
                 "(proof-of-max {lhs} {} {rhs} {})",
-                SiteRef::forward(site)
-                    .with_role(SiteRole::UnionEdge)
-                    .encode(),
-                SiteRef::reversed(site)
-                    .with_role(SiteRole::UnionEdge)
-                    .encode()
+                site_column(site, column::UNION_EDGE),
+                site_column(site, column::UNION_EDGE_REVERSED)
             );
             let edge = self.edge_proof(
                 stmts,
                 &to_ast_constructor,
                 &lhs_nat,
                 &rhs_nat,
-                &justification.at_column(SiteColumn::Runtime(oriented, SiteRole::UnionEdge)),
+                &justification.at_column(SiteColumn::Runtime(oriented, column::UNION_EDGE)),
             );
             return format!("(set ({uf_name} {larger}) (values {smaller} {edge}))");
         }
@@ -478,7 +473,7 @@ impl<'a> ProofInstrumentor<'a> {
             &to_ast_constructor,
             &lhs_nat,
             &rhs_nat,
-            &justification.at_site(SiteRef::forward(site)),
+            &justification.at(site, column::OWN),
         );
 
         // The shared natural form is the canonicalized side's natural (pinned
@@ -535,14 +530,14 @@ impl<'a> ProofInstrumentor<'a> {
         guest: &str,
         justification: &Justification,
         nat_conn: &mut NatConn,
-        site: SiteIndex,
+        site: usize,
     ) {
         let target = plan.target.as_str();
         let (func_type, args) = constructor_operand(expr)
             .expect("construct-into guest must be a constructor application");
         let ctor_name = func_type.name.clone();
         // The guest's own site is `site`; its operands' follow in pre-order.
-        self.site_cursor = Some(SiteIndex(site.0 + 1));
+        self.site_cursor = Some(site + 1);
         let child_vals: Vec<String> = args
             .iter()
             .map(|arg| self.instrument_action_expr(arg, res, justification, nat_conn))
@@ -584,7 +579,7 @@ impl<'a> ProofInstrumentor<'a> {
             &ctor_name,
             &view_sort,
             &child_vals,
-            &justification.at_site(SiteRef::forward(site)),
+            &justification.at(site, column::OWN),
             nat_conn,
         );
         let term_proof_ctor = self.term_proof_name(&sort_name);
@@ -598,7 +593,7 @@ impl<'a> ProofInstrumentor<'a> {
                     &sort_ast,
                     &target_nat,
                     &fv_nat,
-                    &justification.at_site(plan.edge),
+                    &justification.at(plan.union_site, plan.edge_column()),
                 );
                 let to_dedup = self.mint_trans(&edge, chain);
                 match target_conn.clone() {
@@ -614,8 +609,8 @@ impl<'a> ProofInstrumentor<'a> {
             // the whole composition, so one row records it and the edge proof it
             // is built from needs no row of its own.
             None => {
-                let roled = justification.at_site(plan.edge.with_role(SiteRole::GuestView));
-                self.rule_row(res, &roled)
+                let composed = justification.at(plan.union_site, column::GUEST_VIEW);
+                self.rule_row(res, &composed)
             }
         };
         // The guest's term keeps its own id (`fv_nat`); only the view VALUE uses
@@ -634,7 +629,7 @@ impl<'a> ProofInstrumentor<'a> {
                 let sv = self.mint_sym(&view_proof);
                 Connector::Node(self.mint_trans(chain, &sv))
             }
-            None => Connector::Role(plan.edge.with_role(SiteRole::GuestConnector)),
+            None => Connector::Column(plan.union_site, column::GUEST_CONNECTOR),
         };
         nat_conn.insert(
             guest.to_string(),
@@ -1030,7 +1025,7 @@ impl<'a> ProofInstrumentor<'a> {
                 let (add_code, _fv) = self.add_term_and_view(
                     func_type,
                     &exprs,
-                    &justification.at_site(SiteRef::forward(row_site)),
+                    &justification.at(row_site, column::OWN),
                     nat_conn,
                 );
                 res.extend(add_code);
@@ -1190,7 +1185,7 @@ impl<'a> ProofInstrumentor<'a> {
         e_value: &str,
         justification: &Justification,
         nat_conn: &NatConn,
-        row_site: SiteIndex,
+        row_site: usize,
     ) -> String {
         if let Some(NatEntry { connector, .. }) = nat_conn.get(e_value).cloned() {
             match connector {
@@ -1203,11 +1198,10 @@ impl<'a> ProofInstrumentor<'a> {
                 }
                 // A rule head setting a global: the site plus the value's bridge
                 // premises determine the proof, so one row records it.
-                Connector::Role(..) => {
+                Connector::Column(..) => {
                     let to_ast = self.fname_to_ast_name(&func_type.name).to_string();
-                    let roled = justification
-                        .at_site(SiteRef::forward(row_site).with_role(SiteRole::GlobalValue));
-                    self.edge_proof(res, &to_ast, e_value, e_value, &roled)
+                    let composed = justification.at(row_site, column::GLOBAL_VALUE);
+                    self.edge_proof(res, &to_ast, e_value, e_value, &composed)
                 }
             }
         } else {
@@ -1639,11 +1633,11 @@ impl<'a> ProofInstrumentor<'a> {
                 let sym_vprf = self.mint_sym(&vprf);
                 Connector::Node(self.mint_trans(chain, &sym_vprf))
             }
-            None => Connector::Role(
+            None => Connector::Column(
                 justification
                     .static_site()
-                    .expect("a rule proof names a site")
-                    .with_role(SiteRole::Connector),
+                    .expect("a rule proof names a site"),
+                column::CONNECTOR,
             ),
         };
 
@@ -1827,7 +1821,7 @@ impl<'a> ProofInstrumentor<'a> {
                     .collect::<Vec<_>>();
                 // This node's own conclusion is `t = t` for the term it builds.
                 let proof = &match site {
-                    Some(site) => proof.at_site(SiteRef::forward(site)),
+                    Some(site) => proof.at(site, column::OWN),
                     None => proof.at_column(SiteColumn::Missing),
                 };
                 match resolved_call {

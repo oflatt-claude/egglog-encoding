@@ -245,10 +245,10 @@ a correct equality proof. Trace this rule:
 
 The body match binds `a b c rewrite_var` and yields the rule's premise proof,
 carried inline as `prems`. Every proof minted below is a rule proof
-`(Rule_1 rule_name prems site)`, where `site` names a position in the rule head
-*together with which of that position's propositions the row states* — its
-`SiteRole`, see `proof_sites.rs`. The site is the whole conclusion: nothing about
-the proposition is stored. Term, AST, and proof nodes are all relations, so a new
+`(Rule_1 rule_name prems site)`, where `site` is one integer naming a position in
+the rule head *together with which of that position's proofs the row states* —
+see `proof_sites.rs`. The site is the whole conclusion: nothing about the
+proposition is stored. Term, AST, and proof nodes are all relations, so a new
 node is a fresh id plus a row `set` (written inline below — `(Rule_1 …)` means
 "mint a proof id and `set` its `Rule_1` row").
 
@@ -270,8 +270,8 @@ carrying the premises inline, that row is a `RuleLink` naming the row below it
 plus the one bridge recorded since.
 
 No `Congr`, `Trans` or `Sym` row is emitted anywhere in a rule head. Each such
-composition is fixed by the site, the role, and the bridges the rule proof
-carries, so proof conversion rebuilds it from those (see `proof_head.rs`). Only a
+composition is fixed by the site column and the bridges the rule proof carries, so
+proof conversion rebuilds it from those (see `proof_head.rs`). Only a
 top-level action — justified by `Fiat`, with no site to name — spells the
 composition out in rows.
 

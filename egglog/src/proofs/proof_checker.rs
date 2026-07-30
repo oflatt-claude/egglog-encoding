@@ -16,7 +16,7 @@ use crate::{
     core::ResolvedCall,
     proofs::{
         proof_format::{Justification, ProofId, ProofStore, Proposition},
-        proof_sites::{SiteConclusion, SiteIndex, SiteRef, conclusion_sites},
+        proof_sites::{SiteConclusion, column, conclusion_sites, decode},
     },
     typechecking::FuncType,
     util::{HashMap, HashSet, IndexMap, SymbolGen},
@@ -52,7 +52,7 @@ pub(crate) struct ActionContext {
     pub propositions: HashSet<Proposition>,
     /// The proposition each conclusion site concludes, in the canonical order of
     /// [`conclusion_sites`]. Every entry is also in `propositions`.
-    pub site_propositions: Vec<(SiteIndex, Proposition)>,
+    pub site_propositions: Vec<(usize, Proposition)>,
 }
 
 /// Gathers all global CoreActions from a program.
@@ -144,7 +144,7 @@ pub(crate) fn process_actions(
                     Proposition::new(lhs_term, rhs_term)
                 }
             };
-            site_propositions.push((SiteIndex(next_site), prop));
+            site_propositions.push((next_site, prop));
             next_site += 1;
         }
 
@@ -1287,7 +1287,7 @@ impl ProofStore {
         subst_with_globals: &HashMap<String, TermId>,
         claimed: &Proposition,
         rule_name: &str,
-        site: SiteRef,
+        site: i64,
     ) -> Result<(), ProofCheckError> {
         // Use process_actions to get propositions from the rule head
         // Note: process_actions expects global variable bindings, but substitution
@@ -1302,10 +1302,20 @@ impl ProofStore {
         // reflexive equality for every subterm of every head expression and both
         // directions of every `union`, so it would accept a proof stamped with one
         // site whose proposition belongs to another.
-        if let Some((_, prop)) = action_ctx.site_propositions.get(site.index.0)
-            && site.orient(prop) == *claimed
+        // Conversion states only a head's own conclusions as rule proofs, so only
+        // a site's two own-conclusion columns can appear here.
+        let (site, offset) = decode(site);
+        if let Some((_, prop)) = action_ctx.site_propositions.get(site)
+            && offset < column::FIRST_COMPOSED
         {
-            return Ok(());
+            let oriented = if offset == column::OWN_REVERSED {
+                Proposition::new(prop.rhs(), prop.lhs())
+            } else {
+                prop.clone()
+            };
+            if oriented == *claimed {
+                return Ok(());
+            }
         }
 
         Err(ProofCheckErrorKind::RuleHeadMismatch {

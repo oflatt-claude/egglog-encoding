@@ -12,7 +12,7 @@ use crate::{
     core::ResolvedCall,
     proofs::{
         proof_encoding::ProofInstrumentor,
-        proof_sites::{SiteRef, SiteRole},
+        proof_sites::{column, site_column},
     },
     util::{FreshGen, HashMap, HashSet, SymbolGen},
 };
@@ -103,16 +103,16 @@ pub(crate) enum SharedEnd {
     Rhs,
 }
 
-/// The conclusion-site column of a rule proof: an `i64` naming the site of the
-/// rule head the proof is about, encoded by [`SiteRef::encode`].
+/// The conclusion-site column of a rule proof: an `i64` naming which proof of
+/// which site of the rule head the row is, encoded by [`site_column`].
 #[derive(Clone)]
 pub(crate) enum SiteColumn {
-    /// A site fixed at encoding time.
-    Static(SiteRef),
-    /// An `i64`-valued expression selecting between the two orientations of one
-    /// role, for a `union` whose direction is only known once the ids being
-    /// unioned are compared.
-    Runtime(String, SiteRole),
+    /// A site and column offset both fixed at encoding time.
+    At(usize, usize),
+    /// An `i64`-valued expression selecting between the two directions of one of
+    /// a site's proofs, for a `union` whose direction is only known once the ids
+    /// being unioned are compared. The offset is the forward one.
+    Runtime(String, usize),
     /// No site: reading such a proof back panics, so a mint site the encoder
     /// forgot to place fails loudly instead of silently claiming site 0.
     Missing,
@@ -122,9 +122,17 @@ impl SiteColumn {
     /// The column value as an egglog expression.
     fn expr(&self) -> String {
         match self {
-            SiteColumn::Static(site) => site.encode().to_string(),
+            SiteColumn::At(site, offset) => site_column(*site, *offset).to_string(),
             SiteColumn::Runtime(expr, _) => expr.clone(),
             SiteColumn::Missing => "-1".to_string(),
+        }
+    }
+
+    /// Which of the site's proofs the column names.
+    fn offset(&self) -> Option<usize> {
+        match self {
+            SiteColumn::At(_, offset) | SiteColumn::Runtime(_, offset) => Some(*offset),
+            SiteColumn::Missing => None,
         }
     }
 }
@@ -163,17 +171,17 @@ impl Justification {
         }
     }
 
-    /// [`Self::at_column`] for a site fixed at encoding time.
-    pub(crate) fn at_site(&self, site: SiteRef) -> Justification {
-        self.at_column(SiteColumn::Static(site))
+    /// [`Self::at_column`] for a site and column offset fixed at encoding time.
+    pub(crate) fn at(&self, site: usize, offset: usize) -> Justification {
+        self.at_column(SiteColumn::At(site, offset))
     }
 
     /// The site this justification is about, when it is a rule justification with
-    /// a site fixed at encoding time. Naming another of the site's propositions
-    /// by [`SiteRole`] needs one.
-    pub(crate) fn static_site(&self) -> Option<SiteRef> {
+    /// a site fixed at encoding time. Naming another of the site's proofs needs
+    /// one.
+    pub(crate) fn static_site(&self) -> Option<usize> {
         match self {
-            Justification::Rule(_, _, SiteColumn::Static(site)) => Some(*site),
+            Justification::Rule(_, _, SiteColumn::At(site, _)) => Some(*site),
             _ => None,
         }
     }
@@ -190,12 +198,12 @@ impl Justification {
     /// has to name their view-row proofs as bridge premises. False for a proof
     /// stating the head's own conclusion, which is composed from nothing.
     pub(crate) fn needs_bridges(&self) -> bool {
-        let role = match self {
-            Justification::Rule(_, _, SiteColumn::Static(site)) => site.role,
-            Justification::Rule(_, _, SiteColumn::Runtime(_, role)) => *role,
-            _ => return false,
-        };
-        role != SiteRole::AsWritten
+        match self {
+            Justification::Rule(_, _, site) => site
+                .offset()
+                .is_some_and(|off| off >= column::FIRST_COMPOSED),
+            _ => false,
+        }
     }
 }
 

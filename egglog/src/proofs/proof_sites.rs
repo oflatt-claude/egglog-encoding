@@ -1,10 +1,11 @@
-//! The conclusion sites of a rule head.
+//! The conclusion sites of a rule head, and the columns their proofs are named
+//! by.
 //!
 //! A rule head concludes one proposition per site. [`conclusion_sites`] is the
 //! only place the sites are numbered: every consumer — the proof checker
 //! replaying a head, the encoder tagging a proof with the site it concludes at —
 //! must read the order from it rather than recompute it, so a proof that names a
-//! [`SiteIndex`] means the same thing on both sides. [`action_sites`] is the same
+//! column means the same thing on both sides. [`action_sites`] is the same
 //! numbering arranged by action, for a consumer that walks the head's syntax
 //! instead of the flat site list.
 
@@ -13,125 +14,64 @@ use std::borrow::Cow;
 use crate::{
     ast::{GenericAction, ResolvedAction, ResolvedExpr, Span},
     core::ResolvedCall,
-    proofs::proof_format::Proposition,
 };
 
-/// A conclusion site's position in its rule head's canonical site order.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct SiteIndex(pub usize);
+/// How many columns a conclusion site owns. Each is one proof of the head's
+/// lowering, named by [`site_column`].
+pub(crate) const PROOFS_PER_SITE: usize = 4;
 
-/// Which proposition *about* a conclusion site a rule proof states.
+/// Which proof of a conclusion site a rule proof's column names.
 ///
-/// Only [`SiteRole::AsWritten`] is a conclusion of the head. A head that builds
-/// a term also needs the same term over its children's representatives and the
-/// edges between the two, which are composed from the site's own equality; proof
-/// conversion synthesizes that composition from the role, the site, and the rule
-/// proof's trailing bridge premises.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum SiteRole {
-    /// The site's own equality, over the terms the head wrote.
-    AsWritten,
+/// A site's first two columns are the head's own conclusion there, in each
+/// direction. The other two are proofs the head's lowering composes over it,
+/// which only a site that builds something has; which composites they are is
+/// decided by what the head does at that site, so the aliases below overlap (see
+/// [`crate::proofs::proof_head`]).
+pub(crate) mod column {
+    /// The head's own conclusion, over the terms it wrote.
+    pub(crate) const OWN: usize = 0;
+    /// The same conclusion with its two sides swapped.
+    pub(crate) const OWN_REVERSED: usize = 1;
+    /// The first column a site's lowering composes into.
+    pub(crate) const FIRST_COMPOSED: usize = 2;
     /// `t = t` for a build site's term with every built child replaced by the
     /// e-class its view interned it into.
-    CanonicalReflexive,
+    pub(crate) const CANONICAL_REFLEXIVE: usize = 2;
     /// `written = interned` for a build site.
-    Connector,
+    pub(crate) const CONNECTOR: usize = 3;
     /// A construct-into guest's view-row proof: the target's e-class equals the
     /// guest's term over its children's representatives.
-    GuestView,
+    pub(crate) const GUEST_VIEW: usize = 2;
     /// A construct-into guest's connector: the guest as written equals the
     /// target's e-class.
-    GuestConnector,
-    /// A `union`'s union-find edge, `larger = smaller`, routed through the
+    pub(crate) const GUEST_CONNECTOR: usize = 3;
+    /// A kept `union`'s union-find edge, `larger = smaller`, routed through the
     /// operands' written forms.
-    UnionEdge,
-    /// A global's stored value proof: `value = value`, routed through the
-    /// written form of the term it aliases.
-    GlobalValue,
+    pub(crate) const UNION_EDGE: usize = 2;
+    /// The same edge with its two sides swapped.
+    pub(crate) const UNION_EDGE_REVERSED: usize = 3;
+    /// A global's stored value proof: `value = value`, routed through the written
+    /// form of the term it aliases.
+    pub(crate) const GLOBAL_VALUE: usize = 2;
 }
 
-impl SiteRole {
-    /// Every role, in the order [`Self::code`] numbers them.
-    const ALL: [SiteRole; 7] = [
-        SiteRole::AsWritten,
-        SiteRole::CanonicalReflexive,
-        SiteRole::Connector,
-        SiteRole::GuestView,
-        SiteRole::GuestConnector,
-        SiteRole::UnionEdge,
-        SiteRole::GlobalValue,
-    ];
-
-    fn code(self) -> usize {
-        Self::ALL.iter().position(|r| *r == self).unwrap()
-    }
+/// The integer a rule proof's site column stores: which proof of `site`'s block
+/// the row is, so the whole column is one value the encoder can compute with a
+/// single primitive call.
+pub(crate) fn site_column(site: usize, offset: usize) -> i64 {
+    debug_assert!(offset < PROOFS_PER_SITE, "column offset out of range");
+    (site * PROOFS_PER_SITE + offset) as i64
 }
 
-/// A conclusion site, which way round a proof states it, and which of the
-/// site's propositions the proof states.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct SiteRef {
-    pub index: SiteIndex,
-    /// The proof concludes `rhs = lhs` for a site whose equality is `lhs = rhs`.
-    pub reversed: bool,
-    pub role: SiteRole,
-}
-
-impl SiteRef {
-    /// The site as written.
-    pub(crate) fn forward(index: SiteIndex) -> Self {
-        Self {
-            index,
-            reversed: false,
-            role: SiteRole::AsWritten,
-        }
-    }
-
-    /// The site with its two sides swapped.
-    pub(crate) fn reversed(index: SiteIndex) -> Self {
-        Self {
-            index,
-            reversed: true,
-            role: SiteRole::AsWritten,
-        }
-    }
-
-    /// The same reference stating `role` instead.
-    pub(crate) fn with_role(self, role: SiteRole) -> Self {
-        Self { role, ..self }
-    }
-
-    /// The integer a rule proof's site column stores: index, direction and role
-    /// packed together, so the whole column is one value the encoder can compute
-    /// with a single primitive call.
-    pub(crate) fn encode(self) -> i64 {
-        let oriented = self.index.0 * 2 + self.reversed as usize;
-        (oriented * SiteRole::ALL.len() + self.role.code()) as i64
-    }
-
-    /// Read back [`Self::encode`]. Panics on a value that names no site.
-    pub(crate) fn decode(raw: i64) -> Self {
-        assert!(
-            raw >= 0,
-            "rule proof was emitted without a conclusion site (site column {raw})"
-        );
-        let raw = raw as usize;
-        let oriented = raw / SiteRole::ALL.len();
-        Self {
-            index: SiteIndex(oriented / 2),
-            reversed: oriented % 2 == 1,
-            role: SiteRole::ALL[raw % SiteRole::ALL.len()],
-        }
-    }
-
-    /// `prop` stated the way this reference states it.
-    pub(crate) fn orient(self, prop: &Proposition) -> Proposition {
-        if self.reversed {
-            Proposition::new(prop.rhs, prop.lhs)
-        } else {
-            prop.clone()
-        }
-    }
+/// Read back [`site_column`] as `(site, offset)`. Panics on a value that names no
+/// site.
+pub(crate) fn decode(raw: i64) -> (usize, usize) {
+    assert!(
+        raw >= 0,
+        "rule proof was emitted without a conclusion site (site column {raw})"
+    );
+    let raw = raw as usize;
+    (raw / PROOFS_PER_SITE, raw % PROOFS_PER_SITE)
 }
 
 /// The proposition a conclusion site stands for.
@@ -140,12 +80,12 @@ pub(crate) enum SiteConclusion<'a> {
     /// the synthesized row call `(func args… value)`.
     Reflexive(Cow<'a, ResolvedExpr>),
     /// `lhs = rhs`, for the terms a `union`'s operands evaluate to. The reverse
-    /// direction is [`SiteRef::reversed`] of this site, not a site of its own.
+    /// direction is [`column::OWN_REVERSED`] of this site, not a site of its own.
     Equality(&'a ResolvedExpr, &'a ResolvedExpr),
 }
 
 /// One position in a rule head that the head concludes a proposition at. A
-/// site's [`SiteIndex`] is its position in [`conclusion_sites`]' output.
+/// site is identified by its position in [`conclusion_sites`]' output.
 pub(crate) struct ConclusionSite<'a> {
     /// Position of this site's action in the head.
     pub action: usize,
@@ -159,12 +99,12 @@ pub(crate) struct ConclusionSite<'a> {
 pub(crate) struct ActionSites {
     /// The action's own conclusion: a `union`'s equality or a `set`'s row.
     /// `let`, `expr`, `panic` and `change` have none.
-    pub own: Option<SiteIndex>,
+    pub own: Option<usize>,
     /// The site of each expression the action evaluates, in the order
     /// [`conclusion_sites`] visits them: a `union`'s two operands, a `set`'s
     /// arguments then its value, a `let`'s or `expr`'s single expression.
     /// Empty for `panic` and `change`.
-    pub operands: Vec<SiteIndex>,
+    pub operands: Vec<usize>,
 }
 
 /// Enumerate the conclusion sites of a rule head, in canonical order: actions in
@@ -243,7 +183,7 @@ fn push_expr_sites<'a>(
     sites: &mut Vec<ConclusionSite<'a>>,
     at: usize,
     expr: &'a ResolvedExpr,
-) -> SiteIndex {
+) -> usize {
     let index = push_site(sites, at, SiteConclusion::Reflexive(Cow::Borrowed(expr)));
     if let ResolvedExpr::Call(_, _, args) = expr {
         for arg in args {
@@ -257,8 +197,8 @@ fn push_site<'a>(
     sites: &mut Vec<ConclusionSite<'a>>,
     at: usize,
     conclusion: SiteConclusion<'a>,
-) -> SiteIndex {
-    let index = SiteIndex(sites.len());
+) -> usize {
+    let index = sites.len();
     sites.push(ConclusionSite {
         action: at,
         conclusion,

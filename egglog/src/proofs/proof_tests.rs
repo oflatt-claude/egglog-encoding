@@ -8,7 +8,7 @@ mod tests {
     use crate::proofs::proof_checker::process_actions;
     use crate::proofs::proof_extraction::ProveExistsError;
     use crate::proofs::proof_sites::{
-        ConclusionSite, SiteConclusion, SiteIndex, action_sites, conclusion_sites,
+        ConclusionSite, SiteConclusion, action_sites, conclusion_sites,
     };
     use crate::util::{HashMap, HashSet};
     use crate::{
@@ -201,12 +201,8 @@ mod tests {
             for (position, (site, (index, prop))) in
                 sites.iter().zip(&ctx.site_propositions).enumerate()
             {
-                let site_name = format!("rule '{}' site {}", rule.name, index.0);
-                assert_eq!(
-                    *index,
-                    SiteIndex(position),
-                    "{site_name} resolved out of order"
-                );
+                let site_name = format!("rule '{}' site {}", rule.name, index);
+                assert_eq!(*index, position, "{site_name} resolved out of order");
                 assert!(
                     ctx.propositions.contains(prop),
                     "{site_name} concluded a proposition the head does not imply"
@@ -225,12 +221,12 @@ mod tests {
                         };
                         assert_eq!(
                             prop.lhs(),
-                            ctx.site_propositions[lhs_site.0].1.lhs(),
+                            ctx.site_propositions[lhs_site].1.lhs(),
                             "{site_name} did not conclude its lhs operand on the left"
                         );
                         assert_eq!(
                             prop.rhs(),
-                            ctx.site_propositions[rhs_site.0].1.lhs(),
+                            ctx.site_propositions[rhs_site].1.lhs(),
                             "{site_name} did not conclude its rhs operand on the right"
                         );
                     }

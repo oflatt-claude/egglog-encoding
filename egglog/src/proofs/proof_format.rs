@@ -11,7 +11,6 @@ use crate::{
         },
         proof_encoding_helpers::{EncodingNames, SharedEnd},
         proof_head::{Firing, HeadPlan, congr, sym, trans},
-        proof_sites::{SiteIndex, SiteRef},
     },
     typechecking::{FuncType, PrimitiveValidator},
     util::{HashMap, HashSet, IEntry, IndexMap, IndexSet, SymbolGen},
@@ -119,7 +118,8 @@ struct RuleColumns {
     /// One per subterm the head interned before this site, in construction order.
     bridges: Vec<TermId>,
     /// The conclusion site of the row asked about, as an `i64` term
-    /// ([`SiteRef::encode`]); the rows further down the chain state earlier sites.
+    /// ([`crate::proofs::proof_sites::site_column`]); the rows further down the
+    /// chain state earlier sites.
     site: TermId,
 }
 
@@ -170,7 +170,8 @@ enum RawProof {
     /// The second list holds one *bridge* premise per subterm the head interned —
     /// the view-row proof that says which e-class it landed in — in construction
     /// order. The site names which of the head's conclusions the proof is about
-    /// and which of that site's propositions it states ([`SiteRef::encode`]);
+    /// and which of that site's proofs it states
+    /// ([`crate::proofs::proof_sites::site_column`]);
     /// conversion derives the equality from those and the bridges, so the row
     /// stores no terms.
     Rule(String, Vec<RawProofId>, Vec<RawProofId>, i64),
@@ -265,7 +266,7 @@ pub struct ProofStore {
 pub(crate) enum SynthKey {
     /// A rule head's own conclusion: the rule, which of its sites, and the
     /// premises that fix the substitution.
-    Rule(String, SiteRef, Vec<ProofId>),
+    Rule(String, i64, Vec<ProofId>),
     Sym(ProofId),
     Trans(ProofId, ProofId),
     Congr(ProofId, usize, ProofId),
@@ -350,7 +351,7 @@ pub enum Justification {
         substitution: IndexMap<String, TermId>,
         /// The head conclusion site the [`Proposition`] comes from: replaying the
         /// head under `substitution` and reading this site reproduces it.
-        site: SiteRef,
+        site: i64,
     },
     /// Given two proofs f(c1, c2, ..., old) = f(c1, c2, ..., old) and f(c1, c2, ..., new) = f(c1, c2, ..., new),
     /// proves either:
@@ -872,7 +873,6 @@ impl ProofStore {
                 justification: Justification::Fiat,
             },
             RawProof::Rule(name, premise_proofs, bridge_proofs, raw_site) => {
-                let site = SiteRef::decode(*raw_site);
                 let converted_premises: Vec<ProofId> = premise_proofs
                     .iter()
                     .map(|pid| self.convert_raw_proof(prog, globals, raw_store, *pid))
@@ -945,7 +945,7 @@ impl ProofStore {
                         Some(store.convert_raw_proof(prog, globals, raw_store, raw))
                     }),
                 );
-                let proof_id = firing.role(self, site);
+                let proof_id = firing.column(self, *raw_site);
                 self.proof_id.insert(raw_proof.clone(), proof_id);
                 return proof_id;
             }
@@ -1110,7 +1110,7 @@ impl ProofStore {
         globals: &HashMap<String, TermId>,
         rule_name: &str,
         substitution: &IndexMap<String, TermId>,
-    ) -> Vec<(SiteIndex, Proposition)> {
+    ) -> Vec<(usize, Proposition)> {
         let rule = rule_named(prog, rule_name);
         let actions: Vec<_> = rule.head.0.iter().collect();
         let mut bindings = globals.clone();
