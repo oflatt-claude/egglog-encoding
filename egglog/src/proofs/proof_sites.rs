@@ -2,7 +2,7 @@
 //! by.
 //!
 //! A rule head concludes one proposition per site. [`conclusion_sites`] is the
-//! only place the sites are numbered: every consumer — the proof checker
+//! only place the sites are numbered: every consumer — proof conversion
 //! replaying a head, the encoder tagging a proof with the site it concludes at —
 //! must read the order from it rather than recompute it, so a proof that names a
 //! column means the same thing on both sides. [`action_sites`] is the same

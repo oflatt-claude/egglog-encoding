@@ -7,6 +7,7 @@ mod tests {
     use crate::core::ResolvedCall;
     use crate::proofs::proof_checker::process_actions;
     use crate::proofs::proof_extraction::ProveExistsError;
+    use crate::proofs::proof_head::site_conclusions;
     use crate::proofs::proof_sites::{
         ConclusionSite, SiteConclusion, action_sites, conclusion_sites,
     };
@@ -115,12 +116,12 @@ mod tests {
             .collect()
     }
 
-    /// A rule head's conclusion sites are the one enumeration the proof checker
+    /// A rule head's conclusion sites are the one enumeration proof conversion
     /// and the proof encoder both index into, so nothing may recompute the
     /// order. Pin it: the sites are exactly the pre-order of each action's
-    /// expressions (plus one equality per `union`), they are numbered densely
-    /// from zero, and processing the head resolves each of them, in that same
-    /// order, to a proposition the head implies.
+    /// expressions (plus one equality per `union`), and replaying the head
+    /// resolves each of them, in that same order, to a proposition the head
+    /// implies.
     #[test]
     fn conclusion_sites_index_every_rule_head_proposition() {
         let source = r#"
@@ -191,18 +192,17 @@ mod tests {
             let action_refs: Vec<_> = actions.iter().collect();
             let ctx = process_actions(&rule.name, inputs.clone(), &action_refs, &mut term_dag)
                 .unwrap_or_else(|e| panic!("rule '{}' head did not process: {e}", rule.name));
+            let concluded = site_conclusions(&rule.name, inputs.clone(), actions, &mut term_dag)
+                .unwrap_or_else(|e| panic!("rule '{}' head did not replay: {e}", rule.name));
 
             assert_eq!(
-                ctx.site_propositions.len(),
+                concluded.len(),
                 sites.len(),
                 "rule '{}' resolved a different number of sites than it enumerates",
                 rule.name
             );
-            for (position, (site, (index, prop))) in
-                sites.iter().zip(&ctx.site_propositions).enumerate()
-            {
+            for (index, (site, prop)) in sites.iter().zip(&concluded).enumerate() {
                 let site_name = format!("rule '{}' site {}", rule.name, index);
-                assert_eq!(*index, position, "{site_name} resolved out of order");
                 assert!(
                     ctx.propositions.contains(prop),
                     "{site_name} concluded a proposition the head does not imply"
@@ -221,12 +221,12 @@ mod tests {
                         };
                         assert_eq!(
                             prop.lhs(),
-                            ctx.site_propositions[lhs_site].1.lhs(),
+                            concluded[lhs_site].lhs(),
                             "{site_name} did not conclude its lhs operand on the left"
                         );
                         assert_eq!(
                             prop.rhs(),
-                            ctx.site_propositions[rhs_site].1.lhs(),
+                            concluded[rhs_site].lhs(),
                             "{site_name} did not conclude its rhs operand on the right"
                         );
                     }

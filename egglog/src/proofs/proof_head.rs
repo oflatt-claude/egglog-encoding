@@ -20,15 +20,20 @@
 //! merge body.
 
 use crate::{
-    TermId,
+    TermDag, TermId,
     ast::{
-        FunctionSubtype, GenericExpr, ResolvedAction, ResolvedExpr, ResolvedExprExt, ResolvedVar,
+        FunctionSubtype, GenericAction, GenericExpr, ResolvedAction, ResolvedExpr, ResolvedExprExt,
+        ResolvedVar,
     },
     core::ResolvedCall,
     proofs::{
+        proof_checker::{ProofCheckError, eval_expr_with_subst},
         proof_encoding::ProofInstrumentor,
         proof_format::{Justification, Proof, ProofId, ProofStore, Proposition, SynthKey},
-        proof_sites::{ActionSites, action_sites, column, decode, site_column},
+        proof_sites::{
+            ActionSites, SiteConclusion, action_sites, column, conclusion_sites, decode,
+            site_column,
+        },
     },
     typechecking::FuncType,
     util::{HashMap, HashSet, IndexMap},
@@ -462,6 +467,44 @@ fn record_bridges(
     Some(site)
 }
 
+/// What the head's conclusion sites conclude under `bindings`, indexed by site.
+///
+/// Each site is resolved under the bindings in effect at its action, so a `let`
+/// binds only for the sites that follow it.
+///
+/// Errors if the head does not evaluate under `bindings`.
+pub(crate) fn site_conclusions(
+    rule_name: &str,
+    mut bindings: HashMap<String, TermId>,
+    actions: &[ResolvedAction],
+    term_dag: &mut TermDag,
+) -> Result<Vec<Proposition>, ProofCheckError> {
+    let sites = conclusion_sites(actions);
+    let mut conclusions = Vec::with_capacity(sites.len());
+    let mut bound_through = 0;
+    for site in sites {
+        while bound_through < site.action {
+            if let GenericAction::Let(_, var, expr) = &actions[bound_through] {
+                let (term, _) = eval_expr_with_subst(rule_name, expr, term_dag, &bindings)?;
+                bindings.insert(var.name.clone(), term);
+            }
+            bound_through += 1;
+        }
+        conclusions.push(match &site.conclusion {
+            SiteConclusion::Reflexive(expr) => {
+                let (term, _) = eval_expr_with_subst(rule_name, expr, term_dag, &bindings)?;
+                Proposition::new(term, term)
+            }
+            SiteConclusion::Equality(lhs, rhs) => {
+                let (lhs, _) = eval_expr_with_subst(rule_name, lhs, term_dag, &bindings)?;
+                let (rhs, _) = eval_expr_with_subst(rule_name, rhs, term_dag, &bindings)?;
+                Proposition::new(lhs, rhs)
+            }
+        });
+    }
+    Ok(conclusions)
+}
+
 /// One firing of a rule head, and the proofs asked of it so far.
 ///
 /// A firing states only a few of the propositions its sites have, so nothing is
@@ -469,8 +512,8 @@ fn record_bridges(
 pub(crate) struct Firing<'a> {
     rule_name: &'a str,
     plan: &'a HeadPlan,
-    /// The head's as-written propositions, in `conclusion_sites` order.
-    site_props: Vec<(usize, Proposition)>,
+    /// The head's as-written propositions, indexed by site.
+    site_props: Vec<Proposition>,
     /// The premises the rule body matched, one per body fact.
     body_premises: Vec<ProofId>,
     /// The view-row proof the head recorded at a bridge position, converted on
@@ -487,7 +530,7 @@ impl<'a> Firing<'a> {
     pub(crate) fn new(
         rule_name: &'a str,
         plan: &'a HeadPlan,
-        site_props: Vec<(usize, Proposition)>,
+        site_props: Vec<Proposition>,
         body_premises: Vec<ProofId>,
         substitution: IndexMap<String, TermId>,
         bridge_at: Box<dyn FnMut(&mut ProofStore, usize) -> Option<ProofId> + 'a>,
@@ -556,29 +599,27 @@ impl<'a> Firing<'a> {
         if let Some(&id) = self.built.get(&(site, offset)) {
             return id;
         }
-        let raw = site_column(site, offset);
-        let proposition = self
+        let concluded = self
             .site_props
-            .iter()
-            .find_map(|(index, prop)| {
-                (*index == site).then(|| {
-                    if reversed {
-                        Proposition::new(prop.rhs, prop.lhs)
-                    } else {
-                        prop.clone()
-                    }
-                })
-            })
+            .get(site)
             .unwrap_or_else(|| panic!("rule {} has no conclusion site {}", self.rule_name, site));
+        let proposition = if reversed {
+            Proposition::new(concluded.rhs, concluded.lhs)
+        } else {
+            concluded.clone()
+        };
         let id = store.push_shared_proof(
-            SynthKey::Rule(self.rule_name.to_string(), raw, self.body_premises.clone()),
+            SynthKey::Rule(
+                self.rule_name.to_string(),
+                site_column(site, offset),
+                self.body_premises.clone(),
+            ),
             Proof {
                 proposition,
                 justification: Justification::Rule {
                     name: self.rule_name.to_string(),
                     premise_proofs: self.body_premises.clone(),
                     substitution: self.substitution.clone(),
-                    site: raw,
                 },
             },
         );

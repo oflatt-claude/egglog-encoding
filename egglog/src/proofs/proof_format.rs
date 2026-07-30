@@ -6,11 +6,10 @@ use crate::{
     },
     proofs::{
         proof_checker::{
-            ProofCheckError, ProofCheckErrorKind, eval_expr_with_subst, gather_globals,
-            process_actions, run_merge,
+            ProofCheckError, ProofCheckErrorKind, eval_expr_with_subst, gather_globals, run_merge,
         },
         proof_encoding_helpers::{EncodingNames, SharedEnd},
-        proof_head::{Firing, HeadPlan, congr, sym, trans},
+        proof_head::{Firing, HeadPlan, congr, site_conclusions, sym, trans},
     },
     typechecking::{FuncType, PrimitiveValidator},
     util::{HashMap, HashSet, IEntry, IndexMap, IndexSet, SymbolGen},
@@ -349,9 +348,6 @@ pub enum Justification {
         premise_proofs: Vec<ProofId>,
         /// Ordered by where each variable first occurs in the rule body.
         substitution: IndexMap<String, TermId>,
-        /// The head conclusion site the [`Proposition`] comes from: replaying the
-        /// head under `substitution` and reading this site reproduces it.
-        site: i64,
     },
     /// Given two proofs f(c1, c2, ..., old) = f(c1, c2, ..., old) and f(c1, c2, ..., new) = f(c1, c2, ..., new),
     /// proves either:
@@ -1100,8 +1096,8 @@ impl ProofStore {
         plan
     }
 
-    /// What each conclusion site of `rule_name`'s head concludes under
-    /// `substitution`, in `conclusion_sites` order.
+    /// [`site_conclusions`] of `rule_name`'s head, under `substitution` and the
+    /// globals.
     ///
     /// Panics if the rule is not in `prog` or if its head does not replay.
     fn replay_head(
@@ -1110,14 +1106,12 @@ impl ProofStore {
         globals: &HashMap<String, TermId>,
         rule_name: &str,
         substitution: &IndexMap<String, TermId>,
-    ) -> Vec<(usize, Proposition)> {
+    ) -> Vec<Proposition> {
         let rule = rule_named(prog, rule_name);
-        let actions: Vec<_> = rule.head.0.iter().collect();
         let mut bindings = globals.clone();
         bindings.extend(substitution.iter().map(|(var, term)| (var.clone(), *term)));
-        process_actions(rule_name, bindings, &actions, &mut self.term_dag)
+        site_conclusions(rule_name, bindings, &rule.head.0, &mut self.term_dag)
             .unwrap_or_else(|err| panic!("rule {rule_name}'s head did not replay: {err}"))
-            .site_propositions
     }
 
     /// For a given rule and premise proofs, compute the substitution used in the rule application.
@@ -1464,7 +1458,6 @@ impl ProofStore {
                 name,
                 premise_proofs,
                 substitution,
-                site: _,
             } => {
                 let equality = make_equality(dag, proof.lhs(), proof.rhs());
                 let name_literal = dag.lit(Literal::String(name.clone()));
