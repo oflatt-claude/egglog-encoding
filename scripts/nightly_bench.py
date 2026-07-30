@@ -115,6 +115,15 @@ def _run(target: Target, endpoint: Endpoint, *, open_report: bool, rounds: int |
     return subprocess.run(command, cwd=REPO_ROOT, env=_bench_env(), check=False).returncode
 
 
+def _positive_int(value: str) -> int:
+    """Parse ``--rounds``, which bench.py also requires to be positive."""
+
+    parsed = int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be positive")
+    return parsed
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Populate the endpoint cache and publish ``<output_dir>/index.html``."""
 
@@ -126,7 +135,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=DEFAULT_OUTPUT_DIR,
         help="directory to publish index.html and index.jsonl into",
     )
-    parser.add_argument("--rounds", type=int, help="rounds per endpoint/file, passed to bench.py")
+    parser.add_argument(
+        "--rounds",
+        type=_positive_int,
+        help="rounds per endpoint/file, passed to bench.py",
+    )
     args = parser.parse_args(list(argv) if argv is not None else None)
     output_dir = args.output_dir.expanduser().resolve()
 
