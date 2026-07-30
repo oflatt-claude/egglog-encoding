@@ -4,11 +4,12 @@
 //! the head wrote it, the same term over its children's representatives, and the
 //! edges between them. One walk of the head produces them all, in a fixed order,
 //! so a proof is named by nothing but its position in that array — its *column*.
-//! The encoder walks a head to lower it, naming each row it emits by the column
-//! the walk is at; [`Firing`] walks the same head to rebuild the array from the
-//! substitution, the body premises, and the rule proof's trailing *bridge*
-//! premises — the view-row proof of each subterm the head interned. A row's
-//! column indexes straight into what comes back.
+//! [`HeadLayout`] is where those columns go. The encoder walks a head to lower
+//! it, naming each row it emits by the column the layout gives it; [`Firing`]
+//! walks the same head to rebuild the array from the substitution, the body
+//! premises, and the rule proof's trailing *bridge* premises — the view-row proof
+//! of each subterm the head interned. A row's column indexes straight into what
+//! comes back.
 //!
 //! [`HeadPlan`] is the head as the encoder lowers it, read by both walks. The
 //! compositions themselves are written once, over [`ProofAlgebra`]: this walk
@@ -32,6 +33,174 @@ use crate::{
     util::{HashMap, HashSet, IndexMap},
 };
 
+/// One proof a head's walk produces, naming what a column holds.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum HeadProof {
+    /// The head's own conclusion about the term written here.
+    Own,
+    /// That conclusion restated over the children's representatives.
+    Canonical,
+    /// The term as written equals the e-class the head interned it into.
+    Connector,
+    /// A construct-into guest's dropped `union`, stated `target = guest`.
+    DroppedEdge,
+    /// A construct-into guest's view row: the target's e-class equals the guest's
+    /// term over its children's representatives.
+    GuestView,
+    /// A `union`'s union-find edge — the `@UF` row's arrow from a term to its
+    /// parent, proving `term = parent` — with the left operand as the term.
+    /// Which operand that is comes out of the value ordering at run time, so the
+    /// walk produces the edge both ways round.
+    EdgeFromLhs,
+    /// The same edge with the `union`'s right operand as the term.
+    EdgeFromRhs,
+    /// The stored-value proof of a global row.
+    GlobalValue,
+}
+
+/// A position a head's walk reaches, which claims one column per proof it
+/// produces there.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum HeadPosition {
+    /// A term the head builds.
+    Built,
+    /// A term built into another operand's e-class rather than a fresh one.
+    Guest,
+    /// Any other call: a primitive, a relation, a global lookup.
+    Call,
+    /// A `union`.
+    Union,
+    /// A `set`.
+    Set,
+}
+
+impl HeadPosition {
+    /// The proofs this position produces, in the order the walk produces them.
+    /// This is the only statement of the column layout: both walks read their
+    /// columns off it, so neither can state a run length or an offset of its own.
+    pub(crate) fn proofs(self) -> &'static [HeadProof] {
+        use HeadProof::*;
+        match self {
+            HeadPosition::Built => &[Own, Canonical, Connector],
+            HeadPosition::Guest => &[Own, DroppedEdge, GuestView, Connector],
+            HeadPosition::Call => &[Own],
+            HeadPosition::Union => &[Own, EdgeFromLhs, EdgeFromRhs],
+            HeadPosition::Set => &[Own, GlobalValue],
+        }
+    }
+}
+
+/// The consecutive columns one position claims, one per proof in
+/// [`HeadPosition::proofs`].
+#[derive(Clone, Copy)]
+pub(crate) struct HeadRun {
+    position: HeadPosition,
+    /// The run's first column, which holds the position's first proof.
+    first: usize,
+}
+
+impl HeadRun {
+    /// The column holding `proof`.
+    pub(crate) fn column(self, proof: HeadProof) -> usize {
+        let offset = self
+            .position
+            .proofs()
+            .iter()
+            .position(|held| *held == proof)
+            .unwrap_or_else(|| panic!("a {:?} position holds no {proof:?}", self.position));
+        self.first + offset
+    }
+}
+
+/// Where every column of a rule head goes.
+///
+/// One walk of the [`HeadPlan`] claims a run per position — an action's operands
+/// before the action, a term's children before the term — and that walk is the
+/// authority: the encoder claims runs from it as it lowers, and [`Firing`] fills
+/// them as it walks, each checking the position it is at against what the layout
+/// has there. A walk that drifts fails where it drifts, rather than by handing
+/// proof conversion a column that means something else.
+pub(crate) struct HeadLayout {
+    runs: Vec<HeadRun>,
+}
+
+impl HeadLayout {
+    /// Lay out `plan`'s columns by walking it once.
+    pub(crate) fn new(plan: &HeadPlan) -> HeadLayout {
+        let mut layout = HeadLayout { runs: vec![] };
+        for (at, action) in plan.actions.iter().enumerate() {
+            if plan.dropped.contains(&at) {
+                continue;
+            }
+            match action {
+                GenericAction::Let(_, var, expr) if plan.construct_into.contains_key(&var.name) => {
+                    let (_, args) = constructor_operand(expr)
+                        .expect("a construct-into guest is a constructor application");
+                    layout.args(args);
+                    layout.claim(HeadPosition::Guest);
+                }
+                GenericAction::Let(_, _, expr) | GenericAction::Expr(_, expr) => layout.expr(expr),
+                GenericAction::Union(_, lhs, rhs) => {
+                    layout.expr(lhs);
+                    layout.expr(rhs);
+                    layout.claim(HeadPosition::Union);
+                }
+                GenericAction::Set(_, _, args, value) => {
+                    layout.args(args);
+                    layout.expr(value);
+                    layout.claim(HeadPosition::Set);
+                }
+                // A `change` concludes nothing, and a `panic` is passed through
+                // uninstrumented, so neither they nor their arguments hold a
+                // column.
+                GenericAction::Change(..) | GenericAction::Panic(..) => {}
+            }
+        }
+        layout
+    }
+
+    /// The run of columns the walk's `position`th position claims.
+    fn run(&self, position: usize) -> HeadRun {
+        *self
+            .runs
+            .get(position)
+            .unwrap_or_else(|| panic!("a head's walk has no position {position}"))
+    }
+
+    /// What the column at `column` holds, or `None` past the head's last column.
+    #[cfg(test)]
+    pub(crate) fn proof_at(&self, column: usize) -> Option<HeadProof> {
+        let run = self.runs.iter().rev().find(|run| run.first <= column)?;
+        run.position.proofs().get(column - run.first).copied()
+    }
+
+    fn expr(&mut self, expr: &ResolvedExpr) {
+        let ResolvedExpr::Call(_, _, args) = expr else {
+            // A variable or a literal builds nothing, so it is not a position.
+            return;
+        };
+        self.args(args);
+        self.claim(match constructor_operand(expr) {
+            Some(_) => HeadPosition::Built,
+            None => HeadPosition::Call,
+        });
+    }
+
+    fn args(&mut self, args: &[ResolvedExpr]) {
+        for arg in args {
+            self.expr(arg);
+        }
+    }
+
+    fn claim(&mut self, position: HeadPosition) {
+        let first = self
+            .runs
+            .last()
+            .map_or(0, |run| run.first + run.position.proofs().len());
+        self.runs.push(HeadRun { position, first });
+    }
+}
+
 /// Which of the encoding's two layers the encoder is lowering under.
 ///
 /// Layer 1 composes each proof where it is needed and writes every step out.
@@ -43,25 +212,47 @@ pub(crate) enum ProofSite {
     /// No rule head to replay: a top-level action, a merge body, or a position
     /// inside a head that concludes nothing — a `change` argument.
     Composed,
-    /// A rule head, whose next unclaimed column is `next_column`.
-    Skeleton { next_column: usize },
+    /// A rule head, whose columns `layout` lays out, at its `next_position`th
+    /// position.
+    Skeleton {
+        layout: HeadLayout,
+        next_position: usize,
+    },
 }
 
 impl ProofSite {
+    /// A rule head laid out by `layout`, before its first position.
+    pub(crate) fn skeleton(layout: HeadLayout) -> ProofSite {
+        ProofSite::Skeleton {
+            layout,
+            next_position: 0,
+        }
+    }
+
     /// Whether the proofs here are composed on the spot rather than numbered.
     pub(crate) fn composes(&self) -> bool {
         matches!(self, ProofSite::Composed)
     }
 
-    /// Reserve the next `count` columns and answer with the first, or `None`
-    /// where the site composes instead of numbering.
-    pub(crate) fn take_columns(&mut self, count: usize) -> Option<usize> {
-        let ProofSite::Skeleton { next_column } = self else {
+    /// Claim the columns of the next position, which must be a `position`, or
+    /// `None` where the site composes instead of numbering.
+    pub(crate) fn claim(&mut self, position: HeadPosition) -> Option<HeadRun> {
+        let ProofSite::Skeleton {
+            layout,
+            next_position,
+        } = self
+        else {
             return None;
         };
-        let first = *next_column;
-        *next_column += count;
-        Some(first)
+        let run = layout.run(*next_position);
+        assert_eq!(
+            run.position, position,
+            "the encoder is lowering a {position:?} at position {next_position}, \
+             where the head's layout has a {:?}",
+            run.position
+        );
+        *next_position += 1;
+        Some(run)
     }
 }
 
@@ -233,23 +424,20 @@ fn plan_construct_into(actions: &[ResolvedAction]) -> (HashMap<String, String>, 
 ///
 /// The array is built by walking the head bottom-up: an action's operands before
 /// the action, a term's children before the term, so every proof a later column
-/// composes from is already in hand. Each position claims a fixed run of columns,
-/// which the encoder's walk of the same head must claim the same way:
-///
-/// - a term the head builds: its own conclusion, that conclusion over the
-///   children's representatives, and the connector to the e-class it interned
-///   into — except a construct-into guest, whose run is its own conclusion, the
-///   dropped `union`'s edge, the view row it writes, and its connector;
-/// - any other call: its own conclusion;
-/// - a `union`: its equality, then the union-find edge in each direction, routed
-///   through whichever operands the head built;
-/// - a `set`: its row, then the stored-value proof of a global row.
-///
-/// A position whose head does not produce a proof still holds its column, so the
-/// numbering follows the walk rather than what either side emits.
+/// composes from is already in hand. Each position fills the run of columns
+/// [`HeadLayout`] gives it, in the order [`HeadPosition::proofs`] lists them —
+/// the same runs the encoder's walk of the same head claims. A position whose
+/// head produces no proof still holds its column, so the numbering follows the
+/// walk rather than what either side emits.
 pub(crate) struct Firing<'a> {
     rule_name: &'a str,
     plan: &'a HeadPlan,
+    /// Where the head's columns go, walked once up front.
+    layout: HeadLayout,
+    /// How many of the layout's positions the walk has reached.
+    next_position: usize,
+    /// The position being filled, and how many of its columns are filled.
+    open: Option<(HeadRun, usize)>,
     /// The premises the rule body matched, one per body fact.
     body_premises: Vec<ProofId>,
     substitution: IndexMap<String, TermId>,
@@ -280,6 +468,9 @@ impl<'a> Firing<'a> {
         Firing {
             rule_name,
             plan,
+            layout: HeadLayout::new(plan),
+            next_position: 0,
+            open: None,
             body_premises,
             substitution,
             bridge_at,
@@ -342,18 +533,29 @@ impl<'a> Firing<'a> {
                     let rhs_connector = self.expr(store, rhs);
                     let lhs_term = self.eval(store, lhs);
                     let rhs_term = self.eval(store, rhs);
-                    let own = self.own(store, Proposition::new(lhs_term, rhs_term));
-                    match (lhs_connector, rhs_connector) {
-                        // Nothing was built, so both endpoints' terms are the
-                        // ones the head concluded over and the edge is that
-                        // conclusion, in whichever direction the union-find asks
-                        // for.
-                        (None, None) => {
-                            self.own(store, Proposition::new(lhs_term, rhs_term));
-                            self.own(store, Proposition::new(rhs_term, lhs_term));
+                    self.claim(HeadPosition::Union, |this| {
+                        let own =
+                            this.own(store, HeadProof::Own, Proposition::new(lhs_term, rhs_term));
+                        match (lhs_connector, rhs_connector) {
+                            // Nothing was built, so both endpoints' terms are the
+                            // ones the head concluded over and the edge is that
+                            // conclusion, in whichever direction the union-find
+                            // asks for.
+                            (None, None) => {
+                                this.own(
+                                    store,
+                                    HeadProof::EdgeFromLhs,
+                                    Proposition::new(lhs_term, rhs_term),
+                                );
+                                this.own(
+                                    store,
+                                    HeadProof::EdgeFromRhs,
+                                    Proposition::new(rhs_term, lhs_term),
+                                );
+                            }
+                            operands => this.union_edge(store, own, operands),
                         }
-                        operands => self.union_edge(store, own, operands),
-                    }
+                    });
                 }
                 GenericAction::Set(span, func, args, value) => {
                     for arg in args {
@@ -362,11 +564,12 @@ impl<'a> Firing<'a> {
                     self.expr(store, value);
                     let row = set_row_expr(span, func, args, value);
                     let row_term = self.eval(store, &row);
-                    self.own(store, Proposition::new(row_term, row_term));
-                    // The stored-value column of a global row. Only a top-level
-                    // action sets a global, and only a rule head is walked, so the
-                    // column is held but never filled.
-                    self.proofs.push(None);
+                    self.claim(HeadPosition::Set, |this| {
+                        this.own(store, HeadProof::Own, Proposition::new(row_term, row_term));
+                        // Only a top-level action sets a global, and only a rule
+                        // head is walked, so this column is held but never filled.
+                        this.push(HeadProof::GlobalValue, None);
+                    });
                 }
                 GenericAction::Change(..) | GenericAction::Panic(..) => {}
             }
@@ -386,19 +589,29 @@ impl<'a> Firing<'a> {
         };
         let steps = self.args(store, args);
         let term = self.eval(store, expr);
-        let own = self.own(store, Proposition::new(term, term));
         // A primitive or a global lookup builds nothing itself, though a
         // constructor argument of it is still built.
-        constructor_operand(expr)?;
-        let to_canonical = store.canonicalize(own, steps);
-        let canonical_reflexive = store.reflexive(to_canonical);
-        self.proofs.push(Some(canonical_reflexive));
-        let connector = match self.bridge(store, to_canonical) {
-            Some(bridge) => store.connect(to_canonical, bridge),
-            None => to_canonical,
+        let builds = constructor_operand(expr).is_some();
+        let position = if builds {
+            HeadPosition::Built
+        } else {
+            HeadPosition::Call
         };
-        self.proofs.push(Some(connector));
-        Some(connector)
+        self.claim(position, |this| {
+            let own = this.own(store, HeadProof::Own, Proposition::new(term, term));
+            if !builds {
+                return None;
+            }
+            let to_canonical = store.canonicalize(own, steps);
+            let canonical_reflexive = store.reflexive(to_canonical);
+            this.push(HeadProof::Canonical, Some(canonical_reflexive));
+            let connector = match this.bridge(store, to_canonical) {
+                Some(bridge) => store.connect(to_canonical, bridge),
+                None => to_canonical,
+            };
+            this.push(HeadProof::Connector, Some(connector));
+            Some(connector)
+        })
     }
 
     /// Walk a construct-into guest, whose constructor is built into `target`'s
@@ -414,21 +627,27 @@ impl<'a> Firing<'a> {
             constructor_operand(expr).expect("a construct-into guest is a constructor application");
         let steps = self.args(store, args);
         let term = self.eval(store, expr);
-        let own = self.own(store, Proposition::new(term, term));
-        let to_canonical = store.canonicalize(own, steps);
-        let target_term = *self.bindings.get(target).unwrap_or_else(|| {
-            panic!(
-                "rule {}'s construct-into target {target} is unbound",
-                self.rule_name
-            )
-        });
-        let edge = self.own(store, Proposition::new(target_term, term));
-        let target_connector = self.connectors.get(target).copied();
-        let view = store.guest_view(edge, to_canonical, target_connector);
-        self.proofs.push(Some(view));
-        let connector = store.connect(to_canonical, view);
-        self.proofs.push(Some(connector));
-        Some(connector)
+        self.claim(HeadPosition::Guest, |this| {
+            let own = this.own(store, HeadProof::Own, Proposition::new(term, term));
+            let to_canonical = store.canonicalize(own, steps);
+            let target_term = *this.bindings.get(target).unwrap_or_else(|| {
+                panic!(
+                    "rule {}'s construct-into target {target} is unbound",
+                    this.rule_name
+                )
+            });
+            let edge = this.own(
+                store,
+                HeadProof::DroppedEdge,
+                Proposition::new(target_term, term),
+            );
+            let target_connector = this.connectors.get(target).copied();
+            let view = store.guest_view(edge, to_canonical, target_connector);
+            this.push(HeadProof::GuestView, Some(view));
+            let connector = store.connect(to_canonical, view);
+            this.push(HeadProof::Connector, Some(connector));
+            Some(connector)
+        })
     }
 
     /// Walk a call's arguments, keeping the connector of each one holding a term
@@ -444,9 +663,7 @@ impl<'a> Firing<'a> {
     }
 
     /// A `union`'s union-find edge, routed through the operands' written forms so
-    /// both endpoints' proofs end at one shared term. Which endpoint is on the
-    /// left is decided at run time by the value ordering the union-find uses, so
-    /// both orientations are recorded.
+    /// both endpoints' proofs end at one shared term.
     fn union_edge(
         &mut self,
         store: &mut ProofStore,
@@ -455,15 +672,74 @@ impl<'a> Firing<'a> {
     ) {
         let (lhs, rhs) = operands;
         let (lhs_to, rhs_to) = store.union_to_shared(own, lhs, rhs);
-        for (max_pf, min_pf) in [(lhs_to, rhs_to), (rhs_to, lhs_to)] {
+        for (from, max_pf, min_pf) in [
+            (HeadProof::EdgeFromLhs, lhs_to, rhs_to),
+            (HeadProof::EdgeFromRhs, rhs_to, lhs_to),
+        ] {
             let back = sym(store, min_pf);
             let edge = trans(store, max_pf, back);
-            self.proofs.push(Some(edge));
+            self.push(from, Some(edge));
         }
     }
 
-    /// The head's own conclusion at the next column.
-    fn own(&mut self, store: &mut ProofStore, proposition: Proposition) -> ProofId {
+    /// Fill the run of columns the layout gives this walk's next position, which
+    /// must be a `position`.
+    fn claim<R>(&mut self, position: HeadPosition, fill: impl FnOnce(&mut Self) -> R) -> R {
+        let run = self.layout.run(self.next_position);
+        assert_eq!(
+            run.position, position,
+            "rule {}'s walk is at a {position:?} where its layout has a {:?}",
+            self.rule_name, run.position
+        );
+        assert_eq!(
+            self.proofs.len(),
+            run.first,
+            "rule {}'s walk reached the {:?} the layout puts at column {}, having filled {}",
+            self.rule_name,
+            position,
+            run.first,
+            self.proofs.len()
+        );
+        self.next_position += 1;
+        let outer = self.open.replace((run, 0));
+        assert!(outer.is_none(), "a head's positions do not nest");
+        let out = fill(self);
+        let (_, produced) = self.open.take().expect("the position stayed open");
+        assert_eq!(
+            produced,
+            position.proofs().len(),
+            "rule {}'s walk produced {produced} of a {position:?}'s {} proofs",
+            self.rule_name,
+            position.proofs().len()
+        );
+        out
+    }
+
+    /// Fill the open position's next column, which the layout says holds `proof`.
+    fn push(&mut self, proof: HeadProof, id: Option<ProofId>) {
+        let (run, produced) = self
+            .open
+            .as_mut()
+            .expect("every proof the walk produces belongs to a position");
+        assert_eq!(
+            run.position.proofs().get(*produced),
+            Some(&proof),
+            "rule {}'s walk produced a {proof:?} where a {:?} holds {:?}",
+            self.rule_name,
+            run.position,
+            run.position.proofs().get(*produced)
+        );
+        *produced += 1;
+        self.proofs.push(id);
+    }
+
+    /// The head's own conclusion, at the column holding `proof`.
+    fn own(
+        &mut self,
+        store: &mut ProofStore,
+        proof: HeadProof,
+        proposition: Proposition,
+    ) -> ProofId {
         let column = self.proofs.len() as i64;
         let id = store.push_shared_proof(
             SynthKey::Rule(
@@ -480,7 +756,7 @@ impl<'a> Firing<'a> {
                 },
             },
         );
-        self.proofs.push(Some(id));
+        self.push(proof, Some(id));
         id
     }
 
@@ -522,10 +798,9 @@ impl<'a> Firing<'a> {
 /// [`Self::reflexive`], [`Self::connect`] and [`Self::guest_view`] — with
 /// [`Self::union_to_shared`] for a `union`'s two orientations — is the whole of
 /// layer 1. The algebra is written once here and interpreted twice: for
-/// [`ProofStore`] a proof is a node, so applying it builds the proof; for
-/// [`ProofInstrumentor`] a proof is the name of an emitted variable, so applying
-/// it writes the composition into the encoding. Same algebra, evaluated while
-/// replaying a skeleton or while lowering.
+/// [`ProofStore`] a proof is a node, so applying it builds the proof while
+/// replaying a skeleton; for [`ProofInstrumentor`] a proof is the name of an
+/// emitted variable, so applying it writes the composition out while lowering.
 ///
 /// A rule head is where neither happens: layer 2 writes one row per stored proof
 /// and leaves the composing to conversion, so nothing here is applied (see the

@@ -475,9 +475,11 @@ claims a fixed run:
 | a `set` | its row, then the stored-value proof of a global row |
 
 A position whose head produces no proof still holds its column, so the numbering
-follows the walk rather than what either side emits. The encoder's walk assigns
-columns as it lowers; [`crate::proofs::proof_head`]'s `Firing` walks the same
-head to rebuild the array, and a row's column indexes straight into the result.
+follows the walk rather than what either side emits. The table above is
+[`crate::proofs::proof_head`]'s `HeadPosition`, and one walk of the head turns it
+into a `HeadLayout`: the encoder claims a position's run as it lowers, and
+`Firing` fills the same run as it rebuilds the array, so a row's column indexes
+straight into the result.
 
 A rule proof stores no terms at all. The column, plus the premises, is the whole
 conclusion.

@@ -1,6 +1,9 @@
 #[doc = include_str!("proof_encoding.md")]
 use crate::proofs::proof_encoding_helpers::{EncodingNames, HeadColumn, Justification, SharedEnd};
-use crate::proofs::proof_head::{HeadPlan, ProofAlgebra, ProofSite, constructor_operand};
+use crate::proofs::proof_head::{
+    HeadLayout, HeadPlan, HeadPosition, HeadProof, HeadRun, ProofAlgebra, ProofSite,
+    constructor_operand,
+};
 use crate::typechecking::FuncType;
 use crate::*;
 
@@ -44,6 +47,18 @@ impl Operand {
 /// The ids emitted code reads a run of operands by.
 fn ids(operands: &[Operand]) -> Vec<String> {
     operands.iter().map(|o| o.value.clone()).collect()
+}
+
+/// The column of `run` holding `proof`, as a row stating the head's own
+/// conclusion there. Unnumbered where the site composes rather than claiming a
+/// run.
+fn head_column(run: Option<HeadRun>, proof: HeadProof) -> HeadColumn {
+    HeadColumn::own(run.map(|run| run.column(proof)))
+}
+
+/// Like [`head_column`], for a row stating a proof the head's lowering composes.
+fn composed_column(run: Option<HeadRun>, proof: HeadProof) -> HeadColumn {
+    HeadColumn::composed(run.map(|run| run.column(proof)))
 }
 
 /// The variables an action block has bound to a term the encoding built. Every
@@ -398,8 +413,8 @@ impl<'a> ProofInstrumentor<'a> {
     /// Emits any proof-relation mints onto `stmts` and returns the `(set @UF ...)`
     /// action, which the caller must emit after `stmts`.
     ///
-    /// `columns` is the first of the three the walk reserved for this `union`: its
-    /// own conclusion, then the union-find edge in each direction, which is the
+    /// `run` is the columns the walk reserved for this `union`: its own
+    /// conclusion, then the union-find edge in each direction, which is the
     /// conclusion itself when neither operand was built.
     pub(crate) fn union(
         &mut self,
@@ -408,7 +423,7 @@ impl<'a> ProofInstrumentor<'a> {
         lhs: &Operand,
         rhs: &Operand,
         justification: &Justification,
-        columns: Option<usize>,
+        run: Option<HeadRun>,
     ) -> String {
         let uf_name = self.uf_name(type_name);
         let smaller = format!("(ordering-min {} {})", lhs.value, rhs.value);
@@ -421,7 +436,7 @@ impl<'a> ProofInstrumentor<'a> {
         } else if self.site.composes() {
             self.composed_union_edge(stmts, type_name, lhs, rhs, &larger, &smaller)
         } else {
-            self.skeleton_union_edge(stmts, lhs, rhs, justification, columns)
+            self.skeleton_union_edge(stmts, lhs, rhs, justification, run)
         };
         format!("(set ({uf_name} {larger}) (values {smaller} {proof}))")
     }
@@ -435,18 +450,18 @@ impl<'a> ProofInstrumentor<'a> {
         lhs: &Operand,
         rhs: &Operand,
         justification: &Justification,
-        columns: Option<usize>,
+        run: Option<HeadRun>,
     ) -> String {
-        let first = columns.expect("a rule head's unions are numbered");
-        // The union-find edge, in each direction. `proof-of-max` picks the one
-        // the `larger = smaller` edge needs, by the same value ordering as
-        // `ordering-max`, over the two `i64` columns.
+        let run = run.expect("a rule head's unions are numbered");
+        // `proof-of-max` picks the direction the `larger = smaller` edge needs,
+        // by the same value ordering as `ordering-max`, over the two columns'
+        // `i64` literals.
         let oriented = format!(
             "(proof-of-max {} {} {} {})",
             lhs.value,
-            first + 1,
+            run.column(HeadProof::EdgeFromLhs),
             rhs.value,
-            first + 2
+            run.column(HeadProof::EdgeFromRhs)
         );
         // Neither operand was a canonicalized constructor term (no connector),
         // so both e-classes' ASTs are stable and the edge is the head's own
@@ -560,9 +575,7 @@ impl<'a> ProofInstrumentor<'a> {
             .iter()
             .map(|arg| self.instrument_action_expr(arg, res, justification, scope))
             .collect();
-        // The guest's own conclusion, the dropped union's edge, the view row it
-        // writes, and its connector.
-        let columns = self.site.take_columns(4);
+        let run = self.site.claim(HeadPosition::Guest);
         let target_id = &target.value;
 
         if !self.proofs_enabled() {
@@ -602,7 +615,7 @@ impl<'a> ProofInstrumentor<'a> {
             &ctor_name,
             &view_sort,
             &child_vals,
-            &justification.at(HeadColumn::own(columns)),
+            &justification.at(head_column(run, HeadProof::Own)),
         );
         let term_proof_ctor = self.term_proof_name(&sort_name);
         res.push(format!("(set ({term_proof_ctor} {fv_nat}) {nat_prf})"));
@@ -619,7 +632,7 @@ impl<'a> ProofInstrumentor<'a> {
             // composition, so one row records it and the edge proof it is built
             // from needs no row of its own.
             None => {
-                let composed = justification.at(HeadColumn::composed(columns.map(|c| c + 2)));
+                let composed = justification.at(composed_column(run, HeadProof::GuestView));
                 self.rule_row(res, &composed)
             }
         };
@@ -636,7 +649,10 @@ impl<'a> ProofInstrumentor<'a> {
         res.push(format!("(let {guest} {target_id})"));
         let guest_conn = match &nat_to_dedup {
             Some(chain) => Connector::Node(self.connect(chain.clone(), view_proof.clone())),
-            None => Connector::Column(columns.expect("a rule head's guest is numbered") + 3),
+            None => Connector::Column(
+                run.expect("a rule head's guest is numbered")
+                    .column(HeadProof::Connector),
+            ),
         };
         Operand::built(target_id.clone(), fv_nat, guest_conn)
     }
@@ -974,7 +990,7 @@ impl<'a> ProofInstrumentor<'a> {
                     FunctionSubtype::Constructor,
                     "`set` on a constructor should have been rejected by typechecking"
                 );
-                let columns = self.site.take_columns(2);
+                let run = self.site.claim(HeadPosition::Set);
 
                 // Global definition `(set (x) e)`: x is a nullary `:internal-let`
                 // function aliasing e. Store e's value+proof directly in x's FD view
@@ -998,7 +1014,8 @@ impl<'a> ProofInstrumentor<'a> {
                 let (add_code, _fv) = self.add_term_and_view(
                     func_type,
                     &exprs,
-                    &justification.at(HeadColumn::own(columns)),
+                    &justification.at(head_column(run, HeadProof::Own)),
+                    run,
                 );
                 res.extend(add_code);
             }
@@ -1038,8 +1055,8 @@ impl<'a> ProofInstrumentor<'a> {
                 let v2 = self.instrument_action_expr(generic_expr1, &mut res, justification, scope);
                 let ot = generic_expr.output_type();
                 let type_name = ot.name();
-                let columns = self.site.take_columns(3);
-                let unioned = self.union(&mut res, type_name, &v1, &v2, justification, columns);
+                let run = self.site.claim(HeadPosition::Union);
+                let unioned = self.union(&mut res, type_name, &v1, &v2, justification, run);
                 res.push(unioned);
             }
             ResolvedAction::Panic(..) => {
@@ -1369,11 +1386,15 @@ impl<'a> ProofInstrumentor<'a> {
     /// the created term. For constructors, `args` excludes the eclass of the
     /// resulting term (it may not exist yet); for custom functions, `args`
     /// includes all arguments, output included.
+    ///
+    /// `run` is the columns the caller claimed for the position it is at; only a
+    /// constructor reads past the own conclusion the caller already named.
     fn add_term_and_view(
         &mut self,
         func_type: &FuncType,
         args: &[Operand],
         justification: &Justification,
+        run: Option<HeadRun>,
     ) -> (Vec<String>, Operand) {
         let mut res = vec![];
         let view_sort = self
@@ -1393,7 +1414,14 @@ impl<'a> ProofInstrumentor<'a> {
             let canon = self.add_constructor_term_only(&mut res, func_type, &ids(args), &view_sort);
             Operand::plain(canon)
         } else {
-            self.add_constructor_with_proof(&mut res, func_type, args, justification, &view_sort)
+            self.add_constructor_with_proof(
+                &mut res,
+                func_type,
+                args,
+                justification,
+                &view_sort,
+                run,
+            )
         };
         (res, var)
     }
@@ -1500,6 +1528,8 @@ impl<'a> ProofInstrumentor<'a> {
     /// edge. The operand returned reads as the deduped e-class (so parents and
     /// views stay canonical), carrying the natural term and the connector
     /// `natural = deduped` for the parent's `Congr` and the root `union`.
+    ///
+    /// `run` is the [`HeadPosition::Built`] columns the caller claimed.
     fn add_constructor_with_proof(
         &mut self,
         res: &mut Vec<String>,
@@ -1507,6 +1537,7 @@ impl<'a> ProofInstrumentor<'a> {
         args: &[Operand],
         justification: &Justification,
         view_sort: &str,
+        run: Option<HeadRun>,
     ) -> Operand {
         let view = self.view_name(&func_type.name);
         let set_if_empty = crate::proofs::proof_fresh::set_if_empty_prim_name(&view);
@@ -1525,10 +1556,6 @@ impl<'a> ProofInstrumentor<'a> {
             nat_prf,
             to_dedup,
         } = natural;
-        // The term over its children's representatives, then the connector to the
-        // e-class it interns into, follow the own conclusion the caller numbered.
-        let canonical_column = self.site.take_columns(1);
-        let connector_column = self.site.take_columns(1);
         let fv_can = self.mint(
             res,
             &func_type.name,
@@ -1539,7 +1566,7 @@ impl<'a> ProofInstrumentor<'a> {
             Some(chain) => self.reflexive(chain.clone()),
             // One row records the composition proof conversion rebuilds.
             None => {
-                let composed = justification.at(HeadColumn::composed(canonical_column));
+                let composed = justification.at(composed_column(run, HeadProof::Canonical));
                 self.rule_row(res, &composed)
             }
         };
@@ -1573,7 +1600,10 @@ impl<'a> ProofInstrumentor<'a> {
             // connector `fv_nat = dedup` = Trans(nat_to_dedup, Sym(dedup = f(children))).
             // `sym_vprf` reads the `vprf` let, so it lands after the statements above.
             Some(chain) => Connector::Node(self.connect(chain.clone(), vprf.clone())),
-            None => Connector::Column(connector_column.expect("a rule head's terms are numbered")),
+            None => Connector::Column(
+                run.expect("a rule head's terms are numbered")
+                    .column(HeadProof::Connector),
+            ),
         };
         Operand::built(dedup, fv_nat, connector)
     }
@@ -1689,7 +1719,7 @@ impl<'a> ProofInstrumentor<'a> {
                     "new1".to_string(),
                     my_idx,
                 );
-                let (code, fv) = self.add_term_and_view(func_type, &arg_vars, &just);
+                let (code, fv) = self.add_term_and_view(func_type, &arg_vars, &just, None);
                 res.extend(code);
                 fv
             }
@@ -1747,8 +1777,12 @@ impl<'a> ProofInstrumentor<'a> {
                     .iter()
                     .map(|arg| self.instrument_action_expr(arg, res, proof, scope))
                     .collect::<Vec<_>>();
-                // This node's own conclusion is `t = t` for the term it builds.
-                let proof = &proof.at(HeadColumn::own(self.site.take_columns(1)));
+                // The whole run this call claims, its own conclusion first.
+                let run = self.site.claim(match constructor_operand(expr) {
+                    Some(_) => HeadPosition::Built,
+                    None => HeadPosition::Call,
+                });
+                let proof = &proof.at(head_column(run, HeadProof::Own));
                 match resolved_call {
                     ResolvedCall::Func(func_type) => {
                         if func_type.subtype == FunctionSubtype::Custom {
@@ -1765,7 +1799,8 @@ impl<'a> ProofInstrumentor<'a> {
                                 )
                             }
                         } else {
-                            let (add_code, fv) = self.add_term_and_view(func_type, &args, proof);
+                            let (add_code, fv) =
+                                self.add_term_and_view(func_type, &args, proof, run);
                             res.extend(add_code);
                             fv
                         }
@@ -1836,7 +1871,7 @@ impl<'a> ProofInstrumentor<'a> {
         // A rule head is a format proof conversion can replay, so its proofs are
         // named by column; everywhere else the encoder composes them itself.
         self.site = match justification {
-            Justification::Rule(..) => ProofSite::Skeleton { next_column: 0 },
+            Justification::Rule(..) => ProofSite::skeleton(HeadLayout::new(&plan)),
             _ => ProofSite::Composed,
         };
         let mut scope = Scope::default();

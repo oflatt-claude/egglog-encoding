@@ -8,7 +8,7 @@ mod tests {
     use crate::proofs::proof_checker::eval_expr_with_subst;
     use crate::proofs::proof_extraction::ProveExistsError;
     use crate::proofs::proof_format::{ProofStore, Proposition};
-    use crate::proofs::proof_head::{Firing, HeadPlan};
+    use crate::proofs::proof_head::{Firing, HeadLayout, HeadPlan, HeadProof};
     use crate::util::{HashMap, HashSet, IndexMap};
     use crate::{
         CommandOutput, EGraph, Error, ProofEncodingUnsupportedReason, TermDag, TermId,
@@ -167,10 +167,11 @@ mod tests {
 
     /// The encoder names each rule proof row by the column its walk of the head
     /// is at, and proof conversion reads that column out of the array [`Firing`]
-    /// builds by walking the same head. The two walks agree only by claiming
-    /// columns the same way, which nothing checks short of running a proof end to
-    /// end. Pin it: every column an encoded head writes names a proof the walk
-    /// produces.
+    /// builds by walking the same head. Both claim their runs from
+    /// [`HeadLayout`], which checks the position each is at as it goes, so the
+    /// two cannot disagree about a run's length. Pin what is left: every column
+    /// an encoded head writes names a proof the walk produces, and one the head
+    /// writes a row for — so a numbering that slipped within a run fails here.
     #[test]
     fn every_column_an_encoded_head_writes_is_one_the_walk_produces() {
         let source = r#"
@@ -280,6 +281,7 @@ mod tests {
                 format!("@union-operand-{minted}")
             };
             let plan = HeadPlan::new(actions, &mut fresh);
+            let layout = HeadLayout::new(&plan);
             let mut store = ProofStore::new(term_dag, HashMap::default(), HashSet::default());
             let mut firing = Firing::new(
                 &walked.name,
@@ -307,6 +309,19 @@ mod tests {
                     filled.get(column).copied().unwrap_or(false),
                     "rule '{}' writes column {column}, which its head walk does not \
                      produce (columns filled: {filled:?})",
+                    rule.name
+                );
+                // A head writes no row for a guest's dropped `union` — that is
+                // folded into the view row beside it — and sets no global, so a
+                // column landing on either is one the walk numbers differently.
+                let held = layout.proof_at(column);
+                assert!(
+                    !matches!(
+                        held,
+                        Some(HeadProof::DroppedEdge) | Some(HeadProof::GlobalValue)
+                    ),
+                    "rule '{}' writes column {column}, which its head walk fills \
+                     with {held:?} — a proof no head writes a row for",
                     rule.name
                 );
                 named += 1;
