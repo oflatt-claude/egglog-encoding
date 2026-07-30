@@ -24,10 +24,9 @@ pub struct SiteIndex(pub usize);
 ///
 /// Only [`SiteRole::AsWritten`] is a conclusion of the head. A head that builds
 /// a term also needs the same term over its children's representatives and the
-/// edges between the two, which are composed from the site's own equality;
-/// proof conversion synthesizes that composition from the role, the site, and
-/// the rule proof's trailing bridge premises (see
-/// [`crate::proofs::proof_head`]).
+/// edges between the two, which are composed from the site's own equality; proof
+/// conversion synthesizes that composition from the role, the site, and the rule
+/// proof's trailing bridge premises.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SiteRole {
     /// The site's own equality, over the terms the head wrote.
@@ -102,10 +101,9 @@ impl SiteRef {
         Self { role, ..self }
     }
 
-    /// The integer a rule proof's site column stores. Index, direction and role
-    /// share one column because a `union`'s direction is only known once the ids
-    /// being unioned are compared, so the encoder must be able to compute the
-    /// whole column value with one primitive call.
+    /// The integer a rule proof's site column stores: index, direction and role
+    /// packed together, so the whole column is one value the encoder can compute
+    /// with a single primitive call.
     pub(crate) fn encode(self) -> i64 {
         let oriented = self.index.0 * 2 + self.reversed as usize;
         (oriented * SiteRole::ALL.len() + self.role.code()) as i64

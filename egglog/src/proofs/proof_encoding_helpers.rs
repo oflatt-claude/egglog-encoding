@@ -129,9 +129,9 @@ impl SiteColumn {
     }
 }
 
-/// Packages proof information for instrumenting actions. We may not know yet what
-/// terms we are instrumenting, so the justification leaves that information to be
-/// filled in later. Internal to the encoder, not part of the proof format.
+/// What justifies the proofs the encoder mints for an action. The conclusion site
+/// is left as a [`SiteColumn`], filled in per mint site once the encoder knows
+/// which term it is at. Internal to the encoder, not part of the proof format.
 #[derive(Clone)]
 pub(crate) enum Justification {
     /// Rule-name expression, one premise-proof expression per body fact, and the
@@ -187,10 +187,8 @@ impl Justification {
     }
 
     /// Whether the proof is composed from the head's interned subterms, and so
-    /// has to name their view-row proofs. Only a proof stating the head's own
-    /// conclusion is not — which is most of them, so leaving those out of the
-    /// chain keeps the extracted proof from reaching every subterm the firing
-    /// happened to build.
+    /// has to name their view-row proofs as bridge premises. False for a proof
+    /// stating the head's own conclusion, which is composed from nothing.
     pub(crate) fn needs_bridges(&self) -> bool {
         let role = match self {
             Justification::Rule(_, _, SiteColumn::Static(site)) => site.role,
@@ -612,14 +610,13 @@ impl ProofInstrumentor<'_> {
     }
 
     /// A fresh name for an encoder temporary.
-    ///
-    /// Deliberately a different hint from the `"v"` that `proofs::proof_normal_form`
-    /// gives a rule's body variables. [`SymbolGen`] counts per hint, so sharing one
-    /// would make every body variable's number depend on how many temporaries the
-    /// encoder happened to mint — and those names are printed in a proof's
-    /// `substitution`, so changing the number of minted proof nodes would rewrite
-    /// unrelated proof output.
     pub(crate) fn fresh_var(&mut self) -> String {
+        // Keep this hint distinct from the `"v"` that `proofs::proof_normal_form`
+        // gives a rule's body variables. `SymbolGen` counts per hint, so sharing
+        // one would number body variables by how many temporaries the encoder
+        // happened to mint — and those names are printed in a proof's
+        // `substitution`, so minting one more proof node would rewrite unrelated
+        // proof output.
         self.egraph.parser.symbol_gen.fresh("pv")
     }
 

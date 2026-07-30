@@ -288,11 +288,8 @@ impl ProofInstrumentor<'_> {
     /// A reflexive `Fiat` proof `value = value` for a term of `sort_name` (two
     /// identical ASTs under a `Fiat`).
     ///
-    /// The three mints are deferred, so they are emitted only if some row names
-    /// the proof: the proof is reflexive, so the composition that asked for it
-    /// usually drops it (see [`ProofInstrumentor::mint_trans`]), and then no row
-    /// mentions it. `value` is bound by the query, so the mints are free to move
-    /// to wherever the first reader is.
+    /// Deferred (see [`ProofInstrumentor::defer_lookup`]): the returned variable
+    /// is bound wherever something first reads it, and nowhere if nothing does.
     fn reflexive_fiat_proof(&mut self, sort_name: &str, value: &str) -> String {
         let to_ast = self
             .proof_names()

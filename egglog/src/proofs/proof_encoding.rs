@@ -145,8 +145,8 @@ pub(crate) struct ProofInstrumentor<'a> {
     /// the generated programs.
     reflexive: HashSet<String>,
     /// Statements not emitted yet, keyed by the proof variable the group binds.
-    /// A group is emitted where its proof is first read, so a proof no statement
-    /// reads costs neither a read nor a row (see [`Self::defer_lookup`]).
+    /// A group is emitted where its proof is first read; a proof nothing reads is
+    /// never emitted at all (see [`Self::defer_lookup`]).
     pending_lookups: HashMap<String, Pending>,
     /// The conclusion site of the expression [`Self::instrument_action_expr`] is
     /// about to walk, advancing in pre-order as it descends — the order
@@ -250,8 +250,7 @@ impl<'a> ProofInstrumentor<'a> {
     /// proposition from the site column alone, so the row stores no terms.
     ///
     /// A row needing no bridge premise carries the body premises inline; one
-    /// needing them chains onto a row that already names all but the newest, so
-    /// the bridges cost no rows of their own.
+    /// needing them chains onto a row that already names all but the newest.
     fn rule_row(&mut self, stmts: &mut Vec<String>, justification: &Justification) -> String {
         let want = if justification.needs_bridges() {
             self.head_chain.as_ref().map_or(0, |c| c.bridges.len())
@@ -1366,8 +1365,7 @@ impl<'a> ProofInstrumentor<'a> {
     }
 
     /// [`Self::mint`], held back until something reads the fresh variable (see
-    /// [`Self::defer_lookup`]). The id is still allocated here, so a row that no
-    /// reader ever asks for costs a counter bump and nothing else.
+    /// [`Self::defer_lookup`]).
     fn mint_deferred(&mut self, name: &str, args_joined: &str, out_sort: &str) -> String {
         let mut group = vec![];
         let v = self.fresh_id(&mut group, out_sort);

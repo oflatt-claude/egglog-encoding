@@ -477,8 +477,8 @@ impl RawProofStore {
         }
     }
 
-    /// Read a rule proof's columns, walking the chain of later-site links with a
-    /// loop rather than recursion: a head chains one link per conclusion site.
+    /// Read a rule proof's columns, walking the chain of later-site links: a head
+    /// chains one link per conclusion site.
     ///
     /// The premises and the bridges are told apart structurally rather than by
     /// counting: the row ending the chain carries every premise inline, and each
@@ -1574,10 +1574,9 @@ impl Proof {
 }
 
 /// A packed row — a [`RawProof::Rebuild`] or a [`RawProof::Displaced`] — expands
-/// to exactly the `Congr`/`Sym`/`Trans` composition the generated rule or merge
-/// body used to spell across rows. The compositions here are written out by hand
-/// rather than generated, so they are an oracle rather than a second copy of the
-/// expansions.
+/// to exactly the `Congr`/`Sym`/`Trans` composition it stands for. The
+/// compositions below are written out by hand rather than generated, so they are
+/// an oracle rather than a second copy of the expansions.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1638,8 +1637,7 @@ mod tests {
             Proposition::new(lhs, rhs)
         }
 
-        /// Convert and simplify both proofs in one store, and require that they
-        /// are the same tree, proving `expected`.
+        /// [`assert_agree`] over this firing's store.
         fn assert_agree(&self, rebuild: RawProofId, chain: RawProofId, expected: &Proposition) {
             assert_agree(&self.raw, rebuild, chain, expected);
         }
@@ -1819,10 +1817,10 @@ mod tests {
     }
 
     /// The columns are literals, so a reader has to skip them to find the
-    /// proofs, and the e-class's is past the last of them. Getting that wrong
-    /// here costs no correctness — `parse_proof` recurses on whatever it was
-    /// not handed — but it costs the stack, which is what `parse_nested_first`
-    /// exists to spend on the heap instead.
+    /// proofs, and the e-class's is past the last of them. A proof
+    /// `nested_proofs` misses is still parsed, but by `parse_proof`'s recursion
+    /// rather than by `parse_nested_first`'s heap stack, so a deep chain through
+    /// it overflows.
     #[test]
     fn a_rebuild_rows_nested_proofs_are_its_row_and_its_steps() {
         let mut raw = empty_store();
@@ -1909,8 +1907,7 @@ mod tests {
     }
 
     /// Either way the carried proofs point, the row expands to the `Sym` + `Trans`
-    /// pair a merge body used to write, proving that the displaced side equals the
-    /// kept one.
+    /// pair it packs, proving that the displaced side equals the kept one.
     #[test]
     fn displaced_expands_to_the_pair_it_packs() {
         for shared in [SharedEnd::Lhs, SharedEnd::Rhs] {
@@ -1931,10 +1928,8 @@ mod tests {
         }
     }
 
-    /// Both carried proofs nest. Getting that wrong here costs no correctness —
-    /// `parse_proof` recurses on whatever it was not handed — but it costs the
-    /// stack, which is what `parse_nested_first` exists to spend on the heap
-    /// instead.
+    /// Both carried proofs nest, so neither is left to `parse_proof`'s recursion
+    /// (see [`a_rebuild_rows_nested_proofs_are_its_row_and_its_steps`]).
     #[test]
     fn a_displaced_rows_nested_proofs_are_its_two_carried_proofs() {
         let mut raw = empty_store();

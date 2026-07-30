@@ -261,7 +261,7 @@ mod tests {
                (rule ((HasVec v) (= n (vec-length v))) ((VLen n)) :name "vec-len")
                (run 1)
                (prove (VLen 3))"#,
-            // a non-eq container matched in the body and read
+            // a non-eq container whose read computes a base value
             r#"(sort SMap (Map String i64))
                (relation HasMap (SMap))
                (relation MapVal (i64))

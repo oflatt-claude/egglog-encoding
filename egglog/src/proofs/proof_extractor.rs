@@ -14,11 +14,8 @@ type Key = (Value, String);
 /// Unlike the public extractor, this does not compute globally optimal costs
 /// for the whole e-graph. It searches for any reconstructable term for the
 /// requested root, ignoring `:unextractable` and hidden constructor flags, and
-/// skips view tables so proof terms use their original constructor names.
-///
-/// The search keeps its own stack of [`Frame`]s rather than recursing, so a term
-/// with a deep spine — a proof list of thousands of premises, say — costs heap
-/// instead of call frames.
+/// skips view tables so proof terms use their original constructor names. A term
+/// of any depth extracts without overflowing the stack.
 struct RootExtractor {
     cache: HashMap<Key, Option<TermId>>,
     active: HashSet<Key>,
