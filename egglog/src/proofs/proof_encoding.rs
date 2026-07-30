@@ -1535,11 +1535,10 @@ impl<'a> ProofInstrumentor<'a> {
         let set_if_empty = crate::proofs::proof_fresh::set_if_empty_prim_name(&view);
         let term_proof_constructor = self.term_proof_name(func_type.output().name());
 
-        // `fv_nat` stays *unseeded* (only `fv_can` is written to the view) so it is
-        // never pulled into the view's congruence `:merge`; its `@Rule` endpoint
-        // therefore keeps the as-built shape the rule head produced. `fv_can` is
-        // always a separate node (even when no child changed) with the reflexive
-        // proof `fv_can = fv_can`, exempt from the rule-head check.
+        // `fv_nat` stays *unseeded* — only `fv_can` is written to the view — so the
+        // view's congruence `:merge` can never move it, and the proof of the shape the
+        // head wrote stays stated over the ids the head built. `fv_can` is a separate
+        // node even when no child changed.
         let natural =
             self.build_natural_with_congr(res, &func_type.name, view_sort, args, justification);
         let Natural {
