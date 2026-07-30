@@ -2039,8 +2039,7 @@ impl TableAction {
     /// Returns the first value column of the row for `key`: the committed row's
     /// if the key is present, the pending row's if an earlier call in this same
     /// action batch already inserted it, and otherwise `vals`' first entry after
-    /// staging `(key, vals)`. Unlike a `lookup_values` + `insert` pair, two calls
-    /// with the same key in one batch agree.
+    /// staging `(key, vals)`.
     pub fn lookup_or_insert_vals(
         &self,
         state: &mut ExecutionState,

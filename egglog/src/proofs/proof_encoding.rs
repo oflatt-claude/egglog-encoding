@@ -306,8 +306,7 @@ impl<'a> ProofInstrumentor<'a> {
         };
         let proof = match want.checked_sub(1) {
             None => self.inline_rule_row(stmts, justification),
-            // A head records a bridge only just after minting the row at the
-            // level below it, so the row to chain onto is always already there.
+            // The row to chain onto is always there: see `HeadChain::rows`.
             Some(bridge) => {
                 let prev = self.head_chain.as_ref().expect("in a rule head").rows[bridge].clone();
                 self.link_rule_row(stmts, justification, &prev, bridge)
@@ -378,10 +377,9 @@ impl<'a> ProofInstrumentor<'a> {
     }
 
     /// Record a subterm's view-row proof as a bridge premise of the rule proofs
-    /// minted from here on. Only a skeleton site records one: a composing site
-    /// has already used the proof, and nothing later reads a bridge it would push
-    /// here — a subterm the head concludes nothing about (a nested `change`
-    /// argument) is not in the array conversion rebuilds.
+    /// minted from here on. A composing site records nothing: it has already used
+    /// the proof, and a subterm the head concludes nothing about — a nested
+    /// `change` argument — is not in the array conversion rebuilds.
     fn record_bridge(&mut self, view_proof: &str) {
         if self.site.composes() {
             return;
@@ -391,9 +389,8 @@ impl<'a> ProofInstrumentor<'a> {
         }
     }
 
-    /// A built term's connector proof as a proof node, minting the `Rule` row for
-    /// one named by a column. Only the terms whose connector the encoding *stores*
-    /// need a row; everywhere else proof conversion rebuilds it.
+    /// A built term's connector proof as a proof node, minting the rule proof row
+    /// for a [`Connector::Column`].
     fn connector_node(
         &mut self,
         stmts: &mut Vec<String>,
@@ -413,9 +410,8 @@ impl<'a> ProofInstrumentor<'a> {
     /// Emits any proof-relation mints onto `stmts` and returns the `(set @UF ...)`
     /// action, which the caller must emit after `stmts`.
     ///
-    /// `run` is the columns the walk reserved for this `union`: its own
-    /// conclusion, then the union-find edge in each direction, which is the
-    /// conclusion itself when neither operand was built.
+    /// `run` is the columns the walk reserved for this `union` (see
+    /// [`HeadPosition::Union`]).
     pub(crate) fn union(
         &mut self,
         stmts: &mut Vec<String>,
@@ -1070,10 +1066,6 @@ impl<'a> ProofInstrumentor<'a> {
         res
     }
 
-    /// Build the proof term that justifies a freshly-created term `fv`
-    /// (wrapped by the AST constructor `to_ast`) proving `fv = fv`, from the
-    /// surrounding [`Justification`], emitting the proof-relation mints onto
-    /// `stmts` and returning the proof var.
     /// Anchor a container's term-proof: mint a proof of `fv = fv` under
     /// `justification` and record it in the container sort's `<CSort>Proof`
     /// table (the base the container rebuild composes from).
@@ -1914,8 +1906,7 @@ impl<'a> ProofInstrumentor<'a> {
         } else {
             "()".to_string()
         };
-        // Every mint site replaces the placeholder with the column the walk is at;
-        // the placeholder is unreadable, so a column left unset fails loudly.
+        // Every mint site replaces the placeholder with the column the walk is at.
         let proof = Justification::Rule(rule_name_var.clone(), premises, HeadColumn::Unnumbered);
         // A proof-mode head reads the database: it looks up the body variables'
         // term proofs and interns each subterm it builds, so it needs a Read/Full

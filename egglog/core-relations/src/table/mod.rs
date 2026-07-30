@@ -1274,9 +1274,7 @@ fn get_entry_mut<'a>(
         .map(|ent| &mut ent.row)
 }
 
-/// The shard a row's key belongs to.
-///
-/// An unsharded table has only one destination, so the key is not hashed at all.
+/// The shard a row's key belongs to. Always shard 0 for an unsharded table.
 fn shard_of_key(shard_data: ShardData, row: &[Value], n_keys: usize) -> ShardId {
     if shard_data.n_shards() == 1 {
         return ShardId::new(0);

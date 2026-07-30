@@ -179,9 +179,8 @@ impl ProofInstrumentor<'_> {
     ///
     /// In proof mode a firing writes one
     /// [`rebuild_proof`](super::proof_encoding_helpers::EncodingNames::rebuild_proof)
-    /// row: each canonicalized column beside its step proof, plus the e-class's
-    /// own step when the view's output is an e-class. A view with neither writes
-    /// no proof row.
+    /// row, or none at all when nothing was canonicalized and the view's output
+    /// is not an e-class.
     fn indexed_rebuild_rule(
         &mut self,
         fdecl: &ResolvedFunctionDecl,

@@ -930,8 +930,7 @@ impl ProofStore {
                 let mut recorded = substitution;
                 recorded.retain(|var, _term| globals.get(var).is_none());
                 // The bridges are in the order the head builds, which is the order
-                // the walk asks for them; a term built after this proof's row has no
-                // bridge recorded yet.
+                // the walk asks for them.
                 let mut firing = Firing::new(
                     name,
                     &planned,
@@ -1672,7 +1671,8 @@ mod tests {
         }
     }
 
-    /// Columns 0 and 2 move, column 3 does not, and so does the e-class.
+    /// Columns 0 and 2 move, and so does the e-class; column 3's step is
+    /// reflexive.
     #[test]
     fn rebuild_expands_to_the_chain_it_packs() {
         let mut firing = Firing::new();

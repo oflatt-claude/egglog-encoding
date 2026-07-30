@@ -15,7 +15,7 @@
 //! compositions themselves are written once, over [`ProofAlgebra`]: this walk
 //! applies them to proof nodes, and the encoder to the proof variables it emits
 //! wherever it composes rather than records — a top-level action or a merge
-//! body. [`ProofSite`] is which of the two the encoder is doing.
+//! body. [`ProofSite`] says which of those two the encoder is doing.
 
 use crate::{
     TermId,
@@ -76,8 +76,6 @@ pub(crate) enum HeadPosition {
 
 impl HeadPosition {
     /// The proofs this position produces, in the order the walk produces them.
-    /// This is the only statement of the column layout: both walks read their
-    /// columns off it, so neither can state a run length or an offset of its own.
     pub(crate) fn proofs(self) -> &'static [HeadProof] {
         use HeadProof::*;
         match self {
@@ -95,7 +93,7 @@ impl HeadPosition {
 #[derive(Clone, Copy)]
 pub(crate) struct HeadRun {
     position: HeadPosition,
-    /// The run's first column, which holds the position's first proof.
+    /// The run's first column.
     first: usize,
 }
 
@@ -117,9 +115,8 @@ impl HeadRun {
 /// One walk of the [`HeadPlan`] claims a run per position — an action's operands
 /// before the action, a term's children before the term — and that walk is the
 /// authority: the encoder claims runs from it as it lowers, and [`Firing`] fills
-/// them as it walks, each checking the position it is at against what the layout
-/// has there. A walk that drifts fails where it drifts, rather than by handing
-/// proof conversion a column that means something else.
+/// them as it walks, each panicking if the position it is at is not the one the
+/// layout has there.
 pub(crate) struct HeadLayout {
     runs: Vec<HeadRun>,
 }
@@ -201,13 +198,8 @@ impl HeadLayout {
     }
 }
 
-/// Which of the encoding's two layers the encoder is lowering under.
-///
-/// Layer 1 composes each proof where it is needed and writes every step out.
-/// Layer 2 keeps the same walk but, having the rule head to replay, numbers the
-/// proofs by column and writes a row only where the e-graph stores one. Every
-/// site that has to know which layer it is in asks this (see the *Proofs* part
-/// of `proof_encoding.md`).
+/// Which of the encoding's two layers the encoder is lowering under (see the
+/// *Proofs* part of `proof_encoding.md`).
 pub(crate) enum ProofSite {
     /// No rule head to replay: a top-level action, a merge body, or a position
     /// inside a head that concludes nothing — a `change` argument.
@@ -309,8 +301,7 @@ fn set_row_expr(
 }
 
 /// Lift each constructor-application `union` operand into a preceding `let`, so
-/// every union operand is a variable and the inline and let-bound shapes coincide
-/// before [`plan_construct_into`] runs.
+/// that every `union` operand [`plan_construct_into`] sees is a variable.
 fn normalize_union_operands(
     actions: &[ResolvedAction],
     fresh: &mut dyn FnMut() -> String,
@@ -422,13 +413,8 @@ fn plan_construct_into(actions: &[ResolvedAction]) -> (HashMap<String, String>, 
 
 /// One firing of a rule head, and the flat array of proofs its lowering produces.
 ///
-/// The array is built by walking the head bottom-up: an action's operands before
-/// the action, a term's children before the term, so every proof a later column
-/// composes from is already in hand. Each position fills the run of columns
-/// [`HeadLayout`] gives it, in the order [`HeadPosition::proofs`] lists them —
-/// the same runs the encoder's walk of the same head claims. A position whose
-/// head produces no proof still holds its column, so the numbering follows the
-/// walk rather than what either side emits.
+/// Each position of the walk fills the run of columns [`HeadLayout`] gives it,
+/// in the order [`HeadPosition::proofs`] lists them.
 pub(crate) struct Firing<'a> {
     rule_name: &'a str,
     plan: &'a HeadPlan,
@@ -482,8 +468,8 @@ impl<'a> Firing<'a> {
         }
     }
 
-    /// The proofs the head's lowering produces, by column. Empty at a column the
-    /// walk numbers but the head produces no proof for.
+    /// The proofs the head's lowering produces, by column. `None` at a column
+    /// the walk numbers but the head produces no proof for.
     pub(crate) fn proofs(&mut self, store: &mut ProofStore) -> &[Option<ProofId>] {
         if !self.walked {
             self.walked = true;
@@ -797,14 +783,7 @@ impl<'a> Firing<'a> {
 /// Walking a head bottom-up and applying [`Self::canonicalize`],
 /// [`Self::reflexive`], [`Self::connect`] and [`Self::guest_view`] — with
 /// [`Self::union_to_shared`] for a `union`'s two orientations — is the whole of
-/// layer 1. The algebra is written once here and interpreted twice: for
-/// [`ProofStore`] a proof is a node, so applying it builds the proof while
-/// replaying a skeleton; for [`ProofInstrumentor`] a proof is the name of an
-/// emitted variable, so applying it writes the composition out while lowering.
-///
-/// A rule head is where neither happens: layer 2 writes one row per stored proof
-/// and leaves the composing to conversion, so nothing here is applied (see the
-/// *Proofs* part of `proof_encoding.md`).
+/// layer 1.
 pub(super) trait ProofAlgebra {
     type Proof: Clone;
 

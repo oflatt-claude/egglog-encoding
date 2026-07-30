@@ -263,9 +263,8 @@ impl ProofInstrumentor<'_> {
     /// Only the mints nothing can defer come back in the second component: the
     /// `Eval` marker of a container side condition and an eq-sort primitive
     /// result's `term_proof` fetch. Everything else a premise proof is built
-    /// from — the reflexive lookups, and the `Congr`/`Sym`/`Trans` composing
-    /// them — is deferred, and lands wherever the premise is first read, which
-    /// for a rule is the head's own actions. Either component makes the rule
+    /// from is deferred, landing wherever the premise is first read — for a
+    /// rule, the head's own actions. Either component makes the rule
     /// `:unsafe-seminaive`. A head that names no premise (`(panic …)`) reads
     /// none of it, so none of it is emitted; callers that build no proof at all
     /// (`run :until`, `check`) discard the lookups and the premises, and must

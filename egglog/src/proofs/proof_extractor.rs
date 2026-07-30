@@ -164,9 +164,7 @@ impl EqStage {
     /// The next row to try for `value` at `sort`, moving on to further functions
     /// once the current one's matching rows run out.
     ///
-    /// Rows come back lexicographically smallest first, so the reconstruction the
-    /// search settles on does not depend on the backend's (possibly
-    /// nondeterministic) row iteration order — see `prove_exists`.
+    /// Rows come back lexicographically smallest first (see [`FunctionRows`]).
     fn next_row(
         &mut self,
         egraph: &EGraph,
