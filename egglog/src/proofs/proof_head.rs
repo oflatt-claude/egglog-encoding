@@ -325,19 +325,14 @@ impl<'a> Firing<'a> {
                     for arg in args {
                         self.expr(store, arg);
                     }
-                    let stored = self.expr(store, value);
+                    self.expr(store, value);
                     let row = set_row_expr(span, func, args, value);
                     let row_term = self.eval(store, &row);
                     self.own(store, Proposition::new(row_term, row_term));
-                    // A global row's value equals itself, routed through the
-                    // written form of the term it aliases.
-                    match stored {
-                        Some(connector) => {
-                            let proof = reflexive(store, connector);
-                            self.proofs.push(Some(proof));
-                        }
-                        None => self.proofs.push(None),
-                    }
+                    // The stored-value column of a global row. Only a top-level
+                    // action sets a global, and only a rule head is walked, so the
+                    // column is held but never filled.
+                    self.proofs.push(None);
                 }
                 GenericAction::Change(..) | GenericAction::Panic(..) => {}
             }
@@ -425,22 +420,7 @@ impl<'a> Firing<'a> {
         operands: (Option<ProofId>, Option<ProofId>),
     ) {
         let (lhs, rhs) = operands;
-        let (lhs_to, rhs_to) = match rhs {
-            Some(rhs) => {
-                let lhs_to = match lhs {
-                    Some(lhs) => {
-                        let back = sym(store, lhs);
-                        trans(store, back, own)
-                    }
-                    None => own,
-                };
-                (lhs_to, sym(store, rhs))
-            }
-            None => {
-                let lhs = lhs.expect("one operand of the union was built");
-                (sym(store, lhs), sym(store, own))
-            }
-        };
+        let (lhs_to, rhs_to) = union_to_shared(store, own, lhs, rhs);
         for (max_pf, min_pf) in [(lhs_to, rhs_to), (rhs_to, lhs_to)] {
             let back = sym(store, min_pf);
             let edge = trans(store, max_pf, back);
@@ -581,6 +561,37 @@ pub(super) fn connect<M: HeadProofs>(
 ) -> M::Proof {
     let back = proofs.sym(dedup);
     proofs.trans(to_canonical, back)
+}
+
+/// Both operands of a `union` routed to one shared term, so the union-find edge
+/// can be composed in either orientation. `own` states the union's own
+/// conclusion `lhs = rhs`, and an operand's connector is present when the head
+/// built that operand; at least one of them must have been.
+pub(super) fn union_to_shared<M: HeadProofs>(
+    proofs: &mut M,
+    own: M::Proof,
+    lhs: Option<M::Proof>,
+    rhs: Option<M::Proof>,
+) -> (M::Proof, M::Proof) {
+    match rhs {
+        Some(rhs) => {
+            let lhs_to = match lhs {
+                Some(lhs) => {
+                    let back = proofs.sym(lhs);
+                    proofs.trans(back, own)
+                }
+                None => own,
+            };
+            let rhs_to = proofs.sym(rhs);
+            (lhs_to, rhs_to)
+        }
+        None => {
+            let lhs = lhs.expect("one operand of the union was built");
+            let lhs_to = proofs.sym(lhs);
+            let rhs_to = proofs.sym(own);
+            (lhs_to, rhs_to)
+        }
+    }
 }
 
 /// A construct-into guest's view-row proof: the target's e-class equals the

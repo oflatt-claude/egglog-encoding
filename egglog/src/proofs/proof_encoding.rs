@@ -1,7 +1,7 @@
 #[doc = include_str!("proof_encoding.md")]
 use crate::proofs::proof_encoding_helpers::{EncodingNames, HeadColumn, Justification, SharedEnd};
 use crate::proofs::proof_head::{
-    HeadPlan, canonicalize, connect, constructor_operand, guest_view, reflexive,
+    HeadPlan, canonicalize, connect, constructor_operand, guest_view, reflexive, union_to_shared,
 };
 use crate::typechecking::FuncType;
 use crate::*;
@@ -413,26 +413,67 @@ impl<'a> ProofInstrumentor<'a> {
         justification: &Justification,
         columns: Option<usize>,
     ) -> String {
-        let Operand {
-            value: lhs,
-            natural: lhs_nat,
-            connector: lhs_conn,
-        } = lhs;
-        let Operand {
-            value: rhs,
-            natural: rhs_nat,
-            connector: rhs_conn,
-        } = rhs;
         let uf_name = self.uf_name(type_name);
-        let smaller = format!("(ordering-min {lhs} {rhs})");
-        let larger = format!("(ordering-max {lhs} {rhs})");
+        let smaller = format!("(ordering-min {} {})", lhs.value, rhs.value);
+        let larger = format!("(ordering-max {} {})", lhs.value, rhs.value);
         // `@UF : (S) -> (S, {Unit|Proof})` is keyed by the larger endpoint; its
         // `:merge` resolves conflicting parents. The second column carries a proof
         // `larger = smaller` (`()` in term mode).
-        if !self.egraph.proof_state.proofs_enabled {
-            return format!("(set ({uf_name} {larger}) (values {smaller} ()))");
-        }
+        let proof = if !self.egraph.proof_state.proofs_enabled {
+            "()".to_string()
+        } else if matches!(justification, Justification::Rule(..)) {
+            self.head_union_edge(stmts, lhs, rhs, justification, columns)
+        } else {
+            self.composed_union_edge(stmts, type_name, lhs, rhs, &larger, &smaller)
+        };
+        format!("(set ({uf_name} {larger}) (values {smaller} {proof}))")
+    }
 
+    /// The `larger = smaller` proof a `union` in a rule head stores in `@UF`. The
+    /// column and the operands' bridge premises determine the whole composition,
+    /// so one row records it.
+    fn head_union_edge(
+        &mut self,
+        stmts: &mut Vec<String>,
+        lhs: &Operand,
+        rhs: &Operand,
+        justification: &Justification,
+        columns: Option<usize>,
+    ) -> String {
+        let column = columns.map_or(HeadColumn::Missing, |first| {
+            // The union-find edge, in each direction. `proof-of-max` picks the one
+            // the `larger = smaller` edge needs, by the same value ordering as
+            // `ordering-max`, over the two `i64` columns.
+            let oriented = format!(
+                "(proof-of-max {} {} {} {})",
+                lhs.value,
+                first + 1,
+                rhs.value,
+                first + 2
+            );
+            // Neither operand was a canonicalized constructor term (no connector),
+            // so both e-classes' ASTs are stable and the edge is the head's own
+            // conclusion; otherwise it is composed from the operands' natural forms.
+            if lhs.connector.is_none() && rhs.connector.is_none() {
+                HeadColumn::Own(oriented)
+            } else {
+                HeadColumn::Composed(oriented)
+            }
+        });
+        self.rule_row(stmts, &justification.at(column))
+    }
+
+    /// The `larger = smaller` proof a `union` outside a rule head stores in `@UF`,
+    /// composed here rather than recorded: nothing downstream rebuilds it.
+    fn composed_union_edge(
+        &mut self,
+        stmts: &mut Vec<String>,
+        type_name: &str,
+        lhs: &Operand,
+        rhs: &Operand,
+        larger: &str,
+        smaller: &str,
+    ) -> String {
         let to_ast_constructor = self
             .proof_names()
             .sort_to_ast_constructor
@@ -440,24 +481,16 @@ impl<'a> ProofInstrumentor<'a> {
             .unwrap()
             .clone();
 
-        // The union-find edge, in each direction. `proof-of-max` picks the one the
-        // `larger = smaller` edge needs, by the same value ordering as
-        // `ordering-max`, over the two `i64` columns.
-        let oriented =
-            columns.map(|first| format!("(proof-of-max {lhs} {} {rhs} {})", first + 1, first + 2));
-
         // Neither operand was a canonicalized constructor term (no connector), so
         // both e-classes' ASTs are stable: build the edge proof directly over them.
-        if lhs_conn.is_none() && rhs_conn.is_none() {
-            let column = oriented.map_or(HeadColumn::Missing, HeadColumn::Own);
-            let proof = self.edge_proof(
+        if lhs.connector.is_none() && rhs.connector.is_none() {
+            return self.edge_proof(
                 stmts,
                 &to_ast_constructor,
-                &larger,
-                &smaller,
-                &justification.at(column),
+                larger,
+                smaller,
+                &Justification::Fiat,
             );
-            return format!("(set ({uf_name} {larger}) (values {smaller} {proof}))");
         }
 
         // A canonicalized operand's deduped e-class may already be unioned with a
@@ -466,58 +499,33 @@ impl<'a> ProofInstrumentor<'a> {
         // each deduped e-class to a shared natural form and orient the edge to
         // `larger = smaller` with proof-of-max/min.
         //
-        // In a rule head the whole composition below is determined by the columns
-        // and the operands' bridge premises, so one row records it.
-        if matches!(justification, Justification::Rule(..)) {
-            let column = oriented.map_or(HeadColumn::Missing, HeadColumn::Composed);
-            let edge = self.edge_proof(
-                stmts,
-                &to_ast_constructor,
-                lhs_nat,
-                rhs_nat,
-                &justification.at(column),
-            );
-            return format!("(set ({uf_name} {larger}) (values {smaller} {edge}))");
-        }
-
-        // Built over the operands in source order, so it states the head's own
-        // conclusion forwards.
+        // Built over the operands in source order, so it states the conclusion
+        // forwards.
         let base_proof = self.edge_proof(
             stmts,
             &to_ast_constructor,
-            lhs_nat,
-            rhs_nat,
-            &justification.at(HeadColumn::own(columns)),
+            &lhs.natural,
+            &rhs.natural,
+            &Justification::Fiat,
         );
 
         // The shared natural form is the canonicalized side's natural (pinned
         // AST), so the Trans goes through it rather than through the deduped
         // e-class.
-        let lhs_conn = lhs_conn
+        let lhs_conn = lhs
+            .connector
             .as_ref()
-            .map(|c| self.connector_node(stmts, justification, c));
-        let rhs_conn = rhs_conn
+            .map(|c| self.connector_node(stmts, &Justification::Fiat, c));
+        let rhs_conn = rhs
+            .connector
             .as_ref()
-            .map(|c| self.connector_node(stmts, justification, c));
-        let (lhs_to_shared, rhs_to_shared) = if let Some(rc) = &rhs_conn {
-            let lhs_to = if let Some(lc) = &lhs_conn {
-                let sym_lc = self.mint_sym(lc);
-                self.mint_trans(&sym_lc, &base_proof)
-            } else {
-                base_proof.clone()
-            };
-            let rhs_to = self.mint_sym(rc);
-            (lhs_to, rhs_to)
-        } else {
-            let lc = lhs_conn.as_ref().unwrap();
-            let lhs_to = self.mint_sym(lc);
-            let rhs_to = self.mint_sym(&base_proof);
-            (lhs_to, rhs_to)
-        };
+            .map(|c| self.connector_node(stmts, &Justification::Fiat, c));
+        let (lhs_to_shared, rhs_to_shared) = union_to_shared(self, base_proof, lhs_conn, rhs_conn);
         // `proof-of-max`/`min` read the two sides directly rather than through a
         // mint, so bind them here.
-        self.flush_lookups(stmts, &lhs_to_shared);
-        self.flush_lookups(stmts, &rhs_to_shared);
+        self.emit_pending_group(stmts, &lhs_to_shared);
+        self.emit_pending_group(stmts, &rhs_to_shared);
+        let (lhs, rhs) = (&lhs.value, &rhs.value);
         let max_pf = self.fresh_var();
         stmts.push(format!(
             "(let {max_pf} (proof-of-max {lhs} {lhs_to_shared} {rhs} {rhs_to_shared}))"
@@ -529,8 +537,8 @@ impl<'a> ProofInstrumentor<'a> {
         let sym_min = self.mint_sym(&min_pf);
         let edge = self.mint_trans(&max_pf, &sym_min);
         // The `@UF` row below is the caller's, not a mint of ours.
-        self.flush_lookups(stmts, &edge);
-        format!("(set ({uf_name} {larger}) (values {smaller} {edge}))")
+        self.emit_pending_group(stmts, &edge);
+        edge
     }
 
     /// Lower a construct-into guest `(let guest (F args))`: point its view value
@@ -625,7 +633,7 @@ impl<'a> ProofInstrumentor<'a> {
         // picks for `target` ambiguous (it reads term rows, not views).
         let dedup_disp = ListDisplay(&dedup_args, " ").to_string();
         // The view row below carries the proof directly, not through a mint.
-        self.flush_lookups(res, &view_proof);
+        self.emit_pending_group(res, &view_proof);
         res.push(format!(
             "(set ({view} {dedup_disp}) (values {target_id} {view_proof}))"
         ));
@@ -973,13 +981,7 @@ impl<'a> ProofInstrumentor<'a> {
                 if generic_exprs.is_empty() && self.egraph.type_info.is_global(&func_type.name) {
                     let e_value = exprs.pop().expect("a set has a value");
                     let proof = if self.proofs_enabled() {
-                        self.global_value_proof(
-                            &mut res,
-                            func_type,
-                            &e_value,
-                            justification,
-                            columns.map(|c| c + 1),
-                        )
+                        self.global_value_proof(&mut res, func_type, &e_value, justification)
                     } else {
                         "()".to_string()
                     };
@@ -1138,13 +1140,16 @@ impl<'a> ProofInstrumentor<'a> {
     /// literal, or a bare reference to another global) has no connector and is
     /// fiat-ed directly — a literal is self-justifying and a global alias is
     /// already established.
+    ///
+    /// A global is only ever set by a top-level action — a rule head that names
+    /// one reads it as a query variable — so the connector here is always a proof
+    /// node the encoder minted, never a rule head's column.
     fn global_value_proof(
         &mut self,
         res: &mut Vec<String>,
         func_type: &FuncType,
         e_value: &Operand,
         justification: &Justification,
-        stored: Option<usize>,
     ) -> String {
         let value = &e_value.value;
         match &e_value.connector {
@@ -1156,12 +1161,8 @@ impl<'a> ProofInstrumentor<'a> {
                 let sym_conn = self.mint(res, &sym, &connector, &proof_sort);
                 self.mint(res, &trans, &format!("{sym_conn} {connector}"), &proof_sort)
             }
-            // A rule head setting a global: the column plus the value's bridge
-            // premises determine the proof, so one row records it.
-            Some(Connector::Column(..)) => {
-                let to_ast = self.fname_to_ast_name(&func_type.name).to_string();
-                let composed = justification.at(HeadColumn::composed(stored));
-                self.edge_proof(res, &to_ast, value, value, &composed)
+            Some(Connector::Column(column)) => {
+                panic!("a global's value cannot be named by rule head column {column}")
             }
             None => {
                 let to_ast = self.fname_to_ast_name(&func_type.name).to_string();
@@ -1260,13 +1261,6 @@ impl<'a> ProofInstrumentor<'a> {
         self.pending_lookups.clear();
     }
 
-    /// Emit the deferred group binding `var`, for a reader that does not go
-    /// through [`Self::mint`] — a statement built by `format!` rather than as a
-    /// row of its own.
-    fn flush_lookups(&mut self, stmts: &mut Vec<String>, var: &str) {
-        self.emit_pending_group(stmts, var);
-    }
-
     /// Emit the deferred groups `args_joined` reads, and transitively the groups
     /// those read, keeping each binding ahead of the statement reading it. A
     /// group is emitted at most once, wherever it is first read.
@@ -1279,7 +1273,9 @@ impl<'a> ProofInstrumentor<'a> {
         }
     }
 
-    /// [`Self::emit_pending_lookups`] for the group bound to one variable.
+    /// [`Self::emit_pending_lookups`] for the group bound to one variable. Called
+    /// directly by a reader that does not go through [`Self::mint`] — a statement
+    /// built by `format!` rather than as a row of its own.
     fn emit_pending_group(&mut self, stmts: &mut Vec<String>, var: &str) {
         let Some(group) = self.pending_lookups.remove(var) else {
             return;
@@ -1551,7 +1547,7 @@ impl<'a> ProofInstrumentor<'a> {
         let view_proof = crate::proofs::proof_fresh::view_proof_prim_name(&view);
         let dedup_args = ListDisplay(&dedup_args, " ");
         // The three statements below read `can_prf` directly, not through a mint.
-        self.flush_lookups(res, &can_prf);
+        self.emit_pending_group(res, &can_prf);
         res.push(format!(
             "(set ({term_proof_constructor} {fv_nat}) {nat_prf})"
         ));
@@ -1792,7 +1788,7 @@ impl<'a> ProofInstrumentor<'a> {
                                     let conn = self.connector_node(res, proof, connector);
                                     // The `@UF` row reads the connector directly,
                                     // not through a mint.
-                                    self.flush_lookups(res, &conn);
+                                    self.emit_pending_group(res, &conn);
                                     res.push(format!(
                                         "(set ({uf} {natural}) (values {value} {conn}))"
                                     ));
