@@ -8,16 +8,6 @@ use super::proof_encoding_helpers::RebuildShape;
 use crate::typechecking::FuncType;
 use crate::*;
 
-/// Which FD-view value column [`ProofInstrumentor::fd_value_rebuild_rule`] rebuilds.
-enum ValueRebuild {
-    /// A custom function's eq-sort output at child index `out_idx`.
-    CustomOutput { out_idx: usize },
-    /// A custom function's eq-container output at child index `out_idx`,
-    /// canonicalized by the container rebuild primitive (containers have no
-    /// `@UF` to chase).
-    ContainerOutput { out_idx: usize },
-}
-
 impl ProofInstrumentor<'_> {
     /// Rules that execute deletion and subsumption based on the tables requesting the deletion/subsumption.
     pub(super) fn delete_and_subsume(&mut self, fdecl: &ResolvedFunctionDecl) -> String {
@@ -79,7 +69,7 @@ impl ProofInstrumentor<'_> {
     ///
     /// A child update re-keys the row (`set` at the canonicalized children, then
     /// `delete`); a collision on the new key runs the view's `:merge`. The value
-    /// column is canonicalized by [`Self::fd_value_rebuild_rule`]. In proof mode
+    /// column is canonicalized by [`Self::fd_custom_value_rebuild_rule`]. In proof mode
     /// each rule composes the updated view proof.
     pub(super) fn rebuilding_rules(&mut self, fdecl: &ResolvedFunctionDecl) -> Vec<Command> {
         let proofs = self.proofs_enabled();
@@ -146,10 +136,10 @@ impl ProofInstrumentor<'_> {
                 format!("{proof_lets}\n{updated_view}\n(delete ({view_name} {keys_str}))");
             rules.push_str(&self.rebuild_rule(&facts, &actions, is_container));
         }
-        // FD view value column (see [`Self::fd_value_rebuild_rule`]). A
-        // constructor/global's value *is* its e-class; a custom function's
-        // eq-sort or eq-container output takes the delete-then-reinsert path.
-        // A base-sort custom output never goes stale, so nothing is emitted.
+        // FD view value column. A constructor/global's value *is* its e-class; a
+        // custom function's eq-sort or eq-container output takes the
+        // delete-then-reinsert path. A base-sort custom output never goes stale,
+        // so nothing is emitted.
         for vi in self
             .egraph
             .proof_state
@@ -164,17 +154,9 @@ impl ProofInstrumentor<'_> {
             // Covered by the index rule above, which indexes the e-class column too.
         } else if fdecl.subtype == FunctionSubtype::Custom && !self.is_encoded_global(fdecl) {
             if types[n - 1].is_eq_sort() {
-                rules.push_str(&self.fd_value_rebuild_rule(
-                    fdecl,
-                    &key_vars,
-                    ValueRebuild::CustomOutput { out_idx: n - 1 },
-                ));
+                rules.push_str(&self.fd_custom_value_rebuild_rule(fdecl, &key_vars, n - 1));
             } else if types[n - 1].is_eq_container_sort() {
-                rules.push_str(&self.fd_value_rebuild_rule(
-                    fdecl,
-                    &key_vars,
-                    ValueRebuild::ContainerOutput { out_idx: n - 1 },
-                ));
+                rules.push_str(&self.fd_container_value_rebuild_rule(fdecl, &key_vars, n - 1));
             }
         }
         self.parse_program(&rules)
@@ -261,8 +243,8 @@ impl ProofInstrumentor<'_> {
         // from a child: the row proof reads `eclass = f(children)`, so a new leader
         // composes as `Trans(Sym(eclass = leader), …)`. A custom function's value
         // column is an ordinary output, not an e-class — that composition would be
-        // wrong for it, so it keeps [`Self::fd_value_rebuild_rule`], which rewrites
-        // it by `Congr` at its position.
+        // wrong for it, so it keeps [`Self::fd_custom_value_rebuild_rule`], which
+        // rewrites it by `Congr` at its position.
         let out_ty = &types[n_keys];
         let mut eclass_step = None;
         let value_var = if self.output_is_eclass(fdecl)
@@ -329,70 +311,51 @@ impl ProofInstrumentor<'_> {
         )
     }
 
-    /// One rule that canonicalizes an FD view's stale value column. A view whose
-    /// value *is* an e-class needs no rule of its own — the whole-row rebuild
-    /// canonicalizes that column too (see [`Self::indexed_rebuild_rule`]).
+    /// One rule that canonicalizes a custom function's stale eq-sort output, at
+    /// child index `out_idx`: chase the output's `@UF` edge, `delete` the stale
+    /// row first so the re-`set` inserts without re-running the user merge, and in
+    /// proof mode rewrite the row proof's output child by `Congr` at that position.
     ///
-    /// * [`ValueRebuild::CustomOutput`] (a custom function's eq-sort output):
-    ///   `delete` the stale row first, so the re-`set` inserts without re-running
-    ///   the user merge. The row proof rewrites the output child by `Congr` at its
-    ///   position.
-    /// * [`ValueRebuild::ContainerOutput`] (a custom function's eq-container
-    ///   output): like `CustomOutput`, but the value canonicalizes via the
-    ///   container rebuild primitive (`:naive` — it reads `@UF` tables the rule
-    ///   doesn't join on).
-    fn fd_value_rebuild_rule(
+    /// A view whose value *is* an e-class needs no rule of its own — the whole-row
+    /// rebuild canonicalizes that column too (see [`Self::indexed_rebuild_rule`]).
+    fn fd_custom_value_rebuild_rule(
         &mut self,
         fdecl: &ResolvedFunctionDecl,
         key_vars: &[String],
-        kind: ValueRebuild,
+        out_idx: usize,
     ) -> String {
-        if let ValueRebuild::ContainerOutput { out_idx } = kind {
-            return self.fd_container_value_rebuild_rule(fdecl, key_vars, out_idx);
-        }
         let value_uf_name = self.uf_name(fdecl.resolved_schema.output().name());
         let (query_view, value_var, view_prf) = self.query_fd_view(&fdecl.name, key_vars);
         let canon = self.fresh_var();
         let uf_prf = self.fresh_var();
         let (proof_lets, pf_arg) = if self.proofs_enabled() {
             let proof_sort = self.proof_sort();
+            let congr = self.proof_names().congr_constructor.clone();
             let mut lets = vec![];
-            let pf = match kind {
-                ValueRebuild::CustomOutput { out_idx } => {
-                    let congr = self.proof_names().congr_constructor.clone();
-                    self.mint(
-                        &mut lets,
-                        &congr,
-                        &format!("{view_prf} {out_idx} {uf_prf}"),
-                        &proof_sort,
-                    )
-                }
-                ValueRebuild::ContainerOutput { .. } => unreachable!("handled above"),
-            };
+            let pf = self.mint(
+                &mut lets,
+                &congr,
+                &format!("{view_prf} {out_idx} {uf_prf}"),
+                &proof_sort,
+            );
             (lets.join("\n                      "), pf)
         } else {
             (String::new(), "()".to_string())
         };
         let set_canon = self.update_fd_view(&fdecl.name, key_vars, &canon, &pf_arg);
-        let actions = match kind {
-            ValueRebuild::CustomOutput { .. } => {
-                let view_name = self.view_name(&fdecl.name);
-                let keys_str = ListDisplay(key_vars, " ").to_string();
-                format!("{proof_lets}\n(delete ({view_name} {keys_str}))\n{set_canon}")
-            }
-            ValueRebuild::ContainerOutput { .. } => unreachable!("handled above"),
-        };
+        let view_name = self.view_name(&fdecl.name);
+        let keys_str = ListDisplay(key_vars, " ").to_string();
+        let actions = format!("{proof_lets}\n(delete ({view_name} {keys_str}))\n{set_canon}");
         let facts = format!(
             "{query_view}\n(= (values {canon} {uf_prf}) ({value_uf_name} {value_var}))\n(!= {value_var} {canon})"
         );
         self.rebuild_rule(&facts, &actions, false)
     }
 
-    /// The [`ValueRebuild::ContainerOutput`] arm of
-    /// [`Self::fd_value_rebuild_rule`]: canonicalize a custom function's
-    /// container-valued output with the container rebuild primitive,
-    /// delete-then-reinsert the row (dodging the user merge), and in proof mode
-    /// compose the row proof with a `Congr` at the output position.
+    /// [`Self::fd_custom_value_rebuild_rule`] for an eq-container output:
+    /// containers have no `@UF` to chase, so the value canonicalizes via the
+    /// container rebuild primitive (`:naive` — it reads `@UF` tables the rule
+    /// doesn't join on).
     fn fd_container_value_rebuild_rule(
         &mut self,
         fdecl: &ResolvedFunctionDecl,
