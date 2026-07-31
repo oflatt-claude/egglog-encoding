@@ -117,20 +117,25 @@ impl HeadRun {
 /// authority: the encoder claims runs from it as it lowers, and [`Firing`] fills
 /// them as it walks, each panicking if the position it is at is not the one the
 /// layout has there.
+#[derive(Clone)]
 pub(crate) struct HeadLayout {
     runs: Vec<HeadRun>,
 }
 
 impl HeadLayout {
-    /// Lay out `plan`'s columns by walking it once.
-    pub(crate) fn new(plan: &HeadPlan) -> HeadLayout {
+    /// Lay the columns of a planned head out by walking it once.
+    fn new(
+        actions: &[ResolvedAction],
+        construct_into: &HashMap<String, String>,
+        dropped: &HashSet<usize>,
+    ) -> HeadLayout {
         let mut layout = HeadLayout { runs: vec![] };
-        for (at, action) in plan.actions.iter().enumerate() {
-            if plan.dropped.contains(&at) {
+        for (at, action) in actions.iter().enumerate() {
+            if dropped.contains(&at) {
                 continue;
             }
             match action {
-                GenericAction::Let(_, var, expr) if plan.construct_into.contains_key(&var.name) => {
+                GenericAction::Let(_, var, expr) if construct_into.contains_key(&var.name) => {
                     let (_, args) = constructor_operand(expr)
                         .expect("a construct-into guest is a constructor application");
                     layout.args(args);
@@ -258,6 +263,8 @@ pub(crate) struct HeadPlan {
     pub construct_into: HashMap<String, String>,
     /// Indices into [`Self::actions`] of the `union`s the plan makes redundant.
     pub dropped: HashSet<usize>,
+    /// Where this head's columns go.
+    pub layout: HeadLayout,
 }
 
 impl HeadPlan {
@@ -267,10 +274,12 @@ impl HeadPlan {
     pub(crate) fn new(actions: &[ResolvedAction], fresh: &mut dyn FnMut() -> String) -> Self {
         let actions = normalize_union_operands(actions, fresh);
         let (construct_into, dropped) = plan_construct_into(&actions);
+        let layout = HeadLayout::new(&actions, &construct_into, &dropped);
         HeadPlan {
             actions,
             construct_into,
             dropped,
+            layout,
         }
     }
 }
@@ -484,8 +493,6 @@ struct ActionStart {
 pub(crate) struct Firing<'a> {
     rule_name: &'a str,
     plan: &'a HeadPlan,
-    /// Where the head's columns go, walked once up front.
-    layout: HeadLayout,
     /// The position being filled, and how many of its columns are filled.
     open: Option<(HeadRun, usize)>,
     /// The premises the rule body matched, one per body fact.
@@ -503,9 +510,10 @@ pub(crate) struct Firing<'a> {
 }
 
 impl<'a> Firing<'a> {
-    /// `bindings` must resolve every variable the head reads: the globals plus
-    /// the body's substitution. `bridges` hands them over one at a time, starting
-    /// where the walk passed to [`Self::carry_on`] stopped taking.
+    /// `bindings` must resolve every variable the head reads — the globals plus
+    /// the body's substitution — unless a walk is handed to [`Self::carry_on`],
+    /// which brings its own. `bridges` hands them over one at a time, starting
+    /// where that walk stopped taking.
     pub(crate) fn new(
         rule_name: &'a str,
         plan: &'a HeadPlan,
@@ -517,7 +525,6 @@ impl<'a> Firing<'a> {
         Firing {
             rule_name,
             plan,
-            layout: HeadLayout::new(plan),
             open: None,
             body_premises,
             substitution,
@@ -753,7 +760,7 @@ impl<'a> Firing<'a> {
     /// Fill the run of columns the layout gives this walk's next position, which
     /// must be a `position`.
     fn claim<R>(&mut self, position: HeadPosition, fill: impl FnOnce(&mut Self) -> R) -> R {
-        let run = self.layout.run(self.walk.next_position);
+        let run = self.plan.layout.run(self.walk.next_position);
         assert_eq!(
             run.position, position,
             "rule {}'s walk is at a {position:?} where its layout has a {:?}",

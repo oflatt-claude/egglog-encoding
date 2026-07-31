@@ -18,16 +18,6 @@ use egglog_ast::generic_ast::Literal;
 use egglog_numeric_id::{DenseIdMap, NumericId, define_id};
 use std::{fmt, rc::Rc};
 
-/// The rule the proof names, which the encoder guarantees is in the program.
-fn rule_named<'a>(prog: &'a [ResolvedNCommand], rule_name: &str) -> &'a ResolvedRule {
-    prog.iter()
-        .find_map(|cmd| match cmd {
-            ResolvedNCommand::NormRule { rule } if rule.name == rule_name => Some(rule),
-            _ => None,
-        })
-        .unwrap_or_else(|| panic!("could not find rule with name {rule_name}"))
-}
-
 define_id!(
     RawProofId,
     u32,
@@ -227,6 +217,8 @@ pub struct ProofStore {
     /// these heads over literals is a self-evident value, so the checker accepts a
     /// reflexive `Fiat` over it ([`ProofStore::reflexive_value_term`]).
     pub(super) prim_value_constructors: HashSet<String>,
+    /// Rule name -> where the rule sits in the program being checked.
+    rule_at: HashMap<String, usize>,
     /// Rule name -> how its head lowers.
     head_plans: HashMap<String, Rc<HeadPlan>>,
     /// (Rule name, body premises) -> how far that firing's head has been walked.
@@ -741,6 +733,7 @@ impl ProofStore {
             id_to_proof: DenseIdMap::new(),
             container_normalizers,
             prim_value_constructors,
+            rule_at: HashMap::default(),
             head_plans: HashMap::default(),
             head_walks: HashMap::default(),
             synthesized: HashMap::default(),
@@ -759,6 +752,11 @@ impl ProofStore {
             container_normalizers,
             prim_value_constructors,
         );
+        for (at, command) in prog.iter().enumerate() {
+            if let ResolvedNCommand::NormRule { rule } = command {
+                store.rule_at.entry(rule.name.clone()).or_insert(at);
+            }
+        }
         let globals = gather_globals(prog, &mut store.term_dag)
             .unwrap_or_else(|_| panic!("failed to gather globals from program"));
 
@@ -868,7 +866,7 @@ impl ProofStore {
                     .iter()
                     .map(|pid| self.convert_raw_proof(prog, globals, raw_store, *pid))
                     .collect();
-                let rule = rule_named(prog, name);
+                let rule = self.rule_named(prog, name);
                 let planned = self.head_plan(rule);
 
                 // Rebuild/canonicalization can rewrite a matched custom-function-fact
@@ -906,18 +904,27 @@ impl ProofStore {
                     })
                     .collect();
 
-                let substitution = self.compute_rule_substitution(rule, &converted_premises);
-                let mut bindings = globals.clone();
-                bindings.extend(substitution.iter().map(|(var, term)| (var.clone(), *term)));
-                // A global's value is in every substitution, so recording it in the
-                // proof would only repeat the program.
-                let mut recorded = substitution;
-                recorded.retain(|var, _term| globals.get(var).is_none());
                 // This row carries on the walk the last row of the same firing
                 // left off at. A row reached while this one walks starts its own,
                 // so the further of the two is the one kept.
                 let firing_key = (name.clone(), converted_premises.clone());
                 let carried = self.head_walks.remove(&firing_key);
+                let substitution = self.compute_rule_substitution(rule, &converted_premises);
+                // A carried walk brings the bindings the earlier row seeded it
+                // with, so only a walk starting from scratch needs them.
+                let bindings = match &carried {
+                    Some(_) => HashMap::default(),
+                    None => {
+                        let mut bindings = globals.clone();
+                        bindings
+                            .extend(substitution.iter().map(|(var, term)| (var.clone(), *term)));
+                        bindings
+                    }
+                };
+                // A global's value is in every substitution, so recording it in the
+                // proof would only repeat the program.
+                let mut recorded = substitution;
+                recorded.retain(|var, _term| globals.get(var).is_none());
                 // The bridges are in the order the head builds, which is the
                 // order the walk takes them in, so the supply picks up where the
                 // carried walk stopped.
@@ -1058,6 +1065,18 @@ impl ProofStore {
         let proof_id = self.id_to_proof.push(proof);
         self.proof_id.insert(raw_proof.clone(), proof_id);
         proof_id
+    }
+
+    /// The rule the proof names, which the encoder guarantees is in the program.
+    fn rule_named<'a>(&self, prog: &'a [ResolvedNCommand], rule_name: &str) -> &'a ResolvedRule {
+        let at = *self
+            .rule_at
+            .get(rule_name)
+            .unwrap_or_else(|| panic!("could not find rule with name {rule_name}"));
+        match &prog[at] {
+            ResolvedNCommand::NormRule { rule } => rule,
+            _ => unreachable!("only a rule is recorded"),
+        }
     }
 
     /// How `rule`'s head lowers. A property of the rule text, so it is computed

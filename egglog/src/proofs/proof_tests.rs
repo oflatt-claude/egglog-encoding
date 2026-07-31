@@ -8,7 +8,7 @@ mod tests {
     use crate::proofs::proof_checker::eval_expr_with_subst;
     use crate::proofs::proof_extraction::ProveExistsError;
     use crate::proofs::proof_format::{ProofId, ProofStore, Proposition};
-    use crate::proofs::proof_head::{Firing, HeadLayout, HeadPlan, HeadProof, ProofAlgebra};
+    use crate::proofs::proof_head::{Firing, HeadPlan, HeadProof, ProofAlgebra};
     use crate::util::{HashMap, HashSet, IndexMap};
     use crate::{
         CommandOutput, EGraph, Error, ProofEncodingUnsupportedReason, TermDag, TermId,
@@ -288,7 +288,7 @@ mod tests {
                 format!("@union-operand-{minted}")
             };
             let plan = HeadPlan::new(actions, &mut fresh);
-            let layout = HeadLayout::new(&plan);
+            let layout = &plan.layout;
             let mut store = ProofStore::new(term_dag, HashMap::default(), HashSet::default());
             let mut firing = Firing::new(
                 &walked.name,

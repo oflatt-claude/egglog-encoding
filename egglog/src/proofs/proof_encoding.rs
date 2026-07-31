@@ -3,8 +3,7 @@ use crate::proofs::proof_encoding_helpers::{
     Composition, EncodingNames, HeadColumn, Justification, Skeleton,
 };
 use crate::proofs::proof_head::{
-    HeadLayout, HeadPlan, HeadPosition, HeadProof, HeadRun, ProofAlgebra, ProofSite,
-    constructor_operand,
+    HeadPlan, HeadPosition, HeadProof, HeadRun, ProofAlgebra, ProofSite, constructor_operand,
 };
 use crate::typechecking::FuncType;
 use crate::*;
@@ -1925,7 +1924,7 @@ impl<'a> ProofInstrumentor<'a> {
         // A rule head is a format proof conversion can replay, so its proofs are
         // named by column; everywhere else the encoder composes them itself.
         self.site = match justification {
-            Justification::Rule(..) => ProofSite::skeleton(HeadLayout::new(&plan)),
+            Justification::Rule(..) => ProofSite::skeleton(plan.layout.clone()),
             _ => ProofSite::Composed,
         };
         let mut scope = Scope::default();
