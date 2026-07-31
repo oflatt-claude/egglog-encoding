@@ -32,13 +32,14 @@ pub(crate) struct EncodingNames {
     /// A later proof of the same head: the previous column's rule proof plus one
     /// canonicalization bridge.
     pub(crate) rule_link_constructor: String,
-    /// Prefix of the packed proof constructors, whose name spells the
-    /// [`Skeleton`] its row stands for. Derived from one name for the same
-    /// reason as [`Self::rule_fused_prefix`].
+    /// Prefix of the packed proof constructors carrying a [`Skeleton`] and the
+    /// columns it composes over: column count `k`'s constructor is
+    /// [`Self::packed_proof`]. Derived from one name for the same reason as
+    /// [`Self::rule_fused_prefix`].
     pub(crate) packed_prefix: String,
-    /// The skeletons [`ProofInstrumentor::packed_proof_constructor`] has
+    /// The column counts [`ProofInstrumentor::packed_proof_constructor`] has
     /// declared.
-    pub(crate) packed_declared: HashSet<Skeleton>,
+    pub(crate) packed_declared: HashSet<usize>,
     pub(crate) merge_fn_idx_constructor: String,
     pub(crate) merge_fn_row_constructor: String,
     pub(crate) eq_trans_constructor: String,
@@ -63,21 +64,20 @@ pub(crate) struct EncodingNames {
 }
 
 /// The composition one packed proof row stands for, written over the row's own
-/// columns: a [`Skeleton::Hole`] is the proof in a column, and
-/// [`Skeleton::Congr`]'s middle field the column holding that step's child
-/// position. Every column is named, so the skeleton is also the row's layout; a
-/// column a composition reaches twice is named twice and carried once.
+/// proof columns: a [`Skeleton::Hole`] is the proof in a column. Every column is
+/// named, so the skeleton is also the row's layout; a column a composition
+/// reaches twice is named twice and carried once.
 ///
-/// A packed constructor's name spells its skeleton
-/// ([`EncodingNames::packed_proof`]), so the site writing the row and the
-/// unpacking that reads it work from one statement of the composition.
+/// A packed row carries [`Self::spelling`] in its first column, so the site
+/// writing the row and the unpacking that reads it work from one statement of
+/// the composition.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum Skeleton {
     /// The proof in the named column.
     Hole(usize),
     Sym(Box<Skeleton>),
     Trans(Box<Skeleton>, Box<Skeleton>),
-    /// The child position is the `i64` in the named column.
+    /// The child position the step rewrites.
     Congr(Box<Skeleton>, usize, Box<Skeleton>),
 }
 
@@ -91,9 +91,9 @@ impl Skeleton {
     }
 
     /// This composition with one more congruence step, rewriting the child at
-    /// the position in column `index` by the proof `child` reaches.
-    pub(crate) fn congr(self, index: usize, child: Skeleton) -> Skeleton {
-        Skeleton::Congr(Box::new(self), index, Box::new(child))
+    /// position `child` by the proof `step` reaches.
+    pub(crate) fn congr(self, child: usize, step: Skeleton) -> Skeleton {
+        Skeleton::Congr(Box::new(self), child, Box::new(step))
     }
 
     /// How many columns the row has.
@@ -101,43 +101,38 @@ impl Skeleton {
         match self {
             Skeleton::Hole(column) => column + 1,
             Skeleton::Sym(inner) => inner.width(),
-            Skeleton::Trans(left, right) => left.width().max(right.width()),
-            Skeleton::Congr(base, index, child) => base.width().max(index + 1).max(child.width()),
+            Skeleton::Trans(left, right) | Skeleton::Congr(left, _, right) => {
+                left.width().max(right.width())
+            }
         }
     }
 
-    /// The columns holding a proof, ascending.
-    pub(crate) fn proof_columns(&self) -> Vec<usize> {
-        let mut columns = vec![];
-        self.collect_columns(&mut columns, &mut vec![]);
-        columns.sort_unstable();
-        columns.dedup();
-        columns
-    }
-
-    fn collect_columns(&self, proofs: &mut Vec<usize>, indexes: &mut Vec<usize>) {
+    fn collect_columns(&self, columns: &mut Vec<usize>) {
         match self {
-            Skeleton::Hole(column) => proofs.push(*column),
-            Skeleton::Sym(inner) => inner.collect_columns(proofs, indexes),
-            Skeleton::Trans(left, right) => {
-                left.collect_columns(proofs, indexes);
-                right.collect_columns(proofs, indexes);
-            }
-            Skeleton::Congr(base, index, child) => {
-                base.collect_columns(proofs, indexes);
-                indexes.push(*index);
-                child.collect_columns(proofs, indexes);
+            Skeleton::Hole(column) => columns.push(*column),
+            Skeleton::Sym(inner) => inner.collect_columns(columns),
+            Skeleton::Trans(left, right) | Skeleton::Congr(left, _, right) => {
+                left.collect_columns(columns);
+                right.collect_columns(columns);
             }
         }
     }
 
-    /// The name suffix spelling this skeleton: its nodes in prefix order, one
-    /// `_`-separated token each — `sym`, `trans`, `congr`, `p<column>` for a
-    /// hole, and `i<column>` for a congruence's child-position column.
-    fn spelling(&self) -> String {
+    /// This skeleton as the string a packed row carries: its nodes in prefix
+    /// order, one `_`-separated token each — `sym`, `trans`, `congr`,
+    /// `p<column>` for a hole, and a bare number for a congruence's child
+    /// position. Panics unless [`Self::from_spelling`] reads it back, since that
+    /// is all unpacking has to go on.
+    pub(crate) fn spelling(&self) -> String {
         let mut tokens = vec![];
         self.spell(&mut tokens);
-        tokens.join("_")
+        let spelling = tokens.join("_");
+        assert_eq!(
+            Skeleton::from_spelling(&spelling).as_ref(),
+            Some(self),
+            "{spelling} does not spell {self:?}"
+        );
+        spelling
     }
 
     fn spell(&self, tokens: &mut Vec<String>) {
@@ -152,43 +147,34 @@ impl Skeleton {
                 left.spell(tokens);
                 right.spell(tokens);
             }
-            Skeleton::Congr(base, index, child) => {
+            Skeleton::Congr(base, child, step) => {
                 tokens.push("congr".to_string());
                 base.spell(tokens);
-                tokens.push(format!("i{index}"));
-                child.spell(tokens);
+                tokens.push(child.to_string());
+                step.spell(tokens);
             }
         }
     }
 
     /// The skeleton [`Self::spelling`] writes as `spelling`, or `None` when that
-    /// is not a spelling of one whose columns are `0..n`, each holding either a
-    /// proof or a child position. A column may be named more than once: a
-    /// composition reaching the same step twice carries it once.
-    fn from_spelling(spelling: &str) -> Option<Skeleton> {
+    /// is not a spelling of one whose columns are `0..n`. A column may be named
+    /// more than once: a composition reaching the same step twice carries it
+    /// once.
+    pub(crate) fn from_spelling(spelling: &str) -> Option<Skeleton> {
         let mut tokens = spelling.split('_');
         let skeleton = Skeleton::read(&mut tokens)?;
         if tokens.next().is_some() {
             return None;
         }
-        let (mut proofs, mut indexes) = (vec![], vec![]);
-        skeleton.collect_columns(&mut proofs, &mut indexes);
-        proofs.sort_unstable();
-        proofs.dedup();
-        indexes.sort_unstable();
-        indexes.dedup();
-        if proofs.iter().any(|column| indexes.contains(column)) {
-            return None;
-        }
-        let mut columns: Vec<usize> = proofs.into_iter().chain(indexes).collect();
+        let mut columns = vec![];
+        skeleton.collect_columns(&mut columns);
         columns.sort_unstable();
+        columns.dedup();
         (columns == (0..columns.len()).collect::<Vec<_>>()).then_some(skeleton)
     }
 
     fn read<'a>(tokens: &mut impl Iterator<Item = &'a str>) -> Option<Skeleton> {
-        let column = |token: &str, tag: char| token.strip_prefix(tag)?.parse().ok();
-        let token = tokens.next()?;
-        match token {
+        match tokens.next()? {
             "sym" => Some(Skeleton::read(tokens)?.sym()),
             "trans" => {
                 let left = Skeleton::read(tokens)?;
@@ -196,10 +182,10 @@ impl Skeleton {
             }
             "congr" => {
                 let base = Skeleton::read(tokens)?;
-                let index = column(tokens.next()?, 'i')?;
-                Some(base.congr(index, Skeleton::read(tokens)?))
+                let child = tokens.next()?.parse().ok()?;
+                Some(base.congr(child, Skeleton::read(tokens)?))
             }
-            token => Some(Skeleton::Hole(column(token, 'p')?)),
+            token => Some(Skeleton::Hole(token.strip_prefix('p')?.parse().ok()?)),
         }
     }
 }
@@ -226,20 +212,10 @@ impl Composition {
         }
     }
 
-    /// The proof variables the composition reads, in first use order.
-    pub(crate) fn leaves(&self) -> Vec<String> {
-        let (skeleton, columns) = self.pack();
-        skeleton
-            .proof_columns()
-            .into_iter()
-            .map(|column| columns[column].clone())
-            .collect()
-    }
-
-    /// This composition as a packed row: the [`Skeleton`] it states and the row's
-    /// columns, a leaf's proof variable and a congruence's child position as an
-    /// `i64` literal. Equal subtrees share their columns, so a step the
-    /// composition reaches twice is carried once.
+    /// This composition as a packed row: the [`Skeleton`] it states and the proof
+    /// variable in each of the row's columns, in first use order. Equal subtrees
+    /// share their columns, so a step the composition reaches twice is carried
+    /// once.
     pub(crate) fn pack(&self) -> (Skeleton, Vec<String>) {
         let mut columns = vec![];
         let skeleton = self.lay_out(&mut HashMap::default(), &mut columns);
@@ -264,11 +240,9 @@ impl Composition {
                 let left = left.lay_out(laid_out, columns);
                 left.trans(right.lay_out(laid_out, columns))
             }
-            Composition::Congr(base, index, child) => {
+            Composition::Congr(base, child, step) => {
                 let base = base.lay_out(laid_out, columns);
-                columns.push(index.to_string());
-                let index = columns.len() - 1;
-                base.congr(index, child.lay_out(laid_out, columns))
+                base.congr(*child, step.lay_out(laid_out, columns))
             }
         };
         laid_out.insert(self.clone(), skeleton.clone());
@@ -384,23 +358,19 @@ impl EncodingNames {
             .ok()
     }
 
-    /// The packed proof constructor whose row stands for `skeleton`. Panics
-    /// unless the name spells the skeleton back, since that is all unpacking
-    /// has to go on.
-    pub(crate) fn packed_proof(&self, skeleton: &Skeleton) -> String {
-        let name = format!("{}_{}", self.packed_prefix, skeleton.spelling());
-        assert_eq!(
-            self.packed_skeleton(&name).as_ref(),
-            Some(skeleton),
-            "{name} does not spell {skeleton:?}"
-        );
-        name
+    /// The packed proof constructor carrying a [`Skeleton`] over `columns` proof
+    /// columns.
+    pub(crate) fn packed_proof(&self, columns: usize) -> String {
+        format!("{}_{columns}", self.packed_prefix)
     }
 
-    /// The composition `head`'s row stands for, when it is one of
+    /// The proof-column count `head` carries, when it is one of
     /// [`Self::packed_proof`]'s constructors.
-    pub(crate) fn packed_skeleton(&self, head: &str) -> Option<Skeleton> {
-        Skeleton::from_spelling(head.strip_prefix(&self.packed_prefix)?.strip_prefix('_')?)
+    pub(crate) fn packed_proof_columns(&self, head: &str) -> Option<usize> {
+        head.strip_prefix(&self.packed_prefix)?
+            .strip_prefix('_')?
+            .parse()
+            .ok()
     }
 
     pub(crate) fn new(symbol_gen: &mut SymbolGen) -> Self {
@@ -530,35 +500,27 @@ impl ProofInstrumentor<'_> {
         self.parse_program(&decls)
     }
 
-    /// The packed proof constructor standing for `skeleton`, together with its
-    /// declaration — empty once some program has declared it.
+    /// The packed proof constructor for a row of `columns` proof columns,
+    /// together with its declaration — empty once some program has declared it.
     ///
-    /// The skeleton is a property of the site packing the row, not of the proof
-    /// format, so the declaration is emitted with the first commands using it.
-    pub(crate) fn packed_proof_constructor(&mut self, skeleton: &Skeleton) -> (String, String) {
-        let name = self.proof_names().packed_proof(skeleton);
+    /// A row's column count is a property of the site packing it, not of the
+    /// proof format, so the declaration is emitted with the first commands using
+    /// it.
+    pub(crate) fn packed_proof_constructor(&mut self, columns: usize) -> (String, String) {
+        let name = self.proof_names().packed_proof(columns);
         if !self
             .egraph
             .proof_state
             .proof_names
             .packed_declared
-            .insert(skeleton.clone())
+            .insert(columns)
         {
             return (name, String::new());
         }
         let proof = self.proof_names().proof_datatype.clone();
-        let proof_columns = skeleton.proof_columns();
-        let columns: String = (0..skeleton.width())
-            .map(|column| {
-                if proof_columns.contains(&column) {
-                    format!("{proof} ")
-                } else {
-                    "i64 ".to_string()
-                }
-            })
-            .collect();
+        let columns: String = std::iter::repeat_n(format!("{proof} "), columns).collect();
         let decl = format!(
-            "(function {name} ({columns}{proof}) Unit :no-merge :internal-hidden :internal-term-node)\n"
+            "(function {name} (String {columns}{proof}) Unit :no-merge :internal-hidden :internal-term-node)\n"
         );
         (name, decl)
     }
@@ -838,15 +800,15 @@ impl ProofInstrumentor<'_> {
 
 ;; A site with a fixed composition rather than a rule head — a top-level action,
 ;; a merge body, a view rebuild, a merge collision — writes one packed row
-;; standing for the whole composition, in a constructor declared where the row
-;; is written (see `packed_proof_constructor`). The name spells it over the row's
-;; own columns, in prefix order: `sym`, `trans`, `congr`, `p<n>` for the proof in
-;; column n, and `i<n>` for the child position in column n. So
-;;   (Packed_trans_sym_p0_p1 <hi proof> <lo proof>)
+;; standing for the whole composition, in a `Packed_<k>` declared per proof-column
+;; count (see `packed_proof_constructor`). The first column spells the composition
+;; over the rest, in prefix order: `sym`, `trans`, `congr`, `p<n>` for the proof in
+;; column n, and a bare number for a congruence's child position. So
+;;   (Packed_2 \"trans_sym_p0_p1\" <hi proof> <lo proof>)
 ;; is the `@UF` edge a merge collision displaces, where both carried proofs share
 ;; their left-hand side, and
-;;   (Packed_congr_p0_i1_p2 <row proof> <column> <step proof>)
-;; is a view rebuild that canonicalized one child column.
+;;   (Packed_2 \"congr_p0_3_p1\" <row proof> <step proof>)
+;; is a view rebuild that canonicalized child column 3.
 
 ;; term-free merge justification for an FD custom-function view subexpression:
 ;; name of function, two premise proofs, and the pre-order index of the merge-body

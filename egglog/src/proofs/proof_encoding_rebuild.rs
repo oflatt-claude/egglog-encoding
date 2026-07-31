@@ -275,26 +275,26 @@ impl ProofInstrumentor<'_> {
         };
 
         // Lay the row out and state its composition together: the row proof,
-        // then each step's child position beside its proof, then the e-class's
-        // own step.
+        // then each canonicalized column's step proof, then the e-class's own
+        // step.
         let mut decls = String::new();
         let mut proof_acc = row_pf.clone();
         let mut args = vec![row_pf.clone()];
         let mut skeleton = Skeleton::Hole(0);
         for (child, step) in steps {
-            args.push(child.to_string());
             args.push(step);
-            skeleton = skeleton.congr(args.len() - 2, Skeleton::Hole(args.len() - 1));
+            skeleton = skeleton.congr(child, Skeleton::Hole(args.len() - 1));
         }
         if let Some(step) = eclass_step {
             args.push(step);
             skeleton = Skeleton::Hole(args.len() - 1).sym().trans(skeleton);
         }
         if args.len() > 1 {
-            let (packed, decl) = self.packed_proof_constructor(&skeleton);
+            let (packed, decl) = self.packed_proof_constructor(args.len());
             decls = decl;
             let proof_sort = self.proof_sort();
-            proof_acc = self.mint(&mut lets, &packed, &args.join(" "), &proof_sort);
+            let row = format!("\"{}\" {}", skeleton.spelling(), args.join(" "));
+            proof_acc = self.mint(&mut lets, &packed, &row, &proof_sort);
         }
 
         let pf_arg = if proofs { proof_acc } else { "()".to_string() };

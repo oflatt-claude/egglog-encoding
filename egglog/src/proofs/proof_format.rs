@@ -423,14 +423,10 @@ impl RawProofStore {
             } = self.rule_columns(term_id);
             return premises.into_iter().chain(bridges).collect();
         }
-        if let Some(skeleton) = names.packed_skeleton(head)
-            && args.len() == skeleton.width()
+        if let Some(columns) = names.packed_proof_columns(head)
+            && args.len() == columns + 1
         {
-            return skeleton
-                .proof_columns()
-                .into_iter()
-                .map(|column| args[column])
-                .collect();
+            return args[1..].to_vec();
         }
         match args.len() {
             4 if *head == names.merge_fn_idx_constructor => vec![args[1], args[2]],
@@ -514,21 +510,19 @@ impl RawProofStore {
         self.parse_proof(term_id)
     }
 
-    /// The composition `skeleton` states, over the columns of the packed row
-    /// `args`: a hole's column holds its proof, and a congruence's index column
-    /// the child position it rewrites.
-    fn instantiate(&mut self, skeleton: &Skeleton, args: &[TermId]) -> RawProofId {
+    /// The composition `skeleton` states, over the proof columns `columns` of a
+    /// packed row.
+    fn instantiate(&mut self, skeleton: &Skeleton, columns: &[TermId]) -> RawProofId {
         let proof = match skeleton {
-            Skeleton::Hole(column) => return self.child_proof(args[*column]),
-            Skeleton::Sym(inner) => RawProof::Sym(self.instantiate(inner, args)),
+            Skeleton::Hole(column) => return self.child_proof(columns[*column]),
+            Skeleton::Sym(inner) => RawProof::Sym(self.instantiate(inner, columns)),
             Skeleton::Trans(left, right) => {
-                let left = self.instantiate(left, args);
-                RawProof::Trans(left, self.instantiate(right, args))
+                let left = self.instantiate(left, columns);
+                RawProof::Trans(left, self.instantiate(right, columns))
             }
-            Skeleton::Congr(base, index, child) => {
-                let base = self.instantiate(base, args);
-                let child_index = self.parse_index(args[*index]);
-                RawProof::Congr(base, child_index, self.instantiate(child, args))
+            Skeleton::Congr(base, child, step) => {
+                let base = self.instantiate(base, columns);
+                RawProof::Congr(base, *child, self.instantiate(step, columns))
             }
         };
         self.add_proof(proof)
@@ -542,13 +536,19 @@ impl RawProofStore {
             );
         };
 
-        if let Some(skeleton) = self.names.packed_skeleton(&head) {
+        if let Some(columns) = self.names.packed_proof_columns(&head) {
             assert!(
-                args.len() == skeleton.width(),
+                args.len() == columns + 1,
                 "{head} should have {} args",
-                skeleton.width()
+                columns + 1
             );
-            return self.instantiate(&skeleton, &args);
+            let spelling = self.parse_string(args[0]);
+            let skeleton = Skeleton::from_spelling(&spelling)
+                .filter(|skeleton| skeleton.width() == columns)
+                .unwrap_or_else(|| {
+                    panic!("{spelling} is not a composition over {head}'s {columns} columns")
+                });
+            return self.instantiate(&skeleton, &args[1..]);
         }
 
         let proof = if head == self.names.fiat_constructor {
@@ -1604,12 +1604,14 @@ mod tests {
         }
     }
 
-    /// A packed row over `columns`, spelled as the extracted term of the
-    /// constructor standing for `skeleton`.
+    /// A packed row over `columns`, as the extracted term of the constructor
+    /// carrying `skeleton`.
     fn packed_term(raw: &mut RawProofStore, skeleton: &Skeleton, columns: Vec<TermId>) -> TermId {
         assert_eq!(columns.len(), skeleton.width(), "one term per column");
-        let head = raw.names.packed_proof(skeleton);
-        raw.term_dag.app(head, columns)
+        let head = raw.names.packed_proof(columns.len());
+        let spelling = raw.term_dag.lit(Literal::String(skeleton.spelling()));
+        let args = std::iter::once(spelling).chain(columns).collect();
+        raw.term_dag.app(head, args)
     }
 
     /// [`RawProofStore::from_extracted`]'s parse of one packed row.
@@ -1618,37 +1620,28 @@ mod tests {
         raw.parse_proof(term)
     }
 
-    /// An integer column of a packed row.
-    fn column(raw: &mut RawProofStore, value: i64) -> TermId {
-        raw.term_dag.lit(Literal::Int(value))
-    }
-
-    /// The skeleton a view rebuild that canonicalized `steps` child columns
-    /// packs, over the layout `indexed_rebuild_rule` writes.
-    fn rebuild_skeleton(steps: &[usize], eclass: bool) -> Skeleton {
+    /// The skeleton a view rebuild that canonicalized the child columns
+    /// `children` packs, over the layout `indexed_rebuild_rule` writes.
+    fn rebuild_skeleton(children: &[usize], eclass: bool) -> Skeleton {
         let mut skeleton = Skeleton::Hole(0);
-        for step in 0..steps.len() {
-            skeleton = skeleton.congr(1 + 2 * step, Skeleton::Hole(2 + 2 * step));
+        for (step, &child) in children.iter().enumerate() {
+            skeleton = skeleton.congr(child, Skeleton::Hole(1 + step));
         }
         if eclass {
-            skeleton = Skeleton::Hole(1 + 2 * steps.len()).sym().trans(skeleton);
+            skeleton = Skeleton::Hole(1 + children.len()).sym().trans(skeleton);
         }
         skeleton
     }
 
-    /// A rebuild row's columns: the row proof, then each step's child position
-    /// beside its proof, then the e-class's own step when it has one.
+    /// A rebuild row's columns: the row proof, then each canonicalized column's
+    /// step proof, then the e-class's own step when it has one.
     fn rebuild_columns(
-        raw: &mut RawProofStore,
         row: TermId,
         steps: &[(usize, TermId)],
         eclass: Option<TermId>,
     ) -> Vec<TermId> {
         let mut columns = vec![row];
-        for &(position, step) in steps {
-            columns.push(column(raw, position as i64));
-            columns.push(step);
-        }
+        columns.extend(steps.iter().map(|&(_, step)| step));
         columns.extend(eclass);
         columns
     }
@@ -1660,9 +1653,9 @@ mod tests {
         steps: &[(usize, TermId)],
         eclass: Option<TermId>,
     ) -> RawProofId {
-        let positions: Vec<usize> = steps.iter().map(|&(position, _)| position).collect();
-        let skeleton = rebuild_skeleton(&positions, eclass.is_some());
-        let columns = rebuild_columns(raw, row, steps, eclass);
+        let children: Vec<usize> = steps.iter().map(|&(child, _)| child).collect();
+        let skeleton = rebuild_skeleton(&children, eclass.is_some());
+        let columns = rebuild_columns(row, steps, eclass);
         let term = packed_term(raw, &skeleton, columns);
         parse(raw, term)
     }
@@ -1750,11 +1743,10 @@ mod tests {
         store.convert_raw_proof(&vec![], &HashMap::default(), &firing.raw, packed);
     }
 
-    /// The columns are literals, so a reader has to skip them to find the
-    /// proofs, and the e-class's is past the last of them. A proof
-    /// `nested_proofs` misses is still parsed, but by `parse_proof`'s recursion
-    /// rather than by `parse_nested_first`'s heap stack, so a deep chain through
-    /// it overflows.
+    /// Every column of the row is a proof, including the e-class's past the last
+    /// step. A proof `nested_proofs` misses is still parsed, but by
+    /// `parse_proof`'s recursion rather than by `parse_nested_first`'s heap
+    /// stack, so a deep chain through it overflows.
     #[test]
     fn a_rebuild_rows_nested_proofs_are_its_row_and_its_steps() {
         let mut raw = empty_store();
@@ -1768,7 +1760,7 @@ mod tests {
             (Some(eclass), vec![row, first, second, eclass]),
         ] {
             let skeleton = rebuild_skeleton(&[0, 2], with_eclass.is_some());
-            let columns = rebuild_columns(&mut raw, row, &steps, with_eclass);
+            let columns = rebuild_columns(row, &steps, with_eclass);
             let term = packed_term(&mut raw, &skeleton, columns);
             assert_eq!(
                 raw.nested_proofs(term),
@@ -1798,7 +1790,7 @@ mod tests {
                         } else {
                             (chain, None)
                         };
-                        let columns = rebuild_columns(&mut raw, row, &[(0, step)], eclass);
+                        let columns = rebuild_columns(row, &[(0, step)], eclass);
                         chain = packed_term(&mut raw, &skeleton, columns);
                     }
                     RawProofStore::from_extracted(&raw.names, raw.term_dag.clone(), chain);
@@ -1915,24 +1907,23 @@ mod tests {
         }
     }
 
-    /// Every composition a packed row can stand for is recovered from the
-    /// constructor's name, so the encoder and unpacking cannot drift apart.
+    /// Every composition a packed row can stand for is recovered from the string
+    /// the row carries, so the encoder and unpacking cannot drift apart.
     #[test]
-    fn a_packed_constructors_name_spells_its_skeleton() {
-        let names = EncodingNames::new(&mut SymbolGen::new("test".to_string()));
+    fn a_packed_rows_string_spells_its_skeleton() {
         let mut skeletons = displaced_skeletons().to_vec();
         for steps in 0..4 {
             for eclass in [false, true] {
-                let positions: Vec<usize> = (0..steps).map(|step| 2 * step).collect();
-                skeletons.push(rebuild_skeleton(&positions, eclass));
+                let children: Vec<usize> = (0..steps).map(|step| 2 * step).collect();
+                skeletons.push(rebuild_skeleton(&children, eclass));
             }
         }
         for skeleton in skeletons {
-            let head = names.packed_proof(&skeleton);
+            let spelling = skeleton.spelling();
             assert_eq!(
-                names.packed_skeleton(&head),
+                Skeleton::from_spelling(&spelling),
                 Some(skeleton.clone()),
-                "{head} should spell {skeleton:?}"
+                "{spelling} should spell {skeleton:?}"
             );
         }
     }

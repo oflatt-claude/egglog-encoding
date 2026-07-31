@@ -708,10 +708,12 @@ impl<'a> ProofInstrumentor<'a> {
                 ),
             );
         }
-        let (displaced, decl) = self.packed_proof_constructor(&composition);
+        let (displaced, decl) = self.packed_proof_constructor(composition.width());
+        let spelling = composition.spelling();
         let proof_sort = self.proof_sort();
         let mut mints = vec![];
-        let displaced_pf = self.mint(&mut mints, &displaced, "hi_pf_ lo_pf_", &proof_sort);
+        let row = format!("\"{spelling}\" hi_pf_ lo_pf_");
+        let displaced_pf = self.mint(&mut mints, &displaced, &row, &proof_sort);
         let mints_str = mints.join("\n                  ");
         let merge = format!(
             "((let hi_pf_ (proof-of-max old0 old1 new0 new1))
@@ -1333,16 +1335,17 @@ impl<'a> ProofInstrumentor<'a> {
     /// composition is a single step, else one packed row standing for the whole
     /// of it.
     fn emit_composition(&mut self, stmts: &mut Vec<String>, proof: &str, composition: Composition) {
-        for leaf in composition.leaves() {
-            self.emit_pending_group(stmts, &leaf);
+        let (skeleton, columns) = composition.pack();
+        for leaf in &columns {
+            self.emit_pending_group(stmts, leaf);
         }
         let (name, args) = self.single_step(&composition).unwrap_or_else(|| {
-            let (skeleton, columns) = composition.pack();
-            let (name, decl) = self.packed_proof_constructor(&skeleton);
+            let (name, decl) = self.packed_proof_constructor(columns.len());
             if !decl.is_empty() {
                 self.packed_decls.push(decl);
             }
-            (name, columns.join(" "))
+            let spelling = skeleton.spelling();
+            (name, format!("\"{spelling}\" {}", columns.join(" ")))
         });
         let proof_sort = self.proof_sort();
         let get_fresh = crate::proofs::proof_fresh::GET_FRESH_PRIM_NAME;

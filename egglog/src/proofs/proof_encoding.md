@@ -364,7 +364,7 @@ relations `@Fiat`, `@RuleLink`, `@MergeIdx`, `@MergeRow`, `@Trans`, `@Sym`,
 plus a row. Two further families have their column count fixed by the site rather
 than by the format, so each shape is declared just before the commands needing
 it: `@Rule_<k>`, a rule proof carrying its `k` body premises inline, and
-`@Packed_<skeleton>`, one row standing for a whole composition (see
+`@Packed_<k>`, one row standing for a whole composition over `k` proofs (see
 [Packed rows](#packed-rows)).
 
 Each sort also gets `(function @<Sort>Proof (<Sort>) @Proof :merge old)`,
@@ -372,8 +372,8 @@ recording for each term `t` a proof of `t = t` (oldest kept), and the union-find
 and view proof columns become real:
 
 ```text
-(function @UF_Math (Math) (Math @Proof) :merge (… @Packed_trans_sym_p0_p1 …) …)
-(function @AddView (Math Math) (Math @Proof) :merge (… @Packed_trans_p0_sym_p1 …) …)
+(function @UF_Math (Math) (Math @Proof) :merge (… @Packed_2 "trans_sym_p0_p1" …) …)
+(function @AddView (Math Math) (Math @Proof) :merge (… @Packed_2 "trans_p0_sym_p1" …) …)
 ```
 
 If term `k` has parent `p`, `(@UF_Math k)` returns `(values p proof)` where
@@ -673,8 +673,8 @@ column to name, so the encoder composes. For the running example's
 `num*_bridge` the two children's view-row proofs:
 
 ```text
-(set (@Packed_trans_sym_congr_congr_p0_i1_sym_p2_i3_sym_p4_congr_congr_p0_i1_sym_p2_i3_sym_p4
-        add_own 0 num1_bridge 1 num2_bridge add_canon) ())
+(set (@Packed_3 "trans_sym_congr_congr_p0_0_sym_p1_1_sym_p2_congr_congr_p0_0_sym_p1_1_sym_p2"
+        add_own num1_bridge num2_bridge add_canon) ())
 ```
 
 Four `@Proof` rows (plus six `@Ast` rows) for that one expression: the three
@@ -706,13 +706,14 @@ shape is fixed by the site rather than discovered at run time, so one row stands
 for the whole of it.
 
 A site with no rule head to replay says what its row stands for by writing a
-**skeleton** — a proof term over the row's own columns, spelled into the
-constructor's name in prefix order: `sym`, `trans`, `congr`, `p<n>` for the proof
-in column n, and `i<n>` for the child position in column n. Unpacking reads the
-skeleton back off the name and substitutes the row's columns into it, so there is
-one statement of the composition rather than one at each end. A column may be
-named twice — `trans_sym_p0_p0` is `reflexive`, `t' = t'` from the one proof of
-`t = t'` — and is then carried once.
+**skeleton** — a proof term over the row's other columns, spelled into the first
+one in prefix order: `sym`, `trans`, `congr`, `p<n>` for the proof in column n,
+and a bare number for a congruence's child position. Unpacking reads the skeleton
+back off that column and substitutes the rest into it, so there is one statement
+of the composition rather than one at each end. A column may be named twice —
+`trans_sym_p0_p0` is `reflexive`, `t' = t'` from the one proof of `t = t'` — and
+is then carried once. Every other column is a proof, so the constructor is a
+function of their count alone: `@Packed_<k>`.
 
 The encoder composes over proof *names*, so it holds each `@Sym`, `@Trans` and
 `@Congr` back as a tree and writes the row where a statement reads the name. Two
@@ -720,12 +721,12 @@ things bound what one row spells. A composition nothing reads is never written a
 all — the connector of a top-level term nobody builds on, for instance. And the
 connector a built term hands its parent gets a row of its own, rather than being
 spelled into every row above it, whenever the term's own children moved: a
-level's row then spells its own children's steps and no deeper term's, so the
-constructor is a function of the term's arity rather than of its size.
+level's row then spells its own children's steps and no deeper term's, so the row
+is a function of the term's arity rather than of its size.
 
 **A view rebuild** writes one row whose columns are the row proof, then each
-canonicalized column's position beside its step proof, then the e-class's own step
-when the view's output is an e-class. In proof mode the rebuild rule of
+canonicalized column's step proof, then the e-class's own step when the view's
+output is an e-class. In proof mode the rebuild rule of
 [Keeping the view canonical](#keeping-the-view-canonical) reads a step proof per
 column and packs them:
 
@@ -734,8 +735,8 @@ column and packs them:
 (let c0_term (@MathProof c0_))
 (let c0_step (@UF_Math_canon_proof c0_ c0_term))
 … same for c1_ and e2_ …
-(set (@Packed_trans_sym_p5_congr_congr_p0_i1_p2_i3_p4
-        pf 0 c0_step 1 c1_step e2_step out) ())
+(set (@Packed_4 "trans_sym_p3_congr_congr_p0_0_p1_1_p2"
+        pf c0_step c1_step e2_step out) ())
 ```
 
 `@UF_<Sort>_canon_proof` supplies each step's proof, reflexive for a column that
@@ -747,9 +748,8 @@ position, since an e-class can equal one of its own children's terms.
 `proof-of-max`/`proof-of-min` pair each carried proof with the larger and smaller
 side. The two share an endpoint, and which endpoint decides which of them the
 composition reverses; either way it proves `larger = smaller`. The union-find's
-carried proofs share their left-hand side, giving
-`@Packed_trans_sym_p0_p1`, and the view's their right, giving
-`@Packed_trans_p0_sym_p1`.
+carried proofs share their left-hand side, spelling `trans_sym_p0_p1`, and the
+view's their right, spelling `trans_p0_sym_p1`.
 
 **A custom function's view merge** writes one `@MergeRow` naming the function and
 the two colliding rows' proofs; the conclusion is recovered by running the merge
