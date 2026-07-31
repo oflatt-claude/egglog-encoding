@@ -1,5 +1,7 @@
 #[doc = include_str!("proof_encoding.md")]
-use crate::proofs::proof_encoding_helpers::{EncodingNames, HeadColumn, Justification, Skeleton};
+use crate::proofs::proof_encoding_helpers::{
+    Composition, EncodingNames, HeadColumn, Justification, Skeleton,
+};
 use crate::proofs::proof_head::{
     HeadLayout, HeadPlan, HeadPosition, HeadProof, HeadRun, ProofAlgebra, ProofSite,
     constructor_operand,
@@ -205,6 +207,15 @@ pub(crate) struct ProofInstrumentor<'a> {
     /// A group is emitted where its proof is first read; a proof nothing reads is
     /// never emitted at all (see [`Self::defer_lookup`]).
     pending_lookups: HashMap<String, Pending>,
+    /// What each proof variable the encoder composed stands for, until the row
+    /// standing for it is written (see [`Self::mint_sym`]).
+    compositions: HashMap<String, Composition>,
+    /// Compositions that get a row of their own rather than being written into
+    /// the one composing over them (see [`Self::level_connector`]).
+    sealed: HashSet<String>,
+    /// Declarations of the packed constructors the compositions written so far
+    /// need, to be emitted ahead of the command using them.
+    packed_decls: Vec<String>,
     /// Which layer the statements being emitted belong to: a rule head's
     /// skeleton, or a composition written out here.
     site: ProofSite,
@@ -234,6 +245,9 @@ impl<'a> ProofInstrumentor<'a> {
             head_chain: None,
             reflexive: HashSet::default(),
             pending_lookups: HashMap::default(),
+            compositions: HashMap::default(),
+            sealed: HashSet::default(),
+            packed_decls: vec![],
             site: ProofSite::Composed,
         }
     }
@@ -644,7 +658,7 @@ impl<'a> ProofInstrumentor<'a> {
         ));
         res.push(format!("(let {guest} {target_id})"));
         let guest_conn = match &nat_to_dedup {
-            Some(chain) => Connector::Node(self.connect(chain.clone(), view_proof.clone())),
+            Some(chain) => Connector::Node(self.level_connector(chain, &view_proof)),
             None => Connector::Column(
                 run.expect("a rule head's guest is numbered")
                     .column(HeadProof::Connector),
@@ -1228,18 +1242,18 @@ impl<'a> ProofInstrumentor<'a> {
 
     /// `Sym(proof)`, or `proof` itself when it is reflexive.
     ///
-    /// Deferred, like the other two composites: a skeleton step is emitted only
-    /// where something reads it, and a head that concludes nothing writes none.
+    /// Held back, like the other two composites: the row is written where
+    /// something reads the name, so a composition nothing reads is never written
+    /// and one that is becomes a single row (see [`Self::emit_composition`]).
     pub(crate) fn mint_sym(&mut self, proof: &str) -> String {
         if self.is_reflexive(proof) {
             return proof.to_string();
         }
-        let sym = self.proof_names().eq_sym_constructor.clone();
-        let proof_sort = self.proof_sort();
-        self.mint_deferred(&sym, proof, &proof_sort)
+        let inner = self.composition(proof);
+        self.compose(Composition::Sym(Box::new(inner)))
     }
 
-    /// `Trans(lhs, rhs)`, dropping whichever side is reflexive. Deferred, see
+    /// `Trans(lhs, rhs)`, dropping whichever side is reflexive. Held back, see
     /// [`Self::mint_sym`].
     pub(crate) fn mint_trans(&mut self, lhs: &str, rhs: &str) -> String {
         if self.is_reflexive(lhs) {
@@ -1248,20 +1262,102 @@ impl<'a> ProofInstrumentor<'a> {
         if self.is_reflexive(rhs) {
             return lhs.to_string();
         }
-        let trans = self.proof_names().eq_trans_constructor.clone();
-        let proof_sort = self.proof_sort();
-        self.mint_deferred(&trans, &format!("{lhs} {rhs}"), &proof_sort)
+        let (lhs, rhs) = (self.composition(lhs), self.composition(rhs));
+        self.compose(Composition::Trans(Box::new(lhs), Box::new(rhs)))
     }
 
-    /// `Congr(acc, idx, step)`, or `acc` when `step` is reflexive. Deferred, see
+    /// `Congr(acc, idx, step)`, or `acc` when `step` is reflexive. Held back, see
     /// [`Self::mint_sym`].
     pub(crate) fn mint_congr(&mut self, acc: &str, idx: usize, step: &str) -> String {
         if self.is_reflexive(step) {
             return acc.to_string();
         }
-        let congr = self.proof_names().congr_constructor.clone();
+        let (acc, step) = (self.composition(acc), self.composition(step));
+        self.compose(Composition::Congr(Box::new(acc), idx, Box::new(step)))
+    }
+
+    /// What `proof` stands for: the composition it names while that is still
+    /// unwritten and unsealed, else the variable itself.
+    fn composition(&self, proof: &str) -> Composition {
+        match self.compositions.get(proof) {
+            Some(composition) if !self.sealed.contains(proof) => composition.clone(),
+            _ => Composition::Leaf(proof.to_string()),
+        }
+    }
+
+    /// Name `composition`, holding its row back until something reads the name.
+    fn compose(&mut self, composition: Composition) -> String {
+        let proof = self.fresh_var();
+        self.compositions.insert(proof.clone(), composition);
+        proof
+    }
+
+    /// The connector a built term hands its parent: from the term as written,
+    /// through `chain` to the term over canonical children, and back along the
+    /// view row `dedup`.
+    ///
+    /// A term whose own `chain` is still an unwritten composition seals the
+    /// connector, so the row above it holds a column here rather than spelling
+    /// this term out too. A level's packed row is then a function of its arity
+    /// and not of the whole term's size.
+    fn level_connector(&mut self, chain: &str, dedup: &str) -> String {
+        let composed = self.compositions.contains_key(chain);
+        let connector = self.connect(chain.to_string(), dedup.to_string());
+        if composed {
+            self.sealed.insert(connector.clone());
+        }
+        connector
+    }
+
+    /// The `@Sym`/`@Trans`/`@Congr` row `composition` is, as a name and its
+    /// arguments — `None` unless it is one step over proofs already in scope.
+    fn single_step(&self, composition: &Composition) -> Option<(String, String)> {
+        let names = self.proof_names();
+        Some(match composition {
+            Composition::Sym(inner) => {
+                (names.eq_sym_constructor.clone(), inner.leaf()?.to_string())
+            }
+            Composition::Trans(left, right) => (
+                names.eq_trans_constructor.clone(),
+                format!("{} {}", left.leaf()?, right.leaf()?),
+            ),
+            Composition::Congr(base, index, child) => (
+                names.congr_constructor.clone(),
+                format!("{} {index} {}", base.leaf()?, child.leaf()?),
+            ),
+            Composition::Leaf(_) => return None,
+        })
+    }
+
+    /// Write the row `proof` names: one `@Sym`/`@Trans`/`@Congr` when the
+    /// composition is a single step, else one packed row standing for the whole
+    /// of it.
+    fn emit_composition(&mut self, stmts: &mut Vec<String>, proof: &str, composition: Composition) {
+        for leaf in composition.leaves() {
+            self.emit_pending_group(stmts, &leaf);
+        }
+        let (name, args) = self.single_step(&composition).unwrap_or_else(|| {
+            let (skeleton, columns) = composition.pack();
+            let (name, decl) = self.packed_proof_constructor(&skeleton);
+            if !decl.is_empty() {
+                self.packed_decls.push(decl);
+            }
+            (name, columns.join(" "))
+        });
         let proof_sort = self.proof_sort();
-        self.mint_deferred(&congr, &format!("{acc} {idx} {step}"), &proof_sort)
+        let get_fresh = crate::proofs::proof_fresh::GET_FRESH_PRIM_NAME;
+        stmts.push(format!("(let {proof} ({get_fresh} \"{proof_sort}\"))"));
+        stmts.push(format!("(set ({name} {args} {proof}) ())"));
+    }
+
+    /// The declarations the compositions written since the last call need, as
+    /// commands to run ahead of the ones using them.
+    fn take_packed_decls(&mut self) -> Vec<Command> {
+        if self.packed_decls.is_empty() {
+            return vec![];
+        }
+        let decls = std::mem::take(&mut self.packed_decls).join("");
+        self.parse_program(&decls)
     }
 
     /// Hold back `group`, the statements binding `proof`, until something reads
@@ -1283,16 +1379,19 @@ impl<'a> ProofInstrumentor<'a> {
         );
     }
 
-    /// Discard the statements still held back, whose proofs nothing read.
+    /// Discard the statements and compositions still held back, whose proofs
+    /// nothing read.
     pub(crate) fn drop_pending_lookups(&mut self) {
         self.pending_lookups.clear();
+        self.compositions.clear();
+        self.sealed.clear();
     }
 
     /// Emit the deferred groups `args_joined` reads, and transitively the groups
     /// those read, keeping each binding ahead of the statement reading it. A
     /// group is emitted at most once, wherever it is first read.
     fn emit_pending_lookups(&mut self, stmts: &mut Vec<String>, args_joined: &str) {
-        if self.pending_lookups.is_empty() {
+        if self.pending_lookups.is_empty() && self.compositions.is_empty() {
             return;
         }
         for var in read_vars(args_joined) {
@@ -1300,10 +1399,14 @@ impl<'a> ProofInstrumentor<'a> {
         }
     }
 
-    /// [`Self::emit_pending_lookups`] for the group bound to one variable. Called
+    /// [`Self::emit_pending_lookups`] for what one variable holds back. Called
     /// directly by a reader that does not go through [`Self::mint`] — a statement
     /// built by `format!` rather than as a row of its own.
     fn emit_pending_group(&mut self, stmts: &mut Vec<String>, var: &str) {
+        if let Some(composition) = self.compositions.remove(var) {
+            self.emit_composition(stmts, var, composition);
+            return;
+        }
         let Some(group) = self.pending_lookups.remove(var) else {
             return;
         };
@@ -1338,16 +1441,6 @@ impl<'a> ProofInstrumentor<'a> {
         self.emit_pending_lookups(stmts, args_joined);
         let v = self.fresh_id(stmts, out_sort);
         stmts.push(format!("(set ({name} {args_joined} {v}) ())"));
-        v
-    }
-
-    /// [`Self::mint`], held back until something reads the fresh variable (see
-    /// [`Self::defer_lookup`]).
-    fn mint_deferred(&mut self, name: &str, args_joined: &str, out_sort: &str) -> String {
-        let mut group = vec![];
-        let v = self.fresh_id(&mut group, out_sort);
-        group.push(format!("(set ({name} {args_joined} {v}) ())"));
-        self.defer_lookup(&v, group, args_joined);
         v
     }
 
@@ -1601,9 +1694,7 @@ impl<'a> ProofInstrumentor<'a> {
         self.record_bridge(&vprf);
 
         let connector = match &to_dedup {
-            // connector `fv_nat = dedup` = Trans(nat_to_dedup, Sym(dedup = f(children))).
-            // `sym_vprf` reads the `vprf` let, so it lands after the statements above.
-            Some(chain) => Connector::Node(self.connect(chain.clone(), vprf.clone())),
+            Some(chain) => Connector::Node(self.level_connector(chain, &vprf)),
             None => Connector::Column(
                 run.expect("a rule head's terms are numbered")
                     .column(HeadProof::Connector),
@@ -2292,7 +2383,12 @@ impl<'a> ProofInstrumentor<'a> {
         }
 
         for command in program {
+            let at = res.len();
             self.term_encode_command(&command, &mut res)?;
+            // A packed constructor is a property of the composition written, so
+            // it is declared with the first command writing one — ahead of that
+            // command, and outside any `fail` wrapping it.
+            res.splice(at..at, self.take_packed_decls());
 
             if !command_skips_rebuild(&command) {
                 res.push(Command::RunSchedule(self.rebuild()));

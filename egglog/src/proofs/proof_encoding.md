@@ -532,9 +532,14 @@ what [layer 2](#layer-2-proof-skeletons) removes: the walk above is a function o
 the head and the substitution, so it need not be written into the database at
 all.
 
+The walk is the specification of the proof at every layer-1 site, but not of the
+rows written there: where the encoder runs this walk itself, each `@Congr`,
+`@Sym` and `@Trans` above is a node of one [packed row](#packed-rows) rather than
+a row of its own.
+
 ## Layer 2: proof skeletons
 
-Layer 1 writes a row for every proof it composes. Almost none of them are ever
+Layer 1 composes a proof for every step of the walk. Almost none of them are ever
 read: a proof is only wanted if someone later asks to explain a specific fact.
 Layer 2 keeps the same walk but writes a row only where the *e-graph itself must
 store a proof* — a view row's proof column, a `@UF` edge's proof column, a
@@ -662,24 +667,22 @@ lowering, or while replaying a skeleton — which is exactly the difference betw
 the layers.
 
 **Top-level actions.** A top-level action is justified by `@Fiat` and has no
-column to name, so the encoder composes. The running example's
-`(Add (Num 1) (Num 2))` at top level really does emit the layer 1 shape —
-`add_own` is the `@Fiat` conclusion and `num*_bridge` the two children's view-row
-proofs:
+column to name, so the encoder composes. For the running example's
+`(Add (Num 1) (Num 2))` at top level the whole composition is one
+[packed row](#packed-rows) — `add_own` is the `@Fiat` conclusion and
+`num*_bridge` the two children's view-row proofs:
 
 ```text
-(set (@Sym   num1_bridge num1_conn) ())           ;; connector of (Num 1)
-(set (@Congr add_own 0 num1_conn step0) ())       ;; canonicalize, child 0
-(set (@Sym   num2_bridge num2_conn) ())
-(set (@Congr step0 1 num2_conn to_canonical) ())  ;; canonicalize, child 1
-(set (@Sym   to_canonical back) ())
-(set (@Trans back to_canonical add_canon) ())     ;; reflexive: (Add …) = (Add …)
+(set (@Packed_trans_sym_congr_congr_p0_i1_sym_p2_i3_sym_p4_congr_congr_p0_i1_sym_p2_i3_sym_p4
+        add_own 0 num1_bridge 1 num2_bridge add_canon) ())
 ```
 
-Nine `@Proof` rows (plus six `@Ast` rows) for that one expression — against six
-for a rule head that builds the same term *and* unions it into a matched
-variable. The top-level count is already reduced by dropping steps the encoder
-knows are reflexive.
+Four `@Proof` rows (plus six `@Ast` rows) for that one expression: the three
+`@Fiat` conclusions and that one row. A `@Fiat` is composed from nothing, so it
+cannot be a hole of a skeleton and stays a row of its own; the `@Ast` rows are
+its endpoints. The row count is also already reduced by dropping steps the
+encoder knows are reflexive — `(Num 1)`'s own conclusion is its canonical one, so
+neither `Num` level composes anything.
 
 **Merge bodies and maintenance rules.** A custom function's `:merge`, the
 path-compression rule, and the container rebuild rule are all code the encoder
@@ -692,21 +695,33 @@ the view row.
 A rule body's premise proofs are also composed, not recorded, since a body has no
 column either. A nested pattern reads one view per subterm, and the fact's proof
 is the outermost view's proof with a `@Congr` for each child that carries its own
-subproof. Those `@Congr` rows are emitted lazily, at the point the premise is
-first read — which is inside the rule's *action* list. They are the body's
-proofs, not proofs of anything the head concludes.
+subproof. That chain is emitted lazily, as one packed row, at the point the
+premise is first read — which is inside the rule's *action* list. They are the
+body's proofs, not proofs of anything the head concludes.
 
 ## Packed rows
 
-Three more sites record instead of composing, each with a fixed format rather
-than a rule head, so one row stands for a whole composition.
+Wherever [layer 1 is emitted](#where-layer-1-is-still-emitted), the composition's
+shape is fixed by the site rather than discovered at run time, so one row stands
+for the whole of it.
 
 A site with no rule head to replay says what its row stands for by writing a
 **skeleton** — a proof term over the row's own columns, spelled into the
 constructor's name in prefix order: `sym`, `trans`, `congr`, `p<n>` for the proof
 in column n, and `i<n>` for the child position in column n. Unpacking reads the
 skeleton back off the name and substitutes the row's columns into it, so there is
-one statement of the composition rather than one at each end.
+one statement of the composition rather than one at each end. A column may be
+named twice — `trans_sym_p0_p0` is `reflexive`, `t' = t'` from the one proof of
+`t = t'` — and is then carried once.
+
+The encoder composes over proof *names*, so it holds each `@Sym`, `@Trans` and
+`@Congr` back as a tree and writes the row where a statement reads the name. Two
+things bound what one row spells. A composition nothing reads is never written at
+all — the connector of a top-level term nobody builds on, for instance. And the
+connector a built term hands its parent gets a row of its own, rather than being
+spelled into every row above it, whenever the term's own children moved: a
+level's row then spells its own children's steps and no deeper term's, so the
+constructor is a function of the term's arity rather than of its size.
 
 **A view rebuild** writes one row whose columns are the row proof, then each
 canonicalized column's position beside its step proof, then the e-class's own step

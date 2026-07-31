@@ -65,8 +65,8 @@ pub(crate) struct EncodingNames {
 /// The composition one packed proof row stands for, written over the row's own
 /// columns: a [`Skeleton::Hole`] is the proof in a column, and
 /// [`Skeleton::Congr`]'s middle field the column holding that step's child
-/// position. Every column is named exactly once, so the skeleton is also the
-/// row's layout.
+/// position. Every column is named, so the skeleton is also the row's layout; a
+/// column a composition reaches twice is named twice and carried once.
 ///
 /// A packed constructor's name spells its skeleton
 /// ([`EncodingNames::packed_proof`]), so the site writing the row and the
@@ -111,6 +111,7 @@ impl Skeleton {
         let mut columns = vec![];
         self.collect_columns(&mut columns, &mut vec![]);
         columns.sort_unstable();
+        columns.dedup();
         columns
     }
 
@@ -161,7 +162,9 @@ impl Skeleton {
     }
 
     /// The skeleton [`Self::spelling`] writes as `spelling`, or `None` when that
-    /// is not a spelling of one naming each of its columns exactly once.
+    /// is not a spelling of one whose columns are `0..n`, each holding either a
+    /// proof or a child position. A column may be named more than once: a
+    /// composition reaching the same step twice carries it once.
     fn from_spelling(spelling: &str) -> Option<Skeleton> {
         let mut tokens = spelling.split('_');
         let skeleton = Skeleton::read(&mut tokens)?;
@@ -170,9 +173,16 @@ impl Skeleton {
         }
         let (mut proofs, mut indexes) = (vec![], vec![]);
         skeleton.collect_columns(&mut proofs, &mut indexes);
-        proofs.append(&mut indexes);
         proofs.sort_unstable();
-        (proofs == (0..proofs.len()).collect::<Vec<_>>()).then_some(skeleton)
+        proofs.dedup();
+        indexes.sort_unstable();
+        indexes.dedup();
+        if proofs.iter().any(|column| indexes.contains(column)) {
+            return None;
+        }
+        let mut columns: Vec<usize> = proofs.into_iter().chain(indexes).collect();
+        columns.sort_unstable();
+        (columns == (0..columns.len()).collect::<Vec<_>>()).then_some(skeleton)
     }
 
     fn read<'a>(tokens: &mut impl Iterator<Item = &'a str>) -> Option<Skeleton> {
@@ -191,6 +201,78 @@ impl Skeleton {
             }
             token => Some(Skeleton::Hole(column(token, 'p')?)),
         }
+    }
+}
+
+/// A composition the encoder has built but not written a row for. A leaf names a
+/// proof variable already in scope; the whole tree becomes one row where
+/// something reads it.
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub(crate) enum Composition {
+    /// The proof the named variable holds.
+    Leaf(String),
+    Sym(Box<Composition>),
+    Trans(Box<Composition>, Box<Composition>),
+    /// The child position rewritten by the step.
+    Congr(Box<Composition>, usize, Box<Composition>),
+}
+
+impl Composition {
+    /// The proof variable this is, when it names one rather than composing.
+    pub(crate) fn leaf(&self) -> Option<&str> {
+        match self {
+            Composition::Leaf(proof) => Some(proof),
+            _ => None,
+        }
+    }
+
+    /// The proof variables the composition reads, in first use order.
+    pub(crate) fn leaves(&self) -> Vec<String> {
+        let (skeleton, columns) = self.pack();
+        skeleton
+            .proof_columns()
+            .into_iter()
+            .map(|column| columns[column].clone())
+            .collect()
+    }
+
+    /// This composition as a packed row: the [`Skeleton`] it states and the row's
+    /// columns, a leaf's proof variable and a congruence's child position as an
+    /// `i64` literal. Equal subtrees share their columns, so a step the
+    /// composition reaches twice is carried once.
+    pub(crate) fn pack(&self) -> (Skeleton, Vec<String>) {
+        let mut columns = vec![];
+        let skeleton = self.lay_out(&mut HashMap::default(), &mut columns);
+        (skeleton, columns)
+    }
+
+    fn lay_out(
+        &self,
+        laid_out: &mut HashMap<Composition, Skeleton>,
+        columns: &mut Vec<String>,
+    ) -> Skeleton {
+        if let Some(skeleton) = laid_out.get(self) {
+            return skeleton.clone();
+        }
+        let skeleton = match self {
+            Composition::Leaf(proof) => {
+                columns.push(proof.clone());
+                Skeleton::Hole(columns.len() - 1)
+            }
+            Composition::Sym(inner) => inner.lay_out(laid_out, columns).sym(),
+            Composition::Trans(left, right) => {
+                let left = left.lay_out(laid_out, columns);
+                left.trans(right.lay_out(laid_out, columns))
+            }
+            Composition::Congr(base, index, child) => {
+                let base = base.lay_out(laid_out, columns);
+                columns.push(index.to_string());
+                let index = columns.len() - 1;
+                base.congr(index, child.lay_out(laid_out, columns))
+            }
+        };
+        laid_out.insert(self.clone(), skeleton.clone());
+        skeleton
     }
 }
 
@@ -754,10 +836,10 @@ impl ProofInstrumentor<'_> {
 ;;   (RuleLink <earlier column's proof> <bridge proof> <column>)
 (function {rule_link_constructor} ({proof_datatype} {proof_datatype} i64 {proof_datatype}) Unit :no-merge :internal-hidden :internal-term-node)
 
-;; A site with a fixed composition rather than a rule head — a view rebuild, a
-;; merge collision — writes one packed row standing for the whole composition,
-;; in a constructor declared where the row is written (see
-;; `packed_proof_constructor`). The name spells the composition over the row's
+;; A site with a fixed composition rather than a rule head — a top-level action,
+;; a merge body, a view rebuild, a merge collision — writes one packed row
+;; standing for the whole composition, in a constructor declared where the row
+;; is written (see `packed_proof_constructor`). The name spells it over the row's
 ;; own columns, in prefix order: `sym`, `trans`, `congr`, `p<n>` for the proof in
 ;; column n, and `i<n>` for the child position in column n. So
 ;;   (Packed_trans_sym_p0_p1 <hi proof> <lo proof>)
