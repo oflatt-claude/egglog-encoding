@@ -973,10 +973,9 @@ impl<'a> ProofInstrumentor<'a> {
                 for e in generic_exprs.iter().chain(std::iter::once(generic_expr)) {
                     exprs.push(self.instrument_action_expr(e, &mut res, justification, scope));
                 }
-                // The row `(f args… value)` is the `set`'s own conclusion; a global
-                // row's stored value follows it. Building a constructor claims two
-                // more columns than that, so a `set` on one would misnumber every
-                // later column rather than fail.
+                // The row `(f args… value)` is the `set`'s own conclusion, and its
+                // only column. Building a constructor claims two more, so a `set`
+                // on one would misnumber every later column rather than fail.
                 assert_ne!(
                     func_type.subtype,
                     FunctionSubtype::Constructor,

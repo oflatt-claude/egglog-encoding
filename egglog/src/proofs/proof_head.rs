@@ -54,8 +54,6 @@ pub(crate) enum HeadProof {
     EdgeFromLhs,
     /// The same edge with the `union`'s right operand as the term.
     EdgeFromRhs,
-    /// The stored-value proof of a global row.
-    GlobalValue,
 }
 
 /// A position a head's walk reaches, which claims one column per proof it
@@ -83,7 +81,7 @@ impl HeadPosition {
             HeadPosition::Guest => &[Own, DroppedEdge, GuestView, Connector],
             HeadPosition::Call => &[Own],
             HeadPosition::Union => &[Own, EdgeFromLhs, EdgeFromRhs],
-            HeadPosition::Set => &[Own, GlobalValue],
+            HeadPosition::Set => &[Own],
         }
     }
 }
@@ -641,9 +639,6 @@ impl<'a> Firing<'a> {
                     let row_term = self.eval(store, &row);
                     self.claim(HeadPosition::Set, |this| {
                         this.own(store, HeadProof::Own, Proposition::new(row_term, row_term));
-                        // Only a top-level action sets a global, and only a rule
-                        // head is walked, so this column is held but never filled.
-                        this.push(HeadProof::GlobalValue, None);
                     });
                 }
                 GenericAction::Change(..) | GenericAction::Panic(..) => {}

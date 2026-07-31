@@ -564,7 +564,7 @@ claims a fixed run:
 | a construct-into guest | own conclusion, the dropped `union`'s edge, the view row it writes, the connector |
 | any other call | own conclusion |
 | a `union` | its equality, then the union-find edge in each direction |
-| a `set` | its row, then the stored-value proof of a global row |
+| a `set` | its row |
 
 A position whose head produces no proof still holds its column, so the numbering
 follows the walk rather than what either side emits. The table above is

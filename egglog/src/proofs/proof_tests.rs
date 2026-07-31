@@ -319,14 +319,11 @@ mod tests {
                     rule.name
                 );
                 // A head writes no row for a guest's dropped `union` — that is
-                // folded into the view row beside it — and sets no global, so a
-                // column landing on either is one the walk numbers differently.
+                // folded into the view row beside it — so a column landing on one
+                // is a column the walk numbers differently.
                 let held = layout.proof_at(column);
                 assert!(
-                    !matches!(
-                        held,
-                        Some(HeadProof::DroppedEdge) | Some(HeadProof::GlobalValue)
-                    ),
+                    !matches!(held, Some(HeadProof::DroppedEdge)),
                     "rule '{}' writes column {column}, which its head walk fills \
                      with {held:?} — a proof no head writes a row for",
                     rule.name
