@@ -928,7 +928,7 @@ impl ProofStore {
                     bindings,
                     converted_premises,
                     recorded,
-                    Box::new(move |store: &mut ProofStore| {
+                    Box::new(move |store: &mut ProofStore, _to_canonical| {
                         let raw = *bridge_proofs.get(next)?;
                         next += 1;
                         Some(store.convert_raw_proof(prog, globals, raw_store, raw))

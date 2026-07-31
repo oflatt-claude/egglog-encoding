@@ -579,17 +579,17 @@ conclusion.
 ### Bridges
 
 The bridge — which e-class a subterm interned into — is the one thing conversion
-cannot recompute, so the skeleton carries it. A row whose proof needs no bridge
-carries the body premises inline as `@Rule_<k>`. A row that composes over interned
-subterms is a `@RuleLink`, naming a row of the same head that already carries the
-premises and every earlier bridge, plus the one bridge added since. Chaining
-keeps a row's width constant no matter how deep the head is.
+cannot recompute, so the skeleton carries it. A row written before the head
+interns anything carries the body premises inline as `@Rule_<k>`. Every row after
+that is a `@RuleLink`, naming the row written just before the newest interning —
+which carries the premises and every earlier bridge — plus that interning's
+bridge. Chaining keeps a row's width constant no matter how deep the head is.
 
-Such a row carries exactly the bridges the head had interned when it minted the
-row, so the replay takes them one at a time and the supply runs dry just past the
-column the row names: always enough for the proof asked for, never more. An own
-conclusion composes nothing, so its row carries no bridge and the replay reaching
-its column needs none.
+So a row carries exactly the bridges the head had recorded when it wrote the row,
+and the replay takes them one at a time: it reaches the column the row names, and
+then asks for one bridge more than the row has. Running out is what tells the
+replay it has gone as far as this row can say anything about, and it is the only
+thing that stops it.
 
 ### The running example
 
@@ -632,18 +632,20 @@ binding each proof variable elided):
 (set (@Rule_1   rule_name prems 1 num1_pf1) ())      ;; …over canonical children
 (let num1_e     (set-if-empty-@NumView! 1 …))
 (let num1_bridge (view-proof-@NumView 1 …))
-(set (@Rule_1   rule_name prems 3 num2_pf0) ())
-(set (@RuleLink num2_pf0 num1_bridge 4 num2_pf1) ())
+(set (@RuleLink num1_pf1 num1_bridge 3 num2_pf0) ())
+(set (@RuleLink num1_pf1 num1_bridge 4 num2_pf1) ())
 (let num2_e     (set-if-empty-@NumView! 2 …))
 (let num2_bridge (view-proof-@NumView 2 …))
-(set (@Rule_1   rule_name prems 6 add_pf0) ())       ;; (Add …) as written
+(set (@RuleLink num2_pf1 num2_bridge 6 add_pf0) ())  ;; (Add …) as written
 (set (@RuleLink num2_pf1 num2_bridge 8 add_view) ())
 (set (@AddView num1_e num2_e) (values r add_view))
 ```
 
-The last row carries both bridges, reached through the chain. Layer 1's walk of
-the same head names seventeen proofs: four conclusions and thirteen composition
-steps. Six rows against seventeen is the whole point of the layer.
+The last row carries both bridges, reached through the chain. Column 3 is an own
+conclusion, which composes nothing, so it does not use the bridge it carries — but
+carry it it must, or the replay would stop one interning short of it. Layer 1's
+walk of the same head names seventeen proofs: four conclusions and thirteen
+composition steps. Six rows against seventeen is the whole point of the layer.
 
 Row counts per firing, proof rows only (not the view or `@UF` write beside them):
 a flat rewrite **2**, the nested head above **6**, a view rebuild **1**, a merge

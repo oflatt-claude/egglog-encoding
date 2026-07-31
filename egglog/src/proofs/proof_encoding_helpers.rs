@@ -255,12 +255,7 @@ impl Composition {
 /// `i64`-valued egglog expression.
 #[derive(Clone)]
 pub(crate) enum HeadColumn {
-    /// The head's own conclusion at a column, which is composed from nothing and
-    /// so carries the body premises inline.
-    Own(String),
-    /// A proof the head's lowering composes at a column, from the head's interned
-    /// subterms, whose view-row proofs the row must carry as bridge premises.
-    Composed(String),
+    Numbered(String),
     /// A rule row the walk gave no column: the placeholder before the encoder
     /// fills one in, and a position inside a head that concludes nothing. It
     /// renders as `-1`, which reading a proof back panics on.
@@ -268,26 +263,10 @@ pub(crate) enum HeadColumn {
 }
 
 impl HeadColumn {
-    /// [`HeadColumn::Own`] at `column`, or [`HeadColumn::Unnumbered`] where the
-    /// site composes instead of numbering.
-    pub(crate) fn own(column: Option<usize>) -> HeadColumn {
-        column.map_or(HeadColumn::Unnumbered, |column| {
-            HeadColumn::Own(column.to_string())
-        })
-    }
-
-    /// [`HeadColumn::Composed`] at `column`, or [`HeadColumn::Unnumbered`] where
-    /// the site composes instead of numbering.
-    pub(crate) fn composed(column: Option<usize>) -> HeadColumn {
-        column.map_or(HeadColumn::Unnumbered, |column| {
-            HeadColumn::Composed(column.to_string())
-        })
-    }
-
     /// The column value as an egglog expression.
     fn expr(&self) -> String {
         match self {
-            HeadColumn::Own(expr) | HeadColumn::Composed(expr) => expr.clone(),
+            HeadColumn::Numbered(expr) => expr.clone(),
             HeadColumn::Unnumbered => "-1".to_string(),
         }
     }
@@ -334,12 +313,6 @@ impl Justification {
             Justification::Rule(_, _, column) => column.expr(),
             _ => HeadColumn::Unnumbered.expr(),
         }
-    }
-
-    /// Whether the proof is composed from the head's interned subterms, and so
-    /// has to name their view-row proofs as bridge premises.
-    pub(crate) fn needs_bridges(&self) -> bool {
-        matches!(self, Justification::Rule(_, _, HeadColumn::Composed(_)))
     }
 }
 
@@ -785,16 +758,16 @@ impl ProofInstrumentor<'_> {
 
 ;; Fiat justification for globals and primitives, gives two terms t1 = t2 for the proposition being justified
 (function {fiat_constructor} ({ast_sort} {ast_sort} {proof_datatype}) Unit :no-merge :internal-hidden :internal-term-node)
-;; A rule proof needing no bridge carries its premises inline, in a `Rule_<k>`
-;; declared per premise count (see `rule_arity_header`):
+;; A rule proof written before its head interns anything carries its premises
+;; inline, in a `Rule_<k>` declared per premise count (see `rule_arity_header`):
 ;;   (Rule_<k> <rule name> <one proof per body fact> <column>)
-;; A later column of the same head names an earlier column's proof — which
-;; carries the shared premises and the bridges recorded before it — plus the one
-;; *bridge* premise recorded since: the view-row proof of the subterm the head
-;; interned, saying which e-class it landed in. `<column>` says which proof of
-;; the head's lowering this is (see `proof_head`); proof conversion derives the
-;; proposition from it, so no term is stored. The rule name is not repeated
-;; either: it is read off the `Rule_<k>` row ending the chain.
+;; Every rule proof after that names an earlier column's proof — which carries
+;; the shared premises and the bridges recorded before it — plus the one *bridge*
+;; premise recorded since: the view-row proof of the subterm the head interned,
+;; saying which e-class it landed in. `<column>` says which proof of the head's
+;; lowering this is (see `proof_head`); proof conversion derives the proposition
+;; from it, so no term is stored. The rule name is not repeated either: it is
+;; read off the `Rule_<k>` row ending the chain.
 ;;   (RuleLink <earlier column's proof> <bridge proof> <column>)
 (function {rule_link_constructor} ({proof_datatype} {proof_datatype} i64 {proof_datatype}) Unit :no-merge :internal-hidden :internal-term-node)
 

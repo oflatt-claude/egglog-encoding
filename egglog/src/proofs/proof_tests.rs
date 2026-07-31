@@ -7,8 +7,8 @@ mod tests {
     use crate::core::ResolvedCall;
     use crate::proofs::proof_checker::eval_expr_with_subst;
     use crate::proofs::proof_extraction::ProveExistsError;
-    use crate::proofs::proof_format::{ProofStore, Proposition};
-    use crate::proofs::proof_head::{Firing, HeadLayout, HeadPlan, HeadProof};
+    use crate::proofs::proof_format::{ProofId, ProofStore, Proposition};
+    use crate::proofs::proof_head::{Firing, HeadLayout, HeadPlan, HeadProof, ProofAlgebra};
     use crate::util::{HashMap, HashSet, IndexMap};
     use crate::{
         CommandOutput, EGraph, Error, ProofEncodingUnsupportedReason, TermDag, TermId,
@@ -18,6 +18,13 @@ mod tests {
     fn term_encode(source: &str) -> Vec<ResolvedCommand> {
         let mut egraph = crate::EGraph::new_with_term_encoding();
         egraph.resolve_program(None, source).unwrap()
+    }
+
+    /// A bridge supply for a firing where every term the head builds is new, so
+    /// each one interns into itself. It never runs dry, so a walk drawing on it
+    /// reaches the end of the head.
+    fn interns_into_itself(store: &mut ProofStore, to_canonical: ProofId) -> Option<ProofId> {
+        Some(store.reflexive(to_canonical))
     }
 
     /// Stand a distinct constant in for every variable a rule head reads but
@@ -134,16 +141,16 @@ mod tests {
             let plan = HeadPlan::new(actions, &mut fresh);
             let mut store = ProofStore::new(term_dag, HashMap::default(), HashSet::default());
             let expected = head_conclusions(&rule.name, actions, inputs.clone(), &mut store);
-            // No premises and no bridges: every term the head builds stays its own
-            // representative, so each column states the head's conclusion there
-            // rather than one about an e-class it interned into.
+            // No premises, and every term the head builds interns into itself, so
+            // each column states the head's conclusion there rather than one about
+            // an e-class it interned into — and the walk reaches the whole head.
             let mut firing = Firing::new(
                 &rule.name,
                 &plan,
                 inputs,
                 vec![],
                 IndexMap::default(),
-                Box::new(|_store| None),
+                Box::new(interns_into_itself),
             );
             let columns: Vec<_> = firing
                 .proofs(&mut store)
@@ -289,7 +296,7 @@ mod tests {
                 inputs,
                 vec![],
                 IndexMap::default(),
-                Box::new(|_store| None),
+                Box::new(interns_into_itself),
             );
             let filled: Vec<bool> = firing
                 .proofs(&mut store)

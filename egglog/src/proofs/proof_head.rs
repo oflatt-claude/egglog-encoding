@@ -413,11 +413,9 @@ fn plan_construct_into(actions: &[ResolvedAction]) -> (HashMap<String, String>, 
 
 /// How far a rule head's walk has got, and everything it produced on the way.
 ///
-/// A rule proof reads one column, so the walk stops at the action that fills it
-/// and the next proof of the same firing carries on from here. What it holds is
-/// what the whole walk would have produced this far: a rule proof carries only
-/// the bridges recorded before it, so an action that wanted one past them is
-/// rolled back rather than kept.
+/// Each rule proof of a firing walks the head only as far as its own bridges
+/// reach, and hands what it produced to the next one, which carries on from
+/// there. What it holds is what the whole walk would have produced this far.
 #[derive(Clone, Default)]
 pub(crate) struct HeadWalk {
     /// The action to carry on at.
@@ -449,8 +447,8 @@ impl HeadWalk {
     }
 
     /// Where the walk stands, to come back to with [`Self::rewind`].
-    fn mark(&self) -> WalkMark {
-        WalkMark {
+    fn mark(&self) -> ActionStart {
+        ActionStart {
             action: self.next_action,
             position: self.next_position,
             bridges: self.bridges_taken,
@@ -461,7 +459,7 @@ impl HeadWalk {
     /// Undo everything the walk did after `mark`. The bindings and connectors it
     /// wrote are left alone: an action rewrites its own before anything reads
     /// them, and the actions after it are unreached either way.
-    fn rewind(&mut self, mark: WalkMark) {
+    fn rewind(&mut self, mark: ActionStart) {
         self.next_action = mark.action;
         self.next_position = mark.position;
         self.bridges_taken = mark.bridges;
@@ -469,9 +467,9 @@ impl HeadWalk {
     }
 }
 
-/// An action boundary a walk can be rewound to.
+/// The action boundary a walk can be put back to.
 #[derive(Clone, Copy, Default)]
-struct WalkMark {
+struct ActionStart {
     action: usize,
     position: usize,
     bridges: usize,
@@ -494,14 +492,14 @@ pub(crate) struct Firing<'a> {
     body_premises: Vec<ProofId>,
     substitution: IndexMap<String, TermId>,
     /// The bridges the requesting rule proof row carries, in the order the head
-    /// interned them. It runs dry at the point in the head the row was minted at.
-    bridges: Box<dyn FnMut(&mut ProofStore) -> Option<ProofId> + 'a>,
+    /// interned them, each asked for with the proof of the term being interned.
+    /// The supply runs dry inside the action the row was minted in.
+    bridges: Box<dyn FnMut(&mut ProofStore, ProofId) -> Option<ProofId> + 'a>,
     walk: HeadWalk,
-    /// The boundary before the action that first wanted a bridge past the ones
-    /// this row carries, which is as far as the next row can carry on from.
-    kept: WalkMark,
-    /// Whether the supply has run dry.
-    ran_out: bool,
+    /// Where the action being walked began.
+    action_start: ActionStart,
+    /// Whether the walk has asked for a bridge past the ones this row carries.
+    dry: bool,
 }
 
 impl<'a> Firing<'a> {
@@ -514,7 +512,7 @@ impl<'a> Firing<'a> {
         bindings: HashMap<String, TermId>,
         body_premises: Vec<ProofId>,
         substitution: IndexMap<String, TermId>,
-        bridges: Box<dyn FnMut(&mut ProofStore) -> Option<ProofId> + 'a>,
+        bridges: Box<dyn FnMut(&mut ProofStore, ProofId) -> Option<ProofId> + 'a>,
     ) -> Self {
         Firing {
             rule_name,
@@ -528,31 +526,30 @@ impl<'a> Firing<'a> {
                 bindings,
                 ..HeadWalk::default()
             },
-            kept: WalkMark::default(),
-            ran_out: false,
+            action_start: ActionStart::default(),
+            dry: false,
         }
     }
 
     /// Carry on from `walk`, which an earlier row of this firing left behind.
     pub(crate) fn carry_on(&mut self, walk: HeadWalk) {
         self.walk = walk;
-        self.kept = self.walk.mark();
     }
 
-    /// The walk to hand the next row of this firing, cut back to what a row
-    /// carrying more bridges would agree with.
+    /// The walk to hand the next row of this firing. The action the supply ran
+    /// dry in is put back, so the next row walks it with the bridge it wanted.
     pub(crate) fn into_walk(mut self) -> HeadWalk {
-        if self.ran_out {
-            self.walk.rewind(self.kept);
+        if self.dry {
+            self.walk.rewind(self.action_start);
         }
         self.walk
     }
 
-    /// Every proof the head's lowering produces, by column, walking all of it.
-    /// `None` at a column the walk numbers but the head produces no proof for.
+    /// Every proof the head's lowering produces, by column. `None` at a column
+    /// the walk numbers but the head produces no proof for.
     #[cfg(test)]
     pub(crate) fn proofs(&mut self, store: &mut ProofStore) -> &[Option<ProofId>] {
-        self.fill(store, None);
+        self.fill(store);
         &self.walk.proofs
     }
 
@@ -562,7 +559,7 @@ impl<'a> Firing<'a> {
         let column = usize::try_from(raw).unwrap_or_else(|_| {
             panic!("rule {rule_name} proof was emitted without a column ({raw})")
         });
-        self.fill(store, Some(column));
+        self.fill(store);
         self.walk
             .proofs
             .get(column)
@@ -573,17 +570,12 @@ impl<'a> Firing<'a> {
             })
     }
 
-    /// Walk the head until `wanted` is filled — or to its end when nothing is
-    /// wanted. Columns are claimed in walk order, so one already filled is final.
-    fn fill(&mut self, store: &mut ProofStore, wanted: Option<usize>) {
+    /// Walk the head as far as this row's bridges reach: to the end of the action
+    /// that asks for one past them, which is the action the row was minted in.
+    fn fill(&mut self, store: &mut ProofStore) {
         let plan = self.plan;
-        while self.walk.next_action < plan.actions.len() {
-            if wanted.is_some_and(|column| self.walk.proofs.len() > column) {
-                return;
-            }
-            if !self.ran_out {
-                self.kept = self.walk.mark();
-            }
+        while !self.dry && self.walk.next_action < plan.actions.len() {
+            self.action_start = self.walk.mark();
             let at = self.walk.next_action;
             self.walk.next_action += 1;
             if plan.dropped.contains(&at) {
@@ -851,13 +843,12 @@ impl<'a> Firing<'a> {
     /// The next bridge off the supply: the view-row proof the head recorded for
     /// the term the walk just built, saying which e-class it interned into.
     ///
-    /// `None` once the supply has run dry, which is past the point in the head
-    /// the requesting row was minted at.
+    /// `None` once the supply has run dry, which ends the walk.
     fn bridge(&mut self, store: &mut ProofStore, to_canonical: ProofId) -> Option<ProofId> {
         let taken = self.walk.bridges_taken;
         self.walk.bridges_taken += 1;
-        let Some(bridge) = (self.bridges)(store) else {
-            self.ran_out = true;
+        let Some(bridge) = (self.bridges)(store, to_canonical) else {
+            self.dry = true;
             return None;
         };
         // Every proof this read can return — an existing row's, a rebuilt row's, a

@@ -51,16 +51,12 @@ fn ids(operands: &[Operand]) -> Vec<String> {
     operands.iter().map(|o| o.value.clone()).collect()
 }
 
-/// The column of `run` holding `proof`, as a row stating the head's own
-/// conclusion there. Unnumbered where the site composes rather than claiming a
-/// run.
+/// The column of `run` holding `proof`. Unnumbered where the site composes
+/// rather than claiming a run.
 fn head_column(run: Option<HeadRun>, proof: HeadProof) -> HeadColumn {
-    HeadColumn::own(run.map(|run| run.column(proof)))
-}
-
-/// Like [`head_column`], for a row stating a proof the head's lowering composes.
-fn composed_column(run: Option<HeadRun>, proof: HeadProof) -> HeadColumn {
-    HeadColumn::composed(run.map(|run| run.column(proof)))
+    run.map_or(HeadColumn::Unnumbered, |run| {
+        HeadColumn::Numbered(run.column(proof).to_string())
+    })
 }
 
 /// The variables an action block has bound to a term the encoding built. Every
@@ -178,19 +174,15 @@ impl EncodingState {
     }
 }
 
-/// The canonicalization bridges a rule head has recorded, and the rule proof
-/// rows a later column can chain its own onto.
+/// What a rule head's next rule proof row chains onto.
 #[derive(Default)]
 struct HeadChain {
-    /// The view-row proof of each subterm the head has interned, in construction
-    /// order.
-    bridges: Vec<String>,
-    /// `rows[i]` names a rule proof of this head whose bridge premises are
-    /// `bridges[..i]`. Every column shares the head's body premises, so any row at
-    /// a level serves as the next level's link — and a head mints one before
-    /// recording the bridge that opens the level above, so no level is ever
-    /// missing.
-    rows: Vec<String>,
+    /// The last rule proof row this head minted.
+    last: Option<String>,
+    /// The row minted just before the head's newest interning, carrying every
+    /// bridge before that one, and that interning's bridge — the interned
+    /// subterm's view-row proof. `None` until the head interns something.
+    link: Option<(String, String)>,
 }
 
 /// Thin wrapper around an [`EGraph`] for the term encoding
@@ -305,35 +297,21 @@ impl<'a> ProofInstrumentor<'a> {
     /// Mint the rule proof row `justification` names. Proof conversion derives the
     /// proposition from the column alone, so the row stores no terms.
     ///
-    /// A row needing no bridge premise carries the body premises inline; one
-    /// needing them chains onto a row that already names all but the newest.
+    /// A head's first row carries the body premises inline; every row after the
+    /// head has interned a subterm chains onto the row before that interning,
+    /// adding its bridge. So a row names exactly the bridges the head had
+    /// recorded when it minted the row.
     fn rule_row(&mut self, stmts: &mut Vec<String>, justification: &Justification) -> String {
-        let want = if justification.needs_bridges() {
-            self.head_chain.as_ref().map_or(0, |c| c.bridges.len())
-        } else {
-            0
-        };
-        let proof = match want.checked_sub(1) {
+        let link = self
+            .head_chain
+            .as_ref()
+            .and_then(|chain| chain.link.clone());
+        let proof = match link {
             None => self.inline_rule_row(stmts, justification),
-            // The row to chain onto is always there: see `HeadChain::rows`.
-            Some(bridge) => {
-                let prev = self.head_chain.as_ref().expect("in a rule head").rows[bridge].clone();
-                self.link_rule_row(stmts, justification, &prev, bridge)
-            }
+            Some((prev, bridge)) => self.link_rule_row(stmts, justification, &prev, &bridge),
         };
         if let Some(chain) = &mut self.head_chain {
-            // Overwrite this level's row, or open the level above the last one. A
-            // bridge recorded without a row minted at its own level would push
-            // here at the wrong index instead.
-            assert!(
-                want <= chain.rows.len(),
-                "rule proof row for bridge level {want} with only {} levels minted",
-                chain.rows.len()
-            );
-            match chain.rows.get_mut(want) {
-                Some(row) => *row = proof.clone(),
-                None => chain.rows.push(proof.clone()),
-            }
+            chain.last = Some(proof.clone());
         }
         proof
     }
@@ -361,20 +339,19 @@ impl<'a> ProofInstrumentor<'a> {
     }
 
     /// A rule proof row naming `prev` — a row of the same head, carrying the body
-    /// premises and every earlier bridge — plus bridge `bridge`.
+    /// premises and every earlier bridge — plus `bridge`.
     fn link_rule_row(
         &mut self,
         stmts: &mut Vec<String>,
         justification: &Justification,
         prev: &str,
-        bridge: usize,
+        bridge: &str,
     ) -> String {
         assert!(
             matches!(justification, Justification::Rule(..)),
             "only a rule justification mints a rule proof row"
         );
         let column = justification.column_expr();
-        let bridge = self.head_chain.as_ref().expect("in a rule head").bridges[bridge].clone();
         let link = self.proof_names().rule_link_constructor.clone();
         let proof_sort = self.proof_sort();
         self.mint(
@@ -394,7 +371,11 @@ impl<'a> ProofInstrumentor<'a> {
             return;
         }
         if let Some(chain) = &mut self.head_chain {
-            chain.bridges.push(view_proof.to_string());
+            let prev = chain
+                .last
+                .clone()
+                .expect("a head states the term it is interning before interning it");
+            chain.link = Some((prev, view_proof.to_string()));
         }
     }
 
@@ -409,8 +390,8 @@ impl<'a> ProofInstrumentor<'a> {
         match connector {
             Connector::Node(node) => node.clone(),
             Connector::Column(column) => {
-                let composed = justification.at(HeadColumn::composed(Some(*column)));
-                self.rule_row(stmts, &composed)
+                let connector = justification.at(HeadColumn::Numbered(column.to_string()));
+                self.rule_row(stmts, &connector)
             }
         }
     }
@@ -468,15 +449,7 @@ impl<'a> ProofInstrumentor<'a> {
             rhs.value,
             run.column(HeadProof::EdgeFromRhs)
         );
-        // Neither operand was a canonicalized constructor term (no connector),
-        // so both e-classes' ASTs are stable and the edge is the head's own
-        // conclusion; otherwise it is composed from the operands' natural forms.
-        let column = if lhs.connector.is_none() && rhs.connector.is_none() {
-            HeadColumn::Own(oriented)
-        } else {
-            HeadColumn::Composed(oriented)
-        };
-        self.rule_row(stmts, &justification.at(column))
+        self.rule_row(stmts, &justification.at(HeadColumn::Numbered(oriented)))
     }
 
     /// The `larger = smaller` proof a `union` outside a rule head stores in `@UF`,
@@ -637,8 +610,8 @@ impl<'a> ProofInstrumentor<'a> {
             // composition, so one row records it and the edge proof it is built
             // from needs no row of its own.
             None => {
-                let composed = justification.at(composed_column(run, HeadProof::GuestView));
-                self.rule_row(res, &composed)
+                let view = justification.at(head_column(run, HeadProof::GuestView));
+                self.rule_row(res, &view)
             }
         };
         // The guest's term keeps its own id (`fv_nat`); only the view VALUE uses
@@ -1649,8 +1622,8 @@ impl<'a> ProofInstrumentor<'a> {
             Some(chain) => self.reflexive(chain.clone()),
             // One row records the composition proof conversion rebuilds.
             None => {
-                let composed = justification.at(composed_column(run, HeadProof::Canonical));
-                self.rule_row(res, &composed)
+                let canonical = justification.at(head_column(run, HeadProof::Canonical));
+                self.rule_row(res, &canonical)
             }
         };
 
