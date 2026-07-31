@@ -1,0 +1,657 @@
+
+;; Keeps track of a canonical renamed form for each eclass using a union-find table called
+;; "RenamesToLeader".
+;; The job of shape computation rules is to find collisions, pick one of them to be the leader, then add a RenamesToLeader entry for the other eclass to point to the leader, with the appropriate renaming.
+;; Footgun: RenamesToLeader needs to be initialized for each thing you add to the egraph, otherwise you might miss things in your query at the end. 
+;; We delete nodes which are not canonical, compressing the e-graph. So you can't match on them anymore, but you can use their value and RenamesToLeader to find the canonical representative.
+
+;;; Machinery ;;;
+
+(sort Renaming (Map i64 i64))
+
+(sort U)
+
+(constructor Var (i64) U)
+
+;; `(App f m1 c1 m2 c2)` corresponds to the term `f(m1*c1, m2*c2)`
+(constructor App (String Renaming U Renaming U) U)
+
+;; `(RenamesToLeader follower m leader)` corresponds to `follower = m*leader`.
+;; We require `leader <= follower` in terms of ordering-max.
+(relation RenamesToLeader (U Renaming U))
+
+;; `LiveId e` is the identity on e's *live* slots -- the class's own view of
+;; which slots it depends on.  On partial identities `compose` is intersection,
+;; so this merge only ever narrows: re-setting a wider value after a redundancy
+;; has been found is a no-op.  That is what makes re-derivation safe, and it is
+;; why self-edges are emitted from here rather than from a node's edges -- a
+;; node keeps slots its class has dropped, so a node-derived self-edge states
+;; something a later redundancy makes false.
+(function LiveId (U) Renaming :merge (compose old new))
+
+; This is a basic object not depending on any variables.
+(constructor Null () U)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; General Unionfind Properties ;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; transitivity / path compression
+;; e1 = m12*e2 /\ e2 = m23*e3 --> e1 = m12*m23*e3
+(rule ((RenamesToLeader e1 m12 e2)
+       (RenamesToLeader e2 m23 e3)
+
+       ; we exclude non-idempotent self-symmetries for the unionfind
+       (guard (or (bool-!= e2 e3)
+                  (bool= (compose m23 m23) m23)
+                  (bool= e1 e3))))
+
+      ((RenamesToLeader e1 (compose m12 m23) e3)))
+
+;; single parent
+;; a = m1*b /\ a = m2*c  --> b = m1⁻¹*m2*c
+(rule ((RenamesToLeader a m1 b)
+       (RenamesToLeader a m2 c)
+
+       (!= a c) ; We don't want this rule to fire for a=b=c, as it would remove symmetries from our group.
+       (= (ordering-max b c) b) ; c <= b
+
+                                            ; either
+       (guard (or (bool-!= b c)             ; c < b, or
+                  (and (bool= b c)          ; b=c, but m2 < m1
+                       (bool-!= m1 m2)
+                       (bool= (ordering-max m1 m2) m1)))))
+
+      ((delete (RenamesToLeader a m1 b))
+       (RenamesToLeader b (compose (inverse m1) m2) c)))
+
+; single parent for symmetries, this does shrinking.
+(rule ((RenamesToLeader a m1 a)
+       (RenamesToLeader a m a)
+       (= m (compose m m))
+       (= m2 (compose m (compose m1 m)))
+       (!= m1 m2))
+      ((delete (RenamesToLeader a m1 a))
+        (RenamesToLeader a m2 a))
+)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Deduplicate nodes that are equal up to renaming ;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; replace (Var v) by [0 -> v] * (Var 0)
+(rule ((= e (Var v))
+       (!= v 0))
+      ((RenamesToLeader e (map-insert (map-empty) 0 v) (Var 0))
+       (delete (Var v))
+      )
+)
+
+;; α-finder: Will find two App nodes that are equal up to renaming, and eliminate one in favor of the other.
+
+;; Input: e1 = f(m1*c1, m1'*c2) /\ e2 = f(m2*c1, m2'*c2),
+;; then m = (find-mapping m1 m1' m2 m2') is the smallest renaming, s.t. m*m2 = m1 /\ m*m2' = m1'
+;; so that m*e2 = m*f(m2*c1, m2'*c2) = f(m*m2*c1, m*m2'*c2) = f(m1*c1, m1'*c2) = e1
+;; so in short m*e2 = e1.
+(rule ((= e1 (App f m1_o c1 m1'_o c2))
+       (= e2 (App f m2 c1 m2' c2))
+       (= e1 (ordering-max e1 e2))
+       (RenamesToLeader c1 sym c1)
+       (RenamesToLeader c2 sym' c2)
+       (= m1 (compose m1_o sym))
+       (= m1' (compose m1'_o sym'))
+       (= m (find-mapping m1 m1' m2 m2'))
+       (guard
+         (or (bool-!= e1 e2)
+         (and (bool= e1 e2)
+            (or (and
+                 (bool= (ordering-max m1 m2) m2)
+                 (bool-!= m1 m2))
+                (and (bool= m1 m2)
+                     (bool-!= m1' m2')
+                     (bool= (ordering-max m1' m2') m2')))))))
+      (
+        (RenamesToLeader e1 m e2)
+        (delete (App f m1 c1 m1' c2)) ; delete the e-node from e1
+      )
+)
+
+; non-destructive symmetry-finder based on the above.
+(rule ((= e (App f m_o c1 m'_o c2))
+       (RenamesToLeader c1 sym c1)
+       (RenamesToLeader c2 sym' c2)
+       (= m (compose m_o sym))
+       (= m' (compose m'_o sym'))
+       (= sym_out (find-mapping m_o m'_o m m'))
+       (= live (LiveId e)))
+      (
+        ;; restrict to the live slots, rather than emitting a node-wide map and
+        ;; leaving the shrinking rule to delete it afterwards
+        (RenamesToLeader e (compose live (compose sym_out live)) e)
+      )
+)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; Everything has to have a self-loop ;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+; This guarantees that (Var 0) is the lowest ordering-max variable, and it has a reflexive RenamesToLeader entry.
+(RenamesToLeader (Var 0) (map-insert (map-empty) 0 0) (Var 0))
+(RenamesToLeader (Null) (map-empty) (Null))
+
+;; bootstrap: a fresh node's slots are the best guess at its class's live slots
+(rule ((= e1 (App f m1 c1 m1' c2))
+       (= m (find-mapping m1 m1' m1 m1')))
+      ((set (LiveId e1) m)))
+
+;; every idempotent self-edge is a statement about the live slots; the merge
+;; intersects, so redundancy narrows LiveId and never widens it
+(rule ((RenamesToLeader a m a)
+       (= m (compose m m)))
+      ((set (LiveId a) m)))
+
+;; ... and the self-edge is emitted from LiveId, so it is narrow by construction
+(rule ((= live (LiveId e)))
+      ((RenamesToLeader e live e)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Migration of e-nodes ;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; if `e2 = f(m1*c1, m2*c2)` /\ `e2 = m*e1`, then `e1 = m⁻¹*e2 = m⁻¹*f(m1*c1, m2*c2) = f(m⁻¹*m1*c1, m⁻¹*m2*c2)`
+(rule ((RenamesToLeader e2 m e1)
+       (= e2 (App f m1 c1 m2 c2))
+       (!= e1 e2))
+      (
+        (union e1 (App f (compose (inverse m) m1) c1 (compose (inverse m) m2) c2))
+        (delete (App f m1 c1 m2 c2))
+      ))
+
+;;;;;;;;;;;;;;;;;;;;;;;
+;; Child-Update rule ;;
+;;;;;;;;;;;;;;;;;;;;;;;
+
+;; per-position child rewrites- canonicalize children to use representatives
+;; These replace `c` with the more canonical `m*c'`.
+
+;;;; First child:
+
+(rule ((RenamesToLeader c1 m c')
+       (= node (App f m1 c1 m2 c2))
+       (guard ; if c1=c' then m is idempotent (we don't want self-symmetries here)
+            (or (bool-!= c1 c')
+                (bool= (compose m m) m))
+       )
+       (guard ; the new node has to be different from the old one (thus either the e-class, or the renaming has changed)
+            (or (bool-!= c1 c')
+                (bool-!= (compose m1 m) m1))
+       ))
+      (
+        (union node (App f (compose m1 m) c' m2 c2))
+        (delete (App f m1 c1 m2 c2))
+      )
+)
+
+;;;; Second child:
+
+(rule ((RenamesToLeader c2 m c')
+       (= node (App f m1 c1 m2 c2))
+       (guard ; if c2=c' then m is idempotent (we don't want self-symmetries here)
+            (or (bool-!= c2 c')
+                (bool= (compose m m) m))
+       )
+       (guard ; the new node has to be different from the old one (thus either the e-class, or the renaming has changed)
+            (or (bool-!= c2 c')
+                (bool-!= (compose m2 m) m2))
+       ))
+      (
+        (union node (App f m1 c1 (compose m2 m) c'))
+        (delete (App f m1 c1 m2 c2))
+      )
+)
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Lambda alpha-equivalence ;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(rule
+    (
+        (RenamesToLeader
+            (App "lambda" mvar (Var 0) m b)
+            ml l)
+        (= v (map-get mvar 0))
+    )
+    (
+        (RenamesToLeader
+            (App "lambda" mvar (Var 0) m b)
+            (inverse (map-remove (inverse ml) v)) l)
+    )
+)
+
+;;;;;;;;;;
+;; MISC ;;
+;;;;;;;;;;
+
+; if two things are equal up to some identity renaming, let's merge them.
+(rule
+    (
+        (RenamesToLeader a m1_o c)
+        (RenamesToLeader b m2 c)
+        (RenamesToLeader c sym c)
+
+        (= m1 (compose m1_o sym))
+
+        (= m (compose m1 (inverse m2)))
+        (= (compose m m) m)
+    )
+    (
+        (union a b)
+    )
+)
+
+;;; Tests ;;;
+
+
+;;; Case 1: swap of two free variables ;;;
+(push)
+
+(let $a1 (App "f" (map-insert (map-empty) 20 20) (Var 20)
+                  (map-insert (map-empty)  1  1) (Var 1)))
+
+(let $a2 (App "f" (map-insert (map-empty)  1  1) (Var 1)
+                  (map-insert (map-empty) 20 20) (Var 20)))
+
+(run 10)
+
+(fail (check (= $a1 $a2)))
+(check (RenamesToLeader $a2 m1 leader)
+       (RenamesToLeader $a1 m2 leader))
+
+(pop)
+
+
+;;; Case 2: three-variable cyclic permutation, nested ;;;
+(push)
+
+(let $b1 (App "f"
+              (map-insert (map-insert (map-empty) 100 100) 200 200)
+              (App "g" (map-insert (map-empty) 100 100) (Var 100)
+                       (map-insert (map-empty) 200 200) (Var 200))
+              (map-insert (map-empty) 300 300) (Var 300)))
+
+(let $b2 (App "f"
+              (map-insert (map-insert (map-empty) 100 100) 300 300)
+              (App "g" (map-insert (map-empty) 300 300) (Var 300)
+                       (map-insert (map-empty) 100 100) (Var 100))
+              (map-insert (map-empty) 200 200) (Var 200)))
+
+(run 10)
+
+(check (RenamesToLeader $b1 m1 leader)
+       (RenamesToLeader $b2 m2 leader))
+
+(pop)
+
+
+;;; Case 3: same shape, different slot ids ;;;
+(push)
+
+(let $c1 (App "h" (map-insert (map-empty) 50 50) (Var 50)
+                  (map-insert (map-empty) 50 50) (Var 50)))
+
+(let $c2 (App "h" (map-insert (map-empty) 60 60) (Var 60)
+                  (map-insert (map-empty) 60 60) (Var 60)))
+
+(run 10)
+
+(check (RenamesToLeader $c1 m1 leader)
+       (RenamesToLeader $c2 m2 leader))
+
+(pop)
+
+
+;;; Case 4 (negative): different free-slot counts ;;;
+(push)
+
+(let $d1 (App "k" (map-insert (map-empty) 50 50) (Var 50)
+                  (map-insert (map-empty) 50 50) (Var 50)))
+
+(let $d2 (App "k" (map-insert (map-empty) 50 50) (Var 50)
+                  (map-insert (map-empty) 60 60) (Var 60)))
+
+
+(run 10)
+
+;; negative — should remain in distinct e-classes.
+(fail (check (= $d1 $d2)))
+(fail (check (RenamesToLeader $d1 m1 leader)
+             (RenamesToLeader $d2 m2 leader)))
+
+(pop)
+
+
+;;; Case 5- redundancies
+(push)
+
+(let $c1 (App "f" (map-insert (map-empty) 20 20) (Var 20)
+                  (map-insert (map-empty) 1 1) (Var 1)))
+(let $c2 (App "g" (map-insert (map-empty) 20 20) (Var 20)
+                  (map-insert (map-empty) 20 20) (Var 20)))
+
+(union $c1 $c2)
+
+(let $c3 (App "f" (map-insert (map-empty) 23 23) (Var 23)
+                  (map-insert (map-empty) 24 24) (Var 24) ))
+(let $c4 (App "f" (map-insert (map-empty) 23 23) (Var 23)
+                  (map-insert (map-empty) 25 25) (Var 25) ))
+
+(run 10)
+
+(check (RenamesToLeader $c3 m1 leader)
+       (RenamesToLeader $c1 m2 leader))
+
+(check (RenamesToLeader $c3 m1 leader)
+       (RenamesToLeader $c4 m2 leader))
+
+(pop)
+
+
+;;; Case 6- RenamesToLeader Var reflexivity test
+(push)
+
+(let $v1 (Var 1))
+(let $v2 (Var 2))
+
+(run 10)
+(check (RenamesToLeader $v1 m1 leader)
+       (RenamesToLeader $v2 m2 leader))
+
+
+; NOTE: commented out as it crashed even with the "fail".
+; (fail (extract $v2)) ; the renamed version of $v2 is there but the original $v2 is not extractable because it was deleted.
+;; in the encoding we'll look up the leader when you extract anything automatically.
+
+
+(pop)
+
+;;; Case 7- redundancies (II)
+(push)
+
+; If you look at the --to-svg of this (without the push/pop),
+; we get one App node in the end due to the symmetry rule above
+
+; 1 - 1
+(let $m11 (App "m" (map-insert (map-empty) 1 1) (Var 1)
+                  (map-insert (map-empty) 1 1) (Var 1)))
+
+; 2 - 2
+(let $m22 (App "m" (map-insert (map-empty) 2 2) (Var 2)
+                  (map-insert (map-empty) 2 2) (Var 2)))
+
+(union $m11 $m22)
+
+(run 10)
+
+(pop)
+
+;;; Case 8- more toying around
+(push)
+
+(let $v7 (Var 7))
+(let $v0 (Var 0))
+
+(let $f7 (App "f" (map-insert (map-empty) 7 7) (Var 7) (map-empty) (Null)))
+(let $g7 (App "g" (map-insert (map-empty) 7 7) (Var 7) (map-empty) (Null)))
+
+(union $f7 $g7)
+
+(let $f8 (App "f" (map-insert (map-empty) 8 8) (Var 8) (map-empty) (Null)))
+(let $h8 (App "h" (map-insert (map-empty) 8 8) (Var 8) (map-empty) (Null)))
+(union $f8 $h8)
+
+(run 10)
+
+(check (RenamesToLeader $g7 m1 leader)
+       (RenamesToLeader $h8 m2 leader))
+
+(pop)
+
+;;; Case 9- redundancies bug.
+(push)
+
+(let $v0 (Var 0))
+(let $v7 (Var 7))
+
+(let $f0 (App "f" (map-insert (map-empty) 0 0) (Var 0) (map-empty) (Null)))
+(let $f7 (App "f" (map-insert (map-empty) 7 7) (Var 7) (map-empty) (Null)))
+
+(union $v0 $v7)
+
+(run 10)
+
+(check (RenamesToLeader $f0 m1 leader) (RenamesToLeader $f7 m2 leader))
+
+(pop)
+
+
+;;; Case 10- lambda alpha equivalence.
+(push)
+
+(let $lam00 (App "lambda"
+                (map-insert (map-empty) 0 0) (Var 0)
+                (map-insert (map-empty) 0 0) (Var 0)))
+
+(let $lam11 (App "lambda"
+                (map-insert (map-empty) 1 1) (Var 1)
+                (map-insert (map-empty) 1 1) (Var 1)))
+
+(run 10)
+
+(check (= $lam00 $lam11))
+
+(pop)
+
+
+;;; Case 11- f(0, 1) = f(1, 0)
+(push)
+
+(let $f01 (App "f"
+                (map-insert (map-empty) 0 0) (Var 0)
+                (map-insert (map-empty) 1 1) (Var 1)))
+
+(let $f10 (App "f"
+                (map-insert (map-empty) 1 1) (Var 1)
+                (map-insert (map-empty) 0 0) (Var 0)))
+
+(let $node1 (App "g"
+                (map-insert (map-insert (map-empty) 1 1) 0 0) $f01
+                (map-insert (map-insert (map-empty) 1 1) 0 0) $f01))
+
+(let $node2 (App "g"
+                (map-insert (map-insert (map-empty) 1 1) 0 0) $f01
+                (map-insert (map-insert (map-empty) 0 1) 1 0) $f01))
+
+(union $f01 $f10)
+
+(run 10)
+
+(check (= $node1 $node2))
+
+(pop)
+
+;;; Case 12- f(0, 1) = f(1, 0) -> g(f(0, 1)) = g(f(1, 0))
+(push)
+
+(let $f01 (App "f"
+                (map-insert (map-empty) 0 0) (Var 0)
+                (map-insert (map-empty) 1 1) (Var 1)))
+
+(let $f10 (App "f"
+                (map-insert (map-empty) 1 1) (Var 1)
+                (map-insert (map-empty) 0 0) (Var 0)))
+
+(let $g01 (App "g"
+                (map-insert (map-insert (map-empty) 1 1) 0 0) $f01
+                (map-empty) (Null)))
+
+(let $g10 (App "g"
+                (map-insert (map-insert (map-empty) 1 1) 0 0) $f10
+                (map-empty) (Null)))
+
+(let $node1 (App "h"
+                (map-insert (map-insert (map-empty) 1 1) 0 0) $g01
+                (map-insert (map-insert (map-empty) 1 1) 0 0) $g01))
+
+(let $node2 (App "h"
+                (map-insert (map-insert (map-empty) 1 1) 0 0) $g01
+                (map-insert (map-insert (map-empty) 0 1) 1 0) $g01))
+
+(union $f01 $f10)
+
+(run 10)
+
+(check (= $node1 $node2))
+
+(pop)
+
+;;; Case 13- single leader redundancies
+(push)
+
+(let $null (Null))
+(let $f (App "f"
+                (map-insert (map-empty) 0 0) (Var 0)
+                (map-insert (map-empty) 1 1) (Var 1)))
+
+(union $f $null)
+
+(run 10)
+
+(fail (check (RenamesToLeader $f m l)
+             (RenamesToLeader l sym l)
+             (!= sym (map-empty))))
+
+(pop)
+
+;;; Case 14- symmetric children are NOT normalized to equal edges.
+;;;
+;;; The machinery *records* symmetries, but it deliberately never rewrites a
+;;; node so that two edges pointing at the same symmetric child become
+;;; syntactically equal: the child-update rule guards with
+;;; `(or (bool-!= c1 c') (bool= (compose m m) m))`, which excludes exactly the
+;;; non-idempotent self-map case.  (If it did fire, it would materialize the
+;;; whole orbit of every node.)
+;;;
+;;; Consequence for user rules: a rule matching `f(x, x)` cannot ask for the
+;;; two edges to be equal.  It has to ask whether `m1^-1 . m2` is in the
+;;; child's group -- i.e. look up `(RenamesToLeader c sym c)`.
+
+;; (a) with a symmetric child, the edges stay different forever
+(push)
+
+(let $a01 (App "a" (map-insert (map-empty) 0 0) (Var 0)
+                   (map-insert (map-empty) 1 1) (Var 1)))
+(let $a10 (App "a" (map-insert (map-empty) 1 1) (Var 1)
+                   (map-insert (map-empty) 0 0) (Var 0)))
+(union $a01 $a10)                        ; a[$0,$1] = a[$1,$0]
+
+;; f(a[$0,$1], a[$1,$0]): both children are the *same renamed id*
+(let $t (App "f" (map-insert (map-insert (map-empty) 0 0) 1 1) $a01
+                 (map-insert (map-insert (map-empty) 0 1) 1 0) $a01))
+(run 20)
+
+;; `a` really did become symmetric
+(check (RenamesToLeader $a01 sym $a01)
+       (= (map-get sym 0) 1)
+       (= (map-get sym 1) 0))
+
+;; the node is there, with two DIFFERENT edges to one child
+(check (= $t (App "f" m1 c m2 c)) (!= m1 m2))
+
+;; and the two edges do denote the same renamed id -- but only via the group
+(check (= $t (App "f" m1 c m2 c))
+       (RenamesToLeader c sym c)
+       (= m2 (compose m1 sym)))
+
+;; ...while no variant with two syntactically equal edges is ever built
+(fail (check (= $t (App "f" m c m c))))
+(run 50)
+(fail (check (= $t (App "f" m c m c))))
+
+(pop)
+
+;; (b) with no symmetry the group is trivial, so the same test degenerates to
+;;     plain equality of the two edges -- nothing extra is paid for, and the
+;;     identity self-loop every e-class carries is what makes the lookup hit
+(push)
+
+(let $b01 (App "b" (map-insert (map-empty) 0 0) (Var 0)
+                   (map-insert (map-empty) 1 1) (Var 1)))
+(let $same (App "f" (map-insert (map-insert (map-empty) 0 0) 1 1) $b01
+                    (map-insert (map-insert (map-empty) 0 0) 1 1) $b01))
+(let $diff (App "f" (map-insert (map-insert (map-empty) 0 0) 1 1) $b01
+                    (map-insert (map-insert (map-empty) 0 1) 1 0) $b01))
+(run 20)
+
+;; b's only self-map is the identity
+(check (RenamesToLeader $b01 sym $b01) (= sym (map-insert (map-insert (map-empty) 0 0) 1 1)))
+(fail (check (RenamesToLeader $b01 sym $b01)
+             (!= sym (map-insert (map-insert (map-empty) 0 0) 1 1))))
+
+;; so the group test accepts the equal-edge node ...
+(check (= $same (App "f" m1 c m2 c))
+       (RenamesToLeader c sym c)
+       (= m2 (compose m1 sym)))
+
+;; ... and rejects the twisted one, which really is f(x, y) with x != y
+(fail (check (= $diff (App "f" m1 c m2 c))
+             (RenamesToLeader c sym c)
+             (= m2 (compose m1 sym))))
+
+(pop)
+
+;;; Case 15- a self-edge is a fact about the E-CLASS, not about its nodes.
+;;;
+;;; Redundancy means a node keeps a slot its class has dropped, so the identity
+;;; over a node's own edges is *wider* than the class's group identity.  A rule
+;;; that derives a self-edge from a node therefore derives something a later
+;;; redundancy makes false; the shrinking rule deletes it, but only once, since
+;;; semi-naive never re-runs the derivation.  The saturated state would then not
+;;; be a fixpoint -- re-ask and you get a different answer -- and anything that
+;;; makes the node look new again (a rebuild, a re-insert, or a newly added rule
+;;; matching App, which is exactly what a compiled user rule is) would bring the
+;;; wide edge back.
+;;;
+;;; The fix is `LiveId`: self-edges are emitted from the class's live-slot
+;;; identity, whose merge only narrows, so re-deriving is a no-op.
+;;;
+;;; NOTE: `WouldEmit` below is a verbatim copy of the symmetry-finder's body.
+;;; Keep the two in sync -- that is what makes this a fixpoint test.
+(push)
+
+(let $r1 (App "r" (map-insert (map-empty) 0 0) (Var 0) (map-insert (map-empty) 1 1) (Var 1)))
+(let $r2 (App "r" (map-insert (map-empty) 0 0) (Var 0) (map-insert (map-empty) 2 2) (Var 2)))
+(union $r1 $r2)                          ; slot 1 becomes redundant
+(run-schedule (saturate (run)))
+
+;; the node still mentions two slots ...
+(check (= $r1 (App "r" e1 c1 e2 c2)) (!= e1 e2))
+;; ... but the class, and its self-edge, are down to the one live slot
+(check (RenamesToLeader $r1 m $r1) (= (map-length m) 1))
+(check (= (LiveId $r1) m) (RenamesToLeader $r1 m $r1))
+
+(relation WouldEmit (U Renaming))
+(rule ((= e (App f m_o c1 m'_o c2))
+       (RenamesToLeader c1 sym c1)
+       (RenamesToLeader c2 sym' c2)
+       (= m (compose m_o sym))
+       (= m' (compose m'_o sym'))
+       (= sym_out (find-mapping m_o m'_o m m'))
+       (= live (LiveId e)))
+      ((WouldEmit e (compose live (compose sym_out live)))))
+(run 1)
+
+;; nothing wider than the live slots is wanted ...
+(fail (check (WouldEmit $r1 s) (= (map-length s) 2)))
+;; ... and what is wanted is exactly what is stored
+(check (WouldEmit $r1 s) (RenamesToLeader $r1 s $r1))
+
+(pop)

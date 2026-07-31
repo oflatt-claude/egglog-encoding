@@ -1,0 +1,349 @@
+;;; Hand-encoded *user* rules on top of the slotted machinery in
+;;; `slotted-manual-encoding.egg`.  That file encodes the e-graph itself; this
+;;; one works out what a user-written rule has to compile to.
+;;;
+;;; The compiled body computes the paper's `B` (beta, the substitution from
+;;; pattern variables to renamed ids) and `mp` (the renaming from e-graph slots
+;;; to the pattern's slots) explicitly.  A U-sorted rule variable denotes a
+;;; *renamed id* `m * c`, not an e-class, so each user variable `x` compiles to
+;;; a leader `X : U` plus a renaming `mx : slots(X) -> slots(pattern)`, together
+;;; standing for `B(x) = mx * X`.
+;;;
+;;; slots(pattern) is not invented: we take one atom -- the *initial atom*, the
+;;; one matching starts from -- and use its matched node's slots, so its `mp` is
+;;; the identity and never appears.
+;;;
+;;; Reminders about the conventions of the machinery file:
+;;;   (compose a b)          = a . b   -- b applies first, (compose a b)[x] = a[b[x]]
+;;;   (App f m1 c1 m2 c2)    = f(m1*c1, m2*c2), so mi : slots(ci) -> slots(node)
+;;;   (RenamesToLeader a m b) = a = m*b, so m : slots(b) -> slots(a)
+;;;   (RenamesToLeader c m c) = m is in G(c), the e-class's group; always
+;;;                             contains the identity
+;;;
+;;; Each `(push)` block re-declares its own rules so the sections do not
+;;; interfere.
+
+(include "tests/slotted-manual-encoding.egg")
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; U1. One atom, no repeated variable: nothing to check.
+;;;
+;;;   (rule ((= e (App "f" a b)))
+;;;         ((union e (App "f" b a))))
+;;;
+;;; The initial atom is the only atom, so `a` and `b` get the stored edges `ma`,
+;;; `mb` as their pattern-slot renamings directly, and the action reuses them in
+;;; their new positions.  No equivalence check arises.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(push)
+
+(rule ((= e (App "f" ma a mb b)))
+      ((union e (App "f" mb b ma a))))
+
+(let $f01 (App "f" (map-insert (map-empty) 0 0) (Var 0)
+                   (map-insert (map-empty) 1 1) (Var 1)))
+(run 15)
+
+;; commutativity is exactly the statement that the e-class gains the swap
+;; symmetry, which is where a slotted e-graph puts it
+(check (RenamesToLeader $f01 m $f01)
+       (= (map-get m 0) 1)
+       (= (map-get m 1) 0))
+
+(pop)
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; U2. A variable bound twice inside one atom.
+;;;
+;;;   (rule ((= e (App "f" x x)))
+;;;         ((union e x)))
+;;;
+;;; Two occurrences of `x` reach two renamed ids of the same leader, `m1*X` and
+;;; `m2*X`.  This is the `B(x) = m*a` case of the paper's `match`: keep the
+;;; match iff `m1*X = m2*X`, which by Def. 6 holds iff `m1^-1 . m2` is in G(X).
+;;; See Case 14 of the machinery file for why syntactic equality of `m1` and
+;;; `m2` is not enough.
+;;;
+;;; Both renamings are already bound by the atom, so the group element that
+;;; would be needed is *determined*: compute it and look it up.
+;;; `(RenamesToLeader x sym x)` with all three arguments bound is an existence
+;;; check, not an enumeration.  `Enum` below is the enumerate-then-compare
+;;; spelling; the tests check the two agree.
+;;;
+;;; The action is instructive too.  The paper's `union` takes renamed ids
+;;; (S3.5); egglog's takes e-classes, i.e. only the identity-renaming case.
+;;; `(union e x)` is not that case, so it lowers to a `RenamesToLeader` insert.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(push)
+
+(rule ((= e (App "f" m1 x m2 x))
+       (= sym (compose (inverse m1) m2))  ; the symmetry m1*X = m2*X would need
+       (RenamesToLeader x sym x))         ; ... and a lookup for whether X has it
+      ((RenamesToLeader e m1 x)))         ; renamed union:  e = m1*X
+
+;; the enumerate-then-compare spelling, as a cross-check
+(relation Enum (U U))
+(rule ((= e (App "f" m1 x m2 x))
+       (RenamesToLeader x sym x)
+       (= m2 (compose m1 sym)))
+      ((Enum e x)))
+
+;; a witness for the naive encoding that demands the two edges be *equal*
+(relation NaiveHit (U U))
+(rule ((= e (App "f" m1 x m1 x))) ((NaiveHit e x)))
+
+;; (a) trivial symmetry, edges literally equal
+(push)
+(let $ff (App "f" (map-insert (map-empty) 7 7) (Var 7)
+                  (map-insert (map-empty) 7 7) (Var 7)))
+(run 15)
+(check (RenamesToLeader $ff m (Var 0)) (= (map-get m 0) 7))
+(check (Enum $ff (Var 0)))
+(pop)
+
+;; (b) negative: distinct slots, so the children are distinct renamed ids
+(push)
+(let $fg (App "f" (map-insert (map-empty) 7 7) (Var 7)
+                  (map-insert (map-empty) 8 8) (Var 8)))
+(run 15)
+(fail (check (RenamesToLeader $fg m (Var 0))))
+(fail (check (Enum $fg x)))
+(pop)
+
+;; (c) the symmetry join earns its keep: f(a[$0,$1], a[$1,$0]) matches f(x,x)
+;;     only because a is symmetric.  The machinery does *not* rewrite the node
+;;     so that the two edges become equal -- a non-idempotent self-map is
+;;     explicitly excluded from the child-update rule -- so `NaiveHit` stays
+;;     empty while the agreement-aware rule fires.
+(push)
+(let $a01 (App "a" (map-insert (map-empty) 0 0) (Var 0)
+                   (map-insert (map-empty) 1 1) (Var 1)))
+(let $a10 (App "a" (map-insert (map-empty) 1 1) (Var 1)
+                   (map-insert (map-empty) 0 0) (Var 0)))
+(union $a01 $a10)                        ; a[$0,$1] = a[$1,$0]
+(run 20)
+
+(let $t (App "f" (map-insert (map-insert (map-empty) 0 0) 1 1) $a01
+                 (map-insert (map-insert (map-empty) 0 1) 1 0) $a01))
+(run 20)
+(check (RenamesToLeader $t m $a01))
+(check (Enum $t $a01))
+(fail (check (NaiveHit $t $a01)))
+(pop)
+
+(pop)
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; U3. A multipattern whose two atoms bind the same variables.
+;;;
+;;;   (rule ((= p (App "f" x y))
+;;;          (= q (App "g" x y)))
+;;;         ((union p q)))
+;;;
+;;; Atom 1 is the initial atom, so `x` and `y` get pattern-slot renamings `p1`,
+;;; `q1`.  Atom 2's root `q` is a fresh variable, so nothing yet relates its
+;;; node's slots to the pattern's.  This is the paper's `mp'` (S3.6): the
+;;; minimal renaming making the node match, determined by the shared variables:
+;;;     mp' . p2 = p1 . sx      and      mp' . q2 = q1 . sy
+;;; which is what `find-mapping` computes; its injectivity check is the paper's
+;;; requirement that `mp` union `mp'` be bijective.  Solving and checking are
+;;; one operation -- the first shared variable defines `mp'`, each further one
+;;; constrains it.
+;;;
+;;; Note the contrast with U2.  There both renamings were bound, so the group
+;;; element could be computed and looked up.  Here `mp'` is the unknown and
+;;; every shared variable *contributes part of it*, so none can be demoted to a
+;;; lookup: until the last one is in, `mp'` is still partial and the remaining
+;;; constraints cannot even be evaluated.  `TooEager` below is that demotion,
+;;; and the tests show where it silently misses matches.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(push)
+
+(rule ((= p (App "f" p1 x q1 y))
+       (= q (App "g" p2 x q2 y))
+       (RenamesToLeader x sx x)
+       (RenamesToLeader y sy y)
+       (= mp' (find-mapping (compose p1 sx) (compose q1 sy) p2 q2)))
+      ((RenamesToLeader p mp' q)))      ; p = mp' * q
+
+;; build the mp' from x alone, then try to *check* y against it
+(relation TooEager (U U))
+(rule ((= p (App "f" p1 x q1 y))
+       (= q (App "g" p2 x q2 y))
+       (RenamesToLeader x sx x)
+       (= mp' (compose (compose p1 sx) (inverse p2)))
+       (= sy (compose (inverse q1) (compose mp' q2)))
+       (RenamesToLeader y sy y))
+      ((TooEager p q)))
+
+;; the naive encoding: same e-classes, same edges, no mp'
+(relation NaiveHit (U U))
+(rule ((= p (App "f" p1 x q1 y))
+       (= q (App "g" p1 x q1 y)))
+      ((NaiveHit p q)))
+
+;; (a) positive, mp' = identity
+(push)
+(let $P (App "f" (map-insert (map-empty) 0 0) (Var 0) (map-insert (map-empty) 1 1) (Var 1)))
+(let $Q (App "g" (map-insert (map-empty) 0 0) (Var 0) (map-insert (map-empty) 1 1) (Var 1)))
+(run 20)
+(check (RenamesToLeader $P m $Q))
+;; im(p2) = {$0} does not cover q's slots {$0,$1}, so the mp' built from x
+;; alone is partial and y's constraint cannot be evaluated -- match lost
+(fail (check (TooEager $P $Q)))
+(pop)
+
+;; (b) negative: g's two children are the same renamed id but f's are not, so
+;;     no mp' satisfies both constraints and `find-mapping` fails
+(push)
+(let $P (App "f" (map-insert (map-empty) 0 0) (Var 0) (map-insert (map-empty) 1 1) (Var 1)))
+(let $Q (App "g" (map-insert (map-empty) 0 0) (Var 0) (map-insert (map-empty) 0 0) (Var 0)))
+(run 20)
+(fail (check (RenamesToLeader $P m $Q)))
+(fail (check (RenamesToLeader $Q m $P)))
+(pop)
+
+;; (c) positive, and only reachable through the symmetry join on x:
+;;       f(a[$0,$1], v[$0])   vs   g(a[$1,$0], v[$0])
+;;     v[$0] pins mp'[$0] = $0, which rules out sx = identity; sx = swap works.
+(push)
+(let $a01 (App "a" (map-insert (map-empty) 0 0) (Var 0) (map-insert (map-empty) 1 1) (Var 1)))
+(let $a10 (App "a" (map-insert (map-empty) 1 1) (Var 1) (map-insert (map-empty) 0 0) (Var 0)))
+(union $a01 $a10)
+(run 20)
+
+(let $P (App "f" (map-insert (map-insert (map-empty) 0 0) 1 1) $a01
+                 (map-insert (map-empty) 0 0) (Var 0)))
+(let $Q (App "g" (map-insert (map-insert (map-empty) 0 1) 1 0) $a01
+                 (map-insert (map-empty) 0 0) (Var 0)))
+(run 20)
+(check (RenamesToLeader $P m $Q))
+;; here im(p2) = {$0,$1} IS all of q's slots, so the mp' is already total and
+;; the demotion happens to be safe -- but that is a property of the data, not
+;; of the rule, so a compiler cannot rely on it
+(check (TooEager $P $Q))
+(fail (check (NaiveHit $P $Q)))
+(pop)
+
+(pop)
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; U4. eta, i.e. a multipattern chained through a variable that is a child in
+;;; one atom and the ROOT of the next, plus a slot-level side condition.
+;;;
+;;;   (lam $s (app ?f (var $s)))  ->  ?f     if $s not in slots(?f)
+;;;
+;;; Because `b` is already in dom(B) after atom 1, atom 2's `mp` is not solved
+;;; for -- it is `mb` composed with an element of G(b).  That join *is* the
+;;; Def. 6 check for b's second occurrence.
+;;;
+;;; `$s` is a slot, not a variable, but needs no special treatment: `(var $s)`
+;;; is the child `(Var 0)` under an edge, so "the argument is the bound slot" is
+;;; the ordinary Def. 6 check between two occurrences of `(Var 0)`.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(push)
+
+(rule ((= e (App "lambda" mvar (Var 0) mb b))
+       (= v (map-get mvar 0))                     ; the bound slot, in rule space
+       (= b (App "app" mf f mv (Var 0)))
+       (RenamesToLeader b symb b)
+       (= m2 (compose mb symb))                   ; atom 2's root renaming
+       (= (compose m2 mv) mvar)                   ; argument = the bound slot
+       (map-not-contains (inverse (compose m2 mf)) v))   ; $s not free in ?f
+      ((RenamesToLeader e (compose m2 mf) f)))    ; e = (m2.mf) * F
+
+;; positive: (lam $5 (app c (var $5))) -> c
+(push)
+(let $c    (App "c" (map-empty) (Null) (map-empty) (Null)))
+(let $body (App "app" (map-empty) $c (map-insert (map-empty) 5 5) (Var 5)))
+(let $lam  (App "lambda" (map-insert (map-empty) 5 5) (Var 5)
+                         (map-insert (map-empty) 5 5) $body))
+(run 30)
+(check (RenamesToLeader $lam m $c))
+(pop)
+
+;; negative: the side condition fails -- (lam $5 (app (var $5) (var $5)))
+(push)
+(let $body (App "app" (map-insert (map-empty) 5 5) (Var 5)
+                      (map-insert (map-empty) 5 5) (Var 5)))
+(let $lam  (App "lambda" (map-insert (map-empty) 5 5) (Var 5)
+                         (map-insert (map-empty) 5 5) $body))
+(run 30)
+(fail (check (RenamesToLeader $lam m (Var 0))))
+(pop)
+
+;; negative: the argument is a different slot -- (lam $5 (app c (var $6)))
+(push)
+(let $c    (App "c" (map-empty) (Null) (map-empty) (Null)))
+(let $body (App "app" (map-empty) $c (map-insert (map-empty) 6 6) (Var 6)))
+(let $lam  (App "lambda" (map-insert (map-empty) 5 5) (Var 5)
+                         (map-insert (map-insert (map-empty) 5 5) 6 6) $body))
+(run 30)
+(fail (check (RenamesToLeader $lam m $c)))
+(pop)
+
+(pop)
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; U5. When `mp'` is *partial*: the one place this scheme is not enough.
+;;;
+;;;   (rule ((= p (App "f" x y))
+;;;          (= q (App "g" x z)))
+;;;         ((union p (App "h" y z))))
+;;;
+;;; Only `x` is shared, so `mp'` is pinned only on im(p2).  A slot of q outside
+;;; that gets no name in slots(pattern) at all.  The paper picks a *fresh* slot
+;;; for exactly this case (last line of S3.6); a renaming is only a map, so the
+;;; encoding instead silently drops it -- and dropping a slot is a lie that says
+;;; "this slot is redundant".
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; (a) unguarded: demonstrably unsound
+(push)
+(rule ((= p (App "f" p1 x q1 y))
+       (= q (App "g" p2 x q2 z))
+       (RenamesToLeader x sx x)
+       (= mp' (compose (compose p1 sx) (inverse p2))))
+      ((union p (App "h" q1 y (compose mp' q2) z))))
+
+(let $P (App "f" (map-insert (map-empty) 0 0) (Var 0) (map-insert (map-empty) 1 1) (Var 1)))
+(let $Q (App "g" (map-insert (map-empty) 0 0) (Var 0) (map-insert (map-empty) 5 5) (Var 5)))
+(run 20)
+;; the action built h(y, z) with an *empty* edge to z, and unioning that into p
+;; forced p's slot $0 to be redundant: its self-map lost a slot.
+(check (RenamesToLeader $P m $P) (= (map-length m) 1))
+(pop)
+
+;; (b) guarded: every variable used in the action must keep all of its slots.
+;;     Sound, but incomplete -- the rule simply does not fire.
+(push)
+(rule ((= p (App "f" p1 x q1 y))
+       (= q (App "g" p2 x q2 z))
+       (RenamesToLeader x sx x)
+       (= mp' (compose (compose p1 sx) (inverse p2)))
+       (= mz (compose mp' q2))
+       (= (map-length mz) (map-length q2)))       ; <- totality guard
+      ((union p (App "h" q1 y mz z))))
+
+(push)
+(let $P (App "f" (map-insert (map-empty) 0 0) (Var 0) (map-insert (map-empty) 1 1) (Var 1)))
+(let $Q (App "g" (map-insert (map-empty) 0 0) (Var 0) (map-insert (map-empty) 5 5) (Var 5)))
+(run 20)
+(fail (check (RenamesToLeader $P m $P) (= (map-length m) 1)))
+(pop)
+
+;; when z's slots *are* determined by the shared variable the rule fires and
+;; the slot sets line up
+(push)
+(let $P (App "f" (map-insert (map-empty) 0 0) (Var 0) (map-insert (map-empty) 1 1) (Var 1)))
+(let $Q (App "g" (map-insert (map-empty) 0 0) (Var 0) (map-insert (map-empty) 0 0) (Var 0)))
+(run 20)
+(check (RenamesToLeader $P m $P) (= (map-length m) 2))
+(pop)
+
+(pop)
