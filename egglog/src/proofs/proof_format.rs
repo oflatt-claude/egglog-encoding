@@ -9,7 +9,7 @@ use crate::{
             ProofCheckError, ProofCheckErrorKind, eval_expr_with_subst, gather_globals, run_merge,
         },
         proof_encoding_helpers::{EncodingNames, Skeleton},
-        proof_head::{Firing, HeadPlan},
+        proof_head::{Firing, HeadPlan, HeadWalk},
     },
     typechecking::{FuncType, PrimitiveValidator},
     util::{HashMap, HashSet, IEntry, IndexMap, IndexSet, SymbolGen},
@@ -229,6 +229,10 @@ pub struct ProofStore {
     pub(super) prim_value_constructors: HashSet<String>,
     /// Rule name -> how its head lowers.
     head_plans: HashMap<String, Rc<HeadPlan>>,
+    /// (Rule name, body premises) -> how far that firing's head has been walked.
+    /// Every rule proof of one firing reads a column out of the array that one
+    /// walk fills.
+    head_walks: HashMap<(String, Vec<ProofId>), HeadWalk>,
     /// Structural sharing for the proofs conversion synthesizes.
     synthesized: HashMap<SynthKey, ProofId>,
 }
@@ -738,6 +742,7 @@ impl ProofStore {
             container_normalizers,
             prim_value_constructors,
             head_plans: HashMap::default(),
+            head_walks: HashMap::default(),
             synthesized: HashMap::default(),
         }
     }
@@ -910,6 +915,7 @@ impl ProofStore {
                 recorded.retain(|var, _term| globals.get(var).is_none());
                 // The bridges are in the order the head builds, which is the order
                 // the walk asks for them.
+                let firing_key = (name.clone(), converted_premises.clone());
                 let mut firing = Firing::new(
                     name,
                     &planned,
@@ -921,7 +927,21 @@ impl ProofStore {
                         Some(store.convert_raw_proof(prog, globals, raw_store, raw))
                     }),
                 );
+                // This row carries on the walk the last row of the same firing
+                // left off at. A row reached while this one walks starts its own,
+                // so the further of the two is the one kept.
+                if let Some(walk) = self.head_walks.remove(&firing_key) {
+                    firing.carry_on(walk);
+                }
                 let proof_id = firing.column(self, *raw_column);
+                let walked = firing.into_walk();
+                let further = self
+                    .head_walks
+                    .get(&firing_key)
+                    .is_none_or(|kept| kept.reaches() < walked.reaches());
+                if further {
+                    self.head_walks.insert(firing_key, walked);
+                }
                 self.proof_id.insert(raw_proof.clone(), proof_id);
                 return proof_id;
             }

@@ -411,17 +411,77 @@ fn plan_construct_into(actions: &[ResolvedAction]) -> (HashMap<String, String>, 
     (construct_into, dropped)
 }
 
+/// How far a rule head's walk has got, and everything it produced on the way.
+///
+/// A rule proof reads one column, so the walk stops at the action that fills it
+/// and the next proof of the same firing carries on from here. What it holds is
+/// what the whole walk would have produced this far: a rule proof carries only
+/// the bridge premises recorded before it, so an action that asked for one this
+/// proof does not have is rolled back rather than kept.
+#[derive(Clone, Default)]
+pub(crate) struct HeadWalk {
+    /// The action to carry on at.
+    next_action: usize,
+    /// How many of the layout's positions the walk has reached.
+    next_position: usize,
+    /// How many bridge premises the walk has asked for.
+    bridges_read: usize,
+    /// The columns filled so far. `None` at a column the walk numbers but the
+    /// head produces no proof for.
+    proofs: Vec<Option<ProofId>>,
+    /// What the head's variables stand for, as the walk binds them. Empty until
+    /// the first walk, which seeds it with the globals and the substitution.
+    bindings: HashMap<String, TermId>,
+    /// A variable holding a term the head built -> that term's connector.
+    connectors: HashMap<String, ProofId>,
+}
+
+impl HeadWalk {
+    /// How far into the head this walk got.
+    pub(crate) fn reaches(&self) -> usize {
+        self.next_action
+    }
+
+    /// Where the walk stands, to come back to with [`Self::rewind`].
+    fn mark(&self) -> WalkMark {
+        WalkMark {
+            action: self.next_action,
+            position: self.next_position,
+            bridges: self.bridges_read,
+            columns: self.proofs.len(),
+        }
+    }
+
+    /// Undo everything the walk did after `mark`. The bindings and connectors it
+    /// wrote are left alone: an action rewrites its own before anything reads
+    /// them, and the actions after it are unreached either way.
+    fn rewind(&mut self, mark: WalkMark) {
+        self.next_action = mark.action;
+        self.next_position = mark.position;
+        self.bridges_read = mark.bridges;
+        self.proofs.truncate(mark.columns);
+    }
+}
+
+/// An action boundary a walk can be rewound to.
+#[derive(Clone, Copy, Default)]
+struct WalkMark {
+    action: usize,
+    position: usize,
+    bridges: usize,
+    columns: usize,
+}
+
 /// One firing of a rule head, and the flat array of proofs its lowering produces.
 ///
 /// Each position of the walk fills the run of columns [`HeadLayout`] gives it,
-/// in the order [`HeadPosition::proofs`] lists them.
+/// in the order [`HeadPosition::proofs`] lists them. The array lives in a
+/// [`HeadWalk`], which one rule proof of the firing hands on to the next.
 pub(crate) struct Firing<'a> {
     rule_name: &'a str,
     plan: &'a HeadPlan,
     /// Where the head's columns go, walked once up front.
     layout: HeadLayout,
-    /// How many of the layout's positions the walk has reached.
-    next_position: usize,
     /// The position being filled, and how many of its columns are filled.
     open: Option<(HeadRun, usize)>,
     /// The premises the rule body matched, one per body fact.
@@ -430,14 +490,15 @@ pub(crate) struct Firing<'a> {
     /// The view-row proof the head recorded at a bridge position, converted on
     /// demand. `None` for a position the requesting rule proof row does not carry.
     bridge_at: Box<dyn FnMut(&mut ProofStore, usize) -> Option<ProofId> + 'a>,
-    /// What the head's variables stand for, as the walk binds them.
-    bindings: HashMap<String, TermId>,
-    /// A variable holding a term the head built -> that term's connector.
-    connectors: HashMap<String, ProofId>,
-    /// How many bridge premises the walk has asked for.
-    bridges_read: usize,
-    proofs: Vec<Option<ProofId>>,
-    walked: bool,
+    walk: HeadWalk,
+    /// The boundary before the action that first asked for a bridge this row does
+    /// not carry, which is as far as the next row can carry on from.
+    kept: WalkMark,
+    /// Whether the walk has asked for a bridge past the ones this row carries.
+    ran_out: bool,
+    /// The column the walk was asked for, past which it need not go. `None` asks
+    /// for the whole head.
+    wanted: Option<usize>,
 }
 
 impl<'a> Firing<'a> {
@@ -455,27 +516,41 @@ impl<'a> Firing<'a> {
             rule_name,
             plan,
             layout: HeadLayout::new(plan),
-            next_position: 0,
             open: None,
             body_premises,
             substitution,
             bridge_at,
-            bindings,
-            connectors: HashMap::default(),
-            bridges_read: 0,
-            proofs: vec![],
-            walked: false,
+            walk: HeadWalk {
+                bindings,
+                ..HeadWalk::default()
+            },
+            kept: WalkMark::default(),
+            ran_out: false,
+            wanted: None,
         }
     }
 
-    /// The proofs the head's lowering produces, by column. `None` at a column
-    /// the walk numbers but the head produces no proof for.
-    pub(crate) fn proofs(&mut self, store: &mut ProofStore) -> &[Option<ProofId>] {
-        if !self.walked {
-            self.walked = true;
-            self.walk(store);
+    /// Carry on from `walk`, which an earlier row of this firing left behind.
+    pub(crate) fn carry_on(&mut self, walk: HeadWalk) {
+        self.walk = walk;
+        self.kept = self.walk.mark();
+    }
+
+    /// The walk to hand the next row of this firing, cut back to what a row
+    /// carrying more bridges would agree with.
+    pub(crate) fn into_walk(mut self) -> HeadWalk {
+        if self.ran_out {
+            self.walk.rewind(self.kept);
         }
-        &self.proofs
+        self.walk
+    }
+
+    /// Every proof the head's lowering produces, by column, walking all of it.
+    /// `None` at a column the walk numbers but the head produces no proof for.
+    #[cfg(test)]
+    pub(crate) fn proofs(&mut self, store: &mut ProofStore) -> &[Option<ProofId>] {
+        self.fill(store, None);
+        &self.walk.proofs
     }
 
     /// The proof the e-graph stored in the column `raw` names.
@@ -484,7 +559,9 @@ impl<'a> Firing<'a> {
         let column = usize::try_from(raw).unwrap_or_else(|_| {
             panic!("rule {rule_name} proof was emitted without a column ({raw})")
         });
-        self.proofs(store)
+        self.fill(store, Some(column));
+        self.walk
+            .proofs
             .get(column)
             .copied()
             .flatten()
@@ -493,22 +570,47 @@ impl<'a> Firing<'a> {
             })
     }
 
+    /// Walk the head until `wanted` is filled — or to its end when nothing is
+    /// wanted.
+    fn fill(&mut self, store: &mut ProofStore, wanted: Option<usize>) {
+        self.wanted = wanted;
+        if !self.filled() {
+            self.walk(store);
+        }
+    }
+
+    /// Whether the walk has filled the column it was asked for. Columns are
+    /// claimed in walk order, so one already filled is final.
+    fn filled(&self) -> bool {
+        self.wanted
+            .is_some_and(|column| self.walk.proofs.len() > column)
+    }
+
     /// Walk the head, filling the array.
     fn walk(&mut self, store: &mut ProofStore) {
-        for (at, action) in self.plan.actions.iter().enumerate() {
-            if self.plan.dropped.contains(&at) {
+        let plan = self.plan;
+        while self.walk.next_action < plan.actions.len() {
+            if self.filled() {
+                return;
+            }
+            if !self.ran_out {
+                self.kept = self.walk.mark();
+            }
+            let at = self.walk.next_action;
+            self.walk.next_action += 1;
+            if plan.dropped.contains(&at) {
                 continue;
             }
-            match action {
+            match &plan.actions[at] {
                 GenericAction::Let(_, var, expr) => {
                     let connector = match self.plan.construct_into.get(&var.name) {
                         Some(target) => self.guest(store, expr, target),
                         None => self.expr(store, expr),
                     };
                     let term = self.eval(store, expr);
-                    self.bindings.insert(var.name.clone(), term);
+                    self.walk.bindings.insert(var.name.clone(), term);
                     if let Some(connector) = connector {
-                        self.connectors.insert(var.name.clone(), connector);
+                        self.walk.connectors.insert(var.name.clone(), connector);
                     }
                 }
                 GenericAction::Expr(_, expr) => {
@@ -569,7 +671,7 @@ impl<'a> Firing<'a> {
             // A variable's value comes from wherever it was bound; a literal
             // holds no built term.
             return match expr {
-                ResolvedExpr::Var(_, var) => self.connectors.get(&var.name).copied(),
+                ResolvedExpr::Var(_, var) => self.walk.connectors.get(&var.name).copied(),
                 _ => None,
             };
         };
@@ -616,7 +718,7 @@ impl<'a> Firing<'a> {
         self.claim(HeadPosition::Guest, |this| {
             let own = this.own(store, HeadProof::Own, Proposition::new(term, term));
             let to_canonical = store.canonicalize(own, steps);
-            let target_term = *this.bindings.get(target).unwrap_or_else(|| {
+            let target_term = *this.walk.bindings.get(target).unwrap_or_else(|| {
                 panic!(
                     "rule {}'s construct-into target {target} is unbound",
                     this.rule_name
@@ -627,7 +729,7 @@ impl<'a> Firing<'a> {
                 HeadProof::DroppedEdge,
                 Proposition::new(target_term, term),
             );
-            let target_connector = this.connectors.get(target).copied();
+            let target_connector = this.walk.connectors.get(target).copied();
             let view = store.guest_view(edge, to_canonical, target_connector);
             this.push(HeadProof::GuestView, Some(view));
             let connector = store.connect(to_canonical, view);
@@ -671,22 +773,22 @@ impl<'a> Firing<'a> {
     /// Fill the run of columns the layout gives this walk's next position, which
     /// must be a `position`.
     fn claim<R>(&mut self, position: HeadPosition, fill: impl FnOnce(&mut Self) -> R) -> R {
-        let run = self.layout.run(self.next_position);
+        let run = self.layout.run(self.walk.next_position);
         assert_eq!(
             run.position, position,
             "rule {}'s walk is at a {position:?} where its layout has a {:?}",
             self.rule_name, run.position
         );
         assert_eq!(
-            self.proofs.len(),
+            self.walk.proofs.len(),
             run.first,
             "rule {}'s walk reached the {:?} the layout puts at column {}, having filled {}",
             self.rule_name,
             position,
             run.first,
-            self.proofs.len()
+            self.walk.proofs.len()
         );
-        self.next_position += 1;
+        self.walk.next_position += 1;
         let outer = self.open.replace((run, 0));
         assert!(outer.is_none(), "a head's positions do not nest");
         let out = fill(self);
@@ -716,7 +818,7 @@ impl<'a> Firing<'a> {
             run.position.proofs().get(*produced)
         );
         *produced += 1;
-        self.proofs.push(id);
+        self.walk.proofs.push(id);
     }
 
     /// The head's own conclusion, at the column holding `proof`.
@@ -726,7 +828,7 @@ impl<'a> Firing<'a> {
         proof: HeadProof,
         proposition: Proposition,
     ) -> ProofId {
-        let column = self.proofs.len() as i64;
+        let column = self.walk.proofs.len() as i64;
         let id = store.push_shared_proof(
             SynthKey::Rule(
                 self.rule_name.to_string(),
@@ -748,9 +850,14 @@ impl<'a> Firing<'a> {
 
     /// The term `expr` evaluates to under the bindings in effect.
     fn eval(&mut self, store: &mut ProofStore, expr: &ResolvedExpr) -> TermId {
-        eval_expr_with_subst(self.rule_name, expr, &mut store.term_dag, &self.bindings)
-            .unwrap_or_else(|err| panic!("rule {}'s head did not replay: {err}", self.rule_name))
-            .0
+        eval_expr_with_subst(
+            self.rule_name,
+            expr,
+            &mut store.term_dag,
+            &self.walk.bindings,
+        )
+        .unwrap_or_else(|err| panic!("rule {}'s head did not replay: {err}", self.rule_name))
+        .0
     }
 
     /// The view-row proof recorded for the term the walk just built, when it says
@@ -760,9 +867,12 @@ impl<'a> Firing<'a> {
     /// `None` for a term with no bridge recorded: a row minted before the head
     /// reached the subterm it is about has nothing to name yet.
     fn bridge(&mut self, store: &mut ProofStore, to_canonical: ProofId) -> Option<ProofId> {
-        let position = self.bridges_read;
-        self.bridges_read += 1;
-        let bridge = (self.bridge_at)(store, position)?;
+        let position = self.walk.bridges_read;
+        self.walk.bridges_read += 1;
+        let Some(bridge) = (self.bridge_at)(store, position) else {
+            self.ran_out = true;
+            return None;
+        };
         // Every proof this read can return — an existing row's, a rebuilt row's, a
         // construct-into guest view, or the encoder's `can_prf` fallback — ends at
         // the canonical term. A bridge that does not is one aligned to the wrong
