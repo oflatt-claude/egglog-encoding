@@ -445,8 +445,8 @@ impl RawProofStore {
             })
     }
 
-    /// How the proof constructor `head` names is read, or `None` when it names
-    /// none.
+    /// How the proof constructor `head` names is read, or `None` when `head`
+    /// names none.
     fn shape(&self, head: &str) -> Option<ProofShape> {
         let names = &self.names;
         let shape = |arity, children: &'static [usize], build: BuildProof| {
@@ -1489,7 +1489,7 @@ impl Proof {
 ///
 /// [`RawProofStore::add_proof`] hash-conses, so the unpacked row and the
 /// hand-written chain land on the same [`RawProofId`] exactly when they are the
-/// same tree; [`tests::assert_agree`] compares them there.
+/// same tree, which is where `assert_agree` compares them.
 #[cfg(test)]
 mod tests {
     use super::*;

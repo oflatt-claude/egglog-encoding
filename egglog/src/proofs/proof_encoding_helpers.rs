@@ -63,13 +63,9 @@ pub(crate) struct EncodingNames {
     pub(crate) term_proof_name: HashMap<String, String>,
 }
 
-/// A proof composed out of the equality axioms over leaves of type `L`.
-///
-/// Two leaves are in use. A [`Composition`]'s leaf is a proof variable already
-/// in scope: the encoder builds one where it composes rather than records, and
-/// the whole tree becomes one row where something reads it. A [`Skeleton`]'s
-/// leaf is a column of that row, so the skeleton is also the row's layout;
-/// [`Composition::pack`] is the map from the one to the other.
+/// A proof composed out of the equality axioms over leaves of type `L`. Two
+/// leaves are in use — a [`Composition`]'s and a [`Skeleton`]'s — and
+/// [`Composition::pack`] is the map between them.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum ProofTree<L> {
     Leaf(L),
@@ -80,15 +76,18 @@ pub(crate) enum ProofTree<L> {
 }
 
 /// The composition one packed proof row stands for, written over the row's own
-/// proof columns: a leaf is the proof in a column. Every column is named, so a
-/// column a composition reaches twice is named twice and carried once.
+/// proof columns: a leaf is the proof in a column, so the skeleton is also the
+/// row's layout. Every column is named, so a column a composition reaches twice
+/// is named twice and carried once.
 ///
-/// A packed row carries [`Self::spelling`] in its first column, so the site
+/// A packed row carries [`Skeleton::spelling`] in its first column, so the site
 /// writing the row and the unpacking that reads it work from one statement of
 /// the composition.
 pub(crate) type Skeleton = ProofTree<usize>;
 
-/// A composition the encoder has built but not written a row for.
+/// A composition the encoder has built but not written a row for. A leaf names
+/// a proof variable already in scope; the whole tree becomes one row where
+/// something reads it.
 pub(crate) type Composition = ProofTree<String>;
 
 impl<L> ProofTree<L> {
