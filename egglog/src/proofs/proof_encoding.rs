@@ -203,13 +203,9 @@ pub(crate) struct ProofInstrumentor<'a> {
     /// variable name. Names are globally fresh, so entries never collide across
     /// the generated programs.
     reflexive: HashSet<String>,
-    /// Statements not emitted yet, keyed by the proof variable the group binds.
-    /// A group is emitted where its proof is first read; a proof nothing reads is
-    /// never emitted at all (see [`Self::defer_lookup`]).
-    pending_lookups: HashMap<String, Vec<String>>,
-    /// What each proof variable the encoder composed stands for, until the row
-    /// standing for it is written (see [`Self::mint_sym`]).
-    compositions: HashMap<String, Composition>,
+    /// What each proof still held back binds, keyed by its variable. A proof is
+    /// written where it is first read; one nothing reads is never written at all.
+    deferred: HashMap<String, Deferred>,
     /// Compositions that get a row of their own rather than being written into
     /// the one composing over them (see [`Self::level_connector`]).
     sealed: HashSet<String>,
@@ -219,6 +215,14 @@ pub(crate) struct ProofInstrumentor<'a> {
     /// Which layer the statements being emitted belong to: a rule head's
     /// skeleton, or a composition written out here.
     site: ProofSite,
+}
+
+/// A held-back proof: finished statements, emitted as they stand (see
+/// [`ProofInstrumentor::defer_lookup`]), or a composition the encoder can still
+/// rewrite into one row (see [`ProofInstrumentor::mint_sym`]).
+enum Deferred {
+    Stmts(Vec<String>),
+    Composed(Composition),
 }
 
 /// The variables a joined argument string names: its whitespace-separated
@@ -236,8 +240,7 @@ impl<'a> ProofInstrumentor<'a> {
             egraph,
             head_chain: None,
             reflexive: HashSet::default(),
-            pending_lookups: HashMap::default(),
-            compositions: HashMap::default(),
+            deferred: HashMap::default(),
             sealed: HashSet::default(),
             packed_decls: vec![],
             site: ProofSite::Composed,
@@ -1273,8 +1276,10 @@ impl<'a> ProofInstrumentor<'a> {
     /// What `proof` stands for: the composition it names while that is still
     /// unwritten and unsealed, else the variable itself.
     fn composition(&self, proof: &str) -> Composition {
-        match self.compositions.get(proof) {
-            Some(composition) if !self.sealed.contains(proof) => composition.clone(),
+        match self.deferred.get(proof) {
+            Some(Deferred::Composed(composition)) if !self.sealed.contains(proof) => {
+                composition.clone()
+            }
             _ => Composition::Leaf(proof.to_string()),
         }
     }
@@ -1282,7 +1287,8 @@ impl<'a> ProofInstrumentor<'a> {
     /// Name `composition`, holding its row back until something reads the name.
     fn compose(&mut self, composition: Composition) -> String {
         let proof = self.fresh_var();
-        self.compositions.insert(proof.clone(), composition);
+        self.deferred
+            .insert(proof.clone(), Deferred::Composed(composition));
         proof
     }
 
@@ -1295,7 +1301,7 @@ impl<'a> ProofInstrumentor<'a> {
     /// this term out too. A level's packed row is then a function of its arity
     /// and not of the whole term's size.
     fn level_connector(&mut self, chain: &str, dedup: &str) -> String {
-        let composed = self.compositions.contains_key(chain);
+        let composed = matches!(self.deferred.get(chain), Some(Deferred::Composed(_)));
         let connector = self.connect(chain.to_string(), dedup.to_string());
         if composed {
             self.sealed.insert(connector.clone());
@@ -1363,14 +1369,13 @@ impl<'a> ProofInstrumentor<'a> {
     /// reads must be either bound within it or in scope there — a query
     /// variable, or a statement already emitted.
     pub(crate) fn defer_lookup(&mut self, proof: &str, group: Vec<String>) {
-        self.pending_lookups.insert(proof.to_string(), group);
+        self.deferred
+            .insert(proof.to_string(), Deferred::Stmts(group));
     }
 
-    /// Discard the statements and compositions still held back, whose proofs
-    /// nothing read.
+    /// Discard everything still held back, whose proofs nothing read.
     pub(crate) fn drop_pending_lookups(&mut self) {
-        self.pending_lookups.clear();
-        self.compositions.clear();
+        self.deferred.clear();
         self.sealed.clear();
     }
 
@@ -1378,7 +1383,7 @@ impl<'a> ProofInstrumentor<'a> {
     /// those read, keeping each binding ahead of the statement reading it. A
     /// group is emitted at most once, wherever it is first read.
     fn emit_pending_lookups(&mut self, stmts: &mut Vec<String>, args_joined: &str) {
-        if self.pending_lookups.is_empty() && self.compositions.is_empty() {
+        if self.deferred.is_empty() {
             return;
         }
         for var in read_vars(args_joined) {
@@ -1390,12 +1395,10 @@ impl<'a> ProofInstrumentor<'a> {
     /// directly by a reader that does not go through [`Self::mint`] — a statement
     /// built by `format!` rather than as a row of its own.
     fn emit_pending_group(&mut self, stmts: &mut Vec<String>, var: &str) {
-        if let Some(composition) = self.compositions.remove(var) {
-            self.emit_composition(stmts, var, composition);
-            return;
-        }
-        if let Some(group) = self.pending_lookups.remove(var) {
-            stmts.extend(group);
+        match self.deferred.remove(var) {
+            Some(Deferred::Composed(composition)) => self.emit_composition(stmts, var, composition),
+            Some(Deferred::Stmts(group)) => stmts.extend(group),
+            None => {}
         }
     }
 
