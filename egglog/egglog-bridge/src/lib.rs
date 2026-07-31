@@ -2046,6 +2046,11 @@ impl TableAction {
         key: &[Value],
         vals: &[Value],
     ) -> Value {
+        debug_assert_eq!(
+            vals.len(),
+            self.table_math.n_vals(),
+            "lookup_or_insert_vals: vals must fill every value column"
+        );
         let timestamp = MergeVal::Constant(Value::from_usize(state.read_counter(self.timestamp)));
         let mut merge_vals = SmallVec::<[MergeVal; 4]>::new();
         merge_vals.extend(vals.iter().map(|v| MergeVal::Constant(*v)));

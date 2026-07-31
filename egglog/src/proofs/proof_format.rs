@@ -102,7 +102,8 @@ fn run_merge_subexpr(
 /// last of.
 struct RuleColumns {
     name: String,
-    /// One per body fact of the rule.
+    /// One per premise the encoder recorded: the rule's written body facts, in
+    /// order, then a lookup per global the head mentions.
     premises: Vec<TermId>,
     /// One per subterm the head interned before this row's proof, in construction
     /// order.
@@ -1487,6 +1488,10 @@ impl Proof {
 /// A packed row unpacks to exactly the composition its skeleton states. The
 /// compositions below are written out by hand rather than generated, so they are
 /// an oracle rather than a second copy of the instantiation.
+///
+/// [`RawProofStore::add_proof`] hash-conses, so the unpacked row and the
+/// hand-written chain land on the same [`RawProofId`] exactly when they are the
+/// same tree; [`tests::assert_agree`] compares them there.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1496,7 +1501,7 @@ mod tests {
     /// the rule packs: the row proof `e_old = f(old0 old1 old2 old3)`, a step
     /// per child column (column 3's is reflexive — that column did not move),
     /// and the e-class's own move `e_old = e_new`.
-    struct Firing {
+    struct RebuildFiring {
         raw: RawProofStore,
         row: TermId,
         /// `old_j = new_j`, per column.
@@ -1510,8 +1515,8 @@ mod tests {
         e_new: TermId,
     }
 
-    impl Firing {
-        fn new() -> Firing {
+    impl RebuildFiring {
+        fn new() -> RebuildFiring {
             let mut raw = empty_store();
             let leaf = |raw: &mut RawProofStore, name: String| raw.term_dag.app(name, vec![]);
             let old: Vec<TermId> = (0..4).map(|j| leaf(&mut raw, format!("old{j}"))).collect();
@@ -1530,7 +1535,7 @@ mod tests {
                 .map(|j| fiat_term(&mut raw, old[j], new[j]))
                 .collect();
             let eclass = fiat_term(&mut raw, e_old, e_new);
-            Firing {
+            RebuildFiring {
                 raw,
                 row,
                 steps,
@@ -1559,8 +1564,8 @@ mod tests {
         }
     }
 
-    /// Convert and simplify both proofs in one store, and require that they are
-    /// the same tree, proving `expected`.
+    /// Require that the unpacked row `packed` is the same tree as the chain it
+    /// packs, and that the chain proves `expected`.
     fn assert_agree(
         raw: &RawProofStore,
         packed: RawProofId,
@@ -1575,13 +1580,14 @@ mod tests {
             let converted = store.convert_raw_proof(&prog, &globals, raw, id);
             store.simplify(converted)
         };
-        let (packed, chain) = (convert(packed), convert(chain));
-        assert_eq!(store.get(chain).proposition(), expected);
-        assert!(
-            same_proof(&store, packed, chain),
+        let (packed_proof, chain_proof) = (convert(packed), convert(chain));
+        assert_eq!(store.get(chain_proof).proposition(), expected);
+        assert_eq!(
+            packed,
+            chain,
             "the unpacked row\n{}\nis not the composition it packs\n{}",
-            store.proof_to_string(packed),
-            store.proof_to_string(chain),
+            store.proof_to_string(packed_proof),
+            store.proof_to_string(chain_proof),
         );
     }
 
@@ -1598,42 +1604,6 @@ mod tests {
     fn leaf_proof_term(raw: &mut RawProofStore, name: &str) -> TermId {
         let value = raw.term_dag.app(name.to_string(), vec![]);
         fiat_term(raw, value, value)
-    }
-
-    /// Whether two proofs are the same tree. Their ids differ by construction:
-    /// the chain's nodes are minted per raw node, the packed row's by the
-    /// synthesis helpers' own hash-consing.
-    fn same_proof(store: &ProofStore, left: ProofId, right: ProofId) -> bool {
-        let (left, right) = (store.get(left), store.get(right));
-        if left.proposition != right.proposition {
-            return false;
-        }
-        match (&left.justification, &right.justification) {
-            (Justification::Fiat, Justification::Fiat) => true,
-            (Justification::Sym(left), Justification::Sym(right)) => {
-                same_proof(store, *left, *right)
-            }
-            (Justification::Trans(la, lb), Justification::Trans(ra, rb)) => {
-                same_proof(store, *la, *ra) && same_proof(store, *lb, *rb)
-            }
-            (
-                Justification::Congr {
-                    proof: left,
-                    child_index: left_index,
-                    child_proof: left_child,
-                },
-                Justification::Congr {
-                    proof: right,
-                    child_index: right_index,
-                    child_proof: right_child,
-                },
-            ) => {
-                left_index == right_index
-                    && same_proof(store, *left, *right)
-                    && same_proof(store, *left_child, *right_child)
-            }
-            _ => false,
-        }
     }
 
     /// An empty store whose names are the ones a packed row is spelled with.
@@ -1707,7 +1677,7 @@ mod tests {
     /// reflexive.
     #[test]
     fn rebuild_unpacks_to_the_chain_it_packs() {
-        let mut firing = Firing::new();
+        let mut firing = RebuildFiring::new();
         let (row, eclass) = (firing.row, firing.eclass);
         let steps = firing.steps.clone();
         let packed = rebuild(
@@ -1738,7 +1708,7 @@ mod tests {
     /// A view whose output is not an e-class: only child columns move.
     #[test]
     fn rebuild_without_an_eclass_step_unpacks_to_the_chain() {
-        let mut firing = Firing::new();
+        let mut firing = RebuildFiring::new();
         let row = firing.row;
         let steps = firing.steps.clone();
         let packed = rebuild(&mut firing.raw, row, &[(1, steps[1]), (3, steps[3])], None);
@@ -1756,7 +1726,7 @@ mod tests {
     /// Only the e-class moved, so the fold contributes nothing.
     #[test]
     fn rebuild_with_no_child_steps_unpacks_to_the_chain() {
-        let mut firing = Firing::new();
+        let mut firing = RebuildFiring::new();
         let (row, eclass) = (firing.row, firing.eclass);
         let packed = rebuild(&mut firing.raw, row, &[], Some(eclass));
 
@@ -1775,7 +1745,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "congruence step 1 does not start at that child")]
     fn a_rebuild_step_at_the_wrong_child_is_rejected() {
-        let mut firing = Firing::new();
+        let mut firing = RebuildFiring::new();
         let (row, steps) = (firing.row, firing.steps.clone());
         let packed = rebuild(&mut firing.raw, row, &[(1, steps[0])], None);
         let mut store = ProofStore::new(

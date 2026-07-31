@@ -2,14 +2,14 @@
 mod tests {
     use crate::ast::{
         GenericAction, GenericNCommand, Literal, ResolvedAction, ResolvedCommand, ResolvedExpr,
-        RuleEvalMode, sanitize_internal_names,
+        ResolvedFact, RuleEvalMode, remove_globals::remove_globals, sanitize_internal_names,
     };
     use crate::core::ResolvedCall;
     use crate::proofs::proof_checker::eval_expr_with_subst;
     use crate::proofs::proof_extraction::ProveExistsError;
     use crate::proofs::proof_format::{ProofId, ProofStore, Proposition};
     use crate::proofs::proof_head::{Firing, HeadPlan, HeadProof, ProofAlgebra};
-    use crate::util::{HashMap, HashSet, IndexMap};
+    use crate::util::{HashMap, HashSet, IndexMap, SymbolGen};
     use crate::{
         CommandOutput, EGraph, Error, ProofEncodingUnsupportedReason, TermDag, TermId,
         add_primitive_with_validator,
@@ -777,11 +777,11 @@ mod tests {
         // The rules as the checker replays them: before `remove_globals`.
         let mut checker = EGraph::new_with_proofs();
         checker.parse_and_run_program(None, source).unwrap();
-        let written: HashMap<String, usize> = checker
+        let written: HashMap<String, Vec<ResolvedFact>> = checker
             .proof_check_program
             .iter()
             .filter_map(|cmd| match cmd {
-                GenericNCommand::NormRule { rule } => Some((rule.name.clone(), rule.body.len())),
+                GenericNCommand::NormRule { rule } => Some((rule.name.clone(), rule.body.clone())),
                 _ => None,
             })
             .collect();
@@ -817,7 +817,7 @@ mod tests {
         // Holds for every rule the checker replays, including the one `prove`
         // generates.
         for (name, premises) in &recorded {
-            let facts = written[name];
+            let facts = written[name].len();
             assert!(
                 *premises >= facts,
                 "rule '{name}' recorded {premises} premises for a body of {facts} written facts"
@@ -828,13 +828,48 @@ mod tests {
         // without one records exactly its written facts.
         assert_eq!(
             recorded.get("with_global").copied(),
-            Some(written["with_global"] + 1),
+            Some(written["with_global"].len() + 1),
             "a head reading a global should record one extra premise"
         );
         assert_eq!(
             recorded.get("without_global").copied(),
-            Some(written["without_global"]),
+            Some(written["without_global"].len()),
             "a rule mentioning no global should record one premise per written fact"
+        );
+
+        // The extras being *trailing* is what makes pairing by position correct,
+        // and it rests entirely on `remove_globals` mapping the written facts in
+        // place and appending the lookups after them. No written body here
+        // mentions a global, so the mapping is the identity and the prefix
+        // compares exactly.
+        let removed = remove_globals(
+            checker.proof_check_program.clone(),
+            &mut SymbolGen::new("premise_order".to_string()),
+        );
+        let mut compared = 0;
+        for command in &removed {
+            let GenericNCommand::NormRule { rule } = command else {
+                continue;
+            };
+            let before = &written[&rule.name];
+            assert!(
+                rule.body.len() >= before.len(),
+                "`remove_globals` dropped a body fact of rule '{}'",
+                rule.name
+            );
+            for (at, (after, before)) in rule.body.iter().zip(before).enumerate() {
+                assert_eq!(
+                    after, before,
+                    "rule '{}' fact {at} is not the written one after `remove_globals`",
+                    rule.name
+                );
+            }
+            compared += 1;
+        }
+        assert_eq!(
+            compared,
+            written.len(),
+            "every rule the checker replays should have been compared"
         );
     }
 
