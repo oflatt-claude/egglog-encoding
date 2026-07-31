@@ -362,6 +362,20 @@ pub enum Justification {
     Eval,
 }
 
+/// The [`RawProof`] a constructor states, over its arguments and its
+/// already-parsed nested proofs.
+type BuildProof = fn(&RawProofStore, &[TermId], &[RawProofId]) -> RawProof;
+
+/// How one proof constructor is read: how many arguments it takes, which of
+/// them are nested proofs — in the order they are parsed — and what proof it
+/// states over them. The rule and packed-row constructors are variadic and are
+/// not described here; both readers special-case them.
+struct ProofShape {
+    arity: usize,
+    children: &'static [usize],
+    build: BuildProof,
+}
+
 impl RawProofStore {
     /// After extracting a proof from the e-graph, convert it to a [`RawProof`].
     pub(crate) fn from_extracted(
@@ -425,19 +439,53 @@ impl RawProofStore {
         {
             return args[1..].to_vec();
         }
-        match args.len() {
-            4 if *head == names.merge_fn_idx_constructor => vec![args[1], args[2]],
-            3 if *head == names.merge_fn_row_constructor => vec![args[1], args[2]],
-            3 if *head == names.congr_constructor => vec![args[0], args[2]],
-            2 if *head == names.eq_trans_constructor || *head == names.congr_all_constructor => {
-                vec![args[0], args[1]]
-            }
-            1 if *head == names.eq_sym_constructor
-                || *head == names.container_normalize_constructor =>
-            {
-                vec![args[0]]
-            }
-            _ => vec![],
+        self.shape(head)
+            .filter(|shape| shape.arity == args.len())
+            .map_or(vec![], |shape| {
+                shape.children.iter().map(|&at| args[at]).collect()
+            })
+    }
+
+    /// How the proof constructor `head` names is read, or `None` when it names
+    /// none.
+    fn shape(&self, head: &str) -> Option<ProofShape> {
+        let names = &self.names;
+        let shape = |arity, children: &'static [usize], build: BuildProof| {
+            Some(ProofShape {
+                arity,
+                children,
+                build,
+            })
+        };
+        if head == names.fiat_constructor {
+            shape(2, &[], |_, args, _| RawProof::Fiat(args[0], args[1]))
+        } else if head == names.merge_fn_idx_constructor {
+            shape(4, &[1, 2], |store, args, kids| {
+                let function = store.parse_string(args[0]);
+                RawProof::MergeFnIdx(function, kids[0], kids[1], store.parse_index(args[3]))
+            })
+        } else if head == names.merge_fn_row_constructor {
+            shape(3, &[1, 2], |store, args, kids| {
+                RawProof::MergeFnRow(store.parse_string(args[0]), kids[0], kids[1])
+            })
+        } else if head == names.eq_trans_constructor {
+            shape(2, &[0, 1], |_, _, kids| RawProof::Trans(kids[0], kids[1]))
+        } else if head == names.eq_sym_constructor {
+            shape(1, &[0], |_, _, kids| RawProof::Sym(kids[0]))
+        } else if head == names.container_normalize_constructor {
+            shape(1, &[0], |_, _, kids| RawProof::ContainerNormalize(kids[0]))
+        } else if head == names.congr_constructor {
+            shape(3, &[0, 2], |store, args, kids| {
+                RawProof::Congr(kids[0], store.parse_index(args[1]), kids[1])
+            })
+        } else if head == names.congr_all_constructor {
+            shape(2, &[0, 1], |_, _, kids| {
+                RawProof::CongrAll(kids[0], kids[1])
+            })
+        } else if head == names.eval_constructor {
+            shape(0, &[], |_, _, _| RawProof::Eval)
+        } else {
+            None
         }
     }
 
@@ -548,11 +596,7 @@ impl RawProofStore {
             return self.instantiate(&skeleton, &args[1..]);
         }
 
-        let proof = if head == self.names.fiat_constructor {
-            assert!(args.len() == 2, "fiat constructor should have 2 args");
-            RawProof::Fiat(args[0], args[1])
-        } else if self.names.fused_rule_arity(&head).is_some()
-            || head == self.names.rule_link_constructor
+        if self.names.fused_rule_arity(&head).is_some() || head == self.names.rule_link_constructor
         {
             let RuleColumns {
                 name,
@@ -562,53 +606,24 @@ impl RawProofStore {
             } = self.rule_columns(term_id);
             let premises = premises.iter().map(|arg| self.child_proof(*arg)).collect();
             let bridges = bridges.iter().map(|arg| self.child_proof(*arg)).collect();
-            RawProof::Rule(name, premises, bridges, self.parse_int(column))
-        } else if head == self.names.merge_fn_idx_constructor {
-            assert!(args.len() == 4, "merge-idx constructor should have 4 args");
-            let function = self.parse_string(args[0]);
-            let old_proof = self.child_proof(args[1]);
-            let new_proof = self.child_proof(args[2]);
-            let idx = self.parse_index(args[3]);
-            RawProof::MergeFnIdx(function, old_proof, new_proof, idx)
-        } else if head == self.names.merge_fn_row_constructor {
-            assert!(args.len() == 3, "merge-row constructor should have 3 args");
-            let function = self.parse_string(args[0]);
-            let old_proof = self.child_proof(args[1]);
-            let new_proof = self.child_proof(args[2]);
-            RawProof::MergeFnRow(function, old_proof, new_proof)
-        } else if head == self.names.eq_trans_constructor {
-            assert!(args.len() == 2, "trans constructor should have 2 args");
-            let left = self.child_proof(args[0]);
-            let right = self.child_proof(args[1]);
-            RawProof::Trans(left, right)
-        } else if head == self.names.eq_sym_constructor {
-            assert!(args.len() == 1, "sym constructor should have 1 arg");
-            let inner = self.child_proof(args[0]);
-            RawProof::Sym(inner)
-        } else if head == self.names.container_normalize_constructor {
-            assert!(
-                args.len() == 1,
-                "container-normalize constructor should have 1 arg"
-            );
-            let inner = self.child_proof(args[0]);
-            RawProof::ContainerNormalize(inner)
-        } else if head == self.names.congr_constructor {
-            assert!(args.len() == 3, "congr constructor should have 3 args");
-            let proof = self.child_proof(args[0]);
-            let child_index = self.parse_index(args[1]);
-            let child_proof = self.child_proof(args[2]);
-            RawProof::Congr(proof, child_index, child_proof)
-        } else if head == self.names.congr_all_constructor {
-            assert!(args.len() == 2, "congr-all constructor should have 2 args");
-            let proof = self.child_proof(args[0]);
-            let child_proof = self.child_proof(args[1]);
-            RawProof::CongrAll(proof, child_proof)
-        } else if head == self.names.eval_constructor {
-            assert!(args.is_empty(), "eval constructor should have no args");
-            RawProof::Eval
-        } else {
-            panic!("Unrecognized proof term head: {head}. Proof parsing assumes valid proofs.");
-        };
+            let column = self.parse_int(column);
+            return self.add_proof(RawProof::Rule(name, premises, bridges, column));
+        }
+
+        let shape = self.shape(&head).unwrap_or_else(|| {
+            panic!("Unrecognized proof term head: {head}. Proof parsing assumes valid proofs.")
+        });
+        assert!(
+            args.len() == shape.arity,
+            "{head} should have {} args",
+            shape.arity
+        );
+        let children: Vec<RawProofId> = shape
+            .children
+            .iter()
+            .map(|&at| self.child_proof(args[at]))
+            .collect();
+        let proof = (shape.build)(self, &args, &children);
 
         self.add_proof(proof)
     }
