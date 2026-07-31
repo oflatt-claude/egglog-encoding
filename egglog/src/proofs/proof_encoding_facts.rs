@@ -4,7 +4,6 @@
 
 use super::proof_checker::is_container_side_condition;
 use super::proof_encoding::ProofInstrumentor;
-use crate::proofs::proof_encoding_helpers::Justification;
 use crate::typechecking::FuncType;
 use crate::*;
 
@@ -283,10 +282,8 @@ impl ProofInstrumentor<'_> {
         (res, action_lookups, premises)
     }
 
-    /// A reflexive `Fiat` proof `value = value` for a term of `sort_name` (two
-    /// identical ASTs under a `Fiat`).
-    ///
-    /// Deferred (see [`ProofInstrumentor::defer_lookup`]): the returned variable
+    /// [`ProofInstrumentor::fiat_reflexive_proof`] for a term of `sort_name`,
+    /// deferred (see [`ProofInstrumentor::defer_lookup`]): the returned variable
     /// is bound wherever something first reads it, and nowhere if nothing does.
     fn reflexive_fiat_proof(&mut self, sort_name: &str, value: &str) -> String {
         let to_ast = self
@@ -296,8 +293,7 @@ impl ProofInstrumentor<'_> {
             .unwrap()
             .clone();
         let mut group = vec![];
-        let proof =
-            self.term_proof_for_justification(&mut group, value, &to_ast, &Justification::Fiat);
+        let proof = self.fiat_reflexive_proof(&mut group, value, &to_ast);
         self.defer_lookup(&proof, group);
         proof
     }
