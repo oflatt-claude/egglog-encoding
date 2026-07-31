@@ -17,7 +17,7 @@ use crate::{
     QueryEntry, TableId, Variable,
     action::{
         Bindings, ExecutionState,
-        mask::{Mask, MaskIter, ValueSource},
+        mask::{Mask, MaskIter},
     },
     common::Value,
     hash_index::{ColumnIndex, IndexBase, TupleIndex},

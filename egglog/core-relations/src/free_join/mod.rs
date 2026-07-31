@@ -20,7 +20,7 @@ use crate::{
     BaseValues, ContainerRebuildSummary, ContainerValues, PoolSet, QueryEntry, TupleIndex, Value,
     action::{
         Bindings, DbView,
-        mask::{Mask, MaskIter, ValueSource},
+        mask::{Mask, MaskIter},
     },
     dependency_graph::DependencyGraph,
     hash_index::{ColumnIndex, Index, IndexBase},

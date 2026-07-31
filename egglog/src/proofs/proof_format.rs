@@ -120,10 +120,10 @@ struct RawProofStore {
     /// The proof constructor names, used to recognize each extracted proof
     /// term's head by exact match (rather than substring guessing).
     names: EncodingNames,
-    /// Bidirectional map between proof terms and their ids.
+    /// The proofs parsed so far, hash-consed: a [`RawProofId`] is an index into
+    /// it, and equal ids mean equal trees.
     store: IndexSet<RawProof>,
     term_to_proof: HashMap<TermId, RawProofId>,
-    proof_to_term: HashMap<RawProofId, TermId>,
 }
 
 pub(crate) fn proof_store_from_term(
@@ -388,7 +388,6 @@ impl RawProofStore {
             names: encoding_names.clone(),
             store: IndexSet::default(),
             term_to_proof: HashMap::default(),
-            proof_to_term: HashMap::default(),
         };
         store.parse_nested_first(term);
         let parsed = store.parse_proof(term);
@@ -540,7 +539,6 @@ impl RawProofStore {
 
         let proof_id = self.parse_proof_inner(term_id);
         self.term_to_proof.insert(term_id, proof_id);
-        self.proof_to_term.insert(proof_id, term_id);
         proof_id
     }
 
@@ -675,13 +673,13 @@ impl RawProofStore {
     }
 }
 
-/// True iff `fact` is a custom-function application fact `(= (f args) v)` (either
-/// argument order), for which the checker's proof normal form expects a *reflexive*
-/// premise proof. Constructor and plain equality facts are excluded.
+/// True iff `fact` is a custom-function application fact `(= (f args) v)`, for
+/// which the checker's proof normal form expects a *reflexive* premise proof.
+/// Constructor and plain equality facts are excluded. Proof normal form always
+/// writes the call on the left (see [`crate::proofs::proof_normal_form`]).
 fn is_custom_func_fact(fact: &ResolvedFact) -> bool {
     let call = match fact {
-        ResolvedFact::Eq(_, ResolvedExpr::Call(_, c, _), ResolvedExpr::Var(..))
-        | ResolvedFact::Eq(_, ResolvedExpr::Var(..), ResolvedExpr::Call(_, c, _)) => c,
+        ResolvedFact::Eq(_, ResolvedExpr::Call(_, c, _), ResolvedExpr::Var(..)) => c,
         _ => return false,
     };
     matches!(call, ResolvedCall::Func(ft) if ft.subtype == FunctionSubtype::Custom)
@@ -1115,15 +1113,6 @@ impl ProofStore {
         rule: &ResolvedRule,
         premise_proofs: &[ProofId],
     ) -> IndexMap<String, TermId> {
-        if rule.body.len() != premise_proofs.len() {
-            panic!(
-                "rule {} has {} premises, but got {} premise proofs",
-                rule.name,
-                rule.body.len(),
-                premise_proofs.len()
-            );
-        }
-
         let mut current_subst = IndexMap::default();
         for (fact, proof_id) in rule.body.iter().zip(premise_proofs.iter()) {
             // Container side conditions carry only an `Eval` marker (no value);
@@ -1141,7 +1130,7 @@ impl ProofStore {
     /// Bind the fact's variables from the term its premise proof proves. A
     /// primitive call contributes no bindings of its own — the value it computes
     /// is read off the proof instead.
-    pub(super) fn unify_fact(
+    fn unify_fact(
         &self,
         fact: &ResolvedFact,
         proof_id: ProofId,
@@ -1623,7 +1612,6 @@ mod tests {
             names: EncodingNames::new(&mut SymbolGen::new("test".to_string())),
             store: IndexSet::default(),
             term_to_proof: HashMap::default(),
-            proof_to_term: HashMap::default(),
         }
     }
 

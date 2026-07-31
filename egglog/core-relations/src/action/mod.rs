@@ -26,7 +26,7 @@ use crate::{
     table_spec::{ColumnId, MutationBuffer},
 };
 
-use self::mask::{Mask, MaskIter, ValueSource};
+use self::mask::{Mask, MaskIter, ValueSource, value_source};
 
 #[macro_use]
 pub(crate) mod mask;
@@ -446,22 +446,14 @@ impl<'a> ExecutionState<'a> {
     }
 
     /// Stage a batch of mutations against a single table, `mutate` receiving the
-    /// table's mutation buffer directly and returning how many rows it staged.
-    ///
-    /// A batch that stages at least one row notifies the table as changed, once
-    /// for the whole batch; one that stages none leaves it untouched.
-    fn stage_batch(
-        &mut self,
-        table: TableId,
-        mutate: impl FnOnce(&mut dyn MutationBuffer) -> usize,
-    ) {
+    /// table's mutation buffer directly, and notify the table as changed once
+    /// for the whole batch.
+    fn stage_batch(&mut self, table: TableId, mutate: impl FnOnce(&mut dyn MutationBuffer)) {
         self.buffers
             .lazy_init(table, || self.db.table_info[table].table.new_buffer());
-        let staged = mutate(&mut *self.buffers.buffers[table]);
-        if staged > 0 {
-            self.buffers.notify_list.notify(table);
-            self.changed = true;
-        }
+        mutate(&mut *self.buffers.buffers[table]);
+        self.buffers.notify_list.notify(table);
+        self.changed = true;
     }
 
     /// Stage a removal of the given row from `table` if it is present.
@@ -630,25 +622,15 @@ fn row_sources<'a>(
     bindings: &'a Bindings,
 ) -> SmallVec<[ValueSource<'a, Value>; 12]> {
     args.iter()
-        .map(|entry| match entry {
-            QueryEntry::Var(v) => ValueSource::Slice(&bindings[*v]),
-            QueryEntry::Const(c) => ValueSource::Const(*c),
-        })
+        .map(|entry| value_source(entry, bindings))
         .collect()
-}
-
-fn source_at(source: &ValueSource<'_, Value>, idx: usize) -> Value {
-    match source {
-        ValueSource::Const(c) => *c,
-        ValueSource::Slice(slice) => slice[idx],
-    }
 }
 
 /// Overwrite `out` with lane `idx` of `sources`. Panics if any source slice is
 /// shorter than `idx + 1` (see [`row_sources`]).
 fn gather_row(sources: &[ValueSource<'_, Value>], idx: usize, out: &mut RowScratch) {
     out.clear();
-    out.extend(sources.iter().map(|source| source_at(source, idx)));
+    out.extend(sources.iter().map(|source| source.at(idx)));
 }
 
 impl ExecutionState<'_> {
@@ -831,13 +813,10 @@ impl ExecutionState<'_> {
                 let sources = row_sources(vals, bindings);
                 let mut row = RowScratch::new();
                 self.stage_batch(*table, |buf| {
-                    let mut staged = 0;
                     for idx in mask.ones() {
                         gather_row(&sources, idx, &mut row);
                         buf.stage_insert(&row);
-                        staged += 1;
                     }
-                    staged
                 });
             }
             Instr::InsertIfEq { table, l, r, vals } => match (l, r) {
@@ -875,13 +854,10 @@ impl ExecutionState<'_> {
                 let sources = row_sources(args, bindings);
                 let mut row = RowScratch::new();
                 self.stage_batch(*table, |buf| {
-                    let mut staged = 0;
                     for idx in mask.ones() {
                         gather_row(&sources, idx, &mut row);
                         buf.stage_remove(&row);
-                        staged += 1;
                     }
-                    staged
                 });
             }
             Instr::External { func, args, dst } => {
