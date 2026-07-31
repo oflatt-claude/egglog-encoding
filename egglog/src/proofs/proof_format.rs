@@ -9,7 +9,7 @@ use crate::{
             ProofCheckError, ProofCheckErrorKind, eval_expr_with_subst, gather_globals, run_merge,
         },
         proof_encoding_helpers::{EncodingNames, Skeleton},
-        proof_head::{Firing, HeadPlan, HeadWalk},
+        proof_head::{Firing, HeadPlan, HeadWalk, ProofAlgebra},
     },
     typechecking::{FuncType, PrimitiveValidator},
     util::{HashMap, HashSet, IEntry, IndexMap, IndexSet, SymbolGen},
@@ -775,20 +775,14 @@ impl ProofStore {
     /// reflexivizing to its RHS lands both premises on the same canonical view row
     /// so the checker's input-match succeeds.
     fn reflexivize_premise(&mut self, premise_id: ProofId) -> ProofId {
-        let prop = self.id_to_proof[premise_id].proposition.clone();
+        let prop = &self.id_to_proof[premise_id].proposition;
         if prop.lhs == prop.rhs {
             return premise_id;
         }
-        // Sym(p) : rhs = lhs
-        let sym_id = self.id_to_proof.push(Proof {
-            proposition: Proposition::new(prop.rhs, prop.lhs),
-            justification: Justification::Sym(premise_id),
-        });
-        // Trans(Sym(p), p) : rhs = rhs
-        self.id_to_proof.push(Proof {
-            proposition: Proposition::new(prop.rhs, prop.rhs),
-            justification: Justification::Trans(sym_id, premise_id),
-        })
+        // Shared, so the two rows of one firing reflexivize a premise to the
+        // same id: the premise vector is both the walk memo's key and the
+        // rule proofs' sharing key.
+        self.reflexive(premise_id)
     }
 
     /// The two `MergeFn*` premise proofs end (rhs) at the colliding view terms
