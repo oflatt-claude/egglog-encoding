@@ -380,9 +380,15 @@ impl EncodingNames {
 
 /// Whether maintenance empties every `@UF_<S>` table at the end of each run,
 /// keeping only the edges a later iteration's rebuild will read. Set
-/// `EGGLOG_UF_CLEAR=0` to keep every edge instead.
+/// `EGGLOG_UF_CLEAR=1` to enable.
+///
+/// Off by default because it does not pay: the rebuild rule already reads only
+/// the `@UF` delta, so the rows this drops are ones its join never visits. It
+/// also loses the ability to canonicalize a value from an earlier iteration,
+/// which [`crate::extract::find_canonical`] needs, and lets a rule that
+/// re-derives one union per iteration keep `saturate` from terminating.
 pub(crate) fn uf_clear_enabled() -> bool {
-    !matches!(std::env::var("EGGLOG_UF_CLEAR").as_deref(), Ok("0"))
+    matches!(std::env::var("EGGLOG_UF_CLEAR").as_deref(), Ok("1"))
 }
 
 impl ProofInstrumentor<'_> {

@@ -290,6 +290,11 @@ lookup — and keep the `:naive` rule in [Containers](#containers). Subsumption
 markers (`@to_subsume_<Constructor>`) are re-keyed to their leaders by their own
 per-column rules, so a subsumed row stays subsumed after its children move.
 
+This rule is always the incremental shape. Native instead picks per table, per
+round, between that and scanning the whole table, and on the benchmark suite it
+almost always scans. What that costs, and why emptying `@UF` each iteration does
+not recover it, is measured in `rebuild_cost.md`.
+
 # Globals
 
 *Before the term encoding*, [`crate::ast::remove_globals`] desugars every global
