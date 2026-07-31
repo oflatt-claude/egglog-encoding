@@ -143,7 +143,7 @@ mod tests {
                 inputs,
                 vec![],
                 IndexMap::default(),
-                Box::new(|_store, _position| None),
+                Box::new(|_store| None),
             );
             let columns: Vec<_> = firing
                 .proofs(&mut store)
@@ -289,7 +289,7 @@ mod tests {
                 inputs,
                 vec![],
                 IndexMap::default(),
-                Box::new(|_store, _position| None),
+                Box::new(|_store| None),
             );
             let filled: Vec<bool> = firing
                 .proofs(&mut store)

@@ -416,16 +416,16 @@ fn plan_construct_into(actions: &[ResolvedAction]) -> (HashMap<String, String>, 
 /// A rule proof reads one column, so the walk stops at the action that fills it
 /// and the next proof of the same firing carries on from here. What it holds is
 /// what the whole walk would have produced this far: a rule proof carries only
-/// the bridge premises recorded before it, so an action that asked for one this
-/// proof does not have is rolled back rather than kept.
+/// the bridges recorded before it, so an action that wanted one past them is
+/// rolled back rather than kept.
 #[derive(Clone, Default)]
 pub(crate) struct HeadWalk {
     /// The action to carry on at.
     next_action: usize,
     /// How many of the layout's positions the walk has reached.
     next_position: usize,
-    /// How many bridge premises the walk has asked for.
-    bridges_read: usize,
+    /// How many bridges the walk has taken from the row's supply.
+    bridges_taken: usize,
     /// The columns filled so far. `None` at a column the walk numbers but the
     /// head produces no proof for.
     proofs: Vec<Option<ProofId>>,
@@ -442,12 +442,18 @@ impl HeadWalk {
         self.next_action
     }
 
+    /// How many bridges the walk took, which is where a row carrying on from it
+    /// starts taking from its own supply.
+    pub(crate) fn bridges_taken(&self) -> usize {
+        self.bridges_taken
+    }
+
     /// Where the walk stands, to come back to with [`Self::rewind`].
     fn mark(&self) -> WalkMark {
         WalkMark {
             action: self.next_action,
             position: self.next_position,
-            bridges: self.bridges_read,
+            bridges: self.bridges_taken,
             columns: self.proofs.len(),
         }
     }
@@ -458,7 +464,7 @@ impl HeadWalk {
     fn rewind(&mut self, mark: WalkMark) {
         self.next_action = mark.action;
         self.next_position = mark.position;
-        self.bridges_read = mark.bridges;
+        self.bridges_taken = mark.bridges;
         self.proofs.truncate(mark.columns);
     }
 }
@@ -487,30 +493,28 @@ pub(crate) struct Firing<'a> {
     /// The premises the rule body matched, one per body fact.
     body_premises: Vec<ProofId>,
     substitution: IndexMap<String, TermId>,
-    /// The view-row proof the head recorded at a bridge position, converted on
-    /// demand. `None` for a position the requesting rule proof row does not carry.
-    bridge_at: Box<dyn FnMut(&mut ProofStore, usize) -> Option<ProofId> + 'a>,
+    /// The bridges the requesting rule proof row carries, in the order the head
+    /// interned them. It runs dry at the point in the head the row was minted at.
+    bridges: Box<dyn FnMut(&mut ProofStore) -> Option<ProofId> + 'a>,
     walk: HeadWalk,
-    /// The boundary before the action that first asked for a bridge this row does
-    /// not carry, which is as far as the next row can carry on from.
+    /// The boundary before the action that first wanted a bridge past the ones
+    /// this row carries, which is as far as the next row can carry on from.
     kept: WalkMark,
-    /// Whether the walk has asked for a bridge past the ones this row carries.
+    /// Whether the supply has run dry.
     ran_out: bool,
-    /// The column the walk was asked for, past which it need not go. `None` asks
-    /// for the whole head.
-    wanted: Option<usize>,
 }
 
 impl<'a> Firing<'a> {
     /// `bindings` must resolve every variable the head reads: the globals plus
-    /// the body's substitution.
+    /// the body's substitution. `bridges` hands them over one at a time, starting
+    /// where the walk passed to [`Self::carry_on`] stopped taking.
     pub(crate) fn new(
         rule_name: &'a str,
         plan: &'a HeadPlan,
         bindings: HashMap<String, TermId>,
         body_premises: Vec<ProofId>,
         substitution: IndexMap<String, TermId>,
-        bridge_at: Box<dyn FnMut(&mut ProofStore, usize) -> Option<ProofId> + 'a>,
+        bridges: Box<dyn FnMut(&mut ProofStore) -> Option<ProofId> + 'a>,
     ) -> Self {
         Firing {
             rule_name,
@@ -519,14 +523,13 @@ impl<'a> Firing<'a> {
             open: None,
             body_premises,
             substitution,
-            bridge_at,
+            bridges,
             walk: HeadWalk {
                 bindings,
                 ..HeadWalk::default()
             },
             kept: WalkMark::default(),
             ran_out: false,
-            wanted: None,
         }
     }
 
@@ -571,26 +574,11 @@ impl<'a> Firing<'a> {
     }
 
     /// Walk the head until `wanted` is filled — or to its end when nothing is
-    /// wanted.
+    /// wanted. Columns are claimed in walk order, so one already filled is final.
     fn fill(&mut self, store: &mut ProofStore, wanted: Option<usize>) {
-        self.wanted = wanted;
-        if !self.filled() {
-            self.walk(store);
-        }
-    }
-
-    /// Whether the walk has filled the column it was asked for. Columns are
-    /// claimed in walk order, so one already filled is final.
-    fn filled(&self) -> bool {
-        self.wanted
-            .is_some_and(|column| self.walk.proofs.len() > column)
-    }
-
-    /// Walk the head, filling the array.
-    fn walk(&mut self, store: &mut ProofStore) {
         let plan = self.plan;
         while self.walk.next_action < plan.actions.len() {
-            if self.filled() {
+            if wanted.is_some_and(|column| self.walk.proofs.len() > column) {
                 return;
             }
             if !self.ran_out {
@@ -860,16 +848,15 @@ impl<'a> Firing<'a> {
         .0
     }
 
-    /// The view-row proof recorded for the term the walk just built, when it says
-    /// the interned term landed in an e-class whose own term is spelled
-    /// differently.
+    /// The next bridge off the supply: the view-row proof the head recorded for
+    /// the term the walk just built, saying which e-class it interned into.
     ///
-    /// `None` for a term with no bridge recorded: a row minted before the head
-    /// reached the subterm it is about has nothing to name yet.
+    /// `None` once the supply has run dry, which is past the point in the head
+    /// the requesting row was minted at.
     fn bridge(&mut self, store: &mut ProofStore, to_canonical: ProofId) -> Option<ProofId> {
-        let position = self.walk.bridges_read;
-        self.walk.bridges_read += 1;
-        let Some(bridge) = (self.bridge_at)(store, position) else {
+        let taken = self.walk.bridges_taken;
+        self.walk.bridges_taken += 1;
+        let Some(bridge) = (self.bridges)(store) else {
             self.ran_out = true;
             return None;
         };
@@ -880,7 +867,7 @@ impl<'a> Firing<'a> {
         assert_eq!(
             store.get(bridge).rhs(),
             store.get(to_canonical).rhs(),
-            "rule {}'s bridge {position} does not end at the canonical term",
+            "rule {}'s bridge {taken} does not end at the canonical term",
             self.rule_name
         );
         Some(bridge)

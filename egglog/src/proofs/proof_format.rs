@@ -913,24 +913,28 @@ impl ProofStore {
                 // proof would only repeat the program.
                 let mut recorded = substitution;
                 recorded.retain(|var, _term| globals.get(var).is_none());
-                // The bridges are in the order the head builds, which is the order
-                // the walk asks for them.
+                // This row carries on the walk the last row of the same firing
+                // left off at. A row reached while this one walks starts its own,
+                // so the further of the two is the one kept.
                 let firing_key = (name.clone(), converted_premises.clone());
+                let carried = self.head_walks.remove(&firing_key);
+                // The bridges are in the order the head builds, which is the
+                // order the walk takes them in, so the supply picks up where the
+                // carried walk stopped.
+                let mut next = carried.as_ref().map_or(0, HeadWalk::bridges_taken);
                 let mut firing = Firing::new(
                     name,
                     &planned,
                     bindings,
                     converted_premises,
                     recorded,
-                    Box::new(|store: &mut ProofStore, position| {
-                        let raw = *bridge_proofs.get(position)?;
+                    Box::new(move |store: &mut ProofStore| {
+                        let raw = *bridge_proofs.get(next)?;
+                        next += 1;
                         Some(store.convert_raw_proof(prog, globals, raw_store, raw))
                     }),
                 );
-                // This row carries on the walk the last row of the same firing
-                // left off at. A row reached while this one walks starts its own,
-                // so the further of the two is the one kept.
-                if let Some(walk) = self.head_walks.remove(&firing_key) {
+                if let Some(walk) = carried {
                     firing.carry_on(walk);
                 }
                 let proof_id = firing.column(self, *raw_column);

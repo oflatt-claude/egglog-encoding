@@ -585,6 +585,12 @@ subterms is a `@RuleLink`, naming a row of the same head that already carries th
 premises and every earlier bridge, plus the one bridge added since. Chaining
 keeps a row's width constant no matter how deep the head is.
 
+Such a row carries exactly the bridges the head had interned when it minted the
+row, so the replay takes them one at a time and the supply runs dry just past the
+column the row names: always enough for the proof asked for, never more. An own
+conclusion composes nothing, so its row carries no bridge and the replay reaching
+its column needs none.
+
 ### The running example
 
 The `rewrite`'s head builds one guest over two matched variables. It writes two
