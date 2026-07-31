@@ -56,6 +56,7 @@ pub(crate) struct EncodingNames {
     pub(crate) rebuilding_ruleset_name: String,
     pub(crate) rebuilding_cleanup_ruleset_name: String,
     pub(crate) delete_subsume_ruleset_name: String,
+    pub(crate) uf_clear_ruleset_name: String,
     // Per-function fresh names
     pub(crate) view_name: HashMap<String, String>,
     pub(crate) to_delete_name: HashMap<String, String>,
@@ -368,12 +369,20 @@ impl EncodingNames {
             rebuilding_ruleset_name: symbol_gen.fresh("rebuilding"),
             rebuilding_cleanup_ruleset_name: symbol_gen.fresh("rebuilding_cleanup"),
             delete_subsume_ruleset_name: symbol_gen.fresh("delete_subsume_ruleset"),
+            uf_clear_ruleset_name: symbol_gen.fresh("uf_clear"),
             view_name: HashMap::default(),
             to_delete_name: HashMap::default(),
             subsumed_name: HashMap::default(),
             term_proof_name: HashMap::default(),
         }
     }
+}
+
+/// Whether maintenance empties every `@UF_<S>` table at the end of each run,
+/// keeping only the edges a later iteration's rebuild will read. Set
+/// `EGGLOG_UF_CLEAR=0` to keep every edge instead.
+pub(crate) fn uf_clear_enabled() -> bool {
+    !matches!(std::env::var("EGGLOG_UF_CLEAR").as_deref(), Ok("0"))
 }
 
 impl ProofInstrumentor<'_> {
@@ -498,15 +507,23 @@ impl ProofInstrumentor<'_> {
 
     /// Header commands for term encoding, setting up rulesets.
     pub(crate) fn term_header(&mut self) -> Vec<Command> {
+        let uf_clear = if uf_clear_enabled() {
+            format!(
+                "\n             (ruleset {})",
+                self.proof_names().uf_clear_ruleset_name
+            )
+        } else {
+            String::new()
+        };
         let str = format!(
             "(ruleset {})
              (ruleset {})
              (ruleset {})
-             (ruleset {})",
+             (ruleset {}){uf_clear}",
             self.proof_names().path_compress_ruleset_name,
             self.proof_names().rebuilding_ruleset_name,
             self.proof_names().rebuilding_cleanup_ruleset_name,
-            self.proof_names().delete_subsume_ruleset_name
+            self.proof_names().delete_subsume_ruleset_name,
         );
         self.parse_program(&str)
     }
