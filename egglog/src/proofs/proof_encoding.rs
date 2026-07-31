@@ -206,7 +206,7 @@ pub(crate) struct ProofInstrumentor<'a> {
     /// Statements not emitted yet, keyed by the proof variable the group binds.
     /// A group is emitted where its proof is first read; a proof nothing reads is
     /// never emitted at all (see [`Self::defer_lookup`]).
-    pending_lookups: HashMap<String, Pending>,
+    pending_lookups: HashMap<String, Vec<String>>,
     /// What each proof variable the encoder composed stands for, until the row
     /// standing for it is written (see [`Self::mint_sym`]).
     compositions: HashMap<String, Composition>,
@@ -219,14 +219,6 @@ pub(crate) struct ProofInstrumentor<'a> {
     /// Which layer the statements being emitted belong to: a rule head's
     /// skeleton, or a composition written out here.
     site: ProofSite,
-}
-
-/// Statements held back until something reads the proof they bind.
-struct Pending {
-    stmts: Vec<String>,
-    /// The variables `stmts` reads, so the groups binding those still deferred
-    /// are emitted first.
-    reads: Vec<String>,
 }
 
 /// The variables a joined argument string names: its whitespace-separated
@@ -1367,19 +1359,11 @@ impl<'a> ProofInstrumentor<'a> {
     /// `proof`. A proof that nothing ends up reading is never bound, and
     /// [`Self::drop_pending_lookups`] discards it.
     ///
-    /// `reads` is the joined argument string naming the variables `group` uses
-    /// besides `proof`. Any of them still deferred is emitted first, so a group
-    /// need not be self-contained: only what is bound outside the deferral
-    /// machinery altogether — a query variable, or a statement already emitted —
-    /// has to be in scope where the flush lands.
-    pub(crate) fn defer_lookup(&mut self, proof: &str, group: Vec<String>, reads: &str) {
-        self.pending_lookups.insert(
-            proof.to_string(),
-            Pending {
-                stmts: group,
-                reads: read_vars(reads).map(str::to_owned).collect(),
-            },
-        );
+    /// `group` is emitted verbatim wherever the flush lands, so everything it
+    /// reads must be either bound within it or in scope there — a query
+    /// variable, or a statement already emitted.
+    pub(crate) fn defer_lookup(&mut self, proof: &str, group: Vec<String>) {
+        self.pending_lookups.insert(proof.to_string(), group);
     }
 
     /// Discard the statements and compositions still held back, whose proofs
@@ -1410,13 +1394,9 @@ impl<'a> ProofInstrumentor<'a> {
             self.emit_composition(stmts, var, composition);
             return;
         }
-        let Some(group) = self.pending_lookups.remove(var) else {
-            return;
-        };
-        for read in &group.reads {
-            self.emit_pending_group(stmts, read);
+        if let Some(group) = self.pending_lookups.remove(var) {
+            stmts.extend(group);
         }
-        stmts.extend(group.stmts);
     }
 
     /// Bind a fresh id of `sort`, asserting nothing about it.

@@ -153,7 +153,6 @@ impl ProofInstrumentor<'_> {
                         self.defer_lookup(
                             &fresh_proof,
                             vec![format!("(let {fresh_proof} ({term_proof_name} {var}))")],
-                            "",
                         );
                         // A term proof is the term's reflexive anchor.
                         self.mark_reflexive(&fresh_proof);
@@ -299,7 +298,7 @@ impl ProofInstrumentor<'_> {
         let mut group = vec![];
         let proof =
             self.term_proof_for_justification(&mut group, value, &to_ast, &Justification::Fiat);
-        self.defer_lookup(&proof, group, "");
+        self.defer_lookup(&proof, group);
         proof
     }
 }
