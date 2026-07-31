@@ -724,7 +724,7 @@ impl<'a> ProofInstrumentor<'a> {
         // An `@UF` row's carried proof proves `key = parent`, so both share their
         // lhs and it is the larger side's that the composition reverses.
         let (packed_decl, uf_merge) =
-            self.ordered_union_merge(&uf_name, Skeleton::Hole(0).sym().trans(Skeleton::Hole(1)));
+            self.ordered_union_merge(&uf_name, Skeleton::Leaf(0).sym().trans(Skeleton::Leaf(1)));
         // path compression: a->b (pb: a=b), b->c (pc: b=c)  =>  a->c (Trans pb pc: a=c)
         let (compressed_proof_lets, compressed_proof) = if proofs {
             let trans = self.proof_names().eq_trans_constructor.clone();
@@ -888,7 +888,7 @@ impl<'a> ProofInstrumentor<'a> {
             // their rhs and it is the smaller side's that the composition
             // reverses.
             let (decl, congruence_merge) = self
-                .ordered_union_merge(&uf_name, Skeleton::Hole(0).trans(Skeleton::Hole(1).sym()));
+                .ordered_union_merge(&uf_name, Skeleton::Leaf(0).trans(Skeleton::Leaf(1).sym()));
             packed_decl = decl;
             format!(
                 "(function {view_name} ({in_sorts}) ({out_type} {proof_type}) :merge {congruence_merge} :internal-term-constructor {name}{view_flags} :internal-identity-vals 1)"
@@ -1218,7 +1218,7 @@ impl<'a> ProofInstrumentor<'a> {
             return proof.to_string();
         }
         let inner = self.composition(proof);
-        self.compose(Composition::Sym(Box::new(inner)))
+        self.compose(inner.sym())
     }
 
     /// `Trans(lhs, rhs)`, dropping whichever side is reflexive. Held back, see
@@ -1231,7 +1231,7 @@ impl<'a> ProofInstrumentor<'a> {
             return lhs.to_string();
         }
         let (lhs, rhs) = (self.composition(lhs), self.composition(rhs));
-        self.compose(Composition::Trans(Box::new(lhs), Box::new(rhs)))
+        self.compose(lhs.trans(rhs))
     }
 
     /// `Congr(acc, idx, step)`, or `acc` when `step` is reflexive. Held back, see
@@ -1241,7 +1241,7 @@ impl<'a> ProofInstrumentor<'a> {
             return acc.to_string();
         }
         let (acc, step) = (self.composition(acc), self.composition(step));
-        self.compose(Composition::Congr(Box::new(acc), idx, Box::new(step)))
+        self.compose(acc.congr(idx, step))
     }
 
     /// What `proof` stands for: the composition it names while that is still

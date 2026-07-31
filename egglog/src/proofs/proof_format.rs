@@ -511,7 +511,7 @@ impl RawProofStore {
     /// packed row.
     fn instantiate(&mut self, skeleton: &Skeleton, columns: &[TermId]) -> RawProofId {
         let proof = match skeleton {
-            Skeleton::Hole(column) => return self.child_proof(columns[*column]),
+            Skeleton::Leaf(column) => return self.child_proof(columns[*column]),
             Skeleton::Sym(inner) => RawProof::Sym(self.instantiate(inner, columns)),
             Skeleton::Trans(left, right) => {
                 let left = self.instantiate(left, columns);
@@ -1801,8 +1801,8 @@ mod tests {
     /// side's column 1, and whichever points the wrong way is reversed.
     fn displaced_skeletons() -> [Skeleton; 2] {
         [
-            Skeleton::Hole(0).sym().trans(Skeleton::Hole(1)),
-            Skeleton::Hole(0).trans(Skeleton::Hole(1).sym()),
+            Skeleton::Leaf(0).sym().trans(Skeleton::Leaf(1)),
+            Skeleton::Leaf(0).trans(Skeleton::Leaf(1).sym()),
         ]
     }
 

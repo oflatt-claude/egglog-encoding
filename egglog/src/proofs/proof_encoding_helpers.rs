@@ -63,45 +63,65 @@ pub(crate) struct EncodingNames {
     pub(crate) term_proof_name: HashMap<String, String>,
 }
 
+/// A proof composed out of the equality axioms over leaves of type `L`.
+///
+/// Two leaves are in use. A [`Composition`]'s leaf is a proof variable already
+/// in scope: the encoder builds one where it composes rather than records, and
+/// the whole tree becomes one row where something reads it. A [`Skeleton`]'s
+/// leaf is a column of that row, so the skeleton is also the row's layout;
+/// [`Composition::pack`] is the map from the one to the other.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub(crate) enum ProofTree<L> {
+    Leaf(L),
+    Sym(Box<ProofTree<L>>),
+    Trans(Box<ProofTree<L>>, Box<ProofTree<L>>),
+    /// The child position the step rewrites.
+    Congr(Box<ProofTree<L>>, usize, Box<ProofTree<L>>),
+}
+
 /// The composition one packed proof row stands for, written over the row's own
-/// proof columns: a [`Skeleton::Hole`] is the proof in a column. Every column is
-/// named, so the skeleton is also the row's layout; a column a composition
-/// reaches twice is named twice and carried once.
+/// proof columns: a leaf is the proof in a column. Every column is named, so a
+/// column a composition reaches twice is named twice and carried once.
 ///
 /// A packed row carries [`Self::spelling`] in its first column, so the site
 /// writing the row and the unpacking that reads it work from one statement of
 /// the composition.
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub(crate) enum Skeleton {
-    /// The proof in the named column.
-    Hole(usize),
-    Sym(Box<Skeleton>),
-    Trans(Box<Skeleton>, Box<Skeleton>),
-    /// The child position the step rewrites.
-    Congr(Box<Skeleton>, usize, Box<Skeleton>),
-}
+pub(crate) type Skeleton = ProofTree<usize>;
 
-impl Skeleton {
-    pub(crate) fn sym(self) -> Skeleton {
-        Skeleton::Sym(Box::new(self))
+/// A composition the encoder has built but not written a row for.
+pub(crate) type Composition = ProofTree<String>;
+
+impl<L> ProofTree<L> {
+    pub(crate) fn sym(self) -> Self {
+        ProofTree::Sym(Box::new(self))
     }
 
-    pub(crate) fn trans(self, rhs: Skeleton) -> Skeleton {
-        Skeleton::Trans(Box::new(self), Box::new(rhs))
+    pub(crate) fn trans(self, rhs: Self) -> Self {
+        ProofTree::Trans(Box::new(self), Box::new(rhs))
     }
 
     /// This composition with one more congruence step, rewriting the child at
     /// position `child` by the proof `step` reaches.
-    pub(crate) fn congr(self, child: usize, step: Skeleton) -> Skeleton {
-        Skeleton::Congr(Box::new(self), child, Box::new(step))
+    pub(crate) fn congr(self, child: usize, step: Self) -> Self {
+        ProofTree::Congr(Box::new(self), child, Box::new(step))
     }
 
+    /// The leaf this is, when it names one rather than composing.
+    pub(crate) fn leaf(&self) -> Option<&L> {
+        match self {
+            ProofTree::Leaf(leaf) => Some(leaf),
+            _ => None,
+        }
+    }
+}
+
+impl Skeleton {
     /// How many columns the row has.
     pub(crate) fn width(&self) -> usize {
         match self {
-            Skeleton::Hole(column) => column + 1,
-            Skeleton::Sym(inner) => inner.width(),
-            Skeleton::Trans(left, right) | Skeleton::Congr(left, _, right) => {
+            ProofTree::Leaf(column) => column + 1,
+            ProofTree::Sym(inner) => inner.width(),
+            ProofTree::Trans(left, right) | ProofTree::Congr(left, _, right) => {
                 left.width().max(right.width())
             }
         }
@@ -109,9 +129,9 @@ impl Skeleton {
 
     fn collect_columns(&self, columns: &mut Vec<usize>) {
         match self {
-            Skeleton::Hole(column) => columns.push(*column),
-            Skeleton::Sym(inner) => inner.collect_columns(columns),
-            Skeleton::Trans(left, right) | Skeleton::Congr(left, _, right) => {
+            ProofTree::Leaf(column) => columns.push(*column),
+            ProofTree::Sym(inner) => inner.collect_columns(columns),
+            ProofTree::Trans(left, right) | ProofTree::Congr(left, _, right) => {
                 left.collect_columns(columns);
                 right.collect_columns(columns);
             }
@@ -120,7 +140,7 @@ impl Skeleton {
 
     /// This skeleton as the string a packed row carries: its nodes in prefix
     /// order, one `_`-separated token each — `sym`, `trans`, `congr`,
-    /// `p<column>` for a hole, and a bare number for a congruence's child
+    /// `p<column>` for a column, and a bare number for a congruence's child
     /// position. Panics unless [`Self::from_spelling`] reads it back, since that
     /// is all unpacking has to go on.
     pub(crate) fn spelling(&self) -> String {
@@ -137,17 +157,17 @@ impl Skeleton {
 
     fn spell(&self, tokens: &mut Vec<String>) {
         match self {
-            Skeleton::Hole(column) => tokens.push(format!("p{column}")),
-            Skeleton::Sym(inner) => {
+            ProofTree::Leaf(column) => tokens.push(format!("p{column}")),
+            ProofTree::Sym(inner) => {
                 tokens.push("sym".to_string());
                 inner.spell(tokens);
             }
-            Skeleton::Trans(left, right) => {
+            ProofTree::Trans(left, right) => {
                 tokens.push("trans".to_string());
                 left.spell(tokens);
                 right.spell(tokens);
             }
-            Skeleton::Congr(base, child, step) => {
+            ProofTree::Congr(base, child, step) => {
                 tokens.push("congr".to_string());
                 base.spell(tokens);
                 tokens.push(child.to_string());
@@ -185,33 +205,12 @@ impl Skeleton {
                 let child = tokens.next()?.parse().ok()?;
                 Some(base.congr(child, Skeleton::read(tokens)?))
             }
-            token => Some(Skeleton::Hole(token.strip_prefix('p')?.parse().ok()?)),
+            token => Some(ProofTree::Leaf(token.strip_prefix('p')?.parse().ok()?)),
         }
     }
-}
-
-/// A composition the encoder has built but not written a row for. A leaf names a
-/// proof variable already in scope; the whole tree becomes one row where
-/// something reads it.
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub(crate) enum Composition {
-    /// The proof the named variable holds.
-    Leaf(String),
-    Sym(Box<Composition>),
-    Trans(Box<Composition>, Box<Composition>),
-    /// The child position rewritten by the step.
-    Congr(Box<Composition>, usize, Box<Composition>),
 }
 
 impl Composition {
-    /// The proof variable this is, when it names one rather than composing.
-    pub(crate) fn leaf(&self) -> Option<&str> {
-        match self {
-            Composition::Leaf(proof) => Some(proof),
-            _ => None,
-        }
-    }
-
     /// This composition as a packed row: the [`Skeleton`] it states and the proof
     /// variable in each of the row's columns, in first use order. Equal subtrees
     /// share their columns, so a step the composition reaches twice is carried
@@ -231,16 +230,16 @@ impl Composition {
             return skeleton.clone();
         }
         let skeleton = match self {
-            Composition::Leaf(proof) => {
+            ProofTree::Leaf(proof) => {
                 columns.push(proof.clone());
-                Skeleton::Hole(columns.len() - 1)
+                ProofTree::Leaf(columns.len() - 1)
             }
-            Composition::Sym(inner) => inner.lay_out(laid_out, columns).sym(),
-            Composition::Trans(left, right) => {
+            ProofTree::Sym(inner) => inner.lay_out(laid_out, columns).sym(),
+            ProofTree::Trans(left, right) => {
                 let left = left.lay_out(laid_out, columns);
                 left.trans(right.lay_out(laid_out, columns))
             }
-            Composition::Congr(base, child, step) => {
+            ProofTree::Congr(base, child, step) => {
                 let base = base.lay_out(laid_out, columns);
                 base.congr(*child, step.lay_out(laid_out, columns))
             }

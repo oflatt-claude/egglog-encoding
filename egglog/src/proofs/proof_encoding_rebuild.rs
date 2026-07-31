@@ -13,12 +13,12 @@ use crate::*;
 /// 0, then one step proof per canonicalized child in `children`, in the order
 /// the composition applies them, then the e-class's own step when `eclass`.
 pub(super) fn rebuild_skeleton(children: &[usize], eclass: bool) -> Skeleton {
-    let mut skeleton = Skeleton::Hole(0);
+    let mut skeleton = Skeleton::Leaf(0);
     for (step, &child) in children.iter().enumerate() {
-        skeleton = skeleton.congr(child, Skeleton::Hole(1 + step));
+        skeleton = skeleton.congr(child, Skeleton::Leaf(1 + step));
     }
     if eclass {
-        skeleton = Skeleton::Hole(1 + children.len()).sym().trans(skeleton);
+        skeleton = Skeleton::Leaf(1 + children.len()).sym().trans(skeleton);
     }
     skeleton
 }
