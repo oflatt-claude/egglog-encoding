@@ -8,6 +8,21 @@ use super::proof_encoding_helpers::Skeleton;
 use crate::typechecking::FuncType;
 use crate::*;
 
+/// The composition a view rebuild's packed row states, over the columns
+/// [`ProofInstrumentor::indexed_rebuild_rule`] writes: the row proof in column
+/// 0, then one step proof per canonicalized child in `children`, in the order
+/// the composition applies them, then the e-class's own step when `eclass`.
+pub(super) fn rebuild_skeleton(children: &[usize], eclass: bool) -> Skeleton {
+    let mut skeleton = Skeleton::Hole(0);
+    for (step, &child) in children.iter().enumerate() {
+        skeleton = skeleton.congr(child, Skeleton::Hole(1 + step));
+    }
+    if eclass {
+        skeleton = Skeleton::Hole(1 + children.len()).sym().trans(skeleton);
+    }
+    skeleton
+}
+
 impl ProofInstrumentor<'_> {
     /// Rules that execute deletion and subsumption based on the tables requesting the deletion/subsumption.
     pub(super) fn delete_and_subsume(&mut self, fdecl: &ResolvedFunctionDecl) -> String {
@@ -279,16 +294,11 @@ impl ProofInstrumentor<'_> {
         // step.
         let mut decls = String::new();
         let mut proof_acc = row_pf.clone();
+        let children: Vec<usize> = steps.iter().map(|&(child, _)| child).collect();
+        let skeleton = rebuild_skeleton(&children, eclass_step.is_some());
         let mut args = vec![row_pf.clone()];
-        let mut skeleton = Skeleton::Hole(0);
-        for (child, step) in steps {
-            args.push(step);
-            skeleton = skeleton.congr(child, Skeleton::Hole(args.len() - 1));
-        }
-        if let Some(step) = eclass_step {
-            args.push(step);
-            skeleton = Skeleton::Hole(args.len() - 1).sym().trans(skeleton);
-        }
+        args.extend(steps.into_iter().map(|(_, step)| step));
+        args.extend(eclass_step);
         if args.len() > 1 {
             let (packed, decl) = self.packed_proof_constructor(args.len());
             decls = decl;

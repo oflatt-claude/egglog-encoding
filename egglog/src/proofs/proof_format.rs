@@ -1489,6 +1489,7 @@ impl Proof {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::proofs::proof_encoding_rebuild::rebuild_skeleton;
     use crate::util::SymbolGen;
 
     /// One firing of a rebuild rule over a four-child view row, as the proofs
@@ -1625,19 +1626,6 @@ mod tests {
     fn parse(raw: &mut RawProofStore, term: TermId) -> RawProofId {
         raw.parse_nested_first(term);
         raw.parse_proof(term)
-    }
-
-    /// The skeleton a view rebuild that canonicalized the child columns
-    /// `children` packs, over the layout `indexed_rebuild_rule` writes.
-    fn rebuild_skeleton(children: &[usize], eclass: bool) -> Skeleton {
-        let mut skeleton = Skeleton::Hole(0);
-        for (step, &child) in children.iter().enumerate() {
-            skeleton = skeleton.congr(child, Skeleton::Hole(1 + step));
-        }
-        if eclass {
-            skeleton = Skeleton::Hole(1 + children.len()).sym().trans(skeleton);
-        }
-        skeleton
     }
 
     /// A rebuild row's columns: the row proof, then each canonicalized column's
