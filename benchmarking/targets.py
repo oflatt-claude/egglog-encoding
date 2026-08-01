@@ -293,11 +293,6 @@ def workload_command(
         "no-messages",
         "-j",
         "1",
-        # Benchmark the planner without tree decomposition. A bag's materialized
-        # boundary is routinely wider than the split saves, so decomposition costs
-        # more than it returns on this suite -- most of all under the term/proof
-        # encoding, whose view rows carry a proof column into every bag.
-        "--no-decomp",
         *(["--fact-directory", str(file_spec.fact_directory)] if file_spec.fact_directory is not None else []),
         *backend_flags(backend),
         *treatment_flags(treatment),
