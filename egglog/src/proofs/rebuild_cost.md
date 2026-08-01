@@ -106,18 +106,63 @@ desugared *text* keeps the nesting; the encoding's does not. On the rule
 encoding adds two `(= ?matmul <fresh>)` aliases a compiler substitutes away.
 Body shape and atom count therefore match, and the 60x is elsewhere.
 
-What differs per atom is that a view read binds a proof column as well as the
-e-class, so every tuple is one column wider. That is not obviously a 60x.
+Rebuild churn is not the explanation either: `num_matches_per_rule` totals 12550
+under both, so every rule fires the same number of times and no extra deltas
+exist. The e-graph is identical too (129 functions, 15127 rows, no table
+differing).
 
-The leading untested explanation is rebuild churn feeding seminaive. The rebuild
-rule `delete`s and re-`set`s a view row, and it does so per
-`@UF`-delta-times-occurrence match rather than per row that actually moved, so one
-firing rewrites a row whose canonical form may equal what was already there. Each
-re-inserted row is a fresh delta for *every user rule reading that view*, so
-user-rule search would scale with how much the rebuild rewrites rather than with
-the rules' own selectivity. That would also explain why the effect is worst on the
-file with the most view rows. Measuring view-row re-insertions per round against
-native's is the next step.
+It is the **query planner's tree decomposition**. With `--no-decomp` the plans
+become the same 14/15 stages in the same order, and the encoded time reaches
+parity: over the 254 rules present in both, search+apply is 523 ms native vs
+1225 ms encoded with decomposition, and **166 ms vs 158 ms without**. With
+decomposition on, the encoded plan covers the 1301-row `@IConsView` in its outer
+loop where native's covers the 12-row `FusionEnd`.
+
+Turning decomposition off is a large win on its own, for native as much as for the
+encoding — `luminal-llama` goes 1019 ms to 487 ms native and 3845 ms to 2404 ms in
+term mode — but it is not uniform: `math-microbenchmark` is slightly worse without
+it. The heuristic is also unstable under small changes to a query, which is what
+makes the next section's result so hard to read.
+
+## A real bug in `remove_dup_vars`, and why it is not landed
+
+`remove_dup_vars` implements egglog's FD-based duplicate elimination: two atoms
+over one function with equal inputs must agree on the output, so one is dropped
+and an equality recorded. It splits the **last** argument as the output and keys
+on the rest, which assumes a single value column. A tuple-output function has two,
+so the key keeps the e-class — and two reads of one row bind that to different
+variables, so no group ever forms. Every one of the encoding's FD views is
+tuple-output, so repeated subterms are never shared: native's plan reaches one
+`@INil1236` from both `ICons` probes where the encoding has two variables.
+
+Keying on the inputs and unifying every output column fixes it, and does what it
+should: the encoded plan for `grow-FE-B-lhs-Mul` becomes structurally identical to
+native's, sharing one variable across both probes. It is **not** landed, because
+the planner's sensitivity turns it into a loss where it matters:
+
+| geomean vs `5cc4dc1`, 3 rounds | ratio |
+| --- | ---: |
+| native (`off`) | 1.010 |
+| term encoding | 0.943 |
+| proofs | ~1.09 |
+
+Native is flat on five of six files but `herbie` is reproducibly **1.087** at 8
+rounds (127 ms to 138 ms). Proofs regresses on `luminal-llama` (8073 ms to
+11462 ms) — the same file and the same change that term mode runs 23% *faster*.
+Isolating it on that file shows the fix is a real 8% win and decomposition is what
+punishes the new query shape:
+
+| `luminal-llama`, proofs | decomposition on | `--no-decomp` |
+| --- | ---: | ---: |
+| baseline | 8126 ms | 6950 ms |
+| with the fix | 11397 ms | 6410 ms |
+
+Pairing the fix with `--no-decomp` is not uniform either: `hardboiled_conv1d_32`
+runs 0.829 in term mode and 1.422 in proofs. Per-file swings of ±40% in both
+directions from one change are the signature of a plan heuristic being chosen by
+luck, so the decomposition and costing work has to come first. The fix is one
+commit, reverted in place, and worth re-applying against a planner that costs
+these queries stably.
 
 Native picks per table, per round, between scanning only the recently-updated
 subset and scanning the whole table, at `diff > table_size / 8`
