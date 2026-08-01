@@ -251,9 +251,7 @@ impl Plan {
     pub(crate) fn to_report(&self, _symbol_map: &SymbolMap) -> egglog_reports::Plan {
         match self {
             Plan::SinglePlan(p) => p.to_report(_symbol_map),
-            Plan::DecomposedPlan(_) => {
-                todo!()
-            }
+            Plan::DecomposedPlan(p) => p.to_report(_symbol_map),
         }
     }
 
@@ -309,11 +307,21 @@ pub(crate) struct DecomposedPlan {
     pub actions: ActionId,
 }
 
-impl SinglePlan {
-    pub(crate) fn to_report(&self, symbol_map: &SymbolMap) -> egglog_reports::Plan {
+/// Render one run of join instructions as report stages, numbering each stage's
+/// successor from `offset` so several runs can be concatenated into one plan.
+fn stages_to_report(
+    stages: &JoinStages,
+    atoms: &DenseIdMap<AtomId, Atom>,
+    symbol_map: &SymbolMap,
+    offset: usize,
+) -> Vec<(
+    egglog_reports::Stage,
+    Option<egglog_reports::StageStats>,
+    Vec<usize>,
+)> {
+    {
         use egglog_reports::{
-            Plan as ReportPlan, Scan as ReportScan, SingleScan as ReportSingleScan,
-            Stage as ReportStage,
+            Scan as ReportScan, SingleScan as ReportSingleScan, Stage as ReportStage,
         };
         const INTERNAL_PREFIX: &str = "@";
         let get_var = |var: Variable| {
@@ -330,8 +338,8 @@ impl SinglePlan {
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| format!("{INTERNAL_PREFIX}R{atom:?}"))
         };
-        let mut stages = Vec::new();
-        for (i, stage) in self.stages.instrs.iter().enumerate() {
+        let mut out = Vec::new();
+        for (i, stage) in stages.instrs.iter().enumerate() {
             let report_stage = match stage {
                 JoinStage::Intersect { var, scans } => {
                     let var_name = get_var(*var);
@@ -360,8 +368,10 @@ impl SinglePlan {
                         .vars
                         .iter()
                         .map(|col| {
-                            let var_name =
-                                get_var(self.atoms[cover.to_index.atom].get_var(*col).unwrap());
+                            let var_name = atoms[cover.to_index.atom]
+                                .get_var(*col)
+                                .map(get_var)
+                                .unwrap_or_else(|| format!("{INTERNAL_PREFIX}c{col:?}"));
                             (var_name, col.index() as i64)
                         })
                         .collect();
@@ -373,9 +383,12 @@ impl SinglePlan {
                             let cols: Vec<(String, i64)> = key_spec
                                 .iter()
                                 .map(|col| {
-                                    let var_name = get_var(
-                                        self.atoms[scan.to_index.atom].get_var(*col).unwrap(),
-                                    );
+                                    // `key_spec` indexes the cover, so it need not
+                                    // name a column of the probed atom.
+                                    let var_name = atoms[scan.to_index.atom]
+                                        .get_var(*col)
+                                        .map(get_var)
+                                        .unwrap_or_else(|| format!("{INTERNAL_PREFIX}c{col:?}"));
                                     (var_name, col.index() as i64)
                                 })
                                 .collect();
@@ -387,23 +400,85 @@ impl SinglePlan {
                         to_intersect: report_to_intersect,
                     }
                 }
+                // The cover is an intermediate materialization rather than a
+                // table, so it is named for the materialization it reads and its
+                // columns are the ones it binds.
                 JoinStage::FusedIntersectMat {
-                    cover: _,
-                    mode: _,
-                    bind: _,
-                    to_intersect: _,
+                    cover,
+                    mode,
+                    bind,
+                    to_intersect,
                 } => {
-                    todo!("materialization")
+                    let cover_cols: Vec<(String, i64)> = bind
+                        .iter()
+                        .map(|(col, var)| (get_var(*var), col.index() as i64))
+                        .collect();
+                    let report_cover = ReportScan(
+                        format!("{INTERNAL_PREFIX}mat{cover:?}[{mode:?}]"),
+                        cover_cols,
+                    );
+                    let report_to_intersect = to_intersect
+                        .iter()
+                        .map(|(scan, key_spec)| {
+                            let atom_name = get_atom(scan.to_index.atom);
+                            let cols: Vec<(String, i64)> = key_spec
+                                .iter()
+                                .map(|col| {
+                                    // `key_spec` indexes the cover, so it need not
+                                    // name a column of the probed atom.
+                                    let var_name = atoms[scan.to_index.atom]
+                                        .get_var(*col)
+                                        .map(get_var)
+                                        .unwrap_or_else(|| format!("{INTERNAL_PREFIX}c{col:?}"));
+                                    (var_name, col.index() as i64)
+                                })
+                                .collect();
+                            ReportScan(atom_name, cols)
+                        })
+                        .collect();
+                    ReportStage::FusedIntersect {
+                        cover: report_cover,
+                        to_intersect: report_to_intersect,
+                    }
                 }
             };
-            let next = if i == self.stages.instrs.len() - 1 {
+            let next = if i == stages.instrs.len() - 1 {
                 vec![]
             } else {
-                vec![i + 1]
+                vec![offset + i + 1]
             };
-            stages.push((report_stage, None, next));
+            out.push((report_stage, None, next));
         }
-        ReportPlan { stages }
+        out
+    }
+}
+
+impl SinglePlan {
+    pub(crate) fn to_report(&self, symbol_map: &SymbolMap) -> egglog_reports::Plan {
+        egglog_reports::Plan {
+            stages: stages_to_report(&self.stages, &self.atoms, symbol_map, 0),
+        }
+    }
+}
+
+impl DecomposedPlan {
+    /// Every bag's instructions in order, then the block that joins their
+    /// materialized results. Stages are numbered across blocks, so a block's last
+    /// stage has no successor: the bags are independent by construction.
+    pub(crate) fn to_report(&self, symbol_map: &SymbolMap) -> egglog_reports::Plan {
+        let mut stages = Vec::new();
+        for (block, _mat_spec) in &self.stages.blocks {
+            let offset = stages.len();
+            stages.extend(stages_to_report(block, &self.atoms, symbol_map, offset));
+        }
+        let offset = stages.len();
+        stages.extend(stages_to_report(
+            &self.result_block,
+            &self.atoms,
+            symbol_map,
+            offset,
+        ));
+        egglog_reports::Plan { stages }
     }
 }
 

@@ -61,8 +61,13 @@ impl ProofInstrumentor<'_> {
 
                 // The custom function's FD view is keyed by children: bind the
                 // output `v` (pair-first) and the row's existence proof
-                // `proof_var` (pair-second).
-                let proof_var = self.fresh_var();
+                // `proof_var` (pair-second). With proofs off the column is `Unit`
+                // and unread, so match the literal (see the constructor case).
+                let proof_var = if self.egraph.proof_state.proofs_enabled {
+                    self.fresh_var()
+                } else {
+                    "()".to_string()
+                };
                 let children_str = ListDisplay(&new_args, " ");
                 res.push(format!(
                     "(= (values {v} {proof_var}) ({view_name} {children_str}))"
@@ -192,10 +197,18 @@ impl ProofInstrumentor<'_> {
                         let args_str = ListDisplay(new_args, " ");
 
                         let proof = {
-                            let view_proof_var = self.fresh_var();
                             // A constructor view is the FD tuple
                             // `(children) -> (eclass, {Unit|Proof})`: bind the eclass (`fv`)
-                            // and proof from the tuple.
+                            // and proof from the tuple. With proofs off the column is
+                            // `Unit` and nothing reads it, so match the literal rather
+                            // than bind a variable no atom shares — one per view read
+                            // would otherwise enter the join's variable graph and skew
+                            // the planner's decomposition.
+                            let view_proof_var = if self.proofs_enabled() {
+                                self.fresh_var()
+                            } else {
+                                "()".to_string()
+                            };
                             res.push(format!(
                                 "(= (values {fv} {view_proof_var}) ({view_name} {args_str}))"
                             ));
