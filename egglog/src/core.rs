@@ -175,6 +175,17 @@ impl ResolvedCall {
         }
     }
 
+    /// How many of an atom's trailing arguments are value columns rather than
+    /// key columns. One for everything except a tuple-output function.
+    pub(crate) fn num_output_cols(&self) -> usize {
+        match self {
+            ResolvedCall::Func(func) => func.num_outputs(),
+            ResolvedCall::Primitive(_) => 1,
+            // Lowered away before atoms are built; its columns are all outputs.
+            ResolvedCall::Values(sorts) => sorts.len(),
+        }
+    }
+
     /// Gives the types for a term's child with the given resolved call.
     /// For functions this includes the output sort, for constructors it's just the inputs.
     pub(crate) fn view_types(&self) -> Vec<ArcSort> {
@@ -808,8 +819,11 @@ where
     }
 }
 
+/// One equality per output column, pairing each later row of a group with the
+/// first. A group's rows agree on the call's inputs, so the functional
+/// dependency makes every output column equal across them.
 fn equiv_groups_to_eq_constraints<Head, Leaf>(
-    groups: &HashMap<(Head, Vec<GenericAtomTerm<Leaf>>), Vec<GenericAtomTerm<Leaf>>>,
+    groups: &HashMap<(Head, Vec<GenericAtomTerm<Leaf>>), Vec<Vec<GenericAtomTerm<Leaf>>>>,
     span: &Span,
 ) -> Vec<GenericAtom<HeadOrEq<Head>, Leaf>>
 where
@@ -820,14 +834,16 @@ where
     for group in groups.values() {
         let first = &group[0];
         for other in &group[1..] {
-            if first == other {
-                continue;
+            for (a, b) in first.iter().zip(other.iter()) {
+                if a == b {
+                    continue;
+                }
+                eq_constraints.push(GenericAtom {
+                    span: span.clone(),
+                    head: HeadOrEq::Eq,
+                    args: vec![a.clone(), b.clone()],
+                });
             }
-            eq_constraints.push(GenericAtom {
-                span: span.clone(),
-                head: HeadOrEq::Eq,
-                args: vec![first.clone(), other.clone()],
-            });
         }
     }
     eq_constraints
@@ -836,7 +852,8 @@ where
 trait RemoveDuplicateVars<Head, Leaf> {
     fn remove_dup_vars(
         self,
-        value_eq: impl Fn(&GenericAtomTerm<Leaf>, &GenericAtomTerm<Leaf>) -> Head,
+        value_eq: &impl Fn(&GenericAtomTerm<Leaf>, &GenericAtomTerm<Leaf>) -> Head,
+        num_outputs: &impl Fn(&Head) -> usize,
     ) -> Self;
 }
 
@@ -850,20 +867,33 @@ where
     /// For example, if we have two atoms `R(x, y, z1)` and `R(x, y, z2)`,
     /// then we can remove one of them and add an equality constraint `z1 = z2`.
     /// This is done until fixpoint, so it is kind of like rebuilding.
+    ///
+    /// `num_outputs` gives a head's value-column count, so a tuple-output
+    /// function is keyed on its inputs like any other. Keying on all but the
+    /// last column instead would put a tuple's earlier outputs in the key, and
+    /// two reads of one row bind those to different variables — so no group
+    /// would ever form.
     fn remove_dup_vars(
         mut self,
-        value_eq: impl Fn(&GenericAtomTerm<Leaf>, &GenericAtomTerm<Leaf>) -> Head,
+        value_eq: &impl Fn(&GenericAtomTerm<Leaf>, &GenericAtomTerm<Leaf>) -> Head,
+        num_outputs: &impl Fn(&Head) -> usize,
     ) -> Self {
-        // Maps function calls to sets of equivalent variables to be deduplicated
-        let mut groups: HashMap<(Head, Vec<GenericAtomTerm<Leaf>>), Vec<GenericAtomTerm<Leaf>>> =
-            HashMap::default();
+        // Maps function calls to the output tuples to be merged.
+        let mut groups: HashMap<
+            (Head, Vec<GenericAtomTerm<Leaf>>),
+            Vec<Vec<GenericAtomTerm<Leaf>>>,
+        > = HashMap::default();
 
         // Remove entries wit identical (head, inputs) pair and mark respective outputs to be merged.
         self.body.atoms.retain(|atom| {
-            let (out, inp) = atom.args.split_last().unwrap();
+            if atom.args.is_empty() {
+                return true;
+            }
+            let n_out = num_outputs(&atom.head).clamp(1, atom.args.len());
+            let (inp, out) = atom.args.split_at(atom.args.len() - n_out);
             let key = (atom.head.clone(), inp.to_owned());
             let group = groups.entry(key).or_default();
-            group.push(out.clone());
+            group.push(out.to_owned());
             group.len() == 1
         });
 
@@ -886,8 +916,8 @@ where
                 body: Query { atoms },
                 head: self.head,
             }
-            .canonicalize(&value_eq)
-            .remove_dup_vars(value_eq)
+            .canonicalize(value_eq)
+            .remove_dup_vars(value_eq, num_outputs)
         }
     }
 }
@@ -966,7 +996,8 @@ impl ResolvedRuleExt for ResolvedRule {
 
         let rule = rule.canonicalize(&value_eq);
 
-        let rule = rule.remove_dup_vars(value_eq);
+        let num_outputs = |head: &ResolvedCall| head.num_output_cols();
+        let rule = rule.remove_dup_vars(&value_eq, &num_outputs);
 
         Ok(rule)
     }
@@ -1010,7 +1041,7 @@ mod tests {
             head: GenericCoreActions::default(),
         };
 
-        let result = rule.remove_dup_vars(value_eq_string);
+        let result = rule.remove_dup_vars(&value_eq_string, &|_: &String| 1);
 
         assert_eq!(result.body.atoms.len(), 4);
         assert_eq!(result.body.atoms[0].head, "R");
@@ -1037,7 +1068,7 @@ mod tests {
             head: GenericCoreActions::default(),
         };
 
-        let result = rule.remove_dup_vars(value_eq_string);
+        let result = rule.remove_dup_vars(&value_eq_string, &|_: &String| 1);
 
         assert_eq!(result.body.atoms.len(), 2);
         assert_eq!(result.body.atoms[0].head, "R");
@@ -1060,7 +1091,7 @@ mod tests {
             head: GenericCoreActions::default(),
         };
 
-        let result = rule.remove_dup_vars(value_eq_string);
+        let result = rule.remove_dup_vars(&value_eq_string, &|_: &String| 1);
 
         assert_eq!(result.body.atoms.len(), 1);
         assert_eq!(result.body.atoms[0].head, "R");
@@ -1085,7 +1116,7 @@ mod tests {
             )]),
         };
 
-        let result = rule.remove_dup_vars(value_eq_string);
+        let result = rule.remove_dup_vars(&value_eq_string, &|_: &String| 1);
 
         assert_eq!(result.body.atoms.len(), 1);
         assert!(matches!(
