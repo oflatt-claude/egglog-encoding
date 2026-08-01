@@ -14,6 +14,8 @@ pub enum ProveExistsError {
     PrimitivesUnsupported,
     #[error("Could not find a proof due to query not matching (constructor {constructor}).")]
     QueryDidNotMatch { constructor: String },
+    #[error("prove/prove-exists requires proofs to be enabled (run with --proofs).")]
+    ProofsNotEnabled,
 }
 
 impl ProofInstrumentor<'_> {
@@ -65,8 +67,10 @@ impl ProofInstrumentor<'_> {
         })?;
 
         // `prove-exists` targets a constructor, whose eq-sort output has a proof
-        // table. A function with a base-sort output (e.g. `(function f (i64) i64)`)
-        // has none, so there is nothing to prove — reject it rather than panic.
+        // table. A missing proof-function annotation means there is no such table:
+        // either proofs were never enabled, or the output is a base sort (e.g.
+        // `(function f (i64) i64)`), which has nothing to prove. Reject it rather
+        // than panic.
         let Some(proof_function_name) = self
             .egraph
             .proof_state
@@ -74,7 +78,7 @@ impl ProofInstrumentor<'_> {
             .get(output_sort.name())
             .cloned()
         else {
-            return Err(ProveExistsError::RequiresConstructor);
+            return Err(ProveExistsError::ProofsNotEnabled);
         };
         let proof_function = self
             .egraph
