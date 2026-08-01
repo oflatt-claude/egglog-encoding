@@ -184,6 +184,8 @@ pub struct EGraph {
     pub(crate) set_if_empty_ops: HashMap<ExternalFunctionId, ViewOp>,
     /// View-column reader ops, keyed like `set_if_empty_ops`.
     pub(crate) view_column_read_ops: HashMap<ExternalFunctionId, ViewOp>,
+    /// Mint ops, keyed like `set_if_empty_ops`.
+    pub(crate) mint_ops: HashMap<ExternalFunctionId, MintOp>,
 }
 
 /// A term-encoding view op (`set-if-empty` or view-column read) the DD interpreter
@@ -197,6 +199,16 @@ pub(crate) struct ViewOp {
     pub(crate) out_arity: usize,
     /// Output column to read (view-column read only).
     pub(crate) col_idx: usize,
+}
+
+/// A term-encoding mint op the DD interpreter services against its `mirror`:
+/// the term-node relation's name, its argument-column count, and the value
+/// columns that follow the minted id.
+#[derive(Clone)]
+pub(crate) struct MintOp {
+    pub(crate) table_name: String,
+    pub(crate) n_args: usize,
+    pub(crate) vals: Vec<u32>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -265,6 +277,7 @@ impl EGraph {
             table_ids: HashMap::new(),
             set_if_empty_ops: HashMap::new(),
             view_column_read_ops: HashMap::new(),
+            mint_ops: HashMap::new(),
         }
     }
 
@@ -948,14 +961,18 @@ impl<'a> MergeTransaction<'a> {
             MergeFn::Primitive(id, arguments) => {
                 let args = self.eval_args(arguments, owner, old, new, self_col, environment)?;
                 // A custom merge lowered into the FD view's `:merge` may build
-                // terms, so the term encoder's `set-if-empty` / view-column-read ops can
-                // be invoked here too. Service them against the transaction's own
-                // view state (the db external function for them only panics).
+                // terms, so the term encoder's `set-if-empty` / view-column-read /
+                // mint ops can be invoked here too. Service them against the
+                // transaction's own view state (the db external function for
+                // them only panics).
                 if let Some(op) = self.eg.set_if_empty_ops.get(id).cloned() {
                     return self.set_if_empty_in_merge(&op, &args);
                 }
                 if let Some(op) = self.eg.view_column_read_ops.get(id).cloned() {
                     return self.view_column_read_in_merge(&op, &args);
+                }
+                if let Some(op) = self.eg.mint_ops.get(id).cloned() {
+                    return self.mint_in_merge(&op, &args);
                 }
                 let arguments = args.into_iter().map(Value::new).collect::<Vec<_>>();
                 self.eg
@@ -1057,6 +1074,26 @@ impl<'a> MergeTransaction<'a> {
             },
         );
         Ok(eclass)
+    }
+
+    /// Service a mint invoked from inside a merge: stage `(args…, fresh, vals…)`
+    /// into the relation, as an explicit `set` on it would, and return the
+    /// freshly minted id.
+    fn mint_in_merge(&mut self, op: &MintOp, args: &[u32]) -> Result<u32> {
+        let table = *self
+            .eg
+            .table_ids
+            .get(&op.table_name)
+            .ok_or_else(|| anyhow!("mint relation `{}` is not registered", op.table_name))?;
+        let fresh = self.eg.fresh_id_internal();
+        let row: Row = args
+            .iter()
+            .copied()
+            .chain([fresh])
+            .chain(op.vals.iter().copied())
+            .collect();
+        self.next_wave.push((table, row));
+        Ok(fresh)
     }
 
     /// Service a view-column read invoked from inside a merge: output column
@@ -2671,6 +2708,28 @@ impl Backend for EGraph {
         id
     }
 
+    fn register_mint_row(
+        &mut self,
+        table_name: String,
+        n_args: usize,
+        vals: Vec<Value>,
+    ) -> ExternalFunctionId {
+        // Intercepted like `set-if-empty`; see the comment there.
+        let id = Backend::new_panic(
+            self,
+            format!("mint into `{table_name}` reached the db path; DD must intercept it"),
+        );
+        self.mint_ops.insert(
+            id,
+            MintOp {
+                table_name,
+                n_args,
+                vals: vals.iter().map(|v| v.rep()).collect(),
+            },
+        );
+        id
+    }
+
     // -- capability flags ---------------------------------------------------
 
     fn requires_term_encoding(&self) -> bool {
@@ -2725,6 +2784,7 @@ impl Backend for EGraph {
             table_ids: self.table_ids.clone(),
             set_if_empty_ops: self.set_if_empty_ops.clone(),
             view_column_read_ops: self.view_column_read_ops.clone(),
+            mint_ops: self.mint_ops.clone(),
         })
     }
 

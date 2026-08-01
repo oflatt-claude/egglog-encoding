@@ -572,6 +572,19 @@ impl EGraph {
                         (resolved.name.clone(), ft.input.clone(), ft.outputs.clone());
                     crate::proofs::proof_fresh::register_set_if_empty(self, &name, input, outputs);
                 }
+                // A term-node relation (a term/proof/AST node, whose last input
+                // is the minted id) gets a mint primitive, so the encoding
+                // writes a node in one statement. Registered here for the same
+                // reason as `set-if-empty` above.
+                if resolved.internal_term_node
+                    && let ResolvedCall::Func(ft) = &resolved.resolved_schema
+                    && let Some((id_sort, arg_sorts)) = ft.input.split_last()
+                    && id_sort.is_eq_sort()
+                {
+                    let (name, id_sort, arg_sorts) =
+                        (resolved.name.clone(), id_sort.clone(), arg_sorts.to_vec());
+                    crate::proofs::proof_fresh::register_mint(self, &name, arg_sorts, id_sort);
+                }
                 // If this is a let binding, add it to global_sorts
                 // This preserves bahavior for lets after desugaring
                 if resolved.internal_let {

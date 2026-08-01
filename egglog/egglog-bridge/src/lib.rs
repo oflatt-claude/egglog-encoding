@@ -146,6 +146,11 @@ pub struct EGraph {
     /// `WriteState` / `FullState` can resolve table actions at
     /// invoke time. Mutated in place from [`add_table`](EGraph::add_table).
     action_registry: Arc<std::sync::RwLock<ActionRegistry>>,
+    /// Table each row-inserting external function writes, by name. A merge body
+    /// calling one declares the same write dependency an explicit `set` on that
+    /// table would (see [`MergeFn::fill_deps`]).
+    // `BTreeMap` for the reason given on `panic_func_ids`.
+    external_write_deps: BTreeMap<ExternalFunctionId, String>,
 }
 
 pub type Result<T> = std::result::Result<T, anyhow::Error>;
@@ -212,6 +217,7 @@ impl Default for EGraph {
             panic_func_ids,
             report_level: Default::default(),
             action_registry,
+            external_write_deps: Default::default(),
         }
     }
 }
@@ -388,7 +394,59 @@ impl EGraph {
         )))
     }
 
+    /// Register the term encoder's mint op for the term-node relation named
+    /// `table_name`, returning the [`ExternalFunctionId`] its call sites resolve
+    /// to.
+    ///
+    /// Invoked as `(args…)`, it mints a fresh id from the same counter as
+    /// `get-fresh!`, stages the row `(args…, fresh, vals…)`, and returns
+    /// `fresh`. Every id it mints is new, so the staged row can never collide
+    /// with another.
+    pub fn register_mint_row(
+        &mut self,
+        table_name: String,
+        n_args: usize,
+        vals: Vec<Value>,
+    ) -> ExternalFunctionId {
+        let registry = self.action_registry.clone();
+        let counter = self.id_counter;
+        let dep = table_name.clone();
+        let id = self.register_external_func(Box::new(make_external_func(
+            move |state: &mut ExecutionState, args: &[Value]| {
+                let action = registry.read().unwrap().lookup_table(&table_name)?.clone();
+                debug_assert_eq!(
+                    args.len(),
+                    n_args,
+                    "mint into `{table_name}` takes {n_args} arguments"
+                );
+                let fresh = Value::from_usize(state.inc_counter(counter));
+                action.insert(
+                    state,
+                    args.iter().copied().chain([fresh]).chain(vals.clone()),
+                );
+                Some(fresh)
+            },
+        )));
+        self.external_write_deps.insert(id, dep);
+        id
+    }
+
+    /// The table an external function inserts into, for the merge dependency
+    /// graph. `None` for a function that writes no table, or one whose table is
+    /// not declared yet.
+    fn external_write_table(&self, func: ExternalFunctionId) -> Option<TableId> {
+        let name = self.external_write_deps.get(&func)?;
+        Some(
+            self.action_registry
+                .read()
+                .unwrap()
+                .lookup_table(name)?
+                .table,
+        )
+    }
+
     pub fn free_external_func(&mut self, func: ExternalFunctionId) {
+        self.external_write_deps.remove(&func);
         // A cached panic with more than one reference is kept alive (just
         // decrement); one at its last reference — or any func that is not a
         // cached panic — is freed from the database. The reverse index makes the
@@ -1322,10 +1380,16 @@ impl MergeFn {
     ) {
         use MergeFn::*;
         match self {
-            Primitive(_, args) => {
+            Primitive(id, args) => {
                 args.iter()
                     .for_each(|arg| arg.fill_deps(egraph, read_deps, write_deps));
                 write_deps.insert(egraph.uf_table);
+                // A primitive that inserts rows writes its table just as a
+                // `set` on it would, and the merge must be ordered and
+                // buffered against that table the same way.
+                if let Some(table) = egraph.external_write_table(*id) {
+                    write_deps.insert(table);
+                }
             }
             Function(func, args) => {
                 read_deps.insert(egraph.funcs[*func].table);

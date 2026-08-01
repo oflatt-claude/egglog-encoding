@@ -1,18 +1,19 @@
 //! The term/proof encoding's mint + canonicalize primitives.
 //!
 //! With terms and proofs encoded as relations (rather than constructors), an
-//! e-node / proof-node id is no longer minted by a constructor call. Instead the
-//! encoding mints a fresh id explicitly and asserts the relation row:
+//! e-node / proof-node id is no longer minted by a constructor call. The
+//! encoding mints one and writes the row in a single statement:
 //!
 //! ```text
-//! (let fresh (get-fresh! "Math"))
-//! (Add a b fresh)
+//! (let fresh (mint-Add! a b))
 //! ```
 //!
-//! These primitives (`get-fresh!`, `set-if-empty`, and its proof-column reader)
-//! carry only type constraints here; their runtime behavior is supplied by the
-//! backend SPI ([`Backend::register_get_fresh`] / [`Backend::register_set_if_empty`]
-//! / [`Backend::register_view_column_read`]) so each backend services the mint /
+//! `get-fresh!` remains for the few sites wanting an id no row mentions.
+//!
+//! These primitives carry only type constraints here; their runtime behavior is
+//! supplied by the backend SPI ([`Backend::register_get_fresh`] /
+//! [`Backend::register_mint_row`] / [`Backend::register_set_if_empty`] /
+//! [`Backend::register_view_column_read`]) so each backend services the mint /
 //! canonicalize against its own storage — db tables for the reference bridge, a
 //! host-side mirror for the Differential Dataflow backend.
 
@@ -31,6 +32,65 @@ pub(crate) fn set_if_empty_prim_name(view_name: &str) -> String {
 /// [`set_if_empty_prim_name`] for why the prefix carries no internal marker.
 pub(crate) fn view_proof_prim_name(view_name: &str) -> String {
     format!("view-proof-{view_name}")
+}
+
+/// Deterministic name of a term-node relation's mint primitive. See
+/// [`set_if_empty_prim_name`] for why the prefix carries no internal marker.
+pub(crate) fn mint_prim_name(relation: &str) -> String {
+    format!("mint-{relation}!")
+}
+
+/// The relation a [`mint_prim_name`] names, or `None` for any other primitive.
+#[cfg(test)]
+pub(crate) fn mint_prim_relation(prim: &str) -> Option<&str> {
+    prim.strip_prefix("mint-")?.strip_suffix('!')
+}
+
+/// Register a term-node relation's mint primitive. `arg_sorts` is the
+/// relation's input columns up to the minted id, whose sort is `id_sort`. The
+/// runtime entrypoint is minted by the backend so the op writes the backend's
+/// own storage.
+pub(crate) fn register_mint(
+    eg: &mut EGraph,
+    relation: &str,
+    arg_sorts: Vec<ArcSort>,
+    id_sort: ArcSort,
+) {
+    let n_args = arg_sorts.len();
+    let mint = MintRow {
+        name: mint_prim_name(relation),
+        arg_sorts,
+        id_sort,
+    };
+    let name = relation.to_string();
+    eg.add_backend_op_primitive(mint, WriteState::valid_contexts(), move |backend, _| {
+        // A term-node relation's one value column is `Unit`: the row says only
+        // that the node exists.
+        let unit = backend.base_values().get(());
+        backend.register_mint_row(name.clone(), n_args, vec![unit])
+    });
+}
+
+/// `mint-<Relation>!`: mint a fresh id of the relation's id column and assert
+/// the row `(relation args… fresh)`. Impure — every call mints a new id, so the
+/// row is always new. Serviced by the backend against its own storage.
+#[derive(Clone)]
+struct MintRow {
+    name: String,
+    arg_sorts: Vec<ArcSort>,
+    id_sort: ArcSort,
+}
+
+impl Primitive for MintRow {
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        // (args…) -> id
+        let mut sig = self.arg_sorts.clone();
+        sig.push(self.id_sort.clone());
+        SimpleTypeConstraint::new(&self.name, sig, span.clone()).into_box()
+    }
 }
 
 /// Register an FD view's `set-if-empty` primitive and (in proof mode) its

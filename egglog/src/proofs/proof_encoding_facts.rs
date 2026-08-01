@@ -28,8 +28,7 @@ impl ProofInstrumentor<'_> {
             res.push(fact.to_string());
             if self.egraph.proof_state.proofs_enabled {
                 let eval_constructor = self.proof_names().eval_constructor.clone();
-                let proof_sort = self.proof_sort();
-                return self.mint(action_lookups, &eval_constructor, "", &proof_sort);
+                return self.mint(action_lookups, &eval_constructor, "");
             }
             return "()".to_string();
         }
@@ -98,8 +97,7 @@ impl ProofInstrumentor<'_> {
                     )
                 {
                     let eval_constructor = self.proof_names().eval_constructor.clone();
-                    let proof_sort = self.proof_sort();
-                    self.mint(action_lookups, &eval_constructor, "", &proof_sort)
+                    self.mint(action_lookups, &eval_constructor, "")
                 } else {
                     proof
                 }

@@ -84,9 +84,13 @@ and deferred-deletion helpers:
 ```
 
 The term relation `Add(child0, child1, eclass)` stores every application as a row
-whose last column is the term's own id, minted with `get-fresh!`. Nothing is ever
-removed from it, which lets proofs refer to terms after they leave the e-graph.
-`:internal-term-node` marks its rows as term nodes for proof extraction.
+whose last column is the term's own id. Nothing is ever removed from it, which
+lets proofs refer to terms after they leave the e-graph. `:internal-term-node`
+marks its rows as term nodes for proof extraction, and gives the relation a
+`mint-<Relation>!` primitive: every relation whose last input is a minted id —
+the term relations, the `@Ast<Sort>` wrappers, every proof-node relation — gets
+one, and `(let v (mint-Add! a b))` mints the id and writes the row in a single
+statement (see [`crate::proofs::proof_fresh`]).
 
 The **view** is the functional dependency `children -> (eclass, proof)` over a
 term's *canonicalized* children. Two view rows that collide on the same children
@@ -104,12 +108,10 @@ and interns the application into its view. Top level `(Add (Num 1) (Num 2))`
 lowers to:
 
 ```text
-(let n1 (get-fresh! "Math"))
-(set (Num 1 n1) ())
+(let n1 (mint-Num! 1))
 (let n1_can (set-if-empty-@NumView! 1 n1 ()))
 …                                                       ;; the same for (Num 2)
-(let ab (get-fresh! "Math"))
-(set (Add n1_can n2_can ab) ())
+(let ab (mint-Add! n1_can n2_can))
 (let ab_can (set-if-empty-@AddView! n1_can n2_can ab ()))
 ```
 
@@ -361,7 +363,8 @@ With proofs enabled, the encoding first emits a header defining the proof format
 relations `@Fiat`, `@RuleLink`, `@MergeIdx`, `@MergeRow`, `@Trans`, `@Sym`,
 `@Congr`, `@CongrAll`, `@ContainerNormalize`, `@Eval` — each a
 `(function … Unit :no-merge)`, not a constructor, so a proof node is a fresh id
-plus a row. Two further families have their column count fixed by the site rather
+plus a row, both written by that relation's `mint-<Relation>!`. Two further
+families have their column count fixed by the site rather
 than by the format, so each shape is declared just before the commands needing
 it: `@Rule_<k>`, a rule proof carrying its `k` body premises inline, and
 `@Packed_<k>`, one row standing for a whole composition over `k` proofs (see
@@ -422,12 +425,11 @@ as its `@Congr` step.
 
 For the running example's `rewrite`, whose two children come straight from the
 body and whose result is a construct-into guest, layer 1 would emit five proofs
-(illustrative: each proof node is one `let` rather than a `get-fresh!` plus a
-row, and `rule-proof` stands for whatever names a proof the firing concludes):
+(illustrative: `@Trans`/`@Sym` are spelled as calls rather than as mints, and
+`rule-proof` stands for whatever names a proof the firing concludes):
 
 ```text
-(let ba (get-fresh! "Math"))                 ;; the natural node
-(set (Add b a ba) ())
+(let ba (mint-Add! b a))                     ;; the natural node
 (let own  (rule-proof rule_name prems))      ;; ba = ba, the head's own conclusion
 (let edge (rule-proof rule_name prems))      ;; rewrite_var = ba, the dropped union
 (let view (@Trans edge own))                 ;; rewrite_var = (Add b a), the view row
@@ -475,8 +477,7 @@ representative, or installs the given id and proof when the shape is new.
 there is no congruence step — the natural node is the only one built:
 
 ```text
-(let d (get-fresh! "Math"))
-(set (Add b c d) ())
+(let d (mint-Add! b c))
 (let d-prf (rule-proof rule_name prems))              ;; d = d
 (let (values d' d-to-d'-prf) (set-if-empty (@AddView b c) d d-prf))
 ```
@@ -486,12 +487,10 @@ natural node is over `d`; the canonical one over `d'`; `@Congr` at the child's
 position carries the first to the second:
 
 ```text
-(let e (get-fresh! "Math"))
-(set (Add a d e) ())
+(let e (mint-Add! a d))
 (let e-prf (rule-proof rule_name prems))              ;; e = e
 
-(let e' (get-fresh! "Math"))                          ;; the same term over canonical children
-(set (Add a d' e') ())
+(let e' (mint-Add! a d'))                             ;; the same term over canonical children
 (let e-to-e'-prf (@Congr e-prf 1 d-to-d'-prf))        ;; e = e'
 (let e'-prf (@Trans (@Sym e-to-e'-prf) e-to-e'-prf))  ;; e' = e'
 
@@ -503,12 +502,10 @@ position carries the first to the second:
 congruence step:
 
 ```text
-(let f (get-fresh! "Math"))
-(set (Neg e f) ())
+(let f (mint-Neg! e))
 (let f-prf (rule-proof rule_name prems))              ;; f = f
 
-(let f' (get-fresh! "Math"))
-(set (Neg e'' f') ())
+(let f' (mint-Neg! e''))
 (let f-to-f'-prf (@Congr f-prf 0 e-to-e''-prf))       ;; f = f'
 (let f'-prf (@Trans (@Sym f-to-f'-prf) f-to-f'-prf))  ;; f' = f'
 
@@ -600,13 +597,10 @@ proof rows:
 (rule ((= (values e p) (@AddView a b))
        (= rewrite_var e))
       ((let rule_name "(rewrite (Add a b) (Add b a))")
-       (let ba (get-fresh! "Math"))
-       (set (Add b a ba) ())
-       (let own (get-fresh! "@Proof"))
-       (set (@Rule_1 rule_name p 0 own) ())
+       (let ba (mint-Add! b a))
+       (let own (mint-@Rule_1! rule_name p 0))
        (set (@MathProof ba) own)
-       (let view (get-fresh! "@Proof"))
-       (set (@Rule_1 rule_name p 2 view) ())
+       (let view (mint-@Rule_1! rule_name p 2))
        (set (@AddView b a) (values rewrite_var view)))
         :name "(rewrite (Add a b) (Add b a))" :unsafe-seminaive)
 ```
@@ -624,20 +618,19 @@ A nested head chains. For
 ```
 
 the walk numbers `(Num 1)` at columns 0–2, `(Num 2)` at 3–5, and the guest
-`(Add …)` at 6–9, and the head writes six rows (term rows and the `get-fresh!`
-binding each proof variable elided):
+`(Add …)` at 6–9, and the head writes six rows (term rows elided):
 
 ```text
-(set (@Rule_1   rule_name prems 0 num1_pf0) ())      ;; (Num 1) as written
-(set (@Rule_1   rule_name prems 1 num1_pf1) ())      ;; …over canonical children
+(let num1_pf0   (mint-@Rule_1! rule_name prems 0))       ;; (Num 1) as written
+(let num1_pf1   (mint-@Rule_1! rule_name prems 1))       ;; …over canonical children
 (let num1_e     (set-if-empty-@NumView! 1 …))
 (let num1_bridge (view-proof-@NumView 1 …))
-(set (@RuleLink num1_pf1 num1_bridge 3 num2_pf0) ())
-(set (@RuleLink num1_pf1 num1_bridge 4 num2_pf1) ())
+(let num2_pf0   (mint-@RuleLink! num1_pf1 num1_bridge 3))
+(let num2_pf1   (mint-@RuleLink! num1_pf1 num1_bridge 4))
 (let num2_e     (set-if-empty-@NumView! 2 …))
 (let num2_bridge (view-proof-@NumView 2 …))
-(set (@RuleLink num2_pf1 num2_bridge 6 add_pf0) ())  ;; (Add …) as written
-(set (@RuleLink num2_pf1 num2_bridge 8 add_view) ())
+(let add_pf0    (mint-@RuleLink! num2_pf1 num2_bridge 6)) ;; (Add …) as written
+(let add_view   (mint-@RuleLink! num2_pf1 num2_bridge 8))
 (set (@AddView num1_e num2_e) (values r add_view))
 ```
 
@@ -656,7 +649,7 @@ which endpoint the `@UF` edge is stated from is only known once the ids are
 compared. Its column is therefore an expression, not a literal:
 
 ```text
-(set (@Rule_1 rule_name prems (proof-of-max x 1 y 2) edge) ())
+(let edge (mint-@Rule_1! rule_name prems (proof-of-max x 1 y 2)))
 (set (@UF_Math (ordering-max x y)) (values (ordering-min x y) edge))
 ```
 
@@ -681,16 +674,19 @@ column to name, so the encoder composes. For the running example's
 `num*_bridge` the two children's view-row proofs:
 
 ```text
-(set (@Packed_3 "trans_sym_congr_congr_p0_0_sym_p1_1_sym_p2_congr_congr_p0_0_sym_p1_1_sym_p2"
-        add_own num1_bridge num2_bridge add_canon) ())
+(let add_canon (mint-@Packed_3!
+        "trans_sym_congr_congr_p0_0_sym_p1_1_sym_p2_congr_congr_p0_0_sym_p1_1_sym_p2"
+        add_own num1_bridge num2_bridge))
 ```
 
-Four `@Proof` rows (plus six `@Ast` rows) for that one expression: the three
+Four `@Proof` rows (plus three `@Ast` rows) for that one expression: the three
 `@Fiat` conclusions and that one row. A `@Fiat` is composed from nothing, so it
 cannot be a hole of a skeleton and stays a row of its own; the `@Ast` rows are
-its endpoints. The row count is also already reduced by dropping steps the
-encoder knows are reflexive — `(Num 1)`'s own conclusion is its canonical one, so
-neither `Num` level composes anything.
+its endpoints, and a reflexive `@Fiat` — every one of the three here — names the
+same node on both sides, so it costs one term node rather than two. The row count
+is also already reduced by dropping steps the encoder knows are reflexive —
+`(Num 1)`'s own conclusion is its canonical one, so neither `Num` level composes
+anything.
 
 **Merge bodies and maintenance rules.** A custom function's `:merge`, the
 path-compression rule, and the container rebuild rule are all code the encoder
@@ -743,8 +739,8 @@ column and packs them:
 (let c0_term (@MathProof c0_))
 (let c0_step (@UF_Math_canon_proof c0_ c0_term))
 … same for c1_ and e2_ …
-(set (@Packed_4 "trans_sym_p3_congr_congr_p0_0_p1_1_p2"
-        pf c0_step c1_step e2_step out) ())
+(let out (mint-@Packed_4! "trans_sym_p3_congr_congr_p0_0_p1_1_p2"
+        pf c0_step c1_step e2_step))
 ```
 
 `@UF_<Sort>_canon_proof` supplies each step's proof, reflexive for a column that

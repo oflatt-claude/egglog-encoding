@@ -311,12 +311,10 @@ impl<'a> ProofInstrumentor<'a> {
         match emit.justification {
             Justification::Rule(..) => self.rule_row(emit),
             Justification::Fiat => {
-                let ast_sort = self.proof_names().ast_sort.clone();
-                let proof_sort = self.proof_sort();
-                let a1 = self.mint(emit.stmts, to_ast, a, &ast_sort);
-                let a2 = self.mint(emit.stmts, to_ast, b, &ast_sort);
+                let a1 = self.mint(emit.stmts, to_ast, a);
+                let a2 = self.mint(emit.stmts, to_ast, b);
                 let fiat = self.proof_names().fiat_constructor.clone();
-                self.mint(emit.stmts, &fiat, &format!("{a1} {a2}"), &proof_sort)
+                self.mint(emit.stmts, &fiat, &format!("{a1} {a2}"))
             }
             Justification::MergeIdx(..) | Justification::MergeRow(..) => panic!(
                 "Merge functions do not include union actions, so proof should not be by merge"
@@ -353,14 +351,8 @@ impl<'a> ProofInstrumentor<'a> {
         let (rule_name, premises) = (rule_name.clone(), premises.clone());
         let column = justification.column_expr();
         let rule = self.proof_names().fused_rule(premises.len());
-        let proof_sort = self.proof_sort();
         let premises = premises.iter().map(|p| format!("{p} ")).collect::<String>();
-        self.mint(
-            stmts,
-            &rule,
-            &format!("{rule_name} {premises}{column}"),
-            &proof_sort,
-        )
+        self.mint(stmts, &rule, &format!("{rule_name} {premises}{column}"))
     }
 
     /// A rule proof row naming `prev` — a row of the same head, carrying the body
@@ -378,13 +370,7 @@ impl<'a> ProofInstrumentor<'a> {
         );
         let column = justification.column_expr();
         let link = self.proof_names().rule_link_constructor.clone();
-        let proof_sort = self.proof_sort();
-        self.mint(
-            stmts,
-            &link,
-            &format!("{prev} {bridge} {column}"),
-            &proof_sort,
-        )
+        self.mint(stmts, &link, &format!("{prev} {bridge} {column}"))
     }
 
     /// A built term's connector proof as a proof node, minting the rule proof row
@@ -643,10 +629,9 @@ impl<'a> ProofInstrumentor<'a> {
         }
         let (displaced, decl) = self.packed_proof_constructor(composition.width());
         let spelling = composition.spelling();
-        let proof_sort = self.proof_sort();
         let mut mints = vec![];
         let row = format!("\"{spelling}\" hi_pf_ lo_pf_");
-        let displaced_pf = self.mint(&mut mints, &displaced, &row, &proof_sort);
+        let displaced_pf = self.mint(&mut mints, &displaced, &row);
         let mints_str = mints.join("\n                  ");
         let merge = format!(
             "((let hi_pf_ (proof-of-max old0 old1 new0 new1))
@@ -694,9 +679,8 @@ impl<'a> ProofInstrumentor<'a> {
         // path compression: a->b (pb: a=b), b->c (pc: b=c)  =>  a->c (Trans pb pc: a=c)
         let (compressed_proof_lets, compressed_proof) = if proofs {
             let trans = self.proof_names().eq_trans_constructor.clone();
-            let proof_sort = self.proof_sort();
             let mut mints = vec![];
-            let pf = self.mint(&mut mints, &trans, &format!("{pb} {pc}"), &proof_sort);
+            let pf = self.mint(&mut mints, &trans, &format!("{pb} {pc}"));
             (mints.join("\n                    "), pf)
         } else {
             (String::new(), "()".to_string())
@@ -824,9 +808,8 @@ impl<'a> ProofInstrumentor<'a> {
         };
         let to_ast_view_sort = self.add_to_ast(&view_sort);
 
-        // Record the term's eclass sort (its `view_sort`) so the creation site
-        // in `add_term_and_view` knows which `get-fresh!` to mint from, in both
-        // term and proof mode.
+        // Record the term's eclass sort (its `view_sort`) so a global lookup's
+        // fallback id is minted at the right sort.
         self.egraph
             .proof_state
             .proof_names
@@ -1042,7 +1025,6 @@ impl<'a> ProofInstrumentor<'a> {
     /// reflexive regardless, so calling this at an equality — a `union`'s — would
     /// have the compositions built on it silently drop a real proof.
     fn term_proof_for_justification(&mut self, emit: &mut Emit, fv: &str, to_ast: &str) -> String {
-        let proof_sort = self.proof_sort();
         match emit.justification {
             // The head's own conclusion here is `fv = fv` (`fv`/`to_ast` unused:
             // the proposition comes from the column).
@@ -1057,30 +1039,27 @@ impl<'a> ProofInstrumentor<'a> {
             Justification::MergeIdx(fn_name, p1, p2, idx) => {
                 let merge_idx = self.proof_names().merge_fn_idx_constructor.clone();
                 let row = format!("\"{fn_name}\" {p1} {p2} {idx}");
-                self.mint(emit.stmts, &merge_idx, &row, &proof_sort)
+                self.mint(emit.stmts, &merge_idx, &row)
             }
             Justification::MergeRow(fn_name, p1, p2) => {
                 let merge_row = self.proof_names().merge_fn_row_constructor.clone();
                 let row = format!("\"{fn_name}\" {p1} {p2}");
-                self.mint(emit.stmts, &merge_row, &row, &proof_sort)
+                self.mint(emit.stmts, &merge_row, &row)
             }
         }
     }
 
     /// A `Fiat` proof of `fv = fv`, appending its mints to `stmts`. `to_ast`
-    /// wraps `fv` into the AST of both endpoints.
+    /// wraps `fv` into the one AST node both endpoints name.
     pub(super) fn fiat_reflexive_proof(
         &mut self,
         stmts: &mut Vec<String>,
         fv: &str,
         to_ast: &str,
     ) -> String {
-        let ast_sort = self.proof_names().ast_sort.clone();
-        let proof_sort = self.proof_sort();
-        let a1 = self.mint(stmts, to_ast, fv, &ast_sort);
-        let a2 = self.mint(stmts, to_ast, fv, &ast_sort);
+        let ast = self.mint(stmts, to_ast, fv);
         let fiat = self.proof_names().fiat_constructor.clone();
-        let proof = self.mint(stmts, &fiat, &format!("{a1} {a2}"), &proof_sort);
+        let proof = self.mint(stmts, &fiat, &format!("{ast} {ast}"));
         self.mark_reflexive(&proof);
         proof
     }
@@ -1111,12 +1090,11 @@ impl<'a> ProofInstrumentor<'a> {
         match &e_value.connector {
             Some(Connector::Node(connector)) => {
                 let connector = connector.clone();
-                let proof_sort = self.proof_sort();
                 let sym = self.proof_names().eq_sym_constructor.clone();
                 let trans = self.proof_names().eq_trans_constructor.clone();
-                let sym_conn = self.mint(emit.stmts, &sym, &connector, &proof_sort);
+                let sym_conn = self.mint(emit.stmts, &sym, &connector);
                 let row = format!("{sym_conn} {connector}");
-                self.mint(emit.stmts, &trans, &row, &proof_sort)
+                self.mint(emit.stmts, &trans, &row)
             }
             Some(Connector::Column(column)) => {
                 panic!("a global's value cannot be named by rule head column {column}")
@@ -1264,10 +1242,8 @@ impl<'a> ProofInstrumentor<'a> {
             let spelling = skeleton.spelling();
             (name, format!("\"{spelling}\" {}", columns.join(" ")))
         });
-        let proof_sort = self.proof_sort();
-        let get_fresh = crate::proofs::proof_fresh::GET_FRESH_PRIM_NAME;
-        stmts.push(format!("(let {proof} ({get_fresh} \"{proof_sort}\"))"));
-        stmts.push(format!("(set ({name} {args} {proof}) ())"));
+        let mint = crate::proofs::proof_fresh::mint_prim_name(&name);
+        stmts.push(format!("(let {proof} ({mint} {args}))"));
     }
 
     /// The declarations the compositions written since the last call need, as
@@ -1331,21 +1307,20 @@ impl<'a> ProofInstrumentor<'a> {
         v
     }
 
-    /// Mint a fresh id of `out_sort` and assert the relation row
-    /// `({name} {args_joined} <fresh>)`, appending the `let`/`set` onto `stmts`
-    /// and returning the fresh variable. Terms and proofs are relations rather
-    /// than constructors, so an id is minted explicitly here rather than by a
-    /// constructor call; every minted id keeps its row (nothing is merged away).
+    /// Append the one statement minting a fresh id and asserting the relation
+    /// row `({name} {args_joined} <fresh>)`, returning the fresh variable.
+    /// Every minted id keeps its row: nothing is ever merged away.
     pub(crate) fn mint(
         &mut self,
         stmts: &mut Vec<String>,
         name: &str,
         args_joined: &str,
-        out_sort: &str,
     ) -> String {
         self.emit_pending_lookups(stmts, args_joined);
-        let v = self.fresh_id(stmts, out_sort);
-        stmts.push(format!("(set ({name} {args_joined} {v}) ())"));
+        let v = self.fresh_var();
+        let mint = crate::proofs::proof_fresh::mint_prim_name(name);
+        let sep = if args_joined.is_empty() { "" } else { " " };
+        stmts.push(format!("(let {v} ({mint}{sep}{args_joined}))"));
         v
     }
 
@@ -1375,7 +1350,7 @@ impl<'a> ProofInstrumentor<'a> {
         vx
     }
 
-    /// The `Proof` datatype's sort name (mint target for proof relations).
+    /// The `Proof` datatype's sort name.
     pub(crate) fn proof_sort(&self) -> String {
         self.proof_names().proof_datatype.clone()
     }
@@ -1418,12 +1393,10 @@ impl<'a> ProofInstrumentor<'a> {
     /// Custom functions: mint the term-relation row and record its term proof.
     /// No canonicalization threading.
     fn add_custom_row(&mut self, emit: &mut Emit, func_type: &FuncType, args: &[String]) -> String {
-        let view_sort = self.term_sort(&func_type.name);
         let fv = self.mint(
             emit.stmts,
             &func_type.name,
             &ListDisplay(args, " ").to_string(),
-            &view_sort,
         );
         let view_proof_var = if self.egraph.proof_state.proofs_enabled {
             let to_ast = self.fname_to_ast_name(&func_type.name).to_string();
@@ -1451,15 +1424,9 @@ impl<'a> ProofInstrumentor<'a> {
         func_type: &FuncType,
         args: &[String],
     ) -> String {
-        let view_sort = self.term_sort(&func_type.name);
         let view = self.view_name(&func_type.name);
         let set_if_empty = crate::proofs::proof_fresh::set_if_empty_prim_name(&view);
-        let fv = self.mint(
-            res,
-            &func_type.name,
-            &ListDisplay(args, " ").to_string(),
-            &view_sort,
-        );
+        let fv = self.mint(res, &func_type.name, &ListDisplay(args, " ").to_string());
         let canon = self.fresh_var();
         res.push(format!(
             "(let {canon} ({set_if_empty} {} {fv} ()))",
@@ -1476,15 +1443,9 @@ impl<'a> ProofInstrumentor<'a> {
         args: &[Operand],
     ) -> Natural {
         let to_ast = self.fname_to_ast_name(fname).to_string();
-        let view_sort = self.term_sort(fname);
         let nat_args: Vec<String> = args.iter().map(|a| a.natural.clone()).collect();
         let dedup_args = ids(args);
-        let fv_nat = self.mint(
-            emit.stmts,
-            fname,
-            &ListDisplay(&nat_args, " ").to_string(),
-            &view_sort,
-        );
+        let fv_nat = self.mint(emit.stmts, fname, &ListDisplay(&nat_args, " ").to_string());
         let nat_prf = self.term_proof_for_justification(emit, &fv_nat, &to_ast);
         let composes = emit.head.composes();
         let to_dedup = composes.then(|| {
@@ -1520,7 +1481,6 @@ impl<'a> ProofInstrumentor<'a> {
         args: &[Operand],
         run: Option<HeadRun>,
     ) -> Operand {
-        let view_sort = self.term_sort(&func_type.name);
         let view = self.view_name(&func_type.name);
         let set_if_empty = crate::proofs::proof_fresh::set_if_empty_prim_name(&view);
         let term_proof_constructor = self.term_proof_name(func_type.output().name());
@@ -1539,7 +1499,6 @@ impl<'a> ProofInstrumentor<'a> {
             emit.stmts,
             &func_type.name,
             &ListDisplay(&dedup_args, " ").to_string(),
-            &view_sort,
         );
         let can_prf = match &to_dedup {
             Some(chain) => self.reflexive(chain.clone()),

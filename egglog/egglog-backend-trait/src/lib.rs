@@ -432,6 +432,24 @@ pub trait Backend: Send + Sync {
         ))
     }
 
+    /// Register the mint op for the term-node relation named `table_name`
+    /// (`n_args` argument columns, then the minted id column, then value columns
+    /// filled with `vals`). Returns the [`ExternalFunctionId`] its call sites
+    /// resolve to. Semantics at invoke: mint a fresh id, insert
+    /// `(args…, fresh, vals…)`, and return `fresh`. The default registers a
+    /// panic, so a backend that cannot service it fails with a clear message
+    /// rather than silently.
+    fn register_mint_row(
+        &mut self,
+        table_name: String,
+        _n_args: usize,
+        _vals: Vec<Value>,
+    ) -> ExternalFunctionId {
+        self.new_panic(format!(
+            "this backend does not support minting rows of `{table_name}`"
+        ))
+    }
+
     // -- diagnostics --------------------------------------------------------
 
     /// Set the verbosity of the per-iteration timing report.

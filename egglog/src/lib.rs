@@ -2536,13 +2536,12 @@ impl EGraph {
             batch.push((f_id, frow));
 
             let view_proof = if let Some((ast_id, fiat_id, proof_func_id)) = proof_tables {
-                // Fiat proof of the base fact: `@Fiat(ast(fv), ast(fv))`.
-                let a1 = self.backend.fresh_id();
-                batch.push((ast_id, vec![fv, a1, unit_val]));
-                let a2 = self.backend.fresh_id();
-                batch.push((ast_id, vec![fv, a2, unit_val]));
+                // Fiat proof of the base fact: `@Fiat(ast(fv), ast(fv))`, whose
+                // two sides are the one AST node (see `fiat_reflexive_proof`).
+                let ast = self.backend.fresh_id();
+                batch.push((ast_id, vec![fv, ast, unit_val]));
                 let pf = self.backend.fresh_id();
-                batch.push((fiat_id, vec![a1, a2, pf, unit_val]));
+                batch.push((fiat_id, vec![ast, ast, pf, unit_val]));
                 if let Some(proof_func_id) = proof_func_id {
                     batch.push((proof_func_id, vec![fv, pf]));
                 }

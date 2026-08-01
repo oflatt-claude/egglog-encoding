@@ -121,17 +121,12 @@ impl ProofInstrumentor<'_> {
                 let canon_fact = format!("(= {canon} ({value_prim} {ci}))");
                 if proofs {
                     let congr = self.proof_names().congr_constructor.clone();
-                    let proof_sort = self.proof_sort();
                     let proof_prim = self.container_rebuild_proof_prim(ty);
                     let rebuild_pf = self.fresh_var();
                     // proof_lets: bind the container rebuild proof, then mint the congr proof.
                     let mut lets = vec![format!("(let {rebuild_pf} ({proof_prim} {ci}))")];
-                    let new_pf = self.mint(
-                        &mut lets,
-                        &congr,
-                        &format!("{view_prf} {i} {rebuild_pf}"),
-                        &proof_sort,
-                    );
+                    let new_pf =
+                        self.mint(&mut lets, &congr, &format!("{view_prf} {i} {rebuild_pf}"));
                     (
                         canon_fact,
                         lets.join("\n                             "),
@@ -302,9 +297,8 @@ impl ProofInstrumentor<'_> {
         if args.len() > 1 {
             let (packed, decl) = self.packed_proof_constructor(args.len());
             decls = decl;
-            let proof_sort = self.proof_sort();
             let row = format!("\"{}\" {}", skeleton.spelling(), args.join(" "));
-            proof_acc = self.mint(&mut lets, &packed, &row, &proof_sort);
+            proof_acc = self.mint(&mut lets, &packed, &row);
         }
 
         let pf_arg = if proofs { proof_acc } else { "()".to_string() };
@@ -344,15 +338,9 @@ impl ProofInstrumentor<'_> {
         let canon = self.fresh_var();
         let uf_prf = self.fresh_var();
         let (proof_lets, pf_arg) = if self.proofs_enabled() {
-            let proof_sort = self.proof_sort();
             let congr = self.proof_names().congr_constructor.clone();
             let mut lets = vec![];
-            let pf = self.mint(
-                &mut lets,
-                &congr,
-                &format!("{view_prf} {out_idx} {uf_prf}"),
-                &proof_sort,
-            );
+            let pf = self.mint(&mut lets, &congr, &format!("{view_prf} {out_idx} {uf_prf}"));
             (lets.join("\n                      "), pf)
         } else {
             (String::new(), "()".to_string())
@@ -384,7 +372,6 @@ impl ProofInstrumentor<'_> {
         let canon_fact = format!("(= {canon} ({value_prim} {value_var}))");
         let (proof_lets, pf_arg) = if self.proofs_enabled() {
             let congr = self.proof_names().congr_constructor.clone();
-            let proof_sort = self.proof_sort();
             let proof_prim = self.container_rebuild_proof_prim(&out_ty);
             let rebuild_pf = self.fresh_var();
             let mut lets = vec![format!("(let {rebuild_pf} ({proof_prim} {value_var}))")];
@@ -392,7 +379,6 @@ impl ProofInstrumentor<'_> {
                 &mut lets,
                 &congr,
                 &format!("{view_prf} {out_idx} {rebuild_pf}"),
-                &proof_sort,
             );
             (lets.join("\n                      "), new_pf)
         } else {

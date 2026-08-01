@@ -748,13 +748,15 @@ impl ProofInstrumentor<'_> {
 (sort {proof_datatype} :internal-proof-names {congr_constructor} {congr_all_constructor} {eq_trans_constructor} {eq_sym_constructor} {container_normalize_constructor} {fiat_constructor})
 
 ;; Proof/AST terms are relations, not constructors: the encoding mints a fresh id
-;; (`get-fresh!`) and asserts the row, so congruent duplicates are kept (never
-;; merged away) rather than relying on native congruence. The final column of each
-;; relation is the minted output id.
+;; and asserts the row (both in one `mint-<Relation>!` call), so congruent
+;; duplicates are kept (never merged away) rather than relying on native
+;; congruence. The final column of each relation is the minted output id.
 
 {to_ast_str}
 
-;; Fiat justification for globals and primitives, gives two terms t1 = t2 for the proposition being justified
+;; Fiat justification for globals and primitives, gives two terms t1 = t2 for the
+;; proposition being justified. A reflexive Fiat names the same AST node on both
+;; sides, so `t = t` costs one term node.
 (function {fiat_constructor} ({ast_sort} {ast_sort} {proof_datatype}) Unit :no-merge :internal-hidden :internal-term-node)
 ;; A rule proof written before its head interns anything carries its premises
 ;; inline, in a `Rule_<k>` declared per premise count (see `rule_arity_header`):

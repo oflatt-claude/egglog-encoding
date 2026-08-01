@@ -252,22 +252,20 @@ mod tests {
             let Some(walked) = written.get(rule.name.as_str()) else {
                 continue;
             };
-            // Every rule proof row the head writes: `(set (Rule_k … col fresh) ())`
-            // or `(set (RuleLink prev bridge col fresh) ())`. The column sits just
-            // ahead of the minted id, as a literal or as the `proof-of-max` over
-            // the two columns a `union` orients between.
+            // Every rule proof row the head writes: `(mint-Rule_k! … col)` or
+            // `(mint-RuleLink! prev bridge col)`. The column is the last
+            // argument, as a literal or as the `proof-of-max` over the two
+            // columns a `union` orients between.
             let columns: Vec<i64> = rule
                 .head
                 .0
                 .iter()
-                .filter_map(|action| match action {
-                    ResolvedAction::Set(_, ResolvedCall::Func(func), args, _)
-                        if names.fused_rule_arity(&func.name).is_some()
-                            || func.name == names.rule_link_constructor =>
-                    {
-                        args.get(args.len().checked_sub(2)?)
-                    }
-                    _ => None,
+                .filter_map(|action| {
+                    let (relation, args) = mint_call(action)?;
+                    (names.fused_rule_arity(relation).is_some()
+                        || relation == names.rule_link_constructor)
+                        .then(|| args.last())
+                        .flatten()
                 })
                 .flat_map(|column| {
                     let mut out = vec![];
@@ -356,6 +354,18 @@ mod tests {
                 "rule '{expected}' wrote only unnumbered columns: {covered:?}"
             );
         }
+    }
+
+    /// The relation `action` mints a row of, with the row's arguments (the
+    /// minted id excluded); `None` for any other action.
+    fn mint_call(action: &ResolvedAction) -> Option<(&str, &[ResolvedExpr])> {
+        let ResolvedAction::Let(_, _, ResolvedExpr::Call(_, ResolvedCall::Primitive(prim), args)) =
+            action
+        else {
+            return None;
+        };
+        let relation = crate::proofs::proof_fresh::mint_prim_relation(prim.name())?;
+        Some((relation, args))
     }
 
     /// Every integer literal in `expr`, in order.
@@ -673,27 +683,28 @@ mod tests {
         let rule_name_var = rule_name_vars[0];
 
         // Proof constructors are relations, so each rule proof is emitted as a
-        // `(set (@Rule_1 <rule-name> <premise> <column> <id>) ())` action — the rule
-        // has one body fact — not a call expression. Count those set actions and
-        // check they reuse the hoisted rule-name variable as their first argument.
+        // `(let <id> (mint-@Rule_1! <rule-name> <premise> <column>))` action — the
+        // rule has one body fact. Count those mints and check they reuse the
+        // hoisted rule-name variable as their first argument.
         let rule_uses = rule
             .head
             .0
             .iter()
-            .filter(|action| match action {
-                ResolvedAction::Set(_, ResolvedCall::Func(func), args, _)
-                    if rule_constructors.contains(&func.name) =>
-                {
-                    assert!(
-                        matches!(
-                            args.first(),
-                            Some(ResolvedExpr::Var(_, var)) if var.name == rule_name_var
-                        ),
-                        "generated Rule constructor did not reuse the rule-name variable"
-                    );
-                    true
+            .filter(|action| {
+                let Some((relation, args)) = mint_call(action) else {
+                    return false;
+                };
+                if !rule_constructors.contains(relation) {
+                    return false;
                 }
-                _ => false,
+                assert!(
+                    matches!(
+                        args.first(),
+                        Some(ResolvedExpr::Var(_, var)) if var.name == rule_name_var
+                    ),
+                    "generated Rule constructor did not reuse the rule-name variable"
+                );
+                true
             })
             .count();
         assert!(
@@ -800,12 +811,7 @@ mod tests {
                 .head
                 .0
                 .iter()
-                .filter_map(|action| match action {
-                    ResolvedAction::Set(_, ResolvedCall::Func(func), _, _) => {
-                        names.fused_rule_arity(&func.name)
-                    }
-                    _ => None,
-                })
+                .filter_map(|action| names.fused_rule_arity(mint_call(action)?.0))
                 .max()
                 .unwrap_or_else(|| panic!("rule '{}' wrote no inline rule proof", rule.name));
             recorded.insert(rule.name.clone(), premises);
