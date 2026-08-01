@@ -59,6 +59,17 @@ fn ordered_endpoints(lhs: &Operand, rhs: &Operand) -> (String, String) {
     )
 }
 
+/// What justifies the rows of the `idx`th subexpression of `fname`'s merge body
+/// (see [`ProofInstrumentor::instrument_merge_body`]).
+fn merge_idx(fname: &str, idx: usize) -> Justification {
+    Justification::MergeIdx(
+        fname.to_string(),
+        "old1".to_string(),
+        "new1".to_string(),
+        idx,
+    )
+}
+
 /// The column of `run` holding `proof`. Unnumbered where the site composes
 /// rather than claiming a run.
 fn head_column(run: Option<HeadRun>, proof: HeadProof) -> HeadColumn {
@@ -93,6 +104,44 @@ impl Scope {
                 },
             );
         }
+    }
+}
+
+/// Where the encoder is writing: the statements it appends to, the head those
+/// statements belong to, and what justifies the rows they mint.
+struct Emit<'a> {
+    stmts: &'a mut Vec<String>,
+    head: &'a mut Head,
+    justification: &'a Justification,
+}
+
+impl<'a> Emit<'a> {
+    /// The same place, writing rows `justification` justifies instead — a
+    /// numbered column of the same rule, or a proof composed on the spot.
+    fn justified_by<'b>(&'b mut self, justification: &'b Justification) -> Emit<'b> {
+        Emit {
+            stmts: &mut *self.stmts,
+            head: &mut *self.head,
+            justification,
+        }
+    }
+
+    /// Write at a position the head concludes nothing about, per
+    /// [`Head::composing`].
+    fn composing<R>(&mut self, lower: impl FnOnce(&mut Emit) -> R) -> R {
+        let Emit {
+            stmts,
+            head,
+            justification,
+        } = self;
+        let justification = *justification;
+        head.composing(|head| {
+            lower(&mut Emit {
+                stmts,
+                head,
+                justification,
+            })
+        })
     }
 }
 
@@ -255,28 +304,19 @@ impl<'a> ProofInstrumentor<'a> {
         Ok(lowered)
     }
 
-    /// Mint a `Rule` or `Fiat` proof of the equality `a = b`, appending the mints
-    /// to `stmts`. Only `Fiat` names the two endpoints' ASTs; a rule proof's
-    /// proposition comes from its column. Panics on merge justifications (merge
-    /// bodies contain no `union` actions).
-    fn edge_proof(
-        &mut self,
-        stmts: &mut Vec<String>,
-        head: &mut Head,
-        to_ast: &str,
-        a: &str,
-        b: &str,
-        justification: &Justification,
-    ) -> String {
-        match justification {
-            Justification::Rule(..) => self.rule_row(stmts, head, justification),
+    /// Mint a `Rule` or `Fiat` proof of the equality `a = b`. Only `Fiat` names
+    /// the two endpoints' ASTs; a rule proof's proposition comes from its column.
+    /// Panics on merge justifications (merge bodies contain no `union` actions).
+    fn edge_proof(&mut self, emit: &mut Emit, to_ast: &str, a: &str, b: &str) -> String {
+        match emit.justification {
+            Justification::Rule(..) => self.rule_row(emit),
             Justification::Fiat => {
                 let ast_sort = self.proof_names().ast_sort.clone();
                 let proof_sort = self.proof_sort();
-                let a1 = self.mint(stmts, to_ast, a, &ast_sort);
-                let a2 = self.mint(stmts, to_ast, b, &ast_sort);
+                let a1 = self.mint(emit.stmts, to_ast, a, &ast_sort);
+                let a2 = self.mint(emit.stmts, to_ast, b, &ast_sort);
                 let fiat = self.proof_names().fiat_constructor.clone();
-                self.mint(stmts, &fiat, &format!("{a1} {a2}"), &proof_sort)
+                self.mint(emit.stmts, &fiat, &format!("{a1} {a2}"), &proof_sort)
             }
             Justification::MergeIdx(..) | Justification::MergeRow(..) => panic!(
                 "Merge functions do not include union actions, so proof should not be by merge"
@@ -284,24 +324,20 @@ impl<'a> ProofInstrumentor<'a> {
         }
     }
 
-    /// Mint the rule proof row `justification` names. Proof conversion derives the
-    /// proposition from the column alone, so the row stores no terms.
+    /// Mint the rule proof row the emit's justification names. Proof conversion
+    /// derives the proposition from the column alone, so the row stores no terms.
     ///
     /// A head's first row carries the body premises inline; every row after the
     /// head has interned a subterm chains onto the row before that interning,
     /// adding its bridge. So a row names exactly the bridges the head had
     /// recorded when it minted the row.
-    fn rule_row(
-        &mut self,
-        stmts: &mut Vec<String>,
-        head: &mut Head,
-        justification: &Justification,
-    ) -> String {
-        let proof = match head.link() {
-            None => self.inline_rule_row(stmts, justification),
-            Some((prev, bridge)) => self.link_rule_row(stmts, justification, &prev, &bridge),
+    fn rule_row(&mut self, emit: &mut Emit) -> String {
+        let justification = emit.justification;
+        let proof = match emit.head.link() {
+            None => self.inline_rule_row(emit.stmts, justification),
+            Some((prev, bridge)) => self.link_rule_row(emit.stmts, justification, &prev, &bridge),
         };
-        head.minted(&proof);
+        emit.head.minted(&proof);
         proof
     }
 
@@ -353,38 +389,24 @@ impl<'a> ProofInstrumentor<'a> {
 
     /// A built term's connector proof as a proof node, minting the rule proof row
     /// for a [`Connector::Column`].
-    fn connector_node(
-        &mut self,
-        stmts: &mut Vec<String>,
-        head: &mut Head,
-        justification: &Justification,
-        connector: &Connector,
-    ) -> String {
+    fn connector_node(&mut self, emit: &mut Emit, connector: &Connector) -> String {
         match connector {
             Connector::Node(node) => node.clone(),
             Connector::Column(column) => {
-                let connector = justification.at(HeadColumn::Numbered(column.to_string()));
-                self.rule_row(stmts, head, &connector)
+                let connector = emit
+                    .justification
+                    .at(HeadColumn::Numbered(column.to_string()));
+                self.rule_row(&mut emit.justified_by(&connector))
             }
         }
     }
 
-    /// Mark two things as equal, adding proof if proofs are enabled.
-    /// Emits any proof-relation mints onto `stmts` and returns the `(set @UF ...)`
-    /// action, which the caller must emit after `stmts`.
-    ///
-    /// `run` is the columns the walk reserved for this `union` (see
-    /// [`HeadPosition::Union`]).
-    pub(crate) fn union(
-        &mut self,
-        stmts: &mut Vec<String>,
-        head: &mut Head,
-        type_name: &str,
-        lhs: &Operand,
-        rhs: &Operand,
-        justification: &Justification,
-    ) -> String {
-        let run = head.claim(HeadPosition::Union);
+    /// Mark two things as equal, adding proof if proofs are enabled. Claims the
+    /// head's [`HeadPosition::Union`] columns, writes any proof-relation mints,
+    /// and returns the `(set @UF ...)` action, which the caller must emit after
+    /// them.
+    fn union(&mut self, emit: &mut Emit, type_name: &str, lhs: &Operand, rhs: &Operand) -> String {
+        let run = emit.head.claim(HeadPosition::Union);
         let uf_name = self.uf_name(type_name);
         let (larger, smaller) = ordered_endpoints(lhs, rhs);
         // `@UF : (S) -> (S, {Unit|Proof})` is keyed by the larger endpoint; its
@@ -392,10 +414,10 @@ impl<'a> ProofInstrumentor<'a> {
         // `larger = smaller` (`()` in term mode).
         let proof = if !self.egraph.proof_state.proofs_enabled {
             "()".to_string()
-        } else if head.composes() {
-            self.composed_union_edge(stmts, head, type_name, lhs, rhs)
+        } else if emit.head.composes() {
+            self.composed_union_edge(emit, type_name, lhs, rhs)
         } else {
-            self.skeleton_union_edge(stmts, head, lhs, rhs, justification, run)
+            self.skeleton_union_edge(emit, lhs, rhs, run)
         };
         format!("(set ({uf_name} {larger}) (values {smaller} {proof}))")
     }
@@ -405,11 +427,9 @@ impl<'a> ProofInstrumentor<'a> {
     /// so one row records it.
     fn skeleton_union_edge(
         &mut self,
-        stmts: &mut Vec<String>,
-        head: &mut Head,
+        emit: &mut Emit,
         lhs: &Operand,
         rhs: &Operand,
-        justification: &Justification,
         run: Option<HeadRun>,
     ) -> String {
         let run = run.expect("a rule head's unions are numbered");
@@ -423,19 +443,15 @@ impl<'a> ProofInstrumentor<'a> {
             rhs.value,
             run.column(HeadProof::EdgeFromRhs)
         );
-        self.rule_row(
-            stmts,
-            head,
-            &justification.at(HeadColumn::Numbered(oriented)),
-        )
+        let oriented = emit.justification.at(HeadColumn::Numbered(oriented));
+        self.rule_row(&mut emit.justified_by(&oriented))
     }
 
     /// The `larger = smaller` proof a `union` outside a rule head stores in `@UF`,
     /// composed here rather than recorded: nothing downstream rebuilds it.
     fn composed_union_edge(
         &mut self,
-        stmts: &mut Vec<String>,
-        head: &mut Head,
+        emit: &mut Emit,
         type_name: &str,
         lhs: &Operand,
         rhs: &Operand,
@@ -446,19 +462,15 @@ impl<'a> ProofInstrumentor<'a> {
             .get(type_name)
             .unwrap()
             .clone();
+        // No column names any of these rows, so each states its own conclusion.
+        let fiat = Justification::Fiat;
+        let emit = &mut emit.justified_by(&fiat);
 
         // Neither operand was a canonicalized constructor term (no connector), so
         // both e-classes' ASTs are stable: build the edge proof directly over them.
         if lhs.connector.is_none() && rhs.connector.is_none() {
             let (larger, smaller) = ordered_endpoints(lhs, rhs);
-            return self.edge_proof(
-                stmts,
-                head,
-                &to_ast_constructor,
-                &larger,
-                &smaller,
-                &Justification::Fiat,
-            );
+            return self.edge_proof(emit, &to_ast_constructor, &larger, &smaller);
         }
 
         // A canonicalized operand's deduped e-class may already be unioned with a
@@ -469,44 +481,31 @@ impl<'a> ProofInstrumentor<'a> {
         //
         // Built over the operands in source order, so it states the conclusion
         // forwards.
-        let base_proof = self.edge_proof(
-            stmts,
-            head,
-            &to_ast_constructor,
-            &lhs.natural,
-            &rhs.natural,
-            &Justification::Fiat,
-        );
+        let base_proof = self.edge_proof(emit, &to_ast_constructor, &lhs.natural, &rhs.natural);
 
         // The shared natural form is the canonicalized side's natural (pinned
         // AST), so the Trans goes through it rather than through the deduped
         // e-class.
-        let lhs_conn = lhs
-            .connector
-            .as_ref()
-            .map(|c| self.connector_node(stmts, head, &Justification::Fiat, c));
-        let rhs_conn = rhs
-            .connector
-            .as_ref()
-            .map(|c| self.connector_node(stmts, head, &Justification::Fiat, c));
+        let lhs_conn = lhs.connector.as_ref().map(|c| self.connector_node(emit, c));
+        let rhs_conn = rhs.connector.as_ref().map(|c| self.connector_node(emit, c));
         let (lhs_to_shared, rhs_to_shared) = self.union_to_shared(base_proof, lhs_conn, rhs_conn);
         // `proof-of-max`/`min` read the two sides directly rather than through a
         // mint, so bind them here.
-        self.emit_pending_group(stmts, &lhs_to_shared);
-        self.emit_pending_group(stmts, &rhs_to_shared);
+        self.emit_pending_group(emit.stmts, &lhs_to_shared);
+        self.emit_pending_group(emit.stmts, &rhs_to_shared);
         let (lhs, rhs) = (&lhs.value, &rhs.value);
         let max_pf = self.fresh_var();
-        stmts.push(format!(
+        emit.stmts.push(format!(
             "(let {max_pf} (proof-of-max {lhs} {lhs_to_shared} {rhs} {rhs_to_shared}))"
         ));
         let min_pf = self.fresh_var();
-        stmts.push(format!(
+        emit.stmts.push(format!(
             "(let {min_pf} (proof-of-min {lhs} {lhs_to_shared} {rhs} {rhs_to_shared}))"
         ));
         let sym_min = self.mint_sym(&min_pf);
         let edge = self.mint_trans(&max_pf, &sym_min);
         // The `@UF` row below is the caller's, not a mint of ours.
-        self.emit_pending_group(stmts, &edge);
+        self.emit_pending_group(emit.stmts, &edge);
         edge
     }
 
@@ -518,11 +517,9 @@ impl<'a> ProofInstrumentor<'a> {
     /// Returns the guest's term, which the caller binds like any other `let`.
     fn instrument_construct_into(
         &mut self,
-        res: &mut Vec<String>,
-        head: &mut Head,
+        emit: &mut Emit,
         expr: &ResolvedExpr,
         target: &Operand,
-        justification: &Justification,
         scope: &Scope,
     ) -> Operand {
         let (func_type, args) = constructor_operand(expr)
@@ -530,23 +527,23 @@ impl<'a> ProofInstrumentor<'a> {
         let ctor_name = func_type.name.clone();
         let child_vals: Vec<Operand> = args
             .iter()
-            .map(|arg| self.instrument_action_expr(arg, res, head, justification, scope))
+            .map(|arg| self.instrument_action_expr(arg, emit, scope))
             .collect();
-        let run = head.claim(HeadPosition::Guest);
+        let run = emit.head.claim(HeadPosition::Guest);
         let target_id = &target.value;
 
         if !self.proofs_enabled() {
             let child_ids = ids(&child_vals);
-            res.push(format!(
+            emit.stmts.push(format!(
                 "(set ({ctor_name} {} {target_id}) ())",
                 ListDisplay(&child_ids, " ")
             ));
-            res.push(self.update_fd_view(&ctor_name, &child_ids, target_id, "()"));
+            let update = self.update_fd_view(&ctor_name, &child_ids, target_id, "()");
+            emit.stmts.push(update);
             return Operand::plain(target_id.clone());
         }
 
         let sort_name = func_type.output().name().to_string();
-        let view_sort = self.term_sort(&ctor_name);
         let sort_ast = self
             .proof_names()
             .sort_to_ast_constructor
@@ -554,43 +551,33 @@ impl<'a> ProofInstrumentor<'a> {
             .expect("sort AST")
             .clone();
         let view = self.view_name(&ctor_name);
+        let own = emit.justification.at(head_column(run, HeadProof::Own));
         let Natural {
             dedup_args,
             fv_nat,
             nat_prf,
             to_dedup: nat_to_dedup,
-        } = self.build_natural_with_congr(
-            res,
-            head,
-            &ctor_name,
-            &view_sort,
-            &child_vals,
-            &justification.at(head_column(run, HeadProof::Own)),
-        );
+        } = self.build_natural_with_congr(&mut emit.justified_by(&own), &ctor_name, &child_vals);
         let term_proof_ctor = self.term_proof_name(&sort_name);
-        res.push(format!("(set ({term_proof_ctor} {fv_nat}) {nat_prf})"));
+        emit.stmts
+            .push(format!("(set ({term_proof_ctor} {fv_nat}) {nat_prf})"));
         let view_proof = match &nat_to_dedup {
             Some(chain) => {
-                let edge = self.edge_proof(
-                    res,
-                    head,
-                    &sort_ast,
-                    &target.natural,
-                    &fv_nat,
-                    justification,
-                );
+                let edge = self.edge_proof(emit, &sort_ast, &target.natural, &fv_nat);
                 let target_conn = target
                     .connector
                     .as_ref()
-                    .map(|conn| self.connector_node(res, head, justification, conn));
+                    .map(|conn| self.connector_node(emit, conn));
                 self.guest_view(edge, chain.clone(), target_conn)
             }
             // The guest's columns plus its bridge premises determine the whole
             // composition, so one row records it and the edge proof it is built
             // from needs no row of its own.
             None => {
-                let view = justification.at(head_column(run, HeadProof::GuestView));
-                self.rule_row(res, head, &view)
+                let view = emit
+                    .justification
+                    .at(head_column(run, HeadProof::GuestView));
+                self.rule_row(&mut emit.justified_by(&view))
             }
         };
         // The guest's term keeps its own id (`fv_nat`); only the view VALUE uses
@@ -599,8 +586,8 @@ impl<'a> ProofInstrumentor<'a> {
         // picks for `target` ambiguous (it reads term rows, not views).
         let dedup_disp = ListDisplay(&dedup_args, " ").to_string();
         // The view row below carries the proof directly, not through a mint.
-        self.emit_pending_group(res, &view_proof);
-        res.push(format!(
+        self.emit_pending_group(emit.stmts, &view_proof);
+        emit.stmts.push(format!(
             "(set ({view} {dedup_disp}) (values {target_id} {view_proof}))"
         ));
         let guest_conn = match &nat_to_dedup {
@@ -767,20 +754,22 @@ impl<'a> ProofInstrumentor<'a> {
         // A merge body concludes nothing a rule proof row can be named by, so
         // its proofs are composed here.
         let mut head = Head::composed();
+        // The row the whole body computes; each subexpression states its own
+        // `MergeIdx` instead.
+        let row = Justification::MergeRow(name.clone(), "old1".to_string(), "new1".to_string());
+        let mut emit = Emit {
+            stmts: &mut body_code,
+            head: &mut head,
+            justification: &row,
+        };
         let merged = self
-            .instrument_merge_body(&merge.result, &mut body_code, &mut head, &name, &mut idx)
+            .instrument_merge_body(&mut emit, &merge.result, &name, &mut idx)
             .value;
         // The merge body's outermost term records a connector nothing composes
         // with; whatever is still deferred reached no statement.
         self.drop_pending_lookups();
         let row_proof = if self.egraph.proof_state.proofs_enabled {
-            let fresh = self.term_proof_for_justification(
-                &mut body_code,
-                &mut head,
-                "",
-                "",
-                &Justification::MergeRow(name.clone(), "old1".to_string(), "new1".to_string()),
-            );
+            let fresh = self.term_proof_for_justification(&mut emit, "", "");
             // Keep the proof column stable: when the merged output equals a
             // colliding premise's output (as with idempotent `min`/`max`/... merges
             // that keep one input), reuse that premise's existing proof so the row
@@ -930,20 +919,11 @@ impl<'a> ProofInstrumentor<'a> {
     // Every proof minted here is named by the column the walk is at, so an
     // action's operands are instrumented before the columns the action itself
     // claims (see [`crate::proofs::proof_head`]).
-    fn instrument_action(
-        &mut self,
-        action: &ResolvedAction,
-        head: &mut Head,
-        justification: &Justification,
-        scope: &mut Scope,
-    ) -> Vec<String> {
-        let mut res = vec![];
-
+    fn instrument_action(&mut self, action: &ResolvedAction, emit: &mut Emit, scope: &mut Scope) {
         match action {
             ResolvedAction::Let(_span, v, generic_expr) => {
-                let bound =
-                    self.instrument_action_expr(generic_expr, &mut res, head, justification, scope);
-                res.push(format!("(let {} {})", v.name, bound.value));
+                let bound = self.instrument_action_expr(generic_expr, emit, scope);
+                emit.stmts.push(format!("(let {} {})", v.name, bound.value));
                 scope.bind(&v.name, &bound);
             }
             ResolvedAction::Set(_span, h, generic_exprs, generic_expr) => {
@@ -955,13 +935,7 @@ impl<'a> ProofInstrumentor<'a> {
 
                 let mut exprs = vec![];
                 for e in generic_exprs.iter().chain(std::iter::once(generic_expr)) {
-                    exprs.push(self.instrument_action_expr(
-                        e,
-                        &mut res,
-                        head,
-                        justification,
-                        scope,
-                    ));
+                    exprs.push(self.instrument_action_expr(e, emit, scope));
                 }
                 // The row `(f args… value)` is the `set`'s own conclusion, and its
                 // only column. Building a constructor claims two more, so a `set`
@@ -971,7 +945,7 @@ impl<'a> ProofInstrumentor<'a> {
                     FunctionSubtype::Constructor,
                     "`set` on a constructor should have been rejected by typechecking"
                 );
-                let run = head.claim(HeadPosition::Set);
+                let run = emit.head.claim(HeadPosition::Set);
 
                 // Global definition `(set (x) e)`: x is a nullary `:internal-let`
                 // function aliasing e. Store e's value+proof directly in x's FD view
@@ -981,25 +955,21 @@ impl<'a> ProofInstrumentor<'a> {
                 if generic_exprs.is_empty() && self.egraph.type_info.is_global(&func_type.name) {
                     let e_value = exprs.pop().expect("a set has a value");
                     let proof = if self.proofs_enabled() {
-                        self.global_value_proof(&mut res, head, func_type, &e_value, justification)
+                        self.global_value_proof(emit, func_type, &e_value)
                     } else {
                         "()".to_string()
                     };
                     // Term row (`x`'s e-class is e's) + the FD view `() -> (val, proof)`.
                     let e_value = e_value.value;
-                    res.push(format!("(set ({} {e_value}) ())", func_type.name));
-                    res.push(self.update_fd_view(&func_type.name, &[], &e_value, &proof));
-                    return res;
+                    emit.stmts
+                        .push(format!("(set ({} {e_value}) ())", func_type.name));
+                    let update = self.update_fd_view(&func_type.name, &[], &e_value, &proof);
+                    emit.stmts.push(update);
+                    return;
                 }
 
-                let (add_code, _fv) = self.add_term_and_view(
-                    head,
-                    func_type,
-                    &exprs,
-                    &justification.at(head_column(run, HeadProof::Own)),
-                    run,
-                );
-                res.extend(add_code);
+                let own = emit.justification.at(head_column(run, HeadProof::Own));
+                self.add_term_and_view(&mut emit.justified_by(&own), func_type, &exprs, run);
             }
             ResolvedAction::Change(_span, change, h, generic_exprs) => {
                 if let ResolvedCall::Func(func_type) = h {
@@ -1010,18 +980,16 @@ impl<'a> ProofInstrumentor<'a> {
                     // `change` concludes nothing, so its arguments hold no column
                     // for conversion to read back: they compose like a top-level
                     // action, and the head's numbering resumes after them.
-                    let children = head.composing(|head| {
+                    let children = emit.composing(|emit| {
                         generic_exprs
                             .iter()
-                            .map(|e| {
-                                self.instrument_action_expr(e, &mut res, head, justification, scope)
-                            })
+                            .map(|e| self.instrument_action_expr(e, emit, scope))
                             .collect::<Vec<_>>()
                     });
 
                     // The marker is a `Unit` relation, so insert a row keyed on the
                     // children with `set` (rather than a constructor application).
-                    res.push(format!(
+                    emit.stmts.push(format!(
                         "(set ({symbol} {}) ())",
                         ListDisplay(ids(&children), " ")
                     ));
@@ -1035,96 +1003,66 @@ impl<'a> ProofInstrumentor<'a> {
                 // A union whose operand is a freshly-built constructor term is
                 // optimized upstream in `instrument_actions`; this arm handles
                 // the remaining general unions.
-                let v1 =
-                    self.instrument_action_expr(generic_expr, &mut res, head, justification, scope);
-                let v2 = self.instrument_action_expr(
-                    generic_expr1,
-                    &mut res,
-                    head,
-                    justification,
-                    scope,
-                );
+                let v1 = self.instrument_action_expr(generic_expr, emit, scope);
+                let v2 = self.instrument_action_expr(generic_expr1, emit, scope);
                 let ot = generic_expr.output_type();
                 let type_name = ot.name();
-                let unioned = self.union(&mut res, head, type_name, &v1, &v2, justification);
-                res.push(unioned);
+                let unioned = self.union(emit, type_name, &v1, &v2);
+                emit.stmts.push(unioned);
             }
             ResolvedAction::Panic(..) => {
-                res.push(format!("{action}"));
+                emit.stmts.push(format!("{action}"));
             }
             ResolvedAction::Expr(_span, generic_expr) => {
-                self.instrument_action_expr(generic_expr, &mut res, head, justification, scope);
+                self.instrument_action_expr(generic_expr, emit, scope);
             }
         }
-
-        res
     }
 
-    /// Anchor a container's term-proof: mint a proof of `fv = fv` under
-    /// `justification` and record it in the container sort's `<CSort>Proof`
-    /// table (the base the container rebuild composes from).
-    fn anchor_container_term_proof(
-        &mut self,
-        stmts: &mut Vec<String>,
-        head: &mut Head,
-        fv: &str,
-        csort: &str,
-        justification: &Justification,
-    ) {
+    /// Anchor a container's term-proof: mint a proof of `fv = fv` and record it
+    /// in the container sort's `<CSort>Proof` table (the base the container
+    /// rebuild composes from).
+    fn anchor_container_term_proof(&mut self, emit: &mut Emit, fv: &str, csort: &str) {
         let to_ast = self
             .proof_names()
             .sort_to_ast_constructor
             .get(csort)
             .unwrap()
             .clone();
-        let proof_var = self.term_proof_for_justification(stmts, head, fv, &to_ast, justification);
+        let proof_var = self.term_proof_for_justification(emit, fv, &to_ast);
         let cproof = self.term_proof_name(csort);
-        stmts.push(format!("(set ({cproof} {fv}) {proof_var})"));
+        emit.stmts
+            .push(format!("(set ({cproof} {fv}) {proof_var})"));
     }
 
-    /// A proof of `fv = fv` under `justification`, appending its mints to `stmts`.
+    /// A proof of `fv = fv` under the emit's justification.
     ///
     /// The caller must be at a position whose own conclusion is reflexive: a rule
     /// justification's proof states whatever its column says and is marked
     /// reflexive regardless, so calling this at an equality — a `union`'s — would
     /// have the compositions built on it silently drop a real proof.
-    pub(super) fn term_proof_for_justification(
-        &mut self,
-        stmts: &mut Vec<String>,
-        head: &mut Head,
-        fv: &str,
-        to_ast: &str,
-        justification: &Justification,
-    ) -> String {
+    fn term_proof_for_justification(&mut self, emit: &mut Emit, fv: &str, to_ast: &str) -> String {
         let proof_sort = self.proof_sort();
-        match justification {
+        match emit.justification {
             // The head's own conclusion here is `fv = fv` (`fv`/`to_ast` unused:
             // the proposition comes from the column).
             Justification::Rule(..) => {
-                let proof = self.rule_row(stmts, head, justification);
+                let proof = self.rule_row(emit);
                 self.mark_reflexive(&proof);
                 proof
             }
-            Justification::Fiat => self.fiat_reflexive_proof(stmts, fv, to_ast),
+            Justification::Fiat => self.fiat_reflexive_proof(emit.stmts, fv, to_ast),
             // Term-free: no AST minted (`fv`/`to_ast` unused). The checker
             // reconstructs the conclusion from the merge body + premise outputs.
             Justification::MergeIdx(fn_name, p1, p2, idx) => {
                 let merge_idx = self.proof_names().merge_fn_idx_constructor.clone();
-                self.mint(
-                    stmts,
-                    &merge_idx,
-                    &format!("\"{fn_name}\" {p1} {p2} {idx}"),
-                    &proof_sort,
-                )
+                let row = format!("\"{fn_name}\" {p1} {p2} {idx}");
+                self.mint(emit.stmts, &merge_idx, &row, &proof_sort)
             }
             Justification::MergeRow(fn_name, p1, p2) => {
                 let merge_row = self.proof_names().merge_fn_row_constructor.clone();
-                self.mint(
-                    stmts,
-                    &merge_row,
-                    &format!("\"{fn_name}\" {p1} {p2}"),
-                    &proof_sort,
-                )
+                let row = format!("\"{fn_name}\" {p1} {p2}");
+                self.mint(emit.stmts, &merge_row, &row, &proof_sort)
             }
         }
     }
@@ -1165,11 +1103,9 @@ impl<'a> ProofInstrumentor<'a> {
     /// node the encoder minted, never a rule head's column.
     fn global_value_proof(
         &mut self,
-        res: &mut Vec<String>,
-        head: &mut Head,
+        emit: &mut Emit,
         func_type: &FuncType,
         e_value: &Operand,
-        justification: &Justification,
     ) -> String {
         let value = &e_value.value;
         match &e_value.connector {
@@ -1178,15 +1114,16 @@ impl<'a> ProofInstrumentor<'a> {
                 let proof_sort = self.proof_sort();
                 let sym = self.proof_names().eq_sym_constructor.clone();
                 let trans = self.proof_names().eq_trans_constructor.clone();
-                let sym_conn = self.mint(res, &sym, &connector, &proof_sort);
-                self.mint(res, &trans, &format!("{sym_conn} {connector}"), &proof_sort)
+                let sym_conn = self.mint(emit.stmts, &sym, &connector, &proof_sort);
+                let row = format!("{sym_conn} {connector}");
+                self.mint(emit.stmts, &trans, &row, &proof_sort)
             }
             Some(Connector::Column(column)) => {
                 panic!("a global's value cannot be named by rule head column {column}")
             }
             None => {
                 let to_ast = self.fname_to_ast_name(&func_type.name).to_string();
-                self.term_proof_for_justification(res, head, value, &to_ast, justification)
+                self.term_proof_for_justification(emit, value, &to_ast)
             }
         }
     }
@@ -1453,54 +1390,44 @@ impl<'a> ProofInstrumentor<'a> {
             .clone()
     }
 
-    /// Return some code adding to the term and view tables, and a variable for
-    /// the created term. For constructors, `args` excludes the eclass of the
-    /// resulting term (it may not exist yet); for custom functions, `args`
-    /// includes all arguments, output included.
+    /// Add to the term and view tables, returning the created term. For
+    /// constructors, `args` excludes the eclass of the resulting term (it may not
+    /// exist yet); for custom functions, `args` includes all arguments, output
+    /// included.
     ///
     /// `run` is the columns the caller claimed for the position it is at; only a
     /// constructor reads past the own conclusion the caller already named.
     fn add_term_and_view(
         &mut self,
-        head: &mut Head,
+        emit: &mut Emit,
         func_type: &FuncType,
         args: &[Operand],
-        justification: &Justification,
         run: Option<HeadRun>,
-    ) -> (Vec<String>, Operand) {
-        let mut res = vec![];
-        let var = if func_type.subtype != FunctionSubtype::Constructor {
-            let fv = self.add_custom_row(&mut res, head, func_type, &ids(args), justification);
+    ) -> Operand {
+        if func_type.subtype != FunctionSubtype::Constructor {
+            let fv = self.add_custom_row(emit, func_type, &ids(args));
             Operand::plain(fv)
         } else if !self.egraph.proof_state.proofs_enabled {
-            let canon = self.add_constructor_term_only(&mut res, func_type, &ids(args));
+            let canon = self.add_constructor_term_only(emit.stmts, func_type, &ids(args));
             Operand::plain(canon)
         } else {
-            self.add_constructor_with_proof(&mut res, head, func_type, args, justification, run)
-        };
-        (res, var)
+            self.add_constructor_with_proof(emit, func_type, args, run)
+        }
     }
 
     /// Custom functions: mint the term-relation row and record its term proof.
     /// No canonicalization threading.
-    fn add_custom_row(
-        &mut self,
-        res: &mut Vec<String>,
-        head: &mut Head,
-        func_type: &FuncType,
-        args: &[String],
-        justification: &Justification,
-    ) -> String {
+    fn add_custom_row(&mut self, emit: &mut Emit, func_type: &FuncType, args: &[String]) -> String {
         let view_sort = self.term_sort(&func_type.name);
         let fv = self.mint(
-            res,
+            emit.stmts,
             &func_type.name,
             &ListDisplay(args, " ").to_string(),
             &view_sort,
         );
         let view_proof_var = if self.egraph.proof_state.proofs_enabled {
             let to_ast = self.fname_to_ast_name(&func_type.name).to_string();
-            self.term_proof_for_justification(res, head, &fv, &to_ast, justification)
+            self.term_proof_for_justification(emit, &fv, &to_ast)
         } else {
             "()".to_string()
         };
@@ -1510,7 +1437,7 @@ impl<'a> ProofInstrumentor<'a> {
         // premise `MergeRow`/`MergeIdx` reconstruct their conclusion from.
         let (output, children) = args.split_last().expect("custom set needs an output");
         let update = self.update_fd_view(&func_type.name, children, output, &view_proof_var);
-        res.push(update);
+        emit.stmts.push(update);
         fv
     }
 
@@ -1544,28 +1471,27 @@ impl<'a> ProofInstrumentor<'a> {
     /// Mint a constructor's natural node and the proofs about it.
     fn build_natural_with_congr(
         &mut self,
-        res: &mut Vec<String>,
-        head: &mut Head,
+        emit: &mut Emit,
         fname: &str,
-        view_sort: &str,
         args: &[Operand],
-        justification: &Justification,
     ) -> Natural {
         let to_ast = self.fname_to_ast_name(fname).to_string();
+        let view_sort = self.term_sort(fname);
         let nat_args: Vec<String> = args.iter().map(|a| a.natural.clone()).collect();
         let dedup_args = ids(args);
         let fv_nat = self.mint(
-            res,
+            emit.stmts,
             fname,
             &ListDisplay(&nat_args, " ").to_string(),
-            view_sort,
+            &view_sort,
         );
-        let nat_prf = self.term_proof_for_justification(res, head, &fv_nat, &to_ast, justification);
-        let to_dedup = head.composes().then(|| {
+        let nat_prf = self.term_proof_for_justification(emit, &fv_nat, &to_ast);
+        let composes = emit.head.composes();
+        let to_dedup = composes.then(|| {
             let mut steps = vec![];
             for (i, arg) in args.iter().enumerate() {
                 if let Some(conn) = &arg.connector {
-                    steps.push((i, self.connector_node(res, head, justification, conn)));
+                    steps.push((i, self.connector_node(emit, conn)));
                 }
             }
             self.canonicalize(nat_prf.clone(), steps)
@@ -1589,11 +1515,9 @@ impl<'a> ProofInstrumentor<'a> {
     /// `run` is the [`HeadPosition::Built`] columns the caller claimed.
     fn add_constructor_with_proof(
         &mut self,
-        res: &mut Vec<String>,
-        head: &mut Head,
+        emit: &mut Emit,
         func_type: &FuncType,
         args: &[Operand],
-        justification: &Justification,
         run: Option<HeadRun>,
     ) -> Operand {
         let view_sort = self.term_sort(&func_type.name);
@@ -1605,22 +1529,14 @@ impl<'a> ProofInstrumentor<'a> {
         // view's congruence `:merge` can never move it, and the proof of the shape the
         // head wrote stays stated over the ids the head built. `fv_can` is a separate
         // node even when no child changed.
-        let natural = self.build_natural_with_congr(
-            res,
-            head,
-            &func_type.name,
-            &view_sort,
-            args,
-            justification,
-        );
         let Natural {
             dedup_args,
             fv_nat,
             nat_prf,
             to_dedup,
-        } = natural;
+        } = self.build_natural_with_congr(emit, &func_type.name, args);
         let fv_can = self.mint(
-            res,
+            emit.stmts,
             &func_type.name,
             &ListDisplay(&dedup_args, " ").to_string(),
             &view_sort,
@@ -1629,8 +1545,10 @@ impl<'a> ProofInstrumentor<'a> {
             Some(chain) => self.reflexive(chain.clone()),
             // One row records the composition proof conversion rebuilds.
             None => {
-                let canonical = justification.at(head_column(run, HeadProof::Canonical));
-                self.rule_row(res, head, &canonical)
+                let canonical = emit
+                    .justification
+                    .at(head_column(run, HeadProof::Canonical));
+                self.rule_row(&mut emit.justified_by(&canonical))
             }
         };
 
@@ -1641,23 +1559,23 @@ impl<'a> ProofInstrumentor<'a> {
         let view_proof = crate::proofs::proof_fresh::view_proof_prim_name(&view);
         let dedup_args = ListDisplay(&dedup_args, " ");
         // The three statements below read `can_prf` directly, not through a mint.
-        self.emit_pending_group(res, &can_prf);
-        res.push(format!(
+        self.emit_pending_group(emit.stmts, &can_prf);
+        emit.stmts.push(format!(
             "(set ({term_proof_constructor} {fv_nat}) {nat_prf})"
         ));
-        res.push(format!(
+        emit.stmts.push(format!(
             "(set ({term_proof_constructor} {fv_can}) {can_prf})"
         ));
-        res.push(format!(
+        emit.stmts.push(format!(
             "(let {dedup} ({set_if_empty} {dedup_args} {fv_can} {can_prf}))"
         ));
-        res.push(format!(
+        emit.stmts.push(format!(
             "(let {vprf} ({view_proof} {dedup_args} {can_prf}))"
         ));
         // The read misses on a row this action just seeded, returning the fallback:
         // a proof about the term as written rather than about the canonical one,
         // which is how conversion tells "no bridge" from a real one.
-        head.record_bridge(&vprf);
+        emit.head.record_bridge(&vprf);
 
         let connector = match &to_dedup {
             Some(chain) => Connector::Node(self.level_connector(chain, &vprf)),
@@ -1753,13 +1671,12 @@ impl<'a> ProofInstrumentor<'a> {
     /// `old0`/`new0`; the carried view proofs are `old1`/`new1`.
     fn instrument_merge_body(
         &mut self,
+        emit: &mut Emit,
         expr: &ResolvedExpr,
-        res: &mut Vec<String>,
-        head: &mut Head,
         fname: &str,
         idx: &mut usize,
     ) -> Operand {
-        let my_idx = *idx;
+        let node = merge_idx(fname, *idx);
         *idx += 1;
         match expr {
             ResolvedExpr::Lit(_, lit) => Operand::plain(format!("{lit}")),
@@ -1773,17 +1690,9 @@ impl<'a> ProofInstrumentor<'a> {
             ResolvedExpr::Call(_, ResolvedCall::Func(func_type), args) => {
                 let arg_vars = args
                     .iter()
-                    .map(|a| self.instrument_merge_body(a, res, head, fname, idx))
+                    .map(|a| self.instrument_merge_body(emit, a, fname, idx))
                     .collect::<Vec<_>>();
-                let just = Justification::MergeIdx(
-                    fname.to_string(),
-                    "old1".to_string(),
-                    "new1".to_string(),
-                    my_idx,
-                );
-                let (code, fv) = self.add_term_and_view(head, func_type, &arg_vars, &just, None);
-                res.extend(code);
-                fv
+                self.add_term_and_view(&mut emit.justified_by(&node), func_type, &arg_vars, None)
             }
             // A container-producing primitive (e.g. `set-intersect`): build the
             // container over the recursively-built args and anchor a term-free
@@ -1792,24 +1701,18 @@ impl<'a> ProofInstrumentor<'a> {
             ResolvedExpr::Call(_, ResolvedCall::Primitive(sp), args) => {
                 let arg_vars = args
                     .iter()
-                    .map(|a| self.instrument_merge_body(a, res, head, fname, idx))
+                    .map(|a| self.instrument_merge_body(emit, a, fname, idx))
                     .collect::<Vec<_>>();
                 let prim_name = sp.name().to_string();
                 let out = sp.output();
                 let fv = self.fresh_var();
-                res.push(format!(
+                emit.stmts.push(format!(
                     "(let {fv} ({prim_name} {}))",
                     ListDisplay(ids(&arg_vars), " ")
                 ));
                 if self.egraph.proof_state.proofs_enabled && out.is_eq_container_sort() {
                     let csort = out.name().to_string();
-                    let just = Justification::MergeIdx(
-                        fname.to_string(),
-                        "old1".to_string(),
-                        "new1".to_string(),
-                        my_idx,
-                    );
-                    self.anchor_container_term_proof(res, head, &fv, &csort, &just);
+                    self.anchor_container_term_proof(&mut emit.justified_by(&node), &fv, &csort);
                 }
                 Operand::plain(fv)
             }
@@ -1827,9 +1730,7 @@ impl<'a> ProofInstrumentor<'a> {
     fn instrument_action_expr(
         &mut self,
         expr: &ResolvedExpr,
-        res: &mut Vec<String>,
-        head: &mut Head,
-        proof: &Justification,
+        emit: &mut Emit,
         scope: &Scope,
     ) -> Operand {
         match expr {
@@ -1838,14 +1739,15 @@ impl<'a> ProofInstrumentor<'a> {
             ResolvedExpr::Call(_, resolved_call, args) => {
                 let args = args
                     .iter()
-                    .map(|arg| self.instrument_action_expr(arg, res, head, proof, scope))
+                    .map(|arg| self.instrument_action_expr(arg, emit, scope))
                     .collect::<Vec<_>>();
                 // The whole run this call claims, its own conclusion first.
-                let run = head.claim(match constructor_operand(expr) {
+                let run = emit.head.claim(match constructor_operand(expr) {
                     Some(_) => HeadPosition::Built,
                     None => HeadPosition::Call,
                 });
-                let proof = &proof.at(head_column(run, HeadProof::Own));
+                let own = emit.justification.at(head_column(run, HeadProof::Own));
+                let emit = &mut emit.justified_by(&own);
                 match resolved_call {
                     ResolvedCall::Func(func_type) => {
                         if func_type.subtype == FunctionSubtype::Custom {
@@ -1855,17 +1757,14 @@ impl<'a> ProofInstrumentor<'a> {
                             // FD view (see `lookup_global`). This is the only custom
                             // lookup allowed here.
                             if self.egraph.type_info.is_global(&func_type.name) {
-                                Operand::plain(self.lookup_global(&func_type.name, res))
+                                Operand::plain(self.lookup_global(&func_type.name, emit.stmts))
                             } else {
                                 panic!(
                                     "Found a function lookup in actions, should have been prevented by typechecking"
                                 )
                             }
                         } else {
-                            let (add_code, fv) =
-                                self.add_term_and_view(head, func_type, &args, proof, run);
-                            res.extend(add_code);
-                            fv
+                            self.add_term_and_view(emit, func_type, &args, run)
                         }
                     }
                     ResolvedCall::Primitive(specialized_primitive) => {
@@ -1887,11 +1786,11 @@ impl<'a> ProofInstrumentor<'a> {
                                 Some(connector) if container_proof && asort.is_eq_sort() => {
                                     let (value, natural) = (&arg.value, &arg.natural);
                                     let uf = self.uf_name(asort.name());
-                                    let conn = self.connector_node(res, head, proof, connector);
+                                    let conn = self.connector_node(emit, connector);
                                     // The `@UF` row reads the connector directly,
                                     // not through a mint.
-                                    self.emit_pending_group(res, &conn);
-                                    res.push(format!(
+                                    self.emit_pending_group(emit.stmts, &conn);
+                                    emit.stmts.push(format!(
                                         "(set ({uf} {natural}) (values {value} {conn}))"
                                     ));
                                     build_args.push(natural.clone());
@@ -1900,14 +1799,14 @@ impl<'a> ProofInstrumentor<'a> {
                             }
                         }
                         let fv = self.fresh_var();
-                        res.push(format!(
+                        emit.stmts.push(format!(
                             "(let {fv} ({prim_name} {}))",
                             ListDisplay(&build_args, " ")
                         ));
                         // A container-producing primitive records a term-proof in
                         // `<CSort>Proof`, the anchor for the container rebuild.
                         if container_proof {
-                            self.anchor_container_term_proof(res, head, &fv, &csort, proof);
+                            self.anchor_container_term_proof(emit, &fv, &csort);
                         }
                         Operand::plain(fv)
                     }
@@ -1939,6 +1838,11 @@ impl<'a> ProofInstrumentor<'a> {
         };
         let mut scope = Scope::default();
         let mut res = vec![];
+        let mut emit = Emit {
+            stmts: &mut res,
+            head: &mut head,
+            justification,
+        };
         for (i, action) in plan.actions.iter().enumerate() {
             if plan.dropped.contains(&i) {
                 continue;
@@ -1946,20 +1850,11 @@ impl<'a> ProofInstrumentor<'a> {
             match action {
                 ResolvedAction::Let(_, v, expr) if plan.construct_into.contains_key(&v.name) => {
                     let target = scope.read(&plan.construct_into[&v.name]);
-                    let guest = self.instrument_construct_into(
-                        &mut res,
-                        &mut head,
-                        expr,
-                        &target,
-                        justification,
-                        &scope,
-                    );
-                    res.push(format!("(let {} {})", v.name, guest.value));
+                    let guest = self.instrument_construct_into(&mut emit, expr, &target, &scope);
+                    emit.stmts.push(format!("(let {} {})", v.name, guest.value));
                     scope.bind(&v.name, &guest);
                 }
-                _ => {
-                    res.extend(self.instrument_action(action, &mut head, justification, &mut scope))
-                }
+                _ => self.instrument_action(action, &mut emit, &mut scope),
             }
         }
         res
@@ -2267,23 +2162,15 @@ impl<'a> ProofInstrumentor<'a> {
                 // stand for a term built here, and it is no rule head.
                 let scope = Scope::default();
                 let mut head = Head::composed();
-                let instrumented_expr = self
-                    .instrument_action_expr(
-                        expr,
-                        &mut action_stmts,
-                        &mut head,
-                        &Justification::Fiat,
-                        &scope,
-                    )
-                    .value;
+                let fiat = Justification::Fiat;
+                let mut emit = Emit {
+                    stmts: &mut action_stmts,
+                    head: &mut head,
+                    justification: &fiat,
+                };
+                let instrumented_expr = self.instrument_action_expr(expr, &mut emit, &scope).value;
                 let instrumented_variants = self
-                    .instrument_action_expr(
-                        variants,
-                        &mut action_stmts,
-                        &mut head,
-                        &Justification::Fiat,
-                        &scope,
-                    )
+                    .instrument_action_expr(variants, &mut emit, &scope)
                     .value;
 
                 // Add any action statements needed to set up the expressions
