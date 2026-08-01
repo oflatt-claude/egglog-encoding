@@ -146,8 +146,10 @@ pub enum RuleBodyCall {
         read: ReadMode,
     },
     /// An atom over a declared index: the rows of `id` reached through the value
-    /// occurring in *some* one of `any_of`. Its arguments are that value followed
-    /// by the whole row of `id`.
+    /// occurring in *some* one of `any_of`. An index is the relation
+    /// `(value, row of id…) -> Unit`, so the atom takes `id`'s arity plus two
+    /// arguments: that value, the whole row of `id`, then the index's own unit
+    /// output.
     ///
     /// The atom can only be probed, so the leading value must be bound elsewhere
     /// in the query.

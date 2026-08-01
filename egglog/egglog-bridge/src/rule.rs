@@ -497,6 +497,18 @@ impl RuleBuilder<'_> {
         cols: &[usize],
         is_subsumed: Option<bool>,
     ) -> Result<AtomId> {
+        // The backing table carries a timestamp (and a subsumption column), which
+        // an index must not reach; only this layer knows where the schema ends.
+        let n_cols = self.resources.egraph.funcs[func].schema.len();
+        if let Some(col) = cols.iter().find(|c| **c >= n_cols) {
+            return Err(anyhow::Error::from(RuleBuilderError::ArityMismatch {
+                expected: n_cols,
+                got: col + 1,
+            }))
+            .with_context(|| {
+                format!("query_table_by_occurrence: column {col} is not one of the function's")
+            });
+        }
         let atom = self.query_table(func, entries, is_subsumed)?;
         self.query.atoms[atom.index()].occurrence = Some((
             indexed,

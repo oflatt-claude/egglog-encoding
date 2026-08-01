@@ -495,6 +495,15 @@ impl EGraph {
                 span.clone(),
             ));
         }
+        // An index is a view over a function's table; it has no table of its own
+        // for a second index to read.
+        if self.type_info.indexes.contains_key(function) {
+            return Err(TypeError::IndexOfIndex(
+                name.to_owned(),
+                function.to_owned(),
+                span.clone(),
+            ));
+        }
         let ft = self
             .type_info
             .get_func_type(function)
@@ -1555,6 +1564,10 @@ pub enum TypeError {
     IndexValueUnbound(String, String, Span),
     #[error("{1}\nIndex {0} is maintained by the database and cannot be written to")]
     IndexIsReadOnly(String, Span),
+    #[error(
+        "{2}\nIndex {0} indexes {1}, which is itself an index; an index has no rows of its own"
+    )]
+    IndexOfIndex(String, String, Span),
     #[error("{1}\nUnbound symbol {0}")]
     Unbound(String, Span),
     #[error(
