@@ -118,6 +118,7 @@ def test_workload_command_matches_benchmark_behavior() -> None:
         "no-messages",
         "-j",
         "1",
+        "--no-decomp",
         str(file_spec.absolute_path),
     ]
     assert targets.workload_command(ROOT / "egglog-experimental", file_spec, "dd", "proofs") == [
@@ -126,6 +127,7 @@ def test_workload_command_matches_benchmark_behavior() -> None:
         "no-messages",
         "-j",
         "1",
+        "--no-decomp",
         "--backend",
         "dd",
         "--proofs",
@@ -137,6 +139,7 @@ def test_workload_command_matches_benchmark_behavior() -> None:
         "no-messages",
         "-j",
         "1",
+        "--no-decomp",
         "--proof-extraction",
         str(file_spec.absolute_path),
     ]
@@ -150,4 +153,4 @@ def test_workload_command_matches_benchmark_behavior() -> None:
         "sha256:facts",
     )
     command = targets.workload_command(ROOT / "egglog-experimental", file_with_facts, "main", "proofs")
-    assert command[5:7] == ["--fact-directory", str(facts)]
+    assert command[6:8] == ["--fact-directory", str(facts)]

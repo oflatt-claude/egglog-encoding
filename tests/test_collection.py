@@ -428,7 +428,10 @@ def test_preflight_requires_extraction_capability_only_for_fresh_rows(
     with pytest.raises(ValueError, match=r"preflight failed.*--proof-extraction"):
         collection.preflight_collection(collection.CollectionPlan(target, (fresh,)), 120)
 
-    assert calls == [("--timing-summary",), ("--timing-summary", "--proof-extraction")]
+    assert calls == [
+        ("--timing-summary", "--no-decomp"),
+        ("--timing-summary", "--no-decomp", "--proof-extraction"),
+    ]
 
 
 def test_collect_rows_rejects_unsupported_timing_summary_before_append(
