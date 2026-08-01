@@ -1225,9 +1225,7 @@ impl<'a> JoinState<'a> {
                     table: get_occurrence_index_from_tableinfo(info, &cols),
                 }
             } else {
-                DynamicIndex::DynamicOccurrence(
-                    trie_node.get_cached_occurrence_index(&cols, info),
-                )
+                DynamicIndex::DynamicOccurrence(trie_node.get_cached_occurrence_index(&cols, info))
             };
             return Prober {
                 node: trie_node,

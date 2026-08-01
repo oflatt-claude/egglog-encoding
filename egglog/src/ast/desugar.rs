@@ -217,6 +217,14 @@ pub(crate) fn desugar_command(
             // one `fail`, so the assertion covers all of them.
             let mut desugared = vec![];
             for cmd in cmds {
+                if let Command::Include(..) = cmd {
+                    // `include` is expanded before desugaring, so it never reaches
+                    // here from a top-level program; only a wrapped one can.
+                    return Err(Error::DesugarError(
+                        span.clone(),
+                        "include is not allowed inside (fail ...)".to_string(),
+                    ));
+                }
                 desugared.extend(desugar_command(cmd, parser, proof_testing)?);
             }
             if desugared.is_empty() {

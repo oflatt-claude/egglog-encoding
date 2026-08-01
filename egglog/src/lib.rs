@@ -2394,7 +2394,12 @@ impl EGraph {
         let function_type = self
             .type_info
             .get_func_type(func_name)
-            .unwrap_or_else(|| panic!("Unrecognized function name {func_name}"))
+            .ok_or_else(|| {
+                Error::TypeError(TypeError::UnboundFunction(
+                    func_name.to_owned(),
+                    span.clone(),
+                ))
+            })?
             .clone();
         let parsed_contents =
             Self::read_input_file(self.fact_directory.as_deref(), &function_type, &span, &file)?;
