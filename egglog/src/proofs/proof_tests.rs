@@ -1210,6 +1210,61 @@ mod tests {
             .unwrap();
     }
 
+    // Two primitives reading elements out of a container determine the fact
+    // between them, so it is a side condition — no premise, and no reflexive
+    // anchor to find for a container the body built rather than read.
+    #[test]
+    fn proof_mode_equates_two_container_element_reads() {
+        let mut egraph = EGraph::new_with_proofs();
+        egraph
+            .parse_and_run_program(
+                None,
+                r#"
+                (datatype Math (Num i64))
+                (sort MathVec (Vec Math))
+                (constructor Holder (MathVec) Math)
+                (Holder (vec-of (Num 1) (Num 1)))
+
+                (rule ((= h (Holder v))
+                       (= ys (vec-of (vec-get v 0) (vec-get v 0)))
+                       (= (vec-get ys 0) (vec-get ys 1)))
+                      ((Num 99))
+                      :name "elements-agree")
+
+                (run 1)
+                (prove (= (Num 99) (Num 99)))
+                "#,
+            )
+            .unwrap();
+    }
+
+    // The same read against a term the query builds is not a side condition, so
+    // the fact keeps a real premise rather than an `Eval` marker.
+    #[test]
+    fn proof_mode_proves_a_built_term_against_a_container_element_read() {
+        let mut egraph = EGraph::new_with_proofs();
+        egraph
+            .parse_and_run_program(
+                None,
+                r#"
+                (datatype Math (Num i64) (Add Math Math))
+                (sort MathVec (Vec Math))
+                (constructor Holder (MathVec) Math)
+                (relation Seen (Math))
+                (let $held (Holder (vec-of (Add (Num 1) (Num 2)) (Num 3))))
+
+                (rule ((= h (Holder v))
+                       (= (Add p q) (vec-get v 0)))
+                      ((Seen h))
+                      :name "sum-in-slot-zero")
+
+                (run 1)
+                (prove (Seen $held))
+                "#,
+            )
+            .unwrap();
+    }
+
     // A container constructed in the query is a side condition with no carryable
     // proof (just an `Eval` marker), so it can't be used in an action. Proof mode
     // rejects such a rule rather than producing an unsound proof.

@@ -725,10 +725,16 @@ bound variables has no premise to state, so it carries the bare `@Eval` marker
 and the checker re-evaluates it against the rule body instead. Two shapes
 qualify, and the encoder and the checker share one gate so they cannot drift: a
 container-producing primitive anywhere in the fact, and a primitive returning an
-eq-sort value into a variable (`(= e (vec-get v 1))`). The second is how a value
-read out of a container is justified at all — nothing in the query names it as a
-term, so no [anchor](#reflexive-anchors) reaches it. Re-evaluation also binds the
+eq-sort value, either into a variable (`(= e (vec-get v 1))`) or against a second
+such result (`(= (vec-get v 0) (vec-get v 1))`). The second is how a value read
+out of a container is justified at all — nothing in the query names it as a term,
+so no [anchor](#reflexive-anchors) reaches it. Re-evaluation also binds the
 variable the fact determines, which is what lets a rule head use it.
+
+The other side has to be one of those two. A fact equating the result to a term
+the query *builds* — `(= (Add a b) (vec-get v 1))` — asserts an e-graph equality
+re-evaluation cannot settle, so it keeps a real premise stated from the
+constructor view's row proof.
 
 ## Packed rows
 

@@ -25,11 +25,13 @@ use thiserror::Error;
 ///
 /// * a container-producing primitive anywhere in the fact — `(= v (vec-of e))`,
 ///   `(= (set-of a) (set-of b))`, or a bare `(vec-of e)` guard;
-/// * a primitive returning an eq-sort value into a variable — `(= e (vec-get v
-///   1))`. The value comes out of a container, so nothing in the query names it
-///   as a term and no premise can be stated about it. It must be a variable: a
-///   fact equating the result to a *built* term (`(= (Add a b) (vec-get v 1))`)
-///   asserts an equality re-evaluation cannot settle.
+/// * a primitive returning an eq-sort value, against a variable it binds
+///   (`(= e (vec-get v 1))`) or against a second such result
+///   (`(= (vec-get v 0) (vec-get v 1))`). The value comes out of a container, so
+///   nothing in the query names it as a term and no premise can be stated about
+///   it. The other side must be one of those two: a fact equating the result to
+///   a *built* term (`(= (Add a b) (vec-get v 1))`) asserts an equality
+///   re-evaluation cannot settle.
 ///
 /// The encoder emits such a fact with a bare [`Justification::Eval`] marker as
 /// its proof, and the checker verifies it in
@@ -50,15 +52,16 @@ pub(super) fn is_side_condition(fact: &ResolvedFact) -> bool {
                 if p.output().is_eq_sort() && !p.output().is_eq_container_sort()
         )
     }
-    fn determines_var(lhs: &ResolvedExpr, rhs: &ResolvedExpr) -> bool {
-        matches!(lhs, ResolvedExpr::Var(..)) && is_eq_sort_primitive(rhs)
+    fn settled_by(expr: &ResolvedExpr, other: &ResolvedExpr) -> bool {
+        is_eq_sort_primitive(expr)
+            && (matches!(other, ResolvedExpr::Var(..)) || is_eq_sort_primitive(other))
     }
     match fact {
         ResolvedFact::Eq(_, lhs, rhs) => {
             is_container_primitive(lhs)
                 || is_container_primitive(rhs)
-                || determines_var(lhs, rhs)
-                || determines_var(rhs, lhs)
+                || settled_by(lhs, rhs)
+                || settled_by(rhs, lhs)
         }
         ResolvedFact::Fact(expr) => is_container_primitive(expr),
     }
@@ -1058,11 +1061,11 @@ impl ProofStore {
         result
     }
 
-    /// Check a container side condition by re-evaluating it against the rule
-    /// body, rather than against a premise proposition. An unbound side is the
-    /// side condition's output and is bound; otherwise both sides must evaluate
-    /// to the same container. A standalone fact is evaluated only to validate
-    /// its container primitive. Extends `subst` with any bound output.
+    /// Check a side condition by re-evaluating it against the rule body, rather
+    /// than against a premise proposition. An unbound side is the side
+    /// condition's output and is bound; otherwise both sides must evaluate to
+    /// the same term. A standalone fact is evaluated only to validate its
+    /// container primitive. Extends `subst` with any bound output.
     fn check_side_condition(
         &mut self,
         fact: &ResolvedFact,
