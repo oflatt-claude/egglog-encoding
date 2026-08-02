@@ -49,13 +49,9 @@ pub(crate) fn uf_canon_proof_prim_name(uf_name: &str) -> String {
 /// * `uf_canon : (S S) -> S` — `(term fallback)`, the term's `@UF_<S>` leader, or
 ///   `fallback` when it has no row. Callers pass the term itself, making it
 ///   leader-or-self.
-/// * `uf_canon_proof : (S Proof i64) -> Proof` (proof mode) —
-///   `(term row_proof position)`, the `@UF_<S>` row's proof `term = leader`. A
-///   term with no row did not move, so the answer is instead its reflexive
-///   anchor, which the primitive mints as `Proj(row_proof, position)`:
-///   `row_proof` must state an equality naming `term` at `position` — a child
-///   index of its right-hand side, or
-///   [`PROJ_LHS_POSITION`](crate::proofs::proof_format::PROJ_LHS_POSITION).
+/// * `uf_canon_proof : (S Proof) -> Proof` (proof mode) — the `@UF_<S>` row's
+///   proof `term = leader`, or `fallback`. Callers pass a reflexive proof of
+///   `term = term`.
 ///
 /// Both are the generic view-column read over the two-output `@UF_<S>` table, so
 /// every backend services them against its own storage. They read `@UF_<S>`, so
@@ -88,25 +84,14 @@ pub(crate) fn register_uf_canon(
             name: eg.proof_state.proof_names.proof_datatype.clone(),
         });
         let table = uf_name.to_string();
-        let proj = eg.proof_state.proof_names.proj_constructor.clone();
         eg.add_backend_op_primitive(
-            UfCanonProof {
+            UfCanonCol {
                 name: uf_canon_proof_prim_name(uf_name),
                 key_sort: sort,
-                proof_sort,
+                out_sort: proof_sort,
             },
             WriteState::valid_contexts(),
-            move |backend, _| {
-                let unit = backend.base_values().get(());
-                backend.register_view_column_read_or_mint(
-                    table.clone(),
-                    1,
-                    1,
-                    proj.clone(),
-                    2,
-                    vec![unit],
-                )
-            },
+            move |backend, _| backend.register_view_column_read(table.clone(), 1, 1),
         );
     }
 }
@@ -133,36 +118,6 @@ impl Primitive for UfCanonCol {
                 self.key_sort.clone(),
                 self.out_sort.clone(),
                 self.out_sort.clone(),
-            ],
-            span.clone(),
-        )
-        .into_box()
-    }
-}
-
-/// The proof column of an eq-sort's `@UF_<S>` row, read by term, minting the
-/// term's reflexive anchor when it has none (see [`register_uf_canon`]).
-#[derive(Clone)]
-struct UfCanonProof {
-    name: String,
-    key_sort: ArcSort,
-    proof_sort: ArcSort,
-}
-
-impl Primitive for UfCanonProof {
-    fn name(&self) -> &str {
-        &self.name
-    }
-
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        // (term row_proof position) -> proof
-        SimpleTypeConstraint::new(
-            &self.name,
-            vec![
-                self.key_sort.clone(),
-                self.proof_sort.clone(),
-                I64Sort.to_arcsort(),
-                self.proof_sort.clone(),
             ],
             span.clone(),
         )

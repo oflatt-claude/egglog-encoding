@@ -145,11 +145,6 @@ pub(crate) fn proof_store_from_term(
     )
 }
 
-/// The projection position naming the base's left-hand side rather than one of
-/// its right-hand side's children. `Proj(p, PROJ_LHS_POSITION)` proves `t = t`
-/// for `p : t = <term>`; every other position is a child index.
-pub(crate) const PROJ_LHS_POSITION: i64 = -1;
-
 /// Justifies a single grounded equality t1 = t2.
 /// Corresponds closely to the proof header in [`proof_encoding_helpers.rs`](crate::proofs::proof_encoding_helpers).
 /// Compared to [`Proof`], a [`RawProof`] leaves out the implicit [`Proposition`] being proven (in some cases) and
@@ -198,9 +193,6 @@ enum RawProof {
     CongrAll(RawProofId, RawProofId),
     /// given a proof that t1 = f(..., ci, ...) and the child index i,
     /// produces a justification that ci = ci.
-    ///
-    /// The position [`PROJ_LHS_POSITION`] instead names `t1`, and reads back as
-    /// the reflexivization `Trans(p, Sym(p))` rather than as a projection.
     Proj(RawProofId, usize),
     /// Given a proof that `t1 = c` and an AST node naming a term `a`, produces a
     /// justification that `a = a`, provided `a` is a child of `c`. Minted where
@@ -643,17 +635,6 @@ impl RawProofStore {
             let bridges = bridges.iter().map(|arg| self.child_proof(*arg)).collect();
             let column = self.parse_int(column);
             return self.add_proof(RawProof::Rule(name, premises, bridges, column));
-        }
-
-        // A projection at the left-hand-side position reflexivizes its base
-        // instead of naming a child.
-        if head == self.names.proj_constructor
-            && args.len() == 2
-            && self.parse_int(args[1]) == PROJ_LHS_POSITION
-        {
-            let base = self.child_proof(args[0]);
-            let back = self.add_proof(RawProof::Sym(base));
-            return self.add_proof(RawProof::Trans(base, back));
         }
 
         let shape = self.shape(&head).unwrap_or_else(|| {

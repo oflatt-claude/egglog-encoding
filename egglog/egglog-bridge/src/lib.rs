@@ -394,55 +394,6 @@ impl EGraph {
         )))
     }
 
-    /// Register a [`EGraph::register_view_column_read`] whose fallback is a
-    /// [`EGraph::register_mint_row`] into `mint_table`, run only when the key is
-    /// absent: `(keys, mint_args…) -> column`.
-    pub fn register_view_column_read_or_mint(
-        &mut self,
-        view_name: String,
-        n_keys: usize,
-        col_idx: usize,
-        mint_table: String,
-        n_mint_args: usize,
-        vals: Vec<Value>,
-    ) -> ExternalFunctionId {
-        let registry = self.action_registry.clone();
-        let counter = self.id_counter;
-        let dep = mint_table.clone();
-        let id = self.register_external_func(Box::new(make_external_func(
-            move |state: &mut ExecutionState, args: &[Value]| {
-                debug_assert_eq!(
-                    args.len(),
-                    n_keys + n_mint_args,
-                    "view-column read of `{view_name}` takes {n_keys} keys and \
-                     {n_mint_args} mint arguments"
-                );
-                let (view, mint) = {
-                    let registry = registry.read().unwrap();
-                    (
-                        registry.lookup_table(&view_name)?.clone(),
-                        registry.lookup_table(&mint_table)?.clone(),
-                    )
-                };
-                if let Some(col) = view.lookup_value_col(state, &args[..n_keys], col_idx) {
-                    return Some(col);
-                }
-                let fresh = Value::from_usize(state.inc_counter(counter));
-                mint.insert(
-                    state,
-                    args[n_keys..]
-                        .iter()
-                        .copied()
-                        .chain([fresh])
-                        .chain(vals.clone()),
-                );
-                Some(fresh)
-            },
-        )));
-        self.external_write_deps.insert(id, dep);
-        id
-    }
-
     /// Register the term encoder's mint op for the term-node relation named
     /// `table_name`, returning the [`ExternalFunctionId`] its call sites resolve
     /// to.

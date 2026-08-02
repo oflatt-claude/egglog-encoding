@@ -530,16 +530,6 @@ fn apply_head(
                             Some(set_if_empty_apply(eg, &op, &arguments, lookup_index)?)
                         } else if let Some(op) = eg.view_column_read_ops.get(id).cloned() {
                             Some(view_column_read_apply(eg, &op, &arguments, lookup_index)?)
-                        } else if let Some((view, mint)) =
-                            eg.view_column_read_or_mint_ops.get(id).cloned()
-                        {
-                            Some(view_column_read_or_mint_apply(
-                                eg,
-                                &view,
-                                &mint,
-                                &arguments,
-                                lookup_index,
-                            )?)
                         } else if let Some(op) = eg.mint_ops.get(id).cloned() {
                             Some(mint_apply(eg, &op, &arguments)?)
                         } else {
@@ -756,27 +746,6 @@ fn view_column_read_apply(
         Some(values) => Value::new(values[op.col_idx]),
         None => fallback,
     })
-}
-
-/// [`view_column_read_apply`] whose miss mints a row instead of returning a
-/// fallback argument: the mint's arguments are the ones after the view's keys.
-fn view_column_read_or_mint_apply(
-    eg: &mut EGraph,
-    view: &ViewOp,
-    mint: &MintOp,
-    args: &[Value],
-    index: &mut LookupIndex,
-) -> Result<Value> {
-    let table = *eg.table_ids.get(&view.view_name).ok_or_else(|| {
-        anyhow!(
-            "view-column read view `{}` is not registered",
-            view.view_name
-        )
-    })?;
-    if let Some(values) = lookup_existing(eg, table, &args[..view.n_keys], index) {
-        return Ok(Value::new(values[view.col_idx]));
-    }
-    mint_apply(eg, mint, &args[view.n_keys..])
 }
 
 #[cfg(test)]
