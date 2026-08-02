@@ -1222,6 +1222,10 @@ impl<'a> ProofInstrumentor<'a> {
                 names.congr_constructor.clone(),
                 format!("{} {index} {}", base.leaf()?, child.leaf()?),
             ),
+            Composition::Proj(base, index) => (
+                names.proj_constructor.clone(),
+                format!("{} {index}", base.leaf()?),
+            ),
             Composition::Leaf(_) => return None,
         })
     }

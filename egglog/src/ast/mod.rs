@@ -53,6 +53,8 @@ pub struct ProofConstructorNames {
     pub normalize: String,
     /// The `Fiat` justification constructor.
     pub fiat: String,
+    /// The `Proj` justification constructor.
+    pub proj: String,
 }
 
 #[derive(Clone, Debug)]
@@ -1153,8 +1155,8 @@ where
                 if let Some(pc) = proof_constructors {
                     write!(
                         f,
-                        " :internal-proof-names {} {} {} {} {} {}",
-                        pc.congr, pc.congr_all, pc.trans, pc.sym, pc.normalize, pc.fiat
+                        " :internal-proof-names {} {} {} {} {} {} {}",
+                        pc.congr, pc.congr_all, pc.trans, pc.sym, pc.normalize, pc.fiat, pc.proj
                     )?;
                 }
                 write!(f, ")")

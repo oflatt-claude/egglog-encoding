@@ -191,6 +191,9 @@ enum RawProof {
     /// Desugared by [`ProofStore::from_raw`] into positional
     /// [`Justification::Congr`] steps computed against the actual term.
     CongrAll(RawProofId, RawProofId),
+    /// given a proof that t1 = f(..., ci, ...) and the child index i,
+    /// produces a justification that ci = ci.
+    Proj(RawProofId, usize),
     /// Given a proof that `t1 = c` for a container term `c`, produces a proof of
     /// `t1 = normalize(c)` — the container's canonicalization (reorder/dedup/
     /// merge), which a structural `Congr` chain can't express.
@@ -349,6 +352,16 @@ pub enum Justification {
         child_index: usize,
         child_proof: ProofId,
     },
+    /// Projects a subterm out of an equality already proven.
+    /// Given
+    /// 1) a `proof` with proposition `t1 = f(..., ci, ...)`
+    /// 2) and the `child_index` of `ci` in the term `f(..., ci, ...)`,
+    ///
+    /// proves `ci = ci`.
+    ///
+    /// An axiom egglog assumes: a term only enters a provable equality once it
+    /// has been built, and building it built its children.
+    Proj { proof: ProofId, child_index: usize },
     /// Given a `proof` of `t1 = c` for a container term `c`, proves
     /// `t1 = normalize(c)` — the container's canonicalization (sort by
     /// [`TermDag::ast_cmp`]; dedup for sets; last-write-wins for maps). Sound by
@@ -481,6 +494,10 @@ impl RawProofStore {
             shape(2, &[0, 1], |_, _, kids| {
                 RawProof::CongrAll(kids[0], kids[1])
             })
+        } else if head == names.proj_constructor {
+            shape(2, &[0], |store, args, kids| {
+                RawProof::Proj(kids[0], store.parse_index(args[1]))
+            })
         } else if head == names.eval_constructor {
             shape(0, &[], |_, _, _| RawProof::Eval)
         } else {
@@ -567,6 +584,7 @@ impl RawProofStore {
                 let base = self.instantiate(base, columns);
                 RawProof::Congr(base, *child, self.instantiate(step, columns))
             }
+            Skeleton::Proj(base, child) => RawProof::Proj(self.instantiate(base, columns), *child),
         };
         self.add_proof(proof)
     }
@@ -1041,6 +1059,17 @@ impl ProofStore {
                     },
                 }
             }
+            RawProof::Proj(inner_raw, child_index) => {
+                let inner_id = self.convert_raw_proof(prog, globals, raw_store, *inner_raw);
+                let child = self.term_child(self.id_to_proof[inner_id].rhs(), *child_index);
+                Proof {
+                    proposition: Proposition::new(child, child),
+                    justification: Justification::Proj {
+                        proof: inner_id,
+                        child_index: *child_index,
+                    },
+                }
+            }
             RawProof::CongrAll(proof_raw, child_raw) => {
                 let base_id = self.convert_raw_proof(prog, globals, raw_store, *proof_raw);
                 let child_id = self.convert_raw_proof(prog, globals, raw_store, *child_raw);
@@ -1303,6 +1332,20 @@ impl ProofStore {
         );
     }
 
+    /// The child of an application term at `child_index`. Panics when the term
+    /// is not an application, or has no such child.
+    pub(super) fn term_child(&self, term_id: TermId, child_index: usize) -> TermId {
+        let Term::App(head, args) = self.term_dag.get(term_id) else {
+            panic!("projection requires an application term");
+        };
+        *args.get(child_index).unwrap_or_else(|| {
+            panic!(
+                "projection index {child_index} out of bounds for {head} with {} children",
+                args.len()
+            )
+        })
+    }
+
     pub(super) fn replace_term_child(
         &mut self,
         term_id: TermId,
@@ -1349,8 +1392,8 @@ impl ProofStore {
         dag.to_string_with_let_internal(symbol_gen, proof_term_id, buffer, |constructor| {
             match constructor {
                 "=" => "prop".to_string(),
-                "Fiat" | "Rule" | "Merge" | "Trans" | "Sym" | "Congr" | "ContainerNormalize"
-                | "Eval" => "prf".to_string(),
+                "Fiat" | "Rule" | "Merge" | "Trans" | "Sym" | "Congr" | "Proj"
+                | "ContainerNormalize" | "Eval" => "prf".to_string(),
                 _ => "t".to_string(),
             }
         })
@@ -1445,6 +1488,15 @@ impl ProofStore {
                     "Congr".to_string(),
                     vec![equality, base_term_id, child_term_id, index_term],
                 )
+            }
+            Justification::Proj {
+                proof: base,
+                child_index,
+            } => {
+                let equality = make_equality(dag, proof.lhs(), proof.rhs());
+                let base_term_id = self.proof_to_term_for_printing(dag, *base, cache);
+                let index_term = dag.lit(Literal::Int(*child_index as i64));
+                dag.app("Proj".to_string(), vec![equality, base_term_id, index_term])
             }
             Justification::ContainerNormalize { proof: inner } => {
                 let equality = make_equality(dag, proof.lhs(), proof.rhs());
@@ -1916,6 +1968,10 @@ mod tests {
                 skeletons.push(rebuild_skeleton(&children, eclass));
             }
         }
+        for child in 0..3 {
+            skeletons.push(Skeleton::Leaf(0).proj(child));
+            skeletons.push(Skeleton::Leaf(0).congr(child, Skeleton::Leaf(0).proj(child)));
+        }
         for skeleton in skeletons {
             let spelling = skeleton.spelling();
             assert_eq!(
@@ -1924,5 +1980,121 @@ mod tests {
                 "{spelling} should spell {skeleton:?}"
             );
         }
+    }
+
+    /// A store holding one `Fiat` over the term `f(a, b)`, treated as a value
+    /// term so the checker accepts it, plus that proof's id.
+    fn store_over_an_application() -> (ProofStore, ProofId, Vec<TermId>) {
+        let mut term_dag = TermDag::default();
+        let children: Vec<TermId> = ["a", "b"]
+            .iter()
+            .map(|name| term_dag.app((*name).to_string(), vec![]))
+            .collect();
+        let app = term_dag.app("f".to_string(), children.clone());
+        let value_heads: HashSet<String> = ["f", "a", "b"].iter().map(|h| h.to_string()).collect();
+        let mut store = ProofStore::new(term_dag, HashMap::default(), value_heads);
+        let base = store.id_to_proof.push(Proof {
+            proposition: Proposition::new(app, app),
+            justification: Justification::Fiat,
+        });
+        (store, base, children)
+    }
+
+    /// A projection over a row's proof states — and checks as — the reflexivity
+    /// of the child it names.
+    #[test]
+    fn a_projection_states_the_child_it_names() {
+        for (child_index, child) in [0, 1].into_iter().zip(["(a)", "(b)"]) {
+            let (mut store, base, children) = store_over_an_application();
+            let proj = store.id_to_proof.push(Proof {
+                proposition: Proposition::new(children[child_index], children[child_index]),
+                justification: Justification::Proj {
+                    proof: base,
+                    child_index,
+                },
+            });
+            let checked = store.check_proof(proj, &[]).expect("a valid projection");
+            assert_eq!(
+                store.term_dag.to_string(checked.lhs()),
+                child,
+                "projecting child {child_index} proves that child reflexive"
+            );
+            assert_eq!(checked.lhs(), checked.rhs());
+        }
+    }
+
+    /// The checker rejects a projection whose conclusion is not the named
+    /// child's reflexivity, and one whose index the term has no child at.
+    #[test]
+    fn a_projection_of_the_wrong_child_is_rejected() {
+        let (mut store, base, children) = store_over_an_application();
+        let wrong = store.id_to_proof.push(Proof {
+            proposition: Proposition::new(children[1], children[1]),
+            justification: Justification::Proj {
+                proof: base,
+                child_index: 0,
+            },
+        });
+        let err = store.check_proof(wrong, &[]).unwrap_err().to_string();
+        assert!(
+            err.contains("projection error"),
+            "the wrong child should be a projection error, got {err}"
+        );
+
+        let out_of_range = store.id_to_proof.push(Proof {
+            proposition: Proposition::new(children[0], children[0]),
+            justification: Justification::Proj {
+                proof: base,
+                child_index: 2,
+            },
+        });
+        let err = store
+            .check_proof(out_of_range, &[])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("child index 2 out of bounds"),
+            "an out-of-range index should say so, got {err}"
+        );
+
+        let literal = store.term_dag.lit(Literal::Int(1));
+        let over_a_literal = store.id_to_proof.push(Proof {
+            proposition: Proposition::new(literal, literal),
+            justification: Justification::Fiat,
+        });
+        let not_an_app = store.id_to_proof.push(Proof {
+            proposition: Proposition::new(literal, literal),
+            justification: Justification::Proj {
+                proof: over_a_literal,
+                child_index: 0,
+            },
+        });
+        let err = store.check_proof(not_an_app, &[]).unwrap_err().to_string();
+        assert!(
+            err.contains("not a function application"),
+            "a literal has no child to project, got {err}"
+        );
+    }
+
+    /// A packed row spelling a projection unpacks to it, over the child the
+    /// spelling names.
+    #[test]
+    fn a_projection_row_unpacks_to_the_projection_it_packs() {
+        let mut raw = empty_store();
+        let children: Vec<TermId> = ["a", "b", "c"]
+            .iter()
+            .map(|name| raw.term_dag.app((*name).to_string(), vec![]))
+            .collect();
+        let app = raw.term_dag.app("f".to_string(), children.clone());
+        let row = fiat_term(&mut raw, app, app);
+
+        let skeleton = Skeleton::Leaf(0).proj(1);
+        let term = packed_term(&mut raw, &skeleton, vec![row]);
+        let packed = parse(&mut raw, term);
+
+        let row = raw.parse_proof(row);
+        let chain = raw.add_proof(RawProof::Proj(row, 1));
+        let expected = Proposition::new(children[1], children[1]);
+        assert_agree(&raw, packed, chain, &expected);
     }
 }

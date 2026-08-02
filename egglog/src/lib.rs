@@ -2026,6 +2026,7 @@ impl EGraph {
                     // Recovered so `native_input` can build `(input …)` base-fact
                     // proofs when replaying an encoded program in a fresh e-graph.
                     names.fiat_constructor = pc.fiat;
+                    names.proj_constructor = pc.proj;
                 }
                 log::info!("Declared sort {name}.")
             }

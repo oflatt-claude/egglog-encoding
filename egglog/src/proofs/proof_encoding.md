@@ -361,7 +361,7 @@ With proofs enabled, the encoding first emits a header defining the proof format
 (see [`crate::proofs::proof_format`] and `proof_encoding_helpers.rs`): the
 `@Proof` and `@Ast` sorts, one `@Ast<Sort>` per sort, and the proof-node
 relations `@Fiat`, `@RuleLink`, `@MergeIdx`, `@MergeRow`, `@Trans`, `@Sym`,
-`@Congr`, `@CongrAll`, `@ContainerNormalize`, `@Eval` — each a
+`@Congr`, `@CongrAll`, `@Proj`, `@ContainerNormalize`, `@Eval` — each a
 `(function … Unit :no-merge)`, not a constructor, so a proof node is a fresh id
 plus a row, both written by that relation's `mint-<Relation>!`. Two further
 families have their column count fixed by the site rather
@@ -370,9 +370,15 @@ it: `@Rule_<k>`, a rule proof carrying its `k` body premises inline, and
 `@Packed_<k>`, one row standing for a whole composition over `k` proofs (see
 [Packed rows](#packed-rows)).
 
+`@Proj` is the one the encoding declares but never writes: projection is a rule
+the checker admits, so a proof built outside the encoding may use it.
+
 Each sort also gets `(function @<Sort>Proof (<Sort>) @Proof :merge old)`,
-recording for each term `t` a proof of `t = t` (oldest kept), and the union-find
-and view proof columns become real:
+recording for each term `t` a proof of `t = t` (oldest kept). It is the
+reflexive anchor read where nothing else about the term is in hand: the seeds a
+view rebuild hands `@UF_<Sort>_canon_proof`, an eq-sort body variable's premise
+proof, and an eq-sort value a body primitive returned. The union-find and view
+proof columns become real:
 
 ```text
 (function @UF_Math (Math) (Math @Proof) :merge (… @Packed_2 "trans_sym_p0_p1" …) …)
@@ -711,8 +717,9 @@ for the whole of it.
 
 A site with no rule head to replay says what its row stands for by writing a
 **skeleton** — a proof term over the row's other columns, spelled into the first
-one in prefix order: `sym`, `trans`, `congr`, `p<n>` for the proof in column n,
-and a bare number for a congruence's child position. Unpacking reads the skeleton
+one in prefix order: `sym`, `trans`, `congr`, `proj`, `p<n>` for the proof in
+column n, and a bare number for a congruence's or projection's child position.
+Unpacking reads the skeleton
 back off that column and substitutes the rest into it, so there is one statement
 of the composition rather than one at each end. A column may be named twice —
 `trans_sym_p0_p0` is `reflexive`, `t' = t'` from the one proof of `t = t'` — and

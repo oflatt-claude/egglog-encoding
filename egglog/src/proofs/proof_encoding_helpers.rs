@@ -46,6 +46,7 @@ pub(crate) struct EncodingNames {
     pub(crate) eq_sym_constructor: String,
     pub(crate) congr_constructor: String,
     pub(crate) congr_all_constructor: String,
+    pub(crate) proj_constructor: String,
     pub(crate) container_normalize_constructor: String,
     pub(crate) eval_constructor: String,
     /// For a given function symbol, the name of the function that converts to the AST type.
@@ -73,6 +74,8 @@ pub(crate) enum ProofTree<L> {
     Trans(Box<ProofTree<L>>, Box<ProofTree<L>>),
     /// The child position the step rewrites.
     Congr(Box<ProofTree<L>>, usize, Box<ProofTree<L>>),
+    /// The child position projected out of the inner proof's right-hand side.
+    Proj(Box<ProofTree<L>>, usize),
 }
 
 /// The composition one packed proof row stands for, written over the row's own
@@ -105,6 +108,11 @@ impl<L> ProofTree<L> {
         ProofTree::Congr(Box::new(self), child, Box::new(step))
     }
 
+    /// The reflexive proof of this composition's child at position `child`.
+    pub(crate) fn proj(self, child: usize) -> Self {
+        ProofTree::Proj(Box::new(self), child)
+    }
+
     /// The leaf this is, when it names one rather than composing.
     pub(crate) fn leaf(&self) -> Option<&L> {
         match self {
@@ -119,7 +127,7 @@ impl Skeleton {
     pub(crate) fn width(&self) -> usize {
         match self {
             ProofTree::Leaf(column) => column + 1,
-            ProofTree::Sym(inner) => inner.width(),
+            ProofTree::Sym(inner) | ProofTree::Proj(inner, _) => inner.width(),
             ProofTree::Trans(left, right) | ProofTree::Congr(left, _, right) => {
                 left.width().max(right.width())
             }
@@ -129,7 +137,7 @@ impl Skeleton {
     fn collect_columns(&self, columns: &mut Vec<usize>) {
         match self {
             ProofTree::Leaf(column) => columns.push(*column),
-            ProofTree::Sym(inner) => inner.collect_columns(columns),
+            ProofTree::Sym(inner) | ProofTree::Proj(inner, _) => inner.collect_columns(columns),
             ProofTree::Trans(left, right) | ProofTree::Congr(left, _, right) => {
                 left.collect_columns(columns);
                 right.collect_columns(columns);
@@ -138,10 +146,10 @@ impl Skeleton {
     }
 
     /// This skeleton as the string a packed row carries: its nodes in prefix
-    /// order, one `_`-separated token each — `sym`, `trans`, `congr`,
-    /// `p<column>` for a column, and a bare number for a congruence's child
-    /// position. Panics unless [`Self::from_spelling`] reads it back, since that
-    /// is all unpacking has to go on.
+    /// order, one `_`-separated token each — `sym`, `trans`, `congr`, `proj`,
+    /// `p<column>` for a column, and a bare number for a congruence's or
+    /// projection's child position. Panics unless [`Self::from_spelling`] reads
+    /// it back, since that is all unpacking has to go on.
     pub(crate) fn spelling(&self) -> String {
         let mut tokens = vec![];
         self.spell(&mut tokens);
@@ -171,6 +179,11 @@ impl Skeleton {
                 base.spell(tokens);
                 tokens.push(child.to_string());
                 step.spell(tokens);
+            }
+            ProofTree::Proj(base, child) => {
+                tokens.push("proj".to_string());
+                base.spell(tokens);
+                tokens.push(child.to_string());
             }
         }
     }
@@ -203,6 +216,10 @@ impl Skeleton {
                 let base = Skeleton::read(tokens)?;
                 let child = tokens.next()?.parse().ok()?;
                 Some(base.congr(child, Skeleton::read(tokens)?))
+            }
+            "proj" => {
+                let base = Skeleton::read(tokens)?;
+                Some(base.proj(tokens.next()?.parse().ok()?))
             }
             token => Some(ProofTree::Leaf(token.strip_prefix('p')?.parse().ok()?)),
         }
@@ -242,6 +259,7 @@ impl Composition {
                 let base = base.lay_out(laid_out, columns);
                 base.congr(*child, step.lay_out(laid_out, columns))
             }
+            ProofTree::Proj(base, child) => base.lay_out(laid_out, columns).proj(*child),
         };
         laid_out.insert(self.clone(), skeleton.clone());
         skeleton
@@ -360,6 +378,7 @@ impl EncodingNames {
             eq_sym_constructor: symbol_gen.fresh("Sym"),
             congr_constructor: symbol_gen.fresh("Congr"),
             congr_all_constructor: symbol_gen.fresh("CongrAll"),
+            proj_constructor: symbol_gen.fresh("Proj"),
             container_normalize_constructor: symbol_gen.fresh("ContainerNormalize"),
             eval_constructor: symbol_gen.fresh("Eval"),
             sort_to_ast_constructor: HashMap::default(),
@@ -735,6 +754,7 @@ impl ProofInstrumentor<'_> {
             ref eq_sym_constructor,
             ref congr_constructor,
             ref congr_all_constructor,
+            ref proj_constructor,
             ref container_normalize_constructor,
             ref eval_constructor,
             ..
@@ -745,7 +765,7 @@ impl ProofInstrumentor<'_> {
 (sort {ast_sort}) ;; wrap sorts in this for proofs
 ;; The proof datatype records the global proof constructor names so container
 ;; rebuild can recover them on re-parse (see ContainerRebuildSpec).
-(sort {proof_datatype} :internal-proof-names {congr_constructor} {congr_all_constructor} {eq_trans_constructor} {eq_sym_constructor} {container_normalize_constructor} {fiat_constructor})
+(sort {proof_datatype} :internal-proof-names {congr_constructor} {congr_all_constructor} {eq_trans_constructor} {eq_sym_constructor} {container_normalize_constructor} {fiat_constructor} {proj_constructor})
 
 ;; Proof/AST terms are relations, not constructors: the encoding mints a fresh id
 ;; and asserts the row (both in one `mint-<Relation>!` call), so congruent
@@ -807,6 +827,10 @@ impl ProofInstrumentor<'_> {
 ;; t1 = c and a proof that a = b, produces a justification that t1 = c with
 ;; every child of c equal to a replaced by b.
 (function {congr_all_constructor} ({proof_datatype} {proof_datatype} {proof_datatype}) Unit :no-merge :internal-hidden :internal-term-node)
+
+;; given a proof that t1 = f(..., ci, ...) and the child index i,
+;; produces a justification that ci = ci
+(function {proj_constructor} ({proof_datatype} i64 {proof_datatype}) Unit :no-merge :internal-hidden :internal-term-node)
 
 ;; given a proof that t1 = c, where c is a container term, produces a proof that
 ;; t1 = normalize(c) (the container's canonicalization: sort/dedup for sets,
