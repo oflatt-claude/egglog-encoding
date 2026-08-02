@@ -876,11 +876,9 @@ mod tests {
         );
     }
 
-    // An eq-sort value a primitive computes without being handed a container is
-    // named by no view row, so there is no reflexive anchor for it and proof
-    // mode rejects the rule.
-    #[test]
-    fn proof_support_rejects_eq_sort_primitive_results_without_a_container() {
+    /// An e-graph with proofs on and `proof-id`: a primitive returning an
+    /// eq-sort value it was handed no container to read out of.
+    fn proof_id_egraph() -> EGraph {
         let mut egraph = EGraph::default();
         let validator =
             |_: &mut TermDag, args: &[TermId]| -> Option<TermId> { args.first().copied() };
@@ -889,65 +887,98 @@ mod tests {
             "proof-id" = |x: #| -> # { x },
             validator
         );
-        let mut egraph = egraph.with_proofs_enabled();
+        egraph.with_proofs_enabled()
+    }
 
-        let err = egraph
-            .parse_and_run_program(
-                None,
-                r#"
-                (datatype Math
-                  (Done)
-                  (Num i64))
-                (relation Seed (Math))
+    /// The prelude the `proof-id` rules below run against.
+    const PROOF_ID_PRELUDE: &str = r#"
+        (datatype Math
+          (Done)
+          (Num i64))
+        (relation Seed (Math))
+        (relation Seen (Math))
 
-                (Seed (Num 1))
+        (Seed (Num 1))
+    "#;
 
-                (rule ((Seed y)
-                       (= x (proof-id y)))
-                      ((Done))
-                      :name "use-proof-id")
-                "#,
-            )
-            .unwrap_err();
-        assert!(
-            matches!(
-                err,
-                Error::UnsupportedProofCommand {
-                    reason: ProofEncodingUnsupportedReason::EqSortPrimitiveResultWithoutContainer,
-                    ..
-                }
-            ),
-            "expected EqSortPrimitiveResultWithoutContainer, got {err:?}"
-        );
+    // An eq-sort value a primitive computes without being handed a container is
+    // named by no view row, so there is no reflexive anchor for it. The premise
+    // of the fact binding it *is* that anchor, so the rule is rejected whether
+    // or not the actions read the value.
+    #[test]
+    fn proof_support_rejects_eq_sort_primitive_results_without_a_container() {
+        for head in ["((Done))", "((Seen x))"] {
+            let err = proof_id_egraph()
+                .parse_and_run_program(
+                    None,
+                    &format!(
+                        r#"{PROOF_ID_PRELUDE}
+                        (rule ((Seed y)
+                               (= x (proof-id y)))
+                              {head}
+                              :name "use-proof-id")
+                        "#
+                    ),
+                )
+                .unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    Error::UnsupportedProofCommand {
+                        reason:
+                            ProofEncodingUnsupportedReason::EqSortPrimitiveResultWithoutContainer,
+                        ..
+                    }
+                ),
+                "expected EqSortPrimitiveResultWithoutContainer for head {head}, got {err:?}"
+            );
+        }
+    }
+
+    // The same value, in a body position whose premise drops its anchor: a view
+    // atom's argument, and the right-hand side of a term the query builds. Each
+    // rule encodes, and the proof of what it concludes checks.
+    #[test]
+    fn proof_mode_allows_an_eq_sort_primitive_result_whose_anchor_goes_unread() {
+        for body in [
+            "(Seed (proof-id y))",
+            "(= (Num n) (proof-id y))",
+            // The value is also matched by a view atom, which anchors it.
+            "(= x (proof-id y)) (Seed x)",
+            // The value is aliased to a variable a view atom anchors.
+            "(= x (proof-id y)) (Seed z) (= x z)",
+        ] {
+            proof_id_egraph()
+                .parse_and_run_program(
+                    None,
+                    &format!(
+                        r#"{PROOF_ID_PRELUDE}
+                        (rule ((Seed y) {body})
+                              ((Seen y))
+                              :name "read-a-proof-id")
+                        (run 1)
+                        (prove (Seen (Num 1)))
+                        "#
+                    ),
+                )
+                .unwrap_or_else(|err| panic!("body `{body}` should encode, got {err:?}"));
+        }
     }
 
     #[test]
     fn proof_support_rejects_naive_eq_sort_primitive_results_in_facts() {
-        let mut egraph = EGraph::default();
-        let validator =
-            |_: &mut TermDag, args: &[TermId]| -> Option<TermId> { args.first().copied() };
-        add_primitive_with_validator!(
-            &mut egraph,
-            "proof-id" = |x: #| -> # { x },
-            validator
-        );
-        let mut egraph = egraph.with_proofs_enabled();
-
-        let err = egraph
+        let err = proof_id_egraph()
             .parse_and_run_program(
                 None,
-                r#"
-                (datatype Math
-                  (Done)
-                  (Num i64))
-                (relation Seed (Math))
-
-                (rule ((Seed y)
-                       (= x (proof-id y)))
-                      ((Done))
-                      :naive
-                      :name "naive-use-proof-id")
-                "#,
+                &format!(
+                    r#"{PROOF_ID_PRELUDE}
+                    (rule ((Seed y)
+                           (= x (proof-id y)))
+                          ((Done))
+                          :naive
+                          :name "naive-use-proof-id")
+                    "#
+                ),
             )
             .unwrap_err();
 
@@ -1307,22 +1338,63 @@ mod tests {
         );
     }
 
+    // The premise of the fact binding the element *is* its reflexive anchor, so
+    // the rule is rejected whether or not the actions read the element.
     #[test]
     fn proof_support_rejects_element_read_from_query_built_container() {
-        assert_query_built_container_rejected(
-            r#"
-            (datatype Math (Num i64))
-            (sort MathVec (Vec Math))
-            (relation HasElem (Math))
-            (relation Seen (Math))
+        for head in ["((Seen e))", "((Seen a))"] {
+            assert_query_built_container_rejected(&format!(
+                r#"
+                (datatype Math (Num i64))
+                (sort MathVec (Vec Math))
+                (relation HasElem (Math))
+                (relation Seen (Math))
 
-            (rule ((HasElem a) (HasElem b)
-                   (= xs (vec-of a b))
-                   (= e (vec-get xs 1)))
-                  ((Seen e))
-                  :name "read-out-of-a-built-vec")
-            "#,
-        );
+                (rule ((HasElem a) (HasElem b)
+                       (= xs (vec-of a b))
+                       (= e (vec-get xs 1)))
+                      {head}
+                      :name "read-out-of-a-built-vec")
+                "#
+            ));
+        }
+    }
+
+    // The same read, in a body position whose premise drops its anchor: a view
+    // atom's argument, and the right-hand side of a term the query builds. Each
+    // rule encodes, and the proof of what it concludes checks.
+    #[test]
+    fn proof_mode_reads_a_query_built_container_element_whose_anchor_goes_unread() {
+        for body in [
+            "(HasElem (vec-get xs 1))",
+            "(= (Num n) (vec-get xs 1))",
+            // The element is also matched by a view atom, which anchors it.
+            "(= e (vec-get xs 1)) (HasElem e)",
+            // The element is aliased to a variable a view atom anchors.
+            "(= e (vec-get xs 1)) (HasElem z) (= e z)",
+        ] {
+            EGraph::new_with_proofs()
+                .parse_and_run_program(
+                    None,
+                    &format!(
+                        r#"
+                        (datatype Math (Num i64))
+                        (sort MathVec (Vec Math))
+                        (relation HasElem (Math))
+                        (relation Seen (Math))
+                        (HasElem (Num 1))
+
+                        (rule ((HasElem a) (HasElem b) (= xs (vec-of a b)) {body})
+                              ((Seen a))
+                              :name "read-out-of-a-built-vec")
+
+                        (run 1)
+                        (prove (Seen (Num 1)))
+                        "#
+                    ),
+                )
+                .unwrap_or_else(|err| panic!("body `{body}` should encode, got {err:?}"));
+        }
     }
 
     #[test]

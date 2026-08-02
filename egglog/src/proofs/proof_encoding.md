@@ -420,9 +420,19 @@ above is a row the database holds, and a container a body primitive built is in
 no row — so neither it nor anything read out of it can be projected. There is no
 congruence route either: `@Congr`/`@CongrAll` rewrite a child of a term a proof
 already mentions, so they cannot introduce the container's term in the first
-place. Proof support rejects such a rule up front (see
-[`crate::ProofEncodingUnsupportedReason`]), and likewise a rule computing an
-eq-sort value with a primitive that was handed no container to read it out of.
+place.
+
+Such a value only matters where a premise reads its anchor. A fact's premise
+composes `Sym(left)` with `right` and drops whichever side proves `t = t`, so an
+equality reads its right-hand anchor exactly when its left-hand proof is itself
+reflexive — a variable, or another primitive's result, but not a term the query
+builds. Anywhere else the anchor goes unread and is never written: a view atom's
+argument, the right-hand side of a built term, or a value some other atom
+anchors after all. Proof support rejects a rule whose premises do read one (see
+[`crate::ProofEncodingUnsupportedReason`]), covering both a container a body
+primitive built and an eq-sort value a primitive produced without being handed a
+container to read it out of. A head that mints no row reads no premise either;
+proof support does not model that, and rejects those rules too.
 
 ## Layer 1: building the proof as the rule runs
 

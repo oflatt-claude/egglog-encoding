@@ -875,11 +875,11 @@ pub enum ProofEncodingUnsupportedReason {
     )]
     ContainerCreatedInQueryUsedInAction,
     #[error(
-        "a rule body reads an eq-sort value out of a container constructed in the query (a container-producing primitive result), or equates two such containers. The value came out of a container the query computed, so nothing in the query names it as a term and proofs have nothing to say about it."
+        "a rule premise proves an equality about a container the query itself built (a container-producing primitive result), or about a value read out of one. No view row names that value, so the encoding has no row to project its reflexive proof out of; match the value with an atom instead."
     )]
     ContainerCreatedInQueryProvedAbout,
     #[error(
-        "a rule body computes an eq-sort value with a primitive that was given no container to read it out of. The value is one the query computed rather than one the database names, so proofs have nothing to say about it."
+        "a rule premise proves an equality about an eq-sort value a primitive computed without being handed a container to read it out of. No view row names that value, so the encoding has no row to project its reflexive proof out of; match the value with an atom instead."
     )]
     EqSortPrimitiveResultWithoutContainer,
     #[error(
@@ -1063,61 +1063,239 @@ fn query_built_containers(body: &[ResolvedFact]) -> Vec<String> {
     built
 }
 
-/// Whether a rule body states something the encoding would need a query-built
-/// container's reflexive anchor for: an eq-sort value read out of one, or an
-/// equality between two of them. Reading a base-sorted value out of such a
-/// container, passing it to a constructor, or building it needs no such anchor.
-fn body_needs_query_built_container_proof(body: &[ResolvedFact], built: &[String]) -> bool {
-    let is_built = |expr: &ResolvedExpr| match expr {
-        ResolvedExpr::Var(_, v) => built.contains(&v.name),
-        other => builds_a_container(other),
-    };
-    body.iter().any(|fact| {
-        if is_container_side_condition(fact) {
-            return false;
-        }
-        if let ResolvedFact::Eq(_, lhs, rhs) = fact
-            && is_built(lhs)
-            && is_built(rhs)
-        {
-            return true;
-        }
-        let mut reads_an_element = false;
-        fact.clone().visit_exprs(&mut |expr| {
-            if let ResolvedExpr::Call(_, ResolvedCall::Primitive(prim), args) = &expr
-                && prim.output().is_eq_sort()
-                && !prim.output().is_eq_container_sort()
-                && args.iter().any(&is_built)
-            {
-                reads_an_element = true;
-            }
-            expr
-        });
-        reads_an_element
-    })
+/// One value a rule body binds: a variable, or one occurrence of a call the
+/// query evaluates. Two occurrences of the same call are two values, as they
+/// are to the encoder.
+#[derive(Clone, PartialEq, Eq, Hash)]
+enum BodyValue {
+    Var(String),
+    Call(usize),
 }
 
-/// Whether a rule body computes an eq-sort value with a primitive that was
-/// given no container to read it out of. Nothing in the query names such a
-/// value as a term, so the encoding has no row to project its proof out of.
-fn body_computes_a_rootless_value(body: &[ResolvedFact]) -> bool {
-    body.iter().any(|fact| {
-        let mut rootless = false;
-        fact.clone().visit_exprs(&mut |expr| {
-            if let ResolvedExpr::Call(_, ResolvedCall::Primitive(prim), _) = &expr
-                && prim.output().is_eq_sort()
-                && !prim.output().is_eq_container_sort()
-                && !prim
-                    .input()
-                    .iter()
-                    .any(|sort| holds_sort(sort, prim.output().name()))
-            {
-                rootless = true;
+/// What one body expression contributes to a [`BodyAnchorScan`].
+struct Scanned {
+    /// The value the expression denotes.
+    value: BodyValue,
+    /// Whether its proof proves `t = t`.
+    reflexive: bool,
+    /// When that proof is a reflexive anchor, the reason to report if the body
+    /// turns out to supply none.
+    anchor: Option<ProofEncodingUnsupportedReason>,
+}
+
+/// The reflexive anchors a rule body offers and the ones its premises read, as
+/// the encoder collects them (see
+/// [`crate::proofs::proof_encoding::BodyAnchors`]).
+#[derive(Default)]
+struct BodyAnchorScan {
+    /// Values a view atom's row proof reaches.
+    rows: HashSet<BodyValue>,
+    /// Values the body's equalities force equal, so either one's anchor serves
+    /// both.
+    aliases: Vec<(BodyValue, BodyValue)>,
+    /// A value a primitive read out of a container, and the arguments it could
+    /// have come out of.
+    elements: HashMap<BodyValue, Vec<BodyValue>>,
+    /// The anchors the body's premises read, with [`Scanned::anchor`]'s reason.
+    requests: Vec<(BodyValue, ProofEncodingUnsupportedReason)>,
+    /// Calls scanned so far, numbering [`BodyValue::Call`].
+    calls: usize,
+}
+
+impl BodyAnchorScan {
+    fn scan(body: &[ResolvedFact]) -> Self {
+        let mut scan = Self::default();
+        for fact in body {
+            scan.fact(fact);
+        }
+        scan
+    }
+
+    fn fresh(&mut self) -> BodyValue {
+        self.calls += 1;
+        BodyValue::Call(self.calls)
+    }
+
+    fn fact(&mut self, fact: &ResolvedFact) {
+        // A container side condition's premise is the `Eval` marker, which
+        // reads no anchor.
+        if is_container_side_condition(fact) {
+            return;
+        }
+        match fact {
+            // A custom function's view atom: its row proof is reflexive over the
+            // whole application, so it reaches the arguments and the output.
+            ResolvedFact::Eq(
+                _,
+                ResolvedExpr::Call(_, ResolvedCall::Func(func_type), args),
+                ResolvedExpr::Var(_, out),
+            ) if func_type.subtype == crate::ast::FunctionSubtype::Custom => {
+                for arg in args {
+                    let scanned = self.expr(arg);
+                    self.rows.insert(scanned.value);
+                }
+                self.rows.insert(BodyValue::Var(out.name.clone()));
             }
-            expr
-        });
-        rootless
-    })
+            ResolvedFact::Eq(_, lhs, rhs) => {
+                let (lhs, rhs) = (self.expr(lhs), self.expr(rhs));
+                self.aliases.push((lhs.value, rhs.value.clone()));
+                // The premise composes `Sym(left)` with `right` and drops
+                // whichever side is reflexive, so the right-hand anchor is read
+                // exactly when the left-hand proof is itself reflexive.
+                if lhs.reflexive
+                    && let Some(reason) = rhs.anchor
+                {
+                    self.requests.push((rhs.value, reason));
+                }
+            }
+            ResolvedFact::Fact(expr) => {
+                self.expr(expr);
+            }
+        }
+    }
+
+    fn expr(&mut self, expr: &ResolvedExpr) -> Scanned {
+        match expr {
+            // A literal is proved by a reflexive `Fiat`, which needs no anchor.
+            ResolvedExpr::Lit(..) => Scanned {
+                value: self.fresh(),
+                reflexive: true,
+                anchor: None,
+            },
+            // `remove_globals` reads a global reference off its FD view, whose
+            // row proof reaches the value.
+            ResolvedExpr::Var(_, var) if var.is_global_ref => {
+                let value = BodyValue::Var(var.name.clone());
+                self.rows.insert(value.clone());
+                Scanned {
+                    value,
+                    reflexive: false,
+                    anchor: None,
+                }
+            }
+            ResolvedExpr::Var(_, var) => Scanned {
+                value: BodyValue::Var(var.name.clone()),
+                reflexive: true,
+                anchor: if var.sort.is_eq_container_sort() {
+                    Some(ProofEncodingUnsupportedReason::ContainerCreatedInQueryProvedAbout)
+                } else if var.sort.is_eq_sort() {
+                    Some(ProofEncodingUnsupportedReason::EqSortPrimitiveResultWithoutContainer)
+                } else {
+                    None
+                },
+            },
+            ResolvedExpr::Call(_, call, args) => {
+                let args: Vec<Scanned> = args.iter().map(|arg| self.expr(arg)).collect();
+                let value = self.fresh();
+                match call {
+                    // A view atom: its row proof reads `eclass = f(children)`,
+                    // reaching the call's own value and every argument.
+                    ResolvedCall::Func(_) => {
+                        self.rows.insert(value.clone());
+                        self.rows.extend(args.into_iter().map(|arg| arg.value));
+                        Scanned {
+                            value,
+                            reflexive: false,
+                            anchor: None,
+                        }
+                    }
+                    ResolvedCall::Primitive(prim) if prim.output().is_eq_container_sort() => {
+                        Scanned {
+                            value,
+                            reflexive: false,
+                            anchor: None,
+                        }
+                    }
+                    // An eq-sort result is an element the primitive read out of
+                    // whichever arguments can hold its sort.
+                    ResolvedCall::Primitive(prim) if prim.output().is_eq_sort() => {
+                        let containers: Vec<BodyValue> = prim
+                            .input()
+                            .iter()
+                            .zip(&args)
+                            .filter(|(sort, _)| holds_sort(sort, prim.output().name()))
+                            .map(|(_, arg)| arg.value.clone())
+                            .collect();
+                        let anchor = if containers.is_empty() {
+                            ProofEncodingUnsupportedReason::EqSortPrimitiveResultWithoutContainer
+                        } else {
+                            ProofEncodingUnsupportedReason::ContainerCreatedInQueryProvedAbout
+                        };
+                        self.elements.insert(value.clone(), containers);
+                        Scanned {
+                            value,
+                            reflexive: true,
+                            anchor: Some(anchor),
+                        }
+                    }
+                    // A base result is a literal, proved by a reflexive `Fiat`.
+                    ResolvedCall::Primitive(_) => Scanned {
+                        value,
+                        reflexive: true,
+                        anchor: None,
+                    },
+                    ResolvedCall::Values(_) => Scanned {
+                        value,
+                        reflexive: false,
+                        anchor: None,
+                    },
+                }
+            }
+        }
+    }
+
+    /// Every value the body's equalities relate to `value`, itself included.
+    fn alias_class(&self, value: &BodyValue) -> HashSet<BodyValue> {
+        let mut class: HashSet<BodyValue> = HashSet::default();
+        let mut frontier = vec![value.clone()];
+        while let Some(value) = frontier.pop() {
+            if !class.insert(value.clone()) {
+                continue;
+            }
+            for (left, right) in &self.aliases {
+                if *left == value {
+                    frontier.push(right.clone());
+                } else if *right == value {
+                    frontier.push(left.clone());
+                }
+            }
+        }
+        class
+    }
+
+    /// Whether an anchor for `value` can be projected out of a view row the body
+    /// reads: one naming it, or one naming a container it was read out of.
+    ///
+    /// The encoder resolves an alias class to a single source and picks among
+    /// several container reads arbitrarily, so a class of reads counts as
+    /// anchored only when every read in it is.
+    fn anchored(&self, value: &BodyValue, visiting: &mut HashSet<BodyValue>) -> bool {
+        if !visiting.insert(value.clone()) {
+            return false;
+        }
+        let class = self.alias_class(value);
+        let reads: Vec<&Vec<BodyValue>> =
+            class.iter().filter_map(|v| self.elements.get(v)).collect();
+        let anchored = class.iter().any(|v| self.rows.contains(v))
+            || (!reads.is_empty()
+                && reads.iter().all(|containers| {
+                    containers
+                        .iter()
+                        .any(|container| self.anchored(container, visiting))
+                }));
+        visiting.remove(value);
+        anchored
+    }
+}
+
+/// Why the encoding cannot prove a rule's body, if it cannot: a premise reads
+/// the reflexive anchor of a value the query computed, which no view row names.
+fn body_premise_without_anchor(body: &[ResolvedFact]) -> Option<ProofEncodingUnsupportedReason> {
+    let scan = BodyAnchorScan::scan(body);
+    scan.requests
+        .iter()
+        .find(|(value, _)| !scan.anchored(value, &mut HashSet::default()))
+        .map(|(_, reason)| reason.clone())
 }
 
 /// Checks whether a resolved command supports proof encoding.
@@ -1241,14 +1419,9 @@ fn command_supports_proof_encoding_impl(
     }
 
     // A value the query computes is anchored by projecting it out of a view row
-    // the body reads. A container a body primitive built is named by no such
-    // row, and neither is an eq-sort value a primitive produced without being
-    // handed a container to read it out of, so a body may not ask for a proof
-    // about either one.
+    // the body reads, and a container a body primitive built is named by no such
+    // row.
     if let GenericCommand::Rule { rule } = command {
-        if body_computes_a_rootless_value(&rule.body) {
-            return Err(ProofEncodingUnsupportedReason::EqSortPrimitiveResultWithoutContainer);
-        }
         let constructed = query_built_containers(&rule.body);
         if !constructed.is_empty() {
             let mut used_in_action = false;
@@ -1270,9 +1443,9 @@ fn command_supports_proof_encoding_impl(
             if used_in_action {
                 return Err(ProofEncodingUnsupportedReason::ContainerCreatedInQueryUsedInAction);
             }
-            if body_needs_query_built_container_proof(&rule.body, &constructed) {
-                return Err(ProofEncodingUnsupportedReason::ContainerCreatedInQueryProvedAbout);
-            }
+        }
+        if let Some(reason) = body_premise_without_anchor(&rule.body) {
+            return Err(reason);
         }
     }
 
