@@ -567,6 +567,60 @@ mod tests {
         }
     }
 
+    /// A view rebuild anchors a column only when the column did not move:
+    /// `uf_canon_proof` reads the `@UF` row's proof when there is one, and mints
+    /// the reflexive anchor itself on the miss that says there is not.
+    #[test]
+    fn a_view_rebuild_anchors_only_the_columns_that_did_not_move() {
+        /// After a proof-mode run of `source`: the rows in the relations a
+        /// rebuild anchor lands in, and the rows in the two-column packed
+        /// relation the rebuild itself writes, one per firing.
+        fn rows(source: &str) -> (usize, usize) {
+            let mut egraph = EGraph::new_with_proofs();
+            egraph.parse_and_run_program(None, source).unwrap();
+            let names = &egraph.proof_state.proof_names;
+            let size = |name: &String| {
+                egraph
+                    .functions
+                    .get(name)
+                    .map_or(0, |f| egraph.backend.table_size(f.backend_id))
+            };
+            let anchors = [names.proj_constructor.clone(), names.packed_proof(1)];
+            (anchors.iter().map(size).sum(), size(&names.packed_proof(2)))
+        }
+
+        // A `Num` view has no eq-sort child, so its e-class is the only column
+        // the rebuild canonicalizes — and the `@UF` edge the firing joins on is
+        // what moved it.
+        let (anchors, firings) = rows(
+            r#"
+            (datatype Math (Num i64))
+            (let a (Num 1))
+            (let b (Num 2))
+            (union a b)
+            (run 1)
+            (prove (= a b))
+            "#,
+        );
+        assert!(firings > 0, "no view rebuild fired");
+        assert_eq!(anchors, 0, "a column that moved was anchored anyway");
+
+        // `(Add a (Num 2))`'s second child and its e-class stay canonical, so
+        // the same firing does anchor them.
+        let (anchors, _) = rows(
+            r#"
+            (datatype Math (Num i64) (Add Math Math))
+            (let z (Num 0))
+            (let a (Num 1))
+            (let ab (Add a (Num 2)))
+            (union a z)
+            (run 1)
+            (check (= ab (Add z (Num 2))))
+            "#,
+        );
+        assert!(anchors > 0, "a column that did not move went unanchored");
+    }
+
     /// A user rule marked `:naive` must stay `:naive` through proof encoding;
     /// dropping it would silently switch the rule to seminaive evaluation.
     #[test]

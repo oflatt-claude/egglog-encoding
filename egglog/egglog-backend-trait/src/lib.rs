@@ -432,6 +432,28 @@ pub trait Backend: Send + Sync {
         ))
     }
 
+    /// Register a [`Backend::register_view_column_read`] whose fallback is a
+    /// [`Backend::register_mint_row`] into `mint_table`, run only when the key is
+    /// absent: `(keys, mint_args…) -> column`, taking `n_keys + n_mint_args`
+    /// arguments. Semantics at invoke: return output column `col_idx` of
+    /// `(view_name keys)`; when that row is absent, mint a fresh id, insert
+    /// `(mint_args…, fresh, vals…)` into `mint_table`, and return the fresh id.
+    /// The default registers a panic.
+    fn register_view_column_read_or_mint(
+        &mut self,
+        view_name: String,
+        _n_keys: usize,
+        _col_idx: usize,
+        mint_table: String,
+        _n_mint_args: usize,
+        _vals: Vec<Value>,
+    ) -> ExternalFunctionId {
+        self.new_panic(format!(
+            "this backend does not support view-column reads for view `{view_name}` \
+             falling back to minting `{mint_table}`"
+        ))
+    }
+
     /// Register the mint op for the term-node relation named `table_name`
     /// (`n_args` argument columns, then the minted id column, then value columns
     /// filled with `vals`). Returns the [`ExternalFunctionId`] its call sites

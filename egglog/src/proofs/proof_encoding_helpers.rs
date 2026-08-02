@@ -809,7 +809,8 @@ impl ProofInstrumentor<'_> {
 (function {congr_all_constructor} ({proof_datatype} {proof_datatype} {proof_datatype}) Unit :no-merge :internal-hidden :internal-term-node)
 
 ;; given a proof that t1 = f(..., ci, ...) and the child index i,
-;; produces a justification that ci = ci
+;; produces a justification that ci = ci. The index -1 instead names t1, and
+;; reads back as the reflexivization Trans(p, Sym(p)).
 (function {proj_constructor} ({proof_datatype} i64 {proof_datatype}) Unit :no-merge :internal-hidden :internal-term-node)
 
 ;; element-matching projection: given a proof that t1 = c and an AST node naming

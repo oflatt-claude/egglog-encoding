@@ -184,6 +184,9 @@ pub struct EGraph {
     pub(crate) set_if_empty_ops: HashMap<ExternalFunctionId, ViewOp>,
     /// View-column reader ops, keyed like `set_if_empty_ops`.
     pub(crate) view_column_read_ops: HashMap<ExternalFunctionId, ViewOp>,
+    /// View-column reader ops whose miss mints a row, keyed like
+    /// `set_if_empty_ops`. The mint's arguments follow the view's keys.
+    pub(crate) view_column_read_or_mint_ops: HashMap<ExternalFunctionId, (ViewOp, MintOp)>,
     /// Mint ops, keyed like `set_if_empty_ops`.
     pub(crate) mint_ops: HashMap<ExternalFunctionId, MintOp>,
 }
@@ -277,6 +280,7 @@ impl EGraph {
             table_ids: HashMap::new(),
             set_if_empty_ops: HashMap::new(),
             view_column_read_ops: HashMap::new(),
+            view_column_read_or_mint_ops: HashMap::new(),
             mint_ops: HashMap::new(),
         }
     }
@@ -971,6 +975,9 @@ impl<'a> MergeTransaction<'a> {
                 if let Some(op) = self.eg.view_column_read_ops.get(id).cloned() {
                     return self.view_column_read_in_merge(&op, &args);
                 }
+                if let Some((view, mint)) = self.eg.view_column_read_or_mint_ops.get(id).cloned() {
+                    return self.view_column_read_or_mint_in_merge(&view, &mint, &args);
+                }
                 if let Some(op) = self.eg.mint_ops.get(id).cloned() {
                     return self.mint_in_merge(&op, &args);
                 }
@@ -1107,6 +1114,23 @@ impl<'a> MergeTransaction<'a> {
             Some(current) => current.values[op.col_idx],
             None => fallback,
         })
+    }
+
+    /// [`Self::view_column_read_in_merge`] whose miss mints a row instead of
+    /// returning a fallback argument: the mint's arguments are the ones after
+    /// the view's keys.
+    fn view_column_read_or_mint_in_merge(
+        &mut self,
+        view: &ViewOp,
+        mint: &MintOp,
+        args: &[u32],
+    ) -> Result<u32> {
+        let table = self.view_op_table(view)?;
+        let key: Row = args[..view.n_keys].into();
+        match self.current_row(table, view.n_keys, &key) {
+            Some(current) => Ok(current.values[view.col_idx]),
+            None => self.mint_in_merge(mint, &args[view.n_keys..]),
+        }
     }
 
     fn view_op_table(&self, op: &ViewOp) -> Result<FunctionId> {
@@ -2708,6 +2732,40 @@ impl Backend for EGraph {
         id
     }
 
+    fn register_view_column_read_or_mint(
+        &mut self,
+        view_name: String,
+        n_keys: usize,
+        col_idx: usize,
+        mint_table: String,
+        n_mint_args: usize,
+        vals: Vec<Value>,
+    ) -> ExternalFunctionId {
+        // Intercepted like `set-if-empty`; see the comment there.
+        let id = Backend::new_panic(
+            self,
+            format!("view-column read for `{view_name}` reached the db path; DD must intercept it"),
+        );
+        self.view_column_read_or_mint_ops.insert(
+            id,
+            (
+                ViewOp {
+                    view_name,
+                    n_keys,
+                    // Only the mint inserts, so the view's out_arity is unused.
+                    out_arity: 0,
+                    col_idx,
+                },
+                MintOp {
+                    table_name: mint_table,
+                    n_args: n_mint_args,
+                    vals: vals.iter().map(|v| v.rep()).collect(),
+                },
+            ),
+        );
+        id
+    }
+
     fn register_mint_row(
         &mut self,
         table_name: String,
@@ -2784,6 +2842,7 @@ impl Backend for EGraph {
             table_ids: self.table_ids.clone(),
             set_if_empty_ops: self.set_if_empty_ops.clone(),
             view_column_read_ops: self.view_column_read_ops.clone(),
+            view_column_read_or_mint_ops: self.view_column_read_or_mint_ops.clone(),
             mint_ops: self.mint_ops.clone(),
         })
     }

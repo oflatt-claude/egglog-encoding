@@ -23,12 +23,6 @@ pub(super) fn rebuild_skeleton(children: &[usize], eclass: bool) -> Skeleton {
     skeleton
 }
 
-/// The composition reflexivizing a view row's proof `eclass = f(children)` into
-/// `eclass = eclass`, over one column holding that row proof.
-pub(super) fn eclass_refl_skeleton() -> Skeleton {
-    Skeleton::Leaf(0).trans(Skeleton::Leaf(0).sym())
-}
-
 impl ProofInstrumentor<'_> {
     /// Rules that execute deletion and subsumption based on the tables requesting the deletion/subsumption.
     pub(super) fn delete_and_subsume(&mut self, fdecl: &ResolvedFunctionDecl) -> String {
@@ -199,8 +193,9 @@ impl ProofInstrumentor<'_> {
     ///
     /// In proof mode a firing writes one
     /// [`packed_proof`](super::proof_encoding_helpers::EncodingNames::packed_proof)
-    /// row, or none at all when nothing was canonicalized and the view's output
-    /// is not an e-class.
+    /// row — or none at all when nothing was canonicalized and the view's output
+    /// is not an e-class — plus whatever anchors `uf_canon_proof` mints for the
+    /// columns that turned out not to have moved.
     fn indexed_rebuild_rule(
         &mut self,
         fdecl: &ResolvedFunctionDecl,
@@ -246,11 +241,12 @@ impl ProofInstrumentor<'_> {
                 uf_canon_prim_name(&uf_j)
             ));
             if proofs {
-                let proj = self.proof_names().proj_constructor.clone();
-                let refl = self.mint(&mut lets, &proj, &format!("{row_pf} {j}"));
+                // The row proof names this column at child position `j`, so
+                // that is where the anchor comes from if the column turns out
+                // not to have moved.
                 let step = self.fresh_var();
                 lets.push(format!(
-                    "(let {step} ({} {cj} {refl}))",
+                    "(let {step} ({} {cj} {row_pf} {j}))",
                     uf_canon_proof_prim_name(&uf_j)
                 ));
                 steps.push((j, step));
@@ -277,20 +273,14 @@ impl ProofInstrumentor<'_> {
                 uf_canon_prim_name(&uf_out)
             ));
             if proofs {
-                // The row proof reads `eclass = f(children)`, so the e-class is
-                // its left-hand side rather than a child: reflexivize it instead
-                // of projecting.
-                let (packed, decl) = self.packed_proof_constructor(1);
-                decls.push_str(&decl);
-                let refl = self.mint(
-                    &mut lets,
-                    &packed,
-                    &format!("\"{}\" {row_pf}", eclass_refl_skeleton().spelling()),
-                );
+                // The row proof reads `eclass = f(children)`, so the e-class
+                // is its left-hand side rather than a child: the anchor
+                // position is the one that reflexivizes the row proof.
                 let step = self.fresh_var();
                 lets.push(format!(
-                    "(let {step} ({} {eclass} {refl}))",
-                    uf_canon_proof_prim_name(&uf_out)
+                    "(let {step} ({} {eclass} {row_pf} {}))",
+                    uf_canon_proof_prim_name(&uf_out),
+                    crate::proofs::proof_format::PROJ_LHS_POSITION
                 ));
                 // The packed row takes the step as it stands: its expansion is
                 // what applies the `Sym`.

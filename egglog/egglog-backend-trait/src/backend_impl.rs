@@ -267,6 +267,26 @@ impl Backend for EGraph {
         EGraph::register_view_column_read(self, view_name, n_keys, col_idx)
     }
 
+    fn register_view_column_read_or_mint(
+        &mut self,
+        view_name: String,
+        n_keys: usize,
+        col_idx: usize,
+        mint_table: String,
+        n_mint_args: usize,
+        vals: Vec<Value>,
+    ) -> ExternalFunctionId {
+        EGraph::register_view_column_read_or_mint(
+            self,
+            view_name,
+            n_keys,
+            col_idx,
+            mint_table,
+            n_mint_args,
+            vals,
+        )
+    }
+
     fn register_mint_row(
         &mut self,
         table_name: String,

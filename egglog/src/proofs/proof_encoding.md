@@ -401,17 +401,20 @@ anchor is instead **projected out of a row proof already in scope**. A view
 row's proof states an equality whose right-hand side is the row's term, so:
 
 * a term the row mentions as a child is `@Proj(row, i)`;
-* a constructor view's e-class — the row proof's left-hand side — is the row
-  proof reflexivized, `@Packed_1 "trans_p0_sym_p0"`;
+* a constructor view's e-class — the row proof's left-hand side — is
+  `@Proj(row, -1)`, which reads back as the row proof reflexivized,
+  `Trans(row, Sym(row))`;
 * a container's element, whose position in the term form is only known once the
   term is in hand, is `@ProjAll(row, ast)`.
 
-That covers every anchor the encoding wants: the seeds a view rebuild hands
-`@UF_<Sort>_canon_proof`, the reflexive base a container rebuild composes from,
-and a rule body's eq-sort or container variable. Which row anchors a body
+That covers every anchor the encoding wants: the fallback a view rebuild's
+`@UF_<Sort>_canon_proof` mints, the reflexive base a container rebuild composes
+from, and a rule body's eq-sort or container variable. Which row anchors a body
 variable is only known once the whole body is walked, so the anchor's row is
 written where the composition reading it lands — and a composition that drops it
-as reflexive writes none at all.
+as reflexive writes none at all. A view rebuild's anchor is written later still:
+`@UF_<Sort>_canon_proof` mints it only on the miss that says the column did not
+move (see [Packed rows](#packed-rows)).
 
 ## Layer 1: building the proof as the rule runs
 
@@ -655,7 +658,8 @@ steps. Three rows against seventeen is the whole point of the layer.
 
 Row counts per firing, proof rows only (not the view or `@UF` write beside them):
 a flat rewrite **1**, the nested head above **3**, a view rebuild **one packed
-row plus one anchor per canonicalized column**, a merge collision **1**.
+row plus one anchor per canonicalized column that did not move**, a merge
+collision **1**.
 
 A `union` of two matched variables builds nothing, so it needs one row — but
 which endpoint the `@UF` edge is stated from is only known once the ids are
@@ -760,15 +764,16 @@ column and packs them:
 
 ```text
 (let c0_canon_ (@UF_Math_canon c0_ c0_))
-(let c0_refl (mint-@Proj! pf 0))
-(let c0_step (@UF_Math_canon_proof c0_ c0_refl))
-… same for c1_, and for e2_ with (mint-@Packed_1! "trans_p0_sym_p0" pf) …
+(let c0_step (@UF_Math_canon_proof c0_ pf 0))
+… same for c1_ at position 1, and for e2_ at position -1 …
 (let out (mint-@Packed_4! "trans_sym_p3_congr_congr_p0_0_p1_1_p2"
         pf c0_step c1_step e2_step))
 ```
 
-`@UF_<Sort>_canon_proof` supplies each step's proof, falling back to the column's
-reflexive anchor when it did not move. The e-class's step composes on the left
+`@UF_<Sort>_canon_proof` supplies each step's proof: the column's `@UF` row when
+it moved, and otherwise the [anchor](#reflexive-anchors) `@Proj(pf, position)`,
+which it mints only then. So the whole firing writes the packed row plus one
+anchor per column that stayed put. The e-class's step composes on the left
 rather than at a child position, since an e-class can equal one of its own
 children's terms.
 
