@@ -380,8 +380,8 @@ impl Parser {
                 // Parse sort - the :internal-* annotations and container sorts are mutually exclusive
                 // (sort <name>)
                 // (sort <name> :internal-uf <uf-function>)
-                // (sort <name> :internal-proof-func <internal-proof-func-name>)
-                // (sort <name> :internal-proof-names <congr> <congr-all> <trans> <sym> <normalize> <fiat> <proj>)
+                // (sort <name> :internal-ast-func <internal-ast-func-name>)
+                // (sort <name> :internal-proof-names <congr> <congr-all> <trans> <sym> <normalize> <fiat> <proj> <proj-all>)
                 // (sort <name> (<container sort> <argument sort>*))
                 match tail {
                     [name] => vec![Command::Sort {
@@ -389,23 +389,23 @@ impl Parser {
                         name: self.parse_name(name, "sort name")?,
                         presort_and_args: None,
                         uf: None,
-                        proof_func: None,
+                        ast_func: None,
                         container_rebuild: None,
                         proof_constructors: None,
                         unionable: true,
                     }],
                     [name, call @ Sexp::List(..), rest @ ..] => {
                         let (func, args, _) = call.expect_call("container sort declaration")?;
-                        // Container sorts may carry :internal-proof-func (their
-                        // `<CSort>Proof` table) and an :internal-container-rebuild
+                        // Container sorts may carry :internal-ast-func (their
+                        // `@Ast<CSort>` wrapper) and an :internal-container-rebuild
                         // spec (both emitted by the term/proof encoder).
-                        let mut proof_func = None;
+                        let mut ast_func = None;
                         let mut container_rebuild = None;
                         for (key, val) in self.parse_options(rest)? {
                             match (key, val) {
-                                (":internal-proof-func", [pf]) => {
-                                    proof_func =
-                                        Some(pf.expect_atom("internal-proof-func function name")?);
+                                (":internal-ast-func", [pf]) => {
+                                    ast_func =
+                                        Some(pf.expect_atom("internal-ast-func function name")?);
                                 }
                                 (":internal-container-rebuild", [spec]) => {
                                     container_rebuild = Some(parse_container_rebuild_spec(spec)?);
@@ -413,7 +413,7 @@ impl Parser {
                                 _ => {
                                     return error!(
                                         span,
-                                        "usage:\n(sort <name> (<container sort> <argument sort>*) [:internal-proof-func <name>] [:internal-container-rebuild <spec>])"
+                                        "usage:\n(sort <name> (<container sort> <argument sort>*) [:internal-ast-func <name>] [:internal-container-rebuild <spec>])"
                                     );
                                 }
                             }
@@ -426,17 +426,17 @@ impl Parser {
                                 map_fallible(args, self, Self::parse_expr)?,
                             )),
                             uf: None,
-                            proof_func,
+                            ast_func,
                             container_rebuild,
                             proof_constructors: None,
                             unionable: true,
                         }]
                     }
                     [name, rest @ ..] => {
-                        // Parse :internal-uf / :internal-proof-func and the
+                        // Parse :internal-uf / :internal-ast-func and the
                         // :internal-proof-names global proof-constructor record.
                         let mut uf: Option<(String, Option<String>)> = None;
-                        let mut proof_func = None;
+                        let mut ast_func = None;
                         let mut proof_constructors = None;
                         for (key, val) in self.parse_options(rest)? {
                             match (key, val) {
@@ -449,13 +449,22 @@ impl Parser {
                                         Some(uf_index.expect_atom("uf index function name")?),
                                     ));
                                 }
-                                (":internal-proof-func", [pf]) => {
-                                    proof_func =
-                                        Some(pf.expect_atom("internal-proof-func function name")?);
+                                (":internal-ast-func", [pf]) => {
+                                    ast_func =
+                                        Some(pf.expect_atom("internal-ast-func function name")?);
                                 }
                                 (
                                     ":internal-proof-names",
-                                    [congr, congr_all, trans, sym, normalize, fiat, proj],
+                                    [
+                                        congr,
+                                        congr_all,
+                                        trans,
+                                        sym,
+                                        normalize,
+                                        fiat,
+                                        proj,
+                                        proj_all,
+                                    ],
                                 ) => {
                                     proof_constructors = Some(ProofConstructorNames {
                                         congr: congr.expect_atom("congr constructor")?,
@@ -467,12 +476,13 @@ impl Parser {
                                             .expect_atom("container-normalize constructor")?,
                                         fiat: fiat.expect_atom("fiat constructor")?,
                                         proj: proj.expect_atom("proj constructor")?,
+                                        proj_all: proj_all.expect_atom("proj-all constructor")?,
                                     });
                                 }
                                 _ => {
                                     return error!(
                                         span,
-                                        "usages:\n(sort <name>)\n(sort <name> :internal-uf <uf-constructor> [<uf-index>])\n(sort <name> :internal-proof-func <internal-proof-func-name>)\n(sort <name> :internal-proof-names <congr> <congr-all> <trans> <sym> <normalize> <fiat> <proj>)\n(sort <name> (<container sort> <argument sort>*))"
+                                        "usages:\n(sort <name>)\n(sort <name> :internal-uf <uf-constructor> [<uf-index>])\n(sort <name> :internal-ast-func <internal-ast-func-name>)\n(sort <name> :internal-proof-names <congr> <congr-all> <trans> <sym> <normalize> <fiat> <proj> <proj-all>)\n(sort <name> (<container sort> <argument sort>*))"
                                     );
                                 }
                             }
@@ -482,7 +492,7 @@ impl Parser {
                             name: self.parse_name(name, "sort name")?,
                             presort_and_args: None,
                             uf,
-                            proof_func,
+                            ast_func,
                             container_rebuild: None,
                             proof_constructors,
                             unionable: true,

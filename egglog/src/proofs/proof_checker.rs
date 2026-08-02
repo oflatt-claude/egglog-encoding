@@ -20,13 +20,22 @@ use crate::{
 };
 use thiserror::Error;
 
-/// A side condition is a rule-body fact that is just a container-producing
-/// primitive applied to bound variables — `(= v (vec-of e))`, `(= (set-of a)
-/// (set-of b))`, or a bare `(vec-of e)` guard. The encoder emits it with a bare
-/// [`Justification::Eval`] marker as its proof, and the checker verifies it by
-/// re-evaluation in [`ProofStore::check_side_condition`] rather than by matching
-/// a premise proposition. Both use this gate, so they cannot drift.
-pub(super) fn is_container_side_condition(fact: &ResolvedFact) -> bool {
+/// A side condition is a rule-body fact a primitive determines from bound
+/// variables, so it is verified by re-evaluation rather than by a proof:
+///
+/// * a container-producing primitive anywhere in the fact — `(= v (vec-of e))`,
+///   `(= (set-of a) (set-of b))`, or a bare `(vec-of e)` guard;
+/// * a primitive returning an eq-sort value into a variable — `(= e (vec-get v
+///   1))`. The value comes out of a container, so nothing in the query names it
+///   as a term and no premise can be stated about it. It must be a variable: a
+///   fact equating the result to a *built* term (`(= (Add a b) (vec-get v 1))`)
+///   asserts an equality re-evaluation cannot settle.
+///
+/// The encoder emits such a fact with a bare [`Justification::Eval`] marker as
+/// its proof, and the checker verifies it in
+/// [`ProofStore::check_side_condition`], which also binds the output the fact
+/// determines. Both sides use this gate, so they cannot drift.
+pub(super) fn is_side_condition(fact: &ResolvedFact) -> bool {
     fn is_container_primitive(expr: &ResolvedExpr) -> bool {
         matches!(
             expr,
@@ -34,8 +43,23 @@ pub(super) fn is_container_side_condition(fact: &ResolvedFact) -> bool {
                 if p.output().is_eq_container_sort()
         )
     }
+    fn is_eq_sort_primitive(expr: &ResolvedExpr) -> bool {
+        matches!(
+            expr,
+            ResolvedExpr::Call(_, ResolvedCall::Primitive(p), _)
+                if p.output().is_eq_sort() && !p.output().is_eq_container_sort()
+        )
+    }
+    fn determines_var(lhs: &ResolvedExpr, rhs: &ResolvedExpr) -> bool {
+        matches!(lhs, ResolvedExpr::Var(..)) && is_eq_sort_primitive(rhs)
+    }
     match fact {
-        ResolvedFact::Eq(_, lhs, rhs) => is_container_primitive(lhs) || is_container_primitive(rhs),
+        ResolvedFact::Eq(_, lhs, rhs) => {
+            is_container_primitive(lhs)
+                || is_container_primitive(rhs)
+                || determines_var(lhs, rhs)
+                || determines_var(rhs, lhs)
+        }
         ResolvedFact::Fact(expr) => is_container_primitive(expr),
     }
 }
@@ -709,7 +733,7 @@ impl ProofStore {
                 // proposition.
                 for (fact, &premise_id) in rule.body.iter().zip(premise_proofs.iter()) {
                     self.assert_body_proof_normal_form(fact, name)?;
-                    if is_container_side_condition(fact) {
+                    if is_side_condition(fact) {
                         self.check_side_condition(fact, &mut working_subst, name)?;
                     } else {
                         let prop = self.check_proof_with_context(premise_id, program, ctx)?;
@@ -1259,7 +1283,7 @@ impl ProofStore {
     }
 
     /// Evaluate an expression with a variable substitution
-    fn eval_expr_with_subst(
+    pub(super) fn eval_expr_with_subst(
         &mut self,
         rule_name: &str,
         expr: &ResolvedExpr,

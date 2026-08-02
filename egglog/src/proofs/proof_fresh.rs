@@ -170,10 +170,10 @@ impl Primitive for SetIfEmpty {
 ///
 /// Signature `(keys… fallback) -> proof`: returns the committed view proof for
 /// the key, or `fallback` when the key is absent. The fallback lets the caller
-/// build `Trans(term_proof, Sym(view_proof))` uniformly — when the view was just
-/// seeded (empty at read time) the caller passes the term proof itself, so the
-/// connector collapses to a reflexive `fresh = fresh`. Serviced by the backend
-/// against its own view storage.
+/// build `Trans(own, Sym(view_proof))` uniformly — when the view was just seeded
+/// (empty at read time) the caller passes its own conclusion, so the connector
+/// collapses to a reflexive `fresh = fresh`. Serviced by the backend against its
+/// own view storage.
 #[derive(Clone)]
 struct ViewProof {
     name: String,

@@ -605,7 +605,7 @@ impl EGraph {
                 name,
                 presort_and_args,
                 uf,
-                proof_func,
+                ast_func,
                 container_rebuild,
                 proof_constructors,
                 unionable,
@@ -631,12 +631,12 @@ impl EGraph {
                         self,
                         name,
                         uf_ctor,
-                        proof_func.is_some(),
+                        ast_func.is_some(),
                     );
                 }
-                if let Some(pf) = proof_func {
+                if let Some(pf) = ast_func {
                     self.proof_state
-                        .proof_func_parent
+                        .ast_func_parent
                         .insert(name.clone(), pf.clone());
                 }
                 // The Proof sort records the global proof constructors; restore
@@ -650,6 +650,8 @@ impl EGraph {
                     names.eq_trans_constructor = pc.trans.clone();
                     names.eq_sym_constructor = pc.sym.clone();
                     names.container_normalize_constructor = pc.normalize.clone();
+                    names.proj_constructor = pc.proj.clone();
+                    names.proj_all_constructor = pc.proj_all.clone();
                 }
                 // A container sort under the term/proof encoding carries a spec
                 // for its rebuild primitives; register them here so they are
@@ -663,7 +665,7 @@ impl EGraph {
                     name: name.clone(),
                     presort_and_args: presort_and_args.clone(),
                     uf: uf.clone(),
-                    proof_func: proof_func.clone(),
+                    ast_func: ast_func.clone(),
                     container_rebuild: container_rebuild.clone(),
                     proof_constructors: proof_constructors.clone(),
                     unionable: *unionable,

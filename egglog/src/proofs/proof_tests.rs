@@ -492,7 +492,7 @@ mod tests {
         }
     }
 
-    /// The encoding reads `@UF` and `term_proof` from rule actions under
+    /// The encoding reads `@UF` from rule actions under
     /// `:unsafe-seminaive` — in user rule heads and in the indexed rebuild
     /// rule. Assert this produces the same database as the safe baseline (the
     /// same rules annotated `:naive`), for a hardcoded handful of files
@@ -571,8 +571,7 @@ mod tests {
     /// dropping it would silently switch the rule to seminaive evaluation.
     #[test]
     fn proof_encoding_preserves_naive() {
-        // The second case binds an eq-sort body var, whose `term_proof` RHS
-        // read would otherwise force `:unsafe-seminaive`. Both must stay naive.
+        // The second case binds an eq-sort body var. Both must stay naive.
         let cases = [
             r#"(relation r (i64))
                (relation s (i64))
@@ -682,10 +681,11 @@ mod tests {
         );
         let rule_name_var = rule_name_vars[0];
 
-        // Proof constructors are relations, so each rule proof is emitted as a
-        // `(let <id> (mint-@Rule_1! <rule-name> <premise> <column>))` action — the
-        // rule has one body fact. Count those mints and check they reuse the
-        // hoisted rule-name variable as their first argument.
+        // Proof constructors are relations, so a rule proof carrying its premises
+        // inline is emitted as a `(let <id> (mint-@Rule_1! <rule-name> <premise>
+        // <column>))` action — the rule has one body fact. Count those mints and
+        // check they reuse the hoisted rule-name variable as their first
+        // argument.
         let rule_uses = rule
             .head
             .0
@@ -708,8 +708,8 @@ mod tests {
             })
             .count();
         assert!(
-            rule_uses > 1,
-            "expected the multi-action rule to emit multiple Rule constructors"
+            rule_uses > 0,
+            "expected the rule to emit a Rule constructor carrying its premises"
         );
 
         EGraph::new_with_proofs()

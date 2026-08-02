@@ -2,10 +2,19 @@
 //! rewritten to read the view tables, and each matched fact collects a premise
 //! proof for the rule's proof list.
 
-use super::proof_checker::is_container_side_condition;
-use super::proof_encoding::ProofInstrumentor;
+use super::proof_checker::is_side_condition;
+use super::proof_encoding::{Anchor, ProofInstrumentor};
 use crate::typechecking::FuncType;
 use crate::*;
+
+/// Whether `sort` is a container that can hold an element of `element`.
+fn holds_sort(sort: &ArcSort, element: &str) -> bool {
+    sort.is_eq_container_sort()
+        && sort
+            .inner_sorts()
+            .iter()
+            .any(|inner| inner.name() == element || holds_sort(inner, element))
+}
 
 impl ProofInstrumentor<'_> {
     /// Instrument fact replaces terms with looking up
@@ -18,13 +27,11 @@ impl ProofInstrumentor<'_> {
         res: &mut Vec<String>,
         action_lookups: &mut Vec<String>,
     ) -> String {
-        // A container side condition: a fact that builds a container with a
-        // primitive (`(= xs (vec-of e))`, `(= (set-of a) (set-of b))`, or a bare
-        // `(vec-of e)` guard). The container has no carryable proof — emit the
-        // fact as-is so the e-graph computes it (its arguments are already
-        // bound), with the `Eval` marker as its proof; the checker verifies it
-        // by re-evaluation (see `check_side_condition`, which shares this gate).
-        if is_container_side_condition(fact) {
+        // A side condition: a fact a primitive determines from bound variables
+        // (see `is_side_condition`). There is no proof to carry, so emit the
+        // fact as-is — its arguments are already bound — with the `Eval` marker
+        // as its proof; the checker verifies it by re-evaluation.
+        if is_side_condition(fact) {
             res.push(fact.to_string());
             if self.egraph.proof_state.proofs_enabled {
                 let eval_constructor = self.proof_names().eval_constructor.clone();
@@ -50,7 +57,7 @@ impl ProofInstrumentor<'_> {
                 let mut new_args = vec![];
                 let mut arg_proofs = vec![];
                 for arg in args {
-                    let (var, proof) = self.instrument_fact_expr(arg, res, action_lookups);
+                    let (var, proof) = self.instrument_fact_expr(arg, res);
                     new_args.push(var);
                     arg_proofs.push(proof);
                 }
@@ -65,6 +72,13 @@ impl ProofInstrumentor<'_> {
                 res.push(format!(
                     "(= (values {v} {proof_var}) ({view_name} {children_str}))"
                 ));
+                // A custom view's row proof is reflexive over the whole
+                // application `f(children…, output)`, so the output is one more
+                // child position rather than the proof's left-hand side.
+                for (i, arg) in new_args.iter().enumerate() {
+                    self.offer_anchor(arg, &proof_var, Anchor::Child(i));
+                }
+                self.offer_anchor(&v.name, &proof_var, Anchor::Child(new_args.len()));
 
                 if self.egraph.proof_state.proofs_enabled {
                     let mut proof = proof_var;
@@ -77,9 +91,10 @@ impl ProofInstrumentor<'_> {
                 }
             }
             ResolvedFact::Eq(_span, left_expr, right_expr) => {
-                let (v1, p1) = self.instrument_fact_expr(left_expr, res, action_lookups);
-                let (v2, p2) = self.instrument_fact_expr(right_expr, res, action_lookups);
+                let (v1, p1) = self.instrument_fact_expr(left_expr, res);
+                let (v2, p2) = self.instrument_fact_expr(right_expr, res);
                 res.push(format!("(= {v1} {v2})"));
+                self.alias_anchor(&v1, &v2);
                 if self.egraph.proof_state.proofs_enabled {
                     let sym_pf = self.mint_sym(&p1);
                     self.mint_trans(&sym_pf, &p2)
@@ -88,7 +103,7 @@ impl ProofInstrumentor<'_> {
                 }
             }
             ResolvedFact::Fact(generic_expr) => {
-                let (_, proof) = self.instrument_fact_expr(generic_expr, res, action_lookups);
+                let (_, proof) = self.instrument_fact_expr(generic_expr, res);
                 if self.proofs_enabled()
                     && matches!(
                         generic_expr,
@@ -113,7 +128,6 @@ impl ProofInstrumentor<'_> {
         &mut self,
         expr: &ResolvedExpr,
         res: &mut Vec<String>,
-        action_lookups: &mut Vec<String>,
     ) -> (String, String) {
         match expr {
             ResolvedExpr::Lit(_, lit) => {
@@ -136,24 +150,13 @@ impl ProofInstrumentor<'_> {
                     } else if resolved_var.sort.is_eq_sort()
                         || resolved_var.sort.is_eq_container_sort()
                     {
-                        let term_proof_name = self.term_proof_name(resolved_var.sort.name());
-                        let fresh_proof = self.fresh_var();
-                        // Every eq-sort term has its term_proof set at
-                        // constructor-creation time, so this proof is guaranteed
-                        // present when the rule fires. Fetch it directly in the
-                        // action (the rule is then `:unsafe-seminaive`, see
-                        // instrument_rule) instead of as a body join — one fewer
-                        // join per eq-sort body variable. Deferred because the
-                        // proof is reflexive, so the composition asking for it
-                        // often drops it; callers that don't build a proof
-                        // (run :until, check) discard these.
-                        self.defer_lookup(
-                            &fresh_proof,
-                            vec![format!("(let {fresh_proof} ({term_proof_name} {var}))")],
-                        );
-                        // A term proof is the term's reflexive anchor.
-                        self.mark_reflexive(&fresh_proof);
-                        fresh_proof
+                        // The variable names a term some view row the body reads
+                        // mentions, so that row's proof reaches it (see
+                        // [`ProofInstrumentor::request_anchor`]). Which row is
+                        // only known once the whole body is walked, and the
+                        // composition asking for the anchor usually drops it,
+                        // so the row is both resolved and written late.
+                        self.request_anchor(var)
                     } else {
                         self.reflexive_fiat_proof(resolved_var.sort.name(), var)
                     },
@@ -168,7 +171,7 @@ impl ProofInstrumentor<'_> {
                         new_args.push(arg.to_string());
                         arg_proofs.push(None);
                     } else {
-                        let (arg_str, proof) = self.instrument_fact_expr(arg, res, action_lookups);
+                        let (arg_str, proof) = self.instrument_fact_expr(arg, res);
                         new_args.push(arg_str);
                         arg_proofs.push(Some(proof));
                     }
@@ -186,7 +189,7 @@ impl ProofInstrumentor<'_> {
 
                         let fv = self.fresh_var();
                         let view_name = self.view_name(&func_type.name);
-                        let args_str = ListDisplay(new_args, " ");
+                        let args_str = ListDisplay(&new_args, " ");
 
                         let proof = {
                             let view_proof_var = self.fresh_var();
@@ -196,6 +199,11 @@ impl ProofInstrumentor<'_> {
                             res.push(format!(
                                 "(= (values {fv} {view_proof_var}) ({view_name} {args_str}))"
                             ));
+                            // The row proof reads `eclass = f(children)`.
+                            for (i, arg) in new_args.iter().enumerate() {
+                                self.offer_anchor(arg, &view_proof_var, Anchor::Child(i));
+                            }
+                            self.offer_anchor(&fv, &view_proof_var, Anchor::Lhs);
                             if self.proofs_enabled() {
                                 let mut proof = view_proof_var;
                                 for (i, arg_proof) in arg_proofs.into_iter().enumerate() {
@@ -215,7 +223,7 @@ impl ProofInstrumentor<'_> {
                         res.push(format!(
                             "(= {fv} ({} {}))",
                             specialized_primitive.name(),
-                            ListDisplay(new_args, " ")
+                            ListDisplay(&new_args, " ")
                         ));
 
                         let proof = if !self.proofs_enabled() {
@@ -228,15 +236,19 @@ impl ProofInstrumentor<'_> {
                             // this per-expression proof is unused.
                             "()".to_string()
                         } else if specialized_primitive.output().is_eq_sort() {
-                            // An eq-sort (datatype) result is an existing anchored
-                            // term (e.g. an identity primitive returning its
-                            // input); reuse its term-proof, fetched in the action.
-                            let term_proof_name =
-                                self.term_proof_name(specialized_primitive.output().name());
-                            let fresh_proof = self.fresh_var();
-                            action_lookups
-                                .push(format!("(let {fresh_proof} ({term_proof_name} {fv}))"));
-                            fresh_proof
+                            // An eq-sort result is an element the primitive read
+                            // out of a container — `vec-get`, `map-get`,
+                            // `pair-first` — so it is a child of whichever
+                            // argument can hold its sort.
+                            let out = specialized_primitive.output();
+                            let containers = specialized_primitive
+                                .input()
+                                .iter()
+                                .zip(&new_args)
+                                .filter(|(sort, _)| holds_sort(sort, out.name()))
+                                .map(|(_, arg)| arg.clone())
+                                .collect();
+                            self.request_element_anchor(&fv, out.name(), containers)
                         } else {
                             // Base primitives produce a literal result; a
                             // reflexive `Fiat` over a literal is checker-valid.
@@ -256,9 +268,8 @@ impl ProofInstrumentor<'_> {
     /// Return the instrumented query, the mints its premise proofs need, and one
     /// premise proof per fact.
     ///
-    /// Only the mints nothing can defer come back in the second component: the
-    /// `Eval` marker of a container side condition and an eq-sort primitive
-    /// result's `term_proof` fetch. Everything else a premise proof is built
+    /// Only the mints nothing can defer come back in the second component: a
+    /// side condition's `Eval` marker. Everything else a premise proof is built
     /// from is deferred, landing wherever the premise is first read — for a
     /// rule, the head's own actions. Either component makes the rule
     /// `:unsafe-seminaive`. A head that names no premise (`(panic …)`) reads
@@ -277,6 +288,7 @@ impl ProofInstrumentor<'_> {
             let f_proof = self.instrument_fact(fact, &mut res, &mut action_lookups);
             premises.push(f_proof);
         }
+        self.bind_anchors();
         (res, action_lookups, premises)
     }
 

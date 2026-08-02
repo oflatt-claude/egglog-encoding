@@ -47,10 +47,18 @@ pub(crate) struct EncodingNames {
     pub(crate) congr_constructor: String,
     pub(crate) congr_all_constructor: String,
     pub(crate) proj_constructor: String,
+    /// Element-matching projection, minted where the child's position in the
+    /// term is only known once the term is in hand (see
+    /// [`crate::proofs::proof_container_rebuild`]).
+    pub(crate) proj_all_constructor: String,
     pub(crate) container_normalize_constructor: String,
     pub(crate) eval_constructor: String,
     /// For a given function symbol, the name of the function that converts to the AST type.
     pub(crate) sort_to_ast_constructor: HashMap<String, String>,
+    /// The sorts whose AST wrapper some program has already declared. Naming one
+    /// is separate from declaring it: a sort's own `:internal-ast-func`
+    /// annotation names the wrapper before the command declaring it.
+    pub(crate) ast_declared: HashSet<String>,
     pub(crate) fn_to_term_sort: HashMap<String, String>,
     // Ruleset names
     pub(crate) path_compress_ruleset_name: String,
@@ -61,7 +69,6 @@ pub(crate) struct EncodingNames {
     pub(crate) view_name: HashMap<String, String>,
     pub(crate) to_delete_name: HashMap<String, String>,
     pub(crate) subsumed_name: HashMap<String, String>,
-    pub(crate) term_proof_name: HashMap<String, String>,
 }
 
 /// A proof composed out of the equality axioms over leaves of type `L`. Two
@@ -379,9 +386,11 @@ impl EncodingNames {
             congr_constructor: symbol_gen.fresh("Congr"),
             congr_all_constructor: symbol_gen.fresh("CongrAll"),
             proj_constructor: symbol_gen.fresh("Proj"),
+            proj_all_constructor: symbol_gen.fresh("ProjAll"),
             container_normalize_constructor: symbol_gen.fresh("ContainerNormalize"),
             eval_constructor: symbol_gen.fresh("Eval"),
             sort_to_ast_constructor: HashMap::default(),
+            ast_declared: HashSet::default(),
             fn_to_term_sort: HashMap::default(),
             path_compress_ruleset_name: symbol_gen.fresh("parent"),
             rebuilding_ruleset_name: symbol_gen.fresh("rebuilding"),
@@ -390,7 +399,6 @@ impl EncodingNames {
             view_name: HashMap::default(),
             to_delete_name: HashMap::default(),
             subsumed_name: HashMap::default(),
-            term_proof_name: HashMap::default(),
         }
     }
 }
@@ -636,35 +644,43 @@ impl ProofInstrumentor<'_> {
         }
     }
 
-    /// Returns code for a constructor that converts from sort to AST.
-    /// Adds to the sort to AST constructor map.
+    /// The name of `sort`'s `@Ast<Sort>` wrapper, minting it on first ask.
+    pub(crate) fn ast_constructor_name(&mut self, sort: &str) -> String {
+        if let Some(name) = self
+            .proof_names()
+            .sort_to_ast_constructor
+            .get(sort)
+            .cloned()
+        {
+            return name;
+        }
+        let to_ast_constructor = self.egraph.parser.symbol_gen.fresh(&format!("Ast{sort}"));
+        self.egraph
+            .proof_state
+            .proof_names
+            .sort_to_ast_constructor
+            .insert(sort.to_string(), to_ast_constructor.clone());
+        to_ast_constructor
+    }
+
+    /// The declaration of `sort`'s AST wrapper, or the empty string once some
+    /// program has declared it.
     pub(crate) fn add_to_ast(&mut self, sort: &str) -> String {
-        if self.proofs_enabled() {
-            // Check if we've already created an AST constructor for this sort
-            if self
+        if !self.proofs_enabled()
+            || !self
                 .egraph
                 .proof_state
                 .proof_names
-                .sort_to_ast_constructor
-                .contains_key(sort)
-            {
-                // Return empty string since the constructor already exists
-                return "".to_string();
-            }
-
-            let to_ast_constructor = self.egraph.parser.symbol_gen.fresh(&format!("Ast{sort}"));
-            self.egraph
-                .proof_state
-                .proof_names
-                .sort_to_ast_constructor
-                .insert(sort.to_string(), to_ast_constructor.clone());
-            let ast_sort = &self.proof_names().ast_sort;
-            format!(
-                "(function {to_ast_constructor} ({sort} {ast_sort}) Unit :no-merge :internal-hidden :internal-term-node)"
-            )
-        } else {
-            "".to_string()
+                .ast_declared
+                .insert(sort.to_string())
+        {
+            return "".to_string();
         }
+        let to_ast_constructor = self.ast_constructor_name(sort);
+        let ast_sort = &self.proof_names().ast_sort;
+        format!(
+            "(function {to_ast_constructor} ({sort} {ast_sort}) Unit :no-merge :internal-hidden :internal-term-node)"
+        )
     }
 
     /// Given a function name, returns the name of the AST constructor for that function's sort.
@@ -683,26 +699,6 @@ impl ProofInstrumentor<'_> {
             })
     }
 
-    pub(crate) fn term_proof_name(&mut self, name: &str) -> String {
-        if let Some(n) = self
-            .egraph
-            .proof_state
-            .proof_names
-            .term_proof_name
-            .get(name)
-        {
-            n.clone()
-        } else {
-            let fresh_name = self.egraph.parser.symbol_gen.fresh(&format!("{name}Proof"));
-            self.egraph
-                .proof_state
-                .proof_names
-                .term_proof_name
-                .insert(name.to_string(), fresh_name.clone());
-            fresh_name
-        }
-    }
-
     /// A fresh name for an encoder temporary.
     pub(crate) fn fresh_var(&mut self) -> String {
         // Keep this hint distinct from the `"v"` that `proofs::proof_normal_form`
@@ -717,30 +713,13 @@ impl ProofInstrumentor<'_> {
     /// Header string for proof encoding, defining sorts and constructors.
     /// Correspondings to `RawProof` in [`crate::proofs::proof_format`].
     pub(crate) fn proof_header(&mut self) -> String {
-        let mut to_ast_constructors = Vec::new();
         // need to build a Ast{lit} for each lit sort in self
-        for sort_name in self.egraph.type_info.sorts.keys().clone() {
-            if !self
-                .proof_names()
-                .sort_to_ast_constructor
-                .contains_key(sort_name)
-            {
-                let ast_constructor = self
-                    .egraph
-                    .parser
-                    .symbol_gen
-                    .fresh(&format!("Ast{sort_name}"));
-                self.egraph
-                    .proof_state
-                    .proof_names
-                    .sort_to_ast_constructor
-                    .insert(sort_name.clone(), ast_constructor.clone());
-                to_ast_constructors.push(format!(
-                    "(function {ast_constructor} ({sort_name} {}) Unit :no-merge :internal-hidden :internal-term-node)",
-                    self.proof_names().ast_sort
-                ));
-            }
-        }
+        let sort_names: Vec<String> = self.egraph.type_info.sorts.keys().cloned().collect();
+        let to_ast_constructors: Vec<String> = sort_names
+            .iter()
+            .map(|sort_name| self.add_to_ast(sort_name))
+            .filter(|decl| !decl.is_empty())
+            .collect();
         let to_ast_str = to_ast_constructors.join("\n");
 
         let EncodingNames {
@@ -755,6 +734,7 @@ impl ProofInstrumentor<'_> {
             ref congr_constructor,
             ref congr_all_constructor,
             ref proj_constructor,
+            ref proj_all_constructor,
             ref container_normalize_constructor,
             ref eval_constructor,
             ..
@@ -765,7 +745,7 @@ impl ProofInstrumentor<'_> {
 (sort {ast_sort}) ;; wrap sorts in this for proofs
 ;; The proof datatype records the global proof constructor names so container
 ;; rebuild can recover them on re-parse (see ContainerRebuildSpec).
-(sort {proof_datatype} :internal-proof-names {congr_constructor} {congr_all_constructor} {eq_trans_constructor} {eq_sym_constructor} {container_normalize_constructor} {fiat_constructor} {proj_constructor})
+(sort {proof_datatype} :internal-proof-names {congr_constructor} {congr_all_constructor} {eq_trans_constructor} {eq_sym_constructor} {container_normalize_constructor} {fiat_constructor} {proj_constructor} {proj_all_constructor})
 
 ;; Proof/AST terms are relations, not constructors: the encoding mints a fresh id
 ;; and asserts the row (both in one `mint-<Relation>!` call), so congruent
@@ -831,6 +811,11 @@ impl ProofInstrumentor<'_> {
 ;; given a proof that t1 = f(..., ci, ...) and the child index i,
 ;; produces a justification that ci = ci
 (function {proj_constructor} ({proof_datatype} i64 {proof_datatype}) Unit :no-merge :internal-hidden :internal-term-node)
+
+;; element-matching projection: given a proof that t1 = c and an AST node naming
+;; a term a that is a child of c, produces a justification that a = a. Used where
+;; the child's position is only known once the term is in hand.
+(function {proj_all_constructor} ({proof_datatype} {ast_sort} {proof_datatype}) Unit :no-merge :internal-hidden :internal-term-node)
 
 ;; given a proof that t1 = c, where c is a container term, produces a proof that
 ;; t1 = normalize(c) (the container's canonicalization: sort/dedup for sets,
@@ -898,9 +883,9 @@ pub enum ProofEncodingUnsupportedReason {
     )]
     SortWithUfAnnotation,
     #[error(
-        "sort has a :internal-proof-func annotation. The :internal-proof-func annotation is used internally by proof encoding and cannot be specified manually in proof mode."
+        "sort has a :internal-ast-func annotation. The :internal-ast-func annotation is used internally by proof encoding and cannot be specified manually in proof mode."
     )]
-    SortWithProofFuncAnnotation,
+    SortWithAstFuncAnnotation,
     #[error("user-defined commands are not supported.")]
     UserDefinedCommand,
     #[error("`fail` wrapping an `input` command is not supported by proof encoding.")]
@@ -1209,9 +1194,8 @@ fn command_supports_proof_encoding_impl(
             Err(ProofEncodingUnsupportedReason::SortWithUfAnnotation)
         }
         GenericCommand::Sort {
-            proof_func: Some(_),
-            ..
-        } => Err(ProofEncodingUnsupportedReason::SortWithProofFuncAnnotation),
+            ast_func: Some(_), ..
+        } => Err(ProofEncodingUnsupportedReason::SortWithAstFuncAnnotation),
         GenericCommand::UserDefined(..) => Err(ProofEncodingUnsupportedReason::UserDefinedCommand),
         // Extract commands can't have non-global function lookups
         // because instrument_action_expr doesn't support them

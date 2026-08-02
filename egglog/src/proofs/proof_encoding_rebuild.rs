@@ -23,6 +23,12 @@ pub(super) fn rebuild_skeleton(children: &[usize], eclass: bool) -> Skeleton {
     skeleton
 }
 
+/// The composition reflexivizing a view row's proof `eclass = f(children)` into
+/// `eclass = eclass`, over one column holding that row proof.
+pub(super) fn eclass_refl_skeleton() -> Skeleton {
+    Skeleton::Leaf(0).trans(Skeleton::Leaf(0).sym())
+}
+
 impl ProofInstrumentor<'_> {
     /// Rules that execute deletion and subsumption based on the tables requesting the deletion/subsumption.
     pub(super) fn delete_and_subsume(&mut self, fdecl: &ResolvedFunctionDecl) -> String {
@@ -121,10 +127,14 @@ impl ProofInstrumentor<'_> {
                 let canon_fact = format!("(= {canon} ({value_prim} {ci}))");
                 if proofs {
                     let congr = self.proof_names().congr_constructor.clone();
+                    let proj = self.proof_names().proj_constructor.clone();
                     let proof_prim = self.container_rebuild_proof_prim(ty);
                     let rebuild_pf = self.fresh_var();
-                    // proof_lets: bind the container rebuild proof, then mint the congr proof.
-                    let mut lets = vec![format!("(let {rebuild_pf} ({proof_prim} {ci}))")];
+                    // The row proof's term has the container at child `i`, so
+                    // projecting it out is the rebuild's reflexive anchor.
+                    let mut lets = vec![];
+                    let anchor = self.mint(&mut lets, &proj, &format!("{view_prf} {i}"));
+                    lets.push(format!("(let {rebuild_pf} ({proof_prim} {ci} {anchor}))"));
                     let new_pf =
                         self.mint(&mut lets, &congr, &format!("{view_prf} {i} {rebuild_pf}"));
                     (
@@ -236,10 +246,9 @@ impl ProofInstrumentor<'_> {
                 uf_canon_prim_name(&uf_j)
             ));
             if proofs {
-                let term_proof = self.term_proof_name(types[j].name());
-                let refl = self.fresh_var();
+                let proj = self.proof_names().proj_constructor.clone();
+                let refl = self.mint(&mut lets, &proj, &format!("{row_pf} {j}"));
                 let step = self.fresh_var();
-                lets.push(format!("(let {refl} ({term_proof} {cj}))"));
                 lets.push(format!(
                     "(let {step} ({} {cj} {refl}))",
                     uf_canon_proof_prim_name(&uf_j)
@@ -256,6 +265,7 @@ impl ProofInstrumentor<'_> {
         // rewrites it by `Congr` at its position.
         let out_ty = &types[n_keys];
         let mut eclass_step = None;
+        let mut decls = String::new();
         let value_var = if self.output_is_eclass(fdecl)
             && out_ty.is_eq_sort()
             && !out_ty.is_eq_container_sort()
@@ -267,10 +277,17 @@ impl ProofInstrumentor<'_> {
                 uf_canon_prim_name(&uf_out)
             ));
             if proofs {
-                let term_proof = self.term_proof_name(out_ty.name());
-                let refl = self.fresh_var();
+                // The row proof reads `eclass = f(children)`, so the e-class is
+                // its left-hand side rather than a child: reflexivize it instead
+                // of projecting.
+                let (packed, decl) = self.packed_proof_constructor(1);
+                decls.push_str(&decl);
+                let refl = self.mint(
+                    &mut lets,
+                    &packed,
+                    &format!("\"{}\" {row_pf}", eclass_refl_skeleton().spelling()),
+                );
                 let step = self.fresh_var();
-                lets.push(format!("(let {refl} ({term_proof} {eclass}))"));
                 lets.push(format!(
                     "(let {step} ({} {eclass} {refl}))",
                     uf_canon_proof_prim_name(&uf_out)
@@ -287,7 +304,6 @@ impl ProofInstrumentor<'_> {
         // Lay the row out and state its composition together: the row proof,
         // then each canonicalized column's step proof, then the e-class's own
         // step.
-        let mut decls = String::new();
         let mut proof_acc = row_pf.clone();
         let children: Vec<usize> = steps.iter().map(|&(child, _)| child).collect();
         let skeleton = rebuild_skeleton(&children, eclass_step.is_some());
@@ -296,7 +312,7 @@ impl ProofInstrumentor<'_> {
         args.extend(eclass_step);
         if args.len() > 1 {
             let (packed, decl) = self.packed_proof_constructor(args.len());
-            decls = decl;
+            decls.push_str(&decl);
             let row = format!("\"{}\" {}", skeleton.spelling(), args.join(" "));
             proof_acc = self.mint(&mut lets, &packed, &row);
         }
@@ -372,9 +388,14 @@ impl ProofInstrumentor<'_> {
         let canon_fact = format!("(= {canon} ({value_prim} {value_var}))");
         let (proof_lets, pf_arg) = if self.proofs_enabled() {
             let congr = self.proof_names().congr_constructor.clone();
+            let proj = self.proof_names().proj_constructor.clone();
             let proof_prim = self.container_rebuild_proof_prim(&out_ty);
             let rebuild_pf = self.fresh_var();
-            let mut lets = vec![format!("(let {rebuild_pf} ({proof_prim} {value_var}))")];
+            let mut lets = vec![];
+            let anchor = self.mint(&mut lets, &proj, &format!("{view_prf} {out_idx}"));
+            lets.push(format!(
+                "(let {rebuild_pf} ({proof_prim} {value_var} {anchor}))"
+            ));
             let new_pf = self.mint(
                 &mut lets,
                 &congr,

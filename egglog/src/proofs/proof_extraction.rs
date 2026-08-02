@@ -16,6 +16,33 @@ pub enum ProveExistsError {
     QueryDidNotMatch { constructor: String },
 }
 
+/// The one premise of the rule an existence proof wraps, or `None` when it
+/// wraps no such rule. A view row's proof states the rule head's own conclusion
+/// reflexivized — `Trans(p, Sym(p))` or `Trans(Sym(p), p)` — so the search looks
+/// through those steps to the rule row itself.
+fn wrapped_premise(store: &ProofStore, proof_id: ProofId) -> Option<ProofId> {
+    let reflexivized = |left: ProofId, right: ProofId| match store.get(left).justification() {
+        Justification::Sym(inner) if *inner == right => Some(right),
+        _ => match store.get(right).justification() {
+            Justification::Sym(inner) if *inner == left => Some(left),
+            _ => None,
+        },
+    };
+    let mut id = proof_id;
+    loop {
+        match store.get(id).justification() {
+            Justification::Rule { premise_proofs, .. } => {
+                return match premise_proofs.as_slice() {
+                    [premise] => Some(*premise),
+                    _ => None,
+                };
+            }
+            Justification::Trans(left, right) => id = reflexivized(*left, *right)?,
+            _ => return None,
+        }
+    }
+}
+
 impl ProofInstrumentor<'_> {
     /// Prove the existence of a constructor or fail if a proof cannot be found.
     /// We use a constructor because inserting a value at the top level would give a trivial proof.
@@ -33,17 +60,20 @@ impl ProofInstrumentor<'_> {
             }
         };
 
-        let function = self
-            .egraph
-            .functions
-            .get(&func.name)
-            .unwrap_or_else(|| panic!("constructor {} is not declared", func.name));
-
-        let backend_id = function.backend_id;
-        // The eclass sort and its column (last input for a relation, output for a
-        // plain constructor).
-        let output_sort = function.extraction_output_sort().clone();
-        let output_index = function.extraction_output_index();
+        // The witness is a row of the constructor's view, whose proof column
+        // states `eclass = f(children)` — the constructor's existence. A function
+        // with a base-sort output (e.g. `(function f (i64) i64)`) has no such
+        // view, so there is nothing to prove — reject it rather than panic.
+        let view_name = self.view_name(&func.name);
+        let Some(view) = self.egraph.functions.get(&view_name) else {
+            return Err(ProveExistsError::RequiresConstructor);
+        };
+        // The view row is `[children…, value, proof]`.
+        let proof_index = view.schema.input.len() + 1;
+        let view_backend_id = view.backend_id;
+        let Some(proof_sort) = view.schema.outputs.last().cloned() else {
+            return Err(ProveExistsError::RequiresConstructor);
+        };
 
         let mut termdag = TermDag::default();
 
@@ -53,45 +83,16 @@ impl ProofInstrumentor<'_> {
         // hash-set mirror) would otherwise make the extracted existence proof —
         // and thus proof snapshots — vary run to run.
         let mut best_row: Option<Vec<Value>> = None;
-        self.egraph.backend.for_each(backend_id, |row| {
+        self.egraph.backend.for_each(view_backend_id, |row| {
             if best_row.as_deref().is_none_or(|best| row.vals < best) {
                 best_row = Some(row.vals.to_vec());
             }
         });
-        let witness_value = best_row.map(|row| row[output_index]).ok_or_else(|| {
+        let proof_value = best_row.map(|row| row[proof_index]).ok_or_else(|| {
             ProveExistsError::QueryDidNotMatch {
                 constructor: func.name.clone(),
             }
         })?;
-
-        // `prove-exists` targets a constructor, whose eq-sort output has a proof
-        // table. A function with a base-sort output (e.g. `(function f (i64) i64)`)
-        // has none, so there is nothing to prove — reject it rather than panic.
-        let Some(proof_function_name) = self
-            .egraph
-            .proof_state
-            .proof_func_parent
-            .get(output_sort.name())
-            .cloned()
-        else {
-            return Err(ProveExistsError::RequiresConstructor);
-        };
-        let proof_function = self
-            .egraph
-            .functions
-            .get(&proof_function_name)
-            .unwrap_or_else(|| {
-                panic!(
-                    "proof table {proof_function_name} for constructor {} was not declared",
-                    func.name
-                )
-            });
-        let proof_sort = proof_function.schema.output().clone();
-        let proof_value = self
-            .egraph
-            .backend
-            .lookup_id(proof_function.backend_id, &[witness_value])
-            .unwrap_or_else(|| panic!("no proof recorded for constructor {}", func.name));
 
         let proof_term_id = extract_root(self.egraph, &mut termdag, proof_value, proof_sort)
             .unwrap_or_else(|| {
@@ -141,14 +142,7 @@ impl ProofInstrumentor<'_> {
         // not be rule-justified — `check_proof` below validates it either way). Which
         // shape arises depends on the witness row, chosen deterministically above, so
         // this is stable across runs and backends.
-        let proof = proof_store.get(proof_id);
-        let extra_rule_removed = match proof.justification() {
-            Justification::Rule { premise_proofs, .. } => match premise_proofs.as_slice() {
-                [premise_proof_id] => *premise_proof_id,
-                _ => proof_id,
-            },
-            _ => proof_id,
-        };
+        let extra_rule_removed = wrapped_premise(&proof_store, proof_id).unwrap_or(proof_id);
 
         // Check the proof before simplification
         if self.egraph.proof_state.verify_proofs

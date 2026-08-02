@@ -50,8 +50,8 @@ pub(crate) fn uf_canon_proof_prim_name(uf_name: &str) -> String {
 ///   `fallback` when it has no row. Callers pass the term itself, making it
 ///   leader-or-self.
 /// * `uf_canon_proof : (S Proof) -> Proof` (proof mode) — the `@UF_<S>` row's
-///   proof `term = leader`, or `fallback`. Callers pass the reflexive
-///   `<S>Proof(term)`.
+///   proof `term = leader`, or `fallback`. Callers pass a reflexive proof of
+///   `term = term`.
 ///
 /// Both are the generic view-column read over the two-output `@UF_<S>` table, so
 /// every backend services them against its own storage. They read `@UF_<S>`, so
@@ -158,16 +158,16 @@ pub(crate) fn register_container_rebuild_from_spec(
         let Some(id_counter) = eg.backend.id_counter() else {
             return;
         };
-        // Each container's `<CSort>Proof` table (this sort + nested containers),
-        // recovered from proof_state (filled by `:internal-proof-func`).
-        let mut cproof_names = HashMap::default();
-        collect_container_proof_names(eg, &container_sort, &mut cproof_names);
+        // Each nested container's `@Ast<CSort>` wrapper, recovered from
+        // proof_state (filled by `:internal-ast-func`), so a nested container can
+        // be named in the `ProjAll` that anchors it.
+        let mut ast_names = HashMap::default();
+        collect_container_ast_names(eg, &container_sort, &mut ast_names);
         // The global proof constructors, recovered from proof_state (repopulated
         // from the `Proof` sort's `:internal-proof-names` on re-parse).
         let names = &eg.proof_state.proof_names;
         let congr_all_name = names.congr_all_constructor.clone();
-        let trans_name = names.eq_trans_constructor.clone();
-        let sym_name = names.eq_sym_constructor.clone();
+        let proj_all_name = names.proj_all_constructor.clone();
         let container_normalize_name = names.container_normalize_constructor.clone();
         let proof_sort: ArcSort = std::sync::Arc::new(EqSort {
             name: names.proof_datatype.clone(),
@@ -178,10 +178,9 @@ pub(crate) fn register_container_rebuild_from_spec(
                 container_sort,
                 proof_sort,
                 uf_names,
-                cproof_names,
+                ast_names,
                 congr_all_name,
-                trans_name,
-                sym_name,
+                proj_all_name,
                 container_normalize_name,
                 id_counter,
             },
@@ -204,15 +203,15 @@ fn collect_element_uf_names(eg: &EGraph, sort: &ArcSort, out: &mut HashMap<Strin
     }
 }
 
-/// The `<CSort>Proof` table for `sort` and every nested container sort, from
-/// `proof_state.proof_func_parent` (filled by `:internal-proof-func`).
-fn collect_container_proof_names(eg: &EGraph, sort: &ArcSort, out: &mut HashMap<String, String>) {
-    if let Some(cp) = eg.proof_state.proof_func_parent.get(sort.name()) {
-        out.insert(sort.name().to_string(), cp.clone());
+/// The `@Ast<CSort>` wrapper of `sort` and every nested container sort, from
+/// `proof_state.ast_func_parent` (filled by `:internal-ast-func`).
+fn collect_container_ast_names(eg: &EGraph, sort: &ArcSort, out: &mut HashMap<String, String>) {
+    if let Some(ast) = eg.proof_state.ast_func_parent.get(sort.name()) {
+        out.insert(sort.name().to_string(), ast.clone());
     }
     for elem in sort.inner_sorts() {
         if elem.is_eq_container_sort() {
-            collect_container_proof_names(eg, &elem, out);
+            collect_container_ast_names(eg, &elem, out);
         }
     }
 }
@@ -334,10 +333,9 @@ impl ReadPrim for ContainerRebuild {
 
 /// Proof-mode counterpart of [`ContainerRebuild`]: mints a `CongrAll` chain
 /// proving `old_container = rebuilt_container` (recursing through nested
-/// containers). Reads `UF_<E>` (element equality proofs) and `<CSort>Proof`
-/// (reflexive bases), mints `CongrAll`/`Trans`/`Sym` terms, and anchors a
-/// reflexive proof on each rebuilt container so it can be rebuilt again later.
-/// It is a [`FullPrim`], valid only in a `:naive` rule's action.
+/// containers). Takes the container's reflexive anchor as its second argument
+/// and reads `UF_<E>` for the element equality proofs. It is a [`FullPrim`],
+/// valid only in a `:naive` rule's action.
 #[derive(Clone)]
 struct ContainerRebuildProof {
     name: String,
@@ -345,12 +343,11 @@ struct ContainerRebuildProof {
     proof_sort: ArcSort,
     /// element-sort name -> single `UF_<E>` table name (all reachable eq-sorts)
     uf_names: HashMap<String, String>,
-    /// container-sort name -> `<CSort>Proof` table name (all reachable containers)
-    cproof_names: HashMap<String, String>,
-    /// `CongrAll` / `Trans` / `Sym` / `ContainerNormalize` proof constructor names
+    /// container-sort name -> `@Ast<CSort>` wrapper name (all reachable containers)
+    ast_names: HashMap<String, String>,
+    /// `CongrAll` / `ProjAll` / `ContainerNormalize` proof constructor names
     congr_all_name: String,
-    trans_name: String,
-    sym_name: String,
+    proj_all_name: String,
     container_normalize_name: String,
     /// Counter for minting fresh proof ids (see [`mint_proof_row`]).
     id_counter: egglog_backend_trait::CounterId,
@@ -362,9 +359,14 @@ impl Primitive for ContainerRebuildProof {
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        // (container anchor) -> proof, where `anchor` proves `container = container`
         SimpleTypeConstraint::new(
             &self.name,
-            vec![self.container_sort.clone(), self.proof_sort.clone()],
+            vec![
+                self.container_sort.clone(),
+                self.proof_sort.clone(),
+                self.proof_sort.clone(),
+            ],
             span.clone(),
         )
         .into_box()
@@ -374,29 +376,24 @@ impl Primitive for ContainerRebuildProof {
 impl FullPrim for ContainerRebuildProof {
     fn apply<'a, 'db>(&self, mut state: FullState<'a, 'db>, args: &[Value]) -> Option<Value> {
         let (_rebuilt, proof) =
-            rebuild_container_proof_rec(&mut state, self, &self.container_sort, args[0])?;
+            rebuild_container_proof_rec(&mut state, self, &self.container_sort, args[0], args[1])?;
         Some(proof)
     }
 }
 
 /// Recursively rebuild `value` (of container sort `sort`) and produce a proof
-/// that `value = rebuilt`. Returns `(rebuilt_value, proof)`. Uses the same
-/// per-child resolution as [`rebuild_container_value_rec`], additionally
-/// folding a `CongrAll` step for every distinct changed child and recording a
-/// reflexive anchor `<CSort>Proof(rebuilt) = Trans(Sym proof, proof)` so the
-/// rebuilt value can itself be rebuilt in a later iteration. The steps match
-/// elements by term (`CongrAll`), never by position: elements here come in
-/// value order, not the term form's canonical child order.
+/// that `value = rebuilt`. Returns `(rebuilt_value, proof)`. `base` proves
+/// `value = value`. Uses the same per-child resolution as
+/// [`rebuild_container_value_rec`], folding a `CongrAll` step for every distinct
+/// changed child; a nested container's own base is the `ProjAll` naming it in
+/// this term.
 fn rebuild_container_proof_rec(
     state: &mut FullState,
     prim: &ContainerRebuildProof,
     sort: &ArcSort,
     value: Value,
+    base: Value,
 ) -> Option<(Value, Value)> {
-    // Reflexive base proof `value = value`.
-    let base = state
-        .lookup(prim.cproof_names.get(sort.name())?, value)
-        .expect("container proof lookup failed")?;
     let elements = {
         let cvs = state.container_values();
         sort.inner_values(cvs, value)
@@ -419,8 +416,17 @@ fn rebuild_container_proof_rec(
                 child_proofs.push(proof);
             }
         } else if esort.is_eq_container_sort() {
+            // The nested container is a child of this term, so the base
+            // reaches it: name it with its `@Ast` wrapper and project it out.
+            let ast_action = state
+                .registry()
+                .lookup_table(prim.ast_names.get(esort.name())?)?
+                .clone();
+            let proj_all_action = state.registry().lookup_table(&prim.proj_all_name)?.clone();
+            let ast = mint_proof_row(state, &ast_action, prim.id_counter, &[*eval]);
+            let child_base = mint_proof_row(state, &proj_all_action, prim.id_counter, &[base, ast]);
             let (rebuilt_child, child_proof) =
-                rebuild_container_proof_rec(state, prim, esort, *eval)?;
+                rebuild_container_proof_rec(state, prim, esort, *eval, child_base)?;
             if rebuilt_child != *eval {
                 leaders.insert(*eval, rebuilt_child);
                 child_proofs.push(child_proof);
@@ -456,20 +462,6 @@ fn rebuild_container_proof_rec(
         .lookup_table(&prim.container_normalize_name)?
         .clone();
     current = mint_proof_row(state, &normalize_action, prim.id_counter, &[current]);
-
-    // Anchor a reflexive proof on the rebuilt value for future rebuilds.
-    if rebuilt != value {
-        let sym_action = state.registry().lookup_table(&prim.sym_name)?.clone();
-        let trans_action = state.registry().lookup_table(&prim.trans_name)?.clone();
-        let cproof_action = state
-            .registry()
-            .lookup_table(prim.cproof_names.get(sort.name())?)?
-            .clone();
-        // Sym(current): rebuilt = value;  Trans(Sym(current), current): rebuilt = rebuilt.
-        let sym_p = mint_proof_row(state, &sym_action, prim.id_counter, &[current]);
-        let refl = mint_proof_row(state, &trans_action, prim.id_counter, &[sym_p, current]);
-        cproof_action.insert(state.raw_exec_state(), [rebuilt, refl].into_iter());
-    }
 
     Some((rebuilt, current))
 }
