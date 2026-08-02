@@ -263,18 +263,24 @@ pub(crate) enum Anchor {
     Lhs,
 }
 
-/// What a body variable's anchor is asked to be about.
-enum Request {
-    /// The variable is itself a term a row proof reaches.
-    Direct(String),
-    /// The variable is an element of one of `containers` — a value a body
-    /// primitive read out of a container — so its anchor projects it out of
-    /// whichever of them the body anchors, naming it with the `ast` wrapper.
-    Element {
-        containers: Vec<String>,
-        value: String,
-        ast: String,
-    },
+/// A value a body primitive read out of a container. Nothing in the query names
+/// it as a term, but it is a child of whichever of `containers` it came out of,
+/// so an anchor for one of those projects it out by term.
+#[derive(Clone)]
+struct Element {
+    containers: Vec<String>,
+    /// The value variable, named with `ast` in the projection anchoring it.
+    value: String,
+    /// The `@Ast<Sort>` wrapper of the value's sort.
+    ast: String,
+}
+
+/// What a body variable's anchor is projected out of.
+enum Source {
+    /// A view row proof the body reads, which mentions the variable's term.
+    Row(String, Anchor),
+    /// A container the body read the variable out of.
+    Element(Element),
 }
 
 /// The reflexive anchors one rule body offers, collected while its facts are
@@ -284,11 +290,13 @@ enum Request {
 pub(crate) struct BodyAnchors {
     /// Value variable -> the row proof it is reachable from, and how.
     supply: HashMap<String, (String, Anchor)>,
+    /// Value variable -> the containers it was read out of.
+    elements: HashMap<String, Element>,
     /// Value variables the body forces to be equal, so either one's anchor
     /// proves the other reflexive.
     aliases: Vec<(String, String)>,
-    /// Anchors asked for, as proof variable and what it is about.
-    requests: Vec<(String, Request)>,
+    /// Anchors asked for, as proof variable and the value it is about.
+    requests: Vec<(String, String)>,
 }
 
 impl BodyAnchors {
@@ -300,29 +308,36 @@ impl BodyAnchors {
             .or_insert_with(|| (row_proof.to_string(), anchor));
     }
 
+    /// Record that a body primitive read `element` out of a container.
+    fn offer_element(&mut self, element: Element) {
+        self.elements
+            .entry(element.value.clone())
+            .or_insert(element);
+    }
+
     /// Record that the body only matches when `left` and `right` hold the same
     /// value, so one anchor serves both.
     fn alias(&mut self, left: &str, right: &str) {
         self.aliases.push((left.to_string(), right.to_string()));
     }
 
-    /// Ask for an anchor, to be bound to the proof variable `proof`.
-    fn request(&mut self, proof: &str, request: Request) {
-        self.requests.push((proof.to_string(), request));
+    /// Ask for `value`'s anchor, to be bound to the proof variable `proof`.
+    fn request(&mut self, proof: &str, value: &str) {
+        self.requests.push((proof.to_string(), value.to_string()));
     }
 
-    /// The anchor for `value`, following the body's aliases when the variable
-    /// itself is not one a row proof reaches.
-    fn resolve(&self, value: &str) -> Option<(String, Anchor)> {
+    /// Where `value`'s anchor comes from, following the body's aliases when the
+    /// variable itself is not one an atom reaches. A row proof wins over a
+    /// container projection.
+    fn resolve(&self, value: &str) -> Option<Source> {
         let mut seen: HashSet<&str> = HashSet::default();
+        let mut reached: Vec<&str> = vec![];
         let mut frontier = vec![value];
         while let Some(var) = frontier.pop() {
             if !seen.insert(var) {
                 continue;
             }
-            if let Some(found) = self.supply.get(var) {
-                return Some(found.clone());
-            }
+            reached.push(var);
             for (left, right) in &self.aliases {
                 if left == var {
                     frontier.push(right);
@@ -331,7 +346,32 @@ impl BodyAnchors {
                 }
             }
         }
-        None
+        let row = reached.iter().find_map(|var| {
+            let (row_proof, anchor) = self.supply.get(*var)?;
+            Some(Source::Row(row_proof.clone(), *anchor))
+        });
+        row.or_else(|| {
+            reached
+                .iter()
+                .find_map(|var| Some(Source::Element(self.elements.get(*var)?.clone())))
+        })
+    }
+
+    /// How `value`'s anchor is reached: the row proof it bottoms out in and how
+    /// that row mentions its term, plus the container projections leading back
+    /// to `value`, outermost container first.
+    fn anchor_chain(&self, value: &str) -> Option<(String, Anchor, Vec<Element>)> {
+        match self.resolve(value)? {
+            Source::Row(row_proof, anchor) => Some((row_proof, anchor, vec![])),
+            Source::Element(element) => {
+                let (row_proof, anchor, mut chain) = element
+                    .containers
+                    .iter()
+                    .find_map(|container| self.anchor_chain(container))?;
+                chain.push(element);
+                Some((row_proof, anchor, chain))
+            }
+        }
     }
 }
 
@@ -1263,8 +1303,7 @@ impl<'a> ProofInstrumentor<'a> {
     /// once [`Self::bind_anchors`] has seen the whole body.
     pub(crate) fn request_anchor(&mut self, value: &str) -> String {
         let proof = self.fresh_var();
-        self.anchors
-            .request(&proof, Request::Direct(value.to_string()));
+        self.anchors.request(&proof, value);
         self.mark_reflexive(&proof);
         proof
     }
@@ -1278,65 +1317,56 @@ impl<'a> ProofInstrumentor<'a> {
         sort_name: &str,
         containers: Vec<String>,
     ) -> String {
-        let proof = self.fresh_var();
         let ast = self.ast_constructor_name(sort_name);
-        self.anchors.request(
-            &proof,
-            Request::Element {
-                containers,
-                value: value.to_string(),
-                ast,
-            },
-        );
-        self.mark_reflexive(&proof);
-        proof
+        self.anchors.offer_element(Element {
+            containers,
+            value: value.to_string(),
+            ast,
+        });
+        self.request_anchor(value)
     }
 
     /// Bind every anchor the body asked for, and clear the body's anchors for
     /// the next one. Each is deferred, so it lands where it is first read and
     /// nowhere if nothing reads it; an anchor no body atom reaches is left
-    /// unbound, and reading it panics in [`Self::emit_pending_group`].
+    /// unbound, and reading it is the invariant violation
+    /// [`Self::emit_pending_group`] asserts against.
     pub(crate) fn bind_anchors(&mut self) {
         let anchors = std::mem::take(&mut self.anchors);
-        for (proof, request) in &anchors.requests {
-            match request {
-                Request::Direct(value) => {
-                    let Some((row_proof, anchor)) = anchors.resolve(value) else {
-                        self.unanchored.insert(proof.clone(), value.clone());
-                        continue;
-                    };
-                    let derived = self.anchor_composition(&row_proof, anchor);
-                    // `derived` is itself deferred: alias `proof` onto whatever
-                    // it holds so the row lands where the anchor is first read.
-                    let held = self
-                        .deferred
-                        .remove(&derived)
-                        .expect("a minted composition is held back");
-                    self.deferred.insert(proof.clone(), held);
-                }
-                Request::Element {
-                    containers,
-                    value,
-                    ast,
-                } => {
-                    let Some((row_proof, anchor)) =
-                        containers.iter().find_map(|c| anchors.resolve(c))
-                    else {
-                        self.unanchored.insert(proof.clone(), value.clone());
-                        continue;
-                    };
-                    // The container's own anchor gets a row inside this group
-                    // rather than being shared, so the group stays self-contained.
-                    let container_anchor = self.anchor_composition(&row_proof, anchor);
-                    let mut group = vec![];
-                    self.emit_pending_group(&mut group, &container_anchor);
-                    let node = self.mint(&mut group, ast, value);
-                    let proj_all = self.proof_names().proj_all_constructor.clone();
-                    let mint = crate::proofs::proof_fresh::mint_prim_name(&proj_all);
-                    group.push(format!("(let {proof} ({mint} {container_anchor} {node}))"));
-                    self.defer_lookup(proof, group);
-                }
+        for (proof, value) in &anchors.requests {
+            let Some((row_proof, anchor, chain)) = anchors.anchor_chain(value) else {
+                self.unanchored.insert(proof.clone(), value.clone());
+                continue;
+            };
+            let derived = self.anchor_composition(&row_proof, anchor);
+            if chain.is_empty() {
+                // `derived` is itself deferred: alias `proof` onto whatever it
+                // holds so the row lands where the anchor is first read.
+                let held = self
+                    .deferred
+                    .remove(&derived)
+                    .expect("a minted composition is held back");
+                self.deferred.insert(proof.clone(), held);
+                continue;
             }
+            // The row the projections stand on gets a row inside this group
+            // rather than being shared, so the group stays self-contained.
+            let mut group = vec![];
+            self.emit_pending_group(&mut group, &derived);
+            let proj_all = self.proof_names().proj_all_constructor.clone();
+            let mint = crate::proofs::proof_fresh::mint_prim_name(&proj_all);
+            let mut base = derived;
+            for (depth, element) in chain.iter().enumerate() {
+                let node = self.mint(&mut group, &element.ast, &element.value);
+                let projected = if depth + 1 == chain.len() {
+                    proof.clone()
+                } else {
+                    self.fresh_var()
+                };
+                group.push(format!("(let {projected} ({mint} {base} {node}))"));
+                base = projected;
+            }
+            self.defer_lookup(proof, group);
         }
     }
 
@@ -1476,12 +1506,13 @@ impl<'a> ProofInstrumentor<'a> {
             Some(Deferred::Composed(composition)) => self.emit_composition(stmts, var, composition),
             Some(Deferred::Stmts(group)) => stmts.extend(group),
             None => {
-                if let Some(value) = self.unanchored.get(var) {
-                    panic!(
-                        "no reflexive anchor for the body variable `{value}`: it is not a term \
-                         any view row the body reads mentions"
-                    );
-                }
+                assert!(
+                    !self.unanchored.contains_key(var),
+                    "internal invariant: the body variable `{}` has no reflexive anchor — a value \
+                     the query computed rather than one a view row names. Proof support should \
+                     have rejected the rule before it was encoded.",
+                    self.unanchored[var]
+                );
             }
         }
     }

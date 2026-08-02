@@ -411,7 +411,18 @@ That covers every anchor the encoding wants: the seeds a view rebuild hands
 and a rule body's eq-sort or container variable. Which row anchors a body
 variable is only known once the whole body is walked, so the anchor's row is
 written where the composition reading it lands — and a composition that drops it
-as reflexive writes none at all.
+as reflexive writes none at all. A body's equalities join the variables they
+relate into one anchor class, so an element read bound to a variable is anchored
+through the read.
+
+**A value the query computed is not anchored at all.** Every one of the sources
+above is a row the database holds, and a container a body primitive built is in
+no row — so neither it nor anything read out of it can be projected. There is no
+congruence route either: `@Congr`/`@CongrAll` rewrite a child of a term a proof
+already mentions, so they cannot introduce the container's term in the first
+place. Proof support rejects such a rule up front (see
+[`crate::ProofEncodingUnsupportedReason`]), and likewise a rule computing an
+eq-sort value with a primitive that was handed no container to read it out of.
 
 ## Layer 1: building the proof as the rule runs
 
@@ -716,21 +727,17 @@ subproof. That chain is emitted lazily, as one packed row, at the point the
 premise is first read — which is inside the rule's *action* list. They are the
 body's proofs, not proofs of anything the head concludes.
 
-A **side condition** is the exception: a body fact a primitive determines from
-bound variables has no premise to state, so it carries the bare `@Eval` marker
-and the checker re-evaluates it against the rule body instead. Two shapes
-qualify, and the encoder and the checker share one gate so they cannot drift: a
-container-producing primitive anywhere in the fact, and a primitive returning an
-eq-sort value, either into a variable (`(= e (vec-get v 1))`) or against a second
-such result (`(= (vec-get v 0) (vec-get v 1))`). The second is how a value read
-out of a container is justified at all — nothing in the query names it as a term,
-so no [anchor](#reflexive-anchors) reaches it. Re-evaluation also binds the
-variable the fact determines, which is what lets a rule head use it.
+A **container side condition** is the exception: a fact a container-producing
+primitive determines from bound variables — `(= v (vec-of e))`, `(= (set-of a)
+(set-of b))`, or a bare `(vec-of e)` guard — has no premise to state, so it
+carries the bare `@Eval` marker and the checker re-evaluates it against the rule
+body instead. The encoder and the checker share one gate so they cannot drift.
 
-The other side has to be one of those two. A fact equating the result to a term
-the query *builds* — `(= (Add a b) (vec-get v 1))` — asserts an e-graph equality
-re-evaluation cannot settle, so it keeps a real premise stated from the
-constructor view's row proof.
+A value read *out of* a container keeps a real premise, stated from the
+container's own [anchor](#reflexive-anchors): `(= e (vec-get v 1))` and
+`(= (vec-get v 0) (vec-get v 1))` are both `@ProjAll` off whichever row anchors
+`v`. That is why the container has to be one the database holds — a container the
+query built anchors nothing, and the rule is rejected rather than encoded.
 
 ## Packed rows
 

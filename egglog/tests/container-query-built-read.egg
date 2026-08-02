@@ -1,0 +1,21 @@
+; Reading an eq-sort element out of a container the *query* built.
+;
+; The value comes out of a container the query computed, so no view row mentions
+; it and the proof encoding has no reflexive anchor to project it out of. The
+; whole file is therefore expected to be unsupported under proofs (it is listed
+; in the proof_unsupported_files snapshot) and runs only on the native backend.
+; Reading a base-sorted value out of such a container needs no such anchor and
+; stays in container-proofs.egg.
+
+(datatype N (Z) (S N))
+(sort VecN (Vec N))
+
+(relation HasElem (N))
+(HasElem (Z))
+(HasElem (S (Z)))
+
+(relation QVecGet (N))
+(rule ((HasElem a) (HasElem b) (= xs (vec-of a b)) (= e (vec-get xs 1))) ((QVecGet e)))
+(run 1)
+(check (QVecGet (Z)))
+(check (QVecGet (S (Z))))

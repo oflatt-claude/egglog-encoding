@@ -876,8 +876,11 @@ mod tests {
         );
     }
 
+    // An eq-sort value a primitive computes without being handed a container is
+    // named by no view row, so there is no reflexive anchor for it and proof
+    // mode rejects the rule.
     #[test]
-    fn proof_mode_allows_eq_sort_primitive_results_in_facts() {
+    fn proof_support_rejects_eq_sort_primitive_results_without_a_container() {
         let mut egraph = EGraph::default();
         let validator =
             |_: &mut TermDag, args: &[TermId]| -> Option<TermId> { args.first().copied() };
@@ -888,7 +891,7 @@ mod tests {
         );
         let mut egraph = egraph.with_proofs_enabled();
 
-        egraph
+        let err = egraph
             .parse_and_run_program(
                 None,
                 r#"
@@ -903,12 +906,19 @@ mod tests {
                        (= x (proof-id y)))
                       ((Done))
                       :name "use-proof-id")
-
-                (run 1)
-                (prove (Done))
                 "#,
             )
-            .unwrap();
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                Error::UnsupportedProofCommand {
+                    reason: ProofEncodingUnsupportedReason::EqSortPrimitiveResultWithoutContainer,
+                    ..
+                }
+            ),
+            "expected EqSortPrimitiveResultWithoutContainer, got {err:?}"
+        );
     }
 
     #[test]
@@ -1156,9 +1166,9 @@ mod tests {
             .unwrap();
     }
 
-    // Two primitives reading elements out of a container determine the fact
-    // between them, so it is a side condition — no premise, and no reflexive
-    // anchor to find for a container the body built rather than read.
+    // Two elements read out of a container a view row anchors: each read's
+    // reflexive anchor is a projection off that row, so the fact between them
+    // gets a real premise.
     #[test]
     fn proof_mode_equates_two_container_element_reads() {
         let mut egraph = EGraph::new_with_proofs();
@@ -1172,10 +1182,37 @@ mod tests {
                 (Holder (vec-of (Num 1) (Num 1)))
 
                 (rule ((= h (Holder v))
-                       (= ys (vec-of (vec-get v 0) (vec-get v 0)))
-                       (= (vec-get ys 0) (vec-get ys 1)))
+                       (= (vec-get v 0) (vec-get v 1)))
                       ((Num 99))
                       :name "elements-agree")
+
+                (run 1)
+                (prove (= (Num 99) (Num 99)))
+                "#,
+            )
+            .unwrap();
+    }
+
+    // The same, with each read bound to a variable first: the variables are
+    // aliased to the reads, so the anchor is found through the alias.
+    #[test]
+    fn proof_mode_equates_two_container_elements_bound_to_variables() {
+        let mut egraph = EGraph::new_with_proofs();
+        egraph
+            .parse_and_run_program(
+                None,
+                r#"
+                (datatype Math (Num i64))
+                (sort MathVec (Vec Math))
+                (constructor Holder (MathVec) Math)
+                (Holder (vec-of (Num 1) (Num 1)))
+
+                (rule ((= h (Holder v))
+                       (= e (vec-get v 0))
+                       (= f (vec-get v 1))
+                       (= e f))
+                      ((Num 99))
+                      :name "element-variables-agree")
 
                 (run 1)
                 (prove (= (Num 99) (Num 99)))
@@ -1243,6 +1280,129 @@ mod tests {
             ),
             "expected ContainerCreatedInQueryUsedInAction, got {err:?}"
         );
+    }
+
+    /// Run `program` under proofs and return the reason it was rejected.
+    fn proof_rejection_reason(program: &str) -> ProofEncodingUnsupportedReason {
+        let err = EGraph::new_with_proofs()
+            .parse_and_run_program(None, program)
+            .unwrap_err();
+        match err {
+            Error::UnsupportedProofCommand { reason, .. } => reason,
+            other => panic!("expected UnsupportedProofCommand, got {other:?}"),
+        }
+    }
+
+    /// The rules below all read an eq-sort value out of a container the query
+    /// itself built. Nothing anchors such a container — no view row mentions it —
+    /// so the encoding has no proof to project the value out of.
+    fn assert_query_built_container_rejected(program: &str) {
+        let reason = proof_rejection_reason(program);
+        assert!(
+            matches!(
+                reason,
+                ProofEncodingUnsupportedReason::ContainerCreatedInQueryProvedAbout
+            ),
+            "expected ContainerCreatedInQueryProvedAbout, got {reason:?}"
+        );
+    }
+
+    #[test]
+    fn proof_support_rejects_element_read_from_query_built_container() {
+        assert_query_built_container_rejected(
+            r#"
+            (datatype Math (Num i64))
+            (sort MathVec (Vec Math))
+            (relation HasElem (Math))
+            (relation Seen (Math))
+
+            (rule ((HasElem a) (HasElem b)
+                   (= xs (vec-of a b))
+                   (= e (vec-get xs 1)))
+                  ((Seen e))
+                  :name "read-out-of-a-built-vec")
+            "#,
+        );
+    }
+
+    #[test]
+    fn proof_support_rejects_element_reads_equated_from_query_built_container() {
+        assert_query_built_container_rejected(
+            r#"
+            (datatype Math (Num i64))
+            (sort MathVec (Vec Math))
+            (constructor Holder (MathVec) Math)
+
+            (rule ((= h (Holder v))
+                   (= ys (vec-of (vec-get v 0) (vec-get v 0)))
+                   (= (vec-get ys 0) (vec-get ys 1)))
+                  ((Num 99))
+                  :name "built-vec-elements-agree")
+            "#,
+        );
+    }
+
+    #[test]
+    fn proof_support_rejects_element_variables_from_query_built_container() {
+        assert_query_built_container_rejected(
+            r#"
+            (datatype Math (Num i64))
+            (sort MathVec (Vec Math))
+            (constructor Holder (MathVec) Math)
+
+            (rule ((= h (Holder v))
+                   (= ys (vec-of (vec-get v 0) (vec-get v 0)))
+                   (= e (vec-get ys 0))
+                   (= f (vec-get ys 1))
+                   (= e f))
+                  ((Num 99))
+                  :name "built-vec-element-variables-agree")
+            "#,
+        );
+    }
+
+    #[test]
+    fn proof_support_rejects_two_query_built_containers_equated() {
+        assert_query_built_container_rejected(
+            r#"
+            (datatype Math (Num i64))
+            (sort MathVec (Vec Math))
+            (constructor Holder (MathVec) Math)
+
+            (rule ((= h (Holder v))
+                   (= ys (vec-of (vec-get v 0)))
+                   (= zs (vec-of (vec-get v 0)))
+                   (= ys zs))
+                  ((Num 99))
+                  :name "built-vecs-agree")
+            "#,
+        );
+    }
+
+    // A container the query built is still free to produce a base-sorted value,
+    // which needs no proof about the container.
+    #[test]
+    fn proof_mode_reads_a_base_value_out_of_a_query_built_container() {
+        let mut egraph = EGraph::new_with_proofs();
+        egraph
+            .parse_and_run_program(
+                None,
+                r#"
+                (datatype Math (Num i64))
+                (sort MathVec (Vec Math))
+                (relation HasElem (Math))
+                (relation Len (i64))
+                (HasElem (Num 1))
+
+                (rule ((HasElem a) (= xs (vec-of a a)) (= n (vec-length xs)))
+                      ((Len n))
+                      :name "length-of-a-built-vec")
+
+                (run 1)
+                (prove (Len 2))
+                "#,
+            )
+            .unwrap();
     }
 
     #[test]

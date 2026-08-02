@@ -4,13 +4,13 @@
 use std::path::Path;
 
 use crate::{
-    EGraph, TypeInfo, Value,
+    ArcSort, EGraph, TypeInfo, Value,
     ast::{
         Command, Expr, Fact, GenericCommand, ResolvedAction, ResolvedCommand, ResolvedExpr,
         ResolvedExprExt, ResolvedFact, ResolvedNCommand, Schedule, Span,
     },
     core::ResolvedCall,
-    proofs::proof_encoding::ProofInstrumentor,
+    proofs::{proof_checker::is_container_side_condition, proof_encoding::ProofInstrumentor},
     util::{FreshGen, HashMap, HashSet, SymbolGen},
 };
 
@@ -875,6 +875,14 @@ pub enum ProofEncodingUnsupportedReason {
     )]
     ContainerCreatedInQueryUsedInAction,
     #[error(
+        "a rule body reads an eq-sort value out of a container constructed in the query (a container-producing primitive result), or equates two such containers. The value came out of a container the query computed, so nothing in the query names it as a term and proofs have nothing to say about it."
+    )]
+    ContainerCreatedInQueryProvedAbout,
+    #[error(
+        "a rule body computes an eq-sort value with a primitive that was given no container to read it out of. The value is one the query computed rather than one the database names, so proofs have nothing to say about it."
+    )]
+    EqSortPrimitiveResultWithoutContainer,
+    #[error(
         "sort has a presort (custom sort container implementation). Custom sorts are not supported by proof encoding."
     )]
     SortWithPresort,
@@ -1019,6 +1027,99 @@ fn fact_has_eq_sort_primitive_result(fact: &ResolvedFact) -> bool {
     has_eq_sort_primitive
 }
 
+/// Whether `sort` is a container that can hold an element of `element`.
+pub(super) fn holds_sort(sort: &ArcSort, element: &str) -> bool {
+    sort.is_eq_container_sort()
+        && sort
+            .inner_sorts()
+            .iter()
+            .any(|inner| inner.name() == element || holds_sort(inner, element))
+}
+
+/// Whether `expr` is a container-producing primitive call — the query computing
+/// a container rather than reading one out of the database.
+fn builds_a_container(expr: &ResolvedExpr) -> bool {
+    matches!(
+        expr,
+        ResolvedExpr::Call(_, ResolvedCall::Primitive(prim), _)
+            if prim.output().is_eq_container_sort()
+    )
+}
+
+/// The variables a rule body binds to a container the query builds.
+fn query_built_containers(body: &[ResolvedFact]) -> Vec<String> {
+    let mut built = Vec::new();
+    for fact in body {
+        if let ResolvedFact::Eq(_, lhs, rhs) = fact {
+            for (var_side, call_side) in [(lhs, rhs), (rhs, lhs)] {
+                if let ResolvedExpr::Var(_, v) = var_side
+                    && builds_a_container(call_side)
+                {
+                    built.push(v.name.clone());
+                }
+            }
+        }
+    }
+    built
+}
+
+/// Whether a rule body states something the encoding would need a query-built
+/// container's reflexive anchor for: an eq-sort value read out of one, or an
+/// equality between two of them. Reading a base-sorted value out of such a
+/// container, passing it to a constructor, or building it needs no such anchor.
+fn body_needs_query_built_container_proof(body: &[ResolvedFact], built: &[String]) -> bool {
+    let is_built = |expr: &ResolvedExpr| match expr {
+        ResolvedExpr::Var(_, v) => built.contains(&v.name),
+        other => builds_a_container(other),
+    };
+    body.iter().any(|fact| {
+        if is_container_side_condition(fact) {
+            return false;
+        }
+        if let ResolvedFact::Eq(_, lhs, rhs) = fact
+            && is_built(lhs)
+            && is_built(rhs)
+        {
+            return true;
+        }
+        let mut reads_an_element = false;
+        fact.clone().visit_exprs(&mut |expr| {
+            if let ResolvedExpr::Call(_, ResolvedCall::Primitive(prim), args) = &expr
+                && prim.output().is_eq_sort()
+                && !prim.output().is_eq_container_sort()
+                && args.iter().any(&is_built)
+            {
+                reads_an_element = true;
+            }
+            expr
+        });
+        reads_an_element
+    })
+}
+
+/// Whether a rule body computes an eq-sort value with a primitive that was
+/// given no container to read it out of. Nothing in the query names such a
+/// value as a term, so the encoding has no row to project its proof out of.
+fn body_computes_a_rootless_value(body: &[ResolvedFact]) -> bool {
+    body.iter().any(|fact| {
+        let mut rootless = false;
+        fact.clone().visit_exprs(&mut |expr| {
+            if let ResolvedExpr::Call(_, ResolvedCall::Primitive(prim), _) = &expr
+                && prim.output().is_eq_sort()
+                && !prim.output().is_eq_container_sort()
+                && !prim
+                    .input()
+                    .iter()
+                    .any(|sort| holds_sort(sort, prim.output().name()))
+            {
+                rootless = true;
+            }
+            expr
+        });
+        rootless
+    })
+}
+
 /// Checks whether a resolved command supports proof encoding.
 /// Returns Ok(()) if supported, or Err with the reason if not.
 pub(crate) fn command_supports_proof_encoding(
@@ -1139,23 +1240,16 @@ fn command_supports_proof_encoding_impl(
         return Err(ProofEncodingUnsupportedReason::FunctionLookupInAction);
     }
 
-    // A container built by a primitive in the query is a side condition with no
-    // carryable proof, so it can't be used in an action. Reject a rule that binds
-    // such a container to a variable used in its actions.
+    // A value the query computes is anchored by projecting it out of a view row
+    // the body reads. A container a body primitive built is named by no such
+    // row, and neither is an eq-sort value a primitive produced without being
+    // handed a container to read it out of, so a body may not ask for a proof
+    // about either one.
     if let GenericCommand::Rule { rule } = command {
-        let mut constructed: Vec<String> = Vec::new();
-        for fact in &rule.body {
-            if let ResolvedFact::Eq(_, lhs, rhs) = fact {
-                for (var_side, call_side) in [(lhs, rhs), (rhs, lhs)] {
-                    if let ResolvedExpr::Var(_, v) = var_side
-                        && let ResolvedExpr::Call(_, ResolvedCall::Primitive(prim), _) = call_side
-                        && prim.output().is_eq_container_sort()
-                    {
-                        constructed.push(v.name.clone());
-                    }
-                }
-            }
+        if body_computes_a_rootless_value(&rule.body) {
+            return Err(ProofEncodingUnsupportedReason::EqSortPrimitiveResultWithoutContainer);
         }
+        let constructed = query_built_containers(&rule.body);
         if !constructed.is_empty() {
             let mut used_in_action = false;
             for action in &rule.head.0 {
@@ -1175,6 +1269,9 @@ fn command_supports_proof_encoding_impl(
             }
             if used_in_action {
                 return Err(ProofEncodingUnsupportedReason::ContainerCreatedInQueryUsedInAction);
+            }
+            if body_needs_query_built_container_proof(&rule.body, &constructed) {
+                return Err(ProofEncodingUnsupportedReason::ContainerCreatedInQueryProvedAbout);
             }
         }
     }

@@ -33,6 +33,6 @@ expression: proof_snapshot
   (substitution
     (@v (A))
     (@v1 (A))
-    (@v2 (set-of (A)))
     (@v3 (A))
+    (@v2 (set-of (A)))
     (@v4 (set-of (A)))))

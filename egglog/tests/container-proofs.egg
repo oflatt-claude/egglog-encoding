@@ -5,7 +5,8 @@
 ; Elements are an eq-sort, so every container here is an eq-container (rebuild
 ; applies). Containers are matched, read, and constructed in the body (as side
 ; conditions); only validator-backed container primitives are used. A container
-; built in the body is never carried into an action (that is rejected).
+; built in the body is never carried into an action, nor is an eq-sort element
+; read back out of one — both are rejected under proofs.
 
 (datatype N (Z) (S N))
 
@@ -78,12 +79,8 @@
 (run 1)
 (check (QVecLen 2))
 
-; build a vec in the body and read an element back out (an eq-sort result)
-(relation QVecGet (N))
-(rule ((HasElem a) (HasElem b) (= xs (vec-of a b)) (= e (vec-get xs 1))) ((QVecGet e)))
-(run 1)
-(check (QVecGet (Z)))
-(check (QVecGet (S (Z))))
+; reading an eq-sort element back out of a vec built in the body is not
+; supported under proofs; see container-query-built-read.egg
 
 ; join two containers built in the body (neither bound nor used in an action);
 ; `set-of` is injective on singletons, so this matches only when a = b

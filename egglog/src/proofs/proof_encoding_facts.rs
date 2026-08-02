@@ -2,19 +2,11 @@
 //! rewritten to read the view tables, and each matched fact collects a premise
 //! proof for the rule's proof list.
 
-use super::proof_checker::is_side_condition;
+use super::proof_checker::is_container_side_condition;
 use super::proof_encoding::{Anchor, ProofInstrumentor};
+use super::proof_encoding_helpers::holds_sort;
 use crate::typechecking::FuncType;
 use crate::*;
-
-/// Whether `sort` is a container that can hold an element of `element`.
-fn holds_sort(sort: &ArcSort, element: &str) -> bool {
-    sort.is_eq_container_sort()
-        && sort
-            .inner_sorts()
-            .iter()
-            .any(|inner| inner.name() == element || holds_sort(inner, element))
-}
 
 impl ProofInstrumentor<'_> {
     /// Instrument fact replaces terms with looking up
@@ -27,11 +19,12 @@ impl ProofInstrumentor<'_> {
         res: &mut Vec<String>,
         action_lookups: &mut Vec<String>,
     ) -> String {
-        // A side condition: a fact a primitive determines from bound variables
-        // (see `is_side_condition`). There is no proof to carry, so emit the
-        // fact as-is — its arguments are already bound — with the `Eval` marker
-        // as its proof; the checker verifies it by re-evaluation.
-        if is_side_condition(fact) {
+        // A container side condition: a fact a container-producing primitive
+        // determines from bound variables (see `is_container_side_condition`).
+        // There is no proof to carry, so emit the fact as-is — its arguments are
+        // already bound — with the `Eval` marker as its proof; the checker
+        // verifies it by re-evaluation.
+        if is_container_side_condition(fact) {
             res.push(fact.to_string());
             if self.egraph.proof_state.proofs_enabled {
                 let eval_constructor = self.proof_names().eval_constructor.clone();
