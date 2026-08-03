@@ -839,6 +839,9 @@ there, proves `old = new` and folds into the view's congruence step like an
 eq-sort child's `@UF` proof. A *nested* container's own anchor is `@ProjAll` over
 the enclosing container's, which is why the anchor has to be by term: the
 enclosing term's child order is not the order the primitive sees elements in.
+A nested element is anchored only once the value-level rebuild says it moves —
+an element that stays put contributes no step, so its anchor and the whole proof
+standing on it would be dropped.
 
 The chain uses `@CongrAll` — replace every child equal to `a` by `b` — rather
 than positional `@Congr`, for the same reason. Both `@CongrAll` and `@ProjAll`
