@@ -239,8 +239,8 @@ fn rebuild_with_leaders(
 /// a uniform per-child rule: an eq-sort element maps to its union-find leader
 /// (via the single `UF_<E>` row), a
 /// container element is recursively rebuilt, and anything else is unchanged.
-fn rebuild_container_value_rec<'a, 'db: 'a, S: RegistrySealed<'a, 'db> + Core<'a, 'db>>(
-    state: &mut S,
+fn rebuild_container_value_rec(
+    state: &mut ReadState,
     sort: &ArcSort,
     value: Value,
     uf_names: &HashMap<String, String>,
@@ -385,8 +385,8 @@ impl FullPrim for ContainerRebuildProof {
 /// that `value = rebuilt`. Returns `(rebuilt_value, proof)`. `base` proves
 /// `value = value`. Uses the same per-child resolution as
 /// [`rebuild_container_value_rec`], folding a `CongrAll` step for every distinct
-/// changed child; a nested container that moves gets its own base, the `ProjAll`
-/// naming it in this term.
+/// changed child; a nested container's own base is the `ProjAll` naming it in
+/// this term.
 fn rebuild_container_proof_rec(
     state: &mut FullState,
     prim: &ContainerRebuildProof,
@@ -415,14 +415,9 @@ fn rebuild_container_proof_rec(
                 leaders.insert(*eval, leader);
                 child_proofs.push(proof);
             }
-        } else if esort.is_eq_container_sort()
-            && rebuild_container_value_rec(state, esort, *eval, &prim.uf_names, true)? != *eval
-        {
-            // Only a moved element is folded in, and the value-level rebuild
-            // decides that without minting anything — an anchor for an element
-            // that stayed put, and the proof standing on it, would be dropped.
-            // The nested container is a child of this term, so the base reaches
-            // it: name it with its `@Ast` wrapper and project it out.
+        } else if esort.is_eq_container_sort() {
+            // The nested container is a child of this term, so the base
+            // reaches it: name it with its `@Ast` wrapper and project it out.
             let ast_action = state
                 .registry()
                 .lookup_table(prim.ast_names.get(esort.name())?)?
@@ -432,8 +427,10 @@ fn rebuild_container_proof_rec(
             let child_base = mint_proof_row(state, &proj_all_action, prim.id_counter, &[base, ast]);
             let (rebuilt_child, child_proof) =
                 rebuild_container_proof_rec(state, prim, esort, *eval, child_base)?;
-            leaders.insert(*eval, rebuilt_child);
-            child_proofs.push(child_proof);
+            if rebuilt_child != *eval {
+                leaders.insert(*eval, rebuilt_child);
+                child_proofs.push(child_proof);
+            }
         }
     }
 
