@@ -643,7 +643,9 @@ conclusion.
 
 The bridge — which e-class a subterm interned into — is the one thing conversion
 cannot recompute, so the skeleton carries it. A row written before the head
-interns anything carries the body premises inline as `@Rule_<k>`. Every row after
+interns anything carries the body premises inline as `@Rule_<k>`, `k` counting
+only the premises the encoding records (see
+[Body premises](#body-premises)). Every row after
 that is a `@RuleLink`, naming the row written just before the newest interning —
 which carries the premises and every earlier bridge — plus that interning's
 bridge. Chaining keeps a row's width constant no matter how deep the head is.
@@ -764,6 +766,16 @@ primitive determines from bound variables — `(= v (vec-of e))`, `(= (set-of a)
 (set-of b))`, or a bare `(vec-of e)` guard — has no premise to state, so it
 carries the bare `@Eval` marker and the checker re-evaluates it against the rule
 body instead. The encoder and the checker share one gate so they cannot drift.
+
+A **base-value fact** is stated by no column at all. Its premise is a reflexive
+`@Fiat` over a literal — a guard like `(> n 0)`, or an equality between two base
+values such as the `(= len n)` a custom function's output leaves behind — and the
+value is a function of the fact and the bindings the body already made, so
+conversion re-evaluates it rather than reading a row. The `@Rule_<k>` a firing
+writes then has one fewer column, and the row it would have named is never
+minted. This is one gate over the body, taken in order (a fact is only
+recomputable once one of its sides reads nothing but already-bound variables),
+shared by the encoder and proof conversion.
 
 A value read *out of* a container keeps a real premise, stated from the
 container's own [anchor](#reflexive-anchors): `(= e (vec-get v 1))` and

@@ -6,6 +6,7 @@ mod tests {
     };
     use crate::core::ResolvedCall;
     use crate::proofs::proof_checker::eval_expr_with_subst;
+    use crate::proofs::proof_encoding_helpers::recomputable_premises;
     use crate::proofs::proof_extraction::ProveExistsError;
     use crate::proofs::proof_format::{ProofId, ProofStore, Proposition};
     use crate::proofs::proof_head::{Firing, HeadPlan, HeadProof, ProofAlgebra};
@@ -762,11 +763,12 @@ mod tests {
     }
 
     /// The encoder records one premise per body fact of the rule *after*
-    /// `remove_globals` appends a lookup fact per global the head mentions, while
-    /// the proof checker replays the rule as written, without those facts. Proof
-    /// conversion pairs premises with written facts by position, so the premise
-    /// count must cover the written body — the extras are exactly the trailing
-    /// ones.
+    /// `remove_globals` appends a lookup fact per global the head mentions —
+    /// except the facts [`recomputable_premises`] gates out — while the proof
+    /// checker replays the rule as written, without those facts. Proof conversion
+    /// pairs premises with written facts by position, so the premise count must
+    /// cover the written body's recorded facts, and the extras are exactly the
+    /// trailing ones.
     #[test]
     fn rule_premises_cover_the_written_body_facts() {
         let source = r#"
@@ -777,6 +779,9 @@ mod tests {
             (rule ((Seen x)) ((Seen (Add x g))) :name "with_global")
             ;; Two written body facts and no global.
             (rule ((Seen x) (= x (Add a b))) ((Seen a)) :name "without_global")
+            ;; Three written body facts, of which the guard's premise is a
+            ;; reflexive fiat over a base value, so no premise records it.
+            (rule ((Seen x) (= x (Add (Num n) b)) (> n 0)) ((Seen b)) :name "with_guard")
             (Seen (Num 1))
             (run 2)
             (prove (Seen (Add (Num 1) (Num 7))))
@@ -818,17 +823,22 @@ mod tests {
         }
 
         // Holds for every rule the checker replays, including the one `prove`
-        // generates.
+        // generates: conversion recomputes a gated premise instead of reading a
+        // recorded one, so only the ungated facts need covering.
         for (name, premises) in &recorded {
-            let facts = written[name].len();
+            let facts = recomputable_premises(&written[name], &|_| false)
+                .iter()
+                .filter(|gated| !**gated)
+                .count();
             assert!(
                 *premises >= facts,
-                "rule '{name}' recorded {premises} premises for a body of {facts} written facts"
+                "rule '{name}' recorded {premises} premises for a body of {facts} recorded facts"
             );
         }
         // Pin both sides of the inequality, so neither half can drift unnoticed:
-        // the global reference adds exactly one trailing lookup fact, and a rule
-        // without one records exactly its written facts.
+        // the global reference adds exactly one trailing lookup fact, a rule
+        // without one records exactly its written facts, and a gated fact records
+        // none.
         assert_eq!(
             recorded.get("with_global").copied(),
             Some(written["with_global"].len() + 1),
@@ -838,6 +848,11 @@ mod tests {
             recorded.get("without_global").copied(),
             Some(written["without_global"].len()),
             "a rule mentioning no global should record one premise per written fact"
+        );
+        assert_eq!(
+            recorded.get("with_guard").copied(),
+            Some(written["with_guard"].len() - 1),
+            "a base-value guard should record no premise"
         );
 
         // The extras being *trailing* is what makes pairing by position correct,

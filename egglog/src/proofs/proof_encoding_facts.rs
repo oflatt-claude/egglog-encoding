@@ -4,7 +4,7 @@
 
 use super::proof_checker::is_container_side_condition;
 use super::proof_encoding::{Anchor, ProofInstrumentor};
-use super::proof_encoding_helpers::holds_sort;
+use super::proof_encoding_helpers::{holds_sort, recomputable_premises};
 use crate::typechecking::FuncType;
 use crate::*;
 
@@ -258,8 +258,9 @@ impl ProofInstrumentor<'_> {
         }
     }
 
-    /// Return the instrumented query, the mints its premise proofs need, and one
-    /// premise proof per fact.
+    /// Return the instrumented query, the mints its premise proofs need, and the
+    /// premise proofs the rule proof records — one per fact except the
+    /// [`recomputable_premises`] the encoding leaves out.
     ///
     /// Only the mints nothing can defer come back in the second component: a
     /// side condition's `Eval` marker. Everything else a premise proof is built
@@ -277,9 +278,13 @@ impl ProofInstrumentor<'_> {
         let mut action_lookups = vec![];
         let mut premises = vec![];
 
-        for fact in facts.iter() {
+        let recomputable = recomputable_premises(facts, &|_| false);
+        for (fact, recomputable) in facts.iter().zip(recomputable) {
             let f_proof = self.instrument_fact(fact, &mut res, &mut action_lookups);
-            premises.push(f_proof);
+            // Nothing reads a dropped premise, so its proof is never written.
+            if !recomputable {
+                premises.push(f_proof);
+            }
         }
         self.bind_anchors();
         (res, action_lookups, premises)

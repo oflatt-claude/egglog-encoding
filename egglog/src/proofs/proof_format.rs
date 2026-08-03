@@ -8,7 +8,7 @@ use crate::{
         proof_checker::{
             ProofCheckError, ProofCheckErrorKind, eval_expr_with_subst, gather_globals, run_merge,
         },
-        proof_encoding_helpers::{EncodingNames, Skeleton},
+        proof_encoding_helpers::{EncodingNames, Skeleton, recomputable_premises},
         proof_head::{Firing, HeadPlan, HeadWalk, ProofAlgebra},
     },
     typechecking::{FuncType, PrimitiveValidator},
@@ -249,6 +249,8 @@ pub(crate) enum SynthKey {
     Sym(ProofId),
     Trans(ProofId, ProofId),
     Congr(ProofId, usize, ProofId),
+    /// A premise the encoding stored no row for (see [`recomputable_premises`]).
+    Fiat(TermId, TermId),
 }
 
 impl fmt::Debug for ProofStore {
@@ -881,54 +883,16 @@ impl ProofStore {
                 justification: Justification::Fiat,
             },
             RawProof::Rule(name, premise_proofs, bridge_proofs, raw_column) => {
-                let converted_premises: Vec<ProofId> = premise_proofs
-                    .iter()
-                    .map(|pid| self.convert_raw_proof(prog, globals, raw_store, *pid))
-                    .collect();
                 let rule = self.rule_named(prog, name);
                 let planned = self.head_plan(rule);
-
-                // Rebuild/canonicalization can rewrite a matched custom-function-fact
-                // premise `(= (f args) v)` into a non-reflexive natural->canonical
-                // `Congr` proof `(f nat) = (f canon)` (e.g. when an argument's e-class
-                // has several equivalent shapes from commutativity/associativity
-                // rewrites). The checker's function-fact normal form expects a
-                // reflexive premise at the matched (canonical) shape, so reflexivize
-                // those. Equality-fact premises `(= a b)` must stay non-reflexive.
-                let reflex_mask: Vec<bool> = rule.body.iter().map(is_custom_func_fact).collect();
-                // Premises are in body-fact order, so each pairs with its own fact's
-                // decision. There may be more premises than facts: `remove_globals`
-                // appends a lookup fact per global the rule's *head* mentions, and the
-                // encoder records a premise for each, while `prog` is the program from
-                // before that pass. Those extras are exactly the trailing ones, so
-                // dropping them is what pairs the rest correctly — but a *shorter*
-                // premise list would misalign the mask silently, so require the
-                // encoder's count to cover the body (see
-                // `rule_premises_cover_the_written_body_facts`).
-                assert!(
-                    converted_premises.len() >= reflex_mask.len(),
-                    "rule {name} recorded {} premises for a body of {} facts",
-                    converted_premises.len(),
-                    reflex_mask.len()
-                );
-                let converted_premises: Vec<ProofId> = converted_premises
-                    .into_iter()
-                    .zip(reflex_mask)
-                    .map(|(pid, reflex)| {
-                        if reflex {
-                            self.reflexivize_premise(pid)
-                        } else {
-                            pid
-                        }
-                    })
-                    .collect();
+                let (converted_premises, substitution) =
+                    self.rule_premises(prog, globals, raw_store, name, rule, premise_proofs);
 
                 // This row carries on the walk the last row of the same firing
                 // left off at. A row reached while this one walks starts its own,
                 // so the further of the two is the one kept.
                 let firing_key = (name.clone(), converted_premises.clone());
                 let carried = self.head_walks.remove(&firing_key);
-                let substitution = self.compute_rule_substitution(rule, &converted_premises);
                 // A carried walk brings the bindings the earlier row seeded it
                 // with, so only a walk starting from scratch needs them.
                 let bindings = match &carried {
@@ -1163,23 +1127,105 @@ impl ProofStore {
     /// for convenience.
     ///
     /// Entries come out in the order the variables first occur in the rule body.
-    fn compute_rule_substitution(
-        &self,
+    /// A firing's premise proof per body fact, and the substitution they fix.
+    ///
+    /// The body is walked in order because the two are interleaved: the encoding
+    /// stores no row for a [`recomputable_premises`] fact, so that premise is
+    /// rebuilt by evaluating the fact against the bindings the earlier facts
+    /// gave. `premise_proofs` holds the stored rows only, in body order; any
+    /// trailing ones are the lookups `remove_globals` appended for the globals
+    /// the head mentions, which `prog`'s rule predates, so they are left unread.
+    fn rule_premises(
+        &mut self,
+        prog: &Vec<ResolvedNCommand>,
+        globals: &HashMap<String, TermId>,
+        raw_store: &RawProofStore,
+        name: &str,
         rule: &ResolvedRule,
-        premise_proofs: &[ProofId],
-    ) -> IndexMap<String, TermId> {
-        let mut current_subst = IndexMap::default();
-        for (fact, proof_id) in rule.body.iter().zip(premise_proofs.iter()) {
+        premise_proofs: &[RawProofId],
+    ) -> (Vec<ProofId>, IndexMap<String, TermId>) {
+        let recomputable = recomputable_premises(&rule.body, &|var| globals.contains_key(var));
+        let mut stored = premise_proofs.iter();
+        let mut substitution = IndexMap::default();
+        let mut converted = Vec::with_capacity(rule.body.len());
+        for (fact, recomputable) in rule.body.iter().zip(recomputable) {
+            let premise = if recomputable {
+                self.recomputed_premise(name, fact, &substitution)
+            } else {
+                let raw = *stored.next().unwrap_or_else(|| {
+                    panic!(
+                        "rule {name} recorded {} premises for a body of {} facts",
+                        premise_proofs.len(),
+                        rule.body.len()
+                    )
+                });
+                let premise = self.convert_raw_proof(prog, globals, raw_store, raw);
+                // Rebuild/canonicalization can rewrite a matched custom-function-fact
+                // premise `(= (f args) v)` into a non-reflexive natural->canonical
+                // `Congr` proof `(f nat) = (f canon)` (e.g. when an argument's e-class
+                // has several equivalent shapes from commutativity/associativity
+                // rewrites). The checker's function-fact normal form expects a
+                // reflexive premise at the matched (canonical) shape, so reflexivize
+                // those. Equality-fact premises `(= a b)` must stay non-reflexive.
+                if is_custom_func_fact(fact) {
+                    self.reflexivize_premise(premise)
+                } else {
+                    premise
+                }
+            };
             // Container side conditions carry only an `Eval` marker (no value);
             // their bindings are generated by `check_side_condition` at check
             // time, so there is nothing to unify here.
-            if crate::proofs::proof_checker::is_container_side_condition(fact) {
-                continue;
+            if !crate::proofs::proof_checker::is_container_side_condition(fact) {
+                self.unify_fact(fact, premise, &mut substitution);
             }
-            self.unify_fact(fact, *proof_id, &mut current_subst);
+            converted.push(premise);
         }
+        (converted, substitution)
+    }
 
-        current_subst
+    /// The reflexive fiat a [`recomputable_premises`] fact's premise is, over the
+    /// base value the fact evaluates to under `substitution`. Shared, so the rows
+    /// of one firing name the same premise.
+    fn recomputed_premise(
+        &mut self,
+        rule_name: &str,
+        fact: &ResolvedFact,
+        substitution: &IndexMap<String, TermId>,
+    ) -> ProofId {
+        let bindings: HashMap<String, TermId> = substitution
+            .iter()
+            .map(|(var, term)| (var.clone(), *term))
+            .collect();
+        let eval = |store: &mut Self, expr: &ResolvedExpr| {
+            eval_expr_with_subst(rule_name, expr, &mut store.term_dag, &bindings)
+                .ok()
+                .map(|(term, _props)| term)
+        };
+        let (lhs, rhs) = match fact {
+            ResolvedFact::Fact(expr) => {
+                let term = eval(self, expr).unwrap_or_else(|| {
+                    panic!("rule {rule_name}: premise-free fact {fact} does not evaluate")
+                });
+                (term, term)
+            }
+            // Only one side need evaluate: the other is a variable this premise
+            // binds, so it states the same term.
+            ResolvedFact::Eq(_, lhs, rhs) => match (eval(self, lhs), eval(self, rhs)) {
+                (Some(lhs), Some(rhs)) => (lhs, rhs),
+                (Some(term), None) | (None, Some(term)) => (term, term),
+                (None, None) => {
+                    panic!("rule {rule_name}: premise-free fact {fact} has no evaluable side")
+                }
+            },
+        };
+        self.push_shared_proof(
+            SynthKey::Fiat(lhs, rhs),
+            Proof {
+                proposition: Proposition::new(lhs, rhs),
+                justification: Justification::Fiat,
+            },
+        )
     }
 
     /// Bind the fact's variables from the term its premise proof proves. A

@@ -478,14 +478,20 @@ impl ProofInstrumentor<'_> {
     }
 
     /// Declarations for the fused rule constructors `program`'s rules need but
-    /// that no earlier program declared. A rule's premise count is its body-fact
-    /// count, so the arities a program uses are known before it is encoded; these
-    /// are emitted ahead of the program's own commands.
+    /// that no earlier program declared. A rule's premise count is fixed by its
+    /// body (see [`recomputable_premises`]), so the arities a program uses are
+    /// known before it is encoded; these are emitted ahead of the program's own
+    /// commands.
     pub(crate) fn rule_arity_header(&mut self, program: &[ResolvedNCommand]) -> Vec<Command> {
         fn collect(commands: &[ResolvedNCommand], out: &mut Vec<usize>) {
             for command in commands {
                 match command {
-                    ResolvedNCommand::NormRule { rule } => out.push(rule.body.len()),
+                    ResolvedNCommand::NormRule { rule } => out.push(
+                        recomputable_premises(&rule.body, &|_| false)
+                            .iter()
+                            .filter(|recomputable| !**recomputable)
+                            .count(),
+                    ),
                     ResolvedNCommand::Fail(_, nested) => collect(nested, out),
                     _ => {}
                 }
@@ -963,6 +969,90 @@ fn fact_has_eq_sort_primitive_result(fact: &ResolvedFact) -> bool {
         expr
     });
     has_eq_sort_primitive
+}
+
+/// Whether `expr`'s premise proof is a reflexive fiat over a base value: a
+/// literal, a base-sorted variable, or a base-output primitive over those.
+/// `is_global` marks a variable naming a global, whose value no gated fact may
+/// depend on (see [`recomputable_premises`]).
+fn is_base_value_expr(expr: &ResolvedExpr, is_global: &dyn Fn(&str) -> bool) -> bool {
+    let is_base = |sort: &ArcSort| !sort.is_eq_sort() && !sort.is_eq_container_sort();
+    match expr {
+        ResolvedExpr::Lit(..) => true,
+        ResolvedExpr::Var(_, var) => is_base(&var.sort) && !is_global(&var.name),
+        ResolvedExpr::Call(_, ResolvedCall::Primitive(prim), args) => {
+            is_base(prim.output()) && args.iter().all(|arg| is_base_value_expr(arg, is_global))
+        }
+        ResolvedExpr::Call(..) => false,
+    }
+}
+
+/// Whether every variable `expr` reads is in `bound`.
+fn reads_only(expr: &ResolvedExpr, bound: &HashSet<String>) -> bool {
+    match expr {
+        ResolvedExpr::Lit(..) => true,
+        ResolvedExpr::Var(_, var) => bound.contains(&var.name),
+        ResolvedExpr::Call(_, _, args) => args.iter().all(|arg| reads_only(arg, bound)),
+    }
+}
+
+/// Record every variable `expr` mentions as bound.
+fn bind_vars(expr: &ResolvedExpr, bound: &mut HashSet<String>) {
+    match expr {
+        ResolvedExpr::Lit(..) => {}
+        ResolvedExpr::Var(_, var) => {
+            bound.insert(var.name.clone());
+        }
+        ResolvedExpr::Call(_, _, args) => args.iter().for_each(|arg| bind_vars(arg, bound)),
+    }
+}
+
+/// Which of a rule body's facts the encoding stores no premise proof for: the
+/// premise is a reflexive fiat over a base value, which proof conversion
+/// recomputes by evaluating the fact against the bindings the earlier facts
+/// give. Answered per fact, in body order, since a fact is only recomputable
+/// once one of its sides reads nothing but variables the body has already bound.
+///
+/// The encoder and proof conversion share this gate so they cannot drift, and
+/// each must therefore describe the same rule the same way. `remove_globals`
+/// rewrites a global reference into a lookup call, which is not a base value, so
+/// conversion — which sees the rule from before that pass — reports a global's
+/// variable through `is_global` to reach the same answer.
+pub(crate) fn recomputable_premises(
+    body: &[ResolvedFact],
+    is_global: &dyn Fn(&str) -> bool,
+) -> Vec<bool> {
+    let mut bound: HashSet<String> = HashSet::default();
+    let mut out = Vec::with_capacity(body.len());
+    for fact in body {
+        // A side is usable when it evaluates here, or is the bare variable
+        // unification binds from the proposition.
+        let usable = |expr: &ResolvedExpr, bound: &HashSet<String>| {
+            reads_only(expr, bound) || matches!(expr, ResolvedExpr::Var(..))
+        };
+        let recomputable = !is_container_side_condition(fact)
+            && match fact {
+                ResolvedFact::Fact(expr) => {
+                    is_base_value_expr(expr, is_global) && reads_only(expr, &bound)
+                }
+                ResolvedFact::Eq(_, lhs, rhs) => {
+                    is_base_value_expr(lhs, is_global)
+                        && is_base_value_expr(rhs, is_global)
+                        && usable(lhs, &bound)
+                        && usable(rhs, &bound)
+                        && (reads_only(lhs, &bound) || reads_only(rhs, &bound))
+                }
+            };
+        out.push(recomputable);
+        match fact {
+            ResolvedFact::Fact(expr) => bind_vars(expr, &mut bound),
+            ResolvedFact::Eq(_, lhs, rhs) => {
+                bind_vars(lhs, &mut bound);
+                bind_vars(rhs, &mut bound);
+            }
+        }
+    }
+    out
 }
 
 /// Whether `sort` is a container that can hold an element of `element`.
