@@ -194,12 +194,12 @@ enum RawProof {
     /// given a proof that t1 = f(..., ci, ...) and the child index i,
     /// produces a justification that ci = ci.
     Proj(RawProofId, usize),
-    /// Given a proof that `t1 = c` and an AST node naming a term `a`, produces a
-    /// justification that `a = a`, provided `a` is a child of `c`. Minted where
-    /// the child's position in the term is not known at the site — a container's
-    /// elements come in value order, and the term form orders them canonically.
-    /// Desugared by [`ProofStore::from_raw`] into the positional
-    /// [`RawProof::Proj`] computed against the actual term.
+    /// Given a proof that `t1 = c` and a term `a`, produces a justification that
+    /// `a = a`, provided `a` is a child of `c`. Minted where the child's position
+    /// in the term is not known at the site — a container's elements come in
+    /// value order, and the term form orders them canonically. Desugared by
+    /// [`ProofStore::from_raw`] into the positional [`RawProof::Proj`] computed
+    /// against the actual term.
     ProjAll(RawProofId, TermId),
     /// Given a proof that `t1 = c` for a container term `c`, produces a proof of
     /// `t1 = normalize(c)` — the container's canonicalization (reorder/dedup/
@@ -1122,19 +1122,16 @@ impl ProofStore {
         plan
     }
 
-    /// For a given rule and premise proofs, compute the substitution used in the rule application.
-    /// The proof has enough information to compute the substitution, we do it here
-    /// for convenience.
-    ///
-    /// Entries come out in the order the variables first occur in the rule body.
     /// A firing's premise proof per body fact, and the substitution they fix.
+    /// Substitution entries come out in the order the variables first occur in
+    /// the rule body.
     ///
-    /// The body is walked in order because the two are interleaved: the encoding
-    /// stores no row for a [`recomputable_premises`] fact, so that premise is
-    /// rebuilt by evaluating the fact against the bindings the earlier facts
-    /// gave. `premise_proofs` holds the stored rows only, in body order; any
-    /// trailing ones are the lookups `remove_globals` appended for the globals
-    /// the head mentions, which `prog`'s rule predates, so they are left unread.
+    /// The encoding stores no row for a [`recomputable_premises`] fact, so that
+    /// premise is rebuilt by evaluating the fact against the bindings the earlier
+    /// facts gave. `premise_proofs` holds the stored rows only, in body order;
+    /// any trailing ones are the lookups `remove_globals` appended for the
+    /// globals the head mentions, which `prog`'s rule predates, so they are left
+    /// unread.
     fn rule_premises(
         &mut self,
         prog: &Vec<ResolvedNCommand>,

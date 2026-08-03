@@ -398,10 +398,9 @@ impl EGraph {
     /// `table_name`, returning the [`ExternalFunctionId`] its call sites resolve
     /// to.
     ///
-    /// Invoked as `(args…)`, it mints a fresh id from the same counter as
-    /// `get-fresh!`, stages the row `(args…, fresh, vals…)`, and returns
-    /// `fresh`. Every id it mints is new, so the staged row can never collide
-    /// with another.
+    /// Invoked as `(args…)`, it mints a fresh id — from the same counter as
+    /// `get-fresh!`, so never one already in use — stages the row
+    /// `(args…, fresh, vals…)`, and returns `fresh`.
     pub fn register_mint_row(
         &mut self,
         table_name: String,

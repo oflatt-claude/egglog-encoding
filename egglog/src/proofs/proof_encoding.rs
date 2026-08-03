@@ -13,7 +13,7 @@ use crate::*;
 /// connecting the two.
 ///
 /// A proof about the term's shape has to be stated over the natural form, since
-/// the id is an interned e-class whose AST may float.
+/// the id is an interned e-class whose term may float.
 #[derive(Clone)]
 pub(crate) struct Operand {
     /// The id later statements read this operand by.
@@ -588,9 +588,9 @@ impl<'a> ProofInstrumentor<'a> {
         // forwards.
         let base_proof = self.edge_proof(emit, type_name, &lhs.natural, &rhs.natural);
 
-        // The shared natural form is the canonicalized side's natural (pinned
-        // AST), so the Trans goes through it rather than through the deduped
-        // e-class.
+        // The shared natural form is the canonicalized side's natural (pinned to
+        // the enode the rule built), so the Trans goes through it rather than
+        // through the deduped e-class.
         let lhs_conn = lhs.connector.as_ref().map(|c| self.connector_node(emit, c));
         let rhs_conn = rhs.connector.as_ref().map(|c| self.connector_node(emit, c));
         let (lhs_to_shared, rhs_to_shared) = self.union_to_shared(base_proof, lhs_conn, rhs_conn);
@@ -1444,9 +1444,8 @@ impl<'a> ProofInstrumentor<'a> {
         self.parse_program(&decls)
     }
 
-    /// The name of `sort`'s fiat justification, declaring the relation on first
-    /// use. Few of a program's sorts are ever fiat-ed, so the declaration goes
-    /// with the first command needing it rather than with the proof header.
+    /// The name of `sort`'s fiat justification, declaring the relation ahead of
+    /// the command that first uses it.
     pub(crate) fn fiat_constructor(&mut self, sort: &str) -> String {
         let name = self.proof_names().fiat(sort);
         if self
@@ -1494,9 +1493,8 @@ impl<'a> ProofInstrumentor<'a> {
         name
     }
 
-    /// The name of `func`'s subsumption marker relation, declaring the marker and
-    /// its maintenance rules on first use. Commands arrive one at a time, so the
-    /// `subsume` may be many batches after the function's own declaration.
+    /// The name of `func`'s subsumption marker relation, declaring the marker
+    /// and its maintenance rules ahead of the command that first uses them.
     fn subsume_marker(&mut self, func: &str, input: &[ArcSort]) -> String {
         if self
             .egraph
@@ -1527,6 +1525,7 @@ impl<'a> ProofInstrumentor<'a> {
     pub(crate) fn drop_pending_lookups(&mut self) {
         self.deferred.clear();
         self.sealed.clear();
+        self.unanchored.clear();
     }
 
     /// Emit the deferred groups `args_joined` reads, and transitively the groups
@@ -2062,10 +2061,10 @@ impl<'a> ProofInstrumentor<'a> {
         res
     }
 
-    /// Instrument a rule to use term encoding. This involves using the view tables in facts,
-    /// adding to term and view tables in actions.
-    /// When proofs are enabled we query proof tables, then build a proof for the rule in the actions.
-    /// Finally, each view update also updates the proof tables.
+    /// Instrument a rule to use term encoding: the body reads the view tables,
+    /// and the actions write the term and view rows. With proofs enabled the
+    /// actions also build the rule's proofs, one of which fills each written
+    /// row's proof column.
     fn instrument_rule(&mut self, rule: &ResolvedRule) -> Vec<Command> {
         // The reflexive-proof names are globally fresh, so keeping earlier rules'
         // would be harmless but unbounded.

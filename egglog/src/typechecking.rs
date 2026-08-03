@@ -572,10 +572,10 @@ impl EGraph {
                         (resolved.name.clone(), ft.input.clone(), ft.outputs.clone());
                     crate::proofs::proof_fresh::register_set_if_empty(self, &name, input, outputs);
                 }
-                // A term-node relation (a term/proof/AST node, whose last input
-                // is the minted id) gets a mint primitive, so the encoding
-                // writes a node in one statement. Registered here for the same
-                // reason as `set-if-empty` above.
+                // A term-node relation (a term or proof node, whose last input is
+                // the minted id) gets a mint primitive, so the encoding writes a
+                // node in one statement. Registered here for the same reason as
+                // `set-if-empty` above.
                 if resolved.internal_term_node
                     && let ResolvedCall::Func(ft) = &resolved.resolved_schema
                     && let Some((id_sort, arg_sorts)) = ft.input.split_last()
@@ -616,10 +616,9 @@ impl EGraph {
                 if !unionable {
                     self.type_info.non_unionable_sorts.insert(name.clone());
                 }
-                // Record this sort's UF / proof tables in proof_state (as
-                // run_command also does) so the container rebuild registration
-                // below can recover them — including this container's own proof
-                // table, which has not run yet.
+                // Record this sort's UF table and the global proof-constructor
+                // names in proof_state (as run_command also does) so the
+                // container rebuild registration below can recover them.
                 if let Some((uf_ctor, _uf_index)) = uf {
                     self.proof_state
                         .uf_parent

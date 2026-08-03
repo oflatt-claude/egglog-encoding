@@ -312,13 +312,13 @@ pub(crate) enum Justification {
     /// Term-free merge justification for a merge-body subexpression: function
     /// name, the two premise (view) proof expressions, and the pre-order index of
     /// this subexpression in the merge body (matches `subexpr_at_index` in proof
-    /// conversion). It embeds no AST, so it needs neither the merged term
-    /// nor the function key/children — usable in a `:merge` action.
+    /// conversion). It names no term, so it needs neither the merged term nor
+    /// the function key/children — usable in a `:merge` action.
     MergeIdx(String, String, String, usize),
     /// Term-free merge justification for the whole view row (function name + two
     /// premise proof expressions). The conclusion `f(children, merged)` is
     /// reconstructed during proof conversion by running the whole merge body on
-    /// the premise outputs; no AST/children needed.
+    /// the premise outputs, so the row names no term.
     MergeRow(String, String, String),
 }
 

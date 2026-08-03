@@ -66,9 +66,9 @@
 (check (PFirst (Z)))
 
 ; ===== containers constructed in the query (Eval-justified) =====
-; A container built by a primitive in the rule body has no anchored term-proof;
-; `Eval` justifies it from its arguments' existence proofs, re-derived with the
-; typed primitive when the rule fires.
+; A container built by a primitive in the rule body is named by no view row, so
+; there is no reflexive anchor to project it out of; the fact carries a bare
+; `Eval` marker and the checker re-evaluates it against the rule body.
 (relation HasElem (N))
 (HasElem (Z))
 (HasElem (S (Z)))

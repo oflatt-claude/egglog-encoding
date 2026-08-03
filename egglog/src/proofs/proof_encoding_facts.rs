@@ -1,6 +1,6 @@
 //! Query-side instrumentation for the term/proof encoding: rule bodies are
 //! rewritten to read the view tables, and each matched fact collects a premise
-//! proof for the rule's proof list.
+//! proof for the rule proofs the head writes.
 
 use super::proof_checker::is_container_side_condition;
 use super::proof_encoding::{Anchor, ProofInstrumentor};

@@ -708,8 +708,7 @@ fn set_if_empty_apply(
 }
 
 /// Service the term encoder's mint against the mirror: insert
-/// `(args…, fresh, vals…)` with a freshly minted id, and return that id. Every
-/// id is new, so the row can never collide with one already there.
+/// `(args…, fresh, vals…)` with a freshly minted id, and return that id.
 fn mint_apply(eg: &mut EGraph, op: &MintOp, args: &[Value]) -> Result<Value> {
     let table = *eg
         .table_ids
