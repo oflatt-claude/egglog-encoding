@@ -64,11 +64,13 @@ pub(crate) struct EncodingNames {
     pub(crate) path_compress_ruleset_name: String,
     pub(crate) rebuilding_ruleset_name: String,
     pub(crate) rebuilding_cleanup_ruleset_name: String,
-    pub(crate) delete_subsume_ruleset_name: String,
+    pub(crate) subsume_ruleset_name: String,
     // Per-function fresh names
     pub(crate) view_name: HashMap<String, String>,
-    pub(crate) to_delete_name: HashMap<String, String>,
     pub(crate) subsumed_name: HashMap<String, String>,
+    /// The functions whose subsumption scaffolding some program has already
+    /// declared (see [`ProofInstrumentor::subsume_marker`]).
+    pub(crate) subsume_declared: HashSet<String>,
 }
 
 /// A proof composed out of the equality axioms over leaves of type `L`. Two
@@ -395,10 +397,10 @@ impl EncodingNames {
             path_compress_ruleset_name: symbol_gen.fresh("parent"),
             rebuilding_ruleset_name: symbol_gen.fresh("rebuilding"),
             rebuilding_cleanup_ruleset_name: symbol_gen.fresh("rebuilding_cleanup"),
-            delete_subsume_ruleset_name: symbol_gen.fresh("delete_subsume_ruleset"),
+            subsume_ruleset_name: symbol_gen.fresh("subsume_ruleset"),
             view_name: HashMap::default(),
-            to_delete_name: HashMap::default(),
             subsumed_name: HashMap::default(),
+            subsume_declared: HashSet::default(),
         }
     }
 }
@@ -533,7 +535,7 @@ impl ProofInstrumentor<'_> {
             self.proof_names().path_compress_ruleset_name,
             self.proof_names().rebuilding_ruleset_name,
             self.proof_names().rebuilding_cleanup_ruleset_name,
-            self.proof_names().delete_subsume_ruleset_name
+            self.proof_names().subsume_ruleset_name
         );
         self.parse_program(&str)
     }
@@ -575,24 +577,6 @@ impl ProofInstrumentor<'_> {
                 .proof_state
                 .proof_names
                 .view_name
-                .insert(name.to_string(), fresh_name.clone());
-            fresh_name
-        }
-    }
-
-    pub(crate) fn delete_name(&mut self, name: &str) -> String {
-        if let Some(n) = self.egraph.proof_state.proof_names.to_delete_name.get(name) {
-            n.clone()
-        } else {
-            let fresh_name = self
-                .egraph
-                .parser
-                .symbol_gen
-                .fresh(&format!("to_delete_{name}"));
-            self.egraph
-                .proof_state
-                .proof_names
-                .to_delete_name
                 .insert(name.to_string(), fresh_name.clone());
             fresh_name
         }

@@ -1,11 +1,10 @@
 //! Maintenance-rule generation for the term/proof encoding: the rebuild rules
-//! that keep each function's view and subsumed tables canonical, plus the rules
-//! that execute requested deletes/subsumptions. (`@UF` path compression stays
-//! in [`super::proof_encoding`].)
+//! that keep each function's view and subsumed tables canonical, plus the rule
+//! that executes a requested subsumption. (`@UF` path compression stays in
+//! [`super::proof_encoding`].)
 
 use super::proof_encoding::{ProofInstrumentor, ViewIndex};
 use super::proof_encoding_helpers::Skeleton;
-use crate::typechecking::FuncType;
 use crate::*;
 
 /// The composition a view rebuild's packed row states, over the columns
@@ -30,44 +29,69 @@ pub(super) fn eclass_refl_skeleton() -> Skeleton {
 }
 
 impl ProofInstrumentor<'_> {
-    /// Rules that execute deletion and subsumption based on the tables requesting the deletion/subsumption.
-    pub(super) fn delete_and_subsume(&mut self, fdecl: &ResolvedFunctionDecl) -> String {
-        let child_names = fdecl
-            .schema
-            .input
-            .iter()
-            .enumerate()
-            .map(|(i, _)| format!("c{i}_"))
-            .collect::<Vec<_>>()
-            .join(" ");
-        let to_delete_name = self.delete_name(&fdecl.name);
-        let subsumed_name = self.subsumed_name(&fdecl.name);
-        let view_name = self.view_name(&fdecl.name);
-        let delete_subsume_ruleset = self.proof_names().delete_subsume_ruleset_name.clone();
-        let fresh_name = self.egraph.parser.symbol_gen.fresh("delete_rule");
+    /// The declarations `name`'s subsumption marker needs: the marker relation,
+    /// the maintenance rule that applies it to the view, and one rebuild rule per
+    /// eq-sort child keeping the marker keyed on canonical children.
+    ///
+    /// The marker is what makes subsumption survive rebuilding: re-keying a view
+    /// row inserts it afresh, and the new row carries no subsumed bit of its own.
+    pub(super) fn subsume_scaffolding(&mut self, name: &str, input: &[ArcSort]) -> String {
+        let child = |i: usize| format!("c{i}_");
+        let children_vec: Vec<String> = (0..input.len()).map(child).collect();
+        let children = children_vec.join(" ");
+        let in_sorts = ListDisplay(input.iter().map(|s| s.name()).collect::<Vec<_>>(), " ");
+        let subsumed_name = self.subsumed_name(name);
+        let view_name = self.view_name(name);
+        let subsume_ruleset = self.proof_names().subsume_ruleset_name.clone();
+        let rebuilding_ruleset = self.proof_names().rebuilding_ruleset_name.clone();
+        let fresh_name = self.egraph.parser.symbol_gen.fresh("subsume_rule");
 
-        // The view is keyed by children only, so match its value tuple to
-        // delete/subsume by key (the bridge re-reads every value column when
-        // subsuming a tuple-output view). Deletion removes the row by key;
-        // subsumption marks it subsumed (kept for size/proofs but excluded from
-        // matching).
+        // The view is keyed by children only, so match its value tuple to subsume
+        // by key (the bridge re-reads every value column when subsuming a
+        // tuple-output view). A subsumed row is kept for size/proofs but excluded
+        // from matching.
         let e = self.fresh_var();
         let pf = self.fresh_var();
-        let e2 = self.fresh_var();
-        let pf2 = self.fresh_var();
-        format!(
-            "(rule (({to_delete_name} {child_names})
-                    (= (values {e} {pf}) ({view_name} {child_names})))
-                   ((delete ({view_name} {child_names}))
-                    (delete ({to_delete_name} {child_names})))
-                    :ruleset {delete_subsume_ruleset}
-                    :name \"{fresh_name}\")
-             (rule (({subsumed_name} {child_names})
-                    (= (values {e2} {pf2}) ({view_name} {child_names})))
-                   ((subsume ({view_name} {child_names})))
-                    :ruleset {delete_subsume_ruleset}
-                    :name \"{fresh_name}_subsume\")"
-        )
+        let mut decls = format!(
+            "(function {subsumed_name} ({in_sorts}) Unit :no-merge :internal-hidden)
+             (rule (({subsumed_name} {children})
+                    (= (values {e} {pf}) ({view_name} {children})))
+                   ((subsume ({view_name} {children})))
+                    :ruleset {subsume_ruleset}
+                    :name \"{fresh_name}\")\n"
+        );
+
+        // Mirrors [`Self::rebuilding_rules`]: the single-key `@UF` has no row for
+        // a canonical node, so a per-column lookup only fires when there is work.
+        // The `@UF` proof column is unused for subsumed rows.
+        for (i, ty) in input.iter().enumerate() {
+            if !ty.is_eq_sort() {
+                continue;
+            }
+            let ci = child(i);
+            let leader = format!("c{i}_leader_");
+            let uf_name = self.uf_name(ty.name());
+            let proof_var = self.fresh_var();
+            let mut updated = children_vec.clone();
+            updated[i] = leader.clone();
+            let updated_view = ListDisplay(&updated, " ");
+            let fresh_name = self
+                .egraph
+                .parser
+                .symbol_gen
+                .fresh("rebuild_to_subsume_rule");
+            decls.push_str(&format!(
+                "(rule (({subsumed_name} {children})
+                        (= (values {leader} {proof_var}) ({uf_name} {ci}))
+                        (!= {ci} {leader}))
+                     (
+                      (set ({subsumed_name} {updated_view}) ())
+                      (delete ({subsumed_name} {children}))
+                     )
+                      :ruleset {rebuilding_ruleset} :name \"{fresh_name}\" :internal-include-subsumed)\n"
+            ));
+        }
+        decls
     }
 
     /// Wrap one maintenance-rebuild rule (`facts` -> `actions`) with the rebuilding
@@ -411,72 +435,5 @@ impl ProofInstrumentor<'_> {
         let facts = format!("{query_view}\n{canon_fact}\n(!= {value_var} {canon})");
         let actions = format!("{proof_lets}\n(delete ({view_name} {keys_str}))\n{set_canon}");
         self.rebuild_rule(&facts, &actions, true)
-    }
-
-    /// Rules that update the to_subsume tables when children change. One rule per
-    /// eq-sort child (no proof needed for subsumed rows).
-    pub(super) fn rebuilding_subsumed_rules(
-        &mut self,
-        fdecl: &ResolvedFunctionDecl,
-    ) -> Vec<Command> {
-        let ResolvedCall::Func(FuncType { input, .. }) = &fdecl.resolved_schema else {
-            panic!("cannot create subsumed rules for primitives")
-        };
-
-        // Check if there are any eq-sort columns at all; if not, no rebuild rule needed.
-        if !input.iter().any(|t| t.is_eq_sort()) {
-            return vec![];
-        }
-
-        self.rebuilding_subsumed_rules_fanout(fdecl, input.clone())
-    }
-
-    /// Subsumed-table rebuild: one rule per eq-sort column, mirroring
-    /// [`Self::rebuilding_rules`] (the single-key `@UF` has no row for a
-    /// canonical node, so a per-column lookup only fires when there is work).
-    /// The `@UF` proof column is unused for subsumed rows.
-    fn rebuilding_subsumed_rules_fanout(
-        &mut self,
-        fdecl: &ResolvedFunctionDecl,
-        input: Vec<ArcSort>,
-    ) -> Vec<Command> {
-        let subsumed_name = self.subsumed_name(&fdecl.name);
-        let child = |i: usize| format!("c{i}_");
-        let children_vec: Vec<String> = (0..input.len()).map(child).collect();
-        let children = format!("{}", ListDisplay(&children_vec, " "));
-        let rebuilding_ruleset = self.proof_names().rebuilding_ruleset_name.clone();
-
-        let mut rules = String::new();
-        for (i, ty) in input.iter().enumerate() {
-            if !ty.is_eq_sort() {
-                continue;
-            }
-            let ci = child(i);
-            let leader = format!("c{i}_leader_");
-            let uf_name = self.uf_name(ty.name());
-            let uf_lookup = {
-                let proof_var = self.fresh_var();
-                format!("(= (values {leader} {proof_var}) ({uf_name} {ci}))")
-            };
-            let mut updated = children_vec.clone();
-            updated[i] = leader.clone();
-            let updated_view = ListDisplay(&updated, " ");
-            let fresh_name = self
-                .egraph
-                .parser
-                .symbol_gen
-                .fresh("rebuild_to_subsume_rule");
-            rules.push_str(&format!(
-                "(rule (({subsumed_name} {children})
-                        {uf_lookup}
-                        (!= {ci} {leader}))
-                     (
-                      (set ({subsumed_name} {updated_view}) ())
-                      (delete ({subsumed_name} {children}))
-                     )
-                      :ruleset {rebuilding_ruleset} :name \"{fresh_name}\" :internal-include-subsumed)\n"
-            ));
-        }
-        self.parse_program(&rules)
     }
 }

@@ -1477,6 +1477,125 @@ mod tests {
             .unwrap();
     }
 
+    /// A `subsume` may arrive in a batch long after the datatype's, so the
+    /// scaffolding cannot be emitted by a pass over the whole program.
+    #[test]
+    fn subsume_declared_in_a_later_batch() {
+        let mut egraph = EGraph::new_with_term_encoding();
+        egraph
+            .parse_and_run_program(None, "(datatype Math (Num i64) (Add Math Math))")
+            .unwrap();
+        egraph
+            .parse_and_run_program(None, "(Add (Num 1) (Num 2))")
+            .unwrap();
+        egraph
+            .parse_and_run_program(None, "(subsume (Add (Num 1) (Num 2)))")
+            .unwrap();
+        // A subsumed row is excluded from matching but still present.
+        egraph
+            .parse_and_run_program(
+                None,
+                r#"
+                (rule ((= x (Add a b))) ((panic "a subsumed row matched")))
+                (run 1)
+                (check (= (Add (Num 1) (Num 2)) (Add (Num 1) (Num 2))))
+                "#,
+            )
+            .unwrap();
+    }
+
+    /// `push` clones the whole [`EGraph`], so the memo saying a function's
+    /// subsumption scaffolding is declared rolls back with the declaration it
+    /// tracks: subsuming the same function again after the `pop` re-declares it.
+    #[test]
+    fn subsume_scaffolding_survives_push_pop() {
+        let mut egraph = EGraph::new_with_term_encoding();
+        egraph
+            .parse_and_run_program(
+                None,
+                r#"
+                (datatype Math (Num i64) (Add Math Math))
+                (Add (Num 1) (Num 2))
+                (push)
+                (subsume (Add (Num 1) (Num 2)))
+                (pop)
+                (subsume (Add (Num 1) (Num 2)))
+                "#,
+            )
+            .unwrap();
+        egraph
+            .parse_and_run_program(
+                None,
+                r#"
+                (rule ((= x (Add a b))) ((panic "a subsumed row matched")))
+                (run 1)
+                "#,
+            )
+            .unwrap();
+    }
+
+    /// The same, for a `delete` — which needs no scaffolding at all.
+    #[test]
+    fn delete_across_push_pop_and_later_batches() {
+        let mut egraph = EGraph::new_with_term_encoding();
+        egraph
+            .parse_and_run_program(None, "(datatype Math (Num i64) (Add Math Math))")
+            .unwrap();
+        egraph
+            .parse_and_run_program(
+                None,
+                r#"
+                (Add (Num 1) (Num 2))
+                (push)
+                (delete (Add (Num 1) (Num 2)))
+                (pop)
+                "#,
+            )
+            .unwrap();
+        // The pop restored the row, so the later delete has something to remove.
+        egraph
+            .parse_and_run_program(
+                None,
+                r#"
+                (check (= (Add (Num 1) (Num 2)) (Add (Num 1) (Num 2))))
+                (delete (Add (Num 1) (Num 2)))
+                (fail (check (= (Add (Num 1) (Num 2)) (Add (Num 1) (Num 2)))))
+                "#,
+            )
+            .unwrap();
+    }
+
+    /// The encoded `delete` keeps the uninstrumented meaning: the backend stages
+    /// removals and applies them ahead of the insertions committed in the same
+    /// batch, so a row another rule inserts in that batch survives the delete.
+    #[test]
+    fn delete_loses_to_a_same_batch_insert() {
+        for mut egraph in [EGraph::default(), EGraph::new_with_term_encoding()] {
+            let outputs = egraph
+                .parse_and_run_program(
+                    None,
+                    r#"
+                    (function F (i64) i64 :no-merge)
+                    (relation Go ())
+                    (Go)
+                    (rule ((Go)) ((set (F 2) 20)) :name "inserter")
+                    (rule ((Go)) ((delete (F 2))) :name "deleter")
+                    (run 1)
+                    (print-size F)
+                    "#,
+                )
+                .unwrap();
+            let sizes: Vec<usize> = outputs
+                .iter()
+                .filter_map(|output| match output {
+                    CommandOutput::PrintFunctionSize(size) => Some(*size),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(sizes, vec![1]);
+        }
+    }
+
     #[test]
     fn doc_example_add_function2() {
         let commands = term_encode(

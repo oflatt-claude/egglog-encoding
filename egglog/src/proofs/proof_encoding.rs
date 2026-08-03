@@ -242,9 +242,10 @@ pub(crate) struct ProofInstrumentor<'a> {
     /// Compositions that get a row of their own rather than being written into
     /// the one composing over them (see [`Self::level_connector`]).
     sealed: HashSet<String>,
-    /// Declarations of the packed constructors the compositions written so far
-    /// need, to be emitted ahead of the command using them.
-    packed_decls: Vec<String>,
+    /// Declarations the statements written so far need — packed proof
+    /// constructors and subsumption scaffolding — to be emitted ahead of the
+    /// command using them.
+    pending_decls: Vec<String>,
     /// The body anchors of the query being instrumented (see [`BodyAnchors`]).
     anchors: BodyAnchors,
     /// Anchor requests no body atom could reach, as proof variable and the
@@ -399,7 +400,7 @@ impl<'a> ProofInstrumentor<'a> {
             reflexive: HashSet::default(),
             deferred: HashMap::default(),
             sealed: HashSet::default(),
-            packed_decls: vec![],
+            pending_decls: vec![],
             anchors: BodyAnchors::default(),
             unanchored: HashMap::default(),
         }
@@ -898,9 +899,6 @@ impl<'a> ProofInstrumentor<'a> {
         let in_sorts = ListDisplay(schema.input.clone(), " ");
         let fresh_sort = self.egraph.parser.symbol_gen.fresh("view");
         let index_decls = self.declare_view_indexes(fdecl);
-        let delete_rule = self.delete_and_subsume(fdecl);
-        let to_delete_name = self.delete_name(&fdecl.name);
-        let subsumed_name = self.subsumed_name(&fdecl.name);
         // Constructors and encoded globals give the term row `(children eclass)`;
         // a Custom function returning a distinct value (e.g. `-> i64`) keeps an
         // output column plus a fresh eclass column.
@@ -993,19 +991,13 @@ impl<'a> ProofInstrumentor<'a> {
         };
         // The term relation is a term node (`:internal-term-node`): its rows are
         // reconstructed by proof extraction, with the minted id as the last input.
-        // The deferred delete/subsume markers are keyed on children with no output,
-        // so they are plain `Unit` relations (not term nodes) — the encoding mints
-        // no e-class there and extraction never reads them as terms.
         self.parse_program(&format!(
             "
             {fresh_sort_decl}
             {to_ast_view_sort}
             (function {name} ({term_sorts} {view_sort}) Unit :no-merge :internal-hidden :internal-term-node)
             {packed_decl}{view_decl}
-            {index_decls}
-            (function {to_delete_name} ({in_sorts}) Unit :no-merge :internal-hidden)
-            (function {subsumed_name} ({in_sorts}) Unit :no-merge :internal-hidden)
-            {delete_rule}",
+            {index_decls}",
         ))
     }
 
@@ -1069,10 +1061,6 @@ impl<'a> ProofInstrumentor<'a> {
             }
             ResolvedAction::Change(_span, change, h, generic_exprs) => {
                 if let ResolvedCall::Func(func_type) = h {
-                    let symbol = match change {
-                        Change::Delete => self.delete_name(&func_type.name),
-                        Change::Subsume => self.subsumed_name(&func_type.name),
-                    };
                     // `change` concludes nothing, so its arguments hold no column
                     // for conversion to read back: they compose like a top-level
                     // action, and the head's numbering resumes after them.
@@ -1082,13 +1070,23 @@ impl<'a> ProofInstrumentor<'a> {
                             .map(|e| self.instrument_action_expr(e, emit, scope))
                             .collect::<Vec<_>>()
                     });
+                    let args = ListDisplay(ids(&children), " ").to_string();
 
-                    // The marker is a `Unit` relation, so insert a row keyed on the
-                    // children with `set` (rather than a constructor application).
-                    emit.stmts.push(format!(
-                        "(set ({symbol} {}) ())",
-                        ListDisplay(ids(&children), " ")
-                    ));
+                    match change {
+                        // Removing the view row here is the uninstrumented meaning
+                        // of `delete`: the backend stages the removal to the batch
+                        // commit, which applies removals ahead of insertions. The
+                        // term relation keeps its row so proofs can still name the
+                        // deleted term.
+                        Change::Delete => {
+                            let view = self.view_name(&func_type.name);
+                            emit.stmts.push(format!("(delete ({view} {args}))"));
+                        }
+                        Change::Subsume => {
+                            let symbol = self.subsume_marker(&func_type.name, &func_type.input);
+                            emit.stmts.push(format!("(set ({symbol} {args}) ())"));
+                        }
+                    }
                 } else {
                     panic!(
                         "Delete action on non-function, should have been prevented by typechecking"
@@ -1449,7 +1447,7 @@ impl<'a> ProofInstrumentor<'a> {
         let (name, args) = self.single_step(&composition).unwrap_or_else(|| {
             let (name, decl) = self.packed_proof_constructor(columns.len());
             if !decl.is_empty() {
-                self.packed_decls.push(decl);
+                self.pending_decls.push(decl);
             }
             let spelling = skeleton.spelling();
             (name, format!("\"{spelling}\" {}", columns.join(" ")))
@@ -1458,14 +1456,31 @@ impl<'a> ProofInstrumentor<'a> {
         stmts.push(format!("(let {proof} ({mint} {args}))"));
     }
 
-    /// The declarations the compositions written since the last call need, as
+    /// The declarations the statements written since the last call need, as
     /// commands to run ahead of the ones using them.
-    fn take_packed_decls(&mut self) -> Vec<Command> {
-        if self.packed_decls.is_empty() {
+    fn take_pending_decls(&mut self) -> Vec<Command> {
+        if self.pending_decls.is_empty() {
             return vec![];
         }
-        let decls = std::mem::take(&mut self.packed_decls).join("");
+        let decls = std::mem::take(&mut self.pending_decls).join("");
         self.parse_program(&decls)
+    }
+
+    /// The name of `func`'s subsumption marker relation, declaring the marker and
+    /// its maintenance rules on first use. Commands arrive one at a time, so the
+    /// `subsume` may be many batches after the function's own declaration.
+    fn subsume_marker(&mut self, func: &str, input: &[ArcSort]) -> String {
+        if self
+            .egraph
+            .proof_state
+            .proof_names
+            .subsume_declared
+            .insert(func.to_string())
+        {
+            let decls = self.subsume_scaffolding(func, input);
+            self.pending_decls.push(decls);
+        }
+        self.subsumed_name(func)
     }
 
     /// Hold back `group`, the statements binding `proof`, until something reads
@@ -2088,7 +2103,7 @@ impl<'a> ProofInstrumentor<'a> {
         let path_compress_ruleset = self.proof_names().path_compress_ruleset_name.clone();
         let rebuilding_cleanup_ruleset = self.proof_names().rebuilding_cleanup_ruleset_name.clone();
         let rebuilding_ruleset = self.proof_names().rebuilding_ruleset_name.clone();
-        let delete_ruleset = self.proof_names().delete_subsume_ruleset_name.clone();
+        let subsume_ruleset = self.proof_names().subsume_ruleset_name.clone();
         // The `@UF` `:merge` resolves conflicting parents itself, so only
         // `path_compress` (flattening chains) remains as UF maintenance.
         self.parse_schedule(format!(
@@ -2097,7 +2112,7 @@ impl<'a> ProofInstrumentor<'a> {
                   {rebuilding_cleanup_ruleset}
                   (saturate {path_compress_ruleset})
                   {rebuilding_ruleset})
-              {delete_ruleset})"
+              {subsume_ruleset})"
         ))
     }
 
@@ -2263,7 +2278,6 @@ impl<'a> ProofInstrumentor<'a> {
             ResolvedNCommand::Function(fdecl) => {
                 res.extend(self.term_and_view(fdecl));
                 res.extend(self.rebuilding_rules(fdecl));
-                res.extend(self.rebuilding_subsumed_rules(fdecl));
             }
             ResolvedNCommand::NormRule { rule } => {
                 res.extend(self.instrument_rule(rule));
@@ -2400,10 +2414,10 @@ impl<'a> ProofInstrumentor<'a> {
         for command in program {
             let at = res.len();
             self.term_encode_command(&command, &mut res)?;
-            // A packed constructor is a property of the composition written, so
-            // it is declared with the first command writing one — ahead of that
-            // command, and outside any `fail` wrapping it.
-            res.splice(at..at, self.take_packed_decls());
+            // A packed constructor and a subsumption marker are properties of the
+            // statements written, so each is declared with the first command using
+            // it — ahead of that command, and outside any `fail` wrapping it.
+            res.splice(at..at, self.take_pending_decls());
 
             if !command_skips_rebuild(&command) {
                 res.push(Command::RunSchedule(self.rebuild()));
@@ -2422,10 +2436,10 @@ impl<'a> ProofInstrumentor<'a> {
 /// merging e-classes or deferring work, so no maintenance rebuild is needed
 /// after it — this is what stops N global-let `set`s from each triggering a
 /// rebuild (quadratic). A block skips when all of its actions do.
-/// Everything else still rebuilds: `union` merges e-classes, `delete`/`subsume`
-/// defer work to the maintenance ruleset, and a container-valued action needs
-/// the (`:naive`) container rebuild to recanonicalize it — all need the
-/// following rebuild to run.
+/// Everything else still rebuilds: `union` merges e-classes, `subsume` defers
+/// work to the maintenance ruleset, `delete` drops a row other rows may be
+/// stale against, and a container-valued action needs the (`:naive`) container
+/// rebuild to recanonicalize it — all need the following rebuild to run.
 fn command_skips_rebuild(command: &ResolvedNCommand) -> bool {
     fn touches_container(e: &ResolvedExpr) -> bool {
         e.output_type().is_eq_container_sort()

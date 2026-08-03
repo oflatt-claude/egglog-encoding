@@ -69,8 +69,7 @@ at one parent.
 
 ## Term relation and view
 
-Each constructor expands to a **term relation**, a **view**, a rebuild index,
-and deferred-deletion helpers:
+Each constructor expands to a **term relation**, a **view**, and a rebuild index:
 
 ```text
 (function Add (Math Math Math) Unit :no-merge :unextractable :internal-hidden :internal-term-node)
@@ -79,8 +78,6 @@ and deferred-deletion helpers:
             (values (ordering-min old0 new0) ()))
     :internal-term-constructor Add :internal-identity-vals 1)
 (index @AddOcc_Math @AddView (any 0 1 2))
-(function @to_delete_Add (Math Math) Unit :no-merge :unextractable :internal-hidden)
-(function @to_subsume_Add (Math Math) Unit :no-merge :unextractable :internal-hidden)
 ```
 
 The term relation `Add(child0, child1, eclass)` stores every application as a row
@@ -97,9 +94,7 @@ term's *canonicalized* children. Two view rows that collide on the same children
 are congruent, so the view's `:merge` resolves congruence directly — it keeps the
 smaller e-class and unions the two in `@UF_<Sort>`, and no separate congruence
 rule is needed. All queries read the view; the term relation is write-only after
-creation. The two deferred-deletion helpers are plain `Unit` relations keyed on
-the children, with no minted id and no `:internal-term-node`, so extraction never
-reads them as terms.
+creation.
 
 ## Building a term
 
@@ -163,26 +158,51 @@ variables keeps the plain `@UF_<Sort>` edge.
 
 ## Delete and subsume
 
-Deletions and subsumptions are deferred. `(delete (Add (Num 1) (Num 2)))` builds
-its argument's children and then records a marker row:
+Both build their argument's children first, and both touch only the view: the
+term relation is never queried, so keeping its rows lets proofs still refer to
+deleted terms.
+
+`(delete (Add (Num 1) (Num 2)))` deletes the view row in the action:
 
 ```text
-(set (@to_delete_Add n1_can n2_can) ())
+(delete (@AddView n1_can n2_can))
 ```
 
-which `@delete_subsume_ruleset` consumes during maintenance:
+No deferral is added on top of the backend's own. A `delete` is staged into a
+mutation buffer and applied when the batch commits, and a table's commit applies
+its removals *before* its insertions, so a row another rule inserts in the same
+batch outlives the delete. That is the uninstrumented meaning of `delete`, and
+lowering it directly is what preserves it.
+
+Subsumption *is* deferred, through a marker row:
 
 ```text
-(rule ((@to_delete_Add c0_ c1_)
+(set (@to_subsume_Add n1_can n2_can) ())
+```
+
+which `@subsume_ruleset` consumes during maintenance:
+
+```text
+(rule ((@to_subsume_Add c0_ c1_)
        (= (values e pf) (@AddView c0_ c1_)))
-      ((delete (@AddView c0_ c1_))
-       (delete (@to_delete_Add c0_ c1_)))
-        :ruleset @delete_subsume_ruleset :name "@delete_rule")
+      ((subsume (@AddView c0_ c1_)))
+        :ruleset @subsume_ruleset :name "@subsume_rule")
 ```
 
-with a `:subsume` sibling for `@to_subsume_Add`. Only the view is deleted or
-subsumed; the term relation is never queried, so keeping its rows lets proofs
-still refer to deleted terms.
+The marker outlives the row: rebuilding re-keys a view row by inserting it at its
+canonical children, and that insert carries no subsumed bit, so only a marker
+that is itself re-keyed keeps the row subsumed (see
+[Keeping the view canonical](#keeping-the-view-canonical)).
+
+Almost no program subsumes, so `@to_subsume_<Constructor>` and its rules are
+declared on first use rather than with the constructor. Commands arrive one at a
+time — the `subsume` may be many batches after the `datatype` — so the encoder
+emits the declarations ahead of the command that needs them, and remembers which
+constructors it has covered in the e-graph's own state, where `push`/`pop` roll
+the memo back together with the declarations it tracks.
+
+The marker is a plain `Unit` relation keyed on the children, with no minted id
+and no `:internal-term-node`, so extraction never reads it as a term.
 
 # Queries
 
@@ -220,13 +240,13 @@ restore the invariants egglog would otherwise maintain during rebuilding:
 (ruleset @parent)               ;; path compression on the union-find
 (ruleset @rebuilding)           ;; re-canonicalize view rows; resolve congruence
 (ruleset @rebuilding_cleanup)   ;; drop rows merged away
-(ruleset @delete_subsume_ruleset)
+(ruleset @subsume_ruleset)      ;; apply subsumption markers
 
 (run-schedule
     (seq (saturate (seq (run @rebuilding_cleanup)
                         (saturate (seq (run @parent)))
                         (run @rebuilding)))
-         (run @delete_subsume_ruleset)))
+         (run @subsume_ruleset)))
 ```
 
 A command that only builds and interns terms — a `let`, a `set`, a top-level
