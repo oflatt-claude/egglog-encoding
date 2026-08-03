@@ -21,7 +21,12 @@ use crate::{
 pub(crate) struct EncodingNames {
     pub(crate) ast_sort: String,
     pub(crate) proof_datatype: String,
-    pub(crate) fiat_constructor: String,
+    /// Prefix of the fiat justifications, which name their two endpoints by
+    /// value: sort `S`'s constructor is [`Self::fiat`]. Derived from one name
+    /// for the same reason as [`Self::rule_fused_prefix`].
+    pub(crate) fiat_prefix: String,
+    /// The sorts [`ProofInstrumentor::fiat_constructor`] has declared.
+    pub(crate) fiat_declared: HashSet<String>,
     /// Prefix of the rule proofs carrying their body premises inline: premise
     /// count `k`'s constructor is [`Self::fused_rule`]. One prefix rather than a
     /// name per arity, so that re-parsing a desugared program recovers the same
@@ -342,6 +347,17 @@ impl Justification {
 }
 
 impl EncodingNames {
+    /// The fiat justification whose two endpoints are values of `sort`.
+    pub(crate) fn fiat(&self, sort: &str) -> String {
+        format!("{}_{sort}", self.fiat_prefix)
+    }
+
+    /// Whether `head` is one of [`Self::fiat`]'s constructors.
+    pub(crate) fn is_fiat(&self, head: &str) -> bool {
+        head.strip_prefix(&self.fiat_prefix)
+            .is_some_and(|sort| sort.starts_with('_'))
+    }
+
     /// The rule proof constructor carrying `arity` premise proofs inline.
     pub(crate) fn fused_rule(&self, arity: usize) -> String {
         format!("{}_{arity}", self.rule_fused_prefix)
@@ -375,7 +391,8 @@ impl EncodingNames {
         Self {
             ast_sort: symbol_gen.fresh("Ast"),
             proof_datatype: symbol_gen.fresh("Proof"),
-            fiat_constructor: symbol_gen.fresh("Fiat"),
+            fiat_prefix: symbol_gen.fresh("Fiat"),
+            fiat_declared: HashSet::default(),
             rule_fused_prefix: symbol_gen.fresh("Rule"),
             rule_fused_declared: HashSet::default(),
             rule_link_constructor: symbol_gen.fresh("RuleLink"),
@@ -667,22 +684,6 @@ impl ProofInstrumentor<'_> {
         )
     }
 
-    /// Given a function name, returns the name of the AST constructor for that function's sort.
-    pub(crate) fn fname_to_ast_name(&self, fname: &str) -> &str {
-        let fn_sort = self
-            .proof_names()
-            .fn_to_term_sort
-            .get(fname)
-            .unwrap_or_else(|| panic!("Function {fname} has no recorded sort"))
-            .clone();
-        self.proof_names()
-            .sort_to_ast_constructor
-            .get(&fn_sort)
-            .unwrap_or_else(|| {
-                panic!("Function {fname}'s sort {fn_sort} has no recorded AST constructor")
-            })
-    }
-
     /// A fresh name for an encoder temporary.
     pub(crate) fn fresh_var(&mut self) -> String {
         // Keep this hint distinct from the `"v"` that `proofs::proof_normal_form`
@@ -709,7 +710,7 @@ impl ProofInstrumentor<'_> {
         let EncodingNames {
             ref ast_sort,
             ref proof_datatype,
-            ref fiat_constructor,
+            ref fiat_prefix,
             ref rule_link_constructor,
             ref merge_fn_idx_constructor,
             ref merge_fn_row_constructor,
@@ -729,7 +730,7 @@ impl ProofInstrumentor<'_> {
 (sort {ast_sort}) ;; wrap sorts in this for proofs
 ;; The proof datatype records the global proof constructor names so container
 ;; rebuild can recover them on re-parse (see ContainerRebuildSpec).
-(sort {proof_datatype} :internal-proof-names {congr_constructor} {congr_all_constructor} {eq_trans_constructor} {eq_sym_constructor} {container_normalize_constructor} {fiat_constructor} {proj_constructor} {proj_all_constructor})
+(sort {proof_datatype} :internal-proof-names {congr_constructor} {congr_all_constructor} {eq_trans_constructor} {eq_sym_constructor} {container_normalize_constructor} {fiat_prefix} {proj_constructor} {proj_all_constructor})
 
 ;; Proof/AST terms are relations, not constructors: the encoding mints a fresh id
 ;; and asserts the row (both in one `mint-<Relation>!` call), so congruent
@@ -739,9 +740,10 @@ impl ProofInstrumentor<'_> {
 {to_ast_str}
 
 ;; Fiat justification for globals and primitives, gives two terms t1 = t2 for the
-;; proposition being justified. A reflexive Fiat names the same AST node on both
-;; sides, so `t = t` costs one term node.
-(function {fiat_constructor} ({ast_sort} {ast_sort} {proof_datatype}) Unit :no-merge :internal-hidden :internal-term-node)
+;; proposition being justified. Its endpoints are values of one sort, so there is
+;; a `Fiat_<Sort>` per fiat-ed sort, declared on first use (see
+;; `ProofInstrumentor::fiat_constructor`):
+;;   (Fiat_<Sort> <term> <term> <proof>)
 ;; A rule proof written before its head interns anything carries its premises
 ;; inline, in a `Rule_<k>` declared per premise count (see `rule_arity_header`):
 ;;   (Rule_<k> <rule name> <one proof per body fact> <column>)

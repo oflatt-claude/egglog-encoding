@@ -289,14 +289,8 @@ impl ProofInstrumentor<'_> {
     /// deferred (see [`ProofInstrumentor::defer_lookup`]): the returned variable
     /// is bound wherever something first reads it, and nowhere if nothing does.
     fn reflexive_fiat_proof(&mut self, sort_name: &str, value: &str) -> String {
-        let to_ast = self
-            .proof_names()
-            .sort_to_ast_constructor
-            .get(sort_name)
-            .unwrap()
-            .clone();
         let mut group = vec![];
-        let proof = self.fiat_reflexive_proof(&mut group, value, &to_ast);
+        let proof = self.fiat_reflexive_proof(&mut group, value, sort_name);
         self.defer_lookup(&proof, group);
         proof
     }

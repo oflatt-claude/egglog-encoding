@@ -476,7 +476,7 @@ impl RawProofStore {
                 build,
             })
         };
-        if head == names.fiat_constructor {
+        if names.is_fiat(head) {
             shape(2, &[], |_, args, _| RawProof::Fiat(args[0], args[1]))
         } else if head == names.merge_fn_idx_constructor {
             shape(4, &[1, 2], |store, args, kids| {
@@ -892,10 +892,7 @@ impl ProofStore {
 
         let proof = match raw_proof {
             RawProof::Fiat(lhs, rhs) => Proof {
-                proposition: Proposition::new(
-                    raw_store.unwrap_ast(*lhs),
-                    raw_store.unwrap_ast(*rhs),
-                ),
+                proposition: Proposition::new(*lhs, *rhs),
                 justification: Justification::Fiat,
             },
             RawProof::Rule(name, premise_proofs, bridge_proofs, raw_column) => {
@@ -1686,12 +1683,9 @@ mod tests {
         );
     }
 
-    /// A leaf proof of `lhs = rhs`, spelled the way an extracted `Fiat` row is
-    /// (each endpoint wrapped in an `Ast` constructor).
+    /// A leaf proof of `lhs = rhs`, spelled the way an extracted `Fiat` row is.
     fn fiat_term(raw: &mut RawProofStore, lhs: TermId, rhs: TermId) -> TermId {
-        let lhs = raw.term_dag.app("Ast".to_string(), vec![lhs]);
-        let rhs = raw.term_dag.app("Ast".to_string(), vec![rhs]);
-        let head = raw.names.fiat_constructor.clone();
+        let head = raw.names.fiat("Sort");
         raw.term_dag.app(head, vec![lhs, rhs])
     }
 

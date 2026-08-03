@@ -380,15 +380,16 @@ See [`crate::proofs::proof_container_rebuild`] for the rebuild primitives, and
 With proofs enabled, the encoding first emits a header defining the proof format
 (see [`crate::proofs::proof_format`] and `proof_encoding_helpers.rs`): the
 `@Proof` and `@Ast` sorts, one `@Ast<Sort>` per sort, and the proof-node
-relations `@Fiat`, `@RuleLink`, `@MergeIdx`, `@MergeRow`, `@Trans`, `@Sym`,
+relations `@RuleLink`, `@MergeIdx`, `@MergeRow`, `@Trans`, `@Sym`,
 `@Congr`, `@CongrAll`, `@Proj`, `@ProjAll`, `@ContainerNormalize`, `@Eval` — each a
 `(function … Unit :no-merge)`, not a constructor, so a proof node is a fresh id
-plus a row, both written by that relation's `mint-<Relation>!`. Two further
-families have their column count fixed by the site rather
-than by the format, so each shape is declared just before the commands needing
-it: `@Rule_<k>`, a rule proof carrying its `k` body premises inline, and
+plus a row, both written by that relation's `mint-<Relation>!`. Three further
+families have their shape fixed by the site rather
+than by the format, so each is declared just before the commands needing
+it: `@Rule_<k>`, a rule proof carrying its `k` body premises inline;
 `@Packed_<k>`, one row standing for a whole composition over `k` proofs (see
-[Packed rows](#packed-rows)).
+[Packed rows](#packed-rows)); and `@Fiat_<Sort>`, which names its two endpoints
+by value, so its columns are of the sort being fiat-ed.
 
 `@ProjAll` is raw-only: like `@CongrAll` it names a child by term rather than by
 position, and conversion desugars it into the `@Proj` at the position it finds.
@@ -733,11 +734,9 @@ column to name, so the encoder composes. For the running example's
         add_own num1_bridge num2_bridge))
 ```
 
-Four `@Proof` rows (plus three `@Ast` rows) for that one expression: the three
-`@Fiat` conclusions and that one row. A `@Fiat` is composed from nothing, so it
-cannot be a hole of a skeleton and stays a row of its own; the `@Ast` rows are
-its endpoints, and a reflexive `@Fiat` — every one of the three here — names the
-same node on both sides, so it costs one term node rather than two. The row count
+Four `@Proof` rows for that one expression: the three `@Fiat` conclusions and
+that one row. A `@Fiat` is composed from nothing, so it cannot be a hole of a
+skeleton and stays a row of its own. The row count
 is also already reduced by dropping steps the encoder knows are reflexive —
 `(Num 1)`'s own conclusion is its canonical one, so neither `Num` level composes
 anything.

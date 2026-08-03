@@ -2025,7 +2025,7 @@ impl EGraph {
                     names.container_normalize_constructor = pc.normalize;
                     // Recovered so `native_input` can build `(input …)` base-fact
                     // proofs when replaying an encoded program in a fresh e-graph.
-                    names.fiat_constructor = pc.fiat;
+                    names.fiat_prefix = pc.fiat;
                     names.proj_constructor = pc.proj;
                     names.proj_all_constructor = pc.proj_all;
                 }
@@ -2429,8 +2429,8 @@ impl EGraph {
     }
 
     /// Load `(input …)` facts natively into the term/proof encoding's tables. For
-    /// each row we mint a term id (and, when the encoding carries proofs, its AST +
-    /// fiat-proof ids) and insert the encoded term-relation, view, and proof rows
+    /// each row we mint a term id (and, when the encoding carries proofs, its
+    /// fiat-proof id) and insert the encoded term-relation, view, and proof rows
     /// directly. Rows are plain-inserted (no get-or-insert): a duplicate view key
     /// is left to the view's merge/no-merge handling. The proof checker keeps using
     /// the per-row top-level fiat actions (`desugared_before_proofs`); this just
@@ -2498,27 +2498,14 @@ impl EGraph {
             })
             .collect();
 
-        // Proof tables: `Fiat` from the `Proof` sort's `:internal-proof-names`
-        // and the term-id sort's AST constructor by its `(<sort> <Ast>) -> Unit`
-        // signature.
-        let proof_tables = proofs.then(|| {
-            let fiat = self.proof_state.proof_names.fiat_constructor.clone();
-            let fiat_fn = &self.functions[&fiat];
-            let fiat_id = fiat_fn.backend_id;
-            let ast_sort = fiat_fn.schema.input[0].name().to_string();
-            let ast_id = self
-                .functions
-                .values()
-                .find(|g| {
-                    g.decl.internal_hidden
-                        && g.schema.input.len() == 2
-                        && g.schema.input[0].name() == term_id_sort
-                        && g.schema.input[1].name() == ast_sort
-                        && g.schema.output().name() == "Unit"
-                })
-                .unwrap_or_else(|| panic!("no AST constructor for sort {term_id_sort}"))
-                .backend_id;
-            (ast_id, fiat_id)
+        // The term-id sort's fiat relation, named off the prefix the `Proof`
+        // sort's `:internal-proof-names` records.
+        let fiat_table = proofs.then(|| {
+            let fiat = self.proof_state.proof_names.fiat(&term_id_sort);
+            self.functions
+                .get(&fiat)
+                .unwrap_or_else(|| panic!("no fiat relation for sort {term_id_sort}"))
+                .backend_id
         });
 
         let num_facts = value_rows.len();
@@ -2531,13 +2518,11 @@ impl EGraph {
             frow.push(unit_val);
             batch.push((f_id, frow));
 
-            let view_proof = if let Some((ast_id, fiat_id)) = proof_tables {
-                // Fiat proof of the base fact: `@Fiat(ast(fv), ast(fv))`, whose
-                // two sides are the one AST node (see `fiat_reflexive_proof`).
-                let ast = self.backend.fresh_id();
-                batch.push((ast_id, vec![fv, ast, unit_val]));
+            let view_proof = if let Some(fiat_id) = fiat_table {
+                // Fiat proof of the base fact: `@Fiat_<Sort>(fv, fv)` (see
+                // `fiat_reflexive_proof`).
                 let pf = self.backend.fresh_id();
-                batch.push((fiat_id, vec![ast, ast, pf, unit_val]));
+                batch.push((fiat_id, vec![fv, fv, pf, unit_val]));
                 pf
             } else {
                 unit_val

@@ -433,17 +433,16 @@ impl<'a> ProofInstrumentor<'a> {
         Ok(lowered)
     }
 
-    /// Mint a `Rule` or `Fiat` proof of the equality `a = b`. Only `Fiat` names
-    /// the two endpoints' ASTs; a rule proof's proposition comes from its column.
-    /// Panics on merge justifications (merge bodies contain no `union` actions).
-    fn edge_proof(&mut self, emit: &mut Emit, to_ast: &str, a: &str, b: &str) -> String {
+    /// Mint a `Rule` or `Fiat` proof of the equality `a = b`, both values of
+    /// `sort`. Only `Fiat` names the two endpoints; a rule proof's proposition
+    /// comes from its column. Panics on merge justifications (merge bodies
+    /// contain no `union` actions).
+    fn edge_proof(&mut self, emit: &mut Emit, sort: &str, a: &str, b: &str) -> String {
         match emit.justification {
             Justification::Rule(..) => self.rule_row(emit),
             Justification::Fiat => {
-                let a1 = self.mint(emit.stmts, to_ast, a);
-                let a2 = self.mint(emit.stmts, to_ast, b);
-                let fiat = self.proof_names().fiat_constructor.clone();
-                self.mint(emit.stmts, &fiat, &format!("{a1} {a2}"))
+                let fiat = self.fiat_constructor(sort);
+                self.mint(emit.stmts, &fiat, &format!("{a} {b}"))
             }
             Justification::MergeIdx(..) | Justification::MergeRow(..) => panic!(
                 "Merge functions do not include union actions, so proof should not be by merge"
@@ -571,32 +570,26 @@ impl<'a> ProofInstrumentor<'a> {
         lhs: &Operand,
         rhs: &Operand,
     ) -> String {
-        let to_ast_constructor = self
-            .proof_names()
-            .sort_to_ast_constructor
-            .get(type_name)
-            .unwrap()
-            .clone();
         // No column names any of these rows, so each states its own conclusion.
         let fiat = Justification::Fiat;
         let emit = &mut emit.justified_by(&fiat);
 
         // Neither operand was a canonicalized constructor term (no connector), so
-        // both e-classes' ASTs are stable: build the edge proof directly over them.
+        // both e-classes' terms are stable: build the edge proof directly over them.
         if lhs.connector.is_none() && rhs.connector.is_none() {
             let (larger, smaller) = ordered_endpoints(lhs, rhs);
-            return self.edge_proof(emit, &to_ast_constructor, &larger, &smaller);
+            return self.edge_proof(emit, type_name, &larger, &smaller);
         }
 
         // A canonicalized operand's deduped e-class may already be unioned with a
-        // differently-shaped term, so its AST floats. Build the base equality over
-        // the *natural* forms (ASTs pinned to the enode the rule built), then route
+        // differently-shaped term, so its term floats. Build the base equality over
+        // the *natural* forms (pinned to the enode the rule built), then route
         // each deduped e-class to a shared natural form and orient the edge to
         // `larger = smaller` with proof-of-max/min.
         //
         // Built over the operands in source order, so it states the conclusion
         // forwards.
-        let base_proof = self.edge_proof(emit, &to_ast_constructor, &lhs.natural, &rhs.natural);
+        let base_proof = self.edge_proof(emit, type_name, &lhs.natural, &rhs.natural);
 
         // The shared natural form is the canonicalized side's natural (pinned
         // AST), so the Trans goes through it rather than through the deduped
@@ -659,12 +652,6 @@ impl<'a> ProofInstrumentor<'a> {
         }
 
         let sort_name = func_type.output().name().to_string();
-        let sort_ast = self
-            .proof_names()
-            .sort_to_ast_constructor
-            .get(&sort_name)
-            .expect("sort AST")
-            .clone();
         let view = self.view_name(&ctor_name);
         let own = emit.justification.at(head_column(run, HeadProof::Own));
         let Natural {
@@ -674,7 +661,7 @@ impl<'a> ProofInstrumentor<'a> {
         } = self.build_natural_with_congr(&mut emit.justified_by(&own), &ctor_name, &child_vals);
         let view_proof = match &nat_to_dedup {
             Some(chain) => {
-                let edge = self.edge_proof(emit, &sort_ast, &target.natural, &fv_nat);
+                let edge = self.edge_proof(emit, &sort_name, &target.natural, &fv_nat);
                 let target_conn = target
                     .connector
                     .as_ref()
@@ -1119,17 +1106,17 @@ impl<'a> ProofInstrumentor<'a> {
     /// justification's proof states whatever its column says and is marked
     /// reflexive regardless, so calling this at an equality — a `union`'s — would
     /// have the compositions built on it silently drop a real proof.
-    fn reflexive_for_justification(&mut self, emit: &mut Emit, fv: &str, to_ast: &str) -> String {
+    fn reflexive_for_justification(&mut self, emit: &mut Emit, fv: &str, sort: &str) -> String {
         match emit.justification {
-            // The head's own conclusion here is `fv = fv` (`fv`/`to_ast` unused:
+            // The head's own conclusion here is `fv = fv` (`fv`/`sort` unused:
             // the proposition comes from the column).
             Justification::Rule(..) => {
                 let proof = self.rule_row(emit);
                 self.mark_reflexive(&proof);
                 proof
             }
-            Justification::Fiat => self.fiat_reflexive_proof(emit.stmts, fv, to_ast),
-            // Term-free: no AST minted (`fv`/`to_ast` unused). The checker
+            Justification::Fiat => self.fiat_reflexive_proof(emit.stmts, fv, sort),
+            // Term-free: no endpoint named (`fv`/`sort` unused). The checker
             // reconstructs the conclusion from the merge body + premise outputs.
             Justification::MergeIdx(fn_name, p1, p2, idx) => {
                 let merge_idx = self.proof_names().merge_fn_idx_constructor.clone();
@@ -1144,17 +1131,16 @@ impl<'a> ProofInstrumentor<'a> {
         }
     }
 
-    /// A `Fiat` proof of `fv = fv`, appending its mints to `stmts`. `to_ast`
-    /// wraps `fv` into the one AST node both endpoints name.
+    /// A `Fiat` proof of `fv = fv`, appending its mint to `stmts`. `fv` is a
+    /// value of `sort`, which fixes the fiat relation naming it.
     pub(super) fn fiat_reflexive_proof(
         &mut self,
         stmts: &mut Vec<String>,
         fv: &str,
-        to_ast: &str,
+        sort: &str,
     ) -> String {
-        let ast = self.mint(stmts, to_ast, fv);
-        let fiat = self.proof_names().fiat_constructor.clone();
-        let proof = self.mint(stmts, &fiat, &format!("{ast} {ast}"));
+        let fiat = self.fiat_constructor(sort);
+        let proof = self.mint(stmts, &fiat, &format!("{fv} {fv}"));
         self.mark_reflexive(&proof);
         proof
     }
@@ -1195,8 +1181,8 @@ impl<'a> ProofInstrumentor<'a> {
                 panic!("a global's value cannot be named by rule head column {column}")
             }
             None => {
-                let to_ast = self.fname_to_ast_name(&func_type.name).to_string();
-                self.reflexive_for_justification(emit, value, &to_ast)
+                let sort = self.term_sort(&func_type.name);
+                self.reflexive_for_justification(emit, value, &sort)
             }
         }
     }
@@ -1466,6 +1452,26 @@ impl<'a> ProofInstrumentor<'a> {
         self.parse_program(&decls)
     }
 
+    /// The name of `sort`'s fiat justification, declaring the relation on first
+    /// use. Few of a program's sorts are ever fiat-ed, so the declaration goes
+    /// with the first command needing it rather than with the proof header.
+    pub(crate) fn fiat_constructor(&mut self, sort: &str) -> String {
+        let name = self.proof_names().fiat(sort);
+        if self
+            .egraph
+            .proof_state
+            .proof_names
+            .fiat_declared
+            .insert(sort.to_string())
+        {
+            let proof = self.proof_sort();
+            self.pending_decls.push(format!(
+                "(function {name} ({sort} {sort} {proof}) Unit :no-merge :internal-hidden :internal-term-node)\n"
+            ));
+        }
+        name
+    }
+
     /// The name of `func`'s subsumption marker relation, declaring the marker and
     /// its maintenance rules on first use. Commands arrive one at a time, so the
     /// `subsume` may be many batches after the function's own declaration.
@@ -1634,8 +1640,8 @@ impl<'a> ProofInstrumentor<'a> {
             &ListDisplay(args, " ").to_string(),
         );
         let view_proof_var = if self.egraph.proof_state.proofs_enabled {
-            let to_ast = self.fname_to_ast_name(&func_type.name).to_string();
-            self.reflexive_for_justification(emit, &fv, &to_ast)
+            let sort = self.term_sort(&func_type.name);
+            self.reflexive_for_justification(emit, &fv, &sort)
         } else {
             "()".to_string()
         };
@@ -1677,7 +1683,7 @@ impl<'a> ProofInstrumentor<'a> {
         fname: &str,
         args: &[Operand],
     ) -> Natural {
-        let to_ast = self.fname_to_ast_name(fname).to_string();
+        let sort = self.term_sort(fname);
         let nat_args: Vec<String> = args.iter().map(|a| a.natural.clone()).collect();
         let dedup_args = ids(args);
         let fv_nat = self.mint(emit.stmts, fname, &ListDisplay(&nat_args, " ").to_string());
@@ -1685,7 +1691,7 @@ impl<'a> ProofInstrumentor<'a> {
         // chain below, so a head that numbers its proofs instead of composing
         // them writes no row for it: conversion recovers it from the column.
         let to_dedup = emit.head.composes().then(|| {
-            let nat_prf = self.reflexive_for_justification(emit, &fv_nat, &to_ast);
+            let nat_prf = self.reflexive_for_justification(emit, &fv_nat, &sort);
             let mut steps = vec![];
             for (i, arg) in args.iter().enumerate() {
                 if let Some(conn) = &arg.connector {
@@ -2322,10 +2328,16 @@ impl<'a> ProofInstrumentor<'a> {
                 }
                 res.push(Command::Fail(span.clone(), encoded));
             }
-            ResolvedNCommand::Input { .. } => {
+            ResolvedNCommand::Input { name, .. } => {
                 // Loaded natively at run time (see `EGraph::native_input`), inserting
                 // straight into the encoded tables. Pass the command through so
-                // `run_command` dispatches it.
+                // `run_command` dispatches it. The load writes a reflexive fiat per
+                // row, so the loaded sort's fiat relation has to be declared here:
+                // nothing the encoder emits mentions it.
+                if self.proofs_enabled() {
+                    let sort = self.term_sort(name);
+                    self.fiat_constructor(&sort);
+                }
                 res.push(command.to_command().make_unresolved());
             }
             ResolvedNCommand::Extract(span, expr, variants) => {
