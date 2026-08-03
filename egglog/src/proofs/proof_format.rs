@@ -505,10 +505,8 @@ impl RawProofStore {
             shape(2, &[0], |store, args, kids| {
                 RawProof::Proj(kids[0], store.parse_index(args[1]))
             })
-        } else if head == names.proj_all_constructor {
-            shape(2, &[0], |store, args, kids| {
-                RawProof::ProjAll(kids[0], store.unwrap_ast(args[1]))
-            })
+        } else if names.is_proj_all(head) {
+            shape(2, &[0], |_, args, kids| RawProof::ProjAll(kids[0], args[1]))
         } else if head == names.eval_constructor {
             shape(0, &[], |_, _, _| RawProof::Eval)
         } else {
@@ -686,19 +684,6 @@ impl RawProofStore {
         }
         self.store.insert(proof);
         RawProofId::from_usize(self.store.len() - 1)
-    }
-
-    fn unwrap_ast(&self, term_id: TermId) -> TermId {
-        let term = self.term_dag.get(term_id).clone();
-        let Term::App(_, args) = term else {
-            panic!("expected ast wrapper application");
-        };
-        assert!(
-            args.len() == 1,
-            "ast wrapper should have exactly one child, got {}",
-            args.len()
-        );
-        args[0]
     }
 }
 

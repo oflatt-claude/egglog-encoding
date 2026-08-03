@@ -182,8 +182,6 @@ pub(crate) struct ViewIndex {
 #[derive(Clone)]
 pub(crate) struct EncodingState {
     pub uf_parent: HashMap<String, String>,
-    /// Maps sort name -> its `@Ast<Sort>` wrapper (set from :internal-ast-func).
-    pub ast_func_parent: HashMap<String, String>,
     /// Maps container sort name -> the name of its registered container-rebuild
     /// primitive (`ContainerRebuild`). Cached so each container sort gets
     /// a single rebuild primitive shared across all functions using it.
@@ -214,7 +212,6 @@ impl EncodingState {
     pub(crate) fn new(symbol_gen: &mut SymbolGen) -> Self {
         Self {
             uf_parent: HashMap::default(),
-            ast_func_parent: HashMap::default(),
             container_rebuild_name: HashMap::default(),
             container_rebuild_proof_name: HashMap::default(),
             view_index: HashMap::default(),
@@ -270,10 +267,10 @@ pub(crate) enum Anchor {
 #[derive(Clone)]
 struct Element {
     containers: Vec<String>,
-    /// The value variable, named with `ast` in the projection anchoring it.
+    /// The value variable the projection anchoring it names.
     value: String,
-    /// The `@Ast<Sort>` wrapper of the value's sort.
-    ast: String,
+    /// The `@ProjAll_<Sort>` relation projecting a value of the element's sort.
+    proj_all: String,
 }
 
 /// What a body variable's anchor is projected out of.
@@ -703,12 +700,16 @@ impl<'a> ProofInstrumentor<'a> {
     /// Also, we have a rule that maintains the invariant that each term points to its
     /// canonical representative.
     fn declare_sort(&mut self, sort_name: &str, is_container: bool) -> Vec<Command> {
-        // Containers are canonicalized structurally, not unioned directly.
-        // Proof mode still needs the container's reflexive proof table and AST wrapper.
+        // Containers are canonicalized structurally, not unioned directly. In
+        // proof mode a container still needs its projection relation, which the
+        // rebuild primitive mints for a nested container without going through
+        // any statement the encoder writes.
         if is_container {
             if self.egraph.proof_state.proofs_enabled {
-                let add_to_ast_code = self.add_to_ast(sort_name);
-                return self.parse_program(&add_to_ast_code);
+                // Emitted after the sort's own declaration rather than ahead of
+                // it, since the relation's column is of that sort.
+                let (_, decl) = self.proj_all_decl(sort_name);
+                return self.parse_program(&decl);
             }
             return vec![];
         }
@@ -754,7 +755,7 @@ impl<'a> ProofInstrumentor<'a> {
     /// Declare a sort's union-find `@UF : (S) -> (S, {Unit|Proof})`, mapping each
     /// term to its parent plus a proof `key = parent` (`()` in term mode). Its
     /// `:merge` resolves conflicting parents (see `proof_encoding.md`). Also emits
-    /// the `path_compress` rule and, in proof mode, the sort's AST constructor.
+    /// the `path_compress` rule.
     fn declare_sort_eq(&mut self, sort_name: &str) -> Vec<Command> {
         let proofs = self.proofs_enabled();
         let uf_name = self.uf_name(sort_name);
@@ -768,11 +769,6 @@ impl<'a> ProofInstrumentor<'a> {
         let pb = self.egraph.parser.symbol_gen.fresh("uf_pb");
         let pc = self.egraph.parser.symbol_gen.fresh("uf_pc");
 
-        let proof_tables = if proofs {
-            self.add_to_ast(sort_name)
-        } else {
-            String::new()
-        };
         // An `@UF` row's carried proof proves `key = parent`, so both share their
         // lhs and it is the larger side's that the composition reverses.
         let (packed_decl, uf_merge) =
@@ -788,7 +784,7 @@ impl<'a> ProofInstrumentor<'a> {
         };
 
         let code = format!(
-            "{packed_decl}{proof_tables}
+            "{packed_decl}
              (function {uf_name} ({sort_name}) ({sort_name} {proof_type}) :merge {uf_merge} :unextractable :internal-hidden :internal-identity-vals 1)
              (rule ((= (values {b} {pb}) ({uf_name} {a}))
                     (= (values {c} {pc}) ({uf_name} {b}))
@@ -904,8 +900,6 @@ impl<'a> ProofInstrumentor<'a> {
         } else {
             fresh_sort.clone()
         };
-        let to_ast_view_sort = self.add_to_ast(&view_sort);
-
         // Record the term's eclass sort (its `view_sort`) so a global lookup's
         // fallback id is minted at the right sort.
         self.egraph
@@ -981,7 +975,6 @@ impl<'a> ProofInstrumentor<'a> {
         self.parse_program(&format!(
             "
             {fresh_sort_decl}
-            {to_ast_view_sort}
             (function {name} ({term_sorts} {view_sort}) Unit :no-merge :internal-hidden :internal-term-node)
             {packed_decl}{view_decl}
             {index_decls}",
@@ -1301,11 +1294,11 @@ impl<'a> ProofInstrumentor<'a> {
         sort_name: &str,
         containers: Vec<String>,
     ) -> String {
-        let ast = self.ast_constructor_name(sort_name);
+        let proj_all = self.proj_all_constructor(sort_name);
         self.anchors.offer_element(Element {
             containers,
             value: value.to_string(),
-            ast,
+            proj_all,
         });
         self.request_anchor(value)
     }
@@ -1337,17 +1330,16 @@ impl<'a> ProofInstrumentor<'a> {
             // rather than being shared, so the group stays self-contained.
             let mut group = vec![];
             self.emit_pending_group(&mut group, &derived);
-            let proj_all = self.proof_names().proj_all_constructor.clone();
-            let mint = crate::proofs::proof_fresh::mint_prim_name(&proj_all);
             let mut base = derived;
             for (depth, element) in chain.iter().enumerate() {
-                let node = self.mint(&mut group, &element.ast, &element.value);
+                let mint = crate::proofs::proof_fresh::mint_prim_name(&element.proj_all);
                 let projected = if depth + 1 == chain.len() {
                     proof.clone()
                 } else {
                     self.fresh_var()
                 };
-                group.push(format!("(let {projected} ({mint} {base} {node}))"));
+                let value = &element.value;
+                group.push(format!("(let {projected} ({mint} {base} {value}))"));
                 base = projected;
             }
             self.defer_lookup(proof, group);
@@ -1468,6 +1460,36 @@ impl<'a> ProofInstrumentor<'a> {
             self.pending_decls.push(format!(
                 "(function {name} ({sort} {sort} {proof}) Unit :no-merge :internal-hidden :internal-term-node)\n"
             ));
+        }
+        name
+    }
+
+    /// The name of the element-matching projection naming a child of `sort`,
+    /// together with its declaration — empty once some program has declared it.
+    fn proj_all_decl(&mut self, sort: &str) -> (String, String) {
+        let name = self.proof_names().proj_all(sort);
+        if !self
+            .egraph
+            .proof_state
+            .proof_names
+            .proj_all_declared
+            .insert(sort.to_string())
+        {
+            return (name, String::new());
+        }
+        let proof = self.proof_sort();
+        let decl = format!(
+            "(function {name} ({proof} {sort} {proof}) Unit :no-merge :internal-hidden :internal-term-node)\n"
+        );
+        (name, decl)
+    }
+
+    /// [`Self::proj_all_decl`], with the declaration emitted ahead of the command
+    /// using it.
+    pub(crate) fn proj_all_constructor(&mut self, sort: &str) -> String {
+        let (name, decl) = self.proj_all_decl(sort);
+        if !decl.is_empty() {
+            self.pending_decls.push(decl);
         }
         name
     }
@@ -2239,15 +2261,6 @@ impl<'a> ProofInstrumentor<'a> {
                 } else {
                     Some((self.uf_name(name), None))
                 };
-                // Every sort (containers included) records its `@Ast<Sort>`
-                // wrapper via `:internal-ast-func`, so container rebuild can
-                // name a nested container's elements without a per-container
-                // list. (The wrapper itself is declared in `declare_sort`.)
-                let ast_func = if self.egraph.proof_state.proofs_enabled {
-                    Some(self.ast_constructor_name(name))
-                } else {
-                    None
-                };
                 // For container sorts, build the rebuild-primitive spec now (it
                 // generates and caches the fresh primitive names used by the
                 // rebuild rules below) and attach it as an annotation so the
@@ -2272,7 +2285,6 @@ impl<'a> ProofInstrumentor<'a> {
                     name: name.clone(),
                     presort_and_args: presort_and_args.clone(),
                     uf: uf_name,
-                    ast_func,
                     unionable: *unionable,
                     container_rebuild,
                     // The Proof sort (which carries :internal-proof-names) is

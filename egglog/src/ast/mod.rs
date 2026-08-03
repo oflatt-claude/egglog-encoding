@@ -100,9 +100,6 @@ where
         /// for this sort: `UF_<E>` (scanned by extraction's `find_canonical`)
         /// and the optional `UF_<E>f` index (single-key leader lookup).
         uf: Option<(String, Option<String>)>,
-        /// The name of this sort's `@Ast<Sort>` wrapper, naming a value of the sort
-        /// as an AST node. Set by proof desugaring.
-        ast_func: Option<String>,
         /// For container sorts under the term/proof encoding: the spec for the
         /// container's rebuild primitives (see [`ContainerRebuildSpec`]), carried
         /// as the `:internal-container-rebuild` annotation.
@@ -180,7 +177,6 @@ where
                 name,
                 presort_and_args,
                 uf,
-                ast_func,
                 container_rebuild,
                 proof_constructors,
                 unionable,
@@ -189,7 +185,6 @@ where
                 name: name.clone(),
                 presort_and_args: presort_and_args.clone(),
                 uf: uf.clone(),
-                ast_func: ast_func.clone(),
                 container_rebuild: container_rebuild.clone(),
                 proof_constructors: proof_constructors.clone(),
                 unionable: *unionable,
@@ -335,7 +330,6 @@ where
                 name,
                 presort_and_args,
                 uf,
-                ast_func,
                 container_rebuild,
                 proof_constructors,
                 unionable,
@@ -344,7 +338,6 @@ where
                 name,
                 presort_and_args,
                 uf,
-                ast_func,
                 container_rebuild,
                 proof_constructors,
                 unionable,
@@ -673,9 +666,6 @@ where
         /// The union-find `(constructor, optional function-index)` table names
         /// for this sort (see [`GenericNCommand::Sort`]).
         uf: Option<(String, Option<String>)>,
-        /// The name of this sort's `@Ast<Sort>` wrapper, naming a value of the sort
-        /// as an AST node. Set by proof desugaring.
-        ast_func: Option<String>,
         /// For container sorts under the term/proof encoding: the spec for the
         /// container's rebuild primitives (see [`ContainerRebuildSpec`]), carried
         /// as the `:internal-container-rebuild` annotation.
@@ -1140,7 +1130,6 @@ where
                 name,
                 presort_and_args: None,
                 uf,
-                ast_func,
                 proof_constructors,
                 ..
             } => {
@@ -1150,9 +1139,6 @@ where
                     if let Some(uf_index) = uf_index {
                         write!(f, " {uf_index}")?;
                     }
-                }
-                if let Some(pf) = ast_func {
-                    write!(f, " :internal-ast-func {pf}")?;
                 }
                 if let Some(pc) = proof_constructors {
                     write!(
@@ -1173,14 +1159,10 @@ where
             GenericCommand::Sort {
                 name,
                 presort_and_args: Some((name2, args)),
-                ast_func,
                 container_rebuild,
                 ..
             } => {
                 write!(f, "(sort {name} ({name2} {})", ListDisplay(args, " "))?;
-                if let Some(pf) = ast_func {
-                    write!(f, " :internal-ast-func {pf}")?;
-                }
                 if let Some(spec) = container_rebuild {
                     write!(f, " :internal-container-rebuild {spec}")?;
                 }
@@ -1975,7 +1957,6 @@ where
                 name,
                 presort_and_args,
                 uf,
-                ast_func,
                 container_rebuild,
                 proof_constructors,
                 unionable,
@@ -1984,7 +1965,6 @@ where
                 name: fun(name),
                 presort_and_args,
                 uf: uf.map(|(ctor, index)| (fun(ctor), index.map(&mut *fun))),
-                ast_func: ast_func.map(&mut *fun),
                 container_rebuild,
                 proof_constructors,
                 unionable,
@@ -2293,7 +2273,6 @@ where
                 name,
                 presort_and_args,
                 uf,
-                ast_func,
                 container_rebuild,
                 proof_constructors,
                 unionable,
@@ -2302,7 +2281,6 @@ where
                 name,
                 presort_and_args,
                 uf,
-                ast_func,
                 container_rebuild,
                 proof_constructors,
                 unionable,

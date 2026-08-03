@@ -605,7 +605,6 @@ impl EGraph {
                 name,
                 presort_and_args,
                 uf,
-                ast_func,
                 container_rebuild,
                 proof_constructors,
                 unionable,
@@ -627,17 +626,16 @@ impl EGraph {
                         .insert(name.clone(), uf_ctor.clone());
                     // The rebuild rules canonicalize a term in their action
                     // through these, derived from the sort's `@UF_<S>` table.
+                    // Proof mode is on exactly when the encoding's `Proof` sort
+                    // has been declared, which the proof header does before any
+                    // encoded sort.
+                    let proofs = self
+                        .type_info
+                        .sorts
+                        .contains_key(&self.proof_state.proof_names.proof_datatype);
                     crate::proofs::proof_container_rebuild::register_uf_canon(
-                        self,
-                        name,
-                        uf_ctor,
-                        ast_func.is_some(),
+                        self, name, uf_ctor, proofs,
                     );
-                }
-                if let Some(pf) = ast_func {
-                    self.proof_state
-                        .ast_func_parent
-                        .insert(name.clone(), pf.clone());
                 }
                 // The Proof sort records the global proof constructors; restore
                 // them into proof_state so container rebuild can recover them
@@ -651,7 +649,7 @@ impl EGraph {
                     names.eq_sym_constructor = pc.sym.clone();
                     names.container_normalize_constructor = pc.normalize.clone();
                     names.proj_constructor = pc.proj.clone();
-                    names.proj_all_constructor = pc.proj_all.clone();
+                    names.proj_all_prefix = pc.proj_all.clone();
                 }
                 // A container sort under the term/proof encoding carries a spec
                 // for its rebuild primitives; register them here so they are
@@ -665,7 +663,6 @@ impl EGraph {
                     name: name.clone(),
                     presort_and_args: presort_and_args.clone(),
                     uf: uf.clone(),
-                    ast_func: ast_func.clone(),
                     container_rebuild: container_rebuild.clone(),
                     proof_constructors: proof_constructors.clone(),
                     unionable: *unionable,

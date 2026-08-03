@@ -380,7 +380,6 @@ impl Parser {
                 // Parse sort - the :internal-* annotations and container sorts are mutually exclusive
                 // (sort <name>)
                 // (sort <name> :internal-uf <uf-function>)
-                // (sort <name> :internal-ast-func <internal-ast-func-name>)
                 // (sort <name> :internal-proof-names <congr> <congr-all> <trans> <sym> <normalize> <fiat> <proj> <proj-all>)
                 // (sort <name> (<container sort> <argument sort>*))
                 match tail {
@@ -389,31 +388,24 @@ impl Parser {
                         name: self.parse_name(name, "sort name")?,
                         presort_and_args: None,
                         uf: None,
-                        ast_func: None,
                         container_rebuild: None,
                         proof_constructors: None,
                         unionable: true,
                     }],
                     [name, call @ Sexp::List(..), rest @ ..] => {
                         let (func, args, _) = call.expect_call("container sort declaration")?;
-                        // Container sorts may carry :internal-ast-func (their
-                        // `@Ast<CSort>` wrapper) and an :internal-container-rebuild
-                        // spec (both emitted by the term/proof encoder).
-                        let mut ast_func = None;
+                        // Container sorts may carry an :internal-container-rebuild
+                        // spec (emitted by the term/proof encoder).
                         let mut container_rebuild = None;
                         for (key, val) in self.parse_options(rest)? {
                             match (key, val) {
-                                (":internal-ast-func", [pf]) => {
-                                    ast_func =
-                                        Some(pf.expect_atom("internal-ast-func function name")?);
-                                }
                                 (":internal-container-rebuild", [spec]) => {
                                     container_rebuild = Some(parse_container_rebuild_spec(spec)?);
                                 }
                                 _ => {
                                     return error!(
                                         span,
-                                        "usage:\n(sort <name> (<container sort> <argument sort>*) [:internal-ast-func <name>] [:internal-container-rebuild <spec>])"
+                                        "usage:\n(sort <name> (<container sort> <argument sort>*) [:internal-container-rebuild <spec>])"
                                     );
                                 }
                             }
@@ -426,17 +418,15 @@ impl Parser {
                                 map_fallible(args, self, Self::parse_expr)?,
                             )),
                             uf: None,
-                            ast_func,
                             container_rebuild,
                             proof_constructors: None,
                             unionable: true,
                         }]
                     }
                     [name, rest @ ..] => {
-                        // Parse :internal-uf / :internal-ast-func and the
-                        // :internal-proof-names global proof-constructor record.
+                        // Parse :internal-uf and the :internal-proof-names global
+                        // proof-constructor record.
                         let mut uf: Option<(String, Option<String>)> = None;
-                        let mut ast_func = None;
                         let mut proof_constructors = None;
                         for (key, val) in self.parse_options(rest)? {
                             match (key, val) {
@@ -448,10 +438,6 @@ impl Parser {
                                         uf_ctor.expect_atom("uf constructor name")?,
                                         Some(uf_index.expect_atom("uf index function name")?),
                                     ));
-                                }
-                                (":internal-ast-func", [pf]) => {
-                                    ast_func =
-                                        Some(pf.expect_atom("internal-ast-func function name")?);
                                 }
                                 (
                                     ":internal-proof-names",
@@ -482,7 +468,7 @@ impl Parser {
                                 _ => {
                                     return error!(
                                         span,
-                                        "usages:\n(sort <name>)\n(sort <name> :internal-uf <uf-constructor> [<uf-index>])\n(sort <name> :internal-ast-func <internal-ast-func-name>)\n(sort <name> :internal-proof-names <congr> <congr-all> <trans> <sym> <normalize> <fiat> <proj> <proj-all>)\n(sort <name> (<container sort> <argument sort>*))"
+                                        "usages:\n(sort <name>)\n(sort <name> :internal-uf <uf-constructor> [<uf-index>])\n(sort <name> :internal-proof-names <congr> <congr-all> <trans> <sym> <normalize> <fiat> <proj> <proj-all>)\n(sort <name> (<container sort> <argument sort>*))"
                                     );
                                 }
                             }
@@ -492,7 +478,6 @@ impl Parser {
                             name: self.parse_name(name, "sort name")?,
                             presort_and_args: None,
                             uf,
-                            ast_func,
                             container_rebuild: None,
                             proof_constructors,
                             unionable: true,

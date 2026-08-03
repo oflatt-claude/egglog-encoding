@@ -85,7 +85,7 @@ whose last column is the term's own id. Nothing is ever removed from it, which
 lets proofs refer to terms after they leave the e-graph. `:internal-term-node`
 marks its rows as term nodes for proof extraction, and gives the relation a
 `mint-<Relation>!` primitive: every relation whose last input is a minted id —
-the term relations, the `@Ast<Sort>` wrappers, every proof-node relation — gets
+the term relations and every proof-node relation — gets
 one, and `(let v (mint-Add! a b))` mints the id and writes the row in a single
 statement (see [`crate::proofs::proof_fresh`]).
 
@@ -379,20 +379,23 @@ See [`crate::proofs::proof_container_rebuild`] for the rebuild primitives, and
 
 With proofs enabled, the encoding first emits a header defining the proof format
 (see [`crate::proofs::proof_format`] and `proof_encoding_helpers.rs`): the
-`@Proof` and `@Ast` sorts, one `@Ast<Sort>` per sort, and the proof-node
+`@Proof` sort and the proof-node
 relations `@RuleLink`, `@MergeIdx`, `@MergeRow`, `@Trans`, `@Sym`,
-`@Congr`, `@CongrAll`, `@Proj`, `@ProjAll`, `@ContainerNormalize`, `@Eval` — each a
+`@Congr`, `@CongrAll`, `@Proj`, `@ContainerNormalize`, `@Eval` — each a
 `(function … Unit :no-merge)`, not a constructor, so a proof node is a fresh id
-plus a row, both written by that relation's `mint-<Relation>!`. Three further
+plus a row, both written by that relation's `mint-<Relation>!`. Four further
 families have their shape fixed by the site rather
-than by the format, so each is declared just before the commands needing
-it: `@Rule_<k>`, a rule proof carrying its `k` body premises inline;
+than by the format, so each is declared where it is first needed rather than in
+the header: `@Rule_<k>`, a rule proof carrying its `k` body premises inline;
 `@Packed_<k>`, one row standing for a whole composition over `k` proofs (see
-[Packed rows](#packed-rows)); and `@Fiat_<Sort>`, which names its two endpoints
-by value, so its columns are of the sort being fiat-ed.
+[Packed rows](#packed-rows)); `@Fiat_<Sort>`, naming its two endpoints by value;
+and `@ProjAll_<Sort>`, naming the projected child by value. The last two take a
+term of the sort they are specialized on, which is what lets a proof node name a
+term of any sort without a wrapper erasing the sort first.
 
-`@ProjAll` is raw-only: like `@CongrAll` it names a child by term rather than by
-position, and conversion desugars it into the `@Proj` at the position it finds.
+`@ProjAll_<Sort>` is raw-only: like `@CongrAll` it names a child by term rather
+than by position, and conversion desugars it into the `@Proj` at the position it
+finds.
 
 The union-find and view proof columns become real:
 
@@ -425,7 +428,7 @@ row's proof states an equality whose right-hand side is the row's term, so:
 * a constructor view's e-class — the row proof's left-hand side — is the row
   proof reflexivized, `@Packed_1 "trans_p0_sym_p0"`;
 * a container's element, whose position in the term form is only known once the
-  term is in hand, is `@ProjAll(row, ast)`.
+  term is in hand, is `@ProjAll_<Sort>(row, element)`.
 
 That covers every anchor the encoding wants: the seeds a view rebuild hands
 `@UF_<Sort>_canon_proof`, the reflexive base a container rebuild composes from,
@@ -764,7 +767,7 @@ body instead. The encoder and the checker share one gate so they cannot drift.
 
 A value read *out of* a container keeps a real premise, stated from the
 container's own [anchor](#reflexive-anchors): `(= e (vec-get v 1))` and
-`(= (vec-get v 0) (vec-get v 1))` are both `@ProjAll` off whichever row anchors
+`(= (vec-get v 0) (vec-get v 1))` are both `@ProjAll_<Sort>` off whichever row anchors
 `v`. That is why the container has to be one the database holds — a container the
 query built anchors nothing, and the rule is rejected rather than encoded.
 
@@ -835,12 +838,15 @@ A container's term form is the s-expr of its constructor — `(vec-of e0 e1 …)
 container's [reflexive anchor](#reflexive-anchors), projected out of the row
 being rebuilt; a chain of congruence steps over the changed elements, anchored
 there, proves `old = new` and folds into the view's congruence step like an
-eq-sort child's `@UF` proof. A *nested* container's own anchor is `@ProjAll` over
-the enclosing container's, which is why the anchor has to be by term: the
+eq-sort child's `@UF` proof. A *nested* container's own anchor is `@ProjAll_<Sort>`
+over the enclosing container's, which is why the anchor has to be by term: the
 enclosing term's child order is not the order the primitive sees elements in.
+That is also why a container sort's `@ProjAll_<Sort>` is declared with the sort
+rather than on use: the rebuild primitive mints one without going through any
+statement the encoder wrote.
 
 The chain uses `@CongrAll` — replace every child equal to `a` by `b` — rather
-than positional `@Congr`, for the same reason. Both `@CongrAll` and `@ProjAll`
+than positional `@Congr`, for the same reason. Both `@CongrAll` and `@ProjAll_<Sort>`
 exist only in the raw e-graph proof; conversion desugars them into the positional
 `@Congr`/`@Proj` steps computed against the actual term.
 

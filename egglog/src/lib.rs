@@ -1996,7 +1996,6 @@ impl EGraph {
             ResolvedNCommand::Sort {
                 name,
                 uf,
-                ast_func,
                 proof_constructors,
                 ..
             } => {
@@ -2005,13 +2004,6 @@ impl EGraph {
                     self.proof_state
                         .uf_parent
                         .insert(name.clone(), uf_ctor.clone());
-                }
-                // If the sort has a :internal-ast-func field, store the mapping for proof lookup.
-                // This annotation is set by proof instrumentation and consumed here.
-                if let Some(ast_func_name) = ast_func {
-                    self.proof_state
-                        .ast_func_parent
-                        .insert(name.clone(), ast_func_name);
                 }
                 // The Proof sort's :internal-proof-names records the global proof
                 // constructors; restore them so container rebuild can recover them.
@@ -2027,7 +2019,7 @@ impl EGraph {
                     // proofs when replaying an encoded program in a fresh e-graph.
                     names.fiat_prefix = pc.fiat;
                     names.proj_constructor = pc.proj;
-                    names.proj_all_constructor = pc.proj_all;
+                    names.proj_all_prefix = pc.proj_all;
                 }
                 log::info!("Declared sort {name}.")
             }
