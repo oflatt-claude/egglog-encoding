@@ -428,12 +428,12 @@ row's proof states an equality whose right-hand side is the row's term, so:
   term is in hand, is `@ProjAll_<Sort>(row, element)`.
 
 That covers every anchor the encoding wants: the reflexive base a container
-rebuild composes from, and a rule body's eq-sort or container variable. Which row anchors a body
-variable is only known once the whole body is walked, so the anchor's row is
-written where the composition reading it lands — and a composition that drops it
-as reflexive writes none at all. A body's equalities join the variables they
-relate into one anchor class, so an element read bound to a variable is anchored
-through the read.
+rebuild composes from, and a rule body's eq-sort or container variable. Which
+row anchors a body variable is only known once the whole body is walked, so the
+anchor's row is written where the composition reading it lands — and a
+composition that drops it as reflexive writes none at all. A body's equalities
+join the variables they relate into one anchor class, so an element read bound to
+a variable is anchored through the read.
 
 **A value the query computed is not anchored at all.** Every one of the sources
 above is a row the database holds, and a container a body primitive built is in

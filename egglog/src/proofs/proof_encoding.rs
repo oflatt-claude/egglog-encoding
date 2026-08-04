@@ -1652,8 +1652,8 @@ impl<'a> ProofInstrumentor<'a> {
         }
     }
 
-    /// Custom functions: mint the term-relation row and record its term proof.
-    /// No canonicalization threading.
+    /// Custom functions: mint the term-relation row and update the FD view. No
+    /// canonicalization threading.
     fn add_custom_row(&mut self, emit: &mut Emit, func_type: &FuncType, args: &[String]) -> String {
         let fv = self.mint(
             emit.stmts,
@@ -2077,8 +2077,8 @@ impl<'a> ProofInstrumentor<'a> {
         };
         // Every mint site replaces the placeholder with the column the walk is at.
         let proof = Justification::Rule(rule_name_var.clone(), premises, HeadColumn::Unnumbered);
-        // A proof-mode head reads the database: it looks up the body variables'
-        // term proofs and interns each subterm it builds, so it needs a Read/Full
+        // A proof-mode head reads the database: it interns each subterm it builds
+        // and reads back the view row's committed proof, so it needs a Read/Full
         // action context (`eval_opt` below).
         let reads_in_rhs = self.egraph.proof_state.proofs_enabled;
         let action_lookups_str = ListDisplay(&action_lookups, "\n                    ");

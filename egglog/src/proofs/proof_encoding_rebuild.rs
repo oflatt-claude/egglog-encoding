@@ -248,8 +248,8 @@ impl ProofInstrumentor<'_> {
         let index_atom = format!("({} {follower} {keys_str} {eclass} {row_pf})", vi.name);
 
         // Canonicalize every eq-sort column. A column that did not move
-        // canonicalizes to itself and its step is reflexive, which the proof
-        // simplifier drops.
+        // canonicalizes to itself and its step proves nothing, so the packed
+        // row's spelling stops naming it (see `DROP_REFLEXIVE_STEP`).
         let mut lets: Vec<String> = Vec::new();
         let mut updated = key_vars.to_vec();
         // The child position and step proof of each canonicalized column, in

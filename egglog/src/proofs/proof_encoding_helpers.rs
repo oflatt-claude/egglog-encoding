@@ -146,12 +146,14 @@ impl Skeleton {
         }
     }
 
-    /// This skeleton with `column` read as the identity: a congruence over it
-    /// is its own base, a transitivity with it is its other side. `None` when
-    /// the whole composition is that column.
+    /// This skeleton with `column` read as the identity. `None` when that
+    /// leaves nothing to state: the skeleton is that column, or every step it
+    /// keeps rests on one that is — so a caller must not drop the column the
+    /// whole composition stands on.
     ///
-    /// The two agree exactly when the column's proof is reflexive, which is
-    /// the caller's to establish (see [`DropReflexiveStep`]).
+    /// The result proves what this skeleton does exactly when the column's
+    /// proof is reflexive, which is the caller's to establish (see
+    /// [`DropReflexiveStep`]).
     pub(crate) fn without_column(&self, column: usize) -> Option<Skeleton> {
         match self {
             ProofTree::Leaf(named) => (*named != column).then_some(ProofTree::Leaf(*named)),
@@ -214,9 +216,9 @@ impl Skeleton {
     }
 
     /// The skeleton [`Self::spelling`] writes as `spelling`, or `None` when the
-    /// string is not one. A column may be named more than once — a composition
-    /// reaching the same step twice carries it once — or not at all. How many
-    /// columns the row has is the reader's to check, against [`Self::width`].
+    /// string is not one. A column may be named more than once, or not at all,
+    /// so how many columns the row has is the reader's to check against
+    /// [`Self::width`].
     pub(crate) fn from_spelling(spelling: &str) -> Option<Skeleton> {
         let mut tokens = spelling.split('_');
         let skeleton = Skeleton::read(&mut tokens)?;
@@ -964,7 +966,8 @@ fn expr_has_non_global_lookup(
     .is_some()
 }
 
-/// Check if a fact contains a primitive expression whose result needs a stored term proof.
+/// Whether a fact contains a primitive call whose result is an eq-sort or
+/// container value.
 fn fact_has_eq_sort_primitive_result(fact: &ResolvedFact) -> bool {
     let mut has_eq_sort_primitive = false;
     fact.clone().visit_exprs(&mut |expr| {

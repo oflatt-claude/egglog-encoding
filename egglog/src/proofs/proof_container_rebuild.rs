@@ -50,8 +50,9 @@ pub(crate) fn uf_canon_proof_prim_name(uf_name: &str) -> String {
 ///   `fallback` when it has no row. Callers pass the term itself, making it
 ///   leader-or-self.
 /// * `uf_canon_proof : (S Proof) -> Proof` (proof mode) — the `@UF_<S>` row's
-///   proof `term = leader`, or `fallback`. Callers pass a reflexive proof of
-///   `term = term`.
+///   proof `term = leader`, or `fallback` when it has no row. A term with no row
+///   is its own leader, so the caller gets the fallback exactly where the step
+///   proves nothing and is dropped unread.
 ///
 /// Both are the generic view-column read over the two-output `@UF_<S>` table, so
 /// every backend services them against its own storage. They read `@UF_<S>`, so
