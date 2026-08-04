@@ -475,14 +475,14 @@ impl<'outer, 'a> QueryBuilder<'outer, 'a> {
     /// [`Self::add_atom`]; the columns are read disjunctively — unlike a variable
     /// repeated across them, which constrains them to be equal.
     ///
-    /// A variable `occurrence` must be bound elsewhere in the query, since the
-    /// atom is probed rather than scanned: scanning it would have to yield one
-    /// binding per distinct occurring value, which the join does not express.
-    /// Whether that holds is checked when the query is built. A constant
-    /// `occurrence` is already known, so it restricts the atom up front.
+    /// A variable `occurrence` is probed rather than scanned, so it must be bound
+    /// elsewhere in the query; whether that holds is checked when the query is
+    /// built. A constant needs no binder.
     ///
-    /// Over a single indexed column the occurrence is an ordinary equality, so
-    /// such an atom is lowered to a plain one and needs no index.
+    /// Errors if `occurrence_cols` is empty or names a column beyond the table's
+    /// arity, or if a variable `occurrence` also sits at a row column that
+    /// several `occurrence_cols` do not cover: that pairing is a per-row
+    /// disjunction, which is not expressible.
     pub fn add_occurrence_atom<'b>(
         &mut self,
         table_id: TableId,
@@ -504,9 +504,8 @@ impl<'outer, 'a> QueryBuilder<'outer, 'a> {
         }
         let cols: SmallVec<[ColumnId; 4]> = SmallVec::from_slice(occurrence_cols);
         let mut cs: Vec<Constraint> = cs.into_iter().cloned().collect();
-        // Where the occurring value itself sits among this atom's columns, if it
-        // does. A value at one of `cols` provably occurs, so the occurrence is
-        // implied and the atom is an ordinary one.
+        // A value at one of `cols` provably occurs, so the occurrence is implied
+        // and the atom is an ordinary one.
         let at_col = vars
             .iter()
             .position(|entry| match (entry, &occurrence) {
@@ -558,8 +557,8 @@ impl<'outer, 'a> QueryBuilder<'outer, 'a> {
         Ok(atom_id)
     }
 
-    /// Record `key` as the value `atom`'s rows are reached through, restricting
-    /// the atom to the rows holding it (see [`Atom::occurrence`]).
+    /// Record `key` as the value `atom`'s rows are reached through (see
+    /// [`Atom::occurrence`]).
     fn set_occurrence(
         &mut self,
         atom: AtomId,
@@ -571,9 +570,9 @@ impl<'outer, 'a> QueryBuilder<'outer, 'a> {
             cols: cols.clone(),
         });
         match key {
-            // A constant is known now, so the rows it occurs in are the atom's
-            // subset from the start. Cached plans recompute this per run, since
-            // the rows holding the value change as the table grows.
+            // The rows holding the value are the atom's subset from the start.
+            // Cached plans recompute it per run, since which rows those are
+            // changes as the table grows.
             OccurrenceKey::Const(val) => {
                 let table = self.query.atoms[atom].table;
                 let subset = &mut self.query.atoms[atom].constraints.subset;
@@ -714,9 +713,9 @@ impl RuleBuilder<'_, '_> {
     /// Tree decomposition and the free-join planners reason about an atom's
     /// variables through its columns, and an occurrence variable has none, so
     /// they cannot see the edge between such an atom and the one binding its
-    /// value. A constant occurrence has no such variable — it only narrows the
-    /// atom's rows — so it leaves the choice of planner alone. Applied at build,
-    /// so [`QueryBuilder::set_plan_strategy`] cannot override it.
+    /// value. A constant occurrence has no such variable, so it leaves the choice
+    /// of planner alone. Applied at build, so
+    /// [`QueryBuilder::set_plan_strategy`] cannot override it.
     fn force_whole_query_generic_join(&mut self) {
         if self
             .qb
@@ -1107,7 +1106,7 @@ pub(crate) struct Occurrence {
 }
 
 /// The value an occurrence index is read by: a variable another atom binds, or a
-/// constant, which instead restricts the atom's rows up front.
+/// constant, which needs no binder.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum OccurrenceKey {
     Var(Variable),

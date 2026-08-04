@@ -166,8 +166,7 @@ pub(crate) enum JoinStage {
 /// The occurrence columns this subatom reads, if it is the atom's occurrence
 /// variable rather than one of its column variables.
 ///
-/// A constant occurrence binds nothing, so no scan reads its columns: it is
-/// applied to the atom's subset instead.
+/// A constant occurrence binds nothing, so no scan reads its columns.
 fn occurrence_cols_of(
     atoms: &DenseIdMap<AtomId, Atom>,
     subatom: &SubAtom,
