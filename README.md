@@ -206,7 +206,7 @@ corpus:
 | Workload | Adaptation or scope | Correctness signal |
 | --- | --- | --- |
 | Math | Existing synthetic stress fixture | Existing file-test snapshot |
-| eggcc 2mm | Existing bounded container fixture | Generated `main` function type is checked |
+| eggcc 2mm | Bounded pass-one fixture with ordinary constructor-valued merges | Generated `main` function type is checked |
 | Pointer analysis | First 100 rows from 23 relations; three legacy functions are constructors for current egglog compatibility | Known `constant_points_to` row is derived |
 | Hardboiled | Dormant canonicalization rules using unsupported unstable helpers are omitted | Extracted WMMA store result is checked |
 | Luminal | Static Llama graph from [`egglog_repro` commit `7fb0194`](https://github.com/saulshanabrook/egglog_repro/blob/7fb0194812b5b11e41a286d8b55e48e3b0bfcd66/llama.egg) | `t712` is checked after kernel lowering |
