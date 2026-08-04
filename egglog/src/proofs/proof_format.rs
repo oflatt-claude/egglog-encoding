@@ -1873,6 +1873,36 @@ mod tests {
         firing.assert_agree(packed, chain, &expected);
     }
 
+    /// The columns a narrowed spelling names need not be contiguous: a column
+    /// dropped from the middle leaves the later ones where they were, since the
+    /// row still carries it.
+    #[test]
+    fn rebuild_narrows_to_a_gap_in_its_columns() {
+        let mut firing = RebuildFiring::new();
+        let (row, eclass) = (firing.row, firing.eclass);
+        let steps = firing.steps.clone();
+        // Children 0 and 2 are laid out at columns 1 and 2; child 0's step turns
+        // out to be reflexive, so the spelling names columns 0, 2 and 3 but not 1.
+        let narrowed = rebuild_skeleton(&[0, 2], true)
+            .without_column(1)
+            .expect("the row proof still stands");
+        assert_eq!(narrowed.spelling(), "trans_sym_p3_congr_p0_2_p2");
+        let columns = rebuild_columns(row, &[(0, steps[0]), (2, steps[2])], Some(eclass));
+        let term = packed_term(&mut firing.raw, &narrowed, columns);
+        let packed = parse(&mut firing.raw, term);
+
+        let row = firing.proof(row);
+        let step2 = firing.proof(steps[2]);
+        let eclass = firing.proof(eclass);
+        let congr = firing.raw.add_proof(RawProof::Congr(row, 2, step2));
+        let back = firing.raw.add_proof(RawProof::Sym(eclass));
+        let chain = firing.raw.add_proof(RawProof::Trans(back, congr));
+
+        let children = vec![firing.old[0], firing.old[1], firing.new[2], firing.old[3]];
+        let expected = firing.concludes(firing.e_new, children);
+        firing.assert_agree(packed, chain, &expected);
+    }
+
     /// A step that names a child it does not start at is rejected rather than
     /// minting a proof of an equality nothing established.
     #[test]
@@ -2067,6 +2097,11 @@ mod tests {
         for child in 0..3 {
             skeletons.push(Skeleton::Leaf(0).proj(child));
             skeletons.push(Skeleton::Leaf(0).congr(child, Skeleton::Leaf(0).proj(child)));
+        }
+        // A rebuild narrowed to a gapped set of columns, which is what a firing
+        // whose middle column did not move writes.
+        for dropped in 1..4 {
+            skeletons.extend(rebuild_skeleton(&[0, 2, 4], true).without_column(dropped));
         }
         for skeleton in skeletons {
             let spelling = skeleton.spelling();

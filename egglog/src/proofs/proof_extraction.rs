@@ -44,8 +44,9 @@ fn wrapped_premise(store: &ProofStore, proof_id: ProofId) -> Option<ProofId> {
 }
 
 impl ProofInstrumentor<'_> {
-    /// Prove the existence of a constructor or fail if a proof cannot be found.
-    /// We use a constructor because inserting a value at the top level would give a trivial proof.
+    /// Prove that a row of `call`'s view exists, or fail if no proof can be
+    /// found. Any encoded function has such a view, so this reaches a custom
+    /// function's rows too, not only a constructor's.
     pub(crate) fn prove_exists(
         &mut self,
         call: &ResolvedCall,

@@ -980,6 +980,46 @@ mod tests {
         }
     }
 
+    /// A guard reads its own expression's premise — there is no second side to
+    /// drop it against — so a guard over an unanchored value must be rejected by
+    /// proof support rather than reaching the encoder's anchor assertion.
+    #[test]
+    fn proof_support_rejects_a_guard_over_an_unanchored_value() {
+        for (body, expected) in [
+            (
+                "(proof-id y)",
+                ProofEncodingUnsupportedReason::EqSortPrimitiveResultWithoutContainer,
+            ),
+            (
+                "(= v (vec-of y)) (vec-get v 0)",
+                ProofEncodingUnsupportedReason::ContainerCreatedInQueryProvedAbout,
+            ),
+        ] {
+            let err = proof_id_egraph()
+                .parse_and_run_program(
+                    None,
+                    &format!(
+                        r#"{PROOF_ID_PRELUDE}
+                        (sort MathVec (Vec Math))
+                        (rule ((Seed y) {body})
+                              ((Seen y))
+                              :name "guard-over-an-unanchored-value")
+                        "#
+                    ),
+                )
+                .unwrap_err();
+            let reason = match &err {
+                Error::UnsupportedProofCommand { reason, .. } => format!("{reason:?}"),
+                other => panic!("expected an unsupported-proof error for `{body}`, got {other:?}"),
+            };
+            assert_eq!(
+                reason,
+                format!("{expected:?}"),
+                "wrong rejection reason for guard `{body}`"
+            );
+        }
+    }
+
     #[test]
     fn proof_support_rejects_naive_eq_sort_primitive_results_in_facts() {
         let err = proof_id_egraph()

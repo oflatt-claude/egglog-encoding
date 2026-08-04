@@ -153,7 +153,10 @@ impl Skeleton {
     ///
     /// The result proves what this skeleton does exactly when the column's
     /// proof is reflexive, which is the caller's to establish (see
-    /// [`DropReflexiveStep`]).
+    /// [`DropReflexiveStep`]). A projection is the one node whose conclusion is
+    /// not its base's, so `None` under one would read as the identity while
+    /// standing for the projected child: no skeleton may rest a projection on
+    /// the dropped column alone.
     pub(crate) fn without_column(&self, column: usize) -> Option<Skeleton> {
         match self {
             ProofTree::Leaf(named) => (*named != column).then_some(ProofTree::Leaf(*named)),
@@ -168,7 +171,15 @@ impl Skeleton {
                 Some(step) => Some(base.without_column(column)?.congr(*child, step)),
                 None => base.without_column(column),
             },
-            ProofTree::Proj(base, child) => Some(base.without_column(column)?.proj(*child)),
+            ProofTree::Proj(base, child) => {
+                let base = base.without_column(column);
+                debug_assert!(
+                    base.is_some(),
+                    "{self:?} rests its projection on column {column} alone, so dropping the \
+                     column would read as the identity of the projected child"
+                );
+                Some(base?.proj(*child))
+            }
         }
     }
 
@@ -1186,8 +1197,14 @@ impl BodyAnchorScan {
                     self.requests.push((rhs.value, reason));
                 }
             }
+            // A guard's premise *is* its expression's proof: there is no second
+            // side for the composition to drop it against, so the anchor is read
+            // whenever the expression has one.
             ResolvedFact::Fact(expr) => {
-                self.expr(expr);
+                let scanned = self.expr(expr);
+                if let Some(reason) = scanned.anchor {
+                    self.requests.push((scanned.value, reason));
+                }
             }
         }
     }
