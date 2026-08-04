@@ -504,19 +504,23 @@ impl<'outer, 'a> QueryBuilder<'outer, 'a> {
         }
         let cols: SmallVec<[ColumnId; 4]> = SmallVec::from_slice(occurrence_cols);
         let mut cs: Vec<Constraint> = cs.into_iter().cloned().collect();
-        // A value at one of `cols` provably occurs, so the occurrence is implied
-        // and the atom is an ordinary one.
-        let at_col = vars
+        // Every column the value itself occupies. It may occupy several, and one
+        // of `cols` among them provably occurs, so the occurrence is implied and
+        // the atom is an ordinary one.
+        let at_cols: SmallVec<[ColumnId; 4]> = vars
             .iter()
-            .position(|entry| match (entry, &occurrence) {
+            .enumerate()
+            .filter(|(_, entry)| match (entry, &occurrence) {
                 (QueryEntry::Var(l), QueryEntry::Var(r)) => l == r,
                 (QueryEntry::Const(l), QueryEntry::Const(r)) => l == r,
                 _ => false,
             })
-            .map(ColumnId::from_usize);
-        if at_col.is_some_and(|col| cols.contains(&col)) {
+            .map(|(col, _)| ColumnId::from_usize(col))
+            .collect();
+        if at_cols.iter().any(|col| cols.contains(col)) {
             return self.add_atom(table_id, vars, &cs);
         }
+        let at_col = at_cols.first().copied();
         // A single indexed column turns "occurs in one of `cols`" into an
         // equality on that column, which needs no occurrence index.
         if let [col] = cols[..] {
@@ -537,7 +541,21 @@ impl<'outer, 'a> QueryBuilder<'outer, 'a> {
             return self.add_atom(table_id, vars, &cs);
         }
         let key = match occurrence {
-            QueryEntry::Const(val) => OccurrenceKey::Const(val),
+            QueryEntry::Const(val) => {
+                // Restricting to the rows holding a constant reads a cached index,
+                // which a column whose values change underneath it cannot serve.
+                let spec = &self.rsb.db.tables[table_id].spec;
+                if let Some(col) = cols
+                    .iter()
+                    .find(|c| *spec.uncacheable_columns.get(**c).unwrap_or(&false))
+                {
+                    return Err(QueryError::UncacheableOccurrenceConstant {
+                        table: table_id,
+                        column: col.index(),
+                    });
+                }
+                OccurrenceKey::Const(val)
+            }
             QueryEntry::Var(var) => {
                 // The value is bound at a column outside the indexed set, so the
                 // occurrence is a per-row disjunction over `cols` rather than a
@@ -648,6 +666,11 @@ pub enum QueryError {
         column: usize,
         indexed: Vec<usize>,
     },
+
+    #[error(
+        "occurrence atom on table {table:?} is probed by a constant over column {column}, whose values are not cacheable"
+    )]
+    UncacheableOccurrenceConstant { table: TableId, column: usize },
 
     #[error("table {table:?} expected {expected:?} columns but got {got:?}")]
     BadArity {

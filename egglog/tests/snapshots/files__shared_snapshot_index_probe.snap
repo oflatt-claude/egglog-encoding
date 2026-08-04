@@ -3,6 +3,8 @@ source: egglog/tests/files.rs
 expression: snapshot_content_across_treatments
 ---
 ((arc 4)
+ (both 1)
+ (duo 2)
  (edge 5)
  (implied 1)
  (joined 1)
@@ -11,5 +13,5 @@ expression: snapshot_content_across_treatments
  (pick 1)
  (reached 1)
  (repeated 1)
- (seed 1)
+ (seed 2)
  (touched 3))

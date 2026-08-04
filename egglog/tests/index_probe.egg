@@ -89,6 +89,20 @@
 (fail (check (joined 7 1)))
 (fail (check (joined 20 21)))
 
+;; The value may occupy *several* of the row's columns. One indexed column among
+;; them is enough for the occurrence to be implied, whichever order they come in.
+(function duo (i64 i64) i64 :merge old)
+(index DuoOcc duo (any 1 2))
+(relation both (i64 i64))
+(set (duo 70 71) 70)
+(set (duo 72 73) 74)
+(seed 70)
+;; x is at column 0, which is unindexed, and at column 2, which is indexed.
+(rule ((seed x) (DuoOcc x x q x)) ((both x q)))
+(run 1)
+(check (both 70 71))
+(fail (check (both 72 73)))
+
 ;; The same shape with the variable at an *indexed* column: the occurrence is
 ;; implied, so the atom means the same as a plain row match.
 (relation implied (i64 i64 i64))
