@@ -616,7 +616,7 @@ impl RawProofStore {
             );
             let spelling = self.parse_string(args[0]);
             let skeleton = Skeleton::from_spelling(&spelling)
-                .filter(|skeleton| skeleton.width() == columns)
+                .filter(|skeleton| skeleton.width() <= columns)
                 .unwrap_or_else(|| {
                     panic!("{spelling} is not a composition over {head}'s {columns} columns")
                 });
@@ -1736,7 +1736,10 @@ mod tests {
     /// A packed row over `columns`, as the extracted term of the constructor
     /// carrying `skeleton`.
     fn packed_term(raw: &mut RawProofStore, skeleton: &Skeleton, columns: Vec<TermId>) -> TermId {
-        assert_eq!(columns.len(), skeleton.width(), "one term per column");
+        assert!(
+            skeleton.width() <= columns.len(),
+            "one term per column the skeleton names"
+        );
         let head = raw.names.packed_proof(columns.len());
         let spelling = raw.term_dag.lit(Literal::String(skeleton.spelling()));
         let args = std::iter::once(spelling).chain(columns).collect();
@@ -1840,6 +1843,33 @@ mod tests {
 
         let children = firing.old.clone();
         let expected = firing.concludes(firing.e_new, children);
+        firing.assert_agree(packed, chain, &expected);
+    }
+
+    /// A rebuild lays out a column per canonicalizable column and then drops
+    /// the steps that proved nothing, so the row carries columns its spelling
+    /// never names.
+    #[test]
+    fn rebuild_reads_only_the_columns_its_spelling_names() {
+        let mut firing = RebuildFiring::new();
+        let (row, eclass) = (firing.row, firing.eclass);
+        let steps = firing.steps.clone();
+        // Columns 0 and 2 are laid out; column 2's step and the e-class's turn
+        // out to be reflexive, so the spelling drops columns 2 and 3.
+        let narrowed = rebuild_skeleton(&[0, 2], true)
+            .without_column(2)
+            .and_then(|skeleton| skeleton.without_column(3))
+            .expect("the row proof still stands");
+        let columns = rebuild_columns(row, &[(0, steps[0]), (2, steps[2])], Some(eclass));
+        let term = packed_term(&mut firing.raw, &narrowed, columns);
+        let packed = parse(&mut firing.raw, term);
+
+        let row = firing.proof(row);
+        let step0 = firing.proof(steps[0]);
+        let chain = firing.raw.add_proof(RawProof::Congr(row, 0, step0));
+
+        let children = vec![firing.new[0], firing.old[1], firing.old[2], firing.old[3]];
+        let expected = firing.concludes(firing.e_old, children);
         firing.assert_agree(packed, chain, &expected);
     }
 

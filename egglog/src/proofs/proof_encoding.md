@@ -424,14 +424,11 @@ anchor is instead **projected out of a row proof already in scope**. A view
 row's proof states an equality whose right-hand side is the row's term, so:
 
 * a term the row mentions as a child is `@Proj(row, i)`;
-* a constructor view's e-class — the row proof's left-hand side — is the row
-  proof reflexivized, `@Packed_1 "trans_p0_sym_p0"`;
 * a container's element, whose position in the term form is only known once the
   term is in hand, is `@ProjAll_<Sort>(row, element)`.
 
-That covers every anchor the encoding wants: the seeds a view rebuild hands
-`@UF_<Sort>_canon_proof`, the reflexive base a container rebuild composes from,
-and a rule body's eq-sort or container variable. Which row anchors a body
+That covers every anchor the encoding wants: the reflexive base a container
+rebuild composes from, and a rule body's eq-sort or container variable. Which row anchors a body
 variable is only known once the whole body is walked, so the anchor's row is
 written where the composition reading it lands — and a composition that drops it
 as reflexive writes none at all. A body's equalities join the variables they
@@ -700,8 +697,8 @@ the same head names seventeen proofs: four conclusions and thirteen composition
 steps. Three rows against seventeen is the whole point of the layer.
 
 Row counts per firing, proof rows only (not the view or `@UF` write beside them):
-a flat rewrite **1**, the nested head above **3**, a view rebuild **one packed
-row plus one anchor per canonicalized column**, a merge collision **1**.
+a flat rewrite **1**, the nested head above **3**, a view rebuild **1**, a merge
+collision **1**.
 
 A `union` of two matched variables builds nothing, so it needs one row — but
 which endpoint the `@UF` edge is stated from is only known once the ids are
@@ -795,8 +792,9 @@ column n, and a bare number for a congruence's or projection's child position.
 Unpacking reads the skeleton back off that column and substitutes the rest into
 it, so there is one statement of the composition rather than one at each end. A
 column may be named twice — `trans_sym_p0_p0` is `reflexive`, `t' = t'` from the
-one proof of `t = t'` — and is then carried once. Every other column is a proof,
-so the constructor is a function of their count alone: `@Packed_<k>`.
+one proof of `t = t'` — and is then carried once, or named not at all, when the
+step it carries turned out to prove nothing. Every other column is a proof, so
+the constructor is a function of their count alone: `@Packed_<k>`.
 
 The encoder composes over proof *names*, so it holds each `@Sym`, `@Trans` and
 `@Congr` back as a tree and writes the row where a statement reads the name. Two
@@ -815,17 +813,21 @@ column and packs them:
 
 ```text
 (let c0_canon_ (@UF_Math_canon c0_ c0_))
-(let c0_refl (mint-@Proj! pf 0))
-(let c0_step (@UF_Math_canon_proof c0_ c0_refl))
-… same for c1_, and for e2_ with (mint-@Packed_1! "trans_p0_sym_p0" pf) …
-(let out (mint-@Packed_4! "trans_sym_p3_congr_congr_p0_0_p1_1_p2"
-        pf c0_step c1_step e2_step))
+(let c0_step (@UF_Math_canon_proof c0_ pf))
+… same for c1_ and e2_ …
+(let s1 (drop-reflexive-step "trans_sym_p3_congr_congr_p0_0_p1_1_p2" 1 c0_ c0_canon_))
+… same for columns 2 and 3 …
+(let out (mint-@Packed_4! s3 pf c0_step c1_step e2_step))
 ```
 
-`@UF_<Sort>_canon_proof` supplies each step's proof, falling back to the column's
-reflexive anchor when it did not move. The e-class's step composes on the left
-rather than at a child position, since an e-class can equal one of its own
-children's terms.
+`@UF_<Sort>_canon_proof` supplies each step's proof, or the fallback when the
+column has no `@UF` row. A column that did not move proves `t = t`, so it
+contributes nothing: rather than anchor it — a row per column, dropped again by
+the proof simplifier — the fallback is the row proof itself and
+`drop-reflexive-step` narrows the spelling until it names only the columns whose
+two values differ. A column the spelling does not name is carried but never
+read. The e-class's step composes on the left rather than at a child position,
+since an e-class can equal one of its own children's terms.
 
 **A merge collision** — two rows colliding on one key in a `@UF` or view
 `:merge` — writes one packed row for the edge it displaces.

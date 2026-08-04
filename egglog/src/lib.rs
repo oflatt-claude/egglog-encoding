@@ -552,6 +552,13 @@ impl EGraph {
             proofs::proof_encoding_helpers::SelectEqProof,
             Some(select_eq_validator),
         );
+        // `drop-reflexive-step` narrows a view rebuild's packed-row spelling to
+        // the steps that moved; see
+        // [`crate::proofs::proof_encoding_helpers::DropReflexiveStep`].
+        eg.add_pure_primitive(
+            proofs::proof_encoding_helpers::DropReflexiveStep::default(),
+            None,
+        );
 
         eg.rulesets
             .insert("".into(), Ruleset::Rules(Default::default()));

@@ -4,13 +4,16 @@
 //! [`super::proof_encoding`].)
 
 use super::proof_encoding::{ProofInstrumentor, ViewIndex};
-use super::proof_encoding_helpers::Skeleton;
+use super::proof_encoding_helpers::{DROP_REFLEXIVE_STEP, Skeleton};
 use crate::*;
 
 /// The composition a view rebuild's packed row states, over the columns
 /// [`ProofInstrumentor::indexed_rebuild_rule`] writes: the row proof in column
 /// 0, then one step proof per canonicalized child in `children`, in the order
 /// the composition applies them, then the e-class's own step when `eclass`.
+///
+/// The firing narrows this to the columns that moved, so the row it writes may
+/// name fewer (see [`DROP_REFLEXIVE_STEP`]).
 pub(super) fn rebuild_skeleton(children: &[usize], eclass: bool) -> Skeleton {
     let mut skeleton = Skeleton::Leaf(0);
     for (step, &child) in children.iter().enumerate() {
@@ -20,12 +23,6 @@ pub(super) fn rebuild_skeleton(children: &[usize], eclass: bool) -> Skeleton {
         skeleton = Skeleton::Leaf(1 + children.len()).sym().trans(skeleton);
     }
     skeleton
-}
-
-/// The composition reflexivizing a view row's proof `eclass = f(children)` into
-/// `eclass = eclass`, over one column holding that row proof.
-pub(super) fn eclass_refl_skeleton() -> Skeleton {
-    Skeleton::Leaf(0).trans(Skeleton::Leaf(0).sym())
 }
 
 impl ProofInstrumentor<'_> {
@@ -258,6 +255,9 @@ impl ProofInstrumentor<'_> {
         // The child position and step proof of each canonicalized column, in
         // ascending position — the order the composition applies them in.
         let mut steps: Vec<(usize, String)> = Vec::new();
+        // The two values each step column canonicalizes between, in column
+        // order — what `drop-reflexive-step` reads to narrow the spelling.
+        let mut moved: Vec<(String, String)> = Vec::new();
         for j in 0..n_keys {
             if types[j].is_eq_container_sort() || !types[j].is_eq_sort() {
                 continue;
@@ -270,14 +270,15 @@ impl ProofInstrumentor<'_> {
                 uf_canon_prim_name(&uf_j)
             ));
             if proofs {
-                let proj = self.proof_names().proj_constructor.clone();
-                let refl = self.mint(&mut lets, &proj, &format!("{row_pf} {j}"));
+                // The fallback is only carried, never read: when the column did
+                // not move the spelling stops naming it.
                 let step = self.fresh_var();
                 lets.push(format!(
-                    "(let {step} ({} {cj} {refl}))",
+                    "(let {step} ({} {cj} {row_pf}))",
                     uf_canon_proof_prim_name(&uf_j)
                 ));
                 steps.push((j, step));
+                moved.push((cj.clone(), canon.clone()));
             }
             updated[j] = canon;
         }
@@ -301,24 +302,15 @@ impl ProofInstrumentor<'_> {
                 uf_canon_prim_name(&uf_out)
             ));
             if proofs {
-                // The row proof reads `eclass = f(children)`, so the e-class is
-                // its left-hand side rather than a child: reflexivize it instead
-                // of projecting.
-                let (packed, decl) = self.packed_proof_constructor(1);
-                decls.push_str(&decl);
-                let refl = self.mint(
-                    &mut lets,
-                    &packed,
-                    &format!("\"{}\" {row_pf}", eclass_refl_skeleton().spelling()),
-                );
                 let step = self.fresh_var();
                 lets.push(format!(
-                    "(let {step} ({} {eclass} {refl}))",
+                    "(let {step} ({} {eclass} {row_pf}))",
                     uf_canon_proof_prim_name(&uf_out)
                 ));
                 // The packed row takes the step as it stands: its expansion is
                 // what applies the `Sym`.
                 eclass_step = Some(step);
+                moved.push((eclass.clone(), canon.clone()));
             }
             canon
         } else {
@@ -337,7 +329,18 @@ impl ProofInstrumentor<'_> {
         if args.len() > 1 {
             let (packed, decl) = self.packed_proof_constructor(args.len());
             decls.push_str(&decl);
-            let row = format!("\"{}\" {}", skeleton.spelling(), args.join(" "));
+            // Narrow the composition to the columns that moved. Column 0 is the
+            // row proof, so a step's column is its position in `moved` plus one.
+            let mut spelling = format!("\"{}\"", skeleton.spelling());
+            for (column, (before, after)) in moved.iter().enumerate() {
+                let narrowed = self.fresh_var();
+                lets.push(format!(
+                    "(let {narrowed} ({DROP_REFLEXIVE_STEP} {spelling} {} {before} {after}))",
+                    column + 1
+                ));
+                spelling = narrowed;
+            }
+            let row = format!("{spelling} {}", args.join(" "));
             proof_acc = self.mint(&mut lets, &packed, &row);
         }
 

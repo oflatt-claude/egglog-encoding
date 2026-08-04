@@ -2,6 +2,7 @@
 //! naming, headers, and checking whether a program supports proof encoding.
 
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 use crate::{
     ArcSort, EGraph, TypeInfo, Value,
@@ -90,9 +91,9 @@ pub(crate) enum ProofTree<L> {
 }
 
 /// The composition one packed proof row stands for, written over the row's own
-/// proof columns: a leaf is the proof in a column, so the skeleton is also the
-/// row's layout. Every column is named, so a column a composition reaches twice
-/// is named twice and carried once.
+/// proof columns: a leaf is the proof in a column. A column a composition
+/// reaches twice is named twice and carried once; a column it does not reach is
+/// carried and never read.
 ///
 /// A packed row carries [`Skeleton::spelling`] in its first column, so the site
 /// writing the row and the unpacking that reads it work from one statement of
@@ -145,14 +146,27 @@ impl Skeleton {
         }
     }
 
-    fn collect_columns(&self, columns: &mut Vec<usize>) {
+    /// This skeleton with `column` read as the identity: a congruence over it
+    /// is its own base, a transitivity with it is its other side. `None` when
+    /// the whole composition is that column.
+    ///
+    /// The two agree exactly when the column's proof is reflexive, which is
+    /// the caller's to establish (see [`DropReflexiveStep`]).
+    pub(crate) fn without_column(&self, column: usize) -> Option<Skeleton> {
         match self {
-            ProofTree::Leaf(column) => columns.push(*column),
-            ProofTree::Sym(inner) | ProofTree::Proj(inner, _) => inner.collect_columns(columns),
-            ProofTree::Trans(left, right) | ProofTree::Congr(left, _, right) => {
-                left.collect_columns(columns);
-                right.collect_columns(columns);
+            ProofTree::Leaf(named) => (*named != column).then_some(ProofTree::Leaf(*named)),
+            ProofTree::Sym(inner) => Some(inner.without_column(column)?.sym()),
+            ProofTree::Trans(left, right) => {
+                match (left.without_column(column), right.without_column(column)) {
+                    (Some(left), Some(right)) => Some(left.trans(right)),
+                    (left, right) => left.or(right),
+                }
             }
+            ProofTree::Congr(base, child, step) => match step.without_column(column) {
+                Some(step) => Some(base.without_column(column)?.congr(*child, step)),
+                None => base.without_column(column),
+            },
+            ProofTree::Proj(base, child) => Some(base.without_column(column)?.proj(*child)),
         }
     }
 
@@ -199,21 +213,14 @@ impl Skeleton {
         }
     }
 
-    /// The skeleton [`Self::spelling`] writes as `spelling`, or `None` when that
-    /// is not a spelling of one whose columns are `0..n`. A column may be named
-    /// more than once: a composition reaching the same step twice carries it
-    /// once.
+    /// The skeleton [`Self::spelling`] writes as `spelling`, or `None` when the
+    /// string is not one. A column may be named more than once — a composition
+    /// reaching the same step twice carries it once — or not at all. How many
+    /// columns the row has is the reader's to check, against [`Self::width`].
     pub(crate) fn from_spelling(spelling: &str) -> Option<Skeleton> {
         let mut tokens = spelling.split('_');
         let skeleton = Skeleton::read(&mut tokens)?;
-        if tokens.next().is_some() {
-            return None;
-        }
-        let mut columns = vec![];
-        skeleton.collect_columns(&mut columns);
-        columns.sort_unstable();
-        columns.dedup();
-        (columns == (0..columns.len()).collect::<Vec<_>>()).then_some(skeleton)
+        tokens.next().is_none().then_some(skeleton)
     }
 
     fn read<'a>(tokens: &mut impl Iterator<Item = &'a str>) -> Option<Skeleton> {
@@ -1677,5 +1684,105 @@ impl crate::constraint::TypeConstraint for SelectEqProofTypeConstraint {
             crate::constraint::eq(arguments[3].clone(), arguments[2].clone()),
             crate::constraint::eq(arguments[4].clone(), arguments[2].clone()),
         ]
+    }
+}
+
+/// Name of the [`DropReflexiveStep`] primitive.
+pub(crate) const DROP_REFLEXIVE_STEP: &str = "drop-reflexive-step";
+
+/// The `drop-reflexive-step` primitive:
+/// `(drop-reflexive-step spelling column before after) -> spelling` — the
+/// packed-row spelling with `column` no longer named
+/// ([`Skeleton::without_column`]) when `before == after`, and `spelling` itself
+/// otherwise. Typed `(String i64 T T) -> String` for any sort `T`.
+///
+/// `before`/`after` must be the two values the step in `column` canonicalizes
+/// between: equal values are what makes that step reflexive, and so make the
+/// narrowed spelling the same composition. A column the spelling stops naming
+/// is carried but never read, so the caller may fill it with anything.
+#[derive(Clone, Default)]
+pub(crate) struct DropReflexiveStep {
+    /// `(spelling, column)` -> that spelling without the column.
+    dropped: Arc<Mutex<HashMap<(Value, i64), Value>>>,
+}
+
+impl crate::Primitive for DropReflexiveStep {
+    fn name(&self) -> &str {
+        DROP_REFLEXIVE_STEP
+    }
+
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn crate::constraint::TypeConstraint> {
+        Box::new(DropReflexiveStepTypeConstraint { span: span.clone() })
+    }
+}
+
+impl crate::PurePrim for DropReflexiveStep {
+    fn apply<'a, 'db>(&self, state: crate::PureState<'a, 'db>, args: &[Value]) -> Option<Value> {
+        let [spelling, column, before, after] = args else {
+            return None;
+        };
+        if before != after {
+            return Some(*spelling);
+        }
+        let base_values = crate::exec_state::Core::base_values(&state);
+        let key = (*spelling, base_values.unwrap::<i64>(*column));
+        if let Some(dropped) = self.dropped.lock().unwrap().get(&key) {
+            return Some(*dropped);
+        }
+        let text = base_values.unwrap::<crate::sort::S>(*spelling);
+        let skeleton = Skeleton::from_spelling(text.as_str())?;
+        let dropped = base_values.get::<crate::sort::S>(
+            skeleton
+                .without_column(key.1.try_into().ok()?)?
+                .spelling()
+                .into(),
+        );
+        self.dropped.lock().unwrap().insert(key, dropped);
+        Some(dropped)
+    }
+}
+
+struct DropReflexiveStepTypeConstraint {
+    span: Span,
+}
+
+impl crate::constraint::TypeConstraint for DropReflexiveStepTypeConstraint {
+    fn get(
+        &self,
+        arguments: &[crate::core::AtomTerm],
+        typeinfo: &TypeInfo,
+    ) -> Vec<Box<dyn crate::constraint::Constraint<crate::core::AtomTerm, crate::ArcSort>>> {
+        // `(spelling column before after) -> out`: `spelling`/`out` are
+        // `String`, `column` is `i64`, and `before`/`after` share one sort.
+        if arguments.len() != 5 {
+            return vec![crate::constraint::impossible(
+                crate::constraint::ImpossibleConstraint::ArityMismatch {
+                    atom: crate::core::Atom {
+                        span: self.span.clone(),
+                        head: DROP_REFLEXIVE_STEP.to_string(),
+                        args: arguments.to_vec(),
+                    },
+                    expected: 5,
+                },
+            )];
+        }
+        let mut constraints = vec![crate::constraint::eq(
+            arguments[3].clone(),
+            arguments[2].clone(),
+        )];
+        if let Some(string) = typeinfo.get_sort_by_name("String") {
+            constraints.push(crate::constraint::assign(
+                arguments[0].clone(),
+                string.clone(),
+            ));
+            constraints.push(crate::constraint::assign(
+                arguments[4].clone(),
+                string.clone(),
+            ));
+        }
+        if let Some(int) = typeinfo.get_sort_by_name("i64") {
+            constraints.push(crate::constraint::assign(arguments[1].clone(), int.clone()));
+        }
+        constraints
     }
 }
