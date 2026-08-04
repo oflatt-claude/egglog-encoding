@@ -984,11 +984,5 @@ fn add_atom(
     let Some((occ_entry, cols)) = occurrence else {
         return Ok(qb.add_atom(table, &vars, constraints)?);
     };
-    Ok(qb.add_occurrence_atom(
-        table,
-        &vars,
-        inner.convert(occ_entry),
-        cols,
-        constraints,
-    )?)
+    Ok(qb.add_occurrence_atom(table, &vars, inner.convert(occ_entry), cols, constraints)?)
 }

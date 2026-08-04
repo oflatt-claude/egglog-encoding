@@ -1588,7 +1588,10 @@ fn occurrence_atom_rejects_a_value_repeated_at_an_unindexed_column() {
         )
         .expect_err("a value at an unindexed column is not expressible");
     assert!(
-        matches!(err, QueryError::OccurrenceVarAtUnindexedColumn { column: 0, .. }),
+        matches!(
+            err,
+            QueryError::OccurrenceVarAtUnindexedColumn { column: 0, .. }
+        ),
         "{err:?}"
     );
 }

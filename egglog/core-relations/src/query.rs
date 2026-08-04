@@ -13,12 +13,12 @@ use crate::{
     BaseValueId, CounterId, ExternalFunctionId, PoolSet, Value,
     action::{Instr, QueryEntry, WriteVal},
     common::HashMap,
-    offsets::Subset,
     free_join::{
         ActionId, AtomId, Database, ProcessedConstraints, SubAtom, TableId, TableInfo, VarInfo,
         Variable, get_occurrence_index_from_tableinfo,
         plan::{JoinHeader, JoinStages, Plan, PlanStrategy},
     },
+    offsets::Subset,
     pool::{Pooled, with_pool_set},
     table_spec::{ColumnId, Constraint},
 };
@@ -577,12 +577,7 @@ impl<'outer, 'a> QueryBuilder<'outer, 'a> {
 
     /// Record `key` as the value `atom`'s rows are reached through (see
     /// [`Atom::occurrence`]).
-    fn set_occurrence(
-        &mut self,
-        atom: AtomId,
-        key: OccurrenceKey,
-        cols: SmallVec<[ColumnId; 4]>,
-    ) {
+    fn set_occurrence(&mut self, atom: AtomId, key: OccurrenceKey, cols: SmallVec<[ColumnId; 4]>) {
         self.query.atoms[atom].occurrence = Some(Occurrence {
             key,
             cols: cols.clone(),
