@@ -151,8 +151,9 @@ pub enum RuleBodyCall {
     /// arguments: that value, the whole row of `id`, then the index's own unit
     /// output.
     ///
-    /// The atom can only be probed, so the leading value must be bound elsewhere
-    /// in the query.
+    /// The atom is probed rather than scanned, so a variable leading value must
+    /// be bound elsewhere in the query by a function's rows; a literal is already
+    /// known and needs no binder.
     IndexTable {
         id: FunctionId,
         any_of: Vec<usize>,
