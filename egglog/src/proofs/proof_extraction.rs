@@ -69,12 +69,12 @@ impl ProofInstrumentor<'_> {
         let Some(view) = self.egraph.functions.get(&view_name) else {
             return Err(ProveExistsError::RequiresConstructor);
         };
-        // The view row is `[children…, value, proof]`.
-        let proof_index = view.schema.input.len() + 1;
         let view_backend_id = view.backend_id;
         let Some(proof_sort) = view.schema.outputs.last().cloned() else {
             return Err(ProveExistsError::RequiresConstructor);
         };
+        // The view row is `[children…, value, proof]`; the proof is the last column.
+        let proof_index = view.schema.input.len() + view.schema.outputs.len() - 1;
 
         let mut termdag = TermDag::default();
 

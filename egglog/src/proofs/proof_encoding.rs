@@ -1277,7 +1277,8 @@ impl<'a> ProofInstrumentor<'a> {
     }
 
     /// A fresh proof variable standing for `value`'s reflexive anchor, bound
-    /// once [`Self::bind_anchors`] has seen the whole body.
+    /// once [`Self::bind_anchors`] has seen the whole body. Reflexive from here
+    /// on, so a composition reading it drops it as a step.
     pub(crate) fn request_anchor(&mut self, value: &str) -> String {
         let proof = self.fresh_var();
         self.anchors.request(&proof, value);
@@ -1305,9 +1306,13 @@ impl<'a> ProofInstrumentor<'a> {
 
     /// Bind every anchor the body asked for, and clear the body's anchors for
     /// the next one. Each is deferred, so it lands where it is first read and
-    /// nowhere if nothing reads it; an anchor no body atom reaches is left
-    /// unbound, and reading it is the invariant violation
-    /// [`Self::emit_pending_group`] asserts against.
+    /// nowhere if nothing reads it.
+    ///
+    /// An anchor no body atom reaches is left unbound. Proof support rejects such
+    /// a rule before it is encoded, which is the complete gate: a composition over
+    /// an unbound anchor drops it rather than reading it (soundly — its conclusion
+    /// is `t = t`), so [`Self::emit_pending_group`]'s assert only catches a
+    /// statement that names the variable directly.
     pub(crate) fn bind_anchors(&mut self) {
         let anchors = std::mem::take(&mut self.anchors);
         for (proof, value) in &anchors.requests {

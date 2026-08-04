@@ -168,7 +168,15 @@ impl Skeleton {
                 }
             }
             ProofTree::Congr(base, child, step) => match step.without_column(column) {
-                Some(step) => Some(base.without_column(column)?.congr(*child, step)),
+                Some(step) => {
+                    let base = base.without_column(column);
+                    debug_assert!(
+                        base.is_some(),
+                        "{self:?} rests its congruence base on column {column} alone while \
+                         keeping the step, so dropping the column would lose the step's rewrite"
+                    );
+                    Some(base?.congr(*child, step))
+                }
                 None => base.without_column(column),
             },
             ProofTree::Proj(base, child) => {

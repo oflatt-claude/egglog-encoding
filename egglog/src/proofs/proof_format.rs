@@ -2228,4 +2228,35 @@ mod tests {
         let expected = Proposition::new(children[1], children[1]);
         assert_agree(&raw, packed, chain, &expected);
     }
+
+    /// A projection naming its child by term converts to the projection at the
+    /// position that term occupies, and the two share one proof.
+    #[test]
+    fn an_element_projection_is_the_positional_one_over_the_same_child() {
+        let mut raw = empty_store();
+        let children: Vec<TermId> = ["a", "b", "c"]
+            .iter()
+            .map(|name| raw.term_dag.app((*name).to_string(), vec![]))
+            .collect();
+        let app = raw.term_dag.app("f".to_string(), children.clone());
+        let row = fiat_term(&mut raw, app, app);
+        let row = raw.parse_proof(row);
+
+        let by_term = raw.add_proof(RawProof::ProjAll(row, children[1]));
+        let by_index = raw.add_proof(RawProof::Proj(row, 1));
+
+        let mut store =
+            ProofStore::new(raw.term_dag.clone(), HashMap::default(), HashSet::default());
+        let (prog, globals) = (vec![], HashMap::default());
+        let mut convert = |id| store.convert_raw_proof(&prog, &globals, &raw, id);
+        let (element, positional) = (convert(by_term), convert(by_index));
+        assert_eq!(
+            element, positional,
+            "the element projection should resolve to the positional one it desugars to"
+        );
+        assert_eq!(
+            store.get(element).proposition(),
+            &Proposition::new(children[1], children[1])
+        );
+    }
 }

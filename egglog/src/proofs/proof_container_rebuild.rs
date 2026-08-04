@@ -346,10 +346,11 @@ struct ContainerRebuildProof {
     proof_sort: ArcSort,
     /// element-sort name -> single `UF_<E>` table name (all reachable eq-sorts)
     uf_names: HashMap<String, String>,
-    /// `CongrAll` / `ContainerNormalize` proof constructor names
+    /// `CongrAll` proof constructor name
     congr_all_name: String,
     /// container-sort name -> `@ProjAll_<CSort>` name (all reachable containers)
     proj_all_names: HashMap<String, String>,
+    /// `ContainerNormalize` proof constructor name
     container_normalize_name: String,
     /// Counter for minting fresh proof ids (see [`mint_proof_row`]).
     id_counter: egglog_backend_trait::CounterId,

@@ -51,11 +51,11 @@ pub struct ProofConstructorNames {
     pub trans: String,
     pub sym: String,
     pub normalize: String,
-    /// The `Fiat` justification constructor.
+    /// Prefix of the per-sort `Fiat` justification constructors.
     pub fiat: String,
     /// The `Proj` justification constructor.
     pub proj: String,
-    /// The element-matching `ProjAll` justification constructor.
+    /// Prefix of the per-sort element-matching `ProjAll` constructors.
     pub proj_all: String,
 }
 

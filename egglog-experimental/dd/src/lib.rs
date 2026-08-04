@@ -2640,6 +2640,11 @@ impl Backend for EGraph {
     }
 
     fn free_external_func(&mut self, func: ExternalFunctionId) {
+        // A freed id is handed out again, so drop the interception metadata with it:
+        // a stale entry would make the interpreter service an unrelated call as this op.
+        self.set_if_empty_ops.remove(&func);
+        self.view_column_read_ops.remove(&func);
+        self.mint_ops.remove(&func);
         self.db.free_external_function(func);
     }
 

@@ -147,17 +147,7 @@ impl ProofInstrumentor<'_> {
                 let value_prim = self.container_rebuild_prim(ty);
                 let canon_fact = format!("(= {canon} ({value_prim} {ci}))");
                 if proofs {
-                    let congr = self.proof_names().congr_constructor.clone();
-                    let proj = self.proof_names().proj_constructor.clone();
-                    let proof_prim = self.container_rebuild_proof_prim(ty);
-                    let rebuild_pf = self.fresh_var();
-                    // The row proof's term has the container at child `i`, so
-                    // projecting it out is the rebuild's reflexive anchor.
-                    let mut lets = vec![];
-                    let anchor = self.mint(&mut lets, &proj, &format!("{view_prf} {i}"));
-                    lets.push(format!("(let {rebuild_pf} ({proof_prim} {ci} {anchor}))"));
-                    let new_pf =
-                        self.mint(&mut lets, &congr, &format!("{view_prf} {i} {rebuild_pf}"));
+                    let (lets, new_pf) = self.container_rebuild_proof(&view_prf, i, ty, &ci);
                     (
                         canon_fact,
                         lets.join("\n                             "),
@@ -398,6 +388,35 @@ impl ProofInstrumentor<'_> {
         self.rebuild_rule(&facts, &actions, false)
     }
 
+    /// The proof that a view row's container column `index` was rebuilt, as the
+    /// statements writing it and the variable naming it. The row proof's term has
+    /// the container at `index`, so projecting it out is the anchor the rebuild
+    /// composes from, and `Congr` at the same position carries the row proof over
+    /// the rebuild's step.
+    fn container_rebuild_proof(
+        &mut self,
+        view_prf: &str,
+        index: usize,
+        container_sort: &ArcSort,
+        container_var: &str,
+    ) -> (Vec<String>, String) {
+        let congr = self.proof_names().congr_constructor.clone();
+        let proj = self.proof_names().proj_constructor.clone();
+        let proof_prim = self.container_rebuild_proof_prim(container_sort);
+        let rebuild_pf = self.fresh_var();
+        let mut lets = vec![];
+        let anchor = self.mint(&mut lets, &proj, &format!("{view_prf} {index}"));
+        lets.push(format!(
+            "(let {rebuild_pf} ({proof_prim} {container_var} {anchor}))"
+        ));
+        let new_pf = self.mint(
+            &mut lets,
+            &congr,
+            &format!("{view_prf} {index} {rebuild_pf}"),
+        );
+        (lets, new_pf)
+    }
+
     /// [`Self::fd_custom_value_rebuild_rule`] for an eq-container output:
     /// containers have no `@UF` to chase, so the value canonicalizes via the
     /// container rebuild primitive (`:naive` — it reads `@UF` tables the rule
@@ -414,20 +433,8 @@ impl ProofInstrumentor<'_> {
         let canon = self.fresh_var();
         let canon_fact = format!("(= {canon} ({value_prim} {value_var}))");
         let (proof_lets, pf_arg) = if self.proofs_enabled() {
-            let congr = self.proof_names().congr_constructor.clone();
-            let proj = self.proof_names().proj_constructor.clone();
-            let proof_prim = self.container_rebuild_proof_prim(&out_ty);
-            let rebuild_pf = self.fresh_var();
-            let mut lets = vec![];
-            let anchor = self.mint(&mut lets, &proj, &format!("{view_prf} {out_idx}"));
-            lets.push(format!(
-                "(let {rebuild_pf} ({proof_prim} {value_var} {anchor}))"
-            ));
-            let new_pf = self.mint(
-                &mut lets,
-                &congr,
-                &format!("{view_prf} {out_idx} {rebuild_pf}"),
-            );
+            let (lets, new_pf) =
+                self.container_rebuild_proof(&view_prf, out_idx, &out_ty, &value_var);
             (lets.join("\n                      "), new_pf)
         } else {
             (String::new(), "()".to_string())

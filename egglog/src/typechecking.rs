@@ -581,12 +581,20 @@ impl EGraph {
                     && let Some((id_sort, arg_sorts)) = ft.input.split_last()
                     && id_sort.is_eq_sort()
                 {
+                    // `register_mint` stages one `Unit` value column, so a term-node
+                    // relation must declare exactly that.
+                    debug_assert!(
+                        matches!(ft.outputs.as_slice(), [out] if out.name() == "Unit"),
+                        "term-node relation `{}` must declare one `Unit` value column, got {:?}",
+                        resolved.name,
+                        ft.outputs.iter().map(|out| out.name()).collect::<Vec<_>>(),
+                    );
                     let (name, id_sort, arg_sorts) =
                         (resolved.name.clone(), id_sort.clone(), arg_sorts.to_vec());
                     crate::proofs::proof_fresh::register_mint(self, &name, arg_sorts, id_sort);
                 }
                 // If this is a let binding, add it to global_sorts
-                // This preserves bahavior for lets after desugaring
+                // This preserves behavior for lets after desugaring
                 if resolved.internal_let {
                     let output_sort = self.type_info.sorts.get(fdecl.schema.output()).unwrap();
                     self.type_info
@@ -647,6 +655,7 @@ impl EGraph {
                     names.eq_trans_constructor = pc.trans.clone();
                     names.eq_sym_constructor = pc.sym.clone();
                     names.container_normalize_constructor = pc.normalize.clone();
+                    names.fiat_prefix = pc.fiat.clone();
                     names.proj_constructor = pc.proj.clone();
                     names.proj_all_prefix = pc.proj_all.clone();
                 }
