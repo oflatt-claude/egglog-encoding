@@ -3362,7 +3362,7 @@ impl<'a> BackendRule<'a> {
     }
 
     /// An index atom is probed, never scanned, so the value it is looked up by
-    /// must be bound elsewhere in the query.
+    /// must be bound elsewhere in the query. A literal needs no binder.
     fn check_index_value_is_bound(
         &self,
         index: &crate::typechecking::FuncType,
@@ -3387,12 +3387,17 @@ impl<'a> BackendRule<'a> {
                 if std::ptr::eq(other, atom) {
                     return false;
                 }
+                // Only a function's rows bind a value the join can probe by. A body
+                // primitive runs once per match, after the join, so the value it
+                // computes is not available as a lookup key.
+                let ResolvedCall::Func(f) = &other.head else {
+                    return false;
+                };
                 // Another index atom binds through its row columns like any other
                 // atom, but not through the value it is itself probed by: two index
                 // atoms naming each other there would each look bound with neither
                 // reachable.
-                let probed = matches!(&other.head,
-                ResolvedCall::Func(f) if self.type_info.indexes.contains_key(&f.name));
+                let probed = self.type_info.indexes.contains_key(&f.name);
                 other.args.iter().skip(usize::from(probed)).any(
                     |arg| matches!(arg, core::GenericAtomTerm::Var(_, v) if v.name == value.name),
                 )
@@ -4381,5 +4386,45 @@ mod index_binding_tests {
             format!("{err}").contains("must be bound"),
             "expected an unbound-index-value error, got {err}"
         );
+    }
+
+    /// A body primitive runs once per match, after the join, so the value it
+    /// computes cannot key a probe.
+    #[test]
+    fn an_index_value_bound_only_by_a_primitive_is_rejected() {
+        let err = EGraph::default()
+            .parse_and_run_program(
+                None,
+                "
+                (function f (i64 i64) i64 :merge old)
+                (index FOcc f (any 0 1 2))
+                (relation touched (i64 i64 i64))
+                (rule ((= v (+ 0 1)) (FOcc v p q r)) ((touched p q r)))
+                ",
+            )
+            .expect_err("a primitive does not bind a value the join can probe by");
+        assert!(
+            format!("{err}").contains("must be bound"),
+            "expected an unbound-index-value error, got {err}"
+        );
+    }
+
+    /// A literal is already known, so it needs no binder at all.
+    #[test]
+    fn an_index_may_be_probed_by_a_literal() {
+        EGraph::default()
+            .parse_and_run_program(
+                None,
+                "
+                (function f (i64 i64) i64 :merge old)
+                (index FOcc f (any 0 1 2))
+                (relation touched (i64 i64 i64))
+                (set (f 1 2) 3)
+                (rule ((FOcc 1 p q r)) ((touched p q r)))
+                (run 1)
+                (check (touched 1 2 3))
+                ",
+            )
+            .expect("a literal probe needs no binder");
     }
 }
