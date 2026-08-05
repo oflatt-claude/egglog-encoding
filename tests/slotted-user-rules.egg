@@ -78,10 +78,16 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
 
+
+;; TODO this is wrong because RenamesToLeader needs to be oriented to smaller ids
+;; Could use a TodoRenameToLeader or an egglog primitive
 (rule ((= e (App "f" m1 x m2 x))
        (= sym (compose (inverse m1) m2))  ; the symmetry m1*X = m2*X would need
        (RenamesToLeader x sym x))         ; ... and a lookup for whether X has it
       ((RenamesToLeader e m1 x)))         ; renamed union:  e = m1*X
+
+
+
 
 ;; the enumerate-then-compare spelling, as a cross-check
 (relation Enum (U U))
@@ -140,27 +146,36 @@
 ;;; U3. A multipattern whose two atoms bind the same variables.
 ;;;
 ;;;   (rule ((= p (App "f" x y))
-;;;          (= q (App "g" x y)))
+;;;          (= q (App "g" x y))
 ;;;         ((union p q)))
-;;;
-;;; Atom 1 is the initial atom, so `x` and `y` get pattern-slot renamings `p1`,
-;;; `q1`.  Atom 2's root `q` is a fresh variable, so nothing yet relates its
-;;; node's slots to the pattern's.  This is the paper's `mp'` (S3.6): the
-;;; minimal renaming making the node match, determined by the shared variables:
-;;;     mp' . p2 = p1 . sx      and      mp' . q2 = q1 . sy
-;;; which is what `find-mapping` computes; its injectivity check is the paper's
-;;; requirement that `mp` union `mp'` be bijective.  Solving and checking are
-;;; one operation -- the first shared variable defines `mp'`, each further one
-;;; constrains it.
-;;;
-;;; Note the contrast with U2.  There both renamings were bound, so the group
-;;; element could be computed and looked up.  Here `mp'` is the unknown and
-;;; every shared variable *contributes part of it*, so none can be demoted to a
-;;; lookup: until the last one is in, `mp'` is still partial and the remaining
-;;; constraints cannot even be evaluated.  `TooEager` below is that demotion,
-;;; and the tests show where it silently misses matches.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
+
+;; From Rudi: if you have N occurances of y you need N-1 symmetries. 
+;; Here we have N = 2
+;; Rudi version:
+
+(rule ((= p (App "f" p1 x q1 y))
+       (= q (App "g" p2 x q2 y))
+       ;; p1 * x = p2 * x,  so  x = p1^(-1) * p2 * x
+       (RenamesToLeader x (compose (inverse p1) p2) x)
+       (RenamesToLeader y (compose (inverse q1) q2) y)
+
+
+       ;; want something like r * p2 = p1, r * q2 = q1, but with symmetry
+       (= r (find-mapping (compose p1 sx) (compose q1 sy) p2 q2)))
+      )
+      (
+         (TodoSetRenamesToLeader q r p)
+      ))
+
+(App "f" {0 -> x} (Var 0) {0 -> y} (Var 0))
+(Add "g" {0 -> z} (Var 0) {0 -> j} (Var 0))
+
+(App "f" {0 -> x} (Var 0) {0 -> y} (Var 0)) = {x -> z, y -> j} (Add "g" (Var "z") (Var "j"))
+
+
+
 
 (rule ((= p (App "f" p1 x q1 y))
        (= q (App "g" p2 x q2 y))
@@ -345,5 +360,34 @@
 (run 20)
 (check (RenamesToLeader $P m $P) (= (map-length m) 2))
 (pop)
+
+(pop)
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;Another example without union but usting p and q
+;;; (rule ((= p (App "f" x y))
+;;;        (= q (App "g" x y)))
+;;;       ((Union' p q)))
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(push)
+
+
+;; prototype rule- does this work?
+(rule ((= p (App "f" p1 x q1 y))
+       (= q (App "g" p2 x q2 y))
+       ;; p1 * x = p2 * x,  so  x = p1^(-1) * p2 * x
+       (RenamesToLeader x sx x)
+       (RenamesToLeader y sy y)
+       (RenamesToLeader p s p)
+       (= r (find-mapping (compose p1 sx) (compose q1 sy) p2 q2)))
+      )
+      (
+         (Union' s p (compose s r) q)
+      ))
+
+
+(relation Union' (U U))
+
 
 (pop)

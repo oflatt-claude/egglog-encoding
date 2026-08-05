@@ -1,4 +1,4 @@
-
+;; Oliver's favorite encoding as july 2
 ;; Keeps track of a canonical renamed form for each eclass using a union-find table called
 ;; "RenamesToLeader".
 ;; The job of shape computation rules is to find collisions, pick one of them to be the leader, then add a RenamesToLeader entry for the other eclass to point to the leader, with the appropriate renaming.
@@ -19,15 +19,6 @@
 ;; `(RenamesToLeader follower m leader)` corresponds to `follower = m*leader`.
 ;; We require `leader <= follower` in terms of ordering-max.
 (relation RenamesToLeader (U Renaming U))
-
-;; `LiveId e` is the identity on e's *live* slots -- the class's own view of
-;; which slots it depends on.  On partial identities `compose` is intersection,
-;; so this merge only ever narrows: re-setting a wider value after a redundancy
-;; has been found is a no-op.  That is what makes re-derivation safe, and it is
-;; why self-edges are emitted from here rather than from a node's edges -- a
-;; node keeps slots its class has dropped, so a node-derived self-edge states
-;; something a later redundancy makes false.
-(function LiveId (U) Renaming :merge (compose old new))
 
 ; This is a basic object not depending on any variables.
 (constructor Null () U)
@@ -122,12 +113,9 @@
        (RenamesToLeader c2 sym' c2)
        (= m (compose m_o sym))
        (= m' (compose m'_o sym'))
-       (= sym_out (find-mapping m_o m'_o m m'))
-       (= live (LiveId e)))
+       (= sym_out (find-mapping m_o m'_o m m')))
       (
-        ;; restrict to the live slots, rather than emitting a node-wide map and
-        ;; leaving the shrinking rule to delete it afterwards
-        (RenamesToLeader e (compose live (compose sym_out live)) e)
+        (RenamesToLeader e sym_out e)
       )
 )
 
@@ -139,20 +127,10 @@
 (RenamesToLeader (Var 0) (map-insert (map-empty) 0 0) (Var 0))
 (RenamesToLeader (Null) (map-empty) (Null))
 
-;; bootstrap: a fresh node's slots are the best guess at its class's live slots
 (rule ((= e1 (App f m1 c1 m1' c2))
        (= m (find-mapping m1 m1' m1 m1')))
-      ((set (LiveId e1) m)))
-
-;; every idempotent self-edge is a statement about the live slots; the merge
-;; intersects, so redundancy narrows LiveId and never widens it
-(rule ((RenamesToLeader a m a)
-       (= m (compose m m)))
-      ((set (LiveId a) m)))
-
-;; ... and the self-edge is emitted from LiveId, so it is narrow by construction
-(rule ((= live (LiveId e)))
-      ((RenamesToLeader e live e)))
+      ((RenamesToLeader e1 m e1))
+)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Migration of e-nodes ;;
@@ -528,130 +506,5 @@
 (fail (check (RenamesToLeader $f m l)
              (RenamesToLeader l sym l)
              (!= sym (map-empty))))
-
-(pop)
-
-;;; Case 14- symmetric children are NOT normalized to equal edges.
-;;;
-;;; The machinery *records* symmetries, but it deliberately never rewrites a
-;;; node so that two edges pointing at the same symmetric child become
-;;; syntactically equal: the child-update rule guards with
-;;; `(or (bool-!= c1 c') (bool= (compose m m) m))`, which excludes exactly the
-;;; non-idempotent self-map case.  (If it did fire, it would materialize the
-;;; whole orbit of every node.)
-;;;
-;;; Consequence for user rules: a rule matching `f(x, x)` cannot ask for the
-;;; two edges to be equal.  It has to ask whether `m1^-1 . m2` is in the
-;;; child's group -- i.e. look up `(RenamesToLeader c sym c)`.
-
-;; (a) with a symmetric child, the edges stay different forever
-(push)
-
-(let $a01 (App "a" (map-insert (map-empty) 0 0) (Var 0)
-                   (map-insert (map-empty) 1 1) (Var 1)))
-(let $a10 (App "a" (map-insert (map-empty) 1 1) (Var 1)
-                   (map-insert (map-empty) 0 0) (Var 0)))
-(union $a01 $a10)                        ; a[$0,$1] = a[$1,$0]
-
-;; f(a[$0,$1], a[$1,$0]): both children are the *same renamed id*
-(let $t (App "f" (map-insert (map-insert (map-empty) 0 0) 1 1) $a01
-                 (map-insert (map-insert (map-empty) 0 1) 1 0) $a01))
-(run 20)
-
-;; `a` really did become symmetric
-(check (RenamesToLeader $a01 sym $a01)
-       (= (map-get sym 0) 1)
-       (= (map-get sym 1) 0))
-
-;; the node is there, with two DIFFERENT edges to one child
-(check (= $t (App "f" m1 c m2 c)) (!= m1 m2))
-
-;; and the two edges do denote the same renamed id -- but only via the group
-(check (= $t (App "f" m1 c m2 c))
-       (RenamesToLeader c sym c)
-       (= m2 (compose m1 sym)))
-
-;; ...while no variant with two syntactically equal edges is ever built
-(fail (check (= $t (App "f" m c m c))))
-(run 50)
-(fail (check (= $t (App "f" m c m c))))
-
-(pop)
-
-;; (b) with no symmetry the group is trivial, so the same test degenerates to
-;;     plain equality of the two edges -- nothing extra is paid for, and the
-;;     identity self-loop every e-class carries is what makes the lookup hit
-(push)
-
-(let $b01 (App "b" (map-insert (map-empty) 0 0) (Var 0)
-                   (map-insert (map-empty) 1 1) (Var 1)))
-(let $same (App "f" (map-insert (map-insert (map-empty) 0 0) 1 1) $b01
-                    (map-insert (map-insert (map-empty) 0 0) 1 1) $b01))
-(let $diff (App "f" (map-insert (map-insert (map-empty) 0 0) 1 1) $b01
-                    (map-insert (map-insert (map-empty) 0 1) 1 0) $b01))
-(run 20)
-
-;; b's only self-map is the identity
-(check (RenamesToLeader $b01 sym $b01) (= sym (map-insert (map-insert (map-empty) 0 0) 1 1)))
-(fail (check (RenamesToLeader $b01 sym $b01)
-             (!= sym (map-insert (map-insert (map-empty) 0 0) 1 1))))
-
-;; so the group test accepts the equal-edge node ...
-(check (= $same (App "f" m1 c m2 c))
-       (RenamesToLeader c sym c)
-       (= m2 (compose m1 sym)))
-
-;; ... and rejects the twisted one, which really is f(x, y) with x != y
-(fail (check (= $diff (App "f" m1 c m2 c))
-             (RenamesToLeader c sym c)
-             (= m2 (compose m1 sym))))
-
-(pop)
-
-;;; Case 15- a self-edge is a fact about the E-CLASS, not about its nodes.
-;;;
-;;; Redundancy means a node keeps a slot its class has dropped, so the identity
-;;; over a node's own edges is *wider* than the class's group identity.  A rule
-;;; that derives a self-edge from a node therefore derives something a later
-;;; redundancy makes false; the shrinking rule deletes it, but only once, since
-;;; semi-naive never re-runs the derivation.  The saturated state would then not
-;;; be a fixpoint -- re-ask and you get a different answer -- and anything that
-;;; makes the node look new again (a rebuild, a re-insert, or a newly added rule
-;;; matching App, which is exactly what a compiled user rule is) would bring the
-;;; wide edge back.
-;;;
-;;; The fix is `LiveId`: self-edges are emitted from the class's live-slot
-;;; identity, whose merge only narrows, so re-deriving is a no-op.
-;;;
-;;; NOTE: `WouldEmit` below is a verbatim copy of the symmetry-finder's body.
-;;; Keep the two in sync -- that is what makes this a fixpoint test.
-(push)
-
-(let $r1 (App "r" (map-insert (map-empty) 0 0) (Var 0) (map-insert (map-empty) 1 1) (Var 1)))
-(let $r2 (App "r" (map-insert (map-empty) 0 0) (Var 0) (map-insert (map-empty) 2 2) (Var 2)))
-(union $r1 $r2)                          ; slot 1 becomes redundant
-(run-schedule (saturate (run)))
-
-;; the node still mentions two slots ...
-(check (= $r1 (App "r" e1 c1 e2 c2)) (!= e1 e2))
-;; ... but the class, and its self-edge, are down to the one live slot
-(check (RenamesToLeader $r1 m $r1) (= (map-length m) 1))
-(check (= (LiveId $r1) m) (RenamesToLeader $r1 m $r1))
-
-(relation WouldEmit (U Renaming))
-(rule ((= e (App f m_o c1 m'_o c2))
-       (RenamesToLeader c1 sym c1)
-       (RenamesToLeader c2 sym' c2)
-       (= m (compose m_o sym))
-       (= m' (compose m'_o sym'))
-       (= sym_out (find-mapping m_o m'_o m m'))
-       (= live (LiveId e)))
-      ((WouldEmit e (compose live (compose sym_out live)))))
-(run 1)
-
-;; nothing wider than the live slots is wanted ...
-(fail (check (WouldEmit $r1 s) (= (map-length s) 2)))
-;; ... and what is wanted is exactly what is stored
-(check (WouldEmit $r1 s) (RenamesToLeader $r1 s $r1))
 
 (pop)
