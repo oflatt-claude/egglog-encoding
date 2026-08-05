@@ -90,8 +90,11 @@ fn renaming_compose(
         .collect()
 }
 
-/// The inverse map. A renaming is expected to be injective; if it is not, a
-/// later key wins.
+/// The inverse map. A renaming is a partial injection, so this is only
+/// meaningful on injective input; a repeated value keeps the last key, matching
+/// upstream. Unreachable in practice — every renaming the encoding builds comes
+/// from a literal, from `compose` of injectives, or from `find-mapping`, which
+/// checks injectivity.
 fn renaming_inverse(m: &BTreeMap<Value, Value>) -> BTreeMap<Value, Value> {
     m.iter().map(|(k, v)| (*v, *k)).collect()
 }

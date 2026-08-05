@@ -1,9 +1,9 @@
 # Encoding user rules into the slotted encoding
 
-Companion to `tests/slotted-manual-encoding.egg` (the machinery) and
+Companion to `tests/slotted-egraph-encoding-11.egg` (the machinery) and
 `tests/slotted-user-rules.egg` (hand-encoded user rules, all runnable).
-`slotted-encoding.md` describes an older design; see
-[Corrections to `slotted-encoding.md`](#corrections-to-slotted-encodingmd).
+See [Easy things to get wrong](#easy-things-to-get-wrong) for the design points
+an earlier draft of this encoding got backwards.
 
 Ground truth for the semantics is Schneider et al., *Slotted E-Graphs*, PLDI
 2025 ([PDF](https://steuwer.info/files/publications/2025/PLDI-Slotted-E-Graphs.pdf),
@@ -279,42 +279,64 @@ no constraint on `mp′` at all, so that node's slots would have to be freshly
 named outright. Rules whose RHS introduces a binder (eta-expansion) need this
 too.
 
-## Self-edges must come from the class, not from a node
+## Unresolved: self-edges are derived from nodes
 
-A rule that derives a self-edge from a node's own edges is wrong under
-redundancy, and the machinery originally had two of them.
+Flagging this as an open question, not a fixed bug — the evidence is thinner
+than it first looked.
 
-Redundancy is *defined* as a node keeping slots its class has dropped (Def. 4:
-slots in `im(m)` but not in `S`), so the identity over a node's edges is
-strictly wider than `G`'s identity. The wide edge got emitted, the shrinking
-rule deleted it, and it was never re-derived — only because semi-naive had
-already consumed that `App` row. The saturated state was therefore not a
-fixpoint: asking the same rule again gave a different answer, and anything that
-made the row look new (a rebuild, a re-insert, or **a newly added rule matching
-`App`, which is exactly what a compiled user rule is**) would bring it back.
-That would make the `(RenamesToLeader X sym X)` probe schedule-dependent, and
-its failure mode is a silently missed match.
+Two rules derive a self-edge from a node's own edges (`find-mapping m1 m1' m1
+m1'`, the identity on the node's slots). Redundancy is *defined* as a node
+keeping slots its class has dropped (Def. 4: slots in `im(m)` but not in `S`),
+so under redundancy those rules state something false about the class. The
+shrinking rule deletes the too-wide identity, but only once — semi-naive never
+re-runs a derivation on an already-consumed `App` row — so the saturated state
+is not a fixpoint of its own rules.
 
-The fix, now in the machinery file:
+It reproduces in eight lines. `(Null)` has no slots — that is asserted, not
+derived — yet a monotone observer catches it transiently carrying a two-slot
+identity:
 
 ```text
-(function LiveId (U) Renaming :merge (compose old new))
+(relation SymSeen (U Renaming))
+(rule ((RenamesToLeader c m c)) ((SymSeen c m)))
+
+(let $f (App "f" (map-insert (map-empty) 0 0) (Var 0)
+                 (map-insert (map-empty) 1 1) (Var 1)))
+(union $f (Null))                        ; both of $f's slots go redundant
+(run-schedule (saturate (run)))
+
+(check      (SymSeen (Null) (map-empty)))
+(fail (check (SymSeen (Null) m) (!= m (map-empty))))   ; fails: {$0↦$0,$1↦$1}
 ```
 
-On partial identities `compose` is intersection, so the merge only ever
-narrows and re-setting a wider value is a no-op. A node bootstraps its class's
-`LiveId`; every idempotent self-edge narrows it; self-edges are emitted *from*
-`LiveId`, and the symmetry-finder restricts its output through it
-(`compose live (compose sym_out live)`). Nothing is derived-and-deleted, so
-re-derivation is safe and the state no longer depends on evaluation order. The
-dedicated node-derived self-edge rule is gone — it was already subsumed by the
-symmetry-finder.
+Note the machinery's own Case 13 asserts the same thing about the *end* state
+and passes — the wide identity is deleted by then. The two differ only in
+whether they can see inside the phase.
 
-Case 15 of the machinery file pins this as a fixpoint test. The general lesson
-for the rewrite: **any derive/delete pair across two rules over the same table
-has this hazard**, and the machinery still has others (the α-finder deletes
-`App` rows, single-parent deletes `RenamesToLeader` rows). Prefer a merge that
-can only move one way over a rule that deletes what another rule derives.
+**Why it probably does not matter.** Two things came out of trying to turn this
+into a wrong answer, and both cut against acting on it:
+
+* A too-wide identity is *inert*. Every consumer of `RenamesToLeader c sym c`
+  uses `sym` by composing it with an edge, and once child-update has narrowed
+  the edges to the live slots, `compose edge wide == compose edge narrow`. Seven
+  scenarios — re-triggering the derivation after saturation, parents built
+  before the redundancy, fresh α-equivalent rows, interacting redundancies, the
+  U3 glue rule over a redundant shared variable — all came out byte-identical.
+* **Phasing hides it entirely.** The wide edge is only observable by a rule
+  co-scheduled with maintenance. Introduce the observer *after* the maintenance
+  phase and the check above passes, because `saturate`
+  runs to fixpoint and the shrinking rule wins by the end of every phase. So if
+  user rules run only at phase boundaries, this cannot reach them.
+
+A candidate fix exists — `LiveId`, a function whose merge intersects, so
+re-deriving a wider identity is absorbed instead of having to be deleted — but
+it is not recommended on this evidence and is not part of this change.
+
+What is worth carrying into a rewrite is the shape of the mistake, not the
+patch: **don't derive a class-level fact from a node**, and prefer a merge that
+can only move one way over two rules that derive-and-delete against each other.
+The machinery has other derive/delete pairs (the α-finder deletes `App` rows,
+single-parent deletes `RenamesToLeader` rows) that I have not examined.
 
 ## Cost sketch
 
@@ -325,34 +347,32 @@ with a `RenamesToLeader` *join* per variable it is constrained through; and one
 totality guard per action-used variable. Only the joins fan out, and
 `RenamesToLeader` is small — usually one self-loop per e-class.
 
-## Corrections to `slotted-encoding.md`
+## Easy things to get wrong
 
-That document predates the machinery file and disagrees with it in ways that
-matter:
+An earlier draft of this encoding (`slotted-encoding.md`, kept out of the
+branch as historical) got each of the following wrong. They are the places
+where a plausible reading of the design diverges from what the machinery
+actually does, so they are worth stating positively:
 
-* **Argument order.** It has `(constructor App (String U Renaming U Renaming) U)`
-  and `(relation RenamesToLeader (U U Renaming))`; the file has
+* **Argument order.** The renaming comes *before* each child, not after:
   `(App String Renaming U Renaming U)` and `(RenamesToLeader U Renaming U)`.
-* **Child rewrite direction.** It emits `(compose r_i (inverse R))`; the file
-  emits `(compose m1 m)` — the inverse is wrong given
+* **Child rewrite direction.** It is `(compose m1 m)`, not
+  `(compose r_i (inverse R))` — the inverse is wrong given
   `RenamesToLeader c1 m c'` meaning `c1 = m*c'`.
-* **Leaves.** It keeps distinct `Var` e-classes and adds a pair rule between
-  them; the file collapses every `(Var v)` to `[0↦v] * (Var 0)` and deletes the
-  original.
-* **No group anywhere.** Its α-finder, migration, and child-rewrite rules have
-  no `G` join, so they cannot see α-equivalences that hold only through a
+* **Leaves.** Every `(Var v)` collapses to `[0↦v] * (Var 0)` and the original
+  is deleted — the leaves are not kept as distinct e-classes with pair rules
+  between them.
+* **The group is load-bearing.** An α-finder, migration, or child-rewrite rule
+  written without a `G` join cannot see α-equivalences that hold only through a
   child's symmetry.
-* **Rule compilation.** Its §"What gets rewritten in user rules" emits
-  `(= path_i path_j)` for a variable reached by two paths. That is equality of
-  renamings, not `≡`; it should be `(= path_i (compose path_j sym))` with a `G`
-  join, or the lookup form above.
-* **`(union e x)`.** It has no notion of unioning renamed ids, so any rule
-  equating `m1 * a1` with `m2 * a2` for non-identity renamings is
-  inexpressible.
-* Its **open question 3** ("should we emit `(= path synthesized_head_identity)`
-  to force a head and a path to agree?") is answered yes, and the shape of the
-  answer is the general `≡` check: a variable used as both a head and a child is
-  just a variable with two occurrences.
+* **Rule compilation.** A variable reached by two paths does *not* compile to
+  `(= path_i path_j)`. That is equality of renamings, not `≡`; it has to be
+  `(= path_i (compose path_j sym))` with a `G` join, or the lookup form above.
+* **`(union e x)`.** Without a union over renamed ids, any rule equating
+  `m1 * a1` with `m2 * a2` for non-identity renamings is inexpressible.
+* **A head is not special.** A variable used as both a constructor head and a
+  child is just a variable with two occurrences, so it takes the same `≡` check
+  as any other repeat — no separate head-identity synthesis is needed.
 
 ## Primitives
 
@@ -367,8 +387,10 @@ macro instead of hand-rolled `Primitive` impls.
   * `map-union` — partial-map union for any `Map`, fails on a conflicting key.
   * `compose` — `(compose a b)[x] = a[b[x]]`; explicit partial maps, so a
     missing key means "no mapping", not identity.
-  * `inverse` (also `map-inverse`) — total; a renaming is expected to be
-    injective and a non-injective input just loses entries.
+  * `inverse` (also `map-inverse`) — total, matching upstream: a repeated value
+    keeps the last key. Only meaningful on injective input, which is all the
+    encoding ever builds. Making it fail instead changes no behaviour in any
+    test here, so the port keeps upstream's.
   * `find-mapping` — variadic, taking the two tuples flat as
     `[first…, second…]`; returns the least `R` with `R ∘ second[i] = first[i]`.
     Strict: a paired `(first[i], second[i])` must carry exactly the same key
