@@ -1,13 +1,14 @@
 #!/usr/bin/python3 -B
 
 # remaining issues:
-# - non-projective applier patterns
 # - symmetries
 # - redundancies (for later)
 
+import sys
+
 type SExpr = tuple[SExpr, ...] | str
 
-def parse(s: str) -> SExpr:
+def parse(s: str) -> [SExpr]:
     s = s.replace("\n", " ").replace("\t", " ").replace("(", " ( ").replace(")", " ) ")
     toks = [tok for tok in s.split(" ") if tok != ""]
     for i in range(len(toks))[::-1]:
@@ -17,8 +18,23 @@ def parse(s: str) -> SExpr:
                 j += 1
             new = tuple(toks[i+1:j])
             toks = toks[:i] + [new] + toks[j+1:]
-    assert(len(toks) == 1)
-    return toks[0]
+    return toks
+
+def find_vars(x, s):
+    if type(x) == str:
+        try:
+            int(x)
+            s.add(x)
+        except: pass
+    elif type(x) in [tuple, list]:
+        for xx in x:
+            find_vars(xx, s)
+    else:
+        crash(f"what is {x}?")
+
+def crash(x):
+    print(x, file=sys.stderr)
+    exit(1)
 
 def proplist_to_sexpr(l):
     rename = l[0]
@@ -26,29 +42,42 @@ def proplist_to_sexpr(l):
         rename = ("compose", rename, xx)
     return rename
 
+def transform_rule(rule):
+    if rule[0] == "rewrite":
+        return [transform_rewrite(rule)]
+    elif rule[0] == "let":
+        var = rule[1]
+        g, val = transform_rhs(rule[2], {})
+        constr = f"{var}_constr"
+        c_def = ("constructor", constr, "()", "U")
+        let_def = ("let", var, (constr,))
+        relate = ("Union", var, g, val)
+        return [c_def, let_def, relate]
+    elif rule[0] == "run":
+        return [rule]
+    elif rule[0] == "check":
+        return [rule]
+    else:
+        crash(f"transform_rule: unknown rule type {rule}")
+
 def transform_rhs(e, varmap): # returns GId
-    if e == "Null": return "identity", "Null"
+    if e == ("Null",): return "$global_identity", ("Null",)
+    elif len(e) == 2 and e[0] == "Var":
+        return ("map-insert", ("map-empty",), "0", e[1]), ("Var", "0")
     elif len(e) == 3 and e[0] == "App1":
         g2, e2 = transform_rhs(e[2], varmap)
-        return "identity", ("App1", e[1], g2, e2)
+        return "$global_identity", ("App1", e[1], g2, e2)
     elif len(e) == 4 and e[0] == "App2":
         g2, e2 = transform_rhs(e[2], varmap)
         g3, e3 = transform_rhs(e[3], varmap)
-        return "identity", ("App2", e[1], g2, e2, g3, e3)
+        return "$global_identity", ("App2", e[1], g2, e2, g3, e3)
     elif len(e) == 1 and type(v := e[0]) == str:
         return proplist_to_sexpr(varmap[v][0]), f"{v}_l"
     else:
-        print(f"what is {e}?")
-        raise "oh no"
+        crash(f"transform_rhs: what is {e}?")
 
-def transform_rewrite(rw):
-    assert(rw[0] == "rewrite")
-    assert(len(rw) == 3)
-    lhs = rw[1]
-    rhs = rw[2]
-
+def transform_searcher(lhs):
     lhs = stage1(lhs, [0], [], varmap := {})
-    g, new_rhs = transform_rhs(rhs, varmap)
 
     outs = []
     outs.append(("=", "this", lhs))
@@ -63,14 +92,22 @@ def transform_rewrite(rw):
             c = ("RenamesToLeader", vl, sym, vl)
             outs.append(c)
 
-    outs.append(("RenamesToLeader", "this", "identity", "this"))
-    outs.append(("=", "identity", ("compose", "identity", "identity")))
+    return outs, varmap
+
+def transform_rewrite(rw):
+    assert(rw[0] == "rewrite")
+    assert(len(rw) == 3)
+    lhs = rw[1]
+    rhs = rw[2]
+
+    outs, varmap = transform_searcher(lhs)
+    g, new_rhs = transform_rhs(rhs, varmap)
         
     return ("rule", tuple(outs), (("Union", "this", g, new_rhs),))
 
 # varmap["x"] = ["m1*m2", "m2*m3", ...]
 def stage1(e, ctr, prop, varmap):
-    if e == "Null": return "Null"
+    if e == ("Null",): return ("Null",)
     elif len(e) == 3 and e[0] == "App1":
         c = ctr[0]
         ctr[0] += 1
@@ -96,8 +133,7 @@ def stage1(e, ctr, prop, varmap):
         varmap[v].append(prop)
         return f"{v}_l"
     else:
-        print(f"what is {e}?")
-        raise "oh no"
+        crash(f"stage1: what is {e}?")
 
 def size(e):
     if isinstance(e, str): return 1
@@ -117,10 +153,21 @@ def pretty_print(expr: SExpr, indent=0):
     
     return f"({head}\n{spacing}{tail})"
 
+def define_global_identity(parsed):
+    find_vars(parsed, s := set())
+    d = ("map-empty",)
+    for x in s:
+        d = ("map-insert", d, x, x)
+
+    print(pretty_print(("let", "$global_identity", d)))
+
 import sys
 filename = sys.argv[1]
 content = open(filename).read()
 
 parsed = parse(content)
-compiled = transform_rewrite(parsed)
-print(pretty_print(compiled))
+define_global_identity(parsed)
+
+for x in parsed:
+    for x in transform_rule(x):
+        print(pretty_print(x))
