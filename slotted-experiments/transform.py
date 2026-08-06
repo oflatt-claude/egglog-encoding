@@ -27,8 +27,7 @@ def proplist_to_sexpr(l):
     return rename
 
 def transform_rhs(e, varmap): # returns GId
-    if len(e) == 1 and e[0] == "Null":
-        return "identity", "Null"
+    if e == "Null": return "identity", "Null"
     elif len(e) == 3 and e[0] == "App1":
         g2, e2 = transform_rhs(e[2], varmap)
         return "identity", ("App1", e[1], g2, e2)
@@ -71,8 +70,7 @@ def transform_rewrite(rw):
 
 # varmap["x"] = ["m1*m2", "m2*m3", ...]
 def stage1(e, ctr, prop, varmap):
-    if len(e) == 1 and e[0] == "Null":
-        return ("Null",)
+    if e == "Null": return "Null"
     elif len(e) == 3 and e[0] == "App1":
         c = ctr[0]
         ctr[0] += 1
@@ -119,11 +117,10 @@ def pretty_print(expr: SExpr, indent=0):
     
     return f"({head}\n{spacing}{tail})"
 
-rw = '''
-(rewrite
-    (App2 "f" x (App1 "f" x))
-    (App1 "g" x)
-)
-'''
+import sys
+filename = sys.argv[1]
+content = open(filename).read()
 
-print(pretty_print(transform_rewrite(parse(rw))))
+parsed = parse(content)
+compiled = transform_rewrite(parsed)
+print(pretty_print(compiled))

@@ -1,0 +1,4 @@
+(rewrite
+    (App2 "f" x (App2 "f" x (Null)))
+    (App2 "g" x (Null))
+)
