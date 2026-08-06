@@ -78,6 +78,74 @@ fn normalize_map_term(termdag: &mut TermDag, args: &[TermId]) -> Option<TermId> 
     Some(termdag.app("map-of".to_string(), flat))
 }
 
+/// `a ∘ b`, the map sending `x` to `a[b[x]]`: `b` applies first. Undefined
+/// wherever either step is, so the result is keyed on
+/// `{x ∈ dom(b) | b[x] ∈ dom(a)}`.
+fn renaming_compose(
+    a: &BTreeMap<Value, Value>,
+    b: &BTreeMap<Value, Value>,
+) -> BTreeMap<Value, Value> {
+    b.iter()
+        .filter_map(|(x, y)| a.get(y).map(|z| (*x, *z)))
+        .collect()
+}
+
+/// The inverse map. A renaming is a partial injection, so this is only
+/// meaningful on injective input; a repeated value keeps the last key, matching
+/// upstream. Unreachable in practice — every renaming the encoding builds comes
+/// from a literal, from `compose` of injectives, or from `find-mapping`, which
+/// checks injectivity.
+fn renaming_inverse(m: &BTreeMap<Value, Value>) -> BTreeMap<Value, Value> {
+    m.iter().map(|(k, v)| (*v, *k)).collect()
+}
+
+/// Union of partial maps; `None` if they disagree on a shared key.
+fn renaming_union(
+    a: &BTreeMap<Value, Value>,
+    b: &BTreeMap<Value, Value>,
+) -> Option<BTreeMap<Value, Value>> {
+    let mut out = a.clone();
+    for (k, v) in b {
+        if out.insert(*k, *v).is_some_and(|old| old != *v) {
+            return None;
+        }
+    }
+    Some(out)
+}
+
+/// The least renaming `R` with `R ∘ second[i] = first[i]` for every `i`, given
+/// the two halves flat as `[first..., second...]`.
+///
+/// Renamings are explicit partial maps, so a paired `(first[i], second[i])`
+/// must carry exactly the same key set: a missing key means "no mapping", not
+/// "identity". Each shared key `k` contributes `R(second[i][k]) = first[i][k]`.
+///
+/// `None` when the halves are unequal in length, when a pair's key sets
+/// differ, or when the constraints make `R` non-functional or non-injective.
+fn renaming_find_mapping(maps: &[BTreeMap<Value, Value>]) -> Option<BTreeMap<Value, Value>> {
+    if !maps.len().is_multiple_of(2) {
+        return None;
+    }
+    let (first, second) = maps.split_at(maps.len() / 2);
+
+    let mut mapping = BTreeMap::new();
+    let mut inverse = BTreeMap::new();
+    for (m1, m2) in first.iter().zip(second) {
+        if m1.len() != m2.len() || !m1.keys().eq(m2.keys()) {
+            return None;
+        }
+        for ((_, v1), (_, v2)) in m1.iter().zip(m2) {
+            if mapping.insert(*v2, *v1).is_some_and(|prev| prev != *v1) {
+                return None;
+            }
+            if inverse.insert(*v1, *v2).is_some_and(|prev| prev != *v2) {
+                return None;
+            }
+        }
+    }
+    Some(mapping)
+}
+
 /// A map from a key type to a value type supporting these primitives:
 /// - `map-empty`
 /// - `map-insert`
@@ -86,6 +154,16 @@ fn normalize_map_term(termdag: &mut TermDag, args: &[TermId]) -> Option<TermId> 
 /// - `map-not-contains`
 /// - `map-remove`
 /// - `map-length`
+/// - `map-union`
+///
+/// When the key and value sorts coincide, a map also reads as a partial
+/// injection on a single space (a "renaming"), and these are registered too:
+/// - `compose`
+/// - `inverse` (also spelled `map-inverse`)
+/// - `find-mapping`
+///
+/// Those three are not in [`Presort::reserved_primitives`], so a program that
+/// never declares a `Map` sort may still use the names itself.
 #[derive(Clone, Debug)]
 pub struct MapSort {
     name: String,
@@ -251,6 +329,26 @@ impl ContainerSort for MapSort {
         add_primitive_with_validator!(eg, "map-length"       = |xs: @MapContainer (arc)| -> i64 { xs.data.len() as i64 }, map_length_validator);
         add_primitive_with_validator!(eg, "map-contains"     = |xs: @MapContainer (arc), x: # (self.key())| -?> () { ( xs.data.contains_key(&x)).then_some(()) }, map_contains_validator);
         add_primitive_with_validator!(eg, "map-not-contains" = |xs: @MapContainer (arc), x: # (self.key())| -?> () { (!xs.data.contains_key(&x)).then_some(()) }, map_not_contains_validator);
+
+        add_primitive!(eg, "map-union" = |xs: @MapContainer (arc), ys: @MapContainer (arc)| -?> @MapContainer (arc) { Some(MapContainer { data: renaming_union(&xs.data, &ys.data)?, ..xs }) });
+
+        // With matching key and value sorts a map is a partial injection on one
+        // space — a renaming, in the slotted-e-graph sense — so it composes and
+        // inverts. `find-mapping` solves for the renaming carrying one tuple of
+        // edges onto another; it is variadic, taking the two tuples flat.
+        if self.key.name() == self.value.name() {
+            add_primitive!(eg, "compose" = |a: @MapContainer (arc), b: @MapContainer (arc)| -> @MapContainer (arc) { MapContainer { data: renaming_compose(&a.data, &b.data), ..b } });
+            add_primitive!(eg, "inverse"     = |a: @MapContainer (arc)| -> @MapContainer (arc) { MapContainer { data: renaming_inverse(&a.data), ..a } });
+            add_primitive!(eg, "map-inverse" = |a: @MapContainer (arc)| -> @MapContainer (arc) { MapContainer { data: renaming_inverse(&a.data), ..a } });
+            add_primitive!(eg, "find-mapping" = {self.clone(): MapSort} [xs: @MapContainer (arc)] -?> @MapContainer (arc) {{
+                let maps: Vec<BTreeMap<Value, Value>> = xs.map(|m| m.data).collect();
+                Some(MapContainer {
+                    do_rebuild_keys: self.ctx.key.is_eq_sort() || self.ctx.key.is_eq_container_sort(),
+                    do_rebuild_vals: self.ctx.value.is_eq_sort() || self.ctx.value.is_eq_container_sort(),
+                    data: renaming_find_mapping(&maps)?,
+                })
+            }});
+        }
     }
 
     fn reconstruct_termdag(
