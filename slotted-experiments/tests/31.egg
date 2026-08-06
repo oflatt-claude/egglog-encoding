@@ -1,0 +1,26 @@
+; Scale.  Associativity plus commutativity over five variables -- the standard
+; e-graph stress test, and the case slotted e-graphs are supposed to be *better*
+; at, since all the two-slot sums share one e-class.
+; Currently: fine at (run 5), does not finish in 180s at (run 8).
+
+(rewrite
+    (App2 "add" x y)
+    (App2 "add" y x)
+)
+
+(rewrite
+    (App2 "add" x (App2 "add" y z))
+    (App2 "add" (App2 "add" x y) z)
+)
+
+(rewrite
+    (App2 "add" (App2 "add" x y) z)
+    (App2 "add" x (App2 "add" y z))
+)
+
+(let $a (App2 "add" (App2 "add" (App2 "add" (App2 "add" (Var 0) (Var 1)) (Var 2)) (Var 3)) (Var 4)))
+(let $b (App2 "add" (App2 "add" (App2 "add" (App2 "add" (Var 4) (Var 3)) (Var 2)) (Var 1)) (Var 0)))
+
+(run 8)
+
+(check (= $a $b))

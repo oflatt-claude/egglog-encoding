@@ -8,7 +8,21 @@ import sys
 
 type SExpr = tuple[SExpr, ...] | str
 
+def strip_comments(s: str) -> str:
+    out = []
+    for line in s.split("\n"):
+        in_str = False
+        for i, ch in enumerate(line):
+            if ch == '"':
+                in_str = not in_str
+            elif ch == ';' and not in_str:
+                line = line[:i]
+                break
+        out.append(line)
+    return "\n".join(out)
+
 def parse(s: str) -> [SExpr]:
+    s = strip_comments(s)
     s = s.replace("\n", " ").replace("\t", " ").replace("(", " ( ").replace(")", " ) ")
     toks = [tok for tok in s.split(" ") if tok != ""]
     for i in range(len(toks))[::-1]:
