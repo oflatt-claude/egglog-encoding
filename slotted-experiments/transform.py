@@ -57,6 +57,8 @@ def transform_rule(rule):
         return [rule]
     elif rule[0] == "check":
         return [rule]
+    elif rule[0] == "union":
+        return [rule]
     else:
         crash(f"transform_rule: unknown rule type {rule}")
 
