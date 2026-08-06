@@ -857,7 +857,8 @@ fn hash_key(key: &[Value]) -> u64 {
 /// Implemented as an read-optimized key-value arrays, which should be faster
 /// than concurrent hashmaps as long as # indices is smaller than say 64.
 ///
-/// For simplicity we assume the index can be cloned cheaply, e.g., it's behind an [`Arc`].
+/// For simplicity we assume the index can be cloned cheaply, e.g., it's behind an
+/// [`Arc`](std::sync::Arc).
 #[derive(Default)]
 pub struct IndexCatalog<K: Clone + std::hash::Hash + Eq, I: Clone> {
     data: ReadOptimizedLock<Vec<(K, I)>>,
