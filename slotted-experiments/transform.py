@@ -26,6 +26,22 @@ def proplist_to_sexpr(l):
         rename = ("compose", rename, xx)
     return rename
 
+def transform_rhs(e, varmap): # returns GId
+    if len(e) == 1 and e[0] == "Null":
+        return "identity", "Null"
+    elif len(e) == 3 and e[0] == "App1":
+        g2, e2 = transform_rhs(e[2], varmap)
+        return "identity", ("App1", e[1], g2, e2)
+    elif len(e) == 4 and e[0] == "App2":
+        g2, e2 = transform_rhs(e[2], varmap)
+        g3, e3 = transform_rhs(e[3], varmap)
+        return "identity", ("App2", e[1], g2, e2, g3, e3)
+    elif len(e) == 1 and type(v := e[0]) == str:
+        return proplist_to_sexpr(varmap[v][0]), f"{v}_l"
+    else:
+        print(f"what is {e}?")
+        raise "oh no"
+
 def transform_rewrite(rw):
     assert(rw[0] == "rewrite")
     assert(len(rw) == 3)
@@ -33,14 +49,10 @@ def transform_rewrite(rw):
     rhs = rw[2]
 
     lhs = stage1(lhs, [0], [], varmap := {})
-
-    # for now we assume rhs is a variable from lhs.
-    assert(rhs in varmap)
-    l = varmap[rhs][0]
-    rename = proplist_to_sexpr(l)
-    new_rhs = rhs + "_l"
+    g, new_rhs = transform_rhs(rhs, varmap)
 
     outs = []
+    outs.append(("=", "this", lhs))
     for v, ll in varmap.items():
         canon = ll[0]
         for l in ll[1:]:
@@ -51,8 +63,11 @@ def transform_rewrite(rw):
             vl = v + "_l"
             c = ("RenamesToLeader", vl, sym, vl)
             outs.append(c)
+
+    outs.append(("RenamesToLeader", "this", "identity", "this"))
+    outs.append(("=", "identity", ("compose", "identity", "identity")))
         
-    return ("rule", tuple([lhs] + outs), (("Union", lhs, rename, new_rhs),))
+    return ("rule", tuple(outs), (("Union", "this", g, new_rhs),))
 
 # varmap["x"] = ["m1*m2", "m2*m3", ...]
 def stage1(e, ctr, prop, varmap):
@@ -107,7 +122,7 @@ def pretty_print(expr: SExpr, indent=0):
 rw = '''
 (rewrite
     (App2 "f" x (App1 "f" x))
-    x
+    (App1 "g" x)
 )
 '''
 
