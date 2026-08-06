@@ -19,4 +19,6 @@
 
 (run 10)
 
+(check (= $a $b))
 (check (= $c $d))
+(fail (check (= $a $c)))

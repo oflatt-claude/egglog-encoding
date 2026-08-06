@@ -57,6 +57,8 @@ def transform_rule(rule):
         return [rule]
     elif rule[0] == "check":
         return [rule]
+    elif rule[0] == "fail":
+        return [rule]
     elif rule[0] == "union":
         return [rule]
     else:
