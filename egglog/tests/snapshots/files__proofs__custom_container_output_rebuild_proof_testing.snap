@@ -4,13 +4,14 @@ expression: proof_snapshot
 ---
 (let t0 (freer (N 0) (set-of (N 1))))
 (let t1 (freer (N 0) (set-of (N 2))))
-(let prf0
+(let prf0 (Fiat (= t1 t1)))
+(let prf1
   (Congr
             (= t1 t0)
-            (Fiat (= t1 t1))
+            prf0
             (Congr
               (= (set-of (N 2)) (set-of (N 1)))
-              (Fiat (= (set-of (N 2)) (set-of (N 2))))
+              (Proj (= (set-of (N 2)) (set-of (N 2))) prf0 1)
               (Sym (= (N 2) (N 1)) (Fiat (= (N 1) (N 2))))
               0)
             1))
@@ -18,7 +19,7 @@ expression: proof_snapshot
   (= (@ExistsConstructor) (@ExistsConstructor))
   (name "@prove_exists_rule")
   (premises
-    (Trans (= t0 t0) (Sym (= t0 t1) prf0) prf0)
+    (Trans (= t0 t0) (Sym (= t0 t1) prf1) prf1)
     (Fiat (= (N 1) (N 1)))
     (Eval))
   (substitution (@n (set-of (N 1))) (@v (N 1))))
@@ -26,13 +27,14 @@ expression: proof_snapshot
 (let t1 (freer (N 0) t0))
 (let t2 (freer (N 0) (set-of (N 1))))
 (let t3 (freer (N 0) (set-of (N 2))))
-(let prf0
+(let prf0 (Fiat (= t3 t3)))
+(let prf1
   (Congr
               (= t3 t2)
-              (Fiat (= t3 t3))
+              prf0
               (Congr
                 (= (set-of (N 2)) (set-of (N 1)))
-                (Fiat (= (set-of (N 2)) (set-of (N 2))))
+                (Proj (= (set-of (N 2)) (set-of (N 2))) prf0 1)
                 (Sym (= (N 2) (N 1)) (Fiat (= (N 1) (N 2))))
                 0)
               1))
@@ -44,7 +46,7 @@ expression: proof_snapshot
     (Merge
       (= t1 t1)
       freer
-      (Trans (= t2 t2) (Sym (= t2 t3) prf0) prf0)
+      (Trans (= t2 t2) (Sym (= t2 t3) prf1) prf1)
       (Fiat (= t4 t4)))
     (Fiat (= (N 1) (N 1)))
     (Fiat (= (N 3) (N 3)))

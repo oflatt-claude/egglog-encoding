@@ -11,11 +11,9 @@
 //! of each subterm the head interned. A row's column indexes straight into what
 //! comes back.
 //!
-//! [`HeadPlan`] is the head as the encoder lowers it, read by both walks. The
-//! compositions themselves are written once, over [`ProofAlgebra`]: this walk
-//! applies them to proof nodes, and the encoder to the proof variables it emits
-//! wherever it composes rather than records — a top-level action or a merge
-//! body. [`ProofSite`] says which of those two the encoder is doing.
+//! [`HeadPlan`] is the head as the encoder lowers it, read by both walks;
+//! [`ProofAlgebra`] holds the compositions they share, and [`Head`] says which
+//! of the encoder's two composing sites it is at (see `proof_encoding.md`).
 
 use crate::{
     TermId,
@@ -203,7 +201,7 @@ impl HeadLayout {
 
 /// Which of the encoding's two layers the encoder is lowering under (see the
 /// *Proofs* part of `proof_encoding.md`).
-pub(crate) enum ProofSite {
+enum ProofSite {
     /// No rule head to replay: a top-level action, a merge body, or a position
     /// inside a head that concludes nothing — a `change` argument.
     Composed,
@@ -215,27 +213,54 @@ pub(crate) enum ProofSite {
     },
 }
 
-impl ProofSite {
+/// One block of actions as the encoder lowers it: which layer its statements
+/// are on, and what its next rule proof row chains onto. One is made per block,
+/// so nothing it holds reaches the next.
+pub(crate) struct Head {
+    site: ProofSite,
+    /// The last rule proof row this head minted.
+    last: Option<String>,
+    /// The row minted just before the head's newest interning, carrying every
+    /// bridge before that one, and that interning's bridge — the interned
+    /// subterm's view-row proof. `None` until the head interns something.
+    link: Option<(String, String)>,
+}
+
+impl Head {
     /// A rule head laid out by `layout`, before its first position.
-    pub(crate) fn skeleton(layout: HeadLayout) -> ProofSite {
-        ProofSite::Skeleton {
+    pub(crate) fn skeleton(layout: HeadLayout) -> Head {
+        Head::at(ProofSite::Skeleton {
             layout,
             next_position: 0,
+        })
+    }
+
+    /// A block with no rule head to replay, whose proofs are composed on the
+    /// spot.
+    pub(crate) fn composed() -> Head {
+        Head::at(ProofSite::Composed)
+    }
+
+    fn at(site: ProofSite) -> Head {
+        Head {
+            site,
+            last: None,
+            link: None,
         }
     }
 
     /// Whether the proofs here are composed on the spot rather than numbered.
     pub(crate) fn composes(&self) -> bool {
-        matches!(self, ProofSite::Composed)
+        matches!(self.site, ProofSite::Composed)
     }
 
     /// Claim the columns of the next position, which must be a `position`, or
-    /// `None` where the site composes instead of numbering.
+    /// `None` where the head composes instead of numbering.
     pub(crate) fn claim(&mut self, position: HeadPosition) -> Option<HeadRun> {
         let ProofSite::Skeleton {
             layout,
             next_position,
-        } = self
+        } = &mut self.site
         else {
             return None;
         };
@@ -248,6 +273,41 @@ impl ProofSite {
         );
         *next_position += 1;
         Some(run)
+    }
+
+    /// Run `lower` at a position the head concludes nothing about — a `change`
+    /// argument — whose proofs compose rather than claim columns. The head's
+    /// numbering resumes afterwards, over the same chain.
+    pub(crate) fn composing<R>(&mut self, lower: impl FnOnce(&mut Head) -> R) -> R {
+        let numbered = std::mem::replace(&mut self.site, ProofSite::Composed);
+        let lowered = lower(self);
+        self.site = numbered;
+        lowered
+    }
+
+    /// What the next rule proof row chains onto, per [`Self::record_bridge`].
+    pub(crate) fn link(&self) -> Option<(String, String)> {
+        self.link.clone()
+    }
+
+    /// Record `proof` as the head's newest rule proof row.
+    pub(crate) fn minted(&mut self, proof: &str) {
+        self.last = Some(proof.to_string());
+    }
+
+    /// Record a subterm's view-row proof as a bridge premise of the rule proofs
+    /// minted from here on. A composing position records nothing: it has already
+    /// used the proof, and a subterm the head concludes nothing about — a nested
+    /// `change` argument — is not in the array conversion rebuilds.
+    pub(crate) fn record_bridge(&mut self, view_proof: &str) {
+        if self.composes() {
+            return;
+        }
+        let prev = self
+            .last
+            .clone()
+            .expect("a head states the term it is interning before interning it");
+        self.link = Some((prev, view_proof.to_string()));
     }
 }
 

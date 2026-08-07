@@ -510,6 +510,20 @@ impl EGraph {
             }
         );
 
+        add_primitive_with_validator!(
+            &mut eg,
+            "bool=" = |a: #, b: #| -> bool {
+                (a == b)
+            },
+            |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
+                if args.len() == 2 {
+                    Some(termdag.lit(Literal::Bool(args[0] == args[1])))
+                } else {
+                    None
+                }
+            }
+        );
+
         add_primitive!(&mut eg, "value-eq" = |a: #, b: #| -?> () {
             (a == b).then_some(())
         });
@@ -551,6 +565,13 @@ impl EGraph {
         eg.add_pure_primitive(
             proofs::proof_encoding_helpers::SelectEqProof,
             Some(select_eq_validator),
+        );
+        // `drop-reflexive-step` narrows a view rebuild's packed-row spelling to
+        // the steps that moved; see
+        // [`crate::proofs::proof_encoding_helpers::DropReflexiveStep`].
+        eg.add_pure_primitive(
+            proofs::proof_encoding_helpers::DropReflexiveStep::default(),
+            None,
         );
 
         eg.rulesets
@@ -2016,7 +2037,6 @@ impl EGraph {
             ResolvedNCommand::Sort {
                 name,
                 uf,
-                proof_func,
                 proof_constructors,
                 ..
             } => {
@@ -2025,13 +2045,6 @@ impl EGraph {
                     self.proof_state
                         .uf_parent
                         .insert(name.clone(), uf_ctor.clone());
-                }
-                // If the sort has a :internal-proof-func field, store the mapping for proof lookup.
-                // This annotation is set by proof instrumentation and consumed here.
-                if let Some(proof_func_name) = proof_func {
-                    self.proof_state
-                        .proof_func_parent
-                        .insert(name.clone(), proof_func_name);
                 }
                 // The Proof sort's :internal-proof-names records the global proof
                 // constructors; restore them so container rebuild can recover them.
@@ -2045,7 +2058,9 @@ impl EGraph {
                     names.container_normalize_constructor = pc.normalize;
                     // Recovered so `native_input` can build `(input …)` base-fact
                     // proofs when replaying an encoded program in a fresh e-graph.
-                    names.fiat_constructor = pc.fiat;
+                    names.fiat_prefix = pc.fiat;
+                    names.proj_constructor = pc.proj;
+                    names.proj_all_prefix = pc.proj_all;
                 }
                 log::info!("Declared sort {name}.")
             }
@@ -2391,6 +2406,11 @@ impl EGraph {
     }
 
     fn input_file(&mut self, span: Span, func_name: &str, file: String) -> Result<(), Error> {
+        // A declared index has a function type but no table of its own to load
+        // rows into.
+        if self.type_info.indexes.contains_key(func_name) {
+            return Err(TypeError::IndexIsReadOnly(func_name.to_owned(), span).into());
+        }
         let function_type = self
             .type_info
             .get_func_type(func_name)
@@ -2463,8 +2483,8 @@ impl EGraph {
     }
 
     /// Load `(input …)` facts natively into the term/proof encoding's tables. For
-    /// each row we mint a term id (and, when the encoding carries proofs, its AST +
-    /// fiat-proof ids) and insert the encoded term-relation, view, and proof rows
+    /// each row we mint a term id (and, when the encoding carries proofs, its
+    /// fiat-proof id) and insert the encoded term-relation, view, and proof rows
     /// directly. Rows are plain-inserted (no get-or-insert): a duplicate view key
     /// is left to the view's merge/no-merge handling. The proof checker keeps using
     /// the per-row top-level fiat actions (`desugared_before_proofs`); this just
@@ -2475,12 +2495,11 @@ impl EGraph {
     /// replayed in a fresh e-graph. `func_name` names the encoded *term relation*;
     /// the encoded shape is read off the term and view schemas:
     /// * constructor / relation (`term_inputs == view_inputs + 1`) — term row
-    ///   `(F children… term-id) Unit`, FD view `(children…) -> (term-id, proof)`,
-    ///   and the term id's `<Sort>Proof` row.
+    ///   `(F children… term-id) Unit` and FD view `(children…) -> (term-id,
+    ///   proof)`.
     /// * custom `:merge` / `:no-merge` (`term_inputs == view_inputs + 2`) — term
     ///   row `(f children… output term-id) Unit` and view row `(children… output
-    ///   proof)`; the proof lives only in the view (a custom's fresh term sort has
-    ///   no `<Sort>Proof`).
+    ///   proof)`.
     fn native_input(&mut self, span: Span, func_name: &str, file: String) -> Result<(), Error> {
         // The encoded term relation keeps the user's original name. Its last input
         // column is the minted term id; the columns before it are the CSV base
@@ -2533,32 +2552,14 @@ impl EGraph {
             })
             .collect();
 
-        // Proof tables: `Fiat` from the `Proof` sort's `:internal-proof-names`,
-        // the term-id sort's AST constructor by its `(<sort> <Ast>) -> Unit`
-        // signature, and (constructors only) `<Sort>Proof` from the term-id
-        // sort's `:internal-proof-func`.
-        let proof_tables = proofs.then(|| {
-            let fiat = self.proof_state.proof_names.fiat_constructor.clone();
-            let fiat_fn = &self.functions[&fiat];
-            let fiat_id = fiat_fn.backend_id;
-            let ast_sort = fiat_fn.schema.input[0].name().to_string();
-            let ast_id = self
-                .functions
-                .values()
-                .find(|g| {
-                    g.decl.internal_hidden
-                        && g.schema.input.len() == 2
-                        && g.schema.input[0].name() == term_id_sort
-                        && g.schema.input[1].name() == ast_sort
-                        && g.schema.output().name() == "Unit"
-                })
-                .unwrap_or_else(|| panic!("no AST constructor for sort {term_id_sort}"))
-                .backend_id;
-            let proof_func_id = is_constructor.then(|| {
-                let pf = self.proof_state.proof_func_parent[&term_id_sort].clone();
-                self.functions[&pf].backend_id
-            });
-            (ast_id, fiat_id, proof_func_id)
+        // The term-id sort's fiat relation, named off the prefix the `Proof`
+        // sort's `:internal-proof-names` records.
+        let fiat_table = proofs.then(|| {
+            let fiat = self.proof_state.proof_names.fiat(&term_id_sort);
+            self.functions
+                .get(&fiat)
+                .unwrap_or_else(|| panic!("no fiat relation for sort {term_id_sort}"))
+                .backend_id
         });
 
         let num_facts = value_rows.len();
@@ -2571,17 +2572,11 @@ impl EGraph {
             frow.push(unit_val);
             batch.push((f_id, frow));
 
-            let view_proof = if let Some((ast_id, fiat_id, proof_func_id)) = proof_tables {
-                // Fiat proof of the base fact: `@Fiat(ast(fv), ast(fv))`.
-                let a1 = self.backend.fresh_id();
-                batch.push((ast_id, vec![fv, a1, unit_val]));
-                let a2 = self.backend.fresh_id();
-                batch.push((ast_id, vec![fv, a2, unit_val]));
+            let view_proof = if let Some(fiat_id) = fiat_table {
+                // Fiat proof of the base fact: `@Fiat_<Sort>(fv, fv)` (see
+                // `fiat_reflexive_proof`).
                 let pf = self.backend.fresh_id();
-                batch.push((fiat_id, vec![a1, a2, pf, unit_val]));
-                if let Some(proof_func_id) = proof_func_id {
-                    batch.push((proof_func_id, vec![fv, pf]));
-                }
+                batch.push((fiat_id, vec![fv, fv, pf, unit_val]));
                 pf
             } else {
                 unit_val
@@ -3433,7 +3428,7 @@ impl<'a> BackendRule<'a> {
     }
 
     /// An index atom is probed, never scanned, so the value it is looked up by
-    /// must be bound elsewhere in the query.
+    /// must be bound elsewhere in the query. A literal needs no binder.
     fn check_index_value_is_bound(
         &self,
         index: &crate::typechecking::FuncType,
@@ -3453,14 +3448,26 @@ impl<'a> BackendRule<'a> {
         {
             return Ok(());
         }
-        let bound_elsewhere = query.atoms.iter().any(|other| {
-            !std::ptr::eq(other, atom)
-                && !matches!(&other.head,
-                    ResolvedCall::Func(f) if self.type_info.indexes.contains_key(&f.name))
-                && other.args.iter().any(
+        let bound_elsewhere =
+            query.atoms.iter().any(|other| {
+                if std::ptr::eq(other, atom) {
+                    return false;
+                }
+                // Only a function's rows bind a value the join can probe by. A body
+                // primitive runs once per match, after the join, so the value it
+                // computes is not available as a lookup key.
+                let ResolvedCall::Func(f) = &other.head else {
+                    return false;
+                };
+                // Another index atom binds through its row columns like any other
+                // atom, but not through the value it is itself probed by: two index
+                // atoms naming each other there would each look bound with neither
+                // reachable.
+                let probed = self.type_info.indexes.contains_key(&f.name);
+                other.args.iter().skip(usize::from(probed)).any(
                     |arg| matches!(arg, core::GenericAtomTerm::Var(_, v) if v.name == value.name),
                 )
-        });
+            });
         if bound_elsewhere {
             return Ok(());
         }
@@ -4446,5 +4453,85 @@ mod tests {
             )
             .unwrap_err();
         assert!(matches!(err, Error::IoError(..)));
+    }
+}
+
+#[cfg(test)]
+mod index_binding_tests {
+    use crate::*;
+
+    /// The header every case below shares: one function and an index over all
+    /// three of its columns.
+    const INDEXED: &str = "
+        (datatype Math (Num i64))
+        (function edge (Math Math) Math :merge old)
+        (index EdgeOcc edge (any 0 1 2))
+        (relation dirty (Math))
+        (relation touched (Math Math Math))
+    ";
+
+    fn run(rule: &str) -> Result<(), Error> {
+        EGraph::default().parse_and_run_program(None, &format!("{INDEXED}{rule}"))?;
+        Ok(())
+    }
+
+    /// An index is probed, so its value has to be bound — but a *row column* of
+    /// another index atom binds like any other atom's column.
+    #[test]
+    fn an_index_value_may_come_from_another_indexs_row() {
+        run("(rule ((dirty x) (EdgeOcc x p q r) (EdgeOcc q s t u)) ((touched s t u)))")
+            .expect("the second index is probed by a column the first one bound");
+    }
+
+    /// The value an index is probed by does not bind: two atoms naming each
+    /// other there would each look bound with neither reachable.
+    #[test]
+    fn an_index_value_bound_only_by_another_probe_is_rejected() {
+        let err = run("(rule ((EdgeOcc x p q r) (EdgeOcc y s t u)) ((touched p q r)))")
+            .expect_err("neither index's value is bound by anything");
+        assert!(
+            format!("{err}").contains("must be bound"),
+            "expected an unbound-index-value error, got {err}"
+        );
+    }
+
+    /// A body primitive runs once per match, after the join, so the value it
+    /// computes cannot key a probe.
+    #[test]
+    fn an_index_value_bound_only_by_a_primitive_is_rejected() {
+        let err = EGraph::default()
+            .parse_and_run_program(
+                None,
+                "
+                (function f (i64 i64) i64 :merge old)
+                (index FOcc f (any 0 1 2))
+                (relation touched (i64 i64 i64))
+                (rule ((= v (+ 0 1)) (FOcc v p q r)) ((touched p q r)))
+                ",
+            )
+            .expect_err("a primitive does not bind a value the join can probe by");
+        assert!(
+            format!("{err}").contains("must be bound"),
+            "expected an unbound-index-value error, got {err}"
+        );
+    }
+
+    /// A literal is already known, so it needs no binder at all.
+    #[test]
+    fn an_index_may_be_probed_by_a_literal() {
+        EGraph::default()
+            .parse_and_run_program(
+                None,
+                "
+                (function f (i64 i64) i64 :merge old)
+                (index FOcc f (any 0 1 2))
+                (relation touched (i64 i64 i64))
+                (set (f 1 2) 3)
+                (rule ((FOcc 1 p q r)) ((touched p q r)))
+                (run 1)
+                (check (touched 1 2 3))
+                ",
+            )
+            .expect("a literal probe needs no binder");
     }
 }

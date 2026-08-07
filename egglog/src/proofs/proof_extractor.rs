@@ -185,7 +185,7 @@ impl EqStage {
             self.unscanned += 1;
             // Term/proof relations (function-to-Unit, id in the last input) and
             // ordinary constructors both reconstruct here; views and the
-            // delete/subsume markers (`is_relation_term` is false for markers) are
+            // subsumption markers (`is_relation_term` is false for markers) are
             // skipped.
             if (func.decl.subtype != FunctionSubtype::Constructor && !func.is_relation_term())
                 || func.extraction_output_sort().name() != sort.name()

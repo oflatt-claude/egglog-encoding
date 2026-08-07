@@ -757,7 +757,6 @@ pub fn add_sort(egraph: &mut EGraph, name: &str) -> Result<Vec<CommandOutput>, E
         name: name.to_owned(),
         presort_and_args: None,
         uf: None,
-        proof_func: None,
         container_rebuild: None,
         proof_constructors: None,
         unionable: true,

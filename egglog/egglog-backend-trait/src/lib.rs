@@ -146,11 +146,14 @@ pub enum RuleBodyCall {
         read: ReadMode,
     },
     /// An atom over a declared index: the rows of `id` reached through the value
-    /// occurring in *some* one of `any_of`. Its arguments are that value followed
-    /// by the whole row of `id`.
+    /// occurring in *some* one of `any_of`. An index is the relation
+    /// `(value, row of id…) -> Unit`, so the atom takes `id`'s arity plus two
+    /// arguments: that value, the whole row of `id`, then the index's own unit
+    /// output.
     ///
-    /// The atom can only be probed, so the leading value must be bound elsewhere
-    /// in the query.
+    /// The atom is probed rather than scanned, so a variable leading value must
+    /// be bound elsewhere in the query by a function's rows; a literal is already
+    /// known and needs no binder.
     IndexTable {
         id: FunctionId,
         any_of: Vec<usize>,
@@ -305,14 +308,14 @@ pub trait Backend: Send + Sync {
     // -- native fact loading (`(input …)`) ----------------------------------
     //
     // The frontend loads `(input …)` facts by minting ids and inserting the
-    // encoded term/view (and, in proof mode, AST/proof) rows directly, rather
+    // encoded term/view (and, in proof mode, proof) rows directly, rather
     // than compiling and running a loader rule. Each backend services these
     // against its own storage (db buffers for the reference bridge, the
     // host-side mirror for Differential Dataflow), so input loading never falls
     // back to rule compilation.
 
     /// Mint a fresh id: the next unused integer from the backend's counter. A fresh
-    /// id names a term (terms double as their own e-class) or a proof/AST node; the
+    /// id names a term (terms double as their own e-class) or a proof node; the
     /// id itself is not stored anywhere until the encoding asserts a relation row
     /// referencing it. Panics on a backend without a counter.
     fn fresh_id(&mut self) -> Value;
@@ -440,6 +443,23 @@ pub trait Backend: Send + Sync {
     ) -> ExternalFunctionId {
         self.new_panic(format!(
             "this backend does not support view-column reads for view `{view_name}`"
+        ))
+    }
+
+    /// Register the mint op for the term-node relation named `table_name`
+    /// (`n_args` argument columns, then the minted id column, then value columns
+    /// filled with `vals`). Returns the [`ExternalFunctionId`] its call sites
+    /// resolve to. Semantics at invoke: mint a fresh id, insert
+    /// `(args…, fresh, vals…)`, and return `fresh`. The default registers a
+    /// panic.
+    fn register_mint_row(
+        &mut self,
+        table_name: String,
+        _n_args: usize,
+        _vals: Vec<Value>,
+    ) -> ExternalFunctionId {
+        self.new_panic(format!(
+            "this backend does not support minting rows of `{table_name}`"
         ))
     }
 

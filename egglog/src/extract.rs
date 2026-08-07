@@ -728,13 +728,12 @@ impl Function {
         self.decl.term_constructor.is_some() && self.schema.outputs.len() > 1
     }
 
-    /// A term/proof/AST/proof-list node relation created by the term/proof
-    /// encoding, marked `:internal-term-node`. Its rows are reconstructed during
-    /// extraction with the minted id as the last input column and the earlier
-    /// inputs as the term's children. Views (which carry `term_constructor` and a
-    /// non-`Unit` output) and plain bookkeeping relations such as the
-    /// delete/subsume markers are unmarked, so extraction never reads them as
-    /// terms.
+    /// A term or proof node relation created by the term/proof encoding, marked
+    /// `:internal-term-node`. Its rows are reconstructed during extraction with
+    /// the minted id as the last input column and the earlier inputs as the
+    /// term's children. Views (which carry `term_constructor` and a non-`Unit`
+    /// output) and plain bookkeeping relations such as the subsumption markers
+    /// are unmarked, so extraction never reads them as terms.
     pub(crate) fn is_relation_term(&self) -> bool {
         self.decl.internal_term_node
     }
