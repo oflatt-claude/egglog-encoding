@@ -168,6 +168,9 @@ theorem mem_addTerm (t : Term) (db : Database) : t ∈ (db.addTerm t).terms :=
 @[simp] theorem sUnion_env {db : Database} {S : Set Database} :
     (db.sUnion S).env = db.env := rfl
 
+@[simp] theorem sUnion_rows {db : Database} {S : Set Database} :
+    (db.sUnion S).rows = db.rows ∪ ⋃ d ∈ S, d.rows := rfl
+
 @[simp] theorem sUnion_rules {db : Database} {S : Set Database} :
     (db.sUnion S).rules = db.rules := rfl
 
@@ -181,27 +184,95 @@ theorem EnvAgree.eq_of_env_rules {d₁ d₂ : Database} (h : d₁.EnvAgree d₂)
     (R : Set Rule) :
     ({ d₁ with env := σ, rules := R } : Database) = { d₂ with env := σ, rules := R } := by
   rw [show d₁.sig = d₂.sig from h.sig, show d₁.terms = d₂.terms from h.terms,
-    show d₁.eqs = d₂.eqs from h.eqs]
+    show d₁.rows = d₂.rows from h.rows, show d₁.eqs = d₂.eqs from h.eqs]
 
+/-! ### `addTerms` and `addRow`
+
+`addTerms` is a fold, so its untouched fields need an induction rather than `rfl`. -/
+@[simp] theorem addTerms_sig {db : Database} {ts : List Term} :
+    (db.addTerms ts).sig = db.sig := by
+  induction ts generalizing db with
+  | nil => rfl
+  | cons t ts ih => exact ih
+
+@[simp] theorem addTerms_eqs {db : Database} {ts : List Term} :
+    (db.addTerms ts).eqs = db.eqs := by
+  induction ts generalizing db with
+  | nil => rfl
+  | cons t ts ih => exact ih
+
+@[simp] theorem addTerms_env {db : Database} {ts : List Term} :
+    (db.addTerms ts).env = db.env := by
+  induction ts generalizing db with
+  | nil => rfl
+  | cons t ts ih => exact ih
+
+@[simp] theorem addTerms_rules {db : Database} {ts : List Term} :
+    (db.addTerms ts).rules = db.rules := by
+  induction ts generalizing db with
+  | nil => rfl
+  | cons t ts ih => exact ih
+
+@[simp] theorem addRow_sig {db : Database} {f : FnName} {as vs : List Term} :
+    (db.addRow f as vs).sig = db.sig := by simp [Database.addRow]
+
+@[simp] theorem addRow_eqs {db : Database} {f : FnName} {as vs : List Term} :
+    (db.addRow f as vs).eqs = db.eqs := by simp [Database.addRow]
+
+@[simp] theorem addRow_env {db : Database} {f : FnName} {as vs : List Term} :
+    (db.addRow f as vs).env = db.env := by simp [Database.addRow]
+
+@[simp] theorem addRow_rules {db : Database} {f : FnName} {as vs : List Term} :
+    (db.addRow f as vs).rules = db.rules := by simp [Database.addRow]
+
+namespace EnvAgree
+theorem addTerm {d₁ d₂ : Database} (h : d₁.EnvAgree d₂) (t : Term) :
+    (d₁.addTerm t).EnvAgree (d₂.addTerm t) :=
+  ⟨h.sig, by simp [Database.addTerm, h.terms], by simp [Database.addTerm, h.rows],
+    h.eqs, h.rules, h.env⟩
+
+theorem addTerms {d₁ d₂ : Database} (h : d₁.EnvAgree d₂) (ts : List Term) :
+    (d₁.addTerms ts).EnvAgree (d₂.addTerms ts) := by
+  induction ts generalizing d₁ d₂ with
+  | nil => exact h
+  | cons t ts ih => exact ih (h.addTerm t)
+
+theorem addRow {d₁ d₂ : Database} (h : d₁.EnvAgree d₂) (f : FnName) (as vs : List Term) :
+    (d₁.addRow f as vs).EnvAgree (d₂.addRow f as vs) :=
+  let h' := (h.addTerms as).addTerms vs
+  ⟨h'.sig, h'.terms, by simp [Database.addRow, h'.rows], h'.eqs, h'.rules, h'.env⟩
+
+end EnvAgree
 namespace Contained
-theorem refl (db : Database) : Contained db db := ⟨subset_rfl, subset_rfl⟩
+theorem refl (db : Database) : Contained db db := ⟨subset_rfl, subset_rfl, subset_rfl⟩
 
 theorem trans {d₁ d₂ d₃ : Database} (h₁ : Contained d₁ d₂) (h₂ : Contained d₂ d₃) :
     Contained d₁ d₃ :=
-  ⟨h₁.terms.trans h₂.terms, h₁.eqs.trans h₂.eqs⟩
+  ⟨h₁.terms.trans h₂.terms, h₁.rows.trans h₂.rows, h₁.eqs.trans h₂.eqs⟩
 
 theorem addTerm (t : Term) (db : Database) : Contained db (db.addTerm t) :=
-  ⟨Set.subset_union_left, subset_rfl⟩
+  ⟨Set.subset_union_left, Set.subset_union_left, subset_rfl⟩
+
+theorem addTerms (ts : List Term) (db : Database) : Contained db (db.addTerms ts) := by
+  induction ts generalizing db with
+  | nil => exact refl db
+  | cons t ts ih => exact (addTerm t db).trans (ih (db := db.addTerm t))
 
 theorem addEq (a b : Term) (db : Database) : Contained db (db.addEq a b) :=
-  ⟨fun _ h => Or.inl (Or.inl h), Set.subset_insert _ _⟩
+  ⟨fun _ h => Or.inl (Or.inl h), fun _ h => Or.inl (Or.inl h), Set.subset_insert _ _⟩
+
+theorem addRow (f : FnName) (as vs : List Term) (db : Database) :
+    Contained db (db.addRow f as vs) :=
+  ((addTerms as db).trans (addTerms vs _)).trans
+    ⟨subset_rfl, Set.subset_insert _ _, subset_rfl⟩
 
 theorem sUnion (db : Database) (S : Set Database) : Contained db (db.sUnion S) :=
-  ⟨Set.subset_union_left, Set.subset_union_left⟩
+  ⟨Set.subset_union_left, Set.subset_union_left, Set.subset_union_left⟩
 
 theorem mem_sUnion {db d : Database} {S : Set Database} (h : d ∈ S) :
     Contained d (db.sUnion S) :=
-  ⟨fun _ ht => Or.inr (Set.mem_biUnion h ht), fun _ ht => Or.inr (Set.mem_biUnion h ht)⟩
+  ⟨fun _ ht => Or.inr (Set.mem_biUnion h ht), fun _ ht => Or.inr (Set.mem_biUnion h ht),
+    fun _ ht => Or.inr (Set.mem_biUnion h ht)⟩
 
 end Contained
 namespace WF
@@ -217,6 +288,18 @@ theorem addTerm {db : Database} (h : WF db) (t : Term) : WF (db.addTerm t) where
     · exact (Term.subterms_subset_of_mem hs).trans Set.subset_union_right
   eqsInTerms p hp := ⟨Or.inl (h.eqsInTerms p hp).1, Or.inl (h.eqsInTerms p hp).2⟩
   envInTerms b hb := Or.inl (h.envInTerms b hb)
+
+theorem addTerms {db : Database} (h : WF db) (ts : List Term) : WF (db.addTerms ts) := by
+  induction ts generalizing db with
+  | nil => exact h
+  | cons t ts ih => exact ih (h.addTerm t)
+
+/-- A `set` adds terms and one row; `WF` says nothing about rows (`Database.RowsWF`
+does), so this is `addTerms` twice. -/
+theorem addRow {db : Database} (h : WF db) (f : FnName) (as vs : List Term) :
+    WF (db.addRow f as vs) :=
+  ⟨((h.addTerms as).addTerms vs).subtermClosed, ((h.addTerms as).addTerms vs).eqsInTerms,
+    ((h.addTerms as).addTerms vs).envInTerms⟩
 
 theorem addEq {db : Database} (h : WF db) (a b : Term) : WF (db.addEq a b) := by
   refine ⟨((h.addTerm a).addTerm b).subtermClosed, ?_, ((h.addTerm a).addTerm b).envInTerms⟩

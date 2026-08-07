@@ -68,12 +68,14 @@ def Action.Scoped : Action → Scope → Prop
   | .expr e, Γ => e.IsApp ∧ e.Scoped Γ
   | .letBind _ e, Γ => e.Scoped Γ
   | .union e₁ e₂, Γ => e₁.Scoped Γ ∧ e₂.Scoped Γ
+  | .set _ args out, Γ => (∀ e ∈ args, e.Scoped Γ) ∧ out.Scoped Γ
 
 /-- The scope after an action: only a `let` extends it. -/
 def Action.bind : Action → Scope → Scope
   | .expr _, Γ => Γ
   | .letBind v _, Γ => v :: Γ
   | .union _ _, Γ => Γ
+  | .set _ _ _, Γ => Γ
 
 /-- The Redex `typed-actions`: each action is scoped in what the earlier ones bind. -/
 def Actions.Scoped : List Action → Scope → Prop

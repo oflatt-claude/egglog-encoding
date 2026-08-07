@@ -36,175 +36,10 @@ The spec deliberately **over-approximates** egglog rather than matching it. A lo
 reads any recorded output, not the current one; a round takes any number of merge
 steps, not all of them. The M11 safety theorem is an invariant over this relation, and
 an invariant needs neither termination nor confluence — see `MERGE.md`,
-"Over-approximating egglog", and `Proofs/Merge.lean`'s `invariant_of_step`.
+"Why the reader over-approximates", and `Proofs/Merge.lean`'s `invariant_of_step`.
 -/
 
 namespace Egglog
-/-! ### Rows -/
-/-- One tuple of one function's table: `fn args… ↦ out…`.
-
-`out` is a *list*, one entry per value column. egglog's tables are multi-column and the
-encoding depends on it — `@UF_<Sort>` carries a parent *and* a proof, `@<C>View` an
-e-class and a proof — so M11 cannot be stated without this. A constructor has exactly
-one value column. -/
-@[ext]
-structure Row where
-  fn : FnName
-  args : List Term
-  out : List Term
-  deriving DecidableEq
-
-/-- The constructor rows of `t`: one per application among its subterms, each mapping
-its own children to itself.
-
-Only a *constructor* application ever occurs inside a `Term` — `Expr.MEval` resolves a
-`:merge` function's application to its recorded output — so this needs no signature. -/
-def Term.ctorRows (t : Term) : Set Row :=
-  {r | r.out = [.app r.fn r.args] ∧ Term.app r.fn r.args ∈ t.subterms}
-
-/-! ### The M9 command language
-
-`Rule` and `Cmd` carry `Action`, which has no `set`, so an M9 program needs its own.
-`MRule`/`MCmd`/`MProgram` are those with `RowAction` in its place, and `Cmd.toMCmd`
-embeds the old language. Nothing else differs; when `RowAction` replaces `Action`
-outright (`MERGE.md`, "One action language or two") these collapse into `Rule`/`Cmd`. -/
-/-- A rule whose head may write rows. -/
-structure MRule where
-  query : Query
-  actions : List RowAction
-
-/-- A top-level command over `RowAction`. -/
-inductive MCmd where
-  | action : RowAction → MCmd
-  | rule : MRule → MCmd
-  | run : MCmd
-  | decl : FnName → FnDecl → MCmd
-
-/-- An M9 program. -/
-abbrev MProgram := List MCmd
-
-/-- The old rule language, embedded. -/
-def Rule.toMRule (r : Rule) : MRule := ⟨r.query, r.actions.map Action.toRowAction⟩
-
-/-- The old command language, embedded. -/
-def Cmd.toMCmd : Cmd → MCmd
-  | .action a => .action a.toRowAction
-  | .rule r => .rule r.toMRule
-  | .run => .run
-  | .decl f d => .decl f d
-
-/-- Egglog's global state, with rows.
-
-`terms`, `eqs`, `env` and `rules` are `Database`'s. `rows` is new, and `terms` is
-*not* derivable from it: a literal is a term with no row, and `MCong.refl`'s side
-condition reads `terms`. -/
-@[ext]
-structure MDatabase where
-  /-- The declared functions. Read by `MCong.fd`, `Expr.MEval` and `MergeStep`. -/
-  sig : Signature
-  /-- The terms the database holds. Subterm-closed under `WF`. -/
-  terms : Set Term
-  /-- The *asserted* rows. A merge never removes one; it adds the combined row beside
-  the two it merged. -/
-  rows : Set Row
-  /-- The *asserted* equalities, from `union` actions. -/
-  eqs : Set (Term × Term)
-  /-- Global bindings, extended by a top-level `let`. -/
-  env : Env
-  /-- The rules, run by `MCmd.run`. -/
-  rules : Set MRule
-
-namespace MDatabase
-/-- The initial database. -/
-def empty : MDatabase where
-  sig := fun _ => none
-  terms := ∅
-  rows := ∅
-  eqs := ∅
-  env := []
-  rules := ∅
-
-/-- Build `t`: insert it, its subterms, and the constructor row of each application
-among them.
-
-This is `Database.addTerm` plus the rows, and it is the only thing that writes a
-constructor row — which is what makes `Database.toM` an embedding rather than a
-projection. -/
-def build (t : Term) (db : MDatabase) : MDatabase :=
-  { db with terms := db.terms ∪ t.subterms, rows := db.rows ∪ t.ctorRows }
-
-/-- `build` over a list, left to right. -/
-def buildAll (ts : List Term) (db : MDatabase) : MDatabase :=
-  ts.foldl (fun d t => d.build t) db
-
-/-- Assert one row, changing nothing else. -/
-def insertRow (r : Row) (db : MDatabase) : MDatabase :=
-  { db with rows := insert r db.rows }
-
-/-- `(set (f as…) v)`: build the operands, then assert the row.
-
-Only *asserted*. A collision with a congruent key is resolved by `MCong.fd` or by
-`MergeStep`, neither of which removes this row — which is what keeps the state
-monotone under a merge. -/
-def addRow (f : FnName) (as : List Term) (vs : List Term) (db : MDatabase) : MDatabase :=
-  ((db.buildAll as).buildAll vs).insertRow ⟨f, as, vs⟩
-
-/-- Assert `a = b`, building both terms. -/
-def addEq (a b : Term) (db : MDatabase) : MDatabase :=
-  { (db.build a).build b with eqs := insert (a, b) db.eqs }
-
-/-- Union in a whole family of databases at once, as `Database.sUnion`. -/
-def sUnion (db : MDatabase) (S : Set MDatabase) : MDatabase :=
-  { db with
-    terms := db.terms ∪ ⋃ d ∈ S, d.terms
-    rows := db.rows ∪ ⋃ d ∈ S, d.rows
-    eqs := db.eqs ∪ ⋃ d ∈ S, d.eqs }
-
-/-- `d₁`'s terms, rows and asserted equalities are among `d₂`'s.
-
-The `rows` field is the whole monotonicity story: a merge adds a row rather than
-overwriting one, so `MergeStep` preserves this and every M2–M8 lemma resting on
-`Database.Contained` transports. -/
-structure Contained (d₁ d₂ : MDatabase) : Prop where
-  terms : d₁.terms ⊆ d₂.terms
-  rows : d₁.rows ⊆ d₂.rows
-  eqs : d₁.eqs ⊆ d₂.eqs
-
-/-- The database invariants: `Database.WF` plus that a row talks about terms the
-database holds.
-
-A row's key is *not* required to be a term. `.app g as` for a `:merge` function `g` is
-a key, not a value — it has no e-class and cannot be unioned — and with one untyped
-`Term` there is nothing to stop it being written as a term except this. See
-`MERGE.md`, "Base sorts". -/
-structure WF (db : MDatabase) : Prop where
-  subtermClosed : ∀ t ∈ db.terms, t.subterms ⊆ db.terms
-  eqsInTerms : ∀ p ∈ db.eqs, p.1 ∈ db.terms ∧ p.2 ∈ db.terms
-  envInTerms : ∀ b ∈ db.env, b.2 ∈ db.terms
-  rowsInTerms : ∀ r ∈ db.rows, (∀ a ∈ r.args, a ∈ db.terms) ∧ ∀ v ∈ r.out, v ∈ db.terms
-
-/-- Every function is used at its declared key and value arities. Separate from `WF`
-because nothing in the semantics needs it — it is the decidable half of the sort
-discipline `MERGE.md` defers. -/
-def ArityOk (db : MDatabase) : Prop :=
-  ∀ r ∈ db.rows, ∀ d, db.sig r.fn = some d →
-    r.args.length = d.arity ∧ r.out.length = d.outArity
-
-end MDatabase
-/-- Every application `db` holds becomes its own row, `f as… ↦ (f as…)`.
-
-This is `PLAN.md`'s "for a constructor the invariant is `out = .app f args`", read as
-an embedding rather than as an invariant to maintain. `mcong_toM_iff` — that `MCong`
-on the image is `Cong` on the original — is what licenses replacing `Database` by
-`MDatabase` outright. -/
-def Database.toM (db : Database) : MDatabase where
-  sig := db.sig
-  terms := db.terms
-  rows := {r | r.out = [.app r.fn r.args] ∧ Term.app r.fn r.args ∈ db.terms}
-  eqs := db.eqs
-  env := db.env
-  rules := Rule.toMRule '' db.rules
-
 /-! ### Congruence, generalized
 
 `MCong` is `Cong` with `congr` replaced by `fd`. Everything else is unchanged. -/
@@ -231,7 +66,7 @@ function is a source-program constructor, which has one value column, and the en
 program has **no** `.union` function at all. `@AddView` resolves congruence through its
 merge *body* (`set (@UF_Math …)`) and the `@UF` table, not through `fd`. So in the
 target, congruence is entirely simulated — see `MERGE.md`, "Multi-column outputs". -/
-inductive MCong (db : MDatabase) : Term → Term → Prop where
+inductive MCong (db : Database) : Term → Term → Prop where
   | assert {a b : Term} : (a, b) ∈ db.eqs → MCong db a b
   | refl {a : Term} : a ∈ db.terms → MCong db a a
   | symm {a b : Term} : MCong db a b → MCong db b a
@@ -243,7 +78,7 @@ inductive MCong (db : MDatabase) : Term → Term → Prop where
 
 /-- Pointwise `MCong` over key tuples. Companion of `MCong.fd`, for the same reason
 `CongList` is `Cong.congr`'s. -/
-inductive MCongList (db : MDatabase) : List Term → List Term → Prop where
+inductive MCongList (db : Database) : List Term → List Term → Prop where
   | nil : MCongList db [] []
   | cons {a b : Term} {as bs : List Term} :
       MCong db a b → MCongList db as bs → MCongList db (a :: as) (b :: bs)
@@ -251,11 +86,11 @@ inductive MCongList (db : MDatabase) : List Term → List Term → Prop where
 end
 
 namespace MCong
-variable {db : MDatabase}
+variable {db : Database}
 
 /-- `MCong db` is an equivalence on `db.terms`, as `Cong.setoid`. Its quotient is the
 e-class set, and the bridge to M11: an e-class here is an `@UF` leader there. -/
-def setoid (db : MDatabase) : Setoid {t : Term // t ∈ db.terms} where
+def setoid (db : Database) : Setoid {t : Term // t ∈ db.terms} where
   r a b := MCong db a.val b.val
   iseqv := ⟨fun a => .refl a.property, .symm, .trans⟩
 
@@ -263,16 +98,16 @@ end MCong
 /-! ### Reading a table
 
 Keys are compared up to congruence, so a lookup searches the key's class rather than
-the row set. `Out` is the relation; `Greatest` is the single value `PLAN.md` calls the
-merge-fold. -/
-namespace MDatabase
+the row set. `Out` is the relation a lookup reads; `Current` is the single value it has
+when the merge is a join, used only where a result must match egglog exactly. -/
+namespace Database
 /-- `v` is an output `db` records for `f` at the class of the key `as`.
 
 Quantifying over congruent keys here rather than re-keying rows is what lets
 `MergeStep` write the combined row at one key only and still be seen from the other,
 and it is why the row set never needs the re-canonicalization egglog's rebuild does.
 Monotone in `Contained`, because `MCongList` is. -/
-def Out (db : MDatabase) (f : FnName) (as : List Term) (vs : List Term) : Prop :=
+def Out (db : Database) (f : FnName) (as : List Term) (vs : List Term) : Prop :=
   ∃ bs, MCongList db as bs ∧ Row.mk f bs vs ∈ db.rows
 
 /-- The value a *join* merge settles on at the class of `as`: the `le`-greatest
@@ -294,11 +129,11 @@ maximum. A fold over a set is well defined only once the merge is proved commuta
 `le` is a parameter rather than an instance because the order is per function — one
 `Term` type carries every sort — and it orders whole rows, since a multi-column merge
 can settle its columns jointly. -/
-def Current (db : MDatabase) (le : List Term → List Term → Prop) (f : FnName)
+def Current (db : Database) (le : List Term → List Term → Prop) (f : FnName)
     (as : List Term) (vs : List Term) : Prop :=
   db.Out f as vs ∧ ∀ ws, db.Out f as ws → le ws vs
 
-end MDatabase
+end Database
 /-! ### The term order
 
 Two jobs, deliberately one definition.
@@ -393,7 +228,7 @@ Partiality that was `none` in `Expr.eval` is now "no `t` related". `Scope.lean`'
 "a well-scoped program never gets stuck" therefore weakens: staying unstuck now also
 needs every lookup to hit, which is not a scope property and is egglog's `Fail` panic
 rather than anything a static check could rule out. -/
-inductive Expr.MEval (db : MDatabase) (σ : Env) : Expr → Term → Prop where
+inductive Expr.MEval (db : Database) (σ : Env) : Expr → Term → Prop where
   | lit {l : Lit} : Expr.MEval db σ (.lit l) (.lit l)
   | var {v : Var} {t : Term} : Env.lookup v σ = some t → Expr.MEval db σ (.var v) t
   | ctor {f : FnName} {args : List Expr} {ts : List Term} :
@@ -407,7 +242,7 @@ inductive Expr.MEval (db : MDatabase) (σ : Env) : Expr → Term → Prop where
       Expr.MEval db σ (.app f args) v
 
 /-- `Expr.MEval` over an argument list. -/
-inductive Expr.MEvalList (db : MDatabase) (σ : Env) : List Expr → List Term → Prop where
+inductive Expr.MEvalList (db : Database) (σ : Env) : List Expr → List Term → Prop where
   | nil : Expr.MEvalList db σ [] []
   | cons {e : Expr} {es : List Expr} {t : Term} {ts : List Term} :
       Expr.MEval db σ e t → Expr.MEvalList db σ es ts →
@@ -421,31 +256,31 @@ end
 The three inherited cases are `evalAction`'s, read relationally. `set` is the new one,
 and it only ever adds. egglog restricts a `:merge` body to exactly `let`, `set` and
 `union` (`MergeLegal`); a rule head has these plus `expr` and more. -/
-inductive MDatabase.RowActionStep : MDatabase → RowAction → MDatabase → Prop where
-  | expr {db : MDatabase} {e : Expr} {t : Term} :
-      Expr.MEval db db.env e t → MDatabase.RowActionStep db (.expr e) (db.build t)
-  | letBind {db : MDatabase} {v : Var} {e : Expr} {t : Term} :
+inductive Database.ActionStep : Database → Action → Database → Prop where
+  | expr {db : Database} {e : Expr} {t : Term} :
+      Expr.MEval db db.env e t → Database.ActionStep db (.expr e) (db.addTerm t)
+  | letBind {db : Database} {v : Var} {e : Expr} {t : Term} :
       Expr.MEval db db.env e t →
-      MDatabase.RowActionStep db (.letBind v e)
-        { db.build t with env := (v, t) :: db.env }
-  | union {db : MDatabase} {e₁ e₂ : Expr} {t₁ t₂ : Term} :
+      Database.ActionStep db (.letBind v e)
+        { db.addTerm t with env := (v, t) :: db.env }
+  | union {db : Database} {e₁ e₂ : Expr} {t₁ t₂ : Term} :
       Expr.MEval db db.env e₁ t₁ → Expr.MEval db db.env e₂ t₂ →
-      MDatabase.RowActionStep db (.union e₁ e₂) (db.addEq t₁ t₂)
-  | set {db : MDatabase} {f : FnName} {args : List Expr} {out : Expr}
+      Database.ActionStep db (.union e₁ e₂) (db.addEq t₁ t₂)
+  | set {db : Database} {f : FnName} {args : List Expr} {out : Expr}
       {ts : List Term} {v : Term} :
       Expr.MEvalList db db.env args ts → Expr.MEval db db.env out v →
-      MDatabase.RowActionStep db (.set f args out) (db.addRow f ts [v])
+      Database.ActionStep db (.set f args out) (db.addRow f ts [v])
 
 /-- A sequence of row actions, run in order. -/
-inductive MDatabase.RowActionsStep : MDatabase → List RowAction → MDatabase → Prop where
-  | nil {db : MDatabase} : MDatabase.RowActionsStep db [] db
-  | cons {db d d' : MDatabase} {a : RowAction} {as : List RowAction} :
-      MDatabase.RowActionStep db a d → MDatabase.RowActionsStep d as d' →
-      MDatabase.RowActionsStep db (a :: as) d'
+inductive Database.ActionsStep : Database → List Action → Database → Prop where
+  | nil {db : Database} : Database.ActionsStep db [] db
+  | cons {db d d' : Database} {a : Action} {as : List Action} :
+      Database.ActionStep db a d → Database.ActionsStep d as d' →
+      Database.ActionsStep db (a :: as) d'
 
 /-- The actions egglog admits inside a `:merge` body: `let`, `set` and `union` only.
 Anything else is rejected at lowering. -/
-def RowAction.MergeLegal : RowAction → Prop
+def Action.MergeLegal : Action → Prop
   | .expr _ => False
   | .letBind _ _ => True
   | .union _ _ => True
@@ -522,16 +357,16 @@ The two rows are premises in both orders, so a non-commutative merge relates `db
 two different results. That is deliberate: it is the relational reading of what egglog
 calls user-visible undefined behaviour for a non-monotone merge.
 
-**The body runs once, before any column is computed** — `RowActionsStep` produces `d`
+**The body runs once, before any column is computed** — `ActionsStep` produces `d`
 and every column of `res` is then evaluated in `d`. That is egglog's order, not a
 choice: "Run the block's side effects once, before computing the merged values"
 (`egglog-bridge/src/lib.rs:1433`). `res` is one expression per value column. -/
-inductive MergeStep : MDatabase → MDatabase → Prop where
-  | collide {db d : MDatabase} {f : FnName} {as bs a b vs : List Term}
-      {body : List RowAction} {res : List Expr} :
+inductive MergeStep : Database → Database → Prop where
+  | collide {db d : Database} {f : FnName} {as bs a b vs : List Term}
+      {body : List Action} {res : List Expr} :
       ⟨f, as, a⟩ ∈ db.rows → ⟨f, bs, b⟩ ∈ db.rows → MCongList db as bs →
       db.sig.mergeOf f = MergeSpec.merge body res →
-      MDatabase.RowActionsStep { db with env := mergeEnv a b } body d →
+      Database.ActionsStep { db with env := mergeEnv a b } body d →
       Expr.MEvalList d d.env res vs →
       MergeStep db { d.addRow f as vs with env := db.env, rules := db.rules }
 
@@ -542,7 +377,7 @@ universe grows as the closure runs and there is no measure to recurse on. This i
 `PLAN.md` M9's "no termination claim", and it is what separates the merge closure from
 the congruence closure — `Impl/Closure.lean`'s `closure` stays well-founded because
 `terms` and `rows` are fixed while it runs. -/
-def MergeClosure : MDatabase → MDatabase → Prop := Relation.ReflTransGen MergeStep
+def MergeClosure : Database → Database → Prop := Relation.ReflTransGen MergeStep
 
 /-- No merge collision *changes* anything. egglog's `merge_all` runs to exactly this.
 
@@ -557,7 +392,7 @@ This form is what makes dropping the guard workable, so the two are coupled. An
 `ordering-min` self-collision re-derives a row already present, so `db' = db` and
 saturation still holds; a `+` self-collision derives a genuinely new row every time and
 correctly never saturates. -/
-def MergeSaturated (db : MDatabase) : Prop := ∀ db', MergeStep db db' → db' = db
+def MergeSaturated (db : Database) : Prop := ∀ db', MergeStep db db' → db' = db
 
 /-- `:no-merge` is respected: no two rows of a `.noMerge` function collide on
 congruent keys with different outputs.
@@ -565,7 +400,7 @@ congruent keys with different outputs.
 egglog raises `PanicError` when this fails and keeps the old row, so it is a side
 condition rather than a step. Nothing in the semantics consumes it; having it stated
 is what stops `.noMerge` silently meaning "keep the old value". -/
-def MDatabase.NoMergeOk (db : MDatabase) : Prop :=
+def Database.NoMergeOk (db : Database) : Prop :=
   ∀ f as bs (a b : List Term), Row.mk f as a ∈ db.rows → Row.mk f bs b ∈ db.rows →
     MCongList db as bs → db.sig.mergeOf f = MergeSpec.noMerge → a = b
 
@@ -575,37 +410,32 @@ def MDatabase.NoMergeOk (db : MDatabase) : Prop :=
 with `Expr.MEval`. The one non-mechanical change is `RunStep`: merge closure is a
 *phase* of a round, because it is a state change where congruence closure is only a
 relation. -/
-/-- `ValidEnv`, over a term set. Identical to `Spec/Match.lean`'s, which is pinned to
-`Database`; the two collapse when `MDatabase` replaces `Database`. -/
-def MValidEnv (vars : List Var) (db : MDatabase) (σ : Env) : Prop :=
-  (Env.dom σ).Perm vars ∧ ∀ b ∈ σ, b.2 ∈ db.terms
-
 /-- `ValidSubst`, over `MCong`. The witness formulation is unchanged. -/
-inductive MValidSubst (db : MDatabase) : Pattern → Env → Prop where
+inductive MValidSubst (db : Database) : Pattern → Env → Prop where
   | expr {e : Expr} {σ : Env} {w t : Term} :
-      MValidEnv (e.freeVars db.env) db σ → w ∈ db.terms →
-      Expr.MEval db (db.env ++ σ) e t → MCong (db.build t) w t →
+      ValidEnv (e.freeVars db.env) db σ → w ∈ db.terms →
+      Expr.MEval db (db.env ++ σ) e t → MCong (db.addTerm t) w t →
       MValidSubst db (.expr e) σ
   | eq {e₁ e₂ : Expr} {σ : Env} {w t₁ t₂ : Term} :
-      MValidEnv (e₁.freeVars db.env ∪ e₂.freeVars db.env) db σ → w ∈ db.terms →
+      ValidEnv (e₁.freeVars db.env ∪ e₂.freeVars db.env) db σ → w ∈ db.terms →
       Expr.MEval db (db.env ++ σ) e₁ t₁ → Expr.MEval db (db.env ++ σ) e₂ t₂ →
-      MCong ((db.build t₁).build t₂) w t₁ → MCong ((db.build t₁).build t₂) t₁ t₂ →
+      MCong ((db.addTerm t₁).addTerm t₂) w t₁ → MCong ((db.addTerm t₁).addTerm t₂) t₁ t₂ →
       MValidSubst db (.eq e₁ e₂) σ
 
 /-- `ValidQuerySubst`, over `MValidSubst`. -/
-def MValidQuerySubst (db : MDatabase) (q : Query) (σ : Env) : Prop :=
+def MValidQuerySubst (db : Database) (q : Query) (σ : Env) : Prop :=
   ∃ σs : List Env, List.Forall₂ (MValidSubst db) q σs ∧ Env.UnionAll σs σ
 
 /-- The databases one rule contributes, one per substitution satisfying its query. -/
-def MRuleResults (db : MDatabase) (r : MRule) : Set MDatabase :=
+def RuleResults (db : Database) (r : Rule) : Set Database :=
   {d | ∃ σ d', MValidQuerySubst db r.query σ ∧
-        MDatabase.RowActionsStep { db with env := db.env ++ σ } r.actions d' ∧
+        Database.ActionsStep { db with env := db.env ++ σ } r.actions d' ∧
         d = { d' with env := db.env, rules := db.rules }}
 
 /-- Every rule fires on every substitution satisfying its query in the pre-state, and
 the results are unioned in. `runRules`, with rows. -/
-def MRunRules (db : MDatabase) : MDatabase :=
-  db.sUnion {d | ∃ r ∈ db.rules, d ∈ MRuleResults db r}
+def RunRules (db : Database) : Database :=
+  db.sUnion {d | ∃ r ∈ db.rules, d ∈ RuleResults db r}
 
 /-- One round: fire every rule, then take any number of merge steps.
 
@@ -623,24 +453,24 @@ a hypothesis for the theorems that do need it, namely simulation and matching eg
 row counts.
 
 So this relation over-approximates: it reaches every state egglog reaches, plus
-partially merged ones. `MERGE.md`, "Over-approximating egglog", says why that is the
+partially merged ones. `MERGE.md`, "Why the reader over-approximates", says why that is the
 right trade. -/
-def RunStep (db db' : MDatabase) : Prop := MergeClosure (MRunRules db) db'
+def RunStep (db db' : Database) : Prop := MergeClosure (RunRules db) db'
 
 /-- `stepCmd`, relationally. -/
-inductive CmdStep : MDatabase → MCmd → MDatabase → Prop where
-  | action {db d : MDatabase} {a : RowAction} :
-      MDatabase.RowActionStep db a d → CmdStep db (.action a) d
-  | rule {db : MDatabase} {r : MRule} :
+inductive CmdStep : Database → Cmd → Database → Prop where
+  | action {db d : Database} {a : Action} :
+      Database.ActionStep db a d → CmdStep db (.action a) d
+  | rule {db : Database} {r : Rule} :
       CmdStep db (.rule r) { db with rules := insert r db.rules }
-  | run {db db' : MDatabase} : RunStep db db' → CmdStep db .run db'
-  | decl {db : MDatabase} {f : FnName} {d : FnDecl} :
+  | run {db db' : Database} : RunStep db db' → CmdStep db .run db'
+  | decl {db : Database} {f : FnName} {d : FnDecl} :
       CmdStep db (.decl f d) { db with sig := Function.update db.sig f (some d) }
 
 /-- `runProgram`, relationally. -/
-inductive ProgramStep : MDatabase → MProgram → MDatabase → Prop where
-  | nil {db : MDatabase} : ProgramStep db [] db
-  | cons {db d d' : MDatabase} {c : MCmd} {cs : MProgram} :
+inductive ProgramStep : Database → Program → Database → Prop where
+  | nil {db : Database} : ProgramStep db [] db
+  | cons {db d d' : Database} {c : Cmd} {cs : Program} :
       CmdStep db c d → ProgramStep d cs d' → ProgramStep db (c :: cs) d'
 
 end Egglog

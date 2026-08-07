@@ -76,6 +76,7 @@ nine pairs over `{1, 2, 3}`. -/
 private def chain : Database where
   sig := noSig
   terms := {num 1, num 2, num 3}
+  rows := Database.ctorRowsOf {num 1, num 2, num 3}
   eqs := {(num 1, num 2), (num 2, num 3)}
   env := []
   rules := ∅
@@ -112,6 +113,7 @@ derives `(= (wrapper 1) (wrapper 2))`. -/
 private def wrapped : Database where
   sig := noSig
   terms := {num 1, num 2, .app "wrapper" [num 1], .app "wrapper" [num 2]}
+  rows := Database.ctorRowsOf {num 1, num 2, .app "wrapper" [num 1], .app "wrapper" [num 2]}
   eqs := {(num 1, num 2)}
   env := []
   rules := ∅
@@ -126,6 +128,7 @@ assertions that `(1, 4)` is not in (`Cong.le`). -/
 private def separate : Database where
   sig := noSig
   terms := {num 1, num 4, num 7}
+  rows := Database.ctorRowsOf {num 1, num 4, num 7}
   eqs := {(num 4, num 7)}
   env := []
   rules := ∅
@@ -158,6 +161,7 @@ that knows nothing about it. -/
 private def preWrapped : Database where
   sig := noSig
   terms := {num 1, num 2, .app "wrapper" [num 2]}
+  rows := Database.ctorRowsOf {num 1, num 2, .app "wrapper" [num 2]}
   eqs := {(num 1, num 2)}
   env := []
   rules := ∅
@@ -173,7 +177,8 @@ example : ValidSubst preWrapped (.expr (.app "wrapper" [eNum 1])) [] :=
 /-- `(judgment-holds (valid-env (v1) ((tset 1) (congr (= 1 1)) () ()) Env))` is
 `'(((v1 -> 1)))`. -/
 example : ValidEnv ["v1"]
-    { sig := noSig, terms := {num 1}, eqs := ∅, env := [], rules := ∅ } [("v1", num 1)] := by
+    { sig := noSig, terms := {num 1}, rows := Database.ctorRowsOf {num 1}, eqs := ∅,
+      env := [], rules := ∅ } [("v1", num 1)] := by
   refine ⟨by simp, ?_⟩
   intro b hb
   rw [List.mem_singleton] at hb
@@ -232,6 +237,7 @@ example : WellScoped ruleProgram := by
 private def preRun : Database where
   sig := noSig
   terms := add12.subterms
+  rows := add12.ctorRows
   eqs := ∅
   env := []
   rules := insert swapRule ∅
@@ -240,7 +246,7 @@ private theorem preRun_eq :
     runProgram Database.empty [.action (.expr (.app "Add" [eNum 1, eNum 2])), .rule swapRule]
       = some preRun := by
   simp [runProgram, stepCmd, evalAction, Expr.eval, Expr.evalList, Database.empty, preRun,
-    eNum, num, add12]
+    eNum, num, add12, Database.addTerm]
 
 private theorem run_ruleProgram : run ruleProgram = some (runRules preRun) := by
   change runProgram Database.empty
@@ -264,14 +270,16 @@ private theorem swap_matches :
 /-- Running that firing adds `(Add 2 1)` and its children. -/
 private theorem swap_fires :
     evalLocalActions preRun swapRule.actions [("a", num 1), ("b", num 2)]
-      = some { preRun with terms := preRun.terms ∪ add21.subterms } := by
+      = some { preRun with terms := preRun.terms ∪ add21.subterms,
+                           rows := preRun.rows ∪ add21.ctorRows } := by
   simp [evalLocalActions, evalActions, evalAction, Expr.eval, Expr.evalList, Env.lookup,
-    swapRule, preRun, add21, num]
+    swapRule, preRun, add21, num, Database.addTerm]
 
 /-- `(Add 2 1)` is in the database after the run. -/
 example : ∃ db, run ruleProgram = some db ∧ add21 ∈ db.terms := by
   refine ⟨runRules preRun, run_ruleProgram, ?_⟩
-  have hmem : ({ preRun with terms := preRun.terms ∪ add21.subterms } : Database) ∈
+  have hmem : ({ preRun with terms := preRun.terms ∪ add21.subterms,
+                             rows := preRun.rows ∪ add21.ctorRows } : Database) ∈
       {d | ∃ r ∈ preRun.rules, d ∈ ruleResults preRun r} :=
     ⟨swapRule, by simp [preRun], _, swap_matches, swap_fires⟩
   exact Or.inr (Set.mem_biUnion hmem (Or.inr add21.self_mem_subterms))

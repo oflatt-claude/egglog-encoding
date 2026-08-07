@@ -82,7 +82,9 @@ theorem evalAction_eq_some {db db' : Database} {a : Action}
       (∃ v e t, a = .letBind v e ∧ e.eval db.env = some t ∧
         db' = { db.addTerm t with env := (v, t) :: db.env }) ∨
       (∃ e₁ e₂ t₁ t₂, a = .union e₁ e₂ ∧ e₁.eval db.env = some t₁ ∧
-        e₂.eval db.env = some t₂ ∧ db' = db.addEq t₁ t₂) := by
+        e₂.eval db.env = some t₂ ∧ db' = db.addEq t₁ t₂) ∨
+      (∃ f args out as v, a = .set f args out ∧ Expr.evalList args db.env = some as ∧
+        out.eval db.env = some v ∧ db' = db.addRow f as [v]) := by
   cases a with
   | expr e =>
     cases hv : e.eval db.env with
@@ -105,31 +107,47 @@ theorem evalAction_eq_some {db db' : Database} {a : Action}
       | some t₂ =>
         simp only [evalAction, hv₁, hv₂, Option.bind_some, Option.map_some,
           Option.some.injEq] at h
-        exact Or.inr (Or.inr ⟨e₁, e₂, t₁, t₂, rfl, hv₁, hv₂, h.symm⟩)
+        exact Or.inr (Or.inr (Or.inl ⟨e₁, e₂, t₁, t₂, rfl, hv₁, hv₂, h.symm⟩))
+  | set f args out =>
+    cases hv₁ : Expr.evalList args db.env with
+    | none => simp [evalAction, hv₁] at h
+    | some as =>
+      cases hv₂ : out.eval db.env with
+      | none => simp [evalAction, hv₁, hv₂] at h
+      | some v =>
+        simp only [evalAction, hv₁, hv₂, Option.bind_some, Option.map_some,
+          Option.some.injEq] at h
+        exact Or.inr (Or.inr (Or.inr ⟨f, args, out, as, v, rfl, hv₁, hv₂, h.symm⟩))
 
 theorem evalAction_contained {db db' : Database} {a : Action}
     (h : evalAction db a = some db') : db.Contained db' := by
   rcases evalAction_eq_some h with ⟨_, t, -, -, rfl⟩ | ⟨_, _, t, -, -, rfl⟩ |
-    ⟨_, _, t₁, t₂, -, -, -, rfl⟩
+    ⟨_, _, t₁, t₂, -, -, -, rfl⟩ | ⟨f, _, _, as, v, -, -, -, rfl⟩
   · exact .addTerm t db
-  · exact ⟨Set.subset_union_left, subset_rfl⟩
+  · exact ⟨Set.subset_union_left, Set.subset_union_left, subset_rfl⟩
   · exact .addEq t₁ t₂ db
+  · exact .addRow f as [v] db
 
 theorem evalAction_rules {db db' : Database} {a : Action}
     (h : evalAction db a = some db') : db'.rules = db.rules := by
   rcases evalAction_eq_some h with ⟨_, _, -, -, rfl⟩ | ⟨_, _, _, -, -, rfl⟩ |
-    ⟨_, _, _, _, -, -, -, rfl⟩ <;> rfl
+    ⟨_, _, _, _, -, -, -, rfl⟩ | ⟨_, _, _, _, _, -, -, -, rfl⟩
+  · rfl
+  · rfl
+  · rfl
+  · simp
 
 theorem evalAction_wf {db db' : Database} (hw : db.WF) {a : Action}
     (h : evalAction db a = some db') : db'.WF := by
   rcases evalAction_eq_some h with ⟨_, t, -, -, rfl⟩ | ⟨_, _, t, -, -, rfl⟩ |
-    ⟨_, _, t₁, t₂, -, -, -, rfl⟩
+    ⟨_, _, t₁, t₂, -, -, -, rfl⟩ | ⟨f, _, _, as, v, -, -, -, rfl⟩
   · exact hw.addTerm t
   · refine ⟨(hw.addTerm t).subtermClosed, (hw.addTerm t).eqsInTerms, fun b hb => ?_⟩
     rcases List.mem_cons.mp hb with rfl | hb
     · exact db.mem_addTerm t
     · exact (hw.addTerm t).envInTerms b hb
   · exact hw.addEq t₁ t₂
+  · exact hw.addRow f as [v]
 
 theorem evalActions_contained {db db' : Database} {as : List Action}
     (h : evalActions db as = some db') : db.Contained db' := by
@@ -177,13 +195,16 @@ theorem evalAction_envAgree {d₁ d₂ : Database} (h : d₁.EnvAgree d₂) (a :
     simp only [evalAction, ← Expr.eval_agree h.env e]
     cases e.eval d₁.env with
     | none => exact .none
-    | some t => exact .some ⟨h.sig, by simp [h.terms], h.eqs, h.rules, h.env⟩
+    | some t =>
+      exact .some ⟨h.sig, by simp [Database.addTerm, h.terms],
+        by simp [Database.addTerm, h.rows], h.eqs, h.rules, h.env⟩
   | letBind v e =>
     simp only [evalAction, ← Expr.eval_agree h.env e]
     cases e.eval d₁.env with
     | none => exact .none
     | some t =>
-      refine .some ⟨h.sig, by simp [h.terms], h.eqs, h.rules, fun w => ?_⟩
+      refine .some ⟨h.sig, by simp [Database.addTerm, h.terms],
+        by simp [Database.addTerm, h.rows], h.eqs, h.rules, fun w => ?_⟩
       by_cases hw : w = v <;> simp [hw, h.env w]
   | union e₁ e₂ =>
     simp only [evalAction, ← Expr.eval_agree h.env e₁, ← Expr.eval_agree h.env e₂]
@@ -193,7 +214,18 @@ theorem evalAction_envAgree {d₁ d₂ : Database} (h : d₁.EnvAgree d₂) (a :
       cases e₂.eval d₁.env with
       | none => exact .none
       | some t₂ =>
-        exact .some ⟨h.sig, by simp [h.terms], by simp [h.eqs], h.rules, h.env⟩
+        exact .some ⟨h.sig, by simp [Database.addEq, Database.addTerm, h.terms],
+          by simp [Database.addEq, Database.addTerm, h.rows],
+          by simp [Database.addEq, h.eqs], h.rules, h.env⟩
+  | set f args out =>
+    simp only [evalAction, ← Expr.evalList_agree h.env args, ← Expr.eval_agree h.env out]
+    cases Expr.evalList args d₁.env with
+    | none => exact .none
+    | some as =>
+      cases out.eval d₁.env with
+      | none => exact .none
+      | some v =>
+        exact .some (h.addRow f as [v])
 
 theorem evalActions_envAgree {d₁ d₂ : Database} (h : d₁.EnvAgree d₂) (as : List Action) :
     Option.Rel Database.EnvAgree (evalActions d₁ as) (evalActions d₂ as) := by
@@ -220,7 +252,7 @@ theorem evalActions_envAgree {d₁ d₂ : Database} (h : d₁.EnvAgree d₂) (as
 theorem evalLocalActions_agree {db : Database} (as : List Action) {σ₁ σ₂ : Env}
     (h : Env.Agree σ₁ σ₂) : evalLocalActions db as σ₁ = evalLocalActions db as σ₂ := by
   have hE : Database.EnvAgree { db with env := db.env ++ σ₁ } { db with env := db.env ++ σ₂ } :=
-    ⟨rfl, rfl, rfl, rfl, Env.Agree.append_left db.env h⟩
+    ⟨rfl, rfl, rfl, rfl, rfl, Env.Agree.append_left db.env h⟩
   have hrel := evalActions_envAgree hE as
   simp only [evalLocalActions]
   cases h₁ : evalActions { db with env := db.env ++ σ₁ } as with
@@ -260,7 +292,8 @@ theorem evalLocalActions_rules {db db' : Database} {as : List Action} {σ : Env}
 theorem evalLocalActions_contained {db db' : Database} {as : List Action} {σ : Env}
     (h : evalLocalActions db as σ = some db') : db.Contained db' := by
   obtain ⟨_, hv, rfl⟩ := evalLocalActions_eq_some h
-  exact ⟨(evalActions_contained hv).terms, (evalActions_contained hv).eqs⟩
+  exact ⟨(evalActions_contained hv).terms, (evalActions_contained hv).rows,
+    (evalActions_contained hv).eqs⟩
 
 /-- Local actions preserve well-formedness provided the substitution only mentions
 terms the database holds — which is what `ValidEnv` guarantees. -/

@@ -1,4 +1,4 @@
-import EgglogSemantics.Impl.Interp
+import EgglogSemantics.Impl.Merge
 
 /-!
 # Emitting egglog source
@@ -47,18 +47,48 @@ def Action.toEgg : Action → String
   | .expr e => e.toEgg
   | .letBind v e => "(let " ++ v ++ " " ++ e.toEgg ++ ")"
   | .union e₁ e₂ => "(union " ++ e₁.toEgg ++ " " ++ e₂.toEgg ++ ")"
+  | .set f args out =>
+      "(set (" ++ f ++ Expr.toEggArgs args ++ ") " ++ out.toEgg ++ ")"
 
 def Rule.toEgg (r : Rule) : String :=
   "(rule (" ++ String.intercalate " " (r.query.map Pattern.toEgg) ++ ") ("
     ++ String.intercalate " " (r.actions.map Action.toEgg) ++ "))"
 
+/-- A merge specification as egglog source. A `.merge` with an empty action block is the
+expression form `:merge e`; with actions it is the block form. `.union` is a constructor
+and never reaches here; `.noMerge` is `:no-merge`. -/
+def MergeSpec.toEgg : MergeSpec → String
+  | .union => ""
+  | .noMerge => " :no-merge"
+  | .merge [] [e] => " :merge " ++ e.toEgg
+  | .merge body res =>
+      " :merge ((" ++ String.intercalate " " (body.map Action.toEgg) ++ ") (values "
+        ++ String.intercalate " " (res.map Expr.toEgg) ++ "))"
+
+/-- A `:merge` function's declaration.
+
+**Sorts finally bite** (M9): egglog typechecks a `(function …)`, so a merge function
+needs a real output sort. Keys are the one eq-sort `Math`; the output is `i64`, as
+`tests/interval.egg` and `tests/merge-during-rebuild.egg` do. An eq-sorted output would
+dodge the base sort, but then `ordering-min` has to render — and `Term.blt` is
+*structural* where egglog's `ordering-min` is by insertion order, so the two would pick
+different representatives. Row counts are per key class and would survive that; nothing
+else would. Keeping keys eq-sorted also keeps `Term.lit` out of constructor arguments,
+so this file's standing literal mismatch stays out of the way. -/
+def FnDecl.toEgg (f : FnName) (d : FnDecl) : String :=
+  "(function " ++ f ++ " (" ++ String.intercalate " " (List.replicate d.arity "Math")
+    ++ ") i64" ++ d.merge.toEgg ++ ")"
+
 /-- A command as egglog source. `Cmd.run` is one round, so it emits `(run 1)`.
-Declarations produce nothing here — they are folded into the `datatype` header. -/
+A constructor declaration is folded into the `datatype` header and produces nothing; a
+`:merge` declaration is its own command. -/
 def Cmd.toEgg : Cmd → String
   | .action a => a.toEgg
   | .rule r => r.toEgg
   | .run => "(run 1)"
-  | .decl _ _ => ""
+  | .decl f d => match d.merge with
+    | .union => ""
+    | _ => FnDecl.toEgg f d
 
 /-! ### Collecting the signature
 
@@ -86,6 +116,7 @@ def Action.fnArities : Action → List (FnName × Nat)
   | .expr e => e.fnArities
   | .letBind _ e => e.fnArities
   | .union e₁ e₂ => e₁.fnArities ++ e₂.fnArities
+  | .set f args out => (f, args.length) :: Expr.fnAritiesL args ++ out.fnArities
 
 def Cmd.fnArities : Cmd → List (FnName × Nat)
   | .action a => a.fnArities
@@ -93,19 +124,34 @@ def Cmd.fnArities : Cmd → List (FnName × Nat)
   | .run => []
   | .decl f d => [(f, d.arity)]
 
-/-- Every constructor the program uses, with its arity, deduplicated. -/
+/-- Every function the program uses, with its arity, deduplicated. -/
 def Program.fnArities (p : Program) : List (FnName × Nat) :=
   (p.flatMap Cmd.fnArities).dedup
 
-/-- The constructor names, in the order the header declares them. -/
-def Program.fnNames (p : Program) : List FnName := p.fnArities.map Prod.fst
+/-- The names the program declares with a non-`union` merge. These get their own
+`function` command and must be kept out of the `datatype`. -/
+def Program.mergeNames (p : Program) : List FnName :=
+  p.filterMap fun c => match c with
+    | .decl f d => match d.merge with
+      | .union => none
+      | _ => some f
+    | _ => none
+
+/-- The constructors: everything used that is not a declared `:merge` function. -/
+def Program.ctorArities (p : Program) : List (FnName × Nat) :=
+  p.fnArities.filter fun fa => fa.1 ∉ p.mergeNames
+
+/-- Every function `(print-size)` reports, in a stable order. Deduplicated by *name*:
+`fnArities` keys on the pair, so a name used at two arities would appear twice — which
+egglog cannot express anyway, but which would silently double a line here. -/
+def Program.fnNames (p : Program) : List FnName := (p.fnArities.map Prod.fst).dedup
 
 /-! ### The file -/
 
 /-- The single-sort `datatype` declaration the untyped model needs. -/
 def Program.eggHeader (p : Program) : String :=
   "(datatype Math " ++ String.intercalate " "
-    (p.fnArities.map fun fa =>
+    (p.ctorArities.map fun fa =>
       "(" ++ fa.1 ++ String.join (List.replicate fa.2 " Math") ++ ")") ++ ")"
 
 /-- The program as a complete `.egg` file, ending in the `(print-size)` that the
@@ -121,7 +167,7 @@ def Program.expectedSizes (p : Program) : String :=
   match exec p with
   | none => "STUCK\n"
   | some d =>
-    String.intercalate "\n" (p.fnNames.map fun f => f ++ " " ++ toString (d.rowCount f))
+    String.intercalate "\n" (p.fnNames.map fun f => f ++ " " ++ toString (d.keyRowCount f))
       ++ "\n"
 
 end Egglog

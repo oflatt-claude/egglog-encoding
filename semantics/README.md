@@ -7,10 +7,11 @@ proof encoding in `egglog/src/proofs/` (designed in
 It is a port of the Redex model in
 [egglog PR #324](https://github.com/egraphs-good/egglog/pull/324). See
 [`PLAN.md`](PLAN.md) for what the port changes and why, the milestone list, and the
-route to the proof-encoding theorems, and [`MERGE.md`](MERGE.md) for the `:merge`
-design (M9), which is in progress: its compatibility theorem is proved and its
-differential cases pass, but 22 further theorems are stated and unproved, so
-`make lean-check` fails on them while `lake build` is clean.
+route to the proof-encoding theorems; [`MERGE.md`](MERGE.md) for the `:merge` design
+(M9), which is in progress — its compatibility theorem is proved and its differential
+cases pass, but 22 further theorems are stated and unproved, so `make lean-check` fails
+on them while `lake build` is clean; and [`CHECKER.md`](CHECKER.md) for what a Lean
+model of egglog's proof checker would cost, which scopes M11.
 
 ## Layout
 
@@ -31,8 +32,8 @@ are inlined rather than pulled out into named lemmas, so nothing in `Spec/` or `
 is there for a proof's sake.
 
 Reading order for `Spec/`: `Syntax` → `Term` → `Database` → `Congruence` → `Eval` →
-`Match` → `Step` → `Scope` → `Merge`. `Impl/` has `Closure` and `Interp` for the
-constructor fragment and `Merge` for M9. Each `Proofs/X.lean` is about `Spec/X.lean` or
+`Match` → `Step` → `Scope` → `Merge`. `Impl/` has `Closure` and `Interp`, with `Merge`
+adding M9's lookup evaluator and merge phase. Each `Proofs/X.lean` is about `Spec/X.lean` or
 `Impl/X.lean`; `Proofs/Interp.lean` additionally holds the refinement theorem
 `exec_toDatabase`, which is what ties the two together.
 

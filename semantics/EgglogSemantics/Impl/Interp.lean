@@ -28,6 +28,7 @@ not multiplicity or order, is what it denotes. -/
 structure FDatabase where
   sig : Signature
   terms : List Term
+  rows : List Row
   eqs : List (Term × Term)
   env : Env
   rules : List Rule
@@ -38,6 +39,7 @@ this. -/
 def toDatabase (d : FDatabase) : Database where
   sig := d.sig
   terms := {t | t ∈ d.terms}
+  rows := {r | r ∈ d.rows}
   eqs := {p | p ∈ d.eqs}
   env := d.env
   rules := {r | r ∈ d.rules}
@@ -46,6 +48,7 @@ def toDatabase (d : FDatabase) : Database where
 def empty : FDatabase where
   sig := fun _ => none
   terms := []
+  rows := []
   eqs := []
   env := []
   rules := []
@@ -56,7 +59,17 @@ Deduplicated on insertion. That is invisible to `toDatabase`, but not to perform
 round's `union` copies every operand's terms, so without it the list length multiplies
 each round and the per-substitution `List.toFinset` in `closureF` goes quadratic on it. -/
 def addTerm (t : Term) (d : FDatabase) : FDatabase :=
-  { d with terms := (t.subtermList ++ d.terms).dedup }
+  { d with terms := (t.subtermList ++ d.terms).dedup,
+           rows := (t.ctorRowList ++ d.rows).dedup }
+
+/-- `addTerm` over a list. -/
+def addTerms (ts : List Term) (d : FDatabase) : FDatabase :=
+  ts.foldl (fun e t => e.addTerm t) d
+
+/-- `(set (f as…) vs)`, computed. -/
+def addRow (f : FnName) (as vs : List Term) (d : FDatabase) : FDatabase :=
+  let d := (d.addTerms as).addTerms vs
+  { d with rows := (⟨f, as, vs⟩ :: d.rows).dedup }
 
 /-- Assert `a = b`, inserting both terms. -/
 def addEq (a b : Term) (d : FDatabase) : FDatabase :=
@@ -65,7 +78,8 @@ def addEq (a b : Term) (d : FDatabase) : FDatabase :=
 /-- Union two databases, taking the signature, environment and rules from the left. This
 is the Redex `U_d` as `runRules` uses it. -/
 def union (d₁ d₂ : FDatabase) : FDatabase :=
-  { d₁ with terms := (d₁.terms ++ d₂.terms).dedup, eqs := (d₁.eqs ++ d₂.eqs).dedup }
+  { d₁ with terms := (d₁.terms ++ d₂.terms).dedup, rows := (d₁.rows ++ d₂.rows).dedup,
+            eqs := (d₁.eqs ++ d₂.eqs).dedup }
 
 /-- `terms` as a `Finset`, for the closure. -/
 def termsF (d : FDatabase) : Finset Term := d.terms.toFinset
@@ -128,6 +142,8 @@ def execAction (d : FDatabase) : Action → Option FDatabase
       { d.addTerm t with env := (v, t) :: d.env }
   | .union e₁ e₂ =>
       (e₁.eval d.env).bind fun t₁ => (e₂.eval d.env).map fun t₂ => d.addEq t₁ t₂
+  | .set f args out => (Expr.evalList args d.env).bind fun as =>
+      (out.eval d.env).map fun v => d.addRow f as [v]
 
 /-- The Redex `Eval-Global-Actions`, computed. -/
 def execActions (d : FDatabase) : List Action → Option FDatabase

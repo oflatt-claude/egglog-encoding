@@ -27,6 +27,13 @@ theorem evalAction_isSome_of_scoped {db : Database} {Γ : Scope} (hm : Γ.Models
     obtain ⟨t₁, ht₁⟩ := Expr.eval_isSome_of_scoped hm h.1
     obtain ⟨t₂, ht₂⟩ := Expr.eval_isSome_of_scoped hm h.2
     exact ⟨db.addEq t₁ t₂, by simp [evalAction, ht₁, ht₂], hm⟩
+  | set f args out =>
+    obtain ⟨as, has⟩ := Expr.evalList_isSome args fun v hv => by
+      obtain ⟨e, he, hve⟩ := Expr.mem_varsList hv
+      exact (hm v).mp (h.1 e he v hve)
+    obtain ⟨v, hv⟩ := Expr.eval_isSome_of_scoped hm h.2
+    refine ⟨db.addRow f as [v], by simp [evalAction, has, hv], ?_⟩
+    simpa [Action.bind] using hm
 
 theorem evalActions_isSome_of_scoped {db : Database} {Γ : Scope} (hm : Γ.Models db.env)
     {as : List Action} (h : Actions.Scoped as Γ) :

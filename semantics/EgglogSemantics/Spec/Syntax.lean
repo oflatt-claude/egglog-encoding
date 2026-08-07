@@ -57,41 +57,28 @@ inductive Pattern where
 /-- A rule's query, matched conjunctively. -/
 abbrev Query := List Pattern
 
-/-- An action: build a term, bind a variable, or assert an equality. -/
+/-- An action: build a term, bind a variable, assert an equality, or write a row.
+
+`set` is what a `:merge` function needs (M9) and what an encoded rule head writes
+(M11) — `(set (@AddView b a) (values rewrite_var ()))`. The Redex has no such action;
+for a constructor-only program it is unreachable. -/
 inductive Action where
   | expr : Expr → Action
   | letBind : Var → Expr → Action
   | union : Expr → Expr → Action
+  /-- `(set (f args…) out)`: assert the row `f args… ↦ out`. -/
+  | set : FnName → List Expr → Expr → Action
 
 /-- A rule. Its actions run once per substitution satisfying its query. -/
 structure Rule where
   query : Query
   actions : List Action
 
-/-- An action that can also write a row. `Action` is the `set`-free part of it.
-
-A `:merge` body is an action list, not an expression: the union-find's own merge
-`set`s the displaced parent edge into `@UF_<Sort>` (`proof_encoding.md`,
-"Union-find"). Keeping it a separate type from `Action` is a deliberate M9 scope
-limit — see `MERGE.md`, "One action language or two". -/
-inductive RowAction where
-  | expr : Expr → RowAction
-  | letBind : Var → Expr → RowAction
-  | union : Expr → Expr → RowAction
-  /-- `(set (f args…) out)`: assert the row `f args… ↦ out`. -/
-  | set : FnName → List Expr → Expr → RowAction
-
-/-- A rule-head action as a `RowAction`. -/
-def Action.toRowAction : Action → RowAction
-  | .expr e => .expr e
-  | .letBind v e => .letBind v e
-  | .union e₁ e₂ => .union e₁ e₂
-
 /-- How two rows colliding on one key combine.
 
 `union` makes the collision an equality, which is exactly congruence — see
 `proof_encoding.md`, "the view's `:merge` resolves congruence directly", and
-`MCong.fd`, the one constructor that covers both. `merge body result` runs `body`
+`Cong.fd`, the one constructor that covers both. `merge body result` runs `body`
 once, with the two rows' outputs bound by `mergeEnv`, and then evaluates `result` —
 **one expression per value column**; `noMerge` forbids a collision outright.
 
@@ -103,7 +90,7 @@ outputs", for that and for the one place this is coarser than egglog: a merge ki
 per *function* here and per *column* there. -/
 inductive MergeSpec where
   | union
-  | merge : List RowAction → List Expr → MergeSpec
+  | merge : List Action → List Expr → MergeSpec
   | noMerge
 
 /-- A function declaration. -/

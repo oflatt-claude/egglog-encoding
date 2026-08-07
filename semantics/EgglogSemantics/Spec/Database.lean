@@ -42,6 +42,10 @@ structure Database where
   sig : Signature
   /-- The terms the database holds. Subterm-closed under `WF`. -/
   terms : Set Term
+  /-- The *asserted* rows. A merge never removes one; it adds the combined row beside
+  the two it merged, which is what keeps the state monotone. For a constructor the rows
+  are determined by `terms` via `Term.ctorRows`, and `addTerm` maintains that. -/
+  rows : Set Row
   /-- The *asserted* equalities, from `union` actions. Not closed under congruence. -/
   eqs : Set (Term × Term)
   /-- Global bindings, extended by a top-level `let`. -/
@@ -54,13 +58,38 @@ namespace Database
 def empty : Database where
   sig := fun _ => none
   terms := ∅
+  rows := ∅
   eqs := ∅
   env := []
   rules := ∅
 
-/-- Insert `t` and all of its subterms. -/
+/-- The constructor rows a term set induces.
+
+`addTerm` maintains `rows` at exactly this value for a constructor-only program, which
+is the precise sense in which `terms` determines `rows` there. -/
+def ctorRowsOf (terms : Set Term) : Set Row :=
+  {r | r.out = [.app r.fn r.args] ∧ Term.app r.fn r.args ∈ terms}
+
+/-- The database's rows are exactly the constructor rows its terms induce.
+
+True of `empty`, preserved by `addTerm`/`addEq`, and false as soon as a `set` writes a
+`:merge` function's row. It is the hypothesis under which the functional dependency
+`Cong.fd` coincides with plain congruence — see `Proofs/Merge.lean`'s `mcong_iff_cong`. -/
+def CtorRows (db : Database) : Prop := db.rows = ctorRowsOf db.terms
+
+/-- Insert `t`, all of its subterms, and their constructor rows. -/
 def addTerm (t : Term) (db : Database) : Database :=
-  { db with terms := db.terms ∪ t.subterms }
+  { db with terms := db.terms ∪ t.subterms, rows := db.rows ∪ t.ctorRows }
+
+/-- `addTerm` over a list. -/
+def addTerms (ts : List Term) (db : Database) : Database :=
+  ts.foldl (fun d t => d.addTerm t) db
+
+/-- `(set (f as…) vs)`: build the operands, then assert the row. Only *asserted* — a
+collision with a congruent key is resolved by `Cong.fd` or by `MergeStep`, neither of
+which removes this row. -/
+def addRow (f : FnName) (as vs : List Term) (db : Database) : Database :=
+  { (db.addTerms as).addTerms vs with rows := insert ⟨f, as, vs⟩ ((db.addTerms as).addTerms vs).rows }
 
 /-- Assert `a = b`, inserting both terms. -/
 def addEq (a b : Term) (db : Database) : Database :=
@@ -75,6 +104,7 @@ is `(run)`'s, whose operands all carry the caller's env and rules —
 def sUnion (db : Database) (S : Set Database) : Database :=
   { db with
     terms := db.terms ∪ ⋃ d ∈ S, d.terms
+    rows := db.rows ∪ ⋃ d ∈ S, d.rows
     eqs := db.eqs ∪ ⋃ d ∈ S, d.eqs }
 
 /-- Databases that differ only in an environment no `lookup` can tell apart.
@@ -84,6 +114,7 @@ databases behave identically. It is the invariant `evalActions_envAgree` carries
 structure EnvAgree (d₁ d₂ : Database) : Prop where
   sig : d₁.sig = d₂.sig
   terms : d₁.terms = d₂.terms
+  rows : d₁.rows = d₂.rows
   eqs : d₁.eqs = d₂.eqs
   rules : d₁.rules = d₂.rules
   env : Env.Agree d₁.env d₂.env
@@ -92,6 +123,7 @@ structure EnvAgree (d₁ d₂ : Database) : Prop where
 `Cong` monotonicity needs, so it ignores the other fields. -/
 structure Contained (d₁ d₂ : Database) : Prop where
   terms : d₁.terms ⊆ d₂.terms
+  rows : d₁.rows ⊆ d₂.rows
   eqs : d₁.eqs ⊆ d₂.eqs
 
 /-- The database invariants.
@@ -102,6 +134,14 @@ structure WF (db : Database) : Prop where
   subtermClosed : ∀ t ∈ db.terms, t.subterms ⊆ db.terms
   eqsInTerms : ∀ p ∈ db.eqs, p.1 ∈ db.terms ∧ p.2 ∈ db.terms
   envInTerms : ∀ b ∈ db.env, b.2 ∈ db.terms
+
+/-- A row talks only about terms the database holds.
+
+Kept out of `WF` because nothing proved needs it yet, and putting it there would make
+every `WF` construction carry a subterm-transitivity argument for no current payoff.
+It is the row half of `WF` and belongs there once something reads it. -/
+def RowsWF (db : Database) : Prop :=
+  ∀ r ∈ db.rows, (∀ a ∈ r.args, a ∈ db.terms) ∧ ∀ v ∈ r.out, v ∈ db.terms
 
 end Database
 end Egglog

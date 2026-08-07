@@ -55,7 +55,7 @@ theorem stepCmd_contained {db db' : Database} {c : Cmd} (h : stepCmd db c = some
   | rule r =>
     simp only [stepCmd, Option.some.injEq] at h
     subst h
-    exact ⟨subset_rfl, subset_rfl⟩
+    exact ⟨subset_rfl, subset_rfl, subset_rfl⟩
   | run =>
     simp only [stepCmd, Option.some.injEq] at h
     subst h
@@ -63,7 +63,7 @@ theorem stepCmd_contained {db db' : Database} {c : Cmd} (h : stepCmd db c = some
   | decl f d =>
     simp only [stepCmd, Option.some.injEq] at h
     subst h
-    exact ⟨subset_rfl, subset_rfl⟩
+    exact ⟨subset_rfl, subset_rfl, subset_rfl⟩
 
 theorem stepCmd_wf {db db' : Database} (hw : db.WF) {c : Cmd}
     (h : stepCmd db c = some db') : db'.WF := by

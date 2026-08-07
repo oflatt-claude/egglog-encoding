@@ -1,4 +1,4 @@
-import EgglogSemantics.Tests.EggMerge
+import EgglogSemantics.Tests.Egg
 
 /-!
 # Differential test case generator
@@ -244,16 +244,16 @@ private def distMax (n : Nat) : FnDecl :=
 
 private def num (n : Int) : Expr := .lit (.int n)
 
-private def mset (f : FnName) (args : List Expr) (v : Int) : MCmd :=
+private def mset (f : FnName) (args : List Expr) (v : Int) : Cmd :=
   .action (.set f args (num v))
 
 /-- A rule that copies a `Dist` entry onto the commuted key, so a merge fires from a rule
 head as well as from a top-level action. -/
-private def commuteDist : MRule where
+private def commuteDist : Rule where
   query := [.expr (.app "G" [.var "a", .var "b"])]
   actions := [.set "Dist" [.var "b", .var "a"] (num 9)]
 
-private def curatedMerge : List (String × MProgram) :=
+private def curatedMerge : List (String × Program) :=
   [ -- One key, three writes: min wins, and the table still holds one row.
     ("min-one",
       [.decl "Dist" (dist 1), mset "Dist" [C "A"] 5, mset "Dist" [C "A"] 3,
@@ -297,7 +297,7 @@ private def writeCase (dir name : String) (p : Program) : IO Unit := do
   IO.FS.writeFile s!"{dir}/{name}.egg" p.toEgg
   IO.FS.writeFile s!"{dir}/{name}.expected" p.expectedSizes
 
-private def writeMergeCase (dir name : String) (p : MProgram) : IO Unit := do
+private def writeMergeCase (dir name : String) (p : Program) : IO Unit := do
   IO.FS.writeFile s!"{dir}/{name}.egg" p.toEgg
   IO.FS.writeFile s!"{dir}/{name}.expected" p.expectedSizes
 

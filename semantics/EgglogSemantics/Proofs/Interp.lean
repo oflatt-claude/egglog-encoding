@@ -21,8 +21,10 @@ namespace FDatabase
     (d.addTerm t).toDatabase = d.toDatabase.addTerm t := by
   simp only [addTerm, toDatabase, Database.addTerm]
   congr 1
-  ext s
-  simp [List.mem_dedup, Term.mem_subtermList, Term.subterms, Or.comm]
+  · ext s
+    simp [List.mem_dedup, Term.mem_subtermList, Term.subterms, Or.comm]
+  · ext r
+    simp [List.mem_dedup, Or.comm]
 
 @[simp] theorem toDatabase_addEq {a b : Term} {d : FDatabase} :
     (d.addEq a b).toDatabase = d.toDatabase.addEq a b := by
@@ -32,8 +34,53 @@ namespace FDatabase
     simp only [Set.mem_setOf_eq, List.mem_dedup, List.mem_append, Term.mem_subtermList,
       Set.mem_union, Term.mem_subterms]
     tauto
+  · ext r
+    simp only [Set.mem_setOf_eq, List.mem_dedup, List.mem_append, Term.mem_ctorRowList,
+      Set.mem_union]
+    tauto
   · ext p
     simp [List.mem_dedup, Set.insert_def, Or.comm]
+
+@[simp] theorem toDatabase_setRows {d : FDatabase} {L : List Row} :
+    ({ d with rows := L } : FDatabase).toDatabase =
+      { d.toDatabase with rows := {r | r ∈ L} } := rfl
+
+@[simp] theorem toDatabase_addTerms {ts : List Term} {d : FDatabase} :
+    (d.addTerms ts).toDatabase = d.toDatabase.addTerms ts := by
+  induction ts generalizing d with
+  | nil => rfl
+  | cons t ts ih => simpa [addTerms, Database.addTerms] using ih (d := d.addTerm t)
+
+@[simp] theorem toDatabase_addRow {f : FnName} {as vs : List Term} {d : FDatabase} :
+    (d.addRow f as vs).toDatabase = d.toDatabase.addRow f as vs := by
+  have hb : ((d.addTerms as).addTerms vs).toDatabase
+      = Database.addTerms vs (Database.addTerms as d.toDatabase) := by
+    rw [toDatabase_addTerms, toDatabase_addTerms]
+  have hr := congrArg Database.rows hb
+  rw [Set.ext_iff] at hr
+  show ({ (d.addTerms as).addTerms vs with
+      rows := (⟨f, as, vs⟩ :: ((d.addTerms as).addTerms vs).rows).dedup } :
+    FDatabase).toDatabase = _
+  rw [toDatabase_setRows, hb]
+  simp only [Database.addRow]
+  congr 1
+  ext r
+  simp only [Set.mem_setOf_eq, List.mem_dedup, List.mem_cons, Set.mem_insert_iff]
+  have := hr r
+  simp only [FDatabase.toDatabase, Set.mem_setOf_eq] at this
+  tauto
+
+@[simp] theorem mem_terms_union {d₁ d₂ : FDatabase} {t : Term} :
+    t ∈ (d₁.union d₂).terms ↔ t ∈ d₁.terms ∨ t ∈ d₂.terms := by
+  simp [FDatabase.union, List.mem_dedup]
+
+@[simp] theorem mem_rows_union {d₁ d₂ : FDatabase} {r : Row} :
+    r ∈ (d₁.union d₂).rows ↔ r ∈ d₁.rows ∨ r ∈ d₂.rows := by
+  simp [FDatabase.union, List.mem_dedup]
+
+@[simp] theorem mem_eqs_union {d₁ d₂ : FDatabase} {p : Term × Term} :
+    p ∈ (d₁.union d₂).eqs ↔ p ∈ d₁.eqs ∨ p ∈ d₂.eqs := by
+  simp [FDatabase.union, List.mem_dedup]
 
 @[simp] theorem coe_termsF {d : FDatabase} : ↑d.termsF = d.toDatabase.terms := by
   ext t; simp [termsF, toDatabase]
@@ -408,6 +455,13 @@ theorem execAction_toDatabase {d : FDatabase} {a : Action} :
       cases hv₂ : e₂.eval d.env with
       | none => simp [execAction, evalAction, hv₁, hv₂]
       | some t₂ => simp [execAction, evalAction, hv₁, hv₂]
+  | set f args out =>
+    cases hv₁ : Expr.evalList args d.env with
+    | none => simp [execAction, evalAction, hv₁]
+    | some as =>
+      cases hv₂ : out.eval d.env with
+      | none => simp [execAction, evalAction, hv₁, hv₂]
+      | some v => simp [execAction, evalAction, hv₁, hv₂]
 
 theorem execActions_toDatabase {d : FDatabase} {as : List Action} :
     (execActions d as).map FDatabase.toDatabase = evalActions d.toDatabase as := by
@@ -454,6 +508,14 @@ theorem mem_eqs_foldl {g : FDatabase → α → FDatabase} {C : α → Term × T
   | nil => simp
   | cons a l ih => rw [List.foldl_cons, ih, hg]; aesop
 
+theorem mem_rows_foldl {g : FDatabase → α → FDatabase} {C : α → Row → Prop}
+    (hg : ∀ acc a q, q ∈ (g acc a).rows ↔ q ∈ acc.rows ∨ C a q)
+    (l : List α) (init : FDatabase) (r : Row) :
+    r ∈ (l.foldl g init).rows ↔ r ∈ init.rows ∨ ∃ a ∈ l, C a r := by
+  induction l generalizing init with
+  | nil => simp
+  | cons a l ih => rw [List.foldl_cons, ih, hg]; aesop
+
 theorem sig_foldl {g : FDatabase → α → FDatabase} (hg : ∀ acc a, (g acc a).sig = acc.sig)
     (l : List α) (init : FDatabase) : (l.foldl g init).sig = init.sig := by
   induction l generalizing init with
@@ -485,6 +547,12 @@ theorem mem_eqs_fireInto {d : FDatabase} {r : Rule} {acc : FDatabase} {σ : Env}
   unfold fireInto Fired
   cases execLocalActions d r.actions σ <;> simp
 
+theorem mem_rows_fireInto {d : FDatabase} {r : Rule} {acc : FDatabase} {σ : Env}
+    {q : Row} :
+    q ∈ (fireInto d r acc σ).rows ↔ q ∈ acc.rows ∨ ∃ d', Fired d r σ d' ∧ q ∈ d'.rows := by
+  unfold fireInto Fired
+  cases execLocalActions d r.actions σ <;> simp
+
 theorem sig_fireInto {d : FDatabase} {r : Rule} {acc : FDatabase} {σ : Env} :
     (fireInto d r acc σ).sig = acc.sig := by
   unfold fireInto; cases execLocalActions d r.actions σ <;> rfl
@@ -508,6 +576,12 @@ theorem mem_eqs_fireRule {d acc : FDatabase} {r : Rule} {p : Term × Term} :
       p ∈ acc.eqs ∨ ∃ σ ∈ matchQuery d r.query, ∃ d', Fired d r σ d' ∧ p ∈ d'.eqs :=
   mem_eqs_foldl (g := fireInto d r) (C := fun σ p => ∃ d', Fired d r σ d' ∧ p ∈ d'.eqs)
     (fun _ _ _ => mem_eqs_fireInto) _ _ _
+
+theorem mem_rows_fireRule {d acc : FDatabase} {r : Rule} {q : Row} :
+    q ∈ (fireRule d acc r).rows ↔
+      q ∈ acc.rows ∨ ∃ σ ∈ matchQuery d r.query, ∃ d', Fired d r σ d' ∧ q ∈ d'.rows :=
+  mem_rows_foldl (g := fireInto d r) (C := fun σ q => ∃ d', Fired d r σ d' ∧ q ∈ d'.rows)
+    (fun _ _ _ => mem_rows_fireInto) _ _ _
 
 theorem sig_fireRule {d acc : FDatabase} {r : Rule} : (fireRule d acc r).sig = acc.sig :=
   sig_foldl (g := fireInto d r) (fun _ _ => sig_fireInto) _ _
@@ -533,6 +607,13 @@ theorem mem_eqs_execRunRules {d : FDatabase} {p : Term × Term} :
     (C := fun r p => ∃ σ ∈ matchQuery d r.query, ∃ d', Fired d r σ d' ∧ p ∈ d'.eqs)
     (fun _ _ _ => mem_eqs_fireRule) _ _ _
 
+theorem mem_rows_execRunRules {d : FDatabase} {q : Row} :
+    q ∈ (execRunRules d).rows ↔ q ∈ d.rows ∨
+      ∃ r ∈ d.rules, ∃ σ ∈ matchQuery d r.query, ∃ d', Fired d r σ d' ∧ q ∈ d'.rows :=
+  mem_rows_foldl (g := fireRule d)
+    (C := fun r q => ∃ σ ∈ matchQuery d r.query, ∃ d', Fired d r σ d' ∧ q ∈ d'.rows)
+    (fun _ _ _ => mem_rows_fireRule) _ _ _
+
 @[simp] theorem sig_execRunRules {d : FDatabase} : (execRunRules d).sig = d.sig :=
   sig_foldl (g := fireRule d) (fun _ _ => sig_fireRule) _ _
 
@@ -554,7 +635,7 @@ every `Env.UnionAll` decomposition — and `evalLocalActions_agree` is what make
 contribute the same databases. -/
 theorem execRunRules_toDatabase {d : FDatabase} (hw : d.WF) :
     (execRunRules d).toDatabase = runRules d.toDatabase := by
-  refine Database.ext ?_ ?_ ?_ ?_ ?_
+  refine Database.ext ?_ ?_ ?_ ?_ ?_ ?_
   · simp [FDatabase.toDatabase, runRules, Database.sUnion]
   · ext t
     simp only [FDatabase.toDatabase, Set.mem_setOf_eq, mem_terms_execRunRules, runRules,
@@ -577,6 +658,27 @@ theorem execRunRules_toDatabase {d : FDatabase} (hw : d.WF) :
         rw [hev'] at hmap
         obtain ⟨d', hd', rfl⟩ := Option.map_eq_some_iff.mp hmap
         exact Or.inr ⟨r, hr, _, hmem, d', hd', ht⟩
+  · ext q
+    simp only [FDatabase.toDatabase, Set.mem_setOf_eq, mem_rows_execRunRules, runRules,
+      Database.sUnion_rows, Set.mem_union, Set.mem_iUnion₂, exists_prop]
+    constructor
+    · rintro (hq | ⟨r, hr, σ, hσ, d', hf, hq⟩)
+      · exact Or.inl hq
+      · obtain ⟨τ, hτ, hag⟩ := validQuerySubst_of_mem_matchQuery hw hσ
+        refine Or.inr ⟨d'.toDatabase, ⟨r, hr, τ, hτ, ?_⟩, hq⟩
+        rw [evalLocalActions_agree r.actions hag]
+        exact fired_toDatabase hf
+    · rintro (hq | ⟨e, ⟨r, hr, τ, hτ, hev⟩, hq⟩)
+      · exact Or.inl hq
+      · obtain ⟨hmem, hag⟩ := mem_matchQuery_of_validQuerySubst hw hτ
+        have hev' : evalLocalActions d.toDatabase r.actions
+            (Env.canon (Query.freeVars r.query d.env) τ) = some e := by
+          rw [← evalLocalActions_agree r.actions hag]; exact hev
+        have hmap := execLocalActions_toDatabase (d := d) (as := r.actions)
+          (σ := Env.canon (Query.freeVars r.query d.env) τ)
+        rw [hev'] at hmap
+        obtain ⟨d', hd', rfl⟩ := Option.map_eq_some_iff.mp hmap
+        exact Or.inr ⟨r, hr, _, hmem, d', hd', hq⟩
   · ext p
     simp only [FDatabase.toDatabase, Set.mem_setOf_eq, mem_eqs_execRunRules, runRules,
       Database.sUnion_eqs, Set.mem_union, Set.mem_iUnion₂, exists_prop]
@@ -610,7 +712,7 @@ theorem execCmd_toDatabase {d : FDatabase} (hw : d.WF) {c : Cmd} :
   | action a => exact execAction_toDatabase
   | rule r =>
     simp only [execCmd, stepCmd, Option.map_some, Option.some.injEq]
-    refine Database.ext rfl rfl rfl rfl ?_
+    refine Database.ext rfl rfl rfl rfl rfl ?_
     ext r'
     simp [FDatabase.toDatabase]
   | run => simp only [execCmd, stepCmd, Option.map_some, execRunRules_toDatabase hw]
