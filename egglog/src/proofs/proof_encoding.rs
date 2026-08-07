@@ -1,6 +1,6 @@
 #[doc = include_str!("proof_encoding.md")]
 use crate::proofs::proof_encoding_helpers::{
-    Composition, EncodingNames, HeadColumn, Justification, Skeleton, uf_clear_enabled,
+    Composition, EncodingNames, HeadColumn, Justification, Skeleton,
 };
 use crate::proofs::proof_head::{
     Head, HeadPlan, HeadPosition, HeadProof, HeadRun, ProofAlgebra, constructor_operand,
@@ -783,22 +783,6 @@ impl<'a> ProofInstrumentor<'a> {
             (String::new(), "()".to_string())
         };
 
-        // Under the clear knob, every edge of this table is dropped once maintenance
-        // has finished consuming it. `:naive` because the ruleset's own delta is
-        // empty on the run that must see the whole table.
-        let clear_rule = if uf_clear_enabled() {
-            let clear_name = self.egraph.parser.symbol_gen.fresh("uf_clear_rule");
-            let clear_ruleset = self.proof_names().uf_clear_ruleset_name.clone();
-            format!(
-                "(rule ((= (values {b} {pb}) ({uf_name} {a})))
-                       ((delete ({uf_name} {a})))
-                        :ruleset {clear_ruleset} :naive :name \"{clear_name}\")
-                 "
-            )
-        } else {
-            String::new()
-        };
-
         let code = format!(
             "{packed_decl}
              (function {uf_name} ({sort_name}) ({sort_name} {proof_type}) :merge {uf_merge} :unextractable :internal-hidden :internal-identity-vals 1)
@@ -809,7 +793,6 @@ impl<'a> ProofInstrumentor<'a> {
                    (set ({uf_name} {a}) (values {c} {compressed_proof})))
                    :ruleset {path_compress_ruleset_name}
                    :name \"{fresh_name}\")
-             {clear_rule}
                    "
         );
 
@@ -2155,22 +2138,13 @@ impl<'a> ProofInstrumentor<'a> {
         let subsume_ruleset = self.proof_names().subsume_ruleset_name.clone();
         // The `@UF` `:merge` resolves conflicting parents itself, so only
         // `path_compress` (flattening chains) remains as UF maintenance.
-        //
-        // The clear runs last, once the saturated rebuild has canonicalized every
-        // row that any later query, `delete`, or `subsume` can reach — so the edges
-        // it drops are ones nothing reads again.
-        let clear_step = if uf_clear_enabled() {
-            format!(" {}", self.proof_names().uf_clear_ruleset_name)
-        } else {
-            String::new()
-        };
         self.parse_schedule(format!(
             "(seq
               (saturate
                   {rebuilding_cleanup_ruleset}
                   (saturate {path_compress_ruleset})
                   {rebuilding_ruleset})
-              {subsume_ruleset}{clear_step})"
+              {subsume_ruleset})"
         ))
     }
 

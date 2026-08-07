@@ -68,7 +68,6 @@ pub(crate) struct EncodingNames {
     pub(crate) rebuilding_ruleset_name: String,
     pub(crate) rebuilding_cleanup_ruleset_name: String,
     pub(crate) subsume_ruleset_name: String,
-    pub(crate) uf_clear_ruleset_name: String,
     // Per-function fresh names
     pub(crate) view_name: HashMap<String, String>,
     pub(crate) subsumed_name: HashMap<String, String>,
@@ -450,25 +449,11 @@ impl EncodingNames {
             rebuilding_ruleset_name: symbol_gen.fresh("rebuilding"),
             rebuilding_cleanup_ruleset_name: symbol_gen.fresh("rebuilding_cleanup"),
             subsume_ruleset_name: symbol_gen.fresh("subsume_ruleset"),
-            uf_clear_ruleset_name: symbol_gen.fresh("uf_clear"),
             view_name: HashMap::default(),
             subsumed_name: HashMap::default(),
             subsume_declared: HashSet::default(),
         }
     }
-}
-
-/// Whether maintenance empties every `@UF_<S>` table at the end of each run,
-/// keeping only the edges a later iteration's rebuild will read. Set
-/// `EGGLOG_UF_CLEAR=1` to enable.
-///
-/// Off by default because it does not pay: the rebuild rule already reads only
-/// the `@UF` delta, so the rows this drops are ones its join never visits. It
-/// also loses the ability to canonicalize a value from an earlier iteration,
-/// which [`crate::extract::find_canonical`] needs, and lets a rule that
-/// re-derives one union per iteration keep `saturate` from terminating.
-pub(crate) fn uf_clear_enabled() -> bool {
-    matches!(std::env::var("EGGLOG_UF_CLEAR").as_deref(), Ok("1"))
 }
 
 impl ProofInstrumentor<'_> {
@@ -601,19 +586,11 @@ impl ProofInstrumentor<'_> {
 
     /// Header commands for term encoding, setting up rulesets.
     pub(crate) fn term_header(&mut self) -> Vec<Command> {
-        let uf_clear = if uf_clear_enabled() {
-            format!(
-                "\n             (ruleset {})",
-                self.proof_names().uf_clear_ruleset_name
-            )
-        } else {
-            String::new()
-        };
         let str = format!(
             "(ruleset {})
              (ruleset {})
              (ruleset {})
-             (ruleset {}){uf_clear}",
+             (ruleset {})",
             self.proof_names().path_compress_ruleset_name,
             self.proof_names().rebuilding_ruleset_name,
             self.proof_names().rebuilding_cleanup_ruleset_name,
