@@ -572,8 +572,29 @@ impl EGraph {
                         (resolved.name.clone(), ft.input.clone(), ft.outputs.clone());
                     crate::proofs::proof_fresh::register_set_if_empty(self, &name, input, outputs);
                 }
+                // A term-node relation (a term or proof node, whose last input is
+                // the minted id) gets a mint primitive, so the encoding writes a
+                // node in one statement. Registered here for the same reason as
+                // `set-if-empty` above.
+                if resolved.internal_term_node
+                    && let ResolvedCall::Func(ft) = &resolved.resolved_schema
+                    && let Some((id_sort, arg_sorts)) = ft.input.split_last()
+                    && id_sort.is_eq_sort()
+                {
+                    // `register_mint` stages one `Unit` value column, so a term-node
+                    // relation must declare exactly that.
+                    debug_assert!(
+                        matches!(ft.outputs.as_slice(), [out] if out.name() == "Unit"),
+                        "term-node relation `{}` must declare one `Unit` value column, got {:?}",
+                        resolved.name,
+                        ft.outputs.iter().map(|out| out.name()).collect::<Vec<_>>(),
+                    );
+                    let (name, id_sort, arg_sorts) =
+                        (resolved.name.clone(), id_sort.clone(), arg_sorts.to_vec());
+                    crate::proofs::proof_fresh::register_mint(self, &name, arg_sorts, id_sort);
+                }
                 // If this is a let binding, add it to global_sorts
-                // This preserves bahavior for lets after desugaring
+                // This preserves behavior for lets after desugaring
                 if resolved.internal_let {
                     let output_sort = self.type_info.sorts.get(fdecl.schema.output()).unwrap();
                     self.type_info
@@ -592,7 +613,6 @@ impl EGraph {
                 name,
                 presort_and_args,
                 uf,
-                proof_func,
                 container_rebuild,
                 proof_constructors,
                 unionable,
@@ -604,27 +624,25 @@ impl EGraph {
                 if !unionable {
                     self.type_info.non_unionable_sorts.insert(name.clone());
                 }
-                // Record this sort's UF / proof tables in proof_state (as
-                // run_command also does) so the container rebuild registration
-                // below can recover them — including this container's own proof
-                // table, which has not run yet.
+                // Record this sort's UF table and the global proof-constructor
+                // names in proof_state (as run_command also does) so the
+                // container rebuild registration below can recover them.
                 if let Some((uf_ctor, _uf_index)) = uf {
                     self.proof_state
                         .uf_parent
                         .insert(name.clone(), uf_ctor.clone());
                     // The rebuild rules canonicalize a term in their action
                     // through these, derived from the sort's `@UF_<S>` table.
+                    // Proof mode is on exactly when the encoding's `Proof` sort
+                    // has been declared, which the proof header does before any
+                    // encoded sort.
+                    let proofs = self
+                        .type_info
+                        .sorts
+                        .contains_key(&self.proof_state.proof_names.proof_datatype);
                     crate::proofs::proof_container_rebuild::register_uf_canon(
-                        self,
-                        name,
-                        uf_ctor,
-                        proof_func.is_some(),
+                        self, name, uf_ctor, proofs,
                     );
-                }
-                if let Some(pf) = proof_func {
-                    self.proof_state
-                        .proof_func_parent
-                        .insert(name.clone(), pf.clone());
                 }
                 // The Proof sort records the global proof constructors; restore
                 // them into proof_state so container rebuild can recover them
@@ -637,6 +655,9 @@ impl EGraph {
                     names.eq_trans_constructor = pc.trans.clone();
                     names.eq_sym_constructor = pc.sym.clone();
                     names.container_normalize_constructor = pc.normalize.clone();
+                    names.fiat_prefix = pc.fiat.clone();
+                    names.proj_constructor = pc.proj.clone();
+                    names.proj_all_prefix = pc.proj_all.clone();
                 }
                 // A container sort under the term/proof encoding carries a spec
                 // for its rebuild primitives; register them here so they are
@@ -650,7 +671,6 @@ impl EGraph {
                     name: name.clone(),
                     presort_and_args: presort_and_args.clone(),
                     uf: uf.clone(),
-                    proof_func: proof_func.clone(),
                     container_rebuild: container_rebuild.clone(),
                     proof_constructors: proof_constructors.clone(),
                     unionable: *unionable,

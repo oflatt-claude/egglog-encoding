@@ -38,7 +38,7 @@ use hashbrown::{HashMap, HashSet};
 use web_time::{Duration, Instant};
 
 use crate::compile::{ReadKey, Row};
-use crate::{EGraph, TableDefault, ViewOp};
+use crate::{EGraph, MintOp, TableDefault, ViewOp};
 
 /// Binding environment: variable id → bound `u32` value.
 pub(crate) type Env = HashMap<u32, u32>;
@@ -522,14 +522,16 @@ fn apply_head(
                             .copied()
                             .map(Value::new)
                             .collect::<Vec<_>>();
-                        // The term encoder's `set-if-empty` / view-column-read ops are
-                        // serviced against the mirror here (the db external
-                        // function for them only panics); every other primitive
-                        // runs on the embedded db.
+                        // The term encoder's `set-if-empty` / view-column-read /
+                        // mint ops are serviced against the mirror here (the db
+                        // external function for them only panics); every other
+                        // primitive runs on the embedded db.
                         if let Some(op) = eg.set_if_empty_ops.get(id).cloned() {
                             Some(set_if_empty_apply(eg, &op, &arguments, lookup_index)?)
                         } else if let Some(op) = eg.view_column_read_ops.get(id).cloned() {
                             Some(view_column_read_apply(eg, &op, &arguments, lookup_index)?)
+                        } else if let Some(op) = eg.mint_ops.get(id).cloned() {
+                            Some(mint_apply(eg, &op, &arguments)?)
                         } else {
                             eg.eval_prim_internal(*id, &arguments)?
                         }
@@ -703,6 +705,25 @@ fn set_if_empty_apply(
     let full: Row = args[..end].iter().map(|v| v.rep()).collect();
     eg.insert_live_row(view, full);
     Ok(args[op.n_keys])
+}
+
+/// Service the term encoder's mint against the mirror: insert
+/// `(args…, fresh, vals…)` with a freshly minted id, and return that id.
+fn mint_apply(eg: &mut EGraph, op: &MintOp, args: &[Value]) -> Result<Value> {
+    let table = *eg
+        .table_ids
+        .get(&op.table_name)
+        .ok_or_else(|| anyhow!("mint relation `{}` is not registered", op.table_name))?;
+    debug_assert_eq!(args.len(), op.n_args);
+    let fresh = eg.fresh_id_internal();
+    let row: Row = args
+        .iter()
+        .map(|v| v.rep())
+        .chain([fresh])
+        .chain(op.vals.iter().copied())
+        .collect();
+    eg.insert_live_row(table, row);
+    Ok(Value::new(fresh))
 }
 
 /// Service the term encoder's view-column read against the mirror: output column

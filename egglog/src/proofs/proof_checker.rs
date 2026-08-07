@@ -346,6 +346,29 @@ pub enum ProofCheckErrorKind {
     /// Congruence proof: lhs doesn't match base proof lhs
     #[error("Proof {proof_id}: congruence error - proof lhs doesn't match base proof lhs")]
     CongruenceLhsMismatch { proof_id: ProofId },
+    /// Projection proof: sub-proof rhs is not a function application
+    #[error("Proof {proof_id}: projection error - sub-proof rhs is not a function application")]
+    ProjectionBaseNotApp { proof_id: ProofId },
+    /// Projection proof: child index out of bounds
+    #[error(
+        "Proof {proof_id}: projection error - child index {child_index} out of bounds for term with {num_children} children"
+    )]
+    ProjectionChildIndexOutOfBounds {
+        proof_id: ProofId,
+        child_index: usize,
+        num_children: usize,
+    },
+    /// Projection proof: the conclusion is not the projected child's reflexivity
+    #[error(
+        "Proof {proof_id}: projection error - proof {proof_lhs:?} = {proof_rhs:?} is not the reflexivity of child {child_index}, {base_child:?}"
+    )]
+    ProjectionResultMismatch {
+        proof_id: ProofId,
+        proof_lhs: TermId,
+        proof_rhs: TermId,
+        base_child: TermId,
+        child_index: usize,
+    },
     /// Rule application has wrong number of premises
     #[error(
         "Proof {proof_id}: rule '{rule_name}' expects {expected} premises, but proof has {actual}"
@@ -941,6 +964,37 @@ impl ProofStore {
                 }
 
                 Ok(Proposition::new(proof.lhs(), proof.rhs()))
+            }
+
+            Justification::Proj {
+                proof: base_id,
+                child_index,
+            } => {
+                // The sub-proof establishes `t1 = f(..., ci, ...)`; the child at
+                // `child_index` is the `ci` this may conclude is reflexive.
+                let base_prop = self.check_proof_with_context(*base_id, program, ctx)?;
+                let Term::App(_, children) = self.term_dag.get(base_prop.rhs) else {
+                    return Err(ProofCheckErrorKind::ProjectionBaseNotApp { proof_id }.into());
+                };
+                let Some(&base_child) = children.get(*child_index) else {
+                    return Err(ProofCheckErrorKind::ProjectionChildIndexOutOfBounds {
+                        proof_id,
+                        child_index: *child_index,
+                        num_children: children.len(),
+                    }
+                    .into());
+                };
+                if proof.lhs() != base_child || proof.rhs() != base_child {
+                    return Err(ProofCheckErrorKind::ProjectionResultMismatch {
+                        proof_id,
+                        proof_lhs: proof.lhs(),
+                        proof_rhs: proof.rhs(),
+                        base_child,
+                        child_index: *child_index,
+                    }
+                    .into());
+                }
+                Ok(Proposition::new(base_child, base_child))
             }
 
             Justification::ContainerNormalize { proof: inner_id } => {

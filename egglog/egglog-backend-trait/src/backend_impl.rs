@@ -267,6 +267,15 @@ impl Backend for EGraph {
         EGraph::register_view_column_read(self, view_name, n_keys, col_idx)
     }
 
+    fn register_mint_row(
+        &mut self,
+        table_name: String,
+        n_args: usize,
+        vals: Vec<Value>,
+    ) -> ExternalFunctionId {
+        EGraph::register_mint_row(self, table_name, n_args, vals)
+    }
+
     fn set_report_level(&mut self, level: ReportLevel) {
         EGraph::set_report_level(self, level);
     }

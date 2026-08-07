@@ -69,8 +69,7 @@ at one parent.
 
 ## Term relation and view
 
-Each constructor expands to a **term relation**, a **view**, a rebuild index,
-and deferred-deletion helpers:
+Each constructor expands to a **term relation**, a **view**, and a rebuild index:
 
 ```text
 (function Add (Math Math Math) Unit :no-merge :unextractable :internal-hidden :internal-term-node)
@@ -79,23 +78,23 @@ and deferred-deletion helpers:
             (values (ordering-min old0 new0) ()))
     :internal-term-constructor Add :internal-identity-vals 1)
 (index @AddOcc_Math @AddView (any 0 1 2))
-(function @to_delete_Add (Math Math) Unit :no-merge :unextractable :internal-hidden)
-(function @to_subsume_Add (Math Math) Unit :no-merge :unextractable :internal-hidden)
 ```
 
 The term relation `Add(child0, child1, eclass)` stores every application as a row
-whose last column is the term's own id, minted with `get-fresh!`. Nothing is ever
-removed from it, which lets proofs refer to terms after they leave the e-graph.
-`:internal-term-node` marks its rows as term nodes for proof extraction.
+whose last column is the term's own id. Nothing is ever removed from it, which
+lets proofs refer to terms after they leave the e-graph. `:internal-term-node`
+marks its rows as term nodes for proof extraction, and gives the relation a
+`mint-<Relation>!` primitive: every relation whose last input is a minted id —
+the term relations and every proof-node relation — gets one, and
+`(let v (mint-Add! a b))` mints the id and writes the row in a single statement
+(see [`crate::proofs::proof_fresh`]).
 
 The **view** is the functional dependency `children -> (eclass, proof)` over a
 term's *canonicalized* children. Two view rows that collide on the same children
 are congruent, so the view's `:merge` resolves congruence directly — it keeps the
 smaller e-class and unions the two in `@UF_<Sort>`, and no separate congruence
 rule is needed. All queries read the view; the term relation is write-only after
-creation. The two deferred-deletion helpers are plain `Unit` relations keyed on
-the children, with no minted id and no `:internal-term-node`, so extraction never
-reads them as terms.
+creation.
 
 ## Building a term
 
@@ -104,12 +103,10 @@ and interns the application into its view. Top level `(Add (Num 1) (Num 2))`
 lowers to:
 
 ```text
-(let n1 (get-fresh! "Math"))
-(set (Num 1 n1) ())
+(let n1 (mint-Num! 1))
 (let n1_can (set-if-empty-@NumView! 1 n1 ()))
 …                                                       ;; the same for (Num 2)
-(let ab (get-fresh! "Math"))
-(set (Add n1_can n2_can ab) ())
+(let ab (mint-Add! n1_can n2_can))
 (let ab_can (set-if-empty-@AddView! n1_can n2_can ab ()))
 ```
 
@@ -161,26 +158,51 @@ variables keeps the plain `@UF_<Sort>` edge.
 
 ## Delete and subsume
 
-Deletions and subsumptions are deferred. `(delete (Add (Num 1) (Num 2)))` builds
-its argument's children and then records a marker row:
+Both build their argument's children first, and both touch only the view: the
+term relation is never queried, so keeping its rows lets proofs still refer to
+deleted terms.
+
+`(delete (Add (Num 1) (Num 2)))` deletes the view row in the action:
 
 ```text
-(set (@to_delete_Add n1_can n2_can) ())
+(delete (@AddView n1_can n2_can))
 ```
 
-which `@delete_subsume_ruleset` consumes during maintenance:
+No deferral is added on top of the backend's own. A `delete` is staged into a
+mutation buffer and applied when the batch commits, and a table's commit applies
+its removals *before* its insertions, so a row another rule inserts in the same
+batch outlives the delete. That is the uninstrumented meaning of `delete`, and
+lowering it directly is what preserves it.
+
+Subsumption *is* deferred, through a marker row:
 
 ```text
-(rule ((@to_delete_Add c0_ c1_)
+(set (@to_subsume_Add n1_can n2_can) ())
+```
+
+which `@subsume_ruleset` consumes during maintenance:
+
+```text
+(rule ((@to_subsume_Add c0_ c1_)
        (= (values e pf) (@AddView c0_ c1_)))
-      ((delete (@AddView c0_ c1_))
-       (delete (@to_delete_Add c0_ c1_)))
-        :ruleset @delete_subsume_ruleset :name "@delete_rule")
+      ((subsume (@AddView c0_ c1_)))
+        :ruleset @subsume_ruleset :name "@subsume_rule")
 ```
 
-with a `:subsume` sibling for `@to_subsume_Add`. Only the view is deleted or
-subsumed; the term relation is never queried, so keeping its rows lets proofs
-still refer to deleted terms.
+The marker outlives the row: rebuilding re-keys a view row by inserting it at its
+canonical children, and that insert carries no subsumed bit, so only a marker
+that is itself re-keyed keeps the row subsumed (see
+[Keeping the view canonical](#keeping-the-view-canonical)).
+
+Almost no program subsumes, so `@to_subsume_<Constructor>` and its rules are
+declared on first use rather than with the constructor. Commands arrive one at a
+time — the `subsume` may be many batches after the `datatype` — so the encoder
+emits the declarations ahead of the command that needs them, and remembers which
+constructors it has covered in the e-graph's own state, where `push`/`pop` roll
+the memo back together with the declarations it tracks.
+
+The marker is a plain `Unit` relation keyed on the children, with no minted id
+and no `:internal-term-node`, so extraction never reads it as a term.
 
 # Queries
 
@@ -218,13 +240,13 @@ restore the invariants egglog would otherwise maintain during rebuilding:
 (ruleset @parent)               ;; path compression on the union-find
 (ruleset @rebuilding)           ;; re-canonicalize view rows; resolve congruence
 (ruleset @rebuilding_cleanup)   ;; drop rows merged away
-(ruleset @delete_subsume_ruleset)
+(ruleset @subsume_ruleset)      ;; apply subsumption markers
 
 (run-schedule
     (seq (saturate (seq (run @rebuilding_cleanup)
                         (saturate (seq (run @parent)))
                         (run @rebuilding)))
-         (run @delete_subsume_ruleset)))
+         (run @subsume_ruleset)))
 ```
 
 A command that only builds and interns terms — a `let`, a `set`, a top-level
@@ -357,19 +379,24 @@ See [`crate::proofs::proof_container_rebuild`] for the rebuild primitives, and
 
 With proofs enabled, the encoding first emits a header defining the proof format
 (see [`crate::proofs::proof_format`] and `proof_encoding_helpers.rs`): the
-`@Proof` and `@Ast` sorts, one `@Ast<Sort>` per sort, and the proof-node
-relations `@Fiat`, `@RuleLink`, `@MergeIdx`, `@MergeRow`, `@Trans`, `@Sym`,
-`@Congr`, `@CongrAll`, `@ContainerNormalize`, `@Eval` — each a
-`(function … Unit :no-merge)`, not a constructor, so a proof node is a fresh id
-plus a row. Two further families have their column count fixed by the site rather
-than by the format, so each shape is declared just before the commands needing
-it: `@Rule_<k>`, a rule proof carrying its `k` body premises inline, and
-`@Packed_<k>`, one row standing for a whole composition over `k` proofs (see
-[Packed rows](#packed-rows)).
+`@Proof` sort and the proof-node relations `@RuleLink`, `@MergeIdx`,
+`@MergeRow`, `@Trans`, `@Sym`, `@Congr`, `@CongrAll`, `@Proj`,
+`@ContainerNormalize`, `@Eval` — each a `(function … Unit :no-merge)`, not a
+constructor, so a proof node is a fresh id plus a row, both written by that
+relation's `mint-<Relation>!`. Four further families have their shape fixed by
+the site rather than by the format, so each is declared where it is first needed
+rather than in the header: `@Rule_<k>`, a rule proof carrying its `k` body
+premises inline; `@Packed_<k>`, one row standing for a whole composition over
+`k` proofs (see [Packed rows](#packed-rows)); `@Fiat_<Sort>`, naming its two
+endpoints by value; and `@ProjAll_<Sort>`, naming the projected child by value.
+The last two are specialized on a sort so that they can take a term of it
+directly, which is what lets a proof node name a term of any sort.
 
-Each sort also gets `(function @<Sort>Proof (<Sort>) @Proof :merge old)`,
-recording for each term `t` a proof of `t = t` (oldest kept), and the union-find
-and view proof columns become real:
+`@ProjAll_<Sort>` is raw-only: like `@CongrAll` it names a child by term rather
+than by position, and conversion desugars it into the `@Proj` at the position it
+finds.
+
+The union-find and view proof columns become real:
 
 ```text
 (function @UF_Math (Math) (Math @Proof) :merge (… @Packed_2 "trans_sym_p0_p1" …) …)
@@ -380,13 +407,52 @@ If term `k` has parent `p`, `(@UF_Math k)` returns `(values p proof)` where
 `proof` proves `k = p` — the key on the left. A view row's proof runs the other
 way, `eclass = f(children)`.
 
-The rest of this part is the two layers.
-[**Layer 1**](#layer-1-building-the-proof-as-the-rule-runs) is a rule that builds
-each proof as it goes; it is the specification.
+The rest of this part is [reflexive anchors](#reflexive-anchors) and then the two
+layers. [**Layer 1**](#layer-1-building-the-proof-as-the-rule-runs) is a rule
+that builds each proof as it goes; it is the specification.
 [**Layer 2**](#layer-2-proof-skeletons) is what the encoder emits for a rule
 head: a skeleton naming the firing, from which proof conversion recovers layer
 1's proof. Everything after those two — body premises, rebuild rows, merge
 collisions, containers — is stated against layer 1.
+
+## Reflexive anchors
+
+A proof of `t = t` is not free: the checker reads a reflexive equality over an
+eq-sort or container term as a claim that the term *exists*, so a `@Fiat` will
+not do (that is reserved for literals and value-constructor terms). Every such
+anchor is instead **projected out of a row proof already in scope**. A view
+row's proof states an equality whose right-hand side is the row's term, so:
+
+* a term the row mentions as a child is `@Proj(row, i)`;
+* a container's element, whose position in the term form is only known once the
+  term is in hand, is `@ProjAll_<Sort>(row, element)`.
+
+That covers every anchor the encoding wants: the reflexive base a container
+rebuild composes from, and a rule body's eq-sort or container variable. Which
+row anchors a body variable is only known once the whole body is walked, so the
+anchor's row is written where the composition reading it lands — and a
+composition that drops it as reflexive writes none at all. A body's equalities
+join the variables they relate into one anchor class, so an element read bound to
+a variable is anchored through the read.
+
+**A value the query computed is not anchored at all.** Every one of the sources
+above is a row the database holds, and a container a body primitive built is in
+no row — so neither it nor anything read out of it can be projected. There is no
+congruence route either: `@Congr`/`@CongrAll` rewrite a child of a term a proof
+already mentions, so they cannot introduce the container's term in the first
+place.
+
+Such a value only matters where a premise reads its anchor. A fact's premise
+composes `Sym(left)` with `right` and drops whichever side proves `t = t`, so an
+equality reads its right-hand anchor exactly when its left-hand proof is itself
+reflexive — a variable, or another primitive's result, but not a term the query
+builds. Anywhere else the anchor goes unread and is never written: a view atom's
+argument, the right-hand side of a built term, or a value some other atom
+anchors after all. Proof support rejects a rule whose premises do read one (see
+[`crate::ProofEncodingUnsupportedReason`]), covering both a container a body
+primitive built and an eq-sort value a primitive produced without being handed a
+container to read it out of. A head that mints no row reads no premise either;
+proof support does not model that, and rejects those rules too.
 
 ## Layer 1: building the proof as the rule runs
 
@@ -422,18 +488,16 @@ as its `@Congr` step.
 
 For the running example's `rewrite`, whose two children come straight from the
 body and whose result is a construct-into guest, layer 1 would emit five proofs
-(illustrative: each proof node is one `let` rather than a `get-fresh!` plus a
-row, and `rule-proof` stands for whatever names a proof the firing concludes):
+(illustrative: `@Trans`/`@Sym` are spelled as calls rather than as mints, and
+`rule-proof` stands for whatever names a proof the firing concludes):
 
 ```text
-(let ba (get-fresh! "Math"))                 ;; the natural node
-(set (Add b a ba) ())
+(let ba (mint-Add! b a))                     ;; the natural node
 (let own  (rule-proof rule_name prems))      ;; ba = ba, the head's own conclusion
 (let edge (rule-proof rule_name prems))      ;; rewrite_var = ba, the dropped union
 (let view (@Trans edge own))                 ;; rewrite_var = (Add b a), the view row
 (let back (@Sym view))
 (let conn (@Trans own back))                 ;; ba = rewrite_var, the connector
-(set (@MathProof ba) own)
 (set (@AddView b a) (values rewrite_var view))
 ```
 
@@ -475,8 +539,7 @@ representative, or installs the given id and proof when the shape is new.
 there is no congruence step — the natural node is the only one built:
 
 ```text
-(let d (get-fresh! "Math"))
-(set (Add b c d) ())
+(let d (mint-Add! b c))
 (let d-prf (rule-proof rule_name prems))              ;; d = d
 (let (values d' d-to-d'-prf) (set-if-empty (@AddView b c) d d-prf))
 ```
@@ -486,12 +549,10 @@ natural node is over `d`; the canonical one over `d'`; `@Congr` at the child's
 position carries the first to the second:
 
 ```text
-(let e (get-fresh! "Math"))
-(set (Add a d e) ())
+(let e (mint-Add! a d))
 (let e-prf (rule-proof rule_name prems))              ;; e = e
 
-(let e' (get-fresh! "Math"))                          ;; the same term over canonical children
-(set (Add a d' e') ())
+(let e' (mint-Add! a d'))                             ;; the same term over canonical children
 (let e-to-e'-prf (@Congr e-prf 1 d-to-d'-prf))        ;; e = e'
 (let e'-prf (@Trans (@Sym e-to-e'-prf) e-to-e'-prf))  ;; e' = e'
 
@@ -503,12 +564,10 @@ position carries the first to the second:
 congruence step:
 
 ```text
-(let f (get-fresh! "Math"))
-(set (Neg e f) ())
+(let f (mint-Neg! e))
 (let f-prf (rule-proof rule_name prems))              ;; f = f
 
-(let f' (get-fresh! "Math"))
-(set (Neg e'' f') ())
+(let f' (mint-Neg! e''))
 (let f-to-f'-prf (@Congr f-prf 0 e-to-e''-prf))       ;; f = f'
 (let f'-prf (@Trans (@Sym f-to-f'-prf) f-to-f'-prf))  ;; f' = f'
 
@@ -542,9 +601,9 @@ a row of its own.
 Layer 1 composes a proof for every step of the walk. Almost none of them are ever
 read: a proof is only wanted if someone later asks to explain a specific fact.
 Layer 2 keeps the same walk but writes a row only where the *e-graph itself must
-store a proof* — a view row's proof column, a `@UF` edge's proof column, a
-`@<Sort>Proof` entry. Each such row is a **skeleton**: it names the rule that
-fired, the premise proofs it fired on, and *which* proof of that head it is.
+store a proof* — a view row's proof column, a `@UF` edge's proof column. Each
+such row is a **skeleton**: it names the rule that fired, the premise proofs it
+fired on, and *which* proof of that head it is.
 
 The original rule head is then the **format** of the proof. Given the skeleton,
 proof conversion replays the head under the firing's substitution, applies the
@@ -580,10 +639,12 @@ conclusion.
 
 The bridge — which e-class a subterm interned into — is the one thing conversion
 cannot recompute, so the skeleton carries it. A row written before the head
-interns anything carries the body premises inline as `@Rule_<k>`. Every row after
-that is a `@RuleLink`, naming the row written just before the newest interning —
-which carries the premises and every earlier bridge — plus that interning's
-bridge. Chaining keeps a row's width constant no matter how deep the head is.
+interns anything carries the body premises inline as `@Rule_<k>`, `k` counting
+only the premises the encoding records (see [Body premises](#body-premises)).
+Every row after that is a `@RuleLink`, naming the row written just before the
+newest interning — which carries the premises and every earlier bridge — plus
+that interning's bridge. Chaining keeps a row's width constant no matter how
+deep the head is.
 
 So a row carries exactly the bridges the head had recorded when it wrote the row,
 and the replay takes them one at a time: it reaches the column the row names, and
@@ -600,22 +661,16 @@ proof rows:
 (rule ((= (values e p) (@AddView a b))
        (= rewrite_var e))
       ((let rule_name "(rewrite (Add a b) (Add b a))")
-       (let ba (get-fresh! "Math"))
-       (set (Add b a ba) ())
-       (let own (get-fresh! "@Proof"))
-       (set (@Rule_1 rule_name p 0 own) ())
-       (set (@MathProof ba) own)
-       (let view (get-fresh! "@Proof"))
-       (set (@Rule_1 rule_name p 2 view) ())
+       (let ba (mint-Add! b a))
+       (let view (mint-@Rule_1! rule_name p 2))
        (set (@AddView b a) (values rewrite_var view)))
         :name "(rewrite (Add a b) (Add b a))" :unsafe-seminaive)
 ```
 
-Column 0 is the natural node's own conclusion, stored in `@MathProof`; column 2
-is the guest's view row. Columns 1 and 3 — the dropped union's edge and the
-connector — are in the array, but nothing stores them, so no row is written.
-Those two plus the intermediate `@Sym` are the three rows layer 1 wrote above and
-layer 2 does not.
+Column 2 is the guest's view row. Columns 0, 1 and 3 — the natural node's own
+conclusion, the dropped union's edge, and the connector — are in the array, but
+nothing stores them, so no row is written. Those three plus the intermediate
+`@Sym` are the four rows layer 1 wrote above and layer 2 does not.
 
 A nested head chains. For
 
@@ -624,31 +679,25 @@ A nested head chains. For
 ```
 
 the walk numbers `(Num 1)` at columns 0–2, `(Num 2)` at 3–5, and the guest
-`(Add …)` at 6–9, and the head writes six rows (term rows and the `get-fresh!`
-binding each proof variable elided):
+`(Add …)` at 6–9, and the head writes three rows (term rows elided):
 
 ```text
-(set (@Rule_1   rule_name prems 0 num1_pf0) ())      ;; (Num 1) as written
-(set (@Rule_1   rule_name prems 1 num1_pf1) ())      ;; …over canonical children
+(let num1_pf1   (mint-@Rule_1! rule_name prems 1))       ;; (Num 1) over canonical children
 (let num1_e     (set-if-empty-@NumView! 1 …))
 (let num1_bridge (view-proof-@NumView 1 …))
-(set (@RuleLink num1_pf1 num1_bridge 3 num2_pf0) ())
-(set (@RuleLink num1_pf1 num1_bridge 4 num2_pf1) ())
+(let num2_pf1   (mint-@RuleLink! num1_pf1 num1_bridge 4))
 (let num2_e     (set-if-empty-@NumView! 2 …))
 (let num2_bridge (view-proof-@NumView 2 …))
-(set (@RuleLink num2_pf1 num2_bridge 6 add_pf0) ())  ;; (Add …) as written
-(set (@RuleLink num2_pf1 num2_bridge 8 add_view) ())
+(let add_view   (mint-@RuleLink! num2_pf1 num2_bridge 8))
 (set (@AddView num1_e num2_e) (values r add_view))
 ```
 
-The last row carries both bridges, reached through the chain. Column 3 is an own
-conclusion, which composes nothing, so it does not use the bridge it carries — but
-carry it it must, or the replay would stop one interning short of it. Layer 1's
-walk of the same head names seventeen proofs: four conclusions and thirteen
-composition steps. Six rows against seventeen is the whole point of the layer.
+The last row carries both bridges, reached through the chain. Layer 1's walk of
+the same head names seventeen proofs: four conclusions and thirteen composition
+steps. Three rows against seventeen is the whole point of the layer.
 
 Row counts per firing, proof rows only (not the view or `@UF` write beside them):
-a flat rewrite **2**, the nested head above **6**, a view rebuild **1**, a merge
+a flat rewrite **1**, the nested head above **3**, a view rebuild **1**, a merge
 collision **1**.
 
 A `union` of two matched variables builds nothing, so it needs one row — but
@@ -656,7 +705,7 @@ which endpoint the `@UF` edge is stated from is only known once the ids are
 compared. Its column is therefore an expression, not a literal:
 
 ```text
-(set (@Rule_1 rule_name prems (proof-of-max x 1 y 2) edge) ())
+(let edge (mint-@Rule_1! rule_name prems (proof-of-max x 1 y 2)))
 (set (@UF_Math (ordering-max x y)) (values (ordering-min x y) edge))
 ```
 
@@ -681,16 +730,16 @@ column to name, so the encoder composes. For the running example's
 `num*_bridge` the two children's view-row proofs:
 
 ```text
-(set (@Packed_3 "trans_sym_congr_congr_p0_0_sym_p1_1_sym_p2_congr_congr_p0_0_sym_p1_1_sym_p2"
-        add_own num1_bridge num2_bridge add_canon) ())
+(let add_canon (mint-@Packed_3!
+        "trans_sym_congr_congr_p0_0_sym_p1_1_sym_p2_congr_congr_p0_0_sym_p1_1_sym_p2"
+        add_own num1_bridge num2_bridge))
 ```
 
-Four `@Proof` rows (plus six `@Ast` rows) for that one expression: the three
-`@Fiat` conclusions and that one row. A `@Fiat` is composed from nothing, so it
-cannot be a hole of a skeleton and stays a row of its own; the `@Ast` rows are
-its endpoints. The row count is also already reduced by dropping steps the
-encoder knows are reflexive — `(Num 1)`'s own conclusion is its canonical one, so
-neither `Num` level composes anything.
+Four `@Proof` rows for that one expression: the three `@Fiat` conclusions and
+that one row. A `@Fiat` is composed from nothing, so it cannot be a hole of a
+skeleton and stays a row of its own. The row count is also already reduced by
+dropping steps the encoder knows are reflexive — `(Num 1)`'s own conclusion is
+its canonical one, so neither `Num` level composes anything.
 
 **Merge bodies and maintenance rules.** A custom function's `:merge`, the
 path-compression rule, and the container rebuild rule are all code the encoder
@@ -707,6 +756,29 @@ subproof. That chain is emitted lazily, as one packed row, at the point the
 premise is first read — which is inside the rule's *action* list. They are the
 body's proofs, not proofs of anything the head concludes.
 
+A **container side condition** is the exception: a fact a container-producing
+primitive determines from bound variables — `(= v (vec-of e))`, `(= (set-of a)
+(set-of b))`, or a bare `(vec-of e)` guard — has no premise to state, so it
+carries the bare `@Eval` marker and the checker re-evaluates it against the rule
+body instead. The encoder and the checker share one gate so they cannot drift.
+
+A **base-value fact** is stated by no column at all. Its premise is a reflexive
+`@Fiat` over a literal — a guard like `(> n 0)`, or an equality between two base
+values such as the `(= len n)` a custom function's output leaves behind — and the
+value is a function of the fact and the bindings the body already made, so
+conversion re-evaluates it rather than reading a row. The `@Rule_<k>` a firing
+writes then has one fewer column, and the row it would have named is never
+minted. This is one gate over the body, taken in order (a fact is only
+recomputable once one of its sides reads nothing but already-bound variables),
+shared by the encoder and proof conversion.
+
+A value read *out of* a container keeps a real premise, stated from the
+container's own [anchor](#reflexive-anchors): `(= e (vec-get v 1))` and
+`(= (vec-get v 0) (vec-get v 1))` are both `@ProjAll_<Sort>` off whichever row
+anchors `v`. That is why the container has to be one the database holds — a
+container the query built anchors nothing, and the rule is rejected rather than
+encoded.
+
 ## Packed rows
 
 Wherever [layer 1 is emitted](#where-layer-1-is-still-emitted), the composition's
@@ -715,13 +787,14 @@ for the whole of it.
 
 A site with no rule head to replay says what its row stands for by writing a
 **skeleton** — a proof term over the row's other columns, spelled into the first
-one in prefix order: `sym`, `trans`, `congr`, `p<n>` for the proof in column n,
-and a bare number for a congruence's child position. Unpacking reads the skeleton
-back off that column and substitutes the rest into it, so there is one statement
-of the composition rather than one at each end. A column may be named twice —
-`trans_sym_p0_p0` is `reflexive`, `t' = t'` from the one proof of `t = t'` — and
-is then carried once. Every other column is a proof, so the constructor is a
-function of their count alone: `@Packed_<k>`.
+one in prefix order: `sym`, `trans`, `congr`, `proj`, `p<n>` for the proof in
+column n, and a bare number for a congruence's or projection's child position.
+Unpacking reads the skeleton back off that column and substitutes the rest into
+it, so there is one statement of the composition rather than one at each end. A
+column may be named twice — `trans_sym_p0_p0` is `reflexive`, `t' = t'` from the
+one proof of `t = t'` — and is then carried once, or named not at all, when the
+step it carries turned out to prove nothing. Every other column is a proof, so
+the constructor is a function of their count alone: `@Packed_<k>`.
 
 The encoder composes over proof *names*, so it holds each `@Sym`, `@Trans` and
 `@Congr` back as a tree and writes the row where a statement reads the name. Two
@@ -740,16 +813,21 @@ column and packs them:
 
 ```text
 (let c0_canon_ (@UF_Math_canon c0_ c0_))
-(let c0_term (@MathProof c0_))
-(let c0_step (@UF_Math_canon_proof c0_ c0_term))
+(let c0_step (@UF_Math_canon_proof c0_ pf))
 … same for c1_ and e2_ …
-(set (@Packed_4 "trans_sym_p3_congr_congr_p0_0_p1_1_p2"
-        pf c0_step c1_step e2_step out) ())
+(let s1 (drop-reflexive-step "trans_sym_p3_congr_congr_p0_0_p1_1_p2" 1 c0_ c0_canon_))
+… same for columns 2 and 3 …
+(let out (mint-@Packed_4! s3 pf c0_step c1_step e2_step))
 ```
 
-`@UF_<Sort>_canon_proof` supplies each step's proof, reflexive for a column that
-did not move. The e-class's step composes on the left rather than at a child
-position, since an e-class can equal one of its own children's terms.
+`@UF_<Sort>_canon_proof` supplies each step's proof, or the fallback when the
+column has no `@UF` row. A column that did not move proves `t = t`, so it
+contributes nothing: rather than anchor it — a row per column, dropped again by
+the proof simplifier — the fallback is the row proof itself and
+`drop-reflexive-step` narrows the spelling until it names only the columns whose
+two values differ. A column the spelling does not name is carried but never
+read. The e-class's step composes on the left rather than at a child position,
+since an e-class can equal one of its own children's terms.
 
 **A merge collision** — two rows colliding on one key in a `@UF` or view
 `:merge` — writes one packed row for the edge it displaces.
@@ -768,16 +846,21 @@ matching subexpression.
 ## Container proofs
 
 A container's term form is the s-expr of its constructor — `(vec-of e0 e1 …)`,
-`(pair a b)`, `(map-of k0 v0 …)`. Every container sort gets a `@<Sort>Proof`
-table holding a reflexive `container = container` proof, set at creation. A chain
-of congruence steps over the changed elements, anchored there, proves `old = new`
-and folds into the view's congruence step like an eq-sort child's `@UF` proof.
+`(pair a b)`, `(map-of k0 v0 …)`. The rebuild rule hands the primitive the
+container's [reflexive anchor](#reflexive-anchors), projected out of the row
+being rebuilt; a chain of congruence steps over the changed elements, anchored
+there, proves `old = new` and folds into the view's congruence step like an
+eq-sort child's `@UF` proof. A *nested* container's own anchor is
+`@ProjAll_<Sort>` over the enclosing container's, which is why the anchor has to
+be by term: the enclosing term's child order is not the order the primitive sees
+elements in. That is also why a container sort's `@ProjAll_<Sort>` is declared
+with the sort rather than on use: the rebuild primitive mints one without going
+through any statement the encoder wrote.
 
 The chain uses `@CongrAll` — replace every child equal to `a` by `b` — rather
-than positional `@Congr`, because the rebuild primitive sees elements in *value*
-order while the term form orders children canonically. `@CongrAll` exists only in
-the raw e-graph proof; conversion desugars it into positional `@Congr` steps
-computed against the actual term.
+than positional `@Congr`, for the same reason. Both `@CongrAll` and
+`@ProjAll_<Sort>` exist only in the raw e-graph proof; conversion desugars them
+into the positional `@Congr`/`@Proj` steps computed against the actual term.
 
 For reordering or merging containers (`Set`, `Map`, `MultiSet`) the term after
 those steps can be out of order or hold duplicates, so a `@ContainerNormalize`
@@ -787,7 +870,7 @@ drops it wherever it is the identity (always, for `Vec` and `Pair`).
 
 A container is built over its elements' **natural** ids, not their deduped
 e-classes: a deduped id can extract to a different syntactic shape, which would
-break the rule-head check for the container's term proof. Each element's
+break the rule-head check for the container's proof. Each element's
 `natural -> (deduped, connector)` edge goes into the element's ordinary
 `@UF_<E>`, so the standard rebuild and path compression canonicalize the natural
 like any other stale term. That edge's proof column is the element's connector,
