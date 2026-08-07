@@ -61,6 +61,7 @@ and what it computes is `Query.bind`. -/
 def Pattern.Scoped : Pattern → Prop
   | .expr e => e.IsApp
   | .eq _ _ => True
+  | .values _ _ _ => True
 
 /-- The Redex `typed-action`, minus its vacuous side condition and plus the application
 restriction on a bare `expr`. -/
@@ -68,7 +69,7 @@ def Action.Scoped : Action → Scope → Prop
   | .expr e, Γ => e.IsApp ∧ e.Scoped Γ
   | .letBind _ e, Γ => e.Scoped Γ
   | .union e₁ e₂, Γ => e₁.Scoped Γ ∧ e₂.Scoped Γ
-  | .set _ args out, Γ => (∀ e ∈ args, e.Scoped Γ) ∧ out.Scoped Γ
+  | .set _ args out, Γ => (∀ e ∈ args, e.Scoped Γ) ∧ ∀ e ∈ out, e.Scoped Γ
 
 /-- The scope after an action: only a `let` extends it. -/
 def Action.bind : Action → Scope → Scope
@@ -118,5 +119,84 @@ def Program.bind : Program → Scope → Scope
 /-- A program with no free variables: the Redex `(typed-program Program TypeEnv)`
 starting from the empty environment. -/
 def WellScoped (p : Program) : Prop := Program.Scoped p []
+
+/-! ### `set` legality
+
+A second static check, additive and deliberately kept apart from `Scoped`. Both are
+things a real front end rejects in one pass, and folding this into `Action.Scoped` is
+where it eventually belongs.
+
+It is separate for now because of the parameter. `Scoped` relates an `Action` to a
+`Scope`; this relates it to a `Signature`. Threading a signature through
+`Actions.Scoped`, `Rule.Scoped`, `Cmd.Scoped` and `Program.Scoped` would put a signature
+argument on every lemma in `Proofs/Scope.lean` and a new hypothesis on
+`exec_toDatabase`, none of which the scope theorems have any use for. Fold the two
+together once `Program.Scoped` needs the signature for its own sake — M9's sort
+discipline (`PLAN.md`, M9 point 4) is that reason, since a merge function's output has a
+base sort. Until then the pair to carry is `WellScoped p ∧ p.SetLegal sig`.
+-/
+/-- `(set (f …) …)` is legal only when `f` is not a constructor.
+
+egglog rejects a `set` on a constructor while type-checking (`egglog/src/constraint.rs`,
+"Check that we're not trying to set a constructor"), and constructors are exactly the
+functions whose merge is `.union` — `Signature.mergeOf` sends an undeclared name there
+too, so this covers the undeclared case as well.
+
+It is what keeps `Database.CtorRows` an invariant. A `set` writes the row
+`⟨f, as, [v]⟩` for whatever `v` its out expression denotes, and `Database.ctorRowsOf`
+holds no such row unless `v` is `.app f as`. -/
+def Action.SetLegal : Action → Signature → Prop
+  | .expr _, _ => True
+  | .letBind _ _, _ => True
+  | .union _ _, _ => True
+  | .set f _ _, sig => sig.mergeOf f ≠ MergeSpec.union
+
+/-! A `Pattern.values` destructure has the same discipline and does not yet carry it:
+egglog recognizes `(= (values v…) (f a…))` only when `f` is tuple-output, so a
+destructure on a constructor is a type error there and meaningless here. Adding it means
+extending `Rule.SetLegal` to the *query*, which currently reads only the head; the reason
+to wait is that `Proofs/Step.lean`'s `CtorRows` chain is stated over the head alone and a
+destructure writes nothing, so nothing is unsound in the meantime. -/
+/-- Every action in the list is a legal `set`. Unlike `Actions.Scoped` this needs no
+threading: no action changes the signature. -/
+def Actions.SetLegal : List Action → Signature → Prop
+  | [], _ => True
+  | a :: as, sig => a.SetLegal sig ∧ Actions.SetLegal as sig
+
+/-- A rule is legal when its head is; a query writes nothing. -/
+def Rule.SetLegal (r : Rule) (sig : Signature) : Prop := Actions.SetLegal r.actions sig
+
+/-- The signature a command leaves behind. `Cmd.bind` for signatures instead of scopes,
+and exactly what `stepCmd`'s `.decl` case does. -/
+def Cmd.sigBind : Cmd → Signature → Signature
+  | .decl f d, sig => Function.update sig f (some d)
+  | _, sig => sig
+
+/-- `Cmd.Scoped`'s companion for `set`. -/
+def Cmd.SetLegal : Cmd → Signature → Prop
+  | .action a, sig => a.SetLegal sig
+  | .rule r, sig => r.SetLegal sig
+  | .run, _ => True
+  | .decl _ _, _ => True
+
+/-- `Program.Scoped`'s companion for `set`: each command is checked against the
+signature the earlier ones leave, as `Program.Scoped` checks against the scope they
+leave. -/
+def Program.SetLegal : Program → Signature → Prop
+  | [], _ => True
+  | c :: cs, sig => c.SetLegal sig ∧ Program.SetLegal cs (c.sigBind sig)
+
+/-- `c` declares only constructors.
+
+Separate from `SetLegal` because it constrains a different thing: `SetLegal` says what a
+head may write, this says what the signature may become. `Database.CtorRows` needs both
+— declaring a `:merge` function makes rows *already present* a `MergeStep` collision,
+whose combined row need not be a constructor row, and no `set` is involved. -/
+def Cmd.CtorDecl : Cmd → Prop
+  | .decl _ d => d.merge = MergeSpec.union
+  | _ => True
+
+/-- Every declaration in the program declares a constructor. -/
+def Program.CtorDecls (p : Program) : Prop := ∀ c ∈ p, c.CtorDecl
 
 end Egglog

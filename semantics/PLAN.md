@@ -306,10 +306,28 @@ Follow-ups, in rough dependency order:
   - ✅ *`Impl/Merge.lean` and differential testing.* An M9 interpreter, `:merge`
     rendering in `Tests/EggMerge.lean`, and 7 merge cases. `make lean-difftest` is now
     **77 cases**, all passing.
-  - Remaining: 22 theorems are stated and unproved — monotonicity, `MCong.le`, `WF`,
-    and the interpreter's refinement. See `MERGE.md`, "Still unbuilt". `Cong` and
-    `MCong` still coexist over the one `Database`; collapsing them is the rest of
-    stage 2 and is cheap, since `mcong_iff_cong` is the theorem that licenses it.
+  - ✅ *The metatheory.* 17 of the 22 stated theorems are proved — `MCong.le`, the
+    monotonicity family, the `Contained` chain through `CmdStep`/`ProgramStep`,
+    `MergeStep.wf`, `Term.blt_linear`, `Out.union_cong` and `closureF_ok`. Four of the 22
+    statements turned out to be **false or vacuous** and are corrected in place, each with
+    a machine-checked counterexample or a hypothesis added and flagged; `MERGE.md` lists
+    them. 5 remain: the two confluence guesses and three interpreter-refinement ones.
+  - ✅ *Multi-column outputs.* `Action.set` takes a `List Expr` and `Pattern` gained
+    `values`, egglog's tuple destructure `(= (values v…) (f a…))` — the only way egglog
+    offers to read a value column other than the first. This is what `CHECKER.md` called
+    the one blocker on M11's proof column.
+  - ✅ *The implementation deletes; the specification does not.* `Spec/` stays
+    append-only — the M11 invariant depends on it — while `Impl/Merge.lean`'s merge phase
+    drops the two rows it combined, as egglog does, and nothing else.
+    `FDatabase.mergeRound_confined` proves the "nothing else": no term, no equality, no
+    `.union` row, no `.noMerge` row. The contract between the two therefore splits: a
+    containment for soundness (`MValidSubst.mono` is the half that makes fewer rows mean
+    fewer matches), the untouched equality on the constructor fragment (where the pass is
+    the identity, `mergeRound_eq_self`), and `Current` for lattice merges. It also makes
+    merge saturation genuinely terminate.
+  - Remaining: `Cong` and `MCong` still coexist over the one `Database`; collapsing them
+    is the rest of stage 2 and is cheap, since `mcong_iff_cong` is the theorem that
+    licenses it.
   See below for the original proposal and what `MERGE.md` revises in it.
 - **M10 — executable layer.** A `Finset`-based interpreter, a decidable congruence
   closure, and a refinement theorem `↑(exec p d) = spec p (↑d)`.
@@ -532,8 +550,17 @@ Designed so it generalizes rather than rewrites:
 With M9 in place, the encoding becomes a translation between two instances of the
 same semantics, and the theorems are about that translation:
 
-- The target needs **fresh ids** (`get-fresh!`), which the source has no notion
-  of — add an id supply to the target configuration only.
+- The target needs **fresh ids** (`get-fresh!`), which the source has no notion of.
+  An earlier draft of this plan said to add an id supply to the target configuration;
+  that turned out to be unnecessary. Terms *are* the ids: the id for `f` over canonical
+  children `cs` is the term `.app f cs`, the standard skolem encoding of `get-fresh!`.
+  Source terms and target ids then share one type, so the simulation theorem compares
+  them directly with no correspondence relation. The deviation this buys is in row
+  counts, not equalities — egglog mints per construction *site*, so it holds strictly
+  more `@UF` rows than the skolem encoding does. Any theorem about row counts must
+  account for that; the simulation theorem, being about equality, need not. The only
+  supply `encode` still threads is generated variable names (`@v0`, `@v1`, …), which
+  is code generation, not semantics.
 - Define `encode : Program → Program` for a fragment first: constructors only, no
   containers, no delete/subsume, no schedules.
 
@@ -621,3 +648,32 @@ containers, primitives.
   ported Redex check is a closed Lean proof.
 - `make lean-check` from the workspace root runs the above (it adds
   `~/.elan/bin` to `PATH` itself). Verified to fail on an injected `sorry`.
+
+## `set` legality is a separate predicate, for now
+
+`Database.CtorRows` — the rows are exactly the ones the terms induce — is one of the two
+hypotheses `mcong_iff_cong` takes, so it is the on-ramp from "a database you can run a
+program to" to "the functional dependency *is* congruence". It is preserved by every
+step of the semantics only if `set` is restricted, and egglog restricts it the same way:
+`set` on a constructor is a type error (`egglog/src/constraint.rs`, "Check that we're not
+trying to set a constructor"). Since constructors are exactly the `.union`-merge
+functions, the side condition is `mergeOf f ≠ .union`.
+
+That check is `Action.SetLegal`/`Program.SetLegal` in `Spec/Scope.lean`, **beside**
+`Scoped` rather than inside it. It belongs inside eventually — a front end rejects both
+in one pass — and it is out for one reason: the parameter. `Scoped` relates syntax to a
+`Scope`; this relates it to a `Signature`. Threading a signature through
+`Actions.Scoped`, `Rule.Scoped`, `Cmd.Scoped` and `Program.Scoped` would put a signature
+argument on every lemma in `Proofs/Scope.lean` and a new hypothesis on
+`exec_toDatabase`, and none of the scope theorems would use it. Fold the two together
+when `Program.Scoped` needs the signature for its own sake — M9's sort discipline (M9,
+point 4) is that reason, since a merge function's output has a base sort. Until then the
+pair to carry is `WellScoped p ∧ p.SetLegal sig`.
+
+One thing the port learned writing this down: **`SetLegal` alone is not enough**, and the
+gap is not about actions at all. Declaring `f` a `:merge` function makes the constructor
+row `f ↦ (f)` *already in the database* collide with itself, and `MergeStep` then writes
+whatever the merge body computes at that key — a non-constructor row, with no `set`
+anywhere. So `Cmd.CtorDecl` ("this declaration declares a constructor") is a second,
+independent side condition. `Proofs/Step.lean`'s `exists_mergeStep_not_ctorRows` is that
+counterexample as a theorem.

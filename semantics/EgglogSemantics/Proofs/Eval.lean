@@ -83,8 +83,8 @@ theorem evalAction_eq_some {db db' : Database} {a : Action}
         db' = { db.addTerm t with env := (v, t) :: db.env }) ∨
       (∃ e₁ e₂ t₁ t₂, a = .union e₁ e₂ ∧ e₁.eval db.env = some t₁ ∧
         e₂.eval db.env = some t₂ ∧ db' = db.addEq t₁ t₂) ∨
-      (∃ f args out as v, a = .set f args out ∧ Expr.evalList args db.env = some as ∧
-        out.eval db.env = some v ∧ db' = db.addRow f as [v]) := by
+      (∃ f args out as vs, a = .set f args out ∧ Expr.evalList args db.env = some as ∧
+        Expr.evalList out db.env = some vs ∧ db' = db.addRow f as vs) := by
   cases a with
   | expr e =>
     cases hv : e.eval db.env with
@@ -112,21 +112,21 @@ theorem evalAction_eq_some {db db' : Database} {a : Action}
     cases hv₁ : Expr.evalList args db.env with
     | none => simp [evalAction, hv₁] at h
     | some as =>
-      cases hv₂ : out.eval db.env with
+      cases hv₂ : Expr.evalList out db.env with
       | none => simp [evalAction, hv₁, hv₂] at h
-      | some v =>
+      | some vs =>
         simp only [evalAction, hv₁, hv₂, Option.bind_some, Option.map_some,
           Option.some.injEq] at h
-        exact Or.inr (Or.inr (Or.inr ⟨f, args, out, as, v, rfl, hv₁, hv₂, h.symm⟩))
+        exact Or.inr (Or.inr (Or.inr ⟨f, args, out, as, vs, rfl, hv₁, hv₂, h.symm⟩))
 
 theorem evalAction_contained {db db' : Database} {a : Action}
     (h : evalAction db a = some db') : db.Contained db' := by
   rcases evalAction_eq_some h with ⟨_, t, -, -, rfl⟩ | ⟨_, _, t, -, -, rfl⟩ |
-    ⟨_, _, t₁, t₂, -, -, -, rfl⟩ | ⟨f, _, _, as, v, -, -, -, rfl⟩
+    ⟨_, _, t₁, t₂, -, -, -, rfl⟩ | ⟨f, _, _, as, vs, -, -, -, rfl⟩
   · exact .addTerm t db
   · exact ⟨Set.subset_union_left, Set.subset_union_left, subset_rfl⟩
   · exact .addEq t₁ t₂ db
-  · exact .addRow f as [v] db
+  · exact .addRow f as vs db
 
 theorem evalAction_rules {db db' : Database} {a : Action}
     (h : evalAction db a = some db') : db'.rules = db.rules := by
@@ -140,14 +140,14 @@ theorem evalAction_rules {db db' : Database} {a : Action}
 theorem evalAction_wf {db db' : Database} (hw : db.WF) {a : Action}
     (h : evalAction db a = some db') : db'.WF := by
   rcases evalAction_eq_some h with ⟨_, t, -, -, rfl⟩ | ⟨_, _, t, -, -, rfl⟩ |
-    ⟨_, _, t₁, t₂, -, -, -, rfl⟩ | ⟨f, _, _, as, v, -, -, -, rfl⟩
+    ⟨_, _, t₁, t₂, -, -, -, rfl⟩ | ⟨f, _, _, as, vs, -, -, -, rfl⟩
   · exact hw.addTerm t
   · refine ⟨(hw.addTerm t).subtermClosed, (hw.addTerm t).eqsInTerms, fun b hb => ?_⟩
     rcases List.mem_cons.mp hb with rfl | hb
     · exact db.mem_addTerm t
     · exact (hw.addTerm t).envInTerms b hb
   · exact hw.addEq t₁ t₂
-  · exact hw.addRow f as [v]
+  · exact hw.addRow f as vs
 
 theorem evalActions_contained {db db' : Database} {as : List Action}
     (h : evalActions db as = some db') : db.Contained db' := by
@@ -218,14 +218,14 @@ theorem evalAction_envAgree {d₁ d₂ : Database} (h : d₁.EnvAgree d₂) (a :
           by simp [Database.addEq, Database.addTerm, h.rows],
           by simp [Database.addEq, h.eqs], h.rules, h.env⟩
   | set f args out =>
-    simp only [evalAction, ← Expr.evalList_agree h.env args, ← Expr.eval_agree h.env out]
+    simp only [evalAction, ← Expr.evalList_agree h.env args, ← Expr.evalList_agree h.env out]
     cases Expr.evalList args d₁.env with
     | none => exact .none
     | some as =>
-      cases out.eval d₁.env with
+      cases Expr.evalList out d₁.env with
       | none => exact .none
-      | some v =>
-        exact .some (h.addRow f as [v])
+      | some vs =>
+        exact .some (h.addRow f as vs)
 
 theorem evalActions_envAgree {d₁ d₂ : Database} (h : d₁.EnvAgree d₂) (as : List Action) :
     Option.Rel Database.EnvAgree (evalActions d₁ as) (evalActions d₂ as) := by

@@ -17,7 +17,7 @@ Three things follow, and the first is the milestone:
   `.union` function whose keys are congruent have congruent outputs. At constructor
   rows — where `out = [.app f args]` — that *is* `Cong.congr`; at equal keys it is the
   functional dependency. There is no separate `congr` constructor.
-  `Proofs/Merge.lean`'s `mcong_toM_iff` is the compatibility theorem.
+  `Proofs/Merge.lean`'s `mcong_iff_cong` is the compatibility theorem.
 * **A `:merge` body is an action list.** It writes rows to other tables — the
   union-find's merge `set`s the displaced parent edge — so `MergeStep` is a relation
   on *databases*, not a function combining two values, and merge closure is a phase
@@ -186,19 +186,63 @@ without churning `Expr`". -/
 inductive Prim where
   | orderingMin
   | orderingMax
+  /-- egglog's `i64` `min`. -/
+  | intMin
+  /-- egglog's `i64` `max`. -/
+  | intMax
   deriving DecidableEq, Repr
 
-/-- The reserved names. A user function of the same name is shadowed, as in egglog. -/
+/-- The reserved names. A user function of the same name is shadowed, as in egglog.
+
+`min` and `max` are here for a reason worth recording: without them a `:merge (min old
+new)` body — the shape every `:merge` function in the differential test uses, and the
+shape `tests/interval.egg` and `tests/merge-during-rebuild.egg` use — built the *term*
+`min(5, 3)` instead of computing `3`. Three things followed, and all three were observed
+before the primitives were added. Merging was non-idempotent as a term, so no state was
+ever `MergeSaturated` and `Impl/Merge.lean`'s `mergeSaturateF` could not be used. Each
+merge pass wrote a genuinely new value at every colliding key, so the row set squared per
+pass and 12 of 30 generated merge cases timed out. And a rule reading a merged value got
+a term where egglog has a number. -/
 def Prim.ofName : FnName → Option Prim
   | "ordering-min" => some .orderingMin
   | "ordering-max" => some .orderingMax
+  | "min" => some .intMin
+  | "max" => some .intMax
   | _ => none
 
-/-- A primitive's meaning. `none` for the wrong arity. -/
+/-- A primitive's meaning. `none` for the wrong arity, and for `min`/`max` also for a
+non-literal operand — they are `i64` primitives, and this model has no sort discipline to
+reject the application statically. -/
 def Prim.apply : Prim → List Term → Option Term
   | .orderingMin, [s, t] => some (Term.orderingMin s t)
   | .orderingMax, [s, t] => some (Term.orderingMax s t)
+  | .intMin, [.lit (.int m), .lit (.int n)] => some (.lit (.int (min m n)))
+  | .intMax, [.lit (.int m), .lit (.int n)] => some (.lit (.int (max m n)))
   | _, _ => none
+
+/-! `Prim.ofName` resolves a *reserved name*, so whether an application builds a term or
+runs a primitive is a property of the name and not of the syntax. `NoPrim` is that
+property, quantified over the names an expression actually mentions.
+
+It is what `Proofs/Merge.lean`'s bridge between the two evaluators needs: `Expr.eval`
+(M0–M8) builds an application for every name, so it agrees with `Expr.MEval` only on
+expressions naming no primitive. The unrestricted form `∀ f, Prim.ofName f = none` is
+*false* — `ordering-min` is one — which is why the quantifier has to be over `e`. -/
+mutual
+
+/-- No reserved primitive name occurs in `e`, so "build an application" is the right
+reading of every `.app` in it. -/
+def Expr.NoPrim : Expr → Prop
+  | .lit _ => True
+  | .var _ => True
+  | .app f args => Prim.ofName f = none ∧ Expr.NoPrimList args
+
+/-- `Expr.NoPrim` over an argument list. -/
+def Expr.NoPrimList : List Expr → Prop
+  | [] => True
+  | e :: es => Expr.NoPrim e ∧ Expr.NoPrimList es
+
+end
 /-! ### Evaluation
 
 `Expr.eval` is a function of the environment alone, which is exactly right while every
@@ -266,10 +310,9 @@ inductive Database.ActionStep : Database → Action → Database → Prop where
   | union {db : Database} {e₁ e₂ : Expr} {t₁ t₂ : Term} :
       Expr.MEval db db.env e₁ t₁ → Expr.MEval db db.env e₂ t₂ →
       Database.ActionStep db (.union e₁ e₂) (db.addEq t₁ t₂)
-  | set {db : Database} {f : FnName} {args : List Expr} {out : Expr}
-      {ts : List Term} {v : Term} :
-      Expr.MEvalList db db.env args ts → Expr.MEval db db.env out v →
-      Database.ActionStep db (.set f args out) (db.addRow f ts [v])
+  | set {db : Database} {f : FnName} {args out : List Expr} {ts vs : List Term} :
+      Expr.MEvalList db db.env args ts → Expr.MEvalList db db.env out vs →
+      Database.ActionStep db (.set f args out) (db.addRow f ts vs)
 
 /-- A sequence of row actions, run in order. -/
 inductive Database.ActionsStep : Database → List Action → Database → Prop where
@@ -421,6 +464,17 @@ inductive MValidSubst (db : Database) : Pattern → Env → Prop where
       Expr.MEval db (db.env ++ σ) e₁ t₁ → Expr.MEval db (db.env ++ σ) e₂ t₂ →
       MCong ((db.addTerm t₁).addTerm t₂) w t₁ → MCong ((db.addTerm t₁).addTerm t₂) t₁ t₂ →
       MValidSubst db (.eq e₁ e₂) σ
+  /-- The tuple destructure, over `MCong`. This is the *only* way to read a value column
+  other than the first: `MEval.lookup` reads a one-column row, faithfully, because egglog
+  refuses to evaluate a tuple-output function as an expression. Its key premise is
+  `Database.Out`'s and its value premise is the same comparison applied to the value
+  columns. -/
+  | values {vs : List Expr} {f : FnName} {as : List Expr} {σ : Env}
+      {us ts ws bs : List Term} :
+      ValidEnv (Expr.freeVarsList vs db.env ∪ Expr.freeVarsList as db.env) db σ →
+      Expr.MEvalList db (db.env ++ σ) vs us → Expr.MEvalList db (db.env ++ σ) as ts →
+      MCongList db ts bs → MCongList db us ws → Row.mk f bs ws ∈ db.rows →
+      MValidSubst db (.values vs f as) σ
 
 /-- `ValidQuerySubst`, over `MValidSubst`. -/
 def MValidQuerySubst (db : Database) (q : Query) (σ : Env) : Prop :=

@@ -5,10 +5,14 @@ congruence is `Cong`" to "a function carries a `:merge`". Revises `PLAN.md`'s M9
 section, which is kept for the record; where they disagree this document is current.
 
 **Status.** The compatibility theorem is **proved**. `Spec/Merge.lean` and
-`Impl/Merge.lean` are definitions; `Proofs/Merge.lean` has 33 theorems plus 3 `simp`
-lemmas, 11 proved and 22 stated. Seven `:merge` cases run in the differential test against real egglog and pass,
-alongside the 70 constructor cases. Nothing in M0–M10 changed except `MergeSpec` and
-`FnDecl` in `Spec/Syntax.lean`.
+`Impl/Merge.lean` are definitions; of the 22 theorems `Proofs/Merge.lean` originally left
+unproved, 17 are now proved and 5 remain — `MergeStep.diamond_of_join`,
+`RunStep.unique_of_confluent`, `execM_reachable`, `mergeRound_closure` and
+`FDatabase.mergeRound_rowCount`. Four of the 22 statements were **wrong** and are recorded
+where they are stated; see "What the widening and the composed interpreter found".
+Curated `:merge` cases run in the differential test against real egglog alongside the
+constructor cases. Nothing in M0–M10 changed except `MergeSpec` and `FnDecl` in
+`Spec/Syntax.lean`, and later `Action.set` and `Pattern` for multi-column outputs.
 
 Facts about egglog's real behaviour are cited to the Rust. Guesses are flagged
 **[guess]**.
@@ -761,13 +765,118 @@ congruence would predict 2 where egglog says 1.
 * **`Database.RowsWF`** is stated outside `WF`. Putting it in would make every `WF`
   construction carry a subterm-transitivity argument for no current payoff; it belongs in
   `WF` once something reads it.
-* The difftest generator has no *random* merge cases; the seven are curated, so they are
-  only as good as whoever chose them — the same caveat `PLAN.md` records for the
-  constructor cases, and the same fix.
-* `Impl/Interp.lean`'s `execAction` evaluates with `Expr.eval`, so a `set` whose operand
-  is a `:merge` lookup does not resolve; `Impl/Merge.lean`'s `execMergeAction` is the one
-  that uses `execExpr`. The difftest fragment never reads a merge function, so this does
-  not bite there.
+* **`Lit` is still `Int` only**, so `.str` and `.unit` are still missing — which is what a
+  proof column's `Unit` and `@Rule_<k>`'s rule name need. `min` and `max` are no longer on
+  this list; see below.
+
+## What the widening and the composed interpreter found
+
+Two changes, and what each turned up.
+
+**`Action.set` takes a `List Expr` and `Pattern` gained `values`.** `Row.out`,
+`Database.addRow`, `Database.Out` and `MergeSpec`'s result were multi-column from the
+start; `Action.set` and the pattern language were not, so a multi-column row could be
+*created* by a merge and never written or read, which is what `CHECKER.md` called the one
+blocker on M11's proof column. The read side is egglog's **tuple destructure**
+`(= (values v…) (f a…))`, and it is the only way egglog offers to read a value column
+other than the first: a tuple-output function cannot be evaluated as an expression
+(`eval_resolved_expr` panics on `values`) and cannot be extracted, whose error message
+says "Read its columns in a rule with `(= (values ...) (f ...))` instead". `MEval.lookup`
+therefore *stays* single-column, which is faithful rather than a limitation.
+
+**`Program.expectedSizes` now runs a composed M9 `execProgramM`.** It ran
+`Impl/Interp.lean`'s `exec`, which evaluates with `Expr.eval` and never calls
+`mergeRound`, so `mergeOne`, `mergeRound`, `execActions`, `execExpr`'s lookup branch and
+the destructure had **zero** differential coverage — the suite's pass count said nothing
+about the merge implementation. It does now.
+
+**`min` and `max` had to become primitives.** `Prim.ofName` knew only
+`ordering-min`/`ordering-max`, so a `:merge (min old new)` body — the shape every merge
+case uses, and the shape `tests/interval.egg` and `tests/merge-during-rebuild.egg` use —
+built the *term* `min(5, 3)` where egglog computes `3`. That was invisible while nothing
+ran the merge phase, and three things went wrong the moment something did. No state was
+ever `MergeSaturated`, so `mergeSaturateF` returned `none` for every case with a real
+collision. Each pass wrote a genuinely new value at every colliding key, so the row set
+squared per pass and **12 of 30 generated merge cases timed out**. And a rule reading a
+merged value got a term where egglog has a number. Adding `Prim.intMin`/`intMax` on
+`Lit.int` fixed all three: the suite went from 102 passed / 12 skipped to **114 passed, 0
+failed, 0 skipped**, and saturation became reachable again (`execCmdM` still runs one pass,
+for the reason in `mergeSaturateF`'s docstring). This is the sharpest thing the coverage
+gap was hiding: the difftest's merge cases were *generated* correctly and *predicted*
+by a merge implementation that had never been run.
+
+**`Impl/` now deletes superseded merge rows; `Spec/` does not.** The two were both
+append-only, and the contract between them was an *equality* — which is what forced `Impl/`
+to be append-only in the first place. That made the reference implementation faithful to
+this model and **unfaithful to egglog**, which replaces the row, and the divergence below
+is what that costs. `Spec/` stays append-only: the M11 safety theorem is an invariant over
+`MergeStep` and needs neither termination nor confluence precisely because nothing is
+removed, and the encoding depends on the same property. `Impl/Merge.lean`'s merge phase
+drops the two rows it combined, and nothing else — never a term, never an equality, never a
+row of a `.union` function (constructor rows, which the whole congruence argument rests on)
+and never a row of a `.noMerge` function (which is how the encoding declares its proof
+nodes, so deleting one would delete a proof). `Proofs/Merge.lean`'s
+`FDatabase.mergeRound_confined` is that sentence, machine-checked.
+
+The contract therefore **splits** rather than weakens:
+
+* *Soundness* is now a containment — the implementation finds **fewer** results, never
+  more, which is the safe direction because everything M11 reads is positive in the state.
+  `MValidSubst.mono` is the half that makes "fewer rows" mean "fewer matches"; `MCong`,
+  `MCongList`, `Database.Out` and `Expr.MEval` are all monotone already. `execM_contained`
+  is the top-level statement, unproved for the same reason `execM_reachable` is.
+* *Completeness*, so containment is not vacuous, is two statements. On the constructor
+  fragment the existing **equality** stands untouched: no row belongs to a `.merge`
+  function, so `hasMergeRow` is false and the pass is the identity
+  (`FDatabase.mergeRound_eq_self`), which is why `exec_toDatabase` is outside the blast
+  radius entirely. On **lattice** merges the implementation holds the `Current` value at
+  each key class — exactly what `Current` was defined for. For a non-lattice merge
+  `Current` does not exist and nothing is claimed.
+
+Two statements became **false** and are corrected where they stand:
+`Impl/Merge.lean`'s result is no longer `MergeClosure`-reachable (`mergeRound_closure`), and
+neither is `execM`'s (`execM_reachable` now applies to `exec` only, which has no merge
+phase). Both are false in the *harmless* direction — the implementation is smaller than
+anything the spec reaches, not different from it.
+
+Saturation is a consequence rather than a hope: deleting the pair that fired makes a pass
+strictly shrink each colliding key class, so `mergeSaturateF` terminates and `execCmdM`
+runs the merge phase to a fixpoint as `merge_all` does.
+
+**The over-approximation was observable, and is now gone.** `MERGE.md` has always said
+the model keeps every superseded output where egglog deletes it, and that this is sound
+because rows are append-only. Until a rule could read a value column, no oracle could see
+it. Now one can, and it diverges — minimal repro, machine-checked both ways:
+
+```
+(function Dist (Math) (i64 i64) :merge (values (min old0 new0) (max old1 new1)))
+(set (Dist (A)) (values 5 1))
+(set (Dist (A)) (values 3 7))
+(rule ((= (values 5 1) (Dist k))) ((Hit k)))
+(run 1)
+```
+
+egglog reports `Hit 0`: the merge replaced the row and `(5, 1)` is gone. An append-only
+implementation reports `Hit 1`, because the superseded row is still there and the
+destructure reads it. It is now a difftest case (`tuple-stale`, with the single-column
+`read-stale` beside it) and **it agrees**. The *specification* still says `Hit 1` is
+reachable, and that is deliberate: **this is the design showing through, not a defect** — it is the over-approximation argued for under
+"Why the reader over-approximates", and it is in the safe direction, since a stale row is a
+row that really was written. What changed is only which side of the `Spec`/`Impl` line it
+lives on: the specification still admits it, and the reference implementation no longer
+does.
+
+**The read path had no coverage at all**, which is how this stayed invisible. This
+document's own fragment boundary — "merge functions are written and never read" — meant
+`Expr.MEval.lookup`, reachable through `execM` from `MValidSubst.expr`, was exercised zero
+times. The generator now emits a rule reading `Dist` in both shapes egglog offers,
+`(Dist k…)` and `(= v (Dist k…))`, and there are curated `read-exists` / `read-value` /
+`read-stale` cases. One finding from the before-measurement is worth keeping: the
+single-column `read-stale` **agreed even before the deletion**, and for the wrong reason —
+`execExpr` takes the *first* recorded output and `FDatabase.addRow` prepends, so the row it
+picked happened to be the merged one. The tuple destructure searches all rows and exposed
+what the single-column read was hiding. An agreement that rests on list order is not
+evidence of anything, which is the same lesson as `min`/`max`.
 
 ## What was rejected
 

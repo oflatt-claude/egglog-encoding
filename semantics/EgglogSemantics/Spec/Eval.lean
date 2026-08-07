@@ -43,8 +43,8 @@ def evalAction (db : Database) : Action → Option Database
   | .union e₁ e₂ =>
       (e₁.eval db.env).bind fun t₁ => (e₂.eval db.env).map fun t₂ => db.addEq t₁ t₂
   | .set f args out =>
-      (Expr.evalList args db.env).bind fun as => (out.eval db.env).map fun v =>
-        db.addRow f as [v]
+      (Expr.evalList args db.env).bind fun as =>
+        (Expr.evalList out db.env).map fun vs => db.addRow f as vs
 
 /-- The Redex `Eval-Global-Actions`: run the actions in order. -/
 def evalActions (db : Database) : List Action → Option Database

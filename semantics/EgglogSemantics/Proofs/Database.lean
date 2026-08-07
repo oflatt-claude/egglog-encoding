@@ -324,5 +324,93 @@ theorem sUnion {db : Database} (h : WF db) {S : Set Database}
   envInTerms b hb := Or.inl (h.envInTerms b hb)
 
 end WF
+/-! ### Constructor rows
+
+`CtorRows db` says the row set is exactly the one the term set induces. It is one of the
+two hypotheses `Proofs/Merge.lean`'s `mcong_iff_cong` takes — `AllConstructors` is the
+other — so this is the first half of making that theorem apply to a database a program
+can actually produce. `Proofs/Step.lean` carries it along the step relations, where the
+side condition `Action.SetLegal` enters.
+
+Everything here is one observation: `ctorRowsOf` is a comprehension whose only
+dependence on the term set is a single membership test, so it commutes with unions. -/
+/-- `Term.ctorRows` *is* `ctorRowsOf` of the subterms, which is why `addTerm` preserves
+`CtorRows` by set algebra alone. -/
+theorem ctorRowsOf_subterms {t : Term} : ctorRowsOf t.subterms = t.ctorRows := rfl
+
+theorem ctorRowsOf_empty : ctorRowsOf ∅ = ∅ := by
+  ext r; simp [ctorRowsOf]
+
+theorem ctorRowsOf_union {s t : Set Term} :
+    ctorRowsOf (s ∪ t) = ctorRowsOf s ∪ ctorRowsOf t := by
+  ext r
+  simp only [ctorRowsOf, Set.mem_setOf_eq, Set.mem_union]
+  tauto
+
+namespace CtorRows
+theorem empty : Database.empty.CtorRows := ctorRowsOf_empty.symm
+
+theorem addTerm {db : Database} (h : db.CtorRows) (t : Term) :
+    (db.addTerm t).CtorRows := by
+  change db.rows ∪ t.ctorRows = ctorRowsOf (db.terms ∪ t.subterms)
+  rw [ctorRowsOf_union, ctorRowsOf_subterms, h]
+
+theorem addTerms {db : Database} (h : db.CtorRows) (ts : List Term) :
+    (db.addTerms ts).CtorRows := by
+  induction ts generalizing db with
+  | nil => exact h
+  | cons t ts ih => exact ih (h.addTerm t)
+
+theorem addEq {db : Database} (h : db.CtorRows) (a b : Term) :
+    (db.addEq a b).CtorRows := (h.addTerm a).addTerm b
+
+/-- A `set` preserves `CtorRows` exactly when it writes the row a constructor would.
+
+The side condition is not decoration: `addRow f as [v]` for any other `v` writes a row
+`ctorRowsOf` does not contain, and `not_ctorRows_addRow` below is that failure at its
+smallest. Ruling the bad case out statically is `Action.SetLegal`. -/
+theorem addRow {db : Database} (h : db.CtorRows) (f : FnName) (as : List Term) :
+    (db.addRow f as [.app f as]).CtorRows := by
+  have hd : ((db.addTerms as).addTerms [Term.app f as]).CtorRows := (h.addTerms as).addTerms _
+  have hmem : Term.app f as ∈ ((db.addTerms as).addTerms [Term.app f as]).terms :=
+    Database.mem_addTerm _ _
+  change insert (Row.mk f as [Term.app f as])
+    ((db.addTerms as).addTerms [Term.app f as]).rows =
+      ctorRowsOf ((db.addTerms as).addTerms [Term.app f as]).terms
+  rw [hd, Set.insert_eq_self.mpr (show _ ∈ ctorRowsOf _ from ⟨rfl, hmem⟩)]
+
+/-- What `(run)` needs: if every operand's rows are induced by its own terms, the
+union's rows are induced by the union's terms. -/
+theorem sUnion {db : Database} (h : db.CtorRows) {S : Set Database}
+    (hS : ∀ d ∈ S, d.CtorRows) : (db.sUnion S).CtorRows := by
+  change db.rows ∪ (⋃ d ∈ S, d.rows) = ctorRowsOf (db.terms ∪ ⋃ d ∈ S, d.terms)
+  ext r
+  simp only [Set.mem_union, Set.mem_iUnion, ctorRowsOf, Set.mem_setOf_eq, exists_prop]
+  constructor
+  · rintro (hr | ⟨d, hd, hr⟩)
+    · rw [h] at hr; exact ⟨hr.1, Or.inl hr.2⟩
+    · rw [hS d hd] at hr; exact ⟨hr.1, Or.inr ⟨d, hd, hr.2⟩⟩
+  · rintro ⟨hout, ht | ⟨d, hd, ht⟩⟩
+    · exact Or.inl (by rw [h]; exact ⟨hout, ht⟩)
+    · exact Or.inr ⟨d, hd, by rw [hS d hd]; exact ⟨hout, ht⟩⟩
+
+end CtorRows
+/-- A row whose output is not the application it is keyed at is one no `ctorRowsOf`
+contains, so a database holding it is outside `CtorRows`. Every counterexample below is
+this lemma plus a row. -/
+theorem not_ctorRows_of_mem {db : Database} {r : Row} (hr : r ∈ db.rows)
+    (hout : r.out ≠ [.app r.fn r.args]) : ¬db.CtorRows :=
+  fun hc => hout (hc ▸ hr : r ∈ ctorRowsOf db.terms).1
+
+/-- **`CtorRows` really does fail on an unrestricted `set`.**
+
+The smallest witness: `(set (f) 0)` on the empty database writes `⟨f, [], [0]⟩`, whose
+output is a literal, and no row of `ctorRowsOf` has a literal output. This is the whole
+reason `Action.SetLegal` exists — without a side condition ruling this out, no step of
+the semantics preserves `CtorRows`. -/
+theorem not_ctorRows_addRow :
+    ¬(Database.empty.addRow "f" [] [.lit (.int 0)]).CtorRows :=
+  not_ctorRows_of_mem (Set.mem_insert _ _) (by simp)
+
 end Database
 end Egglog

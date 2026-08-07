@@ -77,6 +77,24 @@ True of `empty`, preserved by `addTerm`/`addEq`, and false as soon as a `set` wr
 `Cong.fd` coincides with plain congruence — see `Proofs/Merge.lean`'s `mcong_iff_cong`. -/
 def CtorRows (db : Database) : Prop := db.rows = ctorRowsOf db.terms
 
+/-- Every application the database holds is a *constructor* application.
+
+True of any database a program builds: a `:merge` function's application evaluates to its
+recorded output rather than becoming a term, so only constructors ever appear inside a
+`Term` (`Term.ctorRows` says the same thing from the other side). Unlike `CtorRows` this
+survives a `:merge` declaration, because it constrains `terms`, which merging never
+touches — `FDatabase.mergeRound_confined`. -/
+def CtorTerms (db : Database) : Prop :=
+  ∀ f as, Term.app f as ∈ db.terms → db.sig.mergeOf f = MergeSpec.union
+
+/-- The database holds the constructor row of every application it holds.
+
+The *inclusion* half of `CtorRows`, and the half that survives merging: `addTerm` inserts
+these rows, and a merge only adds and removes rows of `.merge` functions. `CtorRows` is
+this plus the reverse inclusion, and it is the reverse one that a `set` or a `:merge`
+declaration breaks. -/
+def RowsComplete (db : Database) : Prop := ctorRowsOf db.terms ⊆ db.rows
+
 /-- Insert `t`, all of its subterms, and their constructor rows. -/
 def addTerm (t : Term) (db : Database) : Database :=
   { db with terms := db.terms ∪ t.subterms, rows := db.rows ∪ t.ctorRows }

@@ -8,10 +8,14 @@ It is a port of the Redex model in
 [egglog PR #324](https://github.com/egraphs-good/egglog/pull/324). See
 [`PLAN.md`](PLAN.md) for what the port changes and why, the milestone list, and the
 route to the proof-encoding theorems; [`MERGE.md`](MERGE.md) for the `:merge` design
-(M9), which is in progress — its compatibility theorem is proved and its differential
-cases pass, but 22 further theorems are stated and unproved, so `make lean-check` fails
-on them while `lake build` is clean; and [`CHECKER.md`](CHECKER.md) for what a Lean
-model of egglog's proof checker would cost, which scopes M11.
+(M9), which is in progress — its compatibility theorem is proved, its differential cases
+pass, and most of the further theorems are now proved, so `make lean-check` fails only on
+the remaining 7 (plus M11's, in `Proofs/Encode.lean`) while `lake build` is clean. Note
+that `Spec/` is append-only and `Impl/` is not: the reference implementation deletes
+superseded merge rows because egglog does, so the contract between them is a containment
+rather than an equality — `MERGE.md` again. See also
+[`CHECKER.md`](CHECKER.md) for what a Lean model of egglog's proof checker would cost,
+which scopes M11.
 
 ## Layout
 

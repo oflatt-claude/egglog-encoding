@@ -89,6 +89,10 @@ theorem Pattern.mem_freeVars {σ : Env} {v : Var} (p : Pattern) :
     rw [Pattern.freeVars, Pattern.vars, List.mem_union_iff, List.mem_union_iff,
       Expr.mem_freeVars e₁, Expr.mem_freeVars e₂]
     tauto
+  | values vs _ as =>
+    rw [Pattern.freeVars, Pattern.vars, List.mem_union_iff, List.mem_union_iff,
+      Expr.mem_freeVarsList vs, Expr.mem_freeVarsList as]
+    tauto
 
 /-- A free variable is by definition unbound, so a substitution over an expression's
 free variables has a domain disjoint from the environment's. That is why appending
@@ -125,6 +129,7 @@ theorem Pattern.freeVars_nodup (p : Pattern) (σ : Env) : (p.freeVars σ).Nodup 
   cases p with
   | expr e => exact e.freeVars_nodup σ
   | eq _ e₂ => exact List.Nodup.union _ (e₂.freeVars_nodup σ)
+  | values _ _ as => exact List.Nodup.union _ (Expr.freeVarsList_nodup as σ)
 
 namespace Env
 /-- The union binds exactly what its operands bind: `Union2` appends, and only
@@ -303,6 +308,7 @@ theorem validEnv (h : ValidSubst db p σ) : ValidEnv (p.freeVars db.env) db σ :
   cases h with
   | expr hv _ _ _ => exact hv
   | eq hv _ _ _ _ _ => exact hv
+  | values hv _ _ _ _ _ => exact hv
 
 theorem mem_terms (h : ValidSubst db p σ) : ∀ b ∈ σ, b.2 ∈ db.terms := h.validEnv.mem_terms
 
@@ -333,10 +339,16 @@ theorem ValidSubst.of_agree {db : Database} {p : Pattern} {σ σ' : Env}
   have hperm : (Env.dom σ').Perm (p.freeVars db.env) := hdom ▸ List.Perm.refl _
   have hev : ∀ e : Expr, e.eval (db.env ++ σ') = e.eval (db.env ++ σ) :=
     fun e => Expr.eval_agree (Env.Agree.append_left db.env hag.symm) e
+  have hevl : ∀ es : List Expr,
+      Expr.evalList es (db.env ++ σ') = Expr.evalList es (db.env ++ σ) :=
+    fun es => Expr.evalList_agree (Env.Agree.append_left db.env hag.symm) es
   cases h with
   | expr _ hwm he hc => exact .expr ⟨hperm, hterms⟩ hwm (by rw [hev]; exact he) hc
   | eq _ hwm he₁ he₂ hc₁ hc₂ =>
     exact .eq ⟨hperm, hterms⟩ hwm (by rw [hev]; exact he₁) (by rw [hev]; exact he₂) hc₁ hc₂
+  | values _ hu ht hk hw hrow =>
+    exact .values ⟨hperm, hterms⟩ (by rw [hevl]; exact hu) (by rw [hevl]; exact ht)
+      hk hw hrow
 
 namespace ValidQuerySubst
 variable {db : Database} {q : Query} {σ : Env}

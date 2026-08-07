@@ -94,6 +94,12 @@ def WF (d : FDatabase) : Prop := d.toDatabase.WF
 /-- The congruence closure of `d`, computed. -/
 def closureF (d : FDatabase) : Finset (Term × Term) := closureTotal d.termsF d.eqsF
 
+/-- Whether two tuples are pointwise congruent. Compares a row's key and value columns
+against a pattern's operands (`patternHolds`, `Pattern.values`) and two colliding rows'
+keys (`Impl/Merge.lean`, `mergeOne`). -/
+def congrTuple (cl : Finset (Term × Term)) (as bs : List Term) : Bool :=
+  as.length == bs.length && (as.zip bs).all fun q => decide (q ∈ cl)
+
 end FDatabase
 /-! ### Enumerating substitutions -/
 /-- Every assignment of `vars` to `terms`, with the domain in `vars`' order. -/
@@ -116,6 +122,14 @@ is congruent — in the database extended with it — to a witness the database 
 holds. -/
 def patternHolds (d : FDatabase) (p : Pattern) (σ : Env) : Bool :=
   match p with
+  | .values vs f as =>
+    match Expr.evalList vs (d.env ++ σ), Expr.evalList as (d.env ++ σ) with
+    | some us, some ts =>
+      let cl := d.closureF
+      d.rows.any fun r =>
+        decide (r.fn = f) && FDatabase.congrTuple cl ts r.args
+          && FDatabase.congrTuple cl us r.out
+    | _, _ => false
   | .expr e =>
     match e.eval (d.env ++ σ) with
     | none => false
@@ -143,7 +157,7 @@ def execAction (d : FDatabase) : Action → Option FDatabase
   | .union e₁ e₂ =>
       (e₁.eval d.env).bind fun t₁ => (e₂.eval d.env).map fun t₂ => d.addEq t₁ t₂
   | .set f args out => (Expr.evalList args d.env).bind fun as =>
-      (out.eval d.env).map fun v => d.addRow f as [v]
+      (Expr.evalList out d.env).map fun vs => d.addRow f as vs
 
 /-- The Redex `Eval-Global-Actions`, computed. -/
 def execActions (d : FDatabase) : List Action → Option FDatabase

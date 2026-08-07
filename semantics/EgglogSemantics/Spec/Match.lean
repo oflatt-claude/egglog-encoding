@@ -42,6 +42,7 @@ end
 def Pattern.freeVars : Pattern → Env → List Var
   | .expr e, σ => e.freeVars σ
   | .eq e₁ e₂, σ => e₁.freeVars σ ∪ e₂.freeVars σ
+  | .values vs _ as, σ => Expr.freeVarsList vs σ ∪ Expr.freeVarsList as σ
 
 namespace Env
 /-- The Redex `Env-Union2`: append, requiring the two to agree wherever both bind.
@@ -97,6 +98,17 @@ inductive ValidSubst (db : Database) : Pattern → Env → Prop where
       Cong ((db.addTerm t₁).addTerm t₂) w t₁ →
       Cong ((db.addTerm t₁).addTerm t₂) t₁ t₂ →
       ValidSubst db (.eq e₁ e₂) σ
+  /-- A tuple destructure matches a row whose key and value columns are congruent to the
+  operands, which is egglog joining on canonical ids. The row itself is the witness that
+  forbids matching something the database does not hold, so there is no `w ∈ db.terms`
+  premise and no `addTerm`: `Cong db` already relates only terms `db` holds. -/
+  | values {vs : List Expr} {f : FnName} {as : List Expr} {σ : Env}
+      {us ts ws bs : List Term} :
+      ValidEnv (Expr.freeVarsList vs db.env ∪ Expr.freeVarsList as db.env) db σ →
+      Expr.evalList vs (db.env ++ σ) = some us →
+      Expr.evalList as (db.env ++ σ) = some ts →
+      CongList db ts bs → CongList db us ws → Row.mk f bs ws ∈ db.rows →
+      ValidSubst db (.values vs f as) σ
 
 namespace ValidSubst
 variable {db : Database} {p : Pattern} {σ : Env}

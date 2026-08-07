@@ -262,11 +262,58 @@ theorem mem_closureF_addTerm₂ {d : FDatabase} (hw : d.WF) {t₁ t₂ a b : Ter
   rw [mem_closureF_iff_of_wf ((hw.addTerm t₁).addTerm t₂), toDatabase_addTerm,
     toDatabase_addTerm]
 
+/-- `congrTuple` decides pointwise congruence. What `patternHolds` needs for a tuple
+destructure, which compares a row's key *and* value columns. -/
+theorem congrTuple_iff {d : FDatabase} (hw : d.WF) {xs ys : List Term} :
+    FDatabase.congrTuple d.closureF xs ys = true ↔ CongList d.toDatabase xs ys := by
+  rw [FDatabase.congrTuple, Bool.and_eq_true, beq_iff_eq, List.all_eq_true,
+    CongList.forall₂, List.forall₂_iff_zip]
+  constructor
+  · rintro ⟨hlen, hall⟩
+    exact ⟨hlen, fun {a b} hab =>
+      (mem_closureF_iff_of_wf hw).mp (by simpa using hall (a, b) hab)⟩
+  · rintro ⟨hlen, hall⟩
+    exact ⟨hlen, fun q hq => by
+      simpa using (mem_closureF_iff_of_wf hw).mpr (hall (a := q.1) (b := q.2) (by simpa using hq))⟩
+
 end FDatabase
 theorem patternHolds_iff {d : FDatabase} (hw : d.WF) {p : Pattern} {σ : Env}
     (hv : ValidEnv (p.freeVars d.env) d.toDatabase σ) :
     patternHolds d p σ = true ↔ ValidSubst d.toDatabase p σ := by
   cases p with
+  | values vs f as =>
+    cases hu : Expr.evalList vs (d.env ++ σ) with
+    | none =>
+      simp only [patternHolds, hu, Bool.false_eq_true, false_iff]
+      intro h
+      cases h with
+      | values _ hu' _ _ _ _ =>
+        rw [FDatabase.toDatabase_env, hu] at hu'
+        simp at hu'
+    | some us =>
+      cases ht : Expr.evalList as (d.env ++ σ) with
+      | none =>
+        simp only [patternHolds, hu, ht, Bool.false_eq_true, false_iff]
+        intro h
+        cases h with
+        | values _ _ ht' _ _ _ =>
+          rw [FDatabase.toDatabase_env, ht] at ht'
+          simp at ht'
+      | some ts =>
+        simp only [patternHolds, hu, ht, List.any_eq_true, Bool.and_eq_true,
+          decide_eq_true_eq, FDatabase.congrTuple_iff hw]
+        constructor
+        · rintro ⟨r, hr, ⟨hfn, hkey⟩, hval⟩
+          subst hfn
+          exact .values hv hu ht hkey hval hr
+        · intro h
+          cases h with
+          | values _ hu' ht' hkey hval hrow =>
+            rw [FDatabase.toDatabase_env, hu] at hu'
+            rw [FDatabase.toDatabase_env, ht] at ht'
+            cases hu'
+            cases ht'
+            exact ⟨_, hrow, ⟨rfl, hkey⟩, hval⟩
   | expr e =>
     cases hev : e.eval (d.env ++ σ) with
     | none =>
@@ -459,9 +506,9 @@ theorem execAction_toDatabase {d : FDatabase} {a : Action} :
     cases hv₁ : Expr.evalList args d.env with
     | none => simp [execAction, evalAction, hv₁]
     | some as =>
-      cases hv₂ : out.eval d.env with
+      cases hv₂ : Expr.evalList out d.env with
       | none => simp [execAction, evalAction, hv₁, hv₂]
-      | some v => simp [execAction, evalAction, hv₁, hv₂]
+      | some vs => simp [execAction, evalAction, hv₁, hv₂]
 
 theorem execActions_toDatabase {d : FDatabase} {as : List Action} :
     (execActions d as).map FDatabase.toDatabase = evalActions d.toDatabase as := by

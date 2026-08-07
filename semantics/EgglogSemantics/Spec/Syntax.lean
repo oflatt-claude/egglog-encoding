@@ -53,6 +53,19 @@ constraint between two patterns. -/
 inductive Pattern where
   | expr : Expr → Pattern
   | eq : Expr → Expr → Pattern
+  /-- `(= (values v…) (f a…))`: read a row of `f` and bind its value columns.
+
+  This is egglog's **tuple destructure**, and it is the *only* way egglog offers to read
+  a value column other than the first: a tuple-output function cannot be evaluated as an
+  expression (`eval_resolved_expr` panics on `values`) and cannot be extracted
+  (`CannotExtractTupleOutput`, whose message says "Read its columns in a rule with
+  `(= (values ...) (f ...))` instead"). egglog recognizes the shape inside an ordinary
+  `=` fact, in either argument order, and lowers it to the atom `f(a…, v…)`
+  (`match_tuple_destructure`, `egglog/src/ast/mod.rs`). It is a separate `Pattern` case
+  here rather than a reserved `values` name inside `.eq` for the reason that keeps
+  primitives out of `Expr` (`MERGE.md`): a name that is a term constructor in one
+  position and a keyword in another is a trap. -/
+  | values : List Expr → FnName → List Expr → Pattern
 
 /-- A rule's query, matched conjunctively. -/
 abbrev Query := List Pattern
@@ -66,8 +79,15 @@ inductive Action where
   | expr : Expr → Action
   | letBind : Var → Expr → Action
   | union : Expr → Expr → Action
-  /-- `(set (f args…) out)`: assert the row `f args… ↦ out`. -/
-  | set : FnName → List Expr → Expr → Action
+  /-- `(set (f args…) out…)`: assert the row `f args… ↦ out…`.
+
+  The outputs are a **list**, one per value column, where the surface syntax writes a
+  single expression for a one-column function and `(values e₀ e₁ …)` for a tuple-output
+  one. That is the same deviation `MergeSpec.merge`'s result already records, and it
+  follows egglog's *core* action, which is likewise per column
+  (`GenericCoreAction::Set(f, args, values)`). `Tests/Egg.lean` renders both surface
+  forms back. -/
+  | set : FnName → List Expr → List Expr → Action
 
 /-- A rule. Its actions run once per substitution satisfying its query. -/
 structure Rule where
@@ -143,6 +163,7 @@ end
 def Pattern.vars : Pattern → List Var
   | .expr e => e.vars
   | .eq e₁ e₂ => e₁.vars ∪ e₂.vars
+  | .values vs _ as => Expr.varsList vs ∪ Expr.varsList as
 
 /-- All variables occurring in a query. -/
 def Query.vars : Query → List Var

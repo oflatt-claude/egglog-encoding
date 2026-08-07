@@ -31,8 +31,10 @@ theorem evalAction_isSome_of_scoped {db : Database} {Γ : Scope} (hm : Γ.Models
     obtain ⟨as, has⟩ := Expr.evalList_isSome args fun v hv => by
       obtain ⟨e, he, hve⟩ := Expr.mem_varsList hv
       exact (hm v).mp (h.1 e he v hve)
-    obtain ⟨v, hv⟩ := Expr.eval_isSome_of_scoped hm h.2
-    refine ⟨db.addRow f as [v], by simp [evalAction, has, hv], ?_⟩
+    obtain ⟨vs, hvs⟩ := Expr.evalList_isSome out fun v hv => by
+      obtain ⟨e, he, hve⟩ := Expr.mem_varsList hv
+      exact (hm v).mp (h.2 e he v hve)
+    refine ⟨db.addRow f as vs, by simp [evalAction, has, hvs], ?_⟩
     simpa [Action.bind] using hm
 
 theorem evalActions_isSome_of_scoped {db : Database} {Γ : Scope} (hm : Γ.Models db.env)

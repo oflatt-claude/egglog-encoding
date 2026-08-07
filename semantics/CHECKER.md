@@ -213,3 +213,140 @@ theorem (2) (checker soundness → `Cong`) is close to a restatement of `Cong.le
 constructor fragment needs only 5 of 8 justification kinds, all five of which have direct
 counterparts in `Cong`. The thing PLAN.md under-weights is that the rows are not the proofs:
 conversion stands between them, and it is where the encoder's real invariants are enforced.
+
+# M11 status — `encode` and the theorem statements
+
+`Spec/Encode.lean` (definitions) and `Proofs/Encode.lean` (statements, all `sorry`) are in.
+Read of `egglog/src/proofs/` plus the `insta` snapshots of the emitted program for exactly this
+fragment (`proof_tests.rs:1232`, `…doc_example_add_eqsort_children.snap`), which are
+proofs-off and so are the encoding this models.
+
+## What was built
+
+`encode : Program → Program` for constructors only — no containers, no delete/subsume, no
+schedules — with `Program.EncodeDomain` stating that fragment. Per source constructor `f` it
+emits `@fView` (`children ↦ eclass`, the FD) and `@fTerm` (the write-only term relation), plus
+one `@UF` for the sort; the `:merge` body of `@UF` and of every view is the same one egglog
+uses, "keep the smaller side and `set` the larger's `@UF` edge to it", so a view collision *is*
+congruence resolution and no congruence rule is emitted. Maintenance is path compression plus
+per-column view canonicalization. Rendering `encode` on the running example of
+`proof_encoding.md` reproduces the snapshot's shape modulo the deviations below.
+
+The statements: `encode_sound` / `encode_complete` / `encode_simulation` (theorem 3),
+`encode_rows_sound` and `encode_leader_sound` (theorem 2), `encode_proof_rows_check` and its
+view sibling (theorem 1), plus `encode_not_allConstructors`, `encode_eqs_empty`,
+`encode_mcong_eq` and `congOn_iff_cong`.
+
+## What the Rust says that the markdown does not
+
+- **`@rebuilding_cleanup` is an empty ruleset.** `proof_encoding.md`:220 declares it and the
+  schedule runs it every round, with the comment "drop rows merged away". No rule is ever
+  assigned to it — the only four references in the repo are the field, its `fresh`, the
+  `(ruleset …)` header and the schedule. Stale view rows are removed by the `(delete …)` inside
+  the `@rebuilding` rules themselves. Anyone modelling from the markdown would invent a rule
+  family that does not exist.
+- **One rebuild rule per eq-*sort*, not per column.** Its body joins a `@UF` delta against the
+  declared index and its action re-canonicalizes every column at once through
+  `@UF_<Sort>_canon`, which is identity-on-miss. Both are inexpressible here (no index, and "no
+  row" is not a matchable fact), so the encoding emits one rule per column instead.
+- **`get-fresh!` mints three kinds of id**, not just e-class ids: term ids, `@Proof` node ids,
+  and `@Ast` ids. Its signature is `(get-fresh! "Sort") → Sort` — the sort is a *string*
+  literal, so a generated `@`-name never gets mangled on re-parse.
+- **Proof nodes are relations, not constructors** (`… → Unit :no-merge`, with the minted id as
+  the last input column), deliberately so two structurally equal proofs are never merged.
+- The markdown's lowered `rewrite` omits the guest's trailing `(let guest target)`, which
+  `instrument_actions` always emits; `plan_construct_into` also silently drops `(union x x)`,
+  which the markdown's "a union of two matched variables keeps the plain edge" reads against;
+  `@Rule_<k>` is declared once ahead of the whole batch, not "just before the commands needing
+  it" as the markdown says of both families.
+
+Everything load-bearing checked out exactly: the `@UF_<Sort>` and `@<C>View` declarations and
+their shared `:merge`, the path-compression rule, the `check` expansion, and the term-building
+sequence.
+
+## Deviations, and the one blocker
+
+**The one-value-column blocker is fixed.** It was: `ActionStep.set` wrote `db.addRow f ts [v]`
+and `MEval.lookup` read `db.Out f ts [v]`, so a multi-column row could be *created* only by a
+merge and never written or read, and egglog's `@UF` / `@<C>View` — `(S) → (S, P)` and
+`(children) → (out, P)`, proof at value column 1 — were inexpressible. What was done:
+
+1. `Spec/Syntax.lean`: `| set : FnName → List Expr → List Expr → Action`, one expression per
+   value column. This matches egglog's *core* action, `GenericCoreAction::Set(f, args, values)`,
+   which is already per column; the surface `(values …)` is `Tests/Egg.lean`'s job.
+2. `Spec/Merge.lean`: `ActionStep.set` reads the outputs with `Expr.MEvalList` and writes
+   `db.addRow f ts vs`. `Spec/Eval.lean`, `Impl/Interp.lean` and `Impl/Merge.lean` follow.
+3. Reading a column other than the first is **`Pattern.values`**, egglog's tuple destructure
+   `(= (values v…) (f a…))`. Of the two options this document offered, that is the one egglog
+   actually has: `MEval.lookup` generalized with an index is *not* — a tuple-output function
+   cannot be evaluated as an expression at all (`eval_resolved_expr` panics on `values`,
+   `exec_state.rs:293`) and cannot be extracted, and the error message for the latter says
+   "Read its columns in a rule with `(= (values ...) ({0} ...))` instead"
+   (`typechecking.rs:1639`). egglog recognizes the shape inside an ordinary `=` fact, in either
+   argument order, and lowers it to the atom `f(a…, v…)` (`match_tuple_destructure`,
+   `ast/mod.rs:1770`). `MEval.lookup` therefore stays single-column, which is faithful.
+4. `Lit` still wants `.unit` and `.str`, as `MERGE.md` notes — that is what the proof column's
+   `Unit` and `@Rule_<k>`'s rule name need, and it is now the remaining gap along with the
+   encoder itself emitting the column. `encode_proof_rows_check` is still vacuous, but for an
+   encoder reason rather than a language one.
+
+Four differential cases exercise the widening end to end (`tuple-two`, `tuple-merge`,
+`tuple-read`, `tuple-read-congr`), and they agree with egglog. Note what the oracle can see:
+`(print-size)` counts key classes and is blind to value columns, so a row-count comparison
+validates the declaration, the `set` and that the destructure *fires*, not the merged values.
+`tuple-read` gets at the values anyway by guarding on literal columns, so whether the rule
+fired shows up in its head constructor's count.
+
+Three further deviations, all recorded in the file:
+
+- **Fresh ids are structural.** PLAN.md's "add an id supply to the target configuration" is not
+  implementable without touching frozen files — `Database` is fixed and no `Expr` can depend on
+  a counter — so the id minted for `f` over canonical children `cs` is the term `.app f cs`.
+  This is the standard skolem encoding of `get-fresh!`, and it makes source terms and target
+  ids one type, which is what lets the simulation theorem compare them without a
+  correspondence relation. It costs the row counts: egglog mints an id per construction *site*
+  and lets the view dedup them, where a second construction of one shape here reuses the id.
+  The remaining supply, over generated variable names `@v0`, `@v1`, …, is threaded at encode
+  time.
+- **No `!=` and no rulesets.** The guards on path compression and rebuild are dropped, which
+  only adds no-op firings. `Cmd.run` carries no ruleset, so `proof_encoding.md`'s
+  `run-schedule` becomes the predicate `Rebuilt` on the final state, which the completeness
+  half of simulation takes as a hypothesis. A `Cmd.run` with a ruleset argument is what would
+  let the schedule be encoded instead.
+- **No construct-into and no `set-if-empty`.** Construct-into is an optimization whose stated
+  effect is "exactly the edge the explicit union would have produced", so the plain union edge
+  is emitted. `set-if-empty` has no counterpart, so the encoding `set`s and reads the view
+  back; the difference is one extra union between the minted id and the existing e-class, which
+  are equal, so only row counts move.
+
+## Open design questions
+
+1. **Should `ViewRepr` be the source-to-target correspondence?** The simulation theorem reads a
+   source term out of the target by one view lookup per subterm — which is what `check`
+   compiles to — and then compares `@UF` leaders. The alternative is a relation built by
+   induction over the encoding's own construction. `ViewRepr` was chosen because it is
+   observable in the target alone.
+2. **`CongOn` versus `Cong` in the row-soundness statement.** The rebuild re-keys a view row to
+   its children's leaders, so the target holds rows about applications the source never built
+   (`@AddView [1,1] ↦ Add[1,2]` after `(Add 1 2)` and `(union 1 2)`). `Cong` is restricted to
+   `db.terms` at `refl` and `congr` and cannot mention them, so row soundness concludes
+   `CongOn db a b := Cong ((db.addTerm a).addTerm b) a b` — the form `ValidSubst` already uses.
+   `congOn_iff_cong` converts on terms the source holds. If this is wrong, it is wrong in the
+   direction of the *invariant* the induction will carry, so it is the statement to review
+   first.
+3. **Existential or universal reads.** `SameClass` says *some* pair of view readings lands on a
+   common leader. Because rows are never removed, a stale reading is still a true one, so the
+   universal form would be a different (and stronger) claim about the rebuild having converged.
+4. **Is `Rebuilt` satisfiable often enough?** Maintenance rules fire only inside `Cmd.run`, so a
+   program with no `run` after its last `union` never reaches a rebuilt state and the
+   completeness half is vacuous for it. Appending `(run)`s to *both* programs fixes it; adding
+   them to the target alone would break soundness, since the extra rounds also fire the encoded
+   source rules.
+5. **Should `encode` emit the term relation at all?** Nothing in the model reads `@fTerm`, and
+   with structural ids its id column is redundant with its key. It is emitted for fidelity and
+   because proof rows will refer to it.
+6. **`MCong` on the target is claimed trivial** (`encode_mcong_eq`). It rests on the source
+   constructor names staying undeclared — they must be `.union` to be buildable by
+   `MEval.ctor` — so their rows are exactly the constructor rows their terms induce and `fd`
+   only re-derives reflexivity. That is load-bearing and slightly fragile: a source `set`, or a
+   declaration surviving into the target, would break it. `EncodeDomain` rules both out.
