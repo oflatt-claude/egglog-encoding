@@ -1,22 +1,23 @@
-; Ground alpha-equivalence, no rules.
-; f($20,$1) and f($7,$8) are the same e-class invoked with different slots:
-; equal up to renaming, but not equal as invocations.
+(rewrite
+    (App2 "f"
+        (App2 "sub" x x)
+        (App2 "sub" x x)
+    )
+    (App2 "h" (Null) (Null))
+)
 
-(let $a (App2 "f" (Var 20) (Var 1)))
-(let $b (App2 "f" (Var 7) (Var 8)))
-(let $a2 (App2 "f" (Var 20) (Var 1)))
+(let $sub00 (App2 "sub" (Var 0) (Var 0)))
+(let $zero (Null))
+(union $sub00 $zero) ; This makes x redundant in x-x.
 
-; the same for a bare variable: $v3 = [0->3]*(Var 0) is a renamed id, not a class
-(let $v3 (Var 3))
-(let $v4 (Var 4))
-(let $w3 (Var 3))
+(let $x (App2 "f"
+    (App2 "sub" (Var 0) (Var 0))
+    (App2 "sub" (Var 1) (Var 1))
+    ))
+; after redundancies, this should match the rule above.
 
-(run 20)
+(let $y (App2 "h" (Null) (Null)))
 
-(check (= $a $a2))
-(fail (check (= $a $b)))
-(check (RenamesToLeader $a m1 l) (RenamesToLeader $b m2 l))
+(run 10)
 
-(check (= $v3 $w3))
-(fail (check (= $v3 $v4)))
-(check (RenamesToLeader $v3 m3 l2) (RenamesToLeader $v4 m4 l2))
+(check (= $x $y))
