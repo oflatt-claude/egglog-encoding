@@ -1,4 +1,4 @@
-import EgglogSemantics.Tests.Egg
+import EgglogSemantics.Tests.EggMerge
 
 /-!
 # Differential test case generator
@@ -215,9 +215,89 @@ private def genProgram (s : Nat) : Program :=
   [.action (.expr g₁), .action (.expr g₂), .action (.expr g₃)] ++ rules
     ++ List.replicate (rounds + 1) Cmd.run
 
+/-! ### `:merge` cases (M9)
+
+The first empirical check on M9. Every generated merge is a **join** — `min`/`max` on
+`i64` — for a reason: our reads over-approximate, so a non-idempotent merge would give
+extra firings and extra values, and a row-count difference would be this model's design
+showing rather than a real bug.
+
+Merge functions here are written and never read. A body atom reading one would bind the
+variable to *any* recorded output, where egglog binds the current one, so the model would
+fire more and build more. That is the fragment's boundary, and it is where the
+over-approximation would first become observable.
+
+`min-rebuild` is the case that matters: unioning the keys makes two `Dist` rows collide,
+so egglog's table drops from two rows to one. It is the shape of
+`egglog/tests/merge-during-rebuild.egg`, with nullary constructors in place of `(Node
+i64)`. Row counts see it because they count *key classes*, which is also why the
+interpreter need not saturate merges to predict them.
+-/
+
+private def dist (n : Nat) : FnDecl :=
+  { arity := n, outArity := 1,
+    merge := .merge [] [.app "min" [.var "old", .var "new"]] }
+
+private def distMax (n : Nat) : FnDecl :=
+  { arity := n, outArity := 1,
+    merge := .merge [] [.app "max" [.var "old", .var "new"]] }
+
+private def num (n : Int) : Expr := .lit (.int n)
+
+private def mset (f : FnName) (args : List Expr) (v : Int) : MCmd :=
+  .action (.set f args (num v))
+
+/-- A rule that copies a `Dist` entry onto the commuted key, so a merge fires from a rule
+head as well as from a top-level action. -/
+private def commuteDist : MRule where
+  query := [.expr (.app "G" [.var "a", .var "b"])]
+  actions := [.set "Dist" [.var "b", .var "a"] (num 9)]
+
+private def curatedMerge : List (String × MProgram) :=
+  [ -- One key, three writes: min wins, and the table still holds one row.
+    ("min-one",
+      [.decl "Dist" (dist 1), mset "Dist" [C "A"] 5, mset "Dist" [C "A"] 3,
+       mset "Dist" [C "A"] 7]),
+    -- Two distinct keys stay two rows.
+    ("min-two",
+      [.decl "Dist" (dist 1), mset "Dist" [C "A"] 5, mset "Dist" [C "B"] 3]),
+    -- `merge-during-rebuild`: unioning the keys collapses two rows into one.
+    ("min-rebuild",
+      [.decl "Dist" (dist 2),
+       mset "Dist" [C "X", C "Y"] 1, mset "Dist" [C "A", C "B"] 2,
+       .action (.union (C "A") (C "X")), .action (.union (C "B") (C "Y")), .run]),
+    -- The same collapse, with `max`.
+    ("max-rebuild",
+      [.decl "Dist" (distMax 2),
+       mset "Dist" [C "X", C "Y"] 1, mset "Dist" [C "A", C "B"] 2,
+       .action (.union (C "A") (C "X")), .action (.union (C "B") (C "Y")), .run]),
+    -- A congruence-driven collapse: the keys become equal through `G`, not directly.
+    ("min-congr",
+      [.decl "Dist" (dist 1),
+       .action (.expr (.app "G" [C "A", C "B"])),
+       .action (.expr (.app "G" [C "X", C "Y"])),
+       mset "Dist" [.app "G" [C "A", C "B"]] 4,
+       mset "Dist" [.app "G" [C "X", C "Y"]] 6,
+       .action (.union (C "A") (C "X")), .action (.union (C "B") (C "Y")), .run]),
+    -- A rule head writing a row, so the merge fires from a firing rather than an action.
+    ("min-rule",
+      [.decl "Dist" (dist 2),
+       .action (.expr (.app "G" [C "A", C "B"])),
+       .action (.expr (.app "G" [C "B", C "A"])),
+       mset "Dist" [C "B", C "A"] 2,
+       .rule commuteDist, .run]),
+    -- No merge fires at all: the declaration is inert, which the counts must show.
+    ("min-inert",
+      [.decl "Dist" (dist 1), .action (.expr (.app "F" [C "A"])),
+       mset "Dist" [C "A"] 1]) ]
+
 /-! ### Entry point -/
 
 private def writeCase (dir name : String) (p : Program) : IO Unit := do
+  IO.FS.writeFile s!"{dir}/{name}.egg" p.toEgg
+  IO.FS.writeFile s!"{dir}/{name}.expected" p.expectedSizes
+
+private def writeMergeCase (dir name : String) (p : MProgram) : IO Unit := do
   IO.FS.writeFile s!"{dir}/{name}.egg" p.toEgg
   IO.FS.writeFile s!"{dir}/{name}.expected" p.expectedSizes
 
@@ -230,6 +310,11 @@ def main (args : List String) : IO UInt32 := do
     for (name, p) in curated do writeCase dir name p
     IO.println s!"wrote {curated.length} curated cases"
     return 0
+  | [dir, "merge"] =>
+    IO.FS.createDirAll dir
+    for (name, p) in curatedMerge do writeMergeCase dir name p
+    IO.println s!"wrote {curatedMerge.length} merge cases"
+    return 0
   | [dir, "seed", n] =>
     match n.toNat? with
     | none => IO.eprintln s!"difftest: bad seed {n}"; return 1
@@ -238,5 +323,5 @@ def main (args : List String) : IO UInt32 := do
       writeCase dir s!"rand-{n}" (genProgram (k + 1))
       return 0
   | _ =>
-    IO.eprintln "usage: difftest <dir> curated | difftest <dir> seed <n>"
+    IO.eprintln "usage: difftest <dir> curated | merge | seed <n>"
     return 1

@@ -9,9 +9,11 @@
 # canonical argument tuple, which on the Lean side is one per congruence class of
 # argument lists.
 #
-# Cases come in two kinds. The curated ones are the Redex test.rkt programs plus
+# Cases come in three kinds. The curated ones are the Redex test.rkt programs plus
 # variations, and are only as good as whoever chose them. The random ones are generated
-# from seeds, which is what removes that bias. RANDOM_CASES sets how many.
+# from seeds, which is what removes that bias; RANDOM_CASES sets how many. The merge ones
+# are M9's :merge functions -- see DiffTest.lean for why every generated merge is a join
+# and why merge functions are written but never read.
 set -uo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -36,6 +38,7 @@ rm -rf -- "$out"
 mkdir -p -- "$out"
 
 "$gen" "$out" curated >/dev/null || exit 1
+"$gen" "$out" merge >/dev/null || exit 1
 skipped=0
 for ((i = 0; i < random_cases; i++)); do
   if ! timeout "$per_case_timeout" "$gen" "$out" seed "$i" >/dev/null 2>&1; then

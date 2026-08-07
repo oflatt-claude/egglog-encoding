@@ -7,7 +7,10 @@ proof encoding in `egglog/src/proofs/` (designed in
 It is a port of the Redex model in
 [egglog PR #324](https://github.com/egraphs-good/egglog/pull/324). See
 [`PLAN.md`](PLAN.md) for what the port changes and why, the milestone list, and the
-route to the proof-encoding theorems.
+route to the proof-encoding theorems, and [`MERGE.md`](MERGE.md) for the `:merge`
+design (M9), which is in progress: its compatibility theorem is proved and its
+differential cases pass, but 22 further theorems are stated and unproved, so
+`make lean-check` fails on them while `lake build` is clean.
 
 ## Layout
 
@@ -28,7 +31,8 @@ are inlined rather than pulled out into named lemmas, so nothing in `Spec/` or `
 is there for a proof's sake.
 
 Reading order for `Spec/`: `Syntax` → `Term` → `Database` → `Congruence` → `Eval` →
-`Match` → `Step` → `Scope`. Each `Proofs/X.lean` is about `Spec/X.lean` or
+`Match` → `Step` → `Scope` → `Merge`. `Impl/` has `Closure` and `Interp` for the
+constructor fragment and `Merge` for M9. Each `Proofs/X.lean` is about `Spec/X.lean` or
 `Impl/X.lean`; `Proofs/Interp.lean` additionally holds the refinement theorem
 `exec_toDatabase`, which is what ties the two together.
 
@@ -43,7 +47,8 @@ or, from the workspace root:
 
 - `make lean-check` — builds and fails on any `sorry`.
 - `make lean-difftest` — runs the interpreter and egglog on the same generated
-  programs and compares per-constructor row counts. Needs a release `egglog` binary.
+  programs and compares per-function row counts, for the constructor fragment and for
+  M9's `:merge` functions. Needs a release `egglog` binary.
 
 Requires [`elan`](https://github.com/leanprover/elan); the toolchain is pinned in
 `lean-toolchain` and Mathlib in `lakefile.toml` / `lake-manifest.json`.

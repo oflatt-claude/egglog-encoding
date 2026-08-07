@@ -21,7 +21,8 @@ Two deviations:
 * `skip` is an artifact of Redex's two-level reduction relation and is dropped.
 * `Cmd.decl` and `Signature` are new. The Redex has no signature at all; they are
   here from the start so that adding `:merge` functions later extends `MergeSpec`
-  rather than reshaping the AST. Nothing in this phase reads a declaration.
+  rather than reshaping the AST. `Spec/Merge.lean` is what reads a declaration;
+  nothing in M0–M10 does.
 
 `Expr` nests `List Expr`, which no `deriving` handler supports, so the types below
 carry no derived instances. The semantics is relational and needs none; an
@@ -67,24 +68,64 @@ structure Rule where
   query : Query
   actions : List Action
 
+/-- An action that can also write a row. `Action` is the `set`-free part of it.
+
+A `:merge` body is an action list, not an expression: the union-find's own merge
+`set`s the displaced parent edge into `@UF_<Sort>` (`proof_encoding.md`,
+"Union-find"). Keeping it a separate type from `Action` is a deliberate M9 scope
+limit — see `MERGE.md`, "One action language or two". -/
+inductive RowAction where
+  | expr : Expr → RowAction
+  | letBind : Var → Expr → RowAction
+  | union : Expr → Expr → RowAction
+  /-- `(set (f args…) out)`: assert the row `f args… ↦ out`. -/
+  | set : FnName → List Expr → Expr → RowAction
+
+/-- A rule-head action as a `RowAction`. -/
+def Action.toRowAction : Action → RowAction
+  | .expr e => .expr e
+  | .letBind v e => .letBind v e
+  | .union e₁ e₂ => .union e₁ e₂
+
 /-- How two rows colliding on one key combine.
 
-Only `union` is reachable in this phase; the other cases are the hooks for
-`:merge` functions. `union` makes the collision an equality, which is exactly
-congruence — see `proof_encoding.md`, "the view's `:merge` resolves congruence
-directly". -/
+`union` makes the collision an equality, which is exactly congruence — see
+`proof_encoding.md`, "the view's `:merge` resolves congruence directly", and
+`MCong.fd`, the one constructor that covers both. `merge body result` runs `body`
+once, with the two rows' outputs bound by `mergeEnv`, and then evaluates `result` —
+**one expression per value column**; `noMerge` forbids a collision outright.
+
+`result` is a `List Expr` where the surface syntax writes one tuple-valued expression
+`(values e₀ e₁ …)`. That follows the backend, which is already per-column
+(`egglog-bridge/src/lib.rs:1405`, "merge for {f} must have one entry per value
+column"), and avoids a tuple constructor in `Term`. See `MERGE.md`, "Multi-column
+outputs", for that and for the one place this is coarser than egglog: a merge kind is
+per *function* here and per *column* there. -/
 inductive MergeSpec where
   | union
-  | merge : Expr → MergeSpec
+  | merge : List RowAction → List Expr → MergeSpec
   | noMerge
 
 /-- A function declaration. -/
 structure FnDecl where
+  /-- The number of key columns. -/
   arity : Nat
+  /-- The number of value columns. One for a constructor. -/
+  outArity : Nat
   merge : MergeSpec
 
 /-- The declared functions. Undeclared names have no entry. -/
 abbrev Signature := FnName → Option FnDecl
+
+/-- How `f` resolves a collision.
+
+An undeclared name is a constructor. That is what makes the semantics in which
+nothing is declared — everything up to M8 — literally the all-constructors case,
+rather than merely analogous to it. -/
+def Signature.mergeOf (sig : Signature) (f : FnName) : MergeSpec :=
+  match sig f with
+  | some d => d.merge
+  | none => .union
 
 /-- A signature all of whose functions are constructors, i.e. the fragment this
 phase models. -/
