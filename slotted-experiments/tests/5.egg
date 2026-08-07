@@ -1,0 +1,31 @@
+; NOTE: This test would also fail in slotted-egraphs.
+; as (sub x x) and (subb x x) have x both redundant, and have different *initial choices* of x: 3 vs 7,
+; this rule can't fire.
+
+(rewrite
+    (App2 "f"
+        (App2 "sub" x x)
+        (App2 "subb" x x)
+    )
+    (App2 "h" (Null) (Null))
+)
+
+(let $zero (Null))
+
+(let $sub33 (App2 "sub" (Var 3) (Var 3)))
+(union $sub33 $zero)
+
+(let $subb77 (App2 "subb" (Var 7) (Var 7)))
+(union $subb77 $zero)
+
+(let $x (App2 "f"
+    (App2 "sub" (Var 0) (Var 0))
+    (App2 "subb" (Var 1) (Var 1))
+    ))
+; after redundancies, this should match the rule above.
+
+(let $y (App2 "h" (Null) (Null)))
+
+(run 10)
+
+(check (= $x $y))
