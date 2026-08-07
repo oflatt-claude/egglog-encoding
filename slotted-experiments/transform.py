@@ -1,8 +1,14 @@
 #!/usr/bin/python3 -B
 
 # remaining issues:
-# - symmetries
-# - redundancies (for later)
+# - redundancies
+
+# We support only a restricted subset of egglog:
+# - We only support the language T ::= Var v | App2 string T T | Null
+# - We only support (rewrite term term), not the more general (rule ...)
+# - We support global "(let $var ...)", but you can't use this $var in other lets or rewrites
+# - We support run/check/fail/union but those aren't compiled at all.
+# -- So you should only apply this to variables created with let that thus require no compilation
 
 import sys
 
@@ -126,6 +132,8 @@ def transform_rewrite(rw):
 # varmap["x"] = ["m1*m2", "m2*m3", ...]
 def stage1(e, ctr, prop, varmap):
     if e == ("Null",): return ("Null",)
+    elif len(e) == 2 and e[0] == "Var":
+        return e
     elif len(e) == 3 and e[0] == "App1":
         c = ctr[0]
         ctr[0] += 1
