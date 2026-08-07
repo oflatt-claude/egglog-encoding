@@ -660,7 +660,8 @@ impl EGraph {
     /// union-find. Re-typechecking after the encoder runs uses a default
     /// (bridge-backed) e-graph, so this backend need not implement typechecking.
     pub fn with_term_encoding(mut self) -> Self {
-        self.enable_term_encoding(EGraph::default());
+        let typechecker = EGraph::default().with_num_threads(self.num_threads());
+        self.enable_term_encoding(typechecker);
         self
     }
 
@@ -698,12 +699,6 @@ impl EGraph {
         self
     }
 
-    /// Set the number of threads used for parallel operations.
-    ///
-    /// This is a helper that simply configures the global rayon thread pool. It can only be called
-    /// once per process; subsequent calls will be ignored.
-    ///
-    /// # Panics
     /// Return a copy of this e-graph configured with `num_threads`.
     pub fn with_num_threads(mut self, num_threads: usize) -> Self {
         self.set_num_threads(num_threads);

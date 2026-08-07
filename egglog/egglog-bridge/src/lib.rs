@@ -345,8 +345,12 @@ impl EGraph {
     /// Intern the given container value into the EGraph.
     pub fn get_container_value<C: ContainerValue>(&mut self, val: C) -> Value {
         self.register_container_ty::<C>();
-        self.db
-            .with_execution_state(|state| state.clone().container_values().register_val(val, state))
+        let thread_pool = self.thread_pool();
+        install_thread_pool(thread_pool, || {
+            self.db.with_execution_state(|state| {
+                state.clone().container_values().register_val(val, state)
+            })
+        })
     }
 
     /// Register the given [`ContainerValue`] type with this EGraph.
@@ -1299,7 +1303,8 @@ impl EGraph {
         &self,
         f: impl FnOnce(&mut ExecutionState<'_>) -> R,
     ) -> (R, bool) {
-        self.db.with_execution_state_tracked(f)
+        let thread_pool = self.thread_pool();
+        install_thread_pool(thread_pool, || self.db.with_execution_state_tracked(f))
     }
 
     /// Flush the pending update buffers to the EGraph.
