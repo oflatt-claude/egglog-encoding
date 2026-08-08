@@ -13,8 +13,8 @@
 # variations, and are only as good as whoever chose them; likewise the curated :merge ones
 # for M9. The two random families remove that bias -- rand-* over the constructor fragment
 # (RANDOM_CASES) and mrand-* over M9's :merge functions (MERGE_CASES). See DiffTest.lean
-# for why every generated merge is a join and why merge functions are written but never
-# read.
+# for why every generated merge is idempotent, and for how a row count reports which of two
+# colliding values a merge kept.
 set -uo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

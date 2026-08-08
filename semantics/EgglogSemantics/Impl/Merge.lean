@@ -105,21 +105,20 @@ implementation may find *fewer* results, never more — which is the safe direct
 every property M11 cares about is positive in the state.
 
 **What "superseded" means here: the two rows the merge combined.** After the body has run
-and the combined row is computed, `r₁` and `r₂` are dropped and the combined row is
-written at `r₁`'s key. Nothing else is ever removed:
+and the combined row is computed, `r₁` — the row being inserted — is dropped, and `r₂` —
+the row already in the table — is overwritten in place by the combined row. Nothing else
+is ever removed:
 
-* **never a term and never an equality** — only `rows` is filtered;
-* **never a row of a `.union` function** — the filter runs only inside the `.merge` branch,
-  and `r₁.fn = r₂.fn` is that function;
+* **never a term and never an equality** — only `rows` is rewritten;
+* **never a row of a `.union` function** — the rewrite runs only inside the `.merge` branch
+  and touches only `r₁` and `r₂`, whose function is that branch's;
 * **never a row of a `.noMerge` function** — same reason, and it matters: `:no-merge` is
   how the proof encoding declares its proof nodes (`… → Unit :no-merge`, deliberately so
   two structurally equal proofs are never merged), and deleting one would delete a proof.
 
 `Proofs/Merge.lean`'s `mergeRound_confined` is that paragraph, machine-checked.
 
-Two mechanical consequences. Rows are filtered **before** the combined row is added, so an
-idempotent merge that re-derives a row it already had keeps it rather than deleting what it
-just wrote. And a firing now checks that both rows are still **present**, because
+One mechanical consequence: a firing checks that both rows are still **present**, because
 `mergeRound`'s loop ranges over the pre-pass row list and an earlier firing may already
 have removed one — without the check a deleted row would be resurrected.
 
@@ -131,17 +130,39 @@ The signature is consulted *before* the congruence check, which is not cosmetic:
 check computes `closureF`, and `mergeRound` calls this once per ordered pair of rows, so
 testing the cheap condition first is what keeps a constructor-only database from paying
 a closure per pair. Same result either way — a `.union` or `.noMerge` function has no
-body to run. -/
+body to run.
+
+**Position in `rows` is insertion age, and `r₂` is the older row.** `addRow` prepends, so
+the earlier of two rows in `d.rows` is the more recently written one; `mergeRound`'s outer
+loop scans `d.rows` from the front, so the first firing of a key class has `r₁` before `r₂`
+and therefore `r₁` newer. egglog binds `old` to the value already in the table and `new` to
+the one being inserted, so the body runs under `mergeEnv r₂.out r₁.out` — the *opposite* of
+the argument order. Binding it the other way inverted every non-commutative merge: `:merge
+old` returned what `:merge new` should, and vice versa. The generated difftest cases could
+not see it, because `min` and `max` are commutative.
+
+**The combined row takes `r₂`'s key and `r₂`'s slot.** `r₁` is dropped and `r₂` is
+overwritten where it stands, rather than both being dropped and the result prepended. That
+is the same fact once more: in egglog a merge leaves the existing table entry in place, so
+the survivor stays exactly as old as the row it grew out of, and a third row colliding with
+it later is the *newer* one. Prepending instead made the survivor the youngest row of its
+class, which inverts the next collision — `(set (Dist X) 1) (set (Dist Y) 2)
+(set (Dist Z) 3) (union X Y) (union Y Z)` returns `3` under `:merge old` that way, where
+egglog returns `1`. Writing at `r₂`'s key rather than `r₁`'s also matches egglog's choice
+of surviving key, though `keyRowCount` cannot see that. -/
 def FDatabase.mergeOneWith (cl : Finset (Term × Term)) (d : FDatabase) (r₁ r₂ : Row) :
     Option FDatabase :=
   match d.sig.mergeOf r₁.fn with
   | .merge body res =>
     if r₁.fn = r₂.fn && congrKeys cl r₁.args r₂.args
         && d.rows.contains r₁ && d.rows.contains r₂ then
-      (FDatabase.execActions { d with env := mergeEnv r₁.out r₂.out } body).bind
+      (FDatabase.execActions { d with env := mergeEnv r₂.out r₁.out } body).bind
         fun e => (e.execExprList e.env res).map fun vs =>
-          let e' := { e with rows := e.rows.filter fun r => r ≠ r₁ && r ≠ r₂ }
-          { e'.addRow r₁.fn r₁.args vs with env := d.env, rules := d.rules }
+          let e' := (e.addTerms r₂.args).addTerms vs
+          { e' with
+            rows := (e'.rows.filter fun r => r ≠ r₁).map fun r =>
+              if r = r₂ then ⟨r₂.fn, r₂.args, vs⟩ else r,
+            env := d.env, rules := d.rules }
     else none
   | _ => none
 
@@ -183,9 +204,7 @@ timed out difftest cases that had run in seconds. Rows added during the pass are
 compared against the *pre-pass* closure and a collision they create fires on the next
 pass, which is again firing fewer steps. A constructor-only database skips the closure
 altogether (`hasMergeRow`), so the 70 constructor cases pay a linear scan per action and
-nothing else.
-
--/
+nothing else. -/
 def FDatabase.mergeRound (d : FDatabase) : FDatabase :=
   if !d.hasMergeRow then d else
     let cl := d.closureF

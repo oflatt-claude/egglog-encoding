@@ -485,9 +485,12 @@ to "the merge result is a term the database already holds", satisfied by every g
 
 Deliberately narrow, and the narrowness is the interesting part.
 
-* **Every generated merge is a join** (`min`/`max` on `i64`). A non-idempotent one would give extra
-  firings and extra values under our over-approximating reads, so a row-count difference would be
-  this model's design showing rather than a real bug.
+* **Every generated merge is idempotent** (`min`, `max`, `old`, `new` on `i64`). A non-idempotent
+  one would give extra firings and extra values under our over-approximating reads, so a row-count
+  difference would be this model's design showing rather than a real bug. **Non-commutative is a
+  different question**, and excluding `old`/`new` on this bullet's reasoning was a mistake: they are
+  idempotent and, unlike `+`, completely determined in egglog. While every generated merge was
+  commutative, nothing could see which colliding row the model called `old` — see below.
 * **Generated merge bodies are `let`-only.** A body that `set`s a side table would fire on
   self-collisions and in both orders, inflating that table's count for the same reason.
 * ~~**Merge functions are written and never read.**~~ **No longer true, and it agrees.** This was
@@ -596,6 +599,30 @@ it. It is now a difftest case (`tuple-stale`, with the single-column `read-stale
 design showing through, not a defect** — the over-approximation argued for under "Why the reader
 over-approximates", in the safe direction, since a stale row is a row that really was written. What
 changed is only which side of the `Spec`/`Impl` line it lives on.
+
+**`old` and `new` were bound backwards, and a row's *place* in `rows` is its age.** egglog binds
+`old` to the value already in the table and `new` to the one being inserted; `FDatabase.addRow`
+prepends, so the earlier of two rows in `d.rows` is the more recent one, and `mergeRound`'s outer
+loop scans from the front — making `r₁` the newer row of a firing pair. `mergeOneWith` bound `old`
+from `r₁`, so `:merge old` returned what `:merge new` should. Nothing saw it: `genMergeSpec` drew
+`min` and `max` only, which are commutative, and `(print-size)` cannot see a value at all. The
+second half is the same fact once more: the combined row must take `r₂`'s key **and `r₂`'s slot**,
+because a merge in egglog leaves the existing table entry in place, so the survivor stays exactly
+as old as the row it grew out of. Dropping both rows and prepending the result made the survivor
+the *youngest* of its class and inverted the next collision —
+
+```
+(function Dist (Math) i64 :merge old)
+(set (Dist (X)) 1) (set (Dist (Y)) 2) (set (Dist (Z)) 3)
+(union (X) (Y)) (union (Y) (Z))
+```
+
+is `1` in egglog and was `3`. `MergeStep.collide` needed no change: it runs the body under
+`mergeEnv a b` and writes at the *first* row's key, so `mergeOneWith_mergeStep` builds its witness
+with the pair in the order `(r₂, r₁)` and the two line up. `genMergeSpec` now draws `:merge old`
+and `:merge new`, a generated case reads back the value it wrote first (`witnessRule`, whose `Won`
+count is 1 exactly when the earlier write survived), and eight curated cases pin the four shapes;
+122 cases became 130, and the wrong binding fails 14 of them.
 
 **The read path had no coverage at all**, which is how this stayed invisible: `Expr.MEval.lookup`,
 reachable through `execM` from `MValidSubst.expr`, was exercised zero times. One finding from the
