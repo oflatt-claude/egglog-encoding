@@ -111,7 +111,8 @@ the whole interpreter down to `mergeSaturateF 64` reduces by `rfl`.
 | `Expr.MEval_of_eval`'s original hypothesis `∀ f, Prim.ofName f = none` | unsatisfiable (`not_forall_ofName_eq_none`); use `MEval_of_eval'` |
 | `MergeStep.diamond_of_join`'s `hjoin` | vacuous — take `le := fun _ _ => False` |
 | `RunStep.unique_of_confluent`'s `hconf` | Newman's lemma needs termination; `MergeStep` deliberately has none. Use the proved `unique_of_diamond` |
-| `execM_reachable` for `execM`, `mergeRound_closure` | every `MergeStep` grows the state, so no closure reaches a state with fewer rows |
+| `mergeRound_closure` | every `MergeStep` grows the state, so no closure reaches a state with fewer rows |
+| `execM_reachable` | **despite the name this is about `exec`**, the constructor interpreter, which has no merge phase — so the row above is not its reason. It is false because `Expr.eval` builds an application for *every* name; its docstring has two counterexample programs. Repairable with `CtorDecls` + `Expr.NoPrim`, then blocked on the `CtorRows` preservation lemmas, not false forever |
 | `FDatabase.mergeRound_rowCount` as stated | `hpure` bounds the merge body but not its *result* |
 
 ## Queue
@@ -145,8 +146,16 @@ Roughly in priority order.
 7. **Tidy-ups.** Move `CongOn` into `Spec/Congruence.lean` and have `ValidSubst` use it — it
    is already there unnamed, as `ValidSubst.eq`'s last premise (`Spec/Match.lean`), inherited
    from the Redex. Restate `mcong_iff_cong_premises` as the `Iff` next to `mcong_iff_cong`.
-   Relocate the lemmas stranded by import order (`evalAction_sig`, `Expr.NoPrim`, the
-   `addTerm_eq_self` family, and the `contained_addRow` duplicate) — all flagged in place.
+   Relocate the lemmas stranded by import order. Flagged in place: `evalAction_sig`
+   (`Proofs/Step.lean`), the `addTerm_eq_self` family (`Proofs/Merge.lean`),
+   `Signature.AllConstructors.mergeOf_eq` (`Proofs/Step.lean`, the most literal instance —
+   it duplicates `Signature.mergeOf_eq_union` under another name to dodge an import cycle),
+   and `Database.Contained.addTerm_mono` (`Proofs/Merge.lean`). *Not* flagged, and both
+   worth a comment before anyone trusts this list: the `contained_addRow` duplicate at
+   `Proofs/Merge.lean` — its whole docstring is "A `set` only adds", with nothing saying it
+   restates `Database.Contained.addRow` — and `Expr.NoPrim`, which per `README.md`'s
+   definitions-only rule is already where it belongs, so the strays there are really the two
+   `@[simp]` lemmas beside it in `Proofs/Merge.lean`.
 8. **M12** — collapse `Cong`/`MCong` and migrate `Proofs/Interp.lean` from equalities to
    reachability (~1000–1400 lines). Deliberately deferred: the split maps onto the two sides
    of M11's simulation theorem, which is structure, not duplication. Decide on evidence from

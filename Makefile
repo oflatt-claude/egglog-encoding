@@ -110,10 +110,11 @@ nightly-local: nightly-uv nightly-rustup
 # The Lean formalization in semantics/. Kept out of `check` so the Rust and Python
 # suites do not depend on a Lean toolchain; `elan` and a Mathlib cache are needed,
 # see semantics/README.md. `lake build` only warns on a `sorry`, so the sources are
-# grepped for one as well.
+# grepped for one as well. The second grep drops backtick-quoted prose: two module
+# docstrings discuss `sorry`, and without it the target can never pass.
 lean-check:
 	cd semantics && PATH="$(LEAN_BIN_DIR):$$PATH" lake build
-	! grep -rnw --include='*.lean' sorry semantics/EgglogSemantics
+	! grep -rnw --include='*.lean' sorry semantics/EgglogSemantics | grep -v '`sorry`'
 
 # Differentially test the Lean semantics against egglog: for each generated program, the
 # Lean interpreter's per-constructor row counts against egglog's `(print-size)`. Needs a
