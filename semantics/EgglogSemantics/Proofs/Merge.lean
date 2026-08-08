@@ -1089,38 +1089,335 @@ interpreter performs has to be re-read as a specification lookup, and that is ex
 Hence `Inv`, which is what the induction actually carries. Prove its preservation lemmas
 first; the rest of the chain is structural recursion once they are available. -/
 
+/-- A term built only from constructor applications.
+
+`CtorTerms` says the database holds only such terms; this is the same condition on one
+term, which is what the operations that *insert* a term have to be given. -/
+def Term.CtorTerm (sig : Signature) (t : Term) : Prop :=
+  ∀ f as, Term.app f as ∈ t.subterms → sig.mergeOf f = MergeSpec.union
+
 /-- The invariant the refinement chain carries.
 
-`wf` is what `mem_closureF_iff_of_wf` needs; the other two are what `Cong.toMCong'` needs.
-All three hold of `FDatabase.empty` and are preserved by every interpreter step —
-`addTerm` inserts a term's constructor rows, `addRow` inserts its operands' terms, and a
-merge pass touches neither `terms` nor any non-`.merge` row (`mergeRound_confined`). -/
+`wf` is what `mem_closureF_iff_of_wf` needs; `ctorTerms` and `rowsComplete` are what
+`Cong.toMCong'` needs; `rowsWF` is what makes a `lookup`'s result a constructor term, and
+`ctorRows` is `closureF_ok`'s `hrow`. All five hold of `FDatabase.empty`.
+
+The last two are not decoration. Without `rowsWF` the interpreter's `lookup` branch can
+return a row output about which nothing is known, and `execAction` cannot re-establish
+`ctorTerms`; `ctorRows` is the reverse inclusion `RowsComplete` omits, restricted to the
+`.union` functions where it survives a `:merge` declaration, and `Action.SetLegal` is what
+preserves it. -/
 structure FDatabase.Inv (d : FDatabase) : Prop where
   wf : d.WF
   ctorTerms : d.toDatabase.CtorTerms
   rowsComplete : d.toDatabase.RowsComplete
+  rowsWF : d.toDatabase.RowsWF
+  ctorRows : ∀ r ∈ d.toDatabase.rows, d.sig.mergeOf r.fn = MergeSpec.union →
+    r.out = [.app r.fn r.args] ∧ Term.app r.fn r.args ∈ d.toDatabase.terms
 
-theorem FDatabase.Inv.empty : FDatabase.empty.Inv := by sorry
+/-- The `sig`/`terms`/`rows` half of `FDatabase.Inv`, on a spec database. Everything but
+`wf` constrains only those three fields, so it is proved once here and transported through
+the `toDatabase_*` bridges. -/
+structure Database.Inv0 (db : Database) : Prop where
+  ctorTerms : db.CtorTerms
+  rowsComplete : db.RowsComplete
+  rowsWF : db.RowsWF
+  ctorRows : ∀ r ∈ db.rows, db.sig.mergeOf r.fn = MergeSpec.union →
+    r.out = [.app r.fn r.args] ∧ Term.app r.fn r.args ∈ db.terms
 
-theorem FDatabase.Inv.addTerm {d : FDatabase} (h : d.Inv) (t : Term) :
-    (d.addTerm t).Inv := by sorry
+namespace Database
 
-theorem FDatabase.Inv.addEq {d : FDatabase} (h : d.Inv) (a b : Term) :
-    (d.addEq a b).Inv := by sorry
+/-- `addTerms` writes only `terms` and `rows`. -/
+@[simp] theorem sig_addTerms {db : Database} {ts : List Term} :
+    (db.addTerms ts).sig = db.sig := by
+  induction ts generalizing db with
+  | nil => rfl
+  | cons t ts ih => exact ih (db := db.addTerm t)
 
-/-- `addRow` preserves the invariant only for a key whose operands are already terms and
-whose function is not a constructor — a `set` on a constructor would add a row that
-`RowsComplete` does not account for, which is what `Action.SetLegal` rules out. -/
+/-- Every listed term is held by `addTerms`. -/
+theorem mem_terms_addTerms {db : Database} {ts : List Term} {t : Term} (h : t ∈ ts) :
+    t ∈ (db.addTerms ts).terms := by
+  induction ts generalizing db with
+  | nil => simp at h
+  | cons s ts ih =>
+    rcases List.mem_cons.mp h with rfl | h'
+    · exact (Contained.addTerms ts (db.addTerm t)).terms (Or.inr t.self_mem_subterms)
+    · exact ih h'
+
+namespace Inv0
+
+theorem addTerm {db : Database} (h : db.Inv0) {t : Term}
+    (ht : Term.CtorTerm db.sig t) : (db.addTerm t).Inv0 where
+  ctorTerms := by
+    rintro f as (hm | hm)
+    · exact h.ctorTerms f as hm
+    · exact ht f as hm
+  rowsComplete := by
+    rintro r ⟨hout, hm | hm⟩
+    · exact Or.inl (h.rowsComplete ⟨hout, hm⟩)
+    · exact Or.inr ⟨hout, hm⟩
+  rowsWF := by
+    rintro r (hr | ⟨hout, hm⟩)
+    · exact ⟨fun a ha => Or.inl ((h.rowsWF r hr).1 a ha),
+        fun v hv => Or.inl ((h.rowsWF r hr).2 v hv)⟩
+    · refine ⟨fun a ha => Or.inr ?_, ?_⟩
+      · exact Term.subterms_subset_of_mem hm (Term.IsSubterm.arg ha (Term.IsSubterm.refl a))
+      · intro v hv
+        rw [hout] at hv
+        rcases List.mem_singleton.mp hv with rfl
+        exact Or.inr hm
+  ctorRows := by
+    rintro r (hr | ⟨hout, hm⟩) hf
+    · exact ⟨(h.ctorRows r hr hf).1, Or.inl (h.ctorRows r hr hf).2⟩
+    · exact ⟨hout, Or.inr hm⟩
+
+theorem addTerms {db : Database} (h : db.Inv0) {ts : List Term}
+    (hts : ∀ t ∈ ts, Term.CtorTerm db.sig t) : (db.addTerms ts).Inv0 := by
+  induction ts generalizing db with
+  | nil => exact h
+  | cons t ts ih =>
+    exact ih (h.addTerm (hts t (by simp))) fun s hs => hts s (by simp [hs])
+
+theorem addEq {db : Database} (h : db.Inv0) {a b : Term}
+    (ha : Term.CtorTerm db.sig a) (hb : Term.CtorTerm db.sig b) : (db.addEq a b).Inv0 :=
+  let h' := (h.addTerm ha).addTerm hb
+  ⟨h'.ctorTerms, h'.rowsComplete, h'.rowsWF, h'.ctorRows⟩
+
+theorem addRow {db : Database} (h : db.Inv0) {f : FnName} {as vs : List Term}
+    (hf : db.sig.mergeOf f ≠ MergeSpec.union)
+    (has : ∀ a ∈ as, Term.CtorTerm db.sig a) (hvs : ∀ v ∈ vs, Term.CtorTerm db.sig v) :
+    (db.addRow f as vs).Inv0 := by
+  have h' : ((db.addTerms as).addTerms vs).Inv0 :=
+    (h.addTerms has).addTerms (by simpa using hvs)
+  refine ⟨h'.ctorTerms, h'.rowsComplete.trans (Set.subset_insert _ _), ?_, ?_⟩
+  · rintro r (rfl | hr)
+    · exact ⟨fun a ha => Contained.addTerms vs _ |>.terms (mem_terms_addTerms ha),
+        fun v hv => mem_terms_addTerms hv⟩
+    · exact h'.rowsWF r hr
+  · rintro r (rfl | hr) hmf
+    · exact absurd (by simpa using hmf) hf
+    · exact h'.ctorRows r hr hmf
+
+end Inv0
+end Database
+
+namespace FDatabase
+
+theorem Inv.toInv0 {d : FDatabase} (h : d.Inv) : d.toDatabase.Inv0 :=
+  ⟨h.ctorTerms, h.rowsComplete, h.rowsWF, h.ctorRows⟩
+
+theorem Inv.of_inv0 {d : FDatabase} (hw : d.WF) (h : d.toDatabase.Inv0) : d.Inv :=
+  ⟨hw, h.ctorTerms, h.rowsComplete, h.rowsWF, h.ctorRows⟩
+
+/-- The `addRow` companion to `WF.addTerm` and `WF.addEq`. -/
+theorem WF.addRow {d : FDatabase} (h : d.WF) (f : FnName) (as vs : List Term) :
+    (d.addRow f as vs).WF := by
+  show (d.addRow f as vs).toDatabase.WF
+  rw [toDatabase_addRow]
+  exact Database.WF.addRow h f as vs
+
+end FDatabase
+
+theorem FDatabase.Inv.empty : FDatabase.empty.Inv := by
+  refine ⟨FDatabase.empty_wf, ?_, ?_, ?_, ?_⟩ <;>
+    simp [FDatabase.empty, FDatabase.toDatabase, Database.CtorTerms, Database.RowsComplete,
+      Database.RowsWF, Database.ctorRowsOf]
+
+/-- `addTerm` takes an arbitrary `Term`, so it needs `ht`: inserting an application of a
+`:merge` function would put a non-constructor into `terms` and break `ctorTerms`. -/
+theorem FDatabase.Inv.addTerm {d : FDatabase} (h : d.Inv) {t : Term}
+    (ht : Term.CtorTerm d.sig t) : (d.addTerm t).Inv := by
+  refine Inv.of_inv0 (h.wf.addTerm t) ?_
+  rw [toDatabase_addTerm]
+  exact h.toInv0.addTerm ht
+
+theorem FDatabase.Inv.addEq {d : FDatabase} (h : d.Inv) {a b : Term}
+    (ha : Term.CtorTerm d.sig a) (hb : Term.CtorTerm d.sig b) : (d.addEq a b).Inv := by
+  refine Inv.of_inv0 (h.wf.addEq a b) ?_
+  rw [toDatabase_addEq]
+  exact h.toInv0.addEq ha hb
+
+/-- `hf` is what keeps `ctorRows` true — a `set` on a constructor would add a row of a
+`.union` function that is not that function's constructor row, which is exactly what
+`Action.SetLegal` rules out. `has`/`hvs` are `addTerm`'s condition on the operands. -/
 theorem FDatabase.Inv.addRow {d : FDatabase} (h : d.Inv) {f : FnName} {as vs : List Term}
-    (hf : d.sig.mergeOf f ≠ MergeSpec.union) : (d.addRow f as vs).Inv := by sorry
+    (hf : d.sig.mergeOf f ≠ MergeSpec.union)
+    (has : ∀ x ∈ as, Term.CtorTerm d.sig x) (hvs : ∀ x ∈ vs, Term.CtorTerm d.sig x) :
+    (d.addRow f as vs).Inv := by
+  refine Inv.of_inv0 (h.wf.addRow f as vs) ?_
+  rw [toDatabase_addRow]
+  exact h.toInv0.addRow hf has hvs
+
+/-- Every term the database holds is constructor-built: `subtermClosed` pushes the
+application into `terms`, where `ctorTerms` reads it off. -/
+theorem FDatabase.Inv.ctorTerm_of_mem {d : FDatabase} (h : d.Inv) {t : Term}
+    (ht : t ∈ d.toDatabase.terms) : Term.CtorTerm d.sig t :=
+  fun _ _ hsub => h.ctorTerms _ _ (h.wf.subtermClosed t ht hsub)
+
+/-- The environment holds only constructor terms, since `WF.envInTerms` puts its values in
+`terms`. -/
+theorem FDatabase.Inv.env_ctorTerm {d : FDatabase} (h : d.Inv) :
+    ∀ b ∈ d.env, Term.CtorTerm d.sig b.2 :=
+  fun b hb => h.ctorTerm_of_mem (h.wf.envInTerms b hb)
+
+/-- A literal mentions no application. -/
+theorem Term.ctorTerm_lit {sig : Signature} {l : Lit} : Term.CtorTerm sig (.lit l) := by
+  intro f as hsub
+  rw [Term.subterms_lit] at hsub
+  exact absurd hsub (by simp)
+
+/-- A primitive returns one of its operands or a fresh literal, so it cannot introduce a
+non-constructor application. -/
+theorem Prim.apply_ctorTerm {sig : Signature} {p : Prim} {ts : List Term} {v : Term}
+    (hts : ∀ t ∈ ts, Term.CtorTerm sig t) (h : p.apply ts = some v) :
+    Term.CtorTerm sig v := by
+  unfold Prim.apply at h
+  split at h
+  · simp only [Option.some_inj] at h
+    subst h
+    unfold Term.orderingMin
+    split
+    · exact hts _ (by simp)
+    · exact hts _ (by simp)
+  · simp only [Option.some_inj] at h
+    subst h
+    unfold Term.orderingMax
+    split
+    · exact hts _ (by simp)
+    · exact hts _ (by simp)
+  · simp only [Option.some_inj] at h; subst h; exact Term.ctorTerm_lit
+  · simp only [Option.some_inj] at h; subst h; exact Term.ctorTerm_lit
+  · exact absurd h (by simp)
+
+/-- Anything `outs` returns is some row's output column. -/
+theorem FDatabase.mem_outs {d : FDatabase} {f : FnName} {as : List Term}
+    {o : List Term} (h : o ∈ d.outs f as) : ∃ r ∈ d.rows, r.out = o := by
+  simp only [FDatabase.outs, List.mem_filterMap] at h
+  obtain ⟨r, hr, hro⟩ := h
+  refine ⟨r, hr, ?_⟩
+  split at hro
+  · exact (Option.some_inj.mp hro)
+  · exact absurd hro (by simp)
+
+mutual
+
+/-- **The merge interpreter only ever builds constructor terms.**
+
+Each branch that produces a term stays inside the constructor fragment: the `.union`
+branch's head is a constructor by the guard it just tested, a primitive returns an operand
+or a literal, and a `lookup` returns a row output, which `rowsWF` places in `terms` where
+`ctorTerms` applies. This is what `Inv.execAction` needs, and what `Inv` without `rowsWF`
+could not supply. -/
+theorem FDatabase.execExpr_ctorTerm {d : FDatabase} (h : d.Inv) {σ : Env}
+    (hσ : ∀ b ∈ σ, Term.CtorTerm d.sig b.2) {e : Expr} {t : Term}
+    (hs : d.execExpr σ e = some t) : Term.CtorTerm d.sig t := by
+  match e with
+  | .lit l =>
+    simp only [FDatabase.execExpr, Option.some_inj] at hs
+    subst hs; exact Term.ctorTerm_lit
+  | .var v =>
+    simp only [FDatabase.execExpr] at hs
+    exact hσ (v, t) (Env.mem_of_lookup hs)
+  | .app f args =>
+    simp only [FDatabase.execExpr, Option.bind_eq_some_iff] at hs
+    obtain ⟨ts, hts, hrest⟩ := hs
+    have hts' : ∀ x ∈ ts, Term.CtorTerm d.sig x :=
+      FDatabase.execExprList_ctorTerm h hσ hts
+    split at hrest
+    · exact Prim.apply_ctorTerm hts' hrest
+    · rename_i hprim
+      split at hrest
+      · rename_i hu
+        simp only [Option.some_inj] at hrest
+        subst hrest
+        intro g bs hsub
+        rw [Term.subterms_app] at hsub
+        rcases Set.mem_insert_iff.mp hsub with heq | hmem
+        · obtain ⟨rfl, rfl⟩ := Term.app.injEq .. ▸ heq
+          exact hu
+        · obtain ⟨x, hx, hxs⟩ := Set.mem_iUnion₂.mp hmem
+          exact hts' x hx g bs hxs
+      · split at hrest
+        · rename_i o rest hout
+          simp only [Option.some_inj] at hrest
+          subst hrest
+          obtain ⟨r, hr, hro⟩ := FDatabase.mem_outs (by rw [hout]; exact List.mem_cons_self ..)
+          exact h.ctorTerm_of_mem (h.rowsWF r hr |>.2 _ (by rw [hro]; simp))
+        · exact absurd hrest (by simp)
+
+theorem FDatabase.execExprList_ctorTerm {d : FDatabase} (h : d.Inv) {σ : Env}
+    (hσ : ∀ b ∈ σ, Term.CtorTerm d.sig b.2) {es : List Expr} {ts : List Term}
+    (hs : d.execExprList σ es = some ts) : ∀ t ∈ ts, Term.CtorTerm d.sig t := by
+  match es with
+  | [] =>
+    simp only [FDatabase.execExprList, Option.some_inj] at hs
+    subst hs; simp
+  | e :: es =>
+    simp only [FDatabase.execExprList, Option.bind_eq_some_iff, Option.map_eq_some_iff] at hs
+    obtain ⟨t, ht, rest, hrest, rfl⟩ := hs
+    intro x hx
+    rcases List.mem_cons.mp hx with rfl | hx
+    · exact FDatabase.execExpr_ctorTerm h hσ ht
+    · exact FDatabase.execExprList_ctorTerm h hσ hrest x hx
+
+end
 
 theorem FDatabase.Inv.execAction {d d' : FDatabase} (h : d.Inv) {a : Action}
-    (hlegal : a.SetLegal d.sig) (hs : d.execAction a = some d') : d'.Inv := by sorry
+    (hlegal : a.SetLegal d.sig) (hs : d.execAction a = some d') : d'.Inv := by
+  match a with
+  | .expr e =>
+    simp only [FDatabase.execAction, Option.map_eq_some_iff] at hs
+    obtain ⟨t, ht, rfl⟩ := hs
+    exact h.addTerm (FDatabase.execExpr_ctorTerm h h.env_ctorTerm ht)
+  | .letBind v e =>
+    simp only [FDatabase.execAction, Option.map_eq_some_iff] at hs
+    obtain ⟨t, ht, rfl⟩ := hs
+    have hbase := h.addTerm (FDatabase.execExpr_ctorTerm h h.env_ctorTerm ht)
+    refine ⟨⟨hbase.wf.subtermClosed, hbase.wf.eqsInTerms, ?_⟩, hbase.ctorTerms,
+      hbase.rowsComplete, hbase.rowsWF, hbase.ctorRows⟩
+    intro b hb
+    rcases List.mem_cons.mp hb with rfl | hb
+    · have hmem : t ∈ (d.addTerm t).terms := by
+        simp only [FDatabase.addTerm, List.mem_dedup, List.mem_append]
+        exact Or.inl ((Term.mem_subtermList t).mpr (Term.IsSubterm.refl t))
+      exact hmem
+    · exact hbase.wf.envInTerms b hb
+  | .union e₁ e₂ =>
+    simp only [FDatabase.execAction, Option.bind_eq_some_iff, Option.map_eq_some_iff] at hs
+    obtain ⟨t₁, ht₁, t₂, ht₂, rfl⟩ := hs
+    exact h.addEq (FDatabase.execExpr_ctorTerm h h.env_ctorTerm ht₁)
+      (FDatabase.execExpr_ctorTerm h h.env_ctorTerm ht₂)
+  | .set f args out =>
+    simp only [FDatabase.execAction, Option.bind_eq_some_iff, Option.map_eq_some_iff] at hs
+    obtain ⟨ts, hts, vs, hvs, rfl⟩ := hs
+    exact h.addRow hlegal (FDatabase.execExprList_ctorTerm h h.env_ctorTerm hts)
+      (FDatabase.execExprList_ctorTerm h h.env_ctorTerm hvs)
 
 theorem FDatabase.Inv.mergeRound {d : FDatabase} (h : d.Inv) : d.mergeRound.Inv := by
   sorry
 
 /-! #### Evaluation -/
+
+/-- Every output the interpreter's `outs` reports is one the specification records. This
+is where `Cong.toMCong'` is spent: `outs` filters with `closureF`, which computes `Cong`,
+while `Database.Out` compares keys with `MCong`. -/
+theorem FDatabase.Out_of_mem_outs {d : FDatabase} (h : d.Inv) {f : FnName}
+    {as vs : List Term} (hm : vs ∈ d.outs f as) : d.toDatabase.Out f as vs := by
+  simp only [FDatabase.outs, List.mem_filterMap] at hm
+  obtain ⟨r, hr, hif⟩ := hm
+  split at hif
+  · next hc =>
+    rw [Option.some.injEq] at hif
+    rw [Bool.and_eq_true, decide_eq_true_eq] at hc
+    obtain ⟨hfn, hcong⟩ := hc
+    refine ⟨r.args, CongList.toMCongList' h.ctorTerms h.rowsComplete
+      ((FDatabase.congrTuple_iff h.wf).mp hcong), ?_⟩
+    show Row.mk f r.args vs ∈ {r | r ∈ d.rows}
+    rw [← hfn, ← hif]
+    exact hr
+  · exact absurd hif (by simp)
+
+mutual
 
 /-- The interpreter's evaluation is one of the evaluations the specification allows.
 
@@ -1129,12 +1426,47 @@ allows any, so the implementation's choice is among the specification's. The `lo
 is where `Cong.toMCong'` is spent — `outs` filters by `closureF`, which is `Cong`. -/
 theorem FDatabase.execExpr_MEval {d : FDatabase} (h : d.Inv) {σ : Env} {e : Expr}
     {t : Term} (hs : d.execExpr σ e = some t) : Expr.MEval d.toDatabase σ e t := by
-  sorry
+  match e, hs with
+  | .lit l, hs =>
+    rw [FDatabase.execExpr, Option.some.injEq] at hs
+    exact hs ▸ .lit
+  | .var v, hs =>
+    rw [FDatabase.execExpr] at hs
+    exact .var hs
+  | .app f args, hs =>
+    rw [FDatabase.execExpr] at hs
+    obtain ⟨ts, hts, hs⟩ := Option.bind_eq_some_iff.mp hs
+    have hl := FDatabase.execExprList_MEvalList h hts
+    split at hs
+    · next p hp => exact .prim hp hl hs
+    · next hp =>
+      split at hs
+      · next hu =>
+        rw [Option.some.injEq] at hs
+        exact hs ▸ .ctor hp hu hl
+      · next hu =>
+        split at hs
+        · next v tl ho =>
+          rw [Option.some.injEq] at hs
+          subst hs
+          exact .lookup hp hu hl
+            (FDatabase.Out_of_mem_outs h (ho ▸ List.mem_cons_self))
+        · exact absurd hs (by simp)
 
 theorem FDatabase.execExprList_MEvalList {d : FDatabase} (h : d.Inv) {σ : Env}
     {es : List Expr} {ts : List Term} (hs : d.execExprList σ es = some ts) :
     Expr.MEvalList d.toDatabase σ es ts := by
-  sorry
+  match es, hs with
+  | [], hs =>
+    rw [FDatabase.execExprList, Option.some.injEq] at hs
+    exact hs ▸ .nil
+  | e :: es, hs =>
+    rw [FDatabase.execExprList] at hs
+    obtain ⟨t, ht, hs⟩ := Option.bind_eq_some_iff.mp hs
+    obtain ⟨us, hus, rfl⟩ := Option.map_eq_some_iff.mp hs
+    exact .cons (FDatabase.execExpr_MEval h ht) (FDatabase.execExprList_MEvalList h hus)
+
+end
 
 /-! #### Actions -/
 
