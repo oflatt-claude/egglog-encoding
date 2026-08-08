@@ -2,14 +2,14 @@
 
 **M11 is parked** (`PLAN.md`, "Current priority"): the encoding is downstream of a model we trust
 and we do not have one yet. This records what was learned from reading `egglog/src/proofs/` at
-`3364576`, from `--proofs` runs on constructor-only programs, and from building `Spec/Encode.lean`.
+`3364576`, from `--proofs` runs on constructor-only programs, and from building `Encoding/Encode.lean`.
 
 **Two things to know before anyone restarts it.**
 
 * **`Rebuilt` is reachability-vacuous.** Maintenance rules fire only inside `Cmd.run`, so a program
   with no `run` after its last `union` never reaches a rebuilt state, and `encode_complete`,
   `encode_simulation` and `encode_simulation_run` are vacuously true for every program that does
-  real work. `Proofs/Rebuilt.lean` has the machine-checked witnesses: `not_rebuilt₀` for
+  real work. `Encoding/Rebuilt.lean` has the machine-checked witnesses: `not_rebuilt₀` for
   `P₀ = (f 2) (union 1 2)`, `rebuilt₁` for `P₁ = (f 1) (union 1 2)`, and `rebuilt_rekeys` as the
   general form. Fix this **first** — proving those statements as they stand would establish
   nothing. Appending `(run)`s to *both* programs fixes it; adding them to the target alone would
@@ -17,7 +17,7 @@ and we do not have one yet. This records what was learned from reading `egglog/s
 * **The encoder does not emit proof rows**, which is why the two proof-checking theorems are
   vacuous and `Checks` is still `opaque`.
 
-**Assume the 13 statements in `Proofs/Encode.lean` are wrong until checked.** Nine of the seventeen
+**Assume the 13 statements in `Encoding/Proofs.lean` are wrong until checked.** Nine of the seventeen
 `execM` refinement-chain statements were false as written, and *those* had proved M10 counterparts
 in `Proofs/Interp.lean` to copy from; the M11 statements have nothing to check against.
 
@@ -181,7 +181,7 @@ soundness → `Cong`) is close to a restatement of `Cong.le`; and the fragment n
 justification kinds, all with direct counterparts in `Cong`. What `PLAN.md` under-weights is that
 the rows are not the proofs.
 
-## `Spec/Encode.lean`
+## `Encoding/Encode.lean`
 
 `encode : Program → Program` for constructors only, `Program.EncodeDomain` stating that fragment.
 Per source constructor `f` it emits `@fView` (`children ↦ eclass`, the FD) and `@fTerm`
@@ -217,7 +217,7 @@ shared `:merge`, the path-compression rule, the `check` expansion, and the term-
 
 ### Deviations
 
-Each is recorded at its definition in `Spec/Encode.lean`; the reasons in one line each.
+Each is recorded at its definition in `Encoding/Encode.lean`; the reasons in one line each.
 
 * **Fresh ids are structural.** `PLAN.md`'s "add an id supply to the target configuration" needs
   frozen files, so the id minted for `f` over canonical children `cs` is the term `.app f cs` — the
@@ -239,7 +239,7 @@ Each is recorded at its definition in `Spec/Encode.lean`; the reasons in one lin
 
 ### Open design questions
 
-Parked with the milestone; each is argued at its statement in `Spec/Encode.lean`. Whether
+Parked with the milestone; each is argued at its statement in `Encoding/Encode.lean`. Whether
 `ViewRepr` should be the source-to-target correspondence (chosen because it is observable in the
 target alone); whether `SameClass` should be universal rather than existential (a stronger claim,
 about the rebuild having converged, and only meaningful because rows are never removed); and

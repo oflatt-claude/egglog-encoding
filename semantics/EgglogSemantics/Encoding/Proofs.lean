@@ -1,4 +1,4 @@
-import EgglogSemantics.Spec.Encode
+import EgglogSemantics.Encoding.Encode
 import EgglogSemantics.Spec.Step
 
 /-!

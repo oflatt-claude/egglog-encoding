@@ -466,7 +466,7 @@ model predicts the same — so it is exactly the conflicting-value case that is 
 why the difftest's `:no-merge` cases keep their keys distinct.
 
 `MergeSpec.noMerge` itself stays. Scoping out the *collision behaviour* is not "drop the
-constructor": the proof encoding declares its proof nodes with `:no-merge` (`Spec/Encode.lean`'s
+constructor": the proof encoding declares its proof nodes with `:no-merge` (`Encoding/Encode.lean`'s
 `termDecl`), and `Impl/Merge.lean`'s merge phase turns on a `.noMerge` row never being deleted,
 "deleting one would delete a proof".
 

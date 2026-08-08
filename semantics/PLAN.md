@@ -57,9 +57,9 @@ proof relates `Impl/` to *our* `Spec/`, and difftest is the only check that can 
 `Spec/` itself is wrong about egglog — which it has been (see `MERGE.md`, "The merge phase
 runs between commands").
 
-**The proof encoding (M11) is parked.** `Proofs/Encode.lean`, `Proofs/Rebuilt.lean` and
+**The proof encoding (M11) is parked.** `Encoding/Proofs.lean`, `Encoding/Rebuilt.lean` and
 `CHECKER.md` record what has been learned about it; they are not a work queue. Do not start
-M11 work or try to prove anything in `Proofs/Encode.lean`. The encoding is downstream of a
+M11 work or try to prove anything in `Encoding/Proofs.lean`. The encoding is downstream of a
 model we trust, and we do not have one yet — though the three things this note used to name,
 arity checking, reading a `:merge` function in a query, and the rule-head restriction, are
 now done. `Spec/Scope.lean`'s "Arity" and "Reading in an action" sections mirror egglog's
@@ -126,7 +126,7 @@ select (`old`, `new`) or build a term, so there are no lattice merges and no ana
   silently built the *term* `min(5, 3)`.
 - **`ordering-min`/`ordering-max`** serve the real encoding's union-find leader selection and
   nothing else. **M11-min drops the union-find**, so nothing in the live plan needs them;
-  their only remaining uses are inside `Proofs/Rebuilt.lean`, which is parked M11 material.
+  their only remaining uses are inside `Encoding/Rebuilt.lean`, which is parked M11 material.
   Retire the two together when M11-min lands.
   - They also carry the model's one **accepted deviation** on merge results: `Term.blt` is a
     deterministic structural order, egglog's is the allocation order of value ids, so the two
@@ -152,7 +152,7 @@ theorem actually depends on and traces into Mathlib:
 | `exec_toDatabase`, `mem_closure_iff`, `execM_contained` | `propext, Classical.choice, Quot.sound` |
 
 Statements known to be **false** carry compiling counterexamples in
-`Proofs/Counterexamples.lean`, and `Proofs/Rebuilt.lean` holds the `Rebuilt` vacuity result.
+`Proofs/Counterexamples.lean`, and `Encoding/Rebuilt.lean` holds the `Rebuilt` vacuity result.
 Both are `sorry`-free and in the build, so they cannot rot — read them before trying to
 prove anything they refute.
 
@@ -600,13 +600,13 @@ equivalent — `(rule ((= v (Dist k))) ((set (Copy k) v)))` for the first — so
 notation, not expressiveness, except in the `:merge` body, where a body that reads another
 table genuinely cannot be written.
 
-**What it exposed in `Spec/Encode.lean`.** `encodeBuild` interns an application by `set`ting
+**What it exposed in `Encoding/Encode.lean`.** `encodeBuild` interns an application by `set`ting
 the view and then *reading it back* with `(let x (@fView c…))` — a lookup in a rule head,
 which egglog refuses. egglog does the same job with `set-if-empty-<View>!`, registered as a
 **primitive** (`src/proofs/proof_fresh.rs`), and `expr_has_function_lookup` flags only
 `ResolvedCall::Func`. So `encode` emits rule heads the real system rejects, and the fix is
 the one egglog made: a `Prim`-style get-or-insert, which is a write. Recorded in
-`Spec/Encode.lean`, not done — it is M11 work.
+`Encoding/Encode.lean`, not done — it is M11 work.
 
 ## The minimal proof encoding (M11-min)
 
@@ -655,7 +655,7 @@ which would mean some equalities have no rule behind them, defeating the point. 
 collapses to nothing **provided `encode` emits no `union` actions**: with `eqs` empty,
 `MCong` reduces to reflexivity, and `fd` on equal arguments yields nothing new. So "emits no
 `union`" is a syntactic property of `encode` that makes the target's built-in congruence
-vacuous, and `Proofs/Encode.lean`'s `encode_mcong_eq` is exactly that lemma.
+vacuous, and `Encoding/Proofs.lean`'s `encode_mcong_eq` is exactly that lemma.
 
 ### What a proof value is
 

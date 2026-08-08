@@ -28,6 +28,7 @@ read closely and the second skimmed.
 | `EgglogSemantics/Impl/` | the reference implementation, which computes it | none |
 | `EgglogSemantics/Proofs/` | everything proved about the two, one file per subject | all |
 | `EgglogSemantics/Tests/` | ported Redex checks, and the `.egg` emitter | a few |
+| `EgglogSemantics/Encoding/` | **parked M11** — the proof encoding, its statements, and what is known against them | 13 `sorry` |
 
 `Spec/` and `Impl/` hold **definitions only** — no `theorem` appears in either. The
 one exception the language forces is a proof needed to *make* a definition: the
@@ -36,13 +37,14 @@ are inlined rather than pulled out into named lemmas, so nothing in `Spec/` or `
 is there for a proof's sake.
 
 Reading order for `Spec/`: `Syntax` → `Term` → `Database` → `Congruence` → `Eval` →
-`Match` → `Step` → `Scope` → `Merge`. (`Spec/Encode.lean` is parked M11; skip it.) `Impl/`
+`Match` → `Step` → `Scope` → `Merge`. `Impl/`
 has `Closure` and `Interp`, with `Merge` adding M9's lookup evaluator and merge phase.
 
 Each `Proofs/X.lean` is about `Spec/X.lean` or `Impl/X.lean`, with two exceptions worth
-knowing about: `Proofs/Counterexamples.lean` holds compiling witnesses that particular
-statements are **false**, and `Proofs/Rebuilt.lean` the same for M11's `Rebuilt` hypothesis.
-Both are `sorry`-free and in the build, so a refuted statement cannot quietly come back.
+knowing about: `Proofs/Counterexamples.lean` and `Proofs/Lattice.lean` hold compiling
+witnesses that particular statements are **false**, and `Encoding/Rebuilt.lean` the same for
+M11's `Rebuilt` hypothesis. All three are `sorry`-free and in the build, so a refuted
+statement cannot quietly come back.
 `Proofs/Interp.lean` holds `exec_toDatabase`, which ties spec and implementation together.
 
 ## Building
