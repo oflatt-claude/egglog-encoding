@@ -69,8 +69,8 @@ mutual
 
 /-- Evaluation gets stuck on an unbound variable, on a lookup and on a primitive; an
 expression with none of the three evaluates. The two conditions are exactly
-`Expr.Scoped`'s, and this is the whole content of the Redex's type checker plus what a
-sort discipline would add (`Spec/Scope.lean`, `Expr.Scoped`). -/
+`Expr.Scoped` and `Expr.Evaluable`: the Redex's type checker, and what a sort discipline
+would add (`Spec/Scope.lean`). -/
 theorem Expr.eval_isSome {sig : Signature} {σ : Env} (e : Expr)
     (h : ∀ v ∈ e.vars, v ∈ Env.dom σ)
     (hf : ∀ f ∈ e.fns, Prim.ofName f = none ∧ sig.mergeOf f = MergeSpec.union) :

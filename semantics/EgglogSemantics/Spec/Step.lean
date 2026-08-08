@@ -26,7 +26,7 @@ namespace Egglog
 
 This is the Redex `Eval-Actions`, whose `U_d` over the results is taken by
 `runRules`. Substitutions whose actions get stuck contribute nothing, which cannot
-happen for a well-scoped rule (`Scope.lean`). -/
+happen for a scoped, evaluable rule (`Scope.lean`). -/
 def ruleResults (db : Database) (r : Rule) : Set Database :=
   {d | ∃ σ, ValidQuerySubst db r.query σ ∧ evalLocalActions db r.actions σ = some d}
 

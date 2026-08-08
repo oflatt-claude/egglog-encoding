@@ -121,6 +121,10 @@ expression position at all.
 A lookup is `sig.mergeOf f ≠ .union`. `Signature.mergeOf` sends an undeclared name to
 `.union`, so a constructor and a primitive both pass without a case of their own.
 
+`Spec/Scope.lean`'s `Evaluable` is the semantics-side half of this: it constrains only
+the positions `Expr.eval` reaches, and it also excludes primitives, which this check
+deliberately admits.
+
 What it buys is the thing the whole relational layer was paying for: with nothing able to
 read but a query atom, `Expr.eval` needs no `lookup` constructor, is deterministic, and
 consults the database only for its signature.
@@ -197,7 +201,8 @@ def Program.noLookup : Program → Signature → Bool
 def Program.NoLookup (p : Program) (sig : Signature) : Prop := p.noLookup sig = true
 
 /-- The read check from the empty signature: every read is a `Pattern.values` atom. The
-tuple to carry is `WellScoped p ∧ p.SetLegal sig ∧ WellArity p ∧ ReadsAreAtoms p`. -/
+tuple to carry is
+`WellScoped p ∧ p.Evaluable sig ∧ p.SetLegal sig ∧ WellArity p ∧ ReadsAreAtoms p`. -/
 def ReadsAreAtoms (p : Program) : Prop := Program.NoLookup p (fun _ => none)
 
 end Egglog

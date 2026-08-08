@@ -8,12 +8,14 @@ Ports the Redex `typed-expr`, `typed-query-expr`, `typed-action`, `typed-pattern
 `typed-query`, `typed-actions`, `typed-rule` and `typed-program`.
 
 The Redex has a single type, `no-type`, so its `TypeEnv` is a list of variables and
-its judgments check nothing but scope. `Scope` is that list of variables with the
-type erased; real sorts arrive with `:merge` functions, which need base-sorted
-outputs (`PLAN.md`, M9). A judgment here therefore reads both a `Scope` and a
-`Signature`, threaded by `Cmd.bind` and `Cmd.sigBind` respectively — the signature
-because whether an application *builds* is a fact about the declarations, not the
-syntax.
+its judgments check nothing but scope. So do these: `Scope` is that list of variables
+with the type erased, threaded by `Cmd.bind`, and a `Scoped` judgment says one thing
+only — every variable used is bound. Real sorts arrive with `:merge` functions, which
+need base-sorted outputs (`PLAN.md`, M9).
+
+Whether an application can be *evaluated* is a fact about the declarations rather than
+about scope, so it is a judgment of its own: `Evaluable`, below, which reads a
+`Signature` where `Scoped` reads a `Scope`.
 
 Two things the Redex's judgments make relational are functions here:
 
@@ -25,10 +27,10 @@ Two things the Redex's judgments make relational are functions here:
   of bindings occurs as an *element* of itself. That is never true, so the negation
   always holds and the condition is vacuous; a `let` may shadow.
 
-The payoff is `runProgram_isSome`: a well-scoped program never gets stuck.
+The payoff is `run_isSome`: a scoped, evaluable program never gets stuck.
 `runRules` cannot get stuck either way — it drops firings whose actions fail — so
 the corresponding statement about rules is
-`evalLocalActions_isSome_of_scoped`: a well-scoped rule contributes on every
+`evalLocalActions_isSome_of_scoped`: such a rule contributes on every
 substitution its query admits.
 -/
 
@@ -36,33 +38,19 @@ namespace Egglog
 /-- The variables in scope. The Redex `TypeEnv`, with its one type erased. -/
 abbrev Scope := List Var
 
-/-- The Redex `typed-expr`: every variable of `e` is in scope, and every application in
-it **builds**.
+/-- The Redex `typed-expr`: every variable of `e` is in scope.
 
-"Builds" is the second half of what a real type checker does and what makes
-`Expr.eval_isSome_of_scoped` true. An application is one of three things, decided by the
-name: a *lookup* if the function is not a constructor, which egglog rejects in a rule head
-(`check_no_function_lookups_in_actions`) and this model rejects everywhere, since reading
-is the query atom `Pattern.values`; a *primitive*, which computes; or a constructor, which
-builds. Only the last cannot get stuck.
-
-**Primitives are excluded rather than sort-checked**, which is where this is stricter than
-egglog: `(min 1 2)` is a legal egglog action, and `(min (A) (B))` is a type error there,
-and with no sorts in this model (`PLAN.md`, base sorts) nothing here can tell the two
-apart. A `:merge` body — the one position primitives exist for — is not scope-checked at
-all (`Cmd.Scoped`, `.decl`), so nothing the model relies on is lost. -/
-def Expr.Scoped (e : Expr) (Γ : Scope) (sig : Signature) : Prop :=
-  (∀ v ∈ e.vars, v ∈ Γ) ∧
-    ∀ f ∈ e.fns, Prim.ofName f = none ∧ sig.mergeOf f = MergeSpec.union
+Scope and nothing else. Whether `e` can be evaluated is `Expr.Evaluable`, which is a
+question about the declarations and is answered separately. -/
+def Expr.Scoped (e : Expr) (Γ : Scope) : Prop := ∀ v ∈ e.vars, v ∈ Γ
 
 /-- `e` is a constructor application.
 
 Query facts and `expr` actions are required to be applications, which the Redex does not
 require: there a bare variable is a legal fact, matching any term, and a legal action,
 adding one already present. egglog's grammar admits neither, so allowing them would leave
-every later phase handling a case the real system cannot express. This and `Expr.Scoped`'s
-primitive exclusion are the two places `WellScoped` is deliberately stricter than the
-Redex `typed-program`. -/
+every later phase handling a case the real system cannot express. It is the one place
+`WellScoped` is deliberately stricter than the Redex `typed-program`. -/
 def Expr.IsApp : Expr → Prop
   | .app _ _ => True
   | _ => False
@@ -82,11 +70,11 @@ def Pattern.Scoped : Pattern → Prop
 
 /-- The Redex `typed-action`, minus its vacuous side condition and plus the application
 restriction on a bare `expr`. -/
-def Action.Scoped : Action → Scope → Signature → Prop
-  | .expr e, Γ, sig => e.IsApp ∧ e.Scoped Γ sig
-  | .letBind _ e, Γ, sig => e.Scoped Γ sig
-  | .union e₁ e₂, Γ, sig => e₁.Scoped Γ sig ∧ e₂.Scoped Γ sig
-  | .set _ args out, Γ, sig => (∀ e ∈ args, e.Scoped Γ sig) ∧ ∀ e ∈ out, e.Scoped Γ sig
+def Action.Scoped : Action → Scope → Prop
+  | .expr e, Γ => e.IsApp ∧ e.Scoped Γ
+  | .letBind _ e, Γ => e.Scoped Γ
+  | .union e₁ e₂, Γ => e₁.Scoped Γ ∧ e₂.Scoped Γ
+  | .set _ args out, Γ => (∀ e ∈ args, e.Scoped Γ) ∧ ∀ e ∈ out, e.Scoped Γ
 
 /-- The scope after an action: only a `let` extends it. -/
 def Action.bind : Action → Scope → Scope
@@ -96,9 +84,9 @@ def Action.bind : Action → Scope → Scope
   | .set _ _ _, Γ => Γ
 
 /-- The Redex `typed-actions`: each action is scoped in what the earlier ones bind. -/
-def Actions.Scoped : List Action → Scope → Signature → Prop
-  | [], _, _ => True
-  | a :: as, Γ, sig => a.Scoped Γ sig ∧ Actions.Scoped as (a.bind Γ) sig
+def Actions.Scoped : List Action → Scope → Prop
+  | [], _ => True
+  | a :: as, Γ => a.Scoped Γ ∧ Actions.Scoped as (a.bind Γ)
 
 /-- The scope after a sequence of actions. -/
 def Actions.bind : List Action → Scope → Scope
@@ -106,18 +94,18 @@ def Actions.bind : List Action → Scope → Scope
   | a :: as, Γ => Actions.bind as (a.bind Γ)
 
 /-- The Redex `typed-rule`: the actions are scoped in the query's bindings. -/
-def Rule.Scoped (r : Rule) (Γ : Scope) (sig : Signature) : Prop :=
-  (∀ p ∈ r.query, p.Scoped) ∧ Actions.Scoped r.actions (Query.bind r.query Γ) sig
+def Rule.Scoped (r : Rule) (Γ : Scope) : Prop :=
+  (∀ p ∈ r.query, p.Scoped) ∧ Actions.Scoped r.actions (Query.bind r.query Γ)
 
 /-- The Redex `typed-program`, one command at a time.
 
-A `:merge` body is deliberately unchecked: it is the one position primitives are for, and
-`Expr.Scoped` has no sorts to check them with. -/
-def Cmd.Scoped : Cmd → Scope → Signature → Prop
-  | .action a, Γ, sig => a.Scoped Γ sig
-  | .rule r, Γ, sig => r.Scoped Γ sig
-  | .run, _, _ => True
-  | .decl _ _, _, _ => True
+A `:merge` body is deliberately unchecked: it runs in the environment `mergeEnv` builds
+from the two colliding rows, never in the ambient scope, so `Γ` says nothing about it. -/
+def Cmd.Scoped : Cmd → Scope → Prop
+  | .action a, Γ => a.Scoped Γ
+  | .rule r, Γ => r.Scoped Γ
+  | .run, _ => True
+  | .decl _ _, _ => True
 
 /-- The scope after a command: only a top-level `let` extends it. -/
 def Cmd.bind : Cmd → Scope → Scope
@@ -126,33 +114,95 @@ def Cmd.bind : Cmd → Scope → Scope
   | .run, Γ => Γ
   | .decl _ _, Γ => Γ
 
-/-- The signature after a command: only a declaration writes it. `Cmd.bind` for
-signatures, and exactly what `stepCmd`'s `.decl` case does. -/
-def Cmd.sigBind : Cmd → Signature → Signature
-  | .decl f d, sig => Function.update sig f (some d)
-  | _, sig => sig
-
 /-- The Redex `typed-program`. -/
-def Program.Scoped : Program → Scope → Signature → Prop
-  | [], _, _ => True
-  | c :: cs, Γ, sig => c.Scoped Γ sig ∧ Program.Scoped cs (c.bind Γ) (c.sigBind sig)
+def Program.Scoped : Program → Scope → Prop
+  | [], _ => True
+  | c :: cs, Γ => c.Scoped Γ ∧ Program.Scoped cs (c.bind Γ)
 
 /-- The scope after a program. -/
 def Program.bind : Program → Scope → Scope
   | [], Γ => Γ
   | c :: cs, Γ => Program.bind cs (c.bind Γ)
 
-/-- A program with no free variables and nothing declared yet: the Redex
-`(typed-program Program TypeEnv)` from the empty environment, against the empty
-signature `Database.empty` starts from. -/
-def WellScoped (p : Program) : Prop := Program.Scoped p [] (fun _ => none)
+/-- A program with no free variables: the Redex `(typed-program Program TypeEnv)` from
+the empty environment. -/
+def WellScoped (p : Program) : Prop := Program.Scoped p []
+
+/-! ### Evaluability
+
+`Scoped` is the whole of the Redex's judgment, and it is not enough for `Expr.eval` to
+return a term: an application may be a *lookup*, which has no evaluation rule at all, or
+a *primitive*, which may be handed operands of the wrong sort. `Evaluable` rules both
+out. `run_isSome` carries it beside `WellScoped` rather than folding it in, so that
+"scoped" goes on meaning scope.
+
+Like `SetLegal` below it reads the signature and not the scope, threaded by `Cmd.sigBind`.
+-/
+/-- The signature after a command: only a declaration writes it. `Cmd.bind` for
+signatures, and exactly what `stepCmd`'s `.decl` case does. -/
+def Cmd.sigBind : Cmd → Signature → Signature
+  | .decl f d, sig => Function.update sig f (some d)
+  | _, sig => sig
+
+/-- Every application in `e` **builds**, so evaluating `e` cannot get stuck on one.
+
+An application is one of three things, decided by the name: a *lookup* if the function is
+not a constructor, which egglog rejects in a rule head
+(`check_no_function_lookups_in_actions`) and this model rejects everywhere, since reading
+is the query atom `Pattern.values`; a *primitive*, which computes; or a constructor, which
+builds. Only the last always succeeds, and this admits only the last.
+
+**Primitives are excluded rather than sort-checked**, which is where this is stricter than
+egglog: `(min 1 2)` is a legal egglog action, and `(min (A) (B))` is a type error there,
+and with no sorts in this model (`PLAN.md`, base sorts) nothing here can tell the two
+apart. A `:merge` body — the one position primitives exist for — is not checked at all
+(`Cmd.Evaluable`, `.decl`), so nothing the model relies on is lost.
+
+`Impl/Check.lean`'s `Expr.noLookup` is the front end's `Bool` transcription of the
+constructor half. This is the half the semantics consumes. -/
+def Expr.Evaluable (e : Expr) (sig : Signature) : Prop :=
+  ∀ f ∈ e.fns, Prim.ofName f = none ∧ sig.mergeOf f = MergeSpec.union
+
+/-- `Action.Scoped`'s companion: every expression the action evaluates builds. -/
+def Action.Evaluable : Action → Signature → Prop
+  | .expr e, sig => e.Evaluable sig
+  | .letBind _ e, sig => e.Evaluable sig
+  | .union e₁ e₂, sig => e₁.Evaluable sig ∧ e₂.Evaluable sig
+  | .set _ args out, sig => (∀ e ∈ args, e.Evaluable sig) ∧ ∀ e ∈ out, e.Evaluable sig
+
+/-- Every action in the list. Unlike `Actions.Scoped` this needs no threading: no action
+changes the signature. -/
+def Actions.Evaluable : List Action → Signature → Prop
+  | [], _ => True
+  | a :: as, sig => a.Evaluable sig ∧ Actions.Evaluable as sig
+
+/-- A rule's head. A query is matched rather than evaluated, so it is unconstrained. -/
+def Rule.Evaluable (r : Rule) (sig : Signature) : Prop := Actions.Evaluable r.actions sig
+
+/-- `Cmd.Scoped`'s companion.
+
+A `:merge` body is unchecked here too, and for the sharper reason: it is the one position
+primitives exist for, so demanding that it build would forbid the feature. `MergeStep` is
+a relation, and a body that gets stuck simply does not step. -/
+def Cmd.Evaluable : Cmd → Signature → Prop
+  | .action a, sig => a.Evaluable sig
+  | .rule r, sig => r.Evaluable sig
+  | .run, _ => True
+  | .decl _ _, _ => True
+
+/-- `Program.Scoped`'s companion: each command is checked against the signature the
+earlier ones leave, as `Program.Scoped` checks against the scope they leave. -/
+def Program.Evaluable : Program → Signature → Prop
+  | [], _ => True
+  | c :: cs, sig => c.Evaluable sig ∧ Program.Evaluable cs (c.sigBind sig)
 
 /-! ### `set` legality
 
-A second static check, additive and deliberately kept apart from `Scoped`: `Scoped` says
-what an expression may *read*, this says what an action may *write*. Both thread the
-signature, so the pair to carry is `WellScoped p ∧ p.SetLegal sig`; `PLAN.md`, "`set`
-legality is a separate predicate, for now", says when to fold them together.
+A third static check, additive and deliberately kept apart: `Evaluable` says what an
+expression may *build*, this says what an action may *write*. Both read the signature and
+neither reads the scope, so the triple to carry is
+`WellScoped p ∧ p.Evaluable sig ∧ p.SetLegal sig`; `PLAN.md`, "`set` legality is a
+separate predicate, for now", says when to fold them together.
 -/
 /-- `(set (f …) …)` is legal only when `f` is not a constructor.
 
@@ -212,6 +262,7 @@ def Program.CtorDecls (p : Program) : Prop := ∀ c ∈ p, c.CtorDecl
 Two further static checks — a use's column counts against the declaration, and "every
 read is a query atom" — live in `Impl/Check.lean`. They are about what egglog *rejects*
 rather than what a program *means*, and nothing in the semantics consumes them. The tuple
-to carry is `WellScoped p ∧ p.SetLegal sig ∧ WellArity p ∧ ReadsAreAtoms p`. -/
+to carry is
+`WellScoped p ∧ p.Evaluable sig ∧ p.SetLegal sig ∧ WellArity p ∧ ReadsAreAtoms p`. -/
 
 end Egglog

@@ -43,8 +43,7 @@ the Redex check is about. -/
 example : WellScoped
     [.action (.letBind "v1" (eNum 2)), .action (.expr (.app "cwrap" [.var "v1"]))] := by
   simp [WellScoped, Program.Scoped, Cmd.Scoped, Action.Scoped, Expr.Scoped, Expr.IsApp,
-    Cmd.bind, Action.bind, Cmd.sigBind, eNum, Expr.fns, Expr.fnsList, Prim.ofName,
-    Signature.mergeOf]
+    Cmd.bind, Action.bind, eNum]
 
 /-- The Redex form itself is rejected: a bare variable is a legal `expr` action there and
 in egglog is not a legal action at all, so `Action.Scoped` requires an application. -/
@@ -52,24 +51,38 @@ example : ¬ WellScoped [.action (.letBind "v1" (eNum 2)), .action (.expr (.var 
   simp [WellScoped, Program.Scoped, Cmd.Scoped, Action.Scoped, Expr.IsApp]
 
 /-- Likewise for a query fact. -/
-example : ¬ Rule.Scoped ⟨[.expr (.var "a")], []⟩ [] noSig := by
+example : ¬ Rule.Scoped ⟨[.expr (.var "a")], []⟩ [] := by
   simp [Rule.Scoped, Pattern.Scoped, Expr.IsApp]
 
 /-- `(check-false (judgment-holds (typed-rule (rule ((= v1 2)) ((cadd v1 v2))) ())))`:
 `v2` is bound by neither the query nor the globals. -/
 example : ¬ Rule.Scoped
-    ⟨[.eq (.var "v1") (eNum 2)], [.expr (.app "cadd" [.var "v1", .var "v2"])]⟩ [] noSig := by
+    ⟨[.eq (.var "v1") (eNum 2)], [.expr (.app "cadd" [.var "v1", .var "v2"])]⟩ [] := by
   simp [Rule.Scoped, Pattern.Scoped, Actions.Scoped, Action.Scoped, Expr.Scoped,
     Expr.IsApp, Query.bind, Pattern.vars, eNum]
 
 /-- `(check-not-false (judgment-holds (typed-rule (rule ((= v1 2)) ((cadd v1 v2)))
 ((v2 : no-type)))))`: with `v2` a global it does scope. -/
 example : Rule.Scoped
-    ⟨[.eq (.var "v1") (eNum 2)], [.expr (.app "cadd" [.var "v1", .var "v2"])]⟩ ["v2"]
-    noSig := by
+    ⟨[.eq (.var "v1") (eNum 2)], [.expr (.app "cadd" [.var "v1", .var "v2"])]⟩ ["v2"] := by
   simp [Rule.Scoped, Pattern.Scoped, Actions.Scoped, Action.Scoped, Expr.Scoped,
-    Expr.IsApp, Query.bind, Pattern.vars, eNum, Expr.fns, Expr.fnsList, Prim.ofName,
-    Signature.mergeOf]
+    Expr.IsApp, Query.bind, Pattern.vars, eNum]
+
+/-! ### Evaluability
+
+Scope and evaluability are separate judgments, and `(min 1 2)` is what separates them:
+a legal egglog action, well-scoped here, and not `Evaluable`, because this model has no
+sorts and so cannot tell it from the type error `(min (A) (B))`. -/
+
+private def minProgram : Program := [.action (.expr (.app "min" [eNum 1, eNum 2]))]
+
+example : WellScoped minProgram := by
+  simp [WellScoped, minProgram, Program.Scoped, Cmd.Scoped, Action.Scoped, Expr.Scoped,
+    Expr.IsApp, eNum]
+
+example : ¬ Program.Evaluable minProgram noSig := by
+  simp [minProgram, Program.Evaluable, Cmd.Evaluable, Action.Evaluable, Expr.Evaluable,
+    Expr.fns, Expr.fnsList, Prim.ofName, eNum]
 
 /-! ### Congruence
 
@@ -203,8 +216,7 @@ private def actionsProgram : Program :=
 
 example : WellScoped actionsProgram := by
   simp [WellScoped, actionsProgram, Program.Scoped, Cmd.Scoped, Action.Scoped, Expr.Scoped,
-    Cmd.bind, Action.bind, Cmd.sigBind, eNum, Expr.fns, Expr.fnsList, Prim.ofName,
-    Signature.mergeOf]
+    Cmd.bind, Action.bind, eNum]
 
 example : ∃ db, run actionsProgram = some db ∧
     db.terms = {b1, num 1, num 7, num 4} ∧
@@ -236,9 +248,8 @@ private def ruleProgram : Program :=
 
 example : WellScoped ruleProgram := by
   simp [WellScoped, ruleProgram, Program.Scoped, Cmd.Scoped, Action.Scoped, Expr.Scoped,
-    Expr.IsApp, Cmd.bind, Action.bind, Cmd.sigBind, Rule.Scoped, Pattern.Scoped,
-    Actions.Scoped, Query.bind, Pattern.vars, swapRule, eNum, Expr.fns, Expr.fnsList,
-    Prim.ofName, Signature.mergeOf]
+    Expr.IsApp, Cmd.bind, Action.bind, Rule.Scoped, Pattern.Scoped, Actions.Scoped,
+    Query.bind, Pattern.vars, swapRule, eNum]
 
 /-- The database just before the `(run)`: `(Add 1 2)` with its children, plus the rule. -/
 private def preRun : Database where
@@ -281,7 +292,7 @@ private theorem swap_fires :
       = some { preRun with terms := preRun.terms ∪ add21.subterms,
                            rows := preRun.rows ∪ add21.ctorRows } := by
   simp [evalLocalActions, evalActions, evalAction, Expr.eval, Expr.evalList, Env.lookup,
-    swapRule, preRun, add21, num, Database.addTerm, noSig, Prim.ofName, Signature.mergeOf]
+    swapRule, preRun, add21, num, Database.addTerm, Prim.ofName, Signature.mergeOf]
 
 /-- `(Add 2 1)` is in the database after the run. -/
 example : ∃ db, run ruleProgram = some db ∧ add21 ∈ db.terms := by

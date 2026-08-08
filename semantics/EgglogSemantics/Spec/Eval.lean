@@ -10,8 +10,8 @@ Evaluation is partial, in three ways. `Eval-Expr` has no rule for an unbound var
 an application of a non-constructor is a *lookup*, which is a query atom
 (`Pattern.values`) and never an expression; and a primitive may be given operands of the
 wrong sort, which is egglog's own `i64` type error and which this model has no sort
-discipline to reject statically. All three are `none`. `Scope.lean` shows a program the
-front end accepts never produces the first two.
+discipline to reject statically. All three are `none`. `Scope.lean`'s `Scoped` rules out
+the first and its `Evaluable` the other two.
 
 Actions only ever add terms, rows and equalities, which is `evalAction_contained` — the
 fact the Redex documentation appeals to when it says the order of actions does not
