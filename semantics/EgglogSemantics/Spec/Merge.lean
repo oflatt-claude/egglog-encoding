@@ -511,10 +511,21 @@ partially merged ones. `MERGE.md`, "Why the reader over-approximates", says why 
 right trade. -/
 def RunStep (db db' : Database) : Prop := MergeClosure (RunRules db) db'
 
-/-- `stepCmd`, relationally. -/
+/-- `stepCmd`, relationally.
+
+`action` resolves collisions before the next command, which is what egglog does: a bare
+top-level action is compiled into a one-rule run (`egglog/src/lib.rs`, `eval_actions`), and
+every rule-set run ends in `merge_all`. So
+
+```
+(function f () i64 :merge (max old new))  (set (f) 1)  (set (f) 2)
+```
+
+leaves one row holding `2` with no `(run)` anywhere. Without the `MergeClosure` leg this
+relation could not reach that state, and `execM_contained` was false against it. -/
 inductive CmdStep : Database → Cmd → Database → Prop where
-  | action {db d : Database} {a : Action} :
-      Database.ActionStep db a d → CmdStep db (.action a) d
+  | action {db d db' : Database} {a : Action} :
+      Database.ActionStep db a d → MergeClosure d db' → CmdStep db (.action a) db'
   | rule {db : Database} {r : Rule} :
       CmdStep db (.rule r) { db with rules := insert r db.rules }
   | run {db db' : Database} : RunStep db db' → CmdStep db .run db'

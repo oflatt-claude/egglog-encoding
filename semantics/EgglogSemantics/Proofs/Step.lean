@@ -475,7 +475,7 @@ theorem RunRules.ctorRows {db : Database} (h : db.CtorState) : (RunRules db).Cto
 theorem CmdStep.sig {db db' : Database} {c : Cmd} (h : CmdStep db c db') :
     db'.sig = c.sigBind db.sig := by
   cases h with
-  | action ha => exact ha.sig
+  | action ha hm => rw [hm.sig]; exact ha.sig
   | rule => rfl
   | run hrun => exact hrun.sig
   | decl => rfl
@@ -484,7 +484,12 @@ theorem CmdStep.ctorState {db db' : Database} (h : db.CtorState) {c : Cmd}
     (hdecl : c.CtorDecl) (hlegal : c.SetLegal db.sig) (hstep : CmdStep db c db') :
     db'.CtorState := by
   cases hstep with
-  | action ha =>
+  | action ha hm =>
+    -- The merge phase is empty on a constructor signature, so the state after it is the
+    -- state the action left: `MergeClosure.eq_of_allConstructors`, which is the local
+    -- stand-in for `Proofs/Merge.lean`'s saturation lemma (that file is above this one).
+    have hd := hm.eq_of_allConstructors (by rw [ha.sig]; exact h.sig)
+    subst hd
     exact ⟨by rw [ha.sig]; exact h.sig, by rw [ha.sig, ha.rules]; exact h.rules,
       ha.ctorRows h.sig hlegal h.rows⟩
   | rule =>
