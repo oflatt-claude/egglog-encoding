@@ -511,5 +511,107 @@ theorem mergeRound_inv_false : ∃ d : FDatabase, d.Inv ∧ ¬ d.mergeRound.Inv 
     rw [hsig]; rfl
   exact absurd (h.ctorRows ⟨"F", [], []⟩ cexD_mergeRound_badRow hu).1 (by simp)
 
+/-! ## The two matching statements
+
+`FDatabase.patternHoldsM_MValidSubst` and `FDatabase.matchQueryM_MValidQuerySubst` are
+false without the hypotheses they now carry, for two **independent** reasons: the first
+needs `ValidEnv`, and the second's `σ` *is* a valid env at both its patterns. Both
+witnesses live in a one-term database — `FDatabase.empty` plus the literal `0` — whose
+`Inv` comes from `Inv.empty` and `Inv.addTerm` over `Term.ctorTerm_lit`. -/
+
+/-- The only term of the counterexample database. -/
+def t0 : Term := .lit (.int 0)
+
+/-- `FDatabase.empty` holding just `t0`. -/
+def dEx : FDatabase := FDatabase.empty.addTerm t0
+
+theorem dEx_inv : dEx.Inv := FDatabase.Inv.empty.addTerm Term.ctorTerm_lit
+
+theorem t0_mem : t0 ∈ dEx.terms := by
+  simp [dEx, FDatabase.addTerm, t0, List.mem_dedup]
+
+/-- `t0` is its own witness: reflexivity in the extended database. -/
+theorem t0_cong : (t0, t0) ∈ (dEx.addTerm t0).closureF :=
+  (FDatabase.mem_closureF_addTerm dEx_inv.wf).mpr (Cong.refl (Or.inl t0_mem))
+
+/-- The pattern `0` matches under a substitution binding `x`, which the pattern does not
+mention: `patternHoldsM` reads `σ` only through `d.env ++ σ`. -/
+theorem holds_lit : dEx.patternHoldsM (.expr (.lit (.int 0))) [("x", t0)] = true := by
+  simp only [FDatabase.patternHoldsM, FDatabase.execExpr, decide_eq_true_eq]
+  exact ⟨t0, t0_mem, t0_cong⟩
+
+/-- **`FDatabase.patternHoldsM_MValidSubst` is false without `ValidEnv`.**
+`MValidSubst.expr` carries `ValidEnv (e.freeVars db.env) db σ`, which pins `Env.dom σ` to
+a permutation of the pattern's free variables; `(Expr.lit _).freeVars` is `[]` and `σ`
+binds `x`. -/
+theorem patternHoldsM_MValidSubst_false :
+    ¬ ∀ (d : FDatabase), d.Inv → ∀ (p : Pattern) (σ : Env),
+        d.patternHoldsM p σ = true → MValidSubst d.toDatabase p σ := by
+  intro H
+  have hbad := H dEx dEx_inv (.expr (.lit (.int 0))) [("x", t0)] holds_lit
+  cases hbad with
+  | expr hv _ _ _ => simpa [Env.dom, Expr.freeVars] using hv.1
+
+/-- Two patterns sharing the variable `x`. `Query.freeVars qEx dEx.env = ["x"]`: the
+`∪` in `Query.freeVars` deduplicates, so the enumerator assigns `x` once. -/
+def qEx : Query := [Pattern.expr (.var "x"), Pattern.expr (.var "x")]
+
+theorem holds_var : dEx.patternHoldsM (.expr (.var "x")) [("x", t0)] = true := by
+  show decide (∃ w ∈ dEx.terms, (w, t0) ∈ (dEx.addTerm t0).closureF) = true
+  rw [decide_eq_true_eq]
+  exact ⟨t0, t0_mem, t0_cong⟩
+
+theorem mem_matchQueryM_ex : [("x", t0)] ∈ dEx.matchQueryM qEx := by
+  rw [FDatabase.matchQueryM, List.mem_filter]
+  constructor
+  · refine mem_assignments.mpr ⟨rfl, ?_⟩
+    intro b hb
+    rw [List.mem_singleton] at hb
+    subst hb
+    exact t0_mem
+  · show (dEx.patternHoldsM (.expr (.var "x")) (Env.canon ["x"] [("x", t0)]) &&
+      (dEx.patternHoldsM (.expr (.var "x")) (Env.canon ["x"] [("x", t0)]) && true)) = true
+    rw [show Env.canon ["x"] [("x", t0)] = [("x", t0)] from rfl, holds_var]
+    rfl
+
+/-- `Env.UnionAll` is concatenation: `Union2` fixes `σr = σ₁ ++ σ₂` and the fold ends at
+`UnionAll [σ] σ`, so lengths add. This is what the enumerator cannot satisfy. -/
+theorem unionAll_sum_length {σs : List Env} {σ : Env} (h : Env.UnionAll σs σ) :
+    (σs.map List.length).sum = σ.length := by
+  induction h with
+  | nil => simp
+  | single σ => simp
+  | step hu _ ih =>
+    obtain ⟨-, rfl⟩ := hu
+    simp only [List.map_cons, List.sum_cons, List.length_append] at ih ⊢
+    omega
+
+/-- **`FDatabase.matchQueryM_MValidQuerySubst` is false without `Env.Agree`.**
+`[("x", t0)]` is enumerated for `qEx`, and `ValidEnv` holds for it at *both* patterns — so
+this is not the `ValidEnv` defect again. `MValidQuerySubst` needs one substitution per
+pattern, each of length `1`, concatenated to give `σ`; that would make `σ` have length
+`2`. -/
+theorem matchQueryM_MValidQuerySubst_false :
+    ¬ ∀ (d : FDatabase), d.Inv → ∀ (q : Query) (σ : Env),
+        σ ∈ d.matchQueryM q → MValidQuerySubst d.toDatabase q σ := by
+  intro H
+  obtain ⟨σs, hall, hu⟩ := H dEx dEx_inv qEx [("x", t0)] mem_matchQueryM_ex
+  have hlen : ∀ ρ, MValidSubst dEx.toDatabase (.expr (.var "x")) ρ → ρ.length = 1 := by
+    intro ρ hρ
+    cases hρ with
+    | expr hv _ _ _ =>
+      have := hv.1.length_eq
+      simpa [Env.dom, Expr.freeVars, show dEx.env = [] from rfl, Env.lookup] using this
+  cases hall with
+  | cons h1 hrest =>
+    cases hrest with
+    | cons h2 hnil =>
+      cases hnil with
+      | nil =>
+        have := unionAll_sum_length hu
+        simp only [List.map_cons, List.sum_cons, List.map_nil, List.sum_nil,
+          hlen _ h1, hlen _ h2] at this
+        simp at this
+
 end Falsity
 end Egglog

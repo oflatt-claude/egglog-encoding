@@ -6,21 +6,27 @@ the queue. Read [`README.md`](README.md) first for the layout.
 
 ## State of play
 
-`lake build` is clean (716 jobs). `make lean-difftest` is **118 passed / 0 failed /
+`lake build` is clean (717 jobs). `make lean-difftest` is **118 passed / 0 failed /
 0 skipped**, across 60 random constructor cases (38 distinct profiles), 30 random `:merge`
 cases (20 distinct profiles), and 28 curated cases.
 
-**28 `sorry`s, all in two files:** 13 in `Proofs/Encode.lean` (M11 — every statement there
-is unproved on purpose, the statements *are* the deliverable) and 15 in `Proofs/Merge.lean`.
+**21 `sorry`s, all in two files:** 13 in `Proofs/Encode.lean` (M11 — every statement there
+is unproved on purpose, the statements *are* the deliverable) and 8 in `Proofs/Merge.lean`.
 
-Eight of the refinement chain's seventeen lemmas are now proved: `Inv.empty`,
-`Inv.addTerm`, `Inv.addEq`, `Inv.addRow`, `Inv.execAction`, `Inv.mergeRound`,
-`execExpr_MEval`, `execExprList_MEvalList`. **Five of them were false as stated** and
-carry repaired statements — see "Known false" below. Nine remain.
+**Fifteen of the refinement chain's seventeen lemmas are proved.** The two that are not —
+`execCmdM_contained` and `execProgramM_contained` — are *refuted*, and are blocked on the
+one-line specification fix in queue item 0, not on proof effort.
 
-Do not grep for `sorry` to count these: `Proofs/Encode.lean:7` has the word in prose
-inside a module docstring, so `make lean-check`'s `! grep -rnw … sorry` can never pass
-even at zero real obligations. That is a latent false failure in the gate.
+**Nine of the seventeen were false as stated** and now carry repaired statements; see
+"Known false". Three of those nine were wrong in ways the already-proved M10 analogues in
+`Proofs/Interp.lean` had solved years earlier in the file's own history —
+`matchQueryM_MValidQuerySubst` lacked the `Env.Agree` that
+`validQuerySubst_of_mem_matchQuery` carries, `patternHoldsM_MValidSubst` lacked
+`patternHolds_iff`'s `ValidEnv`, `execActions_ActionsStep` lacked `SetLegal`. When stating
+an M9 lemma, read its M10 counterpart first.
+
+`Proofs/Counterexamples.lean` holds the machine-checked witness for every "false as
+stated" claim, so they are checked by `lake build` rather than asserted in prose.
 
 Everything else is proved. Three theorems are load-bearing enough to check on every
 change:
@@ -49,7 +55,8 @@ time:
   Its contract is an **equality**: `exec_toDatabase : (exec p).map toDatabase = run p`.
 - `execM` (`Impl/Merge.lean`) is the merge interpreter. It **deletes** the rows a merge
   combined, so it is not a state the specification can reach. Its contract is
-  **containment**: `execM_contained`.
+  **containment**: `execM_contained` — which is currently *false*, for a reason that is a
+  bug in `Spec/Merge.lean` rather than in `execM`. Queue item 0.
 
 `hasMergeRow_eq_false` + `mergeRound_eq_self` + `mergeSaturateF_eq_self` prove the merge
 phase is the identity on a constructor-only database, which is why deletion cannot affect
@@ -61,11 +68,11 @@ completeness weight: the constructor-fragment equality above, and
 for merges that are joins. For a non-lattice merge nothing is claimed — that is
 `MERGE.md`'s "order-dependent merges are the user's fault".
 
-## Next up: the refinement chain (9 of 17 left)
+## Next up: the refinement chain (2 of 17 left, both blocked)
 
-In `Proofs/Merge.lean`, under "The refinement chain". **`execM_contained` is false** — see
-below — so deriving it is no longer the goal; the chain's remaining value is stages 3 and 4
-plus whatever replaces the `.action` case.
+In `Proofs/Merge.lean`, under "The refinement chain". The two that remain are refuted
+rather than merely unproved, so the next move is queue item 0's specification fix, not more
+proof effort.
 
 1. ~~**`FDatabase.Inv` preservation**~~ — done. `Inv` is now `WF` + `CtorTerms` +
    `RowsComplete` + **`RowsWF`** + **`ctorRows`**. The last two are not optional: without
@@ -73,17 +80,22 @@ plus whatever replaces the `.action` case.
    `ctorTerms`; `ctorRows` is `closureF_ok`'s `hrow`. `Spec/Database.lean`'s `RowsWF`
    docstring predicted this ("belongs there once something reads it").
 2. ~~**Evaluation**~~ — done, via `Out_of_mem_outs`, which is where `Cong.toMCong'` is spent.
-3. **Actions and matching** — `execAction_ActionStep`, `execActions_ActionsStep`,
-   `patternHoldsM_MValidSubst`, `matchQueryM_MValidQuerySubst`. `Inv.execActions` and
-   `Inv.setEnv`/`setEnvRules`/`filterRows` are already proved and are what these need.
-4. **Containment** — `mergeRound_contained`, `mergeSaturateF_contained`,
-   `execRunRulesM_contained`; `execCmdM_contained` and `execProgramM_contained` are
-   **false** as stated. These are the only places a witness must be *chosen* rather than
-   computed.
+3. ~~**Actions and matching**~~ — done. Both matching lemmas needed repair.
+4. **Containment** — `mergeRound_contained`, `mergeSaturateF_contained` and
+   `execRunRulesM_contained` are done, each carrying a legality side condition;
+   `execCmdM_contained` and `execProgramM_contained` are **refuted** and wait on item 0.
 
 Stages 1 and 2 are **coupled**, contrary to what this file used to claim: `Inv.execAction`
 cannot be proved without knowing what `execExpr` produces (`execExpr_ctorTerm`), so they
 have to be done together.
+
+The legality side conditions are all the same condition seen from different places: an
+action block that writes a row must be `SetLegal`, and that has to hold for merge bodies
+(`Inv.mergeRound`, `mergeRound_contained`, `mergeSaturateF_contained`) and for rule heads
+(`execRunRulesM_contained`) as well as for the top-level actions `Program.SetLegal` already
+covers. The spec-level gap is that `Cmd.SetLegal (.decl _ _)` is `True`, so nothing
+constrains a declaration's merge body; closing that would let these hypotheses come from
+`Program.SetLegal` instead of being threaded by hand.
 
 The design work is done and proved; do not redo it. `execExpr` compares keys with
 `closureF`, which computes **`Cong`**, while `Database.Out` compares them with **`MCong`**.
@@ -103,9 +115,12 @@ the whole interpreter down to `mergeSaturateF 64` reduces by `rfl`.
 
 | statement | why |
 | --- | --- |
-| **`execM_contained`**, and `execCmdM_contained` / `execProgramM_contained` above it | `execCmdM` runs a merge phase after every top-level `.action`; the spec's `CmdStep.action` has **no** merge phase, so the implementation reaches states holding a merge *result* no `ProgramStep` state holds. `claim2_execM` refutes it on `(function f () i64 :merge 7) (set (f) 1) (set (f) 2)`, where `execM prog = some d2` by `rfl`. The docstring's "may find fewer results, never more — the safe direction" is wrong: deletion is safe, the *added* row is not |
+| **`execM_contained`**, and `execCmdM_contained` / `execProgramM_contained` above it | `execCmdM` runs a merge phase after every top-level `.action`; the spec's `CmdStep.action` has **no** merge phase, so the implementation reaches states holding a merge *result* no `ProgramStep` state holds. `claim2_execM` refutes it on `(function f () i64 :merge 7) (set (f) 1) (set (f) 2)`, where `execM prog = some d2` by `rfl`. The docstring's "may find fewer results, never more — the safe direction" is wrong: deletion is safe, the *added* row is not. **This one is a bug in `Spec/Merge.lean`, not in the interpreter** — see queue item 0, which has the egglog evidence and the one-line fix that makes all three true again |
 | `FDatabase.Inv.addTerm` / `.addEq` / `.addRow` as originally stated | `addTerm` takes an arbitrary `Term`, so inserting an application of a declared `:merge` function breaks `CtorTerms`. All three now carry the constructor-term condition on what they insert. `addRow`'s `hf` was also defending the wrong field — `RowsComplete` is an inclusion, which adding a row cannot break — and now earns its keep against `ctorRows` |
 | `FDatabase.Inv.mergeRound` as originally stated | a merge body is an arbitrary `List Action` with no `SetLegal` obligation, so a `(set (F) …)` inside one, on a constructor `F`, writes a `.union` row whose output is not `[.app F args]`. `mergeRound_inv_false` is the witness; `Inv.mergeRound_of_legalMerges` is the repair. `CtorTerms` *is* preserved — the break is `ctorRows`. The gap is in the spec: `Cmd.SetLegal (.decl _ _)` is `True`, so `Program.SetLegal` says nothing about merge bodies |
+| `FDatabase.execActions_ActionsStep` as originally stated | the `cons` step cannot re-establish `Inv` for the recursive call without `Actions.SetLegal as d.sig`, since a `set` on a constructor breaks `ctorRows` and `execExpr_MEval` is unavailable from that point on |
+| `FDatabase.patternHoldsM_MValidSubst` as originally stated | `patternHoldsM` reads `σ` only through `d.env ++ σ`, so a `σ` carrying bindings the pattern never mentions still passes, while every `MValidSubst` constructor demands `ValidEnv (p.freeVars db.env) db σ`. `patternHoldsM_MValidSubst_false` is the witness. `Proofs/Interp.lean`'s `patternHolds_iff` already carries the hypothesis |
+| `FDatabase.matchQueryM_MValidQuerySubst` as originally stated | `Query.freeVars` **deduplicates** while `Env.UnionAll` is literal concatenation, so `MValidQuerySubst db q σ` forces `σ.length = Σᵢ \|pᵢ.freeVars\|` and any query with a repeated variable is unsatisfiable — `q = [.expr (.var "x"), .expr (.var "x")]` is the witness (`matchQueryM_MValidQuerySubst_false`). The conclusion has to be up to `Env.Agree`, exactly as `Proofs/Interp.lean`'s `validQuerySubst_of_mem_matchQuery` already concludes |
 | any `FDatabase.Inv.decl` | `CtorTerms` is relative to `db.sig`, so declaring `g` as `:merge` after `g()` is already a term breaks it (`claim1`). Harmless for `execCmdM_contained`'s `.decl` case, whose goal is trivial, but `execProgramM_contained`'s induction has nothing to carry across a declaration |
 | `MCong.mono` / `MCongList.mono` / `Out.mono` *without* `d₁.sig = d₂.sig` | `Contained` ignores `sig` but `MCong.fd` needs `mergeOf f = .union`; redeclaring `f` as `:no-merge` adds nothing yet destroys a derivation (`mcong_mono_needs_sig`) |
 | `Expr.MEval_of_eval`'s original hypothesis `∀ f, Prim.ofName f = none` | unsatisfiable (`not_forall_ofName_eq_none`); use `MEval_of_eval'` |
@@ -119,12 +134,35 @@ the whole interpreter down to `mergeSaturateF 64` reduces by `rfl`.
 
 Roughly in priority order.
 
-0. **Decide what `execM`'s contract actually is.** `execM_contained` is refuted, so this
-   blocks the rest of the chain. Either the spec's `CmdStep.action` gains a merge phase
-   (which is what egglog does — it resolves collisions as part of the action, not only
-   inside `(run)`), or `execCmdM` stops merging after `.action`. The first looks right and
-   makes the implementation the faithful one; it changes `Spec/Merge.lean`, so it wants a
-   difftest run behind it. While this is open, stage 4 cannot be stated correctly.
+0. **Give `CmdStep.action` a merge phase.** `execM_contained` is refuted, and the defect is
+   in `Spec/Merge.lean`, not in the interpreter. Checked against the release binary, with
+   **no `(run)` anywhere**:
+
+   ```
+   (function f () i64 :merge (max old new))  (set (f) 1)  (set (f) 2)
+   → (print-size f) = 1,  (f) -> 2
+   ```
+
+   and swapping the merge gives `old` → 1, `new` → 2, `min` → 1, `max` → 2, so the merge
+   *function* really runs at the second `set` rather than last-write-wins. `print-size` and
+   `print-function` are both `&self` and cannot rebuild, so nothing else can be doing it.
+   The path is `lib.rs:2101` → `eval_actions` (`lib.rs:1490`), which compiles a bare action
+   into a one-rule run and calls `run_rules` at `lib.rs:1508`; every rule-set run ends in
+   `merge_all` (`core-relations/.../execute.rs:654`). So `execCmdM` is faithful and the
+   specification is not. The edit:
+
+   ```lean
+   | action {db d db' : Database} {a : Action} :
+       Database.ActionStep db a d → MergeClosure d db' → CmdStep db (.action a) db'
+   ```
+
+   Cost is mostly negative. `execCmdM_action_contained` is already proved against the
+   amended rule and needs no transport lemma. `CmdStep.contained` survives via
+   `MergeClosure.contained`; `invariant_of_step` is unaffected; the constructor fragment is
+   untouched because `MergeStep.saturated_of_allConstructors` makes the added closure the
+   identity, so M10 and `exec_toDatabase` do not move. The real cost is that
+   `Proofs/Counterexamples.lean`'s `Falsity.claim2_*` become false and must go — they are
+   recording this spec bug, so that is the point.
 1. **The refinement chain** above, then `execM_current_of_lattice` (~200–300 lines on top).
 2. **M11 proper** — `Proofs/Encode.lean`'s 13 statements. The language blocker is gone
    (multi-column `set` and `Pattern.values` landed), so the proof column is now an
@@ -140,9 +178,12 @@ Roughly in priority order.
 5. **`SetLegal` for `Pattern.values`** — egglog recognizes the destructure only for a
    tuple-output `f`. Needs `Rule.SetLegal` extended to the query, where the `CtorRows` chain
    currently covers only rule heads. Nothing unsound meanwhile: a destructure writes nothing.
-6. **The `ActionsStep` transport lemma** (~150–250 lines) would settle `diamond_of_join` in a
-   *stronger* one-step form than `MERGE.md`'s open question 2 contemplates: a step's effect
-   is independent of the ambient state, and nothing is ever removed.
+6. ~~**The `ActionsStep` transport lemma** (~150–250 lines)~~ — the estimate was 5x high in
+   the form that was actually needed. `Database.ActionsStep.mono` is proved in ~35 lines:
+   an `ActionStep`'s effect is fixed by its `MEval` witnesses and `Expr.MEval.mono` carries
+   those into a larger database unchanged. That is enough for containment, which wants only
+   a *lower bound* on the result. `diamond_of_join` is still open because it wants the
+   exact componentwise join, which this does not give.
 7. **Tidy-ups.** Move `CongOn` into `Spec/Congruence.lean` and have `ValidSubst` use it — it
    is already there unnamed, as `ValidSubst.eq`'s last premise (`Spec/Match.lean`), inherited
    from the Redex. Restate `mcong_iff_cong_premises` as the `Iff` next to `mcong_iff_cong`.
