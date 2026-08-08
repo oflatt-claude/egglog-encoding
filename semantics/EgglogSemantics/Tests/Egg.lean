@@ -124,7 +124,16 @@ def Cmd.toEgg : Cmd → String
 /-! ### Collecting the signature
 
 The header has to declare every constructor, so the arities are read off the program's
-uses rather than from `Signature` — generated programs need not declare anything. -/
+uses rather than from `Signature` — generated programs need not declare anything.
+
+Two names must be kept out of the result, and for opposite reasons. A **declared `:merge`
+function** has its own `function` command, and `Program.ctorArities` filters it. A
+**primitive** has no declaration at all: `min`, `max`, `ordering-min` and `ordering-max`
+are resolved by `Prim.ofName` before the signature is consulted, and egglog resolves them
+out of a table that is already populated, so a `datatype` entry for one is rejected with
+`Primitive min already declared.` `Program.fnArities` filters those, which also keeps them
+out of `Program.fnNames` — a primitive is not a table and `(print-size)` never reports one.
+-/
 
 mutual
 
@@ -150,15 +159,27 @@ def Action.fnArities : Action → List (FnName × Nat)
   | .union e₁ e₂ => e₁.fnArities ++ e₂.fnArities
   | .set f args out => (f, args.length) :: Expr.fnAritiesL args ++ Expr.fnAritiesL out
 
+/-- The names a merge specification applies. A `:merge` body is an expression position like
+any other, so a constructor mentioned *only* there — `(set (Log (A)) old)` — still has to
+reach the `datatype` header, and the function it `set`s still has to be a name the emitter
+knows. -/
+def MergeSpec.fnArities : MergeSpec → List (FnName × Nat)
+  | .union => []
+  | .noMerge => []
+  | .merge body res => body.flatMap Action.fnArities ++ Expr.fnAritiesL res
+
 def Cmd.fnArities : Cmd → List (FnName × Nat)
   | .action a => a.fnArities
   | .rule r => (r.query.flatMap Pattern.fnArities) ++ (r.actions.flatMap Action.fnArities)
   | .run => []
-  | .decl f d => [(f, d.arity)]
+  | .decl f d => (f, d.arity) :: d.merge.fnArities
 
-/-- Every function the program uses, with its arity, deduplicated. -/
+/-- Every function the program uses, with its arity, deduplicated — **primitives
+excluded**. A primitive is not a function of the program's signature: egglog has already
+declared it, so emitting a `datatype` entry for one is an error and `(print-size)` never
+reports a row count for one. -/
 def Program.fnArities (p : Program) : List (FnName × Nat) :=
-  (p.flatMap Cmd.fnArities).dedup
+  ((p.flatMap Cmd.fnArities).filter fun fa => (Prim.ofName fa.1).isNone).dedup
 
 /-- The names the program declares with a non-`union` merge. These get their own
 `function` command and must be kept out of the `datatype`. -/

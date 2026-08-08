@@ -250,10 +250,11 @@ exactly why the model could bind the two colliding rows the wrong way round and 
 122-for-122 green. `genMergeSpec` draws them now, and the four curated cases below pin the
 shapes that were checked against the binary.
 
-Merge functions here are written and never read. A body atom reading one would bind the
-variable to *any* recorded output, where egglog binds the current one, so the model would
-fire more and build more. That is the fragment's boundary, and it is where the
-over-approximation would first become observable.
+No `:merge` **body** reads a table. An atom there would bind its variable to *any* recorded
+output, where egglog binds the current one, so the model would fire more and build more;
+`Spec/Scope.lean`'s "Reading in an action" rejects it statically. A body may still *write*
+one, which is the `merge-body-*` family, and a rule body may read one, which is the
+`read-*` family below.
 
 `min-rebuild` is the case that matters: unioning the keys makes two `Dist` rows collide,
 so egglog's table drops from two rows to one. It is the shape of
@@ -278,9 +279,11 @@ seven original merge cases are `:merge (min old new)`, which takes the expressio
 The block branch emitted two nested lists where egglog wants the actions and the result as
 siblings, so every program using it was a parse error.
 
-Bodies stay `let`-only. A body that `set`s a side table is where our over-approximation
-becomes observable — a row collides with itself and both orders fire — so the side
-table's row count would diverge by design rather than by defect. -/
+This is the only *non-writing* body shape. Writing ones — `set` and `union` — are the
+`merge-body-*` cases below, and the reason they were once excluded ("a row collides with
+itself and both orders fire") does not hold: `mergeRound` skips `r₁ == r₂`, and after
+`(r₁, r₂)` fires, `r₁` is gone and `mergeOneWith`'s `rows.contains` test drops the
+reversed pair. -/
 private def distBlock (n : Nat) (op : FnName) : FnDecl :=
   { arity := n, outArity := 1,
     merge := .merge [.letBind "s" (.app op [.var "old", .var "new"])] [.var "s"] }
@@ -390,6 +393,136 @@ only shape the model accepts anywhere. -/
 private def copyDist : Rule where
   query := [.values [.var "v"] "Dist" [.var "k"]]
   actions := [.set "Copy" [.var "k"] [.var "v"]]
+
+/-! ### Making a value observable through a row count
+
+`(print-size)` counts rows and never sees a value, so every case below that is *about* a
+value pairs it with a ground read whose head builds a marker constructor: the marker's row
+count is 1 exactly when the read fired, and 0 otherwise. This is `witnessRule`'s trick,
+generalized over which function is read and which marker is built, because the new cases
+read a *second* table — the one a `:merge` body writes.
+
+Each such case states both the marker that must be 1 and one that must be 0. A single
+positive marker only says "some value matched"; the negative one is what separates "the
+model computed the wrong value" from "the model read nothing at all", since those differ in
+the positive marker alone and not in the pair. -/
+/-- `(rule ((= v (f key…))) ((hit key…)))`. Fires exactly when `f`'s row at `key` holds
+`v`, so `hit`'s row count reports which value survived. The head reuses `key`, which is
+ground, so the query costs one substitution and no enumeration. -/
+private def readInto (hit f : FnName) (key : List Expr) (v : Int) : Rule where
+  query := [.values [num v] f key]
+  actions := [.expr (.app hit key)]
+
+/-- `readInto` at a multi-column output. -/
+private def readIntoW (hit f : FnName) (key : List Expr) (vs : List Int) : Rule where
+  query := [.values (vs.map num) f key]
+  actions := [.expr (.app hit key)]
+
+/-! ### Primitives outside a `:merge` body
+
+Every primitive application in the suite used to sit inside a `:merge` body, and that was
+not a choice about coverage — the emitter could not render one anywhere else. `fnArities`
+fed every applied name into the `datatype` header, so a program applying `min` in an action
+emitted `(datatype Math (min Math Math) …)` and egglog answered `Primitive min already
+declared.` before running a line of it. None of `writeCase`'s four guards caught it, since
+none of them is about the header.
+
+With `Prim.ofName` filtered out of `fnArities` the whole position opens up, and it is
+ordinary egglog: `(set (Dist (K)) (min 5 3))` is an `i64` expression in a value column,
+which is where `tests/interval.egg` puts one too.
+
+**What the oracle sees.** `min` and `max` are the one place the model *computes* rather
+than *builds* (`Prim.apply` against `Expr.MEval.ctor`), so the three ways to get this wrong
+are to build the term `min(5, 3)`, to compute the wrong operation, or to compute nothing.
+Each case reads the answer back at a literal and builds `Hit`, and reads the operand that
+must have lost and builds `Miss`: building a term or getting stuck gives `Hit 0, Miss 0`,
+and computing `max` for `min` gives `Hit 0, Miss 1`. -/
+/-- Seeds a term the rule-head case's query can match. -/
+private def seedF : Cmd := .action (.expr (.app "F" [C "A"]))
+
+/-! ### `:merge` bodies that write
+
+`MERGE.md` drew the fragment boundary at "bodies stay `let`-only", on the grounds that a
+body which `set`s a side table would fire on self-collisions and in both orders and so
+inflate that table's count. Neither happens: `mergeRound` skips `r₁ == r₂`, and after the
+pair `(r₁, r₂)` fires, `r₁` is gone from the accumulator, so `mergeOneWith`'s
+`rows.contains` test drops the reversed pair. What was left behind by the boundary is the
+shape the whole proof encoding is built on — egglog's union-find `:merge`, which writes.
+egglog typechecks a body under `Context::Write`, so `set` and `union` are both legal there,
+and both were checked against the release binary before being generated.
+
+**What the oracle sees**, per body action:
+
+* a `set` into `Log` at the key `(L)` — `L` and `Log` are used *nowhere else in the
+  program*, so both row counts are 0 if the body never ran and 1 if it did. That alone
+  separates "runs the body" from "ignores it". `Hit`/`Miss` then read `Log`'s value, which
+  is `old` or `new` according to the body, so the pair also reports which of the two
+  colliding rows the model called which — the `old`/`new` bug, now inside a body.
+* a `union (U) (V)` — `W` is seeded at both, so `W`'s count is 2 if the body never ran and
+  1 if it did. This is the union-find merge in miniature: the body's whole effect is an
+  equality, and an equality is exactly what a row count can see.
+
+`merge-body-inert` is the negative control: the same declaration with no collision ever
+reached, where `L`, `Log` and `W` must report the body *not* having run. Without it a model
+that ran the body unconditionally would pass every other case in this family. -/
+/-- The side table a body writes into. `min` rather than `old`/`new` on purpose: a case
+with several collisions logs several values, and the count of collisions is the one thing
+the two engines are not obliged to agree on, so the *combination* has to be
+order-insensitive for the value read to mean anything. -/
+private def logDecl : FnDecl :=
+  { arity := 1, outArity := 1,
+    merge := .merge [] [.app "min" [.var "old", .var "new"]] }
+
+/-- A merge that logs one of the colliding values into `Log` and returns the other. -/
+private def distLog (n : Nat) (logged kept : String) : FnDecl :=
+  { arity := n, outArity := 1,
+    merge := .merge [.set "Log" [C "L"] [.var logged]] [.var kept] }
+
+/-- A merge whose body is `(union (U) (V))` — the body's entire effect is an equality, as
+in a union-find's. -/
+private def distUnion (n : Nat) (kept : String) : FnDecl :=
+  { arity := n, outArity := 1,
+    merge := .merge [.union (C "U") (C "V")] [.var kept] }
+
+/-- A two-action body: `let` the combined value, log it, return it. Exercises the block
+form at more than one action, and the `let`-bound variable as a `set`'s value. -/
+private def distLetLog (n : Nat) : FnDecl :=
+  { arity := n, outArity := 1,
+    merge := .merge [.letBind "s" (.app "min" [.var "old", .var "new"]),
+                     .set "Log" [C "L"] [.var "s"]] [.var "s"] }
+
+/-- Seeds `W` at both operands of a body's `union`, so that `W`'s row count falls from 2 to
+1 exactly when the body runs. -/
+private def seedW : List Cmd :=
+  [.action (.expr (.app "W" [C "U"])), .action (.expr (.app "W" [C "V"]))]
+
+/-! ### Widths and arities the suite never drew
+
+Every `:merge` function in the suite had one or two key columns and one or two value
+columns. Three gaps followed, each a distinct branch:
+
+* **arity 0.** `(function Zero () i64 …)` renders an empty key list, and its one key class
+  is the empty tuple — `congrKeys` at length zero, which nothing had run.
+* **arity 3.** Three key columns, collided through a `union` on the third, so
+  `congrKeys` has to walk past two equal columns to a congruent one.
+* **value width 3.** `mergeEnvIdx` binds `old0`/`new0`/`old1`/`new1`/`old2`/`new2`, and only
+  the first two pairs had ever been read. The width-3 case's merge uses all three, one per
+  column and a different combiner in each, so a body reading the wrong index computes a
+  different tuple and the guarded read stops firing.
+
+Eq-sorted merge outputs are deliberately still absent. They would need `ordering-min` to
+render, and `Term.blt` is structural where egglog's is by insertion order — a known
+divergence (`Tests/Egg.lean`, `FnDecl.toEgg`) rather than an untested path. -/
+/-- A three-column merge: a different combiner per column, so every `mergeEnvIdx` binding
+is load-bearing. -/
+private def distTriple (n : Nat) : FnDecl :=
+  { arity := n, outArity := 3,
+    merge := .merge [] [.app "min" [.var "old0", .var "new0"],
+                        .app "max" [.var "old1", .var "new1"],
+                        .var "old2"] }
+
+private def tset (f : FnName) (args : List Expr) (vs : List Int) : Cmd :=
+  .action (.set f args (vs.map num))
 
 private def curatedMerge : List (String × Program) :=
   [ -- One key, three writes: min wins, and the table still holds one row.
@@ -544,7 +677,122 @@ private def curatedMerge : List (String × Program) :=
     ("new-threeway",
       [.decl "Dist" (distPick 1 "new"), mset "Dist" [C "X"] 1, mset "Dist" [C "Y"] 2,
        mset "Dist" [C "Z"] 3, .action (.union (C "X") (C "Y")),
-       .action (.union (C "Y") (C "Z")), .rule (readValue 3), .run]) ]
+       .action (.union (C "Y") (C "Z")), .rule (readValue 3), .run]),
+    -- **Primitives outside a `:merge` body.** `min` in a top-level `set`'s value column.
+    -- `Hit 1, Miss 0` says the model computed `3`; building the term `min(5, 3)` or getting
+    -- stuck gives `0, 0` and computing `max` gives `0, 1`.
+    ("prim-set-min",
+      [.decl "Dist" (dist 1),
+       .action (.set "Dist" [C "K"] [.app "min" [num 5, num 3]]),
+       .rule (readInto "Hit" "Dist" [C "K"] 3), .rule (readInto "Miss" "Dist" [C "K"] 5),
+       .run]),
+    -- The same with `max`, so the two markers swap: a model computing `min` for `max`
+    -- is caught here even though it passes `prim-set-min`.
+    ("prim-set-max",
+      [.decl "Dist" (dist 1),
+       .action (.set "Dist" [C "K"] [.app "max" [num 5, num 3]]),
+       .rule (readInto "Hit" "Dist" [C "K"] 5), .rule (readInto "Miss" "Dist" [C "K"] 3),
+       .run]),
+    -- Nested: `(min (max 5 3) 4)` is `4`, so the operand list itself has to be evaluated
+    -- through `MEvalList` before the outer primitive applies. `Miss` reads `5`, the value
+    -- an unevaluated inner application would have left.
+    ("prim-nested",
+      [.decl "Dist" (dist 1),
+       .action (.set "Dist" [C "K"] [.app "min" [.app "max" [num 5, num 3], num 4]]),
+       .rule (readInto "Hit" "Dist" [C "K"] 4), .rule (readInto "Miss" "Dist" [C "K"] 5),
+       .run]),
+    -- A primitive under a top-level `let`, so the value reaches the row through the global
+    -- environment rather than directly. The `$` prefix is egglog's convention for a global
+    -- and avoids its "Global `g` should start with `$`" warning.
+    ("prim-let",
+      [.decl "Dist" (dist 1),
+       .action (.letBind "$g" (.app "min" [num 7, num 2])),
+       .action (.set "Dist" [C "K"] [.var "$g"]),
+       .rule (readInto "Hit" "Dist" [C "K"] 2), .rule (readInto "Miss" "Dist" [C "K"] 7),
+       .run]),
+    -- A primitive in a **rule head**, which is the position `Rule.noLookup` polices and so
+    -- the one most likely to be rejected by mistake. Two rounds: the first fires the write,
+    -- the second reads it back.
+    ("prim-rule-head",
+      [.decl "Dist" (dist 1), seedF,
+       .rule ⟨[.expr (.app "F" [.var "a"])],
+              [.set "Dist" [.var "a"] [.app "max" [num 5, num 3]]]⟩,
+       .rule (readInto "Hit" "Dist" [C "A"] 5), .rule (readInto "Miss" "Dist" [C "A"] 3),
+       .run, .run]),
+    -- **A `:merge` body that writes.** The body logs `old` into a side table and returns
+    -- `new`. `L 1` and `Log 1` say the body ran at all — both names occur nowhere else —
+    -- and `Hit 1, Miss 0` say it logged `5`, the value already in the table.
+    ("merge-body-set-old",
+      [.decl "Log" logDecl, .decl "Dist" (distLog 1 "old" "new"),
+       mset "Dist" [C "K"] 5, mset "Dist" [C "K"] 3,
+       .rule (readInto "Hit" "Log" [C "L"] 5), .rule (readInto "Miss" "Log" [C "L"] 3),
+       .rule (readInto "Won" "Dist" [C "K"] 3), .run]),
+    -- The mirror: log `new`, keep `old`. Both markers move, which is what makes the pair
+    -- distinguish the two bindings rather than merely detecting that something was logged.
+    ("merge-body-set-new",
+      [.decl "Log" logDecl, .decl "Dist" (distLog 1 "new" "old"),
+       mset "Dist" [C "K"] 5, mset "Dist" [C "K"] 3,
+       .rule (readInto "Hit" "Log" [C "L"] 3), .rule (readInto "Miss" "Log" [C "L"] 5),
+       .rule (readInto "Won" "Dist" [C "K"] 5), .run]),
+    -- A two-action body: `let`, then `set` the bound variable, then return it. Exercises
+    -- the block renderer past one action and a `let`-bound value flowing into a `set`.
+    ("merge-body-let-set",
+      [.decl "Log" logDecl, .decl "Dist" (distLetLog 1),
+       mset "Dist" [C "K"] 5, mset "Dist" [C "K"] 3,
+       .rule (readInto "Hit" "Log" [C "L"] 3), .rule (readInto "Miss" "Log" [C "L"] 5),
+       .rule (readInto "Won" "Dist" [C "K"] 3), .run]),
+    -- The body's effect is an **equality**: `W` is seeded at `(U)` and at `(V)`, so `W 1`
+    -- says the union ran and `W 2` says it did not. This is the union-find `:merge`.
+    ("merge-body-union",
+      [.decl "Dist" (distUnion 1 "new")] ++ seedW ++
+      [mset "Dist" [C "K"] 5, mset "Dist" [C "K"] 3,
+       .rule (readInto "Won" "Dist" [C "K"] 3), .run]),
+    -- The same, with the collision arriving from a `union` on the *keys* during rebuild
+    -- rather than from a repeated `set`, so the body runs from the merge phase.
+    ("merge-body-union-rebuild",
+      [.decl "Dist" (distUnion 1 "old")] ++ seedW ++
+      [mset "Dist" [C "X"] 1, mset "Dist" [C "Y"] 2, .action (.union (C "X") (C "Y")),
+       .rule (readInto "Won" "Dist" [C "X"] 1), .run]),
+    -- A writing body driven by a rebuild collision: `Log` records `old`, which
+    -- `old-rebuild` pins to the earlier write.
+    ("merge-body-set-rebuild",
+      [.decl "Log" logDecl, .decl "Dist" (distLog 1 "old" "new"),
+       mset "Dist" [C "X"] 1, mset "Dist" [C "Y"] 2, .action (.union (C "X") (C "Y")),
+       .rule (readInto "Hit" "Log" [C "L"] 1), .rule (readInto "Miss" "Log" [C "L"] 2),
+       .run]),
+    -- **The negative control.** The same writing body, but the keys never collide, so `L`,
+    -- `Log` and `W` must all report the body having *not* run. Without this a model that
+    -- ran a body unconditionally would pass every other case in the family.
+    ("merge-body-inert",
+      [.decl "Log" logDecl, .decl "Dist" (distLog 2 "old" "new")] ++ seedW ++
+      [mset "Dist" [C "A", C "B"] 1, mset "Dist" [C "B", C "A"] 2,
+       .rule (readInto "Hit" "Log" [C "L"] 1), .run]),
+    -- **Arity 0.** One key class, and it is the empty tuple — `congrKeys` at length zero.
+    ("merge-arity0",
+      [.decl "Zero" (dist 0), mset "Zero" [] 5, mset "Zero" [] 3,
+       .rule (readInto "Hit" "Zero" [] 3), .rule (readInto "Miss" "Zero" [] 5), .run]),
+    -- Arity 0 with a writing body, so the empty key tuple and the side table meet.
+    ("merge-arity0-body",
+      [.decl "Log" logDecl, .decl "Zero" (distLog 0 "old" "new"),
+       mset "Zero" [] 5, mset "Zero" [] 3,
+       .rule (readInto "Hit" "Log" [C "L"] 5), .rule (readInto "Miss" "Log" [C "L"] 3),
+       .run]),
+    -- **Arity 3**, collided on the third column through a `union`, so the key comparison
+    -- has to walk two equal columns before reaching a congruent one.
+    ("merge-arity3",
+      [.decl "Dist" (dist 3),
+       mset "Dist" [C "A", C "B", C "X"] 5, mset "Dist" [C "A", C "B", C "Y"] 3,
+       .action (.union (C "X") (C "Y")),
+       .rule (readInto "Hit" "Dist" [C "A", C "B", C "X"] 3),
+       .rule (readInto "Miss" "Dist" [C "A", C "B", C "X"] 5), .run]),
+    -- **Value width 3**, one combiner per column: `min` on 0, `max` on 1, `old` on 2. A
+    -- body reading the wrong `mergeEnvIdx` index computes a different tuple, and the
+    -- guarded read then stops firing.
+    ("tuple-three",
+      [.decl "Dist" (distTriple 1), tset "Dist" [C "A"] [5, 1, 7],
+       tset "Dist" [C "A"] [3, 9, 2],
+       .rule (readIntoW "Hit" "Dist" [C "A"] [3, 9, 7]),
+       .rule (readIntoW "Miss" "Dist" [C "A"] [5, 1, 7]), .run]) ]
 
 /-! ### Random `:merge` cases
 
@@ -562,12 +810,48 @@ model rather than by convenience:
   `:merge (+ old new)` derives `2v`, `3v`, … — so a difference would be the design showing,
   not a bug. Being non-*commutative* is no such excuse, and `old`/`new` are drawn: a
   commutative merge cannot tell which colliding row the model calls `old`.
-* **Bodies are `let`-only.** A body that `set`s a side table would fire on self-collisions
-  and in both orders, inflating that table's count against egglog's for the same reason.
-* **Merge functions are written and never read**, since a body atom reading one binds any
-  recorded output where egglog binds the current one.
+* **Merge functions are written and never read** by a *body*, since a body atom reading one
+  binds any recorded output where egglog binds the current one. Reading one from a rule
+  body is ordinary egglog and `genMergeReadRule` does it.
 
-Keys are eq-sorted and outputs are `i64`, as the curated cases already are. -/
+`MERGE.md`'s third narrowing, "bodies are `let`-only", is **gone as a statement about the
+model** — the reason it gave is wrong. A body that `set`s a side table does not fire on
+self-collisions (`mergeRound` skips `r₁ == r₂`) and does not fire in both orders (once
+`(r₁, r₂)` has fired, `r₁` is gone and `mergeOneWith`'s `rows.contains` test drops
+`(r₂, r₁)`). The `merge-body-*` cases above generate writing bodies — `set`, `union`, and a
+`let`/`set` block — and the two engines agree on all of them. `genMergeSpec` still does not
+draw one, for a different and narrower reason recorded there.
+
+Keys are eq-sorted and outputs are `i64`, as the curated cases already are.
+
+**Three divergences this family reaches and does not currently draw.** Each was found by
+widening the draw, minimized by hand against the release binary, and is held out here
+rather than fixed, because two of the three are in the model's interpreter rather than in
+anything this file owns.
+
+1. **A read atom's operands are not interned before the congruence test.**
+   `Impl/Merge.lean`'s `patternHoldsM` computes `cl := d.closureF` in its `.values` case and
+   compares the evaluated key against each row, where its `.expr` and `.eq` cases first add
+   the evaluated term (`(d.addTerm t).closureF`). A key expression the program never built
+   is therefore in no congruence class and matches nothing:
+   ```
+   (set (Dist (G (B) (A))) 4) (union (A) (B))
+   (rule ((= o (Dist (G (A) (B))))) ((Hit (A))))
+   ```
+   egglog flattens the fact to `G(a, b, x), Dist(x, o)` and matches through congruence,
+   answering `Hit 1`; the model answers `Hit 0`. Reachable from `genMergeReadRule`'s
+   free-key draw, which is how it turned up.
+2. **`old`/`new` at a rebuild collision follow insertion age here and key canonicity
+   there.** `mergeOneWith` takes the row that was inserted earlier as `old`. egglog takes
+   the row whose key is *already canonical* as `old` and the row being re-inserted because
+   its key moved as `new`. The two agree whenever the younger row sits at the younger key,
+   which every curated case does, and disagree otherwise:
+   ```
+   (function Dist (Math) i64 :merge new)
+   (A) (set (Dist (K)) 3) (set (Dist (A)) 2) (union (A) (K))
+   ```
+   egglog keeps `3` — the earlier write, at the younger key — and the model keeps `2`.
+3. **A no-op collision**, which only a writing body can observe; see `genMergeSpec`. -/
 
 /-- The merge specs the generator draws from: `:merge old` and `:merge new`, then `min`
 and `max`, each of the latter in the expression form and in the action-block form.
@@ -582,7 +866,25 @@ one being inserted.
 
 A difference shows through `(print-size)` because `genMergeReadRule` guards on the value:
 a rule reading `(= v (Dist k))` fires or does not according to which value survived the
-collision, and its head's `Hit` rows are counted. -/
+collision, and its head's `Hit` rows are counted.
+
+**Writing bodies are still not drawn here**, and the reason is no longer the one `MERGE.md`
+gave — `merge-body-*` above generates them and they agree — but a `no-op collision`, which
+only a *writing* body can observe:
+
+```
+(function Log (Math) i64 :merge (min old new))
+(function Dist () i64 :merge ((set (Log (L)) old) new))
+(L) (set (Dist) 2) (set (Dist) 2)
+```
+
+egglog runs the body and answers `Log 1`; this model dedups the two identical rows, so
+there is no pair for `mergeRound` to fire on, and it answers `Log 0`. Worse, the row egglog
+writes is keyed on a **dangling e-class**: with any other constructor around, the key prints
+as that unrelated constructor, and `(extract)` reports `Unextractable root Value(2) with
+sort EqSort { name: "Math" }`. Every curated case above therefore keeps its colliding values
+distinct, which is a condition a random draw over keys, values and a rule head cannot be
+held to. -/
 private def genMergeSpec (s : Nat) : MergeSpec × Nat :=
   let (i, s) := pick 6 s
   match i with

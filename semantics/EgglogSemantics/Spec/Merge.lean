@@ -157,9 +157,34 @@ fires; an interpreter has to pick one, and ordering the candidates by this makes
 choice deterministic. It is also where a termination witness comes from, since a merge
 that keeps the smaller side descends.
 
-egglog orders by insertion instead, so it picks a different class *representative*.
-That is invisible to `(print-size)`, which counts one row per class, so differential
-testing is unaffected. -/
+**An accepted deviation, not a bug.** `Term.blt` is a deterministic *structural* order:
+literals, then arity, then name, then lex. egglog's `ordering-min`/`ordering-max` compare
+the `Value` word a term is stored as (`egglog/src/lib.rs`, `"ordering-min" = |a, b| if a
+< b { a } else { b }`), and that word is an **allocation order** — a `u32` id handed out
+as ids are created within a session. The two therefore pick different class
+*representatives*, deliberately: this model does not model allocation order, and would
+have to thread a session-wide counter through `Database` to do so.
+
+The old claim here — "invisible to `(print-size)`, so differential testing is unaffected"
+— is **false**, and stays false only under two side conditions: while a merge function is
+never *read*, and while its representative is never used as a *key*. Both happen in
+ordinary egglog and in the proof encoding, whose union-find keys `@UF_<Sort>` on
+`(ordering-max old0 new0)`. Two repros, both checked against the binary:
+
+* `(function UF (Math) Math :merge (ordering-min old new))`, `(set (UF (A)) (Y))` then
+  `(set (UF (B)) (X))`, then `(union (A) (B))`, with rules reading `(UF k)` for `(X)` and
+  for `(Y)`. egglog keeps `Y`, the one created first (`(HitX 0) (HitY 1)`); this model
+  keeps `X`, because `"X" < "Y"` structurally. Writing `X` first makes egglog keep `X`
+  too, so egglog's choice is order-driven where this one is name-driven.
+* `(function D (Math) i64 :merge (ordering-min old new))`, `(set (D (A)) -1)`,
+  `(set (D (A)) 1)`. egglog settles on `1`, this model on `-1`: an `i64` in `[0, 2³¹)` is
+  stored unboxed as itself while every other one is interned and stored as `2³¹ + index`,
+  `index` in order of first interning, so `-1` sorts *above* `1`.
+
+Consequence to carry forward: this is a hypothesis of any future simulation theorem
+against real egglog, not something a proof may wave away. `PLAN.md`'s "Which primitives,
+and why" earmarks `ordering-min`/`ordering-max` for retirement with M11-min, which is
+what would remove the deviation rather than repair it. -/
 mutual
 
 /-- A total order on terms: literals below applications, then by argument count, then
@@ -491,7 +516,20 @@ congruent keys with different outputs.
 
 egglog raises `PanicError` when this fails and keeps the old row, so it is a side
 condition rather than a step. Nothing in the semantics consumes it; having it stated
-is what stops `.noMerge` silently meaning "keep the old value". -/
+is what stops `.noMerge` silently meaning "keep the old value".
+
+**Nothing consuming it is deliberate, and the divergence is out of scope.** A `:no-merge`
+collision is a *program error* that egglog rejects at runtime, and this model does not
+model runtime rejection — there is no error state for a step to enter, and adding one to
+cover a case the encoding never produces is not what the model is for. So `NoMergeOk`
+states the condition without enforcing it, and `Impl/Merge.lean` does not check it either.
+Confirmed against the binary: `(function Dist (Math) i64 :no-merge)`, `(set (Dist (A)) 1)`,
+`(set (Dist (B)) 2)`, `(union (A) (B))` makes egglog abort with
+`[ERROR] Panic: Illegal merge attempted for function Dist`, where this model silently keeps
+both rows. With *equal* values the two agree, so it is exactly the conflicting-value case
+that is scoped out. `MergeSpec.noMerge` itself stays — the proof encoding declares its
+proof nodes with it (`Spec/Encode.lean`'s `termDecl`, and `Impl/Merge.lean`'s merge phase
+on why a `.noMerge` row must never be deleted). -/
 def Database.NoMergeOk (db : Database) : Prop :=
   ∀ f as bs (a b : List Term), Row.mk f as a ∈ db.rows → Row.mk f bs b ∈ db.rows →
     MCongList db as bs → db.sig.mergeOf f = MergeSpec.noMerge → a = b

@@ -128,6 +128,13 @@ select (`old`, `new`) or build a term, so there are no lattice merges and no ana
   nothing else. **M11-min drops the union-find**, so nothing in the live plan needs them;
   their only remaining uses are inside `Proofs/Rebuilt.lean`, which is parked M11 material.
   Retire the two together when M11-min lands.
+  - They also carry the model's one **accepted deviation** on merge results: `Term.blt` is a
+    deterministic structural order, egglog's is the allocation order of value ids, so the two
+    keep different representatives. It is observable — `(function D (Math) i64 :merge
+    (ordering-min old new))` with `(set (D (A)) -1)` then `(set (D (A)) 1)` settles on `1` in
+    egglog and `-1` here — and it is a hypothesis of any simulation theorem, not a bug to fix.
+    `MERGE.md`, "The representative deviation", has both repros and the mechanism. Retiring the
+    two primitives is what retires the deviation.
 
 Dropping all four would collapse `MEval` to `Expr.eval` outright, which is the smallest the
 semantics can be — at the price of `:merge` becoming decorative, with no lattice for the

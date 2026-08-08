@@ -249,9 +249,46 @@ from, since a merge that keeps the smaller side descends. **(b) An implementatio
 literals, then arity, then name, then lex, with `orderingMin`/`orderingMax` defined from it —
 makes the interpreter's choice deterministic. **The spec stays non-deterministic**; this is an
 `Impl/` choice only. Structural size before lexicographic, so "keep the smaller side" descends;
-`Term.blt_linear` is stated and unproved. egglog orders by *insertion* instead and so picks a
-different class **representative** — invisible to `(print-size)`, which counts one row per class,
-so differential testing is unaffected.
+`Term.blt_linear` is proved, from `blt_asymm`/`blt_total`/`blt_trans`.
+
+### The representative deviation
+
+**This model keeps a deterministic structural order and does not model egglog's allocation order.
+That is a decision, not a defect, and the claim that used to sit here — "invisible to
+`(print-size)`, so differential testing is unaffected" — is false.**
+
+egglog's `ordering-min`/`ordering-max` compare the `Value` word a term is stored as
+(`egglog/src/lib.rs`, `add_primitive!(&mut eg, "ordering-min" = |a: #, b: #| -> # { if a < b { a }
+else { b } })`), and a `Value` is a `u32` **id handed out in allocation order** within a session.
+`Term.blt` compares structure. So the two pick different class **representatives**, deliberately —
+matching egglog would mean threading a session-wide allocation counter through `Database`.
+
+The invisibility claim holds only under two side conditions, and both are routinely violated: the
+merge function must never be **read**, and its representative must never be used as a **key**. The
+proof encoding does both — it keys `@UF_<Sort>` on `(ordering-max old0 new0)`. Two repros, run
+against `target/release/egglog`:
+
+**(a) An eq-sorted merge, read back.** With `(function UF (Math) Math :merge (ordering-min old
+new))`, `(set (UF (A)) (Y))`, `(set (UF (B)) (X))`, `(union (A) (B))` and rules
+`(rule ((= (X) (UF k))) ((HitX)))` / `(rule ((= (Y) (UF k))) ((HitY)))`, egglog prints
+`(HitX 0) (HitY 1)` — it keeps `Y`, the term created first. This model keeps `X`, because
+`"X" < "Y"` structurally, and predicts `(HitX 1) (HitY 0)`. Swapping the two `set`s so `X` is
+written first makes egglog keep `X`, so egglog's choice is **order-driven where this one is
+name-driven**. Row counts see it: `HitX` and `HitY` differ.
+
+**(b) A negative `i64`.** With `(function D (Math) i64 :merge (ordering-min old new))`,
+`(set (D (A)) -1)`, `(set (D (A)) 1)` and `(rule ((= -1 (D k))) ((Hit k)))`, egglog settles on `1`
+and prints `(Hit 0)`; this model settles on `-1` and predicts `(Hit 1)`. The mechanism is the same
+allocation order: an `i64` in `[0, 2³¹)` is stored *unboxed* as itself, and every other `i64` —
+negative or `≥ 2³¹` — is interned and stored as `2³¹ + index` with `index` handed out in order of
+first interning (`egglog/core-relations/src/base_values/`, `impl_medium_base_value!` and
+`BaseInternTable::intern`). So `1` sorts below `-1`, and between two *interned* literals egglog's
+answer is not even a function of the two numbers — it depends on which the session saw first.
+
+Consequence: this deviation is a **hypothesis of any future simulation theorem** against real
+egglog, not something a proof may wave away. `PLAN.md`'s "Which primitives, and why" earmarks
+`ordering-min`/`ordering-max` for retirement with M11-min; that is what removes the deviation,
+rather than complicating `Term.blt` to chase an order the model cannot see.
 
 ## Multi-column outputs
 
@@ -412,6 +449,27 @@ concern, and the `print-size` filtering above means it is not a difftest-fidelit
 It matters only if `encode`'s output is ever rendered to `.egg` and run in real egglog — the
 trigger to revisit.
 
+### `:no-merge` collisions, out of scope
+
+The other deliberate gap on this constraint, and the one where the model is **looser** than egglog
+rather than stricter. A `:no-merge` collision is a *program error egglog rejects at runtime*, and
+this model does not model runtime rejection: there is no error state for a step to enter, and the
+model should not try to cover the whole egglog language. `Database.NoMergeOk` states the condition
+and **nothing consumes it**; `Impl/Merge.lean` does not check it either, and `MergeStep` fires only
+on `.merge`, so a `.noMerge` collision is simply inert here.
+
+Confirmed against the binary: `(function Dist (Math) i64 :no-merge)`, `(set (Dist (A)) 1)`,
+`(set (Dist (B)) 2)`, `(union (A) (B))` gives `[ERROR] Panic: Illegal merge attempted for function
+Dist` and exits 1, where this model silently keeps both rows and predicts `Dist 1`. With **equal**
+values the two agree — the same program with both values `1` prints `(A 1) (B 1) (Dist 1)` and the
+model predicts the same — so it is exactly the conflicting-value case that is scoped out, which is
+why the difftest's `:no-merge` cases keep their keys distinct.
+
+`MergeSpec.noMerge` itself stays. Scoping out the *collision behaviour* is not "drop the
+constructor": the proof encoding declares its proof nodes with `:no-merge` (`Spec/Encode.lean`'s
+`termDecl`), and `Impl/Merge.lean`'s merge phase turns on a `.noMerge` row never being deleted,
+"deleting one would delete a proof".
+
 ## Constraint (5): base sorts
 
 **Not done, deliberately.** `Lit` is still `Int` only and `Term` is still untyped. Instead:
@@ -508,9 +566,11 @@ Deliberately narrow, and the narrowness is the interesting part.
 * **Outputs are `i64`, keys are eq-sorted.** egglog typechecks a `(function …)` declaration, so a
   merge function needs a real output sort — this is where sorts finally bite. An eq-sorted output
   would dodge the base sort, but then `ordering-min` must render, and `Term.blt` is *structural*
-  where egglog's is by insertion order, so the two would pick different representatives; row counts
-  would survive that, nothing else would. Eq-sorted keys also keep `Term.lit` out of constructor
-  arguments, so `Egg.lean`'s standing literal mismatch stays out of the way.
+  where egglog's is by allocation order, so the two would pick different representatives. **Row
+  counts would not survive that** — repro (a) of "The representative deviation" is exactly this
+  shape, an eq-sorted `ordering-min` merge read back by a rule, and its `Hit` counts differ.
+  Eq-sorted keys also keep `Term.lit` out of constructor arguments, so `Egg.lean`'s standing
+  literal mismatch stays out of the way.
 
 The case that matters is `min-rebuild`, the shape of `egglog/tests/merge-during-rebuild.egg`: two
 `Dist` rows whose keys are then unioned, so egglog's table drops from two rows to one. `min-congr`
