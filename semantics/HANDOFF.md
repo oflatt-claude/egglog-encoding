@@ -29,6 +29,8 @@ stating an M9 lemma, read its M10 counterpart first.**
 
 `Proofs/Counterexamples.lean` is new and holds a compiling witness for every "false as
 stated" claim below, so they are checked by `lake build` rather than asserted in prose.
+`Proofs/Rebuilt.lean` does the same for M11's `Rebuilt` hypothesis — queue item 4, which is
+the one place M11 is known to be broken independently of the encoder being unfinished.
 
 `make lean-difftest` was **not re-run** in this pass. Nothing under `Spec/` or `Impl/` was
 touched, and `DiffTest.lean` is unchanged, so its last result (118 passed / 0 failed /
@@ -188,13 +190,49 @@ Roughly in priority order.
 3. **M11 proper** — `Proofs/Encode.lean`'s 13 statements. The language blocker is gone
    (multi-column `set` and `Pattern.values` landed), so the proof column is now an
    *encoder* gap, not a language one. `CHECKER.md` scopes it.
-4. **`EncodeDomain` gains "ends in `(run)`"** — otherwise `Rebuilt` is vacuous, since
-   maintenance rules only fire inside `Cmd.run`. Decided against appending a `(run)` inside
-   `encode` (source and target would run different numbers of rounds — a soundness break)
-   and against a saturation predicate (reintroduces the "cannot step" fixpoint notion this
-   development deliberately avoids). Note `Rebuilt`'s *second* conjunct fails too:
-   `MergeSaturated` is false outside a run as soon as any `@UF` row exists, because
-   `MergeStep` has no `a ≠ b` guard and the shared `mergeBody` writes a reflexive self-loop.
+4. **`Rebuilt` is reachability-vacuous, and "ends in `(run)`" does not fix it.**
+   `Proofs/Rebuilt.lean` has the machine-checked witnesses; this supersedes the earlier plan.
+
+   `Rebuilt`'s *shape* is fine — `rebuilt₁` exhibits a state satisfying both conjuncts, and
+   `MergeSaturated` is reachable now that `CmdStep.action` merges (it is "no step *changes*
+   anything", and the reflexive self-loop a self-collision writes is itself installed by
+   that merge phase). But conjunct 1 fails whenever the union does any work: `encode P`
+   emits no `Cmd.run` when `P` has none, only `CmdStep.run` reaches `RunRules`, and a merge
+   only ever re-adds a row at an existing key, so a view row keyed on a non-leader can never
+   be re-keyed. `rebuilt_rekeys` is the general form — any `Rebuilt` state holding
+   `@fView [c]↦[e]` and `@UF [c]↦[x]` must already hold `@fView [x]↦[e]`. Without a trailing
+   `(run)`, `Rebuilt` therefore holds **iff the union is inert with respect to every view
+   row**, which `Term.blt`'s orientation decides: `not_rebuilt₀` and `rebuilt₁` are the same
+   program differing only in which literal is built.
+
+   **One `(run)` is not enough, and no fixed `k` is.** `Cmd.run` is a single round and
+   `RunRules` fires every rule against the pre-state, so no rule sees another's output
+   within a round. Union chains need one round per link; congruence propagating upward needs
+   one per level, so the count grows with term depth, and with source rules that build terms
+   each round there may be no `k`. Appending `(run)`s to `EncodeDomain` swaps one vacuous
+   hypothesis for another.
+
+   What closes it is an **achievability lemma**, keeping `Rebuilt` a hypothesis so both
+   previously-rejected alternatives stay rejected:
+
+   ```lean
+   theorem rebuilt_reachable (hdom : P.EncodeDomain) :
+       ∃ k tgt, ProgramStep Database.empty (encode (P ++ List.replicate k .run)) tgt
+              ∧ Rebuilt P tgt
+   ```
+
+   Plausible for rule-free `P`: nothing in the maintenance rules or the merge body creates a
+   term (`ordering-min`/`max` return an operand, re-keying moves keys among existing terms),
+   so the row set is bounded and the closure finite. For `P` with rules it may not exist —
+   the same non-termination the source has, and the honest place for the statement to stop.
+   Note `maintenanceRules P` does not depend on how many `(run)`s `P` contains, so appending
+   them changes only the reachable `tgt`, never the predicate.
+
+   One bonus, machine-checked as `mergeClosure_eq_of_allConstructors`: `encode_complete`'s
+   "runs must be appended to **both** sides" is narrower than its docstring says. `MergeStep`
+   never applies to an `EncodeDomain` source, so `CmdStep.action`'s merge leg is the identity
+   there and trailing `(run)`s are a strict no-op on the source — for the rule-free fragment
+   they can be appended to the target alone without breaking soundness.
 5. **`MEval.lookup`-in-a-query coverage** — the generator only ever `set`s merge functions
    and queries constructors, so this path has *zero* differential coverage despite being
    reachable through `execM`. Every previous untested path here turned out to hide a defect,
