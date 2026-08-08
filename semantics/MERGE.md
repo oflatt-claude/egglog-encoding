@@ -412,11 +412,14 @@ it made the guard the one **under**-approximation in an otherwise over-approxima
 unsafe direction: it leaves egglog reaching states the model never checks, so the safety invariant
 does not transfer to real egglog.
 
-Without the guard the model covers egglog unconditionally. Where a function has
-`:internal-identity-vals` set, egglog skips a re-`set` of an equal value and the model fires
-anyway; where it is not set, egglog fires on the re-`set` and the model fires spontaneously.
-Over-approximate either way. **The safety theorem therefore needs no scope condition on the
-signature at all** — no `merge (x, x) = x`, no identity-guardedness hypothesis.
+Without the guard the model covers egglog unconditionally. egglog skips a collision that changes no
+value column whenever the function declares `:internal-identity-vals` **or** its `:merge` carries an
+action block, and fires on it otherwise; `MergeStep` fires either way, and on the self-collision
+egglog never even sees. Over-approximate in every case. **The safety theorem therefore needs no
+scope condition on the signature at all** — no `merge (x, x) = x`, no identity-guardedness
+hypothesis. (`Impl/` does take the skip, because it has to predict row counts and a `:merge` body
+*writes*; that is `FDatabase.noConflict`, and firing fewer steps is what its containment contract
+allows. See "A collision that changes nothing runs no body" below.)
 
 Read that narrowly: it is about the *safety theorem*. Congruence **monotonicity** does need a
 signature condition, and it is not optional. `Database.Contained` ignores `sig` while `MCong.fd`
@@ -445,9 +448,9 @@ anything" form, under which `ordering-min` self-merges saturate and `+` correctl
 `PLAN.md`'s note that naive and seminaive "genuinely diverge" for a non-idempotent merge is right
 about egglog and does not apply here, since this model has no firing count at all.
 
-### `:internal-identity-vals`, deferred
+### `:internal-identity-vals`, and the skip that is now the default
 
-In full (`egglog-bridge/src/lib.rs:1412-1478`): compare the first `k` **value** columns by raw
+In full (`egglog-bridge/src/lib.rs`, `MergeFn`): compare the first `k` **value** columns by raw
 equality; if they agree, skip the action block entirely, keep the *old* value in every column
 including the payload, and leave the row untouched with its old timestamp so seminaive does not
 re-fire. The encoding's use is identity column = e-class, payload = proof, so a collision agreeing
@@ -459,10 +462,24 @@ proof keeps the old row and its old proof. The comparison is
 `cur[id_lo .. id_lo + k] == new[id_lo .. id_lo + k]`, and when it holds every column, payload
 included, takes the old value.
 
-**`identityVals` stays out of `FnDecl`.** With the collision guard gone it is not a soundness
-concern, and the `print-size` filtering above means it is not a difftest-fidelity concern either.
-It matters only if `encode`'s output is ever rendered to `.egg` and run in real egglog — the
-trigger to revisit.
+**Since `20d1461` (issue #59) the undeclared case is not "no skip".** `unchanged_width` is now
+`n_identity_vals.or_else(|| (!actions.is_empty()).then(n_vals))`: a `:merge` with an **action
+block** and no declaration takes the same skip over *every* value column. A single-expression
+`:merge` still never short-circuits, deliberately — it may be non-idempotent, and `:merge (+ old
+new)` on two rows holding `2` gives `4` on both this binary and upstream.
+
+**That made the skip a difftest-fidelity concern, and this file said it was not.** The earlier
+conclusion here — "the `print-size` filtering above means it is not a difftest-fidelity concern
+either" — was about the *declared* form, which only the encoding's own views use and which
+`print-size` hides. It does not survive the generalization: the difftest generates ordinary
+`:merge` action blocks, they now skip by default, and comparing whole *rows* rather than value
+columns cost a real divergence (recorded below). `Impl/Merge.lean`'s `FDatabase.noConflict` is the
+model of the default form.
+
+**`identityVals` stays out of `FnDecl`**, now for a narrower reason: what is left unmodelled is the
+*prefix* — `k < n_vals`, where the payload columns may differ and the row is still kept. Nothing in
+the difftest fragment declares it, and the trigger to revisit is unchanged: rendering `encode`'s
+output to `.egg` and running it in real egglog.
 
 ### `:no-merge` collisions, out of scope
 
@@ -776,6 +793,65 @@ deletion**, and for the wrong reason: `execExpr` takes the *first* recorded outp
 `FDatabase.addRow` prepends, so the row it picked happened to be the merged one. The tuple
 destructure searches all rows and exposed what the single-column read was hiding. An agreement that
 rests on list order is not evidence of anything, the same lesson as `min`/`max`.
+
+### A collision that changes nothing runs no body
+
+`mergeRound` skipped a pair only when the two rows were **equal**, `r₁ == r₂`. egglog skips when
+the two rows' **value columns** are equal and says nothing about their keys. The gap between the
+two is exactly one shape — *congruent but unequal keys holding the same value* — and it is only
+observable through a body that writes, which is why it survived until writing bodies were
+generated:
+
+```
+(datatype Math (L) (X) (Y))
+(function Log (Math) i64 :merge new)
+(function Dist (Math) i64 :merge ((set (Log (L)) old) new))
+(set (Dist (X)) 2) (set (Dist (Y)) 2) (union (X) (Y)) (run 1) (print-size)
+```
+
+egglog answers `L 0, Log 0`; the model answered `L 1, Log 1`. With a `union` body instead, egglog
+answers `W 2` and the model answered `W 1`. Minimized against `target/release/egglog`, with the
+controls that pin the trigger to *equal values at unequal keys*:
+
+| program | egglog | model, before | what it fixes the trigger to |
+| --- | --- | --- | --- |
+| the repro above | `L 0, Log 0` | `L 1, Log 1` | the divergence |
+| second value `3` instead of `2` | `L 1, Log 1` | `L 1, Log 1` | not "a rebuild collision"; the values must agree (this is `merge-body-set-rebuild`) |
+| `(set (Dist (K)) 2)` twice, one key | `L 0, Log 0` | `L 0, Log 0` | not "equal values"; at one key the model dedups the rows, which is the case issue #59 fixed |
+| width 2, one column equal, one not | `L 1, Log 1` | `L 1, Log 1` | all-or-nothing over the whole value tuple, not per column |
+| three rows, two equal plus one different | `L 1, Log 1` | `L 1, Log 1` | a real conflict elsewhere in the class still fires |
+| `:merge (+ old new)`, both rows `2` | `4` | — | a single-expression `:merge` does **not** short-circuit; `20d1461` records that as an explicit decision |
+
+**The fix is in `Impl/`, not `Spec/`.** `FDatabase.noConflict body r₁ r₂` is `body ≠ [] &&
+r₁.out == r₂.out`, and `mergeOneOriented` takes it as a branch that drops `r₁` and leaves `r₂` where
+it stands, running neither `execActions` nor the result expressions. `Spec/Merge.lean` is untouched:
+`MergeStep` still fires on the collision, which keeps it over-approximating in the safe direction —
+the model **over-fired**, and firing fewer steps is precisely what `mergeRound`'s contract permits.
+
+**Drop `r₁`, not "no-op entirely".** Both agree on the repro and on every control above, because a
+key class whose rows *all* hold one value has nothing to observe and a class with any disagreement
+collapses through the pairs that do fire. Dropping is still the right one: it is what egglog's
+insert does — the arriving row is discarded and only the resident row remains in the table — and it
+is what keeps `mergeRound`'s convergence argument true as stated ("a pass strictly shrinks the rows
+at every key class that collided"), which a branch that removed nothing would break.
+
+**One proof statement had to weaken**, and only these two: `mergeOneOriented_mergeStep` and
+`mergeOneWith_mergeStep` concluded `∃ D', MergeStep D D' ∧ …` and now conclude
+`∃ D', MergeClosure D D' ∧ …`. A skipped collision takes **no** specification step, and no step is
+available to take instead: the implementation never evaluates the body, so `MergeStep.collide`'s
+`evalActions` and `Expr.evalList` premises are not in hand and in general do not hold — nothing
+scope-checks a merge body, so one with a free variable makes `evalActions` fail while the skip still
+fires. Zero-or-one steps is `MergeClosure`. Everything downstream is verbatim unchanged:
+`mergeRound_contained` consumed the step with `ReflTransGen.tail` and now consumes the closure with
+`.trans`, and `execM_contained` and `execM_reachable` are as they were.
+
+Four curated cases pin it — `merge-body-noop-rebuild` (the repro), `merge-body-noop-union` (the
+skip seen as an equality that was never asserted), `merge-body-noop-partial` (width 2, one column
+moving, so the block must still run) and `merge-body-noop-three` (a real conflict inside a class
+that also contains a no-op pair). Reverting the fix fails the first two.
+
+**This unblocks drawing writing merge bodies at random**, which `genMergeSpec` stopped short of for
+exactly this reason. Widening it is a separate change.
 
 ## The merge phase runs between commands
 

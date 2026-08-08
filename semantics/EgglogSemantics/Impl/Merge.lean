@@ -65,8 +65,9 @@ every property M11 cares about is positive in the state.
 
 **What "superseded" means here: the two rows the merge combined.** After the body has run
 and the combined row is computed, `r₁` — the row being inserted — is dropped, and `r₂` —
-the row already in the table — is overwritten in place by the combined row. Nothing else
-is ever removed:
+the row already in the table — is overwritten in place by the combined row. A collision
+that changes no value column skips the body and the overwrite, dropping `r₁` and leaving
+`r₂` exactly as it stands (`noConflict`). Nothing else is ever removed:
 
 * **never a term and never an equality** — only `rows` is rewritten;
 * **never a row of a `.union` function** — the rewrite runs only inside the `.merge` branch
@@ -83,6 +84,48 @@ have removed one — without the check a deleted row would be resurrected.
 
 Saturation becomes genuinely reachable rather than approximated: two rows at one key class
 become one, so the pair that fired is gone and the pass converges. -/
+/-- Whether the collision resolves to nothing, so that egglog runs no body at all.
+
+egglog's `MergeFn` (`egglog-bridge/src/lib.rs`) computes an `unchanged_width`: the
+declared `:internal-identity-vals` columns, or — for a merge with an **action block** —
+*every* value column. When the resident row and the arriving row agree on those columns
+the collision "is not a real value conflict", so the block's actions do not run and the
+resident value columns are kept. That is the whole of this test, and both halves of it
+are load-bearing.
+
+**The comparison is on the values and says nothing about the keys.** Two rows at
+*congruent but unequal* keys holding the same value are therefore a no-op there, where
+whole-row equality — which is all `mergeRound` skips on — sees a firing pair. That
+mismatch was a recorded divergence:
+
+```
+(function Log (Math) i64 :merge new)
+(function Dist (Math) i64 :merge ((set (Log (L)) old) new))
+(set (Dist (X)) 2) (set (Dist (Y)) 2) (union (X) (Y)) (run 1)
+```
+
+egglog answers `L 0, Log 0` and this model answered `L 1, Log 1`. The two agree again as
+soon as any column differs, so this is all-or-nothing over the value tuple and not per
+column — a width-2 body with one column equal and one different runs on both sides.
+
+**The body must be non-empty.** A single-expression `:merge` does not short-circuit in
+egglog and deliberately so, since it may be non-idempotent: `:merge (+ old new)` on two
+rows both holding `2` still gives `4` there. `MergeSpec.merge body res` with `body = []`
+is exactly that form, so the guard is `body ≠ []` and nothing else. The `let`-only block
+form does take the skip, unobservably — such a body writes nothing and its result is
+`min v v = v` either way.
+
+**Firing less is always sound**, which is why this is a repair rather than a new fragment
+boundary: `mergeRound` already fires a strict subset of `MergeStep`, and its contract is
+containment in a state the closure reaches, not equality.
+
+The one residual is eq-sorted value columns, which the difftest fragment does not draw:
+egglog compares canonical e-class ids, so two congruent-but-unequal output terms are
+unchanged there and distinct here, and the model would fire where egglog skips — the safe
+direction again. -/
+def FDatabase.noConflict (body : List Action) (r₁ r₂ : Row) : Bool :=
+  !body.isEmpty && r₁.out == r₂.out
+
 /-- One `:merge` firing on an *oriented* pair of rows, if it applies: `r₂` is the row
 already in the table and `r₁` the one arriving, so the body runs under
 `mergeEnv r₂.out r₁.out` — `old` from `r₂`, `new` from `r₁`, the opposite of the argument
@@ -107,20 +150,28 @@ row, which is what `mergeOneWith` arranges when either row is. When *neither* is
 third, older term in the class carries the canonical key and egglog re-inserts both rows
 under it — egglog's survivor sits at a key no row here has, and this writes at `r₂`'s
 instead. `Database.Out` reads a row from every congruent key, so nothing is lost until a
-row appears at that third key later, which is the residual `MERGE.md` records. -/
+row appears at that third key later, which is the residual `MERGE.md` records.
+
+**A collision that changes no value column runs no body.** `noConflict` is that test, and
+`MERGE.md`'s "A collision that changes nothing runs no body" is the evidence. The firing
+reduces to dropping `r₁`, which is what egglog's insert does with the row it did not have
+to merge. -/
 def FDatabase.mergeOneOriented (cl : Finset (Term × Term)) (d : FDatabase) (r₁ r₂ : Row) :
     Option FDatabase :=
   match d.sig.mergeOf r₁.fn with
   | .merge body res =>
     if r₁.fn = r₂.fn && congrKeys cl r₁.args r₂.args
         && d.rows.contains r₁ && d.rows.contains r₂ then
-      (execActions { d with env := mergeEnv r₂.out r₁.out } body).bind
-        fun e => (Expr.evalList e.sig res e.env).map fun vs =>
-          let e' := (e.addTerms r₂.args).addTerms vs
-          { e' with
-            rows := (e'.rows.filter fun r => r ≠ r₁).map fun r =>
-              if r = r₂ then ⟨r₂.fn, r₂.args, vs⟩ else r,
-            env := d.env, rules := d.rules }
+      if FDatabase.noConflict body r₁ r₂ then
+        some { d with rows := d.rows.filter fun r => r ≠ r₁ }
+      else
+        (execActions { d with env := mergeEnv r₂.out r₁.out } body).bind
+          fun e => (Expr.evalList e.sig res e.env).map fun vs =>
+            let e' := (e.addTerms r₂.args).addTerms vs
+            { e' with
+              rows := (e'.rows.filter fun r => r ≠ r₁).map fun r =>
+                if r = r₂ then ⟨r₂.fn, r₂.args, vs⟩ else r,
+              env := d.env, rules := d.rules }
     else none
   | _ => none
 
@@ -245,8 +296,13 @@ before `r₂` and therefore `r₁` newer. That is the tie-break `mergeOneWith` f
 when key canonicity does not decide, and it is the only thing the argument order means —
 egglog binds `old` by canonicity first, so `mergeOneWith` may hand the pair on swapped.
 
-Two ways this fires a strict subset of what `MergeStep` allows, both deliberate and both
+Three ways this fires a strict subset of what `MergeStep` allows, all deliberate and all
 sound for the same reason.
+
+**A collision that changes no value column takes no step at all**, because egglog takes
+none — `mergeOneOriented`'s `noConflict` drops the arriving row and runs nothing. This is
+the one of the three that is about *fidelity* rather than about cost: over-firing here is
+observable, since a body writes.
 
 **Self-collisions are skipped.** `MergeStep` has no `a ≠ b` guard, on purpose: without it
 the spec would *under*-approximate egglog (`MERGE.md`, "No guard on the collision"). An

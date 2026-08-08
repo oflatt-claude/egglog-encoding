@@ -2000,6 +2000,17 @@ theorem mem_mergeRows_of {rs : List Row} {r₁ r₂ r : Row} {vs : List Term} (h
       if x = r₂ then (⟨r₂.fn, r₂.args, vs⟩ : Row) else x :=
   List.mem_map.mpr ⟨r, List.mem_filter.mpr ⟨hr, by simp [h₁]⟩, by simp [h₂]⟩
 
+/-- The rows a **no-conflict** firing leaves: everything but `r₁`. `mergeOneOriented`'s
+`noConflict` branch runs no body and overwrites nothing, so the row list only shrinks.
+Membership in one direction; `mem_dropRow` is the other. -/
+theorem mem_dropRow_of {rs : List Row} {r₁ r : Row} (hr : r ∈ rs) (h₁ : r ≠ r₁) :
+    r ∈ rs.filter fun x => x ≠ r₁ :=
+  List.mem_filter.mpr ⟨hr, by simp [h₁]⟩
+
+/-- A no-conflict firing leaves only rows that were already there. -/
+theorem mem_dropRow {rs : List Row} {r₁ r : Row} (hr : r ∈ rs.filter fun x => x ≠ r₁) :
+    r ∈ rs := (List.mem_filter.mp hr).1
+
 /-- Every row a merge firing leaves is one that was there or the combined row. -/
 theorem mem_mergeRows {rs : List Row} {r₁ r₂ r : Row} {vs : List Term}
     (hr : r ∈ (rs.filter fun x => x ≠ r₁).map fun x =>
@@ -2021,7 +2032,8 @@ nodes, so deleting one would delete a proof.
 The reason it holds is one line: the only rows dropped or overwritten are `r₁` and `r₂`
 themselves, whose function is `r₁.fn`, and the branch was taken only because
 `d.sig.mergeOf r₁.fn = .merge body res`. A row of any other kind of function is therefore
-distinct from both. -/
+distinct from both. The `noConflict` branch drops `r₁` and nothing else, so the same line
+covers it with `r₂` to spare. -/
 theorem mergeOneOriented_confined {cl : Finset (Term × Term)} {d e : FDatabase}
     {r₁ r₂ : Row} (h : d.mergeOneOriented cl r₁ r₂ = some e) :
     d.toDatabase.terms ⊆ e.toDatabase.terms ∧ d.toDatabase.eqs ⊆ e.toDatabase.eqs ∧
@@ -2038,32 +2050,40 @@ theorem mergeOneOriented_confined {cl : Finset (Term × Term)} {d e : FDatabase}
     split at h
     case isFalse => simp at h
     case isTrue hcond =>
-      cases hb : execActions { d with env := mergeEnv r₂.out r₁.out } body with
-      | none => rw [hb] at h; simp at h
-      | some eb =>
-        rw [hb, Option.bind_some] at h
-        cases hv : Expr.evalList eb.sig res eb.env with
-        | none => rw [hv] at h; simp at h
-        | some vs =>
-          rw [hv, Option.map_some, Option.some.injEq] at h
-          subst h
-          have hcb := execActions_contained hb
-          have hsb := execActions_sig hb
-          have hadd : eb.toDatabase.Contained ((eb.addTerms r₂.args).addTerms vs).toDatabase :=
-            contained_addTerms.trans contained_addTerms
-          refine ⟨fun x hx => hadd.terms (hcb.terms hx), fun q hq => hadd.eqs (hcb.eqs hq),
-            ?_, fun r hr hnm => ?_⟩
-          · show ((eb.addTerms r₂.args).addTerms vs).sig = d.sig
-            rw [addTerms_sig, addTerms_sig]; exact hsb
-          · have hrb : r ∈ ((eb.addTerms r₂.args).addTerms vs).rows := hadd.rows (hcb.rows hr)
-            have hfn : r₁.fn = r₂.fn := by
-              simp only [Bool.and_eq_true, decide_eq_true_eq] at hcond
-              exact hcond.1.1.1
-            have hne : r ≠ r₁ ∧ r ≠ r₂ := by
-              refine ⟨fun hq => hnm body res ?_, fun hq => hnm body res ?_⟩
-              · rw [hq]; exact hm
-              · rw [hq, ← hfn]; exact hm
-            exact mem_mergeRows_of hrb hne.1 hne.2
+      split at h
+      case isTrue =>
+        -- The no-conflict skip: `r₁` is dropped and nothing else moves.
+        rw [Option.some.injEq] at h
+        subst h
+        refine ⟨subset_rfl, subset_rfl, rfl, fun r hr hnm => ?_⟩
+        exact mem_dropRow_of hr fun hq => hnm body res (by rw [hq]; exact hm)
+      case isFalse =>
+        cases hb : execActions { d with env := mergeEnv r₂.out r₁.out } body with
+        | none => rw [hb] at h; simp at h
+        | some eb =>
+          rw [hb, Option.bind_some] at h
+          cases hv : Expr.evalList eb.sig res eb.env with
+          | none => rw [hv] at h; simp at h
+          | some vs =>
+            rw [hv, Option.map_some, Option.some.injEq] at h
+            subst h
+            have hcb := execActions_contained hb
+            have hsb := execActions_sig hb
+            have hadd : eb.toDatabase.Contained ((eb.addTerms r₂.args).addTerms vs).toDatabase :=
+              contained_addTerms.trans contained_addTerms
+            refine ⟨fun x hx => hadd.terms (hcb.terms hx), fun q hq => hadd.eqs (hcb.eqs hq),
+              ?_, fun r hr hnm => ?_⟩
+            · show ((eb.addTerms r₂.args).addTerms vs).sig = d.sig
+              rw [addTerms_sig, addTerms_sig]; exact hsb
+            · have hrb : r ∈ ((eb.addTerms r₂.args).addTerms vs).rows := hadd.rows (hcb.rows hr)
+              have hfn : r₁.fn = r₂.fn := by
+                simp only [Bool.and_eq_true, decide_eq_true_eq] at hcond
+                exact hcond.1.1.1
+              have hne : r ≠ r₁ ∧ r ≠ r₂ := by
+                refine ⟨fun hq => hnm body res ?_, fun hq => hnm body res ?_⟩
+                · rw [hq]; exact hm
+                · rw [hq, ← hfn]; exact hm
+              exact mem_mergeRows_of hrb hne.1 hne.2
 
 /-- **A firing is a firing on one of the two orientations, and nothing else.**
 
@@ -2295,6 +2315,25 @@ theorem Inv.mergeRows {d : FDatabase} (h : d.Inv) {r₁ r₂ : Row} {vs : List T
     · exact h.ctorRows r hr' hu
     · exact absurd hu h₂
 
+/-- **`Inv` survives a no-conflict firing's rewrite of the row list**: `r₁` dropped, and
+nothing put back.
+
+`Inv.mergeRows` without its second row and without the combined row, so it needs neither
+`hargs` nor `hvs` — the rows that remain were already there, and the one hypothesis left
+is `rowsComplete`'s: a `.merge` function's row is never a constructor row, so dropping
+`r₁` cannot drop one the invariant demands. -/
+theorem Inv.dropRow {d : FDatabase} (h : d.Inv) {r₁ : Row}
+    (h₁ : d.sig.mergeOf r₁.fn ≠ MergeSpec.union) :
+    ({ d with rows := d.rows.filter fun r => r ≠ r₁ } : FDatabase).Inv where
+  wf := ⟨h.wf.subtermClosed, h.wf.eqsInTerms, h.wf.envInTerms⟩
+  ctorTerms := h.ctorTerms
+  rowsComplete := by
+    intro r hr
+    have hu : d.sig.mergeOf r.fn = MergeSpec.union := h.ctorTerms r.fn r.args hr.2
+    exact mem_dropRow_of (h.rowsComplete hr) fun hq => h₁ (hq ▸ hu)
+  rowsWF := fun r hr => h.rowsWF r (mem_dropRow hr)
+  ctorRows := fun r hr => h.ctorRows r (mem_dropRow hr)
+
 /-- `Inv` through a whole action block, given every `set` in it is legal. `Inv.execAction`
 iterated; `execAction_sig` is what keeps `SetLegal` — a condition on the signature —
 applicable at each step. -/
@@ -2325,7 +2364,8 @@ because `rowsWF` puts both rows' outputs in `terms`. Running the body preserves 
 are constructor terms by `Expr.evalList_ctorTerm`, so `Inv.addTerms` takes them into
 `terms`. And rewriting the row list — `r₁` dropped, `r₂` overwritten — is `Inv.mergeRows`,
 whose side condition is that both rows belong to a `.merge` function, which is how the
-branch was entered. -/
+branch was entered. The `noConflict` branch runs none of the four: it only drops `r₁`,
+which is `Inv.dropRow` with the same side condition. -/
 theorem mergeOneOriented_inv {cl : Finset (Term × Term)} {d e : FDatabase} {r₁ r₂ : Row}
     (h : d.Inv)
     (hlegal : ∀ g body res, d.sig.mergeOf g = MergeSpec.merge body res →
@@ -2343,6 +2383,12 @@ theorem mergeOneOriented_inv {cl : Finset (Term × Term)} {d e : FDatabase} {r�
     case isTrue hcond =>
       simp only [Bool.and_eq_true, decide_eq_true_eq, List.contains_iff_mem] at hcond
       obtain ⟨⟨⟨hfn, -⟩, hr₁⟩, hr₂⟩ := hcond
+      split at hm
+      case isTrue =>
+        rw [Option.some.injEq] at hm
+        subst hm
+        exact h.dropRow (by rw [hmo]; simp)
+      case isFalse =>
       have hσ : ∀ b ∈ mergeEnv r₂.out r₁.out, b.2 ∈ d.toDatabase.terms := by
         intro b hb
         rcases mem_mergeEnv hb with hb' | hb'
@@ -2493,7 +2539,7 @@ reads something stated above: `execAction_sig`, `mergeOneWith_inv`,
 
 namespace FDatabase
 
-/-- **One firing of the pass is one `MergeStep` of the specification.**
+/-- **One firing of the pass lands in a state the merge closure reaches.**
 
 `x` is the accumulator, `D` a specification state the closure has already reached that
 contains it. The firing's congruence test is against the *pre-pass* closure `d.closureF`,
@@ -2505,7 +2551,18 @@ The witness takes the two rows in the order `(r₂, r₁)`, which is the whole r
 `mergeEnv a b` and writes the combined row at the *first* row's key, and
 `mergeOneOriented` binds `old` from `r₂` and overwrites `r₂`. Both facts are the one fact
 that `r₂` is the row already in the table — which of the two colliding rows that is,
-`mergeOneWith` decides, and `mergeOneWith_mergeStep` says the decision is free. -/
+`mergeOneWith` decides, and `mergeOneWith_mergeStep` says the decision is free.
+
+**Why the conclusion is `MergeClosure` and not `MergeStep`.** A firing takes exactly one
+`MergeStep` — *except* at a `noConflict` collision, which egglog resolves by running
+nothing, and which this therefore has to model by taking **no** step: the implementation
+never evaluates the body there, so the `evalActions` and `Expr.evalList` premises
+`MergeStep.collide` demands are not available and in general do not hold (nothing
+scope-checks a merge body, so a body with a free variable makes `evalActions` fail while
+the skip still fires). Zero-or-one steps is `MergeClosure`, so that is what this states.
+Nothing downstream notices: `mergeRound_contained` consumed the step with
+`ReflTransGen.tail` and now consumes the closure with `.trans`, and its statement — the
+containment contract the interpreter is actually held to — is unchanged. -/
 theorem mergeOneOriented_mergeStep {d x y : FDatabase} {r₁ r₂ : Row} {D : Database}
     (h : d.Inv)
     (hlegal : ∀ g body res, d.sig.mergeOf g = MergeSpec.merge body res →
@@ -2513,7 +2570,7 @@ theorem mergeOneOriented_mergeStep {d x y : FDatabase} {r₁ r₂ : Row} {D : Da
     (hx : x.Inv) (hxs : x.sig = d.sig)
     (hcl : MergeClosure d.toDatabase D) (hxc : x.toDatabase.Contained D)
     (hm : FDatabase.mergeOneOriented d.closureF x r₁ r₂ = some y) :
-    ∃ D', MergeStep D D' ∧ y.toDatabase.Contained D' := by
+    ∃ D', MergeClosure D D' ∧ y.toDatabase.Contained D' := by
   have hDsig : D.sig = d.sig := MergeClosure.sig hcl
   unfold FDatabase.mergeOneOriented at hm
   cases hmo : x.sig.mergeOf r₁.fn with
@@ -2535,6 +2592,14 @@ theorem mergeOneOriented_mergeStep {d x y : FDatabase} {r₁ r₂ : Row} {D : Da
       have h₀ : ({ x with env := mergeEnv r₂.out r₁.out } : FDatabase).Inv := hx.setEnv hσ
       have hlx : Actions.SetLegal body x.sig := by
         rw [hxs]; exact hlegal r₁.fn body res (hxs ▸ hmo)
+      split at hm
+      case isTrue =>
+        -- The no-conflict skip takes no specification step: `y` only drops a row of `x`.
+        rw [Option.some.injEq] at hm
+        subst hm
+        exact ⟨D, Relation.ReflTransGen.refl,
+          hxc.terms, fun r hr => hxc.rows (mem_dropRow hr), hxc.eqs⟩
+      case isFalse =>
       cases hb : execActions { x with env := mergeEnv r₂.out r₁.out } body with
       | none => rw [hb] at hm; simp at hm
       | some eb =>
@@ -2563,7 +2628,8 @@ theorem mergeOneOriented_mergeStep {d x y : FDatabase} {r₁ r₂ : Row} {D : Da
         have hmoD : D.sig.mergeOf r₂.fn = MergeSpec.merge body res := by
           rw [← hfn, hDsig, ← hxs]; exact hmo
         refine ⟨{ D₁.addRow r₂.fn r₂.args vs with env := D.env, rules := D.rules },
-          MergeStep.collide hr₂D hr₁D hcongD hmoD hD₁step hmlD, ?_⟩
+          Relation.ReflTransGen.single
+            (MergeStep.collide hr₂D hr₁D hcongD hmoD hD₁step hmlD), ?_⟩
         have hc₀ : ((eb.addTerms r₂.args).addTerms vs).toDatabase.Contained
             (D₁.addRow r₂.fn r₂.args vs) := by
           have h₂ := (hD₁c.addTerms_mono r₂.args).addTerms_mono vs
@@ -2574,7 +2640,7 @@ theorem mergeOneOriented_mergeStep {d x y : FDatabase} {r₁ r₂ : Row} {D : Da
         · exact hc₀.rows hr'
         · exact Set.mem_insert _ _
 
-/-- **Either orientation is a `MergeStep`, so the choice between them is free.**
+/-- **Either orientation stays inside the closure, so the choice between them is free.**
 
 `mergeOneOriented_mergeStep` instantiates `MergeStep.collide` with the two rows in one
 order; `collide` takes them in both, so `swapForCanon`'s answer never has to be justified
@@ -2588,7 +2654,7 @@ theorem mergeOneWith_mergeStep {d x y : FDatabase} {r₁ r₂ : Row} {D : Databa
     (hx : x.Inv) (hxs : x.sig = d.sig)
     (hcl : MergeClosure d.toDatabase D) (hxc : x.toDatabase.Contained D)
     (hm : FDatabase.mergeOneWith d.closureF x r₁ r₂ = some y) :
-    ∃ D', MergeStep D D' ∧ y.toDatabase.Contained D' := by
+    ∃ D', MergeClosure D D' ∧ y.toDatabase.Contained D' := by
   obtain ⟨a, b, he⟩ := mergeOneWith_eq_oriented (cl := d.closureF) (d := x) r₁ r₂
   exact mergeOneOriented_mergeStep h hlegal hx hxs hcl hxc (he ▸ hm)
 
@@ -2617,8 +2683,7 @@ theorem mergeRound_contained {d : FDatabase} (h : d.Inv)
       obtain ⟨D', hstepD, hyc⟩ :=
         mergeOneWith_mergeStep h hlegal hxInv hxs hcl hxc hy
       refine ⟨mergeOneWith_inv hxInv (fun g body res hg => ?_) hy,
-        ((mergeOneWith_confined hy).2.2.1).trans hxs, D',
-        Relation.ReflTransGen.tail hcl hstepD, hyc⟩
+        ((mergeOneWith_confined hy).2.2.1).trans hxs, D', hcl.trans hstepD, hyc⟩
       exact hxs ▸ hlegal g body res (hxs ▸ hg)
   have hfold : ∀ (l : List Row) (r₁ : Row) (x : FDatabase), P x →
       P (l.foldl (fun acc' r₂ =>
@@ -3054,12 +3119,15 @@ theorem mergeOneOriented_envRules {cl : Finset (Term × Term)} {d e : FDatabase}
     split at h
     case isFalse => simp at h
     case isTrue =>
-      cases hb : execActions { d with env := mergeEnv r₂.out r₁.out } body with
-      | none => rw [hb] at h; simp at h
-      | some eb =>
-        rw [hb, Option.bind_some, Option.map_eq_some_iff] at h
-        obtain ⟨vs, hv, rfl⟩ := h
-        exact ⟨rfl, rfl⟩
+      split at h
+      case isTrue => rw [Option.some.injEq] at h; subst h; exact ⟨rfl, rfl⟩
+      case isFalse =>
+        cases hb : execActions { d with env := mergeEnv r₂.out r₁.out } body with
+        | none => rw [hb] at h; simp at h
+        | some eb =>
+          rw [hb, Option.bind_some, Option.map_eq_some_iff] at h
+          obtain ⟨vs, hv, rfl⟩ := h
+          exact ⟨rfl, rfl⟩
 
 /-- `mergeOneOriented_envRules` at whichever orientation the firing took. -/
 theorem mergeOneWith_envRules {cl : Finset (Term × Term)} {d e : FDatabase} {r₁ r₂ : Row}

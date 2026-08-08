@@ -447,8 +447,9 @@ ordinary egglog: `(set (Dist (K)) (min 5 3))` is an `i64` expression in a value 
 which is where `tests/interval.egg` puts one too.
 
 **What the oracle sees.** `min` and `max` are the one place the model *computes* rather
-than *builds* (`Prim.apply` against `Expr.eval`'s constructor case), so the three ways to get this wrong
-are to build the term `min(5, 3)`, to compute the wrong operation, or to compute nothing.
+than *builds* (`Prim.apply` against `Expr.eval`'s constructor case), so the three ways to
+get this wrong are to build the term `min(5, 3)`, to compute the wrong operation, or to
+compute nothing.
 Each case reads the answer back at a literal and builds `Hit`, and reads the operand that
 must have lost and builds `Miss`: building a term or getting stuck gives `Hit 0, Miss 0`,
 and computing `max` for `min` gives `Hit 0, Miss 1`. -/
@@ -479,7 +480,14 @@ and both were checked against the release binary before being generated.
 
 `merge-body-inert` is the negative control: the same declaration with no collision ever
 reached, where `L`, `Log` and `W` must report the body *not* having run. Without it a model
-that ran the body unconditionally would pass every other case in this family. -/
+that ran the body unconditionally would pass every other case in this family.
+
+**A collision that leaves every value column unchanged runs no block at all**, on either
+side: egglog's `MergeFn` treats it as no conflict and `Impl/Merge.lean`'s `noConflict` now
+does the same. The four `merge-body-noop-*` cases below are that behaviour and its edges —
+they were a recorded divergence until the model grew the skip, and they are the reason the
+rest of this family keeps its two colliding values *distinct*: a case that means to observe
+a body running has to give the body something to resolve. -/
 /-- The side table a body writes into. `min` rather than `old`/`new` on purpose: a case
 with several collisions logs several values, and the count of collisions is the one thing
 the two engines are not obliged to agree on, so the *combination* has to be
@@ -510,6 +518,13 @@ private def distLetLog (n : Nat) : FnDecl :=
 1 exactly when the body runs. -/
 private def seedW : List Cmd :=
   [.action (.expr (.app "W" [C "U"])), .action (.expr (.app "W" [C "V"]))]
+
+/-- A **two-column** merge with a body, for the case where a collision leaves one value
+column unchanged and moves the other. The skip is all-or-nothing over the whole value
+tuple, so this body must still run; a model that skipped per column would report `L 0`. -/
+private def distPairLog (n : Nat) : FnDecl :=
+  { arity := n, outArity := 2,
+    merge := .merge [.set "Log" [C "L"] [.var "old0"]] [.var "new0", .var "new1"] }
 
 /-! ### Widths and arities the suite never drew
 
@@ -831,6 +846,45 @@ private def curatedMerge : List (String × Program) :=
       [.decl "Log" logDecl, .decl "Dist" (distLog 2 "old" "new")] ++ seedW ++
       [mset "Dist" [C "A", C "B"] 1, mset "Dist" [C "B", C "A"] 2,
        .rule (readInto "Hit" "Log" [C "L"] 1), .run]),
+    -- **The no-conflict skip.** The `merge-body-set-rebuild` program with the two values
+    -- made *equal*: the keys still collide through the `union`, but the collision leaves
+    -- the value column unchanged, so egglog treats it as no conflict and runs no block.
+    -- `Won 1` says the collision was still resolved — one row, holding `2` — and `Miss 0`,
+    -- `L 0`, `Log 0` say the body did not run. This was a recorded divergence: comparing
+    -- whole *rows* rather than value columns, the model answered `L 1, Log 1`.
+    ("merge-body-noop-rebuild",
+      [.decl "Log" logDecl, .decl "Dist" (distLog 1 "old" "new"),
+       mset "Dist" [C "X"] 2, mset "Dist" [C "Y"] 2, .action (.union (C "X") (C "Y")),
+       .rule (readInto "Won" "Dist" [C "X"] 2), .rule (readInto "Miss" "Log" [C "L"] 2),
+       .run]),
+    -- The same collision with a `union` body, where the skip is visible as an *equality*
+    -- that was never asserted: `W` stays 2 because `(union (U) (V))` never ran. `Won 1`
+    -- against `Miss 0` reports that the merge itself still happened.
+    ("merge-body-noop-union",
+      [.decl "Dist" (distUnion 1 "new")] ++ seedW ++
+      [mset "Dist" [C "X"] 2, mset "Dist" [C "Y"] 2, .action (.union (C "X") (C "Y")),
+       .rule (readInto "Won" "Dist" [C "X"] 2), .rule (readInto "Miss" "Dist" [C "X"] 3),
+       .run]),
+    -- **The skip is all-or-nothing over the value tuple.** Two value columns, the first
+    -- equal at both rows and the second not, so the collision *is* a conflict and the body
+    -- runs: `Hit 1` reads the logged `old0`. A model that skipped per column would leave
+    -- `L 0, Log 0, Hit 0`. `Miss` reads the column the log does not hold.
+    ("merge-body-noop-partial",
+      [.decl "Log" logDecl, .decl "Dist" (distPairLog 1),
+       pset "Dist" [C "X"] 2 1, pset "Dist" [C "Y"] 2 5,
+       .action (.union (C "X") (C "Y")),
+       .rule (readInto "Hit" "Log" [C "L"] 2), .rule (readInto "Miss" "Log" [C "L"] 5),
+       .run]),
+    -- **Three rows in one key class, two of them equal.** The equal pair is skipped and the
+    -- odd one out is a real conflict, so the body runs — `L 1, Log 1` — and the class still
+    -- collapses to one row holding `3`, which `Hit 1` against `Miss 0` reads back. This is
+    -- the case that separates "drop the arriving row on a skip" from "do nothing at all".
+    ("merge-body-noop-three",
+      [.decl "Log" logDecl, .decl "Dist" (distLog 1 "old" "new"),
+       mset "Dist" [C "X"] 2, mset "Dist" [C "Y"] 2, mset "Dist" [C "Z"] 3,
+       .action (.union (C "X") (C "Y")), .action (.union (C "Y") (C "Z")),
+       .rule (readInto "Hit" "Dist" [C "X"] 3), .rule (readInto "Miss" "Dist" [C "X"] 2),
+       .run]),
     -- **Arity 0.** One key class, and it is the empty tuple — `congrKeys` at length zero.
     ("merge-arity0",
       [.decl "Zero" (dist 0), mset "Zero" [] 5, mset "Zero" [] 3,
@@ -958,7 +1012,21 @@ the draw and minimized by hand against the release binary.
    Reachable from `genKeys`: nothing stops a drawn key from being built before the row
    written at it. `Impl/Merge.lean`'s `canonTerm` is the fix and `MERGE.md`'s "`old` is the
    row at the canonical key" is the evidence, including what it still does not model.
-3. **A no-op collision**, which only a writing body can observe; see `genMergeSpec`. -/
+3. **A value-preserving collision at congruent keys** — *fixed*, and pinned by the four
+   `merge-body-noop-*` cases above. egglog skips a `:merge` **action block** outright when
+   the collision leaves every value column unchanged (`egglog-bridge/src/lib.rs`, `MergeFn`'s
+   `unchanged_width`), comparing the two rows' *values* and saying nothing about their keys,
+   where `mergeRound` skipped an identical *row*. Two rows at congruent but unequal keys
+   holding the same value were therefore a no-op collision there and a firing pair here:
+   ```
+   (function Log (Math) i64 :merge new)
+   (function Dist (Math) i64 :merge ((set (Log (L)) old) new))
+   (set (Dist (X)) 2) (set (Dist (Y)) 2) (union (X) (Y)) (run 1)
+   ```
+   egglog answered `L 0, Log 0` and the model `L 1, Log 1`; a `union` body answered `W 2`
+   there and `W 1` here. `Impl/Merge.lean`'s `noConflict` is the fix. Reachable from
+   `genKeys` and `genMergeRule` the moment a writing body is drawn, which is what it
+   blocked; the block is now lifted, and widening `genMergeSpec` is a separate change. -/
 
 /-- The merge specs the generator draws from: `:merge old` and `:merge new`, then `min`
 and `max`, each of the latter in the expression form and in the action-block form.
@@ -975,23 +1043,17 @@ A difference shows through `(print-size)` because `genMergeReadRule` guards on t
 a rule reading `(= v (Dist k))` fires or does not according to which value survived the
 collision, and its head's `Hit` rows are counted.
 
-**Writing bodies are still not drawn here**, and the reason is no longer the one `MERGE.md`
-gave — `merge-body-*` above generates them and they agree — but a `no-op collision`, which
-only a *writing* body can observe:
+**Writing bodies are still not drawn here**, but the blocker is gone. It was a live
+divergence: egglog skips a `:merge` action block outright when the collision leaves every
+value column unchanged, comparing the two rows' *values* and nothing about their keys,
+where `mergeRound` skipped an identical *row*, so two rows at congruent but unequal keys
+holding the same value were a no-op there and a firing pair here. `Impl/Merge.lean`'s
+`noConflict` closed that, and the `merge-body-noop-*` cases pin it, so a draw over keys,
+values and a rule head can now be given a writing body. Widening this function to draw one
+is a separate change and deliberately not made here.
 
-```
-(function Log (Math) i64 :merge (min old new))
-(function Dist () i64 :merge ((set (Log (L)) old) new))
-(L) (set (Dist) 2) (set (Dist) 2)
-```
-
-egglog runs the body and answers `Log 1`; this model dedups the two identical rows, so
-there is no pair for `mergeRound` to fire on, and it answers `Log 0`. Worse, the row egglog
-writes is keyed on a **dangling e-class**: with any other constructor around, the key prints
-as that unrelated constructor, and `(extract)` reports `Unextractable root Value(2) with
-sort EqSort { name: "Math" }`. Every curated case above therefore keeps its colliding values
-distinct, which is a condition a random draw over keys, values and a rule head cannot be
-held to. -/
+The `let`-only block form drawn here takes egglog's skip too, unobservably — such a body
+writes nothing and its result is `min v v = v` either way. -/
 private def genMergeSpec (s : Nat) : MergeSpec × Nat :=
   let (i, s) := pick 6 s
   match i with
