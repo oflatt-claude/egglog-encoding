@@ -252,6 +252,9 @@ theorem WF.addTerm {d : FDatabase} (h : d.WF) (t : Term) : (d.addTerm t).WF := b
 theorem WF.addEq {d : FDatabase} (h : d.WF) (a b : Term) : (d.addEq a b).WF := by
   rw [FDatabase.WF, toDatabase_addEq]; exact Database.WF.addEq h a b
 
+theorem WF.addTerms {d : FDatabase} (h : d.WF) (ts : List Term) : (d.addTerms ts).WF := by
+  rw [FDatabase.WF, toDatabase_addTerms]; exact Database.WF.addTerms h ts
+
 theorem mem_closureF_addTerm {d : FDatabase} (hw : d.WF) {t a b : Term} :
     (a, b) ∈ (d.addTerm t).closureF ↔ Cong (d.toDatabase.addTerm t) a b := by
   rw [mem_closureF_iff_of_wf (hw.addTerm t), toDatabase_addTerm]
@@ -275,6 +278,16 @@ theorem congrTuple_iff {d : FDatabase} (hw : d.WF) {xs ys : List Term} :
   · rintro ⟨hlen, hall⟩
     exact ⟨hlen, fun q hq => by
       simpa using (mem_closureF_iff_of_wf hw).mpr (hall (a := q.1) (b := q.2) (by simpa using hq))⟩
+
+/-- `congrTuple_iff` at the database a `Pattern.values` atom extends with its operands.
+
+The `.values` case closes over `(d.addTerms ts).addTerms us` for the same reason `.expr`
+and `.eq` close over `addTerm`: an operand is an expression, so it may denote a term the
+program never built, and it belongs to no congruence class until it is added. -/
+theorem congrTuple_addTerms_iff {d : FDatabase} (hw : d.WF) {ts us xs ys : List Term} :
+    FDatabase.congrTuple ((d.addTerms ts).addTerms us).closureF xs ys = true ↔
+      CongList ((d.toDatabase.addTerms ts).addTerms us) xs ys := by
+  rw [congrTuple_iff ((hw.addTerms ts).addTerms us), toDatabase_addTerms, toDatabase_addTerms]
 
 end FDatabase
 theorem patternHolds_iff {d : FDatabase} (hw : d.WF) {p : Pattern} {σ : Env}
@@ -301,7 +314,7 @@ theorem patternHolds_iff {d : FDatabase} (hw : d.WF) {p : Pattern} {σ : Env}
           simp at ht'
       | some ts =>
         simp only [patternHolds, hu, ht, List.any_eq_true, Bool.and_eq_true,
-          decide_eq_true_eq, FDatabase.congrTuple_iff hw]
+          decide_eq_true_eq, FDatabase.congrTuple_addTerms_iff hw]
         constructor
         · rintro ⟨r, hr, ⟨hfn, hkey⟩, hval⟩
           subst hfn

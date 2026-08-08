@@ -124,7 +124,10 @@ have removed one — without the check a deleted row would be resurrected.
 
 Saturation becomes genuinely reachable rather than approximated: two rows at one key class
 become one, so the pair that fired is gone and the pass converges. -/
-/-- One `:merge` firing on a named pair of rows, if it applies.
+/-- One `:merge` firing on an *oriented* pair of rows, if it applies: `r₂` is the row
+already in the table and `r₁` the one arriving, so the body runs under
+`mergeEnv r₂.out r₁.out` — `old` from `r₂`, `new` from `r₁`, the opposite of the argument
+order. `mergeOneWith` is what decides the orientation; nothing else should call this.
 
 The signature is consulted *before* the congruence check, which is not cosmetic: the
 check computes `closureF`, and `mergeRound` calls this once per ordered pair of rows, so
@@ -132,25 +135,21 @@ testing the cheap condition first is what keeps a constructor-only database from
 a closure per pair. Same result either way — a `.union` or `.noMerge` function has no
 body to run.
 
-**Position in `rows` is insertion age, and `r₂` is the older row.** `addRow` prepends, so
-the earlier of two rows in `d.rows` is the more recently written one; `mergeRound`'s outer
-loop scans `d.rows` from the front, so the first firing of a key class has `r₁` before `r₂`
-and therefore `r₁` newer. egglog binds `old` to the value already in the table and `new` to
-the one being inserted, so the body runs under `mergeEnv r₂.out r₁.out` — the *opposite* of
-the argument order. Binding it the other way inverted every non-commutative merge: `:merge
-old` returned what `:merge new` should, and vice versa. The generated difftest cases could
-not see it, because `min` and `max` are commutative.
-
 **The combined row takes `r₂`'s key and `r₂`'s slot.** `r₁` is dropped and `r₂` is
-overwritten where it stands, rather than both being dropped and the result prepended. That
-is the same fact once more: in egglog a merge leaves the existing table entry in place, so
-the survivor stays exactly as old as the row it grew out of, and a third row colliding with
-it later is the *newer* one. Prepending instead made the survivor the youngest row of its
-class, which inverts the next collision — `(set (Dist X) 1) (set (Dist Y) 2)
-(set (Dist Z) 3) (union X Y) (union Y Z)` returns `3` under `:merge old` that way, where
-egglog returns `1`. Writing at `r₂`'s key rather than `r₁`'s also matches egglog's choice
-of surviving key, though `keyRowCount` cannot see that. -/
-def FDatabase.mergeOneWith (cl : Finset (Term × Term)) (d : FDatabase) (r₁ r₂ : Row) :
+overwritten where it stands, rather than both being dropped and the result prepended: in
+egglog a merge leaves the existing table entry in place, so the survivor inherits the
+resident row's key and its age, and a third row colliding with it later is the *newer*
+one. Prepending instead made the survivor the youngest row of its class, which inverts
+the next collision — `(set (Dist X) 1) (set (Dist Y) 2) (set (Dist Z) 3) (union X Y)
+(union Y Z)` returns `3` under `:merge old` that way, where egglog returns `1`.
+
+Writing at `r₂`'s key matches egglog's surviving key whenever `r₂` is the canonical-key
+row, which is what `mergeOneWith` arranges when either row is. When *neither* is — a
+third, older term in the class carries the canonical key and egglog re-inserts both rows
+under it — egglog's survivor sits at a key no row here has, and this writes at `r₂`'s
+instead. `Database.Out` reads a row from every congruent key, so nothing is lost until a
+row appears at that third key later, which is the residual `MERGE.md` records. -/
+def FDatabase.mergeOneOriented (cl : Finset (Term × Term)) (d : FDatabase) (r₁ r₂ : Row) :
     Option FDatabase :=
   match d.sig.mergeOf r₁.fn with
   | .merge body res =>
@@ -165,6 +164,102 @@ def FDatabase.mergeOneWith (cl : Finset (Term × Term)) (d : FDatabase) (r₁ r�
             env := d.env, rules := d.rules }
     else none
   | _ => none
+
+/-! ### Which colliding row is `old`
+
+egglog's table insert calls the merge function as `merge_fn(cur, row)` — `cur` the row
+already stored under that key, `row` the one arriving — and binds `old` to the first and
+`new` to the second (`egglog/core-relations/src/table/mod.rs`, `SortedWritesTable`'s
+`insert`). `old` is therefore not "the row written earlier"; it is **the row that is
+already there**, and the two coincide only when nothing moved.
+
+A rebuild moves rows. It re-canonicalizes every candidate row and stages a
+remove-and-re-insert for exactly those the canonicalization changed
+(`core-relations/src/table/rebuild.rs`), so the row whose key is *already* canonical is
+left alone and is the one the others are inserted onto — it is `cur`, hence `old`,
+however recently it was written. Canonical is least e-class id, because the union-find
+unions by min id (`egglog/union-find/src/lib.rs`, "union by min id"), and ids are handed
+out as terms are built, so the canonical member of a class is its **earliest-created**
+term. That is what `Term.subtermList`'s order records and what `canonTerm` reads back.
+
+Four shapes checked against the release binary, all with
+`(function Dist (Math) i64 :merge new)` and read back with `(print-function Dist)`:
+
+* `(set (Dist (K)) 3) (set (Dist (A)) 2) (union (A) (K))` keeps `2`, but the same three
+  commands after a bare `(A)` — which creates `A` first — keep `3`. Insertion age is
+  identical in the two; only which key is canonical changed, which is what rules the
+  insertion-age reading out. The union's argument order changes nothing.
+* `(P (K) (A))` before the two `set`s keeps `2`, and `(P (A) (K))` keeps `3`: the order
+  the *arguments of one term* are created in decides it too.
+* No union at all — `(set (Dist (K)) 3) (set (Dist (K)) 2)` — keeps `2`. No key moved,
+  so the resident row is simply the earlier write and age does decide, which is the case
+  the two readings agree on.
+* Two rows and no canonical key among them: `(Z)` first, then `(set (Dist (K)) 3)`,
+  `(set (Dist (A)) 2)` and both keys unioned into `(Z)`, keeps `2` under `:merge new` and
+  `3` under `:merge old`. Both keys moved, so egglog stages both in table order and the
+  earlier write is the one the other is merged onto — age, again, as the tie-break.
+
+**What this still does not model** is allocation order the term list cannot see. A term
+list position is fixed when the term is *first* added, which matches egglog for terms
+built by actions and by rule heads in the order the interpreter runs them, but a round
+that fires several rules is free to build terms in another order than egglog's; and
+`ordering-min`/`ordering-max` continue to use the structural `Term.blt`, since a `Prim`
+has no database to consult. `MERGE.md` records both. -/
+/-- Whether `t` is the canonical member of its congruence class — no congruent term was
+created before it — which is what makes egglog's rebuild leave a row keyed on `t` alone.
+
+`ts` is `FDatabase.terms`, which `addTerm` prepends to, so the terms *after* `t` in `ts`
+are exactly the ones created before it. A `t` the list does not hold counts as canonical,
+vacuously; `addRow` puts every key term in `terms`, so a row's key never is one. -/
+def FDatabase.canonTerm (cl : Finset (Term × Term)) (ts : List Term) (t : Term) : Bool :=
+  ((ts.dropWhile (· != t)).drop 1).all fun u => u == t || !(decide ((t, u) ∈ cl))
+
+/-- `canonTerm` on a key tuple: whether a row keyed here is the one egglog's rebuild
+leaves in place. A key is canonical exactly when each column is. -/
+def FDatabase.canonKey (cl : Finset (Term × Term)) (ts : List Term) (as : List Term) :
+    Bool :=
+  as.all (FDatabase.canonTerm cl ts)
+
+/-- Whether the *first* row of the pair is the one already in the table, so that
+`mergeOneWith` must hand `mergeOneOriented` the pair the other way round.
+
+Guarded by `mergeOneOriented`'s own firing condition, and that is load-bearing twice
+over. `mergeRound` asks this once per ordered pair of rows while `canonKey` scans
+`terms` per key column, so the scan has to be confined to pairs that actually collide.
+And a guard that is *weaker* than the firing condition would force `cl` where the firing
+never does — `congrKeys` compares tuple lengths first, so a pair of different arities
+never looks inside the closure — which is enough to put the whole congruence closure in
+front of the kernel and stall the `decide` proofs in `Proofs/Lattice.lean`.
+
+Equal keys need no scan either: they are canonical or not together, so age decides,
+which is the argument order already. -/
+def FDatabase.swapForCanon (cl : Finset (Term × Term)) (d : FDatabase) (r₁ r₂ : Row) :
+    Bool :=
+  match d.sig.mergeOf r₁.fn with
+  | .merge _ _ =>
+    r₁.args != r₂.args && r₁.fn == r₂.fn && congrKeys cl r₁.args r₂.args
+      && FDatabase.canonKey cl d.terms r₁.args && !FDatabase.canonKey cl d.terms r₂.args
+  | _ => false
+
+/-- One `:merge` firing on a named pair of rows, if it applies, with `old` and `new`
+bound the way egglog binds them.
+
+`mergeOneOriented` does the work on a pair whose second element is the row already in
+the table. This picks that pair. If exactly one of the two keys is canonical, its row is
+the resident one and so is `old`, whichever was written first. Otherwise — the keys are
+equal, or neither is canonical — the argument order decides, and `mergeRound` passes the
+older row second, which is egglog's tie-break: rows it re-inserts arrive in table order,
+so the oldest is the one the rest are merged onto.
+
+Both orders are `MergeStep.collide` premises, so either choice refines the spec
+(`Proofs/Merge.lean`, `mergeOneWith_mergeStep`); this is the one that agrees with the
+binary. Getting it wrong is invisible to a commutative merge, which is why the suite
+stayed green through two different wrong answers — first `old` and `new` swapped
+outright, then bound by insertion age. `DiffTest.lean`'s `canon-*` cases pin it. -/
+def FDatabase.mergeOneWith (cl : Finset (Term × Term)) (d : FDatabase) (r₁ r₂ : Row) :
+    Option FDatabase :=
+  if FDatabase.swapForCanon cl d r₁ r₂ then d.mergeOneOriented cl r₂ r₁
+  else d.mergeOneOriented cl r₁ r₂
 
 /-- `mergeOneWith` at `d`'s own closure. -/
 def FDatabase.mergeOne (d : FDatabase) (r₁ r₂ : Row) : Option FDatabase :=
@@ -183,6 +278,13 @@ pass began, fired once, left to right.
 **Not** saturation. Structurally terminating, so it needs neither fuel nor a termination
 witness, and sound because `RunStep` is `MergeClosure` with no `MergeSaturated`
 requirement — a prefix of the closure is still a reachable state.
+
+**Position in `rows` is insertion age, and the pair reaches `mergeOneWith` youngest
+first.** `addRow` prepends, so the earlier of two rows in `d.rows` is the more recently
+written one, and this scans from the front: the first firing of a key class has `r₁`
+before `r₂` and therefore `r₁` newer. That is the tie-break `mergeOneWith` falls back on
+when key canonicity does not decide, and it is the only thing the argument order means —
+egglog binds `old` by canonicity first, so `mergeOneWith` may hand the pair on swapped.
 
 Two ways this fires a strict subset of what `MergeStep` allows, both deliberate and both
 sound for the same reason.
@@ -273,14 +375,24 @@ the current one (`MERGE.md`, "What the widening and the composed interpreter fou
 
 The congruence closure is unchanged. `MCong.fd` fires only at a `.union` function, whose
 rows are exactly the constructor rows `closureF` already sees through `terms`, so
-`closureF` decides `MCong` too — `Proofs/Merge.lean`'s `closureF_ok`. -/
+`closureF` decides `MCong` too — `Proofs/Merge.lean`'s `closureF_ok`.
+
+**Every case closes over the database extended with the pattern's instance**, the row atom
+included. Its operands are expressions, so one may denote a term the program never built,
+and a term the database does not hold is in no congruence class: closing over `d` alone
+made `(Dist (G (A) (B)))` match nothing after `(union (A) (B))` where egglog — which
+flattens the fact to `G(a, b, x), Dist(x, o)` and finds the intermediate class by matching
+— matches the row written at `(G (B) (A))`. `DiffTest.lean`'s `read-unbuilt-key*` cases
+pin it, `read-unbuilt-key-nonode` from the other side: the extension hypothesizes a row for
+every subterm, and a hypothesized row is never enough on its own, since `Cong.congr` still
+wants both applications present. -/
 /-- `MValidSubst`, computed. `patternHolds` with `execExpr` in place of `Expr.eval`. -/
 def FDatabase.patternHoldsM (d : FDatabase) (p : Pattern) (σ : Env) : Bool :=
   match p with
   | .values vs f as =>
     match d.execExprList (d.env ++ σ) vs, d.execExprList (d.env ++ σ) as with
     | some us, some ts =>
-      let cl := d.closureF
+      let cl := ((d.addTerms ts).addTerms us).closureF
       d.rows.any fun r =>
         decide (r.fn = f) && congrKeys cl ts r.args && congrKeys cl us r.out
     | _, _ => false

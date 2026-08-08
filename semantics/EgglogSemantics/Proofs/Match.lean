@@ -170,6 +170,10 @@ theorem UnionAll.mem_dom_iff {σs : List Env} {σ : Env} (h : UnionAll σs σ) {
   · rintro ⟨σ', hσ', t, hb⟩
     exact ⟨t, h.mem_iff.mpr ⟨σ', hσ', hb⟩⟩
 
+/-- Every binding of `τ` is one `σ` also makes. The substitutions the enumerator restricts
+out of a query substitution all refine it, which is what makes them pairwise compatible. -/
+def Refines (τ σ : Env) : Prop := ∀ b ∈ τ, lookup b.1 σ = some b.2
+
 theorem Refines.nil {σ : Env} : Refines [] σ := by simp [Refines]
 
 theorem Refines.append {τ₁ τ₂ σ : Env} (h₁ : Refines τ₁ σ) (h₂ : Refines τ₂ σ) :

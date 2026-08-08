@@ -4,12 +4,9 @@ import EgglogSemantics.Spec.Match
 /-!
 # `:merge` functions
 
-M9. See `MERGE.md` for the design, what was rejected, and the open questions. Every
-claim below about egglog's behaviour is sourced there.
-
 The state gains a **row set**. A row `⟨f, args, out⟩` says the database records the
 value columns `out` for `f` at `args`. For a constructor there is one value column and
-it holds the application itself, so `Database` embeds by `Database.toM`.
+it holds the application itself.
 
 Three things follow, and the first is the milestone:
 
@@ -18,28 +15,23 @@ Three things follow, and the first is the milestone:
   rows — where `out = [.app f args]` — that *is* `Cong.congr`; at equal keys it is the
   functional dependency. There is no separate `congr` constructor.
   `Proofs/Merge.lean`'s `mcong_iff_cong` is the compatibility theorem.
-* **A `:merge` body is an action list.** It writes rows to other tables — the
-  union-find's merge `set`s the displaced parent edge — so `MergeStep` is a relation
-  on *databases*, not a function combining two values, and merge closure is a phase
-  of `RunStep` rather than a definition of "the value of a key".
-* **Reading is a query atom, never an evaluation.** egglog compiles the fact `(Dist k)`
-  to the atom `Dist(k, v)` with a fresh output variable, and forbids a lookup in a rule
-  head outright (`check_no_function_lookups_in_actions`). `Spec/Scope.lean`'s "Reading in
-  an action" adopts that as an invariant: the *only* read is `Pattern.values`, and every
-  expression the semantics evaluates names constructors and primitives alone. So
-  `Expr.MEval` is `Expr.eval` plus primitive resolution — deterministic, and a function of
-  the signature and the environment rather than of the database.
+* **A `:merge` body is an action list.** It writes rows to other tables, so `MergeStep`
+  is a relation on *databases*, not a function combining two values, and merge closure
+  is a phase of `RunStep` rather than a definition of "the value of a key".
+* **Reading is a query atom, never an evaluation.** The *only* read is `Pattern.values`;
+  every expression the semantics evaluates names constructors and primitives alone. So
+  `Expr.MEval` is `Expr.eval` plus primitive resolution — deterministic, and a function
+  of the signature and the environment rather than of the database.
 
 Nothing is ever removed, from any of `terms`, `rows` or `eqs`. Both colliding rows
-survive a merge, which is what keeps the state monotone; the encoding depends on the
-same property ("Nothing is ever removed from it, which lets proofs refer to terms after
-they leave the e-graph").
+survive a merge, which is what keeps the state monotone.
 
-The spec deliberately **over-approximates** egglog rather than matching it. A lookup
-reads any recorded output, not the current one; a round takes any number of merge
-steps, not all of them. The M11 safety theorem is an invariant over this relation, and
-an invariant needs neither termination nor confluence — see `MERGE.md`,
-"Why the reader over-approximates", and `Proofs/Merge.lean`'s `invariant_of_step`.
+The spec deliberately **over-approximates** egglog rather than matching it: a lookup
+reads any recorded output, not the current one, and a round takes any number of merge
+steps, not all of them.
+
+`MERGE.md` is the design record — what egglog does, what was rejected, and the open
+questions. Every claim here about egglog's behaviour is sourced there.
 -/
 
 namespace Egglog
@@ -64,11 +56,7 @@ that already exist, so it is the only one a *relation* can express. The rest are
 `MergeStep`.
 
 The rule is per *column* — `⟨x, y⟩ ∈ a.zip b` — so a multi-column `.union` function
-equates its outputs positionally. Nothing in the encoding needs that: a `.union`
-function is a source-program constructor, which has one value column, and the encoded
-program has **no** `.union` function at all. `@AddView` resolves congruence through its
-merge *body* (`set (@UF_Math …)`) and the `@UF` table, not through `fd`. So in the
-target, congruence is entirely simulated — see `MERGE.md`, "Multi-column outputs". -/
+equates its outputs positionally. See `MERGE.md`, "Multi-column outputs". -/
 inductive MCong (db : Database) : Term → Term → Prop where
   | assert {a b : Term} : (a, b) ∈ db.eqs → MCong db a b
   | refl {a : Term} : a ∈ db.terms → MCong db a a
@@ -88,103 +76,36 @@ inductive MCongList (db : Database) : List Term → List Term → Prop where
 
 end
 
-namespace MCong
-variable {db : Database}
-
-/-- `MCong db` is an equivalence on `db.terms`, as `Cong.setoid`. Its quotient is the
-e-class set, and the bridge to M11: an e-class here is an `@UF` leader there. -/
-def setoid (db : Database) : Setoid {t : Term // t ∈ db.terms} where
-  r a b := MCong db a.val b.val
-  iseqv := ⟨fun a => .refl a.property, .symm, .trans⟩
-
-end MCong
 /-! ### Reading a table
 
 Keys are compared up to congruence, so a lookup searches the key's class rather than
-the row set. `Out` is the relation a lookup reads; `Current` is the single value it has
-when the merge is a join, used only where a result must match egglog exactly. -/
+the row set. -/
 namespace Database
 /-- `vs` are outputs `db` records for `f` at the class of the key `as`.
 
-Quantifying over congruent keys here rather than re-keying rows is what lets
-`MergeStep` write the combined row at one key only and still be seen from the other,
-and it is why the row set never needs the re-canonicalization egglog's rebuild does.
-Monotone in `Contained`, because `MCongList` is.
+Quantifying over congruent keys rather than re-keying rows is what lets `MergeStep`
+write the combined row at one key only and still be seen from the other, so the row set
+never needs re-canonicalization. Monotone in `Contained`, because `MCongList` is.
 
 A key class may record several outputs, which is why this is a relation and not a
 function. Nothing *evaluates* through it — `Expr.MEval` does not read — so the
 over-approximation is confined to the query, where `MValidSubst.values` matches any
-recorded row. `MERGE.md`, "Why the reader over-approximates", is the argument that this
-is the right trade. -/
+recorded row. See `MERGE.md`, "Why the reader over-approximates". -/
 def Out (db : Database) (f : FnName) (as : List Term) (vs : List Term) : Prop :=
   ∃ bs, MCongList db as bs ∧ Row.mk f bs vs ∈ db.rows
-
-/-- The value a *join* merge settles on at the class of `as`: the `le`-greatest
-recorded output.
-
-**Not** what a query read matches — that is `Out`, any recorded output, and `MERGE.md`'s
-"Why the reader over-approximates" says why. `Current` exists only when `f`'s merge is a join
-for `le`: under `:merge old` every recorded output absorbs and it is not unique, and
-under `:merge new` none does and it does not exist. Both are common, and egglog
-settles them by insertion order, which a `Set Row` cannot express.
-
-It is here for the two places that need to match egglog's answer rather than
-over-approximate it: differential testing, and M11's simulation theorem.
-
-This is also `PLAN.md`'s "merge-fold over all congruent asserted rows", restated as a
-maximum. A fold over a set is well defined only once the merge is proved commutative
-*and* associative; a greatest element is unique from antisymmetry alone
-(`current_unique`), and for a `SemilatticeSup` merge it is what the fold computes.
-`le` is a parameter rather than an instance because the order is per function — one
-`Term` type carries every sort — and it orders whole rows, since a multi-column merge
-can settle its columns jointly. -/
-def Current (db : Database) (le : List Term → List Term → Prop) (f : FnName)
-    (as : List Term) (vs : List Term) : Prop :=
-  db.Out f as vs ∧ ∀ ws, db.Out f as ws → le ws vs
 
 end Database
 /-! ### The term order
 
-Two jobs, deliberately one definition.
+One definition with two jobs. `ordering-min`/`ordering-max` are part of the *program*
+the encoding writes — the union-find's merge body is literally
+`(set (@UF_<S> (ordering-max old new)) (values (ordering-min old new) ()))` — and they
+are also what makes an interpreter's choice of which collision to fire deterministic.
 
-**A spec primitive.** `ordering-min`/`ordering-max` are part of the *program* the
-encoding writes, not an implementation detail: the union-find's merge body is literally
-`(set (@UF_<S> (ordering-max old new)) (values (ordering-min old new) ()))`. M11 cannot
-state `encode` without them.
-
-**An implementation tie-break.** `MergeStep` is non-deterministic in which collision
-fires; an interpreter has to pick one, and ordering the candidates by this makes the
-choice deterministic. It is also where a termination witness comes from, since a merge
-that keeps the smaller side descends.
-
-**An accepted deviation, not a bug.** `Term.blt` is a deterministic *structural* order:
-literals, then arity, then name, then lex. egglog's `ordering-min`/`ordering-max` compare
-the `Value` word a term is stored as (`egglog/src/lib.rs`, `"ordering-min" = |a, b| if a
-< b { a } else { b }`), and that word is an **allocation order** — a `u32` id handed out
-as ids are created within a session. The two therefore pick different class
-*representatives*, deliberately: this model does not model allocation order, and would
-have to thread a session-wide counter through `Database` to do so.
-
-The old claim here — "invisible to `(print-size)`, so differential testing is unaffected"
-— is **false**, and stays false only under two side conditions: while a merge function is
-never *read*, and while its representative is never used as a *key*. Both happen in
-ordinary egglog and in the proof encoding, whose union-find keys `@UF_<Sort>` on
-`(ordering-max old0 new0)`. Two repros, both checked against the binary:
-
-* `(function UF (Math) Math :merge (ordering-min old new))`, `(set (UF (A)) (Y))` then
-  `(set (UF (B)) (X))`, then `(union (A) (B))`, with rules reading `(UF k)` for `(X)` and
-  for `(Y)`. egglog keeps `Y`, the one created first (`(HitX 0) (HitY 1)`); this model
-  keeps `X`, because `"X" < "Y"` structurally. Writing `X` first makes egglog keep `X`
-  too, so egglog's choice is order-driven where this one is name-driven.
-* `(function D (Math) i64 :merge (ordering-min old new))`, `(set (D (A)) -1)`,
-  `(set (D (A)) 1)`. egglog settles on `1`, this model on `-1`: an `i64` in `[0, 2³¹)` is
-  stored unboxed as itself while every other one is interned and stored as `2³¹ + index`,
-  `index` in order of first interning, so `-1` sorts *above* `1`.
-
-Consequence to carry forward: this is a hypothesis of any future simulation theorem
-against real egglog, not something a proof may wave away. `PLAN.md`'s "Which primitives,
-and why" earmarks `ordering-min`/`ordering-max` for retirement with M11-min, which is
-what would remove the deviation rather than repair it. -/
+`Term.blt` is a *structural* order where egglog's is an allocation order, so the two pick
+different class representatives. That is an accepted deviation and a hypothesis of any
+future simulation theorem; `MERGE.md`, "The representative deviation", has the argument
+and two repros against the binary. -/
 mutual
 
 /-- A total order on terms: literals below applications, then by argument count, then
@@ -226,17 +147,8 @@ inductive Prim where
   | intMax
   deriving DecidableEq, Repr
 
-/-- The reserved names. A user function of the same name is shadowed, as in egglog.
-
-`min` and `max` are here for a reason worth recording: without them a `:merge (min old
-new)` body — the shape every `:merge` function in the differential test uses, and the
-shape `tests/interval.egg` and `tests/merge-during-rebuild.egg` use — built the *term*
-`min(5, 3)` instead of computing `3`. Three things followed, and all three were observed
-before the primitives were added. Merging was non-idempotent as a term, so no state was
-ever `MergeSaturated` and `Impl/Merge.lean`'s `mergeSaturateF` could not be used. Each
-merge pass wrote a genuinely new value at every colliding key, so the row set squared per
-pass and 12 of 30 generated merge cases timed out. And a rule reading a merged value got
-a term where egglog has a number. -/
+/-- The reserved names. A user function of the same name is shadowed, as in egglog. See
+`MERGE.md`, "Primitives without churning `Expr`", for why `min`/`max` are among them. -/
 def Prim.ofName : FnName → Option Prim
   | "ordering-min" => some .orderingMin
   | "ordering-max" => some .orderingMax
@@ -256,12 +168,10 @@ def Prim.apply : Prim → List Term → Option Term
 
 /-! `Prim.ofName` resolves a *reserved name*, so whether an application builds a term or
 runs a primitive is a property of the name and not of the syntax. `NoPrim` is that
-property, quantified over the names an expression actually mentions.
-
-It is what `Proofs/Merge.lean`'s bridge between the two evaluators needs: `Expr.eval`
-(M0–M8) builds an application for every name, so it agrees with `Expr.MEval` only on
-expressions naming no primitive. The unrestricted form `∀ f, Prim.ofName f = none` is
-*false* — `ordering-min` is one — which is why the quantifier has to be over `e`. -/
+property, quantified over the names an expression actually mentions — the unrestricted
+form `∀ f, Prim.ofName f = none` is *false*, `ordering-min` being one, which is why the
+quantifier has to be over `e`. It is the condition under which `Expr.eval` and
+`Expr.MEval` agree. -/
 mutual
 
 /-- No reserved primitive name occurs in `e`, so "build an application" is the right
@@ -324,14 +234,13 @@ def Program.NoPrim (p : Program) : Prop := ∀ c ∈ p, c.NoPrim
 
 `Expr.eval` is a function of the environment alone, which is exactly right while every
 function is a constructor: a term is its own identity, so building one reads nothing.
-`Expr.MEval` adds the one thing M9 forces, which is not reading but **primitives** — a
-`:merge (min old new)` body has to compute `3` rather than build the term `min(5, 3)`.
+`Expr.MEval` adds the one thing `:merge` forces, which is not reading but **primitives**
+— a `:merge (min old new)` body has to compute `3` rather than build the term
+`min(5, 3)`.
 
-It does *not* read the database, and that is the invariant `Spec/Scope.lean`'s "Reading in
-an action" installs: an application of a non-constructor is a lookup, and a lookup is a
-query atom (`Pattern.values`), never an expression. So there is no `lookup` constructor
-here, `MEval` is deterministic, and it consults `db` only for `db.sig` — which is what a
-`.union` test needs to tell "build" from "the program is rejected". -/
+It does *not* read the database. An application of a non-constructor is a lookup, and a
+lookup is a query atom (`Pattern.values`), never an expression, so there is no `lookup`
+constructor here, `MEval` is deterministic, and it consults `db` only for `db.sig`. -/
 mutual
 
 /-- The value an expression denotes: `Expr.eval` with primitives resolved.
@@ -341,10 +250,10 @@ table is consulted first. A `Term` therefore contains only constructor applicati
 is what lets `Term.ctorRows` need no signature.
 
 There is deliberately **no rule for a non-constructor application**. That is a lookup, and
-`Spec/Scope.lean` rejects one statically in every position this relation is used from —
-a rule head, a top-level action, a `:merge` body, and a query's operands — so a program
-the model accepts never reaches the missing case. Reading happens in the query, where
-`MValidSubst.values` matches a row directly.
+`Impl/Check.lean`'s `noLookup` rejects one statically in every position this relation is
+used from — a rule head, a top-level action, a `:merge` body, and a query's operands — so
+a program the model accepts never reaches the missing case. Reading happens in the query,
+where `MValidSubst.values` matches a row directly.
 
 Partiality that was `none` in `Expr.eval` is "no `t` related": an unbound variable, or a
 primitive at the wrong operands. `Scope.lean`'s "a well-scoped program never gets stuck"
@@ -372,8 +281,7 @@ end
 /-- One row action.
 
 The three inherited cases are `evalAction`'s, read relationally. `set` is the new one,
-and it only ever adds. egglog restricts a `:merge` body to exactly `let`, `set` and
-`union` (`MergeLegal`); a rule head has these plus `expr` and more. -/
+and it only ever adds. -/
 inductive Database.ActionStep : Database → Action → Database → Prop where
   | expr {db : Database} {e : Expr} {t : Term} :
       Expr.MEval db db.env e t → Database.ActionStep db (.expr e) (db.addTerm t)
@@ -395,25 +303,13 @@ inductive Database.ActionsStep : Database → List Action → Database → Prop 
       Database.ActionStep db a d → Database.ActionsStep d as d' →
       Database.ActionsStep db (a :: as) d'
 
-/-- The actions egglog admits inside a `:merge` body: `let`, `set` and `union` only.
-Anything else is rejected at lowering. -/
-def Action.MergeLegal : Action → Prop
-  | .expr _ => False
-  | .letBind _ _ => True
-  | .union _ _ => True
-  | .set _ _ _ => True
-
 /-! ### The merge step -/
-/-- The environment a `:merge` body runs in.
+/-- The environment a `:merge` body runs in: the two colliding rows' outputs, named
+`old<i>`/`new<i>` per value column, and nothing else.
 
-A merge body sees nothing but the two colliding rows' outputs and its own `let`s —
-globals are desugared to nullary functions before it, so they are lookups rather than
-environment reads.
-
-egglog names these `old`/`new` for a single-output function and `old0`/`new0`/`old1`/…
-per value column for a tuple output. *Every* column is bound, not just the one being
-computed: `MergeFn::OldCol`/`NewCol` exist precisely because "a column's merge may
-reference any output column of the old row". -/
+*Every* column is bound, not just the one being computed, because a column's merge may
+reference any output column of the old row. A body's own `let`s extend this; globals
+desugar to nullary functions, so they are lookups rather than environment reads. -/
 def mergeEnvIdx : Nat → List Term → List Term → Env
   | _, [], _ => []
   | _, _, [] => []
@@ -429,55 +325,23 @@ def mergeEnv : List Term → List Term → Env
 running `f`'s body.
 
 A relation on *databases*, because the body is an action list: it writes rows of its
-own, which is the whole content of the union-find's `:merge`. A value combiner
-`Term → Term → Term` could not express it.
+own, which a value combiner `Term → Term → Term` could not express.
 
-Nothing is removed — `db` is `Contained` in the result. The two colliding rows are
-still there afterwards, which keeps every monotonicity lemma alive and leaves the old
-rows' proofs available for the `@MergeRow` that names them.
-
-**There is no `a ≠ b` guard, deliberately.** `MCongList` is reflexive, so a row
-collides with *itself*. An earlier draft excluded that, reasoning that egglog merges a
-retained row against an incoming staged one and so never self-merges. But excluding it
-is an **under**-approximation, and that is the unsafe direction: it lets egglog reach
-states the model never checks, so a safety invariant proved here would not transfer.
-Without the guard the model covers egglog either way — where egglog has
-`:internal-identity-vals` on it skips a re-`set` of an equal value and we fire anyway;
-where the flag is off egglog fires on the re-`set` and we fire spontaneously. The
-safety theorem consequently needs **no** scope condition on the signature: no
-`merge (x, x) = x`, no identity-guardedness.
-
-Two consequences, both intended:
-
-* For an idempotent merge nothing diverges, only finitely many *vacuous* rows appear.
-  The union-find's body on a self-collision is
-  `(set (@UF_<S> (ordering-max p p)) (values (ordering-min p p) ()))` — a reflexive
-  self-edge, from which `MCong` derives only `p = p`, already true by `refl`. In proof
-  mode it writes extra proofs of `p = p`, which are *valid*, so the invariant is
-  untouched. They are not even observable: egglog's `print-size` filters
-  `internal_hidden || internal_let` and reports a view under its `term_constructor`
-  name, which is why `files.rs` shares one snapshot between normal and term-encoded
-  runs, so `@UF_*` and `@*View` never appear in a diff.
-* For `:merge (+ old new)` the model **diverges**: the self-collision derives `2v`,
-  `3v`, … forever, where egglog with a single `set` merges nothing. That is the
-  intended reading and not a defect. Such a program's egglog result is
-  insertion-order-dependent, so there is no fixpoint for a semantics to denote, and
-  diverging is more honest than inventing an answer. Same reading as the
-  order-dependence below.
-
-This works only because `MergeSaturated` was corrected to "no step *changes* anything";
-the two changes are coupled, and the note there says why.
-
-The combined row is written at the key `as` only; `Out` reads it from `bs` too.
-
-The two rows are premises in both orders, so a non-commutative merge relates `db` to
-two different results. That is deliberate: it is the relational reading of what egglog
-calls user-visible undefined behaviour for a non-monotone merge.
-
-**The body runs once, before any column is computed** — `ActionsStep` produces `d`
-and every column of `res` is then evaluated in `d`. That is egglog's order, not a
-choice: "Run the block's side effects once, before computing the merged values"
-(`egglog-bridge/src/lib.rs:1433`). `res` is one expression per value column. -/
+* Nothing is removed — `db` is `Contained` in the result, and both colliding rows
+  survive, which keeps every monotonicity lemma alive.
+* **There is no `a ≠ b` guard, deliberately.** `MCongList` is reflexive, so a row
+  collides with *itself*. That over-approximates egglog in the safe direction, and it is
+  why the safety theorem needs **no** scope condition on the signature — no
+  `merge (x, x) = x`, no identity-guardedness. It works only because `MergeSaturated` is
+  the "no step *changes* anything" form; the two are coupled. `MERGE.md`, "No guard on
+  the collision", has the argument and its two intended consequences.
+* The combined row is written at the key `as` only; `Out` reads it from `bs` too.
+* The two rows are premises in both orders, so a non-commutative merge relates `db` to
+  two different results — the relational reading of what egglog calls user-visible
+  undefined behaviour for a non-monotone merge.
+* **The body runs once, before any column is computed**: `ActionsStep` produces `d` and
+  every column of `res` is then evaluated in `d`, which is egglog's order. `res` is one
+  expression per value column. -/
 inductive MergeStep : Database → Database → Prop where
   | collide {db d : Database} {f : FnName} {as bs a b vs : List Term}
       {body : List Action} {res : List Expr} :
@@ -498,38 +362,21 @@ def MergeClosure : Database → Database → Prop := Relation.ReflTransGen Merge
 
 /-- No merge collision *changes* anything. egglog's `merge_all` runs to exactly this.
 
-Stated as "every step is the identity" and not as "no step applies". The latter is
-**unsatisfiable** here, for two independent reasons: nothing removes rows, so two
-colliding rows are still present after the step and `MergeStep` applies again forever;
-and with the `a ≠ b` guard gone every row collides with itself, so a step always
-applies. That is why `RunStep` does not require saturation — see `MERGE.md`,
-"Saturation is a hypothesis, not a step".
-
-This form is what makes dropping the guard workable, so the two are coupled. An
-`ordering-min` self-collision re-derives a row already present, so `db' = db` and
-saturation still holds; a `+` self-collision derives a genuinely new row every time and
-correctly never saturates. -/
+Stated as "every step is the identity" and not as "no step applies", which is
+**unsatisfiable** here: nothing removes rows, and with no guard on the collision every
+row collides with itself, so a step always applies. This form is what makes dropping the
+guard workable, so the two are coupled — see `MERGE.md`, "Saturation is a hypothesis,
+not a step". -/
 def MergeSaturated (db : Database) : Prop := ∀ db', MergeStep db db' → db' = db
 
 /-- `:no-merge` is respected: no two rows of a `.noMerge` function collide on
 congruent keys with different outputs.
 
-egglog raises `PanicError` when this fails and keeps the old row, so it is a side
-condition rather than a step. Nothing in the semantics consumes it; having it stated
-is what stops `.noMerge` silently meaning "keep the old value".
-
-**Nothing consuming it is deliberate, and the divergence is out of scope.** A `:no-merge`
-collision is a *program error* that egglog rejects at runtime, and this model does not
-model runtime rejection — there is no error state for a step to enter, and adding one to
-cover a case the encoding never produces is not what the model is for. So `NoMergeOk`
-states the condition without enforcing it, and `Impl/Merge.lean` does not check it either.
-Confirmed against the binary: `(function Dist (Math) i64 :no-merge)`, `(set (Dist (A)) 1)`,
-`(set (Dist (B)) 2)`, `(union (A) (B))` makes egglog abort with
-`[ERROR] Panic: Illegal merge attempted for function Dist`, where this model silently keeps
-both rows. With *equal* values the two agree, so it is exactly the conflicting-value case
-that is scoped out. `MergeSpec.noMerge` itself stays — the proof encoding declares its
-proof nodes with it (`Spec/Encode.lean`'s `termDecl`, and `Impl/Merge.lean`'s merge phase
-on why a `.noMerge` row must never be deleted). -/
+A side condition rather than a step, and **nothing consumes it** — deliberately. A
+`:no-merge` collision is a program error egglog rejects at runtime, and this model has no
+error state for a step to enter, so the condition is stated without being enforced.
+Having it stated is what stops `.noMerge` silently meaning "keep the old value". See
+`MERGE.md`, "`:no-merge` collisions, out of scope". -/
 def Database.NoMergeOk (db : Database) : Prop :=
   ∀ f as bs (a b : List Term), Row.mk f as a ∈ db.rows → Row.mk f bs b ∈ db.rows →
     MCongList db as bs → db.sig.mergeOf f = MergeSpec.noMerge → a = b
@@ -554,20 +401,19 @@ inductive MValidSubst (db : Database) : Pattern → Env → Prop where
   /-- The row atom: `f`'s row at a key class congruent to `as`, with value columns
   congruent to `vs`. **This is the only read in the semantics.**
 
-  It is egglog's lowered query atom `f(a…, v…)`, which is what every fact mentioning a
-  non-constructor compiles to — `(Dist k)` with a fresh output variable, `(= v (Dist k))`
-  with `v`, `(= (values v…) (f k…))` for a tuple output. `Tests/Egg.lean` renders the
-  one-column and many-column surface forms back, since egglog recognizes `values` only
-  when the function really has several value columns.
-
   Its key premise is `Database.Out`'s and its value premise is the same comparison applied
-  to the value columns. There is no `w ∈ db.terms` witness and no `addTerm`: the row
-  itself is the witness that forbids matching something the database does not hold. -/
+  to the value columns, both read in the database **extended with the operands**, as the
+  `expr` and `eq` cases read theirs. `ValidSubst.values` says what that extension buys and
+  why it is conservative rather than permissive.
+
+  There is no `w ∈ db.terms` witness: the row itself is what forbids matching something
+  the database does not hold. -/
   | values {vs : List Expr} {f : FnName} {as : List Expr} {σ : Env}
       {us ts ws bs : List Term} :
       ValidEnv (Expr.freeVarsList vs db.env ∪ Expr.freeVarsList as db.env) db σ →
       Expr.MEvalList db (db.env ++ σ) vs us → Expr.MEvalList db (db.env ++ σ) as ts →
-      MCongList db ts bs → MCongList db us ws → Row.mk f bs ws ∈ db.rows →
+      MCongList ((db.addTerms ts).addTerms us) ts bs →
+      MCongList ((db.addTerms ts).addTerms us) us ws → Row.mk f bs ws ∈ db.rows →
       MValidSubst db (.values vs f as) σ
 
 /-- `ValidQuerySubst`, over `MValidSubst`. -/
@@ -591,32 +437,18 @@ Merges are **deferred**, which this records: rule heads stage rows and the merge
 runs once every rule has been searched, so no rule sees another's merged value within a
 round.
 
-egglog additionally runs the merge phase *to a fixpoint*, and `RunStep` deliberately
-does **not**. Requiring `MergeSaturated db'` would make the step relation empty for
-every program with a real merge collision, and — more importantly — nothing that
-matters needs it. The M11 safety theorem is an *invariant* over this relation
-(`invariant_of_step`): it holds at every reachable state, so it needs neither
-termination nor confluence, and a diverging run satisfies it throughout. Saturation is
-a hypothesis for the theorems that do need it, namely simulation and matching egglog's
-row counts.
-
-So this relation over-approximates: it reaches every state egglog reaches, plus
-partially merged ones. `MERGE.md`, "Why the reader over-approximates", says why that is the
-right trade. -/
+The phase is not required to *saturate*, so this relation reaches every state egglog
+reaches plus partially merged ones. Saturation is instead a hypothesis of the theorems
+that need it — simulation, and matching egglog's row counts. `MERGE.md`, "Saturation is
+a hypothesis, not a step". -/
 def RunStep (db db' : Database) : Prop := MergeClosure (RunRules db) db'
 
 /-- `stepCmd`, relationally.
 
-`action` resolves collisions before the next command, which is what egglog does: a bare
-top-level action is compiled into a one-rule run (`egglog/src/lib.rs`, `eval_actions`), and
-every rule-set run ends in `merge_all`. So
-
-```
-(function f () i64 :merge (max old new))  (set (f) 1)  (set (f) 2)
-```
-
-leaves one row holding `2` with no `(run)` anywhere. Without the `MergeClosure` leg this
-relation could not reach that state, and `execM_contained` was false against it. -/
+`action` resolves collisions before the next command: a top-level `set` is its own merge
+phase, so `(set (f) 1) (set (f) 2)` on a `:merge (max old new)` function leaves one row
+holding `2` with no `(run)` anywhere. See `MERGE.md`, "The merge phase runs between
+commands". -/
 inductive CmdStep : Database → Cmd → Database → Prop where
   | action {db d db' : Database} {a : Action} :
       Database.ActionStep db a d → MergeClosure d db' → CmdStep db (.action a) db'

@@ -56,20 +56,14 @@ inductive Pattern where
   /-- `f(a…, v…)`: read a row of `f` and bind its value columns. **The only read in the
   language.**
 
-  This is egglog's lowered query atom. Every fact naming a non-constructor compiles to
-  one: `(f a…)` appending a fresh output variable, `(= v (f a…))` binding `v`, and the
-  tuple destructure `(= (values v…) (f a…))` binding all of them
-  (`match_tuple_destructure`, `egglog/src/ast/mod.rs`, which recognizes the shape inside an
-  ordinary `=` fact in either argument order). The tuple form is the *only* way egglog
-  offers to reach a value column other than the first, since a tuple-output function
-  cannot be evaluated as an expression (`eval_resolved_expr` panics on `values`) or
-  extracted (`CannotExtractTupleOutput`).
+  This is egglog's lowered query atom, which every fact naming a non-constructor compiles
+  to. Its three surface forms — `(f a…)`, `(= v (f a…))` and the tuple destructure
+  `(= (values v…) (f a…))` — are one case here because they are one atom there;
+  `Tests/Egg.lean` renders whichever fits the width.
 
-  The three surface forms are one case here because they are one atom there;
-  `Tests/Egg.lean` renders whichever fits the width. It is a `Pattern` case rather than a
-  reserved `values` name inside `.eq` for the reason that keeps primitives out of `Expr`
-  (`MERGE.md`): a name that is a term constructor in one position and a keyword in another
-  is a trap. -/
+  A `Pattern` case rather than a reserved `values` name inside `.eq`, for the reason that
+  keeps primitives out of `Expr` (`MERGE.md`, "Multi-column outputs"): a name that is a
+  term constructor in one position and a keyword in another is a trap. -/
   | values : List Expr → FnName → List Expr → Pattern
 
 /-- A rule's query, matched conjunctively. -/
@@ -88,10 +82,7 @@ inductive Action where
 
   The outputs are a **list**, one per value column, where the surface syntax writes a
   single expression for a one-column function and `(values e₀ e₁ …)` for a tuple-output
-  one. That is the same deviation `MergeSpec.merge`'s result already records, and it
-  follows egglog's *core* action, which is likewise per column
-  (`GenericCoreAction::Set(f, args, values)`). `Tests/Egg.lean` renders both surface
-  forms back. -/
+  one — the same deviation `MergeSpec.merge`'s result records. -/
   | set : FnName → List Expr → List Expr → Action
 
 /-- A rule. Its actions run once per substitution satisfying its query. -/
@@ -101,18 +92,14 @@ structure Rule where
 
 /-- How two rows colliding on one key combine.
 
-`union` makes the collision an equality, which is exactly congruence — see
-`proof_encoding.md`, "the view's `:merge` resolves congruence directly", and
-`Cong.fd`, the one constructor that covers both. `merge body result` runs `body`
-once, with the two rows' outputs bound by `mergeEnv`, and then evaluates `result` —
-**one expression per value column**; `noMerge` forbids a collision outright.
+`union` makes the collision an equality, which is exactly congruence — `MCong.fd` is the
+one constructor that covers both. `merge body result` runs `body` once, with the two
+rows' outputs bound by `mergeEnv`, and then evaluates `result` — **one expression per
+value column**, where the surface syntax writes one tuple-valued `(values e₀ e₁ …)`.
+`noMerge` forbids a collision outright.
 
-`result` is a `List Expr` where the surface syntax writes one tuple-valued expression
-`(values e₀ e₁ …)`. That follows the backend, which is already per-column
-(`egglog-bridge/src/lib.rs:1405`, "merge for {f} must have one entry per value
-column"), and avoids a tuple constructor in `Term`. See `MERGE.md`, "Multi-column
-outputs", for that and for the one place this is coarser than egglog: a merge kind is
-per *function* here and per *column* there. -/
+See `MERGE.md`, "Multi-column outputs", for the per-column result and for the one place
+this is coarser than egglog: a merge kind is per *function* here and per *column* there. -/
 inductive MergeSpec where
   | union
   | merge : List Action → List Expr → MergeSpec

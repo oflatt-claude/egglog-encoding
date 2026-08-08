@@ -2,6 +2,10 @@ import EgglogSemantics.Spec.Scope
 import EgglogSemantics.Proofs.Step
 
 namespace Egglog
+/-- The scope describes the environment's domain exactly. This is the induction invariant
+`runProgram_isSome` carries across a run. -/
+def Scope.Models (Γ : Scope) (σ : Env) : Prop := ∀ v, v ∈ Γ ↔ v ∈ Env.dom σ
+
 theorem Scope.Models.empty : Scope.Models [] ([] : Env) := by simp [Models]
 
 /-! ### Scoped expressions evaluate -/

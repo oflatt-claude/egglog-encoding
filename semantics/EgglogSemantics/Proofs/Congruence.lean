@@ -144,5 +144,11 @@ theorem mem_right {a b : Term} (hw : db.WF) (hc : Cong db a b) : b ∈ db.terms 
 theorem not_of_empty {a b : Term} (hc : Cong Database.empty a b) : False :=
   (hc.mem_left Database.WF.empty).elim
 
+/-- `Cong db` is an equivalence on the subtype of `db.terms`. This is the e-graph viewed
+as a set of e-classes: the `Quotient` of this setoid is `db`'s e-classes. -/
+def setoid (db : Database) : Setoid {t : Term // t ∈ db.terms} where
+  r a b := Cong db a.val b.val
+  iseqv := ⟨fun a => .refl a.property, .symm, .trans⟩
+
 end Cong
 end Egglog

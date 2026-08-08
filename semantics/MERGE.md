@@ -21,7 +21,7 @@ refinement chain ending in `execM_contained`, and `execM_reachable` are proved.
 written, or a hypothesis that is self-contradictory or too weak — at the point where they are
 stated, with compiling witnesses in `Proofs/Counterexamples.lean` and `Proofs/Lattice.lean`. Five
 further statements needed repair and got it; `Proofs/Merge.lean`'s header lists four and
-`execM_reachable` is the fifth. `make lean-difftest` is **130 passed / 0 failed / 0 skipped**, 22
+`execM_reachable` is the fifth. `make lean-difftest` is **155 passed / 0 failed / 0 skipped**, 55
 of those curated `:merge` cases.
 
 ## The framing: invariants over a step relation
@@ -171,8 +171,9 @@ the encoding's rules write `(set (@AddView b a) (values rewrite_var ()))`, so `e
 language needs `set` in rule heads. Cost as estimated, ~24 match sites across 10 files; not
 anticipated was that it drags the state with it, since `evalAction`'s `set` case has nowhere to put
 a row unless `Database` has one. egglog restricts a `:merge` body to `let, set, union` while a rule
-head also has `panic`, `delete`, `subsume`, `extract` and bare expressions; `Action.MergeLegal`
-records that rather than a second type.
+head also has `panic`, `delete`, `subsume`, `extract` and bare expressions. That difference is
+recorded here rather than as a second type or a predicate — nothing in the model consumed the
+predicate, since `MergeSpec.merge` already carries whatever body the declaration was given.
 
 ## Constraint (2): reading a table
 
@@ -238,6 +239,15 @@ developments do not mix, a latent trap the day the function evaluator goes away,
 `execM_reachable` carries `Program.NoPrim`: the two evaluators agree only on an expression naming
 no reserved name.
 
+**Why `min`/`max` are in `Prim.ofName` too**, recorded because all three symptoms were observed
+before they were added. `:merge (min old new)` is the shape every `:merge` function in the
+differential test uses, and the shape of `tests/interval.egg` and `tests/merge-during-rebuild.egg`.
+Without the primitives it built the *term* `min(5, 3)` instead of computing `3`, and so: merging
+was non-idempotent as a term, so no state was ever `MergeSaturated` and `Impl/Merge.lean`'s
+`mergeSaturateF` could not be used; each merge pass wrote a genuinely new value at every colliding
+key, so the row set squared per pass and 12 of 30 generated merge cases timed out; and a rule
+reading a merged value got a term where egglog has a number.
+
 ## The term order
 
 One definition, two deliberately distinct jobs. **(a) A spec primitive**:
@@ -253,9 +263,14 @@ makes the interpreter's choice deterministic. **The spec stays non-deterministic
 
 ### The representative deviation
 
-**This model keeps a deterministic structural order and does not model egglog's allocation order.
+**`Term.blt` keeps a deterministic structural order and does not model egglog's allocation order.
 That is a decision, not a defect, and the claim that used to sit here — "invisible to
 `(print-size)`, so differential testing is unaffected" — is false.**
+
+Scope, since it narrowed: this is about `ordering-min`/`ordering-max`, and *not* about which of two
+colliding rows is `old`. That one is allocation order too, and `Impl/` does model it, by reading
+`FDatabase.terms`' order — see "`old` is the row at the canonical key". The same repair is not
+available here, because `Prim.apply` is `List Term → Option Term` and has no database to read.
 
 egglog's `ordering-min`/`ordering-max` compare the `Value` word a term is stored as
 (`egglog/src/lib.rs`, `add_primitive!(&mut eg, "ordering-min" = |a: #, b: #| -> # { if a < b { a }
@@ -483,7 +498,7 @@ constructor": the proof encoding declares its proof nodes with `:no-merge` (`Enc
   has no e-class and cannot be unioned — and with one untyped `Term` nothing else prevents it being
   written as a term.
 * The **arity** half of the discipline is done and separable from the sort half.
-  `Spec/Scope.lean`'s "Arity" section is egglog's column-count check, syntactic and `Bool`-valued,
+  `Impl/Check.lean`'s "Arity" section is egglog's column-count check, syntactic and `Bool`-valued,
   beside `SetLegal`; arity needs no sorts, which is why it landed first. What it does *not* give is
   the state-level invariant "every row has its declared width", the derived form that would prove
   `Impl/Merge.lean`'s lookup branch total — `Proofs/Counterexamples.lean`'s `claim3`, whose program
@@ -688,6 +703,71 @@ with the pair in the order `(r₂, r₁)` and the two line up. `genMergeSpec` no
 and `:merge new`, a generated case reads back the value it wrote first (`witnessRule`, whose `Won`
 count is 1 exactly when the earlier write survived), and eight curated cases pin the four shapes;
 122 cases became 130, and the wrong binding fails 14 of them.
+
+### `old` is the row at the canonical key, and insertion age is only the tie-break
+
+The paragraph above got the *direction* right and the *rule* wrong, and every case it added agrees
+with both readings, so nothing caught it. **`old` is not the row written earlier. It is the row
+already in the table.** egglog's insert calls the merge function as `merge_fn(cur, row)` — `cur`
+the stored row, `row` the arriving one — and binds `old` to the first
+(`egglog/core-relations/src/table/mod.rs`, `SortedWritesTable::insert`). Nothing there mentions
+age. A rebuild is what separates the two: it re-canonicalizes each candidate row and stages a
+remove-and-re-insert for exactly those the canonicalization changed
+(`egglog/core-relations/src/table/rebuild.rs`), so the row whose key is *already canonical* is
+never moved and is therefore `cur`, however recently it was written, while every row whose key
+moved arrives as `new`. Canonical is least e-class id, since the union-find unions **by min id**
+(`egglog/union-find/src/lib.rs`), and ids are handed out as terms are built — so the canonical
+member of a class is the term created first. Age decides only when no key moved (two `set`s at one
+key) or when *no* row holds the canonical key (the rebuild stages them all, in table order).
+
+Minimized against `target/release/egglog`, all `(function Dist (Math) i64 :merge new)`:
+
+| program | egglog | what it rules out |
+| --- | --- | --- |
+| `(set (Dist (K)) 3) (set (Dist (A)) 2) (union (A) (K))` | `2` | — |
+| the same after a bare `(A)`, so `A` exists first | `3` | insertion age: identical, answer flipped |
+| `(P (K) (A))` before the two `set`s | `2` | — |
+| `(P (A) (K))` before the two `set`s | `3` | argument order within one term decides too |
+| `(set (Dist (K)) 3) (set (Dist (K)) 2)`, no union | `2` | canonicity alone: no key moved, age decides |
+| `(Z)` first, both keys unioned into `(Z)` | `2` (`3` under `old`) | canonicity alone: neither key canonical |
+
+Swapping the `union`'s arguments changes nothing, which is min-id and not argument order.
+
+**`Impl/` matches this; `Spec/` neither can nor needs to.** `MergeStep.collide` takes the two rows
+as premises in *both* orders, so either binding is a legal step and `mergeOneWith_mergeStep` is
+indifferent to the choice — matching egglog is an implementation question, not a change to the
+semantics. `Database.terms` is a `Set` and has no order to read canonicity from; `FDatabase.terms`
+is a list that `addTerm` prepends to, so a position in it is an age, exactly as a position in
+`rows` is. `FDatabase.canonTerm` reads canonicity off that list and `swapForCanon` orients the pair
+before `mergeOneOriented` runs. Two consequences worth naming:
+
+* **`Term.subtermList` is ordered, and load-bearing.** It now lists a term, then its arguments
+  **right to left**, so that prepending it puts the first-built argument last — egglog builds an
+  application's arguments left to right. Reversing it back fails `canon-arg-left`/`canon-arg-right`.
+  Every other consumer goes through `mem_subtermList` and cannot see the order.
+* **`swapForCanon` is guarded by the firing condition.** A weaker guard forces the congruence
+  closure on pairs whose arities differ — `congrTuple` compares lengths before looking inside `cl` —
+  which is enough to stall the kernel on `Proofs/Lattice.lean`'s `decide` proofs.
+
+Six curated cases (`canon-old`, `canon-new`, `canon-arg-left`, `canon-arg-right`,
+`canon-none-old`, `canon-none-new`) pin the table above, the last three being shapes where the two
+readings agree, so the agreement cannot rot silently. Disabling the orientation fails three of
+them; reversing `subtermList` fails two.
+
+**What is still not modelled.** A term's list position is fixed when it is *first* added, which
+tracks egglog for terms built by actions and by rule heads in the order the interpreter runs them.
+A round firing several rules may build terms in another order than egglog does, and nothing here
+pins that. Two further residuals, both inherited from "quantifying over congruent keys rather than
+re-keying rows":
+
+* When neither colliding key is canonical, egglog's survivor sits at the canonical key and this
+  model's sits at the older row's key. `Database.Out` reads a row from every congruent key, so this
+  is invisible until a row appears at that third key *later*, when the two disagree about which of
+  the pair is resident. Writing at the canonical key is not an option: `MergeStep.collide` writes
+  at one of the two rows' keys, and there is no row at the third.
+* `ordering-min`/`ordering-max` keep using the structural `Term.blt` and remain the deviation
+  recorded under "The representative deviation" — a `Prim` is `List Term → Option Term` with no
+  database to consult, so the term list is not reachable from there.
 
 **The read path had no coverage at all**, which is how this stayed invisible: `Expr.MEval.lookup`,
 reachable through `execM` from `MValidSubst.expr`, was exercised zero times. One finding from the

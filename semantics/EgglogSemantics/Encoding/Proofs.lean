@@ -4,7 +4,7 @@ import EgglogSemantics.Spec.Step
 /-!
 # The proof-encoding theorems
 
-M11. `PLAN.md`'s three theorems over `Spec/Encode.lean`'s `encode`, all `sorry`. The
+M11. `PLAN.md`'s three theorems over `Encoding/Encode.lean`'s `encode`, all `sorry`. The
 statements are the deliverable: what M11 is worth turns on getting them right, and a
 wrong statement proved is worth less than a right one stated.
 

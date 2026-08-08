@@ -54,24 +54,8 @@ weaker relation. On `a b ∈ db.terms` under `Database.WF` the two coincide.
 
 `ValidSubst.eq` is where the semantics needs it. M11 needs it again on the encoded side,
 whose rebuild re-keys view rows to applications the source never built
-(`Spec/Encode.lean`). -/
+(`Encoding/Encode.lean`). -/
 def CongOn (db : Database) (a b : Term) : Prop :=
   Cong ((db.addTerm a).addTerm b) a b
 
-namespace CongList
-variable {db : Database}
-
-end CongList
-namespace Cong
-variable {db : Database}
-
-variable {db : Database}
-
-/-- `Cong db` is an equivalence on the subtype of `db.terms`. This is the e-graph
-viewed as a set of e-classes: `Quotient` of this setoid is `db`'s e-classes. -/
-def setoid (db : Database) : Setoid {t : Term // t ∈ db.terms} where
-  r a b := Cong db a.val b.val
-  iseqv := ⟨fun a => .refl a.property, .symm, .trans⟩
-
-end Cong
 end Egglog

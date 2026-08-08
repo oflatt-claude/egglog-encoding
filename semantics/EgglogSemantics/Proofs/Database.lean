@@ -304,6 +304,15 @@ theorem mem_sUnion {db d : Database} {S : Set Database} (h : d ∈ S) :
     fun _ ht => Or.inr (Set.mem_biUnion h ht)⟩
 
 end Contained
+/-- A row talks only about terms the database holds.
+
+Kept out of `WF` because nothing proved needs it there, and putting it in would make every
+`WF` construction carry a subterm-transitivity argument for no current payoff. It is the
+row half of `WF` and belongs there once something reads it — `MergeStep.self_id` and
+`MergeStep.wf` take it as a separate hypothesis. -/
+def RowsWF (db : Database) : Prop :=
+  ∀ r ∈ db.rows, (∀ a ∈ r.args, a ∈ db.terms) ∧ ∀ v ∈ r.out, v ∈ db.terms
+
 namespace WF
 theorem empty : WF Database.empty where
   subtermClosed := by simp [Database.empty]

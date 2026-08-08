@@ -1,4 +1,3 @@
-import Mathlib.Data.Finset.Dedup
 import Mathlib.Data.Set.Lattice
 import EgglogSemantics.Spec.Syntax
 
@@ -73,21 +72,27 @@ def subterms (t : Term) : Set Term := {s | IsSubterm s t}
 
 mutual
 
-/-- `subterms` as a list, for the executable interpreter. `mem_subtermList` is the
-bridge to the relation. -/
+/-- `subterms` as a list, for the executable interpreter, in **reverse creation order**:
+`t`, then its arguments right to left, each preceded by its own subterms.
+
+The order is load-bearing, not cosmetic: `FDatabase.addTerm` prepends this list, so a
+position in `FDatabase.terms` is the age of the term at it, which is what
+`Impl/Merge.lean`'s `canonKey` reads to pick a canonical key. `MERGE.md`, "`old` is the
+row at the canonical key", is why age is the right notion.
+
+`mem_subtermList` is the bridge to the relation, and it is what every other consumer
+uses, so the order is invisible to them. -/
 def subtermList : Term → List Term
   | .lit l => [.lit l]
   | .app f args => .app f args :: subtermListL args
 
-/-- `subtermList` over an argument list. -/
+/-- `subtermList` over an argument list, **later arguments first**: an argument is
+evaluated after the ones to its left, so it is the newer term. -/
 def subtermListL : List Term → List Term
   | [] => []
-  | t :: ts => subtermList t ++ subtermListL ts
+  | t :: ts => subtermListL ts ++ subtermList t
 
 end
-
-/-- `subterms` as a `Finset`. -/
-def subtermsF (t : Term) : Finset Term := t.subtermList.toFinset
 
 end Term
 /-! ### Rows

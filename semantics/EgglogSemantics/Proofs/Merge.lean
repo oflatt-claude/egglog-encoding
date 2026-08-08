@@ -433,6 +433,12 @@ theorem MCongList.le {db : Database} {R : Term → Term → Prop}
 
 end
 
+/-- `MCong db` is an equivalence on `db.terms`, as `Cong.setoid`. Its quotient is the
+e-class set, and the bridge to M11: an e-class here is an `@UF` leader there. -/
+def MCong.setoid (db : Database) : Setoid {t : Term // t ∈ db.terms} where
+  r a b := MCong db a.val b.val
+  iseqv := ⟨fun a => .refl a.property, .symm, .trans⟩
+
 /-! ### `MCongList` is an equivalence
 
 `MCong.setoid` pointwise. `Out.union_cong` needs it: two lookups at one key class reach
@@ -600,6 +606,23 @@ theorem MergeStep.self_id {db d : Database} {f : FnName} {as a : List Term}
 Constraint (3)'s second half. `PLAN.md` proposes a merge-fold and asks for it to be
 well defined; `Current` is that value defined as a maximum instead, which needs only
 antisymmetry. It is not what `Expr.MEval` reads. -/
+/-- The value a *join* merge settles on at the class of `as`: the `le`-greatest
+recorded output.
+
+**Not** what a query read matches — that is `Database.Out`, any recorded output.
+`Current` exists only when `f`'s merge is a join for `le`, and it is here for the two
+places that need to match egglog's answer rather than over-approximate it: differential
+testing, and M11's simulation theorem.
+
+A maximum rather than a fold, because a greatest element is unique from antisymmetry
+alone (`current_unique`) where a fold over a set needs commutativity and associativity
+first. `le` is a parameter rather than an instance because the order is per function —
+one `Term` type carries every sort — and it orders whole rows, since a multi-column merge
+can settle its columns jointly. See `MERGE.md`, "Why a maximum and not a fold". -/
+def Database.Current (db : Database) (le : List Term → List Term → Prop) (f : FnName)
+    (as : List Term) (vs : List Term) : Prop :=
+  db.Out f as vs ∧ ∀ ws, db.Out f as ws → le ws vs
+
 /-- The observable value is unique. This is "the fold is well defined", with a fold's
 commutativity and associativity obligations replaced by antisymmetry of the order —
 see `MERGE.md`, "Why a maximum and not a fold". -/
@@ -1043,8 +1066,10 @@ theorem MValidSubst.mono {d₁ d₂ : Database} (hc : d₁.Contained d₂) (hsig
     · rw [henv]; exact hv.mono hc
     · rw [henv]; exact Expr.MEval.mono hc hsig he₁
     · rw [henv]; exact Expr.MEval.mono hc hsig he₂
-  | values hv hu ht hk hw hrow =>
-    refine .values ?_ ?_ ?_ (MCongList.mono hc hsig hk) (MCongList.mono hc hsig hw)
+  | @values vs f as σ us ts ws bs hv hu ht hk hw hrow =>
+    refine .values ?_ ?_ ?_
+      (MCongList.mono ((hc.addTerms_mono ts).addTerms_mono us) (by simp [hsig]) hk)
+      (MCongList.mono ((hc.addTerms_mono ts).addTerms_mono us) (by simp [hsig]) hw)
       (hc.rows hrow)
     · rw [henv]; exact hv.mono hc
     · rw [henv]; exact Expr.MEvalList.mono hc hsig hu
@@ -1324,9 +1349,11 @@ theorem MValidSubst.of_validSubst {db : Database} (hsig : db.sig.AllConstructors
       (Cong.toMCong (db := (db.addTerm t₁).addTerm t₂) hsig
         ((hrows.addTerm t₁).addTerm t₂) hct)
   | @values vs f as σ us ts ws bs hve hev₁ hev₂ hct hcu hrow =>
+    have hsig' : ((db.addTerms ts).addTerms us).sig.AllConstructors := by simpa using hsig
+    have hrows' : ((db.addTerms ts).addTerms us).CtorRows := (hrows.addTerms ts).addTerms us
     exact .values hve (Expr.MEvalList_of_evalList' hsig vs hnp.1 hev₁)
       (Expr.MEvalList_of_evalList' hsig as hnp.2 hev₂)
-      (CongList.toMCongList hsig hrows hct) (CongList.toMCongList hsig hrows hcu) hrow
+      (CongList.toMCongList hsig' hrows' hct) (CongList.toMCongList hsig' hrows' hcu) hrow
 
 theorem ValidSubst.of_mvalidSubst {db : Database} (hsig : db.sig.AllConstructors)
     (hrows : db.CtorRows) {p : Pattern} (hnp : p.NoPrim) {σ : Env}
@@ -1341,9 +1368,10 @@ theorem ValidSubst.of_mvalidSubst {db : Database} (hsig : db.sig.AllConstructors
       (MCong.toCong ((hrows.addTerm t₁).addTerm t₂) hcw)
       (MCong.toCong ((hrows.addTerm t₁).addTerm t₂) hct)
   | @values vs f as σ us ts ws bs hve hev₁ hev₂ hct hcu hrow =>
+    have hrows' : ((db.addTerms ts).addTerms us).CtorRows := (hrows.addTerms ts).addTerms us
     exact .values hve (Expr.evalList_of_MEvalList hsig hev₁ hnp.1)
       (Expr.evalList_of_MEvalList hsig hev₂ hnp.2)
-      (MCongList.toCongList hrows hct) (MCongList.toCongList hrows hcu) hrow
+      (MCongList.toCongList hrows' hct) (MCongList.toCongList hrows' hcu) hrow
 
 theorem forall₂_mvalidSubst {db : Database} (hsig : db.sig.AllConstructors)
     (hrows : db.CtorRows) {q : Query} {σs : List Env}
@@ -1546,7 +1574,8 @@ state holding a merge result no `CmdStep` state held. `CmdStep.action` now carri
 one-rule run and every rule-set run ends in `merge_all`.
 
 The chain has one prerequisite that is not obvious, and it is why `Cong.toMCong'` exists.
-`FDatabase.patternHoldsM` compares keys with `congrKeys d.closureF`, and `closureF`
+`FDatabase.patternHoldsM` compares keys with `congrKeys` at the closure of the database
+extended with the atom's operands, and `closureF`
 computes **`Cong`** — it closes over `eqsF` and `congrPair`, with no notion of a row. The
 specification's row atom compares them with **`MCong`**. So every read the interpreter
 performs has to be re-read as a specification read, and that is exactly `Cong.toMCong'`:
@@ -1683,6 +1712,12 @@ theorem FDatabase.Inv.empty : FDatabase.empty.Inv := by
   refine ⟨FDatabase.empty_wf, ?_, ?_, ?_, ?_⟩ <;>
     simp [FDatabase.empty, FDatabase.toDatabase, Database.CtorTerms, Database.RowsComplete,
       Database.RowsWF, Database.ctorRowsOf]
+
+@[simp] theorem FDatabase.addTerms_sig {d : FDatabase} {ts : List Term} :
+    (d.addTerms ts).sig = d.sig := by
+  induction ts generalizing d with
+  | nil => rfl
+  | cons t ts ih => exact ih
 
 /-- `addTerm` takes an arbitrary `Term`, so it needs `ht`: inserting an application of a
 `:merge` function would put a non-constructor into `terms` and break `ctorTerms`. -/
@@ -1954,13 +1989,14 @@ strongest statement whose conclusion can hold, and it is the hypothesis
 `Interp.lean`'s `patternHolds_iff`, forward direction, with `execExpr` for `Expr.eval`
 and `MValidSubst` for `ValidSubst`. Three gaps to bridge beyond that proof:
 
-* the `.values` case compares with `congrKeys d.closureF`, which computes `Cong`, while
-  `MValidSubst.values` wants `MCongList` — `CongList.toMCongList'` closes it, and its
-  `CtorTerms`/`RowsComplete` hypotheses are `Inv` fields;
-* the `.expr`/`.eq` cases close over the *extended* database `d.addTerm t`, so
-  `Cong.toMCong'` is applied at `(d.addTerm t).Inv`, from `Inv.addTerm`;
-* `Inv.addTerm` needs the instance to be a constructor term, which is
-  `execExpr_ctorTerm`, which in turn needs the `ValidEnv`. -/
+* `congrKeys` computes `Cong`, while `MValidSubst` wants `MCong` — `Cong.toMCong'` and
+  `CongList.toMCongList'` close that, and their `CtorTerms`/`RowsComplete` hypotheses are
+  `Inv` fields;
+* every case closes over an *extended* database — `d.addTerm t` for `.expr`, and
+  `(d.addTerms ts).addTerms us` for the row atom's key and value operands — so the bridge
+  is applied at that database's `Inv`, from `Inv.addTerm`/`Inv.addTerms`;
+* those need the instance to be a constructor term, which is
+  `execExpr_ctorTerm`/`execExprList_ctorTerm`, which in turn need the `ValidEnv`. -/
 theorem FDatabase.patternHoldsM_MValidSubst {d : FDatabase} (h : d.Inv) {p : Pattern}
     {σ : Env} (hv : ValidEnv (p.freeVars d.env) d.toDatabase σ)
     (hs : d.patternHoldsM p σ = true) : MValidSubst d.toDatabase p σ := by
@@ -2005,12 +2041,17 @@ theorem FDatabase.patternHoldsM_MValidSubst {d : FDatabase} (h : d.Inv) {p : Pat
       rw [Bool.and_eq_true, Bool.and_eq_true, decide_eq_true_eq] at hcond
       obtain ⟨⟨hfn, hkey⟩, hval⟩ := hcond
       subst hfn
+      have hts : ∀ x ∈ ts, Term.CtorTerm d.sig x := FDatabase.execExprList_ctorTerm h hσ ht
+      have hus : ∀ x ∈ us, Term.CtorTerm (d.addTerms ts).sig x := by
+        simpa using FDatabase.execExprList_ctorTerm h hσ hu
+      have hInv := (h.addTerms hts).addTerms hus
+      have hct := hInv.ctorTerms
+      have hrc := hInv.rowsComplete
+      rw [FDatabase.toDatabase_addTerms, FDatabase.toDatabase_addTerms] at hct hrc
       exact .values hv (FDatabase.execExprList_MEvalList h hu)
         (FDatabase.execExprList_MEvalList h ht)
-        (CongList.toMCongList' h.ctorTerms h.rowsComplete
-          ((FDatabase.congrTuple_iff h.wf).mp hkey))
-        (CongList.toMCongList' h.ctorTerms h.rowsComplete
-          ((FDatabase.congrTuple_iff h.wf).mp hval))
+        (CongList.toMCongList' hct hrc ((FDatabase.congrTuple_addTerms_iff h.wf).mp hkey))
+        (CongList.toMCongList' hct hrc ((FDatabase.congrTuple_addTerms_iff h.wf).mp hval))
         hr
     · exact absurd hs (by simp)
 
@@ -2275,12 +2316,6 @@ finds fewer results cannot make a safety claim false. Two theorems carry that:
 `MValidSubst.mono`, that fewer rows really do mean fewer matches. -/
 namespace FDatabase
 
-@[simp] theorem addTerms_sig {d : FDatabase} {ts : List Term} :
-    (d.addTerms ts).sig = d.sig := by
-  induction ts generalizing d with
-  | nil => rfl
-  | cons t ts ih => exact ih
-
 @[simp] theorem addRow_sig {d : FDatabase} {f : FnName} {as vs : List Term} :
     (d.addRow f as vs).sig = d.sig := by
   show ((d.addTerms as).addTerms vs).sig = d.sig
@@ -2437,13 +2472,13 @@ The reason it holds is one line: the only rows dropped or overwritten are `r₁`
 themselves, whose function is `r₁.fn`, and the branch was taken only because
 `d.sig.mergeOf r₁.fn = .merge body res`. A row of any other kind of function is therefore
 distinct from both. -/
-theorem mergeOneWith_confined {cl : Finset (Term × Term)} {d e : FDatabase} {r₁ r₂ : Row}
-    (h : d.mergeOneWith cl r₁ r₂ = some e) :
+theorem mergeOneOriented_confined {cl : Finset (Term × Term)} {d e : FDatabase}
+    {r₁ r₂ : Row} (h : d.mergeOneOriented cl r₁ r₂ = some e) :
     d.toDatabase.terms ⊆ e.toDatabase.terms ∧ d.toDatabase.eqs ⊆ e.toDatabase.eqs ∧
       e.sig = d.sig ∧
       ∀ r ∈ d.rows, (∀ body res, d.sig.mergeOf r.fn ≠ MergeSpec.merge body res) →
         r ∈ e.rows := by
-  unfold FDatabase.mergeOneWith at h
+  unfold FDatabase.mergeOneOriented at h
   cases hm : d.sig.mergeOf r₁.fn with
   | union => rw [hm] at h; simp at h
   | noMerge => rw [hm] at h; simp at h
@@ -2479,6 +2514,30 @@ theorem mergeOneWith_confined {cl : Finset (Term × Term)} {d e : FDatabase} {r�
               · rw [hq]; exact hm
               · rw [hq, ← hfn]; exact hm
             exact mem_mergeRows_of hrb hne.1 hne.2
+
+/-- **A firing is a firing on one of the two orientations, and nothing else.**
+
+`mergeOneWith` only chooses which colliding row is the one already in the table — that
+is `swapForCanon`, and every fact below is indifferent to it, so each is proved once for
+`mergeOneOriented` and transported through this. What the choice *does* change is which
+`MergeStep` the firing refines, and `MergeStep.collide` has the two rows as premises in
+both orders, so either is available. -/
+theorem mergeOneWith_eq_oriented {cl : Finset (Term × Term)} {d : FDatabase} (r₁ r₂ : Row) :
+    ∃ a b, d.mergeOneWith cl r₁ r₂ = d.mergeOneOriented cl a b := by
+  unfold FDatabase.mergeOneWith
+  split
+  · exact ⟨r₂, r₁, rfl⟩
+  · exact ⟨r₁, r₂, rfl⟩
+
+/-- `mergeOneOriented_confined` at whichever orientation the firing took. -/
+theorem mergeOneWith_confined {cl : Finset (Term × Term)} {d e : FDatabase} {r₁ r₂ : Row}
+    (h : d.mergeOneWith cl r₁ r₂ = some e) :
+    d.toDatabase.terms ⊆ e.toDatabase.terms ∧ d.toDatabase.eqs ⊆ e.toDatabase.eqs ∧
+      e.sig = d.sig ∧
+      ∀ r ∈ d.rows, (∀ body res, d.sig.mergeOf r.fn ≠ MergeSpec.merge body res) →
+        r ∈ e.rows := by
+  obtain ⟨a, b, he⟩ := mergeOneWith_eq_oriented (cl := cl) (d := d) r₁ r₂
+  exact mergeOneOriented_confined (he ▸ h)
 
 /-- **A merge pass removes nothing it must not.** `mergeOneWith_confined` through the two
 folds. This is the formal content of "`Impl/` deletes merge rows only". -/
@@ -2717,12 +2776,12 @@ are constructor terms by `execExprList_ctorTerm`, so `Inv.addTerms` takes them i
 `terms`. And rewriting the row list — `r₁` dropped, `r₂` overwritten — is `Inv.mergeRows`,
 whose side condition is that both rows belong to a `.merge` function, which is how the
 branch was entered. -/
-theorem mergeOneWith_inv {cl : Finset (Term × Term)} {d e : FDatabase} {r₁ r₂ : Row}
+theorem mergeOneOriented_inv {cl : Finset (Term × Term)} {d e : FDatabase} {r₁ r₂ : Row}
     (h : d.Inv)
     (hlegal : ∀ g body res, d.sig.mergeOf g = MergeSpec.merge body res →
       Actions.SetLegal body d.sig)
-    (hm : d.mergeOneWith cl r₁ r₂ = some e) : e.Inv := by
-  unfold FDatabase.mergeOneWith at hm
+    (hm : d.mergeOneOriented cl r₁ r₂ = some e) : e.Inv := by
+  unfold FDatabase.mergeOneOriented at hm
   cases hmo : d.sig.mergeOf r₁.fn with
   | union => rw [hmo] at hm; simp at hm
   | noMerge => rw [hmo] at hm; simp at hm
@@ -2777,6 +2836,15 @@ theorem mergeOneWith_inv {cl : Finset (Term × Term)} {d e : FDatabase} {r₁ r�
         intro b hb'
         exact (contained_addTerms.trans contained_addTerms).terms
           (hcont (h.wf.envInTerms b hb'))
+
+/-- `mergeOneOriented_inv` at whichever orientation the firing took. -/
+theorem mergeOneWith_inv {cl : Finset (Term × Term)} {d e : FDatabase} {r₁ r₂ : Row}
+    (h : d.Inv)
+    (hlegal : ∀ g body res, d.sig.mergeOf g = MergeSpec.merge body res →
+      Actions.SetLegal body d.sig)
+    (hm : d.mergeOneWith cl r₁ r₂ = some e) : e.Inv := by
+  obtain ⟨a, b, he⟩ := mergeOneWith_eq_oriented (cl := cl) (d := d) r₁ r₂
+  exact mergeOneOriented_inv h hlegal (he ▸ hm)
 
 /-- **A merge pass preserves the refinement-chain invariant, provided every declared
 merge's action block writes only legal `set`s.** `mergeOneWith_inv` through the two folds
@@ -2928,19 +2996,20 @@ re-runs the merge body at `D`.
 
 The witness takes the two rows in the order `(r₂, r₁)`, which is the whole reason
 `MergeStep.collide` lines up with the implementation: `collide` runs the body under
-`mergeEnv a b` and writes the combined row at the *first* row's key, and the
-implementation binds `old` from `r₂` and overwrites `r₂`. Both facts are the one fact that
-`r₂` is the row already in the table. -/
-theorem mergeOneWith_mergeStep {d x y : FDatabase} {r₁ r₂ : Row} {D : Database}
+`mergeEnv a b` and writes the combined row at the *first* row's key, and
+`mergeOneOriented` binds `old` from `r₂` and overwrites `r₂`. Both facts are the one fact
+that `r₂` is the row already in the table — which of the two colliding rows that is,
+`mergeOneWith` decides, and `mergeOneWith_mergeStep` says the decision is free. -/
+theorem mergeOneOriented_mergeStep {d x y : FDatabase} {r₁ r₂ : Row} {D : Database}
     (h : d.Inv)
     (hlegal : ∀ g body res, d.sig.mergeOf g = MergeSpec.merge body res →
       Actions.SetLegal body d.sig)
     (hx : x.Inv) (hxs : x.sig = d.sig)
     (hcl : MergeClosure d.toDatabase D) (hxc : x.toDatabase.Contained D)
-    (hm : FDatabase.mergeOneWith d.closureF x r₁ r₂ = some y) :
+    (hm : FDatabase.mergeOneOriented d.closureF x r₁ r₂ = some y) :
     ∃ D', MergeStep D D' ∧ y.toDatabase.Contained D' := by
   have hDsig : D.sig = d.sig := MergeClosure.sig hcl
-  unfold FDatabase.mergeOneWith at hm
+  unfold FDatabase.mergeOneOriented at hm
   cases hmo : x.sig.mergeOf r₁.fn with
   | union => rw [hmo] at hm; simp at hm
   | noMerge => rw [hmo] at hm; simp at hm
@@ -2999,6 +3068,24 @@ theorem mergeOneWith_mergeStep {d x y : FDatabase} {r₁ r₂ : Row} {D : Databa
         rcases mem_mergeRows hr with hr' | rfl
         · exact hc₀.rows hr'
         · exact Set.mem_insert _ _
+
+/-- **Either orientation is a `MergeStep`, so the choice between them is free.**
+
+`mergeOneOriented_mergeStep` instantiates `MergeStep.collide` with the two rows in one
+order; `collide` takes them in both, so `swapForCanon`'s answer never has to be justified
+against the specification. That is what makes matching egglog's `old`/`new` an
+implementation question — settled by `Impl/Merge.lean`'s `canonTerm` against the binary —
+rather than a change to the semantics. -/
+theorem mergeOneWith_mergeStep {d x y : FDatabase} {r₁ r₂ : Row} {D : Database}
+    (h : d.Inv)
+    (hlegal : ∀ g body res, d.sig.mergeOf g = MergeSpec.merge body res →
+      Actions.SetLegal body d.sig)
+    (hx : x.Inv) (hxs : x.sig = d.sig)
+    (hcl : MergeClosure d.toDatabase D) (hxc : x.toDatabase.Contained D)
+    (hm : FDatabase.mergeOneWith d.closureF x r₁ r₂ = some y) :
+    ∃ D', MergeStep D D' ∧ y.toDatabase.Contained D' := by
+  obtain ⟨a, b, he⟩ := mergeOneWith_eq_oriented (cl := d.closureF) (d := x) r₁ r₂
+  exact mergeOneOriented_mergeStep h hlegal hx hxs hcl hxc (he ▸ hm)
 
 /-- **The merge pass lands inside a state the merge closure reaches.**
 
@@ -3445,9 +3532,10 @@ theorem mergeRound_induction {d : FDatabase} {P : FDatabase → Prop} (hinit : P
   · exact houter d.rows d hinit
 
 /-- A firing restores the caller's environment and rule list. -/
-theorem mergeOneWith_envRules {cl : Finset (Term × Term)} {d e : FDatabase} {r₁ r₂ : Row}
-    (h : d.mergeOneWith cl r₁ r₂ = some e) : e.env = d.env ∧ e.rules = d.rules := by
-  unfold FDatabase.mergeOneWith at h
+theorem mergeOneOriented_envRules {cl : Finset (Term × Term)} {d e : FDatabase}
+    {r₁ r₂ : Row} (h : d.mergeOneOriented cl r₁ r₂ = some e) :
+    e.env = d.env ∧ e.rules = d.rules := by
+  unfold FDatabase.mergeOneOriented at h
   cases hmo : d.sig.mergeOf r₁.fn with
   | union => rw [hmo] at h; simp at h
   | noMerge => rw [hmo] at h; simp at h
@@ -3463,6 +3551,12 @@ theorem mergeOneWith_envRules {cl : Finset (Term × Term)} {d e : FDatabase} {r�
         rw [hb, Option.bind_some, Option.map_eq_some_iff] at h
         obtain ⟨vs, hv, rfl⟩ := h
         exact ⟨rfl, rfl⟩
+
+/-- `mergeOneOriented_envRules` at whichever orientation the firing took. -/
+theorem mergeOneWith_envRules {cl : Finset (Term × Term)} {d e : FDatabase} {r₁ r₂ : Row}
+    (h : d.mergeOneWith cl r₁ r₂ = some e) : e.env = d.env ∧ e.rules = d.rules := by
+  obtain ⟨a, b, he⟩ := mergeOneWith_eq_oriented (cl := cl) (d := d) r₁ r₂
+  exact mergeOneOriented_envRules (he ▸ h)
 
 /-- A merge pass touches neither the environment nor the rule list. -/
 theorem mergeRound_envRules {d : FDatabase} :

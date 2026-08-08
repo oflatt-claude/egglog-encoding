@@ -247,12 +247,13 @@ were wrongly excluded on that reading. They are idempotent, and unlike `+` they 
 completely determined in egglog — `old` is the value already in the table, `new` the one
 being inserted. Leaving them out left every merge in the suite commutative, which is
 exactly why the model could bind the two colliding rows the wrong way round and stay
-122-for-122 green. `genMergeSpec` draws them now, and the four curated cases below pin the
-shapes that were checked against the binary.
+122-for-122 green. `genMergeSpec` draws them now; the `old-*`/`new-*` cases below pin the
+four shapes that caught the outright swap, and the `canon-*` cases the six that caught
+*which* row the binding reads — `MERGE.md`, "`old` is the row at the canonical key".
 
 No `:merge` **body** reads a table. An atom there would bind its variable to *any* recorded
 output, where egglog binds the current one, so the model would fire more and build more;
-`Spec/Scope.lean`'s "Reading in an action" rejects it statically. A body may still *write*
+`Impl/Check.lean`'s "Reading in an action" rejects it statically. A body may still *write*
 one, which is the `merge-body-*` family, and a rule body may read one, which is the
 `read-*` family below.
 
@@ -289,7 +290,8 @@ private def distBlock (n : Nat) (op : FnName) : FnDecl :=
     merge := .merge [.letBind "s" (.app op [.var "old", .var "new"])] [.var "s"] }
 
 /-- `:merge old` / `:merge new`, the two merges no commutative one can distinguish. `old`
-is the value already in the table and `new` the one being inserted. -/
+is the value already in the table and `new` the one being inserted — which row that is, at
+a collision a rebuild caused, is `Impl/Merge.lean`'s `swapForCanon`. -/
 private def distPick (n : Nat) (which : String) : FnDecl :=
   { arity := n, outArity := 1, merge := .merge [] [.var which] }
 
@@ -303,6 +305,10 @@ private def num (n : Int) : Expr := .lit (.int n)
 
 private def mset (f : FnName) (args : List Expr) (v : Int) : Cmd :=
   .action (.set f args [num v])
+
+/-- The binary constructor `commuteDist` matches on, as an expression: the key of a
+`:merge` row is a term like any other, and these are the cases whose keys are compound. -/
+private def gg (a b : Expr) : Expr := .app "G" [a, b]
 
 /-- A rule that copies a `Dist` entry onto the commuted key, so a merge fires from a rule
 head as well as from a top-level action. -/
@@ -406,12 +412,21 @@ Each such case states both the marker that must be 1 and one that must be 0. A s
 positive marker only says "some value matched"; the negative one is what separates "the
 model computed the wrong value" from "the model read nothing at all", since those differ in
 the positive marker alone and not in the pair. -/
-/-- `(rule ((= v (f key…))) ((hit key…)))`. Fires exactly when `f`'s row at `key` holds
-`v`, so `hit`'s row count reports which value survived. The head reuses `key`, which is
-ground, so the query costs one substitution and no enumeration. -/
-private def readInto (hit f : FnName) (key : List Expr) (v : Int) : Rule where
+/-- `(rule ((= v (f key…))) ((hit mark…)))`. Fires exactly when `f`'s row at `key` holds
+`v`, so `hit`'s row count reports which value survived.
+
+The marker's arguments are separate from the key because a key may be a *compound*
+expression, and building it in the head would create the very term whose absence the case
+is about — `read-unbuilt-key` reads at a key the program never built. -/
+private def readIntoAt (hit f : FnName) (key : List Expr) (v : Int) (mark : List Expr) :
+    Rule where
   query := [.values [num v] f key]
-  actions := [.expr (.app hit key)]
+  actions := [.expr (.app hit mark)]
+
+/-- `readIntoAt` marking with the key itself, which is ground, so the query costs one
+substitution and no enumeration. -/
+private def readInto (hit f : FnName) (key : List Expr) (v : Int) : Rule :=
+  readIntoAt hit f key v key
 
 /-- `readInto` at a multi-column output. -/
 private def readIntoW (hit f : FnName) (key : List Expr) (vs : List Int) : Rule where
@@ -633,7 +648,7 @@ private def curatedMerge : List (String × Program) :=
     -- Copying one merge function's value into another's row, which is what `read-copy`
     -- used to do from a top-level action. All reading happens in the query, so the read is
     -- `(= v (Dist k))` and the head only writes — the shape egglog requires of a rule and
-    -- the model now requires everywhere (`Spec/Scope.lean`, "Reading in an action").
+    -- the model now requires everywhere (`Impl/Check.lean`, "Reading in an action").
     ("read-copy",
       [.decl "Dist" (dist 1), .decl "Copy" (dist 1), mset "Dist" [C "A"] 3,
        .rule copyDist, .run,
@@ -678,6 +693,55 @@ private def curatedMerge : List (String × Program) :=
       [.decl "Dist" (distPick 1 "new"), mset "Dist" [C "X"] 1, mset "Dist" [C "Y"] 2,
        mset "Dist" [C "Z"] 3, .action (.union (C "X") (C "Y")),
        .action (.union (C "Y") (C "Z")), .rule (readValue 3), .run]),
+    -- **`old` is the row at the canonical key, not the row written first.** Every case
+    -- above writes the younger row at the younger key, where the two readings agree.
+    -- These separate them: a bare `(A)` creates `A` before `K`, so `A` is the *older*
+    -- key while `Dist (A)` is the *younger* row, and egglog keeps the earlier write.
+    -- `Hit`/`Miss` bracket the surviving value, so a wrong binding moves both counts.
+    ("canon-old",
+      [.decl "Dist" (distPick 1 "old"), .action (.expr (C "A")),
+       mset "Dist" [C "K"] 3, mset "Dist" [C "A"] 2,
+       .action (.union (C "A") (C "K")),
+       .rule (readInto "Hit" "Dist" [C "A"] 2), .rule (readInto "Miss" "Dist" [C "A"] 3),
+       .run]),
+    ("canon-new",
+      [.decl "Dist" (distPick 1 "new"), .action (.expr (C "A")),
+       mset "Dist" [C "K"] 3, mset "Dist" [C "A"] 2,
+       .action (.union (C "A") (C "K")),
+       .rule (readInto "Hit" "Dist" [C "A"] 3), .rule (readInto "Miss" "Dist" [C "A"] 2),
+       .run]),
+    -- The same, with the two keys created as the **arguments of one term** rather than by
+    -- separate commands. egglog builds an application's arguments left to right, so `(P
+    -- (K) (A))` makes `K` canonical and `(P (A) (K))` makes `A` canonical, and the pair
+    -- of cases differs in nothing else. This is what `Term.subtermList`'s order is for.
+    ("canon-arg-left",
+      [.decl "Dist" (distPick 1 "new"), .action (.expr (.app "P" [C "K", C "A"])),
+       mset "Dist" [C "K"] 3, mset "Dist" [C "A"] 2,
+       .action (.union (C "A") (C "K")),
+       .rule (readInto "Hit" "Dist" [C "A"] 2), .rule (readInto "Miss" "Dist" [C "A"] 3),
+       .run]),
+    ("canon-arg-right",
+      [.decl "Dist" (distPick 1 "new"), .action (.expr (.app "P" [C "A", C "K"])),
+       mset "Dist" [C "K"] 3, mset "Dist" [C "A"] 2,
+       .action (.union (C "A") (C "K")),
+       .rule (readInto "Hit" "Dist" [C "A"] 3), .rule (readInto "Miss" "Dist" [C "A"] 2),
+       .run]),
+    -- **Neither key canonical**, so canonicity decides nothing and age is the tie-break:
+    -- `Z` is created first and carries no row, both `Dist` rows move to it, and egglog
+    -- stages them in table order — the earlier write is the one the other is merged onto.
+    -- This is the shape the two readings agree on, pinned so the agreement cannot rot.
+    ("canon-none-old",
+      [.decl "Dist" (distPick 1 "old"), .action (.expr (C "Z")),
+       mset "Dist" [C "K"] 3, mset "Dist" [C "A"] 2,
+       .action (.union (C "K") (C "Z")), .action (.union (C "A") (C "Z")),
+       .rule (readInto "Hit" "Dist" [C "Z"] 3), .rule (readInto "Miss" "Dist" [C "Z"] 2),
+       .run]),
+    ("canon-none-new",
+      [.decl "Dist" (distPick 1 "new"), .action (.expr (C "Z")),
+       mset "Dist" [C "K"] 3, mset "Dist" [C "A"] 2,
+       .action (.union (C "K") (C "Z")), .action (.union (C "A") (C "Z")),
+       .rule (readInto "Hit" "Dist" [C "Z"] 2), .rule (readInto "Miss" "Dist" [C "Z"] 3),
+       .run]),
     -- **Primitives outside a `:merge` body.** `min` in a top-level `set`'s value column.
     -- `Hit 1, Miss 0` says the model computed `3`; building the term `min(5, 3)` or getting
     -- stuck gives `0, 0` and computing `max` gives `0, 1`.
@@ -792,7 +856,44 @@ private def curatedMerge : List (String × Program) :=
       [.decl "Dist" (distTriple 1), tset "Dist" [C "A"] [5, 1, 7],
        tset "Dist" [C "A"] [3, 9, 2],
        .rule (readIntoW "Hit" "Dist" [C "A"] [3, 9, 7]),
-       .rule (readIntoW "Miss" "Dist" [C "A"] [5, 1, 7]), .run]) ]
+       .rule (readIntoW "Miss" "Dist" [C "A"] [5, 1, 7]), .run]),
+    -- **A read atom's operands are interned before the congruence test.** The row is
+    -- written at `(G (B) (A))` and read at `(G (A) (B))`, a term the program *never
+    -- builds*: egglog flattens the fact to `G(a, b, x), Dist(x, o)`, so after `(union (A)
+    -- (B))` the intermediate class is found by matching. `Hit 1` says the model found it
+    -- too. `Miss` reads at `(G (C) (A))`, which is equally unbuilt and congruent to
+    -- nothing, so `Miss 0` is what fails if the fix over-matches by treating any
+    -- hypothesized operand as present. This was a recorded divergence: `patternHoldsM`
+    -- closed over `d.closureF` where its `.expr`/`.eq` cases close over `(d.addTerm t)`,
+    -- and answered `Hit 0`.
+    ("read-unbuilt-key",
+      [.decl "Dist" (dist 1),
+       .action (.set "Dist" [gg (C "B") (C "A")] [num 4]),
+       .action (.union (C "A") (C "B")),
+       .rule (readIntoAt "Hit" "Dist" [gg (C "A") (C "B")] 4 [C "A"]),
+       .rule (readIntoAt "Miss" "Dist" [gg (C "C") (C "A")] 4 [C "A"]), .run]),
+    -- The same one level deeper, so the congruence has to be rebuilt at an *inner* node
+    -- before the outer one can match. `Miss` moves the outer argument instead of the inner
+    -- one — `(A)` for `(C)`, which no `union` relates — so it must not fire.
+    ("read-unbuilt-key-deep",
+      [.decl "Dist" (dist 1),
+       .action (.set "Dist" [gg (gg (C "B") (C "A")) (C "C")] [num 4]),
+       .action (.union (C "A") (C "B")),
+       .rule (readIntoAt "Hit" "Dist" [gg (gg (C "A") (C "B")) (C "C")] 4 [C "A"]),
+       .rule (readIntoAt "Miss" "Dist" [gg (gg (C "A") (C "B")) (C "A")] 4 [C "A"]),
+       .run]),
+    -- **The over-matching control.** `Miss` reads at `(G (H (A)) (B))`, whose inner node
+    -- `(H (A))` has no row at all — `H` is never applied anywhere else — so egglog's
+    -- `H(a, h)` atom matches nothing and neither may the model. Interning the operands adds
+    -- a *hypothetical* row for every subterm, and this is the case that says a hypothetical
+    -- row cannot stand in for one the database has to hold.
+    ("read-unbuilt-key-nonode",
+      [.decl "Dist" (dist 1),
+       .action (.set "Dist" [gg (C "B") (C "A")] [num 4]),
+       .action (.union (C "A") (C "B")),
+       .rule (readIntoAt "Hit" "Dist" [gg (C "A") (C "B")] 4 [C "A"]),
+       .rule (readIntoAt "Miss" "Dist" [gg (.app "H" [C "A"]) (C "B")] 4 [C "A"]),
+       .run]) ]
 
 /-! ### Random `:merge` cases
 
@@ -824,33 +925,39 @@ draw one, for a different and narrower reason recorded there.
 
 Keys are eq-sorted and outputs are `i64`, as the curated cases already are.
 
-**Three divergences this family reaches and does not currently draw.** Each was found by
-widening the draw, minimized by hand against the release binary, and is held out here
-rather than fixed, because two of the three are in the model's interpreter rather than in
-anything this file owns.
+**Divergences this family reaches and does not currently draw.** Each was found by widening
+the draw and minimized by hand against the release binary.
 
-1. **A read atom's operands are not interned before the congruence test.**
-   `Impl/Merge.lean`'s `patternHoldsM` computes `cl := d.closureF` in its `.values` case and
-   compares the evaluated key against each row, where its `.expr` and `.eq` cases first add
-   the evaluated term (`(d.addTerm t).closureF`). A key expression the program never built
-   is therefore in no congruence class and matches nothing:
+1. **A read atom's operands were not interned before the congruence test** — *fixed*, and
+   pinned by the three `read-unbuilt-key*` cases above. `patternHoldsM` computed
+   `cl := d.closureF` in its `.values` case where its `.expr` and `.eq` cases close over
+   the extended database, so a key expression the program never built was in no congruence
+   class and matched nothing:
    ```
    (set (Dist (G (B) (A))) 4) (union (A) (B))
    (rule ((= o (Dist (G (A) (B))))) ((Hit (A))))
    ```
    egglog flattens the fact to `G(a, b, x), Dist(x, o)` and matches through congruence,
-   answering `Hit 1`; the model answers `Hit 0`. Reachable from `genMergeReadRule`'s
-   free-key draw, which is how it turned up.
-2. **`old`/`new` at a rebuild collision follow insertion age here and key canonicity
-   there.** `mergeOneWith` takes the row that was inserted earlier as `old`. egglog takes
-   the row whose key is *already canonical* as `old` and the row being re-inserted because
-   its key moved as `new`. The two agree whenever the younger row sits at the younger key,
-   which every curated case does, and disagree otherwise:
+   answering `Hit 1`; the model answered `Hit 0`. Reachable from `genMergeReadRule`'s
+   free-key draw, which is how it turned up. Both `Spec/` and `Impl/` were wrong here, and
+   in the same place: `MValidSubst.values` compared the evaluated operands with `MCongList
+   db`, and `MCong db` relates only terms `db` holds, so the specification could not admit
+   the match either.
+2. **`old`/`new` at a rebuild collision followed insertion age here and key canonicity
+   there** — *fixed*, and pinned by the six `canon-*` cases above. `mergeOneWith` took the
+   row that was inserted earlier as `old`; egglog takes the row whose key is *already
+   canonical* as `old` and the row re-inserted because its key moved as `new`, falling back
+   on age only when no key moved or when no row holds the canonical key. The two agree
+   whenever the younger row sits at the younger key, which every curated case did, and
+   disagree otherwise:
    ```
    (function Dist (Math) i64 :merge new)
    (A) (set (Dist (K)) 3) (set (Dist (A)) 2) (union (A) (K))
    ```
-   egglog keeps `3` — the earlier write, at the younger key — and the model keeps `2`.
+   egglog keeps `3` — the earlier write, at the older key — and the model kept `2`.
+   Reachable from `genKeys`: nothing stops a drawn key from being built before the row
+   written at it. `Impl/Merge.lean`'s `canonTerm` is the fix and `MERGE.md`'s "`old` is the
+   row at the canonical key" is the evidence, including what it still does not model.
 3. **A no-op collision**, which only a writing body can observe; see `genMergeSpec`. -/
 
 /-- The merge specs the generator draws from: `:merge old` and `:merge new`, then `min`
@@ -1009,7 +1116,7 @@ the offending command runs:
 * `set`'s: `(set (f args…) v)` is legal only on a declared function, and is a type error on
   a constructor or a relation (`Program.illegalSets`);
 * every use of a declared function has its declared key and value column counts
-  (`Program.arityErrors`, over `Spec/Scope.lean`'s `Cmd.arityOk`);
+  (`Program.arityErrors`, over `Impl/Check.lean`'s `Cmd.arityOk`);
 * nothing reads a row except a `Pattern.values` atom (`Program.illegalReads`, over
   `Cmd.noLookup`) — egglog rejects this in a rule head, and the model everywhere;
 * no name is used at two key arities, which the emitted `datatype` header cannot express

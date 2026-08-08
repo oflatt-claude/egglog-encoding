@@ -1,3 +1,4 @@
+import EgglogSemantics.Impl.Check
 import EgglogSemantics.Proofs.Merge
 
 set_option autoImplicit false
@@ -512,7 +513,7 @@ theorem currentOfLattice_false_total : ¬ CurrentOfLattice := by
 
 `execM_current_of_lattice` carries **no** legality hypothesis, but adding the ones
 `execM_contained` needs would not rescue it: all three programs satisfy
-`FDatabase.ProgramLegal` from `FDatabase.empty`, and `Spec/Scope.lean`'s `ReadsAreAtoms`,
+`FDatabase.ProgramLegal` from `FDatabase.empty`, and `Impl/Check.lean`'s `ReadsAreAtoms`,
 so no merge body or result column reads a table. -/
 
 theorem mergeOf_update_self {dc : FnDecl} {f : FnName} {body₀ : List Action}

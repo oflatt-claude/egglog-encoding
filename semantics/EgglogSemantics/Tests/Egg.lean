@@ -1,3 +1,4 @@
+import EgglogSemantics.Impl.Check
 import EgglogSemantics.Impl.Merge
 import EgglogSemantics.Spec.Scope
 
@@ -233,7 +234,7 @@ def Program.illegalSets (p : Program) : List FnName :=
 
 Two halves, because the model declares only its `:merge` functions.
 
-For a *declared* function, `Spec/Scope.lean`'s `Cmd.arityOk` is the check — this only
+For a *declared* function, `Impl/Check.lean`'s `Cmd.arityOk` is the check — this only
 walks the program threading `Cmd.sigBind` and renders the commands that fail, so the two
 cannot drift the way `illegalSets` and `Action.SetLegal` can.
 
@@ -254,7 +255,7 @@ def Program.arityErrors (p : Program) : List String :=
 
 /-! ### Where a program may read
 
-`Spec/Scope.lean`'s "Reading in an action": no expression may apply a non-constructor,
+`Impl/Check.lean`'s "Reading in an action": no expression may apply a non-constructor,
 because that is a *lookup*, and the only read is the query atom `Pattern.values`. Walked the
 same way `arityErrorsFrom` walks the arity check, so the difftest and the specification
 share one definition. -/

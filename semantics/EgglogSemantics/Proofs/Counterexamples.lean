@@ -1,3 +1,4 @@
+import EgglogSemantics.Impl.Check
 import EgglogSemantics.Proofs.Merge
 
 /-!
@@ -165,7 +166,7 @@ action") — so the defect does not exist rather than being merely unreachable, 
 
 **What survives is the hygiene gap that made it reachable.** `Action.SetLegal` constrains
 only a function's merge kind, so it admits a `set` whose value list is the wrong width for
-the declaration; `FnDecl.outArity` is what records the width, and `Spec/Scope.lean`'s
+the declaration; `FnDecl.outArity` is what records the width, and `Impl/Check.lean`'s
 arity check is what reads it. The witness below is that pair, and it is why the check is
 not redundant with `SetLegal`. -/
 

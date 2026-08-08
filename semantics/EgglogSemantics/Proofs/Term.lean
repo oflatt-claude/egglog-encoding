@@ -52,7 +52,7 @@ theorem subterms_app {f : FnName} {args : List Term} :
 @[simp] theorem subtermListL_nil : subtermListL [] = [] := rfl
 
 @[simp] theorem subtermListL_cons {t : Term} {ts : List Term} :
-    subtermListL (t :: ts) = subtermList t ++ subtermListL ts := rfl
+    subtermListL (t :: ts) = subtermListL ts ++ subtermList t := rfl
 
 mutual
 
@@ -80,21 +80,14 @@ theorem mem_subtermListL {s : Term} (ts : List Term) :
     simp only [subtermListL_cons, List.mem_append, mem_subtermList t, mem_subtermListL ts,
       List.mem_cons]
     constructor
-    · rintro (h | ⟨a, ha, hs⟩)
-      · exact ⟨t, Or.inl rfl, h⟩
+    · rintro (⟨a, ha, hs⟩ | h)
       · exact ⟨a, Or.inr ha, hs⟩
+      · exact ⟨t, Or.inl rfl, h⟩
     · rintro ⟨a, rfl | ha, hs⟩
-      · exact Or.inl hs
-      · exact Or.inr ⟨a, ha, hs⟩
+      · exact Or.inr hs
+      · exact Or.inl ⟨a, ha, hs⟩
 
 end
-
-@[simp] theorem coe_subtermsF (t : Term) : ↑t.subtermsF = t.subterms := by
-  ext s
-  simp [subtermsF, mem_subtermList, subterms]
-
-@[simp] theorem mem_subtermsF {s t : Term} : s ∈ t.subtermsF ↔ IsSubterm s t := by
-  simp [subtermsF, mem_subtermList]
 
 theorem IsSubterm.trans {s t u : Term} (hst : IsSubterm s t) (htu : IsSubterm t u) :
     IsSubterm s u := by

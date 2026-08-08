@@ -1,3 +1,4 @@
+import EgglogSemantics.Impl.Check
 import EgglogSemantics.Proofs.Interp
 
 /-!
@@ -382,7 +383,7 @@ end Computed
 
 /-! ## Arity
 
-`Spec/Scope.lean`'s `Program.arityOk` mirrors what egglog's typechecker does with column
+`Impl/Check.lean`'s `Program.arityOk` mirrors what egglog's typechecker does with column
 counts. Every rejection below was run against the release binary first, and the quoted text
 is what it printed; the accompanying acceptances are what keep the check from being
 vacuous — a predicate that rejected everything would satisfy the rejections alone. -/
@@ -482,7 +483,7 @@ end Arity
 
 /-! ## Reading
 
-`Spec/Scope.lean`'s `Program.noLookup`: applying a non-constructor is a *read*, and the
+`Impl/Check.lean`'s `Program.noLookup`: applying a non-constructor is a *read*, and the
 only place a program may read is the query atom `Pattern.values`. egglog enforces this in
 a rule head — "Value lookup of non-constructor function function in rule is disallowed" —
 and this model everywhere, which is what makes `Expr.MEval` deterministic. The three

@@ -237,7 +237,7 @@ application, so the equalities are the same and only the row count differs.
 function function in rule is disallowed". egglog gets around it by registering
 `set-if-empty-<View>!` as a **primitive** (`src/proofs/proof_fresh.rs`), and
 `expr_has_function_lookup` flags only `ResolvedCall::Func`. So `encode` as written emits
-rule heads the real system would refuse, and `Spec/Scope.lean`'s `Program.noLookup` says
+rule heads the real system would refuse, and `Impl/Check.lean`'s `Program.noLookup` says
 so of the encoded program. The fix is the same one egglog made — a `Prim`-style
 get-or-insert, which is a write and not a read — and it is M11 work, so it is recorded
 here rather than done. Nothing downstream depends on the read-back stepping:

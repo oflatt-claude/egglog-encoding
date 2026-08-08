@@ -5,6 +5,19 @@ A Lean 4 model of egglog's semantics, ported from the Redex model in
 egglog as cleanly as possible for a paper, and then prove things about an implementation.
 Proving things about egglog's proof encoding is the eventual payoff, and is **parked**.
 
+**Which egglog.** This models egglog *as extended in this repo*, not a released one. Two
+extensions are load-bearing and are part of what the paper discusses:
+
+| extension | upstream `egraphs-good/egglog` | here |
+| --- | --- | --- |
+| multi-output columns — `(function Pair (Math) (i64 i64) …)` | `parse error: expected output sort` | accepted |
+| `set` inside a `:merge` body — `:merge (<action>* <result>)` | `:merge` takes a single expression | accepted |
+
+Checked against upstream `c92a910` (v2.0.0). The second is why M9 makes a merge a *step
+relation on databases* rather than a function combining two values — a body that writes
+rows cannot be modelled as a fold. `make lean-difftest`'s oracle is this repo's binary, so
+it validates against the extended language.
+
 **Picking this up?** Start with [`PLAN.md`](PLAN.md), "Current priority" — what we are
 working on now, what is parked, the two interpreter contracts, and how to check a change.
 

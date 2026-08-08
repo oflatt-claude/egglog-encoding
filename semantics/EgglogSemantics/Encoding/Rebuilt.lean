@@ -3,7 +3,7 @@ import EgglogSemantics.Spec.Step
 
 /-! # Is `Rebuilt` satisfiable?
 
-`Spec/Encode.lean`'s `Rebuilt P d` is the hypothesis `encode_complete`,
+`Encoding/Encode.lean`'s `Rebuilt P d` is the hypothesis `encode_complete`,
 `encode_simulation` and `encode_simulation_run` carry. This file settles whether it is
 satisfiable, over two source programs that differ only in *which* term is built:
 
@@ -199,6 +199,22 @@ theorem lookup_append_of_none {v : Var} {σ τ : Env} (h : Env.lookup v σ = non
 theorem freeVars_var_of_none {v : Var} {σ : Env} (h : Env.lookup v σ = none) :
     Expr.freeVars (.var v) σ = [v] := by simp [Expr.freeVars, h]
 
+/-! ### `addTerms`, the extension a `values` atom reads its congruence in
+
+`Proofs/Database.lean` has these; this file imports only `Spec/`, and two four-line
+inductions are cheaper than the coupling. -/
+
+theorem mem_addTerms {db : Database} {ts : List Term} {t : Term} (h : t ∈ db.terms) :
+    t ∈ (db.addTerms ts).terms := by
+  induction ts generalizing db with
+  | nil => exact h
+  | cons u us ih => exact ih (Or.inl h)
+
+theorem addTerms_eqs {db : Database} {ts : List Term} : (db.addTerms ts).eqs = db.eqs := by
+  induction ts generalizing db with
+  | nil => rfl
+  | cons u us ih => exact ih
+
 /-! ### `Rebuilt` forces every view row to be re-keyed already
 
 The column-0 rebuild rule fires on any state holding a view row `@fView [c] ↦ [e]` and a
@@ -247,10 +263,15 @@ theorem rebuilt_rekeys {P : Program} {d : Database}
     show (Expr.freeVars (.var "@x") d.env ∪ Expr.freeVarsList [] d.env) ∪
       (Expr.freeVars (.var "@c0") d.env ∪ Expr.freeVarsList [] d.env) = _
     rw [hfx, hfc]; rfl
+  -- the operands are variables bound to terms `d` holds, so the database a `values` atom
+  -- extends with them still holds them
+  have hext : ∀ (as vs : List Term) {t : Term}, t ∈ d.terms →
+      t ∈ ((d.addTerms as).addTerms vs).terms := by
+    intro _ _ _ ht; exact mem_addTerms (mem_addTerms ht)
   -- the two `MValidSubst`s
   have s1 : MValidSubst d (.values [.var "@e"] viewF [.var "@c0"]) σ₁ := by
     refine .values ⟨?_, ?_⟩ (.cons (.var l1e) .nil) (.cons (.var l1c) .nil)
-      (.cons (.refl hcT) .nil) (.cons (.refl heT) .nil) hview
+      (.cons (.refl (hext _ _ hcT)) .nil) (.cons (.refl (hext _ _ heT)) .nil) hview
     · rw [hv1]; exact List.Perm.refl _
     · rintro ⟨v, t⟩ hb
       rw [d1] at hb
@@ -260,7 +281,7 @@ theorem rebuilt_rekeys {P : Program} {d : Database}
       · exact hcT
   have s2 : MValidSubst d (.values [.var "@x"] ufName [.var "@c0"]) σ₂ := by
     refine .values ⟨?_, ?_⟩ (.cons (.var l2x) .nil) (.cons (.var l2c) .nil)
-      (.cons (.refl hcT) .nil) (.cons (.refl hxT) .nil) huf
+      (.cons (.refl (hext _ _ hcT)) .nil) (.cons (.refl (hext _ _ hxT)) .nil) huf
     · rw [hv2]; exact List.Perm.refl _
     · rintro ⟨v, t⟩ hb
       rw [d2] at hb
@@ -673,14 +694,26 @@ theorem ctorUnion_addTerm {db : Database} {t : Term}
   · exact h r hr hu
   · exact hr.1
 
+/-- `ctorUnion_addTerm` over a list: the extension a `MValidSubst.values` premise reads
+its congruence in. -/
+theorem ctorUnion_addTerms {db : Database} {ts : List Term}
+    (h : ∀ r ∈ db.rows, db.sig.mergeOf r.fn = MergeSpec.union → r.out = [.app r.fn r.args]) :
+    ∀ r ∈ (db.addTerms ts).rows, (db.addTerms ts).sig.mergeOf r.fn = MergeSpec.union →
+      r.out = [.app r.fn r.args] := by
+  induction ts generalizing db with
+  | nil => exact h
+  | cons t ts ih => exact ih (ctorUnion_addTerm h)
+
 /-- Inverting `MValidSubst` on the one pattern shape every maintenance rule uses: a
 one-column row atom at a variable key.
 
 Shorter than it was, because a read is now the atom itself rather than an `.eq` whose
-right-hand side evaluated by `MEval.lookup`. No `addTerm` is involved, so the value
-comparison is `MCongList` on `d` directly instead of `mcong_eq` on a twice-extended
-database, and the `Prim.ofName`/`mergeOf` hypotheses that ruled out the other `MEval`
-rules are gone. -/
+right-hand side evaluated by `MEval.lookup`, and the `Prim.ofName`/`mergeOf` hypotheses
+that ruled out the other `MEval` rules are gone.
+
+Both congruence premises are read in the database extended with the atom's operands, so
+`mcong_eq`'s two side conditions are discharged there: `addTerms` touches neither `eqs`
+nor any `.union` function's rows beyond the constructor rows it adds. -/
 theorem invert_eq_pattern {d : Database} (heq : d.eqs = ∅)
     (hrows : ∀ r ∈ d.rows, d.sig.mergeOf r.fn = MergeSpec.union → r.out = [.app r.fn r.args])
     {G : FnName} {V W : Var} {σ : Env}
@@ -694,8 +727,11 @@ theorem invert_eq_pattern {d : Database} (heq : d.eqs = ∅)
     refine ⟨hve.1, ?_⟩
     obtain ⟨tv, rfl, hv⟩ := mevalList_one hvs
     obtain ⟨tw, rfl, hw⟩ := mevalList_one has
-    have hb : [tw] = _ := mcongList_eq heq hrows hts
-    have hw' : [tv] = _ := mcongList_eq heq hrows hus
+    have heq' : ((d.addTerms [tw]).addTerms [tv]).eqs = ∅ := by
+      rw [addTerms_eqs, addTerms_eqs]; exact heq
+    have hrows' := ctorUnion_addTerms (ts := [tv]) (ctorUnion_addTerms (ts := [tw]) hrows)
+    have hb : [tw] = _ := mcongList_eq heq' hrows' hts
+    have hw' : [tv] = _ := mcongList_eq heq' hrows' hus
     subst hb; subst hw'
     exact ⟨tv, tw, meval_var' hv, meval_var' hw, hrow⟩
 

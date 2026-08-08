@@ -62,7 +62,7 @@ runs between commands").
 M11 work or try to prove anything in `Encoding/Proofs.lean`. The encoding is downstream of a
 model we trust, and we do not have one yet — though the three things this note used to name,
 arity checking, reading a `:merge` function in a query, and the rule-head restriction, are
-now done. `Spec/Scope.lean`'s "Arity" and "Reading in an action" sections mirror egglog's
+now done. `Impl/Check.lean`'s "Arity" and "Reading in an action" sections mirror egglog's
 typechecker and `writeCase` enforces both; the read path has curated and generated cases and
 agrees with egglog on all of them. What is still missing is the six known-false statements
 in `Proofs/Merge.lean`.
@@ -510,7 +510,7 @@ ignored where egglog panics.
 
 **Every case is checked for legality before it is written.** `writeCase` refuses to emit a
 program egglog would reject — an illegal `set`, a use whose column counts disagree with the
-declaration (`Spec/Scope.lean`'s arity check), or a name used at two arities, which the
+declaration (`Impl/Check.lean`'s arity check), or a name used at two arities, which the
 emitted `datatype` header cannot express. A rejected program is a *missing* case, not a
 failing one, so the check aborts rather than skips.
 
@@ -557,7 +557,10 @@ a round's `union` copies every operand's terms and without dedup the per-substit
 The design is [`MERGE.md`](MERGE.md). What this plan originally proposed is kept only for
 the record of where it was wrong, since two of the mistakes were instructive:
 
-- **A merge body is an action list, not an expression.** So the observable value of a key
+- **A merge body is an action list, not an expression** — an extension local to this repo
+  (`egglog/src/ast/parse.rs`, `9828dbf`); upstream `:merge` takes a single expression, so a
+  body that `set`s another table cannot be written there. It is deliberate and discussed in
+  the paper, but it means M9's shape is a fact about *our* egglog. So the observable value of a key
   class cannot be a fold over asserted rows, and there is no `SemilatticeSup` to lean on.
   Evaluation and `runProgram` became *relations* instead.
 - **A non-constructor application is a lookup**, with no `:default` to fall back on.
@@ -572,7 +575,7 @@ checking" in the current priority.
 
 **All reading happens in the query; all writing happens in the actions.** An application of
 a non-constructor is a *lookup* — it reads a recorded row rather than building a term — and
-`Spec/Scope.lean`'s `Program.noLookup` says a program contains none, anywhere. The one place
+`Impl/Check.lean`'s `Program.noLookup` says a program contains none, anywhere. The one place
 a program reads is the query atom `Pattern.values`, which is egglog's lowered
 `f(a…, v…)` and now covers every width: `(= v (f a…))` at one value column,
 `(= (values v…) (f a…))` at more.
@@ -595,10 +598,16 @@ and only for a seminaive rule. Three other positions read there and are rejected
 | nested in a query fact | accepted, flattened to two atoms | `(F (Dist k))` |
 
 The first two are `Context::Full` and `Context::Write`, neither of which runs the check; the
-third is egglog's query flattening, which this model does not have. Each has a flat
+third is egglog's query flattening, which this model does not have *as syntax*. Each has a flat
 equivalent — `(rule ((= v (Dist k))) ((set (Copy k) v)))` for the first — so the loss is
 notation, not expressiveness, except in the `:merge` body, where a body that reads another
 table genuinely cannot be written.
+
+Flattening's *effect* on a constructor operand is modelled, and has to be: `ValidSubst.values`
+adds the atom's operands to the database before consulting congruence, so `(Dist (G (A) (B)))`
+matches a row written at `(G (B) (A))` after `(union (A) (B))` exactly as the flattened
+`G(a, b, x), Dist(x, o)` does — the intermediate class is found by matching rather than by
+having been built. `DiffTest.lean`'s `read-unbuilt-key*` cases pin it in both directions.
 
 **What it exposed in `Encoding/Encode.lean`.** `encodeBuild` interns an application by `set`ting
 the view and then *reading it back* with `(let x (@fView c…))` — a lookup in a rule head,
@@ -808,3 +817,73 @@ with itself, and `MergeStep` then writes whatever the body computes there — a
 non-constructor row, with no `set` anywhere. Hence the second, independent condition
 `Cmd.CtorDecl`. `Proofs/Step.lean`'s `exists_mergeStep_not_ctorRows` is that counterexample
 as a theorem.
+
+## Arity checking
+
+egglog fixes a function's column counts at declaration and checks every use against them.
+`FnDecl` recorded both counts from M1, but until the check existed nothing read them outside
+`Tests/Egg.lean`'s renderer, so the model accepted programs egglog's typechecker throws out.
+
+egglog's check is one equation on the lowered atom: for an atom headed by `f`,
+`|args| = |inputs f| + |outputs f|` (`constraint.rs`, `get_atom_application_constraints`), reported
+as `TypeError::Arity`, "Arity mismatch, expected {expected} args". What each surface form
+contributes to `|args|` is what makes the one equation say different things:
+
+* an *expression* `(f a…)` — a top-level action, a rule head, a merge body, an argument — and a
+  *query fact* `(f a…)` or `(= e (f a…))` each append exactly one fresh output variable, so both
+  need `|a| = arity f` and `outArity f = 1`. A two-column function is rejected in all of those
+  positions; the binary answers `expected 2 args: (Dist k)`.
+* `(set (f a…) v)` appends the value list — one entry for a bare `v`, `|v…|` for `(values v…)` —
+  so it needs `|a| + |v…| = arity f + outArity f`.
+* the row atom `Pattern.values` appends the read values and needs the same sum. It has no single
+  surface form: egglog writes it `(= v (f a…))` at one value column and `(= (values v…) (f a…))` at
+  more, and answers "Unbound function values" if the tuple form is used on a one-column function.
+  `Tests/Egg.lean` renders whichever fits, so the check is on the columns and not on the notation.
+
+The last two are modelled by the stronger split `|a| = arity f` and `|v…| = outArity f`. egglog's
+sum really does admit moving a column across the divide — with every sort `i64`,
+`(= (values v) (Dist k j))` is accepted for `(function Dist (i64) (i64 i64) …)` — but only because
+the sorts happen to agree. The model is untyped, so the sum alone would let it accept a program
+whose meaning it then gets wrong. **This is the one place the check is stricter than egglog's.**
+
+Two declaration-side rules from the same pass:
+
+* a `:merge` result has one expression per value column — `TupleMergeArity`, "The :merge of tuple-output
+  function {name} has {actual} columns but the function has {expected} output columns" — and must be
+  a `(values …)` at all for a tuple-output function (`TupleMergeNotValues`);
+* a constructor has exactly one value column — `TupleOutputNotAllowed`, "Function {0} has a tuple
+  output, which is only allowed for plain functions (not constructors, relations, or view tables)".
+
+A merge body is checked against the signature *including* the function being declared, so it may
+`set` its own table; a forward reference to a function declared later is instead "Unbound function".
+Both checked against the release binary.
+
+**Why a static check and not a premise.** Arity is a typechecking error, raised per command by
+`get_atom_application_constraints` before that command runs — the same pass, on the same AST node,
+that raises `SetConstructorDisallowed` ten lines above it, which is what `Action.SetLegal` already
+models. Two alternatives were rejected. A premise on `Expr.MEval` would reject at *run* time what
+egglog rejects statically, and would put a hypothesis on every lemma in `Proofs/Merge.lean`. A state
+invariant "every row has its declared width" is the *derived* form and is what would let
+`Impl/Merge.lean`'s lookup branch be proved total (`Proofs/Counterexamples.lean`'s `claim3`), but it
+belongs inside `Database.WF` and needs preservation lemmas through `ActionStep` and `MergeStep`; it
+is the follow-on, not this.
+
+**`Bool`, unlike `Scoped` and `SetLegal`.** Those are `Prop`s with no computable counterpart, so
+`Tests/Egg.lean` restates `SetLegal` as `illegalSets` and the two can drift. `arityOk` is defined
+once and `ArityOk` reads it, so the difftest's check and the statement a proof would use are the
+same definition — and deciding it needs no instance through the `List Expr` nesting.
+
+Two things are deliberately not covered, both because there is no declaration to check against.
+That every *undeclared* name is used at one arity: constructors are never declared here —
+`Signature.mergeOf` sends an undeclared name to `.union` — so `Tests/Egg.lean`, which invents the
+`datatype` header from uses, carries that half as `Program.arityConflicts`. And a primitive's arity,
+which egglog also checks ("Arity mismatch, expected 2 args: (min old new 3)"): `Prim.ofName` lives
+in `Spec/Merge.lean` and an undeclared name passes here, so this is permissive rather than wrong.
+
+A `Pattern.values` atom does **not** want the `SetLegal` companion restriction, and extending that
+family to the query would be wrong rather than merely premature. It is the model's only read and
+covers every width, so at one value column it is `(= v (f a…))` — what an ordinary constructor fact
+lowers to, and legal egglog — and demanding `sig.mergeOf f ≠ .union` there would reject it. What is
+real about "egglog recognizes the tuple form only for a tuple output" is already enforced from the
+other side: `Pattern.arityOk` pins `|v…| = outArity f` and `MergeSpec.arityOk` gives a `.union`
+function `outArity = 1`, so a *wide* read can never name a constructor.

@@ -61,10 +61,6 @@ inductive UnionAll : List Env → Env → Prop where
   | step {σ₁ σ₂ σr σ : Env} {σs : List Env} :
       Union2 σ₁ σ₂ σr → UnionAll (σr :: σs) σ → UnionAll (σ₁ :: σ₂ :: σs) σ
 
-/-- Every binding of `τ` is one `σ` also makes. The substitutions the enumerator restricts
-out of a query substitution all refine it, which is what makes them pairwise compatible. -/
-def Refines (τ σ : Env) : Prop := ∀ b ∈ τ, lookup b.1 σ = some b.2
-
 end Env
 /-! ### Valid substitutions -/
 /-- The Redex `valid-env`: `σ` binds exactly `vars`, each to a term the database
@@ -77,10 +73,6 @@ distinguish (`Expr.eval_agree`). -/
 def ValidEnv (vars : List Var) (db : Database) (σ : Env) : Prop :=
   (Env.dom σ).Perm vars ∧ ∀ b ∈ σ, b.2 ∈ db.terms
 
-namespace ValidEnv
-variable {vars : List Var} {db : Database} {σ : Env}
-
-end ValidEnv
 /-- The Redex `valid-subst`.
 
 Both cases add the pattern's instance (or instances) to the database before asking
@@ -102,27 +94,31 @@ inductive ValidSubst (db : Database) : Pattern → Env → Prop where
       Cong ((db.addTerm t₁).addTerm t₂) w t₁ → CongOn db t₁ t₂ →
       ValidSubst db (.eq e₁ e₂) σ
   /-- A tuple destructure matches a row whose key and value columns are congruent to the
-  operands, which is egglog joining on canonical ids. The row itself is the witness that
-  forbids matching something the database does not hold, so there is no `w ∈ db.terms`
-  premise and no `addTerm`: `Cong db` already relates only terms `db` holds. -/
+  operands, which is egglog joining on canonical ids.
+
+  The operands are added to the database before congruence is consulted, exactly as the
+  `expr` and `eq` cases add theirs. An operand is an *expression*, so it may denote a term
+  the program never built; the extension is what makes such an operand matchable, and it
+  is how this model captures egglog's flattening of a nested fact into one atom per
+  subterm (`PLAN.md`, "Reading is a query atom").
+
+  Adding the operands is conservative, not permissive: `Cong.congr` still needs *both*
+  applications present, so a hypothesized operand reaches an existing class only through a
+  row the database really holds.
+
+  There is no `w ∈ db.terms` witness: the row itself is what forbids matching something
+  the database does not hold. -/
   | values {vs : List Expr} {f : FnName} {as : List Expr} {σ : Env}
       {us ts ws bs : List Term} :
       ValidEnv (Expr.freeVarsList vs db.env ∪ Expr.freeVarsList as db.env) db σ →
       Expr.evalList vs (db.env ++ σ) = some us →
       Expr.evalList as (db.env ++ σ) = some ts →
-      CongList db ts bs → CongList db us ws → Row.mk f bs ws ∈ db.rows →
+      CongList ((db.addTerms ts).addTerms us) ts bs →
+      CongList ((db.addTerms ts).addTerms us) us ws → Row.mk f bs ws ∈ db.rows →
       ValidSubst db (.values vs f as) σ
 
-namespace ValidSubst
-variable {db : Database} {p : Pattern} {σ : Env}
-
-end ValidSubst
 /-- The Redex `valid-query-subst`: one substitution per pattern, unioned. -/
 def ValidQuerySubst (db : Database) (q : Query) (σ : Env) : Prop :=
   ∃ σs : List Env, List.Forall₂ (ValidSubst db) q σs ∧ Env.UnionAll σs σ
 
-namespace ValidQuerySubst
-variable {db : Database} {q : Query} {σ : Env}
-
-end ValidQuerySubst
 end Egglog

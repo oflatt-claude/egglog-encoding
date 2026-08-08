@@ -153,13 +153,5 @@ structure WF (db : Database) : Prop where
   eqsInTerms : ∀ p ∈ db.eqs, p.1 ∈ db.terms ∧ p.2 ∈ db.terms
   envInTerms : ∀ b ∈ db.env, b.2 ∈ db.terms
 
-/-- A row talks only about terms the database holds.
-
-Kept out of `WF` because nothing proved needs it yet, and putting it there would make
-every `WF` construction carry a subterm-transitivity argument for no current payoff.
-It is the row half of `WF` and belongs there once something reads it. -/
-def RowsWF (db : Database) : Prop :=
-  ∀ r ∈ db.rows, (∀ a ∈ r.args, a ∈ db.terms) ∧ ∀ v ∈ r.out, v ∈ db.terms
-
 end Database
 end Egglog
