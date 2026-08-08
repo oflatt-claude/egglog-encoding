@@ -5,12 +5,17 @@ proof encoding in `egglog/src/proofs/` (designed in
 `egglog/src/proofs/proof_encoding.md`).
 
 It is a port of the Redex model in
-[egglog PR #324](https://github.com/egraphs-good/egglog/pull/324). See
-[`PLAN.md`](PLAN.md) for what the port changes and why, the milestone list, and the
+[egglog PR #324](https://github.com/egraphs-good/egglog/pull/324).
+
+**Picking this up?** Start with [`HANDOFF.md`](HANDOFF.md) — what is proved, what is
+stated but unproved, what is known *false*, the work queue, and the gotchas.
+
+See [`PLAN.md`](PLAN.md) for what the port changes and why, the milestone list, and the
 route to the proof-encoding theorems; [`MERGE.md`](MERGE.md) for the `:merge` design
-(M9), which is in progress — its compatibility theorem is proved, its differential cases
-pass, and most of the further theorems are now proved, so `make lean-check` fails only on
-the remaining 7 (plus M11's, in `Proofs/Encode.lean`) while `lake build` is clean. Note
+(M9), which is in progress — its compatibility theorem is proved and its differential cases
+pass, but 23 statements in `Proofs/Merge.lean` are unproved (17 of them the `execM`
+refinement chain, stated and ready to prove) along with M11's 13 in `Proofs/Encode.lean`,
+so `make lean-check` fails on those while `lake build` is clean. Note
 that `Spec/` is append-only and `Impl/` is not: the reference implementation deletes
 superseded merge rows because egglog does, so the contract between them is a containment
 rather than an equality — `MERGE.md` again. See also
