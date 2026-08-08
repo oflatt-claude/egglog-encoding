@@ -20,7 +20,7 @@ along with its data; `FDatabase.execCmdM_contained` is proved.
 Every witness keeps its `:merge` function **nullary**. That is not cosmetic: a nullary
 key makes `congrKeys cl [] []` reduce to `true` through `List.all []` without ever
 forcing `cl`, and `cl` is `closureF`, whose well-founded recursion the kernel cannot
-unfold. With nullary keys the whole interpreter — `execExpr`, `execAction`, `mergeRound`,
+unfold. With nullary keys the whole interpreter — `Expr.eval`, `execAction`, `mergeRound`,
 `mergeSaturateF 64` — reduces by `rfl`.
 -/
 
@@ -157,10 +157,10 @@ theorem claim1' : ∃ (d : FDatabase) (f : FnName) (dc : FnDecl) (d' : FDatabase
 
     match d.outs f ts with | [v] :: _ => some v | _ => none
 
-which demanded that the *first* congruent row be single-column where `Expr.MEval.lookup`
+which demanded that the *first* congruent row be single-column where the old `MEval.lookup`
 needed only *some* congruent row recording `[v]`, so a freshly written two-column row
 shadowed a single-column one at the same key. There is no lookup branch and no
-`MEval.lookup` any more — reading is a query atom (`Spec/Scope.lean`, "Reading in an
+a `lookup` rule any more — reading is a query atom (`Spec/Scope.lean`, "Reading in an
 action") — so the defect does not exist rather than being merely unreachable, and
 `claim3`, `claim3_actions` and `claim3_actions_spec` have gone with it.
 
@@ -263,7 +263,7 @@ theorem mergeRound_inv_false : ∃ d : FDatabase, d.Inv ∧ ¬ d.mergeRound.Inv 
 
 /-! ## The two matching statements
 
-`FDatabase.patternHoldsM_MValidSubst` and `FDatabase.matchQueryM_MValidQuerySubst` are
+`FDatabase.patternHolds_MValidSubst` and `FDatabase.matchQuery_MValidQuerySubst` are
 false without the hypotheses they now carry, for two **independent** reasons: the first
 needs `ValidEnv`, and the second's `σ` *is* a valid env at both its patterns. Both
 witnesses live in a one-term database — `FDatabase.empty` plus the literal `0` — whose
@@ -285,18 +285,18 @@ theorem t0_cong : (t0, t0) ∈ (dEx.addTerm t0).closureF :=
   (FDatabase.mem_closureF_addTerm dEx_inv.wf).mpr (Cong.refl (Or.inl t0_mem))
 
 /-- The pattern `0` matches under a substitution binding `x`, which the pattern does not
-mention: `patternHoldsM` reads `σ` only through `d.env ++ σ`. -/
-theorem holds_lit : dEx.patternHoldsM (.expr (.lit (.int 0))) [("x", t0)] = true := by
-  simp only [FDatabase.patternHoldsM, FDatabase.execExpr, decide_eq_true_eq]
+mention: `patternHolds` reads `σ` only through `d.env ++ σ`. -/
+theorem holds_lit : patternHolds dEx (.expr (.lit (.int 0))) [("x", t0)] = true := by
+  simp only [patternHolds, Expr.eval, decide_eq_true_eq]
   exact ⟨t0, t0_mem, t0_cong⟩
 
-/-- **`FDatabase.patternHoldsM_MValidSubst` is false without `ValidEnv`.**
+/-- **`FDatabase.patternHolds_MValidSubst` is false without `ValidEnv`.**
 `MValidSubst.expr` carries `ValidEnv (e.freeVars db.env) db σ`, which pins `Env.dom σ` to
 a permutation of the pattern's free variables; `(Expr.lit _).freeVars` is `[]` and `σ`
 binds `x`. -/
-theorem patternHoldsM_MValidSubst_false :
+theorem patternHolds_MValidSubst_false :
     ¬ ∀ (d : FDatabase), d.Inv → ∀ (p : Pattern) (σ : Env),
-        d.patternHoldsM p σ = true → MValidSubst d.toDatabase p σ := by
+        patternHolds d p σ = true → MValidSubst d.toDatabase p σ := by
   intro H
   have hbad := H dEx dEx_inv (.expr (.lit (.int 0))) [("x", t0)] holds_lit
   cases hbad with
@@ -306,21 +306,21 @@ theorem patternHoldsM_MValidSubst_false :
 `∪` in `Query.freeVars` deduplicates, so the enumerator assigns `x` once. -/
 def qEx : Query := [Pattern.expr (.var "x"), Pattern.expr (.var "x")]
 
-theorem holds_var : dEx.patternHoldsM (.expr (.var "x")) [("x", t0)] = true := by
+theorem holds_var : patternHolds dEx (.expr (.var "x")) [("x", t0)] = true := by
   show decide (∃ w ∈ dEx.terms, (w, t0) ∈ (dEx.addTerm t0).closureF) = true
   rw [decide_eq_true_eq]
   exact ⟨t0, t0_mem, t0_cong⟩
 
-theorem mem_matchQueryM_ex : [("x", t0)] ∈ dEx.matchQueryM qEx := by
-  rw [FDatabase.matchQueryM, List.mem_filter]
+theorem mem_matchQuery_ex : [("x", t0)] ∈ matchQuery dEx qEx := by
+  rw [matchQuery, List.mem_filter]
   constructor
   · refine mem_assignments.mpr ⟨rfl, ?_⟩
     intro b hb
     rw [List.mem_singleton] at hb
     subst hb
     exact t0_mem
-  · show (dEx.patternHoldsM (.expr (.var "x")) (Env.canon ["x"] [("x", t0)]) &&
-      (dEx.patternHoldsM (.expr (.var "x")) (Env.canon ["x"] [("x", t0)]) && true)) = true
+  · show (patternHolds dEx (.expr (.var "x")) (Env.canon ["x"] [("x", t0)]) &&
+      (patternHolds dEx (.expr (.var "x")) (Env.canon ["x"] [("x", t0)]) && true)) = true
     rw [show Env.canon ["x"] [("x", t0)] = [("x", t0)] from rfl, holds_var]
     rfl
 
@@ -336,16 +336,16 @@ theorem unionAll_sum_length {σs : List Env} {σ : Env} (h : Env.UnionAll σs σ
     simp only [List.map_cons, List.sum_cons, List.length_append] at ih ⊢
     omega
 
-/-- **`FDatabase.matchQueryM_MValidQuerySubst` is false without `Env.Agree`.**
+/-- **`FDatabase.matchQuery_MValidQuerySubst` is false without `Env.Agree`.**
 `[("x", t0)]` is enumerated for `qEx`, and `ValidEnv` holds for it at *both* patterns — so
 this is not the `ValidEnv` defect again. `MValidQuerySubst` needs one substitution per
 pattern, each of length `1`, concatenated to give `σ`; that would make `σ` have length
 `2`. -/
-theorem matchQueryM_MValidQuerySubst_false :
+theorem matchQuery_MValidQuerySubst_false :
     ¬ ∀ (d : FDatabase), d.Inv → ∀ (q : Query) (σ : Env),
-        σ ∈ d.matchQueryM q → MValidQuerySubst d.toDatabase q σ := by
+        σ ∈ matchQuery d q → MValidQuerySubst d.toDatabase q σ := by
   intro H
-  obtain ⟨σs, hall, hu⟩ := H dEx dEx_inv qEx [("x", t0)] mem_matchQueryM_ex
+  obtain ⟨σs, hall, hu⟩ := H dEx dEx_inv qEx [("x", t0)] mem_matchQuery_ex
   have hlen : ∀ ρ, MValidSubst dEx.toDatabase (.expr (.var "x")) ρ → ρ.length = 1 := by
     intro ρ hρ
     cases hρ with
@@ -391,8 +391,8 @@ def badRule : Rule := ⟨[.eq (.lit (.int 0)) (.lit (.int 1))], [.expr (.app "g"
 
 /-- `(set (f) 0) (set (f) 1) (rule ((= 0 1)) ((g))) (run)`.
 
-Declares nothing, so `Program.CtorDecls` holds; names no primitive, so `Program.NoPrim`
-holds; and its two `set`s are the one thing `Program.SetLegal` forbids. -/
+Declares nothing, so `Program.CtorDecls` holds, and its two `set`s are the one thing
+`Program.SetLegal` forbids. -/
 def badProgram : Program :=
   [.action (.set "f" [] [.lit (.int 0)]), .action (.set "f" [] [.lit (.int 1)]),
     .rule badRule, .run]
@@ -450,7 +450,7 @@ theorem badDb_not_cong :
 
 theorem badDb_mvalid : MValidSubst badDb (.eq (.lit (.int 0)) (.lit (.int 1))) [] :=
   .eq (w := .lit (.int 0)) (t₁ := .lit (.int 0)) (t₂ := .lit (.int 1))
-    ⟨by simp, by simp⟩ (by simp [badDb_terms]) .lit .lit
+    ⟨by simp, by simp⟩ (by simp [badDb_terms]) rfl rfl
     (.refl (by simp [badDb_terms])) badDb_mcong
 
 /-- No substitution matches on the interpreter's side: both operands are literals, so the
@@ -497,15 +497,22 @@ theorem badDb_runRules_terms : (runRules badDb).terms = badDb.terms := by
 /-- The relational round does add something: `MCong` matches the query, so the head runs
 and `g` appears. -/
 theorem badDb_runRules_mem : Term.app "g" [] ∈ (RunRules badDb).terms := by
-  have hstep : Database.ActionsStep { badDb with env := badDb.env ++ ([] : Env) }
-      badRule.actions
-      (({ badDb with env := badDb.env ++ ([] : Env) }).addTerm (.app "g" [])) :=
-    .cons (.expr (.ctor (by simp [Prim.ofName])
-      (by simp [Signature.mergeOf, badDb, Database.empty]) .nil)) .nil
+  have hstep : evalLocalActions badDb badRule.actions ([] : Env) =
+      some { ({ badDb with env := badDb.env ++ ([] : Env) }).addTerm (Term.app "g" []) with
+        env := badDb.env, rules := badDb.rules } := by
+    have hact : evalAction { badDb with env := badDb.env ++ ([] : Env) }
+        (.expr (.app "g" []))
+        = some (({ badDb with env := badDb.env ++ ([] : Env) }).addTerm (.app "g" [])) := by
+      rw [evalAction, Expr.eval_app_ctor (by simp [Prim.ofName])
+        (by simp [Signature.mergeOf, badDb, Database.empty])]
+      rfl
+    rw [evalLocalActions, show badRule.actions = [Action.expr (.app "g" [])] from rfl,
+      evalActions_cons, hact]
+    rfl
   set d : Database := { ({ badDb with env := badDb.env ++ ([] : Env) }).addTerm
     (Term.app "g" []) with env := badDb.env, rules := badDb.rules } with hdef
   have hmemS : d ∈ {d | ∃ r ∈ badDb.rules, d ∈ RuleResults badDb r} :=
-    ⟨badRule, badDb_mem_rules.mpr rfl, _, _, badDb_mvalidQuery, hstep, hdef⟩
+    ⟨badRule, badDb_mem_rules.mpr rfl, [], badDb_mvalidQuery, hstep⟩
   have hmemd : Term.app "g" [] ∈ d.terms := Database.mem_addTerm _ _
   exact Or.inr (Set.mem_biUnion hmemS hmemd)
 
@@ -523,21 +530,6 @@ theorem badProgram_ctorDecls : badProgram.CtorDecls := by
   simp only [badProgram, List.mem_cons, List.not_mem_nil, or_false] at hc
   rcases hc with rfl | rfl | rfl | rfl <;> trivial
 
-theorem badRule_noPrim : badRule.NoPrim := by
-  refine ⟨fun p hp => ?_, ⟨⟨rfl, trivial⟩, trivial⟩⟩
-  simp only [badRule, List.mem_cons, List.not_mem_nil, or_false] at hp
-  subst hp
-  exact ⟨trivial, trivial⟩
-
-theorem badProgram_noPrim : badProgram.NoPrim := by
-  intro c hc
-  simp only [badProgram, List.mem_cons, List.not_mem_nil, or_false] at hc
-  rcases hc with rfl | rfl | rfl | rfl
-  · exact ⟨trivial, trivial, trivial⟩
-  · exact ⟨trivial, trivial, trivial⟩
-  · exact badRule_noPrim
-  · trivial
-
 /-- **The state `badProgram` runs to is not one the relation reaches.**
 
 The first three commands are forced — `CmdStep.stepCmd_eq` reads each of them back as
@@ -554,14 +546,14 @@ theorem badProgram_not_programStep :
   obtain ⟨d₄, h₃, k₄⟩ := k₃.cons_inv
   have hempty : Database.empty.sig.AllConstructors := Database.CtorState.empty.sig
   have e₀ : d₁ = Database.empty.addRow "f" [] [Term.lit (.int 0)] :=
-    (Option.some.inj (h₀.stepCmd_eq hempty ⟨trivial, trivial, trivial⟩ (by simp))).symm
+    (Option.some.inj (h₀.stepCmd_eq hempty (by simp))).symm
   subst e₀
   have e₁ : d₂ = (Database.empty.addRow "f" [] [Term.lit (.int 0)]).addRow "f" []
       [Term.lit (.int 1)] :=
-    (Option.some.inj (h₁.stepCmd_eq hempty ⟨trivial, trivial, trivial⟩ (by simp))).symm
+    (Option.some.inj (h₁.stepCmd_eq hempty (by simp))).symm
   subst e₁
   have e₂ : d₃ = badDb :=
-    (Option.some.inj (h₂.stepCmd_eq hempty badRule_noPrim (by simp))).symm
+    (Option.some.inj (h₂.stepCmd_eq hempty (by simp))).symm
   subst e₂
   have e₃ := k₄.nil_inv
   subst e₃
@@ -569,18 +561,18 @@ theorem badProgram_not_programStep :
   | run hrun => exact badDb_runRules_ne (RunStep.eq_runRules badDb_sig hrun).symm
 
 /-- **`execM_reachable`'s `Program.SetLegal` hypothesis is necessary.** There is a program
-satisfying the other two — it declares only constructors and names no primitive — whose
-`exec` state no `ProgramStep` reaches.
+satisfying the other one — it declares only constructors — whose `exec` state no
+`ProgramStep` reaches.
 
 `exec_toDatabase` carries `badProgram_run` across to the interpreter, so this refutes the
 theorem in the shape it is stated, not merely the `run` half of it. -/
 theorem execM_reachable_needs_setLegal :
-    ∃ (p : Program) (d : FDatabase), p.CtorDecls ∧ p.NoPrim ∧ exec p = some d ∧
+    ∃ (p : Program) (d : FDatabase), p.CtorDecls ∧ exec p = some d ∧
       ¬ ProgramStep FDatabase.empty.toDatabase p d.toDatabase := by
   have hmap : (exec badProgram).map FDatabase.toDatabase = some (runRules badDb) := by
     rw [exec_toDatabase]; exact badProgram_run
   obtain ⟨d, hd, hdd⟩ := Option.map_eq_some_iff.mp hmap
-  refine ⟨badProgram, d, badProgram_ctorDecls, badProgram_noPrim, hd, ?_⟩
+  refine ⟨badProgram, d, badProgram_ctorDecls, hd, ?_⟩
   rw [FDatabase.toDatabase_empty, hdd]
   exact badProgram_not_programStep
 

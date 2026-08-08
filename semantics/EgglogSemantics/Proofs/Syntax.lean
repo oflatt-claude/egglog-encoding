@@ -38,6 +38,30 @@ theorem mem_varsList {v : Var} {es : List Expr} (h : v ∈ Expr.varsList es) :
     · obtain ⟨e', he', hv⟩ := ih h
       exact ⟨e', List.mem_cons_of_mem _ he', hv⟩
 
+@[simp] theorem fns_lit {l : Lit} : (Expr.lit l).fns = [] := rfl
+
+@[simp] theorem fns_var {v : Var} : (Expr.var v).fns = [] := rfl
+
+@[simp] theorem fns_app {f : FnName} {args : List Expr} :
+    (Expr.app f args).fns = f :: Expr.fnsList args := rfl
+
+@[simp] theorem fnsList_nil : Expr.fnsList ([] : List Expr) = [] := rfl
+
+@[simp] theorem fnsList_cons {e : Expr} {es : List Expr} :
+    Expr.fnsList (e :: es) = e.fns ∪ Expr.fnsList es := rfl
+
+/-- A function name of an argument list is a function name of one of its arguments. -/
+theorem mem_fnsList {f : FnName} {es : List Expr} (h : f ∈ Expr.fnsList es) :
+    ∃ e ∈ es, f ∈ e.fns := by
+  induction es with
+  | nil => simp at h
+  | cons e es ih =>
+    rw [fnsList_cons, List.mem_union_iff] at h
+    rcases h with h | h
+    · exact ⟨e, List.mem_cons_self, h⟩
+    · obtain ⟨e', he', hv⟩ := ih h
+      exact ⟨e', List.mem_cons_of_mem _ he', hv⟩
+
 end Expr
 @[simp] theorem Query.vars_nil : Query.vars [] = [] := rfl
 

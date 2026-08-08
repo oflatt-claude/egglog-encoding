@@ -94,18 +94,19 @@ programs with rules.
 ### The consolidation arc
 
 M9 introduced a shadow of each M0–M8 notion, and they have been collapsed one at a time.
-Three pairs, in the order they are being retired:
+Four pairs, in the order they are being retired:
 
 | M0–M8 | M9 shadow | status |
 | --- | --- | --- |
 | `Database`, `Action`, `Cmd`, `Rule` | `MDatabase`, `RowAction`, `MCmd`, `MRule` | **done** — one of each |
 | `Cong` | `MCong` | open — `mcong_iff_cong` licenses the collapse |
-| `Expr.eval`, `evalAction`, `stepCmd` | `MEval`, `ActionStep`, `CmdStep` | open — M12, and now *partial* |
+| `Expr.eval`, `evalAction`, `evalActions` | `MEval`, `ActionStep`, `ActionsStep` | **done** — M12 part 1, the functional side won |
+| `stepCmd`, `runProgram` | `CmdStep`, `ProgramStep` | open — and they stay relations; see M12 |
 
 The pattern is worth naming because the answer has been different each time. The state
 types merged outright. `Cong`/`MCong` cannot merge without pushing `CtorRows` hypotheses
 into `exec_toDatabase`, and the split happens to line up with the two sides of a simulation
-theorem, so it is structure rather than duplication. And `eval`/`MEval` can now merge —
+theorem, so it is structure rather than duplication. And `eval`/`MEval` **have** merged —
 because reads became query atoms — but only up to the action level: `MergeStep` chooses
 which rows collide and `MergeClosure` how many steps, so the step relations stay relations.
 See M12.
@@ -524,33 +525,39 @@ a round's `union` copies every operand's terms and without dedup the per-substit
 - **M11 — the proof encoding.** See below.
 
 - **M12 — one evaluator.** `Expr.eval`/`evalAction`/`stepCmd`/`runProgram` (functions,
-  M0–M8) and `Expr.MEval`/`ActionStep`/`CmdStep`/`ProgramStep` (relations, M9) both run
-  over the one `Database` and the one `Action`. Collapsing them is the last of the
-  unification and is **deliberately deferred**. The direction it goes in has changed, and
-  the change is the whole reason "Reading is a query atom" was worth doing.
+  M0–M8) and `Expr.MEval`/`ActionStep`/`CmdStep`/`ProgramStep` (relations, M9) both ran
+  over the one `Database` and the one `Action`. **Part 1 has landed**: `Expr.eval` takes a
+  `Signature` and resolves primitives, `Expr.MEval`/`MEvalList` and
+  `ActionStep`/`ActionsStep` are gone, and the whole `NoPrim` family with them —
+  `MergeStep`, `RuleResults` and `CmdStep.action` read `evalAction`/`evalActions`
+  directly. What is left is `Cong`/`MCong`, `ValidSubst`/`MValidSubst` and
+  `stepCmd`/`CmdStep`. The direction it went in had changed, and the change is the whole
+  reason "Reading is a query atom" was worth doing.
 
-  - *Determinism came back.* `Expr.MEval_unique` now holds with **no hypotheses** — no
-    `AllConstructors`, no `NoPrim` — because the only rule that read the database was
-    `lookup` and reading is a query atom. `Database.ActionStep_unique` and
-    `ActionsStep_unique` follow: every premise of every action case is an evaluation.
+  - *Determinism is what reopened it.* `Expr.MEval_unique` came to hold with **no
+    hypotheses** — no `AllConstructors`, no `NoPrim` — because the only rule that read the
+    database was `lookup` and reading is a query atom, and the action relations inherited
+    it. A relation that is a function unconditionally can simply be replaced by one, which
+    is what part 1 did.
   - *What must stay a relation.* Everything above an action, and for a reason that has
     nothing to do with evaluation: `MergeStep` chooses **which** pair of rows collides and
     in which order, and `MergeClosure` chooses how many steps to take. So `RunStep`,
     `CmdStep` and `ProgramStep` are relations by design and stay that way. The unification
     is therefore *partial* — one evaluator and one action evaluator, two step relations.
-  - *The cost, restated.* The old estimate of 1000–1400 lines assumed converting the
-    functional side (`Proofs/{Eval,Match,Step,Scope,Interp}`) to relations. It now goes
-    the other way: make `ActionStep`/`ActionsStep` functions and the `Option` algebra those
-    files are built on is what survives. What is touched is `Proofs/Merge.lean`'s action
-    lemmas — `ActionStep.contained`/`.envAgree`/`.mono`/`.wf`,
-    `execAction_ActionStep`, `execActions_ActionsStep` and their callers, ~60 references —
-    and `Expr.eval` gaining a `Signature` argument so that one evaluator serves both, which
-    is what puts a hypothesis on `Proofs/Scope.lean` and `exec_toDatabase`.
-  - *The recovery, unchanged in shape.* `exec_toDatabase` is an **equality** on the
-    constructor fragment, and that is what makes the differential cases bear on the
-    specification rather than only on the interpreter. It survives the collapse for the
-    same reason it holds now: on that fragment there is no `.merge` function, so no
-    `MergeStep`, so `ProgramStep` is deterministic there.
+  - *The cost, as it came out.* Going the functional way was right: the `Option` algebra
+    `Proofs/{Eval,Match,Step,Scope,Interp}` is built on survived, `Proofs/` lost ~475 lines
+    and `Spec/` ~77, and `Impl/Merge.lean` lost its whole evaluator, action and matching
+    layer to `Impl/Interp.lean`'s. `exec_toDatabase` needed no hypothesis. `Proofs/Scope.lean`
+    did: `Expr.eval` now returns `none` at a lookup and at a mis-sorted primitive, so
+    `Expr.Scoped` threads a `Signature` and rules both out, and `Program.Scoped` threads it
+    with `Cmd.sigBind` as it already threaded the scope with `Cmd.bind`. `run_isSome` is
+    unchanged in shape.
+  - *The recovery, intact.* `exec_toDatabase` is an **equality** on the constructor
+    fragment, and that is what makes the differential cases bear on the specification
+    rather than only on the interpreter. It survived the collapse for the reason it held
+    before: on that fragment there is no `.merge` function, so no `MergeStep`, so
+    `ProgramStep` is deterministic there. `execM_reachable` got *stronger* — it dropped
+    `Program.NoPrim` and keeps only `CtorDecls` and `SetLegal`.
 
 ## Extending with `:merge` (M9)
 

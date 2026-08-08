@@ -9,13 +9,13 @@ def Scope.Models (Γ : Scope) (σ : Env) : Prop := ∀ v, v ∈ Γ ↔ v ∈ Env
 theorem Scope.Models.empty : Scope.Models [] ([] : Env) := by simp [Models]
 
 /-! ### Scoped expressions evaluate -/
-theorem Expr.eval_isSome_of_scoped {e : Expr} {Γ : Scope} {σ : Env} (hm : Γ.Models σ)
-    (h : e.Scoped Γ) : ∃ t, e.eval σ = some t :=
-  e.eval_isSome fun v hv => (hm v).mp (h v hv)
+theorem Expr.eval_isSome_of_scoped {sig : Signature} {e : Expr} {Γ : Scope} {σ : Env}
+    (hm : Γ.Models σ) (h : e.Scoped Γ sig) : ∃ t, e.eval sig σ = some t :=
+  e.eval_isSome (fun v hv => (hm v).mp (h.1 v hv)) h.2
 
 /-! ### Actions do not get stuck -/
 theorem evalAction_isSome_of_scoped {db : Database} {Γ : Scope} (hm : Γ.Models db.env)
-    {a : Action} (h : a.Scoped Γ) :
+    {a : Action} (h : a.Scoped Γ db.sig) :
     ∃ db', evalAction db a = some db' ∧ (a.bind Γ).Models db'.env := by
   cases a with
   | expr e =>
@@ -32,23 +32,31 @@ theorem evalAction_isSome_of_scoped {db : Database} {Γ : Scope} (hm : Γ.Models
     obtain ⟨t₂, ht₂⟩ := Expr.eval_isSome_of_scoped hm h.2
     exact ⟨db.addEq t₁ t₂, by simp [evalAction, ht₁, ht₂], hm⟩
   | set f args out =>
-    obtain ⟨as, has⟩ := Expr.evalList_isSome args fun v hv => by
-      obtain ⟨e, he, hve⟩ := Expr.mem_varsList hv
-      exact (hm v).mp (h.1 e he v hve)
-    obtain ⟨vs, hvs⟩ := Expr.evalList_isSome out fun v hv => by
-      obtain ⟨e, he, hve⟩ := Expr.mem_varsList hv
-      exact (hm v).mp (h.2 e he v hve)
+    obtain ⟨as, has⟩ := Expr.evalList_isSome args
+      (fun v hv => by
+        obtain ⟨e, he, hve⟩ := Expr.mem_varsList hv
+        exact (hm v).mp ((h.1 e he).1 v hve))
+      (fun g hg => by
+        obtain ⟨e, he, hge⟩ := Expr.mem_fnsList hg
+        exact (h.1 e he).2 g hge)
+    obtain ⟨vs, hvs⟩ := Expr.evalList_isSome out
+      (fun v hv => by
+        obtain ⟨e, he, hve⟩ := Expr.mem_varsList hv
+        exact (hm v).mp ((h.2 e he).1 v hve))
+      (fun g hg => by
+        obtain ⟨e, he, hge⟩ := Expr.mem_fnsList hg
+        exact (h.2 e he).2 g hge)
     refine ⟨db.addRow f as vs, by simp [evalAction, has, hvs], ?_⟩
     simpa [Action.bind] using hm
 
 theorem evalActions_isSome_of_scoped {db : Database} {Γ : Scope} (hm : Γ.Models db.env)
-    {as : List Action} (h : Actions.Scoped as Γ) :
+    {as : List Action} (h : Actions.Scoped as Γ db.sig) :
     ∃ db', evalActions db as = some db' ∧ (Actions.bind as Γ).Models db'.env := by
   induction as generalizing db Γ with
   | nil => exact ⟨db, rfl, hm⟩
   | cons a as ih =>
     obtain ⟨db₁, h₁, hm₁⟩ := evalAction_isSome_of_scoped hm h.1
-    obtain ⟨db₂, h₂, hm₂⟩ := ih hm₁ h.2
+    obtain ⟨db₂, h₂, hm₂⟩ := ih hm₁ (by rw [evalAction_sig h₁]; exact h.2)
     exact ⟨db₂, by simp [h₁, h₂], hm₂⟩
 
 /-! ### A well-scoped rule contributes on every match
@@ -75,30 +83,36 @@ theorem Query.bind_models {db : Database} {Γ : Scope} (hm : Γ.Models db.env) {
     · exact Or.inr ⟨p, hp, (p.mem_freeVars.mp hv).1⟩
 
 theorem evalLocalActions_isSome_of_scoped {db : Database} {Γ : Scope}
-    (hm : Γ.Models db.env) {r : Rule} (hr : r.Scoped Γ) {σ : Env}
+    (hm : Γ.Models db.env) {r : Rule} (hr : r.Scoped Γ db.sig) {σ : Env}
     (hσ : ValidQuerySubst db r.query σ) : ∃ d, evalLocalActions db r.actions σ = some d := by
   obtain ⟨d, hd, _⟩ := evalActions_isSome_of_scoped
     (db := { db with env := db.env ++ σ }) (Query.bind_models hm hσ) hr.2
   exact ⟨{ d with env := db.env, rules := db.rules }, by simp [evalLocalActions, hd]⟩
 
-/-! ### Well-scoped programs do not get stuck -/
+/-! ### Well-scoped programs do not get stuck
+
+`Cmd.sigBind` is what the signature half of the invariant is: a command leaves the
+signature `Program.Scoped` checks the rest of the program against. -/
 theorem stepCmd_isSome_of_scoped {db : Database} {Γ : Scope} (hm : Γ.Models db.env)
-    {c : Cmd} (h : c.Scoped Γ) :
-    ∃ db', stepCmd db c = some db' ∧ (c.bind Γ).Models db'.env := by
+    {c : Cmd} (h : c.Scoped Γ db.sig) :
+    ∃ db', stepCmd db c = some db' ∧ (c.bind Γ).Models db'.env ∧
+      db'.sig = c.sigBind db.sig := by
   cases c with
-  | action a => exact evalAction_isSome_of_scoped hm h
-  | rule r => exact ⟨_, rfl, hm⟩
-  | run => exact ⟨_, rfl, hm⟩
-  | decl f d => exact ⟨_, rfl, hm⟩
+  | action a =>
+    obtain ⟨db', hv, hm'⟩ := evalAction_isSome_of_scoped hm h
+    exact ⟨db', hv, hm', evalAction_sig hv⟩
+  | rule r => exact ⟨_, rfl, hm, rfl⟩
+  | run => exact ⟨_, rfl, hm, rfl⟩
+  | decl f d => exact ⟨_, rfl, hm, rfl⟩
 
 theorem runProgram_isSome_of_scoped {db : Database} {Γ : Scope} (hm : Γ.Models db.env)
-    {p : Program} (h : Program.Scoped p Γ) :
+    {p : Program} (h : Program.Scoped p Γ db.sig) :
     ∃ db', runProgram db p = some db' ∧ (Program.bind p Γ).Models db'.env := by
   induction p generalizing db Γ with
   | nil => exact ⟨db, rfl, hm⟩
   | cons c cs ih =>
-    obtain ⟨db₁, h₁, hm₁⟩ := stepCmd_isSome_of_scoped hm h.1
-    obtain ⟨db₂, h₂, hm₂⟩ := ih hm₁ h.2
+    obtain ⟨db₁, h₁, hm₁, hs₁⟩ := stepCmd_isSome_of_scoped hm h.1
+    obtain ⟨db₂, h₂, hm₂⟩ := ih hm₁ (by rw [hs₁]; exact h.2)
     exact ⟨db₂, by simp [h₁, h₂], hm₂⟩
 
 /-- A well-scoped program runs to completion. -/

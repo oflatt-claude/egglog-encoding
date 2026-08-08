@@ -31,7 +31,7 @@ syntactic equality: congruence there is entirely simulated.
 **Proofs are off, but no longer because the language cannot say them.** egglog's `@UF`
 and `@fView` carry a parent/e-class *and* a proof. That column used to be inexpressible:
 `Action.set` took a single output expression and so could write only one column.
-`Action.set` now takes a `List Expr`, `ActionStep.set` writes `db.addRow f ts vs`, and
+`Action.set` now takes a `List Expr`, `evalAction`'s `set` case writes `db.addRow f ts vs`, and
 `Pattern.values` — egglog's row atom, and now the only read the language has — binds
 every value column. So what remains between this file and a proofs-on encoding is
 *encoder* work: emitting a `@Proof` sort, the `@Rule_<k>` and `@Congr` node families, and
@@ -177,7 +177,7 @@ mutual
 and the next variable number.
 
 A view read is a `Pattern.values` atom, which is what egglog lowers `(= e (@fView c…))` to
-and the only form the model admits: `Expr.MEval` does not read, so a non-constructor
+and the only form the model admits: `Expr.eval` does not read, so a non-constructor
 application is not an expression here. -/
 def encodeQueryExpr : Expr → Nat → Expr × List Pattern × Nat
   | .lit l, n => (.lit l, [], n)

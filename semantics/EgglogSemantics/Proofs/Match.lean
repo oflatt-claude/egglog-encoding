@@ -341,10 +341,10 @@ theorem ValidSubst.of_agree {db : Database} {p : Pattern} {σ σ' : Env}
     rw [← hag b.1] at hlk
     exact h.mem_terms _ (Env.mem_of_lookup hlk)
   have hperm : (Env.dom σ').Perm (p.freeVars db.env) := hdom ▸ List.Perm.refl _
-  have hev : ∀ e : Expr, e.eval (db.env ++ σ') = e.eval (db.env ++ σ) :=
+  have hev : ∀ e : Expr, e.eval db.sig (db.env ++ σ') = e.eval db.sig (db.env ++ σ) :=
     fun e => Expr.eval_agree (Env.Agree.append_left db.env hag.symm) e
   have hevl : ∀ es : List Expr,
-      Expr.evalList es (db.env ++ σ') = Expr.evalList es (db.env ++ σ) :=
+      Expr.evalList db.sig es (db.env ++ σ') = Expr.evalList db.sig es (db.env ++ σ) :=
     fun es => Expr.evalList_agree (Env.Agree.append_left db.env hag.symm) es
   cases h with
   | expr _ hwm he hc => exact .expr ⟨hperm, hterms⟩ hwm (by rw [hev]; exact he) hc

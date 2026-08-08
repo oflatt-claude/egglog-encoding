@@ -86,11 +86,11 @@ final premise, which relates the two instances themselves, is `CongOn`. -/
 inductive ValidSubst (db : Database) : Pattern → Env → Prop where
   | expr {e : Expr} {σ : Env} {w t : Term} :
       ValidEnv (e.freeVars db.env) db σ → w ∈ db.terms →
-      e.eval (db.env ++ σ) = some t → Cong (db.addTerm t) w t →
+      e.eval db.sig (db.env ++ σ) = some t → Cong (db.addTerm t) w t →
       ValidSubst db (.expr e) σ
   | eq {e₁ e₂ : Expr} {σ : Env} {w t₁ t₂ : Term} :
       ValidEnv (e₁.freeVars db.env ∪ e₂.freeVars db.env) db σ → w ∈ db.terms →
-      e₁.eval (db.env ++ σ) = some t₁ → e₂.eval (db.env ++ σ) = some t₂ →
+      e₁.eval db.sig (db.env ++ σ) = some t₁ → e₂.eval db.sig (db.env ++ σ) = some t₂ →
       Cong ((db.addTerm t₁).addTerm t₂) w t₁ → CongOn db t₁ t₂ →
       ValidSubst db (.eq e₁ e₂) σ
   /-- A tuple destructure matches a row whose key and value columns are congruent to the
@@ -111,8 +111,8 @@ inductive ValidSubst (db : Database) : Pattern → Env → Prop where
   | values {vs : List Expr} {f : FnName} {as : List Expr} {σ : Env}
       {us ts ws bs : List Term} :
       ValidEnv (Expr.freeVarsList vs db.env ∪ Expr.freeVarsList as db.env) db σ →
-      Expr.evalList vs (db.env ++ σ) = some us →
-      Expr.evalList as (db.env ++ σ) = some ts →
+      Expr.evalList db.sig vs (db.env ++ σ) = some us →
+      Expr.evalList db.sig as (db.env ++ σ) = some ts →
       CongList ((db.addTerms ts).addTerms us) ts bs →
       CongList ((db.addTerms ts).addTerms us) us ws → Row.mk f bs ws ∈ db.rows →
       ValidSubst db (.values vs f as) σ

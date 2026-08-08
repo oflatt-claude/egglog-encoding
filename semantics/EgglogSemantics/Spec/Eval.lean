@@ -6,11 +6,14 @@ import EgglogSemantics.Spec.Congruence
 Ports the Redex `Eval-Expr`, `Eval-Action`, `Eval-Global-Actions` and
 `Eval-Local-Actions`.
 
-Evaluation is partial: `Eval-Expr` has no rule for an unbound variable, so it gets
-stuck. Here that is `none`, and `Scope.lean` shows a well-scoped program never
-produces it.
+Evaluation is partial, in three ways. `Eval-Expr` has no rule for an unbound variable;
+an application of a non-constructor is a *lookup*, which is a query atom
+(`Pattern.values`) and never an expression; and a primitive may be given operands of the
+wrong sort, which is egglog's own `i64` type error and which this model has no sort
+discipline to reject statically. All three are `none`. `Scope.lean` shows a program the
+front end accepts never produces the first two.
 
-Actions only ever add terms and equalities, which is `evalAction_contained` — the
+Actions only ever add terms, rows and equalities, which is `evalAction_contained` — the
 fact the Redex documentation appeals to when it says the order of actions does not
 matter.
 -/
@@ -18,33 +21,51 @@ matter.
 namespace Egglog
 mutual
 
-/-- The Redex `Eval-Expr`: build the ground term an expression denotes. -/
-def Expr.eval : Expr → Env → Option Term
+/-- The Redex `Eval-Expr`: build the ground term an expression denotes.
+
+The signature is read for one thing only — whether a name **builds or computes or
+reads**. egglog consults its primitive table first, so a reserved name shadows a user
+function; a constructor builds the application; and anything else is a lookup, which has
+no rule here at all. That is why the evaluator needs a `Signature` and nothing else of
+the database: reading is confined to `Pattern.values`.
+
+Because only constructor applications ever end up inside a `Term`, `Term.ctorRows` needs
+no signature. -/
+def Expr.eval (sig : Signature) : Expr → Env → Option Term
   | .lit l, _ => some (.lit l)
   | .var v, σ => Env.lookup v σ
-  | .app f args, σ => (Expr.evalList args σ).map (Term.app f)
+  | .app f args, σ =>
+      match Prim.ofName f, sig.mergeOf f with
+      | some p, _ => (Expr.evalList sig args σ).bind p.apply
+      | none, .union => (Expr.evalList sig args σ).map (Term.app f)
+      | none, _ => none
 
 /-- `Expr.eval` over an argument list, failing if any argument does. -/
-def Expr.evalList : List Expr → Env → Option (List Term)
+def Expr.evalList (sig : Signature) : List Expr → Env → Option (List Term)
   | [], _ => some []
-  | e :: es, σ => (e.eval σ).bind fun t => (Expr.evalList es σ).map (t :: ·)
+  | e :: es, σ => (e.eval sig σ).bind fun t => (Expr.evalList sig es σ).map (t :: ·)
 
 end
 
-/-- The Redex `Eval-Action`.
+/-- The Redex `Eval-Action`, plus `set`.
 
 A `let` binds in the environment the database carries, so at top level it adds a
 global and inside a rule it adds a rule-local binding; `evalLocalActions` is what
-makes the second case local by restoring the caller's environment afterwards. -/
+makes the second case local by restoring the caller's environment afterwards.
+
+`set` is the one case the Redex has no rule for. It only ever adds: a collision with a
+congruent key is resolved by `MCong.fd` or by `MergeStep`, neither of which removes the
+row it wrote. -/
 def evalAction (db : Database) : Action → Option Database
-  | .expr e => (e.eval db.env).map fun t => db.addTerm t
-  | .letBind v e => (e.eval db.env).map fun t =>
+  | .expr e => (e.eval db.sig db.env).map fun t => db.addTerm t
+  | .letBind v e => (e.eval db.sig db.env).map fun t =>
       { db.addTerm t with env := (v, t) :: db.env }
   | .union e₁ e₂ =>
-      (e₁.eval db.env).bind fun t₁ => (e₂.eval db.env).map fun t₂ => db.addEq t₁ t₂
+      (e₁.eval db.sig db.env).bind fun t₁ =>
+        (e₂.eval db.sig db.env).map fun t₂ => db.addEq t₁ t₂
   | .set f args out =>
-      (Expr.evalList args db.env).bind fun as =>
-        (Expr.evalList out db.env).map fun vs => db.addRow f as vs
+      (Expr.evalList db.sig args db.env).bind fun as =>
+        (Expr.evalList db.sig out db.env).map fun vs => db.addRow f as vs
 
 /-- The Redex `Eval-Global-Actions`: run the actions in order. -/
 def evalActions (db : Database) : List Action → Option Database

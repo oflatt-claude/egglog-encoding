@@ -131,11 +131,12 @@ phase models. -/
 def Signature.AllConstructors (sig : Signature) : Prop :=
   ∀ f d, sig f = some d → d.merge = MergeSpec.union
 
-/-! ### Variables
+/-! ### Variables and function names
 
 The Redex has no `vars` function — its `typed-expr` walks the expression instead.
-Having it separately is what lets the static scope check in `Scope.lean` be related
-to the runtime environment. -/
+Having them separately is what lets the static checks in `Scope.lean` be related to the
+runtime state: `vars` is what the environment must bind, `fns` what the signature must
+declare. -/
 mutual
 
 /-- All variables occurring in `e`, deduplicated. -/
@@ -148,6 +149,21 @@ def Expr.vars : Expr → List Var
 def Expr.varsList : List Expr → List Var
   | [] => []
   | e :: es => e.vars ∪ Expr.varsList es
+
+end
+
+mutual
+
+/-- Every function name applied anywhere in `e`. -/
+def Expr.fns : Expr → List FnName
+  | .lit _ => []
+  | .var _ => []
+  | .app f args => f :: Expr.fnsList args
+
+/-- `Expr.fns` over an argument list. -/
+def Expr.fnsList : List Expr → List FnName
+  | [] => []
+  | e :: es => e.fns ∪ Expr.fnsList es
 
 end
 

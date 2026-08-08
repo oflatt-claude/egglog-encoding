@@ -447,7 +447,7 @@ ordinary egglog: `(set (Dist (K)) (min 5 3))` is an `i64` expression in a value 
 which is where `tests/interval.egg` puts one too.
 
 **What the oracle sees.** `min` and `max` are the one place the model *computes* rather
-than *builds* (`Prim.apply` against `Expr.MEval.ctor`), so the three ways to get this wrong
+than *builds* (`Prim.apply` against `Expr.eval`'s constructor case), so the three ways to get this wrong
 are to build the term `min(5, 3)`, to compute the wrong operation, or to compute nothing.
 Each case reads the answer back at a literal and builds `Hit`, and reads the operand that
 must have lost and builds `Miss`: building a term or getting stuck gives `Hit 0, Miss 0`,
@@ -630,7 +630,7 @@ private def curatedMerge : List (String × Program) :=
        .rule readStale, .run]),
     -- A single-column read through *congruent* keys: the row is written at `X`, read at
     -- `A`. `tuple-read-congr` covers the two-column case; this is the one-column one, and
-    -- both reach `patternHoldsM`'s row scan through its key-congruence test.
+    -- both reach `patternHolds`'s row scan through its key-congruence test.
     ("read-congr",
       [.decl "Dist" (dist 1), mset "Dist" [C "X"] 3,
        .action (.expr (C "A")), .action (.union (C "A") (C "X")),
@@ -758,7 +758,7 @@ private def curatedMerge : List (String × Program) :=
        .rule (readInto "Hit" "Dist" [C "K"] 5), .rule (readInto "Miss" "Dist" [C "K"] 3),
        .run]),
     -- Nested: `(min (max 5 3) 4)` is `4`, so the operand list itself has to be evaluated
-    -- through `MEvalList` before the outer primitive applies. `Miss` reads `5`, the value
+    -- through the argument list before the outer primitive applies. `Miss` reads `5`, the value
     -- an unevaluated inner application would have left.
     ("prim-nested",
       [.decl "Dist" (dist 1),
@@ -863,7 +863,7 @@ private def curatedMerge : List (String × Program) :=
     -- (B))` the intermediate class is found by matching. `Hit 1` says the model found it
     -- too. `Miss` reads at `(G (C) (A))`, which is equally unbuilt and congruent to
     -- nothing, so `Miss 0` is what fails if the fix over-matches by treating any
-    -- hypothesized operand as present. This was a recorded divergence: `patternHoldsM`
+    -- hypothesized operand as present. This was a recorded divergence: `patternHolds`
     -- closed over `d.closureF` where its `.expr`/`.eq` cases close over `(d.addTerm t)`,
     -- and answered `Hit 0`.
     ("read-unbuilt-key",
@@ -929,7 +929,7 @@ Keys are eq-sorted and outputs are `i64`, as the curated cases already are.
 the draw and minimized by hand against the release binary.
 
 1. **A read atom's operands were not interned before the congruence test** — *fixed*, and
-   pinned by the three `read-unbuilt-key*` cases above. `patternHoldsM` computed
+   pinned by the three `read-unbuilt-key*` cases above. `patternHolds` computed
    `cl := d.closureF` in its `.values` case where its `.expr` and `.eq` cases close over
    the extended database, so a key expression the program never built was in no congruence
    class and matched nothing:

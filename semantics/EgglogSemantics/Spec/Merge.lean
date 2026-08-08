@@ -20,8 +20,8 @@ Three things follow, and the first is the milestone:
   is a phase of `RunStep` rather than a definition of "the value of a key".
 * **Reading is a query atom, never an evaluation.** The *only* read is `Pattern.values`;
   every expression the semantics evaluates names constructors and primitives alone. So
-  `Expr.MEval` is `Expr.eval` plus primitive resolution — deterministic, and a function
-  of the signature and the environment rather than of the database.
+  `Expr.eval` needs nothing from the database but its signature, and stays the function
+  `Spec/Eval.lean` defines rather than becoming a relation.
 
 Nothing is ever removed, from any of `terms`, `rows` or `eqs`. Both colliding rows
 survive a merge, which is what keeps the state monotone.
@@ -88,221 +88,13 @@ write the combined row at one key only and still be seen from the other, so the 
 never needs re-canonicalization. Monotone in `Contained`, because `MCongList` is.
 
 A key class may record several outputs, which is why this is a relation and not a
-function. Nothing *evaluates* through it — `Expr.MEval` does not read — so the
+function. Nothing *evaluates* through it — `Expr.eval` does not read — so the
 over-approximation is confined to the query, where `MValidSubst.values` matches any
 recorded row. See `MERGE.md`, "Why the reader over-approximates". -/
 def Out (db : Database) (f : FnName) (as : List Term) (vs : List Term) : Prop :=
   ∃ bs, MCongList db as bs ∧ Row.mk f bs vs ∈ db.rows
 
 end Database
-/-! ### The term order
-
-One definition with two jobs. `ordering-min`/`ordering-max` are part of the *program*
-the encoding writes — the union-find's merge body is literally
-`(set (@UF_<S> (ordering-max old new)) (values (ordering-min old new) ()))` — and they
-are also what makes an interpreter's choice of which collision to fire deterministic.
-
-`Term.blt` is a *structural* order where egglog's is an allocation order, so the two pick
-different class representatives. That is an accepted deviation and a hypothesis of any
-future simulation theorem; `MERGE.md`, "The representative deviation", has the argument
-and two repros against the binary. -/
-mutual
-
-/-- A total order on terms: literals below applications, then by argument count, then
-by name, then lexicographically. Written by hand and mutually, for the same reason
-`Term.decEq` is. -/
-def Term.blt : Term → Term → Bool
-  | .lit (.int m), .lit (.int n) => decide (m < n)
-  | .lit _, .app _ _ => true
-  | .app _ _, .lit _ => false
-  | .app f as, .app g bs =>
-      if as.length ≠ bs.length then decide (as.length < bs.length)
-      else if f ≠ g then decide (f < g)
-      else Term.bltList as bs
-
-/-- `Term.blt` lexicographically over argument lists. -/
-def Term.bltList : List Term → List Term → Bool
-  | [], _ => false
-  | _ :: _, [] => false
-  | a :: as, b :: bs => if a = b then Term.bltList as bs else Term.blt a b
-
-end
-
-/-- egglog's `ordering-min`. -/
-def Term.orderingMin (s t : Term) : Term := if Term.blt s t then s else t
-
-/-- egglog's `ordering-max`. -/
-def Term.orderingMax (s t : Term) : Term := if Term.blt s t then t else s
-
-/-- The primitives this fragment has. egglog resolves a primitive by name out of a
-table that shares a namespace with user functions, which is why these are `Expr.app`
-of a reserved name rather than a new `Expr` constructor — see `MERGE.md`, "Primitives
-without churning `Expr`". -/
-inductive Prim where
-  | orderingMin
-  | orderingMax
-  /-- egglog's `i64` `min`. -/
-  | intMin
-  /-- egglog's `i64` `max`. -/
-  | intMax
-  deriving DecidableEq, Repr
-
-/-- The reserved names. A user function of the same name is shadowed, as in egglog. See
-`MERGE.md`, "Primitives without churning `Expr`", for why `min`/`max` are among them. -/
-def Prim.ofName : FnName → Option Prim
-  | "ordering-min" => some .orderingMin
-  | "ordering-max" => some .orderingMax
-  | "min" => some .intMin
-  | "max" => some .intMax
-  | _ => none
-
-/-- A primitive's meaning. `none` for the wrong arity, and for `min`/`max` also for a
-non-literal operand — they are `i64` primitives, and this model has no sort discipline to
-reject the application statically. -/
-def Prim.apply : Prim → List Term → Option Term
-  | .orderingMin, [s, t] => some (Term.orderingMin s t)
-  | .orderingMax, [s, t] => some (Term.orderingMax s t)
-  | .intMin, [.lit (.int m), .lit (.int n)] => some (.lit (.int (min m n)))
-  | .intMax, [.lit (.int m), .lit (.int n)] => some (.lit (.int (max m n)))
-  | _, _ => none
-
-/-! `Prim.ofName` resolves a *reserved name*, so whether an application builds a term or
-runs a primitive is a property of the name and not of the syntax. `NoPrim` is that
-property, quantified over the names an expression actually mentions — the unrestricted
-form `∀ f, Prim.ofName f = none` is *false*, `ordering-min` being one, which is why the
-quantifier has to be over `e`. It is the condition under which `Expr.eval` and
-`Expr.MEval` agree. -/
-mutual
-
-/-- No reserved primitive name occurs in `e`, so "build an application" is the right
-reading of every `.app` in it. -/
-def Expr.NoPrim : Expr → Prop
-  | .lit _ => True
-  | .var _ => True
-  | .app f args => Prim.ofName f = none ∧ Expr.NoPrimList args
-
-/-- `Expr.NoPrim` over an argument list. -/
-def Expr.NoPrimList : List Expr → Prop
-  | [] => True
-  | e :: es => Expr.NoPrim e ∧ Expr.NoPrimList es
-
-end
-
-/-! `Expr.NoPrim` lifted to the program, in the shape `Program.CtorDecls` has: every
-expression position a run evaluates, and no threading, because `Prim.ofName` reads a name
-and nothing a command does changes what it says.
-
-The positions are the ones `Expr.MEval` is invoked from — a top-level action, a rule head,
-and a query's operands. A `Pattern.values` atom's *function name* is not one of them: it
-names a table to read rather than a term to build, so a reserved name there is not an
-application at all. -/
-
-/-- No expression position of `a` names a primitive. -/
-def Action.NoPrim : Action → Prop
-  | .expr e => e.NoPrim
-  | .letBind _ e => e.NoPrim
-  | .union e₁ e₂ => e₁.NoPrim ∧ e₂.NoPrim
-  | .set _ args out => Expr.NoPrimList args ∧ Expr.NoPrimList out
-
-/-- Every action in the list. -/
-def Actions.NoPrim : List Action → Prop
-  | [] => True
-  | a :: as => a.NoPrim ∧ Actions.NoPrim as
-
-/-- A query fact. -/
-def Pattern.NoPrim : Pattern → Prop
-  | .expr e => e.NoPrim
-  | .eq e₁ e₂ => e₁.NoPrim ∧ e₂.NoPrim
-  | .values vs _ as => Expr.NoPrimList vs ∧ Expr.NoPrimList as
-
-/-- A rule's query and head. -/
-def Rule.NoPrim (r : Rule) : Prop :=
-  (∀ p ∈ r.query, p.NoPrim) ∧ Actions.NoPrim r.actions
-
-/-- A command. A `decl` carries expressions only in a `:merge` body, and the fragment this
-is used in has none: `Cmd.CtorDecl` forces the merge to be `.union`. -/
-def Cmd.NoPrim : Cmd → Prop
-  | .action a => a.NoPrim
-  | .rule r => r.NoPrim
-  | .run => True
-  | .decl _ _ => True
-
-/-- Every command, as `Program.CtorDecls`. -/
-def Program.NoPrim (p : Program) : Prop := ∀ c ∈ p, c.NoPrim
-
-/-! ### Evaluation
-
-`Expr.eval` is a function of the environment alone, which is exactly right while every
-function is a constructor: a term is its own identity, so building one reads nothing.
-`Expr.MEval` adds the one thing `:merge` forces, which is not reading but **primitives**
-— a `:merge (min old new)` body has to compute `3` rather than build the term
-`min(5, 3)`.
-
-It does *not* read the database. An application of a non-constructor is a lookup, and a
-lookup is a query atom (`Pattern.values`), never an expression, so there is no `lookup`
-constructor here, `MEval` is deterministic, and it consults `db` only for `db.sig`. -/
-mutual
-
-/-- The value an expression denotes: `Expr.eval` with primitives resolved.
-
-`ctor` builds and `prim` computes, split on the reserved name first, as egglog's primitive
-table is consulted first. A `Term` therefore contains only constructor applications, which
-is what lets `Term.ctorRows` need no signature.
-
-There is deliberately **no rule for a non-constructor application**. That is a lookup, and
-`Impl/Check.lean`'s `noLookup` rejects one statically in every position this relation is
-used from — a rule head, a top-level action, a `:merge` body, and a query's operands — so
-a program the model accepts never reaches the missing case. Reading happens in the query,
-where `MValidSubst.values` matches a row directly.
-
-Partiality that was `none` in `Expr.eval` is "no `t` related": an unbound variable, or a
-primitive at the wrong operands. `Scope.lean`'s "a well-scoped program never gets stuck"
-covers the first and not the second, which is egglog's own `i64` type error. -/
-inductive Expr.MEval (db : Database) (σ : Env) : Expr → Term → Prop where
-  | lit {l : Lit} : Expr.MEval db σ (.lit l) (.lit l)
-  | var {v : Var} {t : Term} : Env.lookup v σ = some t → Expr.MEval db σ (.var v) t
-  | ctor {f : FnName} {args : List Expr} {ts : List Term} :
-      Prim.ofName f = none → db.sig.mergeOf f = MergeSpec.union →
-      Expr.MEvalList db σ args ts → Expr.MEval db σ (.app f args) (.app f ts)
-  | prim {f : FnName} {p : Prim} {args : List Expr} {ts : List Term} {v : Term} :
-      Prim.ofName f = some p → Expr.MEvalList db σ args ts → p.apply ts = some v →
-      Expr.MEval db σ (.app f args) v
-
-/-- `Expr.MEval` over an argument list. -/
-inductive Expr.MEvalList (db : Database) (σ : Env) : List Expr → List Term → Prop where
-  | nil : Expr.MEvalList db σ [] []
-  | cons {e : Expr} {es : List Expr} {t : Term} {ts : List Term} :
-      Expr.MEval db σ e t → Expr.MEvalList db σ es ts →
-      Expr.MEvalList db σ (e :: es) (t :: ts)
-
-end
-
-/-! ### Actions that write rows -/
-/-- One row action.
-
-The three inherited cases are `evalAction`'s, read relationally. `set` is the new one,
-and it only ever adds. -/
-inductive Database.ActionStep : Database → Action → Database → Prop where
-  | expr {db : Database} {e : Expr} {t : Term} :
-      Expr.MEval db db.env e t → Database.ActionStep db (.expr e) (db.addTerm t)
-  | letBind {db : Database} {v : Var} {e : Expr} {t : Term} :
-      Expr.MEval db db.env e t →
-      Database.ActionStep db (.letBind v e)
-        { db.addTerm t with env := (v, t) :: db.env }
-  | union {db : Database} {e₁ e₂ : Expr} {t₁ t₂ : Term} :
-      Expr.MEval db db.env e₁ t₁ → Expr.MEval db db.env e₂ t₂ →
-      Database.ActionStep db (.union e₁ e₂) (db.addEq t₁ t₂)
-  | set {db : Database} {f : FnName} {args out : List Expr} {ts vs : List Term} :
-      Expr.MEvalList db db.env args ts → Expr.MEvalList db db.env out vs →
-      Database.ActionStep db (.set f args out) (db.addRow f ts vs)
-
-/-- A sequence of row actions, run in order. -/
-inductive Database.ActionsStep : Database → List Action → Database → Prop where
-  | nil {db : Database} : Database.ActionsStep db [] db
-  | cons {db d d' : Database} {a : Action} {as : List Action} :
-      Database.ActionStep db a d → Database.ActionsStep d as d' →
-      Database.ActionsStep db (a :: as) d'
-
 /-! ### The merge step -/
 /-- The environment a `:merge` body runs in: the two colliding rows' outputs, named
 `old<i>`/`new<i>` per value column, and nothing else.
@@ -339,7 +131,7 @@ own, which a value combiner `Term → Term → Term` could not express.
 * The two rows are premises in both orders, so a non-commutative merge relates `db` to
   two different results — the relational reading of what egglog calls user-visible
   undefined behaviour for a non-monotone merge.
-* **The body runs once, before any column is computed**: `ActionsStep` produces `d` and
+* **The body runs once, before any column is computed**: `evalActions` produces `d` and
   every column of `res` is then evaluated in `d`, which is egglog's order. `res` is one
   expression per value column. -/
 inductive MergeStep : Database → Database → Prop where
@@ -347,8 +139,8 @@ inductive MergeStep : Database → Database → Prop where
       {body : List Action} {res : List Expr} :
       ⟨f, as, a⟩ ∈ db.rows → ⟨f, bs, b⟩ ∈ db.rows → MCongList db as bs →
       db.sig.mergeOf f = MergeSpec.merge body res →
-      Database.ActionsStep { db with env := mergeEnv a b } body d →
-      Expr.MEvalList d d.env res vs →
+      evalActions { db with env := mergeEnv a b } body = some d →
+      Expr.evalList d.sig res d.env = some vs →
       MergeStep db { d.addRow f as vs with env := db.env, rules := db.rules }
 
 /-- Merge closure.
@@ -383,19 +175,18 @@ def Database.NoMergeOk (db : Database) : Prop :=
 
 /-! ### E-matching and running
 
-`Match.lean` and `Step.lean` ported by replacing `Cong` with `MCong` and `Expr.eval`
-with `Expr.MEval`. The one non-mechanical change is `RunStep`: merge closure is a
-*phase* of a round, because it is a state change where congruence closure is only a
-relation. -/
+`Match.lean` and `Step.lean` ported by replacing `Cong` with `MCong`. The one
+non-mechanical change is `RunStep`: merge closure is a *phase* of a round, because it is a
+state change where congruence closure is only a relation. -/
 /-- `ValidSubst`, over `MCong`. The witness formulation is unchanged. -/
 inductive MValidSubst (db : Database) : Pattern → Env → Prop where
   | expr {e : Expr} {σ : Env} {w t : Term} :
       ValidEnv (e.freeVars db.env) db σ → w ∈ db.terms →
-      Expr.MEval db (db.env ++ σ) e t → MCong (db.addTerm t) w t →
+      e.eval db.sig (db.env ++ σ) = some t → MCong (db.addTerm t) w t →
       MValidSubst db (.expr e) σ
   | eq {e₁ e₂ : Expr} {σ : Env} {w t₁ t₂ : Term} :
       ValidEnv (e₁.freeVars db.env ∪ e₂.freeVars db.env) db σ → w ∈ db.terms →
-      Expr.MEval db (db.env ++ σ) e₁ t₁ → Expr.MEval db (db.env ++ σ) e₂ t₂ →
+      e₁.eval db.sig (db.env ++ σ) = some t₁ → e₂.eval db.sig (db.env ++ σ) = some t₂ →
       MCong ((db.addTerm t₁).addTerm t₂) w t₁ → MCong ((db.addTerm t₁).addTerm t₂) t₁ t₂ →
       MValidSubst db (.eq e₁ e₂) σ
   /-- The row atom: `f`'s row at a key class congruent to `as`, with value columns
@@ -411,7 +202,8 @@ inductive MValidSubst (db : Database) : Pattern → Env → Prop where
   | values {vs : List Expr} {f : FnName} {as : List Expr} {σ : Env}
       {us ts ws bs : List Term} :
       ValidEnv (Expr.freeVarsList vs db.env ∪ Expr.freeVarsList as db.env) db σ →
-      Expr.MEvalList db (db.env ++ σ) vs us → Expr.MEvalList db (db.env ++ σ) as ts →
+      Expr.evalList db.sig vs (db.env ++ σ) = some us →
+      Expr.evalList db.sig as (db.env ++ σ) = some ts →
       MCongList ((db.addTerms ts).addTerms us) ts bs →
       MCongList ((db.addTerms ts).addTerms us) us ws → Row.mk f bs ws ∈ db.rows →
       MValidSubst db (.values vs f as) σ
@@ -420,11 +212,10 @@ inductive MValidSubst (db : Database) : Pattern → Env → Prop where
 def MValidQuerySubst (db : Database) (q : Query) (σ : Env) : Prop :=
   ∃ σs : List Env, List.Forall₂ (MValidSubst db) q σs ∧ Env.UnionAll σs σ
 
-/-- The databases one rule contributes, one per substitution satisfying its query. -/
+/-- The databases one rule contributes, one per substitution satisfying its query.
+`ruleResults`, over `MValidQuerySubst`. -/
 def RuleResults (db : Database) (r : Rule) : Set Database :=
-  {d | ∃ σ d', MValidQuerySubst db r.query σ ∧
-        Database.ActionsStep { db with env := db.env ++ σ } r.actions d' ∧
-        d = { d' with env := db.env, rules := db.rules }}
+  {d | ∃ σ, MValidQuerySubst db r.query σ ∧ evalLocalActions db r.actions σ = some d}
 
 /-- Every rule fires on every substitution satisfying its query in the pre-state, and
 the results are unioned in. `runRules`, with rows. -/
@@ -451,7 +242,7 @@ holding `2` with no `(run)` anywhere. See `MERGE.md`, "The merge phase runs betw
 commands". -/
 inductive CmdStep : Database → Cmd → Database → Prop where
   | action {db d db' : Database} {a : Action} :
-      Database.ActionStep db a d → MergeClosure d db' → CmdStep db (.action a) db'
+      evalAction db a = some d → MergeClosure d db' → CmdStep db (.action a) db'
   | rule {db : Database} {r : Rule} :
       CmdStep db (.rule r) { db with rules := insert r db.rules }
   | run {db db' : Database} : RunStep db db' → CmdStep db .run db'

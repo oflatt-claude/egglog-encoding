@@ -1,4 +1,5 @@
 import EgglogSemantics.Encoding.Encode
+import EgglogSemantics.Proofs.Eval
 import EgglogSemantics.Spec.Step
 
 /-! # Is `Rebuilt` satisfiable?
@@ -270,7 +271,8 @@ theorem rebuilt_rekeys {P : Program} {d : Database}
     intro _ _ _ ht; exact mem_addTerms (mem_addTerms ht)
   -- the two `MValidSubst`s
   have s1 : MValidSubst d (.values [.var "@e"] viewF [.var "@c0"]) σ₁ := by
-    refine .values ⟨?_, ?_⟩ (.cons (.var l1e) .nil) (.cons (.var l1c) .nil)
+    refine .values ⟨?_, ?_⟩ (by rw [Expr.evalList_cons, Expr.eval_var, l1e]; rfl)
+      (by rw [Expr.evalList_cons, Expr.eval_var, l1c]; rfl)
       (.cons (.refl (hext _ _ hcT)) .nil) (.cons (.refl (hext _ _ heT)) .nil) hview
     · rw [hv1]; exact List.Perm.refl _
     · rintro ⟨v, t⟩ hb
@@ -280,7 +282,8 @@ theorem rebuilt_rekeys {P : Program} {d : Database}
       · exact heT
       · exact hcT
   have s2 : MValidSubst d (.values [.var "@x"] ufName [.var "@c0"]) σ₂ := by
-    refine .values ⟨?_, ?_⟩ (.cons (.var l2x) .nil) (.cons (.var l2c) .nil)
+    refine .values ⟨?_, ?_⟩ (by rw [Expr.evalList_cons, Expr.eval_var, l2x]; rfl)
+      (by rw [Expr.evalList_cons, Expr.eval_var, l2c]; rfl)
       (.cons (.refl (hext _ _ hcT)) .nil) (.cons (.refl (hext _ _ hxT)) .nil) huf
     · rw [hv2]; exact List.Perm.refl _
     · rintro ⟨v, t⟩ hb
@@ -303,12 +306,24 @@ theorem rebuilt_rekeys {P : Program} {d : Database}
       · simp [Env.lookup] at hu
         exact hu
   -- the head runs
-  have hact : Database.ActionsStep { d with env := d.env ++ σ } colRuleF.actions
-      (({ d with env := d.env ++ σ }).addRow viewF [x] [e]) :=
-    .cons (.set (.cons (.var lσx) .nil) (.cons (.var lσe) .nil)) .nil
+  have hact : evalLocalActions d colRuleF.actions σ
+      = some { (({ d with env := d.env ++ σ }).addRow viewF [x] [e]) with
+        env := d.env, rules := d.rules } := by
+    have h1 : evalAction { d with env := d.env ++ σ } (.set viewF [.var "@x"] [.var "@e"])
+        = some (({ d with env := d.env ++ σ }).addRow viewF [x] [e]) := by
+      rw [evalAction,
+        show Expr.evalList d.sig [Expr.var "@x"] ({ d with env := d.env ++ σ } : Database).env
+          = some [x] by rw [Expr.evalList_cons, Expr.eval_var]; erw [lσx]; rfl,
+        Option.bind_some,
+        show Expr.evalList d.sig [Expr.var "@e"] ({ d with env := d.env ++ σ } : Database).env
+          = some [e] by rw [Expr.evalList_cons, Expr.eval_var]; erw [lσe]; rfl]
+      rfl
+    rw [evalLocalActions, show colRuleF.actions = [Action.set viewF [.var "@x"] [.var "@e"]]
+      from rfl, evalActions_cons, h1]
+    rfl
   have hres : ({ (({ d with env := d.env ++ σ }).addRow viewF [x] [e]) with
       env := d.env, rules := d.rules } : Database) ∈ RuleResults d colRuleF :=
-    ⟨σ, _, hq, hact, rfl⟩
+    ⟨σ, hq, hact⟩
   have hcont := hreb.1 colRuleF hmem _ hres
   exact hcont.rows (Set.mem_insert _ _)
 
@@ -411,56 +426,53 @@ theorem addRow_eq_self {db : Database} {f : FnName} {as vs : List Term}
 
 /-! ### Inverting evaluation -/
 
-theorem meval_var' {db : Database} {σ : Env} {v : Var} {t : Term}
-    (h : Expr.MEval db σ (.var v) t) : Env.lookup v σ = some t := by
-  cases h with | var h => exact h
+theorem meval_var' {sig : Signature} {σ : Env} {v : Var} {t : Term}
+    (h : Expr.eval sig (.var v) σ = some t) : Env.lookup v σ = some t := h
 
-theorem mevalList_one {db : Database} {σ : Env} {e : Expr} {ts : List Term}
-    (h : Expr.MEvalList db σ [e] ts) : ∃ t, ts = [t] ∧ Expr.MEval db σ e t := by
-  cases h with
-  | cons h1 h2 => cases h2; exact ⟨_, rfl, h1⟩
+theorem mevalList_one {sig : Signature} {σ : Env} {e : Expr} {ts : List Term}
+    (h : Expr.evalList sig [e] σ = some ts) :
+    ∃ t, ts = [t] ∧ Expr.eval sig e σ = some t := by
+  rw [Expr.evalList_cons, Option.bind_eq_some_iff] at h
+  obtain ⟨t, ht, hrest⟩ := h
+  rw [Expr.evalList_nil, Option.map_some, Option.some.injEq] at hrest
+  exact ⟨t, hrest.symm, ht⟩
 
-theorem mevalList_two {db : Database} {σ : Env} {e₁ e₂ : Expr} {ts : List Term}
-    (h : Expr.MEvalList db σ [e₁, e₂] ts) :
-    ∃ u v, ts = [u, v] ∧ Expr.MEval db σ e₁ u ∧ Expr.MEval db σ e₂ v := by
-  cases h with
-  | cons h1 h2 =>
-    cases h2 with
-    | cons h3 h4 => cases h4; exact ⟨_, _, rfl, h1, h3⟩
+theorem mevalList_two {sig : Signature} {σ : Env} {e₁ e₂ : Expr} {ts : List Term}
+    (h : Expr.evalList sig [e₁, e₂] σ = some ts) :
+    ∃ u v, ts = [u, v] ∧ Expr.eval sig e₁ σ = some u ∧ Expr.eval sig e₂ σ = some v := by
+  rw [Expr.evalList_cons, Option.bind_eq_some_iff] at h
+  obtain ⟨u, hu, hrest⟩ := h
+  obtain ⟨vs, hvs, heq⟩ := Option.map_eq_some_iff.mp hrest
+  obtain ⟨v, rfl, hv⟩ := mevalList_one hvs
+  exact ⟨u, v, heq.symm, hu, hv⟩
 
 /-- `(ordering-max old new)` in the merge environment of a self-collision is `p`. -/
-theorem meval_max_self {db : Database} {p t : Term}
-    (h : Expr.MEval db [("old", p), ("new", p)] (maxE (.var "old") (.var "new")) t) :
-    t = p := by
-  cases h with
-  | ctor hp _ _ => simp [Prim.ofName] at hp
-  | prim hp hargs happly =>
-    obtain ⟨u, v, rfl, hu, hv⟩ := mevalList_two hargs
-    have hu' : u = p := by have := meval_var' hu; simpa [Env.lookup] using this.symm
-    have hv' : v = p := by have := meval_var' hv; simpa [Env.lookup] using this.symm
-    subst hu'; subst hv'
-    simp only [Prim.ofName, Option.some.injEq] at hp
-    subst hp
-    simp only [Prim.apply, Term.orderingMax, Option.some.injEq] at happly
-    rw [← happly]
-    split <;> rfl
+theorem meval_max_self {sig : Signature} {p t : Term}
+    (h : Expr.eval sig (maxE (.var "old") (.var "new")) [("old", p), ("new", p)]
+      = some t) : t = p := by
+  rw [maxE, Expr.eval_app_prim (p := Prim.orderingMax) rfl, Option.bind_eq_some_iff] at h
+  obtain ⟨ts, hts, happly⟩ := h
+  obtain ⟨u, v, rfl, hu, hv⟩ := mevalList_two hts
+  have hu' : u = p := by have := meval_var' hu; simpa [Env.lookup] using this.symm
+  have hv' : v = p := by have := meval_var' hv; simpa [Env.lookup] using this.symm
+  subst hu'; subst hv'
+  simp only [Prim.apply, Term.orderingMax, Option.some.injEq] at happly
+  rw [← happly]
+  split <;> rfl
 
 /-- `(ordering-min old new)` in the merge environment of a self-collision is `p`. -/
-theorem meval_min_self {db : Database} {p t : Term}
-    (h : Expr.MEval db [("old", p), ("new", p)] (minE (.var "old") (.var "new")) t) :
-    t = p := by
-  cases h with
-  | ctor hp _ _ => simp [Prim.ofName] at hp
-  | prim hp hargs happly =>
-    obtain ⟨u, v, rfl, hu, hv⟩ := mevalList_two hargs
-    have hu' : u = p := by have := meval_var' hu; simpa [Env.lookup] using this.symm
-    have hv' : v = p := by have := meval_var' hv; simpa [Env.lookup] using this.symm
-    subst hu'; subst hv'
-    simp only [Prim.ofName, Option.some.injEq] at hp
-    subst hp
-    simp only [Prim.apply, Term.orderingMin, Option.some.injEq] at happly
-    rw [← happly]
-    split <;> rfl
+theorem meval_min_self {sig : Signature} {p t : Term}
+    (h : Expr.eval sig (minE (.var "old") (.var "new")) [("old", p), ("new", p)]
+      = some t) : t = p := by
+  rw [minE, Expr.eval_app_prim (p := Prim.orderingMin) rfl, Option.bind_eq_some_iff] at h
+  obtain ⟨ts, hts, happly⟩ := h
+  obtain ⟨u, v, rfl, hu, hv⟩ := mevalList_two hts
+  have hu' : u = p := by have := meval_var' hu; simpa [Env.lookup] using this.symm
+  have hv' : v = p := by have := meval_var' hv; simpa [Env.lookup] using this.symm
+  subst hu'; subst hv'
+  simp only [Prim.apply, Term.orderingMin, Option.some.injEq] at happly
+  rw [← happly]
+  split <;> rfl
 
 /-! ### The state `encode P₁` runs to
 
@@ -592,32 +604,36 @@ theorem mergeSaturated₁ : MergeSaturated d₁ := by
     have hpT : p ∈ terms₁ := (rowTerms₁ _ haL).2 p (by simp)
     have hasT : ∀ t ∈ as, t ∈ terms₁ := (rowTerms₁ _ haL).1
     have hloop : Row.mk ufName [p] [p] ∈ rows₁ := loops₁ _ haL hfv p (by simp)
-    cases hact with
-    | cons h1 h2 =>
-      cases h2
-      cases h1 with
-      | set hargs houts =>
-        obtain ⟨u, rfl, hu⟩ := mevalList_one hargs
-        obtain ⟨w, rfl, hw⟩ := mevalList_one houts
-        obtain ⟨v, rfl, hv⟩ := mevalList_one hres
-        rw [meval_max_self hu, meval_min_self hw, meval_min_self hv]
-        have hA : ({ d₁ with env := mergeEnv [p] [p] } : Database).addRow ufName [p] [p]
-            = { d₁ with env := mergeEnv [p] [p] } := by
-          refine addRow_eq_self ?_ hloop
-          intro t ht
-          have ht' : t = p := by simpa using ht
+    rw [mergeBody, evalActions_cons] at hact
+    cases hstep : evalAction { d₁ with env := mergeEnv [p] [p] }
+        (.set ufName [maxE (.var "old") (.var "new")] [minE (.var "old") (.var "new")]) with
+    | none => rw [hstep] at hact; simp at hact
+    | some dm =>
+      rw [hstep, Option.bind_some, evalActions_nil, Option.some.injEq] at hact
+      subst hact
+      simp only [evalAction, Option.bind_eq_some_iff, Option.map_eq_some_iff] at hstep
+      obtain ⟨ua, hargs, uv, houts, rfl⟩ := hstep
+      obtain ⟨u, rfl, hu⟩ := mevalList_one hargs
+      obtain ⟨w, rfl, hw⟩ := mevalList_one houts
+      obtain ⟨v, rfl, hv⟩ := mevalList_one (by rw [mergeResult] at hres; exact hres)
+      rw [meval_max_self hu, meval_min_self hw, meval_min_self hv]
+      have hA : ({ d₁ with env := mergeEnv [p] [p] } : Database).addRow ufName [p] [p]
+          = { d₁ with env := mergeEnv [p] [p] } := by
+        refine addRow_eq_self ?_ hloop
+        intro t ht
+        have ht' : t = p := by simpa using ht
+        rw [ht']
+        exact sub₁ p hpT
+      have hB : ({ d₁ with env := mergeEnv [p] [p] } : Database).addRow f as [p]
+          = { d₁ with env := mergeEnv [p] [p] } := by
+        refine addRow_eq_self ?_ ha
+        intro t ht
+        rcases List.mem_append.mp ht with h | h
+        · exact sub₁ t (hasT t h)
+        · have ht' : t = p := by simpa using h
           rw [ht']
           exact sub₁ p hpT
-        have hB : ({ d₁ with env := mergeEnv [p] [p] } : Database).addRow f as [p]
-            = { d₁ with env := mergeEnv [p] [p] } := by
-          refine addRow_eq_self ?_ ha
-          intro t ht
-          rcases List.mem_append.mp ht with h | h
-          · exact sub₁ t (hasT t h)
-          · have ht' : t = p := by simpa using h
-            rw [ht']
-            exact sub₁ p hpT
-        rw [hA, hB]
+      rw [hA, hB]
 
 /-! ### Conjunct 1 at `d₁`: the row set is closed under all three maintenance rules
 
@@ -708,8 +724,8 @@ theorem ctorUnion_addTerms {db : Database} {ts : List Term}
 one-column row atom at a variable key.
 
 Shorter than it was, because a read is now the atom itself rather than an `.eq` whose
-right-hand side evaluated by `MEval.lookup`, and the `Prim.ofName`/`mergeOf` hypotheses
-that ruled out the other `MEval` rules are gone.
+right-hand side read a row, and the `Prim.ofName`/`mergeOf` side conditions that ruled
+out the other evaluation rules are gone.
 
 Both congruence premises are read in the database extended with the atom's operands, so
 `mcong_eq`'s two side conditions are discharged there: `addTerms` touches neither `eqs`
@@ -775,7 +791,8 @@ theorem two_pattern_firing {V₁ W₁ V₂ W₂ A B : Var} {G₁ G₂ F : FnName
       Env.lookup B (d₁.env ++ (σa ++ σb)) = some tb ∧
       d' = { (({ d₁ with env := d₁.env ++ (σa ++ σb) }).addRow F [ta] [tb]) with
                env := d₁.env, rules := d₁.rules } := by
-  obtain ⟨σ, dd, hq, hact, rfl⟩ := hd
+  obtain ⟨σ, hq, hloc⟩ := hd
+  obtain ⟨dd, hact, rfl⟩ := evalLocalActions_eq_some hloc
   obtain ⟨σs, hall, hun⟩ := hq
   cases hall with
   | cons s1 rest =>
@@ -793,17 +810,20 @@ theorem two_pattern_firing {V₁ W₁ V₂ W₂ A B : Var} {G₁ G₂ F : FnName
             invert_eq_pattern eqs₁ ctorUnion₁ s2
           rw [hfv1] at hd1
           rw [hfv2] at hd2
-          cases hact with
-          | cons ha1 ha2 =>
-            cases ha2
-            cases ha1 with
-            | set hargs houts =>
-              obtain ⟨ta, rfl, hA⟩ := mevalList_one hargs
-              obtain ⟨tb, rfl, hB⟩ := mevalList_one houts
-              exact ⟨_, _, tv1, tw1, tv2, tw2, ta, tb, hd1, hd2, h1v, h1w, h2v, h2w,
-                hr1, hr2,
-                fun v t u hvt hvu => hcompat (v, t) (mem_of_lookup hvt) u hvu,
-                meval_var' hA, meval_var' hB, rfl⟩
+          rw [evalActions_cons] at hact
+          cases hstep : evalAction _ (Action.set F [Expr.var A] [Expr.var B]) with
+          | none => rw [hstep] at hact; simp at hact
+          | some dm =>
+            rw [hstep, Option.bind_some, evalActions_nil, Option.some.injEq] at hact
+            subst hact
+            simp only [evalAction, Option.bind_eq_some_iff, Option.map_eq_some_iff] at hstep
+            obtain ⟨as, hargs, vs, houts, rfl⟩ := hstep
+            obtain ⟨ta, rfl, hA⟩ := mevalList_one hargs
+            obtain ⟨tb, rfl, hB⟩ := mevalList_one houts
+            exact ⟨_, _, tv1, tw1, tv2, tw2, ta, tb, hd1, hd2, h1v, h1w, h2v, h2w,
+              hr1, hr2,
+              fun v t u hvt hvu => hcompat (v, t) (mem_of_lookup hvt) u hvu,
+              meval_var' hA, meval_var' hB, rfl⟩
 
 /-! ### Conjunct 1 at `d₁` -/
 

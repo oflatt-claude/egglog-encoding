@@ -303,7 +303,7 @@ well-scoped program with no failing lookup and no diverging merge it always does
 
 This is `Impl/Merge.lean`'s **M9** interpreter, not `Impl/Interp.lean`'s `exec`. `exec`
 evaluates with `Expr.eval` and never runs a merge phase, so while it was what this read,
-`mergeOne`, `mergeRound`, `execActions`, `patternHoldsM`'s row scan and the whole
+`mergeOne`, `mergeRound`, `execActions`, `patternHolds`'s row scan and the whole
 `:merge` implementation had **no** differential coverage — the suite's pass count said
 nothing about them. The two agree on the constructor fragment (see `execM`), so the 70
 constructor cases are unaffected. -/

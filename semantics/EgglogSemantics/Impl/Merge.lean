@@ -28,11 +28,13 @@ reachable state. Saturation is *now* reachable, since `min` and `max` became `Pr
 merging is an idempotent join again; `mergeSaturateF` says what switching to it would
 buy and cost.
 
-What no longer differs is **evaluation**: with reading confined to the query, `MEval` is
-deterministic and `execExpr` computes it rather than picking among its answers. The
-remaining choice is `patternHoldsM`'s, which scans rows and so still sees a superseded
-output where egglog sees only the current one — `MERGE.md`, "What the widening and the
-composed interpreter found", has the repro.
+What no longer differs is **evaluation, e-matching or actions**: with reading confined to
+the query, `Expr.eval` takes a signature and resolves primitives, so `Impl/Interp.lean`'s
+`execAction`, `execActions` and `patternHolds` serve a `:merge` program unchanged and this
+file adds only the merge phase and the round that runs it. The one place the interpreter
+still chooses is `patternHolds`' row scan, which sees a superseded output where egglog
+sees only the current one — `MERGE.md`, "What the widening and the composed interpreter
+found", has the repro.
 
 The congruence closure is *unchanged*. `MCong.fd` fires only at `.union` functions, and
 a `.union` function's rows are exactly the constructor rows `Impl/Closure.lean` already
@@ -49,49 +51,6 @@ abbrev congrKeys : Finset (Term × Term) → List Term → List Term → Bool :=
   FDatabase.congrTuple
 
 end FDatabase
-/-! ### Evaluation
-
-`Expr.MEval`, computed — and, since `MEval` has no `lookup`, a plain structural recursion
-with nothing to choose. A non-constructor application is `none`: it is a read, which
-`Spec/Scope.lean` rejects statically wherever this is called from. -/
-mutual
-
-/-- `Expr.MEval`, computed. -/
-def FDatabase.execExpr (d : FDatabase) (σ : Env) : Expr → Option Term
-  | .lit l => some (.lit l)
-  | .var v => Env.lookup v σ
-  | .app f args =>
-    (FDatabase.execExprList d σ args).bind fun ts =>
-      match Prim.ofName f with
-      | some p => p.apply ts
-      | none =>
-        match d.sig.mergeOf f with
-        | .union => some (.app f ts)
-        | _ => none
-
-/-- `execExpr` over an argument list. -/
-def FDatabase.execExprList (d : FDatabase) (σ : Env) : List Expr → Option (List Term)
-  | [] => some []
-  | e :: es => (d.execExpr σ e).bind fun t => (d.execExprList σ es).map (t :: ·)
-
-end
-
-/-! ### Actions -/
-/-- `MDatabase.ActionStep`, computed. -/
-def FDatabase.execAction (d : FDatabase) : Action → Option FDatabase
-  | .expr e => (d.execExpr d.env e).map fun t => d.addTerm t
-  | .letBind v e => (d.execExpr d.env e).map fun t =>
-      { d.addTerm t with env := (v, t) :: d.env }
-  | .union e₁ e₂ => (d.execExpr d.env e₁).bind fun t₁ =>
-      (d.execExpr d.env e₂).map fun t₂ => d.addEq t₁ t₂
-  | .set f args out => (d.execExprList d.env args).bind fun ts =>
-      (d.execExprList d.env out).map fun vs => d.addRow f ts vs
-
-/-- `MDatabase.ActionsStep`, computed. -/
-def FDatabase.execActions (d : FDatabase) : List Action → Option FDatabase
-  | [] => some d
-  | a :: as => (d.execAction a).bind fun d' => d'.execActions as
-
 /-! ### The merge phase
 
 **This is where `Impl/` stops being append-only, and deliberately.** `Spec/` stays
@@ -155,8 +114,8 @@ def FDatabase.mergeOneOriented (cl : Finset (Term × Term)) (d : FDatabase) (r�
   | .merge body res =>
     if r₁.fn = r₂.fn && congrKeys cl r₁.args r₂.args
         && d.rows.contains r₁ && d.rows.contains r₂ then
-      (FDatabase.execActions { d with env := mergeEnv r₂.out r₁.out } body).bind
-        fun e => (e.execExprList e.env res).map fun vs =>
+      (execActions { d with env := mergeEnv r₂.out r₁.out } body).bind
+        fun e => (Expr.evalList e.sig res e.env).map fun vs =>
           let e' := (e.addTerms r₂.args).addTerms vs
           { e' with
             rows := (e'.rows.filter fun r => r ≠ r₁).map fun r =>
@@ -362,82 +321,17 @@ rows at every key class that collided, so this is a bound on the largest such cl
 than on the run. -/
 def mergeFuel : Nat := 64
 
-/-! ### E-matching, over `Expr.MEval`
-
-`Impl/Interp.lean`'s `patternHolds` evaluates a pattern with `Expr.eval`, which builds an
-application for *every* name. That is right for the constructor fragment and wrong here:
-a `:merge` function's row is read by the atom `Pattern.values`, whose operands need
-primitives resolved.
-
-**This is where the interpreter still chooses**, and the only place left: the row scan
-finds any recorded output, so a superseded value is readable here where egglog holds only
-the current one (`MERGE.md`, "What the widening and the composed interpreter found").
-
-The congruence closure is unchanged. `MCong.fd` fires only at a `.union` function, whose
-rows are exactly the constructor rows `closureF` already sees through `terms`, so
-`closureF` decides `MCong` too — `Proofs/Merge.lean`'s `closureF_ok`.
-
-**Every case closes over the database extended with the pattern's instance**, the row atom
-included. Its operands are expressions, so one may denote a term the program never built,
-and a term the database does not hold is in no congruence class: closing over `d` alone
-made `(Dist (G (A) (B)))` match nothing after `(union (A) (B))` where egglog — which
-flattens the fact to `G(a, b, x), Dist(x, o)` and finds the intermediate class by matching
-— matches the row written at `(G (B) (A))`. `DiffTest.lean`'s `read-unbuilt-key*` cases
-pin it, `read-unbuilt-key-nonode` from the other side: the extension hypothesizes a row for
-every subterm, and a hypothesized row is never enough on its own, since `Cong.congr` still
-wants both applications present. -/
-/-- `MValidSubst`, computed. `patternHolds` with `execExpr` in place of `Expr.eval`. -/
-def FDatabase.patternHoldsM (d : FDatabase) (p : Pattern) (σ : Env) : Bool :=
-  match p with
-  | .values vs f as =>
-    match d.execExprList (d.env ++ σ) vs, d.execExprList (d.env ++ σ) as with
-    | some us, some ts =>
-      let cl := ((d.addTerms ts).addTerms us).closureF
-      d.rows.any fun r =>
-        decide (r.fn = f) && congrKeys cl ts r.args && congrKeys cl us r.out
-    | _, _ => false
-  | .expr e =>
-    match d.execExpr (d.env ++ σ) e with
-    | none => false
-    | some t =>
-      let cl := (d.addTerm t).closureF
-      decide (∃ w ∈ d.terms, (w, t) ∈ cl)
-  | .eq e₁ e₂ =>
-    match d.execExpr (d.env ++ σ) e₁, d.execExpr (d.env ++ σ) e₂ with
-    | some t₁, some t₂ =>
-      let cl := ((d.addTerm t₁).addTerm t₂).closureF
-      decide ((t₁, t₂) ∈ cl) && decide (∃ w ∈ d.terms, (w, t₁) ∈ cl)
-    | _, _ => false
-
-/-- `matchQuery`, over `patternHoldsM`. The enumerator is unchanged: it assigns the
-query's free variables to terms the database holds and restricts to each pattern. -/
-def FDatabase.matchQueryM (d : FDatabase) (q : Query) : List Env :=
-  (assignments d.terms (Query.freeVars q d.env)).filter fun σ =>
-    q.all fun p => d.patternHoldsM p (Env.canon (p.freeVars d.env) σ)
-
 /-! ### Running
 
-`Impl/Interp.lean`'s `exec` evaluates with `Expr.eval` and never calls `mergeRound`, so
-before this the merge implementation had **no** differential coverage at all: `mergeOne`,
-`mergeRound`, `execActions` and `patternHoldsM`'s row scan were unreachable from
-`Program.expectedSizes`. `execM` is the composition that reaches them. -/
-/-- `RuleResults`, computed: one firing, unioned into the accumulator. -/
-def FDatabase.fireIntoM (d : FDatabase) (r : Rule) (acc : FDatabase) (σ : Env) :
-    FDatabase :=
-  match (FDatabase.execActions { d with env := d.env ++ σ } r.actions).map
-      (fun d' => { d' with env := d.env, rules := d.rules }) with
-  | some d' => acc.union d'
-  | none => acc
+`Impl/Interp.lean`'s `exec` never calls `mergeRound`, so before `execM` existed the merge
+implementation had **no** differential coverage at all: `mergeOne` and `mergeRound` were
+unreachable from `Program.expectedSizes`. `execM` is the composition that reaches them.
 
-/-- Every firing of `r`, unioned into `acc`. -/
-def FDatabase.fireRuleM (d : FDatabase) (acc : FDatabase) (r : Rule) : FDatabase :=
-  (d.matchQueryM r.query).foldl (d.fireIntoM r) acc
-
-/-- `RunRules`, computed: every rule on every matching substitution, all read off the
-pre-state. The merge phase is deliberately *not* here — egglog defers it until every rule
-has been searched, so no rule sees another's merged value within a round. -/
-def FDatabase.execRunRulesM (d : FDatabase) : FDatabase := d.rules.foldl d.fireRuleM d
-
+Everything below the merge phase is `Impl/Interp.lean`'s, unchanged. `patternHolds`
+already resolves primitives in a row atom's operands, because `Expr.eval` does; and
+`execRunRules` already reads every rule off the pre-state, which is where the merge phase
+must *not* be — egglog defers it until every rule has been searched, so no rule sees
+another's merged value within a round. -/
 /-- `CmdStep`, computed.
 
 Both `.action` and `.run` end in a merge phase, which is egglog's shape and not a choice:
@@ -448,9 +342,9 @@ top-level actions go through the same staging path as a rule head, so **each top
 The phase runs to a **fixpoint**, as `merge_all` does, which is only possible because the
 implementation deletes the rows it merged — `mergeRound`'s docstring has that argument. -/
 def FDatabase.execCmdM (d : FDatabase) : Cmd → Option FDatabase
-  | .action a => (d.execAction a).bind (FDatabase.mergeSaturateF mergeFuel)
+  | .action a => (execAction d a).bind (FDatabase.mergeSaturateF mergeFuel)
   | .rule r => some { d with rules := r :: d.rules }
-  | .run => FDatabase.mergeSaturateF mergeFuel d.execRunRulesM
+  | .run => FDatabase.mergeSaturateF mergeFuel (execRunRules d)
   | .decl f dc => some { d with sig := Function.update d.sig f (some dc) }
 
 /-- `ProgramStep`, computed. -/
@@ -460,11 +354,10 @@ def FDatabase.execProgramM (d : FDatabase) : Program → Option FDatabase
 
 /-- Run a program from the initial database, under the M9 semantics.
 
-On the constructor fragment this agrees with `Impl/Interp.lean`'s `exec`: `execExpr` at a
-`.union` function is `Expr.eval`, no constructor name resolves as a primitive, and with no
-`.merge` function `mergeOne` never fires, so every merge phase is the identity. It differs
-exactly where M9 does — a `:merge` function's application is a lookup, and a round ends
-with `merge_all`. -/
+On the constructor fragment this is `Impl/Interp.lean`'s `exec`: the two share every
+definition below the merge phase, and with no `.merge` function `mergeOne` never fires, so
+every merge phase is the identity. It differs exactly where M9 does — each top-level
+action and each round ends with `merge_all`. -/
 def execM (p : Program) : Option FDatabase := FDatabase.empty.execProgramM p
 
 /-! ### Row counts

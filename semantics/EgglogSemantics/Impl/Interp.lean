@@ -125,7 +125,7 @@ never built (`Spec/Match.lean`'s `ValidSubst.values`). -/
 def patternHolds (d : FDatabase) (p : Pattern) (σ : Env) : Bool :=
   match p with
   | .values vs f as =>
-    match Expr.evalList vs (d.env ++ σ), Expr.evalList as (d.env ++ σ) with
+    match Expr.evalList d.sig vs (d.env ++ σ), Expr.evalList d.sig as (d.env ++ σ) with
     | some us, some ts =>
       let cl := ((d.addTerms ts).addTerms us).closureF
       d.rows.any fun r =>
@@ -133,13 +133,13 @@ def patternHolds (d : FDatabase) (p : Pattern) (σ : Env) : Bool :=
           && FDatabase.congrTuple cl us r.out
     | _, _ => false
   | .expr e =>
-    match e.eval (d.env ++ σ) with
+    match e.eval d.sig (d.env ++ σ) with
     | none => false
     | some t =>
       let cl := (d.addTerm t).closureF
       decide (∃ w ∈ d.terms, (w, t) ∈ cl)
   | .eq e₁ e₂ =>
-    match e₁.eval (d.env ++ σ), e₂.eval (d.env ++ σ) with
+    match e₁.eval d.sig (d.env ++ σ), e₂.eval d.sig (d.env ++ σ) with
     | some t₁, some t₂ =>
       let cl := ((d.addTerm t₁).addTerm t₂).closureF
       decide ((t₁, t₂) ∈ cl) && decide (∃ w ∈ d.terms, (w, t₁) ∈ cl)
@@ -153,13 +153,13 @@ def matchQuery (d : FDatabase) (q : Query) : List Env :=
 /-! ### Running -/
 /-- The Redex `Eval-Action`, computed. -/
 def execAction (d : FDatabase) : Action → Option FDatabase
-  | .expr e => (e.eval d.env).map fun t => d.addTerm t
-  | .letBind v e => (e.eval d.env).map fun t =>
+  | .expr e => (e.eval d.sig d.env).map fun t => d.addTerm t
+  | .letBind v e => (e.eval d.sig d.env).map fun t =>
       { d.addTerm t with env := (v, t) :: d.env }
   | .union e₁ e₂ =>
-      (e₁.eval d.env).bind fun t₁ => (e₂.eval d.env).map fun t₂ => d.addEq t₁ t₂
-  | .set f args out => (Expr.evalList args d.env).bind fun as =>
-      (Expr.evalList out d.env).map fun vs => d.addRow f as vs
+      (e₁.eval d.sig d.env).bind fun t₁ => (e₂.eval d.sig d.env).map fun t₂ => d.addEq t₁ t₂
+  | .set f args out => (Expr.evalList d.sig args d.env).bind fun as =>
+      (Expr.evalList d.sig out d.env).map fun vs => d.addRow f as vs
 
 /-- The Redex `Eval-Global-Actions`, computed. -/
 def execActions (d : FDatabase) : List Action → Option FDatabase

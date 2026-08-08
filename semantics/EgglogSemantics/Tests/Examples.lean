@@ -43,7 +43,8 @@ the Redex check is about. -/
 example : WellScoped
     [.action (.letBind "v1" (eNum 2)), .action (.expr (.app "cwrap" [.var "v1"]))] := by
   simp [WellScoped, Program.Scoped, Cmd.Scoped, Action.Scoped, Expr.Scoped, Expr.IsApp,
-    Cmd.bind, Action.bind, eNum]
+    Cmd.bind, Action.bind, Cmd.sigBind, eNum, Expr.fns, Expr.fnsList, Prim.ofName,
+    Signature.mergeOf]
 
 /-- The Redex form itself is rejected: a bare variable is a legal `expr` action there and
 in egglog is not a legal action at all, so `Action.Scoped` requires an application. -/
@@ -51,22 +52,24 @@ example : ¬ WellScoped [.action (.letBind "v1" (eNum 2)), .action (.expr (.var 
   simp [WellScoped, Program.Scoped, Cmd.Scoped, Action.Scoped, Expr.IsApp]
 
 /-- Likewise for a query fact. -/
-example : ¬ Rule.Scoped ⟨[.expr (.var "a")], []⟩ [] := by
+example : ¬ Rule.Scoped ⟨[.expr (.var "a")], []⟩ [] noSig := by
   simp [Rule.Scoped, Pattern.Scoped, Expr.IsApp]
 
 /-- `(check-false (judgment-holds (typed-rule (rule ((= v1 2)) ((cadd v1 v2))) ())))`:
 `v2` is bound by neither the query nor the globals. -/
 example : ¬ Rule.Scoped
-    ⟨[.eq (.var "v1") (eNum 2)], [.expr (.app "cadd" [.var "v1", .var "v2"])]⟩ [] := by
+    ⟨[.eq (.var "v1") (eNum 2)], [.expr (.app "cadd" [.var "v1", .var "v2"])]⟩ [] noSig := by
   simp [Rule.Scoped, Pattern.Scoped, Actions.Scoped, Action.Scoped, Expr.Scoped,
     Expr.IsApp, Query.bind, Pattern.vars, eNum]
 
 /-- `(check-not-false (judgment-holds (typed-rule (rule ((= v1 2)) ((cadd v1 v2)))
 ((v2 : no-type)))))`: with `v2` a global it does scope. -/
 example : Rule.Scoped
-    ⟨[.eq (.var "v1") (eNum 2)], [.expr (.app "cadd" [.var "v1", .var "v2"])]⟩ ["v2"] := by
+    ⟨[.eq (.var "v1") (eNum 2)], [.expr (.app "cadd" [.var "v1", .var "v2"])]⟩ ["v2"]
+    noSig := by
   simp [Rule.Scoped, Pattern.Scoped, Actions.Scoped, Action.Scoped, Expr.Scoped,
-    Expr.IsApp, Query.bind, Pattern.vars, eNum]
+    Expr.IsApp, Query.bind, Pattern.vars, eNum, Expr.fns, Expr.fnsList, Prim.ofName,
+    Signature.mergeOf]
 
 /-! ### Congruence
 
@@ -171,7 +174,8 @@ example : ValidSubst preWrapped (.expr (.app "wrapper" [eNum 1])) [] :=
   .expr (w := .app "wrapper" [num 2]) (t := .app "wrapper" [num 1])
     ⟨by simp [eNum], by simp⟩
     (by simp [preWrapped])
-    (by simp [Expr.eval, Expr.evalList, eNum, num])
+    (by simp [Expr.eval, Expr.evalList, eNum, num, preWrapped, Prim.ofName,
+      Signature.mergeOf])
     (.congr (by simp [preWrapped]) (by simp [preWrapped])
       (.cons (.symm (.assert (by simp [preWrapped]))) .nil))
 
@@ -199,7 +203,8 @@ private def actionsProgram : Program :=
 
 example : WellScoped actionsProgram := by
   simp [WellScoped, actionsProgram, Program.Scoped, Cmd.Scoped, Action.Scoped, Expr.Scoped,
-    Cmd.bind, Action.bind, eNum]
+    Cmd.bind, Action.bind, Cmd.sigBind, eNum, Expr.fns, Expr.fnsList, Prim.ofName,
+    Signature.mergeOf]
 
 example : ∃ db, run actionsProgram = some db ∧
     db.terms = {b1, num 1, num 7, num 4} ∧
@@ -231,8 +236,9 @@ private def ruleProgram : Program :=
 
 example : WellScoped ruleProgram := by
   simp [WellScoped, ruleProgram, Program.Scoped, Cmd.Scoped, Action.Scoped, Expr.Scoped,
-    Expr.IsApp, Cmd.bind, Action.bind, Rule.Scoped, Pattern.Scoped, Actions.Scoped,
-    Query.bind, Pattern.vars, swapRule, eNum]
+    Expr.IsApp, Cmd.bind, Action.bind, Cmd.sigBind, Rule.Scoped, Pattern.Scoped,
+    Actions.Scoped, Query.bind, Pattern.vars, swapRule, eNum, Expr.fns, Expr.fnsList,
+    Prim.ofName, Signature.mergeOf]
 
 /-- The database just before the `(run)`: `(Add 1 2)` with its children, plus the rule. -/
 private def preRun : Database where
@@ -247,7 +253,7 @@ private theorem preRun_eq :
     runProgram Database.empty [.action (.expr (.app "Add" [eNum 1, eNum 2])), .rule swapRule]
       = some preRun := by
   simp [runProgram, stepCmd, evalAction, Expr.eval, Expr.evalList, Database.empty, preRun,
-    eNum, num, add12, Database.addTerm]
+    eNum, num, add12, Database.addTerm, Prim.ofName, Signature.mergeOf]
 
 private theorem run_ruleProgram : run ruleProgram = some (runRules preRun) := by
   change runProgram Database.empty
@@ -265,7 +271,8 @@ private theorem swap_matches :
     simp only [List.mem_cons, List.not_mem_nil, or_false] at hc
     rcases hc with rfl | rfl <;> simp [preRun, add12, num]
   · simp [preRun, add12]
-  · simp [Expr.eval, Expr.evalList, Env.lookup, preRun, add12, num]
+  · simp [Expr.eval, Expr.evalList, Env.lookup, preRun, add12, num, noSig, Prim.ofName,
+      Signature.mergeOf]
   · simp [preRun, add12]
 
 /-- Running that firing adds `(Add 2 1)` and its children. -/
@@ -274,7 +281,7 @@ private theorem swap_fires :
       = some { preRun with terms := preRun.terms ∪ add21.subterms,
                            rows := preRun.rows ∪ add21.ctorRows } := by
   simp [evalLocalActions, evalActions, evalAction, Expr.eval, Expr.evalList, Env.lookup,
-    swapRule, preRun, add21, num, Database.addTerm]
+    swapRule, preRun, add21, num, Database.addTerm, noSig, Prim.ofName, Signature.mergeOf]
 
 /-- `(Add 2 1)` is in the database after the run. -/
 example : ∃ db, run ruleProgram = some db ∧ add21 ∈ db.terms := by
@@ -420,7 +427,7 @@ flattens to three columns where the table has two. -/
 #guard !accepts one [.action (.set "Dist" [A] [eNum 3, eNum 4])]
 
 /- The row atom at one value column, which is how a single-column read is written since
-`Expr.MEval` does not look up. `Tests/Egg.lean` renders it `(= v (Dist k))`: writing
+`Expr.eval` does not look up. `Tests/Egg.lean` renders it `(= v (Dist k))`: writing
 `(= (values v) (Dist k))` instead is "Unbound function values", because `values` is
 recognized only for a tuple output. -/
 #guard accepts one [.rule ⟨[.values [.var "v"] "Dist" [.var "k"]], []⟩]
@@ -486,7 +493,7 @@ end Arity
 `Impl/Check.lean`'s `Program.noLookup`: applying a non-constructor is a *read*, and the
 only place a program may read is the query atom `Pattern.values`. egglog enforces this in
 a rule head — "Value lookup of non-constructor function function in rule is disallowed" —
-and this model everywhere, which is what makes `Expr.MEval` deterministic. The three
+and this model everywhere, which is what makes `Expr.eval` deterministic. The three
 places egglog is more permissive are each marked below.
 
 Acceptances matter as much as rejections here: a predicate that rejected everything would
@@ -524,7 +531,7 @@ private def ok (cs : List Cmd) : Bool := (decls ++ cs).noLookup emptySig
 /-! ### Positions where egglog is more permissive
 
 Each of the three runs in the binary and is rejected here, which is what confines reading
-to `Pattern.values` and so what removes `Expr.MEval`'s `lookup` constructor. -/
+to `Pattern.values` and so what removes `Expr.eval`'s `lookup` constructor. -/
 
 /- A top-level action. `(set (Copy (A)) (Dist (A)))` copies the value in egglog. -/
 #guard !ok [.action (.set "Copy" [A] [.app "Dist" [A]])]

@@ -3,18 +3,45 @@ import EgglogSemantics.Proofs.Congruence
 
 namespace Egglog
 namespace Expr
-@[simp] theorem eval_lit {l : Lit} {σ : Env} : (Expr.lit l).eval σ = some (.lit l) := rfl
+@[simp] theorem eval_lit {sig : Signature} {l : Lit} {σ : Env} :
+    (Expr.lit l).eval sig σ = some (.lit l) := rfl
 
-@[simp] theorem eval_var {v : Var} {σ : Env} : (Expr.var v).eval σ = Env.lookup v σ := rfl
+@[simp] theorem eval_var {sig : Signature} {v : Var} {σ : Env} :
+    (Expr.var v).eval sig σ = Env.lookup v σ := rfl
 
-@[simp] theorem eval_app {f : FnName} {args : List Expr} {σ : Env} :
-    (Expr.app f args).eval σ = (Expr.evalList args σ).map (Term.app f) := rfl
+/-- The building case, which is the only one the constructor fragment ever takes. -/
+@[simp] theorem eval_app_ctor {sig : Signature} {f : FnName} {args : List Expr} {σ : Env}
+    (hp : Prim.ofName f = none) (hc : sig.mergeOf f = MergeSpec.union) :
+    (Expr.app f args).eval sig σ = (Expr.evalList sig args σ).map (Term.app f) := by
+  simp only [Expr.eval, hp, hc]
 
-@[simp] theorem evalList_nil {σ : Env} : Expr.evalList [] σ = some [] := rfl
+/-- The computing case. A reserved name shadows a user function, so this needs no
+condition on the signature. -/
+theorem eval_app_prim {sig : Signature} {f : FnName} {p : Prim} {args : List Expr}
+    {σ : Env} (hp : Prim.ofName f = some p) :
+    (Expr.app f args).eval sig σ = (Expr.evalList sig args σ).bind p.apply := by
+  simp only [Expr.eval, hp]
 
-@[simp] theorem evalList_cons {e : Expr} {es : List Expr} {σ : Env} :
-    Expr.evalList (e :: es) σ = (e.eval σ).bind fun t => (Expr.evalList es σ).map (t :: ·) :=
-  rfl
+/-- The reading case, which has no rule: an application of a non-constructor is a lookup,
+and `Impl/Check.lean`'s `noLookup` rejects one in every position this is called from. -/
+theorem eval_app_merge {sig : Signature} {f : FnName} {args : List Expr} {σ : Env}
+    {body : List Action} {res : List Expr} (hp : Prim.ofName f = none)
+    (hc : sig.mergeOf f = MergeSpec.merge body res) :
+    (Expr.app f args).eval sig σ = none := by
+  simp only [Expr.eval, hp, hc]
+
+/-- `eval_app_merge` for a `:no-merge` function, which is a lookup for the same reason. -/
+theorem eval_app_noMerge {sig : Signature} {f : FnName} {args : List Expr} {σ : Env}
+    (hp : Prim.ofName f = none) (hc : sig.mergeOf f = MergeSpec.noMerge) :
+    (Expr.app f args).eval sig σ = none := by
+  simp only [Expr.eval, hp, hc]
+
+@[simp] theorem evalList_nil {sig : Signature} {σ : Env} :
+    Expr.evalList sig [] σ = some [] := rfl
+
+@[simp] theorem evalList_cons {sig : Signature} {e : Expr} {es : List Expr} {σ : Env} :
+    Expr.evalList sig (e :: es) σ =
+      (e.eval sig σ).bind fun t => (Expr.evalList sig es σ).map (t :: ·) := rfl
 
 end Expr
 mutual
@@ -22,15 +49,15 @@ mutual
 /-- Evaluation reads the environment only through `lookup`, so environments that
 agree are interchangeable. This is what lets `Env-Union`'s duplicate bindings be
 ignored. -/
-theorem Expr.eval_agree {σ₁ σ₂ : Env} (h : Env.Agree σ₁ σ₂) (e : Expr) :
-    e.eval σ₁ = e.eval σ₂ := by
+theorem Expr.eval_agree {sig : Signature} {σ₁ σ₂ : Env} (h : Env.Agree σ₁ σ₂) (e : Expr) :
+    e.eval sig σ₁ = e.eval sig σ₂ := by
   match e with
   | .lit _ => rfl
   | .var v => exact h v
-  | .app f args => rw [Expr.eval_app, Expr.eval_app, Expr.evalList_agree h args]
+  | .app f args => simp only [Expr.eval, Expr.evalList_agree h args]
 
-theorem Expr.evalList_agree {σ₁ σ₂ : Env} (h : Env.Agree σ₁ σ₂) (es : List Expr) :
-    Expr.evalList es σ₁ = Expr.evalList es σ₂ := by
+theorem Expr.evalList_agree {sig : Signature} {σ₁ σ₂ : Env} (h : Env.Agree σ₁ σ₂)
+    (es : List Expr) : Expr.evalList sig es σ₁ = Expr.evalList sig es σ₂ := by
   match es with
   | [] => rfl
   | e :: es =>
@@ -40,11 +67,14 @@ end
 
 mutual
 
-/-- Evaluation gets stuck only on an unbound variable, so an expression whose
-variables the environment all bind evaluates. This is the whole content of the
-Redex's type checker. -/
-theorem Expr.eval_isSome {σ : Env} (e : Expr) (h : ∀ v ∈ e.vars, v ∈ Env.dom σ) :
-    ∃ t, e.eval σ = some t := by
+/-- Evaluation gets stuck on an unbound variable, on a lookup and on a primitive; an
+expression with none of the three evaluates. The two conditions are exactly
+`Expr.Scoped`'s, and this is the whole content of the Redex's type checker plus what a
+sort discipline would add (`Spec/Scope.lean`, `Expr.Scoped`). -/
+theorem Expr.eval_isSome {sig : Signature} {σ : Env} (e : Expr)
+    (h : ∀ v ∈ e.vars, v ∈ Env.dom σ)
+    (hf : ∀ f ∈ e.fns, Prim.ofName f = none ∧ sig.mergeOf f = MergeSpec.union) :
+    ∃ t, e.eval sig σ = some t := by
   match e with
   | .lit l => exact ⟨.lit l, rfl⟩
   | .var v =>
@@ -52,18 +82,24 @@ theorem Expr.eval_isSome {σ : Env} (e : Expr) (h : ∀ v ∈ e.vars, v ∈ Env.
       (Env.lookup_isSome_iff_mem_dom.mpr (h v (by simp)))
     exact ⟨t, ht⟩
   | .app f args =>
+    obtain ⟨hp, hc⟩ := hf f (by simp)
     obtain ⟨ts, hts⟩ := Expr.evalList_isSome args (by simpa using h)
-    exact ⟨.app f ts, by rw [Expr.eval_app, hts, Option.map_some]⟩
+      (fun g hg => hf g (by simp [hg]))
+    exact ⟨.app f ts, by rw [Expr.eval_app_ctor hp hc, hts, Option.map_some]⟩
 
-theorem Expr.evalList_isSome {σ : Env} (es : List Expr)
-    (h : ∀ v ∈ Expr.varsList es, v ∈ Env.dom σ) : ∃ ts, Expr.evalList es σ = some ts := by
+theorem Expr.evalList_isSome {sig : Signature} {σ : Env} (es : List Expr)
+    (h : ∀ v ∈ Expr.varsList es, v ∈ Env.dom σ)
+    (hf : ∀ f ∈ Expr.fnsList es, Prim.ofName f = none ∧ sig.mergeOf f = MergeSpec.union) :
+    ∃ ts, Expr.evalList sig es σ = some ts := by
   match es with
   | [] => exact ⟨[], rfl⟩
   | e :: es =>
-    obtain ⟨t, ht⟩ := Expr.eval_isSome e fun v hv =>
-      h v (List.mem_union_iff.mpr (Or.inl hv))
-    obtain ⟨ts, hts⟩ := Expr.evalList_isSome es fun v hv =>
-      h v (List.mem_union_iff.mpr (Or.inr hv))
+    obtain ⟨t, ht⟩ := Expr.eval_isSome e (fun v hv =>
+      h v (List.mem_union_iff.mpr (Or.inl hv)))
+      (fun g hg => hf g (List.mem_union_iff.mpr (Or.inl hg)))
+    obtain ⟨ts, hts⟩ := Expr.evalList_isSome es (fun v hv =>
+      h v (List.mem_union_iff.mpr (Or.inr hv)))
+      (fun g hg => hf g (List.mem_union_iff.mpr (Or.inr hg)))
     exact ⟨t :: ts, by rw [Expr.evalList_cons, ht, Option.bind_some, hts, Option.map_some]⟩
 
 end
@@ -78,41 +114,41 @@ end
 three-way `rcases` on this rather than a repeat of the case analysis. -/
 theorem evalAction_eq_some {db db' : Database} {a : Action}
     (h : evalAction db a = some db') :
-    (∃ e t, a = .expr e ∧ e.eval db.env = some t ∧ db' = db.addTerm t) ∨
-      (∃ v e t, a = .letBind v e ∧ e.eval db.env = some t ∧
+    (∃ e t, a = .expr e ∧ e.eval db.sig db.env = some t ∧ db' = db.addTerm t) ∨
+      (∃ v e t, a = .letBind v e ∧ e.eval db.sig db.env = some t ∧
         db' = { db.addTerm t with env := (v, t) :: db.env }) ∨
-      (∃ e₁ e₂ t₁ t₂, a = .union e₁ e₂ ∧ e₁.eval db.env = some t₁ ∧
-        e₂.eval db.env = some t₂ ∧ db' = db.addEq t₁ t₂) ∨
-      (∃ f args out as vs, a = .set f args out ∧ Expr.evalList args db.env = some as ∧
-        Expr.evalList out db.env = some vs ∧ db' = db.addRow f as vs) := by
+      (∃ e₁ e₂ t₁ t₂, a = .union e₁ e₂ ∧ e₁.eval db.sig db.env = some t₁ ∧
+        e₂.eval db.sig db.env = some t₂ ∧ db' = db.addEq t₁ t₂) ∨
+      (∃ f args out as vs, a = .set f args out ∧ Expr.evalList db.sig args db.env = some as ∧
+        Expr.evalList db.sig out db.env = some vs ∧ db' = db.addRow f as vs) := by
   cases a with
   | expr e =>
-    cases hv : e.eval db.env with
+    cases hv : e.eval db.sig db.env with
     | none => simp [evalAction, hv] at h
     | some t =>
       simp only [evalAction, hv, Option.map_some, Option.some.injEq] at h
       exact Or.inl ⟨e, t, rfl, hv, h.symm⟩
   | letBind v e =>
-    cases hv : e.eval db.env with
+    cases hv : e.eval db.sig db.env with
     | none => simp [evalAction, hv] at h
     | some t =>
       simp only [evalAction, hv, Option.map_some, Option.some.injEq] at h
       exact Or.inr (Or.inl ⟨v, e, t, rfl, hv, h.symm⟩)
   | union e₁ e₂ =>
-    cases hv₁ : e₁.eval db.env with
+    cases hv₁ : e₁.eval db.sig db.env with
     | none => simp [evalAction, hv₁] at h
     | some t₁ =>
-      cases hv₂ : e₂.eval db.env with
+      cases hv₂ : e₂.eval db.sig db.env with
       | none => simp [evalAction, hv₁, hv₂] at h
       | some t₂ =>
         simp only [evalAction, hv₁, hv₂, Option.bind_some, Option.map_some,
           Option.some.injEq] at h
         exact Or.inr (Or.inr (Or.inl ⟨e₁, e₂, t₁, t₂, rfl, hv₁, hv₂, h.symm⟩))
   | set f args out =>
-    cases hv₁ : Expr.evalList args db.env with
+    cases hv₁ : Expr.evalList db.sig args db.env with
     | none => simp [evalAction, hv₁] at h
     | some as =>
-      cases hv₂ : Expr.evalList out db.env with
+      cases hv₂ : Expr.evalList db.sig out db.env with
       | none => simp [evalAction, hv₁, hv₂] at h
       | some vs =>
         simp only [evalAction, hv₁, hv₂, Option.bind_some, Option.map_some,
@@ -170,6 +206,17 @@ theorem evalActions_contained {db db' : Database} {as : List Action}
       simp only [evalActions_cons, hv, Option.bind_some] at h
       exact (evalAction_contained hv).trans (ih h)
 
+theorem evalActions_sig {db db' : Database} {as : List Action}
+    (h : evalActions db as = some db') : db'.sig = db.sig := by
+  induction as generalizing db with
+  | nil => simp only [evalActions_nil, Option.some.injEq] at h; simp [← h]
+  | cons a as ih =>
+    cases hv : evalAction db a with
+    | none => simp [hv] at h
+    | some db₁ =>
+      simp only [evalActions_cons, hv, Option.bind_some] at h
+      rw [ih h, evalAction_sig hv]
+
 theorem evalActions_rules {db db' : Database} {as : List Action}
     (h : evalActions db as = some db') : db'.rules = db.rules := by
   induction as generalizing db with
@@ -202,37 +249,39 @@ theorem evalAction_envAgree {d₁ d₂ : Database} (h : d₁.EnvAgree d₂) (a :
     Option.Rel Database.EnvAgree (evalAction d₁ a) (evalAction d₂ a) := by
   cases a with
   | expr e =>
-    simp only [evalAction, ← Expr.eval_agree h.env e]
-    cases e.eval d₁.env with
+    simp only [evalAction, ← h.sig, ← Expr.eval_agree (sig := d₁.sig) h.env e]
+    cases e.eval d₁.sig d₁.env with
     | none => exact .none
     | some t =>
       exact .some ⟨h.sig, by simp [Database.addTerm, h.terms],
         by simp [Database.addTerm, h.rows], h.eqs, h.rules, h.env⟩
   | letBind v e =>
-    simp only [evalAction, ← Expr.eval_agree h.env e]
-    cases e.eval d₁.env with
+    simp only [evalAction, ← h.sig, ← Expr.eval_agree (sig := d₁.sig) h.env e]
+    cases e.eval d₁.sig d₁.env with
     | none => exact .none
     | some t =>
       refine .some ⟨h.sig, by simp [Database.addTerm, h.terms],
         by simp [Database.addTerm, h.rows], h.eqs, h.rules, fun w => ?_⟩
       by_cases hw : w = v <;> simp [hw, h.env w]
   | union e₁ e₂ =>
-    simp only [evalAction, ← Expr.eval_agree h.env e₁, ← Expr.eval_agree h.env e₂]
-    cases e₁.eval d₁.env with
+    simp only [evalAction, ← h.sig, ← Expr.eval_agree (sig := d₁.sig) h.env e₁,
+      ← Expr.eval_agree (sig := d₁.sig) h.env e₂]
+    cases e₁.eval d₁.sig d₁.env with
     | none => exact .none
     | some t₁ =>
-      cases e₂.eval d₁.env with
+      cases e₂.eval d₁.sig d₁.env with
       | none => exact .none
       | some t₂ =>
         exact .some ⟨h.sig, by simp [Database.addEq, Database.addTerm, h.terms],
           by simp [Database.addEq, Database.addTerm, h.rows],
           by simp [Database.addEq, h.eqs], h.rules, h.env⟩
   | set f args out =>
-    simp only [evalAction, ← Expr.evalList_agree h.env args, ← Expr.evalList_agree h.env out]
-    cases Expr.evalList args d₁.env with
+    simp only [evalAction, ← h.sig, ← Expr.evalList_agree (sig := d₁.sig) h.env args,
+      ← Expr.evalList_agree (sig := d₁.sig) h.env out]
+    cases Expr.evalList d₁.sig args d₁.env with
     | none => exact .none
     | some as =>
-      cases Expr.evalList out d₁.env with
+      cases Expr.evalList d₁.sig out d₁.env with
       | none => exact .none
       | some vs =>
         exact .some (h.addRow f as vs)

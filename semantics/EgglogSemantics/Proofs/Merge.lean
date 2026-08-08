@@ -15,17 +15,13 @@ exactly M2's `Cong`. That is what makes replacing `Cong` by `MCong` a refactor r
 than a rewrite — without it every M2–M8 theorem would have to be reproved rather than
 transported.
 
-Five statements needed repair, and the repairs are the interesting output:
+Four statements needed repair, and the repairs are the interesting output:
 
-* `execM_reachable` is false as stated — `Expr.eval` builds an application for *every*
-  name, so a primitive or a non-constructor makes the interpreter and the relation
-  disagree. It carries `Program.CtorDecls`, `Program.SetLegal` and `Program.NoPrim`, and
-  is **proved**; its docstring justifies each, and `Proofs/Counterexamples.lean`'s
-  `execM_reachable_needs_setLegal` shows the middle one cannot be dropped.
-* `Expr.MEval_of_eval`'s `∀ f, Prim.ofName f = none` is **unsatisfiable**
-  (`not_forall_ofName_eq_none`), so it is vacuous. `Expr.NoPrim` and
-  `Expr.MEval_of_eval'` are the version that is not, and `Expr.eval_of_MEval` is the
-  converse M11 wants — it needs no `CtorRows`.
+* `execM_reachable` is false without side conditions — a `set` on a constructor breaks
+  `CtorRows`, which is the only route from `ValidSubst` to `MValidSubst`. It carries
+  `Program.CtorDecls` and `Program.SetLegal` and is **proved**; its docstring justifies
+  both, and `Proofs/Counterexamples.lean`'s `execM_reachable_needs_setLegal` shows the
+  second cannot be dropped.
 * `MCong.mono`, `MCongList.mono` and `Database.Out.mono` are **false** as stated:
   `Contained` ignores `sig` and `fd` fires only at `.union`. See
   `mcong_mono_needs_sig`. They carry `d₁.sig = d₂.sig`.
@@ -178,208 +174,11 @@ theorem MCong.congr {db : Database} {f : FnName} {as bs : List Term}
     MCong db (.app f as) (.app f bs) :=
   .fd ha hb hsig hl (by simp)
 
-/-! ### The two evaluators agree
+/-! ### The constructor fragment collapses
 
-`Expr.eval` (M0–M8, a function) and `Expr.MEval` (M9, a relation) coexist until M12.
-These are the guard against their drifting apart.
-
-`NoPrim` is what `hprim` below *should* say. As stated, `∀ f, Prim.ofName f = none` is
-false — `Prim.ofName "ordering-min" = some .orderingMin` — so `MEval_of_eval` is
-vacuous. It is proved honestly all the same (the induction never needs `hprim` at a name
-other than the one in front of it), and `MEval_of_eval'` is the same statement with the
-hypothesis restricted to the names `e` actually mentions, which is satisfiable.
-
-`Expr.NoPrim` and `Expr.NoPrimList` live in `Spec/Merge.lean` beside `Prim.ofName`. -/
-@[simp] theorem Expr.noPrim_app {f : FnName} {args : List Expr} :
-    Expr.NoPrim (.app f args) ↔ Prim.ofName f = none ∧ Expr.NoPrimList args := Iff.rfl
-
-@[simp] theorem Expr.noPrimList_cons {e : Expr} {es : List Expr} :
-    Expr.NoPrimList (e :: es) ↔ Expr.NoPrim e ∧ Expr.NoPrimList es := Iff.rfl
-
-@[simp] theorem Action.noPrim_expr {e : Expr} : (Action.expr e).NoPrim ↔ e.NoPrim := Iff.rfl
-
-@[simp] theorem Action.noPrim_letBind {v : Var} {e : Expr} :
-    (Action.letBind v e).NoPrim ↔ e.NoPrim := Iff.rfl
-
-@[simp] theorem Action.noPrim_union {e₁ e₂ : Expr} :
-    (Action.union e₁ e₂).NoPrim ↔ e₁.NoPrim ∧ e₂.NoPrim := Iff.rfl
-
-@[simp] theorem Action.noPrim_set {f : FnName} {args out : List Expr} :
-    (Action.set f args out).NoPrim ↔ Expr.NoPrimList args ∧ Expr.NoPrimList out := Iff.rfl
-
-@[simp] theorem Actions.noPrim_cons {a : Action} {as : List Action} :
-    Actions.NoPrim (a :: as) ↔ a.NoPrim ∧ Actions.NoPrim as := Iff.rfl
-
-/-- **`Expr.MEval_of_eval`'s hypothesis is unsatisfiable**, so that theorem is vacuous
-however it is proved. `Expr.MEval_of_eval'` is the same statement with the quantifier
-cut down to the names `e` mentions, which is satisfiable. -/
-theorem not_forall_ofName_eq_none : ¬ ∀ f : FnName, Prim.ofName f = none := by
-  intro h
-  have hmin := h "ordering-min"
-  simp [Prim.ofName] at hmin
-
-mutual
-
-/-- The connecting theorem between the two evaluators, which coexist until stage 3
-(`PLAN.md`, M12). `Expr.eval` is the M0–M8 function; `Expr.MEval` is M9's relation. On a
-constructor-only signature the first refines the second, which is the guard against the
-two drifting apart while both exist.
-
-**The hypothesis as stated is unsatisfiable**, so this theorem is vacuous; see
-`Expr.MEval_of_eval'` for the version that is not. The proof below is the real one —
-only the quantifier on `hprim` is too strong. -/
-theorem Expr.MEval_of_eval {db : Database} (hsig : db.sig.AllConstructors) {σ : Env}
-    {e : Expr} {t : Term} (hprim : ∀ f, Prim.ofName f = none) (h : e.eval σ = some t) :
-    Expr.MEval db σ e t := by
-  match e, h with
-  | .lit l, h => rw [Expr.eval_lit, Option.some.injEq] at h; exact h ▸ .lit
-  | .var v, h => exact .var h
-  | .app f args, h =>
-    rw [Expr.eval_app, Option.map_eq_some_iff] at h
-    obtain ⟨ts, hts, rfl⟩ := h
-    exact .ctor (hprim f) (Signature.mergeOf_eq_union hsig f)
-      (Expr.MEvalList_of_evalList hsig hprim hts)
-
-theorem Expr.MEvalList_of_evalList {db : Database} (hsig : db.sig.AllConstructors)
-    {σ : Env} {es : List Expr} {ts : List Term} (hprim : ∀ f, Prim.ofName f = none)
-    (h : Expr.evalList es σ = some ts) : Expr.MEvalList db σ es ts := by
-  match es, h with
-  | [], h => rw [Expr.evalList_nil, Option.some.injEq] at h; exact h ▸ .nil
-  | e :: es, h =>
-    rw [Expr.evalList_cons] at h
-    obtain ⟨t, ht, h⟩ := Option.bind_eq_some_iff.mp h
-    obtain ⟨us, hus, rfl⟩ := Option.map_eq_some_iff.mp h
-    exact .cons (Expr.MEval_of_eval hsig hprim ht)
-      (Expr.MEvalList_of_evalList hsig hprim hus)
-
-end
-
-mutual
-
-/-- `Expr.MEval_of_eval` with a satisfiable hypothesis: only the names `e` mentions have
-to be non-primitive. -/
-theorem Expr.MEval_of_eval' {db : Database} (hsig : db.sig.AllConstructors) {σ : Env}
-    (e : Expr) {t : Term} : e.NoPrim → e.eval σ = some t → Expr.MEval db σ e t := by
-  match e with
-  | .lit l => intro _ h; rw [Expr.eval_lit, Option.some.injEq] at h; exact h ▸ .lit
-  | .var v => intro _ h; exact .var h
-  | .app f args =>
-    intro hp h
-    rw [Expr.eval_app, Option.map_eq_some_iff] at h
-    obtain ⟨ts, hts, rfl⟩ := h
-    exact .ctor hp.1 (Signature.mergeOf_eq_union hsig f)
-      (Expr.MEvalList_of_evalList' hsig args hp.2 hts)
-
-theorem Expr.MEvalList_of_evalList' {db : Database} (hsig : db.sig.AllConstructors)
-    {σ : Env} (es : List Expr) {ts : List Term} :
-    Expr.NoPrimList es → Expr.evalList es σ = some ts → Expr.MEvalList db σ es ts := by
-  match es with
-  | [] => intro _ h; rw [Expr.evalList_nil, Option.some.injEq] at h; exact h ▸ .nil
-  | e :: es =>
-    intro hp h
-    rw [Expr.evalList_cons] at h
-    obtain ⟨t, ht, h⟩ := Option.bind_eq_some_iff.mp h
-    obtain ⟨us, hus, rfl⟩ := Option.map_eq_some_iff.mp h
-    exact .cons (Expr.MEval_of_eval' hsig e hp.1 ht)
-      (Expr.MEvalList_of_evalList' hsig es hp.2 hus)
-
-end
-
-mutual
-
-/-- **The converse, which is what M11 needs.** On a constructor-only signature and a
-primitive-free expression, `MEval` is no more than `eval`: `ctor` is the only rule that can
-fire, because `mergeOf` is always `.union` and no name resolves as a primitive. This is
-what transports a fact about the relational side back to the function side.
-
-`AllConstructors` is still needed and `db.CtorRows` still is not. The two evaluators
-differ on exactly two things — a primitive name, and a non-constructor application, which
-`MEval` (having no `lookup`) leaves stuck where `eval` builds a term. -/
-theorem Expr.eval_of_MEval {db : Database} (hsig : db.sig.AllConstructors) {σ : Env}
-    {e : Expr} {t : Term} (h : Expr.MEval db σ e t) : e.NoPrim → e.eval σ = some t := by
-  match h with
-  | .lit => intro _; rfl
-  | .var hv => intro _; exact hv
-  | .ctor _ _ hl =>
-    intro hp
-    rw [Expr.eval_app, Expr.evalList_of_MEvalList hsig hl hp.2, Option.map_some]
-  | .prim hf _ _ => intro hp; exact absurd hf (by rw [hp.1]; simp)
-
-theorem Expr.evalList_of_MEvalList {db : Database} (hsig : db.sig.AllConstructors)
-    {σ : Env} {es : List Expr} {ts : List Term} (h : Expr.MEvalList db σ es ts) :
-    Expr.NoPrimList es → Expr.evalList es σ = some ts := by
-  match h with
-  | .nil => intro _; rfl
-  | .cons he hl =>
-    intro hp
-    rw [Expr.evalList_cons, Expr.eval_of_MEval hsig he hp.1, Option.bind_some,
-      Expr.evalList_of_MEvalList hsig hl hp.2, Option.map_some]
-
-end
-
-mutual
-
-/-- **`MEval` is deterministic**, on any signature and any expression.
-
-This used to hold only on the constructor fragment (`AllConstructors`, `NoPrim`), because
-`lookup` read `Out`, which a key class can satisfy several times over. With reading
-confined to the query there is one rule per syntactic form — `ctor` and `prim` are split
-on `Prim.ofName f` — so the derivation is determined by the expression.
-
-It is what makes M12's recovery plan (`PLAN.md`) work, and more: a relation that is a
-function *unconditionally* can simply be replaced by one. -/
-theorem Expr.MEval_unique {db : Database} {σ : Env} {e : Expr} {t₁ t₂ : Term}
-    (h₁ : Expr.MEval db σ e t₁) (h₂ : Expr.MEval db σ e t₂) : t₁ = t₂ := by
-  match h₁, h₂ with
-  | .lit, .lit => rfl
-  | .var hv₁, .var hv₂ => exact Option.some.inj (hv₁.symm.trans hv₂)
-  | .ctor _ _ hl₁, .ctor _ _ hl₂ => rw [Expr.MEvalList_unique hl₁ hl₂]
-  | .ctor hp _ _, .prim hf _ _ => exact absurd (hp.symm.trans hf) (by simp)
-  | .prim hf _ _, .ctor hp _ _ => exact absurd (hf.symm.trans hp) (by simp)
-  | .prim hf₁ hl₁ hv₁, .prim hf₂ hl₂ hv₂ =>
-    rw [Expr.MEvalList_unique hl₁ hl₂] at hv₁
-    rw [Option.some.inj (hf₁.symm.trans hf₂)] at hv₁
-    exact Option.some.inj (hv₁.symm.trans hv₂)
-
-/-- `Expr.MEval_unique` over an argument list. -/
-theorem Expr.MEvalList_unique {db : Database} {σ : Env} {es : List Expr}
-    {ts₁ ts₂ : List Term} (h₁ : Expr.MEvalList db σ es ts₁)
-    (h₂ : Expr.MEvalList db σ es ts₂) : ts₁ = ts₂ := by
-  match h₁, h₂ with
-  | .nil, .nil => rfl
-  | .cons he₁ hl₁, .cons he₂ hl₂ =>
-    rw [Expr.MEval_unique he₁ he₂, Expr.MEvalList_unique hl₁ hl₂]
-
-end
-
-/-- **An action step is deterministic.** Every premise of every case is an evaluation, and
-those are unique, so the resulting database is.
-
-This is the input to M12's remaining question (`PLAN.md`): `ActionStep` and `ActionsStep`
-can go back to being *functions*. What cannot is anything above them — `MergeStep` chooses
-which pair of rows collides and in which order, and `MergeClosure` how many steps to take,
-so `RunStep`, `CmdStep` and `ProgramStep` stay relations. -/
-theorem Database.ActionStep_unique {db d₁ d₂ : Database} {a : Action}
-    (h₁ : Database.ActionStep db a d₁) (h₂ : Database.ActionStep db a d₂) : d₁ = d₂ := by
-  cases h₁ with
-  | expr he₁ => cases h₂ with | expr he₂ => rw [Expr.MEval_unique he₁ he₂]
-  | letBind he₁ => cases h₂ with | letBind he₂ => rw [Expr.MEval_unique he₁ he₂]
-  | union ha₁ hb₁ =>
-    cases h₂ with
-    | union ha₂ hb₂ => rw [Expr.MEval_unique ha₁ ha₂, Expr.MEval_unique hb₁ hb₂]
-  | set ha₁ hb₁ =>
-    cases h₂ with
-    | set ha₂ hb₂ => rw [Expr.MEvalList_unique ha₁ ha₂, Expr.MEvalList_unique hb₁ hb₂]
-
-/-- `Database.ActionStep_unique` over an action list. -/
-theorem Database.ActionsStep_unique {db d₁ d₂ : Database} {as : List Action}
-    (h₁ : Database.ActionsStep db as d₁) (h₂ : Database.ActionsStep db as d₂) : d₁ = d₂ := by
-  induction h₁ with
-  | nil => cases h₂ with | nil => rfl
-  | cons ha₁ _ ih =>
-    cases h₂ with
-    | cons ha₂ hs₂ => exact ih (Database.ActionStep_unique ha₁ ha₂ ▸ hs₂)
-
+`mcong_iff_cong` says the generalized congruence is the old one there. These say the
+same of the *step* relations: no merge fires, so a round is `RunRules` and nothing
+else. -/
 /-- The rest of M9 collapses too: with no `.merge` function there is no collision to
 resolve, so a round is `RunRules` and nothing else. Companion to `mcong_iff_cong` on
 the *step* side — together they say M9 restricted to constructors is M0–M8 unchanged. -/
@@ -530,21 +329,6 @@ theorem Database.Out.mono {d₁ d₂ : Database} (h : d₁.Contained d₂) (hsig
   obtain ⟨bs, hl, hrow⟩ := ho
   exact ⟨bs, MCongList.mono h hsig hl, h.rows hrow⟩
 
-/-- Row actions only add, exactly as `evalAction_contained` does for `Action`. -/
-theorem Database.ActionStep.contained {db d : Database} {a : Action}
-    (h : Database.ActionStep db a d) : db.Contained d := by
-  cases h with
-  | expr => exact Database.Contained.addTerm _ _
-  | letBind => exact ⟨Set.subset_union_left, Set.subset_union_left, subset_rfl⟩
-  | union => exact Database.Contained.addEq _ _ _
-  | set => exact Database.Contained.addRow _ _ _ _
-
-theorem Database.ActionsStep.contained {db d : Database} {as : List Action}
-    (h : Database.ActionsStep db as d) : db.Contained d := by
-  induction h with
-  | nil => exact Database.Contained.refl _
-  | cons ha _ ih => exact (Database.ActionStep.contained ha).trans ih
-
 /-- **A merge never shrinks the database.**
 
 Constraint (3), discharged by the representation rather than by an argument: the step
@@ -556,9 +340,8 @@ theorem MergeStep.contained {d₁ d₂ : Database} (h : MergeStep d₁ d₂) :
   cases h with
   | @collide d f as _ _ _ vs _ _ _ _ _ _ hbody _ =>
     have hb : d₁.Contained d :=
-      ⟨(Database.ActionsStep.contained hbody).terms,
-        (Database.ActionsStep.contained hbody).rows,
-        (Database.ActionsStep.contained hbody).eqs⟩
+      ⟨(evalActions_contained hbody).terms, (evalActions_contained hbody).rows,
+        (evalActions_contained hbody).eqs⟩
     have hc := hb.trans (Database.Contained.addRow f as vs d)
     exact ⟨hc.terms, hc.rows, hc.eqs⟩
 
@@ -581,9 +364,9 @@ theorem MergeStep.self_id {db d : Database} {f : FnName} {as a : List Term}
     {body : List Action} {res : List Expr} (hw : db.WF) (hrw : db.RowsWF)
     (hctor : Database.ctorRowsOf db.terms ⊆ db.rows) (hrow : Row.mk f as a ∈ db.rows)
     (hsig : db.sig.mergeOf f = MergeSpec.merge body res)
-    (hbody : Database.ActionsStep { db with env := mergeEnv a a } body d)
+    (hbody : evalActions { db with env := mergeEnv a a } body = some d)
     (hfix : d.terms = db.terms ∧ d.rows = db.rows ∧ d.eqs = db.eqs)
-    (hres : Expr.MEvalList d d.env res a) :
+    (hres : Expr.evalList d.sig res d.env = some a) :
     ({ d.addRow f as a with env := db.env, rules := db.rules } : Database) = db := by
   obtain ⟨hft, hfr, hfe⟩ := hfix
   have hbase : (db.addTerms as).addTerms a = db := by
@@ -592,7 +375,7 @@ theorem MergeStep.self_id {db d : Database} {f : FnName} {as a : List Term}
   obtain ⟨h1t, h1r⟩ := Database.addTerms_terms_rows hft hfr as
   obtain ⟨h2t, h2r⟩ := Database.addTerms_terms_rows h1t h1r a
   rw [hbase] at h2t h2r
-  have hsg := Database.ActionsStep.sig hbody
+  have hsg := evalActions_sig hbody
   refine Database.ext ?_ ?_ ?_ ?_ rfl rfl
   · exact (Database.addRow_sig (db := d) (f := f) (as := as) (vs := a)).trans hsg
   · exact h2t
@@ -605,7 +388,7 @@ theorem MergeStep.self_id {db d : Database} {f : FnName} {as a : List Term}
 
 Constraint (3)'s second half. `PLAN.md` proposes a merge-fold and asks for it to be
 well defined; `Current` is that value defined as a maximum instead, which needs only
-antisymmetry. It is not what `Expr.MEval` reads. -/
+antisymmetry. It is not what `Expr.eval` reads. -/
 /-- The value a *join* merge settles on at the class of `as`: the `le`-greatest
 recorded output.
 
@@ -908,7 +691,7 @@ theorem CmdStep.contained {db db' : Database} {c : Cmd} (h : CmdStep db c db') :
     db.Contained db' := by
   cases h with
   | action ha hm =>
-    exact (Database.ActionStep.contained ha).trans (MergeClosure.contained hm)
+    exact (evalAction_contained ha).trans (MergeClosure.contained hm)
   | rule => exact ⟨subset_rfl, subset_rfl, subset_rfl⟩
   | run hrun =>
     have hu : db.Contained (RunRules db) := Database.Contained.sUnion _ _
@@ -926,43 +709,11 @@ theorem ProgramStep.contained {db db' : Database} {p : Program}
 Demoted. Confluence is not needed by any safety theorem — see `invariant_of_step`. It
 buys one thing only: strengthening M10's refinement from "the interpreter's result is
 spec-reachable" to an equality. -/
-/-! **Evaluation reads the database only through its signature.** With `lookup` gone, no
-rule mentions `terms`, `rows` or `eqs`, and `sig` is consulted only to tell a constructor
-from a name the program should not have applied. Monotonicity in `Contained` — half of
-what a diamond proof for `MergeStep` needs, see `MergeStep.diamond_of_join` — is the
-corollary, and it no longer uses its containment hypothesis at all. -/
-mutual
-
-/-- Two databases with the same signature admit the same evaluations. -/
-theorem Expr.MEval.ofSig {d₁ d₂ : Database} (hsig : d₁.sig = d₂.sig)
-    {σ : Env} {e : Expr} {t : Term} (h : Expr.MEval d₁ σ e t) : Expr.MEval d₂ σ e t := by
-  match h with
-  | .lit => exact .lit
-  | .var hv => exact .var hv
-  | .ctor hp hu hl => exact .ctor hp (hsig ▸ hu) (Expr.MEvalList.ofSig hsig hl)
-  | .prim hp hl hv => exact .prim hp (Expr.MEvalList.ofSig hsig hl) hv
-
-/-- `Expr.MEval.ofSig` over an argument list. -/
-theorem Expr.MEvalList.ofSig {d₁ d₂ : Database} (hsig : d₁.sig = d₂.sig)
-    {σ : Env} {es : List Expr} {ts : List Term}
-    (h : Expr.MEvalList d₁ σ es ts) : Expr.MEvalList d₂ σ es ts := by
-  match h with
-  | .nil => exact .nil
-  | .cons he hl => exact .cons (Expr.MEval.ofSig hsig he) (Expr.MEvalList.ofSig hsig hl)
-
-end
-
-/-- A larger database admits every evaluation a smaller one does. Kept for the call sites
-that thread `Contained` and `sig` together; the containment is not used. -/
-theorem Expr.MEval.mono {d₁ d₂ : Database} (_hc : d₁.Contained d₂) (hsig : d₁.sig = d₂.sig)
-    {σ : Env} {e : Expr} {t : Term} (h : Expr.MEval d₁ σ e t) : Expr.MEval d₂ σ e t :=
-  h.ofSig hsig
-
-/-- `Expr.MEval.mono` over an argument list. -/
-theorem Expr.MEvalList.mono {d₁ d₂ : Database} (_hc : d₁.Contained d₂)
-    (hsig : d₁.sig = d₂.sig) {σ : Env} {es : List Expr} {ts : List Term}
-    (h : Expr.MEvalList d₁ σ es ts) : Expr.MEvalList d₂ σ es ts :=
-  h.ofSig hsig
+/-! **Evaluation reads the database only through its signature**, which after M12 is
+literally the type of `Expr.eval`: with one evaluator taking a `Signature`, "two databases
+with the same signature admit the same evaluations" is a rewrite rather than a theorem.
+Monotonicity in `Contained` — half of what a diamond proof for `MergeStep` needs, see
+`MergeStep.diamond_of_join` — follows the same way. -/
 
 /-- A saturated state is a fixpoint of the whole closure, not only of one step. -/
 theorem MergeSaturated.closure_eq {db d : Database} (hs : MergeSaturated db)
@@ -983,14 +734,15 @@ Unconditional local confluence nevertheless looks **true**, and in the stronger
 one-step-on-one-side form `Relation.church_rosser` wants, for a reason `MERGE.md`'s
 "open question 2" does not consider: a step's *effect* does not depend on the ambient
 state. `addTerm`/`addEq`/`addRow` each add a set determined by the terms involved, and
-those terms are fixed by the evaluation witnesses, which `Expr.MEval.mono` says stay
+those terms are fixed by the evaluation, which reads only `sig` and so stays
 available in a larger database. So firing collision 2 at `d₁` and collision 1 at `d₂`
 should land on the same state — the third table's merge that `MERGE.md` worries about
 is a *later* step, and it too remains available because nothing is removed.
 
 What is missing is exactness, and only exactness. The *existential* form of that
-transport — `ActionsStep db body d → db.Contained e → e.sig = db.sig → e.env = db.env →
-∃ d', ActionsStep e body d' ∧ d.Contained d'` — is `Database.ActionsStep.mono` below,
+transport — `evalActions db body = some d → db.Contained e → e.sig = db.sig →
+e.env = db.env → ∃ d', evalActions e body = some d' ∧ d.Contained d'` — is
+`evalActions_mono` below,
 and it is enough for the containment contract. The diamond needs the same statement with
 `d'` pinned to the componentwise join `e ⊔ d`, which is one case per action against the
 set algebra of `addTerm`/`addTerms`/`addRow`; that part is still open. -/
@@ -1058,22 +810,22 @@ theorem MValidSubst.mono {d₁ d₂ : Database} (hc : d₁.Contained d₂) (hsig
   | expr hv hw he hcong =>
     refine .expr ?_ (hc.terms hw) ?_ (MCong.mono (hc.addTerm_mono _) (hsig₁ _) hcong)
     · rw [henv]; exact hv.mono hc
-    · rw [henv]; exact Expr.MEval.mono hc hsig he
+    · rw [henv, ← hsig]; exact he
   | eq hv hw he₁ he₂ hc₁ hc₂ =>
     refine .eq ?_ (hc.terms hw) ?_ ?_
       (MCong.mono ((hc.addTerm_mono _).addTerm_mono _) hsig hc₁)
       (MCong.mono ((hc.addTerm_mono _).addTerm_mono _) hsig hc₂)
     · rw [henv]; exact hv.mono hc
-    · rw [henv]; exact Expr.MEval.mono hc hsig he₁
-    · rw [henv]; exact Expr.MEval.mono hc hsig he₂
+    · rw [henv, ← hsig]; exact he₁
+    · rw [henv, ← hsig]; exact he₂
   | @values vs f as σ us ts ws bs hv hu ht hk hw hrow =>
     refine .values ?_ ?_ ?_
       (MCongList.mono ((hc.addTerms_mono ts).addTerms_mono us) (by simp [hsig]) hk)
       (MCongList.mono ((hc.addTerms_mono ts).addTerms_mono us) (by simp [hsig]) hw)
       (hc.rows hrow)
     · rw [henv]; exact hv.mono hc
-    · rw [henv]; exact Expr.MEvalList.mono hc hsig hu
-    · rw [henv]; exact Expr.MEvalList.mono hc hsig ht
+    · rw [henv, ← hsig]; exact hu
+    · rw [henv, ← hsig]; exact ht
 
 theorem MValidQuerySubst.mono {d₁ d₂ : Database} (hc : d₁.Contained d₂)
     (hsig : d₁.sig = d₂.sig) (henv : d₂.env = d₁.env) {q : Query} {σ : Env}
@@ -1084,11 +836,11 @@ theorem MValidQuerySubst.mono {d₁ d₂ : Database} (hc : d₁.Contained d₂)
 /-! ### Transporting a step
 
 A step's *effect* is fixed by the evaluation witnesses it carries, and those witnesses
-depend on the state only through `Expr.MEval.mono` and on the environment only through
+depend on the state only through `sig` and on the environment only through
 `Env.lookup`. Two transports follow, and the containment contract spends both.
 
 Along `Contained`: the same block re-run on a larger state lands on a state containing
-the smaller run's result. That is `Database.ActionsStep.mono`, and it is the weak — but
+the smaller run's result. That is `evalActions_mono`, and it is the weak — but
 sufficient — form of what `MergeStep.diamond_of_join` wants.
 
 Along `Env.Agree`: two environments no `lookup` can tell apart give runs differing only
@@ -1098,7 +850,7 @@ for the relational semantics, and it is what lets a rule fire under the substitu
 specification admits rather than the one the enumerator emitted. -/
 
 /-- Agreement survives a shared innermost binding, which is the `letBind` case of
-`Database.ActionStep.envAgree`. -/
+`evalAction_envAgree`. -/
 theorem Env.Agree.cons {σ₁ σ₂ : Env} (h : Env.Agree σ₁ σ₂) (w : Var) (t : Term) :
     Env.Agree ((w, t) :: σ₁) ((w, t) :: σ₂) := by
   intro v
@@ -1113,118 +865,72 @@ theorem Database.EnvAgree.contained {d₁ d₂ : Database} (h : d₁.EnvAgree d�
     d₁.Contained d₂ :=
   ⟨fun _ hx => h.terms ▸ hx, fun _ hx => h.rows ▸ hx, fun _ hx => h.eqs ▸ hx⟩
 
-/-- The `union` case of `Database.ActionStep.envAgree`; companion of
+/-- The `union` case of `evalAction_envAgree`; companion of
 `Database.EnvAgree.addTerm` and `.addRow` in `Proofs/Database.lean`. -/
 theorem Database.EnvAgree.addEq {d₁ d₂ : Database} (h : d₁.EnvAgree d₂) (a b : Term) :
     (d₁.addEq a b).EnvAgree (d₂.addEq a b) :=
   let h' := (h.addTerm a).addTerm b
   ⟨h'.sig, h'.terms, h'.rows, by simp [Database.addEq, h.eqs], h'.rules, h'.env⟩
 
-mutual
+/-- `evalActions_envAgree` in the shape the transports use: a run under one environment
+gives a run under any environment agreeing with it. -/
+theorem evalActions_envAgree_exists {d₁ d₂ c : Database} (h : d₁.EnvAgree d₂)
+    {as : List Action} (hs : evalActions d₁ as = some c) :
+    ∃ c', evalActions d₂ as = some c' ∧ c.EnvAgree c' := by
+  have hrel := evalActions_envAgree h as
+  rw [hs] at hrel
+  cases hx : evalActions d₂ as with
+  | none => rw [hx] at hrel; cases hrel
+  | some c' => rw [hx] at hrel; cases hrel with | some hc => exact ⟨c', rfl, hc⟩
 
-/-- `MEval` reads the environment only through `Env.lookup`, so agreeing environments
-give the same values. -/
-theorem Expr.MEval.agree {db : Database} {σ₁ σ₂ : Env} (h : Env.Agree σ₁ σ₂) {e : Expr}
-    {t : Term} (hv : Expr.MEval db σ₁ e t) : Expr.MEval db σ₂ e t := by
-  match hv with
-  | .lit => exact .lit
-  | .var hl => exact .var ((h _).symm.trans hl)
-  | .ctor hp hu hl => exact .ctor hp hu (Expr.MEvalList.agree h hl)
-  | .prim hp hl hval => exact .prim hp (Expr.MEvalList.agree h hl) hval
-
-/-- `Expr.MEval.agree` over an argument list. -/
-theorem Expr.MEvalList.agree {db : Database} {σ₁ σ₂ : Env} (h : Env.Agree σ₁ σ₂)
-    {es : List Expr} {ts : List Term} (hv : Expr.MEvalList db σ₁ es ts) :
-    Expr.MEvalList db σ₂ es ts := by
-  match hv with
-  | .nil => exact .nil
-  | .cons he hl => exact .cons (Expr.MEval.agree h he) (Expr.MEvalList.agree h hl)
-
-end
-
-/-- `mono` and `agree` composed, at the environment an `ActionStep` evaluates in. -/
-theorem Expr.MEval.envAgree {d₁ d₂ : Database} (h : d₁.EnvAgree d₂) {e : Expr} {t : Term}
-    (hv : Expr.MEval d₁ d₁.env e t) : Expr.MEval d₂ d₂.env e t :=
-  (Expr.MEval.mono h.contained h.sig hv).agree h.env
-
-/-- `Expr.MEval.envAgree` over an argument list. -/
-theorem Expr.MEvalList.envAgree {d₁ d₂ : Database} (h : d₁.EnvAgree d₂) {es : List Expr}
-    {ts : List Term} (hv : Expr.MEvalList d₁ d₁.env es ts) :
-    Expr.MEvalList d₂ d₂.env es ts :=
-  (Expr.MEvalList.mono h.contained h.sig hv).agree h.env
-
-/-- **A step is blind to which of two agreeing environments it runs in.** The results
-agree too, and `letBind` — the one action that writes `env` — writes the same binding on
-both sides. -/
-theorem Database.ActionStep.envAgree {d₁ d₂ c : Database} (h : d₁.EnvAgree d₂)
-    {a : Action} (hs : Database.ActionStep d₁ a c) :
-    ∃ c', Database.ActionStep d₂ a c' ∧ c.EnvAgree c' := by
-  cases hs with
-  | @expr e t he => exact ⟨d₂.addTerm t, .expr (Expr.MEval.envAgree h he), h.addTerm t⟩
-  | @letBind v e t he =>
-    refine ⟨{ d₂.addTerm t with env := (v, t) :: d₂.env },
-      .letBind (Expr.MEval.envAgree h he), ?_⟩
-    exact ⟨(h.addTerm t).sig, (h.addTerm t).terms, (h.addTerm t).rows, (h.addTerm t).eqs,
-      (h.addTerm t).rules, h.env.cons v t⟩
-  | @union e₁ e₂ t₁ t₂ h₁ h₂ =>
-    exact ⟨d₂.addEq t₁ t₂,
-      .union (Expr.MEval.envAgree h h₁) (Expr.MEval.envAgree h h₂), h.addEq t₁ t₂⟩
-  | @set f args out ts vs h₁ h₂ =>
-    exact ⟨d₂.addRow f ts vs,
-      .set (Expr.MEvalList.envAgree h h₁) (Expr.MEvalList.envAgree h h₂), h.addRow f ts vs⟩
-
-/-- `Database.ActionStep.envAgree` over a block. -/
-theorem Database.ActionsStep.envAgree {d₁ d₂ c : Database} (h : d₁.EnvAgree d₂)
-    {as : List Action} (hs : Database.ActionsStep d₁ as c) :
-    ∃ c', Database.ActionsStep d₂ as c' ∧ c.EnvAgree c' := by
-  induction hs generalizing d₂ with
-  | nil => exact ⟨d₂, .nil, h⟩
-  | @cons db x x' a as ha _ ih =>
-    obtain ⟨y₁, hy₁, hag₁⟩ := Database.ActionStep.envAgree h ha
-    obtain ⟨y₂, hy₂, hag₂⟩ := ih hag₁
-    exact ⟨y₂, .cons hy₁ hy₂, hag₂⟩
-
-/-- **A step available at `db` is available at any `D` containing it, with the same
+/-- **An action available at `db` is available at any `D` containing it, with the same
 effect.** The result is an existential over a database containing the smaller one, not
-the exact join `MergeStep.diamond_of_join` asks for; `Expr.MEval.mono` is what makes the
-witnesses survive. -/
-theorem Database.ActionStep.mono {db D d : Database} (hc : db.Contained D)
+the exact join `MergeStep.diamond_of_join` asks for; the evaluation reads only `sig` and
+`env`, which is what makes the witnesses survive. -/
+theorem evalAction_mono {db D d : Database} (hc : db.Contained D)
     (hsig : db.sig = D.sig) (henv : db.env = D.env) {a : Action}
-    (h : Database.ActionStep db a d) :
-    ∃ D', Database.ActionStep D a D' ∧ d.Contained D' ∧ d.sig = D'.sig ∧
+    (h : evalAction db a = some d) :
+    ∃ D', evalAction D a = some D' ∧ d.Contained D' ∧ d.sig = D'.sig ∧
       d.env = D'.env := by
-  cases h with
-  | @expr e t he =>
-    refine ⟨D.addTerm t, .expr (Expr.MEval.mono hc hsig (henv ▸ he)),
-      hc.addTerm_mono t, ?_, ?_⟩ <;> simp [hsig, henv]
-  | @letBind v e t he =>
-    refine ⟨{ D.addTerm t with env := (v, t) :: D.env },
-      .letBind (Expr.MEval.mono hc hsig (henv ▸ he)), ?_, ?_, ?_⟩
+  rcases evalAction_eq_some h with ⟨e, t, rfl, hv, rfl⟩ | ⟨v, e, t, rfl, hv, rfl⟩ |
+    ⟨e₁, e₂, t₁, t₂, rfl, hv₁, hv₂, rfl⟩ | ⟨f, args, out, as, vs, rfl, hv₁, hv₂, rfl⟩
+  · refine ⟨D.addTerm t, ?_, hc.addTerm_mono t, ?_, ?_⟩
+    · simp [evalAction, ← hsig, ← henv, hv]
+    · simpa using hsig
+    · simpa using henv
+  · refine ⟨{ D.addTerm t with env := (v, t) :: D.env }, ?_, ?_, ?_, ?_⟩
+    · simp [evalAction, ← hsig, ← henv, hv]
     · exact ⟨(hc.addTerm_mono t).terms, (hc.addTerm_mono t).rows, (hc.addTerm_mono t).eqs⟩
     · simpa using hsig
     · simp [henv]
-  | @union e₁ e₂ t₁ t₂ h₁ h₂ =>
-    refine ⟨D.addEq t₁ t₂, .union (Expr.MEval.mono hc hsig (henv ▸ h₁))
-      (Expr.MEval.mono hc hsig (henv ▸ h₂)), hc.addEq_mono t₁ t₂, ?_, ?_⟩ <;>
-      simp [hsig, henv]
-  | @set f args out ts vs hargs hout =>
-    refine ⟨D.addRow f ts vs, .set (Expr.MEvalList.mono hc hsig (henv ▸ hargs))
-      (Expr.MEvalList.mono hc hsig (henv ▸ hout)), hc.addRow_mono f ts vs, ?_, ?_⟩ <;>
-      simp [hsig, henv]
+  · refine ⟨D.addEq t₁ t₂, ?_, hc.addEq_mono t₁ t₂, ?_, ?_⟩
+    · simp [evalAction, ← hsig, ← henv, hv₁, hv₂]
+    · simpa using hsig
+    · simpa using henv
+  · refine ⟨D.addRow f as vs, ?_, hc.addRow_mono f as vs, ?_, ?_⟩
+    · simp [evalAction, ← hsig, ← henv, hv₁, hv₂]
+    · simpa using hsig
+    · simpa using henv
 
-/-- `Database.ActionStep.mono` over a block: each step re-bases onto the previous one's
-larger result. -/
-theorem Database.ActionsStep.mono {db D d : Database} (hc : db.Contained D)
+/-- `evalAction_mono` over a block: each step re-bases onto the previous one's larger
+result. -/
+theorem evalActions_mono {db D d : Database} (hc : db.Contained D)
     (hsig : db.sig = D.sig) (henv : db.env = D.env) {as : List Action}
-    (h : Database.ActionsStep db as d) :
-    ∃ D', Database.ActionsStep D as D' ∧ d.Contained D' ∧ d.sig = D'.sig ∧
+    (h : evalActions db as = some d) :
+    ∃ D', evalActions D as = some D' ∧ d.Contained D' ∧ d.sig = D'.sig ∧
       d.env = D'.env := by
-  induction h generalizing D with
-  | nil => exact ⟨D, .nil, hc, hsig, henv⟩
-  | @cons db₀ d₀ d₁ a as ha _ ih =>
-    obtain ⟨D₀, hD₀, hc₀, hs₀, he₀⟩ := ha.mono hc hsig henv
-    obtain ⟨D₁, hD₁, hc₁, hs₁, he₁⟩ := ih hc₀ hs₀ he₀
-    exact ⟨D₁, .cons hD₀ hD₁, hc₁, hs₁, he₁⟩
+  induction as generalizing db D with
+  | nil =>
+    rw [evalActions_nil, Option.some.injEq] at h
+    exact ⟨D, rfl, h ▸ hc, h ▸ hsig, h ▸ henv⟩
+  | cons a as ih =>
+    cases hv : evalAction db a with
+    | none => simp [hv] at h
+    | some db₁ =>
+      rw [evalActions_cons, hv, Option.bind_some] at h
+      obtain ⟨D₀, hD₀, hc₀, hs₀, he₀⟩ := evalAction_mono hc hsig henv hv
+      obtain ⟨D₁, hD₁, hc₁, hs₁, he₁⟩ := ih hc₀ hs₀ he₀ h
+      exact ⟨D₁, by rw [evalActions_cons, hD₀, Option.bind_some]; exact hD₁, hc₁, hs₁, he₁⟩
 
 /-- **A merge collision available at `A` is available at any `C` containing it.**
 
@@ -1238,11 +944,11 @@ theorem MergeStep.transport {A C B : Database} (hc : A.Contained C) (hsig : A.si
   | @collide dA f as bs a b vs body res hra hrb hcong hm hbody hres =>
     have hc0 : ({ A with env := mergeEnv a b } : Database).Contained
         { C with env := mergeEnv a b } := ⟨hc.terms, hc.rows, hc.eqs⟩
-    obtain ⟨dC, hstepC, hcont, hsig', henv'⟩ := hbody.mono hc0 hsig rfl
+    obtain ⟨dC, hstepC, hcont, hsig', henv'⟩ := evalActions_mono hc0 hsig rfl hbody
     refine ⟨{ dC.addRow f as vs with env := C.env, rules := C.rules },
       .collide (hc.rows hra) (hc.rows hrb) (MCongList.mono hc hsig hcong)
         (by rw [← hsig]; exact hm) hstepC
-        (Expr.MEvalList.mono hcont hsig' (henv' ▸ hres)), ?_, ?_⟩
+        (hsig' ▸ henv' ▸ hres), ?_, ?_⟩
     · exact ⟨(hcont.addRow_mono f as vs).terms, (hcont.addRow_mono f as vs).rows,
         (hcont.addRow_mono f as vs).eqs⟩
     · simpa using hsig'
@@ -1259,91 +965,30 @@ theorem MergeClosure.transport {A C B : Database} (hc : A.Contained C)
     obtain ⟨D', hstepD', hcont', hsig'⟩ := hstep.transport hcontD hsigD
     exact ⟨D', hclD.tail hstepD', hcont', hsig'⟩
 
-/-! ### The functional semantics is the relation, on the constructor fragment
+/-! ### The relational semantics is the functional one, on the constructor fragment
 
 `Spec/Step.lean`'s `runProgram` and `Spec/Merge.lean`'s `ProgramStep` are the same
-semantics written twice, and on a program that declares only constructors, never `set`s
-one and names no primitive they agree exactly. That is what `execM_reachable` needs, and
-it is proved here one layer at a time: actions, then e-matching, then a round, then a
-command, then a program.
+semantics written twice, and on a program that declares only constructors and never
+`set`s one they agree exactly. That is what `execM_reachable` needs.
 
-The layers below the round are **two-way**, and that is new. `Expr.MEval` used to have a
-`lookup` constructor, which read `Database.Out` and so admitted several values at one
-key; there was no hope of turning an `MEval` derivation back into an `Expr.eval` call.
-With reading confined to `Pattern.values` there is one rule per syntactic form, `MEval` is
-deterministic, and `Expr.eval_of_MEval` is its inverse. A *round* needs both directions —
-`RunStep db db'` forces `db' = RunRules db` on a constructor signature, so `stepCmd`'s
-`runRules db` has to be equal to `RunRules db` rather than merely contained in it. -/
-/-- `evalAction → ActionStep`. -/
-theorem Database.ActionStep.of_evalAction {db d : Database}
-    (hsig : db.sig.AllConstructors) {a : Action} (hnp : a.NoPrim)
-    (h : evalAction db a = some d) : Database.ActionStep db a d := by
-  rcases evalAction_eq_some h with ⟨e, t, rfl, hv, rfl⟩ | ⟨v, e, t, rfl, hv, rfl⟩ |
-    ⟨e₁, e₂, t₁, t₂, rfl, hv₁, hv₂, rfl⟩ | ⟨f, args, out, as, vs, rfl, hv₁, hv₂, rfl⟩
-  · exact .expr (Expr.MEval_of_eval' hsig e hnp hv)
-  · exact .letBind (Expr.MEval_of_eval' hsig e hnp hv)
-  · exact .union (Expr.MEval_of_eval' hsig e₁ hnp.1 hv₁)
-      (Expr.MEval_of_eval' hsig e₂ hnp.2 hv₂)
-  · exact .set (Expr.MEvalList_of_evalList' hsig args hnp.1 hv₁)
-      (Expr.MEvalList_of_evalList' hsig out hnp.2 hv₂)
-
-/-- **`ActionStep` is `evalAction`, not merely refined by it.**
-
-Worth keeping independently of what it is used for here. `Database.ActionStep_unique`
-says the relation is a function; this says *which* function, and together they are M12's
-"make it a function again" (`PLAN.md`): on the constructor fragment `ActionStep` and
-`ActionsStep` can be replaced by `evalAction` and `evalActions` outright. Only the layers
-above them — `MergeStep`'s choice of colliding pair, `MergeClosure`'s step count — have to
-stay relations. -/
-theorem Database.ActionStep.evalAction_eq {db d : Database}
-    (hsig : db.sig.AllConstructors) {a : Action} (hnp : a.NoPrim)
-    (h : Database.ActionStep db a d) : evalAction db a = some d := by
-  cases h with
-  | expr he => rw [evalAction, Expr.eval_of_MEval hsig he hnp, Option.map_some]
-  | letBind he => rw [evalAction, Expr.eval_of_MEval hsig he hnp, Option.map_some]
-  | union he₁ he₂ =>
-    rw [evalAction, Expr.eval_of_MEval hsig he₁ hnp.1, Option.bind_some,
-      Expr.eval_of_MEval hsig he₂ hnp.2, Option.map_some]
-  | set ha ho =>
-    rw [evalAction, Expr.evalList_of_MEvalList hsig ha hnp.1, Option.bind_some,
-      Expr.evalList_of_MEvalList hsig ho hnp.2, Option.map_some]
-
-theorem Database.ActionsStep.of_evalActions {db d : Database}
-    (hsig : db.sig.AllConstructors) {as : List Action} (hnp : Actions.NoPrim as)
-    (h : evalActions db as = some d) : Database.ActionsStep db as d := by
-  induction as generalizing db with
-  | nil => exact (Option.some.injEq .. ▸ h : db = d) ▸ .nil
-  | cons a as ih =>
-    cases hv : evalAction db a with
-    | none => simp [hv] at h
-    | some db₁ =>
-      rw [evalActions_cons, hv, Option.bind_some] at h
-      exact .cons (Database.ActionStep.of_evalAction hsig hnp.1 hv)
-        (ih (by rw [evalAction_sig hv]; exact hsig) hnp.2 h)
-
-/-- `Database.ActionStep.evalAction_eq` over an action list; see its docstring for why
-this pair survives on its own. -/
-theorem Database.ActionsStep.evalActions_eq {db d : Database}
-    (hsig : db.sig.AllConstructors) {as : List Action} (hnp : Actions.NoPrim as)
-    (h : Database.ActionsStep db as d) : evalActions db as = some d := by
-  induction h with
-  | nil => rfl
-  | @cons db₀ d₀ d₁ a as hstep _ ih =>
-    rw [evalActions_cons, hstep.evalAction_eq hsig hnp.1, Option.bind_some]
-    exact ih (by rw [hstep.sig]; exact hsig) hnp.2
-
+**Actions are no longer part of this.** `CmdStep.action`, `RuleResults` and
+`MergeStep.collide` all read `evalAction`/`evalActions` directly, so the layer that used
+to need two bridge theorems and a primitive-free hypothesis in each direction needs none.
+What
+is left is the layer that really does have two readings — e-matching, where `MCong`
+replaces `Cong` — and the round above it, and both directions are needed: `RunStep` pins
+`db'` to `RunRules db` on a constructor signature, so `stepCmd`'s `runRules db` has to be
+*equal* to `RunRules db` rather than merely contained in it. -/
 /-- `ValidSubst → MValidSubst`. `mcong_iff_cong` is applied at the *extended* database the
 witness premises ask over, which is why `CtorRows.addTerm` appears. -/
 theorem MValidSubst.of_validSubst {db : Database} (hsig : db.sig.AllConstructors)
-    (hrows : db.CtorRows) {p : Pattern} (hnp : p.NoPrim) {σ : Env}
-    (h : ValidSubst db p σ) : MValidSubst db p σ := by
+    (hrows : db.CtorRows) {p : Pattern} {σ : Env} (h : ValidSubst db p σ) :
+    MValidSubst db p σ := by
   cases h with
   | @expr e σ w t hve hw heval hcong =>
-    exact .expr hve hw (Expr.MEval_of_eval' hsig e hnp heval)
-      (Cong.toMCong (db := db.addTerm t) hsig (hrows.addTerm t) hcong)
+    exact .expr hve hw heval (Cong.toMCong (db := db.addTerm t) hsig (hrows.addTerm t) hcong)
   | @eq e₁ e₂ σ w t₁ t₂ hve hw hev₁ hev₂ hcw hct =>
-    exact .eq hve hw (Expr.MEval_of_eval' hsig e₁ hnp.1 hev₁)
-      (Expr.MEval_of_eval' hsig e₂ hnp.2 hev₂)
+    exact .eq hve hw hev₁ hev₂
       (Cong.toMCong (db := (db.addTerm t₁).addTerm t₂) hsig
         ((hrows.addTerm t₁).addTerm t₂) hcw)
       (Cong.toMCong (db := (db.addTerm t₁).addTerm t₂) hsig
@@ -1351,104 +996,75 @@ theorem MValidSubst.of_validSubst {db : Database} (hsig : db.sig.AllConstructors
   | @values vs f as σ us ts ws bs hve hev₁ hev₂ hct hcu hrow =>
     have hsig' : ((db.addTerms ts).addTerms us).sig.AllConstructors := by simpa using hsig
     have hrows' : ((db.addTerms ts).addTerms us).CtorRows := (hrows.addTerms ts).addTerms us
-    exact .values hve (Expr.MEvalList_of_evalList' hsig vs hnp.1 hev₁)
-      (Expr.MEvalList_of_evalList' hsig as hnp.2 hev₂)
+    exact .values hve hev₁ hev₂
       (CongList.toMCongList hsig' hrows' hct) (CongList.toMCongList hsig' hrows' hcu) hrow
 
-theorem ValidSubst.of_mvalidSubst {db : Database} (hsig : db.sig.AllConstructors)
-    (hrows : db.CtorRows) {p : Pattern} (hnp : p.NoPrim) {σ : Env}
-    (h : MValidSubst db p σ) : ValidSubst db p σ := by
+theorem ValidSubst.of_mvalidSubst {db : Database} (hrows : db.CtorRows) {p : Pattern}
+    {σ : Env} (h : MValidSubst db p σ) : ValidSubst db p σ := by
   cases h with
   | @expr e σ w t hve hw heval hcong =>
-    exact .expr hve hw (Expr.eval_of_MEval hsig heval hnp)
-      (MCong.toCong (hrows.addTerm t) hcong)
+    exact .expr hve hw heval (MCong.toCong (hrows.addTerm t) hcong)
   | @eq e₁ e₂ σ w t₁ t₂ hve hw hev₁ hev₂ hcw hct =>
-    exact .eq hve hw (Expr.eval_of_MEval hsig hev₁ hnp.1)
-      (Expr.eval_of_MEval hsig hev₂ hnp.2)
+    exact .eq hve hw hev₁ hev₂
       (MCong.toCong ((hrows.addTerm t₁).addTerm t₂) hcw)
       (MCong.toCong ((hrows.addTerm t₁).addTerm t₂) hct)
   | @values vs f as σ us ts ws bs hve hev₁ hev₂ hct hcu hrow =>
     have hrows' : ((db.addTerms ts).addTerms us).CtorRows := (hrows.addTerms ts).addTerms us
-    exact .values hve (Expr.evalList_of_MEvalList hsig hev₁ hnp.1)
-      (Expr.evalList_of_MEvalList hsig hev₂ hnp.2)
+    exact .values hve hev₁ hev₂
       (MCongList.toCongList hrows' hct) (MCongList.toCongList hrows' hcu) hrow
 
 theorem forall₂_mvalidSubst {db : Database} (hsig : db.sig.AllConstructors)
     (hrows : db.CtorRows) {q : Query} {σs : List Env}
-    (h : List.Forall₂ (ValidSubst db) q σs) :
-    (∀ p ∈ q, Pattern.NoPrim p) → List.Forall₂ (MValidSubst db) q σs := by
+    (h : List.Forall₂ (ValidSubst db) q σs) : List.Forall₂ (MValidSubst db) q σs := by
   induction h with
-  | nil => exact fun _ => .nil
-  | @cons p σp ps σps hp _ ih =>
-    exact fun hnp =>
-      .cons (MValidSubst.of_validSubst hsig hrows (hnp p (List.mem_cons_self ..)) hp)
-        (ih fun p' hp' => hnp p' (List.mem_cons_of_mem p hp'))
+  | nil => exact .nil
+  | cons hp _ ih => exact .cons (MValidSubst.of_validSubst hsig hrows hp) ih
 
-theorem forall₂_validSubst {db : Database} (hsig : db.sig.AllConstructors)
-    (hrows : db.CtorRows) {q : Query} {σs : List Env}
-    (h : List.Forall₂ (MValidSubst db) q σs) :
-    (∀ p ∈ q, Pattern.NoPrim p) → List.Forall₂ (ValidSubst db) q σs := by
+theorem forall₂_validSubst {db : Database} (hrows : db.CtorRows) {q : Query}
+    {σs : List Env} (h : List.Forall₂ (MValidSubst db) q σs) :
+    List.Forall₂ (ValidSubst db) q σs := by
   induction h with
-  | nil => exact fun _ => .nil
-  | @cons p σp ps σps hp _ ih =>
-    exact fun hnp =>
-      .cons (ValidSubst.of_mvalidSubst hsig hrows (hnp p (List.mem_cons_self ..)) hp)
-        (ih fun p' hp' => hnp p' (List.mem_cons_of_mem p hp'))
+  | nil => exact .nil
+  | cons hp _ ih => exact .cons (ValidSubst.of_mvalidSubst hrows hp) ih
 
 theorem MValidQuerySubst.of_validQuerySubst {db : Database}
-    (hsig : db.sig.AllConstructors) (hrows : db.CtorRows) {q : Query}
-    (hnp : ∀ p ∈ q, Pattern.NoPrim p) {σ : Env} (h : ValidQuerySubst db q σ) :
-    MValidQuerySubst db q σ := by
+    (hsig : db.sig.AllConstructors) (hrows : db.CtorRows) {q : Query} {σ : Env}
+    (h : ValidQuerySubst db q σ) : MValidQuerySubst db q σ := by
   obtain ⟨σs, hall, hu⟩ := h
-  exact ⟨σs, forall₂_mvalidSubst hsig hrows hall hnp, hu⟩
+  exact ⟨σs, forall₂_mvalidSubst hsig hrows hall, hu⟩
 
-theorem ValidQuerySubst.of_mvalidQuerySubst {db : Database}
-    (hsig : db.sig.AllConstructors) (hrows : db.CtorRows) {q : Query}
-    (hnp : ∀ p ∈ q, Pattern.NoPrim p) {σ : Env} (h : MValidQuerySubst db q σ) :
-    ValidQuerySubst db q σ := by
+theorem ValidQuerySubst.of_mvalidQuerySubst {db : Database} (hrows : db.CtorRows)
+    {q : Query} {σ : Env} (h : MValidQuerySubst db q σ) : ValidQuerySubst db q σ := by
   obtain ⟨σs, hall, hu⟩ := h
-  exact ⟨σs, forall₂_validSubst hsig hrows hall hnp, hu⟩
+  exact ⟨σs, forall₂_validSubst hrows hall, hu⟩
 
-/-- One rule contributes the same databases either way. `RuleResults`' existential over the
-intermediate state is `evalLocalActions`' `Option.map`, once the two action relations and
-the two matching relations coincide. -/
+/-- One rule contributes the same databases either way. Both sides run
+`evalLocalActions` on the substitutions their matcher admits, so identifying the matchers
+is the whole proof. -/
 theorem ruleResults_eq {db : Database} (hsig : db.sig.AllConstructors)
-    (hrows : db.CtorRows) {r : Rule} (hnp : r.NoPrim) :
-    RuleResults db r = ruleResults db r := by
+    (hrows : db.CtorRows) {r : Rule} : RuleResults db r = ruleResults db r := by
   ext d
-  constructor
-  · rintro ⟨σ, d', hq, hstep, rfl⟩
-    refine ⟨σ, ValidQuerySubst.of_mvalidQuerySubst hsig hrows hnp.1 hq, ?_⟩
-    rw [evalLocalActions, Database.ActionsStep.evalActions_eq
-      (db := { db with env := db.env ++ σ }) hsig hnp.2 hstep, Option.map_some]
-  · rintro ⟨σ, hq, hd⟩
-    obtain ⟨d', hv, rfl⟩ := evalLocalActions_eq_some hd
-    exact ⟨σ, d', MValidQuerySubst.of_validQuerySubst hsig hrows hnp.1 hq,
-      Database.ActionsStep.of_evalActions (db := { db with env := db.env ++ σ })
-        hsig hnp.2 hv, rfl⟩
+  exact ⟨fun ⟨σ, hq, hd⟩ => ⟨σ, ValidQuerySubst.of_mvalidQuerySubst hrows hq, hd⟩,
+    fun ⟨σ, hq, hd⟩ => ⟨σ, MValidQuerySubst.of_validQuerySubst hsig hrows hq, hd⟩⟩
 
 /-- **A round is the same round.** Both sides are `db.sUnion` of a family indexed by
 `db.rules`, and `ruleResults_eq` identifies the families. -/
-theorem runRules_eq {db : Database} (h : db.CtorPrimState) : RunRules db = runRules db := by
-  have hre : ∀ r ∈ db.rules, RuleResults db r = ruleResults db r :=
-    fun r hr => ruleResults_eq h.ctor.sig h.ctor.rows (h.rules r hr)
+theorem runRules_eq {db : Database} (h : db.CtorState) : RunRules db = runRules db := by
+  have hre : ∀ r : Rule, RuleResults db r = ruleResults db r :=
+    fun r => ruleResults_eq h.sig h.rows
   have hset : {d | ∃ r ∈ db.rules, d ∈ RuleResults db r}
       = {d | ∃ r ∈ db.rules, d ∈ ruleResults db r} := by
     ext d
-    constructor
-    · rintro ⟨r, hr, hd⟩; exact ⟨r, hr, hre r hr ▸ hd⟩
-    · rintro ⟨r, hr, hd⟩; exact ⟨r, hr, (hre r hr).symm ▸ hd⟩
+    exact ⟨fun ⟨r, hr, hd⟩ => ⟨r, hr, hre r ▸ hd⟩, fun ⟨r, hr, hd⟩ => ⟨r, hr, (hre r).symm ▸ hd⟩⟩
   rw [RunRules, runRules, hset]
 
-/-- `stepCmd → CmdStep`. The `MergeClosure` phase `CmdStep.action` now carries is supplied
-by *zero* steps: `MergeStep` never fires on a constructor signature, so the merge leg is
-the identity and `Relation.ReflTransGen.refl` is the whole of it. -/
-theorem CmdStep.of_stepCmd {db db' : Database} (h : db.CtorPrimState) {c : Cmd}
-    (hnp : c.NoPrim) (hv : stepCmd db c = some db') : CmdStep db c db' := by
+/-- `stepCmd → CmdStep`. The `MergeClosure` phase `CmdStep.action` carries is supplied by
+*zero* steps: `MergeStep` never fires on a constructor signature, so the merge leg is the
+identity and `Relation.ReflTransGen.refl` is the whole of it. -/
+theorem CmdStep.of_stepCmd {db db' : Database} (h : db.CtorState) {c : Cmd}
+    (hv : stepCmd db c = some db') : CmdStep db c db' := by
   cases c with
-  | action a =>
-    exact .action (Database.ActionStep.of_evalAction h.ctor.sig hnp hv)
-      Relation.ReflTransGen.refl
+  | action a => exact .action hv Relation.ReflTransGen.refl
   | rule r => simp only [stepCmd, Option.some.injEq] at hv; exact hv ▸ .rule
   | run =>
     simp only [stepCmd, Option.some.injEq] at hv
@@ -1461,19 +1077,18 @@ theorem CmdStep.of_stepCmd {db db' : Database} (h : db.CtorPrimState) {c : Cmd}
 since a `MergeClosure` of length zero is a choice the relation makes and the function does
 not. Reading a concrete run backwards is what needs it. -/
 theorem CmdStep.stepCmd_eq {db db' : Database} {c : Cmd} (h : CmdStep db c db')
-    (hsig : db.sig.AllConstructors) (hnp : c.NoPrim) (hrun : c ≠ Cmd.run) :
-    stepCmd db c = some db' := by
+    (hsig : db.sig.AllConstructors) (hrun : c ≠ Cmd.run) : stepCmd db c = some db' := by
   cases h with
   | action ha hm =>
-    have hd := hm.eq_of_allConstructors (by rw [ha.sig]; exact hsig)
+    have hd := hm.eq_of_allConstructors (by rw [evalAction_sig ha]; exact hsig)
     subst hd
-    exact ha.evalAction_eq hsig hnp
+    exact ha
   | rule => rfl
   | run _ => exact absurd rfl hrun
   | decl => rfl
 
-theorem ProgramStep.of_runProgram {db db' : Database} (h : db.CtorPrimState) {p : Program}
-    (hdecl : p.CtorDecls) (hlegal : p.SetLegal db.sig) (hnp : p.NoPrim)
+theorem ProgramStep.of_runProgram {db db' : Database} (h : db.CtorState) {p : Program}
+    (hdecl : p.CtorDecls) (hlegal : p.SetLegal db.sig)
     (hv : runProgram db p = some db') : ProgramStep db p db' := by
   induction p generalizing db with
   | nil => exact (Option.some.injEq .. ▸ hv : db = db') ▸ .nil
@@ -1482,18 +1097,18 @@ theorem ProgramStep.of_runProgram {db db' : Database} (h : db.CtorPrimState) {p 
     | none => simp [hc] at hv
     | some db₁ =>
       simp only [runProgram_cons, hc, Option.bind_some] at hv
-      exact .cons (CmdStep.of_stepCmd h (hnp c (by simp)) hc)
-        (ih (stepCmd_ctorPrimState h (hdecl c (by simp)) hlegal.1 (hnp c (by simp)) hc)
+      exact .cons (CmdStep.of_stepCmd h hc)
+        (ih (stepCmd_ctorState h (hdecl c (by simp)) hlegal.1 hc)
           (fun c' hc' => hdecl c' (List.mem_cons_of_mem c hc'))
-          (by rw [stepCmd_sig hc]; exact hlegal.2)
-          (fun c' hc' => hnp c' (List.mem_cons_of_mem c hc')) hv)
+          (by rw [stepCmd_sig hc]; exact hlegal.2) hv)
 
 /-- The bridge from the initial state, where every side condition is discharged by
-`Database.CtorPrimState.empty`. -/
+`Database.CtorState.empty`. -/
 theorem run_programStep {p : Program} {D : Database} (hdecl : p.CtorDecls)
-    (hlegal : p.SetLegal Database.empty.sig) (hnp : p.NoPrim) (h : run p = some D) :
+    (hlegal : p.SetLegal Database.empty.sig) (h : run p = some D) :
     ProgramStep Database.empty p D :=
-  ProgramStep.of_runProgram Database.CtorPrimState.empty hdecl hlegal hnp h
+  ProgramStep.of_runProgram Database.CtorState.empty hdecl hlegal h
+
 
 /-! ### The interpreter
 
@@ -1508,36 +1123,29 @@ reaches. Nothing stronger is available, and nothing stronger is wanted — pinni
 single result would mean pinning the merge order, which is the thing `MERGE.md` argues
 the semantics should decline to pin.
 
-**The three hypotheses**, none of them removable:
+**The two hypotheses**, neither removable:
 
 * `Program.CtorDecls` gives `Signature.AllConstructors` at every intermediate state
-  (`Signature.AllConstructors.sigBind`). `Expr.MEval.ctor` builds a term only for a
-  `.union` function, so without it `exec`'s `Expr.eval` builds `g 1` where the relation
-  is stuck — and it is also what makes `MergeStep` vacuous, which is how the
-  `MergeClosure` phase of `CmdStep.action` gets discharged
+  (`Signature.AllConstructors.sigBind`), which is what makes `MergeStep` vacuous and so
+  how the `MergeClosure` phase of `CmdStep.action` gets discharged
   (`MergeClosure.eq_of_allConstructors`).
 * `Program.SetLegal` keeps `Database.CtorRows`, which with the above is `mcong_iff_cong`,
   which is the only route from `ValidSubst` to `MValidSubst` — so it is what makes a
   *round* agree. It is not decoration:
   `Proofs/Counterexamples.lean`'s `execM_reachable_needs_setLegal` is a program satisfying
-  the other two whose `exec` state no `ProgramStep` reaches.
-* `Program.NoPrim` is `Expr.NoPrim` at every expression position, in the query as much as
-  in a head: `Expr.eval` builds `ordering-min 1 2` where `MEval.prim` computes `1`.
+  the other whose `exec` state no `ProgramStep` reaches.
 
-**Why it is no longer long.** `Expr.MEval` used to have a `lookup` constructor reading
-`Database.Out`, so a derivation could not be turned back into an `Expr.eval` call and only
-one direction of the action bridge was available. With reading confined to
-`Pattern.values` the relation is deterministic and `Expr.eval_of_MEval` inverts it, so
-`Database.ActionStep.of_evalAction` and `Database.ActionStep.evalAction_eq` are a pair —
-which is exactly what a round needs, since `RunStep` pins `db'` to `RunRules db`. Every
-`CtorRows` preservation lemma the argument uses already existed, in
-`Proofs/Database.lean` and `Proofs/Step.lean`; the only invariant that had to be added is
-`Database.CtorPrimState`, which carries `NoPrim` for the *stored* rules. -/
+**The primitive-free hypothesis is gone**, and with it the whole action bridge. It was
+there because
+`Expr.eval` built the term `ordering-min 1 2` where `MEval.prim` computed `1`; with one
+evaluator resolving primitives itself the two readings of an action are the same call, so
+`CmdStep.action` and `RuleResults` need nothing proved about them. What is left needing
+proof is e-matching, where `MCong` really does replace `Cong`, and the round above it. -/
 theorem execM_reachable {p : Program} {d : FDatabase} (hdecl : p.CtorDecls)
-    (hlegal : p.SetLegal Database.empty.sig) (hnp : p.NoPrim) (h : exec p = some d) :
+    (hlegal : p.SetLegal Database.empty.sig) (h : exec p = some d) :
     ProgramStep FDatabase.empty.toDatabase p d.toDatabase := by
   rw [FDatabase.toDatabase_empty]
-  refine run_programStep hdecl hlegal hnp ?_
+  refine run_programStep hdecl hlegal ?_
   rw [← exec_toDatabase, h, Option.map_some]
 
 /-! ### The contract for `execM`: containment, not reachability
@@ -1574,7 +1182,7 @@ state holding a merge result no `CmdStep` state held. `CmdStep.action` now carri
 one-rule run and every rule-set run ends in `merge_all`.
 
 The chain has one prerequisite that is not obvious, and it is why `Cong.toMCong'` exists.
-`FDatabase.patternHoldsM` compares keys with `congrKeys` at the closure of the database
+`patternHolds` compares keys with `congrKeys` at the closure of the database
 extended with the atom's operands, and `closureF`
 computes **`Cong`** — it closes over `eqsF` and `congrPair`, with no notion of a row. The
 specification's row atom compares them with **`MCong`**. So every read the interpreter
@@ -1600,7 +1208,7 @@ def Term.CtorTerm (sig : Signature) (t : Term) : Prop :=
 
 The last two are not decoration. `ctorRows` is the reverse inclusion `RowsComplete` omits,
 restricted to the `.union` functions where it survives a `:merge` declaration, and
-`Action.SetLegal` is what preserves it. `rowsWF` was what kept `execExpr`'s lookup branch
+`Action.SetLegal` is what preserves it. `rowsWF` was what kept `Expr.eval`'s lookup branch
 inside the constructor fragment; with reading confined to the query it is no longer load
 bearing for `execAction`, and is kept because it is the row half of `WF` and
 `mergeOneWith` re-establishes it. -/
@@ -1798,34 +1406,34 @@ theorem Prim.apply_ctorTerm {sig : Signature} {p : Prim} {ts : List Term} {v : T
 
 mutual
 
-/-- **The merge interpreter only ever builds constructor terms.**
+/-- **Evaluation only ever builds constructor terms.**
 
 Each branch that produces a term stays inside the constructor fragment: the `.union`
-branch's head is a constructor by the guard it just tested, and a primitive returns an
-operand or a literal. Nothing reads a row, so no case has to place a recorded output back
-in `terms`. This is what `Inv.execAction` needs. -/
-theorem FDatabase.execExpr_ctorTerm {d : FDatabase} (h : d.Inv) {σ : Env}
-    (hσ : ∀ b ∈ σ, Term.CtorTerm d.sig b.2) {e : Expr} {t : Term}
-    (hs : d.execExpr σ e = some t) : Term.CtorTerm d.sig t := by
+branch's head is a constructor by the guard the evaluator just tested, and a primitive
+returns an operand or a literal. Nothing reads a row, so no case has to place a recorded
+output back in `terms`. This is what `Inv.execAction` needs. -/
+theorem Expr.eval_ctorTerm {sig : Signature} {σ : Env}
+    (hσ : ∀ b ∈ σ, Term.CtorTerm sig b.2) {e : Expr} {t : Term}
+    (hs : e.eval sig σ = some t) : Term.CtorTerm sig t := by
   match e with
   | .lit l =>
-    simp only [FDatabase.execExpr, Option.some_inj] at hs
+    rw [Expr.eval_lit, Option.some_inj] at hs
     subst hs; exact Term.ctorTerm_lit
   | .var v =>
-    simp only [FDatabase.execExpr] at hs
+    rw [Expr.eval_var] at hs
     exact hσ (v, t) (Env.mem_of_lookup hs)
   | .app f args =>
-    simp only [FDatabase.execExpr, Option.bind_eq_some_iff] at hs
-    obtain ⟨ts, hts, hrest⟩ := hs
-    have hts' : ∀ x ∈ ts, Term.CtorTerm d.sig x :=
-      FDatabase.execExprList_ctorTerm h hσ hts
-    split at hrest
-    · exact Prim.apply_ctorTerm hts' hrest
-    · rename_i hprim
-      split at hrest
-      · rename_i hu
-        simp only [Option.some_inj] at hrest
-        subst hrest
+    cases hp : Prim.ofName f with
+    | some p =>
+      rw [Expr.eval_app_prim hp, Option.bind_eq_some_iff] at hs
+      obtain ⟨ts, hts, happ⟩ := hs
+      exact Prim.apply_ctorTerm (Expr.evalList_ctorTerm hσ hts) happ
+    | none =>
+      cases hu : sig.mergeOf f with
+      | union =>
+        rw [Expr.eval_app_ctor hp hu, Option.map_eq_some_iff] at hs
+        obtain ⟨ts, hts, rfl⟩ := hs
+        have hts' := Expr.evalList_ctorTerm hσ hts
         intro g bs hsub
         rw [Term.subterms_app] at hsub
         rcases Set.mem_insert_iff.mp hsub with heq | hmem
@@ -1833,36 +1441,39 @@ theorem FDatabase.execExpr_ctorTerm {d : FDatabase} (h : d.Inv) {σ : Env}
           exact hu
         · obtain ⟨x, hx, hxs⟩ := Set.mem_iUnion₂.mp hmem
           exact hts' x hx g bs hxs
-      · exact absurd hrest (by simp)
+      | merge body res => rw [Expr.eval_app_merge hp hu] at hs; exact absurd hs (by simp)
+      | noMerge => rw [Expr.eval_app_noMerge hp hu] at hs; exact absurd hs (by simp)
 
-theorem FDatabase.execExprList_ctorTerm {d : FDatabase} (h : d.Inv) {σ : Env}
-    (hσ : ∀ b ∈ σ, Term.CtorTerm d.sig b.2) {es : List Expr} {ts : List Term}
-    (hs : d.execExprList σ es = some ts) : ∀ t ∈ ts, Term.CtorTerm d.sig t := by
+theorem Expr.evalList_ctorTerm {sig : Signature} {σ : Env}
+    (hσ : ∀ b ∈ σ, Term.CtorTerm sig b.2) {es : List Expr} {ts : List Term}
+    (hs : Expr.evalList sig es σ = some ts) : ∀ t ∈ ts, Term.CtorTerm sig t := by
   match es with
   | [] =>
-    simp only [FDatabase.execExprList, Option.some_inj] at hs
+    rw [Expr.evalList_nil, Option.some_inj] at hs
     subst hs; simp
   | e :: es =>
-    simp only [FDatabase.execExprList, Option.bind_eq_some_iff, Option.map_eq_some_iff] at hs
-    obtain ⟨t, ht, rest, hrest, rfl⟩ := hs
+    rw [Expr.evalList_cons, Option.bind_eq_some_iff] at hs
+    obtain ⟨t, ht, hmap⟩ := hs
+    obtain ⟨rest, hrest, heq⟩ := Option.map_eq_some_iff.mp hmap
+    subst heq
     intro x hx
     rcases List.mem_cons.mp hx with rfl | hx
-    · exact FDatabase.execExpr_ctorTerm h hσ ht
-    · exact FDatabase.execExprList_ctorTerm h hσ hrest x hx
+    · exact Expr.eval_ctorTerm hσ ht
+    · exact Expr.evalList_ctorTerm hσ hrest x hx
 
 end
 
 theorem FDatabase.Inv.execAction {d d' : FDatabase} (h : d.Inv) {a : Action}
-    (hlegal : a.SetLegal d.sig) (hs : d.execAction a = some d') : d'.Inv := by
+    (hlegal : a.SetLegal d.sig) (hs : execAction d a = some d') : d'.Inv := by
   match a with
   | .expr e =>
-    simp only [FDatabase.execAction, Option.map_eq_some_iff] at hs
+    simp only [Egglog.execAction, Option.map_eq_some_iff] at hs
     obtain ⟨t, ht, rfl⟩ := hs
-    exact h.addTerm (FDatabase.execExpr_ctorTerm h h.env_ctorTerm ht)
+    exact h.addTerm (Expr.eval_ctorTerm h.env_ctorTerm ht)
   | .letBind v e =>
-    simp only [FDatabase.execAction, Option.map_eq_some_iff] at hs
+    simp only [Egglog.execAction, Option.map_eq_some_iff] at hs
     obtain ⟨t, ht, rfl⟩ := hs
-    have hbase := h.addTerm (FDatabase.execExpr_ctorTerm h h.env_ctorTerm ht)
+    have hbase := h.addTerm (Expr.eval_ctorTerm h.env_ctorTerm ht)
     refine ⟨⟨hbase.wf.subtermClosed, hbase.wf.eqsInTerms, ?_⟩, hbase.ctorTerms,
       hbase.rowsComplete, hbase.rowsWF, hbase.ctorRows⟩
     intro b hb
@@ -1873,100 +1484,39 @@ theorem FDatabase.Inv.execAction {d d' : FDatabase} (h : d.Inv) {a : Action}
       exact hmem
     · exact hbase.wf.envInTerms b hb
   | .union e₁ e₂ =>
-    simp only [FDatabase.execAction, Option.bind_eq_some_iff, Option.map_eq_some_iff] at hs
+    simp only [Egglog.execAction, Option.bind_eq_some_iff, Option.map_eq_some_iff] at hs
     obtain ⟨t₁, ht₁, t₂, ht₂, rfl⟩ := hs
-    exact h.addEq (FDatabase.execExpr_ctorTerm h h.env_ctorTerm ht₁)
-      (FDatabase.execExpr_ctorTerm h h.env_ctorTerm ht₂)
+    exact h.addEq (Expr.eval_ctorTerm h.env_ctorTerm ht₁)
+      (Expr.eval_ctorTerm h.env_ctorTerm ht₂)
   | .set f args out =>
-    simp only [FDatabase.execAction, Option.bind_eq_some_iff, Option.map_eq_some_iff] at hs
+    simp only [Egglog.execAction, Option.bind_eq_some_iff, Option.map_eq_some_iff] at hs
     obtain ⟨ts, hts, vs, hvs, rfl⟩ := hs
-    exact h.addRow hlegal (FDatabase.execExprList_ctorTerm h h.env_ctorTerm hts)
-      (FDatabase.execExprList_ctorTerm h h.env_ctorTerm hvs)
+    exact h.addRow hlegal (Expr.evalList_ctorTerm h.env_ctorTerm hts)
+      (Expr.evalList_ctorTerm h.env_ctorTerm hvs)
 
 
-/-! #### Evaluation -/
+/-! #### Actions
 
-mutual
+There is nothing here any more. `Impl/Interp.lean`'s `execAction` and `execActions` are
+the merge interpreter's action semantics too, and `Proofs/Interp.lean`'s
+`execAction_toDatabase` already says they compute `evalAction`/`evalActions` — which
+after M12 is what `CmdStep.action`, `RuleResults` and `MergeStep.collide` read. -/
+/-- `execAction_toDatabase` in the `some` shape the merge proofs use. -/
+theorem FDatabase.execAction_evalAction {d d' : FDatabase} {a : Action}
+    (hs : execAction d a = some d') : evalAction d.toDatabase a = some d'.toDatabase := by
+  rw [← execAction_toDatabase, hs, Option.map_some]
 
-/-- **The interpreter computes the evaluation the specification allows.** One rule per
-syntactic form on each side, and no choice on either: `MEval_unique` says the relation is
-a function, and this says `execExpr` is that function wherever it is defined. -/
-theorem FDatabase.execExpr_MEval {d : FDatabase} (h : d.Inv) {σ : Env} {e : Expr}
-    {t : Term} (hs : d.execExpr σ e = some t) : Expr.MEval d.toDatabase σ e t := by
-  match e, hs with
-  | .lit l, hs =>
-    rw [FDatabase.execExpr, Option.some.injEq] at hs
-    exact hs ▸ .lit
-  | .var v, hs =>
-    rw [FDatabase.execExpr] at hs
-    exact .var hs
-  | .app f args, hs =>
-    rw [FDatabase.execExpr] at hs
-    obtain ⟨ts, hts, hs⟩ := Option.bind_eq_some_iff.mp hs
-    have hl := FDatabase.execExprList_MEvalList h hts
-    split at hs
-    · next p hp => exact .prim hp hl hs
-    · next hp =>
-      split at hs
-      · next hu =>
-        rw [Option.some.injEq] at hs
-        exact hs ▸ .ctor hp hu hl
-      · exact absurd hs (by simp)
-
-theorem FDatabase.execExprList_MEvalList {d : FDatabase} (h : d.Inv) {σ : Env}
-    {es : List Expr} {ts : List Term} (hs : d.execExprList σ es = some ts) :
-    Expr.MEvalList d.toDatabase σ es ts := by
-  match es, hs with
-  | [], hs =>
-    rw [FDatabase.execExprList, Option.some.injEq] at hs
-    exact hs ▸ .nil
-  | e :: es, hs =>
-    rw [FDatabase.execExprList] at hs
-    obtain ⟨t, ht, hs⟩ := Option.bind_eq_some_iff.mp hs
-    obtain ⟨us, hus, rfl⟩ := Option.map_eq_some_iff.mp hs
-    exact .cons (FDatabase.execExpr_MEval h ht) (FDatabase.execExprList_MEvalList h hus)
-
-end
-
-/-! #### Actions -/
-
-/-- **`execAction` refines `ActionStep`.** One case per action, each of them
-`execExpr_MEval` under the `toDatabase_*` bridge. -/
-theorem FDatabase.execAction_ActionStep {d d' : FDatabase} (h : d.Inv) {a : Action}
-    (hs : d.execAction a = some d') :
-    Database.ActionStep d.toDatabase a d'.toDatabase := by
-  match a with
-  | .expr e =>
-    simp only [FDatabase.execAction, Option.map_eq_some_iff] at hs
-    obtain ⟨t, ht, rfl⟩ := hs
-    rw [toDatabase_addTerm]
-    exact .expr (FDatabase.execExpr_MEval h ht)
-  | .letBind v e =>
-    simp only [FDatabase.execAction, Option.map_eq_some_iff] at hs
-    obtain ⟨t, ht, rfl⟩ := hs
-    rw [toDatabase_setEnv (d := d.addTerm t) (σ := (v, t) :: d.env), toDatabase_addTerm]
-    exact .letBind (FDatabase.execExpr_MEval h ht)
-  | .union e₁ e₂ =>
-    simp only [FDatabase.execAction, Option.bind_eq_some_iff, Option.map_eq_some_iff] at hs
-    obtain ⟨t₁, ht₁, t₂, ht₂, rfl⟩ := hs
-    rw [toDatabase_addEq]
-    exact .union (FDatabase.execExpr_MEval h ht₁) (FDatabase.execExpr_MEval h ht₂)
-  | .set f args out =>
-    simp only [FDatabase.execAction, Option.bind_eq_some_iff, Option.map_eq_some_iff] at hs
-    obtain ⟨ts, hts, vs, hvs, rfl⟩ := hs
-    rw [toDatabase_addRow]
-    exact .set (FDatabase.execExprList_MEvalList h hts)
-      (FDatabase.execExprList_MEvalList h hvs)
-
-/-! `FDatabase.execActions_ActionsStep` is proved at the end of the file, under
-"Containment for the merge interpreter": its induction carries `Actions.SetLegal` past
-the head of the block with `execAction_sig`, which is stated below. -/
+/-- `execActions_toDatabase` in the `some` shape the merge proofs use. -/
+theorem FDatabase.execActions_evalActions {d d' : FDatabase} {as : List Action}
+    (hs : execActions d as = some d') :
+    evalActions d.toDatabase as = some d'.toDatabase := by
+  rw [← execActions_toDatabase, hs, Option.map_some]
 
 /-! #### Matching -/
 
-/-- Every value visible to `execExpr` under `d.env ++ σ` is a constructor term, given
-that `σ`'s values are terms `d` holds. `execExpr_ctorTerm`'s hypothesis, at the
-environment `patternHoldsM` evaluates in. -/
+/-- Every value visible to `Expr.eval` under `d.env ++ σ` is a constructor term, given
+that `σ`'s values are terms `d` holds. `Expr.eval_ctorTerm`'s hypothesis, at the
+environment `patternHolds` evaluates in. -/
 theorem FDatabase.envAppend_ctorTerm {d : FDatabase} (h : d.Inv) {σ : Env}
     (hσ : ∀ b ∈ σ, b.2 ∈ d.toDatabase.terms) :
     ∀ b ∈ d.env ++ σ, Term.CtorTerm d.sig b.2 := by
@@ -1975,18 +1525,18 @@ theorem FDatabase.envAppend_ctorTerm {d : FDatabase} (h : d.Inv) {σ : Env}
   · exact h.env_ctorTerm b hb
   · exact h.ctorTerm_of_mem (hσ b hb)
 
-/-- **`patternHoldsM` is sound for `MValidSubst`.**
+/-- **`patternHolds` is sound for `MValidSubst`.**
 
 `ValidEnv (p.freeVars d.env) d.toDatabase σ` is load-bearing, not decoration.
-`patternHoldsM` reads `σ` only through `d.env ++ σ`, so a `σ` carrying bindings the
+`patternHolds` reads `σ` only through `d.env ++ σ`, so a `σ` carrying bindings the
 pattern never mentions still passes the test, while every `MValidSubst` constructor pins
 `Env.dom σ` to a permutation of the pattern's free variables —
-`Falsity.patternHoldsM_MValidSubst_false` is the witness. Nothing is lost by requiring
+`Falsity.patternHolds_MValidSubst_false` is the witness. Nothing is lost by requiring
 it: it is a *consequence* of the conclusion (`MValidSubst.validEnv`), so this is the
 strongest statement whose conclusion can hold, and it is the hypothesis
 `Proofs/Interp.lean`'s `patternHolds_iff` already carries.
 
-`Interp.lean`'s `patternHolds_iff`, forward direction, with `execExpr` for `Expr.eval`
+`Interp.lean`'s `patternHolds_iff`, forward direction, with `Expr.eval` for `Expr.eval`
 and `MValidSubst` for `ValidSubst`. Three gaps to bridge beyond that proof:
 
 * `congrKeys` computes `Cong`, while `MValidSubst` wants `MCong` — `Cong.toMCong'` and
@@ -1996,44 +1546,44 @@ and `MValidSubst` for `ValidSubst`. Three gaps to bridge beyond that proof:
   `(d.addTerms ts).addTerms us` for the row atom's key and value operands — so the bridge
   is applied at that database's `Inv`, from `Inv.addTerm`/`Inv.addTerms`;
 * those need the instance to be a constructor term, which is
-  `execExpr_ctorTerm`/`execExprList_ctorTerm`, which in turn need the `ValidEnv`. -/
-theorem FDatabase.patternHoldsM_MValidSubst {d : FDatabase} (h : d.Inv) {p : Pattern}
+  `Expr.eval_ctorTerm`/`Expr.evalList_ctorTerm`, which in turn need the `ValidEnv`. -/
+theorem FDatabase.patternHolds_MValidSubst {d : FDatabase} (h : d.Inv) {p : Pattern}
     {σ : Env} (hv : ValidEnv (p.freeVars d.env) d.toDatabase σ)
-    (hs : d.patternHoldsM p σ = true) : MValidSubst d.toDatabase p σ := by
+    (hs : patternHolds d p σ = true) : MValidSubst d.toDatabase p σ := by
   have hσ := FDatabase.envAppend_ctorTerm h hv.2
   cases p with
   | expr e =>
-    rw [FDatabase.patternHoldsM] at hs
+    rw [patternHolds] at hs
     split at hs
     · exact absurd hs (by simp)
     · next t hev =>
       rw [decide_eq_true_eq] at hs
       obtain ⟨w, hwm, hcl⟩ := hs
-      have ht : Term.CtorTerm d.sig t := FDatabase.execExpr_ctorTerm h hσ hev
+      have ht : Term.CtorTerm d.sig t := Expr.eval_ctorTerm hσ hev
       have hInv := h.addTerm ht
       have hct := hInv.ctorTerms
       have hrc := hInv.rowsComplete
       rw [FDatabase.toDatabase_addTerm] at hct hrc
-      exact .expr hv hwm (FDatabase.execExpr_MEval h hev)
+      exact .expr hv hwm (hev)
         (Cong.toMCong' hct hrc ((FDatabase.mem_closureF_addTerm h.wf).mp hcl))
   | eq e₁ e₂ =>
-    rw [FDatabase.patternHoldsM] at hs
+    rw [patternHolds] at hs
     split at hs
     · next t₁ t₂ hev₁ hev₂ =>
       rw [Bool.and_eq_true, decide_eq_true_eq, decide_eq_true_eq] at hs
       obtain ⟨heq, w, hwm, hcl⟩ := hs
-      have ht₁ : Term.CtorTerm d.sig t₁ := FDatabase.execExpr_ctorTerm h hσ hev₁
-      have ht₂ : Term.CtorTerm d.sig t₂ := FDatabase.execExpr_ctorTerm h hσ hev₂
+      have ht₁ : Term.CtorTerm d.sig t₁ := Expr.eval_ctorTerm hσ hev₁
+      have ht₂ : Term.CtorTerm d.sig t₂ := Expr.eval_ctorTerm hσ hev₂
       have hInv := (h.addTerm ht₁).addTerm ht₂
       have hct := hInv.ctorTerms
       have hrc := hInv.rowsComplete
       rw [FDatabase.toDatabase_addTerm, FDatabase.toDatabase_addTerm] at hct hrc
-      exact .eq hv hwm (FDatabase.execExpr_MEval h hev₁) (FDatabase.execExpr_MEval h hev₂)
+      exact .eq hv hwm (hev₁) (hev₂)
         (Cong.toMCong' hct hrc ((FDatabase.mem_closureF_addTerm₂ h.wf).mp hcl))
         (Cong.toMCong' hct hrc ((FDatabase.mem_closureF_addTerm₂ h.wf).mp heq))
     · exact absurd hs (by simp)
   | values vs f as =>
-    rw [FDatabase.patternHoldsM] at hs
+    rw [patternHolds] at hs
     split at hs
     · next us ts hu ht =>
       rw [List.any_eq_true] at hs
@@ -2041,21 +1591,21 @@ theorem FDatabase.patternHoldsM_MValidSubst {d : FDatabase} (h : d.Inv) {p : Pat
       rw [Bool.and_eq_true, Bool.and_eq_true, decide_eq_true_eq] at hcond
       obtain ⟨⟨hfn, hkey⟩, hval⟩ := hcond
       subst hfn
-      have hts : ∀ x ∈ ts, Term.CtorTerm d.sig x := FDatabase.execExprList_ctorTerm h hσ ht
+      have hts : ∀ x ∈ ts, Term.CtorTerm d.sig x := Expr.evalList_ctorTerm hσ ht
       have hus : ∀ x ∈ us, Term.CtorTerm (d.addTerms ts).sig x := by
-        simpa using FDatabase.execExprList_ctorTerm h hσ hu
+        simpa using Expr.evalList_ctorTerm hσ hu
       have hInv := (h.addTerms hts).addTerms hus
       have hct := hInv.ctorTerms
       have hrc := hInv.rowsComplete
       rw [FDatabase.toDatabase_addTerms, FDatabase.toDatabase_addTerms] at hct hrc
-      exact .values hv (FDatabase.execExprList_MEvalList h hu)
-        (FDatabase.execExprList_MEvalList h ht)
+      exact .values hv (hu)
+        (ht)
         (CongList.toMCongList' hct hrc ((FDatabase.congrTuple_addTerms_iff h.wf).mp hkey))
         (CongList.toMCongList' hct hrc ((FDatabase.congrTuple_addTerms_iff h.wf).mp hval))
         hr
     · exact absurd hs (by simp)
 
-/-- The hypothesis `patternHoldsM_MValidSubst` adds is a consequence of its conclusion,
+/-- The hypothesis `patternHolds_MValidSubst` adds is a consequence of its conclusion,
 which is why requiring it costs nothing. -/
 theorem MValidSubst.validEnv {db : Database} {p : Pattern} {σ : Env}
     (h : MValidSubst db p σ) : ValidEnv (p.freeVars db.env) db σ := by
@@ -2068,21 +1618,21 @@ theorem MValidSubst.validEnv {db : Database} {p : Pattern} {σ : Env}
 `MValidQuerySubst` admits.**
 
 The `Env.Agree` is forced, and not by the `ValidEnv` defect above. `Query.freeVars`
-deduplicates, so `matchQueryM` binds a variable two patterns share exactly **once**;
+deduplicates, so `matchQuery` binds a variable two patterns share exactly **once**;
 `MValidQuerySubst` instead demands `Env.UnionAll σs σ`, which is literal
 *concatenation* of one substitution per pattern, each binding its own pattern's free
 variables. A query with a repeated variable therefore admits no `σ` on the nose — the
-lengths cannot match — and `Falsity.matchQueryM_MValidQuerySubst_false` is the witness.
+lengths cannot match — and `Falsity.matchQuery_MValidQuerySubst_false` is the witness.
 `Proofs/Interp.lean`'s `validQuerySubst_of_mem_matchQuery` already concludes up to
 `Env.Agree` for the same reason. -/
-theorem FDatabase.matchQueryM_MValidQuerySubst {d : FDatabase} (h : d.Inv) {q : Query}
-    {σ : Env} (hs : σ ∈ d.matchQueryM q) :
+theorem FDatabase.matchQuery_MValidQuerySubst {d : FDatabase} (h : d.Inv) {q : Query}
+    {σ : Env} (hs : σ ∈ matchQuery d q) :
     ∃ τ, MValidQuerySubst d.toDatabase q τ ∧ Env.Agree τ σ := by
-  rw [FDatabase.matchQueryM, List.mem_filter, mem_assignments, List.all_eq_true] at hs
+  rw [matchQuery, List.mem_filter, mem_assignments, List.all_eq_true] at hs
   obtain ⟨⟨hdom, hval⟩, hall⟩ := hs
   have hall' : ∀ p ∈ q, MValidSubst d.toDatabase p (Env.canon (p.freeVars d.env) σ) :=
     fun p hp =>
-      FDatabase.patternHoldsM_MValidSubst h (validEnv_canon hp hdom hval) (hall p hp)
+      FDatabase.patternHolds_MValidSubst h (validEnv_canon hp hdom hval) (hall p hp)
   obtain ⟨τ, hu, hr⟩ := Env.exists_unionAll (σ := σ)
     (q.map fun p => Env.canon (p.freeVars d.env) σ) (by
       intro ρ hρ
@@ -2105,7 +1655,7 @@ the specification state to compare against is one that took at least the same me
 `MergeClosure`'s freedom to take any number of steps is what pays for that.
 
 `FDatabase.mergeRound_contained`, `mergeSaturateF_contained` and
-`execRunRulesM_contained` are proved at the end of the file, under "Containment for the
+`execRunRules_contained` are proved at the end of the file, under "Containment for the
 merge interpreter": they read `mergeOneWith_inv`, `mergeOneWith_confined`,
 `mergeRound_confined`, `mem_mergeEnv`, `Inv.setEnv` and `Inv.mergeRound_of_legalMerges`,
 all of which are stated below. -/
@@ -2168,8 +1718,8 @@ theorem execM_current_of_lattice {p : Program} {d : FDatabase}
     (hanti : ∀ x y, le x y → le y x → x = y)
     (hjoin : ∀ (f : FnName) (body : List Action) (res : List Expr) (a b vs : List Term),
       d.sig.mergeOf f = MergeSpec.merge body res →
-      (∃ e, Database.ActionsStep { d.toDatabase with env := mergeEnv a b } body e ∧
-        Expr.MEvalList e e.env res vs) → le a vs ∧ le b vs)
+      (∃ e, evalActions { d.toDatabase with env := mergeEnv a b } body = some e ∧
+        Expr.evalList e.sig res e.env = some vs) → le a vs ∧ le b vs)
     {f : FnName} {as vs : List Term} {body : List Action} {res : List Expr}
     (hmerge : d.sig.mergeOf f = MergeSpec.merge body res)
     (hrow : Row.mk f as vs ∈ d.rows) :
@@ -2289,7 +1839,7 @@ hypotheses. So `MCong` coincides with `Cong` on the row-free projection, and
 `g x` and `g y` by `congr` while `MCong` has no rule that can — `fd` fires only at
 `.union`. It says what `Impl/Merge.lean`'s comment means by "every declared function is
 `.merge` or `.noMerge`": a `:merge` function's application is never itself a term,
-because `execExpr` resolves it to its recorded output. -/
+because `Expr.eval` resolves it to its recorded output. -/
 theorem FDatabase.closureF_ok {d : FDatabase}
     (hrow : ∀ r ∈ d.rows, d.sig.mergeOf r.fn = MergeSpec.union →
       r.out = [.app r.fn r.args] ∧ Term.app r.fn r.args ∈ d.terms)
@@ -2322,47 +1872,47 @@ namespace FDatabase
   rw [addTerms_sig, addTerms_sig]
 
 /-- The interpreter's actions only add, so the only thing that ever removes a row is the
-merge phase. `Database.ActionStep.contained` read through `toDatabase`. -/
+merge phase. `evalAction_contained` read through `toDatabase`. -/
 theorem execAction_contained {d e : FDatabase} {a : Action}
-    (h : d.execAction a = some e) : d.toDatabase.Contained e.toDatabase := by
+    (h : execAction d a = some e) : d.toDatabase.Contained e.toDatabase := by
   cases a with
   | expr e₀ =>
-    cases hv : d.execExpr d.env e₀ with
-    | none => rw [FDatabase.execAction, hv] at h; simp at h
+    cases hv : Expr.eval d.sig e₀ d.env with
+    | none => rw [execAction, hv] at h; simp at h
     | some t =>
-      rw [FDatabase.execAction, hv, Option.map_some, Option.some.injEq] at h
+      rw [execAction, hv, Option.map_some, Option.some.injEq] at h
       subst h
       rw [toDatabase_addTerm]
       exact Database.Contained.addTerm t d.toDatabase
   | letBind v e₀ =>
-    cases hv : d.execExpr d.env e₀ with
-    | none => rw [FDatabase.execAction, hv] at h; simp at h
+    cases hv : Expr.eval d.sig e₀ d.env with
+    | none => rw [execAction, hv] at h; simp at h
     | some t =>
-      rw [FDatabase.execAction, hv, Option.map_some, Option.some.injEq] at h
+      rw [execAction, hv, Option.map_some, Option.some.injEq] at h
       subst h
       refine ⟨fun x hx => ?_, fun x hx => ?_, fun x hx => hx⟩
       · exact List.mem_dedup.mpr (List.mem_append_right _ hx)
       · exact List.mem_dedup.mpr (List.mem_append_right _ hx)
   | union e₁ e₂ =>
-    cases hv₁ : d.execExpr d.env e₁ with
-    | none => rw [FDatabase.execAction, hv₁] at h; simp at h
+    cases hv₁ : Expr.eval d.sig e₁ d.env with
+    | none => rw [execAction, hv₁] at h; simp at h
     | some t₁ =>
-      cases hv₂ : d.execExpr d.env e₂ with
-      | none => rw [FDatabase.execAction, hv₁, hv₂] at h; simp at h
+      cases hv₂ : Expr.eval d.sig e₂ d.env with
+      | none => rw [execAction, hv₁, hv₂] at h; simp at h
       | some t₂ =>
-        rw [FDatabase.execAction, hv₁, hv₂, Option.bind_some, Option.map_some,
+        rw [execAction, hv₁, hv₂, Option.bind_some, Option.map_some,
           Option.some.injEq] at h
         subst h
         rw [toDatabase_addEq]
         exact Database.Contained.addEq t₁ t₂ d.toDatabase
   | set f args out =>
-    cases hv₁ : d.execExprList d.env args with
-    | none => rw [FDatabase.execAction, hv₁] at h; simp at h
+    cases hv₁ : Expr.evalList d.sig args d.env with
+    | none => rw [execAction, hv₁] at h; simp at h
     | some ts =>
-      cases hv₂ : d.execExprList d.env out with
-      | none => rw [FDatabase.execAction, hv₁, hv₂] at h; simp at h
+      cases hv₂ : Expr.evalList d.sig out d.env with
+      | none => rw [execAction, hv₁, hv₂] at h; simp at h
       | some vs =>
-        rw [FDatabase.execAction, hv₁, hv₂, Option.bind_some, Option.map_some,
+        rw [execAction, hv₁, hv₂, Option.bind_some, Option.map_some,
           Option.some.injEq] at h
         subst h
         rw [toDatabase_addRow]
@@ -2370,64 +1920,64 @@ theorem execAction_contained {d e : FDatabase} {a : Action}
 
 /-- The interpreter's actions do not touch the signature either, so which functions are
 `.merge` functions is stable across a merge pass. -/
-theorem execAction_sig {d e : FDatabase} {a : Action} (h : d.execAction a = some e) :
+theorem execAction_sig {d e : FDatabase} {a : Action} (h : execAction d a = some e) :
     e.sig = d.sig := by
   cases a with
   | expr e₀ =>
-    cases hv : d.execExpr d.env e₀ with
-    | none => rw [FDatabase.execAction, hv] at h; simp at h
+    cases hv : Expr.eval d.sig e₀ d.env with
+    | none => rw [execAction, hv] at h; simp at h
     | some t =>
-      rw [FDatabase.execAction, hv, Option.map_some, Option.some.injEq] at h
+      rw [execAction, hv, Option.map_some, Option.some.injEq] at h
       exact h ▸ rfl
   | letBind v e₀ =>
-    cases hv : d.execExpr d.env e₀ with
-    | none => rw [FDatabase.execAction, hv] at h; simp at h
+    cases hv : Expr.eval d.sig e₀ d.env with
+    | none => rw [execAction, hv] at h; simp at h
     | some t =>
-      rw [FDatabase.execAction, hv, Option.map_some, Option.some.injEq] at h
+      rw [execAction, hv, Option.map_some, Option.some.injEq] at h
       exact h ▸ rfl
   | union e₁ e₂ =>
-    cases hv₁ : d.execExpr d.env e₁ with
-    | none => rw [FDatabase.execAction, hv₁] at h; simp at h
+    cases hv₁ : Expr.eval d.sig e₁ d.env with
+    | none => rw [execAction, hv₁] at h; simp at h
     | some t₁ =>
-      cases hv₂ : d.execExpr d.env e₂ with
-      | none => rw [FDatabase.execAction, hv₁, hv₂] at h; simp at h
+      cases hv₂ : Expr.eval d.sig e₂ d.env with
+      | none => rw [execAction, hv₁, hv₂] at h; simp at h
       | some t₂ =>
-        rw [FDatabase.execAction, hv₁, hv₂, Option.bind_some, Option.map_some,
+        rw [execAction, hv₁, hv₂, Option.bind_some, Option.map_some,
           Option.some.injEq] at h
         exact h ▸ rfl
   | set f args out =>
-    cases hv₁ : d.execExprList d.env args with
-    | none => rw [FDatabase.execAction, hv₁] at h; simp at h
+    cases hv₁ : Expr.evalList d.sig args d.env with
+    | none => rw [execAction, hv₁] at h; simp at h
     | some ts =>
-      cases hv₂ : d.execExprList d.env out with
-      | none => rw [FDatabase.execAction, hv₁, hv₂] at h; simp at h
+      cases hv₂ : Expr.evalList d.sig out d.env with
+      | none => rw [execAction, hv₁, hv₂] at h; simp at h
       | some vs =>
-        rw [FDatabase.execAction, hv₁, hv₂, Option.bind_some, Option.map_some,
+        rw [execAction, hv₁, hv₂, Option.bind_some, Option.map_some,
           Option.some.injEq] at h
         exact h ▸ addRow_sig
 
 theorem execActions_contained {d e : FDatabase} {as : List Action}
-    (h : d.execActions as = some e) : d.toDatabase.Contained e.toDatabase := by
+    (h : execActions d as = some e) : d.toDatabase.Contained e.toDatabase := by
   induction as generalizing d with
   | nil =>
-    rw [FDatabase.execActions, Option.some.injEq] at h
+    rw [execActions, Option.some.injEq] at h
     exact h ▸ Database.Contained.refl _
   | cons a as ih =>
-    cases hv : d.execAction a with
-    | none => rw [FDatabase.execActions, hv] at h; simp at h
+    cases hv : execAction d a with
+    | none => rw [execActions, hv] at h; simp at h
     | some d' =>
-      rw [FDatabase.execActions, hv, Option.bind_some] at h
+      rw [execActions, hv, Option.bind_some] at h
       exact (execAction_contained hv).trans (ih h)
 
 theorem execActions_sig {d e : FDatabase} {as : List Action}
-    (h : d.execActions as = some e) : e.sig = d.sig := by
+    (h : execActions d as = some e) : e.sig = d.sig := by
   induction as generalizing d with
-  | nil => rw [FDatabase.execActions, Option.some.injEq] at h; exact h ▸ rfl
+  | nil => rw [execActions, Option.some.injEq] at h; exact h ▸ rfl
   | cons a as ih =>
-    cases hv : d.execAction a with
-    | none => rw [FDatabase.execActions, hv] at h; simp at h
+    cases hv : execAction d a with
+    | none => rw [execActions, hv] at h; simp at h
     | some d' =>
-      rw [FDatabase.execActions, hv, Option.bind_some] at h
+      rw [execActions, hv, Option.bind_some] at h
       exact (ih h).trans (execAction_sig hv)
 
 /-- `addRow` only adds, at the interpreter level. -/
@@ -2488,11 +2038,11 @@ theorem mergeOneOriented_confined {cl : Finset (Term × Term)} {d e : FDatabase}
     split at h
     case isFalse => simp at h
     case isTrue hcond =>
-      cases hb : FDatabase.execActions { d with env := mergeEnv r₂.out r₁.out } body with
+      cases hb : execActions { d with env := mergeEnv r₂.out r₁.out } body with
       | none => rw [hb] at h; simp at h
       | some eb =>
         rw [hb, Option.bind_some] at h
-        cases hv : eb.execExprList eb.env res with
+        cases hv : Expr.evalList eb.sig res eb.env with
         | none => rw [hv] at h; simp at h
         | some vs =>
           rw [hv, Option.map_some, Option.some.injEq] at h
@@ -2689,7 +2239,7 @@ theorem mem_mergeEnv {os ns : List Term} {p : Var × Term} (h : p ∈ mergeEnv o
 a constructor `F`, writes a `.union` function's row whose output is not `[.app F args]` —
 which is exactly what `ctorRows` forbids. `mergeRound_inv_false` in the counterexample
 section machine-checks it. `CtorTerms` *is* preserved, as the `Inv` docstring claims:
-`execExpr` builds an application only under a `.union` guard, and every other branch
+`Expr.eval` builds an application only under a `.union` guard, and every other branch
 returns an operand, a literal, or a recorded row output that `rowsWF` already places in
 `terms`.
 
@@ -2749,19 +2299,19 @@ theorem Inv.mergeRows {d : FDatabase} (h : d.Inv) {r₁ r₂ : Row} {vs : List T
 iterated; `execAction_sig` is what keeps `SetLegal` — a condition on the signature —
 applicable at each step. -/
 theorem Inv.execActions {as : List Action} : ∀ {d d' : FDatabase}, d.Inv →
-    Actions.SetLegal as d.sig → d.execActions as = some d' → d'.Inv := by
+    Actions.SetLegal as d.sig → execActions d as = some d' → d'.Inv := by
   induction as with
   | nil =>
     intro d d' h _ hs
-    rw [FDatabase.execActions, Option.some.injEq] at hs
+    rw [Egglog.execActions, Option.some.injEq] at hs
     exact hs ▸ h
   | cons a as ih =>
     intro d d' h hlegal hs
     obtain ⟨hl₁, hl₂⟩ := hlegal
-    cases hv : d.execAction a with
-    | none => rw [FDatabase.execActions, hv] at hs; simp at hs
+    cases hv : Egglog.execAction d a with
+    | none => rw [Egglog.execActions, hv] at hs; simp at hs
     | some d₁ =>
-      rw [FDatabase.execActions, hv, Option.bind_some] at hs
+      rw [Egglog.execActions, hv, Option.bind_some] at hs
       refine ih (h.execAction hl₁ hv) ?_ hs
       rw [execAction_sig hv]
       exact hl₂
@@ -2772,7 +2322,7 @@ set_option maxHeartbeats 1000000 in
 Four steps, each a lemma above. Rebinding `env` to `mergeEnv r₂.out r₁.out` is harmless
 because `rowsWF` puts both rows' outputs in `terms`. Running the body preserves `Inv` by
 `Inv.execActions`, which is exactly where `hlegal` is spent. The combined row's operands
-are constructor terms by `execExprList_ctorTerm`, so `Inv.addTerms` takes them into
+are constructor terms by `Expr.evalList_ctorTerm`, so `Inv.addTerms` takes them into
 `terms`. And rewriting the row list — `r₁` dropped, `r₂` overwritten — is `Inv.mergeRows`,
 whose side condition is that both rows belong to a `.merge` function, which is how the
 branch was entered. -/
@@ -2799,7 +2349,7 @@ theorem mergeOneOriented_inv {cl : Finset (Term × Term)} {d e : FDatabase} {r�
         · exact (h.rowsWF r₂ hr₂).2 b.2 hb'
         · exact (h.rowsWF r₁ hr₁).2 b.2 hb'
       have h₀ : ({ d with env := mergeEnv r₂.out r₁.out } : FDatabase).Inv := h.setEnv hσ
-      cases hb : FDatabase.execActions { d with env := mergeEnv r₂.out r₁.out } body with
+      cases hb : execActions { d with env := mergeEnv r₂.out r₁.out } body with
       | none => rw [hb] at hm; simp at hm
       | some eb =>
         rw [hb, Option.bind_some, Option.map_eq_some_iff] at hm
@@ -2810,7 +2360,7 @@ theorem mergeOneOriented_inv {cl : Finset (Term × Term)} {d e : FDatabase} {r�
         have hcont : d.toDatabase.terms ⊆ eb.toDatabase.terms :=
           (execActions_contained (d := { d with env := mergeEnv r₂.out r₁.out }) hb).terms
         have hvsCtor : ∀ x ∈ vs, Term.CtorTerm eb.sig x :=
-          FDatabase.execExprList_ctorTerm hebInv hebInv.env_ctorTerm hv
+          Expr.evalList_ctorTerm hebInv.env_ctorTerm hv
         have hasCtor : ∀ x ∈ r₂.args, Term.CtorTerm eb.sig x := fun x hx =>
           hebInv.ctorTerm_of_mem (hcont ((h.rowsWF r₂ hr₂).1 x hx))
         have hInv₀ : ((eb.addTerms r₂.args).addTerms vs).Inv :=
@@ -2909,24 +2459,6 @@ theorem Inv.mergeRound_of_pureMerges {d : FDatabase} (h : d.Inv)
 
 end FDatabase
 
-theorem Database.ActionStep.wf {db d : Database} {a : Action} (hw : db.WF)
-    (h : Database.ActionStep db a d) : d.WF := by
-  cases h with
-  | @expr _ t _ => exact hw.addTerm t
-  | @letBind v _ t _ =>
-    refine ⟨(hw.addTerm t).subtermClosed, (hw.addTerm t).eqsInTerms, fun b hb => ?_⟩
-    rcases List.mem_cons.mp hb with rfl | hb'
-    · exact Database.mem_addTerm t db
-    · exact (hw.addTerm t).envInTerms b hb'
-  | @union _ _ t₁ t₂ _ _ => exact hw.addEq t₁ t₂
-  | @set f _ _ ts vs _ _ => exact hw.addRow f ts vs
-
-theorem Database.ActionsStep.wf {db d : Database} {as : List Action} (hw : db.WF)
-    (h : Database.ActionsStep db as d) : d.WF := by
-  induction h with
-  | nil => exact hw
-  | cons ha _ ih => exact ih (Database.ActionStep.wf hw ha)
-
 /-- A merge preserves the invariants. `RowsWF` is an added hypothesis and is forced: the
 body runs with `mergeEnv a b` in scope, so `WF.envInTerms` needs the colliding rows'
 outputs to be terms, which only `RowsWF` says. -/
@@ -2939,12 +2471,11 @@ theorem MergeStep.wf {d₁ d₂ : Database} (hw : d₁.WF) (hrw : d₁.RowsWF)
       rcases mem_mergeEnv hp with hpa | hpb
       · exact (hrw _ hra).2 _ hpa
       · exact (hrw _ hrb).2 _ hpb
-    have hd : d.WF := Database.ActionsStep.wf hw0 hbody
+    have hd : d.WF := evalActions_wf hw0 hbody
     have hr : (d.addRow f as vs).WF := hd.addRow f as vs
     have hb : d₁.Contained d :=
-      ⟨(Database.ActionsStep.contained hbody).terms,
-        (Database.ActionsStep.contained hbody).rows,
-        (Database.ActionsStep.contained hbody).eqs⟩
+      ⟨(evalActions_contained hbody).terms, (evalActions_contained hbody).rows,
+        (evalActions_contained hbody).eqs⟩
     have hc := hb.trans (Database.Contained.addRow f as vs d)
     exact ⟨hr.subtermClosed, hr.eqsInTerms, fun p hp => hc.terms (hw.envInTerms p hp)⟩
 
@@ -2958,40 +2489,15 @@ reads something stated above: `execAction_sig`, `mergeOneWith_inv`,
 
 `hlegal` — every declared merge's body writes only legal `set`s — recurs throughout, for
 `Inv.mergeRound_of_legalMerges`'s reason: without it the accumulator's `Inv` fails, and
-`Inv` is what turns the interpreter's evaluation into an `Expr.MEval` witness. -/
+`Inv` is what turns the interpreter's evaluation into an `Expr.eval` witness. -/
 
 namespace FDatabase
-
-/-- **`execActions` refines `ActionsStep`.**
-
-`Actions.SetLegal as d.sig` is what carries `Inv` across the block: without it a `set` on
-a constructor function breaks `ctorRows`, which is `Inv.execAction`'s hypothesis, and
-`Inv` is what `execExpr_MEval` needs at every step. `execAction_sig` moves the tail's
-legality past the head. -/
-theorem execActions_ActionsStep {as : List Action} :
-    ∀ {d d' : FDatabase}, d.Inv → Actions.SetLegal as d.sig →
-    d.execActions as = some d' → Database.ActionsStep d.toDatabase as d'.toDatabase := by
-  induction as with
-  | nil =>
-    intro d d' _ _ hs
-    rw [FDatabase.execActions, Option.some.injEq] at hs
-    exact hs ▸ .nil
-  | cons a as ih =>
-    intro d d' h hlegal hs
-    obtain ⟨hl₁, hl₂⟩ := hlegal
-    cases hv : d.execAction a with
-    | none => rw [FDatabase.execActions, hv] at hs; simp at hs
-    | some d₁ =>
-      rw [FDatabase.execActions, hv, Option.bind_some] at hs
-      refine .cons (FDatabase.execAction_ActionStep h hv) (ih (h.execAction hl₁ hv) ?_ hs)
-      rw [execAction_sig hv]
-      exact hl₂
 
 /-- **One firing of the pass is one `MergeStep` of the specification.**
 
 `x` is the accumulator, `D` a specification state the closure has already reached that
 contains it. The firing's congruence test is against the *pre-pass* closure `d.closureF`,
-which is why `d`'s invariant appears alongside `x`'s. `Database.ActionsStep.mono` is what
+which is why `d`'s invariant appears alongside `x`'s. `evalActions_mono` is what
 re-runs the merge body at `D`.
 
 The witness takes the two rows in the order `(r₂, r₁)`, which is the whole reason
@@ -3029,25 +2535,24 @@ theorem mergeOneOriented_mergeStep {d x y : FDatabase} {r₁ r₂ : Row} {D : Da
       have h₀ : ({ x with env := mergeEnv r₂.out r₁.out } : FDatabase).Inv := hx.setEnv hσ
       have hlx : Actions.SetLegal body x.sig := by
         rw [hxs]; exact hlegal r₁.fn body res (hxs ▸ hmo)
-      cases hb : FDatabase.execActions { x with env := mergeEnv r₂.out r₁.out } body with
+      cases hb : execActions { x with env := mergeEnv r₂.out r₁.out } body with
       | none => rw [hb] at hm; simp at hm
       | some eb =>
         rw [hb, Option.bind_some, Option.map_eq_some_iff] at hm
         obtain ⟨vs, hv, rfl⟩ := hm
-        have hbodyStep : Database.ActionsStep
+        have hbodyStep : evalActions
             ({ x with env := mergeEnv r₂.out r₁.out } : FDatabase).toDatabase body
-            eb.toDatabase := execActions_ActionsStep h₀ hlx hb
+            = some eb.toDatabase := FDatabase.execActions_evalActions hb
         obtain ⟨D₁, hD₁step, hD₁c, hD₁sig, hD₁env⟩ :=
-          Database.ActionsStep.mono
+          evalActions_mono
             (db := ({ x with env := mergeEnv r₂.out r₁.out } : FDatabase).toDatabase)
             (D := { D with env := mergeEnv r₂.out r₁.out })
             ⟨hxc.terms, hxc.rows, hxc.eqs⟩ (hxs.trans hDsig.symm) rfl hbodyStep
         have hebInv : eb.Inv := h₀.execActions hlx hb
-        have hml : Expr.MEvalList eb.toDatabase eb.env res vs :=
-          FDatabase.execExprList_MEvalList hebInv hv
-        have hmlD : Expr.MEvalList D₁ D₁.env res vs := by
-          rw [← hD₁env]
-          exact Expr.MEvalList.mono hD₁c hD₁sig hml
+        have hml : Expr.evalList eb.toDatabase.sig res eb.toDatabase.env = some vs := hv
+        have hmlD : Expr.evalList D₁.sig res D₁.env = some vs := by
+          rw [← hD₁env, ← hD₁sig]
+          exact hml
         have hr₂D : Row.mk r₂.fn r₂.args r₂.out ∈ D.rows := hxc.rows hr₂
         have hr₁D : Row.mk r₂.fn r₁.args r₁.out ∈ D.rows := by
           rw [← hfn]; exact hxc.rows hr₁
@@ -3198,25 +2703,25 @@ theorem mergeSaturateF_contained {d e : FDatabase} (h : d.Inv)
 /-- **A round's rule firings stay inside `RunRules`.**
 
 The witness is `RunRules d.toDatabase` itself and the merge closure is the reflexive one:
-`execRunRulesM` runs no merge phase (`Impl/Merge.lean` defers it to `execCmdM`), so
+`execRunRules` runs no merge phase (`Impl/Merge.lean` defers it to `execCmdM`), so
 nothing has to be re-based here.
 
-`hrules` is `execActions_ActionsStep`'s premise, per rule: a rule head is an action block
+`hrules` is `execActions_evalActions`'s premise, per rule: a rule head is an action block
 like any other, and without legality `Inv` does not survive it. It is `Rule.SetLegal` at
 `d.sig`, which is what `Program.SetLegal` gives for every rule a program installs.
 
 The enumerator's substitution is transported to the specification's by
-`Database.ActionsStep.envAgree`: `matchQueryM_MValidQuerySubst` only produces one that
+`evalActions_envAgree`: `matchQuery_MValidQuerySubst` only produces one that
 `Env.Agree`s, and `Database.EnvAgree.eq_of_env_rules` turns that back into equality once
-`fireIntoM` restores the caller's environment. -/
-theorem execRunRulesM_contained {d : FDatabase} (h : d.Inv)
+`fireInto` restores the caller's environment. -/
+theorem execRunRules_contained {d : FDatabase} (h : d.Inv)
     (hrules : ∀ r ∈ d.rules, Actions.SetLegal r.actions d.sig) :
-    ∃ db, RunStep d.toDatabase db ∧ d.execRunRulesM.toDatabase.Contained db := by
+    ∃ db, RunStep d.toDatabase db ∧ (execRunRules d).toDatabase.Contained db := by
   refine ⟨RunRules d.toDatabase, Relation.ReflTransGen.refl, ?_⟩
   set R : Database := RunRules d.toDatabase
   -- Values a match assigns are terms the database already holds, so extending `d.env`
   -- by one keeps `Inv`.
-  have henvInv : ∀ {q : Query} {σ : Env}, σ ∈ d.matchQueryM q →
+  have henvInv : ∀ {q : Query} {σ : Env}, σ ∈ matchQuery d q →
       ({ d with env := d.env ++ σ } : FDatabase).Inv := by
     intro q σ hσ
     refine h.setEnv ?_
@@ -3224,32 +2729,34 @@ theorem execRunRulesM_contained {d : FDatabase} (h : d.Inv)
     rcases List.mem_append.mp hb with hb' | hb'
     · exact h.wf.envInTerms b hb'
     · have : σ ∈ assignments d.terms (Query.freeVars q d.env) :=
-        (List.mem_filter.mp (by rwa [FDatabase.matchQueryM] at hσ)).1
+        (List.mem_filter.mp (by rwa [matchQuery] at hσ)).1
       exact (mem_assignments.mp this).2 b hb'
   -- One firing lands inside `RunRules`.
-  have hone : ∀ (r : Rule), r ∈ d.rules → ∀ (σ : Env), σ ∈ d.matchQueryM r.query →
+  have hone : ∀ (r : Rule), r ∈ d.rules → ∀ (σ : Env), σ ∈ matchQuery d r.query →
       ∀ acc : FDatabase, acc.toDatabase.Contained R →
-      (d.fireIntoM r acc σ).toDatabase.Contained R := by
+      (fireInto d r acc σ).toDatabase.Contained R := by
     intro r hr σ hσ acc hacc
-    rw [FDatabase.fireIntoM]
-    cases hv : FDatabase.execActions { d with env := d.env ++ σ } r.actions with
+    rw [fireInto, execLocalActions]
+    cases hv : execActions { d with env := d.env ++ σ } r.actions with
     | none => simpa using hacc
     | some e =>
       have hmemS : ({ e with env := d.env, rules := d.rules } : FDatabase).toDatabase ∈
           {D | ∃ r' ∈ d.toDatabase.rules, D ∈ RuleResults d.toDatabase r'} := by
-        obtain ⟨τ, hτ, hag⟩ := matchQueryM_MValidQuerySubst h hσ
-        have hstep : Database.ActionsStep
+        obtain ⟨τ, hτ, hag⟩ := matchQuery_MValidQuerySubst h hσ
+        have hstep : evalActions
             ({ d.toDatabase with env := d.toDatabase.env ++ σ } : Database) r.actions
-            e.toDatabase := by
-          have := execActions_ActionsStep (henvInv hσ) (hrules r hr) hv
+            = some e.toDatabase := by
+          have := FDatabase.execActions_evalActions hv
           simpa using this
         have hEA : ({ d.toDatabase with env := d.toDatabase.env ++ σ } : Database).EnvAgree
             { d.toDatabase with env := d.toDatabase.env ++ τ } :=
           ⟨rfl, rfl, rfl, rfl, rfl, Env.Agree.append_left _ hag.symm⟩
         exact
-          let ⟨e', hstep', hag'⟩ := hstep.envAgree hEA
-          ⟨r, hr, τ, e', hτ, hstep',
-            hag'.eq_of_env_rules d.toDatabase.env d.toDatabase.rules⟩
+          let ⟨e', hstep', hag'⟩ := evalActions_envAgree_exists hEA hstep
+          ⟨r, hr, τ, hτ, by
+            rw [evalLocalActions, hstep', Option.map_some, FDatabase.toDatabase_restore,
+              ← hag'.eq_of_env_rules d.toDatabase.env d.toDatabase.rules]
+            rfl⟩
       have hsub :
           ({ e with env := d.env, rules := d.rules } : FDatabase).toDatabase.Contained R :=
         Database.Contained.mem_sUnion hmemS
@@ -3266,9 +2773,9 @@ theorem execRunRulesM_contained {d : FDatabase} (h : d.Inv)
         · exact hsub.eqs hx'
   -- The two folds.
   have hinner : ∀ (r : Rule), r ∈ d.rules → ∀ (σs : List Env),
-      (∀ σ ∈ σs, σ ∈ d.matchQueryM r.query) → ∀ acc : FDatabase,
+      (∀ σ ∈ σs, σ ∈ matchQuery d r.query) → ∀ acc : FDatabase,
       acc.toDatabase.Contained R →
-      (σs.foldl (d.fireIntoM r) acc).toDatabase.Contained R := by
+      (σs.foldl (fireInto d r) acc).toDatabase.Contained R := by
     intro r hr σs
     induction σs with
     | nil => intro _ acc hacc; exact hacc
@@ -3278,7 +2785,7 @@ theorem execRunRulesM_contained {d : FDatabase} (h : d.Inv)
       exact ih (fun τ hτ => hall τ (List.mem_cons_of_mem _ hτ)) _
         (hone r hr σ (hall σ List.mem_cons_self) acc hacc)
   have houter : ∀ (l : List Rule), (∀ r ∈ l, r ∈ d.rules) → ∀ acc : FDatabase,
-      acc.toDatabase.Contained R → (l.foldl d.fireRuleM acc).toDatabase.Contained R := by
+      acc.toDatabase.Contained R → (l.foldl (fireRule d) acc).toDatabase.Contained R := by
     intro l
     induction l with
     | nil => intro _ acc hacc; exact hacc
@@ -3286,16 +2793,16 @@ theorem execRunRulesM_contained {d : FDatabase} (h : d.Inv)
       intro hall acc hacc
       rw [List.foldl_cons]
       refine ih (fun r' hr' => hall r' (List.mem_cons_of_mem _ hr')) _ ?_
-      rw [FDatabase.fireRuleM]
+      rw [fireRule]
       exact hinner r (hall r List.mem_cons_self) _ (fun _ hσ => hσ) acc hacc
-  rw [FDatabase.execRunRulesM]
+  rw [execRunRules]
   exact houter d.rules (fun _ hr => hr) d (Database.Contained.sUnion _ _)
 
 /-- **`execCmdM_contained`'s `.action` case**, with `CmdStep.action`'s two premises spelled
 out rather than packaged.
 
-It needs no transport at all: `execAction_ActionStep` lands on the specification's
-`ActionStep` result exactly, and `mergeSaturateF_contained` continues from there. That
+It needs no transport at all: `execAction_evalAction` lands on the specification's
+`evalAction` result exactly, and `mergeSaturateF_contained` continues from there. That
 pairing *is* `CmdStep.action` — the specification's merge phase is what pays for the
 interpreter's, and without it this statement is false. -/
 theorem execCmdM_action_contained {d e : FDatabase} (h : d.Inv) {a : Action}
@@ -3303,7 +2810,7 @@ theorem execCmdM_action_contained {d e : FDatabase} (h : d.Inv) {a : Action}
     (hlegal : ∀ g body res, d.sig.mergeOf g = MergeSpec.merge body res →
       Actions.SetLegal body d.sig)
     (hs : d.execCmdM (.action a) = some e) :
-    ∃ d₁ db, Database.ActionStep d.toDatabase a d₁ ∧ MergeClosure d₁ db ∧
+    ∃ d₁ db, evalAction d.toDatabase a = some d₁ ∧ MergeClosure d₁ db ∧
       e.toDatabase.Contained db := by
   rw [FDatabase.execCmdM] at hs
   obtain ⟨d₁, hd₁, hsat⟩ := Option.bind_eq_some_iff.mp hs
@@ -3312,20 +2819,20 @@ theorem execCmdM_action_contained {d e : FDatabase} (h : d.Inv) {a : Action}
       Actions.SetLegal body d₁.sig := by rw [hsig₁]; exact hlegal
   obtain ⟨db, hcl, hcont⟩ :=
     mergeSaturateF_contained (h.execAction halegal hd₁) hlegal₁ hsat
-  exact ⟨d₁.toDatabase, db, execAction_ActionStep h hd₁, hcl, hcont⟩
+  exact ⟨d₁.toDatabase, db, FDatabase.execAction_evalAction hd₁, hcl, hcont⟩
 
 end FDatabase
 
 /-! ### Containment for a whole program
 
-`execRunRulesM_contained` and `mergeSaturateF_contained` cover the two phases of a round.
+`execRunRules_contained` and `mergeSaturateF_contained` cover the two phases of a round.
 What is left is the bookkeeping that turns them into a statement about `execCmdM`,
 `execProgramM` and `execM`, and it is bookkeeping of exactly two kinds.
 
 **Transport.** The specification witness for a command is a state *containing* the
 interpreter's, so the next command's witness has to be re-based onto it. `CmdStep.mono`
 and `ProgramStep.mono` are that, and they are `MValidQuerySubst.mono` (a larger state
-admits every match), `Database.ActionsStep.mono` (a block re-run on a larger state lands
+admits every match), `evalActions_mono` (a block re-run on a larger state lands
 on a larger result) and `MergeClosure.transport` composed. They carry `sig`, `env` and
 `rules` equalities alongside the containment because all three are read: `mono` needs the
 signature, a rule fires in `d.env ++ σ`, and `RunRules` ranges over `rules`.
@@ -3350,18 +2857,20 @@ theorem MergeClosure.envRules {d₁ d₂ : Database} (h : MergeClosure d₁ d₂
   | tail _ hstep ih => exact ⟨hstep.envRules.1.trans ih.1, hstep.envRules.2.trans ih.2⟩
 
 /-- **A firing available at `A` is available at any `C` containing it.**
-`MValidQuerySubst.mono` finds the same match and `Database.ActionsStep.mono` re-runs the
+`MValidQuerySubst.mono` finds the same match and `evalActions_mono` re-runs the
 head on the larger state. The result is an existential, not the join: that is all
-containment needs, and it is all `ActionsStep.mono` gives. -/
+containment needs, and it is all `evalActions_mono` gives. -/
 theorem RuleResults.mono {A C : Database} (hc : A.Contained C) (hsig : A.sig = C.sig)
     (henv : A.env = C.env) {r : Rule} {d : Database} (hd : d ∈ RuleResults A r) :
     ∃ D ∈ RuleResults C r, d.Contained D := by
-  obtain ⟨σ, d', hq, hstep, rfl⟩ := hd
+  obtain ⟨σ, hq, hstep⟩ := hd
+  obtain ⟨d', hv, rfl⟩ := evalLocalActions_eq_some hstep
   have hc0 : ({ A with env := A.env ++ σ } : Database).Contained
       { C with env := C.env ++ σ } := ⟨hc.terms, hc.rows, hc.eqs⟩
-  obtain ⟨D', hD', hcont, -, -⟩ := hstep.mono hc0 hsig (by simp [henv])
+  obtain ⟨D', hD', hcont, -, -⟩ := evalActions_mono hc0 hsig (by simp [henv]) hv
   exact ⟨{ D' with env := C.env, rules := C.rules },
-    ⟨σ, D', MValidQuerySubst.mono hc hsig henv.symm hq, hD', rfl⟩,
+    ⟨σ, MValidQuerySubst.mono hc hsig henv.symm hq,
+      by rw [evalLocalActions, hD', Option.map_some]⟩,
     ⟨hcont.terms, hcont.rows, hcont.eqs⟩⟩
 
 /-- **A round's rule phase is monotone.** Every database one rule contributes at `A` is
@@ -3388,7 +2897,7 @@ theorem RunRules.mono {A C : Database} (hc : A.Contained C) (hsig : A.sig = C.si
       exact (key d hd).eqs hx'
 
 /-- **A command available at `A` is available at any `C` containing it, and its result
-still contains the smaller run's.** The four cases are `Database.ActionStep.mono`,
+still contains the smaller run's.** The four cases are `evalAction_mono`,
 nothing, `RunRules.mono`, and nothing; `MergeClosure.transport` re-bases the merge phase
 in the two that have one. -/
 theorem CmdStep.mono {A C B : Database} (hc : A.Contained C) (hsig : A.sig = C.sig)
@@ -3397,12 +2906,12 @@ theorem CmdStep.mono {A C B : Database} (hc : A.Contained C) (hsig : A.sig = C.s
       B.rules = D.rules := by
   cases h with
   | action ha hm =>
-    obtain ⟨D₀, hD₀, hcont₀, hsig₀, henv₀⟩ := ha.mono hc hsig henv
+    obtain ⟨D₀, hD₀, hcont₀, hsig₀, henv₀⟩ := evalAction_mono hc hsig henv ha
     obtain ⟨D, hclD, hcontD, hsigD⟩ := MergeClosure.transport hcont₀ hsig₀ hm
     refine ⟨D, .action hD₀ hclD, hcontD, hsigD, ?_, ?_⟩
     · rw [(MergeClosure.envRules hm).1, (MergeClosure.envRules hclD).1, henv₀]
-    · rw [(MergeClosure.envRules hm).2, (MergeClosure.envRules hclD).2, ha.rules,
-        hD₀.rules, hrules]
+    · rw [(MergeClosure.envRules hm).2, (MergeClosure.envRules hclD).2,
+        evalAction_rules ha, evalAction_rules hD₀, hrules]
   | rule =>
     refine ⟨_, .rule, ⟨hc.terms, hc.rows, hc.eqs⟩, hsig, henv, ?_⟩
     show insert _ A.rules = insert _ C.rules
@@ -3483,7 +2992,7 @@ namespace FDatabase
 
 `mergeRound_confined` records what a merge pass does to `terms`, `rows`, `eqs` and `sig`.
 The transport lemmas above additionally read `env` and `rules`, and the same is needed of
-`execRunRulesM`, so both folds are factored into an induction principle and instantiated
+`execRunRules`, so both folds are factored into an induction principle and instantiated
 twice — once for the fields, once for `Inv`. -/
 
 /-- Anything true of `d` and preserved by one `mergeOneWith` firing is true after a whole
@@ -3545,7 +3054,7 @@ theorem mergeOneOriented_envRules {cl : Finset (Term × Term)} {d e : FDatabase}
     split at h
     case isFalse => simp at h
     case isTrue =>
-      cases hb : FDatabase.execActions { d with env := mergeEnv r₂.out r₁.out } body with
+      cases hb : execActions { d with env := mergeEnv r₂.out r₁.out } body with
       | none => rw [hb] at h; simp at h
       | some eb =>
         rw [hb, Option.bind_some, Option.map_eq_some_iff] at h
@@ -3650,23 +3159,23 @@ theorem Inv.union {d e : FDatabase} (hd : d.Inv) (he : e.Inv) (hsig : e.sig = d.
         mem_terms_union.mpr (Or.inr (he.ctorRows r hr' hu').2)⟩
 
 /-- Anything true of `d` and preserved by one rule firing is true of a whole round's rule
-phase. The three folds of `execRunRulesM`, factored out. -/
-theorem execRunRulesM_induction {d : FDatabase} {P : FDatabase → Prop} (hinit : P d)
+phase. The three folds of `execRunRules`, factored out. -/
+theorem execRunRules_induction {d : FDatabase} {P : FDatabase → Prop} (hinit : P d)
     (hstep : ∀ (acc e : FDatabase) (r : Rule) (σ : Env), P acc → r ∈ d.rules →
-      σ ∈ d.matchQueryM r.query →
-      FDatabase.execActions { d with env := d.env ++ σ } r.actions = some e →
+      σ ∈ matchQuery d r.query →
+      execActions { d with env := d.env ++ σ } r.actions = some e →
       P (acc.union { e with env := d.env, rules := d.rules })) :
-    P d.execRunRulesM := by
-  have hone : ∀ (r : Rule), r ∈ d.rules → ∀ (σ : Env), σ ∈ d.matchQueryM r.query →
-      ∀ acc : FDatabase, P acc → P (d.fireIntoM r acc σ) := by
+    P (execRunRules d) := by
+  have hone : ∀ (r : Rule), r ∈ d.rules → ∀ (σ : Env), σ ∈ matchQuery d r.query →
+      ∀ acc : FDatabase, P acc → P (fireInto d r acc σ) := by
     intro r hr σ hσ acc hacc
-    rw [FDatabase.fireIntoM]
-    cases hv : FDatabase.execActions { d with env := d.env ++ σ } r.actions with
+    rw [fireInto, execLocalActions]
+    cases hv : execActions { d with env := d.env ++ σ } r.actions with
     | none => simpa using hacc
     | some e => simpa using hstep acc e r σ hacc hr hσ hv
   have hinner : ∀ (r : Rule), r ∈ d.rules → ∀ (σs : List Env),
-      (∀ σ ∈ σs, σ ∈ d.matchQueryM r.query) → ∀ acc : FDatabase, P acc →
-      P (σs.foldl (d.fireIntoM r) acc) := by
+      (∀ σ ∈ σs, σ ∈ matchQuery d r.query) → ∀ acc : FDatabase, P acc →
+      P (σs.foldl (fireInto d r) acc) := by
     intro r hr σs
     induction σs with
     | nil => intro _ acc hacc; exact hacc
@@ -3676,7 +3185,7 @@ theorem execRunRulesM_induction {d : FDatabase} {P : FDatabase → Prop} (hinit 
       exact ih (fun τ hτ => hall τ (List.mem_cons_of_mem _ hτ)) _
         (hone r hr σ (hall σ List.mem_cons_self) acc hacc)
   have houter : ∀ (l : List Rule), (∀ r ∈ l, r ∈ d.rules) → ∀ acc : FDatabase, P acc →
-      P (l.foldl d.fireRuleM acc) := by
+      P (l.foldl (fireRule d) acc) := by
     intro l
     induction l with
     | nil => intro _ acc hacc; exact hacc
@@ -3684,37 +3193,37 @@ theorem execRunRulesM_induction {d : FDatabase} {P : FDatabase → Prop} (hinit 
       intro hall acc hacc
       rw [List.foldl_cons]
       refine ih (fun r' hr' => hall r' (List.mem_cons_of_mem _ hr')) _ ?_
-      rw [FDatabase.fireRuleM]
+      rw [fireRule]
       exact hinner r (hall r List.mem_cons_self) _ (fun _ hσ => hσ) acc hacc
-  rw [FDatabase.execRunRulesM]
+  rw [execRunRules]
   exact houter d.rules (fun _ hr => hr) d hinit
 
 /-- A round's rule phase leaves `sig`, `env` and `rules` alone: every firing is unioned
 into the accumulator, and a union takes those three fields from the left. -/
-theorem execRunRulesM_fields {d : FDatabase} :
-    d.execRunRulesM.sig = d.sig ∧ d.execRunRulesM.env = d.env ∧
-      d.execRunRulesM.rules = d.rules :=
-  execRunRulesM_induction (P := fun x => x.sig = d.sig ∧ x.env = d.env ∧ x.rules = d.rules)
+theorem execRunRules_fields {d : FDatabase} :
+    (execRunRules d).sig = d.sig ∧ (execRunRules d).env = d.env ∧
+      (execRunRules d).rules = d.rules :=
+  execRunRules_induction (P := fun x => x.sig = d.sig ∧ x.env = d.env ∧ x.rules = d.rules)
     ⟨rfl, rfl, rfl⟩ fun _ _ _ _ hacc _ _ _ => hacc
 
 /-- Every value a match assigns is a term the database already holds, so extending `d.env`
 by one keeps `Inv`. -/
 theorem Inv.setEnvMatch {d : FDatabase} (h : d.Inv) {q : Query} {σ : Env}
-    (hσ : σ ∈ d.matchQueryM q) : ({ d with env := d.env ++ σ } : FDatabase).Inv := by
+    (hσ : σ ∈ matchQuery d q) : ({ d with env := d.env ++ σ } : FDatabase).Inv := by
   refine h.setEnv ?_
   intro b hb
   rcases List.mem_append.mp hb with hb' | hb'
   · exact h.wf.envInTerms b hb'
   · have : σ ∈ assignments d.terms (Query.freeVars q d.env) :=
-      (List.mem_filter.mp (by rwa [FDatabase.matchQueryM] at hσ)).1
+      (List.mem_filter.mp (by rwa [matchQuery] at hσ)).1
     exact (mem_assignments.mp this).2 b hb'
 
 /-- **A round's rule phase preserves `Inv`.** Each firing runs a rule head, which is an
 action block like any other, so `hrules` is `Inv.execActions`'s premise per rule; the
 result is unioned in, which `Inv.union` covers. -/
-theorem Inv.execRunRulesM {d : FDatabase} (h : d.Inv)
-    (hrules : ∀ r ∈ d.rules, Actions.SetLegal r.actions d.sig) : d.execRunRulesM.Inv := by
-  have := execRunRulesM_induction (d := d) (P := fun x => x.Inv ∧ x.sig = d.sig) ⟨h, rfl⟩
+theorem Inv.execRunRules {d : FDatabase} (h : d.Inv)
+    (hrules : ∀ r ∈ d.rules, Actions.SetLegal r.actions d.sig) : (execRunRules d).Inv := by
+  have := execRunRules_induction (d := d) (P := fun x => x.Inv ∧ x.sig = d.sig) ⟨h, rfl⟩
     (fun acc e r σ hacc hr hσ hv => ?_)
   · exact this.1
   refine ⟨hacc.1.union ?_ ?_, hacc.2⟩
@@ -3735,37 +3244,37 @@ theorem Inv.execRunRulesM {d : FDatabase} (h : d.Inv)
   rw [addTerms_rules, addTerms_rules]
 
 /-- No action touches the rule list; only `Cmd.rule` does. -/
-theorem execAction_rules {d e : FDatabase} {a : Action} (h : d.execAction a = some e) :
+theorem execAction_rules {d e : FDatabase} {a : Action} (h : execAction d a = some e) :
     e.rules = d.rules := by
   cases a with
   | expr e₀ =>
-    rw [FDatabase.execAction] at h
+    rw [execAction] at h
     obtain ⟨t, -, rfl⟩ := Option.map_eq_some_iff.mp h
     rfl
   | letBind v e₀ =>
-    rw [FDatabase.execAction] at h
+    rw [execAction] at h
     obtain ⟨t, -, rfl⟩ := Option.map_eq_some_iff.mp h
     rfl
   | union e₁ e₂ =>
-    rw [FDatabase.execAction] at h
+    rw [execAction] at h
     obtain ⟨t₁, -, h'⟩ := Option.bind_eq_some_iff.mp h
     obtain ⟨t₂, -, rfl⟩ := Option.map_eq_some_iff.mp h'
     rfl
   | set f args out =>
-    rw [FDatabase.execAction] at h
+    rw [execAction] at h
     obtain ⟨ts, -, h'⟩ := Option.bind_eq_some_iff.mp h
     obtain ⟨vs, -, rfl⟩ := Option.map_eq_some_iff.mp h'
     exact addRow_rules
 
 theorem execActions_rules {d e : FDatabase} {as : List Action}
-    (h : d.execActions as = some e) : e.rules = d.rules := by
+    (h : execActions d as = some e) : e.rules = d.rules := by
   induction as generalizing d with
-  | nil => rw [FDatabase.execActions, Option.some.injEq] at h; exact h ▸ rfl
+  | nil => rw [execActions, Option.some.injEq] at h; exact h ▸ rfl
   | cons a as ih =>
-    cases hv : d.execAction a with
-    | none => rw [FDatabase.execActions, hv] at h; simp at h
+    cases hv : execAction d a with
+    | none => rw [execActions, hv] at h; simp at h
     | some d' =>
-      rw [FDatabase.execActions, hv, Option.bind_some] at h
+      rw [execActions, hv, Option.bind_some] at h
       exact (ih h).trans (execAction_rules hv)
 
 /-- **`Inv` survives a declaration of a name the state does not yet mention.**
@@ -3848,7 +3357,7 @@ theorem execCmdM_sig {d d' : FDatabase} {c : Cmd} (hs : d.execCmdM c = some d') 
   | rule r => rw [FDatabase.execCmdM, Option.some.injEq] at hs; exact hs ▸ rfl
   | run =>
     rw [FDatabase.execCmdM] at hs
-    rw [(mergeSaturateF_fields hs).1, execRunRulesM_fields.1]
+    rw [(mergeSaturateF_fields hs).1, execRunRules_fields.1]
     rfl
   | decl f dc => rw [FDatabase.execCmdM, Option.some.injEq] at hs; exact hs ▸ rfl
 
@@ -3872,8 +3381,8 @@ theorem Inv.execCmdM {d d' : FDatabase} (h : d.Inv) {c : Cmd}
       h.rowsComplete, h.rowsWF, h.ctorRows⟩
   | run =>
     rw [FDatabase.execCmdM] at hs
-    refine Inv.mergeSaturateF (h.execRunRulesM hrules) ?_ hs
-    rw [execRunRulesM_fields.1]; exact hmerges
+    refine Inv.mergeSaturateF (h.execRunRules hrules) ?_ hs
+    rw [execRunRules_fields.1]; exact hmerges
   | decl f dc =>
     rw [FDatabase.execCmdM, Option.some.injEq] at hs
     exact hs ▸ h.decl hunused.1 hunused.2
@@ -3903,7 +3412,7 @@ theorem execCmdM_rulesLegal {d d' : FDatabase} {c : Cmd}
   | run =>
     rw [FDatabase.execCmdM] at hs
     rw [(mergeSaturateF_fields hs).1, (mergeSaturateF_fields hs).2.2,
-      execRunRulesM_fields.1, execRunRulesM_fields.2.2]
+      execRunRules_fields.1, execRunRules_fields.2.2]
     exact hrules
   | decl f dc =>
     rw [FDatabase.execCmdM, Option.some.injEq] at hs
@@ -3930,7 +3439,7 @@ theorem execCmdM_contained' {d d' : FDatabase} (h : d.Inv) {c : Cmd}
       rw [execAction_sig hd₁]; exact hmerges
     obtain ⟨db, hcl, hcont⟩ :=
       mergeSaturateF_contained (h.execAction hlegal hd₁) hmerges₁ hsat
-    refine ⟨db, .action (execAction_ActionStep h hd₁) hcl, hcont, ?_, ?_, ?_⟩
+    refine ⟨db, .action (FDatabase.execAction_evalAction hd₁) hcl, hcont, ?_, ?_, ?_⟩
     · show d'.sig = db.sig
       rw [MergeClosure.sig hcl]; exact (mergeSaturateF_fields hsat).1
     · show d'.env = db.env
@@ -3948,26 +3457,26 @@ theorem execCmdM_contained' {d d' : FDatabase} (h : d.Inv) {c : Cmd}
     simp
   | run =>
     rw [FDatabase.execCmdM] at hs
-    obtain ⟨R, hRstep, hRcont⟩ := execRunRulesM_contained h hrules
+    obtain ⟨R, hRstep, hRcont⟩ := execRunRules_contained h hrules
     have hRsig : R.sig = d.sig := MergeClosure.sig hRstep
     have hRenv : R.env = d.env := (MergeClosure.envRules hRstep).1
     have hRrules : R.rules = d.toDatabase.rules := (MergeClosure.envRules hRstep).2
-    have hmerges₁ : Signature.MergesLegal d.execRunRulesM.sig := by
-      rw [execRunRulesM_fields.1]; exact hmerges
+    have hmerges₁ : Signature.MergesLegal (execRunRules d).sig := by
+      rw [execRunRules_fields.1]; exact hmerges
     obtain ⟨db₂, hcl₂, hcont₂⟩ :=
-      mergeSaturateF_contained (h.execRunRulesM hrules) hmerges₁ hs
+      mergeSaturateF_contained (h.execRunRules hrules) hmerges₁ hs
     obtain ⟨db₃, hcl₃, hcont₃, hsig₃⟩ :=
-      MergeClosure.transport hRcont (by rw [hRsig]; exact execRunRulesM_fields.1) hcl₂
+      MergeClosure.transport hRcont (by rw [hRsig]; exact execRunRules_fields.1) hcl₂
     refine ⟨db₃, .run (hRstep.trans hcl₃), hcont₂.trans hcont₃, ?_, ?_, ?_⟩
     · show d'.sig = db₃.sig
       rw [MergeClosure.sig hcl₃, hRsig, (mergeSaturateF_fields hs).1,
-        execRunRulesM_fields.1]
+        execRunRules_fields.1]
     · show d'.env = db₃.env
       rw [(MergeClosure.envRules hcl₃).1, hRenv, (mergeSaturateF_fields hs).2.1,
-        execRunRulesM_fields.2.1]
+        execRunRules_fields.2.1]
     · show ({r | r ∈ d'.rules} : Set Rule) = db₃.rules
       rw [(MergeClosure.envRules hcl₃).2, hRrules, (mergeSaturateF_fields hs).2.2,
-        execRunRulesM_fields.2.2]
+        execRunRules_fields.2.2]
       rfl
   | decl f dc =>
     rw [FDatabase.execCmdM, Option.some.injEq] at hs
@@ -3978,10 +3487,10 @@ theorem execCmdM_contained' {d d' : FDatabase} (h : d.Inv) {c : Cmd}
 /-- **The interpreter's answer to one command is contained in one the specification
 reaches.**
 
-`.action` is `execAction_ActionStep` followed by `mergeSaturateF_contained`, which is
+`.action` is `execAction_evalAction` followed by `mergeSaturateF_contained`, which is
 `CmdStep.action`'s two premises exactly — the specification's merge phase is what pays
 for the interpreter's, and before `CmdStep.action` had one this theorem was **false**
-(the deleted `Falsity.claim2`). `.run` is `execRunRulesM_contained` re-based by
+(the deleted `Falsity.claim2`). `.run` is `execRunRules_contained` re-based by
 `MergeClosure.transport`. `.rule` and `.decl` land on the specification's state on the
 nose.
 

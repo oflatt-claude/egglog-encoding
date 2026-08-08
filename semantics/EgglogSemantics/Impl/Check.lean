@@ -122,7 +122,7 @@ A lookup is `sig.mergeOf f ≠ .union`. `Signature.mergeOf` sends an undeclared 
 `.union`, so a constructor and a primitive both pass without a case of their own.
 
 What it buys is the thing the whole relational layer was paying for: with nothing able to
-read but a query atom, `Expr.MEval` needs no `lookup` constructor, is deterministic, and
+read but a query atom, `Expr.eval` needs no `lookup` constructor, is deterministic, and
 consults the database only for its signature.
 
 `Rule.noLookup`'s action half is egglog's own `check_no_function_lookups_in_actions` and

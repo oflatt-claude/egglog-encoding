@@ -21,35 +21,58 @@ rearrangement of its existing hypotheses rescues it: `hanti` and `hjoin` do not 
 namespace Egglog
 namespace Lattice
 
-/-! ## Inversion helpers for `Expr.MEval`
+/-! ## Inversion helpers for `Expr.eval`
 
-`Expr.MEval`/`Expr.MEvalList` are mutually inductive, so `induction` refuses them;
-everything below is `cases`, which is all the inversions need. -/
+Reading an evaluation backwards, one syntactic form at a time. A nullary application is
+the interesting one: `Expr.eval` builds it only at a constructor, so the other two merge
+kinds are ruled out by the evaluation succeeding at all. -/
 
-theorem mevalList_nil {db : Database} {σ : Env} {ts : List Term}
-    (h : Expr.MEvalList db σ [] ts) : ts = [] := by
-  cases h; rfl
+theorem mevalList_nil {sig : Signature} {σ : Env} {ts : List Term}
+    (h : Expr.evalList sig [] σ = some ts) : ts = [] :=
+  (Option.some.inj h).symm
 
-theorem meval_lit {db : Database} {σ : Env} {l : Lit} {t : Term}
-    (h : Expr.MEval db σ (.lit l) t) : t = .lit l := by
-  cases h; rfl
+theorem meval_lit {sig : Signature} {σ : Env} {l : Lit} {t : Term}
+    (h : Expr.eval sig (.lit l) σ = some t) : t = .lit l :=
+  (Option.some.inj h).symm
 
-theorem meval_var {db : Database} {σ : Env} {v : Var} {t : Term}
-    (h : Expr.MEval db σ (.var v) t) : Env.lookup v σ = some t := by
-  cases h with | var hl => exact hl
+theorem meval_var {sig : Signature} {σ : Env} {v : Var} {t : Term}
+    (h : Expr.eval sig (.var v) σ = some t) : Env.lookup v σ = some t := h
 
-theorem meval_nullary {db : Database} {σ : Env} {f : FnName} {t : Term}
-    (hp : Prim.ofName f = none) (h : Expr.MEval db σ (.app f []) t) :
+theorem meval_nullary {sig : Signature} {σ : Env} {f : FnName} {t : Term}
+    (hp : Prim.ofName f = none) (h : Expr.eval sig (.app f []) σ = some t) :
     t = .app f [] := by
-  cases h with
-  | ctor _ _ hl => rw [mevalList_nil hl]
-  | prim hq _ _ => rw [hp] at hq; simp at hq
+  cases hu : sig.mergeOf f with
+  | union =>
+    rw [Expr.eval_app_ctor hp hu, Expr.evalList_nil, Option.map_some,
+      Option.some.injEq] at h
+    exact h.symm
+  | merge b r => rw [Expr.eval_app_merge hp hu] at h; simp at h
+  | noMerge => rw [Expr.eval_app_noMerge hp hu] at h; simp at h
 
-theorem mevalList_single_nullary {db : Database} {σ : Env} {f : FnName} {vs : List Term}
-    (hp : Prim.ofName f = none) (h : Expr.MEvalList db σ [.app f []] vs) :
+theorem mevalList_one {sig : Signature} {σ : Env} {e : Expr} {ts : List Term}
+    (h : Expr.evalList sig [e] σ = some ts) :
+    ∃ t, ts = [t] ∧ Expr.eval sig e σ = some t := by
+  rw [Expr.evalList_cons, Option.bind_eq_some_iff] at h
+  obtain ⟨t, ht, hrest⟩ := h
+  obtain ⟨us, hus, heq⟩ := Option.map_eq_some_iff.mp hrest
+  exact ⟨t, by rw [← heq, mevalList_nil hus], ht⟩
+
+theorem mevalList_two {sig : Signature} {σ : Env} {e₁ e₂ : Expr} {ts : List Term}
+    (h : Expr.evalList sig [e₁, e₂] σ = some ts) :
+    ∃ u v, ts = [u, v] ∧ Expr.eval sig e₁ σ = some u ∧ Expr.eval sig e₂ σ = some v := by
+  rw [Expr.evalList_cons, Option.bind_eq_some_iff] at h
+  obtain ⟨u, hu, hrest⟩ := h
+  obtain ⟨vs, hvs, heq⟩ := Option.map_eq_some_iff.mp hrest
+  obtain ⟨v, rfl, hv⟩ := mevalList_one hvs
+  exact ⟨u, v, heq.symm, hu, hv⟩
+
+theorem mevalList_single_nullary {sig : Signature} {σ : Env} {f : FnName} {vs : List Term}
+    (hp : Prim.ofName f = none) (h : Expr.evalList sig [.app f []] σ = some vs) :
     vs = [.app f []] := by
-  cases h with
-  | cons hv hrest => rw [mevalList_nil hrest, meval_nullary hp hv]
+  rw [Expr.evalList_cons, Option.bind_eq_some_iff] at h
+  obtain ⟨t, ht, hrest⟩ := h
+  obtain ⟨us, hus, heq⟩ := Option.map_eq_some_iff.mp hrest
+  rw [← heq, mevalList_nil hus, meval_nullary hp ht]
 
 /-! ## Only the declared name has a `:merge` body -/
 
@@ -77,8 +100,8 @@ def CurrentOfLattice : Prop :=
     (∀ x y, le x y → le y x → x = y) →
     (∀ (f : FnName) (body : List Action) (res : List Expr) (a b vs : List Term),
       d.sig.mergeOf f = MergeSpec.merge body res →
-      (∃ e, Database.ActionsStep { d.toDatabase with env := mergeEnv a b } body e ∧
-        Expr.MEvalList e e.env res vs) → le a vs ∧ le b vs) →
+      (∃ e, evalActions { d.toDatabase with env := mergeEnv a b } body = some e ∧
+        Expr.evalList e.sig res e.env = some vs) → le a vs ∧ le b vs) →
     ∀ (f : FnName) (as vs : List Term) (body : List Action) (res : List Expr),
       d.sig.mergeOf f = MergeSpec.merge body res →
       Row.mk f as vs ∈ d.rows →
@@ -126,28 +149,17 @@ theorem dA_mergeOf {g : FnName} {body : List Action} {res : List Expr}
 /-- The stuck merge, machine-checked: no `a`, `b`, `vs` satisfy `hjoin`'s premise. -/
 theorem dA_no_merge_value {a b vs : List Term} {body : List Action} {res : List Expr}
     (hres : res = [.app "min" [.lit (.int 1), eA]])
-    (he : ∃ e, Database.ActionsStep { dA.toDatabase with env := mergeEnv a b } body e ∧
-      Expr.MEvalList e e.env res vs) : False := by
+    (he : ∃ e, evalActions { dA.toDatabase with env := mergeEnv a b } body = some e ∧
+      Expr.evalList e.sig res e.env = some vs) : False := by
   obtain ⟨e, -, hev⟩ := he
   subst hres
-  cases hev with
-  | cons hv _ =>
-    cases hv with
-    | ctor hp _ _ =>
-      rw [show Prim.ofName "min" = some Prim.intMin from rfl] at hp
-      simp at hp
-    | prim hp hargs happ =>
-      rw [show Prim.ofName "min" = some Prim.intMin from rfl] at hp
-      cases Option.some.inj hp
-      cases hargs with
-      | cons h1 hrest =>
-        cases hrest with
-        | cons h2 hnil =>
-          rw [mevalList_nil hnil, meval_lit h1,
-            meval_nullary (show Prim.ofName "a" = none from rfl) h2,
-            show Prim.intMin.apply [Term.lit (Lit.int 1), Term.app "a" []] = none from rfl]
-            at happ
-          simp at happ
+  obtain ⟨t, rfl, hv⟩ := mevalList_one hev
+  rw [Expr.eval_app_prim (p := Prim.intMin) rfl, Option.bind_eq_some_iff] at hv
+  obtain ⟨ts, hts, happ⟩ := hv
+  obtain ⟨u, v, rfl, h1, h2⟩ := mevalList_two hts
+  rw [meval_lit h1, meval_nullary (show Prim.ofName "a" = none from rfl) h2,
+    show Prim.intMin.apply [Term.lit (Lit.int 1), Term.app "a" []] = none from rfl] at happ
+  simp at happ
 
 /-- **Refutation A.** -/
 theorem currentOfLattice_false : ¬ CurrentOfLattice := by
@@ -261,50 +273,42 @@ theorem dB_mergeOf : dB.sig.mergeOf "f" =
 /-- **`hjoin` holds**, and not vacuously: `min` is a join for `leB`. -/
 theorem dB_join (g : FnName) (body : List Action) (res : List Expr) (a b vs : List Term)
     (hg : dB.sig.mergeOf g = MergeSpec.merge body res)
-    (he : ∃ e, Database.ActionsStep { dB.toDatabase with env := mergeEnv a b } body e ∧
-      Expr.MEvalList e e.env res vs) : leB a vs ∧ leB b vs := by
+    (he : ∃ e, evalActions { dB.toDatabase with env := mergeEnv a b } body = some e ∧
+      Expr.evalList e.sig res e.env = some vs) : leB a vs ∧ leB b vs := by
   obtain ⟨hbody, hres⟩ := mergeOf_update_inv (f := "f") rfl (dB_sig ▸ hg)
   subst hbody; subst hres
   obtain ⟨e, hstep, hev⟩ := he
-  cases hstep
-  cases hev with
-  | cons hv hrest =>
-    rw [mevalList_nil hrest]
-    cases hv with
-    | ctor hp _ _ =>
-      rw [show Prim.ofName "min" = some Prim.intMin from rfl] at hp; simp at hp
-    | prim hp hargs happ =>
-      rw [show Prim.ofName "min" = some Prim.intMin from rfl] at hp
-      cases Option.some.inj hp
-      cases hargs with
-      | cons hva hrest2 =>
-        cases hrest2 with
-        | cons hvb hnil =>
-          rw [mevalList_nil hnil] at happ
-          have h1 : Env.lookup "old" (mergeEnv a b) = some _ := meval_var hva
-          have h2 : Env.lookup "new" (mergeEnv a b) = some _ := meval_var hvb
-          obtain ⟨m, n, ht1, ht2, rfl⟩ := prim_intMin_inv happ
-          rcases mergeEnv_cases a b with ⟨x, y, rfl, rfl⟩ | hnone | ⟨ha2, hb2⟩
-          · rw [show mergeEnv [x] [y] = [("old", x), ("new", y)] from rfl] at h1 h2
-            rw [show Env.lookup "old" [("old", x), ("new", y)] = some x from rfl] at h1
-            rw [show Env.lookup "new" [("old", x), ("new", y)] = some y from rfl] at h2
-            obtain rfl : x = _ := Option.some.inj h1
-            obtain rfl : y = _ := Option.some.inj h2
-            rw [ht1, ht2]
-            exact ⟨Or.inr (Or.inl ⟨m, min m n, rfl, rfl, min_le_left m n⟩),
-              Or.inr (Or.inl ⟨n, min m n, rfl, rfl, min_le_right m n⟩)⟩
-          · rw [hnone] at h1; simp at h1
-          · exact ⟨Or.inr (Or.inr ⟨⟨min m n, rfl⟩, not_intSing_of_two ha2⟩),
-              Or.inr (Or.inr ⟨⟨min m n, rfl⟩, not_intSing_of_two hb2⟩)⟩
+  rw [evalActions_nil, Option.some.injEq] at hstep
+  subst hstep
+  obtain ⟨t, rfl, hv⟩ := mevalList_one hev
+  rw [Expr.eval_app_prim (p := Prim.intMin) rfl, Option.bind_eq_some_iff] at hv
+  obtain ⟨ts, hts, happ⟩ := hv
+  obtain ⟨u, v, rfl, hva, hvb⟩ := mevalList_two hts
+  have h1 : Env.lookup "old" (mergeEnv a b) = some _ := meval_var hva
+  have h2 : Env.lookup "new" (mergeEnv a b) = some _ := meval_var hvb
+  obtain ⟨m, n, ht1, ht2, rfl⟩ := prim_intMin_inv happ
+  rcases mergeEnv_cases a b with ⟨x, y, rfl, rfl⟩ | hnone | ⟨ha2, hb2⟩
+  · rw [show mergeEnv [x] [y] = [("old", x), ("new", y)] from rfl] at h1 h2
+    rw [show Env.lookup "old" [("old", x), ("new", y)] = some x from rfl] at h1
+    rw [show Env.lookup "new" [("old", x), ("new", y)] = some y from rfl] at h2
+    obtain rfl : x = _ := Option.some.inj h1
+    obtain rfl : y = _ := Option.some.inj h2
+    rw [ht1, ht2]
+    exact ⟨Or.inr (Or.inl ⟨m, min m n, rfl, rfl, min_le_left m n⟩),
+      Or.inr (Or.inl ⟨n, min m n, rfl, rfl, min_le_right m n⟩)⟩
+  · rw [hnone] at h1; simp at h1
+  · exact ⟨Or.inr (Or.inr ⟨⟨min m n, rfl⟩, not_intSing_of_two ha2⟩),
+      Or.inr (Or.inr ⟨⟨min m n, rfl⟩, not_intSing_of_two hb2⟩)⟩
 
 
 /-- `hjoin` is **not** vacuous here: `min` really does merge two `i64` columns, and the
 value it produces is above both for `leB`. -/
 theorem dB_join_nonvacuous :
-    ∃ e, Database.ActionsStep
-        { dB.toDatabase with env := mergeEnv [.lit (.int 1)] [.lit (.int 2)] } [] e ∧
-      Expr.MEvalList e e.env [.app "min" [.var "old", .var "new"]] [.lit (.int 1)] :=
-  ⟨_, .nil, .cons (.prim rfl (.cons (.var rfl) (.cons (.var rfl) .nil)) rfl) .nil⟩
+    ∃ e, evalActions
+        { dB.toDatabase with env := mergeEnv [.lit (.int 1)] [.lit (.int 2)] } [] = some e ∧
+      Expr.evalList e.sig [.app "min" [.var "old", .var "new"]] e.env
+        = some [.lit (.int 1)] :=
+  ⟨_, rfl, rfl⟩
 
 /-- **Every state the specification reaches on `pB` records the second value too.**
 The last command's `set` writes it and `MergeClosure` never removes a row. -/
@@ -321,12 +325,12 @@ theorem pB_reaches_rowB {db : Database}
         | nil =>
           cases h3 with
           | action hact hcl =>
-            cases hact with
-            | set hargs hout =>
-              rw [show eB = Expr.app "b" [] from rfl] at hout
-              rw [mevalList_nil hargs,
-                mevalList_single_nullary (show Prim.ofName "b" = none from rfl) hout] at hcl
-              exact (MergeClosure.contained hcl).rows (Set.mem_insert _ _)
+            simp only [evalAction, Option.bind_eq_some_iff, Option.map_eq_some_iff] at hact
+            obtain ⟨as, hargs, vs, hout, rfl⟩ := hact
+            rw [show eB = Expr.app "b" [] from rfl] at hout
+            rw [mevalList_nil hargs,
+              mevalList_single_nullary (show Prim.ofName "b" = none from rfl) hout] at hcl
+            exact (MergeClosure.contained hcl).rows (Set.mem_insert _ _)
 
 /-- **Refutation B.**  `leB` is reflexive, transitive and antisymmetric, `hjoin` holds
 non-vacuously, and the conclusion still fails: the interpreter's surviving row at the
@@ -441,45 +445,41 @@ theorem not_leC_of_okA {vs : List Term} (h : okA vs = true) : ¬ leC [tA] vs := 
 pair of single columns. -/
 theorem dC_join (g : FnName) (body : List Action) (res : List Expr) (a b vs : List Term)
     (hg : dC.sig.mergeOf g = MergeSpec.merge body res)
-    (he : ∃ e, Database.ActionsStep { dC.toDatabase with env := mergeEnv a b } body e ∧
-      Expr.MEvalList e e.env res vs) : leC a vs ∧ leC b vs := by
+    (he : ∃ e, evalActions { dC.toDatabase with env := mergeEnv a b } body = some e ∧
+      Expr.evalList e.sig res e.env = some vs) : leC a vs ∧ leC b vs := by
   obtain ⟨hbody, hres⟩ := mergeOf_update_inv (f := "f") rfl (dC_sig ▸ hg)
   subst hbody; subst hres
   obtain ⟨e, hstep, hev⟩ := he
-  cases hstep
-  cases hev with
-  | cons hv hrest =>
-    rw [mevalList_nil hrest]
-    cases hv with
-    | prim hp _ _ => rw [show Prim.ofName "C" = none from rfl] at hp; simp at hp
-    | ctor _ _ hargs =>
-      cases hargs with
-      | cons hva hrest2 =>
-        cases hrest2 with
-        | cons hvb hnil =>
-          rw [mevalList_nil hnil]
-          have h1 : Env.lookup "old" (mergeEnv a b) = some _ := meval_var hva
-          have h2 : Env.lookup "new" (mergeEnv a b) = some _ := meval_var hvb
-          rcases mergeEnv_cases a b with ⟨x, y, rfl, rfl⟩ | hnone | ⟨ha2, hb2⟩
-          · rw [show mergeEnv [x] [y] = [("old", x), ("new", y)] from rfl] at h1 h2
-            rw [show Env.lookup "old" [("old", x), ("new", y)] = some x from rfl] at h1
-            rw [show Env.lookup "new" [("old", x), ("new", y)] = some y from rfl] at h2
-            obtain rfl : x = _ := Option.some.inj h1
-            obtain rfl : y = _ := Option.some.inj h2
-            exact ⟨Or.inr (Or.inl ⟨_, _, rfl, Or.inl rfl⟩),
-              Or.inr (Or.inl ⟨_, _, rfl, Or.inr rfl⟩)⟩
-          · rw [hnone] at h1; simp at h1
-          · exact ⟨Or.inr (Or.inr ⟨⟨_, _, rfl⟩, by omega⟩),
-              Or.inr (Or.inr ⟨⟨_, _, rfl⟩, by omega⟩)⟩
+  rw [evalActions_nil, Option.some.injEq] at hstep
+  subst hstep
+  obtain ⟨t, rfl, hv⟩ := mevalList_one hev
+  rw [Expr.eval_app_ctor (show Prim.ofName "C" = none from rfl)
+    (show Signature.mergeOf _ "C" = MergeSpec.union from rfl),
+    Option.map_eq_some_iff] at hv
+  obtain ⟨ts, hts, rfl⟩ := hv
+  obtain ⟨u, v, rfl, hva, hvb⟩ := mevalList_two hts
+  have h1 : Env.lookup "old" (mergeEnv a b) = some _ := meval_var hva
+  have h2 : Env.lookup "new" (mergeEnv a b) = some _ := meval_var hvb
+  rcases mergeEnv_cases a b with ⟨x, y, rfl, rfl⟩ | hnone | ⟨ha2, hb2⟩
+  · rw [show mergeEnv [x] [y] = [("old", x), ("new", y)] from rfl] at h1 h2
+    rw [show Env.lookup "old" [("old", x), ("new", y)] = some x from rfl] at h1
+    rw [show Env.lookup "new" [("old", x), ("new", y)] = some y from rfl] at h2
+    obtain rfl : x = _ := Option.some.inj h1
+    obtain rfl : y = _ := Option.some.inj h2
+    exact ⟨Or.inr (Or.inl ⟨_, _, rfl, Or.inl rfl⟩),
+      Or.inr (Or.inl ⟨_, _, rfl, Or.inr rfl⟩)⟩
+  · rw [hnone] at h1; simp at h1
+  · exact ⟨Or.inr (Or.inr ⟨⟨_, _, rfl⟩, by omega⟩),
+      Or.inr (Or.inr ⟨⟨_, _, rfl⟩, by omega⟩)⟩
 
 
 /-- `hjoin` is not vacuous here either, and the merge is **total**: `(C old new)`
 computes a value at every pair of single columns. -/
 theorem dC_join_nonvacuous (x y : Term) :
-    ∃ e, Database.ActionsStep { dC.toDatabase with env := mergeEnv [x] [y] } [] e ∧
-      Expr.MEvalList e e.env [.app "C" [.var "old", .var "new"]]
-        [.app "C" [x, y]] :=
-  ⟨_, .nil, .cons (.ctor rfl rfl (.cons (.var rfl) (.cons (.var rfl) .nil))) .nil⟩
+    ∃ e, evalActions { dC.toDatabase with env := mergeEnv [x] [y] } [] = some e ∧
+      Expr.evalList e.sig [.app "C" [.var "old", .var "new"]] e.env
+        = some [.app "C" [x, y]] :=
+  ⟨_, rfl, rfl⟩
 
 /-- Every state the specification reaches on `pC` still records the first value. -/
 theorem pC_reaches_rowA {db : Database}
@@ -491,13 +491,13 @@ theorem pC_reaches_rowA {db : Database}
     | cons h2 r2 =>
       cases h2 with
       | action hact hcl =>
-        cases hact with
-        | set hargs hout =>
-          rw [show eA = Expr.app "a" [] from rfl] at hout
-          rw [mevalList_nil hargs,
-            mevalList_single_nullary (show Prim.ofName "a" = none from rfl) hout] at hcl
-          exact (ProgramStep.contained r2).rows
-            ((MergeClosure.contained hcl).rows (Set.mem_insert _ _))
+        simp only [evalAction, Option.bind_eq_some_iff, Option.map_eq_some_iff] at hact
+        obtain ⟨as, hargs, vs, hout, rfl⟩ := hact
+        rw [show eA = Expr.app "a" [] from rfl] at hout
+        rw [mevalList_nil hargs,
+          mevalList_single_nullary (show Prim.ofName "a" = none from rfl) hout] at hcl
+        exact (ProgramStep.contained r2).rows
+          ((MergeClosure.contained hcl).rows (Set.mem_insert _ _))
 
 /-- **Refutation C.**  `leC` is reflexive and antisymmetric, the merge is total and
 `hjoin` holds, and the conclusion still fails: the survivor of the two-collision chain is
@@ -596,7 +596,7 @@ Three hypotheses are missing, and each counterexample above isolates one.
    already breaks.
 
 3. **The merge must actually resolve every collision the interpreter can reach.**
-   `hjoin` is an implication and says nothing when `execActions`/`execExprList` return
+   `hjoin` is an implication and says nothing when `execActions`/`Expr.evalList` return
    `none`.  When they do, `mergeOneWith` returns `none`, `settled` is reached with two
    rows at one key class, and `Current` is unsatisfiable at either of them however good
    `le` is.  Counterexample B, where `le` is a full partial order.  The trigger is
@@ -615,7 +615,7 @@ specification state holds every superseded output, and `MValidSubst.values` lets
 records whatever those extra matches wrote — rows the interpreter, which overwrites the
 superseded row, never had, and which need not be below its survivor.  That would refute
 the corrected statement too, for programs with rules.  It cannot be machine-checked the
-way the three above are: `FDatabase.patternHoldsM` computes `closureF` at every pattern
+way the three above are: `patternHolds` computes `closureF` at every pattern
 whose tuples are non-empty, and `closureF`'s well-founded recursion does not reduce in the
 kernel, so no program with a rule has an `execM` that evaluates by `rfl`. -/
 

@@ -128,4 +128,76 @@ def ctorRowList (t : Term) : List Row :=
     | .lit _ => none
 
 end Term
+/-! ### The term order
+
+One definition with two jobs. `ordering-min`/`ordering-max` are part of the *program*
+the encoding writes — the union-find's merge body is literally
+`(set (@UF_<S> (ordering-max old new)) (values (ordering-min old new) ()))` — and they
+are also what makes an interpreter's choice of which collision to fire deterministic.
+
+`Term.blt` is a *structural* order where egglog's is an allocation order, so the two pick
+different class representatives. That is an accepted deviation and a hypothesis of any
+future simulation theorem; `MERGE.md`, "The representative deviation", has the argument
+and two repros against the binary. -/
+mutual
+
+/-- A total order on terms: literals below applications, then by argument count, then
+by name, then lexicographically. Written by hand and mutually, for the same reason
+`Term.decEq` is. -/
+def Term.blt : Term → Term → Bool
+  | .lit (.int m), .lit (.int n) => decide (m < n)
+  | .lit _, .app _ _ => true
+  | .app _ _, .lit _ => false
+  | .app f as, .app g bs =>
+      if as.length ≠ bs.length then decide (as.length < bs.length)
+      else if f ≠ g then decide (f < g)
+      else Term.bltList as bs
+
+/-- `Term.blt` lexicographically over argument lists. -/
+def Term.bltList : List Term → List Term → Bool
+  | [], _ => false
+  | _ :: _, [] => false
+  | a :: as, b :: bs => if a = b then Term.bltList as bs else Term.blt a b
+
+end
+
+/-- egglog's `ordering-min`. -/
+def Term.orderingMin (s t : Term) : Term := if Term.blt s t then s else t
+
+/-- egglog's `ordering-max`. -/
+def Term.orderingMax (s t : Term) : Term := if Term.blt s t then t else s
+
+/-! ### Primitives -/
+/-- The primitives this fragment has. egglog resolves a primitive by name out of a
+table that shares a namespace with user functions, which is why these are `Expr.app`
+of a reserved name rather than a new `Expr` constructor — see `MERGE.md`, "Primitives
+without churning `Expr`". -/
+inductive Prim where
+  | orderingMin
+  | orderingMax
+  /-- egglog's `i64` `min`. -/
+  | intMin
+  /-- egglog's `i64` `max`. -/
+  | intMax
+  deriving DecidableEq, Repr
+
+/-- The reserved names. A user function of the same name is shadowed, as in egglog. See
+`MERGE.md`, "Primitives without churning `Expr`", for why `min`/`max` are among them. -/
+def Prim.ofName : FnName → Option Prim
+  | "ordering-min" => some .orderingMin
+  | "ordering-max" => some .orderingMax
+  | "min" => some .intMin
+  | "max" => some .intMax
+  | _ => none
+
+/-- A primitive's meaning. `none` for the wrong arity, and for `min`/`max` also for a
+non-literal operand — they are `i64` primitives, and this model has no sort discipline to
+reject the application statically. -/
+def Prim.apply : Prim → List Term → Option Term
+  | .orderingMin, [s, t] => some (Term.orderingMin s t)
+  | .orderingMax, [s, t] => some (Term.orderingMax s t)
+  | .intMin, [.lit (.int m), .lit (.int n)] => some (.lit (.int (min m n)))
+  | .intMax, [.lit (.int m), .lit (.int n)] => some (.lit (.int (max m n)))
+  | _, _ => none
+
 end Egglog

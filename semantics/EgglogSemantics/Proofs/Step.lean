@@ -245,26 +245,6 @@ theorem Database.CtorState.empty : Database.empty.CtorState where
   rules := by simp [Database.empty]
   rows := Database.CtorRows.empty
 
-/-- `Database.CtorState` with the primitive-free condition on the rules the database
-carries.
-
-A fourth field rather than a fourth conjunct of `CtorState`, because it answers a
-different question: `CtorState` is what keeps the *rows* constructor rows, this is what
-makes a stored rule's two readings agree. `Proofs/Merge.lean`'s `runRules_eq` needs it —
-a round fires every rule in `db.rules`, and a rule naming a primitive fires differently
-under `Expr.eval` and `Expr.MEval`.
-
-It moves exactly as `CtorState.rules` does: only `Cmd.rule` writes `db.rules`, and it
-writes a rule the program supplies. Unlike `SetLegal` it does not depend on the
-signature, so a `decl` cannot invalidate it. -/
-structure Database.CtorPrimState (db : Database) : Prop where
-  ctor : db.CtorState
-  rules : ∀ r ∈ db.rules, Rule.NoPrim r
-
-theorem Database.CtorPrimState.empty : Database.empty.CtorPrimState where
-  ctor := Database.CtorState.empty
-  rules := by simp [Database.empty]
-
 /-! #### The functional semantics -/
 theorem evalAction_ctorRows {db db' : Database} (hsig : db.sig.AllConstructors)
     {a : Action} (hlegal : a.SetLegal db.sig) (hrows : db.CtorRows)
@@ -344,23 +324,6 @@ theorem stepCmd_ctorState {db db' : Database} (h : db.CtorState) {c : Cmd}
     exact ⟨h.sig.sigBind hdecl,
       fun r hr => Rule.SetLegal.of_allConstructors h.sig (h.rules r hr), h.rows⟩
 
-/-- `stepCmd_ctorState` with the primitive-free rules carried along. Only `.rule` has
-anything to prove: every other command leaves `db.rules` alone. -/
-theorem stepCmd_ctorPrimState {db db' : Database} (h : db.CtorPrimState) {c : Cmd}
-    (hdecl : c.CtorDecl) (hlegal : c.SetLegal db.sig) (hnp : c.NoPrim)
-    (hv : stepCmd db c = some db') : db'.CtorPrimState := by
-  refine ⟨stepCmd_ctorState h.ctor hdecl hlegal hv, ?_⟩
-  cases c with
-  | action a => rw [evalAction_rules hv]; exact h.rules
-  | rule r =>
-    simp only [stepCmd, Option.some.injEq] at hv
-    subst hv
-    rintro r' (rfl | hr')
-    · exact hnp
-    · exact h.rules r' hr'
-  | run => simp only [stepCmd, Option.some.injEq] at hv; rw [← hv]; exact h.rules
-  | decl f d => simp only [stepCmd, Option.some.injEq] at hv; rw [← hv]; exact h.rules
-
 theorem runProgram_ctorState {db db' : Database} (h : db.CtorState) {p : Program}
     (hdecl : p.CtorDecls) (hlegal : p.SetLegal db.sig)
     (hv : runProgram db p = some db') : db'.CtorState := by
@@ -382,44 +345,14 @@ theorem run_ctorRows {p : Program} {db : Database} (hdecl : p.CtorDecls)
 
 /-! #### The step relations
 
-M9's relational semantics, where the headline lives. `MergeStep` is the case `SetLegal`
-cannot reach: it fires only on a `.merge` function, so `AllConstructors` makes it
-vacuous and a round is `RunRules` and nothing else. -/
-theorem Database.ActionStep.sig {db d : Database} {a : Action}
-    (h : Database.ActionStep db a d) : d.sig = db.sig := by
-  cases h <;> simp
-
-theorem Database.ActionStep.rules {db d : Database} {a : Action}
-    (h : Database.ActionStep db a d) : d.rules = db.rules := by
-  cases h <;> simp
-
-theorem Database.ActionStep.ctorRows {db d : Database} {a : Action}
-    (h : Database.ActionStep db a d) (hsig : db.sig.AllConstructors)
-    (hlegal : a.SetLegal db.sig) (hrows : db.CtorRows) : d.CtorRows := by
-  cases h with
-  | expr _ => exact hrows.addTerm _
-  | letBind _ => exact hrows.addTerm _
-  | union _ _ => exact hrows.addEq _ _
-  | set _ _ => exact (Action.SetLegal.elim hsig hlegal).elim
-
-theorem Database.ActionsStep.sig {db d : Database} {as : List Action}
-    (h : Database.ActionsStep db as d) : d.sig = db.sig := by
-  induction h with
-  | nil => rfl
-  | cons hstep _ ih => rw [ih, hstep.sig]
-
-theorem Database.ActionsStep.ctorRows {db d : Database} {as : List Action}
-    (h : Database.ActionsStep db as d) (hsig : db.sig.AllConstructors)
-    (hlegal : Actions.SetLegal as db.sig) (hrows : db.CtorRows) : d.CtorRows := by
-  induction h with
-  | nil => exact hrows
-  | cons hstep _ ih =>
-    exact ih (by rw [hstep.sig]; exact hsig) (by rw [hstep.sig]; exact hlegal.2)
-      (hstep.ctorRows hsig hlegal.1 hrows)
-
+M9's relational semantics, where the headline lives. Actions are not among them — one
+evaluator means `evalAction` is both readings — so `MergeStep` upwards is all there is,
+and `MergeStep` is the case `SetLegal` cannot reach: it fires only on a `.merge`
+function, so `AllConstructors` makes it vacuous and a round is `RunRules` and nothing
+else. -/
 theorem MergeStep.sig {d₁ d₂ : Database} (h : MergeStep d₁ d₂) : d₂.sig = d₁.sig := by
   cases h with
-  | collide _ _ _ _ hbody _ => simpa using hbody.sig
+  | collide _ _ _ _ hbody _ => simpa using evalActions_sig hbody
 
 theorem MergeClosure.sig {d₁ d₂ : Database} (h : MergeClosure d₁ d₂) :
     d₂.sig = d₁.sig := by
@@ -471,14 +404,14 @@ theorem exists_mergeStep_not_ctorRows :
     MergeStep.collide (f := "f") (as := []) (bs := []) (a := [Term.app "f" []])
       (b := [Term.app "f" []]) (vs := [Term.lit (.int 0)]) (body := [])
       (res := [.lit (.int 0)]) ⟨rfl, Term.IsSubterm.refl _⟩ ⟨rfl, Term.IsSubterm.refl _⟩
-      .nil (by simp [Signature.mergeOf]) .nil (.cons .lit .nil),
+      .nil (by simp [Signature.mergeOf]) rfl rfl,
     Database.not_ctorRows_of_mem (Set.mem_insert _ _) (by simp)⟩
 
 theorem RuleResults.ctorRows {db d : Database} (hsig : db.sig.AllConstructors) {r : Rule}
     (hlegal : r.SetLegal db.sig) (hrows : db.CtorRows) (h : d ∈ RuleResults db r) :
     d.CtorRows := by
-  obtain ⟨σ, d', -, hstep, rfl⟩ := h
-  exact hstep.ctorRows hsig hlegal hrows
+  obtain ⟨σ, -, hstep⟩ := h
+  exact evalLocalActions_ctorRows hsig hlegal hrows hstep
 
 theorem RunRules.ctorRows {db : Database} (h : db.CtorState) : (RunRules db).CtorRows :=
   h.rows.sUnion fun _ hd =>
@@ -487,7 +420,7 @@ theorem RunRules.ctorRows {db : Database} (h : db.CtorState) : (RunRules db).Cto
 theorem CmdStep.sig {db db' : Database} {c : Cmd} (h : CmdStep db c db') :
     db'.sig = c.sigBind db.sig := by
   cases h with
-  | action ha hm => rw [hm.sig]; exact ha.sig
+  | action ha hm => rw [hm.sig]; exact evalAction_sig ha
   | rule => rfl
   | run hrun => exact hrun.sig
   | decl => rfl
@@ -500,10 +433,11 @@ theorem CmdStep.ctorState {db db' : Database} (h : db.CtorState) {c : Cmd}
     -- The merge phase is empty on a constructor signature, so the state after it is the
     -- state the action left: `MergeClosure.eq_of_allConstructors`, which is the local
     -- stand-in for `Proofs/Merge.lean`'s saturation lemma (that file is above this one).
-    have hd := hm.eq_of_allConstructors (by rw [ha.sig]; exact h.sig)
+    have hd := hm.eq_of_allConstructors (by rw [evalAction_sig ha]; exact h.sig)
     subst hd
-    exact ⟨by rw [ha.sig]; exact h.sig, by rw [ha.sig, ha.rules]; exact h.rules,
-      ha.ctorRows h.sig hlegal h.rows⟩
+    exact ⟨by rw [evalAction_sig ha]; exact h.sig,
+      by rw [evalAction_sig ha, evalAction_rules ha]; exact h.rules,
+      evalAction_ctorRows h.sig hlegal h.rows ha⟩
   | rule =>
     refine ⟨h.sig, ?_, h.rows⟩
     rintro r' (rfl | hr')

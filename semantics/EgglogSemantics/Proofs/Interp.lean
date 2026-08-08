@@ -11,6 +11,8 @@ namespace FDatabase
 
 @[simp] theorem toDatabase_env {d : FDatabase} : d.toDatabase.env = d.env := rfl
 
+@[simp] theorem toDatabase_sig {d : FDatabase} : d.toDatabase.sig = d.sig := rfl
+
 @[simp] theorem toDatabase_rules {d : FDatabase} :
     d.toDatabase.rules = {r | r ∈ d.rules} := rfl
 
@@ -295,22 +297,22 @@ theorem patternHolds_iff {d : FDatabase} (hw : d.WF) {p : Pattern} {σ : Env}
     patternHolds d p σ = true ↔ ValidSubst d.toDatabase p σ := by
   cases p with
   | values vs f as =>
-    cases hu : Expr.evalList vs (d.env ++ σ) with
+    cases hu : Expr.evalList d.sig vs (d.env ++ σ) with
     | none =>
       simp only [patternHolds, hu, Bool.false_eq_true, false_iff]
       intro h
       cases h with
       | values _ hu' _ _ _ _ =>
-        rw [FDatabase.toDatabase_env, hu] at hu'
+        rw [FDatabase.toDatabase_env, FDatabase.toDatabase_sig, hu] at hu'
         simp at hu'
     | some us =>
-      cases ht : Expr.evalList as (d.env ++ σ) with
+      cases ht : Expr.evalList d.sig as (d.env ++ σ) with
       | none =>
         simp only [patternHolds, hu, ht, Bool.false_eq_true, false_iff]
         intro h
         cases h with
         | values _ _ ht' _ _ _ =>
-          rw [FDatabase.toDatabase_env, ht] at ht'
+          rw [FDatabase.toDatabase_env, FDatabase.toDatabase_sig, ht] at ht'
           simp at ht'
       | some ts =>
         simp only [patternHolds, hu, ht, List.any_eq_true, Bool.and_eq_true,
@@ -322,19 +324,19 @@ theorem patternHolds_iff {d : FDatabase} (hw : d.WF) {p : Pattern} {σ : Env}
         · intro h
           cases h with
           | values _ hu' ht' hkey hval hrow =>
-            rw [FDatabase.toDatabase_env, hu] at hu'
-            rw [FDatabase.toDatabase_env, ht] at ht'
+            rw [FDatabase.toDatabase_env, FDatabase.toDatabase_sig, hu] at hu'
+            rw [FDatabase.toDatabase_env, FDatabase.toDatabase_sig, ht] at ht'
             cases hu'
             cases ht'
             exact ⟨_, hrow, ⟨rfl, hkey⟩, hval⟩
   | expr e =>
-    cases hev : e.eval (d.env ++ σ) with
+    cases hev : e.eval d.sig (d.env ++ σ) with
     | none =>
       simp only [patternHolds, hev, Bool.false_eq_true, false_iff]
       intro h
       cases h with
       | expr _ _ he _ =>
-        rw [FDatabase.toDatabase_env, hev] at he
+        rw [FDatabase.toDatabase_env, FDatabase.toDatabase_sig, hev] at he
         simp at he
     | some t =>
       simp only [patternHolds, hev, decide_eq_true_eq]
@@ -344,26 +346,26 @@ theorem patternHolds_iff {d : FDatabase} (hw : d.WF) {p : Pattern} {σ : Env}
       · intro h
         cases h with
         | expr _ hwm he hc =>
-          rw [FDatabase.toDatabase_env, hev] at he
+          rw [FDatabase.toDatabase_env, FDatabase.toDatabase_sig, hev] at he
           cases he
           exact ⟨_, hwm, (FDatabase.mem_closureF_addTerm hw).mpr hc⟩
   | eq e₁ e₂ =>
-    cases hev₁ : e₁.eval (d.env ++ σ) with
+    cases hev₁ : e₁.eval d.sig (d.env ++ σ) with
     | none =>
       simp only [patternHolds, hev₁, Bool.false_eq_true, false_iff]
       intro h
       cases h with
       | eq _ _ he₁ _ _ _ =>
-        rw [FDatabase.toDatabase_env, hev₁] at he₁
+        rw [FDatabase.toDatabase_env, FDatabase.toDatabase_sig, hev₁] at he₁
         simp at he₁
     | some t₁ =>
-      cases hev₂ : e₂.eval (d.env ++ σ) with
+      cases hev₂ : e₂.eval d.sig (d.env ++ σ) with
       | none =>
         simp only [patternHolds, hev₁, hev₂, Bool.false_eq_true, false_iff]
         intro h
         cases h with
         | eq _ _ _ he₂ _ _ =>
-          rw [FDatabase.toDatabase_env, hev₂] at he₂
+          rw [FDatabase.toDatabase_env, FDatabase.toDatabase_sig, hev₂] at he₂
           simp at he₂
       | some t₂ =>
         simp only [patternHolds, hev₁, hev₂, Bool.and_eq_true, decide_eq_true_eq]
@@ -374,8 +376,8 @@ theorem patternHolds_iff {d : FDatabase} (hw : d.WF) {p : Pattern} {σ : Env}
         · intro h
           cases h with
           | eq _ hwm he₁ he₂ hcw hceq =>
-            rw [FDatabase.toDatabase_env, hev₁] at he₁
-            rw [FDatabase.toDatabase_env, hev₂] at he₂
+            rw [FDatabase.toDatabase_env, FDatabase.toDatabase_sig, hev₁] at he₁
+            rw [FDatabase.toDatabase_env, FDatabase.toDatabase_sig, hev₂] at he₂
             cases he₁
             cases he₂
             exact ⟨(FDatabase.mem_closureF_addTerm₂ hw).mpr hceq,
@@ -501,25 +503,25 @@ theorem execAction_toDatabase {d : FDatabase} {a : Action} :
     (execAction d a).map FDatabase.toDatabase = evalAction d.toDatabase a := by
   cases a with
   | expr e =>
-    cases hv : e.eval d.env with
+    cases hv : e.eval d.sig d.env with
     | none => simp [execAction, evalAction, hv]
     | some t => simp [execAction, evalAction, hv]
   | letBind v e =>
-    cases hv : e.eval d.env with
+    cases hv : e.eval d.sig d.env with
     | none => simp [execAction, evalAction, hv]
     | some t => simp [execAction, evalAction, hv]
   | union e₁ e₂ =>
-    cases hv₁ : e₁.eval d.env with
+    cases hv₁ : e₁.eval d.sig d.env with
     | none => simp [execAction, evalAction, hv₁]
     | some t₁ =>
-      cases hv₂ : e₂.eval d.env with
+      cases hv₂ : e₂.eval d.sig d.env with
       | none => simp [execAction, evalAction, hv₁, hv₂]
       | some t₂ => simp [execAction, evalAction, hv₁, hv₂]
   | set f args out =>
-    cases hv₁ : Expr.evalList args d.env with
+    cases hv₁ : Expr.evalList d.sig args d.env with
     | none => simp [execAction, evalAction, hv₁]
     | some as =>
-      cases hv₂ : Expr.evalList out d.env with
+      cases hv₂ : Expr.evalList d.sig out d.env with
       | none => simp [execAction, evalAction, hv₁, hv₂]
       | some vs => simp [execAction, evalAction, hv₁, hv₂]
 
