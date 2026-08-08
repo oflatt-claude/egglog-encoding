@@ -13,15 +13,16 @@ on databases, `MergeStep`, not a value combiner. Because a non-constructor appli
 `Expr.MEval`, and everything downstream — actions, rule firing, `run` — becomes a relation too.
 That last consequence was not in `PLAN.md`.
 
-**Status.** `mcong_iff_cong` (the compatibility theorem, `propext` alone) and the `execM`
-refinement chain ending in `execM_contained` are proved. `Proofs/Merge.lean` has six `sorry`s:
-`MergeStep.diamond_of_join`, `RunStep.unique_of_confluent`, `execM_reachable`,
-`execM_current_of_lattice`, `mergeRound_closure`, `FDatabase.mergeRound_rowCount`. All but
-`execM_current_of_lattice` carry a recorded defect *in the statement* — false as written, or a
-hypothesis that is self-contradictory or too weak — at the point where they are stated, with
-compiling witnesses in `Proofs/Counterexamples.lean`. Four further statements needed repair and
-got it; `Proofs/Merge.lean`'s header lists them. `make lean-difftest` is **122 passed / 0 failed /
-0 skipped**, 22 of those curated `:merge` cases.
+**Status.** `mcong_iff_cong` (the compatibility theorem, `propext` alone), the `execM`
+refinement chain ending in `execM_contained`, and `execM_reachable` are proved.
+`Proofs/Merge.lean` has five `sorry`s: `MergeStep.diamond_of_join`,
+`RunStep.unique_of_confluent`, `execM_current_of_lattice`, `mergeRound_closure`,
+`FDatabase.mergeRound_rowCount`. **All five** carry a recorded defect *in the statement* — false as
+written, or a hypothesis that is self-contradictory or too weak — at the point where they are
+stated, with compiling witnesses in `Proofs/Counterexamples.lean` and `Proofs/Lattice.lean`. Five
+further statements needed repair and got it; `Proofs/Merge.lean`'s header lists four and
+`execM_reachable` is the fifth. `make lean-difftest` is **130 passed / 0 failed / 0 skipped**, 22
+of those curated `:merge` cases.
 
 ## The framing: invariants over a step relation
 
@@ -233,8 +234,9 @@ primitive shares a namespace with user functions and shadows one of the same nam
 `Expr` constructor would make every existing `cases e` in `Proofs/Eval.lean`, `Proofs/Match.lean`
 and `Proofs/Interp.lean` non-exhaustive, an error rather than a `sorry`. `Expr.eval` (the M2
 function) therefore still treats `(ordering-min a b)` as building a term — harmless while the two
-developments do not mix, a latent trap the day the function evaluator goes away, and half of why
-`execM_reachable` is false as stated.
+developments do not mix, a latent trap the day the function evaluator goes away, and the reason
+`execM_reachable` carries `Program.NoPrim`: the two evaluators agree only on an expression naming
+no reserved name.
 
 ## The term order
 
@@ -572,13 +574,16 @@ the state; `MValidSubst.mono` makes "fewer rows" mean "fewer matches", and `MCon
 fragment the existing **equality** stands untouched, since no row belongs to a `.merge` function,
 so `hasMergeRow` is false, the pass is the identity (`FDatabase.mergeRound_eq_self`) and
 `exec_toDatabase` is outside the blast radius; and on **lattice** merges the implementation holds
-the `Current` value at each key class, which is `execM_current_of_lattice` — stated, unproved,
-~200–300 lines on top of the refinement, the one `sorry` in the file not defective as stated. For a
-non-lattice merge `Current` does not exist and nothing is claimed. Two statements became **false**
+the `Current` value at each key class, which is `execM_current_of_lattice` — **false as stated**,
+refuted three ways in `Proofs/Lattice.lean`; its `hjoin` is vacuous for the same reason
+`diamond_of_join`'s is. For a
+non-lattice merge `Current` does not exist and nothing is claimed. One statement became **false**
 in the *harmless* direction (the implementation is smaller than anything the spec reaches, not
 different): `mergeRound_closure`, since a deleting result is not `MergeClosure`-reachable when
-every `MergeStep` only *grows* the state; and `execM_reachable`, which now applies to `exec` only
-and is false even there for the `Expr.eval` reason above.
+every `MergeStep` only *grows* the state. `execM_reachable` now applies to `exec` only, and is
+**proved** there under three hypotheses — `Program.CtorDecls`, `Program.SetLegal`,
+`Program.NoPrim` — each of which the theorem's docstring justifies; `SetLegal`'s necessity is
+`Proofs/Counterexamples.lean`'s `execM_reachable_needs_setLegal`.
 
 **The over-approximation was observable, and `Impl/` no longer shows it.** Until a rule could read
 a value column, no oracle could see that the model keeps every superseded output where egglog

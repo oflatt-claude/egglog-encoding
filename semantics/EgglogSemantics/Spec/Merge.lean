@@ -252,6 +252,49 @@ def Expr.NoPrimList : List Expr → Prop
   | e :: es => Expr.NoPrim e ∧ Expr.NoPrimList es
 
 end
+
+/-! `Expr.NoPrim` lifted to the program, in the shape `Program.CtorDecls` has: every
+expression position a run evaluates, and no threading, because `Prim.ofName` reads a name
+and nothing a command does changes what it says.
+
+The positions are the ones `Expr.MEval` is invoked from — a top-level action, a rule head,
+and a query's operands. A `Pattern.values` atom's *function name* is not one of them: it
+names a table to read rather than a term to build, so a reserved name there is not an
+application at all. -/
+
+/-- No expression position of `a` names a primitive. -/
+def Action.NoPrim : Action → Prop
+  | .expr e => e.NoPrim
+  | .letBind _ e => e.NoPrim
+  | .union e₁ e₂ => e₁.NoPrim ∧ e₂.NoPrim
+  | .set _ args out => Expr.NoPrimList args ∧ Expr.NoPrimList out
+
+/-- Every action in the list. -/
+def Actions.NoPrim : List Action → Prop
+  | [] => True
+  | a :: as => a.NoPrim ∧ Actions.NoPrim as
+
+/-- A query fact. -/
+def Pattern.NoPrim : Pattern → Prop
+  | .expr e => e.NoPrim
+  | .eq e₁ e₂ => e₁.NoPrim ∧ e₂.NoPrim
+  | .values vs _ as => Expr.NoPrimList vs ∧ Expr.NoPrimList as
+
+/-- A rule's query and head. -/
+def Rule.NoPrim (r : Rule) : Prop :=
+  (∀ p ∈ r.query, p.NoPrim) ∧ Actions.NoPrim r.actions
+
+/-- A command. A `decl` carries expressions only in a `:merge` body, and the fragment this
+is used in has none: `Cmd.CtorDecl` forces the merge to be `.union`. -/
+def Cmd.NoPrim : Cmd → Prop
+  | .action a => a.NoPrim
+  | .rule r => r.NoPrim
+  | .run => True
+  | .decl _ _ => True
+
+/-- Every command, as `Program.CtorDecls`. -/
+def Program.NoPrim (p : Program) : Prop := ∀ c ∈ p, c.NoPrim
+
 /-! ### Evaluation
 
 `Expr.eval` is a function of the environment alone, which is exactly right while every

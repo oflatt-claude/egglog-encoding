@@ -245,6 +245,26 @@ theorem Database.CtorState.empty : Database.empty.CtorState where
   rules := by simp [Database.empty]
   rows := Database.CtorRows.empty
 
+/-- `Database.CtorState` with the primitive-free condition on the rules the database
+carries.
+
+A fourth field rather than a fourth conjunct of `CtorState`, because it answers a
+different question: `CtorState` is what keeps the *rows* constructor rows, this is what
+makes a stored rule's two readings agree. `Proofs/Merge.lean`'s `runRules_eq` needs it —
+a round fires every rule in `db.rules`, and a rule naming a primitive fires differently
+under `Expr.eval` and `Expr.MEval`.
+
+It moves exactly as `CtorState.rules` does: only `Cmd.rule` writes `db.rules`, and it
+writes a rule the program supplies. Unlike `SetLegal` it does not depend on the
+signature, so a `decl` cannot invalidate it. -/
+structure Database.CtorPrimState (db : Database) : Prop where
+  ctor : db.CtorState
+  rules : ∀ r ∈ db.rules, Rule.NoPrim r
+
+theorem Database.CtorPrimState.empty : Database.empty.CtorPrimState where
+  ctor := Database.CtorState.empty
+  rules := by simp [Database.empty]
+
 /-! #### The functional semantics -/
 theorem evalAction_ctorRows {db db' : Database} (hsig : db.sig.AllConstructors)
     {a : Action} (hlegal : a.SetLegal db.sig) (hrows : db.CtorRows)
@@ -323,6 +343,23 @@ theorem stepCmd_ctorState {db db' : Database} (h : db.CtorState) {c : Cmd}
     subst hv
     exact ⟨h.sig.sigBind hdecl,
       fun r hr => Rule.SetLegal.of_allConstructors h.sig (h.rules r hr), h.rows⟩
+
+/-- `stepCmd_ctorState` with the primitive-free rules carried along. Only `.rule` has
+anything to prove: every other command leaves `db.rules` alone. -/
+theorem stepCmd_ctorPrimState {db db' : Database} (h : db.CtorPrimState) {c : Cmd}
+    (hdecl : c.CtorDecl) (hlegal : c.SetLegal db.sig) (hnp : c.NoPrim)
+    (hv : stepCmd db c = some db') : db'.CtorPrimState := by
+  refine ⟨stepCmd_ctorState h.ctor hdecl hlegal hv, ?_⟩
+  cases c with
+  | action a => rw [evalAction_rules hv]; exact h.rules
+  | rule r =>
+    simp only [stepCmd, Option.some.injEq] at hv
+    subst hv
+    rintro r' (rfl | hr')
+    · exact hnp
+    · exact h.rules r' hr'
+  | run => simp only [stepCmd, Option.some.injEq] at hv; rw [← hv]; exact h.rules
+  | decl f d => simp only [stepCmd, Option.some.injEq] at hv; rw [← hv]; exact h.rules
 
 theorem runProgram_ctorState {db db' : Database} (h : db.CtorState) {p : Program}
     (hdecl : p.CtorDecls) (hlegal : p.SetLegal db.sig)
@@ -478,6 +515,18 @@ theorem CmdStep.ctorState {db db' : Database} (h : db.CtorState) {c : Cmd}
   | decl =>
     exact ⟨h.sig.sigBind hdecl,
       fun r hr => Rule.SetLegal.of_allConstructors h.sig (h.rules r hr), h.rows⟩
+
+/-! #### Inversion
+
+`ProgramStep` is a relation, so reading a run *backwards* — what must have happened at
+each command — is a `cases` rather than a projection. These two package it, which is what
+lets a proof peel a concrete program one command at a time without nesting. -/
+theorem ProgramStep.cons_inv {db d' : Database} {c : Cmd} {cs : Program}
+    (h : ProgramStep db (c :: cs) d') : ∃ d, CmdStep db c d ∧ ProgramStep d cs d' := by
+  cases h with | cons hc hrest => exact ⟨_, hc, hrest⟩
+
+theorem ProgramStep.nil_inv {db d' : Database} (h : ProgramStep db [] d') : db = d' := by
+  cases h with | nil => rfl
 
 /-- The invariant argument, in the shape `Proofs/Merge.lean`'s `invariant_of_step` gives
 it: an invariant preserved by one command holds at every reachable state. It is spelled

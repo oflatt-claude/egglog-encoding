@@ -85,9 +85,11 @@ adds the combined row *beside* the two it merged. `Impl/` has **two** interprete
 `execM` is not a state the specification can reach, hence containment. Containment is
 satisfied by a do-nothing implementation, and that is *fine for soundness* — the safety
 property is "everything written is valid", so writing nothing is vacuously valid. What rules
-out a degenerate implementation is difftest, not a theorem. `execM_current_of_lattice` would
-add machine-checked completeness for merges that are joins; it is worth having and is not
-urgent.
+out a degenerate implementation is difftest, not a theorem. `execM_current_of_lattice` was
+meant to add machine-checked completeness for merges that are joins, but it is **false as
+stated** — `Proofs/Lattice.lean` refutes it three ways. A corrected statement is worth
+having; see its docstring for what it has to carry, and note it may still be false for
+programs with rules.
 
 ### The consolidation arc
 

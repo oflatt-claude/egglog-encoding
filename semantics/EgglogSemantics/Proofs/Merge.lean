@@ -7,7 +7,7 @@ import EgglogSemantics.Proofs.Interp
 /-!
 # What M9 has to prove
 
-`MERGE.md` says which theorem buys what. Six are still unproved; the rest are proved.
+`MERGE.md` says which theorem buys what. Five are still unproved; the rest are proved.
 
 The load-bearing one is `mcong_iff_cong`: where the rows are the constructor rows
 (`Database.CtorRows`) and the signature is all constructors, the generalized relation is
@@ -15,8 +15,13 @@ exactly M2's `Cong`. That is what makes replacing `Cong` by `MCong` a refactor r
 than a rewrite — without it every M2–M8 theorem would have to be reproved rather than
 transported.
 
-Four statements needed repair, and the repairs are the interesting output:
+Five statements needed repair, and the repairs are the interesting output:
 
+* `execM_reachable` is false as stated — `Expr.eval` builds an application for *every*
+  name, so a primitive or a non-constructor makes the interpreter and the relation
+  disagree. It carries `Program.CtorDecls`, `Program.SetLegal` and `Program.NoPrim`, and
+  is **proved**; its docstring justifies each, and `Proofs/Counterexamples.lean`'s
+  `execM_reachable_needs_setLegal` shows the middle one cannot be dropped.
 * `Expr.MEval_of_eval`'s `∀ f, Prim.ofName f = none` is **unsatisfiable**
   (`not_forall_ofName_eq_none`), so it is vacuous. `Expr.NoPrim` and
   `Expr.MEval_of_eval'` are the version that is not, and `Expr.eval_of_MEval` is the
@@ -190,6 +195,20 @@ hypothesis restricted to the names `e` actually mentions, which is satisfiable.
 
 @[simp] theorem Expr.noPrimList_cons {e : Expr} {es : List Expr} :
     Expr.NoPrimList (e :: es) ↔ Expr.NoPrim e ∧ Expr.NoPrimList es := Iff.rfl
+
+@[simp] theorem Action.noPrim_expr {e : Expr} : (Action.expr e).NoPrim ↔ e.NoPrim := Iff.rfl
+
+@[simp] theorem Action.noPrim_letBind {v : Var} {e : Expr} :
+    (Action.letBind v e).NoPrim ↔ e.NoPrim := Iff.rfl
+
+@[simp] theorem Action.noPrim_union {e₁ e₂ : Expr} :
+    (Action.union e₁ e₂).NoPrim ↔ e₁.NoPrim ∧ e₂.NoPrim := Iff.rfl
+
+@[simp] theorem Action.noPrim_set {f : FnName} {args out : List Expr} :
+    (Action.set f args out).NoPrim ↔ Expr.NoPrimList args ∧ Expr.NoPrimList out := Iff.rfl
+
+@[simp] theorem Actions.noPrim_cons {a : Action} {as : List Action} :
+    Actions.NoPrim (a :: as) ↔ a.NoPrim ∧ Actions.NoPrim as := Iff.rfl
 
 /-- **`Expr.MEval_of_eval`'s hypothesis is unsatisfiable**, so that theorem is vacuous
 however it is proved. `Expr.MEval_of_eval'` is the same statement with the quantifier
@@ -1215,6 +1234,239 @@ theorem MergeClosure.transport {A C B : Database} (hc : A.Contained C)
     obtain ⟨D', hstepD', hcont', hsig'⟩ := hstep.transport hcontD hsigD
     exact ⟨D', hclD.tail hstepD', hcont', hsig'⟩
 
+/-! ### The functional semantics is the relation, on the constructor fragment
+
+`Spec/Step.lean`'s `runProgram` and `Spec/Merge.lean`'s `ProgramStep` are the same
+semantics written twice, and on a program that declares only constructors, never `set`s
+one and names no primitive they agree exactly. That is what `execM_reachable` needs, and
+it is proved here one layer at a time: actions, then e-matching, then a round, then a
+command, then a program.
+
+The layers below the round are **two-way**, and that is new. `Expr.MEval` used to have a
+`lookup` constructor, which read `Database.Out` and so admitted several values at one
+key; there was no hope of turning an `MEval` derivation back into an `Expr.eval` call.
+With reading confined to `Pattern.values` there is one rule per syntactic form, `MEval` is
+deterministic, and `Expr.eval_of_MEval` is its inverse. A *round* needs both directions —
+`RunStep db db'` forces `db' = RunRules db` on a constructor signature, so `stepCmd`'s
+`runRules db` has to be equal to `RunRules db` rather than merely contained in it. -/
+/-- `evalAction → ActionStep`. -/
+theorem Database.ActionStep.of_evalAction {db d : Database}
+    (hsig : db.sig.AllConstructors) {a : Action} (hnp : a.NoPrim)
+    (h : evalAction db a = some d) : Database.ActionStep db a d := by
+  rcases evalAction_eq_some h with ⟨e, t, rfl, hv, rfl⟩ | ⟨v, e, t, rfl, hv, rfl⟩ |
+    ⟨e₁, e₂, t₁, t₂, rfl, hv₁, hv₂, rfl⟩ | ⟨f, args, out, as, vs, rfl, hv₁, hv₂, rfl⟩
+  · exact .expr (Expr.MEval_of_eval' hsig e hnp hv)
+  · exact .letBind (Expr.MEval_of_eval' hsig e hnp hv)
+  · exact .union (Expr.MEval_of_eval' hsig e₁ hnp.1 hv₁)
+      (Expr.MEval_of_eval' hsig e₂ hnp.2 hv₂)
+  · exact .set (Expr.MEvalList_of_evalList' hsig args hnp.1 hv₁)
+      (Expr.MEvalList_of_evalList' hsig out hnp.2 hv₂)
+
+/-- **`ActionStep` is `evalAction`, not merely refined by it.**
+
+Worth keeping independently of what it is used for here. `Database.ActionStep_unique`
+says the relation is a function; this says *which* function, and together they are M12's
+"make it a function again" (`PLAN.md`): on the constructor fragment `ActionStep` and
+`ActionsStep` can be replaced by `evalAction` and `evalActions` outright. Only the layers
+above them — `MergeStep`'s choice of colliding pair, `MergeClosure`'s step count — have to
+stay relations. -/
+theorem Database.ActionStep.evalAction_eq {db d : Database}
+    (hsig : db.sig.AllConstructors) {a : Action} (hnp : a.NoPrim)
+    (h : Database.ActionStep db a d) : evalAction db a = some d := by
+  cases h with
+  | expr he => rw [evalAction, Expr.eval_of_MEval hsig he hnp, Option.map_some]
+  | letBind he => rw [evalAction, Expr.eval_of_MEval hsig he hnp, Option.map_some]
+  | union he₁ he₂ =>
+    rw [evalAction, Expr.eval_of_MEval hsig he₁ hnp.1, Option.bind_some,
+      Expr.eval_of_MEval hsig he₂ hnp.2, Option.map_some]
+  | set ha ho =>
+    rw [evalAction, Expr.evalList_of_MEvalList hsig ha hnp.1, Option.bind_some,
+      Expr.evalList_of_MEvalList hsig ho hnp.2, Option.map_some]
+
+theorem Database.ActionsStep.of_evalActions {db d : Database}
+    (hsig : db.sig.AllConstructors) {as : List Action} (hnp : Actions.NoPrim as)
+    (h : evalActions db as = some d) : Database.ActionsStep db as d := by
+  induction as generalizing db with
+  | nil => exact (Option.some.injEq .. ▸ h : db = d) ▸ .nil
+  | cons a as ih =>
+    cases hv : evalAction db a with
+    | none => simp [hv] at h
+    | some db₁ =>
+      rw [evalActions_cons, hv, Option.bind_some] at h
+      exact .cons (Database.ActionStep.of_evalAction hsig hnp.1 hv)
+        (ih (by rw [evalAction_sig hv]; exact hsig) hnp.2 h)
+
+/-- `Database.ActionStep.evalAction_eq` over an action list; see its docstring for why
+this pair survives on its own. -/
+theorem Database.ActionsStep.evalActions_eq {db d : Database}
+    (hsig : db.sig.AllConstructors) {as : List Action} (hnp : Actions.NoPrim as)
+    (h : Database.ActionsStep db as d) : evalActions db as = some d := by
+  induction h with
+  | nil => rfl
+  | @cons db₀ d₀ d₁ a as hstep _ ih =>
+    rw [evalActions_cons, hstep.evalAction_eq hsig hnp.1, Option.bind_some]
+    exact ih (by rw [hstep.sig]; exact hsig) hnp.2
+
+/-- `ValidSubst → MValidSubst`. `mcong_iff_cong` is applied at the *extended* database the
+witness premises ask over, which is why `CtorRows.addTerm` appears. -/
+theorem MValidSubst.of_validSubst {db : Database} (hsig : db.sig.AllConstructors)
+    (hrows : db.CtorRows) {p : Pattern} (hnp : p.NoPrim) {σ : Env}
+    (h : ValidSubst db p σ) : MValidSubst db p σ := by
+  cases h with
+  | @expr e σ w t hve hw heval hcong =>
+    exact .expr hve hw (Expr.MEval_of_eval' hsig e hnp heval)
+      (Cong.toMCong (db := db.addTerm t) hsig (hrows.addTerm t) hcong)
+  | @eq e₁ e₂ σ w t₁ t₂ hve hw hev₁ hev₂ hcw hct =>
+    exact .eq hve hw (Expr.MEval_of_eval' hsig e₁ hnp.1 hev₁)
+      (Expr.MEval_of_eval' hsig e₂ hnp.2 hev₂)
+      (Cong.toMCong (db := (db.addTerm t₁).addTerm t₂) hsig
+        ((hrows.addTerm t₁).addTerm t₂) hcw)
+      (Cong.toMCong (db := (db.addTerm t₁).addTerm t₂) hsig
+        ((hrows.addTerm t₁).addTerm t₂) hct)
+  | @values vs f as σ us ts ws bs hve hev₁ hev₂ hct hcu hrow =>
+    exact .values hve (Expr.MEvalList_of_evalList' hsig vs hnp.1 hev₁)
+      (Expr.MEvalList_of_evalList' hsig as hnp.2 hev₂)
+      (CongList.toMCongList hsig hrows hct) (CongList.toMCongList hsig hrows hcu) hrow
+
+theorem ValidSubst.of_mvalidSubst {db : Database} (hsig : db.sig.AllConstructors)
+    (hrows : db.CtorRows) {p : Pattern} (hnp : p.NoPrim) {σ : Env}
+    (h : MValidSubst db p σ) : ValidSubst db p σ := by
+  cases h with
+  | @expr e σ w t hve hw heval hcong =>
+    exact .expr hve hw (Expr.eval_of_MEval hsig heval hnp)
+      (MCong.toCong (hrows.addTerm t) hcong)
+  | @eq e₁ e₂ σ w t₁ t₂ hve hw hev₁ hev₂ hcw hct =>
+    exact .eq hve hw (Expr.eval_of_MEval hsig hev₁ hnp.1)
+      (Expr.eval_of_MEval hsig hev₂ hnp.2)
+      (MCong.toCong ((hrows.addTerm t₁).addTerm t₂) hcw)
+      (MCong.toCong ((hrows.addTerm t₁).addTerm t₂) hct)
+  | @values vs f as σ us ts ws bs hve hev₁ hev₂ hct hcu hrow =>
+    exact .values hve (Expr.evalList_of_MEvalList hsig hev₁ hnp.1)
+      (Expr.evalList_of_MEvalList hsig hev₂ hnp.2)
+      (MCongList.toCongList hrows hct) (MCongList.toCongList hrows hcu) hrow
+
+theorem forall₂_mvalidSubst {db : Database} (hsig : db.sig.AllConstructors)
+    (hrows : db.CtorRows) {q : Query} {σs : List Env}
+    (h : List.Forall₂ (ValidSubst db) q σs) :
+    (∀ p ∈ q, Pattern.NoPrim p) → List.Forall₂ (MValidSubst db) q σs := by
+  induction h with
+  | nil => exact fun _ => .nil
+  | @cons p σp ps σps hp _ ih =>
+    exact fun hnp =>
+      .cons (MValidSubst.of_validSubst hsig hrows (hnp p (List.mem_cons_self ..)) hp)
+        (ih fun p' hp' => hnp p' (List.mem_cons_of_mem p hp'))
+
+theorem forall₂_validSubst {db : Database} (hsig : db.sig.AllConstructors)
+    (hrows : db.CtorRows) {q : Query} {σs : List Env}
+    (h : List.Forall₂ (MValidSubst db) q σs) :
+    (∀ p ∈ q, Pattern.NoPrim p) → List.Forall₂ (ValidSubst db) q σs := by
+  induction h with
+  | nil => exact fun _ => .nil
+  | @cons p σp ps σps hp _ ih =>
+    exact fun hnp =>
+      .cons (ValidSubst.of_mvalidSubst hsig hrows (hnp p (List.mem_cons_self ..)) hp)
+        (ih fun p' hp' => hnp p' (List.mem_cons_of_mem p hp'))
+
+theorem MValidQuerySubst.of_validQuerySubst {db : Database}
+    (hsig : db.sig.AllConstructors) (hrows : db.CtorRows) {q : Query}
+    (hnp : ∀ p ∈ q, Pattern.NoPrim p) {σ : Env} (h : ValidQuerySubst db q σ) :
+    MValidQuerySubst db q σ := by
+  obtain ⟨σs, hall, hu⟩ := h
+  exact ⟨σs, forall₂_mvalidSubst hsig hrows hall hnp, hu⟩
+
+theorem ValidQuerySubst.of_mvalidQuerySubst {db : Database}
+    (hsig : db.sig.AllConstructors) (hrows : db.CtorRows) {q : Query}
+    (hnp : ∀ p ∈ q, Pattern.NoPrim p) {σ : Env} (h : MValidQuerySubst db q σ) :
+    ValidQuerySubst db q σ := by
+  obtain ⟨σs, hall, hu⟩ := h
+  exact ⟨σs, forall₂_validSubst hsig hrows hall hnp, hu⟩
+
+/-- One rule contributes the same databases either way. `RuleResults`' existential over the
+intermediate state is `evalLocalActions`' `Option.map`, once the two action relations and
+the two matching relations coincide. -/
+theorem ruleResults_eq {db : Database} (hsig : db.sig.AllConstructors)
+    (hrows : db.CtorRows) {r : Rule} (hnp : r.NoPrim) :
+    RuleResults db r = ruleResults db r := by
+  ext d
+  constructor
+  · rintro ⟨σ, d', hq, hstep, rfl⟩
+    refine ⟨σ, ValidQuerySubst.of_mvalidQuerySubst hsig hrows hnp.1 hq, ?_⟩
+    rw [evalLocalActions, Database.ActionsStep.evalActions_eq
+      (db := { db with env := db.env ++ σ }) hsig hnp.2 hstep, Option.map_some]
+  · rintro ⟨σ, hq, hd⟩
+    obtain ⟨d', hv, rfl⟩ := evalLocalActions_eq_some hd
+    exact ⟨σ, d', MValidQuerySubst.of_validQuerySubst hsig hrows hnp.1 hq,
+      Database.ActionsStep.of_evalActions (db := { db with env := db.env ++ σ })
+        hsig hnp.2 hv, rfl⟩
+
+/-- **A round is the same round.** Both sides are `db.sUnion` of a family indexed by
+`db.rules`, and `ruleResults_eq` identifies the families. -/
+theorem runRules_eq {db : Database} (h : db.CtorPrimState) : RunRules db = runRules db := by
+  have hre : ∀ r ∈ db.rules, RuleResults db r = ruleResults db r :=
+    fun r hr => ruleResults_eq h.ctor.sig h.ctor.rows (h.rules r hr)
+  have hset : {d | ∃ r ∈ db.rules, d ∈ RuleResults db r}
+      = {d | ∃ r ∈ db.rules, d ∈ ruleResults db r} := by
+    ext d
+    constructor
+    · rintro ⟨r, hr, hd⟩; exact ⟨r, hr, hre r hr ▸ hd⟩
+    · rintro ⟨r, hr, hd⟩; exact ⟨r, hr, (hre r hr).symm ▸ hd⟩
+  rw [RunRules, runRules, hset]
+
+/-- `stepCmd → CmdStep`. The `MergeClosure` phase `CmdStep.action` now carries is supplied
+by *zero* steps: `MergeStep` never fires on a constructor signature, so the merge leg is
+the identity and `Relation.ReflTransGen.refl` is the whole of it. -/
+theorem CmdStep.of_stepCmd {db db' : Database} (h : db.CtorPrimState) {c : Cmd}
+    (hnp : c.NoPrim) (hv : stepCmd db c = some db') : CmdStep db c db' := by
+  cases c with
+  | action a =>
+    exact .action (Database.ActionStep.of_evalAction h.ctor.sig hnp hv)
+      Relation.ReflTransGen.refl
+  | rule r => simp only [stepCmd, Option.some.injEq] at hv; exact hv ▸ .rule
+  | run =>
+    simp only [stepCmd, Option.some.injEq] at hv
+    refine .run ?_
+    rw [RunStep, runRules_eq h, ← hv]
+    exact Relation.ReflTransGen.refl
+  | decl f d => simp only [stepCmd, Option.some.injEq] at hv; exact hv ▸ .decl
+
+/-- The converse, away from `(run)` — the one command whose two readings can come apart,
+since a `MergeClosure` of length zero is a choice the relation makes and the function does
+not. Reading a concrete run backwards is what needs it. -/
+theorem CmdStep.stepCmd_eq {db db' : Database} {c : Cmd} (h : CmdStep db c db')
+    (hsig : db.sig.AllConstructors) (hnp : c.NoPrim) (hrun : c ≠ Cmd.run) :
+    stepCmd db c = some db' := by
+  cases h with
+  | action ha hm =>
+    have hd := hm.eq_of_allConstructors (by rw [ha.sig]; exact hsig)
+    subst hd
+    exact ha.evalAction_eq hsig hnp
+  | rule => rfl
+  | run _ => exact absurd rfl hrun
+  | decl => rfl
+
+theorem ProgramStep.of_runProgram {db db' : Database} (h : db.CtorPrimState) {p : Program}
+    (hdecl : p.CtorDecls) (hlegal : p.SetLegal db.sig) (hnp : p.NoPrim)
+    (hv : runProgram db p = some db') : ProgramStep db p db' := by
+  induction p generalizing db with
+  | nil => exact (Option.some.injEq .. ▸ hv : db = db') ▸ .nil
+  | cons c cs ih =>
+    cases hc : stepCmd db c with
+    | none => simp [hc] at hv
+    | some db₁ =>
+      simp only [runProgram_cons, hc, Option.bind_some] at hv
+      exact .cons (CmdStep.of_stepCmd h (hnp c (by simp)) hc)
+        (ih (stepCmd_ctorPrimState h (hdecl c (by simp)) hlegal.1 (hnp c (by simp)) hc)
+          (fun c' hc' => hdecl c' (List.mem_cons_of_mem c hc'))
+          (by rw [stepCmd_sig hc]; exact hlegal.2)
+          (fun c' hc' => hnp c' (List.mem_cons_of_mem c hc')) hv)
+
+/-- The bridge from the initial state, where every side condition is discharged by
+`Database.CtorPrimState.empty`. -/
+theorem run_programStep {p : Program} {D : Database} (hdecl : p.CtorDecls)
+    (hlegal : p.SetLegal Database.empty.sig) (hnp : p.NoPrim) (h : run p = some D) :
+    ProgramStep Database.empty p D :=
+  ProgramStep.of_runProgram Database.CtorPrimState.empty hdecl hlegal hnp h
+
 /-! ### The interpreter
 
 `Impl/Merge.lean` runs the M9 semantics. The refinement is weaker than M10's on purpose:
@@ -1228,27 +1480,37 @@ reaches. Nothing stronger is available, and nothing stronger is wanted — pinni
 single result would mean pinning the merge order, which is the thing `MERGE.md` argues
 the semantics should decline to pin.
 
-**False as stated**, for the reason `Expr.MEval_of_eval'` exists: `exec` is
-`Impl/Interp.lean`'s constructor interpreter and evaluates with `Expr.eval`, which
-builds an application for *every* name.
+**The three hypotheses**, none of them removable:
 
-* `p = [.action (.expr (.app "ordering-min" [1, 2]))]` — `exec` adds the term
-  `ordering-min 1 2`; `MEval.prim` gives `1`, so `ActionStep` adds `1` instead and the
-  two states differ.
-* `p = [.decl "g" ⟨1, 1, .noMerge⟩, .action (.expr (.app "g" [1]))]` — `exec` adds the
-  term `g 1`; `MEval` has only `lookup` for `g`, which needs a row, so no `ActionStep`
-  exists at all and no `ProgramStep` relates the two.
+* `Program.CtorDecls` gives `Signature.AllConstructors` at every intermediate state
+  (`Signature.AllConstructors.sigBind`). `Expr.MEval.ctor` builds a term only for a
+  `.union` function, so without it `exec`'s `Expr.eval` builds `g 1` where the relation
+  is stuck — and it is also what makes `MergeStep` vacuous, which is how the
+  `MergeClosure` phase of `CmdStep.action` gets discharged
+  (`MergeClosure.eq_of_allConstructors`).
+* `Program.SetLegal` keeps `Database.CtorRows`, which with the above is `mcong_iff_cong`,
+  which is the only route from `ValidSubst` to `MValidSubst` — so it is what makes a
+  *round* agree. It is not decoration:
+  `Proofs/Counterexamples.lean`'s `execM_reachable_needs_setLegal` is a program satisfying
+  the other two whose `exec` state no `ProgramStep` reaches.
+* `Program.NoPrim` is `Expr.NoPrim` at every expression position, in the query as much as
+  in a head: `Expr.eval` builds `ordering-min 1 2` where `MEval.prim` computes `1`.
 
-Both are repaired by hypotheses: the program declares nothing but constructors, and no
-`Expr` in it names a primitive (`Expr.NoPrim`). Under those, the proof is the whole
-`runProgram → ProgramStep` bridge — `evalAction → ActionStep` via
-`Expr.MEval_of_eval'`, `ValidSubst → MValidSubst` via `mcong_iff_cong`, then
-`stepCmd`/`runProgram`. The e-matching step needs `db.CtorRows` at every intermediate
-state, i.e. the `CtorRows` preservation lemmas being added to `Proofs/Database.lean` and
-`Proofs/Step.lean`, so this is blocked on those rather than merely long. -/
-theorem execM_reachable {p : Program} {d : FDatabase} (h : exec p = some d) :
+**Why it is no longer long.** `Expr.MEval` used to have a `lookup` constructor reading
+`Database.Out`, so a derivation could not be turned back into an `Expr.eval` call and only
+one direction of the action bridge was available. With reading confined to
+`Pattern.values` the relation is deterministic and `Expr.eval_of_MEval` inverts it, so
+`Database.ActionStep.of_evalAction` and `Database.ActionStep.evalAction_eq` are a pair —
+which is exactly what a round needs, since `RunStep` pins `db'` to `RunRules db`. Every
+`CtorRows` preservation lemma the argument uses already existed, in
+`Proofs/Database.lean` and `Proofs/Step.lean`; the only invariant that had to be added is
+`Database.CtorPrimState`, which carries `NoPrim` for the *stored* rules. -/
+theorem execM_reachable {p : Program} {d : FDatabase} (hdecl : p.CtorDecls)
+    (hlegal : p.SetLegal Database.empty.sig) (hnp : p.NoPrim) (h : exec p = some d) :
     ProgramStep FDatabase.empty.toDatabase p d.toDatabase := by
-  sorry
+  rw [FDatabase.toDatabase_empty]
+  refine run_programStep hdecl hlegal hnp ?_
+  rw [← exec_toDatabase, h, Option.map_some]
 
 /-! ### The contract for `execM`: containment, not reachability
 
@@ -1841,13 +2103,25 @@ element unique (`Database.current_unique`). For a merge that is *not* a lattice 
 `Current` to be complete against and nothing is claimed — `MERGE.md`'s "order-dependent
 merges are the user's fault".
 
-Unproved. Beyond the refinement `execM_contained` needs, this wants an induction over the
-merge phase carrying "every output the specification records at this key class is `le` the
-one the implementation holds", whose step is that `mergeOneWith` replaces two rows by
-their join and its saturation removes the rest. Deleting the merged rows is what makes
-that invariant maintainable at all: while the implementation was append-only it held every
-superseded output and the statement was simply false. Estimated 200–300 lines on top of
-the refinement, which is why it is stated rather than proved. -/
+**False as stated.** `Proofs/Lattice.lean` refutes it three independent ways, all
+machine-checked, and it stays false under the obvious repairs.
+
+`hjoin` is an *implication*, so a merge that never fires satisfies it vacuously while
+`Current` still demands `le vs vs` — instantiate its second conjunct at `ws := vs`. That is
+the same defect `MergeStep.diamond_of_join`'s `hjoin` has, one statement above, and
+`le := fun _ _ => False` refutes both. Giving `le` a genuine partial order does not save it
+(`currentOfLattice_false_partialOrder`): when the merge body is stuck `mergeOneWith`
+returns `none`, `settled` holds with two rows at one key class, and `Current` is
+unsatisfiable at either. Nor does a *total* merge with reflexive `le`
+(`currentOfLattice_false_total`): `hjoin` bounds one collision, and a class that collides
+twice needs them to compose.
+
+A corrected statement needs `hrefl`, `htrans`, `hjoin` strengthened from an implication to
+the existence of a resolving merge, and `ProgramLegal`. Even then it may be false for
+programs with rules: `MergeStep` never removes a row, so a specification state keeps every
+superseded output and `MValidSubst.values` lets a rule read one, writing rows the
+implementation never had. That last part is unverified — `closureF` does not reduce in the
+kernel, so no program containing a rule has an `execM` that evaluates by `rfl`. -/
 theorem execM_current_of_lattice {p : Program} {d : FDatabase}
     {le : List Term → List Term → Prop} (hexec : execM p = some d)
     (hanti : ∀ x y, le x y → le y x → x = y)
