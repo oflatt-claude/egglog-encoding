@@ -1,3 +1,4 @@
+import EgglogSemantics.Proofs.Counterexamples
 import EgglogSemantics.Proofs.Encode
 import EgglogSemantics.Proofs.Interp
 import EgglogSemantics.Proofs.Merge

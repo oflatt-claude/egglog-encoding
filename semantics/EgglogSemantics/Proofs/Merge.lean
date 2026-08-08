@@ -1393,8 +1393,6 @@ theorem FDatabase.Inv.execAction {d d' : FDatabase} (h : d.Inv) {a : Action}
     exact h.addRow hlegal (FDatabase.execExprList_ctorTerm h h.env_ctorTerm hts)
       (FDatabase.execExprList_ctorTerm h h.env_ctorTerm hvs)
 
-theorem FDatabase.Inv.mergeRound {d : FDatabase} (h : d.Inv) : d.mergeRound.Inv := by
-  sorry
 
 /-! #### Evaluation -/
 
@@ -2032,6 +2030,203 @@ theorem mem_mergeEnv {os ns : List Term} {p : Var × Term} (h : p ∈ mergeEnv o
     · exact Or.inl (by simp)
     · exact Or.inr (by simp)
   · exact mem_mergeEnvIdx h
+
+/-! #### The merge phase
+
+`mergeRound` does **not** preserve `Inv` unconditionally. A merge body is an arbitrary
+`List Action` carrying no `Action.SetLegal` obligation, so a `(set (F) ...)` inside one, on
+a constructor `F`, writes a `.union` function's row whose output is not `[.app F args]` —
+which is exactly what `ctorRows` forbids. `mergeRound_inv_false` in the counterexample
+section machine-checks it. `CtorTerms` *is* preserved, as the `Inv` docstring claims:
+`execExpr` builds an application only under a `.union` guard, and every other branch
+returns an operand, a literal, or a recorded row output that `rowsWF` already places in
+`terms`.
+
+The hypothesis below is the repair: every declared merge's body obeys the same `set`
+discipline every other action block obeys. The gap it patches is in the specification —
+`Cmd.SetLegal (.decl _ _)` is `True`, so `Program.SetLegal` says nothing about merge
+bodies. -/
+
+namespace FDatabase
+
+theorem Inv.setEnv {d : FDatabase} (h : d.Inv) {σ : Env}
+    (hσ : ∀ b ∈ σ, b.2 ∈ d.toDatabase.terms) :
+    ({ d with env := σ } : FDatabase).Inv :=
+  ⟨⟨h.wf.subtermClosed, h.wf.eqsInTerms, hσ⟩, h.ctorTerms, h.rowsComplete, h.rowsWF,
+    h.ctorRows⟩
+
+theorem Inv.setEnvRules {d : FDatabase} (h : d.Inv) {σ : Env} {rs : List Rule}
+    (hσ : ∀ b ∈ σ, b.2 ∈ d.toDatabase.terms) :
+    ({ d with env := σ, rules := rs } : FDatabase).Inv :=
+  ⟨⟨h.wf.subtermClosed, h.wf.eqsInTerms, hσ⟩, h.ctorTerms, h.rowsComplete, h.rowsWF,
+    h.ctorRows⟩
+
+theorem Inv.filterRows {d : FDatabase} (h : d.Inv) {p : Row → Bool}
+    (hkeep : ∀ r ∈ d.rows, d.sig.mergeOf r.fn = MergeSpec.union → p r = true) :
+    ({ d with rows := d.rows.filter p } : FDatabase).Inv where
+  wf := ⟨h.wf.subtermClosed, h.wf.eqsInTerms, h.wf.envInTerms⟩
+  ctorTerms := h.ctorTerms
+  rowsComplete := by
+    intro r hr
+    have hmem : r ∈ d.rows := h.rowsComplete hr
+    have hu : d.sig.mergeOf r.fn = MergeSpec.union := h.ctorTerms r.fn r.args hr.2
+    show r ∈ d.rows.filter p
+    exact List.mem_filter.mpr ⟨hmem, hkeep r hmem hu⟩
+  rowsWF := by
+    intro r hr
+    exact h.rowsWF r (List.mem_filter.mp (show r ∈ d.rows.filter p from hr)).1
+  ctorRows := by
+    intro r hr
+    exact h.ctorRows r (List.mem_filter.mp (show r ∈ d.rows.filter p from hr)).1
+
+/-- `Inv` through a whole action block, given every `set` in it is legal. `Inv.execAction`
+iterated; `execAction_sig` is what keeps `SetLegal` — a condition on the signature —
+applicable at each step. -/
+theorem Inv.execActions {as : List Action} : ∀ {d d' : FDatabase}, d.Inv →
+    Actions.SetLegal as d.sig → d.execActions as = some d' → d'.Inv := by
+  induction as with
+  | nil =>
+    intro d d' h _ hs
+    rw [FDatabase.execActions, Option.some.injEq] at hs
+    exact hs ▸ h
+  | cons a as ih =>
+    intro d d' h hlegal hs
+    obtain ⟨hl₁, hl₂⟩ := hlegal
+    cases hv : d.execAction a with
+    | none => rw [FDatabase.execActions, hv] at hs; simp at hs
+    | some d₁ =>
+      rw [FDatabase.execActions, hv, Option.bind_some] at hs
+      refine ih (h.execAction hl₁ hv) ?_ hs
+      rw [execAction_sig hv]
+      exact hl₂
+
+set_option maxHeartbeats 1000000 in
+/-- **One merge firing preserves `Inv`, provided the merge body's `set`s are legal.**
+
+Four steps, each a lemma above. Rebinding `env` to `mergeEnv r₁.out r₂.out` is harmless
+because `rowsWF` puts both rows' outputs in `terms`. Running the body preserves `Inv` by
+`Inv.execActions`, which is exactly where `hlegal` is spent. Deleting `r₁` and `r₂` is
+harmless because their function is a `.merge` function, so `ctorTerms` keeps their
+application out of `terms` and `ctorRowsOf` therefore does not demand them. And the
+combined row is written at that same `.merge` function, so `Inv.addRow`'s side condition
+holds and its operands are constructor terms by `execExprList_ctorTerm`. -/
+theorem mergeOneWith_inv {cl : Finset (Term × Term)} {d e : FDatabase} {r₁ r₂ : Row}
+    (h : d.Inv)
+    (hlegal : ∀ g body res, d.sig.mergeOf g = MergeSpec.merge body res →
+      Actions.SetLegal body d.sig)
+    (hm : d.mergeOneWith cl r₁ r₂ = some e) : e.Inv := by
+  unfold FDatabase.mergeOneWith at hm
+  cases hmo : d.sig.mergeOf r₁.fn with
+  | union => rw [hmo] at hm; simp at hm
+  | noMerge => rw [hmo] at hm; simp at hm
+  | merge body res =>
+    rw [hmo] at hm
+    simp only at hm
+    split at hm
+    case isFalse => simp at hm
+    case isTrue hcond =>
+      simp only [Bool.and_eq_true, decide_eq_true_eq, List.contains_iff_mem] at hcond
+      obtain ⟨⟨⟨hfn, -⟩, hr₁⟩, hr₂⟩ := hcond
+      have hσ : ∀ b ∈ mergeEnv r₁.out r₂.out, b.2 ∈ d.toDatabase.terms := by
+        intro b hb
+        rcases mem_mergeEnv hb with hb' | hb'
+        · exact (h.rowsWF r₁ hr₁).2 b.2 hb'
+        · exact (h.rowsWF r₂ hr₂).2 b.2 hb'
+      have h₀ : ({ d with env := mergeEnv r₁.out r₂.out } : FDatabase).Inv := h.setEnv hσ
+      cases hb : FDatabase.execActions { d with env := mergeEnv r₁.out r₂.out } body with
+      | none => rw [hb] at hm; simp at hm
+      | some eb =>
+        rw [hb, Option.bind_some, Option.map_eq_some_iff] at hm
+        obtain ⟨vs, hv, rfl⟩ := hm
+        have hsig : eb.sig = d.sig :=
+          execActions_sig (d := { d with env := mergeEnv r₁.out r₂.out }) hb
+        have hebInv : eb.Inv := h₀.execActions (hlegal r₁.fn body res hmo) hb
+        have hcont : d.toDatabase.terms ⊆ eb.toDatabase.terms :=
+          (execActions_contained (d := { d with env := mergeEnv r₁.out r₂.out }) hb).terms
+        have hfne : eb.sig.mergeOf r₁.fn ≠ MergeSpec.union := by rw [hsig, hmo]; simp
+        have hkeep : ∀ r ∈ eb.rows, eb.sig.mergeOf r.fn = MergeSpec.union →
+            (decide (r ≠ r₁) && decide (r ≠ r₂)) = true := by
+          intro r _ hu
+          have h₁ : r ≠ r₁ := by rintro rfl; exact hfne hu
+          have h₂ : r ≠ r₂ := by
+            rintro rfl
+            rw [hfn] at hfne
+            exact hfne hu
+          simp [h₁, h₂]
+        have hfInv :=
+          hebInv.filterRows (p := fun r => decide (r ≠ r₁) && decide (r ≠ r₂)) hkeep
+        have hvsCtor : ∀ x ∈ vs, Term.CtorTerm eb.sig x :=
+          FDatabase.execExprList_ctorTerm hebInv hebInv.env_ctorTerm hv
+        have hasCtor : ∀ x ∈ r₁.args, Term.CtorTerm eb.sig x := fun x hx =>
+          hebInv.ctorTerm_of_mem (hcont ((h.rowsWF r₁ hr₁).1 x hx))
+        have haddInv :=
+          hfInv.addRow (f := r₁.fn) (as := r₁.args) (vs := vs) hfne hasCtor hvsCtor
+        refine haddInv.setEnvRules ?_
+        intro b hb'
+        exact FDatabase.contained_addRow.terms (hcont (h.wf.envInTerms b hb'))
+
+/-- **A merge pass preserves the refinement-chain invariant, provided every declared
+merge's action block writes only legal `set`s.** `mergeOneWith_inv` through the two folds
+of `mergeRound`, exactly as `mergeRound_confined` threads `mergeOneWith_confined`. The
+accumulator also carries `sig = d.sig`, which is what lets `hlegal` — a statement about
+the *pre-pass* signature — apply at every intermediate state. -/
+theorem Inv.mergeRound_of_legalMerges {d : FDatabase} (h : d.Inv)
+    (hlegal : ∀ g body res, d.sig.mergeOf g = MergeSpec.merge body res →
+      Actions.SetLegal body d.sig) :
+    d.mergeRound.Inv := by
+  let P : FDatabase → Prop := fun x => x.Inv ∧ x.sig = d.sig
+  have hstep : ∀ (x : FDatabase) (r₁ r₂ : Row), P x →
+      P (match FDatabase.mergeOneWith d.closureF x r₁ r₂ with
+         | some y => y
+         | none => x) := by
+    intro x r₁ r₂ hx
+    cases hy : FDatabase.mergeOneWith d.closureF x r₁ r₂ with
+    | none => simpa [hy] using hx
+    | some y =>
+      have hs : y.sig = x.sig := (mergeOneWith_confined hy).2.2.1
+      refine ⟨mergeOneWith_inv hx.1 (fun g body res hg => ?_) hy, hs.trans hx.2⟩
+      exact hx.2 ▸ hlegal g body res (hx.2 ▸ hg)
+  have hfold : ∀ (l : List Row) (r₁ : Row) (x : FDatabase), P x →
+      P (l.foldl (fun acc' r₂ =>
+          if r₁ == r₂ then acc'
+          else match FDatabase.mergeOneWith d.closureF acc' r₁ r₂ with
+            | some acc'' => acc''
+            | none => acc') x) := by
+    intro l
+    induction l with
+    | nil => intro _ x hx; exact hx
+    | cons r₂ l ih =>
+      intro r₁ x hx
+      refine ih r₁ _ ?_
+      by_cases hbe : r₁ == r₂
+      · simpa [hbe] using hx
+      · simpa [hbe] using hstep x r₁ r₂ hx
+  have houter : ∀ (l : List Row) (x : FDatabase), P x →
+      P (l.foldl (fun acc r₁ =>
+          d.rows.foldl (fun acc' r₂ =>
+            if r₁ == r₂ then acc'
+            else match FDatabase.mergeOneWith d.closureF acc' r₁ r₂ with
+              | some acc'' => acc''
+              | none => acc') acc) x) := by
+    intro l
+    induction l with
+    | nil => intro _ hx; exact hx
+    | cons r₁ l ih => intro x hx; exact ih _ (hfold d.rows r₁ x hx)
+  have hinit : P d := ⟨h, rfl⟩
+  unfold FDatabase.mergeRound
+  split
+  · exact hinit.1
+  · exact (houter d.rows d hinit).1
+
+/-- The special case the task names: merge bodies are `[]`, which is `SetLegal` outright. -/
+theorem Inv.mergeRound_of_pureMerges {d : FDatabase} (h : d.Inv)
+    (hpure : ∀ g body res, d.sig.mergeOf g = MergeSpec.merge body res → body = []) :
+    d.mergeRound.Inv :=
+  h.mergeRound_of_legalMerges fun g body res hg => by
+    rw [hpure g body res hg]
+    exact trivial
+
+end FDatabase
 
 theorem Database.ActionStep.wf {db d : Database} {a : Action} (hw : db.WF)
     (h : Database.ActionStep db a d) : d.WF := by
