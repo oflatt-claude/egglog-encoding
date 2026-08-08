@@ -380,4 +380,180 @@ private def wrapperProgram : Program :=
 
 end Computed
 
+/-! ## Arity
+
+`Spec/Scope.lean`'s `Program.arityOk` mirrors what egglog's typechecker does with column
+counts. Every rejection below was run against the release binary first, and the quoted text
+is what it printed; the accompanying acceptances are what keep the check from being
+vacuous — a predicate that rejected everything would satisfy the rejections alone. -/
+namespace Arity
+set_option linter.hashCommand false
+
+private def emptySig : Signature := fun _ => none
+
+/- `(function Dist (Math) i64 :merge 0)`. -/
+private def one : FnDecl := { arity := 1, outArity := 1, merge := .merge [] [eNum 0] }
+
+/- `(function Dist (Math) (i64 i64) :merge (values 0 1))`. -/
+private def two : FnDecl :=
+  { arity := 1, outArity := 2, merge := .merge [] [eNum 0, eNum 1] }
+
+private def A : Expr := .app "A" []
+
+private def prog (d : FnDecl) (cs : List Cmd) : Program := .decl "Dist" d :: cs
+
+private def accepts (d : FnDecl) (cs : List Cmd) : Bool := (prog d cs).arityOk emptySig
+
+/-! ### One value column -/
+
+#guard accepts one [.action (.set "Dist" [A] [eNum 3])]
+#guard accepts one [.rule ⟨[.expr (.app "Dist" [.var "k"])], []⟩]
+#guard accepts one [.rule ⟨[.eq (eNum 3) (.app "Dist" [.var "k"])], []⟩]
+#guard accepts one [.action (.letBind "x" (.app "Dist" [A]))]
+
+/- "Arity mismatch, expected 1 args: (Dist @A @A1)" — too many key columns. -/
+#guard !accepts one [.action (.set "Dist" [A, A] [eNum 3])]
+
+/- "Arity mismatch, expected 1 args: (Dist @A 3)" — `(set (Dist (A)) (values 3 4))`
+flattens to three columns where the table has two. -/
+#guard !accepts one [.action (.set "Dist" [A] [eNum 3, eNum 4])]
+
+/- The row atom at one value column, which is how a single-column read is written since
+`Expr.MEval` does not look up. `Tests/Egg.lean` renders it `(= v (Dist k))`: writing
+`(= (values v) (Dist k))` instead is "Unbound function values", because `values` is
+recognized only for a tuple output. -/
+#guard accepts one [.rule ⟨[.values [.var "v"] "Dist" [.var "k"]], []⟩]
+
+/- "Arity mismatch, expected 1 args: (Dist a b)" — in a query fact too. -/
+#guard !accepts one [.rule ⟨[.expr (.app "Dist" [.var "a", .var "b"])], []⟩]
+
+/-! ### Two value columns -/
+
+#guard accepts two [.action (.set "Dist" [A] [eNum 3, eNum 4])]
+#guard accepts two [.rule ⟨[.values [.var "v", .var "w"] "Dist" [.var "k"]], []⟩]
+
+/- "Arity mismatch, expected 2 args: (Dist @A)" — a bare value on a two-column table. -/
+#guard !accepts two [.action (.set "Dist" [A] [eNum 3])]
+
+/- "Arity mismatch, expected 2 args: (Dist @A2)" — a tuple-output function cannot be
+evaluated as an expression: only one output variable is appended. -/
+#guard !accepts two [.action (.letBind "x" (.app "Dist" [A]))]
+
+/- "Arity mismatch, expected 2 args: (Dist k)" — nor read as a bare query fact, for the
+same reason. A read of any width is `Pattern.values`. -/
+#guard !accepts two [.rule ⟨[.expr (.app "Dist" [.var "k"])], []⟩]
+
+/- "Arity mismatch, expected 2 args: (Dist k v)" — the destructure binds every value
+column or none. -/
+#guard !accepts two [.rule ⟨[.values [.var "v"] "Dist" [.var "k"]], []⟩]
+
+/-! ### The declaration itself -/
+
+/- "The :merge of tuple-output function Dist has 1 columns but the function has 2 output
+columns." -/
+#guard !accepts { two with merge := .merge [] [eNum 0] } []
+
+/- "Function F has a tuple output, which is only allowed for plain functions (not
+constructors, relations, or view tables)." -/
+#guard !Program.arityOk [.decl "F" { arity := 1, outArity := 2, merge := .union }] emptySig
+
+/- `:no-merge` has no result to check, and a tuple output is legal on one. -/
+#guard Program.arityOk [.decl "F" { arity := 1, outArity := 2, merge := .noMerge }] emptySig
+
+/- A merge body is checked against the signature the declaration itself installs, so it
+may write the function's own table — `(function Dist (Math) i64 :merge ((set (Dist (A)) 1)
+(min old new)))` runs. A forward reference is instead "Unbound function". -/
+#guard accepts { one with merge := .merge [.set "Dist" [A] [eNum 1]] [eNum 0] } []
+
+/- …and its arity is checked there too: "Arity mismatch, expected 1 args:
+(Dist @A @A1)". -/
+#guard !accepts { one with merge := .merge [.set "Dist" [A, A] [eNum 1]] [eNum 0] } []
+
+/-! ### Undeclared names are unconstrained
+
+Constructors are never declared here — `Signature.mergeOf` sends an undeclared name to
+`.union` — so there is nothing for a use to disagree with, and the check passes a name used
+at two arities. `Tests/Egg.lean`'s `Program.arityConflicts` is that half, because it is the
+emitted `datatype` header that cannot express it. -/
+#guard Program.arityOk [.action (.expr (.app "F" [A])), .action (.expr (.app "F" [A, A]))]
+  emptySig
+
+end Arity
+
+/-! ## Reading
+
+`Spec/Scope.lean`'s `Program.noLookup`: applying a non-constructor is a *read*, and the
+only place a program may read is the query atom `Pattern.values`. egglog enforces this in
+a rule head — "Value lookup of non-constructor function function in rule is disallowed" —
+and this model everywhere, which is what makes `Expr.MEval` deterministic. The three
+places egglog is more permissive are each marked below.
+
+Acceptances matter as much as rejections here: a predicate that rejected everything would
+satisfy the rejections on its own. -/
+namespace Reading
+set_option linter.hashCommand false
+
+private def emptySig : Signature := fun _ => none
+
+/- `(function Dist (Math) i64 :merge (min old new))` and a second like it. -/
+private def dist : FnDecl :=
+  { arity := 1, outArity := 1,
+    merge := .merge [] [.app "min" [.var "old", .var "new"]] }
+
+private def decls : Program := [.decl "Dist" dist, .decl "Copy" dist]
+
+private def A : Expr := .app "A" []
+
+private def ok (cs : List Cmd) : Bool := (decls ++ cs).noLookup emptySig
+
+/-! ### A rule head — egglog rejects these too -/
+
+/- "Value lookup of non-constructor function function in rule is disallowed." -/
+#guard !ok [.rule ⟨[.values [.var "v"] "Dist" [.var "k"]],
+                   [.set "Copy" [.var "k"] [.app "Dist" [.var "k"]]]⟩]
+
+/- The same read nested inside a constructor application, and inside a `union`. -/
+#guard !ok [.rule ⟨[], [.expr (.app "F" [.app "Dist" [A]])]⟩]
+#guard !ok [.rule ⟨[], [.union (.app "Dist" [A]) A]⟩]
+
+/- The query binds the value and the head only writes: this is the shape egglog wants. -/
+#guard ok [.rule ⟨[.values [.var "v"] "Dist" [.var "k"]],
+                  [.set "Copy" [.var "k"] [.var "v"]]⟩]
+
+/-! ### Positions where egglog is more permissive
+
+Each of the three runs in the binary and is rejected here, which is what confines reading
+to `Pattern.values` and so what removes `Expr.MEval`'s `lookup` constructor. -/
+
+/- A top-level action. `(set (Copy (A)) (Dist (A)))` copies the value in egglog. -/
+#guard !ok [.action (.set "Copy" [A] [.app "Dist" [A]])]
+
+/- A `:merge` body, typechecked under `Context::Write`, which never runs the check.
+`(function Dist (Math) i64 :merge (max old (Zero)))` reads `Zero` and panics with
+"Lookup on Zero failed in the merge function for Dist" when the row is missing. -/
+#guard !Program.noLookup
+  [.decl "Zero" { arity := 0, outArity := 1, merge := .merge [] [.lit (.int 0)] },
+   .decl "Dist" { arity := 1, outArity := 1,
+                  merge := .merge [] [.app "max" [.var "old", .app "Zero" []]] }] emptySig
+
+/- A read nested in a query fact. egglog flattens `(F (Dist k))` into the two atoms
+`Dist(k, v), F(v, o)`; this model has no flattening pass, so it must be written flat. -/
+#guard !ok [.rule ⟨[.expr (.app "F" [.app "Dist" [.var "k"]])], []⟩]
+#guard ok [.rule ⟨[.values [.var "v"] "Dist" [.var "k"], .expr (.app "F" [.var "v"])], []⟩]
+
+/-! ### What still passes
+
+A constructor, a primitive and a literal are not reads. `Signature.mergeOf` sends an
+undeclared name to `.union`, which covers the first two without a case of their own — so a
+merge body computing `(min old new)` is fine, and a body writing its own table is a write.
+-/
+#guard ok [.action (.expr (.app "F" [A])), .action (.union A (.app "G" [A, A]))]
+#guard Program.noLookup decls emptySig
+#guard Program.noLookup
+  [.decl "Dist" { arity := 1, outArity := 1,
+                  merge := .merge [.set "Dist" [A] [.lit (.int 1)]]
+                    [.app "min" [.var "old", .var "new"]] }] emptySig
+
+end Reading
+
 end Egglog.Examples

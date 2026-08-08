@@ -53,18 +53,23 @@ constraint between two patterns. -/
 inductive Pattern where
   | expr : Expr → Pattern
   | eq : Expr → Expr → Pattern
-  /-- `(= (values v…) (f a…))`: read a row of `f` and bind its value columns.
+  /-- `f(a…, v…)`: read a row of `f` and bind its value columns. **The only read in the
+  language.**
 
-  This is egglog's **tuple destructure**, and it is the *only* way egglog offers to read
-  a value column other than the first: a tuple-output function cannot be evaluated as an
-  expression (`eval_resolved_expr` panics on `values`) and cannot be extracted
-  (`CannotExtractTupleOutput`, whose message says "Read its columns in a rule with
-  `(= (values ...) (f ...))` instead"). egglog recognizes the shape inside an ordinary
-  `=` fact, in either argument order, and lowers it to the atom `f(a…, v…)`
-  (`match_tuple_destructure`, `egglog/src/ast/mod.rs`). It is a separate `Pattern` case
-  here rather than a reserved `values` name inside `.eq` for the reason that keeps
-  primitives out of `Expr` (`MERGE.md`): a name that is a term constructor in one
-  position and a keyword in another is a trap. -/
+  This is egglog's lowered query atom. Every fact naming a non-constructor compiles to
+  one: `(f a…)` appending a fresh output variable, `(= v (f a…))` binding `v`, and the
+  tuple destructure `(= (values v…) (f a…))` binding all of them
+  (`match_tuple_destructure`, `egglog/src/ast/mod.rs`, which recognizes the shape inside an
+  ordinary `=` fact in either argument order). The tuple form is the *only* way egglog
+  offers to reach a value column other than the first, since a tuple-output function
+  cannot be evaluated as an expression (`eval_resolved_expr` panics on `values`) or
+  extracted (`CannotExtractTupleOutput`).
+
+  The three surface forms are one case here because they are one atom there;
+  `Tests/Egg.lean` renders whichever fits the width. It is a `Pattern` case rather than a
+  reserved `values` name inside `.eq` for the reason that keeps primitives out of `Expr`
+  (`MERGE.md`): a name that is a term constructor in one position and a keyword in another
+  is a trap. -/
   | values : List Expr → FnName → List Expr → Pattern
 
 /-- A rule's query, matched conjunctively. -/

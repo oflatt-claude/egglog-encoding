@@ -14,7 +14,7 @@ that evaluates with `Expr.eval` and never calls `mergeRound`, so everything in t
 except `keyRowCount` had **no differential coverage at all**. A passing suite said nothing
 about the merge implementation.
 
-Three things differ from `Impl/Interp.lean`, all forced by the spec being *relational*.
+Two things differ from `Impl/Interp.lean`, both forced by the spec being *relational*.
 
 **The refinement weakens to reachability.** `exec_toDatabase` says the constructor
 interpreter computes exactly the spec's answer. Here the spec admits several, so the
@@ -28,11 +28,11 @@ reachable state. Saturation is *now* reachable, since `min` and `max` became `Pr
 merging is an idempotent join again; `mergeSaturateF` says what switching to it would
 buy and cost.
 
-**A lookup has to pick.** `Expr.MEval`'s `lookup` reads any recorded output; `execExpr`
-takes the first. `MERGE.md`, "Why the reader over-approximates", is why the spec does
-not pin this and why an interpreter must. It is also where the model and egglog are now
-known to diverge, since a superseded row is still readable here — `MERGE.md`, "What the
-widening and the composed interpreter found", has the repro.
+What no longer differs is **evaluation**: with reading confined to the query, `MEval` is
+deterministic and `execExpr` computes it rather than picking among its answers. The
+remaining choice is `patternHoldsM`'s, which scans rows and so still sees a superseded
+output where egglog sees only the current one — `MERGE.md`, "What the widening and the
+composed interpreter found", has the repro.
 
 The congruence closure is *unchanged*. `MCong.fd` fires only at `.union` functions, and
 a `.union` function's rows are exactly the constructor rows `Impl/Closure.lean` already
@@ -44,21 +44,16 @@ sees through `terms`; a `:merge` function's rows contribute nothing to `MCong`. 
 namespace Egglog
 namespace FDatabase
 /-- Whether two key tuples are congruent. `Impl/Interp.lean`'s `congrTuple`, which the
-tuple-destructure pattern also uses. -/
+row atom `Pattern.values` also uses. -/
 abbrev congrKeys : Finset (Term × Term) → List Term → List Term → Bool :=
   FDatabase.congrTuple
-
-/-- `Database.Out`, computed: every output recorded at a key congruent to `as`. -/
-def outs (d : FDatabase) (f : FnName) (as : List Term) : List (List Term) :=
-  let cl := d.closureF
-  d.rows.filterMap fun r =>
-    if r.fn = f && congrKeys cl as r.args then some r.out else none
 
 end FDatabase
 /-! ### Evaluation
 
-`Expr.MEval`, computed. The `lookup` case takes the *first* recorded output, which is
-the interpreter's pick; the spec allows any. -/
+`Expr.MEval`, computed — and, since `MEval` has no `lookup`, a plain structural recursion
+with nothing to choose. A non-constructor application is `none`: it is a read, which
+`Spec/Scope.lean` rejects statically wherever this is called from. -/
 mutual
 
 /-- `Expr.MEval`, computed. -/
@@ -72,9 +67,7 @@ def FDatabase.execExpr (d : FDatabase) (σ : Env) : Expr → Option Term
       | none =>
         match d.sig.mergeOf f with
         | .union => some (.app f ts)
-        | _ => match d.outs f ts with
-               | [v] :: _ => some v
-               | _ => none
+        | _ => none
 
 /-- `execExpr` over an argument list. -/
 def FDatabase.execExprList (d : FDatabase) (σ : Env) : List Expr → Option (List Term)
@@ -252,8 +245,12 @@ def mergeFuel : Nat := 64
 
 `Impl/Interp.lean`'s `patternHolds` evaluates a pattern with `Expr.eval`, which builds an
 application for *every* name. That is right for the constructor fragment and wrong here:
-a body mentioning a `:merge` function has to read its row, and the tuple destructure
-`Pattern.values` has no `Expr.eval` reading at all.
+a `:merge` function's row is read by the atom `Pattern.values`, whose operands need
+primitives resolved.
+
+**This is where the interpreter still chooses**, and the only place left: the row scan
+finds any recorded output, so a superseded value is readable here where egglog holds only
+the current one (`MERGE.md`, "What the widening and the composed interpreter found").
 
 The congruence closure is unchanged. `MCong.fd` fires only at a `.union` function, whose
 rows are exactly the constructor rows `closureF` already sees through `terms`, so
@@ -291,7 +288,7 @@ def FDatabase.matchQueryM (d : FDatabase) (q : Query) : List Env :=
 
 `Impl/Interp.lean`'s `exec` evaluates with `Expr.eval` and never calls `mergeRound`, so
 before this the merge implementation had **no** differential coverage at all: `mergeOne`,
-`mergeRound`, `execActions` and `execExpr`'s lookup branch were unreachable from
+`mergeRound`, `execActions` and `patternHoldsM`'s row scan were unreachable from
 `Program.expectedSizes`. `execM` is the composition that reaches them. -/
 /-- `RuleResults`, computed: one firing, unioned into the accumulator. -/
 def FDatabase.fireIntoM (d : FDatabase) (r : Rule) (acc : FDatabase) (σ : Env) :

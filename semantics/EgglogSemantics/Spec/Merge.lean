@@ -22,10 +22,13 @@ Three things follow, and the first is the milestone:
   union-find's merge `set`s the displaced parent edge — so `MergeStep` is a relation
   on *databases*, not a function combining two values, and merge closure is a phase
   of `RunStep` rather than a definition of "the value of a key".
-* **Evaluation becomes a relation.** A non-constructor application in an action is a
-  *lookup*, not a construction, and a key class can record several outputs. So
-  `Expr.eval` is replaced by `Expr.MEval`, and everything downstream of it —
-  actions, rule firing, `run` — is a relation too.
+* **Reading is a query atom, never an evaluation.** egglog compiles the fact `(Dist k)`
+  to the atom `Dist(k, v)` with a fresh output variable, and forbids a lookup in a rule
+  head outright (`check_no_function_lookups_in_actions`). `Spec/Scope.lean`'s "Reading in
+  an action" adopts that as an invariant: the *only* read is `Pattern.values`, and every
+  expression the semantics evaluates names constructors and primitives alone. So
+  `Expr.MEval` is `Expr.eval` plus primitive resolution — deterministic, and a function of
+  the signature and the environment rather than of the database.
 
 Nothing is ever removed, from any of `terms`, `rows` or `eqs`. Both colliding rows
 survive a merge, which is what keeps the state monotone; the encoding depends on the
@@ -101,20 +104,26 @@ Keys are compared up to congruence, so a lookup searches the key's class rather 
 the row set. `Out` is the relation a lookup reads; `Current` is the single value it has
 when the merge is a join, used only where a result must match egglog exactly. -/
 namespace Database
-/-- `v` is an output `db` records for `f` at the class of the key `as`.
+/-- `vs` are outputs `db` records for `f` at the class of the key `as`.
 
 Quantifying over congruent keys here rather than re-keying rows is what lets
 `MergeStep` write the combined row at one key only and still be seen from the other,
 and it is why the row set never needs the re-canonicalization egglog's rebuild does.
-Monotone in `Contained`, because `MCongList` is. -/
+Monotone in `Contained`, because `MCongList` is.
+
+A key class may record several outputs, which is why this is a relation and not a
+function. Nothing *evaluates* through it — `Expr.MEval` does not read — so the
+over-approximation is confined to the query, where `MValidSubst.values` matches any
+recorded row. `MERGE.md`, "Why the reader over-approximates", is the argument that this
+is the right trade. -/
 def Out (db : Database) (f : FnName) (as : List Term) (vs : List Term) : Prop :=
   ∃ bs, MCongList db as bs ∧ Row.mk f bs vs ∈ db.rows
 
 /-- The value a *join* merge settles on at the class of `as`: the `le`-greatest
 recorded output.
 
-**Not** what `Expr.MEval` reads — that reads `Out`, and `MERGE.md`'s "Why the reader
-over-approximates" says why. `Current` exists only when `f`'s merge really is a join
+**Not** what a query read matches — that is `Out`, any recorded output, and `MERGE.md`'s
+"Why the reader over-approximates" says why. `Current` exists only when `f`'s merge is a join
 for `le`: under `:merge old` every recorded output absorbs and it is not unique, and
 under `:merge new` none does and it does not exist. Both are common, and egglog
 settles them by insertion order, which a `Set Row` cannot express.
@@ -247,40 +256,37 @@ end
 
 `Expr.eval` is a function of the environment alone, which is exactly right while every
 function is a constructor: a term is its own identity, so building one reads nothing.
-A `:merge` function's application is instead a **lookup**, and egglog has no
-`:default` to fall back on (removed in #461) — a missing row is a panic in an action
-and simply no match in a body. So evaluation reads the database, and since a key class
-may record several outputs it is a relation. -/
+`Expr.MEval` adds the one thing M9 forces, which is not reading but **primitives** — a
+`:merge (min old new)` body has to compute `3` rather than build the term `min(5, 3)`.
+
+It does *not* read the database, and that is the invariant `Spec/Scope.lean`'s "Reading in
+an action" installs: an application of a non-constructor is a lookup, and a lookup is a
+query atom (`Pattern.values`), never an expression. So there is no `lookup` constructor
+here, `MEval` is deterministic, and it consults `db` only for `db.sig` — which is what a
+`.union` test needs to tell "build" from "the program is rejected". -/
 mutual
 
-/-- The value(s) an expression denotes.
+/-- The value an expression denotes: `Expr.eval` with primitives resolved.
 
-`ctor` builds and `lookup` reads, split on the signature; `prim` resolves a reserved
-name first, as egglog's primitive table does. A `Term` therefore contains only
-constructor applications, which is what lets `Term.ctorRows` need no signature.
+`ctor` builds and `prim` computes, split on the reserved name first, as egglog's primitive
+table is consulted first. A `Term` therefore contains only constructor applications, which
+is what lets `Term.ctorRows` need no signature.
 
-`lookup` reads `Out` — *any* recorded output — and not `Current`. Two reasons.
-`Current` frequently does not exist: `:merge old` makes every output absorb so it is
-not unique, `:merge new` makes none absorb so there is none, and both are common
-(the encoding's own `@<Sort>Proof` is `:merge old`). And the over-approximation is
-sound for what M11 needs: term and proof rows are append-only, so every recorded proof
-is valid and stays valid, and reading a stale one yields a *different proof of the same
-fact*, never an invalid one. The safety theorem therefore needs no well-behavedness
-hypothesis at all.
+There is deliberately **no rule for a non-constructor application**. That is a lookup, and
+`Spec/Scope.lean` rejects one statically in every position this relation is used from —
+a rule head, a top-level action, a `:merge` body, and a query's operands — so a program
+the model accepts never reaches the missing case. Reading happens in the query, where
+`MValidSubst.values` matches a row directly.
 
-Partiality that was `none` in `Expr.eval` is now "no `t` related". `Scope.lean`'s
-"a well-scoped program never gets stuck" therefore weakens: staying unstuck now also
-needs every lookup to hit, which is not a scope property and is egglog's `Fail` panic
-rather than anything a static check could rule out. -/
+Partiality that was `none` in `Expr.eval` is "no `t` related": an unbound variable, or a
+primitive at the wrong operands. `Scope.lean`'s "a well-scoped program never gets stuck"
+covers the first and not the second, which is egglog's own `i64` type error. -/
 inductive Expr.MEval (db : Database) (σ : Env) : Expr → Term → Prop where
   | lit {l : Lit} : Expr.MEval db σ (.lit l) (.lit l)
   | var {v : Var} {t : Term} : Env.lookup v σ = some t → Expr.MEval db σ (.var v) t
   | ctor {f : FnName} {args : List Expr} {ts : List Term} :
       Prim.ofName f = none → db.sig.mergeOf f = MergeSpec.union →
       Expr.MEvalList db σ args ts → Expr.MEval db σ (.app f args) (.app f ts)
-  | lookup {f : FnName} {args : List Expr} {ts : List Term} {v : Term} :
-      Prim.ofName f = none → db.sig.mergeOf f ≠ MergeSpec.union →
-      Expr.MEvalList db σ args ts → db.Out f ts [v] → Expr.MEval db σ (.app f args) v
   | prim {f : FnName} {p : Prim} {args : List Expr} {ts : List Term} {v : Term} :
       Prim.ofName f = some p → Expr.MEvalList db σ args ts → p.apply ts = some v →
       Expr.MEval db σ (.app f args) v
@@ -464,11 +470,18 @@ inductive MValidSubst (db : Database) : Pattern → Env → Prop where
       Expr.MEval db (db.env ++ σ) e₁ t₁ → Expr.MEval db (db.env ++ σ) e₂ t₂ →
       MCong ((db.addTerm t₁).addTerm t₂) w t₁ → MCong ((db.addTerm t₁).addTerm t₂) t₁ t₂ →
       MValidSubst db (.eq e₁ e₂) σ
-  /-- The tuple destructure, over `MCong`. This is the *only* way to read a value column
-  other than the first: `MEval.lookup` reads a one-column row, faithfully, because egglog
-  refuses to evaluate a tuple-output function as an expression. Its key premise is
-  `Database.Out`'s and its value premise is the same comparison applied to the value
-  columns. -/
+  /-- The row atom: `f`'s row at a key class congruent to `as`, with value columns
+  congruent to `vs`. **This is the only read in the semantics.**
+
+  It is egglog's lowered query atom `f(a…, v…)`, which is what every fact mentioning a
+  non-constructor compiles to — `(Dist k)` with a fresh output variable, `(= v (Dist k))`
+  with `v`, `(= (values v…) (f k…))` for a tuple output. `Tests/Egg.lean` renders the
+  one-column and many-column surface forms back, since egglog recognizes `values` only
+  when the function really has several value columns.
+
+  Its key premise is `Database.Out`'s and its value premise is the same comparison applied
+  to the value columns. There is no `w ∈ db.terms` witness and no `addTerm`: the row
+  itself is the witness that forbids matching something the database does not hold. -/
   | values {vs : List Expr} {f : FnName} {as : List Expr} {σ : Env}
       {us ts ws bs : List Term} :
       ValidEnv (Expr.freeVarsList vs db.env ∪ Expr.freeVarsList as db.env) db σ →

@@ -44,6 +44,20 @@ inductive CongList (db : Database) : List Term → List Term → Prop where
 
 end
 
+/-- `a = b` holds in `db` once both terms are built.
+
+`Cong`'s `refl` and `congr` are restricted to `db.terms`, so a pair the database does not
+hold cannot be related at all. Adding the two first is what the Redex `valid-subst` does
+— "the pattern instance is added to the database before congruence is consulted" — and
+adding a term asserts nothing, so this is a conservative reading of `Cong` rather than a
+weaker relation. On `a b ∈ db.terms` under `Database.WF` the two coincide.
+
+`ValidSubst.eq` is where the semantics needs it. M11 needs it again on the encoded side,
+whose rebuild re-keys view rows to applications the source never built
+(`Spec/Encode.lean`). -/
+def CongOn (db : Database) (a b : Term) : Prop :=
+  Cong ((db.addTerm a).addTerm b) a b
+
 namespace CongList
 variable {db : Database}
 

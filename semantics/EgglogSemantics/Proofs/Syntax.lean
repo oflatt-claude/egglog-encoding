@@ -2,6 +2,17 @@ import Mathlib.Data.List.Basic
 import EgglogSemantics.Spec.Syntax
 
 namespace Egglog
+/-! ### Signatures -/
+/-- With `mergeOf` defaulting an undeclared name to `.union`, `AllConstructors` says
+exactly that every function is a constructor. This is why "everything up to M8" is
+literally the all-constructors case and not merely analogous to it. -/
+theorem Signature.mergeOf_eq_union {sig : Signature} (h : sig.AllConstructors)
+    (f : FnName) : sig.mergeOf f = MergeSpec.union := by
+  unfold Signature.mergeOf
+  cases hf : sig f with
+  | none => rfl
+  | some d => exact h f d hf
+
 namespace Expr
 @[simp] theorem vars_lit {l : Lit} : (Expr.lit l).vars = [] := rfl
 

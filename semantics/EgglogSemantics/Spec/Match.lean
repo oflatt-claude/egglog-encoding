@@ -86,7 +86,11 @@ end ValidEnv
 Both cases add the pattern's instance (or instances) to the database before asking
 `Cong`, mirroring the Redex
 `restore-congruence (U_d Database_1 ((tset Term_res) …))`. The witness is drawn from
-the *original* terms. -/
+the *original* terms.
+
+The witness premises stay spelled out rather than reading `CongOn`, because the extended
+database they ask over is the one *both* instances are added to; only the `eq` case's
+final premise, which relates the two instances themselves, is `CongOn`. -/
 inductive ValidSubst (db : Database) : Pattern → Env → Prop where
   | expr {e : Expr} {σ : Env} {w t : Term} :
       ValidEnv (e.freeVars db.env) db σ → w ∈ db.terms →
@@ -95,8 +99,7 @@ inductive ValidSubst (db : Database) : Pattern → Env → Prop where
   | eq {e₁ e₂ : Expr} {σ : Env} {w t₁ t₂ : Term} :
       ValidEnv (e₁.freeVars db.env ∪ e₂.freeVars db.env) db σ → w ∈ db.terms →
       e₁.eval (db.env ++ σ) = some t₁ → e₂.eval (db.env ++ σ) = some t₂ →
-      Cong ((db.addTerm t₁).addTerm t₂) w t₁ →
-      Cong ((db.addTerm t₁).addTerm t₂) t₁ t₂ →
+      Cong ((db.addTerm t₁).addTerm t₂) w t₁ → CongOn db t₁ t₂ →
       ValidSubst db (.eq e₁ e₂) σ
   /-- A tuple destructure matches a row whose key and value columns are congruent to the
   operands, which is egglog joining on canonical ids. The row itself is the witness that

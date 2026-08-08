@@ -137,6 +137,16 @@ theorem evalAction_rules {db db' : Database} {a : Action}
   · rfl
   · simp
 
+/-- No action touches the signature; only `Cmd.decl` writes it. -/
+theorem evalAction_sig {db db' : Database} {a : Action}
+    (h : evalAction db a = some db') : db'.sig = db.sig := by
+  rcases evalAction_eq_some h with ⟨_, _, -, -, rfl⟩ | ⟨_, _, _, -, -, rfl⟩ |
+    ⟨_, _, _, _, -, -, -, rfl⟩ | ⟨_, _, _, _, _, -, -, -, rfl⟩
+  · rfl
+  · rfl
+  · rfl
+  · simp
+
 theorem evalAction_wf {db db' : Database} (hw : db.WF) {a : Action}
     (h : evalAction db a = some db') : db'.WF := by
   rcases evalAction_eq_some h with ⟨_, t, -, -, rfl⟩ | ⟨_, _, t, -, -, rfl⟩ |

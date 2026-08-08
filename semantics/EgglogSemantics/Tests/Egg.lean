@@ -1,4 +1,5 @@
 import EgglogSemantics.Impl.Merge
+import EgglogSemantics.Spec.Scope
 
 /-!
 # Emitting egglog source
@@ -39,20 +40,23 @@ def Expr.toEggArgs : List Expr → String
 
 end
 
+/-- One expression per value column, written as egglog's tuple form `(values e₀ e₁ …)`
+when there is more than one and bare when there is exactly one. `Spec/Syntax.lean` takes
+the list the tuple denotes, in `Action.set`, `MergeSpec.merge` and `Pattern.values`; this
+is where the two notations meet. -/
+def Expr.valuesToEgg : List Expr → String
+  | [e] => e.toEgg
+  | res => "(values " ++ String.intercalate " " (res.map Expr.toEgg) ++ ")"
+
+/-- A query fact. `Pattern.values` is egglog's row atom, whose surface form depends on the
+width: `(= v (f a…))` at one value column and `(= (values v…) (f a…))` at more, since
+`values` is not a function name and egglog answers "Unbound function values" if the tuple
+form is used on a one-column function. -/
 def Pattern.toEgg : Pattern → String
   | .expr e => e.toEgg
   | .eq e₁ e₂ => "(= " ++ e₁.toEgg ++ " " ++ e₂.toEgg ++ ")"
   | .values vs f as =>
-      "(= (values " ++ String.intercalate " " (vs.map Expr.toEgg) ++ ") ("
-        ++ f ++ Expr.toEggArgs as ++ "))"
-
-/-- One expression per value column, written as egglog's tuple form `(values e₀ e₁ …)`
-when there is more than one and bare when there is exactly one. `Spec/Syntax.lean` takes
-the list the tuple denotes, in both `Action.set` and `MergeSpec.merge`; this is where the
-two notations meet. -/
-def Expr.valuesToEgg : List Expr → String
-  | [e] => e.toEgg
-  | res => "(values " ++ String.intercalate " " (res.map Expr.toEgg) ++ ")"
+      "(= " ++ Expr.valuesToEgg vs ++ " (" ++ f ++ Expr.toEggArgs as ++ "))"
 
 def Action.toEgg : Action → String
   | .expr e => e.toEgg
@@ -204,6 +208,54 @@ non-`union` merge. Empty is the only acceptable value for a case the difftest em
 def Program.illegalSets (p : Program) : List FnName :=
   (p.flatMap Cmd.setTargets).dedup.filter (· ∉ p.mergeNames)
 
+/-! ### Which arities egglog will accept
+
+Two halves, because the model declares only its `:merge` functions.
+
+For a *declared* function, `Spec/Scope.lean`'s `Cmd.arityOk` is the check — this only
+walks the program threading `Cmd.sigBind` and renders the commands that fail, so the two
+cannot drift the way `illegalSets` and `Action.SetLegal` can.
+
+For an *undeclared* one there is no declaration to check against, and the constraint comes
+from this file instead: `eggHeader` invents a `datatype` entry per `(name, arity)` pair, so
+a name used at two arities emits two entries and egglog answers "Function already bound
+{name}". -/
+
+def Program.arityErrorsFrom : Program → Signature → List String
+  | [], _ => []
+  | c :: cs, sig =>
+      (if c.arityOk sig then [] else [c.toEgg]) ++ Program.arityErrorsFrom cs (c.sigBind sig)
+
+/-- The commands whose column counts egglog's typechecker would reject, rendered. Empty is
+the only acceptable value for a case the difftest emits. -/
+def Program.arityErrors (p : Program) : List String :=
+  p.arityErrorsFrom (fun _ => none)
+
+/-! ### Where a program may read
+
+`Spec/Scope.lean`'s "Reading in an action": no expression may apply a non-constructor,
+because that is a *lookup*, and the only read is the query atom `Pattern.values`. Walked the
+same way `arityErrorsFrom` walks the arity check, so the difftest and the specification
+share one definition. -/
+
+def Program.illegalReadsFrom : Program → Signature → List String
+  | [], _ => []
+  | c :: cs, sig =>
+      (if c.noLookup sig then [] else [c.toEgg])
+        ++ Program.illegalReadsFrom cs (c.sigBind sig)
+
+/-- The commands containing a read that is not a `Pattern.values` atom, rendered. Empty is
+the only acceptable value for a case the difftest emits. egglog rejects this in a rule head
+only; the other positions are ours, and `Spec/Scope.lean` says why. -/
+def Program.illegalReads (p : Program) : List String :=
+  p.illegalReadsFrom (fun _ => none)
+
+/-- The names the program uses at more than one key arity. `fnArities` is deduplicated on
+the *pair*, so such a name is exactly one occurring twice in it. -/
+def Program.arityConflicts (p : Program) : List FnName :=
+  ((p.fnArities.map Prod.fst).filter fun f =>
+      1 < (p.fnArities.filter fun fa => fa.1 == f).length).dedup
+
 /-- Every function `(print-size)` reports, in a stable order. Deduplicated by *name*:
 `fnArities` keys on the pair, so a name used at two arities would appear twice — which
 egglog cannot express anyway, but which would silently double a line here. -/
@@ -229,7 +281,7 @@ well-scoped program with no failing lookup and no diverging merge it always does
 
 This is `Impl/Merge.lean`'s **M9** interpreter, not `Impl/Interp.lean`'s `exec`. `exec`
 evaluates with `Expr.eval` and never runs a merge phase, so while it was what this read,
-`mergeOne`, `mergeRound`, `execActions`, `execExpr`'s lookup branch and the whole
+`mergeOne`, `mergeRound`, `execActions`, `patternHoldsM`'s row scan and the whole
 `:merge` implementation had **no** differential coverage — the suite's pass count said
 nothing about them. The two agree on the constructor fragment (see `execM`), so the 70
 constructor cases are unaffected. -/

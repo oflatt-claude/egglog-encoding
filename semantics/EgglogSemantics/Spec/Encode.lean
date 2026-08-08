@@ -32,8 +32,8 @@ syntactic equality: congruence there is entirely simulated.
 and `@fView` carry a parent/e-class *and* a proof. That column used to be inexpressible:
 `Action.set` took a single output expression and so could write only one column.
 `Action.set` now takes a `List Expr`, `ActionStep.set` writes `db.addRow f ts vs`, and
-`Pattern.values` — egglog's tuple destructure `(= (values v…) (f a…))` — reads a column
-other than the first. So what remains between this file and a proofs-on encoding is
+`Pattern.values` — egglog's row atom, and now the only read the language has — binds
+every value column. So what remains between this file and a proofs-on encoding is
 *encoder* work: emitting a `@Proof` sort, the `@Rule_<k>` and `@Congr` node families, and
 a second column on every `set` and every view read. `encode` here still emits one-column
 rows, and `Proofs/Encode.lean`'s `encode_proof_rows_check` is still vacuous for that
@@ -174,7 +174,11 @@ A source pattern becomes one view read per subterm, joined on e-class variables 
 mutual
 
 /-- Flatten `e` into view reads. Returns the expression naming `e`'s e-class, the reads,
-and the next variable number. -/
+and the next variable number.
+
+A view read is a `Pattern.values` atom, which is what egglog lowers `(= e (@fView c…))` to
+and the only form the model admits: `Expr.MEval` does not read, so a non-constructor
+application is not an expression here. -/
 def encodeQueryExpr : Expr → Nat → Expr × List Pattern × Nat
   | .lit l, n => (.lit l, [], n)
   | .var v, n => (.var v, [], n)
@@ -182,7 +186,7 @@ def encodeQueryExpr : Expr → Nat → Expr × List Pattern × Nat
       match encodeQueryArgs args n with
       | (es, ps, n₁) =>
           (.var (freshVar n₁),
-           ps ++ [.eq (.var (freshVar n₁)) (.app (viewName f) es)],
+           ps ++ [.values [.var (freshVar n₁)] (viewName f) es],
            n₁ + 1)
 
 /-- `encodeQueryExpr` over an argument list. -/
@@ -225,7 +229,19 @@ the shape was already there and **discards** the id it just minted. There is no 
 action here, so the encoding `set`s and then reads the view back. The difference is one
 extra union: where egglog drops the minted id, the plain `set` collides with the
 existing row and the view's `:merge` unions the two. Both terms denote the same
-application, so the equalities are the same and only the row count differs. -/
+application, so the equalities are the same and only the row count differs.
+
+**The read-back is a shape egglog rejects, and this is the reason `set-if-empty` exists.**
+`(let x (@fView c…))` in a rule head is a lookup, and
+`check_no_function_lookups_in_actions` refuses one: "Value lookup of non-constructor
+function function in rule is disallowed". egglog gets around it by registering
+`set-if-empty-<View>!` as a **primitive** (`src/proofs/proof_fresh.rs`), and
+`expr_has_function_lookup` flags only `ResolvedCall::Func`. So `encode` as written emits
+rule heads the real system would refuse, and `Spec/Scope.lean`'s `Program.noLookup` says
+so of the encoded program. The fix is the same one egglog made — a `Prim`-style
+get-or-insert, which is a write and not a read — and it is M11 work, so it is recorded
+here rather than done. Nothing downstream depends on the read-back stepping:
+`Proofs/Rebuilt.lean` computes the two encoded states by hand. -/
 mutual
 
 /-- Build `e` in the target. Returns the expression naming `e`'s e-class, the actions
@@ -299,8 +315,8 @@ def encodeRule (r : Rule) (n : Nat) : Rule × Nat :=
 disequality the unguarded rule additionally re-`set`s edges it already holds, which
 changes nothing. -/
 def pathCompressRule : Rule :=
-  { query := [.eq (.var "@b") (.app ufName [.var "@a"]),
-              .eq (.var "@c") (.app ufName [.var "@b"])],
+  { query := [.values [.var "@b"] ufName [.var "@a"],
+              .values [.var "@c"] ufName [.var "@b"]],
     actions := [.set ufName [.var "@a"] [.var "@c"]] }
 
 /-- `@c0 … @c(k-1)`, a rebuild rule's column variables. -/
@@ -320,13 +336,12 @@ row rather than a lost one, and `Database.Out` reads any of them. What egglog bu
 the one-firing form is row count. -/
 def rebuildRules (f : FnName) (k : Nat) : List Rule :=
   let cs := rebuildVars k
-  let view : Expr := .app (viewName f) cs
+  let view : Pattern := .values [.var "@e"] (viewName f) cs
   let eclassRule : Rule :=
-    { query := [.eq (.var "@e") view, .eq (.var "@x") (.app ufName [.var "@e"])],
+    { query := [view, .values [.var "@x"] ufName [.var "@e"]],
       actions := [.set (viewName f) cs [.var "@x"]] }
   eclassRule :: (List.range k).map fun i =>
-    { query := [.eq (.var "@e") view,
-                .eq (.var "@x") (.app ufName [.var ("@c" ++ toString i)])],
+    { query := [view, .values [.var "@x"] ufName [.var ("@c" ++ toString i)]],
       actions := [.set (viewName f) (cs.set i (.var "@x")) [.var "@e"]] }
 
 /-- Every maintenance rule the encoding of `P` emits. `Rebuilt` is stated over it. -/
@@ -376,10 +391,11 @@ def Action.NoSet : Action → Prop
   | .set _ _ _ => False
   | _ => True
 
-/-- No tuple destructure. `Pattern.values` reads a row of a non-constructor function,
-which the constructor fragment has none of — so like `Action.NoSet` this is a fragment
-restriction rather than a limitation, and it is why `encodePattern` leaves the case
-alone instead of encoding it. -/
+/-- No row atom. `Pattern.values` reads a row of a non-constructor function, which the
+constructor fragment has none of — so like `Action.NoSet` this is a fragment restriction
+rather than a limitation, and it is why `encodePattern` leaves the case alone instead of
+encoding it. The encoding's *own* queries are all row atoms; this constrains the
+source. -/
 def Pattern.NoValues : Pattern → Prop
   | .values _ _ _ => False
   | _ => True
@@ -429,7 +445,12 @@ structure Program.EncodeDomain (P : Program) : Prop where
 The three notions the M11 theorems are stated over. None of them is `Cong` or `MCong`:
 the encoded program's tables are `.merge` functions, so `Database.CtorRows` fails on the
 target and `mcong_iff_cong` does not apply there. Equality on the target side is *only*
-what `@UF` and the views record. -/
+what `@UF` and the views record.
+
+Source-side equality is `Spec/Congruence.lean`'s `CongOn`, not `Cong`: the rebuild re-keys
+a view row to its children's leaders, so the encoded database ends up holding rows about
+applications the source never built — `@AddView [1,1] ↦ Add[1,2]` after `(Add 1 2)` and
+`(union 1 2)`. Those rows are still *true*, but only in that sense. -/
 /-- A union-find edge that moves. The `:merge` writes `@UF (ordering-max p p) ↦
 ordering-min p p` on a self-collision, so reflexive self-loops are ordinary rows and a
 leader is "no edge that moves" rather than "no row". -/
@@ -438,7 +459,7 @@ def UFEdge (d : Database) (t p : Term) : Prop := d.Out ufName [t] [p] ∧ p ≠ 
 /-- `l` is `t`'s representative: reachable along edges, and itself at the end of one.
 
 A relation rather than a function because `Database.Out` reads *any* recorded output —
-the model keeps the rows a merge displaces (`MERGE.md`, "What monotonicity costs"), so a
+the model keeps the rows a merge displaces (`MERGE.md`, "Constraint (3): monotonicity"), so a
 term can have several recorded parents, every one of which is genuinely equal to it. -/
 def UFLeader (d : Database) (t l : Term) : Prop :=
   Relation.ReflTransGen (UFEdge d) t l ∧ ∀ p, ¬ UFEdge d l p
@@ -483,19 +504,6 @@ sound for the source side too, since both sides then run the extra rounds. -/
 def Rebuilt (P : Program) (d : Database) : Prop :=
   (∀ r ∈ maintenanceRules P, ∀ d' ∈ RuleResults d r, Database.Contained d' d) ∧
     MergeSaturated d
-
-/-- `a = b` holds in the source once both terms are built.
-
-`Cong`'s `refl` and `congr` are restricted to `db.terms`, and the encoding is not: the
-rebuild re-keys a view row to its children's leaders, so the encoded database ends up
-holding rows about applications the source never built — `@AddView [1,1] ↦ Add[1,2]`
-after `(Add 1 2)` and `(union 1 2)`. Those rows are still *true*, but only in this
-sense. It is the form `ValidSubst` already uses ("the pattern instance is added to the
-database before congruence is consulted"), and adding terms adds no assertion, so it is
-a conservative reading rather than a weaker one. For `a b ∈ db.terms` under
-`Database.WF` it coincides with `Cong db a b`. -/
-def CongOn (db : Database) (a b : Term) : Prop :=
-  Cong ((db.addTerm a).addTerm b) a b
 
 /-! ### Proof nodes
 

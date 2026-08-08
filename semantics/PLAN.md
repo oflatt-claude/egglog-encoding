@@ -37,6 +37,121 @@ Two things shape the design beyond a literal transcription:
 - Validation by Lean proofs of the ported test cases; an executable interpreter
   with a decidable congruence procedure is a later milestone (M10).
 
+## Current priority
+
+**The goal is to model egglog as cleanly as possible for a paper, and then prove things
+about an implementation.** That is a different goal from wanting a sound and fast verified
+engine, and it changes what counts as progress: `Spec/` being readable *as a description of
+what egglog means* is the deliverable, not a convenience. It is ~2000 lines with zero
+theorems and should stay that way.
+
+(The contrast is worth keeping in mind. `lambdaclass/truth_research` — OptiSat — is a Lean 4
+verified equality-saturation engine, ~370 theorems and no `sorry`, whose "specification" is a
+five-line `Prop` plus 12k lines of Lean with the load-bearing definitions living inside the
+proof files. There is no artifact you can read to learn what the system means. It also has
+no differential testing, and a no-op engine satisfies its entire soundness chain.)
+
+**The immediate work is a faithful executable model of egglog, validated against the real
+implementation by `make lean-difftest`.** Differential testing comes before proof work: a
+proof relates `Impl/` to *our* `Spec/`, and difftest is the only check that can tell us
+`Spec/` itself is wrong about egglog — which it has been (see `MERGE.md`, "The merge phase
+runs between commands").
+
+**The proof encoding (M11) is parked.** `Proofs/Encode.lean`, `Proofs/Rebuilt.lean` and
+`CHECKER.md` record what has been learned about it; they are not a work queue. Do not start
+M11 work or try to prove anything in `Proofs/Encode.lean`. The encoding is downstream of a
+model we trust, and we do not have one yet — though the three things this note used to name,
+arity checking, reading a `:merge` function in a query, and the rule-head restriction, are
+now done. `Spec/Scope.lean`'s "Arity" and "Reading in an action" sections mirror egglog's
+typechecker and `writeCase` enforces both; the read path has curated and generated cases and
+agrees with egglog on all of them. What is still missing is the six known-false statements
+in `Proofs/Merge.lean`.
+
+This document mentions the encoding often because much of what we know about egglog came
+from reading `egglog/src/proofs/`. Those are findings about egglog, which is what we are
+modelling.
+
+### The two contracts
+
+`Spec/` is append-only: nothing is ever removed from `terms`, `rows` or `eqs`, and a merge
+adds the combined row *beside* the two it merged. `Impl/` has **two** interpreters with
+**different** contracts, and confusing them wastes time:
+
+| | merge phase? | contract |
+| --- | --- | --- |
+| `exec` (`Impl/Interp.lean`) | none | **equality** — `exec_toDatabase` |
+| `execM` (`Impl/Merge.lean`) | yes, and it **deletes** the rows it merged | **containment** — `execM_contained` |
+
+`execM` is not a state the specification can reach, hence containment. Containment is
+satisfied by a do-nothing implementation, and that is *fine for soundness* — the safety
+property is "everything written is valid", so writing nothing is vacuously valid. What rules
+out a degenerate implementation is difftest, not a theorem. `execM_current_of_lattice` would
+add machine-checked completeness for merges that are joins; it is worth having and is not
+urgent.
+
+### The consolidation arc
+
+M9 introduced a shadow of each M0–M8 notion, and they have been collapsed one at a time.
+Three pairs, in the order they are being retired:
+
+| M0–M8 | M9 shadow | status |
+| --- | --- | --- |
+| `Database`, `Action`, `Cmd`, `Rule` | `MDatabase`, `RowAction`, `MCmd`, `MRule` | **done** — one of each |
+| `Cong` | `MCong` | open — `mcong_iff_cong` licenses the collapse |
+| `Expr.eval`, `evalAction`, `stepCmd` | `MEval`, `ActionStep`, `CmdStep` | open — M12, and now *partial* |
+
+The pattern is worth naming because the answer has been different each time. The state
+types merged outright. `Cong`/`MCong` cannot merge without pushing `CtorRows` hypotheses
+into `exec_toDatabase`, and the split happens to line up with the two sides of a simulation
+theorem, so it is structure rather than duplication. And `eval`/`MEval` can now merge —
+because reads became query atoms — but only up to the action level: `MergeStep` chooses
+which rows collide and `MergeClosure` how many steps, so the step relations stay relations.
+See M12.
+
+One live inconsistency this leaves, and it is the argument for finishing M12: the
+`CmdStep.action` merge-phase fix landed in the *relational* `CmdStep` but not in the
+*functional* `stepCmd`, which still does `.action a => evalAction db a` with no merging. They
+are meant to be the same semantics and now disagree off the constructor fragment, where
+merging is the identity — which is exactly why nothing broke.
+
+### Which primitives, and why
+
+`Prim` exists for one reason: so a `:merge` body can **compute**. Without it a body can only
+select (`old`, `new`) or build a term, so there are no lattice merges and no analyses.
+
+- **`min`/`max`** are what make `:merge` mean anything — every differential merge case uses
+  them, `execM_current_of_lattice` is about them, and without them `:merge (min old new)`
+  silently built the *term* `min(5, 3)`.
+- **`ordering-min`/`ordering-max`** serve the real encoding's union-find leader selection and
+  nothing else. **M11-min drops the union-find**, so nothing in the live plan needs them;
+  their only remaining uses are inside `Proofs/Rebuilt.lean`, which is parked M11 material.
+  Retire the two together when M11-min lands.
+
+Dropping all four would collapse `MEval` to `Expr.eval` outright, which is the smallest the
+semantics can be — at the price of `:merge` becoming decorative, with no lattice for the
+completeness half to be complete about.
+
+### Checking a change
+
+Three theorems are load-bearing enough to check every time, with `lean_verify` (lean-lsp
+MCP) or `#print axioms` rather than by grepping for `sorry` — it asks the kernel what a
+theorem actually depends on and traces into Mathlib:
+
+| theorem | expected axioms |
+| --- | --- |
+| `mcong_iff_cong` | `propext` **alone** |
+| `exec_toDatabase`, `mem_closure_iff`, `execM_contained` | `propext, Classical.choice, Quot.sound` |
+
+Statements known to be **false** carry compiling counterexamples in
+`Proofs/Counterexamples.lean`, and `Proofs/Rebuilt.lean` holds the `Rebuilt` vacuity result.
+Both are `sorry`-free and in the build, so they cannot rot — read them before trying to
+prove anything they refute.
+
+Two traps that a green build will not catch. Writing `h.ge` for a set inclusion silently
+pulls `Classical.choice` into every downstream axiom set. And `lake build` does not rebuild
+the difftest executable — `lake build difftest` does, which `scripts/difftest.sh` handles but
+a manual run may not.
+
 ## What the Redex model contains
 
 | Redex | Role |
@@ -58,34 +173,18 @@ holds*, so the first can be read closely and the second skimmed — `Spec/` and 
 contain **no theorems at all**.
 
 ```
-Spec/     the semantics (definitions only)
-  Syntax      Lit, Expr, Pattern, Action (incl. set), Rule, Cmd, Program;
-              MergeSpec/FnDecl/Signature; the syntactic vars functions
-  Term        Term, decEq, IsSubterm, subterms, subtermList; Row, ctorRows
-  Database    Env (lookup/dom/Agree/Refines/Union2/UnionAll); Database with rows,
-              addTerm/addRow/addEq/sUnion, Contained, WF, EnvAgree, CtorRows
-  Congruence  Cong / CongList
-  Merge       MCong (the functional dependency), MergeStep, Expr.MEval, Out/Current,
-              Prim/Term.blt, RunStep/CmdStep/ProgramStep
-  Eval        Expr.eval, evalAction, evalActions, evalLocalActions
-  Match       freeVars, ValidEnv, ValidSubst, ValidQuerySubst
-  Step        ruleResults, runRules, stepCmd, runProgram, run, runRounds, Saturated
-  Scope       Scoped predicates, bind functions, Models, WellScoped
-Impl/     the reference implementation (definitions only)
-  Closure     candidates, congrPair, stepAdds, congStep, closure, closureTotal
-  Interp      FDatabase, toDatabase, assignments, Env.canon, patternHolds,
-              matchQuery, exec*, fireInto/fireRule, rowCount
-Proofs/   everything proved about the two, one file per subject
-  Syntax, Term, Database, Congruence, Eval, Match, Step, Scope, Closure, Interp
-Tests/
-  Examples    the Redex checks, as proofs and as `#guard`s
-  Egg         rendering a Program as egglog source, for differential testing
+Spec/     Syntax  Term  Database  Congruence  Merge  Eval  Match  Step  Scope   (+ Encode, parked)
+Impl/     Closure  Interp  Merge
+Proofs/   one file per Spec/ or Impl/ subject, plus:
+            Counterexamples   compiling witnesses that a statement is false
+            Rebuilt           the Rebuilt vacuity result (M11, parked)
+Tests/    Examples  the Redex checks, as proofs and as #guards
+          Egg       renders a Program as egglog source, for differential testing
 ```
 
 The one exception to "definitions only" is a proof the language requires to *make* a
 definition — the `decreasing_by` on `closure`, and decidability instances. Those are
-inlined rather than pulled out into named lemmas, so nothing in `Spec/` or `Impl/` is
-there for a proof's sake.
+inlined rather than named, so nothing in `Spec/` or `Impl/` is there for a proof's sake.
 
 ### Syntax
 
@@ -107,6 +206,7 @@ what keeps the `:merge` extension from churning the AST.
 structure Database where
   sig   : Signature
   terms : Set Term
+  rows  : Set Row                -- one entry per value column; added in M9
   eqs   : Set (Term × Term)      -- asserted only
   env   : List (Var × Term)      -- order matters: first binding wins
   rules : Set Rule
@@ -226,39 +326,23 @@ this phase — the point is that M9 turns them on without touching the AST or an
 
 The port proper — **all of M0–M7 is done**, `lake build` is clean and `sorry`-free.
 
-- **M0 — scaffold.** ✅ `elan`; `lake init EgglogSemantics math` in `semantics/`
-  pinned to Mathlib `v4.32.2` on Lean `v4.32.2`; `lake exe cache get`;
-  `make lean-check` in the root `Makefile`, kept out of `make check` so the
-  Rust/Python suites stay unaffected. Mathlib's copyright-header linter is off;
-  the rest of `mathlibStandardSet` is on.
-- **M1 — `Syntax.lean`, `Term.lean`.** ✅ Includes `Term.recTerm` (the induction
-  principle through the `List Term` nesting), `IsSubterm`/`subterms` with inversion
-  lemmas, and the purely syntactic `Expr.vars`/`Pattern.vars`/`Query.vars`.
-- **M2 — `Database.lean`, `Congruence.lean`.** ✅ `Env` with `lookup`/`dom`/`Agree`;
-  `Database` with `addTerm`/`addEq`/`sUnion`/`Contained`/`WF`. `Cong`/`CongList` plus
-  monotonicity, `Cong db a b → a ∈ db.terms ∧ b ∈ db.terms` under `WF`,
-  `Cong.setoid` (the e-class quotient), and `Cong.le` — the least-congruence
-  principle, which is how every negative fact about the closure gets proved and the
-  shape the M11 checker-soundness argument will take.
-- **M3 — `Eval.lean`.** ✅ `Expr.eval`, `evalAction`, `evalActions`,
-  `evalLocalActions`, with `Contained`/`WF`/env/rules lemmas for each, plus
-  `Expr.eval_agree` (evaluation reads the environment only through `lookup`) and
-  `Expr.eval_isSome`.
-- **M4 — `Match.lean`.** ✅ `freeVars` with `mem_freeVars` relating it to `vars`;
-  `Env.Union2`/`UnionAll` with `mem_iff`; `ValidEnv`, `ValidSubst`,
-  `ValidQuerySubst` with `mem_terms` and `mem_dom_iff`.
-- **M5 — `Step.lean`.** ✅ `ruleResults`, `runRules`, `stepCmd`, `runProgram`, `run`,
-  with `Contained`/`WF` preservation and `runProgram_append`.
-- **M6 — `Scope.lean`.** ✅ `Expr.Scoped` and the `bind` functions for actions,
-  queries, commands and programs; `Scope.Models` tying the static scope to the
-  runtime environment; `run_isSome` (a well-scoped program runs to completion) and
-  `evalLocalActions_isSome_of_scoped` (a well-scoped rule contributes on every
-  substitution its query admits — `runRules` silently drops stuck firings, so this
-  is the statement worth having).
-- **M7 — `Examples.lean`.** ✅ The `test.rkt` unit checks as closed proofs: scope
-  checks, congruence closure (positive and negative), the `(wrapper 1)`/`(wrapper 2)`
-  witness example, the `(let v (b 1)) (union 7 7) (union v 4)` program with its exact
-  term and equality sets, and `(Add 1 2)` + `rule` + `run` producing `(Add 2 1)`.
+| | file | notable |
+| --- | --- | --- |
+| M0 | scaffold | Mathlib `v4.32.2` on Lean `v4.32.2`; `make lean-check` kept out of `make check` |
+| M1 | `Syntax`, `Term` | `Term.recTerm`, the induction principle through the `List Term` nesting |
+| M2 | `Database`, `Congruence` | `Cong.le`, the least-congruence principle |
+| M3 | `Eval` | `Expr.eval_agree` — evaluation reads the env only through `lookup` |
+| M4 | `Match` | `ValidSubst`, `Env.UnionAll` |
+| M5 | `Step` | `runRules`, `stepCmd`, `runProgram` |
+| M6 | `Scope` | `run_isSome` — a well-scoped program runs to completion |
+| M7 | `Examples` | the `test.rkt` checks as closed proofs |
+
+Two of those carry more weight than their size suggests. **`Cong.le`** is how every *negative*
+fact about the closure is proved — "this pair is not derivable" means exhibiting a congruence
+that omits it — and it is the shape the M11 checker-soundness argument would take. A design
+without it cannot state a negative fact at all. **`evalLocalActions_isSome_of_scoped`** says a
+well-scoped rule contributes on every substitution its query admits; `runRules` silently drops
+stuck firings, so that is the statement worth having rather than mere totality.
 
 Follow-ups, in rough dependency order:
 
@@ -290,131 +374,81 @@ Follow-ups, in rough dependency order:
 - **M9 — `:merge` functions.** Designed in [`MERGE.md`](MERGE.md). Partly done, and
   **merged into the main development** — there is one `Database`, one `Action`, one
   `Cmd`, and `Spec/Merge.lean` holds only what is genuinely new.
-  - ✅ *The compatibility theorem.* `mcong_toM_iff`: on all-constructor signatures the
-    functional dependency `MCong.fd` **is** `Cong`, so `MCong` needs no `congr`
-    constructor and every M2–M8 theorem transports rather than being reproved. Proved,
-    with `MergeStep.saturated_of_allConstructors` as its step-side companion — together
-    they say M9 restricted to constructors is M0–M8 unchanged.
-  - ✅ *Unification.* `Action` gained `set`; `Database` gained `rows`, maintained by
-    `addTerm` through `Term.ctorRows`. `RowAction`, `MDatabase`, `MRule`, `MCmd`,
-    `MProgram` and `Database.toM` are gone. `Spec/Merge.lean` fell from 640 lines to
-    476 and `Impl/Merge.lean` from 280 to 160, all of it now genuinely M9-only.
-  - ✅ *`Spec/Merge.lean`.* `MCong` (the FD congruence), `MergeStep`, `Expr.MEval`,
-    `RunStep`, `Prim`/`Term.blt`. The headline shape change: a `:merge` body is an
-    action list and a non-constructor application is a lookup, so evaluation — and with
-    it `runProgram` — becomes a **relation**.
-  - ✅ *`Impl/Merge.lean` and differential testing.* An M9 interpreter, `:merge`
-    rendering in `Tests/EggMerge.lean`, and 7 merge cases. `make lean-difftest` is now
-    **77 cases**, all passing.
-  - ✅ *The metatheory.* 17 of the 22 stated theorems are proved — `MCong.le`, the
-    monotonicity family, the `Contained` chain through `CmdStep`/`ProgramStep`,
-    `MergeStep.wf`, `Term.blt_linear`, `Out.union_cong` and `closureF_ok`. Four of the 22
-    statements turned out to be **false or vacuous** and are corrected in place, each with
-    a machine-checked counterexample or a hypothesis added and flagged; `MERGE.md` lists
-    them. 5 remain: the two confluence guesses and three interpreter-refinement ones.
-  - ✅ *Multi-column outputs.* `Action.set` takes a `List Expr` and `Pattern` gained
-    `values`, egglog's tuple destructure `(= (values v…) (f a…))` — the only way egglog
-    offers to read a value column other than the first. This is what `CHECKER.md` called
-    the one blocker on M11's proof column.
-  - ✅ *The implementation deletes; the specification does not.* `Spec/` stays
-    append-only — the M11 invariant depends on it — while `Impl/Merge.lean`'s merge phase
-    drops the two rows it combined, as egglog does, and nothing else.
-    `FDatabase.mergeRound_confined` proves the "nothing else": no term, no equality, no
-    `.union` row, no `.noMerge` row. The contract between the two therefore splits: a
-    containment for soundness (`MValidSubst.mono` is the half that makes fewer rows mean
-    fewer matches), the untouched equality on the constructor fragment (where the pass is
-    the identity, `mergeRound_eq_self`), and `Current` for lattice merges. It also makes
-    merge saturation genuinely terminate.
-  - Remaining: `Cong` and `MCong` still coexist over the one `Database`; collapsing them
-    is the rest of stage 2 and is cheap, since `mcong_iff_cong` is the theorem that
-    licenses it.
-  See below for the original proposal and what `MERGE.md` revises in it.
+  - ✅ *The compatibility theorem.* `mcong_iff_cong`: where the rows are the constructor
+    rows and every function is a constructor, the functional dependency `MCong.fd` **is**
+    `Cong` — so `MCong` needs no `congr` constructor and every M2–M8 theorem transports
+    rather than being reproved. `Cong.toMCong'` generalizes it to `CtorTerms`/`RowsComplete`,
+    which unlike `CtorRows` survive a `:merge` declaration.
+  - ✅ *The shape change.* A `:merge` body is an action list, so `MergeStep` is a relation
+    on databases and `runProgram` is a relation too. `Spec/Merge.lean` holds `MCong`,
+    `MergeStep`, `Expr.MEval`, `RunStep`, `Prim`/`Term.blt`. Evaluation was *also* a
+    relation for a while, because a non-constructor application in an action was a lookup;
+    that is now forbidden — see "Reading is a query atom" below — and `Expr.MEval` is back
+    to being deterministic (`Expr.MEval_unique`, unconditional).
+  - ✅ *Multi-column outputs.* `Action.set` takes a `List Expr`, and `Pattern` gained
+    `values` — egglog's lowered row atom `f(a…, v…)`, written `(= v (f a…))` at one value
+    column and `(= (values v…) (f a…))` at more. It is the only read in the language.
+  - ✅ *The implementation deletes; the specification does not.* `Spec/` stays append-only
+    while `Impl/Merge.lean`'s merge phase drops the two rows it combined, as egglog does,
+    and nothing else — `mergeRound_confined` proves the "nothing else": no term, no
+    equality, no `.union` row, no `.noMerge` row. So the contract splits into containment
+    (`execM_contained`, proved), the untouched equality on the constructor fragment where
+    the pass is the identity (`mergeRound_eq_self`), and `Current` for lattice merges.
+  - ✅ *The refinement chain.* 17 of 17 proved. **Nine were false as written** — three in
+    ways their M10 counterparts in `Proofs/Interp.lean` had already solved, so read the M10
+    counterpart before stating an M9 lemma. Six statements remain `sorry` in
+    `Proofs/Merge.lean`, all known-false, with compiling witnesses in
+    `Proofs/Counterexamples.lean`.
+  - Remaining: `Cong` and `MCong` still coexist over the one `Database` — that is M12.
 - **M10 — executable layer.** A `Finset`-based interpreter, a decidable congruence
   closure, and a refinement theorem `↑(exec p d) = spec p (↑d)`.
-  - ✅ `DecidableEq Term`, hand-written and mutual since `deriving` cannot see through
-    the `List Term` nesting — verified to actually compute.
-  - ✅ *Congruence closure* (`Closure.lean`). `congStep` is one round of
-    one-step-derivable pairs over the candidate universe `terms ×ˢ terms`; `closure`
-    iterates it by well-founded recursion on how much of that universe is still
-    missing. `mem_closure_iff` proves it decides `Cong` exactly: soundness by induction
-    over the iteration, completeness by `Cong.le` against the fixpoint, one closure rule
-    per premise. Stopping *only* at a fixpoint is what makes `Cong.le` applicable, and
-    is why this is well-founded rather than fuel-bounded recursion.
+  Proved end to end. Five design notes are worth more than the lemma inventory, which is
+  in the code:
 
-    Deliberately the obvious algorithm, not the efficient one. Union-find with upward
-    merging is what egglog does and what the M11 theorems are *about*; using it here
-    would put the thing under study inside the thing doing the studying.
+  - **The closure is deliberately the obvious algorithm.** `congStep` is one round of
+    one-step-derivable pairs over `terms ×ˢ terms`; `closure` iterates by well-founded
+    recursion on how much of that universe is missing, and `mem_closure_iff` shows it
+    decides `Cong` exactly (completeness by `Cong.le` against the fixpoint). Union-find
+    with upward merging is what egglog does and what the M11 theorems are *about* — using
+    it here would put the thing under study inside the thing doing the studying. Stopping
+    only at a fixpoint is what makes `Cong.le` applicable, hence well-founded rather than
+    fuel-bounded.
+  - **`FDatabase` uses `List`, not `Finset`**, because `Finset.toList` is noncomputable and
+    the interpreter must enumerate. Duplicates are harmless: the denotation is the set of
+    members.
+  - **The enumerator departs from the spec on purpose.** The spec takes one substitution per
+    pattern and joins them (`Env.UnionAll`, faithful to the Redex); the enumerator assigns
+    the whole query's free variables at once and restricts per pattern with `Env.canon`.
+    `Env.agree_canon` shows they agree up to `Env.Agree`, which is all `runRules` can see.
+    Both directions are proved (`validQuerySubst_of_mem_matchQuery` and its converse).
+  - **`Env.UnionAll.refines_of_mem` had to carry self-refinement, not `Nodup`.** Appending
+    two substitutions sharing a variable duplicates it in the domain while leaving every
+    lookup intact, so `Nodup` is not preserved by a `Union2` step and
+    `∀ b ∈ ρ, lookup b.1 ρ = some b.2` is.
+  - **Fold lemmas need a closed step term.** `execRunRules` was refactored into named
+    `fireInto`/`fireRule` steps so `mem_terms_foldl` and friends can be instantiated at
+    them; inline lambdas leave the lemma's step as an uninferable metavariable.
 
-    Well-founded definitions are sealed against kernel reduction, so `decide` does not
-    see through `closure`. Two ways round, neither adding an axiom: `#guard`, which is a
-    command and so enters no proof term, and `unseal closure`, which lets `decide`
-    through where a real proof wants it. `native_decide` is *not* used — it would add
-    `Lean.ofReduceBool` to every downstream theorem's axiom set.
-  - ✅ *The interpreter* (`Interp.lean`). `FDatabase` (a `List`-backed database) with
-    `toDatabase` giving its denotation; `assignments` and `matchQuery` for e-matching;
-    `execAction`/`execActions`/`execLocalActions`/`execRunRules`/`execRunRounds`/
-    `execCmd`/`execProgram`/`exec`; and `rowCount`/`rowCounts` producing what
-    `files.rs` snapshots.
+  Well-founded definitions are sealed against kernel reduction, so `decide` cannot see
+  through `closure`. Use `#guard` (a command, so it enters no proof term) or `unseal
+  closure`. **Not** `native_decide` — it adds `Lean.ofReduceBool` to every downstream axiom
+  set. The interpreter reproduces the Redex `execute` cases as `#guard`s in `Examples.lean`,
+  including the two-round `Wrapper` test, which has no hand proof because stating it needs
+  `ValidSubst` inversion.
 
-    The components are `List`s rather than `Finset`s for one blunt reason:
-    `Finset.toList` is noncomputable, so nothing that must *enumerate* a `Finset` can be
-    compiled. Duplicates are harmless — the denotation is the set of members, and
-    `closureF` dedups through `List.toFinset` where the closure wants a `Finset`.
+  The chain ends at
 
-    The enumerator departs from the spec deliberately: the spec takes one substitution
-    per pattern and joins them (`Env.UnionAll`, faithful to the Redex `Env-Union`), while
-    the enumerator assigns the whole query's free variables at once and restricts to each
-    pattern with `Env.canon`. `Env.agree_canon` shows the two agree up to `Env.Agree`,
-    which by `evalLocalActions_agree` is all `runRules` can see.
+  ```lean
+  theorem exec_toDatabase {p : Program} :
+      (exec p).map FDatabase.toDatabase = run p
+  ```
 
-    It runs, and reproduces the Redex `execute` cases as `#guard`s in `Examples.lean` —
-    including the two-round `Wrapper` test, which has no hand proof because stating it as
-    a theorem needs `ValidSubst` inversion.
-  - ✅ *Refinement, action level.* `execAction_toDatabase`, `execActions_toDatabase` and
-    `execLocalActions_toDatabase`: each interpreter action denotes the spec's, as
-    `(exec… ).map toDatabase = eval…`. `FDatabase.WF` is stated as `d.toDatabase.WF` so
-    every `Database.WF` lemma transfers through the bridges, and
-    `mem_closureF_iff_of_wf` reads the closure's side condition off it.
-  - ✅ *Refinement, e-matching.* `patternHolds_iff`: given a `valid-env` for the pattern,
-    the interpreter's check decides `ValidSubst` exactly, via `mem_closureF_iff_of_wf`.
-    `mem_matchQuery_iff`: the enumerator produces exactly the substitutions assigning the
-    query's free variables to terms the database holds and satisfying every pattern under
-    restriction. Supporting: `ValidSubst.of_agree` (transfer along agreement given the
-    right domain — agreement alone does not suffice, because `ValidEnv` pins the domain,
-    which is *why* an enumerator must canonicalize), `Expr.freeVars_nodup`,
-    `Env.mem_of_lookup`, and the `Query.freeVars` membership lemmas.
-  - ✅ *Refinement, the enumerator against the spec.* Both directions:
-    `validQuerySubst_of_mem_matchQuery` (every substitution the enumerator produces is, up
-    to `Env.Agree`, one the spec admits) and `mem_matchQuery_of_validQuerySubst` (every
-    substitution the spec admits has a representative in the enumerator's output). This is
-    the shape mismatch closed: the spec joins one substitution per pattern with
-    `Env.UnionAll`; the enumerator restricts a single one.
+  Well-formedness came free: `FDatabase.WF` is the spec's, so `execCmd_wf` is `stepCmd_wf`
+  read through the refinement rather than a separate induction.
 
-    The load-bearing lemma is `Env.UnionAll.refines_of_mem` — every operand's bindings stay
-    reachable in the union. Its induction has to carry **self-refinement**
-    (`∀ b ∈ ρ, lookup b.1 ρ = some b.2`) rather than `Nodup`, because appending two
-    substitutions that share a variable duplicates it in the domain while leaving every
-    lookup intact, so `Nodup` is not preserved by a `Union2` step and self-refinement is.
-    Also `Env.Refines` with its append/transitivity lemmas, `Env.exists_unionAll`,
-    `Env.agree_of_refines` and `Env.canon_canon`.
-  - ✅ *Refinement, the fold and the top level.* `mem_terms_foldl`/`mem_eqs_foldl` and the
-    field-preservation lemmas, stated once over an abstract step and contribution and
-    applied to the substitution fold and the rule fold in turn — which needed
-    `execRunRules` refactored into named `fireInto`/`fireRule` steps so the step function
-    is a closed term the lemmas can be instantiated at. Then `execRunRules_toDatabase`,
-    `execCmd_toDatabase`, `execProgram_toDatabase`, and
-
-    ```lean
-    theorem exec_toDatabase {p : Program} :
-        (exec p).map FDatabase.toDatabase = run p
-    ```
-
-    Well-formedness came free: `FDatabase.WF` is the spec's, so `execCmd_wf` is
-    `stepCmd_wf` read through the refinement rather than a separate induction.
-
-**M10 is done.** The consequence is what it was for: the `#guard` cases in `Examples.lean`
-and the 70 differential cases against the Rust now constrain the *specification*, not just
-the interpreter. Before this they sat on the interpreter's side of an unproved gap.
+**M10 is done**, and that is what makes the `#guard`s in `Examples.lean` and the 122
+differential cases constrain the *specification* rather than only the interpreter. Before
+it they sat on the interpreter's side of an unproved gap.
 
   Two obligations writing the implementation forces:
   1. *Enumeration completeness* — the spec's `{σ | ValidQuerySubst db q σ}` against an
@@ -428,252 +462,340 @@ the interpreter. Before this they sat on the interpreter's side of an unproved g
 
 ### Differential testing — ✅ running
 
-`make lean-difftest` (`scripts/difftest.sh`) compares the Lean interpreter against the
-Rust. 77 cases pass: 10 curated, 60 randomly generated, and 7 M9 `:merge` cases.
+`make lean-difftest` (`scripts/difftest.sh`) compares the Lean interpreter against the Rust
+binary. **122 cases pass**: 60 random constructor (38 distinct profiles), 30 random `:merge`
+(24 profiles), 32 curated.
 
-The oracle is **`(print-size)`**, which prints one row count per function — the same
-quantity `egglog/tests/files.rs` snapshots. egglog's table for `f` holds one row per
-distinct *canonical* argument tuple, so the Lean-side quantity is the number of congruence
-classes of `f`-applications, which is `FDatabase.rowCount`. `DiffTest.lean` writes a `.egg`
-file and the predicted counts per case; the script runs egglog and diffs. One invocation
-per case, with a timeout, so a program that blows up cannot take the run down.
+The oracle is **`(print-size)`**, one row count per function — the same quantity
+`egglog/tests/files.rs` snapshots. egglog's table for `f` holds one row per distinct
+*canonical* argument tuple, so the Lean-side quantity is the number of congruence classes of
+`f`-applications. `DiffTest.lean` writes a `.egg` file and the predicted counts; the script
+runs egglog and diffs, one invocation per case with a timeout.
 
-**No egglog test file is portable.** Of the 104 in `egglog/tests`, zero are in the
-fragment: `function` appears in 47, `relation` in 35, `constructor` in 35, `sort` in 32,
-`set` in 31, `run-schedule` in 21. Even the 7 whose top-level commands are all core use
-numeric or string literals. `before-proofs.egg` is the closest and needs exactly two cheap
-things — a `Lit.str` constructor, and desugaring `(rewrite lhs rhs)` to
-`⟨[.expr lhs], [.union lhs rhs]⟩`, which the fragment already expresses. Everything else
-needs primitives with arithmetic, or M9.
+**No egglog test file is portable.** Of the 104 in `egglog/tests`, zero are in the fragment:
+`function` appears in 47, `relation` 35, `constructor` 35, `sort` 32, `set` 31,
+`run-schedule` 21. `before-proofs.egg` is closest and needs only a `Lit.str` constructor and
+`(rewrite lhs rhs)` desugaring.
 
-**Curated cases are only as good as whoever chose them**, so the random ones matter more.
-Getting them to matter took two corrections worth remembering:
+**This is the only check that the model matches egglog rather than matching itself** — and it
+has caught things no proof would. The specification, not the implementation, was wrong about
+merging between commands (`MERGE.md`).
 
-* A freely generated pattern almost never matches anything, so most programs produced no
-  rows beyond their seeded terms — 31 of 60 gave an identical trivial profile. Patterns are
-  now built by *abstracting subterms of a term the program actually builds*, which
-  guarantees the rule fires. That took the spread from 8 distinct profiles to 20, and the
-  largest case from 6 rows to 41.
-* The script therefore reports the row-count distribution on every run. A pass count alone
-  hides a generator that has stopped exercising anything.
+Three generator lessons, each learned from a green suite that was not testing what it looked
+like:
 
-Two expressiveness findings, both showing the fragment is **not a subset** of egglog's
-language:
+* A freely generated pattern almost never matches, so 31 of 60 cases gave an identical
+  trivial profile. Patterns are now built by *abstracting subterms of a term the program
+  actually builds*, which guarantees the rule fires.
+* `pick` read an LCG's low bits, which have period 4 — all 30 merge cases emitted an
+  identical program.
+* Hence the script prints the **row-count distribution** every run. A pass count alone hides
+  a generator that has stopped exercising anything; treat a narrowing distribution as a
+  regression even if the count rises.
 
-* A bare variable *was* a legal query fact and a legal `expr` action here — it matches, or
-  adds, any term — and egglog's grammar rejects both. 34 of the first 60 generated cases
-  died on this. Now **banned**: `Expr.IsApp` is a conjunct of `Pattern.Scoped` and of
-  `Action.Scoped`'s `expr` case, so every later phase is spared a case the real system
-  cannot express. This is the one place `WellScoped` is deliberately stricter than the
-  Redex `typed-program`, which costs one ported check — `((let v1 2) v1)` — kept in
-  `Examples.lean` with the bare `v1` wrapped in a constructor, alongside two new examples
-  pinning the restriction.
-* `Database.rules` is a `Set`, so a repeated rule is silently ignored; egglog panics with
-  "was already present". The Redex `U_d` dedups too, so this is faithful to the model being
-  ported rather than a defect, but it is a real difference from egglog.
+Two findings that the fragment is **not a subset** of egglog's language: a bare variable was
+a legal query fact and `expr` action here and egglog's grammar rejects both (34 of the first
+60 cases died on it — now banned via `Expr.IsApp`, the one place `WellScoped` is deliberately
+stricter than the Redex); and `Database.rules` is a `Set`, so a repeated rule is silently
+ignored where egglog panics.
 
-What this establishes: it is the only check that the *model* matches egglog rather than
-matching itself, and `rand-37` — a rule matching every `F` application and building nested
-terms over two rounds, agreeing at `F 17` and `G 22` — is not coincidence. What it does not:
-anything outside the fragment, and, until the refinement theorem lands, a divergence
-between the spec and the interpreter, since both difftest and the `#guard`s sit on the
-interpreter's side of that gap.
+**Every case is checked for legality before it is written.** `writeCase` refuses to emit a
+program egglog would reject — an illegal `set`, a use whose column counts disagree with the
+declaration (`Spec/Scope.lean`'s arity check), or a name used at two arities, which the
+emitted `datatype` header cannot express. A rejected program is a *missing* case, not a
+failing one, so the check aborts rather than skips.
 
-One performance note that is really a design note: `FDatabase` insertions deduplicate. A
-round's `union` copies every operand's terms, so without dedup the list length multiplies
-each round and the per-substitution `List.toFinset` inside `closureF` goes quadratic on it
-— `wrapper-3` did not terminate. Dedup is invisible to `toDatabase`.
+What it does not cover: anything outside the fragment, and value columns, since
+`(print-size)` counts key classes and is blind to them.
+
+A performance note that is really a design note: `FDatabase` insertions deduplicate, because
+a round's `union` copies every operand's terms and without dedup the per-substitution
+`List.toFinset` inside `closureF` goes quadratic. Invisible to `toDatabase`.
 
 - **M11 — the proof encoding.** See below.
 
 - **M12 — one evaluator.** `Expr.eval`/`evalAction`/`stepCmd`/`runProgram` (functions,
   M0–M8) and `Expr.MEval`/`ActionStep`/`CmdStep`/`ProgramStep` (relations, M9) both run
   over the one `Database` and the one `Action`. Collapsing them is the last of the
-  unification and is **deliberately deferred**, because it is where the cost is. Three
-  things planned in rather than discovered mid-refactor:
+  unification and is **deliberately deferred**. The direction it goes in has changed, and
+  the change is the whole reason "Reading is a query atom" was worth doing.
 
-  - *The cost.* `Proofs/{Eval,Match,Step,Scope,Interp}` are built on `Option` algebra —
-    `evalAction db a = some db'`, `Option.map`, `Option.bind`. Against a relation each
-    such statement becomes an existential and each proof an induction over a derivation
-    rather than a `cases` on an `Option`. Roughly 1000–1400 lines touched, against the
-    ~450 that stages 1 and 2 cost.
-  - *The framing.* This is not "merge two things". It is **moving determinism out of the
-    spec and into the implementation, where it belongs**. The spec is functional today
-    only because M0–M8 happens to be deterministic; M9 showed that is an accident of the
-    fragment, not a property of egglog. `Expr.MEval_of_eval` is the guard against the two
-    drifting apart while both exist.
-  - *The recovery.* `exec_toDatabase` is currently an **equality**, and it is what makes
-    the 77 differential cases bear on the specification rather than only on the
-    interpreter. Against a relation it weakens to reachability. Plan the equality back
-    in: prove `ProgramStep` **deterministic under `AllConstructors`**, and the equality
-    returns as a corollary for the constructor fragment — which is exactly the fragment
-    the differential test covers.
+  - *Determinism came back.* `Expr.MEval_unique` now holds with **no hypotheses** — no
+    `AllConstructors`, no `NoPrim` — because the only rule that read the database was
+    `lookup` and reading is a query atom. `Database.ActionStep_unique` and
+    `ActionsStep_unique` follow: every premise of every action case is an evaluation.
+  - *What must stay a relation.* Everything above an action, and for a reason that has
+    nothing to do with evaluation: `MergeStep` chooses **which** pair of rows collides and
+    in which order, and `MergeClosure` chooses how many steps to take. So `RunStep`,
+    `CmdStep` and `ProgramStep` are relations by design and stay that way. The unification
+    is therefore *partial* — one evaluator and one action evaluator, two step relations.
+  - *The cost, restated.* The old estimate of 1000–1400 lines assumed converting the
+    functional side (`Proofs/{Eval,Match,Step,Scope,Interp}`) to relations. It now goes
+    the other way: make `ActionStep`/`ActionsStep` functions and the `Option` algebra those
+    files are built on is what survives. What is touched is `Proofs/Merge.lean`'s action
+    lemmas — `ActionStep.contained`/`.envAgree`/`.mono`/`.wf`,
+    `execAction_ActionStep`, `execActions_ActionsStep` and their callers, ~60 references —
+    and `Expr.eval` gaining a `Signature` argument so that one evaluator serves both, which
+    is what puts a hypothesis on `Proofs/Scope.lean` and `exec_toDatabase`.
+  - *The recovery, unchanged in shape.* `exec_toDatabase` is an **equality** on the
+    constructor fragment, and that is what makes the differential cases bear on the
+    specification rather than only on the interpreter. It survives the collapse for the
+    same reason it holds now: on that fragment there is no `.merge` function, so no
+    `MergeStep`, so `ProgramStep` is deterministic there.
 
 ## Extending with `:merge` (M9)
 
-**Superseded by [`MERGE.md`](MERGE.md)**, which is the current design; this section is
-the starting proposal it revises. Three of the five points below did not survive
-contact with egglog's actual `:merge`: a merge body is an action list, so the
-observable value cannot be a fold over asserted rows (3); a non-constructor
-application is a *lookup* with no `:default`, so evaluation and `runProgram` become
-relations; and the base-sort work (4) is deferred rather than done. Points 1, 2 and 5
-stand as written.
+The design is [`MERGE.md`](MERGE.md). What this plan originally proposed is kept only for
+the record of where it was wrong, since two of the mistakes were instructive:
 
-Designed so it generalizes rather than rewrites:
+- **A merge body is an action list, not an expression.** So the observable value of a key
+  class cannot be a fold over asserted rows, and there is no `SemilatticeSup` to lean on.
+  Evaluation and `runProgram` became *relations* instead.
+- **A non-constructor application is a lookup**, with no `:default` to fall back on.
 
-1. **Signature is already there** (M1), so only `MergeSpec`'s other cases become
-   reachable and `Cmd.decl` gains meaning.
-2. **Rows replace the bare term set.** `rows : Set (FnName × List Term × Term)`
-   maps an application to its output value; for a constructor the invariant is
-   `out = .app f args`, so `terms` stays derivable. Congruence then *is* the
-   functional dependency: colliding rows over congruent arguments merge their
-   outputs, with `.union` merging by equality — exactly
-   `proof_encoding.md`'s "the view's `:merge` resolves congruence directly". The
-   theorem that makes this a safe refactor is that the generalized relation
-   restricted to `AllConstructors` coincides with M2's `Cong`.
-3. **Keep the database monotone.** A merge overwrite is not additive, which would
-   break every monotonicity lemma. Instead accumulate *asserted* rows and define
-   the observable value of a key-class as the merge-fold over all congruent
-   asserted rows. Prove that fold well-defined (independent of order) when the
-   merge is a semilattice join, using Mathlib's `SemilatticeSup`; leave the
-   general case relational, matching egglog's actual order-dependence for
-   non-lattice merges.
-4. **Base sorts.** Merge functions have non-eq outputs, so `Lit` grows (`i64`,
-   `Unit`, `String`) and the Redex's placeholder `no-type` becomes a real sort
-   discipline in `Scope.lean` — that is where the Redex's "add types" to-do gets
-   discharged.
-5. **No termination claim.** Merge closure need not terminate; it stays a
-   relation, with saturation as a separate hypothesis where needed.
+What did stand: the signature was already in the AST from M1, so only `MergeSpec`'s other
+cases became reachable; rows replaced the bare term set with congruence *as* the functional
+dependency; and merge closure carries no termination claim. Base sorts (`i64`, `String`, a
+real sort discipline replacing the Redex's `no-type`) are still deferred — see "arity
+checking" in the current priority.
 
-## Path to the proof-encoding theorem (M11)
+## Reading is a query atom
+
+**All reading happens in the query; all writing happens in the actions.** An application of
+a non-constructor is a *lookup* — it reads a recorded row rather than building a term — and
+`Spec/Scope.lean`'s `Program.noLookup` says a program contains none, anywhere. The one place
+a program reads is the query atom `Pattern.values`, which is egglog's lowered
+`f(a…, v…)` and now covers every width: `(= v (f a…))` at one value column,
+`(= (values v…) (f a…))` at more.
+
+**What it buys.** `Expr.MEval` loses its `lookup` constructor. It is then deterministic
+unconditionally (`Expr.MEval_unique`), reads the database only through its signature
+(`Expr.MEval.ofSig`), and `Impl/Merge.lean`'s `execExpr` computes it instead of choosing
+among its answers. `Database.ActionStep`/`ActionsStep` are deterministic too, which is what
+reopens M12. The one remaining place the model over-approximates egglog's reads is the
+query atom itself, which matches *any* recorded row where egglog matches the current one.
+
+**Where it is stricter than egglog, checked against the binary.** egglog runs
+`check_no_function_lookups_in_actions` (`src/typechecking.rs:1325`) on a **rule head** only,
+and only for a seminaive rule. Three other positions read there and are rejected here:
+
+| position | egglog | repro |
+| --- | --- | --- |
+| top-level action | accepted, copies the value | `(set (Copy (A)) (Dist (A)))` |
+| `:merge` body | accepted; missing row is `Lookup on Zero failed in the merge function for Dist` | `(function Dist (Math) i64 :merge (max old (Zero)))` |
+| nested in a query fact | accepted, flattened to two atoms | `(F (Dist k))` |
+
+The first two are `Context::Full` and `Context::Write`, neither of which runs the check; the
+third is egglog's query flattening, which this model does not have. Each has a flat
+equivalent — `(rule ((= v (Dist k))) ((set (Copy k) v)))` for the first — so the loss is
+notation, not expressiveness, except in the `:merge` body, where a body that reads another
+table genuinely cannot be written.
+
+**What it exposed in `Spec/Encode.lean`.** `encodeBuild` interns an application by `set`ting
+the view and then *reading it back* with `(let x (@fView c…))` — a lookup in a rule head,
+which egglog refuses. egglog does the same job with `set-if-empty-<View>!`, registered as a
+**primitive** (`src/proofs/proof_fresh.rs`), and `expr_has_function_lookup` flags only
+`ResolvedCall::Func`. So `encode` emits rule heads the real system rejects, and the fix is
+the one egglog made: a `Prim`-style get-or-insert, which is a write. Recorded in
+`Spec/Encode.lean`, not done — it is M11 work.
+
+## The minimal proof encoding (M11-min)
+
+The target. Everything below is *design*, not built yet.
+
+**Proved against the specification, not against the Rust.** That is the decision that makes
+this tractable: no differential testing against real egglog, no matching its row counts, no
+conversion layer. The claim is about our `encode` and our `Cong`.
+
+### What it drops
+
+Everything the real encoding needs in order to be *fast*:
+
+- **No union-find, no canonical ids, no leader lookups.** Terms are their own ids — the
+  "natural" term a rule builds is the id. No `@UF_<Sort>`, no `ordering-min`/`ordering-max`.
+- **No view tables and no rebuilding.** Nothing is ever re-keyed.
+- **No proof skeletons.** No nested `@Proof` terms, no `get-fresh!`, no `@Ast`.
+
+### What it keeps
+
+The property we actually want: *every equality has a rule firing behind it, and every
+recorded proof is valid.*
+
+**Leading option, not yet settled: constructors for terms, view tables for proofs.**
+
+- The source's **constructors carry over**, so a term is its own id — the "natural" term a
+  rule builds. No canonicalization, so no leader lookup.
+- Per source constructor `C`, a **view table** `@CView : (S…) → (S, Proof)`, a *function*
+  whose output carries the proof alongside the id. Its `:merge` is what resolves
+  congruence: colliding rows over congruent keys merge their outputs and record why.
+
+Three things this decides:
+
+- **It needs `:merge`.** The view's merge is the congruence resolution, so this does *not*
+  live in the `:no-merge` fragment.
+- **It uses multi-column outputs.** `(S, Proof)` is two columns — exactly what `Action.set`'s
+  `List Expr` output and `Pattern.values` were built for.
+- **It stays inside reads-in-query/writes-in-actions.** A merge body has `old*`/`new*` bound
+  by the collision, so it writes without reading. Nothing looks anything up on a
+  right-hand side, because there are no canonical ids to look up.
+
+### The side condition that makes it work
+
+Since the source constructors carry over, `MCong.fd` still fires on them in the target —
+which would mean some equalities have no rule behind them, defeating the point. That
+collapses to nothing **provided `encode` emits no `union` actions**: with `eqs` empty,
+`MCong` reduces to reflexivity, and `fd` on equal arguments yields nothing new. So "emits no
+`union`" is a syntactic property of `encode` that makes the target's built-in congruence
+vacuous, and `Proofs/Encode.lean`'s `encode_mcong_eq` is exactly that lemma.
+
+### What a proof value is
+
+egglog's **user-facing** `Proof` (`src/proofs/proof_format.rs:289`), not `RawProof`:
+
+```rust
+struct Proposition { lhs: TermId, rhs: TermId }
+struct Proof { proposition: Proposition, justification: Justification }
+enum Justification {
+  Fiat,                                                     // top-level equalities, and reflexivity
+  Rule { name, premise_proofs: Vec<ProofId>, substitution },
+  MergeFn { function, old_proof, new_proof },
+  Trans(ProofId, ProofId),
+  Sym(ProofId),
+  Congr { proof, child_index, child_proof },
+}
+```
+
+It maps onto `Cong` almost one for one, which is why checking is a structural induction with
+no conversion layer — the payoff for `Cong` being inductive rather than a computed closure,
+and why dropping the skeletons costs nothing (they exist to make proofs *small*, not
+checkable).
+
+| `Justification` | `Cong` |
+| --- | --- |
+| `Fiat` | `assert`, and `refl` for top-level terms |
+| `Rule` | a rule firing — `ValidQuerySubst` plus `runRules` |
+| `Trans` / `Sym` | `trans` / `symm` |
+| `Congr` | `congr`, **but one child at a time** |
+| `MergeFn` | `MergeStep` — only once merge functions are involved |
+
+Two mismatches to settle before writing `encode`:
+
+- **`Congr` is incremental, `Cong.congr` is n-ary.** egglog extends `t1 = f(…, ci, …)` to
+  `t1 = f(…, c2, …)` one `child_index` at a time; ours takes a whole `CongList`. They are
+  inter-derivable — n chained steps make one of ours — but the proof *terms* differ in
+  shape, so matching the user-facing type needs a bridging lemma by induction on the child
+  list. This is the one place the correspondence is not definitional.
+- **Reflexivity is not assumed, and we already agree.** "A proof of `t = t` must correspond
+  to some `t` added at the top level." `Cong.refl`'s `a ∈ db.terms`, inherited from the
+  Redex, is exactly that discipline.
+
+### The invariant is a precondition of the encoding, not just a style rule
+
+`ProofEncodingUnsupportedReason` (`src/proofs/proof_encoding_helpers.rs:851`) lists
+**`FunctionLookupInAction`** — "action contains a function lookup. Finding the output of a
+function is only supported in queries" — and **`UnsafeSeminaive`** — "Arbitrary RHS database
+reads are not representable by the term/proof encoding." egglog's own encoder *refuses* a
+program that reads on a right-hand side. So "reads in the query, writes in the actions" is
+not merely egglog's default typechecking rule; it is what the proof encoding requires in
+order to exist.
+
+### Three theorems
+
+1. **Soundness.** `@Eq(a, b)` present in `run (encode P)` → `Cong (run P) a b`.
+2. **Completeness.** `Cong (run P) a b` → `@Eq(a, b)` present, given enough rounds.
+3. **Justification validity.** Every justification row's premises are present, and it maps
+   to a `Cong` step. This is "every proof we write, the checker accepts" — and here it is
+   close to definitional, which is the point of dropping the skeletons.
+
+### The costs, stated up front
+
+Without canonicalization the encoded database is much larger — transitivity and congruence
+generate quadratically many `@Eq` rows and nothing dedups them. That is fine for a semantics,
+which is about what is *derivable*, but it means row-count claims are out and there is no
+size comparison against real egglog to be had. Since the theorems are against the spec, that
+costs nothing we wanted.
+
+What this does *not* establish: that egglog's real encoding is correct. It establishes that
+the idea is correct, in a setting where every step is checkable. Recovering the real
+encoding means adding canonicalization and skeletons back, one at a time, each as a
+refinement of this one.
+
+## Path to the full proof-encoding theorem (M11)
 
 With M9 in place, the encoding becomes a translation between two instances of the
-same semantics, and the theorems are about that translation:
-
-- The target needs **fresh ids** (`get-fresh!`), which the source has no notion of.
-  An earlier draft of this plan said to add an id supply to the target configuration;
-  that turned out to be unnecessary. Terms *are* the ids: the id for `f` over canonical
-  children `cs` is the term `.app f cs`, the standard skolem encoding of `get-fresh!`.
-  Source terms and target ids then share one type, so the simulation theorem compares
-  them directly with no correspondence relation. The deviation this buys is in row
-  counts, not equalities — egglog mints per construction *site*, so it holds strictly
-  more `@UF` rows than the skolem encoding does. Any theorem about row counts must
-  account for that; the simulation theorem, being about equality, need not. The only
-  supply `encode` still threads is generated variable names (`@v0`, `@v1`, …), which
-  is code generation, not semantics.
-- Define `encode : Program → Program` for a fragment first: constructors only, no
-  containers, no delete/subsume, no schedules.
+same semantics. **Parked**, and superseded as a near-term target by M11-min above — this is
+what the full encoding would eventually need, kept because the shape of the theorems carries
+over. [`CHECKER.md`](CHECKER.md) has the scoping and the known defects, including that
+`Rebuilt` is reachability-vacuous.
 
 Three theorems, in increasing order of what they buy:
 
-1. **Every proof the encoding writes is accepted by the checker.** Prove that for every
-   `@Proof` row in `runProgram (encode P)`, `Checks` holds. This is the lemma that would
-   catch encoder bugs — a proof row written with the wrong column, the wrong bridge, or a
-   `@Congr` at the wrong child position fails it. It is worth stating separately from (2)
-   because it is about the *encoder*, and holds without reference to the source
-   semantics.
+1. **Every proof the encoding writes is accepted by the checker** — for every `@Proof` row
+   in `runProgram (encode P)`, `Checks` holds. About the *encoder*, with no reference to the
+   source semantics, so it is what would catch a proof row written with the wrong column or
+   a `@Congr` at the wrong child position.
+2. **The checker is sound** — `Checks p` and `p` concludes `a = b` gives
+   `Cong (runProgram P) ⟦a⟧ ⟦b⟧`. With (1), every stored proof witnesses a real equality.
+3. **Simulation** — `Cong (runProgram P) a b` iff `a` and `b` share an `@UF` leader in
+   `runProgram (encode P)`. `⇐` is (1)+(2) at the union-find; `⇒` is completeness and needs
+   the rebuild to have saturated.
 
-   [`CHECKER.md`](CHECKER.md) scopes what `Checks` is, and revises the shape of this
-   theorem in three ways. **The checker is not what reads the rows**: a conversion stage
-   parses rows into `RawProof` and replays the rule head to produce a `Justification`, and
-   it is where the encoder's mistakes are actually caught — 23 `panic!` in
-   `proof_format.rs` against 3 in `proof_checker.rs`. So (1) decomposes into *conversion
-   does not panic*, then *`check_proof` returns `Ok`*, and the first conjunct is the
-   substantial one. **The checker reads the source program, not the e-graph** —
-   `check_proof(proof_id, program: &[ResolvedNCommand])`, with no tables, backend or
-   extraction — so `Checks` is a predicate over syntax `Spec/` already models. And **the
-   constructor-only fragment needs only five justifications** (`Fiat`, `Rule`, `Trans`,
-   `Sym`, `Congr`), estimated at 150–250 lines of Lean; the rest of the checker is out of
-   scope for a first target. The remaining risk is not the checker but `Firing`'s
-   cross-row memoized walk in `proof_head.rs`.
+`Cong` being inductive is what makes all three tractable: all five justifications the
+constructor fragment needs map onto `Cong`'s constructors, so (2) is a structural induction
+on the proof and (3)'s `⇒` an induction on the `Cong` derivation. This is the reason the
+whole development uses a derivation relation rather than a computed closure.
 
-2. **The checker is sound.** If `Checks p` and `p` concludes `a = b`, then
-   `Cong (runProgram P) ⟦a⟧ ⟦b⟧` in the source semantics. This is what makes (1)
-   worth having: (1) + (2) give that every proof the encoding stores witnesses a
-   real equality of the ideal semantics.
+**Fresh ids are structural.** An earlier draft said to add an id supply to the target; that
+was unnecessary. Terms *are* the ids — the id for `f` over canonical children `cs` is the
+term `.app f cs`, the skolem encoding of `get-fresh!` — so source terms and target ids share
+one type and the simulation theorem needs no correspondence relation. The cost is in row
+counts, not equalities: egglog mints per construction *site* and so holds strictly more
+`@UF` rows.
 
-3. **Simulation.** For well-scoped `P`, `Cong (runProgram P) a b` iff `a` and `b`
-   have the same `@UF` leader in `runProgram (encode P)`. The `⇐` direction is
-   (1) + (2) specialized to the union-find; the `⇒` direction is completeness —
-   the encoding loses no equality — and needs the rebuild schedule to have
-   saturated.
+**Naive, not seminaive.** This port returns *all* matching substitutions where egglog
+returns only new ones. Deliberate: a reference semantics should be simple, and a naive round
+fires a superset of a seminaive one, so "every proof row written is valid" covers rows the
+real encoder never writes. It bites only claims about row *counts* — and, once merges are
+not idempotent joins, the number of firings does change the result, so the two genuinely
+diverge there. M9's over-approximation is the same trade for the same reason
+([`MERGE.md`](MERGE.md), "The framing").
 
-`Cong` being inductive is what makes all three tractable: **all five** justifications the
-constructor fragment needs map onto `Cong`'s constructors, so (2) is a structural
-induction on the proof and (3)'s `⇒` an induction on the `Cong` derivation.
-
-`CHECKER.md` also suggests splitting (1) at the layer boundary `proof_encoding.md`
-already draws — prove it for layer 1, where there is no column arithmetic, and leave
-"layer 2 recovers layer 1" to the two Rust tests that pin exactly that.
-
-One deviation to record, because it bears on (1): the Redex (and this port) returns
-**all** matching substitutions, where egglog is seminaive and returns only new ones.
-Deliberately **not** modelled — a reference semantics should be simple, and naive
-evaluation is the simple choice. It is sound for the theorems above rather than
-merely tolerable: a naive round fires a *superset* of what a seminaive one fires, so
-"every proof row written is checker-valid" proved here covers rows the real encoder
-never writes. It would only bite for claims about row *counts*, which are not among
-the goals.
-
-Two places to revisit it. Differential testing compares per round rather than only at
-saturation, since that localizes a discrepancy — and if one ever traces to seminaive,
-this is the note to reread. And once M9 admits merge functions that are not idempotent
-joins (`:merge (+ old new)`, say), the *number* of firings changes the result, so naive
-and seminaive genuinely diverge there in a way they cannot for constructors.
-
-**M9 over-approximates in the same direction, and for the same reason.** With merge
-functions, a lookup reads any recorded output rather than the current one, and a round
-takes any number of merge steps rather than all of them, so the spec reaches every state
-egglog reaches plus some it does not. That is sound for (1) and (2) because theorem (1)
-is an *invariant* over the step relation — it holds at every reachable state, so it
-needs neither termination nor confluence, and a diverging or differently-ordered run
-satisfies it throughout — and because term and proof rows are append-only, so a stale
-read yields a different proof of the same fact rather than an invalid one. It bites the
-same place seminaive does: claims about row counts, and theorem (3), which therefore
-takes saturation and a join condition as hypotheses. There is also a positive argument
-for it rather than only a tolerance: an order-dependent merge has no order-independent
-answer, egglog calls that undefined behaviour, and a semantics that declines to pin an
-order the programmer never specified is arguably the more honest one. See
-[`MERGE.md`](MERGE.md), "The framing".
-
-Other omissions inherited from the Redex to-do list: schedules, extraction,
-containers, primitives.
+Other omissions inherited from the Redex to-do list: schedules, extraction, containers.
 
 ## Verification
 
-- `cd semantics && lake build` — the whole development typechecks.
-- No `sorry`: `lake build` reports `declaration uses 'sorry'`; grep the build
-  output and the sources so an unfinished proof cannot pass silently.
-- `EgglogSemantics/Examples.lean` compiling *is* the test suite for M7 — each
-  ported Redex check is a closed Lean proof.
-- `make lean-check` from the workspace root runs the above (it adds
-  `~/.elan/bin` to `PATH` itself). Verified to fail on an injected `sorry`.
+- `cd semantics && lake build` — the whole development typechecks. This is the check that
+  must stay green.
+- `make lean-difftest` — 122 cases against the real egglog binary. Watch the profile
+  distribution, not only the pass count.
+- `make lean-check` additionally fails on any `sorry`. It **currently fails by design**:
+  19 statements are deliberately unproved (13 parked M11, 6 known-false with witnesses in
+  `Proofs/Counterexamples.lean`). Use it to check that a change adds no *new* `sorry`.
+- Axioms, on every change: `lean_verify` or `#print axioms` against the table in "Current
+  priority". A green build does not catch an axiom leak.
+- `Tests/Examples.lean` compiling *is* the M7 suite — each ported Redex check is a closed
+  proof or a `#guard`.
 
 ## `set` legality is a separate predicate, for now
 
-`Database.CtorRows` — the rows are exactly the ones the terms induce — is one of the two
-hypotheses `mcong_iff_cong` takes, so it is the on-ramp from "a database you can run a
-program to" to "the functional dependency *is* congruence". It is preserved by every
-step of the semantics only if `set` is restricted, and egglog restricts it the same way:
-`set` on a constructor is a type error (`egglog/src/constraint.rs`, "Check that we're not
-trying to set a constructor"). Since constructors are exactly the `.union`-merge
-functions, the side condition is `mergeOf f ≠ .union`.
+`Database.CtorRows` is one of the two hypotheses `mcong_iff_cong` takes, so it is the
+on-ramp from "a database you can run a program to" to "the functional dependency *is*
+congruence". Preserving it needs `set` restricted, and egglog restricts it the same way:
+`set` on a constructor is a type error (`egglog/src/constraint.rs`). Constructors are
+exactly the `.union`-merge functions, so the condition is `mergeOf f ≠ .union` — note this
+admits `:no-merge`, checked against the binary.
 
-That check is `Action.SetLegal`/`Program.SetLegal` in `Spec/Scope.lean`, **beside**
-`Scoped` rather than inside it. It belongs inside eventually — a front end rejects both
-in one pass — and it is out for one reason: the parameter. `Scoped` relates syntax to a
-`Scope`; this relates it to a `Signature`. Threading a signature through
-`Actions.Scoped`, `Rule.Scoped`, `Cmd.Scoped` and `Program.Scoped` would put a signature
-argument on every lemma in `Proofs/Scope.lean` and a new hypothesis on
-`exec_toDatabase`, and none of the scope theorems would use it. Fold the two together
-when `Program.Scoped` needs the signature for its own sake — M9's sort discipline (M9,
-point 4) is that reason, since a merge function's output has a base sort. Until then the
-pair to carry is `WellScoped p ∧ p.SetLegal sig`.
+That is `Action.SetLegal`/`Program.SetLegal` in `Spec/Scope.lean`, **beside** `Scoped`
+rather than inside it, for one reason: `Scoped` relates syntax to a `Scope`, this relates
+it to a `Signature`, and threading a signature through the whole `Scoped` family would put
+an argument on every lemma in `Proofs/Scope.lean` and a hypothesis on `exec_toDatabase`
+that none of them would use. Fold them together when `Program.Scoped` needs the signature
+for its own sake — the sort discipline is that reason. Until then carry
+`WellScoped p ∧ p.SetLegal sig`.
 
-One thing the port learned writing this down: **`SetLegal` alone is not enough**, and the
-gap is not about actions at all. Declaring `f` a `:merge` function makes the constructor
-row `f ↦ (f)` *already in the database* collide with itself, and `MergeStep` then writes
-whatever the merge body computes at that key — a non-constructor row, with no `set`
-anywhere. So `Cmd.CtorDecl` ("this declaration declares a constructor") is a second,
-independent side condition. `Proofs/Step.lean`'s `exists_mergeStep_not_ctorRows` is that
-counterexample as a theorem.
+**`SetLegal` alone is not enough**, and the gap is not about actions. Declaring `f` a
+`:merge` function makes the constructor row `f ↦ (f)` *already in the database* collide
+with itself, and `MergeStep` then writes whatever the body computes there — a
+non-constructor row, with no `set` anywhere. Hence the second, independent condition
+`Cmd.CtorDecl`. `Proofs/Step.lean`'s `exists_mergeStep_not_ctorRows` is that counterexample
+as a theorem.

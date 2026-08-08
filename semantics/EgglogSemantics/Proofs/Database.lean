@@ -266,6 +266,35 @@ theorem addRow (f : FnName) (as vs : List Term) (db : Database) :
   ((addTerms as db).trans (addTerms vs _)).trans
     ⟨subset_rfl, Set.subset_insert _ _, subset_rfl⟩
 
+/-! The same operation applied to both sides. This is what makes an action, and hence a
+whole action block, transportable along `Contained`. -/
+/-- `Contained` is preserved by adding the same term to both sides. -/
+theorem addTerm_mono {d₁ d₂ : Database} (h : d₁.Contained d₂) (t : Term) :
+    (d₁.addTerm t).Contained (d₂.addTerm t) :=
+  ⟨Set.union_subset_union h.terms subset_rfl, Set.union_subset_union h.rows subset_rfl,
+    h.eqs⟩
+
+/-- `addTerm_mono` folded. -/
+theorem addTerms_mono {d₁ d₂ : Database} (h : d₁.Contained d₂) (ts : List Term) :
+    (d₁.addTerms ts).Contained (d₂.addTerms ts) := by
+  induction ts generalizing d₁ d₂ with
+  | nil => exact h
+  | cons t ts ih => exact ih (h.addTerm_mono t)
+
+/-- The same equality is inserted on both sides, so `Set.insert_subset_insert` closes the
+`eqs` component. -/
+theorem addEq_mono {d₁ d₂ : Database} (h : d₁.Contained d₂) (a b : Term) :
+    (d₁.addEq a b).Contained (d₂.addEq a b) :=
+  ⟨((h.addTerm_mono a).addTerm_mono b).terms, ((h.addTerm_mono a).addTerm_mono b).rows,
+    Set.insert_subset_insert h.eqs⟩
+
+/-- The same row is inserted on both sides. -/
+theorem addRow_mono {d₁ d₂ : Database} (h : d₁.Contained d₂) (f : FnName)
+    (as vs : List Term) : (d₁.addRow f as vs).Contained (d₂.addRow f as vs) :=
+  ⟨((h.addTerms_mono as).addTerms_mono vs).terms,
+    Set.insert_subset_insert ((h.addTerms_mono as).addTerms_mono vs).rows,
+    ((h.addTerms_mono as).addTerms_mono vs).eqs⟩
+
 theorem sUnion (db : Database) (S : Set Database) : Contained db (db.sUnion S) :=
   ⟨Set.subset_union_left, Set.subset_union_left, Set.subset_union_left⟩
 
@@ -411,6 +440,43 @@ the semantics preserves `CtorRows`. -/
 theorem not_ctorRows_addRow :
     ¬(Database.empty.addRow "f" [] [.lit (.int 0)]).CtorRows :=
   not_ctorRows_of_mem (Set.mem_insert _ _) (by simp)
+
+/-! ### Re-adding what is already there
+
+`addRow` re-inserts its key and value terms, so "the step changed nothing" needs those
+insertions to be no-ops. That is exactly `WF.subtermClosed` plus the inclusion half of
+`CtorRows`: every application in `terms` has its constructor row
+(`ctorRowsOf db.terms ⊆ db.rows`, the direction `addTerm` maintains). `Proofs/Merge.lean`'s
+`MergeStep.self_id` is what spends them. -/
+theorem addTerm_eq_self {db : Database} (hw : db.WF)
+    (hctor : ctorRowsOf db.terms ⊆ db.rows) {t : Term} (ht : t ∈ db.terms) :
+    db.addTerm t = db := by
+  have hs : t.subterms ⊆ db.terms := hw.subtermClosed t ht
+  have hr : t.ctorRows ⊆ db.rows := fun r hr => hctor ⟨hr.1, hs hr.2⟩
+  unfold Database.addTerm
+  rw [Set.union_eq_left.mpr hs, Set.union_eq_left.mpr hr]
+
+theorem addTerms_eq_self {db : Database} (hw : db.WF)
+    (hctor : ctorRowsOf db.terms ⊆ db.rows) {ts : List Term}
+    (ht : ∀ t ∈ ts, t ∈ db.terms) : db.addTerms ts = db := by
+  induction ts generalizing db with
+  | nil => rfl
+  | cons t ts ih =>
+    have h1 : db.addTerm t = db := addTerm_eq_self hw hctor (ht t (by simp))
+    change Database.addTerms ts (db.addTerm t) = db
+    rw [h1]
+    exact ih hw hctor fun s hs => ht s (by simp [hs])
+
+/-- `addTerms` reads only `terms` and `rows`, so two databases agreeing there agree
+after it. This is what lets a merge body's result `d` be substituted for `db`. -/
+theorem addTerms_terms_rows {d₁ d₂ : Database} (ht : d₁.terms = d₂.terms)
+    (hr : d₁.rows = d₂.rows) (ts : List Term) :
+    (d₁.addTerms ts).terms = (d₂.addTerms ts).terms ∧
+      (d₁.addTerms ts).rows = (d₂.addTerms ts).rows := by
+  induction ts generalizing d₁ d₂ with
+  | nil => exact ⟨ht, hr⟩
+  | cons t ts ih =>
+    exact ih (by simp only [Database.addTerm, ht]) (by simp only [Database.addTerm, hr])
 
 end Database
 end Egglog

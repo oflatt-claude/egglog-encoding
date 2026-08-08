@@ -58,14 +58,14 @@ def termF : FnName := termName "f"
 
 /-- The e-class rebuild rule for `f`. -/
 def eclassRuleF : Rule :=
-  { query := [.eq (.var "@e") (.app viewF [.var "@c0"]),
-              .eq (.var "@x") (.app ufName [.var "@e"])],
+  { query := [.values [.var "@e"] viewF [.var "@c0"],
+              .values [.var "@x"] ufName [.var "@e"]],
     actions := [.set viewF [.var "@c0"] [.var "@x"]] }
 
 /-- The column-0 rebuild rule for `f`: re-key a view row to its child's `@UF` leader. -/
 def colRuleF : Rule :=
-  { query := [.eq (.var "@e") (.app viewF [.var "@c0"]),
-              .eq (.var "@x") (.app ufName [.var "@c0"])],
+  { query := [.values [.var "@e"] viewF [.var "@c0"],
+              .values [.var "@x"] ufName [.var "@c0"]],
     actions := [.set viewF [.var "@x"] [.var "@e"]] }
 
 theorem maintenance₀ :
@@ -209,8 +209,6 @@ theorem rebuilt_rekeys {P : Program} {d : Database}
     (he0 : Env.lookup "@e" d.env = none)
     (hc0 : Env.lookup "@c0" d.env = none)
     (hx0 : Env.lookup "@x" d.env = none)
-    (hV : d.sig.mergeOf viewF ≠ MergeSpec.union)
-    (hU : d.sig.mergeOf ufName ≠ MergeSpec.union)
     {c e x : Term}
     (hview : Row.mk viewF [c] [e] ∈ d.rows) (huf : Row.mk ufName [c] [x] ∈ d.rows)
     (hcT : c ∈ d.terms) (heT : e ∈ d.terms) (hxT : x ∈ d.terms)
@@ -239,19 +237,20 @@ theorem rebuilt_rekeys {P : Program} {d : Database}
   have hfe : Expr.freeVars (.var "@e") d.env = ["@e"] := freeVars_var_of_none he0
   have hfc : Expr.freeVars (.var "@c0") d.env = ["@c0"] := freeVars_var_of_none hc0
   have hfx : Expr.freeVars (.var "@x") d.env = ["@x"] := freeVars_var_of_none hx0
-  have hv1 : Expr.freeVars (.var "@e") d.env ∪
-      Expr.freeVars (.app viewF [.var "@c0"]) d.env = ["@e", "@c0"] := by
-    show Expr.freeVars (.var "@e") d.env ∪
+  have hv1 : Expr.freeVarsList [Expr.var "@e"] d.env ∪
+      Expr.freeVarsList [Expr.var "@c0"] d.env = ["@e", "@c0"] := by
+    show (Expr.freeVars (.var "@e") d.env ∪ Expr.freeVarsList [] d.env) ∪
       (Expr.freeVars (.var "@c0") d.env ∪ Expr.freeVarsList [] d.env) = _
     rw [hfe, hfc]; rfl
-  have hv2 : Expr.freeVars (.var "@x") d.env ∪
-      Expr.freeVars (.app ufName [.var "@c0"]) d.env = ["@x", "@c0"] := by
-    show Expr.freeVars (.var "@x") d.env ∪
+  have hv2 : Expr.freeVarsList [Expr.var "@x"] d.env ∪
+      Expr.freeVarsList [Expr.var "@c0"] d.env = ["@x", "@c0"] := by
+    show (Expr.freeVars (.var "@x") d.env ∪ Expr.freeVarsList [] d.env) ∪
       (Expr.freeVars (.var "@c0") d.env ∪ Expr.freeVarsList [] d.env) = _
     rw [hfx, hfc]; rfl
   -- the two `MValidSubst`s
-  have s1 : MValidSubst d (.eq (.var "@e") (.app viewF [.var "@c0"])) σ₁ := by
-    refine .eq (w := e) (t₁ := e) (t₂ := e) ⟨?_, ?_⟩ heT (.var l1e) ?_ (.refl ?_) (.refl ?_)
+  have s1 : MValidSubst d (.values [.var "@e"] viewF [.var "@c0"]) σ₁ := by
+    refine .values ⟨?_, ?_⟩ (.cons (.var l1e) .nil) (.cons (.var l1c) .nil)
+      (.cons (.refl hcT) .nil) (.cons (.refl heT) .nil) hview
     · rw [hv1]; exact List.Perm.refl _
     · rintro ⟨v, t⟩ hb
       rw [d1] at hb
@@ -259,12 +258,9 @@ theorem rebuilt_rekeys {P : Program} {d : Database}
       rcases hb with ⟨-, rfl⟩ | ⟨-, rfl⟩
       · exact heT
       · exact hcT
-    · exact .lookup (by rfl) hV (.cons (.var l1c) .nil)
-        ⟨[c], .cons (.refl hcT) .nil, hview⟩
-    · exact Or.inl (Or.inl heT)
-    · exact Or.inl (Or.inl heT)
-  have s2 : MValidSubst d (.eq (.var "@x") (.app ufName [.var "@c0"])) σ₂ := by
-    refine .eq (w := x) (t₁ := x) (t₂ := x) ⟨?_, ?_⟩ hxT (.var l2x) ?_ (.refl ?_) (.refl ?_)
+  have s2 : MValidSubst d (.values [.var "@x"] ufName [.var "@c0"]) σ₂ := by
+    refine .values ⟨?_, ?_⟩ (.cons (.var l2x) .nil) (.cons (.var l2c) .nil)
+      (.cons (.refl hcT) .nil) (.cons (.refl hxT) .nil) huf
     · rw [hv2]; exact List.Perm.refl _
     · rintro ⟨v, t⟩ hb
       rw [d2] at hb
@@ -272,10 +268,6 @@ theorem rebuilt_rekeys {P : Program} {d : Database}
       rcases hb with ⟨-, rfl⟩ | ⟨-, rfl⟩
       · exact hxT
       · exact hcT
-    · exact .lookup (by rfl) hU (.cons (.var l2c) .nil)
-        ⟨[c], .cons (.refl hcT) .nil, huf⟩
-    · exact Or.inl (Or.inl hxT)
-    · exact Or.inl (Or.inl hxT)
   -- the query substitution
   have hq : MValidQuerySubst d colRuleF.query σ := by
     refine ⟨[σ₁, σ₂], ?_, ?_⟩
@@ -329,7 +321,7 @@ theorem missing₀ : Row.mk viewF [t1] [ft2] ∉ d₀.rows := by
 
 /-- **`encode P₀`'s final state is not `Rebuilt`.** -/
 theorem not_rebuilt₀ : ¬ Rebuilt P₀ d₀ := fun hreb =>
-  missing₀ (rebuilt_rekeys colRuleF_mem₀ env_e₀ env_c₀ env_x₀ hV₀ hU₀ viewRow₀ ufRow₀
+  missing₀ (rebuilt_rekeys colRuleF_mem₀ env_e₀ env_c₀ env_x₀ viewRow₀ ufRow₀
     (by show t2 ∈ terms₀; decide) (by show ft2 ∈ terms₀; decide)
     (by show t1 ∈ terms₀; decide) hreb)
 
@@ -421,7 +413,6 @@ theorem meval_max_self {db : Database} {p t : Term}
     t = p := by
   cases h with
   | ctor hp _ _ => simp [Prim.ofName] at hp
-  | lookup hp _ _ _ => simp [Prim.ofName] at hp
   | prim hp hargs happly =>
     obtain ⟨u, v, rfl, hu, hv⟩ := mevalList_two hargs
     have hu' : u = p := by have := meval_var' hu; simpa [Env.lookup] using this.symm
@@ -439,7 +430,6 @@ theorem meval_min_self {db : Database} {p t : Term}
     t = p := by
   cases h with
   | ctor hp _ _ => simp [Prim.ofName] at hp
-  | lookup hp _ _ _ => simp [Prim.ofName] at hp
   | prim hp hargs happly =>
     obtain ⟨u, v, rfl, hu, hv⟩ := mevalList_two hargs
     have hu' : u = p := by have := meval_var' hu; simpa [Env.lookup] using this.symm
@@ -683,37 +673,31 @@ theorem ctorUnion_addTerm {db : Database} {t : Term}
   · exact h r hr hu
   · exact hr.1
 
-theorem meval_app_lookup {d : Database} {σ : Env} {G : FnName} {W : Var} {t : Term}
-    (hprim : Prim.ofName G = none) (hG : d.sig.mergeOf G ≠ MergeSpec.union)
-    (h : Expr.MEval d σ (.app G [.var W]) t) :
-    ∃ tw, Env.lookup W σ = some tw ∧ d.Out G [tw] [t] := by
-  cases h with
-  | ctor _ hu _ => exact absurd hu hG
-  | prim hp _ _ => rw [hprim] at hp; exact absurd hp (by simp)
-  | lookup _ _ hargs hout =>
-    obtain ⟨tw, rfl, hw⟩ := mevalList_one hargs
-    exact ⟨tw, meval_var' hw, hout⟩
+/-- Inverting `MValidSubst` on the one pattern shape every maintenance rule uses: a
+one-column row atom at a variable key.
 
-/-- Inverting `MValidSubst` on the one pattern shape every maintenance rule uses. -/
+Shorter than it was, because a read is now the atom itself rather than an `.eq` whose
+right-hand side evaluated by `MEval.lookup`. No `addTerm` is involved, so the value
+comparison is `MCongList` on `d` directly instead of `mcong_eq` on a twice-extended
+database, and the `Prim.ofName`/`mergeOf` hypotheses that ruled out the other `MEval`
+rules are gone. -/
 theorem invert_eq_pattern {d : Database} (heq : d.eqs = ∅)
     (hrows : ∀ r ∈ d.rows, d.sig.mergeOf r.fn = MergeSpec.union → r.out = [.app r.fn r.args])
-    {G : FnName} (hprim : Prim.ofName G = none) (hG : d.sig.mergeOf G ≠ MergeSpec.union)
-    {V W : Var} {σ : Env}
-    (h : MValidSubst d (.eq (.var V) (.app G [.var W])) σ) :
-    (Env.dom σ).Perm (Expr.freeVars (.var V) d.env ∪
-        Expr.freeVars (.app G [.var W]) d.env) ∧
+    {G : FnName} {V W : Var} {σ : Env}
+    (h : MValidSubst d (.values [.var V] G [.var W]) σ) :
+    (Env.dom σ).Perm (Expr.freeVarsList [Expr.var V] d.env ∪
+        Expr.freeVarsList [Expr.var W] d.env) ∧
       ∃ tv tw, Env.lookup V (d.env ++ σ) = some tv ∧
         Env.lookup W (d.env ++ σ) = some tw ∧ Row.mk G [tw] [tv] ∈ d.rows := by
   cases h with
-  | eq hve _ h1 h2 _ hc2 =>
+  | values hve hvs has hts hus hrow =>
     refine ⟨hve.1, ?_⟩
-    have hteq : _ = _ := mcong_eq (db := (d.addTerm _).addTerm _) heq
-      (ctorUnion_addTerm (ctorUnion_addTerm hrows)) hc2
-    obtain ⟨tw, hw, hout⟩ := meval_app_lookup hprim hG h2
-    obtain ⟨bs, hbs, hrow⟩ := hout
-    have : bs = [tw] := (mcongList_eq heq hrows hbs).symm
-    subst this
-    exact ⟨_, tw, meval_var' h1, hw, hteq ▸ hrow⟩
+    obtain ⟨tv, rfl, hv⟩ := mevalList_one hvs
+    obtain ⟨tw, rfl, hw⟩ := mevalList_one has
+    have hb : [tw] = _ := mcongList_eq heq hrows hts
+    have hw' : [tv] = _ := mcongList_eq heq hrows hus
+    subst hb; subst hw'
+    exact ⟨tv, tw, meval_var' hv, meval_var' hw, hrow⟩
 
 theorem lookup_none_of_perm {v : Var} {σ : Env} {l : List Var}
     (hp : (Env.dom σ).Perm l) (h : v ∉ l) : Env.lookup v σ = none :=
@@ -735,17 +719,15 @@ theorem noAtVar₁ (v : Var) (h : v ≠ freshVar 0) : Env.lookup v d₁.env = no
 
 /-- Every firing of a maintenance rule at `d₁`, unpacked.
 
-All three maintenance rules have the same shape: two `.eq` patterns reading a one-column
-table at a variable key, and a head that `set`s a one-column row from two variables. -/
+All three maintenance rules have the same shape: two row atoms reading a one-column table
+at a variable key, and a head that `set`s a one-column row from two variables. -/
 theorem two_pattern_firing {V₁ W₁ V₂ W₂ A B : Var} {G₁ G₂ F : FnName} {d' : Database}
-    (hfv1 : Expr.freeVars (.var V₁) d₁.env ∪
-      Expr.freeVars (.app G₁ [.var W₁]) d₁.env = [V₁, W₁])
-    (hfv2 : Expr.freeVars (.var V₂) d₁.env ∪
-      Expr.freeVars (.app G₂ [.var W₂]) d₁.env = [V₂, W₂])
-    (hp1 : Prim.ofName G₁ = none) (hu1 : d₁.sig.mergeOf G₁ ≠ MergeSpec.union)
-    (hp2 : Prim.ofName G₂ = none) (hu2 : d₁.sig.mergeOf G₂ ≠ MergeSpec.union)
-    (hd : d' ∈ RuleResults d₁ ⟨[.eq (.var V₁) (.app G₁ [.var W₁]),
-                                .eq (.var V₂) (.app G₂ [.var W₂])],
+    (hfv1 : Expr.freeVarsList [Expr.var V₁] d₁.env ∪
+      Expr.freeVarsList [Expr.var W₁] d₁.env = [V₁, W₁])
+    (hfv2 : Expr.freeVarsList [Expr.var V₂] d₁.env ∪
+      Expr.freeVarsList [Expr.var W₂] d₁.env = [V₂, W₂])
+    (hd : d' ∈ RuleResults d₁ ⟨[.values [.var V₁] G₁ [.var W₁],
+                                .values [.var V₂] G₂ [.var W₂]],
                                [.set F [.var A] [.var B]]⟩) :
     ∃ (σa σb : Env) (tv1 tw1 tv2 tw2 ta tb : Term),
       (Env.dom σa).Perm [V₁, W₁] ∧ (Env.dom σb).Perm [V₂, W₂] ∧
@@ -770,9 +752,9 @@ theorem two_pattern_firing {V₁ W₁ V₂ W₂ A B : Var} {G₁ G₂ F : FnName
         | single =>
           obtain ⟨hcompat, rfl⟩ := hu
           obtain ⟨hd1, tv1, tw1, h1v, h1w, hr1⟩ :=
-            invert_eq_pattern eqs₁ ctorUnion₁ hp1 hu1 s1
+            invert_eq_pattern eqs₁ ctorUnion₁ s1
           obtain ⟨hd2, tv2, tw2, h2v, h2w, hr2⟩ :=
-            invert_eq_pattern eqs₁ ctorUnion₁ hp2 hu2 s2
+            invert_eq_pattern eqs₁ ctorUnion₁ s2
           rw [hfv1] at hd1
           rw [hfv2] at hd2
           cases hact with
@@ -809,18 +791,12 @@ theorem contained_of_firing {F : FnName} {ta tb : Term} {E : Env}
 
 theorem rebuilt_conj1 : ∀ r ∈ maintenanceRules P₁, ∀ d' ∈ RuleResults d₁ r,
     Database.Contained d' d₁ := by
-  have hUFprim : Prim.ofName ufName = none := by rfl
-  have hVprim : Prim.ofName viewF = none := by rfl
-  have hUF : d₁.sig.mergeOf ufName ≠ MergeSpec.union := by
-    intro h; exact MergeSpec.noConfusion (show MergeSpec.merge mergeBody mergeResult = _ from h)
-  have hVw : d₁.sig.mergeOf viewF ≠ MergeSpec.union := by
-    intro h; exact MergeSpec.noConfusion (show MergeSpec.merge mergeBody mergeResult = _ from h)
-  have fv : ∀ (V W : Var) (G : FnName), Env.lookup V d₁.env = none →
+  have fv : ∀ (V W : Var), Env.lookup V d₁.env = none →
       Env.lookup W d₁.env = none →
-      Expr.freeVars (.var V) d₁.env ∪ Expr.freeVars (.app G [.var W]) d₁.env =
+      Expr.freeVarsList [Expr.var V] d₁.env ∪ Expr.freeVarsList [Expr.var W] d₁.env =
         List.insert V [W] := by
-    intro V W G hV hW
-    show Expr.freeVars (.var V) d₁.env ∪
+    intro V W hV hW
+    show (Expr.freeVars (.var V) d₁.env ∪ Expr.freeVarsList [] d₁.env) ∪
       (Expr.freeVars (.var W) d₁.env ∪ Expr.freeVarsList [] d₁.env) = _
     rw [freeVars_var_of_none hV, freeVars_var_of_none hW]
     rfl
@@ -832,8 +808,7 @@ theorem rebuilt_conj1 : ∀ r ∈ maintenanceRules P₁, ∀ d' ∈ RuleResults 
   · obtain ⟨σa, σb, tv1, tw1, tv2, tw2, ta, tb, hda, hdb, h1v, h1w, h2v, h2w,
       hr1, hr2, hcom, hAl, hBl, rfl⟩ :=
       two_pattern_firing (V₁ := "@b") (W₁ := "@a") (V₂ := "@c") (W₂ := "@b")
-        (fv _ _ _ (by rfl) (by rfl)) (fv _ _ _ (by rfl) (by rfl))
-        hUFprim hUF hUFprim hUF hd'
+        (fv _ _ (by rfl) (by rfl)) (fv _ _ (by rfl) (by rfl)) hd'
     rw [lookup_append_of_none (by rfl : Env.lookup "@b" d₁.env = none)] at h1v
     rw [lookup_append_of_none (by rfl : Env.lookup "@a" d₁.env = none)] at h1w
     rw [lookup_append_of_none (by rfl : Env.lookup "@c" d₁.env = none)] at h2v
@@ -850,8 +825,7 @@ theorem rebuilt_conj1 : ∀ r ∈ maintenanceRules P₁, ∀ d' ∈ RuleResults 
   · obtain ⟨σa, σb, tv1, tw1, tv2, tw2, ta, tb, hda, hdb, h1v, h1w, h2v, h2w,
       hr1, hr2, hcom, hAl, hBl, rfl⟩ :=
       two_pattern_firing (V₁ := "@e") (W₁ := "@c0") (V₂ := "@x") (W₂ := "@e")
-        (fv _ _ _ (by rfl) (by rfl)) (fv _ _ _ (by rfl) (by rfl))
-        hVprim hVw hUFprim hUF hd'
+        (fv _ _ (by rfl) (by rfl)) (fv _ _ (by rfl) (by rfl)) hd'
     rw [lookup_append_of_none (by rfl : Env.lookup "@e" d₁.env = none)] at h1v
     rw [lookup_append_of_none (by rfl : Env.lookup "@c0" d₁.env = none)] at h1w
     rw [lookup_append_of_none (by rfl : Env.lookup "@x" d₁.env = none)] at h2v
@@ -868,8 +842,7 @@ theorem rebuilt_conj1 : ∀ r ∈ maintenanceRules P₁, ∀ d' ∈ RuleResults 
   · obtain ⟨σa, σb, tv1, tw1, tv2, tw2, ta, tb, hda, hdb, h1v, h1w, h2v, h2w,
       hr1, hr2, hcom, hAl, hBl, rfl⟩ :=
       two_pattern_firing (V₁ := "@e") (W₁ := "@c0") (V₂ := "@x") (W₂ := "@c0")
-        (fv _ _ _ (by rfl) (by rfl)) (fv _ _ _ (by rfl) (by rfl))
-        hVprim hVw hUFprim hUF hd'
+        (fv _ _ (by rfl) (by rfl)) (fv _ _ (by rfl) (by rfl)) hd'
     rw [lookup_append_of_none (by rfl : Env.lookup "@e" d₁.env = none)] at h1v
     rw [lookup_append_of_none (by rfl : Env.lookup "@c0" d₁.env = none)] at h1w
     rw [lookup_append_of_none (by rfl : Env.lookup "@x" d₁.env = none)] at h2v

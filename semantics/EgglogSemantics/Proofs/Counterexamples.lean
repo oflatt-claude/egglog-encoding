@@ -149,91 +149,46 @@ theorem claim1' : ∃ (d : FDatabase) (f : FnName) (dc : FnDecl) (d' : FDatabase
       rw [dG'_mergeOf] at this
       exact MergeSpec.noConfusion this⟩
 
-/-! ## Claim 3 — `execExpr`'s lookup branch fails where `MEval` succeeds
+/-! ## `SetLegal` does not bound a row's width; `arityOk` does
 
-`Impl/Merge.lean`'s lookup branch is
+**What used to be here.** `claim3` witnessed a defect in `Impl/Merge.lean`'s lookup branch,
 
     match d.outs f ts with | [v] :: _ => some v | _ => none
 
-which demands that the *first* congruent row be single-column. `Expr.MEval.lookup` only
-needs *some* congruent row recording `[v]`. Since `addRow` prepends, a freshly written
-multi-column row shadows a single-column one at the same key.
+which demanded that the *first* congruent row be single-column where `Expr.MEval.lookup`
+needed only *some* congruent row recording `[v]`, so a freshly written two-column row
+shadowed a single-column one at the same key. There is no lookup branch and no
+`MEval.lookup` any more — reading is a query atom (`Spec/Scope.lean`, "Reading in an
+action") — so the defect does not exist rather than being merely unreachable, and
+`claim3`, `claim3_actions` and `claim3_actions_spec` have gone with it.
 
-**Scope, stated honestly.** This is an *incompleteness*, not unsoundness: `execExpr`
-returning `none` cannot make `execExpr_MEval` false, and it makes `execM` `none`, at which
-point every `*_contained` theorem is vacuous. What it does break is the docstring in
-`Impl/Merge.lean` — "`Expr.MEval`'s `lookup` reads any recorded output; `execExpr` takes
-the first" — which describes a *choice among* the spec's answers, and a `STUCK` differential
-result where egglog answers.
-
-Reaching the state needs one function whose rows differ in value-column count at one key.
-Nothing in the model forbids it: `FnDecl.outArity` is declared but never read outside
-`Tests/Egg.lean`'s renderer, and `Action.SetLegal` — the only well-formedness condition on
-a `set` — constrains only the function's merge kind (`Spec/Scope.lean:148`). Both actions
-below are `SetLegal`. egglog fixes a function's value-column count at declaration, which is
-what `outArity` records, so the mixed-width state is presumably not reachable from a
-well-typed egglog program: this reads as a gap in the model's own hygiene rather than a
-divergence from egglog. It is still a real bug in `execExpr`, whose contract as written is
-"take the first recorded output". -/
+**What survives is the hygiene gap that made it reachable.** `Action.SetLegal` constrains
+only a function's merge kind, so it admits a `set` whose value list is the wrong width for
+the declaration; `FnDecl.outArity` is what records the width, and `Spec/Scope.lean`'s
+arity check is what reads it. The witness below is that pair, and it is why the check is
+not redundant with `SetLegal`. -/
 
 /-- `(function h () i64 :merge 9)`. -/
 def hDecl : FnDecl := { arity := 0, outArity := 1, merge := .merge [] [.lit (.int 9)] }
 
 def sigH : Signature := Function.update (fun _ => none) "h" (some hDecl)
 
-/-- A database recording the single-column row `h() ↦ 3`. -/
-def d3 : FDatabase where
-  sig := sigH
-  terms := [.lit (.int 3)]
-  rows := [⟨"h", [], [.lit (.int 3)]⟩]
-  eqs := []
-  env := []
-  rules := []
-
-/-- `(set (h) (values 1 2))` — a two-column write at the same key. -/
+/-- `(set (h) (values 1 2))` — a two-column write to a one-column function. -/
 def actTuple : Action := .set "h" [] [.lit (.int 1), .lit (.int 2)]
 
-theorem actTuple_legal : actTuple.SetLegal d3.sig := by
+/-- `SetLegal`, the only condition a `set` carried before the arity check, holds of it. -/
+theorem actTuple_legal : actTuple.SetLegal sigH := by
   intro h
   exact MergeSpec.noConfusion (show MergeSpec.merge [] [Expr.lit (Lit.int 9)] = _ from h)
 
-/-- The state after the two-column write: the wide row is now first. -/
-def d4 : FDatabase := d3.addRow "h" [] [.lit (.int 1), .lit (.int 2)]
+/-- The two-column write egglog's typechecker rejects: "Arity mismatch, expected 1 args". -/
+theorem actTuple_not_arityOk : actTuple.arityOk sigH = false := rfl
 
-theorem d4_outs : d4.outs "h" [] = [[.lit (.int 1), .lit (.int 2)], [.lit (.int 3)]] := rfl
-
-/-- The interpreter gets stuck. -/
-theorem d4_execExpr : d4.execExpr [] (.app "h" []) = none := rfl
-
-/-- The specification does not: the shadowed single-column row is still a legal read. -/
-theorem d4_meval : Expr.MEval d4.toDatabase [] (.app "h" []) (.lit (.int 3)) := by
-  refine Expr.MEval.lookup rfl ?_ .nil ⟨[], .nil, ?_⟩
-  · intro hh
-    exact MergeSpec.noConfusion (show MergeSpec.merge [] [Expr.lit (Lit.int 9)] = _ from hh)
-  · show Row.mk "h" [] [Term.lit (Lit.int 3)] ∈ d4.rows
-    decide
-
-/-- **Claim 3, CONFIRMED.** `execExpr` returns `none` on an application the specification
-evaluates. -/
-theorem claim3 : ∃ (d : FDatabase) (e : Expr) (t : Term),
-    d.execExpr d.env e = none ∧ Expr.MEval d.toDatabase d.env e t :=
-  ⟨d4, .app "h" [], .lit (.int 3), d4_execExpr, d4_meval⟩
-
-/-- The shadowing is dynamic, not a hand-built state: one `set` inside an action list is
-enough to make the *next* action of the same list get stuck. -/
-theorem claim3_actions :
-    d3.execActions [actTuple, .expr (.app "h" [])] = none := rfl
-
-/-- …while the specification runs the same action list to completion. -/
-theorem claim3_actions_spec :
-    Database.ActionsStep d3.toDatabase [actTuple, .expr (.app "h" [])]
-      ((d3.toDatabase.addRow "h" [] [.lit (.int 1), .lit (.int 2)]).addTerm
-        (.lit (.int 3))) := by
-  refine .cons (.set .nil (.cons .lit (.cons .lit .nil))) (.cons ?_ .nil)
-  · have : (d3.toDatabase.addRow "h" [] [.lit (.int 1), .lit (.int 2)]) = d4.toDatabase := by
-      rw [d4, FDatabase.toDatabase_addRow]
-    rw [this]
-    exact .expr d4_meval
+/-- …and the whole program with it, so no state the model accepts holds rows of two widths
+at one key. -/
+theorem claim3Program_not_arityOk :
+    Program.arityOk [.decl "h" hDecl, .action actTuple,
+      .action (.expr (.app "h" []))] (fun _ => none) = false := rfl
 
 /-! ## Axiom audit -/
 

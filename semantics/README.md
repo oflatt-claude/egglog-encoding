@@ -1,26 +1,21 @@
 # EgglogSemantics
 
-A Lean 4 formalization of egglog's semantics, aimed at proving things about the
-proof encoding in `egglog/src/proofs/` (designed in
-`egglog/src/proofs/proof_encoding.md`).
+A Lean 4 model of egglog's semantics, ported from the Redex model in
+[egglog PR #324](https://github.com/egraphs-good/egglog/pull/324). The goal is to model
+egglog as cleanly as possible for a paper, and then prove things about an implementation.
+Proving things about egglog's proof encoding is the eventual payoff, and is **parked**.
 
-It is a port of the Redex model in
-[egglog PR #324](https://github.com/egraphs-good/egglog/pull/324).
+**Picking this up?** Start with [`PLAN.md`](PLAN.md), "Current priority" — what we are
+working on now, what is parked, the two interpreter contracts, and how to check a change.
 
-**Picking this up?** Start with [`HANDOFF.md`](HANDOFF.md) — what is proved, what is
-stated but unproved, what is known *false*, the work queue, and the gotchas.
+The rest of `PLAN.md` has what the port changes and why, and the milestones.
+[`MERGE.md`](MERGE.md) is the `:merge` design (M9). [`CHECKER.md`](CHECKER.md) records what
+a Lean model of egglog's proof checker would cost, and is parked with M11.
 
-See [`PLAN.md`](PLAN.md) for what the port changes and why, the milestone list, and the
-route to the proof-encoding theorems; [`MERGE.md`](MERGE.md) for the `:merge` design
-(M9), which is in progress — its compatibility theorem is proved and its differential cases
-pass, but 23 statements in `Proofs/Merge.lean` are unproved (17 of them the `execM`
-refinement chain, stated and ready to prove) along with M11's 13 in `Proofs/Encode.lean`,
-so `make lean-check` fails on those while `lake build` is clean. Note
-that `Spec/` is append-only and `Impl/` is not: the reference implementation deletes
-superseded merge rows because egglog does, so the contract between them is a containment
-rather than an equality — `MERGE.md` again. See also
-[`CHECKER.md`](CHECKER.md) for what a Lean model of egglog's proof checker would cost,
-which scopes M11.
+One thing worth knowing before reading any of it: `Spec/` is append-only and `Impl/` is
+not. The reference implementation deletes superseded merge rows because egglog does, so the
+contract between them is a **containment**, not an equality — except on the constructor
+fragment, where the merge phase is the identity and `exec_toDatabase` still holds.
 
 ## Layout
 
@@ -41,10 +36,14 @@ are inlined rather than pulled out into named lemmas, so nothing in `Spec/` or `
 is there for a proof's sake.
 
 Reading order for `Spec/`: `Syntax` → `Term` → `Database` → `Congruence` → `Eval` →
-`Match` → `Step` → `Scope` → `Merge`. `Impl/` has `Closure` and `Interp`, with `Merge`
-adding M9's lookup evaluator and merge phase. Each `Proofs/X.lean` is about `Spec/X.lean` or
-`Impl/X.lean`; `Proofs/Interp.lean` additionally holds the refinement theorem
-`exec_toDatabase`, which is what ties the two together.
+`Match` → `Step` → `Scope` → `Merge`. (`Spec/Encode.lean` is parked M11; skip it.) `Impl/`
+has `Closure` and `Interp`, with `Merge` adding M9's lookup evaluator and merge phase.
+
+Each `Proofs/X.lean` is about `Spec/X.lean` or `Impl/X.lean`, with two exceptions worth
+knowing about: `Proofs/Counterexamples.lean` holds compiling witnesses that particular
+statements are **false**, and `Proofs/Rebuilt.lean` the same for M11's `Rebuilt` hypothesis.
+Both are `sorry`-free and in the build, so a refuted statement cannot quietly come back.
+`Proofs/Interp.lean` holds `exec_toDatabase`, which ties spec and implementation together.
 
 ## Building
 
@@ -55,10 +54,11 @@ lake build
 
 or, from the workspace root:
 
-- `make lean-check` — builds and fails on any `sorry`.
-- `make lean-difftest` — runs the interpreter and egglog on the same generated
-  programs and compares per-function row counts, for the constructor fragment and for
-  M9's `:merge` functions. Needs a release `egglog` binary.
+- `make lean-check` — builds and fails on any `sorry`. It **currently fails by design**:
+  19 statements are deliberately unproved. Use it to check a change adds no *new* one.
+- `make lean-difftest` — runs the interpreter and egglog on the same generated programs and
+  compares per-function row counts, for the constructor fragment and for M9's `:merge`
+  functions. 122 cases. Needs a release `egglog` binary.
 
 Requires [`elan`](https://github.com/leanprover/elan); the toolchain is pinned in
 `lean-toolchain` and Mathlib in `lakefile.toml` / `lake-manifest.json`.

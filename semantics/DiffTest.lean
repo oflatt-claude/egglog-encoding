@@ -336,32 +336,45 @@ private def readPair : Rule where
 /-! ### Reading a `:merge` function from a rule body
 
 `MERGE.md` calls this the difftest fragment's boundary: every merge case so far *writes*
-`Dist` and queries only constructors, so `Expr.MEval.lookup` — reachable through `execM`
-from `MValidSubst.expr` — had **no coverage at all**. That is the shape of the `min`/`max`
-bug: a path the suite exercised zero times while the pass count said everything was fine.
+`Dist` and queries only constructors, so the read path — `MValidSubst.values`, reachable
+through `execM` — had **no coverage at all**. That is the shape of the `min`/`max` bug: a
+path the suite exercised zero times while the pass count said everything was fine.
 
 Reading an analysis function in a rule body is ordinary egglog. Three shapes, all checked
 against the binary:
 
-* `(rule ((Dist k)) …)` — existence. The value does not matter, so this agrees whatever
-  the model does with superseded rows.
+* `(rule ((= o (Dist k))) …)` — existence. The value does not matter, so this agrees
+  whatever the model does with superseded rows. egglog also writes this `(Dist k)` and
+  compiles the two to the same atom; the model has only the atom, so it needs the output
+  variable written out.
 * `(rule ((= 3 (Dist k))) …)` — the value, with no collision. Also agrees.
 * `(rule ((= 5 (Dist k))) …)` after a collision that merged `5` away — this is where
-  keeping superseded rows shows. -/
-/-- Existence: fires once per key class holding a row. -/
+  keeping superseded rows shows.
+
+All three are `Pattern.values`, which is the model's only read (`Spec/Scope.lean`,
+"Reading in an action"); `Tests/Egg.lean` renders a one-column atom as `(= v (f k…))`. -/
+/-- Existence: fires once per key class holding a row. The output variable is bound and
+unused, which is what a bare `(Dist k)` compiles to. -/
 private def readExists : Rule where
-  query := [.expr (.app "Dist" [.var "k"])]
+  query := [.values [.var "o"] "Dist" [.var "k"]]
   actions := [.expr (.app "Hit" [.var "k"])]
 
-/-- The value: fires only where the recorded output is `3`. -/
+/-- The value: fires only where the recorded output is `v`. -/
 private def readValue (v : Int) : Rule where
-  query := [.eq (num v) (.app "Dist" [.var "k"])]
+  query := [.values [num v] "Dist" [.var "k"]]
   actions := [.expr (.app "Hit" [.var "k"])]
 
 /-- The two-column acceptance test's rule: guarded on the *pre-merge* value tuple. -/
 private def readStale : Rule where
   query := [.values [num 5, num 1] "Dist" [.var "k"]]
   actions := [.expr (.app "Hit" [.var "k"])]
+
+/-- Copy one merge function's value into another's row. The read is a query fact binding
+`v` and the head only writes, which is the only shape egglog accepts for a rule and the
+only shape the model accepts anywhere. -/
+private def copyDist : Rule where
+  query := [.values [.var "v"] "Dist" [.var "k"]]
+  actions := [.set "Copy" [.var "k"] [.var "v"]]
 
 private def curatedMerge : List (String × Program) :=
   [ -- One key, three writes: min wins, and the table still holds one row.
@@ -451,7 +464,32 @@ private def curatedMerge : List (String × Program) :=
     -- `Hit 1` because the superseded row is still readable.
     ("tuple-stale",
       [.decl "Dist" (distPair 1), pset "Dist" [C "A"] 5 1, pset "Dist" [C "A"] 3 7,
-       .rule readStale, .run]) ]
+       .rule readStale, .run]),
+    -- A single-column read through *congruent* keys: the row is written at `X`, read at
+    -- `A`. `tuple-read-congr` covers the two-column case; this is the one-column one, and
+    -- both reach `patternHoldsM`'s row scan through its key-congruence test.
+    ("read-congr",
+      [.decl "Dist" (dist 1), mset "Dist" [C "X"] 3,
+       .action (.expr (C "A")), .action (.union (C "A") (C "X")),
+       .rule readExists, .run]),
+    -- The same, reading the value rather than only its existence.
+    ("read-value-congr",
+      [.decl "Dist" (dist 1), mset "Dist" [C "X"] 3,
+       .action (.expr (C "A")), .action (.union (C "A") (C "X")),
+       .rule (readValue 3), .run]),
+    -- Reading a `:no-merge` function. A row atom reads any declared function, so
+    -- `:no-merge` is readable too, and `nomerge-two` only ever writes one.
+    ("read-nomerge",
+      [.decl "Dist" (distNoMerge 1), mset "Dist" [C "A"] 3, mset "Dist" [C "B"] 5,
+       .rule (readValue 3), .run]),
+    -- Copying one merge function's value into another's row, which is what `read-copy`
+    -- used to do from a top-level action. All reading happens in the query, so the read is
+    -- `(= v (Dist k))` and the head only writes — the shape egglog requires of a rule and
+    -- the model now requires everywhere (`Spec/Scope.lean`, "Reading in an action").
+    ("read-copy",
+      [.decl "Dist" (dist 1), .decl "Copy" (dist 1), mset "Dist" [C "A"] 3,
+       .rule copyDist, .run,
+       .action (.expr (.app "F" [C "A"]))]) ]
 
 /-! ### Random `:merge` cases
 
@@ -509,24 +547,33 @@ private def genMergeRule (arity : Nat) (src : Expr) (s : Nat) : Rule × Nat :=
   let (v, s) := pick 9 s
   (⟨[.expr p], [.set "Dist" ks [num v]]⟩, s)
 
-/-- A rule *reading* `Dist` from its body, in one of the two shapes egglog offers for a
-single-column function: the bare atom `(Dist k…)` (existence) or `(= v (Dist k…))` (the
-value). Its head builds a `Hit`, so whether and how often it fired is visible in
-`(print-size)`.
+/-- A rule *reading* `Dist` from its body: a `Pattern.values` atom whose value column is
+either a fresh variable (existence) or the literal the program wrote (the value). Its head
+builds a `Hit`, so whether and how often it fired is visible in `(print-size)`.
 
 This is the path `MERGE.md` called the fragment boundary — "merge functions are written
-and never read" — and leaving it there meant `Expr.MEval.lookup`, reachable through
-`execM` from `MValidSubst.expr`, had **no** coverage. Reading an analysis function in a
-rule body is ordinary egglog, so there was no reason for the boundary except that nothing
-had run the merge implementation. -/
-private def genMergeReadRule (arity : Nat) (src : Expr) (s : Nat) : Rule × Nat :=
+and never read" — and leaving it there meant the read path, reachable through `execM` from
+`MValidSubst`, had **no** coverage. Reading an analysis function in a rule body is ordinary
+egglog, so there was no reason for the boundary except that nothing had run the merge
+implementation.
+
+`key` and `val` are a key the program actually writes and the value it writes there, and
+the draw prefers them to freshly generated ones — the same correction `genPattern` needed
+and for the same reason. A freely drawn key hits a written one by luck, and a freely drawn
+value matches by one chance in nine, so most reads returned nothing: with the free draw
+only 6 of 30 generated cases had the read fire at all, which is coverage of the *failing*
+branch of a lookup and not of a lookup. -/
+private def genMergeReadRule (arity : Nat) (src : Expr) (key : List Expr) (val : Nat)
+    (s : Nat) : Rule × Nat :=
   let (p, s) := genPattern ["a", "b"] src s
-  let (ks, s) := genKeysOver p.vars arity s
-  let (v, s) := pick 9 s
+  let (useKey, s) := pick 3 s
+  let (ks, s) := if useKey = 0 then genKeysOver p.vars arity s else (key, s)
+  let (useVal, s) := pick 3 s
+  let (v, s) := if useVal = 0 then pick 9 s else (val, s)
   let (shape, s) := pick 2 s
   let body : Query :=
-    if shape = 0 then [.expr p, .expr (.app "Dist" ks)]
-    else [.expr p, .eq (num v) (.app "Dist" ks)]
+    if shape = 0 then [.expr p, .values [.var "o"] "Dist" ks]
+    else [.expr p, .values [num v] "Dist" ks]
   (⟨body, [.expr (.app "Hit" [p])]⟩, s)
 
 private def genMergeProgram (s : Nat) : Program :=
@@ -543,7 +590,7 @@ private def genMergeProgram (s : Nat) : Program :=
   let (u₁, s) := genGround 1 s
   let (u₂, s) := genGround 1 s
   let (r, s) := genMergeRule arity g s
-  let (rr, s) := genMergeReadRule arity g s
+  let (rr, s) := genMergeReadRule arity g k₁ v₁ s
   let (rounds, _) := pick 2 s
   [ .decl "Dist" { arity := arity, outArity := 1, merge := spec },
     .action (.expr g),
@@ -557,16 +604,35 @@ private def genMergeProgram (s : Nat) : Program :=
 
 /-- Write one case, refusing outright to emit a program egglog would reject.
 
-The one rule the generator can plausibly break is `set`'s: `(set (f args…) v)` is legal
-only on a declared function, and is a *type* error on a constructor or a relation. A
-rejected program is not a failing case but a missing one, and a generator that quietly
+A rejected program is not a failing case but a missing one, and a generator that quietly
 stops producing runnable programs is the failure this whole file is written against — so
-the check is an abort, not a skip. `Program.illegalSets` states it. -/
+each check is an abort, not a skip. Three rules, all raised by egglog's typechecker before
+the offending command runs:
+
+* `set`'s: `(set (f args…) v)` is legal only on a declared function, and is a type error on
+  a constructor or a relation (`Program.illegalSets`);
+* every use of a declared function has its declared key and value column counts
+  (`Program.arityErrors`, over `Spec/Scope.lean`'s `Cmd.arityOk`);
+* nothing reads a row except a `Pattern.values` atom (`Program.illegalReads`, over
+  `Cmd.noLookup`) — egglog rejects this in a rule head, and the model everywhere;
+* no name is used at two key arities, which the emitted `datatype` header cannot express
+  (`Program.arityConflicts`). -/
 private def writeCase (dir name : String) (p : Program) : IO Unit := do
   unless p.illegalSets.isEmpty do
     throw <| IO.userError
       s!"difftest: {name} sets {p.illegalSets}, which egglog rejects: only a function \
          declared with :merge or :no-merge may be set"
+  unless p.arityErrors.isEmpty do
+    throw <| IO.userError
+      s!"difftest: {name} has commands whose column counts egglog rejects: {p.arityErrors}"
+  unless p.illegalReads.isEmpty do
+    throw <| IO.userError
+      s!"difftest: {name} has commands that read a row outside a query atom: \
+         {p.illegalReads}"
+  unless p.arityConflicts.isEmpty do
+    throw <| IO.userError
+      s!"difftest: {name} uses {p.arityConflicts} at more than one arity, which egglog \
+         rejects with \"Function already bound\""
   IO.FS.writeFile s!"{dir}/{name}.egg" p.toEgg
   IO.FS.writeFile s!"{dir}/{name}.expected" p.expectedSizes
 

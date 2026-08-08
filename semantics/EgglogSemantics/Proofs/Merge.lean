@@ -36,17 +36,6 @@ what replaces them.
 -/
 
 namespace Egglog
-/-! ### Signatures -/
-/-- With `mergeOf` defaulting an undeclared name to `.union`, `AllConstructors` says
-exactly that every function is a constructor. This is why "everything up to M8" is
-literally the all-constructors case and not merely analogous to it. -/
-theorem Signature.mergeOf_eq_union {sig : Signature} (h : sig.AllConstructors)
-    (f : FnName) : sig.mergeOf f = MergeSpec.union := by
-  unfold Signature.mergeOf
-  cases hf : sig f with
-  | none => rfl
-  | some d => exact h f d hf
-
 /-! ### Constructor-determined rows
 
 `Database.toM` is gone: `Database` *is* the M9 database now, so the embedding it named
@@ -166,6 +155,17 @@ theorem mcong_iff_cong {db : Database} (hsig : db.sig.AllConstructors)
     (hrows : db.CtorRows) {a b : Term} : MCong db a b ↔ Cong db a b :=
   ⟨MCong.toCong hrows, Cong.toMCong hsig hrows⟩
 
+/-- **The compatibility theorem, at a state a program can reach.** A program that declares
+only constructors and never `set`s one runs to a database where the two relations agree.
+
+`Proofs/Step.lean`'s `ProgramStep.ctorState` supplies both hypotheses; this is the
+composition, which lives here because that is where `mcong_iff_cong` is. -/
+theorem ProgramStep.mcong_iff_cong {p : Program} {db : Database}
+    (hstep : ProgramStep Database.empty p db) (hdecl : p.CtorDecls)
+    (hlegal : p.SetLegal Database.empty.sig) {a b : Term} : MCong db a b ↔ Cong db a b :=
+  let hc := ProgramStep.ctorState Database.CtorState.empty hdecl hlegal hstep
+  Egglog.mcong_iff_cong hc.sig hc.rows
+
 /-- Congruence, recovered as a derived rule rather than a constructor. -/
 theorem MCong.congr {db : Database} {f : FnName} {as bs : List Term}
     (ha : Row.mk f as [.app f as] ∈ db.rows) (hb : Row.mk f bs [.app f bs] ∈ db.rows)
@@ -269,13 +269,13 @@ end
 mutual
 
 /-- **The converse, which is what M11 needs.** On a constructor-only signature and a
-primitive-free expression, `MEval` is no more than `eval`: `lookup` cannot fire because
-`mergeOf` is always `.union`, and `prim` cannot fire because no name resolves. This is
+primitive-free expression, `MEval` is no more than `eval`: `ctor` is the only rule that can
+fire, because `mergeOf` is always `.union` and no name resolves as a primitive. This is
 what transports a fact about the relational side back to the function side.
 
-`db.CtorRows` is *not* needed — the relation is already deterministic without it,
-because the only constructor that reads the database is `lookup` and `AllConstructors`
-rules it out. -/
+`AllConstructors` is still needed and `db.CtorRows` still is not. The two evaluators
+differ on exactly two things — a primitive name, and a non-constructor application, which
+`MEval` (having no `lookup`) leaves stuck where `eval` builds a term. -/
 theorem Expr.eval_of_MEval {db : Database} (hsig : db.sig.AllConstructors) {σ : Env}
     {e : Expr} {t : Term} (h : Expr.MEval db σ e t) : e.NoPrim → e.eval σ = some t := by
   match h with
@@ -284,7 +284,6 @@ theorem Expr.eval_of_MEval {db : Database} (hsig : db.sig.AllConstructors) {σ :
   | .ctor _ _ hl =>
     intro hp
     rw [Expr.eval_app, Expr.evalList_of_MEvalList hsig hl hp.2, Option.map_some]
-  | .lookup _ hne _ _ => exact absurd (Signature.mergeOf_eq_union hsig _) hne
   | .prim hf _ _ => intro hp; exact absurd hf (by rw [hp.1]; simp)
 
 theorem Expr.evalList_of_MEvalList {db : Database} (hsig : db.sig.AllConstructors)
@@ -299,13 +298,68 @@ theorem Expr.evalList_of_MEvalList {db : Database} (hsig : db.sig.AllConstructor
 
 end
 
-/-- `MEval` is deterministic on the constructor fragment, which is what makes M12's
-recovery plan (`PLAN.md`) work: a relation that agrees with a function is a function. -/
-theorem Expr.MEval_unique {db : Database} (hsig : db.sig.AllConstructors) {σ : Env}
-    {e : Expr} {t₁ t₂ : Term} (hp : e.NoPrim) (h₁ : Expr.MEval db σ e t₁)
-    (h₂ : Expr.MEval db σ e t₂) : t₁ = t₂ :=
-  Option.some.inj
-    ((Expr.eval_of_MEval hsig h₁ hp).symm.trans (Expr.eval_of_MEval hsig h₂ hp))
+mutual
+
+/-- **`MEval` is deterministic**, on any signature and any expression.
+
+This used to hold only on the constructor fragment (`AllConstructors`, `NoPrim`), because
+`lookup` read `Out`, which a key class can satisfy several times over. With reading
+confined to the query there is one rule per syntactic form — `ctor` and `prim` are split
+on `Prim.ofName f` — so the derivation is determined by the expression.
+
+It is what makes M12's recovery plan (`PLAN.md`) work, and more: a relation that is a
+function *unconditionally* can simply be replaced by one. -/
+theorem Expr.MEval_unique {db : Database} {σ : Env} {e : Expr} {t₁ t₂ : Term}
+    (h₁ : Expr.MEval db σ e t₁) (h₂ : Expr.MEval db σ e t₂) : t₁ = t₂ := by
+  match h₁, h₂ with
+  | .lit, .lit => rfl
+  | .var hv₁, .var hv₂ => exact Option.some.inj (hv₁.symm.trans hv₂)
+  | .ctor _ _ hl₁, .ctor _ _ hl₂ => rw [Expr.MEvalList_unique hl₁ hl₂]
+  | .ctor hp _ _, .prim hf _ _ => exact absurd (hp.symm.trans hf) (by simp)
+  | .prim hf _ _, .ctor hp _ _ => exact absurd (hf.symm.trans hp) (by simp)
+  | .prim hf₁ hl₁ hv₁, .prim hf₂ hl₂ hv₂ =>
+    rw [Expr.MEvalList_unique hl₁ hl₂] at hv₁
+    rw [Option.some.inj (hf₁.symm.trans hf₂)] at hv₁
+    exact Option.some.inj (hv₁.symm.trans hv₂)
+
+/-- `Expr.MEval_unique` over an argument list. -/
+theorem Expr.MEvalList_unique {db : Database} {σ : Env} {es : List Expr}
+    {ts₁ ts₂ : List Term} (h₁ : Expr.MEvalList db σ es ts₁)
+    (h₂ : Expr.MEvalList db σ es ts₂) : ts₁ = ts₂ := by
+  match h₁, h₂ with
+  | .nil, .nil => rfl
+  | .cons he₁ hl₁, .cons he₂ hl₂ =>
+    rw [Expr.MEval_unique he₁ he₂, Expr.MEvalList_unique hl₁ hl₂]
+
+end
+
+/-- **An action step is deterministic.** Every premise of every case is an evaluation, and
+those are unique, so the resulting database is.
+
+This is the input to M12's remaining question (`PLAN.md`): `ActionStep` and `ActionsStep`
+can go back to being *functions*. What cannot is anything above them — `MergeStep` chooses
+which pair of rows collides and in which order, and `MergeClosure` how many steps to take,
+so `RunStep`, `CmdStep` and `ProgramStep` stay relations. -/
+theorem Database.ActionStep_unique {db d₁ d₂ : Database} {a : Action}
+    (h₁ : Database.ActionStep db a d₁) (h₂ : Database.ActionStep db a d₂) : d₁ = d₂ := by
+  cases h₁ with
+  | expr he₁ => cases h₂ with | expr he₂ => rw [Expr.MEval_unique he₁ he₂]
+  | letBind he₁ => cases h₂ with | letBind he₂ => rw [Expr.MEval_unique he₁ he₂]
+  | union ha₁ hb₁ =>
+    cases h₂ with
+    | union ha₂ hb₂ => rw [Expr.MEval_unique ha₁ ha₂, Expr.MEval_unique hb₁ hb₂]
+  | set ha₁ hb₁ =>
+    cases h₂ with
+    | set ha₂ hb₂ => rw [Expr.MEvalList_unique ha₁ ha₂, Expr.MEvalList_unique hb₁ hb₂]
+
+/-- `Database.ActionStep_unique` over an action list. -/
+theorem Database.ActionsStep_unique {db d₁ d₂ : Database} {as : List Action}
+    (h₁ : Database.ActionsStep db as d₁) (h₂ : Database.ActionsStep db as d₂) : d₁ = d₂ := by
+  induction h₁ with
+  | nil => cases h₂ with | nil => rfl
+  | cons ha₁ _ ih =>
+    cases h₂ with
+    | cons ha₂ hs₂ => exact ih (Database.ActionStep_unique ha₁ ha₂ ▸ hs₂)
 
 /-- The rest of M9 collapses too: with no `.merge` function there is no collision to
 resolve, so a round is `RunRules` and nothing else. Companion to `mcong_iff_cong` on
@@ -451,11 +505,6 @@ theorem Database.Out.mono {d₁ d₂ : Database} (h : d₁.Contained d₂) (hsig
   obtain ⟨bs, hl, hrow⟩ := ho
   exact ⟨bs, MCongList.mono h hsig hl, h.rows hrow⟩
 
-/-- A `set` only adds. -/
-theorem Database.contained_addRow {db : Database} {f : FnName} {as vs : List Term} :
-    db.Contained (db.addRow f as vs) :=
-  Database.Contained.addRow f as vs db
-
 /-- Row actions only add, exactly as `evalAction_contained` does for `Action`. -/
 theorem Database.ActionStep.contained {db d : Database} {a : Action}
     (h : Database.ActionStep db a d) : db.Contained d := by
@@ -493,43 +542,6 @@ theorem MergeClosure.contained {d₁ d₂ : Database} (h : MergeClosure d₁ d�
   induction h with
   | refl => exact Database.Contained.refl _
   | tail _ hstep ih => exact ih.trans (MergeStep.contained hstep)
-
-/-! #### Re-adding what is already there
-
-`addRow` re-inserts its key and value terms, so "the step changed nothing" needs those
-insertions to be no-ops. That is exactly `WF.subtermClosed` plus the two halves of
-`CtorRows`: the row's terms are terms (`RowsWF`), and every application in `terms` has
-its constructor row (`ctorRowsOf db.terms ⊆ db.rows`, the direction `addTerm`
-maintains). These belong in `Proofs/Database.lean`. -/
-theorem Database.addTerm_eq_self {db : Database} (hw : db.WF)
-    (hctor : Database.ctorRowsOf db.terms ⊆ db.rows) {t : Term} (ht : t ∈ db.terms) :
-    db.addTerm t = db := by
-  have hs : t.subterms ⊆ db.terms := hw.subtermClosed t ht
-  have hr : t.ctorRows ⊆ db.rows := fun r hr => hctor ⟨hr.1, hs hr.2⟩
-  unfold Database.addTerm
-  rw [Set.union_eq_left.mpr hs, Set.union_eq_left.mpr hr]
-
-theorem Database.addTerms_eq_self {db : Database} (hw : db.WF)
-    (hctor : Database.ctorRowsOf db.terms ⊆ db.rows) {ts : List Term}
-    (ht : ∀ t ∈ ts, t ∈ db.terms) : db.addTerms ts = db := by
-  induction ts generalizing db with
-  | nil => rfl
-  | cons t ts ih =>
-    have h1 : db.addTerm t = db := Database.addTerm_eq_self hw hctor (ht t (by simp))
-    change Database.addTerms ts (db.addTerm t) = db
-    rw [h1]
-    exact ih hw hctor fun s hs => ht s (by simp [hs])
-
-/-- `addTerms` reads only `terms` and `rows`, so two databases agreeing there agree
-after it. This is what lets a merge body's result `d` be substituted for `db`. -/
-theorem Database.addTerms_terms_rows {d₁ d₂ : Database} (ht : d₁.terms = d₂.terms)
-    (hr : d₁.rows = d₂.rows) (ts : List Term) :
-    (d₁.addTerms ts).terms = (d₂.addTerms ts).terms ∧
-      (d₁.addTerms ts).rows = (d₂.addTerms ts).rows := by
-  induction ts generalizing d₁ d₂ with
-  | nil => exact ⟨ht, hr⟩
-  | cons t ts ih =>
-    exact ih (by simp only [Database.addTerm, ht]) (by simp only [Database.addTerm, hr])
 
 set_option linter.unusedVariables false in
 /-- **A vacuous self-collision is the identity step.**
@@ -872,31 +884,43 @@ theorem ProgramStep.contained {db db' : Database} {p : Program}
 Demoted. Confluence is not needed by any safety theorem — see `invariant_of_step`. It
 buys one thing only: strengthening M10's refinement from "the interpreter's result is
 spec-reachable" to an equality. -/
-/-! Evaluation is monotone in the database. `lookup` is the only constructor that reads
-it, and it reads `Out`, which is. Half of what a diamond proof for `MergeStep` needs —
-see `MergeStep.diamond_of_join`. -/
+/-! **Evaluation reads the database only through its signature.** With `lookup` gone, no
+rule mentions `terms`, `rows` or `eqs`, and `sig` is consulted only to tell a constructor
+from a name the program should not have applied. Monotonicity in `Contained` — half of
+what a diamond proof for `MergeStep` needs, see `MergeStep.diamond_of_join` — is the
+corollary, and it no longer uses its containment hypothesis at all. -/
 mutual
 
-/-- A larger database admits every evaluation a smaller one does. -/
-theorem Expr.MEval.mono {d₁ d₂ : Database} (hc : d₁.Contained d₂) (hsig : d₁.sig = d₂.sig)
+/-- Two databases with the same signature admit the same evaluations. -/
+theorem Expr.MEval.ofSig {d₁ d₂ : Database} (hsig : d₁.sig = d₂.sig)
     {σ : Env} {e : Expr} {t : Term} (h : Expr.MEval d₁ σ e t) : Expr.MEval d₂ σ e t := by
   match h with
   | .lit => exact .lit
   | .var hv => exact .var hv
-  | .ctor hp hu hl => exact .ctor hp (hsig ▸ hu) (Expr.MEvalList.mono hc hsig hl)
-  | .lookup hp hu hl ho =>
-    exact .lookup hp (hsig ▸ hu) (Expr.MEvalList.mono hc hsig hl)
-      (Database.Out.mono hc hsig ho)
-  | .prim hp hl hv => exact .prim hp (Expr.MEvalList.mono hc hsig hl) hv
+  | .ctor hp hu hl => exact .ctor hp (hsig ▸ hu) (Expr.MEvalList.ofSig hsig hl)
+  | .prim hp hl hv => exact .prim hp (Expr.MEvalList.ofSig hsig hl) hv
 
-theorem Expr.MEvalList.mono {d₁ d₂ : Database} (hc : d₁.Contained d₂)
-    (hsig : d₁.sig = d₂.sig) {σ : Env} {es : List Expr} {ts : List Term}
+/-- `Expr.MEval.ofSig` over an argument list. -/
+theorem Expr.MEvalList.ofSig {d₁ d₂ : Database} (hsig : d₁.sig = d₂.sig)
+    {σ : Env} {es : List Expr} {ts : List Term}
     (h : Expr.MEvalList d₁ σ es ts) : Expr.MEvalList d₂ σ es ts := by
   match h with
   | .nil => exact .nil
-  | .cons he hl => exact .cons (Expr.MEval.mono hc hsig he) (Expr.MEvalList.mono hc hsig hl)
+  | .cons he hl => exact .cons (Expr.MEval.ofSig hsig he) (Expr.MEvalList.ofSig hsig hl)
 
 end
+
+/-- A larger database admits every evaluation a smaller one does. Kept for the call sites
+that thread `Contained` and `sig` together; the containment is not used. -/
+theorem Expr.MEval.mono {d₁ d₂ : Database} (_hc : d₁.Contained d₂) (hsig : d₁.sig = d₂.sig)
+    {σ : Env} {e : Expr} {t : Term} (h : Expr.MEval d₁ σ e t) : Expr.MEval d₂ σ e t :=
+  h.ofSig hsig
+
+/-- `Expr.MEval.mono` over an argument list. -/
+theorem Expr.MEvalList.mono {d₁ d₂ : Database} (_hc : d₁.Contained d₂)
+    (hsig : d₁.sig = d₂.sig) {σ : Env} {es : List Expr} {ts : List Term}
+    (h : Expr.MEvalList d₁ σ es ts) : Expr.MEvalList d₂ σ es ts :=
+  h.ofSig hsig
 
 /-- A saturated state is a fixpoint of the whole closure, not only of one step. -/
 theorem MergeSaturated.closure_eq {db d : Database} (hs : MergeSaturated db)
@@ -975,37 +999,8 @@ deletes only what it may; this says that deleting can only *lose* results, never
 them — there is no negation anywhere in the fragment, so every premise of a match is
 positive in the state. Together they are "the implementation may find fewer results, never
 more", which is the safe direction for M11: a safety property is positive in the state, so
-it transfers downward. -/
-/-- `Contained` is preserved by adding the same term to both sides. Belongs in
-`Proofs/Database.lean`. -/
-theorem Database.Contained.addTerm_mono {d₁ d₂ : Database} (h : d₁.Contained d₂)
-    (t : Term) : (d₁.addTerm t).Contained (d₂.addTerm t) :=
-  ⟨Set.union_subset_union h.terms subset_rfl, Set.union_subset_union h.rows subset_rfl,
-    h.eqs⟩
-
-/-- `addTerm_mono` folded. -/
-theorem Database.Contained.addTerms_mono {d₁ d₂ : Database} (h : d₁.Contained d₂)
-    (ts : List Term) : (d₁.addTerms ts).Contained (d₂.addTerms ts) := by
-  induction ts generalizing d₁ d₂ with
-  | nil => exact h
-  | cons t ts ih => exact ih (h.addTerm_mono t)
-
-/-- The same equality is inserted on both sides, so `Set.insert_subset_insert` closes the
-`eqs` component. -/
-theorem Database.Contained.addEq_mono {d₁ d₂ : Database} (h : d₁.Contained d₂)
-    (a b : Term) : (d₁.addEq a b).Contained (d₂.addEq a b) :=
-  ⟨((h.addTerm_mono a).addTerm_mono b).terms, ((h.addTerm_mono a).addTerm_mono b).rows,
-    Set.insert_subset_insert h.eqs⟩
-
-/-- The same row is inserted on both sides. This is what makes a `set` — and hence a
-whole action block — transportable along `Contained`. -/
-theorem Database.Contained.addRow_mono {d₁ d₂ : Database} (h : d₁.Contained d₂)
-    (f : FnName) (as vs : List Term) :
-    (d₁.addRow f as vs).Contained (d₂.addRow f as vs) :=
-  ⟨((h.addTerms_mono as).addTerms_mono vs).terms,
-    Set.insert_subset_insert ((h.addTerms_mono as).addTerms_mono vs).rows,
-    ((h.addTerms_mono as).addTerms_mono vs).eqs⟩
-
+it transfers downward. `Database.Contained`'s `addTerm_mono` family, in
+`Proofs/Database.lean`, is what carries a match along. -/
 theorem ValidEnv.mono {d₁ d₂ : Database} (h : d₁.Contained d₂) {vars : List Var}
     {σ : Env} (hv : ValidEnv vars d₁ σ) : ValidEnv vars d₂ σ :=
   ⟨hv.1, fun b hb => h.terms (hv.2 b hb)⟩
@@ -1091,7 +1086,6 @@ theorem Expr.MEval.agree {db : Database} {σ₁ σ₂ : Env} (h : Env.Agree σ�
   | .lit => exact .lit
   | .var hl => exact .var ((h _).symm.trans hl)
   | .ctor hp hu hl => exact .ctor hp hu (Expr.MEvalList.agree h hl)
-  | .lookup hp hu hl ho => exact .lookup hp hu (Expr.MEvalList.agree h hl) ho
   | .prim hp hl hval => exact .prim hp (Expr.MEvalList.agree h hl) hval
 
 /-- `Expr.MEval.agree` over an argument list. -/
@@ -1290,12 +1284,12 @@ state holding a merge result no `CmdStep` state held. `CmdStep.action` now carri
 one-rule run and every rule-set run ends in `merge_all`.
 
 The chain has one prerequisite that is not obvious, and it is why `Cong.toMCong'` exists.
-`FDatabase.execExpr` compares keys with `congrKeys d.closureF`, and `closureF` computes
-**`Cong`** — it closes over `eqsF` and `congrPair`, with no notion of a row. The
-specification's `Database.Out` compares them with **`MCong`**. So every lookup the
-interpreter performs has to be re-read as a specification lookup, and that is exactly
-`Cong.toMCong'`: `CtorTerms` and `RowsComplete` are what license it, and unlike
-`CtorRows` they survive a `:merge` declaration.
+`FDatabase.patternHoldsM` compares keys with `congrKeys d.closureF`, and `closureF`
+computes **`Cong`** — it closes over `eqsF` and `congrPair`, with no notion of a row. The
+specification's row atom compares them with **`MCong`**. So every read the interpreter
+performs has to be re-read as a specification read, and that is exactly `Cong.toMCong'`:
+`CtorTerms` and `RowsComplete` are what license it, and unlike `CtorRows` they survive a
+`:merge` declaration.
 
 Hence `Inv`, which is what the induction actually carries. Prove its preservation lemmas
 first; the rest of the chain is structural recursion once they are available. -/
@@ -1310,14 +1304,15 @@ def Term.CtorTerm (sig : Signature) (t : Term) : Prop :=
 /-- The invariant the refinement chain carries.
 
 `wf` is what `mem_closureF_iff_of_wf` needs; `ctorTerms` and `rowsComplete` are what
-`Cong.toMCong'` needs; `rowsWF` is what makes a `lookup`'s result a constructor term, and
+`Cong.toMCong'` needs; `rowsWF` says a row talks only about terms the database holds, and
 `ctorRows` is `closureF_ok`'s `hrow`. All five hold of `FDatabase.empty`.
 
-The last two are not decoration. Without `rowsWF` the interpreter's `lookup` branch can
-return a row output about which nothing is known, and `execAction` cannot re-establish
-`ctorTerms`; `ctorRows` is the reverse inclusion `RowsComplete` omits, restricted to the
-`.union` functions where it survives a `:merge` declaration, and `Action.SetLegal` is what
-preserves it. -/
+The last two are not decoration. `ctorRows` is the reverse inclusion `RowsComplete` omits,
+restricted to the `.union` functions where it survives a `:merge` declaration, and
+`Action.SetLegal` is what preserves it. `rowsWF` was what kept `execExpr`'s lookup branch
+inside the constructor fragment; with reading confined to the query it is no longer load
+bearing for `execAction`, and is kept because it is the row half of `WF` and
+`mergeOneWith` re-establishes it. -/
 structure FDatabase.Inv (d : FDatabase) : Prop where
   wf : d.WF
   ctorTerms : d.toDatabase.CtorTerms
@@ -1337,13 +1332,6 @@ structure Database.Inv0 (db : Database) : Prop where
     r.out = [.app r.fn r.args] ∧ Term.app r.fn r.args ∈ db.terms
 
 namespace Database
-
-/-- `addTerms` writes only `terms` and `rows`. -/
-@[simp] theorem sig_addTerms {db : Database} {ts : List Term} :
-    (db.addTerms ts).sig = db.sig := by
-  induction ts generalizing db with
-  | nil => rfl
-  | cons t ts ih => exact ih (db := db.addTerm t)
 
 /-- Every listed term is held by `addTerms`. -/
 theorem mem_terms_addTerms {db : Database} {ts : List Term} {t : Term} (h : t ∈ ts) :
@@ -1500,25 +1488,14 @@ theorem Prim.apply_ctorTerm {sig : Signature} {p : Prim} {ts : List Term} {v : T
   · simp only [Option.some_inj] at h; subst h; exact Term.ctorTerm_lit
   · exact absurd h (by simp)
 
-/-- Anything `outs` returns is some row's output column. -/
-theorem FDatabase.mem_outs {d : FDatabase} {f : FnName} {as : List Term}
-    {o : List Term} (h : o ∈ d.outs f as) : ∃ r ∈ d.rows, r.out = o := by
-  simp only [FDatabase.outs, List.mem_filterMap] at h
-  obtain ⟨r, hr, hro⟩ := h
-  refine ⟨r, hr, ?_⟩
-  split at hro
-  · exact (Option.some_inj.mp hro)
-  · exact absurd hro (by simp)
-
 mutual
 
 /-- **The merge interpreter only ever builds constructor terms.**
 
 Each branch that produces a term stays inside the constructor fragment: the `.union`
-branch's head is a constructor by the guard it just tested, a primitive returns an operand
-or a literal, and a `lookup` returns a row output, which `rowsWF` places in `terms` where
-`ctorTerms` applies. This is what `Inv.execAction` needs, and what `Inv` without `rowsWF`
-could not supply. -/
+branch's head is a constructor by the guard it just tested, and a primitive returns an
+operand or a literal. Nothing reads a row, so no case has to place a recorded output back
+in `terms`. This is what `Inv.execAction` needs. -/
 theorem FDatabase.execExpr_ctorTerm {d : FDatabase} (h : d.Inv) {σ : Env}
     (hσ : ∀ b ∈ σ, Term.CtorTerm d.sig b.2) {e : Expr} {t : Term}
     (hs : d.execExpr σ e = some t) : Term.CtorTerm d.sig t := by
@@ -1548,13 +1525,7 @@ theorem FDatabase.execExpr_ctorTerm {d : FDatabase} (h : d.Inv) {σ : Env}
           exact hu
         · obtain ⟨x, hx, hxs⟩ := Set.mem_iUnion₂.mp hmem
           exact hts' x hx g bs hxs
-      · split at hrest
-        · rename_i o rest hout
-          simp only [Option.some_inj] at hrest
-          subst hrest
-          obtain ⟨r, hr, hro⟩ := FDatabase.mem_outs (by rw [hout]; exact List.mem_cons_self ..)
-          exact h.ctorTerm_of_mem (h.rowsWF r hr |>.2 _ (by rw [hro]; simp))
-        · exact absurd hrest (by simp)
+      · exact absurd hrest (by simp)
 
 theorem FDatabase.execExprList_ctorTerm {d : FDatabase} (h : d.Inv) {σ : Env}
     (hσ : ∀ b ∈ σ, Term.CtorTerm d.sig b.2) {es : List Expr} {ts : List Term}
@@ -1607,32 +1578,11 @@ theorem FDatabase.Inv.execAction {d d' : FDatabase} (h : d.Inv) {a : Action}
 
 /-! #### Evaluation -/
 
-/-- Every output the interpreter's `outs` reports is one the specification records. This
-is where `Cong.toMCong'` is spent: `outs` filters with `closureF`, which computes `Cong`,
-while `Database.Out` compares keys with `MCong`. -/
-theorem FDatabase.Out_of_mem_outs {d : FDatabase} (h : d.Inv) {f : FnName}
-    {as vs : List Term} (hm : vs ∈ d.outs f as) : d.toDatabase.Out f as vs := by
-  simp only [FDatabase.outs, List.mem_filterMap] at hm
-  obtain ⟨r, hr, hif⟩ := hm
-  split at hif
-  · next hc =>
-    rw [Option.some.injEq] at hif
-    rw [Bool.and_eq_true, decide_eq_true_eq] at hc
-    obtain ⟨hfn, hcong⟩ := hc
-    refine ⟨r.args, CongList.toMCongList' h.ctorTerms h.rowsComplete
-      ((FDatabase.congrTuple_iff h.wf).mp hcong), ?_⟩
-    show Row.mk f r.args vs ∈ {r | r ∈ d.rows}
-    rw [← hfn, ← hif]
-    exact hr
-  · exact absurd hif (by simp)
-
 mutual
 
-/-- The interpreter's evaluation is one of the evaluations the specification allows.
-
-Exact, not a containment: `execExpr` picks the *first* recorded output where `MEval`
-allows any, so the implementation's choice is among the specification's. The `lookup` case
-is where `Cong.toMCong'` is spent — `outs` filters by `closureF`, which is `Cong`. -/
+/-- **The interpreter computes the evaluation the specification allows.** One rule per
+syntactic form on each side, and no choice on either: `MEval_unique` says the relation is
+a function, and this says `execExpr` is that function wherever it is defined. -/
 theorem FDatabase.execExpr_MEval {d : FDatabase} (h : d.Inv) {σ : Env} {e : Expr}
     {t : Term} (hs : d.execExpr σ e = some t) : Expr.MEval d.toDatabase σ e t := by
   match e, hs with
@@ -1653,14 +1603,7 @@ theorem FDatabase.execExpr_MEval {d : FDatabase} (h : d.Inv) {σ : Env} {e : Exp
       · next hu =>
         rw [Option.some.injEq] at hs
         exact hs ▸ .ctor hp hu hl
-      · next hu =>
-        split at hs
-        · next v tl ho =>
-          rw [Option.some.injEq] at hs
-          subst hs
-          exact .lookup hp hu hl
-            (FDatabase.Out_of_mem_outs h (ho ▸ List.mem_cons_self))
-        · exact absurd hs (by simp)
+      · exact absurd hs (by simp)
 
 theorem FDatabase.execExprList_MEvalList {d : FDatabase} (h : d.Inv) {σ : Env}
     {es : List Expr} {ts : List Term} (hs : d.execExprList σ es = some ts) :

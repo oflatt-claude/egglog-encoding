@@ -188,26 +188,12 @@ carry it along the semantics, which takes three side conditions, each of them ne
 Under the first two together there is in fact no legal `set` at all
 (`Action.SetLegal.elim`): the constructor fragment is exactly the fragment with no
 `set`, which is also why nothing before M9 needed any of this. -/
-/-- On an all-constructors signature every function's merge is `.union`.
-
-The same statement as `Proofs/Merge.lean`'s `Signature.mergeOf_eq_union`, under another
-name rather than imported: that file sits above this one in the import graph and will
-want `Proofs/Interp.lean` once `execM_reachable` is proved, so importing it here would
-risk a cycle. The two should become one lemma when these results move next to
-`mcong_iff_cong`. -/
-theorem Signature.AllConstructors.mergeOf_eq {sig : Signature} (h : sig.AllConstructors)
-    (f : FnName) : sig.mergeOf f = MergeSpec.union := by
-  unfold Signature.mergeOf
-  cases hf : sig f with
-  | none => rfl
-  | some d => exact h f d hf
-
 /-- **No `set` is legal on an all-constructors signature.** `SetLegal` asks for a merge
 that is not `.union` and there is none, so every `set` case below is impossible rather
 than merely well behaved. -/
 theorem Action.SetLegal.elim {sig : Signature} (hsig : sig.AllConstructors) {f : FnName}
     {args out : List Expr} (h : (Action.set f args out).SetLegal sig) : False :=
-  h (hsig.mergeOf_eq f)
+  h (Signature.mergeOf_eq_union hsig f)
 
 /-- `SetLegal` does not care *which* all-constructors signature it is read against,
 because under one there is no legal `set` to disagree about. This is what lets a `decl`
@@ -260,17 +246,6 @@ theorem Database.CtorState.empty : Database.empty.CtorState where
   rows := Database.CtorRows.empty
 
 /-! #### The functional semantics -/
-/-- No action touches the signature. Belongs in `Proofs/Eval.lean` beside
-`evalAction_rules`; it is here because that file is not this one's to edit. -/
-theorem evalAction_sig {db db' : Database} {a : Action}
-    (h : evalAction db a = some db') : db'.sig = db.sig := by
-  rcases evalAction_eq_some h with ⟨_, _, -, -, rfl⟩ | ⟨_, _, _, -, -, rfl⟩ |
-    ⟨_, _, _, _, -, -, -, rfl⟩ | ⟨_, _, _, _, _, -, -, -, rfl⟩
-  · rfl
-  · rfl
-  · rfl
-  · simp
-
 theorem evalAction_ctorRows {db db' : Database} (hsig : db.sig.AllConstructors)
     {a : Action} (hlegal : a.SetLegal db.sig) (hrows : db.CtorRows)
     (h : evalAction db a = some db') : db'.CtorRows := by
@@ -424,7 +399,7 @@ theorem MergeStep.not_of_allConstructors {db db' : Database}
     (hsig : db.sig.AllConstructors) (h : MergeStep db db') : False := by
   cases h with
   | collide _ _ _ hm _ _ =>
-    rw [hsig.mergeOf_eq] at hm
+    rw [Signature.mergeOf_eq_union hsig] at hm
     exact absurd hm (by simp)
 
 theorem MergeClosure.eq_of_allConstructors {db db' : Database}
@@ -530,21 +505,5 @@ theorem ProgramStep.ctorRows {db db' : Database} {p : Program}
     (hsig : db.sig.AllConstructors) (hdecl : p.CtorDecls) (hlegal : p.SetLegal db.sig)
     (hrules : ∀ r ∈ db.rules, r.SetLegal db.sig) : db'.CtorRows :=
   (ProgramStep.ctorState ⟨hsig, hrules, hrows⟩ hdecl hlegal hstep).rows
-
-/-- **`mcong_iff_cong` applies to whatever a constructor program runs to.**
-
-Its two hypotheses are `db.sig.AllConstructors` and `db.CtorRows`, and this produces
-both, so `MCong db a b ↔ Cong db a b` at the end state follows by
-`mcong_iff_cong hc.1 hc.2`.
-
-Stated as the pair rather than as the `Iff` because `mcong_iff_cong` lives in
-`Proofs/Merge.lean`, which is above this file in the import graph. It should be restated
-there as the `Iff` once these results move next to it. -/
-theorem ProgramStep.mcong_iff_cong_premises {p : Program} {db : Database}
-    (hstep : ProgramStep Database.empty p db) (hdecl : p.CtorDecls)
-    (hlegal : p.SetLegal Database.empty.sig) :
-    db.sig.AllConstructors ∧ db.CtorRows :=
-  let hc := ProgramStep.ctorState Database.CtorState.empty hdecl hlegal hstep
-  ⟨hc.sig, hc.rows⟩
 
 end Egglog
