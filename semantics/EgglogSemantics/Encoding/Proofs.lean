@@ -18,8 +18,9 @@ functional dependency there *is* congruence. Source-side equality is therefore w
 Neither holds of the target. `encode` declares `@UF` and every `@fView` with a `:merge`,
 so `AllConstructors` is false (`encode_not_allConstructors`), and their rows are not
 constructor rows, so `CtorRows` is false and `mcong_iff_cong` does not apply. What takes
-its place is the opposite fact: the encoded program has no `.union` function and asserts
-no equalities, so `MCong` on the target collapses to syntactic equality
+its place is the opposite fact: every table the encoded program writes is a merge
+function's and it asserts no equalities, so `MCong` on the target collapses to syntactic
+equality
 (`encode_mcong_eq`) — congruence there is *entirely simulated* by `@UF` and the views'
 `:merge`. So no theorem below writes `Cong tgt` or `MCong tgt`; the target side speaks
 only of `ViewRepr`, `UFLeader` and rows.
@@ -66,7 +67,7 @@ theorem encode_eqs_empty (htgt : ProgramStep Database.empty (encode P) tgt) :
     tgt.eqs = ∅ := sorry
 
 /-- **Congruence in the target is entirely simulated.** `MCong` there is syntactic
-equality: `eqs` is empty by `encode_eqs_empty`, and the only `.union` functions are the
+equality: `eqs` is empty by `encode_eqs_empty`, and the only constructors are the
 source constructor names, whose rows are exactly the constructor rows their own terms
 induce, so `fd` only ever re-derives reflexivity.
 

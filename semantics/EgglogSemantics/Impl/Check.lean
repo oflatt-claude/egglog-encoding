@@ -81,13 +81,19 @@ def Actions.arityOk (as : List Action) (sig : Signature) : Bool :=
 def Rule.arityOk (r : Rule) (sig : Signature) : Bool :=
   r.query.all (Pattern.arityOk · sig) && Actions.arityOk r.actions sig
 
-/-- A declaration's own merge, against `outArity` value columns. `.union` is a constructor,
-which egglog forbids a tuple output; `.noMerge` has no result to check. -/
+/-- A merge specification, against the declaration's `outArity` value columns. `.noMerge`
+has no result to check. -/
 def MergeSpec.arityOk : MergeSpec → Nat → Signature → Bool
-  | .union, outArity, _ => outArity == 1
   | .noMerge, _, _ => true
   | .merge body res, outArity, sig =>
       res.length == outArity && Actions.arityOk body sig && res.all (Expr.arityOk · sig)
+
+/-- A declaration's own value columns: a constructor has exactly one, which is egglog
+forbidding it a tuple output; a merge function is checked against its result. -/
+def FnDecl.arityOk (d : FnDecl) (sig : Signature) : Bool :=
+  match d.merge with
+  | none => d.outArity == 1
+  | some m => m.arityOk d.outArity sig
 
 /-- A command. A declaration's merge body sees the signature the declaration itself
 installs, so it may write the function's own table. -/
@@ -95,7 +101,7 @@ def Cmd.arityOk : Cmd → Signature → Bool
   | .action a, sig => a.arityOk sig
   | .rule r, sig => r.arityOk sig
   | .run, _ => true
-  | .decl f d, sig => d.merge.arityOk d.outArity ((Cmd.decl f d).sigBind sig)
+  | .decl f d, sig => d.arityOk ((Cmd.decl f d).sigBind sig)
 
 /-- `Program.SetLegal`'s shape: each command against the signature the earlier ones
 leave. -/
@@ -118,8 +124,9 @@ and this section says no expression anywhere in a program contains one. The sing
 a program may read is then the query atom `Pattern.values`, whose function name is not an
 expression position at all.
 
-A lookup is `sig.mergeOf f ≠ .union`. `Signature.mergeOf` sends an undeclared name to
-`.union`, so a constructor and a primitive both pass without a case of their own.
+A lookup is an application of a non-constructor. `Signature.IsCtor` calls an undeclared
+name a constructor, so a constructor and a primitive both pass without a case of their
+own.
 
 `Spec/Scope.lean`'s `Evaluable` is the semantics-side half of this: it constrains only
 the positions `Expr.eval` reaches, and it also excludes primitives, which this check
@@ -141,10 +148,7 @@ mutual
 def Expr.noLookup : Expr → Signature → Bool
   | .lit _, _ => true
   | .var _, _ => true
-  | .app f args, sig =>
-      (match sig.mergeOf f with
-       | .union => true
-       | _ => false) && Expr.noLookupList args sig
+  | .app f args, sig => decide (sig.IsCtor f) && Expr.noLookupList args sig
 
 /-- `Expr.noLookup` over an argument list. -/
 def Expr.noLookupList : List Expr → Signature → Bool
@@ -164,9 +168,8 @@ def Action.noLookup : Action → Signature → Bool
 def Actions.noLookup (as : List Action) (sig : Signature) : Bool :=
   as.all (Action.noLookup · sig)
 
-/-- A `:merge` body and its result columns. `.union` and `.noMerge` have no body. -/
+/-- A `:merge` body and its result columns. `.noMerge` has no body. -/
 def MergeSpec.noLookup : MergeSpec → Signature → Bool
-  | .union, _ => true
   | .noMerge, _ => true
   | .merge body res, sig => Actions.noLookup body sig && res.all (Expr.noLookup · sig)
 
@@ -190,7 +193,10 @@ def Cmd.noLookup : Cmd → Signature → Bool
   | .action a, sig => a.noLookup sig
   | .rule r, sig => r.noLookup sig
   | .run, _ => true
-  | .decl f d, sig => d.merge.noLookup ((Cmd.decl f d).sigBind sig)
+  | .decl f d, sig =>
+      match d.merge with
+      | none => true
+      | some m => m.noLookup ((Cmd.decl f d).sigBind sig)
 
 /-- Each command against the signature the earlier ones leave, as `Program.arityOk`. -/
 def Program.noLookup : Program → Signature → Bool

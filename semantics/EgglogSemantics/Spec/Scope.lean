@@ -161,7 +161,7 @@ apart. A `:merge` body — the one position primitives exist for — is not chec
 `Impl/Check.lean`'s `Expr.noLookup` is the front end's `Bool` transcription of the
 constructor half. This is the half the semantics consumes. -/
 def Expr.Evaluable (e : Expr) (sig : Signature) : Prop :=
-  ∀ f ∈ e.fns, Prim.ofName f = none ∧ sig.mergeOf f = MergeSpec.union
+  ∀ f ∈ e.fns, Prim.ofName f = none ∧ sig.IsCtor f
 
 /-- `Action.Scoped`'s companion: every expression the action evaluates builds. -/
 def Action.Evaluable : Action → Signature → Prop
@@ -206,8 +206,8 @@ separate predicate, for now", says when to fold them together.
 -/
 /-- `(set (f …) …)` is legal only when `f` is not a constructor.
 
-Constructors are exactly the functions whose merge is `.union`, and `Signature.mergeOf`
-sends an undeclared name there too, so this covers the undeclared case as well.
+`Signature.IsCtor` calls an undeclared name a constructor, so this covers the undeclared
+case as well.
 
 It is what keeps `Database.CtorRows` an invariant. A `set` writes the row
 `⟨f, as, [v]⟩` for whatever `v` its out expression denotes, and `Database.ctorRowsOf`
@@ -216,7 +216,7 @@ def Action.SetLegal : Action → Signature → Prop
   | .expr _, _ => True
   | .letBind _ _, _ => True
   | .union _ _, _ => True
-  | .set f _ _, sig => sig.mergeOf f ≠ MergeSpec.union
+  | .set f _ _, sig => ¬ sig.IsCtor f
 
 /-- Every action in the list is a legal `set`. Unlike `Actions.Scoped` this needs no
 threading: no action changes the signature. -/
@@ -251,7 +251,7 @@ head may write, this says what the signature may become. `Database.CtorRows` nee
 — declaring a `:merge` function makes rows *already present* a `MergeStep` collision,
 whose combined row need not be a constructor row, and no `set` is involved. -/
 def Cmd.CtorDecl : Cmd → Prop
-  | .decl _ d => d.merge = MergeSpec.union
+  | .decl _ d => d.merge = none
   | _ => True
 
 /-- Every declaration in the program declares a constructor. -/

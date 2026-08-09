@@ -90,46 +90,54 @@ structure Rule where
   query : Query
   actions : List Action
 
-/-- How two rows colliding on one key combine.
+/-- How two rows of a **merge function** colliding on one key combine.
 
-`union` makes the collision an equality, which is exactly congruence — `MCong.fd` is the
-one constructor that covers both. `merge body result` runs `body` once, with the two
-rows' outputs bound by `mergeEnv`, and then evaluates `result` — **one expression per
-value column**, where the surface syntax writes one tuple-valued `(values e₀ e₁ …)`.
-`noMerge` forbids a collision outright.
+`merge body result` runs `body` once, with the two rows' outputs bound by `mergeEnv`, and
+then evaluates `result` — **one expression per value column**, where the surface syntax
+writes one tuple-valued `(values e₀ e₁ …)`. `noMerge` forbids a collision outright.
+
+A constructor has no merge specification at all (`FnDecl.merge`): its collisions are an
+equality, which is exactly congruence, and `MCong.fd` is the one rule that covers both.
 
 See `MERGE.md`, "Multi-column outputs", for the per-column result and for the one place
 this is coarser than egglog: a merge kind is per *function* here and per *column* there. -/
 inductive MergeSpec where
-  | union
   | merge : List Action → List Expr → MergeSpec
   | noMerge
 
-/-- A function declaration. -/
+/-- A function declaration.
+
+egglog has two declaration forms and this is both of them: `(datatype …)` and
+`(constructor …)` declare a **constructor**, which is `merge = none`; `(function … :merge …)`
+declares a **merge function**, which is `merge = some …`. -/
 structure FnDecl where
   /-- The number of key columns. -/
   arity : Nat
   /-- The number of value columns. One for a constructor. -/
   outArity : Nat
-  merge : MergeSpec
+  /-- How collisions are resolved, or `none` for a constructor. -/
+  merge : Option MergeSpec
 
 /-- The declared functions. Undeclared names have no entry. -/
 abbrev Signature := FnName → Option FnDecl
 
-/-- How `f` resolves a collision.
+/-- How `f` resolves a collision, or `none` if `f` is a constructor. -/
+def Signature.mergeOf (sig : Signature) (f : FnName) : Option MergeSpec :=
+  (sig f).bind FnDecl.merge
 
-An undeclared name is a constructor. That is what makes the semantics in which
-nothing is declared — everything up to M8 — literally the all-constructors case,
-rather than merely analogous to it. -/
-def Signature.mergeOf (sig : Signature) (f : FnName) : MergeSpec :=
-  match sig f with
-  | some d => d.merge
-  | none => .union
+/-- `f` is a constructor: either declared as one, or not declared at all.
+
+An undeclared name being a constructor is what makes the semantics in which nothing is
+declared — everything up to M8 — literally the all-constructors case, rather than merely
+analogous to it. -/
+def Signature.IsCtor (sig : Signature) (f : FnName) : Prop := sig.mergeOf f = none
+
+instance (sig : Signature) (f : FnName) : Decidable (sig.IsCtor f) :=
+  decidable_of_iff ((sig.mergeOf f).isNone = true) Option.isNone_iff_eq_none
 
 /-- A signature all of whose functions are constructors, i.e. the fragment this
 phase models. -/
-def Signature.AllConstructors (sig : Signature) : Prop :=
-  ∀ f d, sig f = some d → d.merge = MergeSpec.union
+def Signature.AllConstructors (sig : Signature) : Prop := ∀ f, sig.IsCtor f
 
 /-! ### Variables and function names
 

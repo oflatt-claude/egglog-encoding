@@ -57,11 +57,14 @@ end FDatabase
 append-only — the M11 safety invariant needs neither termination nor confluence precisely
 because nothing is removed, and the encoding depends on "nothing is ever removed from it,
 which lets proofs refer to terms after they leave the e-graph". A *reference
-implementation* has a different job: egglog's merge replaces the row, so an append-only
-`Impl/` is faithful to our spec and unfaithful to the system the spec is a model of. The
-contract between the two therefore weakens from an equality to a containment — the
-implementation may find *fewer* results, never more — which is the safe direction, since
-every property M11 cares about is positive in the state.
+implementation* has a different job: egglog's merge replaces the row, and its rebuild
+*moves* one, so an append-only `Impl/` is faithful to our spec and unfaithful to the
+system the spec is a model of. The contract between the two therefore weakens from an
+equality to `Spec/Merge.lean`'s `Database.Recorded` — every row the implementation holds
+is one the specification records, read through `Database.Out`, so the implementation may
+find *fewer* results, never more. That is the safe direction, since every property M11
+cares about is positive in the state. Deleting is what makes it a containment; re-keying
+is what makes the containment read keys up to congruence.
 
 **What "superseded" means here: the two rows the merge combined.** After the body has run
 and the combined row is computed, `r₁` — the row being inserted — is dropped, and `r₂` —
@@ -134,8 +137,8 @@ order. `mergeOneWith` is what decides the orientation; nothing else should call 
 The signature is consulted *before* the congruence check, which is not cosmetic: the
 check computes `closureF`, and `mergeRound` calls this once per ordered pair of rows, so
 testing the cheap condition first is what keeps a constructor-only database from paying
-a closure per pair. Same result either way — a `.union` or `.noMerge` function has no
-body to run.
+a closure per pair. Same result either way — a constructor or a `.noMerge` function has
+no body to run.
 
 **The combined row takes `r₂`'s key and `r₂`'s slot.** `r₁` is dropped and `r₂` is
 overwritten where it stands, rather than both being dropped and the result prepended: in
@@ -159,7 +162,7 @@ to merge. -/
 def FDatabase.mergeOneOriented (cl : Finset (Term × Term)) (d : FDatabase) (r₁ r₂ : Row) :
     Option FDatabase :=
   match d.sig.mergeOf r₁.fn with
-  | .merge body res =>
+  | some (.merge body res) =>
     if r₁.fn = r₂.fn && congrKeys cl r₁.args r₂.args
         && d.rows.contains r₁ && d.rows.contains r₂ then
       if FDatabase.noConflict body r₁ r₂ then
@@ -230,6 +233,96 @@ def FDatabase.canonKey (cl : Finset (Term × Term)) (ts : List Term) (as : List 
     Bool :=
   as.all (FDatabase.canonTerm cl ts)
 
+/-! ### The rebuild
+
+`canonTerm` says *whether* a row is the one egglog leaves in place. That is enough to
+orient a collision between two rows the interpreter can see, and not enough when the
+canonical key belongs to a third term carrying no row of its own:
+
+```
+(datatype Math (A) (B) (C) (Kept) (Lost))
+(function Dist (Math) i64 :merge new)
+(A) (set (Dist (B)) 1) (set (Dist (C)) 2) (union (C) (A)) (union (B) (A))
+(rule ((= 1 (Dist (A)))) ((Kept)))  (rule ((= 2 (Dist (A)))) ((Lost)))
+(run 1)
+```
+
+`A` is canonical and holds no row, so neither `Dist (B)` nor `Dist (C)` is at a canonical
+key and `swapForCanon` declines to orient the pair. egglog answers `Kept`, and answers
+`Lost` when the two `union`s are swapped, because `old` is the row **already at the
+canonical key**: the first `union` re-keys `C`'s row onto `A`, where the second `union`
+then finds it resident. Insertion age cannot see that — both `set`s happened before either
+`union` — so the interpreter has to re-key too. `DiffTest.lean`'s `rekey-*` cases are the
+four shapes, and `mrand-28` is what found it.
+
+**What it does.** Rewrite every `:merge` row's key columns to their class's canonical
+representative, drop the rows that become duplicates, and put the rows the rewrite
+*moved* in front of the rows it left alone. All three parts are load-bearing:
+
+* rewriting is what records, in the row itself, that the row has reached the canonical
+  key, so a later collision there can tell resident from arriving;
+* dropping duplicates is egglog's insert finding nothing to resolve — the arriving row
+  goes away and the resident one keeps its place, which `List.dedup` does for free by
+  keeping the *last* occurrence;
+* moving is the age update. A re-keyed row was removed and re-inserted, so it is the
+  arriving row and the one already at the canonical key is `old`. `mergeRound` reads age
+  off the row list front-first, so "arriving" is "at the front", and the moved rows keep
+  their relative order among themselves — egglog stages a rebuild's re-insertions in
+  table order, so the earlier write is still the one the rest merge onto
+  (`canon-none-old`).
+
+**Key columns only.** egglog canonicalizes eq-sorted *value* columns as well — with
+`(function Val (Math) Math :merge ((set (Fired (L)) 1) old))`, a second `(set (Val (K))
+(V2))` after `(union (V1) (V2))` runs no body, where without the `union` it does. That
+stays the residual `noConflict` records: `FnDecl` carries no sorts and `Tests/Egg.lean`
+renders `i64` per output column, so no program the difftest can build has an eq-sorted
+merge output, and re-keying values would put the implementation's rows outside
+`Database.Out` — the relation `Spec/Merge.lean`'s `Database.Recorded` reads them through.
+
+**Constructor rows are left alone**, for the same reason `MCong.fd` needs them: a
+constructor row is `⟨f, as, [.app f as]⟩` determined by `terms`, and re-keying one would
+break `Database.RowsComplete` while buying nothing — congruence already reads it from
+every congruent key. `.noMerge` rows are left alone too; a `:no-merge` collision is a
+program error, not a resolution. -/
+/-- The canonical member of `t`'s congruence class: the congruent term created *first*.
+
+`ts` is `FDatabase.terms`, whose *tail* is the oldest part — `addTerm` prepends and
+`List.dedup` keeps a repeated term's last occurrence, so a term's position is fixed when
+it is first added. The last congruent entry is therefore the earliest-created one, which
+is egglog's representative, its union-find unioning by min id.
+
+`canonTerm` is the predicate this is the witness of: a term is canonical exactly when it
+is its own representative. A term `ts` does not hold represents itself.
+
+Written as a fold that keeps overwriting, so it is one pass and its result is visibly
+either `t` or a congruent entry of `ts` — `Proofs/Merge.lean`'s `foldl_pick`. -/
+def FDatabase.canonOf (cl : Finset (Term × Term)) (ts : List Term) (t : Term) : Term :=
+  ts.foldl (fun acc u => if u == t || decide ((t, u) ∈ cl) then u else acc) t
+
+/-- `canonOf` on a key tuple: the key egglog's rebuild leaves the row at. -/
+def FDatabase.canonKeyOf (cl : Finset (Term × Term)) (ts : List Term) (as : List Term) :
+    List Term :=
+  as.map (FDatabase.canonOf cl ts)
+
+/-- A row at its canonical key. Only a `.merge` function's rows move. -/
+def FDatabase.rebuildRow (cl : Finset (Term × Term)) (d : FDatabase) (r : Row) : Row :=
+  match d.sig.mergeOf r.fn with
+  | some (.merge _ _) => ⟨r.fn, FDatabase.canonKeyOf cl d.terms r.args, r.out⟩
+  | _ => r
+
+/-- **egglog's rebuild**: every `:merge` row re-keyed onto its class's canonical key, the
+re-keyed ones in front as the rows that just arrived, and duplicates dropped.
+
+Takes the closure as an argument because `mergeRound` has already computed it and a
+rebuild cannot change it — only `terms` and `eqs` feed `closureF`, and this writes
+neither. Idempotent for the same reason: its output has every `:merge` key canonical and
+no repeated row, so a second pass moves nothing. -/
+def FDatabase.rebuild (cl : Finset (Term × Term)) (d : FDatabase) : FDatabase :=
+  let tagged := d.rows.map fun r => (d.rebuildRow cl r, r)
+  { d with rows :=
+      ((tagged.filter fun p => p.1 != p.2).map Prod.fst
+        ++ (tagged.filter fun p => p.1 == p.2).map Prod.fst).dedup }
+
 /-- Whether the *first* row of the pair is the one already in the table, so that
 `mergeOneWith` must hand `mergeOneOriented` the pair the other way round.
 
@@ -246,7 +339,7 @@ which is the argument order already. -/
 def FDatabase.swapForCanon (cl : Finset (Term × Term)) (d : FDatabase) (r₁ r₂ : Row) :
     Bool :=
   match d.sig.mergeOf r₁.fn with
-  | .merge _ _ =>
+  | some (.merge _ _) =>
     r₁.args != r₂.args && r₁.fn == r₂.fn && congrKeys cl r₁.args r₂.args
       && FDatabase.canonKey cl d.terms r₁.args && !FDatabase.canonKey cl d.terms r₂.args
   | _ => false
@@ -279,11 +372,20 @@ def FDatabase.mergeOne (d : FDatabase) (r₁ r₂ : Row) : Option FDatabase :=
 keeps a constructor-only database out of the closure entirely. -/
 def FDatabase.hasMergeRow (d : FDatabase) : Bool :=
   d.rows.any fun r => match d.sig.mergeOf r.fn with
-    | .merge _ _ => true
+    | some (.merge _ _) => true
     | _ => false
 
-/-- One pass of the merge phase: every ordered pair of *distinct* rows present when the
-pass began, fired once, left to right.
+/-- One pass of the merge phase: a **rebuild**, then every ordered pair of *distinct* rows
+it leaves, fired once, left to right.
+
+**The rebuild comes first and is part of the pass**, which is where egglog puts it: a
+round canonicalizes the tables and then resolves what the canonicalization collided. Two
+consequences the code depends on. The pairwise fold ranges over the *rebuilt* rows, so
+every `:merge` key it compares is canonical and `congrKeys` mostly degenerates to
+equality — `swapForCanon` is left in place for the rows a merge body writes during the
+pass, which no rebuild has seen yet. And `settled` sees the rebuild, so a pass that only
+re-keys still counts as progress and `mergeSaturateF` runs another; `rebuild` is
+idempotent, so that terminates.
 
 **Not** saturation. Structurally terminating, so it needs neither fuel nor a termination
 witness, and sound because `RunStep` is `MergeClosure` with no `MergeSaturated`
@@ -325,12 +427,13 @@ nothing else. -/
 def FDatabase.mergeRound (d : FDatabase) : FDatabase :=
   if !d.hasMergeRow then d else
     let cl := d.closureF
-    d.rows.foldl (fun acc r₁ =>
-      d.rows.foldl (fun acc' r₂ =>
+    let e := FDatabase.rebuild cl d
+    e.rows.foldl (fun acc r₁ =>
+      e.rows.foldl (fun acc' r₂ =>
         if r₁ == r₂ then acc'
         else match FDatabase.mergeOneWith cl acc' r₁ r₂ with
           | some acc'' => acc''
-          | none => acc') acc) d
+          | none => acc') acc) e
 
 /-! ### Running -/
 /-- Whether a merge pass changed anything. Compares the decidable fields; `sig` is a

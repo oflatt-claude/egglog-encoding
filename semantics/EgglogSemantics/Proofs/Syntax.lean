@@ -3,15 +3,20 @@ import EgglogSemantics.Spec.Syntax
 
 namespace Egglog
 /-! ### Signatures -/
-/-- With `mergeOf` defaulting an undeclared name to `.union`, `AllConstructors` says
-exactly that every function is a constructor. This is why "everything up to M8" is
-literally the all-constructors case and not merely analogous to it. -/
-theorem Signature.mergeOf_eq_union {sig : Signature} (h : sig.AllConstructors)
-    (f : FnName) : sig.mergeOf f = MergeSpec.union := by
-  unfold Signature.mergeOf
-  cases hf : sig f with
-  | none => rfl
-  | some d => exact h f d hf
+/-- `Signature.IsCtor` is an equation, spelled out for `rw`. -/
+theorem Signature.IsCtor.mergeOf {sig : Signature} {f : FnName} (h : sig.IsCtor f) :
+    sig.mergeOf f = none := h
+
+/-- A name with a merge specification is not a constructor. -/
+theorem Signature.not_isCtor {sig : Signature} {f : FnName} {m : MergeSpec}
+    (hm : sig.mergeOf f = some m) : ¬ sig.IsCtor f := fun h => by
+  rw [h.mergeOf] at hm; exact absurd hm (by simp)
+
+/-- Under `AllConstructors` nothing has a merge specification, so every premise naming
+one — a `MergeStep.collide`, a `NoMergeOk` obligation — is contradictory. -/
+theorem Signature.AllConstructors.elim {sig : Signature} (h : sig.AllConstructors)
+    {f : FnName} {m : MergeSpec} (hm : sig.mergeOf f = some m) : False :=
+  Signature.not_isCtor hm (h f)
 
 namespace Expr
 @[simp] theorem vars_lit {l : Lit} : (Expr.lit l).vars = [] := rfl

@@ -11,9 +11,9 @@ namespace Expr
 
 /-- The building case, which is the only one the constructor fragment ever takes. -/
 @[simp] theorem eval_app_ctor {sig : Signature} {f : FnName} {args : List Expr} {σ : Env}
-    (hp : Prim.ofName f = none) (hc : sig.mergeOf f = MergeSpec.union) :
+    (hp : Prim.ofName f = none) (hc : sig.IsCtor f) :
     (Expr.app f args).eval sig σ = (Expr.evalList sig args σ).map (Term.app f) := by
-  simp only [Expr.eval, hp, hc]
+  simp only [Expr.eval, hp, if_pos hc]
 
 /-- The computing case. A reserved name shadows a user function, so this needs no
 condition on the signature. -/
@@ -26,15 +26,15 @@ theorem eval_app_prim {sig : Signature} {f : FnName} {p : Prim} {args : List Exp
 and `Impl/Check.lean`'s `noLookup` rejects one in every position this is called from. -/
 theorem eval_app_merge {sig : Signature} {f : FnName} {args : List Expr} {σ : Env}
     {body : List Action} {res : List Expr} (hp : Prim.ofName f = none)
-    (hc : sig.mergeOf f = MergeSpec.merge body res) :
+    (hc : sig.mergeOf f = some (MergeSpec.merge body res)) :
     (Expr.app f args).eval sig σ = none := by
-  simp only [Expr.eval, hp, hc]
+  simp only [Expr.eval, hp, if_neg (Signature.not_isCtor hc)]
 
 /-- `eval_app_merge` for a `:no-merge` function, which is a lookup for the same reason. -/
 theorem eval_app_noMerge {sig : Signature} {f : FnName} {args : List Expr} {σ : Env}
-    (hp : Prim.ofName f = none) (hc : sig.mergeOf f = MergeSpec.noMerge) :
+    (hp : Prim.ofName f = none) (hc : sig.mergeOf f = some MergeSpec.noMerge) :
     (Expr.app f args).eval sig σ = none := by
-  simp only [Expr.eval, hp, hc]
+  simp only [Expr.eval, hp, if_neg (Signature.not_isCtor hc)]
 
 @[simp] theorem evalList_nil {sig : Signature} {σ : Env} :
     Expr.evalList sig [] σ = some [] := rfl
@@ -73,7 +73,7 @@ expression with none of the three evaluates. The two conditions are exactly
 would add (`Spec/Scope.lean`). -/
 theorem Expr.eval_isSome {sig : Signature} {σ : Env} (e : Expr)
     (h : ∀ v ∈ e.vars, v ∈ Env.dom σ)
-    (hf : ∀ f ∈ e.fns, Prim.ofName f = none ∧ sig.mergeOf f = MergeSpec.union) :
+    (hf : ∀ f ∈ e.fns, Prim.ofName f = none ∧ sig.IsCtor f) :
     ∃ t, e.eval sig σ = some t := by
   match e with
   | .lit l => exact ⟨.lit l, rfl⟩
@@ -89,7 +89,7 @@ theorem Expr.eval_isSome {sig : Signature} {σ : Env} (e : Expr)
 
 theorem Expr.evalList_isSome {sig : Signature} {σ : Env} (es : List Expr)
     (h : ∀ v ∈ Expr.varsList es, v ∈ Env.dom σ)
-    (hf : ∀ f ∈ Expr.fnsList es, Prim.ofName f = none ∧ sig.mergeOf f = MergeSpec.union) :
+    (hf : ∀ f ∈ Expr.fnsList es, Prim.ofName f = none ∧ sig.IsCtor f) :
     ∃ ts, Expr.evalList sig es σ = some ts := by
   match es with
   | [] => exact ⟨[], rfl⟩

@@ -11,7 +11,7 @@ it holds the application itself.
 Three things follow, and the first is the milestone:
 
 * **Congruence is the functional dependency.** `MCong.fd` says two rows of one
-  `.union` function whose keys are congruent have congruent outputs. At constructor
+  constructor whose keys are congruent have congruent outputs. At constructor
   rows — where `out = [.app f args]` — that *is* `Cong.congr`; at equal keys it is the
   functional dependency. There is no separate `congr` constructor.
   `Proofs/Merge.lean`'s `mcong_iff_cong` is the compatibility theorem.
@@ -41,22 +41,21 @@ namespace Egglog
 mutual
 
 /-- Derivable equality: the congruence closure of `db`'s asserted equalities *and* the
-functional dependencies of its `.union` functions.
+functional dependencies of its constructors.
 
 Compared with `Cong`, the `congr` constructor is gone and `fd` has taken its place.
 One rule, three readings:
 
 * at constructor rows and congruent keys, `Cong.congr`;
 * at constructor rows and *equal* keys, `Cong.refl` on an application;
-* at any `.union` function, "one key, one output" — the functional dependency.
+* at any constructor, "one key, one output" — the functional dependency.
 
-A `.merge` or `.noMerge` function contributes nothing here. That is deliberate: a
-`.union` collision is the only one whose whole effect is an equality between terms
-that already exist, so it is the only one a *relation* can express. The rest are
-`MergeStep`.
+A merge function contributes nothing here. That is deliberate: a constructor collision is
+the only one whose whole effect is an equality between terms that already exist, so it is
+the only one a *relation* can express. The rest are `MergeStep`.
 
-The rule is per *column* — `⟨x, y⟩ ∈ a.zip b` — so a multi-column `.union` function
-equates its outputs positionally. See `MERGE.md`, "Multi-column outputs". -/
+The rule is per *column* — `⟨x, y⟩ ∈ a.zip b` — so a multi-column constructor equates its
+outputs positionally. See `MERGE.md`, "Multi-column outputs". -/
 inductive MCong (db : Database) : Term → Term → Prop where
   | assert {a b : Term} : (a, b) ∈ db.eqs → MCong db a b
   | refl {a : Term} : a ∈ db.terms → MCong db a a
@@ -64,7 +63,7 @@ inductive MCong (db : Database) : Term → Term → Prop where
   | trans {a b c : Term} : MCong db a b → MCong db b c → MCong db a c
   | fd {f : FnName} {as bs a b : List Term} {x y : Term} :
       ⟨f, as, a⟩ ∈ db.rows → ⟨f, bs, b⟩ ∈ db.rows →
-      db.sig.mergeOf f = MergeSpec.union → MCongList db as bs →
+      db.sig.IsCtor f → MCongList db as bs →
       (x, y) ∈ a.zip b → MCong db x y
 
 /-- Pointwise `MCong` over key tuples. Companion of `MCong.fd`, for the same reason
@@ -93,6 +92,25 @@ over-approximation is confined to the query, where `MValidSubst.values` matches 
 recorded row. See `MERGE.md`, "Why the reader over-approximates". -/
 def Out (db : Database) (f : FnName) (as : List Term) (vs : List Term) : Prop :=
   ∃ bs, MCongList db as bs ∧ Row.mk f bs vs ∈ db.rows
+
+/-- **Every row `d₁` holds is one `d₂` records** — and `d₁`'s terms and equalities are
+`d₂`'s. This is the contract a reference implementation is held to.
+
+`Database.Contained` with its row clause read through `Out` instead of `⊆`, and the
+weakening is exactly what an implementation that **re-keys** needs. egglog's rebuild moves
+a row from its key to the canonical member of that key's congruence class; nothing here
+moves one, because `Out` searches the class instead. So after a rebuild the implementation
+holds `⟨f, [A], v⟩` where the specification still holds `⟨f, [B], v⟩` with `A ≅ B`, and
+syntactic containment fails although nothing new is claimed: `Out` is the only way anything
+reads a table, so "the specification records it" is the strongest statement about a row
+that is available, and the weakest that is true.
+
+`Contained` remains the relation where syntactic containment is what is meant —
+`MCong.mono`, `Out.mono`, and `MergeStep`'s "nothing is ever removed". -/
+structure Recorded (d₁ d₂ : Database) : Prop where
+  terms : d₁.terms ⊆ d₂.terms
+  rows : ∀ r ∈ d₁.rows, d₂.Out r.fn r.args r.out
+  eqs : d₁.eqs ⊆ d₂.eqs
 
 end Database
 /-! ### The merge step -/
@@ -138,7 +156,7 @@ inductive MergeStep : Database → Database → Prop where
   | collide {db d : Database} {f : FnName} {as bs a b vs : List Term}
       {body : List Action} {res : List Expr} :
       ⟨f, as, a⟩ ∈ db.rows → ⟨f, bs, b⟩ ∈ db.rows → MCongList db as bs →
-      db.sig.mergeOf f = MergeSpec.merge body res →
+      db.sig.mergeOf f = some (.merge body res) →
       evalActions { db with env := mergeEnv a b } body = some d →
       Expr.evalList d.sig res d.env = some vs →
       MergeStep db { d.addRow f as vs with env := db.env, rules := db.rules }
@@ -171,7 +189,7 @@ Having it stated is what stops `.noMerge` silently meaning "keep the old value".
 `MERGE.md`, "`:no-merge` collisions, out of scope". -/
 def Database.NoMergeOk (db : Database) : Prop :=
   ∀ f as bs (a b : List Term), Row.mk f as a ∈ db.rows → Row.mk f bs b ∈ db.rows →
-    MCongList db as bs → db.sig.mergeOf f = MergeSpec.noMerge → a = b
+    MCongList db as bs → db.sig.mergeOf f = some .noMerge → a = b
 
 /-! ### E-matching and running
 

@@ -266,11 +266,11 @@ interpreter need not saturate merges to predict them.
 
 private def dist (n : Nat) : FnDecl :=
   { arity := n, outArity := 1,
-    merge := .merge [] [.app "min" [.var "old", .var "new"]] }
+    merge := some (.merge [] [.app "min" [.var "old", .var "new"]]) }
 
 private def distMax (n : Nat) : FnDecl :=
   { arity := n, outArity := 1,
-    merge := .merge [] [.app "max" [.var "old", .var "new"]] }
+    merge := some (.merge [] [.app "max" [.var "old", .var "new"]]) }
 
 /-- The same join, written as egglog's **action block** — `let`-bind the combined value,
 then return it.
@@ -287,19 +287,19 @@ itself and both orders fire") does not hold: `mergeRound` skips `r₁ == r₂`, 
 reversed pair. -/
 private def distBlock (n : Nat) (op : FnName) : FnDecl :=
   { arity := n, outArity := 1,
-    merge := .merge [.letBind "s" (.app op [.var "old", .var "new"])] [.var "s"] }
+    merge := some (.merge [.letBind "s" (.app op [.var "old", .var "new"])] [.var "s"]) }
 
 /-- `:merge old` / `:merge new`, the two merges no commutative one can distinguish. `old`
 is the value already in the table and `new` the one being inserted — which row that is, at
 a collision a rebuild caused, is `Impl/Merge.lean`'s `swapForCanon`. -/
 private def distPick (n : Nat) (which : String) : FnDecl :=
-  { arity := n, outArity := 1, merge := .merge [] [.var which] }
+  { arity := n, outArity := 1, merge := some (.merge [] [.var which]) }
 
 /-- `:no-merge`: a collision is an error rather than a resolution
 (egglog panics with "Illegal merge attempted for function Dist"), so a case using it must
 keep its keys distinct. Inert in the model, since `MergeStep` fires only on `.merge`. -/
 private def distNoMerge (n : Nat) : FnDecl :=
-  { arity := n, outArity := 1, merge := .noMerge }
+  { arity := n, outArity := 1, merge := some .noMerge }
 
 private def num (n : Int) : Expr := .lit (.int n)
 
@@ -338,8 +338,8 @@ does not have. -/
 `(function Dist (Math…) (i64 i64) :merge (values (min old0 new0) (max old1 new1)))`. -/
 private def distPair (n : Nat) : FnDecl :=
   { arity := n, outArity := 2,
-    merge := .merge [] [.app "min" [.var "old0", .var "new0"],
-                        .app "max" [.var "old1", .var "new1"]] }
+    merge := some (.merge [] [.app "min" [.var "old0", .var "new0"],
+                              .app "max" [.var "old1", .var "new1"]]) }
 
 private def pset (f : FnName) (args : List Expr) (v w : Int) : Cmd :=
   .action (.set f args [num v, num w])
@@ -387,6 +387,14 @@ private def readExists : Rule where
 private def readValue (v : Int) : Rule where
   query := [.values [num v] "Dist" [.var "k"]]
   actions := [.expr (.app "Hit" [.var "k"])]
+
+/-- `distPick` at two value columns: `(values old0 old1)` or `(values new0 new1)`. The one
+merge that is both **non-commutative** and **multi-column**, so it is the only shape in
+which `mergeEnvIdx`'s per-column binding is observable on its own — every other multi-column
+case here combines with `min`/`max`, which cannot tell the two rows apart. -/
+private def distPickPair (n : Nat) (which : String) : FnDecl :=
+  { arity := n, outArity := 2,
+    merge := some (.merge [] [.var (which ++ "0"), .var (which ++ "1")]) }
 
 /-- The two-column acceptance test's rule: guarded on the *pre-merge* value tuple. -/
 private def readStale : Rule where
@@ -484,7 +492,7 @@ that ran the body unconditionally would pass every other case in this family.
 
 **A collision that leaves every value column unchanged runs no block at all**, on either
 side: egglog's `MergeFn` treats it as no conflict and `Impl/Merge.lean`'s `noConflict` now
-does the same. The four `merge-body-noop-*` cases below are that behaviour and its edges —
+does the same. The five `merge-body-noop-*` cases below are that behaviour and its edges —
 they were a recorded divergence until the model grew the skip, and they are the reason the
 rest of this family keeps its two colliding values *distinct*: a case that means to observe
 a body running has to give the body something to resolve. -/
@@ -494,25 +502,25 @@ the two engines are not obliged to agree on, so the *combination* has to be
 order-insensitive for the value read to mean anything. -/
 private def logDecl : FnDecl :=
   { arity := 1, outArity := 1,
-    merge := .merge [] [.app "min" [.var "old", .var "new"]] }
+    merge := some (.merge [] [.app "min" [.var "old", .var "new"]]) }
 
 /-- A merge that logs one of the colliding values into `Log` and returns the other. -/
 private def distLog (n : Nat) (logged kept : String) : FnDecl :=
   { arity := n, outArity := 1,
-    merge := .merge [.set "Log" [C "L"] [.var logged]] [.var kept] }
+    merge := some (.merge [.set "Log" [C "L"] [.var logged]] [.var kept]) }
 
 /-- A merge whose body is `(union (U) (V))` — the body's entire effect is an equality, as
 in a union-find's. -/
 private def distUnion (n : Nat) (kept : String) : FnDecl :=
   { arity := n, outArity := 1,
-    merge := .merge [.union (C "U") (C "V")] [.var kept] }
+    merge := some (.merge [.union (C "U") (C "V")] [.var kept]) }
 
 /-- A two-action body: `let` the combined value, log it, return it. Exercises the block
 form at more than one action, and the `let`-bound variable as a `set`'s value. -/
 private def distLetLog (n : Nat) : FnDecl :=
   { arity := n, outArity := 1,
-    merge := .merge [.letBind "s" (.app "min" [.var "old", .var "new"]),
-                     .set "Log" [C "L"] [.var "s"]] [.var "s"] }
+    merge := some (.merge [.letBind "s" (.app "min" [.var "old", .var "new"]),
+                           .set "Log" [C "L"] [.var "s"]] [.var "s"]) }
 
 /-- Seeds `W` at both operands of a body's `union`, so that `W`'s row count falls from 2 to
 1 exactly when the body runs. -/
@@ -524,7 +532,7 @@ column unchanged and moves the other. The skip is all-or-nothing over the whole 
 tuple, so this body must still run; a model that skipped per column would report `L 0`. -/
 private def distPairLog (n : Nat) : FnDecl :=
   { arity := n, outArity := 2,
-    merge := .merge [.set "Log" [C "L"] [.var "old0"]] [.var "new0", .var "new1"] }
+    merge := some (.merge [.set "Log" [C "L"] [.var "old0"]] [.var "new0", .var "new1"]) }
 
 /-! ### Widths and arities the suite never drew
 
@@ -540,16 +548,18 @@ columns. Three gaps followed, each a distinct branch:
   column and a different combiner in each, so a body reading the wrong index computes a
   different tuple and the guarded read stops firing.
 
-Eq-sorted merge outputs are deliberately still absent. They would need `ordering-min` to
+Eq-sorted merge **outputs** are absent, and there is nothing here to widen: `FnDecl` carries
+no sorts at all, and `Tests/Egg.lean`'s `FnDecl.toEgg` renders `i64` per output column, so
+no program this file can build has one. Adding the sort would also want `ordering-min` to
 render, and `Term.blt` is structural where egglog's is by insertion order — a known
-divergence (`Tests/Egg.lean`, `FnDecl.toEgg`) rather than an untested path. -/
+divergence (`Tests/Egg.lean`, `FnDecl.toEgg`). Missing feature, not untested path. -/
 /-- A three-column merge: a different combiner per column, so every `mergeEnvIdx` binding
 is load-bearing. -/
 private def distTriple (n : Nat) : FnDecl :=
   { arity := n, outArity := 3,
-    merge := .merge [] [.app "min" [.var "old0", .var "new0"],
-                        .app "max" [.var "old1", .var "new1"],
-                        .var "old2"] }
+    merge := some (.merge [] [.app "min" [.var "old0", .var "new0"],
+                              .app "max" [.var "old1", .var "new1"],
+                              .var "old2"]) }
 
 private def tset (f : FnName) (args : List Expr) (vs : List Int) : Cmd :=
   .action (.set f args (vs.map num))
@@ -757,6 +767,39 @@ private def curatedMerge : List (String × Program) :=
        .action (.union (C "K") (C "Z")), .action (.union (C "A") (C "Z")),
        .rule (readInto "Hit" "Dist" [C "Z"] 2), .rule (readInto "Miss" "Dist" [C "Z"] 3),
        .run]),
+    -- **`old` is the row that reached the canonical key first**, which is a fact about the
+    -- *order of the unions* and not about either row's age. `A` is created first and holds
+    -- no row, so neither `Dist (B)` nor `Dist (C)` is ever at a canonical key and
+    -- `canonTerm` decides nothing; both `set`s happen before either `union`, so insertion
+    -- age is the same in both members of each pair. What separates them is that the first
+    -- `union` re-keys its row onto `A`, where the second `union` then finds it resident —
+    -- `Impl/Merge.lean`'s `rebuild`. Swapping the two `union`s swaps the answer, and the
+    -- `old` pair is the exact mirror of the `new` pair, which is what says the rebuild
+    -- changed the *binding* rather than the value. Found by `mrand-28`.
+    ("rekey-new",
+      [.decl "Dist" (distPick 1 "new"), .action (.expr (C "A")),
+       mset "Dist" [C "B"] 1, mset "Dist" [C "C"] 2,
+       .action (.union (C "C") (C "A")), .action (.union (C "B") (C "A")),
+       .rule (readInto "Hit" "Dist" [C "A"] 1), .rule (readInto "Miss" "Dist" [C "A"] 2),
+       .run]),
+    ("rekey-new-swap",
+      [.decl "Dist" (distPick 1 "new"), .action (.expr (C "A")),
+       mset "Dist" [C "B"] 1, mset "Dist" [C "C"] 2,
+       .action (.union (C "B") (C "A")), .action (.union (C "C") (C "A")),
+       .rule (readInto "Hit" "Dist" [C "A"] 2), .rule (readInto "Miss" "Dist" [C "A"] 1),
+       .run]),
+    ("rekey-old",
+      [.decl "Dist" (distPick 1 "old"), .action (.expr (C "A")),
+       mset "Dist" [C "B"] 1, mset "Dist" [C "C"] 2,
+       .action (.union (C "C") (C "A")), .action (.union (C "B") (C "A")),
+       .rule (readInto "Hit" "Dist" [C "A"] 2), .rule (readInto "Miss" "Dist" [C "A"] 1),
+       .run]),
+    ("rekey-old-swap",
+      [.decl "Dist" (distPick 1 "old"), .action (.expr (C "A")),
+       mset "Dist" [C "B"] 1, mset "Dist" [C "C"] 2,
+       .action (.union (C "B") (C "A")), .action (.union (C "C") (C "A")),
+       .rule (readInto "Hit" "Dist" [C "A"] 1), .rule (readInto "Miss" "Dist" [C "A"] 2),
+       .run]),
     -- **Primitives outside a `:merge` body.** `min` in a top-level `set`'s value column.
     -- `Hit 1, Miss 0` says the model computed `3`; building the term `min(5, 3)` or getting
     -- stuck gives `0, 0` and computing `max` gives `0, 1`.
@@ -885,6 +928,35 @@ private def curatedMerge : List (String × Program) :=
        .action (.union (C "X") (C "Y")), .action (.union (C "Y") (C "Z")),
        .rule (readInto "Hit" "Dist" [C "X"] 3), .rule (readInto "Miss" "Dist" [C "X"] 2),
        .run]),
+    -- **`old`/`new` per column, at a canonicity-decided collision.** `canon-old` and
+    -- `canon-new` at two value columns: the merge is `(values old0 old1)` resp. `(values
+    -- new0 new1)`, so every column's binding is `mergeEnvIdx`'s rather than `mergeEnv`'s
+    -- and none of it is hidden behind a commutative combiner. `Hit`/`Miss` read the whole
+    -- surviving tuple, so binding `old` and `new` backwards at *any* column moves both
+    -- counts. This is the shape the random stream draws once its value width exceeds one.
+    ("tuple-canon-old",
+      [.decl "Dist" (distPickPair 1 "old"), .action (.expr (C "A")),
+       pset "Dist" [C "K"] 3 4, pset "Dist" [C "A"] 2 6,
+       .action (.union (C "A") (C "K")),
+       .rule (readIntoW "Hit" "Dist" [C "A"] [2, 6]),
+       .rule (readIntoW "Miss" "Dist" [C "A"] [3, 4]), .run]),
+    ("tuple-canon-new",
+      [.decl "Dist" (distPickPair 1 "new"), .action (.expr (C "A")),
+       pset "Dist" [C "K"] 3 4, pset "Dist" [C "A"] 2 6,
+       .action (.union (C "A") (C "K")),
+       .rule (readIntoW "Hit" "Dist" [C "A"] [3, 4]),
+       .rule (readIntoW "Miss" "Dist" [C "A"] [2, 6]), .run]),
+    -- **Equal values at one key**, the other half of the no-conflict skip: the two writes
+    -- are identical, so egglog's insert finds nothing to resolve and the body never runs —
+    -- `L 0, Log 0` — while `Won 1` says the class still holds the value. The model reaches
+    -- the same answer by a different route, `rows` being a `Set` in which the two writes
+    -- are one row, so this is a control on the *agreement* rather than on the skip:
+    -- `merge-body-noop-rebuild` is the same values at congruent-but-unequal keys, where the
+    -- model does have two rows and does need `noConflict`.
+    ("merge-body-noop-samekey",
+      [.decl "Log" logDecl, .decl "Dist" (distLog 1 "old" "new"),
+       mset "Dist" [C "K"] 2, mset "Dist" [C "K"] 2,
+       .rule (readInto "Won" "Dist" [C "K"] 2), .run]),
     -- **Arity 0.** One key class, and it is the empty tuple — `congrKeys` at length zero.
     ("merge-arity0",
       [.decl "Zero" (dist 0), mset "Zero" [] 5, mset "Zero" [] 3,
@@ -960,27 +1032,33 @@ collide and so what the counts actually discriminate on.
 The fragment stays the one `MERGE.md` describes, and both narrowings are justified by the
 model rather than by convenience:
 
-* **Every drawn merge is idempotent** (`min`, `max`, `old`, `new`). A non-idempotent one
-  diverges under our over-approximating reads *by design* — a row collides with itself, so
-  `:merge (+ old new)` derives `2v`, `3v`, … — so a difference would be the design showing,
-  not a bug. Being non-*commutative* is no such excuse, and `old`/`new` are drawn: a
-  commutative merge cannot tell which colliding row the model calls `old`.
+* **Every drawn merge is idempotent** (`min`, `max`, `old`, `new`, one combiner per value
+  column). A non-idempotent one diverges under our over-approximating reads *by design* — a
+  row collides with itself, so `:merge (+ old new)` derives `2v`, `3v`, … — so a difference
+  would be the design showing, not a bug. Being non-*commutative* is no such excuse, and
+  `old`/`new` are drawn: a commutative merge cannot tell which colliding row the model
+  calls `old`.
 * **Merge functions are written and never read** by a *body*, since a body atom reading one
   binds any recorded output where egglog binds the current one. Reading one from a rule
   body is ordinary egglog and `genMergeReadRule` does it.
 
-`MERGE.md`'s third narrowing, "bodies are `let`-only", is **gone as a statement about the
-model** — the reason it gave is wrong. A body that `set`s a side table does not fire on
-self-collisions (`mergeRound` skips `r₁ == r₂`) and does not fire in both orders (once
-`(r₁, r₂)` has fired, `r₁` is gone and `mergeOneWith`'s `rows.contains` test drops
-`(r₂, r₁)`). The `merge-body-*` cases above generate writing bodies — `set`, `union`, and a
-`let`/`set` block — and the two engines agree on all of them. `genMergeSpec` still does not
-draw one, for a different and narrower reason recorded there.
+`MERGE.md`'s third narrowing, "bodies are `let`-only", is **gone**, from the model and now
+from the draw as well. A body that `set`s a side table does not fire on self-collisions
+(`mergeRound` skips `r₁ == r₂`) and does not fire in both orders (once `(r₁, r₂)` has
+fired, `r₁` is gone and `mergeOneWith`'s `rows.contains` test drops `(r₂, r₁)`).
+`genMergeSpec` draws `set`, `union` and `let`/`set` bodies, and `genMergeProgram` declares
+the side table and seeds the equality's operands, so that a body which runs is visible in a
+row count; `genMergeSpec` carries the observability argument for each shape.
 
-Keys are eq-sorted and outputs are `i64`, as the curated cases already are.
+**Eq-sorted merge *output* columns stay out, and not by choice.** `FnDecl` carries no sorts
+at all and `Tests/Egg.lean`'s `FnDecl.toEgg` renders `i64` per output column, so there is
+nothing to draw — it is a missing feature of the fragment rather than a narrowing of it.
+Keys are eq-sorted, as the curated cases already are.
 
-**Divergences this family reaches and does not currently draw.** Each was found by widening
-the draw and minimized by hand against the release binary.
+**Divergences this family found.** Each turned up on widening the draw and was minimized by
+hand against the release binary. Items 1 to 4 are fixed, drawn again, and pinned by a
+curated case above, so a regression now fails the suite rather than waiting for the next
+widening. **Item 5 is open**, and `mrand-28` is red on it.
 
 1. **A read atom's operands were not interned before the congruence test** — *fixed*, and
    pinned by the three `read-unbuilt-key*` cases above. `patternHolds` computed
@@ -1012,7 +1090,26 @@ the draw and minimized by hand against the release binary.
    Reachable from `genKeys`: nothing stops a drawn key from being built before the row
    written at it. `Impl/Merge.lean`'s `canonTerm` is the fix and `MERGE.md`'s "`old` is the
    row at the canonical key" is the evidence, including what it still does not model.
-3. **A value-preserving collision at congruent keys** — *fixed*, and pinned by the four
+3. **egglog resolved a body's nested call with the enclosing column's `old`** — *fixed in
+   the Rust* (issue #59), and pinned by `merge-body-noop-partial` above.
+   `ResolvedMergeFn::run` carried a shortcut returning `cur` whenever the column's own old
+   and new values agreed (egraphs-good/egglog#287), and `run` runs at *every* node of a
+   merge expression — including the `(L)` inside a body's `(set (Log (L)) old0)`, whose
+   sort has nothing to do with the column's. At a collision agreeing on column 0 the
+   shortcut handed that column's `i64` back as `(L)`'s e-class id, and the `Log` row was
+   keyed on a class no term had:
+   ```
+   (function Log (Math) i64 :merge new)
+   (function Dist (Math) (i64 i64) :merge ((set (Log (L)) old0) (values new0 new1)))
+   (set (Dist (X)) (values 2 1)) (set (Dist (Y)) (values 2 5)) (union (X) (Y)) (run 1)
+   ```
+   `run_result` is the fix: the shortcut now applies once per value column's *result*
+   expression and never to a nested call. Upstream has the same defect and returns a wrong
+   `i64` from it (egraphs-good/egglog#987); only a `:merge` action block lets a nested call
+   carry an eq-sort, which is what made it a dangling class here. Reachable the moment a
+   writing body is drawn, which is the first of the two reasons `genMergeSpec` did not draw
+   one.
+4. **A value-preserving collision at congruent keys** — *fixed*, and pinned by the four
    `merge-body-noop-*` cases above. egglog skips a `:merge` **action block** outright when
    the collision leaves every value column unchanged (`egglog-bridge/src/lib.rs`, `MergeFn`'s
    `unchanged_width`), comparing the two rows' *values* and saying nothing about their keys,
@@ -1024,45 +1121,151 @@ the draw and minimized by hand against the release binary.
    (set (Dist (X)) 2) (set (Dist (Y)) 2) (union (X) (Y)) (run 1)
    ```
    egglog answered `L 0, Log 0` and the model `L 1, Log 1`; a `union` body answered `W 2`
-   there and `W 1` here. `Impl/Merge.lean`'s `noConflict` is the fix. Reachable from
-   `genKeys` and `genMergeRule` the moment a writing body is drawn, which is what it
-   blocked; the block is now lifted, and widening `genMergeSpec` is a separate change. -/
+   there and `W 1` here. `Impl/Merge.lean`'s `noConflict` is the fix — `mergeOneOriented`
+   declines when the body is non-empty and `r₁.out == r₂.out`. Reachable from `genKeys` and
+   `genMergeRule` the moment a writing body is drawn, which was the second reason; both
+   reasons are gone and `genMergeSpec` draws writing bodies now.
+5. **Which colliding row is resident, when a class is built up by *successive* unions** —
+   **open**, and the reason `mrand-28` is red. `mergeOneWith` falls back on insertion age
+   whenever neither colliding key is canonical, on the reading that egglog re-inserts both
+   rows and stages them in table order. egglog does that only when both keys move in *one*
+   rebuild. A key unioned into the class by an **earlier** command has already been
+   rewritten to the canonical key, so its row is the resident one — `cur`, hence `old` —
+   however recently it was written:
+   ```
+   (function Dist (Math) i64 :merge new)
+   (A) (set (Dist (B)) 1) (set (Dist (C)) 2) (union (C) (A)) (union (B) (A))
+   ```
+   `A` is canonical, `C`'s row is rewritten onto it by the first union, and `B`'s row is
+   merged onto that by the second, so egglog keeps `1` — the *older* row's value, under
+   `:merge new` — where the model keeps `2`. Swapping the two `union` commands makes the two
+   agree, and `:merge old` mirrors it exactly, so the trigger is "the younger row's key is
+   canonicalized first" and nothing else. `canon-none-old` and `canon-none-new` are the
+   shape where the two readings agree, and they agree only because the older row's key
+   happens to be unioned first.
 
-/-- The merge specs the generator draws from: `:merge old` and `:merge new`, then `min`
-and `max`, each of the latter in the expression form and in the action-block form.
+   `MERGE.md` records the residual — "when neither colliding key is canonical, egglog's
+   survivor sits at the canonical key and this model's sits at the older row's key" — but
+   calls it invisible "until a row appears at that third key later". It is not: a
+   non-commutative merge and two `union` commands suffice, with no third row anywhere. The
+   model cannot currently state the fix either, since it never re-keys a row and so has
+   nowhere to record that one of the pair *reached* the canonical key first. Reachable from
+   `genMergeProgram`'s column-wise key unions, which is how it turned up. -/
 
-`old` and `new` are the two **non-commutative** merges, and they are here because a
-commutative one cannot see which of the colliding rows the model calls `old`. The model
-had them backwards — `:merge old` returned what `:merge new` should — and 122 green cases
-said nothing, because every merge they drew was `min` or `max`. They are still joins in
-the sense that matters here (`merge v v = v`, so a pass settles), and they are exactly as
-deterministic in egglog as `min` is: `old` is the value already in the table and `new` the
-one being inserted.
+/-- The value-column variables a `:merge` body sees at column `i` of a width-`w` output.
+`mergeEnv` binds egglog's unindexed `old`/`new` at one value column and `old0`/`new0`/…
+above, so the naming is a function of the width rather than a choice. -/
+private def oldAt (w i : Nat) : Expr := .var (if w == 1 then "old" else "old" ++ toString i)
 
-A difference shows through `(print-size)` because `genMergeReadRule` guards on the value:
-a rule reading `(= v (Dist k))` fires or does not according to which value survived the
-collision, and its head's `Hit` rows are counted.
+/-- `oldAt`'s counterpart, the arriving row's column `i`. -/
+private def newAt (w i : Nat) : Expr := .var (if w == 1 then "new" else "new" ++ toString i)
 
-**Writing bodies are still not drawn here**, but the blocker is gone. It was a live
-divergence: egglog skips a `:merge` action block outright when the collision leaves every
-value column unchanged, comparing the two rows' *values* and nothing about their keys,
-where `mergeRound` skipped an identical *row*, so two rows at congruent but unequal keys
-holding the same value were a no-op there and a firing pair here. `Impl/Merge.lean`'s
-`noConflict` closed that, and the `merge-body-noop-*` cases pin it, so a draw over keys,
-values and a rule head can now be given a writing body. Widening this function to draw one
-is a separate change and deliberately not made here.
+/-- One value column's combiner, over that column's own `old`/`new` pair. -/
+private def genCombiner (w i : Nat) (s : Nat) : Expr × Nat :=
+  let (j, s) := pick 4 s
+  match j with
+  | 0 => (oldAt w i, s)
+  | 1 => (newAt w i, s)
+  | k => (.app (if k == 2 then "min" else "max") [oldAt w i, newAt w i], s)
 
-The `let`-only block form drawn here takes egglog's skip too, unobservably — such a body
-writes nothing and its result is `min v v = v` either way. -/
-private def genMergeSpec (s : Nat) : MergeSpec × Nat :=
-  let (i, s) := pick 6 s
-  match i with
-  | 0 => (.merge [] [.var "old"], s)
-  | 1 => (.merge [] [.var "new"], s)
-  | k =>
-    let combined : Expr := .app (if k % 2 == 0 then "min" else "max") [.var "old", .var "new"]
-    if k < 4 then (.merge [] [combined], s)
-    else (.merge [.letBind "s" combined] [.var "s"], s)
+/-- A combiner per value column of a width-`w` output — columns `w - k` through `w - 1`,
+so a call at `k = w` fills the whole tuple from column 0. -/
+private def genCombiners (w : Nat) : Nat → Nat → List Expr × Nat
+  | 0, s => ([], s)
+  | k + 1, s =>
+    let (e, s) := genCombiner w (w - (k + 1)) s
+    let (es, s) := genCombiners w k s
+    (e :: es, s)
+
+/-- A merge specification for a width-`w` output: one combiner per value column, under a
+body that is empty half the time and **writes** in three draws of eight.
+
+**The combiners** are `old`, `new`, `min` and `max`, drawn per column. `old` and `new` are
+the two **non-commutative** merges, and they are here because a commutative one cannot see
+which of the colliding rows the model calls `old`. The model had them backwards — `:merge
+old` returned what `:merge new` should — and 122 green cases said nothing, because every
+merge they drew was `min` or `max`. They are still joins in the sense that matters here
+(`merge v v = v`, so a pass settles), and they are exactly as deterministic in egglog as
+`min` is: `old` is the value already in the table and `new` the one being inserted. Drawing
+each column independently is what makes `mergeEnvIdx`'s indexing load-bearing above width
+one — a body reading `old0` where the column is `old1` computes a different tuple, and the
+guarded reads stop firing.
+
+**The bodies**, and what a row count sees of each:
+
+* `(set (Log (L)) …)` — `L` and `Log` occur nowhere else in a generated program, so both
+  counts are 0 if the body never ran and 1 if it did, which separates "runs the body" from
+  "ignores it" with no rule at all. `genMergeProgram`'s `Kept`/`Lost` rules then read
+  `Log`'s value against the two colliding column-0 values, so the pair also reports *which*
+  of the two rows the model called `old` from inside a body. This draw is also what puts
+  **two** merge functions in one program, the second written from the first's body.
+* `(union (U) (V))` — `genMergeProgram` seeds `W` at both operands, so `W` is 2 if the body
+  never ran and 1 if it did. The body's whole effect is an equality, and an equality is
+  exactly what a row count can see. This is egglog's union-find `:merge` in miniature.
+* a `let` and a `set` of the bound variable, which is the block form past one action and a
+  `let`-bound value flowing into both a `set` and the result tuple.
+
+The `let`-only draw writes nothing, and it takes egglog's no-op skip unobservably: its
+result is `min v v = v` either way.
+
+**Why a writing body could not be drawn before**, and it was never a fragment question:
+two successive divergences, both recorded above. egglog keyed the side table's row on a
+dangling e-class whenever the collision left the body's column unchanged (3), and once the
+Rust was fixed the model fired the body at congruent-but-unequal keys holding the same
+value, where egglog skips (4). A writing body is precisely the observer for both, which is
+why widening the draw is what found them. -/
+private def genMergeSpec (w : Nat) (s : Nat) : MergeSpec × Nat :=
+  let (res, s) := genCombiners w w s
+  let (logged, s) := genCombiner w 0 s
+  let (shape, s) := pick 8 s
+  match shape with
+  | 4 => (.merge [.letBind "s" logged] (.var "s" :: res.tail), s)
+  | 5 => (.merge [.set "Log" [C "L"] [logged]] res, s)
+  | 6 => (.merge [.union (C "U") (C "V")] res, s)
+  | 7 => (.merge [.letBind "s" logged, .set "Log" [C "L"] [.var "s"]]
+            (.var "s" :: res.tail), s)
+  | _ => (.merge [] res, s)
+
+/-- Whether a drawn body writes the side table, which the program then has to declare —
+`writeCase`'s `illegalSets` guard is what an omission would trip. -/
+private def specSetsLog (m : MergeSpec) : Bool := m.setTargets.contains "Log"
+
+/-- Whether a drawn body asserts an equality, which only `seedW` makes observable. -/
+private def specUnions : MergeSpec → Bool
+  | .merge body _ => body.any fun a => match a with
+    | .union _ _ => true
+    | _ => false
+  | _ => false
+
+/-- One value column: a literal, or `min`/`max` applied to two of them, together with the
+integer it denotes.
+
+This is where the random stream gets a primitive **outside** a `:merge` body — a value
+column of a top-level `set` and of a rule head's, which is where `tests/interval.egg` puts
+one too. `min` and `max` are the one place the model *computes* rather than *builds*
+(`Prim.apply` against `Expr.eval`'s constructor case), and returning the denotation beside
+the expression is what makes that observable: `witnessRule` reads the row back at the
+literal the primitive must produce, so a model that built the term `min(5, 3)`, computed
+the other operation, or got stuck writes something the read cannot find and `Won` falls to
+0. Getting stuck is louder still — `expectedSizes` prints `STUCK`. -/
+private def genValue (s : Nat) : Expr × Int × Nat :=
+  let (i, s) := pick 4 s
+  let (a, s) := pick 9 s
+  let x : Int := a
+  if i < 2 then (num x, x, s)
+  else
+    let (b, s) := pick 9 s
+    let y : Int := b
+    if i == 2 then (.app "min" [num x, num y], min x y, s)
+    else (.app "max" [num x, num y], max x y, s)
+
+/-- `n` value columns, each with the integer it denotes. -/
+private def genValues : Nat → Nat → List (Expr × Int) × Nat
+  | 0, s => ([], s)
+  | k + 1, s =>
+    let (e, v, s) := genValue s
+    let (es, s) := genValues k s
+    ((e, v) :: es, s)
 
 /-- `n` ground key expressions. Shallow: a key is a term like any other, so a deep one
 inflates the term set the enumerator squares. -/
@@ -1084,15 +1287,17 @@ private def genKeysOver (vars : List Var) : Nat → Nat → List Expr × Nat
     (e :: es, s)
 
 /-- A rule writing a `Dist` row, so a merge fires from a firing and not only from a
-top-level action. The body is abstracted from a term the program builds, so it fires. -/
-private def genMergeRule (arity : Nat) (src : Expr) (s : Nat) : Rule × Nat :=
+top-level action. The body is abstracted from a term the program builds, so it fires, and
+the value columns are `genValue`'s, so a primitive is applied in a **rule head** — the
+position `Rule.noLookup` polices and so the one most likely to be rejected by mistake. -/
+private def genMergeRule (arity w : Nat) (src : Expr) (s : Nat) : Rule × Nat :=
   let (p, s) := genPattern ["a", "b"] src s
   let (ks, s) := genKeysOver p.vars arity s
-  let (v, s) := pick 9 s
-  (⟨[.expr p], [.set "Dist" ks [num v]]⟩, s)
+  let (vs, s) := genValues w s
+  (⟨[.expr p], [.set "Dist" ks (vs.map Prod.fst)]⟩, s)
 
-/-- Reads back the value the program wrote *first*, at the key it wrote it at, and builds
-`Won` if it is still there.
+/-- Reads back the value tuple the program wrote *first*, at the key it wrote it at, and
+builds `Won` if it is still there.
 
 Drawn from nothing: every generated case gets this rule. It is what makes a merge's
 **answer** observable through an oracle that only counts rows — `Won` is 1 exactly when the
@@ -1101,9 +1306,13 @@ and are indistinguishable everywhere else. `genMergeReadRule` cannot do the job,
 draws its key and value and so reports on a collision only by luck: with the model binding
 `old` and `new` backwards, all 30 generated merge cases still passed.
 
+Above width one the tuple is read whole, so a per-column combiner drawn from the wrong
+`mergeEnvIdx` binding also moves it; and the values are `genValue`'s **denotations**, so a
+primitive the model built instead of computing moves it too.
+
 The query is ground, so it costs one substitution and no enumeration. -/
-private def witnessRule (key : List Expr) (val : Nat) : Rule where
-  query := [.values [num val] "Dist" key]
+private def witnessRule (key : List Expr) (vals : List Int) : Rule where
+  query := [.values (vals.map num) "Dist" key]
   actions := [.expr (.app "Won" key)]
 
 /-- A rule *reading* `Dist` from its body: a `Pattern.values` atom whose value column is
@@ -1121,24 +1330,44 @@ the draw prefers them to freshly generated ones — the same correction `genPatt
 and for the same reason. A freely drawn key hits a written one by luck, and a freely drawn
 value matches by one chance in nine, so most reads returned nothing: with the free draw
 only 6 of 30 generated cases had the read fire at all, which is coverage of the *failing*
-branch of a lookup and not of a lookup. -/
-private def genMergeReadRule (arity : Nat) (src : Expr) (key : List Expr) (val : Nat)
-    (s : Nat) : Rule × Nat :=
+branch of a lookup and not of a lookup.
+
+The existence shape binds **one** fresh variable, in column 0, and pins the remaining
+columns at literals. `matchQuery` enumerates `|terms| ^ |vars|`, so a fresh variable per
+column would cost a width-3 read two more factors of the term set and time the case out —
+and a timeout is a case the suite *loses*, not a case it runs. -/
+private def genMergeReadRule (arity w : Nat) (src : Expr) (key : List Expr)
+    (vals : List Int) (s : Nat) : Rule × Nat :=
   let (p, s) := genPattern ["a", "b"] src s
   let (useKey, s) := pick 3 s
   let (ks, s) := if useKey = 0 then genKeysOver p.vars arity s else (key, s)
   let (useVal, s) := pick 3 s
-  let (v, s) := if useVal = 0 then pick 9 s else (val, s)
+  let (vs, s) :=
+    if useVal = 0 then
+      let (fresh, s) := genValues w s
+      (fresh.map Prod.snd, s)
+    else (vals, s)
   let (shape, s) := pick 2 s
-  let body : Query :=
-    if shape = 0 then [.expr p, .values [.var "o"] "Dist" ks]
-    else [.expr p, .values [num v] "Dist" ks]
-  (⟨body, [.expr (.app "Hit" [p])]⟩, s)
+  let cols : List Expr :=
+    if shape = 0 then .var "o" :: (vs.map num).tail else vs.map num
+  (⟨[.expr p, .values cols "Dist" ks], [.expr (.app "Hit" [p])]⟩, s)
 
+/-- One random `:merge` case.
+
+The **key arity** is drawn from 0 to 3 and the **value width** from 1 to 3, so the two
+column counts that had never varied now do. Arity 0 is the empty key tuple — `congrKeys` at
+length zero, with one key class for the whole table — and arity 3 makes the key comparison
+walk two columns before reaching the one a `union` moved. Width above one is what gives
+`mergeEnvIdx`'s indexed bindings anything to get wrong.
+
+The side table and the equality seeds are conditional on what `genMergeSpec` drew, because
+neither is inert: `Log` has to be declared *before* `Dist`, whose body writes it, and `W`'s
+two rows are what turn a body's `union` into a row count. -/
 private def genMergeProgram (s : Nat) : Program :=
-  let (a, s) := pick 2 s
-  let arity := a + 1
-  let (spec, s) := genMergeSpec s
+  let (arity, s) := pick 4 s
+  let (w, s) := pick 3 s
+  let width := w + 1
+  let (spec, s) := genMergeSpec width s
   let (g, s) := genGround 2 s
   let (k₁, s) := genKeys arity s
   -- Half the cases write the second row at the *first* row's key, which is the only way a
@@ -1149,21 +1378,54 @@ private def genMergeProgram (s : Nat) : Program :=
   let (k₂', s) := genKeys arity s
   let k₂ := if sameKey = 0 then k₁ else k₂'
   let (k₃, s) := genKeys arity s
-  let (v₁, s) := pick 9 s
-  let (v₂, s) := pick 9 s
-  let (v₃, s) := pick 9 s
+  let (v₁, s) := genValues width s
+  -- And half write the second row with the *first* row's values. Two colliding rows that
+  -- agree on every value column are a collision egglog resolves by running **no** body at
+  -- all, and the model's `noConflict` has to agree; drawing the columns independently
+  -- reaches that at roughly one chance in `9 ^ width`, which is to say never. With
+  -- `sameKey` this is the equal-values-at-one-key shape, and with the key union below it is
+  -- the congruent-but-unequal-keys one — the two shapes the writing-body divergences
+  -- turned on.
+  let (sameVal, s) := pick 2 s
+  let (v₂', s) := genValues width s
+  let v₂ := if sameVal = 0 then v₁ else v₂'
+  let (v₃, s) := genValues width s
   let (u₁, s) := genGround 1 s
   let (u₂, s) := genGround 1 s
-  let (r, s) := genMergeRule arity g s
-  let (rr, s) := genMergeReadRule arity g k₁ v₁ s
+  let (r, s) := genMergeRule arity width g s
+  let (rr, s) := genMergeReadRule arity width g k₁ (v₁.map Prod.snd) s
+  let (uShape, s) := pick 2 s
   let (rounds, _) := pick 2 s
-  [ .decl "Dist" { arity := arity, outArity := 1, merge := spec },
-    .action (.expr g),
-    .action (.set "Dist" k₁ [num v₁]),
-    .action (.set "Dist" k₂ [num v₂]),
-    .action (.set "Dist" k₃ [num v₃]),
-    .action (.union u₁ u₂),
-    .rule r, .rule rr, .rule (witnessRule k₁ v₁) ]
+  -- The `union`s. Two freely drawn ground terms relate the program's own keys only by
+  -- luck, so half the cases instead union `k₁` and `k₂` **column by column**, which is what
+  -- makes their rows collide during the rebuild rather than at the `set`. That collision is
+  -- the shape `canon-*`, the `old`/`new` binding and the no-conflict skip all turn on, and
+  -- unioning one column would not produce it above arity 1 — congruence is pointwise, so
+  -- every column has to move. At arity 0 there is no column to union and the drawn pair is
+  -- the only option; the key class is the empty tuple, which collides on its own.
+  let unions : List Cmd :=
+    if uShape = 0 || arity = 0 then [.action (.union u₁ u₂)]
+    else (k₁.zip k₂).map fun p => .action (.union p.1 p.2)
+  -- `Log` and `L` report *whether* the body ran, in their own row counts and with no rule.
+  -- `Kept`/`Lost` read the logged value against the two colliding column-0 values, which
+  -- is what reports which row the body called `old`; a single marker would confuse "the
+  -- wrong value" with "no value at all".
+  let logDecls : Program := if specSetsLog spec then [.decl "Log" logDecl] else []
+  let logReads : Program :=
+    if specSetsLog spec then
+      [.rule (readInto "Kept" "Log" [C "L"] ((v₁.map Prod.snd).headD 0)),
+       .rule (readInto "Lost" "Log" [C "L"] ((v₂.map Prod.snd).headD 0))]
+    else []
+  logDecls
+    ++ [ .decl "Dist" { arity := arity, outArity := width, merge := some spec } ]
+    ++ (if specUnions spec then seedW else [])
+    ++ [ .action (.expr g),
+         .action (.set "Dist" k₁ (v₁.map Prod.fst)),
+         .action (.set "Dist" k₂ (v₂.map Prod.fst)),
+         .action (.set "Dist" k₃ (v₃.map Prod.fst)) ]
+    ++ unions
+    ++ [ .rule r, .rule rr, .rule (witnessRule k₁ (v₁.map Prod.snd)) ]
+    ++ logReads
     ++ List.replicate (rounds + 1) Cmd.run
 
 /-! ### Entry point -/

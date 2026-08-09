@@ -188,12 +188,12 @@ carry it along the semantics, which takes three side conditions, each of them ne
 Under the first two together there is in fact no legal `set` at all
 (`Action.SetLegal.elim`): the constructor fragment is exactly the fragment with no
 `set`, which is also why nothing before M9 needed any of this. -/
-/-- **No `set` is legal on an all-constructors signature.** `SetLegal` asks for a merge
-that is not `.union` and there is none, so every `set` case below is impossible rather
+/-- **No `set` is legal on an all-constructors signature.** `SetLegal` asks for a
+non-constructor and there is none, so every `set` case below is impossible rather
 than merely well behaved. -/
 theorem Action.SetLegal.elim {sig : Signature} (hsig : sig.AllConstructors) {f : FnName}
     {args out : List Expr} (h : (Action.set f args out).SetLegal sig) : False :=
-  h (Signature.mergeOf_eq_union hsig f)
+  h (hsig f)
 
 /-- `SetLegal` does not care *which* all-constructors signature it is read against,
 because under one there is no legal `set` to disagree about. This is what lets a `decl`
@@ -220,13 +220,12 @@ theorem Signature.AllConstructors.sigBind {sig : Signature} (h : sig.AllConstruc
     {c : Cmd} (hc : c.CtorDecl) : (c.sigBind sig).AllConstructors := by
   cases c with
   | decl f d =>
-    intro g d' hg
-    by_cases hgf : g = f
-    · subst hgf
-      rw [Cmd.sigBind, Function.update_self] at hg
-      exact Option.some.inj hg ▸ hc
-    · rw [Cmd.sigBind, Function.update_of_ne hgf] at hg
-      exact h g d' hg
+    intro g
+    change ((Function.update sig f (some d)) g).bind FnDecl.merge = none
+    rw [Function.update_apply]
+    split
+    · exact hc
+    · exact h g
   | _ => exact h
 
 /-- The state half of the constructor fragment: the signature declares only
@@ -241,7 +240,7 @@ structure Database.CtorState (db : Database) : Prop where
   rows : db.CtorRows
 
 theorem Database.CtorState.empty : Database.empty.CtorState where
-  sig := by intro f d h; simp [Database.empty] at h
+  sig := by intro f; simp [Signature.IsCtor, Signature.mergeOf, Database.empty]
   rules := by simp [Database.empty]
   rows := Database.CtorRows.empty
 
@@ -368,9 +367,7 @@ theorem RunStep.sig {db db' : Database} (h : RunStep db db') : db'.sig = db.sig 
 theorem MergeStep.not_of_allConstructors {db db' : Database}
     (hsig : db.sig.AllConstructors) (h : MergeStep db db') : False := by
   cases h with
-  | collide _ _ _ hm _ _ =>
-    rw [Signature.mergeOf_eq_union hsig] at hm
-    exact absurd hm (by simp)
+  | collide _ _ _ hm _ _ => exact hsig.elim hm
 
 theorem MergeClosure.eq_of_allConstructors {db db' : Database}
     (hsig : db.sig.AllConstructors) (h : MergeClosure db db') : db' = db := by
@@ -394,7 +391,7 @@ This is the one place the preservation chain needed a side condition beyond the 
 one, and it is why `ProgramStep.ctorRows` takes `Program.CtorDecls`. -/
 theorem exists_mergeStep_not_ctorRows :
     ∃ db db' : Database, db.CtorRows ∧ MergeStep db db' ∧ ¬db'.CtorRows :=
-  ⟨{ sig := fun g => if g = "f" then some ⟨0, 1, .merge [] [.lit (.int 0)]⟩ else none
+  ⟨{ sig := fun g => if g = "f" then some ⟨0, 1, some (.merge [] [.lit (.int 0)])⟩ else none
      terms := (Term.app "f" []).subterms
      rows := Database.ctorRowsOf (Term.app "f" []).subterms
      eqs := ∅

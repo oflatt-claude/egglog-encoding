@@ -188,7 +188,7 @@ example : ValidSubst preWrapped (.expr (.app "wrapper" [eNum 1])) [] :=
     ⟨by simp [eNum], by simp⟩
     (by simp [preWrapped])
     (by simp [Expr.eval, Expr.evalList, eNum, num, preWrapped, Prim.ofName,
-      Signature.mergeOf])
+      Signature.IsCtor, Signature.mergeOf])
     (.congr (by simp [preWrapped]) (by simp [preWrapped])
       (.cons (.symm (.assert (by simp [preWrapped]))) .nil))
 
@@ -264,7 +264,7 @@ private theorem preRun_eq :
     runProgram Database.empty [.action (.expr (.app "Add" [eNum 1, eNum 2])), .rule swapRule]
       = some preRun := by
   simp [runProgram, stepCmd, evalAction, Expr.eval, Expr.evalList, Database.empty, preRun,
-    eNum, num, add12, Database.addTerm, Prim.ofName, Signature.mergeOf]
+    eNum, num, add12, Database.addTerm, Prim.ofName, Signature.IsCtor, Signature.mergeOf]
 
 private theorem run_ruleProgram : run ruleProgram = some (runRules preRun) := by
   change runProgram Database.empty
@@ -283,7 +283,7 @@ private theorem swap_matches :
     rcases hc with rfl | rfl <;> simp [preRun, add12, num]
   · simp [preRun, add12]
   · simp [Expr.eval, Expr.evalList, Env.lookup, preRun, add12, num, noSig, Prim.ofName,
-      Signature.mergeOf]
+      Signature.IsCtor, Signature.mergeOf]
   · simp [preRun, add12]
 
 /-- Running that firing adds `(Add 2 1)` and its children. -/
@@ -292,7 +292,8 @@ private theorem swap_fires :
       = some { preRun with terms := preRun.terms ∪ add21.subterms,
                            rows := preRun.rows ∪ add21.ctorRows } := by
   simp [evalLocalActions, evalActions, evalAction, Expr.eval, Expr.evalList, Env.lookup,
-    swapRule, preRun, add21, num, Database.addTerm, Prim.ofName, Signature.mergeOf]
+    swapRule, preRun, add21, num, Database.addTerm, Prim.ofName, Signature.IsCtor,
+    Signature.mergeOf]
 
 /-- `(Add 2 1)` is in the database after the run. -/
 example : ∃ db, run ruleProgram = some db ∧ add21 ∈ db.terms := by
@@ -411,11 +412,12 @@ set_option linter.hashCommand false
 private def emptySig : Signature := fun _ => none
 
 /- `(function Dist (Math) i64 :merge 0)`. -/
-private def one : FnDecl := { arity := 1, outArity := 1, merge := .merge [] [eNum 0] }
+private def one : FnDecl :=
+  { arity := 1, outArity := 1, merge := some (.merge [] [eNum 0]) }
 
 /- `(function Dist (Math) (i64 i64) :merge (values 0 1))`. -/
 private def two : FnDecl :=
-  { arity := 1, outArity := 2, merge := .merge [] [eNum 0, eNum 1] }
+  { arity := 1, outArity := 2, merge := some (.merge [] [eNum 0, eNum 1]) }
 
 private def A : Expr := .app "A" []
 
@@ -470,29 +472,31 @@ column or none. -/
 
 /- "The :merge of tuple-output function Dist has 1 columns but the function has 2 output
 columns." -/
-#guard !accepts { two with merge := .merge [] [eNum 0] } []
+#guard !accepts { two with merge := some (.merge [] [eNum 0]) } []
 
 /- "Function F has a tuple output, which is only allowed for plain functions (not
 constructors, relations, or view tables)." -/
-#guard !Program.arityOk [.decl "F" { arity := 1, outArity := 2, merge := .union }] emptySig
+#guard !Program.arityOk [.decl "F" { arity := 1, outArity := 2, merge := none }] emptySig
 
 /- `:no-merge` has no result to check, and a tuple output is legal on one. -/
-#guard Program.arityOk [.decl "F" { arity := 1, outArity := 2, merge := .noMerge }] emptySig
+#guard Program.arityOk
+  [.decl "F" { arity := 1, outArity := 2, merge := some .noMerge }] emptySig
 
 /- A merge body is checked against the signature the declaration itself installs, so it
 may write the function's own table — `(function Dist (Math) i64 :merge ((set (Dist (A)) 1)
 (min old new)))` runs. A forward reference is instead "Unbound function". -/
-#guard accepts { one with merge := .merge [.set "Dist" [A] [eNum 1]] [eNum 0] } []
+#guard accepts { one with merge := some (.merge [.set "Dist" [A] [eNum 1]] [eNum 0]) } []
 
 /- …and its arity is checked there too: "Arity mismatch, expected 1 args:
 (Dist @A @A1)". -/
-#guard !accepts { one with merge := .merge [.set "Dist" [A, A] [eNum 1]] [eNum 0] } []
+#guard !accepts
+  { one with merge := some (.merge [.set "Dist" [A, A] [eNum 1]] [eNum 0]) } []
 
 /-! ### Undeclared names are unconstrained
 
-Constructors are never declared here — `Signature.mergeOf` sends an undeclared name to
-`.union` — so there is nothing for a use to disagree with, and the check passes a name used
-at two arities. `Tests/Egg.lean`'s `Program.arityConflicts` is that half, because it is the
+Constructors are never declared here — `Signature.IsCtor` calls an undeclared name a
+constructor — so there is nothing for a use to disagree with, and the check passes a name
+used at two arities. `Tests/Egg.lean`'s `Program.arityConflicts` is that half, because it is the
 emitted `datatype` header that cannot express it. -/
 #guard Program.arityOk [.action (.expr (.app "F" [A])), .action (.expr (.app "F" [A, A]))]
   emptySig
@@ -517,7 +521,7 @@ private def emptySig : Signature := fun _ => none
 /- `(function Dist (Math) i64 :merge (min old new))` and a second like it. -/
 private def dist : FnDecl :=
   { arity := 1, outArity := 1,
-    merge := .merge [] [.app "min" [.var "old", .var "new"]] }
+    merge := some (.merge [] [.app "min" [.var "old", .var "new"]]) }
 
 private def decls : Program := [.decl "Dist" dist, .decl "Copy" dist]
 
@@ -551,9 +555,10 @@ to `Pattern.values` and so what removes `Expr.eval`'s `lookup` constructor. -/
 `(function Dist (Math) i64 :merge (max old (Zero)))` reads `Zero` and panics with
 "Lookup on Zero failed in the merge function for Dist" when the row is missing. -/
 #guard !Program.noLookup
-  [.decl "Zero" { arity := 0, outArity := 1, merge := .merge [] [.lit (.int 0)] },
+  [.decl "Zero" { arity := 0, outArity := 1, merge := some (.merge [] [.lit (.int 0)]) },
    .decl "Dist" { arity := 1, outArity := 1,
-                  merge := .merge [] [.app "max" [.var "old", .app "Zero" []]] }] emptySig
+                  merge := some (.merge [] [.app "max" [.var "old", .app "Zero" []]]) }]
+  emptySig
 
 /- A read nested in a query fact. egglog flattens `(F (Dist k))` into the two atoms
 `Dist(k, v), F(v, o)`; this model has no flattening pass, so it must be written flat. -/
@@ -562,16 +567,17 @@ to `Pattern.values` and so what removes `Expr.eval`'s `lookup` constructor. -/
 
 /-! ### What still passes
 
-A constructor, a primitive and a literal are not reads. `Signature.mergeOf` sends an
-undeclared name to `.union`, which covers the first two without a case of their own — so a
-merge body computing `(min old new)` is fine, and a body writing its own table is a write.
+A constructor, a primitive and a literal are not reads. `Signature.IsCtor` calls an
+undeclared name a constructor, which covers the first two without a case of their own — so
+a merge body computing `(min old new)` is fine, and a body writing its own table is a
+write.
 -/
 #guard ok [.action (.expr (.app "F" [A])), .action (.union A (.app "G" [A, A]))]
 #guard Program.noLookup decls emptySig
 #guard Program.noLookup
   [.decl "Dist" { arity := 1, outArity := 1,
-                  merge := .merge [.set "Dist" [A] [.lit (.int 1)]]
-                    [.app "min" [.var "old", .var "new"]] }] emptySig
+                  merge := some (.merge [.set "Dist" [A] [.lit (.int 1)]]
+                    [.app "min" [.var "old", .var "new"]]) }] emptySig
 
 end Reading
 

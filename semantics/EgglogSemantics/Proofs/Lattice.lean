@@ -41,13 +41,13 @@ theorem meval_var {sig : Signature} {σ : Env} {v : Var} {t : Term}
 theorem meval_nullary {sig : Signature} {σ : Env} {f : FnName} {t : Term}
     (hp : Prim.ofName f = none) (h : Expr.eval sig (.app f []) σ = some t) :
     t = .app f [] := by
-  cases hu : sig.mergeOf f with
-  | union =>
+  match hu : sig.mergeOf f with
+  | none =>
     rw [Expr.eval_app_ctor hp hu, Expr.evalList_nil, Option.map_some,
       Option.some.injEq] at h
     exact h.symm
-  | merge b r => rw [Expr.eval_app_merge hp hu] at h; simp at h
-  | noMerge => rw [Expr.eval_app_noMerge hp hu] at h; simp at h
+  | some (.merge b r) => rw [Expr.eval_app_merge hp hu] at h; simp at h
+  | some .noMerge => rw [Expr.eval_app_noMerge hp hu] at h; simp at h
 
 theorem mevalList_one {sig : Signature} {σ : Env} {e : Expr} {ts : List Term}
     (h : Expr.evalList sig [e] σ = some ts) :
@@ -77,14 +77,14 @@ theorem mevalList_single_nullary {sig : Signature} {σ : Env} {f : FnName} {vs :
 /-! ## Only the declared name has a `:merge` body -/
 
 theorem mergeOf_update_inv {dc : FnDecl} {f g : FnName} {body₀ body : List Action}
-    {res₀ res : List Expr} (hdc : dc.merge = MergeSpec.merge body₀ res₀)
+    {res₀ res : List Expr} (hdc : dc.merge = some (MergeSpec.merge body₀ res₀))
     (h : Signature.mergeOf (Function.update (fun _ => none) f (some dc)) g =
-      MergeSpec.merge body res) : body = body₀ ∧ res = res₀ := by
+      some (MergeSpec.merge body res)) : body = body₀ ∧ res = res₀ := by
   rw [Signature.mergeOf, Function.update_apply] at h
   by_cases hg : g = f
   · rw [if_pos hg] at h
     change dc.merge = _ at h
-    rw [hdc] at h
+    rw [hdc, Option.some.injEq] at h
     exact ⟨((MergeSpec.merge.injEq .. ▸ h : _ ∧ _).1).symm,
       ((MergeSpec.merge.injEq .. ▸ h : _ ∧ _).2).symm⟩
   · rw [if_neg hg] at h; exact absurd h (by simp)
@@ -99,11 +99,11 @@ def CurrentOfLattice : Prop :=
     execM p = some d →
     (∀ x y, le x y → le y x → x = y) →
     (∀ (f : FnName) (body : List Action) (res : List Expr) (a b vs : List Term),
-      d.sig.mergeOf f = MergeSpec.merge body res →
+      d.sig.mergeOf f = some (MergeSpec.merge body res) →
       (∃ e, evalActions { d.toDatabase with env := mergeEnv a b } body = some e ∧
         Expr.evalList e.sig res e.env = some vs) → le a vs ∧ le b vs) →
     ∀ (f : FnName) (as vs : List Term) (body : List Action) (res : List Expr),
-      d.sig.mergeOf f = MergeSpec.merge body res →
+      d.sig.mergeOf f = some (MergeSpec.merge body res) →
       Row.mk f as vs ∈ d.rows →
       ∃ db, ProgramStep FDatabase.empty.toDatabase p db ∧ db.Current le f as vs
 
@@ -128,7 +128,7 @@ pair of operands: `min` is an `i64` primitive and `(a)` is a constructor term, s
 `Prim.apply` is `none` however the collision arose. -/
 def stuckDecl : FnDecl :=
   { arity := 0, outArity := 1,
-    merge := .merge [] [.app "min" [.lit (.int 1), eA]] }
+    merge := some (.merge [] [.app "min" [.lit (.int 1), eA]]) }
 
 /-- `(function f () i64 :merge (min 1 (a)))  (set (f) (a))`. -/
 def pA : Program := [.decl "f" stuckDecl, .action (.set "f" [] [eA])]
@@ -142,7 +142,7 @@ theorem dA_sig : dA.sig = Function.update (fun _ => none) "f" (some stuckDecl) :
 theorem dA_row : (Row.mk "f" [] [tA]) ∈ dA.rows := by decide
 
 theorem dA_mergeOf {g : FnName} {body : List Action} {res : List Expr}
-    (h : dA.sig.mergeOf g = MergeSpec.merge body res) :
+    (h : dA.sig.mergeOf g = some (MergeSpec.merge body res)) :
     res = [.app "min" [.lit (.int 1), eA]] :=
   (mergeOf_update_inv (f := "f") rfl (dA_sig ▸ h)).2
 
@@ -250,7 +250,7 @@ theorem leB_anti (x y : List Term) (h₁ : leB x y) (h₂ : leB y x) : x = y := 
 /-- `(function f () i64 :merge (min old new))`. -/
 def minDecl : FnDecl :=
   { arity := 0, outArity := 1,
-    merge := .merge [] [.app "min" [.var "old", .var "new"]] }
+    merge := some (.merge [] [.app "min" [.var "old", .var "new"]]) }
 
 /-- `(function f () i64 :merge (min old new))  (set (f) (a))  (set (f) (b))`. -/
 def pB : Program :=
@@ -268,11 +268,11 @@ theorem dB_rowA : (Row.mk "f" [] [tA]) ∈ dB.rows := by decide
 theorem dB_rowB : (Row.mk "f" [] [tB]) ∈ dB.rows := by decide
 
 theorem dB_mergeOf : dB.sig.mergeOf "f" =
-    MergeSpec.merge [] [.app "min" [.var "old", .var "new"]] := rfl
+    some (MergeSpec.merge [] [.app "min" [.var "old", .var "new"]]) := rfl
 
 /-- **`hjoin` holds**, and not vacuously: `min` is a join for `leB`. -/
 theorem dB_join (g : FnName) (body : List Action) (res : List Expr) (a b vs : List Term)
-    (hg : dB.sig.mergeOf g = MergeSpec.merge body res)
+    (hg : dB.sig.mergeOf g = some (MergeSpec.merge body res))
     (he : ∃ e, evalActions { dB.toDatabase with env := mergeEnv a b } body = some e ∧
       Expr.evalList e.sig res e.env = some vs) : leB a vs ∧ leB b vs := by
   obtain ⟨hbody, hres⟩ := mergeOf_update_inv (f := "f") rfl (dB_sig ▸ hg)
@@ -396,7 +396,7 @@ theorem leC_anti (x y : List Term) (h₁ : leC x y) (h₂ : leC y x) : x = y := 
 /-- `(function f () S :merge (C old new))`. -/
 def cDecl : FnDecl :=
   { arity := 0, outArity := 1,
-    merge := .merge [] [.app "C" [.var "old", .var "new"]] }
+    merge := some (.merge [] [.app "C" [.var "old", .var "new"]]) }
 
 /-- Three `set`s at one key class, so the merge phase runs a chain of two collisions. -/
 def pC : Program :=
@@ -410,7 +410,7 @@ theorem execM_pC : execM pC = some dC := rfl
 theorem dC_sig : dC.sig = Function.update (fun _ => none) "f" (some cDecl) := rfl
 
 theorem dC_mergeOf : dC.sig.mergeOf "f" =
-    MergeSpec.merge [] [.app "C" [.var "old", .var "new"]] := rfl
+    some (MergeSpec.merge [] [.app "C" [.var "old", .var "new"]]) := rfl
 
 /-- The value the interpreter's one surviving `f`-row holds.  Read off the interpreter
 rather than written out, so that the refutation does not depend on which of the two
@@ -444,7 +444,7 @@ theorem not_leC_of_okA {vs : List Term} (h : okA vs = true) : ¬ leC [tA] vs := 
 /-- **`hjoin` holds**, and the merge is total: `(C old new)` computes a value at every
 pair of single columns. -/
 theorem dC_join (g : FnName) (body : List Action) (res : List Expr) (a b vs : List Term)
-    (hg : dC.sig.mergeOf g = MergeSpec.merge body res)
+    (hg : dC.sig.mergeOf g = some (MergeSpec.merge body res))
     (he : ∃ e, evalActions { dC.toDatabase with env := mergeEnv a b } body = some e ∧
       Expr.evalList e.sig res e.env = some vs) : leC a vs ∧ leC b vs := by
   obtain ⟨hbody, hres⟩ := mergeOf_update_inv (f := "f") rfl (dC_sig ▸ hg)
@@ -454,7 +454,7 @@ theorem dC_join (g : FnName) (body : List Action) (res : List Expr) (a b vs : Li
   subst hstep
   obtain ⟨t, rfl, hv⟩ := mevalList_one hev
   rw [Expr.eval_app_ctor (show Prim.ofName "C" = none from rfl)
-    (show Signature.mergeOf _ "C" = MergeSpec.union from rfl),
+    (show Signature.mergeOf _ "C" = none from rfl),
     Option.map_eq_some_iff] at hv
   obtain ⟨ts, hts, rfl⟩ := hv
   obtain ⟨u, v, rfl, hva, hvb⟩ := mevalList_two hts
@@ -517,21 +517,21 @@ theorem currentOfLattice_false_total : ¬ CurrentOfLattice := by
 so no merge body or result column reads a table. -/
 
 theorem mergeOf_update_self {dc : FnDecl} {f : FnName} {body₀ : List Action}
-    {res₀ : List Expr} (hdc : dc.merge = MergeSpec.merge body₀ res₀) :
+    {res₀ : List Expr} (hdc : dc.merge = some (MergeSpec.merge body₀ res₀)) :
     Signature.mergeOf (Function.update (fun _ => none) f (some dc)) f =
-      MergeSpec.merge body₀ res₀ := by
+      some (MergeSpec.merge body₀ res₀) := by
   rw [Signature.mergeOf, Function.update_apply, if_pos rfl]
   exact hdc
 
 theorem mergesLegal_update {dc : FnDecl} {f : FnName} {res₀ : List Expr}
-    (hdc : dc.merge = MergeSpec.merge [] res₀) :
+    (hdc : dc.merge = some (MergeSpec.merge [] res₀)) :
     Signature.MergesLegal (Function.update (fun _ => none) f (some dc)) := by
   intro g body res hg
   rw [(mergeOf_update_inv hdc hg).1]
   trivial
 
 theorem legal_decl_cons {dc : FnDecl} {f : FnName} {res₀ : List Expr} {rest : Program}
-    {d' : FDatabase} (hdc : dc.merge = MergeSpec.merge [] res₀)
+    {d' : FDatabase} (hdc : dc.merge = some (MergeSpec.merge [] res₀))
     (hstep : FDatabase.empty.execCmdM (Cmd.decl f dc) = some d')
     (htail : d'.ProgramLegal rest) :
     FDatabase.empty.ProgramLegal (Cmd.decl f dc :: rest) := by
@@ -541,13 +541,13 @@ theorem legal_decl_cons {dc : FnDecl} {f : FnName} {res₀ : List Expr} {rest : 
   exact h'' ▸ htail
 
 theorem legal_action_cons {d d' : FDatabase} {dc : FnDecl} {f : FnName} {res₀ : List Expr}
-    {e : Expr} {rest : Program} (hdc : dc.merge = MergeSpec.merge [] res₀)
+    {e : Expr} {rest : Program} (hdc : dc.merge = some (MergeSpec.merge [] res₀))
     (hsig : d.sig = Function.update (fun _ => none) f (some dc))
     (hstep : d.execCmdM (Cmd.action (.set f [] [e])) = some d')
     (htail : d'.ProgramLegal rest) :
     d.ProgramLegal (Cmd.action (.set f [] [e]) :: rest) := by
   refine ⟨?_, trivial, ?_, ?_⟩
-  · change Signature.mergeOf d.sig f ≠ MergeSpec.union
+  · change Signature.mergeOf d.sig f ≠ none
     rw [hsig, mergeOf_update_self hdc]
     simp
   · change Signature.MergesLegal d.sig

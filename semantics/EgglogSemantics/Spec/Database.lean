@@ -85,7 +85,7 @@ recorded output rather than becoming a term, so only constructors ever appear in
 survives a `:merge` declaration, because it constrains `terms`, which merging never
 touches — `FDatabase.mergeRound_confined`. -/
 def CtorTerms (db : Database) : Prop :=
-  ∀ f as, Term.app f as ∈ db.terms → db.sig.mergeOf f = MergeSpec.union
+  ∀ f as, Term.app f as ∈ db.terms → db.sig.IsCtor f
 
 /-- The database holds the constructor row of every application it holds.
 

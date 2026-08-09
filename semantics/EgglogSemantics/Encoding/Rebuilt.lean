@@ -329,14 +329,12 @@ theorem rebuilt_rekeys {P : Program} {d : Database}
 
 /-! ### Applying it to `d₀`: `encode P₀`'s state is not `Rebuilt` -/
 
-theorem sigView₀ : d₀.sig.mergeOf viewF = MergeSpec.merge mergeBody mergeResult := rfl
-theorem sigUF₀ : d₀.sig.mergeOf ufName = MergeSpec.merge mergeBody mergeResult := rfl
+theorem sigView₀ : d₀.sig.mergeOf viewF = some (MergeSpec.merge mergeBody mergeResult) := rfl
+theorem sigUF₀ : d₀.sig.mergeOf ufName = some (MergeSpec.merge mergeBody mergeResult) := rfl
 
-theorem hV₀ : d₀.sig.mergeOf viewF ≠ MergeSpec.union := by
-  rw [sigView₀]; exact fun h => MergeSpec.noConfusion h
+theorem hV₀ : ¬ d₀.sig.IsCtor viewF := Signature.not_isCtor sigView₀
 
-theorem hU₀ : d₀.sig.mergeOf ufName ≠ MergeSpec.union := by
-  rw [sigUF₀]; exact fun h => MergeSpec.noConfusion h
+theorem hU₀ : ¬ d₀.sig.IsCtor ufName := Signature.not_isCtor sigUF₀
 
 theorem env_e₀ : Env.lookup "@e" d₀.env = none := by rfl
 theorem env_c₀ : Env.lookup "@c0" d₀.env = none := by rfl
@@ -363,13 +361,13 @@ theorem not_rebuilt₀ : ¬ Rebuilt P₀ d₀ := fun hreb =>
 
 /-! ### Generic tools for the positive direction -/
 
-/-! In a database with no asserted equalities whose `.union`-function rows are all
+/-! In a database with no asserted equalities whose constructor rows are all genuine
 constructor rows, `MCong` is syntactic equality (`encode_mcong_eq`'s content). -/
 mutual
 
 /-- `MCong` is syntactic equality there. -/
 theorem mcong_eq {db : Database} (heq : db.eqs = ∅)
-    (hrows : ∀ r ∈ db.rows, db.sig.mergeOf r.fn = MergeSpec.union →
+    (hrows : ∀ r ∈ db.rows, db.sig.IsCtor r.fn →
       r.out = [.app r.fn r.args]) {x y : Term} (h : MCong db x y) : x = y := by
   match h with
   | .assert hm => rw [heq] at hm; simp at hm
@@ -390,7 +388,7 @@ theorem mcong_eq {db : Database} (heq : db.eqs = ∅)
 
 /-- `mcong_eq` over lists. -/
 theorem mcongList_eq {db : Database} (heq : db.eqs = ∅)
-    (hrows : ∀ r ∈ db.rows, db.sig.mergeOf r.fn = MergeSpec.union →
+    (hrows : ∀ r ∈ db.rows, db.sig.IsCtor r.fn →
       r.out = [.app r.fn r.args]) {xs ys : List Term} (h : MCongList db xs ys) : xs = ys := by
   match h with
   | .nil => rfl
@@ -559,14 +557,14 @@ theorem sub₁ : ∀ t ∈ terms₁, t.subterms ⊆ d₁.terms ∧ t.ctorRows �
 
 theorem eqs₁ : d₁.eqs = ∅ := rfl
 
-theorem ctorUnion₁ : ∀ r ∈ d₁.rows, d₁.sig.mergeOf r.fn = MergeSpec.union →
+theorem ctorRows₁ : ∀ r ∈ d₁.rows, d₁.sig.IsCtor r.fn →
     r.out = [.app r.fn r.args] := by
   intro r hr
   have hr : r ∈ rows₁ := hr
   simp only [rows₁, List.mem_cons, List.not_mem_nil, or_false] at hr
   rcases hr with rfl | rfl | rfl | rfl | rfl | rfl <;> intro h
   · rfl
-  all_goals exact absurd h (by intro hh; exact MergeSpec.noConfusion hh)
+  all_goals exact absurd h (Signature.not_isCtor rfl)
 
 /-! ### Conjunct 2: `d₁` is `MergeSaturated`
 
@@ -577,7 +575,7 @@ theorem mergeSaturated₁ : MergeSaturated d₁ := by
   intro db' hstep
   cases hstep with
   | @collide dmid f as bs a b vs body res ha hb hl hm hact hres =>
-    have hab : as = bs := mcongList_eq eqs₁ ctorUnion₁ hl
+    have hab : as = bs := mcongList_eq eqs₁ ctorRows₁ hl
     subst hab
     have haL : Row.mk f as a ∈ rows₁ := ha
     have hbL : Row.mk f as b ∈ rows₁ := hb
@@ -590,15 +588,15 @@ theorem mergeSaturated₁ : MergeSaturated d₁ := by
       · exact Or.inl h
       · exact Or.inr h
       · subst h
-        have hu : MergeSpec.union = MergeSpec.merge body res := hm
-        exact absurd hu (fun hh => MergeSpec.noConfusion hh)
+        exact absurd (show (none : Option MergeSpec) = _ from hm) (by simp)
       · subst h
-        have hn : MergeSpec.noMerge = MergeSpec.merge body res := hm
-        exact absurd hn (fun hh => MergeSpec.noConfusion hh)
+        exact absurd (show some MergeSpec.noMerge = _ from hm) (by simp)
     have hbody : body = mergeBody ∧ res = mergeResult := by
       rcases hfv with h | h <;> subst h <;>
-        (have hm' : MergeSpec.merge mergeBody mergeResult = MergeSpec.merge body res := hm
-         injection hm' with e1 e2
+        (have hm' : some (MergeSpec.merge mergeBody mergeResult)
+             = some (MergeSpec.merge body res) := hm
+         injection hm' with e
+         injection e with e1 e2
          exact ⟨e1.symm, e2.symm⟩)
     obtain ⟨rfl, rfl⟩ := hbody
     have hpT : p ∈ terms₁ := (rowTerms₁ _ haL).2 p (by simp)
@@ -638,7 +636,7 @@ theorem mergeSaturated₁ : MergeSaturated d₁ := by
 /-! ### Conjunct 1 at `d₁`: the row set is closed under all three maintenance rules
 
 Each of the three rules concludes one row, determined by the two rows its body matched.
-Since `MCong d₁` is syntactic equality (`mcong_eq` + `eqs₁`/`ctorUnion₁`), a firing is
+Since `MCong d₁` is syntactic equality (`mcong_eq` + `eqs₁`/`ctorRows₁`), a firing is
 exactly a pair of rows of the right two functions joined on a column, so these three
 decidable closure facts are the whole finite content of `Rebuilt`'s first conjunct at
 `d₁`. -/
@@ -701,24 +699,24 @@ theorem mem_of_lookup {v : Var} {σ : Env} {t : Term} (h : Env.lookup v σ = som
 
 /-- The extended database a `MValidSubst.eq` premise talks about still has
 `MCong = (· = ·)`. -/
-theorem ctorUnion_addTerm {db : Database} {t : Term}
-    (h : ∀ r ∈ db.rows, db.sig.mergeOf r.fn = MergeSpec.union → r.out = [.app r.fn r.args]) :
-    ∀ r ∈ (db.addTerm t).rows, (db.addTerm t).sig.mergeOf r.fn = MergeSpec.union →
+theorem ctorRows_addTerm {db : Database} {t : Term}
+    (h : ∀ r ∈ db.rows, db.sig.IsCtor r.fn → r.out = [.app r.fn r.args]) :
+    ∀ r ∈ (db.addTerm t).rows, (db.addTerm t).sig.IsCtor r.fn →
       r.out = [.app r.fn r.args] := by
   intro r hr hu
   rcases hr with hr | hr
   · exact h r hr hu
   · exact hr.1
 
-/-- `ctorUnion_addTerm` over a list: the extension a `MValidSubst.values` premise reads
+/-- `ctorRows_addTerm` over a list: the extension a `MValidSubst.values` premise reads
 its congruence in. -/
-theorem ctorUnion_addTerms {db : Database} {ts : List Term}
-    (h : ∀ r ∈ db.rows, db.sig.mergeOf r.fn = MergeSpec.union → r.out = [.app r.fn r.args]) :
-    ∀ r ∈ (db.addTerms ts).rows, (db.addTerms ts).sig.mergeOf r.fn = MergeSpec.union →
+theorem ctorRows_addTerms {db : Database} {ts : List Term}
+    (h : ∀ r ∈ db.rows, db.sig.IsCtor r.fn → r.out = [.app r.fn r.args]) :
+    ∀ r ∈ (db.addTerms ts).rows, (db.addTerms ts).sig.IsCtor r.fn →
       r.out = [.app r.fn r.args] := by
   induction ts generalizing db with
   | nil => exact h
-  | cons t ts ih => exact ih (ctorUnion_addTerm h)
+  | cons t ts ih => exact ih (ctorRows_addTerm h)
 
 /-- Inverting `MValidSubst` on the one pattern shape every maintenance rule uses: a
 one-column row atom at a variable key.
@@ -729,9 +727,9 @@ out the other evaluation rules are gone.
 
 Both congruence premises are read in the database extended with the atom's operands, so
 `mcong_eq`'s two side conditions are discharged there: `addTerms` touches neither `eqs`
-nor any `.union` function's rows beyond the constructor rows it adds. -/
+nor any constructor's rows beyond the constructor rows it adds. -/
 theorem invert_eq_pattern {d : Database} (heq : d.eqs = ∅)
-    (hrows : ∀ r ∈ d.rows, d.sig.mergeOf r.fn = MergeSpec.union → r.out = [.app r.fn r.args])
+    (hrows : ∀ r ∈ d.rows, d.sig.IsCtor r.fn → r.out = [.app r.fn r.args])
     {G : FnName} {V W : Var} {σ : Env}
     (h : MValidSubst d (.values [.var V] G [.var W]) σ) :
     (Env.dom σ).Perm (Expr.freeVarsList [Expr.var V] d.env ∪
@@ -745,7 +743,7 @@ theorem invert_eq_pattern {d : Database} (heq : d.eqs = ∅)
     obtain ⟨tw, rfl, hw⟩ := mevalList_one has
     have heq' : ((d.addTerms [tw]).addTerms [tv]).eqs = ∅ := by
       rw [addTerms_eqs, addTerms_eqs]; exact heq
-    have hrows' := ctorUnion_addTerms (ts := [tv]) (ctorUnion_addTerms (ts := [tw]) hrows)
+    have hrows' := ctorRows_addTerms (ts := [tv]) (ctorRows_addTerms (ts := [tw]) hrows)
     have hb : [tw] = _ := mcongList_eq heq' hrows' hts
     have hw' : [tv] = _ := mcongList_eq heq' hrows' hus
     subst hb; subst hw'
@@ -805,9 +803,9 @@ theorem two_pattern_firing {V₁ W₁ V₂ W₂ A B : Var} {G₁ G₂ F : FnName
         | single =>
           obtain ⟨hcompat, rfl⟩ := hu
           obtain ⟨hd1, tv1, tw1, h1v, h1w, hr1⟩ :=
-            invert_eq_pattern eqs₁ ctorUnion₁ s1
+            invert_eq_pattern eqs₁ ctorRows₁ s1
           obtain ⟨hd2, tv2, tw2, h2v, h2w, hr2⟩ :=
-            invert_eq_pattern eqs₁ ctorUnion₁ s2
+            invert_eq_pattern eqs₁ ctorRows₁ s2
           rw [hfv1] at hd1
           rw [hfv2] at hd2
           rw [evalActions_cons] at hact
@@ -923,19 +921,10 @@ constructor, and `MergeStep` needs a `.merge` function. So appending `(run)`s to
 rule-free source program is a genuine no-op, and the "append to both sides" caveat in
 `encode_complete`'s docstring only bites when `P` has rules. -/
 
-theorem mergeOf_union_of_allConstructors {sig : Signature} (h : sig.AllConstructors)
-    (f : FnName) : sig.mergeOf f = MergeSpec.union := by
-  unfold Signature.mergeOf
-  cases hf : sig f with
-  | none => rfl
-  | some dd => exact h f dd hf
-
 theorem no_mergeStep {d d' : Database} (h : d.sig.AllConstructors) (hs : MergeStep d d') :
     False := by
   cases hs with
-  | collide _ _ _ hm _ _ =>
-    rw [mergeOf_union_of_allConstructors h] at hm
-    exact MergeSpec.noConfusion hm
+  | collide _ _ _ hm _ _ => exact h.elim hm
 
 theorem mergeClosure_eq_of_allConstructors {d d' : Database} (h : d.sig.AllConstructors)
     (hc : MergeClosure d d') : d' = d := by

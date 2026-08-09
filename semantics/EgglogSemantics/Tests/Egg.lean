@@ -73,8 +73,8 @@ def Rule.toEgg (r : Rule) : String :=
 /-- The merged value, in egglog's tuple notation. Shared with `Action.set`. -/
 abbrev MergeSpec.resultToEgg : List Expr → String := Expr.valuesToEgg
 
-/-- A merge specification as egglog source. `.union` is a constructor and never reaches
-here; `.noMerge` is `:no-merge`.
+/-- A merge specification as egglog source. `.noMerge` is `:no-merge`; a constructor has
+no merge specification and so never reaches here.
 
 The block form is `:merge (<action>* <result>)` — the actions and the result are
 *siblings* in one list, not two nested ones (`egglog/src/ast/parse.rs:531-569`, and
@@ -83,7 +83,6 @@ element is itself a list, which is why an empty body has to emit the bare result
 expression always has an atom head, so `:merge (min old new)` reads as a result and
 `:merge ((let s …) s)` as a block. -/
 def MergeSpec.toEgg : MergeSpec → String
-  | .union => ""
   | .noMerge => " :no-merge"
   | .merge [] res => " :merge " ++ MergeSpec.resultToEgg res
   | .merge body res =>
@@ -104,12 +103,12 @@ so this file's standing literal mismatch stays out of the way.
 A multi-column output is a parenthesized sort list, `(i64 i64)`, as
 `egglog/tests/tuple-output.egg` writes it. egglog accepts `(i64)` for one column too,
 but the bare form is what every existing case renders and is left alone. -/
-def FnDecl.toEgg (f : FnName) (d : FnDecl) : String :=
+def FnDecl.toEgg (f : FnName) (d : FnDecl) (m : MergeSpec) : String :=
   let out := match d.outArity with
     | 1 => "i64"
     | _ => "(" ++ String.intercalate " " (List.replicate d.outArity "i64") ++ ")"
   "(function " ++ f ++ " (" ++ String.intercalate " " (List.replicate d.arity "Math")
-    ++ ") " ++ out ++ d.merge.toEgg ++ ")"
+    ++ ") " ++ out ++ m.toEgg ++ ")"
 
 /-- A command as egglog source. `Cmd.run` is one round, so it emits `(run 1)`.
 A constructor declaration is folded into the `datatype` header and produces nothing; a
@@ -119,8 +118,8 @@ def Cmd.toEgg : Cmd → String
   | .rule r => r.toEgg
   | .run => "(run 1)"
   | .decl f d => match d.merge with
-    | .union => ""
-    | _ => FnDecl.toEgg f d
+    | none => ""
+    | some m => FnDecl.toEgg f d m
 
 /-! ### Collecting the signature
 
@@ -165,7 +164,6 @@ any other, so a constructor mentioned *only* there — `(set (Log (A)) old)` —
 reach the `datatype` header, and the function it `set`s still has to be a name the emitter
 knows. -/
 def MergeSpec.fnArities : MergeSpec → List (FnName × Nat)
-  | .union => []
   | .noMerge => []
   | .merge body res => body.flatMap Action.fnArities ++ Expr.fnAritiesL res
 
@@ -173,7 +171,7 @@ def Cmd.fnArities : Cmd → List (FnName × Nat)
   | .action a => a.fnArities
   | .rule r => (r.query.flatMap Pattern.fnArities) ++ (r.actions.flatMap Action.fnArities)
   | .run => []
-  | .decl f d => (f, d.arity) :: d.merge.fnArities
+  | .decl f d => (f, d.arity) :: (d.merge.map MergeSpec.fnArities).getD []
 
 /-- Every function the program uses, with its arity, deduplicated — **primitives
 excluded**. A primitive is not a function of the program's signature: egglog has already
@@ -182,13 +180,11 @@ reports a row count for one. -/
 def Program.fnArities (p : Program) : List (FnName × Nat) :=
   ((p.flatMap Cmd.fnArities).filter fun fa => (Prim.ofName fa.1).isNone).dedup
 
-/-- The names the program declares with a non-`union` merge. These get their own
-`function` command and must be kept out of the `datatype`. -/
+/-- The names the program declares as merge functions. These get their own `function`
+command and must be kept out of the `datatype`. -/
 def Program.mergeNames (p : Program) : List FnName :=
   p.filterMap fun c => match c with
-    | .decl f d => match d.merge with
-      | .union => none
-      | _ => some f
+    | .decl f d => if d.merge.isSome then some f else none
     | _ => none
 
 /-- The constructors: everything used that is not a declared `:merge` function. -/
@@ -223,10 +219,10 @@ def Cmd.setTargets : Cmd → List FnName
   | .action a => a.setTargets
   | .rule r => r.actions.flatMap Action.setTargets
   | .run => []
-  | .decl _ d => d.merge.setTargets
+  | .decl _ d => (d.merge.map MergeSpec.setTargets).getD []
 
-/-- The names the program `set`s that egglog would refuse: everything not declared with a
-non-`union` merge. Empty is the only acceptable value for a case the difftest emits. -/
+/-- The names the program `set`s that egglog would refuse: everything not declared as a
+merge function. Empty is the only acceptable value for a case the difftest emits. -/
 def Program.illegalSets (p : Program) : List FnName :=
   (p.flatMap Cmd.setTargets).dedup.filter (· ∉ p.mergeNames)
 

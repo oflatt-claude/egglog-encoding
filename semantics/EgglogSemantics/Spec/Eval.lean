@@ -35,10 +35,10 @@ def Expr.eval (sig : Signature) : Expr → Env → Option Term
   | .lit l, _ => some (.lit l)
   | .var v, σ => Env.lookup v σ
   | .app f args, σ =>
-      match Prim.ofName f, sig.mergeOf f with
-      | some p, _ => (Expr.evalList sig args σ).bind p.apply
-      | none, .union => (Expr.evalList sig args σ).map (Term.app f)
-      | none, _ => none
+      match Prim.ofName f with
+      | some p => (Expr.evalList sig args σ).bind p.apply
+      | none =>
+          if sig.IsCtor f then (Expr.evalList sig args σ).map (Term.app f) else none
 
 /-- `Expr.eval` over an argument list, failing if any argument does. -/
 def Expr.evalList (sig : Signature) : List Expr → Env → Option (List Term)

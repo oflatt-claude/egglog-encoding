@@ -23,7 +23,7 @@ Three tables per source constructor `f`, plus one union-find for the (single) so
 `@UF` and `@fView` share one `:merge` body — keep the smaller side and `set` the
 larger's `@UF` edge to it — so a view collision on congruent children unions the two
 e-classes and no congruence rule is needed. Both are `.merge` functions, so the encoded
-program has **no** `.union` function at all and `MCong` on the target degenerates to
+program has **no** constructor table at all and `MCong` on the target degenerates to
 syntactic equality: congruence there is entirely simulated.
 
 ## Two deviations forced by the modelled language
@@ -111,21 +111,23 @@ def mergeResult : List Expr := [minE (.var "old") (.var "new")]
 /-- `(function @UF (S) (S) :merge …)`. A term with no row is its own representative, so
 the lookup is identity on miss — which the model expresses by there simply being no row
 to read. -/
-def ufDecl : FnDecl := { arity := 1, outArity := 1, merge := .merge mergeBody mergeResult }
+def ufDecl : FnDecl :=
+  { arity := 1, outArity := 1, merge := some (.merge mergeBody mergeResult) }
 
 /-- `(function @fView (S…) (S) :merge …)` for a constructor of arity `k`. Two rows
 colliding on one key are congruent, and the merge resolves that by unioning them. -/
 def viewDecl (k : Nat) : FnDecl :=
-  { arity := k, outArity := 1, merge := .merge mergeBody mergeResult }
+  { arity := k, outArity := 1, merge := some (.merge mergeBody mergeResult) }
 
 /-- `(function @fTerm (S… S) Unit :no-merge)`. Keyed on children *and* id, so distinct
 constructions never collide. -/
-def termDecl (k : Nat) : FnDecl := { arity := k + 1, outArity := 1, merge := .noMerge }
+def termDecl (k : Nat) : FnDecl :=
+  { arity := k + 1, outArity := 1, merge := some .noMerge }
 
 /-! ### The constructors a program mentions
 
 The fragment declares almost nothing — an undeclared name is a constructor
-(`Signature.mergeOf`) — so the functions to emit tables for are read off the syntax. -/
+(`Signature.IsCtor`) — so the functions to emit tables for are read off the syntax. -/
 mutual
 
 /-- The `(name, arity)` pairs an expression applies. -/
@@ -429,7 +431,7 @@ def Program.vars (P : Program) : List Var := (P.flatMap Cmd.vars).dedup
 /-- Constructors only, and no name that would collide with a generated one. -/
 structure Program.EncodeDomain (P : Program) : Prop where
   /-- Every declared function is a constructor. -/
-  ctorsOnly : ∀ c ∈ P, ∀ f d, c = Cmd.decl f d → d.merge = MergeSpec.union
+  ctorsOnly : ∀ c ∈ P, ∀ f d, c = Cmd.decl f d → d.merge = none
   /-- No `set` action anywhere. -/
   noSet : ∀ c ∈ P, c.NoSet
   /-- No source function shadows a primitive, so every application builds. -/
