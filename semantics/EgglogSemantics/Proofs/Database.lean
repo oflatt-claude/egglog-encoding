@@ -365,7 +365,7 @@ end WF
 /-! ### Constructor rows
 
 `CtorRows db` says the row set is exactly the one the term set induces. It is one of the
-two hypotheses `Proofs/Merge.lean`'s `mcong_iff_cong` takes — `AllConstructors` is the
+two hypotheses `Proofs/Merge.lean`'s `mcong_iff_cong` takes — `Database.CtorTerms` is the
 other — so this is the first half of making that theorem apply to a database a program
 can actually produce. `Proofs/Step.lean` carries it along the step relations, where the
 side condition `Action.SetLegal` enters.

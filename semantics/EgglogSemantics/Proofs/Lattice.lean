@@ -41,13 +41,11 @@ theorem meval_var {sig : Signature} {σ : Env} {v : Var} {t : Term}
 theorem meval_nullary {sig : Signature} {σ : Env} {f : FnName} {t : Term}
     (hp : Prim.ofName f = none) (h : Expr.eval sig (.app f []) σ = some t) :
     t = .app f [] := by
-  match hu : sig.mergeOf f with
-  | none =>
-    rw [Expr.eval_app_ctor hp hu, Expr.evalList_nil, Option.map_some,
+  by_cases hu : sig.IsCtor f
+  · rw [Expr.eval_app_ctor hp hu, Expr.evalList_nil, Option.map_some,
       Option.some.injEq] at h
     exact h.symm
-  | some (.merge b r) => rw [Expr.eval_app_merge hp hu] at h; simp at h
-  | some .noMerge => rw [Expr.eval_app_noMerge hp hu] at h; simp at h
+  · rw [Expr.eval_app_not_ctor hp hu] at h; simp at h
 
 theorem mevalList_one {sig : Signature} {σ : Env} {e : Expr} {ts : List Term}
     (h : Expr.evalList sig [e] σ = some ts) :
@@ -74,20 +72,52 @@ theorem mevalList_single_nullary {sig : Signature} {σ : Env} {f : FnName} {vs :
   obtain ⟨us, hus, heq⟩ := Option.map_eq_some_iff.mp hrest
   rw [← heq, mevalList_nil hus, meval_nullary hp ht]
 
-/-! ## Only the declared name has a `:merge` body -/
+/-! ## The constructors the three programs build
 
-theorem mergeOf_update_inv {dc : FnDecl} {f g : FnName} {body₀ body : List Action}
+Declaration is required, so every constructor a program applies has to be declared before
+it: `Expr.eval` has no rule for an undeclared name and `execM` would simply get stuck. The
+header below is shared by all three programs, which keeps one base signature for the
+lemmas that read one. -/
+
+/-- `(datatype S (a) (b) (d) (C S S))`, as four declarations. -/
+def ctorDecl (n : Nat) : FnDecl := { arity := n, outArity := 1, merge := none }
+
+def ctorHeader : Program :=
+  [.decl "a" (ctorDecl 0), .decl "b" (ctorDecl 0), .decl "d" (ctorDecl 0),
+   .decl "C" (ctorDecl 2)]
+
+/-- The signature `ctorHeader` leaves. -/
+def baseSig : Signature :=
+  Function.update (Function.update (Function.update (Function.update
+    (fun _ => none) "a" (some (ctorDecl 0))) "b" (some (ctorDecl 0)))
+    "d" (some (ctorDecl 0))) "C" (some (ctorDecl 2))
+
+theorem allConstructors_update {sig : Signature} (h : sig.AllConstructors) {f : FnName}
+    {dc : FnDecl} (hdc : dc.merge = none) :
+    Signature.AllConstructors (Function.update sig f (some dc)) :=
+  h.sigBind (c := .decl f dc) hdc
+
+theorem baseSig_allConstructors : baseSig.AllConstructors :=
+  allConstructors_update (allConstructors_update (allConstructors_update
+    (allConstructors_update (fun _ => rfl) rfl) rfl) rfl) rfl
+
+/-- The state `ctorHeader` runs to: `FDatabase.empty` with the constructors declared. -/
+def dHdr : FDatabase := { FDatabase.empty with sig := baseSig }
+
+/-! ## Only the declared merge function has a `:merge` body -/
+
+theorem mergeOf_update_inv {sig : Signature} (hsig : sig.AllConstructors) {dc : FnDecl}
+    {f g : FnName} {body₀ body : List Action}
     {res₀ res : List Expr} (hdc : dc.merge = some (MergeSpec.merge body₀ res₀))
-    (h : Signature.mergeOf (Function.update (fun _ => none) f (some dc)) g =
+    (h : Signature.mergeOf (Function.update sig f (some dc)) g =
       some (MergeSpec.merge body res)) : body = body₀ ∧ res = res₀ := by
-  rw [Signature.mergeOf, Function.update_apply] at h
   by_cases hg : g = f
-  · rw [if_pos hg] at h
-    change dc.merge = _ at h
-    rw [hdc, Option.some.injEq] at h
+  · subst hg
+    rw [Signature.mergeOf, Function.update_self, Option.bind_some, hdc,
+      Option.some.injEq] at h
     exact ⟨((MergeSpec.merge.injEq .. ▸ h : _ ∧ _).1).symm,
       ((MergeSpec.merge.injEq .. ▸ h : _ ∧ _).2).symm⟩
-  · rw [if_neg hg] at h; exact absurd h (by simp)
+  · rw [Signature.mergeOf_update_of_ne hg, hsig g] at h; exact absurd h (by simp)
 
 /-! ## The statement under test -/
 
@@ -131,20 +161,29 @@ def stuckDecl : FnDecl :=
     merge := some (.merge [] [.app "min" [.lit (.int 1), eA]]) }
 
 /-- `(function f () i64 :merge (min 1 (a)))  (set (f) (a))`. -/
-def pA : Program := [.decl "f" stuckDecl, .action (.set "f" [] [eA])]
+def pA : Program := ctorHeader ++ [.decl "f" stuckDecl, .action (.set "f" [] [eA])]
 
 def dA : FDatabase := (execM pA).getD FDatabase.empty
 
+set_option maxHeartbeats 2000000 in
+-- The kernel evaluates the program here. Declaring the constructors lengthens every
+-- signature lookup's `Function.update` chain, which is enough to exceed the default.
 theorem execM_pA : execM pA = some dA := rfl
 
-theorem dA_sig : dA.sig = Function.update (fun _ => none) "f" (some stuckDecl) := rfl
+set_option maxHeartbeats 2000000 in
+-- The kernel evaluates the program here. Declaring the constructors lengthens every
+-- signature lookup's `Function.update` chain, which is enough to exceed the default.
+theorem dA_sig : dA.sig = Function.update baseSig "f" (some stuckDecl) := rfl
 
+set_option maxHeartbeats 2000000 in
+-- The kernel evaluates the program here. Declaring the constructors lengthens every
+-- signature lookup's `Function.update` chain, which is enough to exceed the default.
 theorem dA_row : (Row.mk "f" [] [tA]) ∈ dA.rows := by decide
 
 theorem dA_mergeOf {g : FnName} {body : List Action} {res : List Expr}
     (h : dA.sig.mergeOf g = some (MergeSpec.merge body res)) :
     res = [.app "min" [.lit (.int 1), eA]] :=
-  (mergeOf_update_inv (f := "f") rfl (dA_sig ▸ h)).2
+  (mergeOf_update_inv baseSig_allConstructors (f := "f") rfl (dA_sig ▸ h)).2
 
 /-- The stuck merge, machine-checked: no `a`, `b`, `vs` satisfy `hjoin`'s premise. -/
 theorem dA_no_merge_value {a b vs : List Term} {body : List Action} {res : List Expr}
@@ -254,28 +293,48 @@ def minDecl : FnDecl :=
 
 /-- `(function f () i64 :merge (min old new))  (set (f) (a))  (set (f) (b))`. -/
 def pB : Program :=
-  [.decl "f" minDecl, .action (.set "f" [] [eA]), .action (.set "f" [] [eB])]
+  ctorHeader ++
+    [.decl "f" minDecl, .action (.set "f" [] [eA]), .action (.set "f" [] [eB])]
 
 def dB : FDatabase := (execM pB).getD FDatabase.empty
 
+set_option maxHeartbeats 2000000 in
+-- The kernel evaluates the program here. Declaring the constructors lengthens every
+-- signature lookup's `Function.update` chain, which is enough to exceed the default.
 theorem execM_pB : execM pB = some dB := rfl
 
-theorem dB_sig : dB.sig = Function.update (fun _ => none) "f" (some minDecl) := rfl
+set_option maxHeartbeats 2000000 in
+-- The kernel evaluates the program here. Declaring the constructors lengthens every
+-- signature lookup's `Function.update` chain, which is enough to exceed the default.
+theorem dB_sig : dB.sig = Function.update baseSig "f" (some minDecl) := rfl
 
+set_option maxHeartbeats 2000000 in
+-- The kernel evaluates the program here. Declaring the constructors lengthens every
+-- signature lookup's `Function.update` chain, which is enough to exceed the default.
 /-- **The interpreter's final state holds both rows at the one key class.** -/
 theorem dB_rowA : (Row.mk "f" [] [tA]) ∈ dB.rows := by decide
 
+set_option maxHeartbeats 2000000 in
+-- The kernel evaluates the program here. Declaring the constructors lengthens every
+-- signature lookup's `Function.update` chain, which is enough to exceed the default.
 theorem dB_rowB : (Row.mk "f" [] [tB]) ∈ dB.rows := by decide
 
+set_option maxHeartbeats 2000000 in
+-- The kernel evaluates the program here. Declaring the constructors lengthens every
+-- signature lookup's `Function.update` chain, which is enough to exceed the default.
 theorem dB_mergeOf : dB.sig.mergeOf "f" =
     some (MergeSpec.merge [] [.app "min" [.var "old", .var "new"]]) := rfl
 
+set_option maxHeartbeats 2000000 in
+-- The kernel evaluates the program here. Declaring the constructors lengthens every
+-- signature lookup's `Function.update` chain, which is enough to exceed the default.
 /-- **`hjoin` holds**, and not vacuously: `min` is a join for `leB`. -/
 theorem dB_join (g : FnName) (body : List Action) (res : List Expr) (a b vs : List Term)
     (hg : dB.sig.mergeOf g = some (MergeSpec.merge body res))
     (he : ∃ e, evalActions { dB.toDatabase with env := mergeEnv a b } body = some e ∧
       Expr.evalList e.sig res e.env = some vs) : leB a vs ∧ leB b vs := by
-  obtain ⟨hbody, hres⟩ := mergeOf_update_inv (f := "f") rfl (dB_sig ▸ hg)
+  obtain ⟨hbody, hres⟩ :=
+    mergeOf_update_inv baseSig_allConstructors (f := "f") rfl (dB_sig ▸ hg)
   subst hbody; subst hres
   obtain ⟨e, hstep, hev⟩ := he
   rw [evalActions_nil, Option.some.injEq] at hstep
@@ -301,6 +360,9 @@ theorem dB_join (g : FnName) (body : List Action) (res : List Expr) (a b vs : Li
       Or.inr (Or.inr ⟨⟨min m n, rfl⟩, not_intSing_of_two hb2⟩)⟩
 
 
+set_option maxHeartbeats 2000000 in
+-- The kernel evaluates the program here. Declaring the constructors lengthens every
+-- signature lookup's `Function.update` chain, which is enough to exceed the default.
 /-- `hjoin` is **not** vacuous here: `min` really does merge two `i64` columns, and the
 value it produces is above both for `leB`. -/
 theorem dB_join_nonvacuous :
@@ -315,23 +377,28 @@ The last command's `set` writes it and `MergeClosure` never removes a row. -/
 theorem pB_reaches_rowB {db : Database}
     (h : ProgramStep FDatabase.empty.toDatabase pB db) :
     Row.mk "f" [] [tB] ∈ db.rows := by
-  cases h with
-  | cons _ r1 =>
-    cases r1 with
-    | cons _ r2 =>
-      cases r2 with
-      | cons h3 r3 =>
-        cases r3 with
-        | nil =>
-          cases h3 with
-          | action hact hcl =>
-            simp only [evalAction, Option.bind_eq_some_iff, Option.map_eq_some_iff] at hact
-            obtain ⟨as, hargs, vs, hout, rfl⟩ := hact
-            rw [show eB = Expr.app "b" [] from rfl] at hout
-            rw [mevalList_nil hargs,
-              mevalList_single_nullary (show Prim.ofName "b" = none from rfl) hout] at hcl
-            exact (MergeClosure.contained hcl).rows (Set.mem_insert _ _)
+  rw [pB, ctorHeader, List.cons_append, List.cons_append, List.cons_append,
+    List.cons_append, List.nil_append] at h
+  obtain ⟨_, -, h⟩ := h.cons_inv
+  obtain ⟨_, -, h⟩ := h.cons_inv
+  obtain ⟨_, -, h⟩ := h.cons_inv
+  obtain ⟨_, -, h⟩ := h.cons_inv
+  obtain ⟨_, -, h⟩ := h.cons_inv
+  obtain ⟨_, -, h⟩ := h.cons_inv
+  obtain ⟨_, h3, hnil⟩ := h.cons_inv
+  cases hnil.nil_inv
+  cases h3 with
+  | action hact hcl =>
+    simp only [evalAction, Option.bind_eq_some_iff, Option.map_eq_some_iff] at hact
+    obtain ⟨as, hargs, vs, hout, rfl⟩ := hact
+    rw [show eB = Expr.app "b" [] from rfl] at hout
+    rw [mevalList_nil hargs,
+      mevalList_single_nullary (show Prim.ofName "b" = none from rfl) hout] at hcl
+    exact (MergeClosure.contained hcl).rows (Set.mem_insert _ _)
 
+set_option maxHeartbeats 2000000 in
+-- The kernel evaluates the program here. Declaring the constructors lengthens every
+-- signature lookup's `Function.update` chain, which is enough to exceed the default.
 /-- **Refutation B.**  `leB` is reflexive, transitive and antisymmetric, `hjoin` holds
 non-vacuously, and the conclusion still fails: the interpreter's surviving row at the
 class holds `(a)`, the specification also records `(b)` there, and `leB [(b)] [(a)]` is
@@ -400,15 +467,25 @@ def cDecl : FnDecl :=
 
 /-- Three `set`s at one key class, so the merge phase runs a chain of two collisions. -/
 def pC : Program :=
-  [.decl "f" cDecl, .action (.set "f" [] [eA]), .action (.set "f" [] [eB]),
-   .action (.set "f" [] [eD])]
+  ctorHeader ++
+    [.decl "f" cDecl, .action (.set "f" [] [eA]), .action (.set "f" [] [eB]),
+     .action (.set "f" [] [eD])]
 
 def dC : FDatabase := (execM pC).getD FDatabase.empty
 
+set_option maxHeartbeats 2000000 in
+-- The kernel evaluates the program here. Declaring the constructors lengthens every
+-- signature lookup's `Function.update` chain, which is enough to exceed the default.
 theorem execM_pC : execM pC = some dC := rfl
 
-theorem dC_sig : dC.sig = Function.update (fun _ => none) "f" (some cDecl) := rfl
+set_option maxHeartbeats 2000000 in
+-- The kernel evaluates the program here. Declaring the constructors lengthens every
+-- signature lookup's `Function.update` chain, which is enough to exceed the default.
+theorem dC_sig : dC.sig = Function.update baseSig "f" (some cDecl) := rfl
 
+set_option maxHeartbeats 2000000 in
+-- The kernel evaluates the program here. Declaring the constructors lengthens every
+-- signature lookup's `Function.update` chain, which is enough to exceed the default.
 theorem dC_mergeOf : dC.sig.mergeOf "f" =
     some (MergeSpec.merge [] [.app "C" [.var "old", .var "new"]]) := rfl
 
@@ -418,6 +495,9 @@ colliding rows `mergeEnv` calls `old` or which one the pass overwrites. -/
 def vsC : List Term :=
   ((dC.rows.find? fun r => r.fn == "f").getD ⟨"f", [], []⟩).out
 
+set_option maxHeartbeats 2000000 in
+-- The kernel evaluates the program here. Declaring the constructors lengthens every
+-- signature lookup's `Function.update` chain, which is enough to exceed the default.
 theorem dC_row : (Row.mk "f" [] vsC) ∈ dC.rows := by decide
 
 /-- `[(a)]` is neither the survivor nor one of its two `C`-children. -/
@@ -427,6 +507,9 @@ def okA (vs : List Term) : Bool :=
      | [.app "C" [p, q]] => decide (p ≠ tA) && decide (q ≠ tA)
      | _ => true)
 
+set_option maxHeartbeats 2000000 in
+-- The kernel evaluates the program here. Declaring the constructors lengthens every
+-- signature lookup's `Function.update` chain, which is enough to exceed the default.
 theorem dC_okA : okA vsC = true := by decide
 
 theorem not_leC_of_okA {vs : List Term} (h : okA vs = true) : ¬ leC [tA] vs := by
@@ -441,20 +524,24 @@ theorem not_leC_of_okA {vs : List Term} (h : okA vs = true) : ¬ leC [tA] vs := 
     · exact h'.2.2 (by simpa using h₂.symm)
   · simp at hlen
 
+set_option maxHeartbeats 2000000 in
+-- The kernel evaluates the program here. Declaring the constructors lengthens every
+-- signature lookup's `Function.update` chain, which is enough to exceed the default.
 /-- **`hjoin` holds**, and the merge is total: `(C old new)` computes a value at every
 pair of single columns. -/
 theorem dC_join (g : FnName) (body : List Action) (res : List Expr) (a b vs : List Term)
     (hg : dC.sig.mergeOf g = some (MergeSpec.merge body res))
     (he : ∃ e, evalActions { dC.toDatabase with env := mergeEnv a b } body = some e ∧
       Expr.evalList e.sig res e.env = some vs) : leC a vs ∧ leC b vs := by
-  obtain ⟨hbody, hres⟩ := mergeOf_update_inv (f := "f") rfl (dC_sig ▸ hg)
+  obtain ⟨hbody, hres⟩ :=
+    mergeOf_update_inv baseSig_allConstructors (f := "f") rfl (dC_sig ▸ hg)
   subst hbody; subst hres
   obtain ⟨e, hstep, hev⟩ := he
   rw [evalActions_nil, Option.some.injEq] at hstep
   subst hstep
   obtain ⟨t, rfl, hv⟩ := mevalList_one hev
   rw [Expr.eval_app_ctor (show Prim.ofName "C" = none from rfl)
-    (show Signature.mergeOf _ "C" = none from rfl),
+    (show Signature.IsCtor _ "C" from ⟨ctorDecl 2, rfl, rfl⟩),
     Option.map_eq_some_iff] at hv
   obtain ⟨ts, hts, rfl⟩ := hv
   obtain ⟨u, v, rfl, hva, hvb⟩ := mevalList_two hts
@@ -473,6 +560,9 @@ theorem dC_join (g : FnName) (body : List Action) (res : List Expr) (a b vs : Li
       Or.inr (Or.inr ⟨⟨_, _, rfl⟩, by omega⟩)⟩
 
 
+set_option maxHeartbeats 2000000 in
+-- The kernel evaluates the program here. Declaring the constructors lengthens every
+-- signature lookup's `Function.update` chain, which is enough to exceed the default.
 /-- `hjoin` is not vacuous here either, and the merge is **total**: `(C old new)`
 computes a value at every pair of single columns. -/
 theorem dC_join_nonvacuous (x y : Term) :
@@ -485,20 +575,27 @@ theorem dC_join_nonvacuous (x y : Term) :
 theorem pC_reaches_rowA {db : Database}
     (h : ProgramStep FDatabase.empty.toDatabase pC db) :
     Row.mk "f" [] [tA] ∈ db.rows := by
-  cases h with
-  | cons _ r1 =>
-    cases r1 with
-    | cons h2 r2 =>
-      cases h2 with
-      | action hact hcl =>
-        simp only [evalAction, Option.bind_eq_some_iff, Option.map_eq_some_iff] at hact
-        obtain ⟨as, hargs, vs, hout, rfl⟩ := hact
-        rw [show eA = Expr.app "a" [] from rfl] at hout
-        rw [mevalList_nil hargs,
-          mevalList_single_nullary (show Prim.ofName "a" = none from rfl) hout] at hcl
-        exact (ProgramStep.contained r2).rows
-          ((MergeClosure.contained hcl).rows (Set.mem_insert _ _))
+  rw [pC, ctorHeader, List.cons_append, List.cons_append, List.cons_append,
+    List.cons_append, List.nil_append] at h
+  obtain ⟨_, -, h⟩ := h.cons_inv
+  obtain ⟨_, -, h⟩ := h.cons_inv
+  obtain ⟨_, -, h⟩ := h.cons_inv
+  obtain ⟨_, -, h⟩ := h.cons_inv
+  obtain ⟨_, -, h⟩ := h.cons_inv
+  obtain ⟨_, h2, r2⟩ := h.cons_inv
+  cases h2 with
+  | action hact hcl =>
+    simp only [evalAction, Option.bind_eq_some_iff, Option.map_eq_some_iff] at hact
+    obtain ⟨as, hargs, vs, hout, rfl⟩ := hact
+    rw [show eA = Expr.app "a" [] from rfl] at hout
+    rw [mevalList_nil hargs,
+      mevalList_single_nullary (show Prim.ofName "a" = none from rfl) hout] at hcl
+    exact (ProgramStep.contained r2).rows
+      ((MergeClosure.contained hcl).rows (Set.mem_insert _ _))
 
+set_option maxHeartbeats 2000000 in
+-- The kernel evaluates the program here. Declaring the constructors lengthens every
+-- signature lookup's `Function.update` chain, which is enough to exceed the default.
 /-- **Refutation C.**  `leC` is reflexive and antisymmetric, the merge is total and
 `hjoin` holds, and the conclusion still fails: the survivor of the two-collision chain is
 above the intermediate value, which is above `[(a)]`, but `leC` does not compose. -/
@@ -516,33 +613,65 @@ theorem currentOfLattice_false_total : ¬ CurrentOfLattice := by
 `FDatabase.ProgramLegal` from `FDatabase.empty`, and `Impl/Check.lean`'s `ReadsAreAtoms`,
 so no merge body or result column reads a table. -/
 
-theorem mergeOf_update_self {dc : FnDecl} {f : FnName} {body₀ : List Action}
-    {res₀ : List Expr} (hdc : dc.merge = some (MergeSpec.merge body₀ res₀)) :
-    Signature.mergeOf (Function.update (fun _ => none) f (some dc)) f =
+theorem mergeOf_update_self {sig : Signature} {dc : FnDecl} {f : FnName}
+    {body₀ : List Action} {res₀ : List Expr}
+    (hdc : dc.merge = some (MergeSpec.merge body₀ res₀)) :
+    Signature.mergeOf (Function.update sig f (some dc)) f =
       some (MergeSpec.merge body₀ res₀) := by
-  rw [Signature.mergeOf, Function.update_apply, if_pos rfl]
+  rw [Signature.mergeOf, Function.update_self, Option.bind_some]
   exact hdc
 
-theorem mergesLegal_update {dc : FnDecl} {f : FnName} {res₀ : List Expr}
-    (hdc : dc.merge = some (MergeSpec.merge [] res₀)) :
-    Signature.MergesLegal (Function.update (fun _ => none) f (some dc)) := by
+theorem mergesLegal_of_allConstructors {sig : Signature} (h : sig.AllConstructors) :
+    Signature.MergesLegal sig := fun _ _ _ hg => (h.elim hg).elim
+
+theorem mergesLegal_update {sig : Signature} (hsig : sig.AllConstructors) {dc : FnDecl}
+    {f : FnName} {res₀ : List Expr} (hdc : dc.merge = some (MergeSpec.merge [] res₀)) :
+    Signature.MergesLegal (Function.update sig f (some dc)) := by
   intro g body res hg
-  rw [(mergeOf_update_inv hdc hg).1]
+  rw [(mergeOf_update_inv hsig hdc hg).1]
   trivial
+
+/-- A constructor declaration is legal wherever the name is fresh and the state holds no
+terms — which is every prefix of `ctorHeader`. -/
+theorem legal_ctor_cons {d : FDatabase} {f : FnName} {n : Nat} {rest : Program}
+    (hsig : d.sig.AllConstructors) (hfresh : d.sig f = none) (hterms : d.terms = [])
+    (htail : ({ d with sig := Function.update d.sig f (some (ctorDecl n)) }
+      : FDatabase).ProgramLegal rest) :
+    d.ProgramLegal (Cmd.decl f (ctorDecl n) :: rest) := by
+  refine ⟨trivial, ⟨hfresh, ?_⟩,
+    mergesLegal_of_allConstructors
+      (allConstructors_update hsig (dc := ctorDecl n) rfl), ?_⟩
+  · intro as hm; rw [hterms] at hm; simp at hm
+  · intro d'' h''
+    rw [show d.execCmdM (Cmd.decl f (ctorDecl n)) = some _ from rfl,
+      Option.some.injEq] at h''
+    exact h'' ▸ htail
+
+/-- The four constructor declarations, at the front of every program here. -/
+theorem legal_header {rest : Program} (htail : dHdr.ProgramLegal rest) :
+    FDatabase.empty.ProgramLegal (ctorHeader ++ rest) :=
+  legal_ctor_cons (fun _ => rfl) rfl rfl
+    (legal_ctor_cons (allConstructors_update (fun _ => rfl) rfl) rfl rfl
+      (legal_ctor_cons
+        (allConstructors_update (allConstructors_update (fun _ => rfl) rfl) rfl) rfl rfl
+        (legal_ctor_cons (allConstructors_update (allConstructors_update
+          (allConstructors_update (fun _ => rfl) rfl) rfl) rfl) rfl rfl htail)))
 
 theorem legal_decl_cons {dc : FnDecl} {f : FnName} {res₀ : List Expr} {rest : Program}
     {d' : FDatabase} (hdc : dc.merge = some (MergeSpec.merge [] res₀))
-    (hstep : FDatabase.empty.execCmdM (Cmd.decl f dc) = some d')
+    (hfresh : dHdr.sig f = none)
+    (hstep : dHdr.execCmdM (Cmd.decl f dc) = some d')
     (htail : d'.ProgramLegal rest) :
-    FDatabase.empty.ProgramLegal (Cmd.decl f dc :: rest) := by
-  refine ⟨trivial, ⟨rfl, by simp [FDatabase.empty]⟩, mergesLegal_update hdc, ?_⟩
+    dHdr.ProgramLegal (Cmd.decl f dc :: rest) := by
+  refine ⟨trivial, ⟨hfresh, by simp [dHdr, FDatabase.empty]⟩,
+    mergesLegal_update baseSig_allConstructors hdc, ?_⟩
   intro d'' h''
   rw [hstep, Option.some.injEq] at h''
   exact h'' ▸ htail
 
 theorem legal_action_cons {d d' : FDatabase} {dc : FnDecl} {f : FnName} {res₀ : List Expr}
     {e : Expr} {rest : Program} (hdc : dc.merge = some (MergeSpec.merge [] res₀))
-    (hsig : d.sig = Function.update (fun _ => none) f (some dc))
+    (hsig : d.sig = Function.update baseSig f (some dc))
     (hstep : d.execCmdM (Cmd.action (.set f [] [e])) = some d')
     (htail : d'.ProgramLegal rest) :
     d.ProgramLegal (Cmd.action (.set f [] [e]) :: rest) := by
@@ -552,25 +681,43 @@ theorem legal_action_cons {d d' : FDatabase} {dc : FnDecl} {f : FnName} {res₀ 
     simp
   · change Signature.MergesLegal d.sig
     rw [hsig]
-    exact mergesLegal_update hdc
+    exact mergesLegal_update baseSig_allConstructors hdc
   · intro d'' h''
     rw [hstep, Option.some.injEq] at h''
     exact h'' ▸ htail
 
+set_option maxHeartbeats 2000000 in
+-- The kernel evaluates the program here. Declaring the constructors lengthens every
+-- signature lookup's `Function.update` chain, which is enough to exceed the default.
 theorem pA_legal : FDatabase.empty.ProgramLegal pA :=
-  legal_decl_cons rfl rfl (legal_action_cons rfl rfl rfl trivial)
+  legal_header (legal_decl_cons rfl rfl rfl (legal_action_cons rfl rfl rfl trivial))
 
+set_option maxHeartbeats 2000000 in
+-- The kernel evaluates the program here. Declaring the constructors lengthens every
+-- signature lookup's `Function.update` chain, which is enough to exceed the default.
 theorem pB_legal : FDatabase.empty.ProgramLegal pB :=
-  legal_decl_cons rfl rfl
-    (legal_action_cons rfl rfl rfl (legal_action_cons rfl rfl rfl trivial))
+  legal_header (legal_decl_cons rfl rfl rfl
+    (legal_action_cons rfl rfl rfl (legal_action_cons rfl rfl rfl trivial)))
 
+set_option maxHeartbeats 2000000 in
+-- The kernel evaluates the program here. Declaring the constructors lengthens every
+-- signature lookup's `Function.update` chain, which is enough to exceed the default.
 theorem pC_legal : FDatabase.empty.ProgramLegal pC :=
-  legal_decl_cons rfl rfl
+  legal_header (legal_decl_cons rfl rfl rfl
     (legal_action_cons rfl rfl rfl
-      (legal_action_cons rfl rfl rfl (legal_action_cons rfl rfl rfl trivial)))
+      (legal_action_cons rfl rfl rfl (legal_action_cons rfl rfl rfl trivial))))
 
+set_option maxHeartbeats 2000000 in
+-- The kernel evaluates the program here. Declaring the constructors lengthens every
+-- signature lookup's `Function.update` chain, which is enough to exceed the default.
 theorem pA_reads : ReadsAreAtoms pA := rfl
+set_option maxHeartbeats 2000000 in
+-- The kernel evaluates the program here. Declaring the constructors lengthens every
+-- signature lookup's `Function.update` chain, which is enough to exceed the default.
 theorem pB_reads : ReadsAreAtoms pB := rfl
+set_option maxHeartbeats 2000000 in
+-- The kernel evaluates the program here. Declaring the constructors lengthens every
+-- signature lookup's `Function.update` chain, which is enough to exceed the default.
 theorem pC_reads : ReadsAreAtoms pC := rfl
 
 /-! ## What `Current` demands, isolated

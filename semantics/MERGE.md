@@ -89,21 +89,32 @@ with *equal* keys → `Cong.refl` on an application; any `.union` function → "
 the functional dependency. The `zip` premise makes it per *column*, so a multi-column `.union`
 function equates its outputs positionally (see "Multi-column outputs" for why that costs nothing).
 
-`mcong_iff_cong (hsig : db.sig.AllConstructors) (hrows : db.CtorRows) : MCong db a b ↔ Cong db a b`
+`mcong_iff_cong (hterms : db.CtorTerms) (hrows : db.CtorRows) : MCong db a b ↔ Cong db a b`
 is the compatibility theorem. `Database.CtorRows` — `db.rows = ctorRowsOf db.terms` — carries what
 the deleted `toM` embedding used to: `toM` *produced* exactly the constructor rows, `CtorRows`
 *says* the rows are exactly those. It holds of `empty`, is preserved by `addTerm`/`addEq`, and is
 false as soon as a `set` writes a `:merge` row, the right boundary. The directions take different
 hypotheses: `MCong → Cong` holds for **any** signature, since a constructor row is one whatever
-the signature says, while `Cong → MCong` needs `AllConstructors`, which is what licenses `fd`.
+the signature says, while `Cong → MCong` needs `CtorTerms` — every application the database holds
+is a *declared* constructor's — which is what licenses `fd`.
 Congruence returns as a derived rule, `MCong.congr`, not a constructor.
 
-`Signature.mergeOf` defaults an **undeclared** name to `.union`, so M0–M8 — where nothing declares
-anything — is *literally* the all-constructors case rather than analogous to it
-(`Signature.mergeOf_eq_union`); that is why the theorem is a refactor licence rather than a fresh
-development. `MergeStep.saturated_of_allConstructors` is the step-side companion, also proved:
-with no `.merge` function there is no collision, so a round is `RunRules` and nothing else.
-Together they say M9-on-constructors is M0–M8 unchanged, so all of `Proofs/` transports.
+**Declaration is required** (`Signature.IsCtor` is `∃ d, sig f = some d ∧ d.merge = none`), so an
+undeclared name is not a constructor and M0–M8 is the all-constructors case only for programs that
+*declare* their constructors — which is what `Tests/Examples.lean` and `DiffTest.lean` now do, and
+what egglog requires anyway. The hypothesis that carries it is a state invariant,
+`Database.CtorState.terms`, and not a fact about the signature alone:
+`Signature.AllConstructors` says nothing *is* a merge function, which no longer implies that the
+applications in `terms` are constructors'. `MergeStep.saturated_of_allConstructors` is the
+step-side companion, also proved: with no `.merge` function there is no collision, so a round is
+`RunRules` and nothing else. Together they say M9-on-constructors is M0–M8 unchanged, so all of
+`Proofs/` transports.
+
+The payoff of requiring declaration is `CmdStep.mono_recorded` at `.decl`, which was `sorry` while
+an undeclared name counted as a constructor: `MCong.fd` fires only at a constructor, so declaring a
+name that already was one can *remove* a derivation, and `Cmd.DeclFresh` — a declaration names
+something the signature does not have — is what rules that out. A **first** declaration takes
+`IsCtor` away from nothing, which is `MCong.mono_update`.
 
 A Lean trap that cost time twice: `obtain ⟨rfl, _⟩` on a row membership fails, because the row's
 field appears under an unreduced projection (`{fn := f, args := as, out := a}.args`) and `subst`
@@ -907,10 +918,13 @@ to be made twice.
    nevertheless looks true, since a step's effect does not depend on the ambient state. What is
    missing is exactness; the docstring says what would supply it. **Demoted**: no safety theorem
    needs it. It buys one thing, strengthening M10's refinement from "spec-reachable" to an equality.
-2. **Redeclaration.** `Cmd.decl` is `Function.update`, so a program can change a function's `:merge`
-   after rows exist, silently changing what the existing rows mean. egglog forbids redeclaration.
-   Should `WellScoped`?
-3. **`Signature.mergeOf` defaults undeclared names to `.union`.** This makes `AllConstructors` cover
-   M0–M8 exactly and is load-bearing for the compatibility theorem, but egglog requires every
-   function to be declared. Keep the default and note it, or add a `Declared` hypothesis and
-   re-state M0–M8's theorems under it?
+2. **Redeclaration.** `Cmd.decl` is still `Function.update`, so the *dynamics* let a program change
+   a function's `:merge` after rows exist. `Spec/Scope.lean`'s `Cmd.DeclFresh`/`Program.DeclsFresh`
+   is the static check that forbids it, and `Proofs/Counterexamples.lean`'s
+   `mono_recorded_decl_false` is why it has to exist; `FDatabase.ProgramLegal` already implies it
+   (`ProgramLegal.declsFresh`). Should `WellScoped` carry it too, or does the front-end tuple
+   suffice?
+3. **Settled: declaration is required.** `Signature.IsCtor` now asks for a declaration, so
+   `Expr.eval` gets stuck on an undeclared name and `Program.Evaluable` is declare-before-use for
+   free. What it cost is that `AllConstructors` no longer implies `Database.CtorTerms`, which is
+   carried as a state invariant instead.

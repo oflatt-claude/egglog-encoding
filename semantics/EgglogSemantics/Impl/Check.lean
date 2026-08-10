@@ -23,7 +23,8 @@ them: an expression or a query fact appends one fresh output variable, so it nee
 the values it reads. A declaration is checked too — a `:merge` result has one expression
 per value column, and a constructor has exactly one value column.
 
-An undeclared name is a constructor of unconstrained arity, so nothing here constrains it.
+A name with no entry has no declared column counts, so nothing here constrains it. That a
+program must *have* declared what it applies is `Program.Evaluable`'s business.
 
 `PLAN.md`, "Arity checking", is the derivation from egglog's single lowered-atom equation,
 what it deliberately leaves out, and the one place this is stricter than egglog.
@@ -32,7 +33,7 @@ what it deliberately leaves out, and the one place this is stricter than egglog.
 mutual
 
 /-- Every application of a declared function inside `e` has its declared key arity and one
-value column. An undeclared name is a constructor of unconstrained arity. -/
+value column. A name with no entry has nothing to disagree with. -/
 def Expr.arityOk : Expr → Signature → Bool
   | .lit _, _ => true
   | .var _, _ => true
@@ -60,8 +61,8 @@ def Pattern.arityOk : Pattern → Signature → Bool
        | some d => as.length == d.arity && vs.length == d.outArity)
         && Expr.arityOkList vs sig && Expr.arityOkList as sig
 
-/-- An action. A `set`'s key and value counts are checked together; a `set` on an
-undeclared name needs no case here, `Action.SetLegal` already rejects it. -/
+/-- An action. A `set`'s key and value counts are checked together; a `set` on a name with
+no entry needs no case here, `Action.SetLegal` already rejects it. -/
 def Action.arityOk : Action → Signature → Bool
   | .expr e, sig => e.arityOk sig
   | .letBind _ e, sig => e.arityOk sig
@@ -124,9 +125,14 @@ and this section says no expression anywhere in a program contains one. The sing
 a program may read is then the query atom `Pattern.values`, whose function name is not an
 expression position at all.
 
-A lookup is an application of a non-constructor. `Signature.IsCtor` calls an undeclared
-name a constructor, so a constructor and a primitive both pass without a case of their
-own.
+A lookup is an application of a declared merge function. A **primitive** needs a case of
+its own: egglog resolves one out of a table that is already populated, so it is never
+declared, and `Signature.IsCtor` — which requires declaration — would otherwise reject
+`(min old new)`. This is `Expr.eval`'s own order, primitives first.
+
+An **undeclared** name fails this check too, which is a second thing it now says: it is not
+a read, it is a name that means nothing. `Spec/Scope.lean`'s `Evaluable` rejects it for the
+same reason.
 
 `Spec/Scope.lean`'s `Evaluable` is the semantics-side half of this: it constrains only
 the positions `Expr.eval` reaches, and it also excludes primitives, which this check
@@ -144,11 +150,13 @@ egglog allows a read and this does not, and what the restriction already caught 
 
 mutual
 
-/-- No application inside `e` reads a row: every function it names is a constructor. -/
+/-- No application inside `e` reads a row: every function it names is a declared
+constructor or a primitive. -/
 def Expr.noLookup : Expr → Signature → Bool
   | .lit _, _ => true
   | .var _, _ => true
-  | .app f args, sig => decide (sig.IsCtor f) && Expr.noLookupList args sig
+  | .app f args, sig =>
+      ((Prim.ofName f).isSome || decide (sig.IsCtor f)) && Expr.noLookupList args sig
 
 /-- `Expr.noLookup` over an argument list. -/
 def Expr.noLookupList : List Expr → Signature → Bool
@@ -208,7 +216,8 @@ def Program.NoLookup (p : Program) (sig : Signature) : Prop := p.noLookup sig = 
 
 /-- The read check from the empty signature: every read is a `Pattern.values` atom. The
 tuple to carry is
-`WellScoped p ∧ p.Evaluable sig ∧ p.SetLegal sig ∧ WellArity p ∧ ReadsAreAtoms p`. -/
+`WellScoped p ∧ p.Evaluable sig ∧ p.DeclsFresh sig ∧ p.SetLegal sig ∧ WellArity p ∧
+ReadsAreAtoms p`. -/
 def ReadsAreAtoms (p : Program) : Prop := Program.NoLookup p (fun _ => none)
 
 end Egglog

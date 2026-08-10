@@ -22,19 +22,34 @@ theorem eval_app_prim {sig : Signature} {f : FnName} {p : Prim} {args : List Exp
     (Expr.app f args).eval sig σ = (Expr.evalList sig args σ).bind p.apply := by
   simp only [Expr.eval, hp]
 
-/-- The reading case, which has no rule: an application of a non-constructor is a lookup,
+/-- **The stuck case**, all of it: anything that is neither a primitive nor a *declared*
+constructor has no rule. It covers the two lookups — a `:merge` and a `:no-merge` function
+— and, since declaration is required, the name nobody declared. -/
+theorem eval_app_not_ctor {sig : Signature} {f : FnName} {args : List Expr} {σ : Env}
+    (hp : Prim.ofName f = none) (hc : ¬ sig.IsCtor f) :
+    (Expr.app f args).eval sig σ = none := by
+  simp only [Expr.eval, hp, if_neg hc]
+
+/-- The reading case, which has no rule: an application of a merge function is a lookup,
 and `Impl/Check.lean`'s `noLookup` rejects one in every position this is called from. -/
 theorem eval_app_merge {sig : Signature} {f : FnName} {args : List Expr} {σ : Env}
     {body : List Action} {res : List Expr} (hp : Prim.ofName f = none)
     (hc : sig.mergeOf f = some (MergeSpec.merge body res)) :
-    (Expr.app f args).eval sig σ = none := by
-  simp only [Expr.eval, hp, if_neg (Signature.not_isCtor hc)]
+    (Expr.app f args).eval sig σ = none :=
+  eval_app_not_ctor hp (Signature.not_isCtor hc)
 
 /-- `eval_app_merge` for a `:no-merge` function, which is a lookup for the same reason. -/
 theorem eval_app_noMerge {sig : Signature} {f : FnName} {args : List Expr} {σ : Env}
     (hp : Prim.ofName f = none) (hc : sig.mergeOf f = some MergeSpec.noMerge) :
-    (Expr.app f args).eval sig σ = none := by
-  simp only [Expr.eval, hp, if_neg (Signature.not_isCtor hc)]
+    (Expr.app f args).eval sig σ = none :=
+  eval_app_not_ctor hp (Signature.not_isCtor hc)
+
+/-- The undeclared case, spelled out: a name the signature does not mention builds
+nothing. -/
+theorem eval_app_undeclared {sig : Signature} {f : FnName} {args : List Expr} {σ : Env}
+    (hp : Prim.ofName f = none) (hc : sig f = none) :
+    (Expr.app f args).eval sig σ = none :=
+  eval_app_not_ctor hp (Signature.not_isCtor_of_none hc)
 
 @[simp] theorem evalList_nil {sig : Signature} {σ : Env} :
     Expr.evalList sig [] σ = some [] := rfl
@@ -44,6 +59,154 @@ theorem eval_app_noMerge {sig : Signature} {f : FnName} {args : List Expr} {σ :
       (e.eval sig σ).bind fun t => (Expr.evalList sig es σ).map (t :: ·) := rfl
 
 end Expr
+/-! ### Evaluation stays inside the constructor fragment
+
+`Database.CtorTerms` on one term, and the fact that `Expr.eval` only ever produces such
+terms. It lives here rather than with the invariant that reads it because it is a fact
+about `Expr.eval` and nothing else, and both `Proofs/Step.lean`'s `Database.CtorState` and
+`Proofs/Merge.lean`'s `FDatabase.Inv` need it. -/
+
+/-- A term built only from constructor applications.
+
+`Database.CtorTerms` says the database holds only such terms; this is the same condition on
+one term, which is what the operations that *insert* a term have to be given. -/
+def Term.CtorTerm (sig : Signature) (t : Term) : Prop :=
+  ∀ f as, Term.app f as ∈ t.subterms → sig.IsCtor f
+
+/-- A literal mentions no application. -/
+theorem Term.ctorTerm_lit {sig : Signature} {l : Lit} : Term.CtorTerm sig (.lit l) := by
+  intro f as hsub
+  rw [Term.subterms_lit] at hsub
+  exact absurd hsub (by simp)
+
+/-- A primitive returns one of its operands or a fresh literal, so it cannot introduce a
+non-constructor application. -/
+theorem Prim.apply_ctorTerm {sig : Signature} {p : Prim} {ts : List Term} {v : Term}
+    (hts : ∀ t ∈ ts, Term.CtorTerm sig t) (h : p.apply ts = some v) :
+    Term.CtorTerm sig v := by
+  unfold Prim.apply at h
+  split at h
+  · simp only [Option.some_inj] at h
+    subst h
+    unfold Term.orderingMin
+    split
+    · exact hts _ (by simp)
+    · exact hts _ (by simp)
+  · simp only [Option.some_inj] at h
+    subst h
+    unfold Term.orderingMax
+    split
+    · exact hts _ (by simp)
+    · exact hts _ (by simp)
+  · simp only [Option.some_inj] at h; subst h; exact Term.ctorTerm_lit
+  · simp only [Option.some_inj] at h; subst h; exact Term.ctorTerm_lit
+  · exact absurd h (by simp)
+
+mutual
+
+/-- **Evaluation only ever builds constructor terms.**
+
+Each branch that produces a term stays inside the constructor fragment: the building
+branch's head is a *declared* constructor by the guard the evaluator just tested, and a
+primitive returns an operand or a literal. Nothing reads a row, so no case has to place a
+recorded output back in `terms`. This is what `FDatabase.Inv.execAction` needs. -/
+theorem Expr.eval_ctorTerm {sig : Signature} {σ : Env}
+    (hσ : ∀ b ∈ σ, Term.CtorTerm sig b.2) {e : Expr} {t : Term}
+    (hs : e.eval sig σ = some t) : Term.CtorTerm sig t := by
+  match e with
+  | .lit l =>
+    rw [Expr.eval_lit, Option.some_inj] at hs
+    subst hs; exact Term.ctorTerm_lit
+  | .var v =>
+    rw [Expr.eval_var] at hs
+    exact hσ (v, t) (Env.mem_of_lookup hs)
+  | .app f args =>
+    cases hp : Prim.ofName f with
+    | some p =>
+      rw [Expr.eval_app_prim hp, Option.bind_eq_some_iff] at hs
+      obtain ⟨ts, hts, happ⟩ := hs
+      exact Prim.apply_ctorTerm (Expr.evalList_ctorTerm hσ hts) happ
+    | none =>
+      by_cases hu : sig.IsCtor f
+      · rw [Expr.eval_app_ctor hp hu, Option.map_eq_some_iff] at hs
+        obtain ⟨ts, hts, rfl⟩ := hs
+        have hts' := Expr.evalList_ctorTerm hσ hts
+        intro g bs hsub
+        rw [Term.subterms_app] at hsub
+        rcases Set.mem_insert_iff.mp hsub with heq | hmem
+        · obtain ⟨rfl, rfl⟩ := Term.app.injEq .. ▸ heq
+          exact hu
+        · obtain ⟨x, hx, hxs⟩ := Set.mem_iUnion₂.mp hmem
+          exact hts' x hx g bs hxs
+      · rw [Expr.eval_app_not_ctor hp hu] at hs; exact absurd hs (by simp)
+
+theorem Expr.evalList_ctorTerm {sig : Signature} {σ : Env}
+    (hσ : ∀ b ∈ σ, Term.CtorTerm sig b.2) {es : List Expr} {ts : List Term}
+    (hs : Expr.evalList sig es σ = some ts) : ∀ t ∈ ts, Term.CtorTerm sig t := by
+  match es with
+  | [] =>
+    rw [Expr.evalList_nil, Option.some_inj] at hs
+    subst hs; simp
+  | e :: es =>
+    rw [Expr.evalList_cons, Option.bind_eq_some_iff] at hs
+    obtain ⟨t, ht, hmap⟩ := hs
+    obtain ⟨rest, hrest, heq⟩ := Option.map_eq_some_iff.mp hmap
+    subst heq
+    intro x hx
+    rcases List.mem_cons.mp hx with rfl | hx
+    · exact Expr.eval_ctorTerm hσ ht
+    · exact Expr.evalList_ctorTerm hσ hrest x hx
+
+end
+
+namespace Database
+namespace CtorTerms
+
+theorem addTerm {db : Database} (h : db.CtorTerms) {t : Term}
+    (ht : Term.CtorTerm db.sig t) : (db.addTerm t).CtorTerms := by
+  rintro f as (hm | hm)
+  · exact h f as hm
+  · exact ht f as hm
+
+theorem addTerms {db : Database} (h : db.CtorTerms) {ts : List Term}
+    (hts : ∀ t ∈ ts, Term.CtorTerm db.sig t) : (db.addTerms ts).CtorTerms := by
+  induction ts generalizing db with
+  | nil => exact h
+  | cons t ts ih => exact ih (h.addTerm (hts t (by simp))) fun s hs => hts s (by simp [hs])
+
+theorem addEq {db : Database} (h : db.CtorTerms) {a b : Term}
+    (ha : Term.CtorTerm db.sig a) (hb : Term.CtorTerm db.sig b) :
+    (db.addEq a b).CtorTerms := (h.addTerm ha).addTerm hb
+
+theorem addRow {db : Database} (h : db.CtorTerms) {f : FnName} {as vs : List Term}
+    (has : ∀ a ∈ as, Term.CtorTerm db.sig a) (hvs : ∀ v ∈ vs, Term.CtorTerm db.sig v) :
+    (db.addRow f as vs).CtorTerms := (h.addTerms has).addTerms (by simpa using hvs)
+
+/-- A union holds only what its operands hold, and takes `sig` from the left. -/
+theorem sUnion {db : Database} (h : db.CtorTerms) {S : Set Database}
+    (hS : ∀ d ∈ S, ∀ f as, Term.app f as ∈ d.terms → db.sig.IsCtor f) :
+    (db.sUnion S).CtorTerms := by
+  rintro f as (hm | hm)
+  · exact h f as hm
+  · obtain ⟨d, hd, hm'⟩ := Set.mem_iUnion₂.mp hm
+    exact hS d hd f as hm'
+
+end CtorTerms
+
+/-- Every term the database holds is constructor-built: `subtermClosed` pushes the
+application into `terms`, where `CtorTerms` reads it off. -/
+theorem ctorTerm_of_mem {db : Database} (hw : db.WF) (h : db.CtorTerms) {t : Term}
+    (ht : t ∈ db.terms) : Term.CtorTerm db.sig t :=
+  fun _ _ hsub => h _ _ (hw.subtermClosed t ht hsub)
+
+/-- The environment holds only constructor terms, since `WF.envInTerms` puts its values in
+`terms`. -/
+theorem env_ctorTerm {db : Database} (hw : db.WF) (h : db.CtorTerms) :
+    ∀ b ∈ db.env, Term.CtorTerm db.sig b.2 :=
+  fun b hb => Database.ctorTerm_of_mem hw h (hw.envInTerms b hb)
+
+end Database
+
 mutual
 
 /-- Evaluation reads the environment only through `lookup`, so environments that
@@ -347,6 +510,11 @@ theorem evalLocalActions_env {db db' : Database} {as : List Action} {σ : Env}
 theorem evalLocalActions_rules {db db' : Database} {as : List Action} {σ : Env}
     (h : evalLocalActions db as σ = some db') : db'.rules = db.rules := by
   obtain ⟨_, _, rfl⟩ := evalLocalActions_eq_some h; rfl
+
+theorem evalLocalActions_sig {db db' : Database} {as : List Action} {σ : Env}
+    (h : evalLocalActions db as σ = some db') : db'.sig = db.sig := by
+  obtain ⟨_, hv, rfl⟩ := evalLocalActions_eq_some h
+  exact (evalActions_sig hv : _ = ({ db with env := db.env ++ σ } : Database).sig)
 
 theorem evalLocalActions_contained {db db' : Database} {as : List Action} {σ : Env}
     (h : evalLocalActions db as σ = some db') : db.Contained db' := by

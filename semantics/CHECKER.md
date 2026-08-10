@@ -254,7 +254,7 @@ column is redundant with its key). Two are load-bearing:
   `congOn_iff_cong` converting on terms the source holds. If it is wrong, it is wrong in the
   direction of the invariant the induction will carry.
 * **`MCong` on the target is claimed trivial** (`encode_mcong_eq`), resting on source constructor
-  names staying undeclared — they must be `.union` to be buildable by `MEval.ctor` — so their rows
-  are exactly the constructor rows their terms induce and `fd` only re-derives reflexivity. A
-  source `set`, or a declaration surviving into the target, would break it; `EncodeDomain` rules
-  both out.
+  names staying *constructors* in the target — they must be, to be buildable by `Expr.eval` — so
+  their rows are exactly the constructor rows their terms induce and `fd` only re-derives
+  reflexivity. A source `set`, or a `:merge` declaration of one of them surviving into the target,
+  would break it; `EncodeDomain` rules both out.

@@ -6,12 +6,13 @@ import EgglogSemantics.Spec.Congruence
 Ports the Redex `Eval-Expr`, `Eval-Action`, `Eval-Global-Actions` and
 `Eval-Local-Actions`.
 
-Evaluation is partial, in three ways. `Eval-Expr` has no rule for an unbound variable;
-an application of a non-constructor is a *lookup*, which is a query atom
-(`Pattern.values`) and never an expression; and a primitive may be given operands of the
-wrong sort, which is egglog's own `i64` type error and which this model has no sort
-discipline to reject statically. All three are `none`. `Scope.lean`'s `Scoped` rules out
-the first and its `Evaluable` the other two.
+Evaluation is partial, in four ways. `Eval-Expr` has no rule for an unbound variable; an
+application of an **undeclared** name has none either, which is egglog's declare-before-use
+and the Redex's one real omission; an application of a declared merge function is a
+*lookup*, which is a query atom (`Pattern.values`) and never an expression; and a primitive
+may be given operands of the wrong sort, which is egglog's own `i64` type error and which
+this model has no sort discipline to reject statically. All four are `none`. `Scope.lean`'s
+`Scoped` rules out the first and its `Evaluable` the other three.
 
 Actions only ever add terms, rows and equalities, which is `evalAction_contained` — the
 fact the Redex documentation appeals to when it says the order of actions does not
@@ -23,11 +24,12 @@ mutual
 
 /-- The Redex `Eval-Expr`: build the ground term an expression denotes.
 
-The signature is read for one thing only — whether a name **builds or computes or
-reads**. egglog consults its primitive table first, so a reserved name shadows a user
-function; a constructor builds the application; and anything else is a lookup, which has
-no rule here at all. That is why the evaluator needs a `Signature` and nothing else of
-the database: reading is confined to `Pattern.values`.
+The signature is read for one thing only — whether a name **builds or computes or reads
+or means nothing**. egglog consults its primitive table first, so a reserved name shadows
+a user function; a declared constructor builds the application; and anything else — a
+merge function, which would be a lookup, or a name nobody declared — has no rule here at
+all. That is why the evaluator needs a `Signature` and nothing else of the database:
+reading is confined to `Pattern.values`.
 
 Because only constructor applications ever end up inside a `Term`, `Term.ctorRows` needs
 no signature. -/

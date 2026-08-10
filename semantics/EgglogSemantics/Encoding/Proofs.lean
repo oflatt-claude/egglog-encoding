@@ -11,13 +11,13 @@ wrong statement proved is worth less than a right one stated.
 ## The asymmetry between the two sides
 
 The source `P` is in the constructor fragment, so `Database.CtorRows` and
-`Signature.AllConstructors` hold of the state it runs to and `mcong_iff_cong` says the
+`Database.CtorTerms` hold of the state it runs to and `mcong_iff_cong` says the
 functional dependency there *is* congruence. Source-side equality is therefore written
 `Cong`.
 
 Neither holds of the target. `encode` declares `@UF` and every `@fView` with a `:merge`,
-so `AllConstructors` is false (`encode_not_allConstructors`), and their rows are not
-constructor rows, so `CtorRows` is false and `mcong_iff_cong` does not apply. What takes
+so `Signature.AllConstructors` is false (`encode_not_allConstructors`), and their rows are
+not constructor rows, so `CtorRows` is false and `mcong_iff_cong` does not apply. What takes
 its place is the opposite fact: every table the encoded program writes is a merge
 function's and it asserts no equalities, so `MCong` on the target collapses to syntactic
 equality

@@ -880,12 +880,14 @@ is the follow-on, not this.
 once and `ArityOk` reads it, so the difftest's check and the statement a proof would use are the
 same definition — and deciding it needs no instance through the `List Expr` nesting.
 
-Two things are deliberately not covered, both because there is no declaration to check against.
-That every *undeclared* name is used at one arity: constructors are never declared here —
-`Signature.mergeOf` sends an undeclared name to `.union` — so `Tests/Egg.lean`, which invents the
-`datatype` header from uses, carries that half as `Program.arityConflicts`. And a primitive's arity,
-which egglog also checks ("Arity mismatch, expected 2 args: (min old new 3)"): `Prim.ofName` lives
-in `Spec/Merge.lean` and an undeclared name passes here, so this is permissive rather than wrong.
+Two things are deliberately not covered, both because `arityOk` reads the signature and nothing
+else. That every *undeclared* name is used at one arity: a name with no entry has no declared
+column counts to disagree with, so `Tests/Egg.lean`, which invents the `datatype` header from uses,
+carries that half as `Program.arityConflicts`. (That a program must declare before it uses is
+`Program.Evaluable`'s business, and `Program.declared` is how the difftest supplies the
+declarations.) And a primitive's arity, which egglog also checks ("Arity mismatch, expected 2 args:
+(min old new 3)"): `Prim.ofName` lives in `Spec/Merge.lean` and is never in the signature, so this
+is permissive rather than wrong.
 
 A `Pattern.values` atom does **not** want the `SetLegal` companion restriction, and extending that
 family to the query would be wrong rather than merely premature. It is the model's only read and

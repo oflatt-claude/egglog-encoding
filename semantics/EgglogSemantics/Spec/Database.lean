@@ -77,13 +77,18 @@ True of `empty`, preserved by `addTerm`/`addEq`, and false as soon as a `set` wr
 `Cong.fd` coincides with plain congruence — see `Proofs/Merge.lean`'s `mcong_iff_cong`. -/
 def CtorRows (db : Database) : Prop := db.rows = ctorRowsOf db.terms
 
-/-- Every application the database holds is a *constructor* application.
+/-- Every application the database holds is a **declared** constructor's.
 
-True of any database a program builds: a `:merge` function's application evaluates to its
-recorded output rather than becoming a term, so only constructors ever appear inside a
-`Term` (`Term.ctorRows` says the same thing from the other side). Unlike `CtorRows` this
-survives a `:merge` declaration, because it constrains `terms`, which merging never
-touches — `FDatabase.mergeRound_confined`. -/
+True of any database a program builds: `Expr.eval` builds only at a declared constructor —
+a merge function's application would be a lookup and an undeclared name has no rule at all
+— so only constructors ever appear inside a `Term` (`Term.ctorRows` says the same thing
+from the other side). Unlike `CtorRows` this survives a `:merge` declaration of some
+*other* name, because it constrains `terms`, which merging never touches —
+`FDatabase.mergeRound_confined`.
+
+It is the second hypothesis of `Proofs/Merge.lean`'s `mcong_iff_cong`, and it has to be
+carried as a state invariant (`Database.CtorState`): `Signature.AllConstructors` says
+nothing *is* a merge function, which leaves an undeclared name neither. -/
 def CtorTerms (db : Database) : Prop :=
   ∀ f as, Term.app f as ∈ db.terms → db.sig.IsCtor f
 
@@ -107,7 +112,8 @@ def addTerms (ts : List Term) (db : Database) : Database :=
 collision with a congruent key is resolved by `Cong.fd` or by `MergeStep`, neither of
 which removes this row. -/
 def addRow (f : FnName) (as vs : List Term) (db : Database) : Database :=
-  { (db.addTerms as).addTerms vs with rows := insert ⟨f, as, vs⟩ ((db.addTerms as).addTerms vs).rows }
+  { (db.addTerms as).addTerms vs with
+    rows := insert ⟨f, as, vs⟩ ((db.addTerms as).addTerms vs).rows }
 
 /-- Assert `a = b`, inserting both terms. -/
 def addEq (a b : Term) (db : Database) : Database :=

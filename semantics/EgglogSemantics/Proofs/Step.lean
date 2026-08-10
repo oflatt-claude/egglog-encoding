@@ -169,11 +169,44 @@ theorem cong_runProgram {db db' : Database} {p : Program} (h : runProgram db p =
     {a b : Term} (hc : Cong db a b) : Cong db' a b :=
   hc.mono (runProgram_contained h)
 
+/-! ### Matched substitutions bind terms the database holds
+
+`ValidEnv` per pattern, unioned. `RuleResults.wf` and `RuleResults.ctorTerms` need it: a
+firing runs its head in the caller's environment extended by the substitution, and both
+invariants ask that every value there be a term the database already holds. -/
+/-- The hypothesis `patternHolds_MValidSubst` adds is a consequence of its conclusion,
+which is why requiring it costs nothing. -/
+theorem MValidSubst.validEnv {db : Database} {p : Pattern} {σ : Env}
+    (h : MValidSubst db p σ) : ValidEnv (p.freeVars db.env) db σ := by
+  cases h with
+  | expr hv _ _ _ => exact hv
+  | eq hv _ _ _ _ _ => exact hv
+  | values hv _ _ _ _ _ => exact hv
+
+/-- Every value a query substitution binds is a term the database holds — `ValidEnv` per
+pattern, unioned. -/
+theorem MValidQuerySubst.mem_terms {db : Database} {q : Query} {σ : Env}
+    (h : MValidQuerySubst db q σ) : ∀ b ∈ σ, b.2 ∈ db.terms := by
+  obtain ⟨σs, hall, hu⟩ := h
+  have hmem : ∀ σ' ∈ σs, ∃ p, MValidSubst db p σ' := by
+    clear hu
+    induction hall with
+    | nil => intro _ hx; simp at hx
+    | @cons p σ' _ _ hr _ ih =>
+      intro τ hτ
+      rcases List.mem_cons.mp hτ with rfl | h'
+      · exact ⟨p, hr⟩
+      · exact ih τ h'
+  refine hu.forall_mem fun σ' hσ' b hb => ?_
+  obtain ⟨p, hp⟩ := hmem σ' hσ'
+  exact hp.validEnv.2 b hb
+
 /-! ### Constructor rows survive a run
 
-`Database.CtorRows` — the rows are exactly the ones the terms induce — is what
-`Proofs/Merge.lean`'s `mcong_iff_cong` wants of a database besides an all-constructors
-signature, and until now nothing connected it to a database a program can produce.
+`Database.CtorRows` — the rows are exactly the ones the terms induce — is one of the two
+things `Proofs/Merge.lean`'s `mcong_iff_cong` wants of a database (`Database.CtorTerms`,
+below, is the other), and until now nothing connected it to a database a program can
+produce.
 `Proofs/Database.lean` shows every database operation preserves it. What is left is to
 carry it along the semantics, which takes three side conditions, each of them necessary:
 
@@ -228,21 +261,86 @@ theorem Signature.AllConstructors.sigBind {sig : Signature} (h : sig.AllConstruc
     · exact h g
   | _ => exact h
 
-/-- The state half of the constructor fragment: the signature declares only
-constructors, no rule the database holds can `set`, and the rows are the terms'.
+/-- The state half of the constructor fragment: the database is well formed, the signature
+declares no merge function, every application it holds is a *declared* constructor's, no
+rule the database holds can `set`, and the rows are the terms'.
 
-Bundled because all three have to move together — a `decl` changes the signature, so it
-changes what `SetLegal` means for the rules already stored, and `runRules` needs those
-rules legal to keep the rows constructor rows. -/
+Bundled because they have to move together — a `decl` changes the signature, so it changes
+what `SetLegal` means for the rules already stored, and `runRules` needs those rules legal
+to keep the rows constructor rows.
+
+`terms` is what `mcong_iff_cong` reads, and it is a field rather than a consequence of
+`sig` because declaration is required: `AllConstructors` says nothing *is* a merge
+function, which leaves an undeclared name neither a constructor nor a merge function.
+`wf` is here only to keep `terms`: an action evaluates in `db.env`, and knowing that the
+environment's values are constructor-built is `Database.env_ctorTerm`, which reads both. -/
 structure Database.CtorState (db : Database) : Prop where
+  wf : db.WF
   sig : db.sig.AllConstructors
+  terms : db.CtorTerms
   rules : ∀ r ∈ db.rules, r.SetLegal db.sig
   rows : db.CtorRows
 
 theorem Database.CtorState.empty : Database.empty.CtorState where
-  sig := by intro f; simp [Signature.IsCtor, Signature.mergeOf, Database.empty]
+  wf := Database.WF.empty
+  sig := by intro f; simp [Signature.mergeOf, Database.empty]
+  terms := by intro f as hm; exact absurd hm (by simp [Database.empty])
   rules := by simp [Database.empty]
   rows := Database.CtorRows.empty
+
+/-! #### Constructor terms survive a run
+
+`Database.CtorTerms` — every application the database holds heads a declared constructor —
+is the second thing `mcong_iff_cong` wants, and the one the old reading of
+`Signature.IsCtor` gave away for free. It is carried the same way `CtorRows` is, with the
+same three side conditions doing the same work: `Expr.eval` builds only at a constructor,
+so an action adds nothing else; a `set` is the one action that could, and `SetLegal` plus
+`AllConstructors` leaves none; and a `decl` moves the signature, where `CtorDecl` keeps it
+moving in the one direction that adds constructors. -/
+theorem evalAction_ctorTerms {db db' : Database} (hw : db.WF) (hsig : db.sig.AllConstructors)
+    {a : Action} (hlegal : a.SetLegal db.sig) (hterms : db.CtorTerms)
+    (h : evalAction db a = some db') : db'.CtorTerms := by
+  have henv := Database.env_ctorTerm hw hterms
+  rcases evalAction_eq_some h with ⟨_, t, -, ht, rfl⟩ | ⟨_, _, t, -, ht, rfl⟩ |
+    ⟨_, _, t₁, t₂, -, ht₁, ht₂, rfl⟩ | ⟨f, _, _, as, v, rfl, -, -, rfl⟩
+  · exact hterms.addTerm (Expr.eval_ctorTerm henv ht)
+  · exact hterms.addTerm (Expr.eval_ctorTerm henv ht)
+  · exact hterms.addEq (Expr.eval_ctorTerm henv ht₁) (Expr.eval_ctorTerm henv ht₂)
+  · exact (Action.SetLegal.elim hsig hlegal).elim
+
+theorem evalActions_ctorTerms {db db' : Database} (hw : db.WF)
+    (hsig : db.sig.AllConstructors) {as : List Action}
+    (hlegal : Actions.SetLegal as db.sig) (hterms : db.CtorTerms)
+    (h : evalActions db as = some db') : db'.CtorTerms := by
+  induction as generalizing db with
+  | nil => exact (Option.some.injEq .. ▸ h : db = db') ▸ hterms
+  | cons a as ih =>
+    cases hv : evalAction db a with
+    | none => simp [hv] at h
+    | some db₁ =>
+      simp only [evalActions_cons, hv, Option.bind_some] at h
+      exact ih (evalAction_wf hw hv) (by rw [evalAction_sig hv]; exact hsig)
+        (by rw [evalAction_sig hv]; exact hlegal.2)
+        (evalAction_ctorTerms hw hsig hlegal.1 hterms hv) h
+
+theorem evalLocalActions_ctorTerms {db db' : Database} (hw : db.WF)
+    (hsig : db.sig.AllConstructors) {as : List Action} {σ : Env}
+    (hσ : ∀ b ∈ σ, b.2 ∈ db.terms) (hlegal : Actions.SetLegal as db.sig)
+    (hterms : db.CtorTerms) (h : evalLocalActions db as σ = some db') : db'.CtorTerms := by
+  obtain ⟨d, hv, rfl⟩ := evalLocalActions_eq_some h
+  have hw' : Database.WF { db with env := db.env ++ σ } := by
+    refine ⟨hw.subtermClosed, hw.eqsInTerms, fun b hb => ?_⟩
+    rcases List.mem_append.mp hb with hb' | hb'
+    · exact hw.envInTerms b hb'
+    · exact hσ b hb'
+  exact evalActions_ctorTerms (db := { db with env := db.env ++ σ }) (db' := d)
+    hw' hsig hlegal hterms hv
+
+theorem ruleResults_ctorTerms {db d : Database} (hw : db.WF)
+    (hsig : db.sig.AllConstructors) {r : Rule} (hlegal : r.SetLegal db.sig)
+    (hterms : db.CtorTerms) (h : d ∈ ruleResults db r) : d.CtorTerms :=
+  evalLocalActions_ctorTerms hw hsig h.choose_spec.1.mem_terms hlegal hterms
+    h.choose_spec.2
 
 /-! #### The functional semantics -/
 theorem evalAction_ctorRows {db db' : Database} (hsig : db.sig.AllConstructors)
@@ -285,8 +383,17 @@ theorem runRules_ctorRows {db : Database} (h : db.CtorState) : (runRules db).Cto
   h.rows.sUnion fun _ hd =>
     ruleResults_ctorRows h.sig (h.rules _ hd.choose_spec.1) h.rows hd.choose_spec.2
 
+theorem ruleResults_sig {db d : Database} {r : Rule} (h : d ∈ ruleResults db r) :
+    d.sig = db.sig := evalLocalActions_sig h.choose_spec.2
+
+theorem runRules_ctorTerms {db : Database} (h : db.CtorState) : (runRules db).CtorTerms :=
+  h.terms.sUnion fun _ hd f as hm =>
+    ruleResults_sig hd.choose_spec.2 ▸
+      ruleResults_ctorTerms h.wf h.sig (h.rules _ hd.choose_spec.1) h.terms
+        hd.choose_spec.2 f as hm
+
 theorem runRules_ctorState {db : Database} (h : db.CtorState) : (runRules db).CtorState :=
-  ⟨h.sig, h.rules, runRules_ctorRows h⟩
+  ⟨runRules_wf h.wf, h.sig, runRules_ctorTerms h, h.rules, runRules_ctorRows h⟩
 
 /-- The signature a command leaves is `Cmd.sigBind`'s, which is what lets
 `Program.SetLegal` thread through a `decl`. -/
@@ -298,18 +405,53 @@ theorem stepCmd_sig {db db' : Database} {c : Cmd} (h : stepCmd db c = some db') 
   | run => simp only [stepCmd, Option.some.injEq] at h; exact h ▸ rfl
   | decl f d => simp only [stepCmd, Option.some.injEq] at h; exact h ▸ rfl
 
+/-- A declaration whose entry has no merge keeps every constructor a constructor, and makes
+the declared name one. This is the direction `Cmd.CtorDecl` buys: a *merge* declaration
+would take `IsCtor` away at the declared name, which is `Falsity.claim1`. -/
+theorem Signature.IsCtor.update {sig : Signature} {f g : FnName} {d : FnDecl}
+    (hd : d.merge = none) (h : sig.IsCtor g) :
+    Signature.IsCtor (Function.update sig f (some d)) g := by
+  obtain ⟨e, he, hm⟩ := h
+  by_cases hg : g = f
+  · subst hg; exact ⟨d, Function.update_self .., hd⟩
+  · exact ⟨e, by rw [Function.update_of_ne hg]; exact he, hm⟩
+
+/-- **Declaring a name the signature does not mention keeps every constructor.** Unlike
+`Signature.IsCtor.update` this puts no condition on the declaration: whatever `f` is
+declared to be, it was not a constructor before, so nothing that *was* one is disturbed.
+
+This is what declaration-required buys, and the reason `mcong_mono_needs_sig` is not a
+counterexample to it: that witness *re*declares a name that was already a constructor. -/
+theorem Signature.IsCtor.update_of_fresh {sig : Signature} {f g : FnName} {dc : FnDecl}
+    (hf : sig f = none) (h : sig.IsCtor g) :
+    Signature.IsCtor (Function.update sig f (some dc)) g := by
+  obtain ⟨e, he, hm⟩ := h
+  have hg : g ≠ f := by rintro rfl; rw [hf] at he; exact absurd he (by simp)
+  exact ⟨e, by rw [Function.update_of_ne hg]; exact he, hm⟩
+
+/-- `CtorTerms` survives a command's signature change, provided the command declares a
+constructor. -/
+theorem Database.CtorTerms.sigBind {db : Database} (h : db.CtorTerms) {c : Cmd}
+    (hc : c.CtorDecl) : ∀ f as, Term.app f as ∈ db.terms → (c.sigBind db.sig).IsCtor f := by
+  cases c with
+  | decl g d => exact fun f as hm => (h f as hm).update hc
+  | _ => exact h
+
 theorem stepCmd_ctorState {db db' : Database} (h : db.CtorState) {c : Cmd}
     (hdecl : c.CtorDecl) (hlegal : c.SetLegal db.sig) (hv : stepCmd db c = some db') :
     db'.CtorState := by
   cases c with
   | action a =>
-    exact ⟨by rw [evalAction_sig hv]; exact h.sig,
+    exact ⟨evalAction_wf h.wf hv,
+      by rw [evalAction_sig hv]; exact h.sig,
+      evalAction_ctorTerms h.wf h.sig hlegal h.terms hv,
       by rw [evalAction_sig hv, evalAction_rules hv]; exact h.rules,
       evalAction_ctorRows h.sig hlegal h.rows hv⟩
   | rule r =>
     simp only [stepCmd, Option.some.injEq] at hv
     subst hv
-    refine ⟨h.sig, ?_, h.rows⟩
+    refine ⟨⟨h.wf.subtermClosed, h.wf.eqsInTerms, h.wf.envInTerms⟩, h.sig, h.terms, ?_,
+      h.rows⟩
     rintro r' (rfl | hr')
     · exact hlegal
     · exact h.rules r' hr'
@@ -320,7 +462,8 @@ theorem stepCmd_ctorState {db db' : Database} (h : db.CtorState) {c : Cmd}
   | decl f d =>
     simp only [stepCmd, Option.some.injEq] at hv
     subst hv
-    exact ⟨h.sig.sigBind hdecl,
+    exact ⟨⟨h.wf.subtermClosed, h.wf.eqsInTerms, h.wf.envInTerms⟩, h.sig.sigBind hdecl,
+      h.terms.sigBind (c := .decl f d) hdecl,
       fun r hr => Rule.SetLegal.of_allConstructors h.sig (h.rules r hr), h.rows⟩
 
 theorem runProgram_ctorState {db db' : Database} (h : db.CtorState) {p : Program}
@@ -414,6 +557,27 @@ theorem RunRules.ctorRows {db : Database} (h : db.CtorState) : (RunRules db).Cto
   h.rows.sUnion fun _ hd =>
     RuleResults.ctorRows h.sig (h.rules _ hd.choose_spec.1) h.rows hd.choose_spec.2
 
+theorem RuleResults.sig {db d : Database} {r : Rule} (h : d ∈ RuleResults db r) :
+    d.sig = db.sig := by
+  obtain ⟨σ, _, hstep⟩ := h; exact evalLocalActions_sig hstep
+
+theorem RuleResults.wf {db d : Database} (hw : db.WF) {r : Rule}
+    (h : d ∈ RuleResults db r) : d.WF := by
+  obtain ⟨σ, hq, hstep⟩ := h; exact evalLocalActions_wf hw hq.mem_terms hstep
+
+theorem RuleResults.ctorTerms {db d : Database} (h : db.CtorState) {r : Rule}
+    (hlegal : r.SetLegal db.sig) (hd : d ∈ RuleResults db r) : d.CtorTerms := by
+  obtain ⟨σ, hq, hstep⟩ := hd
+  exact evalLocalActions_ctorTerms h.wf h.sig hq.mem_terms hlegal h.terms hstep
+
+theorem RunRules.wf {db : Database} (hw : db.WF) : (RunRules db).WF :=
+  hw.sUnion fun _ hd => RuleResults.wf hw hd.choose_spec.2
+
+theorem RunRules.ctorTerms {db : Database} (h : db.CtorState) : (RunRules db).CtorTerms :=
+  h.terms.sUnion fun _ hd f as hm =>
+    RuleResults.sig hd.choose_spec.2 ▸
+      RuleResults.ctorTerms h (h.rules _ hd.choose_spec.1) hd.choose_spec.2 f as hm
+
 theorem CmdStep.sig {db db' : Database} {c : Cmd} (h : CmdStep db c db') :
     db'.sig = c.sigBind db.sig := by
   cases h with
@@ -432,19 +596,23 @@ theorem CmdStep.ctorState {db db' : Database} (h : db.CtorState) {c : Cmd}
     -- stand-in for `Proofs/Merge.lean`'s saturation lemma (that file is above this one).
     have hd := hm.eq_of_allConstructors (by rw [evalAction_sig ha]; exact h.sig)
     subst hd
-    exact ⟨by rw [evalAction_sig ha]; exact h.sig,
+    exact ⟨evalAction_wf h.wf ha,
+      by rw [evalAction_sig ha]; exact h.sig,
+      evalAction_ctorTerms h.wf h.sig hlegal h.terms ha,
       by rw [evalAction_sig ha, evalAction_rules ha]; exact h.rules,
       evalAction_ctorRows h.sig hlegal h.rows ha⟩
   | rule =>
-    refine ⟨h.sig, ?_, h.rows⟩
+    refine ⟨⟨h.wf.subtermClosed, h.wf.eqsInTerms, h.wf.envInTerms⟩, h.sig, h.terms, ?_,
+      h.rows⟩
     rintro r' (rfl | hr')
     · exact hlegal
     · exact h.rules r' hr'
   | run hrun =>
     rw [RunStep.eq_runRules h.sig hrun]
-    exact ⟨h.sig, h.rules, RunRules.ctorRows h⟩
-  | decl =>
-    exact ⟨h.sig.sigBind hdecl,
+    exact ⟨RunRules.wf h.wf, h.sig, RunRules.ctorTerms h, h.rules, RunRules.ctorRows h⟩
+  | @decl f d =>
+    exact ⟨⟨h.wf.subtermClosed, h.wf.eqsInTerms, h.wf.envInTerms⟩, h.sig.sigBind hdecl,
+      h.terms.sigBind (c := .decl f d) hdecl,
       fun r hr => Rule.SetLegal.of_allConstructors h.sig (h.rules r hr), h.rows⟩
 
 /-! #### Inversion
@@ -479,11 +647,14 @@ constructor leaves the row set determined by the term set.
 The three side conditions are not interchangeable: `SetLegal` rules out the action that
 writes a bad row, `CtorDecls` rules out the *declaration* that would let `MergeStep`
 write one with no action involved, and `AllConstructors` of the starting signature is
-what makes both bite. -/
+what makes both bite. `hwf` and `hterms` are the two `Database.CtorState` needs and this
+statement does not: they say nothing about rows and are carried only because the bundle
+moves as one. -/
 theorem ProgramStep.ctorRows {db db' : Database} {p : Program}
-    (hstep : ProgramStep db p db') (hrows : db.CtorRows)
-    (hsig : db.sig.AllConstructors) (hdecl : p.CtorDecls) (hlegal : p.SetLegal db.sig)
+    (hstep : ProgramStep db p db') (hwf : db.WF) (hrows : db.CtorRows)
+    (hsig : db.sig.AllConstructors) (hterms : db.CtorTerms) (hdecl : p.CtorDecls)
+    (hlegal : p.SetLegal db.sig)
     (hrules : ∀ r ∈ db.rules, r.SetLegal db.sig) : db'.CtorRows :=
-  (ProgramStep.ctorState ⟨hsig, hrules, hrows⟩ hdecl hlegal hstep).rows
+  (ProgramStep.ctorState ⟨hwf, hsig, hterms, hrules, hrows⟩ hdecl hlegal hstep).rows
 
 end Egglog

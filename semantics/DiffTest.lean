@@ -1432,6 +1432,13 @@ private def genMergeProgram (s : Nat) : Program :=
 
 /-- Write one case, refusing outright to emit a program egglog would reject.
 
+**The constructors are declared first** (`Program.declared`). Declaration is required, so a
+program that applies an undeclared name gets stuck in `Expr.eval`; the generators below
+write uses and not declarations, exactly as the `datatype` header this file emits is read
+off the uses, so the declarations are derived here rather than threaded through every
+generator. They render as nothing on the egglog side — a constructor declaration is the
+header — so the two engines see the same file they always did.
+
 A rejected program is not a failing case but a missing one, and a generator that quietly
 stops producing runnable programs is the failure this whole file is written against — so
 each check is an abort, not a skip. Three rules, all raised by egglog's typechecker before
@@ -1445,7 +1452,8 @@ the offending command runs:
   `Cmd.noLookup`) — egglog rejects this in a rule head, and the model everywhere;
 * no name is used at two key arities, which the emitted `datatype` header cannot express
   (`Program.arityConflicts`). -/
-private def writeCase (dir name : String) (p : Program) : IO Unit := do
+private def writeCase (dir name : String) (p₀ : Program) : IO Unit := do
+  let p := p₀.declared
   unless p.illegalSets.isEmpty do
     throw <| IO.userError
       s!"difftest: {name} sets {p.illegalSets}, which egglog rejects: only a function \

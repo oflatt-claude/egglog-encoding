@@ -19,10 +19,11 @@ expr    = number | (constructor expr ...) | var
 Two deviations:
 
 * `skip` is an artifact of Redex's two-level reduction relation and is dropped.
-* `Cmd.decl` and `Signature` are new. The Redex has no signature at all; they are
-  here from the start so that adding `:merge` functions later extends `MergeSpec`
-  rather than reshaping the AST. `Spec/Merge.lean` is what reads a declaration;
-  nothing in M0–M10 does.
+* `Cmd.decl` and `Signature` are new. The Redex has no signature at all, and treats
+  every applied name as a constructor. Here a name means nothing until it is declared:
+  `Expr.eval` builds an application only at a declared constructor, which is egglog's
+  own declare-before-use and is what `Spec/Scope.lean`'s `Evaluable` demands
+  statically.
 
 `Expr` nests `List Expr`, which no `deriving` handler supports, so the types below
 carry no derived instances. The semantics is relational and needs none; an
@@ -111,33 +112,52 @@ egglog has two declaration forms and this is both of them: `(datatype …)` and
 `(constructor …)` declare a **constructor**, which is `merge = none`; `(function … :merge …)`
 declares a **merge function**, which is `merge = some …`. -/
 structure FnDecl where
-  /-- The number of key columns. -/
+  /-- The number of key columns. Surface syntax only: nothing in `Spec/` reads it, and
+  `Impl/Check.lean`'s arity check and `Tests/Egg.lean`'s emitter are its consumers. -/
   arity : Nat
-  /-- The number of value columns. One for a constructor. -/
+  /-- The number of value columns. One for a constructor. Surface syntax only, as
+  `arity`. -/
   outArity : Nat
-  /-- How collisions are resolved, or `none` for a constructor. -/
+  /-- How collisions are resolved, or `none` for a constructor. The one field the
+  semantics reads: `Signature.IsCtor` and `Signature.mergeOf` are both this plus the
+  question of whether there is an entry at all. -/
   merge : Option MergeSpec
 
 /-- The declared functions. Undeclared names have no entry. -/
 abbrev Signature := FnName → Option FnDecl
 
-/-- How `f` resolves a collision, or `none` if `f` is a constructor. -/
+/-- How `f` resolves a collision. `none` covers two cases that are the same here and
+different for `IsCtor`: a declared constructor, and a name nobody declared. -/
 def Signature.mergeOf (sig : Signature) (f : FnName) : Option MergeSpec :=
   (sig f).bind FnDecl.merge
 
-/-- `f` is a constructor: either declared as one, or not declared at all.
+/-- `f` is a **declared** constructor: `(datatype …)` or `(constructor …)`.
 
-An undeclared name being a constructor is what makes the semantics in which nothing is
-declared — everything up to M8 — literally the all-constructors case, rather than merely
-analogous to it. -/
-def Signature.IsCtor (sig : Signature) (f : FnName) : Prop := sig.mergeOf f = none
+Declaration is required. An undeclared name is not a constructor and not a merge
+function; it is nothing, and `Expr.eval` has no rule for it. That is egglog's own
+declare-before-use, and it is what `Spec/Scope.lean`'s `Evaluable` asks of every applied
+name.
+
+It also decides what a later declaration can undo. `Spec/Merge.lean`'s `MCong.fd` fires
+only here, so if an undeclared name were a constructor, declaring it `:merge` would
+*remove* derivations — `Proofs/Merge.lean`'s `CmdStep.mono_recorded` is where that is
+paid for. -/
+def Signature.IsCtor (sig : Signature) (f : FnName) : Prop :=
+  ∃ d, sig f = some d ∧ d.merge = none
 
 instance (sig : Signature) (f : FnName) : Decidable (sig.IsCtor f) :=
-  decidable_of_iff ((sig.mergeOf f).isNone = true) Option.isNone_iff_eq_none
+  decidable_of_iff (((sig f).map fun d => d.merge.isNone).getD false = true) (by
+    unfold Signature.IsCtor
+    cases h : sig f with
+    | none => simp
+    | some d => simp [Option.isNone_iff_eq_none])
 
-/-- A signature all of whose functions are constructors, i.e. the fragment this
-phase models. -/
-def Signature.AllConstructors (sig : Signature) : Prop := ∀ f, sig.IsCtor f
+/-- No declared function has a merge specification: the fragment this phase models.
+
+Not `∀ f, sig.IsCtor f`, which would ask that every name in the universe be declared.
+What a phase without `:merge` needs is that nothing *is* a merge function, which is
+exactly what makes `MergeStep` vacuous. -/
+def Signature.AllConstructors (sig : Signature) : Prop := ∀ f, sig.mergeOf f = none
 
 /-! ### Variables and function names
 

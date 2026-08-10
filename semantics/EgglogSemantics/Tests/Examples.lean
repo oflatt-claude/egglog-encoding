@@ -28,8 +28,16 @@ private def num (n : Int) : Term := .lit (.int n)
 /-- An integer expression. -/
 private def eNum (n : Int) : Expr := .lit (.int n)
 
-/-- The empty signature; nothing in this phase reads it. -/
+/-- The empty signature. -/
 private abbrev noSig : Signature := fun _ => none
+
+/-- `(datatype S (c x…))` at `n` argument columns.
+
+Declaration is required, so every program below that *builds* a term declares its
+constructors first, and every hand-built database declares the ones its terms use. The
+Redex has no signature and no declarations; this is the one place its programs need
+extending to run here. -/
+private def ctorDecl (n : Nat) : FnDecl := { arity := n, outArity := 1, merge := none }
 
 /-! ### Scope checking -/
 
@@ -176,7 +184,7 @@ that knows nothing about it. -/
 
 /-- `1 = 2` over `{1, 2, (wrapper 2)}`. -/
 private def preWrapped : Database where
-  sig := noSig
+  sig := Function.update noSig "wrapper" (some (ctorDecl 1))
   terms := {num 1, num 2, .app "wrapper" [num 2]}
   rows := Database.ctorRowsOf {num 1, num 2, .app "wrapper" [num 2]}
   eqs := {(num 1, num 2)}
@@ -187,8 +195,9 @@ example : ValidSubst preWrapped (.expr (.app "wrapper" [eNum 1])) [] :=
   .expr (w := .app "wrapper" [num 2]) (t := .app "wrapper" [num 1])
     ⟨by simp [eNum], by simp⟩
     (by simp [preWrapped])
-    (by simp [Expr.eval, Expr.evalList, eNum, num, preWrapped, Prim.ofName,
-      Signature.IsCtor, Signature.mergeOf])
+    (by rw [Expr.eval_app_ctor (show Prim.ofName "wrapper" = none from rfl)
+          (show Signature.IsCtor preWrapped.sig "wrapper" from ⟨ctorDecl 1, rfl, rfl⟩)]
+        rfl)
     (.congr (by simp [preWrapped]) (by simp [preWrapped])
       (.cons (.symm (.assert (by simp [preWrapped]))) .nil))
 
@@ -210,7 +219,8 @@ and, after closure, `(b 1) = 4`. -/
 private def b1 : Term := .app "b" [num 1]
 
 private def actionsProgram : Program :=
-  [.action (.letBind "v" (.app "b" [eNum 1])),
+  [.decl "b" (ctorDecl 1),
+   .action (.letBind "v" (.app "b" [eNum 1])),
    .action (.union (eNum 7) (eNum 7)),
    .action (.union (.var "v") (eNum 4))]
 
@@ -244,7 +254,8 @@ private def swapRule : Rule where
   actions := [.expr (.app "Add" [.var "b", .var "a"])]
 
 private def ruleProgram : Program :=
-  [.action (.expr (.app "Add" [eNum 1, eNum 2])), .rule swapRule, .run]
+  [.decl "Add" (ctorDecl 2), .action (.expr (.app "Add" [eNum 1, eNum 2])),
+   .rule swapRule, .run]
 
 example : WellScoped ruleProgram := by
   simp [WellScoped, ruleProgram, Program.Scoped, Cmd.Scoped, Action.Scoped, Expr.Scoped,
@@ -253,7 +264,7 @@ example : WellScoped ruleProgram := by
 
 /-- The database just before the `(run)`: `(Add 1 2)` with its children, plus the rule. -/
 private def preRun : Database where
-  sig := noSig
+  sig := Function.update noSig "Add" (some (ctorDecl 2))
   terms := add12.subterms
   rows := add12.ctorRows
   eqs := ∅
@@ -261,14 +272,15 @@ private def preRun : Database where
   rules := insert swapRule ∅
 
 private theorem preRun_eq :
-    runProgram Database.empty [.action (.expr (.app "Add" [eNum 1, eNum 2])), .rule swapRule]
-      = some preRun := by
+    runProgram Database.empty [.decl "Add" (ctorDecl 2),
+      .action (.expr (.app "Add" [eNum 1, eNum 2])), .rule swapRule] = some preRun := by
   simp [runProgram, stepCmd, evalAction, Expr.eval, Expr.evalList, Database.empty, preRun,
-    eNum, num, add12, Database.addTerm, Prim.ofName, Signature.IsCtor, Signature.mergeOf]
+    eNum, num, add12, Database.addTerm, Prim.ofName, Signature.IsCtor, ctorDecl]
 
 private theorem run_ruleProgram : run ruleProgram = some (runRules preRun) := by
   change runProgram Database.empty
-    ([.action (.expr (.app "Add" [eNum 1, eNum 2])), .rule swapRule] ++ [Cmd.run]) = _
+    ([.decl "Add" (ctorDecl 2), .action (.expr (.app "Add" [eNum 1, eNum 2])),
+      .rule swapRule] ++ [Cmd.run]) = _
   rw [runProgram_append, preRun_eq]
   simp [stepCmd]
 
@@ -282,8 +294,8 @@ private theorem swap_matches :
     simp only [List.mem_cons, List.not_mem_nil, or_false] at hc
     rcases hc with rfl | rfl <;> simp [preRun, add12, num]
   · simp [preRun, add12]
-  · simp [Expr.eval, Expr.evalList, Env.lookup, preRun, add12, num, noSig, Prim.ofName,
-      Signature.IsCtor, Signature.mergeOf]
+  · simp [Expr.eval, Expr.evalList, Env.lookup, preRun, add12, num, Prim.ofName,
+      Signature.IsCtor, ctorDecl]
   · simp [preRun, add12]
 
 /-- Running that firing adds `(Add 2 1)` and its children. -/
@@ -293,7 +305,7 @@ private theorem swap_fires :
                            rows := preRun.rows ∪ add21.ctorRows } := by
   simp [evalLocalActions, evalActions, evalAction, Expr.eval, Expr.evalList, Env.lookup,
     swapRule, preRun, add21, num, Database.addTerm, Prim.ofName, Signature.IsCtor,
-    Signature.mergeOf]
+    ctorDecl]
 
 /-- `(Add 2 1)` is in the database after the run. -/
 example : ∃ db, run ruleProgram = some db ∧ add21 ∈ db.terms := by
@@ -383,16 +395,21 @@ private def detectRule : Rule where
                 (.app "Wrapper" [.app "Add" [eNum 2, eNum 1]])]
   actions := [.expr (.app "success" [])]
 
+private def wrapperDecls : Program :=
+  [.decl "Add" (ctorDecl 2), .decl "Wrapper" (ctorDecl 1), .decl "success" (ctorDecl 0)]
+
 private def wrapperProgram : Program :=
-  [.action (.expr (.app "Wrapper" [.app "Add" [eNum 1, eNum 2]])),
-   .rule commuteRule, .rule detectRule, .run, .run]
+  wrapperDecls ++
+    [.action (.expr (.app "Wrapper" [.app "Add" [eNum 1, eNum 2]])),
+     .rule commuteRule, .rule detectRule, .run, .run]
 
 #guard (exec wrapperProgram).map (fun d => decide (Term.app "success" [] ∈ d.terms))
   = some true
 
 /- One round is not enough: the union has to happen before the second rule can match. -/
-#guard (exec [.action (.expr (.app "Wrapper" [.app "Add" [eNum 1, eNum 2]])),
-    .rule commuteRule, .rule detectRule, .run]).map
+#guard (exec (wrapperDecls ++
+    [.action (.expr (.app "Wrapper" [.app "Add" [eNum 1, eNum 2]])),
+     .rule commuteRule, .rule detectRule, .run])).map
   (fun d => decide (Term.app "success" [] ∈ d.terms)) = some false
 
 #guard (exec wrapperProgram).map (fun d => d.rowCounts ["Add", "Wrapper", "success"])
@@ -494,10 +511,11 @@ may write the function's own table — `(function Dist (Math) i64 :merge ((set (
 
 /-! ### Undeclared names are unconstrained
 
-Constructors are never declared here — `Signature.IsCtor` calls an undeclared name a
-constructor — so there is nothing for a use to disagree with, and the check passes a name
-used at two arities. `Tests/Egg.lean`'s `Program.arityConflicts` is that half, because it is the
-emitted `datatype` header that cannot express it. -/
+`Program.arityOk` reads `Signature` and nothing else, so a name with no entry has no
+declared column counts to disagree with and the check passes a name used at two arities.
+That a program must declare before it uses is `Program.Evaluable`'s business, not this
+one's; that the *emitted* `datatype` header cannot express two arities is
+`Tests/Egg.lean`'s `Program.arityConflicts`. -/
 #guard Program.arityOk [.action (.expr (.app "F" [A])), .action (.expr (.app "F" [A, A]))]
   emptySig
 
@@ -523,7 +541,12 @@ private def dist : FnDecl :=
   { arity := 1, outArity := 1,
     merge := some (.merge [] [.app "min" [.var "old", .var "new"]]) }
 
-private def decls : Program := [.decl "Dist" dist, .decl "Copy" dist]
+/-- The constructors the cases below apply, declared: `noLookup` asks for a *declared*
+constructor or a primitive, so an undeclared name would be rejected for the wrong
+reason. -/
+private def decls : Program :=
+  [.decl "A" (ctorDecl 0), .decl "F" (ctorDecl 1), .decl "G" (ctorDecl 2),
+   .decl "Dist" dist, .decl "Copy" dist]
 
 private def A : Expr := .app "A" []
 
@@ -567,15 +590,14 @@ to `Pattern.values` and so what removes `Expr.eval`'s `lookup` constructor. -/
 
 /-! ### What still passes
 
-A constructor, a primitive and a literal are not reads. `Signature.IsCtor` calls an
-undeclared name a constructor, which covers the first two without a case of their own — so
-a merge body computing `(min old new)` is fine, and a body writing its own table is a
-write.
--/
+A declared constructor, a primitive and a literal are not reads. The primitive has a case
+of its own — `Prim.ofName` is consulted first, exactly as `Expr.eval` does — so a merge
+body computing `(min old new)` is fine, and a body writing its own table is a write. -/
 #guard ok [.action (.expr (.app "F" [A])), .action (.union A (.app "G" [A, A]))]
 #guard Program.noLookup decls emptySig
 #guard Program.noLookup
-  [.decl "Dist" { arity := 1, outArity := 1,
+  [.decl "A" (ctorDecl 0),
+   .decl "Dist" { arity := 1, outArity := 1,
                   merge := some (.merge [.set "Dist" [A] [.lit (.int 1)]]
                     [.app "min" [.var "old", .var "new"]]) }] emptySig
 

@@ -124,10 +124,20 @@ constructions never collide. -/
 def termDecl (k : Nat) : FnDecl :=
   { arity := k + 1, outArity := 1, merge := some .noMerge }
 
+/-- `(constructor f (S…) S)`: the source name, kept as the **skolem-id** constructor.
+
+Declaration is required, so this is a command the prelude has to emit — `.app f es` is
+what `encodeBuild` mints an id with, and `Expr.eval` has no rule for an undeclared name.
+egglog uses the source name for the *term relation* instead; `termName` is the rename that
+frees it. -/
+def skolemDecl (k : Nat) : FnDecl :=
+  { arity := k, outArity := 1, merge := none }
+
 /-! ### The constructors a program mentions
 
-The fragment declares almost nothing — an undeclared name is a constructor
-(`Signature.IsCtor`) — so the functions to emit tables for are read off the syntax. -/
+Read off the syntax rather than off the signature: the source is in the constructor
+fragment, so a name's *arity* is only ever visible in its uses, and the prelude needs one
+table triple — and one skolem declaration — per name however the source came by it. -/
 mutual
 
 /-- The `(name, arity)` pairs an expression applies. -/
@@ -359,12 +369,13 @@ alongside the encoded source rules. -/
 def encodePrelude (P : Program) : Program :=
   .decl ufName ufDecl ::
     (P.ctors.flatMap fun fk =>
-      [.decl (viewName fk.1) (viewDecl fk.2), .decl (termName fk.1) (termDecl fk.2)]) ++
+      [.decl fk.1 (skolemDecl fk.2), .decl (viewName fk.1) (viewDecl fk.2),
+       .decl (termName fk.1) (termDecl fk.2)]) ++
     (maintenanceRules P).map .rule
 
-/-- Encode one command. A source declaration is dropped: its function becomes the
-skolem-id constructor, which must stay undeclared to be a constructor, and its table
-triple is in the prelude. -/
+/-- Encode one command. A source declaration is dropped: the prelude has already declared
+its function as the skolem-id constructor and emitted its table triple, and re-emitting it
+would be a redeclaration (`Cmd.DeclFresh`). -/
 def encodeCmd : Cmd → Nat → Program × Nat
   | .action a, n => match encodeAction a n with | (as, n₁) => (as.map .action, n₁)
   | .rule r, n => match encodeRule r n with | (r', n₁) => ([.rule r'], n₁)

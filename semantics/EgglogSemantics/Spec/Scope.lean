@@ -146,11 +146,13 @@ def Cmd.sigBind : Cmd → Signature → Signature
 
 /-- Every application in `e` **builds**, so evaluating `e` cannot get stuck on one.
 
-An application is one of three things, decided by the name: a *lookup* if the function is
-not a constructor, which egglog rejects in a rule head
-(`check_no_function_lookups_in_actions`) and this model rejects everywhere, since reading
-is the query atom `Pattern.values`; a *primitive*, which computes; or a constructor, which
-builds. Only the last always succeeds, and this admits only the last.
+An application is one of four things, decided by the name: *undeclared*, which is an
+error, and which this rules out — so `Program.Evaluable` is declare-before-use and needs
+no separate check; a *lookup* if the function is a declared merge function, which egglog
+rejects in a rule head (`check_no_function_lookups_in_actions`) and this model rejects
+everywhere, since reading is the query atom `Pattern.values`; a *primitive*, which
+computes; or a declared constructor, which builds. Only the last always succeeds, and this
+admits only the last.
 
 **Primitives are excluded rather than sort-checked**, which is where this is stricter than
 egglog: `(min 1 2)` is a legal egglog action, and `(min (A) (B))` is a type error there,
@@ -204,10 +206,10 @@ neither reads the scope, so the triple to carry is
 `WellScoped p ∧ p.Evaluable sig ∧ p.SetLegal sig`; `PLAN.md`, "`set` legality is a
 separate predicate, for now", says when to fold them together.
 -/
-/-- `(set (f …) …)` is legal only when `f` is not a constructor.
-
-`Signature.IsCtor` calls an undeclared name a constructor, so this covers the undeclared
-case as well.
+/-- `(set (f …) …)` is legal only when `f` is a declared `:merge` or `:no-merge`
+function — the one thing that has a merge specification to consult. A constructor and an
+undeclared name are both excluded, which is egglog's `SetConstructorDisallowed` and its
+"unbound function".
 
 It is what keeps `Database.CtorRows` an invariant. A `set` writes the row
 `⟨f, as, [v]⟩` for whatever `v` its out expression denotes, and `Database.ctorRowsOf`
@@ -216,7 +218,7 @@ def Action.SetLegal : Action → Signature → Prop
   | .expr _, _ => True
   | .letBind _ _, _ => True
   | .union _ _, _ => True
-  | .set f _ _, sig => ¬ sig.IsCtor f
+  | .set f _ _, sig => sig.mergeOf f ≠ none
 
 /-- Every action in the list is a legal `set`. Unlike `Actions.Scoped` this needs no
 threading: no action changes the signature. -/
@@ -244,6 +246,27 @@ def Program.SetLegal : Program → Signature → Prop
   | [], _ => True
   | c :: cs, sig => c.SetLegal sig ∧ Program.SetLegal cs (c.sigBind sig)
 
+/-! ### Freshness of a declaration
+
+The other half of declare-before-use: `Evaluable` says a name must be declared *before* it
+is applied, this says a name is declared *once*. Nothing in the dynamics forbids a
+redeclaration — `Cmd.sigBind` is `Function.update` — but a redeclaration can change what
+`Signature.IsCtor` says of a name the state already has rows of, which is a derivation
+`Spec/Merge.lean`'s `MCong.fd` had and loses. `Proofs/Merge.lean`'s `CmdStep.mono_recorded`
+is the one place that bites, and `Proofs/Counterexamples.lean`'s
+`mono_recorded_decl_false` is the redeclaration that breaks it.
+-/
+/-- `c` declares a name the signature does not already have. -/
+def Cmd.DeclFresh : Cmd → Signature → Prop
+  | .decl f _, sig => sig f = none
+  | _, _ => True
+
+/-- Every declaration in the program is fresh at the point it happens, threaded by
+`Cmd.sigBind` as `Program.Evaluable` is. -/
+def Program.DeclsFresh : Program → Signature → Prop
+  | [], _ => True
+  | c :: cs, sig => c.DeclFresh sig ∧ Program.DeclsFresh cs (c.sigBind sig)
+
 /-- `c` declares only constructors.
 
 Separate from `SetLegal` because it constrains a different thing: `SetLegal` says what a
@@ -263,6 +286,7 @@ Two further static checks — a use's column counts against the declaration, and
 read is a query atom" — live in `Impl/Check.lean`. They are about what egglog *rejects*
 rather than what a program *means*, and nothing in the semantics consumes them. The tuple
 to carry is
-`WellScoped p ∧ p.Evaluable sig ∧ p.SetLegal sig ∧ WellArity p ∧ ReadsAreAtoms p`. -/
+`WellScoped p ∧ p.Evaluable sig ∧ p.DeclsFresh sig ∧ p.SetLegal sig ∧ WellArity p ∧
+ReadsAreAtoms p`. -/
 
 end Egglog

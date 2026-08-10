@@ -91,7 +91,8 @@ theorem pathCompressRule_mem₁ : pathCompressRule ∈ maintenanceRules P₁ := 
 
 theorem encode₀ :
     encode P₀ =
-      [.decl ufName ufDecl, .decl viewF (viewDecl 1), .decl termF (termDecl 1),
+      [.decl ufName ufDecl, .decl "f" (skolemDecl 1), .decl viewF (viewDecl 1),
+       .decl termF (termDecl 1),
        .rule pathCompressRule, .rule eclassRuleF, .rule colRuleF,
        .action (.set termF [.lit (.int 2), .app "f" [.lit (.int 2)]] [unitE]),
        .action (.set viewF [.lit (.int 2)] [.app "f" [.lit (.int 2)]]),
@@ -102,7 +103,8 @@ theorem encode₀ :
 
 theorem encode₁ :
     encode P₁ =
-      [.decl ufName ufDecl, .decl viewF (viewDecl 1), .decl termF (termDecl 1),
+      [.decl ufName ufDecl, .decl "f" (skolemDecl 1), .decl viewF (viewDecl 1),
+       .decl termF (termDecl 1),
        .rule pathCompressRule, .rule eclassRuleF, .rule colRuleF,
        .action (.set termF [.lit (.int 1), .app "f" [.lit (.int 1)]] [unitE]),
        .action (.set viewF [.lit (.int 1)] [.app "f" [.lit (.int 1)]]),
@@ -150,11 +152,14 @@ def t2 : Term := .lit (.int 2)
 /-- `f 2`, the skolem id of `(f 2)`. -/
 def ft2 : Term := .app "f" [t2]
 
-/-- The signature the three prelude `decl`s install. -/
+/-- The signature the four prelude `decl`s install. `f` is among them: it is the skolem-id
+constructor, and declaration is required for `Expr.eval` to build with it. -/
 def sig₀ : Signature :=
   Function.update
     (Function.update
-      (Function.update (fun _ => (none : Option FnDecl)) ufName (some ufDecl))
+      (Function.update
+        (Function.update (fun _ => (none : Option FnDecl)) ufName (some ufDecl))
+        "f" (some (skolemDecl 1)))
       viewF (some (viewDecl 1)))
     termF (some (termDecl 1))
 

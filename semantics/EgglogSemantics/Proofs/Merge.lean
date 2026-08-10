@@ -10,10 +10,13 @@ import EgglogSemantics.Proofs.Interp
 `MERGE.md` says which theorem buys what. Five are still unproved; the rest are proved.
 
 The load-bearing one is `mcong_iff_cong`: where the rows are the constructor rows
-(`Database.CtorRows`) and the signature is all constructors, the generalized relation is
-exactly M2's `Cong`. That is what makes replacing `Cong` by `MCong` a refactor rather
-than a rewrite — without it every M2–M8 theorem would have to be reproved rather than
-transported.
+(`Database.CtorRows`) and every application the database holds is a declared
+constructor's (`Database.CtorTerms`), the generalized relation is exactly M2's `Cong`.
+That is what makes replacing `Cong` by `MCong` a refactor rather than a rewrite — without
+it every M2–M8 theorem would have to be reproved rather than transported. The second
+hypothesis used to read `Signature.AllConstructors`; declaration being required
+(`Signature.IsCtor`) is what separated the two, since "nothing is a merge function" no
+longer says the applications in `terms` are constructors'.
 
 Four statements needed repair, and the repairs are the interesting output:
 
@@ -118,12 +121,6 @@ theorem CongList.toMCongList' {db : Database} (hterms : db.CtorTerms)
 
 end
 
-/-- `AllConstructors` gives `CtorTerms`: it says *every* name is a constructor, which is
-more than `CtorTerms` asks of the applications the database happens to hold. -/
-theorem Signature.AllConstructors.ctorTerms {db : Database}
-    (hsig : db.sig.AllConstructors) : db.CtorTerms :=
-  fun f _ _ => hsig f
-
 /-- `CtorRows` gives `RowsComplete`: it is the equality, this is one inclusion of it.
 
 Written with `▸` rather than `h.ge`: the latter goes through `Set`'s order instances and
@@ -132,17 +129,24 @@ puts `Classical.choice` into the axiom set of everything downstream, including
 theorem Database.CtorRows.rowsComplete {db : Database} (h : db.CtorRows) :
     db.RowsComplete := fun _ hr => h.symm ▸ hr
 
-theorem Cong.toMCong {db : Database} (hsig : db.sig.AllConstructors) (hrows : db.CtorRows)
+theorem Cong.toMCong {db : Database} (hterms : db.CtorTerms) (hrows : db.CtorRows)
     {a b : Term} (h : Cong db a b) : MCong db a b :=
-  Cong.toMCong' hsig.ctorTerms hrows.rowsComplete h
+  Cong.toMCong' hterms hrows.rowsComplete h
 
-theorem CongList.toMCongList {db : Database} (hsig : db.sig.AllConstructors)
+theorem CongList.toMCongList {db : Database} (hterms : db.CtorTerms)
     (hrows : db.CtorRows) {as bs : List Term} (h : CongList db as bs) :
     MCongList db as bs :=
-  CongList.toMCongList' hsig.ctorTerms hrows.rowsComplete h
+  CongList.toMCongList' hterms hrows.rowsComplete h
 
 /-- **The compatibility theorem.** Where the rows are the constructor rows and every
-function is a constructor, the functional dependency *is* congruence.
+application the database holds is a declared constructor's, the functional dependency *is*
+congruence.
+
+`CtorTerms` where this used to read `Signature.AllConstructors`. The two coincided while an
+undeclared name counted as a constructor, and now they do not: `AllConstructors` says
+nothing is a *merge* function, which no longer implies that the applications in `terms`
+are constructors' — that has to be carried as a state invariant, which is
+`Database.CtorState.terms`.
 
 This is what `PLAN.md` M9 asks for, and the reason `MCong` has no `congr` constructor:
 congruence is not lost, it is `fd` read at constructor rows.
@@ -152,9 +156,9 @@ M2 database into a separate `MDatabase`. Now that the two states are one structu
 embedding is the identity, so the *hypothesis* `CtorRows` carries what the embedding
 used to: it says the state is in the constructor-only fragment. The theorem's content is
 unchanged and its proof is the same four `match` cases. -/
-theorem mcong_iff_cong {db : Database} (hsig : db.sig.AllConstructors)
+theorem mcong_iff_cong {db : Database} (hterms : db.CtorTerms)
     (hrows : db.CtorRows) {a b : Term} : MCong db a b ↔ Cong db a b :=
-  ⟨MCong.toCong hrows, Cong.toMCong hsig hrows⟩
+  ⟨MCong.toCong hrows, Cong.toMCong hterms hrows⟩
 
 /-- **The compatibility theorem, at a state a program can reach.** A program that declares
 only constructors and never `set`s one runs to a database where the two relations agree.
@@ -165,7 +169,7 @@ theorem ProgramStep.mcong_iff_cong {p : Program} {db : Database}
     (hstep : ProgramStep Database.empty p db) (hdecl : p.CtorDecls)
     (hlegal : p.SetLegal Database.empty.sig) {a b : Term} : MCong db a b ↔ Cong db a b :=
   let hc := ProgramStep.ctorState Database.CtorState.empty hdecl hlegal hstep
-  Egglog.mcong_iff_cong hc.sig hc.rows
+  Egglog.mcong_iff_cong hc.terms hc.rows
 
 /-- Congruence, recovered as a derived rule rather than a constructor. -/
 theorem MCong.congr {db : Database} {f : FnName} {as bs : List Term}
@@ -307,18 +311,49 @@ theorem mcong_mono_needs_sig : ∃ d₁ d₂ : Database, ∃ a b : Term,
   let x : Term := .lit (.int 0)
   let y : Term := .lit (.int 1)
   let rows : Set Row := {Row.mk "f" [] [x], Row.mk "f" [] [y]}
-  let d₁ : Database := ⟨fun _ => none, ∅, rows, ∅, [], ∅⟩
+  let d₁ : Database := ⟨fun _ => some ⟨0, 1, none⟩, ∅, rows, ∅, [], ∅⟩
   let d₂ : Database := ⟨fun _ => some ⟨0, 1, some .noMerge⟩, ∅, rows, ∅, [], ∅⟩
   refine ⟨d₁, d₂, x, y, ⟨subset_rfl, subset_rfl, subset_rfl⟩, ?_, ?_⟩
   · exact MCong.fd (f := "f") (as := []) (bs := []) (a := [x]) (b := [y])
-      (by simp [d₁, rows]) (by simp [d₁, rows]) rfl .nil (by simp)
+      (by simp [d₁, rows]) (by simp [d₁, rows]) ⟨⟨0, 1, none⟩, rfl, rfl⟩ .nil (by simp)
   · intro h
     have hxy : x = y :=
       MCong.le (R := fun a b => a = b) (by simp [d₂]) (by simp [d₂]) (fun _ _ h => h.symm)
         (fun _ _ _ h₁ h₂ => h₁.trans h₂)
         (fun _ _ _ _ _ _ _ _ _ hu _ _ =>
-          absurd hu (by simp [d₂, Signature.IsCtor, Signature.mergeOf])) h
+          absurd hu (by simp [d₂, Signature.IsCtor])) h
     simp [x, y] at hxy
+
+/-! ### …and the one signature change that is safe
+
+`mcong_mono_needs_sig` says a signature change can destroy a derivation. It can only do so
+by taking `Signature.IsCtor` away from a name, and a **first** declaration takes it away
+from nothing: an undeclared name is not a constructor, so `fd` never fired at it. That is
+the whole content of requiring declaration, and `CmdStep.mono_recorded`'s `.decl` case is
+where it is spent. -/
+mutual
+
+/-- Declaring a name the signature does not yet mention preserves every derivation. -/
+theorem MCong.mono_update {db : Database} {f : FnName} {dc : FnDecl}
+    (hf : db.sig f = none) {a b : Term} (h : MCong db a b) :
+    MCong ({ db with sig := Function.update db.sig f (some dc) } : Database) a b := by
+  match h with
+  | .assert hm => exact .assert hm
+  | .refl hm => exact .refl hm
+  | .symm h => exact .symm (MCong.mono_update hf h)
+  | .trans h₁ h₂ => exact .trans (MCong.mono_update hf h₁) (MCong.mono_update hf h₂)
+  | .fd hra hrb hu hl hxy =>
+    exact .fd hra hrb (Signature.IsCtor.update_of_fresh hf hu)
+      (MCongList.mono_update hf hl) hxy
+
+theorem MCongList.mono_update {db : Database} {f : FnName} {dc : FnDecl}
+    (hf : db.sig f = none) {as bs : List Term} (h : MCongList db as bs) :
+    MCongList ({ db with sig := Function.update db.sig f (some dc) } : Database) as bs := by
+  match h with
+  | .nil => exact .nil
+  | .cons hab hl => exact .cons (MCong.mono_update hf hab) (MCongList.mono_update hf hl)
+
+end
 
 /-- `Out` is monotone, because both of its conjuncts are. A rule body reading a table
 never *loses* a match — the property an overwriting merge would destroy, and the one
@@ -1275,24 +1310,38 @@ replaces `Cong` — and the round above it, and both directions are needed: `Run
 `db'` to `RunRules db` on a constructor signature, so `stepCmd`'s `runRules db` has to be
 *equal* to `RunRules db` rather than merely contained in it. -/
 /-- `ValidSubst → MValidSubst`. `mcong_iff_cong` is applied at the *extended* database the
-witness premises ask over, which is why `CtorRows.addTerm` appears. -/
-theorem MValidSubst.of_validSubst {db : Database} (hsig : db.sig.AllConstructors)
+witness premises ask over, which is why `CtorRows.addTerm` appears — and, now that
+`mcong_iff_cong` reads `CtorTerms`, why the instance it is added is `Expr.eval_ctorTerm`:
+the operand a pattern hypothesizes is itself constructor-built. -/
+theorem MValidSubst.of_validSubst {db : Database} (hwf : db.WF) (hterms : db.CtorTerms)
     (hrows : db.CtorRows) {p : Pattern} {σ : Env} (h : ValidSubst db p σ) :
     MValidSubst db p σ := by
+  have henv : ∀ b ∈ db.env ++ σ, Term.CtorTerm db.sig b.2 := by
+    intro b hb
+    rcases List.mem_append.mp hb with hb' | hb'
+    · exact Database.env_ctorTerm hwf hterms b hb'
+    · exact Database.ctorTerm_of_mem hwf hterms (h.mem_terms b hb')
   cases h with
-  | @expr e σ w t hve hw heval hcong =>
-    exact .expr hve hw heval (Cong.toMCong (db := db.addTerm t) hsig (hrows.addTerm t) hcong)
-  | @eq e₁ e₂ σ w t₁ t₂ hve hw hev₁ hev₂ hcw hct =>
-    exact .eq hve hw hev₁ hev₂
-      (Cong.toMCong (db := (db.addTerm t₁).addTerm t₂) hsig
+  | @expr e σ w t hve hmem heval hcong =>
+    exact .expr hve hmem heval
+      (Cong.toMCong (db := db.addTerm t) (hterms.addTerm (Expr.eval_ctorTerm henv heval))
+        (hrows.addTerm t) hcong)
+  | @eq e₁ e₂ σ w t₁ t₂ hve hmem hev₁ hev₂ hcw hct =>
+    have hterms' : ((db.addTerm t₁).addTerm t₂).CtorTerms :=
+      (hterms.addTerm (Expr.eval_ctorTerm henv hev₁)).addTerm
+        (Expr.eval_ctorTerm henv hev₂)
+    exact .eq hve hmem hev₁ hev₂
+      (Cong.toMCong (db := (db.addTerm t₁).addTerm t₂) hterms'
         ((hrows.addTerm t₁).addTerm t₂) hcw)
-      (Cong.toMCong (db := (db.addTerm t₁).addTerm t₂) hsig
+      (Cong.toMCong (db := (db.addTerm t₁).addTerm t₂) hterms'
         ((hrows.addTerm t₁).addTerm t₂) hct)
   | @values vs f as σ us ts ws bs hve hev₁ hev₂ hct hcu hrow =>
-    have hsig' : ((db.addTerms ts).addTerms us).sig.AllConstructors := by simpa using hsig
+    have hterms' : ((db.addTerms ts).addTerms us).CtorTerms :=
+      (hterms.addTerms (Expr.evalList_ctorTerm henv hev₂)).addTerms
+        (by simpa using Expr.evalList_ctorTerm henv hev₁)
     have hrows' : ((db.addTerms ts).addTerms us).CtorRows := (hrows.addTerms ts).addTerms us
     exact .values hve hev₁ hev₂
-      (CongList.toMCongList hsig' hrows' hct) (CongList.toMCongList hsig' hrows' hcu) hrow
+      (CongList.toMCongList hterms' hrows' hct) (CongList.toMCongList hterms' hrows' hcu) hrow
 
 theorem ValidSubst.of_mvalidSubst {db : Database} (hrows : db.CtorRows) {p : Pattern}
     {σ : Env} (h : MValidSubst db p σ) : ValidSubst db p σ := by
@@ -1308,12 +1357,12 @@ theorem ValidSubst.of_mvalidSubst {db : Database} (hrows : db.CtorRows) {p : Pat
     exact .values hve hev₁ hev₂
       (MCongList.toCongList hrows' hct) (MCongList.toCongList hrows' hcu) hrow
 
-theorem forall₂_mvalidSubst {db : Database} (hsig : db.sig.AllConstructors)
+theorem forall₂_mvalidSubst {db : Database} (hwf : db.WF) (hterms : db.CtorTerms)
     (hrows : db.CtorRows) {q : Query} {σs : List Env}
     (h : List.Forall₂ (ValidSubst db) q σs) : List.Forall₂ (MValidSubst db) q σs := by
   induction h with
   | nil => exact .nil
-  | cons hp _ ih => exact .cons (MValidSubst.of_validSubst hsig hrows hp) ih
+  | cons hp _ ih => exact .cons (MValidSubst.of_validSubst hwf hterms hrows hp) ih
 
 theorem forall₂_validSubst {db : Database} (hrows : db.CtorRows) {q : Query}
     {σs : List Env} (h : List.Forall₂ (MValidSubst db) q σs) :
@@ -1323,10 +1372,10 @@ theorem forall₂_validSubst {db : Database} (hrows : db.CtorRows) {q : Query}
   | cons hp _ ih => exact .cons (ValidSubst.of_mvalidSubst hrows hp) ih
 
 theorem MValidQuerySubst.of_validQuerySubst {db : Database}
-    (hsig : db.sig.AllConstructors) (hrows : db.CtorRows) {q : Query} {σ : Env}
+    (hwf : db.WF) (hterms : db.CtorTerms) (hrows : db.CtorRows) {q : Query} {σ : Env}
     (h : ValidQuerySubst db q σ) : MValidQuerySubst db q σ := by
   obtain ⟨σs, hall, hu⟩ := h
-  exact ⟨σs, forall₂_mvalidSubst hsig hrows hall, hu⟩
+  exact ⟨σs, forall₂_mvalidSubst hwf hterms hrows hall, hu⟩
 
 theorem ValidQuerySubst.of_mvalidQuerySubst {db : Database} (hrows : db.CtorRows)
     {q : Query} {σ : Env} (h : MValidQuerySubst db q σ) : ValidQuerySubst db q σ := by
@@ -1336,17 +1385,17 @@ theorem ValidQuerySubst.of_mvalidQuerySubst {db : Database} (hrows : db.CtorRows
 /-- One rule contributes the same databases either way. Both sides run
 `evalLocalActions` on the substitutions their matcher admits, so identifying the matchers
 is the whole proof. -/
-theorem ruleResults_eq {db : Database} (hsig : db.sig.AllConstructors)
+theorem ruleResults_eq {db : Database} (hwf : db.WF) (hterms : db.CtorTerms)
     (hrows : db.CtorRows) {r : Rule} : RuleResults db r = ruleResults db r := by
   ext d
   exact ⟨fun ⟨σ, hq, hd⟩ => ⟨σ, ValidQuerySubst.of_mvalidQuerySubst hrows hq, hd⟩,
-    fun ⟨σ, hq, hd⟩ => ⟨σ, MValidQuerySubst.of_validQuerySubst hsig hrows hq, hd⟩⟩
+    fun ⟨σ, hq, hd⟩ => ⟨σ, MValidQuerySubst.of_validQuerySubst hwf hterms hrows hq, hd⟩⟩
 
 /-- **A round is the same round.** Both sides are `db.sUnion` of a family indexed by
 `db.rules`, and `ruleResults_eq` identifies the families. -/
 theorem runRules_eq {db : Database} (h : db.CtorState) : RunRules db = runRules db := by
   have hre : ∀ r : Rule, RuleResults db r = ruleResults db r :=
-    fun r => ruleResults_eq h.sig h.rows
+    fun r => ruleResults_eq h.wf h.terms h.rows
   have hset : {d | ∃ r ∈ db.rules, d ∈ RuleResults db r}
       = {d | ∃ r ∈ db.rules, d ∈ ruleResults db r} := by
     ext d
@@ -1493,13 +1542,6 @@ performs has to be re-read as a specification read, and that is exactly `Cong.to
 Hence `Inv`, which is what the induction actually carries. Prove its preservation lemmas
 first; the rest of the chain is structural recursion once they are available. -/
 
-/-- A term built only from constructor applications.
-
-`CtorTerms` says the database holds only such terms; this is the same condition on one
-term, which is what the operations that *insert* a term have to be given. -/
-def Term.CtorTerm (sig : Signature) (t : Term) : Prop :=
-  ∀ f as, Term.app f as ∈ t.subterms → sig.IsCtor f
-
 /-- The invariant the refinement chain carries.
 
 `wf` is what `mem_closureF_iff_of_wf` needs; `ctorTerms` and `rowsComplete` are what
@@ -1517,7 +1559,7 @@ structure FDatabase.Inv (d : FDatabase) : Prop where
   ctorTerms : d.toDatabase.CtorTerms
   rowsComplete : d.toDatabase.RowsComplete
   rowsWF : d.toDatabase.RowsWF
-  ctorRows : ∀ r ∈ d.toDatabase.rows, d.sig.IsCtor r.fn →
+  ctorRows : ∀ r ∈ d.toDatabase.rows, d.sig.mergeOf r.fn = none →
     r.out = [.app r.fn r.args] ∧ Term.app r.fn r.args ∈ d.toDatabase.terms
 
 /-- The `sig`/`terms`/`rows` half of `FDatabase.Inv`, on a spec database. Everything but
@@ -1527,7 +1569,7 @@ structure Database.Inv0 (db : Database) : Prop where
   ctorTerms : db.CtorTerms
   rowsComplete : db.RowsComplete
   rowsWF : db.RowsWF
-  ctorRows : ∀ r ∈ db.rows, db.sig.IsCtor r.fn →
+  ctorRows : ∀ r ∈ db.rows, db.sig.mergeOf r.fn = none →
     r.out = [.app r.fn r.args] ∧ Term.app r.fn r.args ∈ db.terms
 
 namespace Database
@@ -1572,7 +1614,7 @@ theorem addEq {db : Database} (h : db.Inv0) {a b : Term}
   ⟨h'.ctorTerms, h'.rowsComplete, h'.rowsWF, h'.ctorRows⟩
 
 theorem addRow {db : Database} (h : db.Inv0) {f : FnName} {as vs : List Term}
-    (hf : ¬ db.sig.IsCtor f)
+    (hf : db.sig.mergeOf f ≠ none)
     (has : ∀ a ∈ as, Term.CtorTerm db.sig a) (hvs : ∀ v ∈ vs, Term.CtorTerm db.sig v) :
     (db.addRow f as vs).Inv0 := by
   have h' : ((db.addTerms as).addTerms vs).Inv0 :=
@@ -1646,11 +1688,11 @@ theorem FDatabase.Inv.addEq {d : FDatabase} (h : d.Inv) {a b : Term}
   rw [toDatabase_addEq]
   exact h.toInv0.addEq ha hb
 
-/-- `hf` is what keeps `ctorRows` true — a `set` on a constructor would add a row of a
-`.union` function that is not that function's constructor row, which is exactly what
+/-- `hf` is what keeps `ctorRows` true — a `set` on anything but a merge function would add
+a row that `ctorRows` then has to be a constructor row and is not, which is exactly what
 `Action.SetLegal` rules out. `has`/`hvs` are `addTerm`'s condition on the operands. -/
 theorem FDatabase.Inv.addRow {d : FDatabase} (h : d.Inv) {f : FnName} {as vs : List Term}
-    (hf : ¬ d.sig.IsCtor f)
+    (hf : d.sig.mergeOf f ≠ none)
     (has : ∀ x ∈ as, Term.CtorTerm d.sig x) (hvs : ∀ x ∈ vs, Term.CtorTerm d.sig x) :
     (d.addRow f as vs).Inv := by
   refine Inv.of_inv0 (h.wf.addRow f as vs) ?_
@@ -1668,96 +1710,6 @@ theorem FDatabase.Inv.ctorTerm_of_mem {d : FDatabase} (h : d.Inv) {t : Term}
 theorem FDatabase.Inv.env_ctorTerm {d : FDatabase} (h : d.Inv) :
     ∀ b ∈ d.env, Term.CtorTerm d.sig b.2 :=
   fun b hb => h.ctorTerm_of_mem (h.wf.envInTerms b hb)
-
-/-- A literal mentions no application. -/
-theorem Term.ctorTerm_lit {sig : Signature} {l : Lit} : Term.CtorTerm sig (.lit l) := by
-  intro f as hsub
-  rw [Term.subterms_lit] at hsub
-  exact absurd hsub (by simp)
-
-/-- A primitive returns one of its operands or a fresh literal, so it cannot introduce a
-non-constructor application. -/
-theorem Prim.apply_ctorTerm {sig : Signature} {p : Prim} {ts : List Term} {v : Term}
-    (hts : ∀ t ∈ ts, Term.CtorTerm sig t) (h : p.apply ts = some v) :
-    Term.CtorTerm sig v := by
-  unfold Prim.apply at h
-  split at h
-  · simp only [Option.some_inj] at h
-    subst h
-    unfold Term.orderingMin
-    split
-    · exact hts _ (by simp)
-    · exact hts _ (by simp)
-  · simp only [Option.some_inj] at h
-    subst h
-    unfold Term.orderingMax
-    split
-    · exact hts _ (by simp)
-    · exact hts _ (by simp)
-  · simp only [Option.some_inj] at h; subst h; exact Term.ctorTerm_lit
-  · simp only [Option.some_inj] at h; subst h; exact Term.ctorTerm_lit
-  · exact absurd h (by simp)
-
-mutual
-
-/-- **Evaluation only ever builds constructor terms.**
-
-Each branch that produces a term stays inside the constructor fragment: the `.union`
-branch's head is a constructor by the guard the evaluator just tested, and a primitive
-returns an operand or a literal. Nothing reads a row, so no case has to place a recorded
-output back in `terms`. This is what `Inv.execAction` needs. -/
-theorem Expr.eval_ctorTerm {sig : Signature} {σ : Env}
-    (hσ : ∀ b ∈ σ, Term.CtorTerm sig b.2) {e : Expr} {t : Term}
-    (hs : e.eval sig σ = some t) : Term.CtorTerm sig t := by
-  match e with
-  | .lit l =>
-    rw [Expr.eval_lit, Option.some_inj] at hs
-    subst hs; exact Term.ctorTerm_lit
-  | .var v =>
-    rw [Expr.eval_var] at hs
-    exact hσ (v, t) (Env.mem_of_lookup hs)
-  | .app f args =>
-    cases hp : Prim.ofName f with
-    | some p =>
-      rw [Expr.eval_app_prim hp, Option.bind_eq_some_iff] at hs
-      obtain ⟨ts, hts, happ⟩ := hs
-      exact Prim.apply_ctorTerm (Expr.evalList_ctorTerm hσ hts) happ
-    | none =>
-      match hu : sig.mergeOf f with
-      | none =>
-        rw [Expr.eval_app_ctor hp hu, Option.map_eq_some_iff] at hs
-        obtain ⟨ts, hts, rfl⟩ := hs
-        have hts' := Expr.evalList_ctorTerm hσ hts
-        intro g bs hsub
-        rw [Term.subterms_app] at hsub
-        rcases Set.mem_insert_iff.mp hsub with heq | hmem
-        · obtain ⟨rfl, rfl⟩ := Term.app.injEq .. ▸ heq
-          exact hu
-        · obtain ⟨x, hx, hxs⟩ := Set.mem_iUnion₂.mp hmem
-          exact hts' x hx g bs hxs
-      | some (.merge body res) =>
-        rw [Expr.eval_app_merge hp hu] at hs; exact absurd hs (by simp)
-      | some .noMerge =>
-        rw [Expr.eval_app_noMerge hp hu] at hs; exact absurd hs (by simp)
-
-theorem Expr.evalList_ctorTerm {sig : Signature} {σ : Env}
-    (hσ : ∀ b ∈ σ, Term.CtorTerm sig b.2) {es : List Expr} {ts : List Term}
-    (hs : Expr.evalList sig es σ = some ts) : ∀ t ∈ ts, Term.CtorTerm sig t := by
-  match es with
-  | [] =>
-    rw [Expr.evalList_nil, Option.some_inj] at hs
-    subst hs; simp
-  | e :: es =>
-    rw [Expr.evalList_cons, Option.bind_eq_some_iff] at hs
-    obtain ⟨t, ht, hmap⟩ := hs
-    obtain ⟨rest, hrest, heq⟩ := Option.map_eq_some_iff.mp hmap
-    subst heq
-    intro x hx
-    rcases List.mem_cons.mp hx with rfl | hx
-    · exact Expr.eval_ctorTerm hσ ht
-    · exact Expr.evalList_ctorTerm hσ hrest x hx
-
-end
 
 theorem FDatabase.Inv.execAction {d d' : FDatabase} (h : d.Inv) {a : Action}
     (hlegal : a.SetLegal d.sig) (hs : execAction d a = some d') : d'.Inv := by
@@ -1900,15 +1852,6 @@ theorem FDatabase.patternHolds_MValidSubst {d : FDatabase} (h : d.Inv) {p : Patt
         (CongList.toMCongList' hct hrc ((FDatabase.congrTuple_addTerms_iff h.wf).mp hval))
         hr
     · exact absurd hs (by simp)
-
-/-- The hypothesis `patternHolds_MValidSubst` adds is a consequence of its conclusion,
-which is why requiring it costs nothing. -/
-theorem MValidSubst.validEnv {db : Database} {p : Pattern} {σ : Env}
-    (h : MValidSubst db p σ) : ValidEnv (p.freeVars db.env) db σ := by
-  cases h with
-  | expr hv _ _ _ => exact hv
-  | eq hv _ _ _ _ _ => exact hv
-  | values hv _ _ _ _ _ => exact hv
 
 /-- **Every substitution the enumerator produces is, up to `Env.Agree`, one
 `MValidQuerySubst` admits.**
@@ -2053,17 +1996,17 @@ here so `closureF_ok` can have only the halves that hold. -/
 `{fn := f, args := as, out := vs}.out` do not reduce on their own, and `obtain ⟨rfl, _⟩`
 then sees `vs` occurring in its own definition. -/
 theorem Database.ctor_row {db : Database}
-    (hrow : ∀ r ∈ db.rows, db.sig.IsCtor r.fn →
+    (hrow : ∀ r ∈ db.rows, db.sig.mergeOf r.fn = none →
       r.out = [.app r.fn r.args] ∧ Term.app r.fn r.args ∈ db.terms)
     {f : FnName} {as vs : List Term} (h : Row.mk f as vs ∈ db.rows)
     (hu : db.sig.IsCtor f) :
-    vs = [.app f as] ∧ Term.app f as ∈ db.terms := hrow _ h hu
+    vs = [.app f as] ∧ Term.app f as ∈ db.terms := hrow _ h hu.mergeOf
 
 mutual
 
 /-- `MCong.toCong` needing only that a `.union` function's rows are constructor rows. -/
 theorem MCong.toCong_of_rows {db : Database}
-    (hrow : ∀ r ∈ db.rows, db.sig.IsCtor r.fn →
+    (hrow : ∀ r ∈ db.rows, db.sig.mergeOf r.fn = none →
       r.out = [.app r.fn r.args] ∧ Term.app r.fn r.args ∈ db.terms)
     {a b : Term} (h : MCong db a b) : Cong db a b := by
   match h with
@@ -2081,7 +2024,7 @@ theorem MCong.toCong_of_rows {db : Database}
     exact .congr hma hmb (MCongList.toCongList_of_rows hrow hl)
 
 theorem MCongList.toCongList_of_rows {db : Database}
-    (hrow : ∀ r ∈ db.rows, db.sig.IsCtor r.fn →
+    (hrow : ∀ r ∈ db.rows, db.sig.mergeOf r.fn = none →
       r.out = [.app r.fn r.args] ∧ Term.app r.fn r.args ∈ db.terms)
     {as bs : List Term} (h : MCongList db as bs) : CongList db as bs := by
   match h with
@@ -2138,7 +2081,7 @@ hypotheses. So `MCong` coincides with `Cong` on the row-free projection, and
 `.merge` or `.noMerge`": a `:merge` function's application is never itself a term,
 because `Expr.eval` resolves it to its recorded output. -/
 theorem FDatabase.closureF_ok {d : FDatabase}
-    (hrow : ∀ r ∈ d.rows, d.sig.IsCtor r.fn →
+    (hrow : ∀ r ∈ d.rows, d.sig.mergeOf r.fn = none →
       r.out = [.app r.fn r.args] ∧ Term.app r.fn r.args ∈ d.terms)
     (hterm : ∀ f as, Term.app f as ∈ d.terms → d.sig.IsCtor f →
       Row.mk f as [.app f as] ∈ d.rows)
@@ -2513,8 +2456,8 @@ theorem Inv.rebuild {cl : Finset (Term × Term)} {d : FDatabase} (h : d.Inv) :
       have : Term.app r.fn r.args ∈ d.toDatabase.terms := hm
       exact h.ctorTerms r.fn r.args this
     exact mem_rebuild_rows.mpr ⟨r, h.rowsComplete hr,
-      (rebuildRow_of_not_merge fun body res hb =>
-        Signature.not_isCtor hb hctor).symm⟩
+      (rebuildRow_of_not_merge fun body res hb => by
+        rw [hctor.mergeOf] at hb; exact absurd hb (by simp)).symm⟩
   rowsWF := by
     intro r hr
     obtain ⟨s, hs, rfl⟩ := mem_rebuild_rows.mp hr
@@ -2532,10 +2475,11 @@ theorem Inv.rebuild {cl : Finset (Term × Term)} {d : FDatabase} (h : d.Inv) :
     obtain ⟨s, hs, rfl⟩ := mem_rebuild_rows.mp hr
     have hsame : d.rebuildRow cl s = s :=
       rebuildRow_of_not_merge fun body res hb => by
-        refine Signature.not_isCtor hb ?_
-        have : (d.rebuildRow cl s).fn = s.fn := by
+        have hfn : (d.rebuildRow cl s).fn = s.fn := by
           unfold FDatabase.rebuildRow; split <;> rfl
-        exact this ▸ hu
+        rw [← hfn] at hb
+        rw [show (FDatabase.rebuild cl d).sig = d.sig from rfl, hb] at hu
+        exact absurd hu (by simp)
     rw [hsame] at hu ⊢
     exact h.ctorRows s hs hu
 
@@ -2636,7 +2580,7 @@ theorem hasMergeRow_eq_false {d : FDatabase} (hsig : d.sig.AllConstructors) :
     d.hasMergeRow = false := by
   simp only [FDatabase.hasMergeRow, List.any_eq_false]
   intro r _
-  rw [(hsig r.fn).mergeOf]
+  rw [hsig r.fn]
   simp
 
 theorem mergeRound_eq_self {d : FDatabase} (h : d.hasMergeRow = false) :
@@ -2755,8 +2699,8 @@ argument: a `.merge` function's row is never a constructor row, so neither `rows
 one back — can be talking about `r₁` or `r₂`. `hvs` is why the combined row is written
 after `addTerms` and not before: `rowsWF` needs its value columns already held. -/
 theorem Inv.mergeRows {d : FDatabase} (h : d.Inv) {r₁ r₂ : Row} {vs : List Term}
-    (h₁ : ¬ d.sig.IsCtor r₁.fn)
-    (h₂ : ¬ d.sig.IsCtor r₂.fn)
+    (h₁ : d.sig.mergeOf r₁.fn ≠ none)
+    (h₂ : d.sig.mergeOf r₂.fn ≠ none)
     (hargs : ∀ a ∈ r₂.args, a ∈ d.toDatabase.terms)
     (hvs : ∀ v ∈ vs, v ∈ d.toDatabase.terms) :
     ({ d with rows := (d.rows.filter fun r => r ≠ r₁).map fun r =>
@@ -2765,7 +2709,7 @@ theorem Inv.mergeRows {d : FDatabase} (h : d.Inv) {r₁ r₂ : Row} {vs : List T
   ctorTerms := h.ctorTerms
   rowsComplete := by
     intro r hr
-    have hu : d.sig.IsCtor r.fn := h.ctorTerms r.fn r.args hr.2
+    have hu : d.sig.mergeOf r.fn = none := (h.ctorTerms r.fn r.args hr.2).mergeOf
     exact mem_mergeRows_of (h.rowsComplete hr) (fun hq => h₁ (hq ▸ hu))
       (fun hq => h₂ (hq ▸ hu))
   rowsWF := by
@@ -2787,13 +2731,13 @@ nothing put back.
 is `rowsComplete`'s: a `.merge` function's row is never a constructor row, so dropping
 `r₁` cannot drop one the invariant demands. -/
 theorem Inv.dropRow {d : FDatabase} (h : d.Inv) {r₁ : Row}
-    (h₁ : ¬ d.sig.IsCtor r₁.fn) :
+    (h₁ : d.sig.mergeOf r₁.fn ≠ none) :
     ({ d with rows := d.rows.filter fun r => r ≠ r₁ } : FDatabase).Inv where
   wf := ⟨h.wf.subtermClosed, h.wf.eqsInTerms, h.wf.envInTerms⟩
   ctorTerms := h.ctorTerms
   rowsComplete := by
     intro r hr
-    have hu : d.sig.IsCtor r.fn := h.ctorTerms r.fn r.args hr.2
+    have hu : d.sig.mergeOf r.fn = none := (h.ctorTerms r.fn r.args hr.2).mergeOf
     exact mem_dropRow_of (h.rowsComplete hr) fun hq => h₁ (hq ▸ hu)
   rowsWF := fun r hr => h.rowsWF r (mem_dropRow hr)
   ctorRows := fun r hr => h.ctorRows r (mem_dropRow hr)
@@ -2851,7 +2795,7 @@ theorem mergeOneOriented_inv {cl : Finset (Term × Term)} {d e : FDatabase} {r�
       case isTrue =>
         rw [Option.some.injEq] at hm
         subst hm
-        exact h.dropRow (Signature.not_isCtor hmo)
+        exact h.dropRow (by rw [hmo]; simp)
       case isFalse =>
       have hσ : ∀ b ∈ mergeEnv r₂.out r₁.out, b.2 ∈ d.toDatabase.terms := by
         intro b hb
@@ -2877,9 +2821,9 @@ theorem mergeOneOriented_inv {cl : Finset (Term × Term)} {d e : FDatabase} {r�
           (hebInv.addTerms hasCtor).addTerms (by simpa using hvsCtor)
         have hsig₀ : ((eb.addTerms r₂.args).addTerms vs).sig = d.sig := by
           rw [addTerms_sig, addTerms_sig]; exact hsig
-        have hne₁ : ¬ ((eb.addTerms r₂.args).addTerms vs).sig.IsCtor r₁.fn := by
-          rw [hsig₀]; exact Signature.not_isCtor hmo
-        have hne₂ : ¬ ((eb.addTerms r₂.args).addTerms vs).sig.IsCtor r₂.fn := by
+        have hne₁ : ((eb.addTerms r₂.args).addTerms vs).sig.mergeOf r₁.fn ≠ none := by
+          rw [hsig₀, hmo]; simp
+        have hne₂ : ((eb.addTerms r₂.args).addTerms vs).sig.mergeOf r₂.fn ≠ none := by
           rw [← hfn]; exact hne₁
         have hargs : ∀ a ∈ r₂.args,
             a ∈ ((eb.addTerms r₂.args).addTerms vs).toDatabase.terms := by
@@ -3681,24 +3625,6 @@ rather than at the same one. `MValidSubst.mono_recorded` composes that congruenc
 row atom's, and `MergeStep.transport_recorded` writes the combined row at the key it found,
 which is what `Database.Solid` has to be carried for. `CmdStep.solid` is that carrying. -/
 
-/-- Every value a query substitution binds is a term the database holds — `ValidEnv` per
-pattern, unioned. -/
-theorem MValidQuerySubst.mem_terms {db : Database} {q : Query} {σ : Env}
-    (h : MValidQuerySubst db q σ) : ∀ b ∈ σ, b.2 ∈ db.terms := by
-  obtain ⟨σs, hall, hu⟩ := h
-  have hmem : ∀ σ' ∈ σs, ∃ p, MValidSubst db p σ' := by
-    clear hu
-    induction hall with
-    | nil => intro _ hx; simp at hx
-    | @cons p σ' _ _ hr _ ih =>
-      intro τ hτ
-      rcases List.mem_cons.mp hτ with rfl | h'
-      · exact ⟨p, hr⟩
-      · exact ih τ h'
-  refine hu.forall_mem fun σ' hσ' b hb => ?_
-  obtain ⟨p, hp⟩ := hmem σ' hσ'
-  exact hp.validEnv.2 b hb
-
 /-- `Solid` survives a rule firing: the head is an action block, run in the caller's
 environment extended by a substitution whose values the database already holds. -/
 theorem RuleResults.solid {db d : Database} (h : db.Solid) {r : Rule}
@@ -3802,10 +3728,18 @@ theorem RunRules.mono_recorded {A C : Database} (hc : A.Recorded C) (hsig : A.si
     · obtain ⟨d, hd, hx'⟩ := Set.mem_iUnion₂.mp hx
       exact (key d hd).eqs hx'
 
-/-- `CmdStep.mono` along `Recorded`. -/
+/-- `CmdStep.mono` along `Recorded`.
+
+**`hfresh` is not decoration.** `Database.Contained` ignores `sig`, but `Database.Out`
+does not: it reads a key up to `MCong`, and `MCong.fd` fires only at a constructor, so a
+declaration that stops a name being one destroys a derivation the specification witness
+needs. `Falsity.mono_recorded_decl_false` is that program — it *re*declares a constructor
+`:no-merge` — and `Cmd.DeclFresh` is exactly what rules it out. On a fresh name
+`MCong.mono_update` transports every derivation, because there was no `fd` step at an
+undeclared name to lose. -/
 theorem CmdStep.mono_recorded {A C B : Database} (hc : A.Recorded C) (hsig : A.sig = C.sig)
     (henv : A.env = C.env) (hrules : A.rules = C.rules) (hsolid : A.Solid) {c : Cmd}
-    (h : CmdStep A c B) :
+    (hfresh : c.DeclFresh A.sig) (h : CmdStep A c B) :
     ∃ D, CmdStep C c D ∧ B.Recorded D ∧ B.sig = D.sig ∧ B.env = D.env ∧
       B.rules = D.rules := by
   cases h with
@@ -3828,28 +3762,10 @@ theorem CmdStep.mono_recorded {A C B : Database} (hc : A.Recorded C) (hsig : A.s
     refine ⟨D, .run hclD, hcontD, hsigD, ?_, ?_⟩
     · rw [(MergeClosure.envRules hrun).1, (MergeClosure.envRules hclD).1]; exact henv
     · rw [(MergeClosure.envRules hrun).2, (MergeClosure.envRules hclD).2]; exact hrules
-  | @decl _ f =>
+  | @decl f dc =>
     refine ⟨_, .decl, ⟨hc.terms, fun r hr => ?_, hc.eqs⟩, ?_, henv, hrules⟩
-    -- rebuild: open. `Contained` ignores `sig`, so the declaration used to be free. `Out`
-    -- does not: `MCong.fd` fires only at a *constructor*, so declaring `f` `:merge` can
-    -- take a derivation away (`mcong_mono_needs_sig`), and the key congruence `Recorded`
-    -- supplies is stated at the pre-declaration signature.
-    --
-    -- The case is **false as stated** — `Falsity.mono_recorded_decl_false` — so it needs a
-    -- hypothesis about `f`. The obvious one, that `C` holds no row of `f`, is **not
-    -- available**: `Falsity.undeclared_row_reachable` exhibits a program satisfying every
-    -- condition the chain carries whose every specification run holds a row of an
-    -- undeclared `f`. `Action.SetLegal` bars a `set` on `f`, but `addTerm` writes the
-    -- constructor row of every application it holds, `Expr.eval` treats an undeclared name
-    -- as a constructor, and a rule head naming `f` fires in the specification — on a row
-    -- the interpreter's merge phase replaced — where it does not fire in the interpreter,
-    -- so `Cmd.DeclUnused`, checked at the interpreter's state, does not see it.
-    --
-    -- Closing it needs either a syntactic declare-before-use in `FDatabase.ProgramLegal`
-    -- (which strengthens `execM_contained`'s hypothesis) or a provenance-carrying
-    -- congruence — `MCong` with `fd` restricted to a name set — threaded through the whole
-    -- `Recorded` layer.
-    · sorry
+    · obtain ⟨cs, hl, hrow⟩ := hc.rows r hr
+      exact ⟨cs, MCongList.mono_update (hsig ▸ hfresh) hl, hrow⟩
     · show Function.update A.sig _ _ = Function.update C.sig _ _
       rw [hsig]
 
@@ -3857,20 +3773,22 @@ theorem CmdStep.mono_recorded {A C B : Database} (hc : A.Recorded C) (hsig : A.s
 hypothesis across the induction. -/
 theorem ProgramStep.mono_recorded {A C B : Database} (hc : A.Recorded C)
     (hsig : A.sig = C.sig) (henv : A.env = C.env) (hrules : A.rules = C.rules)
-    (hsolid : A.Solid) {p : Program} (h : ProgramStep A p B) :
+    (hsolid : A.Solid) {p : Program} (hfresh : Program.DeclsFresh p A.sig)
+    (h : ProgramStep A p B) :
     ∃ D, ProgramStep C p D ∧ B.Recorded D ∧ B.sig = D.sig ∧ B.env = D.env ∧
       B.rules = D.rules := by
   induction h generalizing C with
   | nil => exact ⟨C, .nil, hc, hsig, henv, hrules⟩
   | @cons A d B c cs hcmd _ ih =>
-    obtain ⟨D₀, hD₀, hc₀, hs₀, he₀, hr₀⟩ := hcmd.mono_recorded hc hsig henv hrules hsolid
-    obtain ⟨D₁, hD₁, hc₁, hs₁, he₁, hr₁⟩ := ih hc₀ hs₀ he₀ hr₀ (hcmd.solid hsolid)
+    obtain ⟨D₀, hD₀, hc₀, hs₀, he₀, hr₀⟩ :=
+      hcmd.mono_recorded hc hsig henv hrules hsolid hfresh.1
+    obtain ⟨D₁, hD₁, hc₁, hs₁, he₁, hr₁⟩ :=
+      ih hc₀ hs₀ he₀ hr₀ (hcmd.solid hsolid) (hcmd.sig ▸ hfresh.2)
     exact ⟨D₁, .cons hD₀ hD₁, hc₁, hs₁, he₁, hr₁⟩
 
 /-! #### Declaring a fresh name
 
-The three facts a `.decl` needs, all of them about `Signature.IsCtor` calling an
-undeclared name a constructor. -/
+The facts a `.decl` needs, all of them about a name the signature does not yet mention. -/
 
 /-- `Signature.mergeOf` is read pointwise, so a declaration at `f` is invisible at every
 other name. -/
@@ -3880,14 +3798,15 @@ theorem Signature.mergeOf_update_of_ne {sig : Signature} {f g : FnName} {dc : Fn
   unfold Signature.mergeOf
   rw [Function.update_of_ne h]
 
-/-- An undeclared name is a constructor. -/
-theorem Signature.isCtor_of_none {sig : Signature} {f : FnName}
-    (h : sig f = none) : Signature.IsCtor sig f :=
-  show (sig f).bind FnDecl.merge = none by rw [h]; rfl
+/-- An undeclared name has no merge specification either — which is *not* the same as
+being a constructor, and is the half of the old reading that survives. -/
+theorem Signature.mergeOf_of_none {sig : Signature} {f : FnName}
+    (h : sig f = none) : Signature.mergeOf sig f = none := by
+  rw [Signature.mergeOf, h]; rfl
 
 /-- Declaring a name the signature does not yet mention can only make a `set` *more*
-legal: `Action.SetLegal` forbids exactly one thing, being a constructor, and that is what
-an undeclared name already is — so no legal `set` names `f`. -/
+legal: `Action.SetLegal` asks for a merge specification and an undeclared name has none,
+so no legal `set` names `f`. -/
 theorem Action.SetLegal.update {a : Action} {sig : Signature} {f : FnName} {dc : FnDecl}
     (hf : sig f = none) (h : a.SetLegal sig) :
     a.SetLegal (Function.update sig f (some dc)) := by
@@ -3898,7 +3817,7 @@ theorem Action.SetLegal.update {a : Action} {sig : Signature} {f : FnName} {dc :
   | set g _ _ =>
     have hg : g ≠ f := by
       rintro rfl
-      exact h (Signature.isCtor_of_none hf)
+      exact h (Signature.mergeOf_of_none hf)
     show Signature.mergeOf (Function.update sig f (some dc)) g ≠ none
     rw [Signature.mergeOf_update_of_ne hg]
     exact h
@@ -4083,7 +4002,7 @@ theorem Inv.union {d e : FDatabase} (hd : d.Inv) (he : e.Inv) (hsig : e.sig = d.
     rcases mem_rows_union.mp hr with hr' | hr'
     · exact ⟨(hd.ctorRows r hr' hu).1,
         mem_terms_union.mpr (Or.inl (hd.ctorRows r hr' hu).2)⟩
-    · have hu' : e.sig.IsCtor r.fn := by rw [hsig]; exact hu
+    · have hu' : e.sig.mergeOf r.fn = none := by rw [hsig]; exact hu
       exact ⟨(he.ctorRows r hr' hu').1,
         mem_terms_union.mpr (Or.inr (he.ctorRows r hr' hu').2)⟩
 
@@ -4211,8 +4130,8 @@ theorem execActions_rules {d e : FDatabase} {as : List Action}
 `Falsity.claim1` shows there is no unconditional preservation lemma: `CtorTerms` reads
 `sig`, so declaring `g` `:merge` after `g ()` is already a term breaks it. The two
 hypotheses are what rule that out — `hterms` keeps `ctorTerms`, and `hf` keeps
-`ctorRows`, since an undeclared name is already a constructor and every row of one is
-already a constructor row. -/
+`ctorRows`, since an undeclared name has no merge specification and `ctorRows` speaks
+about exactly the names that have none. -/
 theorem Inv.decl {d : FDatabase} (h : d.Inv) {f : FnName} {dc : FnDecl}
     (hf : d.sig f = none) (hterms : ∀ as, Term.app f as ∉ d.terms) :
     ({ d with sig := Function.update d.sig f (some dc) } : FDatabase).Inv where
@@ -4220,9 +4139,11 @@ theorem Inv.decl {d : FDatabase} (h : d.Inv) {f : FnName} {dc : FnDecl}
   ctorTerms := by
     intro g as hm
     have hg : g ≠ f := by rintro rfl; exact hterms as hm
-    show Signature.mergeOf (Function.update d.sig f (some dc)) g = none
-    rw [Signature.mergeOf_update_of_ne hg]
-    exact h.ctorTerms g as hm
+    obtain ⟨e, he, hme⟩ := h.ctorTerms g as hm
+    refine ⟨e, ?_, hme⟩
+    show Function.update d.sig f (some dc) g = some e
+    rw [Function.update_of_ne hg]
+    exact he
   rowsComplete := h.rowsComplete
   rowsWF := h.rowsWF
   ctorRows := by
@@ -4231,7 +4152,7 @@ theorem Inv.decl {d : FDatabase} (h : d.Inv) {f : FnName} {dc : FnDecl}
     show Signature.mergeOf d.sig r.fn = none
     by_cases hfn : r.fn = f
     · rw [hfn]
-      exact Signature.isCtor_of_none hf
+      exact Signature.mergeOf_of_none hf
     · rw [← Signature.mergeOf_update_of_ne (sig := d.sig) (dc := dc) hfn]
       exact hu
 
@@ -4289,6 +4210,30 @@ theorem execCmdM_sig {d d' : FDatabase} {c : Cmd} (hs : d.execCmdM c = some d') 
     rw [(mergeSaturateF_fields hs).1, execRunRules_fields.1]
     rfl
   | decl f dc => rw [FDatabase.execCmdM, Option.some.injEq] at hs; exact hs ▸ rfl
+
+/-- **A legal run declares each name once, and freshly.**
+
+`FDatabase.ProgramLegal` checks `Cmd.DeclUnused` at the state each command reaches, which
+is a fact about the interpreter's database; `Program.DeclsFresh` is the same fact read off
+the signature alone, which is the form `ProgramStep.mono_recorded` can carry across a
+specification run. The two agree because `execCmdM` moves the signature exactly as
+`Cmd.sigBind` predicts. -/
+theorem ProgramLegal.declsFresh {p : Program} : ∀ {d d' : FDatabase},
+    d.ProgramLegal p → d.execProgramM p = some d' → Program.DeclsFresh p d.sig := by
+  induction p with
+  | nil => intro _ _ _ _; trivial
+  | cons c cs ih =>
+    intro d d' hp hs
+    rw [FDatabase.execProgramM] at hs
+    obtain ⟨d₁, hd₁, hcs⟩ := Option.bind_eq_some_iff.mp hs
+    refine ⟨?_, ?_⟩
+    · cases c with
+      | decl f dc => exact hp.2.1.1
+      | action a => trivial
+      | rule r => trivial
+      | run => trivial
+    · rw [← execCmdM_sig hd₁]
+      exact ih (hp.2.2.2 d₁ hd₁) hcs
 
 /-- **`Inv` through one command.** `.action` and `.run` are the phase lemmas composed with
 `Inv.mergeSaturateF`; `.rule` touches no field `Inv` reads; `.decl` is `Inv.decl`, and is
@@ -4462,7 +4407,8 @@ theorem execProgramM_contained_aux {p : Program} : ∀ {d d' : FDatabase}, d.Inv
         (execCmdM_rulesLegal hlegal hunused hrules hd₁) (hnext d₁ hd₁) hcs
     obtain ⟨db₃, hstep₃, hcont₃, hsig₃, -, -⟩ :=
       ProgramStep.mono_recorded hcont₁ hsig₁ henv₁ hrules₁
-        (h.execCmdM hlegal hmerges hunused hrules hd₁).solid hstep₂
+        (h.execCmdM hlegal hmerges hunused hrules hd₁).solid
+        (FDatabase.ProgramLegal.declsFresh (hnext d₁ hd₁) hcs) hstep₂
     exact ⟨db₃, .cons hstep₁ hstep₃, hcont₂.trans hcont₃ hsig₃⟩
 
 /-- **The interpreter's answer to a whole program is contained in one the specification
@@ -4500,9 +4446,9 @@ theorem execM_contained {p : Program} (hp : FDatabase.empty.ProgramLegal p)
     {d : FDatabase} (h : execM p = some d) :
     ∃ db, ProgramStep FDatabase.empty.toDatabase p db ∧ d.toDatabase.Recorded db :=
   FDatabase.execProgramM_contained FDatabase.Inv.empty
-    (fun g body res hg =>
-      (Signature.not_isCtor hg
-        (Signature.isCtor_of_none (show FDatabase.empty.sig g = none from rfl))).elim)
+    (fun g body res hg => by
+      rw [Signature.mergeOf_of_none (show FDatabase.empty.sig g = none from rfl)] at hg
+      exact absurd hg (by simp))
     (fun r hr => absurd hr (by simp [FDatabase.empty])) hp h
 
 end Egglog

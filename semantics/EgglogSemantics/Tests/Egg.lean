@@ -124,7 +124,8 @@ def Cmd.toEgg : Cmd → String
 /-! ### Collecting the signature
 
 The header has to declare every constructor, so the arities are read off the program's
-uses rather than from `Signature` — generated programs need not declare anything.
+uses rather than from `Signature`. That is also where `Program.ctorDecls` gets the model
+side's declarations, so the two descriptions of a program's constructors cannot drift.
 
 Two names must be kept out of the result, and for opposite reasons. A **declared `:merge`
 function** has its own `function` command, and `Program.ctorArities` filters it. A
@@ -190,6 +191,28 @@ def Program.mergeNames (p : Program) : List FnName :=
 /-- The constructors: everything used that is not a declared `:merge` function. -/
 def Program.ctorArities (p : Program) : List (FnName × Nat) :=
   p.fnArities.filter fun fa => fa.1 ∉ p.mergeNames
+
+/-- Every name the program declares, whatever it declares it as. -/
+def Program.declaredNames (p : Program) : List FnName :=
+  p.filterMap fun c => match c with
+    | .decl f _ => some f
+    | _ => none
+
+/-- A `(constructor …)` for every constructor the program applies and does not declare.
+
+**Declaration is required** (`Signature.IsCtor`), so a program that applies a name nobody
+declared gets stuck in `Expr.eval` and `execM` returns `none`. Generated programs are
+written against the `datatype` header — which this file reads off the *uses* — so the model
+side needs the same information as commands. This is that, and it is why the two sides
+still agree: a constructor declaration renders as nothing (`Cmd.toEgg`), being folded into
+the header the header check already emits. -/
+def Program.ctorDecls (p : Program) : Program :=
+  (p.ctorArities.filter fun fa => fa.1 ∉ p.declaredNames).map fun fa =>
+    .decl fa.1 { arity := fa.2, outArity := 1, merge := none }
+
+/-- The program with its constructors declared up front. What the difftest actually runs
+and emits. -/
+def Program.declared (p : Program) : Program := p.ctorDecls ++ p
 
 /-! ### Which `set`s egglog will accept
 
