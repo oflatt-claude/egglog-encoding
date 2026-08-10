@@ -4,17 +4,16 @@ import EgglogSemantics.Spec.Term
 /-!
 # The database
 
-The Redex global state is `(Terms Congr Env Rules)`. Two changes here:
+The global state: the terms and rows the program has built, the equalities it has
+asserted, the global bindings, the rules, and the declarations. Two things are worth
+saying about it up front.
 
-* `eqs` holds only the *asserted* equalities. The Redex `Congr` holds a set closed
-  under `restore-congruence`; closure is `Cong`, a predicate, so there
-  is no closed-set state to maintain. See `PLAN.md`.
-* `sig` is new, and is only written by `Cmd.decl`. It exists so that adding
-  `:merge` functions later does not reshape the state.
-
-`Database.addTerm` inserts a term together with all of its subterms, so the Redex
-"presence of children" rule holds by construction instead of being restored after
-each command. This is unobservable because no action reads `Congr`.
+* `eqs` holds only the *asserted* equalities. The equalities that *follow* are `Cong`,
+  a predicate, so there is no closed set for the state to carry or maintain. See
+  `PLAN.md`, "Where 'restored congruence' went".
+* `Database.addTerm` inserts a term together with all of its subterms, so the database
+  holds the children of everything it holds by construction, rather than by a repair
+  pass between commands. This is unobservable because no action consults congruence.
 -/
 
 namespace Egglog
@@ -22,7 +21,7 @@ namespace Egglog
 abbrev Env := List (Var × Term)
 
 namespace Env
-/-- The Redex `Lookup`: the first binding for `v`, if any. -/
+/-- The first binding for `v`, if any. -/
 def lookup (v : Var) : Env → Option Term
   | [] => none
   | (w, t) :: rest => if v = w then some t else lookup v rest
@@ -30,7 +29,7 @@ def lookup (v : Var) : Env → Option Term
 /-- The variables bound by `σ`, in order. -/
 def dom (σ : Env) : List Var := σ.map Prod.fst
 
-/-- Environments no `lookup` can tell apart. `Env-Union` may leave a variable bound
+/-- Environments no `lookup` can tell apart. `Env.UnionAll` may leave a variable bound
 twice with the same term, which `Agree` ignores. -/
 def Agree (σ₁ σ₂ : Env) : Prop := ∀ v, lookup v σ₁ = lookup v σ₂
 
@@ -121,10 +120,9 @@ def addEq (a b : Term) (db : Database) : Database :=
 
 /-- Union in a whole family of databases at once.
 
-This is the Redex `U_d`, specialized to the way it is used: `sig`, `env` and
-`rules` are taken from `db`. That is faithful because the only `U_d` in the Redex
-is `(run)`'s, whose operands all carry the caller's env and rules —
-`ruleResults_env` and `ruleResults_rules`. -/
+Specialized to the way it is used: `sig`, `env` and `rules` are taken from `db`. That
+loses nothing because the only union the semantics takes is `(run)`'s, whose operands
+all carry the caller's env and rules — `ruleResults_env` and `ruleResults_rules`. -/
 def sUnion (db : Database) (S : Set Database) : Database :=
   { db with
     terms := db.terms ∪ ⋃ d ∈ S, d.terms
@@ -152,8 +150,9 @@ structure Contained (d₁ d₂ : Database) : Prop where
 
 /-- The database invariants.
 
-`subtermClosed` is the Redex "presence of children" rule, held by construction.
-The other two say the database only ever talks about terms it holds. -/
+`subtermClosed` says the database holds the children of every term it holds, which
+`addTerm` maintains by construction. The other two say the database only ever talks
+about terms it holds. -/
 structure WF (db : Database) : Prop where
   subtermClosed : ∀ t ∈ db.terms, t.subterms ⊆ db.terms
   eqsInTerms : ∀ p ∈ db.eqs, p.1 ∈ db.terms ∧ p.2 ∈ db.terms

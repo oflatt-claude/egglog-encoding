@@ -5,24 +5,23 @@ import EgglogSemantics.Spec.Eval
 /-!
 # E-matching
 
-Ports the Redex `free-vars`, `Env-Union`, `valid-env`, `valid-subst` and
-`valid-query-subst`.
+E-matching is defined declaratively rather than by a search procedure: a substitution
+matches a pattern when the pattern's *instance* is provably equal to some **witness**
+term the database already holds. The witness is what stops a pattern from matching a
+term the e-graph does not contain — the instance is added to the database before
+congruence is consulted, so without a witness drawn from the original terms,
+reflexivity would match everything.
 
-The Redex defines e-matching declaratively rather than by a search procedure: a
-substitution matches a pattern when the pattern's *instance* is provably equal to
-some **witness** term the database already holds. The witness is what stops a
-pattern from matching a term the e-graph does not contain — the instance is added
-to the database before congruence is consulted, so without a witness drawn from the
-original terms, reflexivity would match everything.
-
-The Redex `valid-subst-faster` gives an operational alternative; porting it and
-proving the two agree is deferred (see `PLAN.md`, M8).
+Searching for those substitutions is the executable layer's job: `Impl/Interp.lean`'s
+`matchQuery` enumerates them, and `Proofs/Interp.lean`'s
+`validQuerySubst_of_mem_matchQuery` and its converse show the two agree up to
+`Env.Agree`.
 -/
 
 namespace Egglog
 mutual
 
-/-- The Redex `free-vars`: the variables of `e` not already bound in `σ`.
+/-- The variables of `e` not already bound in `σ`.
 
 A pattern variable that *is* bound in `σ` is not a match variable — it denotes its
 value. That is how egglog treats a global variable appearing in a rule body. -/
@@ -45,7 +44,7 @@ def Pattern.freeVars : Pattern → Env → List Var
   | .values vs _ as, σ => Expr.freeVarsList vs σ ∪ Expr.freeVarsList as σ
 
 namespace Env
-/-- The Redex `Env-Union2`: append, requiring the two to agree wherever both bind.
+/-- Append, requiring the two to agree wherever both bind.
 
 `σ₁`'s bindings are kept even when `σ₂` has them too, so the result can bind a
 variable twice — always to the same term, so `lookup` cannot tell. This is a
@@ -54,7 +53,7 @@ and this development carries no decidable equality for them. -/
 def Union2 (σ₁ σ₂ σ : Env) : Prop :=
   (∀ b ∈ σ₁, ∀ t, lookup b.1 σ₂ = some t → b.2 = t) ∧ σ = σ₁ ++ σ₂
 
-/-- The Redex `Env-Union`: the left fold of `Union2`, which fails if any step does. -/
+/-- The left fold of `Union2`, which fails if any step does. -/
 inductive UnionAll : List Env → Env → Prop where
   | nil : UnionAll [] []
   | single (σ : Env) : UnionAll [σ] σ
@@ -63,22 +62,19 @@ inductive UnionAll : List Env → Env → Prop where
 
 end Env
 /-! ### Valid substitutions -/
-/-- The Redex `valid-env`: `σ` binds exactly `vars`, each to a term the database
-holds.
+/-- `σ` binds exactly `vars`, each to a term the database holds.
 
-The Redex pins `σ`'s bindings to the order of `vars`; `Perm` is used here so the
-definition does not depend on the order `varset-union` happens to produce. The extra
-substitutions that admits are permutations of Redex ones, which no `lookup` can
-distinguish (`Expr.eval_agree`). -/
+`Perm` rather than equality, so that the definition does not depend on the order
+`Expr.freeVars` happens to produce. Substitutions differing only by a permutation of
+their bindings are indistinguishable to `lookup` (`Expr.eval_agree`), so this admits
+no substitution the semantics can tell apart from one it already admitted. -/
 def ValidEnv (vars : List Var) (db : Database) (σ : Env) : Prop :=
   (Env.dom σ).Perm vars ∧ ∀ b ∈ σ, b.2 ∈ db.terms
 
-/-- The Redex `valid-subst`.
+/-- The substitutions one query pattern admits.
 
-Both cases add the pattern's instance (or instances) to the database before asking
-`Cong`, mirroring the Redex
-`restore-congruence (U_d Database_1 ((tset Term_res) …))`. The witness is drawn from
-the *original* terms.
+Every case adds the pattern's instance (or instances) to the database before asking
+`Cong`. The witness is drawn from the *original* terms.
 
 The witness premises stay spelled out rather than reading `CongOn`, because the extended
 database they ask over is the one *both* instances are added to; only the `eq` case's
@@ -117,7 +113,7 @@ inductive ValidSubst (db : Database) : Pattern → Env → Prop where
       CongList ((db.addTerms ts).addTerms us) us ws → Row.mk f bs ws ∈ db.rows →
       ValidSubst db (.values vs f as) σ
 
-/-- The Redex `valid-query-subst`: one substitution per pattern, unioned. -/
+/-- The substitutions a whole query admits: one per pattern, unioned. -/
 def ValidQuerySubst (db : Database) (q : Query) (σ : Env) : Prop :=
   ∃ σs : List Env, List.Forall₂ (ValidSubst db) q σs ∧ Env.UnionAll σs σ
 

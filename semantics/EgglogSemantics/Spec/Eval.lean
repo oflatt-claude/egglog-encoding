@@ -3,26 +3,24 @@ import EgglogSemantics.Spec.Congruence
 /-!
 # Evaluating expressions and actions
 
-Ports the Redex `Eval-Expr`, `Eval-Action`, `Eval-Global-Actions` and
-`Eval-Local-Actions`.
+An expression denotes a ground term; an action turns a database into a database.
 
-Evaluation is partial, in four ways. `Eval-Expr` has no rule for an unbound variable; an
-application of an **undeclared** name has none either, which is egglog's declare-before-use
-and the Redex's one real omission; an application of a declared merge function is a
-*lookup*, which is a query atom (`Pattern.values`) and never an expression; and a primitive
-may be given operands of the wrong sort, which is egglog's own `i64` type error and which
-this model has no sort discipline to reject statically. All four are `none`. `Scope.lean`'s
-`Scoped` rules out the first and its `Evaluable` the other three.
+Evaluation is partial, in four ways. There is no rule for an unbound variable; none for
+an application of an **undeclared** name, which is egglog's declare-before-use; an
+application of a declared merge function is a *lookup*, which is a query atom
+(`Pattern.values`) and never an expression; and a primitive may be given operands of the
+wrong sort, which is egglog's own `i64` type error and which this model has no sort
+discipline to reject statically. All four are `none`. `Scope.lean`'s `Scoped` rules out
+the first and its `Evaluable` the other three.
 
-Actions only ever add terms, rows and equalities, which is `evalAction_contained` — the
-fact the Redex documentation appeals to when it says the order of actions does not
-matter.
+Actions only ever add terms, rows and equalities — nothing is ever removed or
+overwritten. That is `evalAction_contained`.
 -/
 
 namespace Egglog
 mutual
 
-/-- The Redex `Eval-Expr`: build the ground term an expression denotes.
+/-- Build the ground term an expression denotes.
 
 The signature is read for one thing only — whether a name **builds or computes or reads
 or means nothing**. egglog consults its primitive table first, so a reserved name shadows
@@ -49,15 +47,14 @@ def Expr.evalList (sig : Signature) : List Expr → Env → Option (List Term)
 
 end
 
-/-- The Redex `Eval-Action`, plus `set`.
+/-- Run one action against the database.
 
 A `let` binds in the environment the database carries, so at top level it adds a
 global and inside a rule it adds a rule-local binding; `evalLocalActions` is what
 makes the second case local by restoring the caller's environment afterwards.
 
-`set` is the one case the Redex has no rule for. It only ever adds: a collision with a
-congruent key is resolved by `MCong.fd` or by `MergeStep`, neither of which removes the
-row it wrote. -/
+`set` only ever adds: a collision with a congruent key is resolved by `MCong.fd` or by
+`MergeStep`, neither of which removes the row it wrote. -/
 def evalAction (db : Database) : Action → Option Database
   | .expr e => (e.eval db.sig db.env).map fun t => db.addTerm t
   | .letBind v e => (e.eval db.sig db.env).map fun t =>
@@ -69,18 +66,16 @@ def evalAction (db : Database) : Action → Option Database
       (Expr.evalList db.sig args db.env).bind fun as =>
         (Expr.evalList db.sig out db.env).map fun vs => db.addRow f as vs
 
-/-- The Redex `Eval-Global-Actions`: run the actions in order. -/
+/-- Run the actions in order, threading the database through. -/
 def evalActions (db : Database) : List Action → Option Database
   | [] => some db
   | a :: as => (evalAction db a).bind fun db' => evalActions db' as
 
-/-- The Redex `Eval-Local-Actions`: run a rule's actions with `σ` in scope, then
-forget the resulting environment.
+/-- Run a rule's actions with `σ` in scope, then forget the resulting environment.
 
-`σ` is appended *after* the globals, matching `Env-Union Env_1 Env_local`, so a
-globally bound variable shadows a substitution for the same name. That never
-happens in practice because a pattern's free variables exclude the globals
-(`Expr.freeVars`), but the order is the Redex's. -/
+`σ` is appended *after* the globals, so a globally bound variable shadows a
+substitution for the same name. That never happens in practice because a pattern's
+free variables exclude the globals (`Expr.freeVars`). -/
 def evalLocalActions (db : Database) (as : List Action) (σ : Env) : Option Database :=
   (evalActions { db with env := db.env ++ σ } as).map fun db' =>
     { db' with env := db.env, rules := db.rules }

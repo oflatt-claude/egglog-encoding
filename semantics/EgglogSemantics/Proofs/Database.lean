@@ -42,10 +42,10 @@ theorem lookup_eq_none_iff {v : Var} {σ : Env} : lookup v σ = none ↔ v ∉ d
     obtain ⟨w, t⟩ := b
     by_cases h : v = w <;> simp [h, ih]
 
-/-- Appending environments never fails, unlike the Redex `Env-Union`, because the
-only appends this semantics performs are of a substitution onto the globals, whose
-domains are disjoint (`Pattern.freeVars_lookup_eq_none`). `lookup` is left-biased, so
-`σ₁` shadows `σ₂` — the same as `Env-Union2` prepending `Env_1`. -/
+/-- Appending environments never fails, unlike `Env.Union2`, because the only appends
+this semantics performs are of a substitution onto the globals, whose domains are
+disjoint (`Pattern.freeVars_lookup_eq_none`). `lookup` is left-biased, so `σ₁` shadows
+`σ₂` — the same bias `Env.Union2` has. -/
 theorem lookup_append_of_not_mem {v : Var} {σ₁ σ₂ : Env} (h : v ∉ dom σ₁) :
     lookup v (σ₁ ++ σ₂) = lookup v σ₂ := by
   induction σ₁ with
@@ -105,7 +105,7 @@ theorem Agree.trans {σ₁ σ₂ σ₃ : Env} (h₁ : Agree σ₁ σ₂) (h₂ :
     Agree σ₁ σ₃ := fun v => (h₁ v).trans (h₂ v)
 
 /-- Reordering a duplicate-free environment's bindings changes no lookup. This is
-what makes `ValidEnv`'s use of `Perm` — where the Redex `valid-env` pins the order —
+what makes `ValidEnv`'s use of `Perm`, rather than fixing the order of `σ`'s bindings,
 observationally harmless. -/
 theorem Agree.of_perm {σ₁ σ₂ : Env} (h : σ₁.Perm σ₂) (hnd : (dom σ₁).Nodup) :
     Agree σ₁ σ₂ := by

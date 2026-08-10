@@ -2,22 +2,20 @@ import EgglogSemantics.Impl.Check
 import EgglogSemantics.Proofs.Interp
 
 /-!
-# The Redex test suite, as Lean proofs
+# Worked examples, as Lean proofs
 
-Ports the unit checks in `test.rkt` of
-[egglog PR #324](https://github.com/egraphs-good/egglog/pull/324). Each `example`
-here is a closed proof, so this file compiling *is* the test run.
+One small example per notion the semantics defines — scope, congruence, e-matching,
+running actions, running a rule — meant to be read as documentation. Each `example` is a
+closed proof, so this file compiling *is* the test run; the `#guard`s at the end run
+whole programs through the interpreter instead.
 
-Two of the Redex checks are not reproduced as stated:
-
-* `redex-check`'s random testing has no counterpart.
-* The checks starting from a database with equalities but no terms
-  (`(restore-congruence ((tset) (congr (= 1 2) (= 2 3)) () ()))`) describe states the
-  semantics never reaches — a `union` always inserts its operands — so they are
-  ported with the terms present.
+Every hand-built database below holds the terms its equalities mention. A state with
+equalities but no terms is unreachable — a `union` always inserts its operands — so
+there is nothing to check about one.
 
 Checks about what a `run` does *not* produce need `ValidSubst` inversion, which is
-`PLAN.md`'s M8; the `run` example below is the forward direction only.
+`PLAN.md`'s M8; the `run` example below is the forward direction only. Randomly
+generated programs, checked against the real egglog binary, are `DiffTest.lean`.
 -/
 
 namespace Egglog.Examples
@@ -34,43 +32,41 @@ private abbrev noSig : Signature := fun _ => none
 /-- `(datatype S (c x…))` at `n` argument columns.
 
 Declaration is required, so every program below that *builds* a term declares its
-constructors first, and every hand-built database declares the ones its terms use. The
-Redex has no signature and no declarations; this is the one place its programs need
-extending to run here. -/
+constructors first, and every hand-built database declares the ones its terms use. -/
 private def ctorDecl (n : Nat) : FnDecl := { arity := n, outArity := 1, merge := none }
 
 /-! ### Scope checking -/
 
-/-- `(check-false (judgment-holds (typed-program (v1) TypeEnv)))`. -/
+/-- A bare `v1` as the whole program: nothing binds it, and an action must be an
+application besides. -/
 example : ¬ WellScoped [.action (.expr (.var "v1"))] := by
   simp [WellScoped, Program.Scoped, Cmd.Scoped, Action.Scoped, Expr.Scoped]
 
-/-- `(check-not-false (judgment-holds (typed-program ((let v1 2) v1) TypeEnv)))`, with the
-bare `v1` wrapped in a constructor. A global is in scope for a later command, which is what
-the Redex check is about. -/
+/-- `(let v1 2)` then `(cwrap v1)`: a top-level `let` is in scope for a later command. -/
 example : WellScoped
     [.action (.letBind "v1" (eNum 2)), .action (.expr (.app "cwrap" [.var "v1"]))] := by
   simp [WellScoped, Program.Scoped, Cmd.Scoped, Action.Scoped, Expr.Scoped, Expr.IsApp,
     Cmd.bind, Action.bind, eNum]
 
-/-- The Redex form itself is rejected: a bare variable is a legal `expr` action there and
-in egglog is not a legal action at all, so `Action.Scoped` requires an application. -/
+/-- The same program with a bare `v1` as the second action is rejected. `v1` is in scope,
+but egglog has no such action — `parse error: expected command` at top level and
+`parse error: expected action` in a rule head — so `Action.Scoped` requires an
+application. -/
 example : ¬ WellScoped [.action (.letBind "v1" (eNum 2)), .action (.expr (.var "v1"))] := by
   simp [WellScoped, Program.Scoped, Cmd.Scoped, Action.Scoped, Expr.IsApp]
 
-/-- Likewise for a query fact. -/
+/-- Likewise for a query fact, where egglog answers `parse error: expected fact`. -/
 example : ¬ Rule.Scoped ⟨[.expr (.var "a")], []⟩ [] := by
   simp [Rule.Scoped, Pattern.Scoped, Expr.IsApp]
 
-/-- `(check-false (judgment-holds (typed-rule (rule ((= v1 2)) ((cadd v1 v2))) ())))`:
-`v2` is bound by neither the query nor the globals. -/
+/-- `(rule ((= v1 2)) ((cadd v1 v2)))` with no globals: `v2` is bound by neither the
+query nor the globals. -/
 example : ¬ Rule.Scoped
     ⟨[.eq (.var "v1") (eNum 2)], [.expr (.app "cadd" [.var "v1", .var "v2"])]⟩ [] := by
   simp [Rule.Scoped, Pattern.Scoped, Actions.Scoped, Action.Scoped, Expr.Scoped,
     Expr.IsApp, Query.bind, Pattern.vars, eNum]
 
-/-- `(check-not-false (judgment-holds (typed-rule (rule ((= v1 2)) ((cadd v1 v2)))
-((v2 : no-type)))))`: with `v2` a global it does scope. -/
+/-- The same rule with `v2` a global: it does scope. -/
 example : Rule.Scoped
     ⟨[.eq (.var "v1") (eNum 2)], [.expr (.app "cadd" [.var "v1", .var "v2"])]⟩ ["v2"] := by
   simp [Rule.Scoped, Pattern.Scoped, Actions.Scoped, Action.Scoped, Expr.Scoped,
@@ -94,8 +90,8 @@ example : ¬ Program.Evaluable minProgram noSig := by
 
 /-! ### Congruence
 
-`(restore-congruence ((tset 1 2 3) (congr (= 1 2) (= 2 3)) () ()))` closes to all
-nine pairs over `{1, 2, 3}`. -/
+`1 = 2` and `2 = 3` over `{1, 2, 3}` puts all three terms in one class — all nine
+pairs. -/
 
 /-- `1 = 2` and `2 = 3` asserted over `{1, 2, 3}`. -/
 private def chain : Database where
@@ -125,16 +121,15 @@ example : Cong chain (num 3) (num 1) :=
 
 example : Cong chain (num 2) (num 2) := .refl (by simp [chain])
 
-/-- The closure relates nothing to a term the database does not hold. The Redex
-fixpoint leaves this implicit; here it follows from reflexivity being restricted to
-`db.terms`. -/
+/-- The closure relates nothing to a term the database does not hold, which follows
+from reflexivity being restricted to `db.terms`. -/
 example : ¬ Cong chain (num 1) (num 4) := by
   intro h
   have hm : num 4 ∈ chain.terms := h.mem_right chain_wf
   simp [chain, num] at hm
 
-/-- `(restore-congruence ((tset 1 2 (wrapper 2) (wrapper 1)) (congr (= 1 2)) () ()))`
-derives `(= (wrapper 1) (wrapper 2))`. -/
+/-- `1 = 2` over `{1, 2, (wrapper 1), (wrapper 2)}` derives `(wrapper 1) = (wrapper 2)`:
+congruence propagating under `wrapper`. -/
 private def wrapped : Database where
   sig := noSig
   terms := {num 1, num 2, .app "wrapper" [num 1], .app "wrapper" [num 2]}
@@ -172,10 +167,9 @@ example : ¬ Cong separate (num 1) (num 4) := by
 
 /-! ### E-matching
 
-`(judgment-holds (valid-subst ((tset 1 2 (wrapper 2)) (congr …) () ()) (wrapper 1) Env) Env)`
-is `'(())`: the pattern `(wrapper 1)` matches under the empty substitution even
-though the database holds no such term, because `1 = 2` makes it congruent to
-`(wrapper 2)`.
+Over `{1, 2, (wrapper 2)}` with `1 = 2`, the pattern `(wrapper 1)` matches under the
+empty substitution even though the database holds no such term, because `1 = 2` makes
+it congruent to `(wrapper 2)`.
 
 This is the witness mechanism. The instance `(wrapper 1)` is added to the database
 before `Cong` is asked; the witness `(wrapper 2)` is drawn from the terms the
@@ -201,8 +195,8 @@ example : ValidSubst preWrapped (.expr (.app "wrapper" [eNum 1])) [] :=
     (.congr (by simp [preWrapped]) (by simp [preWrapped])
       (.cons (.symm (.assert (by simp [preWrapped]))) .nil))
 
-/-- `(judgment-holds (valid-env (v1) ((tset 1) (congr (= 1 1)) () ()) Env))` is
-`'(((v1 -> 1)))`. -/
+/-- Over the database holding just `1`, the substitution `v1 ↦ 1` is a valid
+environment for `v1`. -/
 example : ValidEnv ["v1"]
     { sig := noSig, terms := {num 1}, rows := Database.ctorRowsOf {num 1}, eqs := ∅,
       env := [], rules := ∅ } [("v1", num 1)] := by
@@ -213,8 +207,8 @@ example : ValidEnv ["v1"]
 
 /-! ### Running a program of actions
 
-`(execute ((let v (b 1)) (union 7 7) (union v 4)))` gives terms `{(b 1), 4, 7, 1}`
-and, after closure, `(b 1) = 4`. -/
+`(let v (b 1))`, `(union 7 7)`, `(union v 4)` gives terms `{(b 1), 4, 7, 1}` and,
+after closure, `(b 1) = 4`. -/
 
 private def b1 : Term := .app "b" [num 1]
 
@@ -240,7 +234,7 @@ example : ∃ db, run actionsProgram = some db ∧
 
 /-! ### Running a rule
 
-`(execute ((Add 1 2) (rule ((Add a b)) ((Add b a))) (run)))` produces `(Add 2 1)`.
+`(Add 1 2)`, `(rule ((Add a b)) ((Add b a)))`, `(run)` produces `(Add 2 1)`.
 Only the forward direction is shown: the substitution `a ↦ 1, b ↦ 2` satisfies the
 query and its actions build `(Add 2 1)`. That nothing *else* is produced needs
 `ValidSubst` inversion (`PLAN.md`, M8). -/
@@ -318,8 +312,8 @@ example : ∃ db, run ruleProgram = some db ∧ add21 ∈ db.terms := by
 
 /-! ### The closure, computed
 
-The Redex checks `restore-congruence` by writing out the closed `congr` set in full.
-With `Closure.closure` those become computations. `#guard` is checked at compile time
+The two closures above again, computed rather than proved: `Closure.closure` writes out
+the closed set of pairs in full. `#guard` is checked at compile time
 and, being a command rather than a proof, puts nothing into any proof term; `closure`
 is well-founded recursion and so sealed against the kernel, which `unseal` lifts where
 a real proof wants it. -/
@@ -327,7 +321,7 @@ a real proof wants it. -/
 section Computed
 set_option linter.hashCommand false
 
-/-- `(tset 1 2 3)` with `(congr (= 1 2) (= 2 3))`: the Redex expects all nine pairs. -/
+/-- `{1, 2, 3}` with `1 = 2` and `2 = 3`: all nine pairs. -/
 private def chainTerms : Finset Term := {num 1, num 2, num 3}
 
 private def chainEqs : Finset (Term × Term) := {(num 1, num 2), (num 2, num 3)}
@@ -336,8 +330,8 @@ private theorem chainEqs_sub : chainEqs ⊆ candidates chainTerms := by decide
 
 #guard (closure chainTerms chainEqs chainEqs_sub).card = 9
 
-/-- `(tset 1 2 (wrapper 2) (wrapper 1))` with `(congr (= 1 2))`: the Redex expects the
-eight pairs of the two classes `{1, 2}` and `{(wrapper 1), (wrapper 2)}` — congruence
+/-- `{1, 2, (wrapper 1), (wrapper 2)}` with `1 = 2`: the eight pairs of the two classes
+`{1, 2}` and `{(wrapper 1), (wrapper 2)}` — congruence
 propagating under `wrapper`, and nothing across the two classes. -/
 private def wrappedTerms : Finset Term :=
   {num 1, num 2, .app "wrapper" [num 1], .app "wrapper" [num 2]}
@@ -369,11 +363,11 @@ example : Cong chain (num 1) (num 3) := by
 
 /-! ### Running programs
 
-The Redex `execute` cases, run by the interpreter rather than proved. This includes the
-two-round `Wrapper` test, which needs `ValidSubst` inversion to state as a theorem and so
-had no hand proof. -/
+Whole programs, run by the interpreter rather than proved. This includes the two-round
+`Wrapper` case, which needs `ValidSubst` inversion to state as a theorem and so has no
+hand proof. -/
 
-/- `(execute ((Add 1 2) (rule ((Add a b)) ((Add b a))) (run)))`: the Redex expects terms
+/- `(Add 1 2)`, `(rule ((Add a b)) ((Add b a)))`, `(run)`: terms
 `{(Add 1 2), 1, 2, (Add 2 1)}`. `Add` holds two rows — `1` and `2` are not equal, so the
 two argument lists are not congruent. -/
 #guard (exec ruleProgram).map (fun d => d.terms.toFinset.card) = some 4
@@ -382,8 +376,8 @@ two argument lists are not congruent. -/
 
 #guard (exec ruleProgram).map (fun d => d.rowCount "Add") = some 2
 
-/-- `(execute ((Wrapper (Add 1 2)) (rule ((Add a b)) ((union (Add a b) (Add b a))))
-(rule ((= (Wrapper (Add 1 2)) (Wrapper (Add 2 1)))) ((success))) (run) (run)))`: the
+/-- `(Wrapper (Add 1 2))`, `(rule ((Add a b)) ((union (Add a b) (Add b a))))`,
+`(rule ((= (Wrapper (Add 1 2)) (Wrapper (Add 2 1)))) ((success)))`, `(run)`, `(run)`: the
 second rule fires only because `(Wrapper (Add 2 1))` is *congruent* to a term the database
 holds, not because that term was ever built — the witness mechanism, end to end. -/
 private def commuteRule : Rule where

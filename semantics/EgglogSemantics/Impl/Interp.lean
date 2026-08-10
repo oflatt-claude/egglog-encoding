@@ -15,8 +15,8 @@ be compiled. Duplicates in the lists are harmless — the denotation is the set 
 and `closureF` dedups through `List.toFinset` where the closure needs a `Finset`.
 
 The e-matching enumerator differs from the spec in one respect, deliberately. The spec
-takes one substitution per pattern and joins them (`Env.UnionAll`, faithful to the Redex
-`Env-Union`); the enumerator assigns the *whole query's* free variables at once and then
+takes one substitution per pattern and joins them (`Env.UnionAll`); the enumerator
+assigns the *whole query's* free variables at once and then
 restricts to each pattern with `Env.canon`. The two agree up to `Env.Agree`, which by
 `evalLocalActions_agree` is all `runRules` can see.
 -/
@@ -75,8 +75,8 @@ def addRow (f : FnName) (as vs : List Term) (d : FDatabase) : FDatabase :=
 def addEq (a b : Term) (d : FDatabase) : FDatabase :=
   { (d.addTerm a).addTerm b with eqs := ((a, b) :: d.eqs).dedup }
 
-/-- Union two databases, taking the signature, environment and rules from the left. This
-is the Redex `U_d` as `runRules` uses it. -/
+/-- Union two databases, taking the signature, environment and rules from the left.
+`Database.sUnion`, computed, at the two-operand shape `execRunRules` folds with. -/
 def union (d₁ d₂ : FDatabase) : FDatabase :=
   { d₁ with terms := (d₁.terms ++ d₂.terms).dedup, rows := (d₁.rows ++ d₂.rows).dedup,
             eqs := (d₁.eqs ++ d₂.eqs).dedup }
@@ -117,7 +117,7 @@ def Env.canon (vars : List Var) (σ : Env) : Env :=
 def Query.freeVars (q : Query) (σ : Env) : List Var :=
   q.foldr (fun p acc => p.freeVars σ ∪ acc) []
 
-/-- The `valid-subst` side conditions for one pattern, computed: the pattern's instance
+/-- `ValidSubst`'s side conditions for one pattern, computed: the pattern's instance
 is congruent — in the database extended with it — to a witness the database already
 holds. The witness is a term for `.expr`/`.eq` and a *row* for `.values`, whose key and
 value operands are added the same way, since an operand may denote a term the program
@@ -151,7 +151,7 @@ def matchQuery (d : FDatabase) (q : Query) : List Env :=
     q.all fun p => patternHolds d p (Env.canon (p.freeVars d.env) σ)
 
 /-! ### Running -/
-/-- The Redex `Eval-Action`, computed. -/
+/-- `evalAction`, computed. -/
 def execAction (d : FDatabase) : Action → Option FDatabase
   | .expr e => (e.eval d.sig d.env).map fun t => d.addTerm t
   | .letBind v e => (e.eval d.sig d.env).map fun t =>
@@ -161,12 +161,12 @@ def execAction (d : FDatabase) : Action → Option FDatabase
   | .set f args out => (Expr.evalList d.sig args d.env).bind fun as =>
       (Expr.evalList d.sig out d.env).map fun vs => d.addRow f as vs
 
-/-- The Redex `Eval-Global-Actions`, computed. -/
+/-- `evalActions`, computed. -/
 def execActions (d : FDatabase) : List Action → Option FDatabase
   | [] => some d
   | a :: as => (execAction d a).bind fun d' => execActions d' as
 
-/-- The Redex `Eval-Local-Actions`, computed. -/
+/-- `evalLocalActions`, computed. -/
 def execLocalActions (d : FDatabase) (as : List Action) (σ : Env) : Option FDatabase :=
   (execActions { d with env := d.env ++ σ } as).map fun d' =>
     { d' with env := d.env, rules := d.rules }
@@ -190,14 +190,14 @@ def execRunRounds : Nat → FDatabase → FDatabase
   | 0, d => d
   | n + 1, d => execRunRounds n (execRunRules d)
 
-/-- The Redex `Command-Reduction`, computed. -/
+/-- `stepCmd`, computed. -/
 def execCmd (d : FDatabase) : Cmd → Option FDatabase
   | .action a => execAction d a
   | .rule r => some { d with rules := r :: d.rules }
   | .run => some (execRunRules d)
   | .decl f dc => some { d with sig := Function.update d.sig f (some dc) }
 
-/-- The Redex `Egglog-Reduction`, computed. -/
+/-- `runProgram`, computed. -/
 def execProgram (d : FDatabase) : Program → Option FDatabase
   | [] => some d
   | c :: cs => (execCmd d c).bind fun d' => execProgram d' cs

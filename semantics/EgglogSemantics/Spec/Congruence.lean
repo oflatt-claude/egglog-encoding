@@ -4,19 +4,19 @@ import EgglogSemantics.Spec.Database
 /-!
 # Congruence
 
-`Cong db a b` says `a = b` is derivable in `db`. It replaces the Redex
-`Congruence-Reduction` together with `restore-congruence`: those compute a closed
-set of equality pairs by iterating a reduction relation to a fixpoint, and here
-the closure is an inductive predicate instead. Nothing in the semantics needs the
-closed set — the only place the Redex reads it is the `valid-subst` side
-conditions, which ask `Cong` directly.
+`Cong db a b` says `a = b` is derivable in `db`. The closure is an **inductive
+predicate**, not a set of pairs the state carries and repairs to a fixpoint: nothing
+in the semantics needs that set, since the only place congruence is consulted is
+e-matching's side conditions (`ValidSubst`), which ask `Cong` directly. Deriving an
+equality rather than computing one is also what makes a proof term an induction —
+`PLAN.md`, "What a proof value is".
 
-The Redex's fifth rule, "presence of children", is absent because it changes the
-term set rather than the relation; it is `Database.WF.subtermClosed`.
+Subterm closure is not a rule here. It changes the term set rather than the relation,
+and is `Database.WF.subtermClosed`.
 
-Reflexivity is restricted to terms the database holds, as in the Redex: an e-graph
-knows nothing about a term it does not contain, and that restriction is what makes
-the witness condition in e-matching bite.
+Reflexivity is restricted to terms the database holds: an e-graph knows nothing about
+a term it does not contain, and that restriction is what makes the witness condition
+in e-matching bite.
 -/
 
 namespace Egglog
@@ -47,10 +47,10 @@ end
 /-- `a = b` holds in `db` once both terms are built.
 
 `Cong`'s `refl` and `congr` are restricted to `db.terms`, so a pair the database does not
-hold cannot be related at all. Adding the two first is what the Redex `valid-subst` does
-— "the pattern instance is added to the database before congruence is consulted" — and
-adding a term asserts nothing, so this is a conservative reading of `Cong` rather than a
-weaker relation. On `a b ∈ db.terms` under `Database.WF` the two coincide.
+hold cannot be related at all. Adding the two first is what `ValidSubst` does — the
+pattern instance goes into the database before congruence is consulted — and adding a
+term asserts nothing, so this is a conservative reading of `Cong` rather than a weaker
+relation. On `a b ∈ db.terms` under `Database.WF` the two coincide.
 
 `ValidSubst.eq` is where the semantics needs it. M11 needs it again on the encoded side,
 whose rebuild re-keys view rows to applications the source never built

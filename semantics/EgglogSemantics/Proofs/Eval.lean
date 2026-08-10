@@ -210,7 +210,7 @@ end Database
 mutual
 
 /-- Evaluation reads the environment only through `lookup`, so environments that
-agree are interchangeable. This is what lets `Env-Union`'s duplicate bindings be
+agree are interchangeable. This is what lets `Env.UnionAll`'s duplicate bindings be
 ignored. -/
 theorem Expr.eval_agree {sig : Signature} {σ₁ σ₂ : Env} (h : Env.Agree σ₁ σ₂) (e : Expr) :
     e.eval sig σ₁ = e.eval sig σ₂ := by
@@ -232,8 +232,7 @@ mutual
 
 /-- Evaluation gets stuck on an unbound variable, on a lookup and on a primitive; an
 expression with none of the three evaluates. The two conditions are exactly
-`Expr.Scoped` and `Expr.Evaluable`: the Redex's type checker, and what a sort discipline
-would add (`Spec/Scope.lean`). -/
+`Expr.Scoped` and `Expr.Evaluable` (`Spec/Scope.lean`). -/
 theorem Expr.eval_isSome {sig : Signature} {σ : Env} (e : Expr)
     (h : ∀ v ∈ e.vars, v ∈ Env.dom σ)
     (hf : ∀ f ∈ e.fns, Prim.ofName f = none ∧ sig.IsCtor f) :
@@ -406,8 +405,8 @@ theorem evalActions_wf {db db' : Database} (hw : db.WF) {as : List Action}
 
 `Expr.eval_agree` says evaluation reads the environment only through `lookup`. Lifting
 that to whole action sequences is what justifies two places the semantics is loose
-about environments on purpose: the Redex `Env-Union` can leave a variable bound twice,
-and `ValidEnv` fixes a substitution's domain only up to permutation. -/
+about environments on purpose: `Env.Union2` can leave a variable bound twice, and
+`ValidEnv` fixes a substitution's domain only up to permutation. -/
 theorem evalAction_envAgree {d₁ d₂ : Database} (h : d₁.EnvAgree d₂) (a : Action) :
     Option.Rel Database.EnvAgree (evalAction d₁ a) (evalAction d₂ a) := by
   cases a with

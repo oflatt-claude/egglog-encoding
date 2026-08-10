@@ -4,7 +4,7 @@ import EgglogSemantics.Spec.Syntax
 /-!
 # Ground terms
 
-The Redex `Term`:
+What an expression evaluates to, and what the database holds:
 
 ```
 Term = number | (constructor Term ...)
@@ -59,9 +59,9 @@ end
 
 instance : DecidableEq Term := decEq
 
-/-- `IsSubterm s t` holds when `s` occurs in `t`, including `s = t`. This is the
-"presence of children" axiom of the Redex `Congruence-Reduction`, which there adds
-every child of a present term to the term set. -/
+/-- `IsSubterm s t` holds when `s` occurs in `t`, including `s = t`. An e-graph that
+holds a term holds its children, which is `Database.WF.subtermClosed` stated with
+this. -/
 inductive IsSubterm : Term → Term → Prop where
   | refl (t : Term) : IsSubterm t t
   | arg {s a : Term} {f : FnName} {args : List Term} :

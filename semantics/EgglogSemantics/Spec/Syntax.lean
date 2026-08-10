@@ -3,27 +3,23 @@ import Batteries.Data.List.Basic
 /-!
 # Syntax of the modelled egglog fragment
 
-Ported from `semantics.rkt` in
-[egglog PR #324](https://github.com/egraphs-good/egglog/pull/324), whose grammar is
+The fragment's grammar:
 
 ```
 Program = (Cmd ...)
-Cmd     = Action | Rule | (run) | skip
+Cmd     = Action | Rule | (run) | Decl
+Decl    = (datatype ...) | (constructor ...) | (function ... :merge ...)
 Rule    = (rule Query Actions)
 Query   = (Pattern ...)
-Pattern = (= expr expr) | expr
-Action  = expr | (let var expr) | (union expr expr)
-expr    = number | (constructor expr ...) | var
+Pattern = expr | (= expr expr) | (= (values expr ...) (f expr ...))
+Action  = expr | (let var expr) | (union expr expr) | (set (f expr ...) expr ...)
+expr    = number | var | (f expr ...)
 ```
 
-Two deviations:
-
-* `skip` is an artifact of Redex's two-level reduction relation and is dropped.
-* `Cmd.decl` and `Signature` are new. The Redex has no signature at all, and treats
-  every applied name as a constructor. Here a name means nothing until it is declared:
-  `Expr.eval` builds an application only at a declared constructor, which is egglog's
-  own declare-before-use and is what `Spec/Scope.lean`'s `Evaluable` demands
-  statically.
+A name means nothing until it is declared: `Expr.eval` builds an application only at a
+declared constructor, which is egglog's own declare-before-use and is what
+`Spec/Scope.lean`'s `Evaluable` demands statically. `Signature` is where the
+declarations live, and `Cmd.decl` is the only thing that writes it.
 
 `Expr` nests `List Expr`, which no `deriving` handler supports, so the types below
 carry no derived instances. The semantics is relational and needs none; an
@@ -37,8 +33,8 @@ abbrev Var := String
 /-- The name of a constructor or function. -/
 abbrev FnName := String
 
-/-- A base value. The Redex `number` covers all of Racket's numeric tower; `Int`
-is enough here. Kept a separate type so `:merge` functions can add sorts. -/
+/-- A base value. `Int` is the only one modelled; kept a separate type so `:merge`
+functions can add sorts. -/
 inductive Lit where
   | int : Int → Lit
   deriving DecidableEq, Repr, Inhabited
@@ -73,8 +69,8 @@ abbrev Query := List Pattern
 /-- An action: build a term, bind a variable, assert an equality, or write a row.
 
 `set` is what a `:merge` function needs (M9) and what an encoded rule head writes
-(M11) — `(set (@AddView b a) (values rewrite_var ()))`. The Redex has no such action;
-for a constructor-only program it is unreachable. -/
+(M11) — `(set (@AddView b a) (values rewrite_var ()))`. For a constructor-only program
+it is unreachable. -/
 inductive Action where
   | expr : Expr → Action
   | letBind : Var → Expr → Action
@@ -161,10 +157,9 @@ def Signature.AllConstructors (sig : Signature) : Prop := ∀ f, sig.mergeOf f =
 
 /-! ### Variables and function names
 
-The Redex has no `vars` function — its `typed-expr` walks the expression instead.
-Having them separately is what lets the static checks in `Scope.lean` be related to the
-runtime state: `vars` is what the environment must bind, `fns` what the signature must
-declare. -/
+Collecting these up front, rather than having each judgment walk the expression itself,
+is what lets the static checks in `Scope.lean` be related to the runtime state: `vars`
+is what the environment must bind, `fns` what the signature must declare. -/
 mutual
 
 /-- All variables occurring in `e`, deduplicated. -/

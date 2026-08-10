@@ -1,4 +1,4 @@
-# Port the egglog Redex semantics to Lean 4
+# A Lean 4 model of egglog's semantics
 
 ## Context
 
@@ -12,7 +12,10 @@ the proof terms it stores really witness the equalities they claim.
 To state any such theorem we first need the ideal semantics written down formally.
 That exists already as a Redex model — [egglog PR #324](https://github.com/egraphs-good/egglog/pull/324)
 (`semantics/semantics.rkt`, `semantics.scrbl`, `test.rkt`; closed, branch
-`oflatt-ideal-semantics`, head `e46aef4`). This document plans its port to Lean 4.
+`oflatt-ideal-semantics`, head `e46aef4`) — and this development began as its port to
+Lean 4. That is the only debt worth recording up front; "The Redex model this was ported
+from", below, is the one place it is discussed, and nothing in the development itself
+refers to it.
 
 Two things shape the design beyond a literal transcription:
 
@@ -64,7 +67,7 @@ model we trust, and we do not have one yet — though the three things this note
 arity checking, reading a `:merge` function in a query, and the rule-head restriction, are
 now done. `Impl/Check.lean`'s "Arity" and "Reading in an action" sections mirror egglog's
 typechecker and `writeCase` enforces both; the read path has curated and generated cases and
-agrees with egglog on all of them. What is still missing is the six known-false statements
+agrees with egglog on all of them. What is still missing is the five known-false statements
 in `Proofs/Merge.lean`.
 
 This document mentions the encoding often because much of what we know about egglog came
@@ -162,19 +165,65 @@ pulls `Classical.choice` into every downstream axiom set. And `lake build` does 
 the difftest executable — `lake build difftest` does, which `scripts/difftest.sh` handles but
 a manual run may not.
 
-## What the Redex model contains
+## The Redex model this was ported from
 
-| Redex | Role |
-| --- | --- |
-| `Egglog` grammar | `Program`/`Cmd`/`Rule`/`Query`/`Pattern`/`Action`/`expr` |
-| `Database = (Terms Congr Env Rules)` | global state: ground terms, equality pairs, bindings, rules |
-| `Eval-Expr`, `Eval-Action`, `Eval-Global/Local-Actions`, `Eval-Actions` | actions add terms and equalities |
-| `Congruence-Reduction` + `restore-congruence` | refl/symm/trans/congr + "presence of children", to a fixpoint |
-| `valid-env`, `valid-subst`, `valid-query-subst` | declarative e-matching ("pattern instance is equal to a witness term already present") |
-| `valid-subst-faster` | operational e-matching, unused by the main relation |
-| `Command-Reduction`, `Egglog-Reduction` | run one command; run a program, restoring congruence between commands |
-| `typed-*` judgments | scope checking only (a single type `no-type`) |
-| `test.rkt` | ~25 unit checks plus `redex-check` random testing |
+**This section is the whole of the port record.** `Spec/`, `Impl/`, `Proofs/` and
+`Tests/` name nothing here: the Lean development is meant to be read on its own, by
+someone who has never seen the source model. Anything that only makes sense by contrast
+with the source belongs on this page.
+
+| source | role | Lean |
+| --- | --- | --- |
+| `Egglog` grammar | `Program`/`Cmd`/`Rule`/`Query`/`Pattern`/`Action`/`expr` | `Spec/Syntax.lean` |
+| `Database = (Terms Congr Env Rules)` | global state: ground terms, equality pairs, bindings, rules | `Database` |
+| `Lookup`, `free-vars`, `Env-Union`, `Env-Union2` | environments | `Env.lookup`, `Expr.freeVars`, `Env.UnionAll`, `Env.Union2` |
+| `Eval-Expr`, `Eval-Action`, `Eval-Global/Local-Actions`, `Eval-Actions` | actions add terms and equalities | `Expr.eval`, `evalAction`, `evalActions`, `evalLocalActions`, `ruleResults` |
+| `Congruence-Reduction` + `restore-congruence` | refl/symm/trans/congr + "presence of children", to a fixpoint | `Cong`, plus `Database.WF.subtermClosed` |
+| `valid-env`, `valid-subst`, `valid-query-subst` | declarative e-matching ("pattern instance is equal to a witness term already present") | `ValidEnv`, `ValidSubst`, `ValidQuerySubst` |
+| `valid-subst-faster` | operational e-matching, unused by the main relation | not ported |
+| `U_d` | union of databases | `Database.sUnion` |
+| `Command-Reduction`, `Egglog-Reduction` | run one command; run a program, restoring congruence between commands | `stepCmd`, `runProgram` |
+| `typed-*` judgments | scope checking only (a single type `no-type`) | the `Scoped` family, `Spec/Scope.lean` |
+| `test.rkt` | ~25 unit checks plus `redex-check` random testing | `Tests/Examples.lean`, `DiffTest.lean` |
+
+### What the port changed, and why
+
+* **`skip` is gone.** It exists only so `Command-Reduction` can signal completion to
+  `Egglog-Reduction`. That two-level arrangement is there because `(run)` picks a set of
+  substitutions nondeterministically; here the database's components are `Set`s, so the
+  union is expressible directly, `runRules` is a function and `runProgram` a plain fold.
+* **`restore-congruence` is gone.** Congruence is the inductive predicate `Cong` rather
+  than a closed set of pairs the state carries — see "Where 'restored congruence' went".
+  Its "presence of children" half is the one part that *is* state, and it holds by
+  construction because `Database.addTerm` inserts a term with all its subterms.
+* **A `Signature` and `Cmd.decl` are new.** The source has no declarations at all and
+  treats every applied name as a constructor. Here a name means nothing until it is
+  declared, which is egglog's own declare-before-use, and it is what lets `:merge`
+  functions be added without reshaping the AST.
+* **A bare variable is no longer a fact or an action.** The source admits `expr = var`
+  as a query fact, matching any term, and as an action, adding one already present.
+  egglog's grammar admits neither — `parse error: expected fact`, `parse error: expected
+  action`, `parse error: expected command` — so `Expr.IsApp` bans them. **Stricter than
+  the source, not stricter than egglog**: the model matches egglog here and the source
+  did not. It was a difftest finding, 34 of the first 60 generated cases.
+* **`ValidEnv` is up to permutation.** `valid-env` pins `σ`'s bindings to the order
+  `varset-union` happens to produce; `Perm` does not. The extra substitutions this admits
+  differ from the pinned ones only by reordering, which no `lookup` can see —
+  `Env.Agree.of_perm`, and `evalLocalActions_agree` lifts it to whole rule firings.
+* **Appending environments replaces `Env-Union` in the one place it is used.** A
+  pattern's free variables exclude the globally-bound ones, so the substitution's domain
+  is disjoint from the globals' and the append cannot fail
+  (`Pattern.freeVars_lookup_eq_none`).
+* **`number` is `Int`,** not Racket's whole numeric tower.
+* **`no-type` is a single untyped `Term`.** The source's type judgments check scope and
+  nothing else, and so do these. A real sort discipline is deferred — `MERGE.md`, the
+  closing section, has the shape it would take.
+* **`valid-subst-faster` is not ported.** It is the source's operational matcher, unused
+  by its main relation, and proving the two agree is a conjecture the source left open.
+  The Lean model reaches an operational matcher from the other end instead:
+  `Impl/Interp.lean`'s `matchQuery`, tied to `ValidSubst` by `exec_toDatabase`.
+* **`set`, `Pattern.values`, `:merge` functions and multi-column outputs are all new.**
+  None of them exist in the source; they are M9 and M11, designed in `MERGE.md`.
 
 ## Target design
 
@@ -188,7 +237,7 @@ Impl/     Closure  Interp  Merge
 Proofs/   one file per Spec/ or Impl/ subject, plus:
             Counterexamples   compiling witnesses that a statement is false
             Rebuilt           the Rebuilt vacuity result (M11, parked)
-Tests/    Examples  the Redex checks, as proofs and as #guards
+Tests/    Examples  worked examples, as proofs and as #guards
           Egg       renders a Program as egglog source, for differential testing
 ```
 
@@ -223,13 +272,13 @@ structure Database where
 ```
 
 `Cong db : Term → Term → Prop` is the inductive closure with `assert` / `refl`
-(restricted to `t ∈ db.terms`, faithful to the Redex, where reflexivity only fires
+(restricted to `t ∈ db.terms`, so reflexivity only fires
 for terms actually present) / `symm` / `trans` / `congr`. The `congr` rule is
 written as a mutual inductive with a `CongList` companion rather than an
 `∀ i, i < length` premise — same relation, workable induction — with a
 `List.Forall₂ (Cong db)` bridge lemma.
 
-`restore-congruence` **disappears entirely**, which is the main simplification:
+A congruence-restoring pass **disappears entirely**, which is the main simplification:
 
 - refl/symm/trans/congr become `Cong`'s constructors.
 - "presence of children" becomes a structural invariant: `Database.addTerm`
@@ -237,24 +286,21 @@ written as a mutual inductive with a `CongList` companion rather than an
   subterm-closedness plus that every asserted equality's endpoints and every
   binding's value are in `terms`.
 
-This is observationally equivalent because `Eval-Action` never reads `Congr`, so
+This is observationally equivalent because no action ever consults congruence, so
 deferring subterm insertion to a later rebuild is unobservable — recorded in the
 source as a documented deviation with that justification.
 
 ### Where "restored congruence" went
 
-There is deliberately **no post-restore database state**, and no "the reduction
-can no longer step" predicate. The Redex has two kinds of database — one whose
-`Congr` holds just the asserted pairs, and one whose `Congr` is closed — and
-`restore-congruence` moves between them. Here the database always holds only
-asserted equalities, and closure is a predicate rather than a state. Its two
-halves are handled differently:
+There is deliberately **no closed-equality state**, and no "the reduction can no
+longer step" predicate. The database always holds only asserted equalities, and
+closure is a predicate rather than a state. Its two halves are handled
+differently:
 
 - The **relation** half (refl/symm/trans/congr) is never materialized. The only
-  place the Redex reads the closed `Congr` is the `valid-subst` side conditions;
-  those become `Cong (db.addTerm t) w t` directly. `Eval-Action`,
-  `Command-Reduction` and `Egglog-Reduction` never consult `Congr` at all, so
-  nothing else needs it.
+  place the semantics consults congruence is `ValidSubst`'s side conditions,
+  which ask `Cong (db.addTerm t) w t` directly. Evaluating an action and running
+  a command never consult it at all, so nothing else needs it.
 - The **term-set** half ("presence of children") is a real state change, and is
   the one part that stays in the state — as the `addTerm`/`WF.subtermClosed`
   invariant above.
@@ -262,8 +308,8 @@ halves are handled differently:
 The observable meaning of a finished program is therefore the pair
 `(db.terms, Cong db)`, not a database with a big closed equality set.
 
-If an explicit closed representation is wanted — to check faithfulness against the
-Redex, or for the executable layer in M10 — the right way round is to *define* it
+If an explicit closed representation is wanted — as the executable layer in M10
+wanted one — the right way round is to *define* it
 as a comprehension over the relation and *derive* the fixpoint property:
 
 ```lean
@@ -285,28 +331,28 @@ an `@UF` leader on the encoded side.
 
 ### E-matching
 
-Ported structurally from `valid-subst`, keeping the witness formulation: a
-substitution is valid when the pattern instance is `Cong`-equal, *in the database
-extended with that instance*, to some witness term already in the database. The
-witness is what forbids matching a term the e-graph does not contain.
+The witness formulation: a substitution is valid when the pattern instance is
+`Cong`-equal, *in the database extended with that instance*, to some witness term
+already in the database. The witness is what forbids matching a term the e-graph
+does not contain.
 
-Three deviations and facts worth recording:
+One deviation worth recording:
 
 * `ValidEnv` requires the substitution's domain to be a *permutation* of the
-  pattern's free variables, where the Redex pins it to the order `varset-union`
-  happens to produce. The extra substitutions this admits are permutations of Redex
-  ones, which no `lookup` can distinguish; making that precise is the
-  environment-agreement lemma in M8.
+  pattern's free variables rather than fixing its order. The extra substitutions
+  this admits differ only by reordering, which no `lookup` can distinguish; making
+  that precise is the environment-agreement lemma in M8.
 
-Two facts the Redex leaves implicit and Lean needs as lemmas:
+Two facts Lean needs as lemmas:
 
-- `free-vars pat db.env` excludes globally-bound variables, so `σ`'s domain is
-  disjoint from `db.env`'s and `Env-Union db.env σ` never fails — plain append is
+- `Pattern.freeVars p db.env` excludes globally-bound variables, so `σ`'s domain is
+  disjoint from `db.env`'s and appending the two never fails — plain append is
   correct. (This also preserves the real quirk that a globally-bound variable in a
   pattern denotes its value rather than being a match variable.)
 - Envs only ever get consulted through `lookup`, so `evalLocalActions` is
   invariant under extensional agreement of environments. That lemma, rather than a
-  list-level normal form, is what lets `Env-Union`'s duplicate bindings be ignored.
+  list-level normal form, is what lets `Env.UnionAll`'s duplicate bindings be
+  ignored.
 
 ### Steps
 
@@ -323,9 +369,8 @@ noncomputable def runRules (db : Database) : Database :=
 
 `sUnion` is left-biased on `env` and `rules`; `ruleResults_env` and
 `ruleResults_rules` show every `d` in that set has `d.env = db.env` and
-`d.rules = db.rules`, which is what makes the bias faithful to Redex `U_d`. The
-Redex's `skip` command is an artifact of its two-level reduction relation and is
-dropped. `Option` carries the partiality of variable lookup; `Scope.lean` proves
+`d.rules = db.rules`, which is what makes the bias harmless.
+`Option` carries the partiality of variable lookup; `Scope.lean` proves
 well-scoped programs never hit `none`.
 
 `Cmd.decl` updates `db.sig` and nothing reads it yet, so declarations are inert in
@@ -345,7 +390,7 @@ The port proper — **all of M0–M7 is done**, `lake build` is clean and `sorry
 | M4 | `Match` | `ValidSubst`, `Env.UnionAll` |
 | M5 | `Step` | `runRules`, `stepCmd`, `runProgram` |
 | M6 | `Scope` | `run_isSome` — a well-scoped program runs to completion |
-| M7 | `Examples` | the `test.rkt` checks as closed proofs |
+| M7 | `Examples` | the worked examples as closed proofs |
 
 Two of those carry more weight than their size suggests. **`Cong.le`** is how every *negative*
 fact about the closure is proved — "this pair is not derivable" means exhibiting a congruence
@@ -360,9 +405,9 @@ Follow-ups, in rough dependency order:
   - ✅ *Environment agreement.* `Env.Agree.of_perm` and `.append_left`,
     `Database.EnvAgree`, and `evalAction`/`evalActions`/`evalLocalActions_agree`.
     This is `Expr.eval_agree` lifted to whole action sequences, and it discharges
-    both places the semantics is deliberately loose about environments: the Redex
-    `Env-Union` leaving a variable bound twice, and `ValidEnv` fixing a domain only up
-    to permutation. `ruleResults_of_agree` is the payoff — `runRules` sees a
+    both places the semantics is deliberately loose about environments:
+    `Env.UnionAll` leaving a variable bound twice, and `ValidEnv` fixing a domain only
+    up to permutation. `ruleResults_of_agree` is the payoff — `runRules` sees a
     substitution only up to agreement, so an enumerator may emit one representative
     per class.
   - ✅ *Rounds.* `runRounds` (egglog's `(run n)`; `Cmd.run` is one round),
@@ -376,11 +421,9 @@ Follow-ups, in rough dependency order:
   - Remaining: nothing on the critical path. The matcher is the slow one by
     construction — `assignments` is `|terms| ^ |vars|` and `patternHolds` recomputes a
     closure per candidate — which is what keeps the differential cases tiny. The fix is
-    **not** to port the Redex's `valid-subst-faster`: `exec_toDatabase` is the contract,
-    so the reference implementation can be optimized wherever profiling says it is slow
-    and the refinement re-established against the unchanged spec. Porting
-    `valid-subst-faster` specifically would settle a conjecture the Redex left open,
-    which is a nice-to-have rather than a need.
+    **not** a cleverer *specification*: `exec_toDatabase` is the contract, so the
+    reference implementation can be optimized wherever profiling says it is slow and the
+    refinement re-established against the unchanged spec.
 - **M9 — `:merge` functions.** Designed in [`MERGE.md`](MERGE.md). Partly done, and
   **merged into the main development** — there is one `Database`, one `Action`, one
   `Cmd`, and `Spec/Merge.lean` holds only what is genuinely new.
@@ -406,7 +449,7 @@ Follow-ups, in rough dependency order:
     the pass is the identity (`mergeRound_eq_self`), and `Current` for lattice merges.
   - ✅ *The refinement chain.* 17 of 17 proved. **Nine were false as written** — three in
     ways their M10 counterparts in `Proofs/Interp.lean` had already solved, so read the M10
-    counterpart before stating an M9 lemma. Six statements remain `sorry` in
+    counterpart before stating an M9 lemma. Five statements remain `sorry` in
     `Proofs/Merge.lean`, all known-false, with compiling witnesses in
     `Proofs/Counterexamples.lean`.
   - Remaining: `Cong` and `MCong` still coexist over the one `Database` — that is M12.
@@ -427,7 +470,7 @@ Follow-ups, in rough dependency order:
     the interpreter must enumerate. Duplicates are harmless: the denotation is the set of
     members.
   - **The enumerator departs from the spec on purpose.** The spec takes one substitution per
-    pattern and joins them (`Env.UnionAll`, faithful to the Redex); the enumerator assigns
+    pattern and joins them (`Env.UnionAll`); the enumerator assigns
     the whole query's free variables at once and restricts per pattern with `Env.canon`.
     `Env.agree_canon` shows they agree up to `Env.Agree`, which is all `runRules` can see.
     Both directions are proved (`validQuerySubst_of_mem_matchQuery` and its converse).
@@ -442,9 +485,9 @@ Follow-ups, in rough dependency order:
   Well-founded definitions are sealed against kernel reduction, so `decide` cannot see
   through `closure`. Use `#guard` (a command, so it enters no proof term) or `unseal
   closure`. **Not** `native_decide` — it adds `Lean.ofReduceBool` to every downstream axiom
-  set. The interpreter reproduces the Redex `execute` cases as `#guard`s in `Examples.lean`,
-  including the two-round `Wrapper` test, which has no hand proof because stating it needs
-  `ValidSubst` inversion.
+  set. The interpreter runs whole programs as `#guard`s in `Examples.lean`, including the
+  two-round `Wrapper` case, which has no hand proof because stating it needs `ValidSubst`
+  inversion.
 
   The chain ends at
 
@@ -503,10 +546,10 @@ like:
   a generator that has stopped exercising anything; treat a narrowing distribution as a
   regression even if the count rises.
 
-Two findings that the fragment is **not a subset** of egglog's language: a bare variable was
-a legal query fact and `expr` action here and egglog's grammar rejects both (34 of the first
-60 cases died on it — now banned via `Expr.IsApp`, the one place `WellScoped` is deliberately
-stricter than the Redex); and `Database.rules` is a `Set`, so a repeated rule is silently
+Two findings that the fragment was **not a subset** of egglog's language: a bare variable
+was a legal query fact and `expr` action here and egglog's grammar rejects both (34 of the
+first 60 cases died on it — now banned via `Expr.IsApp`; "What the port changed" has where
+that laxity came from); and `Database.rules` is a `Set`, so a repeated rule is silently
 ignored where egglog panics.
 
 **Every case is checked for legality before it is written.** `writeCase` refuses to emit a
@@ -575,7 +618,7 @@ the record of where it was wrong, since two of the mistakes were instructive:
 What did stand: the signature was already in the AST from M1, so only `MergeSpec`'s other
 cases became reachable; rows replaced the bare term set with congruence *as* the functional
 dependency; and merge closure carries no termination claim. Base sorts (`i64`, `String`, a
-real sort discipline replacing the Redex's `no-type`) are still deferred — see "arity
+real sort discipline in place of the single untyped `Term`) are still deferred — see "arity
 checking" in the current priority.
 
 ## Reading is a query atom
@@ -711,8 +754,8 @@ Two mismatches to settle before writing `encode`:
   shape, so matching the user-facing type needs a bridging lemma by induction on the child
   list. This is the one place the correspondence is not definitional.
 - **Reflexivity is not assumed, and we already agree.** "A proof of `t = t` must correspond
-  to some `t` added at the top level." `Cong.refl`'s `a ∈ db.terms`, inherited from the
-  Redex, is exactly that discipline.
+  to some `t` added at the top level." `Cong.refl`'s `a ∈ db.terms` is exactly that
+  discipline.
 
 ### The invariant is a precondition of the encoding, not just a style rule
 
@@ -785,7 +828,7 @@ not idempotent joins, the number of firings does change the result, so the two g
 diverge there. M9's over-approximation is the same trade for the same reason
 ([`MERGE.md`](MERGE.md), "The framing").
 
-Other omissions inherited from the Redex to-do list: schedules, extraction, containers.
+Other omissions, unaddressed since the port: schedules, extraction, containers.
 
 ## Verification
 
@@ -794,12 +837,12 @@ Other omissions inherited from the Redex to-do list: schedules, extraction, cont
 - `make lean-difftest` — 122 cases against the real egglog binary. Watch the profile
   distribution, not only the pass count.
 - `make lean-check` additionally fails on any `sorry`. It **currently fails by design**:
-  19 statements are deliberately unproved (13 parked M11, 6 known-false with witnesses in
+  18 statements are deliberately unproved (13 parked M11, 5 known-false with witnesses in
   `Proofs/Counterexamples.lean`). Use it to check that a change adds no *new* `sorry`.
 - Axioms, on every change: `lean_verify` or `#print axioms` against the table in "Current
   priority". A green build does not catch an axiom leak.
-- `Tests/Examples.lean` compiling *is* the M7 suite — each ported Redex check is a closed
-  proof or a `#guard`.
+- `Tests/Examples.lean` compiling *is* the M7 suite — each check is a closed proof or a
+  `#guard`.
 
 ## `set` legality is a separate predicate, for now
 

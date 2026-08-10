@@ -20,9 +20,9 @@ theorem runProgram_append {db : Database} {p q : Program} :
 
 /-! ### Rule results agree with the caller on env and rules
 
-This is what makes `Database.sUnion`'s left bias faithful to the Redex `U_d`: the
-operands `(run)` unions all carry the pre-state's environment and rules, so taking
-them from the left operand loses nothing. -/
+This is what makes `Database.sUnion`'s left bias harmless: the operands `(run)` unions
+all carry the pre-state's environment and rules, so taking them from the left operand
+loses nothing. -/
 theorem ruleResults_env {db d : Database} {r : Rule} (h : d ∈ ruleResults db r) :
     d.env = db.env :=
   evalLocalActions_env h.choose_spec.2

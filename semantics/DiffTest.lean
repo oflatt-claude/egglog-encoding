@@ -6,11 +6,10 @@ import EgglogSemantics.Tests.Egg
 Writes one `.egg` file and one `.expected` file per case. `scripts/difftest.sh` runs
 egglog on the former and diffs its `(print-size)` output against the latter.
 
-Two kinds of case, over two fragments. The **curated** ones are the Redex `test.rkt`
-programs plus a few variations, so they are only as good as whoever picked them. The
-**random** ones are generated from a seed by a fixed linear congruential stream, which is
-what removes that selection bias — the `redex-check` analogue the Redex had and this port
-did not. Each kind covers both the constructor fragment and M9's `:merge` functions.
+Two kinds of case, over two fragments. The **curated** ones are hand-written, so they are
+only as good as whoever picked them. The **random** ones are generated from a seed by a
+fixed linear congruential stream, which is what removes that selection bias. Each kind
+covers both the constructor fragment and M9's `:merge` functions.
 
 One invocation writes one case, so that a generated program which happens to blow up
 cannot take the rest of the run down with it; the script applies a timeout per case.

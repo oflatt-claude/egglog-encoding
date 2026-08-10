@@ -96,7 +96,7 @@ theorem Pattern.mem_freeVars {σ : Env} {v : Var} (p : Pattern) :
 
 /-- A free variable is by definition unbound, so a substitution over an expression's
 free variables has a domain disjoint from the environment's. That is why appending
-the two never fails, where the Redex `Env-Union` can. -/
+the two never fails, where `Env.Union2` can. -/
 theorem Pattern.freeVars_lookup_eq_none {σ : Env} {v : Var} (p : Pattern)
     (h : v ∈ p.freeVars σ) : Env.lookup v σ = none :=
   Env.lookup_eq_none_iff.mpr (p.mem_freeVars.mp h).2
@@ -307,7 +307,7 @@ end ValidEnv
 namespace ValidSubst
 variable {db : Database} {p : Pattern} {σ : Env}
 
-/-- A `valid-subst` substitution is a `valid-env` over the pattern's free variables. -/
+/-- A `ValidSubst` substitution is a `ValidEnv` over the pattern's free variables. -/
 theorem validEnv (h : ValidSubst db p σ) : ValidEnv (p.freeVars db.env) db σ := by
   cases h with
   | expr hv _ _ _ => exact hv

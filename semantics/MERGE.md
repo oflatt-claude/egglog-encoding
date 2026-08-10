@@ -533,7 +533,7 @@ constructor": the proof encoding declares its proof nodes with `:no-merge` (`Enc
   the syntactic check now rejects (`claim3Program_not_arityOk`). That invariant belongs inside `WF`
   and needs preservation lemmas through `ActionStep` and `MergeStep`.
 
-The shape once sorts land, where the Redex's `no-type` finally dies, is
+The shape once sorts land, where the model's single untyped `Term` finally dies, is
 `Sort := eq String | i64 | str | unit` with `FnDecl` carrying `inputs`/`output`/`merge`, `Scope`
 becoming `List (Var × Sort)` and `Expr.Scoped` a typing judgment. Two side conditions the sorts
 would buy: `.union` requires an eq-sorted output (egglog rejects `:no-merge` on an eq-sort output

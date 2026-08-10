@@ -383,7 +383,7 @@ theorem patternHolds_iff {d : FDatabase} (hw : d.WF) {p : Pattern} {σ : Env}
             exact ⟨(FDatabase.mem_closureF_addTerm₂ hw).mpr hceq,
               _, hwm, (FDatabase.mem_closureF_addTerm₂ hw).mpr hcw⟩
 
-/-- Restricting a query substitution to one pattern gives a `valid-env` for that pattern.
+/-- Restricting a query substitution to one pattern gives a `ValidEnv` for that pattern.
 This is the hypothesis `patternHolds_iff` needs, discharged from what `assignments`
 guarantees. -/
 theorem validEnv_canon {d : FDatabase} {q : Query} {σ : Env} {p : Pattern} (hp : p ∈ q)

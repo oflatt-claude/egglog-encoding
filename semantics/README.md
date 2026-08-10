@@ -40,7 +40,7 @@ read closely and the second skimmed.
 | `EgglogSemantics/Spec/` | the semantics — what an egglog program means | none |
 | `EgglogSemantics/Impl/` | the reference implementation, which computes it | none |
 | `EgglogSemantics/Proofs/` | everything proved about the two, one file per subject | all |
-| `EgglogSemantics/Tests/` | ported Redex checks, and the `.egg` emitter | a few |
+| `EgglogSemantics/Tests/` | example programs as proofs and `#guard`s, and the `.egg` emitter | a few |
 | `EgglogSemantics/Encoding/` | **parked M11** — the proof encoding, its statements, and what is known against them | 13 `sorry` |
 
 `Spec/` and `Impl/` hold **definitions only** — no `theorem` appears in either. The
@@ -70,7 +70,7 @@ lake build
 or, from the workspace root:
 
 - `make lean-check` — builds and fails on any `sorry`. It **currently fails by design**:
-  19 statements are deliberately unproved. Use it to check a change adds no *new* one.
+  18 statements are deliberately unproved. Use it to check a change adds no *new* one.
 - `make lean-difftest` — runs the interpreter and egglog on the same generated programs and
   compares per-function row counts, for the constructor fragment and for M9's `:merge`
   functions. 122 cases. Needs a release `egglog` binary.
