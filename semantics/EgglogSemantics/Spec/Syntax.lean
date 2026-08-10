@@ -211,4 +211,25 @@ inductive Cmd where
 /-- A program is a sequence of commands. -/
 abbrev Program := List Cmd
 
+/-! ### The constructor-only fragment
+
+`Signature.AllConstructors` above says a *state* is in the fragment this phase models;
+this says a *program* keeps it there. It is a fragment restriction and not a front-end
+check — egglog accepts a `:merge` declaration — which is why it is here rather than among
+`Spec/Scope.lean`'s checks, and why `exec_programStep` and `ProgramStep.ctorRows` take it
+rather than `WellFormed`. -/
+
+/-- `c` declares only constructors.
+
+Separate from `Action.SetLegal` because it constrains a different thing: that says what a
+head may write, this says what the signature may become. `Database.CtorRows` needs both —
+declaring a `:merge` function makes rows *already present* a `MergeStep` collision, whose
+combined row need not be a constructor row, and no `set` is involved. -/
+def Cmd.CtorDecl : Cmd → Prop
+  | .decl _ d => d.merge = none
+  | _ => True
+
+/-- Every declaration in the program declares a constructor. -/
+def Program.CtorDecls (p : Program) : Prop := ∀ c ∈ p, c.CtorDecl
+
 end Egglog

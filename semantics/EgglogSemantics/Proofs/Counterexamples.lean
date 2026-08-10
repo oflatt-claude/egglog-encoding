@@ -744,7 +744,7 @@ theorem staleSig_mergeOf :
 
 /-- The program passes the head condition the refinement chain carries. -/
 theorem staleProgram_setLegal : Program.SetLegal staleProgram (fun _ => none) := by
-  refine ⟨trivial, ?_, ?_, ⟨trivial, trivial⟩, trivial, trivial⟩ <;>
+  refine ⟨trivial, ?_, ?_, ⟨fun _ _ => trivial, trivial, trivial⟩, trivial, trivial⟩ <;>
     · show Signature.mergeOf staleSig "M" ≠ none
       rw [staleSig_mergeOf]
       simp
@@ -765,7 +765,7 @@ declared constructor, and `staleRule`'s head applies `f`. -/
 theorem staleProgram_not_evaluable : ¬ Program.Evaluable staleProgram (fun _ => none) := by
   rintro ⟨-, -, -, hrule, -, -⟩
   exact Signature.not_isCtor_of_none (show staleSig "f" = none from rfl)
-    (hrule.1 "f" (by simp)).2
+    (hrule.2.1 "f" (by simp)).2
 
 /-- **And the row is no longer reachable.** At every state `staleProgram` reaches, `f` is
 still undeclared, so the rule's head does not evaluate under any environment: the firing

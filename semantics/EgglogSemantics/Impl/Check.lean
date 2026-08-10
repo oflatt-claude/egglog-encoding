@@ -214,10 +214,8 @@ def Program.noLookup : Program → Signature → Bool
 /-- `Program.noLookup` as a proposition, to sit beside `Program.SetLegal`. -/
 def Program.NoLookup (p : Program) (sig : Signature) : Prop := p.noLookup sig = true
 
-/-- The read check from the empty signature: every read is a `Pattern.values` atom. The
-tuple to carry is
-`WellScoped p ∧ p.Evaluable sig ∧ p.DeclsFresh sig ∧ p.SetLegal sig ∧ WellArity p ∧
-ReadsAreAtoms p`. -/
+/-- The read check from the empty signature: every read is a `Pattern.values` atom. What a
+front end demands in full is `WellFormed p sig ∧ WellArity p ∧ ReadsAreAtoms p`. -/
 def ReadsAreAtoms (p : Program) : Prop := Program.NoLookup p (fun _ => none)
 
 end Egglog

@@ -2,6 +2,17 @@ import EgglogSemantics.Spec.Scope
 import EgglogSemantics.Proofs.Step
 
 namespace Egglog
+/-- The scope after a sequence of actions. The induction invariant of
+`evalActions_isSome_of_scoped`, and not a static check, so it is here and not in `Spec/`. -/
+def Actions.bind : List Action → Scope → Scope
+  | [], Γ => Γ
+  | a :: as, Γ => Actions.bind as (a.bind Γ)
+
+/-- The scope after a program, as `Actions.bind`. -/
+def Program.bind : Program → Scope → Scope
+  | [], Γ => Γ
+  | c :: cs, Γ => Program.bind cs (c.bind Γ)
+
 /-- The scope describes the environment's domain exactly. This is the induction invariant
 `programStep_of_scoped` carries across a run. -/
 def Scope.Models (Γ : Scope) (σ : Env) : Prop := ∀ v, v ∈ Γ ↔ v ∈ Env.dom σ
@@ -88,7 +99,7 @@ theorem evalLocalActions_isSome_of_scoped {db : Database} {Γ : Scope}
     {σ : Env} (hσ : MValidQuerySubst db r.query σ) :
     ∃ d, evalLocalActions db r.actions σ = some d := by
   obtain ⟨d, hd, _⟩ := evalActions_isSome_of_scoped
-    (db := { db with env := db.env ++ σ }) (Query.bind_models hm hσ) hr.2 hre
+    (db := { db with env := db.env ++ σ }) (Query.bind_models hm hσ) hr.2 hre.2
   exact ⟨{ d with env := db.env, rules := db.rules }, by simp [evalLocalActions, hd]⟩
 
 /-! ### Scoped, evaluable programs do not get stuck

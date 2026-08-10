@@ -135,14 +135,14 @@ theorem Actions.SetLegal.of_allConstructors {as : List Action} {sig sig' : Signa
   | cons a as ih =>
     refine ⟨?_, ih h.2⟩
     cases a with
-    | set f args out => exact (Action.SetLegal.elim hsig h.1).elim
+    | set f args out => exact (Action.SetLegal.elim (args := args) (out := out) hsig h.1).elim
     | expr _ => trivial
     | letBind _ _ => trivial
     | union _ _ => trivial
 
 theorem Rule.SetLegal.of_allConstructors {r : Rule} {sig sig' : Signature}
     (hsig : sig.AllConstructors) (h : r.SetLegal sig) : r.SetLegal sig' :=
-  Actions.SetLegal.of_allConstructors hsig h
+  ⟨fun _ _ => trivial, Actions.SetLegal.of_allConstructors hsig h.2⟩
 
 /-- `AllConstructors` survives a command, provided the command declares a constructor. -/
 theorem Signature.AllConstructors.sigBind {sig : Signature} (h : sig.AllConstructors)
@@ -360,7 +360,7 @@ theorem RuleResults.ctorRows {db d : Database} (hsig : db.sig.AllConstructors) {
     (hlegal : r.SetLegal db.sig) (hrows : db.CtorRows) (h : d ∈ RuleResults db r) :
     d.CtorRows := by
   obtain ⟨σ, -, hstep⟩ := h
-  exact evalLocalActions_ctorRows hsig hlegal hrows hstep
+  exact evalLocalActions_ctorRows hsig hlegal.2 hrows hstep
 
 theorem RunRules.ctorRows {db : Database} (h : db.CtorState) : (RunRules db).CtorRows :=
   h.rows.sUnion fun _ hd =>
@@ -377,7 +377,7 @@ theorem RuleResults.wf {db d : Database} (hw : db.WF) {r : Rule}
 theorem RuleResults.ctorTerms {db d : Database} (h : db.CtorState) {r : Rule}
     (hlegal : r.SetLegal db.sig) (hd : d ∈ RuleResults db r) : d.CtorTerms := by
   obtain ⟨σ, hq, hstep⟩ := hd
-  exact evalLocalActions_ctorTerms h.wf h.sig hq.mem_terms hlegal h.terms hstep
+  exact evalLocalActions_ctorTerms h.wf h.sig hq.mem_terms hlegal.2 h.terms hstep
 
 theorem RunRules.wf {db : Database} (hw : db.WF) : (RunRules db).WF :=
   hw.sUnion fun _ hd => RuleResults.wf hw hd.choose_spec.2

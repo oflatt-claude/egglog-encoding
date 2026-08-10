@@ -3979,9 +3979,15 @@ theorem ProgramLegal.declsFresh {p : Program} : ∀ {d d' : FDatabase},
     · cases c with
       | decl f dc => exact hp.2.1.1
       | action a => trivial
-      | rule r => trivial
+      | rule r =>
+        -- `DeclsFresh` asks nothing of a rule, but the walk still visits its head.
+        refine ⟨fun _ _ => trivial, ?_⟩
+        induction r.actions with
+        | nil => trivial
+        | cons a as ih => exact ⟨trivial, ih⟩
       | run => trivial
-    · rw [← execCmdM_sig hd₁]
+    · show Program.DeclsFresh cs (c.sigBind d.sig)
+      rw [← execCmdM_sig hd₁]
       exact ih (hp.2.2.2 d₁ hd₁) hcs
 
 /-- **`Inv` through one command.** `.action` and `.run` are the phase lemmas composed with
@@ -4030,7 +4036,7 @@ theorem execCmdM_rulesLegal {d d' : FDatabase} {c : Cmd}
     subst hs
     intro r' hr'
     rcases List.mem_cons.mp hr' with rfl | hr''
-    · exact hlegal
+    · exact hlegal.2
     · exact hrules r' hr''
   | run =>
     rw [FDatabase.execCmdM] at hs
