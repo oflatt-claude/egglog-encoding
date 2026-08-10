@@ -904,24 +904,28 @@ theorem MValidSubst.mono {d₁ d₂ : Database} (hc : d₁.Contained d₂) (hsig
     (henv : d₂.env = d₁.env) {p : Pattern} {σ : Env} (h : MValidSubst d₁ p σ) :
     MValidSubst d₂ p σ := by
   have hsig₁ : ∀ t : Term, (d₁.addTerm t).sig = (d₂.addTerm t).sig := fun _ => hsig
-  cases h with
-  | expr hv hw he hcong =>
-    refine .expr ?_ (hc.terms hw) ?_ (MCong.mono (hc.addTerm_mono _) (hsig₁ _) hcong)
-    · rw [henv]; exact hv.mono hc
+  refine ⟨by rw [henv]; exact h.1.mono hc, ?_⟩
+  cases h.2 with
+  | expr hw he hcong =>
+    refine .expr (hc.terms hw) ?_
+      (mCongOn_singleton.mpr
+        (MCong.mono (hc.addTerm_mono _) (hsig₁ _) (mCongOn_singleton.mp hcong)))
     · rw [henv, ← hsig]; exact he
-  | eq hv hw he₁ he₂ hc₁ hc₂ =>
-    refine .eq ?_ (hc.terms hw) ?_ ?_
-      (MCong.mono ((hc.addTerm_mono _).addTerm_mono _) hsig hc₁)
-      (MCong.mono ((hc.addTerm_mono _).addTerm_mono _) hsig hc₂)
-    · rw [henv]; exact hv.mono hc
+  | eq hw he₁ he₂ hc₁ hc₂ =>
+    refine .eq (hc.terms hw) ?_ ?_
+      (mCongOn_pair.mpr (MCong.mono ((hc.addTerm_mono _).addTerm_mono _) hsig
+        (mCongOn_pair.mp hc₁)))
+      (mCongOn_pair.mpr (MCong.mono ((hc.addTerm_mono _).addTerm_mono _) hsig
+        (mCongOn_pair.mp hc₂)))
     · rw [henv, ← hsig]; exact he₁
     · rw [henv, ← hsig]; exact he₂
-  | @values vs f as σ us ts ws bs hv hu ht hk hw hrow =>
-    refine .values ?_ ?_ ?_
-      (MCongList.mono ((hc.addTerms_mono ts).addTerms_mono us) (by simp [hsig]) hk)
-      (MCongList.mono ((hc.addTerms_mono ts).addTerms_mono us) (by simp [hsig]) hw)
+  | @values vs f as σ us ts ws bs hu ht hk hw hrow =>
+    refine .values ?_ ?_
+      (mCongListOn_append.mpr (MCongList.mono ((hc.addTerms_mono ts).addTerms_mono us)
+        (by simp [hsig]) (mCongListOn_append.mp hk)))
+      (mCongListOn_append.mpr (MCongList.mono ((hc.addTerms_mono ts).addTerms_mono us)
+        (by simp [hsig]) (mCongListOn_append.mp hw)))
       (hc.rows hrow)
-    · rw [henv]; exact hv.mono hc
     · rw [henv, ← hsig]; exact hu
     · rw [henv, ← hsig]; exact ht
 
@@ -944,32 +948,35 @@ theorem MValidSubst.mono_recorded {d₁ d₂ : Database} (hc : d₁.Recorded d�
     (hsig : d₁.sig = d₂.sig) (henv : d₂.env = d₁.env) {p : Pattern} {σ : Env}
     (h : MValidSubst d₁ p σ) : MValidSubst d₂ p σ := by
   have hsig₁ : ∀ t : Term, (d₁.addTerm t).sig = (d₂.addTerm t).sig := fun _ => hsig
-  cases h with
-  | expr hv hw he hcong =>
-    refine .expr ?_ (hc.terms hw) ?_
-      (MCong.mono_recorded (hc.addTerm_mono _) (hsig₁ _) hcong)
-    · rw [henv]; exact hv.mono_recorded hc
+  refine ⟨by rw [henv]; exact h.1.mono_recorded hc, ?_⟩
+  cases h.2 with
+  | expr hw he hcong =>
+    refine .expr (hc.terms hw) ?_
+      (mCongOn_singleton.mpr
+        (MCong.mono_recorded (hc.addTerm_mono _) (hsig₁ _) (mCongOn_singleton.mp hcong)))
     · rw [henv, ← hsig]; exact he
-  | eq hv hw he₁ he₂ hc₁ hc₂ =>
-    refine .eq ?_ (hc.terms hw) ?_ ?_
-      (MCong.mono_recorded ((hc.addTerm_mono _).addTerm_mono _) hsig hc₁)
-      (MCong.mono_recorded ((hc.addTerm_mono _).addTerm_mono _) hsig hc₂)
-    · rw [henv]; exact hv.mono_recorded hc
+  | eq hw he₁ he₂ hc₁ hc₂ =>
+    refine .eq (hc.terms hw) ?_ ?_
+      (mCongOn_pair.mpr (MCong.mono_recorded ((hc.addTerm_mono _).addTerm_mono _) hsig
+        (mCongOn_pair.mp hc₁)))
+      (mCongOn_pair.mpr (MCong.mono_recorded ((hc.addTerm_mono _).addTerm_mono _) hsig
+        (mCongOn_pair.mp hc₂)))
     · rw [henv, ← hsig]; exact he₁
     · rw [henv, ← hsig]; exact he₂
-  | @values vs f as σ us ts ws bs hv hu ht hk hw hrow =>
+  | @values vs f as σ us ts ws bs hu ht hk hw hrow =>
     have hc' : ((d₁.addTerms ts).addTerms us).Recorded ((d₂.addTerms ts).addTerms us) :=
       (hc.addTerms_mono ts).addTerms_mono us
     have hsig' : ((d₁.addTerms ts).addTerms us).sig = ((d₂.addTerms ts).addTerms us).sig := by
       simp [hsig]
     obtain ⟨bs', hbs', hrow'⟩ := hc.rows _ hrow
-    refine .values ?_ ?_ ?_
-      ((MCongList.mono_recorded hc' hsig' hk).trans
-        (MCongList.mono
-          ((Database.Contained.addTerms ts d₂).trans (Database.Contained.addTerms us _))
-          (by simp) hbs'))
-      (MCongList.mono_recorded hc' hsig' hw) hrow'
-    · rw [henv]; exact hv.mono_recorded hc
+    refine .values ?_ ?_
+      (mCongListOn_append.mpr
+        ((MCongList.mono_recorded hc' hsig' (mCongListOn_append.mp hk)).trans
+          (MCongList.mono
+            ((Database.Contained.addTerms ts d₂).trans (Database.Contained.addTerms us _))
+            (by simp) hbs')))
+      (mCongListOn_append.mpr (MCongList.mono_recorded hc' hsig' (mCongListOn_append.mp hw)))
+      hrow'
     · rw [henv, ← hsig]; exact hu
     · rw [henv, ← hsig]; exact ht
 
@@ -1469,7 +1476,7 @@ theorem FDatabase.envAppend_ctorTerm {d : FDatabase} (h : d.Inv) {σ : Env}
 
 `ValidEnv (p.freeVars d.env) d.toDatabase σ` is load-bearing, not decoration.
 `patternHolds` reads `σ` only through `d.env ++ σ`, so a `σ` carrying bindings the
-pattern never mentions still passes the test, while every `MValidSubst` constructor pins
+pattern never mentions still passes the test, while `MValidSubst`'s `ValidEnv` pins
 `Env.dom σ` to a permutation of the pattern's free variables —
 `Falsity.patternHolds_MValidSubst_false` is the witness. Nothing is lost by requiring
 it: it is a *consequence* of the conclusion (`MValidSubst.validEnv`), so this is the
@@ -1505,8 +1512,8 @@ theorem FDatabase.patternHolds_MValidSubst {d : FDatabase} (h : d.Inv) {p : Patt
       have hct := hInv.ctorTerms
       have hrc := hInv.rowsComplete
       rw [FDatabase.toDatabase_addTerm] at hct hrc
-      exact .expr hv hwm (hev)
-        (Cong.toMCong' hct hrc ((FDatabase.mem_closureF_addTerm h.wf).mp hcl))
+      exact ⟨hv, .expr hwm hev (mCongOn_singleton.mpr
+        (Cong.toMCong' hct hrc ((FDatabase.mem_closureF_addTerm h.wf).mp hcl)))⟩
   | eq e₁ e₂ =>
     rw [patternHolds] at hs
     split at hs
@@ -1519,9 +1526,11 @@ theorem FDatabase.patternHolds_MValidSubst {d : FDatabase} (h : d.Inv) {p : Patt
       have hct := hInv.ctorTerms
       have hrc := hInv.rowsComplete
       rw [FDatabase.toDatabase_addTerm, FDatabase.toDatabase_addTerm] at hct hrc
-      exact .eq hv hwm (hev₁) (hev₂)
-        (Cong.toMCong' hct hrc ((FDatabase.mem_closureF_addTerm₂ h.wf).mp hcl))
-        (Cong.toMCong' hct hrc ((FDatabase.mem_closureF_addTerm₂ h.wf).mp heq))
+      exact ⟨hv, .eq hwm hev₁ hev₂
+        (mCongOn_pair.mpr
+          (Cong.toMCong' hct hrc ((FDatabase.mem_closureF_addTerm₂ h.wf).mp hcl)))
+        (mCongOn_pair.mpr
+          (Cong.toMCong' hct hrc ((FDatabase.mem_closureF_addTerm₂ h.wf).mp heq)))⟩
     · exact absurd hs (by simp)
   | values vs f as =>
     rw [patternHolds] at hs
@@ -1539,11 +1548,12 @@ theorem FDatabase.patternHolds_MValidSubst {d : FDatabase} (h : d.Inv) {p : Patt
       have hct := hInv.ctorTerms
       have hrc := hInv.rowsComplete
       rw [FDatabase.toDatabase_addTerms, FDatabase.toDatabase_addTerms] at hct hrc
-      exact .values hv (hu)
-        (ht)
-        (CongList.toMCongList' hct hrc ((FDatabase.congrTuple_addTerms_iff h.wf).mp hkey))
-        (CongList.toMCongList' hct hrc ((FDatabase.congrTuple_addTerms_iff h.wf).mp hval))
-        hr
+      exact ⟨hv, .values hu ht
+        (mCongListOn_append.mpr (CongList.toMCongList' hct hrc
+          ((FDatabase.congrTuple_addTerms_iff h.wf).mp hkey)))
+        (mCongListOn_append.mpr (CongList.toMCongList' hct hrc
+          ((FDatabase.congrTuple_addTerms_iff h.wf).mp hval)))
+        hr⟩
     · exact absurd hs (by simp)
 
 /-- **Every substitution the enumerator produces is, up to `Env.Agree`, one
@@ -1642,7 +1652,7 @@ twice needs them to compose.
 A corrected statement needs `hrefl`, `htrans`, `hjoin` strengthened from an implication to
 the existence of a resolving merge, and `ProgramLegal`. Even then it may be false for
 programs with rules: `MergeStep` never removes a row, so a specification state keeps every
-superseded output and `MValidSubst.values` lets a rule read one, writing rows the
+superseded output and `MMatches.values` lets a rule read one, writing rows the
 implementation never had. That last part is unverified — `closureF` does not reduce in the
 kernel, so no program containing a rule has an `execM` that evaluates by `rfl`. -/
 theorem execM_current_of_lattice {p : Program} {d : FDatabase}

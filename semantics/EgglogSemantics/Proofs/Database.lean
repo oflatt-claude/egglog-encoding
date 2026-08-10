@@ -189,6 +189,14 @@ theorem EnvAgree.eq_of_env_rules {d₁ d₂ : Database} (h : d₁.EnvAgree d₂)
 /-! ### `addTerms` and `addRow`
 
 `addTerms` is a fold, so its untouched fields need an induction rather than `rfl`. -/
+
+/-- One extension by a concatenation is two extensions in a row. What lets
+`Spec/Merge.lean`'s `MCongListOn db (ts ++ us)` be worked with as the nested
+`(db.addTerms ts).addTerms us` every other `addTerms` lemma is stated at. -/
+theorem addTerms_append {db : Database} {ts us : List Term} :
+    db.addTerms (ts ++ us) = (db.addTerms ts).addTerms us :=
+  List.foldl_append ..
+
 @[simp] theorem addTerms_sig {db : Database} {ts : List Term} :
     (db.addTerms ts).sig = db.sig := by
   induction ts generalizing db with

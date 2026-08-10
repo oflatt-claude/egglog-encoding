@@ -88,7 +88,7 @@ never needs re-canonicalization. Monotone in `Contained`, because `MCongList` is
 
 A key class may record several outputs, which is why this is a relation and not a
 function. Nothing *evaluates* through it — `Expr.eval` does not read — so the
-over-approximation is confined to the query, where `MValidSubst.values` matches any
+over-approximation is confined to the query, where `MMatches.values` matches any
 recorded row. See `MERGE.md`, "Why the reader over-approximates". -/
 def Out (db : Database) (f : FnName) (as : List Term) (vs : List Term) : Prop :=
   ∃ bs, MCongList db as bs ∧ Row.mk f bs vs ∈ db.rows
@@ -197,50 +197,61 @@ The rest of the semantics: which substitutions a query admits, what a round does
 them, and what a command and a program do. Congruence is read as `MCong` throughout, and
 a round has one non-mechanical addition — merge closure is a *phase* of it, because it is
 a state change where congruence closure is only a relation. -/
-/-- The substitutions one query pattern admits.
+/-- The database a match is checked in: `db` plus the terms the pattern's operands denote.
+Every case of `MMatches` asks `MCong` here, which is said once rather than three times.
 
-E-matching is declarative rather than a search procedure. Every case adds the pattern's
-instance (or instances) to the database before asking `MCong`, and the **witness** is
-drawn from the *original* terms: without one, reflexivity on the freshly added instance
-would match everything, so the witness is what stops a pattern from matching a term the
-e-graph does not contain.
+An operand is an *expression*, so it may denote a term the program never built, and `MCong`
+relates nothing outside `db.terms`. Adding the operands first is what makes such an operand
+matchable, and is how this model captures egglog's flattening of a nested fact into one atom
+per subterm (`PLAN.md`, "Reading is a query atom"). It **asserts nothing**, so this is a
+conservative reading of `MCong` and not a weaker one: `MCong.fd` still needs *both* rows
+present, so a hypothesized operand reaches an existing class only through a row the database
+really holds. -/
+def Database.withOperands (db : Database) (ts : List Term) : Database := db.addTerms ts
 
-The witness premises stay spelled out rather than reading a `…On` abbreviation, because
-the extended database they ask over is the one *both* instances are added to. -/
-inductive MValidSubst (db : Database) : Pattern → Env → Prop where
+@[inherit_doc Database.withOperands] def MCongOn
+    (db : Database) (ts : List Term) (a b : Term) : Prop := MCong (db.withOperands ts) a b
+
+@[inherit_doc Database.withOperands] def MCongListOn
+    (db : Database) (ts : List Term) (as bs : List Term) : Prop :=
+  MCongList (db.withOperands ts) as bs
+
+/-- A pattern **matches** under `σ`, up to congruence.
+
+E-matching is declarative rather than a search procedure. The **witness** `w` is drawn from
+the *original* terms: without one, reflexivity on the freshly added operand would match
+everything, so the witness is what stops a pattern from matching a term the e-graph does not
+contain. -/
+inductive MMatches (db : Database) : Pattern → Env → Prop where
   | expr {e : Expr} {σ : Env} {w t : Term} :
-      ValidEnv (e.freeVars db.env) db σ → w ∈ db.terms →
-      e.eval db.sig (db.env ++ σ) = some t → MCong (db.addTerm t) w t →
-      MValidSubst db (.expr e) σ
+      w ∈ db.terms → e.eval db.sig (db.env ++ σ) = some t → MCongOn db [t] w t →
+      MMatches db (.expr e) σ
   | eq {e₁ e₂ : Expr} {σ : Env} {w t₁ t₂ : Term} :
-      ValidEnv (e₁.freeVars db.env ∪ e₂.freeVars db.env) db σ → w ∈ db.terms →
+      w ∈ db.terms →
       e₁.eval db.sig (db.env ++ σ) = some t₁ → e₂.eval db.sig (db.env ++ σ) = some t₂ →
-      MCong ((db.addTerm t₁).addTerm t₂) w t₁ → MCong ((db.addTerm t₁).addTerm t₂) t₁ t₂ →
-      MValidSubst db (.eq e₁ e₂) σ
+      MCongOn db [t₁, t₂] w t₁ → MCongOn db [t₁, t₂] t₁ t₂ →
+      MMatches db (.eq e₁ e₂) σ
   /-- The row atom: `f`'s row at a key class congruent to `as`, with value columns
   congruent to `vs`. **This is the only read in the semantics.**
 
   Its key premise is `Database.Out`'s and its value premise is the same comparison applied
-  to the value columns, both read in the database **extended with the operands**, as the
-  `expr` and `eq` cases read theirs. An operand is an *expression*, so it may denote a term
-  the program never built; the extension is what makes such an operand matchable, and it is
-  how this model captures egglog's flattening of a nested fact into one atom per subterm
-  (`PLAN.md`, "Reading is a query atom").
-
-  Adding the operands is conservative, not permissive: `MCong.fd` still needs *both* rows
-  present, so a hypothesized operand reaches an existing class only through a row the
-  database really holds.
+  to the value columns.
 
   There is no `w ∈ db.terms` witness: the row itself is what forbids matching something
   the database does not hold. -/
   | values {vs : List Expr} {f : FnName} {as : List Expr} {σ : Env}
       {us ts ws bs : List Term} :
-      ValidEnv (Expr.freeVarsList vs db.env ∪ Expr.freeVarsList as db.env) db σ →
       Expr.evalList db.sig vs (db.env ++ σ) = some us →
       Expr.evalList db.sig as (db.env ++ σ) = some ts →
-      MCongList ((db.addTerms ts).addTerms us) ts bs →
-      MCongList ((db.addTerms ts).addTerms us) us ws → Row.mk f bs ws ∈ db.rows →
-      MValidSubst db (.values vs f as) σ
+      MCongListOn db (ts ++ us) ts bs → MCongListOn db (ts ++ us) us ws →
+      Row.mk f bs ws ∈ db.rows →
+      MMatches db (.values vs f as) σ
+
+/-- The substitutions one query pattern admits: `σ` binds exactly the pattern's free
+variables — `Pattern.freeVars` computes them, per case, so one `ValidEnv` covers all
+three — each to a term the database holds, and the pattern matches under it. -/
+def MValidSubst (db : Database) (p : Pattern) (σ : Env) : Prop :=
+  ValidEnv (p.freeVars db.env) db σ ∧ MMatches db p σ
 
 /-- The substitutions a whole query admits: one per pattern, unioned. -/
 def MValidQuerySubst (db : Database) (q : Query) (σ : Env) : Prop :=

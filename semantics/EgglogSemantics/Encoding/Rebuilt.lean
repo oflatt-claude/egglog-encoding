@@ -1,5 +1,6 @@
 import EgglogSemantics.Encoding.Encode
 import EgglogSemantics.Proofs.Eval
+import EgglogSemantics.Proofs.Step
 
 /-! # Is `Rebuilt` satisfiable?
 
@@ -258,13 +259,13 @@ theorem rebuilt_rekeys {P : Program} {d : Database}
   have hfe : Expr.freeVars (.var "@e") d.env = ["@e"] := freeVars_var_of_none he0
   have hfc : Expr.freeVars (.var "@c0") d.env = ["@c0"] := freeVars_var_of_none hc0
   have hfx : Expr.freeVars (.var "@x") d.env = ["@x"] := freeVars_var_of_none hx0
-  have hv1 : Expr.freeVarsList [Expr.var "@e"] d.env ∪
-      Expr.freeVarsList [Expr.var "@c0"] d.env = ["@e", "@c0"] := by
+  have hv1 : (Pattern.values [Expr.var "@e"] viewF [Expr.var "@c0"]).freeVars d.env
+      = ["@e", "@c0"] := by
     show (Expr.freeVars (.var "@e") d.env ∪ Expr.freeVarsList [] d.env) ∪
       (Expr.freeVars (.var "@c0") d.env ∪ Expr.freeVarsList [] d.env) = _
     rw [hfe, hfc]; rfl
-  have hv2 : Expr.freeVarsList [Expr.var "@x"] d.env ∪
-      Expr.freeVarsList [Expr.var "@c0"] d.env = ["@x", "@c0"] := by
+  have hv2 : (Pattern.values [Expr.var "@x"] ufName [Expr.var "@c0"]).freeVars d.env
+      = ["@x", "@c0"] := by
     show (Expr.freeVars (.var "@x") d.env ∪ Expr.freeVarsList [] d.env) ∪
       (Expr.freeVars (.var "@c0") d.env ∪ Expr.freeVarsList [] d.env) = _
     rw [hfx, hfc]; rfl
@@ -275,9 +276,10 @@ theorem rebuilt_rekeys {P : Program} {d : Database}
     intro _ _ _ ht; exact mem_addTerms (mem_addTerms ht)
   -- the two `MValidSubst`s
   have s1 : MValidSubst d (.values [.var "@e"] viewF [.var "@c0"]) σ₁ := by
-    refine .values ⟨?_, ?_⟩ (by rw [Expr.evalList_cons, Expr.eval_var, l1e]; rfl)
+    refine ⟨⟨?_, ?_⟩, .values (by rw [Expr.evalList_cons, Expr.eval_var, l1e]; rfl)
       (by rw [Expr.evalList_cons, Expr.eval_var, l1c]; rfl)
-      (.cons (.refl (hext _ _ hcT)) .nil) (.cons (.refl (hext _ _ heT)) .nil) hview
+      (mCongListOn_append.mpr (.cons (.refl (hext _ _ hcT)) .nil))
+      (mCongListOn_append.mpr (.cons (.refl (hext _ _ heT)) .nil)) hview⟩
     · rw [hv1]; exact List.Perm.refl _
     · rintro ⟨v, t⟩ hb
       rw [d1] at hb
@@ -286,9 +288,10 @@ theorem rebuilt_rekeys {P : Program} {d : Database}
       · exact heT
       · exact hcT
   have s2 : MValidSubst d (.values [.var "@x"] ufName [.var "@c0"]) σ₂ := by
-    refine .values ⟨?_, ?_⟩ (by rw [Expr.evalList_cons, Expr.eval_var, l2x]; rfl)
+    refine ⟨⟨?_, ?_⟩, .values (by rw [Expr.evalList_cons, Expr.eval_var, l2x]; rfl)
       (by rw [Expr.evalList_cons, Expr.eval_var, l2c]; rfl)
-      (.cons (.refl (hext _ _ hcT)) .nil) (.cons (.refl (hext _ _ hxT)) .nil) huf
+      (mCongListOn_append.mpr (.cons (.refl (hext _ _ hcT)) .nil))
+      (mCongListOn_append.mpr (.cons (.refl (hext _ _ hxT)) .nil)) huf⟩
     · rw [hv2]; exact List.Perm.refl _
     · rintro ⟨v, t⟩ hb
       rw [d2] at hb
@@ -701,7 +704,7 @@ theorem mem_of_lookup {v : Var} {σ : Env} {t : Term} (h : Env.lookup v σ = som
     · simp only [if_neg hvw] at h
       exact List.Mem.tail _ (ih h)
 
-/-- The extended database a `MValidSubst.eq` premise talks about still has
+/-- The extended database a `MMatches.eq` premise talks about still has
 `MCong = (· = ·)`. -/
 theorem ctorRows_addTerm {db : Database} {t : Term}
     (h : ∀ r ∈ db.rows, db.sig.IsCtor r.fn → r.out = [.app r.fn r.args]) :
@@ -712,7 +715,7 @@ theorem ctorRows_addTerm {db : Database} {t : Term}
   · exact h r hr hu
   · exact hr.1
 
-/-- `ctorRows_addTerm` over a list: the extension a `MValidSubst.values` premise reads
+/-- `ctorRows_addTerm` over a list: the extension a `MMatches.values` premise reads
 its congruence in. -/
 theorem ctorRows_addTerms {db : Database} {ts : List Term}
     (h : ∀ r ∈ db.rows, db.sig.IsCtor r.fn → r.out = [.app r.fn r.args]) :
@@ -740,16 +743,16 @@ theorem invert_eq_pattern {d : Database} (heq : d.eqs = ∅)
         Expr.freeVarsList [Expr.var W] d.env) ∧
       ∃ tv tw, Env.lookup V (d.env ++ σ) = some tv ∧
         Env.lookup W (d.env ++ σ) = some tw ∧ Row.mk G [tw] [tv] ∈ d.rows := by
-  cases h with
-  | values hve hvs has hts hus hrow =>
-    refine ⟨hve.1, ?_⟩
+  cases h.2 with
+  | values hvs has hts hus hrow =>
+    refine ⟨h.1.1, ?_⟩
     obtain ⟨tv, rfl, hv⟩ := mevalList_one hvs
     obtain ⟨tw, rfl, hw⟩ := mevalList_one has
     have heq' : ((d.addTerms [tw]).addTerms [tv]).eqs = ∅ := by
       rw [addTerms_eqs, addTerms_eqs]; exact heq
     have hrows' := ctorRows_addTerms (ts := [tv]) (ctorRows_addTerms (ts := [tw]) hrows)
-    have hb : [tw] = _ := mcongList_eq heq' hrows' hts
-    have hw' : [tv] = _ := mcongList_eq heq' hrows' hus
+    have hb : [tw] = _ := mcongList_eq heq' hrows' (mCongListOn_append.mp hts)
+    have hw' : [tv] = _ := mcongList_eq heq' hrows' (mCongListOn_append.mp hus)
     subst hb; subst hw'
     exact ⟨tv, tw, meval_var' hv, meval_var' hw, hrow⟩
 

@@ -15,11 +15,14 @@ declared twice. Four checks, each transcribing one a real front end runs:
 | `SetLegal` | no `set` writes a constructor | the signature |
 | `DeclsFresh` | no name is declared twice | the signature |
 
-Between them they are what makes an accepted program mean something: `programStep_isSome`
-— such a program never gets stuck — needs the first two, and the invariance of
-`Database.CtorRows` needs the third. They stay four rather than one because the theorems
-need them apart: handing `execM_contained` the bundle would hand it hypotheses it does not
-use. `WellFormed`, at the end, is the conjunction, for a reader who wants one name.
+**Together they are what makes an accepted program mean something**: `programStep_isSome`
+— such a program never gets stuck — is the first two, and the invariance of
+`Database.CtorRows` is the third. They stay four separate checks rather than one bundle
+because the theorems need them apart: each takes only the ones it uses —
+`programStep_isSome` is `WellScoped` and `Evaluable`, `execM_contained` is `SetLegal`
+alone — and handing either a conjunction would hand it hypotheses it never reads. With
+`Impl/Check.lean`'s two, what a front end demands in full is these four together with
+`WellArity` and `ReadsAreAtoms`.
 
 All four are **one walk**, `Check` below: a check is fixed by what it asks at the three
 sites a program presents — a query fact, an action, a declaration — and by the context it
@@ -257,18 +260,5 @@ abbrev Check.declFresh : Check Signature where
 
 @[inherit_doc Check.declFresh] abbrev Cmd.DeclFresh := Check.declFresh.cmd
 @[inherit_doc Check.declFresh] abbrev Program.DeclsFresh := Check.declFresh.program
-
-/-! ### All four together -/
-
-/-- **The front end accepts `p`.** One name for the four, for a reader who wants one; the
-theorems take the projections instead, each only the ones it needs — `programStep_isSome`
-is `wellScoped` and `evaluable`, `execM_contained` is `setLegal` alone — since taking the
-bundle would be taking hypotheses they do not use. With `Impl/Check.lean`'s two, what a
-front end demands in full is `WellFormed p sig ∧ WellArity p ∧ ReadsAreAtoms p`. -/
-structure WellFormed (p : Program) (sig : Signature) : Prop where
-  wellScoped : WellScoped p
-  evaluable : p.Evaluable sig
-  setLegal : p.SetLegal sig
-  declsFresh : p.DeclsFresh sig
 
 end Egglog

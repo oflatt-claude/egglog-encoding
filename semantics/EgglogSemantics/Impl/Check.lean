@@ -215,7 +215,9 @@ def Program.noLookup : Program → Signature → Bool
 def Program.NoLookup (p : Program) (sig : Signature) : Prop := p.noLookup sig = true
 
 /-- The read check from the empty signature: every read is a `Pattern.values` atom. What a
-front end demands in full is `WellFormed p sig ∧ WellArity p ∧ ReadsAreAtoms p`. -/
+front end demands in full is `WellArity p` and `ReadsAreAtoms p` together with
+`Spec/Scope.lean`'s four: `WellScoped p`, `p.Evaluable sig`, `p.SetLegal sig` and
+`p.DeclsFresh sig`. -/
 def ReadsAreAtoms (p : Program) : Prop := Program.NoLookup p (fun _ => none)
 
 end Egglog

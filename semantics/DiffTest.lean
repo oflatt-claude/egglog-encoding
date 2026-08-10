@@ -359,7 +359,7 @@ private def readPair : Rule where
 /-! ### Reading a `:merge` function from a rule body
 
 `MERGE.md` calls this the difftest fragment's boundary: every merge case so far *writes*
-`Dist` and queries only constructors, so the read path — `MValidSubst.values`, reachable
+`Dist` and queries only constructors, so the read path — `MMatches.values`, reachable
 through `execM` — had **no coverage at all**. That is the shape of the `min`/`max` bug: a
 path the suite exercised zero times while the pass count said everything was fine.
 
@@ -1071,7 +1071,7 @@ widening. **Item 5 is open**, and `mrand-28` is red on it.
    egglog flattens the fact to `G(a, b, x), Dist(x, o)` and matches through congruence,
    answering `Hit 1`; the model answered `Hit 0`. Reachable from `genMergeReadRule`'s
    free-key draw, which is how it turned up. Both `Spec/` and `Impl/` were wrong here, and
-   in the same place: `MValidSubst.values` compared the evaluated operands with `MCongList
+   in the same place: `MMatches.values` compared the evaluated operands with `MCongList
    db`, and `MCong db` relates only terms `db` holds, so the specification could not admit
    the match either.
 2. **`old`/`new` at a rebuild collision followed insertion age here and key canonicity

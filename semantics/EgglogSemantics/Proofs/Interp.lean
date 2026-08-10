@@ -318,8 +318,8 @@ theorem patternHolds_iff {d : FDatabase} (hw : d.WF) (hterms : d.toDatabase.Ctor
     | none =>
       simp only [patternHolds, hu, Bool.false_eq_true, false_iff]
       intro h
-      cases h with
-      | values _ hu' _ _ _ _ =>
+      cases h.2 with
+      | values hu' _ _ _ _ =>
         rw [FDatabase.toDatabase_env, FDatabase.toDatabase_sig, hu] at hu'
         simp at hu'
     | some us =>
@@ -327,8 +327,8 @@ theorem patternHolds_iff {d : FDatabase} (hw : d.WF) (hterms : d.toDatabase.Ctor
       | none =>
         simp only [patternHolds, hu, ht, Bool.false_eq_true, false_iff]
         intro h
-        cases h with
-        | values _ _ ht' _ _ _ =>
+        cases h.2 with
+        | values _ ht' _ _ _ =>
           rw [FDatabase.toDatabase_env, FDatabase.toDatabase_sig, ht] at ht'
           simp at ht'
       | some ts =>
@@ -345,22 +345,23 @@ theorem patternHolds_iff {d : FDatabase} (hw : d.WF) (hterms : d.toDatabase.Ctor
         constructor
         · rintro ⟨r, hr, ⟨hfn, hkey⟩, hval⟩
           subst hfn
-          exact .values hv hu ht hkey hval hr
+          exact ⟨hv, .values hu ht (mCongListOn_append.mpr hkey)
+            (mCongListOn_append.mpr hval) hr⟩
         · intro h
-          cases h with
-          | values _ hu' ht' hkey hval hrow =>
+          cases h.2 with
+          | values hu' ht' hkey hval hrow =>
             rw [FDatabase.toDatabase_env, FDatabase.toDatabase_sig, hu] at hu'
             rw [FDatabase.toDatabase_env, FDatabase.toDatabase_sig, ht] at ht'
             cases hu'
             cases ht'
-            exact ⟨_, hrow, ⟨rfl, hkey⟩, hval⟩
+            exact ⟨_, hrow, ⟨rfl, mCongListOn_append.mp hkey⟩, mCongListOn_append.mp hval⟩
   | expr e =>
     cases hev : e.eval d.sig (d.env ++ σ) with
     | none =>
       simp only [patternHolds, hev, Bool.false_eq_true, false_iff]
       intro h
-      cases h with
-      | expr _ _ he _ =>
+      cases h.2 with
+      | expr _ he _ =>
         rw [FDatabase.toDatabase_env, FDatabase.toDatabase_sig, hev] at he
         simp at he
     | some t =>
@@ -370,20 +371,22 @@ theorem patternHolds_iff {d : FDatabase} (hw : d.WF) (hterms : d.toDatabase.Ctor
       simp only [patternHolds, hev, decide_eq_true_eq]
       constructor
       · rintro ⟨w, hwm, hcl⟩
-        exact .expr hv hwm hev ((hmc _ _).mp ((FDatabase.mem_closureF_addTerm hw).mp hcl))
+        exact ⟨hv, .expr hwm hev (mCongOn_singleton.mpr
+          ((hmc _ _).mp ((FDatabase.mem_closureF_addTerm hw).mp hcl)))⟩
       · intro h
-        cases h with
-        | expr _ hwm he hc =>
+        cases h.2 with
+        | expr hwm he hc =>
           rw [FDatabase.toDatabase_env, FDatabase.toDatabase_sig, hev] at he
           cases he
-          exact ⟨_, hwm, (FDatabase.mem_closureF_addTerm hw).mpr ((hmc _ _).mpr hc)⟩
+          exact ⟨_, hwm, (FDatabase.mem_closureF_addTerm hw).mpr
+            ((hmc _ _).mpr (mCongOn_singleton.mp hc))⟩
   | eq e₁ e₂ =>
     cases hev₁ : e₁.eval d.sig (d.env ++ σ) with
     | none =>
       simp only [patternHolds, hev₁, Bool.false_eq_true, false_iff]
       intro h
-      cases h with
-      | eq _ _ he₁ _ _ _ =>
+      cases h.2 with
+      | eq _ he₁ _ _ _ =>
         rw [FDatabase.toDatabase_env, FDatabase.toDatabase_sig, hev₁] at he₁
         simp at he₁
     | some t₁ =>
@@ -391,8 +394,8 @@ theorem patternHolds_iff {d : FDatabase} (hw : d.WF) (hterms : d.toDatabase.Ctor
       | none =>
         simp only [patternHolds, hev₁, hev₂, Bool.false_eq_true, false_iff]
         intro h
-        cases h with
-        | eq _ _ _ he₂ _ _ =>
+        cases h.2 with
+        | eq _ _ he₂ _ _ =>
           rw [FDatabase.toDatabase_env, FDatabase.toDatabase_sig, hev₂] at he₂
           simp at he₂
       | some t₂ =>
@@ -405,18 +408,20 @@ theorem patternHolds_iff {d : FDatabase} (hw : d.WF) (hterms : d.toDatabase.Ctor
         simp only [patternHolds, hev₁, hev₂, Bool.and_eq_true, decide_eq_true_eq]
         constructor
         · rintro ⟨heq, w, hwm, hcl⟩
-          exact .eq hv hwm hev₁ hev₂
-            ((hmc _ _).mp ((FDatabase.mem_closureF_addTerm₂ hw).mp hcl))
-            ((hmc _ _).mp ((FDatabase.mem_closureF_addTerm₂ hw).mp heq))
+          exact ⟨hv, .eq hwm hev₁ hev₂
+            (mCongOn_pair.mpr ((hmc _ _).mp ((FDatabase.mem_closureF_addTerm₂ hw).mp hcl)))
+            (mCongOn_pair.mpr ((hmc _ _).mp ((FDatabase.mem_closureF_addTerm₂ hw).mp heq)))⟩
         · intro h
-          cases h with
-          | eq _ hwm he₁ he₂ hcw hceq =>
+          cases h.2 with
+          | eq hwm he₁ he₂ hcw hceq =>
             rw [FDatabase.toDatabase_env, FDatabase.toDatabase_sig, hev₁] at he₁
             rw [FDatabase.toDatabase_env, FDatabase.toDatabase_sig, hev₂] at he₂
             cases he₁
             cases he₂
-            exact ⟨(FDatabase.mem_closureF_addTerm₂ hw).mpr ((hmc _ _).mpr hceq),
-              _, hwm, (FDatabase.mem_closureF_addTerm₂ hw).mpr ((hmc _ _).mpr hcw)⟩
+            exact ⟨(FDatabase.mem_closureF_addTerm₂ hw).mpr
+                ((hmc _ _).mpr (mCongOn_pair.mp hceq)),
+              _, hwm, (FDatabase.mem_closureF_addTerm₂ hw).mpr
+                ((hmc _ _).mpr (mCongOn_pair.mp hcw))⟩
 
 /-- Restricting a query substitution to one pattern gives a `ValidEnv` for that pattern.
 This is the hypothesis `patternHolds_iff` needs, discharged from what `assignments`
@@ -522,15 +527,15 @@ theorem mem_matchQuery_of_mvalidQuerySubst {d : FDatabase} (hw : d.WF)
       exact Env.Refines.self_of_nodup (hvs'.validEnv.1.symm.nodup (p'.freeVars_nodup _))
     have hrp : Env.Refines σp τ := (hu.refines_of_mem hsc).1 σp hσp
     rw [Env.canon_canon hpsub (Query.freeVars_nodup q d.env)]
-    refine hvs.of_agree (fun v => ?_) hpdom
+    refine MValidSubst.of_agree hvs (fun v => ?_) hpdom
     by_cases hv : v ∈ p.freeVars d.env
     · rw [Env.lookup_canon (p.freeVars_nodup _) hv]
       cases hlk : Env.lookup v σp with
       | none =>
         rw [Env.lookup_eq_none_iff] at hlk
-        exact absurd (hvs.validEnv.1.mem_iff.mpr hv) hlk
+        exact absurd ((MValidSubst.validEnv hvs).1.mem_iff.mpr hv) hlk
       | some t => exact (hrp (v, t) (Env.mem_of_lookup hlk)).symm
-    · rw [Env.lookup_eq_none_iff.mpr fun hc => hv (hvs.validEnv.1.mem_iff.mp hc),
+    · rw [Env.lookup_eq_none_iff.mpr fun hc => hv ((MValidSubst.validEnv hvs).1.mem_iff.mp hc),
         Env.lookup_eq_none_iff.mpr fun hc => hv (hpdom ▸ hc)]
 
 /-! ### Refinement: actions

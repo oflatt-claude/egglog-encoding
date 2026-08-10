@@ -757,7 +757,7 @@ is an upper bound — plus `FDatabase.empty.ProgramLegal p` for the `ProgramStep
 None of that is proved here.
 
 **A fourth risk this file cannot settle.**  `MergeStep` never removes a row, so a
-specification state holds every superseded output, and `MValidSubst.values` lets a rule
+specification state holds every superseded output, and `MMatches.values` lets a rule
 *read* one.  `RunRules` is a total function, so after a `(run)` every reachable `db`
 records whatever those extra matches wrote — rows the interpreter, which overwrites the
 superseded row, never had, and which need not be below its survivor.  That would refute

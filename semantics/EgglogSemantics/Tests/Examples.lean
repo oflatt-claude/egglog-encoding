@@ -186,16 +186,16 @@ private def preWrapped : Database where
   rules := ∅
 
 example : MValidSubst preWrapped (.expr (.app "wrapper" [eNum 1])) [] :=
-  .expr (w := .app "wrapper" [num 2]) (t := .app "wrapper" [num 1])
-    ⟨by simp [eNum], by simp⟩
-    (by simp [preWrapped])
-    (by rw [Expr.eval_app_ctor (show Prim.ofName "wrapper" = none from rfl)
-          (show Signature.IsCtor preWrapped.sig "wrapper" from ⟨ctorDecl 1, rfl, rfl⟩)]
-        rfl)
-    (MCong.congr (Or.inl ⟨rfl, by simp [preWrapped]⟩)
-      (Or.inr ⟨rfl, Term.self_mem_subterms _⟩)
-      (show Signature.IsCtor preWrapped.sig "wrapper" from ⟨ctorDecl 1, rfl, rfl⟩)
-      (.cons (.symm (.assert (by simp [preWrapped]))) .nil))
+  ⟨⟨by simp [Pattern.freeVars, eNum], by simp⟩,
+    .expr (w := .app "wrapper" [num 2]) (t := .app "wrapper" [num 1])
+      (by simp [preWrapped])
+      (by rw [Expr.eval_app_ctor (show Prim.ofName "wrapper" = none from rfl)
+            (show Signature.IsCtor preWrapped.sig "wrapper" from ⟨ctorDecl 1, rfl, rfl⟩)]
+          rfl)
+      (mCongOn_singleton.mpr (MCong.congr (Or.inl ⟨rfl, by simp [preWrapped]⟩)
+        (Or.inr ⟨rfl, Term.self_mem_subterms _⟩)
+        (show Signature.IsCtor preWrapped.sig "wrapper" from ⟨ctorDecl 1, rfl, rfl⟩)
+        (.cons (.symm (.assert (by simp [preWrapped]))) .nil)))⟩
 
 /-- Over the database holding just `1`, the substitution `v1 ↦ 1` is a valid
 environment for `v1`. -/
@@ -287,8 +287,9 @@ private theorem ruleProgram_step :
 private theorem swap_matches :
     MValidQuerySubst preRun swapRule.query [("a", num 1), ("b", num 2)] := by
   refine ⟨[[("a", num 1), ("b", num 2)]], .cons ?_ .nil, .single _⟩
-  refine MValidSubst.expr (w := add12) (t := add12) ⟨?_, ?_⟩ ?_ ?_ (.refl ?_)
-  · simp [Env.dom, preRun]
+  refine ⟨⟨?_, ?_⟩, MMatches.expr (w := add12) (t := add12) ?_ ?_
+    (mCongOn_singleton.mpr (.refl ?_))⟩
+  · simp [Env.dom, Pattern.freeVars, preRun]
   · intro c hc
     simp only [List.mem_cons, List.not_mem_nil, or_false] at hc
     rcases hc with rfl | rfl <;> simp [preRun, add12, num]

@@ -48,10 +48,11 @@ end
 /-- `a = b` holds in `db` once both terms are built.
 
 `Cong`'s `refl` and `congr` are restricted to `db.terms`, so a pair the database does not
-hold cannot be related at all. Adding the two first is what `MValidSubst` does — the
-pattern instance goes into the database before congruence is consulted — and adding a
-term asserts nothing, so this is a conservative reading of `Cong` rather than a weaker
-relation. On `a b ∈ db.terms` under `Database.WF` the two coincide.
+hold cannot be related at all. Adding the two first is what `Spec/Merge.lean`'s
+`Database.withOperands` does for a pattern's operands, and adding a term asserts nothing,
+so this is a conservative reading of `Cong` rather than a weaker relation. On
+`a b ∈ db.terms` under `Database.WF` the two coincide. The added terms are the *related*
+ones, which is why this needs no separate operand list as `MCongOn` does.
 
 M11 needs it on the encoded side,
 whose rebuild re-keys view rows to applications the source never built

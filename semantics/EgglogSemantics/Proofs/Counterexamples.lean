@@ -308,7 +308,7 @@ theorem holds_lit : patternHolds dEx (.expr (.lit (.int 0))) [("x", t0)] = true 
   exact ⟨t0, t0_mem, t0_cong⟩
 
 /-- **`FDatabase.patternHolds_MValidSubst` is false without `ValidEnv`.**
-`MValidSubst.expr` carries `ValidEnv (e.freeVars db.env) db σ`, which pins `Env.dom σ` to
+`MValidSubst` carries `ValidEnv (p.freeVars db.env) db σ`, which pins `Env.dom σ` to
 a permutation of the pattern's free variables; `(Expr.lit _).freeVars` is `[]` and `σ`
 binds `x`. -/
 theorem patternHolds_MValidSubst_false :
@@ -316,8 +316,7 @@ theorem patternHolds_MValidSubst_false :
         patternHolds d p σ = true → MValidSubst d.toDatabase p σ := by
   intro H
   have hbad := H dEx dEx_inv (.expr (.lit (.int 0))) [("x", t0)] holds_lit
-  cases hbad with
-  | expr hv _ _ _ => simpa [Env.dom, Expr.freeVars] using hv.1
+  simpa [Env.dom, Pattern.freeVars, Expr.freeVars] using hbad.1.1
 
 /-- Two patterns sharing the variable `x`. `Query.freeVars qEx dEx.env = ["x"]`: the
 `∪` in `Query.freeVars` deduplicates, so the enumerator assigns `x` once. -/
@@ -365,10 +364,9 @@ theorem matchQuery_MValidQuerySubst_false :
   obtain ⟨σs, hall, hu⟩ := H dEx dEx_inv qEx [("x", t0)] mem_matchQuery_ex
   have hlen : ∀ ρ, MValidSubst dEx.toDatabase (.expr (.var "x")) ρ → ρ.length = 1 := by
     intro ρ hρ
-    cases hρ with
-    | expr hv _ _ _ =>
-      have := hv.1.length_eq
-      simpa [Env.dom, Expr.freeVars, show dEx.env = [] from rfl, Env.lookup] using this
+    have := hρ.1.1.length_eq
+    simpa [Env.dom, Pattern.freeVars, Expr.freeVars, show dEx.env = [] from rfl, Env.lookup]
+      using this
   cases hall with
   | cons h1 hrest =>
     cases hrest with
@@ -476,9 +474,10 @@ theorem badDb_not_cong :
   simp at heq
 
 theorem badDb_mvalid : MValidSubst badDb (.eq (.lit (.int 0)) (.lit (.int 1))) [] :=
-  .eq (w := .lit (.int 0)) (t₁ := .lit (.int 0)) (t₂ := .lit (.int 1))
-    ⟨by simp, by simp⟩ (by simp [badDb_terms]) rfl rfl
-    (.refl (by simp [badDb_terms])) badDb_mcong
+  ⟨⟨by simp [Pattern.freeVars, Expr.freeVars], by simp⟩,
+    .eq (w := .lit (.int 0)) (t₁ := .lit (.int 0)) (t₂ := .lit (.int 1))
+      (by simp [badDb_terms]) rfl rfl
+      (mCongOn_pair.mpr (.refl (by simp [badDb_terms]))) (mCongOn_pair.mpr badDb_mcong)⟩
 
 theorem badDb_mvalidQuery : MValidQuerySubst badDb badRule.query [] :=
   ⟨[[]], .cons badDb_mvalid .nil, .single []⟩

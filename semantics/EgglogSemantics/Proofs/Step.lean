@@ -13,12 +13,8 @@ namespace MValidSubst
 variable {db : Database} {p : Pattern} {σ : Env}
 
 /-- The hypothesis `patternHolds_MValidSubst` adds is a consequence of its conclusion,
-which is why requiring it costs nothing. -/
-theorem validEnv (h : MValidSubst db p σ) : ValidEnv (p.freeVars db.env) db σ := by
-  cases h with
-  | expr hv _ _ _ => exact hv
-  | eq hv _ _ _ _ _ => exact hv
-  | values hv _ _ _ _ _ => exact hv
+which is why requiring it costs nothing. Since the hoist it is the left conjunct. -/
+theorem validEnv (h : MValidSubst db p σ) : ValidEnv (p.freeVars db.env) db σ := h.1
 
 theorem mem_terms (h : MValidSubst db p σ) : ∀ b ∈ σ, b.2 ∈ db.terms :=
   h.validEnv.mem_terms
@@ -53,13 +49,85 @@ theorem MValidSubst.of_agree {db : Database} {p : Pattern} {σ σ' : Env}
   have hevl : ∀ es : List Expr,
       Expr.evalList db.sig es (db.env ++ σ') = Expr.evalList db.sig es (db.env ++ σ) :=
     fun es => Expr.evalList_agree (Env.Agree.append_left db.env hag.symm) es
-  cases h with
-  | expr _ hwm he hc => exact .expr ⟨hperm, hterms⟩ hwm (by rw [hev]; exact he) hc
-  | eq _ hwm he₁ he₂ hc₁ hc₂ =>
-    exact .eq ⟨hperm, hterms⟩ hwm (by rw [hev]; exact he₁) (by rw [hev]; exact he₂) hc₁ hc₂
-  | values _ hu ht hk hw hrow =>
-    exact .values ⟨hperm, hterms⟩ (by rw [hevl]; exact hu) (by rw [hevl]; exact ht)
-      hk hw hrow
+  refine ⟨⟨hperm, hterms⟩, ?_⟩
+  cases h.2 with
+  | expr hwm he hc => exact .expr hwm (by rw [hev]; exact he) hc
+  | eq hwm he₁ he₂ hc₁ hc₂ =>
+    exact .eq hwm (by rw [hev]; exact he₁) (by rw [hev]; exact he₂) hc₁ hc₂
+  | values hu ht hk hw hrow =>
+    exact .values (by rw [hevl]; exact hu) (by rw [hevl]; exact ht) hk hw hrow
+
+/-! ### Reading `MCongOn` back as an `addTerm`
+
+The three shapes `MMatches` uses, unfolded to the nested `addTerm`/`addTerms` every
+congruence lemma is stated at. The first two are `Iff.rfl`: `withOperands` at a list
+*literal* is a fold that reduces, so `MCongOn db [t]` and `MCongOn db [t₁, t₂]` *are*
+`MCong (db.addTerm t)` and `MCong ((db.addTerm t₁).addTerm t₂)`. Only the row atom's
+`ts ++ us`, whose two halves are variables, needs a rewrite. -/
+
+theorem mCongOn_singleton {db : Database} {t a b : Term} :
+    MCongOn db [t] a b ↔ MCong (db.addTerm t) a b := Iff.rfl
+
+theorem mCongOn_pair {db : Database} {t₁ t₂ a b : Term} :
+    MCongOn db [t₁, t₂] a b ↔ MCong ((db.addTerm t₁).addTerm t₂) a b := Iff.rfl
+
+theorem mCongListOn_append {db : Database} {ts us as bs : List Term} :
+    MCongListOn db (ts ++ us) as bs ↔ MCongList ((db.addTerms ts).addTerms us) as bs := by
+  unfold MCongListOn Database.withOperands
+  rw [Database.addTerms_append]
+
+/-! ### The hoist changed nothing
+
+`MValidSubst` used to be one inductive whose three constructors each carried their own
+`ValidEnv` premise, written out longhand, and their own extended database, spelled as
+nested `addTerm`/`addTerms`. That relation is reproduced verbatim once here, so that
+`mvalidSubst_iff_unfactored` can check the factored form means the same thing. Nothing
+else uses it. -/
+
+/-- The pre-hoist `MValidSubst`, copied unchanged. -/
+inductive MValidSubstUnfactored (db : Database) : Pattern → Env → Prop where
+  | expr {e : Expr} {σ : Env} {w t : Term} :
+      ValidEnv (e.freeVars db.env) db σ → w ∈ db.terms →
+      e.eval db.sig (db.env ++ σ) = some t → MCong (db.addTerm t) w t →
+      MValidSubstUnfactored db (.expr e) σ
+  | eq {e₁ e₂ : Expr} {σ : Env} {w t₁ t₂ : Term} :
+      ValidEnv (e₁.freeVars db.env ∪ e₂.freeVars db.env) db σ → w ∈ db.terms →
+      e₁.eval db.sig (db.env ++ σ) = some t₁ → e₂.eval db.sig (db.env ++ σ) = some t₂ →
+      MCong ((db.addTerm t₁).addTerm t₂) w t₁ → MCong ((db.addTerm t₁).addTerm t₂) t₁ t₂ →
+      MValidSubstUnfactored db (.eq e₁ e₂) σ
+  | values {vs : List Expr} {f : FnName} {as : List Expr} {σ : Env}
+      {us ts ws bs : List Term} :
+      ValidEnv (Expr.freeVarsList vs db.env ∪ Expr.freeVarsList as db.env) db σ →
+      Expr.evalList db.sig vs (db.env ++ σ) = some us →
+      Expr.evalList db.sig as (db.env ++ σ) = some ts →
+      MCongList ((db.addTerms ts).addTerms us) ts bs →
+      MCongList ((db.addTerms ts).addTerms us) us ws → Row.mk f bs ws ∈ db.rows →
+      MValidSubstUnfactored db (.values vs f as) σ
+
+/-- **The two relations are the same.** Two things had to be checked, and each shows up
+below as the absence of a transport:
+
+* the hoisted `ValidEnv (p.freeVars db.env) db σ` is *definitionally* each constructor's
+  old premise, because `Pattern.freeVars` is defined by cases on the pattern — the `hv`s
+  pass straight through;
+* `MCongOn db [t]` and `MCongOn db [t₁, t₂]` are definitionally the old `addTerm` chains
+  (`mCongOn_singleton`, `mCongOn_pair`), so only the row atom's `ts ++ us` needs
+  `mCongListOn_append`. -/
+theorem mvalidSubst_iff_unfactored {db : Database} {p : Pattern} {σ : Env} :
+    MValidSubst db p σ ↔ MValidSubstUnfactored db p σ := by
+  constructor
+  · rintro ⟨hv, h⟩
+    cases h with
+    | expr hw he hc => exact .expr hv hw he hc
+    | eq hw he₁ he₂ hc₁ hc₂ => exact .eq hv hw he₁ he₂ hc₁ hc₂
+    | values hu ht hk hw hrow =>
+      exact .values hv hu ht (mCongListOn_append.mp hk) (mCongListOn_append.mp hw) hrow
+  · intro h
+    cases h with
+    | expr hv hw he hc => exact ⟨hv, .expr hw he hc⟩
+    | eq hv hw he₁ he₂ hc₁ hc₂ => exact ⟨hv, .eq hw he₁ he₂ hc₁ hc₂⟩
+    | values hv hu ht hk hw hrow =>
+      exact ⟨hv, .values hu ht (mCongListOn_append.mpr hk) (mCongListOn_append.mpr hw) hrow⟩
 
 namespace MValidQuerySubst
 variable {db : Database} {q : Query} {σ : Env}
@@ -83,7 +151,7 @@ theorem mem_dom_iff (h : MValidQuerySubst db q σ) {v : Var} :
     exact ⟨p, hp, hvs.mem_dom_iff.mp hv⟩
   · rintro ⟨p, hp, hv⟩
     obtain ⟨σ', hσ', hvs⟩ := hall.flip.exists_left hp
-    exact ⟨σ', hσ', hvs.mem_dom_iff.mpr hv⟩
+    exact ⟨σ', hσ', (MValidSubst.mem_dom_iff hvs).mpr hv⟩
 
 /-- The empty query is satisfied by exactly the empty substitution: a rule with no
 patterns fires once. -/

@@ -118,11 +118,11 @@ def Env.canon (vars : List Var) (σ : Env) : Env :=
 def Query.freeVars (q : Query) (σ : Env) : List Var :=
   q.foldr (fun p acc => p.freeVars σ ∪ acc) []
 
-/-- `MValidSubst`'s side conditions for one pattern, computed: the pattern's instance
+/-- `MMatches`'s side conditions for one pattern, computed: the pattern's instance
 is congruent — in the database extended with it — to a witness the database already
 holds. The witness is a term for `.expr`/`.eq` and a *row* for `.values`, whose key and
 value operands are added the same way, since an operand may denote a term the program
-never built (`Spec/Merge.lean`'s `MValidSubst.values`).
+never built (`Spec/Merge.lean`'s `MMatches.values`).
 
 It compares with `closureF`, which computes `Cong`; `mcong_iff_cong` is what makes that
 the specification's `MCong` on the constructor fragment. -/

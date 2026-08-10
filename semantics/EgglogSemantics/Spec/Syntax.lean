@@ -217,7 +217,7 @@ abbrev Program := List Cmd
 this says a *program* keeps it there. It is a fragment restriction and not a front-end
 check — egglog accepts a `:merge` declaration — which is why it is here rather than among
 `Spec/Scope.lean`'s checks, and why `exec_programStep` and `ProgramStep.ctorRows` take it
-rather than `WellFormed`. -/
+*beside* those rather than as one of them. -/
 
 /-- `c` declares only constructors.
 
