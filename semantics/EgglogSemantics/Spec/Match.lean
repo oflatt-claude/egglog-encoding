@@ -6,15 +6,14 @@ import EgglogSemantics.Spec.Eval
 # Substitutions
 
 The vocabulary e-matching is stated in: which variables a pattern leaves for the matcher
-to assign, how the substitutions of several patterns are joined, and what it means for
-one to be well formed against a database.
+to assign, how the substitutions of several patterns are joined, and what it means for one
+to be well formed against a database.
 
-The matching relation itself is `Spec/Merge.lean`'s `MValidSubst`, because a pattern
-matches up to `MCong` and that is defined there. It is declarative rather than a search
-procedure: a substitution matches when the pattern's *instance* is provably equal to some
-**witness** the database already holds. Searching for those substitutions is the
-executable layer's job — `Impl/Interp.lean`'s `matchQuery` enumerates them, and
-`Proofs/Interp.lean`'s `mem_matchQuery_iff` shows the two agree up to `Env.Agree`.
+The matching relation itself is `Spec/Merge.lean`'s `MValidSubst`, since a pattern matches
+up to `MCong`. It is declarative rather than a search procedure: a substitution matches
+when the pattern's *instance* is provably equal to some **witness** the database already
+holds. Enumerating those substitutions is the executable layer's job —
+`Impl/Interp.lean`'s `matchQuery`.
 -/
 
 namespace Egglog
@@ -36,7 +35,6 @@ def Expr.freeVarsList : List Expr → Env → List Var
 
 end
 
-/-- The free variables of a pattern. -/
 def Pattern.freeVars : Pattern → Env → List Var
   | .expr e, σ => e.freeVars σ
   | .eq e₁ e₂, σ => e₁.freeVars σ ∪ e₂.freeVars σ
@@ -45,10 +43,8 @@ def Pattern.freeVars : Pattern → Env → List Var
 namespace Env
 /-- Append, requiring the two to agree wherever both bind.
 
-`σ₁`'s bindings are kept even when `σ₂` has them too, so the result can bind a
-variable twice — always to the same term, so `lookup` cannot tell. This is a
-relation rather than a function because the side condition is an equality on terms
-and this development carries no decidable equality for them. -/
+`σ₁`'s bindings are kept even when `σ₂` has them too, so the result can bind a variable
+twice — always to the same term, so `lookup` cannot tell. -/
 def Union2 (σ₁ σ₂ σ : Env) : Prop :=
   (∀ b ∈ σ₁, ∀ t, lookup b.1 σ₂ = some t → b.2 = t) ∧ σ = σ₁ ++ σ₂
 
@@ -61,12 +57,10 @@ inductive UnionAll : List Env → Env → Prop where
 
 end Env
 /-! ### Well-formed substitutions -/
-/-- `σ` binds exactly `vars`, each to a term the database holds.
-
-`Perm` rather than equality, so that the definition does not depend on the order
-`Expr.freeVars` happens to produce. Substitutions differing only by a permutation of
-their bindings are indistinguishable to `lookup` (`Expr.eval_agree`), so this admits
-no substitution the semantics can tell apart from one it already admitted. -/
+/-- `σ` binds exactly `vars`, each to a term the database holds. `Perm` rather than
+equality, so the definition does not depend on the order `Expr.freeVars` happens to
+produce; substitutions differing only by a permutation are indistinguishable to
+`lookup`. -/
 def ValidEnv (vars : List Var) (db : Database) (σ : Env) : Prop :=
   (Env.dom σ).Perm vars ∧ ∀ b ∈ σ, b.2 ∈ db.terms
 

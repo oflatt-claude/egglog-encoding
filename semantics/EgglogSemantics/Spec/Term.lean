@@ -10,12 +10,11 @@ What an expression evaluates to, and what the database holds:
 Term = number | (constructor Term ...)
 ```
 
-A term is its own identity — there are no e-class ids on this side of the
-encoding, and the e-graph is a set of terms plus a congruence relation over them.
+A term is its own identity: there are no e-class ids on this side of the encoding, and
+the e-graph is a set of terms plus a congruence relation over them.
 
-`Term` nests `List Term`, so the recursor Lean derives carries a second motive
-over `List Term`. `Term.recTerm` repackages it as ordinary structural induction
-with the hypothesis available for every argument.
+`Term` nests `List Term`, so Lean's derived recursor carries a second motive over
+`List Term`; `Term.recTerm` repackages it as ordinary structural induction.
 -/
 
 namespace Egglog
@@ -27,9 +26,8 @@ inductive Term where
 namespace Term
 mutual
 
-/-- Decidable equality, written by hand because no `deriving` handler sees through the
-`List Term` nesting. The relational semantics needs none of this; a `Finset`-based
-executable interpreter does (`PLAN.md`, M10). -/
+/-- Decidable equality, by hand: no `deriving` handler sees through the `List Term`
+nesting. -/
 def decEq : (s t : Term) → Decidable (s = t)
   | .lit l₁, .lit l₂ =>
     if h : l₁ = l₂ then .isTrue (by rw [h]) else .isFalse (by simp [h])
@@ -42,7 +40,6 @@ def decEq : (s t : Term) → Decidable (s = t)
       | .isFalse ha => .isFalse (by simp [ha])
     else .isFalse (by simp [hf])
 
-/-- `decEq` over argument lists. -/
 def decEqList : (as bs : List Term) → Decidable (as = bs)
   | [], [] => .isTrue rfl
   | [], _ :: _ => .isFalse (by simp)
@@ -59,9 +56,7 @@ end
 
 instance : DecidableEq Term := decEq
 
-/-- `IsSubterm s t` holds when `s` occurs in `t`, including `s = t`. An e-graph that
-holds a term holds its children, which is `Database.WF.subtermClosed` stated with
-this. -/
+/-- `s` occurs in `t`, including `s = t`. -/
 inductive IsSubterm : Term → Term → Prop where
   | refl (t : Term) : IsSubterm t t
   | arg {s a : Term} {f : FnName} {args : List Term} :
@@ -72,16 +67,12 @@ def subterms (t : Term) : Set Term := {s | IsSubterm s t}
 
 mutual
 
-/-- `subterms` as a list, for the executable interpreter, in **reverse creation order**:
-`t`, then its arguments right to left, each preceded by its own subterms.
+/-- `subterms` as a list, in **reverse creation order**: `t`, then its arguments right to
+left, each preceded by its own subterms.
 
-The order is load-bearing, not cosmetic: `FDatabase.addTerm` prepends this list, so a
-position in `FDatabase.terms` is the age of the term at it, which is what
-`Impl/Merge.lean`'s `canonKey` reads to pick a canonical key. `MERGE.md`, "`old` is the
-row at the canonical key", is why age is the right notion.
-
-`mem_subtermList` is the bridge to the relation, and it is what every other consumer
-uses, so the order is invisible to them. -/
+The order is load-bearing. `FDatabase.addTerm` prepends this list, so a position in
+`FDatabase.terms` is the age of the term at it, which is what `Impl/Merge.lean`'s
+`canonKey` reads to pick a canonical key. -/
 def subtermList : Term → List Term
   | .lit l => [.lit l]
   | .app f args => .app f args :: subtermListL args
@@ -97,13 +88,12 @@ end
 end Term
 /-! ### Rows
 
-A database maps each function's key tuple to its value columns. For a constructor there
-is one value column and it holds the application itself, which is what makes congruence
-and the functional dependency one rule (`Cong.fd`). -/
-/-- One tuple of one function's table: `fn args… ↦ out…`.
-
-`out` is a *list*, one entry per value column. egglog's tables are multi-column and the
-encoding depends on it — `@UF_<Sort>` carries a parent *and* a proof. -/
+A database maps each function's key tuple to its value columns. For a constructor there is
+one value column and it holds the application itself, which is what makes congruence and
+the functional dependency one rule (`MCong.fd`). -/
+/-- One tuple of one function's table: `fn args… ↦ out…`. `out` is a *list*, one entry per
+value column: egglog's tables are multi-column, and the encoding depends on it —
+`@UF_<Sort>` carries a parent *and* a proof. -/
 @[ext]
 structure Row where
   fn : FnName
@@ -112,11 +102,10 @@ structure Row where
   deriving DecidableEq
 
 namespace Term
-/-- The constructor rows of `t`: one per application among its subterms, each mapping
-its own children to itself.
-
-Only a *constructor* application ever occurs inside a `Term` — a `:merge` function's
-application evaluates to its recorded output — so this needs no signature. -/
+/-- The constructor rows of `t`: one per application among its subterms, each mapping its
+own children to itself. Only a *constructor* application ever occurs inside a `Term` — a
+`:merge` function's application evaluates to its recorded output — so this needs no
+signature. -/
 def ctorRows (t : Term) : Set Row :=
   {r | r.out = [.app r.fn r.args] ∧ Term.app r.fn r.args ∈ t.subterms}
 
@@ -130,20 +119,17 @@ def ctorRowList (t : Term) : List Row :=
 end Term
 /-! ### The term order
 
-One definition with two jobs. `ordering-min`/`ordering-max` are part of the *program*
-the encoding writes — the union-find's merge body is literally
-`(set (@UF_<S> (ordering-max old new)) (values (ordering-min old new) ()))` — and they
-are also what makes an interpreter's choice of which collision to fire deterministic.
+`ordering-min`/`ordering-max` are part of the *program* the encoding writes — the
+union-find's merge body is literally
+`(set (@UF_<S> (ordering-max old new)) (values (ordering-min old new) ()))`.
 
 `Term.blt` is a *structural* order where egglog's is an allocation order, so the two pick
-different class representatives. That is an accepted deviation and a hypothesis of any
-future simulation theorem; `MERGE.md`, "The representative deviation", has the argument
-and two repros against the binary. -/
+different class representatives: an accepted deviation, argued in `MERGE.md`, "The
+representative deviation". -/
 mutual
 
-/-- A total order on terms: literals below applications, then by argument count, then
-by name, then lexicographically. Written by hand and mutually, for the same reason
-`Term.decEq` is. -/
+/-- A total order on terms: literals below applications, then by argument count, then by
+name, then lexicographically. -/
 def Term.blt : Term → Term → Bool
   | .lit (.int m), .lit (.int n) => decide (m < n)
   | .lit _, .app _ _ => true
@@ -168,10 +154,9 @@ def Term.orderingMin (s t : Term) : Term := if Term.blt s t then s else t
 def Term.orderingMax (s t : Term) : Term := if Term.blt s t then t else s
 
 /-! ### Primitives -/
-/-- The primitives this fragment has. egglog resolves a primitive by name out of a
-table that shares a namespace with user functions, which is why these are `Expr.app`
-of a reserved name rather than a new `Expr` constructor — see `MERGE.md`, "Primitives
-without churning `Expr`". -/
+/-- The primitives this fragment has. egglog resolves a primitive by name out of a table
+sharing a namespace with user functions, so these are `Expr.app` of a reserved name rather
+than a new `Expr` constructor. -/
 inductive Prim where
   | orderingMin
   | orderingMax
@@ -181,8 +166,7 @@ inductive Prim where
   | intMax
   deriving DecidableEq, Repr
 
-/-- The reserved names. A user function of the same name is shadowed, as in egglog. See
-`MERGE.md`, "Primitives without churning `Expr`", for why `min`/`max` are among them. -/
+/-- The reserved names. A user function of the same name is shadowed, as in egglog. -/
 def Prim.ofName : FnName → Option Prim
   | "ordering-min" => some .orderingMin
   | "ordering-max" => some .orderingMax
@@ -191,7 +175,7 @@ def Prim.ofName : FnName → Option Prim
   | _ => none
 
 /-- A primitive's meaning. `none` for the wrong arity, and for `min`/`max` also for a
-non-literal operand — they are `i64` primitives, and this model has no sort discipline to
+non-literal operand: they are `i64` primitives, and this model has no sort discipline to
 reject the application statically. -/
 def Prim.apply : Prim → List Term → Option Term
   | .orderingMin, [s, t] => some (Term.orderingMin s t)

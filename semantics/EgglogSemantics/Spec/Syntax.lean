@@ -18,12 +18,11 @@ expr    = number | var | (f expr ...)
 
 A name means nothing until it is declared: `Expr.eval` builds an application only at a
 declared constructor, which is egglog's own declare-before-use and is what
-`Spec/Scope.lean`'s `Evaluable` demands statically. `Signature` is where the
-declarations live, and `Cmd.decl` is the only thing that writes it.
+`Spec/Scope.lean`'s `Evaluable` demands statically. `Signature` is where the declarations
+live, and `Cmd.decl` is the only thing that writes it.
 
-`Expr` nests `List Expr`, which no `deriving` handler supports, so the types below
-carry no derived instances. The semantics is relational and needs none; an
-executable interpreter would have to write them by mutual recursion.
+`Expr` nests `List Expr`, which no `deriving` handler supports, so the types below carry
+no derived instances.
 -/
 
 namespace Egglog
@@ -55,11 +54,9 @@ inductive Pattern where
 
   This is egglog's lowered query atom, which every fact naming a non-constructor compiles
   to. Its three surface forms — `(f a…)`, `(= v (f a…))` and the tuple destructure
-  `(= (values v…) (f a…))` — are one case here because they are one atom there;
-  `Tests/Egg.lean` renders whichever fits the width.
+  `(= (values v…) (f a…))` — are one case here because they are one atom there.
 
-  A `Pattern` case rather than a reserved `values` name inside `.eq`, for the reason that
-  keeps primitives out of `Expr` (`MERGE.md`, "Multi-column outputs"): a name that is a
+  A `Pattern` case rather than a reserved `values` name inside `.eq`: a name that is a
   term constructor in one position and a keyword in another is a trap. -/
   | values : List Expr → FnName → List Expr → Pattern
 
@@ -68,18 +65,16 @@ abbrev Query := List Pattern
 
 /-- An action: build a term, bind a variable, assert an equality, or write a row.
 
-`set` is what a `:merge` function needs (M9) and what an encoded rule head writes
-(M11) — `(set (@AddView b a) (values rewrite_var ()))`. For a constructor-only program
-it is unreachable. -/
+`set` is what a `:merge` function needs and what an encoded rule head writes —
+`(set (@AddView b a) (values rewrite_var ()))`. For a constructor-only program it is
+unreachable. -/
 inductive Action where
   | expr : Expr → Action
   | letBind : Var → Expr → Action
   | union : Expr → Expr → Action
-  /-- `(set (f args…) out…)`: assert the row `f args… ↦ out…`.
-
-  The outputs are a **list**, one per value column, where the surface syntax writes a
-  single expression for a one-column function and `(values e₀ e₁ …)` for a tuple-output
-  one — the same deviation `MergeSpec.merge`'s result records. -/
+  /-- `(set (f args…) out…)`: assert the row `f args… ↦ out…`. The outputs are a **list**,
+  one per value column, where the surface syntax writes a single expression for a
+  one-column function and `(values e₀ e₁ …)` for a tuple-output one. -/
   | set : FnName → List Expr → List Expr → Action
 
 /-- A rule. Its actions run once per substitution satisfying its query. -/
@@ -93,11 +88,9 @@ structure Rule where
 then evaluates `result` — **one expression per value column**, where the surface syntax
 writes one tuple-valued `(values e₀ e₁ …)`. `noMerge` forbids a collision outright.
 
-A constructor has no merge specification at all (`FnDecl.merge`): its collisions are an
-equality, which is exactly congruence, and `MCong.fd` is the one rule that covers both.
-
-See `MERGE.md`, "Multi-column outputs", for the per-column result and for the one place
-this is coarser than egglog: a merge kind is per *function* here and per *column* there. -/
+A constructor has no merge specification at all: its collisions are an equality, which is
+exactly congruence, and `MCong.fd` is the one rule that covers both. A merge kind is per
+*function* here and per *column* in egglog — `MERGE.md`, "Multi-column outputs". -/
 inductive MergeSpec where
   | merge : List Action → List Expr → MergeSpec
   | noMerge
@@ -108,15 +101,14 @@ egglog has two declaration forms and this is both of them: `(datatype …)` and
 `(constructor …)` declare a **constructor**, which is `merge = none`; `(function … :merge …)`
 declares a **merge function**, which is `merge = some …`. -/
 structure FnDecl where
-  /-- The number of key columns. Surface syntax only: nothing in `Spec/` reads it, and
-  `Impl/Check.lean`'s arity check and `Tests/Egg.lean`'s emitter are its consumers. -/
+  /-- The number of key columns. Surface syntax only: nothing in `Spec/` reads it. -/
   arity : Nat
   /-- The number of value columns. One for a constructor. Surface syntax only, as
   `arity`. -/
   outArity : Nat
   /-- How collisions are resolved, or `none` for a constructor. The one field the
-  semantics reads: `Signature.IsCtor` and `Signature.mergeOf` are both this plus the
-  question of whether there is an entry at all. -/
+  semantics reads: `Signature.IsCtor` and `Signature.mergeOf` are both this plus whether
+  there is an entry at all. -/
   merge : Option MergeSpec
 
 /-- The declared functions. Undeclared names have no entry. -/
@@ -129,15 +121,11 @@ def Signature.mergeOf (sig : Signature) (f : FnName) : Option MergeSpec :=
 
 /-- `f` is a **declared** constructor: `(datatype …)` or `(constructor …)`.
 
-Declaration is required. An undeclared name is not a constructor and not a merge
-function; it is nothing, and `Expr.eval` has no rule for it. That is egglog's own
-declare-before-use, and it is what `Spec/Scope.lean`'s `Evaluable` asks of every applied
-name.
-
-It also decides what a later declaration can undo. `Spec/Merge.lean`'s `MCong.fd` fires
-only here, so if an undeclared name were a constructor, declaring it `:merge` would
-*remove* derivations — `Proofs/Merge.lean`'s `CmdStep.mono_recorded` is where that is
-paid for. -/
+An undeclared name is not a constructor and not a merge function; it is nothing, and
+`Expr.eval` has no rule for it. Requiring the declaration is also what keeps a later one
+from *removing* derivations: `Spec/Merge.lean`'s `MCong.fd` fires only here, so an
+undeclared name counting as a constructor would lose its derivations the moment it was
+declared `:merge` — `Proofs/Merge.lean`'s `CmdStep.mono_recorded`. -/
 def Signature.IsCtor (sig : Signature) (f : FnName) : Prop :=
   ∃ d, sig f = some d ∧ d.merge = none
 
@@ -148,18 +136,16 @@ instance (sig : Signature) (f : FnName) : Decidable (sig.IsCtor f) :=
     | none => simp
     | some d => simp [Option.isNone_iff_eq_none])
 
-/-- No declared function has a merge specification: the fragment this phase models.
-
-Not `∀ f, sig.IsCtor f`, which would ask that every name in the universe be declared.
-What a phase without `:merge` needs is that nothing *is* a merge function, which is
-exactly what makes `MergeStep` vacuous. -/
+/-- No declared function has a merge specification. Not `∀ f, sig.IsCtor f`, which would
+ask that every name in the universe be declared; what matters is that nothing *is* a merge
+function, which is exactly what makes `MergeStep` vacuous. -/
 def Signature.AllConstructors (sig : Signature) : Prop := ∀ f, sig.mergeOf f = none
 
 /-! ### Variables and function names
 
-Collecting these up front, rather than having each judgment walk the expression itself,
-is what lets the static checks in `Scope.lean` be related to the runtime state: `vars`
-is what the environment must bind, `fns` what the signature must declare. -/
+Collected up front so that `Scope.lean`'s static checks can be related to the runtime
+state: `vars` is what the environment must bind, `fns` what the signature must
+declare. -/
 mutual
 
 /-- All variables occurring in `e`, deduplicated. -/
@@ -168,7 +154,6 @@ def Expr.vars : Expr → List Var
   | .var v => [v]
   | .app _ args => Expr.varsList args
 
-/-- `Expr.vars` over an argument list. -/
 def Expr.varsList : List Expr → List Var
   | [] => []
   | e :: es => e.vars ∪ Expr.varsList es
@@ -183,20 +168,17 @@ def Expr.fns : Expr → List FnName
   | .var _ => []
   | .app f args => f :: Expr.fnsList args
 
-/-- `Expr.fns` over an argument list. -/
 def Expr.fnsList : List Expr → List FnName
   | [] => []
   | e :: es => e.fns ∪ Expr.fnsList es
 
 end
 
-/-- All variables occurring in a pattern. -/
 def Pattern.vars : Pattern → List Var
   | .expr e => e.vars
   | .eq e₁ e₂ => e₁.vars ∪ e₂.vars
   | .values vs _ as => Expr.varsList vs ∪ Expr.varsList as
 
-/-- All variables occurring in a query. -/
 def Query.vars : Query → List Var
   | [] => []
   | p :: ps => p.vars ∪ Query.vars ps
@@ -208,23 +190,19 @@ inductive Cmd where
   | run : Cmd
   | decl : FnName → FnDecl → Cmd
 
-/-- A program is a sequence of commands. -/
 abbrev Program := List Cmd
 
 /-! ### The constructor-only fragment
 
-`Signature.AllConstructors` above says a *state* is in the fragment this phase models;
-this says a *program* keeps it there. It is a fragment restriction and not a front-end
-check — egglog accepts a `:merge` declaration — which is why it is here rather than among
-`Spec/Scope.lean`'s checks, and why `exec_programStep` and `ProgramStep.ctorRows` take it
-*beside* those rather than as one of them. -/
+`Signature.AllConstructors` says a *state* is in the fragment this phase models; this says
+a *program* keeps it there. It is a fragment restriction and not a front-end check —
+egglog accepts a `:merge` declaration — which is why it is here rather than among
+`Spec/Scope.lean`'s checks. -/
 
-/-- `c` declares only constructors.
-
-Separate from `Action.SetLegal` because it constrains a different thing: that says what a
-head may write, this says what the signature may become. `Database.CtorRows` needs both —
-declaring a `:merge` function makes rows *already present* a `MergeStep` collision, whose
-combined row need not be a constructor row, and no `set` is involved. -/
+/-- `c` declares only constructors. Separate from `Action.SetLegal`, which says what a
+head may write where this says what the signature may become: `Database.CtorRows` needs
+both, since declaring a `:merge` function makes rows *already present* a `MergeStep`
+collision, with no `set` involved. -/
 def Cmd.CtorDecl : Cmd → Prop
   | .decl _ d => d.merge = none
   | _ => True
