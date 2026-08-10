@@ -21,7 +21,8 @@ longer says the applications in `terms` are constructors'.
 Four statements needed repair, and the repairs are the interesting output:
 
 * `execM_reachable` is false without side conditions — a `set` on a constructor breaks
-  `CtorRows`, which is the only route from `ValidSubst` to `MValidSubst`. It carries
+  `CtorRows`, which is the only route from what `closureF` computes to what `MValidSubst`
+  asks. It carries
   `Program.CtorDecls` and `Program.SetLegal` and is **proved**; its docstring justifies
   both, and `Proofs/Counterexamples.lean`'s `execM_reachable_needs_setLegal` shows the
   second cannot be dropped.
@@ -40,144 +41,6 @@ what replaces them.
 -/
 
 namespace Egglog
-/-! ### Constructor-determined rows
-
-`Database.toM` is gone: `Database` *is* the M9 database now, so the embedding it named
-is the identity and `CtorRows` is what the theorem below quantifies over instead. -/
-theorem Database.mem_rows_iff {db : Database} (h : db.CtorRows) {f : FnName}
-    {as vs : List Term} :
-    Row.mk f as vs ∈ db.rows ↔ vs = [.app f as] ∧ Term.app f as ∈ db.terms := by
-  rw [h]; exact Iff.rfl
-
-/-! ### The generalized relation is the old one
-
-Two directions, two hypotheses. `MCong → Cong` needs only that the rows are constructor
-rows, because a constructor row is one whatever the signature says. `Cong → MCong` also
-needs `AllConstructors`, which is what licenses `fd`. -/
-mutual
-
-/-- Every functional-dependency derivation over constructor rows is an M2 derivation.
-
-`fd` is the only interesting case: its two rows are constructor rows, so their outputs
-are `.app f as` and `.app f bs` and both applications are in `db.terms` — the two
-premises `Cong.congr` wants. -/
-theorem MCong.toCong {db : Database} (hrows : db.CtorRows) {a b : Term}
-    (h : MCong db a b) : Cong db a b := by
-  match h with
-  | .assert hm => exact .assert hm
-  | .refl hm => exact .refl hm
-  | .symm h => exact .symm (MCong.toCong hrows h)
-  | .trans h₁ h₂ => exact .trans (MCong.toCong hrows h₁) (MCong.toCong hrows h₂)
-  | .fd ha hb _ hl hxy =>
-    obtain ⟨rfl, hma⟩ := (Database.mem_rows_iff hrows).mp ha
-    obtain ⟨rfl, hmb⟩ := (Database.mem_rows_iff hrows).mp hb
-    simp only [List.zip_cons_cons, List.zip_nil_left, List.mem_cons, List.not_mem_nil,
-      or_false, Prod.mk.injEq] at hxy
-    obtain ⟨rfl, rfl⟩ := hxy
-    exact .congr hma hmb (MCongList.toCongList hrows hl)
-
-theorem MCongList.toCongList {db : Database} (hrows : db.CtorRows) {as bs : List Term}
-    (h : MCongList db as bs) : CongList db as bs := by
-  match h with
-  | .nil => exact .nil
-  | .cons hab hl => exact .cons (MCong.toCong hrows hab) (MCongList.toCongList hrows hl)
-
-end
-
-mutual
-
-/-- Every M2 derivation is a functional-dependency derivation.
-
-`congr` is the only interesting case, and its two membership premises are exactly what is
-needed: `RowsComplete` turns each into a row `fd` can use, and `CtorTerms` says the
-function they are applications of is a constructor, which is what lets `fd` fire.
-
-Stated over `CtorTerms`/`RowsComplete` rather than `AllConstructors`/`CtorRows` because
-those two **survive merging** — they constrain `terms` and the constructor rows, neither
-of which a merge touches (`FDatabase.mergeRound_confined`) — whereas `CtorRows` fails at
-the first `:merge` declaration. That is what lets the interpreter's `closureF`, which
-computes `Cong`, be read as `MCong` in a database that has merge functions in it, and it
-is the reason the refinement chain below can exist at all. -/
-theorem Cong.toMCong' {db : Database} (hterms : db.CtorTerms) (hrows : db.RowsComplete)
-    {a b : Term} (h : Cong db a b) : MCong db a b := by
-  match h with
-  | .assert hm => exact .assert hm
-  | .refl hm => exact .refl hm
-  | .symm h => exact .symm (Cong.toMCong' hterms hrows h)
-  | .trans h₁ h₂ =>
-    exact .trans (Cong.toMCong' hterms hrows h₁) (Cong.toMCong' hterms hrows h₂)
-  | .congr (f := f) (as := as) (bs := bs) hma hmb hl =>
-    exact .fd (a := [Term.app f as]) (b := [Term.app f bs])
-      (hrows ⟨rfl, hma⟩) (hrows ⟨rfl, hmb⟩) (hterms f as hma)
-      (CongList.toMCongList' hterms hrows hl) (by simp)
-
-theorem CongList.toMCongList' {db : Database} (hterms : db.CtorTerms)
-    (hrows : db.RowsComplete) {as bs : List Term} (h : CongList db as bs) :
-    MCongList db as bs := by
-  match h with
-  | .nil => exact .nil
-  | .cons hab hl =>
-    exact .cons (Cong.toMCong' hterms hrows hab) (CongList.toMCongList' hterms hrows hl)
-
-end
-
-/-- `CtorRows` gives `RowsComplete`: it is the equality, this is one inclusion of it.
-
-Written with `▸` rather than `h.ge`: the latter goes through `Set`'s order instances and
-puts `Classical.choice` into the axiom set of everything downstream, including
-`mcong_iff_cong`, which is otherwise `propext` alone. -/
-theorem Database.CtorRows.rowsComplete {db : Database} (h : db.CtorRows) :
-    db.RowsComplete := fun _ hr => h.symm ▸ hr
-
-theorem Cong.toMCong {db : Database} (hterms : db.CtorTerms) (hrows : db.CtorRows)
-    {a b : Term} (h : Cong db a b) : MCong db a b :=
-  Cong.toMCong' hterms hrows.rowsComplete h
-
-theorem CongList.toMCongList {db : Database} (hterms : db.CtorTerms)
-    (hrows : db.CtorRows) {as bs : List Term} (h : CongList db as bs) :
-    MCongList db as bs :=
-  CongList.toMCongList' hterms hrows.rowsComplete h
-
-/-- **The compatibility theorem.** Where the rows are the constructor rows and every
-application the database holds is a declared constructor's, the functional dependency *is*
-congruence.
-
-`CtorTerms` where this used to read `Signature.AllConstructors`. The two coincided while an
-undeclared name counted as a constructor, and now they do not: `AllConstructors` says
-nothing is a *merge* function, which no longer implies that the applications in `terms`
-are constructors' — that has to be carried as a state invariant, which is
-`Database.CtorState.terms`.
-
-This is what `PLAN.md` M9 asks for, and the reason `MCong` has no `congr` constructor:
-congruence is not lost, it is `fd` read at constructor rows.
-
-It replaces `mcong_toM_iff`, which quantified over the embedding `Database.toM` of an
-M2 database into a separate `MDatabase`. Now that the two states are one structure that
-embedding is the identity, so the *hypothesis* `CtorRows` carries what the embedding
-used to: it says the state is in the constructor-only fragment. The theorem's content is
-unchanged and its proof is the same four `match` cases. -/
-theorem mcong_iff_cong {db : Database} (hterms : db.CtorTerms)
-    (hrows : db.CtorRows) {a b : Term} : MCong db a b ↔ Cong db a b :=
-  ⟨MCong.toCong hrows, Cong.toMCong hterms hrows⟩
-
-/-- **The compatibility theorem, at a state a program can reach.** A program that declares
-only constructors and never `set`s one runs to a database where the two relations agree.
-
-`Proofs/Step.lean`'s `ProgramStep.ctorState` supplies both hypotheses; this is the
-composition, which lives here because that is where `mcong_iff_cong` is. -/
-theorem ProgramStep.mcong_iff_cong {p : Program} {db : Database}
-    (hstep : ProgramStep Database.empty p db) (hdecl : p.CtorDecls)
-    (hlegal : p.SetLegal Database.empty.sig) {a b : Term} : MCong db a b ↔ Cong db a b :=
-  let hc := ProgramStep.ctorState Database.CtorState.empty hdecl hlegal hstep
-  Egglog.mcong_iff_cong hc.terms hc.rows
-
-/-- Congruence, recovered as a derived rule rather than a constructor. -/
-theorem MCong.congr {db : Database} {f : FnName} {as bs : List Term}
-    (ha : Row.mk f as [.app f as] ∈ db.rows) (hb : Row.mk f bs [.app f bs] ∈ db.rows)
-    (hsig : db.sig.IsCtor f) (hl : MCongList db as bs) :
-    MCong db (.app f as) (.app f bs) :=
-  .fd ha hb hsig hl (by simp)
-
 /-! ### The constructor fragment collapses
 
 `mcong_iff_cong` says the generalized congruence is the old one there. These say the
@@ -1295,177 +1158,14 @@ theorem MergeClosure.transport {A C B : Database} (hc : A.Contained C)
     obtain ⟨D', hstepD', hcont', hsig'⟩ := hstep.transport hcontD hsigD
     exact ⟨D', hclD.tail hstepD', hcont', hsig'⟩
 
-/-! ### The relational semantics is the functional one, on the constructor fragment
-
-`Spec/Step.lean`'s `runProgram` and `Spec/Merge.lean`'s `ProgramStep` are the same
-semantics written twice, and on a program that declares only constructors and never
-`set`s one they agree exactly. That is what `execM_reachable` needs.
-
-**Actions are no longer part of this.** `CmdStep.action`, `RuleResults` and
-`MergeStep.collide` all read `evalAction`/`evalActions` directly, so the layer that used
-to need two bridge theorems and a primitive-free hypothesis in each direction needs none.
-What
-is left is the layer that really does have two readings — e-matching, where `MCong`
-replaces `Cong` — and the round above it, and both directions are needed: `RunStep` pins
-`db'` to `RunRules db` on a constructor signature, so `stepCmd`'s `runRules db` has to be
-*equal* to `RunRules db` rather than merely contained in it. -/
-/-- `ValidSubst → MValidSubst`. `mcong_iff_cong` is applied at the *extended* database the
-witness premises ask over, which is why `CtorRows.addTerm` appears — and, now that
-`mcong_iff_cong` reads `CtorTerms`, why the instance it is added is `Expr.eval_ctorTerm`:
-the operand a pattern hypothesizes is itself constructor-built. -/
-theorem MValidSubst.of_validSubst {db : Database} (hwf : db.WF) (hterms : db.CtorTerms)
-    (hrows : db.CtorRows) {p : Pattern} {σ : Env} (h : ValidSubst db p σ) :
-    MValidSubst db p σ := by
-  have henv : ∀ b ∈ db.env ++ σ, Term.CtorTerm db.sig b.2 := by
-    intro b hb
-    rcases List.mem_append.mp hb with hb' | hb'
-    · exact Database.env_ctorTerm hwf hterms b hb'
-    · exact Database.ctorTerm_of_mem hwf hterms (h.mem_terms b hb')
-  cases h with
-  | @expr e σ w t hve hmem heval hcong =>
-    exact .expr hve hmem heval
-      (Cong.toMCong (db := db.addTerm t) (hterms.addTerm (Expr.eval_ctorTerm henv heval))
-        (hrows.addTerm t) hcong)
-  | @eq e₁ e₂ σ w t₁ t₂ hve hmem hev₁ hev₂ hcw hct =>
-    have hterms' : ((db.addTerm t₁).addTerm t₂).CtorTerms :=
-      (hterms.addTerm (Expr.eval_ctorTerm henv hev₁)).addTerm
-        (Expr.eval_ctorTerm henv hev₂)
-    exact .eq hve hmem hev₁ hev₂
-      (Cong.toMCong (db := (db.addTerm t₁).addTerm t₂) hterms'
-        ((hrows.addTerm t₁).addTerm t₂) hcw)
-      (Cong.toMCong (db := (db.addTerm t₁).addTerm t₂) hterms'
-        ((hrows.addTerm t₁).addTerm t₂) hct)
-  | @values vs f as σ us ts ws bs hve hev₁ hev₂ hct hcu hrow =>
-    have hterms' : ((db.addTerms ts).addTerms us).CtorTerms :=
-      (hterms.addTerms (Expr.evalList_ctorTerm henv hev₂)).addTerms
-        (by simpa using Expr.evalList_ctorTerm henv hev₁)
-    have hrows' : ((db.addTerms ts).addTerms us).CtorRows := (hrows.addTerms ts).addTerms us
-    exact .values hve hev₁ hev₂
-      (CongList.toMCongList hterms' hrows' hct) (CongList.toMCongList hterms' hrows' hcu) hrow
-
-theorem ValidSubst.of_mvalidSubst {db : Database} (hrows : db.CtorRows) {p : Pattern}
-    {σ : Env} (h : MValidSubst db p σ) : ValidSubst db p σ := by
-  cases h with
-  | @expr e σ w t hve hw heval hcong =>
-    exact .expr hve hw heval (MCong.toCong (hrows.addTerm t) hcong)
-  | @eq e₁ e₂ σ w t₁ t₂ hve hw hev₁ hev₂ hcw hct =>
-    exact .eq hve hw hev₁ hev₂
-      (MCong.toCong ((hrows.addTerm t₁).addTerm t₂) hcw)
-      (MCong.toCong ((hrows.addTerm t₁).addTerm t₂) hct)
-  | @values vs f as σ us ts ws bs hve hev₁ hev₂ hct hcu hrow =>
-    have hrows' : ((db.addTerms ts).addTerms us).CtorRows := (hrows.addTerms ts).addTerms us
-    exact .values hve hev₁ hev₂
-      (MCongList.toCongList hrows' hct) (MCongList.toCongList hrows' hcu) hrow
-
-theorem forall₂_mvalidSubst {db : Database} (hwf : db.WF) (hterms : db.CtorTerms)
-    (hrows : db.CtorRows) {q : Query} {σs : List Env}
-    (h : List.Forall₂ (ValidSubst db) q σs) : List.Forall₂ (MValidSubst db) q σs := by
-  induction h with
-  | nil => exact .nil
-  | cons hp _ ih => exact .cons (MValidSubst.of_validSubst hwf hterms hrows hp) ih
-
-theorem forall₂_validSubst {db : Database} (hrows : db.CtorRows) {q : Query}
-    {σs : List Env} (h : List.Forall₂ (MValidSubst db) q σs) :
-    List.Forall₂ (ValidSubst db) q σs := by
-  induction h with
-  | nil => exact .nil
-  | cons hp _ ih => exact .cons (ValidSubst.of_mvalidSubst hrows hp) ih
-
-theorem MValidQuerySubst.of_validQuerySubst {db : Database}
-    (hwf : db.WF) (hterms : db.CtorTerms) (hrows : db.CtorRows) {q : Query} {σ : Env}
-    (h : ValidQuerySubst db q σ) : MValidQuerySubst db q σ := by
-  obtain ⟨σs, hall, hu⟩ := h
-  exact ⟨σs, forall₂_mvalidSubst hwf hterms hrows hall, hu⟩
-
-theorem ValidQuerySubst.of_mvalidQuerySubst {db : Database} (hrows : db.CtorRows)
-    {q : Query} {σ : Env} (h : MValidQuerySubst db q σ) : ValidQuerySubst db q σ := by
-  obtain ⟨σs, hall, hu⟩ := h
-  exact ⟨σs, forall₂_validSubst hrows hall, hu⟩
-
-/-- One rule contributes the same databases either way. Both sides run
-`evalLocalActions` on the substitutions their matcher admits, so identifying the matchers
-is the whole proof. -/
-theorem ruleResults_eq {db : Database} (hwf : db.WF) (hterms : db.CtorTerms)
-    (hrows : db.CtorRows) {r : Rule} : RuleResults db r = ruleResults db r := by
-  ext d
-  exact ⟨fun ⟨σ, hq, hd⟩ => ⟨σ, ValidQuerySubst.of_mvalidQuerySubst hrows hq, hd⟩,
-    fun ⟨σ, hq, hd⟩ => ⟨σ, MValidQuerySubst.of_validQuerySubst hwf hterms hrows hq, hd⟩⟩
-
-/-- **A round is the same round.** Both sides are `db.sUnion` of a family indexed by
-`db.rules`, and `ruleResults_eq` identifies the families. -/
-theorem runRules_eq {db : Database} (h : db.CtorState) : RunRules db = runRules db := by
-  have hre : ∀ r : Rule, RuleResults db r = ruleResults db r :=
-    fun r => ruleResults_eq h.wf h.terms h.rows
-  have hset : {d | ∃ r ∈ db.rules, d ∈ RuleResults db r}
-      = {d | ∃ r ∈ db.rules, d ∈ ruleResults db r} := by
-    ext d
-    exact ⟨fun ⟨r, hr, hd⟩ => ⟨r, hr, hre r ▸ hd⟩, fun ⟨r, hr, hd⟩ => ⟨r, hr, (hre r).symm ▸ hd⟩⟩
-  rw [RunRules, runRules, hset]
-
-/-- `stepCmd → CmdStep`. The `MergeClosure` phase `CmdStep.action` carries is supplied by
-*zero* steps: `MergeStep` never fires on a constructor signature, so the merge leg is the
-identity and `Relation.ReflTransGen.refl` is the whole of it. -/
-theorem CmdStep.of_stepCmd {db db' : Database} (h : db.CtorState) {c : Cmd}
-    (hv : stepCmd db c = some db') : CmdStep db c db' := by
-  cases c with
-  | action a => exact .action hv Relation.ReflTransGen.refl
-  | rule r => simp only [stepCmd, Option.some.injEq] at hv; exact hv ▸ .rule
-  | run =>
-    simp only [stepCmd, Option.some.injEq] at hv
-    refine .run ?_
-    rw [RunStep, runRules_eq h, ← hv]
-    exact Relation.ReflTransGen.refl
-  | decl f d => simp only [stepCmd, Option.some.injEq] at hv; exact hv ▸ .decl
-
-/-- The converse, away from `(run)` — the one command whose two readings can come apart,
-since a `MergeClosure` of length zero is a choice the relation makes and the function does
-not. Reading a concrete run backwards is what needs it. -/
-theorem CmdStep.stepCmd_eq {db db' : Database} {c : Cmd} (h : CmdStep db c db')
-    (hsig : db.sig.AllConstructors) (hrun : c ≠ Cmd.run) : stepCmd db c = some db' := by
-  cases h with
-  | action ha hm =>
-    have hd := hm.eq_of_allConstructors (by rw [evalAction_sig ha]; exact hsig)
-    subst hd
-    exact ha
-  | rule => rfl
-  | run _ => exact absurd rfl hrun
-  | decl => rfl
-
-theorem ProgramStep.of_runProgram {db db' : Database} (h : db.CtorState) {p : Program}
-    (hdecl : p.CtorDecls) (hlegal : p.SetLegal db.sig)
-    (hv : runProgram db p = some db') : ProgramStep db p db' := by
-  induction p generalizing db with
-  | nil => exact (Option.some.injEq .. ▸ hv : db = db') ▸ .nil
-  | cons c cs ih =>
-    cases hc : stepCmd db c with
-    | none => simp [hc] at hv
-    | some db₁ =>
-      simp only [runProgram_cons, hc, Option.bind_some] at hv
-      exact .cons (CmdStep.of_stepCmd h hc)
-        (ih (stepCmd_ctorState h (hdecl c (by simp)) hlegal.1 hc)
-          (fun c' hc' => hdecl c' (List.mem_cons_of_mem c hc'))
-          (by rw [stepCmd_sig hc]; exact hlegal.2) hv)
-
-/-- The bridge from the initial state, where every side condition is discharged by
-`Database.CtorState.empty`. -/
-theorem run_programStep {p : Program} {D : Database} (hdecl : p.CtorDecls)
-    (hlegal : p.SetLegal Database.empty.sig) (h : run p = some D) :
-    ProgramStep Database.empty p D :=
-  ProgramStep.of_runProgram Database.CtorState.empty hdecl hlegal h
-
-
 /-! ### The interpreter
 
-`Impl/Merge.lean` runs the M9 semantics. The refinement is weaker than M10's on purpose:
-the spec admits several results, so the interpreter's is one of them rather than *the*
-one. -/
-/-- **The M9 refinement: reachability, not equality.**
-
-`exec_toDatabase` says the constructor interpreter computes exactly `run p`. Here the
-spec is a relation, so the statement is that the interpreter lands on a state the spec
-reaches. Nothing stronger is available, and nothing stronger is wanted — pinning a
-single result would mean pinning the merge order, which is the thing `MERGE.md` argues
-the semantics should decline to pin.
+`Impl/Merge.lean` runs the M9 semantics. The refinement is weaker than `exec`'s on
+purpose: with a `:merge` function in play the spec admits several results, so the
+interpreter's is one of them rather than *the* one. -/
+/-- **The constructor interpreter lands where the specification does.** `exec_programStep`
+proves the two directions at once; this is the half the merge interpreter below cannot
+have, kept under its own name because that contrast is the point.
 
 **The two hypotheses**, neither removable:
 
@@ -1474,23 +1174,15 @@ the semantics should decline to pin.
   how the `MergeClosure` phase of `CmdStep.action` gets discharged
   (`MergeClosure.eq_of_allConstructors`).
 * `Program.SetLegal` keeps `Database.CtorRows`, which with the above is `mcong_iff_cong`,
-  which is the only route from `ValidSubst` to `MValidSubst` — so it is what makes a
-  *round* agree. It is not decoration:
+  which is the only route from what `closureF` computes to what `MValidSubst` asks — so it
+  is what makes a *round* agree. It is not decoration:
   `Proofs/Counterexamples.lean`'s `execM_reachable_needs_setLegal` is a program satisfying
-  the other whose `exec` state no `ProgramStep` reaches.
-
-**The primitive-free hypothesis is gone**, and with it the whole action bridge. It was
-there because
-`Expr.eval` built the term `ordering-min 1 2` where `MEval.prim` computed `1`; with one
-evaluator resolving primitives itself the two readings of an action are the same call, so
-`CmdStep.action` and `RuleResults` need nothing proved about them. What is left needing
-proof is e-matching, where `MCong` really does replace `Cong`, and the round above it. -/
+  the other whose `exec` state no `ProgramStep` reaches. -/
 theorem execM_reachable {p : Program} {d : FDatabase} (hdecl : p.CtorDecls)
     (hlegal : p.SetLegal Database.empty.sig) (h : exec p = some d) :
     ProgramStep FDatabase.empty.toDatabase p d.toDatabase := by
   rw [FDatabase.toDatabase_empty]
-  refine run_programStep hdecl hlegal ?_
-  rw [← exec_toDatabase, h, Option.map_some]
+  exact (exec_programStep hdecl hlegal).mp (by rw [h, Option.map_some])
 
 /-! ### The contract for `execM`: containment, not reachability
 
@@ -1784,8 +1476,9 @@ it: it is a *consequence* of the conclusion (`MValidSubst.validEnv`), so this is
 strongest statement whose conclusion can hold, and it is the hypothesis
 `Proofs/Interp.lean`'s `patternHolds_iff` already carries.
 
-`Interp.lean`'s `patternHolds_iff`, forward direction, with `Expr.eval` for `Expr.eval`
-and `MValidSubst` for `ValidSubst`. Three gaps to bridge beyond that proof:
+`Interp.lean`'s `patternHolds_iff`, forward direction, under `Inv` instead of
+`CtorTerms`/`CtorRows` — which is what lets it hold once a `:merge` function is declared,
+where `CtorRows` fails. Three gaps to bridge beyond that proof:
 
 * `congrKeys` computes `Cong`, while `MValidSubst` wants `MCong` — `Cong.toMCong'` and
   `CongList.toMCongList'` close that, and their `CtorTerms`/`RowsComplete` hypotheses are
@@ -2575,7 +2268,8 @@ theorem mergeRound_confined {d : FDatabase} :
 /-- **On the constructor fragment nothing is deleted, because nothing merges.** With every
 function a constructor no row belongs to a `.merge` function, `hasMergeRow` is false and
 the pass is the identity — which is why `Impl/Interp.lean`'s `exec` and the equality
-`exec_toDatabase` are untouched by any of this. -/
+`exec_programStep` are untouched by any of this, and, via `execM_eq_exec` below, why the
+differential test constrains them. -/
 theorem hasMergeRow_eq_false {d : FDatabase} (hsig : d.sig.AllConstructors) :
     d.hasMergeRow = false := by
   simp only [FDatabase.hasMergeRow, List.any_eq_false]
@@ -2595,6 +2289,61 @@ theorem mergeSaturateF_eq_self {d : FDatabase} (h : d.hasMergeRow = false) {n : 
   cases n <;> simp [FDatabase.mergeSaturateF, hs]
 
 end FDatabase
+
+/-! ### The two interpreters agree on the constructor fragment
+
+`Program.expectedSizes` — what the differential test runs — calls `execM`, and
+`exec_programStep` is stated about `exec`. Without an equation between them the chain from
+a passing difftest case back to `Spec/` has a hole in it. `execCmdM` differs from
+`execCmd` only by a `mergeSaturateF` after each command, and with no `:merge` function
+declared there is no merge row for a pass to fire on, so that call is the identity. -/
+/-- The signature a command leaves, for `Impl/Interp.lean`'s interpreter. This is what
+carries `Signature.AllConstructors` along a run. -/
+theorem execCmd_sig {d d' : FDatabase} {c : Cmd} (hs : execCmd d c = some d') :
+    d'.sig = c.sigBind d.sig := by
+  cases c with
+  | action a => exact FDatabase.execAction_sig hs
+  | rule r => simp only [execCmd, Option.some.injEq] at hs; exact hs ▸ rfl
+  | run => simp only [execCmd, Option.some.injEq] at hs; exact hs ▸ sig_execRunRules
+  | decl f dc => simp only [execCmd, Option.some.injEq] at hs; exact hs ▸ rfl
+
+theorem execProgramM_eq_execProgram {d : FDatabase} (hsig : d.sig.AllConstructors)
+    {p : Program} (hdecl : p.CtorDecls) : d.execProgramM p = execProgram d p := by
+  induction p generalizing d with
+  | nil => rfl
+  | cons c cs ih =>
+    have hc : d.execCmdM c = execCmd d c := by
+      cases c with
+      | action a =>
+        show (execAction d a).bind (FDatabase.mergeSaturateF mergeFuel) = execAction d a
+        cases hv : execAction d a with
+        | none => rfl
+        | some e =>
+          rw [Option.bind_some, FDatabase.mergeSaturateF_eq_self
+            (FDatabase.hasMergeRow_eq_false (by rw [FDatabase.execAction_sig hv]; exact hsig))]
+      | rule r => rfl
+      | run =>
+        show FDatabase.mergeSaturateF mergeFuel (execRunRules d) = some (execRunRules d)
+        exact FDatabase.mergeSaturateF_eq_self
+          (FDatabase.hasMergeRow_eq_false (by rw [sig_execRunRules]; exact hsig))
+      | decl f dc => rfl
+    show (d.execCmdM c).bind (fun d' => d'.execProgramM cs)
+      = (execCmd d c).bind fun d' => execProgram d' cs
+    rw [hc]
+    cases hv : execCmd d c with
+    | none => rfl
+    | some e =>
+      rw [Option.bind_some, Option.bind_some]
+      exact ih (by rw [execCmd_sig hv]; exact hsig.sigBind (hdecl c (by simp)))
+        (fun c' hc' => hdecl c' (List.mem_cons_of_mem c hc'))
+
+/-- **`execM` is `exec` on the constructor fragment.** This is the link that makes a
+differential-test case say something about `Spec/`: `Program.expectedSizes` runs `execM`,
+this carries it to `exec`, and `exec_programStep` carries that to `ProgramStep`. -/
+theorem execM_eq_exec {p : Program} (hdecl : p.CtorDecls) : execM p = exec p :=
+  execProgramM_eq_execProgram (d := FDatabase.empty)
+    (by intro f; simp [Signature.mergeOf, FDatabase.empty]) hdecl
+
 
 /-- **Row counts do not observe the merge phase.**
 
@@ -4440,7 +4189,7 @@ is stated so that a front end which declares before use and type-checks its merg
 satisfies it.
 
 See the section header above for why the contract is `Database.Recorded` rather than the
-equality `exec_toDatabase` enjoys, and `Spec/Merge.lean` for why it is that rather than
+equality `exec_programStep` enjoys, and `Spec/Merge.lean` for why it is that rather than
 `Database.Contained`. -/
 theorem execM_contained {p : Program} (hp : FDatabase.empty.ProgramLegal p)
     {d : FDatabase} (h : execM p = some d) :

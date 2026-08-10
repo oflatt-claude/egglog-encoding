@@ -241,7 +241,7 @@ theorem Query.freeVars_subset {q : Query} {σ : Env} {p : Pattern} (hp : p ∈ q
 
 /-- Restricting a query substitution to one pattern gives a substitution with exactly that
 pattern's free variables as its domain, and it agrees with the original there. These are
-the two facts `patternHolds_iff` and `ValidSubst.of_agree` need. -/
+the two facts `patternHolds_iff` and `MValidSubst.of_agree` need. -/
 theorem Env.dom_canon_of_subset {vars vars' : List Var} {σ : Env} (hsub : vars ⊆ vars')
     (hdom : Env.dom σ = vars') : Env.dom (Env.canon vars σ) = vars :=
   Env.dom_canon fun v hv =>
@@ -292,9 +292,26 @@ theorem congrTuple_addTerms_iff {d : FDatabase} (hw : d.WF) {ts us xs ys : List 
   rw [congrTuple_iff ((hw.addTerms ts).addTerms us), toDatabase_addTerms, toDatabase_addTerms]
 
 end FDatabase
-theorem patternHolds_iff {d : FDatabase} (hw : d.WF) {p : Pattern} {σ : Env}
+/-- **The e-matcher is exactly the specification's matching relation.**
+
+`patternHolds` decides matching through `closureF`, which computes `Cong`; the
+specification compares up to `MCong`. `mcong_iff_cong` is what closes the gap, and it is
+read at the *extended* databases the witness premises ask over — which is why `CtorTerms`
+and `CtorRows` are hypotheses here where `d.WF` alone used to do. Both are carried along a
+run by `Database.CtorState`.
+
+`hv` is not a restriction: it is a consequence of the conclusion
+(`MValidSubst.validEnv`), and requiring it is what lets the `false` cases be discharged
+without inverting. -/
+theorem patternHolds_iff {d : FDatabase} (hw : d.WF) (hterms : d.toDatabase.CtorTerms)
+    (hrows : d.toDatabase.CtorRows) {p : Pattern} {σ : Env}
     (hv : ValidEnv (p.freeVars d.env) d.toDatabase σ) :
-    patternHolds d p σ = true ↔ ValidSubst d.toDatabase p σ := by
+    patternHolds d p σ = true ↔ MValidSubst d.toDatabase p σ := by
+  have henv : ∀ b ∈ d.env ++ σ, Term.CtorTerm d.sig b.2 := by
+    intro b hb
+    rcases List.mem_append.mp hb with hb' | hb'
+    · exact Database.env_ctorTerm hw hterms b hb'
+    · exact Database.ctorTerm_of_mem hw hterms (hv.2 b hb')
   cases p with
   | values vs f as =>
     cases hu : Expr.evalList d.sig vs (d.env ++ σ) with
@@ -315,8 +332,16 @@ theorem patternHolds_iff {d : FDatabase} (hw : d.WF) {p : Pattern} {σ : Env}
           rw [FDatabase.toDatabase_env, FDatabase.toDatabase_sig, ht] at ht'
           simp at ht'
       | some ts =>
+        have hterms' : ((d.toDatabase.addTerms ts).addTerms us).CtorTerms :=
+          (hterms.addTerms (Expr.evalList_ctorTerm henv ht)).addTerms
+            (by simpa using Expr.evalList_ctorTerm henv hu)
+        have hrows' : ((d.toDatabase.addTerms ts).addTerms us).CtorRows :=
+          (hrows.addTerms ts).addTerms us
+        have hcl : ∀ xs ys, CongList ((d.toDatabase.addTerms ts).addTerms us) xs ys ↔
+            MCongList ((d.toDatabase.addTerms ts).addTerms us) xs ys :=
+          fun _ _ => ⟨CongList.toMCongList hterms' hrows', MCongList.toCongList hrows'⟩
         simp only [patternHolds, hu, ht, List.any_eq_true, Bool.and_eq_true,
-          decide_eq_true_eq, FDatabase.congrTuple_addTerms_iff hw]
+          decide_eq_true_eq, FDatabase.congrTuple_addTerms_iff hw, hcl]
         constructor
         · rintro ⟨r, hr, ⟨hfn, hkey⟩, hval⟩
           subst hfn
@@ -339,16 +364,19 @@ theorem patternHolds_iff {d : FDatabase} (hw : d.WF) {p : Pattern} {σ : Env}
         rw [FDatabase.toDatabase_env, FDatabase.toDatabase_sig, hev] at he
         simp at he
     | some t =>
+      have hmc : ∀ a b, Cong (d.toDatabase.addTerm t) a b ↔ MCong (d.toDatabase.addTerm t) a b :=
+        fun _ _ => (mcong_iff_cong (hterms.addTerm (Expr.eval_ctorTerm henv hev))
+          (hrows.addTerm t)).symm
       simp only [patternHolds, hev, decide_eq_true_eq]
       constructor
       · rintro ⟨w, hwm, hcl⟩
-        exact .expr hv hwm hev ((FDatabase.mem_closureF_addTerm hw).mp hcl)
+        exact .expr hv hwm hev ((hmc _ _).mp ((FDatabase.mem_closureF_addTerm hw).mp hcl))
       · intro h
         cases h with
         | expr _ hwm he hc =>
           rw [FDatabase.toDatabase_env, FDatabase.toDatabase_sig, hev] at he
           cases he
-          exact ⟨_, hwm, (FDatabase.mem_closureF_addTerm hw).mpr hc⟩
+          exact ⟨_, hwm, (FDatabase.mem_closureF_addTerm hw).mpr ((hmc _ _).mpr hc)⟩
   | eq e₁ e₂ =>
     cases hev₁ : e₁.eval d.sig (d.env ++ σ) with
     | none =>
@@ -368,11 +396,18 @@ theorem patternHolds_iff {d : FDatabase} (hw : d.WF) {p : Pattern} {σ : Env}
           rw [FDatabase.toDatabase_env, FDatabase.toDatabase_sig, hev₂] at he₂
           simp at he₂
       | some t₂ =>
+        have hmc : ∀ a b, Cong ((d.toDatabase.addTerm t₁).addTerm t₂) a b ↔
+            MCong ((d.toDatabase.addTerm t₁).addTerm t₂) a b :=
+          fun _ _ => (mcong_iff_cong
+            ((hterms.addTerm (Expr.eval_ctorTerm henv hev₁)).addTerm
+              (Expr.eval_ctorTerm henv hev₂))
+            ((hrows.addTerm t₁).addTerm t₂)).symm
         simp only [patternHolds, hev₁, hev₂, Bool.and_eq_true, decide_eq_true_eq]
         constructor
         · rintro ⟨heq, w, hwm, hcl⟩
-          exact .eq hv hwm hev₁ hev₂ ((FDatabase.mem_closureF_addTerm₂ hw).mp hcl)
-            ((FDatabase.mem_closureF_addTerm₂ hw).mp heq)
+          exact .eq hv hwm hev₁ hev₂
+            ((hmc _ _).mp ((FDatabase.mem_closureF_addTerm₂ hw).mp hcl))
+            ((hmc _ _).mp ((FDatabase.mem_closureF_addTerm₂ hw).mp heq))
         · intro h
           cases h with
           | eq _ hwm he₁ he₂ hcw hceq =>
@@ -380,8 +415,8 @@ theorem patternHolds_iff {d : FDatabase} (hw : d.WF) {p : Pattern} {σ : Env}
             rw [FDatabase.toDatabase_env, FDatabase.toDatabase_sig, hev₂] at he₂
             cases he₁
             cases he₂
-            exact ⟨(FDatabase.mem_closureF_addTerm₂ hw).mpr hceq,
-              _, hwm, (FDatabase.mem_closureF_addTerm₂ hw).mpr hcw⟩
+            exact ⟨(FDatabase.mem_closureF_addTerm₂ hw).mpr ((hmc _ _).mpr hceq),
+              _, hwm, (FDatabase.mem_closureF_addTerm₂ hw).mpr ((hmc _ _).mpr hcw)⟩
 
 /-- Restricting a query substitution to one pattern gives a `ValidEnv` for that pattern.
 This is the hypothesis `patternHolds_iff` needs, discharged from what `assignments`
@@ -396,21 +431,22 @@ theorem validEnv_canon {d : FDatabase} {q : Query} {σ : Env} {p : Pattern} (hp 
 /-- The enumerator produces exactly the substitutions that assign the query's free
 variables to terms the database holds and satisfy every pattern under restriction.
 
-What is left between this and `ValidQuerySubst` is repackaging: the spec takes one
+What is left between this and `MValidQuerySubst` is repackaging: the spec takes one
 substitution per pattern and joins them with `Env.UnionAll`, where this restricts a single
 substitution. `Env.agree_canon` is what makes the two interchangeable. -/
-theorem mem_matchQuery_iff {d : FDatabase} (hw : d.WF) {q : Query} {σ : Env} :
+theorem mem_matchQuery_iff {d : FDatabase} (hw : d.WF) (hterms : d.toDatabase.CtorTerms)
+    (hrows : d.toDatabase.CtorRows) {q : Query} {σ : Env} :
     σ ∈ matchQuery d q ↔
       Env.dom σ = Query.freeVars q d.env ∧ (∀ b ∈ σ, b.2 ∈ d.terms) ∧
-        ∀ p ∈ q, ValidSubst d.toDatabase p (Env.canon (p.freeVars d.env) σ) := by
+        ∀ p ∈ q, MValidSubst d.toDatabase p (Env.canon (p.freeVars d.env) σ) := by
   simp only [matchQuery, List.mem_filter, mem_assignments, List.all_eq_true]
   constructor
   · rintro ⟨⟨hdom, hval⟩, hall⟩
     exact ⟨hdom, hval, fun p hp =>
-      (patternHolds_iff hw (validEnv_canon hp hdom hval)).mp (hall p hp)⟩
+      (patternHolds_iff hw hterms hrows (validEnv_canon hp hdom hval)).mp (hall p hp)⟩
   · rintro ⟨hdom, hval, hall⟩
     exact ⟨⟨hdom, hval⟩, fun p hp =>
-      (patternHolds_iff hw (validEnv_canon hp hdom hval)).mpr (hall p hp)⟩
+      (patternHolds_iff hw hterms hrows (validEnv_canon hp hdom hval)).mpr (hall p hp)⟩
 
 /-- A restricted substitution refines the one it came from. -/
 theorem Env.refines_canon {vars : List Var} {σ : Env} : Env.Refines (Env.canon vars σ) σ :=
@@ -421,10 +457,11 @@ theorem Env.refines_canon {vars : List Var} {σ : Env} : Env.Refines (Env.canon 
 The two differ in shape only: the spec joins one substitution per pattern with
 `Env.UnionAll`, and the enumerator restricts a single one. `Env.exists_unionAll` builds the
 join out of the restrictions, which are pairwise compatible because they all refine `σ`. -/
-theorem validQuerySubst_of_mem_matchQuery {d : FDatabase} (hw : d.WF) {q : Query} {σ : Env}
+theorem mvalidQuerySubst_of_mem_matchQuery {d : FDatabase} (hw : d.WF)
+    (hterms : d.toDatabase.CtorTerms) (hrows : d.toDatabase.CtorRows) {q : Query} {σ : Env}
     (h : σ ∈ matchQuery d q) :
-    ∃ τ, ValidQuerySubst d.toDatabase q τ ∧ Env.Agree τ σ := by
-  obtain ⟨hdom, hval, hall⟩ := (mem_matchQuery_iff hw).mp h
+    ∃ τ, MValidQuerySubst d.toDatabase q τ ∧ Env.Agree τ σ := by
+  obtain ⟨hdom, hval, hall⟩ := (mem_matchQuery_iff hw hterms hrows).mp h
   obtain ⟨τ, hu, hr⟩ := Env.exists_unionAll (σ := σ)
     (q.map fun p => Env.canon (p.freeVars d.env) σ) (by
       intro ρ hρ
@@ -457,8 +494,9 @@ theorem Env.canon_canon {vars vars' : List Var} {σ : Env} (hsub : vars ⊆ vars
 /-- Conversely, every substitution the spec admits has a representative in the enumerator's
 output: restricting it to the query's free variables puts it in the canonical form
 `assignments` produces, and no lookup can tell the two apart. -/
-theorem mem_matchQuery_of_validQuerySubst {d : FDatabase} (hw : d.WF) {q : Query} {τ : Env}
-    (h : ValidQuerySubst d.toDatabase q τ) :
+theorem mem_matchQuery_of_mvalidQuerySubst {d : FDatabase} (hw : d.WF)
+    (hterms : d.toDatabase.CtorTerms) (hrows : d.toDatabase.CtorRows) {q : Query} {τ : Env}
+    (h : MValidQuerySubst d.toDatabase q τ) :
     Env.canon (Query.freeVars q d.env) τ ∈ matchQuery d q ∧
       Env.Agree τ (Env.canon (Query.freeVars q d.env) τ) := by
   have hmd : ∀ v, v ∈ Env.dom τ ↔ v ∈ Query.freeVars q d.env := fun v => by
@@ -470,7 +508,7 @@ theorem mem_matchQuery_of_validQuerySubst {d : FDatabase} (hw : d.WF) {q : Query
   have hag : Env.Agree τ (Env.canon (Query.freeVars q d.env) τ) :=
     (Env.agree_of_refines Env.refines_canon (fun v hv => by
       rw [hdom]; exact (hmd v).mp hv)).symm
-  refine ⟨(mem_matchQuery_iff hw).mpr ⟨hdom, ?_, ?_⟩, hag⟩
+  refine ⟨(mem_matchQuery_iff hw hterms hrows).mpr ⟨hdom, ?_, ?_⟩, hag⟩
   · exact fun b hb => h.mem_terms b (Env.mem_of_lookup (Env.mem_canon hb).2)
   · intro p hp
     obtain ⟨σs, hall, hu⟩ := h
@@ -497,7 +535,7 @@ theorem mem_matchQuery_of_validQuerySubst {d : FDatabase} (hw : d.WF) {q : Query
 
 /-! ### Refinement: actions
 
-The interpreter's actions denote the spec's. These are the pieces the `runRules` refinement
+The interpreter's actions denote the spec's. These are the pieces the `RunRules` refinement
 will be threaded through; what remains is the e-matching enumerator and the fold. -/
 theorem execAction_toDatabase {d : FDatabase} {a : Action} :
     (execAction d a).map FDatabase.toDatabase = evalAction d.toDatabase a := by
@@ -694,24 +732,29 @@ theorem fired_toDatabase {d : FDatabase} {r : Rule} {σ : Env} {d' : FDatabase}
 
 The two enumerate different substitutions — the interpreter its canonical ones, the spec
 every `Env.UnionAll` decomposition — and `evalLocalActions_agree` is what makes them
-contribute the same databases. -/
-theorem execRunRules_toDatabase {d : FDatabase} (hw : d.WF) :
-    (execRunRules d).toDatabase = runRules d.toDatabase := by
+contribute the same databases.
+
+This is `RunRules`, the rule-firing half of a round; the merge phase is empty here because
+`exec` runs the constructor fragment, where `MergeStep` never fires
+(`MergeStep.not_of_allConstructors`). -/
+theorem execRunRules_RunRules {d : FDatabase} (hw : d.WF) (hterms : d.toDatabase.CtorTerms)
+    (hrows : d.toDatabase.CtorRows) :
+    (execRunRules d).toDatabase = RunRules d.toDatabase := by
   refine Database.ext ?_ ?_ ?_ ?_ ?_ ?_
-  · simp [FDatabase.toDatabase, runRules, Database.sUnion]
+  · simp [FDatabase.toDatabase, RunRules, Database.sUnion]
   · ext t
-    simp only [FDatabase.toDatabase, Set.mem_setOf_eq, mem_terms_execRunRules, runRules,
+    simp only [FDatabase.toDatabase, Set.mem_setOf_eq, mem_terms_execRunRules, RunRules,
       Database.sUnion_terms, Set.mem_union, Set.mem_iUnion₂, exists_prop]
     constructor
     · rintro (ht | ⟨r, hr, σ, hσ, d', hf, ht⟩)
       · exact Or.inl ht
-      · obtain ⟨τ, hτ, hag⟩ := validQuerySubst_of_mem_matchQuery hw hσ
+      · obtain ⟨τ, hτ, hag⟩ := mvalidQuerySubst_of_mem_matchQuery hw hterms hrows hσ
         refine Or.inr ⟨d'.toDatabase, ⟨r, hr, τ, hτ, ?_⟩, ht⟩
         rw [evalLocalActions_agree r.actions hag]
         exact fired_toDatabase hf
     · rintro (ht | ⟨e, ⟨r, hr, τ, hτ, hev⟩, ht⟩)
       · exact Or.inl ht
-      · obtain ⟨hmem, hag⟩ := mem_matchQuery_of_validQuerySubst hw hτ
+      · obtain ⟨hmem, hag⟩ := mem_matchQuery_of_mvalidQuerySubst hw hterms hrows hτ
         have hev' : evalLocalActions d.toDatabase r.actions
             (Env.canon (Query.freeVars r.query d.env) τ) = some e := by
           rw [← evalLocalActions_agree r.actions hag]; exact hev
@@ -721,18 +764,18 @@ theorem execRunRules_toDatabase {d : FDatabase} (hw : d.WF) :
         obtain ⟨d', hd', rfl⟩ := Option.map_eq_some_iff.mp hmap
         exact Or.inr ⟨r, hr, _, hmem, d', hd', ht⟩
   · ext q
-    simp only [FDatabase.toDatabase, Set.mem_setOf_eq, mem_rows_execRunRules, runRules,
+    simp only [FDatabase.toDatabase, Set.mem_setOf_eq, mem_rows_execRunRules, RunRules,
       Database.sUnion_rows, Set.mem_union, Set.mem_iUnion₂, exists_prop]
     constructor
     · rintro (hq | ⟨r, hr, σ, hσ, d', hf, hq⟩)
       · exact Or.inl hq
-      · obtain ⟨τ, hτ, hag⟩ := validQuerySubst_of_mem_matchQuery hw hσ
+      · obtain ⟨τ, hτ, hag⟩ := mvalidQuerySubst_of_mem_matchQuery hw hterms hrows hσ
         refine Or.inr ⟨d'.toDatabase, ⟨r, hr, τ, hτ, ?_⟩, hq⟩
         rw [evalLocalActions_agree r.actions hag]
         exact fired_toDatabase hf
     · rintro (hq | ⟨e, ⟨r, hr, τ, hτ, hev⟩, hq⟩)
       · exact Or.inl hq
-      · obtain ⟨hmem, hag⟩ := mem_matchQuery_of_validQuerySubst hw hτ
+      · obtain ⟨hmem, hag⟩ := mem_matchQuery_of_mvalidQuerySubst hw hterms hrows hτ
         have hev' : evalLocalActions d.toDatabase r.actions
             (Env.canon (Query.freeVars r.query d.env) τ) = some e := by
           rw [← evalLocalActions_agree r.actions hag]; exact hev
@@ -741,19 +784,19 @@ theorem execRunRules_toDatabase {d : FDatabase} (hw : d.WF) :
         rw [hev'] at hmap
         obtain ⟨d', hd', rfl⟩ := Option.map_eq_some_iff.mp hmap
         exact Or.inr ⟨r, hr, _, hmem, d', hd', hq⟩
-  · ext p
-    simp only [FDatabase.toDatabase, Set.mem_setOf_eq, mem_eqs_execRunRules, runRules,
+  · ext pr
+    simp only [FDatabase.toDatabase, Set.mem_setOf_eq, mem_eqs_execRunRules, RunRules,
       Database.sUnion_eqs, Set.mem_union, Set.mem_iUnion₂, exists_prop]
     constructor
     · rintro (hp | ⟨r, hr, σ, hσ, d', hf, hp⟩)
       · exact Or.inl hp
-      · obtain ⟨τ, hτ, hag⟩ := validQuerySubst_of_mem_matchQuery hw hσ
+      · obtain ⟨τ, hτ, hag⟩ := mvalidQuerySubst_of_mem_matchQuery hw hterms hrows hσ
         refine Or.inr ⟨d'.toDatabase, ⟨r, hr, τ, hτ, ?_⟩, hp⟩
         rw [evalLocalActions_agree r.actions hag]
         exact fired_toDatabase hf
     · rintro (hp | ⟨e, ⟨r, hr, τ, hτ, hev⟩, hp⟩)
       · exact Or.inl hp
-      · obtain ⟨hmem, hag⟩ := mem_matchQuery_of_validQuerySubst hw hτ
+      · obtain ⟨hmem, hag⟩ := mem_matchQuery_of_mvalidQuerySubst hw hterms hrows hτ
         have hev' : evalLocalActions d.toDatabase r.actions
             (Env.canon (Query.freeVars r.query d.env) τ) = some e := by
           rw [← evalLocalActions_agree r.actions hag]; exact hev
@@ -762,54 +805,115 @@ theorem execRunRules_toDatabase {d : FDatabase} (hw : d.WF) :
         rw [hev'] at hmap
         obtain ⟨d', hd', rfl⟩ := Option.map_eq_some_iff.mp hmap
         exact Or.inr ⟨r, hr, _, hmem, d', hd', hp⟩
-  · simp [FDatabase.toDatabase, runRules, Database.sUnion]
-  · simp [FDatabase.toDatabase, runRules, Database.sUnion]
+  · simp [FDatabase.toDatabase, RunRules, Database.sUnion]
+  · simp [FDatabase.toDatabase, RunRules, Database.sUnion]
 
 theorem FDatabase.empty_wf : FDatabase.empty.WF := by
   rw [FDatabase.WF, toDatabase_empty]; exact Database.WF.empty
 
-theorem execCmd_toDatabase {d : FDatabase} (hw : d.WF) {c : Cmd} :
-    (execCmd d c).map FDatabase.toDatabase = stepCmd d.toDatabase c := by
+theorem FDatabase.toDatabase_consRule {d : FDatabase} {r : Rule} :
+    ({ d with rules := r :: d.rules } : FDatabase).toDatabase
+      = { d.toDatabase with rules := insert r d.toDatabase.rules } := by
+  refine Database.ext rfl rfl rfl rfl rfl ?_
+  ext r'
+  simp [FDatabase.toDatabase]
+
+/-- **One command, both ways.** The interpreter's step is exactly the specification's,
+not merely one the specification permits.
+
+`CmdStep` is a relation because the merge phase is one, so an `if and only if` is more
+than bookkeeping: `←` says the interpreter reaches *every* state the specification allows.
+It holds because on the constructor fragment there is no merge phase to choose in —
+`MergeClosure.eq_of_allConstructors` for `action`, `RunStep.eq_runRules` for `run`. -/
+theorem execCmd_cmdStep {d : FDatabase} (h : d.toDatabase.CtorState) {c : Cmd}
+    {D : Database} :
+    (execCmd d c).map FDatabase.toDatabase = some D ↔ CmdStep d.toDatabase c D := by
   cases c with
-  | action a => exact execAction_toDatabase
+  | action a =>
+    rw [show execCmd d (.action a) = execAction d a from rfl, execAction_toDatabase]
+    constructor
+    · intro ha
+      exact .action ha Relation.ReflTransGen.refl
+    · intro hstep
+      cases hstep with
+      | action ha hm =>
+        have hd := hm.eq_of_allConstructors (by rw [evalAction_sig ha]; exact h.sig)
+        subst hd
+        exact ha
   | rule r =>
-    simp only [execCmd, stepCmd, Option.map_some, Option.some.injEq]
-    refine Database.ext rfl rfl rfl rfl rfl ?_
-    ext r'
-    simp [FDatabase.toDatabase]
-  | run => simp only [execCmd, stepCmd, Option.map_some, execRunRules_toDatabase hw]
-  | decl f dc => simp [execCmd, stepCmd, FDatabase.toDatabase]
+    rw [show execCmd d (.rule r) = some { d with rules := r :: d.rules } from rfl,
+      Option.map_some, Option.some.injEq, FDatabase.toDatabase_consRule]
+    exact ⟨fun hd => hd ▸ .rule, fun hs => by cases hs with | rule => rfl⟩
+  | run =>
+    rw [show execCmd d .run = some (execRunRules d) from rfl, Option.map_some,
+      Option.some.injEq, execRunRules_RunRules h.wf h.terms h.rows]
+    constructor
+    · rintro rfl
+      exact .run Relation.ReflTransGen.refl
+    · intro hs
+      cases hs with | run hr => exact (hr.eq_runRules h.sig).symm
+  | decl f dc =>
+    rw [show execCmd d (.decl f dc)
+        = some { d with sig := Function.update d.sig f (some dc) } from rfl,
+      Option.map_some, Option.some.injEq,
+      show ({ d with sig := Function.update d.sig f (some dc) } : FDatabase).toDatabase
+        = { d.toDatabase with sig := Function.update d.toDatabase.sig f (some dc) } from rfl]
+    exact ⟨fun hd => hd ▸ .decl, fun hs => by cases hs with | decl => rfl⟩
 
-/-- Well-formedness of the interpreter's state comes free from the refinement: it is the
-spec's, and `stepCmd_wf` preserves that. -/
-theorem execCmd_wf {d d' : FDatabase} (hw : d.WF) {c : Cmd} (h : execCmd d c = some d') :
-    d'.WF := by
-  have hc := execCmd_toDatabase hw (c := c)
-  rw [h, Option.map_some] at hc
-  exact stepCmd_wf hw hc.symm
-
-theorem execProgram_toDatabase {d : FDatabase} (hw : d.WF) {p : Program} :
-    (execProgram d p).map FDatabase.toDatabase = runProgram d.toDatabase p := by
-  induction p generalizing d with
-  | nil => rfl
+theorem execProgram_programStep {d : FDatabase} (h : d.toDatabase.CtorState) {p : Program}
+    (hdecl : p.CtorDecls) (hlegal : p.SetLegal d.toDatabase.sig) {D : Database} :
+    (execProgram d p).map FDatabase.toDatabase = some D ↔ ProgramStep d.toDatabase p D := by
+  induction p generalizing d D with
+  | nil =>
+    rw [show execProgram d [] = some d from rfl, Option.map_some, Option.some.injEq]
+    exact ⟨fun hd => hd ▸ .nil, fun hs => hs.nil_inv⟩
   | cons c cs ih =>
-    have hc := execCmd_toDatabase hw (c := c)
-    cases h : execCmd d c with
-    | none =>
-      rw [h, Option.map_none] at hc
-      simp [execProgram, h, ← hc]
-    | some d' =>
-      rw [h, Option.map_some] at hc
-      simp only [execProgram, h, Option.bind_some, runProgram_cons, ← hc, Option.bind_some]
-      exact ih (execCmd_wf hw h)
+    constructor
+    · intro hmap
+      cases hc : execCmd d c with
+      | none =>
+        rw [show execProgram d (c :: cs)
+          = (execCmd d c).bind fun d' => execProgram d' cs from rfl, hc] at hmap
+        simp at hmap
+      | some d₁ =>
+        rw [show execProgram d (c :: cs)
+          = (execCmd d c).bind fun d' => execProgram d' cs from rfl, hc,
+          Option.bind_some] at hmap
+        have hstep : CmdStep d.toDatabase c d₁.toDatabase :=
+          (execCmd_cmdStep h).mp (by rw [hc, Option.map_some])
+        exact .cons hstep ((ih (hstep.ctorState h (hdecl c (by simp)) hlegal.1)
+          (fun c' hc' => hdecl c' (List.mem_cons_of_mem c hc'))
+          (by rw [hstep.sig]; exact hlegal.2)).mp hmap)
+    · intro hs
+      obtain ⟨e, he, hrest⟩ := hs.cons_inv
+      obtain ⟨d₁, hc, hd₁⟩ := Option.map_eq_some_iff.mp ((execCmd_cmdStep h).mpr he)
+      subst hd₁
+      rw [show execProgram d (c :: cs)
+        = (execCmd d c).bind fun d' => execProgram d' cs from rfl, hc, Option.bind_some]
+      exact (ih (he.ctorState h (hdecl c (by simp)) hlegal.1)
+        (fun c' hc' => hdecl c' (List.mem_cons_of_mem c hc'))
+        (by rw [he.sig]; exact hlegal.2)).mpr hrest
 
-/-- **The refinement theorem**: running a program with the interpreter denotes running it
-with the semantics.
+/-- **The refinement theorem**: on the constructor fragment the interpreter computes
+exactly the states the semantics reaches — an `if and only if`, so a `#guard` or a
+differential test constrains `Spec/` in both directions.
+
+`exec` used to have no hypotheses, because it was compared against a *function*. Compared
+against the relation it needs the two that pin the merge phase down to nothing, and
+neither is removable: `Proofs/Counterexamples.lean`'s `execM_reachable_needs_setLegal` is
+a program satisfying `CtorDecls` alone whose `exec` state no `ProgramStep` reaches, and
+`exists_mergeStep_not_ctorRows` is why a `:merge` declaration has to be excluded even
+where no `set` occurs.
 
 Everything the interpreter is tested on — the `#guard` cases in `Examples.lean` and the
 differential test against egglog — therefore says something about the specification. -/
-theorem exec_toDatabase {p : Program} : (exec p).map FDatabase.toDatabase = run p := by
-  rw [exec, run, ← FDatabase.toDatabase_empty]
-  exact execProgram_toDatabase FDatabase.empty_wf
+theorem exec_programStep {p : Program} (hdecl : p.CtorDecls)
+    (hlegal : p.SetLegal Database.empty.sig) {D : Database} :
+    (exec p).map FDatabase.toDatabase = some D ↔ ProgramStep Database.empty p D := by
+  rw [show exec p = execProgram FDatabase.empty p from rfl, ← FDatabase.toDatabase_empty]
+  refine execProgram_programStep ?_ hdecl ?_ <;>
+    rw [FDatabase.toDatabase_empty]
+  · exact Database.CtorState.empty
+  · exact hlegal
 
 end Egglog

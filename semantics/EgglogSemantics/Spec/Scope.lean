@@ -20,8 +20,8 @@ Two things are functions rather than judgments, because neither can fail:
   `Query.bind` is that.
 * A `let` may shadow a variable already in scope, so `Action.bind` just prepends.
 
-The payoff is `run_isSome`: a scoped, evaluable program never gets stuck.
-`runRules` cannot get stuck either way — it drops firings whose actions fail — so
+The payoff is `programStep_isSome`: a scoped, evaluable program never gets stuck.
+`RunRules` cannot get stuck either way — it drops firings whose actions fail — so
 the corresponding statement about rules is
 `evalLocalActions_isSome_of_scoped`: such a rule contributes on every
 substitution its query admits.
@@ -126,13 +126,13 @@ def WellScoped (p : Program) : Prop := Program.Scoped p []
 `Scoped` is not enough for `Expr.eval` to return a term: an application may be a
 *lookup*, which has no evaluation rule at all, or
 a *primitive*, which may be handed operands of the wrong sort. `Evaluable` rules both
-out. `run_isSome` carries it beside `WellScoped` rather than folding it in, so that
+out. `programStep_isSome` carries it beside `WellScoped` rather than folding it in, so that
 "scoped" goes on meaning scope.
 
 Like `SetLegal` below it reads the signature and not the scope, threaded by `Cmd.sigBind`.
 -/
 /-- The signature after a command: only a declaration writes it. `Cmd.bind` for
-signatures, and exactly what `stepCmd`'s `.decl` case does. -/
+signatures, and exactly what `CmdStep`'s `.decl` case does. -/
 def Cmd.sigBind : Cmd → Signature → Signature
   | .decl f d, sig => Function.update sig f (some d)
   | _, sig => sig

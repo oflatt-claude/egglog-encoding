@@ -28,7 +28,7 @@ a Lean model of egglog's proof checker would cost, and is parked with M11.
 One thing worth knowing before reading any of it: `Spec/` is append-only and `Impl/` is
 not. The reference implementation deletes superseded merge rows because egglog does, so the
 contract between them is a **containment**, not an equality — except on the constructor
-fragment, where the merge phase is the identity and `exec_toDatabase` still holds.
+fragment, where the merge phase is the identity and `exec_programStep` still holds.
 
 ## Layout
 
@@ -50,15 +50,20 @@ are inlined rather than pulled out into named lemmas, so nothing in `Spec/` or `
 is there for a proof's sake.
 
 Reading order for `Spec/`: `Syntax` → `Term` → `Database` → `Congruence` → `Eval` →
-`Match` → `Step` → `Scope` → `Merge`. `Impl/`
-has `Closure` and `Interp`, with `Merge` adding M9's lookup evaluator and merge phase.
+`Match` → `Scope` → `Merge`. The semantics is defined **once**, relationally: `Merge`
+holds the matching relation and the step relations, and there is no functional
+duplicate of either. `Impl/` has `Closure` and `Interp`, with `Merge` adding M9's
+lookup evaluator and merge phase.
 
-Each `Proofs/X.lean` is about `Spec/X.lean` or `Impl/X.lean`, with two exceptions worth
+Each `Proofs/X.lean` is about `Spec/X.lean` or `Impl/X.lean`, with three exceptions worth
 knowing about: `Proofs/Counterexamples.lean` and `Proofs/Lattice.lean` hold compiling
 witnesses that particular statements are **false**, and `Encoding/Rebuilt.lean` the same for
 M11's `Rebuilt` hypothesis. All three are `sorry`-free and in the build, so a refuted
-statement cannot quietly come back.
-`Proofs/Interp.lean` holds `exec_toDatabase`, which ties spec and implementation together.
+statement cannot quietly come back. The third is `Proofs/Step.lean`, which is about
+`Spec/Merge.lean`'s step relations and is split from `Proofs/Merge.lean` only because
+`Proofs/Interp.lean` sits between them.
+`Proofs/Interp.lean` holds `exec_programStep`, the biconditional that ties spec and
+implementation together.
 
 ## Building
 

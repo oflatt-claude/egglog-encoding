@@ -391,8 +391,9 @@ commands long.
 (empty) key with different outputs. `f` is declared a **constructor**, so `MCong.fd` —
 which *is* the functional dependency — derives `0 = 1` from the pair. `Cong` has no such
 rule: it relates only what `eqs` asserts and what congruence of applications gives, and
-neither applies to two literals. So the query `((= 0 1))` matches in the specification and
-not in the interpreter, the relational round adds the head's term where the functional
+neither applies to two literals. The interpreter decides matching through `closureF`,
+which computes exactly `Cong`. So the query `((= 0 1))` matches in the specification and
+not in the interpreter, the relational round adds the head's term where the interpreter's
 round adds nothing, and the two rounds differ.
 
 `Database.CtorRows` is exactly the condition that excludes this, `Action.SetLegal` is how
@@ -479,46 +480,8 @@ theorem badDb_mvalid : MValidSubst badDb (.eq (.lit (.int 0)) (.lit (.int 1))) [
     ⟨by simp, by simp⟩ (by simp [badDb_terms]) rfl rfl
     (.refl (by simp [badDb_terms])) badDb_mcong
 
-/-- No substitution matches on the interpreter's side: both operands are literals, so the
-final premise is `CongOn badDb 0 1` whatever `σ` is. -/
-theorem badDb_not_valid (σ : Env) :
-    ¬ ValidSubst badDb (.eq (.lit (.int 0)) (.lit (.int 1))) σ := by
-  intro h
-  cases h with
-  | @eq e₁ e₂ σ w t₁ t₂ hve hw hev₁ hev₂ hcw hct =>
-    simp only [Expr.eval_lit, Option.some.injEq] at hev₁ hev₂
-    subst hev₁
-    subst hev₂
-    exact badDb_not_cong hct
-
 theorem badDb_mvalidQuery : MValidQuerySubst badDb badRule.query [] :=
   ⟨[[]], .cons badDb_mvalid .nil, .single []⟩
-
-theorem badDb_not_validQuery (σ : Env) : ¬ ValidQuerySubst badDb badRule.query σ := by
-  rintro ⟨σs, hall, hu⟩
-  cases hall with
-  | cons hp hrest =>
-    cases hrest with
-    | nil => cases hu with | single => exact badDb_not_valid _ hp
-
-theorem badDb_ruleResults : ruleResults badDb badRule = ∅ := by
-  ext d
-  simp only [ruleResults, Set.mem_setOf_eq, Set.mem_empty_iff_false, iff_false]
-  rintro ⟨σ, hq, -⟩
-  exact badDb_not_validQuery σ hq
-
-/-- The functional round adds nothing: the only rule's query has no match. -/
-theorem badDb_runRules_terms : (runRules badDb).terms = badDb.terms := by
-  have hS : {d | ∃ r ∈ badDb.rules, d ∈ ruleResults badDb r} = ∅ := by
-    ext d
-    simp only [Set.mem_setOf_eq, Set.mem_empty_iff_false, iff_false]
-    rintro ⟨r, hr, hd⟩
-    rw [badDb_mem_rules] at hr
-    subst hr
-    rw [badDb_ruleResults] at hd
-    exact hd
-  rw [runRules, hS]
-  simp
 
 /-- The relational round does add something: `MCong` matches the query, so the head runs
 and `g` appears. -/
@@ -542,28 +505,34 @@ theorem badDb_runRules_mem : Term.app "g" [] ∈ (RunRules badDb).terms := by
   have hmemd : Term.app "g" [] ∈ d.terms := Database.mem_addTerm _ _
   exact Or.inr (Set.mem_biUnion hmemS hmemd)
 
-theorem badDb_runRules_ne : RunRules badDb ≠ runRules badDb := by
-  intro h
-  have hmem : Term.app "g" [] ∈ badDb.terms := by
-    rw [← badDb_runRules_terms, ← h]; exact badDb_runRules_mem
-  rw [badDb_terms] at hmem
-  simp at hmem
+section
+-- `closure` is well-founded recursion, so it is sealed against kernel reduction;
+-- `unseal` lets `decide` run the interpreter's matcher below.
+unseal closure
 
-theorem badProgram_run : run badProgram = some (runRules badDb) := rfl
+/-- **The interpreter's round does not.** Its matcher decides `((= 0 1))` through
+`closureF`, which computes `Cong` and so answers `false` where `MCong` answers `true`.
+Computed rather than proved: `closureF` is what `patternHolds` calls, so running it *is*
+the statement that no substitution matches. -/
+theorem badProgram_exec :
+    ∃ d, exec badProgram = some d ∧ Term.app "g" [] ∉ d.terms :=
+  ⟨_, rfl, by decide⟩
+
+end
 
 theorem badProgram_ctorDecls : badProgram.CtorDecls := by
   intro c hc
   simp only [badProgram, List.mem_cons, List.not_mem_nil, or_false] at hc
   rcases hc with rfl | rfl | rfl | rfl | rfl | rfl <;> trivial
 
-/-- **The state `badProgram` runs to is not one the relation reaches.**
+/-- **No state without `(g)` in it is one the relation reaches.**
 
-The first three commands are forced — `CmdStep.stepCmd_eq` reads each of them back as
-`stepCmd`, using that `MergeClosure` is the identity on a constructor signature — and at
-the fourth `RunStep.eq_runRules` pins the result to `RunRules badDb`, which
-`badDb_runRules_ne` says is not `runRules badDb`. -/
-theorem badProgram_not_programStep :
-    ¬ ProgramStep Database.empty badProgram (runRules badDb) := by
+The first five commands are forced — `CmdStep.det` reads each of them back against the
+step it obviously takes, using that `MergeClosure` is the identity on a constructor
+signature — and at the sixth `RunStep.eq_runRules` pins the result to `RunRules badDb`,
+which `badDb_runRules_mem` says holds `(g)`. -/
+theorem badProgram_not_programStep {D : Database} (hg : Term.app "g" [] ∉ D.terms) :
+    ¬ ProgramStep Database.empty badProgram D := by
   intro h
   simp only [badProgram] at h
   obtain ⟨c₁, g₀, k₀⟩ := h.cons_inv
@@ -575,45 +544,42 @@ theorem badProgram_not_programStep :
   have hempty : Database.empty.sig.AllConstructors := Database.CtorState.empty.sig
   have f₀ : c₁ = { Database.empty with
       sig := Function.update (fun _ => none) "f" (some (ctorDecl 0)) } :=
-    (Option.some.inj (g₀.stepCmd_eq hempty (by simp))).symm
+    g₀.det hempty CmdStep.decl
   subst f₀
   have hsig₁ : Signature.AllConstructors
       (Function.update (fun _ => none) "f" (some (ctorDecl 0))) :=
     hempty.sigBind (c := .decl "f" (ctorDecl 0)) rfl
-  have f₁ : c₂ = { Database.empty with sig := badSig } :=
-    (Option.some.inj (g₁.stepCmd_eq hsig₁ (by simp))).symm
+  have f₁ : c₂ = { Database.empty with sig := badSig } := g₁.det hsig₁ CmdStep.decl
   subst f₁
   have hsig₂ : badSig.AllConstructors := hsig₁.sigBind (c := .decl "g" (ctorDecl 0)) rfl
   have e₀ : d₁ = { Database.empty with sig := badSig }.addRow "f" [] [Term.lit (.int 0)] :=
-    (Option.some.inj (h₀.stepCmd_eq hsig₂ (by simp))).symm
+    h₀.det hsig₂ (CmdStep.action rfl Relation.ReflTransGen.refl)
   subst e₀
   have e₁ : d₂ = ({ Database.empty with sig := badSig }.addRow "f" []
       [Term.lit (.int 0)]).addRow "f" [] [Term.lit (.int 1)] :=
-    (Option.some.inj (h₁.stepCmd_eq hsig₂ (by simp))).symm
+    h₁.det hsig₂ (CmdStep.action rfl Relation.ReflTransGen.refl)
   subst e₁
-  have e₂ : d₃ = badDb :=
-    (Option.some.inj (h₂.stepCmd_eq hsig₂ (by simp))).symm
+  have e₂ : d₃ = badDb := h₂.det hsig₂ CmdStep.rule
   subst e₂
   have e₃ := k₄.nil_inv
   subst e₃
   cases h₃ with
-  | run hrun => exact badDb_runRules_ne (RunStep.eq_runRules badDb_sig hrun).symm
+  | run hrun => exact hg ((RunStep.eq_runRules badDb_sig hrun) ▸ badDb_runRules_mem)
 
 /-- **`execM_reachable`'s `Program.SetLegal` hypothesis is necessary.** There is a program
 satisfying the other one — it declares only constructors — whose `exec` state no
 `ProgramStep` reaches.
 
-`exec_toDatabase` carries `badProgram_run` across to the interpreter, so this refutes the
-theorem in the shape it is stated, not merely the `run` half of it. -/
+Since `exec_programStep` is a biconditional, this refutes both halves of it at once: the
+interpreter's state is not one the relation reaches, and the relation's state is not one
+the interpreter computes. -/
 theorem execM_reachable_needs_setLegal :
     ∃ (p : Program) (d : FDatabase), p.CtorDecls ∧ exec p = some d ∧
       ¬ ProgramStep FDatabase.empty.toDatabase p d.toDatabase := by
-  have hmap : (exec badProgram).map FDatabase.toDatabase = some (runRules badDb) := by
-    rw [exec_toDatabase]; exact badProgram_run
-  obtain ⟨d, hd, hdd⟩ := Option.map_eq_some_iff.mp hmap
+  obtain ⟨d, hd, hg⟩ := badProgram_exec
   refine ⟨badProgram, d, badProgram_ctorDecls, hd, ?_⟩
-  rw [FDatabase.toDatabase_empty, hdd]
-  exact badProgram_not_programStep
+  rw [FDatabase.toDatabase_empty]
+  exact badProgram_not_programStep (by simpa using hg)
 
 /-! ## `CmdStep.mono_recorded` at `.decl`
 

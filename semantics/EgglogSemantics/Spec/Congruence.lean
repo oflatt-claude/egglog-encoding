@@ -7,7 +7,8 @@ import EgglogSemantics.Spec.Database
 `Cong db a b` says `a = b` is derivable in `db`. The closure is an **inductive
 predicate**, not a set of pairs the state carries and repairs to a fixpoint: nothing
 in the semantics needs that set, since the only place congruence is consulted is
-e-matching's side conditions (`ValidSubst`), which ask `Cong` directly. Deriving an
+e-matching's side conditions (`MValidSubst`), which ask for a derivation directly.
+Deriving an
 equality rather than computing one is also what makes a proof term an induction —
 `PLAN.md`, "What a proof value is".
 
@@ -47,12 +48,12 @@ end
 /-- `a = b` holds in `db` once both terms are built.
 
 `Cong`'s `refl` and `congr` are restricted to `db.terms`, so a pair the database does not
-hold cannot be related at all. Adding the two first is what `ValidSubst` does — the
+hold cannot be related at all. Adding the two first is what `MValidSubst` does — the
 pattern instance goes into the database before congruence is consulted — and adding a
 term asserts nothing, so this is a conservative reading of `Cong` rather than a weaker
 relation. On `a b ∈ db.terms` under `Database.WF` the two coincide.
 
-`ValidSubst.eq` is where the semantics needs it. M11 needs it again on the encoded side,
+M11 needs it on the encoded side,
 whose rebuild re-keys view rows to applications the source never built
 (`Encoding/Encode.lean`). -/
 def CongOn (db : Database) (a b : Term) : Prop :=

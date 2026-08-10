@@ -1,13 +1,14 @@
 import EgglogSemantics.Impl.Closure
-import EgglogSemantics.Spec.Step
+import EgglogSemantics.Spec.Match
 
 /-!
 # An executable interpreter
 
-The semantics in `Step.lean` is a function but not a computation: `runRules` unions over
-a set of substitutions carved out by a predicate. This runs the same fragment
-computably, so programs can actually be executed — which is what makes the model
-testable against the Rust (`PLAN.md`, "Differential testing").
+`Spec/Merge.lean`'s `RunRules` is a function but not a computation: it unions over a set
+of substitutions carved out by a predicate. This runs the constructor fragment computably,
+so programs can actually be executed — which is what makes the model testable against the
+Rust (`PLAN.md`, "Differential testing"). `Proofs/Interp.lean`'s `exec_programStep` is the
+equation between the two, in both directions.
 
 `FDatabase`'s components are `List`s, not `Finset`s, for one blunt reason:
 `Finset.toList` is noncomputable, so anything that has to *enumerate* a `Finset` cannot
@@ -18,7 +19,7 @@ The e-matching enumerator differs from the spec in one respect, deliberately. Th
 takes one substitution per pattern and joins them (`Env.UnionAll`); the enumerator
 assigns the *whole query's* free variables at once and then
 restricts to each pattern with `Env.canon`. The two agree up to `Env.Agree`, which by
-`evalLocalActions_agree` is all `runRules` can see.
+`evalLocalActions_agree` is all `RunRules` can see.
 -/
 
 namespace Egglog
@@ -117,11 +118,14 @@ def Env.canon (vars : List Var) (σ : Env) : Env :=
 def Query.freeVars (q : Query) (σ : Env) : List Var :=
   q.foldr (fun p acc => p.freeVars σ ∪ acc) []
 
-/-- `ValidSubst`'s side conditions for one pattern, computed: the pattern's instance
+/-- `MValidSubst`'s side conditions for one pattern, computed: the pattern's instance
 is congruent — in the database extended with it — to a witness the database already
 holds. The witness is a term for `.expr`/`.eq` and a *row* for `.values`, whose key and
 value operands are added the same way, since an operand may denote a term the program
-never built (`Spec/Match.lean`'s `ValidSubst.values`). -/
+never built (`Spec/Merge.lean`'s `MValidSubst.values`).
+
+It compares with `closureF`, which computes `Cong`; `mcong_iff_cong` is what makes that
+the specification's `MCong` on the constructor fragment. -/
 def patternHolds (d : FDatabase) (p : Pattern) (σ : Env) : Bool :=
   match p with
   | .values vs f as =>
@@ -185,19 +189,14 @@ def fireRule (d : FDatabase) (acc : FDatabase) (r : Rule) : FDatabase :=
 /-- One round: every rule on every matching substitution, all read off the pre-state. -/
 def execRunRules (d : FDatabase) : FDatabase := d.rules.foldl (fireRule d) d
 
-/-- `execRunRules` iterated: egglog's `(run n)`. -/
-def execRunRounds : Nat → FDatabase → FDatabase
-  | 0, d => d
-  | n + 1, d => execRunRounds n (execRunRules d)
-
-/-- `stepCmd`, computed. -/
+/-- `CmdStep`, computed. -/
 def execCmd (d : FDatabase) : Cmd → Option FDatabase
   | .action a => execAction d a
   | .rule r => some { d with rules := r :: d.rules }
   | .run => some (execRunRules d)
   | .decl f dc => some { d with sig := Function.update d.sig f (some dc) }
 
-/-- `runProgram`, computed. -/
+/-- `ProgramStep`, computed. -/
 def execProgram (d : FDatabase) : Program → Option FDatabase
   | [] => some d
   | c :: cs => (execCmd d c).bind fun d' => execProgram d' cs

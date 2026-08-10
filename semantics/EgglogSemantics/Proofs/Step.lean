@@ -1,211 +1,107 @@
 import EgglogSemantics.Spec.Merge
 import EgglogSemantics.Spec.Scope
-import EgglogSemantics.Spec.Step
 import EgglogSemantics.Proofs.Match
 
 namespace Egglog
-@[simp] theorem runProgram_nil {db : Database} : runProgram db [] = some db := rfl
+/-! ### Matched substitutions
 
-@[simp] theorem runProgram_cons {db : Database} {c : Cmd} {cs : Program} :
-    runProgram db (c :: cs) = (stepCmd db c).bind fun db' => runProgram db' cs := rfl
+The e-matcher's API, on the one matching relation there is. `ValidEnv` per pattern,
+unioned: `RuleResults.wf` and `RuleResults.ctorTerms` need it, because a firing runs its
+head in the caller's environment extended by the substitution and both invariants ask
+that every value there be a term the database already holds. -/
+namespace MValidSubst
+variable {db : Database} {p : Pattern} {σ : Env}
 
-theorem runProgram_append {db : Database} {p q : Program} :
-    runProgram db (p ++ q) = (runProgram db p).bind fun db' => runProgram db' q := by
-  induction p generalizing db with
-  | nil => rfl
-  | cons c cs ih =>
-    cases hv : stepCmd db c with
-    | none => simp [hv]
-    | some db₁ => simp [hv, ih]
-
-/-! ### Rule results agree with the caller on env and rules
-
-This is what makes `Database.sUnion`'s left bias harmless: the operands `(run)` unions
-all carry the pre-state's environment and rules, so taking them from the left operand
-loses nothing. -/
-theorem ruleResults_env {db d : Database} {r : Rule} (h : d ∈ ruleResults db r) :
-    d.env = db.env :=
-  evalLocalActions_env h.choose_spec.2
-
-theorem ruleResults_rules {db d : Database} {r : Rule} (h : d ∈ ruleResults db r) :
-    d.rules = db.rules :=
-  evalLocalActions_rules h.choose_spec.2
-
-theorem ruleResults_contained {db d : Database} {r : Rule} (h : d ∈ ruleResults db r) :
-    db.Contained d :=
-  evalLocalActions_contained h.choose_spec.2
-
-theorem ruleResults_wf {db d : Database} (hw : db.WF) {r : Rule}
-    (h : d ∈ ruleResults db r) : d.WF :=
-  evalLocalActions_wf hw h.choose_spec.1.mem_terms h.choose_spec.2
-
-/-! ### Steps only add, and preserve well-formedness -/
-@[simp] theorem runRules_env {db : Database} : (runRules db).env = db.env := rfl
-
-@[simp] theorem runRules_rules {db : Database} : (runRules db).rules = db.rules := rfl
-
-theorem runRules_contained (db : Database) : db.Contained (runRules db) :=
-  Database.Contained.sUnion db _
-
-theorem runRules_wf {db : Database} (hw : db.WF) : (runRules db).WF :=
-  hw.sUnion fun _ hd => ruleResults_wf hw hd.choose_spec.2
-
-theorem stepCmd_contained {db db' : Database} {c : Cmd} (h : stepCmd db c = some db') :
-    db.Contained db' := by
-  cases c with
-  | action a => exact evalAction_contained h
-  | rule r =>
-    simp only [stepCmd, Option.some.injEq] at h
-    subst h
-    exact ⟨subset_rfl, subset_rfl, subset_rfl⟩
-  | run =>
-    simp only [stepCmd, Option.some.injEq] at h
-    subst h
-    exact runRules_contained db
-  | decl f d =>
-    simp only [stepCmd, Option.some.injEq] at h
-    subst h
-    exact ⟨subset_rfl, subset_rfl, subset_rfl⟩
-
-theorem stepCmd_wf {db db' : Database} (hw : db.WF) {c : Cmd}
-    (h : stepCmd db c = some db') : db'.WF := by
-  cases c with
-  | action a => exact evalAction_wf hw h
-  | rule r =>
-    simp only [stepCmd, Option.some.injEq] at h
-    exact h ▸ ⟨hw.subtermClosed, hw.eqsInTerms, hw.envInTerms⟩
-  | run =>
-    simp only [stepCmd, Option.some.injEq] at h
-    exact h ▸ runRules_wf hw
-  | decl f d =>
-    simp only [stepCmd, Option.some.injEq] at h
-    exact h ▸ ⟨hw.subtermClosed, hw.eqsInTerms, hw.envInTerms⟩
-
-theorem runProgram_contained {db db' : Database} {p : Program}
-    (h : runProgram db p = some db') : db.Contained db' := by
-  induction p generalizing db with
-  | nil => exact (Option.some.injEq .. ▸ h : db = db') ▸ .refl db
-  | cons c cs ih =>
-    cases hv : stepCmd db c with
-    | none => simp [hv] at h
-    | some db₁ =>
-      simp only [runProgram_cons, hv, Option.bind_some] at h
-      exact (stepCmd_contained hv).trans (ih h)
-
-theorem runProgram_wf {db db' : Database} (hw : db.WF) {p : Program}
-    (h : runProgram db p = some db') : db'.WF := by
-  induction p generalizing db with
-  | nil => exact (Option.some.injEq .. ▸ h : db = db') ▸ hw
-  | cons c cs ih =>
-    cases hv : stepCmd db c with
-    | none => simp [hv] at h
-    | some db₁ =>
-      simp only [runProgram_cons, hv, Option.bind_some] at h
-      exact ih (stepCmd_wf hw hv) h
-
-theorem run_wf {p : Program} {db : Database} (h : run p = some db) : db.WF :=
-  runProgram_wf Database.WF.empty h
-
-@[simp] theorem runRounds_zero {db : Database} : runRounds 0 db = db := rfl
-
-theorem runRounds_succ {n : Nat} {db : Database} :
-    runRounds (n + 1) db = runRounds n (runRules db) := rfl
-
-/-- The other way round: a round can be taken last as well as first. -/
-theorem runRounds_succ' {n : Nat} {db : Database} :
-    runRounds (n + 1) db = runRules (runRounds n db) := by
-  induction n generalizing db with
-  | zero => rfl
-  | succ m ih => rw [runRounds_succ, ih, runRounds_succ]
-
-theorem runRounds_contained (n : Nat) (db : Database) : db.Contained (runRounds n db) := by
-  induction n generalizing db with
-  | zero => exact .refl db
-  | succ n ih => exact (runRules_contained db).trans (ih (runRules db))
-
-theorem runRounds_wf {db : Database} (hw : db.WF) (n : Nat) : (runRounds n db).WF := by
-  induction n generalizing db with
-  | zero => exact hw
-  | succ n ih => exact ih (runRules_wf hw)
-
-@[simp] theorem runRounds_env {n : Nat} {db : Database} : (runRounds n db).env = db.env := by
-  induction n generalizing db with
-  | zero => rfl
-  | succ n ih => rw [runRounds_succ, ih, runRules_env]
-
-@[simp] theorem runRounds_rules {n : Nat} {db : Database} :
-    (runRounds n db).rules = db.rules := by
-  induction n generalizing db with
-  | zero => rfl
-  | succ n ih => rw [runRounds_succ, ih, runRules_rules]
-
-/-- Once saturated, every further round changes nothing. -/
-theorem Saturated.runRounds_eq {db : Database} (h : Saturated db) (n : Nat) :
-    runRounds n db = db := by
-  induction n generalizing db with
-  | zero => rfl
-  | succ n ih => rw [runRounds_succ, h, ih h]
-
-/-- A round that adds nothing means the next round's result is the same database.
-This is the stopping condition a saturating schedule tests for. -/
-theorem Saturated.runRounds_succ_eq {db : Database} {n : Nat}
-    (h : Saturated (runRounds n db)) : runRounds (n + 1) db = runRounds n db := by
-  rw [runRounds_succ', h]
-
-/-! ### `runRules` sees a substitution only up to agreement
-
-An executable enumerator emits one substitution per agreement class, where the spec
-admits the whole class (`ValidEnv` fixes the domain only up to permutation). This is
-what makes those contribute the same databases. -/
-theorem ruleResults_of_agree {db : Database} {r : Rule} {σ σ' : Env} (hag : Env.Agree σ σ')
-    (hσ' : ValidQuerySubst db r.query σ') {d : Database}
-    (hd : evalLocalActions db r.actions σ = some d) : d ∈ ruleResults db r :=
-  ⟨σ', hσ', (evalLocalActions_agree r.actions hag).symm.trans hd⟩
-
-/-! ### Equalities survive -/
-/-- Nothing a program derives is ever retracted: the semantics only adds terms and
-equalities, so `Cong` is monotone along a run. -/
-theorem cong_runProgram {db db' : Database} {p : Program} (h : runProgram db p = some db')
-    {a b : Term} (hc : Cong db a b) : Cong db' a b :=
-  hc.mono (runProgram_contained h)
-
-/-! ### Matched substitutions bind terms the database holds
-
-`ValidEnv` per pattern, unioned. `RuleResults.wf` and `RuleResults.ctorTerms` need it: a
-firing runs its head in the caller's environment extended by the substitution, and both
-invariants ask that every value there be a term the database already holds. -/
 /-- The hypothesis `patternHolds_MValidSubst` adds is a consequence of its conclusion,
 which is why requiring it costs nothing. -/
-theorem MValidSubst.validEnv {db : Database} {p : Pattern} {σ : Env}
-    (h : MValidSubst db p σ) : ValidEnv (p.freeVars db.env) db σ := by
+theorem validEnv (h : MValidSubst db p σ) : ValidEnv (p.freeVars db.env) db σ := by
   cases h with
   | expr hv _ _ _ => exact hv
   | eq hv _ _ _ _ _ => exact hv
   | values hv _ _ _ _ _ => exact hv
 
+theorem mem_terms (h : MValidSubst db p σ) : ∀ b ∈ σ, b.2 ∈ db.terms :=
+  h.validEnv.mem_terms
+
+/-- Appending a matching substitution to the globals cannot fail. -/
+theorem union2_env (h : MValidSubst db p σ) : Env.Union2 db.env σ (db.env ++ σ) :=
+  h.validEnv.union2_env fun _ hv => p.freeVars_lookup_eq_none hv
+
+/-- A matching substitution binds exactly the pattern's free variables. -/
+theorem mem_dom_iff (h : MValidSubst db p σ) {v : Var} :
+    v ∈ Env.dom σ ↔ v ∈ p.freeVars db.env :=
+  h.validEnv.mem_dom_iff
+
+end MValidSubst
+/-- `MValidSubst` transfers along agreement, provided the new substitution has exactly the
+pattern's free variables as its domain.
+
+Agreement alone is not enough, because `ValidEnv` pins the domain — which is precisely why
+an executable enumerator has to canonicalize rather than emit any agreeing representative. -/
+theorem MValidSubst.of_agree {db : Database} {p : Pattern} {σ σ' : Env}
+    (h : MValidSubst db p σ) (hag : Env.Agree σ σ')
+    (hdom : Env.dom σ' = p.freeVars db.env) : MValidSubst db p σ' := by
+  have hterms : ∀ b ∈ σ', b.2 ∈ db.terms := by
+    intro b hb
+    have hnd : (Env.dom σ').Nodup := hdom ▸ p.freeVars_nodup db.env
+    have hlk : Env.lookup b.1 σ' = some b.2 := (Env.lookup_eq_some_iff_mem hnd).mpr hb
+    rw [← hag b.1] at hlk
+    exact h.mem_terms _ (Env.mem_of_lookup hlk)
+  have hperm : (Env.dom σ').Perm (p.freeVars db.env) := hdom ▸ List.Perm.refl _
+  have hev : ∀ e : Expr, e.eval db.sig (db.env ++ σ') = e.eval db.sig (db.env ++ σ) :=
+    fun e => Expr.eval_agree (Env.Agree.append_left db.env hag.symm) e
+  have hevl : ∀ es : List Expr,
+      Expr.evalList db.sig es (db.env ++ σ') = Expr.evalList db.sig es (db.env ++ σ) :=
+    fun es => Expr.evalList_agree (Env.Agree.append_left db.env hag.symm) es
+  cases h with
+  | expr _ hwm he hc => exact .expr ⟨hperm, hterms⟩ hwm (by rw [hev]; exact he) hc
+  | eq _ hwm he₁ he₂ hc₁ hc₂ =>
+    exact .eq ⟨hperm, hterms⟩ hwm (by rw [hev]; exact he₁) (by rw [hev]; exact he₂) hc₁ hc₂
+  | values _ hu ht hk hw hrow =>
+    exact .values ⟨hperm, hterms⟩ (by rw [hevl]; exact hu) (by rw [hevl]; exact ht)
+      hk hw hrow
+
+namespace MValidQuerySubst
+variable {db : Database} {q : Query} {σ : Env}
+
 /-- Every value a query substitution binds is a term the database holds — `ValidEnv` per
 pattern, unioned. -/
-theorem MValidQuerySubst.mem_terms {db : Database} {q : Query} {σ : Env}
-    (h : MValidQuerySubst db q σ) : ∀ b ∈ σ, b.2 ∈ db.terms := by
+theorem mem_terms (h : MValidQuerySubst db q σ) : ∀ b ∈ σ, b.2 ∈ db.terms := by
   obtain ⟨σs, hall, hu⟩ := h
-  have hmem : ∀ σ' ∈ σs, ∃ p, MValidSubst db p σ' := by
-    clear hu
-    induction hall with
-    | nil => intro _ hx; simp at hx
-    | @cons p σ' _ _ hr _ ih =>
-      intro τ hτ
-      rcases List.mem_cons.mp hτ with rfl | h'
-      · exact ⟨p, hr⟩
-      · exact ih τ h'
   refine hu.forall_mem fun σ' hσ' b hb => ?_
-  obtain ⟨p, hp⟩ := hmem σ' hσ'
-  exact hp.validEnv.2 b hb
+  obtain ⟨p, _, hv⟩ := hall.exists_left hσ'
+  exact hv.mem_terms b hb
 
+/-- A query substitution binds exactly the query's free variables. -/
+theorem mem_dom_iff (h : MValidQuerySubst db q σ) {v : Var} :
+    v ∈ Env.dom σ ↔ ∃ p ∈ q, v ∈ p.freeVars db.env := by
+  obtain ⟨σs, hall, hu⟩ := h
+  rw [hu.mem_dom_iff]
+  constructor
+  · rintro ⟨σ', hσ', hv⟩
+    obtain ⟨p, hp, hvs⟩ := hall.exists_left hσ'
+    exact ⟨p, hp, hvs.mem_dom_iff.mp hv⟩
+  · rintro ⟨p, hp, hv⟩
+    obtain ⟨σ', hσ', hvs⟩ := hall.flip.exists_left hp
+    exact ⟨σ', hσ', hvs.mem_dom_iff.mpr hv⟩
+
+/-- The empty query is satisfied by exactly the empty substitution: a rule with no
+patterns fires once. -/
+theorem nil_iff : MValidQuerySubst db [] σ ↔ σ = [] := by
+  constructor
+  · rintro ⟨σs, hall, hu⟩
+    cases hall
+    cases hu
+    rfl
+  · rintro rfl
+    exact ⟨[], .nil, .nil⟩
+
+end MValidQuerySubst
 /-! ### Constructor rows survive a run
 
 `Database.CtorRows` — the rows are exactly the ones the terms induce — is one of the two
-things `Proofs/Merge.lean`'s `mcong_iff_cong` wants of a database (`Database.CtorTerms`,
-below, is the other), and until now nothing connected it to a database a program can
+things `mcong_iff_cong` at the end of this file wants of a database (`Database.CtorTerms`,
+below, is the other), and something has to connect it to a database a program can
 produce.
 `Proofs/Database.lean` shows every database operation preserves it. What is left is to
 carry it along the semantics, which takes three side conditions, each of them necessary:
@@ -266,7 +162,7 @@ declares no merge function, every application it holds is a *declared* construct
 rule the database holds can `set`, and the rows are the terms'.
 
 Bundled because they have to move together — a `decl` changes the signature, so it changes
-what `SetLegal` means for the rules already stored, and `runRules` needs those rules legal
+what `SetLegal` means for the rules already stored, and `RunRules` needs those rules legal
 to keep the rows constructor rows.
 
 `terms` is what `mcong_iff_cong` reads, and it is a field rather than a consequence of
@@ -336,13 +232,6 @@ theorem evalLocalActions_ctorTerms {db db' : Database} (hw : db.WF)
   exact evalActions_ctorTerms (db := { db with env := db.env ++ σ }) (db' := d)
     hw' hsig hlegal hterms hv
 
-theorem ruleResults_ctorTerms {db d : Database} (hw : db.WF)
-    (hsig : db.sig.AllConstructors) {r : Rule} (hlegal : r.SetLegal db.sig)
-    (hterms : db.CtorTerms) (h : d ∈ ruleResults db r) : d.CtorTerms :=
-  evalLocalActions_ctorTerms hw hsig h.choose_spec.1.mem_terms hlegal hterms
-    h.choose_spec.2
-
-/-! #### The functional semantics -/
 theorem evalAction_ctorRows {db db' : Database} (hsig : db.sig.AllConstructors)
     {a : Action} (hlegal : a.SetLegal db.sig) (hrows : db.CtorRows)
     (h : evalAction db a = some db') : db'.CtorRows := by
@@ -373,37 +262,6 @@ theorem evalLocalActions_ctorRows {db db' : Database} (hsig : db.sig.AllConstruc
   obtain ⟨d, hv, rfl⟩ := evalLocalActions_eq_some h
   exact evalActions_ctorRows (db := { db with env := db.env ++ σ }) (db' := d)
     hsig hlegal hrows hv
-
-theorem ruleResults_ctorRows {db d : Database} (hsig : db.sig.AllConstructors) {r : Rule}
-    (hlegal : r.SetLegal db.sig) (hrows : db.CtorRows) (h : d ∈ ruleResults db r) :
-    d.CtorRows :=
-  evalLocalActions_ctorRows hsig hlegal hrows h.choose_spec.2
-
-theorem runRules_ctorRows {db : Database} (h : db.CtorState) : (runRules db).CtorRows :=
-  h.rows.sUnion fun _ hd =>
-    ruleResults_ctorRows h.sig (h.rules _ hd.choose_spec.1) h.rows hd.choose_spec.2
-
-theorem ruleResults_sig {db d : Database} {r : Rule} (h : d ∈ ruleResults db r) :
-    d.sig = db.sig := evalLocalActions_sig h.choose_spec.2
-
-theorem runRules_ctorTerms {db : Database} (h : db.CtorState) : (runRules db).CtorTerms :=
-  h.terms.sUnion fun _ hd f as hm =>
-    ruleResults_sig hd.choose_spec.2 ▸
-      ruleResults_ctorTerms h.wf h.sig (h.rules _ hd.choose_spec.1) h.terms
-        hd.choose_spec.2 f as hm
-
-theorem runRules_ctorState {db : Database} (h : db.CtorState) : (runRules db).CtorState :=
-  ⟨runRules_wf h.wf, h.sig, runRules_ctorTerms h, h.rules, runRules_ctorRows h⟩
-
-/-- The signature a command leaves is `Cmd.sigBind`'s, which is what lets
-`Program.SetLegal` thread through a `decl`. -/
-theorem stepCmd_sig {db db' : Database} {c : Cmd} (h : stepCmd db c = some db') :
-    db'.sig = c.sigBind db.sig := by
-  cases c with
-  | action a => exact evalAction_sig h
-  | rule r => simp only [stepCmd, Option.some.injEq] at h; exact h ▸ rfl
-  | run => simp only [stepCmd, Option.some.injEq] at h; exact h ▸ rfl
-  | decl f d => simp only [stepCmd, Option.some.injEq] at h; exact h ▸ rfl
 
 /-- A declaration whose entry has no merge keeps every constructor a constructor, and makes
 the declared name one. This is the direction `Cmd.CtorDecl` buys: a *merge* declaration
@@ -437,61 +295,12 @@ theorem Database.CtorTerms.sigBind {db : Database} (h : db.CtorTerms) {c : Cmd}
   | decl g d => exact fun f as hm => (h f as hm).update hc
   | _ => exact h
 
-theorem stepCmd_ctorState {db db' : Database} (h : db.CtorState) {c : Cmd}
-    (hdecl : c.CtorDecl) (hlegal : c.SetLegal db.sig) (hv : stepCmd db c = some db') :
-    db'.CtorState := by
-  cases c with
-  | action a =>
-    exact ⟨evalAction_wf h.wf hv,
-      by rw [evalAction_sig hv]; exact h.sig,
-      evalAction_ctorTerms h.wf h.sig hlegal h.terms hv,
-      by rw [evalAction_sig hv, evalAction_rules hv]; exact h.rules,
-      evalAction_ctorRows h.sig hlegal h.rows hv⟩
-  | rule r =>
-    simp only [stepCmd, Option.some.injEq] at hv
-    subst hv
-    refine ⟨⟨h.wf.subtermClosed, h.wf.eqsInTerms, h.wf.envInTerms⟩, h.sig, h.terms, ?_,
-      h.rows⟩
-    rintro r' (rfl | hr')
-    · exact hlegal
-    · exact h.rules r' hr'
-  | run =>
-    simp only [stepCmd, Option.some.injEq] at hv
-    subst hv
-    exact runRules_ctorState h
-  | decl f d =>
-    simp only [stepCmd, Option.some.injEq] at hv
-    subst hv
-    exact ⟨⟨h.wf.subtermClosed, h.wf.eqsInTerms, h.wf.envInTerms⟩, h.sig.sigBind hdecl,
-      h.terms.sigBind (c := .decl f d) hdecl,
-      fun r hr => Rule.SetLegal.of_allConstructors h.sig (h.rules r hr), h.rows⟩
-
-theorem runProgram_ctorState {db db' : Database} (h : db.CtorState) {p : Program}
-    (hdecl : p.CtorDecls) (hlegal : p.SetLegal db.sig)
-    (hv : runProgram db p = some db') : db'.CtorState := by
-  induction p generalizing db with
-  | nil => exact (Option.some.injEq .. ▸ hv : db = db') ▸ h
-  | cons c cs ih =>
-    cases hc : stepCmd db c with
-    | none => simp [hc] at hv
-    | some db₁ =>
-      simp only [runProgram_cons, hc, Option.bind_some] at hv
-      exact ih (stepCmd_ctorState h (hdecl c (by simp)) hlegal.1 hc)
-        (fun c' hc' => hdecl c' (List.mem_cons_of_mem c hc'))
-        (by rw [stepCmd_sig hc]; exact hlegal.2) hv
-
-/-- A whole run stays in the constructor fragment. -/
-theorem run_ctorRows {p : Program} {db : Database} (hdecl : p.CtorDecls)
-    (hlegal : p.SetLegal Database.empty.sig) (h : run p = some db) : db.CtorRows :=
-  (runProgram_ctorState Database.CtorState.empty hdecl hlegal h).rows
-
 /-! #### The step relations
 
-M9's relational semantics, where the headline lives. Actions are not among them — one
-evaluator means `evalAction` is both readings — so `MergeStep` upwards is all there is,
-and `MergeStep` is the case `SetLegal` cannot reach: it fires only on a `.merge`
-function, so `AllConstructors` makes it vacuous and a round is `RunRules` and nothing
-else. -/
+The step relations are the semantics, so what is proved about them here is what a
+program run leaves. `MergeStep` is the case `SetLegal` cannot reach: it fires only on a
+`.merge` function, so `AllConstructors` makes it vacuous and a round is `RunRules` and
+nothing else. -/
 theorem MergeStep.sig {d₁ d₂ : Database} (h : MergeStep d₁ d₂) : d₂.sig = d₁.sig := by
   cases h with
   | collide _ _ _ _ hbody _ => simpa using evalActions_sig hbody
@@ -593,7 +402,7 @@ theorem CmdStep.ctorState {db db' : Database} (h : db.CtorState) {c : Cmd}
   | action ha hm =>
     -- The merge phase is empty on a constructor signature, so the state after it is the
     -- state the action left: `MergeClosure.eq_of_allConstructors`, which is the local
-    -- stand-in for `Proofs/Merge.lean`'s saturation lemma (that file is above this one).
+    -- stand-in for `Proofs/Merge.lean`'s saturation lemma (that file is below this one).
     have hd := hm.eq_of_allConstructors (by rw [evalAction_sig ha]; exact h.sig)
     subst hd
     exact ⟨evalAction_wf h.wf ha,
@@ -627,6 +436,14 @@ theorem ProgramStep.cons_inv {db d' : Database} {c : Cmd} {cs : Program}
 theorem ProgramStep.nil_inv {db d' : Database} (h : ProgramStep db [] d') : db = d' := by
   cases h with | nil => rfl
 
+/-- Running `p` then `q` is running `p ++ q`. What lets a concrete program be built a
+prefix at a time. -/
+theorem ProgramStep.append {db d d' : Database} {p q : Program} (h₁ : ProgramStep db p d) :
+    ProgramStep d q d' → ProgramStep db (p ++ q) d' := by
+  induction h₁ with
+  | nil => exact id
+  | cons hc _ ih => exact fun h₂ => .cons hc (ih h₂)
+
 /-- The invariant argument, in the shape `Proofs/Merge.lean`'s `invariant_of_step` gives
 it: an invariant preserved by one command holds at every reachable state. It is spelled
 out rather than instantiated because the invariant here is not a bare `Database → Prop`
@@ -640,6 +457,47 @@ theorem ProgramStep.ctorState {db db' : Database} (h : db.CtorState) {p : Progra
     exact ih (hc.ctorState h (hdecl c (by simp)) hlegal.1)
       (fun c' hc' => hdecl c' (List.mem_cons_of_mem c hc'))
       (by rw [hc.sig]; exact hlegal.2)
+
+/-! #### Determinism on the constructor fragment
+
+`CmdStep` and `ProgramStep` are relations because the merge phase is one — a round may
+stop anywhere in `MergeClosure`. On a constructor signature there is no merge phase, so
+the freedom is gone and the relation is a partial function. This is what lets a concrete
+run be read backwards one command at a time, and it is what makes the interpreter's
+refinement an *equality* rather than a reachability statement. -/
+/-- One command has at most one result where no merge fires.
+
+The `action` case is the only one with a choice to eliminate: `evalAction` is a function,
+so the two runs agree up to the merge phase, and `MergeClosure.eq_of_allConstructors`
+collapses that. `run` is `RunStep.eq_runRules` twice, `rule` and `decl` are `rfl`. -/
+theorem CmdStep.det {db d₁ d₂ : Database} (hsig : db.sig.AllConstructors) {c : Cmd}
+    (h₁ : CmdStep db c d₁) (h₂ : CmdStep db c d₂) : d₁ = d₂ := by
+  cases h₁ with
+  | action ha₁ hm₁ =>
+    cases h₂ with
+    | action ha₂ hm₂ =>
+      obtain rfl := Option.some.inj (ha₁.symm.trans ha₂)
+      rw [hm₁.eq_of_allConstructors (by rw [evalAction_sig ha₁]; exact hsig),
+        hm₂.eq_of_allConstructors (by rw [evalAction_sig ha₁]; exact hsig)]
+  | rule => cases h₂ with | rule => rfl
+  | run hr₁ => cases h₂ with | run hr₂ => rw [hr₁.eq_runRules hsig, hr₂.eq_runRules hsig]
+  | decl => cases h₂ with | decl => rfl
+
+/-- A whole program has at most one result on the constructor fragment. The side
+conditions are `CmdStep.ctorState`'s: they are what keeps `AllConstructors` true at every
+intermediate state, which is what `CmdStep.det` needs there. -/
+theorem ProgramStep.det {db d₁ d₂ : Database} (hc : db.CtorState) {p : Program}
+    (hdecl : p.CtorDecls) (hlegal : p.SetLegal db.sig)
+    (h₁ : ProgramStep db p d₁) (h₂ : ProgramStep db p d₂) : d₁ = d₂ := by
+  induction p generalizing db d₁ d₂ with
+  | nil => rw [← h₁.nil_inv, ← h₂.nil_inv]
+  | cons c cs ih =>
+    obtain ⟨e₁, he₁, hr₁⟩ := h₁.cons_inv
+    obtain ⟨e₂, he₂, hr₂⟩ := h₂.cons_inv
+    obtain rfl := he₁.det hc.sig he₂
+    exact ih (he₁.ctorState hc (hdecl c (by simp)) hlegal.1)
+      (fun c' hc' => hdecl c' (List.mem_cons_of_mem c hc'))
+      (by rw [he₁.sig]; exact hlegal.2) hr₁ hr₂
 
 /-- **The headline.** A program that declares only constructors and never `set`s a
 constructor leaves the row set determined by the term set.
@@ -656,5 +514,144 @@ theorem ProgramStep.ctorRows {db db' : Database} {p : Program}
     (hlegal : p.SetLegal db.sig)
     (hrules : ∀ r ∈ db.rules, r.SetLegal db.sig) : db'.CtorRows :=
   (ProgramStep.ctorState ⟨hwf, hsig, hterms, hrules, hrows⟩ hdecl hlegal hstep).rows
+
+/-! ### The generalized relation is the old one
+
+`MCong` is `Cong` with `congr` replaced by `fd`, so the two have to be reconciled
+somewhere, and this is where: the constructor fragment is exactly where they coincide,
+and `Database.CtorState` above is what a program run leaves. Two directions, two
+hypotheses. `MCong → Cong` needs only that the rows are constructor rows, because a
+constructor row is one whatever the signature says. `Cong → MCong` also needs every
+application the database holds to head a declared constructor, which is what licenses
+`fd`.
+
+`Database.toM` is gone: `Database` *is* the M9 database now, so the embedding it named is
+the identity and `CtorRows` is what the theorems below quantify over instead. -/
+theorem Database.mem_rows_iff {db : Database} (h : db.CtorRows) {f : FnName}
+    {as vs : List Term} :
+    Row.mk f as vs ∈ db.rows ↔ vs = [.app f as] ∧ Term.app f as ∈ db.terms := by
+  rw [h]; exact Iff.rfl
+
+mutual
+
+/-- Every functional-dependency derivation over constructor rows is an M2 derivation.
+
+`fd` is the only interesting case: its two rows are constructor rows, so their outputs
+are `.app f as` and `.app f bs` and both applications are in `db.terms` — the two
+premises `Cong.congr` wants. -/
+theorem MCong.toCong {db : Database} (hrows : db.CtorRows) {a b : Term}
+    (h : MCong db a b) : Cong db a b := by
+  match h with
+  | .assert hm => exact .assert hm
+  | .refl hm => exact .refl hm
+  | .symm h => exact .symm (MCong.toCong hrows h)
+  | .trans h₁ h₂ => exact .trans (MCong.toCong hrows h₁) (MCong.toCong hrows h₂)
+  | .fd ha hb _ hl hxy =>
+    obtain ⟨rfl, hma⟩ := (Database.mem_rows_iff hrows).mp ha
+    obtain ⟨rfl, hmb⟩ := (Database.mem_rows_iff hrows).mp hb
+    simp only [List.zip_cons_cons, List.zip_nil_left, List.mem_cons, List.not_mem_nil,
+      or_false, Prod.mk.injEq] at hxy
+    obtain ⟨rfl, rfl⟩ := hxy
+    exact .congr hma hmb (MCongList.toCongList hrows hl)
+
+theorem MCongList.toCongList {db : Database} (hrows : db.CtorRows) {as bs : List Term}
+    (h : MCongList db as bs) : CongList db as bs := by
+  match h with
+  | .nil => exact .nil
+  | .cons hab hl => exact .cons (MCong.toCong hrows hab) (MCongList.toCongList hrows hl)
+
+end
+
+mutual
+
+/-- Every M2 derivation is a functional-dependency derivation.
+
+`congr` is the only interesting case, and its two membership premises are exactly what is
+needed: `RowsComplete` turns each into a row `fd` can use, and `CtorTerms` says the
+function they are applications of is a constructor, which is what lets `fd` fire.
+
+Stated over `CtorTerms`/`RowsComplete` rather than `AllConstructors`/`CtorRows` because
+those two **survive merging** — they constrain `terms` and the constructor rows, neither
+of which a merge touches (`FDatabase.mergeRound_confined`) — whereas `CtorRows` fails at
+the first `:merge` declaration. That is what lets the interpreter's `closureF`, which
+computes `Cong`, be read as `MCong` in a database that has merge functions in it, and it
+is the reason `Proofs/Merge.lean`'s refinement chain can exist at all. -/
+theorem Cong.toMCong' {db : Database} (hterms : db.CtorTerms) (hrows : db.RowsComplete)
+    {a b : Term} (h : Cong db a b) : MCong db a b := by
+  match h with
+  | .assert hm => exact .assert hm
+  | .refl hm => exact .refl hm
+  | .symm h => exact .symm (Cong.toMCong' hterms hrows h)
+  | .trans h₁ h₂ =>
+    exact .trans (Cong.toMCong' hterms hrows h₁) (Cong.toMCong' hterms hrows h₂)
+  | .congr (f := f) (as := as) (bs := bs) hma hmb hl =>
+    exact .fd (a := [Term.app f as]) (b := [Term.app f bs])
+      (hrows ⟨rfl, hma⟩) (hrows ⟨rfl, hmb⟩) (hterms f as hma)
+      (CongList.toMCongList' hterms hrows hl) (by simp)
+
+theorem CongList.toMCongList' {db : Database} (hterms : db.CtorTerms)
+    (hrows : db.RowsComplete) {as bs : List Term} (h : CongList db as bs) :
+    MCongList db as bs := by
+  match h with
+  | .nil => exact .nil
+  | .cons hab hl =>
+    exact .cons (Cong.toMCong' hterms hrows hab) (CongList.toMCongList' hterms hrows hl)
+
+end
+
+/-- `CtorRows` gives `RowsComplete`: it is the equality, this is one inclusion of it.
+
+Written with `▸` rather than `h.ge`: the latter goes through `Set`'s order instances and
+puts `Classical.choice` into the axiom set of everything downstream, including
+`mcong_iff_cong`, which is otherwise `propext` alone. -/
+theorem Database.CtorRows.rowsComplete {db : Database} (h : db.CtorRows) :
+    db.RowsComplete := fun _ hr => h.symm ▸ hr
+
+theorem Cong.toMCong {db : Database} (hterms : db.CtorTerms) (hrows : db.CtorRows)
+    {a b : Term} (h : Cong db a b) : MCong db a b :=
+  Cong.toMCong' hterms hrows.rowsComplete h
+
+theorem CongList.toMCongList {db : Database} (hterms : db.CtorTerms)
+    (hrows : db.CtorRows) {as bs : List Term} (h : CongList db as bs) :
+    MCongList db as bs :=
+  CongList.toMCongList' hterms hrows.rowsComplete h
+
+/-- **The compatibility theorem.** Where the rows are the constructor rows and every
+application the database holds is a declared constructor's, the functional dependency *is*
+congruence.
+
+`CtorTerms` where this used to read `Signature.AllConstructors`. The two coincided while an
+undeclared name counted as a constructor, and now they do not: `AllConstructors` says
+nothing *is* a merge function, which no longer implies that the applications in `terms`
+are constructors' — that has to be carried as a state invariant, which is
+`Database.CtorState.terms`.
+
+This is what `PLAN.md` M9 asks for, and the reason `MCong` has no `congr` constructor:
+congruence is not lost, it is `fd` read at constructor rows.
+
+It replaces `mcong_toM_iff`, which quantified over the embedding `Database.toM` of an
+M2 database into a separate `MDatabase`. Now that the two states are one structure that
+embedding is the identity, so the *hypothesis* `CtorRows` carries what the embedding
+used to: it says the state is in the constructor-only fragment. -/
+theorem mcong_iff_cong {db : Database} (hterms : db.CtorTerms)
+    (hrows : db.CtorRows) {a b : Term} : MCong db a b ↔ Cong db a b :=
+  ⟨MCong.toCong hrows, Cong.toMCong hterms hrows⟩
+
+/-- **The compatibility theorem, at a state a program can reach.** A program that declares
+only constructors and never `set`s one runs to a database where the two relations agree.
+
+`ProgramStep.ctorState` supplies both hypotheses; this is the composition. -/
+theorem ProgramStep.mcong_iff_cong {p : Program} {db : Database}
+    (hstep : ProgramStep Database.empty p db) (hdecl : p.CtorDecls)
+    (hlegal : p.SetLegal Database.empty.sig) {a b : Term} : MCong db a b ↔ Cong db a b :=
+  let hc := ProgramStep.ctorState Database.CtorState.empty hdecl hlegal hstep
+  Egglog.mcong_iff_cong hc.terms hc.rows
+
+/-- Congruence, recovered as a derived rule rather than a constructor. -/
+theorem MCong.congr {db : Database} {f : FnName} {as bs : List Term}
+    (ha : Row.mk f as [.app f as] ∈ db.rows) (hb : Row.mk f bs [.app f bs] ∈ db.rows)
+    (hsig : db.sig.IsCtor f) (hl : MCongList db as bs) :
+    MCong db (.app f as) (.app f bs) :=
+  .fd ha hb hsig hl (by simp)
 
 end Egglog

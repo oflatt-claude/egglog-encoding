@@ -193,10 +193,20 @@ def Database.NoMergeOk (db : Database) : Prop :=
 
 /-! ### E-matching and running
 
-`Match.lean` and `Step.lean` ported by replacing `Cong` with `MCong`. The one
-non-mechanical change is `RunStep`: merge closure is a *phase* of a round, because it is a
-state change where congruence closure is only a relation. -/
-/-- `ValidSubst`, over `MCong`. The witness formulation is unchanged. -/
+The rest of the semantics: which substitutions a query admits, what a round does with
+them, and what a command and a program do. Congruence is read as `MCong` throughout, and
+a round has one non-mechanical addition — merge closure is a *phase* of it, because it is
+a state change where congruence closure is only a relation. -/
+/-- The substitutions one query pattern admits.
+
+E-matching is declarative rather than a search procedure. Every case adds the pattern's
+instance (or instances) to the database before asking `MCong`, and the **witness** is
+drawn from the *original* terms: without one, reflexivity on the freshly added instance
+would match everything, so the witness is what stops a pattern from matching a term the
+e-graph does not contain.
+
+The witness premises stay spelled out rather than reading a `…On` abbreviation, because
+the extended database they ask over is the one *both* instances are added to. -/
 inductive MValidSubst (db : Database) : Pattern → Env → Prop where
   | expr {e : Expr} {σ : Env} {w t : Term} :
       ValidEnv (e.freeVars db.env) db σ → w ∈ db.terms →
@@ -212,8 +222,14 @@ inductive MValidSubst (db : Database) : Pattern → Env → Prop where
 
   Its key premise is `Database.Out`'s and its value premise is the same comparison applied
   to the value columns, both read in the database **extended with the operands**, as the
-  `expr` and `eq` cases read theirs. `ValidSubst.values` says what that extension buys and
-  why it is conservative rather than permissive.
+  `expr` and `eq` cases read theirs. An operand is an *expression*, so it may denote a term
+  the program never built; the extension is what makes such an operand matchable, and it is
+  how this model captures egglog's flattening of a nested fact into one atom per subterm
+  (`PLAN.md`, "Reading is a query atom").
+
+  Adding the operands is conservative, not permissive: `MCong.fd` still needs *both* rows
+  present, so a hypothesized operand reaches an existing class only through a row the
+  database really holds.
 
   There is no `w ∈ db.terms` witness: the row itself is what forbids matching something
   the database does not hold. -/
@@ -226,17 +242,24 @@ inductive MValidSubst (db : Database) : Pattern → Env → Prop where
       MCongList ((db.addTerms ts).addTerms us) us ws → Row.mk f bs ws ∈ db.rows →
       MValidSubst db (.values vs f as) σ
 
-/-- `ValidQuerySubst`, over `MValidSubst`. -/
+/-- The substitutions a whole query admits: one per pattern, unioned. -/
 def MValidQuerySubst (db : Database) (q : Query) (σ : Env) : Prop :=
   ∃ σs : List Env, List.Forall₂ (MValidSubst db) q σs ∧ Env.UnionAll σs σ
 
 /-- The databases one rule contributes, one per substitution satisfying its query.
-`ruleResults`, over `MValidQuerySubst`. -/
+
+`RunRules` unions these, over every rule. Substitutions whose actions get stuck
+contribute nothing, which cannot happen for a scoped, evaluable rule (`Scope.lean`). -/
 def RuleResults (db : Database) (r : Rule) : Set Database :=
   {d | ∃ σ, MValidQuerySubst db r.query σ ∧ evalLocalActions db r.actions σ = some d}
 
-/-- Every rule fires on every substitution satisfying its query in the pre-state, and
-the results are unioned in. `runRules`, with rows. -/
+/-- The rule-firing half of a round: every rule fires on every substitution satisfying its
+query *in the pre-state*, and all the results are unioned in. Rules therefore cannot see
+each other's output within one round.
+
+A function rather than a relation — the database's components are `Set`s, so that union is
+expressible directly — but not a computation: the set of matching substitutions is carved
+out by a predicate, not enumerated. `Impl/Interp.lean`'s `execRunRules` enumerates it. -/
 def RunRules (db : Database) : Database :=
   db.sUnion {d | ∃ r ∈ db.rules, d ∈ RuleResults db r}
 
@@ -252,12 +275,19 @@ that need it — simulation, and matching egglog's row counts. `MERGE.md`, "Satu
 a hypothesis, not a step". -/
 def RunStep (db db' : Database) : Prop := MergeClosure (RunRules db) db'
 
-/-- `stepCmd`, relationally.
+/-- Run one command.
+
+A relation rather than a function, because `RunStep` is one. There is no
+congruence-restoring pass between commands, because congruence is the predicate `MCong`
+rather than a set the state has to carry (`PLAN.md`, "Where 'restored congruence' went").
 
 `action` resolves collisions before the next command: a top-level `set` is its own merge
 phase, so `(set (f) 1) (set (f) 2)` on a `:merge (max old new)` function leaves one row
 holding `2` with no `(run)` anywhere. See `MERGE.md`, "The merge phase runs between
-commands". -/
+commands".
+
+`run` is exactly one round; schedules are not modelled, and egglog's `(run n)` is `n`
+copies of it. -/
 inductive CmdStep : Database → Cmd → Database → Prop where
   | action {db d db' : Database} {a : Action} :
       evalAction db a = some d → MergeClosure d db' → CmdStep db (.action a) db'
@@ -267,7 +297,8 @@ inductive CmdStep : Database → Cmd → Database → Prop where
   | decl {db : Database} {f : FnName} {d : FnDecl} :
       CmdStep db (.decl f d) { db with sig := Function.update db.sig f (some d) }
 
-/-- `runProgram`, relationally. -/
+/-- Run the commands in order, from `db`. `ProgramStep Database.empty p` is what running
+the whole program `p` means. -/
 inductive ProgramStep : Database → Program → Database → Prop where
   | nil {db : Database} : ProgramStep db [] db
   | cons {db d d' : Database} {c : Cmd} {cs : Program} :

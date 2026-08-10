@@ -1,5 +1,4 @@
 import EgglogSemantics.Encoding.Encode
-import EgglogSemantics.Spec.Step
 
 /-!
 # The proof-encoding theorems
@@ -174,10 +173,13 @@ theorem encode_simulation (hdom : P.EncodeDomain)
     (ha : a ∈ src.terms) (hb : b ∈ src.terms) :
     Cong src a b ↔ SameClass tgt a b := sorry
 
-/-- `PLAN.md`'s literal shape, over the M0–M8 functional semantics. `run P` is defined
-on the constructor fragment and agrees with `ProgramStep` there, and `hdom` is what
-supplies the two fragment hypotheses `encode_simulation` takes explicitly. -/
-theorem encode_simulation_run (hdom : P.EncodeDomain) (hsrc : run P = some src)
+/-- `PLAN.md`'s literal shape: the three fragment hypotheses `encode_simulation` takes
+explicitly are all consequences of `hdom`, which is what makes the statement readable
+without them. `EncodeDomain.ctorsOnly` is `Program.CtorDecls` and `EncodeDomain.noSet` is
+`Program.SetLegal`, so `ProgramStep.ctorState` supplies `hsig`, `hrows` and `hwf` at
+`src`. -/
+theorem encode_simulation_of_domain (hdom : P.EncodeDomain)
+    (hsrc : ProgramStep Database.empty P src)
     (htgt : ProgramStep Database.empty (encode P) tgt) (hreb : Rebuilt P tgt)
     (ha : a ∈ src.terms) (hb : b ∈ src.terms) :
     Cong src a b ↔ SameClass tgt a b := sorry

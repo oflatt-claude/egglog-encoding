@@ -16,10 +16,10 @@ about the merge implementation.
 
 Two things differ from `Impl/Interp.lean`, both forced by the spec being *relational*.
 
-**The refinement weakens to reachability.** `exec_toDatabase` says the constructor
-interpreter computes exactly the spec's answer. Here the spec admits several, so the
-statement is `ProgramStep d.toDatabase p (exec p).toDatabase` — the interpreter's
-result is one the spec reaches. `Proofs/Merge.lean` states it.
+**The refinement weakens to reachability.** `exec_programStep` says the constructor
+interpreter reaches exactly the states the spec does, in both directions. Here the spec
+admits several, so only one direction survives: the interpreter's result is one the spec
+reaches. `Proofs/Merge.lean`'s `execM_contained` states what is available instead.
 
 **The merge phase is one pass, not a fixpoint.** `mergeRound` fires each collision among
 the pre-pass rows once and is structurally terminating, which is sound because `RunStep`

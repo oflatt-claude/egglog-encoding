@@ -1,6 +1,5 @@
 import EgglogSemantics.Encoding.Encode
 import EgglogSemantics.Proofs.Eval
-import EgglogSemantics.Spec.Step
 
 /-! # Is `Rebuilt` satisfiable?
 

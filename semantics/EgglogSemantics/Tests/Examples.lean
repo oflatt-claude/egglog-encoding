@@ -13,7 +13,7 @@ Every hand-built database below holds the terms its equalities mention. A state 
 equalities but no terms is unreachable — a `union` always inserts its operands — so
 there is nothing to check about one.
 
-Checks about what a `run` does *not* produce need `ValidSubst` inversion, which is
+Checks about what a `run` does *not* produce need `MValidSubst` inversion, which is
 `PLAN.md`'s M8; the `run` example below is the forward direction only. Randomly
 generated programs, checked against the real egglog binary, are `DiffTest.lean`.
 -/
@@ -185,14 +185,16 @@ private def preWrapped : Database where
   env := []
   rules := ∅
 
-example : ValidSubst preWrapped (.expr (.app "wrapper" [eNum 1])) [] :=
+example : MValidSubst preWrapped (.expr (.app "wrapper" [eNum 1])) [] :=
   .expr (w := .app "wrapper" [num 2]) (t := .app "wrapper" [num 1])
     ⟨by simp [eNum], by simp⟩
     (by simp [preWrapped])
     (by rw [Expr.eval_app_ctor (show Prim.ofName "wrapper" = none from rfl)
           (show Signature.IsCtor preWrapped.sig "wrapper" from ⟨ctorDecl 1, rfl, rfl⟩)]
         rfl)
-    (.congr (by simp [preWrapped]) (by simp [preWrapped])
+    (MCong.congr (Or.inl ⟨rfl, by simp [preWrapped]⟩)
+      (Or.inr ⟨rfl, Term.self_mem_subterms _⟩)
+      (show Signature.IsCtor preWrapped.sig "wrapper" from ⟨ctorDecl 1, rfl, rfl⟩)
       (.cons (.symm (.assert (by simp [preWrapped]))) .nil))
 
 /-- Over the database holding just `1`, the substitution `v1 ↦ 1` is a valid
@@ -222,12 +224,14 @@ example : WellScoped actionsProgram := by
   simp [WellScoped, actionsProgram, Program.Scoped, Cmd.Scoped, Action.Scoped, Expr.Scoped,
     Cmd.bind, Action.bind, eNum]
 
-example : ∃ db, run actionsProgram = some db ∧
+example : ∃ db, ProgramStep Database.empty actionsProgram db ∧
     db.terms = {b1, num 1, num 7, num 4} ∧
     db.eqs = {(num 7, num 7), (b1, num 4)} ∧
     Env.lookup "v" db.env = some b1 ∧
     Cong db (num 4) b1 := by
-  refine ⟨_, rfl, ?_, ?_, rfl, ?_⟩
+  refine ⟨_, .cons .decl (.cons (.action rfl Relation.ReflTransGen.refl)
+    (.cons (.action rfl Relation.ReflTransGen.refl)
+      (.cons (.action rfl Relation.ReflTransGen.refl) .nil))), ?_, ?_, rfl, ?_⟩
   · ext t; simp [b1, num]; tauto
   · ext p; simp [b1, num]; tauto
   · exact .symm (.assert (by simp [b1, num]))
@@ -237,7 +241,7 @@ example : ∃ db, run actionsProgram = some db ∧
 `(Add 1 2)`, `(rule ((Add a b)) ((Add b a)))`, `(run)` produces `(Add 2 1)`.
 Only the forward direction is shown: the substitution `a ↦ 1, b ↦ 2` satisfies the
 query and its actions build `(Add 2 1)`. That nothing *else* is produced needs
-`ValidSubst` inversion (`PLAN.md`, M8). -/
+`MValidSubst` inversion (`PLAN.md`, M8). -/
 
 private def add12 : Term := .app "Add" [num 1, num 2]
 
@@ -265,24 +269,25 @@ private def preRun : Database where
   env := []
   rules := insert swapRule ∅
 
-private theorem preRun_eq :
-    runProgram Database.empty [.decl "Add" (ctorDecl 2),
-      .action (.expr (.app "Add" [eNum 1, eNum 2])), .rule swapRule] = some preRun := by
-  simp [runProgram, stepCmd, evalAction, Expr.eval, Expr.evalList, Database.empty, preRun,
-    eNum, num, add12, Database.addTerm, Prim.ofName, Signature.IsCtor, ctorDecl]
+private theorem preRun_step : ProgramStep Database.empty
+    [.decl "Add" (ctorDecl 2), .action (.expr (.app "Add" [eNum 1, eNum 2])),
+      .rule swapRule] preRun :=
+  .cons .decl (.cons
+    (.action (d := { preRun with rules := ∅ })
+      (by simp [evalAction, Expr.eval, Expr.evalList, Database.empty, preRun,
+        eNum, num, add12, Database.addTerm, Prim.ofName, Signature.IsCtor, ctorDecl])
+      Relation.ReflTransGen.refl)
+    (.cons (CmdStep.rule (db := { preRun with rules := ∅ }) (r := swapRule)) .nil))
 
-private theorem run_ruleProgram : run ruleProgram = some (runRules preRun) := by
-  change runProgram Database.empty
-    ([.decl "Add" (ctorDecl 2), .action (.expr (.app "Add" [eNum 1, eNum 2])),
-      .rule swapRule] ++ [Cmd.run]) = _
-  rw [runProgram_append, preRun_eq]
-  simp [stepCmd]
+private theorem ruleProgram_step :
+    ProgramStep Database.empty ruleProgram (RunRules preRun) :=
+  preRun_step.append (.cons (.run Relation.ReflTransGen.refl) .nil)
 
 /-- The one firing of the rule: `a ↦ 1`, `b ↦ 2`, witnessed by `(Add 1 2)` itself. -/
 private theorem swap_matches :
-    ValidQuerySubst preRun swapRule.query [("a", num 1), ("b", num 2)] := by
+    MValidQuerySubst preRun swapRule.query [("a", num 1), ("b", num 2)] := by
   refine ⟨[[("a", num 1), ("b", num 2)]], .cons ?_ .nil, .single _⟩
-  refine ValidSubst.expr (w := add12) (t := add12) ⟨?_, ?_⟩ ?_ ?_ (.refl ?_)
+  refine MValidSubst.expr (w := add12) (t := add12) ⟨?_, ?_⟩ ?_ ?_ (.refl ?_)
   · simp [Env.dom, preRun]
   · intro c hc
     simp only [List.mem_cons, List.not_mem_nil, or_false] at hc
@@ -302,11 +307,11 @@ private theorem swap_fires :
     ctorDecl]
 
 /-- `(Add 2 1)` is in the database after the run. -/
-example : ∃ db, run ruleProgram = some db ∧ add21 ∈ db.terms := by
-  refine ⟨runRules preRun, run_ruleProgram, ?_⟩
+example : ∃ db, ProgramStep Database.empty ruleProgram db ∧ add21 ∈ db.terms := by
+  refine ⟨RunRules preRun, ruleProgram_step, ?_⟩
   have hmem : ({ preRun with terms := preRun.terms ∪ add21.subterms,
                              rows := preRun.rows ∪ add21.ctorRows } : Database) ∈
-      {d | ∃ r ∈ preRun.rules, d ∈ ruleResults preRun r} :=
+      {d | ∃ r ∈ preRun.rules, d ∈ RuleResults preRun r} :=
     ⟨swapRule, by simp [preRun], _, swap_matches, swap_fires⟩
   exact Or.inr (Set.mem_biUnion hmem (Or.inr add21.self_mem_subterms))
 
@@ -364,7 +369,7 @@ example : Cong chain (num 1) (num 3) := by
 /-! ### Running programs
 
 Whole programs, run by the interpreter rather than proved. This includes the two-round
-`Wrapper` case, which needs `ValidSubst` inversion to state as a theorem and so has no
+`Wrapper` case, which needs `MValidSubst` inversion to state as a theorem and so has no
 hand proof. -/
 
 /- `(Add 1 2)`, `(rule ((Add a b)) ((Add b a)))`, `(run)`: terms
