@@ -97,6 +97,60 @@ theorem MCongList.le {db : Database} {R : Term → Term → Prop}
 
 end
 
+/-! ### The domain of the relation
+
+A term does not exist by default, so the relation does not relate everything: this is
+what makes a congruence premise about a term the program never built *unsatisfiable*,
+and it is how such a premise is shown vacuous. `Cong.mem_of` for `MCong`. -/
+mutual
+
+/-- Every term a derivation mentions is in the database, so `MCong db` is an equivalence
+relation on `db.terms` and relates nothing outside it.
+
+`Database.RowsWF` is an **added hypothesis** over `Cong.mem_of`'s, and is forced by `fd`:
+its related pair are row *outputs*, and `Database.WF` says nothing about rows, so only
+`RowsWF` puts them in `terms`. `Cong.congr` needed none because it relates applications
+already required to be terms. Every state the refinement chain visits satisfies it —
+it is a field of `FDatabase.Inv`. -/
+theorem MCong.mem_of {db : Database} (hw : db.WF) (hr : db.RowsWF) {a b : Term}
+    (h : MCong db a b) : a ∈ db.terms ∧ b ∈ db.terms := by
+  match h with
+  | .assert hm => exact hw.eqsInTerms _ hm
+  | .refl hm => exact ⟨hm, hm⟩
+  | .symm h => exact (MCong.mem_of hw hr h).symm
+  | .trans h₁ h₂ => exact ⟨(MCong.mem_of hw hr h₁).1, (MCong.mem_of hw hr h₂).2⟩
+  | .fd hra hrb _ _ hxy =>
+    obtain ⟨hx, hy⟩ := List.of_mem_zip hxy
+    exact ⟨(hr _ hra).2 _ hx, (hr _ hrb).2 _ hy⟩
+
+/-- `MCong.mem_of` over key tuples. -/
+theorem MCongList.mem_of {db : Database} (hw : db.WF) (hr : db.RowsWF) {as bs : List Term}
+    (h : MCongList db as bs) :
+    (∀ a ∈ as, a ∈ db.terms) ∧ (∀ b ∈ bs, b ∈ db.terms) := by
+  match h with
+  | .nil => exact ⟨by simp, by simp⟩
+  | .cons hab hl =>
+    refine ⟨fun a ha => ?_, fun b hb => ?_⟩
+    · rcases List.mem_cons.mp ha with rfl | ha
+      · exact (MCong.mem_of hw hr hab).1
+      · exact (MCongList.mem_of hw hr hl).1 a ha
+    · rcases List.mem_cons.mp hb with rfl | hb
+      · exact (MCong.mem_of hw hr hab).2
+      · exact (MCongList.mem_of hw hr hl).2 b hb
+
+end
+
+namespace MCong
+variable {db : Database}
+
+theorem mem_left {a b : Term} (hw : db.WF) (hr : db.RowsWF) (h : MCong db a b) :
+    a ∈ db.terms := (h.mem_of hw hr).1
+
+theorem mem_right {a b : Term} (hw : db.WF) (hr : db.RowsWF) (h : MCong db a b) :
+    b ∈ db.terms := (h.mem_of hw hr).2
+
+end MCong
+
 /-- `MCong db` is an equivalence on `db.terms`, as `Cong.setoid`. Its quotient is the
 e-class set, and the bridge to M11: an e-class here is an `@UF` leader there. -/
 def MCong.setoid (db : Database) : Setoid {t : Term // t ∈ db.terms} where
