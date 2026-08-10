@@ -45,7 +45,13 @@ variable {P : Program} {src tgt : Database} {a b : Term}
 /-! ### `CongOn` against `Cong`
 
 `encode_sound` concludes `CongOn`, which is defined on any pair of terms; the simulation
-theorem states `Cong`, which is not. This is what converts. -/
+theorem states `Cong`, which is not. This is what converts.
+
+**`CongOn` is vacuous on the diagonal**, and five statements below conclude it:
+`Encoding/Rebuilt.lean`'s `congOn_refl` proves `CongOn db a a` for every `db` and every
+`a`, hypothesis-free, so each of them says nothing wherever its two terms coincide. The
+statements are left as they are — they are M11's deliverable — and `CongOnVacuity` there
+records which obligations that empties and the two shapes that would fix it. -/
 /-- On terms the database holds, building them again changes nothing. -/
 theorem congOn_iff_cong {db : Database} (hwf : db.WF) (hrows : db.CtorRows)
     (ha : a ∈ db.terms) (hb : b ∈ db.terms) : CongOn db a b ↔ Cong db a b := sorry
@@ -89,7 +95,14 @@ Stated with `CongOn` rather than `Cong` because the rebuild re-keys view rows to
 children's leaders, so the target holds rows about applications the source never built —
 `@AddView [1,1] ↦ Add[1,2]` after `(Add 1 2)` and `(union 1 2)`, where `Add 1 1` is not
 in `src.terms` and `Cong src` cannot mention it. The equality is still real; `CongOn` is
-the reading under which it is. -/
+the reading under which it is.
+
+**Vacuous at the identity view row**, which is the one `encodeBuild` emits for every
+application it encodes: the second conjunct there reads
+`CongOn src (.app f es) (.app f es)`, closed by `congOn_refl` with no reference to `src`.
+`Encoding/Rebuilt.lean`'s `encode_rows_sound_conj2_at_identity` is that obligation,
+proved; `encode_rows_sound_conj1_at_root` is the same for the first conjunct at a `@UF`
+root. -/
 theorem encode_rows_sound (hdom : P.EncodeDomain)
     (hsrc : ProgramStep Database.empty P src) (hsig : src.sig.AllConstructors)
     (hrows : src.CtorRows) (htgt : ProgramStep Database.empty (encode P) tgt) :
@@ -97,7 +110,10 @@ theorem encode_rows_sound (hdom : P.EncodeDomain)
       (∀ f es e, Row.mk (viewName f) es [e] ∈ tgt.rows → CongOn src (.app f es) e) := sorry
 
 /-- A union-find leader is equal to what it leads. The transitive closure of the first
-half of `encode_rows_sound`, and the form the simulation theorem consumes. -/
+half of `encode_rows_sound`, and the form the simulation theorem consumes.
+
+Vacuous at `t = l`, which is every term that is its own leader — `congOn_refl` in
+`Encoding/Rebuilt.lean`. -/
 theorem encode_leader_sound (hdom : P.EncodeDomain)
     (hsrc : ProgramStep Database.empty P src) (hsig : src.sig.AllConstructors)
     (hrows : src.CtorRows) (htgt : ProgramStep Database.empty (encode P) tgt)
@@ -111,7 +127,10 @@ of stating them separately. -/
 `Cong`-equal in the source.
 
 No `Rebuilt`: soundness is an invariant. No membership hypothesis either, because the
-conclusion is `CongOn`; `encode_simulation` adds both to state it as `Cong`. -/
+conclusion is `CongOn`; `encode_simulation` adds both to state it as `Cong`.
+
+Vacuous at `a = b` — `congOn_refl` in `Encoding/Rebuilt.lean` — so the content is entirely
+in the case of two distinct terms. -/
 theorem encode_sound (hdom : P.EncodeDomain)
     (hsrc : ProgramStep Database.empty P src) (hsig : src.sig.AllConstructors)
     (hrows : src.CtorRows) (htgt : ProgramStep Database.empty (encode P) tgt)
@@ -208,7 +227,10 @@ checker accepts against the source program `P`, concluding `x = y`". -/
 opaque Checks : Program → Term → Term → Term → Prop
 
 /-- **Theorem (1).** Every proof the encoding writes is accepted by the checker, and
-**theorem (2)**, its conclusion is derivable in the source. -/
+**theorem (2)**, its conclusion is derivable in the source.
+
+The second conjunct is vacuous at `k = p`, a `@UF` root — `congOn_refl` in
+`Encoding/Rebuilt.lean` — leaving `Checks P pf k p` as the content there. -/
 theorem encode_proof_rows_check (hdom : P.EncodeDomain)
     (hsrc : ProgramStep Database.empty P src) (hsig : src.sig.AllConstructors)
     (hrows : src.CtorRows) (htgt : ProgramStep Database.empty (encode P) tgt)
@@ -216,7 +238,10 @@ theorem encode_proof_rows_check (hdom : P.EncodeDomain)
     Checks P pf k p ∧ CongOn src k p := sorry
 
 /-- The view's half of theorem (1) + (2). A view row's proof runs the other way round
-from a `@UF` row's: it proves `eclass = f(children)`. -/
+from a `@UF` row's: it proves `eclass = f(children)`.
+
+The second conjunct is vacuous at `e = .app f es`, the identity view row —
+`Encoding/Rebuilt.lean`'s `encode_proof_view_rows_check_congOn_at_identity`. -/
 theorem encode_proof_view_rows_check (hdom : P.EncodeDomain)
     (hsrc : ProgramStep Database.empty P src) (hsig : src.sig.AllConstructors)
     (hrows : src.CtorRows) (htgt : ProgramStep Database.empty (encode P) tgt)

@@ -2,7 +2,13 @@ import EgglogSemantics.Encoding.Encode
 import EgglogSemantics.Proofs.Eval
 import EgglogSemantics.Proofs.Step
 
-/-! # Is `Rebuilt` satisfiable?
+/-! # Machine-checked vacuity results for parked M11
+
+`Encoding/Proofs.lean` states M11's theorems and proves none of them. A statement nothing
+discharges can be *trivially* true without anyone noticing, so each such finding is landed
+here as Lean rather than as prose, and the file has two halves.
+
+## Half one: is `Rebuilt` satisfiable?
 
 `Encoding/Encode.lean`'s `Rebuilt P d` is the hypothesis `encode_complete`,
 `encode_simulation` and `encode_simulation_run` carry. This file settles whether it is
@@ -19,6 +25,13 @@ satisfiable, over two source programs that differ only in *which* term is built:
 `Rebuilt` must already hold every re-keyed view row. `d₀` and `d₁` are the states the two
 encoded programs run to (hand-computed from `encode₀`/`encode₁`; the `ProgramStep`
 derivation itself is not formalized here).
+
+## Half two: `CongOn` cannot express existence
+
+`CongOnVacuity`, at the end of this file. `CongOn` is reflexive on *every* term of *every*
+database, so the five M11 statements concluding `CongOn src _ _` say nothing on the
+diagonal — including at the identity view row `encodeBuild` emits for every application it
+encodes, which is the most common row in the target.
 -/
 
 namespace Egglog
@@ -945,4 +958,107 @@ theorem mergeClosure_eq_of_allConstructors {d d' : Database} (h : d.sig.AllConst
 
 
 end RebuiltVacuity
+
+/-! # `CongOn` cannot express existence
+
+`Spec/Congruence.lean` defines `CongOn db a b := Cong ((db.addTerm a).addTerm b) a b`:
+build both terms, *then* ask. Building is what lets it speak about applications the source
+never held, and at **distinct** terms that is exactly right. On the **diagonal** it
+collapses — `addTerm a` puts `a` into the term set, so `Cong.refl` closes `CongOn db a a`
+for every `db` and every `a`, with no reference to either.
+
+`Cong` does not do this: `Cong.not_of_empty` says nothing at all is derivable in
+`Database.empty`, `CongOn db a a` included. So the collapse is `CongOn`'s alone, and it is
+not a fact about congruence.
+
+## The consequence for `Encoding/Proofs.lean`
+
+Five statements there conclude `CongOn src _ _`: `encode_rows_sound`,
+`encode_leader_sound`, `encode_sound`, `encode_proof_rows_check` and
+`encode_proof_view_rows_check`. Each is vacuous wherever its two terms coincide, and for
+the first that is the common case rather than an edge one. `Encoding/Encode.lean`'s
+`encodeBuild` emits
+
+    .set (viewName f) es [.app f es]
+
+for **every** application it encodes — `encodeBuild_emits_identity_view_row` below is that
+action list, by `rfl`. So the row hypothesis of `encode_rows_sound`'s second conjunct is
+satisfied by an *identity* view row, at which the conclusion is
+`CongOn src (.app f es) (.app f es)`: `congOn_refl`, discharged without looking at `src`,
+at `P`, at `tgt`, or at the row. `encode_rows_sound_conj2_at_identity` is that whole
+obligation, proved. **The row-soundness theorem says nothing about the most common row in
+the target.**
+
+## The fix, not taken here
+
+The five statements are M11's parked deliverable — changing one is the repo owner's call,
+so this file records the shape and stops. Two that would work:
+
+* **conjoin membership**: `k ∈ src.terms ∧ p ∈ src.terms ∧ Cong src k p`. That is
+  `congOn_iff_cong`'s hypotheses moved into the conclusion, and it is what makes the
+  diagonal say something — `Cong src a a` is `a ∈ src.terms`.
+* **split the cases**: state `CongOn` only where the rebuild has re-keyed, and `Cong`
+  everywhere else.
+
+What would *not* be right is "replace `CongOn` by `Cong`". `CongOn` is the correct
+relation for the job it was introduced for: after `(Add 1 2)` and `(union 1 2)` the
+rebuild re-keys `@AddView [1,1] ↦ Add[1,2]`, and `CongOn src (Add 1 1) (Add 1 2)` is a
+true and non-vacuous claim that `Cong src` cannot even state, because `Add 1 1` was never
+built and `Cong` is restricted to `src.terms`. The defect is confined to the diagonal. -/
+
+/-- **`CongOn` is unconditionally reflexive.** No well-formedness, no membership, no
+signature, no program: `addTerm` puts the term in and `Cong.refl` reads it straight back
+out. Contrast `Cong.not_of_empty`. -/
+theorem congOn_refl {db : Database} {a : Term} : CongOn db a a :=
+  Cong.refl (Or.inr a.self_mem_subterms)
+
+namespace CongOnVacuity
+
+/-- A term no program can build: `"nope"` is undeclared, so it is neither a constructor
+nor a merge function and `Expr.eval` has no rule for it. -/
+def junk : Term := .app "nope" [.lit (.int 0)]
+
+/-- **The junk term, in the empty database.** `CongOn` relates it to itself: `Database.empty`
+has no signature, no terms, no rows and no equalities, and `junk` could not be built even
+if it had. -/
+theorem congOn_empty_junk : CongOn Database.empty junk junk := congOn_refl
+
+/-- The contrast that makes the point: on the same database and the same term, `Cong` is
+false. `CongOn` is not a conservative reading of `Cong` on the diagonal — it is a constant
+one. -/
+theorem not_cong_empty_junk : ¬ Cong Database.empty junk junk := Cong.not_of_empty
+
+/-- **The identity view row is what `encodeBuild` emits.** The middle action is
+`.set (viewName "f") es [.app "f" es]` with `es` the encoded arguments: key and output
+denote the same term. One application is enough — the shape is uniform in `f` and in the
+arguments, and the `.app f es` in `encodeBuild`'s output is literally the key `es` re-applied. -/
+theorem encodeBuild_emits_identity_view_row :
+    (encodeBuild (.app "f" [.lit (.int 1)]) 0).2.1 =
+      [.set (termName "f") [.lit (.int 1), .app "f" [.lit (.int 1)]] [unitE],
+       .set (viewName "f") [.lit (.int 1)] [.app "f" [.lit (.int 1)]],
+       .letBind (freshVar 0) (.app (viewName "f") [.lit (.int 1)])] := by rfl
+
+/-- **`encode_rows_sound`'s second conjunct at an identity view row, discharged.** This is
+that obligation verbatim — same row hypothesis, same conclusion — for arbitrary `src`,
+`tgt`, `f` and `es`. Every hypothesis of `encode_rows_sound` is absent because none is
+needed: `congOn_refl` closes it. -/
+theorem encode_rows_sound_conj2_at_identity {src tgt : Database} {f : FnName}
+    {es : List Term} (_hrow : Row.mk (viewName f) es [Term.app f es] ∈ tgt.rows) :
+    CongOn src (.app f es) (.app f es) := congOn_refl
+
+/-- The same collapse in `encode_proof_view_rows_check`, whose `CongOn` conjunct runs the
+other way round. A two-column identity view row leaves `Checks P pf e (.app f es)` as the
+statement's entire content. -/
+theorem encode_proof_view_rows_check_congOn_at_identity {src tgt : Database} {f : FnName}
+    {es : List Term} {pf : Term}
+    (_hrow : Row.mk (viewName f) es [Term.app f es, pf] ∈ tgt.rows) :
+    CongOn src (.app f es) (.app f es) := congOn_refl
+
+/-- And in `encode_proof_rows_check` and `encode_rows_sound`'s first conjunct: a `@UF` row
+whose key is its own parent is a root, which every interned term is until something unions
+it. The `CongOn` conjunct is free there too. -/
+theorem encode_rows_sound_conj1_at_root {src tgt : Database} {k : Term}
+    (_hrow : Row.mk ufName [k] [k] ∈ tgt.rows) : CongOn src k k := congOn_refl
+
+end CongOnVacuity
 end Egglog

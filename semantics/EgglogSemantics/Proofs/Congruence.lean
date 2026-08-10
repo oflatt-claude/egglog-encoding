@@ -32,6 +32,19 @@ theorem refl {as : List Term} (h : ∀ a ∈ as, a ∈ db.terms) : CongList db a
   | cons a as ih =>
     refine .cons (Cong.refl (h a (by simp))) (ih fun b hb => h b (by simp [hb]))
 
+/-- Symmetry, pointwise. -/
+theorem symm {as bs : List Term} (h : CongList db as bs) : CongList db bs as := by
+  match h with
+  | .nil => exact .nil
+  | .cons hab hl => exact .cons hab.symm (CongList.symm hl)
+
+/-- Transitivity, pointwise. -/
+theorem trans {as bs cs : List Term} (h₁ : CongList db as bs) (h₂ : CongList db bs cs) :
+    CongList db as cs := by
+  match h₁, h₂ with
+  | .nil, .nil => exact .nil
+  | .cons hab hl₁, .cons hbc hl₂ => exact .cons (hab.trans hbc) (CongList.trans hl₁ hl₂)
+
 end CongList
 namespace Cong
 variable {db : Database}
@@ -41,6 +54,35 @@ theorem congr' {f : FnName} {as bs : List Term} (ha : Term.app f as ∈ db.terms
     (hb : Term.app f bs ∈ db.terms) (h : List.Forall₂ (Cong db) as bs) :
     Cong db (.app f as) (.app f bs) :=
   .congr ha hb (CongList.forall₂.mpr h)
+
+/-- **For a constructor, the table's functional dependency is derivable congruence.** Two
+rows of one constructor whose keys are congruent have congruent outputs, column by column
+— `Spec/Merge.lean`'s `MCong.fd`, here as a *result* about `Cong` rather than a
+constructor of a second relation. The M9 insight, in the direction that costs nothing.
+
+The only hypothesis is the **shape of the constructor rows**: wherever `db` records a row
+of a constructor, its output column is the application itself and that application is a
+term `db` holds. Nothing else — no `Database.CtorRows`, no `Database.RowsComplete`, no
+`Database.CtorTerms`, so this is strictly less than `mcong_iff_cong` needs. It is
+`Proofs/Merge.lean`'s `FDatabase.Inv.ctorRows` with its guard weakened from
+`mergeOf r.fn = none` to `IsCtor r.fn`, which is the clause that survives a `:merge`
+declaration of some other name; it is spelled out rather than named because its three
+siblings live in `Spec/Database.lean` and a fourth one here would split the family.
+
+`Cong.congr` is the case `as = bs`; `Cong.refl` on an application is the case where the
+two rows are one. -/
+theorem fd {f : FnName} {as bs a b : List Term} {x y : Term}
+    (hrow : ∀ r ∈ db.rows, db.sig.IsCtor r.fn →
+      r.out = [.app r.fn r.args] ∧ Term.app r.fn r.args ∈ db.terms)
+    (hra : Row.mk f as a ∈ db.rows) (hrb : Row.mk f bs b ∈ db.rows)
+    (hu : db.sig.IsCtor f) (hl : CongList db as bs) (hxy : (x, y) ∈ a.zip b) :
+    Cong db x y := by
+  obtain ⟨rfl, hma⟩ : a = [Term.app f as] ∧ Term.app f as ∈ db.terms := hrow _ hra hu
+  obtain ⟨rfl, hmb⟩ : b = [Term.app f bs] ∧ Term.app f bs ∈ db.terms := hrow _ hrb hu
+  simp only [List.zip_cons_cons, List.zip_nil_left, List.mem_cons, List.not_mem_nil,
+    or_false, Prod.mk.injEq] at hxy
+  obtain ⟨rfl, rfl⟩ := hxy
+  exact .congr hma hmb hl
 
 end Cong
 mutual
