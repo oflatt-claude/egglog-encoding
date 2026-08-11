@@ -12,8 +12,9 @@ admitted, nothing uses `native_decide`, and no `Classical.choice` enters beyond 
 Two further witnesses used to live here — that `Program.SetLegal` could not be dropped
 from `exec_programStep`, and that `CmdStep.mono_recorded` needed a hypothesis at `.decl`.
 Both turned on the specification reading congruence through `rows` and `sig`. `Cong` reads
-neither, so both are gone; the two sections below record what they said and what is left
-open.
+neither, so both are gone, and so are the hypotheses they justified. The sections below
+record what they said; `exec_programStep_needs_ctorDecls` is the witness for the one
+hypothesis that survived the deletion.
 
 **Declaration is required** (`Signature.IsCtor`), so every witness that builds a term
 declares its constructors. That is not bookkeeping: three of them turned on a name being
@@ -397,14 +398,108 @@ and the query `((= 0 1))` matches in neither. The program is still one egglog's 
 rejects, and `Action.SetLegal` still rejects it; what is gone is the proof that the
 hypothesis is *necessary*.
 
-`exec_programStep` and `execM_reachable` still carry it, because
-`Database.CtorState.rows` is what the induction re-establishes at each command and
-`Action.SetLegal` is what preserves it. Whether the hypothesis could now be dropped
-outright is open, and is not settled here.
+**The hypothesis is gone too.** What the induction re-establishes at each command is now
+`Database.CtorState`, which is `Database.WF` and `Signature.AllConstructors` and nothing
+about rows, and a `set` disturbs neither; the row invariants moved to
+`Database.CtorFragment`, which only `ProgramStep.ctorRows` asks for.
+`exec_programStep` and `execM_reachable` carry `Program.CtorDecls` alone, and the section
+below is the witness that *that* one cannot go the same way.
 
-What the same program *does* still witness is below: `Proofs/Congruence.lean`'s `Cong.fd`
-has a hypothesis, and a `set` on a constructor is a state a program reaches where that
-hypothesis is false and the functional dependency fails. -/
+What the `(set (f) 0) (set (f) 1)` program *does* still witness is further down:
+`Proofs/Congruence.lean`'s `Cong.fd` has a hypothesis, and a `set` on a constructor is a
+state a program reaches where that hypothesis is false and the functional dependency
+fails. -/
+
+/-! ## `exec_programStep` needs `Program.CtorDecls`
+
+`exec` has no merge phase and `CmdStep.action` has one, so wherever a merge can fire the
+specification reaches states the interpreter does not — and the `←` direction of
+`exec_programStep`, which is what makes the refinement an equality rather than a
+soundness claim, fails.
+
+`(function f () i64 :merge 7) (set (f) 0)` is the smallest program where it can. There is
+no `a ≠ b` guard on `MergeStep.collide`, so the single row `f ↦ 0` collides with *itself*
+and `f`'s body writes `7` at the same key; the merge closure after the action may take
+that step or not, and the two results differ. Every other hypothesis the refinement chain
+knows about holds of the program — it is `Program.SetLegal`, since a `set` on a `:merge`
+function is exactly what `Action.SetLegal` permits — so `Program.CtorDecls` is isolated as
+the one thing that fails.
+
+This replaces `exists_mergeStep_not_ctorRows` as the reason `hdecl` is not removable.
+That one is about `Database.CtorRows`, which the refinement no longer carries; this one is
+about `exec_programStep` itself. -/
+
+/-- `(function f () i64 :merge 7) (set (f) 0)`. -/
+def mergeDeclProgram : Program :=
+  [ .decl "f" fDecl, .action (.set "f" [] [.lit (.int 0)]) ]
+
+/-- After the declaration. -/
+def mergeSig : Database :=
+  { Database.empty with sig := Function.update Database.empty.sig "f" (some fDecl) }
+
+/-- After `(set (f) 0)`: one row, and the state the interpreter stops at. -/
+def mergeSetDb : Database := mergeSig.addRow "f" [] [.lit (.int 0)]
+
+/-- The other state `CmdStep.action`'s merge phase allows: the row collides with itself
+and `f`'s body writes `7` at the same key. -/
+def mergeCollideDb : Database :=
+  { (({ mergeSetDb with env := mergeEnv [.lit (.int 0)] [.lit (.int 0)] } :
+        Database).addRow "f" [] [.lit (.int 7)]) with
+    env := mergeSetDb.env, rules := mergeSetDb.rules }
+
+theorem mergeDecl_eval :
+    evalAction mergeSig (.set "f" [] [.lit (.int 0)]) = some mergeSetDb := rfl
+
+/-- The self-collision. `CongList` is reflexive on the empty key, and the body is empty,
+so every premise is `rfl` or `.nil`. -/
+theorem mergeDecl_mergeStep : MergeStep mergeSetDb mergeCollideDb :=
+  MergeStep.collide (f := "f") (as := []) (bs := []) (a := [.lit (.int 0)])
+    (b := [.lit (.int 0)]) (vs := [.lit (.int 7)]) (body := []) (res := [.lit (.int 7)])
+    (by simp [mergeSetDb, Database.addRow]) (by simp [mergeSetDb, Database.addRow])
+    .nil rfl rfl rfl
+
+/-- **Both states are reachable.** The merge phase after the action is a `MergeClosure`,
+which may be reflexive or take the one step. -/
+theorem mergeDecl_reaches_set : ProgramStep Database.empty mergeDeclProgram mergeSetDb :=
+  .cons .decl (.cons (.action mergeDecl_eval .refl) .nil)
+
+@[inherit_doc mergeDecl_reaches_set]
+theorem mergeDecl_reaches_collide :
+    ProgramStep Database.empty mergeDeclProgram mergeCollideDb :=
+  .cons .decl (.cons (.action mergeDecl_eval (.single mergeDecl_mergeStep)) .nil)
+
+/-- …and they are different: only the merged one holds a row recording `7`. -/
+theorem mergeDecl_ne : mergeSetDb ≠ mergeCollideDb := by
+  intro h
+  have hmem : Row.mk "f" [] [Term.lit (.int 7)] ∈ mergeSetDb.rows := by
+    rw [h]; simp [mergeCollideDb, Database.addRow]
+  simp [mergeSetDb, mergeSig, Database.addRow, Database.addTerms, Database.addTerm,
+    Database.empty, Term.ctorRows] at hmem
+
+/-- The program passes the other check the refinement chain knows about: a `set` on a
+`:merge` function is what `Action.SetLegal` is there to permit. -/
+theorem mergeDeclProgram_setLegal :
+    mergeDeclProgram.SetLegal Database.empty.sig := by
+  refine ⟨trivial, ?_, trivial⟩
+  change Signature.mergeOf mergeSig.sig "f" ≠ none
+  rw [show Signature.mergeOf mergeSig.sig "f" = some (.merge [] [.lit (.int 7)]) from rfl]
+  simp
+
+/-- The one check that rejects it. -/
+theorem mergeDeclProgram_not_ctorDecls : ¬ mergeDeclProgram.CtorDecls := by
+  intro h
+  exact absurd (h (.decl "f" fDecl) (by simp [mergeDeclProgram]))
+    (by simp [Cmd.CtorDecl, fDecl])
+
+/-- **`exec_programStep` without `Program.CtorDecls` is false.** The interpreter returns
+at most one database, and the specification reaches two. -/
+theorem exec_programStep_needs_ctorDecls :
+    ¬ ∀ (p : Program) (D : Database),
+      Option.map FDatabase.toDatabase (exec p) = some D ↔ ProgramStep Database.empty p D := by
+  intro h
+  exact mergeDecl_ne (Option.some.inj
+    (((h mergeDeclProgram mergeSetDb).mpr mergeDecl_reaches_set).symm.trans
+      ((h mergeDeclProgram mergeCollideDb).mpr mergeDecl_reaches_collide)))
 
 theorem forall₂_eq_list {as bs : List Term} (h : List.Forall₂ (· = ·) as bs) : as = bs := by
   induction h with

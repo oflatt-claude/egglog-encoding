@@ -439,6 +439,21 @@ theorem sUnion {db : Database} (h : db.CtorRows) {S : Set Database}
     · exact Or.inl (by rw [h]; exact ⟨hout, ht⟩)
     · exact Or.inr ⟨d, hd, by rw [hS d hd]; exact ⟨hout, ht⟩⟩
 
+/-- **`CtorRows` discharges `Cong.fd`'s hypothesis.** The two are the same statement, one
+as a set equation and one pointwise, so `IsCtor` is not even needed — under `CtorRows`
+*every* row has the constructor shape.
+
+This is what connects `Proofs/Congruence.lean`'s `Cong.fd` to a database anything reaches:
+`Cong.fd` is why `Spec/` needs no `fd` rule, and without this its hypothesis would be one
+nothing was known to satisfy. `Proofs/Step.lean`'s `ProgramStep.ctorRows` supplies the
+`CtorRows` at the far end. -/
+theorem fd_hyp {db : Database} (h : db.CtorRows) :
+    ∀ r ∈ db.rows, db.sig.IsCtor r.fn →
+      r.out = [.app r.fn r.args] ∧ Term.app r.fn r.args ∈ db.terms := by
+  intro r hr _
+  rw [h] at hr
+  exact hr
+
 end CtorRows
 /-- A row whose output is not the application it is keyed at is one no `ctorRowsOf`
 contains, so a database holding it is outside `CtorRows`. Every counterexample below is

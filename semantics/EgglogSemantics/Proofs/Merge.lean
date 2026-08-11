@@ -18,8 +18,8 @@ relation the specification's `Database.Out` and `Matches` compare keys with.
 
 Two statements needed repair, and the repairs are the interesting output:
 
-* `execM_reachable` is false without side conditions. It carries `Program.CtorDecls` and
-  `Program.SetLegal` and is **proved**; its docstring justifies both.
+* `execM_reachable` is false without a side condition. It carries `Program.CtorDecls` and
+  is **proved**; its docstring justifies it.
 * `MergeStep.self_id` and `MergeStep.wf` need the row half of well-formedness
   (`Database.RowsWF`), which `Database.WF` deliberately omits, and `self_id`
   additionally needs `ctorRowsOf db.terms ⊆ db.rows`.
@@ -607,6 +607,24 @@ theorem Database.Out.union_cong {db : Database} {f : FnName} {as v w : List Term
   obtain ⟨cs, hlc, hrc⟩ := hw
   exact Cong.fd hrow hrb hrc hsig (hlb.symm.trans hlc) hxy
 
+/-- **The functional dependency, at a state something reaches.**
+
+`Out.union_cong` with its hypothesis discharged rather than assumed: run any
+constructor-fragment program from a state whose rows are canonical, and in the state it
+reaches a constructor's outputs at one key class are congruent. Nothing consumes this —
+it is the argument that `Spec/` needs no `fd` rule, made machine-checkable end to end
+instead of spread across docstrings. -/
+theorem ProgramStep.out_union_cong {db db' : Database} {p : Program}
+    (h : ProgramStep db p db') (hwf : db.WF) (hrows : db.CtorRows)
+    (hsig : db.sig.AllConstructors) (hterms : db.CtorTerms) (hdecl : p.CtorDecls)
+    (hlegal : p.SetLegal db.sig) (hrules : ∀ r ∈ db.rules, r.SetLegal db.sig)
+    {f : FnName} {as v w : List Term} {x y : Term} (hf : db'.sig.IsCtor f)
+    (hv : db'.Out f as v) (hw : db'.Out f as w) (hxy : (x, y) ∈ v.zip w) :
+    Cong db' x y :=
+  Database.Out.union_cong
+    (Database.CtorRows.fd_hyp
+      (h.ctorRows hwf hrows hsig hterms hdecl hlegal hrules)) hf hv hw hxy
+
 /-! ### Invariants over the step relation
 
 The shape every M11 safety theorem takes, and the reason termination and confluence are
@@ -1017,21 +1035,17 @@ interpreter's is one of them rather than *the* one. -/
 proves the two directions at once; this is the half the merge interpreter below cannot
 have, kept under its own name because that contrast is the point.
 
-**The two hypotheses**, neither removable:
-
-* `Program.CtorDecls` gives `Signature.AllConstructors` at every intermediate state
-  (`Signature.AllConstructors.sigBind`), which is what makes `MergeStep` vacuous and so
-  how the `MergeClosure` phase of `CmdStep.action` gets discharged
-  (`MergeClosure.eq_of_allConstructors`).
-* `Program.SetLegal` keeps `Database.CtorRows`, which is what `Database.CtorState` — the
-  bundle the induction re-establishes at each command — carries.
-  `Proofs/Counterexamples.lean` records that its necessity witness is gone and that
-  whether it is still needed is open. -/
+**The one hypothesis**, not removable: `Program.CtorDecls` gives
+`Signature.AllConstructors` at every intermediate state
+(`Signature.AllConstructors.sigBind`), which is what makes `MergeStep` vacuous and so how
+the `MergeClosure` phase of `CmdStep.action` gets discharged
+(`MergeClosure.eq_of_allConstructors`). `Falsity.exec_programStep_needs_ctorDecls` is the
+witness that dropping it is false. -/
 theorem execM_reachable {p : Program} {d : FDatabase} (hdecl : p.CtorDecls)
-    (hlegal : p.SetLegal Database.empty.sig) (h : exec p = some d) :
+    (h : exec p = some d) :
     ProgramStep FDatabase.empty.toDatabase p d.toDatabase := by
   rw [FDatabase.toDatabase_empty]
-  exact (exec_programStep hdecl hlegal).mp (by rw [h, Option.map_some])
+  exact (exec_programStep hdecl).mp (by rw [h, Option.map_some])
 
 /-! ### The contract for `execM`: containment, not reachability
 
@@ -2842,16 +2856,17 @@ The witness is `RunRules d.toDatabase` itself and the merge closure is the refle
 `execRunRules` runs no merge phase (`Impl/Merge.lean` defers it to `execCmdM`), so
 nothing has to be re-based here.
 
-`hrules` is `execActions_evalActions`'s premise, per rule: a rule head is an action block
-like any other, and without legality `Inv` does not survive it. It is `Rule.SetLegal` at
-`d.sig`, which is what `Program.SetLegal` gives for every rule a program installs.
+**Rule legality is not needed.** Containment only asks that every row the enumerator
+writes is one the specification writes, and `execActions_evalActions` matches the two
+action interpreters on every action block, legal or not. `FDatabase.Inv.execRunRules` is
+where legality is spent — keeping the invariant, which is a stronger conclusion than this
+one.
 
 The enumerator's substitution is transported to the specification's by
 `evalActions_envAgree`: `matchQuery_validQuerySubst` only produces one that
 `Env.Agree`s, and `Database.EnvAgree.eq_of_env_rules` turns that back into equality once
 `fireInto` restores the caller's environment. -/
-theorem execRunRules_contained {d : FDatabase} (h : d.Inv)
-    (hrules : ∀ r ∈ d.rules, Actions.SetLegal r.actions d.sig) :
+theorem execRunRules_contained {d : FDatabase} (h : d.Inv) :
     ∃ db, RunStep d.toDatabase db ∧ (execRunRules d).toDatabase.Contained db := by
   refine ⟨RunRules d.toDatabase, Relation.ReflTransGen.refl, ?_⟩
   set R : Database := RunRules d.toDatabase
@@ -3791,7 +3806,7 @@ theorem execCmdM_contained' {d d' : FDatabase} (h : d.Inv) {c : Cmd}
     simp
   | run =>
     rw [FDatabase.execCmdM] at hs
-    obtain ⟨R, hRstep, hRcont⟩ := execRunRules_contained h hrules
+    obtain ⟨R, hRstep, hRcont⟩ := execRunRules_contained h
     have hRsig : R.sig = d.sig := MergeClosure.sig hRstep
     have hRenv : R.env = d.env := (MergeClosure.envRules hRstep).1
     have hRrules : R.rules = d.toDatabase.rules := (MergeClosure.envRules hRstep).2

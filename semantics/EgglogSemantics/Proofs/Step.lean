@@ -224,9 +224,25 @@ theorem Signature.AllConstructors.sigBind {sig : Signature} (h : sig.AllConstruc
     · exact h g
   | _ => exact h
 
-/-- The state half of the constructor fragment: the database is well formed, the signature
-declares no merge function, every application it holds is a *declared* constructor's, no
-rule the database holds can `set`, and the rows are the terms'.
+/-- The state half of the constructor fragment: the database is well formed and the
+signature declares no merge function.
+
+These two are what a *step* needs, and nothing about rows is among them. `WF` is what
+`Proofs/Interp.lean`'s `execRunRules_RunRules` reads, and `AllConstructors` is what makes
+`MergeStep` vacuous, so that a command has exactly one result. Bundled because they move
+together across a command and because a `decl` moves the signature, which is why
+`CmdStep.ctorState` takes `Cmd.CtorDecl` and nothing else. -/
+structure Database.CtorState (db : Database) : Prop where
+  wf : db.WF
+  sig : db.sig.AllConstructors
+
+theorem Database.CtorState.empty : Database.empty.CtorState where
+  wf := Database.WF.empty
+  sig := by intro f; simp [Signature.mergeOf, Database.empty]
+
+/-- `CtorState` plus the three conditions the **row** invariants need: every application
+the database holds is a *declared* constructor's, no rule the database holds can `set`,
+and the rows are the terms'.
 
 Bundled because they have to move together — a `decl` changes the signature, so it changes
 what `SetLegal` means for the rules already stored, and `RunRules` needs those rules legal
@@ -235,21 +251,17 @@ to keep the rows constructor rows.
 `terms` is a field rather than a consequence of `sig` because declaration is required:
 `AllConstructors` says nothing *is* a merge function, which leaves an undeclared name
 neither a constructor nor a merge function.
-`wf` is here only to keep `terms`: an action evaluates in `db.env`, and knowing that the
-environment's values are constructor-built is `Database.env_ctorTerm`, which reads both. -/
-structure Database.CtorState (db : Database) : Prop where
-  wf : db.WF
-  sig : db.sig.AllConstructors
+`CtorState.wf` is what keeps `terms`: an action evaluates in `db.env`, and knowing that
+the environment's values are constructor-built is `Database.env_ctorTerm`, which reads
+both.
+
+`Action.SetLegal` is what preserves this and does *not* preserve `CtorState`, which is
+why it is a hypothesis of `ProgramStep.ctorRows` and not of the interpreter's
+refinement. -/
+structure Database.CtorFragment (db : Database) : Prop extends Database.CtorState db where
   terms : db.CtorTerms
   rules : ∀ r ∈ db.rules, r.SetLegal db.sig
   rows : db.CtorRows
-
-theorem Database.CtorState.empty : Database.empty.CtorState where
-  wf := Database.WF.empty
-  sig := by intro f; simp [Signature.mergeOf, Database.empty]
-  terms := by intro f as hm; exact absurd hm (by simp [Database.empty])
-  rules := by simp [Database.empty]
-  rows := Database.CtorRows.empty
 
 /-! #### Constructor terms survive a run
 
@@ -429,7 +441,7 @@ theorem RuleResults.ctorRows {db d : Database} (hsig : db.sig.AllConstructors) {
   obtain ⟨σ, -, hstep⟩ := h
   exact evalLocalActions_ctorRows hsig hlegal.2 hrows hstep
 
-theorem RunRules.ctorRows {db : Database} (h : db.CtorState) : (RunRules db).CtorRows :=
+theorem RunRules.ctorRows {db : Database} (h : db.CtorFragment) : (RunRules db).CtorRows :=
   h.rows.sUnion fun _ hd =>
     RuleResults.ctorRows h.sig (h.rules _ hd.choose_spec.1) h.rows hd.choose_spec.2
 
@@ -441,7 +453,7 @@ theorem RuleResults.wf {db d : Database} (hw : db.WF) {r : Rule}
     (h : d ∈ RuleResults db r) : d.WF := by
   obtain ⟨σ, hq, hstep⟩ := h; exact evalLocalActions_wf hw hq.mem_terms hstep
 
-theorem RuleResults.ctorTerms {db d : Database} (h : db.CtorState) {r : Rule}
+theorem RuleResults.ctorTerms {db d : Database} (h : db.CtorFragment) {r : Rule}
     (hlegal : r.SetLegal db.sig) (hd : d ∈ RuleResults db r) : d.CtorTerms := by
   obtain ⟨σ, hq, hstep⟩ := hd
   exact evalLocalActions_ctorTerms h.wf h.sig hq.mem_terms hlegal.2 h.terms hstep
@@ -449,7 +461,7 @@ theorem RuleResults.ctorTerms {db d : Database} (h : db.CtorState) {r : Rule}
 theorem RunRules.wf {db : Database} (hw : db.WF) : (RunRules db).WF :=
   hw.sUnion fun _ hd => RuleResults.wf hw hd.choose_spec.2
 
-theorem RunRules.ctorTerms {db : Database} (h : db.CtorState) : (RunRules db).CtorTerms :=
+theorem RunRules.ctorTerms {db : Database} (h : db.CtorFragment) : (RunRules db).CtorTerms :=
   h.terms.sUnion fun _ hd f as hm =>
     RuleResults.sig hd.choose_spec.2 ▸
       RuleResults.ctorTerms h (h.rules _ hd.choose_spec.1) hd.choose_spec.2 f as hm
@@ -462,9 +474,11 @@ theorem CmdStep.sig {db db' : Database} {c : Cmd} (h : CmdStep db c db') :
   | run hrun => exact hrun.sig
   | decl => rfl
 
+/-- **A command keeps the constructor fragment's state half, with no condition on its
+actions.** The one thing that has to be excluded is the *declaration* of a `:merge`
+function, which is `Cmd.CtorDecl`; a `set` cannot disturb either field. -/
 theorem CmdStep.ctorState {db db' : Database} (h : db.CtorState) {c : Cmd}
-    (hdecl : c.CtorDecl) (hlegal : c.SetLegal db.sig) (hstep : CmdStep db c db') :
-    db'.CtorState := by
+    (hdecl : c.CtorDecl) (hstep : CmdStep db c db') : db'.CtorState := by
   cases hstep with
   | action ha hm =>
     -- The merge phase is empty on a constructor signature, so the state after it is the
@@ -472,22 +486,38 @@ theorem CmdStep.ctorState {db db' : Database} (h : db.CtorState) {c : Cmd}
     -- stand-in for `Proofs/Merge.lean`'s saturation lemma (that file is below this one).
     have hd := hm.eq_of_allConstructors (by rw [evalAction_sig ha]; exact h.sig)
     subst hd
-    exact ⟨evalAction_wf h.wf ha,
-      by rw [evalAction_sig ha]; exact h.sig,
+    exact ⟨evalAction_wf h.wf ha, by rw [evalAction_sig ha]; exact h.sig⟩
+  | rule => exact ⟨⟨h.wf.subtermClosed, h.wf.eqsInTerms, h.wf.envInTerms⟩, h.sig⟩
+  | run hrun =>
+    rw [RunStep.eq_runRules h.sig hrun]
+    exact ⟨RunRules.wf h.wf, h.sig⟩
+  | decl =>
+    exact ⟨⟨h.wf.subtermClosed, h.wf.eqsInTerms, h.wf.envInTerms⟩, h.sig.sigBind hdecl⟩
+
+/-- The row invariants need `Action.SetLegal` on top, and that is the whole difference
+between this and `CmdStep.ctorState`. -/
+theorem CmdStep.ctorFragment {db db' : Database} (h : db.CtorFragment) {c : Cmd}
+    (hdecl : c.CtorDecl) (hlegal : c.SetLegal db.sig) (hstep : CmdStep db c db') :
+    db'.CtorFragment := by
+  cases hstep with
+  | action ha hm =>
+    have hd := hm.eq_of_allConstructors (by rw [evalAction_sig ha]; exact h.sig)
+    subst hd
+    exact ⟨⟨evalAction_wf h.wf ha, by rw [evalAction_sig ha]; exact h.sig⟩,
       evalAction_ctorTerms h.wf h.sig hlegal h.terms ha,
       by rw [evalAction_sig ha, evalAction_rules ha]; exact h.rules,
       evalAction_ctorRows h.sig hlegal h.rows ha⟩
   | rule =>
-    refine ⟨⟨h.wf.subtermClosed, h.wf.eqsInTerms, h.wf.envInTerms⟩, h.sig, h.terms, ?_,
+    refine ⟨⟨⟨h.wf.subtermClosed, h.wf.eqsInTerms, h.wf.envInTerms⟩, h.sig⟩, h.terms, ?_,
       h.rows⟩
     rintro r' (rfl | hr')
     · exact hlegal
     · exact h.rules r' hr'
   | run hrun =>
     rw [RunStep.eq_runRules h.sig hrun]
-    exact ⟨RunRules.wf h.wf, h.sig, RunRules.ctorTerms h, h.rules, RunRules.ctorRows h⟩
+    exact ⟨⟨RunRules.wf h.wf, h.sig⟩, RunRules.ctorTerms h, h.rules, RunRules.ctorRows h⟩
   | @decl f d =>
-    exact ⟨⟨h.wf.subtermClosed, h.wf.eqsInTerms, h.wf.envInTerms⟩, h.sig.sigBind hdecl,
+    exact ⟨⟨⟨h.wf.subtermClosed, h.wf.eqsInTerms, h.wf.envInTerms⟩, h.sig.sigBind hdecl⟩,
       h.terms.sigBind (c := .decl f d) hdecl,
       fun r hr => Rule.SetLegal.of_allConstructors h.sig (h.rules r hr), h.rows⟩
 
@@ -514,14 +544,24 @@ theorem ProgramStep.append {db d d' : Database} {p q : Program} (h₁ : ProgramS
 /-- The invariant argument, in the shape `Proofs/Merge.lean`'s `invariant_of_step` gives
 it: an invariant preserved by one command holds at every reachable state. It is spelled
 out rather than instantiated because the invariant here is not a bare `Database → Prop`
-— each step also takes the command's own two side conditions. -/
+— each step also takes the command's own side condition. -/
 theorem ProgramStep.ctorState {db db' : Database} (h : db.CtorState) {p : Program}
-    (hdecl : p.CtorDecls) (hlegal : p.SetLegal db.sig) (hstep : ProgramStep db p db') :
-    db'.CtorState := by
+    (hdecl : p.CtorDecls) (hstep : ProgramStep db p db') : db'.CtorState := by
   induction hstep with
   | nil => exact h
   | @cons db d d' c cs hc _ ih =>
-    exact ih (hc.ctorState h (hdecl c (by simp)) hlegal.1)
+    exact ih (hc.ctorState h (hdecl c (by simp)))
+      (fun c' hc' => hdecl c' (List.mem_cons_of_mem c hc'))
+
+/-- `ProgramStep.ctorState` for the row invariants, which is the same induction with
+`Action.SetLegal` threaded through it as well. -/
+theorem ProgramStep.ctorFragment {db db' : Database} (h : db.CtorFragment) {p : Program}
+    (hdecl : p.CtorDecls) (hlegal : p.SetLegal db.sig) (hstep : ProgramStep db p db') :
+    db'.CtorFragment := by
+  induction hstep with
+  | nil => exact h
+  | @cons db d d' c cs hc _ ih =>
+    exact ih (hc.ctorFragment h (hdecl c (by simp)) hlegal.1)
       (fun c' hc' => hdecl c' (List.mem_cons_of_mem c hc'))
       (by rw [hc.sig]; exact hlegal.2)
 
@@ -554,17 +594,16 @@ theorem CmdStep.det {db d₁ d₂ : Database} (hsig : db.sig.AllConstructors) {c
 conditions are `CmdStep.ctorState`'s: they are what keeps `AllConstructors` true at every
 intermediate state, which is what `CmdStep.det` needs there. -/
 theorem ProgramStep.det {db d₁ d₂ : Database} (hc : db.CtorState) {p : Program}
-    (hdecl : p.CtorDecls) (hlegal : p.SetLegal db.sig)
-    (h₁ : ProgramStep db p d₁) (h₂ : ProgramStep db p d₂) : d₁ = d₂ := by
+    (hdecl : p.CtorDecls) (h₁ : ProgramStep db p d₁) (h₂ : ProgramStep db p d₂) :
+    d₁ = d₂ := by
   induction p generalizing db d₁ d₂ with
   | nil => rw [← h₁.nil_inv, ← h₂.nil_inv]
   | cons c cs ih =>
     obtain ⟨e₁, he₁, hr₁⟩ := h₁.cons_inv
     obtain ⟨e₂, he₂, hr₂⟩ := h₂.cons_inv
     obtain rfl := he₁.det hc.sig he₂
-    exact ih (he₁.ctorState hc (hdecl c (by simp)) hlegal.1)
-      (fun c' hc' => hdecl c' (List.mem_cons_of_mem c hc'))
-      (by rw [he₁.sig]; exact hlegal.2) hr₁ hr₂
+    exact ih (he₁.ctorState hc (hdecl c (by simp)))
+      (fun c' hc' => hdecl c' (List.mem_cons_of_mem c hc')) hr₁ hr₂
 
 /-- **The headline.** A program that declares only constructors and never `set`s a
 constructor leaves the row set determined by the term set.
@@ -572,14 +611,14 @@ constructor leaves the row set determined by the term set.
 The three side conditions are not interchangeable: `SetLegal` rules out the action that
 writes a bad row, `CtorDecls` rules out the *declaration* that would let `MergeStep`
 write one with no action involved, and `AllConstructors` of the starting signature is
-what makes both bite. `hwf` and `hterms` are the two `Database.CtorState` needs and this
-statement does not: they say nothing about rows and are carried only because the bundle
-moves as one. -/
+what makes both bite. `hwf` and `hterms` are the two `Database.CtorFragment` needs and
+this statement does not: they say nothing about rows and are carried only because the
+bundle moves as one. -/
 theorem ProgramStep.ctorRows {db db' : Database} {p : Program}
     (hstep : ProgramStep db p db') (hwf : db.WF) (hrows : db.CtorRows)
     (hsig : db.sig.AllConstructors) (hterms : db.CtorTerms) (hdecl : p.CtorDecls)
     (hlegal : p.SetLegal db.sig)
     (hrules : ∀ r ∈ db.rules, r.SetLegal db.sig) : db'.CtorRows :=
-  (ProgramStep.ctorState ⟨hwf, hsig, hterms, hrules, hrows⟩ hdecl hlegal hstep).rows
+  (ProgramStep.ctorFragment ⟨⟨hwf, hsig⟩, hterms, hrules, hrows⟩ hdecl hlegal hstep).rows
 
 end Egglog

@@ -834,7 +834,7 @@ theorem execCmd_cmdStep {d : FDatabase} (h : d.toDatabase.CtorState) {c : Cmd}
     exact ⟨fun hd => hd ▸ .decl, fun hs => by cases hs with | decl => rfl⟩
 
 theorem execProgram_programStep {d : FDatabase} (h : d.toDatabase.CtorState) {p : Program}
-    (hdecl : p.CtorDecls) (hlegal : p.SetLegal d.toDatabase.sig) {D : Database} :
+    (hdecl : p.CtorDecls) {D : Database} :
     (execProgram d p).map FDatabase.toDatabase = some D ↔ ProgramStep d.toDatabase p D := by
   induction p generalizing d D with
   | nil =>
@@ -854,39 +854,39 @@ theorem execProgram_programStep {d : FDatabase} (h : d.toDatabase.CtorState) {p 
           Option.bind_some] at hmap
         have hstep : CmdStep d.toDatabase c d₁.toDatabase :=
           (execCmd_cmdStep h).mp (by rw [hc, Option.map_some])
-        exact .cons hstep ((ih (hstep.ctorState h (hdecl c (by simp)) hlegal.1)
-          (fun c' hc' => hdecl c' (List.mem_cons_of_mem c hc'))
-          (by rw [hstep.sig]; exact hlegal.2)).mp hmap)
+        exact .cons hstep ((ih (hstep.ctorState h (hdecl c (by simp)))
+          (fun c' hc' => hdecl c' (List.mem_cons_of_mem c hc'))).mp hmap)
     · intro hs
       obtain ⟨e, he, hrest⟩ := hs.cons_inv
       obtain ⟨d₁, hc, hd₁⟩ := Option.map_eq_some_iff.mp ((execCmd_cmdStep h).mpr he)
       subst hd₁
       rw [show execProgram d (c :: cs)
         = (execCmd d c).bind fun d' => execProgram d' cs from rfl, hc, Option.bind_some]
-      exact (ih (he.ctorState h (hdecl c (by simp)) hlegal.1)
-        (fun c' hc' => hdecl c' (List.mem_cons_of_mem c hc'))
-        (by rw [he.sig]; exact hlegal.2)).mpr hrest
+      exact (ih (he.ctorState h (hdecl c (by simp)))
+        (fun c' hc' => hdecl c' (List.mem_cons_of_mem c hc'))).mpr hrest
 
 /-- **The refinement theorem**: on the constructor fragment the interpreter computes
 exactly the states the semantics reaches — an `if and only if`, so a `#guard` or a
 differential test constrains `Spec/` in both directions.
 
 `exec` used to have no hypotheses, because it was compared against a *function*. Compared
-against the relation it carries two. `hdecl` is not removable —
-`exists_mergeStep_not_ctorRows` is why a `:merge` declaration has to be excluded even
-where no `set` occurs. `hlegal` is what re-establishes `Database.CtorState` at each
-command; its necessity witness is gone with `Cong`'s row-reading, and
-`Proofs/Counterexamples.lean` records that it is now an open question.
+against the relation it carries **one**. `hdecl` is not removable:
+`Falsity.exec_programStep_needs_ctorDecls` exhibits a program whose only offence is a
+`:merge` declaration and two states the specification reaches, of which the interpreter
+returns at most one.
+
+There is no `Program.SetLegal`. What the induction re-establishes at each command is
+`Database.CtorState`, which is `Database.WF` and `Signature.AllConstructors` — and a
+`set` disturbs neither. It used to be re-establishing `Database.CtorRows` as well,
+because congruence read rows; `Cong` does not, so the row invariants moved out to
+`Database.CtorFragment` and the hypothesis that maintained them went with them.
 
 Everything the interpreter is tested on — the `#guard` cases in `Examples.lean` and the
 differential test against egglog — therefore says something about the specification. -/
-theorem exec_programStep {p : Program} (hdecl : p.CtorDecls)
-    (hlegal : p.SetLegal Database.empty.sig) {D : Database} :
+theorem exec_programStep {p : Program} (hdecl : p.CtorDecls) {D : Database} :
     (exec p).map FDatabase.toDatabase = some D ↔ ProgramStep Database.empty p D := by
   rw [show exec p = execProgram FDatabase.empty p from rfl, ← FDatabase.toDatabase_empty]
-  refine execProgram_programStep ?_ hdecl ?_ <;>
-    rw [FDatabase.toDatabase_empty]
-  · exact Database.CtorState.empty
-  · exact hlegal
+  exact execProgram_programStep
+    (by rw [FDatabase.toDatabase_empty]; exact Database.CtorState.empty) hdecl
 
 end Egglog

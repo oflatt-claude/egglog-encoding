@@ -63,8 +63,8 @@ end Expr
 
 `Database.CtorTerms` on one term, and the fact that `Expr.eval` only ever produces such
 terms. It lives here rather than with the invariant that reads it because it is a fact
-about `Expr.eval` and nothing else, and both `Proofs/Step.lean`'s `Database.CtorState` and
-`Proofs/Merge.lean`'s `FDatabase.Inv` need it. -/
+about `Expr.eval` and nothing else, and both `Proofs/Step.lean`'s `Database.CtorFragment`
+and `Proofs/Merge.lean`'s `FDatabase.Inv` need it. -/
 
 /-- A term built only from constructor applications.
 
