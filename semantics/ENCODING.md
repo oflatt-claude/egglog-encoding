@@ -12,8 +12,8 @@ git show 0836127:semantics/EgglogSemantics/Encoding/Rebuilt.lean  # the vacuity 
 ```
 
 They were deleted rather than carried through the `Spec/` simplification work: both are
-row-shaped throughout, the statements are known defective, and porting proofs of nothing
-is not worth the maintenance.
+row-shaped throughout — `Spec/` has no rows now, a function entry is a term — the
+statements are known defective, and porting proofs of nothing is not worth the maintenance.
 
 ## Two findings, both machine-checked before deletion
 
@@ -41,13 +41,13 @@ saturation or state completeness against a genuinely reachable condition.
 
 `CongOn db ts a b` is definitionally `Cong (db.addTerms ts) a b`, so
 `CongOn db [a, a] a a` holds for **every** database and **every** term — no
-well-formedness, no membership, no signature, no program. `addTerm` puts the term in and
-`Cong.refl` reads it back out. The witness was one line:
+well-formedness, no membership, no signature, no program. The witness, `congOn_refl`, was one
+line.
 
-```lean
-theorem congOn_refl {db : Database} {a : Term} : CongOn db [a, a] a a :=
-  Cong.refl (Or.inr a.self_mem_subterms)
-```
+**It survived `Cong` losing its `refl` rule**, which is worth checking rather than
+assuming, since that deletion is what re-examined every other reflexivity guard
+(`Scratch/NonVacuity.lean`). `Database.addTerm` writes a reflexive *equation* per subterm,
+so `(a, a) ∈ (db.addTerms [a, a]).eqs` and `Cong.assert` reads it straight back.
 
 Five of the M11 statements conclude `CongOn`, so each says nothing wherever its two terms
 coincide. That is not a corner case. `encodeBuild` emits
@@ -63,11 +63,12 @@ every interned term is until something unions it.
 for the job it was introduced for: after `(Add 1 2)` and `(union 1 2)` the rebuild re-keys
 `@AddView [1,1] ↦ Add[1,2]`, and `CongOn src [Add 1 1, Add 1 2] (Add 1 1) (Add 1 2)` is a
 true, non-vacuous claim that `Cong src` cannot even state, because `Add 1 1` was never
-built and `Cong` is restricted to `src.terms`. The defect is confined to the diagonal. Two
-repairs that keep what `CongOn` is for:
+built and every term `Cong src` relates is one `src` holds (`eqsInTerms_free`). The defect
+is confined to the diagonal. Two repairs that keep what `CongOn` is for:
 
 * **conjoin membership** — `k ∈ src.terms ∧ p ∈ src.terms ∧ Cong src k p`. This is what
-  makes the diagonal say something, since `Cong src a a` *is* `a ∈ src.terms`.
+  makes the diagonal say something, and it is now *definitional*: `Database.terms` is
+  `{t | Cong db t t}`, so `Cong src a a` and `a ∈ src.terms` are the same proposition.
 * **split the cases** — `CongOn` only where the rebuild has re-keyed, `Cong` elsewhere.
 
 ## The lesson worth keeping
@@ -83,10 +84,21 @@ never checked for vacuity.
 ## What survives
 
 `Encoding/Encode.lean` — `encode`, `encodeBuild`, `maintenanceRules`, `Rebuilt`,
-`EncodeDomain`, `viewName`/`termName`/`ufName`. The encoder is unchanged and does not
-depend on the deleted files. Note that `Rebuilt` as defined there is the predicate finding
-1 refutes; it is kept because re-deriving M11 will want to state something in its place,
-not because it is right.
+`EncodeDomain`, `viewName`/`termName`/`ufName`. The encoder's definitions are unchanged and
+depend on none of the deleted files. Note that `Rebuilt` as defined there is the predicate
+finding 1 refutes; it is kept because re-deriving M11 will want to state something in its
+place, not because it is right, and its docstring now says so.
+
+**The M11 side condition, restated.** `encode` emits no `union`, so the target asserts no
+equality between distinct terms — which used to be written "`Cong` on the target degenerates
+to syntactic equality". That is wrong now, and it is the cheap kind of wrong to leave lying
+around: `Cong` has no `refl` rule, so the target relation is the **identity on the terms the
+target holds**, and it relates nothing else at all. The condition still holds exactly, and
+for one less reason than before — `Cong` reads `eqs` and nothing else, so no table of the
+target can add a derivation. Checked by reading the encoder: it emits only `.set` and
+`.letBind`, never `.union`, so from `Database.empty` the target's `eqs` really is
+diagonal-only. Any restatement gets this for free; it is the one M11 side condition that
+survived both the congruence collapse and the deletion.
 
 The proof checker was never written. `CHECKER.md` scopes it; `Checks` was an opaque
 stand-in in the deleted statements.

@@ -31,22 +31,27 @@ Two things shape the design beyond a literal transcription:
 ## Decisions
 
 - Project lives at `semantics/` in the workspace root, alongside `egglog/` and
-  `egglog-experimental/`, keeping those subtrees clean per `AGENTS.md`.
-- Mathlib (`Set`, indexed unions, `Relation.*`, and later lattices for merge
-  functions), pinned to `v4.32.2` on Lean `v4.32.2` in `lakefile.toml` and
-  `lake-manifest.json`; binaries come from `lake exe cache get`.
-- Congruence as an inductive relation; the database stores only *asserted*
-  equalities.
-- Validation by Lean proofs of the ported test cases; an executable interpreter
-  with a decidable congruence procedure is a later milestone (M10).
+  `egglog-experimental/`, keeping those subtrees clean per `AGENTS.md`. Mathlib and the
+  toolchain are pinned in `lakefile.toml` / `lake-manifest.json`; `README.md` has the build.
+- Congruence as an inductive relation; the database stores only *asserted* equalities. Both
+  held, and the second went further than planned — asserted equalities are now the *whole*
+  state that grows, existence and function tables included.
+- Validation by Lean proofs of the ported test cases. **Superseded**: differential testing
+  against the real binary is the check that decides whether the model is right about egglog,
+  and Lean proofs decide whether `Impl/` is right about `Spec/`.
 
 ## Current priority
 
 **The goal is to model egglog as cleanly as possible for a paper, and then prove things
 about an implementation.** That is a different goal from wanting a sound and fast verified
 engine, and it changes what counts as progress: `Spec/` being readable *as a description of
-what egglog means* is the deliverable, not a convenience. `Spec/` is ~1200 lines with zero
-theorems and should stay that way.
+what egglog means* is the deliverable, not a convenience.
+
+**`Spec/` is frozen**: 8 files, ~900 lines, one theorem, and roughly one comment line per two
+of code. It got there by deletion — a row set, a term field, a second congruence relation, a
+functional command semantics and a generic front-end walk all came out — and the standard for
+putting anything back is that a reimplementer would get it wrong without it. Rationale, egglog
+citations and design history live in these documents, not in its comments.
 
 (The contrast is worth keeping in mind. `lambdaclass/truth_research` — OptiSat — is a Lean 4
 verified equality-saturation engine, ~370 theorems and no `sorry`, whose "specification" is a
@@ -73,9 +78,19 @@ yet.
 
 | open | where |
 | --- | --- |
-| five unproved statements, all with a recorded defect *in the statement* | `Proofs/Merge.lean` |
+| **port `Proofs/` to the rewritten `Spec/`** — the frontier | `Proofs/Interp.lean`, then `Merge`, `Counterexamples`, `Lattice` |
+| home the two witness files, which compile but are outside the library | `Scratch/` → `Proofs/Counterexamples.lean` |
 | base sorts, in place of the single untyped `Term` | `MERGE.md`, constraint (5) |
 | restating M11 against a reachable saturation condition | `ENCODING.md` |
+
+**Where the port stands.** `Spec/` and `Impl/` build, and difftest is 166/0.
+`Proofs/{Syntax,Term,Database,Congruence,Eval,Match,Step,Scope,Closure}` and
+`Encoding/Encode.lean` are ported. `Proofs/{Interp,Merge,Counterexamples,Lattice}` and
+`Tests/Examples.lean` are not, so **a whole-library build is red** — the difftest reaches
+`Impl/` through `Tests/Egg.lean` without touching `Proofs/`, which is why it keeps running
+meanwhile. Do not read a statement in an unported file as a claim about the current
+`Spec/`; several have already turned out to be false rather than stale, and the port is
+where that gets found out.
 
 The three things this note used to name — arity checking, reading a `:merge` function in a
 query, and the rule-head restriction — are now done: `Impl/Check.lean`'s "Arity" and
@@ -88,14 +103,14 @@ modelling.
 
 ### The two contracts
 
-`Spec/` is append-only: nothing is ever removed from `terms`, `rows` or `eqs`, and a merge
-adds the combined row *beside* the two it merged. `Impl/` has **two** interpreters with
-**different** contracts, and confusing them wastes time:
+`Spec/` is append-only: nothing is ever removed from `eqs`, which is the whole state that
+grows, and a merge adds the combined entry *beside* the two it merged. `Impl/` has **two**
+interpreters with **different** contracts, and confusing them wastes time:
 
 | | merge phase? | contract |
 | --- | --- | --- |
 | `exec` (`Impl/Interp.lean`) | none | **exact, both directions** — `exec_programStep` |
-| `execM` (`Impl/Merge.lean`) | yes, and it **deletes** the rows it merged | **containment** — `execM_contained` |
+| `execM` (`Impl/Merge.lean`) | yes, and it **deletes** from the row index | **containment** — `execM_contained` |
 
 `execM` is not a state the specification can reach, hence containment. Containment is
 satisfied by a do-nothing implementation, and that is *fine for soundness* — the safety
@@ -116,29 +131,37 @@ answer was different each time, which is why the arc is worth keeping:
 | `Database`, `Action`, `Cmd`, `Rule` | `MDatabase`, `RowAction`, `MCmd`, `MRule` | merged outright — one of each |
 | `Expr.eval`, `evalAction`, `evalActions` | `MEval`, `ActionStep`, `ActionsStep` | the **functional** side won, once reads became query atoms |
 | `stepCmd`, `runProgram` | `CmdStep`, `ProgramStep` | the **relational** side won; the functional semantics was deleted |
-| `Cong` | `MCong` | `MCong` deleted; `Cong` alone, with `Cong.fd` a theorem |
+| `Cong` | `MCong` | `MCong` deleted; the functional dependency is `Cong.congr`, a rule of the one relation |
 
 The two step rows went opposite ways for one reason. Below an action nothing reads the
 database — `Expr.eval` wants only a `Signature` — so evaluation is a function
-unconditionally. Above an action `MergeStep` chooses *which* rows collide and
+unconditionally. Above an action `MergeStep` chooses *which* entries collide and
 `MergeClosure` *how many* steps to take, and neither choice can be made by a function.
-So `Spec/` now has one evaluator and one action evaluator, both functions, under step
-relations that stay relations by design. `Spec/Step.lean` is gone with the functional
-half, and with it the standing inconsistency that `CmdStep.action`'s merge phase had
-landed in the relation and not in `stepCmd`.
+So `Spec/` has one evaluator and one action evaluator, both functions, under step relations
+that stay relations by design. The functional half was deleted, and with it the standing
+inconsistency that `CmdStep.action`'s merge phase had landed in the relation and not in
+`stepCmd`. (The file now called `Spec/Step.lean` is *not* that half returning: it is
+`Spec/Merge.lean` renamed, and it holds the relations.)
 
-The `Cong`/`MCong` row was the last, and it was the one previously argued to be blocked:
-collapsing them was supposed to push `Database.CtorRows` hypotheses into the refinement
-theorem. It did not. `Proofs/Congruence.lean`'s `Cong.fd` derives the functional
-dependency from `Cong` alone, under nothing but the shape of a constructor's rows — no
-`CtorRows`, no `CtorTerms`, no `RowsComplete` — so what a row set adds to congruence is a
-*theorem about* `Cong` rather than a second relation. The collapse is **not**
-meaning-preserving: `Cong ⊊ MCong`, and `(set (f) (c)) (set (f) (d))` reaches the gap,
-where `MCong.fd` equated `c` and `d` and `Cong` does not. `Action.SetLegal` forbids
-exactly that program, which is why `exec_programStep`'s statement and axioms were
-unchanged by the deletion and `execM_contained` came out strictly stronger.
-`Proofs/Counterexamples.lean`'s `setCtorProgram` is that gap as a compiling witness, and
-is what keeps `Cong.fd`'s row-shape hypothesis from looking automatic.
+**The `Cong`/`MCong` row is the one worth reading, and it is now closed.** It was argued to
+be blocked: collapsing the two was supposed to push `Database.CtorRows` hypotheses into the
+refinement theorem. It resolved in two steps and the blockage argument was wrong at both.
+
+*First*, `Cong.fd` derived the dependency from `Cong` alone under nothing but the shape of a
+constructor's rows — so what a row set added to congruence was a *theorem about* `Cong`, not
+a second relation. *Then the row set itself went away.* A constructor's entry is now the
+term `f(a…)`, its own application, so "congruent keys give congruent outputs" is
+`Cong.congr` read at that term — a **rule of the relation**, holding with no hypothesis at
+all. `Cong.fd` is deleted, and so is the chain that existed only to discharge its row-shape
+hypothesis (`Database.CtorRows.fd_hyp`, `ProgramStep.ctorRows`, `Database.CtorFragment`).
+
+What kept `Cong` from being *equal* to `MCong` also survives, relocated. The gap was
+`(set (f) (c)) (set (f) (d))` on a declared constructor `f`, where `MCong.fd` equated `c`
+and `d`. That program no longer reaches a database at all: a `set` writes the term
+`f(c)`, which has the wrong width for a constructor's entry, so `Database.DeclaredTerms`
+excludes it — and `Action.SetLegal` is the front-end check that forbids writing it, which
+is exactly what its docstring now says it is for. The invariant moved from *the shape of a
+row* to *the width of a term*, and the deletion cost `exec_programStep` nothing.
 
 ### Which primitives, and why
 
@@ -155,11 +178,9 @@ select (`old`, `new`) or build a term, so there are no lattice merges and no ana
   union-find-free encoding would retire them.
   - They also carry the model's one **accepted deviation** on merge results: `Term.blt` is a
     deterministic structural order, egglog's is the allocation order of value ids, so the two
-    keep different representatives. It is observable — `(function D (Math) i64 :merge
-    (ordering-min old new))` with `(set (D (A)) -1)` then `(set (D (A)) 1)` settles on `1` in
-    egglog and `-1` here — and it is a hypothesis of any simulation theorem, not a bug to fix.
-    `MERGE.md`, "The representative deviation", has both repros and the mechanism. Retiring the
-    two primitives is what retires the deviation.
+    keep different representatives. Observable, and a hypothesis of any simulation theorem
+    rather than a bug to fix; `MERGE.md`, "The representative deviation", has the repros and
+    the mechanism. Retiring the two primitives is what retires the deviation.
 
 Dropping all four would take `Prim` out of `Expr.eval` entirely, which is the smallest the
 semantics can be — at the price of `:merge` becoming decorative, with no lattice for the
@@ -173,12 +194,17 @@ theorem actually depends on and traces into Mathlib:
 
 | theorem | expected axioms |
 | --- | --- |
-| `Cong.fd` | `propext` **alone** |
+| `Impl/Interp.lean`'s `toDatabase_cong_mem` | **none at all** |
 | `exec_programStep`, `mem_closure_iff`, `execM_contained` | `propext, Classical.choice, Quot.sound` |
 
+The first is the canary the `Spec/` rewrite left behind: it is the bridge from the
+interpreter's term list to the diagonal of `eqs`, every refinement theorem reads through it,
+and it is short enough that anything appearing in its axiom set got there by accident.
+
 Statements known to be **false** carry compiling counterexamples in
-`Proofs/Counterexamples.lean` and `Proofs/Lattice.lean`. Both are `sorry`-free and in the
-build, so they cannot rot — read them before trying to prove anything they refute.
+`Proofs/Counterexamples.lean` and `Proofs/Lattice.lean`, so a refuted statement cannot
+quietly come back — read them before trying to prove anything they refute. Both are
+unported, and re-greening them is part of the port rather than optional.
 
 Two traps that a green build will not catch. Writing `h.ge` for a set inclusion silently
 pulls `Classical.choice` into every downstream axiom set. And `lake build` does not rebuild
@@ -195,10 +221,10 @@ with the source belongs on this page.
 | source | role | Lean |
 | --- | --- | --- |
 | `Egglog` grammar | `Program`/`Cmd`/`Rule`/`Query`/`Pattern`/`Action`/`expr` | `Spec/Syntax.lean` |
-| `Database = (Terms Congr Env Rules)` | global state: ground terms, equality pairs, bindings, rules | `Database` |
+| `Database = (Terms Congr Env Rules)` | global state: ground terms, equality pairs, bindings, rules | `Database` — but `sig`/`eqs`/`env`/`rules`, with the terms read back off `eqs`' diagonal |
 | `Lookup`, `free-vars`, `Env-Union`, `Env-Union2` | environments | `Env.lookup`, `Expr.freeVars`, `Env.UnionAll`, `Env.Union2` |
 | `Eval-Expr`, `Eval-Action`, `Eval-Global/Local-Actions`, `Eval-Actions` | actions add terms and equalities | `Expr.eval`, `evalAction`, `evalActions`, `evalLocalActions`, `RuleResults` |
-| `Congruence-Reduction` + `restore-congruence` | refl/symm/trans/congr + "presence of children", to a fixpoint | `Cong`, plus `Database.WF.subtermClosed` |
+| `Congruence-Reduction` + `restore-congruence` | refl/symm/trans/congr + "presence of children", to a fixpoint | `Cong` (no `refl` rule — reflexivity is an asserted equation), plus `Database.WF.subtermClosed` |
 | `valid-env`, `valid-subst`, `valid-query-subst` | declarative e-matching ("pattern instance is equal to a witness term already present") | `ValidEnv`, `ValidSubst`, `ValidQuerySubst` |
 | `valid-subst-faster` | operational e-matching, unused by the main relation | not ported |
 | `U_d` | union of databases | `Database.sUnion` |
@@ -251,16 +277,20 @@ with the source belongs on this page.
 Package `EgglogSemantics`; `README.md` has what each directory is for. As it landed:
 
 ```
-Spec/      Syntax  Term  Database  Congruence  Eval  Match  Scope  Merge
+Spec/      Syntax  Term  Database  Congruence  Eval  Match  Step  Scope
 Impl/      Closure  Interp  Merge  Check
 Proofs/    one file per Spec/ or Impl/ subject, plus:
              Counterexamples   compiling witnesses that a statement is false
              Lattice           the same for execM_current_of_lattice
-             Step              Spec/Merge.lean's step relations, split off from Proofs/Merge
 Tests/     Examples  worked examples, as proofs and as #guards
            Egg       renders a Program as egglog source, for differential testing
 Encoding/  Encode                         — parked M11; see ENCODING.md
+Scratch/   witnesses not yet homed in Proofs/; compiles, outside the library
 ```
+
+`Spec/Eval.lean` is what a command *computes* and is `Option`-valued; `Spec/Step.lean` is
+what a command *does* and is `Prop`-valued. That is the seam the whole file layout turns on,
+and it is why there is no functional/relational pair anywhere in `Spec/`.
 
 ### Syntax
 
@@ -281,34 +311,54 @@ removed the state in which a name both had a merge specification and was a const
 
 ### Database and congruence
 
+The draft here had six fields, including a term set and (from M9) a row set. Both are gone.
+**Four fields, and one of them carries three jobs:**
+
 ```lean
 structure Database where
   sig   : Signature
-  terms : Set Term
-  rows  : Set Row                -- one entry per value column; added in M9
-  eqs   : Set (Term × Term)      -- asserted only
+  eqs   : Set (Term × Term)      -- asserted only, and never shrinks
   env   : List (Var × Term)      -- order matters: first binding wins
   rules : Set Rule
 ```
 
-`Cong db : Term → Term → Prop` is the inductive closure with `assert` / `refl`
-(restricted to `t ∈ db.terms`, so reflexivity only fires
-for terms actually present) / `symm` / `trans` / `congr`. The `congr` rule is
-written as a mutual inductive with a `CongList` companion rather than an
-`∀ i, i < length` premise — same relation, workable induction — with a
-`List.Forall₂ (Cong db)` bridge lemma.
+`eqs` records what a `union` asserted, *and* what exists — the reflexive equation `t = t` is
+what it means for `t` to have been built — *and* every function's table, since a merge
+function's entry at the key `a…` with value columns `v…` **is** the term `f(a…, v…)`.
+`Database.terms` is then a `def` after the relation, `{t | Cong db t t}`, so every use site
+reads unchanged.
+
+A constructor's entry is `f(a…)` **alone**, with no value appended, because a constructor's
+value is its own application. `FnDecl.entryWidth` is what decides which of the two shapes a
+name gets, and `Database.DeclaredTerms` is the invariant that every application the database
+holds has its declaration's width. Appending the value for a constructor as well would put
+`f(as)` and `f(as ++ [f as])` in the state under one head at two widths, which makes that
+invariant unstatable — `MERGE.md`, "Representation", has the argument.
+
+`Cong db : Term → Term → Prop` is the inductive closure with `assert` / `symm` / `trans` /
+`congr`. **There is no `refl` rule**: `Cong db t t` is derived from an asserted reflexive
+pair like anything else, which is what makes being a *partial equivalence relation*
+structural rather than a side condition restated in every docstring. `congr` is written as a
+mutual inductive with a `CongList` companion rather than an `∀ i, i < length` premise — same
+relation, workable induction — with a `List.Forall₂ (Cong db)` bridge lemma.
 
 A congruence-restoring pass **disappears entirely**, which is the main simplification:
 
-- refl/symm/trans/congr become `Cong`'s constructors.
-- "presence of children" becomes a structural invariant: `Database.addTerm`
-  inserts a term together with all its subterms, and `Database.WF` asserts
-  subterm-closedness plus that every asserted equality's endpoints and every
-  binding's value are in `terms`.
+- symm/trans/congr become `Cong`'s constructors, and reflexivity becomes an assertion.
+- "presence of children" becomes a structural invariant: `Database.addTerm` records a term
+  together with all its subterms, and `Database.WF` asks for subterm-closedness, that every
+  present term is self-equal in `eqs` (`eqsRefl`), and that every binding's value is present.
 
 This is observationally equivalent because no action ever consults congruence, so
 deferring subterm insertion to a later rebuild is unobservable — recorded in the
 source as a documented deviation with that justification.
+
+**`eqsRefl` is a real invariant, not bookkeeping.** Without it a term can be present by
+`symm`/`trans` alone, and then `addTerm` on a term the database already holds is not the
+identity. Since `MergeSaturated` is "every step is a no-op" and every entry collides with
+itself, a state missing one reflexive equation is not `MergeSaturated` however settled it
+looks. `eqsInTerms` came out of `WF` in the same move: it is now the free theorem
+`eqsInTerms_free`, `h.trans h.symm`.
 
 ### Where "restored congruence" went
 
@@ -317,16 +367,16 @@ longer step" predicate. The database always holds only asserted equalities, and
 closure is a predicate rather than a state. Its two halves are handled
 differently:
 
-- The **relation** half (refl/symm/trans/congr) is never materialized. The only
-  place the semantics consults congruence is `Matches`' side conditions, which ask
-  `CongOn` — `Cong (db.withOperands ts)` — for a derivation directly. Evaluating an
-  action and running a command never consult it at all, so nothing else needs it.
-- The **term-set** half ("presence of children") is a real state change, and is
-  the one part that stays in the state — as the `addTerm`/`WF.subtermClosed`
-  invariant above.
+- The **relation** half is never materialized. Two places consult congruence:
+  `Matches`' side conditions, which ask `CongOn` — `Cong (db.withOperands ts)` — for a
+  derivation directly, and `MergeStep`, which compares two entries' keys with `CongList`.
+  Evaluating an action never consults it at all.
+- The **term-set** half ("presence of children") is a real state change, and stays in the
+  state — as the `addTerm`/`WF.subtermClosed`/`WF.eqsRefl` invariants above.
 
-The observable meaning of a finished program is therefore the pair
-`(db.terms, Cong db)`, not a database with a big closed equality set.
+The observable meaning of a finished program is therefore `Cong db` and nothing else: the
+term set is its diagonal, so the pair this section used to name has collapsed to its second
+component.
 
 This section used to sketch a `restore` that materialized the closure as a
 comprehension over the relation, for the executable layer to use. **M10 answered it a
@@ -380,12 +430,21 @@ def RunRules (db : Database) : Database :=
 `d.rules = db.rules`, which is what makes the bias harmless.
 `RuleResults`' `Option` carries the partiality of variable lookup;
 `Proofs/Scope.lean`'s `programStep_isSome` proves well-scoped, evaluable programs never
-hit `none`. What the draft got wrong is one level up: `(run)` is *not* a function, because
-`RunStep` composes `RunRules` with a merge closure that chooses how many steps to take.
+hit `none`. What the draft got wrong is one level up: a command is *not* a function, because
+`CmdStep` composes the deterministic `cmdEffect` with a merge closure that chooses how many
+steps to take. That is the whole of the relational layer —
+
+```lean
+def CmdStep (db) (c) (db') : Prop := ∃ d, cmdEffect db c = some d ∧ MergeClosure d db'
+```
+
+— and it is a `def`, not an inductive, because there is nothing per-command left to say.
 
 `Cmd.decl` updates `db.sig` and nothing reads it yet, so declarations are inert in
 this phase — the point is that M9 turns them on without touching the AST or any
-`match` over `Cmd`.
+`match` over `Cmd`. (M9 turned them on further than expected: a merge phase now follows a
+declaration too, which is sound only because the front end checks a `:merge` body's names —
+`MERGE.md`, "The merge phase runs between commands".)
 
 ## Milestones
 
@@ -398,7 +457,7 @@ The port proper — **all of M0–M7 is done**, `lake build` is clean and `sorry
 | M2 | `Database`, `Congruence` | `Cong.le`, the least-congruence principle |
 | M3 | `Eval` | `Expr.eval_agree` — evaluation reads the env only through `lookup` |
 | M4 | `Match` | `ValidEnv`, `Env.UnionAll` |
-| M5 | the step relations | `RunRules`, `CmdStep`, `ProgramStep` — now in `Spec/Merge.lean`; `Spec/Step.lean` is gone |
+| M5 | the step relations | `RunRules`, `CmdStep`, `ProgramStep`, in `Spec/Step.lean` |
 | M6 | `Scope` | `programStep_isSome` — a well-scoped, evaluable program runs to completion |
 | M7 | `Examples` | the worked examples as closed proofs |
 
@@ -422,8 +481,8 @@ Follow-ups, in rough dependency order:
     what `Impl/Interp.lean`'s `Env.canon` does.
   - ~~*Rounds.* `runRounds` (egglog's `(run n)`), `runRounds_succ'`, `Saturated`~~ —
     **deleted with the functional semantics.** `Cmd.run` is one round and `(run n)` is
-    `n` copies of it, which `Spec/Merge.lean`'s `CmdStep` says in one line; nothing needed
-    a named iterator, and schedules are still unmodelled.
+    `n` copies of it, which `CmdStep` says in one line; nothing needed a named iterator,
+    and schedules are still unmodelled.
   - ~~`ValidSubst` inversion, without which no example can state what a `run` does *not*
     produce~~ — **superseded by M10.** `exec_programStep` makes any statement about a
     *specific* program's result decidable: it transfers to the interpreter, where the
@@ -438,37 +497,36 @@ Follow-ups, in rough dependency order:
     refinement re-established against the unchanged spec.
 - **M9 — `:merge` functions.** Designed in [`MERGE.md`](MERGE.md). Partly done, and
   **merged into the main development** — there is one `Database`, one `Action`, one
-  `Cmd`, and `Spec/Merge.lean` holds only what is genuinely new.
-  - ✅ *Congruence is the functional dependency.* For a constructor, two rows with
-    congruent keys have congruent outputs — `Proofs/Congruence.lean`'s `Cong.fd`, whose
-    one hypothesis is the shape of a constructor's rows. A *theorem about* `Cong`, so
-    every M2–M8 theorem transports rather than being reproved and `Spec/` keeps one
-    congruence relation. The route here went through a second relation `MCong` carrying
-    the dependency as a constructor, and a compatibility theorem `mcong_iff_cong`; both
-    are deleted — see "The consolidation arc".
+  `Cmd`, and `Spec/Step.lean` holds only what is genuinely new.
+  - ✅ *Congruence is the functional dependency* — and it ended up being a **rule** of
+    `Cong`, not a theorem about it. A constructor's entry is its own application, so "two
+    entries with congruent keys have congruent outputs" is `Cong.congr` read at that term,
+    with no hypothesis. The route went through a second relation `MCong` carrying the
+    dependency as a constructor, then a theorem `Cong.fd` under a row-shape hypothesis;
+    both are deleted — see "The consolidation arc".
   - ✅ *The shape change.* A `:merge` body is an action list, so `MergeStep` is a relation
-    on databases and `CmdStep`/`ProgramStep` are relations too. `Spec/Merge.lean` holds
-    `Database.Out`, `Database.Recorded`, `MergeStep`/`MergeClosure`/`MergeSaturated`, the
-    matching family (`Matches`, `ValidSubst`, `ValidQuerySubst`) and the step relations;
-    `Prim` and `Term.blt` are in `Spec/Term.lean`. Evaluation was *also* a relation for a
-    while, because a non-constructor application in an action was a lookup; that is now
-    forbidden — see "Reading is a query atom" below — and `Expr.eval` is a function again.
+    on databases and `CmdStep`/`ProgramStep` are relations too. `Spec/Step.lean` holds
+    `Database.Out`, `MergeStep`/`MergeClosure`/`MergeSaturated`, `Database.NoMergeOk` and
+    the step relations; the matching family (`Matches`, `ValidSubst`, `ValidQuerySubst`) is
+    `Spec/Match.lean` and `Database.Recorded` sits beside `CongOn` in
+    `Spec/Congruence.lean`; `Prim` and `Term.blt` are in `Spec/Term.lean`. Evaluation was
+    *also* a relation for a while, because a non-constructor application in an action was a
+    lookup; that is now forbidden — see "Reading is a query atom" below — and `Expr.eval` is
+    a function again.
   - ✅ *Multi-column outputs.* `Action.set` takes a `List Expr`, and `Pattern` gained
     `values` — egglog's lowered row atom `f(a…, v…)`, written `(= v (f a…))` at one value
     column and `(= (values v…) (f a…))` at more. It is the only read in the language.
-  - ✅ *The implementation deletes; the specification does not.* `Spec/` stays append-only
-    while `Impl/Merge.lean`'s merge phase drops the two rows it combined, as egglog does,
-    and nothing else — `mergeRound_confined` proves the "nothing else": no term, no
-    equality, no constructor row, no `.noMerge` row. So the contract splits into
-    containment (`execM_contained`, proved), the untouched equality on the constructor
-    fragment where the pass is the identity (`mergeRound_eq_self`), and `Database.Current`
-    for lattice merges.
-  - ✅ *The refinement chain.* 17 of 17 proved. **Nine were false as written** — three in
-    ways their M10 counterparts in `Proofs/Interp.lean` had already solved, so read the M10
-    counterpart before stating an M9 lemma. Five statements remain `sorry` in
-    `Proofs/Merge.lean`, all known-false or hypothesis-defective, with compiling witnesses
-    in `Proofs/Counterexamples.lean` and `Proofs/Lattice.lean`.
-  - Remaining: those five. Everything else M9 named is done.
+  - ✅ *The implementation deletes; the specification does not.* The contract therefore splits
+    three ways: containment (`execM_contained`), the untouched equality on the constructor
+    fragment where the merge pass is the identity (`FDatabase.mergeRound_eq_self`), and
+    `Database.Current` for lattice merges. `MERGE.md` has what is and is not deleted, and why
+    each of the three is the right shape.
+  - ✅ *The refinement chain.* **Nine of its seventeen statements were false as written** —
+    three in ways their M10 counterparts in `Proofs/Interp.lean` had already solved, so read
+    the M10 counterpart before stating an M9 lemma. Five carry a recorded defect *in the
+    statement*, known-false or hypothesis-defective, with witnesses in
+    `Proofs/Counterexamples.lean` and `Proofs/Lattice.lean`; `MERGE.md` names them.
+  - Remaining: those five, and the port. Everything else M9 named is done.
 - **M10 — executable layer.** A `Finset`-based interpreter, a decidable congruence
   closure, and a refinement *biconditional* between the interpreter and `ProgramStep`.
   Proved end to end. Five design notes are worth more than the lemma inventory, which is
@@ -485,11 +543,24 @@ Follow-ups, in rough dependency order:
   - **`FDatabase` uses `List`, not `Finset`**, because `Finset.toList` is noncomputable and
     the interpreter must enumerate. Duplicates are harmless: the denotation is the set of
     members.
-  - **The enumerator departs from the spec on purpose.** The spec takes one substitution per
-    pattern and joins them (`Env.UnionAll`); the enumerator assigns
+  - **The enumerator departs from the spec on purpose, twice.** The spec takes one
+    substitution per pattern and joins them (`Env.UnionAll`); the enumerator assigns
     the whole query's free variables at once and restricts per pattern with `Env.canon`.
-    `Env.agree_canon` shows they agree up to `Env.Agree`, which is all `RunRules` can see.
-    Both directions are proved (`validQuerySubst_of_mem_matchQuery` and its converse).
+    `Env.agree_canon` shows they agree up to `Env.Agree`, which is all `RunRules` can see,
+    and both directions are stated (`validQuerySubst_of_mem_matchQuery` and
+    `mem_matchQuery_of_validQuerySubst`). The second departure came with the entry rewrite:
+    `matchQuery` assigns from `FDatabase.valueTerms`, not `terms`, so a variable is never
+    bound to a *merge function's entry term* — which `Spec/Match.lean`'s `ValidEnv` permits,
+    since it asks only for membership. Firing on fewer substitutions is the safe direction.
+    It costs `exec_programStep`'s *statement* nothing, because the two coincide exactly where
+    that theorem lives: on an `AllConstructors` signature no name has a merge, so `valueTerms`
+    filters nothing out. It does cost the reverse direction a hypothesis, and this is a live
+    port item: `mem_matchQuery_of_validQuerySubst` is stated for an arbitrary `d.WF`, and at
+    that generality it is now **false** — a spec substitution binding a variable to a merge
+    function's entry term satisfies `ValidSubst` and is not enumerated. It needs either
+    `AllConstructors` or a lemma that an entry-term binding never satisfies `Matches`. On the
+    M9 side it is a genuine refinement and nothing is owed, since the contract there is
+    containment.
   - **`Env.UnionAll.refines_of_mem` had to carry self-refinement, not `Nodup`.** Appending
     two substitutions sharing a variable duplicates it in the domain while leaving every
     lookup intact, so `Nodup` is not preserved by a `Union2` step and
@@ -515,14 +586,19 @@ Follow-ups, in rough dependency order:
   **One** hypothesis, which arrived when the spec's command stepping became a relation, and
   it is not decoration: `Falsity.exec_programStep_needs_ctorDecls` exhibits
   `(function f () i64 :merge 7) (set (f) 0)` — a program whose only offence is a `:merge`
-  declaration — where the row collides with *itself*, since `MergeStep` has no `a ≠ b`
-  guard, so `ProgramStep` reaches two distinct states and `exec` returns at most one. A
-  second hypothesis `p.SetLegal` sat here until the induction was re-examined: what it
-  maintained was `Database.CtorRows`, which the refinement does not read, and what the
-  refinement does re-establish is `Database.CtorState` — `WF` and `AllConstructors`, which
-  a `set` disturbs neither of. Well-formedness came free: `FDatabase.WF` is defined as the
-  spec's through `toDatabase`, so every `WF` fact is read through the refinement rather
-  than proved by a separate induction.
+  declaration — where the entry collides with *itself*, since `MergeStep` has no `a ≠ b`
+  guard, so `ProgramStep` reaches two distinct states and `exec` returns at most one.
+
+  **A second hypothesis `p.SetLegal` sat here and is gone.** *Settled:* the refinement does
+  not need it, and the reasoning first recorded for why was wrong. `SetLegal` was said to
+  re-establish the row invariant `Database.CtorRows`; what the induction actually
+  re-establishes is `Database.CtorState` — `WF` and `AllConstructors` — and a `set` disturbs
+  neither. `CtorRows` is now deleted outright, so nothing is left to be confused about: what
+  `SetLegal` buys is stated in `Spec/Scope.lean`, and it is the *entry width* invariant
+  (`Database.DeclaredTerms`), which the refinement does not read either. Five other theorems
+  dropped the hypothesis in the same pass. Well-formedness came free throughout:
+  `FDatabase.WF` is *defined* as the spec's through `toDatabase`, so every `WF` fact is read
+  through the refinement rather than proved by a separate induction.
 
 **M10 is done**, and that is what makes the `#guard`s in `Examples.lean` and the
 differential cases constrain the *specification* rather than only the interpreter. Before
@@ -594,17 +670,17 @@ a round's `union` copies every operand's terms and without dedup the per-substit
 
 - **M12 — one semantics. ✅ Done.** M0–M8's functions and M9's relations ran side by side
   over the one `Database` and the one `Action`. `Spec/` now defines egglog **once**:
-  `Expr.eval`/`evalAction`/`evalActions` are functions, `MergeStep`/`RunStep`/`CmdStep`/
-  `ProgramStep` are relations, `Spec/Step.lean` is deleted, and `Cong` is the only
-  congruence. What was learned:
+  `Expr.eval`/`evalAction`/`evalActions`/`cmdEffect` are functions, `MergeStep`/`CmdStep`/
+  `ProgramStep` are relations, the functional command semantics is deleted, and `Cong` is
+  the only congruence. What was learned:
 
   - *Determinism is what reopened it.* Evaluation's uniqueness came to hold with **no**
     hypotheses — no `AllConstructors`, no `NoPrim` — because the only rule that read the
     database was `lookup`, and reading became a query atom. A relation that is a function
     unconditionally can simply be replaced by one.
   - *What must stay a relation.* Everything above an action, for a reason that has nothing
-    to do with evaluation: `MergeStep` chooses **which** pair of rows collides and in which
-    order, and `MergeClosure` chooses how many steps to take.
+    to do with evaluation: `MergeStep` chooses **which** pair of entries collides and in
+    which order, and `MergeClosure` chooses how many steps to take.
   - *The cost, as it came out.* Going the functional way below an action was right: the
     `Option` algebra `Proofs/{Eval,Match,Step,Scope,Interp}` is built on survived, and
     `Impl/Merge.lean` lost its whole evaluator, action and matching layer to
@@ -632,15 +708,16 @@ the record of where it was wrong, since two of the mistakes were instructive:
 - **A non-constructor application is a lookup**, with no `:default` to fall back on.
 
 What did stand: the signature was already in the AST from M1, so `MergeSpec` only had to
-become reachable; rows replaced the bare term set, with congruence *as* the functional
-dependency; and merge closure carries no termination claim. Base sorts (`i64`, `String`, a
-real sort discipline in place of the single untyped `Term`) are still deferred — see "arity
-checking" in the current priority.
+become reachable; congruence really is the functional dependency; and merge closure carries
+no termination claim. What did not is the *representation* — a row set was added and then
+removed again, and a function's table now lives in the term structure itself. Base sorts
+(`i64`, `String`, a real sort discipline in place of the single untyped `Term`) are still
+deferred — see "arity checking" in the current priority.
 
 ## Reading is a query atom
 
 **All reading happens in the query; all writing happens in the actions.** An application of
-a non-constructor is a *lookup* — it reads a recorded row rather than building a term — and
+a non-constructor is a *lookup* — it reads a recorded entry rather than building a term — and
 `Impl/Check.lean`'s `Program.noLookup` says a program contains none, anywhere. The one place
 a program reads is the query atom `Pattern.values`, which is egglog's lowered
 `f(a…, v…)` and now covers every width: `(= v (f a…))` at one value column,
@@ -670,7 +747,7 @@ table genuinely cannot be written.
 
 Flattening's *effect* on a constructor operand is modelled, and has to be: `Matches.values`
 adds the atom's operands to the database before consulting congruence, so `(Dist (G (A) (B)))`
-matches a row written at `(G (B) (A))` after `(union (A) (B))` exactly as the flattened
+matches an entry written at `(G (B) (A))` after `(union (A) (B))` exactly as the flattened
 `G(a, b, x), Dist(x, o)` does — the intermediate class is found by matching rather than by
 having been built. `DiffTest.lean`'s `read-unbuilt-key*` cases pin it in both directions.
 
@@ -686,48 +763,25 @@ the one egglog made: a `Prim`-style get-or-insert, which is a write. Recorded in
 
 **A design record, superseded.** `Encoding/Encode.lean` builds the *full* encoding —
 `@UF`, per-constructor views, rebuild rules, path compression — and the three theorems
-were stated over that, then deleted (`ENCODING.md`). Two things below survived and are
-current: "Proved against the specification", and the side condition. The rest is kept
-because it is the cheapest sketch of what a union-find-free encoding would look like, if
-the full one turns out to be too much.
+were stated over that, then deleted (`ENCODING.md`). The sketch is kept only for the two
+things below that are still current, and because it is the cheapest picture of what a
+union-find-free encoding would look like if the full one turns out to be too much. What it
+proposed dropping was the union-find, the view tables and the proof skeletons; **only the
+third held**, and structural fresh ids are what replaced `get-fresh!`.
 
 **Proved against the specification, not against the Rust.** That is the decision that makes
 this tractable, and it did carry over: no differential testing against real egglog, no
 matching its row counts, no conversion layer. The claim is about our `encode` and our
 `Cong`.
 
-### What it would have dropped
-
-Everything the real encoding needs in order to be *fast* — and all of which `encode` in
-fact has:
-
-- **No union-find, no canonical ids, no leader lookups.** Terms are their own ids — the
-  "natural" term a rule builds is the id. No `@UF_<Sort>`, no `ordering-min`/`ordering-max`.
-- **No view tables and no rebuilding.** Nothing is ever re-keyed.
-- **No proof skeletons.** No nested `@Proof` terms, no `get-fresh!`, no `@Ast`.
-
-Only the third held: `encode` has no skeletons, and structural fresh ids are what replaced
-`get-fresh!`.
-
-### What it keeps
-
-The property we actually want — *every equality has a rule firing behind it, and every
-recorded proof is valid* — via source constructors for terms and, per constructor `C`, a
-view table `@CView : (S…) → (S, Proof)` whose `:merge` resolves congruence and records why.
-That needs `:merge` (so not the `:no-merge` fragment) and multi-column outputs, which is
-what `Action.set`'s `List Expr` and `Pattern.values` were built for; and it stays inside
-reads-in-query/writes-in-actions, since a merge body has `old*`/`new*` bound by the
-collision and there are no canonical ids to look up.
-
 ### The side condition that makes it work
 
 Since the source constructors carry over, built-in congruence still applies to them in the
 target — which would mean some equalities have no rule behind them, defeating the point.
-That collapses to nothing **provided `encode` emits no `union` actions**: with `eqs` empty,
-`Cong` on the target is syntactic equality. So "emits no `union`" is a syntactic property of
-`encode` that makes the target's built-in congruence vacuous — the one M11 side condition
-that survived both the congruence collapse and the deletion, and the one a restatement gets
-for free, since `Cong` reads neither `rows` nor `sig`.
+That collapses to nothing **provided `encode` emits no `union` actions**, which it does not.
+The exact statement, and why the obvious phrasing of it is wrong, is `ENCODING.md`, "What
+survives"; this is the one M11 side condition that survived both the congruence collapse and
+the deletion.
 
 ### What a proof value is
 
@@ -739,7 +793,7 @@ costs nothing (they exist to make proofs *small*, not checkable).
 
 | `Justification` | `Cong` |
 | --- | --- |
-| `Fiat` | `assert`, and `refl` for top-level terms |
+| `Fiat` | `assert` — including the reflexive equation `addTerm` writes per top-level term |
 | `Rule` | a rule firing — `ValidQuerySubst` plus `RunRules` |
 | `Trans` / `Sym` | `trans` / `symm` |
 | `Congr` | `congr`, **but one child at a time** |
@@ -752,9 +806,10 @@ Two mismatches to settle before writing `encode`:
   inter-derivable — n chained steps make one of ours — but the proof *terms* differ in
   shape, so matching the user-facing type needs a bridging lemma by induction on the child
   list. This is the one place the correspondence is not definitional.
-- **Reflexivity is not assumed, and we already agree.** "A proof of `t = t` must correspond
-  to some `t` added at the top level." `Cong.refl`'s `a ∈ db.terms` is exactly that
-  discipline.
+- **Reflexivity is not assumed, and the agreement got exact.** "A proof of `t = t` must
+  correspond to some `t` added at the top level." `Cong` has no `refl` rule at all now:
+  `Cong db t t` holds only where an equation puts it, and the only thing that writes one is
+  `addTerm`, on a term the program built. The discipline is the definition.
 
 ### The invariant is a precondition of the encoding, not just a style rule
 
@@ -817,57 +872,66 @@ Other omissions, unaddressed since the port: schedules, extraction, containers.
 
 ## Verification
 
-- `cd semantics && lake build` — the whole development typechecks. This is the check that
-  must stay green.
+- `cd semantics && lake build` — the whole development typechecks. **Red while `Proofs/` is
+  being ported**; the goal state, and the check that must stay green afterwards. Until then,
+  build the file you are working on and keep everything already ported green.
 - `make lean-difftest` — 166 cases against the real egglog binary. Watch the profile
-  distribution, not only the pass count.
-- `make lean-check` additionally fails on any `sorry`. It **currently fails by design**:
-  5 statements are deliberately unproved, all in `Proofs/Merge.lean`, with witnesses in
-  `Proofs/Counterexamples.lean` and `Proofs/Lattice.lean`. Use it to check that a change
-  adds no *new* `sorry`.
+  distribution, not only the pass count. Runnable throughout the port.
+- `make lean-check` additionally fails on any `sorry`. Use it to check that a change adds no
+  *new* one; the standing ones are the five defective M9 statements in `Proofs/Merge.lean`,
+  with witnesses in `Proofs/Counterexamples.lean` and `Proofs/Lattice.lean`.
 - Axioms, on every change: `lean_verify` or `#print axioms` against the table in "Current
   priority". A green build does not catch an axiom leak.
 - `Tests/Examples.lean` compiling *is* the M7 suite — each check is a closed proof or a
   `#guard`.
 
-## `set` legality is a separate predicate, for now
+## The front end's five checks
 
-The shape of a constructor's rows — output column is the application itself — is what
-`Cong.fd` needs to make the table's functional dependency derivable congruence, and it is
-what a `set` on a constructor destroys. egglog restricts `set` the same way: it is a type
-error (`egglog/src/constraint.rs`). A constructor is a declaration with no merge
-specification, so the condition is `mergeOf f ≠ none` — which admits `:no-merge` and
-rejects an undeclared name, both checked against the binary.
+`Spec/Scope.lean` holds `Scoped`, `Evaluable`, `SetLegal`, `DeclsFresh` and `MergeDeclared`.
+They are **five separate predicates**, and each threads exactly what it needs: `Scoped` a
+`Scope`, extended by a `let` and by a query; the other four a `Signature`, moved only by
+`Cmd.sigBind`. Folding the signature ones into `Scoped` would put a signature argument on
+every lemma in `Proofs/Scope.lean` that none of them would use, and the theorems take
+different subsets anyway — `programStep_isSome` wants `Scoped` and `Evaluable`, the state
+invariants want `SetLegal` and `DeclsFresh`.
 
-That is `Action.SetLegal`/`Program.SetLegal` in `Spec/Scope.lean`, **beside** `Scoped`
-rather than inside it, for one reason: `Scoped` relates syntax to a `Scope`, this relates
-it to a `Signature`, and folding them together would put a signature argument on every
-lemma in `Proofs/Scope.lean` that none of them would use. `Spec/Scope.lean` now runs all
-four front-end checks — `Scoped`, `Evaluable`, `SetLegal`, `DeclsFresh` — over one walk
-(`Check`), which is where the sharing went instead; they stay four predicates because the
-theorems take different subsets, `programStep_isSome` wanting `Scoped` and `Evaluable`
-where the row invariants want `SetLegal`.
+**They are written out, not generated.** A `Check` record used to parameterise one traversal
+by three questions and three context binders, with four instances and fourteen `inherit_doc`
+aliases giving them their real names. Nothing in `Proofs/` or `Impl/` was ever generic over
+it — the aliases were its entire public surface — so the genericity bought nothing and cost
+a five-definition indirection to read what `Program.Evaluable` means. It also charged proof
+effort for sites it had nothing to ask: the walk made `Rule.Evaluable` elaborate to
+`(∀ p ∈ r.query, True) ∧ …`, and `DeclsFresh`'s `.rule` case a five-line induction over a
+question that does not exist. Written directly those are `Actions.Evaluable r.actions sig`
+and `trivial`. Deleted; all 15 exported names kept their types and argument order.
 
-**What `SetLegal` actually buys, and what it does not.** It is not a hypothesis of the
-refinement theorem: `exec_programStep` re-establishes `Database.CtorState` — `WF` and
-`AllConstructors` — and a `set` disturbs neither. What it maintains is `Database.CtorRows`,
-which lives one level up in `Database.CtorFragment` (`CtorState` plus `CtorTerms`, legal
-rules, and the rows), and that is what the functional dependency needs. The chain is
-machine-checked end to end: `ProgramStep.ctorRows` carries `CtorRows` across a
-constructor-fragment run, `Database.CtorRows.fd_hyp` turns it into `Cong.fd`'s row-shape
-hypothesis, and `ProgramStep.out_union_cong` concludes that a constructor's outputs at one
-key class are congruent at any state such a program reaches. **That chain is the whole
-argument that `Spec/` needs no `fd` rule**, and until those two lemmas landed it existed
-only in docstrings — `Cong.fd`'s hypothesis was never discharged by a proof term.
+**`set` legality.** A constructor's entry is `f(a…)` alone, so `(set (f a…) v)` would record
+`f(a…, v)` — an application of `f` one column too wide for its declaration, which
+`Database.DeclaredTerms` forbids. `Action.SetLegal` is the syntactic check that keeps that
+out, and its condition is `mergeOf f ≠ none`: it admits `:no-merge`, rejects an undeclared
+name, and rejects a constructor, all checked against the binary. egglog restricts `set` the
+same way, as a type error (`egglog/src/constraint.rs`).
 
-**`SetLegal` alone would not be enough either**, and the gap is not about actions.
-Declaring `f` a `:merge` function makes the constructor row `f ↦ (f)` *already in the
-database* collide with itself, and `MergeStep` then writes whatever the body computes there
-— a non-constructor row, with no `set` anywhere. Hence the second, independent condition
-`Cmd.CtorDecl`, which *is* a hypothesis of the refinement. Two counterexamples, for the two
-things it protects: `Proofs/Step.lean`'s `exists_mergeStep_not_ctorRows` for `CtorRows`, and
-`Falsity.exec_programStep_needs_ctorDecls` for `exec_programStep` itself, where the
-self-collision makes the specification reach two states and the interpreter one.
+*What it buys, and what it does not.* It is **not** a hypothesis of the refinement theorem —
+see M10, where it was removed. It maintains a state invariant (`DeclaredTerms`, the entry
+widths) that the refinement does not read.
+
+**`SetLegal` would not be enough anyway**, and the gap is not about actions. Declaring `f` a
+`:merge` function makes an entry of `f` *already in the database* collide with itself, and
+`MergeStep` then writes whatever the body computes, with no `set` anywhere. Hence the
+second, independent condition `Cmd.CtorDecl`, which *is* a hypothesis of the refinement;
+`Falsity.exec_programStep_needs_ctorDecls` is the witness, where the self-collision makes
+the specification reach two states and the interpreter one.
+
+**`MergeDeclared` is the fifth and newest**, and the only check that walks into a `:merge`
+body — `Scoped`, `Evaluable` and `SetLegal` all say nothing about one, because it runs in
+the environment `mergeEnv` builds rather than in the ambient context. It asks that every
+name a body or result applies is a primitive or a declared function of any kind, and it asks
+it of the signature the declaration **installs**, so a `:merge` may name the function it
+resolves. That is the mirror image of `DeclsFresh`, which is asked before. `Evaluable` would
+be the wrong demand there: a merge body is exactly where primitives are legal and where a
+`set` on another merge function is legal. Why it is load-bearing rather than tidy —
+`MERGE.md`, "The merge phase runs between commands".
 
 ## Arity checking
 
@@ -891,11 +955,19 @@ contributes to `|args|` is what makes the one equation say different things:
   more, and answers "Unbound function values" if the tuple form is used on a one-column function.
   `Tests/Egg.lean` renders whichever fits, so the check is on the columns and not on the notation.
 
-The last two are modelled by the stronger split `|a| = arity f` and `|v…| = outArity f`. egglog's
-sum really does admit moving a column across the divide — with every sort `i64`,
-`(= (values v) (Dist k j))` is accepted for `(function Dist (i64) (i64 i64) …)` — but only because
-the sorts happen to agree. The model is untyped, so the sum alone would let it accept a program
-whose meaning it then gets wrong. **This is the one place the check is stricter than egglog's.**
+The last two are modelled by the stronger **split**, `|a| = arity f` alongside the sum, rather than
+by the sum alone. egglog's sum really does admit moving a column across the divide — with every sort
+`i64`, `(= (values v) (Dist k j))` is accepted for `(function Dist (i64) (i64 i64) …)` — but only
+because the sorts happen to agree. The model is untyped, so the sum alone would let it accept a
+program whose meaning it then gets wrong. **This is the one place the check is stricter than
+egglog's.**
+
+The sum the row atom is checked against is `FnDecl.entryWidth`, not `arity + outArity`, and the
+difference is the whole point of `entryWidth`: it is `arity` for a constructor, whose entry carries
+no value columns at all. So `(= v (Add a b))` on a *constructor* `Add` is not a row atom in this
+model and `Pattern.arityOk` rejects it — binding a constructor's value is the `.eq` atom, since the
+value *is* the application. Before `entryWidth`, that atom passed the front end, matched in `Impl/`
+through the row scan, and was unmatchable in `Spec/`.
 
 Two declaration-side rules from the same pass:
 
@@ -924,18 +996,18 @@ once and `ArityOk` reads it, so the difftest's check and the statement a proof w
 same definition — and deciding it needs no instance through the `List Expr` nesting.
 
 Two things are deliberately not covered, both because `arityOk` reads the signature and nothing
-else. That every *undeclared* name is used at one arity: a name with no entry has no declared
-column counts to disagree with, so `Tests/Egg.lean`, which invents the `datatype` header from uses,
-carries that half as `Program.arityConflicts`. (That a program must declare before it uses is
-`Program.Evaluable`'s business, and `Program.declared` is how the difftest supplies the
+else. That every *undeclared* name is used at one arity: outside the row atom, a name with no entry
+has no declared column counts to disagree with, so `Tests/Egg.lean`, which invents the `datatype`
+header from uses, carries that half as `Program.arityConflicts`. (That a program must declare before
+it uses is `Program.Evaluable`'s business, and `Program.declared` is how the difftest supplies the
 declarations.) And a primitive's arity, which egglog also checks ("Arity mismatch, expected 2 args:
 (min old new 3)"): `Prim.ofName` lives in `Spec/Term.lean` and is never in the signature, so this
 is permissive rather than wrong.
 
-A `Pattern.values` atom does **not** want the `SetLegal` companion restriction, and extending that
-family to the query would be wrong rather than merely premature. It is the model's only read and
-covers every width, so at one value column it is `(= v (f a…))` — what an ordinary constructor fact
-lowers to, and legal egglog — and demanding `sig.mergeOf f ≠ none` there would reject it. What is
-real about "egglog recognizes the tuple form only for a tuple output" is already enforced from the
-other side: `Pattern.arityOk` pins `|v…| = outArity f` and `FnDecl.arityOk` gives a constructor
-`outArity = 1`, so a *wide* read can never name a constructor.
+The row atom is the exception to the first, and needs to be: `Pattern.arityOk` rejects a `.values`
+naming an undeclared function outright, because the key/value split is exactly what a declaration
+supplies and there is nothing to check it against otherwise. It still does **not** want the
+`SetLegal` companion restriction `sig.mergeOf f ≠ none` — not because that would reject something
+useful, but because `entryWidth` already decides the case: a `.values` on a constructor is
+admissible only at zero value columns, which is a bare existence read and not a program anything
+writes.

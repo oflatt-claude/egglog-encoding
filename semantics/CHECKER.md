@@ -12,7 +12,10 @@ and whose cost is what it scopes.
 
 **Assume any statement about the encoder is wrong until checked.** Nine of the seventeen `execM`
 refinement-chain statements were false as written, and *those* had proved M10 counterparts in
-`Proofs/Interp.lean` to copy from.
+`Proofs/Interp.lean` to copy from. The `Spec/` rewrite added two more data points in the same
+direction: porting the `Proofs/` foundations turned up three lemmas that were false rather than
+merely stale, and two of `Encode.lean`'s own docstrings were making false claims about the
+encoding. Staleness and falsity look identical from the outside.
 
 ## The headline finding: the checker is not what reads the rows
 
@@ -237,13 +240,10 @@ Parked with the milestone; each is argued at its statement in `Encoding/Encode.l
 only Lean the encoding still has. Whether `ViewRepr` should be the source-to-target correspondence
 (chosen because it is observable in the target alone); whether `SameClass` should be universal
 rather than existential (a stronger claim, about the rebuild having converged, and only meaningful
-because rows are never removed); and whether `encode` should emit `@fTerm` at all (nothing reads
+because nothing is ever removed); and whether `encode` should emit `@fTerm` at all (nothing reads
 it, and with structural ids its id column is redundant with its key).
 
 One more, and it is the one to settle before restating anything: **congruence on the target is
-trivial, for a cheaper reason than the one first recorded.** The argument used to be that source
-constructor names stay constructors there, so the functional dependency only re-derives
-reflexivity. It does not need to be: `encode` emits no `union`, so the target asserts no
-equalities, and `Cong` restricted to a database with `eqs = ∅` is syntactic equality. `Cong` reads
-neither `rows` nor `sig`, so nothing about the target's tables can add a derivation at all. Any
-restatement gets this for free.
+trivial**, because `encode` emits no `union` and `Cong` reads `eqs` and nothing else, so no table
+of the target can add a derivation. `ENCODING.md`, "What survives", states it exactly — the
+version of it that says "syntactic equality" is wrong, and was wrong in `Encode.lean` too.
