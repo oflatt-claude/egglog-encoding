@@ -10,11 +10,8 @@ What an expression evaluates to, and what the database holds:
 Term = number | (constructor Term ...)
 ```
 
-A term is its own identity: there are no e-class ids on this side of the encoding, and
-the e-graph is a set of terms plus a congruence relation over them.
-
-`Term` nests `List Term`, so Lean's derived recursor carries a second motive over
-`List Term`; `Term.recTerm` repackages it as ordinary structural induction.
+A term is its own identity: there are no e-class ids, and the e-graph is a set of terms
+plus a congruence relation over them.
 -/
 
 namespace Egglog
@@ -26,8 +23,7 @@ inductive Term where
 namespace Term
 mutual
 
-/-- Decidable equality, by hand: no `deriving` handler sees through the `List Term`
-nesting. -/
+/-- Decidable equality. -/
 def decEq : (s t : Term) → Decidable (s = t)
   | .lit l₁, .lit l₂ =>
     if h : l₁ = l₂ then .isTrue (by rw [h]) else .isFalse (by simp [h])
@@ -68,17 +64,13 @@ def subterms (t : Term) : Set Term := {s | IsSubterm s t}
 mutual
 
 /-- `subterms` as a list, in **reverse creation order**: `t`, then its arguments right to
-left, each preceded by its own subterms.
-
-The order is load-bearing. `FDatabase.addTerm` prepends this list, so a position in
-`FDatabase.terms` is the age of the term at it, which is what `Impl/Merge.lean`'s
-`canonKey` reads to pick a canonical key. -/
+left, each preceded by its own subterms. The order is load-bearing. -/
 def subtermList : Term → List Term
   | .lit l => [.lit l]
   | .app f args => .app f args :: subtermListL args
 
-/-- `subtermList` over an argument list, **later arguments first**: an argument is
-evaluated after the ones to its left, so it is the newer term. -/
+/-- `subtermList` over an argument list, **later arguments first**: a later argument is the
+newer term. -/
 def subtermListL : List Term → List Term
   | [] => []
   | t :: ts => subtermListL ts ++ subtermList t
@@ -88,13 +80,8 @@ end
 end Term
 /-! ### The term order
 
-`ordering-min`/`ordering-max` are part of the *program* the encoding writes — the
-union-find's merge body is literally
-`(set (@UF_<S> (ordering-max old new)) (values (ordering-min old new) ()))`.
-
-`Term.blt` is a *structural* order where egglog's is an allocation order, so the two pick
-different class representatives: an accepted deviation, argued in `MERGE.md`, "The
-representative deviation". -/
+`ordering-min`/`ordering-max` are primitives a `:merge` body calls, and `Term.blt` is the
+order they read. -/
 mutual
 
 /-- A total order on terms: literals below applications, then by argument count, then by
@@ -123,9 +110,8 @@ def Term.orderingMin (s t : Term) : Term := if Term.blt s t then s else t
 def Term.orderingMax (s t : Term) : Term := if Term.blt s t then t else s
 
 /-! ### Primitives -/
-/-- The primitives this fragment has. egglog resolves a primitive by name out of a table
-sharing a namespace with user functions, so these are `Expr.app` of a reserved name rather
-than a new `Expr` constructor. -/
+/-- The primitives this fragment has. A primitive is applied as `Expr.app` of a reserved
+name, not by a constructor of its own. -/
 inductive Prim where
   | orderingMin
   | orderingMax
@@ -135,7 +121,7 @@ inductive Prim where
   | intMax
   deriving DecidableEq, Repr
 
-/-- The reserved names. A user function of the same name is shadowed, as in egglog. -/
+/-- The reserved names; a user function of the same name is shadowed. -/
 def Prim.ofName : FnName → Option Prim
   | "ordering-min" => some .orderingMin
   | "ordering-max" => some .orderingMax
@@ -144,8 +130,7 @@ def Prim.ofName : FnName → Option Prim
   | _ => none
 
 /-- A primitive's meaning. `none` for the wrong arity, and for `min`/`max` also for a
-non-literal operand: they are `i64` primitives, and this model has no sort discipline to
-reject the application statically. -/
+non-literal operand. -/
 def Prim.apply : Prim → List Term → Option Term
   | .orderingMin, [s, t] => some (Term.orderingMin s t)
   | .orderingMax, [s, t] => some (Term.orderingMax s t)

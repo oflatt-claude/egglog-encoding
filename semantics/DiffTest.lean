@@ -317,11 +317,11 @@ private def commuteDist : Rule where
 
 /-! ### Multi-column outputs
 
-`Row.out`, `Database.addRow`, `Database.Out` and `MergeSpec`'s result were multi-column
-from the start; `Action.set` and `Pattern` were not, so a two-column row could be created
-by a merge and never written or read. Both are now widened, and these are the cases that
-exercise it — egglog's `(function f (Math) (i64 i64) …)`, `(set (f k) (values a b))` and
-the tuple destructure `(= (values a b) (f k))`.
+`Database.Out`, `MergeStep` and `MergeSpec`'s result were multi-column from the start;
+`Action.set` and `Pattern` were not, so a two-column entry could be created by a merge and
+never written or read. Both are now widened, and these are the cases that exercise it —
+egglog's `(function f (Math) (i64 i64) …)`, `(set (f k) (values a b))` and the tuple
+destructure `(= (values a b) (f k))`.
 
 **What the oracle can and cannot see.** `(print-size)` reports one row per canonical *key*
 tuple and is blind to value columns, so a row-count comparison validates that egglog

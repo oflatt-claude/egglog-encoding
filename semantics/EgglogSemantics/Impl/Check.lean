@@ -58,7 +58,7 @@ def Pattern.arityOk : Pattern → Signature → Bool
   | .values vs f as, sig =>
       (match sig f with
        | none => false
-       | some d => as.length == d.arity && vs.length == d.outArity)
+       | some d => as.length == d.arity && as.length + vs.length == d.entryWidth)
         && Expr.arityOkList vs sig && Expr.arityOkList as sig
 
 /-- An action. A `set`'s key and value counts are checked together; a `set` on a name with

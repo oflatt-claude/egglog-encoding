@@ -37,9 +37,15 @@ sees only the current one — `MERGE.md`, "What the widening and the composed in
 found", has the repro.
 
 The congruence closure is *unchanged*, and needs no argument to stay so: `Cong` reads
-`terms` and `eqs` and no row at all, so `closureF` decides it whatever the row set holds.
-What a constructor's rows add — the functional dependency — is
-`Proofs/Congruence.lean`'s `Cong.fd`, a theorem rather than a rule.
+`terms` and `eqs` and no row at all, so `closureF` decides it whatever the index holds.
+The functional dependency a constructor's table has is `Cong.congr` itself, a rule of the
+relation, since a constructor's entry is its own application.
+
+Entry terms do enter the closure, and inertly. A merge function's entry `f(a…, v…)` is
+never a *subterm* of anything — `Expr.eval` builds no application of a merge function, so
+every key and value column is a constructor term — so the pairs it adds relate entry terms
+to entry terms and can never propagate down to a key. `congrKeys`, `canonTerm` and
+`canonOf` therefore see exactly what they saw when entries were rows and nothing else.
 -/
 
 namespace Egglog
@@ -52,24 +58,28 @@ abbrev congrKeys : Finset (Term × Term) → List Term → List Term → Bool :=
 end FDatabase
 /-! ### The merge phase
 
-**This is where `Impl/` stops being append-only, and deliberately.** `Spec/` stays
+**This is where the *index* stops being append-only, and deliberately.** `Spec/` stays
 append-only — the M11 safety invariant needs neither termination nor confluence precisely
 because nothing is removed, and the encoding depends on "nothing is ever removed from it,
 which lets proofs refer to terms after they leave the e-graph". A *reference
 implementation* has a different job: egglog's merge replaces the row, and its rebuild
-*moves* one, so an append-only `Impl/` is faithful to our spec and unfaithful to the
-system the spec is a model of. The contract between the two therefore weakens from an
-equality to `Spec/Merge.lean`'s `Database.Recorded` — every row the implementation holds
-is one the specification records, read through `Database.Out`, so the implementation may
-find *fewer* results, never more. That is the safe direction, since every property M11
-cares about is positive in the state. Deleting is what makes it a containment; re-keying
-is what makes the containment read keys up to congruence.
+*moves* one, so a table that only grows is faithful to our spec and unfaithful to the
+system the spec is a model of.
+
+`FDatabase.rows` is where that happens, and `toDatabase` drops it, so the **denotation
+stays append-only** whatever the index does: the entry terms `addRow` and
+`mergeOneOriented` put in `terms` are never removed and never re-keyed. What the two
+sides then differ by is which entries the implementation still *finds* — the contract is
+`Spec/Merge.lean`'s `Database.Recorded`, read through `Database.Out`, so the
+implementation may find *fewer* results, never more. That is the safe direction, since
+every property M11 cares about is positive in the state.
 
 **What "superseded" means here: the two rows the merge combined.** After the body has run
-and the combined row is computed, `r₁` — the row being inserted — is dropped, and `r₂` —
-the row already in the table — is overwritten in place by the combined row. A collision
-that changes no value column skips the body and the overwrite, dropping `r₁` and leaving
-`r₂` exactly as it stands (`noConflict`). Nothing else is ever removed:
+and the combined row is computed, `r₁` — the row being inserted — is dropped from the
+index, and `r₂` — the row already in the table — is overwritten in place by the combined
+row, whose entry term is added beside the two it combined. A collision that changes no
+value column skips the body and the overwrite, dropping `r₁` and leaving `r₂` exactly as
+it stands (`noConflict`). Nothing else is ever removed:
 
 * **never a term and never an equality** — only `rows` is rewritten;
 * **never a row of a `.union` function** — the rewrite runs only inside the `.merge` branch
@@ -139,8 +149,10 @@ testing the cheap condition first is what keeps a constructor-only database from
 a closure per pair. Same result either way — a constructor or a `.noMerge` function has
 no body to run.
 
-**The combined row takes `r₂`'s key and `r₂`'s slot.** `r₁` is dropped and `r₂` is
-overwritten where it stands, rather than both being dropped and the result prepended: in
+**The combined row takes `r₂`'s key and `r₂`'s slot**, and its entry term `f(r₂.args…,
+vs…)` joins `terms`, which is what `MergeStep` records and the only part of the firing the
+denotation sees. `r₁` is dropped and `r₂` is overwritten where it stands, rather than both
+being dropped and the result prepended: in
 egglog a merge leaves the existing table entry in place, so the survivor inherits the
 resident row's key and its age, and a third row colliding with it later is the *newer*
 one. Prepending instead made the survivor the youngest row of its class, which inverts
@@ -169,7 +181,7 @@ def FDatabase.mergeOneOriented (cl : Finset (Term × Term)) (d : FDatabase) (r�
       else
         (execActions { d with env := mergeEnv r₂.out r₁.out } body).bind
           fun e => (Expr.evalList e.sig res e.env).map fun vs =>
-            let e' := (e.addTerms r₂.args).addTerms vs
+            let e' := e.addTerm (.app r₂.fn (r₂.args ++ vs))
             { e' with
               rows := (e'.rows.filter fun r => r ≠ r₁).map fun r =>
                 if r = r₂ then ⟨r₂.fn, r₂.args, vs⟩ else r,
@@ -278,11 +290,11 @@ renders `i64` per output column, so no program the difftest can build has an eq-
 merge output, and re-keying values would put the implementation's rows outside
 `Database.Out` — the relation `Spec/Merge.lean`'s `Database.Recorded` reads them through.
 
-**Constructor rows are left alone**: a constructor row is `⟨f, as, [.app f as]⟩`
-determined by `terms`, and re-keying one would break `Database.RowsComplete` while buying
-nothing — congruence never reads a row, and `Database.Out` reads it from every congruent
-key already. `.noMerge` rows are left alone too; a `:no-merge` collision is a
-program error, not a resolution. -/
+**Constructor rows are left alone**: a constructor row is `⟨f, as, [.app f as]⟩`, the
+index's reading of the term `f(as)`, and re-keying one would put it out of step with the
+term it indexes while buying nothing — congruence never reads a row, and `Database.Out`
+reads a constructor's entry from every congruent key already. `.noMerge` rows are left
+alone too; a `:no-merge` collision is a program error, not a resolution. -/
 /-- The canonical member of `t`'s congruence class: the congruent term created *first*.
 
 `ts` is `FDatabase.terms`, whose *tail* is the oldest part — `addTerm` prepends and

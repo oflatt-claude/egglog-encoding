@@ -3,27 +3,19 @@ import EgglogSemantics.Spec.Congruence
 /-!
 # Evaluating expressions and actions
 
-An expression denotes a ground term; an action turns a database into a database.
-
-Evaluation is partial, in four ways, all `none`: an unbound variable; an application of an
-**undeclared** name, which is egglog's declare-before-use; an application of a declared
-merge function, which is a *lookup* and so a query atom (`Pattern.values`) rather than an
-expression; and a primitive given operands of the wrong sort, which this model has no
-sorts to reject statically. `Scope.lean`'s `Scoped` rules out the first and its
-`Evaluable` the other three.
-
-Actions only ever add terms and equalities — `evalAction_contained`.
+An expression denotes a ground term; an action turns a database into a database. Evaluation
+is partial in four ways, all `none`: an unbound variable, an **undeclared** name, a declared
+merge function — which is a *lookup*, and so the query atom `Pattern.values` rather than an
+expression — and a primitive given operands of the wrong sort. Actions only ever add terms
+and equalities.
 -/
 
 namespace Egglog
 mutual
 
-/-- Build the ground term an expression denotes.
-
-The signature is read for one thing only — whether a name **builds, computes, reads, or
-means nothing**. egglog consults its primitive table first, so a reserved name shadows a
-user function. That is why the evaluator needs a `Signature` and nothing else of the
-database: reading is confined to `Pattern.values`. -/
+/-- Build the ground term an expression denotes. The signature is read for one thing only —
+whether a name **builds, computes, reads, or means nothing** — and the primitive table is
+consulted first, so a reserved name shadows a user function. -/
 def Expr.eval (sig : Signature) : Expr → Env → Option Term
   | .lit l, _ => some (.lit l)
   | .var v, σ => Env.lookup v σ
@@ -40,14 +32,9 @@ def Expr.evalList (sig : Signature) : List Expr → Env → Option (List Term)
 
 end
 
-/-- Run one action against the database.
-
-A `let` binds in the environment the database carries, so at top level it adds a global
-and inside a rule a rule-local binding; `evalLocalActions` makes the second case local by
-restoring the caller's environment afterwards.
-
-A `set` only *records* its entry: a collision with a congruent key is resolved by
-`MergeStep`, which leaves both entries it merged in place. -/
+/-- Run one action against the database. A `let` binds in the environment the database
+carries, a global at top level and a rule-local binding inside a rule. A `set` only
+*records* its entry; a collision on a congruent key is resolved by `MergeStep`. -/
 def evalAction (db : Database) : Action → Option Database
   | .expr e => (e.eval db.sig db.env).map fun t => db.addTerm t
   | .letBind v e => (e.eval db.sig db.env).map fun t =>
@@ -64,11 +51,8 @@ def evalActions (db : Database) : List Action → Option Database
   | [] => some db
   | a :: as => (evalAction db a).bind fun db' => evalActions db' as
 
-/-- Run a rule's actions with `σ` in scope, then forget the resulting environment.
-
-`σ` is appended *after* the globals, so a globally bound variable shadows a substitution
-for the same name — which never arises, since a pattern's free variables exclude the
-globals (`Expr.freeVars`). -/
+/-- Run a rule's actions with `σ` in scope, then forget the resulting environment. `σ` is
+appended *after* the globals, so a global shadows a substitution for the same name. -/
 def evalLocalActions (db : Database) (as : List Action) (σ : Env) : Option Database :=
   (evalActions { db with env := db.env ++ σ } as).map fun db' =>
     { db' with env := db.env, rules := db.rules }

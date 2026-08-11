@@ -5,18 +5,10 @@ import EgglogSemantics.Spec.Term
 # The database
 
 The global state: the terms the program has built, the equalities it has asserted, the
-global bindings, the rules, and the declarations.
-
-A function's table lives in the term set. An entry of a merge function `f` with value
-columns `v…` at the key `a…` is the term `f(a…, v…)`; a constructor's value is its own
-application, so its entry is just `f(a…)`. `FnDecl.entryWidth` is which of the two a name
-gets, and `Database.DeclaredTerms` says every application the state holds is one.
-
-* `eqs` holds only the *asserted* equalities. The equalities that *follow* are `Cong`, a
-  predicate, so there is no closed set for the state to carry or maintain.
-* `Database.addTerm` inserts a term together with all of its subterms, so the database
-  holds the children of everything it holds by construction rather than by a repair pass
-  between commands.
+global bindings, the rules, and the declarations. A function's table lives in the term set:
+a merge function's entry at the key `a…` with value columns `v…` is the term `f(a…, v…)`,
+a constructor's entry is `f(a…)`, and `Database.DeclaredTerms` says every application the
+state holds is one of the two.
 -/
 
 namespace Egglog
@@ -32,8 +24,7 @@ def lookup (v : Var) : Env → Option Term
 /-- The variables bound by `σ`, in order. -/
 def dom (σ : Env) : List Var := σ.map Prod.fst
 
-/-- Environments no `lookup` can tell apart. `Env.UnionAll` may leave a variable bound
-twice with the same term, which `Agree` ignores. -/
+/-- Environments no `lookup` can tell apart. -/
 def Agree (σ₁ σ₂ : Env) : Prop := ∀ v, lookup v σ₁ = lookup v σ₂
 
 end Env
@@ -43,8 +34,7 @@ structure Database where
   /-- The declared functions. Written only by `Cmd.decl`. -/
   sig : Signature
   /-- The terms the database holds — the values it built and the entries it recorded.
-  Subterm-closed under `WF`, and never shrinks: a merge adds the combined entry beside the
-  two it merged, which is what keeps the state monotone. -/
+  Subterm-closed under `WF`, and never shrinks. -/
   terms : Set Term
   /-- The *asserted* equalities, from `union` actions. Not closed under congruence. -/
   eqs : Set (Term × Term)
@@ -63,10 +53,7 @@ def empty : Database where
   rules := ∅
 
 /-- Every application the database holds is a **declared** function's entry: its head is
-declared, and it carries exactly as many children as that declaration's entries have.
-
-Carried as a state invariant rather than read off the signature, because a name nobody
-declared has no width to be checked against. -/
+declared, and it carries that declaration's `entryWidth` children. -/
 def DeclaredTerms (db : Database) : Prop :=
   ∀ f as, Term.app f as ∈ db.terms → ∃ d, db.sig f = some d ∧ as.length = d.entryWidth
 
@@ -82,16 +69,13 @@ def addEq (a b : Term) (db : Database) : Database :=
   { (db.addTerm a).addTerm b with eqs := insert (a, b) db.eqs }
 
 /-- Union in a whole family of databases at once, taking `sig`, `env` and `rules` from
-`db`. That loses nothing: the only union the semantics takes is `(run)`'s, whose operands
-all carry the caller's env and rules. -/
+`db`. -/
 def sUnion (db : Database) (S : Set Database) : Database :=
   { db with
     terms := db.terms ∪ ⋃ d ∈ S, d.terms
     eqs := db.eqs ∪ ⋃ d ∈ S, d.eqs }
 
-/-- Databases that differ only in an environment no `lookup` can tell apart. Nothing but
-`Expr.eval` reads the environment, so this is enough to make two databases behave
-identically. -/
+/-- Databases that differ only in an environment no `lookup` can tell apart. -/
 structure EnvAgree (d₁ d₂ : Database) : Prop where
   sig : d₁.sig = d₂.sig
   terms : d₁.terms = d₂.terms
@@ -99,8 +83,7 @@ structure EnvAgree (d₁ d₂ : Database) : Prop where
   rules : d₁.rules = d₂.rules
   env : Env.Agree d₁.env d₂.env
 
-/-- `d₁`'s terms and asserted equalities are among `d₂`'s. The other fields are ignored:
-this is exactly what congruence monotonicity needs. -/
+/-- `d₁`'s terms and asserted equalities are among `d₂`'s; the other fields are ignored. -/
 structure Contained (d₁ d₂ : Database) : Prop where
   terms : d₁.terms ⊆ d₂.terms
   eqs : d₁.eqs ⊆ d₂.eqs

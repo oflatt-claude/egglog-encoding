@@ -4,43 +4,18 @@ import EgglogSemantics.Spec.Term
 /-!
 # The front end's static checks
 
-**egglog's front end accepts this program** — every variable bound, every applied name a
-declared constructor, no `set` on a constructor, no name declared twice. Four checks, each
-transcribing one a real front end runs:
-
-| check | asks | reads |
-| --- | --- | --- |
-| `Scoped` | every variable used is bound | the scope |
-| `Evaluable` | every applied name is a declared constructor | the signature |
-| `SetLegal` | no `set` writes a constructor | the signature |
-| `DeclsFresh` | no name is declared twice | the signature |
-
-They stay four separate checks rather than one bundle because the theorems need them
-apart, each taking only the ones it uses: `programStep_isSome` — such a program never gets
-stuck — is `WellScoped` and `Evaluable`, while `execM_contained` is `SetLegal` alone.
-
-All four are **one walk**, `Check` below: a check is fixed by what it asks at the three
-sites a program presents — a query fact, an action, a declaration — and by the context it
-threads. That a rule's head is checked in what its query binds, and a command in what the
-earlier ones leave, is then said once.
-
-Two more front-end checks are `Bool` and live in `Impl/Check.lean`, because they say what
-egglog *rejects* rather than what a program *means*: `arityOk`, a use's column counts
-against its declaration, and `noLookup`, "every read is a query atom". Those two walk into
-a `:merge` body; nothing here does.
+Four checks, each an instance of the one walk `Check` below: `Scoped` — every variable used
+is bound; `Evaluable` — every applied name is a declared constructor; `SetLegal` — no `set`
+writes a constructor; `DeclsFresh` — no name is declared twice. `Scoped` threads a `Scope`,
+the other three a `Signature`.
 -/
 
 namespace Egglog
 
 /-! ### One walk -/
 
-/-- A static check, as the front end runs it over a program: three questions, and how the
-context they read is threaded. Unasked sites default to `True`, so each check below lists
-only the sites it cares about.
-
-A declaration is asked about at the context *before* it is installed, which is what lets
-`DeclsFresh` mean "not already declared" while every command after it sees the context
-including it. -/
+/-- A static check as a walk over a program: what it asks at the three sites a program
+presents, and how the context they read is threaded. Unasked sites default to `True`. -/
 structure Check (C : Type) where
   /-- Asked of each fact of a rule's query. -/
   fact : Pattern → C → Prop := fun _ _ => True
@@ -67,8 +42,7 @@ variable {C : Type}
   (∀ p ∈ r.query, K.fact p c) ∧ K.actions r.actions (K.bindQuery r.query c)
 
 /-- One command. A `:merge` body is **not** walked into: it runs in the environment
-`mergeEnv` builds from the two colliding entries rather than in the ambient context, and it
-is the one position primitives exist for. A body that gets stuck simply does not step. -/
+`mergeEnv` builds rather than in the ambient context. -/
 @[simp] def Check.cmd (K : Check C) : Cmd → C → Prop
   | .action a, c => K.action a c
   | .rule r, c => K.rule r c
@@ -80,14 +54,7 @@ is the one position primitives exist for. A body that gets stuck simply does not
   | [], _ => True
   | c :: cs, x => K.cmd c x ∧ K.program cs (K.bindCmd c x)
 
-/-! ### Scope
-
-**Scope and nothing else**: every variable used is bound. This is the one check that
-threads a `Scope`, and the one that asks anything of a query fact.
-
-Its two binders are functions rather than judgments because neither can fail: an unbound
-*pattern* variable is a match variable rather than an error, so a query only extends the
-scope, and a `let` may shadow. -/
+/-! ### Scope -/
 
 /-- The variables in scope. -/
 abbrev Scope := List Var
@@ -95,21 +62,14 @@ abbrev Scope := List Var
 /-- Every variable of `e` is in scope. -/
 def Expr.Scoped (e : Expr) (Γ : Scope) : Prop := ∀ v ∈ e.vars, v ∈ Γ
 
-/-- `e` is a constructor application.
-
-Query facts and `expr` actions are required to be applications because **egglog's grammar
-admits nothing else there**: a bare variable is `parse error: expected fact` as a query
-fact, `parse error: expected action` in a rule head and `parse error: expected command` at
-top level, and a literal is rejected the same way. An `.eq` fact is unrestricted, as in
-egglog, which accepts `(= a b)` between two bound variables. -/
+/-- `e` is an application. Query facts and `expr` actions are restricted to applications;
+an `.eq` fact is not. -/
 def Expr.IsApp : Expr → Prop
   | .app _ _ => True
   | _ => False
 
 /-- A query fact carries the application restriction and nothing else: a fact never fails
-to scope, and what it binds is `Query.bind`. A `.values` atom's head function is
-unconstrained, here and in `Evaluable`, because reading a non-constructor is what the atom
-is *for* and is the only legal read. -/
+to scope, and what it binds is `Query.bind`. A `.values` head is unconstrained. -/
 def Pattern.Scoped : Pattern → Prop
   | .expr e => e.IsApp
   | .eq _ _ => True
@@ -154,29 +114,16 @@ def WellScoped (p : Program) : Prop := Program.Scoped p []
 
 /-! ### Evaluability
 
-`Scoped` is not enough for `Expr.eval` to return a term: an application may be a *lookup*,
-which has no evaluation rule at all, or a *primitive*, which may be handed operands of the
-wrong sort. `Evaluable` rules both out. It is the first of the three checks that read a
-`Signature`, all threading it by `Cmd.sigBind`. -/
+`Scoped` is not enough for `Expr.eval` to return a term: an application may be a *lookup*
+or a *primitive*. `Evaluable` rules both out. -/
 
-/-- The signature after a command: only a declaration writes it, exactly as `CmdStep`'s
-`.decl` case does. -/
+/-- The signature after a command: only a declaration writes it, as in `CmdStep`. -/
 def Cmd.sigBind : Cmd → Signature → Signature
   | .decl f d, sig => Function.update sig f (some d)
   | _, sig => sig
 
-/-- Every application in `e` **builds**, so evaluating `e` cannot get stuck on one.
-
-Of the four things a name can be (`Spec/Eval.lean`), only a declared constructor always
-succeeds, and only it is admitted. Ruling out the undeclared case makes
-`Program.Evaluable` declare-before-use; ruling out a lookup is egglog's
-`check_no_function_lookups_in_actions`, extended from rule heads to everywhere, since
-reading is the query atom `Pattern.values`.
-
-**Primitives are excluded rather than sort-checked**, which is where this is stricter than
-egglog: `(min 1 2)` is a legal egglog action and `(min (A) (B))` a type error there, and
-with no sorts in this model nothing here can tell the two apart. The one position
-primitives exist for is a `:merge` body, which is not walked into at all. -/
+/-- Every application in `e` **builds**: its head is a declared constructor and not a
+primitive, so evaluating `e` cannot get stuck on it. -/
 def Expr.Evaluable (e : Expr) (sig : Signature) : Prop :=
   ∀ f ∈ e.fns, Prim.ofName f = none ∧ sig.IsCtor f
 
@@ -187,8 +134,8 @@ def Action.Evaluable : Action → Signature → Prop
   | .union e₁ e₂, sig => e₁.Evaluable sig ∧ e₂.Evaluable sig
   | .set _ args out, sig => (∀ e ∈ args, e.Evaluable sig) ∧ ∀ e ∈ out, e.Evaluable sig
 
-/-- Every applied name is a declared constructor. Nothing is asked of a query fact: a
-query is *matched* rather than evaluated. -/
+/-- Every applied name is a declared constructor. Nothing is asked of a query fact, which
+is matched rather than evaluated. -/
 abbrev Check.evaluable : Check Signature where
   action := Action.Evaluable
   bindCmd := Cmd.sigBind
@@ -198,25 +145,15 @@ abbrev Check.evaluable : Check Signature where
 @[inherit_doc Check.evaluable] abbrev Cmd.Evaluable := Check.evaluable.cmd
 @[inherit_doc Check.evaluable] abbrev Program.Evaluable := Check.evaluable.program
 
-/-! ### `set` legality
+/-! ### `set` legality -/
 
-Kept apart from `Evaluable` because it is additive: that says what an expression may
-*build*, this says what an action may *write*. -/
-
-/-- `(set (f …) …)` is legal only when `f` is a declared `:merge` or `:no-merge`
-function — the one thing that has a merge specification to consult. A constructor and an
-undeclared name are both excluded, which is egglog's `SetConstructorDisallowed` and its
-"unbound function".
-
-It is what keeps a constructor's entries the shape `Cong.fd` needs: a `set` on `f` records
-`f(as…, v…)` for whatever `v…` its out expressions denote, which for a constructor is an
-entry of the wrong width. -/
+/-- `(set (f …) …)` is legal only when `f` is a declared `:merge` or `:no-merge` function,
+which is what keeps a constructor's entries the width `FnDecl.entryWidth` gives them. -/
 def Action.SetLegal : Action → Signature → Prop
   | .set f _ _, sig => sig.mergeOf f ≠ none
   | _, _ => True
 
-/-- No `set` writes a constructor. Nothing is asked of a query fact, which writes
-nothing. -/
+/-- No `set` writes a constructor. -/
 abbrev Check.setLegal : Check Signature where
   action := Action.SetLegal
   bindCmd := Cmd.sigBind
@@ -228,15 +165,11 @@ abbrev Check.setLegal : Check Signature where
 
 /-! ### Freshness of a declaration
 
-The other half of declare-before-use: `Evaluable` says a name must be declared *before* it
-is applied, this says a name is declared *once*. Nothing in the dynamics forbids a
-redeclaration — `Cmd.sigBind` is `Function.update` — but one changes what the signature
-says of a name the state already has terms of, and so breaks `Database.DeclaredTerms`.
-`Proofs/Counterexamples.lean`'s `claim1` is the redeclaration that breaks it. -/
+A redeclaration changes what the signature says of a name the state already has terms of,
+breaking `Database.DeclaredTerms`. -/
 
-/-- Every declaration names something the signature does not already have. The walk asks
-this *before* `Cmd.sigBind` installs the name; after, it would be reading back
-`Function.update`'s own entry and would always fail. -/
+/-- Every declaration names something the signature does not already have, asked *before*
+`Cmd.sigBind` installs the name. -/
 abbrev Check.declFresh : Check Signature where
   decl f _ sig := sig f = none
   bindCmd := Cmd.sigBind
