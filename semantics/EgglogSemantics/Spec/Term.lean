@@ -86,37 +86,6 @@ def subtermListL : List Term → List Term
 end
 
 end Term
-/-! ### Rows
-
-A database maps each function's key tuple to its value columns. For a constructor there is
-one value column and it holds the application itself, which is what makes the table's
-functional dependency derivable congruence — `Proofs/Congruence.lean`'s `Cong.fd`. -/
-/-- One tuple of one function's table: `fn args… ↦ out…`. `out` is a *list*, one entry per
-value column: egglog's tables are multi-column, and the encoding depends on it —
-`@UF_<Sort>` carries a parent *and* a proof. -/
-@[ext]
-structure Row where
-  fn : FnName
-  args : List Term
-  out : List Term
-  deriving DecidableEq
-
-namespace Term
-/-- The constructor rows of `t`: one per application among its subterms, each mapping its
-own children to itself. Only a *constructor* application ever occurs inside a `Term` — a
-`:merge` function's application evaluates to its recorded output — so this needs no
-signature. -/
-def ctorRows (t : Term) : Set Row :=
-  {r | r.out = [.app r.fn r.args] ∧ Term.app r.fn r.args ∈ t.subterms}
-
-/-- `ctorRows` as a list, for the executable interpreter. -/
-def ctorRowList (t : Term) : List Row :=
-  t.subtermList.filterMap fun s =>
-    match s with
-    | .app f as => some ⟨f, as, [.app f as]⟩
-    | .lit _ => none
-
-end Term
 /-! ### The term order
 
 `ordering-min`/`ordering-max` are part of the *program* the encoding writes — the

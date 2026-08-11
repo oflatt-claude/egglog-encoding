@@ -41,4 +41,18 @@ inductive CongList (db : Database) : List Term → List Term → Prop where
 
 end
 
+/-! ### Congruence with extra terms in scope -/
+/-- `db` plus the terms `ts`, used to relate a term the database may not hold to one it
+does.
+
+A pattern's operands are *expressions*, so an instance of a pattern may be a term the
+program never built, and `Cong` relates nothing outside `db.terms`. Adding the operands
+first is what makes such a term relatable, and is how this model captures egglog's
+flattening of a nested fact into one atom per subterm. It **asserts nothing**, so this is a
+conservative reading of `Cong` and not a weaker one. -/
+def Database.withOperands (db : Database) (ts : List Term) : Database := db.addTerms ts
+
+@[inherit_doc Database.withOperands] def CongOn
+    (db : Database) (ts : List Term) (a b : Term) : Prop := Cong (db.withOperands ts) a b
+
 end Egglog

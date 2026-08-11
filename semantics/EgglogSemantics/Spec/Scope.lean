@@ -67,7 +67,7 @@ variable {C : Type}
   (∀ p ∈ r.query, K.fact p c) ∧ K.actions r.actions (K.bindQuery r.query c)
 
 /-- One command. A `:merge` body is **not** walked into: it runs in the environment
-`mergeEnv` builds from the two colliding rows rather than in the ambient context, and it
+`mergeEnv` builds from the two colliding entries rather than in the ambient context, and it
 is the one position primitives exist for. A body that gets stuck simply does not step. -/
 @[simp] def Check.cmd (K : Check C) : Cmd → C → Prop
   | .action a, c => K.action a c
@@ -208,9 +208,9 @@ function — the one thing that has a merge specification to consult. A construc
 undeclared name are both excluded, which is egglog's `SetConstructorDisallowed` and its
 "unbound function".
 
-It is what keeps `Database.CtorRows` an invariant: a `set` writes `⟨f, as, [v]⟩` for
-whatever `v` its out expression denotes, and `Database.ctorRowsOf` holds no such row
-unless `v` is `.app f as`. -/
+It is what keeps a constructor's entries the shape `Cong.fd` needs: a `set` on `f` records
+`f(as…, v…)` for whatever `v…` its out expressions denote, which for a constructor is an
+entry of the wrong width. -/
 def Action.SetLegal : Action → Signature → Prop
   | .set f _ _, sig => sig.mergeOf f ≠ none
   | _, _ => True
@@ -230,10 +230,9 @@ abbrev Check.setLegal : Check Signature where
 
 The other half of declare-before-use: `Evaluable` says a name must be declared *before* it
 is applied, this says a name is declared *once*. Nothing in the dynamics forbids a
-redeclaration — `Cmd.sigBind` is `Function.update` — but one changes what
-`Signature.IsCtor` says of a name the state already has terms of, and so breaks
-`Database.CtorTerms`. `Proofs/Counterexamples.lean`'s `claim1` is the redeclaration that
-breaks it. -/
+redeclaration — `Cmd.sigBind` is `Function.update` — but one changes what the signature
+says of a name the state already has terms of, and so breaks `Database.DeclaredTerms`.
+`Proofs/Counterexamples.lean`'s `claim1` is the redeclaration that breaks it. -/
 
 /-- Every declaration names something the signature does not already have. The walk asks
 this *before* `Cmd.sigBind` installs the name; after, it would be reading back

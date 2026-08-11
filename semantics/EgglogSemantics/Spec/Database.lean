@@ -4,8 +4,13 @@ import EgglogSemantics.Spec.Term
 /-!
 # The database
 
-The global state: the terms and rows the program has built, the equalities it has
-asserted, the global bindings, the rules, and the declarations.
+The global state: the terms the program has built, the equalities it has asserted, the
+global bindings, the rules, and the declarations.
+
+A function's table lives in the term set. An entry of a merge function `f` with value
+columns `v…` at the key `a…` is the term `f(a…, v…)`; a constructor's value is its own
+application, so its entry is just `f(a…)`. `FnDecl.entryWidth` is which of the two a name
+gets, and `Database.DeclaredTerms` says every application the state holds is one.
 
 * `eqs` holds only the *asserted* equalities. The equalities that *follow* are `Cong`, a
   predicate, so there is no closed set for the state to carry or maintain.
@@ -37,12 +42,10 @@ end Env
 structure Database where
   /-- The declared functions. Written only by `Cmd.decl`. -/
   sig : Signature
-  /-- The terms the database holds. Subterm-closed under `WF`. -/
+  /-- The terms the database holds — the values it built and the entries it recorded.
+  Subterm-closed under `WF`, and never shrinks: a merge adds the combined entry beside the
+  two it merged, which is what keeps the state monotone. -/
   terms : Set Term
-  /-- The *asserted* rows. A merge never removes one; it adds the combined row beside the
-  two it merged, which is what keeps the state monotone. For a constructor the rows are
-  determined by `terms` via `Term.ctorRows`. -/
-  rows : Set Row
   /-- The *asserted* equalities, from `union` actions. Not closed under congruence. -/
   eqs : Set (Term × Term)
   /-- Global bindings, extended by a top-level `let`. -/
@@ -55,50 +58,24 @@ namespace Database
 def empty : Database where
   sig := fun _ => none
   terms := ∅
-  rows := ∅
   eqs := ∅
   env := []
   rules := ∅
 
-/-- The constructor rows a term set induces. For a constructor-only program `addTerm`
-maintains `rows` at exactly this value. -/
-def ctorRowsOf (terms : Set Term) : Set Row :=
-  {r | r.out = [.app r.fn r.args] ∧ Term.app r.fn r.args ∈ terms}
+/-- Every application the database holds is a **declared** function's entry: its head is
+declared, and it carries exactly as many children as that declaration's entries have.
 
-/-- The database's rows are exactly the constructor rows its terms induce. True of
-`empty`, preserved by `addTerm`/`addEq`, and false as soon as a `set` writes a `:merge`
-function's row. It is the strongest of the three row conditions here, and the one that
-gives `Proofs/Congruence.lean`'s `Cong.fd` its hypothesis for free. -/
-def CtorRows (db : Database) : Prop := db.rows = ctorRowsOf db.terms
+Carried as a state invariant rather than read off the signature, because a name nobody
+declared has no width to be checked against. -/
+def DeclaredTerms (db : Database) : Prop :=
+  ∀ f as, Term.app f as ∈ db.terms → ∃ d, db.sig f = some d ∧ as.length = d.entryWidth
 
-/-- Every application the database holds is a **declared** constructor's.
-
-True of any database a program builds, since `Expr.eval` builds only at a declared
-constructor. Unlike `CtorRows` it survives a `:merge` declaration of some *other* name,
-because it constrains `terms`, which merging never touches. It has to be carried as a
-state invariant rather than read off the signature: `Signature.AllConstructors` says
-nothing *is* a merge function, which leaves an undeclared name neither. -/
-def CtorTerms (db : Database) : Prop :=
-  ∀ f as, Term.app f as ∈ db.terms → db.sig.IsCtor f
-
-/-- The database holds the constructor row of every application it holds: the *inclusion*
-half of `CtorRows`, and the half that survives merging. The reverse inclusion is the one a
-`set` or a `:merge` declaration breaks. -/
-def RowsComplete (db : Database) : Prop := ctorRowsOf db.terms ⊆ db.rows
-
-/-- Insert `t`, all of its subterms, and their constructor rows. -/
+/-- Insert `t` and all of its subterms. -/
 def addTerm (t : Term) (db : Database) : Database :=
-  { db with terms := db.terms ∪ t.subterms, rows := db.rows ∪ t.ctorRows }
+  { db with terms := db.terms ∪ t.subterms }
 
 def addTerms (ts : List Term) (db : Database) : Database :=
   ts.foldl (fun d t => d.addTerm t) db
-
-/-- `(set (f as…) vs)`: build the operands, then assert the row. Only *asserted* — a
-collision with a congruent key is resolved by `MergeStep`, which does not remove this
-row. -/
-def addRow (f : FnName) (as vs : List Term) (db : Database) : Database :=
-  { (db.addTerms as).addTerms vs with
-    rows := insert ⟨f, as, vs⟩ ((db.addTerms as).addTerms vs).rows }
 
 /-- Assert `a = b`, inserting both terms. -/
 def addEq (a b : Term) (db : Database) : Database :=
@@ -110,7 +87,6 @@ all carry the caller's env and rules. -/
 def sUnion (db : Database) (S : Set Database) : Database :=
   { db with
     terms := db.terms ∪ ⋃ d ∈ S, d.terms
-    rows := db.rows ∪ ⋃ d ∈ S, d.rows
     eqs := db.eqs ∪ ⋃ d ∈ S, d.eqs }
 
 /-- Databases that differ only in an environment no `lookup` can tell apart. Nothing but
@@ -119,16 +95,14 @@ identically. -/
 structure EnvAgree (d₁ d₂ : Database) : Prop where
   sig : d₁.sig = d₂.sig
   terms : d₁.terms = d₂.terms
-  rows : d₁.rows = d₂.rows
   eqs : d₁.eqs = d₂.eqs
   rules : d₁.rules = d₂.rules
   env : Env.Agree d₁.env d₂.env
 
-/-- `d₁`'s terms, rows and asserted equalities are among `d₂`'s. The other fields are
-ignored: this is exactly what congruence monotonicity needs. -/
+/-- `d₁`'s terms and asserted equalities are among `d₂`'s. The other fields are ignored:
+this is exactly what congruence monotonicity needs. -/
 structure Contained (d₁ d₂ : Database) : Prop where
   terms : d₁.terms ⊆ d₂.terms
-  rows : d₁.rows ⊆ d₂.rows
   eqs : d₁.eqs ⊆ d₂.eqs
 
 /-- The database invariants: it holds the children of every term it holds, and only ever

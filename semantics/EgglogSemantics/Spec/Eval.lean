@@ -12,7 +12,7 @@ expression; and a primitive given operands of the wrong sort, which this model h
 sorts to reject statically. `Scope.lean`'s `Scoped` rules out the first and its
 `Evaluable` the other three.
 
-Actions only ever add terms, rows and equalities — `evalAction_contained`.
+Actions only ever add terms and equalities — `evalAction_contained`.
 -/
 
 namespace Egglog
@@ -44,7 +44,10 @@ end
 
 A `let` binds in the environment the database carries, so at top level it adds a global
 and inside a rule a rule-local binding; `evalLocalActions` makes the second case local by
-restoring the caller's environment afterwards. -/
+restoring the caller's environment afterwards.
+
+A `set` only *records* its entry: a collision with a congruent key is resolved by
+`MergeStep`, which leaves both entries it merged in place. -/
 def evalAction (db : Database) : Action → Option Database
   | .expr e => (e.eval db.sig db.env).map fun t => db.addTerm t
   | .letBind v e => (e.eval db.sig db.env).map fun t =>
@@ -54,7 +57,7 @@ def evalAction (db : Database) : Action → Option Database
         (e₂.eval db.sig db.env).map fun t₂ => db.addEq t₁ t₂
   | .set f args out =>
       (Expr.evalList db.sig args db.env).bind fun as =>
-        (Expr.evalList db.sig out db.env).map fun vs => db.addRow f as vs
+        (Expr.evalList db.sig out db.env).map fun vs => db.addTerm (.app f (as ++ vs))
 
 /-- Run the actions in order, threading the database through. -/
 def evalActions (db : Database) : List Action → Option Database

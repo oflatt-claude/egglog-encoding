@@ -49,8 +49,8 @@ constraint between two patterns. -/
 inductive Pattern where
   | expr : Expr → Pattern
   | eq : Expr → Expr → Pattern
-  /-- `f(a…, v…)`: read a row of `f` and bind its value columns. **The only read in the
-  language.**
+  /-- `f(a…, v…)`: read `f`'s entry at the key `a…` and bind its value columns `v…`.
+  **The only read in the language.**
 
   This is egglog's lowered query atom, which every fact naming a non-constructor compiles
   to. Its three surface forms — `(f a…)`, `(= v (f a…))` and the tuple destructure
@@ -63,7 +63,7 @@ inductive Pattern where
 /-- A rule's query, matched conjunctively. -/
 abbrev Query := List Pattern
 
-/-- An action: build a term, bind a variable, assert an equality, or write a row.
+/-- An action: build a term, bind a variable, assert an equality, or record an entry.
 
 `set` is what a `:merge` function needs and what an encoded rule head writes —
 `(set (@AddView b a) (values rewrite_var ()))`. For a constructor-only program it is
@@ -72,9 +72,9 @@ inductive Action where
   | expr : Expr → Action
   | letBind : Var → Expr → Action
   | union : Expr → Expr → Action
-  /-- `(set (f args…) out…)`: assert the row `f args… ↦ out…`. The outputs are a **list**,
-  one per value column, where the surface syntax writes a single expression for a
-  one-column function and `(values e₀ e₁ …)` for a tuple-output one. -/
+  /-- `(set (f args…) out…)`: record `f args… ↦ out…`. The outputs are a **list**, one per
+  value column, where the surface syntax writes a single expression for a one-column
+  function and `(values e₀ e₁ …)` for a tuple-output one. -/
   | set : FnName → List Expr → List Expr → Action
 
 /-- A rule. Its actions run once per substitution satisfying its query. -/
@@ -82,10 +82,10 @@ structure Rule where
   query : Query
   actions : List Action
 
-/-- How two rows of a **merge function** colliding on one key combine.
+/-- How two entries of a **merge function** colliding on one key combine.
 
-`merge body result` runs `body` once, with the two rows' outputs bound by `mergeEnv`, and
-then evaluates `result` — **one expression per value column**, where the surface syntax
+`merge body result` runs `body` once, with the two entries' outputs bound by `mergeEnv`,
+and then evaluates `result` — **one expression per value column**, where the surface syntax
 writes one tuple-valued `(values e₀ e₁ …)`. `noMerge` forbids a collision outright.
 
 A constructor has no merge specification at all: its collisions are an equality, and that
@@ -101,15 +101,21 @@ egglog has two declaration forms and this is both of them: `(datatype …)` and
 `(constructor …)` declare a **constructor**, which is `merge = none`; `(function … :merge …)`
 declares a **merge function**, which is `merge = some …`. -/
 structure FnDecl where
-  /-- The number of key columns. Surface syntax only: nothing in `Spec/` reads it. -/
+  /-- The number of key columns. Read by `MergeStep`, which needs to know where a term's
+  key ends and its value columns begin. -/
   arity : Nat
-  /-- The number of value columns. One for a constructor. Surface syntax only, as
-  `arity`. -/
+  /-- The number of value columns. One for a constructor. -/
   outArity : Nat
-  /-- How collisions are resolved, or `none` for a constructor. The one field the
-  semantics reads: `Signature.IsCtor` and `Signature.mergeOf` are both this plus whether
-  there is an entry at all. -/
+  /-- How collisions are resolved, or `none` for a constructor. `Signature.IsCtor` and
+  `Signature.mergeOf` are both this plus whether there is a declaration at all. -/
   merge : Option MergeSpec
+
+/-- How many children a term recording an entry of this function carries.
+
+A constructor's value *is* its application, so its entry is `f(a…)` and its key is all of
+it. A merge function's entry appends the value columns: `f(a…, v…)`. -/
+def FnDecl.entryWidth (d : FnDecl) : Nat :=
+  if d.merge.isNone then d.arity else d.arity + d.outArity
 
 /-- The declared functions. Undeclared names have no entry. -/
 abbrev Signature := FnName → Option FnDecl
@@ -199,9 +205,8 @@ egglog accepts a `:merge` declaration — which is why it is here rather than am
 `Spec/Scope.lean`'s checks. -/
 
 /-- `c` declares only constructors. Separate from `Action.SetLegal`, which says what a
-head may write where this says what the signature may become: `Database.CtorRows` needs
-both, since declaring a `:merge` function makes rows *already present* a `MergeStep`
-collision, with no `set` involved. -/
+head may write where this says what the signature may become: declaring a `:merge`
+function makes terms *already present* a `MergeStep` collision, with no `set` involved. -/
 def Cmd.CtorDecl : Cmd → Prop
   | .decl _ d => d.merge = none
   | _ => True
