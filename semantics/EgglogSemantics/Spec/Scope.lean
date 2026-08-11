@@ -4,10 +4,11 @@ import EgglogSemantics.Spec.Term
 /-!
 # The front end's static checks
 
-Four checks: `Scoped` — every variable used is bound; `Evaluable` — every applied name is
+Five checks: `Scoped` — every variable used is bound; `Evaluable` — every applied name is
 a declared constructor; `SetLegal` — no `set` writes a constructor; `DeclsFresh` — no name
-is declared twice. `Scoped` threads a `Scope`, extended by a `let` and by a query; the
-other three thread a `Signature`, moved only by `Cmd.sigBind`.
+is declared twice; `MergeDeclared` — every name a `:merge` applies is declared or a
+primitive. `Scoped` threads a `Scope`, extended by a `let` and by a query; the other four
+thread a `Signature`, moved only by `Cmd.sigBind`.
 -/
 
 namespace Egglog
@@ -63,8 +64,9 @@ def Cmd.bind : Cmd → Scope → Scope
 @[simp] def Rule.Scoped (r : Rule) (Γ : Scope) : Prop :=
   (∀ p ∈ r.query, p.Scoped) ∧ Actions.Scoped r.actions (Query.bind r.query Γ)
 
-/-- A `:merge` body is **not** walked into, here or in any of the checks below: it runs in
-the environment `mergeEnv` builds rather than in the ambient context. -/
+/-- A `:merge` body is walked into by `MergeDeclared` alone: it runs in the environment
+`mergeEnv` builds rather than in the ambient context, so `Scoped`, `Evaluable` and
+`SetLegal` all say nothing about one. -/
 @[simp] def Cmd.Scoped : Cmd → Scope → Prop
   | .action a, Γ => a.Scoped Γ
   | .rule r, Γ => r.Scoped Γ
@@ -161,5 +163,43 @@ the check would read back `Function.update`'s own entry and always fail. -/
 @[simp] def Program.DeclsFresh : Program → Signature → Prop
   | [], _ => True
   | c :: cs, sig => c.DeclFresh sig ∧ Program.DeclsFresh cs (c.sigBind sig)
+
+/-! ### Declaredness of a `:merge`
+
+The one check that walks into a `:merge`. `Evaluable` is the wrong demand there: a merge
+body is where primitives are legal, and it may `set` another merge function. -/
+
+/-- Every name applied in `e` is a primitive or a declared function, of any kind. -/
+def Expr.Declared (e : Expr) (sig : Signature) : Prop :=
+  ∀ f ∈ e.fns, Prim.ofName f ≠ none ∨ sig f ≠ none
+
+/-- A `set` head must be declared outright: a primitive has no table. -/
+def Action.Declared : Action → Signature → Prop
+  | .expr e, sig => e.Declared sig
+  | .letBind _ e, sig => e.Declared sig
+  | .union e₁ e₂, sig => e₁.Declared sig ∧ e₂.Declared sig
+  | .set f args out, sig =>
+      sig f ≠ none ∧ (∀ e ∈ args, e.Declared sig) ∧ ∀ e ∈ out, e.Declared sig
+
+@[simp] def Actions.Declared : List Action → Signature → Prop
+  | [], _ => True
+  | a :: as, sig => a.Declared sig ∧ Actions.Declared as sig
+
+/-- `.noMerge` runs nothing. -/
+@[simp] def MergeSpec.Declared : MergeSpec → Signature → Prop
+  | .merge body res, sig => Actions.Declared body sig ∧ ∀ e ∈ res, e.Declared sig
+  | .noMerge, _ => True
+
+/-- Asked of the signature the declaration **installs**, so a `:merge` may name the function
+it resolves. The opposite of `Cmd.DeclFresh`, which is asked before. -/
+@[simp] def Cmd.MergeDeclared : Cmd → Signature → Prop
+  | .decl f d, sig => ∀ ms ∈ d.merge, ms.Declared ((Cmd.decl f d).sigBind sig)
+  | .action _, _ => True
+  | .rule _, _ => True
+  | .run, _ => True
+
+@[simp] def Program.MergeDeclared : Program → Signature → Prop
+  | [], _ => True
+  | c :: cs, sig => c.MergeDeclared sig ∧ Program.MergeDeclared cs (c.sigBind sig)
 
 end Egglog

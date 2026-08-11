@@ -4,7 +4,7 @@ import EgglogSemantics.Spec.Match
 /-!
 # An executable interpreter
 
-`Spec/Merge.lean`'s `RunRules` is a function but not a computation: it unions over a set
+`Spec/Step.lean`'s `RunRules` is a function but not a computation: it unions over a set
 of substitutions carved out by a predicate. This runs the constructor fragment computably,
 so programs can actually be executed — which is what makes the model testable against the
 Rust (`PLAN.md`, "Differential testing"). `Proofs/Interp.lean`'s `exec_programStep` is the
@@ -81,16 +81,50 @@ namespace FDatabase
 /-- The spec database an `FDatabase` denotes. The refinement theorems are stated against
 this.
 
+**`terms` becomes the diagonal.** A `Database` has no term field — `t` is present exactly
+when `t = t` is derivable — so the list contributes one reflexive equation per member and
+`Database.terms` reads them back out. `toDatabase_terms` is that bridge, and it is what
+every refinement theorem rests on.
+
+**An equation is kept only where the list holds both of its sides**, which is what makes
+that bridge unconditional rather than an invariant to be maintained. `Cong` can reach
+`Cong db t t` by `symm` and `trans` from a *non*-reflexive pair, so an equation naming a
+term the list does not hold would put a term in the denotation that the interpreter cannot
+see. The restriction is not a weakening — `closureTotal` already imposes it on `eqsF`, so
+this is the denotation agreeing with the computation, and it removes nothing from a
+database the interpreter built: `EqsInTerms` below.
+
 `rows` is simply dropped: every row is also an entry term in `terms`, put there by
 `addRow` and never taken out, so the index carries nothing the denotation does not already
 have. Synthesising the entry terms *here* instead would not work — `closureF`'s candidate
 universe is `terms`, so an entry that is not in the list is congruent to nothing. -/
 def toDatabase (d : FDatabase) : Database where
   sig := d.sig
-  terms := {t | t ∈ d.terms}
-  eqs := {p | p ∈ d.eqs}
+  eqs := {p | p.1 = p.2 ∧ p.1 ∈ d.terms} ∪
+    {p | p ∈ d.eqs ∧ p.1 ∈ d.terms ∧ p.2 ∈ d.terms}
   env := d.env
   rules := {r | r ∈ d.rules}
+
+/-- Every term a derivation over the denotation mentions is one the list holds. Immediate
+from `toDatabase`'s restriction on `eqs`: `assert` is the only rule that introduces a term,
+and `congr`'s two self-congruence premises carry the memberships for it. -/
+theorem toDatabase_cong_mem {d : FDatabase} {a b : Term} (h : Cong d.toDatabase a b) :
+    a ∈ d.terms ∧ b ∈ d.terms := by
+  match h with
+  | .assert hm =>
+    rcases hm with ⟨he, hd⟩ | ⟨_, h₁, h₂⟩
+    · refine ⟨hd, ?_⟩
+      have he' : a = b := he
+      exact he' ▸ hd
+    · exact ⟨h₁, h₂⟩
+  | .symm h => exact (toDatabase_cong_mem h).symm
+  | .trans h₁ h₂ => exact ⟨(toDatabase_cong_mem h₁).1, (toDatabase_cong_mem h₂).2⟩
+  | .congr hm₁ hm₂ _ => exact ⟨(toDatabase_cong_mem hm₁).1, (toDatabase_cong_mem hm₂).1⟩
+
+/-- **The denotation holds exactly the terms the list does.** -/
+theorem toDatabase_terms (d : FDatabase) : d.toDatabase.terms = {t | t ∈ d.terms} := by
+  ext t
+  exact ⟨fun h => (toDatabase_cong_mem h).1, fun h => Cong.assert (Or.inl ⟨rfl, h⟩)⟩
 
 /-- The initial database. -/
 def empty : FDatabase where
@@ -133,6 +167,51 @@ def addEq (a b : Term) (d : FDatabase) : FDatabase :=
 def union (d₁ d₂ : FDatabase) : FDatabase :=
   { d₁ with terms := (d₁.terms ++ d₂.terms).dedup, rows := (d₁.rows ++ d₂.rows).dedup,
             eqs := (d₁.eqs ++ d₂.eqs).dedup }
+
+/-! ### What `toDatabase` restricts by
+
+`toDatabase` keeps an equation only where `terms` holds both of its sides, and
+`closureTotal` imposes the same restriction on `eqsF`. Neither loses anything: `empty`
+satisfies the condition, the four writers below preserve it, and they are the only ones —
+every `set`, `union` and rule firing goes through them, and `Impl/Merge.lean` reaches
+`eqs` and `terms` only through `addTerm` and `execActions`, a merge pass otherwise
+rewriting `rows` alone. -/
+/-- Every equation names terms the list holds. -/
+def EqsInTerms (d : FDatabase) : Prop := ∀ p ∈ d.eqs, p.1 ∈ d.terms ∧ p.2 ∈ d.terms
+
+theorem empty_eqsInTerms : EqsInTerms empty := by simp [EqsInTerms, empty]
+
+/-- `addTerm` only grows `terms`. -/
+theorem EqsInTerms.addTerm {d : FDatabase} (h : d.EqsInTerms) (t : Term) :
+    (d.addTerm t).EqsInTerms := by
+  intro p hp
+  simp only [FDatabase.addTerm, List.mem_dedup, List.mem_append]
+  exact ⟨Or.inr (h p hp).1, Or.inr (h p hp).2⟩
+
+/-- `addRow` is `addTerm` on the entry term. -/
+theorem EqsInTerms.addRow {d : FDatabase} (h : d.EqsInTerms) (f : FnName) (as vs : List Term) :
+    (FDatabase.addRow f as vs d).EqsInTerms := h.addTerm _
+
+/-- **The one writer that introduces a pair**, and it inserts both sides. -/
+theorem EqsInTerms.addEq {d : FDatabase} (h : d.EqsInTerms) (a b : Term) :
+    (FDatabase.addEq a b d).EqsInTerms := by
+  have hself : ∀ t : Term, t ∈ t.subtermList := fun t => by
+    cases t <;> simp [Term.subtermList]
+  intro p hp
+  simp only [FDatabase.addEq, List.mem_dedup, List.mem_cons] at hp
+  simp only [FDatabase.addEq, FDatabase.addTerm, List.mem_dedup, List.mem_append]
+  rcases hp with rfl | hp
+  · exact ⟨Or.inr (Or.inl (hself a)), Or.inl (hself b)⟩
+  · exact ⟨Or.inr (Or.inr (h p hp).1), Or.inr (Or.inr (h p hp).2)⟩
+
+/-- `union` concatenates `eqs` and `terms` together. -/
+theorem EqsInTerms.union {d₁ d₂ : FDatabase} (h₁ : d₁.EqsInTerms) (h₂ : d₂.EqsInTerms) :
+    (d₁.union d₂).EqsInTerms := by
+  intro p hp
+  simp only [FDatabase.union, List.mem_dedup, List.mem_append] at hp ⊢
+  rcases hp with hp | hp
+  · exact ⟨Or.inl (h₁ p hp).1, Or.inl (h₁ p hp).2⟩
+  · exact ⟨Or.inr (h₂ p hp).1, Or.inr (h₂ p hp).2⟩
 
 /-- `terms` as a `Finset`, for the closure. -/
 def termsF (d : FDatabase) : Finset Term := d.terms.toFinset
@@ -195,7 +274,7 @@ def Query.freeVars (q : Query) (σ : Env) : List Var :=
 is congruent — in the database extended with it — to a witness the database already
 holds. The witness is a term for `.expr`/`.eq` and a *row* for `.values`, whose key and
 value operands are added the same way, since an operand may denote a term the program
-never built (`Spec/Merge.lean`'s `Matches.values`).
+never built (`Spec/Match.lean`'s `Matches.values`).
 
 It compares with `closureF`, which computes exactly the specification's `Cong`. -/
 def patternHolds (d : FDatabase) (p : Pattern) (σ : Env) : Bool :=

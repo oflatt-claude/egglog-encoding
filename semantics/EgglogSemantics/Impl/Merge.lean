@@ -1,10 +1,10 @@
 import EgglogSemantics.Impl.Interp
-import EgglogSemantics.Spec.Merge
+import EgglogSemantics.Spec.Step
 
 /-!
 # An executable interpreter for the M9 semantics
 
-`Impl/Interp.lean` runs the constructor-only fragment. This runs `Spec/Merge.lean`, so
+`Impl/Interp.lean` runs the constructor-only fragment. This runs `Spec/Step.lean`, so
 that `:merge` programs can be differentially tested against egglog — which is the only
 check that M9's design matches the real system rather than matching itself.
 
@@ -22,9 +22,9 @@ admits several, so only one direction survives: the interpreter's result is one 
 reaches. `Proofs/Merge.lean`'s `execM_contained` states what is available instead.
 
 **The merge phase is one pass, not a fixpoint.** `mergeRound` fires each collision among
-the pre-pass rows once and is structurally terminating, which is sound because `RunStep`
-is `MergeClosure` with no `MergeSaturated` requirement — a prefix of the closure is a
-reachable state. Saturation is *now* reachable, since `min` and `max` became `Prim`s and
+the pre-pass rows once and is structurally terminating, which is sound because `CmdStep`
+ends in a `MergeClosure` with no `MergeSaturated` requirement — a prefix of the closure is
+a reachable state. Saturation is *now* reachable, since `min` and `max` became `Prim`s and
 merging is an idempotent join again; `mergeSaturateF` says what switching to it would
 buy and cost.
 
@@ -37,7 +37,7 @@ sees only the current one — `MERGE.md`, "What the widening and the composed in
 found", has the repro.
 
 The congruence closure is *unchanged*, and needs no argument to stay so: `Cong` reads
-`terms` and `eqs` and no row at all, so `closureF` decides it whatever the index holds.
+`eqs` and no row at all, so `closureF` decides it whatever the index holds.
 The functional dependency a constructor's table has is `Cong.congr` itself, a rule of the
 relation, since a constructor's entry is its own application.
 
@@ -70,7 +70,7 @@ system the spec is a model of.
 stays append-only** whatever the index does: the entry terms `addRow` and
 `mergeOneOriented` put in `terms` are never removed and never re-keyed. What the two
 sides then differ by is which entries the implementation still *finds* — the contract is
-`Spec/Merge.lean`'s `Database.Recorded`, read through `Database.Out`, so the
+`Spec/Congruence.lean`'s `Database.Recorded`, read through `Database.Out`, so the
 implementation may find *fewer* results, never more. That is the safe direction, since
 every property M11 cares about is positive in the state.
 
@@ -288,7 +288,8 @@ representative, drop the rows that become duplicates, and put the rows the rewri
 stays the residual `noConflict` records: `FnDecl` carries no sorts and `Tests/Egg.lean`
 renders `i64` per output column, so no program the difftest can build has an eq-sorted
 merge output, and re-keying values would put the implementation's rows outside
-`Database.Out` — the relation `Spec/Merge.lean`'s `Database.Recorded` reads them through.
+`Database.Out` — the relation `Spec/Congruence.lean`'s `Database.Recorded` reads them
+through.
 
 **Constructor rows are left alone**: a constructor row is `⟨f, as, [.app f as]⟩`, the
 index's reading of the term `f(as)`, and re-keying one would put it out of step with the
@@ -399,7 +400,7 @@ re-keys still counts as progress and `mergeSaturateF` runs another; `rebuild` is
 idempotent, so that terminates.
 
 **Not** saturation. Structurally terminating, so it needs neither fuel nor a termination
-witness, and sound because `RunStep` is `MergeClosure` with no `MergeSaturated`
+witness, and sound because `CmdStep` ends in a `MergeClosure` with no `MergeSaturated`
 requirement — a prefix of the closure is still a reachable state.
 
 **Position in `rows` is insertion age, and the pair reaches `mergeOneWith` youngest
