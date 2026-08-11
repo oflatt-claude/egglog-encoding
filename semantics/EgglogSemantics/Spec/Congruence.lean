@@ -48,7 +48,8 @@ structure Database.WF (db : Database) : Prop where
   envInTerms : ∀ b ∈ db.env, b.2 ∈ db.terms
 
 /-- `db` plus the terms `ts`, used to relate a term the database may not hold — a pattern
-instance, say — to one it does. It **asserts nothing**. -/
+instance, say — to one it does. It records that each of `ts` exists and **adds no equation
+between distinct terms**, so it can relate `a` to `b` only for a reason `db` already had. -/
 def Database.withOperands (db : Database) (ts : List Term) : Database := db.addTerms ts
 
 @[inherit_doc Database.withOperands] def CongOn

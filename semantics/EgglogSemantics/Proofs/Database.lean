@@ -1,4 +1,4 @@
-import EgglogSemantics.Spec.Database
+import EgglogSemantics.Spec.Congruence
 import EgglogSemantics.Proofs.Term
 
 namespace Egglog
@@ -130,11 +130,55 @@ theorem Agree.append_left (ρ : Env) {σ₁ σ₂ : Env} (h : Agree σ₁ σ₂)
     exact h v
 
 end Env
-namespace Database
-@[simp] theorem addTerm_terms {t : Term} {db : Database} :
-    (db.addTerm t).terms = db.terms ∪ t.subterms := rfl
+/-! ### What the database holds
 
-@[simp] theorem addTerm_eqs {t : Term} {db : Database} : (db.addTerm t).eqs = db.eqs := rfl
+`Database.terms` is a `def` over `Cong`, not a field, so the lemmas below are proved rather
+than `rfl`. They all come from one fact: no rule of `Cong` introduces a term the equations
+do not already name, so `terms` is a comprehension over `eqs`. -/
+
+/-- **A derivation mentions only what the equations name.** Both endpoints of a `Cong` are
+endpoints of an asserted equation; with no reflexivity rule there is nowhere else for a
+term to come from. -/
+theorem Cong.mem_endpoints {db : Database} {a b : Term} (h : Cong db a b) :
+    (∃ u, (a, u) ∈ db.eqs ∨ (u, a) ∈ db.eqs) ∧
+      (∃ u, (b, u) ∈ db.eqs ∨ (u, b) ∈ db.eqs) := by
+  induction h using Cong.rec (motive_2 := fun _ _ _ => True) with
+  | assert hab => exact ⟨⟨_, Or.inl hab⟩, ⟨_, Or.inr hab⟩⟩
+  | symm _ ih => exact ih.symm
+  | trans _ _ ih₁ ih₂ => exact ⟨ih₁.1, ih₂.2⟩
+  | congr _ _ _ ih₁ ih₂ _ => exact ⟨ih₁.1, ih₂.1⟩
+  | nil => trivial
+  | cons => trivial
+
+namespace Database
+/-- **The terms are exactly the endpoints of the asserted equations.** Every `terms` lemma
+below is this plus set algebra. -/
+theorem mem_terms_iff {db : Database} {t : Term} :
+    t ∈ db.terms ↔ ∃ u, (t, u) ∈ db.eqs ∨ (u, t) ∈ db.eqs :=
+  ⟨fun ht => (Cong.mem_endpoints ht).1, fun ⟨_, h⟩ =>
+    h.elim (fun h => (eqsInTerms_free (Cong.assert h)).1)
+      fun h => (eqsInTerms_free (Cong.assert h)).2⟩
+
+@[simp] theorem empty_terms : Database.empty.terms = ∅ := by
+  ext t; simp [mem_terms_iff, Database.empty]
+
+@[simp] theorem addTerm_terms {t : Term} {db : Database} :
+    (db.addTerm t).terms = db.terms ∪ t.subterms := by
+  ext s
+  simp only [mem_terms_iff, Database.addTerm, Set.mem_union, Set.mem_setOf_eq, Prod.mk.injEq]
+  constructor
+  · rintro ⟨u, (h | ⟨v, hv, hv₁, hv₂⟩) | (h | ⟨v, hv, hv₁, hv₂⟩)⟩
+    · exact Or.inl ⟨u, Or.inl h⟩
+    · exact Or.inr (hv₁ ▸ hv)
+    · exact Or.inl ⟨u, Or.inr h⟩
+    · exact Or.inr (hv₂ ▸ hv)
+  · rintro (⟨u, h | h⟩ | h)
+    · exact ⟨u, Or.inl (Or.inl h)⟩
+    · exact ⟨u, Or.inr (Or.inl h)⟩
+    · exact ⟨s, Or.inl (Or.inr ⟨s, h, rfl, rfl⟩)⟩
+
+@[simp] theorem addTerm_eqs {t : Term} {db : Database} :
+    (db.addTerm t).eqs = db.eqs ∪ {(s, s) | s ∈ t.subterms} := rfl
 
 @[simp] theorem addTerm_sig {t : Term} {db : Database} : (db.addTerm t).sig = db.sig := rfl
 
@@ -144,13 +188,36 @@ namespace Database
     (db.addTerm t).rules = db.rules := rfl
 
 theorem mem_addTerm (t : Term) (db : Database) : t ∈ (db.addTerm t).terms :=
-  Or.inr (Term.IsSubterm.refl t)
-
-@[simp] theorem addEq_terms {a b : Term} {db : Database} :
-    (db.addEq a b).terms = db.terms ∪ a.subterms ∪ b.subterms := rfl
+  Cong.assert (Or.inr ⟨t, Term.IsSubterm.refl t, rfl⟩)
 
 @[simp] theorem addEq_eqs {a b : Term} {db : Database} :
-    (db.addEq a b).eqs = insert (a, b) db.eqs := rfl
+    (db.addEq a b).eqs = insert (a, b) ((db.addTerm a).addTerm b).eqs := rfl
+
+/-- Asserting an equation between terms the database already holds adds no terms. -/
+theorem terms_insert_eq {db : Database} {a b : Term} (ha : a ∈ db.terms) (hb : b ∈ db.terms) :
+    ({ db with eqs := insert (a, b) db.eqs } : Database).terms = db.terms := by
+  obtain ⟨ua, ha⟩ := mem_terms_iff.mp ha
+  obtain ⟨ub, hb⟩ := mem_terms_iff.mp hb
+  ext s
+  simp only [mem_terms_iff, Set.mem_insert_iff, Prod.mk.injEq]
+  constructor
+  · rintro ⟨u, (⟨rfl, rfl⟩ | h) | (⟨rfl, rfl⟩ | h)⟩
+    · exact ⟨ua, ha⟩
+    · exact ⟨u, Or.inl h⟩
+    · exact ⟨ub, hb⟩
+    · exact ⟨u, Or.inr h⟩
+  · rintro ⟨u, h⟩
+    exact ⟨u, h.imp Or.inr Or.inr⟩
+
+@[simp] theorem addEq_terms {a b : Term} {db : Database} :
+    (db.addEq a b).terms = db.terms ∪ a.subterms ∪ b.subterms := by
+  have ha : a ∈ ((db.addTerm a).addTerm b).terms := by
+    simp only [addTerm_terms]; exact Or.inl (Or.inr a.self_mem_subterms)
+  have hb : b ∈ ((db.addTerm a).addTerm b).terms := by
+    simp only [addTerm_terms]; exact Or.inr b.self_mem_subterms
+  change ({ (db.addTerm a).addTerm b with
+      eqs := insert (a, b) ((db.addTerm a).addTerm b).eqs } : Database).terms = _
+  rw [terms_insert_eq ha hb, addTerm_terms, addTerm_terms]
 
 @[simp] theorem addEq_env {a b : Term} {db : Database} : (db.addEq a b).env = db.env := rfl
 
@@ -159,17 +226,25 @@ theorem mem_addTerm (t : Term) (db : Database) : t ∈ (db.addTerm t).terms :=
 
 @[simp] theorem addEq_sig {a b : Term} {db : Database} : (db.addEq a b).sig = db.sig := rfl
 
-@[simp] theorem sUnion_terms {db : Database} {S : Set Database} :
-    (db.sUnion S).terms = db.terms ∪ ⋃ d ∈ S, d.terms := rfl
-
 @[simp] theorem sUnion_eqs {db : Database} {S : Set Database} :
     (db.sUnion S).eqs = db.eqs ∪ ⋃ d ∈ S, d.eqs := rfl
 
+@[simp] theorem sUnion_terms {db : Database} {S : Set Database} :
+    (db.sUnion S).terms = db.terms ∪ ⋃ d ∈ S, d.terms := by
+  ext s
+  simp only [Set.mem_union, Set.mem_iUnion, mem_terms_iff, sUnion_eqs, exists_prop]
+  constructor
+  · rintro ⟨u, (h | ⟨d, hd, h⟩) | (h | ⟨d, hd, h⟩)⟩
+    · exact Or.inl ⟨u, Or.inl h⟩
+    · exact Or.inr ⟨d, hd, u, Or.inl h⟩
+    · exact Or.inl ⟨u, Or.inr h⟩
+    · exact Or.inr ⟨d, hd, u, Or.inr h⟩
+  · rintro (⟨u, h⟩ | ⟨d, hd, u, h⟩)
+    · exact ⟨u, h.imp Or.inl Or.inl⟩
+    · exact ⟨u, h.imp (fun h => Or.inr ⟨d, hd, h⟩) fun h => Or.inr ⟨d, hd, h⟩⟩
+
 @[simp] theorem sUnion_env {db : Database} {S : Set Database} :
     (db.sUnion S).env = db.env := rfl
-
-@[simp] theorem sUnion_rows {db : Database} {S : Set Database} :
-    (db.sUnion S).rows = db.rows ∪ ⋃ d ∈ S, d.rows := rfl
 
 @[simp] theorem sUnion_rules {db : Database} {S : Set Database} :
     (db.sUnion S).rules = db.rules := rfl
@@ -183,28 +258,21 @@ caller's environment. -/
 theorem EnvAgree.eq_of_env_rules {d₁ d₂ : Database} (h : d₁.EnvAgree d₂) (σ : Env)
     (R : Set Rule) :
     ({ d₁ with env := σ, rules := R } : Database) = { d₂ with env := σ, rules := R } := by
-  rw [show d₁.sig = d₂.sig from h.sig, show d₁.terms = d₂.terms from h.terms,
-    show d₁.rows = d₂.rows from h.rows, show d₁.eqs = d₂.eqs from h.eqs]
+  rw [show d₁.sig = d₂.sig from h.sig, show d₁.eqs = d₂.eqs from h.eqs]
 
-/-! ### `addTerms` and `addRow`
+/-! ### `addTerms`
 
 `addTerms` is a fold, so its untouched fields need an induction rather than `rfl`. -/
 
-/-- One extension by a concatenation is two extensions in a row. What lets
-`Spec/Merge.lean`'s `CongListOn db (ts ++ us)` be worked with as the nested
-`(db.addTerms ts).addTerms us` every other `addTerms` lemma is stated at. -/
+/-- One extension by a concatenation is two extensions in a row: the fold law that lets an
+appended operand list be worked with as the nested `(db.addTerms ts).addTerms us` every
+other `addTerms` lemma is stated at. -/
 theorem addTerms_append {db : Database} {ts us : List Term} :
     db.addTerms (ts ++ us) = (db.addTerms ts).addTerms us :=
   List.foldl_append ..
 
 @[simp] theorem addTerms_sig {db : Database} {ts : List Term} :
     (db.addTerms ts).sig = db.sig := by
-  induction ts generalizing db with
-  | nil => rfl
-  | cons t ts ih => exact ih
-
-@[simp] theorem addTerms_eqs {db : Database} {ts : List Term} :
-    (db.addTerms ts).eqs = db.eqs := by
   induction ts generalizing db with
   | nil => rfl
   | cons t ts ih => exact ih
@@ -221,23 +289,33 @@ theorem addTerms_append {db : Database} {ts us : List Term} :
   | nil => rfl
   | cons t ts ih => exact ih
 
-@[simp] theorem addRow_sig {db : Database} {f : FnName} {as vs : List Term} :
-    (db.addRow f as vs).sig = db.sig := by simp [Database.addRow]
+@[simp] theorem addTerms_terms {db : Database} {ts : List Term} :
+    (db.addTerms ts).terms = db.terms ∪ {s | ∃ t ∈ ts, s ∈ t.subterms} := by
+  induction ts generalizing db with
+  | nil => change db.terms = _; simp
+  | cons t ts ih =>
+    change ((db.addTerm t).addTerms ts).terms = _
+    rw [ih, addTerm_terms]
+    ext s
+    simp only [Set.mem_union, Set.mem_setOf_eq, List.mem_cons]
+    constructor
+    · rintro ((hs | hs) | ⟨u, hu, hs⟩)
+      · exact Or.inl hs
+      · exact Or.inr ⟨t, Or.inl rfl, hs⟩
+      · exact Or.inr ⟨u, Or.inr hu, hs⟩
+    · rintro (hs | ⟨u, rfl | hu, hs⟩)
+      · exact Or.inl (Or.inl hs)
+      · exact Or.inl (Or.inr hs)
+      · exact Or.inr ⟨u, hu, hs⟩
 
-@[simp] theorem addRow_eqs {db : Database} {f : FnName} {as vs : List Term} :
-    (db.addRow f as vs).eqs = db.eqs := by simp [Database.addRow]
-
-@[simp] theorem addRow_env {db : Database} {f : FnName} {as vs : List Term} :
-    (db.addRow f as vs).env = db.env := by simp [Database.addRow]
-
-@[simp] theorem addRow_rules {db : Database} {f : FnName} {as vs : List Term} :
-    (db.addRow f as vs).rules = db.rules := by simp [Database.addRow]
+theorem mem_addTerms {db : Database} {ts : List Term} {t : Term} (h : t ∈ ts) :
+    t ∈ (db.addTerms ts).terms :=
+  addTerms_terms ▸ Or.inr ⟨t, h, t.self_mem_subterms⟩
 
 namespace EnvAgree
 theorem addTerm {d₁ d₂ : Database} (h : d₁.EnvAgree d₂) (t : Term) :
     (d₁.addTerm t).EnvAgree (d₂.addTerm t) :=
-  ⟨h.sig, by simp [Database.addTerm, h.terms], by simp [Database.addTerm, h.rows],
-    h.eqs, h.rules, h.env⟩
+  ⟨h.sig, by simp only [addTerm_eqs, h.eqs], h.rules, h.env⟩
 
 theorem addTerms {d₁ d₂ : Database} (h : d₁.EnvAgree d₂) (ts : List Term) :
     (d₁.addTerms ts).EnvAgree (d₂.addTerms ts) := by
@@ -245,21 +323,15 @@ theorem addTerms {d₁ d₂ : Database} (h : d₁.EnvAgree d₂) (ts : List Term
   | nil => exact h
   | cons t ts ih => exact ih (h.addTerm t)
 
-theorem addRow {d₁ d₂ : Database} (h : d₁.EnvAgree d₂) (f : FnName) (as vs : List Term) :
-    (d₁.addRow f as vs).EnvAgree (d₂.addRow f as vs) :=
-  let h' := (h.addTerms as).addTerms vs
-  ⟨h'.sig, h'.terms, by simp [Database.addRow, h'.rows], h'.eqs, h'.rules, h'.env⟩
-
 end EnvAgree
 namespace Contained
-theorem refl (db : Database) : Contained db db := ⟨subset_rfl, subset_rfl, subset_rfl⟩
+theorem refl (db : Database) : Contained db db := ⟨subset_rfl⟩
 
 theorem trans {d₁ d₂ d₃ : Database} (h₁ : Contained d₁ d₂) (h₂ : Contained d₂ d₃) :
-    Contained d₁ d₃ :=
-  ⟨h₁.terms.trans h₂.terms, h₁.rows.trans h₂.rows, h₁.eqs.trans h₂.eqs⟩
+    Contained d₁ d₃ := ⟨h₁.eqs.trans h₂.eqs⟩
 
 theorem addTerm (t : Term) (db : Database) : Contained db (db.addTerm t) :=
-  ⟨Set.subset_union_left, Set.subset_union_left, subset_rfl⟩
+  ⟨Set.subset_union_left⟩
 
 theorem addTerms (ts : List Term) (db : Database) : Contained db (db.addTerms ts) := by
   induction ts generalizing db with
@@ -267,20 +339,14 @@ theorem addTerms (ts : List Term) (db : Database) : Contained db (db.addTerms ts
   | cons t ts ih => exact (addTerm t db).trans (ih (db := db.addTerm t))
 
 theorem addEq (a b : Term) (db : Database) : Contained db (db.addEq a b) :=
-  ⟨fun _ h => Or.inl (Or.inl h), fun _ h => Or.inl (Or.inl h), Set.subset_insert _ _⟩
-
-theorem addRow (f : FnName) (as vs : List Term) (db : Database) :
-    Contained db (db.addRow f as vs) :=
-  ((addTerms as db).trans (addTerms vs _)).trans
-    ⟨subset_rfl, Set.subset_insert _ _, subset_rfl⟩
+  ((addTerm a db).trans (addTerm b _)).trans ⟨Set.subset_insert _ _⟩
 
 /-! The same operation applied to both sides. This is what makes an action, and hence a
 whole action block, transportable along `Contained`. -/
 /-- `Contained` is preserved by adding the same term to both sides. -/
 theorem addTerm_mono {d₁ d₂ : Database} (h : d₁.Contained d₂) (t : Term) :
     (d₁.addTerm t).Contained (d₂.addTerm t) :=
-  ⟨Set.union_subset_union h.terms subset_rfl, Set.union_subset_union h.rows subset_rfl,
-    h.eqs⟩
+  ⟨Set.union_subset_union h.eqs subset_rfl⟩
 
 /-- `addTerm_mono` folded. -/
 theorem addTerms_mono {d₁ d₂ : Database} (h : d₁.Contained d₂) (ts : List Term) :
@@ -293,221 +359,57 @@ theorem addTerms_mono {d₁ d₂ : Database} (h : d₁.Contained d₂) (ts : Lis
 `eqs` component. -/
 theorem addEq_mono {d₁ d₂ : Database} (h : d₁.Contained d₂) (a b : Term) :
     (d₁.addEq a b).Contained (d₂.addEq a b) :=
-  ⟨((h.addTerm_mono a).addTerm_mono b).terms, ((h.addTerm_mono a).addTerm_mono b).rows,
-    Set.insert_subset_insert h.eqs⟩
-
-/-- The same row is inserted on both sides. -/
-theorem addRow_mono {d₁ d₂ : Database} (h : d₁.Contained d₂) (f : FnName)
-    (as vs : List Term) : (d₁.addRow f as vs).Contained (d₂.addRow f as vs) :=
-  ⟨((h.addTerms_mono as).addTerms_mono vs).terms,
-    Set.insert_subset_insert ((h.addTerms_mono as).addTerms_mono vs).rows,
-    ((h.addTerms_mono as).addTerms_mono vs).eqs⟩
+  ⟨Set.insert_subset_insert ((h.addTerm_mono a).addTerm_mono b).eqs⟩
 
 theorem sUnion (db : Database) (S : Set Database) : Contained db (db.sUnion S) :=
-  ⟨Set.subset_union_left, Set.subset_union_left, Set.subset_union_left⟩
+  ⟨Set.subset_union_left⟩
 
 theorem mem_sUnion {db d : Database} {S : Set Database} (h : d ∈ S) :
     Contained d (db.sUnion S) :=
-  ⟨fun _ ht => Or.inr (Set.mem_biUnion h ht), fun _ ht => Or.inr (Set.mem_biUnion h ht),
-    fun _ ht => Or.inr (Set.mem_biUnion h ht)⟩
+  ⟨fun _ ht => Or.inr (Set.mem_biUnion h ht)⟩
 
 end Contained
-/-- A row talks only about terms the database holds.
-
-Kept out of `WF` because nothing proved needs it there, and putting it in would make every
-`WF` construction carry a subterm-transitivity argument for no current payoff. It is the
-row half of `WF` and belongs there once something reads it — `MergeStep.self_id` and
-`MergeStep.wf` take it as a separate hypothesis. -/
-def RowsWF (db : Database) : Prop :=
-  ∀ r ∈ db.rows, (∀ a ∈ r.args, a ∈ db.terms) ∧ ∀ v ∈ r.out, v ∈ db.terms
-
 namespace WF
 theorem empty : WF Database.empty where
-  subtermClosed := by simp [Database.empty]
-  eqsInTerms := by simp [Database.empty]
+  subtermClosed := by simp
   envInTerms := by simp [Database.empty]
 
 theorem addTerm {db : Database} (h : WF db) (t : Term) : WF (db.addTerm t) where
   subtermClosed := by
-    rintro s (hs | hs)
-    · exact (h.subtermClosed s hs).trans Set.subset_union_left
-    · exact (Term.subterms_subset_of_mem hs).trans Set.subset_union_right
-  eqsInTerms p hp := ⟨Or.inl (h.eqsInTerms p hp).1, Or.inl (h.eqsInTerms p hp).2⟩
-  envInTerms b hb := Or.inl (h.envInTerms b hb)
+    simp only [addTerm_terms]
+    rintro s (hs | hs) u hu
+    · exact Or.inl (h.subtermClosed s hs hu)
+    · exact Or.inr (Term.subterms_subset_of_mem hs hu)
+  envInTerms b hb := by
+    simp only [addTerm_terms]; exact Or.inl (h.envInTerms b hb)
 
 theorem addTerms {db : Database} (h : WF db) (ts : List Term) : WF (db.addTerms ts) := by
   induction ts generalizing db with
   | nil => exact h
   | cons t ts ih => exact ih (h.addTerm t)
 
-/-- A `set` adds terms and one row; `WF` says nothing about rows (`Database.RowsWF`
-does), so this is `addTerms` twice. -/
-theorem addRow {db : Database} (h : WF db) (f : FnName) (as vs : List Term) :
-    WF (db.addRow f as vs) :=
-  ⟨((h.addTerms as).addTerms vs).subtermClosed, ((h.addTerms as).addTerms vs).eqsInTerms,
-    ((h.addTerms as).addTerms vs).envInTerms⟩
-
-theorem addEq {db : Database} (h : WF db) (a b : Term) : WF (db.addEq a b) := by
-  refine ⟨((h.addTerm a).addTerm b).subtermClosed, ?_, ((h.addTerm a).addTerm b).envInTerms⟩
-  rintro p (rfl | hp)
-  · exact ⟨Or.inl (Or.inr a.self_mem_subterms), Or.inr b.self_mem_subterms⟩
-  · exact ⟨Or.inl (Or.inl (h.eqsInTerms p hp).1), Or.inl (Or.inl (h.eqsInTerms p hp).2)⟩
+theorem addEq {db : Database} (h : WF db) (a b : Term) : WF (db.addEq a b) where
+  subtermClosed := by
+    simp only [addEq_terms]
+    rintro s ((hs | hs) | hs) u hu
+    · exact Or.inl (Or.inl (h.subtermClosed s hs hu))
+    · exact Or.inl (Or.inr (Term.subterms_subset_of_mem hs hu))
+    · exact Or.inr (Term.subterms_subset_of_mem hs hu)
+  envInTerms b hb := by
+    simp only [addEq_terms]; exact Or.inl (Or.inl (h.envInTerms b hb))
 
 theorem sUnion {db : Database} (h : WF db) {S : Set Database}
     (hS : ∀ d ∈ S, WF d) : WF (db.sUnion S) where
   subtermClosed := by
+    simp only [sUnion_terms]
     rintro t (ht | ht)
     · exact (h.subtermClosed t ht).trans Set.subset_union_left
     · obtain ⟨d, hd, ht⟩ := Set.mem_iUnion₂.mp ht
       exact ((hS d hd).subtermClosed t ht).trans
         (Set.subset_union_of_subset_right (Set.subset_biUnion_of_mem hd) _)
-  eqsInTerms := by
-    rintro p (hp | hp)
-    · exact ⟨Or.inl (h.eqsInTerms p hp).1, Or.inl (h.eqsInTerms p hp).2⟩
-    · obtain ⟨d, hd, hp⟩ := Set.mem_iUnion₂.mp hp
-      exact ⟨Or.inr (Set.mem_biUnion hd ((hS d hd).eqsInTerms p hp).1),
-        Or.inr (Set.mem_biUnion hd ((hS d hd).eqsInTerms p hp).2)⟩
-  envInTerms b hb := Or.inl (h.envInTerms b hb)
+  envInTerms b hb := by
+    simp only [sUnion_terms]; exact Or.inl (h.envInTerms b hb)
 
 end WF
-/-! ### Constructor rows
-
-`CtorRows db` says the row set is exactly the one the term set induces: the condition
-that says a state is in the constructor fragment, and the one that gives
-`Proofs/Congruence.lean`'s `Cong.fd` its hypothesis. `Proofs/Step.lean` carries it along
-the step relations, where the side condition `Action.SetLegal` enters.
-
-Everything here is one observation: `ctorRowsOf` is a comprehension whose only
-dependence on the term set is a single membership test, so it commutes with unions. -/
-/-- `Term.ctorRows` *is* `ctorRowsOf` of the subterms, which is why `addTerm` preserves
-`CtorRows` by set algebra alone. -/
-theorem ctorRowsOf_subterms {t : Term} : ctorRowsOf t.subterms = t.ctorRows := rfl
-
-theorem ctorRowsOf_empty : ctorRowsOf ∅ = ∅ := by
-  ext r; simp [ctorRowsOf]
-
-theorem ctorRowsOf_union {s t : Set Term} :
-    ctorRowsOf (s ∪ t) = ctorRowsOf s ∪ ctorRowsOf t := by
-  ext r
-  simp only [ctorRowsOf, Set.mem_setOf_eq, Set.mem_union]
-  tauto
-
-namespace CtorRows
-theorem empty : Database.empty.CtorRows := ctorRowsOf_empty.symm
-
-theorem addTerm {db : Database} (h : db.CtorRows) (t : Term) :
-    (db.addTerm t).CtorRows := by
-  change db.rows ∪ t.ctorRows = ctorRowsOf (db.terms ∪ t.subterms)
-  rw [ctorRowsOf_union, ctorRowsOf_subterms, h]
-
-theorem addTerms {db : Database} (h : db.CtorRows) (ts : List Term) :
-    (db.addTerms ts).CtorRows := by
-  induction ts generalizing db with
-  | nil => exact h
-  | cons t ts ih => exact ih (h.addTerm t)
-
-theorem addEq {db : Database} (h : db.CtorRows) (a b : Term) :
-    (db.addEq a b).CtorRows := (h.addTerm a).addTerm b
-
-/-- A `set` preserves `CtorRows` exactly when it writes the row a constructor would.
-
-The side condition is not decoration: `addRow f as [v]` for any other `v` writes a row
-`ctorRowsOf` does not contain, and `not_ctorRows_addRow` below is that failure at its
-smallest. Ruling the bad case out statically is `Action.SetLegal`. -/
-theorem addRow {db : Database} (h : db.CtorRows) (f : FnName) (as : List Term) :
-    (db.addRow f as [.app f as]).CtorRows := by
-  have hd : ((db.addTerms as).addTerms [Term.app f as]).CtorRows := (h.addTerms as).addTerms _
-  have hmem : Term.app f as ∈ ((db.addTerms as).addTerms [Term.app f as]).terms :=
-    Database.mem_addTerm _ _
-  change insert (Row.mk f as [Term.app f as])
-    ((db.addTerms as).addTerms [Term.app f as]).rows =
-      ctorRowsOf ((db.addTerms as).addTerms [Term.app f as]).terms
-  rw [hd, Set.insert_eq_self.mpr (show _ ∈ ctorRowsOf _ from ⟨rfl, hmem⟩)]
-
-/-- What `(run)` needs: if every operand's rows are induced by its own terms, the
-union's rows are induced by the union's terms. -/
-theorem sUnion {db : Database} (h : db.CtorRows) {S : Set Database}
-    (hS : ∀ d ∈ S, d.CtorRows) : (db.sUnion S).CtorRows := by
-  change db.rows ∪ (⋃ d ∈ S, d.rows) = ctorRowsOf (db.terms ∪ ⋃ d ∈ S, d.terms)
-  ext r
-  simp only [Set.mem_union, Set.mem_iUnion, ctorRowsOf, Set.mem_setOf_eq, exists_prop]
-  constructor
-  · rintro (hr | ⟨d, hd, hr⟩)
-    · rw [h] at hr; exact ⟨hr.1, Or.inl hr.2⟩
-    · rw [hS d hd] at hr; exact ⟨hr.1, Or.inr ⟨d, hd, hr.2⟩⟩
-  · rintro ⟨hout, ht | ⟨d, hd, ht⟩⟩
-    · exact Or.inl (by rw [h]; exact ⟨hout, ht⟩)
-    · exact Or.inr ⟨d, hd, by rw [hS d hd]; exact ⟨hout, ht⟩⟩
-
-/-- **`CtorRows` discharges `Cong.fd`'s hypothesis.** The two are the same statement, one
-as a set equation and one pointwise, so `IsCtor` is not even needed — under `CtorRows`
-*every* row has the constructor shape.
-
-This is what connects `Proofs/Congruence.lean`'s `Cong.fd` to a database anything reaches:
-`Cong.fd` is why `Spec/` needs no `fd` rule, and without this its hypothesis would be one
-nothing was known to satisfy. `Proofs/Step.lean`'s `ProgramStep.ctorRows` supplies the
-`CtorRows` at the far end. -/
-theorem fd_hyp {db : Database} (h : db.CtorRows) :
-    ∀ r ∈ db.rows, db.sig.IsCtor r.fn →
-      r.out = [.app r.fn r.args] ∧ Term.app r.fn r.args ∈ db.terms := by
-  intro r hr _
-  rw [h] at hr
-  exact hr
-
-end CtorRows
-/-- A row whose output is not the application it is keyed at is one no `ctorRowsOf`
-contains, so a database holding it is outside `CtorRows`. Every counterexample below is
-this lemma plus a row. -/
-theorem not_ctorRows_of_mem {db : Database} {r : Row} (hr : r ∈ db.rows)
-    (hout : r.out ≠ [.app r.fn r.args]) : ¬db.CtorRows :=
-  fun hc => hout (hc ▸ hr : r ∈ ctorRowsOf db.terms).1
-
-/-- **`CtorRows` really does fail on an unrestricted `set`.**
-
-The smallest witness: `(set (f) 0)` on the empty database writes `⟨f, [], [0]⟩`, whose
-output is a literal, and no row of `ctorRowsOf` has a literal output. This is the whole
-reason `Action.SetLegal` exists — without a side condition ruling this out, no step of
-the semantics preserves `CtorRows`. -/
-theorem not_ctorRows_addRow :
-    ¬(Database.empty.addRow "f" [] [.lit (.int 0)]).CtorRows :=
-  not_ctorRows_of_mem (Set.mem_insert _ _) (by simp)
-
-/-! ### Re-adding what is already there
-
-`addRow` re-inserts its key and value terms, so "the step changed nothing" needs those
-insertions to be no-ops. That is exactly `WF.subtermClosed` plus the inclusion half of
-`CtorRows`: every application in `terms` has its constructor row
-(`ctorRowsOf db.terms ⊆ db.rows`, the direction `addTerm` maintains). `Proofs/Merge.lean`'s
-`MergeStep.self_id` is what spends them. -/
-theorem addTerm_eq_self {db : Database} (hw : db.WF)
-    (hctor : ctorRowsOf db.terms ⊆ db.rows) {t : Term} (ht : t ∈ db.terms) :
-    db.addTerm t = db := by
-  have hs : t.subterms ⊆ db.terms := hw.subtermClosed t ht
-  have hr : t.ctorRows ⊆ db.rows := fun r hr => hctor ⟨hr.1, hs hr.2⟩
-  unfold Database.addTerm
-  rw [Set.union_eq_left.mpr hs, Set.union_eq_left.mpr hr]
-
-theorem addTerms_eq_self {db : Database} (hw : db.WF)
-    (hctor : ctorRowsOf db.terms ⊆ db.rows) {ts : List Term}
-    (ht : ∀ t ∈ ts, t ∈ db.terms) : db.addTerms ts = db := by
-  induction ts generalizing db with
-  | nil => rfl
-  | cons t ts ih =>
-    have h1 : db.addTerm t = db := addTerm_eq_self hw hctor (ht t (by simp))
-    change Database.addTerms ts (db.addTerm t) = db
-    rw [h1]
-    exact ih hw hctor fun s hs => ht s (by simp [hs])
-
-/-- `addTerms` reads only `terms` and `rows`, so two databases agreeing there agree
-after it. This is what lets a merge body's result `d` be substituted for `db`. -/
-theorem addTerms_terms_rows {d₁ d₂ : Database} (ht : d₁.terms = d₂.terms)
-    (hr : d₁.rows = d₂.rows) (ts : List Term) :
-    (d₁.addTerms ts).terms = (d₂.addTerms ts).terms ∧
-      (d₁.addTerms ts).rows = (d₂.addTerms ts).rows := by
-  induction ts generalizing d₁ d₂ with
-  | nil => exact ⟨ht, hr⟩
-  | cons t ts ih =>
-    exact ih (by simp only [Database.addTerm, ht]) (by simp only [Database.addTerm, hr])
-
 end Database
 end Egglog

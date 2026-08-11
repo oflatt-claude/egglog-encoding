@@ -101,22 +101,4 @@ theorem subterms_subset_of_mem {s t : Term} (h : s ∈ t.subterms) :
   fun _ hu => hu.trans h
 
 end Term
-/-! ### Constructor rows -/
-@[simp] theorem Term.mem_ctorRowList {t : Term} {r : Row} :
-    r ∈ t.ctorRowList ↔ r ∈ t.ctorRows := by
-  simp only [Term.ctorRowList, List.mem_filterMap, Term.ctorRows, Set.mem_setOf_eq]
-  constructor
-  · rintro ⟨s, hs, hr⟩
-    cases s with
-    | lit l => simp at hr
-    | app f as =>
-      simp only [Option.some.injEq] at hr
-      subst hr
-      exact ⟨rfl, (Term.mem_subtermList _).mp hs⟩
-  · rintro ⟨hout, hmem⟩
-    refine ⟨Term.app r.fn r.args, (Term.mem_subtermList _).mpr hmem, ?_⟩
-    simp only []
-    obtain ⟨f, as, out⟩ := r
-    simp_all
-
 end Egglog
