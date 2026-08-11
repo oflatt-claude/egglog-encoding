@@ -79,7 +79,7 @@ theorem congStep_sound {db : Database} {terms : Finset Term} {rel : Finset (Term
     unfold stepAdds at hstep
     simp only [Bool.or_eq_true, decide_eq_true_eq] at hstep
     rcases hstep with ((heq | hsym) | ⟨m, _, hm₁, hm₂⟩) | hcongr
-    · exact heq ▸ Cong.refl hmem.1
+    · exact heq ▸ hmem.1
     · exact (hrel _ hsym).symm
     · exact (hrel _ hm₁).trans (hrel _ hm₂)
     · obtain ⟨f, as, bs, rfl, rfl, hz⟩ := congrPair_elim hcongr
@@ -105,13 +105,8 @@ theorem mem_closure_iff {db : Database} {terms : Finset Term} {rel : Finset (Ter
   have hassert : ∀ p ∈ rel, Cong db p.1 p.2 := fun p hp =>
     Cong.assert (by rw [heqs]; exact hp)
   refine ⟨fun hp => closure_sound hterms rel h hassert (a, b) hp, fun hc => ?_⟩
-  refine hc.le (R := fun x y => (x, y) ∈ closure terms rel h) ?_ ?_ ?_ ?_ ?_
+  refine hc.le (R := fun x y => (x, y) ∈ closure terms rel h) ?_ ?_ ?_ ?_
   · exact fun x y hxy => subset_closure h (by rw [heqs] at hxy; exact hxy)
-  · intro x hx
-    rw [← closure_fixpoint h]
-    refine mem_congStep.mpr (Or.inr ⟨mem_candidates.mpr ?_, ?_⟩)
-    · rw [hterms] at hx; exact ⟨hx, hx⟩
-    · simp [stepAdds]
   · intro x y hxy
     have hcand := mem_candidates.mp (closure_subset h hxy)
     rw [← closure_fixpoint h]
