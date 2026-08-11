@@ -304,4 +304,107 @@ theorem union2_env (h : ValidEnv vars db σ)
   ⟨h.compatible hvars, rfl⟩
 
 end ValidEnv
+/-! ### Reading `CongOn` back as an `addTerm`
+
+The two shapes `Matches` uses, unfolded to the `addTerm` chain every congruence lemma is
+stated at. Both are `Iff.rfl`: `withOperands` at a list *literal* is a fold that reduces,
+so `CongOn db [t]` and `CongOn db [t₁, t₂]` *are* `Cong (db.addTerm t)` and
+`Cong ((db.addTerm t₁).addTerm t₂)`. -/
+
+theorem congOn_singleton {db : Database} {t a b : Term} :
+    CongOn db [t] a b ↔ Cong (db.addTerm t) a b := Iff.rfl
+
+theorem congOn_pair {db : Database} {t₁ t₂ a b : Term} :
+    CongOn db [t₁, t₂] a b ↔ Cong ((db.addTerm t₁).addTerm t₂) a b := Iff.rfl
+
+/-! ### Matched substitutions
+
+The e-matcher's API, on the one matching relation there is. `ValidEnv` per pattern,
+unioned: `RuleResults.wf` needs it, because a firing runs its head in the caller's
+environment extended by the substitution and that invariant asks that every value there be
+a term the database already holds. -/
+namespace ValidSubst
+variable {db : Database} {p : Pattern} {σ : Env}
+
+/-- The hypothesis `patternHolds_validSubst` adds is a consequence of its conclusion,
+which is why requiring it costs nothing. Since the hoist it is the left conjunct. -/
+theorem validEnv (h : ValidSubst db p σ) : ValidEnv (p.freeVars db.env) db σ := h.1
+
+theorem mem_terms (h : ValidSubst db p σ) : ∀ b ∈ σ, b.2 ∈ db.terms :=
+  h.validEnv.mem_terms
+
+/-- Appending a matching substitution to the globals cannot fail. -/
+theorem union2_env (h : ValidSubst db p σ) : Env.Union2 db.env σ (db.env ++ σ) :=
+  h.validEnv.union2_env fun _ hv => p.freeVars_lookup_eq_none hv
+
+/-- A matching substitution binds exactly the pattern's free variables. -/
+theorem mem_dom_iff (h : ValidSubst db p σ) {v : Var} :
+    v ∈ Env.dom σ ↔ v ∈ p.freeVars db.env :=
+  h.validEnv.mem_dom_iff
+
+end ValidSubst
+/-- `ValidSubst` transfers along agreement, provided the new substitution has exactly the
+pattern's free variables as its domain.
+
+Agreement alone is not enough, because `ValidEnv` pins the domain — which is precisely why
+an executable enumerator has to canonicalize rather than emit any agreeing representative. -/
+theorem ValidSubst.of_agree {db : Database} {p : Pattern} {σ σ' : Env}
+    (h : ValidSubst db p σ) (hag : Env.Agree σ σ')
+    (hdom : Env.dom σ' = p.freeVars db.env) : ValidSubst db p σ' := by
+  have hterms : ∀ b ∈ σ', b.2 ∈ db.terms := by
+    intro b hb
+    have hnd : (Env.dom σ').Nodup := hdom ▸ p.freeVars_nodup db.env
+    have hlk : Env.lookup b.1 σ' = some b.2 := (Env.lookup_eq_some_iff_mem hnd).mpr hb
+    rw [← hag b.1] at hlk
+    exact h.mem_terms _ (Env.mem_of_lookup hlk)
+  have hperm : (Env.dom σ').Perm (p.freeVars db.env) := hdom ▸ List.Perm.refl _
+  have hev : ∀ e : Expr, e.eval db.sig (db.env ++ σ') = e.eval db.sig (db.env ++ σ) :=
+    fun e => Expr.eval_agree (Env.Agree.append_left db.env hag.symm) e
+  have hevl : ∀ es : List Expr,
+      Expr.evalList db.sig es (db.env ++ σ') = Expr.evalList db.sig es (db.env ++ σ) :=
+    fun es => Expr.evalList_agree (Env.Agree.append_left db.env hag.symm) es
+  refine ⟨⟨hperm, hterms⟩, ?_⟩
+  cases h.2 with
+  | expr hwm he hc => exact .expr hwm (by rw [hev]; exact he) hc
+  | eq hwm he₁ he₂ hc₁ hc₂ =>
+    exact .eq hwm (by rw [hev]; exact he₁) (by rw [hev]; exact he₂) hc₁ hc₂
+  | values hwm hts hus hc =>
+    exact .values hwm (by rw [hevl]; exact hts) (by rw [hevl]; exact hus) hc
+
+namespace ValidQuerySubst
+variable {db : Database} {q : Query} {σ : Env}
+
+/-- Every value a query substitution binds is a term the database holds — `ValidEnv` per
+pattern, unioned. -/
+theorem mem_terms (h : ValidQuerySubst db q σ) : ∀ b ∈ σ, b.2 ∈ db.terms := by
+  obtain ⟨σs, hall, hu⟩ := h
+  refine hu.forall_mem fun σ' hσ' b hb => ?_
+  obtain ⟨p, _, hv⟩ := hall.exists_left hσ'
+  exact hv.mem_terms b hb
+
+/-- A query substitution binds exactly the query's free variables. -/
+theorem mem_dom_iff (h : ValidQuerySubst db q σ) {v : Var} :
+    v ∈ Env.dom σ ↔ ∃ p ∈ q, v ∈ p.freeVars db.env := by
+  obtain ⟨σs, hall, hu⟩ := h
+  rw [hu.mem_dom_iff]
+  constructor
+  · rintro ⟨σ', hσ', hv⟩
+    obtain ⟨p, hp, hvs⟩ := hall.exists_left hσ'
+    exact ⟨p, hp, hvs.mem_dom_iff.mp hv⟩
+  · rintro ⟨p, hp, hv⟩
+    obtain ⟨σ', hσ', hvs⟩ := hall.flip.exists_left hp
+    exact ⟨σ', hσ', (ValidSubst.mem_dom_iff hvs).mpr hv⟩
+
+/-- The empty query is satisfied by exactly the empty substitution: a rule with no
+patterns fires once. -/
+theorem nil_iff : ValidQuerySubst db [] σ ↔ σ = [] := by
+  constructor
+  · rintro ⟨σs, hall, hu⟩
+    cases hall
+    cases hu
+    rfl
+  · rintro rfl
+    exact ⟨[], .nil, .nil⟩
+
+end ValidQuerySubst
 end Egglog

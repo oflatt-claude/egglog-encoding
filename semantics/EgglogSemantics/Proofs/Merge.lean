@@ -7,26 +7,29 @@ import EgglogSemantics.Proofs.Interp
 /-!
 # What M9 has to prove
 
-`MERGE.md` says which theorem buys what. Five are still unproved; the rest are proved.
+`MERGE.md` says which theorem buys what.
 
-M9 gives the state a **row set** and keeps `Spec/Congruence.lean`'s `Cong` as the only
-equality. What a row set adds to congruence is the functional dependency, and that is
-`Proofs/Congruence.lean`'s `Cong.fd` — a theorem, under the hypothesis that a
-constructor's rows have their canonical shape. So every M2–M8 theorem transports
-unchanged, and `closureF`, which reads `terms` and `eqs` and no row, still decides the
-relation the specification's `Database.Out` and `Matches` compare keys with.
+**This file is mid-port and does not build.** It was written against a `Database` with a
+`terms` field and a `rows` field, and `Spec/` now has neither: an entry `f(a…) ↦ v…` is
+the term `f(a…, v…)`, `terms` is the diagonal of `eqs` read back out, and the functional
+dependency is `Cong.congr`, a rule of the relation rather than a theorem under a
+row-shape hypothesis. `Proofs/{Syntax,Term,Database,Congruence}.lean` are ported; this
+file, `Proofs/Interp.lean` and the two files that import this one are not.
 
-Two statements needed repair, and the repairs are the interesting output:
+What has already been removed, because its subject is gone rather than merely renamed:
+the `Database.Solid` cluster and `Recorded.addRow_congr` (they existed to license
+`addTerms_eq_self`, which is **false** — re-adding a held term is a no-op up to the
+relation, not up to equality, and `Cong.of_addTerm` is the successor);
+`Database.Out.union_cong` and `ProgramStep.out_union_cong` (`Cong.fd` scaffolding);
+`RunStep.unique_of_confluent` (`RunStep` is deleted, and the statement was false as
+stated); `Recorded.addRow_mono` (subsumed by `addTerm_mono` at the entry term); and four
+row-algebra helpers, two of which duplicated `Proofs/{Congruence,Database}.lean`'s
+`CongList.refl` and `Database.mem_addTerms`.
 
-* `execM_reachable` is false without a side condition. It carries `Program.CtorDecls` and
-  is **proved**; its docstring justifies it.
-* `MergeStep.self_id` and `MergeStep.wf` need the row half of well-formedness
-  (`Database.RowsWF`), which `Database.WF` deliberately omits, and `self_id`
-  additionally needs `ctorRowsOf db.terms ⊆ db.rows`.
-
-`MergeStep.diamond_of_join` and `RunStep.unique_of_confluent` are the two `MERGE.md`
-flags as guesses, and both have hypotheses that cannot be used; their docstrings say
-what replaces them.
+Three statements still carry a `sorry` and each is documented as **false as stated**
+rather than merely unproved: `MergeStep.diamond_of_join`, `execM_current_of_lattice` and
+`FDatabase.mergeRound_rowCount`; `mergeRound_closure` is open rather than false. Their
+docstrings say what replaces them.
 -/
 
 namespace Egglog
@@ -71,45 +74,17 @@ theorem Database.Out.mono {d₁ d₂ : Database} (h : d₁.Contained d₂)
 
 /-! ### Recording: containment for an implementation that re-keys
 
-`Database.Recorded` is `Contained` with its row clause read through `Out`, and
-`Spec/Merge.lean` says why the refinement chain needs it: a rebuild moves a row onto the
-canonical key of its class, which `Out` still reads and `⊆` does not. Everything
-`Contained` gave the chain has to be given again, and each lemma below is the `Contained`
-one with that single clause changed.
+`Database.Recorded` is why the refinement chain cannot run on `Contained` alone: a rebuild
+moves an entry onto the canonical key of its class, which congruence still sees and `⊆`
+does not.
 
-The price shows up in exactly one place, `Cong.fd`: its two rows are now found at
-*congruent* keys rather than at the same ones, so its key premise has to be recomposed
-from three congruences instead of transported. Every other case is `Contained`'s. -/
-/-- `CongList` is reflexive on tuples the database holds, which is what makes a row
-`Out` at its own key. `Cong.refl`'s membership side condition is why this is not free. -/
-theorem CongList.refl_of_mem {db : Database} {as : List Term}
-    (h : ∀ a ∈ as, a ∈ db.terms) : CongList db as as := by
-  induction as with
-  | nil => exact .nil
-  | cons a as ih =>
-    exact .cons (.refl (h a (by simp))) (ih fun x hx => h x (by simp [hx]))
-
-/-- A row the database holds is `Out` at its own key, provided the key's terms are held
-too. -/
-theorem Database.out_self {db : Database} {r : Row} (hr : r ∈ db.rows)
-    (ha : ∀ a ∈ r.args, a ∈ db.terms) : db.Out r.fn r.args r.out :=
-  ⟨r.args, CongList.refl_of_mem ha, hr⟩
-
-/-- Every listed term is held by `addTerms`. -/
-theorem Database.mem_terms_addTerms {db : Database} {ts : List Term} {t : Term}
-    (h : t ∈ ts) : t ∈ (db.addTerms ts).terms := by
-  induction ts generalizing db with
-  | nil => simp at h
-  | cons s ts ih =>
-    rcases List.mem_cons.mp h with rfl | h'
-    · exact (Database.Contained.addTerms ts (db.addTerm t)).terms
-        (Or.inr t.self_mem_subterms)
-    · exact ih h'
-
-/-- A constructor row of `t` talks only about subterms of `t`. -/
-theorem Term.args_mem_subterms_of_mem_ctorRows {t : Term} {r : Row} (h : r ∈ t.ctorRows)
-    {a : Term} (ha : a ∈ r.args) : a ∈ t.subterms :=
-  Term.subterms_subset_of_mem h.2 (Term.IsSubterm.arg ha (Term.IsSubterm.refl a))
+**Everything below this heading is stated against the old three-clause `Recorded`**
+(`terms ⊆ terms`, a row clause through `Out`, `eqs ⊆ eqs`). `Spec/Congruence.lean` now has
+one clause, and it is weaker in a way that changes shapes rather than vocabulary: each
+`p ∈ d₁.eqs` is matched by *some* `q ∈ d₂.eqs` whose endpoints are congruent to `p`'s, so
+a term of `d₁` is not a term of `d₂` — it is congruent to one. The `.terms` and `.rows`
+projections every proof below uses do not exist, and `Cong.mono_recorded`'s conclusion
+cannot be `Cong d₂ a b`. See the port notes on `ValidEnv.mono_recorded`. -/
 
 mutual
 
@@ -207,61 +182,6 @@ theorem addEq_mono {d₁ d₂ : Database} (h : d₁.Recorded d₂) (a b : Term) 
   exact ⟨h'.terms, fun r hr => Database.Out.mono hc (h'.rows r hr),
     Set.insert_subset_insert h.eqs⟩
 
-theorem addRow_mono {d₁ d₂ : Database} (h : d₁.Recorded d₂) (f : FnName)
-    (as vs : List Term) : (d₁.addRow f as vs).Recorded (d₂.addRow f as vs) := by
-  have h' := (h.addTerms_mono as).addTerms_mono vs
-  have hc : ((d₂.addTerms as).addTerms vs).Contained (d₂.addRow f as vs) :=
-    ⟨subset_rfl, Set.subset_insert _ _, subset_rfl⟩
-  refine ⟨h'.terms, ?_, h'.eqs⟩
-  rintro r (rfl | hr)
-  · exact Database.out_self (Set.mem_insert _ _) fun a ha =>
-      (Database.Contained.addTerms vs _).terms (Database.mem_terms_addTerms ha)
-  · exact Database.Out.mono hc (h'.rows r hr)
-
-end Recorded
-
-/-- What the **smaller** side of a `Recorded` has to satisfy for a row written at a
-congruent key to be free: it is subterm-closed, its rows talk only about terms it holds,
-and it holds the constructor row of every application it holds.
-
-Together they are `Database.addTerms_eq_self`'s hypotheses, which is the point: re-adding a
-key the database already has changes nothing, so the specification is free to write the
-combined row at a *different* key of the same class without the implementation's terms or
-constructor rows going missing. Every state the refinement chain visits has all three —
-they are `FDatabase.Inv`'s `wf`, `rowsWF` and `rowsComplete`. -/
-structure Solid (db : Database) : Prop where
-  wf : db.WF
-  rowsWF : db.RowsWF
-  rowsComplete : db.RowsComplete
-
-namespace Recorded
-
-/-- **`addRow_mono` with the two keys merely congruent.** This is the shape a re-keying
-implementation needs: it writes the combined row at the canonical key of the class and the
-specification writes it at the key of the row it merged, and `Out` reads the one from the
-other. -/
-theorem addRow_congr {d₁ d₂ : Database} (h : d₁.Recorded d₂) (hs : d₁.Solid) (f : FnName)
-    {as : List Term} (bs vs : List Term) (has : ∀ a ∈ as, a ∈ d₁.terms)
-    (hab : CongList (d₂.addRow f bs vs) as bs) :
-    (d₁.addRow f as vs).Recorded (d₂.addRow f bs vs) := by
-  have hself : d₁.addTerms as = d₁ :=
-    Database.addTerms_eq_self hs.wf hs.rowsComplete has
-  have hc : (d₂.addTerms vs).Contained (d₂.addRow f bs vs) :=
-    ((Database.Contained.addTerms bs d₂).addTerms_mono vs).trans
-      ⟨subset_rfl, Set.subset_insert _ _, subset_rfl⟩
-  have hrest : (d₁.addTerms vs).Recorded (d₂.addRow f bs vs) :=
-    (h.addTerms_mono vs).trans_contained hc
-  refine ⟨?_, ?_, ?_⟩
-  · show ((d₁.addTerms as).addTerms vs).terms ⊆ _
-    rw [hself]; exact hrest.terms
-  · show ∀ r ∈ insert (Row.mk f as vs) ((d₁.addTerms as).addTerms vs).rows, _
-    rw [hself]
-    rintro r (rfl | hr)
-    · exact ⟨bs, hab, Set.mem_insert _ _⟩
-    · exact hrest.rows r hr
-  · show ((d₁.addTerms as).addTerms vs).eqs ⊆ _
-    rw [hself]; exact hrest.eqs
-
 end Recorded
 end Database
 
@@ -290,9 +210,42 @@ theorem MergeClosure.contained {d₁ d₂ : Database} (h : MergeClosure d₁ d�
 set_option linter.unusedVariables false in
 /-- **A vacuous self-collision is the identity step.**
 
-Three hypotheses beyond the original statement, all forced and all discharged by the
-invariants `addTerm` maintains: `addRow` re-inserts the row's key and value terms, so
-those insertions have to be no-ops. See `Database.addTerm_eq_self`.
+**Database equality is no longer available, and the reason is one missing `WF` clause.**
+
+The old proof recovered `db' = db` from `Database.addTerms_eq_self`, which is false:
+`addTerm` writes `{(s, s) | s ∈ t.subterms}` into `eqs`, and `db.eqs = {(a, b)}` with
+`a ≠ b` is `WF` and holds `a` — `Cong.assert` then `trans .. symm` — while `(a, a)` is not
+in `db.eqs`. So re-adding a held term is a no-op **up to the relation**, which is
+`Cong.of_addTerm`, and not up to equality.
+
+Two successors, and the second is the one worth having.
+
+1. **Up to the relation, unconditionally.** With `hfix` weakened to `d.eqs = db.eqs` — the
+   only field `Cong` reads — the step's result `db'` satisfies `Cong db' = Cong db`, hence
+   `db'.terms = db.terms`, hence the same `Out` and the same `Matches`. Forward is
+   `Cong.of_addTerm` at `hw` and the `Term.app f (as ++ a) ∈ db.terms` premise that
+   `MergeStep.collide` already carries; backward is `Cong.mono`. Nothing else survives:
+   `db.Contained db'` holds and the converse does not, since `db'.eqs` is strictly larger
+   whenever a reflexive pair was missing.
+
+2. **Equality, if `Database.WF` gains the clause it is missing.** Call it
+   `eqsRefl : ∀ t ∈ db.terms, (t, t) ∈ db.eqs`. Under it `addTerm_eq_self` is true again —
+   `WF.subtermClosed` puts `t.subterms` inside `terms` and `eqsRefl` puts each reflexive
+   pair inside `eqs` — and this theorem goes back to being a database equality with `hrw`
+   and `hctor` dropped.
+
+   `eqsRefl` is not an extra assumption to discharge; it is a fact about every state that
+   exists. `Database.empty` has it vacuously; `addTerm`, `addEq` and `sUnion` each grow
+   `terms` only by subterms whose reflexive pairs they have just written
+   (`addTerm_terms`, `addEq_terms`, `sUnion_terms`); and `FDatabase.toDatabase` satisfies
+   it *definitionally*, since its `eqs` is `{p | p.1 = p.2 ∧ p.1 ∈ d.terms} ∪ …` and
+   `toDatabase_terms` says the two `terms` agree. The counterexample that killed
+   `addTerm_eq_self` is a `Database` no writer can build.
+
+   It also decides whether `MergeSaturated` means what its docstring says. Every entry
+   collides with itself, so a step always applies; without `eqsRefl` that step can be
+   non-trivial — it adds the reflexive pairs `eqs` was missing — and a state with a
+   missing pair is not `MergeSaturated` however settled it looks.
 
 `hsig` and `hres` are not used by the equation — they are what makes the conclusion an
 instance of `MergeStep`, so removing them would change what the theorem says. -/
@@ -590,41 +543,6 @@ theorem Term.blt_linear : (∀ s t : Term, Term.blt s t = true → Term.blt t s 
     (∀ s t u : Term, Term.blt s t = true → Term.blt t u = true → Term.blt s u = true) :=
   ⟨Term.blt_asymm, Term.blt_total, Term.blt_trans⟩
 
-/-- **A constructor's outputs are all congruent.**
-
-The functional dependency, stated as what it buys: however many rows a constructor
-accumulates at one key class, they are one e-class. For `@UF_<Sort>` this is
-"every parent a term ever had is equal to it"; for `@<C>View` it is congruence.
-
-`hrow` is `Cong.fd`'s, and is what a `set` on a constructor breaks. -/
-theorem Database.Out.union_cong {db : Database} {f : FnName} {as v w : List Term}
-    {x y : Term}
-    (hrow : ∀ r ∈ db.rows, db.sig.IsCtor r.fn →
-      r.out = [.app r.fn r.args] ∧ Term.app r.fn r.args ∈ db.terms)
-    (hsig : db.sig.IsCtor f) (hv : db.Out f as v)
-    (hw : db.Out f as w) (hxy : (x, y) ∈ v.zip w) : Cong db x y := by
-  obtain ⟨bs, hlb, hrb⟩ := hv
-  obtain ⟨cs, hlc, hrc⟩ := hw
-  exact Cong.fd hrow hrb hrc hsig (hlb.symm.trans hlc) hxy
-
-/-- **The functional dependency, at a state something reaches.**
-
-`Out.union_cong` with its hypothesis discharged rather than assumed: run any
-constructor-fragment program from a state whose rows are canonical, and in the state it
-reaches a constructor's outputs at one key class are congruent. Nothing consumes this —
-it is the argument that `Spec/` needs no `fd` rule, made machine-checkable end to end
-instead of spread across docstrings. -/
-theorem ProgramStep.out_union_cong {db db' : Database} {p : Program}
-    (h : ProgramStep db p db') (hwf : db.WF) (hrows : db.CtorRows)
-    (hsig : db.sig.AllConstructors) (hterms : db.CtorTerms) (hdecl : p.CtorDecls)
-    (hlegal : p.SetLegal db.sig) (hrules : ∀ r ∈ db.rules, r.SetLegal db.sig)
-    {f : FnName} {as v w : List Term} {x y : Term} (hf : db'.sig.IsCtor f)
-    (hv : db'.Out f as v) (hw : db'.Out f as w) (hxy : (x, y) ∈ v.zip w) :
-    Cong db' x y :=
-  Database.Out.union_cong
-    (Database.CtorRows.fd_hyp
-      (h.ctorRows hwf hrows hsig hterms hdecl hlegal hrules)) hf hv hw hxy
-
 /-! ### Invariants over the step relation
 
 The shape every M11 safety theorem takes, and the reason termination and confluence are
@@ -712,23 +630,6 @@ theorem MergeStep.diamond_of_join {db d₁ d₂ : Database}
     ∃ d, MergeClosure d₁ d ∧ MergeClosure d₂ d := by
   sorry
 
-/-- **`hconf` is too weak to use.** Local confluence plus "both are normal forms" gives
-uniqueness only via Newman's lemma, which needs the relation to be *terminating* — and
-`MergeStep` deliberately is not (`MERGE.md`, constraint (6)). Without termination the
-implication genuinely fails in general rewriting: `a ⇄ b`, `a → c`, `b → d` with `c`,
-`d` normal is locally confluent and has two normal forms. That shape cannot arise here,
-because `MergeStep.contained` forbids cycles — so the *conclusion* is very likely true
-— but it is true for a reason `hconf` does not supply, and the only route to it is the
-strong diamond, which is `MergeStep.diamond_of_join` restated. Hence
-`RunStep.unique_of_diamond` below, which is this theorem with a hypothesis a proof can
-actually consume. -/
-theorem RunStep.unique_of_confluent {db d₁ d₂ : Database}
-    (hconf : ∀ e e₁ e₂, MergeStep e e₁ → MergeStep e e₂ →
-      ∃ e', MergeClosure e₁ e' ∧ MergeClosure e₂ e')
-    (hs₁ : MergeSaturated d₁) (hs₂ : MergeSaturated d₂)
-    (h₁ : RunStep db d₁) (h₂ : RunStep db d₂) : d₁ = d₂ := by
-  sorry
-
 /-- With a confluent merge the *saturated* states of a round coincide, so an
 interpreter that runs merges to a fixpoint computes the one answer `RunStep` allows
 that egglog also allows. `RunStep` itself stays a relation.
@@ -796,7 +697,35 @@ theorem ValidQuerySubst.mono {d₁ d₂ : Database} (hc : d₁.Contained d₂)
   obtain ⟨σs, hall, hu⟩ := h
   exact ⟨σs, hall.imp fun _ _ hv => ValidSubst.mono hc hsig henv hv, hu⟩
 
-/-- `ValidEnv.mono` needs only the term half, which `Recorded` has unchanged. -/
+/-- `ValidEnv.mono` needs only the term half, which the old three-clause `Recorded` had as
+`terms ⊆ terms`. **That clause is gone**, and the one-clause `Recorded` gives only that a
+term of `d₁` is congruent to a term of `d₂`, so the same-`σ` conclusion is not available
+from it. Whether the same-`σ` form survives by some other route is being settled elsewhere.
+
+If it does not, the replacement has to be `σ` with each **value** replaced by a congruent
+one, keeping the domain and its order — anything coarser loses `ValidEnv`'s `Perm` clause
+for nothing. Against that form the consumers split three ways.
+
+*Indifferent*, because `σ` is existentially quantified before they see it, so they only
+compose: `RunRules.mono_recorded`, `CmdStep.mono_recorded`, `ProgramStep.mono_recorded`,
+`execCmdM_contained'`, `execProgramM_contained_aux`.
+
+*Needs the choice made once for the whole query*: `ValidQuerySubst.mono_recorded`. It
+transports pattern by pattern and then re-establishes `Env.UnionAll σs σ`, whose `Union2`
+requires the pieces to agree wherever two of them bind the same variable. Per-pattern
+transports may pick different congruent representatives, and then they do not agree. One
+`σ'` chosen for the query, with the per-pattern transports restricted to it, is what the
+clause can absorb.
+
+*Costs a new lemma*: `ValidSubst.mono_recorded` and `RuleResults.mono_recorded`. Both
+re-evaluate under the substitution — `Matches` through `Expr.eval`, `RuleResults` through
+`evalActions` on `{C with env := C.env ++ σ}` — and `Expr.eval` is **not** congruence-stable
+at a primitive: `Prim.apply` matches on literals, so a term congruent to `.lit 1` but not
+equal to it does not compute the same answer, or any answer. The missing lemma is
+"congruent environments give recording results", and it is the same one
+`MergeStep.transport_recorded` already needs for an unrelated reason — its body runs under
+`mergeEnv a b` built from the colliding outputs, and on the `C` side those are congruent
+rather than equal. So the new obligation is shared, not additional. -/
 theorem ValidEnv.mono_recorded {d₁ d₂ : Database} (h : d₁.Recorded d₂) {vars : List Var}
     {σ : Env} (hv : ValidEnv vars d₁ σ) : ValidEnv vars d₂ σ :=
   ⟨hv.1, fun b hb => h.terms (hv.2 b hb)⟩
@@ -1097,14 +1026,17 @@ recursion once they are available. -/
 /-- The invariant the refinement chain carries.
 
 `wf` is what `mem_closureF_iff_of_wf` needs; `ctorTerms` and `ctorRows` are what tell the
-merge passes which rows are a constructor's, so that they leave them alone;
-`rowsComplete` and `rowsWF` are the other two thirds of `Database.Solid`, which
-`Database.Recorded.addRow_congr` reads. All five hold of `FDatabase.empty`.
+merge passes which rows are a constructor's, so that they leave them alone.
 
-`ctorRows` is also `Proofs/Congruence.lean`'s `Cong.fd` hypothesis, with its guard widened
-from `IsCtor r.fn` to `mergeOf r.fn = none`: it is the reverse inclusion `RowsComplete`
-omits, restricted to the functions where it survives a `:merge` declaration, and
-`Action.SetLegal` is what preserves it. -/
+**Four of the five fields no longer typecheck**, and this record is the hinge the whole
+`FDatabase` half of the file turns on, so it has to be rebuilt before anything below it.
+`rowsComplete` and `rowsWF` were the two thirds of the deleted `Database.Solid` that
+`addTerms_eq_self` needed, and that lemma is false; `ctorRows` was `Cong.fd`'s hypothesis,
+and `Cong.fd` is `Cong.congr` now, a rule rather than a derived fact, so the hypothesis has
+nothing left to buy; `ctorTerms` is `Database.DeclaredTerms`'s job, which asks a stronger
+question — declaredness *and* `entryWidth` — than `IsCtor`. What survives unchanged is
+`wf`, and what has to be added is whatever `Impl/`'s `rows` index needs to stay a faithful
+index of `terms`, which is a property of `FDatabase` and not of its denotation. -/
 structure FDatabase.Inv (d : FDatabase) : Prop where
   wf : d.WF
   ctorTerms : d.toDatabase.CtorTerms
@@ -1183,10 +1115,6 @@ end Inv0
 end Database
 
 namespace FDatabase
-
-/-- The three fields `Database.Recorded.addRow_congr` reads. -/
-theorem Inv.solid {d : FDatabase} (h : d.Inv) : d.toDatabase.Solid :=
-  ⟨h.wf, h.rowsWF, h.rowsComplete⟩
 
 theorem Inv.toInv0 {d : FDatabase} (h : d.Inv) : d.toDatabase.Inv0 :=
   ⟨h.ctorTerms, h.rowsComplete, h.rowsWF, h.ctorRows⟩
@@ -2414,121 +2342,15 @@ theorem MergeStep.wf {d₁ d₂ : Database} (hw : d₁.WF) (hrw : d₁.RowsWF)
     have hc := hb.trans (Database.Contained.addRow f as vs d)
     exact ⟨hr.subtermClosed, hr.eqsInTerms, fun p hp => hc.terms (hw.envInTerms p hp)⟩
 
-/-! ### `Database.Solid` survives a step
-
-`Database.Recorded.addRow_congr` — what lets the specification write the combined row at a
-*different* key of the class — needs `Solid` of the side being recorded, so transporting a
-whole merge closure needs `Solid` to survive one. It does, and with no side condition:
-every operation an action performs inserts terms together with their subterms and their
-constructor rows, which is all three fields at once. -/
-
-namespace Database
-namespace Solid
-
-theorem addTerm {db : Database} (h : db.Solid) (t : Term) : (db.addTerm t).Solid where
-  wf := h.wf.addTerm t
-  rowsWF := by
-    rintro r (hr | ⟨hout, hm⟩)
-    · exact ⟨fun a ha => Or.inl ((h.rowsWF r hr).1 a ha),
-        fun v hv => Or.inl ((h.rowsWF r hr).2 v hv)⟩
-    · refine ⟨fun a ha => Or.inr ?_, ?_⟩
-      · exact Term.subterms_subset_of_mem hm (Term.IsSubterm.arg ha (Term.IsSubterm.refl a))
-      · intro v hv
-        rw [hout] at hv
-        rcases List.mem_singleton.mp hv with rfl
-        exact Or.inr hm
-  rowsComplete := by
-    rintro r ⟨hout, hm | hm⟩
-    · exact Or.inl (h.rowsComplete ⟨hout, hm⟩)
-    · exact Or.inr ⟨hout, hm⟩
-
-theorem addTerms {db : Database} (h : db.Solid) (ts : List Term) :
-    (db.addTerms ts).Solid := by
-  induction ts generalizing db with
-  | nil => exact h
-  | cons t ts ih => exact ih (h.addTerm t)
-
-theorem addEq {db : Database} (h : db.Solid) (a b : Term) : (db.addEq a b).Solid := by
-  have h' := (h.addTerm a).addTerm b
-  refine ⟨⟨h'.wf.subtermClosed, ?_, h'.wf.envInTerms⟩, h'.rowsWF, h'.rowsComplete⟩
-  rintro p (rfl | hp)
-  · exact ⟨(Database.Contained.addTerm b _).terms (Or.inr a.self_mem_subterms),
-      Or.inr b.self_mem_subterms⟩
-  · exact h'.wf.eqsInTerms p hp
-
-theorem addRow {db : Database} (h : db.Solid) (f : FnName) (as vs : List Term) :
-    (db.addRow f as vs).Solid := by
-  have h' := (h.addTerms as).addTerms vs
-  refine ⟨h.wf.addRow f as vs, ?_, h'.rowsComplete.trans (Set.subset_insert _ _)⟩
-  rintro r (rfl | hr)
-  · exact ⟨fun a ha => (Database.Contained.addTerms vs _).terms (mem_terms_addTerms ha),
-      fun v hv => mem_terms_addTerms hv⟩
-  · exact h'.rowsWF r hr
-
-/-- Only `WF.envInTerms` reads the environment, so a new one has to be checked and nothing
-else moves. -/
-theorem setEnv {db : Database} (h : db.Solid) {σ : Env}
-    (hσ : ∀ b ∈ σ, b.2 ∈ db.terms) : ({ db with env := σ } : Database).Solid :=
-  ⟨⟨h.wf.subtermClosed, h.wf.eqsInTerms, hσ⟩, h.rowsWF, h.rowsComplete⟩
-
-end Solid
-end Database
-
-theorem evalAction_solid {db d : Database} (h : db.Solid) {a : Action}
-    (hv : evalAction db a = some d) : d.Solid := by
-  rcases evalAction_eq_some hv with ⟨e, t, rfl, -, rfl⟩ | ⟨v, e, t, rfl, -, rfl⟩ |
-    ⟨e₁, e₂, t₁, t₂, rfl, -, -, rfl⟩ | ⟨f, args, out, as, vs, rfl, -, -, rfl⟩
-  · exact h.addTerm t
-  · refine ⟨⟨(h.addTerm t).wf.subtermClosed, (h.addTerm t).wf.eqsInTerms, ?_⟩,
-      (h.addTerm t).rowsWF, (h.addTerm t).rowsComplete⟩
-    intro b hb
-    rcases List.mem_cons.mp hb with rfl | hb'
-    · exact Or.inr t.self_mem_subterms
-    · exact Or.inl (h.wf.envInTerms b hb')
-  · exact h.addEq t₁ t₂
-  · exact h.addRow f as vs
-
-theorem evalActions_solid {db d : Database} (h : db.Solid) {as : List Action}
-    (hv : evalActions db as = some d) : d.Solid := by
-  induction as generalizing db with
-  | nil => rw [evalActions_nil, Option.some.injEq] at hv; exact hv ▸ h
-  | cons a as ih =>
-    cases hx : evalAction db a with
-    | none => rw [evalActions_cons, hx] at hv; simp at hv
-    | some db₁ =>
-      rw [evalActions_cons, hx, Option.bind_some] at hv
-      exact ih (evalAction_solid h hx) hv
-
-/-- A merge step is an action block followed by an `addRow`, so `Solid` survives it. -/
-theorem MergeStep.solid {d₁ d₂ : Database} (h : d₁.Solid) (hstep : MergeStep d₁ d₂) :
-    d₂.Solid := by
-  cases hstep with
-  | @collide d f as _ a b vs _ _ hra hrb _ _ hbody _ =>
-    have h0 : ({ d₁ with env := mergeEnv a b } : Database).Solid :=
-      h.setEnv fun p hp => by
-        rcases mem_mergeEnv hp with hpa | hpb
-        · exact (h.rowsWF _ hra).2 _ hpa
-        · exact (h.rowsWF _ hrb).2 _ hpb
-    have hd : d.Solid := evalActions_solid h0 hbody
-    have hr := hd.addRow f as vs
-    have hb : d₁.Contained d :=
-      ⟨(evalActions_contained hbody).terms, (evalActions_contained hbody).rows,
-        (evalActions_contained hbody).eqs⟩
-    have hcont := hb.trans (Database.Contained.addRow f as vs d)
-    exact ⟨⟨hr.wf.subtermClosed, hr.wf.eqsInTerms,
-        fun p hp => hcont.terms (h.wf.envInTerms p hp)⟩, hr.rowsWF, hr.rowsComplete⟩
-
-theorem MergeClosure.solid {d₁ d₂ : Database} (h : d₁.Solid) (hcl : MergeClosure d₁ d₂) :
-    d₂.Solid := by
-  induction hcl with
-  | refl => exact h
-  | tail _ hstep ih => exact hstep.solid ih
-
 /-- **A merge collision available at `A` is available at any `C` that *records* it.**
 
-The one step beyond `MergeStep.transport`: the specification finds the two rows at
-congruent keys and so writes the combined row at a key the implementation did not, which
-`Database.Recorded.addRow_congr` is exactly the shape of. -/
+The one step beyond `MergeStep.transport`: the specification finds the two entries at
+congruent keys and so writes the combined entry at a key the implementation did not.
+
+`Database.Recorded.addRow_congr` was what supplied that, and it is deleted: it rested on
+`addTerms_eq_self`, which is false. Its successor has to be built out of `Cong.of_addTerm`,
+whose hypotheses are `db.WF` and `t ∈ db.terms` — so the `hs : A.Solid` premise below
+becomes `A.WF`. -/
 theorem MergeStep.transport_recorded {A C B : Database} (hc : A.Recorded C)
     (hsig : A.sig = C.sig) (hs : A.Solid) (h : MergeStep A B) :
     ∃ D, MergeStep C D ∧ B.Recorded D ∧ B.sig = D.sig := by
@@ -3096,71 +2918,15 @@ theorem ProgramStep.mono {A C B : Database} (hc : A.Contained C) (hsig : A.sig =
 /-! #### The same, along `Recorded`
 
 The re-keying contract needs every one of the four transport lemmas again. Two things are
-new and both come from the same place — the specification finds a row at a *congruent* key
-rather than at the same one. `ValidSubst.mono_recorded` composes that congruence into the
-row atom's, and `MergeStep.transport_recorded` writes the combined row at the key it found,
-which is what `Database.Solid` has to be carried for. `CmdStep.solid` is that carrying. -/
+new and both come from the same place — the specification finds an entry at a *congruent*
+key rather than at the same one. `ValidSubst.mono_recorded` composes that congruence into
+the entry atom's, and `MergeStep.transport_recorded` writes the combined entry at the key
+it found.
 
-/-- `Solid` survives a rule firing: the head is an action block, run in the caller's
-environment extended by a substitution whose values the database already holds. -/
-theorem RuleResults.solid {db d : Database} (h : db.Solid) {r : Rule}
-    (hd : d ∈ RuleResults db r) : d.Solid := by
-  obtain ⟨σ, hq, hstep⟩ := hd
-  obtain ⟨d', hv, rfl⟩ := evalLocalActions_eq_some hstep
-  have h0 : ({ db with env := db.env ++ σ } : Database).Solid := by
-    refine h.setEnv fun b hb => ?_
-    rcases List.mem_append.mp hb with hb' | hb'
-    · exact h.wf.envInTerms b hb'
-    · exact hq.mem_terms b hb'
-  have hd' : d'.Solid := evalActions_solid h0 hv
-  exact ⟨⟨hd'.wf.subtermClosed, hd'.wf.eqsInTerms,
-      fun b hb => (evalActions_contained hv).terms (h.wf.envInTerms b hb)⟩,
-    hd'.rowsWF, hd'.rowsComplete⟩
-
-/-- `Solid` survives the union a round takes: each field is a union of the same field over
-databases that all have it. -/
-theorem RunRules.solid {db : Database} (h : db.Solid) : (RunRules db).Solid := by
-  set S : Set Database := {d | ∃ r ∈ db.rules, d ∈ RuleResults db r} with hS
-  have key : ∀ d ∈ S, d.Solid := by
-    rintro d ⟨r, -, hdr⟩
-    exact RuleResults.solid h hdr
-  have hsubT : ∀ d ∈ S, d.terms ⊆ (db.sUnion S).terms :=
-    fun d hd => (Database.Contained.mem_sUnion hd).terms
-  have hsubR : ∀ d ∈ S, d.rows ⊆ (db.sUnion S).rows :=
-    fun d hd => (Database.Contained.mem_sUnion hd).rows
-  refine ⟨⟨?_, ?_, ?_⟩, ?_, ?_⟩
-  · rintro t (ht | ht)
-    · exact (h.wf.subtermClosed t ht).trans Set.subset_union_left
-    · obtain ⟨d, hd, ht'⟩ := Set.mem_iUnion₂.mp ht
-      exact ((key d hd).wf.subtermClosed t ht').trans (hsubT d hd)
-  · rintro p (hp | hp)
-    · exact ⟨Or.inl (h.wf.eqsInTerms p hp).1, Or.inl (h.wf.eqsInTerms p hp).2⟩
-    · obtain ⟨d, hd, hp'⟩ := Set.mem_iUnion₂.mp hp
-      exact ⟨hsubT d hd ((key d hd).wf.eqsInTerms p hp').1,
-        hsubT d hd ((key d hd).wf.eqsInTerms p hp').2⟩
-  · exact fun b hb => Or.inl (h.wf.envInTerms b hb)
-  · rintro r (hr | hr)
-    · exact ⟨fun a ha => Or.inl ((h.rowsWF r hr).1 a ha),
-        fun v hv => Or.inl ((h.rowsWF r hr).2 v hv)⟩
-    · obtain ⟨d, hd, hr'⟩ := Set.mem_iUnion₂.mp hr
-      exact ⟨fun a ha => hsubT d hd (((key d hd).rowsWF r hr').1 a ha),
-        fun v hv => hsubT d hd (((key d hd).rowsWF r hr').2 v hv)⟩
-  · rintro r ⟨hout, hm | hm⟩
-    · exact Or.inl (h.rowsComplete ⟨hout, hm⟩)
-    · obtain ⟨d, hd, hm'⟩ := Set.mem_iUnion₂.mp hm
-      exact hsubR d hd ((key d hd).rowsComplete ⟨hout, hm'⟩)
-
-/-- `Solid` survives a command: an action, a round and a merge phase all preserve it, and
-`.rule`/`.decl` touch no field it reads. -/
-theorem CmdStep.solid {A B : Database} (h : A.Solid) {c : Cmd} (hs : CmdStep A c B) :
-    B.Solid := by
-  cases hs with
-  | action ha hm => exact MergeClosure.solid (evalAction_solid h ha) hm
-  | rule =>
-    exact ⟨⟨h.wf.subtermClosed, h.wf.eqsInTerms, h.wf.envInTerms⟩, h.rowsWF, h.rowsComplete⟩
-  | run hrun => exact MergeClosure.solid (RunRules.solid h) hrun
-  | decl =>
-    exact ⟨⟨h.wf.subtermClosed, h.wf.eqsInTerms, h.wf.envInTerms⟩, h.rowsWF, h.rowsComplete⟩
+The `hsolid : A.Solid` premise threaded through the four lemmas below was carried for
+`Recorded.addRow_congr`; both are deleted, and `A.WF` is what the successor needs.
+`CmdStep.solid` was the carrying lemma and is `Proofs/Eval.lean`'s `evalActions_wf`
+composed with a `MergeClosure` induction now. -/
 
 /-- `RuleResults.mono` along `Recorded`. The signature equality comes out with it because
 `RunRules.mono_recorded` needs it to re-base each firing onto the union. -/
@@ -3239,8 +3005,8 @@ theorem CmdStep.mono_recorded {A C B : Database} (hc : A.Recorded C) (hsig : A.s
     · show Function.update A.sig _ _ = Function.update C.sig _ _
       rw [hsig]
 
-/-- `ProgramStep.mono` along `Recorded`. `CmdStep.solid` is what carries the extra
-hypothesis across the induction. -/
+/-- `ProgramStep.mono` along `Recorded`. The extra hypothesis has to be carried across the
+induction by a preservation lemma for whatever replaces `hsolid`; see the heading above. -/
 theorem ProgramStep.mono_recorded {A C B : Database} (hc : A.Recorded C)
     (hsig : A.sig = C.sig) (henv : A.env = C.env) (hrules : A.rules = C.rules)
     (hsolid : A.Solid) {p : Program} (h : ProgramStep A p B) :

@@ -58,7 +58,7 @@ theorem evalAction_isSome_of_scoped {db : Database} {Γ : Scope} (hm : Γ.Models
       (fun g hg => by
         obtain ⟨e, hmem, hge⟩ := Expr.mem_fnsList hg
         exact he.2 e hmem g hge)
-    refine ⟨db.addRow f as vs, by simp [evalAction, has, hvs], ?_⟩
+    refine ⟨db.addTerm (.app f (as ++ vs)), by simp [evalAction, has, hvs], ?_⟩
     simpa [Action.bind] using hm
 
 theorem evalActions_isSome_of_scoped {db : Database} {Γ : Scope} (hm : Γ.Models db.env)
@@ -99,7 +99,7 @@ theorem evalLocalActions_isSome_of_scoped {db : Database} {Γ : Scope}
     {σ : Env} (hσ : ValidQuerySubst db r.query σ) :
     ∃ d, evalLocalActions db r.actions σ = some d := by
   obtain ⟨d, hd, _⟩ := evalActions_isSome_of_scoped
-    (db := { db with env := db.env ++ σ }) (Query.bind_models hm hσ) hr.2 hre.2
+    (db := { db with env := db.env ++ σ }) (Query.bind_models hm hσ) hr.2 hre
   exact ⟨{ d with env := db.env, rules := db.rules }, by simp [evalLocalActions, hd]⟩
 
 /-! ### Scoped, evaluable programs do not get stuck
@@ -113,10 +113,10 @@ theorem cmdStep_of_scoped {db : Database} {Γ : Scope} (hm : Γ.Models db.env)
   cases c with
   | action a =>
     obtain ⟨db', hv, hm'⟩ := evalAction_isSome_of_scoped hm h he
-    exact ⟨db', .action hv Relation.ReflTransGen.refl, hm', evalAction_sig hv⟩
-  | rule r => exact ⟨_, .rule, hm, rfl⟩
-  | run => exact ⟨_, .run Relation.ReflTransGen.refl, hm, rfl⟩
-  | decl f d => exact ⟨_, .decl, hm, rfl⟩
+    exact ⟨db', ⟨db', hv, Relation.ReflTransGen.refl⟩, hm', evalAction_sig hv⟩
+  | rule r => exact ⟨_, ⟨_, rfl, Relation.ReflTransGen.refl⟩, hm, rfl⟩
+  | run => exact ⟨_, ⟨_, rfl, Relation.ReflTransGen.refl⟩, hm, rfl⟩
+  | decl f d => exact ⟨_, ⟨_, rfl, Relation.ReflTransGen.refl⟩, hm, rfl⟩
 
 theorem programStep_of_scoped {db : Database} {Γ : Scope} (hm : Γ.Models db.env)
     {p : Program} (h : Program.Scoped p Γ) (he : Program.Evaluable p db.sig) :

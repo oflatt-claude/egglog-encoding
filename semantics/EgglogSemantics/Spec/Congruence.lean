@@ -41,9 +41,15 @@ declared, and it carries that declaration's `entryWidth` children. -/
 def Database.DeclaredTerms (db : Database) : Prop :=
   ∀ f as, Term.app f as ∈ db.terms → ∃ d, db.sig f = some d ∧ as.length = d.entryWidth
 
-/-- The database invariants: it holds the children of every term it holds, and binds its
-variables to terms it holds. -/
+/-- The database invariants: it records the diagonal of what it holds, holds the children
+of every term it holds, and binds its variables to terms it holds.
+
+`eqsRefl` is what makes "the term is present" and "the equation `t = t` is asserted"
+interchangeable. Without it a term can be present by `symm`/`trans` alone, and then
+`addTerm` on a term already held is not the identity — so a self-collision, which always
+applies, would still change the state and nothing would be `MergeSaturated`. -/
 structure Database.WF (db : Database) : Prop where
+  eqsRefl : ∀ t ∈ db.terms, (t, t) ∈ db.eqs
   subtermClosed : ∀ t ∈ db.terms, t.subterms ⊆ db.terms
   envInTerms : ∀ b ∈ db.env, b.2 ∈ db.terms
 

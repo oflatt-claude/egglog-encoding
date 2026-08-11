@@ -371,10 +371,16 @@ theorem mem_sUnion {db d : Database} {S : Set Database} (h : d ∈ S) :
 end Contained
 namespace WF
 theorem empty : WF Database.empty where
+  eqsRefl := by simp
   subtermClosed := by simp
   envInTerms := by simp [Database.empty]
 
 theorem addTerm {db : Database} (h : WF db) (t : Term) : WF (db.addTerm t) where
+  eqsRefl := by
+    simp only [addTerm_terms, addTerm_eqs]
+    rintro s (hs | hs)
+    · exact Or.inl (h.eqsRefl s hs)
+    · exact Or.inr ⟨s, hs, rfl⟩
   subtermClosed := by
     simp only [addTerm_terms]
     rintro s (hs | hs) u hu
@@ -389,6 +395,9 @@ theorem addTerms {db : Database} (h : WF db) (ts : List Term) : WF (db.addTerms 
   | cons t ts ih => exact ih (h.addTerm t)
 
 theorem addEq {db : Database} (h : WF db) (a b : Term) : WF (db.addEq a b) where
+  eqsRefl s hs := Set.mem_insert_of_mem _ (((h.addTerm a).addTerm b).eqsRefl s (by
+    simpa only [addTerm_terms, ← Set.union_assoc] using
+      (by simpa only [addEq_terms, ← Set.union_assoc] using hs)))
   subtermClosed := by
     simp only [addEq_terms]
     rintro s ((hs | hs) | hs) u hu
@@ -400,6 +409,12 @@ theorem addEq {db : Database} (h : WF db) (a b : Term) : WF (db.addEq a b) where
 
 theorem sUnion {db : Database} (h : WF db) {S : Set Database}
     (hS : ∀ d ∈ S, WF d) : WF (db.sUnion S) where
+  eqsRefl := by
+    simp only [sUnion_terms, sUnion_eqs]
+    rintro t (ht | ht)
+    · exact Or.inl (h.eqsRefl t ht)
+    · obtain ⟨d, hd, ht⟩ := Set.mem_iUnion₂.mp ht
+      exact Or.inr (Set.mem_biUnion hd ((hS d hd).eqsRefl t ht))
   subtermClosed := by
     simp only [sUnion_terms]
     rintro t (ht | ht)

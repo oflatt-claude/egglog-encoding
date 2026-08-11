@@ -2,6 +2,49 @@ import EgglogSemantics.Spec.Eval
 import EgglogSemantics.Proofs.Congruence
 
 namespace Egglog
+/-! ### The terms depend on `eqs` alone
+
+`Database.terms` is `{t | Cong db t t}` and `Cong` reads `eqs`, so an update to `sig`,
+`env` or `rules` leaves the terms alone — and, at an environment whose values the database
+holds, leaves `WF` alone too. Every field update the semantics performs is one of these. -/
+
+/-- Two databases asserting the same equations hold the same terms. -/
+theorem Database.terms_eq_of_eqs_eq {d₁ d₂ : Database} (h : d₁.eqs = d₂.eqs) :
+    d₁.terms = d₂.terms :=
+  Set.Subset.antisymm (Database.Contained.terms ⟨h.subset⟩)
+    (Database.Contained.terms ⟨h.symm.subset⟩)
+
+@[simp] theorem Database.terms_setEnv {db : Database} {σ : Env} :
+    ({ db with env := σ } : Database).terms = db.terms := terms_eq_of_eqs_eq rfl
+
+@[simp] theorem Database.terms_setEnvRules {db : Database} {σ : Env} {R : Set Rule} :
+    ({ db with env := σ, rules := R } : Database).terms = db.terms := terms_eq_of_eqs_eq rfl
+
+/-- `WF` reads `eqs` and `env` only: a database agreeing in both is well formed too. -/
+theorem Database.WF.congr {d₁ d₂ : Database} (hw : d₁.WF) (heqs : d₁.eqs = d₂.eqs)
+    (henv : d₁.env = d₂.env) : d₂.WF := by
+  have ht : d₁.terms = d₂.terms := Database.terms_eq_of_eqs_eq heqs
+  refine ⟨fun t htm => ?_, fun t htm => ?_, fun b hb => ?_⟩
+  · rw [← heqs, ← ht] at *
+    exact hw.eqsRefl t htm
+  · rw [← ht] at htm ⊢
+    exact hw.subtermClosed t htm
+  · rw [← ht]
+    exact hw.envInTerms b (by rw [henv]; exact hb)
+
+/-- Replacing the environment by one whose values the database holds keeps `WF`. -/
+theorem Database.WF.setEnv {db : Database} (hw : db.WF) {σ : Env}
+    (hσ : ∀ b ∈ σ, b.2 ∈ db.terms) : Database.WF { db with env := σ } where
+  eqsRefl := by simpa using hw.eqsRefl
+  subtermClosed := by simpa using hw.subtermClosed
+  envInTerms b hb := by simpa using hσ b hb
+
+/-- `WF.setEnv` at the one environment the semantics imposes: the globals extended by a
+rule-local substitution. -/
+theorem Database.WF.appendEnv {db : Database} (hw : db.WF) {σ : Env}
+    (hσ : ∀ b ∈ σ, b.2 ∈ db.terms) : Database.WF { db with env := db.env ++ σ } :=
+  hw.setEnv fun b hb => (List.mem_append.mp hb).elim (hw.envInTerms b) (hσ b)
+
 namespace Expr
 @[simp] theorem eval_lit {sig : Signature} {l : Lit} {σ : Env} :
     (Expr.lit l).eval sig σ = some (.lit l) := rfl
@@ -61,15 +104,12 @@ theorem eval_app_undeclared {sig : Signature} {f : FnName} {args : List Expr} {�
 end Expr
 /-! ### Evaluation stays inside the constructor fragment
 
-`Database.CtorTerms` on one term, and the fact that `Expr.eval` only ever produces such
+The condition on a single term, and the fact that `Expr.eval` only ever produces such
 terms. It lives here rather than with the invariant that reads it because it is a fact
-about `Expr.eval` and nothing else, and both `Proofs/Step.lean`'s `Database.CtorFragment`
-and `Proofs/Merge.lean`'s `FDatabase.Inv` need it. -/
+about `Expr.eval` and nothing else; `Proofs/Merge.lean`'s `FDatabase.Inv` needs it. -/
 
-/-- A term built only from constructor applications.
-
-`Database.CtorTerms` says the database holds only such terms; this is the same condition on
-one term, which is what the operations that *insert* a term have to be given. -/
+/-- A term built only from constructor applications: the condition the operations that
+*insert* a term have to be given. -/
 def Term.CtorTerm (sig : Signature) (t : Term) : Prop :=
   ∀ f as, Term.app f as ∈ t.subterms → sig.IsCtor f
 
@@ -159,54 +199,6 @@ theorem Expr.evalList_ctorTerm {sig : Signature} {σ : Env}
 
 end
 
-namespace Database
-namespace CtorTerms
-
-theorem addTerm {db : Database} (h : db.CtorTerms) {t : Term}
-    (ht : Term.CtorTerm db.sig t) : (db.addTerm t).CtorTerms := by
-  rintro f as (hm | hm)
-  · exact h f as hm
-  · exact ht f as hm
-
-theorem addTerms {db : Database} (h : db.CtorTerms) {ts : List Term}
-    (hts : ∀ t ∈ ts, Term.CtorTerm db.sig t) : (db.addTerms ts).CtorTerms := by
-  induction ts generalizing db with
-  | nil => exact h
-  | cons t ts ih => exact ih (h.addTerm (hts t (by simp))) fun s hs => hts s (by simp [hs])
-
-theorem addEq {db : Database} (h : db.CtorTerms) {a b : Term}
-    (ha : Term.CtorTerm db.sig a) (hb : Term.CtorTerm db.sig b) :
-    (db.addEq a b).CtorTerms := (h.addTerm ha).addTerm hb
-
-theorem addRow {db : Database} (h : db.CtorTerms) {f : FnName} {as vs : List Term}
-    (has : ∀ a ∈ as, Term.CtorTerm db.sig a) (hvs : ∀ v ∈ vs, Term.CtorTerm db.sig v) :
-    (db.addRow f as vs).CtorTerms := (h.addTerms has).addTerms (by simpa using hvs)
-
-/-- A union holds only what its operands hold, and takes `sig` from the left. -/
-theorem sUnion {db : Database} (h : db.CtorTerms) {S : Set Database}
-    (hS : ∀ d ∈ S, ∀ f as, Term.app f as ∈ d.terms → db.sig.IsCtor f) :
-    (db.sUnion S).CtorTerms := by
-  rintro f as (hm | hm)
-  · exact h f as hm
-  · obtain ⟨d, hd, hm'⟩ := Set.mem_iUnion₂.mp hm
-    exact hS d hd f as hm'
-
-end CtorTerms
-
-/-- Every term the database holds is constructor-built: `subtermClosed` pushes the
-application into `terms`, where `CtorTerms` reads it off. -/
-theorem ctorTerm_of_mem {db : Database} (hw : db.WF) (h : db.CtorTerms) {t : Term}
-    (ht : t ∈ db.terms) : Term.CtorTerm db.sig t :=
-  fun _ _ hsub => h _ _ (hw.subtermClosed t ht hsub)
-
-/-- The environment holds only constructor terms, since `WF.envInTerms` puts its values in
-`terms`. -/
-theorem env_ctorTerm {db : Database} (hw : db.WF) (h : db.CtorTerms) :
-    ∀ b ∈ db.env, Term.CtorTerm db.sig b.2 :=
-  fun b hb => Database.ctorTerm_of_mem hw h (hw.envInTerms b hb)
-
-end Database
-
 mutual
 
 /-- Evaluation reads the environment only through `lookup`, so environments that
@@ -282,7 +274,8 @@ theorem evalAction_eq_some {db db' : Database} {a : Action}
       (∃ e₁ e₂ t₁ t₂, a = .union e₁ e₂ ∧ e₁.eval db.sig db.env = some t₁ ∧
         e₂.eval db.sig db.env = some t₂ ∧ db' = db.addEq t₁ t₂) ∨
       (∃ f args out as vs, a = .set f args out ∧ Expr.evalList db.sig args db.env = some as ∧
-        Expr.evalList db.sig out db.env = some vs ∧ db' = db.addRow f as vs) := by
+        Expr.evalList db.sig out db.env = some vs ∧
+        db' = db.addTerm (.app f (as ++ vs))) := by
   cases a with
   | expr e =>
     cases hv : e.eval db.sig db.env with
@@ -322,40 +315,32 @@ theorem evalAction_contained {db db' : Database} {a : Action}
   rcases evalAction_eq_some h with ⟨_, t, -, -, rfl⟩ | ⟨_, _, t, -, -, rfl⟩ |
     ⟨_, _, t₁, t₂, -, -, -, rfl⟩ | ⟨f, _, _, as, vs, -, -, -, rfl⟩
   · exact .addTerm t db
-  · exact ⟨Set.subset_union_left, Set.subset_union_left, subset_rfl⟩
+  · exact ⟨Set.subset_union_left⟩
   · exact .addEq t₁ t₂ db
-  · exact .addRow f as vs db
+  · exact .addTerm _ db
 
 theorem evalAction_rules {db db' : Database} {a : Action}
     (h : evalAction db a = some db') : db'.rules = db.rules := by
   rcases evalAction_eq_some h with ⟨_, _, -, -, rfl⟩ | ⟨_, _, _, -, -, rfl⟩ |
-    ⟨_, _, _, _, -, -, -, rfl⟩ | ⟨_, _, _, _, _, -, -, -, rfl⟩
-  · rfl
-  · rfl
-  · rfl
-  · simp
+    ⟨_, _, _, _, -, -, -, rfl⟩ | ⟨_, _, _, _, _, -, -, -, rfl⟩ <;> rfl
 
 /-- No action touches the signature; only `Cmd.decl` writes it. -/
 theorem evalAction_sig {db db' : Database} {a : Action}
     (h : evalAction db a = some db') : db'.sig = db.sig := by
   rcases evalAction_eq_some h with ⟨_, _, -, -, rfl⟩ | ⟨_, _, _, -, -, rfl⟩ |
-    ⟨_, _, _, _, -, -, -, rfl⟩ | ⟨_, _, _, _, _, -, -, -, rfl⟩
-  · rfl
-  · rfl
-  · rfl
-  · simp
+    ⟨_, _, _, _, -, -, -, rfl⟩ | ⟨_, _, _, _, _, -, -, -, rfl⟩ <;> rfl
 
 theorem evalAction_wf {db db' : Database} (hw : db.WF) {a : Action}
     (h : evalAction db a = some db') : db'.WF := by
   rcases evalAction_eq_some h with ⟨_, t, -, -, rfl⟩ | ⟨_, _, t, -, -, rfl⟩ |
     ⟨_, _, t₁, t₂, -, -, -, rfl⟩ | ⟨f, _, _, as, vs, -, -, -, rfl⟩
   · exact hw.addTerm t
-  · refine ⟨(hw.addTerm t).subtermClosed, (hw.addTerm t).eqsInTerms, fun b hb => ?_⟩
+  · refine (hw.addTerm t).setEnv fun b hb => ?_
     rcases List.mem_cons.mp hb with rfl | hb
     · exact db.mem_addTerm t
     · exact (hw.addTerm t).envInTerms b hb
   · exact hw.addEq t₁ t₂
-  · exact hw.addRow f as vs
+  · exact hw.addTerm _
 
 theorem evalActions_contained {db db' : Database} {as : List Action}
     (h : evalActions db as = some db') : db.Contained db' := by
@@ -414,16 +399,13 @@ theorem evalAction_envAgree {d₁ d₂ : Database} (h : d₁.EnvAgree d₂) (a :
     simp only [evalAction, ← h.sig, ← Expr.eval_agree (sig := d₁.sig) h.env e]
     cases e.eval d₁.sig d₁.env with
     | none => exact .none
-    | some t =>
-      exact .some ⟨h.sig, by simp [Database.addTerm, h.terms],
-        by simp [Database.addTerm, h.rows], h.eqs, h.rules, h.env⟩
+    | some t => exact .some (h.addTerm t)
   | letBind v e =>
     simp only [evalAction, ← h.sig, ← Expr.eval_agree (sig := d₁.sig) h.env e]
     cases e.eval d₁.sig d₁.env with
     | none => exact .none
     | some t =>
-      refine .some ⟨h.sig, by simp [Database.addTerm, h.terms],
-        by simp [Database.addTerm, h.rows], h.eqs, h.rules, fun w => ?_⟩
+      refine .some ⟨h.sig, (h.addTerm t).eqs, h.rules, fun w => ?_⟩
       by_cases hw : w = v <;> simp [hw, h.env w]
   | union e₁ e₂ =>
     simp only [evalAction, ← h.sig, ← Expr.eval_agree (sig := d₁.sig) h.env e₁,
@@ -434,9 +416,8 @@ theorem evalAction_envAgree {d₁ d₂ : Database} (h : d₁.EnvAgree d₂) (a :
       cases e₂.eval d₁.sig d₁.env with
       | none => exact .none
       | some t₂ =>
-        exact .some ⟨h.sig, by simp [Database.addEq, Database.addTerm, h.terms],
-          by simp [Database.addEq, Database.addTerm, h.rows],
-          by simp [Database.addEq, h.eqs], h.rules, h.env⟩
+        exact .some ⟨h.sig,
+          by simp only [Database.addEq_eqs, ((h.addTerm t₁).addTerm t₂).eqs], h.rules, h.env⟩
   | set f args out =>
     simp only [evalAction, ← h.sig, ← Expr.evalList_agree (sig := d₁.sig) h.env args,
       ← Expr.evalList_agree (sig := d₁.sig) h.env out]
@@ -445,8 +426,7 @@ theorem evalAction_envAgree {d₁ d₂ : Database} (h : d₁.EnvAgree d₂) (a :
     | some as =>
       cases Expr.evalList d₁.sig out d₁.env with
       | none => exact .none
-      | some vs =>
-        exact .some (h.addRow f as vs)
+      | some vs => exact .some (h.addTerm _)
 
 theorem evalActions_envAgree {d₁ d₂ : Database} (h : d₁.EnvAgree d₂) (as : List Action) :
     Option.Rel Database.EnvAgree (evalActions d₁ as) (evalActions d₂ as) := by
@@ -473,7 +453,7 @@ theorem evalActions_envAgree {d₁ d₂ : Database} (h : d₁.EnvAgree d₂) (as
 theorem evalLocalActions_agree {db : Database} (as : List Action) {σ₁ σ₂ : Env}
     (h : Env.Agree σ₁ σ₂) : evalLocalActions db as σ₁ = evalLocalActions db as σ₂ := by
   have hE : Database.EnvAgree { db with env := db.env ++ σ₁ } { db with env := db.env ++ σ₂ } :=
-    ⟨rfl, rfl, rfl, rfl, rfl, Env.Agree.append_left db.env h⟩
+    ⟨rfl, rfl, rfl, Env.Agree.append_left db.env h⟩
   have hrel := evalActions_envAgree hE as
   simp only [evalLocalActions]
   cases h₁ : evalActions { db with env := db.env ++ σ₁ } as with
@@ -518,19 +498,16 @@ theorem evalLocalActions_sig {db db' : Database} {as : List Action} {σ : Env}
 theorem evalLocalActions_contained {db db' : Database} {as : List Action} {σ : Env}
     (h : evalLocalActions db as σ = some db') : db.Contained db' := by
   obtain ⟨_, hv, rfl⟩ := evalLocalActions_eq_some h
-  exact ⟨(evalActions_contained hv).terms, (evalActions_contained hv).rows,
-    (evalActions_contained hv).eqs⟩
+  exact ⟨(evalActions_contained hv).eqs⟩
 
 /-- Local actions preserve well-formedness provided the substitution only mentions
 terms the database holds — which is what `ValidEnv` guarantees. -/
 theorem evalLocalActions_wf {db db' : Database} (hw : db.WF) {as : List Action} {σ : Env}
     (hσ : ∀ b ∈ σ, b.2 ∈ db.terms) (h : evalLocalActions db as σ = some db') : db'.WF := by
-  have hw' : Database.WF { db with env := db.env ++ σ } := by
-    refine ⟨hw.subtermClosed, hw.eqsInTerms, fun b hb => ?_⟩
-    exact (List.mem_append.mp hb).elim (hw.envInTerms b) (hσ b)
   obtain ⟨d, hv, rfl⟩ := evalLocalActions_eq_some h
-  have hd := evalActions_wf hw' hv
-  exact ⟨hd.subtermClosed, hd.eqsInTerms,
-    fun b hb => (evalActions_contained hv).terms (hw.envInTerms b hb)⟩
+  have hd := evalActions_wf (hw.appendEnv hσ) hv
+  exact ⟨by simpa using hd.eqsRefl, by simpa using hd.subtermClosed,
+    fun b hb => Database.terms_setEnvRules ▸ (evalActions_contained hv).terms
+      (Database.terms_setEnv ▸ hw.envInTerms b hb)⟩
 
 end Egglog
