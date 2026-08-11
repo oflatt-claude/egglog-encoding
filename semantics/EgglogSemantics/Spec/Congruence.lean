@@ -6,7 +6,7 @@ import EgglogSemantics.Spec.Database
 
 `Cong db a b` says `a = b` is derivable in `db`. The closure is an **inductive
 predicate**, not a set of pairs the state carries and repairs to a fixpoint: the only
-place congruence is consulted is e-matching's side conditions (`MValidSubst`), which ask
+place congruence is consulted is e-matching's side conditions (`ValidSubst`), which ask
 for a derivation directly.
 
 Subterm closure is not a rule here. It changes the term set rather than the relation, and
@@ -40,14 +40,5 @@ inductive CongList (db : Database) : List Term → List Term → Prop where
       Cong db a b → CongList db as bs → CongList db (a :: as) (b :: bs)
 
 end
-
-/-- `a = b` holds in `db` once both terms are built.
-
-Adding a term asserts nothing, so this is a conservative reading of `Cong` rather than a
-weaker relation; on `a b ∈ db.terms` under `Database.WF` the two coincide.
-`Spec/Merge.lean`'s `MCongOn` is the same move for a pattern's operands, and needs a
-separate operand list because there the added terms are not the related ones. -/
-def CongOn (db : Database) (a b : Term) : Prop :=
-  Cong ((db.addTerm a).addTerm b) a b
 
 end Egglog

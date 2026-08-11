@@ -287,12 +287,12 @@ theorem rebuilt_rekeys {P : Program} {d : Database}
   have hext : ∀ (as vs : List Term) {t : Term}, t ∈ d.terms →
       t ∈ ((d.addTerms as).addTerms vs).terms := by
     intro _ _ _ ht; exact mem_addTerms (mem_addTerms ht)
-  -- the two `MValidSubst`s
-  have s1 : MValidSubst d (.values [.var "@e"] viewF [.var "@c0"]) σ₁ := by
+  -- the two `ValidSubst`s
+  have s1 : ValidSubst d (.values [.var "@e"] viewF [.var "@c0"]) σ₁ := by
     refine ⟨⟨?_, ?_⟩, .values (by rw [Expr.evalList_cons, Expr.eval_var, l1e]; rfl)
       (by rw [Expr.evalList_cons, Expr.eval_var, l1c]; rfl)
-      (mCongListOn_append.mpr (.cons (.refl (hext _ _ hcT)) .nil))
-      (mCongListOn_append.mpr (.cons (.refl (hext _ _ heT)) .nil)) hview⟩
+      (congListOn_append.mpr (.cons (.refl (hext _ _ hcT)) .nil))
+      (congListOn_append.mpr (.cons (.refl (hext _ _ heT)) .nil)) hview⟩
     · rw [hv1]; exact List.Perm.refl _
     · rintro ⟨v, t⟩ hb
       rw [d1] at hb
@@ -300,11 +300,11 @@ theorem rebuilt_rekeys {P : Program} {d : Database}
       rcases hb with ⟨-, rfl⟩ | ⟨-, rfl⟩
       · exact heT
       · exact hcT
-  have s2 : MValidSubst d (.values [.var "@x"] ufName [.var "@c0"]) σ₂ := by
+  have s2 : ValidSubst d (.values [.var "@x"] ufName [.var "@c0"]) σ₂ := by
     refine ⟨⟨?_, ?_⟩, .values (by rw [Expr.evalList_cons, Expr.eval_var, l2x]; rfl)
       (by rw [Expr.evalList_cons, Expr.eval_var, l2c]; rfl)
-      (mCongListOn_append.mpr (.cons (.refl (hext _ _ hcT)) .nil))
-      (mCongListOn_append.mpr (.cons (.refl (hext _ _ hxT)) .nil)) huf⟩
+      (congListOn_append.mpr (.cons (.refl (hext _ _ hcT)) .nil))
+      (congListOn_append.mpr (.cons (.refl (hext _ _ hxT)) .nil)) huf⟩
     · rw [hv2]; exact List.Perm.refl _
     · rintro ⟨v, t⟩ hb
       rw [d2] at hb
@@ -313,7 +313,7 @@ theorem rebuilt_rekeys {P : Program} {d : Database}
       · exact hxT
       · exact hcT
   -- the query substitution
-  have hq : MValidQuerySubst d colRuleF.query σ := by
+  have hq : ValidQuerySubst d colRuleF.query σ := by
     refine ⟨[σ₁, σ₂], ?_, ?_⟩
     · exact .cons s1 (.cons s2 .nil)
     · refine .step ⟨?_, rfl⟩ (.single σ)
@@ -381,38 +381,27 @@ theorem not_rebuilt₀ : ¬ Rebuilt P₀ d₀ := fun hreb =>
 
 /-! ### Generic tools for the positive direction -/
 
-/-! In a database with no asserted equalities whose constructor rows are all genuine
-constructor rows, `MCong` is syntactic equality (`encode_mcong_eq`'s content). -/
+/-! In a database with no asserted equalities `Cong` is syntactic equality
+(`encode_cong_eq`'s content): `congr` relates two applications of one name whose
+arguments are already equal. -/
 mutual
 
-/-- `MCong` is syntactic equality there. -/
-theorem mcong_eq {db : Database} (heq : db.eqs = ∅)
-    (hrows : ∀ r ∈ db.rows, db.sig.IsCtor r.fn →
-      r.out = [.app r.fn r.args]) {x y : Term} (h : MCong db x y) : x = y := by
+/-- `Cong` is syntactic equality there. -/
+theorem cong_eq {db : Database} (heq : db.eqs = ∅) {x y : Term} (h : Cong db x y) :
+    x = y := by
   match h with
   | .assert hm => rw [heq] at hm; simp at hm
   | .refl _ => rfl
-  | .symm h => exact (mcong_eq heq hrows h).symm
-  | .trans h₁ h₂ => exact (mcong_eq heq hrows h₁).trans (mcong_eq heq hrows h₂)
-  | .fd ha hb hu hl hxy =>
-    have hab := mcongList_eq heq hrows hl
-    have hA := hrows _ ha hu
-    have hB := hrows _ hb hu
-    simp only at hA hB
-    subst hab
-    rw [hA, hB] at hxy
-    simp only [List.zip_cons_cons, List.zip_nil_left, List.mem_cons, List.not_mem_nil,
-      or_false, Prod.mk.injEq] at hxy
-    obtain ⟨rfl, rfl⟩ := hxy
-    rfl
+  | .symm h => exact (cong_eq heq h).symm
+  | .trans h₁ h₂ => exact (cong_eq heq h₁).trans (cong_eq heq h₂)
+  | .congr _ _ hl => rw [congList_eq heq hl]
 
-/-- `mcong_eq` over lists. -/
-theorem mcongList_eq {db : Database} (heq : db.eqs = ∅)
-    (hrows : ∀ r ∈ db.rows, db.sig.IsCtor r.fn →
-      r.out = [.app r.fn r.args]) {xs ys : List Term} (h : MCongList db xs ys) : xs = ys := by
+/-- `cong_eq` over lists. -/
+theorem congList_eq {db : Database} (heq : db.eqs = ∅) {xs ys : List Term}
+    (h : CongList db xs ys) : xs = ys := by
   match h with
   | .nil => rfl
-  | .cons hab hl => rw [mcong_eq heq hrows hab, mcongList_eq heq hrows hl]
+  | .cons hab hl => rw [cong_eq heq hab, congList_eq heq hl]
 
 end
 
@@ -573,18 +562,9 @@ theorem sub₁ : ∀ t ∈ terms₁, t.subterms ⊆ d₁.terms ∧ t.ctorRows �
         show _ ∈ rows₁; decide
       · exact absurd (isSubterm_lit hs') (by simp)
 
-/-! ### `d₁` satisfies the `MCong`-is-equality hypotheses -/
+/-! ### `d₁` satisfies the `Cong`-is-equality hypothesis -/
 
 theorem eqs₁ : d₁.eqs = ∅ := rfl
-
-theorem ctorRows₁ : ∀ r ∈ d₁.rows, d₁.sig.IsCtor r.fn →
-    r.out = [.app r.fn r.args] := by
-  intro r hr
-  have hr : r ∈ rows₁ := hr
-  simp only [rows₁, List.mem_cons, List.not_mem_nil, or_false] at hr
-  rcases hr with rfl | rfl | rfl | rfl | rfl | rfl <;> intro h
-  · rfl
-  all_goals exact absurd h (Signature.not_isCtor rfl)
 
 /-! ### Conjunct 2: `d₁` is `MergeSaturated`
 
@@ -595,7 +575,7 @@ theorem mergeSaturated₁ : MergeSaturated d₁ := by
   intro db' hstep
   cases hstep with
   | @collide dmid f as bs a b vs body res ha hb hl hm hact hres =>
-    have hab : as = bs := mcongList_eq eqs₁ ctorRows₁ hl
+    have hab : as = bs := congList_eq eqs₁ hl
     subst hab
     have haL : Row.mk f as a ∈ rows₁ := ha
     have hbL : Row.mk f as b ∈ rows₁ := hb
@@ -656,7 +636,7 @@ theorem mergeSaturated₁ : MergeSaturated d₁ := by
 /-! ### Conjunct 1 at `d₁`: the row set is closed under all three maintenance rules
 
 Each of the three rules concludes one row, determined by the two rows its body matched.
-Since `MCong d₁` is syntactic equality (`mcong_eq` + `eqs₁`/`ctorRows₁`), a firing is
+Since `Cong d₁` is syntactic equality (`cong_eq` + `eqs₁`), a firing is
 exactly a pair of rows of the right two functions joined on a column, so these three
 decidable closure facts are the whole finite content of `Rebuilt`'s first conjunct at
 `d₁`. -/
@@ -717,28 +697,7 @@ theorem mem_of_lookup {v : Var} {σ : Env} {t : Term} (h : Env.lookup v σ = som
     · simp only [if_neg hvw] at h
       exact List.Mem.tail _ (ih h)
 
-/-- The extended database a `MMatches.eq` premise talks about still has
-`MCong = (· = ·)`. -/
-theorem ctorRows_addTerm {db : Database} {t : Term}
-    (h : ∀ r ∈ db.rows, db.sig.IsCtor r.fn → r.out = [.app r.fn r.args]) :
-    ∀ r ∈ (db.addTerm t).rows, (db.addTerm t).sig.IsCtor r.fn →
-      r.out = [.app r.fn r.args] := by
-  intro r hr hu
-  rcases hr with hr | hr
-  · exact h r hr hu
-  · exact hr.1
-
-/-- `ctorRows_addTerm` over a list: the extension a `MMatches.values` premise reads
-its congruence in. -/
-theorem ctorRows_addTerms {db : Database} {ts : List Term}
-    (h : ∀ r ∈ db.rows, db.sig.IsCtor r.fn → r.out = [.app r.fn r.args]) :
-    ∀ r ∈ (db.addTerms ts).rows, (db.addTerms ts).sig.IsCtor r.fn →
-      r.out = [.app r.fn r.args] := by
-  induction ts generalizing db with
-  | nil => exact h
-  | cons t ts ih => exact ih (ctorRows_addTerm h)
-
-/-- Inverting `MValidSubst` on the one pattern shape every maintenance rule uses: a
+/-- Inverting `ValidSubst` on the one pattern shape every maintenance rule uses: a
 one-column row atom at a variable key.
 
 Shorter than it was, because a read is now the atom itself rather than an `.eq` whose
@@ -746,12 +705,10 @@ right-hand side read a row, and the `Prim.ofName`/`mergeOf` side conditions that
 out the other evaluation rules are gone.
 
 Both congruence premises are read in the database extended with the atom's operands, so
-`mcong_eq`'s two side conditions are discharged there: `addTerms` touches neither `eqs`
-nor any constructor's rows beyond the constructor rows it adds. -/
+`cong_eq`'s side condition is discharged there: `addTerms` does not touch `eqs`. -/
 theorem invert_eq_pattern {d : Database} (heq : d.eqs = ∅)
-    (hrows : ∀ r ∈ d.rows, d.sig.IsCtor r.fn → r.out = [.app r.fn r.args])
     {G : FnName} {V W : Var} {σ : Env}
-    (h : MValidSubst d (.values [.var V] G [.var W]) σ) :
+    (h : ValidSubst d (.values [.var V] G [.var W]) σ) :
     (Env.dom σ).Perm (Expr.freeVarsList [Expr.var V] d.env ∪
         Expr.freeVarsList [Expr.var W] d.env) ∧
       ∃ tv tw, Env.lookup V (d.env ++ σ) = some tv ∧
@@ -763,9 +720,8 @@ theorem invert_eq_pattern {d : Database} (heq : d.eqs = ∅)
     obtain ⟨tw, rfl, hw⟩ := mevalList_one has
     have heq' : ((d.addTerms [tw]).addTerms [tv]).eqs = ∅ := by
       rw [addTerms_eqs, addTerms_eqs]; exact heq
-    have hrows' := ctorRows_addTerms (ts := [tv]) (ctorRows_addTerms (ts := [tw]) hrows)
-    have hb : [tw] = _ := mcongList_eq heq' hrows' (mCongListOn_append.mp hts)
-    have hw' : [tv] = _ := mcongList_eq heq' hrows' (mCongListOn_append.mp hus)
+    have hb : [tw] = _ := congList_eq heq' (congListOn_append.mp hts)
+    have hw' : [tv] = _ := congList_eq heq' (congListOn_append.mp hus)
     subst hb; subst hw'
     exact ⟨tv, tw, meval_var' hv, meval_var' hw, hrow⟩
 
@@ -823,9 +779,9 @@ theorem two_pattern_firing {V₁ W₁ V₂ W₂ A B : Var} {G₁ G₂ F : FnName
         | single =>
           obtain ⟨hcompat, rfl⟩ := hu
           obtain ⟨hd1, tv1, tw1, h1v, h1w, hr1⟩ :=
-            invert_eq_pattern eqs₁ ctorRows₁ s1
+            invert_eq_pattern eqs₁ s1
           obtain ⟨hd2, tv2, tw2, h2v, h2w, hr2⟩ :=
-            invert_eq_pattern eqs₁ ctorRows₁ s2
+            invert_eq_pattern eqs₁ s2
           rw [hfv1] at hd1
           rw [hfv2] at hd2
           rw [evalActions_cons] at hact
@@ -961,14 +917,15 @@ end RebuiltVacuity
 
 /-! # `CongOn` cannot express existence
 
-`Spec/Congruence.lean` defines `CongOn db a b := Cong ((db.addTerm a).addTerm b) a b`:
-build both terms, *then* ask. Building is what lets it speak about applications the source
-never held, and at **distinct** terms that is exactly right. On the **diagonal** it
-collapses — `addTerm a` puts `a` into the term set, so `Cong.refl` closes `CongOn db a a`
-for every `db` and every `a`, with no reference to either.
+`Spec/Merge.lean` defines `CongOn db ts a b := Cong (db.addTerms ts) a b`, and the M11
+statements read it at `ts = [a, b]`: build both terms, *then* ask. Building is what lets
+it speak about applications the source never held, and at **distinct** terms that is
+exactly right. On the **diagonal** it collapses — `addTerms` puts `a` into the term set,
+so `Cong.refl` closes `CongOn db [a, a] a a` for every `db` and every `a`, with no
+reference to either.
 
 `Cong` does not do this: `Cong.not_of_empty` says nothing at all is derivable in
-`Database.empty`, `CongOn db a a` included. So the collapse is `CongOn`'s alone, and it is
+`Database.empty`, `CongOn db [a, a] a a` included. So the collapse is `CongOn`'s alone, and it is
 not a fact about congruence.
 
 ## The consequence for `Encoding/Proofs.lean`
@@ -984,10 +941,10 @@ the first that is the common case rather than an edge one. `Encoding/Encode.lean
 for **every** application it encodes — `encodeBuild_emits_identity_view_row` below is that
 action list, by `rfl`. So the row hypothesis of `encode_rows_sound`'s second conjunct is
 satisfied by an *identity* view row, at which the conclusion is
-`CongOn src (.app f es) (.app f es)`: `congOn_refl`, discharged without looking at `src`,
-at `P`, at `tgt`, or at the row. `encode_rows_sound_conj2_at_identity` is that whole
-obligation, proved. **The row-soundness theorem says nothing about the most common row in
-the target.**
+`CongOn src [.app f es, .app f es] (.app f es) (.app f es)`: `congOn_refl`, discharged
+without looking at `src`, at `P`, at `tgt`, or at the row.
+`encode_rows_sound_conj2_at_identity` is that whole obligation, proved. **The
+row-soundness theorem says nothing about the most common row in the target.**
 
 ## The fix, not taken here
 
@@ -1002,14 +959,15 @@ so this file records the shape and stops. Two that would work:
 
 What would *not* be right is "replace `CongOn` by `Cong`". `CongOn` is the correct
 relation for the job it was introduced for: after `(Add 1 2)` and `(union 1 2)` the
-rebuild re-keys `@AddView [1,1] ↦ Add[1,2]`, and `CongOn src (Add 1 1) (Add 1 2)` is a
-true and non-vacuous claim that `Cong src` cannot even state, because `Add 1 1` was never
-built and `Cong` is restricted to `src.terms`. The defect is confined to the diagonal. -/
+rebuild re-keys `@AddView [1,1] ↦ Add[1,2]`, and
+`CongOn src [Add 1 1, Add 1 2] (Add 1 1) (Add 1 2)` is a true and non-vacuous claim that
+`Cong src` cannot even state, because `Add 1 1` was never built and `Cong` is restricted
+to `src.terms`. The defect is confined to the diagonal. -/
 
 /-- **`CongOn` is unconditionally reflexive.** No well-formedness, no membership, no
 signature, no program: `addTerm` puts the term in and `Cong.refl` reads it straight back
 out. Contrast `Cong.not_of_empty`. -/
-theorem congOn_refl {db : Database} {a : Term} : CongOn db a a :=
+theorem congOn_refl {db : Database} {a : Term} : CongOn db [a, a] a a :=
   Cong.refl (Or.inr a.self_mem_subterms)
 
 namespace CongOnVacuity
@@ -1021,7 +979,7 @@ def junk : Term := .app "nope" [.lit (.int 0)]
 /-- **The junk term, in the empty database.** `CongOn` relates it to itself: `Database.empty`
 has no signature, no terms, no rows and no equalities, and `junk` could not be built even
 if it had. -/
-theorem congOn_empty_junk : CongOn Database.empty junk junk := congOn_refl
+theorem congOn_empty_junk : CongOn Database.empty [junk, junk] junk junk := congOn_refl
 
 /-- The contrast that makes the point: on the same database and the same term, `Cong` is
 false. `CongOn` is not a conservative reading of `Cong` on the diagonal — it is a constant
@@ -1044,7 +1002,7 @@ that obligation verbatim — same row hypothesis, same conclusion — for arbitr
 needed: `congOn_refl` closes it. -/
 theorem encode_rows_sound_conj2_at_identity {src tgt : Database} {f : FnName}
     {es : List Term} (_hrow : Row.mk (viewName f) es [Term.app f es] ∈ tgt.rows) :
-    CongOn src (.app f es) (.app f es) := congOn_refl
+    CongOn src [.app f es, .app f es] (.app f es) (.app f es) := congOn_refl
 
 /-- The same collapse in `encode_proof_view_rows_check`, whose `CongOn` conjunct runs the
 other way round. A two-column identity view row leaves `Checks P pf e (.app f es)` as the
@@ -1052,13 +1010,13 @@ statement's entire content. -/
 theorem encode_proof_view_rows_check_congOn_at_identity {src tgt : Database} {f : FnName}
     {es : List Term} {pf : Term}
     (_hrow : Row.mk (viewName f) es [Term.app f es, pf] ∈ tgt.rows) :
-    CongOn src (.app f es) (.app f es) := congOn_refl
+    CongOn src [.app f es, .app f es] (.app f es) (.app f es) := congOn_refl
 
 /-- And in `encode_proof_rows_check` and `encode_rows_sound`'s first conjunct: a `@UF` row
 whose key is its own parent is a root, which every interned term is until something unions
 it. The `CongOn` conjunct is free there too. -/
 theorem encode_rows_sound_conj1_at_root {src tgt : Database} {k : Term}
-    (_hrow : Row.mk ufName [k] [k] ∈ tgt.rows) : CongOn src k k := congOn_refl
+    (_hrow : Row.mk ufName [k] [k] ∈ tgt.rows) : CongOn src [k, k] k k := congOn_refl
 
 end CongOnVacuity
 end Egglog

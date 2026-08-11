@@ -80,7 +80,7 @@ checked against. -/
 /-- A query substitution together with the globals models exactly the scope the
 query binds. -/
 theorem Query.bind_models {db : Database} {Γ : Scope} (hm : Γ.Models db.env) {q : Query}
-    {σ : Env} (hσ : MValidQuerySubst db q σ) : (Query.bind q Γ).Models (db.env ++ σ) := by
+    {σ : Env} (hσ : ValidQuerySubst db q σ) : (Query.bind q Γ).Models (db.env ++ σ) := by
   intro v
   rw [Query.bind, List.mem_union_iff, Env.dom_append, List.mem_append, hm v,
     hσ.mem_dom_iff, Query.mem_vars]
@@ -96,7 +96,7 @@ theorem Query.bind_models {db : Database} {Γ : Scope} (hm : Γ.Models db.env) {
 
 theorem evalLocalActions_isSome_of_scoped {db : Database} {Γ : Scope}
     (hm : Γ.Models db.env) {r : Rule} (hr : r.Scoped Γ) (hre : r.Evaluable db.sig)
-    {σ : Env} (hσ : MValidQuerySubst db r.query σ) :
+    {σ : Env} (hσ : ValidQuerySubst db r.query σ) :
     ∃ d, evalLocalActions db r.actions σ = some d := by
   obtain ⟨d, hd, _⟩ := evalActions_isSome_of_scoped
     (db := { db with env := db.env ++ σ }) (Query.bind_models hm hσ) hr.2 hre.2

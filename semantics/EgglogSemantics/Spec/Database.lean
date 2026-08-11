@@ -67,8 +67,8 @@ def ctorRowsOf (terms : Set Term) : Set Row :=
 
 /-- The database's rows are exactly the constructor rows its terms induce. True of
 `empty`, preserved by `addTerm`/`addEq`, and false as soon as a `set` writes a `:merge`
-function's row. Under it the functional dependency `MCong.fd` coincides with plain
-congruence — `Proofs/Merge.lean`'s `mcong_iff_cong`. -/
+function's row. It is the strongest of the three row conditions here, and the one that
+gives `Proofs/Congruence.lean`'s `Cong.fd` its hypothesis for free. -/
 def CtorRows (db : Database) : Prop := db.rows = ctorRowsOf db.terms
 
 /-- Every application the database holds is a **declared** constructor's.
@@ -94,8 +94,8 @@ def addTerms (ts : List Term) (db : Database) : Database :=
   ts.foldl (fun d t => d.addTerm t) db
 
 /-- `(set (f as…) vs)`: build the operands, then assert the row. Only *asserted* — a
-collision with a congruent key is resolved by `MCong.fd` or by `MergeStep`, neither of
-which removes this row. -/
+collision with a congruent key is resolved by `MergeStep`, which does not remove this
+row. -/
 def addRow (f : FnName) (as vs : List Term) (db : Database) : Database :=
   { (db.addTerms as).addTerms vs with
     rows := insert ⟨f, as, vs⟩ ((db.addTerms as).addTerms vs).rows }

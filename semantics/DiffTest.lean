@@ -359,7 +359,7 @@ private def readPair : Rule where
 /-! ### Reading a `:merge` function from a rule body
 
 `MERGE.md` calls this the difftest fragment's boundary: every merge case so far *writes*
-`Dist` and queries only constructors, so the read path — `MMatches.values`, reachable
+`Dist` and queries only constructors, so the read path — `Matches.values`, reachable
 through `execM` — had **no coverage at all**. That is the shape of the `min`/`max` bug: a
 path the suite exercised zero times while the pass count said everything was fine.
 
@@ -1071,8 +1071,8 @@ widening. **Item 5 is open**, and `mrand-28` is red on it.
    egglog flattens the fact to `G(a, b, x), Dist(x, o)` and matches through congruence,
    answering `Hit 1`; the model answered `Hit 0`. Reachable from `genMergeReadRule`'s
    free-key draw, which is how it turned up. Both `Spec/` and `Impl/` were wrong here, and
-   in the same place: `MMatches.values` compared the evaluated operands with `MCongList
-   db`, and `MCong db` relates only terms `db` holds, so the specification could not admit
+   in the same place: `Matches.values` compared the evaluated operands with `CongList
+   db`, and `Cong db` relates only terms `db` holds, so the specification could not admit
    the match either.
 2. **`old`/`new` at a rebuild collision followed insertion age here and key canonicity
    there** — *fixed*, and pinned by the six `canon-*` cases above. `mergeOneWith` took the
@@ -1320,7 +1320,7 @@ builds a `Hit`, so whether and how often it fired is visible in `(print-size)`.
 
 This is the path `MERGE.md` called the fragment boundary — "merge functions are written
 and never read" — and leaving it there meant the read path, reachable through `execM` from
-`MValidSubst`, had **no** coverage. Reading an analysis function in a rule body is ordinary
+`ValidSubst`, had **no** coverage. Reading an analysis function in a rule body is ordinary
 egglog, so there was no reason for the boundary except that nothing had run the merge
 implementation.
 

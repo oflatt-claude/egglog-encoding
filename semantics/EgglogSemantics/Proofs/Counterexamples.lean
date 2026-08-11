@@ -5,11 +5,15 @@ import EgglogSemantics.Proofs.Merge
 # Machine-checked falsity witnesses for `Proofs/Merge.lean`'s refinement chain
 
 Two defects, each with a concrete compiling counterexample, plus three refutations of
-statements that were tried without the hypotheses they now carry, plus two witnesses that a
-hypothesis a *proved* theorem carries cannot be dropped —
-`execM_reachable_needs_setLegal` and `mono_recorded_decl_false`. Nothing here is admitted,
-nothing uses `native_decide`, and no `Classical.choice` enters beyond what `Mathlib`
-already pulls in.
+statements that were tried without the hypotheses they now carry. Nothing here is
+admitted, nothing uses `native_decide`, and no `Classical.choice` enters beyond what
+`Mathlib` already pulls in.
+
+Two further witnesses used to live here — that `Program.SetLegal` could not be dropped
+from `exec_programStep`, and that `CmdStep.mono_recorded` needed a hypothesis at `.decl`.
+Both turned on the specification reading congruence through `rows` and `sig`. `Cong` reads
+neither, so both are gone; the two sections below record what they said and what is left
+open.
 
 **Declaration is required** (`Signature.IsCtor`), so every witness that builds a term
 declares its constructors. That is not bookkeeping: three of them turned on a name being
@@ -280,7 +284,7 @@ theorem mergeRound_inv_false : ∃ d : FDatabase, d.Inv ∧ ¬ d.mergeRound.Inv 
 
 /-! ## The two matching statements
 
-`FDatabase.patternHolds_MValidSubst` and `FDatabase.matchQuery_MValidQuerySubst` are
+`FDatabase.patternHolds_validSubst` and `FDatabase.matchQuery_validQuerySubst` are
 false without the hypotheses they now carry, for two **independent** reasons: the first
 needs `ValidEnv`, and the second's `σ` *is* a valid env at both its patterns. Both
 witnesses live in a one-term database — `FDatabase.empty` plus the literal `0` — whose
@@ -307,13 +311,13 @@ theorem holds_lit : patternHolds dEx (.expr (.lit (.int 0))) [("x", t0)] = true 
   simp only [patternHolds, Expr.eval, decide_eq_true_eq]
   exact ⟨t0, t0_mem, t0_cong⟩
 
-/-- **`FDatabase.patternHolds_MValidSubst` is false without `ValidEnv`.**
-`MValidSubst` carries `ValidEnv (p.freeVars db.env) db σ`, which pins `Env.dom σ` to
+/-- **`FDatabase.patternHolds_validSubst` is false without `ValidEnv`.**
+`ValidSubst` carries `ValidEnv (p.freeVars db.env) db σ`, which pins `Env.dom σ` to
 a permutation of the pattern's free variables; `(Expr.lit _).freeVars` is `[]` and `σ`
 binds `x`. -/
-theorem patternHolds_MValidSubst_false :
+theorem patternHolds_validSubst_false :
     ¬ ∀ (d : FDatabase), d.Inv → ∀ (p : Pattern) (σ : Env),
-        patternHolds d p σ = true → MValidSubst d.toDatabase p σ := by
+        patternHolds d p σ = true → ValidSubst d.toDatabase p σ := by
   intro H
   have hbad := H dEx dEx_inv (.expr (.lit (.int 0))) [("x", t0)] holds_lit
   simpa [Env.dom, Pattern.freeVars, Expr.freeVars] using hbad.1.1
@@ -352,17 +356,17 @@ theorem unionAll_sum_length {σs : List Env} {σ : Env} (h : Env.UnionAll σs σ
     simp only [List.map_cons, List.sum_cons, List.length_append] at ih ⊢
     omega
 
-/-- **`FDatabase.matchQuery_MValidQuerySubst` is false without `Env.Agree`.**
+/-- **`FDatabase.matchQuery_validQuerySubst` is false without `Env.Agree`.**
 `[("x", t0)]` is enumerated for `qEx`, and `ValidEnv` holds for it at *both* patterns — so
-this is not the `ValidEnv` defect again. `MValidQuerySubst` needs one substitution per
+this is not the `ValidEnv` defect again. `ValidQuerySubst` needs one substitution per
 pattern, each of length `1`, concatenated to give `σ`; that would make `σ` have length
 `2`. -/
-theorem matchQuery_MValidQuerySubst_false :
+theorem matchQuery_validQuerySubst_false :
     ¬ ∀ (d : FDatabase), d.Inv → ∀ (q : Query) (σ : Env),
-        σ ∈ matchQuery d q → MValidQuerySubst d.toDatabase q σ := by
+        σ ∈ matchQuery d q → ValidQuerySubst d.toDatabase q σ := by
   intro H
   obtain ⟨σs, hall, hu⟩ := H dEx dEx_inv qEx [("x", t0)] mem_matchQuery_ex
-  have hlen : ∀ ρ, MValidSubst dEx.toDatabase (.expr (.var "x")) ρ → ρ.length = 1 := by
+  have hlen : ∀ ρ, ValidSubst dEx.toDatabase (.expr (.var "x")) ρ → ρ.length = 1 := by
     intro ρ hρ
     have := hρ.1.1.length_eq
     simpa [Env.dom, Pattern.freeVars, Expr.freeVars, show dEx.env = [] from rfl, Env.lookup]
@@ -378,334 +382,133 @@ theorem matchQuery_MValidQuerySubst_false :
           hlen _ h1, hlen _ h2] at this
         simp at this
 
-/-! ## `execM_reachable`'s `SetLegal` hypothesis cannot be dropped
+/-! ## Where `execM_reachable`'s `SetLegal` witness went
 
-`Proofs/Merge.lean`'s `execM_reachable` carries three hypotheses. Two are forced by the
-counterexamples in its own docstring; this section is the third, which is the one that
-would look droppable — no primitive is named, nothing is declared, and the program is four
-commands long.
+There used to be a witness here — `(datatype S (f) (g)) (set (f) 0) (set (f) 1)
+(rule ((= 0 1)) ((g))) (run)` — that `Program.SetLegal` could not be dropped from
+`execM_reachable` and `exec_programStep`. It worked because the specification read
+congruence as a relation that consulted `rows`: the two `set`s left two rows of the
+constructor `f` at one key, the functional dependency derived `0 = 1`, and the
+interpreter's `closureF`, which computes `Cong`, did not.
 
-**The mechanism.** `(set (f) 0)` and `(set (f) 1)` leave two rows of `f` at the same
-(empty) key with different outputs. `f` is declared a **constructor**, so `MCong.fd` —
-which *is* the functional dependency — derives `0 = 1` from the pair. `Cong` has no such
-rule: it relates only what `eqs` asserts and what congruence of applications gives, and
-neither applies to two literals. The interpreter decides matching through `closureF`,
-which computes exactly `Cong`. So the query `((= 0 1))` matches in the specification and
-not in the interpreter, the relational round adds the head's term where the interpreter's
-round adds nothing, and the two rounds differ.
+`Spec/` no longer has that relation. `Cong` reads `terms` and `eqs` and nothing else, so
+`(set (f) 0)` and `(set (f) 1)` leave a stray row that *neither* side's congruence sees
+and the query `((= 0 1))` matches in neither. The program is still one egglog's front end
+rejects, and `Action.SetLegal` still rejects it; what is gone is the proof that the
+hypothesis is *necessary*.
 
-`Database.CtorRows` is exactly the condition that excludes this, `Action.SetLegal` is how
-the semantics enforces it statically (`Database.not_ctorRows_addRow` is the same failure at
-its smallest), and `Proofs/Step.lean`'s `Database.CtorState` is where the two meet.
+`exec_programStep` and `execM_reachable` still carry it, because
+`Database.CtorState.rows` is what the induction re-establishes at each command and
+`Action.SetLegal` is what preserves it. Whether the hypothesis could now be dropped
+outright is open, and is not settled here.
 
-The two declarations are both `(datatype …)`, so `Program.CtorDecls` still holds and the
-`set`s are still the one thing `Program.SetLegal` forbids. There is no `:merge` body, so
-nothing here needs the nullary-key trick: `run` reduces by `rfl` because every action is a
-`set` with an empty key and a literal value. -/
-
-/-- `(rule ((= 0 1)) ((g)))`. Its head builds a term the interpreter's round cannot. -/
-def badRule : Rule := ⟨[.eq (.lit (.int 0)) (.lit (.int 1))], [.expr (.app "g" [])]⟩
-
-/-- `(datatype S (f) (g)) (set (f) 0) (set (f) 1) (rule ((= 0 1)) ((g))) (run)`.
-
-Declares only constructors, so `Program.CtorDecls` holds, and its two `set`s are the one
-thing `Program.SetLegal` forbids. -/
-def badProgram : Program :=
-  [.decl "f" (ctorDecl 0), .decl "g" (ctorDecl 0),
-    .action (.set "f" [] [.lit (.int 0)]), .action (.set "f" [] [.lit (.int 1)]),
-    .rule badRule, .run]
-
-/-- The signature the two declarations leave. -/
-def badSig : Signature :=
-  Function.update (Function.update (fun _ => none) "f" (some (ctorDecl 0)))
-    "g" (some (ctorDecl 0))
-
-/-- The state `badProgram`'s first five commands run to. -/
-def badDb : Database :=
-  { (({ Database.empty with sig := badSig }.addRow "f" [] [.lit (.int 0)]).addRow "f" []
-      [.lit (.int 1)]) with rules := insert badRule ∅ }
-
-theorem badDb_sig : badDb.sig.AllConstructors := by
-  intro f
-  show Signature.mergeOf badSig f = none
-  simp only [Signature.mergeOf, badSig, Function.update_apply]
-  split <;> [rfl; split] <;> rfl
-
-theorem badDb_eqs : badDb.eqs = ∅ := by simp [badDb, Database.empty]
-
-theorem badDb_terms : badDb.terms = {Term.lit (.int 0), Term.lit (.int 1)} := by
-  simp [badDb, Database.addRow, Database.addTerms, Database.addTerm, Database.empty]
-  ext t
-  simp [Set.mem_insert_iff]
-  tauto
-
-theorem badDb_row0 : Row.mk "f" [] [Term.lit (.int 0)] ∈ badDb.rows := by
-  simp [badDb, Database.addRow, Database.addTerms, Database.addTerm, Database.empty]
-
-theorem badDb_row1 : Row.mk "f" [] [Term.lit (.int 1)] ∈ badDb.rows := by
-  simp [badDb, Database.addRow, Database.addTerms, Database.addTerm, Database.empty]
-
-theorem badDb_mem_rules {r : Rule} : r ∈ badDb.rules ↔ r = badRule := by simp [badDb]
+What the same program *does* still witness is below: `Proofs/Congruence.lean`'s `Cong.fd`
+has a hypothesis, and a `set` on a constructor is a state a program reaches where that
+hypothesis is false and the functional dependency fails. -/
 
 theorem forall₂_eq_list {as bs : List Term} (h : List.Forall₂ (· = ·) as bs) : as = bs := by
   induction h with
   | nil => rfl
   | cons hab _ ih => rw [hab, ih]
 
-/-- The functional dependency fires on the two rows the `set`s wrote: `f` is a declared
-constructor, and the keys are equal. -/
-theorem badDb_mcong :
-    MCong ((badDb.addTerm (.lit (.int 0))).addTerm (.lit (.int 1)))
-      (.lit (.int 0)) (.lit (.int 1)) :=
-  .fd (f := "f") (as := []) (bs := []) (a := [.lit (.int 0)]) (b := [.lit (.int 1)])
-    (Or.inl (Or.inl badDb_row0)) (Or.inl (Or.inl badDb_row1))
-    ⟨ctorDecl 0, rfl, rfl⟩ .nil (by simp)
+/-- `(datatype S (c) (d) (f)) (set (f) (c)) (set (f) (d))`. Declares only constructors,
+and its two `set`s are the one thing `Program.SetLegal` forbids. -/
+def setCtorProgram : Program :=
+  [ .decl "c" (ctorDecl 0), .decl "d" (ctorDecl 0), .decl "f" (ctorDecl 0),
+    .action (.set "f" [] [.app "c" []]), .action (.set "f" [] [.app "d" []]) ]
 
-/-- `Cong` does not fire: `eqs` is empty and no application is involved, so `Cong.le` at
-equality closes it. -/
-theorem badDb_not_cong :
-    ¬ Cong ((badDb.addTerm (.lit (.int 0))).addTerm (.lit (.int 1)))
-      (.lit (.int 0)) (.lit (.int 1)) := by
+def cTerm : Term := .app "c" []
+def dTerm : Term := .app "d" []
+
+def setCtorSig₁ : Database :=
+  { Database.empty with sig := Function.update Database.empty.sig "c" (some (ctorDecl 0)) }
+def setCtorSig₂ : Database :=
+  { setCtorSig₁ with sig := Function.update setCtorSig₁.sig "d" (some (ctorDecl 0)) }
+def setCtorSig : Database :=
+  { setCtorSig₂ with sig := Function.update setCtorSig₂.sig "f" (some (ctorDecl 0)) }
+
+/-- After `(set (f) (c))`. -/
+def setCtorDb₁ : Database := setCtorSig.addRow "f" [] [cTerm]
+
+/-- After `(set (f) (d))`: two rows of the constructor `f` at the same (empty) key,
+recording two different terms. -/
+def setCtorDb : Database := setCtorDb₁.addRow "f" [] [dTerm]
+
+theorem setCtor_eval₁ :
+    evalAction setCtorSig (.set "f" [] [.app "c" []]) = some setCtorDb₁ := rfl
+
+theorem setCtor_eval₂ :
+    evalAction setCtorDb₁ (.set "f" [] [.app "d" []]) = some setCtorDb := rfl
+
+/-- **The state is reachable.** No merge phase does anything — every declaration is a
+constructor — so each action is its own step. -/
+theorem setCtor_programStep : ProgramStep Database.empty setCtorProgram setCtorDb :=
+  .cons .decl (.cons .decl (.cons .decl
+    (.cons (.action setCtor_eval₁ .refl) (.cons (.action setCtor_eval₂ .refl) .nil))))
+
+theorem setCtor_row_c : Row.mk "f" [] [cTerm] ∈ setCtorDb.rows := by
+  simp [setCtorDb, setCtorDb₁, Database.addRow, Database.addTerms, Database.addTerm]
+
+theorem setCtor_row_d : Row.mk "f" [] [dTerm] ∈ setCtorDb.rows := by
+  simp [setCtorDb, Database.addRow]
+
+theorem setCtor_isCtor : setCtorDb.sig.IsCtor "f" := ⟨ctorDecl 0, rfl, rfl⟩
+
+theorem setCtor_eqs : setCtorDb.eqs = ∅ := rfl
+
+/-- **`Cong.fd`'s hypothesis is false there.** `f` is a declared constructor and its row
+records `(c)`, which is not `.app "f" []`. -/
+theorem setCtor_not_ctorShaped :
+    ¬ ∀ r ∈ setCtorDb.rows, setCtorDb.sig.IsCtor r.fn →
+      r.out = [.app r.fn r.args] ∧ Term.app r.fn r.args ∈ setCtorDb.terms := by
   intro h
-  have heq : (Term.lit (.int 0)) = Term.lit (.int 1) :=
-    Cong.le (R := (· = ·)) (fun a b hm => by simp [badDb_eqs] at hm) (fun _ _ => rfl)
-      (fun _ _ h => h.symm) (fun _ _ _ h₁ h₂ => h₁.trans h₂)
+  have := (h ⟨"f", [], [cTerm]⟩ setCtor_row_c setCtor_isCtor).1
+  simp [cTerm] at this
+
+/-- **…and the functional dependency genuinely fails.** The two rows are both present,
+their keys are equal, and `f` is a declared constructor; `Cong` still does not relate the
+outputs, because `eqs` is empty and the two terms head different names.
+
+This is the whole of the difference a row-reading congruence would have made, and it is
+confined to programs `Action.SetLegal` rejects. -/
+theorem setCtor_not_cong : ¬ Cong setCtorDb cTerm dTerm := by
+  intro h
+  have heq : cTerm = dTerm :=
+    Cong.le (R := (· = ·)) (fun a b hm => absurd (setCtor_eqs ▸ hm) (by simp))
+      (fun _ _ => rfl) (fun _ _ h => h.symm) (fun _ _ _ h₁ h₂ => h₁.trans h₂)
       (fun _ _ _ _ _ hl => by rw [forall₂_eq_list hl]) h
-  simp at heq
+  simp [cTerm, dTerm] at heq
 
-theorem badDb_mvalid : MValidSubst badDb (.eq (.lit (.int 0)) (.lit (.int 1))) [] :=
-  ⟨⟨by simp [Pattern.freeVars, Expr.freeVars], by simp⟩,
-    .eq (w := .lit (.int 0)) (t₁ := .lit (.int 0)) (t₂ := .lit (.int 1))
-      (by simp [badDb_terms]) rfl rfl
-      (mCongOn_pair.mpr (.refl (by simp [badDb_terms]))) (mCongOn_pair.mpr badDb_mcong)⟩
-
-theorem badDb_mvalidQuery : MValidQuerySubst badDb badRule.query [] :=
-  ⟨[[]], .cons badDb_mvalid .nil, .single []⟩
-
-/-- The relational round does add something: `MCong` matches the query, so the head runs
-and `g` appears. -/
-theorem badDb_runRules_mem : Term.app "g" [] ∈ (RunRules badDb).terms := by
-  have hstep : evalLocalActions badDb badRule.actions ([] : Env) =
-      some { ({ badDb with env := badDb.env ++ ([] : Env) }).addTerm (Term.app "g" []) with
-        env := badDb.env, rules := badDb.rules } := by
-    have hact : evalAction { badDb with env := badDb.env ++ ([] : Env) }
-        (.expr (.app "g" []))
-        = some (({ badDb with env := badDb.env ++ ([] : Env) }).addTerm (.app "g" [])) := by
-      rw [evalAction, Expr.eval_app_ctor (by simp [Prim.ofName])
-        (show Signature.IsCtor _ "g" from ⟨ctorDecl 0, rfl, rfl⟩)]
-      rfl
-    rw [evalLocalActions, show badRule.actions = [Action.expr (.app "g" [])] from rfl,
-      evalActions_cons, hact]
-    rfl
-  set d : Database := { ({ badDb with env := badDb.env ++ ([] : Env) }).addTerm
-    (Term.app "g" []) with env := badDb.env, rules := badDb.rules } with hdef
-  have hmemS : d ∈ {d | ∃ r ∈ badDb.rules, d ∈ RuleResults badDb r} :=
-    ⟨badRule, badDb_mem_rules.mpr rfl, [], badDb_mvalidQuery, hstep⟩
-  have hmemd : Term.app "g" [] ∈ d.terms := Database.mem_addTerm _ _
-  exact Or.inr (Set.mem_biUnion hmemS hmemd)
-
-section
--- `closure` is well-founded recursion, so it is sealed against kernel reduction;
--- `unseal` lets `decide` run the interpreter's matcher below.
-unseal closure
-
-/-- **The interpreter's round does not.** Its matcher decides `((= 0 1))` through
-`closureF`, which computes `Cong` and so answers `false` where `MCong` answers `true`.
-Computed rather than proved: `closureF` is what `patternHolds` calls, so running it *is*
-the statement that no substitution matches. -/
-theorem badProgram_exec :
-    ∃ d, exec badProgram = some d ∧ Term.app "g" [] ∉ d.terms :=
-  ⟨_, rfl, by decide⟩
-
-end
-
-theorem badProgram_ctorDecls : badProgram.CtorDecls := by
+theorem setCtorProgram_ctorDecls : setCtorProgram.CtorDecls := by
   intro c hc
-  simp only [badProgram, List.mem_cons, List.not_mem_nil, or_false] at hc
-  rcases hc with rfl | rfl | rfl | rfl | rfl | rfl <;> trivial
+  simp only [setCtorProgram, List.mem_cons, List.not_mem_nil, or_false] at hc
+  rcases hc with rfl | rfl | rfl | rfl | rfl <;> trivial
 
-/-- **No state without `(g)` in it is one the relation reaches.**
+/-- The one check that rejects it. -/
+theorem setCtorProgram_not_setLegal :
+    ¬ setCtorProgram.SetLegal Database.empty.sig := by
+  rintro ⟨-, -, -, hs, -⟩
+  exact hs (by decide)
 
-The first five commands are forced — `CmdStep.det` reads each of them back against the
-step it obviously takes, using that `MergeClosure` is the identity on a constructor
-signature — and at the sixth `RunStep.eq_runRules` pins the result to `RunRules badDb`,
-which `badDb_runRules_mem` says holds `(g)`. -/
-theorem badProgram_not_programStep {D : Database} (hg : Term.app "g" [] ∉ D.terms) :
-    ¬ ProgramStep Database.empty badProgram D := by
-  intro h
-  simp only [badProgram] at h
-  obtain ⟨c₁, g₀, k₀⟩ := h.cons_inv
-  obtain ⟨c₂, g₁, k₁'⟩ := k₀.cons_inv
-  obtain ⟨d₁, h₀, k₁⟩ := k₁'.cons_inv
-  obtain ⟨d₂, h₁, k₂⟩ := k₁.cons_inv
-  obtain ⟨d₃, h₂, k₃⟩ := k₂.cons_inv
-  obtain ⟨d₄, h₃, k₄⟩ := k₃.cons_inv
-  have hempty : Database.empty.sig.AllConstructors := Database.CtorState.empty.sig
-  have f₀ : c₁ = { Database.empty with
-      sig := Function.update (fun _ => none) "f" (some (ctorDecl 0)) } :=
-    g₀.det hempty CmdStep.decl
-  subst f₀
-  have hsig₁ : Signature.AllConstructors
-      (Function.update (fun _ => none) "f" (some (ctorDecl 0))) :=
-    hempty.sigBind (c := .decl "f" (ctorDecl 0)) rfl
-  have f₁ : c₂ = { Database.empty with sig := badSig } := g₁.det hsig₁ CmdStep.decl
-  subst f₁
-  have hsig₂ : badSig.AllConstructors := hsig₁.sigBind (c := .decl "g" (ctorDecl 0)) rfl
-  have e₀ : d₁ = { Database.empty with sig := badSig }.addRow "f" [] [Term.lit (.int 0)] :=
-    h₀.det hsig₂ (CmdStep.action rfl Relation.ReflTransGen.refl)
-  subst e₀
-  have e₁ : d₂ = ({ Database.empty with sig := badSig }.addRow "f" []
-      [Term.lit (.int 0)]).addRow "f" [] [Term.lit (.int 1)] :=
-    h₁.det hsig₂ (CmdStep.action rfl Relation.ReflTransGen.refl)
-  subst e₁
-  have e₂ : d₃ = badDb := h₂.det hsig₂ CmdStep.rule
-  subst e₂
-  have e₃ := k₄.nil_inv
-  subst e₃
-  cases h₃ with
-  | run hrun => exact hg ((RunStep.eq_runRules badDb_sig hrun) ▸ badDb_runRules_mem)
-
-/-- **`execM_reachable`'s `Program.SetLegal` hypothesis is necessary.** There is a program
-satisfying the other one — it declares only constructors — whose `exec` state no
-`ProgramStep` reaches.
-
-Since `exec_programStep` is a biconditional, this refutes both halves of it at once: the
-interpreter's state is not one the relation reaches, and the relation's state is not one
-the interpreter computes. -/
-theorem execM_reachable_needs_setLegal :
-    ∃ (p : Program) (d : FDatabase), p.CtorDecls ∧ exec p = some d ∧
-      ¬ ProgramStep FDatabase.empty.toDatabase p d.toDatabase := by
-  obtain ⟨d, hd, hg⟩ := badProgram_exec
-  refine ⟨badProgram, d, badProgram_ctorDecls, hd, ?_⟩
-  rw [FDatabase.toDatabase_empty]
-  exact badProgram_not_programStep (by simpa using hg)
 
 /-! ## `CmdStep.mono_recorded` at `.decl`
 
-The two witnesses that bound what that case can assume. Both are still true; what changed
-is which hypothesis they point at.
+Both witnesses that used to bound this case are gone, for different reasons. -/
 
-`Database.Recorded` reads a key up to `MCong`, and `MCong.fd` fires only at a constructor,
-so a declaration that stops a name being one takes a derivation away. The first witness is
-that program — it **re**declares a constructor `:no-merge` — and it says the case needs a
-hypothesis about the declaration. `Cmd.DeclFresh` is that hypothesis, and it is enough,
-because a *first* declaration cannot stop anything being a constructor
-(`MCong.mono_update`).
+/-! ### The `.decl` case no longer needs a hypothesis
 
-The second witness used to say that the other candidate hypothesis — "the specification
-witness holds no row of `f`" — was unavailable, because a rule head could name a function
-nobody declared and the specification's stale reads fired it. Requiring declaration is what
-retires that: the head no longer evaluates, so the row is not reachable and the program is
-not `Program.Evaluable`. It is kept below in that form. -/
+The witness that used to sit here declared `f` a constructor, gave it two rows at one key
+whose outputs the functional dependency equated, and then *re*declared `f` `:no-merge` —
+which took the derivation away without removing a term, a row or an equality, so
+`Database.Recorded` was destroyed by a command that added nothing.
 
-/-! ### The `.decl` case needs a hypothesis -/
+`Cong` reads neither `sig` nor `rows`, so no declaration can destroy a derivation and the
+witness cannot be rebuilt. `CmdStep.mono_recorded` and `ProgramStep.mono_recorded` have
+correspondingly lost their `Cmd.DeclFresh` hypothesis, and `Cong.mono_update` is the
+`.decl` case in one line.
 
-def d0 : Term := .lit (.int 0)
-def d1 : Term := .lit (.int 1)
-def d2 : Term := .lit (.int 2)
-
-def declTerms : Set Term := {d0, d1, d2}
-
-/-- `f` before the command: a declared constructor, which is what makes its two rows an
-`fd` premise. -/
-def declSig : Signature := Function.update (fun _ => none) "f" (some (ctorDecl 0))
-
-/-- The implementation side: one row of `g`, keyed at `d0`. -/
-def declA : Database := ⟨declSig, declTerms, {⟨"g", [d0], [d2]⟩}, ∅, [], ∅⟩
-
-/-- The specification side: the same row keyed at `d1` instead — a rebuild's re-keying —
-plus the two rows of `f` that make `d0` and `d1` congruent. -/
-def declC : Database :=
-  ⟨declSig, declTerms, {⟨"f", [], [d0]⟩, ⟨"f", [], [d1]⟩, ⟨"g", [d1], [d2]⟩}, ∅, [], ∅⟩
-
-/-- `(function f () i64 :no-merge)` — a **re**declaration of the constructor `f`, which is
-exactly what `Cmd.DeclFresh` forbids. -/
-def declDecl : FnDecl := ⟨0, 1, some .noMerge⟩
-
-def declB : Database := { declA with sig := Function.update declA.sig "f" (some declDecl) }
-def declD : Database := { declC with sig := Function.update declC.sig "f" (some declDecl) }
-
-theorem declTerms_subterms : ∀ t ∈ declTerms, t.subterms ⊆ declTerms := by
-  intro t ht s hs
-  simp only [declTerms, Set.mem_insert_iff, Set.mem_singleton_iff] at ht
-  rcases ht with rfl | rfl | rfl <;> cases hs <;> simp [declTerms, d0, d1, d2]
-
-theorem declA_solid : declA.Solid := by
-  refine ⟨⟨declTerms_subterms, ?_, ?_⟩, ?_, ?_⟩
-  · intro p hp; exact absurd hp (by simp [declA])
-  · intro b hb; exact absurd hb (by simp [declA])
-  · intro r hr
-    simp only [declA, Set.mem_singleton_iff] at hr
-    subst hr
-    refine ⟨fun a ha => ?_, fun v hv => ?_⟩
-    · rw [List.mem_singleton] at ha; subst ha; simp [declA, declTerms]
-    · rw [List.mem_singleton] at hv; subst hv; simp [declA, declTerms]
-  · intro r hr
-    obtain ⟨-, hmem⟩ := hr
-    simp only [declA, declTerms, Set.mem_insert_iff, Set.mem_singleton_iff, d0, d1, d2] at hmem
-    rcases hmem with h | h | h <;> exact absurd h (by simp)
-
-/-- Before the declaration `f` is a constructor, so its two rows are an `fd` premise. -/
-theorem declC_isCtor : declC.sig.IsCtor "f" := ⟨ctorDecl 0, rfl, rfl⟩
-
-theorem declC_mcong : MCong declC d0 d1 :=
-  MCong.fd (f := "f") (as := []) (bs := []) (a := [d0]) (b := [d1])
-    (by simp [declC]) (by simp [declC]) declC_isCtor .nil (by simp)
-
-theorem declA_recorded : declA.Recorded declC := by
-  refine ⟨subset_rfl, ?_, subset_rfl⟩
-  intro r hr
-  simp only [declA, Set.mem_singleton_iff] at hr
-  subst hr
-  exact ⟨[d1], .cons declC_mcong .nil, by simp [declC]⟩
-
-/-- After it, `f` is not a constructor and nothing else relates the two keys. -/
-theorem declD_not_mcong : ¬ MCong declD d0 d1 := by
-  intro h
-  have hEq : d0 = d1 := by
-    refine MCong.le (R := fun a b => a = b) (by simp [declD, declC]) (fun _ _ => rfl)
-      (fun _ _ h => h.symm) (fun _ _ _ h₁ h₂ => h₁.trans h₂) ?_ h
-    intro fn as bs a b u v hra hrb hu hl huv
-    simp only [declD, declC, Set.mem_insert_iff, Set.mem_singleton_iff,
-      Row.mk.injEq] at hra hrb
-    rcases hra with ⟨rfl, -, rfl⟩ | ⟨rfl, -, rfl⟩ | ⟨rfl, -, rfl⟩
-    · exact absurd hu (Signature.not_isCtor
-        (show declD.sig.mergeOf "f" = some MergeSpec.noMerge from rfl))
-    · exact absurd hu (Signature.not_isCtor
-        (show declD.sig.mergeOf "f" = some MergeSpec.noMerge from rfl))
-    · rcases hrb with ⟨h1, -, -⟩ | ⟨h1, -, -⟩ | ⟨-, -, rfl⟩
-      · exact absurd h1 (by simp)
-      · exact absurd h1 (by simp)
-      · rw [show ([d2] : List Term).zip [d2] = [(d2, d2)] from rfl, List.mem_singleton,
-          Prod.mk.injEq] at huv
-        exact huv.1.trans huv.2.symm
-  simp [d0, d1] at hEq
-
-theorem declB_not_recorded : ¬ declB.Recorded declD := by
-  intro h
-  obtain ⟨bs, hl, hrow⟩ := h.rows ⟨"g", [d0], [d2]⟩ (by simp [declB, declA])
-  simp only [declD, declC, Set.mem_insert_iff, Set.mem_singleton_iff, Row.mk.injEq] at hrow
-  rcases hrow with ⟨h1, -, -⟩ | ⟨h1, -, -⟩ | ⟨-, rfl, -⟩
-  · exact absurd h1 (by simp)
-  · exact absurd h1 (by simp)
-  · cases hl with
-    | cons hab _ => exact declD_not_mcong hab
-
-/-- **`CmdStep.mono_recorded` is false at `.decl`.** Every hypothesis it carries holds and
-the conclusion does not, so the case needs a hypothesis about `f` that the theorem does
-not yet have. -/
-theorem mono_recorded_decl_false :
-    ∃ (A C B : Database) (f : FnName) (dc : FnDecl),
-      A.Recorded C ∧ A.sig = C.sig ∧ A.env = C.env ∧ A.rules = C.rules ∧ A.Solid ∧
-      CmdStep A (.decl f dc) B ∧ ¬ Cmd.DeclFresh (.decl f dc) A.sig ∧
-      ¬ ∃ D, CmdStep C (.decl f dc) D ∧ B.Recorded D :=
-  ⟨declA, declC, declB, "f", declDecl, declA_recorded, rfl, rfl, rfl, declA_solid, .decl,
-    by rw [show Cmd.DeclFresh (.decl "f" declDecl) declA.sig = (declA.sig "f" = none) from
-        rfl, show declA.sig "f" = some (ctorDecl 0) from rfl]
-       simp,
-    by rintro ⟨D, hD, hrec⟩
-       cases hD
-       exact declB_not_recorded hrec⟩
+`FDatabase.ProgramLegal` still carries `Cmd.DeclUnused`, for an unrelated reason that
+`claim1` above still witnesses: a declaration destroys `FDatabase.Inv`. -/
 
 /-! ### …and the program that used to block the other candidate no longer runs
 

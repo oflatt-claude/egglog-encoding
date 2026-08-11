@@ -16,8 +16,7 @@ theorem Signature.not_isCtor {sig : Signature} {f : FnName} {m : MergeSpec}
   rw [h.mergeOf] at hm; exact absurd hm (by simp)
 
 /-- **An undeclared name is not a constructor.** The one direction the old reading had
-backwards, and the whole content of the change: `Expr.eval` gets stuck on such a name, and
-`MCong.fd` cannot fire at one, so declaring it later takes nothing away. -/
+backwards, and the whole content of the change: `Expr.eval` gets stuck on such a name. -/
 theorem Signature.not_isCtor_of_none {sig : Signature} {f : FnName} (h : sig f = none) :
     ¬ sig.IsCtor f := fun ⟨_, hd, _⟩ => by rw [h] at hd; exact absurd hd (by simp)
 

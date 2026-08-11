@@ -9,8 +9,8 @@ The vocabulary e-matching is stated in: which variables a pattern leaves for the
 to assign, how the substitutions of several patterns are joined, and what it means for one
 to be well formed against a database.
 
-The matching relation itself is `Spec/Merge.lean`'s `MValidSubst`, since a pattern matches
-up to `MCong`. It is declarative rather than a search procedure: a substitution matches
+The matching relation itself is `Spec/Merge.lean`'s `ValidSubst`, since a pattern matches
+up to `Cong`. It is declarative rather than a search procedure: a substitution matches
 when the pattern's *instance* is provably equal to some **witness** the database already
 holds. Enumerating those substitutions is the executable layer's job —
 `Impl/Interp.lean`'s `matchQuery`.

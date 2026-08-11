@@ -23,7 +23,7 @@ Three tables per source constructor `f`, plus one union-find for the (single) so
 `@UF` and `@fView` share one `:merge` body — keep the smaller side and `set` the
 larger's `@UF` edge to it — so a view collision on congruent children unions the two
 e-classes and no congruence rule is needed. Both are `.merge` functions, so the encoded
-program has **no** constructor table at all and `MCong` on the target degenerates to
+program has **no** constructor table at all and `Cong` on the target degenerates to
 syntactic equality: congruence there is entirely simulated.
 
 ## Two deviations forced by the modelled language
@@ -399,7 +399,7 @@ restriction that is permanent rather than a gap: egglog refuses to encode a func
 with a `:merge` action block. -/
 /-- No `set` action. `Action.set` is what a `:merge` function and an encoded rule head
 need; the constructor fragment has neither, so its presence would take the source out of
-`Database.CtorRows` and with it out of `mcong_iff_cong`. -/
+`Database.CtorRows`. -/
 def Action.NoSet : Action → Prop
   | .set _ _ _ => False
   | _ => True
@@ -455,12 +455,12 @@ structure Program.EncodeDomain (P : Program) : Prop where
 
 /-! ### Reading the target
 
-The three notions the M11 theorems are stated over. None of them is `Cong` or `MCong`:
-the encoded program's tables are `.merge` functions, so `Database.CtorRows` fails on the
-target and `mcong_iff_cong` does not apply there. Equality on the target side is *only*
-what `@UF` and the views record.
+The three notions the M11 theorems are stated over. None of them is `Cong`: the encoded
+program's tables are `.merge` functions and it asserts no equalities, so `Cong` on the
+target is syntactic equality. Equality on the target side is *only* what `@UF` and the
+views record.
 
-Source-side equality is `Spec/Congruence.lean`'s `CongOn`, not `Cong`: the rebuild re-keys
+Source-side equality is `Spec/Merge.lean`'s `CongOn`, not `Cong`: the rebuild re-keys
 a view row to its children's leaders, so the encoded database ends up holding rows about
 applications the source never built — `@AddView [1,1] ↦ Add[1,2]` after `(Add 1 2)` and
 `(union 1 2)`. Those rows are still *true*, but only in that sense. -/

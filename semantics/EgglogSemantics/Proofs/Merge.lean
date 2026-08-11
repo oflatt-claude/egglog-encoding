@@ -9,31 +9,20 @@ import EgglogSemantics.Proofs.Interp
 
 `MERGE.md` says which theorem buys what. Five are still unproved; the rest are proved.
 
-The load-bearing one is `mcong_iff_cong`: where the rows are the constructor rows
-(`Database.CtorRows`) and every application the database holds is a declared
-constructor's (`Database.CtorTerms`), the generalized relation is exactly M2's `Cong`.
-That is what makes replacing `Cong` by `MCong` a refactor rather than a rewrite — without
-it every M2–M8 theorem would have to be reproved rather than transported. The second
-hypothesis used to read `Signature.AllConstructors`; declaration being required
-(`Signature.IsCtor`) is what separated the two, since "nothing is a merge function" no
-longer says the applications in `terms` are constructors'.
+M9 gives the state a **row set** and keeps `Spec/Congruence.lean`'s `Cong` as the only
+equality. What a row set adds to congruence is the functional dependency, and that is
+`Proofs/Congruence.lean`'s `Cong.fd` — a theorem, under the hypothesis that a
+constructor's rows have their canonical shape. So every M2–M8 theorem transports
+unchanged, and `closureF`, which reads `terms` and `eqs` and no row, still decides the
+relation the specification's `Database.Out` and `Matches` compare keys with.
 
-Four statements needed repair, and the repairs are the interesting output:
+Two statements needed repair, and the repairs are the interesting output:
 
-* `execM_reachable` is false without side conditions — a `set` on a constructor breaks
-  `CtorRows`, which is the only route from what `closureF` computes to what `MValidSubst`
-  asks. It carries
-  `Program.CtorDecls` and `Program.SetLegal` and is **proved**; its docstring justifies
-  both, and `Proofs/Counterexamples.lean`'s `execM_reachable_needs_setLegal` shows the
-  second cannot be dropped.
-* `MCong.mono`, `MCongList.mono` and `Database.Out.mono` are **false** as stated:
-  `Contained` ignores `sig` and `fd` fires only at `.union`. See
-  `mcong_mono_needs_sig`. They carry `d₁.sig = d₂.sig`.
+* `execM_reachable` is false without side conditions. It carries `Program.CtorDecls` and
+  `Program.SetLegal` and is **proved**; its docstring justifies both.
 * `MergeStep.self_id` and `MergeStep.wf` need the row half of well-formedness
   (`Database.RowsWF`), which `Database.WF` deliberately omits, and `self_id`
   additionally needs `ctorRowsOf db.terms ⊆ db.rows`.
-* `FDatabase.closureF_ok`'s `←` direction is false without "every application the
-  database holds is a `.union` function's".
 
 `MergeStep.diamond_of_join` and `RunStep.unique_of_confluent` are the two `MERGE.md`
 flags as guesses, and both have hypotheses that cannot be used; their docstrings say
@@ -43,242 +32,42 @@ what replaces them.
 namespace Egglog
 /-! ### The constructor fragment collapses
 
-`mcong_iff_cong` says the generalized congruence is the old one there. These say the
-same of the *step* relations: no merge fires, so a round is `RunRules` and nothing
-else. -/
-/-- The rest of M9 collapses too: with no `.merge` function there is no collision to
-resolve, so a round is `RunRules` and nothing else. Companion to `mcong_iff_cong` on
-the *step* side — together they say M9 restricted to constructors is M0–M8 unchanged. -/
+Congruence is M2's already; this says the same of the *step* relations. -/
+/-- With no `.merge` function there is no collision to resolve, so a round is `RunRules`
+and nothing else: M9 restricted to constructors is M0–M8 unchanged. -/
 theorem MergeStep.saturated_of_allConstructors {db : Database}
     (hsig : db.sig.AllConstructors) : MergeSaturated db := by
   intro db' h
   cases h with
   | collide _ _ _ hm _ _ => exact (hsig.elim hm).elim
 
-/-! ### The least-congruence principle
+/-! ### The one signature change worth naming
 
-How every negative fact about the closure gets proved, and the shape the M11
-checker-soundness argument takes. `Cong.le` with the `congr` hypothesis replaced by an
-`fd` one. -/
-mutual
+`Cong` reads neither `sig` nor `rows`, so a declaration cannot take a derivation away.
+Named rather than inlined because `CmdStep.mono_recorded`'s `.decl` case is the only
+place it is spent, and the name says what that case is doing. -/
 
-/-- `MCong db` is the least relation closed under `db`'s assertions, reflexivity on its
-terms, symmetry, transitivity and the functional dependency. -/
-theorem MCong.le {db : Database} {R : Term → Term → Prop}
-    (hassert : ∀ a b, (a, b) ∈ db.eqs → R a b) (hrefl : ∀ a ∈ db.terms, R a a)
-    (hsymm : ∀ a b, R a b → R b a) (htrans : ∀ a b c, R a b → R b c → R a c)
-    (hfd : ∀ f as bs (a b : List Term) x y, Row.mk f as a ∈ db.rows →
-      Row.mk f bs b ∈ db.rows → db.sig.IsCtor f →
-      List.Forall₂ R as bs → (x, y) ∈ a.zip b → R x y)
-    {a b : Term} (h : MCong db a b) : R a b := by
-  match h with
-  | .assert hm => exact hassert _ _ hm
-  | .refl hm => exact hrefl _ hm
-  | .symm h => exact hsymm _ _ (MCong.le hassert hrefl hsymm htrans hfd h)
-  | .trans h₁ h₂ =>
-    exact htrans _ _ _ (MCong.le hassert hrefl hsymm htrans hfd h₁)
-      (MCong.le hassert hrefl hsymm htrans hfd h₂)
-  | .fd hra hrb hu hl hxy =>
-    exact hfd _ _ _ _ _ _ _ hra hrb hu (MCongList.le hassert hrefl hsymm htrans hfd hl) hxy
+/-- Declaring a name preserves every derivation. -/
+theorem Cong.mono_update {db : Database} {f : FnName} {dc : FnDecl} {a b : Term}
+    (h : Cong db a b) :
+    Cong ({ db with sig := Function.update db.sig f (some dc) } : Database) a b :=
+  Cong.mono (show db.Contained { db with sig := Function.update db.sig f (some dc) } from
+    ⟨subset_rfl, subset_rfl, subset_rfl⟩) h
 
-/-- `MCong.le` over key tuples; the companion `MCong.le`'s `fd` case recurses into. -/
-theorem MCongList.le {db : Database} {R : Term → Term → Prop}
-    (hassert : ∀ a b, (a, b) ∈ db.eqs → R a b) (hrefl : ∀ a ∈ db.terms, R a a)
-    (hsymm : ∀ a b, R a b → R b a) (htrans : ∀ a b c, R a b → R b c → R a c)
-    (hfd : ∀ f as bs (a b : List Term) x y, Row.mk f as a ∈ db.rows →
-      Row.mk f bs b ∈ db.rows → db.sig.IsCtor f →
-      List.Forall₂ R as bs → (x, y) ∈ a.zip b → R x y)
-    {as bs : List Term} (h : MCongList db as bs) : List.Forall₂ R as bs := by
-  match h with
-  | .nil => exact .nil
-  | .cons hab hl =>
-    exact .cons (MCong.le hassert hrefl hsymm htrans hfd hab)
-      (MCongList.le hassert hrefl hsymm htrans hfd hl)
-
-end
-
-/-! ### The domain of the relation
-
-A term does not exist by default, so the relation does not relate everything: this is
-what makes a congruence premise about a term the program never built *unsatisfiable*,
-and it is how such a premise is shown vacuous. `Cong.mem_of` for `MCong`. -/
-mutual
-
-/-- Every term a derivation mentions is in the database, so `MCong db` is an equivalence
-relation on `db.terms` and relates nothing outside it.
-
-`Database.RowsWF` is an **added hypothesis** over `Cong.mem_of`'s, and is forced by `fd`:
-its related pair are row *outputs*, and `Database.WF` says nothing about rows, so only
-`RowsWF` puts them in `terms`. `Cong.congr` needed none because it relates applications
-already required to be terms. Every state the refinement chain visits satisfies it —
-it is a field of `FDatabase.Inv`. -/
-theorem MCong.mem_of {db : Database} (hw : db.WF) (hr : db.RowsWF) {a b : Term}
-    (h : MCong db a b) : a ∈ db.terms ∧ b ∈ db.terms := by
-  match h with
-  | .assert hm => exact hw.eqsInTerms _ hm
-  | .refl hm => exact ⟨hm, hm⟩
-  | .symm h => exact (MCong.mem_of hw hr h).symm
-  | .trans h₁ h₂ => exact ⟨(MCong.mem_of hw hr h₁).1, (MCong.mem_of hw hr h₂).2⟩
-  | .fd hra hrb _ _ hxy =>
-    obtain ⟨hx, hy⟩ := List.of_mem_zip hxy
-    exact ⟨(hr _ hra).2 _ hx, (hr _ hrb).2 _ hy⟩
-
-/-- `MCong.mem_of` over key tuples. -/
-theorem MCongList.mem_of {db : Database} (hw : db.WF) (hr : db.RowsWF) {as bs : List Term}
-    (h : MCongList db as bs) :
-    (∀ a ∈ as, a ∈ db.terms) ∧ (∀ b ∈ bs, b ∈ db.terms) := by
-  match h with
-  | .nil => exact ⟨by simp, by simp⟩
-  | .cons hab hl =>
-    refine ⟨fun a ha => ?_, fun b hb => ?_⟩
-    · rcases List.mem_cons.mp ha with rfl | ha
-      · exact (MCong.mem_of hw hr hab).1
-      · exact (MCongList.mem_of hw hr hl).1 a ha
-    · rcases List.mem_cons.mp hb with rfl | hb
-      · exact (MCong.mem_of hw hr hab).2
-      · exact (MCongList.mem_of hw hr hl).2 b hb
-
-end
-
-namespace MCong
-variable {db : Database}
-
-theorem mem_left {a b : Term} (hw : db.WF) (hr : db.RowsWF) (h : MCong db a b) :
-    a ∈ db.terms := (h.mem_of hw hr).1
-
-theorem mem_right {a b : Term} (hw : db.WF) (hr : db.RowsWF) (h : MCong db a b) :
-    b ∈ db.terms := (h.mem_of hw hr).2
-
-end MCong
-
-/-- `MCong db` is an equivalence on `db.terms`, as `Cong.setoid`. Its quotient is the
-e-class set, and the bridge to M11: an e-class here is an `@UF` leader there. -/
-def MCong.setoid (db : Database) : Setoid {t : Term // t ∈ db.terms} where
-  r a b := MCong db a.val b.val
-  iseqv := ⟨fun a => .refl a.property, .symm, .trans⟩
-
-/-! ### `MCongList` is an equivalence
-
-`MCong.setoid` pointwise. `Out.union_cong` needs it: two lookups at one key class reach
-their rows through *different* congruent keys, and `fd` compares those two directly. -/
-theorem MCongList.symm {db : Database} {as bs : List Term} (h : MCongList db as bs) :
-    MCongList db bs as := by
-  match h with
-  | .nil => exact .nil
-  | .cons hab hl => exact .cons hab.symm (MCongList.symm hl)
-
-theorem MCongList.trans {db : Database} {as bs cs : List Term} (h₁ : MCongList db as bs)
-    (h₂ : MCongList db bs cs) : MCongList db as cs := by
-  match h₁, h₂ with
-  | .nil, .nil => exact .nil
-  | .cons hab hl₁, .cons hbc hl₂ => exact .cons (hab.trans hbc) (MCongList.trans hl₁ hl₂)
-
-theorem MCongList.forall₂ {db : Database} {as bs : List Term} (h : MCongList db as bs) :
-    List.Forall₂ (MCong db) as bs := by
-  match h with
-  | .nil => exact .nil
-  | .cons hab hl => exact .cons hab (MCongList.forall₂ hl)
-
-theorem MCongList.ofForall₂ {db : Database} {as bs : List Term}
-    (h : List.Forall₂ (MCong db) as bs) : MCongList db as bs := by
-  induction h with
-  | nil => exact .nil
-  | cons hab _ ih => exact .cons hab ih
-
-/-! ### Monotonicity
-
-Constraint (3). That a merge *adds* the combined row instead of replacing the two it
-combined is exactly what these need.
-
-All three carry an **added hypothesis** `d₁.sig = d₂.sig`, and it is not decoration:
-`Database.Contained` ignores `sig`, while `MCong.fd` fires only where
-`mergeOf f = .union`, so redeclaring `f` as `:no-merge` destroys a derivation without
-removing anything. `mcong_mono_needs_sig` below is the counterexample. Every use in this
-file has it — `MergeStep.sig` and `MergeClosure.sig` — because only `Cmd.decl` writes
-`sig`. -/
-mutual
-
-/-- Adding terms, rows and equalities only adds derivations. `Cong.mono`, with the
-`fd` case in place of `congr`. -/
-theorem MCong.mono {d₁ d₂ : Database} (h : d₁.Contained d₂) (hsig : d₁.sig = d₂.sig)
-    {a b : Term} (hc : MCong d₁ a b) : MCong d₂ a b := by
-  match hc with
-  | .assert hm => exact .assert (h.eqs hm)
-  | .refl hm => exact .refl (h.terms hm)
-  | .symm hc => exact .symm (MCong.mono h hsig hc)
-  | .trans h₁ h₂ => exact .trans (MCong.mono h hsig h₁) (MCong.mono h hsig h₂)
-  | .fd hra hrb hu hl hxy =>
-    exact .fd (h.rows hra) (h.rows hrb) (hsig ▸ hu) (MCongList.mono h hsig hl) hxy
-
-theorem MCongList.mono {d₁ d₂ : Database} (h : d₁.Contained d₂) (hsig : d₁.sig = d₂.sig)
-    {as bs : List Term} (hc : MCongList d₁ as bs) : MCongList d₂ as bs := by
-  match hc with
-  | .nil => exact .nil
-  | .cons hab hl => exact .cons (MCong.mono h hsig hab) (MCongList.mono h hsig hl)
-
-end
-
-/-- **Why `MCong.mono` needs the signature hypothesis.** Two rows of `f` recording
-different outputs at one key make those outputs `fd`-equal while `f` is a constructor.
-Declaring `f` `:no-merge` adds no term, row or equality — so `Contained` still holds —
-and takes the derivation away. -/
-theorem mcong_mono_needs_sig : ∃ d₁ d₂ : Database, ∃ a b : Term,
-    d₁.Contained d₂ ∧ MCong d₁ a b ∧ ¬ MCong d₂ a b := by
-  classical
-  let x : Term := .lit (.int 0)
-  let y : Term := .lit (.int 1)
-  let rows : Set Row := {Row.mk "f" [] [x], Row.mk "f" [] [y]}
-  let d₁ : Database := ⟨fun _ => some ⟨0, 1, none⟩, ∅, rows, ∅, [], ∅⟩
-  let d₂ : Database := ⟨fun _ => some ⟨0, 1, some .noMerge⟩, ∅, rows, ∅, [], ∅⟩
-  refine ⟨d₁, d₂, x, y, ⟨subset_rfl, subset_rfl, subset_rfl⟩, ?_, ?_⟩
-  · exact MCong.fd (f := "f") (as := []) (bs := []) (a := [x]) (b := [y])
-      (by simp [d₁, rows]) (by simp [d₁, rows]) ⟨⟨0, 1, none⟩, rfl, rfl⟩ .nil (by simp)
-  · intro h
-    have hxy : x = y :=
-      MCong.le (R := fun a b => a = b) (by simp [d₂]) (by simp [d₂]) (fun _ _ h => h.symm)
-        (fun _ _ _ h₁ h₂ => h₁.trans h₂)
-        (fun _ _ _ _ _ _ _ _ _ hu _ _ =>
-          absurd hu (by simp [d₂, Signature.IsCtor])) h
-    simp [x, y] at hxy
-
-/-! ### …and the one signature change that is safe
-
-`mcong_mono_needs_sig` says a signature change can destroy a derivation. It can only do so
-by taking `Signature.IsCtor` away from a name, and a **first** declaration takes it away
-from nothing: an undeclared name is not a constructor, so `fd` never fired at it. That is
-the whole content of requiring declaration, and `CmdStep.mono_recorded`'s `.decl` case is
-where it is spent. -/
-mutual
-
-/-- Declaring a name the signature does not yet mention preserves every derivation. -/
-theorem MCong.mono_update {db : Database} {f : FnName} {dc : FnDecl}
-    (hf : db.sig f = none) {a b : Term} (h : MCong db a b) :
-    MCong ({ db with sig := Function.update db.sig f (some dc) } : Database) a b := by
-  match h with
-  | .assert hm => exact .assert hm
-  | .refl hm => exact .refl hm
-  | .symm h => exact .symm (MCong.mono_update hf h)
-  | .trans h₁ h₂ => exact .trans (MCong.mono_update hf h₁) (MCong.mono_update hf h₂)
-  | .fd hra hrb hu hl hxy =>
-    exact .fd hra hrb (Signature.IsCtor.update_of_fresh hf hu)
-      (MCongList.mono_update hf hl) hxy
-
-theorem MCongList.mono_update {db : Database} {f : FnName} {dc : FnDecl}
-    (hf : db.sig f = none) {as bs : List Term} (h : MCongList db as bs) :
-    MCongList ({ db with sig := Function.update db.sig f (some dc) } : Database) as bs := by
-  match h with
-  | .nil => exact .nil
-  | .cons hab hl => exact .cons (MCong.mono_update hf hab) (MCongList.mono_update hf hl)
-
-end
+@[inherit_doc Cong.mono_update]
+theorem CongList.mono_update {db : Database} {f : FnName} {dc : FnDecl} {as bs : List Term}
+    (h : CongList db as bs) :
+    CongList ({ db with sig := Function.update db.sig f (some dc) } : Database) as bs :=
+  CongList.mono (show db.Contained { db with sig := Function.update db.sig f (some dc) } from
+    ⟨subset_rfl, subset_rfl, subset_rfl⟩) h
 
 /-- `Out` is monotone, because both of its conjuncts are. A rule body reading a table
 never *loses* a match — the property an overwriting merge would destroy, and the one
 seminaive evaluation rests on. -/
-theorem Database.Out.mono {d₁ d₂ : Database} (h : d₁.Contained d₂) (hsig : d₁.sig = d₂.sig)
+theorem Database.Out.mono {d₁ d₂ : Database} (h : d₁.Contained d₂)
     {f : FnName} {as vs : List Term} (ho : d₁.Out f as vs) : d₂.Out f as vs := by
   obtain ⟨bs, hl, hrow⟩ := ho
-  exact ⟨bs, MCongList.mono h hsig hl, h.rows hrow⟩
+  exact ⟨bs, CongList.mono h hl, h.rows hrow⟩
 
 /-! ### Recording: containment for an implementation that re-keys
 
@@ -288,13 +77,13 @@ canonical key of its class, which `Out` still reads and `⊆` does not. Everythi
 `Contained` gave the chain has to be given again, and each lemma below is the `Contained`
 one with that single clause changed.
 
-The price shows up in exactly one place, `MCong.fd`: its two rows are now found at
+The price shows up in exactly one place, `Cong.fd`: its two rows are now found at
 *congruent* keys rather than at the same ones, so its key premise has to be recomposed
 from three congruences instead of transported. Every other case is `Contained`'s. -/
-/-- `MCongList` is reflexive on tuples the database holds, which is what makes a row
-`Out` at its own key. `MCong.refl`'s membership side condition is why this is not free. -/
-theorem MCongList.refl_of_mem {db : Database} {as : List Term}
-    (h : ∀ a ∈ as, a ∈ db.terms) : MCongList db as as := by
+/-- `CongList` is reflexive on tuples the database holds, which is what makes a row
+`Out` at its own key. `Cong.refl`'s membership side condition is why this is not free. -/
+theorem CongList.refl_of_mem {db : Database} {as : List Term}
+    (h : ∀ a ∈ as, a ∈ db.terms) : CongList db as as := by
   induction as with
   | nil => exact .nil
   | cons a as ih =>
@@ -304,7 +93,7 @@ theorem MCongList.refl_of_mem {db : Database} {as : List Term}
 too. -/
 theorem Database.out_self {db : Database} {r : Row} (hr : r ∈ db.rows)
     (ha : ∀ a ∈ r.args, a ∈ db.terms) : db.Out r.fn r.args r.out :=
-  ⟨r.args, MCongList.refl_of_mem ha, hr⟩
+  ⟨r.args, CongList.refl_of_mem ha, hr⟩
 
 /-- Every listed term is held by `addTerms`. -/
 theorem Database.mem_terms_addTerms {db : Database} {ts : List Term} {t : Term}
@@ -324,44 +113,39 @@ theorem Term.args_mem_subterms_of_mem_ctorRows {t : Term} {r : Row} (h : r ∈ t
 
 mutual
 
-/-- `MCong.mono` along `Recorded`. -/
-theorem MCong.mono_recorded {d₁ d₂ : Database} (h : d₁.Recorded d₂)
-    (hsig : d₁.sig = d₂.sig) {a b : Term} (hc : MCong d₁ a b) : MCong d₂ a b := by
+/-- `Cong.mono` along `Recorded`. `Recorded` weakens only the row clause, and `Cong`
+reads no rows, so this is `Cong.mono` with the same proof. -/
+theorem Cong.mono_recorded {d₁ d₂ : Database} (h : d₁.Recorded d₂)
+    {a b : Term} (hc : Cong d₁ a b) : Cong d₂ a b := by
   match hc with
   | .assert hm => exact .assert (h.eqs hm)
   | .refl hm => exact .refl (h.terms hm)
-  | .symm hc => exact .symm (MCong.mono_recorded h hsig hc)
-  | .trans h₁ h₂ =>
-    exact .trans (MCong.mono_recorded h hsig h₁) (MCong.mono_recorded h hsig h₂)
-  | .fd hra hrb hu hl hxy =>
-    obtain ⟨as', hla, hra'⟩ := h.rows _ hra
-    obtain ⟨bs', hlb, hrb'⟩ := h.rows _ hrb
-    exact .fd hra' hrb' (hsig ▸ hu)
-      (hla.symm.trans ((MCongList.mono_recorded h hsig hl).trans hlb)) hxy
+  | .symm hc => exact .symm (Cong.mono_recorded h hc)
+  | .trans h₁ h₂ => exact .trans (Cong.mono_recorded h h₁) (Cong.mono_recorded h h₂)
+  | .congr hm₁ hm₂ hl =>
+    exact .congr (h.terms hm₁) (h.terms hm₂) (CongList.mono_recorded h hl)
 
-theorem MCongList.mono_recorded {d₁ d₂ : Database} (h : d₁.Recorded d₂)
-    (hsig : d₁.sig = d₂.sig) {as bs : List Term} (hc : MCongList d₁ as bs) :
-    MCongList d₂ as bs := by
+theorem CongList.mono_recorded {d₁ d₂ : Database} (h : d₁.Recorded d₂)
+    {as bs : List Term} (hc : CongList d₁ as bs) : CongList d₂ as bs := by
   match hc with
   | .nil => exact .nil
-  | .cons hab hl =>
-    exact .cons (MCong.mono_recorded h hsig hab) (MCongList.mono_recorded h hsig hl)
+  | .cons hab hl => exact .cons (Cong.mono_recorded h hab) (CongList.mono_recorded h hl)
 
 end
 
 /-- `Out.mono` along `Recorded`: the key class is searched twice and the two searches
 compose. -/
 theorem Database.Out.mono_recorded {d₁ d₂ : Database} (h : d₁.Recorded d₂)
-    (hsig : d₁.sig = d₂.sig) {f : FnName} {as vs : List Term} (ho : d₁.Out f as vs) :
+    {f : FnName} {as vs : List Term} (ho : d₁.Out f as vs) :
     d₂.Out f as vs := by
   obtain ⟨bs, hl, hrow⟩ := ho
   obtain ⟨cs, hl', hrow'⟩ := h.rows _ hrow
-  exact ⟨cs, (MCongList.mono_recorded h hsig hl).trans hl', hrow'⟩
+  exact ⟨cs, (CongList.mono_recorded h hl).trans hl', hrow'⟩
 
 namespace Database
 namespace Recorded
 
-/-- Reflexivity is **not** free: `Out` reads a key up to congruence and `MCongList` is
+/-- Reflexivity is **not** free: `Out` reads a key up to congruence and `CongList` is
 reflexive only on terms the database holds, so `RowsWF` is the side condition. Every state
 the refinement chain visits has it, as the row half of `FDatabase.Inv`. -/
 theorem refl {db : Database} (h : db.RowsWF) : db.Recorded db :=
@@ -380,23 +164,23 @@ theorem setEnvRules {d₁ d₂ : Database} (h : d₁.Recorded d₂) (σ τ : Env
       { d₂ with env := τ, rules := ss } := by
   have hc : d₂.Contained ({ d₂ with env := τ, rules := ss } : Database) :=
     ⟨subset_rfl, subset_rfl, subset_rfl⟩
-  exact ⟨h.terms, fun r hr => Database.Out.mono hc rfl (h.rows r hr), h.eqs⟩
+  exact ⟨h.terms, fun r hr => Database.Out.mono hc (h.rows r hr), h.eqs⟩
 
 /-- Nothing reads the environment through `Out`, so both sides may be re-based. -/
 theorem setEnv {d₁ d₂ : Database} (h : d₁.Recorded d₂) (σ τ : Env) :
     ({ d₁ with env := σ } : Database).Recorded { d₂ with env := τ } :=
   h.setEnvRules σ τ d₁.rules d₂.rules
 
-theorem trans {d₁ d₂ d₃ : Database} (h₁ : d₁.Recorded d₂) (h₂ : d₂.Recorded d₃)
-    (hsig : d₂.sig = d₃.sig) : d₁.Recorded d₃ :=
+theorem trans {d₁ d₂ d₃ : Database} (h₁ : d₁.Recorded d₂) (h₂ : d₂.Recorded d₃) :
+    d₁.Recorded d₃ :=
   ⟨h₁.terms.trans h₂.terms,
-    fun r hr => Database.Out.mono_recorded h₂ hsig (h₁.rows r hr), h₁.eqs.trans h₂.eqs⟩
+    fun r hr => Database.Out.mono_recorded h₂ (h₁.rows r hr), h₁.eqs.trans h₂.eqs⟩
 
 /-- Growing the right-hand side keeps it a recorder. -/
 theorem trans_contained {d₁ d₂ d₃ : Database} (h₁ : d₁.Recorded d₂)
-    (h₂ : d₂.Contained d₃) (hsig : d₂.sig = d₃.sig) : d₁.Recorded d₃ :=
+    (h₂ : d₂.Contained d₃) : d₁.Recorded d₃ :=
   ⟨h₁.terms.trans h₂.terms,
-    fun r hr => Database.Out.mono h₂ hsig (h₁.rows r hr), h₁.eqs.trans h₂.eqs⟩
+    fun r hr => Database.Out.mono h₂ (h₁.rows r hr), h₁.eqs.trans h₂.eqs⟩
 
 /-! The same operation applied to both sides, as `Contained` has. The added rows are the
 same on both, so they are `Out` at their own keys and only the *old* rows need the
@@ -405,7 +189,7 @@ theorem addTerm_mono {d₁ d₂ : Database} (h : d₁.Recorded d₂) (t : Term) 
     (d₁.addTerm t).Recorded (d₂.addTerm t) := by
   refine ⟨Set.union_subset_union h.terms subset_rfl, ?_, h.eqs⟩
   rintro r (hr | hr)
-  · exact Database.Out.mono (Database.Contained.addTerm t d₂) rfl (h.rows r hr)
+  · exact Database.Out.mono (Database.Contained.addTerm t d₂) (h.rows r hr)
   · exact Database.out_self (Or.inr hr)
       fun a ha => Or.inr (Term.args_mem_subterms_of_mem_ctorRows hr ha)
 
@@ -420,7 +204,7 @@ theorem addEq_mono {d₁ d₂ : Database} (h : d₁.Recorded d₂) (a b : Term) 
   have h' := (h.addTerm_mono a).addTerm_mono b
   have hc : ((d₂.addTerm a).addTerm b).Contained (d₂.addEq a b) :=
     ⟨subset_rfl, subset_rfl, Set.subset_insert _ _⟩
-  exact ⟨h'.terms, fun r hr => Database.Out.mono hc rfl (h'.rows r hr),
+  exact ⟨h'.terms, fun r hr => Database.Out.mono hc (h'.rows r hr),
     Set.insert_subset_insert h.eqs⟩
 
 theorem addRow_mono {d₁ d₂ : Database} (h : d₁.Recorded d₂) (f : FnName)
@@ -432,7 +216,7 @@ theorem addRow_mono {d₁ d₂ : Database} (h : d₁.Recorded d₂) (f : FnName)
   rintro r (rfl | hr)
   · exact Database.out_self (Set.mem_insert _ _) fun a ha =>
       (Database.Contained.addTerms vs _).terms (Database.mem_terms_addTerms ha)
-  · exact Database.Out.mono hc rfl (h'.rows r hr)
+  · exact Database.Out.mono hc (h'.rows r hr)
 
 end Recorded
 
@@ -458,7 +242,7 @@ specification writes it at the key of the row it merged, and `Out` reads the one
 other. -/
 theorem addRow_congr {d₁ d₂ : Database} (h : d₁.Recorded d₂) (hs : d₁.Solid) (f : FnName)
     {as : List Term} (bs vs : List Term) (has : ∀ a ∈ as, a ∈ d₁.terms)
-    (hab : MCongList (d₂.addRow f bs vs) as bs) :
+    (hab : CongList (d₂.addRow f bs vs) as bs) :
     (d₁.addRow f as vs).Recorded (d₂.addRow f bs vs) := by
   have hself : d₁.addTerms as = d₁ :=
     Database.addTerms_eq_self hs.wf hs.rowsComplete has
@@ -466,7 +250,7 @@ theorem addRow_congr {d₁ d₂ : Database} (h : d₁.Recorded d₂) (hs : d₁.
     ((Database.Contained.addTerms bs d₂).addTerms_mono vs).trans
       ⟨subset_rfl, Set.subset_insert _ _, subset_rfl⟩
   have hrest : (d₁.addTerms vs).Recorded (d₂.addRow f bs vs) :=
-    (h.addTerms_mono vs).trans_contained hc (by simp [Database.addTerms_sig])
+    (h.addTerms_mono vs).trans_contained hc
   refine ⟨?_, ?_, ?_⟩
   · show ((d₁.addTerms as).addTerms vs).terms ⊆ _
     rw [hself]; exact hrest.terms
@@ -485,7 +269,7 @@ end Database
 
 Constraint (3), discharged by the representation rather than by an argument: the step
 adds the combined row beside the two it merged, so there is nothing to overwrite. This
-is what lets `MCong.mono`, `Out.mono` and every `WF`-preservation lemma survive into
+is what lets `Cong.mono`, `Out.mono` and every `WF`-preservation lemma survive into
 M9 unchanged. -/
 theorem MergeStep.contained {d₁ d₂ : Database} (h : MergeStep d₁ d₂) :
     d₁.Contained d₂ := by
@@ -806,17 +590,22 @@ theorem Term.blt_linear : (∀ s t : Term, Term.blt s t = true → Term.blt t s 
     (∀ s t u : Term, Term.blt s t = true → Term.blt t u = true → Term.blt s u = true) :=
   ⟨Term.blt_asymm, Term.blt_total, Term.blt_trans⟩
 
-/-- **A `.union` function's outputs are all congruent.**
+/-- **A constructor's outputs are all congruent.**
 
-The functional dependency, stated as what it buys: however many rows a `.union`
-function accumulates at one key class, they are one e-class. For `@UF_<Sort>` this is
-"every parent a term ever had is equal to it"; for `@<C>View` it is congruence. -/
+The functional dependency, stated as what it buys: however many rows a constructor
+accumulates at one key class, they are one e-class. For `@UF_<Sort>` this is
+"every parent a term ever had is equal to it"; for `@<C>View` it is congruence.
+
+`hrow` is `Cong.fd`'s, and is what a `set` on a constructor breaks. -/
 theorem Database.Out.union_cong {db : Database} {f : FnName} {as v w : List Term}
-    {x y : Term} (hsig : db.sig.IsCtor f) (hv : db.Out f as v)
-    (hw : db.Out f as w) (hxy : (x, y) ∈ v.zip w) : MCong db x y := by
+    {x y : Term}
+    (hrow : ∀ r ∈ db.rows, db.sig.IsCtor r.fn →
+      r.out = [.app r.fn r.args] ∧ Term.app r.fn r.args ∈ db.terms)
+    (hsig : db.sig.IsCtor f) (hv : db.Out f as v)
+    (hw : db.Out f as w) (hxy : (x, y) ∈ v.zip w) : Cong db x y := by
   obtain ⟨bs, hlb, hrb⟩ := hv
   obtain ⟨cs, hlc, hrc⟩ := hw
-  exact .fd hrb hrc hsig (hlb.symm.trans hlc) hxy
+  exact Cong.fd hrow hrb hrc hsig (hlb.symm.trans hlc) hxy
 
 /-! ### Invariants over the step relation
 
@@ -954,67 +743,67 @@ theorem ValidEnv.mono {d₁ d₂ : Database} (h : d₁.Contained d₂) {vars : L
 /-- **A larger database admits every match a smaller one does.** Read contrapositively —
 which is how the containment contract uses it — a database missing rows finds at most the
 matches the full one finds. -/
-theorem MValidSubst.mono {d₁ d₂ : Database} (hc : d₁.Contained d₂) (hsig : d₁.sig = d₂.sig)
-    (henv : d₂.env = d₁.env) {p : Pattern} {σ : Env} (h : MValidSubst d₁ p σ) :
-    MValidSubst d₂ p σ := by
+theorem ValidSubst.mono {d₁ d₂ : Database} (hc : d₁.Contained d₂) (hsig : d₁.sig = d₂.sig)
+    (henv : d₂.env = d₁.env) {p : Pattern} {σ : Env} (h : ValidSubst d₁ p σ) :
+    ValidSubst d₂ p σ := by
   have hsig₁ : ∀ t : Term, (d₁.addTerm t).sig = (d₂.addTerm t).sig := fun _ => hsig
   refine ⟨by rw [henv]; exact h.1.mono hc, ?_⟩
   cases h.2 with
   | expr hw he hcong =>
     refine .expr (hc.terms hw) ?_
-      (mCongOn_singleton.mpr
-        (MCong.mono (hc.addTerm_mono _) (hsig₁ _) (mCongOn_singleton.mp hcong)))
+      (congOn_singleton.mpr
+        (Cong.mono (hc.addTerm_mono _) (congOn_singleton.mp hcong)))
     · rw [henv, ← hsig]; exact he
   | eq hw he₁ he₂ hc₁ hc₂ =>
     refine .eq (hc.terms hw) ?_ ?_
-      (mCongOn_pair.mpr (MCong.mono ((hc.addTerm_mono _).addTerm_mono _) hsig
-        (mCongOn_pair.mp hc₁)))
-      (mCongOn_pair.mpr (MCong.mono ((hc.addTerm_mono _).addTerm_mono _) hsig
-        (mCongOn_pair.mp hc₂)))
+      (congOn_pair.mpr (Cong.mono ((hc.addTerm_mono _).addTerm_mono _)
+        (congOn_pair.mp hc₁)))
+      (congOn_pair.mpr (Cong.mono ((hc.addTerm_mono _).addTerm_mono _)
+        (congOn_pair.mp hc₂)))
     · rw [henv, ← hsig]; exact he₁
     · rw [henv, ← hsig]; exact he₂
   | @values vs f as σ us ts ws bs hu ht hk hw hrow =>
     refine .values ?_ ?_
-      (mCongListOn_append.mpr (MCongList.mono ((hc.addTerms_mono ts).addTerms_mono us)
-        (by simp [hsig]) (mCongListOn_append.mp hk)))
-      (mCongListOn_append.mpr (MCongList.mono ((hc.addTerms_mono ts).addTerms_mono us)
-        (by simp [hsig]) (mCongListOn_append.mp hw)))
+      (congListOn_append.mpr (CongList.mono ((hc.addTerms_mono ts).addTerms_mono us)
+        (congListOn_append.mp hk)))
+      (congListOn_append.mpr (CongList.mono ((hc.addTerms_mono ts).addTerms_mono us)
+        (congListOn_append.mp hw)))
       (hc.rows hrow)
     · rw [henv, ← hsig]; exact hu
     · rw [henv, ← hsig]; exact ht
 
-theorem MValidQuerySubst.mono {d₁ d₂ : Database} (hc : d₁.Contained d₂)
+theorem ValidQuerySubst.mono {d₁ d₂ : Database} (hc : d₁.Contained d₂)
     (hsig : d₁.sig = d₂.sig) (henv : d₂.env = d₁.env) {q : Query} {σ : Env}
-    (h : MValidQuerySubst d₁ q σ) : MValidQuerySubst d₂ q σ := by
+    (h : ValidQuerySubst d₁ q σ) : ValidQuerySubst d₂ q σ := by
   obtain ⟨σs, hall, hu⟩ := h
-  exact ⟨σs, hall.imp fun _ _ hv => MValidSubst.mono hc hsig henv hv, hu⟩
+  exact ⟨σs, hall.imp fun _ _ hv => ValidSubst.mono hc hsig henv hv, hu⟩
 
 /-- `ValidEnv.mono` needs only the term half, which `Recorded` has unchanged. -/
 theorem ValidEnv.mono_recorded {d₁ d₂ : Database} (h : d₁.Recorded d₂) {vars : List Var}
     {σ : Env} (hv : ValidEnv vars d₁ σ) : ValidEnv vars d₂ σ :=
   ⟨hv.1, fun b hb => h.terms (hv.2 b hb)⟩
 
-/-- **`MValidSubst.mono` along `Recorded`.** Only the row atom differs from the
+/-- **`ValidSubst.mono` along `Recorded`.** Only the row atom differs from the
 `Contained` proof: the row is found at a *congruent* key, so the atom's key congruence is
 composed with the one `Recorded` supplies. Its value columns are untouched, which is why
 `Database.Recorded` may weaken the key clause and must not weaken the value one. -/
-theorem MValidSubst.mono_recorded {d₁ d₂ : Database} (hc : d₁.Recorded d₂)
+theorem ValidSubst.mono_recorded {d₁ d₂ : Database} (hc : d₁.Recorded d₂)
     (hsig : d₁.sig = d₂.sig) (henv : d₂.env = d₁.env) {p : Pattern} {σ : Env}
-    (h : MValidSubst d₁ p σ) : MValidSubst d₂ p σ := by
+    (h : ValidSubst d₁ p σ) : ValidSubst d₂ p σ := by
   have hsig₁ : ∀ t : Term, (d₁.addTerm t).sig = (d₂.addTerm t).sig := fun _ => hsig
   refine ⟨by rw [henv]; exact h.1.mono_recorded hc, ?_⟩
   cases h.2 with
   | expr hw he hcong =>
     refine .expr (hc.terms hw) ?_
-      (mCongOn_singleton.mpr
-        (MCong.mono_recorded (hc.addTerm_mono _) (hsig₁ _) (mCongOn_singleton.mp hcong)))
+      (congOn_singleton.mpr
+        (Cong.mono_recorded (hc.addTerm_mono _) (congOn_singleton.mp hcong)))
     · rw [henv, ← hsig]; exact he
   | eq hw he₁ he₂ hc₁ hc₂ =>
     refine .eq (hc.terms hw) ?_ ?_
-      (mCongOn_pair.mpr (MCong.mono_recorded ((hc.addTerm_mono _).addTerm_mono _) hsig
-        (mCongOn_pair.mp hc₁)))
-      (mCongOn_pair.mpr (MCong.mono_recorded ((hc.addTerm_mono _).addTerm_mono _) hsig
-        (mCongOn_pair.mp hc₂)))
+      (congOn_pair.mpr (Cong.mono_recorded ((hc.addTerm_mono _).addTerm_mono _)
+        (congOn_pair.mp hc₁)))
+      (congOn_pair.mpr (Cong.mono_recorded ((hc.addTerm_mono _).addTerm_mono _)
+        (congOn_pair.mp hc₂)))
     · rw [henv, ← hsig]; exact he₁
     · rw [henv, ← hsig]; exact he₂
   | @values vs f as σ us ts ws bs hu ht hk hw hrow =>
@@ -1024,21 +813,21 @@ theorem MValidSubst.mono_recorded {d₁ d₂ : Database} (hc : d₁.Recorded d�
       simp [hsig]
     obtain ⟨bs', hbs', hrow'⟩ := hc.rows _ hrow
     refine .values ?_ ?_
-      (mCongListOn_append.mpr
-        ((MCongList.mono_recorded hc' hsig' (mCongListOn_append.mp hk)).trans
-          (MCongList.mono
+      (congListOn_append.mpr
+        ((CongList.mono_recorded hc' (congListOn_append.mp hk)).trans
+          (CongList.mono
             ((Database.Contained.addTerms ts d₂).trans (Database.Contained.addTerms us _))
-            (by simp) hbs')))
-      (mCongListOn_append.mpr (MCongList.mono_recorded hc' hsig' (mCongListOn_append.mp hw)))
+            hbs')))
+      (congListOn_append.mpr (CongList.mono_recorded hc' (congListOn_append.mp hw)))
       hrow'
     · rw [henv, ← hsig]; exact hu
     · rw [henv, ← hsig]; exact ht
 
-theorem MValidQuerySubst.mono_recorded {d₁ d₂ : Database} (hc : d₁.Recorded d₂)
+theorem ValidQuerySubst.mono_recorded {d₁ d₂ : Database} (hc : d₁.Recorded d₂)
     (hsig : d₁.sig = d₂.sig) (henv : d₂.env = d₁.env) {q : Query} {σ : Env}
-    (h : MValidQuerySubst d₁ q σ) : MValidQuerySubst d₂ q σ := by
+    (h : ValidQuerySubst d₁ q σ) : ValidQuerySubst d₂ q σ := by
   obtain ⟨σs, hall, hu⟩ := h
-  exact ⟨σs, hall.imp fun _ _ hv => MValidSubst.mono_recorded hc hsig henv hv, hu⟩
+  exact ⟨σs, hall.imp fun _ _ hv => ValidSubst.mono_recorded hc hsig henv hv, hu⟩
 
 /-! ### Transporting a step
 
@@ -1190,7 +979,7 @@ theorem evalActions_mono_recorded {db D d : Database} (hc : db.Recorded D)
 
 No `env`/`rules` hypothesis is needed: a `MergeStep` overwrites the environment with
 `mergeEnv a b` before running the body and restores the caller's `env`/`rules`
-afterwards, so neither field is ever read. `sig` is needed, because `MCongList.mono` is.
+afterwards, so neither field is ever read. `sig` is needed, because `CongList.mono` is.
 -/
 theorem MergeStep.transport {A C B : Database} (hc : A.Contained C) (hsig : A.sig = C.sig)
     (h : MergeStep A B) : ∃ D, MergeStep C D ∧ B.Contained D ∧ B.sig = D.sig := by
@@ -1200,7 +989,7 @@ theorem MergeStep.transport {A C B : Database} (hc : A.Contained C) (hsig : A.si
         { C with env := mergeEnv a b } := ⟨hc.terms, hc.rows, hc.eqs⟩
     obtain ⟨dC, hstepC, hcont, hsig', henv'⟩ := evalActions_mono hc0 hsig rfl hbody
     refine ⟨{ dC.addRow f as vs with env := C.env, rules := C.rules },
-      .collide (hc.rows hra) (hc.rows hrb) (MCongList.mono hc hsig hcong)
+      .collide (hc.rows hra) (hc.rows hrb) (CongList.mono hc hcong)
         (by rw [← hsig]; exact hm) hstepC
         (hsig' ▸ henv' ▸ hres), ?_, ?_⟩
     · exact ⟨(hcont.addRow_mono f as vs).terms, (hcont.addRow_mono f as vs).rows,
@@ -1234,11 +1023,10 @@ have, kept under its own name because that contrast is the point.
   (`Signature.AllConstructors.sigBind`), which is what makes `MergeStep` vacuous and so
   how the `MergeClosure` phase of `CmdStep.action` gets discharged
   (`MergeClosure.eq_of_allConstructors`).
-* `Program.SetLegal` keeps `Database.CtorRows`, which with the above is `mcong_iff_cong`,
-  which is the only route from what `closureF` computes to what `MValidSubst` asks — so it
-  is what makes a *round* agree. It is not decoration:
-  `Proofs/Counterexamples.lean`'s `execM_reachable_needs_setLegal` is a program satisfying
-  the other whose `exec` state no `ProgramStep` reaches. -/
+* `Program.SetLegal` keeps `Database.CtorRows`, which is what `Database.CtorState` — the
+  bundle the induction re-establishes at each command — carries.
+  `Proofs/Counterexamples.lean` records that its necessity witness is gone and that
+  whether it is still needed is open. -/
 theorem execM_reachable {p : Program} {d : FDatabase} (hdecl : p.CtorDecls)
     (hlegal : p.SetLegal Database.empty.sig) (h : exec p = some d) :
     ProgramStep FDatabase.empty.toDatabase p d.toDatabase := by
@@ -1258,7 +1046,7 @@ that performed none holds no combined row. `execM_reachable` above survives only
 What replaces it is that every row the implementation holds is one the specification
 *records* — `Database.Recorded` — so the implementation may find **fewer** results, never
 more. That is the safe direction, because everything the M11 safety theorem reads is
-positive in the state, so safety transfers downward. `MValidSubst.mono_recorded` is the
+positive in the state, so safety transfers downward. `ValidSubst.mono_recorded` is the
 step that makes "fewer rows" mean "fewer matches" rather than merely "a different
 database".
 
@@ -1283,30 +1071,26 @@ state holding a merge result no `CmdStep` state held. `CmdStep.action` now carri
 `MergeClosure`, which is what egglog does — a bare top-level action is compiled into a
 one-rule run and every rule-set run ends in `merge_all`.
 
-The chain has one prerequisite that is not obvious, and it is why `Cong.toMCong'` exists.
-`patternHolds` compares keys with `congrKeys` at the closure of the database
-extended with the atom's operands, and `closureF`
-computes **`Cong`** — it closes over `eqsF` and `congrPair`, with no notion of a row. The
-specification's row atom compares them with **`MCong`**. So every read the interpreter
-performs has to be re-read as a specification read, and that is exactly `Cong.toMCong'`:
-`CtorTerms` and `RowsComplete` are what license it, and unlike `CtorRows` they survive a
-`:merge` declaration.
+The chain needs no bridge at the congruence step, and that is the point of keeping one
+relation: `patternHolds` compares keys with `congrKeys` at the closure of the database
+extended with the atom's operands, `closureF` closes over `eqsF` and `congrPair` with no
+notion of a row, and the specification's row atom compares them with the same `Cong`.
 
-Hence `Inv`, which is what the induction actually carries. Prove its preservation lemmas
-first; the rest of the chain is structural recursion once they are available. -/
+What the induction does have to carry is `Inv` — the well-formedness the merge passes
+consume. Prove its preservation lemmas first; the rest of the chain is structural
+recursion once they are available. -/
 
 /-- The invariant the refinement chain carries.
 
-`wf` is what `mem_closureF_iff_of_wf` needs; `ctorTerms` and `rowsComplete` are what
-`Cong.toMCong'` needs; `rowsWF` says a row talks only about terms the database holds, and
-`ctorRows` is `closureF_ok`'s `hrow`. All five hold of `FDatabase.empty`.
+`wf` is what `mem_closureF_iff_of_wf` needs; `ctorTerms` and `ctorRows` are what tell the
+merge passes which rows are a constructor's, so that they leave them alone;
+`rowsComplete` and `rowsWF` are the other two thirds of `Database.Solid`, which
+`Database.Recorded.addRow_congr` reads. All five hold of `FDatabase.empty`.
 
-The last two are not decoration. `ctorRows` is the reverse inclusion `RowsComplete` omits,
-restricted to the `.union` functions where it survives a `:merge` declaration, and
-`Action.SetLegal` is what preserves it. `rowsWF` was what kept `Expr.eval`'s lookup branch
-inside the constructor fragment; with reading confined to the query it is no longer load
-bearing for `execAction`, and is kept because it is the row half of `WF` and
-`mergeOneWith` re-establishes it. -/
+`ctorRows` is also `Proofs/Congruence.lean`'s `Cong.fd` hypothesis, with its guard widened
+from `IsCtor r.fn` to `mergeOf r.fn = none`: it is the reverse inclusion `RowsComplete`
+omits, restricted to the functions where it survives a `:merge` declaration, and
+`Action.SetLegal` is what preserves it. -/
 structure FDatabase.Inv (d : FDatabase) : Prop where
   wf : d.WF
   ctorTerms : d.toDatabase.CtorTerms
@@ -1526,32 +1310,28 @@ theorem FDatabase.envAppend_ctorTerm {d : FDatabase} (h : d.Inv) {σ : Env}
   · exact h.env_ctorTerm b hb
   · exact h.ctorTerm_of_mem (hσ b hb)
 
-/-- **`patternHolds` is sound for `MValidSubst`.**
+/-- **`patternHolds` is sound for `ValidSubst`.**
 
 `ValidEnv (p.freeVars d.env) d.toDatabase σ` is load-bearing, not decoration.
 `patternHolds` reads `σ` only through `d.env ++ σ`, so a `σ` carrying bindings the
-pattern never mentions still passes the test, while `MValidSubst`'s `ValidEnv` pins
+pattern never mentions still passes the test, while `ValidSubst`'s `ValidEnv` pins
 `Env.dom σ` to a permutation of the pattern's free variables —
-`Falsity.patternHolds_MValidSubst_false` is the witness. Nothing is lost by requiring
-it: it is a *consequence* of the conclusion (`MValidSubst.validEnv`), so this is the
+`Falsity.patternHolds_validSubst_false` is the witness. Nothing is lost by requiring
+it: it is a *consequence* of the conclusion (`ValidSubst.validEnv`), so this is the
 strongest statement whose conclusion can hold, and it is the hypothesis
 `Proofs/Interp.lean`'s `patternHolds_iff` already carries.
 
-`Interp.lean`'s `patternHolds_iff`, forward direction, under `Inv` instead of
-`CtorTerms`/`CtorRows` — which is what lets it hold once a `:merge` function is declared,
-where `CtorRows` fails. Three gaps to bridge beyond that proof:
-
-* `congrKeys` computes `Cong`, while `MValidSubst` wants `MCong` — `Cong.toMCong'` and
-  `CongList.toMCongList'` close that, and their `CtorTerms`/`RowsComplete` hypotheses are
-  `Inv` fields;
-* every case closes over an *extended* database — `d.addTerm t` for `.expr`, and
-  `(d.addTerms ts).addTerms us` for the row atom's key and value operands — so the bridge
-  is applied at that database's `Inv`, from `Inv.addTerm`/`Inv.addTerms`;
-* those need the instance to be a constructor term, which is
-  `Expr.eval_ctorTerm`/`Expr.evalList_ctorTerm`, which in turn need the `ValidEnv`. -/
-theorem FDatabase.patternHolds_MValidSubst {d : FDatabase} (h : d.Inv) {p : Pattern}
+`Interp.lean`'s `patternHolds_iff`, forward direction, under `Inv` instead of `d.WF` —
+which is what lets it be applied once a `:merge` function is declared. `congrKeys`
+computes the same `Cong` that `ValidSubst` wants, so the only gap is that every case
+closes over an *extended* database — `d.addTerm t` for `.expr`, and
+`(d.addTerms ts).addTerms us` for the row atom's key and value operands — and `Inv` has
+to be re-established there, from `Inv.addTerm`/`Inv.addTerms`. Those need the instance to
+be a constructor term, which is `Expr.eval_ctorTerm`/`Expr.evalList_ctorTerm`, which in
+turn need the `ValidEnv`. -/
+theorem FDatabase.patternHolds_validSubst {d : FDatabase} (h : d.Inv) {p : Pattern}
     {σ : Env} (hv : ValidEnv (p.freeVars d.env) d.toDatabase σ)
-    (hs : patternHolds d p σ = true) : MValidSubst d.toDatabase p σ := by
+    (hs : patternHolds d p σ = true) : ValidSubst d.toDatabase p σ := by
   have hσ := FDatabase.envAppend_ctorTerm h hv.2
   cases p with
   | expr e =>
@@ -1561,30 +1341,17 @@ theorem FDatabase.patternHolds_MValidSubst {d : FDatabase} (h : d.Inv) {p : Patt
     · next t hev =>
       rw [decide_eq_true_eq] at hs
       obtain ⟨w, hwm, hcl⟩ := hs
-      have ht : Term.CtorTerm d.sig t := Expr.eval_ctorTerm hσ hev
-      have hInv := h.addTerm ht
-      have hct := hInv.ctorTerms
-      have hrc := hInv.rowsComplete
-      rw [FDatabase.toDatabase_addTerm] at hct hrc
-      exact ⟨hv, .expr hwm hev (mCongOn_singleton.mpr
-        (Cong.toMCong' hct hrc ((FDatabase.mem_closureF_addTerm h.wf).mp hcl)))⟩
+      exact ⟨hv, .expr hwm hev (congOn_singleton.mpr
+        ((FDatabase.mem_closureF_addTerm h.wf).mp hcl))⟩
   | eq e₁ e₂ =>
     rw [patternHolds] at hs
     split at hs
     · next t₁ t₂ hev₁ hev₂ =>
       rw [Bool.and_eq_true, decide_eq_true_eq, decide_eq_true_eq] at hs
       obtain ⟨heq, w, hwm, hcl⟩ := hs
-      have ht₁ : Term.CtorTerm d.sig t₁ := Expr.eval_ctorTerm hσ hev₁
-      have ht₂ : Term.CtorTerm d.sig t₂ := Expr.eval_ctorTerm hσ hev₂
-      have hInv := (h.addTerm ht₁).addTerm ht₂
-      have hct := hInv.ctorTerms
-      have hrc := hInv.rowsComplete
-      rw [FDatabase.toDatabase_addTerm, FDatabase.toDatabase_addTerm] at hct hrc
       exact ⟨hv, .eq hwm hev₁ hev₂
-        (mCongOn_pair.mpr
-          (Cong.toMCong' hct hrc ((FDatabase.mem_closureF_addTerm₂ h.wf).mp hcl)))
-        (mCongOn_pair.mpr
-          (Cong.toMCong' hct hrc ((FDatabase.mem_closureF_addTerm₂ h.wf).mp heq)))⟩
+        (congOn_pair.mpr ((FDatabase.mem_closureF_addTerm₂ h.wf).mp hcl))
+        (congOn_pair.mpr ((FDatabase.mem_closureF_addTerm₂ h.wf).mp heq))⟩
     · exact absurd hs (by simp)
   | values vs f as =>
     rw [patternHolds] at hs
@@ -1595,40 +1362,31 @@ theorem FDatabase.patternHolds_MValidSubst {d : FDatabase} (h : d.Inv) {p : Patt
       rw [Bool.and_eq_true, Bool.and_eq_true, decide_eq_true_eq] at hcond
       obtain ⟨⟨hfn, hkey⟩, hval⟩ := hcond
       subst hfn
-      have hts : ∀ x ∈ ts, Term.CtorTerm d.sig x := Expr.evalList_ctorTerm hσ ht
-      have hus : ∀ x ∈ us, Term.CtorTerm (d.addTerms ts).sig x := by
-        simpa using Expr.evalList_ctorTerm hσ hu
-      have hInv := (h.addTerms hts).addTerms hus
-      have hct := hInv.ctorTerms
-      have hrc := hInv.rowsComplete
-      rw [FDatabase.toDatabase_addTerms, FDatabase.toDatabase_addTerms] at hct hrc
       exact ⟨hv, .values hu ht
-        (mCongListOn_append.mpr (CongList.toMCongList' hct hrc
-          ((FDatabase.congrTuple_addTerms_iff h.wf).mp hkey)))
-        (mCongListOn_append.mpr (CongList.toMCongList' hct hrc
-          ((FDatabase.congrTuple_addTerms_iff h.wf).mp hval)))
+        (congListOn_append.mpr ((FDatabase.congrTuple_addTerms_iff h.wf).mp hkey))
+        (congListOn_append.mpr ((FDatabase.congrTuple_addTerms_iff h.wf).mp hval))
         hr⟩
     · exact absurd hs (by simp)
 
 /-- **Every substitution the enumerator produces is, up to `Env.Agree`, one
-`MValidQuerySubst` admits.**
+`ValidQuerySubst` admits.**
 
 The `Env.Agree` is forced, and not by the `ValidEnv` defect above. `Query.freeVars`
 deduplicates, so `matchQuery` binds a variable two patterns share exactly **once**;
-`MValidQuerySubst` instead demands `Env.UnionAll σs σ`, which is literal
+`ValidQuerySubst` instead demands `Env.UnionAll σs σ`, which is literal
 *concatenation* of one substitution per pattern, each binding its own pattern's free
 variables. A query with a repeated variable therefore admits no `σ` on the nose — the
-lengths cannot match — and `Falsity.matchQuery_MValidQuerySubst_false` is the witness.
+lengths cannot match — and `Falsity.matchQuery_validQuerySubst_false` is the witness.
 `Proofs/Interp.lean`'s `validQuerySubst_of_mem_matchQuery` already concludes up to
 `Env.Agree` for the same reason. -/
-theorem FDatabase.matchQuery_MValidQuerySubst {d : FDatabase} (h : d.Inv) {q : Query}
+theorem FDatabase.matchQuery_validQuerySubst {d : FDatabase} (h : d.Inv) {q : Query}
     {σ : Env} (hs : σ ∈ matchQuery d q) :
-    ∃ τ, MValidQuerySubst d.toDatabase q τ ∧ Env.Agree τ σ := by
+    ∃ τ, ValidQuerySubst d.toDatabase q τ ∧ Env.Agree τ σ := by
   rw [matchQuery, List.mem_filter, mem_assignments, List.all_eq_true] at hs
   obtain ⟨⟨hdom, hval⟩, hall⟩ := hs
-  have hall' : ∀ p ∈ q, MValidSubst d.toDatabase p (Env.canon (p.freeVars d.env) σ) :=
+  have hall' : ∀ p ∈ q, ValidSubst d.toDatabase p (Env.canon (p.freeVars d.env) σ) :=
     fun p hp =>
-      FDatabase.patternHolds_MValidSubst h (validEnv_canon hp hdom hval) (hall p hp)
+      FDatabase.patternHolds_validSubst h (validEnv_canon hp hdom hval) (hall p hp)
   obtain ⟨τ, hu, hr⟩ := Env.exists_unionAll (σ := σ)
     (q.map fun p => Env.canon (p.freeVars d.env) σ) (by
       intro ρ hρ
@@ -1706,7 +1464,7 @@ twice needs them to compose.
 A corrected statement needs `hrefl`, `htrans`, `hjoin` strengthened from an implication to
 the existence of a resolving merge, and `ProgramLegal`. Even then it may be false for
 programs with rules: `MergeStep` never removes a row, so a specification state keeps every
-superseded output and `MMatches.values` lets a rule read one, writing rows the
+superseded output and `Matches.values` lets a rule read one, writing rows the
 implementation never had. That last part is unverified — `closureF` does not reduce in the
 kernel, so no program containing a rule has an `execM` that evaluates by `rfl`. -/
 theorem execM_current_of_lattice {p : Program} {d : FDatabase}
@@ -1735,117 +1493,13 @@ Stated here with **no** hypothesis, which is why it is still open:
 `FDatabase.mergeRound_contained` is this statement under `d.Inv` and `hlegal`, and both
 are forced. `mergeOne` gates on `congrKeys d.closureF`, and `closureF` decides `Cong`
 only for a well-formed database (`mem_closureF_iff_of_wf`), while `MergeStep` gates on
-`MCongList`; `Database.Recorded.refl` needs `RowsWF` on its own; and without `hlegal` the
+`CongList`; `Database.Recorded.refl` needs `RowsWF` on its own; and without `hlegal` the
 accumulator's `Inv` fails at the first merge body that writes an illegal `set`
 (`Falsity.mergeRound_inv_false`). What `mergeRound_confined` gives unconditionally is only
 that the rows the pass drops are merge rows and nothing else. -/
 theorem mergeRound_closure {d : FDatabase} :
     ∃ db, MergeClosure d.toDatabase db ∧ d.mergeRound.toDatabase.Recorded db := by
   sorry
-
-/-! #### `mcong_iff_cong` without `CtorRows`
-
-`CtorRows` is an equality of row *sets*, which the interpreter's databases do not
-satisfy once a `:merge` function has a row. The two halves it is used for are separated
-here so `closureF_ok` can have only the halves that hold. -/
-/-- `hrow` in reduced form. Stating it separately is the same trick
-`Database.mem_rows_iff` plays: applied to a row *literal* the projections
-`{fn := f, args := as, out := vs}.out` do not reduce on their own, and `obtain ⟨rfl, _⟩`
-then sees `vs` occurring in its own definition. -/
-theorem Database.ctor_row {db : Database}
-    (hrow : ∀ r ∈ db.rows, db.sig.mergeOf r.fn = none →
-      r.out = [.app r.fn r.args] ∧ Term.app r.fn r.args ∈ db.terms)
-    {f : FnName} {as vs : List Term} (h : Row.mk f as vs ∈ db.rows)
-    (hu : db.sig.IsCtor f) :
-    vs = [.app f as] ∧ Term.app f as ∈ db.terms := hrow _ h hu.mergeOf
-
-mutual
-
-/-- `MCong.toCong` needing only that a `.union` function's rows are constructor rows. -/
-theorem MCong.toCong_of_rows {db : Database}
-    (hrow : ∀ r ∈ db.rows, db.sig.mergeOf r.fn = none →
-      r.out = [.app r.fn r.args] ∧ Term.app r.fn r.args ∈ db.terms)
-    {a b : Term} (h : MCong db a b) : Cong db a b := by
-  match h with
-  | .assert hm => exact .assert hm
-  | .refl hm => exact .refl hm
-  | .symm h => exact .symm (MCong.toCong_of_rows hrow h)
-  | .trans h₁ h₂ =>
-    exact .trans (MCong.toCong_of_rows hrow h₁) (MCong.toCong_of_rows hrow h₂)
-  | .fd hra hrb hu hl hxy =>
-    obtain ⟨rfl, hma⟩ := Database.ctor_row hrow hra hu
-    obtain ⟨rfl, hmb⟩ := Database.ctor_row hrow hrb hu
-    simp only [List.zip_cons_cons, List.zip_nil_left, List.mem_cons, List.not_mem_nil,
-      or_false, Prod.mk.injEq] at hxy
-    obtain ⟨rfl, rfl⟩ := hxy
-    exact .congr hma hmb (MCongList.toCongList_of_rows hrow hl)
-
-theorem MCongList.toCongList_of_rows {db : Database}
-    (hrow : ∀ r ∈ db.rows, db.sig.mergeOf r.fn = none →
-      r.out = [.app r.fn r.args] ∧ Term.app r.fn r.args ∈ db.terms)
-    {as bs : List Term} (h : MCongList db as bs) : CongList db as bs := by
-  match h with
-  | .nil => exact .nil
-  | .cons hab hl =>
-    exact .cons (MCong.toCong_of_rows hrow hab) (MCongList.toCongList_of_rows hrow hl)
-
-end
-
-mutual
-
-/-- `Cong.toMCong` needing only that every application the database holds is a `.union`
-function's and has its constructor row. -/
-theorem Cong.toMCong_of_terms {db : Database}
-    (hterm : ∀ f as, Term.app f as ∈ db.terms → Row.mk f as [.app f as] ∈ db.rows)
-    (hunion : ∀ f as, Term.app f as ∈ db.terms → db.sig.IsCtor f)
-    {a b : Term} (h : Cong db a b) : MCong db a b := by
-  match h with
-  | .assert hm => exact .assert hm
-  | .refl hm => exact .refl hm
-  | .symm h => exact .symm (Cong.toMCong_of_terms hterm hunion h)
-  | .trans h₁ h₂ =>
-    exact .trans (Cong.toMCong_of_terms hterm hunion h₁)
-      (Cong.toMCong_of_terms hterm hunion h₂)
-  | .congr (f := f) (as := as) (bs := bs) hma hmb hl =>
-    exact .fd (a := [Term.app f as]) (b := [Term.app f bs]) (hterm f as hma)
-      (hterm f bs hmb) (hunion f as hma)
-      (CongList.toMCongList_of_terms hterm hunion hl) (by simp)
-
-theorem CongList.toMCongList_of_terms {db : Database}
-    (hterm : ∀ f as, Term.app f as ∈ db.terms → Row.mk f as [.app f as] ∈ db.rows)
-    (hunion : ∀ f as, Term.app f as ∈ db.terms → db.sig.IsCtor f)
-    {as bs : List Term} (h : CongList db as bs) : MCongList db as bs := by
-  match h with
-  | .nil => exact .nil
-  | .cons hab hl =>
-    exact .cons (Cong.toMCong_of_terms hterm hunion hab)
-      (CongList.toMCongList_of_terms hterm hunion hl)
-
-end
-
-/-- **The congruence closure needs no `fd` disjunct.**
-
-`MCong.fd` fires only at a `.union` function, and in a database the interpreter builds a
-`.union` function's rows are exactly the constructor rows of its terms — the two
-hypotheses. So `MCong` coincides with `Cong` on the row-free projection, and
-`Impl/Closure.lean`'s `closure` decides it unchanged. This is what licenses
-`FDatabase.closureF` reusing `closureTotal`.
-
-`hunion` is an **added hypothesis** and the `←` direction is false without it: with
-`sig g = .merge …`, terms `g x`, `g y` and an asserted `x = y`, `Cong` relates
-`g x` and `g y` by `congr` while `MCong` has no rule that can — `fd` fires only at
-`.union`. It says what `Impl/Merge.lean`'s comment means by "every declared function is
-`.merge` or `.noMerge`": a `:merge` function's application is never itself a term,
-because `Expr.eval` resolves it to its recorded output. -/
-theorem FDatabase.closureF_ok {d : FDatabase}
-    (hrow : ∀ r ∈ d.rows, d.sig.mergeOf r.fn = none →
-      r.out = [.app r.fn r.args] ∧ Term.app r.fn r.args ∈ d.terms)
-    (hterm : ∀ f as, Term.app f as ∈ d.terms → d.sig.IsCtor f →
-      Row.mk f as [.app f as] ∈ d.rows)
-    (hunion : ∀ f as, Term.app f as ∈ d.terms → d.sig.IsCtor f)
-    {a b : Term} : MCong d.toDatabase a b ↔ Cong d.toDatabase a b :=
-  ⟨MCong.toCong_of_rows hrow,
-    Cong.toMCong_of_terms (fun f as h => hterm f as h (hunion f as h)) hunion⟩
 
 /-! ### The implementation deletes, the specification does not
 
@@ -1860,7 +1514,7 @@ So the contract between them weakens from an equality to a **containment**, whic
 safe direction — everything M11 reads is positive in the state, so an implementation that
 finds fewer results cannot make a safety claim false. Two theorems carry that:
 `FDatabase.mergeRound_confined`, that deletion touches nothing it must not, and
-`MValidSubst.mono`, that fewer rows really do mean fewer matches. -/
+`ValidSubst.mono`, that fewer rows really do mean fewer matches. -/
 namespace FDatabase
 
 @[simp] theorem addRow_sig {d : FDatabase} {f : FnName} {as vs : List Term} :
@@ -2246,16 +1900,15 @@ the contract is `Database.Recorded` and not `Database.Contained`. -/
 theorem rebuild_recorded {d : FDatabase} (h : d.Inv) :
     (FDatabase.rebuild d.closureF d).toDatabase.Recorded d.toDatabase := by
   have hcanon : ∀ a ∈ d.toDatabase.terms,
-      MCong d.toDatabase (FDatabase.canonOf d.closureF d.terms a) a := by
+      Cong d.toDatabase (FDatabase.canonOf d.closureF d.terms a) a := by
     intro a hat
     rcases canonOf_spec (cl := d.closureF) (ts := d.terms) (t := a) with he | ⟨-, hp⟩
     · rw [he]; exact .refl hat
     · rcases hp with he | hcl
       · rw [he]; exact .refl hat
-      · exact (Cong.toMCong' h.ctorTerms h.rowsComplete
-          ((FDatabase.mem_closureF_iff_of_wf h.wf).mp hcl)).symm
+      · exact ((FDatabase.mem_closureF_iff_of_wf h.wf).mp hcl).symm
   have hcanonL : ∀ l : List Term, (∀ a ∈ l, a ∈ d.toDatabase.terms) →
-      MCongList d.toDatabase (l.map (FDatabase.canonOf d.closureF d.terms)) l := by
+      CongList d.toDatabase (l.map (FDatabase.canonOf d.closureF d.terms)) l := by
     intro l
     induction l with
     | nil => intro _; exact .nil
@@ -2431,7 +2084,7 @@ d.sig  = fun n => if n = "f" then some ⟨1, 1, .merge [] [.app "F" [.var "old"]
 d.terms = [k],  d.rows = [⟨"f", [k], [k]⟩],  d.eqs = []
 ```
 
-`hpure` holds (the only block is `[]`). The row collides with itself — `MCongList` is
+`hpure` holds (the only block is `[]`). The row collides with itself — `CongList` is
 reflexive and `closureF` has `(k, k)` — so `mergeRound` fires, the result evaluates to
 `F k`, and `addRow "f" [k] [F k]` writes the constructor row `⟨F, [k], [F k]⟩`. Then
 `d.mergeRound.keyRowCount "F" = 1` while `d.keyRowCount "F" = 0`.
@@ -2878,8 +2531,8 @@ theorem MergeStep.transport_recorded {A C B : Database} (hc : A.Recorded C)
         { C with env := mergeEnv a b } := hc.setEnv _ _
     obtain ⟨dC, hstepC, hcont, hsig', henv'⟩ := evalActions_mono_recorded hc0 hsig rfl hbody
     have hsolid : dA.Solid := evalActions_solid h0 hbody
-    have hcong' : MCongList C as' bs' :=
-      ha'.symm.trans ((MCongList.mono_recorded hc hsig hcong).trans hb')
+    have hcong' : CongList C as' bs' :=
+      ha'.symm.trans ((CongList.mono_recorded hc hcong).trans hb')
     have hargs : ∀ x ∈ as, x ∈ dA.terms := fun x hx =>
       (evalActions_contained hbody).terms ((hs.rowsWF _ hra).1 x hx)
     have hCdC : C.Contained dC :=
@@ -2887,10 +2540,8 @@ theorem MergeStep.transport_recorded {A C B : Database} (hc : A.Recorded C)
         (evalActions_contained hstepC).eqs⟩
     have hdAsig : A.sig = dA.sig := by simpa using (evalActions_sig hbody).symm
     have hdCsig : C.sig = dC.sig := hsig ▸ hdAsig.trans hsig'
-    have hMC : MCongList (dC.addRow f as' vs) as as' :=
-      MCongList.mono (hCdC.trans (Database.Contained.addRow f as' vs dC))
-        (by show C.sig = ((dC.addTerms as').addTerms vs).sig
-            simp [hdCsig]) ha'
+    have hMC : CongList (dC.addRow f as' vs) as as' :=
+      CongList.mono (hCdC.trans (Database.Contained.addRow f as' vs dC)) ha'
     have hAR : (dA.addRow f as vs).Recorded (dC.addRow f as' vs) :=
       Database.Recorded.addRow_congr hcont hsolid f as' vs hargs hMC
     have hEnv : (dC.addRow f as' vs).Contained
@@ -2899,7 +2550,7 @@ theorem MergeStep.transport_recorded {A C B : Database} (hc : A.Recorded C)
     refine ⟨{ dC.addRow f as' vs with env := C.env, rules := C.rules },
       .collide hra' hrb' hcong' (by rw [← hsig]; exact hm) hstepC
         (hsig' ▸ henv' ▸ hres), ?_, ?_⟩
-    · exact ⟨hAR.terms, fun r hr => Database.Out.mono hEnv rfl (hAR.rows r hr), hAR.eqs⟩
+    · exact ⟨hAR.terms, fun r hr => Database.Out.mono hEnv (hAR.rows r hr), hAR.eqs⟩
     · simpa using hsig'
 
 /-- `MergeStep.transport_recorded` iterated. -/
@@ -3013,11 +2664,10 @@ theorem mergeOneOriented_mergeStep {d x y : FDatabase} {r₁ r₂ : Row} {D : Da
         obtain ⟨bs₂, hb₂, hr₂D⟩ := hxc.rows r₂ hr₂
         obtain ⟨bs₁, hb₁, hr₁D⟩ : D.Out r₂.fn r₁.args r₁.out := by
           rw [← hfn]; exact hxc.rows r₁ hr₁
-        have hcongD : MCongList D r₂.args r₁.args :=
-          (MCongList.mono (MergeClosure.contained hcl) hDsig.symm
-            (CongList.toMCongList' h.ctorTerms h.rowsComplete
-              ((FDatabase.congrTuple_iff h.wf).mp hck))).symm
-        have hcongB : MCongList D bs₂ bs₁ := hb₂.symm.trans (hcongD.trans hb₁)
+        have hcongD : CongList D r₂.args r₁.args :=
+          (CongList.mono (MergeClosure.contained hcl)
+            ((FDatabase.congrTuple_iff h.wf).mp hck)).symm
+        have hcongB : CongList D bs₂ bs₁ := hb₂.symm.trans (hcongD.trans hb₁)
         have hmoD : D.sig.mergeOf r₂.fn = some (MergeSpec.merge body res) := by
           rw [← hfn, hDsig, ← hxs]; exact hmo
         refine ⟨{ D₁.addRow r₂.fn bs₂ vs with env := D.env, rules := D.rules },
@@ -3035,10 +2685,8 @@ theorem mergeOneOriented_mergeStep {d x y : FDatabase} {r₁ r₂ : Row} {D : Da
           show x.sig = D.sig
           rw [hxs, hDsig]
         have hDD₁sig : D.sig = D₁.sig := hebSig.symm.trans hD₁sig
-        have hMC : MCongList (D₁.addRow r₂.fn bs₂ vs) r₂.args bs₂ :=
-          MCongList.mono (hDD₁.trans (Database.Contained.addRow r₂.fn bs₂ vs D₁))
-            (by show D.sig = ((D₁.addTerms bs₂).addTerms vs).sig
-                simp [hDD₁sig]) hb₂
+        have hMC : CongList (D₁.addRow r₂.fn bs₂ vs) r₂.args bs₂ :=
+          CongList.mono (hDD₁.trans (Database.Contained.addRow r₂.fn bs₂ vs D₁)) hb₂
         have hAR : (eb.toDatabase.addRow r₂.fn r₂.args vs).Recorded
             (D₁.addRow r₂.fn bs₂ vs) :=
           Database.Recorded.addRow_congr hD₁c hebInvT r₂.fn bs₂ vs hargs hMC
@@ -3052,10 +2700,10 @@ theorem mergeOneOriented_mergeStep {d x y : FDatabase} {r₁ r₂ : Row} {D : Da
         · show ((eb.addTerms r₂.args).addTerms vs).toDatabase.terms ⊆ _
           rw [hbridge]; exact hAR.terms
         · rcases mem_mergeRows hr with hr' | rfl
-          · refine Database.Out.mono hEnv rfl (hAR.rows r (Or.inr ?_))
+          · refine Database.Out.mono hEnv (hAR.rows r (Or.inr ?_))
             show r ∈ ((eb.toDatabase.addTerms r₂.args).addTerms vs).rows
             rw [← hbridge]; exact hr'
-          · exact ⟨bs₂, MCongList.mono hEnv rfl hMC, Set.mem_insert _ _⟩
+          · exact ⟨bs₂, CongList.mono hEnv hMC, Set.mem_insert _ _⟩
         · show ((eb.addTerms r₂.args).addTerms vs).toDatabase.eqs ⊆ _
           rw [hbridge]; exact hAR.eqs
 
@@ -3174,7 +2822,7 @@ theorem mergeSaturateF_contained_aux {n : Nat} : ∀ {d e : FDatabase}, d.Inv �
         exact (MergeClosure.sig hcl₁).symm
       obtain ⟨db₃, hcl₃, hcont₃, hsig₃⟩ :=
         MergeClosure.transport_recorded hcont₁ hsig₁ hround.solid hcl₂
-      exact ⟨db₃, hcl₁.trans hcl₃, hcont₂.trans hcont₃ hsig₃⟩
+      exact ⟨db₃, hcl₁.trans hcl₃, hcont₂.trans hcont₃⟩
 
 /-- **The merge phase run to a fixpoint stays inside the merge closure.**
 
@@ -3199,7 +2847,7 @@ like any other, and without legality `Inv` does not survive it. It is `Rule.SetL
 `d.sig`, which is what `Program.SetLegal` gives for every rule a program installs.
 
 The enumerator's substitution is transported to the specification's by
-`evalActions_envAgree`: `matchQuery_MValidQuerySubst` only produces one that
+`evalActions_envAgree`: `matchQuery_validQuerySubst` only produces one that
 `Env.Agree`s, and `Database.EnvAgree.eq_of_env_rules` turns that back into equality once
 `fireInto` restores the caller's environment. -/
 theorem execRunRules_contained {d : FDatabase} (h : d.Inv)
@@ -3230,7 +2878,7 @@ theorem execRunRules_contained {d : FDatabase} (h : d.Inv)
     | some e =>
       have hmemS : ({ e with env := d.env, rules := d.rules } : FDatabase).toDatabase ∈
           {D | ∃ r' ∈ d.toDatabase.rules, D ∈ RuleResults d.toDatabase r'} := by
-        obtain ⟨τ, hτ, hag⟩ := matchQuery_MValidQuerySubst h hσ
+        obtain ⟨τ, hτ, hag⟩ := matchQuery_validQuerySubst h hσ
         have hstep : evalActions
             ({ d.toDatabase with env := d.toDatabase.env ++ σ } : Database) r.actions
             = some e.toDatabase := by
@@ -3319,7 +2967,7 @@ What is left is the bookkeeping that turns them into a statement about `execCmdM
 
 **Transport.** The specification witness for a command is a state *containing* the
 interpreter's, so the next command's witness has to be re-based onto it. `CmdStep.mono`
-and `ProgramStep.mono` are that, and they are `MValidQuerySubst.mono` (a larger state
+and `ProgramStep.mono` are that, and they are `ValidQuerySubst.mono` (a larger state
 admits every match), `evalActions_mono` (a block re-run on a larger state lands
 on a larger result) and `MergeClosure.transport` composed. They carry `sig`, `env` and
 `rules` equalities alongside the containment because all three are read: `mono` needs the
@@ -3345,7 +2993,7 @@ theorem MergeClosure.envRules {d₁ d₂ : Database} (h : MergeClosure d₁ d₂
   | tail _ hstep ih => exact ⟨hstep.envRules.1.trans ih.1, hstep.envRules.2.trans ih.2⟩
 
 /-- **A firing available at `A` is available at any `C` containing it.**
-`MValidQuerySubst.mono` finds the same match and `evalActions_mono` re-runs the
+`ValidQuerySubst.mono` finds the same match and `evalActions_mono` re-runs the
 head on the larger state. The result is an existential, not the join: that is all
 containment needs, and it is all `evalActions_mono` gives. -/
 theorem RuleResults.mono {A C : Database} (hc : A.Contained C) (hsig : A.sig = C.sig)
@@ -3357,7 +3005,7 @@ theorem RuleResults.mono {A C : Database} (hc : A.Contained C) (hsig : A.sig = C
       { C with env := C.env ++ σ } := ⟨hc.terms, hc.rows, hc.eqs⟩
   obtain ⟨D', hD', hcont, -, -⟩ := evalActions_mono hc0 hsig (by simp [henv]) hv
   exact ⟨{ D' with env := C.env, rules := C.rules },
-    ⟨σ, MValidQuerySubst.mono hc hsig henv.symm hq,
+    ⟨σ, ValidQuerySubst.mono hc hsig henv.symm hq,
       by rw [evalLocalActions, hD', Option.map_some]⟩,
     ⟨hcont.terms, hcont.rows, hcont.eqs⟩⟩
 
@@ -3434,7 +3082,7 @@ theorem ProgramStep.mono {A C B : Database} (hc : A.Contained C) (hsig : A.sig =
 
 The re-keying contract needs every one of the four transport lemmas again. Two things are
 new and both come from the same place — the specification finds a row at a *congruent* key
-rather than at the same one. `MValidSubst.mono_recorded` composes that congruence into the
+rather than at the same one. `ValidSubst.mono_recorded` composes that congruence into the
 row atom's, and `MergeStep.transport_recorded` writes the combined row at the key it found,
 which is what `Database.Solid` has to be carried for. `CmdStep.solid` is that carrying. -/
 
@@ -3510,7 +3158,7 @@ theorem RuleResults.mono_recorded {A C : Database} (hc : A.Recorded C) (hsig : A
       { C with env := C.env ++ σ } := hc.setEnv _ _
   obtain ⟨D', hD', hcont, -, -⟩ := evalActions_mono_recorded hc0 hsig (by simp [henv]) hv
   refine ⟨{ D' with env := C.env, rules := C.rules },
-    ⟨σ, MValidQuerySubst.mono_recorded hc hsig henv.symm hq,
+    ⟨σ, ValidQuerySubst.mono_recorded hc hsig henv.symm hq,
       by rw [evalLocalActions, hD', Option.map_some]⟩,
     hcont.setEnvRules _ _ _ _, ?_⟩
   show D'.sig = C.sig
@@ -3524,9 +3172,8 @@ theorem RunRules.mono_recorded {A C : Database} (hc : A.Recorded C) (hsig : A.si
     rintro d ⟨r, hr, hdr⟩
     obtain ⟨D, hD, hcd, hDsig⟩ := RuleResults.mono_recorded hc hsig henv hdr
     exact hcd.trans_contained (Database.Contained.mem_sUnion ⟨r, hrules ▸ hr, hD⟩)
-      (by show D.sig = C.sig; exact hDsig)
   have hbase : A.Recorded (RunRules C) :=
-    hc.trans_contained (Database.Contained.sUnion C _) rfl
+    hc.trans_contained (Database.Contained.sUnion C _)
   refine ⟨?_, ?_, ?_⟩
   · rintro x (hx | hx)
     · exact hbase.terms hx
@@ -3543,16 +3190,11 @@ theorem RunRules.mono_recorded {A C : Database} (hc : A.Recorded C) (hsig : A.si
 
 /-- `CmdStep.mono` along `Recorded`.
 
-**`hfresh` is not decoration.** `Database.Contained` ignores `sig`, but `Database.Out`
-does not: it reads a key up to `MCong`, and `MCong.fd` fires only at a constructor, so a
-declaration that stops a name being one destroys a derivation the specification witness
-needs. `Falsity.mono_recorded_decl_false` is that program — it *re*declares a constructor
-`:no-merge` — and `Cmd.DeclFresh` is exactly what rules it out. On a fresh name
-`MCong.mono_update` transports every derivation, because there was no `fd` step at an
-undeclared name to lose. -/
+The `.decl` case asks nothing of the declaration: `Cong` reads neither `sig` nor `rows`,
+so `Cong.mono_update` transports every derivation whatever the name already was. -/
 theorem CmdStep.mono_recorded {A C B : Database} (hc : A.Recorded C) (hsig : A.sig = C.sig)
     (henv : A.env = C.env) (hrules : A.rules = C.rules) (hsolid : A.Solid) {c : Cmd}
-    (hfresh : c.DeclFresh A.sig) (h : CmdStep A c B) :
+    (h : CmdStep A c B) :
     ∃ D, CmdStep C c D ∧ B.Recorded D ∧ B.sig = D.sig ∧ B.env = D.env ∧
       B.rules = D.rules := by
   cases h with
@@ -3578,7 +3220,7 @@ theorem CmdStep.mono_recorded {A C B : Database} (hc : A.Recorded C) (hsig : A.s
   | @decl f dc =>
     refine ⟨_, .decl, ⟨hc.terms, fun r hr => ?_, hc.eqs⟩, ?_, henv, hrules⟩
     · obtain ⟨cs, hl, hrow⟩ := hc.rows r hr
-      exact ⟨cs, MCongList.mono_update (hsig ▸ hfresh) hl, hrow⟩
+      exact ⟨cs, CongList.mono_update hl, hrow⟩
     · show Function.update A.sig _ _ = Function.update C.sig _ _
       rw [hsig]
 
@@ -3586,17 +3228,16 @@ theorem CmdStep.mono_recorded {A C B : Database} (hc : A.Recorded C) (hsig : A.s
 hypothesis across the induction. -/
 theorem ProgramStep.mono_recorded {A C B : Database} (hc : A.Recorded C)
     (hsig : A.sig = C.sig) (henv : A.env = C.env) (hrules : A.rules = C.rules)
-    (hsolid : A.Solid) {p : Program} (hfresh : Program.DeclsFresh p A.sig)
-    (h : ProgramStep A p B) :
+    (hsolid : A.Solid) {p : Program} (h : ProgramStep A p B) :
     ∃ D, ProgramStep C p D ∧ B.Recorded D ∧ B.sig = D.sig ∧ B.env = D.env ∧
       B.rules = D.rules := by
   induction h generalizing C with
   | nil => exact ⟨C, .nil, hc, hsig, henv, hrules⟩
   | @cons A d B c cs hcmd _ ih =>
     obtain ⟨D₀, hD₀, hc₀, hs₀, he₀, hr₀⟩ :=
-      hcmd.mono_recorded hc hsig henv hrules hsolid hfresh.1
+      hcmd.mono_recorded hc hsig henv hrules hsolid
     obtain ⟨D₁, hD₁, hc₁, hs₁, he₁, hr₁⟩ :=
-      ih hc₀ hs₀ he₀ hr₀ (hcmd.solid hsolid) (hcmd.sig ▸ hfresh.2)
+      ih hc₀ hs₀ he₀ hr₀ (hcmd.solid hsolid)
     exact ⟨D₁, .cons hD₀ hD₁, hc₁, hs₁, he₁, hr₁⟩
 
 /-! #### Declaring a fresh name
@@ -4160,7 +3801,7 @@ theorem execCmdM_contained' {d d' : FDatabase} (h : d.Inv) {c : Cmd}
       mergeSaturateF_contained (h.execRunRules hrules) hmerges₁ hs
     obtain ⟨db₃, hcl₃, hcont₃, hsig₃⟩ :=
       MergeClosure.transport hRcont (by rw [hRsig]; exact execRunRules_fields.1) hcl₂
-    refine ⟨db₃, .run (hRstep.trans hcl₃), hcont₂.trans_contained hcont₃ hsig₃, ?_, ?_, ?_⟩
+    refine ⟨db₃, .run (hRstep.trans hcl₃), hcont₂.trans_contained hcont₃, ?_, ?_, ?_⟩
     · show d'.sig = db₃.sig
       rw [MergeClosure.sig hcl₃, hRsig, (mergeSaturateF_fields hs).1,
         execRunRules_fields.1]
@@ -4226,15 +3867,14 @@ theorem execProgramM_contained_aux {p : Program} : ∀ {d d' : FDatabase}, d.Inv
         (execCmdM_rulesLegal hlegal hunused hrules hd₁) (hnext d₁ hd₁) hcs
     obtain ⟨db₃, hstep₃, hcont₃, hsig₃, -, -⟩ :=
       ProgramStep.mono_recorded hcont₁ hsig₁ henv₁ hrules₁
-        (h.execCmdM hlegal hmerges hunused hrules hd₁).solid
-        (FDatabase.ProgramLegal.declsFresh (hnext d₁ hd₁) hcs) hstep₂
-    exact ⟨db₃, .cons hstep₁ hstep₃, hcont₂.trans hcont₃ hsig₃⟩
+        (h.execCmdM hlegal hmerges hunused hrules hd₁).solid hstep₂
+    exact ⟨db₃, .cons hstep₁ hstep₃, hcont₂.trans hcont₃⟩
 
 /-- **The interpreter's answer to a whole program is contained in one the specification
 reaches.**
 
 `execCmdM_contained'` per command, with `ProgramStep.mono` re-basing the tail's witness
-onto the head's — which is where `MValidSubst.mono` is spent, read forwards: a larger
+onto the head's — which is where `ValidSubst.mono` is spent, read forwards: a larger
 specification state still admits every match, so the specification can follow along.
 
 `hp` is the per-command bundle. It is what carries the induction across a `.decl`:

@@ -8,11 +8,11 @@ The state gains a **row set**. A row `⟨f, args, out⟩` says the database reco
 columns `out` for `f` at `args`. For a constructor there is one value column and it holds
 the application itself. Three things follow.
 
-* **Congruence is the functional dependency.** `MCong.fd` says two rows of one constructor
-  whose keys are congruent have congruent outputs. At constructor rows — where
-  `out = [.app f args]` — that *is* `Cong.congr`; at equal keys it is the functional
-  dependency. There is no separate `congr` constructor, and `Proofs/Merge.lean`'s
-  `mcong_iff_cong` is the compatibility theorem.
+* **Congruence is the functional dependency.** Two rows of one constructor whose keys are
+  congruent have congruent outputs — `Proofs/Congruence.lean`'s `Cong.fd`, a *theorem*
+  about `Cong` and not a rule of it. Its one hypothesis is the shape of a constructor's
+  rows, and `Action.SetLegal` is what keeps that true; where it fails the row is one
+  egglog's front end rejects.
 * **A `:merge` body is an action list.** It writes rows to other tables, so `MergeStep` is
   a relation on *databases* rather than a function combining two values, and merge closure
   is a phase of `RunStep` rather than a definition of "the value of a key".
@@ -30,44 +30,6 @@ there.
 -/
 
 namespace Egglog
-/-! ### Congruence, generalized
-
-`MCong` is `Cong` with `congr` replaced by `fd`. Everything else is unchanged. -/
-mutual
-
-/-- Derivable equality: the congruence closure of `db`'s asserted equalities *and* the
-functional dependencies of its constructors. Like `Cong`, a **partial equivalence
-relation** — symmetric and transitive, but reflexive only on `db.terms`, so `MCong db a a`
-says that `a` is present.
-
-`fd` is one rule with three readings:
-
-* at constructor rows and congruent keys, `Cong.congr`;
-* at constructor rows and *equal* keys, `Cong.refl` on an application;
-* at any constructor, "one key, one output" — the functional dependency.
-
-A merge function contributes nothing here: a constructor collision is the only one whose
-whole effect is an equality between terms that already exist, so it is the only one a
-*relation* can express. The rest are `MergeStep`. The rule is per *column* —
-`⟨x, y⟩ ∈ a.zip b` — so a multi-column constructor equates its outputs positionally. -/
-inductive MCong (db : Database) : Term → Term → Prop where
-  | assert {a b : Term} : (a, b) ∈ db.eqs → MCong db a b
-  | refl {a : Term} : a ∈ db.terms → MCong db a a
-  | symm {a b : Term} : MCong db a b → MCong db b a
-  | trans {a b c : Term} : MCong db a b → MCong db b c → MCong db a c
-  | fd {f : FnName} {as bs a b : List Term} {x y : Term} :
-      ⟨f, as, a⟩ ∈ db.rows → ⟨f, bs, b⟩ ∈ db.rows →
-      db.sig.IsCtor f → MCongList db as bs →
-      (x, y) ∈ a.zip b → MCong db x y
-
-/-- Pointwise `MCong` over key tuples. -/
-inductive MCongList (db : Database) : List Term → List Term → Prop where
-  | nil : MCongList db [] []
-  | cons {a b : Term} {as bs : List Term} :
-      MCong db a b → MCongList db as bs → MCongList db (a :: as) (b :: bs)
-
-end
-
 /-! ### Reading a table
 
 Keys are compared up to congruence, so a lookup searches the key's class rather than
@@ -83,7 +45,7 @@ A key class may record several outputs, which is why this is a relation and not 
 function. Nothing *evaluates* through it, so the over-approximation is confined to the
 query — `MERGE.md`, "Why the reader over-approximates". -/
 def Out (db : Database) (f : FnName) (as : List Term) (vs : List Term) : Prop :=
-  ∃ bs, MCongList db as bs ∧ Row.mk f bs vs ∈ db.rows
+  ∃ bs, CongList db as bs ∧ Row.mk f bs vs ∈ db.rows
 
 /-- **Every row `d₁` holds is one `d₂` records** — and `d₁`'s terms and equalities are
 `d₂`'s. This is the contract a reference implementation is held to: `Database.Contained`
@@ -124,7 +86,7 @@ def mergeEnv : List Term → List Term → Env
 of its own, which a value combiner `Term → Term → Term` could not express.
 
 * Nothing is removed, and both colliding rows survive.
-* **There is no `a ≠ b` guard.** `MCongList` is reflexive, so a row collides with
+* **There is no `a ≠ b` guard.** `CongList` is reflexive, so a row collides with
   *itself*. That over-approximates egglog in the safe direction, and it is why the safety
   theorem needs **no** scope condition on the signature — no `merge (x, x) = x`, no
   identity-guardedness. It works only because `MergeSaturated` is the "no step *changes*
@@ -139,7 +101,7 @@ of its own, which a value combiner `Term → Term → Term` could not express.
 inductive MergeStep : Database → Database → Prop where
   | collide {db d : Database} {f : FnName} {as bs a b vs : List Term}
       {body : List Action} {res : List Expr} :
-      ⟨f, as, a⟩ ∈ db.rows → ⟨f, bs, b⟩ ∈ db.rows → MCongList db as bs →
+      ⟨f, as, a⟩ ∈ db.rows → ⟨f, bs, b⟩ ∈ db.rows → CongList db as bs →
       db.sig.mergeOf f = some (.merge body res) →
       evalActions { db with env := mergeEnv a b } body = some d →
       Expr.evalList d.sig res d.env = some vs →
@@ -167,43 +129,43 @@ to enter; stating the condition anyway is what stops `.noMerge` silently meaning
 old value". -/
 def Database.NoMergeOk (db : Database) : Prop :=
   ∀ f as bs (a b : List Term), Row.mk f as a ∈ db.rows → Row.mk f bs b ∈ db.rows →
-    MCongList db as bs → db.sig.mergeOf f = some .noMerge → a = b
+    CongList db as bs → db.sig.mergeOf f = some .noMerge → a = b
 
 /-! ### E-matching and running
 
 Which substitutions a query admits, what a round does with them, and what a command and a
-program do. Congruence is read as `MCong` throughout, and a round gains one phase: merge
+program do. Congruence is read as `Cong` throughout, and a round gains one phase: merge
 closure, which is a state change where congruence closure is only a relation. -/
 /-- The database a match is checked in: `db` plus the terms the pattern's operands denote.
 
-An operand is an *expression*, so it may denote a term the program never built, and `MCong`
+An operand is an *expression*, so it may denote a term the program never built, and `Cong`
 relates nothing outside `db.terms`. Adding the operands first is what makes such an operand
 matchable, and is how this model captures egglog's flattening of a nested fact into one atom
-per subterm. It **asserts nothing**, so this is a conservative reading of `MCong` and not a
-weaker one: `MCong.fd` still needs *both* rows present. -/
+per subterm. It **asserts nothing** — no equality and no row — so this is a conservative
+reading of `Cong` and not a weaker one. -/
 def Database.withOperands (db : Database) (ts : List Term) : Database := db.addTerms ts
 
-@[inherit_doc Database.withOperands] def MCongOn
-    (db : Database) (ts : List Term) (a b : Term) : Prop := MCong (db.withOperands ts) a b
+@[inherit_doc Database.withOperands] def CongOn
+    (db : Database) (ts : List Term) (a b : Term) : Prop := Cong (db.withOperands ts) a b
 
-@[inherit_doc Database.withOperands] def MCongListOn
+@[inherit_doc Database.withOperands] def CongListOn
     (db : Database) (ts : List Term) (as bs : List Term) : Prop :=
-  MCongList (db.withOperands ts) as bs
+  CongList (db.withOperands ts) as bs
 
 /-- A pattern **matches** under `σ`, up to congruence.
 
 The **witness** `w` is drawn from the *original* terms: without one, reflexivity on the
 freshly added operand would match everything, so the witness is what stops a pattern from
 matching a term the e-graph does not contain. -/
-inductive MMatches (db : Database) : Pattern → Env → Prop where
+inductive Matches (db : Database) : Pattern → Env → Prop where
   | expr {e : Expr} {σ : Env} {w t : Term} :
-      w ∈ db.terms → e.eval db.sig (db.env ++ σ) = some t → MCongOn db [t] w t →
-      MMatches db (.expr e) σ
+      w ∈ db.terms → e.eval db.sig (db.env ++ σ) = some t → CongOn db [t] w t →
+      Matches db (.expr e) σ
   | eq {e₁ e₂ : Expr} {σ : Env} {w t₁ t₂ : Term} :
       w ∈ db.terms →
       e₁.eval db.sig (db.env ++ σ) = some t₁ → e₂.eval db.sig (db.env ++ σ) = some t₂ →
-      MCongOn db [t₁, t₂] w t₁ → MCongOn db [t₁, t₂] t₁ t₂ →
-      MMatches db (.eq e₁ e₂) σ
+      CongOn db [t₁, t₂] w t₁ → CongOn db [t₁, t₂] t₁ t₂ →
+      Matches db (.eq e₁ e₂) σ
   /-- The row atom: `f`'s row at a key class congruent to `as`, with value columns
   congruent to `vs`. **This is the only read in the semantics.**
 
@@ -213,24 +175,24 @@ inductive MMatches (db : Database) : Pattern → Env → Prop where
       {us ts ws bs : List Term} :
       Expr.evalList db.sig vs (db.env ++ σ) = some us →
       Expr.evalList db.sig as (db.env ++ σ) = some ts →
-      MCongListOn db (ts ++ us) ts bs → MCongListOn db (ts ++ us) us ws →
+      CongListOn db (ts ++ us) ts bs → CongListOn db (ts ++ us) us ws →
       Row.mk f bs ws ∈ db.rows →
-      MMatches db (.values vs f as) σ
+      Matches db (.values vs f as) σ
 
 /-- The substitutions one query pattern admits: `σ` binds exactly the pattern's free
 variables, each to a term the database holds, and the pattern matches under it. -/
-def MValidSubst (db : Database) (p : Pattern) (σ : Env) : Prop :=
-  ValidEnv (p.freeVars db.env) db σ ∧ MMatches db p σ
+def ValidSubst (db : Database) (p : Pattern) (σ : Env) : Prop :=
+  ValidEnv (p.freeVars db.env) db σ ∧ Matches db p σ
 
 /-- The substitutions a whole query admits: one per pattern, unioned. -/
-def MValidQuerySubst (db : Database) (q : Query) (σ : Env) : Prop :=
-  ∃ σs : List Env, List.Forall₂ (MValidSubst db) q σs ∧ Env.UnionAll σs σ
+def ValidQuerySubst (db : Database) (q : Query) (σ : Env) : Prop :=
+  ∃ σs : List Env, List.Forall₂ (ValidSubst db) q σs ∧ Env.UnionAll σs σ
 
 /-- The databases one rule contributes, one per substitution satisfying its query.
 Substitutions whose actions get stuck contribute nothing, which cannot happen for a
 scoped, evaluable rule (`Scope.lean`). -/
 def RuleResults (db : Database) (r : Rule) : Set Database :=
-  {d | ∃ σ, MValidQuerySubst db r.query σ ∧ evalLocalActions db r.actions σ = some d}
+  {d | ∃ σ, ValidQuerySubst db r.query σ ∧ evalLocalActions db r.actions σ = some d}
 
 /-- The rule-firing half of a round: every rule fires on every substitution satisfying its
 query *in the pre-state*, and all the results are unioned in. Rules therefore cannot see
@@ -253,7 +215,7 @@ def RunStep (db db' : Database) : Prop := MergeClosure (RunRules db) db'
 /-- Run one command.
 
 There is no congruence-restoring pass between commands, because congruence is the
-predicate `MCong` rather than a set the state has to carry (`PLAN.md`, "Where 'restored
+predicate `Cong` rather than a set the state has to carry (`PLAN.md`, "Where 'restored
 congruence' went").
 
 `action` resolves collisions before the next command: a top-level `set` is its own merge

@@ -118,14 +118,13 @@ def Env.canon (vars : List Var) (σ : Env) : Env :=
 def Query.freeVars (q : Query) (σ : Env) : List Var :=
   q.foldr (fun p acc => p.freeVars σ ∪ acc) []
 
-/-- `MMatches`'s side conditions for one pattern, computed: the pattern's instance
+/-- `Matches`'s side conditions for one pattern, computed: the pattern's instance
 is congruent — in the database extended with it — to a witness the database already
 holds. The witness is a term for `.expr`/`.eq` and a *row* for `.values`, whose key and
 value operands are added the same way, since an operand may denote a term the program
-never built (`Spec/Merge.lean`'s `MMatches.values`).
+never built (`Spec/Merge.lean`'s `Matches.values`).
 
-It compares with `closureF`, which computes `Cong`; `mcong_iff_cong` is what makes that
-the specification's `MCong` on the constructor fragment. -/
+It compares with `closureF`, which computes exactly the specification's `Cong`. -/
 def patternHolds (d : FDatabase) (p : Pattern) (σ : Env) : Bool :=
   match p with
   | .values vs f as =>

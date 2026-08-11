@@ -88,8 +88,8 @@ structure Rule where
 then evaluates `result` — **one expression per value column**, where the surface syntax
 writes one tuple-valued `(values e₀ e₁ …)`. `noMerge` forbids a collision outright.
 
-A constructor has no merge specification at all: its collisions are an equality, which is
-exactly congruence, and `MCong.fd` is the one rule that covers both. A merge kind is per
+A constructor has no merge specification at all: its collisions are an equality, and that
+equality is `Cong` already — `Proofs/Congruence.lean`'s `Cong.fd`. A merge kind is per
 *function* here and per *column* in egglog — `MERGE.md`, "Multi-column outputs". -/
 inductive MergeSpec where
   | merge : List Action → List Expr → MergeSpec
@@ -122,10 +122,9 @@ def Signature.mergeOf (sig : Signature) (f : FnName) : Option MergeSpec :=
 /-- `f` is a **declared** constructor: `(datatype …)` or `(constructor …)`.
 
 An undeclared name is not a constructor and not a merge function; it is nothing, and
-`Expr.eval` has no rule for it. Requiring the declaration is also what keeps a later one
-from *removing* derivations: `Spec/Merge.lean`'s `MCong.fd` fires only here, so an
-undeclared name counting as a constructor would lose its derivations the moment it was
-declared `:merge` — `Proofs/Merge.lean`'s `CmdStep.mono_recorded`. -/
+`Expr.eval` has no rule for it — which is egglog's declare-before-use, and the only thing
+this predicate is read for. `Cong` does not read the signature at all, so a later
+declaration cannot take a derivation away. -/
 def Signature.IsCtor (sig : Signature) (f : FnName) : Prop :=
   ∃ d, sig f = some d ∧ d.merge = none
 

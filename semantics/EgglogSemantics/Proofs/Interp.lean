@@ -241,7 +241,7 @@ theorem Query.freeVars_subset {q : Query} {σ : Env} {p : Pattern} (hp : p ∈ q
 
 /-- Restricting a query substitution to one pattern gives a substitution with exactly that
 pattern's free variables as its domain, and it agrees with the original there. These are
-the two facts `patternHolds_iff` and `MValidSubst.of_agree` need. -/
+the two facts `patternHolds_iff` and `ValidSubst.of_agree` need. -/
 theorem Env.dom_canon_of_subset {vars vars' : List Var} {σ : Env} (hsub : vars ⊆ vars')
     (hdom : Env.dom σ = vars') : Env.dom (Env.canon vars σ) = vars :=
   Env.dom_canon fun v hv =>
@@ -294,24 +294,16 @@ theorem congrTuple_addTerms_iff {d : FDatabase} (hw : d.WF) {ts us xs ys : List 
 end FDatabase
 /-- **The e-matcher is exactly the specification's matching relation.**
 
-`patternHolds` decides matching through `closureF`, which computes `Cong`; the
-specification compares up to `MCong`. `mcong_iff_cong` is what closes the gap, and it is
-read at the *extended* databases the witness premises ask over — which is why `CtorTerms`
-and `CtorRows` are hypotheses here where `d.WF` alone used to do. Both are carried along a
-run by `Database.CtorState`.
+`patternHolds` decides matching through `closureF`, which computes `Cong`, and the
+specification compares up to `Cong` too, so there is no gap to close: `d.WF` is the only
+hypothesis, at the *extended* databases the witness premises ask over as much as at `d`.
 
 `hv` is not a restriction: it is a consequence of the conclusion
-(`MValidSubst.validEnv`), and requiring it is what lets the `false` cases be discharged
+(`ValidSubst.validEnv`), and requiring it is what lets the `false` cases be discharged
 without inverting. -/
-theorem patternHolds_iff {d : FDatabase} (hw : d.WF) (hterms : d.toDatabase.CtorTerms)
-    (hrows : d.toDatabase.CtorRows) {p : Pattern} {σ : Env}
+theorem patternHolds_iff {d : FDatabase} (hw : d.WF) {p : Pattern} {σ : Env}
     (hv : ValidEnv (p.freeVars d.env) d.toDatabase σ) :
-    patternHolds d p σ = true ↔ MValidSubst d.toDatabase p σ := by
-  have henv : ∀ b ∈ d.env ++ σ, Term.CtorTerm d.sig b.2 := by
-    intro b hb
-    rcases List.mem_append.mp hb with hb' | hb'
-    · exact Database.env_ctorTerm hw hterms b hb'
-    · exact Database.ctorTerm_of_mem hw hterms (hv.2 b hb')
+    patternHolds d p σ = true ↔ ValidSubst d.toDatabase p σ := by
   cases p with
   | values vs f as =>
     cases hu : Expr.evalList d.sig vs (d.env ++ σ) with
@@ -332,21 +324,13 @@ theorem patternHolds_iff {d : FDatabase} (hw : d.WF) (hterms : d.toDatabase.Ctor
           rw [FDatabase.toDatabase_env, FDatabase.toDatabase_sig, ht] at ht'
           simp at ht'
       | some ts =>
-        have hterms' : ((d.toDatabase.addTerms ts).addTerms us).CtorTerms :=
-          (hterms.addTerms (Expr.evalList_ctorTerm henv ht)).addTerms
-            (by simpa using Expr.evalList_ctorTerm henv hu)
-        have hrows' : ((d.toDatabase.addTerms ts).addTerms us).CtorRows :=
-          (hrows.addTerms ts).addTerms us
-        have hcl : ∀ xs ys, CongList ((d.toDatabase.addTerms ts).addTerms us) xs ys ↔
-            MCongList ((d.toDatabase.addTerms ts).addTerms us) xs ys :=
-          fun _ _ => ⟨CongList.toMCongList hterms' hrows', MCongList.toCongList hrows'⟩
         simp only [patternHolds, hu, ht, List.any_eq_true, Bool.and_eq_true,
-          decide_eq_true_eq, FDatabase.congrTuple_addTerms_iff hw, hcl]
+          decide_eq_true_eq, FDatabase.congrTuple_addTerms_iff hw]
         constructor
         · rintro ⟨r, hr, ⟨hfn, hkey⟩, hval⟩
           subst hfn
-          exact ⟨hv, .values hu ht (mCongListOn_append.mpr hkey)
-            (mCongListOn_append.mpr hval) hr⟩
+          exact ⟨hv, .values hu ht (congListOn_append.mpr hkey)
+            (congListOn_append.mpr hval) hr⟩
         · intro h
           cases h.2 with
           | values hu' ht' hkey hval hrow =>
@@ -354,7 +338,7 @@ theorem patternHolds_iff {d : FDatabase} (hw : d.WF) (hterms : d.toDatabase.Ctor
             rw [FDatabase.toDatabase_env, FDatabase.toDatabase_sig, ht] at ht'
             cases hu'
             cases ht'
-            exact ⟨_, hrow, ⟨rfl, mCongListOn_append.mp hkey⟩, mCongListOn_append.mp hval⟩
+            exact ⟨_, hrow, ⟨rfl, congListOn_append.mp hkey⟩, congListOn_append.mp hval⟩
   | expr e =>
     cases hev : e.eval d.sig (d.env ++ σ) with
     | none =>
@@ -365,21 +349,17 @@ theorem patternHolds_iff {d : FDatabase} (hw : d.WF) (hterms : d.toDatabase.Ctor
         rw [FDatabase.toDatabase_env, FDatabase.toDatabase_sig, hev] at he
         simp at he
     | some t =>
-      have hmc : ∀ a b, Cong (d.toDatabase.addTerm t) a b ↔ MCong (d.toDatabase.addTerm t) a b :=
-        fun _ _ => (mcong_iff_cong (hterms.addTerm (Expr.eval_ctorTerm henv hev))
-          (hrows.addTerm t)).symm
       simp only [patternHolds, hev, decide_eq_true_eq]
       constructor
       · rintro ⟨w, hwm, hcl⟩
-        exact ⟨hv, .expr hwm hev (mCongOn_singleton.mpr
-          ((hmc _ _).mp ((FDatabase.mem_closureF_addTerm hw).mp hcl)))⟩
+        exact ⟨hv, .expr hwm hev (congOn_singleton.mpr
+          ((FDatabase.mem_closureF_addTerm hw).mp hcl))⟩
       · intro h
         cases h.2 with
         | expr hwm he hc =>
           rw [FDatabase.toDatabase_env, FDatabase.toDatabase_sig, hev] at he
           cases he
-          exact ⟨_, hwm, (FDatabase.mem_closureF_addTerm hw).mpr
-            ((hmc _ _).mpr (mCongOn_singleton.mp hc))⟩
+          exact ⟨_, hwm, (FDatabase.mem_closureF_addTerm hw).mpr (congOn_singleton.mp hc)⟩
   | eq e₁ e₂ =>
     cases hev₁ : e₁.eval d.sig (d.env ++ σ) with
     | none =>
@@ -399,18 +379,12 @@ theorem patternHolds_iff {d : FDatabase} (hw : d.WF) (hterms : d.toDatabase.Ctor
           rw [FDatabase.toDatabase_env, FDatabase.toDatabase_sig, hev₂] at he₂
           simp at he₂
       | some t₂ =>
-        have hmc : ∀ a b, Cong ((d.toDatabase.addTerm t₁).addTerm t₂) a b ↔
-            MCong ((d.toDatabase.addTerm t₁).addTerm t₂) a b :=
-          fun _ _ => (mcong_iff_cong
-            ((hterms.addTerm (Expr.eval_ctorTerm henv hev₁)).addTerm
-              (Expr.eval_ctorTerm henv hev₂))
-            ((hrows.addTerm t₁).addTerm t₂)).symm
         simp only [patternHolds, hev₁, hev₂, Bool.and_eq_true, decide_eq_true_eq]
         constructor
         · rintro ⟨heq, w, hwm, hcl⟩
           exact ⟨hv, .eq hwm hev₁ hev₂
-            (mCongOn_pair.mpr ((hmc _ _).mp ((FDatabase.mem_closureF_addTerm₂ hw).mp hcl)))
-            (mCongOn_pair.mpr ((hmc _ _).mp ((FDatabase.mem_closureF_addTerm₂ hw).mp heq)))⟩
+            (congOn_pair.mpr ((FDatabase.mem_closureF_addTerm₂ hw).mp hcl))
+            (congOn_pair.mpr ((FDatabase.mem_closureF_addTerm₂ hw).mp heq))⟩
         · intro h
           cases h.2 with
           | eq hwm he₁ he₂ hcw hceq =>
@@ -418,10 +392,8 @@ theorem patternHolds_iff {d : FDatabase} (hw : d.WF) (hterms : d.toDatabase.Ctor
             rw [FDatabase.toDatabase_env, FDatabase.toDatabase_sig, hev₂] at he₂
             cases he₁
             cases he₂
-            exact ⟨(FDatabase.mem_closureF_addTerm₂ hw).mpr
-                ((hmc _ _).mpr (mCongOn_pair.mp hceq)),
-              _, hwm, (FDatabase.mem_closureF_addTerm₂ hw).mpr
-                ((hmc _ _).mpr (mCongOn_pair.mp hcw))⟩
+            exact ⟨(FDatabase.mem_closureF_addTerm₂ hw).mpr (congOn_pair.mp hceq),
+              _, hwm, (FDatabase.mem_closureF_addTerm₂ hw).mpr (congOn_pair.mp hcw)⟩
 
 /-- Restricting a query substitution to one pattern gives a `ValidEnv` for that pattern.
 This is the hypothesis `patternHolds_iff` needs, discharged from what `assignments`
@@ -436,22 +408,21 @@ theorem validEnv_canon {d : FDatabase} {q : Query} {σ : Env} {p : Pattern} (hp 
 /-- The enumerator produces exactly the substitutions that assign the query's free
 variables to terms the database holds and satisfy every pattern under restriction.
 
-What is left between this and `MValidQuerySubst` is repackaging: the spec takes one
+What is left between this and `ValidQuerySubst` is repackaging: the spec takes one
 substitution per pattern and joins them with `Env.UnionAll`, where this restricts a single
 substitution. `Env.agree_canon` is what makes the two interchangeable. -/
-theorem mem_matchQuery_iff {d : FDatabase} (hw : d.WF) (hterms : d.toDatabase.CtorTerms)
-    (hrows : d.toDatabase.CtorRows) {q : Query} {σ : Env} :
+theorem mem_matchQuery_iff {d : FDatabase} (hw : d.WF) {q : Query} {σ : Env} :
     σ ∈ matchQuery d q ↔
       Env.dom σ = Query.freeVars q d.env ∧ (∀ b ∈ σ, b.2 ∈ d.terms) ∧
-        ∀ p ∈ q, MValidSubst d.toDatabase p (Env.canon (p.freeVars d.env) σ) := by
+        ∀ p ∈ q, ValidSubst d.toDatabase p (Env.canon (p.freeVars d.env) σ) := by
   simp only [matchQuery, List.mem_filter, mem_assignments, List.all_eq_true]
   constructor
   · rintro ⟨⟨hdom, hval⟩, hall⟩
     exact ⟨hdom, hval, fun p hp =>
-      (patternHolds_iff hw hterms hrows (validEnv_canon hp hdom hval)).mp (hall p hp)⟩
+      (patternHolds_iff hw (validEnv_canon hp hdom hval)).mp (hall p hp)⟩
   · rintro ⟨hdom, hval, hall⟩
     exact ⟨⟨hdom, hval⟩, fun p hp =>
-      (patternHolds_iff hw hterms hrows (validEnv_canon hp hdom hval)).mpr (hall p hp)⟩
+      (patternHolds_iff hw (validEnv_canon hp hdom hval)).mpr (hall p hp)⟩
 
 /-- A restricted substitution refines the one it came from. -/
 theorem Env.refines_canon {vars : List Var} {σ : Env} : Env.Refines (Env.canon vars σ) σ :=
@@ -462,11 +433,10 @@ theorem Env.refines_canon {vars : List Var} {σ : Env} : Env.Refines (Env.canon 
 The two differ in shape only: the spec joins one substitution per pattern with
 `Env.UnionAll`, and the enumerator restricts a single one. `Env.exists_unionAll` builds the
 join out of the restrictions, which are pairwise compatible because they all refine `σ`. -/
-theorem mvalidQuerySubst_of_mem_matchQuery {d : FDatabase} (hw : d.WF)
-    (hterms : d.toDatabase.CtorTerms) (hrows : d.toDatabase.CtorRows) {q : Query} {σ : Env}
+theorem validQuerySubst_of_mem_matchQuery {d : FDatabase} (hw : d.WF) {q : Query} {σ : Env}
     (h : σ ∈ matchQuery d q) :
-    ∃ τ, MValidQuerySubst d.toDatabase q τ ∧ Env.Agree τ σ := by
-  obtain ⟨hdom, hval, hall⟩ := (mem_matchQuery_iff hw hterms hrows).mp h
+    ∃ τ, ValidQuerySubst d.toDatabase q τ ∧ Env.Agree τ σ := by
+  obtain ⟨hdom, hval, hall⟩ := (mem_matchQuery_iff hw).mp h
   obtain ⟨τ, hu, hr⟩ := Env.exists_unionAll (σ := σ)
     (q.map fun p => Env.canon (p.freeVars d.env) σ) (by
       intro ρ hρ
@@ -499,9 +469,8 @@ theorem Env.canon_canon {vars vars' : List Var} {σ : Env} (hsub : vars ⊆ vars
 /-- Conversely, every substitution the spec admits has a representative in the enumerator's
 output: restricting it to the query's free variables puts it in the canonical form
 `assignments` produces, and no lookup can tell the two apart. -/
-theorem mem_matchQuery_of_mvalidQuerySubst {d : FDatabase} (hw : d.WF)
-    (hterms : d.toDatabase.CtorTerms) (hrows : d.toDatabase.CtorRows) {q : Query} {τ : Env}
-    (h : MValidQuerySubst d.toDatabase q τ) :
+theorem mem_matchQuery_of_validQuerySubst {d : FDatabase} (hw : d.WF) {q : Query} {τ : Env}
+    (h : ValidQuerySubst d.toDatabase q τ) :
     Env.canon (Query.freeVars q d.env) τ ∈ matchQuery d q ∧
       Env.Agree τ (Env.canon (Query.freeVars q d.env) τ) := by
   have hmd : ∀ v, v ∈ Env.dom τ ↔ v ∈ Query.freeVars q d.env := fun v => by
@@ -513,7 +482,7 @@ theorem mem_matchQuery_of_mvalidQuerySubst {d : FDatabase} (hw : d.WF)
   have hag : Env.Agree τ (Env.canon (Query.freeVars q d.env) τ) :=
     (Env.agree_of_refines Env.refines_canon (fun v hv => by
       rw [hdom]; exact (hmd v).mp hv)).symm
-  refine ⟨(mem_matchQuery_iff hw hterms hrows).mpr ⟨hdom, ?_, ?_⟩, hag⟩
+  refine ⟨(mem_matchQuery_iff hw).mpr ⟨hdom, ?_, ?_⟩, hag⟩
   · exact fun b hb => h.mem_terms b (Env.mem_of_lookup (Env.mem_canon hb).2)
   · intro p hp
     obtain ⟨σs, hall, hu⟩ := h
@@ -527,15 +496,15 @@ theorem mem_matchQuery_of_mvalidQuerySubst {d : FDatabase} (hw : d.WF)
       exact Env.Refines.self_of_nodup (hvs'.validEnv.1.symm.nodup (p'.freeVars_nodup _))
     have hrp : Env.Refines σp τ := (hu.refines_of_mem hsc).1 σp hσp
     rw [Env.canon_canon hpsub (Query.freeVars_nodup q d.env)]
-    refine MValidSubst.of_agree hvs (fun v => ?_) hpdom
+    refine ValidSubst.of_agree hvs (fun v => ?_) hpdom
     by_cases hv : v ∈ p.freeVars d.env
     · rw [Env.lookup_canon (p.freeVars_nodup _) hv]
       cases hlk : Env.lookup v σp with
       | none =>
         rw [Env.lookup_eq_none_iff] at hlk
-        exact absurd ((MValidSubst.validEnv hvs).1.mem_iff.mpr hv) hlk
+        exact absurd ((ValidSubst.validEnv hvs).1.mem_iff.mpr hv) hlk
       | some t => exact (hrp (v, t) (Env.mem_of_lookup hlk)).symm
-    · rw [Env.lookup_eq_none_iff.mpr fun hc => hv ((MValidSubst.validEnv hvs).1.mem_iff.mp hc),
+    · rw [Env.lookup_eq_none_iff.mpr fun hc => hv ((ValidSubst.validEnv hvs).1.mem_iff.mp hc),
         Env.lookup_eq_none_iff.mpr fun hc => hv (hpdom ▸ hc)]
 
 /-! ### Refinement: actions
@@ -742,8 +711,7 @@ contribute the same databases.
 This is `RunRules`, the rule-firing half of a round; the merge phase is empty here because
 `exec` runs the constructor fragment, where `MergeStep` never fires
 (`MergeStep.not_of_allConstructors`). -/
-theorem execRunRules_RunRules {d : FDatabase} (hw : d.WF) (hterms : d.toDatabase.CtorTerms)
-    (hrows : d.toDatabase.CtorRows) :
+theorem execRunRules_RunRules {d : FDatabase} (hw : d.WF) :
     (execRunRules d).toDatabase = RunRules d.toDatabase := by
   refine Database.ext ?_ ?_ ?_ ?_ ?_ ?_
   · simp [FDatabase.toDatabase, RunRules, Database.sUnion]
@@ -753,13 +721,13 @@ theorem execRunRules_RunRules {d : FDatabase} (hw : d.WF) (hterms : d.toDatabase
     constructor
     · rintro (ht | ⟨r, hr, σ, hσ, d', hf, ht⟩)
       · exact Or.inl ht
-      · obtain ⟨τ, hτ, hag⟩ := mvalidQuerySubst_of_mem_matchQuery hw hterms hrows hσ
+      · obtain ⟨τ, hτ, hag⟩ := validQuerySubst_of_mem_matchQuery hw hσ
         refine Or.inr ⟨d'.toDatabase, ⟨r, hr, τ, hτ, ?_⟩, ht⟩
         rw [evalLocalActions_agree r.actions hag]
         exact fired_toDatabase hf
     · rintro (ht | ⟨e, ⟨r, hr, τ, hτ, hev⟩, ht⟩)
       · exact Or.inl ht
-      · obtain ⟨hmem, hag⟩ := mem_matchQuery_of_mvalidQuerySubst hw hterms hrows hτ
+      · obtain ⟨hmem, hag⟩ := mem_matchQuery_of_validQuerySubst hw hτ
         have hev' : evalLocalActions d.toDatabase r.actions
             (Env.canon (Query.freeVars r.query d.env) τ) = some e := by
           rw [← evalLocalActions_agree r.actions hag]; exact hev
@@ -774,13 +742,13 @@ theorem execRunRules_RunRules {d : FDatabase} (hw : d.WF) (hterms : d.toDatabase
     constructor
     · rintro (hq | ⟨r, hr, σ, hσ, d', hf, hq⟩)
       · exact Or.inl hq
-      · obtain ⟨τ, hτ, hag⟩ := mvalidQuerySubst_of_mem_matchQuery hw hterms hrows hσ
+      · obtain ⟨τ, hτ, hag⟩ := validQuerySubst_of_mem_matchQuery hw hσ
         refine Or.inr ⟨d'.toDatabase, ⟨r, hr, τ, hτ, ?_⟩, hq⟩
         rw [evalLocalActions_agree r.actions hag]
         exact fired_toDatabase hf
     · rintro (hq | ⟨e, ⟨r, hr, τ, hτ, hev⟩, hq⟩)
       · exact Or.inl hq
-      · obtain ⟨hmem, hag⟩ := mem_matchQuery_of_mvalidQuerySubst hw hterms hrows hτ
+      · obtain ⟨hmem, hag⟩ := mem_matchQuery_of_validQuerySubst hw hτ
         have hev' : evalLocalActions d.toDatabase r.actions
             (Env.canon (Query.freeVars r.query d.env) τ) = some e := by
           rw [← evalLocalActions_agree r.actions hag]; exact hev
@@ -795,13 +763,13 @@ theorem execRunRules_RunRules {d : FDatabase} (hw : d.WF) (hterms : d.toDatabase
     constructor
     · rintro (hp | ⟨r, hr, σ, hσ, d', hf, hp⟩)
       · exact Or.inl hp
-      · obtain ⟨τ, hτ, hag⟩ := mvalidQuerySubst_of_mem_matchQuery hw hterms hrows hσ
+      · obtain ⟨τ, hτ, hag⟩ := validQuerySubst_of_mem_matchQuery hw hσ
         refine Or.inr ⟨d'.toDatabase, ⟨r, hr, τ, hτ, ?_⟩, hp⟩
         rw [evalLocalActions_agree r.actions hag]
         exact fired_toDatabase hf
     · rintro (hp | ⟨e, ⟨r, hr, τ, hτ, hev⟩, hp⟩)
       · exact Or.inl hp
-      · obtain ⟨hmem, hag⟩ := mem_matchQuery_of_mvalidQuerySubst hw hterms hrows hτ
+      · obtain ⟨hmem, hag⟩ := mem_matchQuery_of_validQuerySubst hw hτ
         have hev' : evalLocalActions d.toDatabase r.actions
             (Env.canon (Query.freeVars r.query d.env) τ) = some e := by
           rw [← evalLocalActions_agree r.actions hag]; exact hev
@@ -851,7 +819,7 @@ theorem execCmd_cmdStep {d : FDatabase} (h : d.toDatabase.CtorState) {c : Cmd}
     exact ⟨fun hd => hd ▸ .rule, fun hs => by cases hs with | rule => rfl⟩
   | run =>
     rw [show execCmd d .run = some (execRunRules d) from rfl, Option.map_some,
-      Option.some.injEq, execRunRules_RunRules h.wf h.terms h.rows]
+      Option.some.injEq, execRunRules_RunRules h.wf]
     constructor
     · rintro rfl
       exact .run Relation.ReflTransGen.refl
@@ -904,11 +872,11 @@ exactly the states the semantics reaches — an `if and only if`, so a `#guard` 
 differential test constrains `Spec/` in both directions.
 
 `exec` used to have no hypotheses, because it was compared against a *function*. Compared
-against the relation it needs the two that pin the merge phase down to nothing, and
-neither is removable: `Proofs/Counterexamples.lean`'s `execM_reachable_needs_setLegal` is
-a program satisfying `CtorDecls` alone whose `exec` state no `ProgramStep` reaches, and
+against the relation it carries two. `hdecl` is not removable —
 `exists_mergeStep_not_ctorRows` is why a `:merge` declaration has to be excluded even
-where no `set` occurs.
+where no `set` occurs. `hlegal` is what re-establishes `Database.CtorState` at each
+command; its necessity witness is gone with `Cong`'s row-reading, and
+`Proofs/Counterexamples.lean` records that it is now an open question.
 
 Everything the interpreter is tested on — the `#guard` cases in `Examples.lean` and the
 differential test against egglog — therefore says something about the specification. -/

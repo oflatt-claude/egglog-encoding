@@ -9,34 +9,34 @@ The e-matcher's API, on the one matching relation there is. `ValidEnv` per patte
 unioned: `RuleResults.wf` and `RuleResults.ctorTerms` need it, because a firing runs its
 head in the caller's environment extended by the substitution and both invariants ask
 that every value there be a term the database already holds. -/
-namespace MValidSubst
+namespace ValidSubst
 variable {db : Database} {p : Pattern} {σ : Env}
 
-/-- The hypothesis `patternHolds_MValidSubst` adds is a consequence of its conclusion,
+/-- The hypothesis `patternHolds_validSubst` adds is a consequence of its conclusion,
 which is why requiring it costs nothing. Since the hoist it is the left conjunct. -/
-theorem validEnv (h : MValidSubst db p σ) : ValidEnv (p.freeVars db.env) db σ := h.1
+theorem validEnv (h : ValidSubst db p σ) : ValidEnv (p.freeVars db.env) db σ := h.1
 
-theorem mem_terms (h : MValidSubst db p σ) : ∀ b ∈ σ, b.2 ∈ db.terms :=
+theorem mem_terms (h : ValidSubst db p σ) : ∀ b ∈ σ, b.2 ∈ db.terms :=
   h.validEnv.mem_terms
 
 /-- Appending a matching substitution to the globals cannot fail. -/
-theorem union2_env (h : MValidSubst db p σ) : Env.Union2 db.env σ (db.env ++ σ) :=
+theorem union2_env (h : ValidSubst db p σ) : Env.Union2 db.env σ (db.env ++ σ) :=
   h.validEnv.union2_env fun _ hv => p.freeVars_lookup_eq_none hv
 
 /-- A matching substitution binds exactly the pattern's free variables. -/
-theorem mem_dom_iff (h : MValidSubst db p σ) {v : Var} :
+theorem mem_dom_iff (h : ValidSubst db p σ) {v : Var} :
     v ∈ Env.dom σ ↔ v ∈ p.freeVars db.env :=
   h.validEnv.mem_dom_iff
 
-end MValidSubst
-/-- `MValidSubst` transfers along agreement, provided the new substitution has exactly the
+end ValidSubst
+/-- `ValidSubst` transfers along agreement, provided the new substitution has exactly the
 pattern's free variables as its domain.
 
 Agreement alone is not enough, because `ValidEnv` pins the domain — which is precisely why
 an executable enumerator has to canonicalize rather than emit any agreeing representative. -/
-theorem MValidSubst.of_agree {db : Database} {p : Pattern} {σ σ' : Env}
-    (h : MValidSubst db p σ) (hag : Env.Agree σ σ')
-    (hdom : Env.dom σ' = p.freeVars db.env) : MValidSubst db p σ' := by
+theorem ValidSubst.of_agree {db : Database} {p : Pattern} {σ σ' : Env}
+    (h : ValidSubst db p σ) (hag : Env.Agree σ σ')
+    (hdom : Env.dom σ' = p.freeVars db.env) : ValidSubst db p σ' := by
   have hterms : ∀ b ∈ σ', b.2 ∈ db.terms := by
     intro b hb
     have hnd : (Env.dom σ').Nodup := hdom ▸ p.freeVars_nodup db.env
@@ -57,52 +57,52 @@ theorem MValidSubst.of_agree {db : Database} {p : Pattern} {σ σ' : Env}
   | values hu ht hk hw hrow =>
     exact .values (by rw [hevl]; exact hu) (by rw [hevl]; exact ht) hk hw hrow
 
-/-! ### Reading `MCongOn` back as an `addTerm`
+/-! ### Reading `CongOn` back as an `addTerm`
 
-The three shapes `MMatches` uses, unfolded to the nested `addTerm`/`addTerms` every
+The three shapes `Matches` uses, unfolded to the nested `addTerm`/`addTerms` every
 congruence lemma is stated at. The first two are `Iff.rfl`: `withOperands` at a list
-*literal* is a fold that reduces, so `MCongOn db [t]` and `MCongOn db [t₁, t₂]` *are*
-`MCong (db.addTerm t)` and `MCong ((db.addTerm t₁).addTerm t₂)`. Only the row atom's
+*literal* is a fold that reduces, so `CongOn db [t]` and `CongOn db [t₁, t₂]` *are*
+`Cong (db.addTerm t)` and `Cong ((db.addTerm t₁).addTerm t₂)`. Only the row atom's
 `ts ++ us`, whose two halves are variables, needs a rewrite. -/
 
-theorem mCongOn_singleton {db : Database} {t a b : Term} :
-    MCongOn db [t] a b ↔ MCong (db.addTerm t) a b := Iff.rfl
+theorem congOn_singleton {db : Database} {t a b : Term} :
+    CongOn db [t] a b ↔ Cong (db.addTerm t) a b := Iff.rfl
 
-theorem mCongOn_pair {db : Database} {t₁ t₂ a b : Term} :
-    MCongOn db [t₁, t₂] a b ↔ MCong ((db.addTerm t₁).addTerm t₂) a b := Iff.rfl
+theorem congOn_pair {db : Database} {t₁ t₂ a b : Term} :
+    CongOn db [t₁, t₂] a b ↔ Cong ((db.addTerm t₁).addTerm t₂) a b := Iff.rfl
 
-theorem mCongListOn_append {db : Database} {ts us as bs : List Term} :
-    MCongListOn db (ts ++ us) as bs ↔ MCongList ((db.addTerms ts).addTerms us) as bs := by
-  unfold MCongListOn Database.withOperands
+theorem congListOn_append {db : Database} {ts us as bs : List Term} :
+    CongListOn db (ts ++ us) as bs ↔ CongList ((db.addTerms ts).addTerms us) as bs := by
+  unfold CongListOn Database.withOperands
   rw [Database.addTerms_append]
 
 /-! ### The hoist changed nothing
 
-`MValidSubst` used to be one inductive whose three constructors each carried their own
+`ValidSubst` used to be one inductive whose three constructors each carried their own
 `ValidEnv` premise, written out longhand, and their own extended database, spelled as
 nested `addTerm`/`addTerms`. That relation is reproduced verbatim once here, so that
-`mvalidSubst_iff_unfactored` can check the factored form means the same thing. Nothing
+`validSubst_iff_unfactored` can check the factored form means the same thing. Nothing
 else uses it. -/
 
-/-- The pre-hoist `MValidSubst`, copied unchanged. -/
-inductive MValidSubstUnfactored (db : Database) : Pattern → Env → Prop where
+/-- The pre-hoist `ValidSubst`, copied unchanged. -/
+inductive ValidSubstUnfactored (db : Database) : Pattern → Env → Prop where
   | expr {e : Expr} {σ : Env} {w t : Term} :
       ValidEnv (e.freeVars db.env) db σ → w ∈ db.terms →
-      e.eval db.sig (db.env ++ σ) = some t → MCong (db.addTerm t) w t →
-      MValidSubstUnfactored db (.expr e) σ
+      e.eval db.sig (db.env ++ σ) = some t → Cong (db.addTerm t) w t →
+      ValidSubstUnfactored db (.expr e) σ
   | eq {e₁ e₂ : Expr} {σ : Env} {w t₁ t₂ : Term} :
       ValidEnv (e₁.freeVars db.env ∪ e₂.freeVars db.env) db σ → w ∈ db.terms →
       e₁.eval db.sig (db.env ++ σ) = some t₁ → e₂.eval db.sig (db.env ++ σ) = some t₂ →
-      MCong ((db.addTerm t₁).addTerm t₂) w t₁ → MCong ((db.addTerm t₁).addTerm t₂) t₁ t₂ →
-      MValidSubstUnfactored db (.eq e₁ e₂) σ
+      Cong ((db.addTerm t₁).addTerm t₂) w t₁ → Cong ((db.addTerm t₁).addTerm t₂) t₁ t₂ →
+      ValidSubstUnfactored db (.eq e₁ e₂) σ
   | values {vs : List Expr} {f : FnName} {as : List Expr} {σ : Env}
       {us ts ws bs : List Term} :
       ValidEnv (Expr.freeVarsList vs db.env ∪ Expr.freeVarsList as db.env) db σ →
       Expr.evalList db.sig vs (db.env ++ σ) = some us →
       Expr.evalList db.sig as (db.env ++ σ) = some ts →
-      MCongList ((db.addTerms ts).addTerms us) ts bs →
-      MCongList ((db.addTerms ts).addTerms us) us ws → Row.mk f bs ws ∈ db.rows →
-      MValidSubstUnfactored db (.values vs f as) σ
+      CongList ((db.addTerms ts).addTerms us) ts bs →
+      CongList ((db.addTerms ts).addTerms us) us ws → Row.mk f bs ws ∈ db.rows →
+      ValidSubstUnfactored db (.values vs f as) σ
 
 /-- **The two relations are the same.** Two things had to be checked, and each shows up
 below as the absence of a transport:
@@ -110,38 +110,38 @@ below as the absence of a transport:
 * the hoisted `ValidEnv (p.freeVars db.env) db σ` is *definitionally* each constructor's
   old premise, because `Pattern.freeVars` is defined by cases on the pattern — the `hv`s
   pass straight through;
-* `MCongOn db [t]` and `MCongOn db [t₁, t₂]` are definitionally the old `addTerm` chains
-  (`mCongOn_singleton`, `mCongOn_pair`), so only the row atom's `ts ++ us` needs
-  `mCongListOn_append`. -/
-theorem mvalidSubst_iff_unfactored {db : Database} {p : Pattern} {σ : Env} :
-    MValidSubst db p σ ↔ MValidSubstUnfactored db p σ := by
+* `CongOn db [t]` and `CongOn db [t₁, t₂]` are definitionally the old `addTerm` chains
+  (`congOn_singleton`, `congOn_pair`), so only the row atom's `ts ++ us` needs
+  `congListOn_append`. -/
+theorem validSubst_iff_unfactored {db : Database} {p : Pattern} {σ : Env} :
+    ValidSubst db p σ ↔ ValidSubstUnfactored db p σ := by
   constructor
   · rintro ⟨hv, h⟩
     cases h with
     | expr hw he hc => exact .expr hv hw he hc
     | eq hw he₁ he₂ hc₁ hc₂ => exact .eq hv hw he₁ he₂ hc₁ hc₂
     | values hu ht hk hw hrow =>
-      exact .values hv hu ht (mCongListOn_append.mp hk) (mCongListOn_append.mp hw) hrow
+      exact .values hv hu ht (congListOn_append.mp hk) (congListOn_append.mp hw) hrow
   · intro h
     cases h with
     | expr hv hw he hc => exact ⟨hv, .expr hw he hc⟩
     | eq hv hw he₁ he₂ hc₁ hc₂ => exact ⟨hv, .eq hw he₁ he₂ hc₁ hc₂⟩
     | values hv hu ht hk hw hrow =>
-      exact ⟨hv, .values hu ht (mCongListOn_append.mpr hk) (mCongListOn_append.mpr hw) hrow⟩
+      exact ⟨hv, .values hu ht (congListOn_append.mpr hk) (congListOn_append.mpr hw) hrow⟩
 
-namespace MValidQuerySubst
+namespace ValidQuerySubst
 variable {db : Database} {q : Query} {σ : Env}
 
 /-- Every value a query substitution binds is a term the database holds — `ValidEnv` per
 pattern, unioned. -/
-theorem mem_terms (h : MValidQuerySubst db q σ) : ∀ b ∈ σ, b.2 ∈ db.terms := by
+theorem mem_terms (h : ValidQuerySubst db q σ) : ∀ b ∈ σ, b.2 ∈ db.terms := by
   obtain ⟨σs, hall, hu⟩ := h
   refine hu.forall_mem fun σ' hσ' b hb => ?_
   obtain ⟨p, _, hv⟩ := hall.exists_left hσ'
   exact hv.mem_terms b hb
 
 /-- A query substitution binds exactly the query's free variables. -/
-theorem mem_dom_iff (h : MValidQuerySubst db q σ) {v : Var} :
+theorem mem_dom_iff (h : ValidQuerySubst db q σ) {v : Var} :
     v ∈ Env.dom σ ↔ ∃ p ∈ q, v ∈ p.freeVars db.env := by
   obtain ⟨σs, hall, hu⟩ := h
   rw [hu.mem_dom_iff]
@@ -151,11 +151,11 @@ theorem mem_dom_iff (h : MValidQuerySubst db q σ) {v : Var} :
     exact ⟨p, hp, hvs.mem_dom_iff.mp hv⟩
   · rintro ⟨p, hp, hv⟩
     obtain ⟨σ', hσ', hvs⟩ := hall.flip.exists_left hp
-    exact ⟨σ', hσ', (MValidSubst.mem_dom_iff hvs).mpr hv⟩
+    exact ⟨σ', hσ', (ValidSubst.mem_dom_iff hvs).mpr hv⟩
 
 /-- The empty query is satisfied by exactly the empty substitution: a rule with no
 patterns fires once. -/
-theorem nil_iff : MValidQuerySubst db [] σ ↔ σ = [] := by
+theorem nil_iff : ValidQuerySubst db [] σ ↔ σ = [] := by
   constructor
   · rintro ⟨σs, hall, hu⟩
     cases hall
@@ -164,13 +164,12 @@ theorem nil_iff : MValidQuerySubst db [] σ ↔ σ = [] := by
   · rintro rfl
     exact ⟨[], .nil, .nil⟩
 
-end MValidQuerySubst
+end ValidQuerySubst
 /-! ### Constructor rows survive a run
 
-`Database.CtorRows` — the rows are exactly the ones the terms induce — is one of the two
-things `mcong_iff_cong` at the end of this file wants of a database (`Database.CtorTerms`,
-below, is the other), and something has to connect it to a database a program can
-produce.
+`Database.CtorRows` — the rows are exactly the ones the terms induce — is what says a
+state is in the constructor fragment, and something has to connect it to a database a
+program can produce.
 `Proofs/Database.lean` shows every database operation preserves it. What is left is to
 carry it along the semantics, which takes three side conditions, each of them necessary:
 
@@ -233,9 +232,9 @@ Bundled because they have to move together — a `decl` changes the signature, s
 what `SetLegal` means for the rules already stored, and `RunRules` needs those rules legal
 to keep the rows constructor rows.
 
-`terms` is what `mcong_iff_cong` reads, and it is a field rather than a consequence of
-`sig` because declaration is required: `AllConstructors` says nothing *is* a merge
-function, which leaves an undeclared name neither a constructor nor a merge function.
+`terms` is a field rather than a consequence of `sig` because declaration is required:
+`AllConstructors` says nothing *is* a merge function, which leaves an undeclared name
+neither a constructor nor a merge function.
 `wf` is here only to keep `terms`: an action evaluates in `db.env`, and knowing that the
 environment's values are constructor-built is `Database.env_ctorTerm`, which reads both. -/
 structure Database.CtorState (db : Database) : Prop where
@@ -255,8 +254,8 @@ theorem Database.CtorState.empty : Database.empty.CtorState where
 /-! #### Constructor terms survive a run
 
 `Database.CtorTerms` — every application the database holds heads a declared constructor —
-is the second thing `mcong_iff_cong` wants, and the one the old reading of
-`Signature.IsCtor` gave away for free. It is carried the same way `CtorRows` is, with the
+is the one the old reading of `Signature.IsCtor` gave away for free. It is carried the
+same way `CtorRows` is, with the
 same three side conditions doing the same work: `Expr.eval` builds only at a constructor,
 so an action adds nothing else; a `set` is the one action that could, and `SetLegal` plus
 `AllConstructors` leaves none; and a `decl` moves the signature, where `CtorDecl` keeps it
@@ -346,8 +345,8 @@ theorem Signature.IsCtor.update {sig : Signature} {f g : FnName} {d : FnDecl}
 `Signature.IsCtor.update` this puts no condition on the declaration: whatever `f` is
 declared to be, it was not a constructor before, so nothing that *was* one is disturbed.
 
-This is what declaration-required buys, and the reason `mcong_mono_needs_sig` is not a
-counterexample to it: that witness *re*declares a name that was already a constructor. -/
+This is what declaration-required buys. A *re*declaration is the case it does not
+cover, and `Falsity.claim1` is where that bites. -/
 theorem Signature.IsCtor.update_of_fresh {sig : Signature} {f g : FnName} {dc : FnDecl}
     (hf : sig f = none) (h : sig.IsCtor g) :
     Signature.IsCtor (Function.update sig f (some dc)) g := by
@@ -582,144 +581,5 @@ theorem ProgramStep.ctorRows {db db' : Database} {p : Program}
     (hlegal : p.SetLegal db.sig)
     (hrules : ∀ r ∈ db.rules, r.SetLegal db.sig) : db'.CtorRows :=
   (ProgramStep.ctorState ⟨hwf, hsig, hterms, hrules, hrows⟩ hdecl hlegal hstep).rows
-
-/-! ### The generalized relation is the old one
-
-`MCong` is `Cong` with `congr` replaced by `fd`, so the two have to be reconciled
-somewhere, and this is where: the constructor fragment is exactly where they coincide,
-and `Database.CtorState` above is what a program run leaves. Two directions, two
-hypotheses. `MCong → Cong` needs only that the rows are constructor rows, because a
-constructor row is one whatever the signature says. `Cong → MCong` also needs every
-application the database holds to head a declared constructor, which is what licenses
-`fd`.
-
-`Database.toM` is gone: `Database` *is* the M9 database now, so the embedding it named is
-the identity and `CtorRows` is what the theorems below quantify over instead. -/
-theorem Database.mem_rows_iff {db : Database} (h : db.CtorRows) {f : FnName}
-    {as vs : List Term} :
-    Row.mk f as vs ∈ db.rows ↔ vs = [.app f as] ∧ Term.app f as ∈ db.terms := by
-  rw [h]; exact Iff.rfl
-
-mutual
-
-/-- Every functional-dependency derivation over constructor rows is an M2 derivation.
-
-`fd` is the only interesting case: its two rows are constructor rows, so their outputs
-are `.app f as` and `.app f bs` and both applications are in `db.terms` — the two
-premises `Cong.congr` wants. -/
-theorem MCong.toCong {db : Database} (hrows : db.CtorRows) {a b : Term}
-    (h : MCong db a b) : Cong db a b := by
-  match h with
-  | .assert hm => exact .assert hm
-  | .refl hm => exact .refl hm
-  | .symm h => exact .symm (MCong.toCong hrows h)
-  | .trans h₁ h₂ => exact .trans (MCong.toCong hrows h₁) (MCong.toCong hrows h₂)
-  | .fd ha hb _ hl hxy =>
-    obtain ⟨rfl, hma⟩ := (Database.mem_rows_iff hrows).mp ha
-    obtain ⟨rfl, hmb⟩ := (Database.mem_rows_iff hrows).mp hb
-    simp only [List.zip_cons_cons, List.zip_nil_left, List.mem_cons, List.not_mem_nil,
-      or_false, Prod.mk.injEq] at hxy
-    obtain ⟨rfl, rfl⟩ := hxy
-    exact .congr hma hmb (MCongList.toCongList hrows hl)
-
-theorem MCongList.toCongList {db : Database} (hrows : db.CtorRows) {as bs : List Term}
-    (h : MCongList db as bs) : CongList db as bs := by
-  match h with
-  | .nil => exact .nil
-  | .cons hab hl => exact .cons (MCong.toCong hrows hab) (MCongList.toCongList hrows hl)
-
-end
-
-mutual
-
-/-- Every M2 derivation is a functional-dependency derivation.
-
-`congr` is the only interesting case, and its two membership premises are exactly what is
-needed: `RowsComplete` turns each into a row `fd` can use, and `CtorTerms` says the
-function they are applications of is a constructor, which is what lets `fd` fire.
-
-Stated over `CtorTerms`/`RowsComplete` rather than `AllConstructors`/`CtorRows` because
-those two **survive merging** — they constrain `terms` and the constructor rows, neither
-of which a merge touches (`FDatabase.mergeRound_confined`) — whereas `CtorRows` fails at
-the first `:merge` declaration. That is what lets the interpreter's `closureF`, which
-computes `Cong`, be read as `MCong` in a database that has merge functions in it, and it
-is the reason `Proofs/Merge.lean`'s refinement chain can exist at all. -/
-theorem Cong.toMCong' {db : Database} (hterms : db.CtorTerms) (hrows : db.RowsComplete)
-    {a b : Term} (h : Cong db a b) : MCong db a b := by
-  match h with
-  | .assert hm => exact .assert hm
-  | .refl hm => exact .refl hm
-  | .symm h => exact .symm (Cong.toMCong' hterms hrows h)
-  | .trans h₁ h₂ =>
-    exact .trans (Cong.toMCong' hterms hrows h₁) (Cong.toMCong' hterms hrows h₂)
-  | .congr (f := f) (as := as) (bs := bs) hma hmb hl =>
-    exact .fd (a := [Term.app f as]) (b := [Term.app f bs])
-      (hrows ⟨rfl, hma⟩) (hrows ⟨rfl, hmb⟩) (hterms f as hma)
-      (CongList.toMCongList' hterms hrows hl) (by simp)
-
-theorem CongList.toMCongList' {db : Database} (hterms : db.CtorTerms)
-    (hrows : db.RowsComplete) {as bs : List Term} (h : CongList db as bs) :
-    MCongList db as bs := by
-  match h with
-  | .nil => exact .nil
-  | .cons hab hl =>
-    exact .cons (Cong.toMCong' hterms hrows hab) (CongList.toMCongList' hterms hrows hl)
-
-end
-
-/-- `CtorRows` gives `RowsComplete`: it is the equality, this is one inclusion of it.
-
-Written with `▸` rather than `h.ge`: the latter goes through `Set`'s order instances and
-puts `Classical.choice` into the axiom set of everything downstream, including
-`mcong_iff_cong`, which is otherwise `propext` alone. -/
-theorem Database.CtorRows.rowsComplete {db : Database} (h : db.CtorRows) :
-    db.RowsComplete := fun _ hr => h.symm ▸ hr
-
-theorem Cong.toMCong {db : Database} (hterms : db.CtorTerms) (hrows : db.CtorRows)
-    {a b : Term} (h : Cong db a b) : MCong db a b :=
-  Cong.toMCong' hterms hrows.rowsComplete h
-
-theorem CongList.toMCongList {db : Database} (hterms : db.CtorTerms)
-    (hrows : db.CtorRows) {as bs : List Term} (h : CongList db as bs) :
-    MCongList db as bs :=
-  CongList.toMCongList' hterms hrows.rowsComplete h
-
-/-- **The compatibility theorem.** Where the rows are the constructor rows and every
-application the database holds is a declared constructor's, the functional dependency *is*
-congruence.
-
-`CtorTerms` where this used to read `Signature.AllConstructors`. The two coincided while an
-undeclared name counted as a constructor, and now they do not: `AllConstructors` says
-nothing *is* a merge function, which no longer implies that the applications in `terms`
-are constructors' — that has to be carried as a state invariant, which is
-`Database.CtorState.terms`.
-
-This is what `PLAN.md` M9 asks for, and the reason `MCong` has no `congr` constructor:
-congruence is not lost, it is `fd` read at constructor rows.
-
-It replaces `mcong_toM_iff`, which quantified over the embedding `Database.toM` of an
-M2 database into a separate `MDatabase`. Now that the two states are one structure that
-embedding is the identity, so the *hypothesis* `CtorRows` carries what the embedding
-used to: it says the state is in the constructor-only fragment. -/
-theorem mcong_iff_cong {db : Database} (hterms : db.CtorTerms)
-    (hrows : db.CtorRows) {a b : Term} : MCong db a b ↔ Cong db a b :=
-  ⟨MCong.toCong hrows, Cong.toMCong hterms hrows⟩
-
-/-- **The compatibility theorem, at a state a program can reach.** A program that declares
-only constructors and never `set`s one runs to a database where the two relations agree.
-
-`ProgramStep.ctorState` supplies both hypotheses; this is the composition. -/
-theorem ProgramStep.mcong_iff_cong {p : Program} {db : Database}
-    (hstep : ProgramStep Database.empty p db) (hdecl : p.CtorDecls)
-    (hlegal : p.SetLegal Database.empty.sig) {a b : Term} : MCong db a b ↔ Cong db a b :=
-  let hc := ProgramStep.ctorState Database.CtorState.empty hdecl hlegal hstep
-  Egglog.mcong_iff_cong hc.terms hc.rows
-
-/-- Congruence, recovered as a derived rule rather than a constructor. -/
-theorem MCong.congr {db : Database} {f : FnName} {as bs : List Term}
-    (ha : Row.mk f as [.app f as] ∈ db.rows) (hb : Row.mk f bs [.app f bs] ∈ db.rows)
-    (hsig : db.sig.IsCtor f) (hl : MCongList db as bs) :
-    MCong db (.app f as) (.app f bs) :=
-  .fd ha hb hsig hl (by simp)
 
 end Egglog

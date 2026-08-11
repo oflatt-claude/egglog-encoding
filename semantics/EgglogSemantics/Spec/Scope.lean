@@ -230,10 +230,10 @@ abbrev Check.setLegal : Check Signature where
 
 The other half of declare-before-use: `Evaluable` says a name must be declared *before* it
 is applied, this says a name is declared *once*. Nothing in the dynamics forbids a
-redeclaration — `Cmd.sigBind` is `Function.update` — but one can change what
-`Signature.IsCtor` says of a name the state already has rows of, and so *remove* a
-derivation `Spec/Merge.lean`'s `MCong.fd` had. `Proofs/Counterexamples.lean`'s
-`mono_recorded_decl_false` is the redeclaration that breaks it. -/
+redeclaration — `Cmd.sigBind` is `Function.update` — but one changes what
+`Signature.IsCtor` says of a name the state already has terms of, and so breaks
+`Database.CtorTerms`. `Proofs/Counterexamples.lean`'s `claim1` is the redeclaration that
+breaks it. -/
 
 /-- Every declaration names something the signature does not already have. The walk asks
 this *before* `Cmd.sigBind` installs the name; after, it would be reading back

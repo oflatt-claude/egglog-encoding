@@ -13,7 +13,7 @@ Every hand-built database below holds the terms its equalities mention. A state 
 equalities but no terms is unreachable — a `union` always inserts its operands — so
 there is nothing to check about one.
 
-Checks about what a `run` does *not* produce need `MValidSubst` inversion, which is
+Checks about what a `run` does *not* produce need `ValidSubst` inversion, which is
 `PLAN.md`'s M8; the `run` example below is the forward direction only. Randomly
 generated programs, checked against the real egglog binary, are `DiffTest.lean`.
 -/
@@ -185,16 +185,15 @@ private def preWrapped : Database where
   env := []
   rules := ∅
 
-example : MValidSubst preWrapped (.expr (.app "wrapper" [eNum 1])) [] :=
+example : ValidSubst preWrapped (.expr (.app "wrapper" [eNum 1])) [] :=
   ⟨⟨by simp [Pattern.freeVars, eNum], by simp⟩,
     .expr (w := .app "wrapper" [num 2]) (t := .app "wrapper" [num 1])
       (by simp [preWrapped])
       (by rw [Expr.eval_app_ctor (show Prim.ofName "wrapper" = none from rfl)
             (show Signature.IsCtor preWrapped.sig "wrapper" from ⟨ctorDecl 1, rfl, rfl⟩)]
           rfl)
-      (mCongOn_singleton.mpr (MCong.congr (Or.inl ⟨rfl, by simp [preWrapped]⟩)
-        (Or.inr ⟨rfl, Term.self_mem_subterms _⟩)
-        (show Signature.IsCtor preWrapped.sig "wrapper" from ⟨ctorDecl 1, rfl, rfl⟩)
+      (congOn_singleton.mpr (Cong.congr (Or.inl (by simp [preWrapped]))
+        (Or.inr (Term.self_mem_subterms _))
         (.cons (.symm (.assert (by simp [preWrapped]))) .nil)))⟩
 
 /-- Over the database holding just `1`, the substitution `v1 ↦ 1` is a valid
@@ -241,7 +240,7 @@ example : ∃ db, ProgramStep Database.empty actionsProgram db ∧
 `(Add 1 2)`, `(rule ((Add a b)) ((Add b a)))`, `(run)` produces `(Add 2 1)`.
 Only the forward direction is shown: the substitution `a ↦ 1, b ↦ 2` satisfies the
 query and its actions build `(Add 2 1)`. That nothing *else* is produced needs
-`MValidSubst` inversion (`PLAN.md`, M8). -/
+`ValidSubst` inversion (`PLAN.md`, M8). -/
 
 private def add12 : Term := .app "Add" [num 1, num 2]
 
@@ -285,10 +284,10 @@ private theorem ruleProgram_step :
 
 /-- The one firing of the rule: `a ↦ 1`, `b ↦ 2`, witnessed by `(Add 1 2)` itself. -/
 private theorem swap_matches :
-    MValidQuerySubst preRun swapRule.query [("a", num 1), ("b", num 2)] := by
+    ValidQuerySubst preRun swapRule.query [("a", num 1), ("b", num 2)] := by
   refine ⟨[[("a", num 1), ("b", num 2)]], .cons ?_ .nil, .single _⟩
-  refine ⟨⟨?_, ?_⟩, MMatches.expr (w := add12) (t := add12) ?_ ?_
-    (mCongOn_singleton.mpr (.refl ?_))⟩
+  refine ⟨⟨?_, ?_⟩, Matches.expr (w := add12) (t := add12) ?_ ?_
+    (congOn_singleton.mpr (.refl ?_))⟩
   · simp [Env.dom, Pattern.freeVars, preRun]
   · intro c hc
     simp only [List.mem_cons, List.not_mem_nil, or_false] at hc
@@ -370,7 +369,7 @@ example : Cong chain (num 1) (num 3) := by
 /-! ### Running programs
 
 Whole programs, run by the interpreter rather than proved. This includes the two-round
-`Wrapper` case, which needs `MValidSubst` inversion to state as a theorem and so has no
+`Wrapper` case, which needs `ValidSubst` inversion to state as a theorem and so has no
 hand proof. -/
 
 /- `(Add 1 2)`, `(rule ((Add a b)) ((Add b a)))`, `(run)`: terms

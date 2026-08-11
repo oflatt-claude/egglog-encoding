@@ -57,17 +57,20 @@ theorem congr' {f : FnName} {as bs : List Term} (ha : Term.app f as ∈ db.terms
 
 /-- **For a constructor, the table's functional dependency is derivable congruence.** Two
 rows of one constructor whose keys are congruent have congruent outputs, column by column
-— `Spec/Merge.lean`'s `MCong.fd`, here as a *result* about `Cong` rather than a
-constructor of a second relation. The M9 insight, in the direction that costs nothing.
+— the M9 insight, as a *result* about `Cong` rather than a rule of it. This is the whole
+of what a row set adds to congruence, which is why `Spec/` needs only one relation.
 
 The only hypothesis is the **shape of the constructor rows**: wherever `db` records a row
 of a constructor, its output column is the application itself and that application is a
 term `db` holds. Nothing else — no `Database.CtorRows`, no `Database.RowsComplete`, no
-`Database.CtorTerms`, so this is strictly less than `mcong_iff_cong` needs. It is
-`Proofs/Merge.lean`'s `FDatabase.Inv.ctorRows` with its guard weakened from
-`mergeOf r.fn = none` to `IsCtor r.fn`, which is the clause that survives a `:merge`
-declaration of some other name; it is spelled out rather than named because its three
-siblings live in `Spec/Database.lean` and a fourth one here would split the family.
+`Database.CtorTerms`. It is `Proofs/Merge.lean`'s `FDatabase.Inv.ctorRows` with its guard
+weakened from `mergeOf r.fn = none` to `IsCtor r.fn`, which is the clause that survives a
+`:merge` declaration of some other name; it is spelled out rather than named because its
+three siblings live in `Spec/Database.lean` and a fourth one here would split the family.
+
+It is **not** free: `Action.SetLegal` is what keeps it true, and a `set` on a constructor
+is a database where it fails and where the two rows say nothing. egglog's front end
+rejects that program.
 
 `Cong.congr` is the case `as = bs`; `Cong.refl` on an application is the case where the
 two rows are one. -/

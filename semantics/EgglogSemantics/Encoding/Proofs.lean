@@ -10,19 +10,16 @@ wrong statement proved is worth less than a right one stated.
 ## The asymmetry between the two sides
 
 The source `P` is in the constructor fragment, so `Database.CtorRows` and
-`Database.CtorTerms` hold of the state it runs to and `mcong_iff_cong` says the
-functional dependency there *is* congruence. Source-side equality is therefore written
-`Cong`.
+`Database.CtorTerms` hold of the state it runs to and `Proofs/Congruence.lean`'s `Cong.fd`
+applies there: the functional dependency of a source constructor's table *is* congruence.
 
 Neither holds of the target. `encode` declares `@UF` and every `@fView` with a `:merge`,
-so `Signature.AllConstructors` is false (`encode_not_allConstructors`), and their rows are
-not constructor rows, so `CtorRows` is false and `mcong_iff_cong` does not apply. What takes
-its place is the opposite fact: every table the encoded program writes is a merge
-function's and it asserts no equalities, so `MCong` on the target collapses to syntactic
-equality
-(`encode_mcong_eq`) — congruence there is *entirely simulated* by `@UF` and the views'
-`:merge`. So no theorem below writes `Cong tgt` or `MCong tgt`; the target side speaks
-only of `ViewRepr`, `UFLeader` and rows.
+so `Signature.AllConstructors` is false (`encode_not_allConstructors`) and their rows are
+not constructor rows. What takes its place is the opposite fact: the encoded program
+asserts no equalities, so `Cong` on the target collapses to syntactic equality
+(`encode_cong_eq`) — congruence there is *entirely simulated* by `@UF` and the views'
+`:merge`. So no theorem below writes `Cong tgt`; the target side speaks only of
+`ViewRepr`, `UFLeader` and rows.
 
 The second asymmetry is `Rebuilt`. Soundness — every recorded equality is real — is an
 invariant and holds at every reachable state, so it needs no saturation hypothesis at
@@ -48,20 +45,19 @@ variable {P : Program} {src tgt : Database} {a b : Term}
 theorem states `Cong`, which is not. This is what converts.
 
 **`CongOn` is vacuous on the diagonal**, and five statements below conclude it:
-`Encoding/Rebuilt.lean`'s `congOn_refl` proves `CongOn db a a` for every `db` and every
+`Encoding/Rebuilt.lean`'s `congOn_refl` proves `CongOn db [a, a] a a` for every `db` and every
 `a`, hypothesis-free, so each of them says nothing wherever its two terms coincide. The
 statements are left as they are — they are M11's deliverable — and `CongOnVacuity` there
 records which obligations that empties and the two shapes that would fix it. -/
 /-- On terms the database holds, building them again changes nothing. -/
 theorem congOn_iff_cong {db : Database} (hwf : db.WF) (hrows : db.CtorRows)
-    (ha : a ∈ db.terms) (hb : b ∈ db.terms) : CongOn db a b ↔ Cong db a b := sorry
+    (ha : a ∈ db.terms) (hb : b ∈ db.terms) : CongOn db [a, b] a b ↔ Cong db a b := sorry
 
 /-! ### The target is not the constructor fragment
 
 Three statements of one fact, and the reason the theorems below are not symmetric. -/
 /-- `encode` declares `@UF` with a `:merge`, so the target signature has a
-non-constructor. `mcong_iff_cong` is therefore unavailable on the target, and with it
-every M2–M8 theorem that transports through it. -/
+non-constructor, and `Database.CtorRows` fails there. -/
 theorem encode_not_allConstructors (htgt : ProgramStep Database.empty (encode P) tgt) :
     ¬ tgt.sig.AllConstructors := sorry
 
@@ -71,16 +67,15 @@ calls to union"). Every equality it records is a `@UF` row. -/
 theorem encode_eqs_empty (htgt : ProgramStep Database.empty (encode P) tgt) :
     tgt.eqs = ∅ := sorry
 
-/-- **Congruence in the target is entirely simulated.** `MCong` there is syntactic
-equality: `eqs` is empty by `encode_eqs_empty`, and the only constructors are the
-source constructor names, whose rows are exactly the constructor rows their own terms
-induce, so `fd` only ever re-derives reflexivity.
+/-- **Congruence in the target is entirely simulated.** `Cong` there is syntactic
+equality: `eqs` is empty by `encode_eqs_empty`, so `congr` only ever relates two
+applications whose arguments are already equal.
 
 This is what makes table lookups in the target read keys syntactically, as egglog's do,
 and it is the formal content of `MERGE.md`'s "in the target, congruence is entirely
 simulated". -/
-theorem encode_mcong_eq (htgt : ProgramStep Database.empty (encode P) tgt) {x y : Term}
-    (h : MCong tgt x y) : x = y := sorry
+theorem encode_cong_eq (htgt : ProgramStep Database.empty (encode P) tgt) {x y : Term}
+    (h : Cong tgt x y) : x = y := sorry
 
 /-! ### Theorem (2), soundness
 
@@ -99,15 +94,16 @@ the reading under which it is.
 
 **Vacuous at the identity view row**, which is the one `encodeBuild` emits for every
 application it encodes: the second conjunct there reads
-`CongOn src (.app f es) (.app f es)`, closed by `congOn_refl` with no reference to `src`.
+`CongOn src [.app f es, .app f es] (.app f es) (.app f es)`, closed by `congOn_refl`.
 `Encoding/Rebuilt.lean`'s `encode_rows_sound_conj2_at_identity` is that obligation,
 proved; `encode_rows_sound_conj1_at_root` is the same for the first conjunct at a `@UF`
 root. -/
 theorem encode_rows_sound (hdom : P.EncodeDomain)
     (hsrc : ProgramStep Database.empty P src) (hsig : src.sig.AllConstructors)
     (hrows : src.CtorRows) (htgt : ProgramStep Database.empty (encode P) tgt) :
-    (∀ k p, Row.mk ufName [k] [p] ∈ tgt.rows → CongOn src k p) ∧
-      (∀ f es e, Row.mk (viewName f) es [e] ∈ tgt.rows → CongOn src (.app f es) e) := sorry
+    (∀ k p, Row.mk ufName [k] [p] ∈ tgt.rows → CongOn src [k, p] k p) ∧
+      (∀ f es e, Row.mk (viewName f) es [e] ∈ tgt.rows →
+        CongOn src [.app f es, e] (.app f es) e) := sorry
 
 /-- A union-find leader is equal to what it leads. The transitive closure of the first
 half of `encode_rows_sound`, and the form the simulation theorem consumes.
@@ -117,7 +113,7 @@ Vacuous at `t = l`, which is every term that is its own leader — `congOn_refl`
 theorem encode_leader_sound (hdom : P.EncodeDomain)
     (hsrc : ProgramStep Database.empty P src) (hsig : src.sig.AllConstructors)
     (hrows : src.CtorRows) (htgt : ProgramStep Database.empty (encode P) tgt)
-    {t l : Term} (h : UFLeader tgt t l) : CongOn src t l := sorry
+    {t l : Term} (h : UFLeader tgt t l) : CongOn src [t, l] t l := sorry
 
 /-! ### Theorem (3), simulation
 
@@ -134,7 +130,7 @@ in the case of two distinct terms. -/
 theorem encode_sound (hdom : P.EncodeDomain)
     (hsrc : ProgramStep Database.empty P src) (hsig : src.sig.AllConstructors)
     (hrows : src.CtorRows) (htgt : ProgramStep Database.empty (encode P) tgt)
-    (h : SameClass tgt a b) : CongOn src a b := sorry
+    (h : SameClass tgt a b) : CongOn src [a, b] a b := sorry
 
 /-- Every source term has a view reading. The encoding builds and interns every term the
 source builds, so the right-hand side of the simulation theorem is never vacuously
@@ -173,12 +169,11 @@ it is the correspondence between a source term and a target e-class.
 The hypotheses, and why each is here:
 
 * `hdom` — `encode`'s domain, `PLAN.md`'s fragment.
-* `hsig`, `hrows` — the source is in the constructor fragment, so `mcong_iff_cong`
-  applies there and `Cong` is the right relation to state. They follow from `hdom` along
+* `hsig`, `hrows` — the source is in the constructor fragment. They follow from `hdom` along
   `hsrc` by the `CtorRows` preservation lemma; they are hypotheses here so the statement
   can be read without it.
 * `hwf` — `Database.WF`, to know `a` and `b` are subterm-closed, which is what makes
-  `CongOn src a b` and `Cong src a b` the same on terms the source holds.
+  `CongOn src [a, b] a b` and `Cong src a b` the same on terms the source holds.
 * `hreb` — completeness only; see `encode_complete`.
 * `ha`, `hb` — `Cong` is restricted to `db.terms` at `refl` and `congr`, so it is only
   the intended relation on terms the source holds.
@@ -235,7 +230,7 @@ theorem encode_proof_rows_check (hdom : P.EncodeDomain)
     (hsrc : ProgramStep Database.empty P src) (hsig : src.sig.AllConstructors)
     (hrows : src.CtorRows) (htgt : ProgramStep Database.empty (encode P) tgt)
     {k p pf : Term} (hrow : Row.mk ufName [k] [p, pf] ∈ tgt.rows) :
-    Checks P pf k p ∧ CongOn src k p := sorry
+    Checks P pf k p ∧ CongOn src [k, p] k p := sorry
 
 /-- The view's half of theorem (1) + (2). A view row's proof runs the other way round
 from a `@UF` row's: it proves `eclass = f(children)`.
@@ -247,6 +242,6 @@ theorem encode_proof_view_rows_check (hdom : P.EncodeDomain)
     (hrows : src.CtorRows) (htgt : ProgramStep Database.empty (encode P) tgt)
     {f : FnName} {es : List Term} {e pf : Term}
     (hrow : Row.mk (viewName f) es [e, pf] ∈ tgt.rows) :
-    Checks P pf e (.app f es) ∧ CongOn src e (.app f es) := sorry
+    Checks P pf e (.app f es) ∧ CongOn src [e, .app f es] e (.app f es) := sorry
 
 end Egglog

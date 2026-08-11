@@ -191,7 +191,7 @@ theorem EnvAgree.eq_of_env_rules {d₁ d₂ : Database} (h : d₁.EnvAgree d₂)
 `addTerms` is a fold, so its untouched fields need an induction rather than `rfl`. -/
 
 /-- One extension by a concatenation is two extensions in a row. What lets
-`Spec/Merge.lean`'s `MCongListOn db (ts ++ us)` be worked with as the nested
+`Spec/Merge.lean`'s `CongListOn db (ts ++ us)` be worked with as the nested
 `(db.addTerms ts).addTerms us` every other `addTerms` lemma is stated at. -/
 theorem addTerms_append {db : Database} {ts us : List Term} :
     db.addTerms (ts ++ us) = (db.addTerms ts).addTerms us :=
@@ -372,11 +372,10 @@ theorem sUnion {db : Database} (h : WF db) {S : Set Database}
 end WF
 /-! ### Constructor rows
 
-`CtorRows db` says the row set is exactly the one the term set induces. It is one of the
-two hypotheses `Proofs/Merge.lean`'s `mcong_iff_cong` takes — `Database.CtorTerms` is the
-other — so this is the first half of making that theorem apply to a database a program
-can actually produce. `Proofs/Step.lean` carries it along the step relations, where the
-side condition `Action.SetLegal` enters.
+`CtorRows db` says the row set is exactly the one the term set induces: the condition
+that says a state is in the constructor fragment, and the one that gives
+`Proofs/Congruence.lean`'s `Cong.fd` its hypothesis. `Proofs/Step.lean` carries it along
+the step relations, where the side condition `Action.SetLegal` enters.
 
 Everything here is one observation: `ctorRowsOf` is a comprehension whose only
 dependence on the term set is a single membership test, so it commutes with unions. -/

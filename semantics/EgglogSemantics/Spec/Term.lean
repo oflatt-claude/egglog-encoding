@@ -89,8 +89,8 @@ end Term
 /-! ### Rows
 
 A database maps each function's key tuple to its value columns. For a constructor there is
-one value column and it holds the application itself, which is what makes congruence and
-the functional dependency one rule (`MCong.fd`). -/
+one value column and it holds the application itself, which is what makes the table's
+functional dependency derivable congruence — `Proofs/Congruence.lean`'s `Cong.fd`. -/
 /-- One tuple of one function's table: `fn args… ↦ out…`. `out` is a *list*, one entry per
 value column: egglog's tables are multi-column, and the encoding depends on it —
 `@UF_<Sort>` carries a parent *and* a proof. -/

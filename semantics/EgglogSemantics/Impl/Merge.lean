@@ -36,11 +36,10 @@ still chooses is `patternHolds`' row scan, which sees a superseded output where 
 sees only the current one — `MERGE.md`, "What the widening and the composed interpreter
 found", has the repro.
 
-The congruence closure is *unchanged*. `MCong.fd` fires only at `.union` functions, and
-a `.union` function's rows are exactly the constructor rows `Impl/Closure.lean` already
-sees through `terms`; a `:merge` function's rows contribute nothing to `MCong`. So
-`closureF` needs no `fd` disjunct as long as every declared function is `.merge` or
-`.noMerge`, which is `Proofs/Merge.lean`'s `closureF_ok`.
+The congruence closure is *unchanged*, and needs no argument to stay so: `Cong` reads
+`terms` and `eqs` and no row at all, so `closureF` decides it whatever the row set holds.
+What a constructor's rows add — the functional dependency — is
+`Proofs/Congruence.lean`'s `Cong.fd`, a theorem rather than a rule.
 -/
 
 namespace Egglog
@@ -279,10 +278,10 @@ renders `i64` per output column, so no program the difftest can build has an eq-
 merge output, and re-keying values would put the implementation's rows outside
 `Database.Out` — the relation `Spec/Merge.lean`'s `Database.Recorded` reads them through.
 
-**Constructor rows are left alone**, for the same reason `MCong.fd` needs them: a
-constructor row is `⟨f, as, [.app f as]⟩` determined by `terms`, and re-keying one would
-break `Database.RowsComplete` while buying nothing — congruence already reads it from
-every congruent key. `.noMerge` rows are left alone too; a `:no-merge` collision is a
+**Constructor rows are left alone**: a constructor row is `⟨f, as, [.app f as]⟩`
+determined by `terms`, and re-keying one would break `Database.RowsComplete` while buying
+nothing — congruence never reads a row, and `Database.Out` reads it from every congruent
+key already. `.noMerge` rows are left alone too; a `:no-merge` collision is a
 program error, not a resolution. -/
 /-- The canonical member of `t`'s congruence class: the congruent term created *first*.
 
@@ -410,7 +409,7 @@ observable, since a body writes.
 the spec would *under*-approximate egglog (`MERGE.md`, "No guard on the collision"). An
 interpreter is under no such obligation — firing fewer steps still lands on a reachable
 state — and egglog merges a retained row against an incoming staged one, so it never
-self-merges either. What they produce is a row `MCong` already derives, so nothing is
+self-merges either. What they produce is a row `Cong` already derives, so nothing is
 lost.
 
 **The inner loop ranges over the pre-pass rows**, not the accumulator, so a pass is a
