@@ -22,8 +22,9 @@ it validates against the extended language.
 working on now, what is parked, the two interpreter contracts, and how to check a change.
 
 The rest of `PLAN.md` has what the port changes and why, and the milestones.
-[`MERGE.md`](MERGE.md) is the `:merge` design (M9). [`CHECKER.md`](CHECKER.md) records what
-a Lean model of egglog's proof checker would cost, and is parked with M11.
+[`MERGE.md`](MERGE.md) is the `:merge` design (M9). Two files are parked with M11:
+[`ENCODING.md`](ENCODING.md), what was learned from the encoding's theorems before they were
+deleted, and [`CHECKER.md`](CHECKER.md), what a Lean model of egglog's proof checker would cost.
 
 One thing worth knowing before reading any of it: `Spec/` is append-only and `Impl/` is
 not. The reference implementation deletes superseded merge rows because egglog does, so the
@@ -41,7 +42,7 @@ read closely and the second skimmed.
 | `EgglogSemantics/Impl/` | the reference implementation, which computes it | none |
 | `EgglogSemantics/Proofs/` | everything proved about the two, one file per subject | all |
 | `EgglogSemantics/Tests/` | example programs as proofs and `#guard`s, and the `.egg` emitter | a few |
-| `EgglogSemantics/Encoding/` | **parked M11** — the proof encoding, its statements, and what is known against them | 13 `sorry` |
+| `EgglogSemantics/Encoding/` | **parked M11** — the encoder `encode` and nothing else; its theorems were deleted, and [`ENCODING.md`](ENCODING.md) is what survives them | none |
 
 `Spec/` and `Impl/` hold **definitions only** — no `theorem` appears in either. The
 one exception the language forces is a proof needed to *make* a definition: the
@@ -52,16 +53,15 @@ is there for a proof's sake.
 Reading order for `Spec/`: `Syntax` → `Term` → `Database` → `Congruence` → `Eval` →
 `Match` → `Scope` → `Merge`. The semantics is defined **once**, relationally: `Merge`
 holds the matching relation and the step relations, and there is no functional
-duplicate of either. `Impl/` has `Closure` and `Interp`, with `Merge` adding M9's
-lookup evaluator and merge phase.
+duplicate of either. `Impl/` has `Closure` and `Interp`, with `Merge` adding only M9's merge
+phase and `Check` the two front-end checks that are `Bool` rather than `Prop`.
 
 Each `Proofs/X.lean` is about `Spec/X.lean` or `Impl/X.lean`, with three exceptions worth
-knowing about: `Proofs/Counterexamples.lean` and `Proofs/Lattice.lean` hold compiling
-witnesses that particular statements are **false**, and `Encoding/Rebuilt.lean` the same for
-M11's `Rebuilt` hypothesis. All three are `sorry`-free and in the build, so a refuted
-statement cannot quietly come back. The third is `Proofs/Step.lean`, which is about
-`Spec/Merge.lean`'s step relations and is split from `Proofs/Merge.lean` only because
-`Proofs/Interp.lean` sits between them.
+knowing about. `Proofs/Counterexamples.lean` and `Proofs/Lattice.lean` hold compiling
+witnesses that particular statements are **false** — `sorry`-free and in the build, so a
+refuted statement cannot quietly come back. `Proofs/Step.lean` is about `Spec/Merge.lean`'s
+step relations, split from `Proofs/Merge.lean` only because `Proofs/Interp.lean` sits
+between them.
 `Proofs/Interp.lean` holds `exec_programStep`, the biconditional that ties spec and
 implementation together.
 
@@ -75,10 +75,11 @@ lake build
 or, from the workspace root:
 
 - `make lean-check` — builds and fails on any `sorry`. It **currently fails by design**:
-  18 statements are deliberately unproved. Use it to check a change adds no *new* one.
+  5 statements are deliberately unproved, all in `Proofs/Merge.lean`. Use it to check a
+  change adds no *new* one.
 - `make lean-difftest` — runs the interpreter and egglog on the same generated programs and
   compares per-function row counts, for the constructor fragment and for M9's `:merge`
-  functions. 122 cases. Needs a release `egglog` binary.
+  functions. 166 cases. Needs a release `egglog` binary.
 
 Requires [`elan`](https://github.com/leanprover/elan); the toolchain is pinned in
 `lean-toolchain` and Mathlib in `lakefile.toml` / `lake-manifest.json`.

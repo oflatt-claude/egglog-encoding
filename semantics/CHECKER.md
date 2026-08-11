@@ -1,25 +1,18 @@
-# M11: the proof encoding and its checker — a record, not a work queue
+# M11: the proof checker — a record, not a work queue
 
 **M11 is parked** (`PLAN.md`, "Current priority"): the encoding is downstream of a model we trust
 and we do not have one yet. This records what was learned from reading `egglog/src/proofs/` at
 `3364576`, from `--proofs` runs on constructor-only programs, and from building `Encoding/Encode.lean`.
 
-**Two things to know before anyone restarts it.**
+**Read [`ENCODING.md`](ENCODING.md) first.** The encoding's theorems have been deleted, and that
+file is what survives them: two defects that made them vacuous — `Rebuilt` unsatisfiable at
+reachable states, `CongOn` vacuous on the diagonal — and the repairs that do and do not work.
+Nothing about them is repeated here. **This file is about the checker**, which was never written
+and whose cost is what it scopes.
 
-* **`Rebuilt` is reachability-vacuous.** Maintenance rules fire only inside `Cmd.run`, so a program
-  with no `run` after its last `union` never reaches a rebuilt state, and `encode_complete`,
-  `encode_simulation` and `encode_simulation_run` are vacuously true for every program that does
-  real work. `Encoding/Rebuilt.lean` has the machine-checked witnesses: `not_rebuilt₀` for
-  `P₀ = (f 2) (union 1 2)`, `rebuilt₁` for `P₁ = (f 1) (union 1 2)`, and `rebuilt_rekeys` as the
-  general form. Fix this **first** — proving those statements as they stand would establish
-  nothing. Appending `(run)`s to *both* programs fixes it; adding them to the target alone would
-  break soundness, since the extra rounds also fire the encoded source rules.
-* **The encoder does not emit proof rows**, which is why the two proof-checking theorems are
-  vacuous and `Checks` is still `opaque`.
-
-**Assume the 13 statements in `Encoding/Proofs.lean` are wrong until checked.** Nine of the seventeen
-`execM` refinement-chain statements were false as written, and *those* had proved M10 counterparts
-in `Proofs/Interp.lean` to copy from; the M11 statements have nothing to check against.
+**Assume any statement about the encoder is wrong until checked.** Nine of the seventeen `execM`
+refinement-chain statements were false as written, and *those* had proved M10 counterparts in
+`Proofs/Interp.lean` to copy from.
 
 ## The headline finding: the checker is not what reads the rows
 
@@ -176,7 +169,7 @@ and variables, is `Spec/Eval.lean`'s `evalAction` with a different accumulator: 
 the pair both ways, and every evaluated call contributes reflexive equalities for the term *and all
 its subterms* (`add_subterm_reflexive_equalities`, `:226`), for which M1's `Term.subterms` is
 already right. Two facts make (1a) cheaper than `PLAN.md` assumes: the checker reads the *source*
-program, so `Checks` is a predicate over the syntax `Spec/` already models and theorem (2) (checker
+program, so a Lean `Checks` would be a predicate over the syntax `Spec/` already models and theorem (2) (checker
 soundness → `Cong`) is close to a restatement of `Cong.le`; and the fragment needs only 5 of 8
 justification kinds, all with direct counterparts in `Cong`. What `PLAN.md` under-weights is that
 the rows are not the proofs.
@@ -227,34 +220,30 @@ Each is recorded at its definition in `Encoding/Encode.lean`; the reasons in one
   one shape here reuses the id.
 * **No `!=`, no rulesets, no construct-into, no `set-if-empty`.** The first two only add no-op
   firings, but a ruleset-less `Cmd.run` is why `run-schedule` becomes the predicate `Rebuilt` and
-  hence why the vacuity above bites. The last two only move row counts.
+  hence why `ENCODING.md`'s first finding bites. The last two only move row counts.
 * **The one-value-column blocker is fixed**: `Action.set` takes one expression per value column
   (egglog's core `GenericCoreAction::Set(f, args, values)`) and `Pattern.values` reads a non-first
   column (`MERGE.md`, "Multi-column outputs"). `tuple-two`, `tuple-merge`, `tuple-read`,
   `tuple-read-congr` exercise it and agree — but `(print-size)` counts key classes and is blind to
   value columns, so a row-count comparison validates the declaration, the `set` and that the
   destructure *fires*, not the merged values; `tuple-read` reaches the values by guarding on
-  literal columns so the firing shows in its head constructor's count. `encode_proof_rows_check` is
-  still vacuous for an encoder reason now, not a language one.
+  literal columns so the firing shows in its head constructor's count. So when a proof-column
+  theorem is restated, the language will not be what stops it — the encoder not emitting the column
+  will.
 
 ### Open design questions
 
-Parked with the milestone; each is argued at its statement in `Encoding/Encode.lean`. Whether
-`ViewRepr` should be the source-to-target correspondence (chosen because it is observable in the
-target alone); whether `SameClass` should be universal rather than existential (a stronger claim,
-about the rebuild having converged, and only meaningful because rows are never removed); and
-whether `encode` should emit `@fTerm` at all (nothing reads it, and with structural ids its id
-column is redundant with its key). Two are load-bearing:
+Parked with the milestone; each is argued at its statement in `Encoding/Encode.lean`, which is the
+only Lean the encoding still has. Whether `ViewRepr` should be the source-to-target correspondence
+(chosen because it is observable in the target alone); whether `SameClass` should be universal
+rather than existential (a stronger claim, about the rebuild having converged, and only meaningful
+because rows are never removed); and whether `encode` should emit `@fTerm` at all (nothing reads
+it, and with structural ids its id column is redundant with its key).
 
-* **`CongOn` versus `Cong` in row soundness — review this first.** The rebuild re-keys a view row
-  to its children's leaders, so the target holds rows about applications the source never built
-  (`@AddView [1,1] ↦ Add[1,2]` after `(Add 1 2)` and `(union 1 2)`), which `Cong` — restricted to
-  `db.terms` at `refl` and `congr` — cannot mention. Hence
-  `CongOn db a b := Cong ((db.addTerm a).addTerm b) a b`, the form `ValidSubst` already uses, with
-  `congOn_iff_cong` converting on terms the source holds. If it is wrong, it is wrong in the
-  direction of the invariant the induction will carry.
-* **`MCong` on the target is claimed trivial** (`encode_mcong_eq`), resting on source constructor
-  names staying *constructors* in the target — they must be, to be buildable by `Expr.eval` — so
-  their rows are exactly the constructor rows their terms induce and `fd` only re-derives
-  reflexivity. A source `set`, or a `:merge` declaration of one of them surviving into the target,
-  would break it; `EncodeDomain` rules both out.
+One more, and it is the one to settle before restating anything: **congruence on the target is
+trivial, for a cheaper reason than the one first recorded.** The argument used to be that source
+constructor names stay constructors there, so the functional dependency only re-derives
+reflexivity. It does not need to be: `encode` emits no `union`, so the target asserts no
+equalities, and `Cong` restricted to a database with `eqs = ∅` is syntactic equality. `Cong` reads
+neither `rows` nor `sig`, so nothing about the target's tables can add a derivation at all. Any
+restatement gets this for free.

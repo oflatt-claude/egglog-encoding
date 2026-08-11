@@ -36,9 +36,8 @@ and `@fView` carry a parent/e-class *and* a proof. That column used to be inexpr
 every value column. So what remains between this file and a proofs-on encoding is
 *encoder* work: emitting a `@Proof` sort, the `@Rule_<k>` and `@Congr` node families, and
 a second column on every `set` and every view read. `encode` here still emits one-column
-rows, and `Proofs/Encode.lean`'s `encode_proof_rows_check` is still vacuous for that
-reason — a statement about a row shape the encoder does not yet write, rather than one the
-language cannot express. `Lit` still wants `.unit` and `.str`, which is what the proof
+rows, so any statement about the proof column is vacuous for that reason — a row shape the
+encoder does not yet write, rather than one the language cannot express. `Lit` still wants `.unit` and `.str`, which is what the proof
 column's `Unit` and `@Rule_<k>`'s rule name need.
 
 **No disequality and no rulesets.** `Pattern` has no `!=`, so the `(!= b c)` guards on

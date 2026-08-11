@@ -20,7 +20,7 @@ is not worth the maintenance.
 ### 1. `Rebuilt` is unsatisfiable at the states `encode` runs to
 
 `Rebuilt P d` is the saturation hypothesis `encode_complete`, `encode_simulation` and
-`encode_simulation_run` all carry. It is satisfiable for some states and not for the ones
+`encode_simulation_of_domain` all carry. It is satisfiable for some states and not for the ones
 that matter. Two source programs differing only in *which* term is built:
 
 * `P₁ = (f 1) (union 1 2)` — the union's larger endpoint `2` is not a view key, so the
