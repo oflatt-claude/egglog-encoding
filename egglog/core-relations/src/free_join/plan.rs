@@ -1231,7 +1231,7 @@ pub(crate) fn plan_query<'a>(query: Query, col_est: ColumnCardEst<'a>) -> Plan {
 /// JoinStage, but it still contains variable information.
 ///
 /// This separation makes it easier for us to iterate with different planning
-/// algorithms while sharing the same "backend" that generates a concrete plan.
+/// algorithms while sharing the same machinery that generates a concrete plan.
 #[derive(Debug)]
 struct StageInfo {
     cover: SubAtom,

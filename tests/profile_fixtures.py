@@ -93,7 +93,6 @@ def make_profile_case(
     request = profile_runner.ProfileRequest(
         file=file_spec,
         target_request=models.TargetRequest(raw=".", source=".", label=None),
-        backend="main",
         treatment="proofs",
         timeout_sec=120,
         profiles_dir=tmp_path,
@@ -109,7 +108,6 @@ def make_profile_case(
         tmp_path,
         target.binary_sha256,
         file_spec.sha256,
-        request.backend,
         request.treatment,
         request.mode,
     )

@@ -5,16 +5,16 @@
   
   ## Comparison
   
-  | Role | Target | Git | Backend | Treatment |
-  | --- | --- | --- | --- | --- |
-  | Baseline | baseline | abc123 | main | off |
-  | Candidate | candidate | abc123 | dd | proofs |
+  | Role | Target | Git | Treatment |
+  | --- | --- | --- | --- |
+  | Baseline | baseline | abc123 | off |
+  | Candidate | candidate | abc123 | proofs |
   
   *2 file(s): math.egg, rewrite.egg · 2 round(s) per endpoint/file · 120 s timeout per run · Report: /tmp/benchmark-report.jsonl*
   
-  *This comparison changes more than one of target, backend, and treatment. Its ratios describe the joint endpoint change and do not isolate one cause.*
+  *This comparison changes both target and treatment. Its ratios describe the joint endpoint change and do not isolate one cause.*
   
-  ## Summary — candidate dd/proofs vs baseline main/off
+  ## Summary — candidate proofs vs baseline off
   
   | Metric | Scope | File(s) | Ratio (95% CI) | Result |
   | --- | --- | --- | ---: | --- |
@@ -284,16 +284,16 @@
                                                                                                                           
   ────────────────────────────────────────────────────── Comparison ──────────────────────────────────────────────────────
                                                                                                                           
-    Role                          Target              Git                 Backend               Treatment                 
+    Role                                 Target                  Git                     Treatment                        
    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 
-    Baseline                      old                 abc123              main                  off                       
-    Candidate                     new                 abc123              main                  proofs                    
+    Baseline                             old                     abc123                  off                              
+    Candidate                            new                     abc123                  proofs                           
                                                                                                                           
   6 file(s): math.egg, eggcc-extract.egg, pointer-analysis-small.egg, hardboiled.egg, luminal.egg, herbie.egg · 2 round(s)
   per endpoint/file · 120 s timeout per run · Report: six-files.jsonl                                                     
-  This comparison changes more than one of target, backend, and treatment. Its ratios describe the joint endpoint change 
-  and do not isolate one cause.
-  ────────────────────────────────────── Summary — new main/proofs vs old main/off ───────────────────────────────────────
+  This comparison changes both target and treatment. Its ratios describe the joint endpoint change and do not isolate one 
+  cause.
+  ─────────────────────────────────────────── Summary — new proofs vs old off ────────────────────────────────────────────
                                                                                                                           
     Metric             Scope                             File(s)                       Ratio (95% CI)  Result             
    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 

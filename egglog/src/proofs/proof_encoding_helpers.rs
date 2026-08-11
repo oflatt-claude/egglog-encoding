@@ -893,7 +893,7 @@ pub enum ProofEncodingUnsupportedReason {
     )]
     MergeActionBlock,
     #[error(
-        "eq-sort-output `:no-merge` functions are not supported by the term/proof encoding (their conflict check needs union-find leaders); run them on the native backend, or give the function a `:merge` (e.g. `:merge old`). Primitive/`Unit`-output `:no-merge` functions are supported."
+        "eq-sort-output `:no-merge` functions are not supported by the term/proof encoding (their conflict check needs union-find leaders); run without term/proof encoding, or give the function a `:merge` (e.g. `:merge old`). Primitive/`Unit`-output `:no-merge` functions are supported."
     )]
     NoMergeEqSortFunction,
 }

@@ -1,7 +1,7 @@
 use std::{
     fmt::Debug,
     hash::Hash,
-    iter, slice,
+    slice,
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -11,8 +11,7 @@ use std::{
 
 use crate::core_relations;
 use crate::core_relations::{
-    ContainerValue, ExternalFunctionId, SortedWritesTable, Value, ValueRebuilder,
-    make_external_func,
+    ContainerValue, ExternalFunctionId, Value, ValueRebuilder, make_external_func,
 };
 use crate::numeric_id::NumericId;
 use log::debug;
@@ -23,194 +22,6 @@ use crate::{
     ColumnTy, DefaultVal, EGraph, FunctionConfig, FunctionId, MergeAction, MergeFn, QueryEntry,
     TableAction, add_expressions, define_rule,
 };
-
-#[test]
-fn dropped_rule_builder_releases_panics() {
-    let mut egraph = EGraph::default();
-    let unit_type = egraph.base_values_mut().register_type::<()>();
-    let register = |egraph: &mut EGraph| {
-        egraph.register_external_func(Box::new(make_external_func(
-            |state: &mut core_relations::ExecutionState<'_>, _args: &[Value]| {
-                Some(state.base_values().get(()))
-            },
-        )))
-    };
-    let target = register(&mut egraph);
-    let reusable = register(&mut egraph);
-    egraph.free_external_func(reusable);
-
-    let mut builder = egraph.new_rule("dropped", false);
-    builder.call_external_func(target, &[], ColumnTy::Base(unit_type), || "failed".into());
-    drop(builder);
-
-    assert_eq!(register(&mut egraph), reusable);
-    egraph.free_external_func(reusable);
-
-    let mut builder = egraph.new_rule("dropped", false);
-    assert_eq!(builder.new_panic("direct panic".into()), reusable);
-    drop(builder);
-    assert_eq!(register(&mut egraph), reusable);
-    egraph.free_external_func(reusable);
-
-    let mut builder = egraph.new_rule("dropped", false);
-    builder.panic("rule panic".into());
-    drop(builder);
-    assert_eq!(register(&mut egraph), reusable);
-    egraph.free_external_func(reusable);
-
-    let mut builder = egraph.new_rule("dropped", false);
-    let first = builder.new_panic("shared panic".into());
-    let second = builder.new_panic("shared panic".into());
-    assert_eq!(first, reusable);
-    assert_eq!(second, reusable);
-    drop(builder);
-    assert_eq!(register(&mut egraph), reusable);
-    egraph.free_external_func(reusable);
-
-    let rule = {
-        let mut builder = egraph.new_rule("built", false);
-        builder.panic("built panic".into());
-        builder.build()
-    };
-    let occupied = register(&mut egraph);
-    assert_ne!(occupied, reusable);
-    egraph.free_external_func(occupied);
-    egraph.free_rule(rule);
-    assert_eq!(register(&mut egraph), reusable);
-}
-
-#[test]
-fn removing_last_table_restores_shadowed_registry_entry_and_id() {
-    let mut egraph = EGraph::default();
-    let unit_type = egraph.base_values_mut().register_type::<()>();
-    let unit = egraph.base_values().get(());
-    let config = || FunctionConfig {
-        schema: vec![ColumnTy::Base(unit_type)],
-        n_vals: 1,
-        n_identity_vals: None,
-        default: DefaultVal::Const(unit),
-        merge: MergeFn::AssertEq,
-        name: "temporary".into(),
-        can_subsume: false,
-    };
-
-    let original = egraph.add_table(config());
-    let original_action = egraph
-        .action_registry()
-        .read()
-        .unwrap()
-        .lookup_table("temporary")
-        .unwrap()
-        .clone();
-    let temporary = egraph.add_table(config());
-
-    egraph.remove_last_table(temporary).unwrap();
-    assert_eq!(
-        egraph
-            .action_registry()
-            .read()
-            .unwrap()
-            .lookup_table("temporary"),
-        Some(&original_action)
-    );
-    assert_eq!(egraph.add_table(config()), temporary);
-    assert_ne!(original, temporary);
-}
-
-#[test]
-fn removing_unknown_or_non_last_function_preserves_registrations() {
-    let mut egraph = EGraph::default();
-    let unit_type = egraph.base_values_mut().register_type::<()>();
-    let unit = egraph.base_values().get(());
-    let config = |name: &str| FunctionConfig {
-        schema: vec![ColumnTy::Base(unit_type)],
-        n_vals: 1,
-        n_identity_vals: None,
-        default: DefaultVal::Const(unit),
-        merge: MergeFn::AssertEq,
-        name: name.into(),
-        can_subsume: false,
-    };
-    let first = egraph.add_table(config("first"));
-    let second = egraph.add_table(config("second"));
-    let first_action = TableAction::new(&egraph, first);
-    let second_action = TableAction::new(&egraph, second);
-
-    assert!(egraph.remove_last_table(FunctionId::new(u32::MAX)).is_err());
-    assert_eq!(egraph.table_size(first), 0);
-    assert_eq!(egraph.table_size(second), 0);
-    assert_eq!(
-        egraph
-            .action_registry()
-            .read()
-            .unwrap()
-            .lookup_table("first"),
-        Some(&first_action)
-    );
-    assert_eq!(
-        egraph
-            .action_registry()
-            .read()
-            .unwrap()
-            .lookup_table("second"),
-        Some(&second_action)
-    );
-
-    assert!(egraph.remove_last_table(first).is_err());
-    assert_eq!(egraph.table_size(first), 0);
-    assert_eq!(egraph.table_size(second), 0);
-    assert_eq!(
-        egraph
-            .action_registry()
-            .read()
-            .unwrap()
-            .lookup_table("first"),
-        Some(&first_action)
-    );
-    assert_eq!(
-        egraph
-            .action_registry()
-            .read()
-            .unwrap()
-            .lookup_table("second"),
-        Some(&second_action)
-    );
-}
-
-#[test]
-fn failed_database_table_removal_restores_function_registration() {
-    let mut egraph = EGraph::default();
-    let unit_type = egraph.base_values_mut().register_type::<()>();
-    let unit = egraph.base_values().get(());
-    let function = egraph.add_table(FunctionConfig {
-        schema: vec![ColumnTy::Base(unit_type)],
-        n_vals: 1,
-        n_identity_vals: None,
-        default: DefaultVal::Const(unit),
-        merge: MergeFn::AssertEq,
-        name: "function".into(),
-        can_subsume: false,
-    });
-    let action = TableAction::new(&egraph, function);
-    let blocker = egraph.db.add_table(
-        SortedWritesTable::new(1, 1, None, vec![], Box::new(|_, _, _, _| false)),
-        iter::empty(),
-        iter::empty(),
-    );
-
-    assert!(egraph.remove_last_table(function).is_err());
-    assert_eq!(egraph.table_size(function), 0);
-    assert_eq!(
-        egraph
-            .action_registry()
-            .read()
-            .unwrap()
-            .lookup_table("function"),
-        Some(&action)
-    );
-    assert!(egraph.db.remove_last_table(blocker));
-    egraph.remove_last_table(function).unwrap();
-}
 
 /// Run a simple associativity/commutativity test.
 ///
@@ -1767,7 +1578,7 @@ fn self_referential_merge_union_find() {
     // A merge that writes back into its OWN table, like the term encoding's single-table UF. On a
     // conflicting parent it keeps the smaller endpoint and re-inserts the displaced edge into
     // itself. Exercises `peek_next_function_id`, `MergeFn::TableInsert` into self, `Seq`, and the
-    // backend's self-write buffer pre-seed.
+    // e-graph's self-write buffer pre-seed.
     let mut egraph = EGraph::default();
     let int_base = egraph.base_values_mut().register_type::<i64>();
     let min_func = egraph.register_external_func(Box::new(core_relations::make_external_func(

@@ -95,21 +95,21 @@ or modify the JSONL.
 - The runner loads report JSONL once through the shared JSON codec into an
   indexed `ReportStore`; an interactive artifact embeds that complete snapshot
   and retargets only within it.
-- `proofs` is generation-only. The main-only `proof-extraction` treatment uses
+- `proofs` is generation-only. The `proof-extraction` treatment uses
   `--proof-extraction` to rewrite checks and extract, materialize, clean, and
   simplify proofs without verifying them. Treat its results as performance
   evidence only; `--proof-testing` remains the strict correctness mode.
-- Bare `./bench.py` compares `proofs` with `off`. The main-only
-  `proof-extraction` treatment is explicit opt-in; the DD backend rejects it.
+- Bare `./bench.py` compares `proofs` with `off`. The `proof-extraction`
+  treatment is explicit opt-in.
 - Benchmark inputs should not contain executable `(prove ...)` commands. Use
   `(check ...)` so the selected treatment controls proof extraction, and cover
   strict proof validity in proof tests.
 - Benchmark files are resolved relative to the command invocation directory,
   not relative to comparison targets.
 - Cache reuse is decided by binary SHA-256, file SHA-256, fact-directory
-  SHA-256, backend, treatment, and timeout.
+  SHA-256, treatment, and timeout.
 - The baseline and candidate must have different endpoint cache identities
-  (binary SHA-256, backend, and treatment). They may use the same binary when
-  backend or treatment differs.
+  (binary SHA-256 and treatment). They may use the same binary when treatment
+  differs.
 - A request must not contain duplicate file/fact-directory hash pairs; those
   selectors would address the same cached workload observations twice.

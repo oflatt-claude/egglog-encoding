@@ -168,8 +168,8 @@ deleted terms.
 (delete (@AddView n1_can n2_can))
 ```
 
-No deferral is added on top of the backend's own. A `delete` is staged into a
-mutation buffer and applied when the batch commits, and a table's commit applies
+No extra deferral is added. A `delete` is staged into a mutation buffer and
+applied when the batch commits, and a table's commit applies
 its removals *before* its insertions, so a row another rule inserts in the same
 batch outlives the delete. That is the uninstrumented meaning of `delete`, and
 lowering it directly is what preserves it.
@@ -315,7 +315,7 @@ per-column rules, so a subsumed row stays subsumed after its children move.
 # Globals
 
 *Before the term encoding*, [`crate::ast::remove_globals`] desugars every global
-variable to a nullary function, so the backend need not treat them specially:
+variable to a nullary function, so execution need not treat them specially:
 
 ```text
 (let g1 (Add (Num 1) (Num 2)))

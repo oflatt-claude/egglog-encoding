@@ -286,9 +286,6 @@ impl Counters {
         // NB: we may want to experiment with Ordering::Relaxed here.
         self.0[ctr].fetch_add(1, Ordering::Release)
     }
-    pub(crate) fn set(&self, ctr: CounterId, value: usize) {
-        self.0[ctr].store(value, Ordering::Release);
-    }
 }
 
 /// A collection of tables and indexes over them.
@@ -516,13 +513,6 @@ impl Database {
     /// Get the current value of the given counter.
     pub fn read_counter(&self, counter: CounterId) -> usize {
         self.counters.read(counter)
-    }
-
-    /// Overwrite the given counter's value. Used (by the differential-dataflow
-    /// backend) to roll a counter back to a previously read value, e.g. reclaiming
-    /// ids staged by an aborted action.
-    pub fn set_counter(&self, counter: CounterId, value: usize) {
-        self.counters.set(counter, value)
     }
 
     /// A helper for merging all pending updates. Used to write to the database after updates have
@@ -900,24 +890,6 @@ impl Database {
             }
         });
         self.total_size_estimate = self.total_size_estimate.wrapping_sub(prev_len);
-    }
-
-    /// Remove the most recently added table.
-    ///
-    /// This is intended for rolling back a failed higher-level registration.
-    /// It returns `false` without changing the database if `table` is not the
-    /// final table id.
-    pub fn remove_last_table(&mut self, table: TableId) -> bool {
-        let Some(info) = self.tables.pop_last(table) else {
-            return false;
-        };
-        let notified = self.notification_list.reset();
-        for other in notified.into_iter().filter(|other| *other != table) {
-            self.notification_list.notify(other);
-        }
-        self.deps.remove_last_table(table);
-        self.total_size_estimate = self.total_size_estimate.wrapping_sub(info.table.len());
-        true
     }
 
     pub(crate) fn plan_query(&mut self, query: Query) -> Plan {

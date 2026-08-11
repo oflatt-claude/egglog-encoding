@@ -229,7 +229,6 @@ class InteractiveRuntime:
                         "target": choice.endpoint.target.display_label,
                         "git_sha": choice.endpoint.target.row.git_sha,
                         "dirty": choice.endpoint.target.row.is_dirty,
-                        "backend": choice.endpoint.backend,
                         "treatment": choice.endpoint.treatment,
                     }
                     for choice in endpoint_choices
@@ -335,7 +334,6 @@ def _cache_universe(
             ),
             key=lambda choice: (
                 choice.endpoint.target.display_label,
-                choice.endpoint.backend,
                 choice.endpoint.treatment,
                 choice.endpoint.target.binary_sha256,
             ),
@@ -370,7 +368,7 @@ def _endpoint_from_record(record: ReportRecord) -> BenchmarkEndpoint:
         record["binary_sha256"],
         None,
     )
-    return BenchmarkEndpoint(target, record["backend"], record["treatment"])
+    return BenchmarkEndpoint(target, record["treatment"])
 
 
 def _file_from_record(record: ReportRecord) -> FileSpec:
@@ -389,7 +387,7 @@ def _endpoint_id(endpoint: BenchmarkEndpoint) -> str:
 
 
 def _record_endpoint_id(record: ReportRecord) -> str:
-    return report_id("endpoint", record["binary_sha256"], record["backend"], record["treatment"])
+    return report_id("endpoint", record["binary_sha256"], record["treatment"])
 
 
 def _endpoint_label(endpoint: BenchmarkEndpoint) -> str:
@@ -398,7 +396,7 @@ def _endpoint_label(endpoint: BenchmarkEndpoint) -> str:
     target = endpoint.target.display_label
     git = f"{short_git_sha}{dirty}"
     target_and_git = git if target == short_git_sha else f"{target} · {git}"
-    return f"{target_and_git} · {endpoint.backend}/{endpoint.treatment}"
+    return f"{target_and_git} · {endpoint.treatment}"
 
 
 def _file_id(file: FileSpec) -> str:

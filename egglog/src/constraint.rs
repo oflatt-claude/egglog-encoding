@@ -1,7 +1,7 @@
 use crate::{
     core::{
         Atom, CoreAction, CoreRule, GenericCoreActions, GenericCoreRule, HeadOrEq, Query,
-        QueryConstraints, StringOrEq,
+        StringOrEq,
     },
     *,
 };
@@ -831,17 +831,8 @@ impl Problem<AtomTerm, ArcSort> {
     }
 }
 
-trait CoreActionConstraints {
-    fn get_constraints(
-        &self,
-        typeinfo: &TypeInfo,
-        symbol_gen: &mut SymbolGen,
-        ctx: crate::Context,
-    ) -> Result<Vec<Box<dyn Constraint<AtomTerm, ArcSort>>>, TypeError>;
-}
-
-impl CoreActionConstraints for CoreAction {
-    fn get_constraints(
+impl CoreAction {
+    pub(crate) fn get_constraints(
         &self,
         typeinfo: &TypeInfo,
         symbol_gen: &mut SymbolGen,
@@ -917,16 +908,8 @@ impl CoreActionConstraints for CoreAction {
     }
 }
 
-pub(crate) trait AtomConstraints {
-    fn get_constraints(
-        &self,
-        type_info: &TypeInfo,
-        ctx: crate::Context,
-    ) -> Result<Vec<Box<dyn Constraint<AtomTerm, ArcSort>>>, TypeError>;
-}
-
-impl AtomConstraints for Atom<StringOrEq> {
-    fn get_constraints(
+impl Atom<StringOrEq> {
+    pub(crate) fn get_constraints(
         &self,
         type_info: &TypeInfo,
         ctx: crate::Context,

@@ -13,7 +13,6 @@ use std::any::TypeId;
 use std::sync::Mutex;
 
 use crate::exec_state::Internal;
-use egglog_backend_trait::BackendExt;
 use enum_map::EnumMap;
 
 use super::*;
@@ -153,15 +152,13 @@ impl Sort for FunctionSort {
         &self.name
     }
 
-    fn column_ty(&self, _base_values: &BaseValues) -> ColumnTy {
+    fn column_ty(&self, _egraph: &egglog_bridge::EGraph) -> ColumnTy {
         ColumnTy::Id
     }
 
-    fn register_type(&self, backend: &mut dyn egglog_backend_trait::Backend) {
-        backend.register_container_ty::<FunctionContainer>();
-        backend
-            .base_values_mut()
-            .register_type::<ResolvedFunction>();
+    fn register_type(&self, egraph: &mut egglog_bridge::EGraph) {
+        egraph.register_container_ty::<FunctionContainer>();
+        egraph.base_values_mut().register_type::<ResolvedFunction>();
     }
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
@@ -601,7 +598,7 @@ impl FunctionContainer {
         let panic_id = self.3;
         // On capability mismatch, trigger the egglog runtime panic
         // pre-registered at the `unstable-fn` build site (see
-        // `BackendRule::prim`). The panic writes to the egraph's
+        // the rule translator). The panic writes to the egraph's
         // panic side channel and triggers early stop, so `run_rules`
         // surfaces the misuse as an `Err`.
         let mismatch = |state: &mut crate::PureState<'a, 'db>| -> Option<Value> {

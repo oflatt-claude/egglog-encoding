@@ -51,8 +51,8 @@ pub trait Sort: Any + Send + Sync + Debug {
     /// Returns the name of this sort.
     fn name(&self) -> &str;
 
-    /// Returns the backend-specific column type. See [`ColumnTy`].
-    fn column_ty(&self, base_values: &BaseValues) -> ColumnTy;
+    /// Returns the storage column type. See [`ColumnTy`].
+    fn column_ty(&self, egraph: &egglog_bridge::EGraph) -> ColumnTy;
 
     /// return the inner sorts if a container sort
     /// remember that containers can contain containers
@@ -65,7 +65,7 @@ pub trait Sort: Any + Send + Sync + Debug {
         }
     }
 
-    fn register_type(&self, backend: &mut dyn egglog_backend_trait::Backend);
+    fn register_type(&self, egraph: &mut egglog_bridge::EGraph);
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static>;
 
@@ -188,11 +188,11 @@ impl Sort for EqSort {
         &self.name
     }
 
-    fn column_ty(&self, _base_values: &BaseValues) -> ColumnTy {
+    fn column_ty(&self, _egraph: &egglog_bridge::EGraph) -> ColumnTy {
         ColumnTy::Id
     }
 
-    fn register_type(&self, _backend: &mut dyn egglog_backend_trait::Backend) {}
+    fn register_type(&self, _egraph: &mut egglog_bridge::EGraph) {}
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
         self

@@ -11,8 +11,8 @@
 use super::proof_encoding::ProofInstrumentor;
 use crate::exec_state::{Internal, RegistrySealed};
 use crate::*;
-use egglog_backend_trait::CounterId;
 use egglog_bridge::TableAction;
+use egglog_core_relations::CounterId;
 use egglog_numeric_id::NumericId;
 
 /// Mint a fresh proof id and assert the relation row `(<action> args… out ())`,
@@ -55,7 +55,7 @@ pub(crate) fn uf_canon_proof_prim_name(uf_name: &str) -> String {
 ///   proves nothing and is dropped unread.
 ///
 /// Both are the generic view-column read over the two-output `@UF_<S>` table, so
-/// every backend services them against its own storage. They read `@UF_<S>`, so
+/// both use the generic view-column reader. They read `@UF_<S>`, so
 /// they are sound only in the action of a rule whose body joins the driving
 /// `@UF` delta. Called from the sort's Sort command, so they exist both during
 /// encoding and on re-parse.
@@ -69,14 +69,14 @@ pub(crate) fn register_uf_canon(
         return;
     };
     let table = uf_name.to_string();
-    eg.add_backend_op_primitive(
+    eg.add_internal_primitive(
         UfCanonCol {
             name: uf_canon_prim_name(uf_name),
             key_sort: sort.clone(),
             out_sort: sort.clone(),
         },
         WriteState::valid_contexts(),
-        move |backend, _| backend.register_view_column_read(table.clone(), 1, 0),
+        move |egraph, _| egraph.register_view_column_read(table.clone(), 1, 0),
     );
 
     // The proof column is `Unit` in term mode, and no rule reads it there.
@@ -85,14 +85,14 @@ pub(crate) fn register_uf_canon(
             name: eg.proof_state.proof_names.proof_datatype.clone(),
         });
         let table = uf_name.to_string();
-        eg.add_backend_op_primitive(
+        eg.add_internal_primitive(
             UfCanonCol {
                 name: uf_canon_proof_prim_name(uf_name),
                 key_sort: sort,
                 out_sort: proof_sort,
             },
             WriteState::valid_contexts(),
-            move |backend, _| backend.register_view_column_read(table.clone(), 1, 1),
+            move |egraph, _| egraph.register_view_column_read(table.clone(), 1, 1),
         );
     }
 }
@@ -154,11 +154,7 @@ pub(crate) fn register_container_rebuild_from_spec(
     );
 
     if let Some(proof_prim) = &spec.internal_rebuild_proof_prim {
-        // Proof ids are minted from the backend's id counter; a backend without
-        // one can't run these proofs.
-        let Some(id_counter) = eg.backend.id_counter() else {
-            return;
-        };
+        let id_counter = eg.backend.id_counter();
         // The global proof constructors, recovered from proof_state (repopulated
         // from the `Proof` sort's `:internal-proof-names` on re-parse). A nested
         // container is projected out by its own sort's `ProjAll_<CSort>`, derived
@@ -353,7 +349,7 @@ struct ContainerRebuildProof {
     /// `ContainerNormalize` proof constructor name
     container_normalize_name: String,
     /// Counter for minting fresh proof ids (see [`mint_proof_row`]).
-    id_counter: egglog_backend_trait::CounterId,
+    id_counter: egglog_core_relations::CounterId,
 }
 
 impl Primitive for ContainerRebuildProof {

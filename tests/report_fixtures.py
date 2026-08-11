@@ -26,7 +26,6 @@ def make_record(
     binary_sha256: str = "sha256:bin",
     file_sha256: str = "sha256:file",
     fact_directory_sha256: str = "",
-    backend: models.Backend = "main",
     treatment: models.Treatment = "off",
     timeout_sec: int = 120,
     target_label: str | None = None,
@@ -49,7 +48,6 @@ def make_record(
         "file_sha256": file_sha256,
         "fact_directory_path": None,
         "fact_directory_sha256": fact_directory_sha256,
-        "backend": backend,
         "treatment": treatment,
         "timeout_sec": timeout_sec,
         "wall_sec": None if status == "timed-out" else wall_sec,
@@ -124,13 +122,11 @@ def make_endpoint(
     *,
     target_label: str | None = None,
     binary_sha256: str = "sha256:bin",
-    backend: models.Backend = "main",
     treatment: models.Treatment = "off",
 ) -> models.BenchmarkEndpoint:
     """Construct one resolved endpoint used by pair-report tests."""
 
     return models.BenchmarkEndpoint(
         make_target(target_label=target_label, binary_sha256=binary_sha256),
-        backend,
         treatment,
     )

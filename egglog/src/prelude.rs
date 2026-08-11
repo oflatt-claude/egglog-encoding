@@ -872,12 +872,12 @@ impl<T: BaseSort> Sort for BaseSortImpl<T> {
         self.0.name()
     }
 
-    fn column_ty(&self, base_values: &BaseValues) -> ColumnTy {
-        ColumnTy::Base(base_values.get_ty::<T::Base>())
+    fn column_ty(&self, egraph: &egglog_bridge::EGraph) -> ColumnTy {
+        ColumnTy::Base(egraph.base_values().get_ty::<T::Base>())
     }
 
-    fn register_type(&self, backend: &mut dyn egglog_backend_trait::Backend) {
-        backend.base_values_mut().register_type::<T::Base>();
+    fn register_type(&self, egraph: &mut egglog_bridge::EGraph) {
+        egraph.base_values_mut().register_type::<T::Base>();
     }
 
     fn value_type(&self) -> Option<TypeId> {
@@ -953,12 +953,12 @@ impl<T: ContainerSort> Sort for ContainerSortImpl<T> {
         self.0.name()
     }
 
-    fn column_ty(&self, _base_values: &BaseValues) -> ColumnTy {
+    fn column_ty(&self, _egraph: &egglog_bridge::EGraph) -> ColumnTy {
         ColumnTy::Id
     }
 
-    fn register_type(&self, backend: &mut dyn egglog_backend_trait::Backend) {
-        backend.register_container_ty::<T::Container>();
+    fn register_type(&self, egraph: &mut egglog_bridge::EGraph) {
+        egraph.register_container_ty::<T::Container>();
     }
 
     fn value_type(&self) -> Option<TypeId> {

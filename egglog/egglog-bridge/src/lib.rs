@@ -39,7 +39,7 @@ pub(crate) mod rule;
 #[cfg(test)]
 mod tests;
 
-pub use rule::{Function, QueryEntry, RuleBuilder, Variable, VariableId};
+pub use rule::{Function, QueryEntry, RuleBuilder};
 use thiserror::Error;
 
 /// A live registry of action handles for use by typed primitives.
@@ -126,19 +126,7 @@ pub struct EGraph {
     /// around allows us to cache external function ids with repeat panic messages and they can
     /// also serve as a debugging tool in the case that the number of panic messages grows without
     /// bound.
-    panic_funcs: HashMap<String, CachedPanic>,
-    /// Reverse index `id -> message` for [`EGraph::panic_funcs`]. Lets
-    /// [`EGraph::free_external_func`] find a cached panic's entry — or determine
-    /// that a func is not a cached panic at all — in O(1), instead of scanning
-    /// the whole (id-unindexed) `panic_funcs` map on every free. That scan made
-    /// freeing one-shot action rules O(number of cached panics), which grows with
-    /// the program, so a long run of one-shot actions was quadratic.
-    // `BTreeMap` (not `HashMap`) on purpose: it introduces no new randomly-seeded
-    // hasher, so the seed sequence of the other hash tables is unchanged. Some
-    // backends' row iteration order (which order-dependent proof extraction reads)
-    // depends on that sequence, so a `HashMap` here would needlessly shift it.
-    // Lookups are by a small integer id, so a `BTreeMap` is more than fast enough.
-    panic_func_ids: BTreeMap<ExternalFunctionId, String>,
+    panic_funcs: HashMap<String, ExternalFunctionId>,
     report_level: ReportLevel,
     /// Live registry of name-indexed action handles. Shared (via
     /// `Arc<RwLock<_>>`) with state wrappers and primitive callbacks
@@ -149,17 +137,12 @@ pub struct EGraph {
     /// Table each row-inserting external function writes, by name. A merge body
     /// calling one declares the same write dependency an explicit `set` on that
     /// table would (see [`MergeFn::fill_deps`]).
-    // `BTreeMap` for the reason given on `panic_func_ids`.
+    // Avoid introducing another randomly seeded hash table: row iteration order
+    // in proof extraction can depend on the seed sequence of existing maps.
     external_write_deps: BTreeMap<ExternalFunctionId, String>,
 }
 
 pub type Result<T> = std::result::Result<T, anyhow::Error>;
-
-#[derive(Clone, Copy)]
-struct CachedPanic {
-    id: ExternalFunctionId,
-    references: usize,
-}
 
 impl Default for EGraph {
     fn default() -> Self {
@@ -180,21 +163,13 @@ impl Default for EGraph {
         // also seeds `panic_funcs` so a later `new_panic` with the
         // same message reuses the id.
         let panic_message: SideChannel<String> = Default::default();
-        let mut panic_funcs: HashMap<String, CachedPanic> = Default::default();
-        let mut panic_func_ids: BTreeMap<ExternalFunctionId, String> = Default::default();
+        let mut panic_funcs: HashMap<String, ExternalFunctionId> = Default::default();
         let default_panic_msg = "primitive panicked".to_string();
         let default_panic_id = db.add_external_function(Box::new(Panic(
             default_panic_msg.clone(),
             panic_message.clone(),
         )));
-        panic_func_ids.insert(default_panic_id, default_panic_msg.clone());
-        panic_funcs.insert(
-            default_panic_msg,
-            CachedPanic {
-                id: default_panic_id,
-                references: 1,
-            },
-        );
+        panic_funcs.insert(default_panic_msg, default_panic_id);
 
         let union_action = UnionAction {
             table: uf_table,
@@ -214,7 +189,6 @@ impl Default for EGraph {
             funcs: Default::default(),
             panic_message,
             panic_funcs,
-            panic_func_ids,
             report_level: Default::default(),
             action_registry,
             external_write_deps: Default::default(),
@@ -446,26 +420,7 @@ impl EGraph {
 
     pub fn free_external_func(&mut self, func: ExternalFunctionId) {
         self.external_write_deps.remove(&func);
-        // A cached panic with more than one reference is kept alive (just
-        // decrement); one at its last reference — or any func that is not a
-        // cached panic — is freed from the database. The reverse index makes the
-        // "is this a cached panic, and which entry?" question O(1); previously we
-        // scanned all of `panic_funcs` on every call (see `panic_func_ids`).
-        let mut free = true;
-        if let Some(message) = self.panic_func_ids.get(&func).cloned()
-            && let Some(cached) = self.panic_funcs.get_mut(&message)
-        {
-            if cached.references > 1 {
-                cached.references -= 1;
-                free = false;
-            } else {
-                self.panic_funcs.remove(&message);
-                self.panic_func_ids.remove(&func);
-            }
-        }
-        if free {
-            self.db.free_external_function(func);
-        }
+        self.db.free_external_function(func);
     }
 
     /// Generate a fresh id.
@@ -599,50 +554,6 @@ impl EGraph {
     pub fn clear_table(&mut self, func: FunctionId) {
         let table_id = self.funcs[func].table;
         self.db.clear_table(table_id);
-    }
-
-    /// Remove the most recently registered function and its backing table.
-    ///
-    /// This is a rollback operation for callers whose later registration work
-    /// failed. It rejects older functions because later rules or merge
-    /// callbacks may already depend on them.
-    pub fn remove_last_table(&mut self, func: FunctionId) -> Result<()> {
-        anyhow::ensure!(
-            self.funcs.get(func).is_some(),
-            "cannot remove unknown function {func:?}"
-        );
-        let removed_action = TableAction::new(self, func);
-        let info = self.funcs.pop_last(func).ok_or_else(|| {
-            anyhow::anyhow!("can only remove the most recently registered function")
-        })?;
-        if !self.db.remove_last_table(info.table) {
-            self.funcs.insert(func, info);
-            anyhow::bail!("function's backing table was not the most recently registered table");
-        }
-
-        self.free_rule(info.nonincremental_rebuild_rule);
-        for rule in info.incremental_rebuild_rules.iter().rev() {
-            self.free_rule(*rule);
-        }
-
-        let replacement = self
-            .funcs
-            .iter()
-            .filter(|(_, candidate)| candidate.name == info.name)
-            .map(|(id, _)| TableAction::new(self, id))
-            .last();
-        let mut registry = self.action_registry.write().unwrap();
-        if registry.table_actions.get(info.name.as_ref()) == Some(&removed_action) {
-            match replacement {
-                Some(action) => {
-                    registry.register_table(info.name.to_string(), action);
-                }
-                None => {
-                    registry.table_actions.remove(info.name.as_ref());
-                }
-            }
-        }
-        Ok(())
     }
 
     /// Read the contents of the given function.
@@ -1252,7 +1163,6 @@ impl EGraph {
 struct RuleInfo {
     last_run_at: Timestamp,
     query: rule::Query,
-    owned_external_funcs: Vec<ExternalFunctionId>,
     cached_plan: Option<CachedPlanInfo>,
     desc: Arc<str>,
 }
@@ -2278,15 +2188,12 @@ struct Panic(String, SideChannel<String>);
 impl EGraph {
     /// Create a new `ExternalFunction` that panics with the given message.
     pub fn new_panic(&mut self, message: String) -> ExternalFunctionId {
-        if let Some(cached) = self.panic_funcs.get_mut(&message) {
-            cached.references += 1;
-            return cached.id;
+        if let Some(cached) = self.panic_funcs.get(&message) {
+            return *cached;
         }
         let panic = Panic(message.clone(), self.panic_message.clone());
         let id = self.db.add_external_function(Box::new(panic));
-        self.panic_func_ids.insert(id, message.clone());
-        self.panic_funcs
-            .insert(message, CachedPanic { id, references: 1 });
+        self.panic_funcs.insert(message, id);
         id
     }
 

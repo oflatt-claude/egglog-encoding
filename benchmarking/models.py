@@ -1,4 +1,4 @@
-"""Define dependency-free benchmark identities, invariants, and backend metadata.
+"""Define dependency-free benchmark identities and invariants.
 
 This module owns endpoint selection, comparison scope, and the uniqueness rules
 required by cache-backed statistics. Feature-local requests, subprocess
@@ -13,47 +13,8 @@ from pathlib import Path
 from typing import Literal
 
 Status = Literal["success", "timed-out", "failure"]
-Backend = str
 Treatment = Literal["off", "term", "proofs", "proof-extraction"]
 DetailLevel = Literal["summary", "files", "phases", "rulesets"]
-
-
-@dataclass(frozen=True)
-class BackendSpec:
-    treatments: tuple[Treatment, ...]
-    flags: tuple[str, ...]
-    cargo_features: tuple[str, ...] = ()
-
-
-BACKEND_SPECS: dict[Backend, BackendSpec] = {
-    "main": BackendSpec(("off", "term", "proofs", "proof-extraction"), ()),
-    "dd": BackendSpec(("term", "proofs"), ("--backend", "dd"), ("dd-backend",)),
-}
-
-
-def backend_spec(backend: Backend) -> BackendSpec:
-    """Return metadata for a configured backend."""
-
-    try:
-        return BACKEND_SPECS[backend]
-    except KeyError as error:
-        raise ValueError(f"unknown backend: {backend}") from error
-
-
-def backend_cargo_features(backends: Sequence[Backend]) -> tuple[str, ...]:
-    """Return deduplicated Cargo features required by ``backends``."""
-
-    return tuple(dict.fromkeys(feature for backend in backends for feature in backend_spec(backend).cargo_features))
-
-
-def validate_backend_treatment(backend: Backend, treatment: Treatment) -> None:
-    """Reject one endpoint combination unsupported by its backend."""
-
-    supported = backend_spec(backend).treatments
-    if treatment not in supported:
-        raise ValueError(
-            f"backend {backend} does not support treatment {treatment}; supported treatments: {','.join(supported)}"
-        )
 
 
 @dataclass(frozen=True)
@@ -121,32 +82,24 @@ class ResolvedTarget:
 
 @dataclass(frozen=True)
 class EndpointRequest:
-    """One unresolved target/backend/treatment selected by the CLI."""
+    """One unresolved target/treatment selected by the CLI."""
 
     target: TargetRequest
-    backend: Backend
     treatment: Treatment
-
-    def __post_init__(self) -> None:
-        validate_backend_treatment(self.backend, self.treatment)
 
 
 @dataclass(frozen=True)
 class BenchmarkEndpoint:
-    """One resolved target/backend/treatment addressed by benchmark cache rows."""
+    """One resolved target/treatment addressed by benchmark cache rows."""
 
     target: ResolvedTarget
-    backend: Backend
     treatment: Treatment
 
-    def __post_init__(self) -> None:
-        validate_backend_treatment(self.backend, self.treatment)
-
     @property
-    def cache_identity(self) -> tuple[str, Backend, Treatment]:
+    def cache_identity(self) -> tuple[str, Treatment]:
         """Return the endpoint coordinates shared by all of its file keys."""
 
-        return (self.target.binary_sha256, self.backend, self.treatment)
+        return (self.target.binary_sha256, self.treatment)
 
 
 @dataclass(frozen=True)

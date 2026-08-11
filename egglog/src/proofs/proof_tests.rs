@@ -1620,7 +1620,7 @@ mod tests {
             .unwrap();
     }
 
-    /// The encoded `delete` keeps the uninstrumented meaning: the backend stages
+    /// The encoded `delete` keeps the uninstrumented meaning: execution stages
     /// removals and applies them ahead of the insertions committed in the same
     /// batch, so a row another rule inserts in that batch survives the delete.
     #[test]

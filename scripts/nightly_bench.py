@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Generate the egglog-encoding nightly benchmark webpage.
 
-Runs the public benchmark entrypoint (``bench.py``) once per backend/treatment
-endpoint, on the current checkout and on the latest ``main``, accumulating every
+Runs the public benchmark entrypoint (``bench.py``) once per treatment and
+target, on the current checkout and on the latest ``main``, accumulating every
 endpoint in the ordinary report cache. eval-live's interactive report discovers
 its dropdown from every cached endpoint, so the page can compare any two of
 them — including branch against main. Each endpoint is labelled by target
@@ -33,7 +33,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 type Target = tuple[str, str]  # (label, source) for bench.py's label=source syntax
-type Endpoint = tuple[str, str]  # (backend, treatment)
+type Treatment = str
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BENCH_SCRIPT = REPO_ROOT / "bench.py"
@@ -45,25 +45,23 @@ REPORT_PATH = REPO_ROOT / ".reports.jsonl"
 PAGE_PATH = REPO_ROOT / ".reports.html"
 
 # Checkouts to measure, each with a stable label so the dropdown shows which
-# commit an endpoint belongs to. Endpoint identity is (binary, backend,
-# treatment), so a branch matching main byte-for-byte collapses to one endpoint
-# per config; the two diverge once the code differs.
+# commit an endpoint belongs to. Endpoint identity is (binary, treatment), so a
+# branch matching main byte-for-byte collapses to one endpoint per treatment;
+# the two diverge once the code differs.
 BRANCH: Target = ("branch", ".")
 TARGETS: tuple[Target, ...] = (BRANCH, ("main", "@origin/main"))
 
-# Endpoints to measure, all on the main backend: proof-extraction is main-only,
-# and the differential-dataflow backend's endpoints — ("dd", "term") and
-# ("dd", "proofs") — are disabled for now. Re-add them here to measure dd again.
-ENDPOINTS: tuple[Endpoint, ...] = (
-    ("main", "term"),
-    ("main", "proofs"),
-    ("main", "proof-extraction"),
+# Treatments to measure.
+TREATMENTS: tuple[Treatment, ...] = (
+    "term",
+    "proofs",
+    "proof-extraction",
 )
 
 # Every endpoint is measured against ordinary mode on its own checkout, so the
 # page opens on proof overhead of the branch.
-BASELINE: Endpoint = ("main", "off")
-HEADLINE: Endpoint = ("main", "proofs")
+BASELINE: Treatment = "off"
+HEADLINE: Treatment = "proofs"
 
 # The nightly host leaves rustup's shim directory off PATH, so cargo resolves to
 # Ubuntu's, which predates rust-toolchain.toml's pin; only rustup honours that
@@ -84,27 +82,21 @@ def _bench_env() -> dict[str, str]:
     return {**os.environ, "PATH": os.pathsep.join(path), "BROWSER": "true"}
 
 
-def _run(target: Target, endpoint: Endpoint, *, open_report: bool, rounds: int | None) -> int:
+def _run(target: Target, treatment: Treatment, *, open_report: bool, rounds: int | None) -> int:
     """Benchmark one endpoint against the baseline on the same checkout."""
 
     label, source = target
-    backend, treatment = endpoint
-    baseline_backend, baseline_treatment = BASELINE
     command = [
         sys.executable,
         str(BENCH_SCRIPT),
         "--target",
         f"{label}={source}",
-        "--backend",
-        backend,
         "--treatment",
         treatment,
         "--compare-target",
         f"{label}={source}",
-        "--compare-backend",
-        baseline_backend,
         "--compare-treatment",
-        baseline_treatment,
+        BASELINE,
         # Per-file tables make a long run's progress legible.
         "--detail",
         "files",
@@ -146,9 +138,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     # Populate the dropdown with every endpoint. A combination that fails to
     # build or run drops one option instead of failing the whole nightly.
     for target in TARGETS:
-        for endpoint in ENDPOINTS:
-            if _run(target, endpoint, open_report=False, rounds=args.rounds) != 0:
-                print(f"nightly: skipped {target[0]} {endpoint[0]}/{endpoint[1]}", file=sys.stderr)
+        for treatment in TREATMENTS:
+            if _run(target, treatment, open_report=False, rounds=args.rounds) != 0:
+                print(f"nightly: skipped {target[0]} {treatment}", file=sys.stderr)
 
     # The whole cache is now populated, so this last run re-renders it as the
     # page. Its rows are already cached, so it only rebuilds the report.
