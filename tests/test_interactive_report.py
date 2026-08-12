@@ -200,6 +200,7 @@ def test_html_embeds_exact_jsonl_initial_catalog_runtime_and_safe_data(tmp_path:
     assert cast(str, envelope["pyodide_base_url"]) == interactive.PYODIDE_BASE_URL
     assert set(cast(dict[str, str], envelope["python_modules"])) == {
         "benchmarking/__init__.py",
+        "benchmarking/engines.py",
         "benchmarking/models.py",
         "benchmarking/reports/__init__.py",
         "benchmarking/reports/analysis.py",

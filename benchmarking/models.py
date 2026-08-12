@@ -12,8 +12,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from .engines import TREATMENT_SPECS, Engine, Treatment
+
 Status = Literal["success", "timed-out", "failure"]
-Treatment = Literal["off", "term", "proofs", "proof-extraction"]
 DetailLevel = Literal["summary", "files", "phases", "rulesets"]
 
 
@@ -63,11 +64,38 @@ class TargetRequest:
 
 
 @dataclass(frozen=True)
+class EngineBinary:
+    engine: Engine
+    sha256: str
+    path: Path | None
+
+
+@dataclass(frozen=True)
 class ResolvedTarget:
     request: TargetRequest
     row: TargetRow
     binary_sha256: str
     binary_path: Path | None
+    engine_binaries: tuple[EngineBinary, ...] = ()
+    primary_engine: Engine | None = None
+
+    def binary_sha256_for(self, treatment: Treatment) -> str:
+        engine = TREATMENT_SPECS[treatment].engine
+        for binary in self.engine_binaries:
+            if binary.engine == engine:
+                return binary.sha256
+        if engine == "egglog" and self.primary_engine in (None, "egglog"):
+            return self.binary_sha256
+        raise ValueError(f"target {self.display_label} has no {engine} binary")
+
+    def binary_path_for(self, treatment: Treatment) -> Path | None:
+        engine = TREATMENT_SPECS[treatment].engine
+        for binary in self.engine_binaries:
+            if binary.engine == engine:
+                return binary.path
+        if engine == "egglog" and self.primary_engine in (None, "egglog"):
+            return self.binary_path
+        raise ValueError(f"target {self.display_label} has no {engine} binary")
 
     @property
     def display_label(self) -> str:
@@ -99,7 +127,7 @@ class BenchmarkEndpoint:
     def cache_identity(self) -> tuple[str, Treatment]:
         """Return the endpoint coordinates shared by all of its file keys."""
 
-        return (self.target.binary_sha256, self.treatment)
+        return (self.target.binary_sha256_for(self.treatment), self.treatment)
 
 
 @dataclass(frozen=True)

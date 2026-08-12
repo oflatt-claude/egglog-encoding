@@ -101,6 +101,10 @@ or modify the JSONL.
   evidence only; `--proof-testing` remains the strict correctness mode.
 - Bare `./bench.py` compares `proofs` with `off`. The `proof-extraction`
   treatment is explicit opt-in.
+- The five egglog treatments run `egglog-experimental`. The four `egg*`
+  treatments run `egg-math-benchmark` and support only the fixed Rational Math
+  workload. Mixed-engine comparisons build both executables, and every cache
+  row identifies the executable that actually ran.
 - Benchmark inputs should not contain executable `(prove ...)` commands. Use
   `(check ...)` so the selected treatment controls proof extraction, and cover
   strict proof validity in proof tests.

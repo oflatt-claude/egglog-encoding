@@ -1170,6 +1170,9 @@ impl EGraph {
     ) -> Result<(), Error> {
         // make a new e-graph, desugar the program in proof mode
         let mut proof_check_eg = EGraph::new_with_proofs();
+        proof_check_eg
+            .fact_directory
+            .clone_from(&self.fact_directory);
         if proof_testing {
             proof_check_eg = proof_check_eg.with_proof_testing();
         }

@@ -335,7 +335,7 @@ def _cache_universe(
             key=lambda choice: (
                 choice.endpoint.target.display_label,
                 choice.endpoint.treatment,
-                choice.endpoint.target.binary_sha256,
+                choice.endpoint.cache_identity[0],
             ),
         )
     )

@@ -147,7 +147,7 @@ def test_same_checkout_target_aliases_build_once(
     }
     binary_path = ROOT / "target/release/egglog-experimental"
     materialized: list[models.TargetRequest] = []
-    builds: list[models.TargetRequest] = []
+    builds: list[tuple[models.TargetRequest, tuple[str, ...]]] = []
 
     def materialize(request: models.TargetRequest, *_args: object) -> models.TargetRow:
         materialized.append(request)
@@ -160,9 +160,10 @@ def test_same_checkout_target_aliases_build_once(
         row: models.TargetRow,
         _console: Console,
         _profile: targets.BuildProfile,
+        engines: tuple[str, ...],
     ) -> models.ResolvedTarget:
         assert materialized == [baseline_request, candidate_request]
-        builds.append(request)
+        builds.append((request, engines))
         return models.ResolvedTarget(request, row, "sha256:union", binary_path)
 
     monkeypatch.setattr(collection, "build_resolved_target", build)
@@ -184,13 +185,54 @@ def test_same_checkout_target_aliases_build_once(
         Console(stderr=True),
     )
 
-    assert builds == [baseline_request]
+    assert builds == [(baseline_request, ("egglog",))]
     assert resolved[baseline_request].request == baseline_request
     assert resolved[candidate_request].request == candidate_request
     assert resolved[baseline_request].row.source == "."
     assert resolved[candidate_request].row.source == str(ROOT)
     assert resolved[baseline_request].binary_path == resolved[candidate_request].binary_path == binary_path
     assert resolved[baseline_request].binary_sha256 == resolved[candidate_request].binary_sha256 == "sha256:union"
+
+
+def test_same_target_builds_each_engine_required_by_its_treatments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = targets.parse_target(".")
+    row = models.TargetRow(".", str(ROOT), "HEAD", "abc123", False)
+    built = make_target(binary_path=ROOT / "egglog-experimental")
+    observed_engines: list[tuple[str, ...]] = []
+
+    monkeypatch.setattr(collection, "materialize_target_request", lambda *_args: row)
+
+    def build(
+        _request: models.TargetRequest,
+        _row: models.TargetRow,
+        _console: Console,
+        _profile: targets.BuildProfile,
+        engines: tuple[str, ...],
+    ) -> models.ResolvedTarget:
+        observed_engines.append(engines)
+        return built
+
+    monkeypatch.setattr(collection, "build_resolved_target", build)
+    endpoints = (
+        models.EndpointRequest(request, "off"),
+        models.EndpointRequest(request, "egg"),
+    )
+
+    collection.resolve_targets(
+        ((request, endpoints),),
+        cast(ReportStore, object()),
+        (FILE_SPEC,),
+        1,
+        120,
+        False,
+        ROOT,
+        ROOT,
+        Console(stderr=True),
+    )
+
+    assert observed_engines == [("egglog", "egg")]
 
 
 def test_batch_target_resolution_reuses_complete_cache_label_before_building_pending_target(
@@ -212,7 +254,7 @@ def test_batch_target_resolution_reuses_complete_cache_label_before_building_pen
     fresh_row = models.TargetRow(".", str(tmp_path / "checkout"), "HEAD", "fresh123", False)
     binary_path = tmp_path / "checkout/target/release/egglog-experimental"
     materialized: list[models.TargetRequest] = []
-    builds: list[models.TargetRequest] = []
+    builds: list[tuple[models.TargetRequest, tuple[str, ...]]] = []
 
     def materialize(request: models.TargetRequest, *_args: object) -> models.TargetRow:
         materialized.append(request)
@@ -223,8 +265,9 @@ def test_batch_target_resolution_reuses_complete_cache_label_before_building_pen
         row: models.TargetRow,
         _console: Console,
         _profile: targets.BuildProfile,
+        engines: tuple[str, ...],
     ) -> models.ResolvedTarget:
-        builds.append(request)
+        builds.append((request, engines))
         return models.ResolvedTarget(request, row, "sha256:fresh", binary_path)
 
     monkeypatch.setattr(collection, "materialize_target_request", materialize)
@@ -247,7 +290,7 @@ def test_batch_target_resolution_reuses_complete_cache_label_before_building_pen
     )
 
     assert materialized == [fresh_request]
-    assert builds == [fresh_request]
+    assert builds == [(fresh_request, ("egglog",))]
     assert resolved[cached_request].binary_sha256 == "sha256:cached"
     assert resolved[cached_request].binary_path is None
     assert resolved[fresh_request].binary_sha256 == "sha256:fresh"
@@ -400,6 +443,91 @@ def test_preflight_requires_extraction_capability_only_for_fresh_rows(
         collection.preflight_collection(collection.CollectionPlan(target, (fresh,)), 120)
 
     assert calls == [("--timing-summary",), ("--timing-summary", "--proof-extraction")]
+
+
+def test_preflight_checks_each_required_engine_binary(monkeypatch: pytest.MonkeyPatch) -> None:
+    egglog_binary = ROOT / "egglog-experimental"
+    egg_binary = ROOT / "egg-math-benchmark"
+    original = make_target(binary_sha256="sha256:egglog", binary_path=egglog_binary)
+    target = models.ResolvedTarget(
+        original.request,
+        original.row,
+        original.binary_sha256,
+        original.binary_path,
+        (
+            models.EngineBinary("egglog", "sha256:egglog", egglog_binary),
+            models.EngineBinary("egg", "sha256:egg", egg_binary),
+        ),
+        "egglog",
+    )
+    calls: list[tuple[Path, tuple[str, ...]]] = []
+
+    def preflight(
+        binary_path: Path,
+        _checkout_path: Path,
+        _timeout_sec: int,
+        required_outputs: tuple[str, ...],
+    ) -> processes.TimingResult:
+        calls.append((binary_path, required_outputs))
+        return processes.TimingResult("success", processes.TimingRow(wall_sec=0.01), None)
+
+    monkeypatch.setattr(collection, "run_preflight", preflight)
+    plan = collection.CollectionPlan(
+        target,
+        (
+            planned_run(treatment="proof-testing", required=1),
+            planned_run(treatment="egg-proof-testing", required=1),
+        ),
+    )
+
+    collection.preflight_collection(plan, 120)
+
+    assert calls == [
+        (egglog_binary, ("--timing-summary", "--proof-testing")),
+        (egg_binary, ("--timing-summary",)),
+    ]
+
+
+def test_collected_row_uses_selected_engine_binary_and_hash(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    egglog_binary = ROOT / "egglog-experimental"
+    egg_binary = ROOT / "egg-math-benchmark"
+    original = make_target(binary_sha256="sha256:egglog", binary_path=egglog_binary)
+    target = models.ResolvedTarget(
+        original.request,
+        original.row,
+        original.binary_sha256,
+        original.binary_path,
+        (
+            models.EngineBinary("egglog", "sha256:egglog", egglog_binary),
+            models.EngineBinary("egg", "sha256:egg", egg_binary),
+        ),
+        "egglog",
+    )
+    file_spec = models.FileSpec(
+        "egglog-experimental/tests/math-microbenchmark-rational.egg",
+        ROOT / "egglog-experimental/tests/math-microbenchmark-rational.egg",
+        "sha256:math",
+    )
+    selected_endpoint = models.BenchmarkEndpoint(target, "egg")
+    success = processes.TimingResult("success", processes.TimingRow(wall_sec=0.5), None)
+    observed_binaries: list[Path] = []
+
+    def run_process(binary_path: Path, *_args: object) -> collection.ProcessObservation:
+        observed_binaries.append(binary_path)
+        return collection.ProcessObservation(success, make_timing_summary())
+
+    monkeypatch.setattr(collection, "run_process", run_process)
+    store = ReportStore(tmp_path / "report.jsonl")
+    plan = collection.build_collection_plan(store, target, (selected_endpoint,), (file_spec,), 1, 120, False)
+
+    collection.collect_rows(store, plan, 120, Console(stderr=True))
+
+    assert observed_binaries == [egg_binary]
+    assert store.records[0]["binary_sha256"] == "sha256:egg"
+    assert CacheKey.for_endpoint(selected_endpoint, file_spec, 120).binary_sha256 == "sha256:egg"
 
 
 def test_collect_rows_rejects_unsupported_timing_summary_before_append(

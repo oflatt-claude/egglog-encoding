@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from benchmarking import models, targets, workloads
+from benchmarking.engines import validate_engine_workload
 
 from .report_fixtures import ROOT
 
@@ -79,16 +80,27 @@ def test_prove_scan_ignores_comments_strings_and_longer_atoms(tmp_path: Path) ->
 def test_default_workloads_are_the_six_research_cases() -> None:
     files = workloads.resolve_files([], ROOT)
     assert tuple(file.display_path for file in files) == (
-        "egglog/tests/math-microbenchmark.egg",
+        "egglog-experimental/tests/math-microbenchmark-rational.egg",
         "egglog-experimental/tests/fixtures/eggcc-2mm-pass1.egg",
-        "benchmarks/pointer-analysis-small.egg",
+        "egglog/tests/pointer-analysis-initdb.egg",
         "egglog/tests/hardboiled_conv1d_32.egg",
-        "benchmarks/luminal-llama.egg",
+        "egglog/tests/luminal-llama.egg",
         "egglog/tests/web-demo/herbie.egg",
     )
-    pointer = next(file for file in files if file.display_path == "benchmarks/pointer-analysis-small.egg")
-    assert pointer.fact_directory == (ROOT / "benchmarks/data/pointer-analysis-small").resolve()
+    pointer = next(file for file in files if file.display_path == "egglog/tests/pointer-analysis-initdb.egg")
+    assert pointer.fact_directory == (ROOT / "egglog/tests/pointer-analysis-initdb").resolve()
     assert pointer.fact_directory_sha256.startswith("sha256:")
+
+
+def test_pointer_initdb_facts_are_the_complete_consumed_artifact_relations() -> None:
+    fact_directory = ROOT / "egglog/tests/pointer-analysis-initdb"
+    files = tuple(sorted(fact_directory.glob("*.csv")))
+
+    assert len(files) == 23
+    assert sum(len(path.read_text(encoding="utf-8").splitlines()) for path in files) == 73_864
+    assert targets.sha256_directory(fact_directory) == (
+        "sha256:28354d7f25d8c198d923be014bbb1ee2292501e12cdde29ea90e666bc86b6929"
+    )
 
 
 def test_explicit_fact_directory_is_resolved_and_hashed(tmp_path: Path) -> None:
@@ -138,6 +150,15 @@ def test_workload_command_matches_benchmark_behavior() -> None:
         "--proof-extraction",
         str(file_spec.absolute_path),
     ]
+    assert targets.workload_command(ROOT / "egglog-experimental", file_spec, "proof-testing") == [
+        str(ROOT / "egglog-experimental"),
+        "--mode",
+        "no-messages",
+        "-j",
+        "1",
+        "--proof-testing",
+        str(file_spec.absolute_path),
+    ]
 
     facts = ROOT / "facts"
     file_with_facts = models.FileSpec(
@@ -149,3 +170,28 @@ def test_workload_command_matches_benchmark_behavior() -> None:
     )
     command = targets.workload_command(ROOT / "egglog-experimental", file_with_facts, "proofs")
     assert command[5:7] == ["--fact-directory", str(facts)]
+
+
+def test_egg_workload_command_uses_the_fixed_math_driver_contract() -> None:
+    (math,) = workloads.resolve_files(["egglog-experimental/tests/math-microbenchmark-rational.egg"], ROOT)
+
+    assert targets.workload_command(ROOT / "egg-math-benchmark", math, "egg-proof-testing") == [
+        str(ROOT / "egg-math-benchmark"),
+        "--proof-mode",
+        "check",
+    ]
+
+
+def test_egg_treatments_reject_other_workloads_and_fact_directories() -> None:
+    other = models.FileSpec("other.egg", ROOT / "other.egg", "sha256:other")
+    with pytest.raises(ValueError, match="only supports egglog-experimental/tests/math-microbenchmark-rational.egg"):
+        validate_engine_workload(other, "egg")
+
+    math = models.FileSpec(
+        "egglog-experimental/tests/math-microbenchmark-rational.egg",
+        ROOT / "egglog-experimental/tests/math-microbenchmark-rational.egg",
+        "sha256:math",
+        ROOT / "facts",
+    )
+    with pytest.raises(ValueError, match="does not support --fact-directory"):
+        validate_engine_workload(math, "egg-proofs")

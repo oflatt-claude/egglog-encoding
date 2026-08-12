@@ -76,6 +76,13 @@ def test_pair_cli_accepts_arbitrary_explicit_endpoints() -> None:
     assert args.detail == "rulesets"
 
 
+def test_pair_cli_accepts_egg_treatments() -> None:
+    args = benchmark.parse_benchmark_args(["--treatment", "egg-proof-testing"])
+    _baseline, candidate = benchmark.endpoint_requests(args)
+
+    assert candidate.treatment == "egg-proof-testing"
+
+
 @pytest.mark.parametrize("detail", ["summary", "files", "phases", "rulesets"])
 def test_pair_cli_accepts_each_named_detail_level(detail: str) -> None:
     assert benchmark.parse_benchmark_args(["--detail", detail]).detail == detail

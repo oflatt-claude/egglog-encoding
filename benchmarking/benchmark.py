@@ -26,6 +26,7 @@ from .collection import (
     preflight_collection,
     resolve_targets,
 )
+from .engines import TREATMENTS, Treatment, validate_engine_workload
 from .models import (
     BenchmarkEndpoint,
     ComparisonSpec,
@@ -33,7 +34,6 @@ from .models import (
     EndpointRequest,
     ResolvedTarget,
     TargetRequest,
-    Treatment,
 )
 from .reports.interactive import interactive_report_path, open_interactive_report, write_interactive_report
 from .reports.presentation import build_report_catalog
@@ -50,8 +50,8 @@ DEFAULT_TIMEOUT_SEC = 120
 def parse_benchmark_args(argv: Sequence[str]) -> argparse.Namespace:
     """Parse the public pair-only benchmark command."""
 
-    parser = argparse.ArgumentParser(description="Collect or reuse one egglog benchmark comparison.")
-    parser.add_argument("files", nargs="*", help="egglog files to benchmark")
+    parser = argparse.ArgumentParser(description="Collect or reuse one engine benchmark comparison.")
+    parser.add_argument("files", nargs="*", help="workload files to benchmark")
     parser.add_argument(
         "--fact-directory",
         default=None,
@@ -64,7 +64,7 @@ def parse_benchmark_args(argv: Sequence[str]) -> argparse.Namespace:
     )
     parser.add_argument(
         "--treatment",
-        choices=("off", "term", "proofs", "proof-extraction"),
+        choices=TREATMENTS,
         default="proofs",
         help="candidate treatment (default: proofs)",
     )
@@ -75,7 +75,7 @@ def parse_benchmark_args(argv: Sequence[str]) -> argparse.Namespace:
     )
     parser.add_argument(
         "--compare-treatment",
-        choices=("off", "term", "proofs", "proof-extraction"),
+        choices=TREATMENTS,
         default="off",
         help="baseline treatment (default: off)",
     )
@@ -214,6 +214,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         # materialization can build or run anything.
         store = ReportStore(report_path)
         files = resolve_files(args.files, invocation_cwd, args.fact_directory)
+        for endpoint in (baseline_request, candidate_request):
+            for file in files:
+                validate_engine_workload(file, endpoint.treatment)
         resolved_targets = resolve_targets(
             group_endpoint_requests(baseline_request, candidate_request),
             store,

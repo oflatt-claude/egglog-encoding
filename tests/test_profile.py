@@ -147,6 +147,73 @@ def test_profile_accepts_explicit_proof_extraction(tmp_path: Path) -> None:
     assert request.treatment == "proof-extraction"
 
 
+def test_profile_egg_treatment_uses_egg_binary_for_execution_identity_and_summary(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    math_path = ROOT / "egglog-experimental/tests/math-microbenchmark-rational.egg"
+    file_spec = models.FileSpec(
+        "egglog-experimental/tests/math-microbenchmark-rational.egg",
+        math_path,
+        "sha256:" + "b" * 64,
+    )
+    request = profile_runner.ProfileRequest(
+        file=file_spec,
+        target_request=targets.parse_target("."),
+        treatment="egg-proof-testing",
+        timeout_sec=120,
+        profiles_dir=tmp_path,
+        mode=profile_runner.ProfileMode(1, None),
+        open_after=False,
+        force_run=True,
+    )
+    egglog_binary = ROOT / "target/profiling/egglog-experimental"
+    egg_binary = ROOT / "target/profiling/egg-math-benchmark"
+    egg_hash = "sha256:" + "c" * 64
+    target = models.ResolvedTarget(
+        request=request.target_request,
+        row=models.TargetRow(".", str(ROOT), "HEAD", "abc123", False),
+        binary_sha256="sha256:" + "a" * 64,
+        binary_path=egglog_binary,
+        engine_binaries=(
+            models.EngineBinary("egglog", "sha256:" + "a" * 64, egglog_binary),
+            models.EngineBinary("egg", egg_hash, egg_binary),
+        ),
+        primary_engine="egglog",
+    )
+    recorded: dict[str, Any] = {}
+    summarized: list[Path] = []
+
+    monkeypatch.setattr(profile_runner, "resolve_profile_request", lambda *_args: request)
+    monkeypatch.setattr(profile_runner, "resolve_profile_target", lambda *_args: target)
+    monkeypatch.setattr(profile_runner.sys, "platform", "darwin")
+
+    def record(**kwargs: Any) -> dict[str, Any]:
+        recorded.update(kwargs)
+        return make_profile_data()
+
+    def summarize(_profile: dict[str, Any], binary: Path) -> samply_analysis.ProfileCpuSummary:
+        summarized.append(binary)
+        return make_cpu_summary()
+
+    monkeypatch.setattr(profile_runner, "run_samply_record", record)
+    monkeypatch.setattr(samply_analysis, "summarize", summarize)
+
+    profile_runner.run_profile(argparse.Namespace(), Console(stderr=True), ROOT, ROOT)
+
+    expected_artifact = profile_runner.profile_cache_path(
+        tmp_path,
+        egg_hash,
+        file_spec.sha256,
+        "egg-proof-testing",
+        request.mode,
+    )
+    assert recorded["artifact"] == expected_artifact
+    assert recorded["workload"] == [str(egg_binary), "--proof-mode", "check"]
+    assert "bin:cccccccc" in cast(str, recorded["name"])
+    assert summarized == [egg_binary]
+
+
 def test_target_resolvers_share_materialization_and_select_build_profile(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -169,9 +236,11 @@ def test_target_resolvers_share_materialization_and_select_build_profile(
         target_row: models.TargetRow,
         console: Console,
         build_profile: targets.BuildProfile,
+        engines: tuple[str, ...],
     ) -> models.ResolvedTarget:
         assert target_request == request
         assert target_row == row
+        assert engines == ("egglog",)
         build_profiles.append(build_profile)
         return target
 
@@ -193,7 +262,7 @@ def test_target_resolvers_share_materialization_and_select_build_profile(
         ROOT,
         Console(stderr=True),
     )[request]
-    profile_target = targets.resolve_profile_target(request, ROOT, ROOT, Console(stderr=True))
+    profile_target = targets.resolve_profile_target(request, "proofs", ROOT, ROOT, Console(stderr=True))
 
     assert benchmark_target == target
     assert profile_target == target
@@ -662,4 +731,4 @@ def test_profile_auto_iteration_cap_prints_warning(
 
 def test_profile_rejects_cache_only_label_targets() -> None:
     with pytest.raises(ValueError, match="cache-only label="):
-        targets.resolve_profile_target(targets.parse_target("cached="), ROOT, ROOT, Console(stderr=True))
+        targets.resolve_profile_target(targets.parse_target("cached="), "proofs", ROOT, ROOT, Console(stderr=True))
