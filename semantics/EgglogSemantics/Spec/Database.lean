@@ -6,9 +6,11 @@ import EgglogSemantics.Spec.Term
 
 The global state: the equalities the program has asserted, the global bindings, the rules,
 and the declarations. There is no separate term set — the equation `t = t` records that `t`
-was built, and `Database.terms` reads the diagonal back out. A function's table lives there
-too: a merge function's entry at the key `a…` with value columns `v…` is the term
-`f(a…, v…)`, and a constructor's entry is `f(a…)`.
+was built, and `Database.terms` is the terms that are self-equal. It is the *endpoints* of
+`eqs`, not its diagonal: asserting `1 = 2` alone holds both, by `symm` and `trans`. The two
+coincide exactly under `WF.eqsRefl`, which is what that field is for. A function's table
+lives there too: a merge function's entry at the key `a…` with value columns `v…` is the
+term `f(a…, v…)`, and a constructor's entry is `f(a…)`.
 -/
 
 namespace Egglog

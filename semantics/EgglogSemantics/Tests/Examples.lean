@@ -9,9 +9,10 @@ running actions, running a rule — meant to be read as documentation. Each `exa
 closed proof, so this file compiling *is* the test run; the `#guard`s at the end run
 whole programs through the interpreter instead.
 
-Every hand-built database below holds the terms its equalities mention. A state with
-equalities but no terms is unreachable — a `union` always inserts its operands — so
-there is nothing to check about one.
+A database has no term field: a state *is* its equalities, and `Database.terms` reads the
+terms back off the diagonal. So every hand-built database below carries one reflexive
+equation per term it holds — that is what makes it a state a program could have reached,
+and it is exactly `Database.WF.eqsRefl`.
 
 Checks about what a `run` does *not* produce need `ValidSubst` inversion, which is
 `PLAN.md`'s M8; the `run` example below is the forward direction only. Randomly
@@ -40,31 +41,30 @@ private def ctorDecl (n : Nat) : FnDecl := { arity := n, outArity := 1, merge :=
 /-- A bare `v1` as the whole program: nothing binds it, and an action must be an
 application besides. -/
 example : ¬ WellScoped [.action (.expr (.var "v1"))] := by
-  simp [WellScoped, Program.Scoped, Cmd.Scoped, Action.Scoped, Expr.Scoped]
+  simp [WellScoped, Action.Scoped, Expr.Scoped]
 
 /-- `(let v1 2)` then `(cwrap v1)`: a top-level `let` is in scope for a later command. -/
 example : WellScoped
     [.action (.letBind "v1" (eNum 2)), .action (.expr (.app "cwrap" [.var "v1"]))] := by
-  simp [WellScoped, Program.Scoped, Cmd.Scoped, Action.Scoped, Expr.Scoped, Expr.IsApp,
-    Cmd.bind, Action.bind, eNum]
+  simp [WellScoped, Action.Scoped, Expr.Scoped, Expr.IsApp, Cmd.bind, Action.bind, eNum]
 
 /-- The same program with a bare `v1` as the second action is rejected. `v1` is in scope,
 but egglog has no such action — `parse error: expected command` at top level and
 `parse error: expected action` in a rule head — so `Action.Scoped` requires an
 application. -/
 example : ¬ WellScoped [.action (.letBind "v1" (eNum 2)), .action (.expr (.var "v1"))] := by
-  simp [WellScoped, Program.Scoped, Cmd.Scoped, Action.Scoped, Expr.IsApp]
+  simp [WellScoped, Action.Scoped, Expr.IsApp]
 
 /-- Likewise for a query fact, where egglog answers `parse error: expected fact`. -/
 example : ¬ Rule.Scoped ⟨[.expr (.var "a")], []⟩ [] := by
-  simp [Rule.Scoped, Pattern.Scoped, Expr.IsApp]
+  simp [Pattern.Scoped, Expr.IsApp]
 
 /-- `(rule ((= v1 2)) ((cadd v1 v2)))` with no globals: `v2` is bound by neither the
 query nor the globals. -/
 example : ¬ Rule.Scoped
     ⟨[.eq (.var "v1") (eNum 2)], [.expr (.app "cadd" [.var "v1", .var "v2"])]⟩ [] := by
-  simp [Rule.Scoped, Pattern.Scoped, Actions.Scoped, Action.Scoped, Expr.Scoped,
-    Expr.IsApp, Query.bind, Pattern.vars, eNum]
+  simp [Pattern.Scoped, Action.Scoped, Expr.Scoped, Expr.IsApp, Query.bind, Pattern.vars,
+    eNum]
 
 /-- The same rule with `v2` a global: it does scope. -/
 example : Rule.Scoped
@@ -81,8 +81,7 @@ sorts and so cannot tell it from the type error `(min (A) (B))`. -/
 private def minProgram : Program := [.action (.expr (.app "min" [eNum 1, eNum 2]))]
 
 example : WellScoped minProgram := by
-  simp [WellScoped, minProgram, Program.Scoped, Cmd.Scoped, Action.Scoped, Expr.Scoped,
-    Expr.IsApp, eNum]
+  simp [WellScoped, minProgram, Action.Scoped, Expr.Scoped, Expr.IsApp, eNum]
 
 example : ¬ Program.Evaluable minProgram noSig := by
   simp [minProgram, Program.Evaluable, Cmd.Evaluable, Action.Evaluable, Expr.Evaluable,
@@ -93,24 +92,32 @@ example : ¬ Program.Evaluable minProgram noSig := by
 `1 = 2` and `2 = 3` over `{1, 2, 3}` puts all three terms in one class — all nine
 pairs. -/
 
-/-- `1 = 2` and `2 = 3` asserted over `{1, 2, 3}`. -/
+/-- `1 = 2` and `2 = 3` asserted over `{1, 2, 3}`: five equations, of which the three
+reflexive ones are the three terms. -/
 private def chain : Database where
   sig := noSig
-  terms := {num 1, num 2, num 3}
-  rows := Database.ctorRowsOf {num 1, num 2, num 3}
-  eqs := {(num 1, num 2), (num 2, num 3)}
+  eqs := {(num 1, num 1), (num 2, num 2), (num 3, num 3), (num 1, num 2), (num 2, num 3)}
   env := []
   rules := ∅
 
+/-- The terms, read back off the diagonal. -/
+private theorem chain_terms : chain.terms = {num 1, num 2, num 3} := by
+  refine Set.Subset.antisymm (fun t ht => ?_) ?_
+  · obtain ⟨u, h | h⟩ := Database.mem_terms_iff.mp ht <;>
+      simp only [chain, Set.mem_insert_iff, Set.mem_singleton_iff, Prod.mk.injEq] at h <;>
+      rcases h with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ <;> simp
+  · rintro t (rfl | rfl | rfl) <;> exact .assert (by simp [chain])
+
+/-- `chain` is a state a program could have reached. `eqsRefl` is the clause the three
+reflexive equations are there for; without them the terms would still be `{1, 2, 3}`, but
+the database would claim to hold terms it never recorded. -/
 private theorem chain_wf : chain.WF where
+  eqsRefl := by
+    rw [chain_terms]
+    rintro t (rfl | rfl | rfl) <;> simp [chain]
   subtermClosed := by
-    intro t ht
-    simp only [chain, Set.mem_insert_iff, Set.mem_singleton_iff] at ht
-    rcases ht with rfl | rfl | rfl <;> simp [chain, num]
-  eqsInTerms := by
-    intro p hp
-    simp only [chain, Set.mem_insert_iff, Set.mem_singleton_iff] at hp
-    rcases hp with rfl | rfl <;> simp [chain]
+    rw [chain_terms]
+    rintro t (rfl | rfl | rfl) <;> simp [num]
   envInTerms := by simp [chain]
 
 example : Cong chain (num 1) (num 3) :=
@@ -119,27 +126,31 @@ example : Cong chain (num 1) (num 3) :=
 example : Cong chain (num 3) (num 1) :=
   .symm (.trans (b := num 2) (.assert (by simp [chain])) (.assert (by simp [chain])))
 
-example : Cong chain (num 2) (num 2) := .refl (by simp [chain])
+/-- Self-congruence is not a rule of `Cong` but an equation like any other: the database
+holds `2` because it asserts `2 = 2`. -/
+example : Cong chain (num 2) (num 2) := .assert (by simp [chain])
 
 /-- The closure relates nothing to a term the database does not hold, which follows
-from reflexivity being restricted to `db.terms`. -/
+from there being no reflexivity rule: every derivation ends at an asserted equation. -/
 example : ¬ Cong chain (num 1) (num 4) := by
   intro h
-  have hm : num 4 ∈ chain.terms := h.mem_right chain_wf
-  simp [chain, num] at hm
+  have hm : num 4 ∈ chain.terms := h.mem_right
+  rw [chain_terms] at hm
+  simp [num] at hm
 
 /-- `1 = 2` over `{1, 2, (wrapper 1), (wrapper 2)}` derives `(wrapper 1) = (wrapper 2)`:
 congruence propagating under `wrapper`. -/
 private def wrapped : Database where
   sig := noSig
-  terms := {num 1, num 2, .app "wrapper" [num 1], .app "wrapper" [num 2]}
-  rows := Database.ctorRowsOf {num 1, num 2, .app "wrapper" [num 1], .app "wrapper" [num 2]}
-  eqs := {(num 1, num 2)}
+  eqs := {(num 1, num 1), (num 2, num 2),
+          (.app "wrapper" [num 1], .app "wrapper" [num 1]),
+          (.app "wrapper" [num 2], .app "wrapper" [num 2]),
+          (num 1, num 2)}
   env := []
   rules := ∅
 
 example : Cong wrapped (.app "wrapper" [num 1]) (.app "wrapper" [num 2]) :=
-  .congr (by simp [wrapped]) (by simp [wrapped])
+  .congr (.assert (by simp [wrapped])) (.assert (by simp [wrapped]))
     (.cons (.assert (by simp [wrapped])) .nil)
 
 /-- Congruence derives nothing beyond what is asserted. Over `{1, 4, 7}` with only
@@ -147,22 +158,21 @@ example : Cong wrapped (.app "wrapper" [num 1]) (.app "wrapper" [num 2]) :=
 assertions that `(1, 4)` is not in (`Cong.le`). -/
 private def separate : Database where
   sig := noSig
-  terms := {num 1, num 4, num 7}
-  rows := Database.ctorRowsOf {num 1, num 4, num 7}
-  eqs := {(num 4, num 7)}
+  eqs := {(num 1, num 1), (num 4, num 4), (num 7, num 7), (num 4, num 7)}
   env := []
   rules := ∅
 
 example : ¬ Cong separate (num 1) (num 4) := by
   intro h
   have hR := h.le (R := fun a b => a = b ∨ (a = num 4 ∧ b = num 7) ∨ (a = num 7 ∧ b = num 4))
-    (fun a b hm => by simp only [separate, Set.mem_singleton_iff, Prod.mk.injEq] at hm
-                      exact Or.inr (Or.inl ⟨hm.1, hm.2⟩))
-    (fun _ _ => Or.inl rfl)
+    (by rintro a b hm
+        simp only [separate, Set.mem_insert_iff, Set.mem_singleton_iff, Prod.mk.injEq] at hm
+        rcases hm with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ <;> simp)
     (by rintro a b (rfl | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩) <;> simp)
     (by rintro a b c (rfl | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩) (rfl | ⟨h1, rfl⟩ | ⟨h1, rfl⟩) <;>
           simp_all [num])
-    (fun f as bs hm _ _ => by simp [separate, num] at hm)
+    (fun f as bs hm _ _ => by
+      obtain ⟨u, hu | hu⟩ := Database.mem_terms_iff.mp hm <;> simp [separate, num] at hu)
   simp [num] at hR
 
 /-! ### E-matching
@@ -179,37 +189,38 @@ that knows nothing about it. -/
 /-- `1 = 2` over `{1, 2, (wrapper 2)}`. -/
 private def preWrapped : Database where
   sig := Function.update noSig "wrapper" (some (ctorDecl 1))
-  terms := {num 1, num 2, .app "wrapper" [num 2]}
-  rows := Database.ctorRowsOf {num 1, num 2, .app "wrapper" [num 2]}
-  eqs := {(num 1, num 2)}
+  eqs := {(num 1, num 1), (num 2, num 2),
+          (.app "wrapper" [num 2], .app "wrapper" [num 2]), (num 1, num 2)}
   env := []
   rules := ∅
 
 example : ValidSubst preWrapped (.expr (.app "wrapper" [eNum 1])) [] :=
   ⟨⟨by simp [Pattern.freeVars, eNum], by simp⟩,
     .expr (w := .app "wrapper" [num 2]) (t := .app "wrapper" [num 1])
-      (by simp [preWrapped])
+      (.assert (by simp [preWrapped]))
       (by rw [Expr.eval_app_ctor (show Prim.ofName "wrapper" = none from rfl)
             (show Signature.IsCtor preWrapped.sig "wrapper" from ⟨ctorDecl 1, rfl, rfl⟩)]
           rfl)
-      (congOn_singleton.mpr (Cong.congr (Or.inl (by simp [preWrapped]))
-        (Or.inr (Term.self_mem_subterms _))
-        (.cons (.symm (.assert (by simp [preWrapped]))) .nil)))⟩
+      (congOn_singleton.mpr (Cong.congr
+        (.assert (Set.mem_union_left _ (by simp [preWrapped])))
+        (Database.mem_addTerm _ _)
+        (.cons (.symm (.assert (Set.mem_union_left _ (by simp [preWrapped])))) .nil)))⟩
 
 /-- Over the database holding just `1`, the substitution `v1 ↦ 1` is a valid
 environment for `v1`. -/
 example : ValidEnv ["v1"]
-    { sig := noSig, terms := {num 1}, rows := Database.ctorRowsOf {num 1}, eqs := ∅,
-      env := [], rules := ∅ } [("v1", num 1)] := by
+    { sig := noSig, eqs := {(num 1, num 1)}, env := [], rules := ∅ } [("v1", num 1)] := by
   refine ⟨by simp, ?_⟩
   intro b hb
   rw [List.mem_singleton] at hb
-  simp [hb]
+  exact hb ▸ .assert rfl
 
 /-! ### Running a program of actions
 
-`(let v (b 1))`, `(union 7 7)`, `(union v 4)` gives terms `{(b 1), 4, 7, 1}` and,
-after closure, `(b 1) = 4`. -/
+`(let v (b 1))`, `(union 7 7)`, `(union v 4)` gives four reflexive equations — the terms
+`{(b 1), 1, 7, 4}` — and the one asserted equation `(b 1) = 4`, from which the closure
+derives `4 = (b 1)`. The self-union `(union 7 7)` contributes only the term: the equation
+it asserts is the reflexive one recording `7`. -/
 
 private def b1 : Term := .app "b" [num 1]
 
@@ -220,18 +231,16 @@ private def actionsProgram : Program :=
    .action (.union (.var "v") (eNum 4))]
 
 example : WellScoped actionsProgram := by
-  simp [WellScoped, actionsProgram, Program.Scoped, Cmd.Scoped, Action.Scoped, Expr.Scoped,
-    Cmd.bind, Action.bind, eNum]
+  simp [WellScoped, actionsProgram, Action.Scoped, Expr.Scoped, Cmd.bind, Action.bind, eNum]
 
 example : ∃ db, ProgramStep Database.empty actionsProgram db ∧
     db.terms = {b1, num 1, num 7, num 4} ∧
-    db.eqs = {(num 7, num 7), (b1, num 4)} ∧
+    db.eqs = {(b1, b1), (num 1, num 1), (num 7, num 7), (num 4, num 4), (b1, num 4)} ∧
     Env.lookup "v" db.env = some b1 ∧
     Cong db (num 4) b1 := by
-  refine ⟨_, .cons .decl (.cons (.action rfl Relation.ReflTransGen.refl)
-    (.cons (.action rfl Relation.ReflTransGen.refl)
-      (.cons (.action rfl Relation.ReflTransGen.refl) .nil))), ?_, ?_, rfl, ?_⟩
-  · ext t; simp [b1, num]; tauto
+  refine ⟨_, .cons ⟨_, rfl, .refl⟩ (.cons ⟨_, rfl, .refl⟩
+    (.cons ⟨_, rfl, .refl⟩ (.cons ⟨_, rfl, .refl⟩ .nil))), ?_, ?_, rfl, ?_⟩
+  · ext t; simp [b1, num, Database.mem_terms_iff]; tauto
   · ext p; simp [b1, num]; tauto
   · exact .symm (.assert (by simp [b1, num]))
 
@@ -255,65 +264,62 @@ private def ruleProgram : Program :=
    .rule swapRule, .run]
 
 example : WellScoped ruleProgram := by
-  simp [WellScoped, ruleProgram, Program.Scoped, Cmd.Scoped, Action.Scoped, Expr.Scoped,
-    Expr.IsApp, Cmd.bind, Action.bind, Rule.Scoped, Pattern.Scoped, Actions.Scoped,
-    Query.bind, Pattern.vars, swapRule, eNum]
+  simp [WellScoped, ruleProgram, Action.Scoped, Expr.Scoped, Expr.IsApp, Cmd.bind,
+    Action.bind, Pattern.Scoped, Query.bind, Pattern.vars, swapRule, eNum]
 
-/-- The database just before the `(run)`: `(Add 1 2)` with its children, plus the rule. -/
+/-- The database just before the `(run)`: `(Add 1 2)` with its children — three reflexive
+equations, one per subterm built — plus the rule. -/
 private def preRun : Database where
   sig := Function.update noSig "Add" (some (ctorDecl 2))
-  terms := add12.subterms
-  rows := add12.ctorRows
-  eqs := ∅
+  eqs := {(add12, add12), (num 1, num 1), (num 2, num 2)}
   env := []
   rules := insert swapRule ∅
 
 private theorem preRun_step : ProgramStep Database.empty
     [.decl "Add" (ctorDecl 2), .action (.expr (.app "Add" [eNum 1, eNum 2])),
-      .rule swapRule] preRun :=
-  .cons .decl (.cons
-    (.action (d := { preRun with rules := ∅ })
-      (by simp [evalAction, Expr.eval, Expr.evalList, Database.empty, preRun,
-        eNum, num, add12, Database.addTerm, Prim.ofName, Signature.IsCtor, ctorDecl])
-      Relation.ReflTransGen.refl)
-    (.cons (CmdStep.rule (db := { preRun with rules := ∅ }) (r := swapRule)) .nil))
+      .rule swapRule] preRun := by
+  -- Every command computes its effect and then merges, and no merge fires here: the
+  -- signature declares only a constructor. The one field that is not `rfl` is `eqs`,
+  -- where `addTerm`'s diagonal over `add12.subterms` is the three pairs written out.
+  refine .cons ⟨_, rfl, .refl⟩
+    (.cons ⟨{ preRun with rules := ∅ }, congrArg some (Database.ext rfl ?_ rfl rfl), .refl⟩
+      (.cons ⟨preRun, rfl, .refl⟩ .nil))
+  ext p
+  simp [Database.empty, preRun, add12, num]
+  tauto
 
 private theorem ruleProgram_step :
     ProgramStep Database.empty ruleProgram (RunRules preRun) :=
-  preRun_step.append (.cons (.run Relation.ReflTransGen.refl) .nil)
+  preRun_step.append (.cons ⟨_, rfl, .refl⟩ .nil)
 
 /-- The one firing of the rule: `a ↦ 1`, `b ↦ 2`, witnessed by `(Add 1 2)` itself. -/
 private theorem swap_matches :
     ValidQuerySubst preRun swapRule.query [("a", num 1), ("b", num 2)] := by
   refine ⟨[[("a", num 1), ("b", num 2)]], .cons ?_ .nil, .single _⟩
-  refine ⟨⟨?_, ?_⟩, Matches.expr (w := add12) (t := add12) ?_ ?_
-    (congOn_singleton.mpr (.refl ?_))⟩
+  refine ⟨⟨?_, ?_⟩, Matches.expr (w := add12) (t := add12) (.assert ?_) ?_
+    (congOn_singleton.mpr (.assert (Set.mem_union_left _ ?_)))⟩
   · simp [Env.dom, Pattern.freeVars, preRun]
   · intro c hc
     simp only [List.mem_cons, List.not_mem_nil, or_false] at hc
-    rcases hc with rfl | rfl <;> simp [preRun, add12, num]
+    rcases hc with rfl | rfl <;> exact .assert (by simp [preRun, num])
   · simp [preRun, add12]
   · simp [Expr.eval, Expr.evalList, Env.lookup, preRun, add12, num, Prim.ofName,
       Signature.IsCtor, ctorDecl]
   · simp [preRun, add12]
 
-/-- Running that firing adds `(Add 2 1)` and its children. -/
+/-- Running that firing adds `(Add 2 1)` and its children — which is exactly what
+`Database.addTerm` records. -/
 private theorem swap_fires :
     evalLocalActions preRun swapRule.actions [("a", num 1), ("b", num 2)]
-      = some { preRun with terms := preRun.terms ∪ add21.subterms,
-                           rows := preRun.rows ∪ add21.ctorRows } := by
-  simp [evalLocalActions, evalActions, evalAction, Expr.eval, Expr.evalList, Env.lookup,
-    swapRule, preRun, add21, num, Database.addTerm, Prim.ofName, Signature.IsCtor,
-    ctorDecl]
+      = some (preRun.addTerm add21) := rfl
 
 /-- `(Add 2 1)` is in the database after the run. -/
 example : ∃ db, ProgramStep Database.empty ruleProgram db ∧ add21 ∈ db.terms := by
   refine ⟨RunRules preRun, ruleProgram_step, ?_⟩
-  have hmem : ({ preRun with terms := preRun.terms ∪ add21.subterms,
-                             rows := preRun.rows ∪ add21.ctorRows } : Database) ∈
-      {d | ∃ r ∈ preRun.rules, d ∈ RuleResults preRun r} :=
+  have hmem : preRun.addTerm add21 ∈ {d | ∃ r ∈ preRun.rules, d ∈ RuleResults preRun r} :=
     ⟨swapRule, by simp [preRun], _, swap_matches, swap_fires⟩
-  exact Or.inr (Set.mem_biUnion hmem (Or.inr add21.self_mem_subterms))
+  rw [RunRules, Database.sUnion_terms]
+  exact Or.inr (Set.mem_biUnion hmem (Database.mem_addTerm _ _))
 
 /-! ### The closure, computed
 
@@ -326,10 +332,12 @@ a real proof wants it. -/
 section Computed
 set_option linter.hashCommand false
 
-/-- `{1, 2, 3}` with `1 = 2` and `2 = 3`: all nine pairs. -/
+/-- `{1, 2, 3}` with `1 = 2` and `2 = 3`: all nine pairs. `chainEqs` is `chain.eqs`,
+reflexive equations and all, since that is what `mem_closure_iff` reads. -/
 private def chainTerms : Finset Term := {num 1, num 2, num 3}
 
-private def chainEqs : Finset (Term × Term) := {(num 1, num 2), (num 2, num 3)}
+private def chainEqs : Finset (Term × Term) :=
+  {(num 1, num 1), (num 2, num 2), (num 3, num 3), (num 1, num 2), (num 2, num 3)}
 
 private theorem chainEqs_sub : chainEqs ⊆ candidates chainTerms := by decide
 
@@ -363,7 +371,7 @@ on throughout. -/
 example : Cong chain (num 1) (num 3) := by
   refine (mem_closure_iff (terms := chainTerms) (rel := chainEqs) ?_ ?_ chainEqs_sub).mp
     (by decide)
-  · simp [chain, chainTerms]
+  · rw [chain_terms]; simp [chainTerms]
   · simp [chain, chainEqs]
 
 /-! ### Running programs
