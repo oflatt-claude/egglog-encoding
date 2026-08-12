@@ -5,17 +5,32 @@ set_option autoImplicit false
 set_option maxRecDepth 100000
 
 /-!
-# `execM_current_of_lattice` is **false**
-
-Machine-checked refutations of `Proofs/Merge.lean`'s `execM_current_of_lattice`, each
-isolating one hypothesis the statement is missing.
+# What a completeness companion has to assume
 
 `execM_contained` is a containment, and a do-nothing implementation satisfies it, so the
-chain wants a completeness companion saying the interpreter keeps the `le`-greatest
-recorded output at each key class rather than merely some subset. `Database.Current` is
-that companion for a merge that is a join. The statement as written does not hold, and no
-rearrangement of its existing hypotheses rescues it: `hanti` and `hjoin` do not axiomatize
-"join", and `hjoin` says nothing at all about a merge that fails to produce a value.
+refinement chain wants a completeness companion: the interpreter keeps the `le`-greatest
+recorded output at each key class rather than merely some subset. `Database.Current`
+(`Proofs/Merge.lean`) is that notion for a merge that is a join, and **no theorem says the
+interpreter computes it** — see `PLAN.md`, "The two contracts".
+
+`CurrentOfLattice` below is that companion in its naive shape: `execM_contained`'s
+premises, plus antisymmetry of `le` and "the merged value is above both operands". Three
+refutations show it false. Each satisfies every hypothesis the naive statement has and
+fails only its conclusion, so each shows one further hypothesis to be **necessary**:
+
+* **A** — `le` is reflexive. `Current` demands `le vs vs`, and an implication-shaped
+  `hjoin` is vacuous under `le := fun _ _ => False`.
+* **B** — the merge resolves every collision the interpreter can reach. `hjoin` is silent
+  when the body computes nothing, and then two entries survive at one key class.
+* **C** — `le` is transitive. `hjoin` bounds one collision, and a class that collides
+  twice needs the bounds to compose.
+
+`Proofs/Merge.lean`, "Two statements removed rather than carried", records the corrected
+statement these three witness. It has not been written, so this file is what stops the
+naive one coming back.
+
+The deleted `execM_current_of_lattice` was the naive statement; `CurrentOfLattice` is it
+verbatim, kept here so the refutations have a subject.
 -/
 
 namespace Egglog
@@ -121,9 +136,14 @@ theorem mergeOf_update_inv {sig : Signature} (hsig : sig.AllConstructors) {dc : 
 
 /-! ## The statement under test -/
 
-/-- `Proofs/Merge.lean`'s `execM_current_of_lattice`, restated with every binder
-explicit so that it can be negated.  Nothing has been weakened: `hexec`, `hanti`,
-`hjoin`, `hmerge` and `hrow` are the theorem's five hypotheses verbatim. -/
+/-- The naive completeness companion, with every binder explicit so that it can be
+negated: `execM` reached `d`, `le` is antisymmetric, and `f`'s merge body sends every pair
+of operands it evaluates at to an upper bound of both.  Nothing is weakened — this is the
+deleted `execM_current_of_lattice`'s statement unchanged.
+
+The conclusion is deliberately generous: not that the interpreter's own denotation is
+`Current`, but that *some* specification state the program reaches is.  It is false even
+so. -/
 def CurrentOfLattice : Prop :=
   ∀ (p : Program) (d : FDatabase) (le : List Term → List Term → Prop),
     execM p = some d →
@@ -373,10 +393,11 @@ theorem dB_join_nonvacuous :
   ⟨_, rfl, rfl⟩
 
 /-- **Every state the specification reaches on `pB` records the second value too.**
-The last command's `set` writes it and `MergeClosure` never removes a row. -/
-theorem pB_reaches_rowB {db : Database}
+The last command's `set` writes the entry term `f(b)` and `MergeClosure` never removes
+one. -/
+theorem pB_reaches_entryB {db : Database}
     (h : ProgramStep FDatabase.empty.toDatabase pB db) :
-    Row.mk "f" [] [tB] ∈ db.rows := by
+    Term.app "f" [tB] ∈ db.terms := by
   rw [pB, ctorHeader, List.cons_append, List.cons_append, List.cons_append,
     List.cons_append, List.nil_append] at h
   obtain ⟨_, -, h⟩ := h.cons_inv
@@ -387,14 +408,13 @@ theorem pB_reaches_rowB {db : Database}
   obtain ⟨_, -, h⟩ := h.cons_inv
   obtain ⟨_, h3, hnil⟩ := h.cons_inv
   cases hnil.nil_inv
-  cases h3 with
-  | action hact hcl =>
-    simp only [evalAction, Option.bind_eq_some_iff, Option.map_eq_some_iff] at hact
-    obtain ⟨as, hargs, vs, hout, rfl⟩ := hact
-    rw [show eB = Expr.app "b" [] from rfl] at hout
-    rw [mevalList_nil hargs,
-      mevalList_single_nullary (show Prim.ofName "b" = none from rfl) hout] at hcl
-    exact (MergeClosure.contained hcl).rows (Set.mem_insert _ _)
+  obtain ⟨_, hact, hcl⟩ := h3
+  simp only [cmdEffect, evalAction, Option.bind_eq_some_iff, Option.map_eq_some_iff] at hact
+  obtain ⟨as, hargs, vs, hout, rfl⟩ := hact
+  rw [show eB = Expr.app "b" [] from rfl] at hout
+  rw [mevalList_nil hargs,
+    mevalList_single_nullary (show Prim.ofName "b" = none from rfl) hout] at hcl
+  exact (MergeClosure.contained hcl).terms (Database.mem_addTerm _ _)
 
 set_option maxHeartbeats 2000000 in
 -- The kernel evaluates the program here. Declaring the constructors lengthens every
@@ -407,7 +427,7 @@ theorem currentOfLattice_false_partialOrder : ¬ CurrentOfLattice := by
   intro H
   obtain ⟨db, hstep, hcur⟩ :=
     H pB dB leB execM_pB leB_anti dB_join "f" [] [tA] _ _ dB_mergeOf dB_rowA
-  have hbad := hcur.2 [tB] ⟨[], .nil, pB_reaches_rowB hstep⟩
+  have hbad := hcur.2 [tB] ⟨[], .nil, pB_reaches_entryB hstep⟩
   rcases hbad with h | ⟨_, _, h, _⟩ | ⟨⟨_, h⟩, _⟩ <;> simp [tA, tB] at h
 
 
@@ -572,9 +592,9 @@ theorem dC_join_nonvacuous (x y : Term) :
   ⟨_, rfl, rfl⟩
 
 /-- Every state the specification reaches on `pC` still records the first value. -/
-theorem pC_reaches_rowA {db : Database}
+theorem pC_reaches_entryA {db : Database}
     (h : ProgramStep FDatabase.empty.toDatabase pC db) :
-    Row.mk "f" [] [tA] ∈ db.rows := by
+    Term.app "f" [tA] ∈ db.terms := by
   rw [pC, ctorHeader, List.cons_append, List.cons_append, List.cons_append,
     List.cons_append, List.nil_append] at h
   obtain ⟨_, -, h⟩ := h.cons_inv
@@ -583,15 +603,14 @@ theorem pC_reaches_rowA {db : Database}
   obtain ⟨_, -, h⟩ := h.cons_inv
   obtain ⟨_, -, h⟩ := h.cons_inv
   obtain ⟨_, h2, r2⟩ := h.cons_inv
-  cases h2 with
-  | action hact hcl =>
-    simp only [evalAction, Option.bind_eq_some_iff, Option.map_eq_some_iff] at hact
-    obtain ⟨as, hargs, vs, hout, rfl⟩ := hact
-    rw [show eA = Expr.app "a" [] from rfl] at hout
-    rw [mevalList_nil hargs,
-      mevalList_single_nullary (show Prim.ofName "a" = none from rfl) hout] at hcl
-    exact (ProgramStep.contained r2).rows
-      ((MergeClosure.contained hcl).rows (Set.mem_insert _ _))
+  obtain ⟨_, hact, hcl⟩ := h2
+  simp only [cmdEffect, evalAction, Option.bind_eq_some_iff, Option.map_eq_some_iff] at hact
+  obtain ⟨as, hargs, vs, hout, rfl⟩ := hact
+  rw [show eA = Expr.app "a" [] from rfl] at hout
+  rw [mevalList_nil hargs,
+    mevalList_single_nullary (show Prim.ofName "a" = none from rfl) hout] at hcl
+  exact (ProgramStep.contained r2).terms
+    ((MergeClosure.contained hcl).terms (Database.mem_addTerm _ _))
 
 set_option maxHeartbeats 2000000 in
 -- The kernel evaluates the program here. Declaring the constructors lengthens every
@@ -603,7 +622,47 @@ theorem currentOfLattice_false_total : ¬ CurrentOfLattice := by
   intro H
   obtain ⟨db, hstep, hcur⟩ :=
     H pC dC leC execM_pC leC_anti dC_join "f" [] vsC _ _ dC_mergeOf dC_row
-  exact not_leC_of_okA dC_okA (hcur.2 [tA] ⟨[], .nil, pC_reaches_rowA hstep⟩)
+  exact not_leC_of_okA dC_okA (hcur.2 [tA] ⟨[], .nil, pC_reaches_entryA hstep⟩)
+
+
+/-! ## Neither B nor C blames the specification's over-approximation
+
+Both refutations above reach for a specification state, because that is the shape the
+naive statement has.  Neither needs one.  `Impl/Interp.lean`'s `addRow` records the entry
+term beside the index row and the merge phase deletes only from the *index*, so a
+superseded output is still a term of `execM`'s own final state, and `Database.Out` — which
+reads `terms`, not `rows` — finds it at every congruent key.  So the conclusion already
+fails at `d.toDatabase`, with no `ProgramStep` and no `MergeStep` in sight.
+
+This is what makes the three counterexamples robust to a repair of `hjoin`: they are not
+artefacts of the specification reaching states the interpreter does not. -/
+
+set_option maxHeartbeats 2000000 in
+-- The kernel evaluates the program here. Declaring the constructors lengthens every
+-- signature lookup's `Function.update` chain, which is enough to exceed the default.
+theorem dB_out_b : dB.toDatabase.Out "f" [] [tB] :=
+  ⟨[], .nil, by
+    rw [FDatabase.toDatabase_terms]
+    change Term.app "f" [tB] ∈ dB.terms
+    decide⟩
+
+/-- **Refutation B, with the specification removed.** -/
+theorem dB_not_current : ¬ dB.toDatabase.Current leB "f" [] [tA] := by
+  intro hcur
+  rcases hcur.2 [tB] dB_out_b with h | ⟨_, _, h, _⟩ | ⟨⟨_, h⟩, _⟩ <;> simp [tA, tB] at h
+
+set_option maxHeartbeats 2000000 in
+-- The kernel evaluates the program here. Declaring the constructors lengthens every
+-- signature lookup's `Function.update` chain, which is enough to exceed the default.
+theorem dC_out_a : dC.toDatabase.Out "f" [] [tA] :=
+  ⟨[], .nil, by
+    rw [FDatabase.toDatabase_terms]
+    change Term.app "f" [tA] ∈ dC.terms
+    decide⟩
+
+/-- **Refutation C, with the specification removed.** -/
+theorem dC_not_current : ¬ dC.toDatabase.Current leC "f" [] vsC :=
+  fun hcur => not_leC_of_okA dC_okA (hcur.2 [tA] dC_out_a)
 
 
 /-! ## The three programs satisfy the side conditions the refinement chain imposes
@@ -621,15 +680,30 @@ theorem mergeOf_update_self {sig : Signature} {dc : FnDecl} {f : FnName}
   rw [Signature.mergeOf, Function.update_self, Option.bind_some]
   exact hdc
 
-theorem mergesLegal_of_allConstructors {sig : Signature} (h : sig.AllConstructors) :
-    Signature.MergesLegal sig := fun _ _ _ hg => (h.elim hg).elim
+/-- `Signature.mergeOf`, read off a declaration. -/
+theorem mergeOf_of_decl {sig : Signature} {g : FnName} {dc : FnDecl} {m : MergeSpec}
+    (hd : sig g = some dc) (hm : dc.merge = some m) : sig.mergeOf g = some m := by
+  rw [Signature.mergeOf, hd, Option.bind_some, hm]
 
+theorem mergesLegal_of_allConstructors {sig : Signature} (h : sig.AllConstructors) :
+    Signature.MergesLegal sig := fun _ _ _ _ hd hm => (h.elim (mergeOf_of_decl hd hm)).elim
+
+/-- `hwidth` is `Signature.MergesLegal`'s second half: one result expression per value
+column.  All three merges above have a single value column, so it is `rfl` at each use. -/
 theorem mergesLegal_update {sig : Signature} (hsig : sig.AllConstructors) {dc : FnDecl}
-    {f : FnName} {res₀ : List Expr} (hdc : dc.merge = some (MergeSpec.merge [] res₀)) :
+    {f : FnName} {res₀ : List Expr} (hdc : dc.merge = some (MergeSpec.merge [] res₀))
+    (hwidth : res₀.length = dc.outArity) :
     Signature.MergesLegal (Function.update sig f (some dc)) := by
-  intro g body res hg
-  rw [(mergeOf_update_inv hsig hdc hg).1]
-  trivial
+  intro g dc' body res hd hm
+  by_cases hg : g = f
+  · subst hg
+    rw [Function.update_self, Option.some.injEq] at hd
+    subst hd
+    rw [hdc, Option.some.injEq, MergeSpec.merge.injEq] at hm
+    obtain ⟨rfl, rfl⟩ := hm
+    exact ⟨⟨trivial, trivial⟩, hwidth⟩
+  · rw [Function.update_of_ne hg] at hd
+    exact (hsig.elim (mergeOf_of_decl hd hm)).elim
 
 /-- A constructor declaration is legal wherever the name is fresh and the state holds no
 terms — which is every prefix of `ctorHeader`. -/
@@ -659,29 +733,40 @@ theorem legal_header {rest : Program} (htail : dHdr.ProgramLegal rest) :
 
 theorem legal_decl_cons {dc : FnDecl} {f : FnName} {res₀ : List Expr} {rest : Program}
     {d' : FDatabase} (hdc : dc.merge = some (MergeSpec.merge [] res₀))
+    (hwidth : res₀.length = dc.outArity)
     (hfresh : dHdr.sig f = none)
     (hstep : dHdr.execCmdM (Cmd.decl f dc) = some d')
     (htail : d'.ProgramLegal rest) :
     dHdr.ProgramLegal (Cmd.decl f dc :: rest) := by
   refine ⟨trivial, ⟨hfresh, by simp [dHdr, FDatabase.empty]⟩,
-    mergesLegal_update baseSig_allConstructors hdc, ?_⟩
+    mergesLegal_update baseSig_allConstructors hdc hwidth, ?_⟩
   intro d'' h''
   rw [hstep, Option.some.injEq] at h''
   exact h'' ▸ htail
 
+/-- `harity` and `hout` discharge `Action.SetWidthOk`: the `set` fills exactly the
+declared key and value columns.  All three programs declare `f` nullary with one value
+column, which is what makes `(set (f) e)` the right shape. -/
 theorem legal_action_cons {d d' : FDatabase} {dc : FnDecl} {f : FnName} {res₀ : List Expr}
     {e : Expr} {rest : Program} (hdc : dc.merge = some (MergeSpec.merge [] res₀))
+    (hwidth : res₀.length = dc.outArity)
+    (harity : dc.arity = 0) (hout : dc.outArity = 1)
     (hsig : d.sig = Function.update baseSig f (some dc))
     (hstep : d.execCmdM (Cmd.action (.set f [] [e])) = some d')
     (htail : d'.ProgramLegal rest) :
     d.ProgramLegal (Cmd.action (.set f [] [e]) :: rest) := by
-  refine ⟨?_, trivial, ?_, ?_⟩
+  refine ⟨⟨?_, ?_⟩, trivial, ?_, ?_⟩
   · change Signature.mergeOf d.sig f ≠ none
     rw [hsig, mergeOf_update_self hdc]
     simp
+  · change ∀ dc', d.sig f = some dc' → _ ∧ _
+    intro dc' hdc'
+    rw [hsig, Function.update_self, Option.some.injEq] at hdc'
+    subst hdc'
+    exact ⟨harity.symm, hout.symm⟩
   · change Signature.MergesLegal d.sig
     rw [hsig]
-    exact mergesLegal_update baseSig_allConstructors hdc
+    exact mergesLegal_update baseSig_allConstructors hdc hwidth
   · intro d'' h''
     rw [hstep, Option.some.injEq] at h''
     exact h'' ▸ htail
@@ -690,22 +775,25 @@ set_option maxHeartbeats 2000000 in
 -- The kernel evaluates the program here. Declaring the constructors lengthens every
 -- signature lookup's `Function.update` chain, which is enough to exceed the default.
 theorem pA_legal : FDatabase.empty.ProgramLegal pA :=
-  legal_header (legal_decl_cons rfl rfl rfl (legal_action_cons rfl rfl rfl trivial))
+  legal_header (legal_decl_cons rfl rfl rfl rfl
+    (legal_action_cons rfl rfl rfl rfl rfl rfl trivial))
 
 set_option maxHeartbeats 2000000 in
 -- The kernel evaluates the program here. Declaring the constructors lengthens every
 -- signature lookup's `Function.update` chain, which is enough to exceed the default.
 theorem pB_legal : FDatabase.empty.ProgramLegal pB :=
-  legal_header (legal_decl_cons rfl rfl rfl
-    (legal_action_cons rfl rfl rfl (legal_action_cons rfl rfl rfl trivial)))
+  legal_header (legal_decl_cons rfl rfl rfl rfl
+    (legal_action_cons rfl rfl rfl rfl rfl rfl
+      (legal_action_cons rfl rfl rfl rfl rfl rfl trivial)))
 
 set_option maxHeartbeats 2000000 in
 -- The kernel evaluates the program here. Declaring the constructors lengthens every
 -- signature lookup's `Function.update` chain, which is enough to exceed the default.
 theorem pC_legal : FDatabase.empty.ProgramLegal pC :=
-  legal_header (legal_decl_cons rfl rfl rfl
-    (legal_action_cons rfl rfl rfl
-      (legal_action_cons rfl rfl rfl (legal_action_cons rfl rfl rfl trivial))))
+  legal_header (legal_decl_cons rfl rfl rfl rfl
+    (legal_action_cons rfl rfl rfl rfl rfl rfl
+      (legal_action_cons rfl rfl rfl rfl rfl rfl
+        (legal_action_cons rfl rfl rfl rfl rfl rfl trivial))))
 
 set_option maxHeartbeats 2000000 in
 -- The kernel evaluates the program here. Declaring the constructors lengthens every
@@ -731,7 +819,8 @@ theorem current_forces_refl {db : Database} {le : List Term → List Term → Pr
 
 /-! ## Diagnosis
 
-Three hypotheses are missing, and each counterexample above isolates one.
+Four hypotheses are missing; the counterexamples above isolate the first three, and the
+fourth is a consequence of `Database.Out` being term-based.
 
 1. **`le` must be reflexive.**  `Database.Current` demands `le vs vs`
    (`current_forces_refl`), and `hjoin` supplies it only when the merge is defined and
@@ -750,21 +839,41 @@ Three hypotheses are missing, and each counterexample above isolates one.
    `Prim.apply`'s partiality — `min`/`max` are `i64` primitives and the model has no sort
    discipline — but a merge body that gets stuck for any other reason does the same.
 
+4. **The key width must be the declared one.**  `Database.Out` is term-based:
+   `f(bs ++ vs) ∈ db.terms` with `bs` congruent to `as`, so the key/value split is fixed
+   by `as.length` and by nothing else — `Database.WF` has no `DeclaredTerms` clause to
+   pin it.  `Database.Current le f as vs` accordingly ranges over the *suffixes* beyond
+   position `as.length`, which are the declared value columns only when `as.length` is
+   `f`'s arity.  `CurrentOfLattice` gets that for free from `Row.mk f as vs ∈ d.rows`,
+   since `FDatabase.IndexOk` fixes a row's key width; a corrected statement phrased over
+   `Database.Out` alone has to carry `as.length = dc.arity` itself, or it quantifies over
+   a different set of `ws` than it reads.  Nothing here needs the hypothesis, because all
+   three programs declare `f` nullary and instantiate at `as = []`.
+
 A corrected statement would therefore read: `hexec`, `hanti`, plus `hrefl : ∀ x, le x x`,
 `htrans : ∀ x y z, le x y → le y z → le x z`, plus `hjoin` strengthened from an
 implication to an existence — for every `a b` there *is* a `vs` the body computes, and it
-is an upper bound — plus `FDatabase.empty.ProgramLegal p` for the `ProgramStep` half.
-None of that is proved here.
+is an upper bound — plus `FDatabase.empty.ProgramLegal p` for the `ProgramStep` half and
+`as.length = dc.arity` for the read.  None of that is proved here.
 
-**A fourth risk this file cannot settle.**  `MergeStep` never removes a row, so a
-specification state holds every superseded output, and `Matches.values` lets a rule
-*read* one.  `RunRules` is a total function, so after a `(run)` every reachable `db`
-records whatever those extra matches wrote — rows the interpreter, which overwrites the
-superseded row, never had, and which need not be below its survivor.  That would refute
-the corrected statement too, for programs with rules.  It cannot be machine-checked the
-way the three above are: `patternHolds` computes `closureF` at every pattern
-whose tuples are non-empty, and `closureF`'s well-founded recursion does not reduce in the
-kernel, so no program with a rule has an `execM` that evaluates by `rfl`. -/
+It is also a stronger obligation than it looks.  `Out` reads `terms`, which nothing ever
+deletes from, so "greatest recorded output" ranges over the *whole write history* of the
+key class and not over the entries that happen to survive.  A corrected statement is
+therefore asking that the merge be a join for `le` on every value ever written at the
+class, not merely on the pairs that collided.
+
+**A risk this file cannot settle.**  Neither side ever loses a superseded output — the
+specification because `MergeStep` only adds, the interpreter because `addRow` records the
+entry term beside the index row — but the interpreter *matches* on the index, which its
+merge phase does prune (`patternHolds`, at a `.values` pattern on a merge function, scans
+`d.rows`), while `Matches.values` reads `db.terms`.  So a specification rule can read an
+output no interpreter match can see.  `RunRules` is a total function, so after a `(run)`
+every reachable `db` records whatever those extra matches wrote — entries the interpreter
+never had, and which need not be below its survivor.  That would refute the corrected
+statement too, for programs with rules.  It cannot be machine-checked the way the three
+above are: `patternHolds` computes `closureF` at every pattern whose tuples are non-empty,
+and `closureF`'s well-founded recursion does not reduce in the kernel, so no program with
+a rule has an `execM` that evaluates by `rfl`. -/
 
 end Lattice
 end Egglog
