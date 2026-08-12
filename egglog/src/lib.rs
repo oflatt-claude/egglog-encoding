@@ -343,7 +343,6 @@ pub struct EGraph {
     /// In proof mode, this is the program before proof instrumentation and the version we use for proof checking.
     proof_check_program: Vec<ResolvedNCommand>,
     /// Which row of its sort's shared table each global occupies.
-    global_slots: remove_globals::GlobalSlots,
     /// Where wall time outside rule-set execution went.
     phase_timings: phase_timers::PhaseTimings,
 }
@@ -449,13 +448,13 @@ impl EGraph {
         for command in commands {
             if let GenericNCommand::Function(fdecl) = command
                 && fdecl.internal_let
+                && !fdecl.internal_global_table
+                && let Some(sort) = self.type_info.sorts.get(fdecl.schema.output())
             {
-                if fdecl.internal_global_table {
-                    self.type_info.global_tables.insert(fdecl.name.clone());
-                } else if let Some(sort) = self.type_info.sorts.get(fdecl.schema.output()) {
-                    let sort = sort.clone();
-                    self.type_info.global_sorts.insert(fdecl.name.clone(), sort);
-                }
+                // A shared table is known from the slots that named it; only a
+                // global with a function of its own needs registering here.
+                let sort = sort.clone();
+                self.type_info.global_sorts.insert(fdecl.name.clone(), sort);
             }
         }
     }
@@ -468,7 +467,7 @@ impl EGraph {
     /// or discards them, so that a rejection anywhere later in resolving the same
     /// command still unwinds them.
     fn check_slotted_global_names(&mut self) -> Result<(), Error> {
-        let mut slotted = self.global_slots.take_new();
+        let mut slotted = self.type_info.global_slots.take_new();
         let mut checked = Ok(());
         for slot in &mut slotted {
             if slot.named {
@@ -481,20 +480,20 @@ impl EGraph {
             slot.named = true;
             self.names.track_global_alias(&slot.name, &slot.span);
         }
-        self.global_slots.put_back(slotted);
+        self.type_info.global_slots.put_back(slotted);
         checked
     }
 
     /// Undo the rows and names reserved while resolving a command that was then
     /// rejected, so that nothing it named or declared outlives it.
     fn discard_slotted_globals(&mut self) {
-        let slotted = self.global_slots.take_new();
+        let slotted = self.type_info.global_slots.take_new();
         for slot in &slotted {
             if slot.named {
                 self.names.forget(&slot.name);
             }
         }
-        self.global_slots.give_back(slotted);
+        self.type_info.global_slots.give_back(slotted);
     }
 
     /// The key column of every shared global table.
@@ -518,7 +517,6 @@ impl EGraph {
             backend,
             parser,
             names: Default::default(),
-            global_slots: Default::default(),
             phase_timings: Default::default(),
             pushed_egraph: Default::default(),
             functions: Default::default(),
@@ -1291,7 +1289,7 @@ impl EGraph {
             }
         };
 
-        let (f, termdag, terms_and_outputs) = match self.global_slots.slot(sym) {
+        let (f, termdag, terms_and_outputs) = match self.type_info.global_slots.slot(sym) {
             Some((table, id)) => self.global_row_to_dag(sym, table, id, n)?,
             None => {
                 let (terms, outputs, termdag) = self.function_to_dag(sym, n, true)?;
@@ -1889,7 +1887,7 @@ impl EGraph {
         let key_sort = self.global_key_sort();
         Ok(remove_globals::remove_globals_expr(
             resolved,
-            &self.global_slots,
+            &self.type_info.global_slots,
             &key_sort,
         ))
     }
@@ -2812,7 +2810,7 @@ impl EGraph {
             typechecked = remove_globals::remove_globals(
                 typechecked,
                 &mut self.parser.symbol_gen,
-                &mut self.global_slots,
+                &mut self.type_info.global_slots,
                 key_sort,
                 true,
             );
@@ -2841,7 +2839,7 @@ impl EGraph {
         if resolved.is_err() {
             self.discard_slotted_globals();
         } else {
-            self.global_slots.take_new();
+            self.type_info.global_slots.take_new();
         }
         let nested = self.accounted_time().saturating_sub(accounted_before);
         self.phase_timings.desugar += start.elapsed().saturating_sub(nested);
@@ -2869,7 +2867,7 @@ impl EGraph {
             let typechecked_no_globals = remove_globals::remove_globals(
                 resolved_before_proofs,
                 &mut self.parser.symbol_gen,
-                &mut self.global_slots,
+                &mut self.type_info.global_slots,
                 key_sort,
                 true,
             );
@@ -2905,7 +2903,7 @@ impl EGraph {
                 let desugared_typechecked = remove_globals::remove_globals(
                     desugared_typechecked,
                     &mut self.parser.symbol_gen,
-                    &mut self.global_slots,
+                    &mut self.type_info.global_slots,
                     key_sort,
                     false,
                 );
@@ -4491,7 +4489,11 @@ mod tests {
             )
             .unwrap();
 
-        let (table, id) = egraph.global_slots.slot("$x").expect("$x is a global");
+        let (table, id) = egraph
+            .type_info
+            .global_slots
+            .slot("$x")
+            .expect("$x is a global");
         match resolved {
             ResolvedExpr::Call(_, ResolvedCall::Func(func), children) => {
                 assert_eq!(func.name, table);

@@ -799,32 +799,42 @@ impl<'a> ProofInstrumentor<'a> {
         self.parse_program(&code)
     }
 
-    /// A global whose value is an e-class; in the encoding it is treated like a
-    /// nullary constructor (FD view, congruence merge, readable value+proof) rather
-    /// than a `:no-merge` custom function.
+    /// Whether `fdecl` declares a global whose value is an e-class, so the
+    /// encoding treats it like a nullary constructor (FD view, congruence merge,
+    /// readable value+proof) rather than a `:no-merge` custom function.
     ///
-    /// A global of a base sort holds a value rather than naming a term, so it has
-    /// no e-class to be congruent over and encodes as an ordinary custom function.
-    pub(super) fn is_encoded_global(&self, fdecl: &ResolvedFunctionDecl) -> bool {
+    /// The call-site counterpart is [`Self::global_role`].
+    pub(super) fn global_decl_holds_eclass(&self, fdecl: &ResolvedFunctionDecl) -> bool {
         fdecl.internal_let && holds_eclasses(fdecl.resolved_schema.output())
     }
 
-    /// Whether the call names a global: a row of a shared table, or the global's
-    /// own function.
+    /// How `name` stores what it holds, for a call producing `output`.
     ///
-    /// Both spellings are needed because `:internal-global-table` is not part of
-    /// the surface syntax: a desugared program replayed from text declares its
-    /// shared tables as plain `:internal-let` functions, which register as
-    /// globals rather than as global tables.
-    pub(super) fn names_a_global(&self, name: &str, _args: &[ResolvedExpr]) -> bool {
-        self.egraph.type_info.is_global_table(name) || self.egraph.type_info.is_global(name)
+    /// One classification for every site that reads or writes a global. Asking
+    /// "is it a global" and "what does it hold" separately is what let a `:merge`
+    /// body and a replayed program each be encoded as building a term.
+    ///
+    /// Both spellings of a global are recognized because
+    /// `:internal-global-table` is not part of the surface syntax: a desugared
+    /// program replayed from text declares its shared tables as plain
+    /// `:internal-let` functions, which register as globals rather than as
+    /// global tables.
+    pub(super) fn global_role(&self, name: &str, output: &ArcSort) -> GlobalRole {
+        let info = &self.egraph.type_info;
+        if !info.is_global_table(name) && !info.is_global(name) {
+            GlobalRole::NotAGlobal
+        } else if holds_eclasses(output) {
+            GlobalRole::HoldsEclass
+        } else {
+            GlobalRole::HoldsValue
+        }
     }
 
     /// Whether the function's output value *is* its e-class, so the term relation
     /// needs no separate output column and the view is the congruence FD
     /// `(children) -> (eclass, proof)`. Holds for constructors and encoded globals.
     pub(super) fn output_is_eclass(&self, fdecl: &ResolvedFunctionDecl) -> bool {
-        fdecl.subtype == FunctionSubtype::Constructor || self.is_encoded_global(fdecl)
+        fdecl.subtype == FunctionSubtype::Constructor || self.global_decl_holds_eclass(fdecl)
     }
 
     /// The `:merge` expression for a custom function's FD pair-valued view
@@ -1043,8 +1053,8 @@ impl<'a> ProofInstrumentor<'a> {
                 //
                 // Only when e is an e-class. A global of a base sort holds a value,
                 // so its row carries one like any custom function's does.
-                let is_global_row = self.names_a_global(&func_type.name, generic_exprs)
-                    && holds_eclasses(func_type.output());
+                let is_global_row = self.global_role(&func_type.name, func_type.output())
+                    == GlobalRole::HoldsEclass;
                 if is_global_row {
                     let e_value = exprs.pop().expect("a set has a value");
                     let proof = if self.proofs_enabled() {
@@ -1635,13 +1645,13 @@ impl<'a> ProofInstrumentor<'a> {
         &mut self,
         name: &str,
         keys: &[String],
-        holds_eclass: bool,
+        role: GlobalRole,
         res: &mut Vec<String>,
     ) -> String {
         let view = self.view_name(name);
         // A global whose value is not an e-class has nothing to canonicalize and
         // no id to mint for an absent row: read the value column by key.
-        if !holds_eclass {
+        if role == GlobalRole::HoldsValue {
             let read = crate::proofs::proof_fresh::view_value_prim_name(&view);
             let vx = self.fresh_var();
             res.push(format!("(let {vx} ({read} {}))", ListDisplay(keys, " ")));
@@ -1964,10 +1974,10 @@ impl<'a> ProofInstrumentor<'a> {
                 // A global here is read, not built: it already has a row, and
                 // building one would write the merge's own term relation with the
                 // global's key in place of an argument.
-                if self.names_a_global(&func_type.name, args) {
+                let role = self.global_role(&func_type.name, func_type.output());
+                if role != GlobalRole::NotAGlobal {
                     let keys: Vec<String> = arg_vars.iter().map(|a| a.value.clone()).collect();
-                    let holds_eclass = holds_eclasses(func_type.output());
-                    let read = self.lookup_global(&func_type.name, &keys, holds_eclass, emit.stmts);
+                    let read = self.lookup_global(&func_type.name, &keys, role, emit.stmts);
                     return Operand::plain(read);
                 }
                 self.add_term_and_view(&mut emit.justified_by(&node), func_type, &arg_vars, None)
@@ -2025,16 +2035,14 @@ impl<'a> ProofInstrumentor<'a> {
                             // Proof normal form bans looking up custom functions in
                             // actions. An encoded global is the one exception: its
                             // value is read from its FD view (see `lookup_global`).
-                            if self.egraph.type_info.is_global(&func_type.name)
-                                || self.egraph.type_info.is_global_table(&func_type.name)
-                            {
+                            let role = self.global_role(&func_type.name, func_type.output());
+                            if role != GlobalRole::NotAGlobal {
                                 let keys: Vec<String> =
                                     args.iter().map(|a| a.value.clone()).collect();
-                                let holds_eclass = holds_eclasses(func_type.output());
                                 Operand::plain(self.lookup_global(
                                     &func_type.name,
                                     &keys,
-                                    holds_eclass,
+                                    role,
                                     emit.stmts,
                                 ))
                             } else {
@@ -2558,6 +2566,19 @@ fn command_skips_rebuild(command: &ResolvedNCommand) -> bool {
         ResolvedNCommand::CoreActions(actions) => actions.0.iter().all(action_skips_rebuild),
         _ => false,
     }
+}
+
+/// How the encoding stores what a call reads or writes. See
+/// [`ProofInstrumentor::global_role`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum GlobalRole {
+    /// Not a global, so it is built as a term.
+    NotAGlobal,
+    /// A global whose value is, or contains, an e-class: its row *is* the term.
+    HoldsEclass,
+    /// A global whose value stands alone: its row carries the value, as any
+    /// custom function's does.
+    HoldsValue,
 }
 
 /// Whether values of `sort` are, or contain, e-classes, so a row holding one goes

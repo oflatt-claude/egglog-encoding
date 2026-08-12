@@ -40,6 +40,12 @@ pub(crate) struct NewSlot {
 }
 
 impl GlobalSlots {
+    /// Whether `name` is a shared table this holds globals in. A table released
+    /// by [`Self::give_back`] is not one.
+    pub(crate) fn is_table(&self, name: &str) -> bool {
+        self.next_id.contains_key(name)
+    }
+
     /// The row `global` was written to.
     pub(crate) fn slot(&self, global: &str) -> Option<(&str, i64)> {
         self.slots

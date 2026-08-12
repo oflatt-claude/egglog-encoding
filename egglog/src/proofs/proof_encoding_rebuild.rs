@@ -183,7 +183,8 @@ impl ProofInstrumentor<'_> {
         }
         if output_is_eclass {
             // Covered by the index rule above, which indexes the e-class column too.
-        } else if fdecl.subtype == FunctionSubtype::Custom && !self.is_encoded_global(fdecl) {
+        } else if fdecl.subtype == FunctionSubtype::Custom && !self.global_decl_holds_eclass(fdecl)
+        {
             if types[n - 1].is_eq_sort() {
                 rules.push_str(&self.fd_custom_value_rebuild_rule(fdecl, &key_vars, n - 1));
             } else if types[n - 1].is_eq_container_sort() {

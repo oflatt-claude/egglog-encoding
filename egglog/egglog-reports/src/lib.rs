@@ -378,7 +378,7 @@ impl RunReport {
 
 /// Compact, deterministic timing transport for benchmark runners.
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
-pub struct RulesetTimingV3 {
+pub struct RulesetTimingRecord {
     pub name: String,
     pub assembly_ns: u64,
     pub search_ns: u64,
@@ -390,8 +390,10 @@ pub struct RulesetTimingV3 {
 
 /// Versioned timing summary for successful egglog runs.
 ///
-/// V3 adds each ruleset's assembly time and the phases that ran outside every
+/// Carries each ruleset's assembly time and the phases that ran outside every
 /// ruleset, so a runner can attribute wall time that no ruleset timer covers.
+/// `schema_version` is what a runner checks before trusting a cached summary;
+/// bump it whenever these fields change meaning.
 /// It includes every name in [`RunReport::ruleset_timings`], preserves the
 /// empty name used by the default ruleset, and sorts names lexicographically.
 /// Split pre-merge timing must be available for every included ruleset;
@@ -399,17 +401,17 @@ pub struct RulesetTimingV3 {
 /// converted to nanoseconds with saturation at [`u64::MAX`], and the ruleset
 /// list is never truncated.
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
-pub struct TimingSummaryV3 {
+pub struct TimingSummary {
     pub schema_version: u32,
-    pub rulesets: Vec<RulesetTimingV3>,
+    pub rulesets: Vec<RulesetTimingRecord>,
     /// Work outside rule-set execution, which no ruleset timer covers.
-    pub outside_rulesets: OutsidePhasesV3,
+    pub outside_rulesets: OutsidePhases,
 }
 
 /// The phases of one run's work outside rule-set execution, in nanoseconds.
 /// Disjoint from each other and from the ruleset timings.
 #[derive(Debug, Serialize, Clone, Copy, Default, PartialEq, Eq)]
-pub struct OutsidePhasesV3 {
+pub struct OutsidePhases {
     pub parse_ns: u64,
     pub typecheck_ns: u64,
     pub desugar_ns: u64,
@@ -439,17 +441,14 @@ impl Display for PhaseTimingUnavailable {
 
 impl std::error::Error for PhaseTimingUnavailable {}
 
-impl TimingSummaryV3 {
+impl TimingSummary {
     pub fn from_run_report(report: &RunReport) -> Result<Self, PhaseTimingUnavailable> {
-        Self::new(report, OutsidePhasesV3::default())
+        Self::new(report, OutsidePhases::default())
     }
 
     /// The summary for `report`, with `outside` naming the phases that ran
     /// outside any ruleset.
-    pub fn new(
-        report: &RunReport,
-        outside: OutsidePhasesV3,
-    ) -> Result<Self, PhaseTimingUnavailable> {
+    pub fn new(report: &RunReport, outside: OutsidePhases) -> Result<Self, PhaseTimingUnavailable> {
         let mut timings = report.ruleset_timings.iter().collect::<Vec<_>>();
         timings.sort_unstable_by(|(left, _), (right, _)| left.as_ref().cmp(right.as_ref()));
 
@@ -466,7 +465,7 @@ impl TimingSummaryV3 {
                         ruleset: name.to_string(),
                     });
                 };
-                Ok(RulesetTimingV3 {
+                Ok(RulesetTimingRecord {
                     assembly_ns: duration_ns(timing.assembly),
                     search_ns: duration_ns(search),
                     apply_ns: duration_ns(apply),
@@ -544,7 +543,7 @@ mod tests {
             },
         );
 
-        let summary = TimingSummaryV3::from_run_report(&report).unwrap();
+        let summary = TimingSummary::from_run_report(&report).unwrap();
         let json = serde_json::to_string(&summary).unwrap();
 
         assert_eq!(
@@ -555,7 +554,7 @@ mod tests {
 
     #[test]
     fn timing_summary_v3_empty_report_golden() {
-        let summary = TimingSummaryV3::from_run_report(&RunReport::default()).unwrap();
+        let summary = TimingSummary::from_run_report(&RunReport::default()).unwrap();
         let json = serde_json::to_string(&summary).unwrap();
 
         assert_eq!(
@@ -592,7 +591,7 @@ mod tests {
             },
         );
 
-        let summary = TimingSummaryV3::from_run_report(&report).unwrap();
+        let summary = TimingSummary::from_run_report(&report).unwrap();
 
         assert_eq!(
             report.ruleset_timings["timed"].pre_merge.total(),
@@ -605,7 +604,7 @@ mod tests {
 
         assert_eq!(
             summary.rulesets,
-            [RulesetTimingV3 {
+            [RulesetTimingRecord {
                 assembly_ns: 0,
                 name: "timed".to_owned(),
                 search_ns: 30,
@@ -630,7 +629,7 @@ mod tests {
             );
         }
 
-        let summary = TimingSummaryV3::from_run_report(&report).unwrap();
+        let summary = TimingSummary::from_run_report(&report).unwrap();
 
         assert_eq!(summary.rulesets.len(), 40);
         assert_eq!(summary.rulesets.first().unwrap().name, "ruleset-00");
@@ -653,7 +652,7 @@ mod tests {
             },
         );
 
-        let summary = TimingSummaryV3::from_run_report(&report).unwrap();
+        let summary = TimingSummary::from_run_report(&report).unwrap();
 
         assert_eq!(summary.rulesets[0].search_ns, u64::MAX);
     }
@@ -673,7 +672,7 @@ mod tests {
         );
 
         assert_eq!(
-            TimingSummaryV3::from_run_report(&report),
+            TimingSummary::from_run_report(&report),
             Err(PhaseTimingUnavailable {
                 ruleset: "default".to_owned(),
             })

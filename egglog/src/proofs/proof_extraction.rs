@@ -134,9 +134,10 @@ impl ProofInstrumentor<'_> {
         );
 
         // Remove globals from the proof
-        if let Result::Err(e) =
-            proof_store.remove_globals(&self.egraph.proof_check_program, &self.egraph.global_slots)
-        {
+        if let Result::Err(e) = proof_store.remove_globals(
+            &self.egraph.proof_check_program,
+            &self.egraph.type_info.global_slots,
+        ) {
             panic!("Failed to remove globals from proof: {e}");
         }
 

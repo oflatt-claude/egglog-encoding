@@ -161,7 +161,7 @@ impl EGraph {
                     let bound = inps
                         .first()
                         .map(|key| self.backend.base_values().unwrap::<i64>(*key))
-                        .and_then(|key| self.global_slots.global_at(name, key))
+                        .and_then(|key| self.type_info.global_slots.global_at(name, key))
                         .unwrap_or(name)
                         .to_owned();
                     let_bindings

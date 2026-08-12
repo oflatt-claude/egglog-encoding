@@ -3,7 +3,7 @@
 //! proof for the rule proofs the head writes.
 
 use super::proof_checker::is_container_side_condition;
-use super::proof_encoding::{Anchor, ProofInstrumentor, holds_eclasses};
+use super::proof_encoding::{Anchor, GlobalRole, ProofInstrumentor};
 use super::proof_encoding_helpers::{holds_sort, recomputable_premises};
 use crate::typechecking::FuncType;
 use crate::*;
@@ -75,7 +75,7 @@ impl ProofInstrumentor<'_> {
 
                 if !self.egraph.proof_state.proofs_enabled {
                     "()".to_string()
-                } else if self.names_a_global(head.name(), args) && !holds_eclasses(head.output()) {
+                } else if self.global_role(head.name(), head.output()) == GlobalRole::HoldsValue {
                     let value = v.name.clone();
                     // As in `instrument_fact_expr`. A custom function with a
                     // base-sort output keeps the row's proof: its row is
@@ -201,7 +201,9 @@ impl ProofInstrumentor<'_> {
                             ));
                             if !self.proofs_enabled() {
                                 "()".to_string()
-                            } else if !holds_eclasses(func_type.output()) {
+                            } else if self.global_role(&func_type.name, func_type.output())
+                                == GlobalRole::HoldsValue
+                            {
                                 // The row's term names the slot as well as the value,
                                 // so it lines up with nothing else and anchors
                                 // nothing. The value stands for itself, as a literal

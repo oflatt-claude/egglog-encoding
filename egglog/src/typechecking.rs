@@ -240,7 +240,9 @@ pub struct TypeInfo {
     func_types: HashMap<String, FuncType>,
     pub(crate) global_sorts: HashMap<String, ArcSort>,
     /// Names of the shared per-sort tables holding globals.
-    pub(crate) global_tables: HashSet<String>,
+    /// Where each global lives. Owned here with the other global maps, so that
+    /// the tables it declares cannot disagree with what is registered.
+    pub(crate) global_slots: crate::ast::remove_globals::GlobalSlots,
     /// Sorts that do not allow union (e.g., from `:no-union` sorts or relations).
     pub(crate) non_unionable_sorts: HashSet<String>,
     /// Declared indexes, by the name their atoms are written with.
@@ -604,12 +606,6 @@ impl EGraph {
                     let (name, id_sort, arg_sorts) =
                         (resolved.name.clone(), id_sort.clone(), arg_sorts.to_vec());
                     crate::proofs::proof_fresh::register_mint(self, &name, arg_sorts, id_sort);
-                }
-                // `remove_globals` runs after typechecking and registers what it
-                // declares, so this and the `global_sorts` arm below only matter
-                // for a decl reaching typechecking some other way.
-                if resolved.internal_global_table {
-                    self.type_info.global_tables.insert(fdecl.name.clone());
                 }
                 // If this is a let binding, add it to global_sorts
                 // This preserves behavior for lets after desugaring. A term
@@ -1568,7 +1564,7 @@ impl TypeInfo {
     /// Whether `sym` is a shared per-sort table holding globals, whose rows are
     /// written like a global's rather than minted as terms.
     pub(crate) fn is_global_table(&self, sym: &str) -> bool {
-        self.global_tables.contains(sym)
+        self.global_slots.is_table(sym)
     }
 
     /// Check if an expression contains non-global function lookups (FunctionSubtype::Custom calls).

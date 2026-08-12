@@ -4,7 +4,7 @@ use std::io::{self, BufRead, BufReader, IsTerminal, Read, Write};
 use std::str::FromStr;
 
 use clap::Parser;
-use egglog_reports::{OutsidePhasesV3, TimingSummaryV3};
+use egglog_reports::{OutsidePhases, TimingSummary};
 use env_logger::Env;
 use std::path::PathBuf;
 
@@ -249,7 +249,7 @@ where
 
     if let Some(summary_path) = args.timing_summary {
         let phases = egraph.phase_timings();
-        let outside = OutsidePhasesV3 {
+        let outside = OutsidePhases {
             parse_ns: duration_ns(phases.parse),
             typecheck_ns: duration_ns(phases.typecheck),
             desugar_ns: duration_ns(phases.desugar),
@@ -259,8 +259,8 @@ where
             schedule_ns: duration_ns(phases.schedule),
             proof_extraction_ns: duration_ns(phases.proof_extraction),
         };
-        let summary = TimingSummaryV3::new(egraph.get_overall_run_report(), outside)
-            .unwrap_or_else(|error| {
+        let summary =
+            TimingSummary::new(egraph.get_overall_run_report(), outside).unwrap_or_else(|error| {
                 log::error!("failed to create timing summary: {error}");
                 std::process::exit(1);
             });
