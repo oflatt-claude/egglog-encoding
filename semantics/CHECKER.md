@@ -12,10 +12,17 @@ and whose cost is what it scopes.
 
 **Assume any statement about the encoder is wrong until checked.** Nine of the seventeen `execM`
 refinement-chain statements were false as written, and *those* had proved M10 counterparts in
-`Proofs/Interp.lean` to copy from. The `Spec/` rewrite added two more data points in the same
-direction: porting the `Proofs/` foundations turned up three lemmas that were false rather than
-merely stale, and two of `Encode.lean`'s own docstrings were making false claims about the
-encoding. Staleness and falsity look identical from the outside.
+`Proofs/Interp.lean` to copy from. The `Spec/` rewrite added more of the same: porting the
+`Proofs/` foundations turned up three lemmas false rather than merely stale, two of
+`Encode.lean`'s own docstrings were making false claims about the encoding, and porting
+`Proofs/Merge.lean` turned up three more — `Cong.mono_recorded` in its old shape, the
+`ValidEnv`/`ValidSubst`/`ValidQuerySubst` family at a fixed substitution, and "a run under a
+congruent environment records the run under the original". Staleness and falsity look identical
+from the outside.
+
+**Assume predictions about the *proofs* are wrong too.** `Database.Recorded.trans` was expected to
+need congruence-closure completeness; what proved it was 315 lines of conservativity machinery
+over a `Quot (Cong db)` model, and it gained two well-formedness premises on the way.
 
 ## The headline finding: the checker is not what reads the rows
 

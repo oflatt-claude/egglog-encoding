@@ -47,11 +47,13 @@ about an implementation.** That is a different goal from wanting a sound and fas
 engine, and it changes what counts as progress: `Spec/` being readable *as a description of
 what egglog means* is the deliverable, not a convenience.
 
-**`Spec/` is frozen**: 8 files, ~900 lines, one theorem, and roughly one comment line per two
-of code. It got there by deletion — a row set, a term field, a second congruence relation, a
-functional command semantics and a generic front-end walk all came out — and the standard for
-putting anything back is that a reimplementer would get it wrong without it. Rationale, egglog
-citations and design history live in these documents, not in its comments.
+**`Spec/` is frozen**: 8 files, ~975 lines, one theorem (`eqsInTerms_free`), and roughly one
+comment line per two of code. It got there by deletion — a row set, a term field, a second
+congruence relation, a functional command semantics and a generic front-end walk all came out —
+and the standard for putting anything back is that a reimplementer would get it wrong without it.
+One thing has gone back in since: `Spec/Scope.lean`'s sixth check, `WidthOk`, which four separate
+pieces of work independently needed. Rationale, egglog citations and design history live in these
+documents, not in its comments.
 
 (The contrast is worth keeping in mind. `lambdaclass/truth_research` — OptiSat — is a Lean 4
 verified equality-saturation engine, ~370 theorems and no `sorry`, whose "specification" is a
@@ -78,19 +80,29 @@ yet.
 
 | open | where |
 | --- | --- |
-| **port `Proofs/` to the rewritten `Spec/`** — the frontier | `Proofs/Interp.lean`, then `Merge`, `Counterexamples`, `Lattice` |
+| **port `Proofs/Counterexamples.lean` and `Proofs/Lattice.lean`** — all that is left of the port, and the only red files | both are row-shaped throughout (`Database.rows`, `CtorTerms`, `RowsComplete`) |
+| the three `Recorded` transports, the only `sorry`s | `Proofs/Merge.lean`, header |
 | home the two witness files, which compile but are outside the library | `Scratch/` → `Proofs/Counterexamples.lean` |
+| `Matches.values` is split-blind and e-class-blind | `MERGE.md`, open question 1 |
 | base sorts, in place of the single untyped `Term` | `MERGE.md`, constraint (5) |
 | restating M11 against a reachable saturation condition | `ENCODING.md` |
 
-**Where the port stands.** `Spec/` and `Impl/` build, and difftest is 166/0.
-`Proofs/{Syntax,Term,Database,Congruence,Eval,Match,Step,Scope,Closure}` and
-`Encoding/Encode.lean` are ported. `Proofs/{Interp,Merge,Counterexamples,Lattice}` and
-`Tests/Examples.lean` are not, so **a whole-library build is red** — the difftest reaches
-`Impl/` through `Tests/Egg.lean` without touching `Proofs/`, which is why it keeps running
-meanwhile. Do not read a statement in an unported file as a claim about the current
-`Spec/`; several have already turned out to be false rather than stale, and the port is
-where that gets found out.
+**Where the port stands.** `Spec/`, `Impl/`, `Encoding/Encode.lean`, `DiffTest`, `Tests/Egg`,
+`Tests/Examples` and `Proofs/` through `Merge` all build. Difftest is **166 passed / 0 failed**.
+A whole-library build is still red, at the two files above and nowhere else.
+
+**The headline: `execM_eq_exec` and `exec_programStep` are `sorryAx`-free**, so the chain from the
+egglog binary to `ProgramStep` is unbroken. Difftest compares egglog against `execM`;
+`execM_eq_exec` carries `execM` to `exec` on the constructor fragment; `exec_programStep` is a
+biconditional against `ProgramStep`. The 166 cases therefore constrain the **specification**, not
+only the interpreter. `execM_contained` builds but still depends on `sorryAx`: three `sorry`s at
+`a95d680`, being reduced, all of them `Recorded` transports.
+
+Do not read a statement in an unported file as a claim about the current `Spec/`; several have
+turned out to be false rather than stale. In particular
+`Falsity.exec_programStep_needs_ctorDecls`, which `exec_programStep` and `execM_reachable` both
+cite as the witness that `Program.CtorDecls` is not removable, lives in a red file and is
+currently unchecked.
 
 The three things this note used to name — arity checking, reading a `:merge` function in a
 query, and the rule-head restriction — are now done: `Impl/Check.lean`'s "Arity" and
@@ -116,10 +128,11 @@ interpreters with **different** contracts, and confusing them wastes time:
 satisfied by a do-nothing implementation, and that is *fine for soundness* — the safety
 property is "everything written is valid", so writing nothing is vacuously valid. What rules
 out a degenerate implementation is difftest, not a theorem. `execM_current_of_lattice` was
-meant to add machine-checked completeness for merges that are joins, but it is **false as
-stated** — `Proofs/Lattice.lean` refutes it three ways. A corrected statement is worth
-having; see its docstring for what it has to carry, and note it may still be false for
-programs with rules.
+meant to add machine-checked completeness for merges that are joins; it is **false as stated**,
+refuted three ways in `Proofs/Lattice.lean`, and is now **deleted**. `Proofs/Merge.lean`'s "Two
+statements removed rather than carried" says what a corrected statement has to carry, and notes it
+may still be false for programs with rules. Until someone writes it, nothing machine-checked says
+the merge interpreter finds anything at all.
 
 ### The consolidation arc — ✅ closed
 
@@ -178,9 +191,14 @@ select (`old`, `new`) or build a term, so there are no lattice merges and no ana
   union-find-free encoding would retire them.
   - They also carry the model's one **accepted deviation** on merge results: `Term.blt` is a
     deterministic structural order, egglog's is the allocation order of value ids, so the two
-    keep different representatives. Observable, and a hypothesis of any simulation theorem
-    rather than a bug to fix; `MERGE.md`, "The representative deviation", has the repros and
-    the mechanism. Retiring the two primitives is what retires the deviation.
+    keep different representatives. **No longer merely a fidelity gap**, and any text calling it
+    cosmetic or retirable-on-demand is superseded: a structural order is not congruence-stable —
+    after `(union (f 1) (g 1))`, `orderingMin (f 1) (f 2) = f 1` but `orderingMin (g 1) (f 2) =
+    f 2`, and those two are not congruent — so "a run under a congruent environment records the
+    run under the original" is false at a primitive, and two of `Proofs/Merge.lean`'s three
+    remaining `sorry`s spend exactly that lemma. Since `mergeBody`/`mergeResult` are built from
+    the two primitives, `Term.blt` cannot leave `Spec/` either. `MERGE.md`, "The representative
+    deviation", has the repros, the mechanism and the way out.
 
 Dropping all four would take `Prim` out of `Expr.eval` entirely, which is the smallest the
 semantics can be — at the price of `:merge` becoming decorative, with no lattice for the
@@ -188,23 +206,28 @@ completeness half to be complete about.
 
 ### Checking a change
 
-Three theorems are load-bearing enough to check every time, with `lean_verify` (lean-lsp
-MCP) or `#print axioms` rather than by grepping for `sorry` — it asks the kernel what a
-theorem actually depends on and traces into Mathlib:
+Five theorems are load-bearing enough to check every time, with `lean_verify` (lean-lsp MCP) or
+`#print axioms` rather than by grepping for `sorry` — it asks the kernel what a theorem actually
+depends on and traces into Mathlib. Verified at `a95d680`:
 
-| theorem | expected axioms |
+| theorem | axioms |
 | --- | --- |
-| `Impl/Interp.lean`'s `toDatabase_cong_mem` | **none at all** |
-| `exec_programStep`, `mem_closure_iff`, `execM_contained` | `propext, Classical.choice, Quot.sound` |
+| `FDatabase.toDatabase_cong_mem` (`Impl/Interp.lean`) | **none at all** |
+| `exec_programStep`, `execM_eq_exec`, `mem_closure_iff`, `Database.Recorded.trans` | `propext, Classical.choice, Quot.sound` |
+| `execM_contained` | the same **plus `sorryAx`** — the three open transports |
 
 The first is the canary the `Spec/` rewrite left behind: it is the bridge from the
 interpreter's term list to the diagonal of `eqs`, every refinement theorem reads through it,
-and it is short enough that anything appearing in its axiom set got there by accident.
+and it is short enough that anything appearing in its axiom set got there by accident. The second
+row is the load-bearing one: `execM_eq_exec` and `exec_programStep` clean together are what make
+difftest a check on `Spec/`. `execM_contained` is the only place `sorryAx` is allowed, and only
+until the transports land.
 
 Statements known to be **false** carry compiling counterexamples in
 `Proofs/Counterexamples.lean` and `Proofs/Lattice.lean`, so a refuted statement cannot
 quietly come back — read them before trying to prove anything they refute. Both are
-unported, and re-greening them is part of the port rather than optional.
+unported, so right now they are a record rather than a check, and re-greening them is part of the
+port rather than optional.
 
 Two traps that a green build will not catch. Writing `h.ge` for a set inclusion silently
 pulls `Classical.choice` into every downstream axiom set. And `lake build` does not rebuild
@@ -394,25 +417,12 @@ an `@UF` leader on the encoded side.
 The witness formulation: a substitution is valid when the pattern instance is
 `Cong`-equal, *in the database extended with that instance*, to some witness term
 already in the database. The witness is what forbids matching a term the e-graph
-does not contain.
+does not contain, and it is what `Scratch/NonVacuity.lean`'s `not_matches_empty` checks is not
+vacuous.
 
-One deviation worth recording:
-
-* `ValidEnv` requires the substitution's domain to be a *permutation* of the
-  pattern's free variables rather than fixing its order. The extra substitutions
-  this admits differ only by reordering, which no `lookup` can distinguish; making
-  that precise is the environment-agreement lemma in M8.
-
-Two facts Lean needs as lemmas:
-
-- `Pattern.freeVars p db.env` excludes globally-bound variables, so `σ`'s domain is
-  disjoint from `db.env`'s and appending the two never fails — plain append is
-  correct. (This also preserves the real quirk that a globally-bound variable in a
-  pattern denotes its value rather than being a match variable.)
-- Envs only ever get consulted through `lookup`, so `evalLocalActions` is
-  invariant under extensional agreement of environments. That lemma, rather than a
-  list-level normal form, is what lets `Env.UnionAll`'s duplicate bindings be
-  ignored.
+Two deviations, both recorded elsewhere and neither closed: `ValidEnv` fixes the domain only up to
+permutation ("What the port changed", and M8's agreement lemma is what makes it harmless), and the
+row atom `Matches.values` is split-blind and e-class-blind (`MERGE.md`, open question 1).
 
 ### Steps
 
@@ -516,17 +526,21 @@ Follow-ups, in rough dependency order:
   - ✅ *Multi-column outputs.* `Action.set` takes a `List Expr`, and `Pattern` gained
     `values` — egglog's lowered row atom `f(a…, v…)`, written `(= v (f a…))` at one value
     column and `(= (values v…) (f a…))` at more. It is the only read in the language.
-  - ✅ *The implementation deletes; the specification does not.* The contract therefore splits
-    three ways: containment (`execM_contained`), the untouched equality on the constructor
-    fragment where the merge pass is the identity (`FDatabase.mergeRound_eq_self`), and
-    `Database.Current` for lattice merges. `MERGE.md` has what is and is not deleted, and why
-    each of the three is the right shape.
+  - ✅ *The implementation deletes; the specification does not.* The contract was to split three
+    ways: containment (`execM_contained`), the untouched equality on the constructor fragment
+    where the merge pass is the identity (`FDatabase.mergeRound_eq_self`), and `Database.Current`
+    for lattice merges. **The third never held** — see "The two contracts" — so two of the three
+    stand. `MERGE.md` has what is and is not deleted.
   - ✅ *The refinement chain.* **Nine of its seventeen statements were false as written** —
     three in ways their M10 counterparts in `Proofs/Interp.lean` had already solved, so read
-    the M10 counterpart before stating an M9 lemma. Five carry a recorded defect *in the
-    statement*, known-false or hypothesis-defective, with witnesses in
-    `Proofs/Counterexamples.lean` and `Proofs/Lattice.lean`; `MERGE.md` names them.
-  - Remaining: those five, and the port. Everything else M9 named is done.
+    the M10 counterpart before stating an M9 lemma. The five with a defect *in the statement* are
+    now **deleted**, each with its defect written up where it stood; `MERGE.md`'s status block
+    names them. The port then found three more that were false rather than stale —
+    `Cong.mono_recorded` in its old shape, the `ValidEnv`/`ValidSubst`/`ValidQuerySubst` family at
+    the same substitution, and "a run under a congruent environment records the run under the
+    original".
+  - Remaining: the three `Recorded` transports, and re-greening the two witness files. Everything
+    else M9 named is done.
 - **M10 — executable layer.** A `Finset`-based interpreter, a decidable congruence
   closure, and a refinement *biconditional* between the interpreter and `ProgramStep`.
   Proved end to end. Five design notes are worth more than the lemma inventory, which is
@@ -554,13 +568,11 @@ Follow-ups, in rough dependency order:
     since it asks only for membership. Firing on fewer substitutions is the safe direction.
     It costs `exec_programStep`'s *statement* nothing, because the two coincide exactly where
     that theorem lives: on an `AllConstructors` signature no name has a merge, so `valueTerms`
-    filters nothing out. It does cost the reverse direction a hypothesis, and this is a live
-    port item: `mem_matchQuery_of_validQuerySubst` is stated for an arbitrary `d.WF`, and at
-    that generality it is now **false** — a spec substitution binding a variable to a merge
-    function's entry term satisfies `ValidSubst` and is not enumerated. It needs either
-    `AllConstructors` or a lemma that an entry-term binding never satisfies `Matches`. On the
-    M9 side it is a genuine refinement and nothing is owed, since the contract there is
-    containment.
+    filters nothing out. It does cost the reverse direction a hypothesis — **settled**:
+    `mem_matchQuery_of_validQuerySubst` takes `AllConstructors`, which is what closes the gap, and
+    so do `patternHolds_iff`, `mem_matchQuery_iff` and `validQuerySubst_of_mem_matchQuery`. All
+    four sit under callers that already carry it, so nothing reached the top level. On the M9 side
+    it is a genuine refinement and nothing is owed, since the contract there is containment.
   - **`Env.UnionAll.refines_of_mem` had to carry self-refinement, not `Nodup`.** Appending
     two substitutions sharing a variable duplicates it in the domain while leaving every
     lookup intact, so `Nodup` is not preserved by a `Union2` step and
@@ -653,11 +665,12 @@ first 60 cases died on it — now banned via `Expr.IsApp`; "What the port change
 that laxity came from); and `Database.rules` is a `Set`, so a repeated rule is silently
 ignored where egglog panics.
 
-**Every case is checked for legality before it is written.** `writeCase` refuses to emit a
-program egglog would reject — an illegal `set`, a use whose column counts disagree with the
-declaration (`Impl/Check.lean`'s arity check), or a name used at two arities, which the
-emitted `datatype` header cannot express. A rejected program is a *missing* case, not a
-failing one, so the check aborts rather than skips.
+**Every case is checked for legality before it is written.** `writeCase` refuses to emit a program
+egglog would reject, on four counts: an illegal `set` (`Program.illegalSets`), a use whose column
+counts disagree with the declaration (`Program.arityErrors`, over `Impl/Check.lean`'s `arityOk`), a
+read outside a query atom (`Program.illegalReads`, over `Cmd.noLookup`), and a name used at two
+arities, which the emitted `datatype` header cannot express (`Program.arityConflicts`). A rejected
+program is a *missing* case, not a failing one, so each check aborts rather than skips.
 
 What it does not cover: anything outside the fragment, and value columns, since
 `(print-size)` counts key classes and is blind to them.
@@ -695,24 +708,18 @@ a round's `union` copies every operand's terms and without dedup the per-substit
 
 ## Extending with `:merge` (M9)
 
-The design is [`MERGE.md`](MERGE.md). What this plan originally proposed is kept only for
-the record of where it was wrong, since two of the mistakes were instructive:
+The design is [`MERGE.md`](MERGE.md), whose header has what that file argued for and what became
+of each. One fact belongs here rather than there, because it is what makes M9's whole shape a
+statement about *our* egglog: **a merge body is an action list, not an expression**, an extension
+local to this repo (`egglog/src/ast/parse.rs`, `9828dbf`), deliberate and discussed in the paper.
+Upstream `:merge` takes a single expression, so a body that `set`s another table cannot be written
+there at all. That is why the observable value of a key class cannot be a fold over asserted
+entries, why there is no `SemilatticeSup` to lean on, and why command stepping is a relation.
 
-- **A merge body is an action list, not an expression** — an extension local to this repo
-  (`egglog/src/ast/parse.rs`, `9828dbf`); upstream `:merge` takes a single expression, so a
-  body that `set`s another table cannot be written there. It is deliberate and discussed in
-  the paper, but it means M9's shape is a fact about *our* egglog. So the observable value of a key
-  class cannot be a fold over asserted rows, and there is no `SemilatticeSup` to lean on.
-  Command stepping became a *relation* instead. (Evaluation did too, for a while, and then
-  came back — see "Reading is a query atom".)
-- **A non-constructor application is a lookup**, with no `:default` to fall back on.
-
-What did stand: the signature was already in the AST from M1, so `MergeSpec` only had to
-become reachable; congruence really is the functional dependency; and merge closure carries
-no termination claim. What did not is the *representation* — a row set was added and then
-removed again, and a function's table now lives in the term structure itself. Base sorts
-(`i64`, `String`, a real sort discipline in place of the single untyped `Term`) are still
-deferred — see "arity checking" in the current priority.
+What this plan got right: the signature was in the AST from M1, so `MergeSpec` only had to become
+reachable; congruence really is the functional dependency; merge closure carries no termination
+claim. What it got wrong is the *representation* — a row set was added and then removed again, and
+a function's table now lives in the term structure itself. Base sorts are still deferred.
 
 ## Reading is a query atom
 
@@ -725,9 +732,10 @@ a program reads is the query atom `Pattern.values`, which is egglog's lowered
 
 **What it buys.** Evaluation loses its `lookup` case, so it needs nothing of the database
 but its signature and is a **function** again — `Expr.eval : Signature → Expr → Env →
-Option Term` — and with it `evalAction`/`evalActions`. That is what closed M12. The one
-remaining place the model over-approximates egglog's reads is the query atom itself, which
-matches *any* recorded row where egglog matches the current one.
+Option Term` — and with it `evalAction`/`evalActions`. That is what closed M12. What remains is
+that the query atom itself over-approximates, in two ways: it matches *any* recorded entry where
+egglog matches the current one, and it is **split-blind and e-class-blind** — `MERGE.md`, open
+question 1.
 
 **Where it is stricter than egglog, checked against the binary.** egglog runs
 `check_no_function_lookups_in_actions` (`src/typechecking.rs:1325`) on a **rule head** only,
@@ -761,13 +769,14 @@ the one egglog made: a `Prim`-style get-or-insert, which is a write. Recorded in
 
 ## The minimal proof encoding (M11-min) — the road not taken
 
-**A design record, superseded.** `Encoding/Encode.lean` builds the *full* encoding —
-`@UF`, per-constructor views, rebuild rules, path compression — and the three theorems
-were stated over that, then deleted (`ENCODING.md`). The sketch is kept only for the two
-things below that are still current, and because it is the cheapest picture of what a
-union-find-free encoding would look like if the full one turns out to be too much. What it
-proposed dropping was the union-find, the view tables and the proof skeletons; **only the
-third held**, and structural fresh ids are what replaced `get-fresh!`.
+**A design record, superseded.** `Encoding/Encode.lean` builds the *full* encoding — `@UF`,
+per-constructor views, rebuild rules, path compression — and the three theorems were stated over
+that, then deleted (`ENCODING.md`). Of what this sketch proposed dropping — the union-find, the
+view tables, the proof skeletons — **only the third held**, and structural fresh ids are what
+replaced `get-fresh!`. It is kept for the three things below that are still current, and because
+it is the cheapest picture of a union-find-free encoding, which is also the only thing that would
+retire `ordering-min`/`ordering-max` and with them the congruence-instability now blocking two
+`sorry`s.
 
 **Proved against the specification, not against the Rust.** That is the decision that makes
 this tractable, and it did carry over: no differential testing against real egglog, no
@@ -785,19 +794,13 @@ the deletion.
 
 ### What a proof value is
 
-egglog's **user-facing** `Proof`, not `RawProof` — `CHECKER.md`, "Node kinds", has the
-eight `Justification`s and what checking each one needs. It maps onto `Cong` almost one for
-one, which is why checking is a structural induction with no conversion layer — the payoff
-for `Cong` being inductive rather than a computed closure, and why dropping the skeletons
-costs nothing (they exist to make proofs *small*, not checkable).
-
-| `Justification` | `Cong` |
-| --- | --- |
-| `Fiat` | `assert` — including the reflexive equation `addTerm` writes per top-level term |
-| `Rule` | a rule firing — `ValidQuerySubst` plus `RunRules` |
-| `Trans` / `Sym` | `trans` / `symm` |
-| `Congr` | `congr`, **but one child at a time** |
-| `MergeFn` | `MergeStep` — only once merge functions are involved |
+egglog's **user-facing** `Proof`, not `RawProof`; `CHECKER.md`, "Node kinds", has the eight
+`Justification`s, what checking each needs, and which five the constructor fragment actually
+uses. They map onto `Cong` almost one for one — `Fiat`/`Rule`/`Trans`/`Sym`/`Congr` against
+`assert`, a rule firing, `trans`, `symm`, `congr`, and `MergeFn` against `MergeStep` — which is
+why checking is a structural induction with no conversion layer, the payoff for `Cong` being
+inductive rather than a computed closure, and why dropping the skeletons costs nothing (they
+exist to make proofs *small*, not checkable).
 
 Two mismatches to settle before writing `encode`:
 
@@ -872,28 +875,30 @@ Other omissions, unaddressed since the port: schedules, extraction, containers.
 
 ## Verification
 
-- `cd semantics && lake build` — the whole development typechecks. **Red while `Proofs/` is
-  being ported**; the goal state, and the check that must stay green afterwards. Until then,
-  build the file you are working on and keep everything already ported green.
+- `cd semantics && lake build` — the whole development typechecks. **Red at
+  `Proofs/Counterexamples.lean` and `Proofs/Lattice.lean`**, and nowhere else; that is the goal
+  state, and the check that must stay green afterwards.
 - `make lean-difftest` — 166 cases against the real egglog binary. Watch the profile
-  distribution, not only the pass count. Runnable throughout the port.
+  distribution, not only the pass count. Runnable throughout the port, because it reaches `Impl/`
+  through `Tests/Egg.lean` without touching `Proofs/`. It shares one scratch directory, so two
+  runs at once will report spurious failures.
 - `make lean-check` additionally fails on any `sorry`. Use it to check that a change adds no
-  *new* one; the standing ones are the five defective M9 statements in `Proofs/Merge.lean`,
-  with witnesses in `Proofs/Counterexamples.lean` and `Proofs/Lattice.lean`.
+  *new* one; the standing ones are the three `Recorded` transports in `Proofs/Merge.lean`. The
+  five defective M9 statements are gone — deleted, not sorried.
 - Axioms, on every change: `lean_verify` or `#print axioms` against the table in "Current
   priority". A green build does not catch an axiom leak.
 - `Tests/Examples.lean` compiling *is* the M7 suite — each check is a closed proof or a
   `#guard`.
 
-## The front end's five checks
+## The front end's six checks
 
-`Spec/Scope.lean` holds `Scoped`, `Evaluable`, `SetLegal`, `DeclsFresh` and `MergeDeclared`.
-They are **five separate predicates**, and each threads exactly what it needs: `Scoped` a
-`Scope`, extended by a `let` and by a query; the other four a `Signature`, moved only by
+`Spec/Scope.lean` holds `Scoped`, `Evaluable`, `SetLegal`, `WidthOk`, `DeclsFresh` and
+`MergeDeclared`. They are **six separate predicates**, and each threads exactly what it needs:
+`Scoped` a `Scope`, extended by a `let` and by a query; the other five a `Signature`, moved only by
 `Cmd.sigBind`. Folding the signature ones into `Scoped` would put a signature argument on
 every lemma in `Proofs/Scope.lean` that none of them would use, and the theorems take
 different subsets anyway — `programStep_isSome` wants `Scoped` and `Evaluable`, the state
-invariants want `SetLegal` and `DeclsFresh`.
+invariants want `SetLegal`, `WidthOk` and `DeclsFresh`.
 
 **They are written out, not generated.** A `Check` record used to parameterise one traversal
 by three questions and three context binders, with four instances and fourteen `inherit_doc`
@@ -905,16 +910,32 @@ effort for sites it had nothing to ask: the walk made `Rule.Evaluable` elaborate
 question that does not exist. Written directly those are `Actions.Evaluable r.actions sig`
 and `trivial`. Deleted; all 15 exported names kept their types and argument order.
 
-**`set` legality.** A constructor's entry is `f(a…)` alone, so `(set (f a…) v)` would record
-`f(a…, v)` — an application of `f` one column too wide for its declaration, which
-`Database.DeclaredTerms` forbids. `Action.SetLegal` is the syntactic check that keeps that
-out, and its condition is `mergeOf f ≠ none`: it admits `:no-merge`, rejects an undeclared
-name, and rejects a constructor, all checked against the binary. egglog restricts `set` the
-same way, as a type error (`egglog/src/constraint.rs`).
+**`set` legality, and the widths beside it.** A constructor's entry is `f(a…)` alone, so
+`(set (f a…) v)` would record `f(a…, v)` — an application of `f` one column too wide for its
+declaration, which `Database.DeclaredTerms` forbids. `Action.SetLegal` is the syntactic check that
+keeps that out, and its condition is `mergeOf f ≠ none`: it admits `:no-merge`, rejects an
+undeclared name, and rejects a constructor, all checked against the binary. egglog restricts `set`
+the same way, as a type error (`egglog/src/constraint.rs`).
 
-*What it buys, and what it does not.* It is **not** a hypothesis of the refinement theorem —
-see M10, where it was removed. It maintains a state invariant (`DeclaredTerms`, the entry
-widths) that the refinement does not read.
+**`SetLegal` alone does not make the entry-width claim**, and `WidthOk` is why it is a sixth check
+rather than a clause of an existing one. `SetLegal` decides *which* width an entry is held to —
+`FnDecl.entryWidth` is `arity` for a constructor and `arity + outArity` otherwise — and `WidthOk`
+supplies the counts; only the two together say every entry has its declaration's width, and alone
+`SetLegal` says nothing about an entry no `set` wrote. Four independent needs forced it:
+`DeclaredTerms` is **false** without it, `FDatabase.IndexOk.width` has nothing funding it,
+`MergeStep.collide`'s two `arity` premises are unfunded, and `Proofs/Merge.lean` had re-introduced
+a local copy. It sits beside `SetLegal` and not inside `Evaluable` because egglog raises arity as a
+*type* error on the same AST node, in the same pass, that raises `SetConstructorDisallowed`
+(`constraint.rs:924-938`, `TypeError::Arity`; the parser holds no `TypeInfo`), and because
+`Evaluable` structurally could not say it — it quantifies over `Expr.fns`, a list of *names* that
+has lost the application structure. It is also the second check that walks into a `:merge`, since
+`res` is what `MergeStep` writes into the value columns.
+
+*What they buy, and what they do not.* Neither is a hypothesis of the refinement theorem — see M10,
+where `SetLegal` was removed. They maintain a state invariant (`DeclaredTerms`, the entry widths)
+that the refinement does not read. **Nothing outside `Spec/Scope.lean` consumes `WidthOk` yet**:
+`Proofs/Merge.lean` carries `Action.SetWidthOk`, its `set` clause alone, because substituting the
+whole check makes `Action.WriteLegal.update` false — `MERGE.md`, constraint (5), has that argument.
 
 **`SetLegal` would not be enough anyway**, and the gap is not about actions. Declaring `f` a
 `:merge` function makes an entry of `f` *already in the database* collide with itself, and
@@ -923,7 +944,7 @@ second, independent condition `Cmd.CtorDecl`, which *is* a hypothesis of the ref
 `Falsity.exec_programStep_needs_ctorDecls` is the witness, where the self-collision makes
 the specification reach two states and the interpreter one.
 
-**`MergeDeclared` is the fifth and newest**, and the only check that walks into a `:merge`
+**`MergeDeclared`**, with `WidthOk`, is one of the two checks that walk into a `:merge`
 body — `Scoped`, `Evaluable` and `SetLegal` all say nothing about one, because it runs in
 the environment `mergeEnv` builds rather than in the ambient context. It asks that every
 name a body or result applies is a primitive or a declared function of any kind, and it asks
@@ -992,8 +1013,18 @@ preservation lemmas through `evalAction` and `MergeStep`; it is the follow-on, n
 
 **`Bool`, unlike `Scoped` and `SetLegal`.** Those are `Prop`s with no computable counterpart, so
 `Tests/Egg.lean` restates `SetLegal` as `illegalSets` and the two can drift. `arityOk` is defined
-once and `ArityOk` reads it, so the difftest's check and the statement a proof would use are the
-same definition — and deciding it needs no instance through the `List Expr` nesting.
+once and `Program.ArityOk` reads it, so the difftest gets its check for free — and deciding it
+needs no instance through the `List Expr` nesting.
+
+*That is now half true.* `Spec/Scope.lean`'s `WidthOk` is a second, `Prop`-side statement of the
+same discipline, and it is **not** `arityOk` read through a coercion. They agree on the `set` case
+and on a `:merge` result, and `arityOk` demands three things besides: the row atom's split and
+`entryWidth` sum (`WidthOk` has no `Pattern` case at all), `outArity = 1` at an application in an
+expression, and `outArity = 1` on a constructor's declaration. So `arityOk` is strictly the
+stronger, they are consistent today, and they can drift. Which is which: `arityOk` is what the
+difftest enforces before writing a case; `WidthOk` is the front-end predicate a theorem would take
+as a hypothesis, and nothing takes it yet. `Program.ArityOk` and `WellArity` likewise have no
+consumers outside `Impl/Check.lean`.
 
 Two things are deliberately not covered, both because `arityOk` reads the signature and nothing
 else. That every *undeclared* name is used at one arity: outside the row atom, a name with no entry

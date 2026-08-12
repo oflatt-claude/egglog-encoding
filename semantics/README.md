@@ -28,9 +28,9 @@ deleted, and [`CHECKER.md`](CHECKER.md), what a Lean model of egglog's proof che
 
 Two things worth knowing before reading any of it.
 
-**`Spec/` is frozen** at 8 files and ~900 lines. `Impl/` is ported against it and difftest
-is green; `Proofs/` is mid-rebuild, so a statement there may be stale, deleted, or not yet
-compiling — `PLAN.md`, "Current priority", has the frontier.
+**`Spec/` is frozen** at 8 files and ~975 lines. `Impl/` is ported against it, difftest is
+green, and `Proofs/` builds through `Merge`; `Proofs/Counterexamples.lean` and
+`Proofs/Lattice.lean` are still red — `PLAN.md`, "Current priority", has the frontier.
 
 **`Spec/` is append-only and `Impl/` is not.** Nothing is ever removed from `Database.eqs`,
 where a function's whole table lives as terms; `Impl/` keeps a `Row` index it re-keys and
@@ -85,8 +85,8 @@ lake build
 or, from the workspace root:
 
 - `make lean-check` — builds and fails on any `sorry`. **A whole-library build does not
-  pass right now**: `Proofs/` is being ported to the rewritten `Spec/`, so build the
-  file you are working on rather than the library. `PLAN.md` has the frontier.
+  pass right now**: `Proofs/Counterexamples.lean` and `Proofs/Lattice.lean` are not yet
+  ported to the rewritten `Spec/`. `PLAN.md` has the frontier.
 - `make lean-difftest` — runs the interpreter and egglog on the same generated programs and
   compares per-function row counts, for the constructor fragment and for M9's `:merge`
   functions. 166 cases, all passing. Needs a release `egglog` binary. It reaches the

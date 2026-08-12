@@ -89,6 +89,14 @@ depend on none of the deleted files. Note that `Rebuilt` as defined there is the
 finding 1 refutes; it is kept because re-deriving M11 will want to state something in its
 place, not because it is right, and its docstring now says so.
 
+**A third obstacle, not a defect of these statements but of what they are stated over.**
+`mergeBody`/`mergeResult` — the `:merge` shared by `@UF` and every view — are built from
+`ordering-min`/`ordering-max`, and those are **not congruence-stable** in this model, because
+`Term.blt` is a structural order and no function of the term can be. A simulation theorem has to
+either carry that as a hypothesis or restrict its transported positions to primitive-free
+expressions; it is already blocking two `sorry`s in `Proofs/Merge.lean`. `MERGE.md`, "The
+representative deviation".
+
 **The M11 side condition, restated.** `encode` emits no `union`, so the target asserts no
 equality between distinct terms — which used to be written "`Cong` on the target degenerates
 to syntactic equality". That is wrong now, and it is the cheap kind of wrong to leave lying
