@@ -1393,6 +1393,8 @@ impl EGraph {
     /// This applies every match it finds (under semi-naive).
     /// See [`EGraph::step_rules_with_scheduler`] for more fine-grained control.
     ///
+    /// The iteration is recorded in the overall run report, whatever ran it.
+    ///
     /// This will return an error if an egglog primitive returns None in an action.
     pub fn step_rules(&mut self, ruleset: &str) -> Result<RunReport, Error> {
         fn collect_rule_ids(
@@ -1425,7 +1427,9 @@ impl EGraph {
             })
             .map_err(|e| Error::BackendError(e.to_string()))?;
 
-        Ok(RunReport::singleton(ruleset, iteration_report))
+        let report = RunReport::singleton(ruleset, iteration_report);
+        self.overall_run_report.union(report.clone());
+        Ok(report)
     }
 
     fn add_rule(&mut self, rule: ast::ResolvedRule) -> Result<String, Error> {
@@ -2086,7 +2090,7 @@ impl EGraph {
                 let report = self.run_schedule(&sched)?;
                 log::info!("Ran schedule {sched}.");
                 log::info!("Report: {report}");
-                self.overall_run_report.union(report.clone());
+                // Already recorded by `step_rules`, per iteration.
                 return Ok(vec![CommandOutput::RunSchedule(report)]);
             }
             ResolvedNCommand::PrintOverallStatistics(span, file) => match file {
