@@ -625,7 +625,6 @@ dependencies = [
  "mimalloc",
  "num",
  "ordered-float",
- "rayon",
  "rustc-hash",
  "serde_json",
  "serial_test",
@@ -668,6 +667,7 @@ version = "2.0.0"
 dependencies = [
  "anyhow",
  "dyn-clone",
+ "egglog-concurrency",
  "egglog-core-relations",
  "egglog-numeric-id",
  "egglog-reports",
@@ -681,7 +681,6 @@ dependencies = [
  "once_cell",
  "ordered-float",
  "rand 0.9.4",
- "rayon",
  "smallvec",
  "thiserror 2.0.18",
  "web-time",
@@ -694,6 +693,7 @@ dependencies = [
  "arc-swap",
  "bumpalo",
  "codspeed-divan-compat",
+ "crossbeam",
  "egglog-numeric-id",
  "proptest",
  "rayon",
@@ -772,9 +772,6 @@ dependencies = [
 [[package]]
 name = "egglog-numeric-id"
 version = "2.0.0"
-dependencies = [
- "rayon",
-]
 
 [[package]]
 name = "egglog-reports"

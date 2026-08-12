@@ -3,10 +3,6 @@
 /.reports*.jsonl
 /.reports*.html
 /.profiles/
-/.paper-artifact/
-/.paper-build/
-/.paper-results/
-/output*.log
 /.bench-worktrees/
 /.uv/
 /.venv/

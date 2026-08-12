@@ -291,7 +291,6 @@ pub fn run_ruleset(egraph: &mut EGraph, ruleset: &str) -> Result<Vec<CommandOutp
     egraph.run_program(vec![Command::RunSchedule(Schedule::Run(
         span!(),
         RunConfig {
-            scheduler: None,
             ruleset: ruleset.to_owned(),
             until: None,
         },

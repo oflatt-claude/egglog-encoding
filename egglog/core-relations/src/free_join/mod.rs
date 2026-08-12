@@ -1,6 +1,5 @@
 //! Execute queries against a database using a variant of Free Join.
 use std::{
-    any::Any,
     mem,
     sync::{
         Arc,
@@ -14,7 +13,6 @@ use crate::{
     numeric_id::{DenseIdMap, DenseIdMapWithReuse, NumericId, define_id},
 };
 use egglog_concurrency::{NotificationList, ResettableOnceLock};
-use rayon::prelude::*;
 use smallvec::SmallVec;
 
 use crate::{
@@ -26,6 +24,7 @@ use crate::{
     dependency_graph::DependencyGraph,
     hash_index::{ColumnIndex, Index, IndexBase},
     offsets::Subset,
+    parallel,
     parallel_heuristics::parallelize_db_level_op,
     pool::{Pool, Pooled, with_pool_set},
     query::{Query, RuleSetBuilder},
@@ -193,22 +192,15 @@ define_id!(pub ExternalFunctionId, u32, "A user-defined operation that can be in
 ///
 /// This is a useful, if low-level, interface for extending this database with
 /// functionality and state not built into the core model.
-pub trait ExternalFunction: Any + dyn_clone::DynClone + Send + Sync {
+pub trait ExternalFunction: dyn_clone::DynClone + Send + Sync {
     /// Invoke the function with mutable access to the database. If a value is
     /// not returned, halt the execution of the current rule.
     fn invoke(&self, state: &mut ExecutionState, args: &[Value]) -> Option<Value>;
 }
 
-impl dyn ExternalFunction {
-    /// Return this external function as [`Any`] for backend-owned state access.
-    pub fn as_any(&self) -> &dyn Any {
-        self
-    }
-}
-
 /// Automatically generate an `ExternalFunction` implementation from a function.
 pub fn make_external_func<
-    F: Fn(&mut ExecutionState, &[Value]) -> Option<Value> + Clone + Send + Sync + 'static,
+    F: Fn(&mut ExecutionState, &[Value]) -> Option<Value> + Clone + Send + Sync,
 >(
     f: F,
 ) -> impl ExternalFunction {
@@ -216,7 +208,7 @@ pub fn make_external_func<
     struct Wrapped<F>(F);
     impl<F> ExternalFunction for Wrapped<F>
     where
-        F: Fn(&mut ExecutionState, &[Value]) -> Option<Value> + Clone + Send + Sync + 'static,
+        F: Fn(&mut ExecutionState, &[Value]) -> Option<Value> + Clone + Send + Sync,
     {
         fn invoke(&self, state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
             (self.0)(state, args)
@@ -302,7 +294,7 @@ impl Counters {
 /// A collection of tables and indexes over them.
 ///
 /// A database also owns the memory pools used by its tables.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Database {
     // NB: some fields are pub(crate) to allow some internal modules to avoid
     // borrowing the whole table.
@@ -327,26 +319,11 @@ pub struct Database {
     total_size_estimate: usize,
 }
 
-impl Clone for Database {
-    fn clone(&self) -> Self {
-        Self {
-            tables: self.tables.clone(),
-            counters: self.counters.clone(),
-            external_functions: self.external_functions.clone(),
-            container_values: self.container_values.clone(),
-            notification_list: self.notification_list.fork(),
-            deps: self.deps.clone(),
-            base_values: self.base_values.clone(),
-            total_size_estimate: self.total_size_estimate,
-        }
-    }
-}
-
 impl Database {
     /// Create an empty Database.
     ///
-    /// Queries are executed using the current rayon thread pool, which defaults to the global
-    /// thread pool.
+    /// Queries use the currently installed egglog thread pool. If no pool is
+    /// installed, queries run single-threaded.
     pub fn new() -> Database {
         Database::default()
     }
@@ -362,11 +339,6 @@ impl Database {
         f: Box<dyn ExternalFunction + 'static>,
     ) -> ExternalFunctionId {
         self.external_functions.push(f)
-    }
-
-    /// Return a registered external function without moving it out of the database.
-    pub fn external_function(&self, id: ExternalFunctionId) -> &dyn ExternalFunction {
-        self.external_functions[id].as_ref()
     }
 
     /// Free an existing external function. Make sure not to use `id` afterwards.
@@ -456,7 +428,7 @@ impl Database {
                 tables.push((*id, self.tables.take(*id).unwrap()));
             }
             let view = self.read_only_view();
-            tables.par_iter_mut().for_each(|(id, info)| {
+            parallel::for_each_mut(&mut tables, |_, (id, info)| {
                 if run(*id, info, &view) {
                     self.notification_list.notify(*id);
                 }
@@ -627,14 +599,12 @@ impl Database {
                 }
                 let db = self.read_only_view();
                 changed |= if do_parallel {
-                    tables_merging
-                        .par_iter_mut()
-                        .map(|(_, (info, buffers))| {
-                            let mut es = ExecutionState::new(db, mem::take(buffers));
-                            info.as_mut().unwrap().table.merge(&mut es).added || es.changed
-                        })
-                        .max()
-                        .unwrap_or(false)
+                    parallel::map_dense_id_map_mut(&mut tables_merging, |_, (info, buffers)| {
+                        let mut es = ExecutionState::new(db, mem::take(buffers));
+                        info.as_mut().unwrap().table.merge(&mut es).added || es.changed
+                    })
+                    .into_iter()
+                    .any(|changed| changed)
                 } else {
                     tables_merging
                         .iter_mut()
@@ -955,11 +925,8 @@ impl Database {
 
 impl Drop for Database {
     fn drop(&mut self) {
-        // Clean up the ambient thread pool.
-        //
-        // Calling mem::forget on the egraph can result in much faster execution times.
+        // Clean up this thread's ambient memory pool.
         with_pool_set(PoolSet::clear);
-        rayon::broadcast(|_| with_pool_set(PoolSet::clear));
     }
 }
 

@@ -1,5 +1,5 @@
 //! Direct port of the artifact Math workload from
-//! `.paper-artifact/artifact/micro-benchmarks/src/math.rs`.
+//! `micro-benchmarks/src/math.rs` in the PLDI 2023 artifact.
 
 use egg::{Rewrite, Symbol, define_language, rewrite as rw};
 use num_rational::Rational64;

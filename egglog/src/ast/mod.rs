@@ -456,7 +456,6 @@ where
             GenericSchedule::Run(span, run_config) => GenericSchedule::Run(
                 span,
                 GenericRunConfig {
-                    scheduler: run_config.scheduler,
                     ruleset: run_config.ruleset,
                     until: run_config.until.map(f),
                 },
@@ -1358,7 +1357,6 @@ pub(crate) type ResolvedRunConfig = GenericRunConfig<ResolvedCall, ResolvedVar>;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct GenericRunConfig<Head, Leaf> {
-    pub scheduler: Option<String>,
     pub ruleset: String,
     pub until: Option<Vec<GenericFact<Head, Leaf>>>,
 }
@@ -1373,7 +1371,6 @@ where
         f: &mut impl FnMut(GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
     ) -> Self {
         Self {
-            scheduler: self.scheduler,
             ruleset: self.ruleset,
             until: self
                 .until
@@ -1392,7 +1389,6 @@ where
         Leaf2: Clone + PartialEq + Eq + Display + Hash,
     {
         GenericRunConfig {
-            scheduler: self.scheduler,
             ruleset: self.ruleset,
             until: self.until.map(|facts| {
                 facts
@@ -1409,7 +1405,6 @@ where
         fun: &mut impl FnMut(String) -> String,
     ) -> GenericRunConfig<Head, Leaf> {
         GenericRunConfig {
-            scheduler: self.scheduler.map(&mut *fun),
             ruleset: fun(self.ruleset),
             until: self.until,
         }
@@ -1428,10 +1423,7 @@ where
     Leaf: Display,
 {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        match &self.scheduler {
-            Some(scheduler) => write!(f, "(run-with {scheduler}")?,
-            None => write!(f, "(run")?,
-        }
+        write!(f, "(run")?;
         if !self.ruleset.is_empty() {
             write!(f, " {}", self.ruleset)?;
         }

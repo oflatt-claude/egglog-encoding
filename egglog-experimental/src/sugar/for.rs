@@ -53,7 +53,6 @@ impl Macro<Vec<Command>> for For {
             Command::RunSchedule(Schedule::Run(
                 span.clone(),
                 RunConfig {
-                    scheduler: None,
                     ruleset,
                     until: None,
                 },

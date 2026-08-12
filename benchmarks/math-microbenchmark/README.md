@@ -11,11 +11,11 @@ artifact for *Better Together: Unifying Datalog and Equality Saturation*:
 - egg source: `micro-benchmarks/src/math.rs`
 - Eqlog source: `micro-benchmarks/src/eqlog/math_full.egg`
 
-`base.egg` is the current-egglog port and preserves the artifact's Rational
-constants. The `egg-math-benchmark` workspace crate directly ports the egg
-language and rewrites to egg 0.11.0.
+`math.egg` is the self-contained current-egglog port and preserves the
+artifact's Rational constants. The `egg-math-benchmark` workspace crate
+directly ports the egg language and rewrites to egg 0.11.0.
 
-`math.egg` is generated with eleven explicit `(run)` leaves inside one schedule.
+`math.egg` contains eleven explicit `(run)` leaves inside one schedule.
 It deliberately uses the ordinary simple/seminaive schedulers, without the
 artifact's backoff scheduler or match cap. The fixture therefore supports a
 controlled current-engine comparison; it is not an exact reproduction of the
@@ -32,13 +32,6 @@ Both engines first establish this equality on iteration eleven: the correspondin
 tests require failure after ten iterations and success after eleven. This makes
 the terminal check an execution-depth guard rather than a seed or first-step
 identity.
-
-Regenerate or verify the fixture with:
-
-```bash
-uv run --locked python scripts/generate_math_benchmark.py --write
-uv run --locked python scripts/generate_math_benchmark.py --check
-```
 
 The `bench.py` egg treatments are supported only for this fixture. For example:
 

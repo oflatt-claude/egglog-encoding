@@ -287,7 +287,7 @@ def run_samply_record(
     try:
         process = subprocess.Popen(
             command,
-            cwd=file_spec.working_directory or checkout_path,
+            cwd=checkout_path,
             env=env,
             stdout=sys.stderr,
             stderr=sys.stderr,
@@ -406,11 +406,7 @@ def run_profile(args: argparse.Namespace, console: Console, invocation_cwd: Path
                     f" {request.backend}/{request.treatment} for {request.mode.profile_seconds}s",
                 )
             )
-            calibration = run_command(
-                workload,
-                request.file.working_directory or checkout_path,
-                request.timeout_sec,
-            )
+            calibration = run_command(workload, checkout_path, request.timeout_sec)
             if calibration.status != "success" or calibration.timing.wall_sec is None:
                 detail = calibration.error.message if calibration.error is not None else calibration.status
                 raise ValueError(f"profile calibration failed: {detail}")

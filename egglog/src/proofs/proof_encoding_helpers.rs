@@ -475,7 +475,9 @@ impl ProofInstrumentor<'_> {
         let res = self.egraph.parser.get_program_from_string(None, input);
         self.egraph.parser.ensure_no_reserved_symbols = true;
 
-        res.unwrap()
+        // This program is generated internally by term encoding, so a parse
+        // failure is an egglog bug rather than a user error.
+        res.expect("internally generated term-encoding program must parse")
     }
 
     /// Like [`Self::parse_program`], but groups each maximal run of consecutive
@@ -602,7 +604,7 @@ impl ProofInstrumentor<'_> {
         self.egraph.parser.ensure_no_reserved_symbols = false;
         let res = self.egraph.parser.get_schedule_from_string(None, &input);
         self.egraph.parser.ensure_no_reserved_symbols = true;
-        res.unwrap()
+        res.expect("internally generated term-encoding schedule must parse")
     }
 
     /// Internal parse helper for term encoding- parse and crash on failure.
@@ -610,7 +612,12 @@ impl ProofInstrumentor<'_> {
         self.egraph.parser.ensure_no_reserved_symbols = false;
         let res = input
             .iter()
-            .map(|f| self.egraph.parser.get_fact_from_string(None, f).unwrap())
+            .map(|f| {
+                self.egraph
+                    .parser
+                    .get_fact_from_string(None, f)
+                    .expect("internally generated term-encoding fact must parse")
+            })
             .collect();
         self.egraph.parser.ensure_no_reserved_symbols = true;
         res
@@ -621,7 +628,7 @@ impl ProofInstrumentor<'_> {
         self.egraph.parser.ensure_no_reserved_symbols = false;
         let res = self.egraph.parser.get_expr_from_string(None, input);
         self.egraph.parser.ensure_no_reserved_symbols = true;
-        res.unwrap()
+        res.expect("internally generated term-encoding expression must parse")
     }
 
     // Each function/constructor gets a view table, the canonicalized e-nodes to accelerate e-matching.
@@ -830,12 +837,7 @@ pub fn file_supports_proofs_with_egraph(path: &Path, mut egraph: EGraph) -> bool
         Err(_) => return false,
     };
 
-    program_supports_proofs_impl(&desugared, &egraph.type_info, &|name| {
-        egraph
-            .commands
-            .get(name)
-            .is_some_and(|command| command.is_proof_transparent())
-    })
+    program_supports_proofs(&desugared, &egraph.type_info)
 }
 
 /// Reasons why a command doesn't support proof encoding
@@ -905,14 +907,6 @@ pub enum ProofEncodingUnsupportedReason {
 
 /// Checks whether a desugared program supports proof encoding.
 pub fn program_supports_proofs(commands: &[ResolvedCommand], type_info: &TypeInfo) -> bool {
-    program_supports_proofs_impl(commands, type_info, &|_| false)
-}
-
-fn program_supports_proofs_impl(
-    commands: &[ResolvedCommand],
-    type_info: &TypeInfo,
-    is_proof_transparent: &impl Fn(&str) -> bool,
-) -> bool {
     // Globals defined anywhere in the program, including inside `(push)`/`(pop)`
     // scopes. `type_info.global_sorts` reflects only the final scope (each `pop`
     // unregisters its globals), so checking against it alone misreads a popped
@@ -929,11 +923,6 @@ fn program_supports_proofs_impl(
         })
         .collect();
     for command in commands {
-        if let GenericCommand::UserDefined(_, name, _) = command
-            && is_proof_transparent(name)
-        {
-            continue;
-        }
         if let Err(reason) = command_supports_proof_encoding_impl(command, type_info, &let_globals)
         {
             let cmd = command.to_string();

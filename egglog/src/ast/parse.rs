@@ -59,7 +59,6 @@ const RESERVED_KEYWORDS: &[&str] = &[
     "rewrite",
     "birewrite",
     "run",
-    "run-with",
     "run-schedule",
     "check",
     "extract",
@@ -858,14 +857,7 @@ impl Parser {
                 vec![Command::RunSchedule(Schedule::Repeat(
                     span.clone(),
                     limit,
-                    Box::new(Schedule::Run(
-                        span,
-                        RunConfig {
-                            scheduler: None,
-                            ruleset,
-                            until,
-                        },
-                    )),
+                    Box::new(Schedule::Run(span, RunConfig { ruleset, until })),
                 ))]
             }
             "run-schedule" => vec![Command::RunSchedule(Schedule::Sequence(
@@ -1065,7 +1057,6 @@ impl Parser {
             return Ok(Schedule::Run(
                 span.clone(),
                 RunConfig {
-                    scheduler: None,
                     ruleset: ruleset.clone(),
                     until: None,
                 },
@@ -1094,18 +1085,7 @@ impl Parser {
                 ),
                 _ => return error!(span, "usage: (repeat <number of iterations> <schedule>*)"),
             },
-            "run" | "run-with" => {
-                let (scheduler, tail) = if head == "run-with" {
-                    let Some((scheduler, tail)) = tail.split_first() else {
-                        return error!(
-                            span,
-                            "usage: (run-with <scheduler> <ruleset>? <:until (<fact>*)>?)"
-                        );
-                    };
-                    (Some(scheduler.expect_atom("scheduler name")?), tail)
-                } else {
-                    (None, tail)
-                };
+            "run" => {
                 let has_ruleset = match tail.first() {
                     None => false,
                     Some(Sexp::Atom(o, _)) if *o == ":until" => false,
@@ -1124,21 +1104,9 @@ impl Parser {
                     _ => return error!(span, "could not parse run options"),
                 };
 
-                Schedule::Run(
-                    span,
-                    RunConfig {
-                        scheduler,
-                        ruleset,
-                        until,
-                    },
-                )
+                Schedule::Run(span, RunConfig { ruleset, until })
             }
-            _ => {
-                return error!(
-                    span,
-                    "expected either saturate, seq, repeat, run, or run-with"
-                );
-            }
+            _ => return error!(span, "expected either saturate, seq, repeat, or run"),
         })
     }
 

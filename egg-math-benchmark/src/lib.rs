@@ -3,7 +3,12 @@
 use anyhow::{Context, Result, ensure};
 use egg::{RecExpr, Runner, SimpleScheduler, StopReason};
 use egglog_reports::{RulesetTimingV2, TimingSummaryV2};
-use std::{fs::File, io::BufWriter, path::Path, time::Duration};
+use std::{
+    fs::File,
+    io::BufWriter,
+    path::Path,
+    time::{Duration, Instant},
+};
 
 mod math;
 
@@ -80,13 +85,17 @@ pub fn run_math(
         "terminal equality is not established after {iterations} iterations"
     );
 
-    if matches!(proof_mode, ProofMode::Extract | ProofMode::Check) {
+    let proof_postprocessing_started = Instant::now();
+    let proof_postprocessing_ns = if matches!(proof_mode, ProofMode::Extract | ProofMode::Check) {
         let mut explanation = runner.explain_equivalence(&left, &right);
         explanation.make_flat_explanation();
         if proof_mode == ProofMode::Check {
             explanation.check_proof(&rules);
         }
-    }
+        duration_to_ns(proof_postprocessing_started.elapsed())
+    } else {
+        0
+    };
 
     Ok(MathRun {
         iterations: report.iterations,
@@ -104,7 +113,8 @@ pub fn run_math(
                         - report.apply_time
                         - report.rebuild_time)
                         .max(0.0),
-                ),
+                )
+                .saturating_add(proof_postprocessing_ns),
                 merge_ns: 0,
                 rebuild_ns: seconds_to_ns(report.rebuild_time),
             }],
@@ -130,6 +140,10 @@ fn seconds_to_ns(seconds: f64) -> u64 {
         return 0;
     }
     (seconds * 1_000_000_000.0).min(u64::MAX as f64) as u64
+}
+
+fn duration_to_ns(duration: Duration) -> u64 {
+    duration.as_nanos().min(u128::from(u64::MAX)) as u64
 }
 
 #[cfg(test)]

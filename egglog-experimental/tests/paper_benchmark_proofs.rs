@@ -11,8 +11,12 @@ fn repository() -> PathBuf {
 }
 
 fn math_program(repository: &Path, iterations: usize, check: &str) -> String {
-    let base = std::fs::read_to_string(repository.join("benchmarks/math-microbenchmark/base.egg"))
-        .unwrap();
+    let fixture =
+        std::fs::read_to_string(repository.join("benchmarks/math-microbenchmark/math.egg"))
+            .unwrap();
+    let (base, _) = fixture
+        .split_once("(run-schedule")
+        .expect("Math fixture should contain a run schedule");
     let runs = std::iter::repeat_n("  (run)", iterations)
         .collect::<Vec<_>>()
         .join("\n");
@@ -46,6 +50,11 @@ fn short_math_runs_pass_proof_checking() {
 fn terminal_math_equality_requires_iteration_eleven() {
     let repository = repository();
     let check = format!("(check (= {CHECK_LEFT} {CHECK_RIGHT}))");
+
+    let fixture =
+        std::fs::read_to_string(repository.join("benchmarks/math-microbenchmark/math.egg"))
+            .unwrap();
+    assert_eq!(fixture.matches("  (run)").count(), 11);
 
     let error = egglog_experimental::new_experimental_egraph()
         .parse_and_run_program(None, &math_program(&repository, 10, &check))

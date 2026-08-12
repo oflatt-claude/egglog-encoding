@@ -201,8 +201,7 @@
     (union (A alloc1) (A alloc2))
 ))
 
-(let-scheduler paper-backoff (back-off :match-limit 10000000 :ban-length 5))
-(run-schedule (saturate (run-with paper-backoff)))
+(run-schedule (saturate (run)))
 
 (check (= (expr_points_to "</home/anonymous/eqlog-steensgaard-analysis-benchmark/benchmarks/postgresql-9.5.2/initdb.bc>:setup_pgdata:3:0:@strlen")
           (A "*global_alloc@strlen")))
