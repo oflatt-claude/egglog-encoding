@@ -4,11 +4,12 @@ import EgglogSemantics.Spec.Term
 /-!
 # The front end's static checks
 
-Five checks: `Scoped` — every variable used is bound; `Evaluable` — every applied name is
-a declared constructor; `SetLegal` — no `set` writes a constructor; `DeclsFresh` — no name
-is declared twice; `MergeDeclared` — every name a `:merge` applies is declared or a
-primitive. `Scoped` threads a `Scope`, extended by a `let` and by a query; the other four
-thread a `Signature`, moved only by `Cmd.sigBind`.
+Six checks: `Scoped` — every variable used is bound; `Evaluable` — every applied name is a
+declared constructor; `SetLegal` — no `set` writes a constructor; `WidthOk` — every
+application carries its declaration's column counts; `DeclsFresh` — no name is declared
+twice; `MergeDeclared` — every name a `:merge` applies is declared or a primitive.
+`Scoped` threads a `Scope`, extended by a `let` and by a query; the other five thread a
+`Signature`, moved only by `Cmd.sigBind`.
 -/
 
 namespace Egglog
@@ -124,8 +125,10 @@ def Action.Evaluable : Action → Signature → Prop
 
 /-! ### `set` legality -/
 
-/-- `(set (f …) …)` is legal only when `f` is a declared `:merge` or `:no-merge` function,
-which is what keeps a constructor's entries the width `FnDecl.entryWidth` gives them. -/
+/-- `(set (f …) …)` is legal only when `f` is a declared `:merge` or `:no-merge` function.
+This decides *which* width an entry is held to; `Action.WidthOk` supplies the column
+counts, and only the two together keep every entry the width `FnDecl.entryWidth` gives
+it. Alone, this says nothing about an entry no `set` wrote. -/
 def Action.SetLegal : Action → Signature → Prop
   | .set f _ _, sig => sig.mergeOf f ≠ none
   | _, _ => True
@@ -146,6 +149,72 @@ def Action.SetLegal : Action → Signature → Prop
 @[simp] def Program.SetLegal : Program → Signature → Prop
   | [], _ => True
   | c :: cs, sig => c.SetLegal sig ∧ Program.SetLegal cs (c.sigBind sig)
+
+/-! ### Column widths
+
+egglog fixes a function's column counts at its declaration and checks every use against
+them: `constraint.rs`'s `get_atom_application_constraints`, raised as `TypeError::Arity` by
+the same pass, on the same node, that raises `SetConstructorDisallowed`. So it belongs
+beside `SetLegal` rather than inside `Evaluable`, which structurally could not say it —
+`Evaluable` quantifies over `Expr.fns`, a list of *names* that has lost the application
+structure. -/
+
+mutual
+
+/-- Every application in `e` carries the argument count its declaration fixes. A name with
+no entry has nothing to disagree with; that a program declares what it applies is
+`Evaluable`'s business. -/
+def Expr.WidthOk : Expr → Signature → Prop
+  | .lit _, _ => True
+  | .var _, _ => True
+  | .app f args, sig =>
+      (∀ d, sig f = some d → args.length = d.arity) ∧ Expr.WidthOkList args sig
+
+/-- `Expr.WidthOk` over an argument list. -/
+def Expr.WidthOkList : List Expr → Signature → Prop
+  | [], _ => True
+  | e :: es, sig => Expr.WidthOk e sig ∧ Expr.WidthOkList es sig
+
+end
+
+/-- `Action.SetLegal`'s companion: a `set` fills the declared key and value columns, so the
+entry it records is `FnDecl.entryWidth` wide. -/
+def Action.WidthOk : Action → Signature → Prop
+  | .expr e, sig => e.WidthOk sig
+  | .letBind _ e, sig => e.WidthOk sig
+  | .union e₁ e₂, sig => e₁.WidthOk sig ∧ e₂.WidthOk sig
+  | .set f args out, sig =>
+      (∀ d, sig f = some d → args.length = d.arity ∧ out.length = d.outArity) ∧
+        Expr.WidthOkList args sig ∧ Expr.WidthOkList out sig
+
+@[simp] def Actions.WidthOk : List Action → Signature → Prop
+  | [], _ => True
+  | a :: as, sig => a.WidthOk sig ∧ Actions.WidthOk as sig
+
+/-- Nothing is asked of a query fact, which is matched rather than evaluated. -/
+@[simp] def Rule.WidthOk (r : Rule) (sig : Signature) : Prop :=
+  Actions.WidthOk r.actions sig
+
+/-- One result expression per value column: `res` is what `MergeStep` writes into them.
+This is the one check besides `MergeDeclared` that walks into a `:merge`, for the reason
+`MergeDeclared`'s own heading gives — the body and `res` are where a merge writes. -/
+@[simp] def MergeSpec.WidthOk : MergeSpec → Nat → Signature → Prop
+  | .merge body res, n, sig =>
+      res.length = n ∧ Actions.WidthOk body sig ∧ Expr.WidthOkList res sig
+  | .noMerge, _, _ => True
+
+/-- Asked of the signature the declaration **installs**, as `Cmd.MergeDeclared` and unlike
+`Cmd.DeclFresh`, so a `:merge` may name the function it resolves. -/
+@[simp] def Cmd.WidthOk : Cmd → Signature → Prop
+  | .action a, sig => a.WidthOk sig
+  | .rule r, sig => r.WidthOk sig
+  | .run, _ => True
+  | .decl f d, sig => ∀ ms ∈ d.merge, ms.WidthOk d.outArity ((Cmd.decl f d).sigBind sig)
+
+/-- Each command in the signature the earlier ones leave, as `Program.SetLegal`. -/
+@[simp] def Program.WidthOk : Program → Signature → Prop
+  | [], _ => True
+  | c :: cs, sig => c.WidthOk sig ∧ Program.WidthOk cs (c.sigBind sig)
 
 /-! ### Freshness of a declaration
 

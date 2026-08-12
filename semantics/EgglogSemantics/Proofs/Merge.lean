@@ -9,24 +9,38 @@ import EgglogSemantics.Proofs.Interp
 
 `MERGE.md` says which theorem buys what.
 
-## The four open transports
+## The three open transports
 
-Everything in this file is proved except four lemmas, each of which transports a
-*specification* fact along `Database.Recorded`. They are the only `sorry`s, they are
-listed here rather than only at their statements, and none of them is known to be false:
-`Database.Recorded.trans`, `Database.Out.mono_recorded`, `MergeStep.transport_recorded`
-and `RuleResults.mono_recorded`.
+Everything in this file is proved except three lemmas, each of which transports a
+*specification* fact along `Database.Recorded`. They are the only `sorry`s and they are
+listed here rather than only at their statements: `Database.Out.mono_recorded`,
+`MergeStep.transport_recorded` and `RuleResults.mono_recorded`.
 
-All four fail for one reason. `Recorded` says every equation of `d₁` is matched by an
-equation of `d₂` whose endpoints are congruent **in `d₂` extended by the two terms in
-question** — `Database.CongOn`, which posits the terms reflexively and lets `Cong.congr`
-close over them. So `d₂` need not hold a term `d₁` holds; it holds a congruent one, and
-the operand list that witnesses this is different for every equation. Composing two
-`Recorded`s therefore needs the operand lists to compose, which they do only if the list
-is left open — see `Cong.mono_recorded`, which is the composable form and *is* proved.
+They share a shape. `Recorded` says every equation of `d₁` is matched by an equation of
+`d₂` whose endpoints are congruent **in `d₂` extended by the two terms in question** —
+`Database.CongOn`, which posits the terms reflexively and lets `Cong.congr` close over
+them. So `d₂` need not hold a term `d₁` holds; it holds a congruent one.
 
-What is **false**, and so restated rather than left open, is the same-`σ`, same-`d₂`
-family: `Cong.mono_recorded` in its old shape (`Cong d₁ a b → Cong d₂ a b`) and with it
+What removes that extension is `Conservativity`: adding reflexive equations for terms the
+database does not hold cannot relate two terms it does. That is what proves
+`Cong.mono_recorded` at the pinned ambient and, with it, `Database.Recorded.trans` — both
+under `WF`, which is where the two new `WF` premises on `trans` come from.
+
+Conservativity does *not* rescue the three above, and for two different reasons.
+
+* `Database.Out` and `MergeStep.collide`'s `CongList` premise both want **bare** `Cong` at
+  `d₂`, and conservativity discharges the ambient only when both endpoints are already
+  terms of `d₂` — which `Recorded` does not supply, since the key `d₁` searched at need not
+  be a term of `d₂` at all. Both have to be restated at the congruent key `Recorded`
+  hands over, and that is a change to what they say, not to how they are proved.
+* "a run under a congruent environment records the run under the original" is **false**:
+  `Prim.apply` matches on literals, so `ordering-min` returns a non-congruent answer and
+  `min` returns `none`. The positive half holds — a primitive-free expression is
+  congruence-stable in any subterm-closed ambient — so the two transports that spend it
+  need their transported positions restricted to primitive-free expressions.
+
+Also **false**, and so restated rather than left open, is the same-`σ`, same-`d₂` family:
+`Cong.mono_recorded` in its old shape (`Cong d₁ a b → Cong d₂ a b`) and with it
 `ValidEnv`/`ValidSubst`/`ValidQuerySubst.mono_recorded`. The counterexample is recorded at
 `Cong.mono_recorded`.
 
@@ -88,10 +102,10 @@ theorem CongList.append {db : Database} : ∀ {as bs cs ds : List Term},
 
 /-! ### `CongOn`, moved around
 
-`Database.withOperands` posits a list of terms reflexively, so a longer list is a larger
-database and every `CongOn` fact survives a longer one. That is all four lemmas here, and
-they are what lets `Cong.mono_recorded` concatenate the operand lists of its subderivations.
--/
+`Database.withOperands` posits a list of terms reflexively, so a `CongOn` fact survives
+anything that only adds equations — a larger database, or a different `sig`, `env` or
+`rules`, none of which `Cong` reads. Widening the operand *list* is
+`Conservativity.withOperands_mono_list`, below, where it is needed. -/
 
 @[inherit_doc CongOn] def CongListOn
     (db : Database) (ts : List Term) (as bs : List Term) : Prop :=
@@ -103,16 +117,6 @@ theorem mem_congOn_self {db : Database} {ts : List Term} {a : Term} (h : a ∈ t
 
 theorem congOn_mono {d₁ d₂ : Database} (h : d₁.Contained d₂) {ts : List Term} {a b : Term}
     (hc : CongOn d₁ ts a b) : CongOn d₂ ts a b := Cong.mono (h.addTerms_mono ts) hc
-
-theorem congOn_mono_append_right {db : Database} {ts us : List Term} {a b : Term}
-    (hc : CongOn db ts a b) : CongOn db (ts ++ us) a b := by
-  rw [CongOn, Database.withOperands, Database.addTerms_append]
-  exact Cong.mono (Database.Contained.addTerms us _) hc
-
-theorem congOn_mono_append_left {db : Database} {ts us : List Term} {a b : Term}
-    (hc : CongOn db us a b) : CongOn db (ts ++ us) a b := by
-  rw [CongOn, Database.withOperands, Database.addTerms_append]
-  exact Cong.mono ((Database.Contained.addTerms ts db).addTerms_mono us) hc
 
 /-- `addTerms` writes `eqs` from `eqs`, so databases agreeing there agree after it. -/
 theorem Database.addTerms_eqs_of_eqs {d₁ d₂ : Database} (h : d₁.eqs = d₂.eqs)
@@ -138,11 +142,6 @@ theorem congOn_setEnvRules {db : Database} {σ : Env} {rs : Set Rule} {ts : List
     ⟨(Database.addTerms_eqs_of_eqs (d₁ := db)
       (d₂ := ({ db with env := σ, rules := rs } : Database)) rfl ts).subset⟩) h
 
-theorem congListOn_mono_append_left {db : Database} {ts us : List Term} {as bs : List Term}
-    (hc : CongListOn db us as bs) : CongListOn db (ts ++ us) as bs := by
-  rw [CongListOn, Database.withOperands, Database.addTerms_append]
-  exact CongList.mono ((Database.Contained.addTerms ts db).addTerms_mono us) hc
-
 /-! ### Recording: containment for an implementation that re-keys
 
 `Database.Recorded` is why the refinement chain cannot run on `Contained` alone: a rebuild
@@ -156,9 +155,341 @@ whose endpoints are congruent to `p`'s **in `d₂.withOperands [p.1, p.2]`** —
 chosen per equation. That is exactly the slack the re-keying needs, and exactly what makes
 the relation hard to compose. -/
 
+/-! ### Conservativity of `withOperands`
+
+A `Recorded` witness lives in `d₂` extended by two phantom operands, and composing two
+witnesses lands in `d₂` extended by more of them. What takes an extension back off is that
+it is **conservative**: reflexive equations for terms the database does not hold cannot
+relate two terms it does.
+
+The proof is a model. Interpret every term in `Quot (Cong db)`, the classes of `db` (a term
+`db` does not hold is its own class). An application is sent to the class of a *database
+entry* with the same head whose arguments have the same values, if there is one, and to a
+junk class otherwise. Both branches read the head and the argument **values** only, so the
+interpretation validates `Cong.congr` — including the case the extension exercises, where
+one side is an entry and the other a phantom.
+
+This is what makes `Cong.mono_recorded` land in the pinned two-operand ambient `Recorded`
+itself uses, and with it `Database.Recorded.trans`. -/
+
+namespace Conservativity
+
+/-- `Cong.mono` with its hypothesis weakened from presence to derivability: a derivation
+replays wherever each *asserted* equation of `D` is derivable. -/
+theorem cong_replay {D E : Database} (h : ∀ p ∈ D.eqs, Cong E p.1 p.2) {a b : Term}
+    (hc : Cong D a b) : Cong E a b := by
+  induction hc using Cong.rec (motive_2 := fun as bs _ => CongList E as bs) with
+  | assert hab => exact h _ hab
+  | symm _ ih => exact .symm ih
+  | trans _ _ ih₁ ih₂ => exact .trans ih₁ ih₂
+  | congr _ _ _ ih₁ ih₂ ihl => exact .congr ih₁ ih₂ ihl
+  | nil => exact .nil
+  | cons _ _ ih ihl => exact .cons ih ihl
+
+/-- `Database.Contained.addTerms`, read as the subset it wraps. -/
+theorem eqs_subset_addTerms (ts : List Term) (db : Database) :
+    db.eqs ⊆ (db.addTerms ts).eqs := (Database.Contained.addTerms ts db).eqs
+
+/-- `addTerms` adds reflexive pairs and nothing else. This is the whole content of
+conservativity's hypothesis. -/
+theorem mem_addTerms_eqs : ∀ (ts : List Term) (db : Database) (p : Term × Term),
+    p ∈ (db.addTerms ts).eqs → p ∈ db.eqs ∨ p.1 = p.2
+  | [], _, _, h => Or.inl h
+  | t :: ts, db, p, h => by
+      rcases mem_addTerms_eqs ts (db.addTerm t) p h with h' | h'
+      · rcases h' with h' | ⟨s, _, hs⟩
+        · exact Or.inl h'
+        · exact Or.inr (by rw [← hs])
+      · exact Or.inr h'
+
+/-- The sharper reading: a new pair is reflexive *on a subterm of an operand*. -/
+theorem mem_addTerms_eqs' : ∀ (ts : List Term) (db : Database) (p : Term × Term),
+    p ∈ (db.addTerms ts).eqs → p ∈ db.eqs ∨ ∃ t ∈ ts, ∃ s ∈ t.subterms, p = (s, s)
+  | [], _, _, h => Or.inl h
+  | t :: ts, db, p, h => by
+      rcases mem_addTerms_eqs' ts (db.addTerm t) p h with h' | ⟨u, hu, s, hs, rfl⟩
+      · rcases h' with h' | ⟨s, hs, hp⟩
+        · exact Or.inl h'
+        · exact Or.inr ⟨t, List.mem_cons_self .., s, hs, hp.symm⟩
+      · exact Or.inr ⟨u, List.mem_cons_of_mem t hu, s, hs, rfl⟩
+
+theorem refl_mem_addTerms {s t : Term} (hs : s ∈ t.subterms) :
+    ∀ (ts : List Term) (db : Database), t ∈ ts → (s, s) ∈ (db.addTerms ts).eqs
+  | [], _, hmem => by simp at hmem
+  | u :: ts, db, hmem => by
+      rcases List.mem_cons.mp hmem with heq | hmem
+      · exact eqs_subset_addTerms ts (db.addTerm u) (Or.inr ⟨s, heq ▸ hs, rfl⟩)
+      · exact refl_mem_addTerms hs ts (db.addTerm u) hmem
+
+theorem addTerms_eqs_mono {d₁ d₂ : Database} (h : d₁.eqs ⊆ d₂.eqs) (ts : List Term) :
+    (d₁.addTerms ts).eqs ⊆ (d₂.addTerms ts).eqs :=
+  (Database.Contained.addTerms_mono ⟨h⟩ ts).eqs
+
+/-- Widening the operand list. -/
+theorem withOperands_mono_list {db : Database} {ts us : List Term} (h : ∀ t ∈ ts, t ∈ us) :
+    (db.withOperands ts).eqs ⊆ (db.withOperands us).eqs := by
+  intro p hp
+  rcases mem_addTerms_eqs' ts db p hp with hq | ⟨t, ht, s, hs, rfl⟩
+  · exact eqs_subset_addTerms us db hq
+  · exact refl_mem_addTerms hs us db (h t ht)
+
+/-- Every term a database holds is subterm-closed as soon as the *asserted* pairs are. -/
+theorem terms_subtermClosed {E : Database}
+    (h : ∀ p ∈ E.eqs, p.1.subterms ⊆ E.terms ∧ p.2.subterms ⊆ E.terms) :
+    ∀ t ∈ E.terms, t.subterms ⊆ E.terms := by
+  have key : ∀ {a b : Term}, Cong E a b → a.subterms ⊆ E.terms ∧ b.subterms ⊆ E.terms := by
+    intro a b hc
+    induction hc using Cong.rec (motive_2 := fun _ _ _ => True) with
+    | assert hab => exact h _ hab
+    | symm _ ih => exact ⟨ih.2, ih.1⟩
+    | trans _ _ ih₁ ih₂ => exact ⟨ih₁.1, ih₂.2⟩
+    | congr _ _ _ ih₁ ih₂ _ => exact ⟨ih₁.1, ih₂.1⟩
+    | nil => trivial
+    | cons => trivial
+  exact fun t ht => (key ht).1
+
+/-- `db.withOperands ts` is subterm-closed whenever `db` is. -/
+theorem withOperands_subtermClosed {db : Database}
+    (hwf : ∀ t ∈ db.terms, t.subterms ⊆ db.terms) (ts : List Term) :
+    ∀ t ∈ (db.withOperands ts).terms, t.subterms ⊆ (db.withOperands ts).terms := by
+  refine terms_subtermClosed ?_
+  have grow : db.terms ⊆ (db.withOperands ts).terms := fun _ hx =>
+    Cong.mono (Database.Contained.addTerms ts db) hx
+  intro p hp
+  rcases mem_addTerms_eqs' ts db p hp with hq | ⟨t, ht, s, hs, rfl⟩
+  · have hm := eqsInTerms_free (Cong.assert hq)
+    exact ⟨fun x hx => grow (hwf _ hm.1 hx), fun x hx => grow (hwf _ hm.2 hx)⟩
+  · have hsub : ∀ x ∈ (s : Term).subterms, x ∈ (db.withOperands ts).terms := fun x hx =>
+      Cong.assert (refl_mem_addTerms (Term.subterms_subset_of_mem hs hx) ts db ht)
+    exact ⟨hsub, hsub⟩
+
+/-! #### The model -/
+
+/-- The classes of `db`. -/
+abbrev Cls (db : Database) := Quot (Cong db)
+
+/-- `Cong db` is symmetric and transitive already, so its equivalence closure adds only
+reflexivity. -/
+theorem eq_or_cong_of_eqvGen {db : Database} {a b : Term}
+    (h : Relation.EqvGen (Cong db) a b) : a = b ∨ Cong db a b := by
+  induction h with
+  | rel _ _ hr => exact Or.inr hr
+  | refl _ => exact Or.inl rfl
+  | symm _ _ _ ih => rcases ih with rfl | hc; exacts [Or.inl rfl, Or.inr hc.symm]
+  | trans _ _ _ _ _ ih₁ ih₂ =>
+    rcases ih₁ with rfl | h₁
+    · exact ih₂
+    · rcases ih₂ with rfl | h₂
+      exacts [Or.inr h₁, Or.inr (h₁.trans h₂)]
+
+theorem eq_or_cong_of_cls_eq {db : Database} {a b : Term}
+    (h : Quot.mk (Cong db) a = Quot.mk (Cong db) b) : a = b ∨ Cong db a b :=
+  eq_or_cong_of_eqvGen (Quot.eqvGen_exact h)
+
+open Classical in
+/-- The value an application gets: a function of the head and the argument **values**. -/
+noncomputable def Iapp (db : Database) (f : FnName) (vs : List (Cls db)) : Cls db :=
+  if h : ∃ bs : List Term, Term.app f bs ∈ db.terms ∧ vs = bs.map (Quot.mk (Cong db)) then
+    Quot.mk (Cong db) (Term.app f h.choose)
+  else Quot.mk (Cong db) (Term.app f (vs.map Quot.out))
+
 mutual
 
-/-- **`Cong.mono` along `Recorded`, in the only shape that is true.**
+/-- The interpretation. -/
+noncomputable def I (db : Database) : Term → Cls db
+  | .lit l => Quot.mk (Cong db) (.lit l)
+  | .app f as => Iapp db f (IList db as)
+
+/-- `I` over an argument list. -/
+noncomputable def IList (db : Database) : List Term → List (Cls db)
+  | [] => []
+  | t :: ts => I db t :: IList db ts
+
+end
+
+theorem congList_of_map_eq {db : Database} :
+    ∀ {as cs : List Term}, (∀ a ∈ as, a ∈ db.terms) →
+      as.map (Quot.mk (Cong db)) = cs.map (Quot.mk (Cong db)) → CongList db as cs
+  | [], [], _, _ => .nil
+  | [], _ :: _, _, h => by simp at h
+  | _ :: _, [], _, h => by simp at h
+  | a :: as, c :: cs, hmem, h => by
+    rw [List.map_cons, List.map_cons, List.cons.injEq] at h
+    have ha : a ∈ db.terms := hmem a (List.mem_cons_self ..)
+    refine .cons ?_ (congList_of_map_eq (fun x hx => hmem x (List.mem_cons_of_mem a hx)) h.2)
+    rcases eq_or_cong_of_cls_eq h.1 with rfl | hc
+    exacts [ha, hc]
+
+/-- **The interpretation is the identity on the classes of `db`.** -/
+theorem I_eq_of_mem {db : Database} (hsub : ∀ t ∈ db.terms, t.subterms ⊆ db.terms) :
+    ∀ t : Term, t ∈ db.terms → I db t = Quot.mk (Cong db) t := by
+  intro t
+  induction t using Term.rec (motive_2 := fun ts => (∀ x ∈ ts, x ∈ db.terms) →
+      IList db ts = ts.map (Quot.mk (Cong db))) with
+  | lit l => intro _; rfl
+  | app f as ih =>
+    intro hmem
+    have hargs : ∀ x ∈ as, x ∈ db.terms := fun x hx =>
+      hsub _ hmem (Term.IsSubterm.arg hx (Term.IsSubterm.refl x))
+    have hlist : IList db as = as.map (Quot.mk (Cong db)) := ih hargs
+    have hex : ∃ bs : List Term, Term.app f bs ∈ db.terms ∧
+        IList db as = bs.map (Quot.mk (Cong db)) := ⟨as, hmem, hlist⟩
+    change Iapp db f (IList db as) = _
+    rw [Iapp, dif_pos hex]
+    apply Quot.sound
+    have hspec := hex.choose_spec
+    have hcs : ∀ x ∈ hex.choose, x ∈ db.terms := fun x hx =>
+      hsub _ hspec.1 (Term.IsSubterm.arg hx (Term.IsSubterm.refl x))
+    exact Cong.congr hspec.1 hmem
+      (congList_of_map_eq hcs (hspec.2.symm.trans hlist))
+  | nil => rfl
+  | cons t ts iht ihts =>
+    have hmem : ∀ x ∈ t :: ts, x ∈ db.terms := by assumption
+    change I db t :: IList db ts = _
+    rw [iht (hmem t (List.mem_cons_self ..)),
+      ihts fun x hx => hmem x (List.mem_cons_of_mem t hx), List.map_cons]
+
+/-- **The interpretation validates every derivation of the extension.** -/
+theorem I_congr {db E : Database} (hsub : ∀ t ∈ db.terms, t.subterms ⊆ db.terms)
+    (hE : ∀ p ∈ E.eqs, p ∈ db.eqs ∨ p.1 = p.2) {a b : Term} (hc : Cong E a b) :
+    I db a = I db b := by
+  induction hc using Cong.rec (motive_2 := fun as bs _ => IList db as = IList db bs) with
+  | @assert x y hxy =>
+    rcases hE _ hxy with hp | hp
+    · have hcong : Cong db x y := Cong.assert hp
+      have hm := eqsInTerms_free hcong
+      rw [I_eq_of_mem hsub x hm.1, I_eq_of_mem hsub y hm.2]
+      exact Quot.sound hcong
+    · exact congrArg (I db) (hp : x = y)
+  | symm _ ih => exact ih.symm
+  | trans _ _ ih₁ ih₂ => exact ih₁.trans ih₂
+  | @congr f as bs _ _ _ _ _ ihl =>
+    change Iapp db f (IList db as) = Iapp db f (IList db bs)
+    rw [ihl]
+  | nil => rfl
+  | cons _ _ ih ihl => change _ :: _ = _ :: _; rw [ih, ihl]
+
+/-- **Conservativity.** Reflexive equations for terms `db` does not hold cannot relate two
+terms it does; `withOperands ts` is exactly such an extension. -/
+theorem conservative {db E : Database} (hsub : ∀ t ∈ db.terms, t.subterms ⊆ db.terms)
+    (hE : ∀ p ∈ E.eqs, p ∈ db.eqs ∨ p.1 = p.2) {u v : Term} (hu : u ∈ db.terms)
+    (hv : v ∈ db.terms) (h : Cong E u v) : Cong db u v := by
+  have hI := I_congr hsub hE h
+  rw [I_eq_of_mem hsub u hu, I_eq_of_mem hsub v hv] at hI
+  rcases eq_or_cong_of_cls_eq hI with rfl | hc
+  exacts [hu, hc]
+
+/-- Conservativity, packaged for the operand ambient: the phantom operands drop out. -/
+theorem congOn_elim {db : Database} (hwf : ∀ t ∈ db.terms, t.subterms ⊆ db.terms)
+    {ts : List Term} {u v : Term} (hu : u ∈ db.terms) (hv : v ∈ db.terms)
+    (h : CongOn db ts u v) : Cong db u v :=
+  conservative hwf (fun p hp => mem_addTerms_eqs ts db p hp) hu hv h
+
+/-! #### The wide ambient
+
+`withOperands` takes a *list*; transporting a whole derivation needs a whole term **set** in
+scope. `amb` is that, and `conservative` is what takes it back off again. -/
+
+/-- `D` with every term of `S` recorded reflexively. -/
+def amb (D : Database) (S : Set Term) : Database :=
+  { D with eqs := D.eqs ∪ {p | ∃ t ∈ S, p = (t, t)} }
+
+theorem subset_amb {D : Database} {S : Set Term} : D.eqs ⊆ (amb D S).eqs :=
+  fun _ h => Or.inl h
+
+theorem amb_refl {D : Database} {S : Set Term} {t : Term} (h : t ∈ S) :
+    (t, t) ∈ (amb D S).eqs := Or.inr ⟨t, h, rfl⟩
+
+theorem mem_amb_eqs {D : Database} {S : Set Term} {p : Term × Term}
+    (h : p ∈ (amb D S).eqs) : p ∈ D.eqs ∨ p.1 = p.2 := by
+  rcases h with h | ⟨t, -, rfl⟩
+  exacts [Or.inl h, Or.inr rfl]
+
+/-- An operand list whose subterms `S` covers adds nothing the wide ambient lacks. -/
+theorem withOperands_subset_amb {D : Database} {S : Set Term} {ts : List Term}
+    (h : ∀ t ∈ ts, ∀ s ∈ t.subterms, s ∈ S) : (D.withOperands ts).eqs ⊆ (amb D S).eqs := by
+  intro p hp
+  rcases mem_addTerms_eqs' ts D p hp with hq | ⟨t, ht, s, hs, rfl⟩
+  · exact Or.inl hq
+  · exact amb_refl (h t ht s hs)
+
+/-- An operand *pair* whose subterms `S` covers. This is the shape `Recorded`'s clause
+hands over. -/
+theorem pair_operands_subset {D E : Database} {S : Set Term} {x y : Term}
+    (hx : ∀ s ∈ (x : Term).subterms, s ∈ S) (hy : ∀ s ∈ (y : Term).subterms, s ∈ S)
+    (hE : E.eqs ⊆ D.eqs) : (E.withOperands [x, y]).eqs ⊆ (amb D S).eqs := by
+  refine (addTerms_eqs_mono hE [x, y]).trans (withOperands_subset_amb ?_)
+  rintro t ht s hs
+  rcases List.mem_cons.mp ht with rfl | ht
+  · exact hx s hs
+  · rcases List.mem_cons.mp ht with rfl | ht
+    · exact hy s hs
+    · simp at ht
+
+/-- Conservativity over the wide ambient. -/
+theorem amb_elim {db : Database} (hwf : ∀ t ∈ db.terms, t.subterms ⊆ db.terms)
+    {S : Set Term} {u v : Term} (hu : u ∈ db.terms) (hv : v ∈ db.terms)
+    (h : Cong (amb db S) u v) : Cong db u v :=
+  conservative hwf (fun _ hp => mem_amb_eqs hp) hu hv h
+
+/-! #### Transport along `Recorded` -/
+
+/-- Every equation of `d₁` is derivable in the wide ambient. This is the step that cannot
+be sharpened: the derivation of one equation may pass through any term `d₁` holds, which is
+why `S` has to cover them all before conservativity can take the widening back off. -/
+theorem cong_of_mem_eqs {d₁ d₂ : Database} (h : d₁.Recorded d₂) (hwf : d₁.WF)
+    {S : Set Term} (hS : d₁.terms ⊆ S) {D : Database} (hD : d₂.eqs ⊆ D.eqs)
+    {p : Term × Term} (hp : p ∈ d₁.eqs) : Cong (amb D S) p.1 p.2 := by
+  obtain ⟨q, hq, h₁, h₂⟩ := h.eqs p hp
+  have hmem := eqsInTerms_free (Cong.assert hp)
+  have hsub : (d₂.withOperands [p.1, p.2]).eqs ⊆ (amb D S).eqs :=
+    pair_operands_subset (fun s hs => hS (hwf.subtermClosed _ hmem.1 hs))
+      (fun s hs => hS (hwf.subtermClosed _ hmem.2 hs)) hD
+  exact (Cong.mono ⟨hsub⟩ h₁).trans
+    ((Cong.assert (subset_amb (hD hq))).trans (Cong.mono ⟨hsub⟩ h₂).symm)
+
+/-- A whole derivation of `d₁`, moved into the wide ambient. -/
+theorem cong_transport {d₁ d₂ : Database} (h : d₁.Recorded d₂) (hwf : d₁.WF)
+    {S : Set Term} (hS : d₁.terms ⊆ S) {D : Database} (hD : d₂.eqs ⊆ D.eqs)
+    {a b : Term} (hc : Cong d₁ a b) : Cong (amb D S) a b :=
+  cong_replay (fun _ hp => cong_of_mem_eqs h hwf hS hD hp) hc
+
+/-- One endpoint of the composition behind `Database.Recorded.trans`. `x` is one endpoint
+of `d₁`'s equation, `y` the matching one of `d₂`'s witness, `z` the matching one of `d₃`'s;
+the two witnesses are reached in *different* ambients, and the wide one absorbs the
+difference. -/
+theorem trans_side {d₂ d₃ : Database} (h₂₃ : d₂.Recorded d₃) (hwf₂ : d₂.WF) (hwf₃ : d₃.WF)
+    {ts : List Term} {q : Term × Term} (hq : q ∈ d₂.eqs) {x y z : Term} (hxt : x ∈ ts)
+    (hz : z ∈ d₃.terms) (hxy : Cong (d₂.withOperands ts) x y)
+    (hyz : Cong (d₃.withOperands [q.1, q.2]) y z) : Cong (d₃.withOperands ts) x z := by
+  have hD3 : d₃.eqs ⊆ (d₃.withOperands ts).eqs := eqs_subset_addTerms _ d₃
+  -- (a) `d₂`'s derivation replays in `d₃` widened by all of `d₂`'s terms
+  have hall : ∀ w ∈ (d₂.withOperands ts).eqs,
+      Cong (amb (d₃.withOperands ts) d₂.terms) w.1 w.2 := by
+    intro w hw
+    rcases mem_addTerms_eqs' ts d₂ w hw with hw2 | ⟨t, ht, s, hs, rfl⟩
+    · obtain ⟨r', hr', h₁', h₂'⟩ := h₂₃.eqs w hw2
+      have hwm := eqsInTerms_free (Cong.assert hw2)
+      have hsub := pair_operands_subset (D := d₃.withOperands ts) (S := d₂.terms)
+        (fun s hs => hwf₂.subtermClosed _ hwm.1 hs)
+        (fun s hs => hwf₂.subtermClosed _ hwm.2 hs) hD3
+      exact (Cong.mono ⟨hsub⟩ h₁').trans
+        ((Cong.assert (subset_amb (hD3 hr'))).trans (Cong.mono ⟨hsub⟩ h₂').symm)
+    · exact Cong.assert (subset_amb (refl_mem_addTerms hs ts d₃ ht))
+  -- (b) `d₃`'s own witness for `q` lives there too
+  have hqmem := eqsInTerms_free (Cong.assert hq)
+  have hsubq := pair_operands_subset (D := d₃.withOperands ts) (S := d₂.terms)
+    (fun s hs => hwf₂.subtermClosed _ hqmem.1 hs)
+    (fun s hs => hwf₂.subtermClosed _ hqmem.2 hs) hD3
+  -- (c) both endpoints are `d₃`-side, so conservativity takes the widening back off
+  exact amb_elim (withOperands_subtermClosed hwf₃.subtermClosed ts)
+    (Database.mem_addTerms hxt) (Cong.mono ⟨hD3⟩ hz)
+    ((cong_replay hall hxy).trans (Cong.mono ⟨hsubq⟩ hyz))
+
+end Conservativity
+
+open Conservativity in
+/-- **`Cong.mono` along `Recorded`.**
 
 The conclusion cannot be `Cong d₂ a b`. Counterexample: `d₁.eqs = {(F c, F c)}` and
 `d₂.eqs = {(F e, F e), (c, e)}`. Then `d₁.Recorded d₂` — take `q := (F e, F e)`, since
@@ -166,60 +497,51 @@ The conclusion cannot be `Cong d₂ a b`. Counterexample: `d₁.eqs = {(F c, F c
 so `Cong.congr` gives `F c = F e` — while `F c ∉ d₂.terms`, so `Cong d₂ (F c) (F c)` is
 false.
 
-What survives is the same statement with the operand list left **open**: `d₁`'s derivation
-is reproduced in `d₂` extended by finitely many terms declared to exist. That composes,
-because two such extensions concatenate, which is what makes this the form the transitivity
-of `Recorded` would be proved from. Adding terms only ever adds *reflexive* equations, so
-the conclusion still says something: it can relate two distinct terms only for a reason
-`d₂` already had. -/
-theorem Cong.mono_recorded {d₁ d₂ : Database} (h : d₁.Recorded d₂)
-    {a b : Term} (hc : Cong d₁ a b) : ∃ ts, CongOn d₂ ts a b := by
-  match hc with
-  | .assert hm =>
-    obtain ⟨q, hq, h₁, h₂⟩ := h.eqs _ hm
-    refine ⟨[a, b], h₁.trans ((Cong.assert (Database.Contained.addTerms _ _ |>.eqs hq)).trans
-      h₂.symm)⟩
-  | .symm hc =>
-    obtain ⟨ts, ht⟩ := Cong.mono_recorded h hc
-    exact ⟨ts, ht.symm⟩
-  | .trans h₁ h₂ =>
-    obtain ⟨ts, ht⟩ := Cong.mono_recorded h h₁
-    obtain ⟨us, hu⟩ := Cong.mono_recorded h h₂
-    exact ⟨ts ++ us, (congOn_mono_append_right ht).trans (congOn_mono_append_left hu)⟩
-  | .congr hm₁ hm₂ hl =>
-    obtain ⟨ts, ht⟩ := Cong.mono_recorded h hm₁
-    obtain ⟨us, hu⟩ := Cong.mono_recorded h hm₂
-    obtain ⟨ws, hw⟩ := CongList.mono_recorded h hl
-    refine ⟨ts ++ us ++ ws, Cong.congr ?_ ?_ ?_⟩
-    · exact congOn_mono_append_right (congOn_mono_append_right ht)
-    · exact congOn_mono_append_right (congOn_mono_append_left hu)
-    · exact congListOn_mono_append_left hw
+What does hold is the same **pinned** ambient `Recorded`'s own clause uses: the two
+endpoints, and nothing else. The derivation may pass through any term of `d₁`, so it is run
+in `d₂` widened by all of them and conservativity takes the widening back off — which is
+what the two `WF` hypotheses pay for. -/
+theorem Cong.mono_recorded {d₁ d₂ : Database} (h : d₁.Recorded d₂) (hwf₁ : d₁.WF)
+    (hwf₂ : d₂.WF) {a b : Term} (hc : Cong d₁ a b) : CongOn d₂ [a, b] a b :=
+  amb_elim (withOperands_subtermClosed hwf₂.subtermClosed [a, b])
+    (Database.mem_addTerms (by simp)) (Database.mem_addTerms (by simp))
+    (cong_transport h hwf₁ (fun _ hx => hx) (eqs_subset_addTerms [a, b] d₂) hc)
 
-@[inherit_doc Cong.mono_recorded]
-theorem CongList.mono_recorded {d₁ d₂ : Database} (h : d₁.Recorded d₂)
-    {as bs : List Term} (hc : CongList d₁ as bs) : ∃ ts, CongListOn d₂ ts as bs := by
-  match hc with
-  | .nil => exact ⟨[], .nil⟩
-  | .cons hab hl =>
-    obtain ⟨ts, ht⟩ := Cong.mono_recorded h hab
-    obtain ⟨us, hu⟩ := CongList.mono_recorded h hl
-    exact ⟨ts ++ us, .cons (congOn_mono_append_right ht) (congListOn_mono_append_left hu)⟩
-
-end
+open Conservativity in
+/-- The list form, which is what an entry atom needs. The ambient is a single list covering
+both sides, since `Cong.congr` wants all the operands of an application in scope at once. -/
+theorem CongList.mono_recorded {d₁ d₂ : Database} (h : d₁.Recorded d₂) (hwf₁ : d₁.WF)
+    (hwf₂ : d₂.WF) : ∀ {as bs : List Term}, CongList d₁ as bs →
+      ∀ ts : List Term, (∀ a ∈ as, a ∈ ts) → (∀ b ∈ bs, b ∈ ts) → CongListOn d₂ ts as bs
+  | _, _, .nil, _, _, _ => .nil
+  | a :: as, b :: bs, .cons hab hl, ts, hta, htb => by
+    refine .cons (Cong.mono ⟨withOperands_mono_list ?_⟩ (Cong.mono_recorded h hwf₁ hwf₂ hab))
+      (CongList.mono_recorded h hwf₁ hwf₂ hl ts
+        (fun x hx => hta x (List.mem_cons_of_mem a hx))
+        (fun x hx => htb x (List.mem_cons_of_mem b hx)))
+    intro t ht
+    rcases List.mem_cons.mp ht with rfl | ht
+    · exact hta t (List.mem_cons_self ..)
+    · rcases List.mem_cons.mp ht with rfl | ht
+      · exact htb t (List.mem_cons_self ..)
+      · simp at ht
 
 /-- `Out.mono` along `Recorded`: the key class is searched twice and the two searches
 compose.
 
-**Open.** The obstruction is the one the file header names: `d₁`'s entry term
-`f(bs ++ vs)` need not be a term of `d₂`, so the second search has to start from a term
-`d₂` does hold. The argument that should close it is structural — in
-`d₂.withOperands [t]`, a term `t = f(…)` that `d₂` does not hold can take no `assert`
-step, so the *first* step of any derivation out of it is a `Cong.congr`, whose premise
-is that some `f`-application `d₂` **does** hold sits at the other end. That is a
-decomposition property of `Cong` derivations and there is no lemma for it yet. -/
+**Open, and not for want of a proof — the statement is wrong.** `Out d₂ f as vs` asks for
+`CongList d₂ as bs` at bare `Cong`, so it asks in particular that every key column `as` be
+a term of `d₂`. `Recorded` gives no such thing: it gives a *congruent* term, and
+`Cong.mono_recorded` lands in `d₂.withOperands [a, b]` for exactly that reason.
+`Conservativity.congOn_elim` takes the ambient off only when both endpoints are already
+`d₂` terms, and there are well-formed `Recorded` pairs where a term of `d₁` is not a term
+of `d₂` at all. So this wants restating at the key `Recorded` supplies — `∃ as', CongList`
+… `∧ d₂.Out f as' vs`, or `Out` itself read up to the ambient — which changes its two
+consumers in `mergeOneOriented_mergeStep`. -/
 theorem Database.Out.mono_recorded {d₁ d₂ : Database} (h : d₁.Recorded d₂)
     {f : FnName} {as vs : List Term} (ho : d₁.Out f as vs) :
     d₂.Out f as vs := by
+  -- Open: `Out` wants bare `Cong` at `d₂`, which `Recorded` cannot supply; restate it.
   sorry
 
 namespace Database
@@ -250,19 +572,25 @@ theorem setEnv {d₁ d₂ : Database} (h : d₁.Recorded d₂) (σ τ : Env) :
     ({ d₁ with env := σ } : Database).Recorded { d₂ with env := τ } :=
   h.setEnvRules σ τ d₁.rules d₂.rules
 
-/-- **Open**, and the file header says why. `d₁`'s equation is matched by one of `d₂`'s
-in `d₂.withOperands [p.1, p.2]`, and that one is matched by one of `d₃`'s in
-`d₃.withOperands [q.1, q.2]` — a *different* extension. Composing them lands in
-`d₃` extended by both lists, which is `Cong.mono_recorded`'s open-list conclusion and not
-`Recorded`'s pinned one.
+/-- **`Recorded` composes**, given that the two later states are well formed.
 
-`Cong.mono_recorded` is the half of this that is proved. What is missing is the converse
-step, that a derivation in `d₃` extended by an arbitrary finite list can be rerun in `d₃`
-extended by the two endpoints alone — the locality of congruence closure. It is not known
-to be false; the file header records the shape a proof would take. -/
-theorem trans {d₁ d₂ d₃ : Database} (h₁ : d₁.Recorded d₂) (h₂ : d₂.Recorded d₃) :
-    d₁.Recorded d₃ := by
-  sorry
+`d₁`'s equation is matched by one of `d₂`'s in `d₂.withOperands [p.1, p.2]`, and that one
+by one of `d₃`'s in `d₃.withOperands [q.1, q.2]` — a *different* extension. Neither list is
+the one the conclusion is pinned to, so both derivations are run in `d₃` widened by all of
+`d₂`'s terms and `Conservativity.amb_elim` takes the widening off again, which it may
+because both endpoints of the composite are `d₃`-side. `hwf₂` covers the subterms of the
+equations being composed; `hwf₃` is what conservativity is applied to.
+
+`Conservativity.trans_side` is one endpoint of the composition; the two calls differ only
+in which endpoint they follow. -/
+theorem trans {d₁ d₂ d₃ : Database} (h₁ : d₁.Recorded d₂) (h₂ : d₂.Recorded d₃)
+    (hwf₂ : d₂.WF) (hwf₃ : d₃.WF) : d₁.Recorded d₃ := by
+  refine ⟨fun p hp => ?_⟩
+  obtain ⟨q, hq, hq₁, hq₂⟩ := h₁.eqs p hp
+  obtain ⟨r, hr, hr₁, hr₂⟩ := h₂.eqs q hq
+  have hrmem := eqsInTerms_free (Cong.assert hr)
+  exact ⟨r, hr, Conservativity.trans_side h₂ hwf₂ hwf₃ hq (by simp) hrmem.1 hq₁ hr₁,
+    Conservativity.trans_side h₂ hwf₂ hwf₃ hq (by simp) hrmem.2 hq₂ hr₂⟩
 
 /-- Growing the right-hand side keeps it a recorder: the extension is monotone in `d₂`,
 so no re-derivation is needed and this is *not* an instance of `trans`. -/
@@ -830,14 +1158,17 @@ compose: `RunRules.mono_recorded`, `CmdStep.mono_recorded`, `ProgramStep.mono_re
 
 *Needs the choice made once for the whole query*: a per-pattern transport re-establishing
 `Env.UnionAll σs σ`, whose `Union2` requires the pieces to agree wherever two of them bind
-the same variable; per-pattern transports may pick different congruent representatives.
+the same variable; per-pattern transports may pick different congruent representatives. The
+answer is a single witness **function** `Term → Term` rather than a witness per use site —
+then equal terms get equal images and `Union2` still joins.
 
-*Costs a new lemma*: `RuleResults.mono_recorded`, which is where the `sorry` sits. It
-re-evaluates under the substitution, and `Expr.eval` is **not** congruence-stable at a
+*Costs a lemma that is false*: `RuleResults.mono_recorded`, which is where the `sorry` sits.
+It re-evaluates under the substitution, and `Expr.eval` is **not** congruence-stable at a
 primitive — `Prim.apply` matches on literals, so a term congruent to `.lit 1` but not equal
-to it does not compute the same answer, or any answer. That missing lemma is shared with
-`MergeStep.transport_recorded`, whose body runs under a `mergeEnv` built from the colliding
-outputs, congruent rather than equal on the specification side. -/
+to it does not compute the same answer, or any answer. What is true is the primitive-free
+half, so the fix is to restrict the transported positions and not to look for a proof. The
+same obligation is `MergeStep.transport_recorded`'s, whose body runs under a `mergeEnv`
+built from the colliding outputs, congruent rather than equal on the specification side. -/
 
 /-! ### Transporting a step
 
@@ -1133,24 +1464,31 @@ to come from somewhere, and the only place they can come from is the front end.
 
 **This is a hypothesis the refinement chain did not carry before**, because before the split
 there was nothing to split: a row was `⟨f, as, vs⟩` and `MergeStep` read the two halves off
-it. It is threaded as `Action.WidthOk`, bundled with `Action.SetLegal` into
-`Action.WriteLegal`, and it is what `FDatabase.IndexOk.width` records. -/
-def Action.WidthOk : Action → Signature → Prop
+it. It is threaded as `Action.SetWidthOk`, bundled with `Action.SetLegal` into
+`Action.WriteLegal`, and it is what `FDatabase.IndexOk.width` records.
+
+It is the `set` clause of `Spec/Scope.lean`'s `Action.WidthOk` and **not** that check:
+`Action.WidthOk` also constrains every application inside an *expression*, and that half is
+not preserved by `Function.update` at a fresh name — an action applying an as-yet
+undeclared `f` satisfies it vacuously and stops satisfying it the moment `f` is declared,
+which would make `Action.WriteLegal.update` false. The interpreter's chain needs a check
+that survives a declaration, so it carries only the clause it spends. -/
+def Action.SetWidthOk : Action → Signature → Prop
   | .set f args out, sig =>
       ∀ dc, sig f = some dc → args.length = dc.arity ∧ out.length = dc.outArity
   | _, _ => True
 
-@[simp] def Actions.WidthOk : List Action → Signature → Prop
+@[simp] def Actions.SetWidthOk : List Action → Signature → Prop
   | [], _ => True
-  | a :: as, sig => a.WidthOk sig ∧ Actions.WidthOk as sig
+  | a :: as, sig => a.SetWidthOk sig ∧ Actions.SetWidthOk as sig
 
-/-- `Action.SetLegal` and `Action.WidthOk` together: a `set` writes a merge function's
+/-- `Action.SetLegal` and `Action.SetWidthOk` together: a `set` writes a merge function's
 table, at that declaration's column widths. -/
 def Action.WriteLegal (a : Action) (sig : Signature) : Prop :=
-  a.SetLegal sig ∧ a.WidthOk sig
+  a.SetLegal sig ∧ a.SetWidthOk sig
 
 @[simp] def Actions.WriteLegal (as : List Action) (sig : Signature) : Prop :=
-  Actions.SetLegal as sig ∧ Actions.WidthOk as sig
+  Actions.SetLegal as sig ∧ Actions.SetWidthOk as sig
 
 @[simp] def Cmd.WriteLegal : Cmd → Signature → Prop
   | .action a, sig => a.WriteLegal sig
@@ -1320,7 +1658,7 @@ theorem FDatabase.Inv.addEq {d : FDatabase} (h : d.Inv) (a b : Term) :
 
 /-- `hf` is what keeps `ctor` true: a `set` on anything but a merge function would add a row
 whose `out` is not `[]`, which is exactly what `Action.SetLegal` rules out. `hw` is
-`Action.WidthOk`, and it is what `IndexOk.width` records. -/
+`Action.SetWidthOk`, and it is what `IndexOk.width` records. -/
 theorem FDatabase.Inv.addRow {d : FDatabase} (h : d.Inv) {f : FnName} {as vs : List Term}
     (hf : d.sig.mergeOf f ≠ none)
     (hw : ∀ dc, d.sig f = some dc → as.length = dc.arity ∧ vs.length = dc.outArity) :
@@ -2499,25 +2837,37 @@ theorem CmdStep.wf {db db' : Database} (hw : db.WF) {c : Cmd} (h : CmdStep db c 
   obtain ⟨d, heff, hcl⟩ := h
   exact MergeClosure.wf (cmdEffect_wf hw heff) hcl
 
+/-- A whole run preserves `Database.WF`, `CmdStep.wf` per command. It is what pays for
+`Database.Recorded.trans`'s two `WF` premises where the refinement chain composes two
+containments. -/
+theorem ProgramStep.wf {db db' : Database} {p : Program} (h : ProgramStep db p db') :
+    db.WF → db'.WF := by
+  induction h with
+  | nil => exact id
+  | cons hcmd _ ih => exact fun hw => ih (CmdStep.wf hw hcmd)
+
 /-- **A merge collision available at `A` is available at any `C` that *records* it.**
 
-**Open**, and it is one of the four the file header lists. The step's premises are
-`Term.app f (as ++ a) ∈ A.terms` and `CongList A as bs`, and `Recorded` gives neither at
-`C`: the entry term need not be a term of `C` at all, only congruent to one, and
-transporting the key congruence is `Cong.mono_recorded`, whose conclusion lives in `C`
-extended by an operand list rather than in `C`.
+**Open**, and it is one of the three the file header lists, for both of the reasons that
+header gives. The step's premises are `Term.app f (as ++ a) ∈ A.terms` and `CongList A as
+bs`, and `Recorded` gives neither at `C`: the entry term need not be a term of `C` at all,
+only congruent to one, and `Cong.mono_recorded` lands in `C` extended by the two endpoints
+rather than in `C`. `Conservativity.congOn_elim` would take that extension off, but only
+against endpoints `C` already holds, which is the thing not available. So the `collide`
+premises have to be restated at the congruent key `Recorded` supplies.
 
-The missing lemma is the same one `RuleResults.mono_recorded` needs — that a run under a
-*congruent* environment records the run under the original — because the body executes
-under `mergeEnv a b`, and on the `C` side the two colliding outputs are congruent rather
-than equal. `Expr.eval` is not congruence-stable at a primitive, so it is a real
-obligation and not bookkeeping.
+The second obstruction is real and not bookkeeping: the body executes under `mergeEnv a b`,
+and on the `C` side the two colliding outputs are congruent rather than equal, so this
+needs "a run under a congruent environment records the run under the original" — which is
+**false** at a primitive and holds only for primitive-free expressions.
 
 `Database.Recorded.addRow_congr`, which used to supply this, is deleted: it rested on
 `addTerms_eq_self` at a row-shaped `Recorded` that no longer exists. -/
 theorem MergeStep.transport_recorded {A C B : Database} (hc : A.Recorded C)
     (hsig : A.sig = C.sig) (hw : A.WF) (h : MergeStep A B) :
     ∃ D, MergeStep C D ∧ B.Recorded D ∧ B.sig = D.sig := by
+  -- Open: `collide`'s premises want bare `Cong`, and the body's transport wants the
+  -- congruent-environment lemma, which is false at a primitive.
   sorry
 
 /-- `MergeStep.transport_recorded` iterated. -/
@@ -2788,7 +3138,8 @@ theorem mergeSaturateF_contained_aux {n : Nat} : ∀ {d e : FDatabase}, d.Inv �
         exact (MergeClosure.sig hcl₁).symm
       obtain ⟨db₃, hcl₃, hcont₃, hsig₃⟩ :=
         MergeClosure.transport_recorded hcont₁ hsig₁ hround.wf hcl₂
-      exact ⟨db₃, hcl₁.trans hcl₃, hcont₂.trans hcont₃⟩
+      exact ⟨db₃, hcl₁.trans hcl₃, hcont₂.trans hcont₃ (MergeClosure.wf hround.wf hcl₂)
+        (MergeClosure.wf (MergeClosure.wf h.wf hcl₁) hcl₃)⟩
 
 /-- **The merge phase run to a fixpoint stays inside the merge closure.**
 
@@ -3045,12 +3396,13 @@ theorem ProgramStep.mono {A C B : Database} (hc : A.Contained C) (hsig : A.sig =
 
 /-! #### The same, along `Recorded`
 
-The re-keying contract needs every one of the four transport lemmas again, and this is
-where the file's open obligations sit. `ValidSubst.mono_recorded` is **deleted** — see the
-heading above `ValidEnv.mono`, it is false — so `RuleResults.mono_recorded` cannot be
-proved by transporting the same substitution and is left open; `MergeStep.transport_recorded`
-and `Database.Recorded.trans` are open for the reasons their own docstrings give. The three
-lemmas below are the composites, and each is proved from those. -/
+The re-keying contract needs the transport lemmas again, and this is where the file's open
+obligations sit. `ValidSubst.mono_recorded` is **deleted** — see the heading above
+`ValidEnv.mono`, it is false — so `RuleResults.mono_recorded` cannot be proved by
+transporting the same substitution and is left open; `MergeStep.transport_recorded` is open
+for the reason its own docstring gives. `Database.Recorded.trans`, which used to be a third,
+is proved from `Conservativity` under two `WF` premises. The three lemmas below are the
+composites, and each is proved from those. -/
 
 /-- `RuleResults.mono` along `Recorded`.
 
@@ -3058,11 +3410,17 @@ lemmas below are the composites, and each is proved from those. -/
 firing runs under has to be replaced by a congruent one — chosen once for the whole query,
 because `Env.UnionAll` makes the per-pattern choices agree — and then the head has to be
 re-run under it. `Expr.eval` is not congruence-stable at a primitive (`Prim.apply` matches
-on literals), so "a congruent environment gives a recording result" is a real lemma and
-does not exist. It is the same obligation `MergeStep.transport_recorded` needs. -/
+on literals), so "a congruent environment gives a recording result" is a real lemma, and it
+is **false** as stated — `ordering-min` returns a non-congruent answer and `min` returns
+`none`. Its positive half holds for primitive-free expressions, so what this needs is the
+transported positions restricted to those, not a different proof. It is the same obligation
+`MergeStep.transport_recorded` needs. The substitution side *is* available: one witness
+function chosen for the whole query keeps `Env.Union2` joining. -/
 theorem RuleResults.mono_recorded {A C : Database} (hc : A.Recorded C) (hsig : A.sig = C.sig)
     (henv : A.env = C.env) {r : Rule} {d : Database} (hd : d ∈ RuleResults A r) :
     ∃ D ∈ RuleResults C r, d.Recorded D ∧ D.sig = C.sig := by
+  -- Open: needs the head re-run under a congruent environment, which is false at a
+  -- primitive and holds only for primitive-free expressions.
   sorry
 
 /-- `RunRules.mono` along `Recorded`. -/
@@ -3786,14 +4144,14 @@ theorem execProgramM_contained_aux {p : Program} : ∀ {d d' : FDatabase}, d.Inv
     obtain ⟨hlegal, hunused, hmerges', hnext⟩ := hp
     obtain ⟨db₁, hstep₁, hcont₁, hsig₁, henv₁, hrules₁⟩ :=
       execCmdM_contained' h hlegal hmerges hrules hd₁
+    have hinv₁ : d₁.Inv := h.execCmdM hlegal hmerges hunused hrules hd₁
     obtain ⟨db₂, hstep₂, hcont₂⟩ :=
-      ih (h.execCmdM hlegal hmerges hunused hrules hd₁)
-        (by rw [execCmdM_sig hd₁]; exact hmerges')
+      ih hinv₁ (by rw [execCmdM_sig hd₁]; exact hmerges')
         (execCmdM_rulesLegal hlegal hunused hrules hd₁) (hnext d₁ hd₁) hcs
     obtain ⟨db₃, hstep₃, hcont₃, hsig₃, -, -⟩ :=
-      ProgramStep.mono_recorded hcont₁ hsig₁ henv₁ hrules₁
-        (h.execCmdM hlegal hmerges hunused hrules hd₁).wf hstep₂
-    exact ⟨db₃, .cons hstep₁ hstep₃, hcont₂.trans hcont₃⟩
+      ProgramStep.mono_recorded hcont₁ hsig₁ henv₁ hrules₁ hinv₁.wf hstep₂
+    exact ⟨db₃, .cons hstep₁ hstep₃, hcont₂.trans hcont₃ (hstep₂.wf hinv₁.wf)
+      (hstep₃.wf (CmdStep.wf h.wf hstep₁))⟩
 
 /-- **The interpreter's answer to a whole program is contained in one the specification
 reaches.**
