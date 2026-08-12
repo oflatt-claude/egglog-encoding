@@ -463,9 +463,11 @@ Each observation contains target and workload
 provenance, exact cache coordinates, status, wall time, peak RSS, and failure
 details. A top-level report schema version covers both the persisted shape and
 measurement semantics, so methodology changes cannot silently reuse stale
-measurements. Successful observations also contain the version-2 per-ruleset
-timing summary: name plus Search, Apply, Unattributed, Merge, and Rebuild
-nanoseconds.
+measurements. Successful observations also contain the version-3 timing summary:
+per rule set, its name plus Assembly, Search, Apply, Unattributed, Merge, and
+Rebuild nanoseconds; and the phases that run outside every rule set — parse,
+typecheck, desugar, encode, declare-and-compile, top-level actions, schedule, and
+proof extraction.
 
 Timed-out rows have null wall time, peak RSS, and timing summary. Failed rows
 have no timing summary and retain whatever process measurements the operating

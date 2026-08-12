@@ -342,7 +342,6 @@ pub struct EGraph {
     proof_state: EncodingState,
     /// In proof mode, this is the program before proof instrumentation and the version we use for proof checking.
     proof_check_program: Vec<ResolvedNCommand>,
-    /// Which row of its sort's shared table each global occupies.
     /// Where wall time outside rule-set execution went.
     phase_timings: phase_timers::PhaseTimings,
 }
@@ -441,20 +440,27 @@ impl Default for EGraph {
 
 impl EGraph {
     /// Register the globals a program declares. `remove_globals` runs after
-    /// typechecking, so nothing else registers what it declares, and it hoists a
-    /// shared table out of any `fail` wrapping the binding that declared it, so
-    /// every declaration is reachable here.
+    /// typechecking, so nothing else registers what it declares.
+    ///
+    /// Descends into a `fail`: global removal hoists a *shared table* out of one,
+    /// but a hand-written `:internal-let` function stays inside, and an
+    /// unregistered one reaches the encoder as a function lookup it asserts
+    /// against.
     fn register_declared_globals(&mut self, commands: &[ResolvedNCommand]) {
         for command in commands {
-            if let GenericNCommand::Function(fdecl) = command
-                && fdecl.internal_let
-                && !fdecl.internal_global_table
-                && let Some(sort) = self.type_info.sorts.get(fdecl.schema.output())
-            {
-                // A shared table is known from the slots that named it; only a
-                // global with a function of its own needs registering here.
-                let sort = sort.clone();
-                self.type_info.global_sorts.insert(fdecl.name.clone(), sort);
+            match command {
+                GenericNCommand::Function(fdecl)
+                    if fdecl.internal_let && !fdecl.internal_global_table =>
+                {
+                    // A shared table is known from the slots that named it; only a
+                    // global with a function of its own needs registering here.
+                    if let Some(sort) = self.type_info.sorts.get(fdecl.schema.output()) {
+                        let sort = sort.clone();
+                        self.type_info.global_sorts.insert(fdecl.name.clone(), sort);
+                    }
+                }
+                GenericNCommand::Fail(_, wrapped) => self.register_declared_globals(wrapped),
+                _ => {}
             }
         }
     }
@@ -1227,11 +1233,12 @@ impl EGraph {
         Ok(())
     }
 
-    /// Extract rows of a table using the default cost model with name sym
-    /// The `include_output` parameter controls whether the output column is always extracted
-    /// For functions, the output column is usually useful
     /// The row a global was written to, shown under the global's own name rather
     /// than the shared table's. Empty when `n` is 0.
+    ///
+    /// The row is keyed by the global's slot id. Under the term/proof encoding the
+    /// table's name is also the term relation's, whose rows carry the value as a
+    /// further child rather than as the output, so both shapes are read here.
     fn global_row_to_dag(
         &self,
         global: &str,
@@ -1244,13 +1251,18 @@ impl EGraph {
             .into_iter()
             .zip(values.expect("asked for the output column"))
             .find_map(|(key, value)| match termdag.get(key) {
-                Term::App(_, children) if children.len() == 1 => {
-                    matches!(termdag.get(children[0]), Term::Lit(Literal::Int(k)) if *k == id)
-                        .then_some(value)
+                Term::App(_, children) => {
+                    let (slot, rest) = children.split_first()?;
+                    matches!(termdag.get(*slot), Term::Lit(Literal::Int(k)) if *k == id)
+                        .then(|| (rest.to_vec(), value))
                 }
                 _ => None,
             });
-        let named = termdag.app(global.to_owned(), vec![]);
+        let children = bound
+            .as_ref()
+            .map(|(rest, _)| rest.clone())
+            .unwrap_or_default();
+        let named = termdag.app(global.to_owned(), children);
         let function = self
             .functions
             .get(table)
@@ -1261,7 +1273,7 @@ impl EGraph {
             termdag,
             bound
                 .filter(|_| n > 0)
-                .map(|value| (named, value))
+                .map(|(_, value)| (named, value))
                 .into_iter()
                 .collect(),
         ))
@@ -4552,6 +4564,49 @@ mod tests {
                 .parse_and_run_program(None, &desugared)
                 .unwrap_or_else(|err| panic!("replay failed: {err}\n{desugared}"));
         }
+    }
+
+    /// A global is reported under its own name in every mode. Under the encoding
+    /// the shared table's name is also its term relation's, whose rows carry the
+    /// value as a further child, so the row is read differently there.
+    #[test]
+    fn test_globals_are_reported_under_their_own_name_when_encoded() {
+        for mut egraph in [EGraph::default(), EGraph::new_with_term_encoding()] {
+            let out = egraph
+                .parse_and_run_program(
+                    None,
+                    "(datatype Math (Num i64))
+                     (let $b (Num 2))
+                     (print-function $b 10)",
+                )
+                .unwrap()
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect::<Vec<_>>();
+            assert!(out[0].contains("($b"), "{out:?}");
+            assert!(out[0].contains("(Num 2)"), "{out:?}");
+        }
+    }
+
+    /// A `:internal-let` function declared inside a `fail` still has to be
+    /// registered: global removal hoists a shared table out of one, but not a
+    /// hand-written function, and an unregistered one reaches the encoder as a
+    /// function lookup it asserts against.
+    #[test]
+    fn test_a_global_declared_inside_fail_is_registered() {
+        let mut egraph = EGraph::new_with_term_encoding();
+        egraph
+            .parse_and_run_program(
+                None,
+                "(datatype Math (Num i64))
+                 (fail (function foo () i64 :no-merge :internal-let) (check (Num 99)))
+                 (set (foo) 3)
+                 (rule ((Num 1)) ((Num (foo))))
+                 (Num 1)
+                 (run 1)
+                 (check (Num 3))",
+            )
+            .unwrap();
     }
 
     /// `print-function` and `get-size!` report a global under its own name, and do

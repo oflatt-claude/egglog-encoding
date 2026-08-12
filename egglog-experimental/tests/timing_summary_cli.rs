@@ -17,7 +17,7 @@ fn temporary_directory() -> PathBuf {
 }
 
 #[test]
-fn dd_timing_summary_v3_splits_search_and_apply_for_every_named_ruleset() {
+fn dd_timing_summary_splits_search_and_apply_for_every_named_ruleset() {
     let directory = temporary_directory();
     let program_path = directory.join("program.egg");
     let summary_path = directory.join("summary.json");

@@ -95,7 +95,7 @@ def make_timing_summary(
     schedule_ns: int = 0,
     proof_extraction_ns: int = 0,
 ) -> TimingSummaryRecord:
-    """Construct a valid v3 timing-summary fixture."""
+    """Construct a valid timing-summary fixture."""
 
     return {
         "schema_version": 3,

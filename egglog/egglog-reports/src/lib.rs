@@ -156,8 +156,9 @@ pub struct RulesetTiming {
 }
 
 impl RulesetTiming {
+    /// Every phase of the rule set's time, assembly included.
     pub fn total(self) -> Duration {
-        self.pre_merge.total() + self.merge + self.rebuild
+        self.assembly + self.pre_merge.total() + self.merge + self.rebuild
     }
 
     fn union(&mut self, other: Self) {
@@ -256,6 +257,7 @@ impl Display for RunReport {
         }
 
         for (ruleset, timing) in &self.ruleset_timings {
+            let assembly_time = timing.assembly.as_secs_f64();
             let merge_time = timing.merge.as_secs_f64();
             let rebuild_time = timing.rebuild.as_secs_f64();
             match timing.pre_merge {
@@ -266,7 +268,7 @@ impl Display for RunReport {
                 } => {
                     writeln!(
                         f,
-                        "Ruleset {ruleset}: search {:.3}s, apply {:.3}s, unattributed {:.3}s, merge {merge_time:.3}s, rebuild {rebuild_time:.3}s",
+                        "Ruleset {ruleset}: assembly {assembly_time:.3}s, search {:.3}s, apply {:.3}s, unattributed {:.3}s, merge {merge_time:.3}s, rebuild {rebuild_time:.3}s",
                         search.as_secs_f64(),
                         apply.as_secs_f64(),
                         unattributed.as_secs_f64(),
@@ -275,7 +277,7 @@ impl Display for RunReport {
                 PreMergeTiming::Combined { elapsed } => {
                     writeln!(
                         f,
-                        "Ruleset {ruleset}: pre-merge {:.3}s, merge {merge_time:.3}s, rebuild {rebuild_time:.3}s",
+                        "Ruleset {ruleset}: assembly {assembly_time:.3}s, pre-merge {:.3}s, merge {merge_time:.3}s, rebuild {rebuild_time:.3}s",
                         elapsed.as_secs_f64(),
                     )?;
                 }
@@ -351,9 +353,7 @@ impl RunReport {
     pub fn total_ruleset_time(&self) -> Duration {
         self.ruleset_timings
             .values()
-            .map(|timing| {
-                timing.assembly + timing.pre_merge.total() + timing.merge + timing.rebuild
-            })
+            .map(|timing| timing.total())
             .sum()
     }
 
@@ -502,7 +502,7 @@ mod tests {
     }
 
     #[test]
-    fn timing_summary_v3_exact_json_is_sorted() {
+    fn timing_summary_exact_json_is_sorted() {
         let mut report = RunReport::default();
         report.ruleset_timings.insert(
             "zeta".into(),
@@ -553,7 +553,7 @@ mod tests {
     }
 
     #[test]
-    fn timing_summary_v3_empty_report_golden() {
+    fn timing_summary_empty_report_golden() {
         let summary = TimingSummary::from_run_report(&RunReport::default()).unwrap();
         let json = serde_json::to_string(&summary).unwrap();
 
@@ -564,7 +564,7 @@ mod tests {
     }
 
     #[test]
-    fn timing_summary_v3_aggregates_every_iteration_of_a_ruleset() {
+    fn timing_summary_aggregates_every_iteration_of_a_ruleset() {
         let mut report = RunReport::default();
         report.add_iteration(
             "timed",
@@ -617,7 +617,7 @@ mod tests {
     }
 
     #[test]
-    fn timing_summary_v3_does_not_truncate_rulesets() {
+    fn timing_summary_does_not_truncate_rulesets() {
         let mut report = RunReport::default();
         for index in (0..40).rev() {
             report.ruleset_timings.insert(
@@ -637,7 +637,7 @@ mod tests {
     }
 
     #[test]
-    fn timing_summary_v3_saturates_nanoseconds_to_u64() {
+    fn timing_summary_saturates_nanoseconds_to_u64() {
         let mut report = RunReport::default();
         report.ruleset_timings.insert(
             "long".into(),
@@ -658,7 +658,7 @@ mod tests {
     }
 
     #[test]
-    fn timing_summary_v3_rejects_unavailable_split_timing() {
+    fn timing_summary_rejects_unavailable_split_timing() {
         let mut report = RunReport::default();
         report.ruleset_timings.insert(
             "default".into(),
