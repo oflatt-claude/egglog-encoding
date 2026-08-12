@@ -374,6 +374,7 @@ theorem empty : WF Database.empty where
   eqsRefl := by simp
   subtermClosed := by simp
   envInTerms := by simp [Database.empty]
+  litsIsolated := by simp [Database.empty, LitsIsolated]
 
 theorem addTerm {db : Database} (h : WF db) (t : Term) : WF (db.addTerm t) where
   eqsRefl := by
@@ -388,13 +389,19 @@ theorem addTerm {db : Database} (h : WF db) (t : Term) : WF (db.addTerm t) where
     · exact Or.inr (Term.subterms_subset_of_mem hs hu)
   envInTerms b hb := by
     simp only [addTerm_terms]; exact Or.inl (h.envInTerms b hb)
+  litsIsolated := by
+    rintro p (hp | ⟨s, -, rfl⟩)
+    exacts [h.litsIsolated p hp, fun _ => rfl]
 
 theorem addTerms {db : Database} (h : WF db) (ts : List Term) : WF (db.addTerms ts) := by
   induction ts generalizing db with
   | nil => exact h
   | cons t ts ih => exact ih (h.addTerm t)
 
-theorem addEq {db : Database} (h : WF db) (a b : Term) : WF (db.addEq a b) where
+/-- `hlit` is what `evalAction`'s `union` check pays for: an equation with a literal
+endpoint is reflexive, and `Database.LitsIsolated` survives. -/
+theorem addEq {db : Database} (h : WF db) (a b : Term)
+    (hlit : a.isLit ∨ b.isLit → a = b) : WF (db.addEq a b) where
   eqsRefl s hs := Set.mem_insert_of_mem _ (((h.addTerm a).addTerm b).eqsRefl s (by
     simpa only [addTerm_terms, ← Set.union_assoc] using
       (by simpa only [addEq_terms, ← Set.union_assoc] using hs)))
@@ -406,6 +413,10 @@ theorem addEq {db : Database} (h : WF db) (a b : Term) : WF (db.addEq a b) where
     · exact Or.inr (Term.subterms_subset_of_mem hs hu)
   envInTerms b hb := by
     simp only [addEq_terms]; exact Or.inl (Or.inl (h.envInTerms b hb))
+  litsIsolated := by
+    rintro p (rfl | hp)
+    · exact hlit
+    · exact ((h.addTerm a).addTerm b).litsIsolated p hp
 
 theorem sUnion {db : Database} (h : WF db) {S : Set Database}
     (hS : ∀ d ∈ S, WF d) : WF (db.sUnion S) where
@@ -424,6 +435,11 @@ theorem sUnion {db : Database} (h : WF db) {S : Set Database}
         (Set.subset_union_of_subset_right (Set.subset_biUnion_of_mem hd) _)
   envInTerms b hb := by
     simp only [sUnion_terms]; exact Or.inl (h.envInTerms b hb)
+  litsIsolated := by
+    rintro p (hp | hp)
+    · exact h.litsIsolated p hp
+    · obtain ⟨d, hd, hp⟩ := Set.mem_iUnion₂.mp hp
+      exact (hS d hd).litsIsolated p hp
 
 end WF
 end Database

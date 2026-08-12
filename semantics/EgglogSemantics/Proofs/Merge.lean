@@ -33,11 +33,17 @@ Conservativity does *not* rescue the three above, and for two different reasons.
   terms of `d₂` — which `Recorded` does not supply, since the key `d₁` searched at need not
   be a term of `d₂` at all. Both have to be restated at the congruent key `Recorded`
   hands over, and that is a change to what they say, not to how they are proved.
-* "a run under a congruent environment records the run under the original" is **false**:
-  `Prim.apply` matches on literals, so `ordering-min` returns a non-congruent answer and
-  `min` returns `none`. The positive half holds — a primitive-free expression is
-  congruence-stable in any subterm-closed ambient — so the two transports that spend it
-  need their transported positions restricted to primitive-free expressions.
+* "a run under a congruent environment records the run under the original" is **false**,
+  and now for exactly one reason. `min`/`max` match on literals, and that half is fixed:
+  `evalAction` refuses a `union` on a literal, so `Database.WF.litsIsolated` holds and
+  `Cong.eq_of_isLit` makes a literal's class a singleton — `Prim.apply_cong` is the
+  resulting stability. What is left is `ordering-min`/`ordering-max`, which choose by
+  `Term.blt`, a *structural* order, where egglog chooses by e-class id. `union (f 1)
+  (g 1)` sends `ordering-min (f 1) (f 2)` to `f 1` and `ordering-min (g 1) (f 2)` to
+  `f 2`, which are not congruent, with no literal anywhere and every state well formed.
+  No condition on the database repairs it; only restricting the transported positions to
+  ordering-free expressions does, and `Encoding/Encode.lean`'s `mergeBody`/`mergeResult`
+  are built from exactly these two.
 
 Also **false**, and so restated rather than left open, is the same-`σ`, same-`d₂` family:
 `Cong.mono_recorded` in its old shape (`Cong d₁ a b → Cong d₂ a b`) and with it
@@ -1230,7 +1236,7 @@ theorem evalAction_mono {db D d : Database} (hc : db.Contained D)
     ∃ D', evalAction D a = some D' ∧ d.Contained D' ∧ d.sig = D'.sig ∧
       d.env = D'.env := by
   rcases evalAction_eq_some h with ⟨e, t, rfl, hv, rfl⟩ | ⟨v, e, t, rfl, hv, rfl⟩ |
-    ⟨e₁, e₂, t₁, t₂, rfl, hv₁, hv₂, rfl⟩ | ⟨f, args, out, as, vs, rfl, hv₁, hv₂, rfl⟩
+    ⟨e₁, e₂, t₁, t₂, rfl, hv₁, hv₂, hlit, rfl⟩ | ⟨f, args, out, as, vs, rfl, hv₁, hv₂, rfl⟩
   · refine ⟨D.addTerm t, ?_, hc.addTerm_mono t, ?_, ?_⟩
     · simp [evalAction, ← hsig, ← henv, hv]
     · simpa using hsig
@@ -1241,7 +1247,8 @@ theorem evalAction_mono {db D d : Database} (hc : db.Contained D)
     · simpa using hsig
     · simp [henv]
   · refine ⟨D.addEq t₁ t₂, ?_, hc.addEq_mono t₁ t₂, ?_, ?_⟩
-    · simp [evalAction, ← hsig, ← henv, hv₁, hv₂]
+    · simp only [not_or, Bool.not_eq_true] at hlit
+      simp [evalAction, ← hsig, ← henv, hv₁, hv₂, hlit.1, hlit.2]
     · simpa using hsig
     · simpa using henv
   · refine ⟨D.addTerm (.app f (as ++ vs)), ?_, hc.addTerm_mono _, ?_, ?_⟩
@@ -1278,7 +1285,7 @@ theorem evalAction_mono_recorded {db D d : Database} (hc : db.Recorded D)
     ∃ D', evalAction D a = some D' ∧ d.Recorded D' ∧ d.sig = D'.sig ∧
       d.env = D'.env := by
   rcases evalAction_eq_some h with ⟨e, t, rfl, hv, rfl⟩ | ⟨v, e, t, rfl, hv, rfl⟩ |
-    ⟨e₁, e₂, t₁, t₂, rfl, hv₁, hv₂, rfl⟩ | ⟨f, args, out, as, vs, rfl, hv₁, hv₂, rfl⟩
+    ⟨e₁, e₂, t₁, t₂, rfl, hv₁, hv₂, hlit, rfl⟩ | ⟨f, args, out, as, vs, rfl, hv₁, hv₂, rfl⟩
   · refine ⟨D.addTerm t, ?_, hc.addTerm_mono t, ?_, ?_⟩
     · simp [evalAction, ← hsig, ← henv, hv]
     · simpa using hsig
@@ -1289,7 +1296,8 @@ theorem evalAction_mono_recorded {db D d : Database} (hc : db.Recorded D)
     · simpa using hsig
     · simp [henv]
   · refine ⟨D.addEq t₁ t₂, ?_, hc.addEq_mono t₁ t₂, ?_, ?_⟩
-    · simp [evalAction, ← hsig, ← henv, hv₁, hv₂]
+    · simp only [not_or, Bool.not_eq_true] at hlit
+      simp [evalAction, ← hsig, ← henv, hv₁, hv₂, hlit.1, hlit.2]
     · simpa using hsig
     · simpa using henv
   · refine ⟨D.addTerm (.app f (as ++ vs)), ?_, hc.addTerm_mono _, ?_, ?_⟩
@@ -1427,7 +1435,7 @@ what has to be said about it is a property of the `FDatabase` and is said here d
 theorem Database.WF.setEnvRules {db : Database} (hw : db.WF) {σ : Env} {R : Set Rule}
     (hσ : ∀ b ∈ σ, b.2 ∈ db.terms) :
     ({ db with env := σ, rules := R } : Database).WF := by
-  refine ⟨fun t ht => ?_, fun t ht => ?_, fun b hb => ?_⟩
+  refine ⟨fun t ht => ?_, fun t ht => ?_, fun b hb => ?_, hw.litsIsolated⟩
   · rw [Database.terms_setEnvRules] at ht; exact hw.eqsRefl t ht
   · rw [Database.terms_setEnvRules] at ht ⊢; exact hw.subtermClosed t ht
   · rw [Database.terms_setEnvRules]; exact hσ b hb
@@ -1580,7 +1588,7 @@ theorem WF.setEnvRules {d : FDatabase} (h : d.WF) {σ : Env} {rs : List Rule}
     (hσ : ∀ b ∈ σ, b.2 ∈ d.toDatabase.terms) :
     ({ d with env := σ, rules := rs } : FDatabase).WF := by
   change ({ d.toDatabase with env := σ, rules := { r | r ∈ rs } } : Database).WF
-  refine ⟨fun t htm => ?_, fun t htm => ?_, fun b hb => ?_⟩
+  refine ⟨fun t htm => ?_, fun t htm => ?_, fun b hb => ?_, h.litsIsolated⟩
   · rw [Database.terms_setEnvRules] at htm; exact h.eqsRefl t htm
   · rw [Database.terms_setEnvRules] at htm ⊢; exact h.subtermClosed t htm
   · rw [Database.terms_setEnvRules]; exact hσ b hb
@@ -1642,9 +1650,9 @@ theorem FDatabase.Inv.addTerms {d : FDatabase} (h : d.Inv) (ts : List Term) :
   | nil => exact h
   | cons t ts ih => exact ih (h.addTerm t)
 
-theorem FDatabase.Inv.addEq {d : FDatabase} (h : d.Inv) (a b : Term) :
-    (d.addEq a b).Inv where
-  wf := h.wf.addEq h.eqs a b
+theorem FDatabase.Inv.addEq {d : FDatabase} (h : d.Inv) (a b : Term)
+    (hlit : a.isLit ∨ b.isLit → a = b) : (d.addEq a b).Inv where
+  wf := h.wf.addEq h.eqs a b hlit
   eqs := h.eqs.addEq a b
   index := by
     have hbase := (h.addTerm a).addTerm b
@@ -1705,9 +1713,13 @@ theorem FDatabase.Inv.execAction {d d' : FDatabase} (h : d.Inv) {a : Action}
       exact FDatabase.mem_addTerm_terms.mpr (Or.inl ((Term.mem_subtermList _).mpr (.refl _)))
     · exact hbase.wf.envInTerms b hb
   | .union e₁ e₂ =>
-    simp only [Egglog.execAction, Option.bind_eq_some_iff, Option.map_eq_some_iff] at hs
-    obtain ⟨t₁, -, t₂, -, rfl⟩ := hs
-    exact h.addEq t₁ t₂
+    simp only [Egglog.execAction, Option.bind_eq_some_iff] at hs
+    obtain ⟨t₁, -, t₂, -, hs⟩ := hs
+    split at hs
+    · simp at hs
+    · rename_i hlit
+      simp only [Option.some.injEq] at hs
+      exact hs ▸ h.addEq t₁ t₂ (by simp_all)
   | .set f args out =>
     simp only [Egglog.execAction, Option.bind_eq_some_iff, Option.map_eq_some_iff] at hs
     obtain ⟨ts, hts, vs, hvs, rfl⟩ := hs
@@ -1976,7 +1988,8 @@ theorem contained_addTerm {d : FDatabase} {t : Term} :
 /-- The action interpreter only adds, at the list level. -/
 theorem execAction_lists {d e : FDatabase} {a : Action} (h : execAction d a = some e) :
     (∀ t ∈ d.terms, t ∈ e.terms) ∧ (∀ p ∈ d.eqs, p ∈ e.eqs) := by
-  rcases execAction_eq_some h with ⟨t, rfl⟩ | ⟨v, t, rfl⟩ | ⟨t₁, t₂, rfl⟩ | ⟨f, as, vs, rfl⟩ <;>
+  rcases execAction_eq_some h with ⟨t, rfl⟩ | ⟨v, t, rfl⟩ | ⟨t₁, t₂, -, rfl⟩ |
+    ⟨f, as, vs, rfl⟩ <;>
     exact ⟨fun x hx => by
         simp [FDatabase.addTerm, FDatabase.addEq, FDatabase.addRow, List.mem_dedup, hx],
       fun q hq => by
@@ -1984,7 +1997,8 @@ theorem execAction_lists {d e : FDatabase} {a : Action} (h : execAction d a = so
 
 theorem execAction_rows {d e : FDatabase} {a : Action} (h : execAction d a = some e) :
     ∀ r ∈ d.rows, r ∈ e.rows := by
-  rcases execAction_eq_some h with ⟨t, rfl⟩ | ⟨v, t, rfl⟩ | ⟨t₁, t₂, rfl⟩ | ⟨f, as, vs, rfl⟩ <;>
+  rcases execAction_eq_some h with ⟨t, rfl⟩ | ⟨v, t, rfl⟩ | ⟨t₁, t₂, -, rfl⟩ |
+    ⟨f, as, vs, rfl⟩ <;>
     intro r hr <;>
     simp [FDatabase.addTerm, FDatabase.addEq, FDatabase.addRow, List.mem_dedup, hr]
 
@@ -2034,9 +2048,11 @@ theorem execAction_sig {d e : FDatabase} {a : Action} (h : execAction d a = some
       cases hv₂ : Expr.eval d.sig e₂ d.env with
       | none => rw [execAction, hv₁, hv₂] at h; simp at h
       | some t₂ =>
-        rw [execAction, hv₁, hv₂, Option.bind_some, Option.map_some,
-          Option.some.injEq] at h
-        exact h ▸ rfl
+        rw [execAction, hv₁, hv₂, Option.bind_some, Option.bind_some] at h
+        split at h
+        · simp at h
+        · simp only [Option.some.injEq] at h
+          exact h ▸ rfl
   | set f args out =>
     cases hv₁ : Expr.evalList d.sig args d.env with
     | none => rw [execAction, hv₁] at h; simp at h
@@ -2859,7 +2875,7 @@ premises have to be restated at the congruent key `Recorded` supplies.
 The second obstruction is real and not bookkeeping: the body executes under `mergeEnv a b`,
 and on the `C` side the two colliding outputs are congruent rather than equal, so this
 needs "a run under a congruent environment records the run under the original" — which is
-**false** at a primitive and holds only for primitive-free expressions.
+**false** at `ordering-min`/`ordering-max`, and only there; see the file header.
 
 `Database.Recorded.addRow_congr`, which used to supply this, is deleted: it rested on
 `addTerms_eq_self` at a row-shaped `Recorded` that no longer exists. -/
@@ -2867,7 +2883,7 @@ theorem MergeStep.transport_recorded {A C B : Database} (hc : A.Recorded C)
     (hsig : A.sig = C.sig) (hw : A.WF) (h : MergeStep A B) :
     ∃ D, MergeStep C D ∧ B.Recorded D ∧ B.sig = D.sig := by
   -- Open: `collide`'s premises want bare `Cong`, and the body's transport wants the
-  -- congruent-environment lemma, which is false at a primitive.
+  -- congruent-environment lemma, which is false at `ordering-min`/`ordering-max`.
   sorry
 
 /-- `MergeStep.transport_recorded` iterated. -/
@@ -3409,18 +3425,18 @@ composites, and each is proved from those. -/
 **Open.** `ValidQuerySubst.mono_recorded` is false at the same `σ`, so the substitution the
 firing runs under has to be replaced by a congruent one — chosen once for the whole query,
 because `Env.UnionAll` makes the per-pattern choices agree — and then the head has to be
-re-run under it. `Expr.eval` is not congruence-stable at a primitive (`Prim.apply` matches
-on literals), so "a congruent environment gives a recording result" is a real lemma, and it
-is **false** as stated — `ordering-min` returns a non-congruent answer and `min` returns
-`none`. Its positive half holds for primitive-free expressions, so what this needs is the
-transported positions restricted to those, not a different proof. It is the same obligation
+re-run under it. `Expr.eval` is not congruence-stable at `ordering-min`/`ordering-max`, so
+"a congruent environment gives a recording result" is a real lemma, and it is **false** as
+stated: put `ordering-max` in the *action* and no substitution on the implementation side
+repairs it. What this needs is the transported positions restricted to ordering-free
+expressions, not a different proof, and it is the same obligation
 `MergeStep.transport_recorded` needs. The substitution side *is* available: one witness
 function chosen for the whole query keeps `Env.Union2` joining. -/
 theorem RuleResults.mono_recorded {A C : Database} (hc : A.Recorded C) (hsig : A.sig = C.sig)
     (henv : A.env = C.env) {r : Rule} {d : Database} (hd : d ∈ RuleResults A r) :
     ∃ D ∈ RuleResults C r, d.Recorded D ∧ D.sig = C.sig := by
-  -- Open: needs the head re-run under a congruent environment, which is false at a
-  -- primitive and holds only for primitive-free expressions.
+  -- Open: needs the head re-run under a congruent environment, which is false at
+  -- `ordering-min`/`ordering-max` and holds only for ordering-free expressions.
   sorry
 
 /-- `RunRules.mono` along `Recorded`. -/
@@ -3718,7 +3734,7 @@ theorem Inv.union {d e : FDatabase} (hd : d.Inv) (he : e.Inv) (hsig : e.sig = d.
   have hce : e.toDatabase.Contained (d.union e).toDatabase :=
     toDatabase_contained_of_lists (fun _ hx => mem_terms_union.mpr (Or.inr hx))
       (fun _ hx => mem_eqs_union.mpr (Or.inr hx))
-  refine ⟨⟨eqsRefl _, fun t ht s hs => ?_, fun b hb => ?_⟩,
+  refine ⟨⟨eqsRefl _, fun t ht s hs => ?_, fun b hb => ?_, fun p hp => ?_⟩,
     EqsInTerms.union hd.eqs he.eqs, ⟨fun r hr hm => ?_, fun r hr hm => ?_,
       fun r hr dc hdc hm => ?_⟩⟩
   · rw [FDatabase.mem_toDatabase_terms] at ht
@@ -3731,6 +3747,13 @@ theorem Inv.union {d e : FDatabase} (hd : d.Inv) (he : e.Inv) (hsig : e.sig = d.
       exact FDatabase.mem_toDatabase_terms.mp
         (he.wf.subtermClosed t (FDatabase.mem_toDatabase_terms.mpr ht') hs)
   · exact hcd.terms (hd.wf.envInTerms b hb)
+  · rcases FDatabase.mem_toDatabase_eqs.mp hp with ⟨heq, -⟩ | ⟨hp', -, -⟩
+    · exact fun _ => heq
+    · rcases mem_eqs_union.mp hp' with hp'' | hp''
+      · exact hd.wf.litsIsolated p
+          ((FDatabase.mem_toDatabase_eqs_of_eqsInTerms hd.eqs).mpr (Or.inr hp''))
+      · exact he.wf.litsIsolated p
+          ((FDatabase.mem_toDatabase_eqs_of_eqsInTerms he.eqs).mpr (Or.inr hp''))
   · rcases mem_rows_union.mp hr with hr' | hr'
     · exact ⟨(hd.index.ctor r hr' hm).1,
         mem_terms_union.mpr (Or.inl (hd.index.ctor r hr' hm).2)⟩
@@ -3849,8 +3872,11 @@ theorem execAction_rules {d e : FDatabase} {a : Action} (h : execAction d a = so
   | union e₁ e₂ =>
     rw [execAction] at h
     obtain ⟨t₁, -, h'⟩ := Option.bind_eq_some_iff.mp h
-    obtain ⟨t₂, -, rfl⟩ := Option.map_eq_some_iff.mp h'
-    rfl
+    obtain ⟨t₂, -, h''⟩ := Option.bind_eq_some_iff.mp h'
+    split at h''
+    · simp at h''
+    · simp only [Option.some.injEq] at h''
+      exact h'' ▸ rfl
   | set f args out =>
     rw [execAction] at h
     obtain ⟨ts, -, h'⟩ := Option.bind_eq_some_iff.mp h

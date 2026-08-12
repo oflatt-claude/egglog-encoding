@@ -328,7 +328,8 @@ def execAction (d : FDatabase) : Action → Option FDatabase
   | .letBind v e => (e.eval d.sig d.env).map fun t =>
       { d.addTerm t with env := (v, t) :: d.env }
   | .union e₁ e₂ =>
-      (e₁.eval d.sig d.env).bind fun t₁ => (e₂.eval d.sig d.env).map fun t₂ => d.addEq t₁ t₂
+      (e₁.eval d.sig d.env).bind fun t₁ => (e₂.eval d.sig d.env).bind fun t₂ =>
+        if t₁.isLit || t₂.isLit then none else some (d.addEq t₁ t₂)
   | .set f args out => (Expr.evalList d.sig args d.env).bind fun as =>
       (Expr.evalList d.sig out d.env).map fun vs => d.addRow f as vs
 

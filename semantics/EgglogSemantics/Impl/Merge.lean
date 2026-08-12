@@ -21,12 +21,13 @@ interpreter reaches exactly the states the spec does, in both directions. Here t
 admits several, so only one direction survives: the interpreter's result is one the spec
 reaches. `Proofs/Merge.lean`'s `execM_contained` states what is available instead.
 
-**The merge phase is one pass, not a fixpoint.** `mergeRound` fires each collision among
-the pre-pass rows once and is structurally terminating, which is sound because `CmdStep`
-ends in a `MergeClosure` with no `MergeSaturated` requirement — a prefix of the closure is
-a reachable state. Saturation is *now* reachable, since `min` and `max` became `Prim`s and
-merging is an idempotent join again; `mergeSaturateF` says what switching to it would
-buy and cost.
+**The merge phase is a pass iterated to a fixpoint.** `mergeRound` is one pass — a rebuild, then
+each collision among the pre-pass rows fired once, structurally terminating — and `execCmdM` runs
+`mergeSaturateF` over it, as `merge_all` does. A single pass would also be sound, since `CmdStep`
+ends in a `MergeClosure` with no `MergeSaturated` requirement and a prefix of the closure is a
+reachable state; it is not *enough*, because a rule can read a value and one pass leaves three
+colliding entries at a key class as two. Saturating terminates only because the pass deletes the
+rows it merged — `mergeSaturateF` has the argument.
 
 What no longer differs is **evaluation, e-matching or actions**: with reading confined to
 the query, `Expr.eval` takes a signature and resolves primitives, so `Impl/Interp.lean`'s
@@ -82,8 +83,8 @@ value column skips the body and the overwrite, dropping `r₁` and leaving `r₂
 it stands (`noConflict`). Nothing else is ever removed:
 
 * **never a term and never an equality** — only `rows` is rewritten;
-* **never a row of a `.union` function** — the rewrite runs only inside the `.merge` branch
-  and touches only `r₁` and `r₂`, whose function is that branch's;
+* **never a constructor's row**, which the whole congruence argument rests on — the rewrite runs
+  only inside the `.merge` branch and touches only `r₁` and `r₂`, whose function is that branch's;
 * **never a row of a `.noMerge` function** — same reason, and it matters: `:no-merge` is
   how the proof encoding declares its proof nodes (`… → Unit :no-merge`, deliberately so
   two structurally equal proofs are never merged), and deleting one would delete a proof.
@@ -291,11 +292,11 @@ merge output, and re-keying values would put the implementation's rows outside
 `Database.Out` — the relation `Spec/Congruence.lean`'s `Database.Recorded` reads them
 through.
 
-**Constructor rows are left alone**: a constructor row is `⟨f, as, [.app f as]⟩`, the
-index's reading of the term `f(as)`, and re-keying one would put it out of step with the
-term it indexes while buying nothing — congruence never reads a row, and `Database.Out`
-reads a constructor's entry from every congruent key already. `.noMerge` rows are left
-alone too; a `:no-merge` collision is a program error, not a resolution. -/
+**Constructor rows are left alone**: a constructor has no value column, so `ctorRowList` emits
+`⟨f, as, []⟩` and the term it indexes is the application `f(as)` itself. Re-keying one would put
+it out of step with that term while buying nothing — congruence never reads a row, and
+`Database.Out` reads a constructor's entry from every congruent key already. `.noMerge` rows are
+left alone too; a `:no-merge` collision is a program error, not a resolution. -/
 /-- The canonical member of `t`'s congruence class: the congruent term created *first*.
 
 `ts` is `FDatabase.terms`, whose *tail* is the oldest part — `addTerm` prepends and
@@ -456,8 +457,8 @@ def FDatabase.settled (d : FDatabase) : Bool :=
 
 /-- Merge saturation, for the record. Takes a **termination witness**, not fuel: being
 undefined for a signature whose merges diverge is what egglog does too, where fuel would
-return a half-merged database and present it as an answer. Not used by `execCmd`, which
-runs one pass — see `mergeRound`. -/
+return a half-merged database and present it as an answer. Kept as the faithful shape;
+`execCmdM` runs `mergeSaturateF` instead, which fails rather than returning a prefix. -/
 def FDatabase.MergeRel (x y : FDatabase) : Prop :=
   y.mergeRound = x ∧ ¬ y.settled = true
 
@@ -536,14 +537,15 @@ def execM (p : Program) : Option FDatabase := FDatabase.empty.execProgramM p
 `(print-size)` reports one row per distinct *canonical key tuple*, so this counts
 congruence classes of keys — not rows and not values.
 
-That is what makes the difftest work without the interpreter saturating merges. A merge
-step writes its combined row at a key that is already present, so it adds no key class;
-a merge with an empty action block adds no row anywhere else either. The count is
-therefore invariant under the merge phase, which `Proofs/Merge.lean`'s
-`mergeRound_rowCount` states — and does not hold as stated; the counterexample is
-recorded there. It is also why keeping every superseded output — the
-over-approximation the whole design rests on — does not inflate the number: three
-recorded values at one key are still one row. -/
+That is what makes the difftest comparable at all. A merge step writes its combined row at a
+key that is already present, so it adds no key class; a merge with an empty action block adds
+no row anywhere else either. The count should therefore be invariant under the merge phase —
+but that is **not proved**: `mergeRound_rowCount` said it, was false as stated, and is deleted
+with its counterexample at `Proofs/Merge.lean`'s deletion note. What holds is the same claim
+with the merge result restricted to a term the database already holds, which every generated
+case satisfies. It is also why keeping every superseded output — the over-approximation the
+whole design rests on — does not inflate the number: three recorded values at one key are
+still one row. -/
 /-- The key tuples of `d`'s `f`-rows. -/
 def FDatabase.keyLists (d : FDatabase) (f : FnName) : List (List Term) :=
   d.rows.filterMap fun r => if r.fn = f then some r.args else none

@@ -89,19 +89,26 @@ example : ¬ Program.Evaluable minProgram noSig := by
 
 /-! ### Congruence
 
-`1 = 2` and `2 = 3` over `{1, 2, 3}` puts all three terms in one class — all nine
-pairs. -/
+`(a) = (b)` and `(b) = (c)` over `{(a), (b), (c)}` puts all three terms in one class — all
+nine pairs. The three are nullary constructors rather than literals because `union` may not
+be given a literal: egglog's wants an eq-sort, `evalAction` refuses one, and
+`Database.LitsIsolated` is the invariant that buys — so `1 = 2` is a state no program
+reaches. -/
 
-/-- `1 = 2` and `2 = 3` asserted over `{1, 2, 3}`: five equations, of which the three
-reflexive ones are the three terms. -/
+/-- A nullary constructor term. -/
+private def cnst (n : String) : Term := .app n []
+
+/-- `(a) = (b)` and `(b) = (c)` asserted over `{(a), (b), (c)}`: five equations, of which
+the three reflexive ones are the three terms. -/
 private def chain : Database where
   sig := noSig
-  eqs := {(num 1, num 1), (num 2, num 2), (num 3, num 3), (num 1, num 2), (num 2, num 3)}
+  eqs := {(cnst "a", cnst "a"), (cnst "b", cnst "b"), (cnst "c", cnst "c"),
+          (cnst "a", cnst "b"), (cnst "b", cnst "c")}
   env := []
   rules := ∅
 
 /-- The terms, read back off the diagonal. -/
-private theorem chain_terms : chain.terms = {num 1, num 2, num 3} := by
+private theorem chain_terms : chain.terms = {cnst "a", cnst "b", cnst "c"} := by
   refine Set.Subset.antisymm (fun t ht => ?_) ?_
   · obtain ⟨u, h | h⟩ := Database.mem_terms_iff.mp ht <;>
       simp only [chain, Set.mem_insert_iff, Set.mem_singleton_iff, Prod.mk.injEq] at h <;>
@@ -109,34 +116,36 @@ private theorem chain_terms : chain.terms = {num 1, num 2, num 3} := by
   · rintro t (rfl | rfl | rfl) <;> exact .assert (by simp [chain])
 
 /-- `chain` is a state a program could have reached. `eqsRefl` is the clause the three
-reflexive equations are there for; without them the terms would still be `{1, 2, 3}`, but
-the database would claim to hold terms it never recorded. -/
+reflexive equations are there for; without them the terms would still be the three
+constructors, but the database would claim to hold terms it never recorded.
+`litsIsolated` is the clause that would fail were the three literals. -/
 private theorem chain_wf : chain.WF where
   eqsRefl := by
     rw [chain_terms]
     rintro t (rfl | rfl | rfl) <;> simp [chain]
   subtermClosed := by
     rw [chain_terms]
-    rintro t (rfl | rfl | rfl) <;> simp [num]
+    rintro t (rfl | rfl | rfl) <;> simp [cnst, Term.subterms_app]
   envInTerms := by simp [chain]
+  litsIsolated := by rintro p (rfl | rfl | rfl | rfl | rfl) <;> simp [cnst, Term.isLit]
 
-example : Cong chain (num 1) (num 3) :=
-  .trans (b := num 2) (.assert (by simp [chain])) (.assert (by simp [chain]))
+example : Cong chain (cnst "a") (cnst "c") :=
+  .trans (b := cnst "b") (.assert (by simp [chain])) (.assert (by simp [chain]))
 
-example : Cong chain (num 3) (num 1) :=
-  .symm (.trans (b := num 2) (.assert (by simp [chain])) (.assert (by simp [chain])))
+example : Cong chain (cnst "c") (cnst "a") :=
+  .symm (.trans (b := cnst "b") (.assert (by simp [chain])) (.assert (by simp [chain])))
 
 /-- Self-congruence is not a rule of `Cong` but an equation like any other: the database
-holds `2` because it asserts `2 = 2`. -/
-example : Cong chain (num 2) (num 2) := .assert (by simp [chain])
+holds `(b)` because it asserts `(b) = (b)`. -/
+example : Cong chain (cnst "b") (cnst "b") := .assert (by simp [chain])
 
 /-- The closure relates nothing to a term the database does not hold, which follows
 from there being no reflexivity rule: every derivation ends at an asserted equation. -/
-example : ¬ Cong chain (num 1) (num 4) := by
+example : ¬ Cong chain (cnst "a") (cnst "d") := by
   intro h
-  have hm : num 4 ∈ chain.terms := h.mem_right
+  have hm : cnst "d" ∈ chain.terms := h.mem_right
   rw [chain_terms] at hm
-  simp [num] at hm
+  simp [cnst] at hm
 
 /-- `1 = 2` over `{1, 2, (wrapper 1), (wrapper 2)}` derives `(wrapper 1) = (wrapper 2)`:
 congruence propagating under `wrapper`. -/
@@ -217,32 +226,40 @@ example : ValidEnv ["v1"]
 
 /-! ### Running a program of actions
 
-`(let v (b 1))`, `(union 7 7)`, `(union v 4)` gives four reflexive equations — the terms
-`{(b 1), 1, 7, 4}` — and the one asserted equation `(b 1) = 4`, from which the closure
-derives `4 = (b 1)`. The self-union `(union 7 7)` contributes only the term: the equation
-it asserts is the reflexive one recording `7`. -/
+`(let v (b 1))`, `(union (b 1) (b 1))`, `(union v (d))` gives four reflexive equations —
+the terms `{(b 1), 1, (d)}` — and the one asserted equation `(b 1) = (d)`, from which the
+closure derives `(d) = (b 1)`. The self-union contributes only the term: the equation it
+asserts is the reflexive one recording `(b 1)`.
+
+Neither operand of either `union` is a literal, and neither may be: `(union 7 7)` and
+`(union v 4)` are both stuck, because egglog rejects a `union` on a primitive sort and
+`evalAction` follows it. -/
 
 private def b1 : Term := .app "b" [num 1]
 
 private def actionsProgram : Program :=
-  [.decl "b" (ctorDecl 1),
+  [.decl "b" (ctorDecl 1), .decl "d" (ctorDecl 0),
    .action (.letBind "v" (.app "b" [eNum 1])),
-   .action (.union (eNum 7) (eNum 7)),
-   .action (.union (.var "v") (eNum 4))]
+   .action (.union (.app "b" [eNum 1]) (.app "b" [eNum 1])),
+   .action (.union (.var "v") (.app "d" []))]
 
 example : WellScoped actionsProgram := by
   simp [WellScoped, actionsProgram, Action.Scoped, Expr.Scoped, Cmd.bind, Action.bind, eNum]
 
+/-- `(union 7 7)` gets stuck, in any state: `evalAction` refuses a literal operand. -/
+example {db : Database} : evalAction db (.union (eNum 7) (eNum 7)) = none := by
+  simp [evalAction, eNum, Term.isLit]
+
 example : ∃ db, ProgramStep Database.empty actionsProgram db ∧
-    db.terms = {b1, num 1, num 7, num 4} ∧
-    db.eqs = {(b1, b1), (num 1, num 1), (num 7, num 7), (num 4, num 4), (b1, num 4)} ∧
+    db.terms = {b1, num 1, cnst "d"} ∧
+    db.eqs = {(b1, b1), (num 1, num 1), (cnst "d", cnst "d"), (b1, cnst "d")} ∧
     Env.lookup "v" db.env = some b1 ∧
-    Cong db (num 4) b1 := by
-  refine ⟨_, .cons ⟨_, rfl, .refl⟩ (.cons ⟨_, rfl, .refl⟩
-    (.cons ⟨_, rfl, .refl⟩ (.cons ⟨_, rfl, .refl⟩ .nil))), ?_, ?_, rfl, ?_⟩
-  · ext t; simp [b1, num, Database.mem_terms_iff]; tauto
-  · ext p; simp [b1, num]; tauto
-  · exact .symm (.assert (by simp [b1, num]))
+    Cong db (cnst "d") b1 := by
+  refine ⟨_, .cons ⟨_, rfl, .refl⟩ (.cons ⟨_, rfl, .refl⟩ (.cons ⟨_, rfl, .refl⟩
+    (.cons ⟨_, rfl, .refl⟩ (.cons ⟨_, rfl, .refl⟩ .nil)))), ?_, ?_, rfl, ?_⟩
+  · ext t; simp [b1, cnst, num, Database.mem_terms_iff]; tauto
+  · ext p; simp [b1, cnst, num]; tauto
+  · exact .symm (.assert (by simp [b1, cnst, num]))
 
 /-! ### Running a rule
 
@@ -332,12 +349,13 @@ a real proof wants it. -/
 section Computed
 set_option linter.hashCommand false
 
-/-- `{1, 2, 3}` with `1 = 2` and `2 = 3`: all nine pairs. `chainEqs` is `chain.eqs`,
-reflexive equations and all, since that is what `mem_closure_iff` reads. -/
-private def chainTerms : Finset Term := {num 1, num 2, num 3}
+/-- `{(a), (b), (c)}` with `(a) = (b)` and `(b) = (c)`: all nine pairs. `chainEqs` is
+`chain.eqs`, reflexive equations and all, since that is what `mem_closure_iff` reads. -/
+private def chainTerms : Finset Term := {cnst "a", cnst "b", cnst "c"}
 
 private def chainEqs : Finset (Term × Term) :=
-  {(num 1, num 1), (num 2, num 2), (num 3, num 3), (num 1, num 2), (num 2, num 3)}
+  {(cnst "a", cnst "a"), (cnst "b", cnst "b"), (cnst "c", cnst "c"),
+   (cnst "a", cnst "b"), (cnst "b", cnst "c")}
 
 private theorem chainEqs_sub : chainEqs ⊆ candidates chainTerms := by decide
 
@@ -368,7 +386,7 @@ unseal closure
 /-- The computation transfers to the spec: `mem_closure_iff` turns a decidable
 membership into a `Cong` derivation, which is what an executable interpreter will lean
 on throughout. -/
-example : Cong chain (num 1) (num 3) := by
+example : Cong chain (cnst "a") (cnst "c") := by
   refine (mem_closure_iff (terms := chainTerms) (rel := chainEqs) ?_ ?_ chainEqs_sub).mp
     (by decide)
   · rw [chain_terms]; simp [chainTerms]

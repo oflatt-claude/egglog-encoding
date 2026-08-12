@@ -5,10 +5,11 @@ import EgglogSemantics.Spec.Congruence
 
 An expression denotes a ground term; an action turns a database into a database. This file
 is `Option`-valued: what a command computes, deterministically. The nondeterminism —
-merge closure, rule firing — is `Spec/Step.lean`. Evaluation is partial in four ways, all
+merge closure, rule firing — is `Spec/Step.lean`. Evaluation is partial in five ways, all
 `none`: an unbound variable, an **undeclared** name, a declared merge function — which is a
-*lookup*, and so the query atom `Pattern.values` rather than an expression — and a
-primitive given operands of the wrong sort. Actions only ever add equations.
+*lookup*, and so the query atom `Pattern.values` rather than an expression — a
+primitive given operands of the wrong sort, and a `union` on a literal. Actions only ever
+add equations.
 -/
 
 namespace Egglog
@@ -35,14 +36,20 @@ end
 
 /-- Run one action against the database. A `let` binds in the environment the database
 carries, a global at top level and a rule-local binding inside a rule. A `set` only
-*records* its entry; a collision on a congruent key is resolved by `MergeStep`. -/
+*records* its entry; a collision on a congruent key is resolved by `MergeStep`.
+
+A `union` on a literal is stuck. egglog rejects it in its type checker — `union` wants an
+eq-sort and `i64` is not one (`TypeError::NonEqsortUnion`) — and this untyped model cannot
+see it until the operands are values. Asserting it instead would cost
+`Database.LitsIsolated`. -/
 def evalAction (db : Database) : Action → Option Database
   | .expr e => (e.eval db.sig db.env).map fun t => db.addTerm t
   | .letBind v e => (e.eval db.sig db.env).map fun t =>
       { db.addTerm t with env := (v, t) :: db.env }
   | .union e₁ e₂ =>
       (e₁.eval db.sig db.env).bind fun t₁ =>
-        (e₂.eval db.sig db.env).map fun t₂ => db.addEq t₁ t₂
+        (e₂.eval db.sig db.env).bind fun t₂ =>
+          if t₁.isLit || t₂.isLit then none else some (db.addEq t₁ t₂)
   | .set f args out =>
       (Expr.evalList db.sig args db.env).bind fun as =>
         (Expr.evalList db.sig out db.env).map fun vs => db.addTerm (.app f (as ++ vs))

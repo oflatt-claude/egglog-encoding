@@ -368,9 +368,9 @@ theorem WF.addTerm {d : FDatabase} (h : d.WF) (he : d.EqsInTerms) (t : Term) :
     (d.addTerm t).WF := by
   rw [FDatabase.WF, toDatabase_addTerm he]; exact Database.WF.addTerm h t
 
-theorem WF.addEq {d : FDatabase} (h : d.WF) (he : d.EqsInTerms) (a b : Term) :
-    (d.addEq a b).WF := by
-  rw [FDatabase.WF, toDatabase_addEq he]; exact Database.WF.addEq h a b
+theorem WF.addEq {d : FDatabase} (h : d.WF) (he : d.EqsInTerms) (a b : Term)
+    (hlit : a.isLit ∨ b.isLit → a = b) : (d.addEq a b).WF := by
+  rw [FDatabase.WF, toDatabase_addEq he]; exact Database.WF.addEq h a b hlit
 
 theorem WF.addTerms {d : FDatabase} (h : d.WF) (he : d.EqsInTerms) (ts : List Term) :
     (d.addTerms ts).WF := by
@@ -658,7 +658,8 @@ theorem mem_matchQuery_of_validQuerySubst {d : FDatabase} (he : d.EqsInTerms)
 `rcases` on this rather than a repeat of the case analysis. -/
 theorem execAction_eq_some {d d' : FDatabase} {a : Action} (h : execAction d a = some d') :
     (∃ t, d' = d.addTerm t) ∨ (∃ v t, d' = { d.addTerm t with env := (v, t) :: d.env }) ∨
-      (∃ t₁ t₂, d' = d.addEq t₁ t₂) ∨ (∃ f as vs, d' = d.addRow f as vs) := by
+      (∃ t₁ t₂, ¬ (t₁.isLit ∨ t₂.isLit) ∧ d' = d.addEq t₁ t₂) ∨
+      (∃ f as vs, d' = d.addRow f as vs) := by
   cases a with
   | expr e =>
     cases hv : e.eval d.sig d.env with
@@ -679,9 +680,12 @@ theorem execAction_eq_some {d d' : FDatabase} {a : Action} (h : execAction d a =
       cases hv₂ : e₂.eval d.sig d.env with
       | none => simp [execAction, hv₁, hv₂] at h
       | some t₂ =>
-        simp only [execAction, hv₁, hv₂, Option.bind_some, Option.map_some,
-          Option.some.injEq] at h
-        exact Or.inr (Or.inr (Or.inl ⟨t₁, t₂, h.symm⟩))
+        simp only [execAction, hv₁, hv₂, Option.bind_some] at h
+        split at h
+        · simp at h
+        · rename_i hlit
+          simp only [Option.some.injEq] at h
+          exact Or.inr (Or.inr (Or.inl ⟨t₁, t₂, by simpa using hlit, h.symm⟩))
   | set f args out =>
     cases hv₁ : Expr.evalList d.sig args d.env with
     | none => simp [execAction, hv₁] at h
@@ -695,7 +699,8 @@ theorem execAction_eq_some {d d' : FDatabase} {a : Action} (h : execAction d a =
 
 theorem execAction_eqsInTerms {d d' : FDatabase} (he : d.EqsInTerms) {a : Action}
     (h : execAction d a = some d') : d'.EqsInTerms := by
-  rcases execAction_eq_some h with ⟨t, rfl⟩ | ⟨v, t, rfl⟩ | ⟨t₁, t₂, rfl⟩ | ⟨f, as, vs, rfl⟩
+  rcases execAction_eq_some h with ⟨t, rfl⟩ | ⟨v, t, rfl⟩ | ⟨t₁, t₂, -, rfl⟩ |
+    ⟨f, as, vs, rfl⟩
   · exact he.addTerm t
   · exact (he.addTerm t).setEnv _
   · exact he.addEq t₁ t₂
@@ -703,7 +708,8 @@ theorem execAction_eqsInTerms {d d' : FDatabase} (he : d.EqsInTerms) {a : Action
 
 theorem execAction_rules {d d' : FDatabase} {a : Action} (h : execAction d a = some d') :
     d'.rules = d.rules := by
-  rcases execAction_eq_some h with ⟨t, rfl⟩ | ⟨v, t, rfl⟩ | ⟨t₁, t₂, rfl⟩ | ⟨f, as, vs, rfl⟩ <;>
+  rcases execAction_eq_some h with ⟨t, rfl⟩ | ⟨v, t, rfl⟩ | ⟨t₁, t₂, -, rfl⟩ |
+    ⟨f, as, vs, rfl⟩ <;>
     rfl
 
 theorem execActions_eqsInTerms {as : List Action} : ∀ {d d' : FDatabase}, d.EqsInTerms →
@@ -743,7 +749,10 @@ theorem execAction_toDatabase {d : FDatabase} (he : d.EqsInTerms) {a : Action} :
     | some t₁ =>
       cases hv₂ : e₂.eval d.sig d.env with
       | none => simp [execAction, evalAction, hv₁, hv₂]
-      | some t₂ => simp [execAction, evalAction, hv₁, hv₂, FDatabase.toDatabase_addEq he]
+      | some t₂ =>
+        by_cases hlit : t₁.isLit ∨ t₂.isLit
+        · simp [execAction, evalAction, hv₁, hv₂, hlit]
+        · simp [execAction, evalAction, hv₁, hv₂, hlit, FDatabase.toDatabase_addEq he]
   | set f args out =>
     cases hv₁ : Expr.evalList d.sig args d.env with
     | none => simp [execAction, evalAction, hv₁]

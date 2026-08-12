@@ -97,11 +97,15 @@ primitive, so evaluating `e` cannot get stuck on it. -/
 def Expr.Evaluable (e : Expr) (sig : Signature) : Prop :=
   ∀ f ∈ e.fns, Prim.ofName f = none ∧ sig.IsCtor f
 
-/-- `Action.Scoped`'s companion: every expression the action evaluates builds. -/
+/-- `Action.Scoped`'s companion: every expression the action evaluates builds, and a
+`union` operand is an application — the strongest sound stand-in for egglog's eq-sort
+requirement, which `evalAction` refuses dynamically. A variable operand may hold a literal,
+since a query binds one under a literal argument, so no check reading the expression alone
+admits it. -/
 def Action.Evaluable : Action → Signature → Prop
   | .expr e, sig => e.Evaluable sig
   | .letBind _ e, sig => e.Evaluable sig
-  | .union e₁ e₂, sig => e₁.Evaluable sig ∧ e₂.Evaluable sig
+  | .union e₁ e₂, sig => (e₁.IsApp ∧ e₁.Evaluable sig) ∧ e₂.IsApp ∧ e₂.Evaluable sig
   | .set _ args out, sig => (∀ e ∈ args, e.Evaluable sig) ∧ ∀ e ∈ out, e.Evaluable sig
 
 @[simp] def Actions.Evaluable : List Action → Signature → Prop

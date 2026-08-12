@@ -25,6 +25,17 @@ theorem Expr.eval_isSome_of_scoped {sig : Signature} {e : Expr} {Γ : Scope} {σ
     ∃ t, e.eval sig σ = some t :=
   e.eval_isSome (fun v hv => (hm v).mp (h v hv)) he
 
+/-- An `Evaluable` application builds, so its value is not a literal. This is what
+`Action.Evaluable` asks of a `union` operand, and what `evalAction`'s check then needs. -/
+theorem Expr.not_isLit_of_isApp {sig : Signature} {e : Expr} {σ : Env} {t : Term}
+    (ha : e.IsApp) (he : e.Evaluable sig) (h : e.eval sig σ = some t) : ¬ t.isLit := by
+  match e with
+  | .app f args =>
+    obtain ⟨hp, hc⟩ := he f (by simp [Expr.fns])
+    rw [Expr.eval_app_ctor hp hc] at h
+    obtain ⟨_, -, rfl⟩ := Option.map_eq_some_iff.mp h
+    simp [Term.isLit]
+
 /-! ### Actions do not get stuck -/
 theorem evalAction_isSome_of_scoped {db : Database} {Γ : Scope} (hm : Γ.Models db.env)
     {a : Action} (h : a.Scoped Γ) (he : a.Evaluable db.sig) :
@@ -40,9 +51,11 @@ theorem evalAction_isSome_of_scoped {db : Database} {Γ : Scope} (hm : Γ.Models
     simp only [Action.bind, List.mem_cons, Env.dom_cons]
     exact or_congr_right (hm w)
   | union e₁ e₂ =>
-    obtain ⟨t₁, ht₁⟩ := Expr.eval_isSome_of_scoped hm h.1 he.1
-    obtain ⟨t₂, ht₂⟩ := Expr.eval_isSome_of_scoped hm h.2 he.2
-    exact ⟨db.addEq t₁ t₂, by simp [evalAction, ht₁, ht₂], hm⟩
+    obtain ⟨t₁, ht₁⟩ := Expr.eval_isSome_of_scoped hm h.1 he.1.2
+    obtain ⟨t₂, ht₂⟩ := Expr.eval_isSome_of_scoped hm h.2 he.2.2
+    have hl₁ := Expr.not_isLit_of_isApp he.1.1 he.1.2 ht₁
+    have hl₂ := Expr.not_isLit_of_isApp he.2.1 he.2.2 ht₂
+    exact ⟨db.addEq t₁ t₂, by simp [evalAction, ht₁, ht₂, hl₁, hl₂], hm⟩
   | set f args out =>
     obtain ⟨as, has⟩ := Expr.evalList_isSome args
       (fun v hv => by

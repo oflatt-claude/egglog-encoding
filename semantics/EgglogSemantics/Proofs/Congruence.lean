@@ -156,6 +156,60 @@ theorem Cong.of_addTerm {db : Database} (hw : db.WF) {t : Term} (ht : t ∈ db.t
     obtain ⟨rfl, rfl⟩ := hseq
     exact hw.subtermClosed t ht hs
 
+/-! ### A literal's class is a singleton
+
+`Database.LitsIsolated` constrains the *asserted* equations. That the derived ones are
+constrained too is one induction: `congr` relates applications, so it cannot reach a
+literal at all, and `symm`/`trans` carry the literal along. `evalAction`'s `union` check is
+what establishes the hypothesis; `Prim.apply` at `min`/`max` is what spends it. -/
+
+/-- **A literal is congruent to nothing but itself.** -/
+theorem Cong.eq_of_isLit {db : Database} (hl : db.LitsIsolated) {a b : Term}
+    (hc : Cong db a b) : a.isLit ∨ b.isLit → a = b := by
+  induction hc using Cong.rec (motive_2 := fun _ _ _ => True) with
+  | assert hab => exact hl _ hab
+  | symm _ ih => exact fun h => (ih h.symm).symm
+  | trans _ _ ih₁ ih₂ =>
+    rintro (h | h)
+    · have h₁ := ih₁ (Or.inl h)
+      rw [h₁] at h
+      exact h₁.trans (ih₂ (Or.inl h))
+    · have h₂ := ih₂ (Or.inr h)
+      rw [← h₂] at h
+      exact (ih₁ (Or.inr h)).trans h₂
+  | congr => simp [Term.isLit]
+  | nil => trivial
+  | cons => trivial
+
+/-- The list form: an operand list of literals has no congruent neighbours either. -/
+theorem CongList.eq_of_isLit {db : Database} (hl : db.LitsIsolated) :
+    ∀ {as bs : List Term}, CongList db as bs → (∀ a ∈ as, a.isLit) → as = bs
+  | _, _, .nil, _ => rfl
+  | a :: _, _, .cons hab hrest, hlit => by
+    rw [Cong.eq_of_isLit hl hab (Or.inl (hlit a (by simp))),
+      CongList.eq_of_isLit hl hrest fun x hx => hlit x (by simp [hx])]
+
+/-- `min` and `max` answer only on two literals. -/
+theorem Prim.isLit_of_apply : ∀ {p : Prim} {as : List Term} {t : Term},
+    p = .intMin ∨ p = .intMax → p.apply as = some t → ∀ a ∈ as, a.isLit
+  | _, [.lit _, .lit _], _, _, _ => by simp [Term.isLit]
+  | _, [], _, hp, h => by rcases hp with rfl | rfl <;> simp [Prim.apply] at h
+  | _, [_], _, hp, h => by rcases hp with rfl | rfl <;> simp [Prim.apply] at h
+  | _, .app _ _ :: _ :: _, _, hp, h => by rcases hp with rfl | rfl <;> simp [Prim.apply] at h
+  | _, _ :: .app _ _ :: _, _, hp, h => by rcases hp with rfl | rfl <;> simp [Prim.apply] at h
+  | _, _ :: _ :: _ :: _, _, hp, h => by rcases hp with rfl | rfl <;> simp [Prim.apply] at h
+
+/-- **`min` and `max` are congruence-stable.** They read a literal, and a literal is alone
+in its class, so operands congruent to ones they answer on *are* those operands.
+
+`ordering-min`/`ordering-max` are excluded and cannot be included: they choose by
+`Term.blt`, a structural order, where egglog chooses by e-class id, so `f 1 ≅ g 1` already
+sends them to incongruent answers with no literal anywhere. -/
+theorem Prim.apply_cong {db : Database} (hl : db.LitsIsolated) {p : Prim}
+    (hp : p = .intMin ∨ p = .intMax) {as bs : List Term} (hc : CongList db as bs)
+    {t : Term} (h : p.apply as = some t) : p.apply bs = some t := by
+  rwa [← CongList.eq_of_isLit hl hc (Prim.isLit_of_apply hp h)]
+
 namespace Cong
 variable {db : Database}
 

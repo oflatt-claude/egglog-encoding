@@ -41,8 +41,14 @@ declared, and it carries that declaration's `entryWidth` children. -/
 def Database.DeclaredTerms (db : Database) : Prop :=
   ∀ f as, Term.app f as ∈ db.terms → ∃ d, db.sig f = some d ∧ as.length = d.entryWidth
 
+/-- No asserted equation puts a literal beside anything but itself: `evalAction` refuses a
+`union` on a literal and `addTerm` writes only reflexive pairs. `Cong.eq_of_isLit` reads it
+back as "a literal's class is a singleton", which is what makes `Prim.apply` stable. -/
+def Database.LitsIsolated (db : Database) : Prop :=
+  ∀ p ∈ db.eqs, p.1.isLit ∨ p.2.isLit → p.1 = p.2
+
 /-- The database invariants: it records the diagonal of what it holds, holds the children
-of every term it holds, and binds its variables to terms it holds.
+of every term it holds, binds its variables to terms it holds, and isolates literals.
 
 `eqsRefl` is what makes "the term is present" and "the equation `t = t` is asserted"
 interchangeable. Without it a term can be present by `symm`/`trans` alone, and then
@@ -52,6 +58,7 @@ structure Database.WF (db : Database) : Prop where
   eqsRefl : ∀ t ∈ db.terms, (t, t) ∈ db.eqs
   subtermClosed : ∀ t ∈ db.terms, t.subterms ⊆ db.terms
   envInTerms : ∀ b ∈ db.env, b.2 ∈ db.terms
+  litsIsolated : db.LitsIsolated
 
 /-- `db` plus the terms `ts`, used to relate a term the database may not hold — a pattern
 instance, say — to one it does. It records that each of `ts` exists and **adds no equation
