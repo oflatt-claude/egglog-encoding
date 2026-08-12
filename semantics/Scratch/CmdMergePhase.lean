@@ -11,10 +11,12 @@ where `.rule` and `.decl` previously took none.
   followed by the old effect, so it adds no state a merge phase before the command does not
   already reach.
 * `.decl` — neutral **once `Spec/Scope.lean`'s `MergeDeclared` is asked**: `declStep_iff`.
-  Without that check it is not: `decl_enables_merge` gives a database where `f` is
-  undeclared and nothing merges, and declaring `f` enables a merge step, because a `:merge`
-  result may name a function declared later. `MergeDeclared` rejects that program
-  (`gdecl_not_mergeDeclared`), as egglog does.
+  Without that check it is not, and the counterexample now lives in the library —
+  `Proofs/Counterexamples.lean`'s `decl_enables_merge` and `gdecl_not_mergeDeclared`.
+
+Only the neutrality half is left here. It is not a falsity witness, so it does not belong in
+`Proofs/Counterexamples.lean`; it belongs beside `Proofs/Step.lean`'s `CmdStep` lemmas, and
+is unbuilt until it is moved there.
 -/
 
 namespace Egglog
@@ -54,8 +56,14 @@ theorem evalAction_rules (db : Database) (R : Set Rule) (a : Action) :
   | expr e => cases h : e.eval db.sig db.env <;> simp [evalAction, h, Database.addTerm]
   | letBind v e => cases h : e.eval db.sig db.env <;> simp [evalAction, h, Database.addTerm]
   | union e₁ e₂ =>
-      cases h₁ : e₁.eval db.sig db.env <;> cases h₂ : e₂.eval db.sig db.env <;>
-        simp [evalAction, h₁, h₂, Database.addEq, Database.addTerm]
+      cases h₁ : e₁.eval db.sig db.env with
+      | none => simp [evalAction, h₁]
+      | some t₁ =>
+          cases h₂ : e₂.eval db.sig db.env with
+          | none => simp [evalAction, h₁, h₂]
+          | some t₂ =>
+              simp only [evalAction, h₁, h₂, Option.bind_some]
+              split <;> simp [Database.addEq, Database.addTerm]
   | set f args out =>
       cases h₁ : Expr.evalList db.sig args db.env <;>
         cases h₂ : Expr.evalList db.sig out db.env <;>
@@ -211,7 +219,10 @@ theorem evalAction_sig {db d : Database} {a : Action} (h : evalAction db a = som
   | union e₁ e₂ =>
       rw [evalAction] at h
       rcases Option.bind_eq_some_iff.mp h with ⟨t₁, -, h⟩
-      rcases Option.map_eq_some_iff.mp h with ⟨t₂, -, rfl⟩; rfl
+      rcases Option.bind_eq_some_iff.mp h with ⟨t₂, -, h⟩
+      split at h
+      · exact absurd h (by simp)
+      · rw [← Option.some.inj h]; rfl
   | set g args out =>
       rw [evalAction] at h
       rcases Option.bind_eq_some_iff.mp h with ⟨as, -, h⟩
@@ -276,8 +287,14 @@ theorem evalAction_update {f : FnName} {sig' : Signature} {db : Database} {a : A
   | union e₁ e₂ =>
       have h₁ := eval_update hf hag e₁ hd.1 db.env
       have h₂ := eval_update hf hag e₂ hd.2 db.env
-      cases hc₁ : e₁.eval db.sig db.env <;> cases hc₂ : e₂.eval db.sig db.env <;>
-        simp [evalAction, ← h₁, ← h₂, hc₁, hc₂, Database.addEq, Database.addTerm]
+      cases hc₁ : e₁.eval db.sig db.env with
+      | none => simp [evalAction, ← h₁, hc₁]
+      | some t₁ =>
+          cases hc₂ : e₂.eval db.sig db.env with
+          | none => simp [evalAction, ← h₁, ← h₂, hc₁, hc₂]
+          | some t₂ =>
+              simp only [evalAction, ← h₁, ← h₂, hc₁, hc₂, Option.bind_some]
+              split <;> simp [Database.addEq, Database.addTerm]
   | set g args out =>
       have h₁ := evalList_update (sig := db.sig) (sig' := sig') (σ := db.env) args
         fun a ha => eval_update hf hag a (hd.2.1 a ha) db.env
@@ -499,9 +516,12 @@ theorem evalAction_avoids {f : FnName} {db d : Database} {a : Action}
   | union e₁ e₂ =>
       rw [evalAction] at h
       obtain ⟨t₁, h₁, h⟩ := Option.bind_eq_some_iff.mp h
-      obtain ⟨t₂, h₂, rfl⟩ := Option.map_eq_some_iff.mp h
-      exact ⟨avoids_addEq hav.terms (eval_avoids hf hav.env e₁ t₁ h₁)
-        (eval_avoids hf hav.env e₂ t₂ h₂), hav.env⟩
+      obtain ⟨t₂, h₂, h⟩ := Option.bind_eq_some_iff.mp h
+      split at h
+      · exact absurd h (by simp)
+      · obtain rfl := Option.some.inj h
+        exact ⟨avoids_addEq hav.terms (eval_avoids hf hav.env e₁ t₁ h₁)
+          (eval_avoids hf hav.env e₂ t₂ h₂), hav.env⟩
   | set g args out =>
       rw [evalAction] at h
       obtain ⟨as, h₁, h⟩ := Option.bind_eq_some_iff.mp h
@@ -738,110 +758,11 @@ theorem programStep_sigMergeDeclared : ∀ {db d : Database} {p : Program}, Prog
 
 /-! ### What `MergeDeclared` rules out
 
-Without it, `.decl` is *not* neutral: `g` is a merge function whose `:merge` result names
-`f`, and `f` is declared afterwards. `Program.DeclsFresh` permits that, and so does every
-other check, since only `MergeDeclared` walks into a `:merge` body. -/
-
-def fdecl : FnDecl := { arity := 0, outArity := 1, merge := none }
-
-def gdecl : FnDecl := { arity := 1, outArity := 1, merge := some (.merge [] [.app "f" []]) }
-
-def t0 : Term := .lit (.int 0)
-
-/-- `g`'s one entry: key `0`, value `0`. -/
-def entry : Term := .app "g" [t0, t0]
-
-def db₀ : Database where
-  sig := fun n => if n = "g" then some gdecl else none
-  eqs := {(t0, t0), (entry, entry)}
-  env := []
-  rules := ∅
-
-/-- What the old `CmdStep.decl` reached, and the whole of it. -/
-def db₁ : Database := { db₀ with sig := Function.update db₀.sig "f" (some fdecl) }
-
-theorem oldDecl : cmdEffect db₀ (.decl "f" fdecl) = some db₁ := rfl
-
-/-- `f` is fresh, so `Cmd.DeclFresh` admits `(constructor f)` here. -/
-theorem f_fresh : db₀.sig "f" = none := by simp [db₀]
-
-theorem cong_db₀ {a b : Term} (h : Cong db₀ a b) : a = b ∧ (a = t0 ∨ a = entry) := by
-  induction h using Cong.rec (motive_2 := fun as bs _ => as = bs) with
-  | assert hab =>
-      simp only [db₀, Set.mem_insert_iff, Set.mem_singleton_iff, Prod.mk.injEq] at hab
-      rcases hab with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ <;> simp
-  | symm _ ih => obtain ⟨rfl, h⟩ := ih; exact ⟨rfl, h⟩
-  | trans _ _ ih₁ ih₂ =>
-      obtain ⟨rfl, h⟩ := ih₁; obtain ⟨rfl, -⟩ := ih₂; exact ⟨rfl, h⟩
-  | congr _ _ _ ih₁ _ ih => subst ih; exact ⟨rfl, ih₁.2⟩
-  | nil => rfl
-  | cons _ _ ih₁ ih₂ => obtain ⟨rfl, -⟩ := ih₁; rw [ih₂]
-
-/-- Every application `db₀` holds is `g`'s entry, of the width `g` declares: the state is
-`DeclaredTerms`, so the counterexample is not a malformed database. -/
-theorem declaredTerms_db₀ : db₀.DeclaredTerms := by
-  intro f as hmem
-  obtain ⟨-, h | h⟩ := cong_db₀ hmem
-  · exact absurd h (by simp [t0])
-  · obtain ⟨rfl, rfl⟩ : f = "g" ∧ as = [t0, t0] := by simpa [entry] using h
-    exact ⟨gdecl, by simp [db₀], rfl⟩
-
-/-- **Nothing merges before the declaration.** `g`'s `:merge` result names `f`, which is
-undeclared, so `Expr.evalList` returns `none` and `MergeStep.collide` cannot fire. -/
-theorem no_merge_before (x : Database) : ¬ MergeStep db₀ x := by
-  intro h
-  cases h with
-  | @collide d f decl as bs a b vs body res hsig hmerge _ _ _ _ _ heval hres =>
-      have hdecl : decl = gdecl := by
-        by_cases hf : f = "g"
-        · subst hf; simpa [db₀] using hsig.symm
-        · simp [db₀, hf] at hsig
-      subst hdecl
-      simp only [gdecl, Option.some.injEq, MergeSpec.merge.injEq] at hmerge
-      obtain ⟨rfl, rfl⟩ := hmerge
-      simp only [evalActions, Option.some.injEq] at heval
-      subst heval
-      simp [Expr.evalList, Expr.eval, Prim.ofName, Signature.IsCtor, db₀] at hres
-
-/-- **The declaration enables a merge step.** `f` fresh and the state `DeclaredTerms` do
-not prevent it: the new `.decl` step reaches a database the old one could not. -/
-theorem decl_enables_merge :
-    ∃ db', CmdStep db₀ (.decl "f" fdecl) db' ∧ db' ≠ db₁ := by
-  have hg : db₁.sig "g" = some gdecl := by simp [db₁, db₀]
-  have hctor : db₁.sig.IsCtor "f" := ⟨fdecl, by simp [db₁], rfl⟩
-  have hentry : entry ∈ db₁.terms := Cong.assert (by simp [db₁, db₀])
-  have ht0 : Cong db₁ t0 t0 := Cong.assert (by simp [db₁, db₀])
-  have hres : Expr.evalList db₁.sig [Expr.app "f" []] (mergeEnv [t0] [t0]) =
-      some [Term.app "f" []] := by
-    simp [Expr.evalList, Expr.eval, Prim.ofName, hctor]
-  refine ⟨_, ⟨db₁, rfl, Relation.ReflTransGen.single (MergeStep.collide (f := "g")
-    (d := { db₁ with env := mergeEnv [t0] [t0] }) (as := [t0]) (bs := [t0]) (a := [t0])
-    (b := [t0]) hg rfl rfl rfl hentry hentry (CongList.cons ht0 CongList.nil) rfl hres)⟩, ?_⟩
-  intro hcontra
-  have hmem : (Term.app "g" [t0, .app "f" []], Term.app "g" [t0, .app "f" []]) ∈ db₁.eqs := by
-    rw [← hcontra]
-    exact Or.inr ⟨_, Term.IsSubterm.refl _, rfl⟩
-  simp [db₁, db₀, entry, t0] at hmem
-
-/-- **The check excludes it.** `(function g … :merge (f))` fails `Cmd.MergeDeclared` in any
-signature `f` is not already in, so no program the checks admit builds `db₀`, and
-`declStep_iff` applies to every `.decl` such a program runs. -/
-theorem gdecl_not_mergeDeclared (sig : Signature) (h : sig "f" = none) :
-    ¬ Cmd.MergeDeclared (.decl "g" gdecl) sig := by
-  intro hc
-  rcases hc (.merge [] [.app "f" []]) rfl |>.2 (.app "f" []) (List.mem_cons_self ..) "f"
-    (by simp [Expr.fns, Expr.fnsList]) with hp | hs
-  · exact hp (by simp [Prim.ofName])
-  · exact hs (show Function.update sig "g" (some gdecl) "f" = none by
-      rw [Function.update_of_ne (by simp)]; exact h)
-
-/-- `declStep_iff` does not apply to `db₀`, and this is the hypothesis it fails. -/
-theorem db₀_not_sigMergeDeclared : ¬ SigMergeDeclared db₀.sig := by
-  intro h
-  rcases (h "g" gdecl (.merge [] [.app "f" []]) (by simp [db₀]) rfl).2 (.app "f" [])
-    (List.mem_cons_self ..) "f" (by simp [Expr.fns, Expr.fnsList]) with hp | hs
-  · exact hp (by simp [Prim.ofName])
-  · exact hs (by simp [db₀])
+Without it, `.decl` is *not* neutral, and the witness has moved into the library:
+`Proofs/Counterexamples.lean`'s `decl_enables_merge`, `gdecl_not_mergeDeclared` and
+`db₀_not_sigMergeDeclared`. `g` is a merge function whose `:merge` result names `f`, and `f`
+is declared afterwards; `Program.DeclsFresh` permits that, and so does every other check,
+since only `MergeDeclared` walks into a `:merge` body. -/
 
 end Scratch
 end Egglog
