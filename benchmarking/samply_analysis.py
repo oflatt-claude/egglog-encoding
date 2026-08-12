@@ -48,7 +48,6 @@ class ProfileReport:
     artifact: Path
     cache_status: Literal["hit", "recorded"]
     workload: str
-    backend: str
     treatment: str
     top: int
     cpu_summary: ProfileCpuSummary | None
@@ -335,7 +334,6 @@ def _metadata_rows(report: ProfileReport) -> tuple[tuple[str, str], ...]:
         ("Artifact", str(report.artifact)),
         ("Cache", report.cache_status),
         ("Workload", report.workload),
-        ("Backend", report.backend),
         ("Treatment", report.treatment),
     )
 

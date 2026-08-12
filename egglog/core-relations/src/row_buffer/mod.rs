@@ -26,7 +26,7 @@ pub trait ValueVec {
     fn push(&mut self, value: Cell<Value>);
     fn extend_from_values(&mut self, values: &[Value]);
     /// Refresh the backing allocation from a pool, if applicable.
-    /// The default implementation is a no-op, used by non-pooled backends.
+    /// The default implementation is a no-op for non-pooled buffers.
     fn refresh(&mut self) {}
 }
 
@@ -142,7 +142,7 @@ impl Clone for RowBuffer {
     }
 }
 
-// Generic methods available for any ValueVec backend.
+// Generic methods available for any ValueVec implementation.
 impl<V: ValueVec> RowBuffer<V> {
     /// The size of the rows accepted by this buffer.
     pub(crate) fn arity(&self) -> usize {

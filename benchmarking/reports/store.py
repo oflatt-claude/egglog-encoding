@@ -15,7 +15,6 @@ from pathlib import Path
 from typing import Final, Literal, TypedDict, cast
 
 from ..models import (
-    Backend,
     BenchmarkEndpoint,
     FileSpec,
     Status,
@@ -23,8 +22,8 @@ from ..models import (
     Treatment,
 )
 
-type ReportSchemaVersion = Literal[1]
-REPORT_SCHEMA_VERSION: Final[ReportSchemaVersion] = 1
+type ReportSchemaVersion = Literal[2]
+REPORT_SCHEMA_VERSION: Final[ReportSchemaVersion] = 2
 
 type TimingSummarySchemaVersion = Literal[2]
 TIMING_SUMMARY_SCHEMA_VERSION: Final[TimingSummarySchemaVersion] = 2
@@ -65,7 +64,6 @@ class ReportRecord(TypedDict):
     file_sha256: str
     fact_directory_path: str | None
     fact_directory_sha256: str
-    backend: Backend
     treatment: Treatment
     timeout_sec: int
     wall_sec: float | None
@@ -84,7 +82,6 @@ class CacheKey:
     file_sha256: str
     treatment: Treatment
     timeout_sec: int
-    backend: Backend = "main"
     fact_directory_sha256: str = ""
 
     @classmethod
@@ -101,7 +98,6 @@ class CacheKey:
             file_sha256=file_spec.sha256,
             treatment=endpoint.treatment,
             timeout_sec=timeout_sec,
-            backend=endpoint.backend,
             fact_directory_sha256=file_spec.fact_directory_sha256,
         )
 
@@ -242,7 +238,6 @@ def _record_key(record: ReportRecord) -> CacheKey:
         file_sha256=record["file_sha256"],
         treatment=record["treatment"],
         timeout_sec=record["timeout_sec"],
-        backend=record["backend"],
         fact_directory_sha256=record["fact_directory_sha256"],
     )
 

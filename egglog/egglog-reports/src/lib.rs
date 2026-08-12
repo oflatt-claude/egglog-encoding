@@ -14,8 +14,8 @@ pub(crate) type HashMap<K, V> = hashbrown::HashMap<K, V, BuildHasherDefault<FxHa
 pub enum ReportLevel {
     /// Report pre-merge, merge, and rebuild time.
     ///
-    /// Backends split pre-merge time into search, apply, and unattributed time
-    /// when their execution mode can attribute the phases without overlap.
+    /// Pre-merge time is split into search, apply, and unattributed time when
+    /// execution can attribute those phases without overlap.
     #[default]
     TimeOnly,
     /// Report [`ReportLevel::TimeOnly`] and query plan for each rule
@@ -68,31 +68,28 @@ pub struct RuleReport {
 pub struct RuleSetReport {
     pub changed: bool,
     pub rule_reports: HashMap<Arc<str>, Vec<RuleReport>>,
-    /// Backend-defined timed work before staged updates are merged, either as
-    /// one elapsed duration or as an exhaustive serial phase breakdown.
+    /// Timed work before staged updates are merged, either as one elapsed
+    /// duration or as an exhaustive serial phase breakdown.
     pub pre_merge: PreMergeTiming,
     pub merge_time: Duration,
 }
 
-/// Timing for a backend's defined timed work before staged updates are merged.
+/// Timing for work before staged updates are merged.
 ///
 /// Parallel execution reports one wall-clock duration because search and apply
-/// can overlap. Serial execution reports an additive, backend-defined phase
-/// breakdown. Main egglog derives `unattributed` so the components close its
-/// measured outer interval. DD instead defines its pre-merge total directly as
-/// its native search plus apply regions and therefore reports zero
-/// `unattributed` time.
+/// can overlap. Serial execution reports an additive phase breakdown and
+/// derives `unattributed` so the components close its measured outer interval.
 #[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
 pub enum PreMergeTiming {
     /// One wall-clock duration for execution modes whose search and apply work
     /// can overlap.
     Combined { elapsed: Duration },
-    /// Non-overlapping components of the backend's serial pre-merge timing.
+    /// Non-overlapping components of serial pre-merge timing.
     Split {
         search: Duration,
         apply: Duration,
         /// Remainder of a measured outer pre-merge interval after search and
-        /// apply, or zero when the backend defines the total as their sum.
+        /// apply.
         unattributed: Duration,
     },
 }

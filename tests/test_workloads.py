@@ -112,7 +112,7 @@ def test_fact_directory_requires_explicit_benchmark_file(tmp_path: Path) -> None
 def test_workload_command_matches_benchmark_behavior() -> None:
     file_spec = models.FileSpec("file.egg", ROOT / "file.egg", "sha256:file")
 
-    assert targets.workload_command(ROOT / "egglog-experimental", file_spec, "main", "off") == [
+    assert targets.workload_command(ROOT / "egglog-experimental", file_spec, "off") == [
         str(ROOT / "egglog-experimental"),
         "--mode",
         "no-messages",
@@ -120,18 +120,16 @@ def test_workload_command_matches_benchmark_behavior() -> None:
         "1",
         str(file_spec.absolute_path),
     ]
-    assert targets.workload_command(ROOT / "egglog-experimental", file_spec, "dd", "proofs") == [
+    assert targets.workload_command(ROOT / "egglog-experimental", file_spec, "proofs") == [
         str(ROOT / "egglog-experimental"),
         "--mode",
         "no-messages",
         "-j",
         "1",
-        "--backend",
-        "dd",
         "--proofs",
         str(file_spec.absolute_path),
     ]
-    assert targets.workload_command(ROOT / "egglog-experimental", file_spec, "main", "proof-extraction") == [
+    assert targets.workload_command(ROOT / "egglog-experimental", file_spec, "proof-extraction") == [
         str(ROOT / "egglog-experimental"),
         "--mode",
         "no-messages",
@@ -149,5 +147,5 @@ def test_workload_command_matches_benchmark_behavior() -> None:
         facts,
         "sha256:facts",
     )
-    command = targets.workload_command(ROOT / "egglog-experimental", file_with_facts, "main", "proofs")
+    command = targets.workload_command(ROOT / "egglog-experimental", file_with_facts, "proofs")
     assert command[5:7] == ["--fact-directory", str(facts)]

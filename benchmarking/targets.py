@@ -1,6 +1,6 @@
 """Parse, materialize, build, describe, and construct commands for targets.
 
-This module owns backend/treatment workload command construction. Subprocess
+This module owns treatment-specific workload command construction. Subprocess
 measurement and report persistence belong in their dedicated modules.
 """
 
@@ -19,7 +19,7 @@ from typing import Literal
 from rich.console import Console
 from rich.text import Text
 
-from .models import Backend, FileSpec, ResolvedTarget, TargetRequest, TargetRow, Treatment, backend_spec
+from .models import FileSpec, ResolvedTarget, TargetRequest, TargetRow, Treatment
 
 BuildProfile = Literal["release", "profiling"]
 
@@ -32,10 +32,6 @@ def treatment_flags(treatment: Treatment) -> list[str]:
     if treatment == "proof-extraction":
         return ["--proof-extraction"]
     return ["--proofs"]
-
-
-def backend_flags(backend: Backend) -> list[str]:
-    return list(backend_spec(backend).flags)
 
 
 def parse_target(raw: str) -> TargetRequest:
@@ -221,7 +217,6 @@ def build_target(
     row: TargetRow,
     console: Console,
     build_profile: BuildProfile = "release",
-    cargo_features: Sequence[str] = (),
 ) -> tuple[Path, str]:
     checkout_path = Path(row.path)
     console.print(Text.assemble(("Building", "bold"), " ", _display_target(row)))
@@ -229,8 +224,6 @@ def build_target(
         build_args = ["cargo", "build", "--release", "-p", "egglog-experimental"]
     else:
         build_args = ["cargo", "build", "--profile", "profiling", "-p", "egglog-experimental"]
-    if cargo_features:
-        build_args.extend(("--features", ",".join(cargo_features)))
     subprocess.run(
         build_args,
         cwd=checkout_path,
@@ -251,16 +244,14 @@ def build_resolved_target(
     row: TargetRow,
     console: Console,
     build_profile: BuildProfile,
-    cargo_features: Sequence[str],
 ) -> ResolvedTarget:
-    binary_path, binary_sha256 = build_target(row, console, build_profile, cargo_features)
+    binary_path, binary_sha256 = build_target(row, console, build_profile)
     row = replace(row, is_dirty=git_dirty(Path(row.path)))
     return ResolvedTarget(request=request, row=row, binary_sha256=binary_sha256, binary_path=binary_path)
 
 
 def resolve_profile_target(
     request: TargetRequest,
-    backend: Backend,
     invocation_cwd: Path,
     repo_root: Path,
     console: Console,
@@ -268,7 +259,7 @@ def resolve_profile_target(
     if request.is_label_lookup:
         raise ValueError("profile mode does not support cache-only label= targets; use label=SOURCE")
     row = materialize_target_request(request, invocation_cwd, repo_root)
-    return build_resolved_target(request, row, console, "profiling", backend_spec(backend).cargo_features)
+    return build_resolved_target(request, row, console, "profiling")
 
 
 def _display_target(row: TargetRow) -> str:
@@ -284,7 +275,6 @@ def _display_target(row: TargetRow) -> str:
 def workload_command(
     binary_path: Path,
     file_spec: FileSpec,
-    backend: Backend,
     treatment: Treatment,
 ) -> list[str]:
     return [
@@ -294,7 +284,6 @@ def workload_command(
         "-j",
         "1",
         *(["--fact-directory", str(file_spec.fact_directory)] if file_spec.fact_directory is not None else []),
-        *backend_flags(backend),
         *treatment_flags(treatment),
         str(file_spec.absolute_path),
     ]

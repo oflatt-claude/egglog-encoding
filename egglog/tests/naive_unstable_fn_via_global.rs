@@ -110,8 +110,8 @@ fn rule_action_using_unstable_fn_custom_function_requires_naive() {
 /// widen rule contexts to `Read`/`Full` for typechecking just like
 /// rule-local `:naive` does — otherwise a primitive registered as
 /// `FullPrim` (e.g. `unstable-multiset-fill-index`) typechecks under
-/// `:naive` but errors under `--naive` even though the backend
-/// lowering already runs the rule naively.
+/// `:naive` but errors under `--naive` even though rule lowering already runs
+/// the rule naively.
 #[test]
 fn global_naive_widens_rule_context_same_as_local_naive() {
     let program = "

@@ -1054,7 +1054,7 @@ impl<'a> ProofInstrumentor<'a> {
 
                     match change {
                         // Removing the view row here is the uninstrumented meaning
-                        // of `delete`: the backend stages the removal to the batch
+                        // of `delete`: execution stages the removal to the batch
                         // commit, which applies removals ahead of insertions. The
                         // term relation keeps its row so proofs can still name the
                         // deleted term.

@@ -3,7 +3,7 @@
 ; The value comes out of a container the query computed, so no view row mentions
 ; it and the proof encoding has no reflexive anchor to project it out of. The
 ; whole file is therefore expected to be unsupported under proofs (it is listed
-; in the proof_unsupported_files snapshot) and runs only on the native backend.
+; in the proof_unsupported_files snapshot) and runs only without proof encoding.
 ; Reading a base-sorted value out of such a container needs no such anchor and
 ; stays in container-proofs.egg.
 

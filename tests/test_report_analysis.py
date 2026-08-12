@@ -19,12 +19,10 @@ def _endpoint(
     label: str,
     binary_sha256: str,
     *,
-    backend: models.Backend = "main",
     treatment: models.Treatment = "off",
 ) -> models.BenchmarkEndpoint:
     return models.BenchmarkEndpoint(
         make_target(target_label=label, binary_sha256=binary_sha256),
-        backend,
         treatment,
     )
 

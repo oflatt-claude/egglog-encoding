@@ -3,7 +3,7 @@ use std::hash::Hasher;
 use crate::Context;
 use crate::proofs::proof_container_rebuild::register_container_rebuild_from_spec;
 use crate::{
-    core::{CoreActionContext, CoreRule, GenericActionsExt, QueryConstraints, ResolvedCall},
+    core::{CoreActionContext, CoreRule, GenericActionsExt, ResolvedCall},
     *,
 };
 use ast::{
@@ -189,7 +189,7 @@ pub struct PrimitiveWithId {
     pub(crate) validator: Option<PrimitiveValidator>,
     /// Runtime entrypoints for the contexts this primitive is valid in.
     /// The primitive definition is stored once, while each context keeps
-    /// its own backend id so higher-order dispatch can still recover the
+    /// its own runtime id so higher-order dispatch can still recover the
     /// application context at runtime.
     pub(crate) context_ids: EnumMap<Context, Option<ExternalFunctionId>>,
 }
@@ -255,8 +255,8 @@ pub struct IndexInfo {
     pub any_of: Vec<usize>,
 }
 
-// These methods need to be on the `EGraph` in order to
-// register sorts and primitives with the backend.
+// These methods need to be on the `EGraph` in order to register sorts and
+// primitives with the runtime.
 impl EGraph {
     /// Add a user-defined sort to the e-graph.
     ///
@@ -295,7 +295,7 @@ impl EGraph {
 
     /// Add a user-defined sort to the e-graph.
     pub fn add_arcsort(&mut self, sort: ArcSort, span: Span) -> Result<(), TypeError> {
-        sort.register_type(self.backend.as_mut());
+        sort.register_type(&mut self.backend);
 
         let name = sort.name();
         match self.type_info.sorts.entry(name.to_owned()) {
@@ -332,8 +332,8 @@ impl EGraph {
             x,
             validator,
             PureState::valid_contexts(),
-            |backend, x, ctx| {
-                backend.register_external_func(Box::new(PurePrimWrapper { prim: x, ctx }))
+            |egraph, x, ctx| {
+                egraph.register_external_func(Box::new(PurePrimWrapper { prim: x, ctx }))
             },
         );
     }
@@ -378,40 +378,31 @@ impl EGraph {
         T: Primitive + Clone,
         S: RegistryWrap<T> + 'static,
     {
-        self.register_per_context(x, validator, valid_ctxs, |backend, x, ctx| {
-            if let Some(registry) = backend.action_registry().cloned() {
-                backend.register_external_func(Box::new(RegistryPrimWrapper::<T, S> {
-                    prim: x,
-                    registry,
-                    ctx,
-                    _wrap: std::marker::PhantomData,
-                }))
-            } else {
-                let name = x.name().to_owned();
-                backend.new_panic(format!(
-                    "primitive {name} in {ctx:?} context requires a backend action registry"
-                ))
-            }
+        self.register_per_context(x, validator, valid_ctxs, |egraph, x, ctx| {
+            let registry = egraph.action_registry().clone();
+            egraph.register_external_func(Box::new(RegistryPrimWrapper::<T, S> {
+                prim: x,
+                registry,
+                ctx,
+                _wrap: std::marker::PhantomData,
+            }))
         });
     }
 
-    /// Register a term-encoding op primitive whose runtime entrypoint the backend
-    /// itself mints. `prim` supplies only the type constraints (its body is never
-    /// invoked); `make_id` asks each backend on the typechecker chain for the
-    /// [`ExternalFunctionId`] that services this op against that backend's own
-    /// storage. Unlike [`Self::register_registry_primitive`], this works on
-    /// backends without an action registry.
-    pub(crate) fn add_backend_op_primitive<T, F>(
+    /// Register an internal term-encoding primitive. `prim` supplies only the
+    /// type constraints; `make_id` creates its runtime entrypoint on each
+    /// e-graph in the typechecker chain.
+    pub(crate) fn add_internal_primitive<T, F>(
         &mut self,
         prim: T,
         valid_ctxs: &[Context],
         mut make_id: F,
     ) where
         T: Primitive + Clone,
-        F: FnMut(&mut dyn Backend, Context) -> ExternalFunctionId,
+        F: FnMut(&mut egglog_bridge::EGraph, Context) -> ExternalFunctionId,
     {
-        self.register_per_context(prim, None, valid_ctxs, move |backend, _x, ctx| {
-            make_id(backend, ctx)
+        self.register_per_context(prim, None, valid_ctxs, move |egraph, _x, ctx| {
+            make_id(egraph, ctx)
         });
     }
 
@@ -432,7 +423,7 @@ impl EGraph {
         mut build_wrapper: F,
     ) where
         T: Primitive + Clone,
-        F: FnMut(&mut dyn Backend, T, Context) -> ExternalFunctionId,
+        F: FnMut(&mut egglog_bridge::EGraph, T, Context) -> ExternalFunctionId,
     {
         // Register on this e-graph AND every term-encoding typechecker down the
         // chain. Each typechecker is a separate e-graph that typechecks the
@@ -449,7 +440,7 @@ impl EGraph {
             let context_ids = EnumMap::from_fn(|ctx| {
                 valid_ctxs
                     .contains(&ctx)
-                    .then(|| build_wrapper(eg.backend.as_mut(), x.clone(), ctx))
+                    .then(|| build_wrapper(&mut eg.backend, x.clone(), ctx))
             });
             eg.type_info
                 .primitives

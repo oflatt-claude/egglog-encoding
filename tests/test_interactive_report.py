@@ -33,10 +33,10 @@ def test_runtime_discovers_entire_cache_and_retargets_all_sections(tmp_path: Pat
     files = cast(list[dict[str, JsonValue]], selectors["files"])
 
     assert {endpoint["label"] for endpoint in endpoints} == {
-        "alternative · abc123 · dd/proofs",
-        "baseline · abc123 · main/off",
-        "candidate · abc123 · main/proofs",
-        "historical · abc123 · main/term",
+        "alternative · abc123 · proofs",
+        "baseline · abc123 · off",
+        "candidate · abc123 · proofs",
+        "historical · abc123 · term",
     }
     assert {file["label"] for file in files} == {"one.egg", "two.egg", "three.egg"}
     assert selectors["timeouts_sec"] == [60, 120]
@@ -44,7 +44,7 @@ def test_runtime_discovers_entire_cache_and_retargets_all_sections(tmp_path: Pat
     assert selectors["max_rounds"] == 2
     assert _section_ids(payload) == ["selection", "summary", "files", "phases", "rulesets"]
 
-    alternative = next(endpoint for endpoint in endpoints if endpoint["backend"] == "dd")
+    alternative = next(endpoint for endpoint in endpoints if endpoint["target"] == "alternative")
     baseline = next(endpoint for endpoint in endpoints if endpoint["treatment"] == "off")
     first_file = next(file for file in files if file["label"] == "one.egg")
     second_file = next(file for file in files if file["label"] == "two.egg")
@@ -76,7 +76,7 @@ def test_incomplete_scope_publishes_missing_cells_but_invalid_scope_rolls_back(t
     selectors = cast(dict[str, JsonValue], payload["selectors"])
     endpoints = cast(list[dict[str, JsonValue]], selectors["endpoints"])
     files = cast(list[dict[str, JsonValue]], selectors["files"])
-    alternative = next(endpoint for endpoint in endpoints if endpoint["backend"] == "dd")
+    alternative = next(endpoint for endpoint in endpoints if endpoint["target"] == "alternative")
     baseline = next(endpoint for endpoint in endpoints if endpoint["treatment"] == "off")
     first_file = next(file for file in files if file["label"] == "one.egg")
 
@@ -264,20 +264,18 @@ def test_initial_html_uses_native_provenance_file_order_and_selector_labels(tmp_
     assert endpoints[:2] == [
         {
             "id": initial_scope["baseline_endpoint_id"],
-            "label": "feedface0001 dirty · main/off",
+            "label": "feedface0001 dirty · off",
             "target": "feedface0001",
             "git_sha": "feedface0001",
             "dirty": True,
-            "backend": "main",
             "treatment": "off",
         },
         {
             "id": initial_scope["candidate_endpoint_id"],
-            "label": "working-candidate · feedface0002 · main/proofs",
+            "label": "working-candidate · feedface0002 · proofs",
             "target": "working-candidate",
             "git_sha": "feedface0002",
             "dirty": False,
-            "backend": "main",
             "treatment": "proofs",
         },
     ]
@@ -342,7 +340,6 @@ def _interactive_case(
         make_endpoint(
             target_label="alternative",
             binary_sha256="sha256:alternative",
-            backend="dd",
             treatment="proofs",
         ),
         make_endpoint(target_label="historical", binary_sha256="sha256:historical", treatment="term"),
@@ -358,7 +355,6 @@ def _interactive_case(
             target_label=endpoint.target.row.label,
             binary_sha256=endpoint.target.binary_sha256,
             file_sha256=file.sha256,
-            backend=endpoint.backend,
             treatment=endpoint.treatment,
             timeout_sec=timeout_sec,
             wall_sec=1.0 + endpoint_order * 0.2 + file_order * 0.1 + round_index * 0.01,

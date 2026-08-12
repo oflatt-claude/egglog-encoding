@@ -93,7 +93,6 @@ def test_parse_args_dispatches_profile_without_changing_benchmark_defaults() -> 
     assert benchmark_args.format == "rich"
     assert profile_args.command == "profile"
     assert profile_args.file == "file.egg"
-    assert profile_args.backend == "main"
     assert profile_args.treatment == "proofs"
     assert profile_args.top == 15
     assert not profile_args.no_summary
@@ -138,23 +137,13 @@ def test_parse_profile_args_rejects_iterations_with_profile_seconds() -> None:
         profile_runner.parse_profile_args(["file.egg", "--iterations", "1", "--profile-seconds", "1"])
 
 
-def test_resolve_profile_request_reuses_backend_treatment_validation(tmp_path: Path) -> None:
-    file_path = tmp_path / "file.egg"
-    file_path.write_text("(check (= 1 1))\n", encoding="utf-8")
-    args = profile_runner.parse_profile_args([str(file_path), "--backend", "dd", "--treatment", "off"])
-
-    with pytest.raises(ValueError, match="backend dd does not support treatment off"):
-        profile_runner.resolve_profile_request(args, ROOT)
-
-
-def test_profile_accepts_explicit_main_proof_extraction(tmp_path: Path) -> None:
+def test_profile_accepts_explicit_proof_extraction(tmp_path: Path) -> None:
     file_path = tmp_path / "file.egg"
     file_path.write_text("(check (= 1 1))\n", encoding="utf-8")
     args = profile_runner.parse_profile_args([str(file_path), "--treatment", "proof-extraction"])
 
     request = profile_runner.resolve_profile_request(args, ROOT)
 
-    assert request.backend == "main"
     assert request.treatment == "proof-extraction"
 
 
@@ -166,7 +155,6 @@ def test_target_resolvers_share_materialization_and_select_build_profile(
     target = make_target(binary_path=ROOT / "egglog-experimental")
     materialized: list[models.TargetRequest] = []
     build_profiles: list[targets.BuildProfile] = []
-    build_features: list[tuple[str, ...]] = []
 
     def fake_materialize(
         target_request: models.TargetRequest,
@@ -181,12 +169,10 @@ def test_target_resolvers_share_materialization_and_select_build_profile(
         target_row: models.TargetRow,
         console: Console,
         build_profile: targets.BuildProfile,
-        cargo_features: tuple[str, ...],
     ) -> models.ResolvedTarget:
         assert target_request == request
         assert target_row == row
         build_profiles.append(build_profile)
-        build_features.append(cargo_features)
         return target
 
     monkeypatch.setattr(collection, "materialize_target_request", fake_materialize)
@@ -194,7 +180,7 @@ def test_target_resolvers_share_materialization_and_select_build_profile(
     monkeypatch.setattr(targets, "materialize_target_request", fake_materialize)
     monkeypatch.setattr(targets, "build_resolved_target", fake_build)
     file_spec = models.FileSpec("file.egg", ROOT / "file.egg", "sha256:file")
-    endpoint_request = models.EndpointRequest(request, "main", "off")
+    endpoint_request = models.EndpointRequest(request, "off")
 
     benchmark_target = collection.resolve_targets(
         ((request, (endpoint_request,)),),
@@ -207,13 +193,12 @@ def test_target_resolvers_share_materialization_and_select_build_profile(
         ROOT,
         Console(stderr=True),
     )[request]
-    profile_target = targets.resolve_profile_target(request, "dd", ROOT, ROOT, Console(stderr=True))
+    profile_target = targets.resolve_profile_target(request, ROOT, ROOT, Console(stderr=True))
 
     assert benchmark_target == target
     assert profile_target == target
     assert materialized == [request, request]
     assert build_profiles == ["release", "profiling"]
-    assert build_features == [(), ("dd-backend",)]
 
 
 def test_build_target_uses_profiling_profile(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -247,32 +232,30 @@ def test_profile_cache_path_uses_full_binary_and_file_hashes() -> None:
     file_hash = "sha256:" + "b" * 64
 
     explicit = profile_runner.profile_cache_path(
-        Path(".profiles"), binary_hash, file_hash, "main", "proofs", profile_runner.ProfileMode(5, None)
+        Path(".profiles"), binary_hash, file_hash, "proofs", profile_runner.ProfileMode(5, None)
     )
     automatic = profile_runner.profile_cache_path(
         Path(".profiles"),
         binary_hash,
         file_hash,
-        "main",
         "proofs",
         profile_runner.ProfileMode(None, 10),
     )
 
-    base = Path(".profiles") / "v3" / ("a" * 64) / ("b" * 64) / "no-facts"
-    assert explicit == base / "main-proofs-i5.json.gz"
-    assert automatic == base / "main-proofs-auto10s.json.gz"
+    base = Path(".profiles") / "v4" / ("a" * 64) / ("b" * 64) / "no-facts"
+    assert explicit == base / "proofs-i5.json.gz"
+    assert automatic == base / "proofs-auto10s.json.gz"
 
     data_hash = "sha256:" + "c" * 64
     with_facts = profile_runner.profile_cache_path(
         Path(".profiles"),
         binary_hash,
         file_hash,
-        "main",
         "proofs",
         profile_runner.ProfileMode(5, None),
         data_hash,
     )
-    assert with_facts == base.parent / ("c" * 64) / "main-proofs-i5.json.gz"
+    assert with_facts == base.parent / ("c" * 64) / "proofs-i5.json.gz"
 
 
 def test_profile_display_path_is_relative_inside_invocation_directory(tmp_path: Path) -> None:
@@ -679,4 +662,4 @@ def test_profile_auto_iteration_cap_prints_warning(
 
 def test_profile_rejects_cache_only_label_targets() -> None:
     with pytest.raises(ValueError, match="cache-only label="):
-        targets.resolve_profile_target(targets.parse_target("cached="), "main", ROOT, ROOT, Console(stderr=True))
+        targets.resolve_profile_target(targets.parse_target("cached="), ROOT, ROOT, Console(stderr=True))
