@@ -206,7 +206,7 @@ corpus:
 | Luminal | Static Llama graph from [`egglog_repro` commit `7fb0194`](https://github.com/saulshanabrook/egglog_repro/blob/7fb0194812b5b11e41a286d8b55e48e3b0bfcd66/llama.egg) | `t712` is checked after kernel lowering |
 | Herbie | Static engine proxy without Racket orchestration or an FPCore corpus | All 14 checks exercise the selected treatment |
 | MISAAL | Complete generated HVX dot-product workload with current global syntax | The source expression is checked equivalent to the synthesized HVX result |
-| Churchroad | The paper's 16-by-32-bit wide multiply with its prelude and driver mapping rules materialized; the saturating schedule is bounded to 14 cycles | The multiply expansion and its two-input and three-input DSP proposals are checked |
+| Churchroad | The paper's 16-by-32-bit wide multiply with its prelude and driver mapping rules materialized; the saturating schedule is bounded to 17 cycles, calibrated as a roughly one-second normal-mode workload | The multiply expansion and its two-input and three-input DSP proposals are checked |
 | DialEgg | Generated NMM-40 scaling workload with `base.egg` materialized | An alternative matrix-chain association is checked |
 | SpEQ | Four artifact-preserved programs that still match the artifact's GEMV/histogram reference rules, recorded using egglog-python's native command log | Each input is checked equal to its extracted reference call (or enclosing expression) |
 

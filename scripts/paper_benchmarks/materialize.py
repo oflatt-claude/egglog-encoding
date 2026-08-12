@@ -21,6 +21,7 @@ CHURCHROAD_WIDE_MUL_SHA256 = "793eaa9b8af1b7432e60af4739819373d2f7bc84b670816f9f
 CHURCHROAD_MAIN_SHA256 = "ee0df34796744c548fb4d8058fd2fde2bb5165e00097a3626314d2d62484b541"
 CHURCHROAD_PLUGIN_SHA256 = "da3f0fabeb0b8337a57833a45e94a1631eee1711e516a918a33adbb4560023af"
 CHURCHROAD_GENERATED_SHA256 = "d4264a2c04382e1a78c0ceb4323b363b11a320bf3b66e3ac451a8114707e479b"
+CHURCHROAD_BENCHMARK_CYCLES = 17
 YOSYS_COMMIT = "f8d4d7128cf72456cc03b0738a8651ac5dbe52e1"
 DIALEGG_BASE_SHA256 = "69768076a70f83075cafd00aa053b227e257ecf88e5afaf368af44801fae2e5f"
 DIALEGG_NMM_TEMPLATE_SHA256 = "548e5fc8f0bd4cbf294760769f783b48979021a58b93dd14cb104d14b612fc91"
@@ -225,7 +226,10 @@ def materialize_churchroad_wide_mul(
     shifted_high = f"(Op2 (Shl) {high_mul} (Op0 (BV 16 32)))"
     checks = "\n".join(
         (
-            "(run-schedule (repeat 14 (seq (run typing) (run transform) (run mapping))))",
+            f"; The paper driver saturates this sequence. This {CHURCHROAD_BENCHMARK_CYCLES}-cycle prefix",
+            "; measured about 0.9 seconds in normal release mode on the calibration machine;",
+            f"; {CHURCHROAD_BENCHMARK_CYCLES + 1} cycles measured about 1.6 seconds.",
+            f"(run-schedule (repeat {CHURCHROAD_BENCHMARK_CYCLES} (seq (run typing) (run transform) (run mapping))))",
             f"(check (= $v2 (Op2 (Add) {low_mul} {shifted_high})))",
             f"(check (= {low_mul} (PrimitiveInterfaceDSP $v0 {low_b})))",
             f"(check (= {high_mul} (PrimitiveInterfaceDSP $v0 {high_b})))",
@@ -248,8 +252,11 @@ def materialize_churchroad_wide_mul(
             "The paper schedule does not invoke module enumeration, so its Rust-only debruijnify primitive",
             "and module_enumeration_rewrites.egg are intentionally not part of this standalone workload.",
             "Adaptations: inline the prelude, use current constructors/globals, bound the paper's saturating",
-            "typing/transform/mapping sequence to 14 cycles, and add checks for the wide-multiply expansion",
-            "and the two-input and three-input DSP mapping proposals.",
+            f"typing/transform/mapping sequence to {CHURCHROAD_BENCHMARK_CYCLES} cycles, and add checks for",
+            "the wide-multiply expansion and the two-input and three-input DSP mapping proposals.",
+            f"Calibration: {CHURCHROAD_BENCHMARK_CYCLES} cycles measured about 0.9 seconds in normal release",
+            f"mode on the calibration machine; {CHURCHROAD_BENCHMARK_CYCLES + 1} cycles measured about 1.6",
+            "seconds. Timings are machine-dependent.",
             "Reproduce: uv run python scripts/paper_benchmarks/materialize.py churchroad-wide-multiply "
             "--checkout churchroad --yosys YOSYS --plugin churchroad.so --output OUT",
         )

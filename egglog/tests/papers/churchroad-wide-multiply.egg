@@ -12,8 +12,11 @@
 ;; The paper schedule does not invoke module enumeration, so its Rust-only debruijnify primitive
 ;; and module_enumeration_rewrites.egg are intentionally not part of this standalone workload.
 ;; Adaptations: inline the prelude, use current constructors/globals, bound the paper's saturating
-;; typing/transform/mapping sequence to 14 cycles, and add checks for the wide-multiply expansion
-;; and the two-input and three-input DSP mapping proposals.
+;; typing/transform/mapping sequence to 17 cycles, and add checks for
+;; the wide-multiply expansion and the two-input and three-input DSP mapping proposals.
+;; Calibration: 17 cycles measured about 0.9 seconds in normal release
+;; mode on the calibration machine; 18 cycles measured about 1.6
+;; seconds. Timings are machine-dependent.
 ;; Reproduce: uv run python scripts/paper_benchmarks/materialize.py churchroad-wide-multiply --checkout churchroad --yosys YOSYS --plugin churchroad.so --output OUT
 
 ;;; Churchroad language definition with antiunification experiments.
@@ -427,7 +430,10 @@
     :ruleset transform)
 
 ;;; Replay oracles
-(run-schedule (repeat 14 (seq (run typing) (run transform) (run mapping))))
+; The paper driver saturates this sequence. This 17-cycle prefix
+; measured about 0.9 seconds in normal release mode on the calibration machine;
+; 18 cycles measured about 1.6 seconds.
+(run-schedule (repeat 17 (seq (run typing) (run transform) (run mapping))))
 (check (= $v2 (Op2 (Add) (Op2 (Mul) (Op1 (ZeroExtend 32) $v0) (Op1 (ZeroExtend 32) (Op1 (Extract 15 0) $v1))) (Op2 (Shl) (Op2 (Mul) (Op1 (ZeroExtend 32) $v0) (Op1 (ZeroExtend 32) (Op1 (Extract 31 16) $v1))) (Op0 (BV 16 32))))))
 (check (= (Op2 (Mul) (Op1 (ZeroExtend 32) $v0) (Op1 (ZeroExtend 32) (Op1 (Extract 15 0) $v1))) (PrimitiveInterfaceDSP $v0 (Op1 (Extract 15 0) $v1))))
 (check (= (Op2 (Mul) (Op1 (ZeroExtend 32) $v0) (Op1 (ZeroExtend 32) (Op1 (Extract 31 16) $v1))) (PrimitiveInterfaceDSP $v0 (Op1 (Extract 31 16) $v1))))

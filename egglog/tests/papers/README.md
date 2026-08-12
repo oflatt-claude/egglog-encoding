@@ -17,10 +17,12 @@ The choices favor meaningful representative workloads that stay bounded for
 default use.
 MISAAL has only one committed complete generated workload. Churchroad's paper
 contains one end-to-end running example, the wide multiply used here. The file
-replays that example's Egglog mapping phase, bounded to 14 iterations of the
-paper's saturating schedule. `debruijnify` is required by Churchroad's separate
-module-enumeration rules, but the paper driver does not invoke those rules in
-this flow. DialEgg's NMM-40 input is the medium published scaling case: unlike
+replays that example's Egglog mapping phase, bounded to 17 iterations of the
+paper's saturating schedule. Seventeen cycles measured about 0.9 seconds in
+normal release mode on the calibration machine, while 18 measured about 1.6
+seconds; timings are machine-dependent. `debruijnify` is required by
+Churchroad's separate module-enumeration rules, but the paper driver does not
+invoke those rules in this flow. DialEgg's NMM-40 input is the medium published scaling case: unlike
 NMM-20 it runs for hundreds of milliseconds, while avoiding NMM-80's
 multi-second, multi-gigabyte proof run. The SpEQ file groups the four preserved
 REV programs that still reach the artifact's verified GEMV or histogram
