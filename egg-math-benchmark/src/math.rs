@@ -55,14 +55,12 @@ pub(crate) fn rules() -> Vec<Rewrite<Math, ()>> {
     ]
 }
 
-pub(crate) fn start_expressions() -> &'static [&'static str] {
-    &[
-        "(i (ln x) x)",
-        "(i (+ x (cos x)) x)",
-        "(i (* (cos x) x) x)",
-        "(d x (+ 1 (* 2 x)))",
-        "(d x (- (pow x 3) (* 7 (pow x 2))))",
-        "(+ (* y (+ x y)) (- (+ x 2) (+ x x)))",
-        "(/ 1 (- (/ (+ 1 (sqrt five)) 2) (/ (- 1 (sqrt five)) 2)))",
-    ]
-}
+pub(crate) const START_EXPRESSIONS: &[&str] = &[
+    "(i (ln x) x)",
+    "(i (+ x (cos x)) x)",
+    "(i (* (cos x) x) x)",
+    "(d x (+ 1 (* 2 x)))",
+    "(d x (- (pow x 3) (* 7 (pow x 2))))",
+    "(+ (* y (+ x y)) (- (+ x 2) (+ x x)))",
+    "(/ 1 (- (/ (+ 1 (sqrt five)) 2) (/ (- 1 (sqrt five)) 2)))",
+];

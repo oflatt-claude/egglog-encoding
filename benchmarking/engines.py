@@ -53,18 +53,10 @@ TREATMENTS = tuple(TREATMENT_SPECS)
 MATH_WORKLOAD_PATH = Path("egglog-experimental/tests/math-microbenchmark-rational.egg")
 
 
-def treatment_spec(treatment: Treatment) -> TreatmentSpec:
-    return TREATMENT_SPECS[treatment]
-
-
-def treatment_engine(treatment: Treatment) -> Engine:
-    return treatment_spec(treatment).engine
-
-
 def validate_engine_workload(file_spec: WorkloadFile, treatment: Treatment) -> None:
     """Reject workload features unsupported by the selected treatment engine."""
 
-    if treatment_engine(treatment) != "egg":
+    if TREATMENT_SPECS[treatment].engine != "egg":
         return
     project_fixture = Path(__file__).resolve().parents[1] / MATH_WORKLOAD_PATH
     if file_spec.absolute_path != project_fixture.resolve():

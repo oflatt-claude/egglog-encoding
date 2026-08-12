@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from .engines import Engine, Treatment, treatment_engine
+from .engines import TREATMENT_SPECS, Engine, Treatment
 
 Status = Literal["success", "timed-out", "failure"]
 Backend = str
@@ -132,7 +132,7 @@ class ResolvedTarget:
     primary_engine: Engine | None = None
 
     def binary_sha256_for(self, treatment: Treatment) -> str:
-        engine = treatment_engine(treatment)
+        engine = TREATMENT_SPECS[treatment].engine
         for binary in self.engine_binaries:
             if binary.engine == engine:
                 return binary.sha256
@@ -141,7 +141,7 @@ class ResolvedTarget:
         raise ValueError(f"target {self.display_label} has no {engine} binary")
 
     def binary_path_for(self, treatment: Treatment) -> Path | None:
-        engine = treatment_engine(treatment)
+        engine = TREATMENT_SPECS[treatment].engine
         for binary in self.engine_binaries:
             if binary.engine == engine:
                 return binary.path

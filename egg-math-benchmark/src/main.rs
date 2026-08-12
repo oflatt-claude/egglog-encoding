@@ -26,12 +26,6 @@ enum ProofMode {
     Check,
 }
 
-impl ProofMode {
-    fn records_proofs(self) -> bool {
-        self != Self::Off
-    }
-}
-
 #[derive(Debug, Parser)]
 #[command(about = "Run the fixed PLDI 2023 Math workload with current egg")]
 struct Args {
@@ -59,10 +53,10 @@ fn run_math(proof_mode: ProofMode) -> Result<TimingSummaryV2> {
         .with_iter_limit(ITERATIONS)
         .with_node_limit(usize::MAX)
         .with_time_limit(Duration::MAX);
-    if proof_mode.records_proofs() {
+    if proof_mode != ProofMode::Off {
         runner = runner.with_explanations_enabled();
     }
-    for start in math::start_expressions() {
+    for start in math::START_EXPRESSIONS {
         let expression = start.parse().expect("fixed Math seed must parse");
         runner = runner.with_expr(&expression);
     }

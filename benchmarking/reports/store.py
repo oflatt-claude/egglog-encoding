@@ -14,7 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Final, Literal, TypedDict, cast
 
-from ..engines import Engine, treatment_engine
+from ..engines import TREATMENT_SPECS, Engine
 from ..models import (
     Backend,
     BenchmarkEndpoint,
@@ -181,7 +181,9 @@ class ReportStore:
         if not rows:
             return None
         matching = (
-            rows if engine is None else [row for row in rows if treatment_engine(row.record["treatment"]) == engine]
+            rows
+            if engine is None
+            else [row for row in rows if TREATMENT_SPECS[row.record["treatment"]].engine == engine]
         )
         if not matching:
             return None

@@ -26,7 +26,7 @@ from rich.progress import (
 from rich.table import Column
 from rich.text import Text
 
-from .engines import treatment_engine, treatment_spec
+from .engines import TREATMENT_SPECS
 from .models import (
     Backend,
     BenchmarkEndpoint,
@@ -197,7 +197,7 @@ def resolve_targets(
         backends = tuple(endpoint.backend for target in pending_targets for endpoint in target.endpoint_requests)
         engines = tuple(
             dict.fromkeys(
-                treatment_engine(endpoint.treatment)
+                TREATMENT_SPECS[endpoint.treatment].engine
                 for target in pending_targets
                 for endpoint in target.endpoint_requests
             )
@@ -241,7 +241,9 @@ def _resolve_or_materialize_target(
         raise ValueError("target resolution requires its exact endpoint requests")
     if request.is_label_lookup:
         assert request.label is not None
-        required_engines = tuple(dict.fromkeys(treatment_engine(endpoint.treatment) for endpoint in endpoint_requests))
+        required_engines = tuple(
+            dict.fromkeys(TREATMENT_SPECS[endpoint.treatment].engine for endpoint in endpoint_requests)
+        )
         engine_pointers = tuple(
             (engine, store.find_label_pointer(request.label, engine)) for engine in required_engines
         )
@@ -366,15 +368,15 @@ def preflight_collection(plan: CollectionPlan, timeout_sec: int) -> None:
         return
     target = plan.target
     missing = tuple(run for run in plan.runs if run.missing_observations > 0)
-    for engine in dict.fromkeys(treatment_engine(run.treatment) for run in missing):
-        engine_runs = tuple(run for run in missing if treatment_engine(run.treatment) == engine)
+    for engine in dict.fromkeys(TREATMENT_SPECS[run.treatment].engine for run in missing):
+        engine_runs = tuple(run for run in missing if TREATMENT_SPECS[run.treatment].engine == engine)
         binary_path = target.binary_path_for(engine_runs[0].treatment)
         if binary_path is None:
             raise ValueError(f"target {target.display_label} needs a fresh {engine} binary")
         required_outputs = ["--timing-summary"]
         if engine == "egglog":
             required_outputs.extend(
-                flag for run in engine_runs for flag in treatment_spec(run.treatment).flags if flag.startswith("--")
+                flag for run in engine_runs for flag in TREATMENT_SPECS[run.treatment].flags if flag.startswith("--")
             )
         result = run_preflight(
             binary_path,
@@ -542,7 +544,7 @@ def collect_rows(
                 binary_path = target.binary_path_for(run.treatment)
                 if binary_path is None:
                     raise ValueError(
-                        f"target {target.display_label} needs a fresh {treatment_engine(run.treatment)} binary"
+                        f"target {target.display_label} needs a fresh {TREATMENT_SPECS[run.treatment].engine} binary"
                     )
                 observation = run_process(
                     binary_path,

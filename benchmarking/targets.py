@@ -19,7 +19,7 @@ from typing import Literal
 from rich.console import Console
 from rich.text import Text
 
-from .engines import Engine, Treatment, treatment_spec, validate_engine_workload
+from .engines import TREATMENT_SPECS, Engine, Treatment, validate_engine_workload
 from .models import Backend, EngineBinary, FileSpec, ResolvedTarget, TargetRequest, TargetRow, backend_spec
 
 BuildProfile = Literal["release", "profiling"]
@@ -279,7 +279,7 @@ def resolve_profile_target(
     if request.is_label_lookup:
         raise ValueError("profile mode does not support cache-only label= targets; use label=SOURCE")
     row = materialize_target_request(request, invocation_cwd, repo_root)
-    engine = treatment_spec(treatment).engine
+    engine = TREATMENT_SPECS[treatment].engine
     return build_resolved_target(
         request,
         row,
@@ -306,7 +306,7 @@ def workload_command(
     backend: Backend,
     treatment: Treatment,
 ) -> list[str]:
-    specification = treatment_spec(treatment)
+    specification = TREATMENT_SPECS[treatment]
     if specification.engine == "egg":
         validate_engine_workload(file_spec, treatment)
         return [str(binary_path), *specification.flags]
