@@ -26,10 +26,12 @@ from rich.progress import (
 from rich.table import Column
 from rich.text import Text
 
+from .engines import treatment_engine, treatment_spec
 from .models import (
     Backend,
     BenchmarkEndpoint,
     EndpointRequest,
+    EngineBinary,
     FileSpec,
     ResolvedTarget,
     Status,
@@ -193,6 +195,13 @@ def resolve_targets(
         if len(git_shas) != 1:
             raise ValueError(f"target selectors resolved checkout {checkout_path} at different git commits")
         backends = tuple(endpoint.backend for target in pending_targets for endpoint in target.endpoint_requests)
+        engines = tuple(
+            dict.fromkeys(
+                treatment_engine(endpoint.treatment)
+                for target in pending_targets
+                for endpoint in target.endpoint_requests
+            )
+        )
         representative = pending_targets[0]
         built = build_resolved_target(
             representative.request,
@@ -200,6 +209,7 @@ def resolve_targets(
             console,
             "release",
             backend_cargo_features(backends),
+            engines,
         )
         for target in pending_targets:
             resolved[target.request] = ResolvedTarget(
@@ -207,6 +217,8 @@ def resolve_targets(
                 row=replace(target.row, is_dirty=built.row.is_dirty),
                 binary_sha256=built.binary_sha256,
                 binary_path=built.binary_path,
+                engine_binaries=built.engine_binaries,
+                primary_engine=built.primary_engine,
             )
 
     return {request: resolved[request] for request, _endpoint_requests in request_groups}
@@ -232,21 +244,36 @@ def _resolve_or_materialize_target(
         pointer = store.find_label_pointer(request.label)
         if pointer is None:
             raise ValueError(f"no cached rows found for label {request.label!r}")
-        cached_target = ResolvedTarget(
-            request=request,
-            row=pointer.row,
-            binary_sha256=pointer.binary_sha256,
-            binary_path=None,
+        required_engines = tuple(dict.fromkeys(treatment_engine(endpoint.treatment) for endpoint in endpoint_requests))
+        engine_pointers = tuple(
+            (engine, store.find_label_pointer(request.label, engine)) for engine in required_engines
         )
-        if not force_run and label_has_enough_rows(
-            store,
-            pointer.binary_sha256,
-            endpoint_requests,
-            files,
-            rounds,
-            timeout_sec,
+        if all(
+            engine_pointer is not None and engine_pointer.row == pointer.row
+            for _engine, engine_pointer in engine_pointers
         ):
-            return cached_target
+            binaries = tuple(
+                EngineBinary(engine, engine_pointer.binary_sha256, None)
+                for engine, engine_pointer in engine_pointers
+                if engine_pointer is not None
+            )
+            cached_target = ResolvedTarget(
+                request=request,
+                row=pointer.row,
+                binary_sha256=binaries[0].sha256,
+                binary_path=None,
+                engine_binaries=binaries,
+                primary_engine=binaries[0].engine,
+            )
+            if not force_run and label_has_enough_rows(
+                store,
+                cached_target,
+                endpoint_requests,
+                files,
+                rounds,
+                timeout_sec,
+            ):
+                return cached_target
         if pointer.row.is_dirty:
             raise ValueError(
                 f"label {request.label!r} points to a dirty checkout; provide label=SOURCE to collect fresh rows"
@@ -261,7 +288,7 @@ def _resolve_or_materialize_target(
 
 def label_has_enough_rows(
     store: ReportStore,
-    binary_sha256: str,
+    target: ResolvedTarget,
     endpoint_requests: tuple[EndpointRequest, ...],
     files: tuple[FileSpec, ...],
     rounds: int,
@@ -271,7 +298,7 @@ def label_has_enough_rows(
 
     keys = tuple(
         CacheKey(
-            binary_sha256,
+            target.binary_sha256_for(endpoint.treatment),
             file_spec.sha256,
             endpoint.treatment,
             timeout_sec,
@@ -340,17 +367,28 @@ def preflight_collection(plan: CollectionPlan, timeout_sec: int) -> None:
     if plan.total_missing_observations == 0:
         return
     target = plan.target
-    if target.binary_path is None:
-        raise ValueError(f"target {target.display_label} needs fresh rows but has no build path")
-    required_outputs: tuple[str, ...] = ("--timing-summary",)
-    if any(run.treatment == "proof-extraction" and run.missing_observations > 0 for run in plan.runs):
-        required_outputs += ("--proof-extraction",)
-    result = run_preflight(target.binary_path, Path(target.row.path), timeout_sec, required_outputs)
-    if result.status != "success":
-        message = f"target {target.display_label} preflight failed"
-        if result.error is not None:
-            message = f"{message}: {result.error.message}"
-        raise ValueError(message)
+    missing = tuple(run for run in plan.runs if run.missing_observations > 0)
+    for engine in dict.fromkeys(treatment_engine(run.treatment) for run in missing):
+        engine_runs = tuple(run for run in missing if treatment_engine(run.treatment) == engine)
+        binary_path = target.binary_path_for(engine_runs[0].treatment)
+        if binary_path is None:
+            raise ValueError(f"target {target.display_label} needs a fresh {engine} binary")
+        required_outputs = ["--timing-summary"]
+        if engine == "egglog":
+            required_outputs.extend(
+                flag for run in engine_runs for flag in treatment_spec(run.treatment).flags if flag.startswith("--")
+            )
+        result = run_preflight(
+            binary_path,
+            Path(target.row.path),
+            timeout_sec,
+            tuple(dict.fromkeys(required_outputs)),
+        )
+        if result.status != "success":
+            message = f"target {target.display_label} {engine} preflight failed"
+            if result.error is not None:
+                message = f"{message}: {result.error.message}"
+            raise ValueError(message)
 
 
 def collection_label(
@@ -430,7 +468,7 @@ def flat_report_record(
         "target_git_ref": target.row.git_ref,
         "target_git_sha": target.row.git_sha,
         "target_is_dirty": target.row.is_dirty,
-        "binary_sha256": target.binary_sha256,
+        "binary_sha256": target.binary_sha256_for(run.treatment),
         "file_path": run.file.display_path,
         "file_sha256": run.file.sha256,
         "fact_directory_path": (str(run.file.fact_directory) if run.file.fact_directory is not None else None),
@@ -458,9 +496,6 @@ def collect_rows(
     target = plan.target
     if plan.total_missing_observations == 0:
         return
-    if target.binary_path is None:
-        raise ValueError(f"target {target.display_label} needs fresh rows but has no build path")
-    binary_path = target.binary_path
     total_observations = plan.total_missing_observations
     max_deficit = max(run.missing_observations for run in plan.runs)
     completed_observations = 0
@@ -506,6 +541,11 @@ def collect_rows(
                     current=label,
                 )
                 started_at = _now_iso()
+                binary_path = target.binary_path_for(run.treatment)
+                if binary_path is None:
+                    raise ValueError(
+                        f"target {target.display_label} needs a fresh {treatment_engine(run.treatment)} binary"
+                    )
                 observation = run_process(
                     binary_path,
                     Path(target.row.path),

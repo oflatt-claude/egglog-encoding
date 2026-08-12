@@ -135,7 +135,16 @@ def _selection_section(
     )
     blocks: list[ReportBlock] = [endpoint_table]
     changed = (
-        comparison.baseline.target.binary_sha256 != comparison.candidate.target.binary_sha256,
+        (
+            comparison.baseline.target.row.git_sha,
+            comparison.baseline.target.row.is_dirty,
+            comparison.baseline.target.display_label,
+        )
+        != (
+            comparison.candidate.target.row.git_sha,
+            comparison.candidate.target.row.is_dirty,
+            comparison.candidate.target.display_label,
+        ),
         comparison.baseline.backend != comparison.candidate.backend,
         comparison.baseline.treatment != comparison.candidate.treatment,
     )

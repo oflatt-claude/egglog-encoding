@@ -12,9 +12,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from .engines import Engine, Treatment, treatment_engine
+
 Status = Literal["success", "timed-out", "failure"]
 Backend = str
-Treatment = Literal["off", "term", "proofs", "proof-extraction"]
 DetailLevel = Literal["summary", "files", "phases", "rulesets"]
 
 
@@ -26,7 +27,20 @@ class BackendSpec:
 
 
 BACKEND_SPECS: dict[Backend, BackendSpec] = {
-    "main": BackendSpec(("off", "term", "proofs", "proof-extraction"), ()),
+    "main": BackendSpec(
+        (
+            "off",
+            "term",
+            "proofs",
+            "proof-extraction",
+            "proof-testing",
+            "egg",
+            "egg-proofs",
+            "egg-proof-extraction",
+            "egg-proof-testing",
+        ),
+        (),
+    ),
     "dd": BackendSpec(("term", "proofs"), ("--backend", "dd"), ("dd-backend",)),
 }
 
@@ -103,11 +117,38 @@ class TargetRequest:
 
 
 @dataclass(frozen=True)
+class EngineBinary:
+    engine: Engine
+    sha256: str
+    path: Path | None
+
+
+@dataclass(frozen=True)
 class ResolvedTarget:
     request: TargetRequest
     row: TargetRow
     binary_sha256: str
     binary_path: Path | None
+    engine_binaries: tuple[EngineBinary, ...] = ()
+    primary_engine: Engine | None = None
+
+    def binary_sha256_for(self, treatment: Treatment) -> str:
+        engine = treatment_engine(treatment)
+        for binary in self.engine_binaries:
+            if binary.engine == engine:
+                return binary.sha256
+        if self.primary_engine is None or self.primary_engine == engine:
+            return self.binary_sha256
+        raise ValueError(f"target {self.display_label} has no {engine} binary")
+
+    def binary_path_for(self, treatment: Treatment) -> Path | None:
+        engine = treatment_engine(treatment)
+        for binary in self.engine_binaries:
+            if binary.engine == engine:
+                return binary.path
+        if self.primary_engine is None or self.primary_engine == engine:
+            return self.binary_path
+        raise ValueError(f"target {self.display_label} has no {engine} binary")
 
     @property
     def display_label(self) -> str:
@@ -147,7 +188,7 @@ class BenchmarkEndpoint:
     def cache_identity(self) -> tuple[str, Backend, Treatment]:
         """Return the endpoint coordinates shared by all of its file keys."""
 
-        return (self.target.binary_sha256, self.backend, self.treatment)
+        return (self.target.binary_sha256_for(self.treatment), self.backend, self.treatment)
 
 
 @dataclass(frozen=True)

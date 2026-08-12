@@ -14,6 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Final, Literal, TypedDict, cast
 
+from ..engines import Engine, treatment_engine
 from ..models import (
     Backend,
     BenchmarkEndpoint,
@@ -97,7 +98,7 @@ class CacheKey:
         """Build the identity shared by collection and reporting."""
 
         return cls(
-            binary_sha256=endpoint.target.binary_sha256,
+            binary_sha256=endpoint.target.binary_sha256_for(endpoint.treatment),
             file_sha256=file_spec.sha256,
             treatment=endpoint.treatment,
             timeout_sec=timeout_sec,
@@ -173,13 +174,18 @@ class ReportStore:
             handle.write(encoded + b"\n")
         self._index(indexed)
 
-    def find_label_pointer(self, label: str) -> CachedTarget | None:
-        """Return the latest row carrying ``label``, or ``None``."""
+    def find_label_pointer(self, label: str, engine: Engine | None = None) -> CachedTarget | None:
+        """Return the latest row carrying ``label`` for an optional engine."""
 
         rows = self._by_label.get(label)
         if not rows:
             return None
-        record = max(rows, key=lambda row: row.order_key).record
+        matching = (
+            rows if engine is None else [row for row in rows if treatment_engine(row.record["treatment"]) == engine]
+        )
+        if not matching:
+            return None
+        record = max(matching, key=lambda row: row.order_key).record
         return CachedTarget(
             TargetRow(
                 source=record["target_source"],

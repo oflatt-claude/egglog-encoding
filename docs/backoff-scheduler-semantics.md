@@ -20,13 +20,12 @@ The current implementation now provides the paper-compatible seminaive policy:
 - `saturate` stops on `RunReport.can_stop`, not merely on an iteration with no
   database update.
 
-These semantics target the archived Eqlog Math table totals through 100
-scheduled steps and the archived pointer-analysis output sizes. The standalone
-paper harness carries exact ordered output oracles for timed off, term, and
-proofs runs, followed by a strict proof-testing checker pass. Committed focused
-proof tests cover Math checkpoints 0 and 10 plus pointer analysis;
-`paper_bench.py run artifact-full math` is the explicit broad execution gate for
-every Math checkpoint.
+These semantics were derived against the archived Eqlog Math behavior and the
+archived pointer-analysis output sizes. The committed scheduler canaries cover
+the policy boundary, and the pointer fixture remains an end-to-end backoff
+workload. The ordinary Math benchmark now uses a separate fixed eleven-step
+simple/seminaive schedule so current egg and current egglog can run the same
+bounded comparison.
 
 This is not a claim that current `egglog` implements `egg`'s scheduler in every
 respect. The target is the paper's seminaive Eqlog behavior while retaining
@@ -154,11 +153,7 @@ is ported from `micro-benchmarks/src/eqlog/math_full.egg` in the PLDI artifact:
 - Archive SHA-256:
   `2f061f4f59fd3404638db0d9ad9d130e008d4c41fdeb58ade30684d8e424607a`
 
-Generated checkpoints execute an explicit sequence of exactly N scheduled
-steps. They do not use `repeat`, because the experimental schedule language's
-`repeat` is exact while core `Repeat` may stop when its child can stop.
-
-The sum of the 13 printed source tables is:
+The archived sum of the 13 printed source tables was:
 
 | Steps | Rows | Steps | Rows |
 | ---: | ---: | ---: | ---: |
@@ -169,27 +164,11 @@ The sum of the 13 printed source tables is:
 | 40 | 163,480 | 100 | 2,080,931 |
 | 50 | 288,119 | | |
 
-At checkpoint 10, the exact per-table output in off, term, proofs, and strict
-proof-testing modes is:
-
-```text
-1857
-3771
-6893
-1838
-6676
-3
-2
-1
-1
-1
-1
-5
-3
-```
-
-The standalone paper harness also stages a read-only copy of the historical
-Rust driver and validates the selected Eqlog row against the same total.
+These values document the evidence used while implementing backoff. They are
+not active oracles for
+[`math.egg`](../benchmarks/math-microbenchmark/math.egg), which deliberately
+does not use backoff or match caps. See the workload README for that comparison's
+current-engine scope and terminal equality.
 
 ## Pointer Artifact Oracle
 

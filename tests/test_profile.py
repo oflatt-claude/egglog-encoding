@@ -159,6 +159,17 @@ def test_profile_accepts_explicit_main_proof_extraction(tmp_path: Path) -> None:
     assert request.treatment == "proof-extraction"
 
 
+def test_profile_accepts_the_fixed_math_egg_treatment() -> None:
+    args = profile_runner.parse_profile_args(
+        ["benchmarks/math-microbenchmark/math.egg", "--treatment", "egg-proof-testing"]
+    )
+
+    request = profile_runner.resolve_profile_request(args, ROOT)
+
+    assert request.backend == "main"
+    assert request.treatment == "egg-proof-testing"
+
+
 def test_target_resolvers_share_materialization_and_select_build_profile(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -168,6 +179,7 @@ def test_target_resolvers_share_materialization_and_select_build_profile(
     materialized: list[models.TargetRequest] = []
     build_profiles: list[targets.BuildProfile] = []
     build_features: list[tuple[str, ...]] = []
+    build_engines: list[tuple[str, ...]] = []
 
     def fake_materialize(
         target_request: models.TargetRequest,
@@ -183,11 +195,13 @@ def test_target_resolvers_share_materialization_and_select_build_profile(
         console: Console,
         build_profile: targets.BuildProfile,
         cargo_features: tuple[str, ...],
+        engines: tuple[str, ...],
     ) -> models.ResolvedTarget:
         assert target_request == request
         assert target_row == row
         build_profiles.append(build_profile)
         build_features.append(cargo_features)
+        build_engines.append(engines)
         return target
 
     monkeypatch.setattr(collection, "materialize_target_request", fake_materialize)
@@ -208,13 +222,14 @@ def test_target_resolvers_share_materialization_and_select_build_profile(
         ROOT,
         Console(stderr=True),
     )[request]
-    profile_target = targets.resolve_profile_target(request, "dd", ROOT, ROOT, Console(stderr=True))
+    profile_target = targets.resolve_profile_target(request, "dd", "proofs", ROOT, ROOT, Console(stderr=True))
 
     assert benchmark_target == target
     assert profile_target == target
     assert materialized == [request, request]
     assert build_profiles == ["release", "profiling"]
     assert build_features == [(), ("dd-backend",)]
+    assert build_engines == [("egglog",), ("egglog",)]
 
 
 def test_build_target_uses_profiling_profile(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -241,6 +256,28 @@ def test_build_target_uses_profiling_profile(monkeypatch: pytest.MonkeyPatch, tm
     assert commands == [["cargo", "build", "--profile", "profiling", "-p", "egglog-experimental"]]
     assert binary_path == binary
     assert binary_sha256 == "sha256:bin"
+
+
+def test_build_target_selects_the_egg_driver_package(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    commands: list[list[str]] = []
+    binary = tmp_path / "target" / "release" / "egg-math-benchmark"
+    binary.parent.mkdir(parents=True)
+    binary.write_text("binary", encoding="utf-8")
+    row = models.TargetRow(".", str(tmp_path), "HEAD", "abc123", False)
+    monkeypatch.setattr(targets.subprocess, "run", lambda command, **_kwargs: commands.append(command))
+    monkeypatch.setattr(targets, "sha256_file", lambda _path: "sha256:egg")
+
+    binary_path, binary_sha256 = targets.build_target(
+        row,
+        Console(stderr=True),
+        "release",
+        ("dd-backend",),
+        "egg",
+    )
+
+    assert commands == [["cargo", "build", "--release", "-p", "egg-math-benchmark"]]
+    assert binary_path == binary
+    assert binary_sha256 == "sha256:egg"
 
 
 def test_profile_cache_path_uses_full_binary_and_file_hashes() -> None:
@@ -710,4 +747,11 @@ def test_profile_auto_iteration_cap_prints_warning(
 
 def test_profile_rejects_cache_only_label_targets() -> None:
     with pytest.raises(ValueError, match="cache-only label="):
-        targets.resolve_profile_target(targets.parse_target("cached="), "main", ROOT, ROOT, Console(stderr=True))
+        targets.resolve_profile_target(
+            targets.parse_target("cached="),
+            "main",
+            "proofs",
+            ROOT,
+            ROOT,
+            Console(stderr=True),
+        )

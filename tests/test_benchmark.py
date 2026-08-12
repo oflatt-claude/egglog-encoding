@@ -63,6 +63,16 @@ def test_dd_rejects_explicit_proof_extraction_treatment() -> None:
         benchmark.endpoint_requests(args)
 
 
+def test_main_accepts_egg_treatments_while_dd_rejects_them() -> None:
+    args = benchmark.parse_benchmark_args(["--treatment", "egg-proof-testing"])
+    _baseline, candidate = benchmark.endpoint_requests(args)
+    assert candidate.treatment == "egg-proof-testing"
+
+    dd_args = benchmark.parse_benchmark_args(["--backend", "dd", "--treatment", "egg"])
+    with pytest.raises(ValueError, match="backend dd does not support treatment egg"):
+        benchmark.endpoint_requests(dd_args)
+
+
 def test_pair_cli_accepts_arbitrary_explicit_endpoints() -> None:
     args = benchmark.parse_benchmark_args(
         [

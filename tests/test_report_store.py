@@ -44,6 +44,35 @@ def test_append_is_immediately_queryable(tmp_path: Path) -> None:
     assert "row_index" not in raw
 
 
+def test_label_pointers_select_the_latest_binary_for_each_engine(tmp_path: Path) -> None:
+    report = tmp_path / "report.jsonl"
+    write_report(
+        report,
+        make_record(
+            0,
+            started_at="2026-07-15T12:00:00Z",
+            target_label="current",
+            binary_sha256="sha256:egglog",
+            treatment="off",
+        ),
+        make_record(
+            1,
+            started_at="2026-07-15T12:00:01Z",
+            target_label="current",
+            binary_sha256="sha256:egg",
+            treatment="egg",
+        ),
+    )
+    store = ReportStore(report)
+    egglog = store.find_label_pointer("current", "egglog")
+    egg = store.find_label_pointer("current", "egg")
+    latest = store.find_label_pointer("current")
+
+    assert egglog is not None and egglog.binary_sha256 == "sha256:egglog"
+    assert egg is not None and egg.binary_sha256 == "sha256:egg"
+    assert latest is not None and latest.binary_sha256 == "sha256:egg"
+
+
 def test_append_indexes_the_exact_record_it_persists(tmp_path: Path) -> None:
     report = tmp_path / "report.jsonl"
     record = make_record(0, started_at="2026-07-15T12:00:00Z", wall_sec=2.5)

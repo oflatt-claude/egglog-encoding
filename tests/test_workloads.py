@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from benchmarking import models, targets, workloads
+from benchmarking.engines import MATH_EGG_WORKLOAD, validate_engine_workload
 
 from .report_fixtures import ROOT
 
@@ -149,14 +150,14 @@ def test_require_workload_unchanged_detects_included_source_mutation(tmp_path: P
 def test_default_workloads_are_the_six_research_cases() -> None:
     files = workloads.resolve_files([], ROOT)
     assert tuple(file.display_path for file in files) == (
-        "benchmarks/math-microbenchmark/math-run-010.egg",
+        "benchmarks/math-microbenchmark/math.egg",
         "egglog-experimental/tests/fixtures/eggcc-2mm-pass1.egg",
         "benchmarks/pointer-analysis-initdb.egg",
         "egglog/tests/hardboiled_conv1d_32.egg",
         "benchmarks/luminal-llama.egg",
         "egglog/tests/web-demo/herbie.egg",
     )
-    math = next(file for file in files if file.display_path.endswith("math-run-010.egg"))
+    math = next(file for file in files if file.display_path.endswith("math.egg"))
     assert math.sha256 != targets.sha256_file(math.absolute_path)
     pointer = next(file for file in files if file.display_path == "benchmarks/pointer-analysis-initdb.egg")
     assert pointer.fact_directory == (ROOT / "benchmarks/data/pointer-analysis-initdb").resolve()
@@ -223,6 +224,15 @@ def test_workload_command_matches_benchmark_behavior() -> None:
         "--proof-extraction",
         str(file_spec.absolute_path),
     ]
+    assert targets.workload_command(ROOT / "egglog-experimental", file_spec, "main", "proof-testing") == [
+        str(ROOT / "egglog-experimental"),
+        "--mode",
+        "no-messages",
+        "-j",
+        "1",
+        "--proof-testing",
+        str(file_spec.absolute_path),
+    ]
 
     facts = ROOT / "facts"
     file_with_facts = models.FileSpec(
@@ -234,3 +244,34 @@ def test_workload_command_matches_benchmark_behavior() -> None:
     )
     command = targets.workload_command(ROOT / "egglog-experimental", file_with_facts, "main", "proofs")
     assert command[5:7] == ["--fact-directory", str(facts)]
+
+
+def test_egg_workload_command_uses_the_fixed_math_driver_contract() -> None:
+    (math,) = workloads.resolve_files(["benchmarks/math-microbenchmark/math.egg"], ROOT)
+
+    assert targets.workload_command(ROOT / "egg-math-benchmark", math, "main", "egg-proof-testing") == [
+        str(ROOT / "egg-math-benchmark"),
+        "--iterations",
+        str(MATH_EGG_WORKLOAD.iterations),
+        "--check-left",
+        MATH_EGG_WORKLOAD.check_left,
+        "--check-right",
+        MATH_EGG_WORKLOAD.check_right,
+        "--proof-mode",
+        "check",
+    ]
+
+
+def test_egg_treatments_reject_other_workloads_and_fact_directories() -> None:
+    other = models.FileSpec("other.egg", ROOT / "other.egg", "sha256:other")
+    with pytest.raises(ValueError, match="only supports benchmarks/math-microbenchmark/math.egg"):
+        validate_engine_workload(other, "egg")
+
+    math = models.FileSpec(
+        "benchmarks/math-microbenchmark/math.egg",
+        ROOT / "benchmarks/math-microbenchmark/math.egg",
+        "sha256:math",
+        ROOT / "facts",
+    )
+    with pytest.raises(ValueError, match="does not support --fact-directory"):
+        validate_engine_workload(math, "egg-proofs")

@@ -337,7 +337,7 @@ def _cache_universe(
                 choice.endpoint.target.display_label,
                 choice.endpoint.backend,
                 choice.endpoint.treatment,
-                choice.endpoint.target.binary_sha256,
+                choice.endpoint.cache_identity[0],
             ),
         )
     )

@@ -97,10 +97,14 @@ or modify the JSONL.
   and retargets only within it.
 - `proofs` is generation-only. The main-only `proof-extraction` treatment uses
   `--proof-extraction` to rewrite checks and extract, materialize, clean, and
-  simplify proofs without verifying them. Treat its results as performance
-  evidence only; `--proof-testing` remains the strict correctness mode.
-- Bare `./bench.py` compares `proofs` with `off`. The main-only
-  `proof-extraction` treatment is explicit opt-in; the DD backend rejects it.
+  simplify proofs without verifying them; `proof-testing` adds strict proof
+  verification. Treat extraction-only results as performance evidence.
+- Bare `./bench.py` compares `proofs` with `off`. Main supports the five egglog
+  treatments plus four `egg*` treatments for the fixed Math workload. DD
+  supports only `term` and `proofs`.
+- Resolve the executable from the treatment engine. Mixed egg/egglog
+  comparisons build both executables, and each report row records the hash of
+  the executable that actually ran.
 - Benchmark inputs should not contain executable `(prove ...)` commands. Use
   `(check ...)` so the selected treatment controls proof extraction, and cover
   strict proof validity in proof tests.
