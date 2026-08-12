@@ -37,14 +37,14 @@ struct Args {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    let timing = run_math(args.proof_mode)?;
+    let (timing, _) = run_math(args.proof_mode)?;
     if let Some(path) = args.timing_summary {
         write_timing_summary(&path, &timing)?;
     }
     Ok(())
 }
 
-fn run_math(proof_mode: ProofMode) -> Result<TimingSummaryV2> {
+fn run_math(proof_mode: ProofMode) -> Result<(TimingSummaryV2, usize)> {
     let left: RecExpr<Math> = CHECK_LEFT.parse().expect("fixed left check must parse");
     let right: RecExpr<Math> = CHECK_RIGHT.parse().expect("fixed right check must parse");
     let rules = math::rules();
@@ -100,7 +100,7 @@ fn run_math(proof_mode: ProofMode) -> Result<TimingSummaryV2> {
         0
     };
 
-    Ok(TimingSummaryV2 {
+    let timing = TimingSummaryV2 {
         schema_version: 2,
         rulesets: vec![RulesetTimingV2 {
             name: String::new(),
@@ -114,7 +114,8 @@ fn run_math(proof_mode: ProofMode) -> Result<TimingSummaryV2> {
             merge_ns: 0,
             rebuild_ns: seconds_to_ns(report.rebuild_time),
         }],
-    })
+    };
+    Ok((timing, report.egraph_nodes))
 }
 
 fn write_timing_summary(path: &Path, timing: &TimingSummaryV2) -> Result<()> {
@@ -140,7 +141,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fixed_math_workload_runs_and_checks_at_iteration_eleven() {
-        run_math(ProofMode::Check).unwrap();
+    fn fixed_math_workload_matches_egglog_after_iteration_eleven() {
+        let (_, egg_nodes) = run_math(ProofMode::Check).unwrap();
+        let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("egg-math-benchmark should be inside the workspace");
+        let fixture = std::fs::read_to_string(
+            repository.join("egglog-experimental/tests/math-microbenchmark-rational.egg"),
+        )
+        .unwrap();
+        let mut egglog = egglog_experimental::new_experimental_egraph_with_proof_testing();
+        egglog.parse_and_run_program(None, &fixture).unwrap();
+        let egglog_experimental::CommandOutput::PrintAllFunctionsSize(table_sizes) =
+            egglog.print_size(None).unwrap()
+        else {
+            unreachable!("print-size without a table always returns all table sizes");
+        };
+        let egglog_nodes = table_sizes.iter().map(|(_, size)| size).sum::<usize>();
+
+        assert_eq!(
+            egg_nodes, egglog_nodes,
+            "egg enodes and egglog visible constructor rows differ"
+        );
     }
 }
