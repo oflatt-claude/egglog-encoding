@@ -40,9 +40,13 @@ moves the denotation. -/
 /-- One tuple of one function's table: `fn args… ↦ out…`.
 
 `out` is a *list*, one entry per value column: egglog's tables are multi-column, and the
-encoding depends on it — `@UF_<Sort>` carries a parent *and* a proof. A constructor's row
-is `⟨f, as, [f(as)]⟩`, its own application, which is what makes its functional dependency
-plain congruence. -/
+encoding depends on it — `@UF_<Sort>` carries a parent *and* a proof.
+
+**A row's entry term is `fn(args… ++ out…)`**, which is the one thing the index and the
+denotation have to agree on. A constructor's `FnDecl.entryWidth` is its `arity`, so a
+constructor has *no* value column and its row is `⟨f, as, []⟩`, whose entry term is the
+application `f(as)` itself — which is what makes its functional dependency plain
+congruence. -/
 @[ext]
 structure Row where
   fn : FnName
@@ -62,7 +66,7 @@ function, so on a term the evaluator produced the filter removes nothing. -/
 def Term.ctorRowList (sig : Signature) (t : Term) : List Row :=
   t.subtermList.filterMap fun s =>
     match s with
-    | .app f as => if (sig.mergeOf f).isSome then none else some ⟨f, as, [.app f as]⟩
+    | .app f as => if (sig.mergeOf f).isSome then none else some ⟨f, as, []⟩
     | .lit _ => none
 
 /-! ### Finite databases -/
