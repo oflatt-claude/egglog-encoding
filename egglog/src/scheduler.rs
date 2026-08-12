@@ -184,7 +184,10 @@ impl EGraph {
         self.schedulers.take(scheduler_id).map(|r| r.scheduler)
     }
 
-    /// Runs a ruleset for one iteration using the given ruleset
+    /// Runs a ruleset for one iteration using the given ruleset.
+    ///
+    /// The iteration is recorded in the overall run report, as in
+    /// [`EGraph::step_rules`].
     pub fn step_rules_with_scheduler(
         &mut self,
         scheduler_id: SchedulerId,
@@ -305,6 +308,9 @@ impl EGraph {
         self.rulesets = rulesets;
         self.schedulers = schedulers;
 
+        if let Ok(report) = &result {
+            self.overall_run_report.union(report.clone());
+        }
         result
     }
 }
