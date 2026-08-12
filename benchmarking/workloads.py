@@ -34,6 +34,10 @@ DEFAULT_WORKLOADS = (
     WorkloadConfig("egglog/tests/hardboiled_conv1d_32.egg"),
     WorkloadConfig("egglog/tests/luminal-llama.egg"),
     WorkloadConfig("egglog/tests/web-demo/herbie.egg"),
+    WorkloadConfig("egglog/tests/papers/misaal-hvx-dot-product.egg"),
+    WorkloadConfig("egglog/tests/papers/churchroad-wide-multiply.egg"),
+    WorkloadConfig("egglog-experimental/tests/papers/dialegg-nmm40.egg"),
+    WorkloadConfig("egglog/tests/papers/speq-preserved-reference-suite.egg"),
 )
 
 

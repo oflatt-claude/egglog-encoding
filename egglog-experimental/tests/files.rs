@@ -9,6 +9,9 @@ struct Run {
     path: PathBuf,
     desugar: bool,
     proof_testing: bool,
+    /// Compare stable command output, including the appended table sizes,
+    /// between the ordinary and proof-testing runs.
+    snapshot_across_treatments: bool,
 }
 
 impl Run {
@@ -44,18 +47,30 @@ impl Run {
             )
         };
 
-        if self.proof_testing {
-            match result {
-                Ok(outputs) => {
+        match result {
+            Ok(outputs) => {
+                if self.proof_testing {
                     let snapshot = CommandOutput::snapshot_proofs_only(&outputs);
                     if !snapshot.is_empty() {
                         insta::assert_snapshot!(self.snapshot_name(), snapshot);
                     }
                 }
-                Err(err_msg) => {
-                    panic!("proof fixture failed: {err_msg}");
+
+                if self.snapshot_across_treatments {
+                    let snapshot = if self.proof_testing {
+                        CommandOutput::snapshot_non_proof_stable_under_proof_encoding(&outputs)
+                    } else {
+                        CommandOutput::snapshot_stable_under_proof_encoding(&outputs)
+                    };
+                    if !snapshot.is_empty() {
+                        insta::assert_snapshot!(self.snapshot_name_across_treatments(), snapshot);
+                    }
                 }
             }
+            Err(err_msg) if self.proof_testing => {
+                panic!("proof fixture failed: {err_msg}");
+            }
+            Err(_) => {}
         }
     }
 
@@ -74,7 +89,14 @@ impl Run {
         message: &str,
     ) -> Result<Vec<CommandOutput>, String> {
         let mut egraph = self.egraph();
-        match egraph.parse_and_run_program(filename, program) {
+        // Match the main file harness: table sizes are part of the output that
+        // must remain stable under proof encoding.
+        let program = if self.snapshot_across_treatments {
+            format!("{program}\n(print-size)")
+        } else {
+            program.to_owned()
+        };
+        match egraph.parse_and_run_program(filename, &program) {
             Ok(outputs) => {
                 if self.should_fail() {
                     panic!(
@@ -151,6 +173,12 @@ impl Run {
         self.name().to_string()
     }
 
+    fn snapshot_name_across_treatments(&self) -> String {
+        let stem = self.path.file_stem().unwrap();
+        let stem = stem.to_string_lossy().replace(['.', '-', ' '], "_");
+        format!("shared_snapshot_{stem}")
+    }
+
     fn should_fail(&self) -> bool {
         self.path.to_string_lossy().contains("fail-typecheck")
     }
@@ -175,6 +203,7 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
             path: path.clone(),
             desugar: false,
             proof_testing: false,
+            snapshot_across_treatments: false,
         };
         if skipped_files.iter().any(|file| run.path.ends_with(file)) {
             continue;
@@ -182,6 +211,11 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
         let should_fail = run.should_fail();
         let supports_proofs = !should_fail
             && file_supports_proofs_with_egraph(&run.path, new_experimental_egraph_for_proofs());
+        let run = Run {
+            // A shared snapshot needs both an ordinary and proof-testing trial.
+            snapshot_across_treatments: supports_proofs && !run.requires_proofs() && !is_fixture,
+            ..run
+        };
 
         if !run.requires_proofs() && !is_fixture {
             push_trial(run.clone());
