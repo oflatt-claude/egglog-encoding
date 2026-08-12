@@ -1,6 +1,6 @@
 """Parse, materialize, build, describe, and construct commands for targets.
 
-This module owns backend/treatment workload command construction. Subprocess
+This module owns treatment-specific workload command construction. Subprocess
 measurement and report persistence belong in their dedicated modules.
 """
 
@@ -20,13 +20,9 @@ from rich.console import Console
 from rich.text import Text
 
 from .engines import TREATMENT_SPECS, Engine, Treatment, validate_engine_workload
-from .models import Backend, EngineBinary, FileSpec, ResolvedTarget, TargetRequest, TargetRow, backend_spec
+from .models import EngineBinary, FileSpec, ResolvedTarget, TargetRequest, TargetRow
 
 BuildProfile = Literal["release", "profiling"]
-
-
-def backend_flags(backend: Backend) -> list[str]:
-    return list(backend_spec(backend).flags)
 
 
 def parse_target(raw: str) -> TargetRequest:
@@ -212,7 +208,6 @@ def build_target(
     row: TargetRow,
     console: Console,
     build_profile: BuildProfile = "release",
-    cargo_features: Sequence[str] = (),
     engine: Engine = "egglog",
 ) -> tuple[Path, str]:
     checkout_path = Path(row.path)
@@ -223,8 +218,6 @@ def build_target(
         build_args = ["cargo", "build", "--release", "-p", package]
     else:
         build_args = ["cargo", "build", "--profile", "profiling", "-p", package]
-    if engine == "egglog" and cargo_features:
-        build_args.extend(("--features", ",".join(cargo_features)))
     subprocess.run(
         build_args,
         cwd=checkout_path,
@@ -246,16 +239,16 @@ def build_resolved_target(
     row: TargetRow,
     console: Console,
     build_profile: BuildProfile,
-    cargo_features: Sequence[str],
     engines: Sequence[Engine] = ("egglog",),
 ) -> ResolvedTarget:
     required_engines = tuple(dict.fromkeys(engines))
     if not required_engines:
         raise ValueError("target build requires at least one engine")
-    binaries: list[EngineBinary] = []
-    for engine in required_engines:
-        path, sha256 = build_target(row, console, build_profile, cargo_features, engine)
-        binaries.append(EngineBinary(engine, sha256, path))
+    binaries = tuple(
+        EngineBinary(engine, binary_sha256, binary_path)
+        for engine in required_engines
+        for binary_path, binary_sha256 in (build_target(row, console, build_profile, engine),)
+    )
     primary = binaries[0]
     row = replace(row, is_dirty=git_dirty(Path(row.path)))
     return ResolvedTarget(
@@ -263,14 +256,13 @@ def build_resolved_target(
         row=row,
         binary_sha256=primary.sha256,
         binary_path=primary.path,
-        engine_binaries=tuple(binaries),
+        engine_binaries=binaries,
         primary_engine=primary.engine,
     )
 
 
 def resolve_profile_target(
     request: TargetRequest,
-    backend: Backend,
     treatment: Treatment,
     invocation_cwd: Path,
     repo_root: Path,
@@ -279,14 +271,12 @@ def resolve_profile_target(
     if request.is_label_lookup:
         raise ValueError("profile mode does not support cache-only label= targets; use label=SOURCE")
     row = materialize_target_request(request, invocation_cwd, repo_root)
-    engine = TREATMENT_SPECS[treatment].engine
     return build_resolved_target(
         request,
         row,
         console,
         "profiling",
-        backend_spec(backend).cargo_features,
-        (engine,),
+        (TREATMENT_SPECS[treatment].engine,),
     )
 
 
@@ -303,7 +293,6 @@ def _display_target(row: TargetRow) -> str:
 def workload_command(
     binary_path: Path,
     file_spec: FileSpec,
-    backend: Backend,
     treatment: Treatment,
 ) -> list[str]:
     specification = TREATMENT_SPECS[treatment]
@@ -317,7 +306,6 @@ def workload_command(
         "-j",
         "1",
         *(["--fact-directory", str(file_spec.fact_directory)] if file_spec.fact_directory is not None else []),
-        *backend_flags(backend),
         *specification.flags,
         str(file_spec.absolute_path),
     ]

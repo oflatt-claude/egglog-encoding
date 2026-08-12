@@ -3,7 +3,6 @@ use crate::proofs::proof_extractor::extract_root;
 use crate::proofs::proof_format::{Justification, ProofId, ProofStore, proof_store_from_term};
 use crate::util::HashSet;
 use crate::{ResolvedCall, TermDag, Value};
-use egglog_backend_trait::BackendExt;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -69,7 +68,7 @@ impl ProofInstrumentor<'_> {
         let Some(view) = self.egraph.functions.get(&view_name) else {
             return Err(ProveExistsError::RequiresConstructor);
         };
-        let view_backend_id = view.backend_id;
+        let view_id = view.backend_id;
         let Some(proof_sort) = view.schema.outputs.last().cloned() else {
             return Err(ProveExistsError::RequiresConstructor);
         };
@@ -78,13 +77,11 @@ impl ProofInstrumentor<'_> {
 
         let mut termdag = TermDag::default();
 
-        // Pick the lexicographically-smallest row as the witness rather than
-        // whichever row the backend happens to yield first. A backend whose row
-        // order is not deterministic (e.g. the differential-dataflow backend's
-        // hash-set mirror) would otherwise make the extracted existence proof —
-        // and thus proof snapshots — vary run to run.
+        // Pick the lexicographically-smallest row as the witness rather than the
+        // first row in storage iteration order. This keeps extracted existence
+        // proofs and their snapshots stable.
         let mut best_row: Option<Vec<Value>> = None;
-        self.egraph.backend.for_each(view_backend_id, |row| {
+        self.egraph.backend.for_each(view_id, |row| {
             if best_row.as_deref().is_none_or(|best| row.vals < best) {
                 best_row = Some(row.vals.to_vec());
             }
@@ -142,7 +139,7 @@ impl ProofInstrumentor<'_> {
         // and use its premise; otherwise use the proof as-is (an existence proof need
         // not be rule-justified — `check_proof` below validates it either way). Which
         // shape arises depends on the witness row, chosen deterministically above, so
-        // this is stable across runs and backends.
+        // this is stable across runs.
         let extra_rule_removed = wrapped_premise(&proof_store, proof_id).unwrap_or(proof_id);
 
         // Check the proof before simplification

@@ -32,7 +32,7 @@ use thiserror::Error;
 ///
 /// These signal a misuse the API can detect at runtime — wrong table
 /// subtype, wrong arity, mismatched column sorts, etc. They are *not*
-/// egglog typecheck errors and *not* backend / e-graph failures; for
+/// egglog typecheck errors and *not* general e-graph failures; for
 /// those, see [`enum@crate::Error`].
 #[derive(Debug, Error)]
 pub enum ApiError {

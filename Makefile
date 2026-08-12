@@ -54,11 +54,9 @@ rust-format-check:
 
 rust-test:
 	cargo test --workspace
-	cargo test -p egglog-experimental --features dd-backend --test timing_summary_cli
 
 rust-clippy:
 	cargo clippy --workspace --all-targets -- -D warnings
-	cargo clippy -p egglog-experimental --features dd-backend --all-targets -- -D warnings
 
 # Clippy does not resolve doc links, and plain `cargo doc` skips the private
 # items most of this codebase documents, so a rename leaves stale links behind
@@ -74,13 +72,12 @@ proof-tests:
 benchmark-smoke:
 	rm -f -- "$(BENCHMARK_SMOKE_REPORT)"
 	uv run --locked ./bench.py --rounds 1 \
-		--report "$(BENCHMARK_SMOKE_REPORT)" --format markdown \
-		egglog/tests/integer_math.egg > /dev/null
+		--report "$(BENCHMARK_SMOKE_REPORT)" --format markdown > /dev/null
 	uv run --locked python -c \
 		'from pathlib import Path; import sys; from benchmarking.reports.store import ReportStore; assert ReportStore(Path(sys.argv[1])).row_count > 0' \
 		"$(BENCHMARK_SMOKE_REPORT)"
 
-# Benchmark each endpoint in nightly_bench.py's ENDPOINTS on this checkout and on
+# Benchmark each treatment in nightly_bench.py's TREATMENTS on this checkout and on
 # main, then copy eval-live's interactive report to nightly/output/. The
 # egraphs-good nightly service (nightly.cs.washington.edu) runs this target and
 # serves that directory, matching `report=` in the nightly configuration.

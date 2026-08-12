@@ -4,7 +4,7 @@
 ; facts contain every row from each relation consumed from the postgresql-9.5.2
 ; initdb.bc dataset. Three legacy lookup-or-create functions are represented as
 ; constructors because current egglog disallows custom-function lookups in
-; seminaive rule actions. See data/pointer-analysis-initdb.PROVENANCE.md.
+; seminaive rule actions. See pointer-analysis-initdb.PROVENANCE.md.
 
 ;; functions
 (relation function_name (String))

@@ -39,38 +39,19 @@ def test_pair_cli_defaults_to_current_main_off_vs_proofs() -> None:
     args = benchmark.parse_benchmark_args([])
     baseline, candidate = benchmark.endpoint_requests(args)
 
-    assert baseline == models.EndpointRequest(targets.parse_target("."), "main", "off")
-    assert candidate == models.EndpointRequest(targets.parse_target("."), "main", "proofs")
+    assert baseline == models.EndpointRequest(targets.parse_target("."), "off")
+    assert candidate == models.EndpointRequest(targets.parse_target("."), "proofs")
     assert args.detail == "summary"
     assert args.command == "benchmark"
 
 
-def test_compare_target_inherits_candidate_but_compare_backend_stays_main() -> None:
-    args = benchmark.parse_benchmark_args(["--target", "mine=@branch", "--backend", "dd"])
+def test_compare_target_inherits_candidate_target() -> None:
+    args = benchmark.parse_benchmark_args(["--target", "mine=@branch"])
     baseline, candidate = benchmark.endpoint_requests(args)
 
     assert baseline.target == candidate.target == targets.parse_target("mine=@branch")
-    assert baseline.backend == "main"
     assert baseline.treatment == "off"
-    assert candidate.backend == "dd"
     assert candidate.treatment == "proofs"
-
-
-def test_dd_rejects_explicit_proof_extraction_treatment() -> None:
-    args = benchmark.parse_benchmark_args(["--backend", "dd", "--treatment", "proof-extraction"])
-
-    with pytest.raises(ValueError, match="backend dd does not support treatment proof-extraction"):
-        benchmark.endpoint_requests(args)
-
-
-def test_main_accepts_egg_treatments_while_dd_rejects_them() -> None:
-    args = benchmark.parse_benchmark_args(["--treatment", "egg-proof-testing"])
-    _baseline, candidate = benchmark.endpoint_requests(args)
-    assert candidate.treatment == "egg-proof-testing"
-
-    dd_args = benchmark.parse_benchmark_args(["--backend", "dd", "--treatment", "egg"])
-    with pytest.raises(ValueError, match="backend dd does not support treatment egg"):
-        benchmark.endpoint_requests(dd_args)
 
 
 def test_pair_cli_accepts_arbitrary_explicit_endpoints() -> None:
@@ -78,14 +59,10 @@ def test_pair_cli_accepts_arbitrary_explicit_endpoints() -> None:
         [
             "--compare-target",
             "old=@origin/main",
-            "--compare-backend",
-            "dd",
             "--compare-treatment",
             "term",
             "--target",
             "new=.",
-            "--backend",
-            "main",
             "--treatment",
             "proofs",
             "--detail",
@@ -94,9 +71,16 @@ def test_pair_cli_accepts_arbitrary_explicit_endpoints() -> None:
     )
     baseline, candidate = benchmark.endpoint_requests(args)
 
-    assert baseline == models.EndpointRequest(targets.parse_target("old=@origin/main"), "dd", "term")
-    assert candidate == models.EndpointRequest(targets.parse_target("new=."), "main", "proofs")
+    assert baseline == models.EndpointRequest(targets.parse_target("old=@origin/main"), "term")
+    assert candidate == models.EndpointRequest(targets.parse_target("new=."), "proofs")
     assert args.detail == "rulesets"
+
+
+def test_pair_cli_accepts_egg_treatments() -> None:
+    args = benchmark.parse_benchmark_args(["--treatment", "egg-proof-testing"])
+    _baseline, candidate = benchmark.endpoint_requests(args)
+
+    assert candidate.treatment == "egg-proof-testing"
 
 
 @pytest.mark.parametrize("detail", ["summary", "files", "phases", "rulesets"])
@@ -108,7 +92,6 @@ def test_pair_cli_accepts_each_named_detail_level(detail: str) -> None:
     "argv",
     [
         ("--treatments", "off,proofs"),
-        ("--backend", "main,dd"),
         ("--phase-timings",),
         ("--detailed-timing",),
         ("--serve",),
@@ -130,24 +113,6 @@ def test_interactive_report_is_opt_in() -> None:
     assert interactive.open
 
 
-def test_endpoint_validation_uses_backend_registry(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setitem(
-        models.BACKEND_SPECS,
-        "future",
-        models.BackendSpec(("proofs",), ("--backend", "future"), ("future-backend",)),
-    )
-    request = targets.parse_target(".")
-
-    args = benchmark.parse_benchmark_args(["--backend", "future"])
-    _baseline, candidate = benchmark.endpoint_requests(args)
-
-    assert candidate == models.EndpointRequest(request, "future", "proofs")
-    assert targets.backend_flags("future") == ["--backend", "future"]
-    assert models.backend_cargo_features(("main", "future")) == ("future-backend",)
-    with pytest.raises(ValueError, match="backend future does not support treatment off"):
-        models.EndpointRequest(request, "future", "off")
-
-
 def test_pair_cli_rejects_identical_endpoints_before_target_resolution() -> None:
     args = benchmark.parse_benchmark_args(["--treatment", "off"])
 
@@ -157,19 +122,19 @@ def test_pair_cli_rejects_identical_endpoints_before_target_resolution() -> None
 
 def test_comparison_permits_shared_binary_across_different_treatments() -> None:
     target = make_target(binary_sha256="sha256:shared")
-    baseline = models.BenchmarkEndpoint(target, "main", "off")
-    candidate = models.BenchmarkEndpoint(target, "main", "proofs")
+    baseline = models.BenchmarkEndpoint(target, "off")
+    candidate = models.BenchmarkEndpoint(target, "proofs")
 
     comparison = models.ComparisonSpec(baseline, candidate, (FILE_SPEC,), 2, 120)
 
-    assert baseline.cache_identity == ("sha256:shared", "main", "off")
-    assert candidate.cache_identity == ("sha256:shared", "main", "proofs")
+    assert baseline.cache_identity == ("sha256:shared", "off")
+    assert candidate.cache_identity == ("sha256:shared", "proofs")
     assert comparison.baseline.target is comparison.candidate.target
 
 
 def test_comparison_rejects_identical_cache_endpoints() -> None:
     target = make_target(binary_sha256="sha256:shared")
-    endpoint = models.BenchmarkEndpoint(target, "main", "proofs")
+    endpoint = models.BenchmarkEndpoint(target, "proofs")
 
     with pytest.raises(ValueError, match="baseline and candidate endpoints must be different"):
         models.ComparisonSpec(endpoint, endpoint, (FILE_SPEC,), 1, 120)
@@ -177,12 +142,12 @@ def test_comparison_rejects_identical_cache_endpoints() -> None:
 
 def test_endpoint_requests_group_one_shared_target_and_two_distinct_targets() -> None:
     shared = targets.parse_target(".")
-    baseline = models.EndpointRequest(shared, "main", "off")
-    candidate = models.EndpointRequest(shared, "main", "proofs")
+    baseline = models.EndpointRequest(shared, "off")
+    candidate = models.EndpointRequest(shared, "proofs")
 
     assert benchmark.group_endpoint_requests(baseline, candidate) == ((shared, (baseline, candidate)),)
 
-    other = models.EndpointRequest(targets.parse_target("@origin/main"), "main", "proofs")
+    other = models.EndpointRequest(targets.parse_target("@origin/main"), "proofs")
     assert benchmark.group_endpoint_requests(baseline, other) == (
         (shared, (baseline,)),
         (other.target, (other,)),

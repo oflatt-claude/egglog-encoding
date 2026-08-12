@@ -12,6 +12,7 @@ import math
 from collections.abc import Sequence
 from pathlib import Path
 
+from ..engines import TREATMENT_SPECS
 from ..models import BenchmarkEndpoint, ComparisonSpec, DetailLevel, FileSpec
 from .analysis import (
     Estimate,
@@ -120,7 +121,6 @@ def _selection_section(
                 endpoint.target.row.git_sha,
                 _git_display(endpoint.target.row.git_sha, endpoint.target.row.is_dirty),
             ),
-            endpoint.backend,
             endpoint.treatment,
         )
         for role, endpoint in (("baseline", comparison.baseline), ("candidate", comparison.candidate))
@@ -128,32 +128,34 @@ def _selection_section(
     endpoint_table = _table(
         report_id("table", "selection", "endpoints"),
         "Comparison",
-        ("role", "target", "git", "backend", "treatment"),
-        ("Role", "Target", "Git", "Backend", "Treatment"),
+        ("role", "target", "git", "treatment"),
+        ("Role", "Target", "Git", "Treatment"),
         endpoint_rows,
         caption=_comparison_caption(report_path, comparison, file_labels),
     )
     blocks: list[ReportBlock] = [endpoint_table]
-    changed = (
-        (
-            comparison.baseline.target.row.git_sha,
-            comparison.baseline.target.row.is_dirty,
-            comparison.baseline.target.display_label,
-        )
-        != (
-            comparison.candidate.target.row.git_sha,
-            comparison.candidate.target.row.is_dirty,
-            comparison.candidate.target.display_label,
-        ),
-        comparison.baseline.backend != comparison.candidate.backend,
-        comparison.baseline.treatment != comparison.candidate.treatment,
+    baseline_engine = TREATMENT_SPECS[comparison.baseline.treatment].engine
+    candidate_engine = TREATMENT_SPECS[comparison.candidate.treatment].engine
+    target_changed = (
+        comparison.baseline.target.row.git_sha,
+        comparison.baseline.target.row.is_dirty,
+        comparison.baseline.target.display_label,
+    ) != (
+        comparison.candidate.target.row.git_sha,
+        comparison.candidate.target.row.is_dirty,
+        comparison.candidate.target.display_label,
+    ) or (
+        baseline_engine == candidate_engine
+        and comparison.baseline.target.binary_sha256_for(comparison.baseline.treatment)
+        != comparison.candidate.target.binary_sha256_for(comparison.candidate.treatment)
     )
+    changed = (target_changed, comparison.baseline.treatment != comparison.candidate.treatment)
     if sum(changed) > 1:
         blocks.append(
             ReportMessage(
                 report_id("message", "selection", "joint-comparison"),
                 None,
-                "This comparison changes more than one of target, backend, and treatment. Its ratios describe "
+                "This comparison changes both target and treatment. Its ratios describe "
                 "the joint endpoint change and do not isolate one cause.",
                 tone="warning",
             )
@@ -224,7 +226,7 @@ def _summary_section(
 
 
 def _endpoint_identity(endpoint: BenchmarkEndpoint) -> str:
-    return f"{endpoint.target.display_label} {endpoint.backend}/{endpoint.treatment}"
+    return f"{endpoint.target.display_label} {endpoint.treatment}"
 
 
 def _deduplicate_summary_rows(

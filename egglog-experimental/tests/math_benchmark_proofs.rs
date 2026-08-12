@@ -22,17 +22,6 @@ fn math_program(repository: &Path, iterations: usize, check: &str) -> String {
 }
 
 #[test]
-fn pointer_analysis_initdb_passes_proof_checking() {
-    let repository = repository();
-    let mut egraph = egglog_experimental::new_experimental_egraph_with_proof_testing();
-    egraph.fact_directory = Some(repository.join("benchmarks/data/pointer-analysis-initdb"));
-    let program =
-        std::fs::read_to_string(repository.join("benchmarks/pointer-analysis-initdb.egg")).unwrap();
-
-    egraph.parse_and_run_program(None, &program).unwrap();
-}
-
-#[test]
 fn terminal_math_equality_requires_iteration_eleven() {
     let repository = repository();
     let check = format!("(check (= {CHECK_LEFT} {CHECK_RIGHT}))");

@@ -3,7 +3,6 @@ use crate::extract::find_canonical;
 use crate::termdag::{TermDag, TermId};
 use crate::util::{HashMap, HashSet};
 use crate::{ArcSort, EGraph, Function, Value};
-use egglog_backend_trait::BackendExt;
 use std::ops::Range;
 
 /// A node of the search: a value together with the sort it is reconstructed at.
@@ -82,11 +81,11 @@ struct EqStage {
 /// extraction output column.
 ///
 /// A group's rows are in lexicographic order, so which row a search picks does
-/// not depend on the backend's row iteration order — see `prove_exists`.
+/// not depend on storage row iteration order — see `prove_exists`.
 struct FunctionRows {
     /// Row width; zero when the function has no rows.
     arity: usize,
-    /// The rows, concatenated in the order the backend yielded them.
+    /// The rows, concatenated in storage iteration order.
     vals: Vec<Value>,
     /// Row numbers into `vals`, ordered by output value and then by row
     /// contents, so each group is a contiguous run.

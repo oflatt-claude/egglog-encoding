@@ -82,18 +82,18 @@ def test_default_workloads_are_the_six_research_cases() -> None:
     assert tuple(file.display_path for file in files) == (
         "egglog-experimental/tests/math-microbenchmark-rational.egg",
         "egglog-experimental/tests/fixtures/eggcc-2mm-pass1.egg",
-        "benchmarks/pointer-analysis-initdb.egg",
+        "egglog/tests/pointer-analysis-initdb.egg",
         "egglog/tests/hardboiled_conv1d_32.egg",
-        "benchmarks/luminal-llama.egg",
+        "egglog/tests/luminal-llama.egg",
         "egglog/tests/web-demo/herbie.egg",
     )
-    pointer = next(file for file in files if file.display_path == "benchmarks/pointer-analysis-initdb.egg")
-    assert pointer.fact_directory == (ROOT / "benchmarks/data/pointer-analysis-initdb").resolve()
+    pointer = next(file for file in files if file.display_path == "egglog/tests/pointer-analysis-initdb.egg")
+    assert pointer.fact_directory == (ROOT / "egglog/tests/pointer-analysis-initdb").resolve()
     assert pointer.fact_directory_sha256.startswith("sha256:")
 
 
 def test_pointer_initdb_facts_are_the_complete_consumed_artifact_relations() -> None:
-    fact_directory = ROOT / "benchmarks/data/pointer-analysis-initdb"
+    fact_directory = ROOT / "egglog/tests/pointer-analysis-initdb"
     files = tuple(sorted(fact_directory.glob("*.csv")))
 
     assert len(files) == 23
@@ -124,7 +124,7 @@ def test_fact_directory_requires_explicit_benchmark_file(tmp_path: Path) -> None
 def test_workload_command_matches_benchmark_behavior() -> None:
     file_spec = models.FileSpec("file.egg", ROOT / "file.egg", "sha256:file")
 
-    assert targets.workload_command(ROOT / "egglog-experimental", file_spec, "main", "off") == [
+    assert targets.workload_command(ROOT / "egglog-experimental", file_spec, "off") == [
         str(ROOT / "egglog-experimental"),
         "--mode",
         "no-messages",
@@ -132,18 +132,16 @@ def test_workload_command_matches_benchmark_behavior() -> None:
         "1",
         str(file_spec.absolute_path),
     ]
-    assert targets.workload_command(ROOT / "egglog-experimental", file_spec, "dd", "proofs") == [
+    assert targets.workload_command(ROOT / "egglog-experimental", file_spec, "proofs") == [
         str(ROOT / "egglog-experimental"),
         "--mode",
         "no-messages",
         "-j",
         "1",
-        "--backend",
-        "dd",
         "--proofs",
         str(file_spec.absolute_path),
     ]
-    assert targets.workload_command(ROOT / "egglog-experimental", file_spec, "main", "proof-extraction") == [
+    assert targets.workload_command(ROOT / "egglog-experimental", file_spec, "proof-extraction") == [
         str(ROOT / "egglog-experimental"),
         "--mode",
         "no-messages",
@@ -152,7 +150,7 @@ def test_workload_command_matches_benchmark_behavior() -> None:
         "--proof-extraction",
         str(file_spec.absolute_path),
     ]
-    assert targets.workload_command(ROOT / "egglog-experimental", file_spec, "main", "proof-testing") == [
+    assert targets.workload_command(ROOT / "egglog-experimental", file_spec, "proof-testing") == [
         str(ROOT / "egglog-experimental"),
         "--mode",
         "no-messages",
@@ -170,14 +168,14 @@ def test_workload_command_matches_benchmark_behavior() -> None:
         facts,
         "sha256:facts",
     )
-    command = targets.workload_command(ROOT / "egglog-experimental", file_with_facts, "main", "proofs")
+    command = targets.workload_command(ROOT / "egglog-experimental", file_with_facts, "proofs")
     assert command[5:7] == ["--fact-directory", str(facts)]
 
 
 def test_egg_workload_command_uses_the_fixed_math_driver_contract() -> None:
     (math,) = workloads.resolve_files(["egglog-experimental/tests/math-microbenchmark-rational.egg"], ROOT)
 
-    assert targets.workload_command(ROOT / "egg-math-benchmark", math, "main", "egg-proof-testing") == [
+    assert targets.workload_command(ROOT / "egg-math-benchmark", math, "egg-proof-testing") == [
         str(ROOT / "egg-math-benchmark"),
         "--proof-mode",
         "check",

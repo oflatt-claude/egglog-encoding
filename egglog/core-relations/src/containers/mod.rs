@@ -165,7 +165,7 @@ impl ContainerValues {
     /// `type_id`.
     ///
     /// Unlike [`ContainerValues::rebuild_all`], which drives rebuilds off the
-    /// backend union-find, the caller supplies the remapping explicitly and
+    /// e-graph union-find, the caller supplies the remapping explicitly and
     /// identifies the container type dynamically by its [`TypeId`].
     pub fn rebuild_val_with(
         &self,
@@ -776,7 +776,7 @@ fn incremental_rebuild(uf_size: usize, table_size: usize, parallel: bool) -> boo
 
 /// A [`ValueRebuilder`] that remaps individual values through a caller-supplied
 /// closure. Used by [`ContainerValues::rebuild_val_with`] to rebuild a single
-/// container against an explicit value mapping rather than a backend union-find.
+/// container against an explicit value mapping rather than an e-graph union-find.
 struct ClosureRebuilder<'a> {
     remap: &'a (dyn Fn(Value) -> Value + Send + Sync),
 }

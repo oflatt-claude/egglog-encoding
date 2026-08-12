@@ -1,8 +1,7 @@
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use core_relations::{ExecutionState, ExternalFunction, ExternalFunctionId, Value};
-use egglog_backend_trait::{BackendExt, ReadMode, RuleSetRun, RuleValue};
+use core_relations::{ExecutionState, ExternalFunction, Value};
 use egglog_bridge::{
     ColumnTy, DefaultVal, FunctionConfig, FunctionId, MergeFn, RuleId, TableAction,
 };
@@ -185,7 +184,10 @@ impl EGraph {
         self.schedulers.take(scheduler_id).map(|r| r.scheduler)
     }
 
-    /// Runs a ruleset for one iteration using the given ruleset
+    /// Runs a ruleset for one iteration using the given ruleset.
+    ///
+    /// The iteration is recorded in the overall run report, as in
+    /// [`EGraph::step_rules`].
     pub fn step_rules_with_scheduler(
         &mut self,
         scheduler_id: SchedulerId,
@@ -212,12 +214,6 @@ impl EGraph {
                 }
             }
             Ok(())
-        }
-
-        if !self.backend.as_any().is::<egglog_bridge::EGraph>() {
-            return Err(Error::BackendError(
-                "scheduler match instantiation requires the reference bridge backend".into(),
-            ));
         }
 
         let mut rules = Vec::new();
@@ -256,23 +252,11 @@ impl EGraph {
 
             let query_iter_report = self
                 .backend
-                .run_rules(RuleSetRun {
-                    name: Some(ruleset),
-                    rules: &query_rules,
-                })
+                .run_rules(&query_rules)
                 .map_err(|e| Error::BackendError(e.to_string()))?;
 
             // Step 3: let the scheduler decide which matches need to be kept
-            let bridge = self
-                .backend
-                .as_any()
-                .downcast_ref::<egglog_bridge::EGraph>()
-                .ok_or_else(|| {
-                    Error::BackendError(
-                        "scheduler match instantiation requires the reference bridge backend"
-                            .into(),
-                    )
-                })?;
+            let bridge = &self.backend;
             self.backend.with_execution_state(|state| {
                 for (rule_id, _rule) in &rules {
                     let rule_info = record.rule_info.get_mut(rule_id).unwrap();
@@ -300,10 +284,7 @@ impl EGraph {
                 .collect::<Vec<_>>();
             let action_iter_report = self
                 .backend
-                .run_rules(RuleSetRun {
-                    name: Some(ruleset),
-                    rules: &action_rules,
-                })
+                .run_rules(&action_rules)
                 .map_err(|e| Error::BackendError(e.to_string()))?;
 
             // Step 5: combine the reports
@@ -327,6 +308,9 @@ impl EGraph {
         self.rulesets = rulesets;
         self.schedulers = schedulers;
 
+        if let Ok(report) = &result {
+            self.overall_run_report.union(report.clone());
+        }
         result
     }
 }
@@ -337,8 +321,7 @@ pub(crate) struct SchedulerRecord {
     rule_info: HashMap<String, SchedulerRuleInfo>,
 }
 
-/// To enable scheduling without modifying the backend,
-/// we split a rule (rule query action) into a worklist relation
+/// To enable scheduling, we split a rule (rule query action) into a worklist relation
 /// two rules (rule query (worklist vars false)) and
 /// (rule (worklist vars false) (action ... (delete (worklist vars false))))
 #[derive(Clone)]
@@ -349,12 +332,6 @@ struct SchedulerRuleInfo {
     query_rule: RuleId,
     action_rule: RuleId,
     free_vars: Vec<ResolvedVar>,
-}
-
-struct SchedulerRuleBuild {
-    collect_matches: ExternalFunctionId,
-    query_rule: Option<RuleId>,
-    decided: Option<FunctionId>,
 }
 
 struct CollectMatches {
@@ -382,36 +359,6 @@ impl ExternalFunction for CollectMatches {
     }
 }
 
-impl SchedulerRuleBuild {
-    fn rollback(self, egraph: &mut EGraph, error: Error) -> Error {
-        let table_result = self.decided.map_or(Ok(()), |table| {
-            let bridge = egraph
-                .backend
-                .as_any_mut()
-                .downcast_mut::<egglog_bridge::EGraph>()
-                .ok_or_else(|| {
-                    Error::BackendError(
-                        "scheduler rollback requires the reference bridge backend".into(),
-                    )
-                })?;
-            bridge
-                .remove_last_table(table)
-                .map_err(|error| Error::BackendError(error.to_string()))
-        });
-        if let Some(rule) = self.query_rule {
-            egraph.backend.free_rule(rule);
-        }
-        egraph.backend.free_external_func(self.collect_matches);
-
-        match table_result {
-            Ok(()) => error,
-            Err(rollback_error) => Error::BackendError(format!(
-                "{error}; scheduler rule rollback also failed: {rollback_error}"
-            )),
-        }
-    }
-}
-
 impl SchedulerRuleInfo {
     fn new(
         egraph: &mut EGraph,
@@ -421,50 +368,33 @@ impl SchedulerRuleInfo {
         let free_vars = rule.head.free_vars();
         let unit_type = egraph.backend.base_values().get_ty::<()>();
         let unit = egraph.backend.base_values().get(());
-        let unit_entry = GenericAtomTerm::Literal(
-            rule.span.clone(),
-            RuleValue {
-                value: unit,
-                ty: ColumnTy::Base(unit_type),
-            },
-        );
+        let unit_entry = QueryEntry::Const {
+            val: unit,
+            ty: ColumnTy::Base(unit_type),
+        };
 
         let matches = Arc::new(Mutex::new(Vec::new()));
         let collect_matches = egraph
             .backend
             .register_external_func(Box::new(CollectMatches::new(matches.clone())));
-        let mut build = SchedulerRuleBuild {
-            collect_matches,
-            query_rule: None,
-            decided: None,
-        };
         let schema = free_vars
             .iter()
-            .map(|v| v.sort.column_ty(egraph.backend.base_values()))
+            .map(|v| v.sort.column_ty(&egraph.backend))
             .chain(std::iter::once(ColumnTy::Base(unit_type)))
             .collect();
         // Step 1: build the query rule
-        let mut qrule_builder = BackendRule::new(
-            &mut *egraph.backend,
+        let builder = egraph.backend.new_rule(name, true);
+        let mut qrule_builder = RuleTranslator::new(
+            builder,
             &egraph.functions,
             &egraph.type_info,
             false, // seminaive query: Pure/Write contexts
         );
-        if let Err(error) = qrule_builder.query(&rule.body, false) {
-            drop(qrule_builder);
-            return Err(build.rollback(egraph, error));
-        }
-        let entries = free_vars
+        qrule_builder.query(&rule.body, false)?;
+        let mut entries = free_vars
             .iter()
             .map(|fv| qrule_builder.entry(&GenericAtomTerm::Var(span!(), fv.clone())))
-            .collect::<Result<Vec<_>, _>>();
-        let mut entries = match entries {
-            Ok(entries) => entries,
-            Err(error) => {
-                drop(qrule_builder);
-                return Err(build.rollback(egraph, error));
-            }
-        };
+            .collect::<Result<Vec<_>, _>>()?;
         // A rule whose head references no variables would otherwise collect empty
         // tuples, leaving the scheduler unable to tell whether the query matched and
         // so never applying its actions. Collect a single unit marker per match so
@@ -473,17 +403,12 @@ impl SchedulerRuleInfo {
             entries.push(unit_entry.clone());
         }
         qrule_builder.call_external_func(
-            rule.span.clone(),
             collect_matches,
             "collect_matches",
-            entries,
+            &entries,
             ColumnTy::Base(unit_type),
         );
-        let qrule_id = match qrule_builder.try_build(name, true, false, rule.span.clone()) {
-            Ok(rule) => rule,
-            Err(error) => return Err(build.rollback(egraph, error)),
-        };
-        build.query_rule = Some(qrule_id);
+        let qrule_id = qrule_builder.build(false);
 
         let decided = egraph.backend.add_table(FunctionConfig {
             schema,
@@ -491,14 +416,14 @@ impl SchedulerRuleInfo {
             n_identity_vals: None,
             default: DefaultVal::Const(unit),
             merge: MergeFn::Old,
-            name: "backend".to_string(),
+            name: "scheduler-decided".to_string(),
             can_subsume: false,
         });
-        build.decided = Some(decided);
 
         // Step 2: build the action rule
-        let mut arule_builder = BackendRule::new(
-            &mut *egraph.backend,
+        let builder = egraph.backend.new_rule(name, false);
+        let mut arule_builder = RuleTranslator::new(
+            builder,
             &egraph.functions,
             &egraph.type_info,
             true, // action rule reads the DB: Read/Full contexts
@@ -506,27 +431,15 @@ impl SchedulerRuleInfo {
         let entries = free_vars
             .iter()
             .map(|fv| arule_builder.entry(&GenericAtomTerm::Var(span!(), fv.clone())))
-            .collect::<Result<Vec<_>, _>>();
-        let mut entries = match entries {
-            Ok(entries) => entries,
-            Err(error) => {
-                drop(arule_builder);
-                return Err(build.rollback(egraph, error));
-            }
-        };
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut entries = entries;
         entries.push(unit_entry);
-        arule_builder.query_table(rule.span.clone(), decided, entries.clone(), ReadMode::All);
-        if let Err(error) = arule_builder.actions(&rule.head) {
-            drop(arule_builder);
-            return Err(build.rollback(egraph, error));
-        }
+        arule_builder.query_table(decided, &entries, None)?;
+        arule_builder.actions(&rule.head)?;
         // Remove the entry as it's now done
         entries.pop();
-        arule_builder.remove(rule.span.clone(), decided, "backend", entries);
-        let arule_id = match arule_builder.try_build(name, false, false, rule.span.clone()) {
-            Ok(rule) => rule,
-            Err(error) => return Err(build.rollback(egraph, error)),
-        };
+        arule_builder.remove(decided, &entries);
+        let arule_id = arule_builder.build(false);
 
         Ok(SchedulerRuleInfo {
             free_vars,
@@ -542,117 +455,6 @@ impl SchedulerRuleInfo {
 #[cfg(test)]
 mod test {
     use super::*;
-    use egglog_backend_trait::RuleSpec;
-
-    fn scheduler_rule_fixture() -> (EGraph, ResolvedCoreRule) {
-        let mut egraph = EGraph::default();
-        egraph
-            .parse_and_run_program(
-                None,
-                r#"
-                (ruleset test)
-                (relation R (i64))
-                (function F (i64) i64 :no-merge)
-                (rule ((R x)) ((set (F x) x)) :ruleset test :name "test-rule")
-                "#,
-            )
-            .unwrap();
-        let Ruleset::Rules(rules) = &egraph.rulesets["test"] else {
-            unreachable!()
-        };
-        let rule = rules["test-rule"].0.clone();
-        (egraph, rule)
-    }
-
-    fn backend_probe(egraph: &mut EGraph) -> ([ExternalFunctionId; 2], [RuleId; 2], FunctionId) {
-        let external = std::array::from_fn(|_| {
-            egraph
-                .backend
-                .register_external_func(Box::new(core_relations::make_external_func(
-                    |state: &mut ExecutionState<'_>, _args: &[Value]| {
-                        Some(state.base_values().get(()))
-                    },
-                )))
-        });
-        let rules = std::array::from_fn(|_| {
-            egraph
-                .backend
-                .add_rule(RuleSpec {
-                    name: "probe".into(),
-                    seminaive: false,
-                    no_decomp: false,
-                    core: egglog_ast::core::GenericCoreRule {
-                        span: span!(),
-                        body: Default::default(),
-                        head: Default::default(),
-                    },
-                })
-                .unwrap()
-        });
-        let unit_type = egraph.backend.base_values().get_ty::<()>();
-        let unit = egraph.backend.base_values().get(());
-        let table = egraph.backend.add_table(FunctionConfig {
-            schema: vec![ColumnTy::Base(unit_type)],
-            n_vals: 1,
-            n_identity_vals: None,
-            default: DefaultVal::Const(unit),
-            merge: MergeFn::AssertEq,
-            name: "probe".into(),
-            can_subsume: false,
-        });
-        (external, rules, table)
-    }
-
-    fn assert_failed_construction_restores_backend(mut failed: EGraph, rule: &ResolvedCoreRule) {
-        let (mut baseline, _) = scheduler_rule_fixture();
-        assert!(SchedulerRuleInfo::new(&mut failed, rule, "test-rule").is_err());
-
-        let bridge = failed
-            .backend
-            .as_any()
-            .downcast_ref::<egglog_bridge::EGraph>()
-            .unwrap();
-        assert!(
-            bridge
-                .action_registry()
-                .read()
-                .unwrap()
-                .lookup_table("backend")
-                .is_none()
-        );
-        assert_eq!(backend_probe(&mut baseline), backend_probe(&mut failed));
-    }
-
-    #[test]
-    fn scheduler_query_failure_rolls_back_backend_resources() {
-        let (egraph, mut rule) = scheduler_rule_fixture();
-        rule.body.atoms[0].args.pop();
-        assert_failed_construction_restores_backend(egraph, &rule);
-    }
-
-    #[test]
-    fn scheduler_action_failure_rolls_back_backend_resources() {
-        let (egraph, mut rule) = scheduler_rule_fixture();
-        let (span, function, args) = rule
-            .head
-            .0
-            .iter()
-            .find_map(|action| match action {
-                crate::core::GenericCoreAction::Set(span, function, args, _) => {
-                    Some((span.clone(), function.clone(), args.clone()))
-                }
-                _ => None,
-            })
-            .unwrap();
-        rule.head.0 = vec![crate::core::GenericCoreAction::Change(
-            span,
-            crate::ast::Change::Subsume,
-            function,
-            args,
-        )];
-
-        assert_failed_construction_restores_backend(egraph, &rule);
-    }
 
     #[derive(Clone)]
     struct FirstNScheduler {

@@ -247,7 +247,7 @@ impl EGraph {
         // Canonicalize the value first so that we always use the canonical e-class ID
         let value = self
             .backend
-            .get_canon_repr(value, sort.column_ty(self.backend.base_values()));
+            .get_canon_repr(value, sort.column_ty(&self.backend));
         use numeric_id::NumericId;
         // `value.rep()` is numeric and never contains '-', so the sort tag and the
         // value are recovered by splitting on the *last* '-' (see `class_id_to_value`).

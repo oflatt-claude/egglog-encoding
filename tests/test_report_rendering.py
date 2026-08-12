@@ -21,7 +21,14 @@ from benchmarking.reports.presentation import (
 from benchmarking.reports.render import render_markdown_report_document, render_rich_report_document
 from benchmarking.reports.store import ReportRecord, ReportStore
 
-from .report_fixtures import make_endpoint, make_record, make_ruleset_timing, make_timing_summary, write_report
+from .report_fixtures import (
+    make_endpoint,
+    make_record,
+    make_ruleset_timing,
+    make_target,
+    make_timing_summary,
+    write_report,
+)
 
 
 def test_report_ids_encode_parts_unambiguously() -> None:
@@ -44,16 +51,16 @@ def test_realistic_pair_report_markdown_snapshot(tmp_path: Path, snapshot: Snaps
         "phases",
         "rulesets",
     )
-    assert "| Baseline | baseline | abc123 | main | off |" in markdown
-    assert "| Candidate | candidate | abc123 | dd | proofs |" in markdown
+    assert "| Baseline | baseline | abc123 | off |" in markdown
+    assert "| Candidate | candidate | abc123 | proofs |" in markdown
     assert "0.983–1.16x" in markdown
     assert "883 ms–1.14 s" not in markdown
     assert "0.883–1.14 s" in markdown
 
 
-def test_selection_uses_backend_and_treatment_from_the_comparison(tmp_path: Path) -> None:
-    baseline = make_endpoint(target_label="main/off", binary_sha256="sha256:shared", backend="main", treatment="off")
-    candidate = make_endpoint(target_label="DD/term", binary_sha256="sha256:shared", backend="dd", treatment="term")
+def test_selection_uses_treatment_from_the_comparison(tmp_path: Path) -> None:
+    baseline = make_endpoint(target_label="off", binary_sha256="sha256:shared", treatment="off")
+    candidate = make_endpoint(target_label="term", binary_sha256="sha256:shared", treatment="term")
     comparison = models.ComparisonSpec(
         baseline,
         candidate,
@@ -64,8 +71,48 @@ def test_selection_uses_backend_and_treatment_from_the_comparison(tmp_path: Path
 
     markdown = render_markdown_report_document(build_report_catalog(ReportStore(tmp_path / "report.jsonl"), comparison))
 
-    assert "| Baseline | main/off | abc123 | main | off |" in markdown
-    assert "| Candidate | DD/term | abc123 | dd | term |" in markdown
+    assert "| Baseline | off | abc123 | off |" in markdown
+    assert "| Candidate | term | abc123 | term |" in markdown
+
+
+def test_selection_warns_when_same_engine_binary_and_treatment_both_change(tmp_path: Path) -> None:
+    comparison = models.ComparisonSpec(
+        models.BenchmarkEndpoint(make_target(binary_sha256="sha256:before"), "off"),
+        models.BenchmarkEndpoint(make_target(binary_sha256="sha256:after"), "proofs"),
+        (models.FileSpec("file.egg", tmp_path / "file.egg", "sha256:file"),),
+        1,
+        120,
+    )
+
+    markdown = render_markdown_report_document(build_report_catalog(ReportStore(tmp_path / "report.jsonl"), comparison))
+
+    assert "This comparison changes both target and treatment" in markdown
+
+
+def test_selection_does_not_treat_cross_engine_binary_difference_as_target_change(tmp_path: Path) -> None:
+    original = make_target(binary_sha256="sha256:egglog")
+    target = models.ResolvedTarget(
+        original.request,
+        original.row,
+        original.binary_sha256,
+        original.binary_path,
+        (
+            models.EngineBinary("egglog", "sha256:egglog", None),
+            models.EngineBinary("egg", "sha256:egg", None),
+        ),
+        "egglog",
+    )
+    comparison = models.ComparisonSpec(
+        models.BenchmarkEndpoint(target, "egg-proofs"),
+        models.BenchmarkEndpoint(target, "proofs"),
+        (models.FileSpec("file.egg", tmp_path / "file.egg", "sha256:file"),),
+        1,
+        120,
+    )
+
+    markdown = render_markdown_report_document(build_report_catalog(ReportStore(tmp_path / "report.jsonl"), comparison))
+
+    assert "This comparison changes both target and treatment" not in markdown
 
 
 def test_shared_formatters_keep_compact_units_and_unambiguous_paths() -> None:
@@ -352,13 +399,11 @@ def _pair_case(tmp_path: Path) -> tuple[Path, models.ComparisonSpec]:
     baseline = make_endpoint(
         target_label="baseline",
         binary_sha256="sha256:baseline",
-        backend="main",
         treatment="off",
     )
     candidate = make_endpoint(
         target_label="candidate",
         binary_sha256="sha256:candidate",
-        backend="dd",
         treatment="proofs",
     )
     records: list[ReportRecord] = []
@@ -376,7 +421,6 @@ def _pair_case(tmp_path: Path) -> tuple[Path, models.ComparisonSpec]:
                         started_at=f"2026-07-17T12:00:{len(records):02d}Z",
                         binary_sha256=endpoint.target.binary_sha256,
                         file_sha256=file.sha256,
-                        backend=endpoint.backend,
                         treatment=endpoint.treatment,
                         target_label=endpoint.target.row.label,
                         wall_sec=wall,

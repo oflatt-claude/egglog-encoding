@@ -28,8 +28,6 @@ from .collection import (
 )
 from .engines import TREATMENTS, Treatment, validate_engine_workload
 from .models import (
-    BACKEND_SPECS,
-    Backend,
     BenchmarkEndpoint,
     ComparisonSpec,
     DetailLevel,
@@ -65,12 +63,6 @@ def parse_benchmark_args(argv: Sequence[str]) -> argparse.Namespace:
         help="candidate target: ., /path, @git-ref, #pr, label=source, or label=",
     )
     parser.add_argument(
-        "--backend",
-        choices=tuple(BACKEND_SPECS),
-        default="main",
-        help="candidate backend (default: main)",
-    )
-    parser.add_argument(
         "--treatment",
         choices=TREATMENTS,
         default="proofs",
@@ -80,12 +72,6 @@ def parse_benchmark_args(argv: Sequence[str]) -> argparse.Namespace:
         "--compare-target",
         default=None,
         help="baseline target (default: candidate target)",
-    )
-    parser.add_argument(
-        "--compare-backend",
-        choices=tuple(BACKEND_SPECS),
-        default="main",
-        help="baseline backend (default: main)",
     )
     parser.add_argument(
         "--compare-treatment",
@@ -164,12 +150,10 @@ def endpoint_requests(args: argparse.Namespace) -> tuple[EndpointRequest, Endpoi
     baseline_target = parse_target(str(args.compare_target)) if args.compare_target is not None else candidate_target
     baseline = EndpointRequest(
         baseline_target,
-        cast(Backend, str(args.compare_backend)),
         cast(Treatment, str(args.compare_treatment)),
     )
     candidate = EndpointRequest(
         candidate_target,
-        cast(Backend, str(args.backend)),
         cast(Treatment, str(args.treatment)),
     )
     if baseline == candidate:
@@ -247,12 +231,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         comparison = ComparisonSpec(
             baseline=BenchmarkEndpoint(
                 resolved_targets[baseline_request.target],
-                baseline_request.backend,
                 baseline_request.treatment,
             ),
             candidate=BenchmarkEndpoint(
                 resolved_targets[candidate_request.target],
-                candidate_request.backend,
                 candidate_request.treatment,
             ),
             files=files,

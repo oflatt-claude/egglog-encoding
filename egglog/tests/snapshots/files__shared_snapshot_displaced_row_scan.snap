@@ -1,6 +1,7 @@
 ---
-source: egglog-experimental/dd/tests/files.rs
-expression: out
+source: egglog/tests/files.rs
+assertion_line: 289
+expression: shared_snapshot
 ---
 ((deleted 0)
  (f 2)

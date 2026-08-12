@@ -28,7 +28,6 @@ from rich.text import Text
 
 from .engines import TREATMENT_SPECS
 from .models import (
-    Backend,
     BenchmarkEndpoint,
     EndpointRequest,
     EngineBinary,
@@ -38,7 +37,6 @@ from .models import (
     TargetRequest,
     TargetRow,
     Treatment,
-    backend_cargo_features,
 )
 from .processes import TimingResult, run_command
 from .reports.store import (
@@ -64,7 +62,6 @@ class BenchmarkRunPlan:
     """Cached and missing observations for one endpoint/file result."""
 
     file: FileSpec
-    backend: Backend
     treatment: Treatment
     required_rows: int
     cached_statuses: tuple[Status, ...]
@@ -126,22 +123,20 @@ def build_collection_plan(
     requests = tuple(
         (
             file_spec,
-            endpoint.backend,
             endpoint.treatment,
             CacheKey.for_endpoint(endpoint, file_spec, timeout_sec),
         )
         for file_spec in files
         for endpoint in endpoints
     )
-    selected = store.selected_statuses_for_keys(tuple(request[3] for request in requests), rounds)
+    selected = store.selected_statuses_for_keys(tuple(request[2] for request in requests), rounds)
     runs: list[BenchmarkRunPlan] = []
-    for file_spec, backend, treatment, cache_key in requests:
+    for file_spec, treatment, cache_key in requests:
         cached = selected[cache_key]
         missing = rounds if force_run else max(0, rounds - len(cached))
         runs.append(
             BenchmarkRunPlan(
                 file=file_spec,
-                backend=backend,
                 treatment=treatment,
                 required_rows=rounds,
                 cached_statuses=cached,
@@ -165,9 +160,8 @@ def resolve_targets(
     """Resolve every request, then build once per canonical checkout path.
 
     Materializing all requests before building prevents distinct aliases for the
-    same checkout from overwriting one another's feature-specific executable.
-    Each alias retains its own request and row provenance while sharing the
-    executable path and hash produced from the union of required backends.
+    same checkout from rebuilding the same executable. Each alias retains its
+    own request and row provenance while sharing the executable path and hash.
     """
 
     resolved: dict[TargetRequest, ResolvedTarget] = {}
@@ -194,7 +188,6 @@ def resolve_targets(
         git_shas = {target.row.git_sha for target in pending_targets}
         if len(git_shas) != 1:
             raise ValueError(f"target selectors resolved checkout {checkout_path} at different git commits")
-        backends = tuple(endpoint.backend for target in pending_targets for endpoint in target.endpoint_requests)
         engines = tuple(
             dict.fromkeys(
                 TREATMENT_SPECS[endpoint.treatment].engine
@@ -208,7 +201,6 @@ def resolve_targets(
             representative.row,
             console,
             "release",
-            backend_cargo_features(backends),
             engines,
         )
         for target in pending_targets:
@@ -250,9 +242,9 @@ def _resolve_or_materialize_target(
         pointers = tuple(pointer for _engine, pointer in engine_pointers if pointer is not None)
         if len(pointers) == len(engine_pointers) and all(pointer.row == pointers[0].row for pointer in pointers):
             binaries = tuple(
-                EngineBinary(engine, engine_pointer.binary_sha256, None)
-                for engine, engine_pointer in engine_pointers
-                if engine_pointer is not None
+                EngineBinary(engine, pointer.binary_sha256, None)
+                for engine, pointer in engine_pointers
+                if pointer is not None
             )
             cached_target = ResolvedTarget(
                 request=request,
@@ -302,7 +294,6 @@ def label_has_enough_rows(
             file_spec.sha256,
             endpoint.treatment,
             timeout_sec,
-            endpoint.backend,
             file_spec.fact_directory_sha256,
         )
         for file_spec in files
@@ -316,7 +307,6 @@ def run_process(
     binary_path: Path,
     checkout_path: Path,
     file_spec: FileSpec,
-    backend: Backend,
     treatment: Treatment,
     timeout_sec: int,
 ) -> ProcessObservation:
@@ -324,7 +314,7 @@ def run_process(
 
     with tempfile.TemporaryDirectory(prefix="egglog-benchmark-") as directory:
         summary_path = Path(directory) / "timing-summary.json"
-        workload = workload_command(binary_path, file_spec, backend, treatment)
+        workload = workload_command(binary_path, file_spec, treatment)
         command = [workload[0], "--timing-summary", str(summary_path), *workload[1:]]
         result = run_command(command, checkout_path, timeout_sec)
         require_workload_unchanged(file_spec)
@@ -393,7 +383,6 @@ def preflight_collection(plan: CollectionPlan, timeout_sec: int) -> None:
 
 def collection_label(
     file_spec: FileSpec,
-    backend: Backend,
     treatment: Treatment,
     round_index: int,
     rounds: int,
@@ -401,7 +390,7 @@ def collection_label(
     """Return a concise progress label for one measured observation."""
 
     filename = Path(file_spec.display_path).name
-    return f"{filename} · {backend}/{treatment} · {round_index + 1}/{rounds}"
+    return f"{filename} · {treatment} · {round_index + 1}/{rounds}"
 
 
 def format_timing_result(result: TimingResult) -> str:
@@ -473,7 +462,6 @@ def flat_report_record(
         "file_sha256": run.file.sha256,
         "fact_directory_path": (str(run.file.fact_directory) if run.file.fact_directory is not None else None),
         "fact_directory_sha256": run.file.fact_directory_sha256,
-        "backend": run.backend,
         "treatment": run.treatment,
         "timeout_sec": timeout_sec,
         "wall_sec": result.timing.wall_sec,
@@ -531,7 +519,6 @@ def collect_rows(
                 observation_number = completed_observations + 1
                 label = collection_label(
                     run.file,
-                    run.backend,
                     run.treatment,
                     round_index,
                     run.missing_observations,
@@ -550,7 +537,6 @@ def collect_rows(
                     binary_path,
                     Path(target.row.path),
                     run.file,
-                    run.backend,
                     run.treatment,
                     timeout_sec,
                 )

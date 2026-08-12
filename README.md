@@ -59,8 +59,8 @@ The public entrypoint is:
 ```
 
 Every benchmark invocation compares exactly two endpoints over the same ordered
-files: a candidate and a baseline. An endpoint is one target, backend, and
-treatment. There are no implicit matrices or multi-way comparisons.
+files: a candidate and a baseline. An endpoint is one target and treatment.
+There are no implicit matrices or multi-way comparisons.
 
 The default command compares proof mode with ordinary mode in the current
 checkout:
@@ -70,43 +70,40 @@ checkout:
 
 # Equivalent endpoint selection:
 ./bench.py \
-  --target . --backend main --treatment proofs \
-  --compare-target . --compare-backend main --compare-treatment off
+  --target . --treatment proofs \
+  --compare-target . --compare-treatment off
 ```
 
 The endpoint defaults are:
 
-| Endpoint | Target | Backend | Treatment |
-| --- | --- | --- | --- |
-| Candidate | `.` | `main` | `proofs` |
-| Baseline | candidate target | `main` | `off` |
+| Endpoint | Target | Treatment |
+| --- | --- | --- |
+| Candidate | `.` | `proofs` |
+| Baseline | candidate target | `off` |
 
-In particular, `--compare-backend` always defaults to `main`, even when the
-candidate uses another backend. `--compare-target` alone inherits the candidate
-target. Every rendered report states the exact endpoints, files, rounds,
-timeout, and report path so every ratio is interpretable.
+`--compare-target` defaults to the candidate target. Every rendered report
+states the exact endpoints, files, rounds, timeout, and report path so every
+ratio is interpretable.
 
 Treatments map directly to engine modes:
 
-| Treatment | Engine behavior |
+| Treatment | Executable and behavior |
 | --- | --- |
-| `off` | no term or proof encoding |
-| `term` | `--term-encoding` |
-| `proofs` | `--proofs` |
-| `proof-extraction` | `--proof-extraction`; rewrite checks, then extract, materialize, clean, and simplify proofs without verifying them |
-| `proof-testing` | `--proof-testing`; extract and verify the proofs for checks |
-| `egg` | current egg 0.11.0 without explanation recording |
+| `off` | egglog without term or proof encoding |
+| `term` | egglog with `--term-encoding` |
+| `proofs` | egglog with `--proofs` |
+| `proof-extraction` | egglog with `--proof-extraction`; rewrite checks, then extract, materialize, clean, and simplify proofs without verifying them |
+| `proof-testing` | egglog with `--proof-testing`; extract and verify proofs for checks |
+| `egg` | current egg without explanation recording |
 | `egg-proofs` | current egg with explanation recording enabled |
 | `egg-proof-extraction` | current egg with explanation recording and extraction |
 | `egg-proof-testing` | current egg with extraction and explanation checking |
 
-The `main` backend supports all nine treatments. The `dd` backend supports only
-`term` and `proofs`. The four `egg*` treatments run the separate
-`egg-math-benchmark` executable and currently support only
-`egglog-experimental/tests/math-microbenchmark-rational.egg`; the other five treatments run
-`egglog-experimental`. Results from either proof-extraction treatment are
-performance evidence only. The corresponding proof-testing treatment provides
-the strict validity check.
+The five egglog treatments run `egglog-experimental`. The four `egg*`
+treatments run the separate `egg-math-benchmark` executable and currently
+support only `egglog-experimental/tests/math-microbenchmark-rational.egg`.
+Results from either proof-extraction treatment are performance evidence only;
+the corresponding proof-testing treatment provides the strict validity check.
 
 ### Common comparisons
 
@@ -126,12 +123,6 @@ Compare the current proof implementation with proof mode on `origin/main`:
 
 ```bash
 ./bench.py --compare-target @origin/main --compare-treatment proofs
-```
-
-Compare the DD backend with main while holding proof mode fixed:
-
-```bash
-./bench.py --backend dd --compare-treatment proofs
 ```
 
 Compare term encoding with ordinary mode:
@@ -170,9 +161,9 @@ Compare current proofs with a previously cached, labeled ordinary baseline:
 That last form reuses the newest cache identity carrying `old-off` when it has
 enough matching rows. First create the label with a concrete source, for
 example `--compare-target old-off=@origin/main`. Newest means the greatest
-`started_at`, with later JSONL order breaking ties. If a command changes more
-than one of target, backend, and treatment, the report warns that the ratio is
-a joint endpoint change and does not attribute the effect to one cause.
+`started_at`, with later JSONL order breaking ties. If a command changes both
+target and treatment, the report warns that the ratio is a joint endpoint
+change and does not attribute the effect to one cause.
 
 ### Targets
 
@@ -191,9 +182,9 @@ resolved commit when available, otherwise the runner creates or reuses an
 isolated temporary worktree. It never stashes the main checkout.
 
 If differently spelled target selectors resolve to the same checkout, the
-runner materializes that checkout once, builds each engine required by the
-selected treatments, and uses the union of required egglog backend features.
-Each cache row records the SHA-256 of the executable that actually ran.
+runner materializes it once and builds each executable required by the selected
+treatments. Each cache row records the SHA-256 of the executable that actually
+ran.
 
 A cache-only `label=` target skips materialization and building when every
 requested endpoint/file already has enough rows. If more rows are required, a
@@ -201,8 +192,8 @@ clean cached git revision can be rebuilt; a label pointing to a dirty checkout
 requires a new `label=SOURCE` request.
 
 The baseline and candidate may share a binary, as the default proof-overhead
-comparison does, but their complete cache identities—binary SHA-256, backend,
-and treatment—must differ.
+comparison does, but their complete cache identities—binary SHA-256 and
+treatment—must differ.
 
 ### Files
 
@@ -211,7 +202,8 @@ selected workloads containing `(input ...)` commands:
 
 ```bash
 ./bench.py egglog/tests/foo.egg egglog/tests/bar.egg
-./bench.py benchmarks/pointer.egg --fact-directory benchmarks/data/pointer
+./bench.py egglog/tests/pointer-analysis-initdb.egg \
+  --fact-directory egglog/tests/pointer-analysis-initdb
 ```
 
 Paths are resolved relative to the command invocation directory, not relative
@@ -222,10 +214,10 @@ With no positional files, the representative suite is:
 
 - `egglog-experimental/tests/math-microbenchmark-rational.egg`
 - `egglog-experimental/tests/fixtures/eggcc-2mm-pass1.egg`
-- `benchmarks/pointer-analysis-initdb.egg`, with
-  `benchmarks/data/pointer-analysis-initdb`
+- `egglog/tests/pointer-analysis-initdb.egg`, with
+  `egglog/tests/pointer-analysis-initdb`
 - `egglog/tests/hardboiled_conv1d_32.egg`
-- `benchmarks/luminal-llama.egg`
+- `egglog/tests/luminal-llama.egg`
 - `egglog/tests/web-demo/herbie.egg`
 
 The workloads are intentionally bounded proxies rather than an undifferentiated
@@ -240,7 +232,7 @@ corpus:
 | Luminal | Static Llama graph from [`egglog_repro` commit `7fb0194`](https://github.com/saulshanabrook/egglog_repro/blob/7fb0194812b5b11e41a286d8b55e48e3b0bfcd66/llama.egg) | `t712` is checked after kernel lowering |
 | Herbie | Static engine proxy without Racket orchestration or an FPCore corpus | All 14 checks exercise the selected treatment |
 
-The Math language, 24 rewrites, and seven seeds come from
+The Math language, rewrites, and seeds come from
 `micro-benchmarks/src/math.rs` and `micro-benchmarks/src/eqlog/math_full.egg`
 in the [PLDI 2023 artifact](https://doi.org/10.5281/zenodo.7709794). The fixture
 preserves its Rational constants but uses current egg and egglog's ordinary
@@ -250,10 +242,10 @@ reproduction of the paper's historical scheduler results.
 
 The pointer input is the complete `initdb.bc` input for the 23 relations read by
 this adaptation, not the artifact's full 30-program pointer-analysis matrix.
-See `benchmarks/data/pointer-analysis-initdb.PROVENANCE.md` for its archive and
-content hashes. Herbie remains a bounded static proxy in the ordinary benchmark
-suite. Reproducing the historical Racket/FPCore orchestration remains outside
-the ordinary benchmark runner.
+See `egglog/tests/pointer-analysis-initdb.PROVENANCE.md` for the source
+details and archive SHA-256. Herbie remains a bounded static proxy in the
+ordinary benchmark suite; reproducing the historical Racket/FPCore
+orchestration remains outside the ordinary runner.
 
 Benchmark files must not contain executable `(prove ...)` commands. Use
 `(check ...)` in timed workloads so the selected treatment controls whether
@@ -335,11 +327,8 @@ nanosecond totals:
 - Merge: resolving and installing staged updates.
 - Rebuild: rebuilding indexes and e-graph state.
 
-The pre-merge boundary is backend-defined. Main egglog measures one contiguous
-pre-merge interval and records the remainder after Search and Apply as
-Unattributed. DD directly times its native Search and Apply regions and defines
-its pre-merge total as their sum, so DD records zero Unattributed time. DD work
-outside those phase boundaries remains part of Outside recorded rulesets.
+The engine measures one contiguous pre-merge interval and records the remainder
+after Search and Apply as Unattributed.
 
 The phase report aggregates all rulesets and keeps two kinds of otherwise
 hidden time distinct:
@@ -370,8 +359,7 @@ ruleset absent from one endpoint is displayed as `—`, while a measured zero
 remains `0 ns`.
 
 Benchmarks run single-threaded. This keeps Search and Apply attribution
-additive for main egglog's interleaved executor. The DD backend records the same
-schema at its natural search, apply, merge, and rebuild boundaries.
+additive for egglog's interleaved executor.
 
 ### Interactive report
 
@@ -404,9 +392,8 @@ sharing it.
 
 ### Nightly
 
-`make nightly` benchmarks each endpoint in `ENDPOINTS` — the main backend's
-`term`, `proofs`, and `proof-extraction`, with the `dd` backend disabled for
-now — on the current checkout and on the latest `main`, accumulating them all in
+`make nightly` benchmarks each treatment in `TREATMENTS` — `term`, `proofs`,
+and `proof-extraction` — on the current checkout and on the latest `main`, accumulating them all in
 the ordinary report cache, and copies the resulting interactive page and its
 cache to `nightly/output/index.html` and `index.jsonl`:
 
@@ -421,7 +408,7 @@ side is; endpoints with identical binaries collapse to one option. The page
 opens on proof overhead of the current checkout. Populating is best effort: an
 endpoint that fails to build or run drops one dropdown option rather than
 failing the run, and the output directory is only overwritten after a
-successful run. Edit `TARGETS` and `ENDPOINTS` in `scripts/nightly_bench.py` to
+successful run. Edit `TARGETS` and `TREATMENTS` in `scripts/nightly_bench.py` to
 change what is measured.
 
 `make nightly-local` is the same run at `--rounds 1`, for trying the whole
@@ -449,12 +436,11 @@ separate Samply command when a particular endpoint needs call-stack diagnosis:
 ```bash
 ./bench.py profile FILE
 ./bench.py profile FILE --target @origin/main --treatment proofs --open
-./bench.py profile FILE --backend dd --profile-seconds 20
-./bench.py profile egglog-experimental/tests/math-microbenchmark-rational.egg --treatment egg-proofs
+./bench.py profile FILE --profile-seconds 20
 ```
 
-Profiling selects one target, backend, treatment, and file. Artifacts are cached
-under `.profiles/` by binary, file, fact-directory, backend, treatment, and
+Profiling selects one target, treatment, and file. Artifacts are cached under
+`.profiles/` by binary, file, fact-directory, treatment, and
 iteration policy. `--open` loads the artifact in Samply; `--force-run` replaces
 the cached profile. Profiling is deliberately separate from the repeated-run
 benchmark statistics and pair report.
@@ -482,7 +468,6 @@ Cache reuse is keyed by:
 - binary SHA-256;
 - file SHA-256;
 - fact-directory SHA-256;
-- backend;
 - treatment; and
 - timeout.
 
@@ -684,7 +669,7 @@ CI runs on pull requests, manual dispatches, and pushes to `main`:
 - `codspeed`: an in-process, proofs-only benchmark over a smaller workload set
   in simulation and memory modes. CodSpeed includes phase-clock execution but
   does not persist phase reports; `./bench.py` remains the source for
-  off/proofs, commit, and backend comparisons with stored observations.
+  off/proofs and commit comparisons with stored observations.
 
 Ruff and Mypy discover all repository-owned Python files from project
 configuration, so new modules under `benchmarking/` or `tests/` require no

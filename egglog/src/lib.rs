@@ -39,13 +39,7 @@ pub use egglog_add_primitive::add_primitive_with_validator;
 use egglog_ast::generic_ast::{Change, GenericExpr, Literal};
 use egglog_ast::span::Span;
 use egglog_ast::util::ListDisplay;
-/// The pluggable backend interface. Re-exported so downstream crates can
-/// implement their own backend (see [`EGraph::with_backend`]).
-pub use egglog_backend_trait::{Backend, BackendExt};
-use egglog_backend_trait::{
-    ReadMode, RuleActionCall, RuleBodyCall, RuleSetRun, RuleSpec, RuleValue, RuleVar,
-};
-use egglog_bridge::ColumnTy;
+use egglog_bridge::{ColumnTy, QueryEntry};
 use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
 use egglog_reports::{ReportLevel, RunReport};
@@ -316,7 +310,7 @@ dyn_clone::clone_trait_object!(ExtensionStateValue);
 
 #[derive(Clone)]
 pub struct EGraph {
-    backend: Box<dyn egglog_backend_trait::Backend>,
+    backend: egglog_bridge::EGraph,
     pub parser: Parser,
     names: check_shadowing::Names,
     /// pushed_egraph forms a linked list of pushed egraphs.
@@ -355,7 +349,7 @@ pub trait UserDefinedCommand: Send + Sync {
 /// A function in the e-graph.
 ///
 /// This contains the schema information of the function and
-/// the backend id of the function in the e-graph.
+/// the table id of the function in the e-graph.
 #[derive(Clone)]
 pub struct Function {
     decl: ResolvedFunctionDecl,
@@ -430,22 +424,16 @@ impl Debug for Function {
 
 impl Default for EGraph {
     fn default() -> Self {
-        Self::with_backend(Box::new(egglog_bridge::EGraph::default()))
+        Self::new_inner(1)
     }
 }
 
 impl EGraph {
-    /// Construct an `EGraph` backed by the given [`Backend`] implementation.
-    ///
-    /// [`EGraph::default`] uses the in-memory reference backend
-    /// (`egglog_bridge::EGraph`); downstream crates can supply their own
-    /// backend (e.g. a differential-dataflow engine) by implementing
-    /// [`Backend`] and passing it here.
-    pub fn with_backend(backend: Box<dyn Backend>) -> Self {
+    fn new_inner(num_threads: usize) -> Self {
         let mut parser = Parser::default();
         let proof_state = EncodingState::new(&mut parser.symbol_gen);
         let mut eg = Self {
-            backend,
+            backend: egglog_bridge::EGraph::new(num_threads),
             parser,
             names: Default::default(),
             pushed_egraph: Default::default(),
@@ -577,9 +565,9 @@ impl EGraph {
         eg.rulesets
             .insert("".into(), Ruleset::Rules(Default::default()));
 
-        // The generic `get-fresh!` mint primitive is registered on every e-graph
-        // (a no-op without an eclass-id counter). Doing it here — rather than
-        // per-eq-sort — means it is present whenever the *encoded* program is run,
+        // The generic `get-fresh!` mint primitive is registered on every e-graph.
+        // Doing it here — rather than per-eq-sort — means it is present whenever
+        // the *encoded* program is run,
         // including when the already-desugared program is replayed in a plain
         // e-graph (e.g. the desugar proof-testing path).
         crate::proofs::proof_fresh::register_get_fresh(&mut eg);
@@ -611,7 +599,7 @@ impl EGraph {
     /// Passing `1` keeps execution serial. Passing `0` uses available
     /// parallelism.
     pub fn new(num_threads: usize) -> Self {
-        EGraph::default().with_num_threads(num_threads)
+        Self::new_inner(num_threads)
     }
 
     /// Create a new e-graph with the term-encoding pipeline enabled.
@@ -648,27 +636,6 @@ impl EGraph {
     #[doc(hidden)]
     pub fn with_term_encoding_enabled(mut self) -> Self {
         let typechecker = self.clone();
-        self.enable_term_encoding(typechecker);
-        self
-    }
-
-    /// Enable the term-encoding pipeline for a custom backend.
-    ///
-    /// Relational backends without a native union-find require this:
-    /// congruence and rebuild are lowered to ordinary
-    /// rules over `@uf` tables instead of relying on the backend's own
-    /// union-find. Re-typechecking after the encoder runs uses a default
-    /// (bridge-backed) e-graph, so this backend need not implement typechecking.
-    pub fn with_term_encoding(mut self) -> Self {
-        let typechecker = EGraph::default().with_num_threads(self.num_threads());
-        self.enable_term_encoding(typechecker);
-        self
-    }
-
-    /// Enable the term-encoding pipeline for a custom backend, using the given
-    /// bridge-backed e-graph for parsing/typechecking before instrumentation.
-    #[doc(hidden)]
-    pub fn with_term_encoding_typechecker(mut self, typechecker: EGraph) -> Self {
         self.enable_term_encoding(typechecker);
         self
     }
@@ -891,7 +858,7 @@ impl EGraph {
     ) -> Result<egglog_bridge::MergeFn, Error> {
         match expr {
             GenericExpr::Lit(_, literal) => {
-                let val = literal_to_value(self.backend.base_values(), literal);
+                let val = literal_to_value(&self.backend, literal);
                 Ok(egglog_bridge::MergeFn::Const(val))
             }
             GenericExpr::Var(span, resolved_var) => {
@@ -935,19 +902,14 @@ impl EGraph {
                             "expected string literal after `unstable-fn`".into(),
                         ));
                     };
-                    let bridge = self
+                    let panic_id = self
                         .backend
-                        .as_any()
-                        .downcast_ref::<egglog_bridge::EGraph>()
-                        .ok_or_else(|| {
-                            Error::BackendError(
-                                "`unstable-fn` merge expressions require the reference bridge backend"
-                                    .into(),
-                            )
-                        })?;
-                    let panic_id = bridge.action_registry().read().unwrap().default_panic_id();
+                        .action_registry()
+                        .read()
+                        .unwrap()
+                        .default_panic_id();
                     let resolved = resolve_function_container_target_with_context(
-                        bridge,
+                        &self.backend,
                         &self.functions,
                         &self.type_info,
                         name,
@@ -974,10 +936,10 @@ impl EGraph {
         }
     }
 
-    /// Lower a resolved `:merge` (a value-producing action block) to a backend [`egglog_bridge::MergeFn`], keeping
+    /// Lower a resolved `:merge` (a value-producing action block) to an [`egglog_bridge::MergeFn`], keeping
     /// the existing merge interpreter. The `result` produces the merged value(s); any `actions` run
     /// first as effects.
-    /// `self_ref` names the function this merge belongs to and its (peeked) backend id,
+    /// `self_ref` names the function this merge belongs to and its (peeked) table id,
     /// so the merge can write into the table being declared.
     fn translate_merge_to_mergefn(
         &self,
@@ -1019,7 +981,7 @@ impl EGraph {
         })
     }
 
-    /// Lower a single resolved merge action to a backend [`egglog_bridge::MergeAction`]. Supports `set`, `let`, and
+    /// Lower a single resolved merge action to an [`egglog_bridge::MergeAction`]. Supports `set`, `let`, and
     /// `union`; other actions (`delete`/`panic`/`extract`/...) are not meaningful during a merge.
     fn translate_merge_action(
         &self,
@@ -1103,7 +1065,7 @@ impl EGraph {
         };
 
         use egglog_bridge::{DefaultVal, MergeFn};
-        // This function's backend id (the id `add_table` below will assign, peeked
+        // This function's table id (the id `add_table` below will assign, peeked
         // deterministically), so its merge can write into its own table.
         let own_id = self.backend.peek_next_function_id();
         let merge = match decl.subtype {
@@ -1121,7 +1083,7 @@ impl EGraph {
             schema: input
                 .iter()
                 .chain(outputs.iter())
-                .map(|sort| sort.column_ty(self.backend.base_values()))
+                .map(|sort| sort.column_ty(&self.backend))
                 .collect(),
             n_vals: num_outputs,
             n_identity_vals: decl.identity_vals,
@@ -1208,6 +1170,9 @@ impl EGraph {
     ) -> Result<(), Error> {
         // make a new e-graph, desugar the program in proof mode
         let mut proof_check_eg = EGraph::new_with_proofs();
+        proof_check_eg
+            .fact_directory
+            .clone_from(&self.fact_directory);
         if proof_testing {
             proof_check_eg = proof_check_eg.with_proof_testing();
         }
@@ -1393,6 +1358,8 @@ impl EGraph {
     /// This applies every match it finds (under semi-naive).
     /// See [`EGraph::step_rules_with_scheduler`] for more fine-grained control.
     ///
+    /// The iteration is recorded in the overall run report, whatever ran it.
+    ///
     /// This will return an error if an egglog primitive returns None in an action.
     pub fn step_rules(&mut self, ruleset: &str) -> Result<RunReport, Error> {
         fn collect_rule_ids(
@@ -1419,13 +1386,12 @@ impl EGraph {
 
         let iteration_report = self
             .backend
-            .run_rules(RuleSetRun {
-                name: Some(ruleset),
-                rules: &rule_ids,
-            })
+            .run_rules(&rule_ids)
             .map_err(|e| Error::BackendError(e.to_string()))?;
 
-        Ok(RunReport::singleton(ruleset, iteration_report))
+        let report = RunReport::singleton(ruleset, iteration_report);
+        self.overall_run_report.union(report.clone());
+        Ok(report)
     }
 
     fn add_rule(&mut self, rule: ast::ResolvedRule) -> Result<String, Error> {
@@ -1471,15 +1437,16 @@ impl EGraph {
         )?;
         let (query, actions) = (&core_rule.body, &core_rule.head);
         let rule_id = {
-            let mut translator = BackendRule::new(
-                &mut *self.backend,
+            let builder = self.backend.new_rule(&rule.name, seminaive);
+            let mut translator = RuleTranslator::new(
+                builder,
                 &self.functions,
                 &self.type_info,
                 requires_read_context,
             );
             translator.query(query, rule.include_subsumed)?;
             translator.actions(actions)?;
-            translator.try_build(&rule.name, seminaive, no_decomp, core_rule.span.clone())?
+            translator.build(no_decomp)
         };
 
         let Some(Ruleset::Rules(rules)) = self.rulesets.get_mut(&rule.ruleset) else {
@@ -1504,18 +1471,16 @@ impl EGraph {
         );
         let (actions, _) = actions.to_core_actions(&mut ctx)?;
 
-        let mut translator = BackendRule::new(
-            &mut *self.backend,
+        let builder = self.backend.new_rule("eval_actions", false);
+        let mut translator = RuleTranslator::new(
+            builder,
             &self.functions,
             &self.type_info,
             true, // global action: Read/Full contexts (may read the DB)
         );
         translator.actions(&actions)?;
-        let id = translator.try_build("eval_actions", false, false, Span::Panic)?;
-        let result = self.backend.run_rules(RuleSetRun {
-            name: None,
-            rules: &[id],
-        });
+        let id = translator.build(false);
+        let result = self.backend.run_rules(&[id]);
         self.backend.free_rule(id);
 
         match result {
@@ -1540,17 +1505,8 @@ impl EGraph {
     /// borrows `&self`, the closure and its callbacks may also call other
     /// `&self` methods such as [`EGraph::value_to_base`].
     ///
-    /// # Panics
-    ///
-    /// Panics if the selected backend does not provide an action registry.
-    /// Use the fallible top-level table iteration methods for backend-generic
-    /// reads.
     pub fn read<R>(&self, f: impl FnOnce(ReadState<'_, '_>) -> R) -> R {
-        let registry = self
-            .backend
-            .action_registry()
-            .cloned()
-            .expect("EGraph::read requires a backend action registry");
+        let registry = self.backend.action_registry().clone();
         let guard = registry.read().unwrap();
         self.backend
             .with_execution_state_tracked(|es| f(ReadState::wrap(es, &guard, Context::Read)))
@@ -1766,7 +1722,7 @@ impl EGraph {
     /// The returned expression must be evaluated with the returned bindings in
     /// scope before any caller-supplied local bindings. This lets direct
     /// execution-state evaluation use the same hidden `ResolvedFunction` value
-    /// that backend rule lowering injects for `unstable-fn`.
+    /// that rule lowering injects for `unstable-fn`.
     ///
     /// For example, a resolved body like `(unstable-app (unstable-fn "f") _0)`
     /// cannot evaluate the string literal `"f"` directly. This helper replaces
@@ -1803,46 +1759,21 @@ impl EGraph {
                                 .unwrap_or_else(|| Span::Panic)
                         )));
                     };
-                    if !self.backend.as_any().is::<egglog_bridge::EGraph>() {
-                        return Err(Error::BackendError(
-                            "`unstable-fn` is only supported on the reference bridge backend"
-                                .into(),
-                        ));
-                    }
                     let panic_id = self.backend.new_panic(format!(
                         "unstable-fn over `{name}` was applied in a context where its wrapped \
                          function is not valid for this call site, if in a rule, add :naive."
                     ));
-                    let resolved_function = {
-                        let bridge = self
-                            .backend
-                            .as_any()
-                            .downcast_ref::<egglog_bridge::EGraph>()
-                            .ok_or_else(|| {
-                                Error::BackendError(
-                                    "`unstable-fn` is only supported on the reference bridge backend"
-                                        .into(),
-                                )
-                            })?;
-                        resolve_function_container_target_with_context(
-                            bridge,
-                            &self.functions,
-                            &self.type_info,
-                            name,
-                            prim,
-                            panic_id,
-                            // Top-level action evaluation runs in the `Full` context.
-                            crate::Context::Full,
-                            target_span,
-                        )
-                    };
-                    let resolved_function = match resolved_function {
-                        Ok(resolved) => resolved,
-                        Err(error) => {
-                            self.backend.free_external_func(panic_id);
-                            return Err(error);
-                        }
-                    };
+                    let resolved_function = resolve_function_container_target_with_context(
+                        &self.backend,
+                        &self.functions,
+                        &self.type_info,
+                        name,
+                        prim,
+                        panic_id,
+                        // Top-level action evaluation runs in the `Full` context.
+                        crate::Context::Full,
+                        target_span,
+                    )?;
                     let fn_value = self.backend.base_values().get(resolved_function);
                     let binding_name = self.parser.symbol_gen.fresh("unstable_fn_target");
                     bindings.push((binding_name.clone(), fn_value));
@@ -1894,14 +1825,13 @@ impl EGraph {
                 Some(unit_val)
             })));
 
-        let mut translator = BackendRule::new(
-            &mut *self.backend,
+        let builder = self.backend.new_rule("eval_resolved_expr", false);
+        let mut translator = RuleTranslator::new(
+            builder,
             &self.functions,
             &self.type_info,
             true, // global action: Read/Full contexts (may read the DB)
         );
-        translator.rollback_external_funcs.push(ext_id);
-
         let result_var = ResolvedVar {
             name: self.parser.symbol_gen.fresh("eval_resolved_expr"),
             sort: expr.output_type(),
@@ -1924,18 +1854,14 @@ impl EGraph {
 
         let arg = translator.entry(&ResolvedAtomTerm::Var(span.clone(), result_var))?;
         translator.call_external_func(
-            span.clone(),
             ext_id,
             "eval_resolved_expr_result",
-            vec![arg],
+            &[arg],
             egglog_bridge::ColumnTy::Base(unit_id),
         );
 
-        let id = translator.try_build("eval_resolved_expr", false, false, span)?;
-        let rule_result = self.backend.run_rules(RuleSetRun {
-            name: None,
-            rules: &[id],
-        });
+        let id = translator.build(false);
+        let rule_result = self.backend.run_rules(&[id]);
         self.backend.free_rule(id);
         self.backend.free_external_func(ext_id);
         let _ = rule_result.map_err(|e| {
@@ -1989,26 +1915,22 @@ impl EGraph {
                 Some(Value::new_const(0))
             })));
 
-        let mut translator = BackendRule::new(
-            &mut *self.backend,
+        let builder = self.backend.new_rule("check_facts", false);
+        let mut translator = RuleTranslator::new(
+            builder,
             &self.functions,
             &self.type_info,
             true, // global query: Read context (may read the DB)
         );
-        translator.rollback_external_funcs.push(ext_id);
         translator.query(&query, true)?;
         translator.call_external_func(
-            span.clone(),
             ext_id,
             "check_facts_match",
-            Vec::new(),
+            &[],
             egglog_bridge::ColumnTy::Id,
         );
-        let id = translator.try_build("check_facts", false, false, span.clone())?;
-        let run_result = self.backend.run_rules(RuleSetRun {
-            name: None,
-            rules: &[id],
-        });
+        let id = translator.build(false);
+        let run_result = self.backend.run_rules(&[id]);
         self.backend.free_rule(id);
         self.backend.free_external_func(ext_id);
         run_result.map_err(|e| Error::BackendError(e.to_string()))?;
@@ -2064,7 +1986,7 @@ impl EGraph {
                 log::info!("Declared {} {}.", fdecl.subtype, fdecl.name)
             }
             ResolvedNCommand::Index { name, function, .. } => {
-                // Nothing to build: the backend creates the occurrence index the
+                // Nothing to build: storage creates the occurrence index the
                 // first time a rule probes it. Typechecking already registered
                 // the relation the atoms resolve against.
                 log::info!("Declared index {name} over {function}.");
@@ -2086,7 +2008,7 @@ impl EGraph {
                 let report = self.run_schedule(&sched)?;
                 log::info!("Ran schedule {sched}.");
                 log::info!("Report: {report}");
-                self.overall_run_report.union(report.clone());
+                // Already recorded by `step_rules`, per iteration.
                 return Ok(vec![CommandOutput::RunSchedule(report)]);
             }
             ResolvedNCommand::PrintOverallStatistics(span, file) => match file {
@@ -2442,16 +2364,7 @@ impl EGraph {
 
         let num_facts = parsed_contents.len();
 
-        let bridge = self
-            .backend
-            .as_any()
-            .downcast_ref::<egglog_bridge::EGraph>()
-            .ok_or_else(|| {
-                Error::BackendError(
-                    "loading facts from a file requires the reference bridge backend".into(),
-                )
-            })?;
-        let table_action = egglog_bridge::TableAction::new(bridge, func.backend_id);
+        let table_action = egglog_bridge::TableAction::new(&self.backend, func.backend_id);
 
         if function_type.subtype != FunctionSubtype::Constructor {
             self.backend.with_execution_state(|es| {
@@ -2775,10 +2688,6 @@ impl EGraph {
     /// Run a program, represented as an AST.
     /// Return a list of messages.
     pub fn run_program(&mut self, program: Vec<Command>) -> Result<Vec<CommandOutput>, Error> {
-        if self.backend.requires_term_encoding() && self.proof_state.original_typechecking.is_none()
-        {
-            return Err(Error::BackendRequiresTermEncoding);
-        }
         let res = self.process_program_internal(program, true)?;
         Ok(res.outputs)
     }
@@ -2920,12 +2829,6 @@ impl EGraph {
         self.functions.get(name)
     }
 
-    /// Whether this e-graph's backend exposes the in-memory action registry
-    /// used by registry-backed primitives.
-    pub fn supports_action_registry(&self) -> bool {
-        self.backend.action_registry().is_some()
-    }
-
     /// Returns `true` if a user-defined command with the given name is
     /// registered in this e-graph.
     pub fn has_command(&self, name: &str) -> bool {
@@ -2982,7 +2885,7 @@ impl EGraph {
     ///    how many writes occurred.
     /// 3. A closure that only reads (e.g. `lookup`, `constructor_enodes`)
     ///    stages nothing, so the flush is skipped entirely — a read
-    ///    costs no more than a direct backend scan.
+    ///    costs no more than a direct table scan.
     ///
     /// # Example
     /// ```
@@ -3016,9 +2919,7 @@ impl EGraph {
         &mut self,
         f: impl FnOnce(FullState<'_, '_>) -> Result<R, Error>,
     ) -> Result<R, Error> {
-        let registry = self.backend.action_registry().cloned().ok_or_else(|| {
-            Error::BackendError("EGraph::update requires a backend action registry".into())
-        })?;
+        let registry = self.backend.action_registry().clone();
         let guard = registry.read().unwrap();
         let (result, changed) = self
             .backend
@@ -3027,7 +2928,7 @@ impl EGraph {
         // A read-only closure stages nothing, so `flush_updates` would only do
         // a no-op merge plus a spurious timestamp bump and rebuild check. Skip
         // it unless the closure actually wrote, keeping reads as cheap as a
-        // direct backend scan.
+        // direct table scan.
         if changed {
             self.backend.flush_updates();
         }
@@ -3235,13 +3136,9 @@ fn resolve_function_container_target_with_context(
     })
 }
 
-struct BackendRule<'a> {
-    backend: &'a mut dyn Backend,
-    entries: HashMap<core::ResolvedAtomTerm, core::GenericAtomTerm<RuleVar, RuleValue>>,
-    next_var: u32,
-    body: core::Query<RuleBodyCall, RuleVar, RuleValue>,
-    head: core::GenericCoreActions<RuleActionCall, RuleVar, RuleValue>,
-    rollback_external_funcs: Vec<ExternalFunctionId>,
+struct RuleTranslator<'a> {
+    builder: egglog_bridge::RuleBuilder<'a>,
+    entries: HashMap<core::ResolvedAtomTerm, QueryEntry>,
     functions: &'a IndexMap<String, Function>,
     type_info: &'a TypeInfo,
     /// Whether primitives may read the database. When true the per-phase
@@ -3251,23 +3148,19 @@ struct BackendRule<'a> {
     requires_read_context: bool,
 }
 
-impl<'a> BackendRule<'a> {
+impl<'a> RuleTranslator<'a> {
     fn new(
-        backend: &'a mut dyn Backend,
+        builder: egglog_bridge::RuleBuilder<'a>,
         functions: &'a IndexMap<String, Function>,
         type_info: &'a TypeInfo,
         requires_read_context: bool,
-    ) -> BackendRule<'a> {
-        BackendRule {
-            backend,
+    ) -> RuleTranslator<'a> {
+        RuleTranslator {
+            builder,
             functions,
             type_info,
             requires_read_context,
             entries: Default::default(),
-            next_var: 0,
-            body: Default::default(),
-            head: Default::default(),
-            rollback_external_funcs: Vec::new(),
         }
     }
 
@@ -3298,34 +3191,21 @@ impl<'a> BackendRule<'a> {
         }
     }
 
-    fn fresh_var(&mut self, variable: &ResolvedVar) -> RuleVar {
-        let id = self.next_var;
-        self.next_var += 1;
-        RuleVar {
-            id,
-            name: variable.name.clone().into_boxed_str(),
-            ty: variable.sort.column_ty(self.backend.base_values()),
-        }
-    }
-
-    fn entry(
-        &mut self,
-        term: &core::ResolvedAtomTerm,
-    ) -> Result<core::GenericAtomTerm<RuleVar, RuleValue>, Error> {
+    fn entry(&mut self, term: &core::ResolvedAtomTerm) -> Result<QueryEntry, Error> {
         if let Some(entry) = self.entries.get(term) {
             return Ok(entry.clone());
         }
         let entry = match term {
-            core::GenericAtomTerm::Var(span, variable) => {
-                core::GenericAtomTerm::Var(span.clone(), self.fresh_var(variable))
-            }
-            core::GenericAtomTerm::Literal(span, literal) => core::GenericAtomTerm::Literal(
-                span.clone(),
-                literal_to_rule_value(self.backend.base_values(), literal),
+            core::GenericAtomTerm::Var(_, variable) => self.builder.new_var_named(
+                variable.sort.column_ty(self.builder.egraph()),
+                &variable.name,
             ),
+            core::GenericAtomTerm::Literal(_, literal) => {
+                literal_to_entry(self.builder.egraph(), literal)
+            }
             core::GenericAtomTerm::Global(span, variable) => {
                 return Err(Error::BackendError(format!(
-                    "{span}: global `{}` was not desugared before backend lowering",
+                    "{span}: global `{}` was not desugared before rule lowering",
                     variable.name
                 )));
             }
@@ -3343,14 +3223,7 @@ impl<'a> BackendRule<'a> {
         prim: &core::SpecializedPrimitive,
         args: &[core::ResolvedAtomTerm],
         ctx: crate::Context,
-    ) -> Result<
-        (
-            ExternalFunctionId,
-            Vec<core::GenericAtomTerm<RuleVar, RuleValue>>,
-            ColumnTy,
-        ),
-        Error,
-    > {
+    ) -> Result<(ExternalFunctionId, Vec<QueryEntry>, ColumnTy), Error> {
         // The typechecker has already checked that this primitive is
         // valid in `ctx`; pick the runtime id that stamps the same ctx
         // onto the state wrapper when invoked.
@@ -3365,37 +3238,17 @@ impl<'a> BackendRule<'a> {
                     "expected string literal after `unstable-fn`".into(),
                 ));
             };
-            if self
-                .backend
-                .as_any()
-                .downcast_ref::<egglog_bridge::EGraph>()
-                .is_none()
-            {
-                return Err(Error::BackendError(
-                    "`unstable-fn` is only supported on the reference bridge backend".into(),
-                ));
-            }
             // Pre-register a panic id used by `FunctionContainer::apply`
             // when the wrapped function is applied in a context that
             // doesn't admit it. Triggered at runtime via the egglog
             // panic side channel so misuse surfaces as an `Err` from
             // `run_rules` rather than a thread unwind.
-            let panic_id = self.backend.new_panic(format!(
+            let panic_id = self.builder.new_panic(format!(
                 "unstable-fn over `{name}` was applied in a context where its wrapped \
                  function is not valid for this call site, if in a rule, add :naive."
             ));
-            self.rollback_external_funcs.push(panic_id);
-            let bridge = self
-                .backend
-                .as_any()
-                .downcast_ref::<egglog_bridge::EGraph>()
-                .ok_or_else(|| {
-                    Error::BackendError(
-                        "`unstable-fn` is only supported on the reference bridge backend".into(),
-                    )
-                })?;
             let resolved = resolve_function_container_target_with_context(
-                bridge,
+                self.builder.egraph(),
                 self.functions,
                 self.type_info,
                 name,
@@ -3403,22 +3256,18 @@ impl<'a> BackendRule<'a> {
                 panic_id,
                 ctx,
                 args[0].span(),
-            );
-            let resolved = resolved?;
-            rule_args[0] = core::GenericAtomTerm::Literal(
-                args[0].span().clone(),
-                base_rule_value(self.backend.base_values(), resolved),
-            );
+            )?;
+            rule_args[0] = self.builder.egraph().base_value_constant(resolved);
         }
 
-        let output_ty = prim.output().column_ty(self.backend.base_values());
+        let output_ty = prim.output().column_ty(self.builder.egraph());
         Ok((resolved_id, rule_args, output_ty))
     }
 
     fn args<'b>(
         &mut self,
         args: impl IntoIterator<Item = &'b core::ResolvedAtomTerm>,
-    ) -> Result<Vec<core::GenericAtomTerm<RuleVar, RuleValue>>, Error> {
+    ) -> Result<Vec<QueryEntry>, Error> {
         args.into_iter().map(|term| self.entry(term)).collect()
     }
 
@@ -3478,12 +3327,8 @@ impl<'a> BackendRule<'a> {
         include_subsumed: bool,
     ) -> Result<(), Error> {
         for atom in &query.atoms {
-            let read = if include_subsumed {
-                ReadMode::All
-            } else {
-                ReadMode::Live
-            };
-            let (head, args) = match &atom.head {
+            let is_subsumed = if include_subsumed { None } else { Some(false) };
+            match &atom.head {
                 // An atom on a declared index reads the rows of the indexed
                 // function, reached through the value its first argument binds.
                 ResolvedCall::Func(f) if self.type_info.indexes.contains_key(&f.name) => {
@@ -3494,43 +3339,41 @@ impl<'a> BackendRule<'a> {
                         .get_func_type(&index.function)
                         .expect("index target checked at declaration")
                         .clone();
-                    (
-                        RuleBodyCall::IndexTable {
-                            id: self.func(&indexed),
-                            any_of: index.any_of,
-                            read,
-                        },
-                        self.args(&atom.args)?,
-                    )
+                    let entries = self.args(&atom.args)?;
+                    let (indexed_value, rest) = entries
+                        .split_first()
+                        .expect("an index atom binds a value and a row");
+                    let (_unit, row) = rest
+                        .split_last()
+                        .expect("an index atom carries the relation's unit output");
+                    self.builder
+                        .query_table_by_occurrence(
+                            self.func(&indexed),
+                            row,
+                            indexed_value.clone(),
+                            &index.any_of,
+                            is_subsumed,
+                        )
+                        .map_err(|error| Error::BackendError(error.to_string()))?;
                 }
-                ResolvedCall::Func(f) => (
-                    RuleBodyCall::Table {
-                        id: self.func(f),
-                        read,
-                    },
-                    self.args(&atom.args)?,
-                ),
+                ResolvedCall::Func(f) => {
+                    let id = self.func(f);
+                    let entries = self.args(&atom.args)?;
+                    self.builder
+                        .query_table(id, &entries, is_subsumed)
+                        .map_err(|error| Error::BackendError(error.to_string()))?;
+                }
                 ResolvedCall::Primitive(p) => {
                     let ctx = self.query_context();
-                    let (id, args, output) = self.prim(p, &atom.args, ctx)?;
-                    (
-                        RuleBodyCall::Primitive {
-                            id,
-                            name: p.name().into(),
-                            output,
-                        },
-                        args,
-                    )
+                    let (id, entries, output) = self.prim(p, &atom.args, ctx)?;
+                    self.builder
+                        .query_prim(id, &entries, output)
+                        .map_err(|error| Error::BackendError(error.to_string()))?;
                 }
                 ResolvedCall::Values(_) => {
                     unreachable!("`values` is lowered to the underlying function atom before query")
                 }
-            };
-            self.body.atoms.push(core::GenericAtom {
-                span: atom.span.clone(),
-                head,
-                args,
-            });
+            }
         }
         Ok(())
     }
@@ -3558,56 +3401,42 @@ impl<'a> BackendRule<'a> {
             }
             match action {
                 core::GenericCoreAction::Let(span, v, f, args) => {
-                    let (call, args) = match f {
-                        ResolvedCall::Func(f) => (
-                            RuleActionCall::Table {
-                                id: self.func(f),
-                                name: f.name.clone().into_boxed_str(),
-                            },
-                            self.args(args)?,
-                        ),
+                    let value: QueryEntry = match f {
+                        ResolvedCall::Func(f) => {
+                            let id = self.func(f);
+                            let name = f.name.clone();
+                            let args = self.args(args)?;
+                            let span = span.clone();
+                            self.builder
+                                .lookup(id, &args, move || {
+                                    format!("{span}: lookup of function {name} failed")
+                                })
+                                .into()
+                        }
                         ResolvedCall::Primitive(p) => {
                             let ctx = self.action_context();
                             let (id, args, output) = self.prim(p, args, ctx)?;
-                            (
-                                RuleActionCall::Primitive {
-                                    id,
-                                    name: p.name().into(),
-                                    output,
-                                },
-                                args,
-                            )
+                            let name = p.name().to_owned();
+                            let span = span.clone();
+                            self.builder
+                                .call_external_func(id, &args, output, move || {
+                                    format!("{span}: call of primitive {name} failed")
+                                })
+                                .into()
                         }
                         ResolvedCall::Values(_) => {
                             panic!("`values` cannot be bound as a single value")
                         }
                     };
-                    let variable = self.fresh_var(v);
-                    self.head.0.push(core::GenericCoreAction::Let(
-                        span.clone(),
-                        variable.clone(),
-                        call,
-                        args,
-                    ));
-                    self.entries.insert(
-                        core::GenericAtomTerm::Var(span.clone(), v.clone()),
-                        core::GenericAtomTerm::Var(span.clone(), variable),
-                    );
+                    self.entries
+                        .insert(core::GenericAtomTerm::Var(span.clone(), v.clone()), value);
                 }
                 core::GenericCoreAction::LetAtomTerm(span, v, x) => {
                     let value = self.entry(x)?;
-                    let variable = self.fresh_var(v);
-                    self.head.0.push(core::GenericCoreAction::LetAtomTerm(
-                        span.clone(),
-                        variable.clone(),
-                        value,
-                    ));
-                    self.entries.insert(
-                        core::GenericAtomTerm::Var(span.clone(), v.clone()),
-                        core::GenericAtomTerm::Var(span.clone(), variable),
-                    );
+                    self.entries
+                        .insert(core::GenericAtomTerm::Var(span.clone(), v.clone()), value);
                 }
-                core::GenericCoreAction::Set(span, f, xs, ys) => match f {
+                core::GenericCoreAction::Set(_span, f, xs, ys) => match f {
                     ResolvedCall::Primitive(..) => {
                         return Err(Error::BackendError("cannot set a primitive".into()));
                     }
@@ -3617,17 +3446,9 @@ impl<'a> BackendRule<'a> {
                         ));
                     }
                     ResolvedCall::Func(f) => {
-                        let arguments = self.args(xs)?;
-                        let values = self.args(ys)?;
-                        self.head.0.push(core::GenericCoreAction::Set(
-                            span.clone(),
-                            RuleActionCall::Table {
-                                id: self.func(f),
-                                name: f.name.clone().into_boxed_str(),
-                            },
-                            arguments,
-                            values,
-                        ));
+                        let id = self.func(f);
+                        let entries = self.args(xs.iter().chain(ys))?;
+                        self.builder.set(id, &entries);
                     }
                 },
                 core::GenericCoreAction::Change(span, change, f, args) => match f {
@@ -3647,30 +3468,21 @@ impl<'a> BackendRule<'a> {
                         if matches!(change, Change::Subsume) && !can_subsume {
                             return Err(Error::SubsumeMergeError(name, span.clone()));
                         }
+                        let id = self.func(f);
                         let arguments = self.args(args)?;
-                        self.head.0.push(core::GenericCoreAction::Change(
-                            span.clone(),
-                            *change,
-                            RuleActionCall::Table {
-                                id: self.func(f),
-                                name: f.name.clone().into_boxed_str(),
-                            },
-                            arguments,
-                        ));
+                        match change {
+                            Change::Delete => self.builder.remove(id, &arguments),
+                            Change::Subsume => self.builder.subsume(id, &arguments),
+                        }
                     }
                 },
-                core::GenericCoreAction::Union(span, x, y) => {
+                core::GenericCoreAction::Union(_span, x, y) => {
                     let x = self.entry(x)?;
                     let y = self.entry(y)?;
-                    self.head
-                        .0
-                        .push(core::GenericCoreAction::Union(span.clone(), x, y));
+                    self.builder.union(x, y);
                 }
-                core::GenericCoreAction::Panic(span, message) => {
-                    self.head.0.push(core::GenericCoreAction::Panic(
-                        span.clone(),
-                        message.clone(),
-                    ));
+                core::GenericCoreAction::Panic(_span, message) => {
+                    self.builder.panic(message.clone());
                 }
             }
         }
@@ -3679,123 +3491,58 @@ impl<'a> BackendRule<'a> {
 
     fn query_table(
         &mut self,
-        span: Span,
         table: egglog_bridge::FunctionId,
-        entries: Vec<core::GenericAtomTerm<RuleVar, RuleValue>>,
-        read: ReadMode,
-    ) {
-        self.body.atoms.push(core::GenericAtom {
-            span,
-            head: RuleBodyCall::Table { id: table, read },
-            args: entries,
-        });
+        entries: &[QueryEntry],
+        is_subsumed: Option<bool>,
+    ) -> Result<(), Error> {
+        self.builder
+            .query_table(table, entries, is_subsumed)
+            .map(|_| ())
+            .map_err(|error| Error::BackendError(error.to_string()))
     }
 
     fn call_external_func(
         &mut self,
-        span: Span,
         id: ExternalFunctionId,
         name: &str,
-        arguments: Vec<core::GenericAtomTerm<RuleVar, RuleValue>>,
+        arguments: &[QueryEntry],
         output: ColumnTy,
-    ) -> core::GenericAtomTerm<RuleVar, RuleValue> {
-        let variable = RuleVar {
-            id: self.next_var,
-            name: format!("@{name}").into_boxed_str(),
-            ty: output,
-        };
-        self.next_var += 1;
-        self.head.0.push(core::GenericCoreAction::Let(
-            span.clone(),
-            variable.clone(),
-            RuleActionCall::Primitive {
-                id,
-                name: name.into(),
-                output,
-            },
-            arguments,
-        ));
-        core::GenericAtomTerm::Var(span, variable)
+    ) -> QueryEntry {
+        self.builder
+            .call_external_func(id, arguments, output, {
+                let name = name.to_owned();
+                move || format!("call of primitive {name} failed")
+            })
+            .into()
     }
 
-    fn remove(
-        &mut self,
-        span: Span,
-        table: egglog_bridge::FunctionId,
-        name: &str,
-        arguments: Vec<core::GenericAtomTerm<RuleVar, RuleValue>>,
-    ) {
-        self.head.0.push(core::GenericCoreAction::Change(
-            span,
-            Change::Delete,
-            RuleActionCall::Table {
-                id: table,
-                name: name.into(),
-            },
-            arguments,
-        ));
+    fn remove(&mut self, table: egglog_bridge::FunctionId, arguments: &[QueryEntry]) {
+        self.builder.remove(table, arguments);
     }
 
-    fn try_build(
-        mut self,
-        name: &str,
-        seminaive: bool,
-        no_decomp: bool,
-        span: Span,
-    ) -> Result<egglog_bridge::RuleId, Error> {
-        let spec = RuleSpec {
-            name: name.to_owned(),
-            seminaive,
-            no_decomp,
-            core: core::GenericCoreRule {
-                span,
-                body: std::mem::take(&mut self.body),
-                head: std::mem::take(&mut self.head),
-            },
-        };
-        let result = self
-            .backend
-            .add_rule(spec)
-            .map_err(|error| Error::BackendError(error.to_string()));
-        if result.is_ok() {
-            self.rollback_external_funcs.clear();
-        }
-        result
+    fn build(mut self, no_decomp: bool) -> egglog_bridge::RuleId {
+        self.builder.set_no_decomp(no_decomp);
+        self.builder.build()
     }
 }
 
-impl Drop for BackendRule<'_> {
-    fn drop(&mut self) {
-        for id in self.rollback_external_funcs.drain(..) {
-            self.backend.free_external_func(id);
-        }
-    }
-}
-
-fn base_rule_value<T: core_relations::BaseValue>(base_values: &BaseValues, x: T) -> RuleValue {
-    RuleValue {
-        value: base_values.get(x),
-        ty: ColumnTy::Base(base_values.get_ty::<T>()),
-    }
-}
-
-fn literal_to_rule_value(base_values: &BaseValues, l: &Literal) -> RuleValue {
+fn literal_to_entry(egraph: &egglog_bridge::EGraph, l: &Literal) -> QueryEntry {
     match l {
-        Literal::Int(x) => base_rule_value::<i64>(base_values, *x),
-        Literal::Float(x) => base_rule_value::<sort::F>(base_values, x.into()),
-        Literal::String(x) => base_rule_value::<sort::S>(base_values, sort::S::new(x.clone())),
-        Literal::Bool(x) => base_rule_value::<bool>(base_values, *x),
-        Literal::Unit => base_rule_value::<()>(base_values, ()),
+        Literal::Int(x) => egraph.base_value_constant::<i64>(*x),
+        Literal::Float(x) => egraph.base_value_constant::<sort::F>(x.into()),
+        Literal::String(x) => egraph.base_value_constant::<sort::S>(sort::S::new(x.clone())),
+        Literal::Bool(x) => egraph.base_value_constant::<bool>(*x),
+        Literal::Unit => egraph.base_value_constant::<()>(()),
     }
 }
 
-fn literal_to_value(base_values: &BaseValues, l: &Literal) -> Value {
+fn literal_to_value(egraph: &egglog_bridge::EGraph, l: &Literal) -> Value {
     match l {
-        Literal::Int(x) => base_values.get::<i64>(*x),
-        Literal::Float(x) => base_values.get::<sort::F>(x.into()),
-        Literal::String(x) => base_values.get::<sort::S>(sort::S::new(x.clone())),
-        Literal::Bool(x) => base_values.get::<bool>(*x),
-        Literal::Unit => base_values.get::<()>(()),
+        Literal::Int(x) => egraph.base_values().get::<i64>(*x),
+        Literal::Float(x) => egraph.base_values().get::<sort::F>(x.into()),
+        Literal::String(x) => egraph.base_values().get::<sort::S>(sort::S::new(x.clone())),
+        Literal::Bool(x) => egraph.base_values().get::<bool>(*x),
+        Literal::Unit => egraph.base_values().get::<()>(()),
     }
 }
 
@@ -3821,10 +3568,6 @@ pub enum Error {
     CombinedRulesetError(String, Span),
     #[error("{0}")]
     BackendError(String),
-    #[error(
-        "This backend requires term encoding. Build the e-graph with `EGraph::with_backend(..).with_term_encoding()`."
-    )]
-    BackendRequiresTermEncoding,
     #[error("{0}\nTried to pop too much")]
     Pop(Span),
     #[error("{0}\nCommand should have failed.")]
@@ -3944,41 +3687,6 @@ mod tests {
         fn apply<'a, 'db>(&self, state: FullState<'a, 'db>, _args: &[Value]) -> Option<Value> {
             Some(state.base_values().get::<i64>(1))
         }
-    }
-
-    #[test]
-    fn unstable_fn_resolution_error_releases_panic_registration() {
-        let mut egraph = EGraph::default();
-        egraph
-            .parse_and_run_program(None, "(sort Fn (UnstableFn (i64) i64))")
-            .unwrap();
-        let register_probe = |egraph: &mut EGraph| {
-            egraph
-                .backend
-                .register_external_func(Box::new(core_relations::make_external_func(
-                    |_state: &mut core_relations::ExecutionState<'_>, _args: &[Value]| None,
-                )))
-        };
-        let error = egraph
-            .parse_and_run_program(None, "(let $first (unstable-fn \"missing\"))")
-            .expect_err("missing unstable-fn target should return an error");
-        assert!(error.to_string().contains("No resolution for `missing`"));
-        let reused = register_probe(&mut egraph);
-        egraph.backend.free_external_func(reused);
-
-        let message = "unstable-fn over `missing` was applied in a context where its wrapped \
-                       function is not valid for this call site, if in a rule, add :naive."
-            .to_string();
-        let shared = egraph.backend.new_panic(message);
-        assert_eq!(shared, reused);
-        let error = egraph
-            .parse_and_run_program(None, "(let $second (unstable-fn \"missing\"))")
-            .expect_err("missing unstable-fn target should return an error");
-        assert!(error.to_string().contains("No resolution for `missing`"));
-        let occupied = register_probe(&mut egraph);
-        assert_ne!(occupied, shared);
-        egraph.backend.free_external_func(shared);
-        assert_eq!(register_probe(&mut egraph), shared);
     }
 
     #[test]

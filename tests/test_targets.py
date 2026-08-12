@@ -154,7 +154,7 @@ def test_path_targets_retain_dirty_checkout(use_absolute_path: bool, tmp_path: P
     assert tracked.read_text(encoding="utf-8") == "dirty\n"
 
 
-def test_build_target_enables_requested_backend_features(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_build_target_builds_release_binary(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     commands: list[list[str]] = []
     binary = tmp_path / "target" / "release" / "egglog-experimental"
     binary.parent.mkdir(parents=True)
@@ -165,11 +165,24 @@ def test_build_target_enables_requested_backend_features(monkeypatch: pytest.Mon
     monkeypatch.setattr(targets, "sha256_file", lambda path: "sha256:bin")
     stream = io.StringIO()
 
-    targets.build_target(
-        row,
-        Console(file=stream, color_system=None),
-        cargo_features=models.backend_cargo_features(("main", "dd")),
+    targets.build_target(row, Console(file=stream, color_system=None))
+
+    assert commands == [["cargo", "build", "--release", "-p", "egglog-experimental"]]
+    assert stream.getvalue().strip() == f"Building {label}"
+
+
+def test_legacy_resolved_target_only_falls_back_to_egglog_binary() -> None:
+    binary = Path("/tmp/egglog-experimental")
+    target = models.ResolvedTarget(
+        request=targets.parse_target("."),
+        row=models.TargetRow(".", "/tmp", "HEAD", "abc123", False),
+        binary_sha256="sha256:egglog",
+        binary_path=binary,
     )
 
-    assert commands == [["cargo", "build", "--release", "-p", "egglog-experimental", "--features", "dd-backend"]]
-    assert stream.getvalue().strip() == f"Building {label}"
+    assert target.binary_sha256_for("proofs") == "sha256:egglog"
+    assert target.binary_path_for("proofs") == binary
+    with pytest.raises(ValueError, match="has no egg binary"):
+        target.binary_sha256_for("egg-proofs")
+    with pytest.raises(ValueError, match="has no egg binary"):
+        target.binary_path_for("egg-proofs")

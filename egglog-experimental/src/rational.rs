@@ -1,13 +1,24 @@
 use egglog::prelude::BaseSort;
 use egglog::sort::{BaseValues, Boxed, F, OrderedFloat};
 use num::integer::Roots;
-use num::rational::Rational64;
+use num::rational::{Ratio, Rational64};
 use num::traits::{CheckedAdd, CheckedDiv, CheckedMul, CheckedSub, One, Signed, ToPrimitive, Zero};
 
 pub type R = Boxed<Rational64>;
 use crate::ast::Literal;
 
 use super::*;
+
+fn checked_rational(numer: i64, denom: i64) -> Option<Rational64> {
+    if denom == 0 {
+        return None;
+    }
+    let canonical = Ratio::new(i128::from(numer), i128::from(denom));
+    Some(Rational64::new_raw(
+        i64::try_from(*canonical.numer()).ok()?,
+        i64::try_from(*canonical.denom()).ok()?,
+    ))
+}
 
 #[derive(Debug)]
 pub struct RationalSort;
@@ -25,10 +36,7 @@ impl BaseSort for RationalSort {
             let [numer, denom] = args else { return None };
             let Term::Lit(Literal::Int(numer)) = termdag.get(*numer) else { return None };
             let Term::Lit(Literal::Int(denom)) = termdag.get(*denom) else { return None };
-            if *denom == 0 {
-                return None;
-            }
-            let value = Rational64::new(*numer, *denom);
+            let value = checked_rational(*numer, *denom)?;
             let numer = termdag.lit(Literal::Int(*value.numer()));
             let denom = termdag.lit(Literal::Int(*value.denom()));
             Some(termdag.app("rational".to_owned(), vec![numer, denom]))
@@ -46,7 +54,7 @@ impl BaseSort for RationalSort {
         add_primitive!(eg, "floor" = |a: R| -> R { R::new(a.0.floor()) });
         add_primitive!(eg, "ceil" = |a: R| -> R { R::new(a.0.ceil()) });
         add_primitive!(eg, "round" = |a: R| -> R { R::new(a.0.round()) });
-        add_primitive_with_validator!(eg, "rational" = |a: i64, b: i64| -> R { R::new(Rational64::new(a, b)) }, rational_validator);
+        add_primitive_with_validator!(eg, "rational" = |a: i64, b: i64| -?> R { checked_rational(a, b).map(R::new) }, rational_validator);
         add_primitive!(eg, "numer" = |a: R| -> i64 { *a.0.numer() });
         add_primitive!(eg, "denom" = |a: R| -> i64 { *a.0.denom() });
 
@@ -127,12 +135,22 @@ impl BaseSort for RationalSort {
 
 #[cfg(test)]
 mod tests {
+    use super::{Rational64, checked_rational};
+
     const CANONICAL_RATIONAL_PROGRAM: &str = r#"
         (datatype E (Num Rational))
         (relation Seen (E))
         (Seen (Num (rational 2 2)))
+        (Seen (Num (rational 1 -1)))
         (check (Seen (Num (rational 1 1))))
+        (check (Seen (Num (rational -1 1))))
     "#;
+
+    #[test]
+    fn rational_constructor_canonicalizes_without_i64_overflow() {
+        assert_eq!(checked_rational(1, -1), Some(Rational64::new_raw(-1, 1)));
+        assert_eq!(checked_rational(i64::MIN, -1), None);
+    }
 
     #[test]
     fn rational_constructor_is_canonical_in_term_and_proof_modes() {

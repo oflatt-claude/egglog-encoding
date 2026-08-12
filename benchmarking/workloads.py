@@ -28,11 +28,11 @@ DEFAULT_WORKLOADS = (
     WorkloadConfig("egglog-experimental/tests/math-microbenchmark-rational.egg"),
     WorkloadConfig("egglog-experimental/tests/fixtures/eggcc-2mm-pass1.egg"),
     WorkloadConfig(
-        "benchmarks/pointer-analysis-initdb.egg",
-        "benchmarks/data/pointer-analysis-initdb",
+        "egglog/tests/pointer-analysis-initdb.egg",
+        "egglog/tests/pointer-analysis-initdb",
     ),
     WorkloadConfig("egglog/tests/hardboiled_conv1d_32.egg"),
-    WorkloadConfig("benchmarks/luminal-llama.egg"),
+    WorkloadConfig("egglog/tests/luminal-llama.egg"),
     WorkloadConfig("egglog/tests/web-demo/herbie.egg"),
 )
 
