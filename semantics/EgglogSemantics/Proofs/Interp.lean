@@ -6,17 +6,15 @@ import EgglogSemantics.Proofs.Scope
 # The interpreter refines the specification
 
 `Impl/Interp.lean`'s `exec` computes what `Spec/Step.lean`'s `ProgramStep` relates, on the
-constructor fragment and away from the row atom.
+constructor fragment.
 
 Two conditions run through the whole file. `FDatabase.EqsInTerms` is what makes
 `toDatabase` a homomorphism: the denotation keeps an equation only where the term list
 holds both of its sides, so a list carrying an equation between terms it does not hold
 denotes something `addTerm` cannot track. `Signature.AllConstructors` is what makes
 `matchQuery`'s enumeration from `FDatabase.valueTerms` agree with `ValidEnv`'s from
-`terms`, and what makes the merge phase empty.
-
-`Pattern.NoRead` is the third, and it is a real restriction rather than an invariant —
-see there.
+`terms`, what puts the row atom on `patternHolds`' entry-term branch, and what makes the
+merge phase empty.
 -/
 
 namespace Egglog
@@ -427,61 +425,57 @@ theorem mem_valueTerms {d : FDatabase} (hsig : d.sig.AllConstructors) {t : Term}
     rw [hsig f]; rfl
 
 end FDatabase
-/-! ### The read-free fragment
-
-**`Impl/Interp.lean` and `Spec/Match.lean` disagree about the row atom on a constructor**,
-and the theorems below exclude it rather than restricting it.
-
-`patternHolds` decides a `Pattern.values` atom by scanning the row *index*;
-`Matches.values` asks instead for a term congruent to the entry `f(a…, v…)`. On a merge
-function the scan is a proxy for that term, since `addRow` records exactly it beside the
-row and `Term.ctorRowList` synthesises no row for one. On a constructor it is not: the
-index row is `⟨f, as, [f(as)]⟩`, whose entry term is `f(as)`, while `Matches.values` asks
-about `f(as, f(as))` — an application of the wrong width, which `Database.DeclaredTerms`
-forbids outright.
-
-The witness is one `constructor f` and one action `(f 0)`: `patternHolds` accepts
-`.values [f 0] "f" [0]` against the constructor row, and no term the database holds is
-congruent to `f(0, f(0))` — by `mem_closureF_iff`, `decide` refutes it. `patternHolds` is
-therefore **unsound** for `Matches` there, which no hypothesis about the *state* can
-repair; and a declared merge function is precisely what the constructor fragment has none
-of, so on this fragment "the read atom agrees" and "there is no read atom" are the same
-condition. -/
-/-- The pattern is not the table-read atom. -/
-def Pattern.NoRead : Pattern → Prop
-  | .values _ _ _ => False
-  | _ => True
-
-/-- No pattern of the query is a read. -/
-def Query.NoRead (q : Query) : Prop := ∀ p ∈ q, Pattern.NoRead p
-
-/-- The command declares no rule that reads. -/
-def Cmd.NoRead : Cmd → Prop
-  | .rule r => Query.NoRead r.query
-  | _ => True
-
-/-- No rule the program declares reads. -/
-def Program.NoReads (p : Program) : Prop := ∀ c ∈ p, Cmd.NoRead c
-
-/-- The state-side invariant: no rule the database holds reads. -/
-def FDatabase.RulesNoRead (d : FDatabase) : Prop := ∀ r ∈ d.rules, Query.NoRead r.query
-
 /-! ### E-matching -/
-/-- **The e-matcher is exactly the specification's matching relation**, away from the read
-atom.
+/-- **The e-matcher is exactly the specification's matching relation.**
 
 `patternHolds` decides matching through `closureF`, which computes `Cong`, and the
 specification compares up to `Cong` too, so there is no gap to close.
 
-`hv` is not a restriction: it is a consequence of the conclusion
+`hsig` is what the read atom needs: with no merge function declared, `patternHolds` decides
+a `Pattern.values` atom at the entry term `f(a…, v…)`, which is the term `Matches.values`
+asks about. `hv` is not a restriction: it is a consequence of the conclusion
 (`ValidSubst.validEnv`), and requiring it is what lets the `false` cases be discharged
 without inverting. -/
-theorem patternHolds_iff {d : FDatabase} (he : d.EqsInTerms) {p : Pattern}
-    (hnr : Pattern.NoRead p) {σ : Env}
+theorem patternHolds_iff {d : FDatabase} (he : d.EqsInTerms)
+    (hsig : d.sig.AllConstructors) {p : Pattern} {σ : Env}
     (hv : ValidEnv (p.freeVars d.env) d.toDatabase σ) :
     patternHolds d p σ = true ↔ ValidSubst d.toDatabase p σ := by
   cases p with
-  | values vs f as => exact hnr.elim
+  | values vs f as =>
+    have hm : (d.sig.mergeOf f).isSome = false := by rw [hsig f]; rfl
+    cases hev₁ : Expr.evalList d.sig vs (d.env ++ σ) with
+    | none =>
+      simp only [patternHolds, hev₁, Bool.false_eq_true, false_iff]
+      intro h
+      cases h.2 with
+      | values _ _ hus _ =>
+        rw [FDatabase.toDatabase_env, FDatabase.toDatabase_sig, hev₁] at hus
+        simp at hus
+    | some us =>
+      cases hev₂ : Expr.evalList d.sig as (d.env ++ σ) with
+      | none =>
+        simp only [patternHolds, hev₁, hev₂, Bool.false_eq_true, false_iff]
+        intro h
+        cases h.2 with
+        | values _ hts _ _ =>
+          rw [FDatabase.toDatabase_env, FDatabase.toDatabase_sig, hev₂] at hts
+          simp at hts
+      | some ts =>
+        simp only [patternHolds, hev₁, hev₂, hm, Bool.false_eq_true, if_false,
+          decide_eq_true_eq]
+        constructor
+        · rintro ⟨w, hwm, hcl⟩
+          exact ⟨hv, .values (FDatabase.mem_toDatabase_terms.mpr hwm) hev₂ hev₁
+            (congOn_singleton.mpr ((FDatabase.mem_closureF_addTerm he).mp hcl))⟩
+        · intro h
+          cases h.2 with
+          | values hwm hts hus hc =>
+            rw [FDatabase.toDatabase_env, FDatabase.toDatabase_sig, hev₂] at hts
+            rw [FDatabase.toDatabase_env, FDatabase.toDatabase_sig, hev₁] at hus
+            cases hts
+            cases hus
+            exact ⟨_, FDatabase.mem_toDatabase_terms.mp hwm,
+              (FDatabase.mem_closureF_addTerm he).mpr (congOn_singleton.mp hc)⟩
   | expr e =>
     cases hev : e.eval d.sig (d.env ++ σ) with
     | none =>
@@ -557,8 +551,8 @@ variables to values the database holds and satisfy every pattern under restricti
 What is left between this and `ValidQuerySubst` is repackaging: the spec takes one
 substitution per pattern and joins them with `Env.UnionAll`, where this restricts a single
 substitution. `Env.agree_canon` is what makes the two interchangeable. -/
-theorem mem_matchQuery_iff {d : FDatabase} (he : d.EqsInTerms) {q : Query}
-    (hnr : Query.NoRead q) {σ : Env} :
+theorem mem_matchQuery_iff {d : FDatabase} (he : d.EqsInTerms)
+    (hsig : d.sig.AllConstructors) {q : Query} {σ : Env} :
     σ ∈ matchQuery d q ↔
       Env.dom σ = Query.freeVars q d.env ∧ (∀ b ∈ σ, b.2 ∈ d.valueTerms) ∧
         ∀ p ∈ q, ValidSubst d.toDatabase p (Env.canon (p.freeVars d.env) σ) := by
@@ -566,10 +560,10 @@ theorem mem_matchQuery_iff {d : FDatabase} (he : d.EqsInTerms) {q : Query}
   constructor
   · rintro ⟨⟨hdom, hval⟩, hall⟩
     exact ⟨hdom, hval, fun p hp =>
-      (patternHolds_iff he (hnr p hp) (validEnv_canon hp hdom hval)).mp (hall p hp)⟩
+      (patternHolds_iff he hsig (validEnv_canon hp hdom hval)).mp (hall p hp)⟩
   · rintro ⟨hdom, hval, hall⟩
     exact ⟨⟨hdom, hval⟩, fun p hp =>
-      (patternHolds_iff he (hnr p hp) (validEnv_canon hp hdom hval)).mpr (hall p hp)⟩
+      (patternHolds_iff he hsig (validEnv_canon hp hdom hval)).mpr (hall p hp)⟩
 
 /-- A restricted substitution refines the one it came from. -/
 theorem Env.refines_canon {vars : List Var} {σ : Env} : Env.Refines (Env.canon vars σ) σ :=
@@ -580,10 +574,10 @@ theorem Env.refines_canon {vars : List Var} {σ : Env} : Env.Refines (Env.canon 
 The two differ in shape only: the spec joins one substitution per pattern with
 `Env.UnionAll`, and the enumerator restricts a single one. `Env.exists_unionAll` builds the
 join out of the restrictions, which are pairwise compatible because they all refine `σ`. -/
-theorem validQuerySubst_of_mem_matchQuery {d : FDatabase} (he : d.EqsInTerms) {q : Query}
-    (hnr : Query.NoRead q) {σ : Env} (h : σ ∈ matchQuery d q) :
+theorem validQuerySubst_of_mem_matchQuery {d : FDatabase} (he : d.EqsInTerms)
+    (hsig : d.sig.AllConstructors) {q : Query} {σ : Env} (h : σ ∈ matchQuery d q) :
     ∃ τ, ValidQuerySubst d.toDatabase q τ ∧ Env.Agree τ σ := by
-  obtain ⟨hdom, hval, hall⟩ := (mem_matchQuery_iff he hnr).mp h
+  obtain ⟨hdom, hval, hall⟩ := (mem_matchQuery_iff he hsig).mp h
   obtain ⟨τ, hu, hr⟩ := Env.exists_unionAll (σ := σ)
     (q.map fun p => Env.canon (p.freeVars d.env) σ) (by
       intro ρ hρ
@@ -620,7 +614,7 @@ output: restricting it to the query's free variables puts it in the canonical fo
 `AllConstructors` is what closes the one gap in the other direction: the enumerator assigns
 from `FDatabase.valueTerms`, and with no merge function declared that is every term. -/
 theorem mem_matchQuery_of_validQuerySubst {d : FDatabase} (he : d.EqsInTerms)
-    (hsig : d.sig.AllConstructors) {q : Query} (hnr : Query.NoRead q) {τ : Env}
+    (hsig : d.sig.AllConstructors) {q : Query} {τ : Env}
     (h : ValidQuerySubst d.toDatabase q τ) :
     Env.canon (Query.freeVars q d.env) τ ∈ matchQuery d q ∧
       Env.Agree τ (Env.canon (Query.freeVars q d.env) τ) := by
@@ -633,7 +627,7 @@ theorem mem_matchQuery_of_validQuerySubst {d : FDatabase} (he : d.EqsInTerms)
   have hag : Env.Agree τ (Env.canon (Query.freeVars q d.env) τ) :=
     (Env.agree_of_refines Env.refines_canon (fun v hv => by
       rw [hdom]; exact (hmd v).mp hv)).symm
-  refine ⟨(mem_matchQuery_iff he hnr).mpr ⟨hdom, ?_, ?_⟩, hag⟩
+  refine ⟨(mem_matchQuery_iff he hsig).mpr ⟨hdom, ?_, ?_⟩, hag⟩
   · exact fun b hb => FDatabase.mem_valueTerms hsig (FDatabase.mem_toDatabase_terms.mp
       (h.mem_terms b (Env.mem_of_lookup (Env.mem_canon hb).2)))
   · intro p hp
@@ -960,16 +954,16 @@ def Fires (d : FDatabase) (P : Database → Prop) : Prop :=
 The interpreter enumerates its canonical substitutions and the spec every `Env.UnionAll`
 decomposition; `evalLocalActions_agree` is what makes them contribute the same states. -/
 theorem fires_iff {d : FDatabase} (he : d.EqsInTerms) (hsig : d.sig.AllConstructors)
-    (hnr : d.RulesNoRead) {P : Database → Prop} :
+    {P : Database → Prop} :
     Fires d P ↔ ∃ D, (∃ r ∈ d.toDatabase.rules, D ∈ RuleResults d.toDatabase r) ∧ P D := by
   constructor
   · rintro ⟨r, hr, σ, hσ, d', hf, hP⟩
-    obtain ⟨τ, hτ, hag⟩ := validQuerySubst_of_mem_matchQuery he (hnr r hr) hσ
+    obtain ⟨τ, hτ, hag⟩ := validQuerySubst_of_mem_matchQuery he hsig hσ
     refine ⟨d'.toDatabase, ⟨r, hr, τ, hτ, ?_⟩, hP⟩
     rw [evalLocalActions_agree r.actions hag]
     exact fired_toDatabase he hf
   · rintro ⟨D, ⟨r, hr, τ, hτ, hev⟩, hP⟩
-    obtain ⟨hmem, hag⟩ := mem_matchQuery_of_validQuerySubst he hsig (hnr r hr) hτ
+    obtain ⟨hmem, hag⟩ := mem_matchQuery_of_validQuerySubst he hsig hτ
     have hev' : evalLocalActions d.toDatabase r.actions
         (Env.canon (Query.freeVars r.query d.env) τ) = some D := by
       rw [← evalLocalActions_agree r.actions hag]; exact hev
@@ -1009,13 +1003,13 @@ This is `RunRules`, the rule-firing half of a round; the merge phase is empty he
 `exec` runs the constructor fragment, where `MergeStep` never fires
 (`MergeStep.not_of_allConstructors`). -/
 theorem execRunRules_RunRules {d : FDatabase} (he : d.EqsInTerms)
-    (hsig : d.sig.AllConstructors) (hnr : d.RulesNoRead) :
+    (hsig : d.sig.AllConstructors) :
     (execRunRules d).toDatabase = RunRules d.toDatabase := by
   refine Database.ext ?_ ?_ ?_ ?_
   · change (execRunRules d).sig = _
     rw [sig_execRunRules]; rfl
   · ext p
-    rw [mem_eqs_toDatabase_execRunRules he, fires_iff he hsig hnr]
+    rw [mem_eqs_toDatabase_execRunRules he, fires_iff he hsig]
     simp only [RunRules, Database.sUnion_eqs, Set.mem_union, Set.mem_iUnion₂, Set.mem_setOf_eq,
       exists_prop]
   · change (execRunRules d).env = _
@@ -1026,7 +1020,7 @@ theorem execRunRules_RunRules {d : FDatabase} (he : d.EqsInTerms)
 /-! ### Refinement: commands and programs -/
 /-- **The interpreter's command is the specification's `cmdEffect`.** -/
 theorem execCmd_toDatabase {d : FDatabase} (he : d.EqsInTerms) (hsig : d.sig.AllConstructors)
-    (hnr : d.RulesNoRead) {c : Cmd} :
+    {c : Cmd} :
     (execCmd d c).map FDatabase.toDatabase = cmdEffect d.toDatabase c := by
   cases c with
   | action a => exact execAction_toDatabase he
@@ -1036,7 +1030,7 @@ theorem execCmd_toDatabase {d : FDatabase} (he : d.EqsInTerms) (hsig : d.sig.All
     rfl
   | run =>
     rw [show execCmd d .run = some (execRunRules d) from rfl, Option.map_some,
-      execRunRules_RunRules he hsig hnr]
+      execRunRules_RunRules he hsig]
     rfl
   | decl f dc => rfl
 
@@ -1056,42 +1050,17 @@ theorem execCmd_eqsInTerms {d d' : FDatabase} (he : d.EqsInTerms) {c : Cmd}
         from rfl, Option.some.injEq] at h
     exact h ▸ he.setSig _
 
-theorem execCmd_rulesNoRead {d d' : FDatabase} (hnr : d.RulesNoRead) {c : Cmd}
-    (hc : Cmd.NoRead c) (h : execCmd d c = some d') : d'.RulesNoRead := by
-  cases c with
-  | action a =>
-    intro r hr
-    exact hnr r (execAction_rules h ▸ hr)
-  | rule r =>
-    rw [show execCmd d (.rule r) = some { d with rules := r :: d.rules } from rfl,
-      Option.some.injEq] at h
-    subst h
-    intro r' hr'
-    rcases List.mem_cons.mp hr' with rfl | hr'
-    · exact hc
-    · exact hnr r' hr'
-  | run =>
-    rw [show execCmd d .run = some (execRunRules d) from rfl, Option.some.injEq] at h
-    subst h
-    intro r hr
-    exact hnr r (rules_execRunRules ▸ hr)
-  | decl f dc =>
-    rw [show execCmd d (.decl f dc) = some { d with sig := Function.update d.sig f (some dc) }
-        from rfl, Option.some.injEq] at h
-    subst h
-    exact hnr
-
 theorem execCmd_sig {d d' : FDatabase} (he : d.EqsInTerms) (hsig : d.sig.AllConstructors)
-    (hnr : d.RulesNoRead) {c : Cmd} (h : execCmd d c = some d') :
+    {c : Cmd} (h : execCmd d c = some d') :
     d'.sig = c.sigBind d.sig := by
   have : cmdEffect d.toDatabase c = some d'.toDatabase := by
-    rw [← execCmd_toDatabase he hsig hnr, h, Option.map_some]
+    rw [← execCmd_toDatabase he hsig, h, Option.map_some]
   exact cmdEffect_sig this
 
 theorem execCmd_allConstructors {d d' : FDatabase} (he : d.EqsInTerms)
-    (hsig : d.sig.AllConstructors) (hnr : d.RulesNoRead) {c : Cmd} (hdecl : c.CtorDecl)
+    (hsig : d.sig.AllConstructors) {c : Cmd} (hdecl : c.CtorDecl)
     (h : execCmd d c = some d') : d'.sig.AllConstructors := by
-  rw [execCmd_sig he hsig hnr h]; exact hsig.sigBind hdecl
+  rw [execCmd_sig he hsig h]; exact hsig.sigBind hdecl
 
 /-- **One command, both ways.** The interpreter's step is exactly the specification's,
 not merely one the specification permits.
@@ -1101,29 +1070,27 @@ than bookkeeping: `←` says the interpreter reaches *every* state the specifica
 It holds because on the constructor fragment there is no merge phase to choose in, which
 is `MergeClosure.eq_of_allConstructors`. -/
 theorem execCmd_cmdStep {d : FDatabase} (he : d.EqsInTerms) (hsig : d.sig.AllConstructors)
-    (hnr : d.RulesNoRead) {c : Cmd} (hdecl : c.CtorDecl) {D : Database} :
+    {c : Cmd} (hdecl : c.CtorDecl) {D : Database} :
     (execCmd d c).map FDatabase.toDatabase = some D ↔ CmdStep d.toDatabase c D := by
-  rw [execCmd_toDatabase he hsig hnr]
+  rw [execCmd_toDatabase he hsig]
   refine ⟨fun h => ⟨D, h, Relation.ReflTransGen.refl⟩, ?_⟩
   rintro ⟨e, heff, hcl⟩
   rw [heff, Option.some.injEq]
   exact (hcl.eq_of_allConstructors (cmdEffect_allConstructors hsig hdecl heff)).symm
 
 theorem execProgram_programStep {p : Program} : ∀ {d : FDatabase}, d.EqsInTerms →
-    d.sig.AllConstructors → d.RulesNoRead → p.CtorDecls → Program.NoReads p →
+    d.sig.AllConstructors → p.CtorDecls →
     ∀ {D : Database},
       (execProgram d p).map FDatabase.toDatabase = some D ↔ ProgramStep d.toDatabase p D := by
   induction p with
   | nil =>
-    intro d _ _ _ _ _ D
+    intro d _ _ _ D
     rw [show execProgram d [] = some d from rfl, Option.map_some, Option.some.injEq]
     exact ⟨fun hd => hd ▸ .nil, fun hs => hs.nil_inv⟩
   | cons c cs ih =>
-    intro d he hsig hnr hdecl hread D
+    intro d he hsig hdecl D
     have hc : Cmd.CtorDecl c := hdecl c (by simp)
-    have hcr : Cmd.NoRead c := hread c (by simp)
     have hrest : Program.CtorDecls cs := fun c' hc' => hdecl c' (List.mem_cons_of_mem c hc')
-    have hreadrest : Program.NoReads cs := fun c' hc' => hread c' (List.mem_cons_of_mem c hc')
     constructor
     · intro hmap
       cases hce : execCmd d c with
@@ -1135,36 +1102,32 @@ theorem execProgram_programStep {p : Program} : ∀ {d : FDatabase}, d.EqsInTerm
         rw [show execProgram d (c :: cs)
           = (execCmd d c).bind fun d' => execProgram d' cs from rfl, hce,
           Option.bind_some] at hmap
-        refine .cons ((execCmd_cmdStep he hsig hnr hc).mp (by rw [hce, Option.map_some]))
-          ((ih (execCmd_eqsInTerms he hce) (execCmd_allConstructors he hsig hnr hc hce)
-            (execCmd_rulesNoRead hnr hcr hce) hrest hreadrest).mp hmap)
+        refine .cons ((execCmd_cmdStep he hsig hc).mp (by rw [hce, Option.map_some]))
+          ((ih (execCmd_eqsInTerms he hce) (execCmd_allConstructors he hsig hc hce)
+            hrest).mp hmap)
     · intro hs
       obtain ⟨e, hstep, hrestep⟩ := hs.cons_inv
       obtain ⟨d₁, hce, hd₁⟩ :=
-        Option.map_eq_some_iff.mp ((execCmd_cmdStep he hsig hnr hc).mpr hstep)
+        Option.map_eq_some_iff.mp ((execCmd_cmdStep he hsig hc).mpr hstep)
       subst hd₁
       rw [show execProgram d (c :: cs)
         = (execCmd d c).bind fun d' => execProgram d' cs from rfl, hce, Option.bind_some]
-      exact (ih (execCmd_eqsInTerms he hce) (execCmd_allConstructors he hsig hnr hc hce)
-        (execCmd_rulesNoRead hnr hcr hce) hrest hreadrest).mpr hrestep
+      exact (ih (execCmd_eqsInTerms he hce) (execCmd_allConstructors he hsig hc hce)
+        hrest).mpr hrestep
 
-/-- **The refinement theorem**: on the constructor fragment, and away from the row atom,
-the interpreter computes exactly the states the semantics reaches — an `if and only if`,
-so a `#guard` or a differential test constrains `Spec/` in both directions.
+/-- **The refinement theorem**: on the constructor fragment, the interpreter computes
+exactly the states the semantics reaches — an `if and only if`, so a `#guard` or a
+differential test constrains `Spec/` in both directions.
 
 `hdecl` is not removable: `Falsity.exec_programStep_needs_ctorDecls` exhibits a program
 whose only offence is a `:merge` declaration and two states the specification reaches, of
-which the interpreter returns at most one.
-
-`hread` is what pays for the row atom's index: see `Pattern.NoRead`. It is not a statement
-about the constructor fragment being uninteresting — a read of a constructor's table is
-egglog's `(= v (Add a b))`, which this model writes as the `.eq` atom. -/
-theorem exec_programStep {p : Program} (hdecl : p.CtorDecls) (hread : Program.NoReads p)
-    {D : Database} :
+which the interpreter returns at most one. The row atom is included: with no merge function
+declared, every entry is its own application, which `patternHolds` decides at the entry
+term rather than through the index. -/
+theorem exec_programStep {p : Program} (hdecl : p.CtorDecls) {D : Database} :
     (exec p).map FDatabase.toDatabase = some D ↔ ProgramStep Database.empty p D := by
   rw [show exec p = execProgram FDatabase.empty p from rfl, ← FDatabase.toDatabase_empty]
   exact execProgram_programStep FDatabase.empty_eqsInTerms
-    (by intro f; simp [Signature.mergeOf, FDatabase.empty])
-    (by intro r hr; simp [FDatabase.empty] at hr) hdecl hread
+    (by intro f; simp [Signature.mergeOf, FDatabase.empty]) hdecl
 
 end Egglog

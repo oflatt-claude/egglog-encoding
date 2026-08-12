@@ -276,9 +276,15 @@ def Query.freeVars (q : Query) (σ : Env) : List Var :=
 
 /-- `Matches`'s side conditions for one pattern, computed: the pattern's instance
 is congruent — in the database extended with it — to a witness the database already
-holds. The witness is a term for `.expr`/`.eq` and a *row* for `.values`, whose key and
-value operands are added the same way, since an operand may denote a term the program
-never built (`Spec/Match.lean`'s `Matches.values`).
+holds. The instance is added because a pattern operand may denote a term the program
+never built.
+
+The witness is a term, except at a **merge function's** entry atom, where it is a *row*
+and the key and value operands are added instead. The index is what says which of that
+function's recorded entries is current, and nothing else does. It says nothing about a
+constructor: a constructor's entry is its own application, so the atom asks about the
+term `f(a…, v…)` like any other instance, and a row — which fixes one key/value split
+where the term admits every split — would answer a different question.
 
 It compares with `closureF`, which computes exactly the specification's `Cong`. -/
 def patternHolds (d : FDatabase) (p : Pattern) (σ : Env) : Bool :=
@@ -286,10 +292,15 @@ def patternHolds (d : FDatabase) (p : Pattern) (σ : Env) : Bool :=
   | .values vs f as =>
     match Expr.evalList d.sig vs (d.env ++ σ), Expr.evalList d.sig as (d.env ++ σ) with
     | some us, some ts =>
-      let cl := ((d.addTerms ts).addTerms us).closureF
-      d.rows.any fun r =>
-        decide (r.fn = f) && FDatabase.congrTuple cl ts r.args
-          && FDatabase.congrTuple cl us r.out
+      if (d.sig.mergeOf f).isSome then
+        let cl := ((d.addTerms ts).addTerms us).closureF
+        d.rows.any fun r =>
+          decide (r.fn = f) && FDatabase.congrTuple cl ts r.args
+            && FDatabase.congrTuple cl us r.out
+      else
+        let t := Term.app f (ts ++ us)
+        let cl := (d.addTerm t).closureF
+        decide (∃ w ∈ d.terms, (w, t) ∈ cl)
     | _, _ => false
   | .expr e =>
     match e.eval d.sig (d.env ++ σ) with
