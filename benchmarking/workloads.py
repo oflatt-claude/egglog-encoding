@@ -25,7 +25,7 @@ class WorkloadConfig:
 
 
 DEFAULT_WORKLOADS = (
-    WorkloadConfig("benchmarks/math-microbenchmark/math.egg"),
+    WorkloadConfig("egglog-experimental/tests/math-microbenchmark-rational.egg"),
     WorkloadConfig("egglog-experimental/tests/fixtures/eggcc-2mm-pass1.egg"),
     WorkloadConfig(
         "benchmarks/pointer-analysis-initdb.egg",

@@ -37,13 +37,6 @@ class TreatmentSpec:
     flags: tuple[str, ...]
 
 
-@dataclass(frozen=True)
-class EggWorkloadSpec:
-    iterations: int
-    check_left: str
-    check_right: str
-
-
 TREATMENT_SPECS: dict[Treatment, TreatmentSpec] = {
     "off": TreatmentSpec("egglog", ()),
     "term": TreatmentSpec("egglog", ("--term-encoding",)),
@@ -57,12 +50,7 @@ TREATMENT_SPECS: dict[Treatment, TreatmentSpec] = {
 }
 TREATMENTS = tuple(TREATMENT_SPECS)
 
-MATH_WORKLOAD_PATH = Path("benchmarks/math-microbenchmark/math.egg")
-MATH_EGG_WORKLOAD = EggWorkloadSpec(
-    iterations=11,
-    check_left="(+ (cos x) (cos x))",
-    check_right="(d x (+ (sin x) (sin x)))",
-)
+MATH_WORKLOAD_PATH = Path("egglog-experimental/tests/math-microbenchmark-rational.egg")
 
 
 def treatment_spec(treatment: Treatment) -> TreatmentSpec:
@@ -73,21 +61,13 @@ def treatment_engine(treatment: Treatment) -> Engine:
     return treatment_spec(treatment).engine
 
 
-def egg_workload_spec(file_spec: WorkloadFile) -> EggWorkloadSpec | None:
-    """Return the fixed egg driver configuration for a supported workload."""
-
-    project_fixture = Path(__file__).resolve().parents[1] / MATH_WORKLOAD_PATH
-    if file_spec.absolute_path == project_fixture.resolve():
-        return MATH_EGG_WORKLOAD
-    return None
-
-
 def validate_engine_workload(file_spec: WorkloadFile, treatment: Treatment) -> None:
     """Reject workload features unsupported by the selected treatment engine."""
 
     if treatment_engine(treatment) != "egg":
         return
-    if egg_workload_spec(file_spec) is None:
+    project_fixture = Path(__file__).resolve().parents[1] / MATH_WORKLOAD_PATH
+    if file_spec.absolute_path != project_fixture.resolve():
         raise ValueError(
             f"treatment {treatment} only supports {MATH_WORKLOAD_PATH.as_posix()}; cannot run {file_spec.display_path}"
         )

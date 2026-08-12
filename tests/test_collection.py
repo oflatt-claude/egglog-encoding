@@ -244,15 +244,21 @@ def test_batch_target_resolution_reuses_complete_cache_label_before_building_pen
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     report = tmp_path / "report.jsonl"
-    write_report(
-        report,
-        make_record(
-            0,
-            started_at="2026-07-04T12:00:00Z",
-            target_label="cached",
-            binary_sha256="sha256:cached",
-        ),
+    cached = make_record(
+        0,
+        started_at="2026-07-04T12:00:00Z",
+        target_label="cached",
+        binary_sha256="sha256:cached",
     )
+    newer_egg = make_record(
+        1,
+        started_at="2026-07-04T12:00:01Z",
+        target_label="cached",
+        binary_sha256="sha256:newer-egg",
+        treatment="egg",
+    )
+    newer_egg["target_git_sha"] = "newer123"
+    write_report(report, cached, newer_egg)
     cached_request = targets.parse_target("cached=")
     fresh_request = targets.parse_target(".")
     fresh_row = models.TargetRow(".", str(tmp_path / "checkout"), "HEAD", "fresh123", False)
@@ -535,8 +541,8 @@ def test_collected_row_uses_the_selected_engine_binary_hash(
         ),
     )
     file_spec = models.FileSpec(
-        "benchmarks/math-microbenchmark/math.egg",
-        ROOT / "benchmarks/math-microbenchmark/math.egg",
+        "egglog-experimental/tests/math-microbenchmark-rational.egg",
+        ROOT / "egglog-experimental/tests/math-microbenchmark-rational.egg",
         "sha256:math",
     )
     endpoint = models.BenchmarkEndpoint(target, "main", "egg")

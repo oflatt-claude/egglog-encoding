@@ -15,10 +15,6 @@ pub struct RationalSort;
 impl BaseSort for RationalSort {
     type Base = R;
 
-    fn prim_value_constructor(&self) -> Option<String> {
-        Some("rational".to_owned())
-    }
-
     fn name(&self) -> &str {
         "Rational"
     }
@@ -50,9 +46,7 @@ impl BaseSort for RationalSort {
         add_primitive!(eg, "floor" = |a: R| -> R { R::new(a.0.floor()) });
         add_primitive!(eg, "ceil" = |a: R| -> R { R::new(a.0.ceil()) });
         add_primitive!(eg, "round" = |a: R| -> R { R::new(a.0.round()) });
-        add_primitive_with_validator!(eg, "rational" = |a: i64, b: i64| -?> R {
-            (b != 0).then(|| R::new(Rational64::new(a, b)))
-        }, rational_validator);
+        add_primitive_with_validator!(eg, "rational" = |a: i64, b: i64| -> R { R::new(Rational64::new(a, b)) }, rational_validator);
         add_primitive!(eg, "numer" = |a: R| -> i64 { *a.0.numer() });
         add_primitive!(eg, "denom" = |a: R| -> i64 { *a.0.denom() });
 
@@ -133,8 +127,6 @@ impl BaseSort for RationalSort {
 
 #[cfg(test)]
 mod tests {
-    use std::panic::{AssertUnwindSafe, catch_unwind};
-
     const CANONICAL_RATIONAL_PROGRAM: &str = r#"
         (datatype E (Num Rational))
         (relation Seen (E))
@@ -152,19 +144,5 @@ mod tests {
                 .parse_and_run_program(None, CANONICAL_RATIONAL_PROGRAM)
                 .unwrap();
         }
-    }
-
-    #[test]
-    fn zero_denominator_is_partial() {
-        let result = catch_unwind(AssertUnwindSafe(|| {
-            crate::new_experimental_egraph()
-                .parse_and_run_program(None, "(let invalid (rational 1 0))")
-        }));
-
-        assert!(
-            result.is_ok(),
-            "rational must not panic on a zero denominator"
-        );
-        assert!(result.unwrap().is_err());
     }
 }

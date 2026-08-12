@@ -160,7 +160,7 @@ def test_profile_accepts_explicit_main_proof_extraction(tmp_path: Path) -> None:
 
 def test_profile_accepts_the_fixed_math_egg_treatment() -> None:
     args = profile_runner.parse_profile_args(
-        ["benchmarks/math-microbenchmark/math.egg", "--treatment", "egg-proof-testing"]
+        ["egglog-experimental/tests/math-microbenchmark-rational.egg", "--treatment", "egg-proof-testing"]
     )
 
     request = profile_runner.resolve_profile_request(args, ROOT)

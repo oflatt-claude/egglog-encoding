@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from benchmarking import models, targets, workloads
-from benchmarking.engines import MATH_EGG_WORKLOAD, validate_engine_workload
+from benchmarking.engines import validate_engine_workload
 
 from .report_fixtures import ROOT
 
@@ -80,7 +80,7 @@ def test_prove_scan_ignores_comments_strings_and_longer_atoms(tmp_path: Path) ->
 def test_default_workloads_are_the_six_research_cases() -> None:
     files = workloads.resolve_files([], ROOT)
     assert tuple(file.display_path for file in files) == (
-        "benchmarks/math-microbenchmark/math.egg",
+        "egglog-experimental/tests/math-microbenchmark-rational.egg",
         "egglog-experimental/tests/fixtures/eggcc-2mm-pass1.egg",
         "benchmarks/pointer-analysis-initdb.egg",
         "egglog/tests/hardboiled_conv1d_32.egg",
@@ -175,17 +175,10 @@ def test_workload_command_matches_benchmark_behavior() -> None:
 
 
 def test_egg_workload_command_uses_the_fixed_math_driver_contract() -> None:
-    (math,) = workloads.resolve_files(["benchmarks/math-microbenchmark/math.egg"], ROOT)
+    (math,) = workloads.resolve_files(["egglog-experimental/tests/math-microbenchmark-rational.egg"], ROOT)
 
-    assert math.absolute_path.read_text(encoding="utf-8").count("  (run)") == MATH_EGG_WORKLOAD.iterations
     assert targets.workload_command(ROOT / "egg-math-benchmark", math, "main", "egg-proof-testing") == [
         str(ROOT / "egg-math-benchmark"),
-        "--iterations",
-        str(MATH_EGG_WORKLOAD.iterations),
-        "--check-left",
-        MATH_EGG_WORKLOAD.check_left,
-        "--check-right",
-        MATH_EGG_WORKLOAD.check_right,
         "--proof-mode",
         "check",
     ]
@@ -193,12 +186,12 @@ def test_egg_workload_command_uses_the_fixed_math_driver_contract() -> None:
 
 def test_egg_treatments_reject_other_workloads_and_fact_directories() -> None:
     other = models.FileSpec("other.egg", ROOT / "other.egg", "sha256:other")
-    with pytest.raises(ValueError, match="only supports benchmarks/math-microbenchmark/math.egg"):
+    with pytest.raises(ValueError, match="only supports egglog-experimental/tests/math-microbenchmark-rational.egg"):
         validate_engine_workload(other, "egg")
 
     math = models.FileSpec(
-        "benchmarks/math-microbenchmark/math.egg",
-        ROOT / "benchmarks/math-microbenchmark/math.egg",
+        "egglog-experimental/tests/math-microbenchmark-rational.egg",
+        ROOT / "egglog-experimental/tests/math-microbenchmark-rational.egg",
         "sha256:math",
         ROOT / "facts",
     )

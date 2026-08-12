@@ -159,7 +159,11 @@ impl Run {
 fn generate_tests(glob: &str) -> Vec<Trial> {
     let mut trials = vec![];
     let mut push_trial = |run: Run| trials.push(run.into_trial());
-    let skipped_files = ["math-backoff.egg"];
+    let skipped_files = [
+        "math-backoff.egg",
+        // The bounded paper test checks the iteration witness and full proof.
+        "math-microbenchmark-rational.egg",
+    ];
 
     for entry in glob::glob(glob).unwrap() {
         let path = entry.unwrap();

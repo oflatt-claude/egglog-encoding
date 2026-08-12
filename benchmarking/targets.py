@@ -19,7 +19,7 @@ from typing import Literal
 from rich.console import Console
 from rich.text import Text
 
-from .engines import Engine, Treatment, egg_workload_spec, treatment_spec
+from .engines import Engine, Treatment, treatment_spec, validate_engine_workload
 from .models import Backend, EngineBinary, FileSpec, ResolvedTarget, TargetRequest, TargetRow, backend_spec
 
 BuildProfile = Literal["release", "profiling"]
@@ -308,19 +308,8 @@ def workload_command(
 ) -> list[str]:
     specification = treatment_spec(treatment)
     if specification.engine == "egg":
-        workload = egg_workload_spec(file_spec)
-        if workload is None:
-            raise ValueError(f"treatment {treatment} does not support {file_spec.display_path}")
-        return [
-            str(binary_path),
-            "--iterations",
-            str(workload.iterations),
-            "--check-left",
-            workload.check_left,
-            "--check-right",
-            workload.check_right,
-            *specification.flags,
-        ]
+        validate_engine_workload(file_spec, treatment)
+        return [str(binary_path), *specification.flags]
     return [
         str(binary_path),
         "--mode",

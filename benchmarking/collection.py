@@ -241,17 +241,12 @@ def _resolve_or_materialize_target(
         raise ValueError("target resolution requires its exact endpoint requests")
     if request.is_label_lookup:
         assert request.label is not None
-        pointer = store.find_label_pointer(request.label)
-        if pointer is None:
-            raise ValueError(f"no cached rows found for label {request.label!r}")
         required_engines = tuple(dict.fromkeys(treatment_engine(endpoint.treatment) for endpoint in endpoint_requests))
         engine_pointers = tuple(
             (engine, store.find_label_pointer(request.label, engine)) for engine in required_engines
         )
-        if all(
-            engine_pointer is not None and engine_pointer.row == pointer.row
-            for _engine, engine_pointer in engine_pointers
-        ):
+        pointers = tuple(pointer for _engine, pointer in engine_pointers if pointer is not None)
+        if len(pointers) == len(engine_pointers) and all(pointer.row == pointers[0].row for pointer in pointers):
             binaries = tuple(
                 EngineBinary(engine, engine_pointer.binary_sha256, None)
                 for engine, engine_pointer in engine_pointers
@@ -259,7 +254,7 @@ def _resolve_or_materialize_target(
             )
             cached_target = ResolvedTarget(
                 request=request,
-                row=pointer.row,
+                row=pointers[0].row,
                 binary_sha256=binaries[0].sha256,
                 binary_path=None,
                 engine_binaries=binaries,
@@ -274,6 +269,9 @@ def _resolve_or_materialize_target(
                 timeout_sec,
             ):
                 return cached_target
+        pointer = store.find_label_pointer(request.label)
+        if pointer is None:
+            raise ValueError(f"no cached rows found for label {request.label!r}")
         if pointer.row.is_dirty:
             raise ValueError(
                 f"label {request.label!r} points to a dirty checkout; provide label=SOURCE to collect fresh rows"

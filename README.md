@@ -103,7 +103,7 @@ Treatments map directly to engine modes:
 The `main` backend supports all nine treatments. The `dd` backend supports only
 `term` and `proofs`. The four `egg*` treatments run the separate
 `egg-math-benchmark` executable and currently support only
-`benchmarks/math-microbenchmark/math.egg`; the other five treatments run
+`egglog-experimental/tests/math-microbenchmark-rational.egg`; the other five treatments run
 `egglog-experimental`. Results from either proof-extraction treatment are
 performance evidence only. The corresponding proof-testing treatment provides
 the strict validity check.
@@ -140,18 +140,25 @@ Compare term encoding with ordinary mode:
 ./bench.py --treatment term
 ```
 
-Compare current egg explanation overhead on the fixed Math workload:
+For the fixed Math workload, compare proof overhead within each engine and then
+compare the engines with proof recording consistently disabled or enabled:
 
-```bash
-./bench.py benchmarks/math-microbenchmark/math.egg \
+```shell
+# Proof overhead in egg.
+./bench.py egglog-experimental/tests/math-microbenchmark-rational.egg \
   --compare-treatment egg --treatment egg-proofs
-```
 
-Compare current egglog with current egg without proof recording:
+# Proof overhead in egglog.
+./bench.py egglog-experimental/tests/math-microbenchmark-rational.egg \
+  --compare-treatment off --treatment proofs
 
-```bash
-./bench.py benchmarks/math-microbenchmark/math.egg \
+# egglog versus egg without proofs.
+./bench.py egglog-experimental/tests/math-microbenchmark-rational.egg \
   --compare-treatment egg --treatment off
+
+# egglog versus egg with proofs.
+./bench.py egglog-experimental/tests/math-microbenchmark-rational.egg \
+  --compare-treatment egg-proofs --treatment proofs
 ```
 
 Compare current proofs with a previously cached, labeled ordinary baseline:
@@ -213,7 +220,7 @@ directory contents. Their SHA-256 hashes are part of the cache identity.
 
 With no positional files, the representative suite is:
 
-- `benchmarks/math-microbenchmark/math.egg`
+- `egglog-experimental/tests/math-microbenchmark-rational.egg`
 - `egglog-experimental/tests/fixtures/eggcc-2mm-pass1.egg`
 - `benchmarks/pointer-analysis-initdb.egg`, with
   `benchmarks/data/pointer-analysis-initdb`
@@ -226,22 +233,20 @@ corpus:
 
 | Workload | Adaptation or scope | Correctness signal |
 | --- | --- | --- |
-| Math | The paper artifact's Rational language, 24 rewrites, and seven seeds, run for eleven explicit steps through current egg or egglog without backoff | An equality first established on step eleven is checked; tests require it to fail after step ten in both engines |
+| Math | The paper artifact's Rational language, 24 rewrites, and seven seeds, run for eleven iterations through current egg or egglog without backoff | An equality first established on iteration eleven is checked; tests require it to fail after iteration ten in both engines |
 | eggcc 2mm | Bounded pass-one fixture with ordinary constructor-valued merges | Generated `main` function type is checked |
 | Pointer analysis | All 73,864 rows from the 23 `initdb.bc` relations consumed by the adapted program; three legacy lookup-or-create functions are constructors under current egglog, and the run uses ordinary seminaive scheduling | Known `constant_points_to` row is derived and both reported output-table sizes are available for artifact comparison |
 | Hardboiled | Dormant canonicalization rules using unsupported unstable helpers are omitted | Extracted WMMA store result is checked |
 | Luminal | Static Llama graph from [`egglog_repro` commit `7fb0194`](https://github.com/saulshanabrook/egglog_repro/blob/7fb0194812b5b11e41a286d8b55e48e3b0bfcd66/llama.egg) | `t712` is checked after kernel lowering |
 | Herbie | Static engine proxy without Racket orchestration or an FPCore corpus | All 14 checks exercise the selected treatment |
 
-Run the fixed Math fixture through both current engines with:
-
-```bash
-./bench.py benchmarks/math-microbenchmark/math.egg \
-  --compare-treatment egg --treatment off
-```
-
-See `benchmarks/math-microbenchmark/README.md` for the rule-set provenance,
-scheduler scope, terminal witness, and exact treatment mapping.
+The Math language, 24 rewrites, and seven seeds come from
+`micro-benchmarks/src/math.rs` and `micro-benchmarks/src/eqlog/math_full.egg`
+in the [PLDI 2023 artifact](https://doi.org/10.5281/zenodo.7709794). The fixture
+preserves its Rational constants but uses current egg and egglog's ordinary
+simple/seminaive schedulers without the artifact's backoff scheduler or match
+cap, so this is a controlled current-engine comparison rather than an exact
+reproduction of the paper's historical scheduler results.
 
 The pointer input is the complete `initdb.bc` input for the 23 relations read by
 this adaptation, not the artifact's full 30-program pointer-analysis matrix.
@@ -445,7 +450,7 @@ separate Samply command when a particular endpoint needs call-stack diagnosis:
 ./bench.py profile FILE
 ./bench.py profile FILE --target @origin/main --treatment proofs --open
 ./bench.py profile FILE --backend dd --profile-seconds 20
-./bench.py profile benchmarks/math-microbenchmark/math.egg --treatment egg-proofs
+./bench.py profile egglog-experimental/tests/math-microbenchmark-rational.egg --treatment egg-proofs
 ```
 
 Profiling selects one target, backend, treatment, and file. Artifacts are cached

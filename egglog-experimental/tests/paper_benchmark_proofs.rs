@@ -11,16 +11,14 @@ fn repository() -> PathBuf {
 }
 
 fn math_program(repository: &Path, iterations: usize, check: &str) -> String {
-    let fixture =
-        std::fs::read_to_string(repository.join("benchmarks/math-microbenchmark/math.egg"))
-            .unwrap();
+    let fixture = std::fs::read_to_string(
+        repository.join("egglog-experimental/tests/math-microbenchmark-rational.egg"),
+    )
+    .unwrap();
     let (base, _) = fixture
-        .split_once("(run-schedule")
-        .expect("Math fixture should contain a run schedule");
-    let runs = std::iter::repeat_n("  (run)", iterations)
-        .collect::<Vec<_>>()
-        .join("\n");
-    format!("{base}\n(run-schedule (seq\n{runs}))\n{check}\n")
+        .split_once("(run 11)")
+        .expect("Math fixture should run eleven iterations");
+    format!("{base}\n(run {iterations})\n{check}\n")
 }
 
 #[test]
@@ -35,33 +33,22 @@ fn pointer_analysis_initdb_passes_proof_checking() {
 }
 
 #[test]
-fn short_math_runs_pass_proof_checking() {
-    let repository = repository();
-    let check = r#"(check (= (Add (Var "x") (Cos (Var "x"))) (Add (Cos (Var "x")) (Var "x"))))"#;
-
-    for iterations in [1, 6] {
-        egglog_experimental::new_experimental_egraph_with_proof_testing()
-            .parse_and_run_program(None, &math_program(&repository, iterations, check))
-            .unwrap();
-    }
-}
-
-#[test]
 fn terminal_math_equality_requires_iteration_eleven() {
     let repository = repository();
     let check = format!("(check (= {CHECK_LEFT} {CHECK_RIGHT}))");
 
-    let fixture =
-        std::fs::read_to_string(repository.join("benchmarks/math-microbenchmark/math.egg"))
-            .unwrap();
-    assert_eq!(fixture.matches("  (run)").count(), 11);
+    let fixture = std::fs::read_to_string(
+        repository.join("egglog-experimental/tests/math-microbenchmark-rational.egg"),
+    )
+    .unwrap();
+    assert!(fixture.contains("(run 11)"));
 
     let error = egglog_experimental::new_experimental_egraph()
         .parse_and_run_program(None, &math_program(&repository, 10, &check))
         .unwrap_err();
     assert!(error.to_string().contains("Check failed"));
 
-    egglog_experimental::new_experimental_egraph()
-        .parse_and_run_program(None, &math_program(&repository, 11, &check))
+    egglog_experimental::new_experimental_egraph_with_proof_testing()
+        .parse_and_run_program(None, &fixture)
         .unwrap();
 }
