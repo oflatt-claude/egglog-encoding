@@ -664,8 +664,8 @@ CI runs on pull requests, manual dispatches, and pushes to `main`:
 
 - `python`: `make python-nits`, then `make python-test`.
 - `rust`: `make rust-nits`, then `make rust-test`.
-- `benchmark-smoke`: a one-round pair comparison on
-  `egglog/tests/integer_math.egg` through `make benchmark-smoke`.
+- `benchmark-smoke`: a one-round `off`/`proofs` pair comparison across the
+  default six-file suite through `make benchmark-smoke`.
 - `codspeed`: an in-process, proofs-only benchmark over a smaller workload set
   in simulation and memory modes. CodSpeed includes phase-clock execution but
   does not persist phase reports; `./bench.py` remains the source for

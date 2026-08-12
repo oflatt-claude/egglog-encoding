@@ -75,9 +75,9 @@ def parse_profile_args(argv: Sequence[str]) -> argparse.Namespace:
     """Parse profile arguments without importing the benchmark data stack."""
     parser = argparse.ArgumentParser(
         prog=f"{Path(sys.argv[0]).name} profile",
-        description="Record or reuse a cached Samply CPU profile for one egglog workload.",
+        description="Record or reuse a cached Samply CPU profile for one benchmark workload.",
     )
-    parser.add_argument("file", help="egglog file to profile")
+    parser.add_argument("file", help="benchmark workload file to profile")
     parser.add_argument(
         "--fact-directory",
         default=None,
