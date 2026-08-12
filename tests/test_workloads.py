@@ -76,7 +76,7 @@ def test_prove_scan_ignores_comments_strings_and_longer_atoms(tmp_path: Path) ->
     assert not workloads.file_contains_executable_prove_command(check_file)
 
 
-def test_default_workloads_are_the_six_research_cases() -> None:
+def test_default_workloads_are_the_ten_research_cases() -> None:
     files = workloads.resolve_files([], ROOT)
     assert tuple(file.display_path for file in files) == (
         "egglog/tests/math-microbenchmark.egg",
@@ -85,6 +85,10 @@ def test_default_workloads_are_the_six_research_cases() -> None:
         "egglog/tests/hardboiled_conv1d_32.egg",
         "benchmarks/luminal-llama.egg",
         "egglog/tests/web-demo/herbie.egg",
+        "egglog/tests/papers/misaal-hvx-dot-product.egg",
+        "egglog/tests/papers/churchroad-wide-multiply.egg",
+        "egglog-experimental/tests/papers/dialegg-nmm40.egg",
+        "egglog/tests/papers/speq-preserved-reference-suite.egg",
     )
     pointer = next(file for file in files if file.display_path == "benchmarks/pointer-analysis-small.egg")
     assert pointer.fact_directory == (ROOT / "benchmarks/data/pointer-analysis-small").resolve()

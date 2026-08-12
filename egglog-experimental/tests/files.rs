@@ -48,7 +48,7 @@ impl Run {
             match result {
                 Ok(outputs) => {
                     let snapshot = CommandOutput::snapshot_proofs_only(&outputs);
-                    if !snapshot.is_empty() {
+                    if !self.should_skip_snapshot() && !snapshot.is_empty() {
                         insta::assert_snapshot!(self.snapshot_name(), snapshot);
                     }
                 }
@@ -153,6 +153,14 @@ impl Run {
 
     fn should_fail(&self) -> bool {
         self.path.to_string_lossy().contains("fail-typecheck")
+    }
+
+    fn should_skip_snapshot(&self) -> bool {
+        // Paper artifact workloads carry explicit checks as their correctness
+        // oracle. Their generated proofs do not add a stable signal.
+        self.path
+            .parent()
+            .is_some_and(|parent| parent.ends_with("papers"))
     }
 }
 

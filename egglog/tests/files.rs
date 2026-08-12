@@ -341,6 +341,12 @@ impl Run {
     }
 
     fn should_skip_snapshot(&self) -> bool {
+        // Paper artifact workloads carry explicit checks as their correctness
+        // oracle. Their table summaries and generated proofs are large and do
+        // not add a stable signal beyond those checks.
+        if self.path.parent().is_some_and(|p| p.ends_with("papers")) {
+            return true;
+        }
         if self.proof_testing {
             // Proof-testing snapshots have their own filtering below.
             false
