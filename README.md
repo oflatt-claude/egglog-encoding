@@ -416,6 +416,10 @@ with `◆`, and uses fixed Assembly, Search, Apply, Execution, Merge, Rebuild
 order. `…` means smaller nonzero phase changes were omitted from display, not
 from accounting.
 
+Rich gives every repeated table schema one content-derived column layout, so
+wall/RSS results align with each other and all per-file driver panels retain
+the same scan positions. Markdown remains width-independent.
+
 Benchmarks run single-threaded. This keeps Search and Apply attribution
 additive for egglog's interleaved executor.
 

@@ -34,6 +34,10 @@ from .report_fixtures import (
 )
 
 
+def _header_positions(lines: list[str], labels: tuple[str, ...]) -> list[tuple[int, ...]]:
+    return [tuple(line.index(label) for label in labels) for line in lines if all(label in line for label in labels)]
+
+
 def test_report_ids_encode_parts_unambiguously() -> None:
     assert report_id("target", "ab", "c") != report_id("target", "a", "bc")
 
@@ -195,6 +199,26 @@ def test_realistic_six_file_rich_120_snapshot(
     assert rendered.count("Slowdown decomposition") >= 1
     assert "Warning: detailed Rich report" not in rendered
     assert "Other (7 more source rulesets)" in rendered
+
+
+def test_repeated_rich_table_schemas_share_column_positions(tmp_path: Path) -> None:
+    report_path, comparison = _six_file_pair_case(tmp_path)
+    catalog = build_report_catalog(ReportStore(report_path), comparison, "rulesets")
+
+    for width in (120, 160, 200):
+        console = Console(record=True, width=width, color_system=None)
+        console.print(render_rich_report_document(catalog, width))
+        lines = console.export_text().splitlines()
+
+        ruleset_positions = _header_positions(lines, ("Driver", "Δ", "Wall share", "Important phase changes"))
+        assert len(ruleset_positions) == len(comparison.files)
+        assert len(set(ruleset_positions)) == 1
+
+        result_positions = _header_positions(
+            lines, ("File", "Baseline (95% CI)", "Candidate (95% CI)", "Ratio (95% CI)", "Result")
+        )
+        assert len(result_positions) == 2
+        assert len(set(result_positions)) == 1
 
 
 def test_detail_level_is_cumulative(tmp_path: Path) -> None:
