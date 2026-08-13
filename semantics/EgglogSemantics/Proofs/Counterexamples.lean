@@ -523,14 +523,14 @@ def staleDecl : FnDecl := ⟨0, 1, some (.merge [] [.var "new"])⟩
 /-- `(rule ((= 0 (M))) ((f)))`. Its head names `f`, which nothing has declared; only a
 `set` is constrained by `Action.SetLegal`, so the rule is still legal, and it is
 `Program.Evaluable` that rejects it. -/
-def staleRule : Rule := ⟨[.values [.lit (.int 0)] "M" []], [.expr (.app "f" [])]⟩
+def staleRule : Rule := ⟨[.values [.lit (.int 0)] "M" []], [.expr (.app "f" [])], ""⟩
 
 def staleProgram : Program :=
   [ .decl "M" staleDecl,
     .action (.set "M" [] [.lit (.int 0)]),
     .action (.set "M" [] [.lit (.int 1)]),
     .rule staleRule,
-    .run ]
+    .run "" ]
 
 def staleSig : Signature := Function.update (fun _ => none) "M" (some staleDecl)
 

@@ -68,23 +68,49 @@ def Database.NoMergeOk (db : Database) : Prop :=
 def RuleResults (db : Database) (r : Rule) : Set Database :=
   {d | ∃ σ, ValidQuerySubst db r.query σ ∧ evalLocalActions db r.actions σ = some d}
 
-/-- The rule-firing half of a round: every rule fires on every substitution satisfying its
-query *in the pre-state*, and all the results are unioned in. -/
-def RunRules (db : Database) : Database :=
-  db.sUnion {d | ∃ r ∈ db.rules, d ∈ RuleResults db r}
+/-- The rule-firing half of a round of the ruleset `R`: every rule *of `R`* fires on every
+substitution satisfying its query *in the pre-state*, and all the results are unioned
+in. -/
+def RunRules (R : RulesetName) (db : Database) : Database :=
+  db.sUnion {d | ∃ r ∈ db.rules, r.ruleset = R ∧ d ∈ RuleResults db r}
+
+/-- One round of `R`: rule firing, then a merge phase. What `Cmd.run R` does once and
+`Cmd.saturate R` repeats. -/
+def RunStep (R : RulesetName) (db db' : Database) : Prop :=
+  MergeClosure (RunRules R db) db'
+
+/-- `R` has saturated: no rule of `R` adds anything, and no merge step changes anything. -/
+def RunSaturated (R : RulesetName) (d : Database) : Prop :=
+  RunRules R d = d ∧ MergeSaturated d
+
+/-- `Cmd.saturate R` reaches `d`: rounds of `R` until it has saturated. A fixpoint
+condition rather than a `cmdEffect`, because no expression computes the round count — it
+grows with the data. -/
+def SaturateReach (R : RulesetName) (db d : Database) : Prop :=
+  Relation.ReflTransGen (RunStep R) db d ∧ RunSaturated R d
 
 /-- What a command computes before its merge phase. `Option`-valued, so `Spec/Eval.lean`'s
-kind of definition; it sits here because `.run` names `RunRules`. -/
+kind of definition; it sits here because `.run` names `RunRules`. `Cmd.saturate` has no
+such effect — `cmdReach` is what it steps by. -/
 def cmdEffect (db : Database) : Cmd → Option Database
   | .action a => evalAction db a
   | .rule r => some { db with rules := insert r db.rules }
-  | .run => some (RunRules db)
+  | .run R => some (RunRules R db)
+  | .saturate _ => none
   | .decl f d => some { db with sig := Function.update db.sig f (some d) }
 
-/-- Run one command: its effect, then a merge phase. Every command merges, so a top-level
-`set` is its own merge phase, and `run` is one round of rule firing followed by one. -/
+/-- What a command reaches before its merge phase. Every command but `Cmd.saturate` is a
+`cmdEffect`; that one is a fixpoint condition. -/
+def cmdReach (db : Database) : Cmd → Database → Prop
+  | .saturate R => SaturateReach R db
+  | c => fun d => cmdEffect db c = some d
+
+/-- Run one command: what it reaches, then a merge phase. Every command merges, so a
+top-level `set` is its own merge phase, and `run` is one round of rule firing followed by
+one. The phase is neutral after a `Cmd.saturate`, which ends merge-saturated
+(`cmdStep_saturate_iff`). -/
 def CmdStep (db : Database) (c : Cmd) (db' : Database) : Prop :=
-  ∃ d, cmdEffect db c = some d ∧ MergeClosure d db'
+  ∃ d, cmdReach db c d ∧ MergeClosure d db'
 
 /-- Run the commands in order. `ProgramStep Database.empty p` is running the program `p`. -/
 inductive ProgramStep : Database → Program → Database → Prop where

@@ -66,9 +66,13 @@ def Action.toEgg : Action → String
   | .set f args out =>
       "(set (" ++ f ++ Expr.toEggArgs args ++ ") " ++ Expr.valuesToEgg out ++ ")"
 
+/-- `:ruleset` is emitted only for a named ruleset: egglog's unnamed one is what a rule with
+no `:ruleset` joins, so the empty name renders as nothing and the existing cases are
+unchanged. -/
 def Rule.toEgg (r : Rule) : String :=
   "(rule (" ++ String.intercalate " " (r.query.map Pattern.toEgg) ++ ") ("
-    ++ String.intercalate " " (r.actions.map Action.toEgg) ++ "))"
+    ++ String.intercalate " " (r.actions.map Action.toEgg) ++ ")"
+    ++ (if r.ruleset = "" then "" else " :ruleset " ++ r.ruleset) ++ ")"
 
 /-- The merged value, in egglog's tuple notation. Shared with `Action.set`. -/
 abbrev MergeSpec.resultToEgg : List Expr → String := Expr.valuesToEgg
@@ -110,13 +114,15 @@ def FnDecl.toEgg (f : FnName) (d : FnDecl) (m : MergeSpec) : String :=
   "(function " ++ f ++ " (" ++ String.intercalate " " (List.replicate d.arity "Math")
     ++ ") " ++ out ++ m.toEgg ++ ")"
 
-/-- A command as egglog source. `Cmd.run` is one round, so it emits `(run 1)`.
+/-- A command as egglog source. A run of the *unnamed* ruleset is `(run 1)`, which is what
+egglog's bare form means (`egglog/src/ast/parse.rs:834-864`); a named one carries its name.
 A constructor declaration is folded into the `datatype` header and produces nothing; a
 `:merge` declaration is its own command. -/
 def Cmd.toEgg : Cmd → String
   | .action a => a.toEgg
   | .rule r => r.toEgg
-  | .run => "(run 1)"
+  | .run R => if R = "" then "(run 1)" else "(run " ++ R ++ " 1)"
+  | .saturate R => "(run-schedule (saturate " ++ (if R = "" then "(run)" else R) ++ "))"
   | .decl f d => match d.merge with
     | none => ""
     | some m => FnDecl.toEgg f d m
@@ -171,7 +177,8 @@ def MergeSpec.fnArities : MergeSpec → List (FnName × Nat)
 def Cmd.fnArities : Cmd → List (FnName × Nat)
   | .action a => a.fnArities
   | .rule r => (r.query.flatMap Pattern.fnArities) ++ (r.actions.flatMap Action.fnArities)
-  | .run => []
+  | .run _ => []
+  | .saturate _ => []
   | .decl f d => (f, d.arity) :: (d.merge.map MergeSpec.fnArities).getD []
 
 /-- Every function the program uses, with its arity, deduplicated — **primitives
@@ -241,7 +248,8 @@ def MergeSpec.setTargets : MergeSpec → List FnName
 def Cmd.setTargets : Cmd → List FnName
   | .action a => a.setTargets
   | .rule r => r.actions.flatMap Action.setTargets
-  | .run => []
+  | .run _ => []
+  | .saturate _ => []
   | .decl _ d => (d.merge.map MergeSpec.setTargets).getD []
 
 /-- The names the program `set`s that egglog would refuse: everything not declared as a
@@ -310,11 +318,22 @@ def Program.eggHeader (p : Program) : String :=
     (p.ctorArities.map fun fa =>
       "(" ++ fa.1 ++ String.join (List.replicate fa.2 " Math") ++ ")") ++ ")"
 
+/-- A `(ruleset <name>)` for every named ruleset the program mentions. egglog requires the
+declaration before a rule may join one or a schedule may run one; the unnamed ruleset is
+declared already, so a program that uses only that one emits nothing here. -/
+def Program.rulesetDecls (p : Program) : List String :=
+  ((p.filterMap fun c => match c with
+    | .rule r => some r.ruleset
+    | .run R => some R
+    | .saturate R => some R
+    | _ => none).filter (· ≠ "")).dedup.map fun R => "(ruleset " ++ R ++ ")"
+
 /-- The program as a complete `.egg` file, ending in the `(print-size)` that the
 comparison reads. -/
 def Program.toEgg (p : Program) : String :=
   String.intercalate "\n"
-    (p.eggHeader :: (p.map Cmd.toEgg).filter (· ≠ "") ++ ["(print-size)", ""])
+    (p.eggHeader :: p.rulesetDecls ++ (p.map Cmd.toEgg).filter (· ≠ "")
+      ++ ["(print-size)", ""])
 
 /-- The row counts the interpreter predicts, one `name count` line per constructor, for
 diffing against egglog's `(print-size)`. `STUCK` if the program does not run, which for a

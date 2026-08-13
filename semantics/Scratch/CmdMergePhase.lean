@@ -123,7 +123,7 @@ old effect: every state it adds is one the *preceding* merge phase already reach
 theorem ruleStep_iff {db db' : Database} {r : Rule} :
     CmdStep db (.rule r) db' ↔
       ∃ d, MergeClosure db d ∧ db' = { d with rules := insert r db.rules } := by
-  simpa [CmdStep, cmdEffect] using
+  simpa [CmdStep, cmdReach, cmdEffect] using
     mergeClosure_setRules (db := db) (db' := db') (R := insert r db.rules)
 
 /-! ### `.decl` is neutral once `MergeDeclared` is asked
@@ -717,23 +717,38 @@ theorem declStep_iff {db db' : Database} {f : FnName} {fd : FnDecl} (hf : db.sig
     (hsmd : SigMergeDeclared db.sig) (hwf : db.WF) (hdt : db.DeclaredTerms) :
     CmdStep db (.decl f fd) db' ↔
       ∃ d, MergeClosure db d ∧ db' = { d with sig := Function.update db.sig f (some fd) } := by
-  simpa [CmdStep, cmdEffect] using
+  simpa [CmdStep, cmdReach, cmdEffect] using
     mergeClosure_setSig (fd := fd) hf hsmd (avoids_of_declaredTerms hf hwf hdt)
 
 /-! #### `Program.MergeDeclared` supplies `declStep_iff`'s hypothesis -/
+
+theorem runReach_sig {R : RulesetName} {db d : Database}
+    (h : Relation.ReflTransGen (RunStep R) db d) : d.sig = db.sig := by
+  induction h with
+  | refl => rfl
+  | @tail x y _ hstep ih =>
+      have hx : (RunRules R x).sig = x.sig := rfl
+      rw [mergeClosure_sig hstep, hx, ih]
 
 theorem cmdEffect_sig {db d : Database} {c : Cmd} (h : cmdEffect db c = some d) :
     d.sig = c.sigBind db.sig := by
   cases c with
   | action a => rw [cmdEffect] at h; rw [evalAction_sig h]; rfl
   | rule r => rw [cmdEffect] at h; rw [← Option.some.inj h]; rfl
-  | run => rw [cmdEffect] at h; rw [← Option.some.inj h]; rfl
+  | run R => rw [cmdEffect] at h; rw [← Option.some.inj h]; rfl
+  | saturate R => exact absurd h (by simp [cmdEffect])
   | decl g d' => rw [cmdEffect] at h; rw [← Option.some.inj h]; rfl
+
+theorem cmdReach_sig {db d : Database} {c : Cmd} (h : cmdReach db c d) :
+    d.sig = c.sigBind db.sig := by
+  cases c with
+  | saturate R => exact runReach_sig (show SaturateReach R db d from h).1
+  | _ => exact cmdEffect_sig h
 
 theorem cmdStep_sig {db d : Database} {c : Cmd} (h : CmdStep db c d) :
     d.sig = c.sigBind db.sig := by
   obtain ⟨x, hx, hcl⟩ := h
-  rw [mergeClosure_sig hcl, cmdEffect_sig hx]
+  rw [mergeClosure_sig hcl, cmdReach_sig hx]
 
 theorem cmdStep_sigMergeDeclared {db d : Database} {c : Cmd} (hsmd : SigMergeDeclared db.sig)
     (hc : c.MergeDeclared db.sig) (h : CmdStep db c d) : SigMergeDeclared d.sig := by
@@ -741,7 +756,8 @@ theorem cmdStep_sigMergeDeclared {db d : Database} {c : Cmd} (hsmd : SigMergeDec
   cases c with
   | action a => exact hsmd
   | rule r => exact hsmd
-  | run => exact hsmd
+  | run R => exact hsmd
+  | saturate R => exact hsmd
   | decl g d' => exact sigMergeDeclared_decl hsmd hc
 
 /-- Every state a checked program reaches satisfies the invariant, so `declStep_iff` covers

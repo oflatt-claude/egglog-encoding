@@ -120,7 +120,7 @@ theorem evalLocalActions_isSome_of_scoped {db : Database} {Γ : Scope}
 `Cmd.sigBind` is what the signature half of the invariant is: a command leaves the
 signature `Program.Evaluable` checks the rest of the program against. -/
 theorem cmdStep_of_scoped {db : Database} {Γ : Scope} (hm : Γ.Models db.env)
-    {c : Cmd} (h : c.Scoped Γ) (he : c.Evaluable db.sig) :
+    {c : Cmd} (hns : c.NoSaturate) (h : c.Scoped Γ) (he : c.Evaluable db.sig) :
     ∃ db', CmdStep db c db' ∧ (c.bind Γ).Models db'.env ∧
       db'.sig = c.sigBind db.sig := by
   cases c with
@@ -128,17 +128,20 @@ theorem cmdStep_of_scoped {db : Database} {Γ : Scope} (hm : Γ.Models db.env)
     obtain ⟨db', hv, hm'⟩ := evalAction_isSome_of_scoped hm h he
     exact ⟨db', ⟨db', hv, Relation.ReflTransGen.refl⟩, hm', evalAction_sig hv⟩
   | rule r => exact ⟨_, ⟨_, rfl, Relation.ReflTransGen.refl⟩, hm, rfl⟩
-  | run => exact ⟨_, ⟨_, rfl, Relation.ReflTransGen.refl⟩, hm, rfl⟩
+  | run R => exact ⟨_, ⟨_, rfl, Relation.ReflTransGen.refl⟩, hm, rfl⟩
+  | saturate R => exact (hns : False).elim
   | decl f d => exact ⟨_, ⟨_, rfl, Relation.ReflTransGen.refl⟩, hm, rfl⟩
 
 theorem programStep_of_scoped {db : Database} {Γ : Scope} (hm : Γ.Models db.env)
-    {p : Program} (h : Program.Scoped p Γ) (he : Program.Evaluable p db.sig) :
+    {p : Program} (hns : p.NoSaturate) (h : Program.Scoped p Γ)
+    (he : Program.Evaluable p db.sig) :
     ∃ db', ProgramStep db p db' ∧ (Program.bind p Γ).Models db'.env := by
   induction p generalizing db Γ with
   | nil => exact ⟨db, .nil, hm⟩
   | cons c cs ih =>
-    obtain ⟨db₁, h₁, hm₁, hs₁⟩ := cmdStep_of_scoped hm h.1 he.1
-    obtain ⟨db₂, h₂, hm₂⟩ := ih hm₁ h.2 (by rw [hs₁]; exact he.2)
+    obtain ⟨db₁, h₁, hm₁, hs₁⟩ := cmdStep_of_scoped hm (hns c List.mem_cons_self) h.1 he.1
+    obtain ⟨db₂, h₂, hm₂⟩ :=
+      ih hm₁ (fun c' hc' => hns c' (List.mem_cons_of_mem c hc')) h.2 (by rw [hs₁]; exact he.2)
     exact ⟨db₂, .cons h₁ h₂, hm₂⟩
 
 /-- A program whose variables are bound and whose applications all build runs to
@@ -151,11 +154,16 @@ the scope check would make "well-scoped" reject `(min 1 2)`, which egglog accept
 
 The merge phase is what stops this from being uniqueness as well: `CmdStep` may stop
 anywhere in `MergeClosure`. On the constructor fragment there is nothing to stop in, and
-`ProgramStep.det` says so. -/
-theorem programStep_isSome {p : Program} (h : WellScoped p)
+`ProgramStep.det` says so.
+
+`hns` is not removable: a `Cmd.saturate` reaches a state only if its ruleset *has* a
+fixpoint, and `(rule () ((f (g x))))` under a saturating run has none. Scope and
+evaluability are properties of the syntax and cannot see that, so the totality theorem is
+for the fragment whose round counts are written down. -/
+theorem programStep_isSome {p : Program} (hns : p.NoSaturate) (h : WellScoped p)
     (he : p.Evaluable Database.empty.sig) : ∃ db, ProgramStep Database.empty p db := by
   obtain ⟨db, hdb, _⟩ := programStep_of_scoped
-    (db := Database.empty) Scope.Models.empty h he
+    (db := Database.empty) Scope.Models.empty hns h he
   exact ⟨db, hdb⟩
 
 end Egglog

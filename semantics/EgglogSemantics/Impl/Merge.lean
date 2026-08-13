@@ -19,7 +19,10 @@ Two things differ from `Impl/Interp.lean`, both forced by the spec being *relati
 **The refinement weakens to reachability.** `exec_programStep` says the constructor
 interpreter reaches exactly the states the spec does, in both directions. Here the spec
 admits several, so only one direction survives: the interpreter's result is one the spec
-reaches. `Proofs/Merge.lean`'s `execM_contained` states what is available instead.
+reaches. `Proofs/Merge.lean`'s `execM_contained` states what is available instead, and it
+is confined to `Program.NoSaturate` — `execRunRules_contained` is a *containment*, so the
+interpreter settling does not witness a specification fixpoint, and that is what a
+`Cmd.saturate` would need.
 
 **The merge phase is a pass iterated to a fixpoint.** `mergeRound` is one pass — a rebuild, then
 each collision among the pre-pass rows fired once, structurally terminating — and `execCmdM` runs
@@ -451,9 +454,7 @@ def FDatabase.mergeRound (d : FDatabase) : FDatabase :=
 /-! ### Running -/
 /-- Whether a merge pass changed anything. Compares the decidable fields; `sig` is a
 function and `env`/`rules` a merge cannot touch. -/
-def FDatabase.settled (d : FDatabase) : Bool :=
-  let e := d.mergeRound
-  e.terms == d.terms && e.rows == d.rows && e.eqs == d.eqs
+def FDatabase.settled (d : FDatabase) : Bool := d.sameData d.mergeRound
 
 /-- Merge saturation, for the record. Takes a **termination witness**, not fuel: being
 undefined for a signature whose merges diverge is what egglog does too, where fuel would
@@ -504,19 +505,33 @@ already resolves primitives in a row atom's operands, because `Expr.eval` does; 
 `execRunRules` already reads every rule off the pre-state, which is where the merge phase
 must *not* be — egglog defers it until every rule has been searched, so no rule sees
 another's merged value within a round. -/
-/-- `CmdStep`, computed.
-
-Both `.action` and `.run` end in a merge phase, which is egglog's shape and not a choice:
-top-level actions go through the same staging path as a rule head, so **each top-level
-`set` is its own merge phase** (`src/lib.rs:1490-1512`). Without that, the three top-level
-`set`s of a difftest case would collide only at the next `(run)`.
+/-- One round of `R`: rule firing, then a merge phase run to a fixpoint. `Spec/Step.lean`'s
+`RunStep`, computed.
 
 The phase runs to a **fixpoint**, as `merge_all` does, which is only possible because the
 implementation deletes the rows it merged — `mergeRound`'s docstring has that argument. -/
+def FDatabase.runRoundM (R : RulesetName) (d : FDatabase) : Option FDatabase :=
+  FDatabase.mergeSaturateF mergeFuel (execRunRules R d)
+
+/-- Rounds of `R` until nothing changes: `Impl/Interp.lean`'s `runSaturateF` with a merge
+phase inside each round. Two ways to fail — the merge phase of a round diverges, or the
+rounds do. -/
+def FDatabase.runSaturateM (R : RulesetName) : Nat → FDatabase → Option FDatabase
+  | 0, d => (d.runRoundM R).bind fun e => if d.sameData e then some d else none
+  | n + 1, d => (d.runRoundM R).bind fun e =>
+      if d.sameData e then some d else FDatabase.runSaturateM R n e
+
+/-- `CmdStep`, computed.
+
+Both `.action` and a run end in a merge phase, which is egglog's shape and not a choice:
+top-level actions go through the same staging path as a rule head, so **each top-level
+`set` is its own merge phase** (`src/lib.rs:1490-1512`). Without that, the three top-level
+`set`s of a difftest case would collide only at the next `(run 1)`. -/
 def FDatabase.execCmdM (d : FDatabase) : Cmd → Option FDatabase
   | .action a => (execAction d a).bind (FDatabase.mergeSaturateF mergeFuel)
   | .rule r => some { d with rules := r :: d.rules }
-  | .run => FDatabase.mergeSaturateF mergeFuel (execRunRules d)
+  | .run R => d.runRoundM R
+  | .saturate R => d.runSaturateM R runFuel
   | .decl f dc => some { d with sig := Function.update d.sig f (some dc) }
 
 /-- `ProgramStep`, computed. -/

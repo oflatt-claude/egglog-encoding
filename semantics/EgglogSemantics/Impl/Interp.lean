@@ -354,14 +354,57 @@ def fireInto (d : FDatabase) (r : Rule) (acc : FDatabase) (σ : Env) : FDatabase
 def fireRule (d : FDatabase) (acc : FDatabase) (r : Rule) : FDatabase :=
   (matchQuery d r.query).foldl (fireInto d r) acc
 
-/-- One round: every rule on every matching substitution, all read off the pre-state. -/
-def execRunRules (d : FDatabase) : FDatabase := d.rules.foldl (fireRule d) d
+/-- One round of the ruleset `R`: every rule *of `R`* on every matching substitution, all
+read off the pre-state. -/
+def execRunRules (R : RulesetName) (d : FDatabase) : FDatabase :=
+  (d.rules.filter fun r => r.ruleset == R).foldl (fireRule d) d
+
+/-- Whether two states agree on the fields a round can change. `sig` is a function, and
+`env`/`rules` no round touches. -/
+def FDatabase.sameData (d e : FDatabase) : Bool :=
+  e.terms == d.terms && e.rows == d.rows && e.eqs == d.eqs
+
+/-- Rounds of `R`, as a relation to descend: `x` is the round after `y`, and `y` had not
+settled. It is well founded at `d` exactly when `R` saturates from `d`. -/
+def FDatabase.RunRel (R : RulesetName) (x y : FDatabase) : Prop :=
+  execRunRules R y = x ∧ ¬ y.sameData (execRunRules R y) = true
+
+/-- Rounds of `R` until nothing changes. Takes a **termination witness**, not fuel, so it is
+total on the states where the ruleset saturates and loses nothing — `Impl/Merge.lean`'s
+`mergeSaturate` pattern, one level up. `exec` runs `runSaturateF` instead, because no
+witness is available at runtime: whether a ruleset saturates at a given state is not
+something the caller can supply. -/
+def FDatabase.runSaturate (R : RulesetName) (d : FDatabase)
+    (h : Acc (FDatabase.RunRel R) d) : FDatabase :=
+  Acc.rec (motive := fun _ _ => FDatabase)
+    (fun x _ ih =>
+      if he : x.sameData (execRunRules R x) = true then x
+      else ih (execRunRules R x) ⟨rfl, he⟩) h
+
+/-- Rounds of `R` until nothing changes, bounded by fuel that **fails** rather than
+returning a prefix — `Impl/Merge.lean`'s `mergeSaturateF` pattern, one level up and for
+its reason: a ruleset that really does diverge makes the run `none`, which the difftest
+reports as a mismatch, rather than presenting a half-run state as a saturation.
+
+This is what `exec` runs, and `runSaturateF_eq_runSaturate` is the price: it agrees with
+`runSaturate` whenever it answers at all, and answers less often. -/
+def FDatabase.runSaturateF (R : RulesetName) : Nat → FDatabase → Option FDatabase
+  | 0, d => if d.sameData (execRunRules R d) then some d else none
+  | n + 1, d =>
+      if d.sameData (execRunRules R d) then some d
+      else FDatabase.runSaturateF R n (execRunRules R d)
+
+/-- Rounds a run allows before declaring a ruleset divergent. Unlike `mergeFuel` this
+bounds no structural quantity: rounds add terms rather than shrink a class, so a
+terminating ruleset can need arbitrarily many and `exec_programStep` has to say so. -/
+def runFuel : Nat := 64
 
 /-- `CmdStep`, computed. -/
 def execCmd (d : FDatabase) : Cmd → Option FDatabase
   | .action a => execAction d a
   | .rule r => some { d with rules := r :: d.rules }
-  | .run => some (execRunRules d)
+  | .run R => some (execRunRules R d)
+  | .saturate R => d.runSaturateF R runFuel
   | .decl f dc => some { d with sig := Function.update d.sig f (some dc) }
 
 /-- `ProgramStep`, computed. -/

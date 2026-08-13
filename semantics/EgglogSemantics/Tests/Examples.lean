@@ -1,4 +1,5 @@
 import EgglogSemantics.Impl.Check
+import EgglogSemantics.Impl.Merge
 import EgglogSemantics.Proofs.Interp
 
 /-!
@@ -56,19 +57,19 @@ example : ¬ WellScoped [.action (.letBind "v1" (eNum 2)), .action (.expr (.var 
   simp [WellScoped, Action.Scoped, Expr.IsApp]
 
 /-- Likewise for a query fact, where egglog answers `parse error: expected fact`. -/
-example : ¬ Rule.Scoped ⟨[.expr (.var "a")], []⟩ [] := by
+example : ¬ Rule.Scoped ⟨[.expr (.var "a")], [], ""⟩ [] := by
   simp [Pattern.Scoped, Expr.IsApp]
 
 /-- `(rule ((= v1 2)) ((cadd v1 v2)))` with no globals: `v2` is bound by neither the
 query nor the globals. -/
 example : ¬ Rule.Scoped
-    ⟨[.eq (.var "v1") (eNum 2)], [.expr (.app "cadd" [.var "v1", .var "v2"])]⟩ [] := by
+    ⟨[.eq (.var "v1") (eNum 2)], [.expr (.app "cadd" [.var "v1", .var "v2"])], ""⟩ [] := by
   simp [Pattern.Scoped, Action.Scoped, Expr.Scoped, Expr.IsApp, Query.bind, Pattern.vars,
     eNum]
 
 /-- The same rule with `v2` a global: it does scope. -/
 example : Rule.Scoped
-    ⟨[.eq (.var "v1") (eNum 2)], [.expr (.app "cadd" [.var "v1", .var "v2"])]⟩ ["v2"] := by
+    ⟨[.eq (.var "v1") (eNum 2)], [.expr (.app "cadd" [.var "v1", .var "v2"])], ""⟩ ["v2"] := by
   simp [Rule.Scoped, Pattern.Scoped, Actions.Scoped, Action.Scoped, Expr.Scoped,
     Expr.IsApp, Query.bind, Pattern.vars, eNum]
 
@@ -275,10 +276,11 @@ private def add21 : Term := .app "Add" [num 2, num 1]
 private def swapRule : Rule where
   query := [.expr (.app "Add" [.var "a", .var "b"])]
   actions := [.expr (.app "Add" [.var "b", .var "a"])]
+  ruleset := ""
 
 private def ruleProgram : Program :=
   [.decl "Add" (ctorDecl 2), .action (.expr (.app "Add" [eNum 1, eNum 2])),
-   .rule swapRule, .run]
+   .rule swapRule, .run ""]
 
 example : WellScoped ruleProgram := by
   simp [WellScoped, ruleProgram, Action.Scoped, Expr.Scoped, Expr.IsApp, Cmd.bind,
@@ -306,7 +308,7 @@ private theorem preRun_step : ProgramStep Database.empty
   tauto
 
 private theorem ruleProgram_step :
-    ProgramStep Database.empty ruleProgram (RunRules preRun) :=
+    ProgramStep Database.empty ruleProgram (RunRules "" preRun) :=
   preRun_step.append (.cons ⟨_, rfl, .refl⟩ .nil)
 
 /-- The one firing of the rule: `a ↦ 1`, `b ↦ 2`, witnessed by `(Add 1 2)` itself. -/
@@ -332,9 +334,10 @@ private theorem swap_fires :
 
 /-- `(Add 2 1)` is in the database after the run. -/
 example : ∃ db, ProgramStep Database.empty ruleProgram db ∧ add21 ∈ db.terms := by
-  refine ⟨RunRules preRun, ruleProgram_step, ?_⟩
-  have hmem : preRun.addTerm add21 ∈ {d | ∃ r ∈ preRun.rules, d ∈ RuleResults preRun r} :=
-    ⟨swapRule, by simp [preRun], _, swap_matches, swap_fires⟩
+  refine ⟨RunRules "" preRun, ruleProgram_step, ?_⟩
+  have hmem : preRun.addTerm add21 ∈
+      {d | ∃ r ∈ preRun.rules, r.ruleset = "" ∧ d ∈ RuleResults preRun r} :=
+    ⟨swapRule, by simp [preRun], rfl, _, swap_matches, swap_fires⟩
   rw [RunRules, Database.sUnion_terms]
   exact Or.inr (Set.mem_biUnion hmem (Database.mem_addTerm _ _))
 
@@ -414,11 +417,13 @@ holds, not because that term was ever built — the witness mechanism, end to en
 private def commuteRule : Rule where
   query := [.expr (.app "Add" [.var "a", .var "b"])]
   actions := [.union (.app "Add" [.var "a", .var "b"]) (.app "Add" [.var "b", .var "a"])]
+  ruleset := ""
 
 private def detectRule : Rule where
   query := [.eq (.app "Wrapper" [.app "Add" [eNum 1, eNum 2]])
                 (.app "Wrapper" [.app "Add" [eNum 2, eNum 1]])]
   actions := [.expr (.app "success" [])]
+  ruleset := ""
 
 private def wrapperDecls : Program :=
   [.decl "Add" (ctorDecl 2), .decl "Wrapper" (ctorDecl 1), .decl "success" (ctorDecl 0)]
@@ -426,7 +431,7 @@ private def wrapperDecls : Program :=
 private def wrapperProgram : Program :=
   wrapperDecls ++
     [.action (.expr (.app "Wrapper" [.app "Add" [eNum 1, eNum 2]])),
-     .rule commuteRule, .rule detectRule, .run, .run]
+     .rule commuteRule, .rule detectRule, .run "", .run ""]
 
 #guard (exec wrapperProgram).map (fun d => decide (Term.app "success" [] ∈ d.terms))
   = some true
@@ -434,7 +439,7 @@ private def wrapperProgram : Program :=
 /- One round is not enough: the union has to happen before the second rule can match. -/
 #guard (exec (wrapperDecls ++
     [.action (.expr (.app "Wrapper" [.app "Add" [eNum 1, eNum 2]])),
-     .rule commuteRule, .rule detectRule, .run])).map
+     .rule commuteRule, .rule detectRule, .run ""])).map
   (fun d => decide (Term.app "success" [] ∈ d.terms)) = some false
 
 #guard (exec wrapperProgram).map (fun d => d.rowCounts ["Add", "Wrapper", "success"])
@@ -470,8 +475,8 @@ private def accepts (d : FnDecl) (cs : List Cmd) : Bool := (prog d cs).arityOk e
 /-! ### One value column -/
 
 #guard accepts one [.action (.set "Dist" [A] [eNum 3])]
-#guard accepts one [.rule ⟨[.expr (.app "Dist" [.var "k"])], []⟩]
-#guard accepts one [.rule ⟨[.eq (eNum 3) (.app "Dist" [.var "k"])], []⟩]
+#guard accepts one [.rule ⟨[.expr (.app "Dist" [.var "k"])], [], ""⟩]
+#guard accepts one [.rule ⟨[.eq (eNum 3) (.app "Dist" [.var "k"])], [], ""⟩]
 #guard accepts one [.action (.letBind "x" (.app "Dist" [A]))]
 
 /- "Arity mismatch, expected 1 args: (Dist @A @A1)" — too many key columns. -/
@@ -485,15 +490,15 @@ flattens to three columns where the table has two. -/
 `Expr.eval` does not look up. `Tests/Egg.lean` renders it `(= v (Dist k))`: writing
 `(= (values v) (Dist k))` instead is "Unbound function values", because `values` is
 recognized only for a tuple output. -/
-#guard accepts one [.rule ⟨[.values [.var "v"] "Dist" [.var "k"]], []⟩]
+#guard accepts one [.rule ⟨[.values [.var "v"] "Dist" [.var "k"]], [], ""⟩]
 
 /- "Arity mismatch, expected 1 args: (Dist a b)" — in a query fact too. -/
-#guard !accepts one [.rule ⟨[.expr (.app "Dist" [.var "a", .var "b"])], []⟩]
+#guard !accepts one [.rule ⟨[.expr (.app "Dist" [.var "a", .var "b"])], [], ""⟩]
 
 /-! ### Two value columns -/
 
 #guard accepts two [.action (.set "Dist" [A] [eNum 3, eNum 4])]
-#guard accepts two [.rule ⟨[.values [.var "v", .var "w"] "Dist" [.var "k"]], []⟩]
+#guard accepts two [.rule ⟨[.values [.var "v", .var "w"] "Dist" [.var "k"]], [], ""⟩]
 
 /- "Arity mismatch, expected 2 args: (Dist @A)" — a bare value on a two-column table. -/
 #guard !accepts two [.action (.set "Dist" [A] [eNum 3])]
@@ -504,11 +509,11 @@ evaluated as an expression: only one output variable is appended. -/
 
 /- "Arity mismatch, expected 2 args: (Dist k)" — nor read as a bare query fact, for the
 same reason. A read of any width is `Pattern.values`. -/
-#guard !accepts two [.rule ⟨[.expr (.app "Dist" [.var "k"])], []⟩]
+#guard !accepts two [.rule ⟨[.expr (.app "Dist" [.var "k"])], [], ""⟩]
 
 /- "Arity mismatch, expected 2 args: (Dist k v)" — the destructure binds every value
 column or none. -/
-#guard !accepts two [.rule ⟨[.values [.var "v"] "Dist" [.var "k"]], []⟩]
+#guard !accepts two [.rule ⟨[.values [.var "v"] "Dist" [.var "k"]], [], ""⟩]
 
 /-! ### The declaration itself -/
 
@@ -581,15 +586,15 @@ private def ok (cs : List Cmd) : Bool := (decls ++ cs).noLookup emptySig
 
 /- "Value lookup of non-constructor function function in rule is disallowed." -/
 #guard !ok [.rule ⟨[.values [.var "v"] "Dist" [.var "k"]],
-                   [.set "Copy" [.var "k"] [.app "Dist" [.var "k"]]]⟩]
+                   [.set "Copy" [.var "k"] [.app "Dist" [.var "k"]]], ""⟩]
 
 /- The same read nested inside a constructor application, and inside a `union`. -/
-#guard !ok [.rule ⟨[], [.expr (.app "F" [.app "Dist" [A]])]⟩]
-#guard !ok [.rule ⟨[], [.union (.app "Dist" [A]) A]⟩]
+#guard !ok [.rule ⟨[], [.expr (.app "F" [.app "Dist" [A]])], ""⟩]
+#guard !ok [.rule ⟨[], [.union (.app "Dist" [A]) A], ""⟩]
 
 /- The query binds the value and the head only writes: this is the shape egglog wants. -/
 #guard ok [.rule ⟨[.values [.var "v"] "Dist" [.var "k"]],
-                  [.set "Copy" [.var "k"] [.var "v"]]⟩]
+                  [.set "Copy" [.var "k"] [.var "v"]], ""⟩]
 
 /-! ### Positions where egglog is more permissive
 
@@ -610,8 +615,8 @@ to `Pattern.values` and so what removes `Expr.eval`'s `lookup` constructor. -/
 
 /- A read nested in a query fact. egglog flattens `(F (Dist k))` into the two atoms
 `Dist(k, v), F(v, o)`; this model has no flattening pass, so it must be written flat. -/
-#guard !ok [.rule ⟨[.expr (.app "F" [.app "Dist" [.var "k"]])], []⟩]
-#guard ok [.rule ⟨[.values [.var "v"] "Dist" [.var "k"], .expr (.app "F" [.var "v"])], []⟩]
+#guard !ok [.rule ⟨[.expr (.app "F" [.app "Dist" [.var "k"]])], [], ""⟩]
+#guard ok [.rule ⟨[.values [.var "v"] "Dist" [.var "k"], .expr (.app "F" [.var "v"])], [], ""⟩]
 
 /-! ### What still passes
 
@@ -627,5 +632,67 @@ body computing `(min old new)` is fine, and a body writing its own table is a wr
                     [.app "min" [.var "old", .var "new"]]) }] emptySig
 
 end Reading
+
+/-! ## A saturating run, executed
+
+`ENCODING.md` finding 1 was that appending `(run)`s cannot make the encoding's rebuild
+schedule saturate, because the number of rounds needed grows with the data. Here is a
+ruleset with exactly that property — the transitive closure of an entry table, which is the
+shape the rebuild rules have — and the demonstration that `Cmd.run` does not reach its
+fixpoint while `Cmd.saturate` does.
+
+An entry table rather than a constructor on purpose: `Cong` is a full congruence closure,
+so over *constructors* one round already propagates to any depth. The encoding's `@UF` and
+`@fView` are `:merge` functions for the same reason — congruence there is simulated, not
+built in — so this is the fragment the rebuild schedule actually runs in, and `execM` is
+the interpreter for it. -/
+namespace Saturating
+set_option linter.hashCommand false
+
+/-- A node. -/
+private def N (i : Int) : Expr := .app "N" [.lit (.int i)]
+
+private def one : Expr := .lit (.int 1)
+
+/-- The edge table `E(x, y) ↦ 1`. A `:merge` function whose collisions never conflict:
+every edge carries the same value, so the merge phase is inert and only the rounds show. -/
+private def edgeDecl : FnDecl :=
+  { arity := 2, outArity := 1, merge := some (.merge [] [.var "new"]) }
+
+/-- Transitive closure: `E(a,b)` and `E(b,c)` give `E(a,c)`. Over a path of `n` edges this
+needs `⌈log₂ n⌉` rounds, and that count is a function of the data, not of the program. -/
+private def trans : Rule where
+  query := [.values [one] "E" [.var "a", .var "b"],
+            .values [one] "E" [.var "b", .var "c"]]
+  actions := [.set "E" [.var "a", .var "c"] [one]]
+  ruleset := "@tc"
+
+/-- Declarations, the path `N0 → N1 → N2 → N3`, the rule, then whatever `cs` runs. -/
+private def path (cs : Program) : Program :=
+  [.decl "N" (ctorDecl 1), .decl "E" edgeDecl] ++
+  ((List.range 3).map fun i => Cmd.action (.set "E" [N i, N (i + 1)] [one])) ++
+  [.rule trans] ++ cs
+
+/-- Key classes of `E`: three to start with, six at the transitive closure. -/
+private def edges (p : Program) : Option Nat := (execM p).map fun d => d.keyRowCount "E"
+
+/- The three edges of the path. -/
+#guard edges (path []) = some 3
+
+/- **One round is not enough**: it finds `0→2` and `1→3`, but not `0→3`. -/
+#guard edges (path [.run "@tc"]) = some 5
+
+/- Two rounds reach it — and "two" is a function of the path length, which is exactly why
+appending `(run)`s is not a repair. -/
+#guard edges (path [.run "@tc", .run "@tc"]) = some 6
+
+/- **`Cmd.saturate` reaches it in one command**, whatever the path length. -/
+#guard edges (path [.saturate "@tc"]) = some 6
+
+/- And the ruleset is respected: a run of the *unnamed* ruleset does not fire `@tc`'s rule.
+That is what keeps the encoding's maintenance rules out of the source program's rounds. -/
+#guard edges (path [.run ""]) = some 3
+
+end Saturating
 
 end Egglog.Examples

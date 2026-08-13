@@ -101,7 +101,8 @@ installs, so it may write the function's own table. -/
 def Cmd.arityOk : Cmd → Signature → Bool
   | .action a, sig => a.arityOk sig
   | .rule r, sig => r.arityOk sig
-  | .run, _ => true
+  | .run _, _ => true
+  | .saturate _, _ => true
   | .decl f d, sig => d.arityOk ((Cmd.decl f d).sigBind sig)
 
 /-- `Program.SetLegal`'s shape: each command against the signature the earlier ones
@@ -200,7 +201,8 @@ lookup like any other. -/
 def Cmd.noLookup : Cmd → Signature → Bool
   | .action a, sig => a.noLookup sig
   | .rule r, sig => r.noLookup sig
-  | .run, _ => true
+  | .run _, _ => true
+  | .saturate _, _ => true
   | .decl f d, sig =>
       match d.merge with
       | none => true

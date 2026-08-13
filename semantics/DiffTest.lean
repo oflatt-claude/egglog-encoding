@@ -36,20 +36,24 @@ private def add (a b : Expr) : Expr := .app "Add" [a, b]
 private def commuteRule : Rule where
   query := [.expr (add (.var "a") (.var "b"))]
   actions := [.union (add (.var "a") (.var "b")) (add (.var "b") (.var "a"))]
+  ruleset := ""
 
 private def swapRule : Rule where
   query := [.expr (add (.var "a") (.var "b"))]
   actions := [.expr (add (.var "b") (.var "a"))]
+  ruleset := ""
 
 private def detectRule : Rule where
   query := [.eq (.app "Wrapper" [add (C "One") (C "Two")])
                 (.app "Wrapper" [add (C "Two") (C "One")])]
   actions := [.expr (.app "Success" [])]
+  ruleset := ""
 
 private def assocRule : Rule where
   query := [.expr (add (add (.var "a") (.var "b")) (.var "c"))]
   actions := [.union (add (add (.var "a") (.var "b")) (.var "c"))
                      (add (.var "a") (add (.var "b") (.var "c")))]
+  ruleset := ""
 
 private def curated : List (String × Program) :=
   [ ("actions",
@@ -57,26 +61,41 @@ private def curated : List (String × Program) :=
        .action (.union (C "One") (C "One")),
        .action (.letBind "$g" (add (C "Two") (C "Three"))),
        .action (.expr (.app "Wrapper" [.var "$g"]))]),
-    ("swap-1", [.action (.expr (add (C "One") (C "Two"))), .rule swapRule, .run]),
-    ("swap-2", [.action (.expr (add (C "One") (C "Two"))), .rule swapRule, .run, .run]),
+    ("swap-1", [.action (.expr (add (C "One") (C "Two"))), .rule swapRule, .run ""]),
+    ("swap-2", [.action (.expr (add (C "One") (C "Two"))), .rule swapRule, .run "", .run ""]),
     ("wrapper-1",
       [.action (.expr (.app "Wrapper" [add (C "One") (C "Two")])),
-       .rule commuteRule, .rule detectRule, .run]),
+       .rule commuteRule, .rule detectRule, .run ""]),
     ("wrapper-2",
       [.action (.expr (.app "Wrapper" [add (C "One") (C "Two")])),
-       .rule commuteRule, .rule detectRule, .run, .run]),
+       .rule commuteRule, .rule detectRule, .run "", .run ""]),
     ("wrapper-3",
       [.action (.expr (.app "Wrapper" [add (C "One") (C "Two")])),
-       .rule commuteRule, .rule detectRule, .run, .run, .run]),
+       .rule commuteRule, .rule detectRule, .run "", .run "", .run ""]),
     ("assoc-1",
-      [.action (.expr (add (add (C "One") (C "Two")) (C "Three"))), .rule assocRule, .run]),
+      [.action (.expr (add (add (C "One") (C "Two")) (C "Three"))), .rule assocRule, .run ""]),
     ("assoc-2",
       [.action (.expr (add (add (C "One") (C "Two")) (C "Three"))),
-       .rule assocRule, .run, .run]),
+       .rule assocRule, .run "", .run ""]),
     ("both-2",
       [.action (.expr (add (add (C "One") (C "Two")) (C "Three"))),
-       .rule assocRule, .rule commuteRule, .run, .run]),
-    ("seed-2", [.rule ⟨[], [.expr (add (C "One") (C "Two"))]⟩, .run, .run]) ]
+       .rule assocRule, .rule commuteRule, .run "", .run ""]),
+    ("seed-2", [.rule ⟨[], [.expr (add (C "One") (C "Two"))], ""⟩, .run "", .run ""]) ]
+
+/-! **The emitted egglog is unchanged by rulesets.** Every case here names the *unnamed*
+ruleset, which a rule joins by writing no `:ruleset` and which `(run 1)` runs, so
+`Cmd.toEgg` and `Rule.toEgg` render exactly what they rendered before `Rule.ruleset` and
+`Cmd.run`'s argument existed, and `Program.rulesetDecls` adds no line. Pinned rather than
+argued: the whole suite compares against egglog byte for byte. -/
+set_option linter.hashCommand false in
+#guard Program.toEgg (Program.declared
+    [.action (.expr (add (C "One") (C "Two"))), .rule swapRule, .run "", .run ""])
+  = "(datatype Math (One) (Two) (Add Math Math))\n\
+     (Add (One) (Two))\n\
+     (rule ((Add a b)) ((Add b a)))\n\
+     (run 1)\n\
+     (run 1)\n\
+     (print-size)\n"
 
 /-! ### Random cases
 
@@ -207,17 +226,17 @@ private def genRule (src : Expr) (s : Nat) : Rule × Nat :=
   | 0 =>
     -- one pattern, head builds a term
     let (a, s) := genApp p.vars 2 s
-    (⟨[.expr p], [.expr a]⟩, s)
+    (⟨[.expr p], [.expr a], ""⟩, s)
   | 1 =>
     -- one pattern, head unions two terms; `union` operands may be bare variables
     let (a₁, s) := genOver p.vars 2 s
     let (a₂, s) := genOver p.vars 2 s
-    (⟨[.expr p], [.union a₁ a₂]⟩, s)
+    (⟨[.expr p], [.union a₁ a₂], ""⟩, s)
   | _ =>
     -- an equality body, so matching has to go through congruence
     let (q, s) := genPattern ["a", "b"] src s
     let (a, s) := genApp (p.vars ∪ q.vars) 2 s
-    (⟨[.eq p q], [.expr a]⟩, s)
+    (⟨[.eq p q], [.expr a], ""⟩, s)
 
 private def genProgram (s : Nat) : Program :=
   let (g₁, s) := genGround 2 s
@@ -230,7 +249,7 @@ private def genProgram (s : Nat) : Program :=
   -- Compare the rendered form, there being no decidable equality on `Rule`.
   let rules := if r₁.toEgg = r₂.toEgg then [Cmd.rule r₁] else [Cmd.rule r₁, Cmd.rule r₂]
   [.action (.expr g₁), .action (.expr g₂), .action (.expr g₃)] ++ rules
-    ++ List.replicate (rounds + 1) Cmd.run
+    ++ List.replicate (rounds + 1) (Cmd.run "")
 
 /-! ### `:merge` cases (M9)
 
@@ -314,6 +333,7 @@ head as well as from a top-level action. -/
 private def commuteDist : Rule where
   query := [.expr (.app "G" [.var "a", .var "b"])]
   actions := [.set "Dist" [.var "b", .var "a"] [num 9]]
+  ruleset := ""
 
 /-! ### Multi-column outputs
 
@@ -355,6 +375,7 @@ minimal repro. -/
 private def readPair : Rule where
   query := [.values [num 3, num 4] "Dist" [.var "k"]]
   actions := [.expr (.app "Hit" [.var "k"])]
+  ruleset := ""
 
 /-! ### Reading a `:merge` function from a rule body
 
@@ -381,11 +402,13 @@ unused, which is what a bare `(Dist k)` compiles to. -/
 private def readExists : Rule where
   query := [.values [.var "o"] "Dist" [.var "k"]]
   actions := [.expr (.app "Hit" [.var "k"])]
+  ruleset := ""
 
 /-- The value: fires only where the recorded output is `v`. -/
 private def readValue (v : Int) : Rule where
   query := [.values [num v] "Dist" [.var "k"]]
   actions := [.expr (.app "Hit" [.var "k"])]
+  ruleset := ""
 
 /-- `distPick` at two value columns: `(values old0 old1)` or `(values new0 new1)`. The one
 merge that is both **non-commutative** and **multi-column**, so it is the only shape in
@@ -399,6 +422,7 @@ private def distPickPair (n : Nat) (which : String) : FnDecl :=
 private def readStale : Rule where
   query := [.values [num 5, num 1] "Dist" [.var "k"]]
   actions := [.expr (.app "Hit" [.var "k"])]
+  ruleset := ""
 
 /-- Copy one merge function's value into another's row. The read is a query fact binding
 `v` and the head only writes, which is the only shape egglog accepts for a rule and the
@@ -406,6 +430,7 @@ only shape the model accepts anywhere. -/
 private def copyDist : Rule where
   query := [.values [.var "v"] "Dist" [.var "k"]]
   actions := [.set "Copy" [.var "k"] [.var "v"]]
+  ruleset := ""
 
 /-! ### Making a value observable through a row count
 
@@ -429,6 +454,7 @@ private def readIntoAt (hit f : FnName) (key : List Expr) (v : Int) (mark : List
     Rule where
   query := [.values [num v] f key]
   actions := [.expr (.app hit mark)]
+  ruleset := ""
 
 /-- `readIntoAt` marking with the key itself, which is ground, so the query costs one
 substitution and no enumeration. -/
@@ -439,6 +465,7 @@ private def readInto (hit f : FnName) (key : List Expr) (v : Int) : Rule :=
 private def readIntoW (hit f : FnName) (key : List Expr) (vs : List Int) : Rule where
   query := [.values (vs.map num) f key]
   actions := [.expr (.app hit key)]
+  ruleset := ""
 
 /-! ### Primitives outside a `:merge` body
 
@@ -575,12 +602,12 @@ private def curatedMerge : List (String × Program) :=
     ("min-rebuild",
       [.decl "Dist" (dist 2),
        mset "Dist" [C "X", C "Y"] 1, mset "Dist" [C "A", C "B"] 2,
-       .action (.union (C "A") (C "X")), .action (.union (C "B") (C "Y")), .run]),
+       .action (.union (C "A") (C "X")), .action (.union (C "B") (C "Y")), .run ""]),
     -- The same collapse, with `max`.
     ("max-rebuild",
       [.decl "Dist" (distMax 2),
        mset "Dist" [C "X", C "Y"] 1, mset "Dist" [C "A", C "B"] 2,
-       .action (.union (C "A") (C "X")), .action (.union (C "B") (C "Y")), .run]),
+       .action (.union (C "A") (C "X")), .action (.union (C "B") (C "Y")), .run ""]),
     -- A congruence-driven collapse: the keys become equal through `G`, not directly.
     ("min-congr",
       [.decl "Dist" (dist 1),
@@ -588,14 +615,14 @@ private def curatedMerge : List (String × Program) :=
        .action (.expr (.app "G" [C "X", C "Y"])),
        mset "Dist" [.app "G" [C "A", C "B"]] 4,
        mset "Dist" [.app "G" [C "X", C "Y"]] 6,
-       .action (.union (C "A") (C "X")), .action (.union (C "B") (C "Y")), .run]),
+       .action (.union (C "A") (C "X")), .action (.union (C "B") (C "Y")), .run ""]),
     -- A rule head writing a row, so the merge fires from a firing rather than an action.
     ("min-rule",
       [.decl "Dist" (dist 2),
        .action (.expr (.app "G" [C "A", C "B"])),
        .action (.expr (.app "G" [C "B", C "A"])),
        mset "Dist" [C "B", C "A"] 2,
-       .rule commuteDist, .run]),
+       .rule commuteDist, .run ""]),
     -- No merge fires at all: the declaration is inert, which the counts must show.
     ("min-inert",
       [.decl "Dist" (dist 1), .action (.expr (.app "F" [C "A"])),
@@ -608,7 +635,7 @@ private def curatedMerge : List (String × Program) :=
     ("max-block-rebuild",
       [.decl "Dist" (distBlock 2 "max"),
        mset "Dist" [C "X", C "Y"] 1, mset "Dist" [C "A", C "B"] 2,
-       .action (.union (C "A") (C "X")), .action (.union (C "B") (C "Y")), .run]),
+       .action (.union (C "A") (C "X")), .action (.union (C "B") (C "Y")), .run ""]),
     -- `:no-merge`, with keys kept distinct so no collision is ever attempted.
     ("nomerge-two",
       [.decl "Dist" (distNoMerge 2), .action (.expr (.app "F" [C "A"])),
@@ -626,56 +653,56 @@ private def curatedMerge : List (String × Program) :=
     -- columns. `Hit` is 1 iff the read bound the columns the `set` wrote.
     ("tuple-read",
       [.decl "Dist" (distPair 1), pset "Dist" [C "A"] 3 4, pset "Dist" [C "B"] 5 6,
-       .rule readPair, .run]),
+       .rule readPair, .run ""]),
     -- The destructure through congruent keys: `A` and `X` become one class, so the row
     -- written at `X` is readable at `A`.
     ("tuple-read-congr",
       [.decl "Dist" (distPair 1), pset "Dist" [C "X"] 3 4,
        .action (.expr (C "A")), .action (.union (C "A") (C "X")),
-       .rule readPair, .run]),
+       .rule readPair, .run ""]),
     -- A rule body *reading* a single-column `:merge` function: existence only.
     ("read-exists",
       [.decl "Dist" (dist 1), mset "Dist" [C "A"] 3, mset "Dist" [C "B"] 5,
-       .rule readExists, .run]),
+       .rule readExists, .run ""]),
     -- The same, reading the value, with the keys distinct so no merge fires.
     ("read-value",
       [.decl "Dist" (dist 1), mset "Dist" [C "A"] 3, mset "Dist" [C "B"] 5,
-       .rule (readValue 3), .run]),
+       .rule (readValue 3), .run ""]),
     -- **The acceptance test, single column.** `5` is merged away by `min`, so egglog's
     -- table no longer holds it and the rule must not fire.
     ("read-stale",
       [.decl "Dist" (dist 1), mset "Dist" [C "A"] 5, mset "Dist" [C "A"] 3,
-       .rule (readValue 5), .run]),
+       .rule (readValue 5), .run ""]),
     -- **The acceptance test, two columns.** The repro that was recorded in `MERGE.md` as
     -- a known divergence: egglog says `Hit 0`, and an append-only implementation says
     -- `Hit 1` because the superseded row is still readable.
     ("tuple-stale",
       [.decl "Dist" (distPair 1), pset "Dist" [C "A"] 5 1, pset "Dist" [C "A"] 3 7,
-       .rule readStale, .run]),
+       .rule readStale, .run ""]),
     -- A single-column read through *congruent* keys: the row is written at `X`, read at
     -- `A`. `tuple-read-congr` covers the two-column case; this is the one-column one, and
     -- both reach `patternHolds`'s row scan through its key-congruence test.
     ("read-congr",
       [.decl "Dist" (dist 1), mset "Dist" [C "X"] 3,
        .action (.expr (C "A")), .action (.union (C "A") (C "X")),
-       .rule readExists, .run]),
+       .rule readExists, .run ""]),
     -- The same, reading the value rather than only its existence.
     ("read-value-congr",
       [.decl "Dist" (dist 1), mset "Dist" [C "X"] 3,
        .action (.expr (C "A")), .action (.union (C "A") (C "X")),
-       .rule (readValue 3), .run]),
+       .rule (readValue 3), .run ""]),
     -- Reading a `:no-merge` function. A row atom reads any declared function, so
     -- `:no-merge` is readable too, and `nomerge-two` only ever writes one.
     ("read-nomerge",
       [.decl "Dist" (distNoMerge 1), mset "Dist" [C "A"] 3, mset "Dist" [C "B"] 5,
-       .rule (readValue 3), .run]),
+       .rule (readValue 3), .run ""]),
     -- Copying one merge function's value into another's row, which is what `read-copy`
     -- used to do from a top-level action. All reading happens in the query, so the read is
     -- `(= v (Dist k))` and the head only writes — the shape egglog requires of a rule and
     -- the model now requires everywhere (`Impl/Check.lean`, "Reading in an action").
     ("read-copy",
       [.decl "Dist" (dist 1), .decl "Copy" (dist 1), mset "Dist" [C "A"] 3,
-       .rule copyDist, .run,
+       .rule copyDist, .run "",
        .action (.expr (.app "F" [C "A"]))]),
     -- **The `old`/`new` cases.** `(print-size)` cannot see a value, so each reads back the
     -- value egglog keeps: `Hit` is 1 exactly when the surviving output is that one. These
@@ -684,39 +711,39 @@ private def curatedMerge : List (String × Program) :=
     -- Three writes at one key: egglog keeps the first, `5`.
     ("old-three",
       [.decl "Dist" (distPick 1 "old"), mset "Dist" [C "A"] 5, mset "Dist" [C "A"] 3,
-       mset "Dist" [C "A"] 7, .rule (readValue 5), .run]),
+       mset "Dist" [C "A"] 7, .rule (readValue 5), .run ""]),
     -- The same, keeping the last, `7`.
     ("new-three",
       [.decl "Dist" (distPick 1 "new"), mset "Dist" [C "A"] 5, mset "Dist" [C "A"] 3,
-       mset "Dist" [C "A"] 7, .rule (readValue 7), .run]),
+       mset "Dist" [C "A"] 7, .rule (readValue 7), .run ""]),
     -- Rebuild-driven: the collision arrives with the `union`, not with the `set`.
     ("old-rebuild",
       [.decl "Dist" (distPick 1 "old"), mset "Dist" [C "A"] 1, mset "Dist" [C "B"] 2,
-       .action (.union (C "A") (C "B")), .rule (readValue 1), .run]),
+       .action (.union (C "A") (C "B")), .rule (readValue 1), .run ""]),
     ("new-rebuild",
       [.decl "Dist" (distPick 1 "new"), mset "Dist" [C "A"] 1, mset "Dist" [C "B"] 2,
-       .action (.union (C "A") (C "B")), .rule (readValue 2), .run]),
+       .action (.union (C "A") (C "B")), .rule (readValue 2), .run ""]),
     -- Rule-head-driven, over two rounds: the head writes `9`, and the second round's read
     -- sees it only under `:merge new`. `Hit` is 0 in the `old` case, in both engines.
     ("old-rule",
       [.decl "Dist" (distPick 1 "old"), mset "Dist" [C "A"] 4,
-       .rule ⟨[.expr (C "A")], [.set "Dist" [C "A"] [num 9]]⟩,
-       .rule (readValue 9), .run, .run]),
+       .rule ⟨[.expr (C "A")], [.set "Dist" [C "A"] [num 9]], ""⟩,
+       .rule (readValue 9), .run "", .run ""]),
     ("new-rule",
       [.decl "Dist" (distPick 1 "new"), mset "Dist" [C "A"] 4,
-       .rule ⟨[.expr (C "A")], [.set "Dist" [C "A"] [num 9]]⟩,
-       .rule (readValue 9), .run, .run]),
+       .rule ⟨[.expr (C "A")], [.set "Dist" [C "A"] [num 9]], ""⟩,
+       .rule (readValue 9), .run "", .run ""]),
     -- Three rows in one key class, reached by two unions. This is the shape that says the
     -- survivor of a collision keeps the *older* row's place: merge the first two and the
     -- result must still count as older than the third.
     ("old-threeway",
       [.decl "Dist" (distPick 1 "old"), mset "Dist" [C "X"] 1, mset "Dist" [C "Y"] 2,
        mset "Dist" [C "Z"] 3, .action (.union (C "X") (C "Y")),
-       .action (.union (C "Y") (C "Z")), .rule (readValue 1), .run]),
+       .action (.union (C "Y") (C "Z")), .rule (readValue 1), .run ""]),
     ("new-threeway",
       [.decl "Dist" (distPick 1 "new"), mset "Dist" [C "X"] 1, mset "Dist" [C "Y"] 2,
        mset "Dist" [C "Z"] 3, .action (.union (C "X") (C "Y")),
-       .action (.union (C "Y") (C "Z")), .rule (readValue 3), .run]),
+       .action (.union (C "Y") (C "Z")), .rule (readValue 3), .run ""]),
     -- **`old` is the row at the canonical key, not the row written first.** Every case
     -- above writes the younger row at the younger key, where the two readings agree.
     -- These separate them: a bare `(A)` creates `A` before `K`, so `A` is the *older*
@@ -727,13 +754,13 @@ private def curatedMerge : List (String × Program) :=
        mset "Dist" [C "K"] 3, mset "Dist" [C "A"] 2,
        .action (.union (C "A") (C "K")),
        .rule (readInto "Hit" "Dist" [C "A"] 2), .rule (readInto "Miss" "Dist" [C "A"] 3),
-       .run]),
+       .run ""]),
     ("canon-new",
       [.decl "Dist" (distPick 1 "new"), .action (.expr (C "A")),
        mset "Dist" [C "K"] 3, mset "Dist" [C "A"] 2,
        .action (.union (C "A") (C "K")),
        .rule (readInto "Hit" "Dist" [C "A"] 3), .rule (readInto "Miss" "Dist" [C "A"] 2),
-       .run]),
+       .run ""]),
     -- The same, with the two keys created as the **arguments of one term** rather than by
     -- separate commands. egglog builds an application's arguments left to right, so `(P
     -- (K) (A))` makes `K` canonical and `(P (A) (K))` makes `A` canonical, and the pair
@@ -743,13 +770,13 @@ private def curatedMerge : List (String × Program) :=
        mset "Dist" [C "K"] 3, mset "Dist" [C "A"] 2,
        .action (.union (C "A") (C "K")),
        .rule (readInto "Hit" "Dist" [C "A"] 2), .rule (readInto "Miss" "Dist" [C "A"] 3),
-       .run]),
+       .run ""]),
     ("canon-arg-right",
       [.decl "Dist" (distPick 1 "new"), .action (.expr (.app "P" [C "A", C "K"])),
        mset "Dist" [C "K"] 3, mset "Dist" [C "A"] 2,
        .action (.union (C "A") (C "K")),
        .rule (readInto "Hit" "Dist" [C "A"] 3), .rule (readInto "Miss" "Dist" [C "A"] 2),
-       .run]),
+       .run ""]),
     -- **Neither key canonical**, so canonicity decides nothing and age is the tie-break:
     -- `Z` is created first and carries no row, both `Dist` rows move to it, and egglog
     -- stages them in table order — the earlier write is the one the other is merged onto.
@@ -759,13 +786,13 @@ private def curatedMerge : List (String × Program) :=
        mset "Dist" [C "K"] 3, mset "Dist" [C "A"] 2,
        .action (.union (C "K") (C "Z")), .action (.union (C "A") (C "Z")),
        .rule (readInto "Hit" "Dist" [C "Z"] 3), .rule (readInto "Miss" "Dist" [C "Z"] 2),
-       .run]),
+       .run ""]),
     ("canon-none-new",
       [.decl "Dist" (distPick 1 "new"), .action (.expr (C "Z")),
        mset "Dist" [C "K"] 3, mset "Dist" [C "A"] 2,
        .action (.union (C "K") (C "Z")), .action (.union (C "A") (C "Z")),
        .rule (readInto "Hit" "Dist" [C "Z"] 2), .rule (readInto "Miss" "Dist" [C "Z"] 3),
-       .run]),
+       .run ""]),
     -- **`old` is the row that reached the canonical key first**, which is a fact about the
     -- *order of the unions* and not about either row's age. `A` is created first and holds
     -- no row, so neither `Dist (B)` nor `Dist (C)` is ever at a canonical key and
@@ -780,25 +807,25 @@ private def curatedMerge : List (String × Program) :=
        mset "Dist" [C "B"] 1, mset "Dist" [C "C"] 2,
        .action (.union (C "C") (C "A")), .action (.union (C "B") (C "A")),
        .rule (readInto "Hit" "Dist" [C "A"] 1), .rule (readInto "Miss" "Dist" [C "A"] 2),
-       .run]),
+       .run ""]),
     ("rekey-new-swap",
       [.decl "Dist" (distPick 1 "new"), .action (.expr (C "A")),
        mset "Dist" [C "B"] 1, mset "Dist" [C "C"] 2,
        .action (.union (C "B") (C "A")), .action (.union (C "C") (C "A")),
        .rule (readInto "Hit" "Dist" [C "A"] 2), .rule (readInto "Miss" "Dist" [C "A"] 1),
-       .run]),
+       .run ""]),
     ("rekey-old",
       [.decl "Dist" (distPick 1 "old"), .action (.expr (C "A")),
        mset "Dist" [C "B"] 1, mset "Dist" [C "C"] 2,
        .action (.union (C "C") (C "A")), .action (.union (C "B") (C "A")),
        .rule (readInto "Hit" "Dist" [C "A"] 2), .rule (readInto "Miss" "Dist" [C "A"] 1),
-       .run]),
+       .run ""]),
     ("rekey-old-swap",
       [.decl "Dist" (distPick 1 "old"), .action (.expr (C "A")),
        mset "Dist" [C "B"] 1, mset "Dist" [C "C"] 2,
        .action (.union (C "B") (C "A")), .action (.union (C "C") (C "A")),
        .rule (readInto "Hit" "Dist" [C "A"] 1), .rule (readInto "Miss" "Dist" [C "A"] 2),
-       .run]),
+       .run ""]),
     -- **Primitives outside a `:merge` body.** `min` in a top-level `set`'s value column.
     -- `Hit 1, Miss 0` says the model computed `3`; building the term `min(5, 3)` or getting
     -- stuck gives `0, 0` and computing `max` gives `0, 1`.
@@ -806,14 +833,14 @@ private def curatedMerge : List (String × Program) :=
       [.decl "Dist" (dist 1),
        .action (.set "Dist" [C "K"] [.app "min" [num 5, num 3]]),
        .rule (readInto "Hit" "Dist" [C "K"] 3), .rule (readInto "Miss" "Dist" [C "K"] 5),
-       .run]),
+       .run ""]),
     -- The same with `max`, so the two markers swap: a model computing `min` for `max`
     -- is caught here even though it passes `prim-set-min`.
     ("prim-set-max",
       [.decl "Dist" (dist 1),
        .action (.set "Dist" [C "K"] [.app "max" [num 5, num 3]]),
        .rule (readInto "Hit" "Dist" [C "K"] 5), .rule (readInto "Miss" "Dist" [C "K"] 3),
-       .run]),
+       .run ""]),
     -- Nested: `(min (max 5 3) 4)` is `4`, so the operand list itself has to be evaluated
     -- through the argument list before the outer primitive applies. `Miss` reads `5`, the value
     -- an unevaluated inner application would have left.
@@ -821,7 +848,7 @@ private def curatedMerge : List (String × Program) :=
       [.decl "Dist" (dist 1),
        .action (.set "Dist" [C "K"] [.app "min" [.app "max" [num 5, num 3], num 4]]),
        .rule (readInto "Hit" "Dist" [C "K"] 4), .rule (readInto "Miss" "Dist" [C "K"] 5),
-       .run]),
+       .run ""]),
     -- A primitive under a top-level `let`, so the value reaches the row through the global
     -- environment rather than directly. The `$` prefix is egglog's convention for a global
     -- and avoids its "Global `g` should start with `$`" warning.
@@ -830,16 +857,16 @@ private def curatedMerge : List (String × Program) :=
        .action (.letBind "$g" (.app "min" [num 7, num 2])),
        .action (.set "Dist" [C "K"] [.var "$g"]),
        .rule (readInto "Hit" "Dist" [C "K"] 2), .rule (readInto "Miss" "Dist" [C "K"] 7),
-       .run]),
+       .run ""]),
     -- A primitive in a **rule head**, which is the position `Rule.noLookup` polices and so
     -- the one most likely to be rejected by mistake. Two rounds: the first fires the write,
     -- the second reads it back.
     ("prim-rule-head",
       [.decl "Dist" (dist 1), seedF,
        .rule ⟨[.expr (.app "F" [.var "a"])],
-              [.set "Dist" [.var "a"] [.app "max" [num 5, num 3]]]⟩,
+              [.set "Dist" [.var "a"] [.app "max" [num 5, num 3]]], ""⟩,
        .rule (readInto "Hit" "Dist" [C "A"] 5), .rule (readInto "Miss" "Dist" [C "A"] 3),
-       .run, .run]),
+       .run "", .run ""]),
     -- **A `:merge` body that writes.** The body logs `old` into a side table and returns
     -- `new`. `L 1` and `Log 1` say the body ran at all — both names occur nowhere else —
     -- and `Hit 1, Miss 0` say it logged `5`, the value already in the table.
@@ -847,47 +874,47 @@ private def curatedMerge : List (String × Program) :=
       [.decl "Log" logDecl, .decl "Dist" (distLog 1 "old" "new"),
        mset "Dist" [C "K"] 5, mset "Dist" [C "K"] 3,
        .rule (readInto "Hit" "Log" [C "L"] 5), .rule (readInto "Miss" "Log" [C "L"] 3),
-       .rule (readInto "Won" "Dist" [C "K"] 3), .run]),
+       .rule (readInto "Won" "Dist" [C "K"] 3), .run ""]),
     -- The mirror: log `new`, keep `old`. Both markers move, which is what makes the pair
     -- distinguish the two bindings rather than merely detecting that something was logged.
     ("merge-body-set-new",
       [.decl "Log" logDecl, .decl "Dist" (distLog 1 "new" "old"),
        mset "Dist" [C "K"] 5, mset "Dist" [C "K"] 3,
        .rule (readInto "Hit" "Log" [C "L"] 3), .rule (readInto "Miss" "Log" [C "L"] 5),
-       .rule (readInto "Won" "Dist" [C "K"] 5), .run]),
+       .rule (readInto "Won" "Dist" [C "K"] 5), .run ""]),
     -- A two-action body: `let`, then `set` the bound variable, then return it. Exercises
     -- the block renderer past one action and a `let`-bound value flowing into a `set`.
     ("merge-body-let-set",
       [.decl "Log" logDecl, .decl "Dist" (distLetLog 1),
        mset "Dist" [C "K"] 5, mset "Dist" [C "K"] 3,
        .rule (readInto "Hit" "Log" [C "L"] 3), .rule (readInto "Miss" "Log" [C "L"] 5),
-       .rule (readInto "Won" "Dist" [C "K"] 3), .run]),
+       .rule (readInto "Won" "Dist" [C "K"] 3), .run ""]),
     -- The body's effect is an **equality**: `W` is seeded at `(U)` and at `(V)`, so `W 1`
     -- says the union ran and `W 2` says it did not. This is the union-find `:merge`.
     ("merge-body-union",
       [.decl "Dist" (distUnion 1 "new")] ++ seedW ++
       [mset "Dist" [C "K"] 5, mset "Dist" [C "K"] 3,
-       .rule (readInto "Won" "Dist" [C "K"] 3), .run]),
+       .rule (readInto "Won" "Dist" [C "K"] 3), .run ""]),
     -- The same, with the collision arriving from a `union` on the *keys* during rebuild
     -- rather than from a repeated `set`, so the body runs from the merge phase.
     ("merge-body-union-rebuild",
       [.decl "Dist" (distUnion 1 "old")] ++ seedW ++
       [mset "Dist" [C "X"] 1, mset "Dist" [C "Y"] 2, .action (.union (C "X") (C "Y")),
-       .rule (readInto "Won" "Dist" [C "X"] 1), .run]),
+       .rule (readInto "Won" "Dist" [C "X"] 1), .run ""]),
     -- A writing body driven by a rebuild collision: `Log` records `old`, which
     -- `old-rebuild` pins to the earlier write.
     ("merge-body-set-rebuild",
       [.decl "Log" logDecl, .decl "Dist" (distLog 1 "old" "new"),
        mset "Dist" [C "X"] 1, mset "Dist" [C "Y"] 2, .action (.union (C "X") (C "Y")),
        .rule (readInto "Hit" "Log" [C "L"] 1), .rule (readInto "Miss" "Log" [C "L"] 2),
-       .run]),
+       .run ""]),
     -- **The negative control.** The same writing body, but the keys never collide, so `L`,
     -- `Log` and `W` must all report the body having *not* run. Without this a model that
     -- ran a body unconditionally would pass every other case in the family.
     ("merge-body-inert",
       [.decl "Log" logDecl, .decl "Dist" (distLog 2 "old" "new")] ++ seedW ++
       [mset "Dist" [C "A", C "B"] 1, mset "Dist" [C "B", C "A"] 2,
-       .rule (readInto "Hit" "Log" [C "L"] 1), .run]),
+       .rule (readInto "Hit" "Log" [C "L"] 1), .run ""]),
     -- **The no-conflict skip.** The `merge-body-set-rebuild` program with the two values
     -- made *equal*: the keys still collide through the `union`, but the collision leaves
     -- the value column unchanged, so egglog treats it as no conflict and runs no block.
@@ -898,7 +925,7 @@ private def curatedMerge : List (String × Program) :=
       [.decl "Log" logDecl, .decl "Dist" (distLog 1 "old" "new"),
        mset "Dist" [C "X"] 2, mset "Dist" [C "Y"] 2, .action (.union (C "X") (C "Y")),
        .rule (readInto "Won" "Dist" [C "X"] 2), .rule (readInto "Miss" "Log" [C "L"] 2),
-       .run]),
+       .run ""]),
     -- The same collision with a `union` body, where the skip is visible as an *equality*
     -- that was never asserted: `W` stays 2 because `(union (U) (V))` never ran. `Won 1`
     -- against `Miss 0` reports that the merge itself still happened.
@@ -906,7 +933,7 @@ private def curatedMerge : List (String × Program) :=
       [.decl "Dist" (distUnion 1 "new")] ++ seedW ++
       [mset "Dist" [C "X"] 2, mset "Dist" [C "Y"] 2, .action (.union (C "X") (C "Y")),
        .rule (readInto "Won" "Dist" [C "X"] 2), .rule (readInto "Miss" "Dist" [C "X"] 3),
-       .run]),
+       .run ""]),
     -- **The skip is all-or-nothing over the value tuple.** Two value columns, the first
     -- equal at both rows and the second not, so the collision *is* a conflict and the body
     -- runs: `Hit 1` reads the logged `old0`. A model that skipped per column would leave
@@ -916,7 +943,7 @@ private def curatedMerge : List (String × Program) :=
        pset "Dist" [C "X"] 2 1, pset "Dist" [C "Y"] 2 5,
        .action (.union (C "X") (C "Y")),
        .rule (readInto "Hit" "Log" [C "L"] 2), .rule (readInto "Miss" "Log" [C "L"] 5),
-       .run]),
+       .run ""]),
     -- **Three rows in one key class, two of them equal.** The equal pair is skipped and the
     -- odd one out is a real conflict, so the body runs — `L 1, Log 1` — and the class still
     -- collapses to one row holding `3`, which `Hit 1` against `Miss 0` reads back. This is
@@ -926,7 +953,7 @@ private def curatedMerge : List (String × Program) :=
        mset "Dist" [C "X"] 2, mset "Dist" [C "Y"] 2, mset "Dist" [C "Z"] 3,
        .action (.union (C "X") (C "Y")), .action (.union (C "Y") (C "Z")),
        .rule (readInto "Hit" "Dist" [C "X"] 3), .rule (readInto "Miss" "Dist" [C "X"] 2),
-       .run]),
+       .run ""]),
     -- **`old`/`new` per column, at a canonicity-decided collision.** `canon-old` and
     -- `canon-new` at two value columns: the merge is `(values old0 old1)` resp. `(values
     -- new0 new1)`, so every column's binding is `mergeEnvIdx`'s rather than `mergeEnv`'s
@@ -938,13 +965,13 @@ private def curatedMerge : List (String × Program) :=
        pset "Dist" [C "K"] 3 4, pset "Dist" [C "A"] 2 6,
        .action (.union (C "A") (C "K")),
        .rule (readIntoW "Hit" "Dist" [C "A"] [2, 6]),
-       .rule (readIntoW "Miss" "Dist" [C "A"] [3, 4]), .run]),
+       .rule (readIntoW "Miss" "Dist" [C "A"] [3, 4]), .run ""]),
     ("tuple-canon-new",
       [.decl "Dist" (distPickPair 1 "new"), .action (.expr (C "A")),
        pset "Dist" [C "K"] 3 4, pset "Dist" [C "A"] 2 6,
        .action (.union (C "A") (C "K")),
        .rule (readIntoW "Hit" "Dist" [C "A"] [3, 4]),
-       .rule (readIntoW "Miss" "Dist" [C "A"] [2, 6]), .run]),
+       .rule (readIntoW "Miss" "Dist" [C "A"] [2, 6]), .run ""]),
     -- **Equal values at one key**, the other half of the no-conflict skip: the two writes
     -- are identical, so egglog's insert finds nothing to resolve and the body never runs —
     -- `L 0, Log 0` — while `Won 1` says the class still holds the value. The model reaches
@@ -955,17 +982,17 @@ private def curatedMerge : List (String × Program) :=
     ("merge-body-noop-samekey",
       [.decl "Log" logDecl, .decl "Dist" (distLog 1 "old" "new"),
        mset "Dist" [C "K"] 2, mset "Dist" [C "K"] 2,
-       .rule (readInto "Won" "Dist" [C "K"] 2), .run]),
+       .rule (readInto "Won" "Dist" [C "K"] 2), .run ""]),
     -- **Arity 0.** One key class, and it is the empty tuple — `congrKeys` at length zero.
     ("merge-arity0",
       [.decl "Zero" (dist 0), mset "Zero" [] 5, mset "Zero" [] 3,
-       .rule (readInto "Hit" "Zero" [] 3), .rule (readInto "Miss" "Zero" [] 5), .run]),
+       .rule (readInto "Hit" "Zero" [] 3), .rule (readInto "Miss" "Zero" [] 5), .run ""]),
     -- Arity 0 with a writing body, so the empty key tuple and the side table meet.
     ("merge-arity0-body",
       [.decl "Log" logDecl, .decl "Zero" (distLog 0 "old" "new"),
        mset "Zero" [] 5, mset "Zero" [] 3,
        .rule (readInto "Hit" "Log" [C "L"] 5), .rule (readInto "Miss" "Log" [C "L"] 3),
-       .run]),
+       .run ""]),
     -- **Arity 3**, collided on the third column through a `union`, so the key comparison
     -- has to walk two equal columns before reaching a congruent one.
     ("merge-arity3",
@@ -973,7 +1000,7 @@ private def curatedMerge : List (String × Program) :=
        mset "Dist" [C "A", C "B", C "X"] 5, mset "Dist" [C "A", C "B", C "Y"] 3,
        .action (.union (C "X") (C "Y")),
        .rule (readInto "Hit" "Dist" [C "A", C "B", C "X"] 3),
-       .rule (readInto "Miss" "Dist" [C "A", C "B", C "X"] 5), .run]),
+       .rule (readInto "Miss" "Dist" [C "A", C "B", C "X"] 5), .run ""]),
     -- **Value width 3**, one combiner per column: `min` on 0, `max` on 1, `old` on 2. A
     -- body reading the wrong `mergeEnvIdx` index computes a different tuple, and the
     -- guarded read then stops firing.
@@ -981,7 +1008,7 @@ private def curatedMerge : List (String × Program) :=
       [.decl "Dist" (distTriple 1), tset "Dist" [C "A"] [5, 1, 7],
        tset "Dist" [C "A"] [3, 9, 2],
        .rule (readIntoW "Hit" "Dist" [C "A"] [3, 9, 7]),
-       .rule (readIntoW "Miss" "Dist" [C "A"] [5, 1, 7]), .run]),
+       .rule (readIntoW "Miss" "Dist" [C "A"] [5, 1, 7]), .run ""]),
     -- **A read atom's operands are interned before the congruence test.** The row is
     -- written at `(G (B) (A))` and read at `(G (A) (B))`, a term the program *never
     -- builds*: egglog flattens the fact to `G(a, b, x), Dist(x, o)`, so after `(union (A)
@@ -996,7 +1023,7 @@ private def curatedMerge : List (String × Program) :=
        .action (.set "Dist" [gg (C "B") (C "A")] [num 4]),
        .action (.union (C "A") (C "B")),
        .rule (readIntoAt "Hit" "Dist" [gg (C "A") (C "B")] 4 [C "A"]),
-       .rule (readIntoAt "Miss" "Dist" [gg (C "C") (C "A")] 4 [C "A"]), .run]),
+       .rule (readIntoAt "Miss" "Dist" [gg (C "C") (C "A")] 4 [C "A"]), .run ""]),
     -- The same one level deeper, so the congruence has to be rebuilt at an *inner* node
     -- before the outer one can match. `Miss` moves the outer argument instead of the inner
     -- one — `(A)` for `(C)`, which no `union` relates — so it must not fire.
@@ -1006,7 +1033,7 @@ private def curatedMerge : List (String × Program) :=
        .action (.union (C "A") (C "B")),
        .rule (readIntoAt "Hit" "Dist" [gg (gg (C "A") (C "B")) (C "C")] 4 [C "A"]),
        .rule (readIntoAt "Miss" "Dist" [gg (gg (C "A") (C "B")) (C "A")] 4 [C "A"]),
-       .run]),
+       .run ""]),
     -- **The over-matching control.** `Miss` reads at `(G (H (A)) (B))`, whose inner node
     -- `(H (A))` has no row at all — `H` is never applied anywhere else — so egglog's
     -- `H(a, h)` atom matches nothing and neither may the model. Interning the operands adds
@@ -1018,7 +1045,7 @@ private def curatedMerge : List (String × Program) :=
        .action (.union (C "A") (C "B")),
        .rule (readIntoAt "Hit" "Dist" [gg (C "A") (C "B")] 4 [C "A"]),
        .rule (readIntoAt "Miss" "Dist" [gg (.app "H" [C "A"]) (C "B")] 4 [C "A"]),
-       .run]) ]
+       .run ""]) ]
 
 /-! ### Random `:merge` cases
 
@@ -1293,7 +1320,7 @@ private def genMergeRule (arity w : Nat) (src : Expr) (s : Nat) : Rule × Nat :=
   let (p, s) := genPattern ["a", "b"] src s
   let (ks, s) := genKeysOver p.vars arity s
   let (vs, s) := genValues w s
-  (⟨[.expr p], [.set "Dist" ks (vs.map Prod.fst)]⟩, s)
+  (⟨[.expr p], [.set "Dist" ks (vs.map Prod.fst)], ""⟩, s)
 
 /-- Reads back the value tuple the program wrote *first*, at the key it wrote it at, and
 builds `Won` if it is still there.
@@ -1313,6 +1340,7 @@ The query is ground, so it costs one substitution and no enumeration. -/
 private def witnessRule (key : List Expr) (vals : List Int) : Rule where
   query := [.values (vals.map num) "Dist" key]
   actions := [.expr (.app "Won" key)]
+  ruleset := ""
 
 /-- A rule *reading* `Dist` from its body: a `Pattern.values` atom whose value column is
 either a fresh variable (existence) or the literal the program wrote (the value). Its head
@@ -1349,7 +1377,7 @@ private def genMergeReadRule (arity w : Nat) (src : Expr) (key : List Expr)
   let (shape, s) := pick 2 s
   let cols : List Expr :=
     if shape = 0 then .var "o" :: (vs.map num).tail else vs.map num
-  (⟨[.expr p, .values cols "Dist" ks], [.expr (.app "Hit" [p])]⟩, s)
+  (⟨[.expr p, .values cols "Dist" ks], [.expr (.app "Hit" [p])], ""⟩, s)
 
 /-- One random `:merge` case.
 
@@ -1425,7 +1453,7 @@ private def genMergeProgram (s : Nat) : Program :=
     ++ unions
     ++ [ .rule r, .rule rr, .rule (witnessRule k₁ (v₁.map Prod.snd)) ]
     ++ logReads
-    ++ List.replicate (rounds + 1) Cmd.run
+    ++ List.replicate (rounds + 1) (Cmd.run "")
 
 /-! ### Entry point -/
 

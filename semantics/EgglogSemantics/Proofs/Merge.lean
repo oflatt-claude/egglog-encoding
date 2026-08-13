@@ -1071,19 +1071,32 @@ fields `Contained` ignores.
 
 `CmdStep` is a `def` now — an effect followed by a merge phase — so the case split is on
 the command rather than on the step. -/
+theorem RunStep.contained {R : RulesetName} {db db' : Database} (h : RunStep R db db') :
+    db.Contained db' :=
+  Database.Contained.trans (Database.Contained.sUnion _ _) (MergeClosure.contained h)
+
+theorem RunReach.contained {R : RulesetName} {db d : Database}
+    (h : Relation.ReflTransGen (RunStep R) db d) : db.Contained d :=
+  RunReach.induction (P := fun x => db.Contained x)
+    (fun _ _ hp hs => hp.trans hs.contained) h (Database.Contained.refl _)
+
 theorem CmdStep.contained {db db' : Database} {c : Cmd} (h : CmdStep db c db') :
     db.Contained db' := by
-  obtain ⟨d, heff, hcl⟩ := h
+  obtain ⟨d, hreach, hcl⟩ := h
   refine Database.Contained.trans ?_ (MergeClosure.contained hcl)
   cases c with
-  | action a => exact evalAction_contained heff
+  | saturate R => exact RunReach.contained (show SaturateReach R db d from hreach).1
+  | action a => exact evalAction_contained hreach
   | rule r =>
-    rw [cmdEffect, Option.some.injEq] at heff; subst heff; exact ⟨subset_rfl⟩
-  | run =>
-    rw [cmdEffect, Option.some.injEq] at heff
-    subst heff; exact Database.Contained.sUnion _ _
+    replace hreach : cmdEffect db (.rule r) = some d := hreach
+    rw [cmdEffect, Option.some.injEq] at hreach; subst hreach; exact ⟨subset_rfl⟩
+  | run R =>
+    replace hreach : cmdEffect db (.run R) = some d := hreach
+    rw [cmdEffect, Option.some.injEq] at hreach
+    subst hreach; exact Database.Contained.sUnion _ _
   | decl f dc =>
-    rw [cmdEffect, Option.some.injEq] at heff; subst heff; exact ⟨subset_rfl⟩
+    replace hreach : cmdEffect db (.decl f dc) = some d := hreach
+    rw [cmdEffect, Option.some.injEq] at hreach; subst hreach; exact ⟨subset_rfl⟩
 
 theorem ProgramStep.contained {db db' : Database} {p : Program}
     (h : ProgramStep db p db') : db.Contained db' := by
@@ -1413,7 +1426,7 @@ theorem execM_reachable {p : Program} {d : FDatabase} (hdecl : p.CtorDecls)
     (h : exec p = some d) :
     ProgramStep FDatabase.empty.toDatabase p d.toDatabase := by
   rw [FDatabase.toDatabase_empty]
-  exact (exec_programStep hdecl).mp (by rw [h, Option.map_some])
+  exact (exec_programStep hdecl (by rw [h]; simp)).mp (by rw [h, Option.map_some])
 
 /-! ### The contract for `execM`: containment, not reachability
 
@@ -1529,7 +1542,8 @@ def Action.WriteLegal (a : Action) (sig : Signature) : Prop :=
 @[simp] def Cmd.WriteLegal : Cmd → Signature → Prop
   | .action a, sig => a.WriteLegal sig
   | .rule r, sig => Actions.WriteLegal r.actions sig
-  | .run, _ => True
+  | .run _, _ => True
+  | .saturate _, _ => True
   | .decl _ _, _ => True
 
 theorem Actions.WriteLegal.head {a : Action} {as : List Action} {sig : Signature}
@@ -2488,7 +2502,7 @@ theorem mergeRound_eq_self {d : FDatabase} (h : d.hasMergeRow = false) :
 theorem mergeSaturateF_eq_self {d : FDatabase} (h : d.hasMergeRow = false) {n : Nat} :
     FDatabase.mergeSaturateF n d = some d := by
   have hs : d.settled = true := by
-    simp [FDatabase.settled, mergeRound_eq_self h]
+    simp [FDatabase.settled, FDatabase.sameData, mergeRound_eq_self h]
   cases n <;> simp [FDatabase.mergeSaturateF, hs]
 
 end FDatabase
@@ -2500,6 +2514,34 @@ end FDatabase
 a passing difftest case back to `Spec/` has a hole in it. `execCmdM` differs from
 `execCmd` only by a `mergeSaturateF` after each command, and with no `:merge` function
 declared there is no merge row for a pass to fire on, so that call is the identity. -/
+namespace FDatabase
+
+/-- **A round has no merge phase on the constructor fragment**, so `Impl/Merge.lean`'s round
+is `Impl/Interp.lean`'s. -/
+theorem runRoundM_eq_round {R : RulesetName} {d : FDatabase} (hsig : d.sig.AllConstructors) :
+    d.runRoundM R = some (execRunRules R d) :=
+  FDatabase.mergeSaturateF_eq_self
+    (FDatabase.hasMergeRow_eq_false (by rw [sig_execRunRules]; exact hsig))
+
+/-- And so the two saturating runs are the same partial function there. -/
+theorem runSaturateM_eq_runSaturateF {R : RulesetName} : ∀ (n : Nat) {d : FDatabase},
+    d.sig.AllConstructors → d.runSaturateM R n = d.runSaturateF R n := by
+  intro n
+  induction n with
+  | zero =>
+    intro d hsig
+    rw [FDatabase.runSaturateM, runRoundM_eq_round hsig, Option.bind_some,
+      FDatabase.runSaturateF]
+  | succ n ih =>
+    intro d hsig
+    rw [FDatabase.runSaturateM, runRoundM_eq_round hsig, Option.bind_some,
+      FDatabase.runSaturateF]
+    split
+    · rfl
+    · exact ih (by rw [sig_execRunRules]; exact hsig)
+
+end FDatabase
+
 /-- The signature a command leaves, for `Impl/Interp.lean`'s interpreter. This is what
 carries `Signature.AllConstructors` along a run. -/
 theorem execCmd_sigBind {d d' : FDatabase} {c : Cmd} (hs : execCmd d c = some d') :
@@ -2507,7 +2549,11 @@ theorem execCmd_sigBind {d d' : FDatabase} {c : Cmd} (hs : execCmd d c = some d'
   cases c with
   | action a => exact FDatabase.execAction_sig hs
   | rule r => simp only [execCmd, Option.some.injEq] at hs; exact hs ▸ rfl
-  | run => simp only [execCmd, Option.some.injEq] at hs; exact hs ▸ sig_execRunRules
+  | run R => simp only [execCmd, Option.some.injEq] at hs; exact hs ▸ sig_execRunRules
+  | saturate R =>
+    obtain ⟨k, hk⟩ :=
+      runSaturateF_iterate runFuel (show d.runSaturateF R runFuel = some d' from hs)
+    exact hk ▸ (execRunRules_iterate_sig k)
   | decl f dc => simp only [execCmd, Option.some.injEq] at hs; exact hs ▸ rfl
 
 theorem execProgramM_eq_execProgram {d : FDatabase} (hsig : d.sig.AllConstructors)
@@ -2525,10 +2571,8 @@ theorem execProgramM_eq_execProgram {d : FDatabase} (hsig : d.sig.AllConstructor
           rw [Option.bind_some, FDatabase.mergeSaturateF_eq_self
             (FDatabase.hasMergeRow_eq_false (by rw [FDatabase.execAction_sig hv]; exact hsig))]
       | rule r => rfl
-      | run =>
-        change FDatabase.mergeSaturateF mergeFuel (execRunRules d) = some (execRunRules d)
-        exact FDatabase.mergeSaturateF_eq_self
-          (FDatabase.hasMergeRow_eq_false (by rw [sig_execRunRules]; exact hsig))
+      | run R => exact FDatabase.runRoundM_eq_round hsig
+      | saturate R => exact FDatabase.runSaturateM_eq_runSaturateF runFuel hsig
       | decl f dc => rfl
     change (d.execCmdM c).bind (fun d' => d'.execProgramM cs)
       = (execCmd d c).bind fun d' => execProgram d' cs
@@ -2877,10 +2921,21 @@ theorem MergeClosure.wf {d₁ d₂ : Database} (hw : d₁.WF) (h : MergeClosure 
 
 /-- One command preserves `Database.WF`: `cmdEffect_wf` for the effect, `MergeClosure.wf`
 for the merge phase. -/
+theorem RunStep.wf {R : RulesetName} {db db' : Database} (hw : db.WF)
+    (h : RunStep R db db') : db'.WF := MergeClosure.wf (RunRules.wf hw) h
+
+theorem cmdReach_wf {db d : Database} (hw : db.WF) {c : Cmd} (h : cmdReach db c d) :
+    d.WF := by
+  cases c with
+  | saturate R =>
+    exact RunReach.induction (P := Database.WF) (fun _ _ hp hs => hs.wf hp)
+      (show SaturateReach R db d from h).1 hw
+  | _ => exact cmdEffect_wf hw h
+
 theorem CmdStep.wf {db db' : Database} (hw : db.WF) {c : Cmd} (h : CmdStep db c db') :
     db'.WF := by
-  obtain ⟨d, heff, hcl⟩ := h
-  exact MergeClosure.wf (cmdEffect_wf hw heff) hcl
+  obtain ⟨d, hreach, hcl⟩ := h
+  exact MergeClosure.wf (cmdReach_wf hw hreach) hcl
 
 /-- A whole run preserves `Database.WF`, `CmdStep.wf` per command. It is what pays for
 `Database.Recorded.trans`'s two `WF` premises where the refinement chain composes two
@@ -2972,14 +3027,15 @@ reaches. -/
 def Database.RulesOk (db : Database) : Prop :=
   ∀ r ∈ db.rules, Actions.WidthOk r.actions db.sig ∧ Actions.SetLegal r.actions db.sig
 
-theorem runRules_declaredTerms {db : Database} (hwf : db.WF) (hdt : db.DeclaredTerms)
-    (hr : db.RulesOk) : (RunRules db).DeclaredTerms := by
+theorem runRules_declaredTerms {R : RulesetName} {db : Database} (hwf : db.WF)
+    (hdt : db.DeclaredTerms)
+    (hr : db.RulesOk) : (RunRules R db).DeclaredTerms := by
   intro g cs hmem
   rw [RunRules, Database.sUnion_terms] at hmem
   rcases hmem with hmem | hmem
   · exact hdt g cs hmem
   · obtain ⟨e, he, hmem⟩ := Set.mem_iUnion₂.mp hmem
-    obtain ⟨r, hrmem, σ, hq, hstep⟩ := he
+    obtain ⟨r, hrmem, -, σ, hq, hstep⟩ := he
     have hes : e.sig = db.sig := evalLocalActions_sig hstep
     change ∃ x, db.sig g = some x ∧ cs.length = x.entryWidth
     rw [← hes]
@@ -3011,12 +3067,46 @@ theorem cmdEffect_declaredTerms {db d : Database} (hwf : db.WF) (hdt : db.Declar
     intro g cs hmem
     rw [Database.terms_setRules] at hmem
     exact hdt g cs hmem
-  | run =>
+  | run R =>
     rw [cmdEffect, Option.some_inj] at h
     subst h; exact runRules_declaredTerms hwf hdt hr
+  | saturate R => exact absurd h (by simp [cmdEffect])
   | decl f dc =>
     rw [cmdEffect, Option.some_inj] at h
     subst h; exact decl_declaredTerms hdt hfresh
+
+/-- **A saturating run preserves `DeclaredTerms`.** Each round is `runRules_declaredTerms`
+then `mergeClosure_declaredTerms`; what makes the induction go through is that a round moves
+neither `sig` nor `rules`, so `Database.RulesOk` and the two signature-level checks hold
+verbatim at every intermediate state. -/
+theorem runReach_declaredTerms {R : RulesetName} {db d : Database} (hwf : db.WF)
+    (hdt : db.DeclaredTerms) (hr : db.RulesOk) (hml : db.sig.MergesLegal)
+    (hmw : db.sig.MergesWidthOk) (h : Relation.ReflTransGen (RunStep R) db d) :
+    d.DeclaredTerms := by
+  refine (RunReach.induction
+    (P := fun x => x.WF ∧ x.DeclaredTerms ∧ x.sig = db.sig ∧ x.rules = db.rules)
+    ?_ h ⟨hwf, hdt, rfl, rfl⟩).2.1
+  rintro x y ⟨hxw, hxd, hxs, hxr⟩ hstep
+  have hro : x.RulesOk := fun r hr' => hxs ▸ hr r (hxr ▸ hr')
+  have hxml : Signature.MergesLegal (RunRules R x).sig := by
+    rw [RunRules.sig (R := R) (db := x), hxs]; exact hml
+  have hxmw : Signature.MergesWidthOk (RunRules R x).sig := by
+    rw [RunRules.sig (R := R) (db := x), hxs]; exact hmw
+  have hyr : y.rules = db.rules := by
+    rw [(MergeClosure.envRules hstep).2]
+    simpa only [RunRules, Database.sUnion_rules] using hxr
+  exact ⟨hstep.wf hxw, mergeClosure_declaredTerms (RunRules.wf hxw)
+      (runRules_declaredTerms hxw hxd hro) hxml hxmw hstep,
+    by rw [hstep.sig]; exact hxs, hyr⟩
+
+theorem cmdReach_declaredTerms {db d : Database} (hwf : db.WF) (hdt : db.DeclaredTerms)
+    (hr : db.RulesOk) {c : Cmd} (hw : c.WidthOk db.sig) (hsl : c.SetLegal db.sig)
+    (hfresh : c.DeclFresh db.sig) (hml : (c.sigBind db.sig).MergesLegal)
+    (hmw : (c.sigBind db.sig).MergesWidthOk) (h : cmdReach db c d) : d.DeclaredTerms := by
+  cases c with
+  | saturate R =>
+    exact runReach_declaredTerms hwf hdt hr hml hmw (show SaturateReach R db d from h).1
+  | _ => exact cmdEffect_declaredTerms hwf hdt hr hw hsl hfresh h
 
 /-- The two signature-level invariants are read at the signature the command *installs*, as
 `Cmd.WidthOk` and `Cmd.MergeDeclared` are: that is the signature the merge phase runs
@@ -3026,9 +3116,9 @@ theorem cmdStep_declaredTerms {db d : Database} (hwf : db.WF) (hdt : db.Declared
     (hfresh : c.DeclFresh db.sig) (hml : (c.sigBind db.sig).MergesLegal)
     (hmw : (c.sigBind db.sig).MergesWidthOk) (h : CmdStep db c d) : d.DeclaredTerms := by
   obtain ⟨x, hx, hcl⟩ := h
-  have hxs : x.sig = c.sigBind db.sig := cmdEffect_sig hx
-  exact mergeClosure_declaredTerms (cmdEffect_wf hwf hx)
-    (cmdEffect_declaredTerms hwf hdt hr hw hsl hfresh hx)
+  have hxs : x.sig = c.sigBind db.sig := cmdReach_sig hx
+  exact mergeClosure_declaredTerms (cmdReach_wf hwf hx)
+    (cmdReach_declaredTerms hwf hdt hr hw hsl hfresh hml hmw hx)
     (by rw [hxs]; exact hml) (by rw [hxs]; exact hmw) hcl
 
 /-- What `Program.WidthOk`, `Program.SetLegal` and `Program.DeclsFresh` cannot say, checked
@@ -3233,10 +3323,11 @@ theorem MergeClosure.diag {d₁ d₂ : Database} (hs : Signature.UnionFree d₁.
 
 /-- A round's rule phase runs every rule the state carries, so this is where the `rules`
 clause is spent. -/
-theorem RunRules.diag {db : Database} (hn : db.NoUnions) : (RunRules db).Diag := by
+theorem RunRules.diag {R : RulesetName} {db : Database} (hn : db.NoUnions) :
+    (RunRules R db).Diag := by
   rintro p (hp | hp)
   · exact hn.diag p hp
-  · obtain ⟨d, ⟨r, hr, σ, -, hσ⟩, hp'⟩ := Set.mem_iUnion₂.mp hp
+  · obtain ⟨d, ⟨r, hr, -, σ, -, hσ⟩, hp'⟩ := Set.mem_iUnion₂.mp hp
     exact evalLocalActions_diag (hn.rules r hr) hn.diag hσ p hp'
 
 /-! ### Ordering-freedom, and where it puts `Recorded`
@@ -4115,14 +4206,17 @@ theorem RuleResults.mono_owes {A C : Database} (hc : A.Recorded C) (hwfA : A.WF)
   exact (evalActions_sig hD : _ = ({ C with env := C.env ++ Env.mapVals w σ } : Database).sig)
 
 /-- **A round's rule phase transports along `Recorded`.** -/
-theorem RunRules.mono_owes {A C : Database} (hc : A.Recorded C) (hwfA : A.WF) (hwfC : C.WF)
+theorem RunRules.mono_owes {R : RulesetName} {A C : Database} (hc : A.Recorded C)
+    (hwfA : A.WF) (hwfC : C.WF)
     (hsig : A.sig = C.sig) (henv : A.env = C.env) (hrules : A.rules = C.rules)
-    (hof : ∀ r ∈ C.rules, Rule.OrderingFree r) : (RunRules A).Recorded (RunRules C) := by
-  have key : ∀ d ∈ {d | ∃ r ∈ A.rules, d ∈ RuleResults A r}, d.Recorded (RunRules C) := by
-    rintro d ⟨r, hr, hdr⟩
+    (hof : ∀ r ∈ C.rules, Rule.OrderingFree r) :
+    (RunRules R A).Recorded (RunRules R C) := by
+  have key : ∀ d ∈ {d | ∃ r ∈ A.rules, r.ruleset = R ∧ d ∈ RuleResults A r},
+      d.Recorded (RunRules R C) := by
+    rintro d ⟨r, hr, hR, hdr⟩
     obtain ⟨D, hD, hcd, -⟩ :=
       RuleResults.mono_owes hc hwfA hwfC hsig henv (hof r (hrules ▸ hr)) hdr
-    exact hcd.trans_contained (Database.Contained.mem_sUnion ⟨r, hrules ▸ hr, hD⟩)
+    exact hcd.trans_contained (Database.Contained.mem_sUnion ⟨r, hrules ▸ hr, hR, hD⟩)
   refine ⟨fun p hp => ?_⟩
   rcases hp with hx | hx
   · obtain ⟨q, hq, hc₁, hc₂⟩ := (hc.trans_contained (Database.Contained.sUnion C _)).eqs p hx
@@ -4546,21 +4640,22 @@ theorem union_contained {d₁ d₂ : FDatabase} (he₁ : d₁.EqsInTerms) (he₂
     · exact h₁.eqs (Or.inr ⟨hq', (he₁ p hq').1, (he₁ p hq').2⟩)
     · exact h₂.eqs (Or.inr ⟨hq', (he₂ p hq').1, (he₂ p hq').2⟩)
 
-theorem execRunRules_contained {d : FDatabase} (h : d.Inv) :
-    (execRunRules d).toDatabase.Contained (RunRules d.toDatabase) := by
-  set R : Database := RunRules d.toDatabase with hR
+theorem execRunRules_contained {R : RulesetName} {d : FDatabase} (h : d.Inv) :
+    (execRunRules R d).toDatabase.Contained (RunRules R d.toDatabase) := by
+  set S : Database := RunRules R d.toDatabase with hS
   -- One firing lands inside `RunRules`, and keeps the accumulator's `EqsInTerms`.
-  have hone : ∀ (r : Rule), r ∈ d.rules → ∀ (σ : Env), σ ∈ matchQuery d r.query →
-      ∀ acc : FDatabase, acc.EqsInTerms → acc.toDatabase.Contained R →
-      (fireInto d r acc σ).EqsInTerms ∧ (fireInto d r acc σ).toDatabase.Contained R := by
-    intro r hr σ hσ acc hacce hacc
+  have hone : ∀ (r : Rule), r ∈ d.rules → r.ruleset = R → ∀ (σ : Env),
+      σ ∈ matchQuery d r.query →
+      ∀ acc : FDatabase, acc.EqsInTerms → acc.toDatabase.Contained S →
+      (fireInto d r acc σ).EqsInTerms ∧ (fireInto d r acc σ).toDatabase.Contained S := by
+    intro r hr hR σ hσ acc hacce hacc
     rw [fireInto, execLocalActions]
     cases hv : execActions { d with env := d.env ++ σ } r.actions with
     | none => simpa using ⟨hacce, hacc⟩
     | some e =>
       have hee : e.EqsInTerms := execActions_eqsInTerms (h.eqs.setEnv (d.env ++ σ)) hv
       have hmemS : ({ e with env := d.env, rules := d.rules } : FDatabase).toDatabase ∈
-          {D | ∃ r' ∈ d.toDatabase.rules, D ∈ RuleResults d.toDatabase r'} := by
+          {D | ∃ r' ∈ d.toDatabase.rules, r'.ruleset = R ∧ D ∈ RuleResults d.toDatabase r'} := by
         obtain ⟨τ, hτ, hag⟩ := matchQuery_validQuerySubst h hσ
         have hstep : evalActions
             ({ d.toDatabase with env := d.toDatabase.env ++ σ } : Database) r.actions
@@ -4572,33 +4667,33 @@ theorem execRunRules_contained {d : FDatabase} (h : d.Inv) :
           ⟨rfl, rfl, rfl, Env.Agree.append_left _ hag.symm⟩
         exact
           let ⟨e', hstep', hag'⟩ := evalActions_envAgree_exists hEA hstep
-          ⟨r, hr, τ, hτ, by
+          ⟨r, hr, hR, τ, hτ, by
             rw [evalLocalActions, hstep', Option.map_some, FDatabase.toDatabase_restore,
               ← hag'.eq_of_env_rules d.toDatabase.env d.toDatabase.rules]
             rfl⟩
       have hsub :
-          ({ e with env := d.env, rules := d.rules } : FDatabase).toDatabase.Contained R :=
+          ({ e with env := d.env, rules := d.rules } : FDatabase).toDatabase.Contained S :=
         Database.Contained.mem_sUnion hmemS
       simp only [Option.map_some]
       exact ⟨EqsInTerms.union hacce (hee.restore), union_contained hacce hee.restore hacc hsub⟩
   -- The two folds.
-  have hinner : ∀ (r : Rule), r ∈ d.rules → ∀ (σs : List Env),
+  have hinner : ∀ (r : Rule), r ∈ d.rules → r.ruleset = R → ∀ (σs : List Env),
       (∀ σ ∈ σs, σ ∈ matchQuery d r.query) → ∀ acc : FDatabase, acc.EqsInTerms →
-      acc.toDatabase.Contained R →
+      acc.toDatabase.Contained S →
       (σs.foldl (fireInto d r) acc).EqsInTerms ∧
-        (σs.foldl (fireInto d r) acc).toDatabase.Contained R := by
-    intro r hr σs
+        (σs.foldl (fireInto d r) acc).toDatabase.Contained S := by
+    intro r hr hR σs
     induction σs with
     | nil => intro _ acc hacce hacc; exact ⟨hacce, hacc⟩
     | cons σ σs ih =>
       intro hall acc hacce hacc
       rw [List.foldl_cons]
-      obtain ⟨h₁, h₂⟩ := hone r hr σ (hall σ List.mem_cons_self) acc hacce hacc
+      obtain ⟨h₁, h₂⟩ := hone r hr hR σ (hall σ List.mem_cons_self) acc hacce hacc
       exact ih (fun τ hτ => hall τ (List.mem_cons_of_mem _ hτ)) _ h₁ h₂
-  have houter : ∀ (l : List Rule), (∀ r ∈ l, r ∈ d.rules) → ∀ acc : FDatabase,
-      acc.EqsInTerms → acc.toDatabase.Contained R →
+  have houter : ∀ (l : List Rule), (∀ r ∈ l, r ∈ d.rules ∧ r.ruleset = R) →
+      ∀ acc : FDatabase, acc.EqsInTerms → acc.toDatabase.Contained S →
       (l.foldl (fireRule d) acc).EqsInTerms ∧
-        (l.foldl (fireRule d) acc).toDatabase.Contained R := by
+        (l.foldl (fireRule d) acc).toDatabase.Contained S := by
     intro l
     induction l with
     | nil => intro _ acc hacce hacc; exact ⟨hacce, hacc⟩
@@ -4608,10 +4703,13 @@ theorem execRunRules_contained {d : FDatabase} (h : d.Inv) :
       refine ih (fun r' hr' => hall r' (List.mem_cons_of_mem _ hr')) _ ?_ ?_ <;>
       · rw [fireRule]
         first
-        | exact (hinner r (hall r List.mem_cons_self) _ (fun _ hσ => hσ) acc hacce hacc).1
-        | exact (hinner r (hall r List.mem_cons_self) _ (fun _ hσ => hσ) acc hacce hacc).2
+        | exact (hinner r (hall r List.mem_cons_self).1 (hall r List.mem_cons_self).2 _
+            (fun _ hσ => hσ) acc hacce hacc).1
+        | exact (hinner r (hall r List.mem_cons_self).1 (hall r List.mem_cons_self).2 _
+            (fun _ hσ => hσ) acc hacce hacc).2
   rw [execRunRules]
-  exact (houter d.rules (fun _ hr => hr) d h.eqs (Database.Contained.sUnion _ _)).2
+  exact (houter _ (fun _ hr => mem_rules_filter.mp hr) d h.eqs
+    (Database.Contained.sUnion _ _)).2
 
 /-- **`execCmdM_contained`'s `.action` case**, with `CmdStep.action`'s two premises spelled
 out rather than packaged.
@@ -4662,19 +4760,22 @@ re-establish it. `.action` and `.run` are the lemmas above run to a fixpoint; `.
 touches no field `Inv` reads; `.decl` is the one that needs a hypothesis of its own, and
 `Falsity.claim1` is why. -/
 
-/-- A merge writes its combined row and then restores the caller's environment and rule
-list, so neither field ever moves. `MergeStep.sig` is the third of these; it is in
-`Proofs/Step.lean`, next to `MergeClosure.sig`. -/
-theorem MergeStep.envRules {d₁ d₂ : Database} (h : MergeStep d₁ d₂) :
-    d₂.env = d₁.env ∧ d₂.rules = d₁.rules := by
-  cases h with
-  | collide => exact ⟨rfl, rfl⟩
+/-- **A round preserves union-freedom.** Its rule phase is the `.run` case of
+`CmdStep.noUnions` and its merge phase is `MergeClosure.diag`, so a saturating run only has
+to iterate it. -/
+theorem RunStep.noUnions {R : RulesetName} {A B : Database} (h : RunStep R A B)
+    (hn : A.NoUnions) : B.NoUnions :=
+  ⟨MergeClosure.diag (by rw [RunRules.sig]; exact hn.sig) (RunRules.diag hn) h,
+    by rw [MergeClosure.sig h, RunRules.sig]; exact hn.sig,
+    by rw [(MergeClosure.envRules h).2]
+       simpa only [RunRules, Database.sUnion_rules] using hn.rules⟩
 
-theorem MergeClosure.envRules {d₁ d₂ : Database} (h : MergeClosure d₁ d₂) :
-    d₂.env = d₁.env ∧ d₂.rules = d₁.rules := by
-  induction h with
-  | refl => exact ⟨rfl, rfl⟩
-  | tail _ hstep ih => exact ⟨hstep.envRules.1.trans ih.1, hstep.envRules.2.trans ih.2⟩
+/-- A round moves neither `sig` nor `rules`, which is all ordering-freedom is about. -/
+theorem RunStep.noOrdering {R : RulesetName} {A B : Database} (h : RunStep R A B)
+    (hn : A.NoOrdering) : B.NoOrdering :=
+  ⟨by rw [MergeClosure.sig h, RunRules.sig]; exact hn.sig,
+    by rw [(MergeClosure.envRules h).2]
+       simpa only [RunRules, Database.sUnion_rules] using hn.rules⟩
 
 /-- **One command preserves union-freedom, all three clauses.** `.decl` is the only case
 that moves `sig` and `.rule` the only one that moves `rules`, which is why `Cmd.UnionFree`
@@ -4683,23 +4784,31 @@ ends with moves neither, and `MergeClosure.diag` is what keeps the state diagona
 it. -/
 theorem CmdStep.noUnions {A B : Database} (hn : A.NoUnions) {c : Cmd} (hu : c.UnionFree)
     (h : CmdStep A c B) : B.NoUnions := by
-  obtain ⟨e, heff, hcl⟩ := h
+  obtain ⟨e, hreach, hcl⟩ := h
   have hE : e.NoUnions := by
     cases c with
+    | saturate R =>
+      exact RunReach.induction (P := Database.NoUnions)
+        (fun _ _ hp hs => RunStep.noUnions hs hp)
+        (show SaturateReach R A e from hreach).1 hn
     | action a =>
+      replace heff : cmdEffect A (.action a) = some e := hreach
       exact ⟨evalAction_diag hu hn.diag heff, by rw [evalAction_sig heff]; exact hn.sig,
         by rw [evalAction_rules heff]; exact hn.rules⟩
     | rule r =>
+      replace heff : cmdEffect A (.rule r) = some e := hreach
       rw [cmdEffect, Option.some.injEq] at heff
       subst heff
       refine ⟨hn.diag, hn.sig, fun r' hr' => ?_⟩
       rcases hr' with rfl | hr'
       exacts [hu, hn.rules r' hr']
-    | run =>
+    | run R =>
+      replace heff : cmdEffect A (.run R) = some e := hreach
       rw [cmdEffect, Option.some.injEq] at heff
       subst heff
       exact ⟨RunRules.diag hn, hn.sig, hn.rules⟩
     | decl f dc =>
+      replace heff : cmdEffect A (.decl f dc) = some e := hreach
       rw [cmdEffect, Option.some.injEq] at heff
       subst heff
       refine ⟨hn.diag, fun g dc' hg => ?_, hn.rules⟩
@@ -4728,10 +4837,11 @@ theorem cmdEffect_noOrdering {A e : Database} (hn : A.NoOrdering) {c : Cmd}
     refine ⟨hn.sig, fun r' hr' => ?_⟩
     rcases hr' with rfl | hr'
     exacts [hu, hn.rules r' hr']
-  | run =>
+  | run R =>
     rw [cmdEffect, Option.some.injEq] at heff
     subst heff
     exact ⟨hn.sig, hn.rules⟩
+  | saturate R => exact absurd heff (by simp [cmdEffect])
   | decl f dc =>
     rw [cmdEffect, Option.some.injEq] at heff
     subst heff
@@ -4745,8 +4855,14 @@ theorem cmdEffect_noOrdering {A e : Database} (hn : A.NoOrdering) {c : Cmd}
 
 theorem CmdStep.noOrdering {A B : Database} (hn : A.NoOrdering) {c : Cmd}
     (hu : c.OrderingFree) (h : CmdStep A c B) : B.NoOrdering := by
-  obtain ⟨e, heff, hcl⟩ := h
-  have hE : e.NoOrdering := cmdEffect_noOrdering hn hu heff
+  obtain ⟨e, hreach, hcl⟩ := h
+  have hE : e.NoOrdering := by
+    cases c with
+    | saturate R =>
+      exact RunReach.induction (P := Database.NoOrdering)
+        (fun _ _ hp hs => RunStep.noOrdering hs hp)
+        (show SaturateReach R A e from hreach).1 hn
+    | _ => exact cmdEffect_noOrdering hn hu hreach
   exact ⟨by rw [MergeClosure.sig hcl]; exact hE.sig,
     by rw [(MergeClosure.envRules hcl).2]; exact hE.rules⟩
 
@@ -4776,13 +4892,15 @@ theorem RuleResults.mono {A C : Database} (hc : A.Contained C) (hsig : A.sig = C
 
 /-- **A round's rule phase is monotone.** Every database one rule contributes at `A` is
 contained in one the same rule contributes at `C`, so the two unions are ordered. -/
-theorem RunRules.mono {A C : Database} (hc : A.Contained C) (hsig : A.sig = C.sig)
+theorem RunRules.mono {R : RulesetName} {A C : Database} (hc : A.Contained C)
+    (hsig : A.sig = C.sig)
     (henv : A.env = C.env) (hrules : A.rules = C.rules) :
-    (RunRules A).Contained (RunRules C) := by
-  have key : ∀ d ∈ {d | ∃ r ∈ A.rules, d ∈ RuleResults A r}, d.Contained (RunRules C) := by
-    rintro d ⟨r, hr, hdr⟩
+    (RunRules R A).Contained (RunRules R C) := by
+  have key : ∀ d ∈ {d | ∃ r ∈ A.rules, r.ruleset = R ∧ d ∈ RuleResults A r},
+      d.Contained (RunRules R C) := by
+    rintro d ⟨r, hr, hR, hdr⟩
     obtain ⟨D, hD, hcd⟩ := RuleResults.mono hc hsig henv hdr
-    exact hcd.trans (Database.Contained.mem_sUnion ⟨r, hrules ▸ hr, hD⟩)
+    exact hcd.trans (Database.Contained.mem_sUnion ⟨r, hrules ▸ hr, hR, hD⟩)
   refine ⟨?_⟩
   rintro x (hx | hx)
   · exact (Database.Contained.sUnion C _).eqs (hc.eqs hx)
@@ -4794,10 +4912,12 @@ still contains the smaller run's.** The four cases are `evalAction_mono`,
 nothing, `RunRules.mono`, and nothing; `MergeClosure.transport` re-bases the merge phase
 in the two that have one. -/
 theorem CmdStep.mono {A C B : Database} (hc : A.Contained C) (hsig : A.sig = C.sig)
-    (henv : A.env = C.env) (hrules : A.rules = C.rules) {c : Cmd} (h : CmdStep A c B) :
+    (henv : A.env = C.env) (hrules : A.rules = C.rules) {c : Cmd} (hns : c.NoSaturate)
+    (h : CmdStep A c B) :
     ∃ D, CmdStep C c D ∧ B.Contained D ∧ B.sig = D.sig ∧ B.env = D.env ∧
       B.rules = D.rules := by
-  obtain ⟨e, heff, hcl⟩ := h
+  obtain ⟨e, hreach, hcl⟩ := h
+  replace heff := cmdEffect_of_cmdReach hns hreach
   have key : ∃ E, cmdEffect C c = some E ∧ e.Contained E ∧ e.sig = E.sig ∧ e.env = E.env ∧
       e.rules = E.rules := by
     cases c with
@@ -4811,16 +4931,17 @@ theorem CmdStep.mono {A C B : Database} (hc : A.Contained C) (hsig : A.sig = C.s
       exact ⟨_, rfl, ⟨hc.eqs⟩, hsig, henv, by
         change insert r A.rules = insert r C.rules
         rw [hrules]⟩
-    | run =>
+    | run R =>
       rw [cmdEffect, Option.some.injEq] at heff
       subst heff
       refine ⟨_, rfl, RunRules.mono hc hsig henv hrules, ?_, ?_, ?_⟩
-      · show (RunRules A).sig = (RunRules C).sig
+      · show (RunRules R A).sig = (RunRules R C).sig
         simp only [RunRules, Database.sUnion_sig]; exact hsig
-      · show (RunRules A).env = (RunRules C).env
+      · show (RunRules R A).env = (RunRules R C).env
         simp only [RunRules, Database.sUnion_env]; exact henv
-      · show (RunRules A).rules = (RunRules C).rules
+      · show (RunRules R A).rules = (RunRules R C).rules
         simp only [RunRules, Database.sUnion_rules]; exact hrules
+    | saturate R => exact (hns : False).elim
     | decl f dc =>
       rw [cmdEffect, Option.some.injEq] at heff
       subst heff
@@ -4829,23 +4950,26 @@ theorem CmdStep.mono {A C B : Database} (hc : A.Contained C) (hsig : A.sig = C.s
         rw [hsig], henv, hrules⟩
   obtain ⟨E, hE, hcont, hs, he, hr⟩ := key
   obtain ⟨D, hclD, hcontD, hsigD⟩ := MergeClosure.transport hcont hs hcl
-  exact ⟨D, ⟨E, hE, hclD⟩, hcontD, hsigD,
+  exact ⟨D, ⟨E, cmdReach_of_cmdEffect hns hE, hclD⟩, hcontD, hsigD,
     by rw [(MergeClosure.envRules hcl).1, (MergeClosure.envRules hclD).1, he],
     by rw [(MergeClosure.envRules hcl).2, (MergeClosure.envRules hclD).2, hr]⟩
 
 /-- `CmdStep.mono` iterated. This is what makes the containment contract compose: the
 specification witness for the tail of a program starts from the witness the head
 produced, which contains — but need not equal — the interpreter's state. -/
-theorem ProgramStep.mono {A C B : Database} (hc : A.Contained C) (hsig : A.sig = C.sig)
-    (henv : A.env = C.env) (hrules : A.rules = C.rules) {p : Program}
-    (h : ProgramStep A p B) :
-    ∃ D, ProgramStep C p D ∧ B.Contained D ∧ B.sig = D.sig ∧ B.env = D.env ∧
-      B.rules = D.rules := by
-  induction h generalizing C with
-  | nil => exact ⟨C, .nil, hc, hsig, henv, hrules⟩
-  | cons hcmd _ ih =>
-    obtain ⟨D₀, hD₀, hc₀, hs₀, he₀, hr₀⟩ := hcmd.mono hc hsig henv hrules
-    obtain ⟨D₁, hD₁, hc₁, hs₁, he₁, hr₁⟩ := ih hc₀ hs₀ he₀ hr₀
+theorem ProgramStep.mono {A B : Database} {p : Program} (h : ProgramStep A p B) :
+    ∀ {C : Database}, A.Contained C → A.sig = C.sig → A.env = C.env → A.rules = C.rules →
+      p.NoSaturate →
+      ∃ D, ProgramStep C p D ∧ B.Contained D ∧ B.sig = D.sig ∧ B.env = D.env ∧
+        B.rules = D.rules := by
+  induction h with
+  | nil => exact fun hc hsig henv hrules _ => ⟨_, .nil, hc, hsig, henv, hrules⟩
+  | @cons A e B c cs hcmd _ ih =>
+    intro C hc hsig henv hrules hns
+    obtain ⟨D₀, hD₀, hc₀, hs₀, he₀, hr₀⟩ :=
+      hcmd.mono hc hsig henv hrules (hns c List.mem_cons_self)
+    obtain ⟨D₁, hD₁, hc₁, hs₁, he₁, hr₁⟩ :=
+      ih hc₀ hs₀ he₀ hr₀ (fun c' hc' => hns c' (List.mem_cons_of_mem c hc'))
     exact ⟨D₁, .cons hD₀ hD₁, hc₁, hs₁, he₁, hr₁⟩
 
 /-! #### The same, along `Recorded`
@@ -4893,10 +5017,11 @@ theorem RuleResults.mono_recorded {A C : Database} (hc : A.Recorded C) (hwfA : A
   · exact RuleResults.mono_owes hc hwfA hwfC hsig henv hof hd
 
 /-- `RunRules.mono` along `Recorded`. -/
-theorem RunRules.mono_recorded {A C : Database} (hc : A.Recorded C) (hwfA : A.WF)
+theorem RunRules.mono_recorded {R : RulesetName} {A C : Database} (hc : A.Recorded C)
+    (hwfA : A.WF)
     (hwfC : C.WF) (hsig : A.sig = C.sig) (henv : A.env = C.env) (hrules : A.rules = C.rules)
     (hcond : C.Diag ∨ ∀ r ∈ C.rules, Rule.OrderingFree r) :
-    (RunRules A).Recorded (RunRules C) := by
+    (RunRules R A).Recorded (RunRules R C) := by
   rcases hcond with hdiag | hof
   · exact .of_contained (RunRules.mono (hc.contained_of_diag hdiag) hsig henv hrules)
   · exact RunRules.mono_owes hc hwfA hwfC hsig henv hrules hof
@@ -4907,14 +5032,16 @@ needs no condition because the two environments are equal there, nothing,
 phase in all four. -/
 theorem CmdStep.mono_recorded {A C B : Database} (hc : A.Recorded C) (hwfA : A.WF)
     (hwfC : C.WF) (hsig : A.sig = C.sig) (henv : A.env = C.env) (hrules : A.rules = C.rules)
-    {c : Cmd} (hcond : C.Diag ∨ (C.NoOrdering ∧ c.OrderingFree)) (h : CmdStep A c B) :
+    {c : Cmd} (hns : c.NoSaturate)
+    (hcond : C.Diag ∨ (C.NoOrdering ∧ c.OrderingFree)) (h : CmdStep A c B) :
     ∃ D, CmdStep C c D ∧ B.Recorded D ∧ B.sig = D.sig ∧ B.env = D.env ∧
       B.rules = D.rules := by
   rcases hcond with hdiag | ⟨hno, hcof⟩
   · obtain ⟨D, hstep, hcont, hs, he, hr⟩ :=
-      h.mono (hc.contained_of_diag hdiag) hsig henv hrules
+      h.mono (hc.contained_of_diag hdiag) hsig henv hrules hns
     exact ⟨D, hstep, .of_contained hcont, hs, he, hr⟩
-  obtain ⟨e, heff, hcl⟩ := h
+  obtain ⟨e, hreach, hcl⟩ := h
+  replace heff := cmdEffect_of_cmdReach hns hreach
   have key : ∃ E, cmdEffect C c = some E ∧ e.Recorded E ∧ e.sig = E.sig ∧ e.env = E.env ∧
       e.rules = E.rules ∧ E.WF ∧ e.WF := by
     have hwfe : e.WF := cmdEffect_wf hwfA heff
@@ -4930,17 +5057,18 @@ theorem CmdStep.mono_recorded {A C B : Database} (hc : A.Recorded C) (hwfA : A.W
       exact ⟨_, rfl, hc.setEnvRules _ _ _ _, hsig, henv, by
         change insert r A.rules = insert r C.rules
         rw [hrules], hwfC.congr rfl rfl, hwfe⟩
-    | run =>
+    | run R =>
       rw [cmdEffect, Option.some.injEq] at heff
       subst heff
       refine ⟨_, rfl, RunRules.mono_recorded hc hwfA hwfC hsig henv hrules (Or.inr hno.rules),
         ?_, ?_, ?_, RunRules.wf hwfC, hwfe⟩
-      · show (RunRules A).sig = (RunRules C).sig
+      · show (RunRules R A).sig = (RunRules R C).sig
         simp only [RunRules, Database.sUnion_sig]; exact hsig
-      · show (RunRules A).env = (RunRules C).env
+      · show (RunRules R A).env = (RunRules R C).env
         simp only [RunRules, Database.sUnion_env]; exact henv
-      · show (RunRules A).rules = (RunRules C).rules
+      · show (RunRules R A).rules = (RunRules R C).rules
         simp only [RunRules, Database.sUnion_rules]; exact hrules
+    | saturate R => exact (hns : False).elim
     | decl f dc =>
       rw [cmdEffect, Option.some.injEq] at heff
       subst heff
@@ -4953,7 +5081,7 @@ theorem CmdStep.mono_recorded {A C B : Database} (hc : A.Recorded C) (hwfA : A.W
   obtain ⟨D, hclD, hcontD, hsigD⟩ :=
     MergeClosure.transport_recorded hcont hwfe hwfE hs
       (Or.inr (cmdEffect_noOrdering hno hcof hE).sig) hcl
-  exact ⟨D, ⟨E, hE, hclD⟩, hcontD, hsigD,
+  exact ⟨D, ⟨E, cmdReach_of_cmdEffect hns hE, hclD⟩, hcontD, hsigD,
     by rw [(MergeClosure.envRules hcl).1, (MergeClosure.envRules hclD).1, he],
     by rw [(MergeClosure.envRules hcl).2, (MergeClosure.envRules hclD).2, hr]⟩
 
@@ -4962,18 +5090,20 @@ re-established per command by `CmdStep.noOrdering`, which is why the program's o
 condition appears; the `Database.WF`s are re-established by `CmdStep.wf`. -/
 theorem ProgramStep.mono_owes {A B : Database} {p : Program} (h : ProgramStep A p B) :
     ∀ {C : Database}, A.WF → C.WF → A.Recorded C → A.sig = C.sig → A.env = C.env →
-      A.rules = C.rules → C.NoOrdering → p.OrderingFree →
+      A.rules = C.rules → C.NoOrdering → p.NoSaturate → p.OrderingFree →
       ∃ D, ProgramStep C p D ∧ B.Recorded D ∧ B.sig = D.sig ∧ B.env = D.env ∧
         B.rules = D.rules := by
   induction h with
-  | nil => exact fun _ _ hc hsig henv hrules _ _ => ⟨_, .nil, hc, hsig, henv, hrules⟩
+  | nil => exact fun _ _ hc hsig henv hrules _ _ _ => ⟨_, .nil, hc, hsig, henv, hrules⟩
   | @cons A e B c cs hcmd _ ih =>
-    intro C hwfA hwfC hc hsig henv hrules hno hof
+    intro C hwfA hwfC hc hsig henv hrules hno hns hof
     obtain ⟨D₀, hD₀, hc₀, hs₀, he₀, hr₀⟩ :=
-      hcmd.mono_recorded hc hwfA hwfC hsig henv hrules (Or.inr ⟨hno, hof.1⟩)
+      hcmd.mono_recorded hc hwfA hwfC hsig henv hrules (hns c List.mem_cons_self)
+        (Or.inr ⟨hno, hof.1⟩)
     obtain ⟨D₁, hD₁, hc₁, hs₁, he₁, hr₁⟩ :=
       ih (CmdStep.wf hwfA hcmd) (CmdStep.wf hwfC hD₀) hc₀ hs₀ he₀ hr₀
-        (CmdStep.noOrdering hno hof.1 hD₀) hof.2
+        (CmdStep.noOrdering hno hof.1 hD₀) (fun c' hc' => hns c' (List.mem_cons_of_mem c hc'))
+        hof.2
     exact ⟨D₁, .cons hD₀ hD₁, hc₁, hs₁, he₁, hr₁⟩
 
 /-- `ProgramStep.mono` along `Recorded`. In the diagonal arm `hcond` is about `C` alone, so
@@ -4981,15 +5111,15 @@ nothing has to be re-established at the intermediate witnesses; in the ordering-
 `ProgramStep.mono_owes` re-establishes it per command. -/
 theorem ProgramStep.mono_recorded {A C B : Database} (hc : A.Recorded C) (hwfA : A.WF)
     (hwfC : C.WF) (hsig : A.sig = C.sig) (henv : A.env = C.env) (hrules : A.rules = C.rules)
-    {p : Program} (hcond : C.Diag ∨ (C.NoOrdering ∧ p.OrderingFree))
+    {p : Program} (hns : p.NoSaturate) (hcond : C.Diag ∨ (C.NoOrdering ∧ p.OrderingFree))
     (h : ProgramStep A p B) :
     ∃ D, ProgramStep C p D ∧ B.Recorded D ∧ B.sig = D.sig ∧ B.env = D.env ∧
       B.rules = D.rules := by
   rcases hcond with hdiag | ⟨hno, hof⟩
   · obtain ⟨D, hstep, hcont, hs, he, hr⟩ :=
-      h.mono (hc.contained_of_diag hdiag) hsig henv hrules
+      h.mono (hc.contained_of_diag hdiag) hsig henv hrules hns
     exact ⟨D, hstep, .of_contained hcont, hs, he, hr⟩
-  · exact h.mono_owes hwfA hwfC hc hsig henv hrules hno hof
+  · exact h.mono_owes hwfA hwfC hc hsig henv hrules hno hns hof
 
 /-! #### Declaring a fresh name
 
@@ -5242,12 +5372,13 @@ theorem Inv.union {d e : FDatabase} (hd : d.Inv) (he : e.Inv) (hsig : e.sig = d.
 
 /-- Anything true of `d` and preserved by one rule firing is true of a whole round's rule
 phase. The three folds of `execRunRules`, factored out. -/
-theorem execRunRules_induction {d : FDatabase} {P : FDatabase → Prop} (hinit : P d)
+theorem execRunRules_induction {R : RulesetName} {d : FDatabase} {P : FDatabase → Prop}
+    (hinit : P d)
     (hstep : ∀ (acc e : FDatabase) (r : Rule) (σ : Env), P acc → r ∈ d.rules →
       σ ∈ matchQuery d r.query →
       execActions { d with env := d.env ++ σ } r.actions = some e →
       P (acc.union { e with env := d.env, rules := d.rules })) :
-    P (execRunRules d) := by
+    P (execRunRules R d) := by
   have hone : ∀ (r : Rule), r ∈ d.rules → ∀ (σ : Env), σ ∈ matchQuery d r.query →
       ∀ acc : FDatabase, P acc → P (fireInto d r acc σ) := by
     intro r hr σ hσ acc hacc
@@ -5278,13 +5409,13 @@ theorem execRunRules_induction {d : FDatabase} {P : FDatabase → Prop} (hinit :
       rw [fireRule]
       exact hinner r (hall r List.mem_cons_self) _ (fun _ hσ => hσ) acc hacc
   rw [execRunRules]
-  exact houter d.rules (fun _ hr => hr) d hinit
+  exact houter _ (fun _ hr => (mem_rules_filter.mp hr).1) d hinit
 
 /-- A round's rule phase leaves `sig`, `env` and `rules` alone: every firing is unioned
 into the accumulator, and a union takes those three fields from the left. -/
-theorem execRunRules_fields {d : FDatabase} :
-    (execRunRules d).sig = d.sig ∧ (execRunRules d).env = d.env ∧
-      (execRunRules d).rules = d.rules :=
+theorem execRunRules_fields {R : RulesetName} {d : FDatabase} :
+    (execRunRules R d).sig = d.sig ∧ (execRunRules R d).env = d.env ∧
+      (execRunRules R d).rules = d.rules :=
   execRunRules_induction (P := fun x => x.sig = d.sig ∧ x.env = d.env ∧ x.rules = d.rules)
     ⟨rfl, rfl, rfl⟩ fun _ _ _ _ hacc _ _ _ => hacc
 
@@ -5304,9 +5435,11 @@ theorem Inv.setEnvMatch {d : FDatabase} (h : d.Inv) {q : Query} {σ : Env}
 /-- **A round's rule phase preserves `Inv`.** Each firing runs a rule head, which is an
 action block like any other, so `hrules` is `Inv.execActions`'s premise per rule; the
 result is unioned in, which `Inv.union` covers. -/
-theorem Inv.execRunRules {d : FDatabase} (h : d.Inv)
-    (hrules : ∀ r ∈ d.rules, Actions.WriteLegal r.actions d.sig) : (execRunRules d).Inv := by
-  have := execRunRules_induction (d := d) (P := fun x => x.Inv ∧ x.sig = d.sig) ⟨h, rfl⟩
+theorem Inv.execRunRules {R : RulesetName} {d : FDatabase} (h : d.Inv)
+    (hrules : ∀ r ∈ d.rules, Actions.WriteLegal r.actions d.sig) :
+    (execRunRules R d).Inv := by
+  have := execRunRules_induction (R := R) (d := d) (P := fun x => x.Inv ∧ x.sig = d.sig)
+    ⟨h, rfl⟩
     (fun acc e r σ hacc hr hσ hv => ?_)
   · exact this.1
   refine ⟨hacc.1.union ?_ ?_, hacc.2⟩
@@ -5424,6 +5557,67 @@ def FDatabase.ProgramLegal (d : FDatabase) : Program → Prop
 
 namespace FDatabase
 
+/-! #### A saturating run, on the interpreter side
+
+`runSaturateM` is `runRoundM` iterated and `runRoundM` is a rule phase followed by a merge
+phase, so each fact below is the corresponding fact about those two carried along the fuel
+by an induction. -/
+theorem runRoundM_fields {R : RulesetName} {d e : FDatabase} (hs : d.runRoundM R = some e) :
+    e.sig = d.sig ∧ e.env = d.env ∧ e.rules = d.rules := by
+  obtain ⟨h₁, h₂, h₃⟩ := mergeSaturateF_fields hs
+  exact ⟨h₁.trans execRunRules_fields.1, h₂.trans execRunRules_fields.2.1,
+    h₃.trans execRunRules_fields.2.2⟩
+
+theorem Inv.runRoundM {R : RulesetName} {d e : FDatabase} (h : d.Inv)
+    (hmerges : Signature.MergesLegal d.sig)
+    (hrules : ∀ r ∈ d.rules, Actions.WriteLegal r.actions d.sig)
+    (hs : d.runRoundM R = some e) : e.Inv :=
+  Inv.mergeSaturateF (h.execRunRules hrules)
+    (by rw [execRunRules_fields.1]; exact hmerges) hs
+
+theorem runSaturateM_fields {R : RulesetName} : ∀ (n : Nat) {d e : FDatabase},
+    d.runSaturateM R n = some e → e.sig = d.sig ∧ e.env = d.env ∧ e.rules = d.rules := by
+  intro n
+  induction n with
+  | zero =>
+    intro d e hs
+    rw [FDatabase.runSaturateM] at hs
+    obtain ⟨x, hx, hxe⟩ := Option.bind_eq_some_iff.mp hs
+    split at hxe
+    · rw [Option.some.injEq] at hxe; exact hxe ▸ ⟨rfl, rfl, rfl⟩
+    · exact absurd hxe (by simp)
+  | succ n ih =>
+    intro d e hs
+    rw [FDatabase.runSaturateM] at hs
+    obtain ⟨x, hx, hxe⟩ := Option.bind_eq_some_iff.mp hs
+    split at hxe
+    · rw [Option.some.injEq] at hxe; exact hxe ▸ ⟨rfl, rfl, rfl⟩
+    · obtain ⟨h₁, h₂, h₃⟩ := ih hxe
+      obtain ⟨g₁, g₂, g₃⟩ := runRoundM_fields hx
+      exact ⟨h₁.trans g₁, h₂.trans g₂, h₃.trans g₃⟩
+
+theorem Inv.runSaturateM {R : RulesetName} : ∀ (n : Nat) {d e : FDatabase}, d.Inv →
+    Signature.MergesLegal d.sig → (∀ r ∈ d.rules, Actions.WriteLegal r.actions d.sig) →
+    d.runSaturateM R n = some e → e.Inv := by
+  intro n
+  induction n with
+  | zero =>
+    intro d e h _ _ hs
+    rw [FDatabase.runSaturateM] at hs
+    obtain ⟨x, -, hxe⟩ := Option.bind_eq_some_iff.mp hs
+    split at hxe
+    · rw [Option.some.injEq] at hxe; exact hxe ▸ h
+    · exact absurd hxe (by simp)
+  | succ n ih =>
+    intro d e h hmerges hrules hs
+    rw [FDatabase.runSaturateM] at hs
+    obtain ⟨x, hx, hxe⟩ := Option.bind_eq_some_iff.mp hs
+    split at hxe
+    · rw [Option.some.injEq] at hxe; exact hxe ▸ h
+    · obtain ⟨g₁, -, g₃⟩ := runRoundM_fields hx
+      exact ih (h.runRoundM hmerges hrules hx) (by rw [g₁]; exact hmerges)
+        (fun r hr => by rw [g₁]; exact hrules r (g₃ ▸ hr)) hxe
+
 /-- The signature after a command is the one `Cmd.sigBind` predicts: only `.decl` moves
 it, and neither an action nor a merge phase does. -/
 theorem execCmdM_sig {d d' : FDatabase} {c : Cmd} (hs : d.execCmdM c = some d') :
@@ -5435,9 +5629,13 @@ theorem execCmdM_sig {d d' : FDatabase} {c : Cmd} (hs : d.execCmdM c = some d') 
     rw [(mergeSaturateF_fields h₂).1, execAction_sig h₁]
     rfl
   | rule r => rw [FDatabase.execCmdM, Option.some.injEq] at hs; exact hs ▸ rfl
-  | run =>
+  | run R =>
     rw [FDatabase.execCmdM] at hs
-    rw [(mergeSaturateF_fields hs).1, execRunRules_fields.1]
+    rw [(runRoundM_fields hs).1]
+    rfl
+  | saturate R =>
+    rw [FDatabase.execCmdM] at hs
+    rw [(runSaturateM_fields runFuel hs).1]
     rfl
   | decl f dc => rw [FDatabase.execCmdM, Option.some.injEq] at hs; exact hs ▸ rfl
 
@@ -5461,7 +5659,8 @@ theorem ProgramLegal.declsFresh {p : Program} : ∀ {d d' : FDatabase},
       | decl f dc => exact hp.2.1.1
       | action a => trivial
       | rule r => trivial
-      | run => trivial
+      | run R => trivial
+      | saturate R => trivial
     · show Program.DeclsFresh cs (c.sigBind d.sig)
       rw [← execCmdM_sig hd₁]
       exact ih (hp.2.2.2 d₁ hd₁) hcs
@@ -5484,10 +5683,12 @@ theorem Inv.execCmdM {d d' : FDatabase} (h : d.Inv) {c : Cmd}
     rw [FDatabase.execCmdM, Option.some.injEq] at hs
     exact hs ▸ ⟨h.wf.setEnvRules (rs := r :: d.rules) h.wf.envInTerms, h.eqs,
       h.index.setEnvRules d.env (r :: d.rules)⟩
-  | run =>
+  | run R =>
     rw [FDatabase.execCmdM] at hs
-    refine Inv.mergeSaturateF (h.execRunRules hrules) ?_ hs
-    rw [execRunRules_fields.1]; exact hmerges
+    exact h.runRoundM hmerges hrules hs
+  | saturate R =>
+    rw [FDatabase.execCmdM] at hs
+    exact Inv.runSaturateM runFuel h hmerges hrules hs
   | decl f dc =>
     rw [FDatabase.execCmdM, Option.some.injEq] at hs
     exact hs ▸ h.decl hunused.1 hunused.2
@@ -5514,10 +5715,13 @@ theorem execCmdM_rulesLegal {d d' : FDatabase} {c : Cmd}
     rcases List.mem_cons.mp hr' with rfl | hr''
     · exact ⟨hlegal.1, hlegal.2⟩
     · exact hrules r' hr''
-  | run =>
+  | run R =>
     rw [FDatabase.execCmdM] at hs
-    rw [(mergeSaturateF_fields hs).1, (mergeSaturateF_fields hs).2.2,
-      execRunRules_fields.1, execRunRules_fields.2.2]
+    rw [(runRoundM_fields hs).1, (runRoundM_fields hs).2.2]
+    exact hrules
+  | saturate R =>
+    rw [FDatabase.execCmdM] at hs
+    rw [(runSaturateM_fields runFuel hs).1, (runSaturateM_fields runFuel hs).2.2]
     exact hrules
   | decl f dc =>
     rw [FDatabase.execCmdM, Option.some.injEq] at hs
@@ -5529,7 +5733,7 @@ theorem execCmdM_rulesLegal {d d' : FDatabase} {c : Cmd}
 /-- `execCmdM_contained` with the three fields `Database.Contained` ignores. The extra
 equalities are what `CmdStep.mono` consumes, so the program induction can start its tail
 from the witness the head produced. -/
-theorem execCmdM_contained' {d d' : FDatabase} (h : d.Inv) {c : Cmd}
+theorem execCmdM_contained' {d d' : FDatabase} (h : d.Inv) {c : Cmd} (hns : c.NoSaturate)
     (hlegal : c.WriteLegal d.sig) (hmerges : Signature.MergesLegal d.sig)
     (hrules : ∀ r ∈ d.rules, Actions.WriteLegal r.actions d.sig)
     (hcond : (d.toDatabase.NoUnions ∧ c.UnionFree) ∨
@@ -5572,11 +5776,11 @@ theorem execCmdM_contained' {d d' : FDatabase} (h : d.Inv) {c : Cmd}
     change ({r' | r' ∈ r :: d.rules} : Set Rule) = insert r {r' | r' ∈ d.rules}
     ext r'
     simp
-  | run =>
-    rw [FDatabase.execCmdM] at hs
-    have hRcont : (execRunRules d).toDatabase.Contained (RunRules d.toDatabase) :=
+  | run R =>
+    rw [FDatabase.execCmdM, FDatabase.runRoundM] at hs
+    have hRcont : (execRunRules R d).toDatabase.Contained (RunRules R d.toDatabase) :=
       execRunRules_contained h
-    have hmerges₁ : Signature.MergesLegal (execRunRules d).sig := by
+    have hmerges₁ : Signature.MergesLegal (execRunRules R d).sig := by
       rw [execRunRules_fields.1]; exact hmerges
     obtain ⟨db₂, hcl₂, hcont₂⟩ :=
       mergeSaturateF_contained (h.execRunRules hrules) hmerges₁ (by
@@ -5586,10 +5790,10 @@ theorem execCmdM_contained' {d d' : FDatabase} (h : d.Inv) {c : Cmd}
         · exact Or.inr (by rw [execRunRules_fields.1]; exact hno.sig)) hs
     obtain ⟨db₃, hcl₃, hcont₃, hsig₃⟩ :=
       MergeClosure.transport hRcont (by
-        change (execRunRules d).sig = (RunRules d.toDatabase).sig
+        change (execRunRules R d).sig = (RunRules R d.toDatabase).sig
         simp only [RunRules, Database.sUnion_sig]
         exact execRunRules_fields.1) hcl₂
-    refine ⟨db₃, ⟨RunRules d.toDatabase, rfl, hcl₃⟩, hcont₂.trans_contained hcont₃,
+    refine ⟨db₃, ⟨RunRules R d.toDatabase, rfl, hcl₃⟩, hcont₂.trans_contained hcont₃,
       ?_, ?_, ?_⟩
     · change d'.sig = db₃.sig
       rw [MergeClosure.sig hcl₃, (mergeSaturateF_fields hs).1, execRunRules_fields.1]
@@ -5605,6 +5809,7 @@ theorem execCmdM_contained' {d d' : FDatabase} (h : d.Inv) {c : Cmd}
         execRunRules_fields.2.2]
       simp only [RunRules, Database.sUnion_rules]
       rfl
+  | saturate R => exact (hns : False).elim
   | decl f dc =>
     rw [FDatabase.execCmdM, Option.some.injEq] at hs
     subst hs
@@ -5629,7 +5834,7 @@ for the interpreter's, and before every command carried one this theorem was **f
 is what a merge body needs and `Program.SetLegal` does not supply; `hnu` and `hcu` are what
 `MergeStep.transport_recorded` needs, since the merge phase is where the interpreter's
 re-keying has to be matched at a *congruent* key. -/
-theorem execCmdM_contained {d d' : FDatabase} (h : d.Inv) {c : Cmd}
+theorem execCmdM_contained {d d' : FDatabase} (h : d.Inv) {c : Cmd} (hns : c.NoSaturate)
     (hlegal : c.WriteLegal d.sig) (hmerges : Signature.MergesLegal d.sig)
     (hrules : ∀ r ∈ d.rules, Actions.WriteLegal r.actions d.sig)
     (hcond : (d.toDatabase.NoUnions ∧ c.UnionFree) ∨
@@ -5637,7 +5842,7 @@ theorem execCmdM_contained {d d' : FDatabase} (h : d.Inv) {c : Cmd}
     (hs : d.execCmdM c = some d') :
     ∃ db, CmdStep d.toDatabase c db ∧ d'.toDatabase.Recorded db := by
   obtain ⟨db, hstep, hcont, -, -, -⟩ :=
-    execCmdM_contained' h hlegal hmerges hrules hcond hs
+    execCmdM_contained' h hns hlegal hmerges hrules hcond hs
   exact ⟨db, hstep, hcont⟩
 
 /-- `execProgramM_contained`, with the program first so the induction can generalize the
@@ -5648,24 +5853,26 @@ witness `db₁`, and `Database.NoUnions.of_recorded` pushes it back down onto th
 interpreter's `d₁`, which records into `db₁` and so has a subset of its equations. That is
 why no union-freedom lemma about the interpreter is needed anywhere. -/
 theorem execProgramM_contained_aux {p : Program} : ∀ {d d' : FDatabase}, d.Inv →
-    Signature.MergesLegal d.sig →
+    p.NoSaturate → Signature.MergesLegal d.sig →
     (∀ r ∈ d.rules, Actions.WriteLegal r.actions d.sig) →
     ((d.toDatabase.NoUnions ∧ p.UnionFree) ∨ (d.toDatabase.NoOrdering ∧ p.OrderingFree)) →
     d.ProgramLegal p → d.execProgramM p = some d' →
     ∃ db, ProgramStep d.toDatabase p db ∧ d'.toDatabase.Recorded db := by
   induction p with
   | nil =>
-    intro d d' hinv _ _ _ _ hs
+    intro d d' hinv _ _ _ _ _ hs
     rw [FDatabase.execProgramM, Option.some.injEq] at hs
     exact ⟨d.toDatabase, .nil, hs ▸ Database.Recorded.refl⟩
   | cons c cs ih =>
-    intro d d' h hmerges hrules hcond hp hs
+    intro d d' h hns hmerges hrules hcond hp hs
     rw [FDatabase.execProgramM] at hs
     obtain ⟨d₁, hd₁, hcs⟩ := Option.bind_eq_some_iff.mp hs
     rw [FDatabase.ProgramLegal] at hp
     obtain ⟨hlegal, hunused, hmerges', hnext⟩ := hp
+    have hnsc : c.NoSaturate := hns c List.mem_cons_self
+    have hnscs : Program.NoSaturate cs := fun c' hc' => hns c' (List.mem_cons_of_mem c hc')
     obtain ⟨db₁, hstep₁, hcont₁, hsig₁, henv₁, hrules₁⟩ :=
-      execCmdM_contained' h hlegal hmerges hrules
+      execCmdM_contained' h hnsc hlegal hmerges hrules
         (hcond.imp (fun hu => ⟨hu.1, hu.2.1⟩) fun ho => ⟨ho.1, ho.2.1⟩) hd₁
     have hinv₁ : d₁.Inv := h.execCmdM hlegal hmerges hunused hrules hd₁
     -- the condition at the interpreter's next state, and at the specification's witness
@@ -5678,11 +5885,11 @@ theorem execProgramM_contained_aux {p : Program} : ∀ {d d' : FDatabase}, d.Inv
       · have hno₁ := CmdStep.noOrdering hno hcof.1 hstep₁
         exact ⟨Or.inr ⟨hno₁.of_eq hsig₁ hrules₁, hcof.2⟩, Or.inr ⟨hno₁, hcof.2⟩⟩
     obtain ⟨db₂, hstep₂, hcont₂⟩ :=
-      ih hinv₁ (by rw [execCmdM_sig hd₁]; exact hmerges')
+      ih hinv₁ hnscs (by rw [execCmdM_sig hd₁]; exact hmerges')
         (execCmdM_rulesLegal hlegal hunused hrules hd₁) hnext₁.1 (hnext d₁ hd₁) hcs
     obtain ⟨db₃, hstep₃, hcont₃, hsig₃, -, -⟩ :=
       ProgramStep.mono_recorded hcont₁ hinv₁.wf (CmdStep.wf h.wf hstep₁) hsig₁ henv₁ hrules₁
-        hnext₁.2 hstep₂
+        hnscs hnext₁.2 hstep₂
     exact ⟨db₃, .cons hstep₁ hstep₃, hcont₂.trans hcont₃ (hstep₂.wf hinv₁.wf)
       (hstep₃.wf (CmdStep.wf h.wf hstep₁))⟩
 
@@ -5704,15 +5911,18 @@ merge fragment is not excluded.
 "Union-freedom, and where it puts `Recorded`" and "Ordering-freedom, and where it puts
 `Recorded`". It *does* restrict which programs are covered, and it is the price of the
 re-keying contract: without it the two `Recorded` transports the induction runs on are
-false. -/
+false.
+
+`hns` is what `Cmd.saturate` costs here; `execM_contained` says what a version without it
+would need. -/
 theorem execProgramM_contained {d d' : FDatabase} (h : d.Inv) {p : Program}
-    (hmerges : Signature.MergesLegal d.sig)
+    (hns : p.NoSaturate) (hmerges : Signature.MergesLegal d.sig)
     (hrules : ∀ r ∈ d.rules, Actions.WriteLegal r.actions d.sig)
     (hcond : (d.toDatabase.NoUnions ∧ p.UnionFree) ∨
       (d.toDatabase.NoOrdering ∧ p.OrderingFree))
     (hp : d.ProgramLegal p) (hs : d.execProgramM p = some d') :
     ∃ db, ProgramStep d.toDatabase p db ∧ d'.toDatabase.Recorded db :=
-  execProgramM_contained_aux h hmerges hrules hcond hp hs
+  execProgramM_contained_aux h hns hmerges hrules hcond hp hs
 
 end FDatabase
 
@@ -5745,11 +5955,27 @@ singleton. What it excludes is `Encoding/Encode.lean`, whose `encodeAction` emit
 
 See the section header above for why the contract is `Database.Recorded` rather than the
 equality `exec_programStep` enjoys, and `Spec/Merge.lean` for why it is that rather than
-`Database.Contained`. -/
-theorem execM_contained {p : Program} (hp : FDatabase.empty.ProgramLegal p)
+`Database.Contained`.
+
+**`hns` — the program runs no `Cmd.saturate`** — is the one restriction this branch adds,
+and unlike `hcond` it is not known to be necessary; it is what the present proof needs.
+The obstacle is exact. `execCmdM`'s `.saturate` case would have to produce a
+`SaturateReach R d.toDatabase db` witness out of `runSaturateM` returning an answer, and
+`runSaturateM` returning an answer says only that the *interpreter's* round added nothing.
+`execRunRules_contained` is a containment, not an equality — the enumerator under-fires,
+because `valueTerms` is stricter than `Spec/Match.lean`'s `ValidEnv` — so an interpreter
+fixpoint need not be a specification fixpoint, and `RunSaturated`'s first conjunct is
+exactly a specification fixpoint. On the constructor fragment there is no gap
+(`execRunRules_RunRules` is an equality, which is how `Proofs/Interp.lean`'s
+`runSaturateF_saturateReach` goes through), but encoded programs are not in that fragment:
+`@UF` and every `@fView` are `.merge` functions. Closing it needs either an enumerator that
+is complete for `ValidEnv` on merge functions, or a `SaturateReach` weakened to the
+substitutions the interpreter can see — a change to `Spec/`, not to this proof. -/
+theorem execM_contained {p : Program} (hns : p.NoSaturate)
+    (hp : FDatabase.empty.ProgramLegal p)
     (hcond : p.UnionFree ∨ p.OrderingFree) {d : FDatabase} (h : execM p = some d) :
     ∃ db, ProgramStep FDatabase.empty.toDatabase p db ∧ d.toDatabase.Recorded db :=
-  FDatabase.execProgramM_contained FDatabase.Inv.empty
+  FDatabase.execProgramM_contained FDatabase.Inv.empty hns
     (fun g dc body res hg _ => absurd hg (by simp [FDatabase.empty]))
     (fun r hr => absurd hr (by simp [FDatabase.empty]))
     (hcond.imp

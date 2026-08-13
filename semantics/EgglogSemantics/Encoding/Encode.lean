@@ -1,4 +1,4 @@
-import EgglogSemantics.Spec.Step
+import EgglogSemantics.Proofs.Step
 
 /-!
 # The proof encoding, as a program transformation
@@ -45,11 +45,14 @@ column is vacuous for that reason — a shape the encoder does not yet write, ra
 one the language cannot express. `Lit` still wants `.unit` and `.str`, which is what the
 proof column's `Unit` and `@Rule_<k>`'s rule name need.
 
-**No disequality and no rulesets.** `Pattern` has no `!=`, so the `(!= b c)` guards on
-path compression and on the rebuild rule are dropped; they only suppressed no-op
-firings. `Cmd.run` has no ruleset argument, so the maintenance rules are ordinary rules
-that fire in every round rather than a `run-schedule`, and "the rebuild schedule has
-saturated" becomes the predicate `Rebuilt` rather than a command.
+**No disequality.** `Pattern` has no `!=`, so the `(!= b c)` guards on path compression
+and on the rebuild rule are dropped; they only suppressed no-op firings.
+
+**One flat rebuild ruleset.** The maintenance rules join `rebuildRuleset` and every encoded
+run is followed by `Cmd.saturate rebuildRuleset`. egglog nests three rulesets in a
+`run-schedule`; one flat ruleset run to a fixpoint is exactly as strong, since a fixpoint of
+a union of rulesets is a fixpoint of each. `Rebuilt` is that command's postcondition
+(`saturateReach_rebuilt`).
 
 ## Fresh ids
 
@@ -77,6 +80,14 @@ namespace Egglog
 /-- The union-find table. The modelled language has one eq-sort, so where egglog emits
 `@UF_<Sort>` per sort there is one table here. -/
 def ufName : FnName := "@UF"
+
+/-- The ruleset the maintenance rules join, and the one every emitted `Cmd.saturate` runs.
+
+**One flat ruleset, one `saturate`.** egglog's rebuild schedule nests three
+(`egglog/src/proofs/proof_encoding.rs:1928-1943`); this is exactly as strong, because a
+fixpoint of the union of rulesets is a fixpoint of each, and `Cmd.saturate` runs to a
+fixpoint. -/
+def rebuildRuleset : RulesetName := "@rebuild"
 
 /-- `f`'s view: the functional dependency `children ↦ eclass`. All queries read it. -/
 def viewName (f : FnName) : FnName := "@" ++ f ++ "View"
@@ -174,7 +185,8 @@ def Action.ctors : Action → List (FnName × Nat)
 def Cmd.ctors : Cmd → List (FnName × Nat)
   | .action a => a.ctors
   | .rule r => (r.query.flatMap Pattern.ctors) ++ (r.actions.flatMap Action.ctors)
-  | .run => []
+  | .run _ => []
+  | .saturate _ => []
   | .decl f d => [(f, d.arity)]
 
 /-- Every function the program mentions, deduplicated. One table triple is emitted per
@@ -322,7 +334,7 @@ def encodeRule (r : Rule) (n : Nat) : Rule × Nat :=
   match encodeQuery r.query n with
   | (q, n₁) =>
       match encodeActions r.actions n₁ with
-      | (as, n₂) => (⟨q, as⟩, n₂)
+      | (as, n₂) => ({ query := q, actions := as, ruleset := r.ruleset }, n₂)
 
 /-! ### Maintenance
 
@@ -333,7 +345,8 @@ changes nothing. -/
 def pathCompressRule : Rule :=
   { query := [.values [.var "@b"] ufName [.var "@a"],
               .values [.var "@c"] ufName [.var "@b"]],
-    actions := [.set ufName [.var "@a"] [.var "@c"]] }
+    actions := [.set ufName [.var "@a"] [.var "@c"]],
+    ruleset := rebuildRuleset }
 
 /-- `@c0 … @c(k-1)`, a rebuild rule's column variables. -/
 def rebuildVars (k : Nat) : List Expr :=
@@ -355,21 +368,19 @@ def rebuildRules (f : FnName) (k : Nat) : List Rule :=
   let view : Pattern := .values [.var "@e"] (viewName f) cs
   let eclassRule : Rule :=
     { query := [view, .values [.var "@x"] ufName [.var "@e"]],
-      actions := [.set (viewName f) cs [.var "@x"]] }
+      actions := [.set (viewName f) cs [.var "@x"]],
+      ruleset := rebuildRuleset }
   eclassRule :: (List.range k).map fun i =>
     { query := [view, .values [.var "@x"] ufName [.var ("@c" ++ toString i)]],
-      actions := [.set (viewName f) (cs.set i (.var "@x")) [.var "@e"]] }
+      actions := [.set (viewName f) (cs.set i (.var "@x")) [.var "@e"]],
+      ruleset := rebuildRuleset }
 
 /-- Every maintenance rule the encoding of `P` emits. `Rebuilt` is stated over it. -/
 def maintenanceRules (P : Program) : List Rule :=
   pathCompressRule :: P.ctors.flatMap fun fk => rebuildRules fk.1 fk.2
 
 /-! ### The transformation -/
-/-- The declarations and maintenance rules, emitted once at the top.
-
-egglog runs the maintenance rules on a `run-schedule` between the source program's
-commands; with no schedules they are ordinary rules, so they fire once per `Cmd.run`
-alongside the encoded source rules. -/
+/-- The declarations and maintenance rules, emitted once at the top. -/
 def encodePrelude (P : Program) : Program :=
   .decl ufName ufDecl ::
     (P.ctors.flatMap fun fk =>
@@ -383,7 +394,8 @@ would be a redeclaration (`Cmd.DeclFresh`). -/
 def encodeCmd : Cmd → Nat → Program × Nat
   | .action a, n => match encodeAction a n with | (as, n₁) => (as.map .action, n₁)
   | .rule r, n => match encodeRule r n with | (r', n₁) => ([.rule r'], n₁)
-  | .run, n => ([.run], n)
+  | .run R, n => ([.run R, .saturate rebuildRuleset], n)
+  | .saturate R, n => ([.saturate R, .saturate rebuildRuleset], n)
   | .decl _ _, n => ([], n)
 
 /-- `encodeCmd` over a program. -/
@@ -438,7 +450,8 @@ def Action.vars : Action → List Var
 def Cmd.vars : Cmd → List Var
   | .action a => a.vars
   | .rule r => r.query.vars ∪ (r.actions.flatMap Action.vars)
-  | .run => []
+  | .run _ => []
+  | .saturate _ => []
   | .decl _ _ => []
 
 /-- Every variable the program mentions. -/
@@ -512,21 +525,41 @@ def SameClass (d : Database) (a b : Term) : Prop :=
   ∃ ea eb l, ViewRepr d a ea ∧ ViewRepr d b eb ∧ UFLeader d ea l ∧ UFLeader d eb l
 
 /-- The rebuild schedule has run out: no maintenance rule adds anything, and no merge
-step changes anything.
+step changes anything. It is the hypothesis the completeness half of simulation needs —
+until the views are re-keyed to leaders, a collision that congruence would find has not yet
+happened.
 
-egglog's `(saturate (seq (run @rebuilding_cleanup) (saturate (run @parent))
-(run @rebuilding)))`, as a predicate on the state rather than a command, because
-`Cmd.run` carries no ruleset. It is the hypothesis the completeness half of simulation
-needs: until the views are re-keyed to leaders, a collision that congruence would find
-has not yet happened.
-
-**Known wrong, and kept only as a placeholder.** `ENCODING.md`, finding 1: no state
-`encode` runs to satisfies this, and appending `(run)`s does not repair it, because the
-number of rounds needed to re-key grows with term depth. Restating completeness against a
-reachable saturation condition is what M11 needs before any of this is worth proving. -/
+`ENCODING.md`, finding 1, was that no state `encode` ran to satisfied this, because
+`Cmd.run` carried no ruleset and the number of rounds needed to re-key grows with term
+depth. `encode` now emits `Cmd.saturate rebuildRuleset` after every run, and
+`saturateReach_rebuilt` below is the repair: this is that command's *postcondition*. -/
 def Rebuilt (P : Program) (d : Database) : Prop :=
   (∀ r ∈ maintenanceRules P, ∀ d' ∈ RuleResults d r, Database.Contained d' d) ∧
     MergeSaturated d
+
+/-- **`Rebuilt` is `RunSaturated rebuildRuleset`.** The only bookkeeping is `hR`: the
+rules of `d` in the rebuild ruleset are the maintenance rules `encode` emitted. -/
+theorem rebuilt_iff_runSaturated {P : Program} {d : Database}
+    (hR : ∀ r, (r ∈ d.rules ∧ r.ruleset = rebuildRuleset) ↔ r ∈ maintenanceRules P) :
+    RunSaturated rebuildRuleset d ↔ Rebuilt P d := by
+  rw [RunSaturated, runRules_eq_self_iff]
+  exact and_congr_left' ⟨fun h r hr => h r ((hR r).mpr hr).1 ((hR r).mpr hr).2,
+    fun h r hr hRr => h r ((hR r).mp ⟨hr, hRr⟩)⟩
+
+/-- **And `Cmd.saturate rebuildRuleset` delivers it**, with no extra hypothesis. This is
+what the ruleset bought: `Rebuilt` went from a condition nothing reachable satisfied to the
+postcondition of a command the encoding emits. -/
+theorem saturateReach_rebuilt {P : Program} {db d : Database}
+    (hR : ∀ r, (r ∈ d.rules ∧ r.ruleset = rebuildRuleset) ↔ r ∈ maintenanceRules P)
+    (h : SaturateReach rebuildRuleset db d) : Rebuilt P d :=
+  (rebuilt_iff_runSaturated hR).mp h.2
+
+/-- Read through `CmdStep`: whatever the encoded program's rebuild command steps to is
+rebuilt. `cmdStep_saturate_iff` is what makes the trailing merge phase neutral here. -/
+theorem cmdStep_rebuilt {P : Program} {db d : Database}
+    (hR : ∀ r, (r ∈ d.rules ∧ r.ruleset = rebuildRuleset) ↔ r ∈ maintenanceRules P)
+    (h : CmdStep db (.saturate rebuildRuleset) d) : Rebuilt P d :=
+  saturateReach_rebuilt hR (cmdStep_saturate_iff.mp h)
 
 /-! ### Proof nodes
 

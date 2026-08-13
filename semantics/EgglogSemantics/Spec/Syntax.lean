@@ -5,9 +5,9 @@ import Batteries.Data.List.Basic
 
 ```
 Program = (Cmd ...)
-Cmd     = Action | Rule | (run) | Decl
+Cmd     = Action | Rule | (run R) | (saturate R) | Decl
 Decl    = (datatype ...) | (constructor ...) | (function ... :merge ...)
-Rule    = (rule Query Actions)
+Rule    = (rule Query Actions :ruleset R)
 Query   = (Pattern ...)
 Pattern = expr | (= expr expr) | (= (values expr ...) (f expr ...))
 Action  = expr | (let var expr) | (union expr expr) | (set (f expr ...) expr ...)
@@ -54,10 +54,19 @@ inductive Action where
   column. -/
   | set : FnName → List Expr → List Expr → Action
 
-/-- A rule. Its actions run once per substitution satisfying its query. -/
+/-- A ruleset name. A rule joins one with `:ruleset <name>`, and a run names the one it
+fires. egglog's *unnamed* ruleset is the empty name: that is what a rule with no
+`:ruleset` joins and what `(run 1)` runs (`egglog/src/ast/parse.rs:713`, `:849`); a named
+one is declared with `(ruleset <name>)` (`:686`). -/
+abbrev RulesetName := String
+
+/-- A rule. Its actions run once per substitution satisfying its query, in the rounds of
+the ruleset it joins. -/
 structure Rule where
   query : Query
   actions : List Action
+  /-- The ruleset this rule belongs to. Only a run naming it fires it. -/
+  ruleset : RulesetName
 
 /-- How two entries of a **merge function** colliding on one key combine: `merge body res`
 runs `body` once with the two outputs bound by `mergeEnv`, then evaluates `res`, one
@@ -145,7 +154,12 @@ def Query.vars : Query → List Var
 inductive Cmd where
   | action : Action → Cmd
   | rule : Rule → Cmd
-  | run : Cmd
+  /-- One round of a ruleset: egglog's `(run <ruleset> 1)`, which is `(repeat 1 (run
+  <ruleset>))` (`egglog/src/ast/parse.rs:834-864`). -/
+  | run : RulesetName → Cmd
+  /-- Rounds of a ruleset until nothing changes: egglog's `(run-schedule (saturate
+  <ruleset>))` (`egglog/src/ast/parse.rs:1073-1079`). -/
+  | saturate : RulesetName → Cmd
   | decl : FnName → FnDecl → Cmd
 
 abbrev Program := List Cmd
@@ -160,5 +174,16 @@ def Cmd.CtorDecl : Cmd → Prop
 /-- Every declaration in the program declares a constructor, so every state it reaches is
 `Signature.AllConstructors`. -/
 def Program.CtorDecls (p : Program) : Prop := ∀ c ∈ p, c.CtorDecl
+
+/-! ### The terminating fragment -/
+
+/-- `c` is not a saturating run. A ruleset that keeps adding terms has no fixpoint, so
+`Cmd.saturate` is the one command that may fail to reach a state at all. -/
+def Cmd.NoSaturate : Cmd → Prop
+  | .saturate _ => False
+  | _ => True
+
+/-- The program bounds its own running: every round count is written down. -/
+def Program.NoSaturate (p : Program) : Prop := ∀ c ∈ p, c.NoSaturate
 
 end Egglog

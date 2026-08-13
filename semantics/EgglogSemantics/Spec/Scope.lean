@@ -71,7 +71,8 @@ def Cmd.bind : Cmd → Scope → Scope
 @[simp] def Cmd.Scoped : Cmd → Scope → Prop
   | .action a, Γ => a.Scoped Γ
   | .rule r, Γ => r.Scoped Γ
-  | .run, _ => True
+  | .run _, _ => True
+  | .saturate _, _ => True
   | .decl _ _, _ => True
 
 /-- Each command in the scope the earlier ones leave. -/
@@ -119,7 +120,8 @@ def Action.Evaluable : Action → Signature → Prop
 @[simp] def Cmd.Evaluable : Cmd → Signature → Prop
   | .action a, sig => a.Evaluable sig
   | .rule r, sig => r.Evaluable sig
-  | .run, _ => True
+  | .run _, _ => True
+  | .saturate _, _ => True
   | .decl _ _, _ => True
 
 /-- Each command in the signature the earlier ones leave. -/
@@ -147,7 +149,8 @@ def Action.SetLegal : Action → Signature → Prop
 @[simp] def Cmd.SetLegal : Cmd → Signature → Prop
   | .action a, sig => a.SetLegal sig
   | .rule r, sig => r.SetLegal sig
-  | .run, _ => True
+  | .run _, _ => True
+  | .saturate _, _ => True
   | .decl _ _, _ => True
 
 @[simp] def Program.SetLegal : Program → Signature → Prop
@@ -212,7 +215,8 @@ This is the one check besides `MergeDeclared` that walks into a `:merge`, for th
 @[simp] def Cmd.WidthOk : Cmd → Signature → Prop
   | .action a, sig => a.WidthOk sig
   | .rule r, sig => r.WidthOk sig
-  | .run, _ => True
+  | .run _, _ => True
+  | .saturate _, _ => True
   | .decl f d, sig => ∀ ms ∈ d.merge, ms.WidthOk d.outArity ((Cmd.decl f d).sigBind sig)
 
 /-- Each command in the signature the earlier ones leave, as `Program.SetLegal`. -/
@@ -229,7 +233,8 @@ breaking `Database.DeclaredTerms`. -/
   | .decl f _, sig => sig f = none
   | .action _, _ => True
   | .rule _, _ => True
-  | .run, _ => True
+  | .run _, _ => True
+  | .saturate _, _ => True
 
 /-- Each command is asked **before** `Cmd.sigBind` installs its declaration; asked after,
 the check would read back `Function.update`'s own entry and always fail. -/
@@ -269,7 +274,8 @@ it resolves. The opposite of `Cmd.DeclFresh`, which is asked before. -/
   | .decl f d, sig => ∀ ms ∈ d.merge, ms.Declared ((Cmd.decl f d).sigBind sig)
   | .action _, _ => True
   | .rule _, _ => True
-  | .run, _ => True
+  | .run _, _ => True
+  | .saturate _, _ => True
 
 @[simp] def Program.MergeDeclared : Program → Signature → Prop
   | [], _ => True
@@ -316,7 +322,8 @@ def Signature.UnionFree (sig : Signature) : Prop := ∀ f d, sig f = some d → 
 @[simp] def Cmd.UnionFree : Cmd → Prop
   | .action a => a.UnionFree
   | .rule r => r.UnionFree
-  | .run => True
+  | .run _ => True
+  | .saturate _ => True
   | .decl _ d => d.UnionFree
 
 /-- No signature threading: which actions a command carries does not depend on what is
@@ -384,7 +391,8 @@ def Signature.OrderingFree (sig : Signature) : Prop :=
 @[simp] def Cmd.OrderingFree : Cmd → Prop
   | .action a => a.OrderingFree
   | .rule r => r.OrderingFree
-  | .run => True
+  | .run _ => True
+  | .saturate _ => True
   | .decl _ d => d.OrderingFree
 
 /-- No signature threading, as `Program.UnionFree`. -/

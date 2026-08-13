@@ -20,7 +20,7 @@ statements are known defective, and porting proofs of nothing is not worth the m
 
 ## Two findings, both machine-checked before deletion
 
-### 1. `Rebuilt` is unsatisfiable at the states `encode` runs to
+### 1. `Rebuilt` was unsatisfiable at the states `encode` ran to — **fixed**
 
 `Rebuilt P d` is the saturation hypothesis `encode_complete`, `encode_simulation` and
 `encode_simulation_of_domain` all carry. It is satisfiable for some states and not for the ones
@@ -35,10 +35,17 @@ that matter. Two source programs differing only in *which* term is built:
 The general form: **any** state satisfying `Rebuilt` must already hold every re-keyed view
 row. A hypothesis nothing reachable satisfies makes the three theorems it guards vacuous.
 
-**The recorded fix does not work.** Appending `(run)` to `encode`'s output does not
-suffice: the number of rounds needed to re-key grows with term depth, so no fixed number
-of `(run)` commands saturates for all inputs. A correct fix has to either run to
-saturation or state completeness against a genuinely reachable condition.
+**Appending `(run)`s does not work**, and that was the whole difficulty: the number of
+rounds needed to re-key grows with term depth, so no fixed number of `(run)` commands
+saturates for all inputs. The fix had to run to saturation.
+
+**Repaired by rulesets.** `Spec/Step.lean` now has `Cmd.saturate R`, whose postcondition
+is `RunSaturated R` — the ruleset at a fixpoint and no merge step left. The maintenance
+rules join `rebuildRuleset` and `encodeCmd` emits `Cmd.saturate rebuildRuleset` after
+every run, so `Rebuilt` is now a *postcondition* rather than a hypothesis:
+`Encoding/Encode.lean`'s `saturateReach_rebuilt` and `cmdStep_rebuilt`. One flat ruleset
+suffices where egglog nests three, because a fixpoint of a union of rulesets is a fixpoint
+of each.
 
 ### 2. `CongOn` cannot express existence
 
@@ -87,10 +94,9 @@ never checked for vacuity.
 ## What survives
 
 `Encoding/Encode.lean` — `encode`, `encodeBuild`, `maintenanceRules`, `Rebuilt`,
-`EncodeDomain`, `viewName`/`termName`/`ufName`. The encoder's definitions are unchanged and
-depend on none of the deleted files. Note that `Rebuilt` as defined there is the predicate
-finding 1 refutes; it is kept because re-deriving M11 will want to state something in its
-place, not because it is right, and its docstring now says so.
+`EncodeDomain`, `viewName`/`termName`/`ufName`, `rebuildRuleset`. The encoder's definitions
+depend on none of the deleted files. `Rebuilt` is now reachable — see finding 1 — and the
+three payoff theorems next to it are the only proofs the file carries.
 
 **A third obstacle, and it is unrepairable in general.** `mergeBody`/`mergeResult` — the `:merge`
 shared by `@UF` and every view — are built from `ordering-min`/`ordering-max`, which are **not

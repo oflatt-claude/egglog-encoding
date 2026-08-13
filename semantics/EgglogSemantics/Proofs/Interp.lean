@@ -912,38 +912,53 @@ theorem rules_fireRule {d acc : FDatabase} {r : Rule} :
     (fireRule d acc r).rules = acc.rules :=
   rules_foldl (g := fireInto d r) (fun _ _ => rules_fireInto) _ _
 
-theorem mem_terms_execRunRules {d : FDatabase} {t : Term} :
-    t ∈ (execRunRules d).terms ↔ t ∈ d.terms ∨
-      ∃ r ∈ d.rules, ∃ σ ∈ matchQuery d r.query, ∃ d', Fired d r σ d' ∧ t ∈ d'.terms :=
-  mem_terms_foldl (g := fireRule d)
+/-- A round folds over `R`'s rules, so every membership lemma below reads the filter back
+off as the side condition `r.ruleset = R`. -/
+theorem mem_rules_filter {R : RulesetName} {d : FDatabase} {r : Rule} :
+    r ∈ d.rules.filter (fun r => r.ruleset == R) ↔ r ∈ d.rules ∧ r.ruleset = R := by
+  simp [List.mem_filter]
+
+theorem mem_terms_execRunRules {R : RulesetName} {d : FDatabase} {t : Term} :
+    t ∈ (execRunRules R d).terms ↔ t ∈ d.terms ∨
+      ∃ r ∈ d.rules, r.ruleset = R ∧
+        ∃ σ ∈ matchQuery d r.query, ∃ d', Fired d r σ d' ∧ t ∈ d'.terms := by
+  rw [execRunRules, mem_terms_foldl (g := fireRule d)
     (C := fun r t => ∃ σ ∈ matchQuery d r.query, ∃ d', Fired d r σ d' ∧ t ∈ d'.terms)
-    (fun _ _ _ => mem_terms_fireRule) _ _ _
+    (fun _ _ _ => mem_terms_fireRule)]
+  simp only [mem_rules_filter, and_assoc]
 
-theorem mem_eqs_execRunRules {d : FDatabase} {p : Term × Term} :
-    p ∈ (execRunRules d).eqs ↔ p ∈ d.eqs ∨
-      ∃ r ∈ d.rules, ∃ σ ∈ matchQuery d r.query, ∃ d', Fired d r σ d' ∧ p ∈ d'.eqs :=
-  mem_eqs_foldl (g := fireRule d)
+theorem mem_eqs_execRunRules {R : RulesetName} {d : FDatabase} {p : Term × Term} :
+    p ∈ (execRunRules R d).eqs ↔ p ∈ d.eqs ∨
+      ∃ r ∈ d.rules, r.ruleset = R ∧
+        ∃ σ ∈ matchQuery d r.query, ∃ d', Fired d r σ d' ∧ p ∈ d'.eqs := by
+  rw [execRunRules, mem_eqs_foldl (g := fireRule d)
     (C := fun r p => ∃ σ ∈ matchQuery d r.query, ∃ d', Fired d r σ d' ∧ p ∈ d'.eqs)
-    (fun _ _ _ => mem_eqs_fireRule) _ _ _
+    (fun _ _ _ => mem_eqs_fireRule)]
+  simp only [mem_rules_filter, and_assoc]
 
-theorem mem_rows_execRunRules {d : FDatabase} {q : Row} :
-    q ∈ (execRunRules d).rows ↔ q ∈ d.rows ∨
-      ∃ r ∈ d.rules, ∃ σ ∈ matchQuery d r.query, ∃ d', Fired d r σ d' ∧ q ∈ d'.rows :=
-  mem_rows_foldl (g := fireRule d)
+theorem mem_rows_execRunRules {R : RulesetName} {d : FDatabase} {q : Row} :
+    q ∈ (execRunRules R d).rows ↔ q ∈ d.rows ∨
+      ∃ r ∈ d.rules, r.ruleset = R ∧
+        ∃ σ ∈ matchQuery d r.query, ∃ d', Fired d r σ d' ∧ q ∈ d'.rows := by
+  rw [execRunRules, mem_rows_foldl (g := fireRule d)
     (C := fun r q => ∃ σ ∈ matchQuery d r.query, ∃ d', Fired d r σ d' ∧ q ∈ d'.rows)
-    (fun _ _ _ => mem_rows_fireRule) _ _ _
+    (fun _ _ _ => mem_rows_fireRule)]
+  simp only [mem_rules_filter, and_assoc]
 
-theorem eqsInTerms_execRunRules {d : FDatabase} (he : d.EqsInTerms) :
-    (execRunRules d).EqsInTerms :=
+theorem eqsInTerms_execRunRules {R : RulesetName} {d : FDatabase} (he : d.EqsInTerms) :
+    (execRunRules R d).EqsInTerms :=
   eqsInTerms_foldl (g := fireRule d) (fun _ _ h => eqsInTerms_fireRule he h) _ he
 
-@[simp] theorem sig_execRunRules {d : FDatabase} : (execRunRules d).sig = d.sig :=
+@[simp] theorem sig_execRunRules {R : RulesetName} {d : FDatabase} :
+    (execRunRules R d).sig = d.sig :=
   sig_foldl (g := fireRule d) (fun _ _ => sig_fireRule) _ _
 
-@[simp] theorem env_execRunRules {d : FDatabase} : (execRunRules d).env = d.env :=
+@[simp] theorem env_execRunRules {R : RulesetName} {d : FDatabase} :
+    (execRunRules R d).env = d.env :=
   env_foldl (g := fireRule d) (fun _ _ => env_fireRule) _ _
 
-@[simp] theorem rules_execRunRules {d : FDatabase} : (execRunRules d).rules = d.rules :=
+@[simp] theorem rules_execRunRules {R : RulesetName} {d : FDatabase} :
+    (execRunRules R d).rules = d.rules :=
   rules_foldl (g := fireRule d) (fun _ _ => rules_fireRule) _ _
 
 /-- A firing's result denotes the spec's. -/
@@ -952,26 +967,29 @@ theorem fired_toDatabase {d : FDatabase} (he : d.EqsInTerms) {r : Rule} {σ : En
     evalLocalActions d.toDatabase r.actions σ = some d'.toDatabase := by
   rw [← execLocalActions_toDatabase he, h]; rfl
 
-/-- What one round's firings contribute, as a predicate on the databases they produce.
-Both `terms` and `eqs` of a round are the pre-state's plus what this collects, so the
-correspondence with `RuleResults` is proved once. -/
-def Fires (d : FDatabase) (P : Database → Prop) : Prop :=
-  ∃ r ∈ d.rules, ∃ σ ∈ matchQuery d r.query, ∃ d' : FDatabase, Fired d r σ d' ∧ P d'.toDatabase
+/-- What one round of `R`'s firings contribute, as a predicate on the databases they
+produce. Both `terms` and `eqs` of a round are the pre-state's plus what this collects, so
+the correspondence with `RuleResults` is proved once. -/
+def Fires (R : RulesetName) (d : FDatabase) (P : Database → Prop) : Prop :=
+  ∃ r ∈ d.rules, r.ruleset = R ∧
+    ∃ σ ∈ matchQuery d r.query, ∃ d' : FDatabase, Fired d r σ d' ∧ P d'.toDatabase
 
 /-- **The two rounds union in the same databases.**
 
 The interpreter enumerates its canonical substitutions and the spec every `Env.UnionAll`
-decomposition; `evalLocalActions_agree` is what makes them contribute the same states. -/
-theorem fires_iff {d : FDatabase} (he : d.EqsInTerms) (hsig : d.sig.AllConstructors)
-    {P : Database → Prop} :
-    Fires d P ↔ ∃ D, (∃ r ∈ d.toDatabase.rules, D ∈ RuleResults d.toDatabase r) ∧ P D := by
+decomposition; `evalLocalActions_agree` is what makes them contribute the same states. The
+ruleset is carried along untouched: both sides read it off the same rule. -/
+theorem fires_iff {R : RulesetName} {d : FDatabase} (he : d.EqsInTerms)
+    (hsig : d.sig.AllConstructors) {P : Database → Prop} :
+    Fires R d P ↔
+      ∃ D, (∃ r ∈ d.toDatabase.rules, r.ruleset = R ∧ D ∈ RuleResults d.toDatabase r) ∧ P D := by
   constructor
-  · rintro ⟨r, hr, σ, hσ, d', hf, hP⟩
+  · rintro ⟨r, hr, hR, σ, hσ, d', hf, hP⟩
     obtain ⟨τ, hτ, hag⟩ := validQuerySubst_of_mem_matchQuery he hsig hσ
-    refine ⟨d'.toDatabase, ⟨r, hr, τ, hτ, ?_⟩, hP⟩
+    refine ⟨d'.toDatabase, ⟨r, hr, hR, τ, hτ, ?_⟩, hP⟩
     rw [evalLocalActions_agree r.actions hag]
     exact fired_toDatabase he hf
-  · rintro ⟨D, ⟨r, hr, τ, hτ, hev⟩, hP⟩
+  · rintro ⟨D, ⟨r, hr, hR, τ, hτ, hev⟩, hP⟩
     obtain ⟨hmem, hag⟩ := mem_matchQuery_of_validQuerySubst he hsig hτ
     have hev' : evalLocalActions d.toDatabase r.actions
         (Env.canon (Query.freeVars r.query d.env) τ) = some D := by
@@ -980,56 +998,240 @@ theorem fires_iff {d : FDatabase} (he : d.EqsInTerms) (hsig : d.sig.AllConstruct
       (σ := Env.canon (Query.freeVars r.query d.env) τ)
     rw [hev'] at hmap
     obtain ⟨d', hd', rfl⟩ := Option.map_eq_some_iff.mp hmap
-    exact ⟨r, hr, _, hmem, d', hd', hP⟩
+    exact ⟨r, hr, hR, _, hmem, d', hd', hP⟩
 
-theorem mem_eqs_toDatabase_execRunRules {d : FDatabase} (he : d.EqsInTerms)
+theorem mem_eqs_toDatabase_execRunRules {R : RulesetName} {d : FDatabase} (he : d.EqsInTerms)
     {p : Term × Term} :
-    p ∈ (execRunRules d).toDatabase.eqs ↔
-      p ∈ d.toDatabase.eqs ∨ Fires d (fun D => p ∈ D.eqs) := by
+    p ∈ (execRunRules R d).toDatabase.eqs ↔
+      p ∈ d.toDatabase.eqs ∨ Fires R d (fun D => p ∈ D.eqs) := by
   rw [FDatabase.mem_toDatabase_eqs_of_eqsInTerms (eqsInTerms_execRunRules he),
     FDatabase.mem_toDatabase_eqs_of_eqsInTerms he, mem_terms_execRunRules, mem_eqs_execRunRules]
   constructor
-  · rintro (⟨heq, ht | ⟨r, hr, σ, hσ, d', hf, ht⟩⟩ | (hp | ⟨r, hr, σ, hσ, d', hf, hp⟩))
+  · rintro (⟨heq, ht | ⟨r, hr, hR, σ, hσ, d', hf, ht⟩⟩ | (hp | ⟨r, hr, hR, σ, hσ, d', hf, hp⟩))
     · exact Or.inl (Or.inl ⟨heq, ht⟩)
-    · exact Or.inr ⟨r, hr, σ, hσ, d', hf,
+    · exact Or.inr ⟨r, hr, hR, σ, hσ, d', hf,
         (FDatabase.mem_toDatabase_eqs_of_eqsInTerms
           (execLocalActions_eqsInTerms he hf)).mpr (Or.inl ⟨heq, ht⟩)⟩
     · exact Or.inl (Or.inr hp)
-    · exact Or.inr ⟨r, hr, σ, hσ, d', hf,
+    · exact Or.inr ⟨r, hr, hR, σ, hσ, d', hf,
         (FDatabase.mem_toDatabase_eqs_of_eqsInTerms
           (execLocalActions_eqsInTerms he hf)).mpr (Or.inr hp)⟩
-  · rintro ((⟨heq, ht⟩ | hp) | ⟨r, hr, σ, hσ, d', hf, hP⟩)
+  · rintro ((⟨heq, ht⟩ | hp) | ⟨r, hr, hR, σ, hσ, d', hf, hP⟩)
     · exact Or.inl ⟨heq, Or.inl ht⟩
     · exact Or.inr (Or.inl hp)
     · rcases (FDatabase.mem_toDatabase_eqs_of_eqsInTerms
         (execLocalActions_eqsInTerms he hf)).mp hP with ⟨heq, ht⟩ | hp
-      · exact Or.inl ⟨heq, Or.inr ⟨r, hr, σ, hσ, d', hf, ht⟩⟩
-      · exact Or.inr (Or.inr ⟨r, hr, σ, hσ, d', hf, hp⟩)
+      · exact Or.inl ⟨heq, Or.inr ⟨r, hr, hR, σ, hσ, d', hf, ht⟩⟩
+      · exact Or.inr (Or.inr ⟨r, hr, hR, σ, hσ, d', hf, hp⟩)
 
 /-- **One round of the interpreter denotes one round of the spec.**
 
 This is `RunRules`, the rule-firing half of a round; the merge phase is empty here because
 `exec` runs the constructor fragment, where `MergeStep` never fires
 (`MergeStep.not_of_allConstructors`). -/
-theorem execRunRules_RunRules {d : FDatabase} (he : d.EqsInTerms)
+theorem execRunRules_RunRules {R : RulesetName} {d : FDatabase} (he : d.EqsInTerms)
     (hsig : d.sig.AllConstructors) :
-    (execRunRules d).toDatabase = RunRules d.toDatabase := by
+    (execRunRules R d).toDatabase = RunRules R d.toDatabase := by
   refine Database.ext ?_ ?_ ?_ ?_
-  · change (execRunRules d).sig = _
+  · change (execRunRules R d).sig = _
     rw [sig_execRunRules]; rfl
   · ext p
     rw [mem_eqs_toDatabase_execRunRules he, fires_iff he hsig]
     simp only [RunRules, Database.sUnion_eqs, Set.mem_union, Set.mem_iUnion₂, Set.mem_setOf_eq,
       exists_prop]
-  · change (execRunRules d).env = _
+  · change (execRunRules R d).env = _
     rw [env_execRunRules]; rfl
-  · change {r | r ∈ (execRunRules d).rules} = _
+  · change {r | r ∈ (execRunRules R d).rules} = _
     rw [rules_execRunRules]; rfl
 
+/-! ### A saturating run
+
+`runSaturateF` is `Impl/Merge.lean`'s `mergeSaturateF` pattern one level up, and it wants
+the same two facts: what it returns is a fixpoint of the round, and what it returns is an
+iterate of it. Neither mentions the specification, so both are read straight off the
+recursion. -/
+
+/-- Two states with the same fields denote the same database. `FDatabase.sameData` decides
+three of the five the denotation reads; a round fixes the other two. -/
+theorem toDatabase_eq_of_fields {d e : FDatabase} (hsig : d.sig = e.sig)
+    (ht : d.terms = e.terms) (hq : d.eqs = e.eqs) (henv : d.env = e.env)
+    (hrules : d.rules = e.rules) : d.toDatabase = e.toDatabase := by
+  unfold FDatabase.toDatabase
+  rw [hsig, ht, hq, henv, hrules]
+
+/-- **`runSaturateF` never claims a saturation it has not reached.** -/
+theorem runSaturateF_sameData {R : RulesetName} : ∀ (n : Nat) {d e : FDatabase},
+    d.runSaturateF R n = some e → e.sameData (execRunRules R e) = true := by
+  intro n
+  induction n with
+  | zero =>
+    intro d e h
+    rw [FDatabase.runSaturateF] at h
+    split at h
+    · rename_i hs; rw [Option.some.injEq] at h; exact h ▸ hs
+    · exact absurd h (by simp)
+  | succ n ih =>
+    intro d e h
+    rw [FDatabase.runSaturateF] at h
+    split at h
+    · rename_i hs; rw [Option.some.injEq] at h; exact h ▸ hs
+    · exact ih h
+
+/-- **And what it returns is an iterate of the round**, so the specification can follow it
+one `RunStep` at a time. -/
+theorem runSaturateF_iterate {R : RulesetName} : ∀ (n : Nat) {d e : FDatabase},
+    d.runSaturateF R n = some e → ∃ k, (execRunRules R)^[k] d = e := by
+  intro n
+  induction n with
+  | zero =>
+    intro d e h
+    rw [FDatabase.runSaturateF] at h
+    split at h
+    · rw [Option.some.injEq] at h; exact ⟨0, h⟩
+    · exact absurd h (by simp)
+  | succ n ih =>
+    intro d e h
+    rw [FDatabase.runSaturateF] at h
+    split at h
+    · rw [Option.some.injEq] at h; exact ⟨0, h⟩
+    · obtain ⟨k, hk⟩ := ih h
+      exact ⟨k + 1, by rw [Function.iterate_succ_apply]; exact hk⟩
+
+theorem eqsInTerms_iterate {R : RulesetName} : ∀ (k : Nat) {d : FDatabase}, d.EqsInTerms →
+    ((execRunRules R)^[k] d).EqsInTerms := by
+  intro k
+  induction k with
+  | zero => intro d he; exact he
+  | succ k ih =>
+    intro d he
+    rw [Function.iterate_succ_apply']
+    exact eqsInTerms_execRunRules (ih he)
+
+theorem execRunRules_iterate_sig {R : RulesetName} : ∀ (k : Nat) {d : FDatabase},
+    ((execRunRules R)^[k] d).sig = d.sig := by
+  intro k
+  induction k with
+  | zero => intro d; rfl
+  | succ k ih => intro d; rw [Function.iterate_succ_apply', sig_execRunRules]; exact ih
+
+/-- **The specification takes one `RunStep` per interpreter round.** -/
+theorem execRunRules_iterate {R : RulesetName} : ∀ (k : Nat) {d : FDatabase}, d.EqsInTerms →
+    d.sig.AllConstructors →
+      Relation.ReflTransGen (RunStep R) d.toDatabase ((execRunRules R)^[k] d).toDatabase := by
+  intro k
+  induction k with
+  | zero => intro d _ _; exact Relation.ReflTransGen.refl
+  | succ k ih =>
+    intro d he hsig
+    have hex : ((execRunRules R)^[k] d).sig.AllConstructors := by
+      rw [execRunRules_iterate_sig k]; exact hsig
+    rw [Function.iterate_succ_apply']
+    refine (ih he hsig).tail ?_
+    change MergeClosure (RunRules R ((execRunRules R)^[k] d).toDatabase) _
+    rw [← execRunRules_RunRules (eqsInTerms_iterate k he) hex]
+    exact Relation.ReflTransGen.refl
+
+/-! #### The witness version
+
+`runSaturate` is `runSaturateF` without the fuel. It is not what `exec` runs — no caller can
+produce an `Acc` witness for a ruleset whose saturation is the question — but it is where the
+statement without a side condition lives, and it is what pins the fuel's incompleteness on
+the fuel rather than on the design. -/
+theorem runSaturate_of_settled {R : RulesetName} {d : FDatabase}
+    (h : Acc (FDatabase.RunRel R) d) (hs : d.sameData (execRunRules R d) = true) :
+    FDatabase.runSaturate R d h = d := by
+  cases h with
+  | intro hx => simp only [FDatabase.runSaturate, hs, dif_pos]
+
+theorem runSaturate_step {R : RulesetName} {d : FDatabase}
+    (h : Acc (FDatabase.RunRel R) d) (hs : ¬ d.sameData (execRunRules R d) = true) :
+    FDatabase.runSaturate R d h
+      = FDatabase.runSaturate R (execRunRules R d) (h.inv ⟨rfl, hs⟩) := by
+  cases h with
+  | intro hx => exact dif_neg hs
+
+/-- **The fuel agrees with the witness whenever it answers.** So the fuel never invents an
+answer, and `runSaturateF` returning `none` is the *only* way the two differ. -/
+theorem runSaturateF_eq_runSaturate {R : RulesetName} : ∀ (n : Nat) {d e : FDatabase}
+    (h : Acc (FDatabase.RunRel R) d), d.runSaturateF R n = some e →
+    FDatabase.runSaturate R d h = e := by
+  intro n
+  induction n with
+  | zero =>
+    intro d e h hf
+    rw [FDatabase.runSaturateF] at hf
+    split at hf
+    · rename_i hs
+      rw [Option.some.injEq] at hf
+      rw [runSaturate_of_settled h hs, hf]
+    · exact absurd hf (by simp)
+  | succ n ih =>
+    intro d e h hf
+    rw [FDatabase.runSaturateF] at hf
+    split at hf
+    · rename_i hs
+      rw [Option.some.injEq] at hf
+      rw [runSaturate_of_settled h hs, hf]
+    · rename_i hs
+      rw [runSaturate_step h hs]
+      exact ih _ hf
+
+/-- **The witness version reaches the specification's fixpoint, unconditionally.** No fuel
+and no `≠ none`: given only that the ruleset saturates at all, which is what the `Acc`
+witness says, `runSaturate` lands on a `SaturateReach`. Whatever `exec_programStep` has to
+carry is therefore the *fuel's*, not the semantics'. -/
+theorem runSaturate_saturateReach {R : RulesetName} : ∀ {d : FDatabase}
+    (h : Acc (FDatabase.RunRel R) d), d.EqsInTerms → d.sig.AllConstructors →
+    SaturateReach R d.toDatabase (FDatabase.runSaturate R d h).toDatabase := by
+  intro d h
+  induction h with
+  | @intro x hx ih =>
+    intro he hsig
+    by_cases hs : x.sameData (execRunRules R x) = true
+    · rw [runSaturate_of_settled _ hs]
+      simp only [FDatabase.sameData, Bool.and_eq_true, beq_iff_eq] at hs
+      refine ⟨Relation.ReflTransGen.refl, ?_,
+        fun db' hstep => (MergeStep.not_of_allConstructors hsig hstep).elim⟩
+      rw [← execRunRules_RunRules he hsig]
+      exact toDatabase_eq_of_fields sig_execRunRules hs.1.1 hs.2 env_execRunRules
+        rules_execRunRules
+    · rw [runSaturate_step _ hs]
+      have hsx : (execRunRules R x).sig.AllConstructors := by
+        rw [sig_execRunRules]; exact hsig
+      obtain ⟨hreach, hsat⟩ :=
+        ih (execRunRules R x) ⟨rfl, hs⟩ (eqsInTerms_execRunRules he) hsx
+      refine ⟨Relation.ReflTransGen.head ?_ hreach, hsat⟩
+      change MergeClosure (RunRules R x.toDatabase) _
+      rw [← execRunRules_RunRules he hsig]
+      exact Relation.ReflTransGen.refl
+
+/-- **The interpreter's saturating run reaches the specification's fixpoint.**
+
+The rounds are `runSaturateF_iterate` replayed as `RunStep`s; the fixpoint is
+`runSaturateF_sameData` read through `execRunRules_RunRules`, which on the constructor
+fragment is an *equality* and not a containment. `MergeSaturated` is free there —
+`MergeStep.not_of_allConstructors`. -/
+theorem runSaturateF_saturateReach {R : RulesetName} {n : Nat} {d e : FDatabase}
+    (he : d.EqsInTerms) (hsig : d.sig.AllConstructors) (h : d.runSaturateF R n = some e) :
+    SaturateReach R d.toDatabase e.toDatabase := by
+  obtain ⟨k, hk⟩ := runSaturateF_iterate n h
+  have hreach := execRunRules_iterate (R := R) k he hsig
+  have hes := execRunRules_iterate_sig (R := R) k (d := d)
+  have hee : e.EqsInTerms := hk ▸ eqsInTerms_iterate (R := R) k he
+  rw [hk] at hes hreach
+  have hesig : e.sig.AllConstructors := by rw [hes]; exact hsig
+  have hsame := runSaturateF_sameData n h
+  simp only [FDatabase.sameData, Bool.and_eq_true, beq_iff_eq] at hsame
+  refine ⟨hreach, ?_, fun db' hstep => (MergeStep.not_of_allConstructors hesig hstep).elim⟩
+  rw [← execRunRules_RunRules hee hesig]
+  exact toDatabase_eq_of_fields sig_execRunRules hsame.1.1 hsame.2 env_execRunRules
+    rules_execRunRules
+
 /-! ### Refinement: commands and programs -/
-/-- **The interpreter's command is the specification's `cmdEffect`.** -/
+/-- **The interpreter's command is the specification's `cmdEffect`**, on the four commands
+that have one. -/
 theorem execCmd_toDatabase {d : FDatabase} (he : d.EqsInTerms) (hsig : d.sig.AllConstructors)
-    {c : Cmd} :
+    {c : Cmd} (hns : c.NoSaturate) :
     (execCmd d c).map FDatabase.toDatabase = cmdEffect d.toDatabase c := by
   cases c with
   | action a => exact execAction_toDatabase he
@@ -1037,11 +1239,27 @@ theorem execCmd_toDatabase {d : FDatabase} (he : d.EqsInTerms) (hsig : d.sig.All
     rw [show execCmd d (.rule r) = some { d with rules := r :: d.rules } from rfl,
       Option.map_some, FDatabase.toDatabase_consRule]
     rfl
-  | run =>
-    rw [show execCmd d .run = some (execRunRules d) from rfl, Option.map_some,
+  | run R =>
+    rw [show execCmd d (.run R) = some (execRunRules R d) from rfl, Option.map_some,
       execRunRules_RunRules he hsig]
     rfl
+  | saturate R => exact (hns : False).elim
   | decl f dc => rfl
+
+/-- **The interpreter's command is one the specification reaches.** The uniform statement:
+`Cmd.saturate` has no `cmdEffect`, and `runSaturateF_saturateReach` is what stands in its
+place. -/
+theorem execCmd_cmdReach {d d' : FDatabase} (he : d.EqsInTerms)
+    (hsig : d.sig.AllConstructors) {c : Cmd} (h : execCmd d c = some d') :
+    cmdReach d.toDatabase c d'.toDatabase := by
+  have hgen : ∀ c : Cmd, c.NoSaturate → execCmd d c = some d' →
+      cmdReach d.toDatabase c d'.toDatabase := by
+    intro c hns hc
+    refine cmdReach_of_cmdEffect hns ?_
+    rw [← execCmd_toDatabase he hsig hns, hc, Option.map_some]
+  cases c with
+  | saturate R => exact runSaturateF_saturateReach he hsig h
+  | _ => exact hgen _ trivial h
 
 theorem execCmd_eqsInTerms {d d' : FDatabase} (he : d.EqsInTerms) {c : Cmd}
     (h : execCmd d c = some d') : d'.EqsInTerms := by
@@ -1051,9 +1269,13 @@ theorem execCmd_eqsInTerms {d d' : FDatabase} (he : d.EqsInTerms) {c : Cmd}
     rw [show execCmd d (.rule r) = some { d with rules := r :: d.rules } from rfl,
       Option.some.injEq] at h
     exact h ▸ he.consRule r
-  | run =>
-    rw [show execCmd d .run = some (execRunRules d) from rfl, Option.some.injEq] at h
+  | run R =>
+    rw [show execCmd d (.run R) = some (execRunRules R d) from rfl, Option.some.injEq] at h
     exact h ▸ eqsInTerms_execRunRules he
+  | saturate R =>
+    obtain ⟨k, hk⟩ :=
+      runSaturateF_iterate runFuel (show d.runSaturateF R runFuel = some d' from h)
+    exact hk ▸ eqsInTerms_iterate k he
   | decl f dc =>
     rw [show execCmd d (.decl f dc) = some { d with sig := Function.update d.sig f (some dc) }
         from rfl, Option.some.injEq] at h
@@ -1061,10 +1283,8 @@ theorem execCmd_eqsInTerms {d d' : FDatabase} (he : d.EqsInTerms) {c : Cmd}
 
 theorem execCmd_sig {d d' : FDatabase} (he : d.EqsInTerms) (hsig : d.sig.AllConstructors)
     {c : Cmd} (h : execCmd d c = some d') :
-    d'.sig = c.sigBind d.sig := by
-  have : cmdEffect d.toDatabase c = some d'.toDatabase := by
-    rw [← execCmd_toDatabase he hsig, h, Option.map_some]
-  exact cmdEffect_sig this
+    d'.sig = c.sigBind d.sig :=
+  cmdReach_sig (execCmd_cmdReach he hsig h)
 
 theorem execCmd_allConstructors {d d' : FDatabase} (he : d.EqsInTerms)
     (hsig : d.sig.AllConstructors) {c : Cmd} (hdecl : c.CtorDecl)
@@ -1077,52 +1297,67 @@ not merely one the specification permits.
 `CmdStep` is a relation because the merge phase is one, so an `if and only if` is more
 than bookkeeping: `←` says the interpreter reaches *every* state the specification allows.
 It holds because on the constructor fragment there is no merge phase to choose in, which
-is `MergeClosure.eq_of_allConstructors`. -/
+is `MergeClosure.eq_of_allConstructors`.
+
+`hs` is what `Cmd.saturate` costs, and **only** `Cmd.saturate`: on any other command the
+left arm holds for free. A saturating run can exhaust `runFuel` on a ruleset the
+specification does saturate, and then `←` fails; given an answer at all, determinism says
+it is *the* answer, which is `CmdStep.det`. -/
 theorem execCmd_cmdStep {d : FDatabase} (he : d.EqsInTerms) (hsig : d.sig.AllConstructors)
-    {c : Cmd} (hdecl : c.CtorDecl) {D : Database} :
+    {c : Cmd} (hdecl : c.CtorDecl) (hs : c.NoSaturate ∨ execCmd d c ≠ none) {D : Database} :
     (execCmd d c).map FDatabase.toDatabase = some D ↔ CmdStep d.toDatabase c D := by
-  rw [execCmd_toDatabase he hsig]
-  refine ⟨fun h => ⟨D, h, Relation.ReflTransGen.refl⟩, ?_⟩
-  rintro ⟨e, heff, hcl⟩
-  rw [heff, Option.some.injEq]
-  exact (hcl.eq_of_allConstructors (cmdEffect_allConstructors hsig hdecl heff)).symm
+  cases hce : execCmd d c with
+  | none =>
+    refine ⟨fun h => absurd h (by simp), fun hstep => ?_⟩
+    obtain ⟨x, hreach, -⟩ := hstep
+    have hns : c.NoSaturate := hs.resolve_right (by rw [hce]; simp)
+    have hx : (execCmd d c).map FDatabase.toDatabase = some x := by
+      rw [execCmd_toDatabase he hsig hns, cmdEffect_of_cmdReach hns hreach]
+    rw [hce] at hx; simp at hx
+  | some d' =>
+    have hstep : CmdStep d.toDatabase c d'.toDatabase :=
+      ⟨d'.toDatabase, execCmd_cmdReach he hsig hce, Relation.ReflTransGen.refl⟩
+    rw [Option.map_some, Option.some.injEq]
+    exact ⟨fun h => h ▸ hstep, fun h => CmdStep.det hsig hdecl hstep h⟩
 
 theorem execProgram_programStep {p : Program} : ∀ {d : FDatabase}, d.EqsInTerms →
-    d.sig.AllConstructors → p.CtorDecls →
+    d.sig.AllConstructors → p.CtorDecls → (p.NoSaturate ∨ execProgram d p ≠ none) →
     ∀ {D : Database},
       (execProgram d p).map FDatabase.toDatabase = some D ↔ ProgramStep d.toDatabase p D := by
   induction p with
   | nil =>
-    intro d _ _ _ D
+    intro d _ _ _ _ D
     rw [show execProgram d [] = some d from rfl, Option.map_some, Option.some.injEq]
     exact ⟨fun hd => hd ▸ .nil, fun hs => hs.nil_inv⟩
   | cons c cs ih =>
-    intro d he hsig hdecl D
+    intro d he hsig hdecl hs D
     have hc : Cmd.CtorDecl c := hdecl c (by simp)
     have hrest : Program.CtorDecls cs := fun c' hc' => hdecl c' (List.mem_cons_of_mem c hc')
-    constructor
-    · intro hmap
-      cases hce : execCmd d c with
-      | none =>
-        rw [show execProgram d (c :: cs)
-          = (execCmd d c).bind fun d' => execProgram d' cs from rfl, hce] at hmap
-        simp at hmap
-      | some d₁ =>
-        rw [show execProgram d (c :: cs)
-          = (execCmd d c).bind fun d' => execProgram d' cs from rfl, hce,
-          Option.bind_some] at hmap
-        refine .cons ((execCmd_cmdStep he hsig hc).mp (by rw [hce, Option.map_some]))
-          ((ih (execCmd_eqsInTerms he hce) (execCmd_allConstructors he hsig hc hce)
-            hrest).mp hmap)
-    · intro hs
-      obtain ⟨e, hstep, hrestep⟩ := hs.cons_inv
-      obtain ⟨d₁, hce, hd₁⟩ :=
-        Option.map_eq_some_iff.mp ((execCmd_cmdStep he hsig hc).mpr hstep)
-      subst hd₁
-      rw [show execProgram d (c :: cs)
-        = (execCmd d c).bind fun d' => execProgram d' cs from rfl, hce, Option.bind_some]
-      exact (ih (execCmd_eqsInTerms he hce) (execCmd_allConstructors he hsig hc hce)
-        hrest).mpr hrestep
+    have hcons : execProgram d (c :: cs)
+        = (execCmd d c).bind fun d' => execProgram d' cs := rfl
+    cases hce : execCmd d c with
+    | none =>
+      rw [hcons, hce, Option.bind_none]
+      refine ⟨fun h => absurd h (by simp), fun hstep => ?_⟩
+      obtain ⟨e, hstep₁, -⟩ := hstep.cons_inv
+      have hcs : (execCmd d c).map FDatabase.toDatabase = some e :=
+        (execCmd_cmdStep he hsig hc
+          (hs.imp (fun hns => hns c List.mem_cons_self)
+            (fun hne hx => hne (by rw [hcons, hx, Option.bind_none])))).mpr hstep₁
+      rw [hce] at hcs; simp at hcs
+    | some d₁ =>
+      have hstep₁ : CmdStep d.toDatabase c d₁.toDatabase :=
+        ⟨d₁.toDatabase, execCmd_cmdReach he hsig hce, Relation.ReflTransGen.refl⟩
+      have hs₁ : Program.NoSaturate cs ∨ execProgram d₁ cs ≠ none :=
+        hs.imp (fun hns c' hc' => hns c' (List.mem_cons_of_mem c hc'))
+          (fun hne => by rwa [hcons, hce, Option.bind_some] at hne)
+      have ihx := ih (execCmd_eqsInTerms he hce) (execCmd_allConstructors he hsig hc hce)
+        hrest hs₁ (D := D)
+      rw [hcons, hce, Option.bind_some]
+      refine ⟨fun hmap => .cons hstep₁ (ihx.mp hmap), fun hst => ?_⟩
+      obtain ⟨e, hstep, hrestep⟩ := hst.cons_inv
+      obtain rfl := CmdStep.det hsig hc hstep hstep₁
+      exact ihx.mpr hrestep
 
 /-- **The refinement theorem**: on the constructor fragment, the interpreter computes
 exactly the states the semantics reaches — an `if and only if`, so a `#guard` or a
@@ -1132,11 +1367,24 @@ differential test constrains `Spec/` in both directions.
 whose only offence is a `:merge` declaration and two states the specification reaches, of
 which the interpreter returns at most one. The row atom is included: with no merge function
 declared, every entry is its own application, which `patternHolds` decides at the entry
-term rather than through the index. -/
-theorem exec_programStep {p : Program} (hdecl : p.CtorDecls) {D : Database} :
+term rather than through the index.
+
+`hs` is what `Cmd.saturate` cost, and it is a **disjunction so that the fragment without one
+pays nothing**: `Program.NoSaturate` is a syntactic condition, satisfied by every difftest
+case and by every source program, and under it the iff is unconditional exactly as before.
+The right arm is for a program that does saturate. There it is not removable: `runSaturateF`
+gives up after `runFuel` rounds while `SaturateReach` has no fuel, so on a program the
+specification saturates in more rounds the interpreter returns nothing while the
+specification reaches a state — `←` failing. No constant fuel repairs that, since the round
+count grows with the data rather than with the program text. The gap is the *fuel's* and not
+the semantics': `runSaturate_saturateReach` is the same statement about `runSaturate`, with
+no side condition at all. `→` is untouched in every case, and it is the direction a `#guard`
+or a differential test uses. -/
+theorem exec_programStep {p : Program} (hdecl : p.CtorDecls)
+    (hs : p.NoSaturate ∨ exec p ≠ none) {D : Database} :
     (exec p).map FDatabase.toDatabase = some D ↔ ProgramStep Database.empty p D := by
   rw [show exec p = execProgram FDatabase.empty p from rfl, ← FDatabase.toDatabase_empty]
   exact execProgram_programStep FDatabase.empty_eqsInTerms
-    (by intro f; simp [Signature.mergeOf, FDatabase.empty]) hdecl
+    (by intro f; simp [Signature.mergeOf, FDatabase.empty]) hdecl hs
 
 end Egglog
