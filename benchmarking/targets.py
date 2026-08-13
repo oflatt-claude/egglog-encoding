@@ -19,19 +19,10 @@ from typing import Literal
 from rich.console import Console
 from rich.text import Text
 
-from .models import FileSpec, ResolvedTarget, TargetRequest, TargetRow, Treatment
+from .engines import TREATMENT_SPECS, Engine, Treatment, validate_engine_workload
+from .models import EngineBinary, FileSpec, ResolvedTarget, TargetRequest, TargetRow
 
 BuildProfile = Literal["release", "profiling"]
-
-
-def treatment_flags(treatment: Treatment) -> list[str]:
-    if treatment == "off":
-        return []
-    if treatment == "term":
-        return ["--term-encoding"]
-    if treatment == "proof-extraction":
-        return ["--proof-extraction"]
-    return ["--proofs"]
 
 
 def parse_target(raw: str) -> TargetRequest:
@@ -217,13 +208,16 @@ def build_target(
     row: TargetRow,
     console: Console,
     build_profile: BuildProfile = "release",
+    engine: Engine = "egglog",
 ) -> tuple[Path, str]:
     checkout_path = Path(row.path)
-    console.print(Text.assemble(("Building", "bold"), " ", _display_target(row)))
+    engine_label = "" if engine == "egglog" else " · egg"
+    console.print(Text.assemble(("Building", "bold"), " ", _display_target(row), engine_label))
+    package = "egglog-experimental" if engine == "egglog" else "egg-math-benchmark"
     if build_profile == "release":
-        build_args = ["cargo", "build", "--release", "-p", "egglog-experimental"]
+        build_args = ["cargo", "build", "--release", "-p", package]
     else:
-        build_args = ["cargo", "build", "--profile", "profiling", "-p", "egglog-experimental"]
+        build_args = ["cargo", "build", "--profile", "profiling", "-p", package]
     subprocess.run(
         build_args,
         cwd=checkout_path,
@@ -231,7 +225,8 @@ def build_target(
         stdout=sys.stderr,
         stderr=sys.stderr,
     )
-    binary_name = "egglog-experimental.exe" if os.name == "nt" else "egglog-experimental"
+    binary_stem = "egglog-experimental" if engine == "egglog" else "egg-math-benchmark"
+    binary_name = f"{binary_stem}.exe" if os.name == "nt" else binary_stem
     binary_path = checkout_path / "target" / build_profile / binary_name
     if not binary_path.is_file():
         raise FileNotFoundError(f"{build_profile} binary was not produced: {binary_path}")
@@ -244,14 +239,31 @@ def build_resolved_target(
     row: TargetRow,
     console: Console,
     build_profile: BuildProfile,
+    engines: Sequence[Engine] = ("egglog",),
 ) -> ResolvedTarget:
-    binary_path, binary_sha256 = build_target(row, console, build_profile)
+    required_engines = tuple(dict.fromkeys(engines))
+    if not required_engines:
+        raise ValueError("target build requires at least one engine")
+    binaries = tuple(
+        EngineBinary(engine, binary_sha256, binary_path)
+        for engine in required_engines
+        for binary_path, binary_sha256 in (build_target(row, console, build_profile, engine),)
+    )
+    primary = binaries[0]
     row = replace(row, is_dirty=git_dirty(Path(row.path)))
-    return ResolvedTarget(request=request, row=row, binary_sha256=binary_sha256, binary_path=binary_path)
+    return ResolvedTarget(
+        request=request,
+        row=row,
+        binary_sha256=primary.sha256,
+        binary_path=primary.path,
+        engine_binaries=binaries,
+        primary_engine=primary.engine,
+    )
 
 
 def resolve_profile_target(
     request: TargetRequest,
+    treatment: Treatment,
     invocation_cwd: Path,
     repo_root: Path,
     console: Console,
@@ -259,7 +271,13 @@ def resolve_profile_target(
     if request.is_label_lookup:
         raise ValueError("profile mode does not support cache-only label= targets; use label=SOURCE")
     row = materialize_target_request(request, invocation_cwd, repo_root)
-    return build_resolved_target(request, row, console, "profiling")
+    return build_resolved_target(
+        request,
+        row,
+        console,
+        "profiling",
+        (TREATMENT_SPECS[treatment].engine,),
+    )
 
 
 def _display_target(row: TargetRow) -> str:
@@ -277,6 +295,10 @@ def workload_command(
     file_spec: FileSpec,
     treatment: Treatment,
 ) -> list[str]:
+    specification = TREATMENT_SPECS[treatment]
+    if specification.engine == "egg":
+        validate_engine_workload(file_spec, treatment)
+        return [str(binary_path), *specification.flags]
     return [
         str(binary_path),
         "--mode",
@@ -284,6 +306,6 @@ def workload_command(
         "-j",
         "1",
         *(["--fact-directory", str(file_spec.fact_directory)] if file_spec.fact_directory is not None else []),
-        *treatment_flags(treatment),
+        *specification.flags,
         str(file_spec.absolute_path),
     ]

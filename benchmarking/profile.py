@@ -23,7 +23,8 @@ from rich.console import Console
 from rich.text import Text
 
 from . import samply_analysis
-from .models import FileSpec, TargetRequest, Treatment
+from .engines import TREATMENTS, Treatment, validate_engine_workload
+from .models import FileSpec, TargetRequest
 from .processes import run_command, terminate_process_group
 from .targets import git_root_for_path, parse_target, resolve_profile_target, workload_command
 from .workloads import require_workload_unchanged, resolve_files
@@ -74,9 +75,9 @@ def parse_profile_args(argv: Sequence[str]) -> argparse.Namespace:
     """Parse profile arguments without importing the benchmark data stack."""
     parser = argparse.ArgumentParser(
         prog=f"{Path(sys.argv[0]).name} profile",
-        description="Record or reuse a cached Samply CPU profile for one egglog workload.",
+        description="Record or reuse a cached Samply CPU profile for one benchmark workload.",
     )
-    parser.add_argument("file", help="egglog file to profile")
+    parser.add_argument("file", help="benchmark workload file to profile")
     parser.add_argument(
         "--fact-directory",
         default=None,
@@ -89,7 +90,7 @@ def parse_profile_args(argv: Sequence[str]) -> argparse.Namespace:
     )
     parser.add_argument(
         "--treatment",
-        choices=("off", "term", "proofs", "proof-extraction"),
+        choices=TREATMENTS,
         default="proofs",
         help="treatment to profile (default: proofs)",
     )
@@ -314,6 +315,7 @@ def open_samply_profile(artifact: Path, checkout_path: Path) -> None:
 def resolve_profile_request(args: argparse.Namespace, invocation_cwd: Path) -> ProfileRequest:
     files = resolve_files([str(args.file)], invocation_cwd, args.fact_directory)
     treatment = cast(Treatment, str(args.treatment))
+    validate_engine_workload(files[0], treatment)
     if args.iterations is not None:
         mode = ProfileMode(iterations=args.iterations, profile_seconds=None)
     else:
@@ -340,14 +342,16 @@ def resolve_profile_request(args: argparse.Namespace, invocation_cwd: Path) -> P
 
 def run_profile(args: argparse.Namespace, console: Console, invocation_cwd: Path, repo_root: Path) -> None:
     request = resolve_profile_request(args, invocation_cwd)
-    target = resolve_profile_target(request.target_request, invocation_cwd, repo_root, console)
-    if target.binary_path is None:
+    target = resolve_profile_target(request.target_request, request.treatment, invocation_cwd, repo_root, console)
+    binary_path = target.binary_path_for(request.treatment)
+    binary_sha256 = target.binary_sha256_for(request.treatment)
+    if binary_path is None:
         raise ValueError(f"target {target.display_label} needs a profiling binary")
     checkout_path = Path(target.row.path)
-    workload = workload_command(target.binary_path, request.file, request.treatment)
+    workload = workload_command(binary_path, request.file, request.treatment)
     artifact = profile_cache_path(
         request.profiles_dir,
-        target.binary_sha256,
+        binary_sha256,
         request.file.sha256,
         request.treatment,
         request.mode,
@@ -399,7 +403,7 @@ def run_profile(args: argparse.Namespace, console: Console, invocation_cwd: Path
             request.treatment,
             request.mode,
             iterations,
-            target.binary_sha256,
+            binary_sha256,
         )
         console.print(Text.assemble(("Recording profile", "bold"), " ", str(artifact)))
         profile = run_samply_record(
@@ -418,7 +422,7 @@ def run_profile(args: argparse.Namespace, console: Console, invocation_cwd: Path
         summary: samply_analysis.ProfileCpuSummary | None = None
         if sys.platform == "darwin":
             try:
-                summary = samply_analysis.summarize(profile, target.binary_path)
+                summary = samply_analysis.summarize(profile, binary_path)
             except ValueError as error:
                 console.print(Text.assemble(("warning:", "yellow"), " CPU profile summary unavailable: ", str(error)))
             if summary is not None:

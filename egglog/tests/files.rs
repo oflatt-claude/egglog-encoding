@@ -60,6 +60,8 @@ const PROOF_TESTING_SNAPSHOT_DISABLED_FILES: &[&str] = &[
     "knapsack.egg",
     "lambda.egg",
     "list.egg",
+    "luminal-llama.egg",
+    "pointer-analysis-initdb.egg",
     "repro-desugar-143.egg",
     "string_quotes.egg",
 ];
@@ -167,13 +169,18 @@ impl Run {
     }
 
     fn egraph(&self) -> EGraph {
-        let egraph = if self.proof_testing {
+        let mut egraph = if self.proof_testing {
             EGraph::new_with_proofs().with_proof_testing()
         } else if self.term_encoding {
             EGraph::new_with_term_encoding()
         } else {
             EGraph::default()
         };
+        // A same-stem directory holds external inputs for file-harness fixtures.
+        let fact_directory = self.path.with_extension("");
+        if fact_directory.is_dir() {
+            egraph.fact_directory = Some(fact_directory);
+        }
         egraph.with_num_threads(self.threads)
     }
 

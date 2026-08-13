@@ -87,17 +87,23 @@ ratio is interpretable.
 
 Treatments map directly to engine modes:
 
-| Treatment | Engine behavior |
+| Treatment | Executable and behavior |
 | --- | --- |
-| `off` | no term or proof encoding |
-| `term` | `--term-encoding` |
-| `proofs` | `--proofs` |
-| `proof-extraction` | `--proof-extraction`; rewrite checks, then extract, materialize, clean, and simplify proofs without verifying them |
+| `off` | egglog without term or proof encoding |
+| `term` | egglog with `--term-encoding` |
+| `proofs` | egglog with `--proofs` |
+| `proof-extraction` | egglog with `--proof-extraction`; rewrite checks, then extract, materialize, clean, and simplify proofs without verifying them |
+| `proof-testing` | egglog with `--proof-testing`; extract and verify proofs for checks |
+| `egg` | current egg without explanation recording |
+| `egg-proofs` | current egg with explanation recording enabled |
+| `egg-proof-extraction` | current egg with explanation recording and extraction |
+| `egg-proof-testing` | current egg with extraction and explanation checking |
 
-The engine's `--proof-testing` option is a strict correctness mode that rewrites
-checks, extracts proofs, and verifies them, not a benchmark treatment. Results
-from `proof-extraction` are performance evidence only, not proof-validity
-evidence.
+The five egglog treatments run `egglog-experimental`. The four `egg*`
+treatments run the separate `egg-math-benchmark` executable and currently
+support only `egglog-experimental/tests/math-microbenchmark-rational.egg`.
+Results from either proof-extraction treatment are performance evidence only;
+the corresponding proof-testing treatment provides the strict validity check.
 
 ### Common comparisons
 
@@ -123,6 +129,27 @@ Compare term encoding with ordinary mode:
 
 ```bash
 ./bench.py --treatment term
+```
+
+For the fixed Math workload, compare proof overhead within each engine and then
+compare the engines with proof recording consistently disabled or enabled:
+
+```shell
+# Proof overhead in egg.
+./bench.py egglog-experimental/tests/math-microbenchmark-rational.egg \
+  --compare-treatment egg --treatment egg-proofs
+
+# Proof overhead in egglog.
+./bench.py egglog-experimental/tests/math-microbenchmark-rational.egg \
+  --compare-treatment off --treatment proofs
+
+# egglog versus egg without proofs.
+./bench.py egglog-experimental/tests/math-microbenchmark-rational.egg \
+  --compare-treatment egg --treatment off
+
+# egglog versus egg with proofs.
+./bench.py egglog-experimental/tests/math-microbenchmark-rational.egg \
+  --compare-treatment egg-proofs --treatment proofs
 ```
 
 Compare current proofs with a previously cached, labeled ordinary baseline:
@@ -155,7 +182,9 @@ resolved commit when available, otherwise the runner creates or reuses an
 isolated temporary worktree. It never stashes the main checkout.
 
 If differently spelled target selectors resolve to the same checkout, the
-runner builds that checkout once and shares that binary across the aliases.
+runner materializes it once and builds each executable required by the selected
+treatments. Each cache row records the SHA-256 of the executable that actually
+ran.
 
 A cache-only `label=` target skips materialization and building when every
 requested endpoint/file already has enough rows. If more rows are required, a
@@ -173,7 +202,8 @@ selected workloads containing `(input ...)` commands:
 
 ```bash
 ./bench.py egglog/tests/foo.egg egglog/tests/bar.egg
-./bench.py benchmarks/pointer.egg --fact-directory benchmarks/data/pointer
+./bench.py egglog/tests/pointer-analysis-initdb.egg \
+  --fact-directory egglog/tests/pointer-analysis-initdb
 ```
 
 Paths are resolved relative to the command invocation directory, not relative
@@ -182,25 +212,48 @@ directory contents. Their SHA-256 hashes are part of the cache identity.
 
 With no positional files, the representative suite is:
 
-- `egglog/tests/math-microbenchmark.egg`
+- `egglog-experimental/tests/math-microbenchmark-rational.egg`
 - `egglog-experimental/tests/fixtures/eggcc-2mm-pass1.egg`
-- `benchmarks/pointer-analysis-small.egg`, with
-  `benchmarks/data/pointer-analysis-small`
+- `egglog/tests/pointer-analysis-initdb.egg`, with
+  `egglog/tests/pointer-analysis-initdb`
 - `egglog/tests/hardboiled_conv1d_32.egg`
-- `benchmarks/luminal-llama.egg`
+- `egglog/tests/luminal-llama.egg`
 - `egglog/tests/web-demo/herbie.egg`
+- `egglog/tests/papers/misaal-hvx-dot-product.egg`
+- `egglog/tests/papers/churchroad-wide-multiply.egg`
+- `egglog-experimental/tests/papers/dialegg-nmm40.egg`
+- `egglog/tests/papers/speq-preserved-reference-suite.egg`
 
 The workloads are intentionally bounded proxies rather than an undifferentiated
 corpus:
 
 | Workload | Adaptation or scope | Correctness signal |
 | --- | --- | --- |
-| Math | Existing synthetic stress fixture | Existing file-test snapshot |
+| Math | The paper artifact's Rational language, 24 rewrites, and seven seeds, run for eleven iterations through current egg or egglog without backoff | An equality first established on iteration eleven is checked; tests require it to fail after iteration ten in both engines |
 | eggcc 2mm | Bounded pass-one fixture with ordinary constructor-valued merges | Generated `main` function type is checked |
-| Pointer analysis | First 100 rows from 23 relations; three legacy functions are constructors for current egglog compatibility | Known `constant_points_to` row is derived |
+| Pointer analysis | All 73,864 rows from the 23 `initdb.bc` relations consumed by the adapted program; three legacy lookup-or-create functions are constructors under current egglog, and the run uses ordinary seminaive scheduling | Known `constant_points_to` row is derived and both reported output-table sizes are available for artifact comparison |
 | Hardboiled | Dormant canonicalization rules using unsupported unstable helpers are omitted | Extracted WMMA store result is checked |
 | Luminal | Static Llama graph from [`egglog_repro` commit `7fb0194`](https://github.com/saulshanabrook/egglog_repro/blob/7fb0194812b5b11e41a286d8b55e48e3b0bfcd66/llama.egg) | `t712` is checked after kernel lowering |
 | Herbie | Static engine proxy without Racket orchestration or an FPCore corpus | All 14 checks exercise the selected treatment |
+| MISAAL | Complete generated HVX dot-product workload with current global syntax | The source expression is checked equivalent to the synthesized HVX result |
+| Churchroad | The paper's 16-by-32-bit wide multiply with its prelude and driver mapping rules materialized; the saturating schedule is bounded to 17 cycles, calibrated as a roughly one-second normal-mode workload | The multiply expansion and its two-input and three-input DSP proposals are checked |
+| DialEgg | Generated NMM-40 scaling workload with `base.egg` materialized | An alternative matrix-chain association is checked |
+| SpEQ | Four artifact-preserved programs that still match the artifact's GEMV/histogram reference rules, recorded using egglog-python's native command log | Each input is checked equal to its extracted reference call (or enclosing expression) |
+
+The Math language, rewrites, and seeds come from
+`micro-benchmarks/src/math.rs` and `micro-benchmarks/src/eqlog/math_full.egg`
+in the [PLDI 2023 artifact](https://doi.org/10.5281/zenodo.7709794). The fixture
+preserves its Rational constants but uses current egg and egglog's ordinary
+simple/seminaive schedulers without the artifact's backoff scheduler or match
+cap, so this is a controlled current-engine comparison rather than an exact
+reproduction of the paper's historical scheduler results.
+
+The pointer input is the complete `initdb.bc` input for the 23 relations read by
+this adaptation, not the artifact's full 30-program pointer-analysis matrix.
+See `egglog/tests/pointer-analysis-initdb.PROVENANCE.md` for the source
+details and archive SHA-256. Herbie remains a bounded static proxy in the
+ordinary benchmark suite; reproducing the historical Racket/FPCore
+orchestration remains outside the ordinary runner.
 
 Benchmark files must not contain executable `(prove ...)` commands. Use
 `(check ...)` in timed workloads so the selected treatment controls whether
@@ -672,8 +725,8 @@ CI runs on pull requests, manual dispatches, and pushes to `main`:
 
 - `python`: `make python-nits`, then `make python-test`.
 - `rust`: `make rust-nits`, then `make rust-test`.
-- `benchmark-smoke`: a one-round pair comparison on
-  `egglog/tests/integer_math.egg` through `make benchmark-smoke`.
+- `benchmark-smoke`: a one-round `off`/`proofs` pair comparison across the
+  default six-file suite through `make benchmark-smoke`.
 - `codspeed`: an in-process, proofs-only benchmark over a smaller workload set
   in simulation and memory modes. CodSpeed includes phase-clock execution but
   does not persist phase reports; `./bench.py` remains the source for

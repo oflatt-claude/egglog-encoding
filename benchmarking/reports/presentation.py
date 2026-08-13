@@ -12,6 +12,7 @@ import math
 from collections.abc import Sequence
 from pathlib import Path
 
+from ..engines import TREATMENT_SPECS
 from ..models import BenchmarkEndpoint, ComparisonSpec, DetailLevel, FileSpec
 from .analysis import (
     RULESET_CONTRIBUTOR_LIMIT,
@@ -133,10 +134,22 @@ def _selection_section(
         caption=_comparison_caption(report_path, comparison, file_labels),
     )
     blocks: list[ReportBlock] = [endpoint_table]
-    changed = (
-        comparison.baseline.target.binary_sha256 != comparison.candidate.target.binary_sha256,
-        comparison.baseline.treatment != comparison.candidate.treatment,
+    baseline_engine = TREATMENT_SPECS[comparison.baseline.treatment].engine
+    candidate_engine = TREATMENT_SPECS[comparison.candidate.treatment].engine
+    target_changed = (
+        comparison.baseline.target.row.git_sha,
+        comparison.baseline.target.row.is_dirty,
+        comparison.baseline.target.display_label,
+    ) != (
+        comparison.candidate.target.row.git_sha,
+        comparison.candidate.target.row.is_dirty,
+        comparison.candidate.target.display_label,
+    ) or (
+        baseline_engine == candidate_engine
+        and comparison.baseline.target.binary_sha256_for(comparison.baseline.treatment)
+        != comparison.candidate.target.binary_sha256_for(comparison.candidate.treatment)
     )
+    changed = (target_changed, comparison.baseline.treatment != comparison.candidate.treatment)
     if sum(changed) > 1:
         blocks.append(
             ReportMessage(
