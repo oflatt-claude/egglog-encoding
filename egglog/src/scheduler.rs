@@ -188,6 +188,9 @@ impl EGraph {
     ///
     /// The iteration is recorded in the overall run report, as in
     /// [`EGraph::step_rules`].
+    /// Lazy rule compilation and the intermediate update flush surround the
+    /// recorded query/action invocations; an enclosing command therefore
+    /// attributes that work to command timing rather than ruleset timing.
     pub fn step_rules_with_scheduler(
         &mut self,
         scheduler_id: SchedulerId,

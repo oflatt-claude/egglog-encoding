@@ -475,6 +475,10 @@ measurements. Successful observations also contain the version-4 timing
 summary: fixed process counters, a typed list of named ruleset timings, and one
 global native-Rebuild counter. Changes to timing coverage or meaning require a
 schema-version change so stale measurements cannot be reused silently.
+The experimental custom-scheduler API times its backend query and action
+invocations as ruleset work; lazy rule compilation and its intermediate update
+flush remain surrounding work and are charged to an enclosing command when one
+exists.
 
 Timed-out rows have null wall time, peak RSS, and timing summary. Failed rows
 have no timing summary and retain whatever process measurements the operating

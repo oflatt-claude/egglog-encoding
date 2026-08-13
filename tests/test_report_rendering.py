@@ -325,6 +325,56 @@ def test_ruleset_detail_unfolds_program_and_equality_with_explicit_children(tmp_
     assert rewrite.rows[0].cells[1].tone == "default"
 
 
+def test_ruleset_edges_label_empty_names_and_break_equal_deltas_by_name(tmp_path: Path) -> None:
+    report_path = tmp_path / "ruleset-ties.jsonl"
+    file = models.FileSpec("file.egg", tmp_path / "file.egg", "sha256:file")
+    baseline = make_endpoint(binary_sha256="sha256:baseline", treatment="off")
+    candidate = make_endpoint(binary_sha256="sha256:candidate", treatment="proofs")
+    unchanged = make_ruleset_timing("unchanged", search_ns=0, apply_ns=0, merge_ns=0)
+    tied_names = ("zeta", "beta", "eta", "delta", "gamma", "alpha", "epsilon")
+    write_report(
+        report_path,
+        make_record(
+            0,
+            started_at="2026-07-17T12:00:00Z",
+            binary_sha256=baseline.target.binary_sha256,
+            timing_summary=make_timing_summary(unchanged, native_rebuild_ns=0),
+        ),
+        make_record(
+            1,
+            started_at="2026-07-17T12:00:01Z",
+            binary_sha256=candidate.target.binary_sha256,
+            treatment="proofs",
+            wall_sec=1.2,
+            timing_summary=make_timing_summary(
+                *(make_ruleset_timing(name, search_ns=10_000_000, apply_ns=0, merge_ns=0) for name in tied_names),
+                make_ruleset_timing("", role="equality", search_ns=1_000_000, apply_ns=0, merge_ns=0),
+                unchanged,
+                native_rebuild_ns=0,
+            ),
+        ),
+    )
+    comparison = models.ComparisonSpec(baseline, candidate, (file,), 1, 120)
+
+    catalog = build_report_catalog(ReportStore(report_path), comparison, "rulesets")
+    section = next(section for section in catalog.sections if section.id == "rulesets")
+    table = next(block for block in section.blocks if isinstance(block, ReportTable))
+    default_ruleset = next(row for row in table.rows if row.cells[0].display == "↳ <default ruleset>")
+
+    assert default_ruleset.cells[0].raw == ""
+    assert [row.cells[0].display for row in table.rows[:8]] == [
+        "Program rules — own work",
+        "↳ alpha",
+        "↳ beta",
+        "↳ delta",
+        "↳ epsilon",
+        "↳ eta",
+        "↳ Other (2 more source rulesets)",
+        "Equality/rebuild — net",
+    ]
+    assert table.rows[6].cells[1].display == "+20.0 ms"
+
+
 def test_ratio_tones_use_green_for_improvements_and_dim_unclear_results(tmp_path: Path) -> None:
     report_path, comparison = _pair_case(tmp_path)
     catalog = build_report_catalog(ReportStore(report_path), comparison)

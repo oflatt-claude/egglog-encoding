@@ -3124,7 +3124,15 @@ impl EGraph {
                 results.push(map);
                 Some(())
             })?;
-            prelude::run_ruleset(self, &ruleset)?;
+            let rule_ids = match &self.rulesets[&ruleset].kind {
+                RulesetKind::Rules(rules) => rules.values().map(|(_, id)| *id).collect::<Vec<_>>(),
+                RulesetKind::Combined(_) => unreachable!("the query ruleset was created directly"),
+            };
+            let iteration_report = self
+                .backend
+                .run_rules(&rule_ids)
+                .map_err(|e| Error::BackendError(e.to_string()))?;
+            self.overall_report.commands_check += iteration_report.total_time();
             Ok(())
         })();
 
@@ -3791,6 +3799,37 @@ mod tests {
             source_checker.overall_report.typecheck,
             std::time::Duration::ZERO,
             "the child checker must not retain time omitted from the outer summary"
+        );
+    }
+
+    #[test]
+    fn query_is_recorded_as_command_work_without_persistent_ruleset_rows() {
+        let mut egraph = EGraph::default();
+        egraph
+            .parse_and_run_program(None, "(relation R (i64)) (R 1) (R 2)")
+            .unwrap();
+        let iterations_before = egraph.overall_report.run.iterations.len();
+        let check_time_before = egraph.overall_report.commands_check;
+
+        for _ in 0..2 {
+            let matches = egraph
+                .query(crate::vars![x: i64], crate::facts![(R x)])
+                .unwrap();
+            assert_eq!(matches.len(), 2);
+        }
+
+        assert_eq!(
+            egraph.overall_report.run.iterations.len(),
+            iterations_before
+        );
+        assert!(egraph.overall_report.commands_check > check_time_before);
+        assert!(
+            egraph
+                .timing_summary()
+                .unwrap()
+                .rulesets
+                .iter()
+                .all(|ruleset| !ruleset.name.contains("query_ruleset"))
         );
     }
 

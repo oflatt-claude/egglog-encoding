@@ -577,6 +577,45 @@ mod tests {
     }
 
     #[test]
+    fn run_report_preserves_mixed_pre_merge_totals() {
+        let mut report = RunReport::default();
+        report.add_iteration(
+            "mixed",
+            RulesetTimingRole::Program,
+            iteration(2, split(3, 5, 7), 11, Duration::from_nanos(13)),
+        );
+        report.add_iteration(
+            "mixed",
+            RulesetTimingRole::Program,
+            iteration(
+                17,
+                PreMergeTiming::Combined {
+                    elapsed: Duration::from_nanos(19),
+                },
+                23,
+                Duration::from_nanos(29),
+            ),
+        );
+
+        let (rulesets, native_rebuild) = report.aggregate_timings();
+        let ((role, name), (assembly, pre_merge, merge)) = rulesets.iter().next().unwrap();
+        assert_eq!(rulesets.len(), 1);
+        assert_eq!(
+            (*role, name.as_ref()),
+            (RulesetTimingRole::Program, "mixed")
+        );
+        assert_eq!(*assembly, Duration::from_nanos(19));
+        assert_eq!(
+            *pre_merge,
+            PreMergeTiming::Combined {
+                elapsed: Duration::from_nanos(34)
+            }
+        );
+        assert_eq!(*merge, Duration::from_nanos(34));
+        assert_eq!(native_rebuild, Duration::from_nanos(42));
+    }
+
+    #[test]
     fn timing_summary_exact_json_is_dense_and_sorted() {
         let mut report = OverallReport {
             typecheck: Duration::from_nanos(2),
@@ -594,11 +633,16 @@ mod tests {
             RulesetTimingRole::Program,
             iteration(0, split(1_000_000_234, 3, 4), 5, Duration::ZERO),
         );
+        report.run.add_iteration(
+            "",
+            RulesetTimingRole::Program,
+            iteration(0, split(0, 0, 0), 0, Duration::ZERO),
+        );
         let summary = TimingSummary::from_report(&report).unwrap();
 
         assert_eq!(
             serde_json::to_string(&summary).unwrap(),
-            r#"{"schema_version":4,"typecheck_ns":2,"frontend_parse_ns":1,"frontend_other_ns":0,"frontend_install_ns":0,"commands_actions_ns":0,"commands_check_ns":6,"commands_other_ns":0,"native_rebuild_ns":13,"rulesets":[{"name":"rules/λ","role":"program","assembly_ns":0,"search_ns":1000000234,"apply_ns":3,"execution_ns":4,"merge_ns":5},{"name":"@parent","role":"equality","assembly_ns":8,"search_ns":9,"apply_ns":10,"execution_ns":11,"merge_ns":12}]}"#
+            r#"{"schema_version":4,"typecheck_ns":2,"frontend_parse_ns":1,"frontend_other_ns":0,"frontend_install_ns":0,"commands_actions_ns":0,"commands_check_ns":6,"commands_other_ns":0,"native_rebuild_ns":13,"rulesets":[{"name":"","role":"program","assembly_ns":0,"search_ns":0,"apply_ns":0,"execution_ns":0,"merge_ns":0},{"name":"rules/λ","role":"program","assembly_ns":0,"search_ns":1000000234,"apply_ns":3,"execution_ns":4,"merge_ns":5},{"name":"@parent","role":"equality","assembly_ns":8,"search_ns":9,"apply_ns":10,"execution_ns":11,"merge_ns":12}]}"#
         );
     }
 
