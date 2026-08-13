@@ -1,3 +1,4 @@
+import EgglogSemantics.Encoding.Encode
 import EgglogSemantics.Tests.Egg
 
 /-!
@@ -1455,6 +1456,464 @@ private def genMergeProgram (s : Nat) : Program :=
     ++ logReads
     ++ List.replicate (rounds + 1) (Cmd.run "")
 
+/-! ### The whole corpus
+
+The cases `scripts/difftest.sh` runs, as data rather than as files, so that a harness which
+does not go through egglog can reuse them. The two random families are drawn at the script's
+default `RANDOM_CASES` and `MERGE_CASES`, and the seed is `k + 1` exactly as `main`'s
+`seed`/`mergeseed` modes compute it. -/
+
+/-- The 60 random constructor-fragment cases. -/
+private def randomCases : List (String × Program) :=
+  (List.range 60).map fun k => (s!"rand-{k}", genProgram (k + 1))
+
+/-- The 30 random `:merge` cases. -/
+private def randomMergeCases : List (String × Program) :=
+  (List.range 30).map fun k => (s!"mrand-{k}", genMergeProgram (k + 1))
+
+/-- Every case the difftest runs, in the order the script writes them. -/
+private def allCases : List (String × Program) :=
+  curated ++ curatedMerge ++ randomCases ++ randomMergeCases
+
+set_option linter.hashCommand false in
+#guard curated.length = 10
+set_option linter.hashCommand false in
+#guard curatedMerge.length = 66
+set_option linter.hashCommand false in
+#guard allCases.length = 166
+
+/-! Three cases small enough to pin the encoding's behaviour at compile time. None has a
+rule, so none runs the enumerator, whose cost is `|terms| ^ |vars|`. -/
+
+/-- One construction and nothing else. -/
+private def buildCase : Program := [.action (.expr (add (C "One") (C "Two")))]
+
+/-- Two applications made congruent by a `union`, and nothing else — the smallest program
+whose encoded view holds a stale key. -/
+private def unionCase : Program :=
+  [.action (.expr (add (C "One") (C "Two"))),
+   .action (.expr (add (C "Two") (C "One"))),
+   .action (.union (C "One") (C "Two"))]
+
+/-- `unionCase` under a `Wrapper`, so the congruence the `union` creates has to travel
+**up** a level. The harness's negative control: it is the same three commands and it does
+not agree. -/
+private def upCase : Program :=
+  [.action (.expr (.app "Wrapper" [add (C "One") (C "Two")])),
+   .action (.expr (.app "Wrapper" [add (C "Two") (C "One")])),
+   .action (.union (C "One") (C "Two"))]
+
+/-- `upCase` with unary constructors throughout: the same two-level shape, and the smallest
+program in which the congruence has anywhere to travel. Cheaper only because the enumerator
+is exponential in a rule's variable count and a unary view's rebuild rule has one fewer. -/
+private def upThinCase : Program :=
+  [.action (.expr (.app "H" [.app "F" [C "A"]])),
+   .action (.expr (.app "H" [.app "F" [C "B"]])),
+   .action (.union (C "A") (C "B"))]
+
+/-- The probes, reachable from `difftest encode <fuel> <name>` by name. The `-run` variants
+append one empty round, which is what makes `encode` emit a `Cmd.saturate rebuildRuleset` and
+so the only way to ask whether the rebuild repairs the gap `upCase` shows. They are out of
+the guards because running a rebuild is far too slow to sit in a build. -/
+private def probeCases : List (String × Program) :=
+  [("build", buildCase), ("union", unionCase),
+   ("up", upCase), ("up-run", upCase ++ [.run ""]),
+   ("up-thin", upThinCase), ("up-thin-run", upThinCase ++ [.run ""])]
+
+namespace Egglog
+/-! ### The proof encoding, by tuple count
+
+`Encoding/Encode.lean`'s `encode` is parked M11 material and nothing had ever run it on a
+program. This runs it over the corpus above and compares the encoded database's tuple counts
+against the source run's.
+
+It is a **self-consistency** check inside the model and deliberately not one against the
+binary. egglog mints a fresh id per construction and lets the view merge dedup them, where
+the ids here are structural, so against egglog "the induced equivalence is the same; the
+entry counts are not" (`Encode.lean`, "Fresh ids"). Against our own source run they should
+be.
+
+#### Which two numbers
+
+The source side is `Impl/Merge.lean`'s `keyRowCount f`: one class per congruence class of
+`f`'s key tuples, which is `(print-size)`'s quantity and the one the whole difftest is
+stated in. `Impl/Interp.lean`'s `rowCount` agrees with it on a constructor, so the source
+side could use either; `keyRowCount` is chosen because it reads the same index the target
+side has to.
+
+The target side is `@fView`, and *neither* count is right there unadjusted:
+
+* `rowCount (viewName f)` reads applications out of `terms`. `@fView` is a `.merge`
+  function, so its entry term is `@fView(children…, eclass)` and this would count classes of
+  the key-and-value pair; and `terms` never shrinks, so it would also count every entry a
+  merge or a rebuild has since superseded. Its own docstring says "Constructors only".
+* `keyRowCount (viewName f)` reads the index, which is the right table and the right
+  key/value split — but it quotients by `closureF`, and on an encoded program `closureF` is
+  the **identity**. `encodeAction` turns a source `union` into `.set @UF …`, so the encoded
+  program contains no `Action.union` at all, `eqs` stays empty, and the congruence closure
+  collapses to the diagonal. Quotienting by it quotients by nothing.
+
+That is not a defect in `keyRowCount`; it is the encoding working. Equality on the target is
+*only* what `@UF` and the views record (`Encode.lean`, "Reading the target"), so the
+equivalence to quotient `@fView`'s keys by is `UFLeader`, not `Cong`. `viewClassCount` below
+is `keyRowCount`'s shape with `closureF` replaced by that — a computable `ViewReprList`
+composed with `UFLeader`, which is exactly the correspondence `SameClass` is stated over.
+
+`viewEntryCount` — the raw `keyRowCount (viewName f)` — is reported beside it, because the
+gap between the two is a documented property of this encoder rather than noise: the rebuild
+rules re-key an entry by *adding* one at the leader's key and there is no `delete` to remove
+the stale one, so "a half-rewritten entry is an extra entry rather than a lost one"
+(`rebuildRules`). The class count is the claim; the entry count is the price.
+
+The two numbers really do come apart, and the guards below pin the smallest case where they
+do: `unionCase` is one source key class, one view class and **two** view entries. A harness
+that had reached for `keyRowCount` on both sides would have reported a mismatch there and
+been wrong about it.
+
+#### What is actually runnable
+
+Encoding a query multiplies the e-matcher's exponent: one view read per subterm, each
+binding an id variable, so `Program.widestRule` goes from 0–3 across the in-domain corpus to
+3–12, and `matchQuery` is `|valueTerms| ^ that` with a congruence closure computed per
+candidate. Most of the corpus is therefore out of the reference interpreter's reach on the
+target side however long it is given — the width-3 and width-4 cases finish, the width-5 and
+up do not. `difftest encode-cost` prints both exponents per case, which is the number to look
+at before waiting on one.
+-/
+
+/-! #### `encode`'s domain, decided
+
+`Program.EncodeDomain` as a `Bool`, with the equivalence proved, so that the census below
+and the hypothesis a theorem would carry cannot drift apart. -/
+/-- `EncodeDomain.ctorsOnly` at one command. -/
+def Cmd.ctorDeclB : Cmd → Bool
+  | .decl _ d => d.merge.isNone
+  | _ => true
+
+theorem Cmd.ctorDeclB_iff (c : Cmd) :
+    c.ctorDeclB = true ↔ ∀ f d, c = Cmd.decl f d → d.merge = none := by
+  cases c <;> simp [Cmd.ctorDeclB, Option.isNone_iff_eq_none]
+
+/-- `Action.NoSet`, computed. -/
+def Action.noSetB : Action → Bool
+  | .set _ _ _ => false
+  | _ => true
+
+theorem Action.noSetB_iff (a : Action) : a.noSetB = true ↔ a.NoSet := by
+  cases a <;> simp [Action.noSetB, Action.NoSet]
+
+/-- `Pattern.NoValues`, computed. -/
+def Pattern.noValuesB : Pattern → Bool
+  | .values _ _ _ => false
+  | _ => true
+
+theorem Pattern.noValuesB_iff (p : Pattern) : p.noValuesB = true ↔ p.NoValues := by
+  cases p <;> simp [Pattern.noValuesB, Pattern.NoValues]
+
+/-- `Cmd.NoSet`, computed. -/
+def Cmd.noSetB : Cmd → Bool
+  | .action a => a.noSetB
+  | .rule r => r.actions.all Action.noSetB && r.query.all Pattern.noValuesB
+  | _ => true
+
+theorem Cmd.noSetB_iff (c : Cmd) : c.noSetB = true ↔ c.NoSet := by
+  cases c <;>
+    simp [Cmd.noSetB, Cmd.NoSet, Action.noSetB_iff, Pattern.noValuesB_iff, List.all_eq_true]
+
+/-- `Program.EncodeDomain`, computed. -/
+def Program.encodeDomainB (p : Program) : Bool :=
+  p.all Cmd.ctorDeclB && p.all Cmd.noSetB
+    && p.ctors.all (fun fk => (Prim.ofName fk.1).isNone)
+    && p.ctors.all (fun fk => !"@".isPrefixOf fk.1)
+    && p.vars.all (fun v => !"@".isPrefixOf v)
+
+/-- **The census below counts exactly `EncodeDomain`.** -/
+theorem Program.encodeDomainB_iff (p : Program) :
+    p.encodeDomainB = true ↔ p.EncodeDomain := by
+  simp only [Program.encodeDomainB, Bool.and_eq_true, List.all_eq_true, Cmd.ctorDeclB_iff,
+    Cmd.noSetB_iff, Option.isNone_iff_eq_none, Bool.not_eq_eq_eq_not, Bool.not_true,
+    Bool.eq_false_iff, ne_eq]
+  exact ⟨fun h => ⟨h.1.1.1.1, h.1.1.1.2, h.1.1.2, h.1.2, h.2⟩,
+    fun h => ⟨⟨⟨⟨h.ctorsOnly, h.noSet⟩, h.noPrim⟩, h.noAt⟩, h.noAtVar⟩⟩
+
+/-! #### Standing in for `set-if-empty`
+
+`encodeBuild` ends every construction with `(let x (@fView c…))`, a **lookup** in a rule
+head. `Encode.lean` records that egglog rejects the shape and that `Program.noLookup` is the
+transcribed check — but it is worse than a static rejection here: `Expr.eval` has no rule
+for an application of a declared `.merge` function either, so the *interpreter* gets stuck
+on the very first construction and `execM (encode P)` is `none` for every program that
+builds anything. `stuckAt` below reports where, and it is why nothing about counts can be
+said of `encode` as written.
+
+`skolemizeReadBack` is the harness's stand-in, and it is not a repair of `encode`: it
+rewrites the read-back to bind the id the `set` on the line above just interned, which is
+the skolem `f(c…)`. egglog's `set-if-empty-<View>!` returns the **resident** e-class where
+one was already there, so the two differ exactly when the view already held that key —
+where egglog keeps the resident id, this binds the skolem, and the two are `@UF`-unioned by
+the `set`'s own merge in either case. So the parent is built over a non-leader child and the
+rebuild moves it, which costs entries and not equalities. What it does *not* do is invent a
+missing action: a real fix is a `Prim`-style get-or-insert, which is a write, and that is
+M11 encoder work (`Encode.lean`, "Building a term"). Everything below the stand-in is
+`encode`'s own output, unedited. -/
+/-- The read-back rewritten to the skolem id, given the source constructors. Matching on the
+name rather than on the string shape keeps `viewName`'s spelling in one place. -/
+def unLookupAction (fs : List FnName) : Action → Action
+  | .letBind v (.app g es) =>
+      match fs.find? fun f => viewName f == g with
+      | some f => .letBind v (.app f es)
+      | none => .letBind v (.app g es)
+  | a => a
+
+/-- `unLookupAction` over a command: top-level actions and rule heads, which are the only
+places `encodeBuild`'s output lands. -/
+def unLookupCmd (fs : List FnName) : Cmd → Cmd
+  | .action a => .action (unLookupAction fs a)
+  | .rule r => .rule { r with actions := r.actions.map (unLookupAction fs) }
+  | c => c
+
+/-- `encode`, with every view read-back standing in as its skolem id. -/
+def skolemizeReadBack (p : Program) : Program :=
+  (encode p).map (unLookupCmd (p.ctors.map Prod.fst))
+
+/-! #### Running the encoded program
+
+`encode` emits `Cmd.saturate rebuildRuleset` after every run, so an encoded program is
+outside `Program.NoSaturate` and `execM` reaches `runSaturateM`, which is fuel-bounded and
+answers `none` on exhaustion. `execAt` takes the fuel as an argument so that "the rebuild
+did not settle" and "a command got stuck" are different answers rather than the same
+`none`; everything but `.saturate` is `execCmdM` unchanged, so `execAt runFuel` is `execM`.
+-/
+/-- `execM` with the `.saturate` fuel supplied by the caller. -/
+def execAt (fuel : Nat) (d : FDatabase) : Program → Option FDatabase
+  | [] => some d
+  | .saturate R :: cs => (d.runSaturateM R fuel).bind fun d' => execAt fuel d' cs
+  | c :: cs => (d.execCmdM c).bind fun d' => execAt fuel d' cs
+
+/-- **At `runFuel` it is `execM`**, so raising the fuel is the only thing the parameter
+does and a run that finishes is a run `execM` would have finished. -/
+theorem execAt_runFuel (d : FDatabase) (p : Program) :
+    execAt runFuel d p = d.execProgramM p := by
+  induction p generalizing d with
+  | nil => rfl
+  | cons c cs ih =>
+    cases c <;> simp [execAt, FDatabase.execProgramM, FDatabase.execCmdM, ih]
+
+/-- The first command of `p` that does not step, with its position. `none` is a run that
+finished. -/
+def stuckAt (fuel : Nat) (d : FDatabase) (i : Nat) : Program → Option (Nat × Cmd)
+  | [] => none
+  | .saturate R :: cs =>
+      match d.runSaturateM R fuel with
+      | none => some (i, .saturate R)
+      | some d' => stuckAt fuel d' (i + 1) cs
+  | c :: cs =>
+      match d.execCmdM c with
+      | none => some (i, c)
+      | some d' => stuckAt fuel d' (i + 1) cs
+
+/-- The exponent the e-matcher runs at: the most free variables any one rule's query has.
+`matchQuery` assigns a query's free variables all at once from `valueTerms` and computes a
+congruence closure per candidate, so a case costs `|valueTerms| ^ this`, and encoding
+multiplies it — one view read per subterm binds an id variable for each. An upper bound,
+since a global would already be bound; it is a cost proxy and nothing reads it but the
+report. -/
+def Program.widestRule (p : Program) : Nat :=
+  (p.filterMap fun c => match c with
+    | .rule r => some (Query.freeVars r.query []).length
+    | _ => none).foldl max 0
+
+/-! #### Reading the encoded database
+
+`UFLeader`, computed. `@UF` is a `.merge` function of one key column, so the index holds at
+most one row per key term and following it is a walk. The walk terminates because
+`mergeBody` only ever writes `@UF (ordering-max x y) ↦ ordering-min x y`, so every edge
+strictly descends `Term.blt`; the fuel is `rows.length`, which bounds any descending walk
+through the index, and `ufLeader` is only ever called with it.
+
+A self-loop is an ordinary entry rather than the absence of one — `UFEdge` carries `p ≠ t`
+for that reason — so the walk stops at an edge that does not move. -/
+/-- `@UF`'s recorded parent for `t`, if it moves. -/
+def ufParent (d : FDatabase) (t : Term) : Option Term :=
+  (d.rows.find? fun r => r.fn == ufName && r.args == [t]).bind fun r =>
+    match r.out with
+    | [p] => if p == t then none else some p
+    | _ => none
+
+/-- `t`'s union-find leader. -/
+def ufLeader (d : FDatabase) : Nat → Term → Term
+  | 0, t => t
+  | n + 1, t => match ufParent d t with
+    | none => t
+    | some p => ufLeader d n p
+
+/-- `ufLeader` at the fuel that bounds any walk through the index. -/
+def ufLeaderOf (d : FDatabase) (t : Term) : Term := ufLeader d d.rows.length t
+
+/-- **The target-side count.** `@fView`'s key tuples, each mapped to its children's
+union-find leaders, deduplicated: one per e-class tuple the view holds an entry for. This is
+`keyRowCount` with the encoded program's own equality — `UFLeader` — in place of `closureF`,
+which on an encoded program is the identity. -/
+def viewClassCount (d : FDatabase) (f : FnName) : Nat :=
+  ((d.keyLists (viewName f)).map fun ks => ks.map (ufLeaderOf d)).dedup.length
+
+/-- The entries `@fView` actually holds, unquotiented. Reported beside `viewClassCount`
+because the difference is what the missing `delete` costs: a rebuild adds the re-keyed entry
+and cannot remove the stale one. -/
+def viewEntryCount (d : FDatabase) (f : FnName) : Nat :=
+  d.keyRowCount (viewName f)
+
+/-! #### One case -/
+/-- What running one case reports. -/
+inductive EncOutcome where
+  /-- Not in `Program.EncodeDomain`, so `encode` says nothing about it. -/
+  | outOfDomain
+  /-- The **source** run did not finish, so there is nothing to compare against. -/
+  | sourceStuck (at? : Option (Nat × Cmd))
+  /-- The encoded run did not finish; the command it stopped at says which hazard. -/
+  | encodedStuck (at? : Option (Nat × Cmd))
+  /-- Per source constructor: source key classes, target view classes, target view
+  entries. -/
+  | counts (rows : List (FnName × Nat × Nat × Nat))
+
+/-- Run one source program against its encoding. `fuel` is `.saturate`'s. -/
+def encodeCompare (fuel : Nat) (p₀ : Program) : EncOutcome :=
+  let p := p₀.declared
+  if !p.encodeDomainB then .outOfDomain
+  else
+    match execAt fuel FDatabase.empty p with
+    | none => .sourceStuck (stuckAt fuel FDatabase.empty 0 p)
+    | some d =>
+      let q := skolemizeReadBack p
+      match execAt fuel FDatabase.empty q with
+      | none => .encodedStuck (stuckAt fuel FDatabase.empty 0 q)
+      | some e =>
+        .counts (p.ctors.map fun fk =>
+          (fk.1, d.keyRowCount fk.1, viewClassCount e fk.1, viewEntryCount e fk.1))
+
+/-- Whether every source constructor's class count survived the encoding. **The claim.** -/
+def EncOutcome.agrees : EncOutcome → Bool
+  | .counts rows => rows.all fun r => r.2.1 == r.2.2.1
+  | _ => false
+
+/-- Whether the *entry* counts agree too. Strictly stronger, and expected to fail wherever a
+rebuild has re-keyed an entry: there is no `delete` to retire the stale one. -/
+def EncOutcome.entriesAgree : EncOutcome → Bool
+  | .counts rows => rows.all fun r => r.2.1 == r.2.2.2
+  | _ => false
+
+/-- One line per case, for the report: `f:source/classes/entries` per source
+constructor. -/
+def EncOutcome.render (o : EncOutcome) : String :=
+  match o with
+  | .outOfDomain => "out-of-domain"
+  | .sourceStuck none => "source-stuck (no command)"
+  | .sourceStuck (some (i, c)) => s!"source-stuck at #{i} {c.toEgg}"
+  | .encodedStuck none => "encoded-stuck (no command)"
+  | .encodedStuck (some (i, c)) => s!"encoded-stuck at #{i} {c.toEgg}"
+  | .counts rows =>
+    (if o.agrees then "AGREE  " else "DIFFER ") ++
+      String.intercalate " "
+        (rows.map fun r => s!"{r.1}:{r.2.1}/{r.2.2.1}/{r.2.2.2}")
+
+/-! #### What the harness pins
+
+The census. `encode`'s fragment is the constructor one, so the in-domain cases are exactly
+the two constructor families and none of the `:merge` ones — which is 70 of 166, and the
+reason a green sweep here is a statement about 42% of the suite. -/
+set_option linter.hashCommand false in
+#guard (allCases.filter fun c => (c.2.declared).encodeDomainB).map Prod.fst
+  = curated.map Prod.fst ++ randomCases.map Prod.fst
+set_option linter.hashCommand false in
+#guard (allCases.filter fun c => (c.2.declared).encodeDomainB).length = 70
+
+/-! And they are out for the one reason `MERGE.md` calls permanent rather than a gap: every
+one of the 96 declares a `:merge` function, so it is `EncodeDomain.ctorsOnly` that fails and
+not a generated-name clash or a shadowed primitive. -/
+set_option linter.hashCommand false in
+#guard (allCases.filter fun c => !(c.2.declared).encodeDomainB).all fun c =>
+  !((c.2.declared).all Cmd.ctorDeclB)
+
+/-! **`encode` as written does not run.** The read-back is rejected statically by the
+front-end check, as `Encode.lean` says — and it is worse than that: `Expr.eval` has no rule
+for an application of a `.merge` function either, so the interpreter stops at the first one.
+For the one-construction program that is command 18, before any count exists. -/
+set_option linter.hashCommand false in
+#guard (encode buildCase.declared).illegalReads.length = 3
+set_option linter.hashCommand false in
+#guard (execM (encode buildCase.declared)).isNone
+set_option linter.hashCommand false in
+#guard ((stuckAt runFuel FDatabase.empty 0 (encode buildCase.declared)).map fun ic =>
+  (ic.1, ic.2.toEgg)) = some (18, "(let @v0 (@OneView))")
+
+/-! With the read-back standing in as the skolem id, the same program passes all four
+front-end checks and runs. -/
+set_option linter.hashCommand false in
+#guard (skolemizeReadBack buildCase.declared).illegalReads.isEmpty
+set_option linter.hashCommand false in
+#guard (skolemizeReadBack buildCase.declared).illegalSets.isEmpty
+set_option linter.hashCommand false in
+#guard (skolemizeReadBack buildCase.declared).arityErrors.isEmpty
+set_option linter.hashCommand false in
+#guard (skolemizeReadBack buildCase.declared).arityConflicts.isEmpty
+set_option linter.hashCommand false in
+#guard (execM (skolemizeReadBack buildCase.declared)).isSome
+
+/-! **The class count is the claim; the entry count is the price.** `unionCase` builds
+`Add(One, Two)` and `Add(Two, One)` and unions the leaves, so the source has one key class.
+The encoded view holds two entries — `[One, Two]` and `[Two, One]` — and there is no
+`delete` to retire either, so `viewEntryCount` is 2 where `viewClassCount` is 1. This is the
+one case where the two target-side numbers come apart at a size a `#guard` can run, and it
+is the whole reason the harness reports both. -/
+set_option linter.hashCommand false in
+#guard (encodeCompare runFuel buildCase).render = "AGREE  Add:1/1/1 One:1/1/1 Two:1/1/1"
+set_option linter.hashCommand false in
+#guard (encodeCompare runFuel unionCase).render = "AGREE  Add:1/1/2 One:1/1/1 Two:1/1/1"
+set_option linter.hashCommand false in
+#guard (encodeCompare runFuel unionCase).agrees
+set_option linter.hashCommand false in
+#guard !(encodeCompare runFuel unionCase).entriesAgree
+
+/-! **The negative control, and a defect it exposes.** Put `unionCase`'s two applications
+under a `Wrapper` and the congruence has to travel up a level: the source says one `Wrapper`
+key class, the encoding says two. The two `Add` ids are unioned only when the rebuild
+re-keys both view entries onto the leaders and the merge collides them — and `encodeCmd`
+emits `Cmd.saturate rebuildRuleset` **only after a `run` or a `saturate`**, so a source
+program made of top-level actions gets no rebuild at all and the target simulates no
+congruence above the columns a `union` names directly.
+
+That is a defect in `encode` rather than in the correspondence, and it is not an artefact of
+the stand-in above: egglog's `set-if-empty` would mint the same two distinct ids for the two
+`Add` shapes, so the two `Wrapper` entries sit at distinct keys under either reading. The
+source's congruence is a closure and holds the moment the `union` lands; the target's is a
+ruleset, and `execCmdM` runs a merge phase after every top-level action but nothing runs the
+rebuild.
+
+**One empty round repairs it**, which is what says the rebuild is the missing piece and
+nothing else is: the `up-thin-run` probe is `upThinCase ++ [.run ""]`, whose source counts
+are unchanged and whose encoded counts then agree (`H:1/1/2 F:1/1/2` — classes right, the
+stale entries still there). Whether `encodeCmd` should emit a `Cmd.saturate rebuildRuleset`
+after `.action` as well, as `execCmdM` runs a merge phase there, is the question this
+raises. The probe is not a guard because running one rebuild takes minutes.
+
+It is also what makes the corpus result readable: the curated `actions` case is action-only
+too, and agrees only because the congruence it asserts is `One = One`. Every other in-domain
+case ends in a `run`, so every other one does get a rebuild. -/
+set_option linter.hashCommand false in
+#guard (encodeCompare runFuel upCase).render
+  = "DIFFER Wrapper:1/2/2 Add:1/1/2 One:1/1/1 Two:1/1/1"
+set_option linter.hashCommand false in
+#guard !(encodeCompare runFuel upCase).agrees
+
+/-! And `actions` is the only in-domain case the gap can reach, because it is the only one
+with no `run` in it — so the corpus cannot see this defect and a probe was needed. -/
+set_option linter.hashCommand false in
+#guard ((allCases.filter fun c => (c.2.declared).encodeDomainB).filter fun c =>
+    !c.2.any fun cmd => match cmd with | .run _ => true | _ => false).map Prod.fst
+  = ["actions"]
+
+end Egglog
+
 /-! ### Entry point -/
 
 /-- Write one case, refusing outright to emit a program egglog would reject.
@@ -1499,14 +1958,43 @@ private def writeCase (dir name : String) (p₀ : Program) : IO Unit := do
   IO.FS.writeFile s!"{dir}/{name}.egg" p.toEgg
   IO.FS.writeFile s!"{dir}/{name}.expected" p.expectedSizes
 
+/-- One line of the encoding report. -/
+private def encodeLine (fuel : Nat) (c : String × Program) : String :=
+  s!"{c.1}: {(Egglog.encodeCompare fuel c.2).render}"
+
 /-- `difftest <dir> curated` writes the curated cases, `difftest <dir> merge` the curated
 `:merge` ones; `difftest <dir> seed <n>` writes one random constructor case named
 `rand-<n>` and `difftest <dir> mergeseed <n>` one random `:merge` case named `mrand-<n>`.
 The two random families are named apart so the script can report a profile distribution
 for each — a collapsing distribution is how a generator that has stopped exercising
-anything shows up, and a single pooled number would hide it. -/
+anything shows up, and a single pooled number would hide it.
+
+`difftest encode-domain` prints how much of the corpus `encode` is defined on, and
+`difftest encode <fuel> [case…]` runs the tuple-count comparison — every case, or the named
+ones. These write nothing and never invoke egglog; the comparison is between the model and
+itself (`Egglog.encodeCompare`). -/
 def main (args : List String) : IO UInt32 := do
   match args with
+  | ["encode-domain"] =>
+    let inDom := allCases.filter fun c => (c.2.declared).encodeDomainB
+    IO.println s!"{inDom.length} of {allCases.length} cases are in encode's domain"
+    IO.println (String.intercalate " " (inDom.map Prod.fst))
+    return 0
+  | ["encode-cost"] =>
+    -- `name source-width encoded-width`: the enumerator's exponent before and after.
+    for (name, p₀) in allCases do
+      let p := p₀.declared
+      if p.encodeDomainB then
+        IO.println s!"{name} {p.widestRule} {(Egglog.skolemizeReadBack p).widestRule}"
+    return 0
+  | "encode" :: fuel :: names =>
+    match fuel.toNat? with
+    | none => IO.eprintln s!"difftest: bad fuel {fuel}"; return 1
+    | some n =>
+      let cases := if names.isEmpty then allCases
+        else (allCases ++ probeCases).filter fun c => names.contains c.1
+      for c in cases do IO.println (encodeLine n c)
+      return 0
   | [dir, "curated"] =>
     IO.FS.createDirAll dir
     for (name, p) in curated do writeCase dir name p
