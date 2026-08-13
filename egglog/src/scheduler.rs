@@ -310,7 +310,7 @@ impl EGraph {
         self.schedulers = schedulers;
 
         if let Ok(report) = &result {
-            self.overall_run_report.union(report.clone());
+            self.overall_report.run.union(report.clone());
         }
         result
     }
@@ -514,14 +514,12 @@ mod test {
                     .keys()
                     .all(|k| k.starts_with("test-rule"))
             );
-            assert_eq!(
+            assert!(!report.iterations.is_empty());
+            assert!(
                 report
-                    .timings()
-                    .rulesets
+                    .iterations
                     .iter()
-                    .map(|timing| timing.name.as_ref())
-                    .collect::<Vec<_>>(),
-                ["test"]
+                    .all(|iteration| iteration.name.as_ref() == "test")
             );
 
             if report.can_stop {

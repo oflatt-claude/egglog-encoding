@@ -1,9 +1,7 @@
 use anyhow::{Context, Result, ensure};
 use clap::{Parser, ValueEnum};
 use egg::{RecExpr, Runner, SimpleScheduler, StopReason};
-use egglog_reports::{
-    PreMergeTiming, ProcessTimings, RulesetTiming, RulesetTimingRole, RunTimings, TimingSummary,
-};
+use egglog_reports::{RulesetTimingRecord, RulesetTimingRole, TimingSummary};
 use std::{
     fs::File,
     io::BufWriter,
@@ -102,32 +100,29 @@ fn run_math(proof_mode: ProofMode) -> Result<(TimingSummary, usize)> {
         Duration::ZERO
     };
 
-    let timing = TimingSummary::new(
-        ProcessTimings {
-            commands_other: proof_postprocessing,
-            ..ProcessTimings::default()
-        },
-        RunTimings {
-            rulesets: vec![RulesetTiming {
-                name: "".into(),
-                role: RulesetTimingRole::Program,
-                assembly: Duration::ZERO,
-                pre_merge: PreMergeTiming::Split {
-                    search: Duration::from_nanos(seconds_to_ns(report.search_time)),
-                    apply: Duration::from_nanos(seconds_to_ns(report.apply_time)),
-                    unattributed: Duration::from_nanos(seconds_to_ns(
-                        (report.total_time
-                            - report.search_time
-                            - report.apply_time
-                            - report.rebuild_time)
-                            .max(0.0),
-                    )),
-                },
-                merge: Duration::ZERO,
-            }],
-            native_rebuild: Duration::from_nanos(seconds_to_ns(report.rebuild_time)),
-        },
-    )?;
+    let timing = TimingSummary {
+        schema_version: TimingSummary::SCHEMA_VERSION,
+        typecheck_ns: 0,
+        frontend_parse_ns: 0,
+        frontend_other_ns: 0,
+        frontend_install_ns: 0,
+        commands_actions_ns: 0,
+        commands_check_ns: 0,
+        commands_other_ns: proof_postprocessing.as_nanos().min(u64::MAX as u128) as u64,
+        native_rebuild_ns: seconds_to_ns(report.rebuild_time),
+        rulesets: vec![RulesetTimingRecord {
+            name: String::new(),
+            role: RulesetTimingRole::Program,
+            assembly_ns: 0,
+            search_ns: seconds_to_ns(report.search_time),
+            apply_ns: seconds_to_ns(report.apply_time),
+            execution_ns: seconds_to_ns(
+                (report.total_time - report.search_time - report.apply_time - report.rebuild_time)
+                    .max(0.0),
+            ),
+            merge_ns: 0,
+        }],
+    };
     Ok((timing, report.egraph_nodes))
 }
 

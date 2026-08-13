@@ -3,6 +3,7 @@
 
 use egglog::CommandOutput;
 use egglog_reports::RunReport;
+use std::collections::BTreeSet;
 
 const PROGRAM: &str = r#"
     (ruleset grow)
@@ -17,10 +18,11 @@ const PROGRAM: &str = r#"
 
 fn ruleset_names(report: &RunReport) -> Vec<String> {
     report
-        .timings()
-        .rulesets
+        .iterations
         .iter()
-        .map(|timing| timing.name.to_string())
+        .map(|iteration| iteration.name.to_string())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
         .collect()
 }
 
