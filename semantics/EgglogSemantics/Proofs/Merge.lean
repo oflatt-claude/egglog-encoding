@@ -9,46 +9,55 @@ import EgglogSemantics.Proofs.Interp
 
 `MERGE.md` says which theorem buys what.
 
-## The three open transports
+## The two remaining transports, and what they are
 
-Everything in this file is proved except three lemmas, each of which transports a
+Everything in this file is proved except two lemmas, each of which transports a
 *specification* fact along `Database.Recorded`. They are the only `sorry`s and they are
-listed here rather than only at their statements: `Database.Out.mono_recorded`,
-`MergeStep.transport_recorded` and `RuleResults.mono_recorded`.
+listed here rather than only at their statements: `MergeStep.transport_recorded` and
+`RuleResults.mono_recorded`.
 
-They share a shape. `Recorded` says every equation of `d₁` is matched by an equation of
-`d₂` whose endpoints are congruent **in `d₂` extended by the two terms in question** —
-`Database.CongOn`, which posits the terms reflexively and lets `Cong.congr` close over
-them. So `d₂` need not hold a term `d₁` holds; it holds a congruent one.
+`Recorded` says every equation of `d₁` is matched by an equation of `d₂` whose endpoints
+are congruent **in `d₂` extended by the two terms in question** — `Database.CongOn`, which
+posits the terms reflexively and lets `Cong.congr` close over them. So `d₂` need not hold a
+term `d₁` holds; it holds a congruent one. It follows that `Recorded` moves an entry's
+**key** columns, which is what the interpreter's rebuild does and the whole reason the
+contract is `Recorded`, but also its **value** columns, which the interpreter never does.
 
-What removes that extension is `Conservativity`: adding reflexive equations for terms the
+What removes the extension is `Conservativity`: adding reflexive equations for terms the
 database does not hold cannot relate two terms it does. That is what proves
 `Cong.mono_recorded` at the pinned ambient and, with it, `Database.Recorded.trans` — both
 under `WF`, which is where the two new `WF` premises on `trans` come from.
 
-Conservativity does *not* rescue the three above, and for two different reasons.
+Conservativity rescues neither of the two, and the obstruction is the same both times: a
+run under a *congruent* environment does not record the run under the original.
+`min`/`max` matching on literals is fixed — `evalAction` refuses a `union` on a literal, so
+`Database.WF.litsIsolated` holds, `Cong.eq_of_isLit` makes a literal's class a singleton
+and `Prim.apply_cong` is the resulting stability. What is left is
+`ordering-min`/`ordering-max`, which choose by `Term.blt`, a *structural* order, where
+egglog chooses by e-class id. `union (f 1) (g 1)` sends `ordering-min (f 1) (f 2)` to
+`f 1` and `ordering-min (g 1) (f 2)` to `f 2`, which are not congruent, with no literal
+anywhere and every state well formed. No condition on the database repairs it; only
+restricting the transported positions to ordering-free expressions does, and
+`Encoding/Encode.lean`'s `mergeBody`/`mergeResult` are built from exactly these two.
 
-* `Database.Out` and `MergeStep.collide`'s `CongList` premise both want **bare** `Cong` at
-  `d₂`, and conservativity discharges the ambient only when both endpoints are already
-  terms of `d₂` — which `Recorded` does not supply, since the key `d₁` searched at need not
-  be a term of `d₂` at all. Both have to be restated at the congruent key `Recorded`
-  hands over, and that is a change to what they say, not to how they are proved.
-* "a run under a congruent environment records the run under the original" is **false**,
-  and now for exactly one reason. `min`/`max` match on literals, and that half is fixed:
-  `evalAction` refuses a `union` on a literal, so `Database.WF.litsIsolated` holds and
-  `Cong.eq_of_isLit` makes a literal's class a singleton — `Prim.apply_cong` is the
-  resulting stability. What is left is `ordering-min`/`ordering-max`, which choose by
-  `Term.blt`, a *structural* order, where egglog chooses by e-class id. `union (f 1)
-  (g 1)` sends `ordering-min (f 1) (f 2)` to `f 1` and `ordering-min (g 1) (f 2)` to
-  `f 2`, which are not congruent, with no literal anywhere and every state well formed.
-  No condition on the database repairs it; only restricting the transported positions to
-  ordering-free expressions does, and `Encoding/Encode.lean`'s `mergeBody`/`mergeResult`
-  are built from exactly these two.
+`MergeStep.transport_recorded` is not merely unproved: it is **false as stated**, refuted
+at that encoding's own `:merge` body, and its statement carries the counterexample. Its two
+consumers — `mergeSaturateF_contained_aux` and `CmdStep.mono_recorded` — hold a genuine
+`Recorded` and not a `Contained`, so the proved `MergeStep.transport`/`MergeClosure.transport`
+do not serve them, and any hypothesis that excludes the counterexample restricts which
+programs the contract covers. That is a change to `execM_contained`, so it is not made here.
 
-Also **false**, and so restated rather than left open, is the same-`σ`, same-`d₂` family:
-`Cong.mono_recorded` in its old shape (`Cong d₁ a b → Cong d₂ a b`) and with it
-`ValidEnv`/`ValidSubst`/`ValidQuerySubst.mono_recorded`. The counterexample is recorded at
-`Cong.mono_recorded`.
+Also **false**, and so restated or deleted rather than left open:
+
+* `Database.Out.mono_recorded`. `Out` reads the key up to congruence and the value columns
+  syntactically, and `Recorded` moves both; there is no restatement that both holds and
+  serves `mergeOneOriented_mergeStep`, which needs the value columns verbatim. It is
+  **deleted**, and the two `Database.Out` facts it used to supply are now premises, carried
+  by `mergeRound_contained`'s fold invariant. See the section above `Database.Recorded`.
+* the same-`σ`, same-`d₂` family: `Cong.mono_recorded` in its old shape
+  (`Cong d₁ a b → Cong d₂ a b`) and with it
+  `ValidEnv`/`ValidSubst`/`ValidQuerySubst.mono_recorded`. The counterexample is recorded at
+  `Cong.mono_recorded`.
 
 ## Known-broken statements, removed
 
@@ -532,23 +541,26 @@ theorem CongList.mono_recorded {d₁ d₂ : Database} (h : d₁.Recorded d₂) (
       · exact htb t (List.mem_cons_self ..)
       · simp at ht
 
-/-- `Out.mono` along `Recorded`: the key class is searched twice and the two searches
-compose.
+/-! **There is no `Out.mono` along `Recorded`, in any form its consumer could use.**
 
-**Open, and not for want of a proof — the statement is wrong.** `Out d₂ f as vs` asks for
-`CongList d₂ as bs` at bare `Cong`, so it asks in particular that every key column `as` be
-a term of `d₂`. `Recorded` gives no such thing: it gives a *congruent* term, and
-`Cong.mono_recorded` lands in `d₂.withOperands [a, b]` for exactly that reason.
-`Conservativity.congOn_elim` takes the ambient off only when both endpoints are already
-`d₂` terms, and there are well-formed `Recorded` pairs where a term of `d₁` is not a term
-of `d₂` at all. So this wants restating at the key `Recorded` supplies — `∃ as', CongList`
-… `∧ d₂.Out f as' vs`, or `Out` itself read up to the ambient — which changes its two
-consumers in `mergeOneOriented_mergeStep`. -/
-theorem Database.Out.mono_recorded {d₁ d₂ : Database} (h : d₁.Recorded d₂)
-    {f : FnName} {as vs : List Term} (ho : d₁.Out f as vs) :
-    d₂.Out f as vs := by
-  -- Open: `Out` wants bare `Cong` at `d₂`, which `Recorded` cannot supply; restate it.
-  sorry
+`Out d₂ f as vs` reads the key `as` up to congruence and the value columns `vs`
+*syntactically*, and `Recorded` moves both. It moves the key because `Cong.mono_recorded`
+lands in `d₂.withOperands [a, b]` rather than in `d₂`, and `Conservativity.congOn_elim`
+takes that ambient off only against endpoints `d₂` already holds. It moves the values
+because an equation of `d₂` may relate a value column to another term: with
+`d₁.eqs = {(f k v, f k v), (k, k), (v, v)}` and
+`d₂.eqs = {(f k w, f k w), (k, k), (w, w), (v, v), (v, w)}` both states are well formed and
+`d₁.Recorded d₂` — the witness for the entry is `f k w`, reached by `Cong.congr` under
+`v = w` — while `d₂` holds no `f`-entry whose value column is `v`, so `d₂.Out f as' [v]`
+fails for every `as'`.
+
+That second half is not an artefact: it is the interpreter's own situation, since the
+implementation canonicalises a row's outputs and the specification keeps the originals.
+`mergeOneOriented_mergeStep` needs the value columns *verbatim* — the merge body has to run
+under the same `mergeEnv` on both sides — so it takes the two `Database.Out` facts as
+hypotheses instead. `mergeRound_contained` carries them: they are about the fixed pre-pass
+row list, `FDatabase.IndexOk.entry` establishes them at the rebuild, and `Out.mono` keeps
+them as the specification witness grows. -/
 
 namespace Database
 namespace Recorded
@@ -1168,13 +1180,15 @@ the same variable; per-pattern transports may pick different congruent represent
 answer is a single witness **function** `Term → Term` rather than a witness per use site —
 then equal terms get equal images and `Union2` still joins.
 
-*Costs a lemma that is false*: `RuleResults.mono_recorded`, which is where the `sorry` sits.
-It re-evaluates under the substitution, and `Expr.eval` is **not** congruence-stable at a
-primitive — `Prim.apply` matches on literals, so a term congruent to `.lit 1` but not equal
-to it does not compute the same answer, or any answer. What is true is the primitive-free
-half, so the fix is to restrict the transported positions and not to look for a proof. The
-same obligation is `MergeStep.transport_recorded`'s, whose body runs under a `mergeEnv`
-built from the colliding outputs, congruent rather than equal on the specification side. -/
+*Costs a lemma that is false*: `RuleResults.mono_recorded`, which is where one of the two
+`sorry`s sits. It re-evaluates under the substitution, and `Expr.eval` is **not**
+congruence-stable at a primitive — `Prim.apply` matches on literals, so a term congruent to
+`.lit 1` but not equal to it does not compute the same answer, or any answer. What is true
+is the primitive-free half, so the fix is to restrict the transported positions and not to
+look for a proof. `MergeStep.transport_recorded` is defeated by the same instability one
+step earlier: its body runs under a `mergeEnv` built from the colliding outputs, congruent
+rather than equal on the specification side, so no restriction on the *transported
+positions* reaches it. -/
 
 /-! ### Transporting a step
 
@@ -1405,7 +1419,7 @@ semantically new is claimed: `Out` is the only read there is.
 
 A step-by-step account of the merge interpreter against the merge specification. It runs
 from `Inv` preservation through evaluation, actions and matching to containment, and it
-is proved all the way to `execM_contained`, except at the four `Recorded` transports the
+is proved all the way to `execM_contained`, except at the two `Recorded` transports the
 file header lists. What is *not* here at all is completeness — see "Two statements removed
 rather than carried" below.
 
@@ -2193,11 +2207,12 @@ is `swapForCanon`, and every fact below is indifferent to it, so each is proved 
 `MergeStep` the firing refines, and `MergeStep.collide` has the two rows as premises in
 both orders, so either is available. -/
 theorem mergeOneWith_eq_oriented {cl : Finset (Term × Term)} {d : FDatabase} (r₁ r₂ : Row) :
-    ∃ a b, d.mergeOneWith cl r₁ r₂ = d.mergeOneOriented cl a b := by
+    d.mergeOneWith cl r₁ r₂ = d.mergeOneOriented cl r₂ r₁ ∨
+      d.mergeOneWith cl r₁ r₂ = d.mergeOneOriented cl r₁ r₂ := by
   unfold FDatabase.mergeOneWith
   split
-  · exact ⟨r₂, r₁, rfl⟩
-  · exact ⟨r₁, r₂, rfl⟩
+  · exact Or.inl rfl
+  · exact Or.inr rfl
 
 /-- `mergeOneOriented_confined` at whichever orientation the firing took. -/
 theorem mergeOneWith_confined {cl : Finset (Term × Term)} {d e : FDatabase} {r₁ r₂ : Row}
@@ -2205,8 +2220,8 @@ theorem mergeOneWith_confined {cl : Finset (Term × Term)} {d e : FDatabase} {r�
     (∀ t ∈ d.terms, t ∈ e.terms) ∧ (∀ p ∈ d.eqs, p ∈ e.eqs) ∧ e.sig = d.sig ∧
       ∀ r ∈ d.rows, (∀ body res, d.sig.mergeOf r.fn ≠ some (MergeSpec.merge body res)) →
         r ∈ e.rows := by
-  obtain ⟨a, b, he⟩ := mergeOneWith_eq_oriented (cl := cl) (d := d) r₁ r₂
-  exact mergeOneOriented_confined (he ▸ h)
+  rcases mergeOneWith_eq_oriented (cl := cl) (d := d) r₁ r₂ with he | he <;>
+    exact mergeOneOriented_confined (he ▸ h)
 
 /-! #### The rebuild
 
@@ -2761,8 +2776,8 @@ theorem mergeOneOriented_inv {cl : Finset (Term × Term)} {d e : FDatabase} {r�
 theorem mergeOneWith_inv {cl : Finset (Term × Term)} {d e : FDatabase} {r₁ r₂ : Row}
     (h : d.Inv) (hlegal : Signature.MergesLegal d.sig)
     (hm : d.mergeOneWith cl r₁ r₂ = some e) : e.Inv := by
-  obtain ⟨a, b, he⟩ := mergeOneWith_eq_oriented (cl := cl) (d := d) r₁ r₂
-  exact mergeOneOriented_inv h hlegal (he ▸ hm)
+  rcases mergeOneWith_eq_oriented (cl := cl) (d := d) r₁ r₂ with he | he <;>
+    exact mergeOneOriented_inv h hlegal (he ▸ hm)
 
 /-- **A merge pass preserves the refinement-chain invariant, provided every declared merge
 is legal.** `mergeOneWith_inv` through the two folds of `mergeRound`, exactly as
@@ -2864,26 +2879,40 @@ theorem ProgramStep.wf {db db' : Database} {p : Program} (h : ProgramStep db p d
 
 /-- **A merge collision available at `A` is available at any `C` that *records* it.**
 
-**Open**, and it is one of the three the file header lists, for both of the reasons that
-header gives. The step's premises are `Term.app f (as ++ a) ∈ A.terms` and `CongList A as
-bs`, and `Recorded` gives neither at `C`: the entry term need not be a term of `C` at all,
-only congruent to one, and `Cong.mono_recorded` lands in `C` extended by the two endpoints
-rather than in `C`. `Conservativity.congOn_elim` would take that extension off, but only
-against endpoints `C` already holds, which is the thing not available. So the `collide`
-premises have to be restated at the congruent key `Recorded` supplies.
+**False as stated**, and not merely unproved. `Recorded` moves an entry's value columns as
+well as its key, so the body runs under a *congruent* `mergeEnv` on the `C` side, and
+`ordering-min`/`ordering-max` are not stable there: the two runs settle on incongruent
+parents and the union-find edge one writes is congruent to nothing the other can write. The
+counterexample is at the encoding's own `mergeBody`/`mergeResult` and one `viewDecl`, with
+`A.Recorded C`, both states well formed and one signature: `A` holds `@fView(k) ↦ p`
+alongside `@fView(k) ↦ r`, `C` holds the first re-keyed to the congruent `s`, and with
+`p < r < s` the step from `A` writes `@UF(r) ↦ p` while every step from `C` writes
+`@UF(s) ↦ s`, `@UF(s) ↦ r` or `@UF(r) ↦ r`. A merge asserts no equation, so nothing relates
+`r` to `p` afterwards either. Adding `C.WF` does not rescue it.
 
-The second obstruction is real and not bookkeeping: the body executes under `mergeEnv a b`,
-and on the `C` side the two colliding outputs are congruent rather than equal, so this
-needs "a run under a congruent environment records the run under the original" — which is
-**false** at `ordering-min`/`ordering-max`, and only there; see the file header.
+Kept rather than deleted because its two consumers need exactly this shape and have no
+weaker one available. `mergeSaturateF_contained_aux` and `CmdStep.mono_recorded` both hold
+a genuine `Recorded` — `FDatabase.mergeRound_contained`'s conclusion cannot be strengthened
+to `Contained`, the interpreter's rebuild being what moves the key — so the proved
+`MergeStep.transport` and `MergeClosure.transport` do not apply. Every repair adds a
+hypothesis those consumers cannot discharge without restricting which programs the
+contract covers, which would change `execM_contained`; that is not a bookkeeping decision
+and is deliberately not made here.
+
+What such a repair looks like: the interpreter never moves a value column, so what it
+actually maintains is `Recorded` *plus* "every entry of `A` is `Database.Out` in `C` at its
+own value columns" — the clause `mergeRound_contained` already carries for one pass. Under
+it the body runs under the same environment on both sides, `Expr.eval` reading only `sig`
+and `env`, and only the key moves. Carrying that clause through `evalActions`, `RunRules`
+and the whole chain is the work, and `RuleResults.mono_recorded` stays open regardless.
 
 `Database.Recorded.addRow_congr`, which used to supply this, is deleted: it rested on
 `addTerms_eq_self` at a row-shaped `Recorded` that no longer exists. -/
 theorem MergeStep.transport_recorded {A C B : Database} (hc : A.Recorded C)
     (hsig : A.sig = C.sig) (hw : A.WF) (h : MergeStep A B) :
     ∃ D, MergeStep C D ∧ B.Recorded D ∧ B.sig = D.sig := by
-  -- Open: `collide`'s premises want bare `Cong`, and the body's transport wants the
-  -- congruent-environment lemma, which is false at `ordering-min`/`ordering-max`.
+  -- False as stated: `Recorded` moves the colliding value columns, and the body's
+  -- `ordering-min`/`ordering-max` are not stable under that. See the docstring.
   sorry
 
 /-- `MergeStep.transport_recorded` iterated. -/
@@ -2935,10 +2964,18 @@ scope-checks a merge body, so a body with a free variable makes `evalActions` fa
 the skip still fires). Zero-or-one steps is `MergeClosure`, so that is what this states.
 Nothing downstream notices: `mergeRound_contained` consumed the step with
 `ReflTransGen.tail` and now consumes the closure with `.trans`, and its statement — the
-containment contract the interpreter is actually held to — is unchanged. -/
+containment contract the interpreter is actually held to — is unchanged.
+
+**`hO₁` and `hO₂` are premises rather than consequences of `hxc`.** `Recorded` does not
+carry them — see "There is no `Out.mono` along `Recorded`" above — and what they say is
+exactly what the body needs: the specification holds each colliding entry with the *same*
+value columns, so `MergeStep.collide` runs the body under the same `mergeEnv` the
+implementation does and only the key moves. `mergeRound_contained` supplies them. -/
 theorem mergeOneOriented_mergeStep {d x y : FDatabase} {r₁ r₂ : Row} {D : Database}
     (h : d.Inv) (hx : x.Inv) (hxs : x.sig = d.sig)
     (hcl : MergeClosure d.toDatabase D) (hxc : x.toDatabase.Recorded D)
+    (hO₁ : x.sig.mergeOf r₁.fn ≠ none → D.Out r₁.fn r₁.args r₁.out)
+    (hO₂ : x.sig.mergeOf r₂.fn ≠ none → D.Out r₂.fn r₂.args r₂.out)
     (hm : FDatabase.mergeOneOriented d.closureF x r₁ r₂ = some y) :
     ∃ D', MergeClosure D D' ∧ y.toDatabase.Recorded D' := by
   have hDsig : D.sig = d.sig := MergeClosure.sig hcl
@@ -2989,12 +3026,10 @@ theorem mergeOneOriented_mergeStep {d x y : FDatabase} {r₁ r₂ : Row} {D : Da
       | some eb =>
         rw [hb, Option.bind_some, Option.map_eq_some_iff] at hm
         obtain ⟨vs, hv, rfl⟩ := hm
-        -- The two entries, found in `D` at *congruent* keys.
-        obtain ⟨bs₂, hb₂, hr₂D⟩ : D.Out r₂.fn r₂.args r₂.out :=
-          Database.Out.mono_recorded hxc (hx.index.entry r₂ hr₂ hne₂)
+        -- The two entries, found in `D` at *congruent* keys and the same value columns.
+        obtain ⟨bs₂, hb₂, hr₂D⟩ : D.Out r₂.fn r₂.args r₂.out := hO₂ hne₂
         obtain ⟨bs₁, hb₁, hr₁D⟩ : D.Out r₂.fn r₁.args r₁.out := by
-          rw [← hfn]
-          exact Database.Out.mono_recorded hxc (hx.index.entry r₁ hr₁ hne₁)
+          rw [← hfn]; exact hO₁ hne₁
         have hcongD : CongList D r₂.args r₁.args :=
           (CongList.mono (MergeClosure.contained hcl)
             (FDatabase.congrTuple_iff.mp hck)).symm
@@ -3055,10 +3090,13 @@ rather than a change to the semantics. -/
 theorem mergeOneWith_mergeStep {d x y : FDatabase} {r₁ r₂ : Row} {D : Database}
     (h : d.Inv) (hx : x.Inv) (hxs : x.sig = d.sig)
     (hcl : MergeClosure d.toDatabase D) (hxc : x.toDatabase.Recorded D)
+    (hO₁ : x.sig.mergeOf r₁.fn ≠ none → D.Out r₁.fn r₁.args r₁.out)
+    (hO₂ : x.sig.mergeOf r₂.fn ≠ none → D.Out r₂.fn r₂.args r₂.out)
     (hm : FDatabase.mergeOneWith d.closureF x r₁ r₂ = some y) :
     ∃ D', MergeClosure D D' ∧ y.toDatabase.Recorded D' := by
-  obtain ⟨a, b, he⟩ := mergeOneWith_eq_oriented (cl := d.closureF) (d := x) r₁ r₂
-  exact mergeOneOriented_mergeStep h hx hxs hcl hxc (he ▸ hm)
+  rcases mergeOneWith_eq_oriented (cl := d.closureF) (d := x) r₁ r₂ with he | he
+  · exact mergeOneOriented_mergeStep h hx hxs hcl hxc hO₂ hO₁ (he ▸ hm)
+  · exact mergeOneOriented_mergeStep h hx hxs hcl hxc hO₁ hO₂ (he ▸ hm)
 
 /-- **The merge pass lands inside a state the merge closure reaches.**
 
@@ -3066,26 +3104,43 @@ The pass deletes the two rows it merged, so its result is not itself a `MergeClo
 state; the witness is a specification state that took the same collisions and kept the
 originals. The fold invariant is "the accumulator is `Inv`, has the pre-pass signature,
 and is contained in some state the closure has reached"; each firing extends the closure
-by one `MergeStep.collide`. -/
+by one `MergeStep.collide`.
+
+The invariant carries a fourth clause, and it is what pays for `mergeOneWith_mergeStep`'s
+two `Database.Out` premises: **the witness holds every pre-pass row's entry at its own
+value columns.** It is stated about the rebuilt row list rather than about the accumulator
+because that list is what both folds range over — a merge body's own `set`s land in the
+accumulator and are never collided — so the clause is established once, by
+`FDatabase.IndexOk.entry` at the rebuild, and thereafter only has to survive a growing
+witness, which is `Database.Out.mono`. -/
 theorem mergeRound_contained {d : FDatabase} (h : d.Inv)
     (hlegal : Signature.MergesLegal d.sig) :
     ∃ db, MergeClosure d.toDatabase db ∧ d.mergeRound.toDatabase.Recorded db := by
   let P : FDatabase → Prop := fun x => x.Inv ∧ x.sig = d.sig ∧
-    ∃ D, MergeClosure d.toDatabase D ∧ x.toDatabase.Recorded D
+    ∃ D, MergeClosure d.toDatabase D ∧ x.toDatabase.Recorded D ∧
+      ∀ r ∈ (FDatabase.rebuild d.closureF d).rows, d.sig.mergeOf r.fn ≠ none →
+        D.Out r.fn r.args r.out
   have hstep : ∀ (x : FDatabase) (r₁ r₂ : Row), P x →
+      r₁ ∈ (FDatabase.rebuild d.closureF d).rows →
+      r₂ ∈ (FDatabase.rebuild d.closureF d).rows →
       P (match FDatabase.mergeOneWith d.closureF x r₁ r₂ with
          | some y => y
          | none => x) := by
-    intro x r₁ r₂ hx
-    obtain ⟨hxInv, hxs, D, hcl, hxc⟩ := hx
+    intro x r₁ r₂ hx hr₁ hr₂
+    obtain ⟨hxInv, hxs, D, hcl, hxc, hOut⟩ := hx
     cases hy : FDatabase.mergeOneWith d.closureF x r₁ r₂ with
-    | none => exact ⟨hxInv, hxs, D, hcl, hxc⟩
+    | none => exact ⟨hxInv, hxs, D, hcl, hxc, hOut⟩
     | some y =>
       obtain ⟨D', hstepD, hyc⟩ :=
-        mergeOneWith_mergeStep h hxInv hxs hcl hxc hy
-      refine ⟨mergeOneWith_inv hxInv (hxs ▸ hlegal) hy,
-        ((mergeOneWith_confined hy).2.2.1).trans hxs, D', hcl.trans hstepD, hyc⟩
+        mergeOneWith_mergeStep h hxInv hxs hcl hxc
+          (fun hne => hOut r₁ hr₁ (hxs ▸ hne)) (fun hne => hOut r₂ hr₂ (hxs ▸ hne)) hy
+      exact ⟨mergeOneWith_inv hxInv (hxs ▸ hlegal) hy,
+        ((mergeOneWith_confined hy).2.2.1).trans hxs, D', hcl.trans hstepD, hyc,
+        fun r hr hne =>
+          Database.Out.mono (MergeClosure.contained hstepD) (hOut r hr hne)⟩
   have hfold : ∀ (l : List Row) (r₁ : Row) (x : FDatabase), P x →
+      r₁ ∈ (FDatabase.rebuild d.closureF d).rows →
+      (∀ r ∈ l, r ∈ (FDatabase.rebuild d.closureF d).rows) →
       P (l.foldl (fun acc' r₂ =>
           if r₁ == r₂ then acc'
           else match FDatabase.mergeOneWith d.closureF acc' r₁ r₂ with
@@ -3093,14 +3148,16 @@ theorem mergeRound_contained {d : FDatabase} (h : d.Inv)
             | none => acc') x) := by
     intro l
     induction l with
-    | nil => intro _ x hx; exact hx
+    | nil => intro _ x hx _ _; exact hx
     | cons r₂ l ih =>
-      intro r₁ x hx
-      refine ih r₁ _ ?_
+      intro r₁ x hx hr₁ hl
+      refine ih r₁ _ ?_ hr₁ (fun r hr => hl r (List.mem_cons_of_mem r₂ hr))
       by_cases hbe : r₁ == r₂
       · simpa [hbe] using hx
-      · simpa [hbe] using hstep x r₁ r₂ hx
+      · simpa [hbe] using hstep x r₁ r₂ hx hr₁ (hl r₂ (List.mem_cons_self ..))
   have houter : ∀ (m l : List Row) (x : FDatabase), P x →
+      (∀ r ∈ m, r ∈ (FDatabase.rebuild d.closureF d).rows) →
+      (∀ r ∈ l, r ∈ (FDatabase.rebuild d.closureF d).rows) →
       P (l.foldl (fun acc r₁ =>
           m.foldl (fun acc' r₂ =>
             if r₁ == r₂ then acc'
@@ -3109,18 +3166,24 @@ theorem mergeRound_contained {d : FDatabase} (h : d.Inv)
               | none => acc') acc) x) := by
     intro m l
     induction l with
-    | nil => intro _ hx; exact hx
-    | cons r₁ l ih => intro x hx; exact ih _ (hfold m r₁ x hx)
+    | nil => intro _ hx _ _; exact hx
+    | cons r₁ l ih =>
+      intro x hx hm hl
+      exact ih _ (hfold m r₁ x hx (hl r₁ (List.mem_cons_self ..)) hm) hm
+        (fun r hr => hl r (List.mem_cons_of_mem r₁ hr))
   -- The rebuild is the pass's first step and the one place the witness stands still: it
   -- writes `rows`, which `toDatabase` drops, so no `MergeStep` is taken and the witness is
-  -- reflexivity.
+  -- reflexivity. It is also where the `Out` clause is discharged, by the rebuilt state's
+  -- own index.
   have hreb : P (FDatabase.rebuild d.closureF d) :=
     ⟨h.rebuild closureSound_closureF, rfl, d.toDatabase, Relation.ReflTransGen.refl,
-      Database.Recorded.refl⟩
+      Database.Recorded.refl,
+      fun r hr hne => (h.rebuild closureSound_closureF).index.entry r hr hne⟩
   unfold FDatabase.mergeRound
   split
   · exact ⟨d.toDatabase, Relation.ReflTransGen.refl, Database.Recorded.refl⟩
-  · obtain ⟨-, -, D, hcl, hc⟩ := houter _ _ _ hreb
+  · obtain ⟨-, -, D, hcl, hc, -⟩ :=
+      houter _ _ _ hreb (fun _ hr => hr) (fun _ hr => hr)
     exact ⟨D, hcl, hc⟩
 
 /-- `mergeSaturateF_contained`, with the fuel first so the induction can generalize the
@@ -3415,10 +3478,10 @@ theorem ProgramStep.mono {A C B : Database} (hc : A.Contained C) (hsig : A.sig =
 The re-keying contract needs the transport lemmas again, and this is where the file's open
 obligations sit. `ValidSubst.mono_recorded` is **deleted** — see the heading above
 `ValidEnv.mono`, it is false — so `RuleResults.mono_recorded` cannot be proved by
-transporting the same substitution and is left open; `MergeStep.transport_recorded` is open
-for the reason its own docstring gives. `Database.Recorded.trans`, which used to be a third,
-is proved from `Conservativity` under two `WF` premises. The three lemmas below are the
-composites, and each is proved from those. -/
+transporting the same substitution and is left open; `MergeStep.transport_recorded` is
+false as stated, for the reason its own docstring gives. `Database.Recorded.trans`, which
+used to be a third, is proved from `Conservativity` under two `WF` premises. The three
+lemmas below are the composites, and each is proved from those. -/
 
 /-- `RuleResults.mono` along `Recorded`.
 
@@ -3428,10 +3491,18 @@ because `Env.UnionAll` makes the per-pattern choices agree — and then the head
 re-run under it. `Expr.eval` is not congruence-stable at `ordering-min`/`ordering-max`, so
 "a congruent environment gives a recording result" is a real lemma, and it is **false** as
 stated: put `ordering-max` in the *action* and no substitution on the implementation side
-repairs it. What this needs is the transported positions restricted to ordering-free
-expressions, not a different proof, and it is the same obligation
-`MergeStep.transport_recorded` needs. The substitution side *is* available: one witness
-function chosen for the whole query keeps `Env.Union2` joining. -/
+repairs it. The substitution side *is* available: one witness function chosen for the whole
+query keeps `Env.Union2` joining.
+
+The general form is what the consumer needs — `RunRules.mono_recorded` transports every
+member of `RuleResults A r`, at an arbitrary `Recorded` reaching back to
+`execProgramM_contained_aux` — so this cannot be narrowed to a special case. What would
+make it provable is the transported positions restricted to ordering-free expressions,
+which is a restriction on the *actions a rule may carry*: it belongs in
+`FDatabase.ProgramLegal` and therefore in `execM_contained`'s statement, and that is not
+decided here. Note that the analogous restriction does **not** rescue
+`MergeStep.transport_recorded`, whose environment moves before any expression is
+evaluated. -/
 theorem RuleResults.mono_recorded {A C : Database} (hc : A.Recorded C) (hsig : A.sig = C.sig)
     (henv : A.env = C.env) {r : Rule} {d : Database} (hd : d ∈ RuleResults A r) :
     ∃ D ∈ RuleResults C r, d.Recorded D ∧ D.sig = C.sig := by
@@ -3673,8 +3744,8 @@ theorem mergeOneOriented_envRules {cl : Finset (Term × Term)} {d e : FDatabase}
 /-- `mergeOneOriented_envRules` at whichever orientation the firing took. -/
 theorem mergeOneWith_envRules {cl : Finset (Term × Term)} {d e : FDatabase} {r₁ r₂ : Row}
     (h : d.mergeOneWith cl r₁ r₂ = some e) : e.env = d.env ∧ e.rules = d.rules := by
-  obtain ⟨a, b, he⟩ := mergeOneWith_eq_oriented (cl := cl) (d := d) r₁ r₂
-  exact mergeOneOriented_envRules (he ▸ h)
+  rcases mergeOneWith_eq_oriented (cl := cl) (d := d) r₁ r₂ with he | he <;>
+    exact mergeOneOriented_envRules (he ▸ h)
 
 /-- A merge pass touches neither the environment nor the rule list. -/
 theorem mergeRound_envRules {d : FDatabase} :
