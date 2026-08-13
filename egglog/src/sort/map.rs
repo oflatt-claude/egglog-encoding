@@ -122,7 +122,7 @@ fn renaming_union(
 ///
 /// `None` when the halves are unequal in length, when a pair's key sets
 /// differ, or when the constraints make `R` non-functional or non-injective.
-fn renaming_find_mapping(maps: &[BTreeMap<Value, Value>]) -> Option<BTreeMap<Value, Value>> {
+fn renaming_find_mapping<T: Copy + Ord>(maps: &[BTreeMap<T, T>]) -> Option<BTreeMap<T, T>> {
     if !maps.len().is_multiple_of(2) {
         return None;
     }
@@ -142,6 +142,41 @@ fn renaming_find_mapping(maps: &[BTreeMap<Value, Value>]) -> Option<BTreeMap<Val
                 return None;
             }
         }
+    }
+    Some(mapping)
+}
+
+/// [`renaming_find_mapping`] extended to be *total* on a domain, minting a
+/// fresh slot for every domain key the constraints leave unnamed.
+///
+/// Arguments come flat as `[avoid, domain, first..., second...]`. The
+/// constraint part is solved exactly as in [`renaming_find_mapping`]; each
+/// remaining key of `domain` is then named with a slot strictly greater than
+/// every slot mentioned in `avoid`, `domain`, or the solved part, which keeps
+/// the result injective and disjoint from the slots already in play.
+///
+/// `None` on the same conditions as [`renaming_find_mapping`], on fewer than
+/// two leading maps, or on `i64` overflow.
+fn renaming_find_mapping_total(maps: &[BTreeMap<i64, i64>]) -> Option<BTreeMap<i64, i64>> {
+    let (head, pairs) = maps.split_at_checked(2)?;
+    let (avoid, domain) = (&head[0], &head[1]);
+
+    let mut mapping = renaming_find_mapping(pairs)?;
+
+    let mentioned = mapping
+        .values()
+        .chain(avoid.keys())
+        .chain(avoid.values())
+        .chain(domain.keys())
+        .chain(domain.values());
+    let mut next = mentioned.copied().max().unwrap_or(0).max(0);
+
+    for k in domain.keys() {
+        if mapping.contains_key(k) {
+            continue;
+        }
+        next = next.checked_add(1)?;
+        mapping.insert(*k, next);
     }
     Some(mapping)
 }
@@ -348,6 +383,23 @@ impl ContainerSort for MapSort {
                     data: renaming_find_mapping(&maps)?,
                 })
             }});
+
+            // Minting a fresh slot means naming one that is not in use, which
+            // needs the slot space to be ordered and unbounded above.
+            if self.key.name() == "i64" {
+                add_primitive!(eg, "find-mapping-total" = {self.clone(): MapSort} [xs: @MapContainer (arc)] -?> @MapContainer (arc) {{
+                    let bv = state.base_values();
+                    let maps: Vec<BTreeMap<i64, i64>> = xs
+                        .map(|m| m.data.iter().map(|(k, v)| (bv.unwrap::<i64>(*k), bv.unwrap::<i64>(*v))).collect())
+                        .collect();
+                    let solved = renaming_find_mapping_total(&maps)?;
+                    Some(MapContainer {
+                        do_rebuild_keys: false,
+                        do_rebuild_vals: false,
+                        data: solved.into_iter().map(|(k, v)| (bv.get::<i64>(k), bv.get::<i64>(v))).collect(),
+                    })
+                }});
+            }
         }
     }
 

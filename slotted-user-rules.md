@@ -75,9 +75,19 @@ Everything else follows mechanically.
 
 ## Compiling the body
 
-Process the atoms in an order where each atom after the first shares a variable
-with the already-processed part. Each atom needs an `mp` carrying its node's
-slots into `slots(pattern)`, and there are exactly three ways to get one:
+First **flatten** the rule's LHS into depth-1 atoms `?v == (Op ?c1 ?c2)`, one
+per e-node, every child a bare pattern variable — the reference crate's
+`MultiPattern`, and the shape an egglog rule body already wants. Depth 0 is
+preprocessing and depth >1 flattens by naming intermediate nodes.
+
+Flattening is not meaning-preserving in general: a nested pattern is matched
+under one renaming for the whole pattern, a flattened one gets a renaming per
+atom, so a slot literal written both under a binder and outside it lets the
+binder escape. A flattener has to reject or rename those.
+
+Then process the atoms in an order where each atom after the first shares a
+variable with the already-processed part. Each atom needs an `mp` carrying its
+node's slots into `slots(pattern)`, and there are exactly three ways to get one:
 
 1. **Initial atom** — `mp = id`. Nothing is emitted; the children's stored edges
    *are* their pattern-slot renamings.
@@ -99,7 +109,7 @@ slots into `slots(pattern)`, and there are exactly three ways to get one:
 
    With one shared child, equivalently `(compose (compose mx1 sym1) (inverse p1))`.
    `find-mapping`'s injectivity check is the paper's requirement that
-   `mp ∪ mp′` be bijective. U3 is the worked example; U5 is what goes wrong when
+   `mp ∪ mp′` be bijective. M4 and M5 are the worked examples; M6 is what goes wrong when
    `mp′` does not cover the whole node.
 
 Then walk the atom's children. A child at stored edge `p` has candidate
@@ -133,7 +143,7 @@ The enumerate-then-compare spelling
 
 means the same thing and is what the machinery file's own rules use, but it
 makes the planner produce `|G(X)|` candidate rows per match and discard all but
-one. `tests/slotted-user-rules.egg` U2 runs both and checks they agree,
+one. `tests/slotted-user-rules.egg` M2 runs both and checks they agree,
 including on the case that needs a real swap.
 
 The two can only diverge if the computed `sym` comes out *shorter* than `mx`
@@ -148,7 +158,7 @@ you drop is the enumeration.
 
 *Neither* form may be weakened to `(= (compose mp p) mx)`. Syntactic equality of
 renamings is strictly weaker than `≡`, and the difference is observable.
-U2(c) matches `f(x, x)` against `f(a[$0,$1], a[$1,$0])` where `a` is symmetric:
+M2(c) matches `f(x, x)` against `f(a[$0,$1], a[$1,$0])` where `a` is symmetric:
 the two occurrences of `x` *are* the same renamed id, the `≡`-aware rule fires,
 and the `NaiveHit` witness relation stays empty. The machinery will not rewrite
 the node so the two edges become equal — the child-update rule explicitly
@@ -165,10 +175,10 @@ to something meaningless, so there is nothing to compute a group element from.
 That is why all the pairs go into one `find-mapping`, and why its `sym_i` are
 genuinely enumerated.
 
-U3 makes this concrete. `TooEager` there builds `mp′` from `x` alone and then
-probes `y` against it; on U3(a) — `f(v[$0], v[$1])` against `g(v[$0], v[$1])` —
+M4 makes this concrete. `TooEager` there builds `mp′` from `x` alone and then
+probes `y` against it; on M4(a) — `f(v[$0], v[$1])` against `g(v[$0], v[$1])` —
 `im(p2)` is only `{$0}`, `mp′` never reaches `$1`, and the match is silently
-lost. On U3(c) the same demotion happens to work, because there `im(p2)` covers
+lost. On M4(c) the same demotion happens to work, because there `im(p2)` covers
 all of the node's slots. Whether `mp′` is already total is a property of the
 data, not of the rule, so a compiler cannot rely on it.
 
@@ -176,7 +186,7 @@ The general shape, then: **a group element is a lookup when the renamings on
 both sides are known, and an enumeration when one of them is being solved for.**
 
 `find-mapping` fails when the constraints disagree or when the result is not
-injective. U3(b) is the negative: `f(x,y)` against `g(x,x)` admits no `mp′`.
+injective. M4(b) is the negative: `f(x,y)` against `g(x,x)` admits no `mp′`.
 
 ## Where group joins are needed, and where they are not
 
@@ -233,51 +243,62 @@ e-classes, i.e. only the case where both renamings are the identity. So:
 
   The machinery's transitivity / single-parent rules re-orient it, and the
   `MISC` rule promotes it to a real `union` once the renaming turns out to be an
-  identity. U2 and U4 both need this.
+  identity. M2 and M7 both need this; M8 states it as a relation.
 
 So the surface language wants an action that takes renamed ids, or the encoder
 has to synthesise the `RenamesToLeader` insert itself.
 
-## The gap: fresh slots
+## Fresh slots
 
 `find-mapping` gives the *minimal* `mp′`, exactly as Definition 8 asks, so a
 slot of the node outside `⋃ im(p_i)` gets no name in `slots(pattern)`. The paper
 covers this in the last line of §3.6 — a redundant or bound slot would stand for
 infinitely many e-nodes, but "for the purpose of this algorithm, it suffices to
-pick any fresh slot for them". A `Renaming` is only a map, so the encoding
-instead silently *drops* the slot — and dropping a slot asserts that it is
-redundant.
+pick any fresh slot for them". A `Renaming` is only a map, so minimal `mp′`
+silently *drops* the slot, leaving an edge whose domain is smaller than its
+child's slot set — which Definition 4 forbids.
 
-U5(a) shows this is not theoretical. For
+M6 is the worked case. For
 
 ```text
 (rule ((= p (App "f" x y)) (= q (App "g" x z))) ((union p (App "h" y z))))
 ```
 
-with `p = f(v[$0], v[$1])` and `q = g(v[$0], v[$5])`, `mp′` is `{$0↦$0}`, `z`'s
-renaming comes out empty, the action builds `h(y, z)` with an empty edge to `z`,
-and unioning that into `p` forces `p`'s slot `$0` to become redundant. Silent,
-and wrong.
+with `p = f(v[$0], v[$1])` and `q = g(v[$0], v[$5])`, minimal `mp′` is `{$0↦$0}`,
+`z`'s renaming comes out empty, and the action builds `h(y, z)` with an empty
+edge to `z`.
 
-Two ways out:
+**What to measure.** Not "did `p` lose a slot?" — that assertion does not
+isolate the bug. `f(x,y) = h(y,z)` genuinely says `f` does not depend on `x`, so
+`p` losing `$0` is the correct reading of the rule and happens in the fixed
+version too. The narrow observable is the malformed edge; M6's `BadEdge`
+relation witnesses it directly, and that is what separates the two.
 
-* **Guard (sound, incomplete).** For every variable used in the action, require
-  its renaming to keep all of its slots:
-  `(= (map-length (compose mp' p)) (map-length p))`. U5(b) shows the rule then
-  declines to fire in the bad case and still fires in the good one. `≡` checks
-  are self-guarding already, since a dropped slot changes the domain and breaks
-  the equation.
-* **Mint fresh slots (complete).** Wants a primitive — something like
-  `(map-complete-fresh partial domain avoid)` extending a partial map to be
-  total on `domain` with values outside `avoid`. Any deterministic choice works
-  because the result is canonicalised anyway. Deciding what `avoid` has to
-  contain is the real design question; the natural answer is every slot
-  currently in `im(mp)` anywhere in the rule.
+`find-mapping-total` closes the gap: same constraints and same injectivity check
+as `find-mapping`, plus a fresh name for every domain slot the constraints leave
+unnamed.
+
+```text
+(find-mapping-total avoid domain first… second…)
+```
+
+`domain`'s keys are the slots the result must cover and `avoid`'s slots are the
+ones it may not mint over; both are identity maps the caller already has, since
+`(find-mapping p1 p2 p1 p2)` is the identity on a node's slots. Minted slots go
+strictly above everything mentioned, so the result stays injective and cannot
+collide with a slot in play. Any deterministic choice works, because differing
+choices produce α-variants that the machinery identifies anyway.
+
+The sound-but-incomplete alternative is still worth knowing, since it needs no
+primitive: guard every action-used variable with
+`(= (map-length (compose mp' p)) (map-length p))`. M6(b) shows the rule then
+declines to fire in the bad case and still fires in the good one. `≡` checks are
+self-guarding already, since a dropped slot changes the domain and breaks the
+equation.
 
 The same gap in its extreme form: a body whose atoms share *no* variable gives
-no constraint on `mp′` at all, so that node's slots would have to be freshly
-named outright. Rules whose RHS introduces a binder (eta-expansion) need this
-too.
+no constraint on `mp′` at all, so that node's slots are named entirely by
+minting. Rules whose RHS introduces a binder (eta-expansion) need this too.
 
 ## Unresolved: self-edges are derived from nodes
 
@@ -321,7 +342,7 @@ into a wrong answer, and both cut against acting on it:
   the edges to the live slots, `compose edge wide == compose edge narrow`. Seven
   scenarios — re-triggering the derivation after saturation, parents built
   before the redundancy, fresh α-equivalent rows, interacting redundancies, the
-  U3 glue rule over a redundant shared variable — all came out byte-identical.
+  M4 glue rule over a redundant shared variable — all came out byte-identical.
 * **Phasing hides it entirely.** The wide edge is only observable by a rule
   co-scheduled with maintenance. Introduce the observer *after* the maintenance
   phase and the check above passes, because `saturate`
@@ -395,6 +416,10 @@ macro instead of hand-rolled `Primitive` impls.
     `[first…, second…]`; returns the least `R` with `R ∘ second[i] = first[i]`.
     Strict: a paired `(first[i], second[i])` must carry exactly the same key
     set, and `R` must come out functional and injective.
+  * `find-mapping-total` — `find-mapping` extended to be total on a domain,
+    minting fresh slots for the keys the constraints leave unnamed. Takes
+    `[avoid, domain, first…, second…]`. Registered only for `Map i64 i64`,
+    since minting needs the slot space ordered and unbounded above.
 * `egglog/src/lib.rs` — `bool=`.
 * `egglog/src/sort/bool.rs` — `and` made variadic, like `or`.
 
@@ -413,8 +438,11 @@ here yet), `has_delta` (a stub whose comparison is `false // TODO`), and the
 
 ## Open questions
 
-1. **Fresh slots** — the gap above. Needs a primitive and a decision about the
-   avoid-set.
+1. **Which slots `avoid` must contain.** `find-mapping-total` takes the
+   avoid-set from its caller, and the rules here pass `slots(pattern)`. That is
+   enough for one atom; a rule that mints in two different atoms should probably
+   avoid the union of everything minted so far, which the current spelling does
+   not thread through.
 2. **Choice of initial atom.** Any atom can be it; the choice determines which
    atoms have to extend `mp`, hence how many `find-mapping`s and how early the
    query is constrained. Probably worth choosing the atom with the most shared
