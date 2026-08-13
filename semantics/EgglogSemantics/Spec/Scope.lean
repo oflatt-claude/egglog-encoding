@@ -282,9 +282,10 @@ where a program may assert an equation. `Action.union` is the only action that a
 between distinct terms — every other write goes through `Database.addTerm`, which records
 reflexive pairs alone — so a program with none keeps every state it reaches **diagonal**,
 and on a diagonal state nothing is congruent to anything but itself. That is what makes
-`Database.Recorded` and `Database.Contained` agree there, which is what
-`Proofs/Merge.lean`'s two `Recorded` transports need; `Database.Diag` is the state-level
-reading and `Proofs/Merge.lean` carries it.
+`Database.Recorded` and `Database.Contained` agree there, which is one of the two things
+`Proofs/Merge.lean`'s two `Recorded` transports can be given; `Database.Diag` is the
+state-level reading and `Proofs/Merge.lean` carries it. The other is `OrderingFree` below,
+and neither condition implies the other.
 
 It walks into a rule and into a `:merge`, since a `union` runs in either. -/
 
@@ -323,5 +324,72 @@ declared. -/
 @[simp] def Program.UnionFree : Program → Prop
   | [] => True
   | c :: cs => c.UnionFree ∧ Program.UnionFree cs
+
+/-! ### Ordering-freedom
+
+The second condition on *positions* rather than names, and the alternative to union-freedom:
+where a program may apply a **choice** primitive. `ordering-min`/`ordering-max` pick between
+two terms by `Term.blt`, a structural order, where egglog picks by e-class id, so they are
+the one part of `Expr.eval` that is not stable under congruence — `union (f 1) (g 1)` sends
+`ordering-min (f 1) (f 2)` to `f 1` and `ordering-min (g 1) (f 2)` to `f 2`, which are not
+congruent. `min`/`max` are **not** excluded: they answer only on literals, and
+`Cong.eq_of_isLit` makes a literal's class a singleton, so `Prim.apply_cong` is stability
+for them.
+
+It walks into a rule — both its query, which evaluates its patterns, and its head — and
+into a `:merge`, since a body and its result are evaluated too. -/
+
+/-- No application in `e` names a choice primitive. -/
+def Expr.OrderingFree (e : Expr) : Prop :=
+  ∀ f ∈ e.fns, Prim.ofName f ≠ some .orderingMin ∧ Prim.ofName f ≠ some .orderingMax
+
+/-- `Expr.OrderingFree` over an argument list. Stated on `Expr.fnsList` rather than
+pointwise because that is what the evaluation induction reads. -/
+def Expr.OrderingFreeList (es : List Expr) : Prop :=
+  ∀ f ∈ Expr.fnsList es, Prim.ofName f ≠ some .orderingMin ∧ Prim.ofName f ≠ some .orderingMax
+
+/-- A query pattern is evaluated, so it carries the condition too. -/
+def Pattern.OrderingFree : Pattern → Prop
+  | .expr e => e.OrderingFree
+  | .eq e₁ e₂ => e₁.OrderingFree ∧ e₂.OrderingFree
+  | .values vs _ as => Expr.OrderingFreeList vs ∧ Expr.OrderingFreeList as
+
+def Action.OrderingFree : Action → Prop
+  | .expr e => e.OrderingFree
+  | .letBind _ e => e.OrderingFree
+  | .union e₁ e₂ => e₁.OrderingFree ∧ e₂.OrderingFree
+  | .set _ args out => Expr.OrderingFreeList args ∧ Expr.OrderingFreeList out
+
+@[simp] def Actions.OrderingFree : List Action → Prop
+  | [] => True
+  | a :: as => a.OrderingFree ∧ Actions.OrderingFree as
+
+/-- Both halves: a query pattern is evaluated against the database, a head action against
+the substitution. -/
+@[simp] def Rule.OrderingFree (r : Rule) : Prop :=
+  (∀ p ∈ r.query, p.OrderingFree) ∧ Actions.OrderingFree r.actions
+
+/-- `.noMerge` runs nothing; a `:merge` evaluates both its body and its result. -/
+@[simp] def MergeSpec.OrderingFree : MergeSpec → Prop
+  | .merge body res => Actions.OrderingFree body ∧ Expr.OrderingFreeList res
+  | .noMerge => True
+
+def FnDecl.OrderingFree (d : FnDecl) : Prop := ∀ ms ∈ d.merge, ms.OrderingFree
+
+/-- Read of a *signature*, because a `MergeStep` reads the body it runs from one, as
+`Signature.UnionFree`. -/
+def Signature.OrderingFree (sig : Signature) : Prop :=
+  ∀ f d, sig f = some d → d.OrderingFree
+
+@[simp] def Cmd.OrderingFree : Cmd → Prop
+  | .action a => a.OrderingFree
+  | .rule r => r.OrderingFree
+  | .run => True
+  | .decl _ d => d.OrderingFree
+
+/-- No signature threading, as `Program.UnionFree`. -/
+@[simp] def Program.OrderingFree : Program → Prop
+  | [] => True
+  | c :: cs => c.OrderingFree ∧ Program.OrderingFree cs
 
 end Egglog

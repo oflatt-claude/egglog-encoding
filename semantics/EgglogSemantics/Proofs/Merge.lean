@@ -9,14 +9,15 @@ import EgglogSemantics.Proofs.Interp
 
 `MERGE.md` says which theorem buys what.
 
-## The two transports, and the condition that buys them
+## The two transports, and the conditions that buy them
 
 Everything in this file is proved, and there are no `sorry`s. Two lemmas transport a
 *specification* fact along `Database.Recorded` — `MergeStep.transport_recorded` and
 `RuleResults.mono_recorded` — and **both are false at an arbitrary recorder**. What makes
-them true is a legality condition, `Program.UnionFree`, which reaches
-`execM_contained`'s statement; the section "Union-freedom, and where it puts `Recorded`"
-below is where it is developed.
+them true is a legality condition, and there are **two**, either of which closes both:
+`Program.UnionFree` and `Program.OrderingFree`. Their disjunction is what reaches
+`execM_contained`'s statement; the sections "Union-freedom, and where it puts `Recorded`"
+and "Ordering-freedom, and where it puts `Recorded`" below are where they are developed.
 
 `Recorded` says every equation of `d₁` is matched by an equation of `d₂` whose endpoints
 are congruent **in `d₂` extended by the two terms in question** — `Database.CongOn`, which
@@ -39,23 +40,31 @@ and `Prim.apply_cong` is the resulting stability. What is left is
 egglog chooses by e-class id. `union (f 1) (g 1)` sends `ordering-min (f 1) (f 2)` to
 `f 1` and `ordering-min (g 1) (f 2)` to `f 2`, which are not congruent, with no literal
 anywhere and every state well formed. No condition on the *database* repairs it. Two
-conditions on the *program* do, and they are different conditions:
+conditions on the *program* do, and each closes **both** transports:
 
-* restricting the transported positions to ordering-free expressions closes
-  `RuleResults.mono_recorded` and does **not** close `MergeStep.transport_recorded`, whose
-  environment moves before any expression is evaluated;
-* **`Program.UnionFree` closes both**, and is what this file carries. `Action.union` is the
-  only action that asserts an equation between distinct terms, so a program with none
-  reaches only states whose `eqs` are diagonal, and there congruence is equality:
-  `Database.Recorded` and `Database.Contained` coincide, and the transports along
-  `Contained` are `MergeStep.transport` and `MergeClosure.transport`, already proved.
+* **`Program.UnionFree`.** `Action.union` is the only action that asserts an equation
+  between distinct terms, so a program with none reaches only states whose `eqs` are
+  diagonal, and there congruence is equality: `Database.Recorded` and `Database.Contained`
+  coincide, and the transports along `Contained` are `MergeStep.transport` and
+  `MergeClosure.transport`, already proved.
+* **`Program.OrderingFree`.** Then `Expr.eval` *is* congruence-stable (`eval_owes`), so a
+  run under the congruent environment a `Recorded` witness supplies gives a congruent
+  result — which is what recording asks for. This restricts no `union` at all. That a
+  `:merge` body runs under a `mergeEnv` built from value columns `Recorded` moves *before*
+  any body expression is evaluated is **not** an obstruction: a moved environment is
+  congruent, and nothing reads it except through `Expr.eval`. The one thing this arm needs
+  that `Recorded` does not say outright is that the specification holds an entry with the
+  *same head* — `recorded_entry`, from an induction over the derivation plus a sharpened
+  conservativity (`cong_pin`).
 
-`MergeStep.transport_recorded` without the condition is not merely unproved but **false**,
-refuted at `Encoding/Encode.lean`'s own `:merge` body, and its statement carries the
-counterexample. The condition is not vacuous and does not exclude that encoding:
-`encodeAction` turns a source `union` into `.set @UF [ordering-max x₁ x₂] [ordering-min
-x₁ x₂]`, so `encode` uses `ordering-max` in a rule action — the position an ordering-free
-condition would forbid — and emits no `Action.union` at all.
+`MergeStep.transport_recorded` without either condition is not merely unproved but
+**false**, refuted at `Encoding/Encode.lean`'s own `:merge` body, and its statement carries
+the counterexample. Neither arm is vacuous, and between them they cover the encoding and
+the equational fragment: `encodeAction` turns a source `union` into `.set @UF [ordering-max
+x₁ x₂] [ordering-min x₁ x₂]`, so `encode` uses `ordering-max` — which the second arm
+forbids — and emits no `Action.union` at all, which is the first arm; while a source
+program with `(union (add a b) (add b a))` and `min`/`max` merges is the second arm and not
+the first.
 
 Also **false**, and so restated or deleted rather than left open:
 
@@ -1191,19 +1200,20 @@ answer is a single witness **function** `Term → Term` rather than a witness pe
 then equal terms get equal images and `Union2` still joins.
 
 *Costs a lemma that is false*: `RuleResults.mono_recorded`. It re-evaluates under the
-substitution, and `Expr.eval` is **not** congruence-stable at a primitive — `Prim.apply`
-matches on literals, so a term congruent to `.lit 1` but not equal to it does not compute
-the same answer, or any answer. What is true is the primitive-free half, so one fix is to
-restrict the transported positions. `MergeStep.transport_recorded` is defeated by the same
-instability one step earlier: its body runs under a `mergeEnv` built from the colliding
-outputs, congruent rather than equal on the specification side, so no restriction on the
-*transported positions* reaches it.
+substitution, and `Expr.eval` is **not** congruence-stable at `ordering-min`/`ordering-max`,
+which choose by `Term.blt`. It *is* stable at `min`/`max`, which answer only on literals
+(`Prim.apply_cong`), so restricting the transported positions to ordering-free expressions
+is a fix — and it is a fix for `MergeStep.transport_recorded` too, whose body runs under a
+`mergeEnv` that `Recorded` may have moved: a moved environment is congruent, and congruent
+environments give congruent results.
 
-The fix this file takes instead makes the whole family moot at once: on a **diagonal**
-recorder there is no congruent-but-distinct term for any of this to go wrong at, so
-`Database.Recorded.contained_of_diag` hands both lemmas back to `ValidQuerySubst.mono` and
-`MergeStep.transport` above. `Program.UnionFree` is what keeps every reachable state
-diagonal. -/
+This file carries both fixes. On a **diagonal** recorder there is no congruent-but-distinct
+term for any of this to go wrong at, so `Database.Recorded.contained_of_diag` hands both
+lemmas back to `ValidQuerySubst.mono` and `MergeStep.transport` above, and
+`Program.UnionFree` is what keeps every reachable state diagonal. Under
+`Program.OrderingFree` the substitution is instead *moved*, by the single witness function
+of `exists_witness`, and `Env.mapVals` keeps `Env.Union2` joinable because equal terms get
+equal images. -/
 
 /-! ### Transporting a step
 
@@ -2901,16 +2911,18 @@ so the run on the right-hand side happens under a *congruent* environment, and
 `ordering-min`/`ordering-max` choose by `Term.blt` rather than by e-class, so they are not
 stable there.
 
-What buys them back is `Action.UnionFree`. A `union` is the only action that asserts an
-equation between distinct terms, so a program with none keeps every state's `eqs`
-**diagonal**; on a diagonal state `Cong` is the identity, and `Database.Recorded` collapses
-to `Database.Contained` — along which both transports are already proved
-(`MergeStep.transport`, `MergeClosure.transport`). Nothing is congruent but equal, so no
-choice operator is ever asked to be stable.
+One of the two things that buys them back is `Action.UnionFree`. A `union` is the only
+action that asserts an equation between distinct terms, so a program with none keeps every
+state's `eqs` **diagonal**; on a diagonal state `Cong` is the identity, and
+`Database.Recorded` collapses to `Database.Contained` — along which both transports are
+already proved (`MergeStep.transport`, `MergeClosure.transport`). Nothing is congruent but
+equal, so no choice operator is ever asked to be stable.
 
 This is where `Encoding/Encode.lean` lives: `encodeAction` turns a source `union` into
 `.set @UF [ordering-max x₁ x₂] [ordering-min x₁ x₂]`, so `encode` emits `ordering-max`
-inside a rule action and *no* `Action.union` at all.
+inside a rule action and *no* `Action.union` at all. The other thing that buys them back —
+ordering-freedom, which covers the programs this one excludes and vice versa — is the
+section "Ordering-freedom, and where it puts `Recorded`" below.
 
 `Database.Diag` is the state-level reading; `Signature.UnionFree` and `Database.NoUnions`
 are what carry it across a merge phase and a rule phase, which read their actions from the
@@ -2926,6 +2938,14 @@ structure Database.NoUnions (db : Database) : Prop where
   diag : db.Diag
   sig : Signature.UnionFree db.sig
   rules : ∀ r ∈ db.rules, Actions.UnionFree r.actions
+
+/-- The ordering-free arm's state-level reading. Two fields rather than three, and no
+clause about `eqs`: the condition is about *positions* — where a choice primitive may be
+applied — so nothing has to be said about what the state asserts. `sig` is what a
+`MergeStep` runs, `rules` is what a `RunRules` runs. -/
+structure Database.NoOrdering (db : Database) : Prop where
+  sig : Signature.OrderingFree db.sig
+  rules : ∀ r ∈ db.rules, Rule.OrderingFree r
 
 namespace Database
 
@@ -3052,10 +3072,915 @@ theorem RunRules.diag {db : Database} (hn : db.NoUnions) : (RunRules db).Diag :=
   · obtain ⟨d, ⟨r, hr, σ, -, hσ⟩, hp'⟩ := Set.mem_iUnion₂.mp hp
     exact evalLocalActions_diag (hn.rules r hr) hn.diag hσ p hp'
 
-/-- **A merge collision available at `A` is available at any `C` that *records* it — when
-`C` is diagonal.**
+/-! ### Ordering-freedom, and where it puts `Recorded`
 
-`hdiag` is not bookkeeping: **without it the statement is false**, and not merely unproved.
+The other condition that buys the two transports, and the one that admits `union`.
+
+`Recorded` matches an equation only up to congruence, so the run on the right-hand side
+happens under a *congruent* environment. Everything `Expr.eval` does is stable there except
+the two choice primitives: `ordering-min`/`ordering-max` read `Term.blt`. `min`/`max` are
+**not** a problem — `Database.WF.litsIsolated` and `Cong.eq_of_isLit` make a literal's class
+a singleton, so congruent operands to them *are* those operands (`Prim.apply_cong`).
+
+So `Spec/Scope.lean`'s `Program.OrderingFree` is enough, and unlike `Program.UnionFree` it
+restricts no `union` at all. Four things carry it:
+
+* `Owes` — what the specification owes one value the implementation computed: the two are
+  congruent, and every *subterm* of the implementation's value is congruent to a term the
+  specification holds. The second clause is what `Database.Recorded` asks of the reflexive
+  equations `Database.addTerm` writes, and it is why the relation is about subterms rather
+  than about the value alone.
+* `cong_pin` — **conservativity, sharpened**: a derivation ending in a term the database
+  holds needs no phantom operand but the *source's own* subterms. `Conservativity`'s model
+  proves it, and it is what pins every congruence below into the one-term ambient
+  `Database.Recorded` and `Matches` are stated in.
+* `recorded_entry` — **head extraction**: an entry of `f` the implementation holds is
+  matched by an entry of `f` the specification holds, column by column. `Recorded` matches
+  the *equation*, and it takes an induction over the derivation (`reach_iff`) to see that
+  the witness can be taken to have the same head. Without this a `MergeStep` cannot even be
+  *stated* at the specification, let alone run.
+* `eval_owes` — **ordering-free evaluation is congruence-stable**, which is the fact the
+  whole condition exists to supply.
+
+The consequence is the two transports at ordering-free positions:
+`MergeStep.transport_owes` and `RuleResults.mono_owes`. Note where the merge one lands: a
+`:merge` body runs under `mergeEnv`, built from value columns `Recorded` moves *before* any
+body expression is evaluated — and that is not an obstruction, because a moved environment
+is congruent and evaluation respects congruence. -/
+
+section OrderingFree
+open Conservativity
+
+/-- `x` is an application whose head names an entry of `C` at `E`-congruent arguments. -/
+def Reach (C E : Database) (x : Term) : Prop :=
+  ∃ f args args', x = .app f args ∧ Term.app f args' ∈ C.terms ∧ CongList E args args'
+
+theorem reach_self {C E : Database} (hCE : C.Contained E)
+    (hsub : ∀ t ∈ C.terms, t.subterms ⊆ C.terms) {f : FnName} {args : List Term}
+    (hx : Term.app f args ∈ C.terms) : Reach C E (.app f args) :=
+  ⟨f, args, args, rfl, hx, CongList.refl fun a ha =>
+    hCE.terms (hsub _ hx (Term.IsSubterm.arg ha (.refl a)))⟩
+
+/-- **Head extraction.** In an ambient that adds only reflexive equations to `C`, a term
+that reaches an entry of `C` stays one along every derivation. -/
+theorem reach_iff {C E : Database} (hCE : C.Contained E)
+    (hE : ∀ p ∈ E.eqs, p ∈ C.eqs ∨ p.1 = p.2)
+    (hsub : ∀ t ∈ C.terms, t.subterms ⊆ C.terms) (hlit : C.LitsIsolated)
+    {x y : Term} (h : Cong E x y) : Reach C E x ↔ Reach C E y := by
+  have hforall : ∀ {as bs : List Term},
+      List.Forall₂ (fun a b => Cong E a b ∧ (Reach C E a ↔ Reach C E b)) as bs →
+      List.Forall₂ (Cong E) as bs := fun h => h.imp (fun {_ _} h => h.1)
+  refine (Cong.le (R := fun a b => Cong E a b ∧ (Reach C E a ↔ Reach C E b))
+    (fun a b hab => ⟨.assert hab, ?_⟩) (fun _ _ h => ⟨h.1.symm, h.2.symm⟩)
+    (fun _ _ _ h₁ h₂ => ⟨h₁.1.trans h₂.1, h₁.2.trans h₂.2⟩)
+    (fun f as bs hma hmb hl => ⟨Cong.congr' hma hmb (hforall hl), ?_⟩) h).2
+  · -- an asserted pair: either `C`'s own, or reflexive
+    rcases hE _ hab with hp | hp
+    · have hm := eqsInTerms_free (Cong.assert (db := C) hp)
+      cases a with
+      | lit l => rw [show b = Term.lit l from (hlit _ hp (Or.inl rfl)).symm]
+      | app f args =>
+        cases b with
+        | lit m => exact absurd (hlit _ hp (Or.inr rfl)) (by simp)
+        | app g brgs => exact iff_of_true (reach_self hCE hsub hm.1) (reach_self hCE hsub hm.2)
+    · simp only at hp; rw [hp]
+  · -- a congruence step: the same entry serves both sides
+    have hcl : CongList E as bs := CongList.ofForall₂ (hforall hl)
+    constructor
+    · rintro ⟨f', args, args', heq, hmem, hc⟩
+      obtain ⟨rfl, rfl⟩ := Term.app.inj heq
+      exact ⟨f, bs, args', rfl, hmem, hcl.symm.trans hc⟩
+    · rintro ⟨f', args, args', heq, hmem, hc⟩
+      obtain ⟨rfl, rfl⟩ := Term.app.inj heq
+      exact ⟨f, as, args', rfl, hmem, hcl.trans hc⟩
+
+/-! #### Congruence-stable evaluation -/
+
+/-- Widening a pinned ambient to a term the pinned one occurs in. -/
+theorem congOn_subterm {D : Database} {s t a b : Term} (hs : s ∈ t.subterms)
+    (h : CongOn D [s] a b) : CongOn D [t] a b := by
+  refine Cong.mono ⟨fun p hp => ?_⟩ h
+  rcases mem_addTerms_eqs' [s] D p hp with hq | ⟨u, hu, x, hx, rfl⟩
+  · exact eqs_subset_addTerms [t] D hq
+  · rw [List.mem_singleton] at hu
+    exact refl_mem_addTerms (Term.subterms_subset_of_mem (hu ▸ hs) hx) [t] D (by simp)
+
+/-- **What a recorder owes one evaluated value.** At every ambient holding the recorder's
+own value, the two values are congruent and each subterm of the recorded one is congruent
+to a term the ambient holds — which is exactly the clause `Database.Recorded` asks of the
+reflexive equations `Database.addTerm` writes. -/
+def Owes (E : Database) (t t' : Term) : Prop :=
+  ∀ F : Database, E.Contained F → (∀ s ∈ t'.subterms, s ∈ F.terms) →
+    CongOn F [t] t t' ∧ ∀ s ∈ t.subterms, ∃ u ∈ F.terms, CongOn F [s] s u
+
+theorem Owes.mono {E E' : Database} (h : E.Contained E') {t t' : Term} (ho : Owes E t t') :
+    Owes E' t t' := fun F hF hsub => ho F (h.trans hF) hsub
+
+/-- `Owes` reads `eqs` alone, so the recorder's environment may be replaced. -/
+theorem Owes.setEnv {E : Database} {σ : Env} {t t' : Term} (ho : Owes E t t') :
+    Owes ({ E with env := σ } : Database) t t' := fun F hF hsub => ho F ⟨hF.eqs⟩ hsub
+
+/-- A value the recorder holds verbatim owes nothing: the ambient posits it. -/
+theorem Owes.refl {E : Database} {t : Term} : Owes E t t := fun _ _ hsub =>
+  ⟨mem_congOn_self (by simp), fun s hs => ⟨s, hsub s hs, mem_congOn_self (by simp)⟩⟩
+
+theorem owes_list {E F : Database} (hF : E.Contained F) {u : Term} :
+    ∀ {ts ts' : List Term}, List.Forall₂ (Owes E) ts ts' →
+      (∀ a' ∈ ts', ∀ s ∈ a'.subterms, s ∈ F.terms) → (∀ a ∈ ts, a ∈ u.subterms) →
+      (∀ a ∈ ts, ∀ s ∈ a.subterms, ∃ x ∈ F.terms, CongOn F [s] s x) ∧
+        CongList (F.withOperands [u]) ts ts'
+  | _, _, .nil, _, _ => ⟨by simp, .nil⟩
+  | a :: ts, a' :: ts', .cons ho hrest, hsub, hu => by
+      obtain ⟨hc, hm⟩ := ho F hF (fun s hs => hsub a' (by simp) s hs)
+      obtain ⟨hms, hcs⟩ := owes_list hF hrest (fun x hx => hsub x (by simp [hx]))
+        (fun x hx => hu x (by simp [hx]))
+      refine ⟨fun x hx => ?_, .cons (congOn_subterm (hu a (by simp)) hc) hcs⟩
+      rcases List.mem_cons.mp hx with rfl | hx
+      · exact hm
+      · exact hms x hx
+
+theorem Owes.app {E : Database} {f : FnName} {ts ts' : List Term}
+    (h : List.Forall₂ (Owes E) ts ts') : Owes E (.app f ts) (.app f ts') := by
+  intro F hF hsub
+  have hmem' : Term.app f ts' ∈ F.terms := hsub _ (Term.self_mem_subterms _)
+  obtain ⟨hms, hlist⟩ := owes_list (u := Term.app f ts) hF h
+    (fun a' ha' s hs => hsub s (Term.subterms_app ▸
+      Set.mem_insert_of_mem _ (Set.mem_biUnion ha' hs)))
+    (fun a ha => Term.arg_subterms ha (Term.self_mem_subterms a))
+  have hcong : CongOn F [Term.app f ts] (.app f ts) (.app f ts') :=
+    Cong.congr (mem_congOn_self (by simp))
+      (Cong.mono (Database.Contained.addTerms _ _) hmem') hlist
+  refine ⟨hcong, fun s hs => ?_⟩
+  rw [Term.subterms_app] at hs
+  rcases Set.mem_insert_iff.mp hs with rfl | hs
+  · exact ⟨.app f ts', hmem', hcong⟩
+  · obtain ⟨a, ha, hsa⟩ := Set.mem_iUnion₂.mp hs
+    exact hms a ha s hsa
+
+theorem litsIsolated_addTerms {db : Database} (h : db.LitsIsolated) (ts : List Term) :
+    (db.addTerms ts).LitsIsolated := fun p hp =>
+  (mem_addTerms_eqs ts db p hp).elim (h p) (fun hq _ => hq)
+
+/-- The two `i64` primitives are the ordering-free ones. -/
+theorem prim_int_of_orderingFree {f : FnName} {p : Prim} (hp : Prim.ofName f = some p)
+    (hof : Prim.ofName f ≠ some .orderingMin ∧ Prim.ofName f ≠ some .orderingMax) :
+    p = .intMin ∨ p = .intMax := by
+  cases p with
+  | orderingMin => exact absurd hp hof.1
+  | orderingMax => exact absurd hp hof.2
+  | intMin => exact Or.inl rfl
+  | intMax => exact Or.inr rfl
+
+/-- A value the recorder owes and that is a **literal** it holds verbatim: a literal's
+class is a singleton, so the two values are equal. -/
+theorem owes_eq_of_isLit {E : Database} (hlit : E.LitsIsolated) : ∀ {ts ts' : List Term},
+    List.Forall₂ (Owes E) ts ts' → (∀ a ∈ ts, a.isLit) → ts = ts'
+  | _, _, .nil, _ => rfl
+  | a :: ts, a' :: ts', .cons ho hrest, hl => by
+      have hsub : ∀ s ∈ a'.subterms, s ∈ (E.withOperands [a']).terms := fun s hs =>
+        Database.addTerms_terms ▸ Or.inr ⟨a', by simp, hs⟩
+      have hc := (ho (E.withOperands [a']) (Database.Contained.addTerms _ _) hsub).1
+      have : a = a' := Cong.eq_of_isLit
+        (litsIsolated_addTerms (litsIsolated_addTerms hlit [a']) [a]) hc
+        (Or.inl (hl a (by simp)))
+      rw [this, owes_eq_of_isLit hlit hrest (fun x hx => hl x (by simp [hx]))]
+
+mutual
+
+/-- **Ordering-free evaluation is congruence-stable.** Under an environment whose values
+the recorder owes, the expression evaluates there too, and the recorder owes its value.
+`min`/`max` survive: they answer only on literals, a literal's class is a singleton, so
+congruent operands *are* the operands. `ordering-min`/`ordering-max` are what the
+hypothesis excludes. -/
+theorem eval_owes {E : Database} (hlit : E.LitsIsolated) {sig : Signature} {σ σ' : Env}
+    (henv : ∀ (v : Var) (t : Term), Env.lookup v σ = some t →
+      ∃ t', Env.lookup v σ' = some t' ∧ Owes E t t')
+    {e : Expr} (hof : Expr.OrderingFree e) {t : Term} (he : e.eval sig σ = some t) :
+    ∃ t', e.eval sig σ' = some t' ∧ Owes E t t' := by
+  match e with
+  | .lit l =>
+    rw [Expr.eval_lit, Option.some_inj] at he
+    exact ⟨.lit l, rfl, he ▸ Owes.refl⟩
+  | .var v =>
+    rw [Expr.eval_var] at he
+    exact henv v t he
+  | .app f args =>
+    have hargs : Expr.OrderingFreeList args := fun g hg => hof g (by simp [Expr.fns, hg])
+    cases hp : Prim.ofName f with
+    | some p =>
+      rw [Expr.eval_app_prim hp, Option.bind_eq_some_iff] at he
+      obtain ⟨ts, hts, happ⟩ := he
+      obtain ⟨ts', hts', hall⟩ := evalList_owes hlit henv hargs hts
+      have hpm := prim_int_of_orderingFree hp (hof f (by simp [Expr.fns]))
+      have heq : ts = ts' :=
+        owes_eq_of_isLit hlit hall (Prim.isLit_of_apply hpm happ)
+      refine ⟨t, ?_, Owes.refl⟩
+      rw [Expr.eval_app_prim hp, hts', Option.bind_some, ← heq, happ]
+    | none =>
+      by_cases hc : sig.IsCtor f
+      · rw [Expr.eval_app_ctor hp hc, Option.map_eq_some_iff] at he
+        obtain ⟨ts, hts, rfl⟩ := he
+        obtain ⟨ts', hts', hall⟩ := evalList_owes hlit henv hargs hts
+        exact ⟨.app f ts', by rw [Expr.eval_app_ctor hp hc, hts', Option.map_some],
+          Owes.app hall⟩
+      · rw [Expr.eval_app_not_ctor hp hc] at he; exact absurd he (by simp)
+
+theorem evalList_owes {E : Database} (hlit : E.LitsIsolated) {sig : Signature} {σ σ' : Env}
+    (henv : ∀ (v : Var) (t : Term), Env.lookup v σ = some t →
+      ∃ t', Env.lookup v σ' = some t' ∧ Owes E t t')
+    {es : List Expr} (hof : Expr.OrderingFreeList es) {ts : List Term}
+    (he : Expr.evalList sig es σ = some ts) :
+    ∃ ts', Expr.evalList sig es σ' = some ts' ∧ List.Forall₂ (Owes E) ts ts' := by
+  match es with
+  | [] =>
+    rw [Expr.evalList_nil, Option.some_inj] at he
+    exact ⟨[], rfl, he ▸ List.Forall₂.nil⟩
+  | e :: es =>
+    rw [Expr.evalList_cons, Option.bind_eq_some_iff] at he
+    obtain ⟨u, hu, hmap⟩ := he
+    obtain ⟨us, hus, rfl⟩ := Option.map_eq_some_iff.mp hmap
+    obtain ⟨u', hu', ho⟩ := eval_owes hlit henv
+      (fun g hg => hof g (List.mem_union_iff.mpr (Or.inl hg))) hu
+    obtain ⟨us', hus', hall⟩ := evalList_owes hlit henv
+      (fun g hg => hof g (List.mem_union_iff.mpr (Or.inr hg))) hus
+    exact ⟨u' :: us', by rw [Expr.evalList_cons, hu', Option.bind_some, hus', Option.map_some],
+      .cons ho hall⟩
+
+end
+
+/-- `Database.Recorded` after adding a term on each side, where the recorder's term is one
+the recorder **owes** rather than the same one. This is `Recorded.addTerm_congr` with the
+value columns free to move as well as the key. -/
+theorem recorded_addTerm_owes {A C : Database} (hc : A.Recorded C) (hwf : C.WF)
+    {t t' : Term} (ho : Owes C t t') : (A.addTerm t).Recorded (C.addTerm t') := by
+  have hsub : ∀ s ∈ t'.subterms, s ∈ (C.addTerm t').terms := fun s hs =>
+    Database.addTerm_terms ▸ Or.inr hs
+  obtain ⟨-, hm⟩ := ho (C.addTerm t') (Database.Contained.addTerm t' C) hsub
+  refine ⟨fun p hp => ?_⟩
+  rcases hp with hp | ⟨s, hs, rfl⟩
+  · obtain ⟨q, hq, hc₁, hc₂⟩ := hc.eqs p hp
+    exact ⟨q, Or.inl hq, congOn_mono (Database.Contained.addTerm t' C) hc₁,
+      congOn_mono (Database.Contained.addTerm t' C) hc₂⟩
+  · obtain ⟨u, hu, hcu⟩ := hm s hs
+    have hq : (u, u) ∈ (C.addTerm t').eqs := (hwf.addTerm t').eqsRefl u hu
+    have hwiden : CongOn (C.addTerm t') [s, s] s u :=
+      Cong.mono ⟨withOperands_mono_list (by simp)⟩ hcu
+    exact ⟨(u, u), hq, hwiden, hwiden⟩
+
+/-- The environment clause: every binding the recorder can be asked for, it owes. -/
+def EnvOwes (E : Database) (σ σ' : Env) : Prop :=
+  ∀ (v : Var) (t : Term), Env.lookup v σ = some t →
+    ∃ t', Env.lookup v σ' = some t' ∧ Owes E t t'
+
+theorem EnvOwes.mono {E E' : Database} (h : E.Contained E') {σ σ' : Env}
+    (ho : EnvOwes E σ σ') : EnvOwes E' σ σ' := fun v t ht =>
+  let ⟨t', ht', how⟩ := ho v t ht
+  ⟨t', ht', how.mono h⟩
+
+theorem EnvOwes.setEnv {E : Database} {τ : Env} {σ σ' : Env} (ho : EnvOwes E σ σ') :
+    EnvOwes ({ E with env := τ } : Database) σ σ' := fun v t ht =>
+  let ⟨t', ht', how⟩ := ho v t ht
+  ⟨t', ht', how.setEnv⟩
+
+theorem EnvOwes.cons {E : Database} {σ σ' : Env} (ho : EnvOwes E σ σ') (v : Var)
+    {t t' : Term} (h : Owes E t t') : EnvOwes E ((v, t) :: σ) ((v, t') :: σ') := by
+  intro u x hx
+  rw [Env.lookup_cons] at hx
+  split at hx
+  · exact ⟨t', by rw [Env.lookup_cons, if_pos (by assumption)], Option.some.inj hx ▸ h⟩
+  · obtain ⟨y, hy, hoy⟩ := ho u x hx
+    exact ⟨y, by rw [Env.lookup_cons, if_neg (by assumption)]; exact hy, hoy⟩
+
+/-- **The state relation the ordering-free transport maintains**: the recorder records the
+run, agrees on the signature the run reads, and owes every value the run can look up. -/
+structure StateOwes (d d' : Database) : Prop where
+  recorded : d.Recorded d'
+  sig : d.sig = d'.sig
+  env : EnvOwes d' d.env d'.env
+
+theorem forall₂_append {α β : Type} {R : α → β → Prop} : ∀ {as as' : List α} {bs bs' : List β},
+    List.Forall₂ R as bs → List.Forall₂ R as' bs' → List.Forall₂ R (as ++ as') (bs ++ bs')
+  | _, _, _, _, .nil, h₂ => h₂
+  | _ :: _, _, _, _, .cons hab hl, h₂ => .cons hab (forall₂_append hl h₂)
+
+/-- `Owes` for a whole application: the concatenated columns. -/
+theorem owes_append {E : Database} {f : FnName} {as as' vs vs' : List Term}
+    (h₁ : List.Forall₂ (Owes E) as as') (h₂ : List.Forall₂ (Owes E) vs vs') :
+    Owes E (.app f (as ++ vs)) (.app f (as' ++ vs')) :=
+  Owes.app (forall₂_append h₁ h₂)
+
+/-- **One ordering-free action transports along `StateOwes`.** -/
+theorem evalAction_owes {A C d : Database} (hf : StateOwes A C) (hwf : C.WF)
+    {a : Action} (hof : Action.OrderingFree a) (h : evalAction A a = some d) :
+    ∃ d', evalAction C a = some d' ∧ StateOwes d d' := by
+  have hlit := hwf.litsIsolated
+  rcases evalAction_eq_some h with ⟨e, t, rfl, hv, rfl⟩ | ⟨v, e, t, rfl, hv, rfl⟩ |
+    ⟨e₁, e₂, t₁, t₂, rfl, hv₁, hv₂, hnl, rfl⟩ | ⟨f, args, out, as, vs, rfl, hv₁, hv₂, rfl⟩
+  · obtain ⟨t', hv', ho⟩ := eval_owes hlit hf.env hof (hf.sig ▸ hv)
+    refine ⟨C.addTerm t', by simp [evalAction, hv'], ?_⟩
+    exact ⟨recorded_addTerm_owes hf.recorded hwf ho, hf.sig,
+      hf.env.mono (Database.Contained.addTerm t' C)⟩
+  · obtain ⟨t', hv', ho⟩ := eval_owes hlit hf.env hof (hf.sig ▸ hv)
+    refine ⟨{ C.addTerm t' with env := (v, t') :: C.env }, by simp [evalAction, hv'], ?_⟩
+    refine ⟨(recorded_addTerm_owes hf.recorded hwf ho).setEnv _ _, hf.sig, ?_⟩
+    exact ((hf.env.mono (Database.Contained.addTerm t' C)).cons v
+      (ho.mono (Database.Contained.addTerm t' C))).setEnv
+  · obtain ⟨t₁', hv₁', ho₁⟩ := eval_owes hlit hf.env hof.1 (hf.sig ▸ hv₁)
+    obtain ⟨t₂', hv₂', ho₂⟩ := eval_owes hlit hf.env hof.2 (hf.sig ▸ hv₂)
+    -- the recorder's operands are not literals either: a literal's class is a singleton
+    have hpair : ∀ {x x' : Term}, Owes C x x' → ¬ x.isLit → ¬ x'.isLit := by
+      intro x x' ho hx hx'
+      have hsub : ∀ s ∈ x'.subterms, s ∈ (C.withOperands [x']).terms := fun s hs =>
+        Database.addTerms_terms ▸ Or.inr ⟨x', by simp, hs⟩
+      have hc := (ho (C.withOperands [x']) (Database.Contained.addTerms _ _) hsub).1
+      exact hx ((Cong.eq_of_isLit (litsIsolated_addTerms
+        (litsIsolated_addTerms hlit [x']) [x]) hc (Or.inr hx')) ▸ hx')
+    simp only [not_or, Bool.not_eq_true] at hnl
+    have hnl₁ : ¬ t₁'.isLit := hpair ho₁ (by simp [hnl.1])
+    have hnl₂ : ¬ t₂'.isLit := hpair ho₂ (by simp [hnl.2])
+    refine ⟨C.addEq t₁' t₂', by
+      simp only [evalAction, hv₁', hv₂', Option.bind_some]
+      rw [if_neg (by simp [Bool.eq_false_iff.mpr, hnl₁, hnl₂])], ?_⟩
+    refine ⟨?_, hf.sig, hf.env.mono (Database.Contained.addEq t₁' t₂' C)⟩
+    have hsub : ∀ {x' : Term}, x' = t₁' ∨ x' = t₂' → ∀ s ∈ x'.subterms,
+        s ∈ (C.addEq t₁' t₂').terms := by
+      rintro x' (rfl | rfl) s hs
+      · exact Database.addEq_terms ▸ Or.inl (Or.inr hs)
+      · exact Database.addEq_terms ▸ Or.inr hs
+    have hstep : ((A.addTerm t₁).addTerm t₂).Recorded ((C.addTerm t₁').addTerm t₂') :=
+      recorded_addTerm_owes (recorded_addTerm_owes hf.recorded hwf ho₁) (hwf.addTerm t₁')
+        (ho₂.mono (Database.Contained.addTerm t₁' C))
+    have hins : ((C.addTerm t₁').addTerm t₂').Contained (C.addEq t₁' t₂') :=
+      ⟨Set.subset_insert _ _⟩
+    refine ⟨fun p hp => ?_⟩
+    rcases Set.mem_insert_iff.mp hp with rfl | hp
+    · refine ⟨(t₁', t₂'), Set.mem_insert _ _, ?_, ?_⟩
+      · exact Cong.mono ⟨withOperands_mono_list (by simp)⟩
+          ((ho₁ (C.addEq t₁' t₂') (Database.Contained.addEq t₁' t₂' C)
+            (hsub (Or.inl rfl))).1)
+      · exact Cong.mono ⟨withOperands_mono_list (by simp)⟩
+          ((ho₂ (C.addEq t₁' t₂') (Database.Contained.addEq t₁' t₂' C)
+            (hsub (Or.inr rfl))).1)
+    · obtain ⟨q, hq, hc₁, hc₂⟩ := hstep.eqs p hp
+      exact ⟨q, Set.mem_insert_of_mem _ hq, congOn_mono hins hc₁, congOn_mono hins hc₂⟩
+  · obtain ⟨as', hv₁', ho₁⟩ := evalList_owes hlit hf.env hof.1 (hf.sig ▸ hv₁)
+    obtain ⟨vs', hv₂', ho₂⟩ := evalList_owes hlit hf.env hof.2 (hf.sig ▸ hv₂)
+    refine ⟨C.addTerm (.app f (as' ++ vs')), by simp [evalAction, hv₁', hv₂'], ?_⟩
+    exact ⟨recorded_addTerm_owes hf.recorded hwf (owes_append ho₁ ho₂), hf.sig,
+      hf.env.mono (Database.Contained.addTerm _ C)⟩
+
+/-- **A whole ordering-free action block transports along `StateOwes`.** -/
+theorem evalActions_owes {A C d : Database} (hf : StateOwes A C) (hwf : C.WF)
+    {as : List Action} (hof : Actions.OrderingFree as) (h : evalActions A as = some d) :
+    ∃ d', evalActions C as = some d' ∧ StateOwes d d' := by
+  induction as generalizing A C with
+  | nil =>
+    rw [evalActions_nil, Option.some.injEq] at h
+    exact ⟨C, rfl, h ▸ hf⟩
+  | cons a as ih =>
+    cases hv : evalAction A a with
+    | none => simp [hv] at h
+    | some A₁ =>
+      rw [evalActions_cons, hv, Option.bind_some] at h
+      obtain ⟨C₁, hC₁, hf₁⟩ := evalAction_owes hf hwf hof.1 hv
+      obtain ⟨d', hd', hfd⟩ := ih hf₁ (evalAction_wf hwf hC₁) hof.2 h
+      exact ⟨d', by rw [evalActions_cons, hC₁, Option.bind_some]; exact hd', hfd⟩
+
+/-- **The pinning lemma.** A derivation ending in a term the database holds needs no
+phantom operand but the *source's own* subterms: the interpretation of the source already
+lands in the target's class, and the model's application branch is exactly a `Cong.congr`
+against a database entry. -/
+theorem cong_of_I {C : Database} (hsub : ∀ t ∈ C.terms, t.subterms ⊆ C.terms) :
+    ∀ (x : Term) (y : Term), y ∈ C.terms → I C x = Quot.mk (Cong C) y → CongOn C [x] x y := by
+  intro x
+  induction x using Term.rec (motive_2 := fun us => ∀ (bs : List Term) (parent : Term),
+      (∀ u ∈ us, u ∈ parent.subterms) → (∀ b ∈ bs, b ∈ C.terms) →
+      IList C us = bs.map (Quot.mk (Cong C)) →
+      CongList (C.withOperands [parent]) us bs) with
+  | lit l =>
+    intro y hy hI
+    rcases eq_or_cong_of_cls_eq (hI : Quot.mk (Cong C) (.lit l) = Quot.mk (Cong C) y) with
+      rfl | hc
+    · exact mem_congOn_self (by simp)
+    · exact Cong.mono (Database.Contained.addTerms _ _) hc
+  | app f us ih =>
+    intro y hy hI
+    change Iapp C f (IList C us) = _ at hI
+    by_cases hex : ∃ bs : List Term, Term.app f bs ∈ C.terms ∧
+        IList C us = bs.map (Quot.mk (Cong C))
+    · rw [Iapp, dif_pos hex] at hI
+      obtain ⟨hmem, hmap⟩ := hex.choose_spec
+      have hbs : ∀ b ∈ hex.choose, b ∈ C.terms := fun b hb =>
+        hsub _ hmem (Term.IsSubterm.arg hb (.refl b))
+      have hl := ih hex.choose (.app f us)
+        (fun u hu => Term.arg_subterms hu (Term.self_mem_subterms u)) hbs hmap
+      have hstep : CongOn C [Term.app f us] (.app f us) (.app f hex.choose) :=
+        Cong.congr (mem_congOn_self (by simp))
+          (Cong.mono (Database.Contained.addTerms _ _) hmem) hl
+      rcases eq_or_cong_of_cls_eq hI with heq | hc
+      · exact heq ▸ hstep
+      · exact hstep.trans (Cong.mono (Database.Contained.addTerms _ _) hc)
+    · exfalso
+      rw [Iapp, dif_neg hex] at hI
+      refine hex ⟨(IList C us).map Quot.out, ?_, ?_⟩
+      · rcases eq_or_cong_of_cls_eq hI with heq | hc
+        · exact heq ▸ hy
+        · exact hc.mem_left
+      · rw [List.map_map, show (Quot.mk (Cong C) ∘ Quot.out) = (id : Cls C → Cls C) from
+          funext fun q => Quot.out_eq q, List.map_id]
+  | nil =>
+    rename_i bs parent _ _ hmap
+    cases bs with
+    | nil => exact .nil
+    | cons b bs => simp [IList] at hmap
+  | cons u us ihu ihus =>
+    rename_i bs parent hpar hbs hmap
+    cases bs with
+    | nil => simp [IList] at hmap
+    | cons b bs =>
+      rw [show IList C (u :: us) = I C u :: IList C us from rfl, List.map_cons,
+        List.cons.injEq] at hmap
+      refine .cons ?_ (ihus bs parent (fun x hx => hpar x (by simp [hx]))
+        (fun x hx => hbs x (by simp [hx])) hmap.2)
+      exact congOn_subterm (hpar u (by simp))
+        (ihu b (hbs b (by simp)) hmap.1)
+
+/-- **Conservativity, sharpened.** A phantom ambient may be replaced by the source term's
+own subterms whenever the target is a term the database holds. -/
+theorem cong_pin {C E : Database} (hsub : ∀ t ∈ C.terms, t.subterms ⊆ C.terms)
+    (hE : ∀ p ∈ E.eqs, p ∈ C.eqs ∨ p.1 = p.2) {x y : Term} (hy : y ∈ C.terms)
+    (h : Cong E x y) : CongOn C [x] x y :=
+  cong_of_I hsub x y hy ((I_congr hsub hE h).trans (I_eq_of_mem hsub y hy))
+
+theorem operands_pair_subset {db : Database} {t : Term} :
+    (db.withOperands [t, t]).eqs ⊆ (db.withOperands [t]).eqs := by
+  rintro x ((h | h) | h)
+  · exact Or.inl h
+  · exact Or.inr h
+  · exact Or.inr h
+
+/-- **The `terms` clause of `Recorded`.** Every term the implementation holds is congruent
+to one the specification holds, in the ambient pinned to that term alone. -/
+theorem terms_clause {A C : Database} (h : A.Recorded C) (hwf : A.WF) {t : Term}
+    (ht : t ∈ A.terms) : ∃ t' ∈ C.terms, CongOn C [t] t t' := by
+  obtain ⟨q, hq, h₁, -⟩ := h.eqs (t, t) (hwf.eqsRefl t ht)
+  exact ⟨q.1, (Cong.assert hq).trans (Cong.assert hq).symm,
+    Cong.mono ⟨operands_pair_subset⟩ h₁⟩
+
+theorem owes_of_congOn {C : Database} {x u : Term} (h : CongOn C [x] x u)
+    (hall : ∀ s ∈ x.subterms, ∃ v ∈ C.terms, CongOn C [s] s v) : Owes C x u :=
+  fun _ hF _ => ⟨congOn_mono hF h, fun s hs =>
+    let ⟨v, hv, hcv⟩ := hall s hs
+    ⟨v, hF.terms hv, congOn_mono hF hcv⟩⟩
+
+/-- **Every term the implementation holds, the specification owes.** -/
+theorem recorded_owes {A C : Database} (hc : A.Recorded C) (hwf : A.WF) {x : Term}
+    (hx : x ∈ A.terms) : ∃ u ∈ C.terms, Owes C x u := by
+  obtain ⟨u, hu, hcu⟩ := terms_clause hc hwf hx
+  exact ⟨u, hu, owes_of_congOn hcu fun s hs =>
+    terms_clause hc hwf (hwf.subtermClosed x hx hs)⟩
+
+/-- Pointwise: a congruence in a phantom ambient between implementation terms and
+specification terms is a pointwise `Owes`. -/
+theorem owes_list_of_congList {A C : Database} (hc : A.Recorded C) (hwfA : A.WF)
+    (hwfC : C.WF) {E : Database} (hE : ∀ p ∈ E.eqs, p ∈ C.eqs ∨ p.1 = p.2) :
+    ∀ {as bs : List Term}, CongList E as bs → (∀ a ∈ as, a ∈ A.terms) →
+      (∀ b ∈ bs, b ∈ C.terms) → List.Forall₂ (Owes C) as bs
+  | _, _, .nil, _, _ => .nil
+  | a :: as, b :: bs, .cons hab hrest, hA, hC => by
+      refine .cons ?_ (owes_list_of_congList hc hwfA hwfC hE hrest
+        (fun x hx => hA x (by simp [hx])) (fun x hx => hC x (by simp [hx])))
+      refine owes_of_congOn (cong_pin hwfC.subtermClosed hE (hC b (by simp)) hab)
+        (fun s hs => terms_clause hc hwfA (hwfA.subtermClosed a (hA a (by simp)) hs))
+
+/-- **The entry clause.** An entry of `f` the implementation holds is matched by an entry
+of `f` the specification holds, column by column. This is what a `MergeStep` needs and what
+`Database.Recorded` does not say outright: `Recorded` matches the *equation*, and it takes
+the head-extraction argument to see that the witness can be taken to have the same head. -/
+theorem recorded_entry {A C : Database} (hc : A.Recorded C) (hwfA : A.WF) (hwfC : C.WF)
+    {f : FnName} {args : List Term} (ht : Term.app f args ∈ A.terms) :
+    ∃ args', Term.app f args' ∈ C.terms ∧ List.Forall₂ (Owes C) args args' := by
+  obtain ⟨t', ht', hcong⟩ := terms_clause hc hwfA ht
+  have hE : ∀ p ∈ (C.withOperands [Term.app f args]).eqs, p ∈ C.eqs ∨ p.1 = p.2 :=
+    fun p hp => mem_addTerms_eqs _ C p hp
+  have hlit : (C.withOperands [Term.app f args]).LitsIsolated :=
+    litsIsolated_addTerms hwfC.litsIsolated _
+  have hRt : Reach C (C.withOperands [Term.app f args]) (.app f args) := by
+    refine (reach_iff (Database.Contained.addTerms _ _) hE hwfC.subtermClosed
+      hwfC.litsIsolated hcong).mpr ?_
+    cases t' with
+    | lit l => exact absurd (Cong.eq_of_isLit hlit hcong (Or.inr rfl)) (by simp)
+    | app g cs =>
+      exact reach_self (Database.Contained.addTerms _ _) hwfC.subtermClosed ht'
+  obtain ⟨f', args₀, args', heq, hmem, hcl⟩ := hRt
+  obtain ⟨rfl, rfl⟩ := Term.app.inj heq
+  exact ⟨args', hmem, owes_list_of_congList hc hwfA hwfC hE hcl
+    (fun x hx => hwfA.subtermClosed _ ht (Term.IsSubterm.arg hx (.refl x)))
+    (fun x hx => hwfC.subtermClosed _ hmem (Term.IsSubterm.arg hx (.refl x)))⟩
+
+theorem envOwes_nil {C : Database} : EnvOwes C [] [] := by
+  intro v t ht; simp [Env.lookup] at ht
+
+theorem mergeEnvIdx_owes {C : Database} : ∀ {os os' ns ns' : List Term} (i : Nat),
+    List.Forall₂ (Owes C) os os' → List.Forall₂ (Owes C) ns ns' →
+    EnvOwes C (mergeEnvIdx i os ns) (mergeEnvIdx i os' ns')
+  | [], [], _, _, _, .nil, _ => envOwes_nil
+  | _ :: _, _ :: _, [], [], _, .cons _ _, .nil => envOwes_nil
+  | o :: os, o' :: os', n :: ns, n' :: ns', i, .cons ho hos, .cons hn hns => by
+      show EnvOwes C (("old" ++ toString i, o) :: ("new" ++ toString i, n) ::
+          mergeEnvIdx (i + 1) os ns)
+        (("old" ++ toString i, o') :: ("new" ++ toString i, n') ::
+          mergeEnvIdx (i + 1) os' ns')
+      exact ((mergeEnvIdx_owes (i + 1) hos hns).cons _ hn).cons _ ho
+
+theorem mergeEnv_owes {C : Database} : ∀ {os os' ns ns' : List Term},
+    List.Forall₂ (Owes C) os os' → List.Forall₂ (Owes C) ns ns' →
+    EnvOwes C (mergeEnv os ns) (mergeEnv os' ns')
+  | [o], [o'], [n], [n'], .cons ho .nil, .cons hn .nil => by
+      show EnvOwes C [("old", o), ("new", n)] [("old", o'), ("new", n')]
+      exact ((envOwes_nil).cons "new" hn).cons "old" ho
+  | [], [], _, _, .nil, hn => mergeEnvIdx_owes 0 .nil hn
+  | _ :: _ :: _, _ :: _ :: _, _, _, .cons h₁ (.cons h₂ h₃), hn =>
+      mergeEnvIdx_owes 0 (.cons h₁ (.cons h₂ h₃)) hn
+  | [_], [_], [], [], .cons ho .nil, .nil => mergeEnvIdx_owes 0 (.cons ho .nil) .nil
+  | [_], [_], _ :: _ :: _, _ :: _ :: _, .cons ho .nil, .cons h₁ (.cons h₂ h₃) =>
+      mergeEnvIdx_owes 0 (.cons ho .nil) (.cons h₁ (.cons h₂ h₃))
+
+theorem forall₂_mem_left {α β : Type} {R : α → β → Prop} : ∀ {as : List α} {bs : List β},
+    List.Forall₂ R as bs → ∀ {a : α}, a ∈ as → ∃ b ∈ bs, R a b
+  | _, _, .cons hab hrest, x, hx => by
+      rcases List.mem_cons.mp hx with rfl | hx'
+      · exact ⟨_, by simp, hab⟩
+      · obtain ⟨b, hb, hR⟩ := forall₂_mem_left hrest hx'
+        exact ⟨b, by simp [hb], hR⟩
+
+theorem forall₂_split {α β : Type} {R : α → β → Prop} : ∀ {as vs : List α} {cs : List β},
+    List.Forall₂ R (as ++ vs) cs →
+    ∃ as' vs', cs = as' ++ vs' ∧ List.Forall₂ R as as' ∧ List.Forall₂ R vs vs'
+  | [], vs, cs, h => ⟨[], cs, rfl, .nil, h⟩
+  | a :: as, vs, _ :: cs, .cons hab hrest => by
+      obtain ⟨as', vs', rfl, h₁, h₂⟩ := forall₂_split hrest
+      exact ⟨_ :: as', vs', rfl, .cons hab h₁, h₂⟩
+
+/-- Two implementation terms congruent at `A` have specification witnesses congruent at
+`C` proper: the three links compose in the pinned ambient and conservativity takes it
+off. -/
+theorem cong_of_owes {A C : Database} (hc : A.Recorded C) (hwfA : A.WF) (hwfC : C.WF)
+    {x y x' y' : Term} (hxy : Cong A x y) (hx : Owes C x x') (hy : Owes C y y')
+    (hx' : x' ∈ C.terms) (hy' : y' ∈ C.terms) : Cong C x' y' := by
+  have hcx : CongOn C [x] x x' :=
+    (hx C (Database.Contained.refl C) fun s hs => hwfC.subtermClosed x' hx' hs).1
+  have hcy : CongOn C [y] y y' :=
+    (hy C (Database.Contained.refl C) fun s hs => hwfC.subtermClosed y' hy' hs).1
+  exact congOn_elim hwfC.subtermClosed hx' hy'
+    ((Cong.mono ⟨withOperands_mono_list (by simp)⟩ hcx).symm.trans
+      ((Cong.mono_recorded hc hwfA hwfC hxy).trans
+        (Cong.mono ⟨withOperands_mono_list (by simp)⟩ hcy)))
+
+theorem congList_of_owes {A C : Database} (hc : A.Recorded C) (hwfA : A.WF) (hwfC : C.WF) :
+    ∀ {xs ys xs' ys' : List Term}, CongList A xs ys →
+      List.Forall₂ (Owes C) xs xs' → List.Forall₂ (Owes C) ys ys' →
+      (∀ x ∈ xs', x ∈ C.terms) → (∀ y ∈ ys', y ∈ C.terms) → CongList C xs' ys'
+  | _, _, _, _, .nil, .nil, .nil, _, _ => .nil
+  | _ :: _, _ :: _, _ :: _, _ :: _, .cons hxy hrest, .cons hx hxs, .cons hy hys, hxm, hym =>
+      .cons (cong_of_owes hc hwfA hwfC hxy hx hy (hxm _ (by simp)) (hym _ (by simp)))
+        (congList_of_owes hc hwfA hwfC hrest hxs hys (fun x hx => hxm x (by simp [hx]))
+          (fun y hy => hym y (by simp [hy])))
+
+/-- **A merge collision available at `A` is available at any `C` that records it — when the
+`:merge` bodies are ordering-free.** -/
+theorem MergeStep.transport_owes {A C B : Database} (hc : A.Recorded C) (hwfA : A.WF)
+    (hwfC : C.WF) (hsig : A.sig = C.sig) (hof : Signature.OrderingFree C.sig)
+    (h : MergeStep A B) : ∃ D, MergeStep C D ∧ B.Recorded D ∧ B.sig = D.sig := by
+  cases h with
+  | @collide dA f dc as bs a b vs body res hdc hmg hla hlb hra hrb hcong hbody hres =>
+    -- the two colliding entries, matched column by column at `C`
+    obtain ⟨cs, hcs, howcs⟩ := recorded_entry hc hwfA hwfC hra
+    obtain ⟨es, hes, howes⟩ := recorded_entry hc hwfA hwfC hrb
+    obtain ⟨as', a', rfl, howas, howa⟩ := forall₂_split howcs
+    obtain ⟨bs', b', rfl, howbs, howb⟩ := forall₂_split howes
+    have hmemC : ∀ {gs : List Term}, Term.app f gs ∈ C.terms → ∀ x ∈ gs, x ∈ C.terms :=
+      fun hg x hx => hwfC.subtermClosed _ hg (Term.IsSubterm.arg hx (.refl x))
+    -- the specification's two keys are congruent to each other
+    have hkey : CongList C as' bs' :=
+      congList_of_owes hc hwfA hwfC hcong howas howbs
+        (fun x hx => hmemC hcs x (List.mem_append_left _ hx))
+        (fun y hy => hmemC hes y (List.mem_append_left _ hy))
+    -- the body runs at `C` under the congruent merge environment
+    have hwfCe : Database.WF { C with env := mergeEnv a' b' } :=
+      hwfC.setEnv fun p hp => (mem_mergeEnv hp).elim
+        (fun hm => hmemC hcs p.2 (List.mem_append_right _ hm))
+        (fun hm => hmemC hes p.2 (List.mem_append_right _ hm))
+    have hfollows : StateOwes { A with env := mergeEnv a b } { C with env := mergeEnv a' b' } :=
+      ⟨hc.setEnv _ _, hsig, (mergeEnv_owes howa howb).setEnv⟩
+    obtain ⟨hbodyof, hresof⟩ : Actions.OrderingFree body ∧ Expr.OrderingFreeList res := by
+      have := hof f dc (hsig ▸ hdc) (MergeSpec.merge body res) (by rw [hmg]; rfl)
+      exact this
+    obtain ⟨dC, hdC, hfd⟩ := evalActions_owes hfollows hwfCe hbodyof hbody
+    have hwfdC : dC.WF := evalActions_wf hwfCe hdC
+    -- the result columns follow
+    obtain ⟨vs', hvs', howvs⟩ :=
+      evalList_owes hwfdC.litsIsolated hfd.env hresof (hfd.sig ▸ hres)
+    -- the combined entry
+    have hcontCd : ({ C with env := mergeEnv a' b' } : Database).Contained dC :=
+      evalActions_contained hdC
+    have howentry : Owes dC (.app f (as ++ vs)) (.app f (as' ++ vs')) :=
+      owes_append (howas.imp (fun {_ _} ho => Owes.mono ⟨hcontCd.eqs⟩ (Owes.setEnv ho))) howvs
+    refine ⟨{ dC.addTerm (.app f (as' ++ vs')) with env := C.env, rules := C.rules },
+      .collide (hsig ▸ hdc) hmg ?_ ?_ ?_ ?_ hkey hdC hvs', ?_, ?_⟩
+    · rw [← hla]; exact (howas.length_eq).symm
+    · rw [← hlb]; exact (howbs.length_eq).symm
+    · exact hcs
+    · exact hes
+    · exact (recorded_addTerm_owes hfd.recorded hwfdC howentry).setEnvRules _ _ _ _
+    · show dA.sig = dC.sig
+      exact hfd.sig
+
+/-- The `Owes` clause, read off at the ambient that posits the recorder's own values. -/
+theorem owes_at {C : Database} {ts' : List Term} :
+    ∀ {t t' : Term}, Owes C t t' → t' ∈ ts' →
+      CongOn (C.withOperands ts') [t] t t' ∧
+      ∀ s ∈ t.subterms, ∃ u ∈ (C.withOperands ts').terms,
+        CongOn (C.withOperands ts') [s] s u := by
+  intro t t' ho ht'
+  exact ho (C.withOperands ts') (Database.Contained.addTerms _ _)
+    (fun s hs => Database.addTerms_terms ▸ Or.inr ⟨t', ht', hs⟩)
+
+/-- **`Recorded` survives matched phantom operands.** The reflexive equations
+`withOperands` writes on the implementation's side are matched by the `Owes` clause. -/
+theorem recorded_withOperands {A C : Database} (hc : A.Recorded C) (hwfC : C.WF)
+    {ts ts' : List Term} (hall : List.Forall₂ (Owes C) ts ts') :
+    (A.withOperands ts).Recorded (C.withOperands ts') := by
+  have hwf' : (C.withOperands ts').WF := hwfC.addTerms ts'
+  refine ⟨fun p hp => ?_⟩
+  rcases mem_addTerms_eqs' ts A p hp with hq | ⟨x, hx, s, hs, rfl⟩
+  · obtain ⟨q, hq', hc₁, hc₂⟩ := hc.eqs p hq
+    exact ⟨q, eqs_subset_addTerms ts' C hq',
+      congOn_mono (Database.Contained.addTerms _ _) hc₁,
+      congOn_mono (Database.Contained.addTerms _ _) hc₂⟩
+  · obtain ⟨x', hx', hox⟩ := forall₂_mem_left hall hx
+    obtain ⟨u, hu, hcu⟩ := (owes_at hox hx').2 s hs
+    have hwiden : CongOn (C.withOperands ts') [s, s] s u :=
+      Cong.mono ⟨withOperands_mono_list (by simp)⟩ hcu
+    exact ⟨(u, u), hwf'.eqsRefl u hu, hwiden, hwiden⟩
+
+/-- **The instance clause.** A pattern instance the implementation matches against a term
+it holds is matched, at the specification, by the specification's witness for that term. -/
+theorem cong_instance {A C : Database} (hc : A.Recorded C) (hwfA : A.WF) (hwfC : C.WF)
+    {ts ts' : List Term} (hall : List.Forall₂ (Owes C) ts ts')
+    {w u : Term} (hou : Owes C w u) (hu : u ∈ C.terms)
+    {x x' : Term} (hx' : x' ∈ ts') (hox : Owes C x x') (hcong : CongOn A ts w x) :
+    CongOn C [x'] u x' := by
+  set E : Database := (C.withOperands ts').withOperands [w, x] with hE
+  have hrefl : ∀ p ∈ E.eqs, p ∈ C.eqs ∨ p.1 = p.2 := by
+    intro p hp
+    rcases mem_addTerms_eqs [w, x] (C.withOperands ts') p hp with hq | hq
+    · exact mem_addTerms_eqs ts' C p hq
+    · exact Or.inr hq
+  have h₁ : Cong E w x :=
+    Cong.mono_recorded (recorded_withOperands hc hwfC hall) (hwfA.addTerms ts)
+      (hwfC.addTerms ts') hcong
+  have h₂ : Cong E x x' :=
+    Cong.mono ⟨withOperands_mono_list (by simp)⟩ (owes_at hox hx').1
+  have h₃ : Cong E w u := by
+    refine Cong.mono ⟨?_⟩ ((hou C (Database.Contained.refl C)
+      (fun s hs => hwfC.subtermClosed u hu hs)).1)
+    exact (addTerms_eqs_mono (eqs_subset_addTerms ts' C) [w]).trans
+      (withOperands_mono_list (by simp))
+  exact (cong_pin hwfC.subtermClosed hrefl hu (h₂.symm.trans (h₁.symm.trans h₃))).symm
+
+/-- **An ordering-free pattern matches at the recorder, under the moved substitution.** -/
+theorem matches_owes {A C : Database} (hc : A.Recorded C) (hwfA : A.WF) (hwfC : C.WF)
+    (hsig : A.sig = C.sig) {p : Pattern} (hof : Pattern.OrderingFree p) {σ σ' : Env}
+    (henv : EnvOwes C (A.env ++ σ) (C.env ++ σ')) (h : Matches A p σ) : Matches C p σ' := by
+  cases h with
+  | @expr e _ w t hw he hcong =>
+    obtain ⟨t', he', ho⟩ := eval_owes hwfC.litsIsolated henv hof (hsig ▸ he)
+    obtain ⟨u, hu, hou⟩ := recorded_owes hc hwfA hw
+    exact .expr hu he'
+      (cong_instance hc hwfA hwfC (List.Forall₂.cons ho .nil) hou hu (by simp) ho hcong)
+  | @eq e₁ e₂ _ w t₁ t₂ hw he₁ he₂ hcw hc₁₂ =>
+    obtain ⟨t₁', he₁', ho₁⟩ := eval_owes hwfC.litsIsolated henv hof.1 (hsig ▸ he₁)
+    obtain ⟨t₂', he₂', ho₂⟩ := eval_owes hwfC.litsIsolated henv hof.2 (hsig ▸ he₂)
+    obtain ⟨u, hu, hou⟩ := recorded_owes hc hwfA hw
+    have hall : List.Forall₂ (Owes C) [t₁, t₂] [t₁', t₂'] :=
+      .cons ho₁ (.cons ho₂ .nil)
+    have hk₁ : CongOn C [t₁'] u t₁' :=
+      cong_instance hc hwfA hwfC hall hou hu (by simp) ho₁ hcw
+    have hk₂ : CongOn C [t₂'] u t₂' :=
+      cong_instance hc hwfA hwfC hall hou hu (by simp) ho₂ (hcw.trans hc₁₂)
+    refine .eq hu he₁' he₂' (Cong.mono ⟨withOperands_mono_list (by simp)⟩ hk₁) ?_
+    exact (Cong.mono ⟨withOperands_mono_list (by simp)⟩ hk₁).symm.trans
+      (Cong.mono ⟨withOperands_mono_list (by simp)⟩ hk₂)
+  | @values vs f as _ us ts w hw hts hus hcw =>
+    obtain ⟨ts', hts', hots⟩ := evalList_owes hwfC.litsIsolated henv hof.2 (hsig ▸ hts)
+    obtain ⟨us', hus', hous⟩ := evalList_owes hwfC.litsIsolated henv hof.1 (hsig ▸ hus)
+    obtain ⟨u, hu, hou⟩ := recorded_owes hc hwfA hw
+    have hox : Owes C (.app f (ts ++ us)) (.app f (ts' ++ us')) := owes_append hots hous
+    exact .values hu hts' hus'
+      (cong_instance hc hwfA hwfC (List.Forall₂.cons hox .nil) hou hu (by simp) hox hcw)
+
+/-! ### The witness function and the query join -/
+
+/-- **The witness.** One function, chosen once, sending each term of `A` to a term of `C`
+that `C` owes it. Choosing a *function* rather than a term per use site is what keeps
+`Env.Union2` joinable: equal terms get equal images. -/
+theorem exists_witness {A C : Database} (hc : A.Recorded C) (hwf : A.WF) :
+    ∃ w : Term → Term, ∀ t ∈ A.terms, w t ∈ C.terms ∧ Owes C t (w t) := by
+  classical
+  refine ⟨fun t => if ht : t ∈ A.terms then (recorded_owes hc hwf ht).choose else t,
+    fun t ht => ?_⟩
+  simpa only [dif_pos ht] using (recorded_owes hc hwf ht).choose_spec
+
+/-- `σ` with every value rewritten by `w`. Domain and order untouched. -/
+def Env.mapVals (w : Term → Term) (σ : Env) : Env := σ.map fun b => (b.1, w b.2)
+
+theorem dom_mapVals (w : Term → Term) : ∀ σ : Env, Env.dom (Env.mapVals w σ) = Env.dom σ
+  | [] => rfl
+  | b :: σ => by
+      show (b.1, w b.2).1 :: (Env.mapVals w σ).map Prod.fst = b.1 :: σ.map Prod.fst
+      rw [show (Env.mapVals w σ).map Prod.fst = σ.map Prod.fst from dom_mapVals w σ]
+
+theorem lookup_mapVals (w : Term → Term) (v : Var) : ∀ σ : Env,
+    Env.lookup v (Env.mapVals w σ) = (Env.lookup v σ).map w
+  | [] => rfl
+  | (u, t) :: σ => by
+      show (if v = u then some (w t) else Env.lookup v (Env.mapVals w σ)) =
+        Option.map w (if v = u then some t else Env.lookup v σ)
+      split
+      · rfl
+      · exact lookup_mapVals w v σ
+
+theorem mem_mapVals {w : Term → Term} {b : Var × Term} : ∀ {σ : Env},
+    b ∈ Env.mapVals w σ → ∃ a ∈ σ, b = (a.1, w a.2)
+  | [], hb => by simp [Env.mapVals] at hb
+  | a :: σ, hb => by
+      rcases List.mem_cons.mp hb with rfl | hb
+      · exact ⟨a, List.mem_cons_self .., rfl⟩
+      · obtain ⟨c, hc, rfl⟩ := mem_mapVals hb
+        exact ⟨c, List.mem_cons_of_mem a hc, rfl⟩
+
+theorem mapVals_append (w : Term → Term) (σ₁ σ₂ : Env) :
+    Env.mapVals w (σ₁ ++ σ₂) = Env.mapVals w σ₁ ++ Env.mapVals w σ₂ := List.map_append
+
+/-- **`Env.Union2` survives a witness function.** -/
+theorem union2_mapVals (w : Term → Term) {σ₁ σ₂ σ : Env} (h : Env.Union2 σ₁ σ₂ σ) :
+    Env.Union2 (Env.mapVals w σ₁) (Env.mapVals w σ₂) (Env.mapVals w σ) := by
+  refine ⟨fun b hb t ht => ?_, by rw [h.2, mapVals_append]⟩
+  obtain ⟨a, ha, rfl⟩ := mem_mapVals hb
+  rw [lookup_mapVals] at ht
+  obtain ⟨u, hu, rfl⟩ := Option.map_eq_some_iff.mp ht
+  exact congrArg w (h.1 a ha u hu)
+
+theorem unionAll_mapVals (w : Term → Term) {σs : List Env} {σ : Env}
+    (h : Env.UnionAll σs σ) : Env.UnionAll (σs.map (Env.mapVals w)) (Env.mapVals w σ) := by
+  induction h with
+  | nil => exact .nil
+  | single σ => exact .single _
+  | step h₂ _ ih => exact .step (union2_mapVals w h₂) ih
+
+/-- Every value the join produces came from one of the pieces. -/
+theorem unionAll_vals {S : Set Term} : ∀ {σs : List Env} {σ : Env}, Env.UnionAll σs σ →
+    (∀ τ ∈ σs, ∀ b ∈ τ, b.2 ∈ S) → ∀ b ∈ σ, b.2 ∈ S := by
+  intro σs σ hu
+  induction hu with
+  | nil => simp
+  | single τ => exact fun h => h τ (by simp)
+  | @step σ₁ σ₂ σr σ σs h₂ _ ih =>
+    intro h
+    refine ih fun τ hτ => ?_
+    rcases List.mem_cons.mp hτ with rfl | hτ'
+    · rw [h₂.2]
+      intro b hb
+      rcases List.mem_append.mp hb with hb | hb
+      exacts [h σ₁ (by simp) b hb, h σ₂ (by simp) b hb]
+    · exact h τ (by simp [hτ'])
+
+/-- The environment clause for a moved substitution. -/
+theorem envOwes_mapVals {A C : Database} {w : Term → Term}
+    (hw : ∀ t ∈ A.terms, w t ∈ C.terms ∧ Owes C t (w t)) {σ : Env}
+    (hσ : ∀ b ∈ σ, b.2 ∈ A.terms) : EnvOwes C σ (Env.mapVals w σ) := by
+  intro v t ht
+  refine ⟨w t, by rw [lookup_mapVals, ht]; rfl, (hw t ?_).2⟩
+  induction σ with
+  | nil => simp [Env.lookup] at ht
+  | cons b σ ih =>
+    rw [Env.lookup_cons] at ht
+    split at ht
+    · exact Option.some.inj ht ▸ hσ b (by simp)
+    · exact ih (fun x hx => hσ x (by simp [hx])) ht
+
+/-- Appending environments whose domains agree keeps the clause: `lookup` is left-biased,
+so the two sides fall through together. -/
+theorem envOwes_append {C : Database} {σ₁ σ₁' σ₂ σ₂' : Env}
+    (h₁ : EnvOwes C σ₁ σ₁') (hdom : Env.dom σ₁ = Env.dom σ₁') (h₂ : EnvOwes C σ₂ σ₂') :
+    EnvOwes C (σ₁ ++ σ₂) (σ₁' ++ σ₂') := by
+  intro v t ht
+  by_cases hv : v ∈ Env.dom σ₁
+  · rw [Env.lookup_append_of_mem hv] at ht
+    obtain ⟨t', ht', ho⟩ := h₁ v t ht
+    exact ⟨t', by rw [Env.lookup_append_of_mem (hdom ▸ hv)]; exact ht', ho⟩
+  · rw [Env.lookup_append_of_not_mem hv] at ht
+    obtain ⟨t', ht', ho⟩ := h₂ v t ht
+    exact ⟨t', by rw [Env.lookup_append_of_not_mem (hdom ▸ hv)]; exact ht', ho⟩
+
+theorem validSubst_mapVals {A C : Database} (hc : A.Recorded C) (hwfA : A.WF) (hwfC : C.WF)
+    (hsig : A.sig = C.sig) (henv : A.env = C.env) {w : Term → Term}
+    (hw : ∀ t ∈ A.terms, w t ∈ C.terms ∧ Owes C t (w t))
+    {p : Pattern} (hof : Pattern.OrderingFree p) {τ : Env} (h : ValidSubst A p τ) :
+    ValidSubst C p (Env.mapVals w τ) := by
+  refine ⟨⟨?_, ?_⟩, ?_⟩
+  · rw [dom_mapVals, ← henv]; exact h.1.1
+  · intro b hb
+    obtain ⟨a, ha, rfl⟩ := mem_mapVals hb
+    exact (hw a.2 (h.1.2 a ha)).1
+  · refine matches_owes hc hwfA hwfC hsig hof ?_ h.2
+    exact envOwes_append (fun v t ht => ⟨t, henv ▸ ht, Owes.refl⟩) (by rw [henv])
+      (envOwes_mapVals hw h.1.2)
+
+theorem forall₂_validSubst {A C : Database} (hc : A.Recorded C) (hwfA : A.WF) (hwfC : C.WF)
+    (hsig : A.sig = C.sig) (henv : A.env = C.env) {w : Term → Term}
+    (hw : ∀ t ∈ A.terms, w t ∈ C.terms ∧ Owes C t (w t)) :
+    ∀ {q : Query} {σs : List Env}, List.Forall₂ (ValidSubst A) q σs →
+      (∀ p ∈ q, Pattern.OrderingFree p) →
+      List.Forall₂ (ValidSubst C) q (σs.map (Env.mapVals w))
+  | _, _, .nil, _ => .nil
+  | p :: ps, τ :: τs, .cons hv hrest, hof =>
+      .cons (validSubst_mapVals hc hwfA hwfC hsig henv hw (hof p (by simp)) hv)
+        (forall₂_validSubst hc hwfA hwfC hsig henv hw hrest fun x hx => hof x (by simp [hx]))
+
+theorem forall₂_vals {A : Database} {q : Query} {σs : List Env}
+    (hall : List.Forall₂ (ValidSubst A) q σs) : ∀ τ ∈ σs, ∀ b ∈ τ, b.2 ∈ A.terms := by
+  induction hall with
+  | nil => simp
+  | @cons p τ ps τs hv _ ih =>
+    intro x hx
+    rcases List.mem_cons.mp hx with rfl | hx'
+    exacts [hv.1.2, ih x hx']
+
+/-- **A rule firing at `A` is matched by one at any `C` that records it — when the rule is
+ordering-free.** -/
+theorem RuleResults.mono_owes {A C : Database} (hc : A.Recorded C) (hwfA : A.WF)
+    (hwfC : C.WF) (hsig : A.sig = C.sig) (henv : A.env = C.env) {r : Rule}
+    (hof : Rule.OrderingFree r) {d : Database} (hd : d ∈ RuleResults A r) :
+    ∃ D ∈ RuleResults C r, d.Recorded D ∧ D.sig = C.sig := by
+  obtain ⟨σ, hq, hstep⟩ := hd
+  obtain ⟨w, hw⟩ := exists_witness hc hwfA
+  obtain ⟨σs, hall, hu⟩ := hq
+  have hvals : ∀ b ∈ σ, b.2 ∈ A.terms := unionAll_vals hu (forall₂_vals hall)
+  have hq' : ValidQuerySubst C r.query (Env.mapVals w σ) :=
+    ⟨σs.map (Env.mapVals w), forall₂_validSubst hc hwfA hwfC hsig henv hw hall hof.1,
+      unionAll_mapVals w hu⟩
+  obtain ⟨dA, hv, rfl⟩ := evalLocalActions_eq_some hstep
+  have hwfCe : Database.WF { C with env := C.env ++ Env.mapVals w σ } :=
+    hwfC.appendEnv fun b hb => by
+      obtain ⟨a, ha, rfl⟩ := mem_mapVals hb
+      exact (hw a.2 (hvals a ha)).1
+  have hfollows : StateOwes { A with env := A.env ++ σ }
+      { C with env := C.env ++ Env.mapVals w σ } :=
+    ⟨hc.setEnv _ _, hsig,
+      (envOwes_append (fun v t ht => ⟨t, henv ▸ ht, Owes.refl⟩) (by rw [henv])
+        (envOwes_mapVals hw hvals)).setEnv⟩
+  obtain ⟨D, hD, hfd⟩ := evalActions_owes hfollows hwfCe hof.2 hv
+  refine ⟨{ D with env := C.env, rules := C.rules },
+    ⟨Env.mapVals w σ, hq', by rw [evalLocalActions, hD, Option.map_some]⟩,
+    hfd.recorded.setEnvRules _ _ _ _, ?_⟩
+  exact (evalActions_sig hD : _ = ({ C with env := C.env ++ Env.mapVals w σ } : Database).sig)
+
+/-- **A round's rule phase transports along `Recorded`.** -/
+theorem RunRules.mono_owes {A C : Database} (hc : A.Recorded C) (hwfA : A.WF) (hwfC : C.WF)
+    (hsig : A.sig = C.sig) (henv : A.env = C.env) (hrules : A.rules = C.rules)
+    (hof : ∀ r ∈ C.rules, Rule.OrderingFree r) : (RunRules A).Recorded (RunRules C) := by
+  have key : ∀ d ∈ {d | ∃ r ∈ A.rules, d ∈ RuleResults A r}, d.Recorded (RunRules C) := by
+    rintro d ⟨r, hr, hdr⟩
+    obtain ⟨D, hD, hcd, -⟩ :=
+      RuleResults.mono_owes hc hwfA hwfC hsig henv (hof r (hrules ▸ hr)) hdr
+    exact hcd.trans_contained (Database.Contained.mem_sUnion ⟨r, hrules ▸ hr, hD⟩)
+  refine ⟨fun p hp => ?_⟩
+  rcases hp with hx | hx
+  · obtain ⟨q, hq, hc₁, hc₂⟩ := (hc.trans_contained (Database.Contained.sUnion C _)).eqs p hx
+    exact ⟨q, hq, hc₁, hc₂⟩
+  · obtain ⟨d, hd, hx'⟩ := Set.mem_iUnion₂.mp hx
+    exact (key d hd).eqs p hx'
+/-- `MergeStep.transport_owes` iterated. The condition is about the signature, which no
+merge step writes, so it survives to every intermediate state. -/
+theorem MergeClosure.transport_owes {A C B : Database} (hc : A.Recorded C) (hwfA : A.WF)
+    (hwfC : C.WF) (hsig : A.sig = C.sig) (hof : Signature.OrderingFree C.sig)
+    (h : MergeClosure A B) : ∃ D, MergeClosure C D ∧ B.Recorded D ∧ B.sig = D.sig := by
+  induction h with
+  | refl => exact ⟨C, Relation.ReflTransGen.refl, hc, hsig⟩
+  | @tail b c hcl hstep ih =>
+    obtain ⟨D, hclD, hcontD, hsigD⟩ := ih
+    obtain ⟨D', hstepD', hcont', hsig'⟩ :=
+      MergeStep.transport_owes hcontD (MergeClosure.wf hwfA hcl) (MergeClosure.wf hwfC hclD)
+        hsigD (by rw [MergeClosure.sig hclD]; exact hof) hstep
+    exact ⟨D', hclD.tail hstepD', hcont', hsig'⟩
+
+end OrderingFree
+
+/-- **A merge collision available at `A` is available at any `C` that *records* it.**
+
+`hcond` is not bookkeeping: **without it the statement is false**, and not merely unproved.
 `Recorded` moves an entry's value columns as well as its key, so the body runs under a
 *congruent* `mergeEnv` on the `C` side, and `ordering-min`/`ordering-max` are not stable
 there: the two runs settle on incongruent parents and the union-find edge one writes is
@@ -3065,42 +3990,41 @@ and one signature: `A` holds `@fView(k) ↦ p` alongside `@fView(k) ↦ r`, `C` 
 re-keyed to the congruent `s`, and with `p < r < s` the step from `A` writes `@UF(r) ↦ p`
 while every step from `C` writes `@UF(s) ↦ s`, `@UF(s) ↦ r` or `@UF(r) ↦ r`. A merge
 asserts no equation, so nothing relates `r` to `p` afterwards either. Adding `C.WF` does
-not rescue it; `hdiag` does, by making `C` a state where `p` and `s` could not have been
-congruent in the first place.
+not rescue it.
 
-Under `hdiag` there is nothing left to prove here: `Database.Recorded.contained_of_diag`
-turns `hc` into a `Database.Contained` and `MergeStep.transport` is the proved transport
-along that. `hw` is no longer needed and is gone.
+Either arm of `hcond` does. Under `C.Diag` there is nothing left to prove:
+`Database.Recorded.contained_of_diag` turns `hc` into a `Database.Contained` and
+`MergeStep.transport` is the proved transport along that — `p` and `s` could not have been
+congruent there in the first place. Under `Signature.OrderingFree` the counterexample is
+excluded at its own primitive, and `MergeStep.transport_owes` is the proof: the moved
+environment is congruent, and ordering-free evaluation respects congruence, so the two runs
+land on congruent results. That the environment moves *before* any body expression runs is
+not an obstruction, since nothing about the moved values is read except through
+`Expr.eval`.
 
-The two consumers — `mergeSaturateF_contained_aux` and `CmdStep.mono_recorded` — discharge
-`hdiag` from `Database.NoUnions`, which is what puts `Program.UnionFree` in
-`execM_contained`'s statement.
-
-There is a second repair, for the record, which restricts no program at all but needs a
-great deal of threading: the interpreter never moves a value column, so what it actually
-maintains is `Recorded` *plus* "every entry of `A` is `Database.Out` in `C` at its own
-value columns" — the clause `mergeRound_contained` already carries for one pass. Under it
-the body runs under the same environment on both sides, `Expr.eval` reading only `sig` and
-`env`, and only the key moves. Carrying that clause through `evalActions`, `RunRules` and
-the whole chain is the work, and it would not help `RuleResults.mono_recorded`, which needs
-a condition on the program either way.
-
-`Database.Recorded.addRow_congr`, which used to supply this, is deleted: it rested on
-`addTerms_eq_self` at a row-shaped `Recorded` that no longer exists. -/
-theorem MergeStep.transport_recorded {A C B : Database} (hc : A.Recorded C)
-    (hsig : A.sig = C.sig) (hdiag : C.Diag) (h : MergeStep A B) :
+`Database.Recorded.addRow_congr`, which used to supply the first arm, is deleted: it rested
+on `addTerms_eq_self` at a row-shaped `Recorded` that no longer exists. -/
+theorem MergeStep.transport_recorded {A C B : Database} (hc : A.Recorded C) (hwfA : A.WF)
+    (hwfC : C.WF) (hsig : A.sig = C.sig)
+    (hcond : C.Diag ∨ Signature.OrderingFree C.sig) (h : MergeStep A B) :
     ∃ D, MergeStep C D ∧ B.Recorded D ∧ B.sig = D.sig := by
-  obtain ⟨D, hstep, hcont, hsig'⟩ := h.transport (hc.contained_of_diag hdiag) hsig
-  exact ⟨D, hstep, .of_contained hcont, hsig'⟩
+  rcases hcond with hdiag | hof
+  · obtain ⟨D, hstep, hcont, hsig'⟩ := h.transport (hc.contained_of_diag hdiag) hsig
+    exact ⟨D, hstep, .of_contained hcont, hsig'⟩
+  · exact MergeStep.transport_owes hc hwfA hwfC hsig hof h
 
-/-- `MergeStep.transport_recorded` iterated — and not by iterating it: `hdiag` is about `C`
-alone, so `MergeClosure.transport` closes the whole closure in one go and no diagonality
-has to be re-established at the intermediate states. -/
-theorem MergeClosure.transport_recorded {A C B : Database} (hc : A.Recorded C)
-    (hsig : A.sig = C.sig) (hdiag : C.Diag) (h : MergeClosure A B) :
+/-- `MergeStep.transport_recorded` iterated. Both arms are about `C` alone — `Diag` because
+`MergeClosure.transport` closes the whole closure in one go, `Signature.OrderingFree`
+because no merge step writes `sig` — so nothing has to be re-established at the intermediate
+states. -/
+theorem MergeClosure.transport_recorded {A C B : Database} (hc : A.Recorded C) (hwfA : A.WF)
+    (hwfC : C.WF) (hsig : A.sig = C.sig)
+    (hcond : C.Diag ∨ Signature.OrderingFree C.sig) (h : MergeClosure A B) :
     ∃ D, MergeClosure C D ∧ B.Recorded D ∧ B.sig = D.sig := by
-  obtain ⟨D, hcl, hcont, hsig'⟩ := h.transport (hc.contained_of_diag hdiag) hsig
-  exact ⟨D, hcl, .of_contained hcont, hsig'⟩
+  rcases hcond with hdiag | hof
+  · obtain ⟨D, hcl, hcont, hsig'⟩ := h.transport (hc.contained_of_diag hdiag) hsig
+    exact ⟨D, hcl, .of_contained hcont, hsig'⟩
+  · exact MergeClosure.transport_owes hc hwfA hwfC hsig hof h
 
 /-! ### Containment for the merge interpreter
 
@@ -3364,25 +4288,27 @@ theorem mergeRound_contained {d : FDatabase} (h : d.Inv)
 /-- `mergeSaturateF_contained`, with the fuel first so the induction can generalize the
 database.
 
-`hufree` and `hdiag` are `MergeClosure.transport_recorded`'s premise, pulled back one step:
-the witness `db₁` this re-bases onto is reached from `d.toDatabase` by a merge closure, so
-it is diagonal as soon as `d.toDatabase` is and the merge bodies assert nothing. They also
-carry themselves across a round — `mergeRound_confined` pins `sig`, and the round's own
-`Recorded` conclusion pushes diagonality back down onto the interpreter's state. -/
+`hcond` is `MergeClosure.transport_recorded`'s premise, pulled back one step. Its first arm
+needs both halves: the witness `db₁` this re-bases onto is reached from `d.toDatabase` by a
+merge closure, so it is diagonal as soon as `d.toDatabase` is *and* the merge bodies assert
+nothing. Its second arm needs only the signature, which no round writes. Either carries
+itself across a round — `mergeRound_confined` pins `sig`, and the round's own `Recorded`
+conclusion pushes diagonality back down onto the interpreter's state. -/
 theorem mergeSaturateF_contained_aux {n : Nat} : ∀ {d e : FDatabase}, d.Inv →
-    Signature.MergesLegal d.sig → Signature.UnionFree d.sig → d.toDatabase.Diag →
+    Signature.MergesLegal d.sig →
+    ((Signature.UnionFree d.sig ∧ d.toDatabase.Diag) ∨ Signature.OrderingFree d.sig) →
     d.mergeSaturateF n = some e →
     ∃ db, MergeClosure d.toDatabase db ∧ e.toDatabase.Recorded db := by
   induction n with
   | zero =>
-    intro d e h _ _ _ hs
+    intro d e h _ _ hs
     rw [FDatabase.mergeSaturateF] at hs
     split at hs
     · rw [Option.some.injEq] at hs
       exact ⟨d.toDatabase, .refl, hs ▸ Database.Recorded.refl⟩
     · exact absurd hs (by simp)
   | succ n ih =>
-    intro d e h hlegal hufree hdiag hs
+    intro d e h hlegal hcond hs
     rw [FDatabase.mergeSaturateF] at hs
     split at hs
     · rw [Option.some.injEq] at hs
@@ -3391,15 +4317,25 @@ theorem mergeSaturateF_contained_aux {n : Nat} : ∀ {d e : FDatabase}, d.Inv �
       have hlegal' : Signature.MergesLegal d.mergeRound.sig := by rw [hsigR]; exact hlegal
       have hround : d.mergeRound.Inv := h.mergeRound_of_legalMerges hlegal
       obtain ⟨db₁, hcl₁, hcont₁⟩ := mergeRound_contained h hlegal
-      have hdiag₁ : db₁.Diag := MergeClosure.diag hufree hdiag hcl₁
-      obtain ⟨db₂, hcl₂, hcont₂⟩ := ih hround hlegal' (by rw [hsigR]; exact hufree)
-        (Database.Diag.mono (hcont₁.contained_of_diag hdiag₁) hdiag₁) hs
       have hsig₁ : d.mergeRound.toDatabase.sig = db₁.sig := by
         change d.mergeRound.sig = db₁.sig
         rw [hsigR]
         exact (MergeClosure.sig hcl₁).symm
+      have hcond₁ : db₁.Diag ∨ Signature.OrderingFree db₁.sig := by
+        rcases hcond with ⟨hufree, hdiag⟩ | hof
+        · exact Or.inl (MergeClosure.diag hufree hdiag hcl₁)
+        · exact Or.inr (by rw [MergeClosure.sig hcl₁]; exact hof)
+      have hnext : (Signature.UnionFree d.mergeRound.sig ∧ d.mergeRound.toDatabase.Diag) ∨
+          Signature.OrderingFree d.mergeRound.sig := by
+        rcases hcond with ⟨hufree, hdiag⟩ | hof
+        · refine Or.inl ⟨by rw [hsigR]; exact hufree, ?_⟩
+          have hdiag₁ : db₁.Diag := MergeClosure.diag hufree hdiag hcl₁
+          exact Database.Diag.mono (hcont₁.contained_of_diag hdiag₁) hdiag₁
+        · exact Or.inr (by rw [hsigR]; exact hof)
+      obtain ⟨db₂, hcl₂, hcont₂⟩ := ih hround hlegal' hnext hs
       obtain ⟨db₃, hcl₃, hcont₃, hsig₃⟩ :=
-        MergeClosure.transport_recorded hcont₁ hsig₁ hdiag₁ hcl₂
+        MergeClosure.transport_recorded hcont₁ hround.wf (MergeClosure.wf h.wf hcl₁) hsig₁
+          hcond₁ hcl₂
       exact ⟨db₃, hcl₁.trans hcl₃, hcont₂.trans hcont₃ (MergeClosure.wf hround.wf hcl₂)
         (MergeClosure.wf (MergeClosure.wf h.wf hcl₁) hcl₃)⟩
 
@@ -3407,13 +4343,13 @@ theorem mergeSaturateF_contained_aux {n : Nat} : ∀ {d e : FDatabase}, d.Inv �
 
 `mergeRound_contained` once per round, with `MergeClosure.transport_recorded` re-basing the
 tail's closure onto the head's witness. `mergeRound_confined` is what keeps `hlegal` and
-`hufree` applicable at the next round: a pass does not touch `sig`. -/
+`hcond` applicable at the next round: a pass does not touch `sig`. -/
 theorem mergeSaturateF_contained {d e : FDatabase} (h : d.Inv)
-    (hlegal : Signature.MergesLegal d.sig) (hufree : Signature.UnionFree d.sig)
-    (hdiag : d.toDatabase.Diag)
-    {n : Nat} (hs : d.mergeSaturateF n = some e) :
+    (hlegal : Signature.MergesLegal d.sig)
+    (hcond : (Signature.UnionFree d.sig ∧ d.toDatabase.Diag) ∨ Signature.OrderingFree d.sig)
+    (hs : d.mergeSaturateF mergeFuel = some e) :
     ∃ db, MergeClosure d.toDatabase db ∧ e.toDatabase.Recorded db :=
-  mergeSaturateF_contained_aux h hlegal hufree hdiag hs
+  mergeSaturateF_contained_aux h hlegal hcond hs
 
 /-- **A round's rule firings stay inside `RunRules`.**
 
@@ -3520,7 +4456,8 @@ interpreter's, and without it this statement is false. -/
 theorem execCmdM_action_contained {d e : FDatabase} (h : d.Inv) {a : Action}
     (halegal : a.WriteLegal d.sig)
     (hlegal : Signature.MergesLegal d.sig)
-    (hufree : Signature.UnionFree d.sig) (hdiag : d.toDatabase.Diag) (hau : a.UnionFree)
+    (hcond : (Signature.UnionFree d.sig ∧ d.toDatabase.Diag ∧ a.UnionFree) ∨
+      Signature.OrderingFree d.sig)
     (hs : d.execCmdM (.action a) = some e) :
     ∃ d₁ db, evalAction d.toDatabase a = some d₁ ∧ MergeClosure d₁ db ∧
       e.toDatabase.Recorded db := by
@@ -3531,8 +4468,10 @@ theorem execCmdM_action_contained {d e : FDatabase} (h : d.Inv) {a : Action}
   have heval : evalAction d.toDatabase a = some d₁.toDatabase :=
     FDatabase.execAction_evalAction h.eqs hd₁
   obtain ⟨db, hcl, hcont⟩ :=
-    mergeSaturateF_contained (h.execAction halegal hd₁) hlegal₁ (by rw [hsig₁]; exact hufree)
-      (evalAction_diag hau hdiag heval) hsat
+    mergeSaturateF_contained (h.execAction halegal hd₁) hlegal₁ (by
+      rcases hcond with ⟨hufree, hdiag, hau⟩ | hof
+      · exact Or.inl ⟨by rw [hsig₁]; exact hufree, evalAction_diag hau hdiag heval⟩
+      · exact Or.inr (by rw [hsig₁]; exact hof)) hsat
   exact ⟨d₁.toDatabase, db, heval, hcl, hcont⟩
 
 end FDatabase
@@ -3606,6 +4545,50 @@ theorem CmdStep.noUnions {A B : Database} (hn : A.NoUnions) {c : Cmd} (hu : c.Un
   exact ⟨MergeClosure.diag hE.sig hE.diag hcl,
     by rw [MergeClosure.sig hcl]; exact hE.sig,
     by rw [(MergeClosure.envRules hcl).2]; exact hE.rules⟩
+
+/-- **One command preserves ordering-freedom, both clauses.** `.decl` is the only case that
+moves `sig` and `.rule` the only one that moves `rules`; the merge phase every command ends
+with moves neither, and a top-level action moves neither either. -/
+theorem cmdEffect_noOrdering {A e : Database} (hn : A.NoOrdering) {c : Cmd}
+    (hu : c.OrderingFree) (heff : cmdEffect A c = some e) : e.NoOrdering := by
+  cases c with
+  | action a =>
+    exact ⟨by rw [evalAction_sig heff]; exact hn.sig,
+      by rw [evalAction_rules heff]; exact hn.rules⟩
+  | rule r =>
+    rw [cmdEffect, Option.some.injEq] at heff
+    subst heff
+    refine ⟨hn.sig, fun r' hr' => ?_⟩
+    rcases hr' with rfl | hr'
+    exacts [hu, hn.rules r' hr']
+  | run =>
+    rw [cmdEffect, Option.some.injEq] at heff
+    subst heff
+    exact ⟨hn.sig, hn.rules⟩
+  | decl f dc =>
+    rw [cmdEffect, Option.some.injEq] at heff
+    subst heff
+    refine ⟨fun g dc' hg => ?_, hn.rules⟩
+    have hg' : Function.update A.sig f (some dc) g = some dc' := hg
+    by_cases hgf : g = f
+    · rw [hgf, Function.update_self, Option.some.injEq] at hg'
+      exact hg' ▸ hu
+    · rw [Function.update_of_ne hgf] at hg'
+      exact hn.sig g dc' hg'
+
+theorem CmdStep.noOrdering {A B : Database} (hn : A.NoOrdering) {c : Cmd}
+    (hu : c.OrderingFree) (h : CmdStep A c B) : B.NoOrdering := by
+  obtain ⟨e, heff, hcl⟩ := h
+  have hE : e.NoOrdering := cmdEffect_noOrdering hn hu heff
+  exact ⟨by rw [MergeClosure.sig hcl]; exact hE.sig,
+    by rw [(MergeClosure.envRules hcl).2]; exact hE.rules⟩
+
+/-- What the interpreter's own state inherits: it agrees with a witness that is
+ordering-free in the two fields the condition reads. -/
+theorem Database.NoOrdering.of_eq {A C : Database} (hn : C.NoOrdering) (hsig : A.sig = C.sig)
+    (hrules : A.rules = C.rules) : A.NoOrdering where
+  sig := by rw [hsig]; exact hn.sig
+  rules := by rw [hrules]; exact hn.rules
 
 /-- **A firing available at `A` is available at any `C` containing it.**
 `ValidQuerySubst.mono` finds the same match and `evalActions_mono` re-runs the
@@ -3700,73 +4683,146 @@ theorem ProgramStep.mono {A C B : Database} (hc : A.Contained C) (hsig : A.sig =
 
 /-! #### The same, along `Recorded`
 
-The re-keying contract needs the transport lemmas again, and **`hdiag` is what makes them
+The re-keying contract needs the transport lemmas again, and **`hcond` is what makes them
 true**. `ValidSubst.mono_recorded` is **deleted** — see the heading above `ValidEnv.mono`,
-it is false — so `RuleResults.mono_recorded` cannot be proved by transporting the same
-substitution at an arbitrary recorder; `MergeStep.transport_recorded` is false at an
-arbitrary recorder too, for the reason its own docstring gives. On a **diagonal** `C` both
-obstructions vanish at once, because there is nothing congruent but equal:
-`Database.Recorded.contained_of_diag` turns the hypothesis into a `Database.Contained` and
-the four `mono`/`transport` lemmas above are the proofs. `Database.Recorded.trans`, which
-used to be a third open obligation, is proved from `Conservativity` under two `WF`
-premises.
+it is false — so these cannot be proved by transporting the same substitution at an
+arbitrary recorder; `MergeStep.transport_recorded` is false at an arbitrary recorder too,
+for the reason its own docstring gives.
 
-Each lemma below therefore keeps its old statement plus `hdiag`, and loses whatever
-premise only the old proof route needed — `A.WF` in the last two. -/
+Two conditions repair them, and each closes both. On a **diagonal** `C` there is nothing
+congruent but equal, so `Database.Recorded.contained_of_diag` turns the hypothesis into a
+`Database.Contained` and the four `mono`/`transport` lemmas above are the proofs. Under
+**ordering-freedom** the substitution is moved by a single witness function and the head
+re-run under it: `RuleResults.mono_owes` and `MergeStep.transport_owes` are the proofs, and
+`union` is not restricted at all.
 
-/-- `RuleResults.mono` along `Recorded`, on a diagonal `C`.
+`Database.Recorded.trans`, which used to be a third open obligation, is proved from
+`Conservativity` under two `WF` premises. The two `WF` premises the lemmas below now carry
+are the ordering-free arm's: `Owes` is a statement about the *subterms* of a value, and
+both `Database.WF.subtermClosed` and `Database.WF.eqsRefl` are read to establish it. -/
 
-`hdiag` is not bookkeeping: without it this is **not provable**, and the obstruction is
+/-- `RuleResults.mono` along `Recorded`.
+
+`hcond` is not bookkeeping: without it this is **not provable**, and the obstruction is
 double. `ValidQuerySubst.mono_recorded` is false at the same `σ`, so the substitution the
-firing runs under would have to be replaced by a congruent one — chosen once for the whole
-query, because `Env.UnionAll` makes the per-pattern choices agree — and then the head
-re-run under it; and `Expr.eval` is not congruence-stable at `ordering-min`/`ordering-max`,
-so "a congruent environment gives a recording result" is itself **false** with
-`ordering-max` in the action. Restricting the rule's actions to ordering-free expressions
-is the other repair, and it is a genuinely different one: it closes this lemma and does
-**not** close `MergeStep.transport_recorded`, whose environment moves before any expression
-is evaluated.
+firing runs under has to be replaced by a congruent one — chosen once for the whole query,
+because `Env.UnionAll` makes the per-pattern choices agree — and then the head re-run under
+it; and `Expr.eval` is not congruence-stable at `ordering-min`/`ordering-max`, so "a
+congruent environment gives a recording result" is itself **false** with `ordering-max` in
+the rule. `Rule.OrderingFree` is exactly what closes the second gap, and `Env.mapVals` over
+the witness of `exists_witness` closes the first.
 
 The general form is what the consumer needs — `RunRules.mono_recorded` transports every
 member of `RuleResults A r`, at a `Recorded` reaching back to `execProgramM_contained_aux`
 — so this cannot be narrowed to a special case. -/
-theorem RuleResults.mono_recorded {A C : Database} (hc : A.Recorded C) (hsig : A.sig = C.sig)
-    (henv : A.env = C.env) (hdiag : C.Diag) {r : Rule} {d : Database}
-    (hd : d ∈ RuleResults A r) :
+theorem RuleResults.mono_recorded {A C : Database} (hc : A.Recorded C) (hwfA : A.WF)
+    (hwfC : C.WF) (hsig : A.sig = C.sig) (henv : A.env = C.env) {r : Rule}
+    (hcond : C.Diag ∨ Rule.OrderingFree r) {d : Database} (hd : d ∈ RuleResults A r) :
     ∃ D ∈ RuleResults C r, d.Recorded D ∧ D.sig = C.sig := by
-  obtain ⟨D, hD, hcont⟩ := RuleResults.mono (hc.contained_of_diag hdiag) hsig henv hd
-  obtain ⟨σ, hq, hσ⟩ := hD
-  exact ⟨D, ⟨σ, hq, hσ⟩, .of_contained hcont, evalLocalActions_sig hσ⟩
+  rcases hcond with hdiag | hof
+  · obtain ⟨D, hD, hcont⟩ := RuleResults.mono (hc.contained_of_diag hdiag) hsig henv hd
+    obtain ⟨σ, hq, hσ⟩ := hD
+    exact ⟨D, ⟨σ, hq, hσ⟩, .of_contained hcont, evalLocalActions_sig hσ⟩
+  · exact RuleResults.mono_owes hc hwfA hwfC hsig henv hof hd
 
-/-- `RunRules.mono` along `Recorded`, on a diagonal `C`. -/
-theorem RunRules.mono_recorded {A C : Database} (hc : A.Recorded C) (hsig : A.sig = C.sig)
-    (henv : A.env = C.env) (hrules : A.rules = C.rules) (hdiag : C.Diag) :
-    (RunRules A).Recorded (RunRules C) :=
-  .of_contained (RunRules.mono (hc.contained_of_diag hdiag) hsig henv hrules)
+/-- `RunRules.mono` along `Recorded`. -/
+theorem RunRules.mono_recorded {A C : Database} (hc : A.Recorded C) (hwfA : A.WF)
+    (hwfC : C.WF) (hsig : A.sig = C.sig) (henv : A.env = C.env) (hrules : A.rules = C.rules)
+    (hcond : C.Diag ∨ ∀ r ∈ C.rules, Rule.OrderingFree r) :
+    (RunRules A).Recorded (RunRules C) := by
+  rcases hcond with hdiag | hof
+  · exact .of_contained (RunRules.mono (hc.contained_of_diag hdiag) hsig henv hrules)
+  · exact RunRules.mono_owes hc hwfA hwfC hsig henv hrules hof
 
-/-- `CmdStep.mono` along `Recorded`, on a diagonal `C`. `A.WF` is gone: it paid for the
-`Recorded`-specific route through `MergeClosure.transport_recorded`, and the
-`Contained` route needs nothing of `A`. -/
-theorem CmdStep.mono_recorded {A C B : Database} (hc : A.Recorded C) (hsig : A.sig = C.sig)
-    (henv : A.env = C.env) (hrules : A.rules = C.rules) (hdiag : C.Diag) {c : Cmd}
-    (h : CmdStep A c B) :
+/-- `CmdStep.mono` along `Recorded`. The four cases are `evalAction_mono_recorded`, which
+needs no condition because the two environments are equal there, nothing,
+`RunRules.mono_recorded`, and nothing; `MergeClosure.transport_recorded` re-bases the merge
+phase in all four. -/
+theorem CmdStep.mono_recorded {A C B : Database} (hc : A.Recorded C) (hwfA : A.WF)
+    (hwfC : C.WF) (hsig : A.sig = C.sig) (henv : A.env = C.env) (hrules : A.rules = C.rules)
+    {c : Cmd} (hcond : C.Diag ∨ (C.NoOrdering ∧ c.OrderingFree)) (h : CmdStep A c B) :
     ∃ D, CmdStep C c D ∧ B.Recorded D ∧ B.sig = D.sig ∧ B.env = D.env ∧
       B.rules = D.rules := by
-  obtain ⟨D, hstep, hcont, hs, he, hr⟩ :=
-    h.mono (hc.contained_of_diag hdiag) hsig henv hrules
-  exact ⟨D, hstep, .of_contained hcont, hs, he, hr⟩
+  rcases hcond with hdiag | ⟨hno, hcof⟩
+  · obtain ⟨D, hstep, hcont, hs, he, hr⟩ :=
+      h.mono (hc.contained_of_diag hdiag) hsig henv hrules
+    exact ⟨D, hstep, .of_contained hcont, hs, he, hr⟩
+  obtain ⟨e, heff, hcl⟩ := h
+  have key : ∃ E, cmdEffect C c = some E ∧ e.Recorded E ∧ e.sig = E.sig ∧ e.env = E.env ∧
+      e.rules = E.rules ∧ E.WF ∧ e.WF := by
+    have hwfe : e.WF := cmdEffect_wf hwfA heff
+    cases c with
+    | action a =>
+      obtain ⟨E, hE, hcont, hs, he⟩ := evalAction_mono_recorded hc hsig henv heff
+      exact ⟨E, hE, hcont, hs, he,
+        by rw [evalAction_rules heff, evalAction_rules hE, hrules],
+        evalAction_wf hwfC hE, hwfe⟩
+    | rule r =>
+      rw [cmdEffect, Option.some.injEq] at heff
+      subst heff
+      exact ⟨_, rfl, hc.setEnvRules _ _ _ _, hsig, henv, by
+        change insert r A.rules = insert r C.rules
+        rw [hrules], hwfC.congr rfl rfl, hwfe⟩
+    | run =>
+      rw [cmdEffect, Option.some.injEq] at heff
+      subst heff
+      refine ⟨_, rfl, RunRules.mono_recorded hc hwfA hwfC hsig henv hrules (Or.inr hno.rules),
+        ?_, ?_, ?_, RunRules.wf hwfC, hwfe⟩
+      · show (RunRules A).sig = (RunRules C).sig
+        simp only [RunRules, Database.sUnion_sig]; exact hsig
+      · show (RunRules A).env = (RunRules C).env
+        simp only [RunRules, Database.sUnion_env]; exact henv
+      · show (RunRules A).rules = (RunRules C).rules
+        simp only [RunRules, Database.sUnion_rules]; exact hrules
+    | decl f dc =>
+      rw [cmdEffect, Option.some.injEq] at heff
+      subst heff
+      refine ⟨_, rfl, ⟨fun p hp => ?_⟩, ?_, henv, hrules, hwfC.congr rfl rfl, hwfe⟩
+      · obtain ⟨q, hq, hc₁, hc₂⟩ := hc.eqs p hp
+        exact ⟨q, hq, congOn_setSig hc₁, congOn_setSig hc₂⟩
+      · change Function.update A.sig f (some dc) = Function.update C.sig f (some dc)
+        rw [hsig]
+  obtain ⟨E, hE, hcont, hs, he, hr, hwfE, hwfe⟩ := key
+  obtain ⟨D, hclD, hcontD, hsigD⟩ :=
+    MergeClosure.transport_recorded hcont hwfe hwfE hs
+      (Or.inr (cmdEffect_noOrdering hno hcof hE).sig) hcl
+  exact ⟨D, ⟨E, hE, hclD⟩, hcontD, hsigD,
+    by rw [(MergeClosure.envRules hcl).1, (MergeClosure.envRules hclD).1, he],
+    by rw [(MergeClosure.envRules hcl).2, (MergeClosure.envRules hclD).2, hr]⟩
 
-/-- `ProgramStep.mono` along `Recorded`, on a diagonal `C`. The induction is
-`ProgramStep.mono`'s: `hdiag` is about `C` alone, so no diagonality has to be
-re-established at the intermediate witnesses. -/
-theorem ProgramStep.mono_recorded {A C B : Database} (hc : A.Recorded C)
-    (hsig : A.sig = C.sig) (henv : A.env = C.env) (hrules : A.rules = C.rules)
-    (hdiag : C.Diag) {p : Program} (h : ProgramStep A p B) :
+/-- `CmdStep.mono_recorded` iterated, under ordering-freedom. The condition is
+re-established per command by `CmdStep.noOrdering`, which is why the program's own
+condition appears; the `Database.WF`s are re-established by `CmdStep.wf`. -/
+theorem ProgramStep.mono_owes {A B : Database} {p : Program} (h : ProgramStep A p B) :
+    ∀ {C : Database}, A.WF → C.WF → A.Recorded C → A.sig = C.sig → A.env = C.env →
+      A.rules = C.rules → C.NoOrdering → p.OrderingFree →
+      ∃ D, ProgramStep C p D ∧ B.Recorded D ∧ B.sig = D.sig ∧ B.env = D.env ∧
+        B.rules = D.rules := by
+  induction h with
+  | nil => exact fun _ _ hc hsig henv hrules _ _ => ⟨_, .nil, hc, hsig, henv, hrules⟩
+  | @cons A e B c cs hcmd _ ih =>
+    intro C hwfA hwfC hc hsig henv hrules hno hof
+    obtain ⟨D₀, hD₀, hc₀, hs₀, he₀, hr₀⟩ :=
+      hcmd.mono_recorded hc hwfA hwfC hsig henv hrules (Or.inr ⟨hno, hof.1⟩)
+    obtain ⟨D₁, hD₁, hc₁, hs₁, he₁, hr₁⟩ :=
+      ih (CmdStep.wf hwfA hcmd) (CmdStep.wf hwfC hD₀) hc₀ hs₀ he₀ hr₀
+        (CmdStep.noOrdering hno hof.1 hD₀) hof.2
+    exact ⟨D₁, .cons hD₀ hD₁, hc₁, hs₁, he₁, hr₁⟩
+
+/-- `ProgramStep.mono` along `Recorded`. In the diagonal arm `hcond` is about `C` alone, so
+nothing has to be re-established at the intermediate witnesses; in the ordering-free arm
+`ProgramStep.mono_owes` re-establishes it per command. -/
+theorem ProgramStep.mono_recorded {A C B : Database} (hc : A.Recorded C) (hwfA : A.WF)
+    (hwfC : C.WF) (hsig : A.sig = C.sig) (henv : A.env = C.env) (hrules : A.rules = C.rules)
+    {p : Program} (hcond : C.Diag ∨ (C.NoOrdering ∧ p.OrderingFree))
+    (h : ProgramStep A p B) :
     ∃ D, ProgramStep C p D ∧ B.Recorded D ∧ B.sig = D.sig ∧ B.env = D.env ∧
       B.rules = D.rules := by
-  obtain ⟨D, hstep, hcont, hs, he, hr⟩ :=
-    h.mono (hc.contained_of_diag hdiag) hsig henv hrules
-  exact ⟨D, hstep, .of_contained hcont, hs, he, hr⟩
+  rcases hcond with hdiag | ⟨hno, hof⟩
+  · obtain ⟨D, hstep, hcont, hs, he, hr⟩ :=
+      h.mono (hc.contained_of_diag hdiag) hsig henv hrules
+    exact ⟨D, hstep, .of_contained hcont, hs, he, hr⟩
+  · exact h.mono_owes hwfA hwfC hc hsig henv hrules hno hof
 
 /-! #### Declaring a fresh name
 
@@ -4309,7 +5365,8 @@ from the witness the head produced. -/
 theorem execCmdM_contained' {d d' : FDatabase} (h : d.Inv) {c : Cmd}
     (hlegal : c.WriteLegal d.sig) (hmerges : Signature.MergesLegal d.sig)
     (hrules : ∀ r ∈ d.rules, Actions.WriteLegal r.actions d.sig)
-    (hnu : d.toDatabase.NoUnions) (hcu : c.UnionFree)
+    (hcond : (d.toDatabase.NoUnions ∧ c.UnionFree) ∨
+      (d.toDatabase.NoOrdering ∧ c.OrderingFree))
     (hs : d.execCmdM c = some d') :
     ∃ db, CmdStep d.toDatabase c db ∧ d'.toDatabase.Recorded db ∧
       d'.toDatabase.sig = db.sig ∧ d'.toDatabase.env = db.env ∧
@@ -4323,9 +5380,11 @@ theorem execCmdM_contained' {d d' : FDatabase} (h : d.Inv) {c : Cmd}
     have heval : evalAction d.toDatabase a = some d₁.toDatabase :=
       FDatabase.execAction_evalAction h.eqs hd₁
     obtain ⟨db, hcl, hcont⟩ :=
-      mergeSaturateF_contained (h.execAction hlegal hd₁) hmerges₁
-        (by rw [execAction_sig hd₁]; exact hnu.sig)
-        (evalAction_diag hcu hnu.diag heval) hsat
+      mergeSaturateF_contained (h.execAction hlegal hd₁) hmerges₁ (by
+        rcases hcond with ⟨hnu, hcu⟩ | ⟨hno, hcof⟩
+        · exact Or.inl ⟨by rw [execAction_sig hd₁]; exact hnu.sig,
+            evalAction_diag hcu hnu.diag heval⟩
+        · exact Or.inr (by rw [execAction_sig hd₁]; exact hno.sig)) hsat
     refine ⟨db, ⟨d₁.toDatabase, heval, hcl⟩, hcont,
       ?_, ?_, ?_⟩
     · change d'.sig = db.sig
@@ -4353,9 +5412,11 @@ theorem execCmdM_contained' {d d' : FDatabase} (h : d.Inv) {c : Cmd}
     have hmerges₁ : Signature.MergesLegal (execRunRules d).sig := by
       rw [execRunRules_fields.1]; exact hmerges
     obtain ⟨db₂, hcl₂, hcont₂⟩ :=
-      mergeSaturateF_contained (h.execRunRules hrules) hmerges₁
-        (by rw [execRunRules_fields.1]; exact hnu.sig)
-        (Database.Diag.mono hRcont (RunRules.diag hnu)) hs
+      mergeSaturateF_contained (h.execRunRules hrules) hmerges₁ (by
+        rcases hcond with ⟨hnu, -⟩ | ⟨hno, -⟩
+        · exact Or.inl ⟨by rw [execRunRules_fields.1]; exact hnu.sig,
+            Database.Diag.mono hRcont (RunRules.diag hnu)⟩
+        · exact Or.inr (by rw [execRunRules_fields.1]; exact hno.sig)) hs
     obtain ⟨db₃, hcl₃, hcont₃, hsig₃⟩ :=
       MergeClosure.transport hRcont (by
         change (execRunRules d).sig = (RunRules d.toDatabase).sig
@@ -4404,11 +5465,12 @@ re-keying has to be matched at a *congruent* key. -/
 theorem execCmdM_contained {d d' : FDatabase} (h : d.Inv) {c : Cmd}
     (hlegal : c.WriteLegal d.sig) (hmerges : Signature.MergesLegal d.sig)
     (hrules : ∀ r ∈ d.rules, Actions.WriteLegal r.actions d.sig)
-    (hnu : d.toDatabase.NoUnions) (hcu : c.UnionFree)
+    (hcond : (d.toDatabase.NoUnions ∧ c.UnionFree) ∨
+      (d.toDatabase.NoOrdering ∧ c.OrderingFree))
     (hs : d.execCmdM c = some d') :
     ∃ db, CmdStep d.toDatabase c db ∧ d'.toDatabase.Recorded db := by
   obtain ⟨db, hstep, hcont, -, -, -⟩ :=
-    execCmdM_contained' h hlegal hmerges hrules hnu hcu hs
+    execCmdM_contained' h hlegal hmerges hrules hcond hs
   exact ⟨db, hstep, hcont⟩
 
 /-- `execProgramM_contained`, with the program first so the induction can generalize the
@@ -4421,31 +5483,39 @@ why no union-freedom lemma about the interpreter is needed anywhere. -/
 theorem execProgramM_contained_aux {p : Program} : ∀ {d d' : FDatabase}, d.Inv →
     Signature.MergesLegal d.sig →
     (∀ r ∈ d.rules, Actions.WriteLegal r.actions d.sig) →
-    d.toDatabase.NoUnions → p.UnionFree →
+    ((d.toDatabase.NoUnions ∧ p.UnionFree) ∨ (d.toDatabase.NoOrdering ∧ p.OrderingFree)) →
     d.ProgramLegal p → d.execProgramM p = some d' →
     ∃ db, ProgramStep d.toDatabase p db ∧ d'.toDatabase.Recorded db := by
   induction p with
   | nil =>
-    intro d d' hinv _ _ _ _ _ hs
+    intro d d' hinv _ _ _ _ hs
     rw [FDatabase.execProgramM, Option.some.injEq] at hs
     exact ⟨d.toDatabase, .nil, hs ▸ Database.Recorded.refl⟩
   | cons c cs ih =>
-    intro d d' h hmerges hrules hnu hcu hp hs
+    intro d d' h hmerges hrules hcond hp hs
     rw [FDatabase.execProgramM] at hs
     obtain ⟨d₁, hd₁, hcs⟩ := Option.bind_eq_some_iff.mp hs
     rw [FDatabase.ProgramLegal] at hp
     obtain ⟨hlegal, hunused, hmerges', hnext⟩ := hp
     obtain ⟨db₁, hstep₁, hcont₁, hsig₁, henv₁, hrules₁⟩ :=
-      execCmdM_contained' h hlegal hmerges hrules hnu hcu.1 hd₁
+      execCmdM_contained' h hlegal hmerges hrules
+        (hcond.imp (fun hu => ⟨hu.1, hu.2.1⟩) fun ho => ⟨ho.1, ho.2.1⟩) hd₁
     have hinv₁ : d₁.Inv := h.execCmdM hlegal hmerges hunused hrules hd₁
-    have hnu₁ : d₁.toDatabase.NoUnions :=
-      (CmdStep.noUnions hnu hcu.1 hstep₁).of_recorded hcont₁ hsig₁ hrules₁
+    -- the condition at the interpreter's next state, and at the specification's witness
+    have hnext₁ : ((d₁.toDatabase.NoUnions ∧ Program.UnionFree cs) ∨
+        (d₁.toDatabase.NoOrdering ∧ Program.OrderingFree cs)) ∧
+        (db₁.Diag ∨ (db₁.NoOrdering ∧ Program.OrderingFree cs)) := by
+      rcases hcond with ⟨hnu, hcu⟩ | ⟨hno, hcof⟩
+      · have hnu₁ := CmdStep.noUnions hnu hcu.1 hstep₁
+        exact ⟨Or.inl ⟨hnu₁.of_recorded hcont₁ hsig₁ hrules₁, hcu.2⟩, Or.inl hnu₁.diag⟩
+      · have hno₁ := CmdStep.noOrdering hno hcof.1 hstep₁
+        exact ⟨Or.inr ⟨hno₁.of_eq hsig₁ hrules₁, hcof.2⟩, Or.inr ⟨hno₁, hcof.2⟩⟩
     obtain ⟨db₂, hstep₂, hcont₂⟩ :=
       ih hinv₁ (by rw [execCmdM_sig hd₁]; exact hmerges')
-        (execCmdM_rulesLegal hlegal hunused hrules hd₁) hnu₁ hcu.2 (hnext d₁ hd₁) hcs
+        (execCmdM_rulesLegal hlegal hunused hrules hd₁) hnext₁.1 (hnext d₁ hd₁) hcs
     obtain ⟨db₃, hstep₃, hcont₃, hsig₃, -, -⟩ :=
-      ProgramStep.mono_recorded hcont₁ hsig₁ henv₁ hrules₁
-        (CmdStep.noUnions hnu hcu.1 hstep₁).diag hstep₂
+      ProgramStep.mono_recorded hcont₁ hinv₁.wf (CmdStep.wf h.wf hstep₁) hsig₁ henv₁ hrules₁
+        hnext₁.2 hstep₂
     exact ⟨db₃, .cons hstep₁ hstep₃, hcont₂.trans hcont₃ (hstep₂.wf hinv₁.wf)
       (hstep₃.wf (CmdStep.wf h.wf hstep₁))⟩
 
@@ -4463,47 +5533,64 @@ something the state does not yet mention, which is what egglog's front end requi
 anyway. It does not restrict which `:merge` functions a program may declare, so the
 merge fragment is not excluded.
 
-`hnu` and `hufree` are the union-freedom side condition; see the section "Union-freedom,
-and where it puts `Recorded`". They *do* restrict which programs are covered, and they are
-the price of the re-keying contract: without them the two `Recorded` transports the
-induction runs on are false. -/
+`hcond` is the side condition, in either of its two arms; see the sections
+"Union-freedom, and where it puts `Recorded`" and "Ordering-freedom, and where it puts
+`Recorded`". It *does* restrict which programs are covered, and it is the price of the
+re-keying contract: without it the two `Recorded` transports the induction runs on are
+false. -/
 theorem execProgramM_contained {d d' : FDatabase} (h : d.Inv) {p : Program}
     (hmerges : Signature.MergesLegal d.sig)
     (hrules : ∀ r ∈ d.rules, Actions.WriteLegal r.actions d.sig)
-    (hnu : d.toDatabase.NoUnions) (hufree : p.UnionFree)
+    (hcond : (d.toDatabase.NoUnions ∧ p.UnionFree) ∨
+      (d.toDatabase.NoOrdering ∧ p.OrderingFree))
     (hp : d.ProgramLegal p) (hs : d.execProgramM p = some d') :
     ∃ db, ProgramStep d.toDatabase p db ∧ d'.toDatabase.Recorded db :=
-  execProgramM_contained_aux h hmerges hrules hnu hufree hp hs
+  execProgramM_contained_aux h hmerges hrules hcond hp hs
 
 end FDatabase
 
 /-- **The contract for `execM`.** `execProgramM_contained` from `FDatabase.empty`, whose
 three global side conditions discharge themselves: the empty signature declares no merge
-body, the empty state has no rules, and it asserts no equation. `hp` and `hufree` are what
-remain, and `FDatabase.ProgramLegal` is stated so that a front end which declares before
-use and type-checks its merge bodies satisfies it.
+body, the empty state has no rules, and it asserts no equation. `hp` and `hcond` are what
+remain, and `FDatabase.ProgramLegal` is stated so that a front end which declares before use
+and type-checks its merge bodies satisfies it.
 
-`hufree` — **the program emits no `Action.union`, in a command, a rule head or a `:merge`
-body** — is the legality condition the two `Recorded` transports need, and it is not
-removable: both are false without it, `MergeStep.transport_recorded` refutably so. A
-union-free program keeps every state it reaches diagonal, and there `Database.Recorded` and
+`hcond` — **the program is union-free, or ordering-free** — is the legality condition the
+two `Recorded` transports need, and it is not removable: both are false without it,
+`MergeStep.transport_recorded` refutably so. The two arms buy it differently.
+
+*Union-free* — the program emits no `Action.union`, in a command, a rule head or a `:merge`
+body. Then every state it reaches is diagonal, and there `Database.Recorded` and
 `Database.Contained` agree, so the proved `Contained` transports serve. It does not exclude
 `Encoding/Encode.lean`: `encodeAction` turns a source `union` into a `set` of a `@UF` edge,
 and no `encode` output — prelude, maintenance rule, merge body or encoded head — contains
 an `Action.union`.
 
+*Ordering-free* — no expression the program evaluates applies `ordering-min` or
+`ordering-max`, in a rule's query or head, in a command, or in a `:merge` body or result.
+Then evaluation is congruence-stable (`eval_owes`), so a run under the congruent
+environment a `Recorded` witness supplies produces a congruent result, which is what
+recording asks for. This arm restricts **no** `union`: `(union (add a b) (add b a))` and
+every other equational program is covered, as is every `:merge` body built from `min`/`max`
+— those two are stable, since `Database.WF.litsIsolated` makes a literal's class a
+singleton. What it excludes is `Encoding/Encode.lean`, whose `encodeAction` emits
+`ordering-max`; that encoding is what the first arm is for.
+
 See the section header above for why the contract is `Database.Recorded` rather than the
 equality `exec_programStep` enjoys, and `Spec/Merge.lean` for why it is that rather than
 `Database.Contained`. -/
 theorem execM_contained {p : Program} (hp : FDatabase.empty.ProgramLegal p)
-    (hufree : p.UnionFree) {d : FDatabase} (h : execM p = some d) :
+    (hcond : p.UnionFree ∨ p.OrderingFree) {d : FDatabase} (h : execM p = some d) :
     ∃ db, ProgramStep FDatabase.empty.toDatabase p db ∧ d.toDatabase.Recorded db :=
   FDatabase.execProgramM_contained FDatabase.Inv.empty
     (fun g dc body res hg _ => absurd hg (by simp [FDatabase.empty]))
     (fun r hr => absurd hr (by simp [FDatabase.empty]))
-    ⟨by simp [FDatabase.toDatabase_empty, Database.Diag, Database.empty],
-      by simp [FDatabase.toDatabase_empty, Database.empty, Signature.UnionFree],
-      by simp [FDatabase.toDatabase_empty, Database.empty]⟩
-    hufree hp h
+    (hcond.imp
+      (fun hu => ⟨⟨by simp [FDatabase.toDatabase_empty, Database.Diag, Database.empty],
+        by simp [FDatabase.toDatabase_empty, Database.empty, Signature.UnionFree],
+        by simp [FDatabase.toDatabase_empty, Database.empty]⟩, hu⟩)
+      fun ho => ⟨⟨by simp [FDatabase.toDatabase_empty, Database.empty,
+        Signature.OrderingFree], by simp [FDatabase.toDatabase_empty, Database.empty]⟩, ho⟩)
+    hp h
 
 end Egglog
