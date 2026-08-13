@@ -489,8 +489,9 @@ The witness is minimal: `(A) (B) (C)` nullary and `(function Dist (Math) i64 :me
 `spec_never_distA` shows no `ProgramStep` on that program ever reaches a state holding any
 `Dist(A, …)`. Kernel-checked: the sealed well-founded `closure` is replaced by a proved
 description of it, thirteen pairs, after which the pass reduces and `decide` goes through. These
-two are gone from the tree with the refutations under "The representative deviation", and are
-re-derivable from this description.
+two live with the refutations under "The representative deviation", in probe files outside the
+repository — they compile, nothing in `lake build` checks them, and this description is what a
+reader of the tree alone has.
 
 **Both witnesses `union`**, and they have to: re-keying moves a key only where congruence relates
 two terms, and only a `union` puts two distinct terms in one class. So the programs that show
