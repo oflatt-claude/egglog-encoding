@@ -271,7 +271,7 @@ path.
 | --- | --- |
 | `summary` | comparison selection and headline summary |
 | `files` | per-file wall time and peak RSS estimates |
-| `phases` | additive slowdown decomposition plus suite optimization ceilings |
+| `phases` | additive suite and per-file slowdown decomposition |
 | `rulesets` | Program/Equality driver groups and changed rulesets per file |
 
 The default is `summary`. For example:
@@ -381,25 +381,17 @@ leaf. It includes process setup, reporting, teardown, and any still-
 uninstrumented work.
 
 At `--detail phases`, the additive slowdown-decomposition table has a suite row
-and one row per file. Its rendered headers are `Wall Δ`, `Typecheck`,
-`Frontend`, `Program`, `Equality`, `Commands`, and `Residual`. Every mechanism
-cell displays its share of the wall-time change first, then
-candidate-minus-baseline milliseconds. `◆` marks the largest absolute
-mechanism share in each row; Rich and interactive reports also bold that cell,
-dim contributions below 5%, and color improvements green. Expected overhead is
-neutral rather than red; warning and error colors are reserved for suspect
-measurements. Percentages may be negative or exceed 100% when mechanisms
-offset. `!` on a Residual cell means at least one endpoint's mean recorded total
-exceeded its wall time.
-
-A compact suite-level `Optimization ceilings` table then resets selected
-positive candidate-minus-baseline deltas to zero and reports the remaining
-wall-time change and implied point ratio. Candidate-side speedups are retained.
-It distinguishes removing only Equality ruleset assembly from making the
-entire net Equality/rebuild responsibility match the baseline. These rows are
-optimistic additive accounting bounds, not predictions: they hold every other
-measured mean fixed, omit confidence intervals, and cannot model interactions
-between optimizations. Residual is never treated as removable work.
+and one row per file. The suite row is the sum of each selected file's
+candidate-minus-baseline endpoint mean; it is not a single process observation.
+Its rendered headers are `Wall Δ`, `Typecheck`, `Frontend`, `Program`,
+`Equality`, `Commands`, and `Residual`. Every mechanism cell displays its share
+of the row's wall-time change first, then candidate-minus-baseline milliseconds.
+`◆` marks the largest absolute mechanism share in each row; Rich and
+interactive reports also bold that cell, dim contributions below 5%, and color
+improvements green. Expected overhead is neutral rather than red; warning and
+error colors are reserved for suspect measurements. Percentages may be
+negative or exceed 100% when mechanisms offset. `!` on a Residual cell means at
+least one endpoint's mean recorded total exceeded its wall time.
 
 At `--detail rulesets`, one compact driver table appears per file. Its
 `Program rules — own work` and `Equality/rebuild — net` parent rows exactly
@@ -619,9 +611,9 @@ shown. No median or geometric mean is mixed into this minimal headline.
 
 A timed-out, failed, or otherwise incomplete selected result invalidates the
 suite result that depends on it. Valid per-file tail comparisons remain useful
-when an unrelated file is incomplete. Mechanism contributions, optimization
-ceilings, and ruleset totals or component deltas are descriptive diagnostics;
-only endpoint estimates and ratios receive confidence intervals.
+when an unrelated file is incomplete. Mechanism contributions and ruleset
+totals or component deltas are descriptive diagnostics; only endpoint
+estimates and ratios receive confidence intervals.
 
 The `<2x` proof goal is established only when the upper bound of the suite wall
 ratio's 95% confidence interval is below `2x` for a proofs-versus-off

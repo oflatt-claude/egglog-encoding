@@ -4,20 +4,20 @@
 
 | Role | Target | Git | Treatment |
 | --- | --- | --- | --- |
-| Baseline | d60202f64424 | d60202f64424 | off |
-| Candidate | d60202f64424 | d60202f64424 | term |
+| Baseline | d60202f644249ef565de0ca7c51871fe497440a2 | d60202f64424 | off |
+| Candidate | d60202f644249ef565de0ca7c51871fe497440a2 | d60202f64424 | term |
 
 *10 file(s): math-microbenchmark-rational.egg, eggcc-2mm-pass1.egg, pointer-analysis-initdb.egg (facts: /Users/saul/p/wt/egglog-encoding/term-encoding-always-on/egglog/tests/pointer-analysis-initdb), hardboiled_conv1d_32.egg, luminal-llama.egg, herbie.egg, misaal-hvx-dot-product.egg, churchroad-wide-multiply.egg, dialegg-nmm40.egg, speq-preserved-reference-suite.egg · 6 round(s) per endpoint/file · 120 s timeout per run · Report: /private/tmp/term-encoding-d60202f.jsonl*
 
-## Summary — d60202f64424 term vs d60202f64424 off
+## Summary — d60202f644249ef565de0ca7c51871fe497440a2 term vs d60202f644249ef565de0ca7c51871fe497440a2 off
 
 | Metric | Scope | File(s) | Ratio (95% CI) | Result |
 | --- | --- | --- | ---: | --- |
-| Wall time | Suite total | 10 files | 1.61–1.63x | slower |
-| Wall time | Lowest-ratio file | churchroad-wide-multiply.egg | 0.705–0.715x | faster |
-| Wall time | Highest-ratio file | speq-preserved-reference-suite.egg | 3.56–3.61x | slower |
-| Peak RSS | Lowest-ratio file | churchroad-wide-multiply.egg | 1.10–1.11x | higher RSS |
-| Peak RSS | Highest-ratio file | pointer-analysis-initdb.egg | 3.59–3.65x | higher RSS |
+| Wall time | Suite total | 10 files | 1.62–1.64x | slower |
+| Wall time | Lowest-ratio file | churchroad-wide-multiply.egg | 0.708–0.720x | faster |
+| Wall time | Highest-ratio file | speq-preserved-reference-suite.egg | 3.55–3.65x | slower |
+| Peak RSS | Lowest-ratio file | churchroad-wide-multiply.egg | 1.11–1.13x | higher RSS |
+| Peak RSS | Highest-ratio file | pointer-analysis-initdb.egg | 3.78–3.80x | higher RSS |
 
 *Ratios are candidate / baseline; below 1 is lower and above 1 is higher.*
 
@@ -27,64 +27,49 @@
 
 | File | Baseline (95% CI) | Candidate (95% CI) | Ratio (95% CI) | Result |
 | --- | ---: | ---: | ---: | --- |
-| math-microbenchmark-rational.egg | 393–412 ms | 825–836 ms | 2.01–2.11x | slower |
-| eggcc-2mm-pass1.egg | 799–812 ms | 1.16–1.19 s | 1.43–1.48x | slower |
-| pointer-analysis-initdb.egg | 57.1–58.4 ms | 132–137 ms | 2.27–2.37x | slower |
-| hardboiled_conv1d_32.egg | 110–112 ms | 210–215 ms | 1.88–1.94x | slower |
-| luminal-llama.egg | 355–363 ms | 1.23–1.23 s | 3.38–3.46x | slower |
-| herbie.egg | 51.7–52.4 ms | 102–105 ms | 1.96–2.02x | slower |
-| misaal-hvx-dot-product.egg | 33.2–33.9 ms | 99.3–103 ms | 2.95–3.07x | slower |
-| churchroad-wide-multiply.egg | 1.00–1.02 s | 715–717 ms | 0.705–0.715x | faster |
-| dialegg-nmm40.egg | 158–160 ms | 261–263 ms | 1.64–1.66x | slower |
-| speq-preserved-reference-suite.egg | 45.7–46.0 ms | 163–165 ms | 3.56–3.61x | slower |
+| math-microbenchmark-rational.egg | 413–431 ms | 844–865 ms | 1.98–2.08x | slower |
+| eggcc-2mm-pass1.egg | 819–824 ms | 1.19–1.21 s | 1.45–1.48x | slower |
+| pointer-analysis-initdb.egg | 58.0–59.8 ms | 135–137 ms | 2.27–2.35x | slower |
+| hardboiled_conv1d_32.egg | 112–113 ms | 215–218 ms | 1.91–1.95x | slower |
+| luminal-llama.egg | 363–366 ms | 1.24–1.25 s | 3.39–3.43x | slower |
+| herbie.egg | 52.7–54.3 ms | 105–108 ms | 1.95–2.03x | slower |
+| misaal-hvx-dot-product.egg | 33.9–34.5 ms | 102–104 ms | 2.97–3.05x | slower |
+| churchroad-wide-multiply.egg | 1.00–1.01 s | 714–724 ms | 0.708–0.720x | faster |
+| dialegg-nmm40.egg | 158–165 ms | 263–270 ms | 1.61–1.69x | slower |
+| speq-preserved-reference-suite.egg | 46.6–47.6 ms | 168–171 ms | 3.55–3.65x | slower |
 
 ### Peak RSS
 
 | File | Baseline (95% CI) | Candidate (95% CI) | Ratio (95% CI) | Result |
 | --- | ---: | ---: | ---: | --- |
-| math-microbenchmark-rational.egg | 287.1–287.3 MiB | 494.0–494.6 MiB | 1.72–1.72x | higher RSS |
-| eggcc-2mm-pass1.egg | 109.4–110.8 MiB | 248.2–250.2 MiB | 2.25–2.28x | higher RSS |
-| pointer-analysis-initdb.egg | 41.7–42.4 MiB | 152.1–152.7 MiB | 3.59–3.65x | higher RSS |
-| hardboiled_conv1d_32.egg | 41.6–41.9 MiB | 68.1–68.6 MiB | 1.63–1.64x | higher RSS |
-| luminal-llama.egg | 118.1–119.4 MiB | 256.4–259.8 MiB | 2.15–2.19x | higher RSS |
-| herbie.egg | 19.9–20.1 MiB | 34.0–34.2 MiB | 1.69–1.71x | higher RSS |
-| misaal-hvx-dot-product.egg | 31.7–31.9 MiB | 65.5–65.9 MiB | 2.06–2.07x | higher RSS |
-| churchroad-wide-multiply.egg | 20.5–20.6 MiB | 22.6–22.8 MiB | 1.10–1.11x | higher RSS |
-| dialegg-nmm40.egg | 30.6–30.8 MiB | 97.8–98.0 MiB | 3.17–3.20x | higher RSS |
-| speq-preserved-reference-suite.egg | 16.8–17.1 MiB | 35.2–35.7 MiB | 2.07–2.11x | higher RSS |
+| math-microbenchmark-rational.egg | 287.4–287.6 MiB | 470.3–470.5 MiB | 1.64–1.64x | higher RSS |
+| eggcc-2mm-pass1.egg | 106.6–110.5 MiB | 242.9–248.6 MiB | 2.22–2.31x | higher RSS |
+| pointer-analysis-initdb.egg | 40.2–40.3 MiB | 152.2–152.7 MiB | 3.78–3.80x | higher RSS |
+| hardboiled_conv1d_32.egg | 41.4–41.8 MiB | 68.0–68.3 MiB | 1.63–1.65x | higher RSS |
+| luminal-llama.egg | 117.1–119.9 MiB | 258.4–261.0 MiB | 2.16–2.22x | higher RSS |
+| herbie.egg | 20.0–20.1 MiB | 33.7–33.9 MiB | 1.68–1.69x | higher RSS |
+| misaal-hvx-dot-product.egg | 31.5–32.1 MiB | 64.9–66.2 MiB | 2.03–2.09x | higher RSS |
+| churchroad-wide-multiply.egg | 20.1–20.5 MiB | 22.6–22.8 MiB | 1.11–1.13x | higher RSS |
+| dialegg-nmm40.egg | 30.7–31.0 MiB | 98.1–98.3 MiB | 3.17–3.20x | higher RSS |
+| speq-preserved-reference-suite.egg | 16.7–17.1 MiB | 35.2–35.4 MiB | 2.07–2.11x | higher RSS |
 
 ## Slowdown decomposition
 
 | File | Wall Δ | Typecheck | Frontend | Program | Equality | Commands | Residual |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Suite total | +1889 ms | +18.2%  +345 ms | +18.2%  +344 ms | ◆ +29.8%  +563 ms | +24.1%  +455 ms | +7.22%  +136 ms | +2.46%  +46.4 ms |
-| math-microbenchmark-rational.egg | +428 ms | +0.369%  +1.58 ms | +0.387%  +1.65 ms | +35.5%  +152 ms | ◆ +60.6%  +259 ms | +2.76%  +11.8 ms | +0.397%  +1.70 ms |
-| eggcc-2mm-pass1.egg | +368 ms | +18.0%  +66.2 ms | +18.9%  +69.4 ms | ◆ +29.4%  +108 ms | +22.7%  +83.4 ms | +9.37%  +34.5 ms | +1.68%  +6.18 ms |
-| pointer-analysis-initdb.egg | +76.4 ms | +2.88%  +2.20 ms | +27.0%  +20.7 ms | +14.9%  +11.4 ms | ◆ +38.4%  +29.3 ms | +4.36%  +3.34 ms | +12.5%  +9.53 ms |
-| hardboiled_conv1d_32.egg | +101 ms | +24.6%  +24.9 ms | +23.4%  +23.7 ms | ◆ +32.9%  +33.3 ms | +10.6%  +10.7 ms | +5.65%  +5.72 ms | +2.83%  +2.86 ms |
-| luminal-llama.egg | +868 ms | +21.0%  +183 ms | +18.6%  +162 ms | ◆ +46.5%  +403 ms | +4.59%  +39.8 ms | +7.43%  +64.5 ms | +1.83%  +15.9 ms |
-| herbie.egg | +51.6 ms | +15.4%  +7.96 ms | +17.7%  +9.12 ms | ◆ +26.6%  +13.7 ms | +22.4%  +11.5 ms | +14.8%  +7.62 ms | +3.23%  +1.67 ms |
-| misaal-hvx-dot-product.egg | +67.4 ms | +45.1%  +30.4 ms | ◆ +45.5%  +30.7 ms | +1.07%  +0.724 ms | +2.81%  +1.90 ms | +0.702%  +0.473 ms | +4.86%  +3.28 ms |
-| churchroad-wide-multiply.egg | -292 ms | -1.90%  +5.56 ms | -2.11%  +6.18 ms | ◆ +105%  -308 ms | -0.552%  +1.61 ms | -0.150%  +0.439 ms | -0.496%  +1.45 ms |
-| dialegg-nmm40.egg | +103 ms | +11.1%  +11.4 ms | +9.85%  +10.1 ms | ◆ +57.9%  +59.5 ms | +16.3%  +16.8 ms | +2.71%  +2.78 ms | +2.11%  +2.17 ms |
-| speq-preserved-reference-suite.egg | +118 ms | +9.95%  +11.8 ms | +9.13%  +10.8 ms | ◆ +74.5%  +88.2 ms | +0.660%  +0.782 ms | +4.37%  +5.18 ms | +1.41%  +1.67 ms |
+| Suite total (10 files) | +1935 ms | +18.1%  +350 ms | +17.9%  +346 ms | ◆ +29.7%  +575 ms | +24.6%  +476 ms | +7.12%  +138 ms | +2.60%  +50.3 ms |
+| math-microbenchmark-rational.egg | +433 ms | +0.385%  +1.66 ms | +0.417%  +1.80 ms | +33.6%  +145 ms | ◆ +62.5%  +270 ms | +2.64%  +11.4 ms | +0.464%  +2.01 ms |
+| eggcc-2mm-pass1.egg | +380 ms | +17.9%  +68.2 ms | +18.6%  +70.7 ms | ◆ +29.8%  +113 ms | +22.7%  +86.3 ms | +9.15%  +34.8 ms | +1.80%  +6.84 ms |
+| pointer-analysis-initdb.egg | +77.3 ms | +2.90%  +2.25 ms | +26.9%  +20.8 ms | +14.8%  +11.4 ms | ◆ +38.7%  +29.9 ms | +3.66%  +2.83 ms | +13.0%  +10.1 ms |
+| hardboiled_conv1d_32.egg | +104 ms | +24.2%  +25.2 ms | +23.1%  +24.1 ms | ◆ +33.2%  +34.7 ms | +10.8%  +11.3 ms | +5.77%  +6.02 ms | +2.83%  +2.96 ms |
+| luminal-llama.egg | +879 ms | +21.0%  +185 ms | +18.1%  +159 ms | ◆ +46.4%  +408 ms | +5.10%  +44.8 ms | +7.40%  +65.1 ms | +2.01%  +17.7 ms |
+| herbie.egg | +53.0 ms | +15.3%  +8.11 ms | +17.5%  +9.29 ms | ◆ +26.6%  +14.1 ms | +22.3%  +11.8 ms | +15.4%  +8.16 ms | +2.86%  +1.52 ms |
+| misaal-hvx-dot-product.egg | +68.6 ms | +44.6%  +30.6 ms | ◆ +45.7%  +31.4 ms | +1.16%  +0.794 ms | +2.90%  +1.99 ms | +0.709%  +0.487 ms | +4.93%  +3.39 ms |
+| churchroad-wide-multiply.egg | -288 ms | -1.97%  +5.67 ms | -2.21%  +6.36 ms | ◆ +105%  -303 ms | -0.606%  +1.74 ms | -0.163%  +0.469 ms | -0.496%  +1.43 ms |
+| dialegg-nmm40.egg | +105 ms | +11.0%  +11.5 ms | +9.93%  +10.4 ms | ◆ +57.8%  +60.5 ms | +16.3%  +17.1 ms | +2.75%  +2.88 ms | +2.20%  +2.30 ms |
+| speq-preserved-reference-suite.egg | +122 ms | +9.89%  +12.1 ms | +9.27%  +11.3 ms | ◆ +73.9%  +90.4 ms | +0.691%  +0.846 ms | +4.52%  +5.52 ms | +1.76%  +2.15 ms |
 
-*Each mechanism cell is its share of the wall-time slowdown followed by candidate − baseline mean time. Frontend includes parsing, other lowering, and declaration/install commands. Program rules includes every phase of source-origin rulesets except rebuild. Equality/rebuild combines encoded maintenance rulesets with native rebuild tails. Commands includes actions/input, checks, and other schedules. Shares may be negative or exceed 100% when mechanisms offset. ◆ and bold type mark each row's largest absolute share; contributions below 5% are dimmed and improvements are green in Rich and interactive reports. Signed values carry the same information without styling. Residual is wall time minus every recorded leaf; ! means an endpoint's mean residual is negative.*
-
-### Optimization ceilings
-
-| Hypothetical change | Time removed | Remaining wall Δ | Implied ratio |
-| --- | ---: | ---: | ---: |
-| Remove added typechecking time | +345 ms | +1545 ms | 1.51x |
-| Remove added frontend/install time | +344 ms | +1545 ms | 1.51x |
-| Remove added typechecking + frontend time | +689 ms | +1201 ms | 1.40x |
-| Remove added Equality assembly time | +299 ms | +1590 ms | 1.52x |
-| Remove added net Equality/rebuild time | +455 ms | +1434 ms | 1.47x |
-| Remove added source-rule execution time | +563 ms | +1327 ms | 1.44x |
-| Remove every added non-program mechanism | +1.28 s | +609 ms | 1.20x |
-| Remove every recorded added mechanism | +1.84 s | +46.4 ms | 1.02x |
-
-*Each row mechanically removes the named positive candidate − baseline timing deltas while holding every other measured mean fixed; candidate advantages are retained. Equality assembly removes only ruleset assembly, while net Equality/rebuild removes the whole positive Equality bucket. These are optimistic additive accounting bounds, not implementation predictions; point ratios have no confidence intervals and interactions can invalidate them. Residual is never removed.*
+*The Suite total row sums each selected file's candidate − baseline mean; file rows are per-file mean deltas. Each mechanism cell is its share of that row's wall-time change followed by its signed mean time change. Frontend includes parsing, other lowering, and declaration/install commands. Program rules includes every phase of source-origin rulesets except rebuild. Equality/rebuild combines encoded maintenance rulesets with native rebuild tails. Commands includes actions/input, checks, and other schedules. Shares may be negative or exceed 100% when mechanisms offset. ◆ and bold type mark each row's largest absolute share; contributions below 5% are dimmed and improvements are green in Rich and interactive reports. Signed values carry the same information without styling. Residual is wall time minus every recorded leaf; ! means an endpoint's mean residual is negative.*
 
 ## Ruleset drivers
 
@@ -94,14 +79,14 @@
 
 | Driver | Δ | Wall share | Important phase changes |
 | --- | ---: | ---: | --- |
-| Program rules — own work | +152 ms | +35.5% | ◆ Apply +80.8 ms; Merge +69.9 ms; … |
-| ↳ <default ruleset> | +152 ms |  | ◆ Apply +80.8 ms; Merge +69.9 ms; … |
-| Equality/rebuild — net | +259 ms | +60.6% | ◆ Search +267 ms; Apply +57.6 ms; Merge +69.4 ms; Rebuild -135 ms; … |
-| ↳ @rebuilding | +354 ms |  | ◆ Search +233 ms; Apply +57.2 ms; Merge +62.8 ms; … |
-| ↳ @parent | +41.0 ms |  | ◆ Search +33.9 ms; Merge +6.60 ms; … |
-| ↳ @rebuilding_cleanup | +855 ns |  | ◆ Assembly +855 ns |
-| ↳ @subsume_ruleset | +209 ns |  | ◆ Assembly +209 ns |
-| ↳ Native rebuild replaced | -135 ms |  | ◆ Rebuild -135 ms |
+| Program rules — own work | +145 ms | +33.6% | ◆ Apply +73.1 ms; Merge +71.1 ms; … |
+| ↳ <default ruleset> | +145 ms |  | ◆ Apply +73.1 ms; Merge +71.1 ms; … |
+| Equality/rebuild — net | +270 ms | +62.5% | ◆ Search +280 ms; Apply +59.9 ms; Merge +72.1 ms; Rebuild -142 ms; … |
+| ↳ @rebuilding | +371 ms |  | ◆ Search +246 ms; Apply +59.4 ms; Merge +65.3 ms; … |
+| ↳ @parent | +41.2 ms |  | ◆ Search +33.8 ms; Merge +6.83 ms; … |
+| ↳ @rebuilding_cleanup | +908 ns |  | ◆ Assembly +908 ns |
+| ↳ @subsume_ruleset | +223 ns |  | ◆ Assembly +223 ns |
+| ↳ Native rebuild replaced | -142 ms |  | ◆ Rebuild -142 ms |
 
 *Program + Equality account for +96.1% of this file's wall-time change. Source rules shown: 1/1. Maintenance rules shown: 4/4.*
 
@@ -109,86 +94,86 @@
 
 | Driver | Δ | Wall share | Important phase changes |
 | --- | ---: | ---: | --- |
-| Program rules — own work | +108 ms | +29.4% | Assembly +11.1 ms; ◆ Search +54.5 ms; Apply +24.5 ms; Merge +17.7 ms; … |
-| ↳ always-run | +82.2 ms |  | Assembly +8.52 ms; ◆ Search +43.2 ms; Apply +18.1 ms; Merge +12.0 ms; … |
-| ↳ type-analysis | +7.08 ms |  | Search +1.53 ms; ◆ Apply +2.84 ms; Merge +2.39 ms; … |
-| ↳ is-resolved | +4.99 ms |  | ◆ Search +4.01 ms; … |
-| ↳ terms | +3.52 ms |  | ◆ Search +1.46 ms; … |
-| ↳ terms-helpers | +3.48 ms |  | ◆ Search +1.86 ms; … |
-| ↳ Other (23 more source rulesets) | +7.06 ms |  | Assembly +1.47 ms; ◆ Search +2.44 ms; Apply +1.35 ms; Merge +1.68 ms; … |
-| Equality/rebuild — net | +83.4 ms | +22.7% | ◆ Assembly +245 ms; Search +55.5 ms; Execution +10.8 ms; Merge +10.6 ms; Rebuild -245 ms; … |
-| ↳ @rebuilding | +277 ms |  | ◆ Assembly +201 ms; Search +50.1 ms; … |
-| ↳ @parent | +48.6 ms |  | ◆ Assembly +41.6 ms; Search +5.31 ms; … |
-| ↳ @subsume_ruleset | +2.78 ms |  | ◆ Assembly +2.68 ms; … |
-| ↳ @rebuilding_cleanup | +65.8 us |  | ◆ Assembly +65.8 us |
-| ↳ Native rebuild replaced | -245 ms |  | ◆ Rebuild -245 ms |
+| Program rules — own work | +113 ms | +29.8% | Assembly +11.6 ms; ◆ Search +56.8 ms; Apply +25.5 ms; Merge +18.8 ms; … |
+| ↳ always-run | +85.6 ms |  | Assembly +8.73 ms; ◆ Search +44.5 ms; Apply +19.1 ms; Merge +12.9 ms; … |
+| ↳ type-analysis | +8.36 ms |  | Search +2.43 ms; ◆ Apply +2.93 ms; Merge +2.47 ms; … |
+| ↳ is-resolved | +5.00 ms |  | ◆ Search +4.02 ms; … |
+| ↳ terms | +3.65 ms |  | ◆ Search +1.46 ms; … |
+| ↳ terms-helpers | +3.61 ms |  | ◆ Search +1.90 ms; … |
+| ↳ Other (23 more source rulesets) | +7.11 ms |  | Assembly +1.49 ms; ◆ Search +2.46 ms; Apply +1.34 ms; Merge +1.73 ms; … |
+| Equality/rebuild — net | +86.3 ms | +22.7% | ◆ Assembly +248 ms; Search +57.6 ms; Execution +11.4 ms; Merge +11.2 ms; Rebuild -247 ms; … |
+| ↳ @rebuilding | +282 ms |  | ◆ Assembly +203 ms; Search +52.0 ms; … |
+| ↳ @parent | +49.3 ms |  | ◆ Assembly +42.0 ms; Search +5.56 ms; … |
+| ↳ @subsume_ruleset | +2.83 ms |  | ◆ Assembly +2.73 ms; … |
+| ↳ @rebuilding_cleanup | +67.2 us |  | ◆ Assembly +67.2 us |
+| ↳ Native rebuild replaced | -247 ms |  | ◆ Rebuild -247 ms |
 
-*Program + Equality account for +52.1% of this file's wall-time change. Source rules shown: 5/28 plus exact Other. Maintenance rules shown: 4/4.*
+*Program + Equality account for +52.5% of this file's wall-time change. Source rules shown: 5/28 plus exact Other. Maintenance rules shown: 4/4.*
 
 ### Ruleset drivers — pointer-analysis-initdb.egg
 
 | Driver | Δ | Wall share | Important phase changes |
 | --- | ---: | ---: | --- |
-| Program rules — own work | +11.4 ms | +14.9% | Apply +3.88 ms; ◆ Merge +7.28 ms; … |
-| ↳ <default ruleset> | +11.4 ms |  | Apply +3.88 ms; ◆ Merge +7.28 ms; … |
-| Equality/rebuild — net | +29.3 ms | +38.4% | ◆ Search +19.9 ms; Apply +3.84 ms; Merge +9.41 ms; Rebuild -4.56 ms; … |
-| ↳ @rebuilding | +18.9 ms |  | ◆ Search +12.7 ms; Apply +3.25 ms; Merge +2.63 ms; … |
-| ↳ @parent | +15.0 ms |  | ◆ Search +7.19 ms; Merge +6.78 ms; … |
-| ↳ @rebuilding_cleanup | +1.29 us |  | ◆ Assembly +1.29 us |
-| ↳ @subsume_ruleset | +770 ns |  | ◆ Assembly +770 ns |
-| ↳ Native rebuild replaced | -4.56 ms |  | ◆ Rebuild -4.56 ms |
+| Program rules — own work | +11.4 ms | +14.8% | Apply +3.91 ms; ◆ Merge +7.45 ms; … |
+| ↳ <default ruleset> | +11.4 ms |  | Apply +3.91 ms; ◆ Merge +7.45 ms; … |
+| Equality/rebuild — net | +29.9 ms | +38.7% | ◆ Search +20.2 ms; Apply +3.89 ms; Merge +9.65 ms; Rebuild -4.66 ms; … |
+| ↳ @rebuilding | +19.2 ms |  | ◆ Search +12.8 ms; Apply +3.29 ms; Merge +2.69 ms; … |
+| ↳ @parent | +15.4 ms |  | ◆ Search +7.39 ms; Merge +6.96 ms; … |
+| ↳ @rebuilding_cleanup | +1.19 us |  | ◆ Assembly +1.19 us |
+| ↳ @subsume_ruleset | +785 ns |  | ◆ Assembly +785 ns |
+| ↳ Native rebuild replaced | -4.66 ms |  | ◆ Rebuild -4.66 ms |
 
-*Program + Equality account for +53.3% of this file's wall-time change. Source rules shown: 1/1. Maintenance rules shown: 4/4.*
+*Program + Equality account for +53.4% of this file's wall-time change. Source rules shown: 1/1. Maintenance rules shown: 4/4.*
 
 ### Ruleset drivers — hardboiled_conv1d_32.egg
 
 | Driver | Δ | Wall share | Important phase changes |
 | --- | ---: | ---: | --- |
-| Program rules — own work | +33.3 ms | +32.9% | ◆ Search +23.6 ms; Apply +4.44 ms; … |
-| ↳ <default ruleset> | +31.8 ms |  | ◆ Search +23.6 ms; Apply +3.85 ms; … |
-| ↳ typechecking | +967 us |  | ◆ Apply +590 us; … |
-| ↳ amx | +497 us |  | ◆ Assembly +497 us |
-| Equality/rebuild — net | +10.7 ms | +10.6% | Assembly +4.74 ms; ◆ Search +5.76 ms; Apply +2.32 ms; Rebuild -3.73 ms; … |
-| ↳ @rebuilding | +12.4 ms |  | Assembly +3.87 ms; ◆ Search +4.82 ms; Apply +2.29 ms; … |
-| ↳ @parent | +2.02 ms |  | ◆ Search +943 us; … |
-| ↳ @subsume_ruleset | +21.1 us |  | ◆ Assembly +21.1 us |
-| ↳ @rebuilding_cleanup | +2.68 us |  | ◆ Assembly +2.68 us |
-| ↳ Native rebuild replaced | -3.73 ms |  | ◆ Rebuild -3.73 ms |
+| Program rules — own work | +34.7 ms | +33.2% | ◆ Search +24.2 ms; Apply +4.64 ms; … |
+| ↳ <default ruleset> | +33.1 ms |  | ◆ Search +24.2 ms; Apply +4.02 ms; … |
+| ↳ typechecking | +1.06 ms |  | ◆ Apply +616 us; … |
+| ↳ amx | +531 us |  | ◆ Assembly +531 us |
+| Equality/rebuild — net | +11.3 ms | +10.8% | Assembly +4.99 ms; ◆ Search +5.96 ms; Apply +2.38 ms; Rebuild -3.75 ms; … |
+| ↳ @rebuilding | +12.9 ms |  | Assembly +4.07 ms; ◆ Search +4.97 ms; Apply +2.34 ms; … |
+| ↳ @parent | +2.12 ms |  | ◆ Search +984 us; … |
+| ↳ @subsume_ruleset | +22.1 us |  | ◆ Assembly +22.1 us |
+| ↳ @rebuilding_cleanup | +2.88 us |  | ◆ Assembly +2.88 us |
+| ↳ Native rebuild replaced | -3.75 ms |  | ◆ Rebuild -3.75 ms |
 
-*Program + Equality account for +43.5% of this file's wall-time change. Source rules shown: 3/3. Maintenance rules shown: 4/4.*
+*Program + Equality account for +44.1% of this file's wall-time change. Source rules shown: 3/3. Maintenance rules shown: 4/4.*
 
 ### Ruleset drivers — luminal-llama.egg
 
 | Driver | Δ | Wall share | Important phase changes |
 | --- | ---: | ---: | --- |
-| Program rules — own work | +403 ms | +46.5% | Assembly +87.7 ms; ◆ Search +311 ms; … |
-| ↳ fusion_grow | +169 ms |  | ◆ Search +168 ms; … |
-| ↳ fusion_pair | +147 ms |  | ◆ Search +145 ms; … |
-| ↳ direct_kernel | +36.3 ms |  | ◆ Search +36.1 ms; … |
-| ↳ matmul_backend | +29.9 ms |  | ◆ Assembly +75.1 ms; Search -45.5 ms; … |
-| ↳ fusion_merge | +14.7 ms |  | ◆ Search +14.2 ms; … |
-| ↳ Other (11 more source rulesets) | +7.04 ms |  | ◆ Assembly +11.4 ms; Search -5.95 ms; … |
-| Equality/rebuild — net | +39.8 ms | +4.59% | ◆ Assembly +42.3 ms; Rebuild -5.66 ms; … |
-| ↳ @rebuilding | +44.7 ms |  | ◆ Assembly +41.6 ms; … |
-| ↳ @parent | +565 us |  | ◆ Assembly +514 us; … |
-| ↳ @subsume_ruleset | +217 us |  | ◆ Assembly +133 us; … |
-| ↳ @rebuilding_cleanup | +3.66 us |  | ◆ Assembly +3.66 us |
-| ↳ Native rebuild replaced | -5.66 ms |  | ◆ Rebuild -5.66 ms |
+| Program rules — own work | +408 ms | +46.4% | Assembly +89.0 ms; ◆ Search +314 ms; … |
+| ↳ fusion_grow | +170 ms |  | ◆ Search +168 ms; … |
+| ↳ fusion_pair | +148 ms |  | ◆ Search +146 ms; … |
+| ↳ direct_kernel | +36.9 ms |  | ◆ Search +36.7 ms; … |
+| ↳ matmul_backend | +30.5 ms |  | ◆ Assembly +76.1 ms; Search -45.9 ms; … |
+| ↳ fusion_merge | +14.9 ms |  | ◆ Search +14.3 ms; … |
+| ↳ Other (11 more source rulesets) | +7.62 ms |  | ◆ Assembly +11.8 ms; Search -5.93 ms; … |
+| Equality/rebuild — net | +44.8 ms | +5.10% | ◆ Assembly +47.3 ms; Rebuild -5.74 ms; … |
+| ↳ @rebuilding | +49.7 ms |  | ◆ Assembly +46.5 ms; … |
+| ↳ @parent | +627 us |  | ◆ Assembly +574 us; … |
+| ↳ @subsume_ruleset | +238 us |  | ◆ Assembly +147 us; … |
+| ↳ @rebuilding_cleanup | +3.58 us |  | ◆ Assembly +3.58 us |
+| ↳ Native rebuild replaced | -5.74 ms |  | ◆ Rebuild -5.74 ms |
 
-*Program + Equality account for +51.1% of this file's wall-time change. Source rules shown: 5/16 plus exact Other. Maintenance rules shown: 4/4.*
+*Program + Equality account for +51.5% of this file's wall-time change. Source rules shown: 5/16 plus exact Other. Maintenance rules shown: 4/4.*
 
 ### Ruleset drivers — herbie.egg
 
 | Driver | Δ | Wall share | Important phase changes |
 | --- | ---: | ---: | --- |
-| Program rules — own work | +13.7 ms | +26.6% | ◆ Assembly +8.06 ms; Apply +3.05 ms; Merge +1.98 ms; … |
-| ↳ <default ruleset> | +13.7 ms |  | ◆ Assembly +8.06 ms; Apply +3.05 ms; Merge +1.98 ms; … |
-| Equality/rebuild — net | +11.5 ms | +22.4% | ◆ Search +8.05 ms; Apply +1.88 ms; Merge +2.25 ms; Rebuild -1.98 ms; … |
-| ↳ @rebuilding | +11.3 ms |  | ◆ Search +6.58 ms; Apply +1.80 ms; Merge +1.76 ms; … |
-| ↳ @parent | +2.20 ms |  | ◆ Search +1.47 ms; … |
-| ↳ @rebuilding_cleanup | +2.40 us |  | ◆ Assembly +2.40 us |
-| ↳ @subsume_ruleset | +1.55 us |  | ◆ Assembly +1.55 us |
-| ↳ Native rebuild replaced | -1.98 ms |  | ◆ Rebuild -1.98 ms |
+| Program rules — own work | +14.1 ms | +26.6% | ◆ Assembly +8.33 ms; Apply +3.13 ms; Merge +2.02 ms; … |
+| ↳ <default ruleset> | +14.1 ms |  | ◆ Assembly +8.33 ms; Apply +3.13 ms; Merge +2.02 ms; … |
+| Equality/rebuild — net | +11.8 ms | +22.3% | ◆ Search +8.17 ms; Apply +1.92 ms; Merge +2.32 ms; Rebuild -2.01 ms; … |
+| ↳ @rebuilding | +11.6 ms |  | ◆ Search +6.68 ms; Apply +1.83 ms; Merge +1.82 ms; … |
+| ↳ @parent | +2.24 ms |  | ◆ Search +1.49 ms; … |
+| ↳ @rebuilding_cleanup | +2.48 us |  | ◆ Assembly +2.48 us |
+| ↳ @subsume_ruleset | +1.60 us |  | ◆ Assembly +1.60 us |
+| ↳ Native rebuild replaced | -2.01 ms |  | ◆ Rebuild -2.01 ms |
 
 *Program + Equality account for +48.9% of this file's wall-time change. Source rules shown: 1/1. Maintenance rules shown: 4/4.*
 
@@ -196,31 +181,31 @@
 
 | Driver | Δ | Wall share | Important phase changes |
 | --- | ---: | ---: | --- |
-| Program rules — own work | +724 us | +1.07% | ◆ Assembly +623 us; … |
-| ↳ <default ruleset> | +724 us |  | ◆ Assembly +623 us; … |
-| Equality/rebuild — net | +1.90 ms | +2.81% | ◆ Assembly +1.49 ms; … |
-| ↳ @rebuilding | +2.03 ms |  | ◆ Assembly +1.48 ms; … |
-| ↳ @parent | +48.1 us |  | ◆ Search +24.3 us; … |
-| ↳ @rebuilding_cleanup | +230 ns |  | ◆ Assembly +230 ns |
-| ↳ @subsume_ruleset | +90.2 ns |  | ◆ Assembly +90.2 ns |
-| ↳ Native rebuild replaced | -180 us |  | ◆ Rebuild -180 us |
+| Program rules — own work | +794 us | +1.16% | ◆ Assembly +675 us; … |
+| ↳ <default ruleset> | +794 us |  | ◆ Assembly +675 us; … |
+| Equality/rebuild — net | +1.99 ms | +2.90% | ◆ Assembly +1.57 ms; … |
+| ↳ @rebuilding | +2.13 ms |  | ◆ Assembly +1.56 ms; … |
+| ↳ @parent | +48.8 us |  | ◆ Search +25.0 us; … |
+| ↳ @rebuilding_cleanup | +223 ns |  | ◆ Assembly +223 ns |
+| ↳ @subsume_ruleset | +180 ns |  | ◆ Assembly +180 ns |
+| ↳ Native rebuild replaced | -185 us |  | ◆ Rebuild -185 us |
 
-*Program + Equality account for +3.89% of this file's wall-time change. Source rules shown: 1/1. Maintenance rules shown: 4/4.*
+*Program + Equality account for +4.06% of this file's wall-time change. Source rules shown: 1/1. Maintenance rules shown: 4/4.*
 
 ### Ruleset drivers — churchroad-wide-multiply.egg
 
 | Driver | Δ | Wall share | Important phase changes |
 | --- | ---: | ---: | --- |
-| Program rules — own work | -308 ms | +105% | ◆ Search -309 ms; … |
-| ↳ mapping | -309 ms |  | ◆ Search -309 ms; … |
-| ↳ transform | +899 us |  | ◆ Apply +641 us; … |
-| ↳ typing | +699 us |  | ◆ Apply +437 us; … |
-| ↳ misc | +6.33 us |  | ◆ Assembly +6.33 us |
-| Equality/rebuild — net | +1.61 ms | -0.552% | ◆ Assembly +1.21 ms; … |
-| ↳ @rebuilding | +1.43 ms |  | ◆ Assembly +1.02 ms; … |
-| ↳ @parent | +187 us |  | ◆ Assembly +178 us; … |
-| ↳ @rebuilding_cleanup | +1.31 us |  | ◆ Assembly +1.31 us |
-| ↳ @subsume_ruleset | +1.22 us |  | ◆ Assembly +1.22 us |
+| Program rules — own work | -303 ms | +105% | ◆ Search -305 ms; … |
+| ↳ mapping | -305 ms |  | ◆ Search -305 ms; … |
+| ↳ transform | +923 us |  | ◆ Apply +668 us; … |
+| ↳ typing | +741 us |  | ◆ Apply +466 us; … |
+| ↳ misc | +7.69 us |  | ◆ Assembly +7.69 us |
+| Equality/rebuild — net | +1.74 ms | -0.606% | ◆ Assembly +1.30 ms; … |
+| ↳ @rebuilding | +1.53 ms |  | ◆ Assembly +1.09 ms; … |
+| ↳ @parent | +213 us |  | ◆ Assembly +203 us; … |
+| ↳ @rebuilding_cleanup | +1.48 us |  | ◆ Assembly +1.48 us |
+| ↳ @subsume_ruleset | +1.10 us |  | ◆ Assembly +1.10 us |
 
 *Program + Equality account for +105% of this file's wall-time change. Source rules shown: 4/4. Maintenance rules shown: 4/4.*
 
@@ -228,33 +213,33 @@
 
 | Driver | Δ | Wall share | Important phase changes |
 | --- | ---: | ---: | --- |
-| Program rules — own work | +59.5 ms | +57.9% | ◆ Apply +40.4 ms; Merge +22.8 ms; … |
-| ↳ rules | +59.5 ms |  | ◆ Apply +40.4 ms; Merge +22.8 ms; … |
-| Equality/rebuild — net | +16.8 ms | +16.3% | Assembly +1.73 ms; ◆ Search +15.4 ms; Apply +6.26 ms; Merge +4.05 ms; Rebuild -11.1 ms; … |
-| ↳ @rebuilding | +26.9 ms |  | ◆ Search +14.6 ms; Apply +6.25 ms; Merge +3.95 ms; … |
-| ↳ @parent | +950 us |  | ◆ Search +747 us; … |
-| ↳ @rebuilding_cleanup | +701 ns |  | ◆ Assembly +701 ns |
-| ↳ @subsume_ruleset | +334 ns |  | ◆ Assembly +334 ns |
-| ↳ Native rebuild replaced | -11.1 ms |  | ◆ Rebuild -11.1 ms |
+| Program rules — own work | +60.5 ms | +57.8% | ◆ Apply +40.8 ms; Merge +23.5 ms; … |
+| ↳ rules | +60.5 ms |  | ◆ Apply +40.8 ms; Merge +23.5 ms; … |
+| Equality/rebuild — net | +17.1 ms | +16.3% | Assembly +1.93 ms; ◆ Search +15.6 ms; Apply +6.35 ms; Merge +4.13 ms; Rebuild -11.4 ms; … |
+| ↳ @rebuilding | +27.5 ms |  | ◆ Search +14.9 ms; Apply +6.33 ms; Merge +4.03 ms; … |
+| ↳ @parent | +996 us |  | ◆ Search +776 us; … |
+| ↳ @rebuilding_cleanup | +784 ns |  | ◆ Assembly +784 ns |
+| ↳ @subsume_ruleset | +319 ns |  | ◆ Assembly +319 ns |
+| ↳ Native rebuild replaced | -11.4 ms |  | ◆ Rebuild -11.4 ms |
 
-*Program + Equality account for +74.2% of this file's wall-time change. Source rules shown: 1/1. Maintenance rules shown: 4/4.*
+*Program + Equality account for +74.1% of this file's wall-time change. Source rules shown: 1/1. Maintenance rules shown: 4/4.*
 
 ### Ruleset drivers — speq-preserved-reference-suite.egg
 
 | Driver | Δ | Wall share | Important phase changes |
 | --- | ---: | ---: | --- |
-| Program rules — own work | +88.2 ms | +74.5% | ◆ Assembly +71.8 ms; Search +9.67 ms; … |
-| ↳ parseIR.transform-taco-spmv-csc | +27.8 ms |  | ◆ Assembly +19.7 ms; Search +4.84 ms; Execution +3.23 ms; … |
-| ↳ parseIR.transform-csparse-spmv-csc-nostruct | +27.4 ms |  | ◆ Assembly +19.4 ms; Search +4.74 ms; Execution +3.20 ms; … |
-| ↳ parseIR.transform-parboil-hist | +16.5 ms |  | ◆ Assembly +16.3 ms; … |
-| ↳ parseIR.transform-npb-is-hist | +16.3 ms |  | ◆ Assembly +16.2 ms; … |
-| ↳ parseIR.expand-parboil-hist | +49.8 us |  | ◆ Assembly +25.3 us; … |
-| ↳ Other (3 more source rulesets) | +117 us |  | ◆ Assembly +73.8 us; … |
-| Equality/rebuild — net | +782 us | +0.660% | ◆ Assembly +478 us; … |
-| ↳ @rebuilding | +783 us |  | ◆ Assembly +440 us; … |
-| ↳ @parent | +53.3 us |  | ◆ Assembly +35.5 us; … |
-| ↳ @subsume_ruleset | +1.27 us |  | ◆ Assembly +1.27 us |
-| ↳ @rebuilding_cleanup | +1.26 us |  | ◆ Assembly +1.26 us |
-| ↳ Native rebuild replaced | -56.5 us |  | ◆ Rebuild -56.5 us |
+| Program rules — own work | +90.4 ms | +73.9% | ◆ Assembly +73.5 ms; Search +9.92 ms; … |
+| ↳ parseIR.transform-taco-spmv-csc | +28.5 ms |  | ◆ Assembly +20.2 ms; Search +4.92 ms; Execution +3.28 ms; … |
+| ↳ parseIR.transform-csparse-spmv-csc-nostruct | +28.1 ms |  | ◆ Assembly +19.9 ms; Search +4.88 ms; Execution +3.26 ms; … |
+| ↳ parseIR.transform-parboil-hist | +17.0 ms |  | ◆ Assembly +16.7 ms; … |
+| ↳ parseIR.transform-npb-is-hist | +16.7 ms |  | ◆ Assembly +16.6 ms; … |
+| ↳ parseIR.expand-parboil-hist | +52.7 us |  | ◆ Assembly +29.4 us; … |
+| ↳ Other (3 more source rulesets) | +132 us |  | ◆ Assembly +81.7 us; … |
+| Equality/rebuild — net | +846 us | +0.691% | ◆ Assembly +520 us; … |
+| ↳ @rebuilding | +844 us |  | ◆ Assembly +477 us; … |
+| ↳ @parent | +59.9 us |  | ◆ Assembly +41.1 us; … |
+| ↳ @rebuilding_cleanup | +1.27 us |  | ◆ Assembly +1.27 us |
+| ↳ @subsume_ruleset | +1.10 us |  | ◆ Assembly +1.10 us |
+| ↳ Native rebuild replaced | -61.0 us |  | ◆ Rebuild -61.0 us |
 
-*Program + Equality account for +75.1% of this file's wall-time change. Source rules shown: 5/8 plus exact Other. Maintenance rules shown: 4/4.*
+*Program + Equality account for +74.6% of this file's wall-time change. Source rules shown: 5/8 plus exact Other. Maintenance rules shown: 4/4.*

@@ -2,29 +2,29 @@
 
 ## Result
 
-Term encoding is `1.61–1.63x` slower across the current ten-workload suite, but
-there is no single dominant cause. The suite mean adds 1.889 seconds over a
-3.035-second `off` baseline:
+Term encoding is `1.62–1.64x` slower across the current ten-workload suite, but
+there is no single dominant cause. The suite mean adds 1.935 seconds over a
+3.083-second `off` baseline:
 
 | Mechanism | Mean delta | Share of slowdown |
 | --- | ---: | ---: |
-| Source-rule execution | +563 ms | 29.8% |
-| Equality/rebuild, net | +455 ms | 24.1% |
-| Typechecking | +345 ms | 18.2% |
-| Other frontend/install | +344 ms | 18.2% |
-| Commands | +136 ms | 7.22% |
-| Residual | +46.4 ms | 2.46% |
+| Source-rule execution | +575 ms | 29.7% |
+| Equality/rebuild, net | +476 ms | 24.6% |
+| Typechecking | +350 ms | 18.1% |
+| Other frontend/install | +346 ms | 17.9% |
+| Commands | +138 ms | 7.12% |
+| Residual | +50.3 ms | 2.60% |
 
 The full generated report is checked in as
 [`term-encoding-overhead-benchmark.md`](term-encoding-overhead-benchmark.md).
 
 The important engineering conclusion is that a native or inline rebuild alone
 cannot reach the 5–10% target. Making the entire Equality/rebuild bucket as
-cheap as the baseline would reduce the suite point ratio only from `1.62x` to
+cheap as the baseline would reduce the suite point ratio only from `1.63x` to
 `1.47x`. Removing all measured non-program overhead would still leave `1.20x`
 because transformed source rules remain materially different. Reaching `1.10x`
 would require removing about 84% of the current added time, including roughly
-306 ms, or 54%, of the net Program bucket even after every positive non-program
+317 ms, or 55%, of the net Program bucket even after every positive non-program
 delta disappeared.
 
 ## Measurement
@@ -35,9 +35,10 @@ commit `d60202f64424`; the later report-only commit does not change that binary.
 
 ```bash
 ./bench.py \
+  --target @d60202f \
+  --compare-target @d60202f \
   --detail rulesets \
   --treatment term \
-  --force-run \
   --report /tmp/term-encoding-d60202f.jsonl \
   --format markdown
 ```
@@ -52,19 +53,19 @@ The actual wall-time ratios were:
 
 | Workload | `term / off` (95% CI) |
 | --- | ---: |
-| Math | 2.01–2.11x |
-| eggcc | 1.43–1.48x |
-| Pointer analysis | 2.27–2.37x |
-| Hardboiled | 1.88–1.94x |
-| Luminal | 3.38–3.46x |
-| Herbie | 1.96–2.02x |
-| Misaal HVX | 2.95–3.07x |
-| Churchroad wide multiply | 0.705–0.715x |
-| DialEgg NMM40 | 1.64–1.66x |
-| SPEQ preserved-reference suite | 3.56–3.61x |
+| Math | 1.98–2.08x |
+| eggcc | 1.45–1.48x |
+| Pointer analysis | 2.27–2.35x |
+| Hardboiled | 1.91–1.95x |
+| Luminal | 3.39–3.43x |
+| Herbie | 1.95–2.03x |
+| Misaal HVX | 2.97–3.05x |
+| Churchroad wide multiply | 0.708–0.720x |
+| DialEgg NMM40 | 1.61–1.69x |
+| SPEQ preserved-reference suite | 3.55–3.65x |
 
 Churchroad is a useful warning against treating every encoding-induced change
-as overhead: its `mapping` Search becomes 309 ms faster, more than offsetting
+as overhead: its `mapping` Search becomes 305 ms faster, more than offsetting
 the added frontend and maintenance work.
 
 ### Timer-tax control
@@ -80,93 +81,95 @@ also same-binary, so both of its endpoints pay the retained instrumentation.
 
 ## What “inline rebuilding” can mean
 
-The report separates two distinct counterfactuals:
+The measured leaves support two distinct interpretations of “inline”:
 
-1. **Remove Equality ruleset assembly.** This removes 299 ms of lazy plan
+1. **Remove Equality ruleset assembly.** This removes 307 ms of lazy plan
    creation and per-invocation executable-ruleset construction, producing an
-   implied `1.52x` suite ratio.
+   implied `1.53x` suite ratio.
 2. **Make net Equality/rebuild baseline-equivalent.** This removes the entire
-   455 ms net responsibility, producing an implied `1.47x` ratio.
+   476 ms net responsibility, producing an implied `1.47x` ratio.
 
 The second number is the optimistic answer to “what if the relational UF and
 rebuild were as cheap as native rebuilding?” It is not the cost of one named
 ruleset. Encoded maintenance is collective: `@rebuilding`, `@parent`, cleanup,
 and subsumption together replace the native rebuild loop.
 
-Across the suite, generated Equality maintenance adds 863 ms before crediting
-the 407 ms of native Rebuild it replaces:
+Across the suite, generated Equality maintenance adds 894 ms before crediting
+the 417 ms of native Rebuild it replaces:
 
 | Equality phase | Mean delta |
 | --- | ---: |
-| Assembly | +299 ms |
-| Search | +375 ms |
-| Apply | +77.8 ms |
-| Execution | +13.2 ms |
-| Merge | +96.9 ms |
-| Native Rebuild replaced | −407 ms |
-| **Net Equality/rebuild** | **+455 ms** |
+| Assembly | +307 ms |
+| Search | +391 ms |
+| Apply | +80.5 ms |
+| Execution | +14.0 ms |
+| Merge | +101 ms |
+| Native Rebuild replaced | −417 ms |
+| **Net Equality/rebuild** | **+476 ms** |
 
 So a plan-cache or inline-assembly change attacks a real cost, especially on
 eggcc, but it leaves most Equality Search/Apply/Merge work intact. Conversely,
 folding the native-rebuild credit into `@rebuilding` would falsely make that
 single generated ruleset look cheap and obscure the collective substitution.
 
-## Optimization ceilings
+## Derived bounds for the engineering question
 
-The report now performs the arithmetic directly. Each row removes only the
-named positive candidate-minus-baseline deltas, preserves candidate-side
-speedups, and holds every other mean fixed.
+The suite row is a sum of per-file mean deltas, not one process observation.
+Its additive cells support simple what-if arithmetic, but that arithmetic is
+deliberately not another report table: the combinations are editorial, add no
+measurement, and hide that a mechanism can dominate one workload while being
+irrelevant to another.
 
-| Hypothetical change | Time removed | Implied ratio |
-| --- | ---: | ---: |
-| Remove added typechecking | 345 ms | 1.51x |
-| Remove added frontend/install | 344 ms | 1.51x |
-| Remove both frontend groups | 689 ms | 1.40x |
-| Remove Equality assembly | 299 ms | 1.52x |
-| Remove net Equality/rebuild | 455 ms | 1.47x |
-| Remove source-rule execution delta | 563 ms | 1.44x |
-| Remove every positive non-program delta | 1.28 s | 1.20x |
-| Remove every recorded positive mechanism delta | 1.84 s | 1.02x |
+For the specific always-on design question:
 
-These are additive accounting ceilings, not implementation predictions. They
-have no confidence intervals and do not model interactions: removing generated
-types or identities may also change Program Search, Apply, Merge, or plan
-assembly. The `1.02x` final row is primarily an accounting-closure check; it
-leaves the 46 ms residual rather than pretending uninstrumented time is freely
-removable.
+- matching the baseline's typechecking cost alone implies `1.51x`; matching
+  other frontend/install alone implies `1.52x`, and matching both implies
+  `1.40x`;
+- eliminating Equality ruleset assembly alone implies `1.53x`, while making
+  the entire net Equality/rebuild responsibility baseline-equivalent implies
+  `1.47x`;
+- eliminating the net source-rule execution delta implies `1.44x`; and
+- even eliminating every positive non-program delta while holding the Program
+  delta fixed implies about `1.20x`.
+
+These are point-estimate accounting bounds, not implementation predictions.
+They have no confidence intervals and do not model interactions: removing
+generated types or identities may also change Program Search, Apply, Merge, or
+plan assembly. The per-workload rows below are the primary evidence for
+choosing an optimization.
 
 ## Workload narratives
 
-- **Math:** Equality/rebuild is 60.6% of the slowdown. Generated maintenance
-  costs 395 ms and replaces 135 ms of native rebuild. This is the clearest
+- **Math:** Equality/rebuild is 62.5% of the slowdown. Generated maintenance
+  costs 412 ms and replaces 142 ms of native rebuild. This is the clearest
   relational-UF target, though changed default-rule Apply and Merge still add
-  152 ms.
-- **eggcc:** no single mechanism wins. Typecheck plus frontend adds 136 ms,
-  source rules add 108 ms, net Equality adds 83 ms, and commands add 35 ms.
-  Equality is assembly-heavy: 245 ms of added assembly is almost exactly
-  offset by 245 ms of removed native rebuild before Search and execution are
-  counted. `always-run` carries 82 ms of the Program delta.
-- **Pointer analysis:** net Equality is largest at 29 ms, frontend is 21 ms,
-  and Program is 11 ms. Its 9.5 ms residual is large enough that tiny
+  145 ms.
+- **eggcc:** no single mechanism wins. Typecheck plus frontend adds 139 ms,
+  source rules add 113 ms, net Equality adds 86 ms, and commands add 35 ms.
+  Equality is assembly-heavy: 248 ms of added assembly is almost exactly
+  offset by 247 ms of removed native rebuild before Search and execution are
+  counted. `always-run` carries 86 ms of the Program delta.
+- **Pointer analysis:** net Equality is largest at 30 ms, frontend is 21 ms,
+  and Program is 11 ms. Its 10.1 ms residual is large enough that tiny
   sub-mechanism conclusions should remain cautious.
-- **Hardboiled:** source rules add 33 ms, while typecheck plus frontend adds
+- **Hardboiled:** source rules add 35 ms, while typecheck plus frontend adds
   49 ms. The default ruleset's Search dominates its Program child; check
   evaluation is routed symmetrically under Commands rather than appearing as a
   term-only default ruleset artifact.
-- **Luminal:** Program is 403 ms, 46.5% of the slowdown; Equality is only
-  39.8 ms, 4.59%. `fusion_grow` and `fusion_pair` add 169 and 147 ms, almost
+- **Luminal:** Program is 408 ms, 46.4% of the slowdown; Equality is only
+  44.8 ms, 5.10%. `fusion_grow` and `fusion_pair` add 170 and 148 ms, almost
   entirely Search. Typecheck plus frontend adds another 344 ms. UF work is not
   the limiting explanation here.
-- **Herbie:** mixed across Program (26.6%), Equality (22.4%), frontend/typecheck
-  (33.1%), and Commands (14.8%).
-- **Misaal HVX:** typecheck plus frontend explains 90.6% of the slowdown.
-  Program and Equality together explain less than 4%; a UF optimization would
+- **Herbie:** mixed across Program (26.6%), Equality (22.3%), frontend/typecheck
+  (32.8%), and Commands (15.4%).
+- **Misaal HVX:** typecheck plus frontend explains 90.3% of the slowdown.
+  Program and Equality together explain about 4.1%; a UF optimization would
   barely move it.
-- **Churchroad:** Program Search improves by 308 ms net, making term encoding
+- **Churchroad:** Program Search improves by 303 ms net, making term encoding
   faster overall despite every other top-level mechanism becoming slower.
-- **DialEgg:** Program contributes 57.9%, led by Apply and Merge; net Equality
+- **DialEgg:** Program contributes 57.8%, led by Apply and Merge; net Equality
   contributes 16.3%.
-- **SPEQ:** Program contributes 74.5%, mostly assembly in four transform
+- **SPEQ:** Program contributes 73.9%, mostly assembly in four transform
   rulesets; Equality is below 1%.
 
 ## What this answers—and what it does not
@@ -177,13 +180,13 @@ The additive report now answers:
   equality/rebuild, commands, or residual;
 - whether Equality cost is assembly or execution;
 - which source or maintenance rulesets carry Program and Equality changes; and
-- optimistic remaining ratios when selected positive deltas disappear.
+- the suite sum and the distinct per-workload mechanism mixes.
 
 It does not identify why a source rule searches or assembles more slowly. For
 Luminal, the data localizes the problem to `fusion_grow`/`fusion_pair` Search,
 but distinguishing wider tuples, extra identity columns, changed join order,
 or greater state churn requires a profiler or a targeted lowering ablation.
-Likewise, the counterfactual rows cannot predict cross-mechanism effects.
+Likewise, the derived bounds cannot predict cross-mechanism effects.
 
 ## Measurement design
 
@@ -226,17 +229,17 @@ The retained complexity has five responsibilities:
 | Engine timing | Exclusive process and six-phase ruleset boundaries | Static path slices and one duration map |
 | Semantic routing | Program, maintenance, native rebuild, and check ownership | One two-variant role instead of name-prefix inference |
 | Transport | Persist exact leaves for later projections | One open segmented-path list; no fixed phase structs or second ruleset schema |
-| Analysis | Align endpoint samples, derive residual, mechanisms, drivers, and ceilings | One generic path-sample ledger; parent/child sums are direct |
-| Presentation | Decomposition, suite ceilings, and per-file drivers | One shared catalog and table renderer for Rich, Markdown, and interactive output |
+| Analysis | Align endpoint samples and derive residual, mechanisms, and drivers | One generic path-sample ledger; parent/child sums are direct |
+| Presentation | Decomposition and per-file drivers | One shared catalog and table renderer for Rich, Markdown, and interactive output |
 
 The final reduction pass kept the old execution path recognizable and removed
 presentation-only alternatives: there is no global phase-rollup model, no
 ten-column ruleset table, no duplicated fixed five-bucket wire record, and no
-special report-time native-rebuild credit. The optimization table is derived
-from the same means and leaf ledger rather than introducing another recording
-shape. Further reduction would either lose the Assembly/Search distinction
-that separates plan-cache work from query-shape work or make the signs in the
-ruleset panel misleading again.
+special report-time native-rebuild credit. Counterfactual combinations stay in
+the engineering analysis rather than becoming another report model. Further
+reduction would either lose the Assembly/Search distinction that separates
+plan-cache work from query-shape work or make the signs in the ruleset panel
+misleading again.
 
 ## Engineering direction
 

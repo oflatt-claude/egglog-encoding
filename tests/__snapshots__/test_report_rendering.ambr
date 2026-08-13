@@ -46,26 +46,11 @@
   
   | File | Wall Δ | Typecheck | Frontend | Program | Equality | Commands | Residual |
   | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-  | Suite total | +200 ms | 0%  0 ms | 0%  0 ms | ◆ +58.0%  +116 ms | 0%  0 ms | 0%  0 ms | +42.0%  +84.0 ms |
+  | Suite total (2 files) | +200 ms | 0%  0 ms | 0%  0 ms | ◆ +58.0%  +116 ms | 0%  0 ms | 0%  0 ms | +42.0%  +84.0 ms |
   | math.egg | -200 ms | 0%  0 ms | 0%  0 ms | ◆ +58.0%  -116 ms | 0%  0 ms | 0%  0 ms | +42.0%  -84.0 ms |
   | rewrite.egg | +400 ms | 0%  0 ms | 0%  0 ms | ◆ +58.0%  +232 ms | 0%  0 ms | 0%  0 ms | +42.0%  +168 ms |
   
-  *Each mechanism cell is its share of the wall-time slowdown followed by candidate − baseline mean time. Frontend includes parsing, other lowering, and declaration/install commands. Program rules includes every phase of source-origin rulesets except rebuild. Equality/rebuild combines encoded maintenance rulesets with native rebuild tails. Commands includes actions/input, checks, and other schedules. Shares may be negative or exceed 100% when mechanisms offset. ◆ and bold type mark each row's largest absolute share; contributions below 5% are dimmed and improvements are green in Rich and interactive reports. Signed values carry the same information without styling. Residual is wall time minus every recorded leaf; ! means an endpoint's mean residual is negative.*
-  
-  ### Optimization ceilings
-  
-  | Hypothetical change | Time removed | Remaining wall Δ | Implied ratio |
-  | --- | ---: | ---: | ---: |
-  | Remove added typechecking time | 0 ns | +200 ms | 1.07x |
-  | Remove added frontend/install time | 0 ns | +200 ms | 1.07x |
-  | Remove added typechecking + frontend time | 0 ns | +200 ms | 1.07x |
-  | Remove added Equality assembly time | 0 ns | +200 ms | 1.07x |
-  | Remove added net Equality/rebuild time | 0 ns | +200 ms | 1.07x |
-  | Remove added source-rule execution time | +116 ms | +84.0 ms | 1.03x |
-  | Remove every added non-program mechanism | 0 ns | +200 ms | 1.07x |
-  | Remove every recorded added mechanism | +116 ms | +84.0 ms | 1.03x |
-  
-  *Each row mechanically removes the named positive candidate − baseline timing deltas while holding every other measured mean fixed; candidate advantages are retained. Equality assembly removes only ruleset assembly, while net Equality/rebuild removes the whole positive Equality bucket. These are optimistic additive accounting bounds, not implementation predictions; point ratios have no confidence intervals and interactions can invalidate them. Residual is never removed.*
+  *The Suite total row sums each selected file's candidate − baseline mean; file rows are per-file mean deltas. Each mechanism cell is its share of that row's wall-time change followed by its signed mean time change. Frontend includes parsing, other lowering, and declaration/install commands. Program rules includes every phase of source-origin rulesets except rebuild. Equality/rebuild combines encoded maintenance rulesets with native rebuild tails. Commands includes actions/input, checks, and other schedules. Shares may be negative or exceed 100% when mechanisms offset. ◆ and bold type mark each row's largest absolute share; contributions below 5% are dimmed and improvements are green in Rich and interactive reports. Signed values carry the same information without styling. Residual is wall time minus every recorded leaf; ! means an endpoint's mean residual is negative.*
   
   ## Ruleset drivers
   
@@ -204,7 +189,8 @@
                                                                                                                           
     File                 Wall Δ  Typecheck  Frontend           Program            Equality  Commands            Residual  
    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 
-    Suite total        +1550 ms   0%  0 ms  0%  0 ms   +10.7%  +165 ms            0%  0 ms  0%  0 ms  ◆ +89.3%  +1385 ms  
+    Suite total (6     +1550 ms   0%  0 ms  0%  0 ms   +10.7%  +165 ms            0%  0 ms  0%  0 ms  ◆ +89.3%  +1385 ms  
+    files)                                                                                                                
     math.egg            -200 ms   0%  0 ms  0%  0 ms  +14.6%  -29.1 ms   +0.985%  -1.97 ms  0%  0 ms   ◆ +84.4%  -169 ms  
     eggcc-extract.egg   -150 ms   0%  0 ms  0%  0 ms  +21.1%  -31.7 ms   +0.788%  -1.18 ms  0%  0 ms   ◆ +78.1%  -117 ms  
     pointer-analysis-      0 ms    —  0 ms   —  0 ms       —  -15.3 ms        —  -0.394 ms   —  0 ms         —  +15.7 ms  
@@ -213,31 +199,14 @@
     luminal.egg         +600 ms   0%  0 ms  0%  0 ms  +12.4%  +74.2 ms   +0.197%  +1.18 ms  0%  0 ms   ◆ +87.4%  +525 ms  
     herbie.egg         +1050 ms   0%  0 ms  0%  0 ms   +14.0%  +147 ms   +0.188%  +1.97 ms  0%  0 ms   ◆ +85.8%  +901 ms  
                                                                                                                           
-  Each mechanism cell is its share of the wall-time slowdown followed by candidate − baseline mean time. Frontend includes
+  The Suite total row sums each selected file's candidate − baseline mean; file rows are per-file mean deltas. Each       
+  mechanism cell is its share of that row's wall-time change followed by its signed mean time change. Frontend includes   
   parsing, other lowering, and declaration/install commands. Program rules includes every phase of source-origin rulesets 
   except rebuild. Equality/rebuild combines encoded maintenance rulesets with native rebuild tails. Commands includes     
   actions/input, checks, and other schedules. Shares may be negative or exceed 100% when mechanisms offset. ◆ and bold    
   type mark each row's largest absolute share; contributions below 5% are dimmed and improvements are green in Rich and   
   interactive reports. Signed values carry the same information without styling. Residual is wall time minus every        
   recorded leaf; ! means an endpoint's mean residual is negative.                                                         
-                                                   Optimization ceilings                                                  
-                                                                                                                          
-    Hypothetical change                                           Time removed       Remaining wall Δ      Implied ratio  
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 
-    Remove added typechecking time                                        0 ns               +1550 ms              1.11x  
-    Remove added frontend/install time                                    0 ns               +1550 ms              1.11x  
-    Remove added typechecking + frontend time                             0 ns               +1550 ms              1.11x  
-    Remove added Equality assembly time                                   0 ns               +1550 ms              1.11x  
-    Remove added net Equality/rebuild time                                0 ns               +1550 ms              1.11x  
-    Remove added source-rule execution time                            +165 ms               +1385 ms              1.10x  
-    Remove every added non-program mechanism                              0 ns               +1550 ms              1.11x  
-    Remove every recorded added mechanism                              +165 ms               +1385 ms              1.10x  
-                                                                                                                          
-  Each row mechanically removes the named positive candidate − baseline timing deltas while holding every other measured  
-  mean fixed; candidate advantages are retained. Equality assembly removes only ruleset assembly, while net               
-  Equality/rebuild removes the whole positive Equality bucket. These are optimistic additive accounting bounds, not       
-  implementation predictions; point ratios have no confidence intervals and interactions can invalidate them. Residual is 
-  never removed.                                                                                                          
   ─────────────────────────────────────────────────── Per-file results ───────────────────────────────────────────────────
                                                          Wall time                                                        
                                                                                                                           

@@ -229,14 +229,14 @@ def test_all_rich_tables_use_one_compact_style(tmp_path: Path) -> None:
     assert all(table.box is box.SIMPLE_HEAVY and not table.show_lines for table in tables)
 
 
-def test_phase_detail_adds_compact_suite_optimization_ceilings(tmp_path: Path) -> None:
+def test_phase_detail_is_one_additive_decomposition_table(tmp_path: Path) -> None:
     report_path, comparison = _pair_case(tmp_path)
     catalog = build_report_catalog(ReportStore(report_path), comparison, "phases")
 
     section = next(section for section in catalog.sections if section.id == "phases")
     tables = tuple(block for block in section.blocks if isinstance(block, ReportTable))
-    assert len(tables) == 2
-    table, ceilings = tables
+    assert len(tables) == 1
+    (table,) = tables
     assert tuple(column.id for column in table.columns) == (
         "file",
         "wall_delta",
@@ -248,7 +248,7 @@ def test_phase_detail_adds_compact_suite_optimization_ceilings(tmp_path: Path) -
         "residual",
     )
     assert len(table.rows) == len(comparison.files) + 1
-    assert table.rows[0].cells[0].display == "Suite total"
+    assert table.rows[0].cells[0].display == "Suite total (2 files)"
     assert [row.cells[0].display for row in table.rows[1:]] == ["math.egg", "rewrite.egg"]
     assert table.columns[3].label == "Frontend"
     assert table.columns[4].label == "Program"
@@ -261,26 +261,6 @@ def test_phase_detail_adds_compact_suite_optimization_ceilings(tmp_path: Path) -
     assert table.rows[1].cells[1].tone == "positive"
     assert table.rows[1].cells[4].tone == "emphasis"
     assert table.rows[1].cells[7].tone == "positive"
-    assert ceilings.title == "Optimization ceilings"
-    assert tuple(column.id for column in ceilings.columns) == (
-        "scenario",
-        "reset_delta",
-        "remaining_delta",
-        "counterfactual_ratio",
-    )
-    assert [row.cells[0].display for row in ceilings.rows] == [
-        "Remove added typechecking time",
-        "Remove added frontend/install time",
-        "Remove added typechecking + frontend time",
-        "Remove added Equality assembly time",
-        "Remove added net Equality/rebuild time",
-        "Remove added source-rule execution time",
-        "Remove every added non-program mechanism",
-        "Remove every recorded added mechanism",
-    ]
-    assert all(row.cells[3].display.endswith("x") for row in ceilings.rows)
-    assert ceilings.caption is not None and "accounting bounds, not implementation predictions" in ceilings.caption
-    assert "Residual is never removed" in ceilings.caption
 
 
 def test_ruleset_detail_unfolds_program_and_equality_with_explicit_children(tmp_path: Path) -> None:
