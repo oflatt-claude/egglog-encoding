@@ -347,9 +347,10 @@ congruent answers. Stated at the strongest hypothesis (bare `Cong C`) and the we
 (`CongOn C`), so refuting it refutes every weaker reading. Against it — machine-checked and
 `sorryAx`-free. The names below live in **probe files outside the repository**, at
 `.claude/jobs/0f6e77e4/tmp/Choice{1,2,3}.lean`; they still compile, but nothing in `lake build`
-checks them and they import each other, so `LEAN_PATH` must include that directory. Homing them
-into `Proofs/Counterexamples.lean` is a work-queue row in `PLAN.md`, and until then they are
-evidence that no continuous check defends.
+checks them and they import each other, so `LEAN_PATH` must include that directory. **They stay
+out of the tree by decision, not by omission**: they justify the *shape* of a hypothesis rather
+than supporting a theorem, so nothing breaks if they rot, and the write-ups here are detailed
+enough to re-derive them.
 
 * **The general impossibility** (`no_stable_choice`). No operator that answers with something
   congruent to one of its arguments and makes the same choice on `(x, y)` as on `(y, x)` is

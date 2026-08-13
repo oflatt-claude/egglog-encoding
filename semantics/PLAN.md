@@ -80,9 +80,8 @@ yet.
 
 | open | where |
 | --- | --- |
-| the second, ordering-free arm of `execM_contained`'s hypothesis — "What is covered", below | `Proofs/Merge.lean` |
-| the probe refutations, which compile but live **outside the repository** (`.claude/jobs/0f6e77e4/tmp/`), so no build checks them | `Proofs/Counterexamples.lean`; `Scratch/CmdMergePhase.lean` is the one already in-tree |
 | `Proofs/Merge.lean`'s `Action.SetWidthOk` against `Spec/Scope.lean`'s `WidthOk`, and the `ProgramLegal` clause that would let them be one predicate | `MERGE.md`, constraint (5) |
+| `Database.DeclaredTerms` has no preservation lemma, so `WidthOk` funds nothing yet | `Spec/Congruence.lean`, `Proofs/` |
 | `Matches.values` is split-blind and e-class-blind | `MERGE.md`, open question 1 |
 | base sorts, in place of the single untyped `Term` | `MERGE.md`, constraint (5) |
 | restating M11 against a reachable saturation condition | `ENCODING.md` |
@@ -99,21 +98,27 @@ interpreter.
 ### What is covered, and what is not
 
 `execM_contained` bought its last two `sorry`s with a hypothesis rather than a weakening:
-`p.UnionFree`, no `Action.union` in a top-level action, a rule head or a `:merge` body. The
-conclusion and `FDatabase.ProgramLegal` are unchanged. That hypothesis is a real restriction and is
-the development's main limitation:
+`p.UnionFree ∨ p.OrderingFree`. The conclusion and `FDatabase.ProgramLegal` are unchanged. The two
+arms work differently — union-freedom makes the state diagonal, so `Cong` is equality and
+`Recorded` *is* `Contained`; ordering-freedom makes `Expr.eval` congruence-stable, so a moved
+environment computes congruent answers.
 
 | | `union` | `:merge` functions |
 | --- | --- | --- |
 | `exec_programStep` | ✓ | ✗ — constructor fragment (`p.CtorDecls`) |
-| `execM_contained` | ✗ — `p.UnionFree` | ✓ |
-| both at once | **neither theorem covers it** | |
+| `execM_contained` | ✓ via `OrderingFree` | ✓ |
+| both at once | ✓ — unless the program also applies an ordering primitive | |
 
-**Difftest exercises the uncovered combination**, so the tested corpus is strictly larger than what
-`execM_contained` proves. `DiffTest.lean` writes an `Action.union` at 54 sites over 44 lines — the
-commutativity rule `(union (add a b) (add b a))` in a rule head among them, and a `:merge` body
-whose entire effect is a `union` — beside the 66 curated merge cases, and the generator emits more
-per case. 166/0 is not evidence about the theorem's reach.
+`min`/`max` are *not* restricted: congruent operands to them are those operands, by
+`Cong.eq_of_isLit` under `WF.litsIsolated`, so the condition is ordering-free rather than
+primitive-free and a `:merge` body of `(min old new)` is covered.
+
+**The whole tested corpus is inside the theorem.** No rendered difftest case applies an ordering
+primitive, so all 166 satisfy the second arm; 105 contain a `union` and would fail the first, and
+the 64 carrying both a `union` and a `:merge` — what difftest exists to exercise — are admitted.
+Excluded: only a program that applies `ordering-min`/`ordering-max` *and* emits an `Action.union`.
+`encode` is not one — it uses `ordering-max` but emits no `union` — which is why both arms are
+kept.
 
 **A second, ordering-free arm is being added**, which would cover much of that gap: every generated
 merge body is `min`/`max`/`old`/`new`, and `ordering-min`/`ordering-max` appear only under
@@ -162,7 +167,7 @@ interpreters with **different** contracts, and confusing them wastes time:
 | | merge phase? | contract |
 | --- | --- | --- |
 | `exec` (`Impl/Interp.lean`) | none | **exact, both directions** — `exec_programStep`, on `p.CtorDecls` |
-| `execM` (`Impl/Merge.lean`) | yes, and it **deletes** from the row index | **containment** — `execM_contained`, on `p.UnionFree` |
+| `execM` (`Impl/Merge.lean`) | yes, and it **deletes** from the row index | **containment** — `execM_contained`, on `p.UnionFree ∨ p.OrderingFree` |
 
 `execM` is not a state the specification can reach, hence containment. Containment is
 satisfied by a do-nothing implementation, and that is *fine for soundness* — the safety
@@ -564,7 +569,7 @@ Follow-ups, in rough dependency order:
     and `Database.Out.mono_recorded` in every form.
   - ✅ *The three `Recorded` transports.* Closed two ways: one deleted as false, with its consumers
     handed the premise their caller already maintained, and two proved as compositions under
-    `p.UnionFree` — "What is covered, and what is not". **Everything M9 named is done**, and what
+    `p.UnionFree ∨ p.OrderingFree` — "What is covered, and what is not". **Everything M9 named is done**, and what
     is left is coverage rather than proof.
 - **M10 — executable layer.** A `Finset`-based interpreter, a decidable congruence
   closure, and a refinement *biconditional* between the interpreter and `ProgramStep`.
