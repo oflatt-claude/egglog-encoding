@@ -1,8 +1,8 @@
 """Compute renderer-neutral statistics for one benchmark endpoint pair.
 
 This module selects observations, estimates means and confidence intervals,
-computes Fieller ratios, exhaustively attributes wall time, and ranks changed
-rulesets. Persistence lives in :mod:`benchmarking.reports.store`; all labels,
+computes Fieller ratios, exhaustively attributes wall time, and partitions
+ruleset work. Persistence lives in :mod:`benchmarking.reports.store`; all labels,
 units, and presentation policy live in :mod:`benchmarking.reports.presentation`.
 """
 
@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import math
 import statistics
+from collections.abc import Iterable
 from typing import Literal, NamedTuple, cast
 
 from scipy import stats
@@ -20,16 +21,13 @@ from .store import CacheKey, IndexedRecord, ReportStore
 MetricName = Literal["wall_sec", "max_rss_bytes"]
 ResultClass = Literal["higher", "invalid", "lower", "point_only", "unclear"]
 SummaryKind = Literal["suite", "lowest_file", "highest_file"]
-MechanismName = Literal["typecheck", "frontend", "program", "equality", "commands", "residual"]
 RulesetPhaseName = Literal["assembly", "search", "apply", "execution", "merge", "rebuild"]
 RulesetMechanism = Literal["program", "equality"]
-RulesetRowKind = Literal["aggregate", "ruleset", "native_rebuild", "other"]
 type _MetricKey = tuple[int, int, MetricName]
 type _ObservationKey = tuple[int, int]
-type _TimingPath = tuple[str, ...]
 
 _METRICS: tuple[MetricName, ...] = ("wall_sec", "max_rss_bytes")
-_RULESET_PHASES: tuple[RulesetPhaseName, ...] = (
+RULESET_PHASES: tuple[RulesetPhaseName, ...] = (
     "assembly",
     "search",
     "apply",
@@ -37,16 +35,6 @@ _RULESET_PHASES: tuple[RulesetPhaseName, ...] = (
     "merge",
     "rebuild",
 )
-_RULESET_MECHANISMS: tuple[RulesetMechanism, ...] = ("program", "equality")
-_MECHANISMS: tuple[MechanismName, ...] = (
-    "typecheck",
-    "frontend",
-    "program",
-    "equality",
-    "commands",
-    "residual",
-)
-RULESET_CONTRIBUTOR_LIMIT = 5
 
 
 class Estimate(NamedTuple):
@@ -75,12 +63,9 @@ class PhaseValues(NamedTuple):
     merge: float
     rebuild: float
 
-
-class RulesetDelta(NamedTuple):
-    """One exact total delta and its six timing-component deltas."""
-
-    total: float
-    phases: PhaseValues
+    @property
+    def total(self) -> float:
+        return math.fsum(self)
 
 
 class SummaryView(NamedTuple):
@@ -102,43 +87,52 @@ class FileComparisonView(NamedTuple):
     ratio: RatioEstimate
 
 
-class SlowdownCell(NamedTuple):
-    """One mechanism's delta and share of the observed wall slowdown."""
+class RulesetChange(NamedTuple):
+    """One named ruleset's own-work phase changes."""
 
-    delta_ns: float | None
-    slowdown_share: float | None
-
-
-class SlowdownValues(NamedTuple):
-    """The six additive mechanism cells displayed for one row."""
-
-    typecheck: SlowdownCell
-    frontend: SlowdownCell
-    program: SlowdownCell
-    equality: SlowdownCell
-    commands: SlowdownCell
-    residual: SlowdownCell
+    name: str
+    phases: PhaseValues
 
 
-class SlowdownDecompositionView(NamedTuple):
-    """One per-file or suite-wide additive slowdown decomposition."""
+class RulesetGroup(NamedTuple):
+    """One mechanism's named rulesets and optional global rebuild change."""
+
+    rulesets: tuple[RulesetChange, ...]
+    native_rebuild_delta_ns: float = 0.0
+
+    @property
+    def phases(self) -> PhaseValues:
+        values = [math.fsum(ruleset.phases[index] for ruleset in self.rulesets) for index in range(len(RULESET_PHASES))]
+        values[-1] += self.native_rebuild_delta_ns
+        return PhaseValues(*values)
+
+
+class FileTimingBreakdown(NamedTuple):
+    """One canonical additive timing partition consumed by both timing views."""
 
     file_order: int | None
     wall_delta_ns: float | None
-    mechanisms: SlowdownValues
+    typecheck_delta_ns: float
+    frontend_delta_ns: float
+    program: RulesetGroup
+    equality: RulesetGroup
+    commands_delta_ns: float
+    residual_delta_ns: float
     residual_warning: bool
     issue: str | None
 
-
-class RulesetContributorView(NamedTuple):
-    """One mechanism parent, named child, native rebuild, or exact remainder."""
-
-    file_order: int
-    kind: RulesetRowKind
-    mechanism: RulesetMechanism
-    name: str
-    ruleset_count: int
-    delta: RulesetDelta
+    @property
+    def mechanism_deltas(self) -> tuple[float | None, ...]:
+        if self.issue is not None:
+            return (None,) * 6
+        return (
+            self.typecheck_delta_ns,
+            self.frontend_delta_ns,
+            self.program.phases.total,
+            self.equality.phases.total,
+            self.commands_delta_ns,
+            self.residual_delta_ns,
+        )
 
 
 class PairReportViewData(NamedTuple):
@@ -146,8 +140,7 @@ class PairReportViewData(NamedTuple):
 
     summary: tuple[SummaryView, ...]
     files: tuple[FileComparisonView, ...]
-    decomposition: tuple[SlowdownDecompositionView, ...]
-    rulesets: tuple[RulesetContributorView, ...]
+    timing: tuple[FileTimingBreakdown, ...]
 
 
 class _MetricEstimate(NamedTuple):
@@ -157,12 +150,15 @@ class _MetricEstimate(NamedTuple):
     issue: str | None
 
 
-class _TimingAggregate(NamedTuple):
-    """Aligned samples for the open timing paths in one endpoint/file selection."""
+class _TimingMean(NamedTuple):
+    """One endpoint/file's direct means from the typed timing record."""
 
-    observation_count: int
-    paths: dict[_TimingPath, list[float]]
-    residuals: list[float]
+    typecheck_ns: float
+    frontend_ns: float
+    commands_ns: float
+    rulesets: dict[tuple[RulesetMechanism, str], PhaseValues]
+    native_rebuild_ns: float
+    residual_ns: float | None
 
 
 def analyze_pair(
@@ -180,16 +176,12 @@ def analyze_pair(
     summary = _summary_rows(comparison, estimates, file_rows, t_critical)
 
     if detail == "summary":
-        return PairReportViewData(summary, (), (), ())
+        return PairReportViewData(summary, (), ())
     if detail == "files":
-        return PairReportViewData(summary, file_rows, (), ())
+        return PairReportViewData(summary, file_rows, ())
 
-    timing = _timing_aggregates(observations)
-    decomposition = _slowdown_decomposition(comparison, timing, issues, estimates)
-    if detail == "phases":
-        return PairReportViewData(summary, file_rows, decomposition, ())
-    rulesets = _ruleset_contributors(comparison, timing, issues)
-    return PairReportViewData(summary, file_rows, decomposition, rulesets)
+    timing = _timing_breakdowns(comparison, observations, issues, estimates)
+    return PairReportViewData(summary, file_rows, timing)
 
 
 def _selected_observations(
@@ -362,267 +354,154 @@ def _summary_rows(
     return tuple(rows)
 
 
-def _slowdown_decomposition(
+def _timing_breakdowns(
     comparison: ComparisonSpec,
-    timing: dict[_ObservationKey, _TimingAggregate],
+    observations: dict[_ObservationKey, tuple[IndexedRecord, ...]],
     issues: dict[_ObservationKey, str | None],
     metric_estimates: dict[_MetricKey, _MetricEstimate],
-) -> tuple[SlowdownDecompositionView, ...]:
-    points: dict[tuple[int, int, MechanismName], float | None] = {}
-    for (endpoint_order, file_order), aggregate in timing.items():
-        for mechanism in _MECHANISMS:
-            issue = issues[(endpoint_order, file_order)]
-            if mechanism == "residual" and issue is None:
-                issue = metric_estimates[(endpoint_order, file_order, "wall_sec")].issue
-            paths = [path for path in aggregate.paths if path[0] == mechanism]
-            values = aggregate.residuals if mechanism == "residual" else _sum_path_samples(aggregate, paths)
-            points[(endpoint_order, file_order, mechanism)] = (
-                statistics.fmean(values) if issue is None and values else None
-            )
-
-    result: list[SlowdownDecompositionView] = []
+) -> tuple[FileTimingBreakdown, ...]:
+    means = _timing_means(observations, metric_estimates)
+    files: list[FileTimingBreakdown] = []
     for file_order in range(len(comparison.files)):
-        baseline_wall = metric_estimates[(0, file_order, "wall_sec")].estimate.point
-        candidate_wall = metric_estimates[(1, file_order, "wall_sec")].estimate.point
+        baseline = means[(0, file_order)]
+        candidate = means[(1, file_order)]
+        baseline_wall = metric_estimates[(0, file_order, "wall_sec")]
+        candidate_wall = metric_estimates[(1, file_order, "wall_sec")]
+        issue = issues[(0, file_order)] or issues[(1, file_order)] or baseline_wall.issue or candidate_wall.issue
         wall_delta_ns = (
             None
-            if baseline_wall is None or candidate_wall is None
-            else (candidate_wall - baseline_wall) * 1_000_000_000.0
+            if issue is not None or baseline_wall.estimate.point is None or candidate_wall.estimate.point is None
+            else (candidate_wall.estimate.point - baseline_wall.estimate.point) * 1_000_000_000.0
         )
-        cells: list[SlowdownCell] = []
-        for mechanism in _MECHANISMS:
-            baseline_point = points[(0, file_order, mechanism)]
-            candidate_point = points[(1, file_order, mechanism)]
-            delta = None if baseline_point is None or candidate_point is None else candidate_point - baseline_point
-            cells.append(SlowdownCell(delta, _share(delta, wall_delta_ns)))
-        baseline_residual = points[(0, file_order, "residual")]
-        candidate_residual = points[(1, file_order, "residual")]
-        issue = (
-            issues[(0, file_order)]
-            or issues[(1, file_order)]
-            or metric_estimates[(0, file_order, "wall_sec")].issue
-            or metric_estimates[(1, file_order, "wall_sec")].issue
+        residual_delta_ns = (
+            0.0
+            if baseline.residual_ns is None or candidate.residual_ns is None
+            else candidate.residual_ns - baseline.residual_ns
         )
-        result.append(
-            SlowdownDecompositionView(
+        files.append(
+            FileTimingBreakdown(
                 file_order,
                 wall_delta_ns,
-                SlowdownValues(*cells),
-                (baseline_residual is not None and baseline_residual < 0)
-                or (candidate_residual is not None and candidate_residual < 0),
+                candidate.typecheck_ns - baseline.typecheck_ns,
+                candidate.frontend_ns - baseline.frontend_ns,
+                _ruleset_group_delta(baseline, candidate, "program"),
+                _ruleset_group_delta(baseline, candidate, "equality"),
+                candidate.commands_ns - baseline.commands_ns,
+                residual_delta_ns,
+                (baseline.residual_ns is not None and baseline.residual_ns < 0)
+                or (candidate.residual_ns is not None and candidate.residual_ns < 0),
                 issue,
             )
         )
 
-    suite_issue = next((row.issue for row in result if row.issue is not None), None)
-    if suite_issue is None:
-        suite_wall_delta = sum(cast(float, row.wall_delta_ns) for row in result)
-        suite_cells = []
-        for mechanism_index in range(len(_MECHANISMS)):
-            delta = sum(cast(float, row.mechanisms[mechanism_index].delta_ns) for row in result)
-            suite_cells.append(SlowdownCell(delta, _share(delta, suite_wall_delta)))
-    else:
-        suite_wall_delta = None
-        suite_cells = [SlowdownCell(None, None) for _ in _MECHANISMS]
-    suite = SlowdownDecompositionView(
+    suite_issue = next((row.issue for row in files if row.issue is not None), None)
+    suite = FileTimingBreakdown(
         None,
-        suite_wall_delta,
-        SlowdownValues(*suite_cells),
-        any(row.residual_warning for row in result),
+        None if suite_issue is not None else math.fsum(cast(float, row.wall_delta_ns) for row in files),
+        math.fsum(row.typecheck_delta_ns for row in files),
+        math.fsum(row.frontend_delta_ns for row in files),
+        _sum_ruleset_groups(row.program for row in files),
+        _sum_ruleset_groups(row.equality for row in files),
+        math.fsum(row.commands_delta_ns for row in files),
+        math.fsum(row.residual_delta_ns for row in files),
+        any(row.residual_warning for row in files),
         suite_issue,
     )
-    return (suite, *result)
+    return (suite, *files)
 
 
-def _timing_aggregates(
+def _timing_means(
     observations: dict[_ObservationKey, tuple[IndexedRecord, ...]],
-) -> dict[_ObservationKey, _TimingAggregate]:
-    result: dict[_ObservationKey, _TimingAggregate] = {}
+    metric_estimates: dict[_MetricKey, _MetricEstimate],
+) -> dict[_ObservationKey, _TimingMean]:
+    result: dict[_ObservationKey, _TimingMean] = {}
     for key, rows in observations.items():
-        aggregate = _TimingAggregate(len(rows), {}, [])
-        for observation_index, row in enumerate(rows):
+        typecheck = 0.0
+        frontend = 0.0
+        commands = 0.0
+        native_rebuild = 0.0
+        rulesets: dict[tuple[RulesetMechanism, str], list[float]] = {}
+        for row in rows:
             record = row.record
             if record["status"] != "success":
-                for samples in aggregate.paths.values():
-                    samples.append(0.0)
                 continue
             summary = record["timing_summary"]
             if summary is None:
                 raise ValueError("successful benchmark record is missing its timing summary")
-            observation: dict[_TimingPath, float] = {}
-            recorded = 0.0
-            for leaf in summary["timings"]:
-                path = tuple(leaf["path"])
-                if not path:
-                    raise ValueError("timing path must not be empty")
-                if path[0] == "residual":
-                    raise ValueError("residual is derived rather than recorded")
-                if path[0] not in _MECHANISMS[:-1]:
-                    raise ValueError(f"unknown timing responsibility {path[0]!r}")
-                duration = float(leaf["ns"])
-                observation[path] = observation.get(path, 0.0) + duration
-                recorded += duration
-            for path, samples in aggregate.paths.items():
-                samples.append(observation.pop(path, 0.0))
-            for path, duration in observation.items():
-                aggregate.paths[path] = [0.0] * observation_index + [duration]
-            wall_sec = record["wall_sec"]
-            if wall_sec is not None:
-                aggregate.residuals.append(wall_sec * 1_000_000_000.0 - recorded)
-        result[key] = aggregate
+            typecheck += summary["typecheck_ns"]
+            frontend += summary["frontend_parse_ns"] + summary["frontend_other_ns"] + summary["frontend_install_ns"]
+            commands += summary["commands_actions_ns"] + summary["commands_check_ns"] + summary["commands_other_ns"]
+            native_rebuild += summary["native_rebuild_ns"]
+            for timing in summary["rulesets"]:
+                phase_sums = rulesets.setdefault((timing["role"], timing["name"]), [0.0] * 6)
+                phase_sums[0] += timing["assembly_ns"]
+                phase_sums[1] += timing["search_ns"]
+                phase_sums[2] += timing["apply_ns"]
+                phase_sums[3] += timing["execution_ns"]
+                phase_sums[4] += timing["merge_ns"]
+
+        denominator = len(rows) or 1
+        ruleset_means = {
+            key: PhaseValues(*(value / denominator for value in values)) for key, values in rulesets.items()
+        }
+        typecheck /= denominator
+        frontend /= denominator
+        commands /= denominator
+        native_rebuild /= denominator
+        recorded = (
+            typecheck
+            + frontend
+            + commands
+            + native_rebuild
+            + math.fsum(phases.total for phases in ruleset_means.values())
+        )
+        wall = metric_estimates[(key[0], key[1], "wall_sec")].estimate.point
+        result[key] = _TimingMean(
+            typecheck,
+            frontend,
+            commands,
+            ruleset_means,
+            native_rebuild,
+            None if wall is None else wall * 1_000_000_000.0 - recorded,
+        )
     return result
 
 
-def _sum_path_samples(aggregate: _TimingAggregate, paths: list[_TimingPath]) -> list[float]:
-    """Add selected exclusive leaves observation by observation."""
-
-    return [math.fsum(aggregate.paths[path][index] for path in paths) for index in range(aggregate.observation_count)]
-
-
-def _ruleset_contributors(
-    comparison: ComparisonSpec,
-    timing: dict[_ObservationKey, _TimingAggregate],
-    issues: dict[_ObservationKey, str | None],
-) -> tuple[RulesetContributorView, ...]:
-    """Unfold Program and Equality into truthful per-file child partitions."""
-
-    result: list[RulesetContributorView] = []
-    for file_order in range(len(comparison.files)):
-        if issues[(0, file_order)] is not None or issues[(1, file_order)] is not None:
-            continue
-        source_names = sorted(
-            {
-                path[2]
-                for endpoint_order in (0, 1)
-                for path in timing[(endpoint_order, file_order)].paths
-                if len(path) == 3 and path[0] == "program"
-            }
+def _ruleset_group_delta(
+    baseline: _TimingMean,
+    candidate: _TimingMean,
+    mechanism: RulesetMechanism,
+) -> RulesetGroup:
+    names = sorted({name for role, name in baseline.rulesets.keys() | candidate.rulesets.keys() if role == mechanism})
+    zero = PhaseValues(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    rulesets = []
+    for name in names:
+        baseline_phases = baseline.rulesets.get((mechanism, name), zero)
+        candidate_phases = candidate.rulesets.get((mechanism, name), zero)
+        phases = PhaseValues(
+            *(candidate_phases[index] - baseline_phases[index] for index in range(len(RULESET_PHASES)))
         )
-        maintenance_names = sorted(
-            {
-                path[2]
-                for endpoint_order in (0, 1)
-                for path in timing[(endpoint_order, file_order)].paths
-                if len(path) == 3 and path[0] == "equality" and path[1] != "rebuild"
-            }
-        )
-
-        names_by_mechanism = {"program": source_names, "equality": maintenance_names}
-        children: dict[RulesetMechanism, list[RulesetContributorView]] = {"program": [], "equality": []}
-        for mechanism in _RULESET_MECHANISMS:
-            for name in names_by_mechanism[mechanism]:
-                delta = _ruleset_phase_deltas(timing, file_order, name, mechanism)
-                if any(delta.phases):
-                    children[mechanism].append(RulesetContributorView(file_order, "ruleset", mechanism, name, 1, delta))
-            children[mechanism].sort(key=lambda row: (-abs(row.delta.total), row.name))
-
-        source_rebuild_deltas: list[float] = [
-            rebuild_delta
-            for name in source_names
-            if (
-                rebuild_delta := _ruleset_phase_delta(
-                    timing,
-                    file_order,
-                    name,
-                    "equality",
-                    "rebuild",
-                )
-            )
-            != 0
-        ]
-        if source_rebuild_deltas:
-            rebuild_delta = math.fsum(source_rebuild_deltas)
-            children["equality"].append(
-                RulesetContributorView(
-                    file_order,
-                    "native_rebuild",
-                    "equality",
-                    "",
-                    0,
-                    RulesetDelta(
-                        rebuild_delta,
-                        PhaseValues(0.0, 0.0, 0.0, 0.0, 0.0, rebuild_delta),
-                    ),
-                )
-            )
-
-        for mechanism in _RULESET_MECHANISMS:
-            group = children[mechanism]
-            result.append(
-                RulesetContributorView(
-                    file_order,
-                    "aggregate",
-                    mechanism,
-                    "",
-                    sum(row.ruleset_count for row in group),
-                    _sum_ruleset_deltas(group),
-                )
-            )
-            if mechanism == "program" and len(group) > RULESET_CONTRIBUTOR_LIMIT:
-                omitted = group[RULESET_CONTRIBUTOR_LIMIT:]
-                result.extend(group[:RULESET_CONTRIBUTOR_LIMIT])
-                result.append(
-                    RulesetContributorView(
-                        file_order,
-                        "other",
-                        mechanism,
-                        "",
-                        len(omitted),
-                        _sum_ruleset_deltas(omitted),
-                    )
-                )
-            else:
-                result.extend(group)
-    return tuple(result)
+        if any(phases):
+            rulesets.append(RulesetChange(name, phases))
+    rebuild = candidate.native_rebuild_ns - baseline.native_rebuild_ns if mechanism == "equality" else 0.0
+    return RulesetGroup(tuple(rulesets), rebuild)
 
 
-def _ruleset_phase_delta(
-    timing: dict[_ObservationKey, _TimingAggregate],
-    file_order: int,
-    name: str,
-    responsibility: RulesetMechanism,
-    phase: RulesetPhaseName,
-) -> float:
-    """Subtract one named responsibility/phase mean across the endpoints."""
+def _sum_ruleset_groups(groups: Iterable[RulesetGroup]) -> RulesetGroup:
+    """Combine file-level ruleset groups while preserving named phase totals."""
 
-    def mean(endpoint_order: int) -> float:
-        aggregate = timing[(endpoint_order, file_order)]
-        paths: list[_TimingPath] = [
-            path
-            for path in aggregate.paths
-            if len(path) == 3 and path[0] == responsibility and path[1] == phase and path[2] == name
-        ]
-        if not paths:
-            return 0.0
-        return statistics.fmean(_sum_path_samples(aggregate, paths))
-
-    return mean(1) - mean(0)
-
-
-def _ruleset_phase_deltas(
-    timing: dict[_ObservationKey, _TimingAggregate],
-    file_order: int,
-    name: str,
-    responsibility: RulesetMechanism,
-) -> RulesetDelta:
-    """Return own-work Program phases or complete Equality-maintenance phases."""
-
-    phases = PhaseValues(
-        *(
-            0.0
-            if responsibility == "program" and phase == "rebuild"
-            else _ruleset_phase_delta(timing, file_order, name, responsibility, phase)
-            for phase in _RULESET_PHASES
-        )
+    phase_sums: dict[str, list[float]] = {}
+    native_rebuild = 0.0
+    for group in groups:
+        native_rebuild += group.native_rebuild_delta_ns
+        for ruleset in group.rulesets:
+            values = phase_sums.setdefault(ruleset.name, [0.0] * len(RULESET_PHASES))
+            for index, value in enumerate(ruleset.phases):
+                values[index] += value
+    rulesets = tuple(
+        RulesetChange(name, PhaseValues(*values)) for name, values in sorted(phase_sums.items()) if any(values)
     )
-    return RulesetDelta(math.fsum(phases), phases)
-
-
-def _sum_ruleset_deltas(rows: list[RulesetContributorView]) -> RulesetDelta:
-    """Sum a ruleset partition without losing phase-level additivity."""
-
-    phases = PhaseValues(*(math.fsum(row.delta.phases[index] for row in rows) for index in range(len(_RULESET_PHASES))))
-    return RulesetDelta(math.fsum(row.delta.total for row in rows), phases)
+    return RulesetGroup(rulesets, native_rebuild)
 
 
 def _sample_estimate(
@@ -642,9 +521,3 @@ def _sample_estimate(
         ci_low = mean - half_width
         ci_high = mean + half_width
     return _MetricEstimate(len(values), Estimate(mean, ci_low, ci_high), var_mean, issue)
-
-
-def _share(numerator: float | None, denominator: float | None, *, scale: float = 1.0) -> float | None:
-    if numerator is None or denominator is None or denominator == 0:
-        return None
-    return numerator / (denominator * scale)

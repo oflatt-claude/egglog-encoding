@@ -30,22 +30,13 @@ fn assert_duration(value: &serde_json::Value) {
     assert!(duration["nanos"].is_u64());
 }
 
-fn timing_leaf(summary: &serde_json::Value, path: &[&str]) -> u64 {
-    summary["timings"]
+fn ruleset<'a>(summary: &'a serde_json::Value, name: &str) -> &'a serde_json::Value {
+    summary["rulesets"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|leaf| {
-            leaf["path"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|segment| segment.as_str().unwrap())
-                .eq(path.iter().copied())
-        })
-        .unwrap_or_else(|| panic!("missing timing leaf {path:?}"))["ns"]
-        .as_u64()
-        .unwrap()
+        .find(|ruleset| ruleset["name"] == name)
+        .unwrap_or_else(|| panic!("missing ruleset {name:?}"))
 }
 
 #[test]
@@ -77,15 +68,18 @@ fn checks_have_the_same_command_timing_path_with_and_without_term_encoding() {
         let summary: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&summary_path).unwrap()).unwrap();
 
-        assert!(timing_leaf(&summary, &["commands", "check"]) > 0);
-        assert!(!summary["timings"].as_array().unwrap().iter().any(|leaf| {
-            let path = leaf["path"].as_array().unwrap();
-            path.first().and_then(serde_json::Value::as_str) == Some("program")
-                && path
-                    .last()
-                    .and_then(serde_json::Value::as_str)
-                    .is_some_and(|name| name.contains("check_facts_ruleset"))
-        }));
+        assert!(summary["commands_check_ns"].as_u64().unwrap() > 0);
+        assert!(
+            !summary["rulesets"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|ruleset| {
+                    ruleset["name"]
+                        .as_str()
+                        .is_some_and(|name| name.contains("check_facts_ruleset"))
+                })
+        );
 
         std::fs::remove_dir_all(directory).unwrap();
     }
@@ -121,26 +115,25 @@ fn encoded_equality_rulesets_are_tagged_by_role_not_mixed_with_program_rules() {
     );
     let summary: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&summary_path).unwrap()).unwrap();
-    let maintenance_names = summary["timings"]
+    let maintenance_names = summary["rulesets"]
         .as_array()
         .unwrap()
         .iter()
-        .filter_map(|leaf| {
-            let path = leaf["path"].as_array().unwrap();
-            (path.len() == 3
-                && path[0].as_str() == Some("equality")
-                && path[1].as_str() != Some("rebuild"))
-            .then(|| path[2].as_str().unwrap().to_owned())
-        })
+        .filter(|ruleset| ruleset["role"] == "equality")
+        .map(|ruleset| ruleset["name"].as_str().unwrap().to_owned())
         .collect::<std::collections::BTreeSet<_>>();
 
     assert!(!maintenance_names.is_empty());
-    assert!(!summary["timings"].as_array().unwrap().iter().any(|leaf| {
-        let path = leaf["path"].as_array().unwrap();
-        path.len() == 3
-            && path[0].as_str() == Some("program")
-            && maintenance_names.contains(path[2].as_str().unwrap())
-    }));
+    assert!(
+        !summary["rulesets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|ruleset| {
+                ruleset["role"] == "program"
+                    && maintenance_names.contains(ruleset["name"].as_str().unwrap())
+            })
+    );
 
     std::fs::remove_dir_all(directory).unwrap();
 }
@@ -186,43 +179,46 @@ fn timing_summary_is_compact_and_works_with_every_report_level() {
         assert!(!bytes[..bytes.len() - 1].contains(&b'\n'));
 
         let summary: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(summary.as_object().unwrap().len(), 2);
-        assert_eq!(summary["schema_version"], 3);
-        let timings = summary["timings"].as_array().unwrap();
-        assert_eq!(timings.len(), 19);
-        let paths = timings
-            .iter()
-            .map(|leaf| {
-                leaf["path"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .map(|segment| segment.as_str().unwrap().to_owned())
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
-        assert!(paths.windows(2).all(|pair| pair[0] < pair[1]));
-        assert_eq!(timing_leaf(&summary, &["commands", "check"]), 0);
-        for path in [
-            &["frontend", "parse"][..],
-            &["frontend", "other"],
-            &["frontend", "install"],
-            &["typecheck", "total"],
-            &["commands", "actions"],
-            &["commands", "other"],
+        assert_eq!(summary.as_object().unwrap().len(), 10);
+        assert_eq!(summary["schema_version"], 4);
+        assert_eq!(summary["commands_check_ns"], 0);
+        for field in [
+            "frontend_parse_ns",
+            "frontend_other_ns",
+            "frontend_install_ns",
+            "typecheck_ns",
+            "commands_actions_ns",
+            "commands_other_ns",
         ] {
-            assert!(timing_leaf(&summary, path) > 0, "expected nonzero {path:?}");
+            assert!(
+                summary[field].as_u64().unwrap() > 0,
+                "expected nonzero {field}"
+            );
         }
-        for ruleset in ["alpha", "zeta"] {
-            for phase in ["assembly", "search", "apply", "execution", "merge"] {
-                timing_leaf(&summary, &["program", phase, ruleset]);
+        let rulesets = summary["rulesets"].as_array().unwrap();
+        assert_eq!(rulesets.len(), 2);
+        assert_eq!(rulesets[0]["name"], "alpha");
+        assert_eq!(rulesets[1]["name"], "zeta");
+        for ruleset_name in ["alpha", "zeta"] {
+            let timing = ruleset(&summary, ruleset_name);
+            assert_eq!(timing["role"], "program");
+            for phase in [
+                "assembly_ns",
+                "search_ns",
+                "apply_ns",
+                "execution_ns",
+                "merge_ns",
+            ] {
+                assert!(timing[phase].is_u64());
             }
-            timing_leaf(&summary, &["equality", "rebuild", ruleset]);
         }
+        assert!(summary["native_rebuild_ns"].is_u64());
         let report: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&report_path).unwrap()).unwrap();
         for iteration in report["iterations"].as_array().unwrap() {
-            let split = iteration["rule_set_report"]["pre_merge"]["Split"]
+            assert!(iteration["name"].is_string());
+            assert_eq!(iteration["role"], "program");
+            let split = iteration["report"]["rule_set_report"]["pre_merge"]["Split"]
                 .as_object()
                 .unwrap();
             assert_eq!(split.len(), 3);
@@ -271,7 +267,7 @@ fn parallel_saved_report_uses_combined_pre_merge_shape() {
     let iterations = report["iterations"].as_array().unwrap();
     assert!(!iterations.is_empty());
     for iteration in iterations {
-        let combined = iteration["rule_set_report"]["pre_merge"]["Combined"]
+        let combined = iteration["report"]["rule_set_report"]["pre_merge"]["Combined"]
             .as_object()
             .unwrap();
         assert_eq!(combined.len(), 1);
@@ -326,8 +322,8 @@ fn stdin_program_writes_timing_summary() {
     let bytes = std::fs::read(&summary_path).unwrap();
     assert_eq!(bytes.last(), Some(&b'\n'));
     let summary: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(summary["schema_version"], 3);
-    assert!(summary["timings"].is_array());
+    assert_eq!(summary["schema_version"], 4);
+    assert!(summary["rulesets"].is_array());
     std::fs::remove_dir_all(directory).unwrap();
 }
 

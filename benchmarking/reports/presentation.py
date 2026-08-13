@@ -15,17 +15,15 @@ from pathlib import Path
 from ..engines import TREATMENT_SPECS
 from ..models import BenchmarkEndpoint, ComparisonSpec, DetailLevel, FileSpec
 from .analysis import (
-    RULESET_CONTRIBUTOR_LIMIT,
+    RULESET_PHASES,
     Estimate,
     FileComparisonView,
+    FileTimingBreakdown,
     MetricName,
-    PairReportViewData,
+    PhaseValues,
     RatioEstimate,
     ResultClass,
-    RulesetContributorView,
-    RulesetDelta,
-    SlowdownCell,
-    SlowdownDecompositionView,
+    RulesetGroup,
     SummaryView,
     analyze_pair,
 )
@@ -47,11 +45,19 @@ from .store import ReportStore
 
 NULL = "—"
 DEFAULT_RULESET = "<default ruleset>"
+RULESET_CONTRIBUTOR_LIMIT = 5
 DETAIL_ORDER: dict[DetailLevel, int] = {
     "summary": 0,
     "files": 1,
     "phases": 2,
     "rulesets": 3,
+}
+RESULT_TONES: dict[ResultClass, CellTone] = {
+    "higher": "default",
+    "invalid": "error",
+    "lower": "positive",
+    "point_only": "muted",
+    "unclear": "muted",
 }
 RATIO_DIRECTION = "Ratios are candidate / baseline; below 1 is lower and above 1 is higher."
 DECOMPOSITION_CAPTION = (
@@ -93,9 +99,9 @@ def build_report_catalog(
     if _includes(detail, "files"):
         sections.append(_files_section(views.files, comparison, file_labels))
     if _includes(detail, "phases"):
-        sections.append(_phases_section(views.decomposition, comparison, file_labels))
+        sections.append(_phases_section(views.timing, comparison, file_labels))
     if _includes(detail, "rulesets"):
-        sections.append(_rulesets_section(views, comparison, file_labels))
+        sections.append(_rulesets_section(views.timing, comparison, file_labels))
     return ReportCatalog(tuple(sections))
 
 
@@ -319,7 +325,7 @@ def _files_section(
 
 
 def _phases_section(
-    rows: Sequence[SlowdownDecompositionView],
+    rows: Sequence[FileTimingBreakdown],
     comparison: ComparisonSpec,
     file_labels: dict[FileSpec, str],
 ) -> ReportSection:
@@ -333,17 +339,23 @@ def _phases_section(
             file = comparison.files[row.file_order]
             row_id = report_id("row", "phases", file.sha256, file.fact_directory_sha256)
             label = file_labels[file]
-        comparable = [index for index, cell in enumerate(row.mechanisms) if cell.slowdown_share is not None]
-        leader = max(comparable, key=lambda index: abs(row.mechanisms[index].slowdown_share or 0.0), default=None)
-        if leader is not None and row.mechanisms[leader].slowdown_share == 0.0:
+        deltas = row.mechanism_deltas
+        wall_delta = row.wall_delta_ns
+        shares = tuple(
+            None if delta is None or wall_delta is None or wall_delta == 0 else delta / wall_delta for delta in deltas
+        )
+        comparable = [index for index, share in enumerate(shares) if share is not None]
+        leader = max(comparable, key=lambda index: abs(shares[index] or 0.0), default=None)
+        if leader is not None and shares[leader] == 0.0:
             leader = None
         mechanism_cells = tuple(
             _slowdown_cell(
-                cell,
+                delta,
+                shares[index],
                 leader=index == leader,
-                warning=row.residual_warning and index == len(row.mechanisms) - 1,
+                warning=row.residual_warning and index == len(deltas) - 1,
             )
-            for index, cell in enumerate(row.mechanisms)
+            for index, delta in enumerate(deltas)
         )
         report_rows.append(
             _row(
@@ -378,17 +390,23 @@ def _phases_section(
     return ReportSection("phases", "Slowdown decomposition", (table,))
 
 
-def _slowdown_cell(cell: SlowdownCell, *, leader: bool, warning: bool) -> ReportCell:
-    duration = _format_delta_ms(cell.delta_ns)
-    share = _format_percent(cell.slowdown_share, signed=True)
+def _slowdown_cell(
+    delta_ns: float | None,
+    slowdown_share: float | None,
+    *,
+    leader: bool,
+    warning: bool,
+) -> ReportCell:
+    duration = _format_delta_ms(delta_ns)
+    share = _format_percent(slowdown_share, signed=True)
     marker = "◆ " if leader else ""
-    display = NULL if cell.delta_ns is None else f"{marker}{share}  {duration}"
+    display = NULL if delta_ns is None else f"{marker}{share}  {duration}"
     if warning:
         display = f"!{display}"
     return text_cell(
-        cell.slowdown_share,
+        slowdown_share,
         display,
-        tone=_delta_tone(cell.delta_ns, share=cell.slowdown_share, emphasis=leader, warning=warning),
+        tone=_delta_tone(delta_ns, share=slowdown_share, emphasis=leader, warning=warning),
     )
 
 
@@ -415,28 +433,19 @@ def _delta_tone(
 
 
 def _rulesets_section(
-    views: PairReportViewData,
+    timing: Sequence[FileTimingBreakdown],
     comparison: ComparisonSpec,
     file_labels: dict[FileSpec, str],
 ) -> ReportSection:
-    by_file: dict[int, list[RulesetContributorView]] = {}
-    for row in views.rulesets:
-        by_file.setdefault(row.file_order, []).append(row)
-    file_issues = {
-        row.file_order: row.ratio.issue
-        for row in views.files
-        if row.metric == "wall_sec" and row.ratio.issue is not None
-    }
-    wall_deltas = {row.file_order: row.wall_delta_ns for row in views.decomposition if row.file_order is not None}
-    blocks: list[ReportBlock] = []
-    if views.rulesets:
-        blocks.append(ReportMessage(report_id("message", "rulesets", "guide"), None, RULESET_CAPTION, tone="muted"))
+    by_file = {row.file_order: row for row in timing if row.file_order is not None}
+    blocks: list[ReportBlock] = [
+        ReportMessage(report_id("message", "rulesets", "guide"), None, RULESET_CAPTION, tone="muted")
+    ]
     for file_order, file in enumerate(comparison.files):
         title = f"Ruleset drivers — {file_labels[file]}"
-        rulesets = by_file.get(file_order, [])
-        if not rulesets:
-            issue = file_issues.get(file_order)
-            status = f"Status: {issue}" if issue is not None else "No nonzero ruleset timing differences."
+        breakdown = by_file.get(file_order)
+        if breakdown is None or breakdown.issue is not None:
+            status = f"Status: {breakdown.issue}" if breakdown is not None else "Timing unavailable."
             blocks.append(
                 ReportMessage(
                     report_id("message", "rulesets", file.sha256, file.fact_directory_sha256),
@@ -445,14 +454,13 @@ def _rulesets_section(
                 )
             )
             continue
-        wall_delta = wall_deltas.get(file_order)
-        parents = {row.mechanism: row for row in rulesets if row.kind == "aggregate"}
-        program_parent = parents["program"]
-        equality_parent = parents["equality"]
+        program = sorted(breakdown.program.rulesets, key=lambda row: (-abs(row.phases.total), row.name))
+        maintenance = sorted(breakdown.equality.rulesets, key=lambda row: (-abs(row.phases.total), row.name))
+        wall_delta = breakdown.wall_delta_ns
         coverage = (
             None
             if wall_delta is None or wall_delta == 0
-            else (program_parent.delta.total + equality_parent.delta.total) / wall_delta
+            else (breakdown.program.phases.total + breakdown.equality.phases.total) / wall_delta
         )
         coverage_text = (
             "Program + Equality coverage is unavailable because wall time did not change."
@@ -462,24 +470,95 @@ def _rulesets_section(
                 "of this file's wall-time change."
             )
         )
-        source_count = program_parent.ruleset_count
+        source_count = len(program)
         source_shown = min(source_count, RULESET_CONTRIBUTOR_LIMIT)
         source_text = f"Source rules shown: {source_shown}/{source_count}"
         source_text += " plus exact Other." if source_count > source_shown else "."
-        maintenance_count = equality_parent.ruleset_count
+        maintenance_count = len(maintenance)
         maintenance_text = (
             "Maintenance rules shown: none."
             if maintenance_count == 0
             else f"Maintenance rules shown: {maintenance_count}/{maintenance_count}."
         )
         caption = f"{coverage_text} {source_text} {maintenance_text}"
+        report_rows = [
+            _ruleset_report_row(
+                file,
+                "aggregate",
+                "program",
+                "",
+                source_count,
+                breakdown.program.phases,
+                breakdown.wall_delta_ns,
+            )
+        ]
+        report_rows.extend(
+            _ruleset_report_row(
+                file,
+                "ruleset",
+                "program",
+                ruleset.name,
+                1,
+                ruleset.phases,
+                breakdown.wall_delta_ns,
+            )
+            for ruleset in program[:RULESET_CONTRIBUTOR_LIMIT]
+        )
+        if len(program) > RULESET_CONTRIBUTOR_LIMIT:
+            omitted = tuple(program[RULESET_CONTRIBUTOR_LIMIT:])
+            report_rows.append(
+                _ruleset_report_row(
+                    file,
+                    "other",
+                    "program",
+                    "",
+                    len(omitted),
+                    RulesetGroup(omitted).phases,
+                    breakdown.wall_delta_ns,
+                )
+            )
+        report_rows.append(
+            _ruleset_report_row(
+                file,
+                "aggregate",
+                "equality",
+                "",
+                maintenance_count,
+                breakdown.equality.phases,
+                breakdown.wall_delta_ns,
+            )
+        )
+        report_rows.extend(
+            _ruleset_report_row(
+                file,
+                "ruleset",
+                "equality",
+                ruleset.name,
+                1,
+                ruleset.phases,
+                breakdown.wall_delta_ns,
+            )
+            for ruleset in maintenance
+        )
+        if breakdown.equality.native_rebuild_delta_ns != 0:
+            report_rows.append(
+                _ruleset_report_row(
+                    file,
+                    "native_rebuild",
+                    "equality",
+                    "",
+                    0,
+                    PhaseValues(0, 0, 0, 0, 0, breakdown.equality.native_rebuild_delta_ns),
+                    breakdown.wall_delta_ns,
+                )
+            )
         blocks.append(
             _table(
                 report_id("table", "rulesets", file.sha256, file.fact_directory_sha256),
                 title,
                 ("driver", "delta", "share", "important_phases"),
                 ("Driver", "Δ", "Wall share", "Important phase changes"),
-                tuple(_ruleset_report_row(file, row, wall_delta) for row in rulesets),
+                tuple(report_rows),
                 caption=caption,
                 alignments=("left", "right", "right", "left"),
             )
@@ -487,54 +566,55 @@ def _rulesets_section(
     return ReportSection("rulesets", "Ruleset drivers", tuple(blocks))
 
 
-def _ruleset_report_row(file: FileSpec, row: RulesetContributorView, wall_delta: float | None) -> ReportRow:
-    parent = row.kind == "aggregate"
-    share = None if not parent or wall_delta is None or wall_delta == 0 else row.delta.total / wall_delta
-    tone = _delta_tone(row.delta.total, share=share)
+def _ruleset_report_row(
+    file: FileSpec,
+    kind: str,
+    mechanism: str,
+    name: str,
+    ruleset_count: int,
+    phases: PhaseValues,
+    wall_delta: float | None,
+) -> ReportRow:
+    parent = kind == "aggregate"
+    share = None if not parent or wall_delta is None or wall_delta == 0 else phases.total / wall_delta
+    tone = _delta_tone(phases.total, share=share)
+    if kind == "aggregate":
+        label = "Program rules — own work" if mechanism == "program" else "Equality/rebuild — net"
+    elif kind == "native_rebuild":
+        label = "↳ Native rebuild replaced"
+    elif kind == "other":
+        label = f"↳ Other ({ruleset_count} more source rulesets)"
+    else:
+        label = f"↳ {DEFAULT_RULESET if name == '' else name}"
     return _row(
         report_id(
             "row",
             "rulesets",
             file.sha256,
             file.fact_directory_sha256,
-            row.kind,
-            row.mechanism,
-            row.name,
+            kind,
+            mechanism,
+            name,
         ),
-        text_cell(
-            row.name,
-            _ruleset_contributor_label(row),
-            tone="emphasis" if parent else "default",
-        ),
-        text_cell(row.delta.total, format_duration(row.delta.total, signed=True), tone=tone),
+        text_cell(name, label, tone="emphasis" if parent else "default"),
+        text_cell(phases.total, format_duration(phases.total, signed=True), tone=tone),
         text_cell(share, _format_percent(share, signed=True) if parent else "", tone=tone),
-        text_cell(_important_phase_changes(row.delta), tone=tone),
+        text_cell(_important_phase_changes(phases), tone=tone),
     )
 
 
-def _ruleset_contributor_label(row: RulesetContributorView) -> str:
-    if row.kind == "aggregate":
-        return "Program rules — own work" if row.mechanism == "program" else "Equality/rebuild — net"
-    if row.kind == "native_rebuild":
-        return "↳ Native rebuild replaced"
-    if row.kind == "other":
-        return f"↳ Other ({row.ruleset_count} more source rulesets)"
-    name = DEFAULT_RULESET if row.name == "" else row.name
-    return f"↳ {name}"
-
-
-def _important_phase_changes(delta: RulesetDelta) -> str:
-    labels = ("Assembly", "Search", "Apply", "Execution", "Merge", "Rebuild")
-    changed = [index for index, value in enumerate(delta.phases) if value != 0]
+def _important_phase_changes(phases: PhaseValues) -> str:
+    changed = [index for index, value in enumerate(phases) if value != 0]
     if not changed:
         return "0 ns"
-    dominant = max(changed, key=lambda index: abs(delta.phases[index]))
-    threshold = max(1_000_000.0, abs(delta.total) * 0.1)
-    included = {index for index in changed if abs(delta.phases[index]) >= threshold}
+    dominant = max(changed, key=lambda index: abs(phases[index]))
+    threshold = max(1_000_000.0, abs(phases.total) * 0.1)
+    included = {index for index in changed if abs(phases[index]) >= threshold}
     included.add(dominant)
     parts = [
-        f"{'◆ ' if index == dominant else ''}{labels[index]} {format_duration(delta.phases[index], signed=True)}"
-        for index in range(len(labels))
+        f"{'◆ ' if index == dominant else ''}{RULESET_PHASES[index].title()} "
+        f"{format_duration(phases[index], signed=True)}"
+        for index in range(len(RULESET_PHASES))
         if index in included
     ]
     if any(index not in included for index in changed):
@@ -585,16 +665,14 @@ def report_file_labels(files: Sequence[FileSpec]) -> dict[FileSpec, str]:
 def format_duration(
     value_ns: float | None,
     *,
-    attribution: bool = False,
     signed: bool = False,
 ) -> str:
     """Format nanoseconds with three significant digits and a local unit."""
 
     if value_ns is None:
         return NULL
-    prefix = "!" if attribution and value_ns < 0 else ""
     divisor, unit = _duration_unit(abs(value_ns))
-    return f"{prefix}{_format_scaled(value_ns / divisor, signed=signed)} {unit}"
+    return f"{_format_scaled(value_ns / divisor, signed=signed)} {unit}"
 
 
 def _format_delta_ms(value_ns: float | None) -> str:
@@ -607,16 +685,13 @@ def _format_duration_interval(
     point_ns: float | None,
     low_ns: float | None,
     high_ns: float | None,
-    *,
-    attribution: bool = False,
 ) -> str:
     if point_ns is None:
         return NULL
     if low_ns is None or high_ns is None:
-        return format_duration(point_ns, attribution=attribution)
+        return format_duration(point_ns)
     divisor, unit = _duration_unit(max(abs(point_ns), abs(low_ns), abs(high_ns)))
-    prefix = "!" if attribution and point_ns < 0 else ""
-    return f"{prefix}{_format_scaled(low_ns / divisor)}–{_format_scaled(high_ns / divisor)} {unit}"
+    return f"{_format_scaled(low_ns / divisor)}–{_format_scaled(high_ns / divisor)} {unit}"
 
 
 def _duration_unit(magnitude_ns: float) -> tuple[float, str]:
@@ -667,14 +742,7 @@ def _estimate_cell(
 
 def _ratio_cell(ratio: RatioEstimate) -> ReportCell:
     # Retain the point for sorting/filtering while keeping the visible CI cell compact.
-    tones: dict[ResultClass, CellTone] = {
-        "higher": "default",
-        "invalid": "error",
-        "lower": "positive",
-        "point_only": "muted",
-        "unclear": "muted",
-    }
-    return text_cell(ratio.estimate.point, format_ratio_summary(ratio), tone=tones[ratio.result_class])
+    return text_cell(ratio.estimate.point, format_ratio_summary(ratio), tone=RESULT_TONES[ratio.result_class])
 
 
 def format_ratio_summary(ratio: RatioEstimate) -> str:
@@ -739,14 +807,7 @@ def _result_cell(result_class: ResultClass, issue: str | None, *, rss: bool) -> 
         text = "CI includes 1"
     else:
         raise AssertionError(f"unknown result class: {result_class}")
-    tones: dict[ResultClass, CellTone] = {
-        "higher": "default",
-        "invalid": "error",
-        "lower": "positive",
-        "point_only": "muted",
-        "unclear": "muted",
-    }
-    return text_cell(result_class, text, tone=tones[result_class])
+    return text_cell(result_class, text, tone=RESULT_TONES[result_class])
 
 
 def _table(

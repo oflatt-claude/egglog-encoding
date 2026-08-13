@@ -12,7 +12,7 @@ from benchmarking.reports.store import (
     CacheKey,
     ReportRecord,
     ReportStore,
-    TimingLeafRecord,
+    RulesetTimingRecord,
     TimingSummaryRecord,
     parse_report_record,
 )
@@ -116,8 +116,8 @@ def test_typed_dict_schema_and_nested_values_round_trip(tmp_path: Path) -> None:
                 apply_ns=5,
                 execution_ns=4,
                 merge_ns=7,
-                rebuild_ns=3,
-            )
+            ),
+            native_rebuild_ns=3,
         ),
     )
 
@@ -128,9 +128,20 @@ def test_typed_dict_schema_and_nested_values_round_trip(tmp_path: Path) -> None:
     assert tuple(loaded) == tuple(ReportRecord.__annotations__)
     summary = cast(TimingSummaryRecord, loaded["timing_summary"])
     assert tuple(summary) == tuple(TimingSummaryRecord.__annotations__)
-    timings = cast(list[TimingLeafRecord], summary["timings"])
-    assert all(tuple(leaf) == tuple(TimingLeafRecord.__annotations__) for leaf in timings)
-    assert ["program", "search", "rules/λ"] in [leaf["path"] for leaf in timings]
+    rulesets = cast(list[RulesetTimingRecord], summary["rulesets"])
+    assert all(tuple(ruleset) == tuple(RulesetTimingRecord.__annotations__) for ruleset in rulesets)
+    assert rulesets == [
+        {
+            "name": "rules/λ",
+            "role": "program",
+            "assembly_ns": 0,
+            "search_ns": 6,
+            "apply_ns": 5,
+            "execution_ns": 4,
+            "merge_ns": 7,
+        }
+    ]
+    assert summary["native_rebuild_ns"] == 3
 
 
 @pytest.mark.parametrize("schema_version", [None, 2], ids=["missing", "wrong"])

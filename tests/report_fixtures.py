@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal
 
 from benchmarking import models
 from benchmarking.reports.store import (
     REPORT_SCHEMA_VERSION,
     ReportRecord,
     ReportStore,
-    TimingLeafRecord,
+    RulesetTimingRecord,
+    RulesetTimingRole,
     TimingSummaryRecord,
 )
 
@@ -68,24 +68,23 @@ def make_ruleset_timing(
     apply_ns: int = 200_000_000,
     execution_ns: int = 0,
     merge_ns: int = 200_000_000,
-    rebuild_ns: int = 100_000_000,
-    role: Literal["program", "equality"] = "program",
-) -> tuple[TimingLeafRecord, ...]:
+    role: RulesetTimingRole = "program",
+) -> RulesetTimingRecord:
     """Construct one valid ruleset timing fixture."""
 
-    responsibility = "equality" if role == "equality" else "program"
-    return (
-        {"path": [responsibility, "assembly", name], "ns": assembly_ns},
-        {"path": [responsibility, "search", name], "ns": search_ns},
-        {"path": [responsibility, "apply", name], "ns": apply_ns},
-        {"path": [responsibility, "execution", name], "ns": execution_ns},
-        {"path": [responsibility, "merge", name], "ns": merge_ns},
-        {"path": ["equality", "rebuild", name], "ns": rebuild_ns},
-    )
+    return {
+        "name": name,
+        "role": role,
+        "assembly_ns": assembly_ns,
+        "search_ns": search_ns,
+        "apply_ns": apply_ns,
+        "execution_ns": execution_ns,
+        "merge_ns": merge_ns,
+    }
 
 
 def make_timing_summary(
-    *rulesets: tuple[TimingLeafRecord, ...],
+    *rulesets: RulesetTimingRecord,
     typecheck_ns: int = 0,
     frontend_parse_ns: int = 0,
     frontend_other_ns: int = 0,
@@ -93,24 +92,21 @@ def make_timing_summary(
     commands_actions_ns: int = 0,
     commands_check_ns: int = 0,
     commands_other_ns: int = 0,
+    native_rebuild_ns: int = 100_000_000,
 ) -> TimingSummaryRecord:
-    """Construct a valid V3 timing-summary fixture."""
+    """Construct a valid dense timing-summary fixture."""
 
-    timing_groups = rulesets or (make_ruleset_timing(),)
-    timings: list[TimingLeafRecord] = [
-        {"path": ["typecheck", "total"], "ns": typecheck_ns},
-        {"path": ["frontend", "parse"], "ns": frontend_parse_ns},
-        {"path": ["frontend", "other"], "ns": frontend_other_ns},
-        {"path": ["frontend", "install"], "ns": frontend_install_ns},
-        {"path": ["commands", "actions"], "ns": commands_actions_ns},
-        {"path": ["commands", "check"], "ns": commands_check_ns},
-        {"path": ["commands", "other"], "ns": commands_other_ns},
-    ]
-    timings.extend(leaf for group in timing_groups for leaf in group)
-    timings.sort(key=lambda leaf: leaf["path"])
     return {
-        "schema_version": 3,
-        "timings": timings,
+        "schema_version": 4,
+        "typecheck_ns": typecheck_ns,
+        "frontend_parse_ns": frontend_parse_ns,
+        "frontend_other_ns": frontend_other_ns,
+        "frontend_install_ns": frontend_install_ns,
+        "commands_actions_ns": commands_actions_ns,
+        "commands_check_ns": commands_check_ns,
+        "commands_other_ns": commands_other_ns,
+        "native_rebuild_ns": native_rebuild_ns,
+        "rulesets": list(rulesets or (make_ruleset_timing(),)),
     }
 
 

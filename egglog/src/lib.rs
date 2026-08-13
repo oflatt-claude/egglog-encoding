@@ -8,7 +8,6 @@ pub mod constraint;
 mod core;
 mod exec_state;
 pub mod extract;
-mod phase_timers;
 pub mod prelude;
 mod proofs;
 
@@ -44,7 +43,7 @@ use egglog_bridge::{ColumnTy, QueryEntry};
 use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
 use egglog_reports::{
-    PhaseTimingUnavailable, PreMergeTiming, ReportLevel, RunReport, TimingSummaryV3,
+    ProcessTimings, ReportLevel, RulesetTimingRole, RunReport, TimingSummary, TimingSummaryError,
 };
 pub use exec_state::{
     Context, Core, Enode, FullState, FunctionEntry, PureState, Read, ReadState, Write, WriteState,
@@ -322,19 +321,14 @@ pub struct EGraph {
     pushed_egraph: Option<Box<Self>>,
     functions: IndexMap<String, Function>,
     rulesets: IndexMap<String, Ruleset>,
-    /// The semantic responsibility of each declared ruleset's execution.
-    ruleset_timing_roles: IndexMap<String, phase_timers::RulesetTimingRole>,
     pub fact_directory: Option<PathBuf>,
     pub seminaive: bool,
     pub no_decomp: bool,
     type_info: TypeInfo,
     /// The run report unioned over all runs so far.
     overall_run_report: RunReport,
-    /// Roles for every ruleset present in `overall_run_report`, including work
-    /// performed inside a scope that has since been popped.
-    overall_ruleset_timing_roles: IndexMap<String, phase_timers::RulesetTimingRole>,
     /// Exclusive process work outside ruleset execution.
-    phase_timings: phase_timers::PhaseTimings,
+    process_timings: ProcessTimings,
     schedulers: DenseIdMap<SchedulerId, SchedulerRecord>,
     commands: IndexMap<String, Arc<dyn UserDefinedCommand>>,
     extension_state: HashMap<TypeId, Box<dyn ExtensionStateValue>>,
@@ -450,13 +444,11 @@ impl EGraph {
             pushed_egraph: Default::default(),
             functions: Default::default(),
             rulesets: Default::default(),
-            ruleset_timing_roles: Default::default(),
             fact_directory: None,
             seminaive: true,
             no_decomp: false,
             overall_run_report: Default::default(),
-            overall_ruleset_timing_roles: Default::default(),
-            phase_timings: Default::default(),
+            process_timings: Default::default(),
             type_info: Default::default(),
             schedulers: Default::default(),
             commands: Default::default(),
@@ -576,10 +568,13 @@ impl EGraph {
             None,
         );
 
-        eg.rulesets
-            .insert("".into(), Ruleset::Rules(Default::default()));
-        eg.ruleset_timing_roles
-            .insert("".into(), phase_timers::RulesetTimingRole::Program);
+        eg.rulesets.insert(
+            "".into(),
+            Ruleset {
+                kind: RulesetKind::Rules(Default::default()),
+                timing_role: RulesetTimingRole::Program,
+            },
+        );
 
         // The generic `get-fresh!` mint primitive is registered on every e-graph.
         // Doing it here — rather than per-eq-sort — means it is present whenever
@@ -857,12 +852,8 @@ impl EGraph {
             Some(mut e) => {
                 // Preserve the overall report from the popped egraph
                 std::mem::swap(&mut self.overall_run_report, &mut e.overall_run_report);
-                std::mem::swap(
-                    &mut self.overall_ruleset_timing_roles,
-                    &mut e.overall_ruleset_timing_roles,
-                );
                 // Work performed in the popped scope still belongs to this run.
-                std::mem::swap(&mut self.phase_timings, &mut e.phase_timings);
+                std::mem::swap(&mut self.process_timings, &mut e.process_timings);
                 // Preserve the symbol generator so that fresh symbols
                 // generated after pop don't collide with ones generated before pop.
                 std::mem::swap(&mut self.parser.symbol_gen, &mut e.parser.symbol_gen);
@@ -1389,13 +1380,13 @@ impl EGraph {
             rulesets: &IndexMap<String, Ruleset>,
             ids: &mut Vec<egglog_bridge::RuleId>,
         ) {
-            match &rulesets[ruleset] {
-                Ruleset::Rules(rules) => {
+            match &rulesets[ruleset].kind {
+                RulesetKind::Rules(rules) => {
                     for (_, id) in rules.values() {
                         ids.push(*id);
                     }
                 }
-                Ruleset::Combined(sub_rulesets) => {
+                RulesetKind::Combined(sub_rulesets) => {
                     for sub_ruleset in sub_rulesets {
                         collect_rule_ids(sub_ruleset, rulesets, ids);
                     }
@@ -1411,24 +1402,13 @@ impl EGraph {
             .run_rules(&rule_ids)
             .map_err(|e| Error::BackendError(e.to_string()))?;
 
-        let report = RunReport::singleton(ruleset, iteration_report);
-        self.record_ruleset_timing_role(ruleset);
+        let report = RunReport::singleton(
+            ruleset,
+            self.rulesets[ruleset].timing_role,
+            iteration_report,
+        );
         self.overall_run_report.union(report.clone());
         Ok(report)
-    }
-
-    fn record_ruleset_timing_role(&mut self, ruleset: &str) {
-        let role = self.ruleset_timing_roles[ruleset];
-        match self.overall_ruleset_timing_roles.entry(ruleset.to_owned()) {
-            Entry::Occupied(entry) => assert_eq!(
-                *entry.get(),
-                role,
-                "a ruleset's timing role changed after it was recorded"
-            ),
-            Entry::Vacant(entry) => {
-                entry.insert(role);
-            }
-        }
     }
 
     fn add_rule(&mut self, rule: ast::ResolvedRule) -> Result<String, Error> {
@@ -1451,9 +1431,13 @@ impl EGraph {
         // it expects only `union` on constructors (not set).
         let union_to_set = self.proof_state.original_typechecking.is_none();
 
-        match self.rulesets.get(&rule.ruleset) {
-            Some(Ruleset::Rules(_)) => {}
-            Some(Ruleset::Combined(_)) => {
+        match self
+            .rulesets
+            .get(&rule.ruleset)
+            .map(|ruleset| &ruleset.kind)
+        {
+            Some(RulesetKind::Rules(_)) => {}
+            Some(RulesetKind::Combined(_)) => {
                 return Err(Error::CombinedRulesetError(
                     rule.ruleset.clone(),
                     rule.span.clone(),
@@ -1486,7 +1470,11 @@ impl EGraph {
             translator.build(no_decomp)
         };
 
-        let Some(Ruleset::Rules(rules)) = self.rulesets.get_mut(&rule.ruleset) else {
+        let Some(Ruleset {
+            kind: RulesetKind::Rules(rules),
+            ..
+        }) = self.rulesets.get_mut(&rule.ruleset)
+        else {
             unreachable!("ruleset was validated before compiling the rule")
         };
         match rules.entry(rule.name.clone()) {
@@ -1918,9 +1906,9 @@ impl EGraph {
         let mut timing_role = None;
         for ruleset in &rulesets {
             let role = self
-                .ruleset_timing_roles
+                .rulesets
                 .get(ruleset)
-                .copied()
+                .map(|ruleset| ruleset.timing_role)
                 .ok_or_else(|| Error::NoSuchRuleset(ruleset.clone(), span.clone()))?;
             if timing_role.is_some_and(|expected| expected != role) {
                 return Err(Error::MixedRulesetResponsibilities(name, span.clone()));
@@ -1929,12 +1917,11 @@ impl EGraph {
         }
         match self.rulesets.entry(name.clone()) {
             Entry::Occupied(_) => panic!("Ruleset '{name}' was already present"),
-            Entry::Vacant(e) => e.insert(Ruleset::Combined(rulesets)),
+            Entry::Vacant(e) => e.insert(Ruleset {
+                kind: RulesetKind::Combined(rulesets),
+                timing_role: timing_role.unwrap_or(RulesetTimingRole::Program),
+            }),
         };
-        self.ruleset_timing_roles.insert(
-            name,
-            timing_role.unwrap_or(phase_timers::RulesetTimingRole::Program),
-        );
         Ok(())
     }
 
@@ -1949,15 +1936,17 @@ impl EGraph {
         .iter()
         .any(|generated| generated.as_str() == name)
         {
-            phase_timers::RulesetTimingRole::EqualityMaintenance
+            RulesetTimingRole::Equality
         } else {
-            phase_timers::RulesetTimingRole::Program
+            RulesetTimingRole::Program
         };
         match self.rulesets.entry(name.clone()) {
             Entry::Occupied(_) => panic!("Ruleset '{name}' was already present"),
-            Entry::Vacant(e) => e.insert(Ruleset::Rules(Default::default())),
+            Entry::Vacant(e) => e.insert(Ruleset {
+                kind: RulesetKind::Rules(Default::default()),
+                timing_role,
+            }),
         };
-        self.ruleset_timing_roles.insert(name, timing_role);
     }
 
     fn check_facts(&mut self, span: &Span, facts: &[ResolvedFact]) -> Result<(), Error> {
@@ -2008,8 +1997,7 @@ impl EGraph {
         self.backend.free_rule(id);
         self.backend.free_external_func(ext_id);
         let iteration_report = run_result.map_err(|e| Error::BackendError(e.to_string()))?;
-        self.phase_timings
-            .add(phase_timers::COMMANDS_CHECK, iteration_report.total_time());
+        self.process_timings.commands_check += iteration_report.total_time();
 
         let ext_sc_val = ext_sc.lock().unwrap().take();
         let matched = matches!(ext_sc_val, Some(()));
@@ -2046,30 +2034,22 @@ impl EGraph {
             _ => CommandPhase::Other,
         };
         let command_timer = Instant::now();
-        let process_before = self.phase_timings.total();
-        let ruleset_before = self.overall_run_report.total_ruleset_time();
+        let process_before = self.process_timings.total();
+        let iteration_before = self.overall_run_report.iterations.len();
         let result = self.run_command_inner(command);
-        let nested_process = self.phase_timings.total().saturating_sub(process_before);
-        let nested_rulesets = self
-            .overall_run_report
-            .total_ruleset_time()
-            .saturating_sub(ruleset_before);
+        let nested_process = self.process_timings.total().saturating_sub(process_before);
+        let nested_rulesets = self.overall_run_report.iterations[iteration_before..]
+            .iter()
+            .map(|iteration| iteration.report.total_time())
+            .sum();
         let own_time = command_timer
             .elapsed()
             .saturating_sub(nested_process + nested_rulesets);
         match phase {
-            CommandPhase::Install => self
-                .phase_timings
-                .add(phase_timers::FRONTEND_INSTALL, own_time),
-            CommandPhase::Actions => self
-                .phase_timings
-                .add(phase_timers::COMMANDS_ACTIONS, own_time),
-            CommandPhase::Check => self
-                .phase_timings
-                .add(phase_timers::COMMANDS_CHECK, own_time),
-            CommandPhase::Other => self
-                .phase_timings
-                .add(phase_timers::COMMANDS_OTHER, own_time),
+            CommandPhase::Install => self.process_timings.frontend_install += own_time,
+            CommandPhase::Actions => self.process_timings.commands_actions += own_time,
+            CommandPhase::Check => self.process_timings.commands_check += own_time,
+            CommandPhase::Other => self.process_timings.commands_other += own_time,
         }
         result
     }
@@ -2649,8 +2629,7 @@ impl EGraph {
             // TODO this is ugly- we don't need an entire e-graph just for type information.
             let typecheck_timer = Instant::now();
             let typechecked = original_typechecking.typecheck_program(&desugared)?;
-            self.phase_timings
-                .add(phase_timers::TYPECHECK, typecheck_timer.elapsed());
+            self.process_timings.typecheck += typecheck_timer.elapsed();
 
             for command in &typechecked {
                 if let Err(reason) = command_supports_proof_encoding(
@@ -2669,8 +2648,7 @@ impl EGraph {
         } else {
             let typecheck_timer = Instant::now();
             let mut typechecked = self.typecheck_program(&desugared)?;
-            self.phase_timings
-                .add(phase_timers::TYPECHECK, typecheck_timer.elapsed());
+            self.process_timings.typecheck += typecheck_timer.elapsed();
 
             typechecked = remove_globals::remove_globals(typechecked, &mut self.parser.symbol_gen);
             for command in &typechecked {
@@ -2685,13 +2663,10 @@ impl EGraph {
     /// When will_run is true, adds to `desugared_commands_run_so_far`, which is used for proof checking.
     fn resolve_command(&mut self, command: Command) -> Result<ResolvedNCommands, Error> {
         let lowering_timer = Instant::now();
-        let nested_before = self.phase_timings.total();
+        let nested_before = self.process_timings.total();
         let resolved = self.resolve_command_inner(command);
-        let nested = self.phase_timings.total().saturating_sub(nested_before);
-        self.phase_timings.add(
-            phase_timers::FRONTEND_OTHER,
-            lowering_timer.elapsed().saturating_sub(nested),
-        );
+        let nested = self.process_timings.total().saturating_sub(nested_before);
+        self.process_timings.frontend_other += lowering_timer.elapsed().saturating_sub(nested);
         resolved
     }
 
@@ -2745,8 +2720,7 @@ impl EGraph {
                 // Now typecheck using self, adding term type information.
                 let typecheck_timer = Instant::now();
                 let desugared_typechecked = self.typecheck_program(&desugared)?;
-                self.phase_timings
-                    .add(phase_timers::TYPECHECK, typecheck_timer.elapsed());
+                self.process_timings.typecheck += typecheck_timer.elapsed();
                 // Remove the globals the term encoding itself introduced (its minted
                 // `let`s), the same way source-level globals were removed above.
                 let desugared_typechecked = remove_globals::remove_globals(
@@ -2789,8 +2763,7 @@ impl EGraph {
                 &mut self.parser.symbol_gen,
                 macro_type_info,
             );
-            self.phase_timings
-                .add(phase_timers::FRONTEND_OTHER, macro_timer.elapsed());
+            self.process_timings.frontend_other += macro_timer.elapsed();
             let macro_expanded = macro_expanded?;
 
             for command in macro_expanded {
@@ -2799,8 +2772,7 @@ impl EGraph {
                     let include_timer = Instant::now();
                     let s = std::fs::read_to_string(file)
                         .map_err(|e| Error::IoError(file.clone().into(), e, span.clone()));
-                    self.phase_timings
-                        .add(phase_timers::FRONTEND_OTHER, include_timer.elapsed());
+                    self.process_timings.frontend_other += include_timer.elapsed();
                     let s = s?;
                     let included_program = self.parse_program_timed(Some(file.clone()), &s)?;
                     // run program internal on these include commands
@@ -2893,8 +2865,7 @@ impl EGraph {
     ) -> Result<Vec<Command>, Error> {
         let parse_timer = Instant::now();
         let parsed = self.parser.get_program_from_string(filename, input);
-        self.phase_timings
-            .add(phase_timers::FRONTEND_PARSE, parse_timer.elapsed());
+        self.process_timings.frontend_parse += parse_timer.elapsed();
         Ok(parsed?)
     }
 
@@ -2952,53 +2923,8 @@ impl EGraph {
         &self.overall_run_report
     }
 
-    pub(crate) fn timing_summary(&self) -> Result<TimingSummaryV3, PhaseTimingUnavailable> {
-        let mut leaves = self.phase_timings.timing_leaves();
-        for (ruleset, timing) in &self.overall_run_report.ruleset_timings {
-            let PreMergeTiming::Split {
-                search,
-                apply,
-                unattributed,
-            } = timing.pre_merge
-            else {
-                return Err(PhaseTimingUnavailable {
-                    ruleset: ruleset.to_string(),
-                });
-            };
-            let role = self
-                .overall_ruleset_timing_roles
-                .get(ruleset.as_ref())
-                .unwrap_or_else(|| panic!("missing timing role for ruleset {ruleset:?}"));
-            let responsibility = match role {
-                phase_timers::RulesetTimingRole::Program => "program",
-                phase_timers::RulesetTimingRole::EqualityMaintenance => "equality",
-            };
-            for (phase, duration) in [
-                ("assembly", timing.assembly),
-                ("search", search),
-                ("apply", apply),
-                ("execution", unattributed),
-                ("merge", timing.merge),
-            ] {
-                leaves.push((
-                    vec![
-                        responsibility.to_owned(),
-                        phase.to_owned(),
-                        ruleset.to_string(),
-                    ],
-                    duration,
-                ));
-            }
-            leaves.push((
-                vec![
-                    "equality".to_owned(),
-                    "rebuild".to_owned(),
-                    ruleset.to_string(),
-                ],
-                timing.rebuild,
-            ));
-        }
-        Ok(TimingSummaryV3::new(leaves))
+    pub(crate) fn timing_summary(&self) -> Result<TimingSummary, TimingSummaryError> {
+        TimingSummary::new(self.process_timings, self.overall_run_report.timings())
     }
 
     /// Convert from an egglog value to a Rust type.
@@ -3203,12 +3129,15 @@ impl EGraph {
 
         // Tear the temporary rule + ruleset down whether the body
         // succeeded or not.
-        if let Some(Ruleset::Rules(rules)) = self.rulesets.swap_remove(&ruleset) {
+        if let Some(Ruleset {
+            kind: RulesetKind::Rules(rules),
+            ..
+        }) = self.rulesets.swap_remove(&ruleset)
+        {
             for (_, rule) in rules {
                 self.backend.free_rule(rule.1);
             }
         }
-        self.ruleset_timing_roles.swap_remove(&ruleset);
         outcome?;
 
         let Some(mutex) = Arc::into_inner(results) else {
@@ -3853,16 +3782,12 @@ mod tests {
             .parse_and_run_program(None, "(datatype Math (Num i64)) (let value (Num 1))")
             .unwrap();
 
-        assert!(
-            egraph.phase_timings.leaves[phase_timers::FRONTEND_PARSE] > std::time::Duration::ZERO
-        );
-        assert!(egraph.phase_timings.leaves[phase_timers::TYPECHECK] > std::time::Duration::ZERO);
-        assert!(
-            egraph.phase_timings.leaves[phase_timers::FRONTEND_OTHER] > std::time::Duration::ZERO
-        );
+        assert!(egraph.process_timings.frontend_parse > std::time::Duration::ZERO);
+        assert!(egraph.process_timings.typecheck > std::time::Duration::ZERO);
+        assert!(egraph.process_timings.frontend_other > std::time::Duration::ZERO);
         let source_checker = egraph.proof_state.original_typechecking.as_ref().unwrap();
         assert_eq!(
-            source_checker.phase_timings.leaves[phase_timers::TYPECHECK],
+            source_checker.process_timings.typecheck,
             std::time::Duration::ZERO,
             "the child checker must not retain time omitted from the outer summary"
         );

@@ -15,14 +15,13 @@ const PROGRAM: &str = r#"
     (seed 1)
 "#;
 
-fn ruleset_names(report: &RunReport) -> Vec<&str> {
-    let mut names = report
-        .ruleset_timings
-        .keys()
-        .map(|name| name.as_ref())
-        .collect::<Vec<_>>();
-    names.sort_unstable();
-    names
+fn ruleset_names(report: &RunReport) -> Vec<String> {
+    report
+        .timings()
+        .rulesets
+        .iter()
+        .map(|timing| timing.name.to_string())
+        .collect()
 }
 
 #[test]

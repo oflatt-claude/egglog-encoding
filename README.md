@@ -325,100 +325,17 @@ Every successful benchmark observation records timing from the same measured
 process. Timing collection is always enabled; requesting a detailed report does
 not rerun a diagnostic process or change the cache key.
 
-The JSONL stores one sorted list of exclusive timing leaves. Each leaf has a
-segmented `path` and a raw nanosecond total; parent totals are never stored.
-Segmented paths keep a ruleset name such as `rules/λ` or one containing `/`
-unambiguous.
+The versioned timing summary stores seven fixed process counters, one typed row
+per named ruleset with its Program or Equality role and five exclusive own-work
+phases, and one global native-Rebuild counter. Parent mechanisms, shares, and
+Residual are derived rather than stored; the same canonical per-file breakdown
+feeds both the decomposition and ruleset-driver views, so their parent totals
+match by construction.
 
-Ruleset leaves have one of these shapes:
-
-- `program/<phase>/<ruleset>` for source-origin ruleset work;
-- `equality/<phase>/<ruleset>` for encoded equality-maintenance work;
-- `equality/rebuild/<ruleset>` for native Rebuild tails from source rulesets as
-  well as rebuild tails from maintenance rulesets.
-
-Rulesets receive an explicit semantic role when declared. Generated equality
-maintenance is therefore not inferred from an `@` name prefix. Moving both
-native and encoded implementations under `equality` makes their net cost an
-ordinary candidate-minus-baseline difference.
-
-The recorded ruleset phases are:
-
-- Ruleset assembly: lazy cached-plan creation and per-invocation executable
-  ruleset construction.
-- Search: matching and join execution.
-- Apply: executing rule-head instructions and staging updates.
-- Execution: measured pre-merge work that cannot be accurately classified as
-  Search or Apply.
-- Merge: resolving and installing staged updates.
-- Rebuild: rebuilding indexes and e-graph state.
-
-The engine measures one contiguous pre-merge interval, including per-run setup,
-and records the remainder after Search and Apply as Execution. Assembly done
-inside native rebuild remains part of Rebuild rather than being counted twice.
-All six leaves are retained for every invoked ruleset, including zero values.
-
-The same list contains these process leaves outside ordinary ruleset execution:
-
-- `typecheck/total`: total source and generated typechecking, including source
-  checking performed by the encoded mode's cloned checker;
-- `frontend/parse`, `frontend/other`, and `frontend/install`: parsing, other
-  lowering work, and post-resolution execution of declarations;
-- `commands/actions`, `commands/check`, and `commands/other`: actions/input,
-  complete check evaluation, and other commands or schedule driving.
-
-Check queries are transient backend rules in both encoded and unencoded modes.
-Their backend execution and surrounding compilation/validation overhead are
-charged together to `commands/check`; they do not appear as program rulesets.
-One known command boundary remains: if a top-level action such as `(union ...)`
-causes `flush_updates` to rebuild, that rebuild stays in `commands/actions`.
-Top-level actions are timed as commands and their transient backend report is
-not inserted into the named-ruleset ledger, so this work does not appear under
-Equality.
-
-Residual is derived per observation as external wall time minus every recorded
-leaf. It includes process setup, reporting, teardown, and any still-
-uninstrumented work.
-
-At `--detail phases`, the additive slowdown-decomposition table has a suite row
-and one row per file. The suite row is the sum of each selected file's
-candidate-minus-baseline endpoint mean; it is not a single process observation.
-Its rendered headers are `Wall Δ`, `Typecheck`, `Frontend`, `Program`,
-`Equality`, `Commands`, and `Residual`. Every mechanism cell displays its share
-of the row's wall-time change first, then candidate-minus-baseline milliseconds.
-`◆` marks the largest absolute mechanism share in each row; Rich and
-interactive reports also bold that cell, dim contributions below 5%, and color
-improvements green. Expected overhead is neutral rather than red; warning and
-error colors are reserved for suspect measurements. Percentages may be
-negative or exceed 100% when mechanisms offset. `!` on a Residual cell means at
-least one endpoint's mean recorded total exceeded its wall time.
-
-At `--detail rulesets`, one compact driver table appears per file. Its
-`Program rules — own work` and `Equality/rebuild — net` parent rows exactly
-match the corresponding cells in the decomposition, show their wall share,
-and report what fraction of the file's wall-time change they jointly account
-for. Child rows use a `↳` prefix in Rich, Markdown, and interactive reports.
-
-Program children contain only source-rule Assembly, Search, Apply, Execution,
-and Merge. They never inherit the native Rebuild tail that happened to follow
-their invocation. At most five changed source rulesets are ranked by absolute
-own-work difference; `Other (N more source rulesets)` is the exact additive
-sum of the omitted source children. Equality children contain every changed
-encoded-maintenance ruleset and, when nonzero, one global
-`Native rebuild replaced` row. Thus the children beneath each parent add
-exactly to that parent without a cross-mechanism reconciliation convention.
-Zero children are omitted.
-
-Only parent rows show wall share. Every row retains a compact phase summary.
-That summary includes every phase whose absolute change is at least
-`max(1 ms, 10% of |row change|)`, always includes the dominant phase marked
-with `◆`, and uses fixed Assembly, Search, Apply, Execution, Merge, Rebuild
-order. `…` means smaller nonzero phase changes were omitted from display, not
-from accounting.
-
-Rich gives every repeated table schema one content-derived column layout, so
-wall/RSS results align with each other and all per-file driver panels retain
-the same scan positions. Markdown remains width-independent.
+Checks are charged to the command counters in both modes. One known boundary is
+that a rebuild triggered by a top-level action such as `(union ...)` remains in
+Commands/Actions. The captions printed next to `--detail phases` and
+`--detail rulesets` are the source of truth for grouping and display rules.
 
 Benchmarks run single-threaded. This keeps Search and Apply attribution
 additive for egglog's interleaved executor.
@@ -554,10 +471,9 @@ Each observation contains target and workload
 provenance, exact cache coordinates, status, wall time, peak RSS, and failure
 details. A top-level report schema version covers both the persisted shape and
 measurement semantics, so methodology changes cannot silently reuse stale
-measurements. Successful observations also contain the version-3 timing
-summary: one open list of exclusive `{path: [segment, ...], ns: value}` leaves.
-Adding detail below an existing responsibility prefix does not require another
-parallel record shape. Changes to timing coverage or meaning still require a
+measurements. Successful observations also contain the version-4 timing
+summary: fixed process counters, a typed list of named ruleset timings, and one
+global native-Rebuild counter. Changes to timing coverage or meaning require a
 schema-version change so stale measurements cannot be reused silently.
 
 Timed-out rows have null wall time, peak RSS, and timing summary. Failed rows
@@ -569,18 +485,17 @@ This tool is the only supported reader and writer. The codec rejects old report
 and timing-summary schema versions and requires successful rows to contain
 timing data. It trusts the tool's typed writer rather than repeating the
 `TypedDict` as runtime field-by-field validation. A schema change intentionally
-invalidates existing caches: move or remove an incompatible report and recompute
-it. Analysis invariants use ordinary exceptions rather than `assert`, so
-optimized Python does not silently accept a persisted Residual leaf or an
-unknown top-level timing responsibility.
+invalidates existing caches: move or remove an incompatible report and
+recompute it.
 
 ### Report-analysis ownership
 
 `ComparisonSpec` owns the exact endpoints, files, rounds, and timeout;
 `store.py` owns physical row order and cache selection. `analysis.py` computes
-immutable summary, file, mechanism-decomposition, and ruleset rows, while `presentation.py` maps
-them to the renderer-neutral catalog. Rich, Markdown, and the interactive page
-serialize that catalog without recomputing report facts.
+immutable summary and file comparisons plus one canonical timing breakdown per
+file. `presentation.py` projects that breakdown into mechanism and ruleset
+tables; Rich, Markdown, and the interactive page serialize the catalog without
+recomputing report facts.
 
 ## Statistics
 

@@ -1,7 +1,9 @@
 use anyhow::{Context, Result, ensure};
 use clap::{Parser, ValueEnum};
 use egg::{RecExpr, Runner, SimpleScheduler, StopReason};
-use egglog_reports::TimingSummaryV3;
+use egglog_reports::{
+    PreMergeTiming, ProcessTimings, RulesetTiming, RulesetTimingRole, RunTimings, TimingSummary,
+};
 use std::{
     fs::File,
     io::BufWriter,
@@ -44,7 +46,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn run_math(proof_mode: ProofMode) -> Result<(TimingSummaryV3, usize)> {
+fn run_math(proof_mode: ProofMode) -> Result<(TimingSummary, usize)> {
     let left: RecExpr<Math> = CHECK_LEFT.parse().expect("fixed left check must parse");
     let right: RecExpr<Math> = CHECK_RIGHT.parse().expect("fixed right check must parse");
     let rules = math::rules();
@@ -100,43 +102,36 @@ fn run_math(proof_mode: ProofMode) -> Result<(TimingSummaryV3, usize)> {
         Duration::ZERO
     };
 
-    let timing = TimingSummaryV3::new([
-        (
-            vec!["program".into(), "assembly".into(), String::new()],
-            Duration::ZERO,
-        ),
-        (
-            vec!["program".into(), "search".into(), String::new()],
-            Duration::from_nanos(seconds_to_ns(report.search_time)),
-        ),
-        (
-            vec!["program".into(), "apply".into(), String::new()],
-            Duration::from_nanos(seconds_to_ns(report.apply_time)),
-        ),
-        (
-            vec!["program".into(), "execution".into(), String::new()],
-            Duration::from_nanos(seconds_to_ns(
-                (report.total_time - report.search_time - report.apply_time - report.rebuild_time)
-                    .max(0.0),
-            )),
-        ),
-        (
-            vec!["program".into(), "merge".into(), String::new()],
-            Duration::ZERO,
-        ),
-        (
-            vec!["equality".into(), "rebuild".into(), String::new()],
-            Duration::from_nanos(seconds_to_ns(report.rebuild_time)),
-        ),
-        (
-            vec!["commands".into(), "other".into()],
-            proof_postprocessing,
-        ),
-    ]);
+    let timing = TimingSummary::new(
+        ProcessTimings {
+            commands_other: proof_postprocessing,
+            ..ProcessTimings::default()
+        },
+        RunTimings {
+            rulesets: vec![RulesetTiming {
+                name: "".into(),
+                role: RulesetTimingRole::Program,
+                assembly: Duration::ZERO,
+                pre_merge: PreMergeTiming::Split {
+                    search: Duration::from_nanos(seconds_to_ns(report.search_time)),
+                    apply: Duration::from_nanos(seconds_to_ns(report.apply_time)),
+                    unattributed: Duration::from_nanos(seconds_to_ns(
+                        (report.total_time
+                            - report.search_time
+                            - report.apply_time
+                            - report.rebuild_time)
+                            .max(0.0),
+                    )),
+                },
+                merge: Duration::ZERO,
+            }],
+            native_rebuild: Duration::from_nanos(seconds_to_ns(report.rebuild_time)),
+        },
+    )?;
     Ok((timing, report.egraph_nodes))
 }
 
-fn write_timing_summary(path: &Path, timing: &TimingSummaryV3) -> Result<()> {
+fn write_timing_summary(path: &Path, timing: &TimingSummary) -> Result<()> {
     let file = File::create(path)
         .with_context(|| format!("failed to create timing summary {}", path.display()))?;
     serde_json::to_writer(BufWriter::new(file), timing)

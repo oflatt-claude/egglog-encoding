@@ -37,21 +37,6 @@ TONE_STYLES: dict[CellTone, str] = {
 }
 
 
-def report_table(title: str | None, *, caption: str | None = None) -> Table:
-    """Create one consistently styled Rich report table."""
-
-    return Table(
-        title=None if title is None else Text(title, style="bold"),
-        caption=None if caption is None else Text(caption, style="dim"),
-        caption_justify="left",
-        header_style="bold",
-        box=box.SIMPLE_HEAVY,
-        expand=True,
-        collapse_padding=True,
-        padding=(0, 1),
-    )
-
-
 def render_rich_table(
     table_data: ReportTable,
     *,
@@ -60,9 +45,15 @@ def render_rich_table(
 ) -> Table:
     """Render one catalog table without interpreting its display strings."""
 
-    table = report_table(
-        table_data.title if show_title else None,
-        caption=table_data.caption,
+    table = Table(
+        title=Text(table_data.title, style="bold") if show_title else None,
+        caption=None if table_data.caption is None else Text(table_data.caption, style="dim"),
+        caption_justify="left",
+        header_style="bold",
+        box=box.SIMPLE_HEAVY,
+        expand=True,
+        collapse_padding=True,
+        padding=(0, 1),
     )
     widths: tuple[int | None, ...] = preferred_widths or tuple(None for _ in table_data.columns)
     for column, preferred_width in zip(table_data.columns, widths, strict=True):

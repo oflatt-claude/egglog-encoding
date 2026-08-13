@@ -13,7 +13,7 @@ from rich.rule import Rule
 from syrupy.assertion import SnapshotAssertion
 
 from benchmarking import models
-from benchmarking.reports.analysis import PhaseValues, RulesetDelta
+from benchmarking.reports.analysis import PhaseValues
 from benchmarking.reports.catalog import ReportCatalog, ReportMessage, ReportTable, report_id
 from benchmarking.reports.presentation import (
     _important_phase_changes,
@@ -363,8 +363,8 @@ def test_negative_residual_keeps_an_explicit_warning(tmp_path: Path) -> None:
                     search_ns=1_200_000_000,
                     apply_ns=0,
                     merge_ns=0,
-                    rebuild_ns=0,
-                )
+                ),
+                native_rebuild_ns=0,
             ),
         ),
         make_record(
@@ -378,8 +378,8 @@ def test_negative_residual_keeps_an_explicit_warning(tmp_path: Path) -> None:
                     search_ns=1_100_000_000,
                     apply_ns=0,
                     merge_ns=0,
-                    rebuild_ns=0,
-                )
+                ),
+                native_rebuild_ns=0,
             ),
         ),
     )
@@ -392,9 +392,9 @@ def test_negative_residual_keeps_an_explicit_warning(tmp_path: Path) -> None:
 
 
 def test_important_phase_changes_use_the_documented_deterministic_threshold() -> None:
-    delta = RulesetDelta(20_000_000, PhaseValues(500_000, 10_000_000, 3_000_000, 2_000_000, 4_000_000, 500_000))
+    phases = PhaseValues(500_000, 10_000_000, 3_000_000, 2_000_000, 4_000_000, 500_000)
 
-    assert _important_phase_changes(delta) == (
+    assert _important_phase_changes(phases) == (
         "◆ Search +10.0 ms; Apply +3.00 ms; Execution +2.00 ms; Merge +4.00 ms; …"
     )
 
@@ -488,8 +488,12 @@ def test_timed_out_file_has_missing_phase_cells_and_ruleset_status(tmp_path: Pat
     assert len(phase_table.rows) == 2
     assert all(cell.display == "—" for row in phase_table.rows for cell in row.cells[1:])
     ruleset_section = next(section for section in catalog.sections if section.id == "rulesets")
-    assert isinstance(ruleset_section.blocks[0], ReportMessage)
-    assert ruleset_section.blocks[0].text == "Status: timeout row selected"
+    status = next(
+        block
+        for block in ruleset_section.blocks
+        if isinstance(block, ReportMessage) and block.title == "Ruleset drivers — file.egg"
+    )
+    assert status.text == "Status: timeout row selected"
     summary_section = next(section for section in catalog.sections if section.id == "summary")
     summary_table = next(block for block in summary_section.blocks if isinstance(block, ReportTable))
     invalid = next(row for row in summary_table.rows if row.cells[4].raw == "invalid")
@@ -538,15 +542,14 @@ def _pair_case(tmp_path: Path) -> tuple[Path, models.ComparisonSpec]:
                                 search_ns=int(wall * 300_000_000),
                                 apply_ns=int(wall * 120_000_000),
                                 merge_ns=80_000_000,
-                                rebuild_ns=30_000_000,
                             ),
                             make_ruleset_timing(
                                 "finish",
                                 search_ns=int(wall * 100_000_000),
                                 apply_ns=int(wall * 60_000_000),
                                 merge_ns=20_000_000,
-                                rebuild_ns=10_000_000,
                             ),
+                            native_rebuild_ns=40_000_000,
                         ),
                     )
                 )
@@ -584,7 +587,6 @@ def _six_file_pair_case(tmp_path: Path) -> tuple[Path, models.ComparisonSpec]:
                         apply_ns=int((ruleset_order + 1) * (file_order + 1) * 1_000_000 * timing_factor),
                         execution_ns=int((ruleset_order + 1) * 200_000 * timing_factor),
                         merge_ns=int((ruleset_order + 1) * 500_000 * timing_factor),
-                        rebuild_ns=int((ruleset_order + 1) * 250_000 * timing_factor),
                     )
                     for ruleset_order in range(12)
                 )
@@ -598,7 +600,12 @@ def _six_file_pair_case(tmp_path: Path) -> tuple[Path, models.ComparisonSpec]:
                         target_label=endpoint.target.row.label,
                         wall_sec=baseline_wall * wall_factor + round_index * 0.01,
                         max_rss_bytes=(100 + file_order * 20 + endpoint_order * 10 + round_index) * 1_000_000,
-                        timing_summary=make_timing_summary(*rulesets),
+                        timing_summary=make_timing_summary(
+                            *rulesets,
+                            native_rebuild_ns=sum(
+                                int((ruleset_order + 1) * 250_000 * timing_factor) for ruleset_order in range(12)
+                            ),
+                        ),
                     )
                 )
     write_report(report_path, *records)
