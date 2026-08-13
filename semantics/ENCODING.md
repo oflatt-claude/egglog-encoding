@@ -3,9 +3,9 @@
 `Encoding/Encode.lean` defines the encoding. Its theorems and their vacuity witnesses are
 **deleted**; this file is what survives of them, and it exists so the design is not
 re-attempted with the same defects. One thing has since moved in M11's favour, and it is the
-reason to restate rather than abandon: the congruence obstruction that blocks the refinement chain
-on *source* programs provably does not arise on encoded ones — "What survives", last two
-paragraphs.
+reason to restate rather than abandon: the congruence obstruction that constrains the refinement
+chain on *source* programs provably does not arise on encoded ones, and the hypothesis the chain
+was finally proved under is one `encode` satisfies — "What survives", last three paragraphs.
 
 The Lean is recoverable at commit `0836127`:
 
@@ -97,35 +97,43 @@ shared by `@UF` and every view — are built from `ordering-min`/`ordering-max`,
 congruence-stable**, and no operator is: the obstruction is that a choice operator has to commit
 to a side, not that `Term.blt` reads structure, so e-class ids, a class minimum, a database-aware
 primitive and a new operator baked into the language fail alike (`MERGE.md`, "The representative
-deviation"). It bites this encoder concretely rather than abstractly:
-`MergeStep.transport_recorded` is **false as stated at `c5682e0`**, refuted at `mergeBody` itself
+deviation"). It bites this encoder concretely rather than abstractly: an unrestricted
+`MergeStep.transport_recorded` is **false**, refuted at `mergeBody` itself
 (`transport_recorded_false`, with both states well formed and `A.Recorded C`). The specification's
 collision keeps one parent, every collision the implementation can run keeps another, and a
 `MergeStep` **asserts no equation** — the union-find edge is a *term*, `@UF(max, min)`, and `.set`
 records reflexive pairs only — so the two candidate parents are exactly as unrelated after the
 merge as before. That refutes the "any consistent choice of parent induces the same equivalence"
-argument at its root: the union-find does not absorb a different choice. (Treat the statement as
-being restated, not as pinned; a corrected form has not landed. The refutation and
-`recorded_iff_subset` below are probes, not yet homed in `Proofs/Counterexamples.lean`.)
+argument at its root: the union-find does not absorb a different choice.
 
-**The M11 side condition, restated — and it now buys the transports.** `encode` emits only `.set`
-and `.letBind`, never `.union`; a source `union` becomes a `.set @UF …`. So from `Database.empty`
-the target's `eqs` is diagonal-only, and `Cong` on the target is the **identity on the terms the
-target holds** — not "syntactic equality", which was the old phrasing and is wrong now that `Cong`
-has no `refl` rule. `Cong` reads `eqs` and nothing else, so no table of the target can add a
-derivation. It is the one M11 side condition that survived both the congruence collapse and the
-deletion, and any restatement gets it for free.
+The lemma that carries that name today is the *restricted* one — it takes `C.Diag` and is proved,
+by the collapse below, having also dropped `A.WF`. The refutation is why the hypothesis is there,
+and it stands against dropping it. `transport_recorded_false` and `recorded_iff_subset` were
+probes living outside the repository
+(`.claude/jobs/0f6e77e4/tmp/Choice3.lean`); they compile, but nothing in `lake build` checks them,
+so this description is what a reader of the tree alone has.
 
-**What it is worth has grown, and this is the finding to restate M11 around.** On a state whose
-asserted pairs are all reflexive, `Database.Recorded` **is** `Database.Contained`
-(`recorded_iff_subset`; `MERGE.md`, "Why `Recorded` is weaker than `Contained`") — nothing is
-congruent-but-distinct, so there is nothing for a re-keying to hide behind. By the side condition
-that is every state an encoded program reaches. `MergeStep.transport` and `MergeClosure.transport`
-along `Contained` are **already proved**, so a restated M11 may need no `Recorded` transport at
-all, and no congruence-stability hypothesis with it. The refutations above are not thereby
-harmless — they say where the danger lives, which is a *source* program combining a `union` with a
-user `:merge` that calls `ordering-min`. A restatement that stays on encoded programs never meets
-one; one that quantifies over source programs must.
+**The M11 side condition, restated — and it is now the delivered hypothesis, not just an
+observation.** `encode` emits only `.set` and `.letBind`, never `.union`; a source `union` becomes a
+`.set @UF …`. So from `Database.empty` the target's `eqs` is diagonal-only, and `Cong` on the target
+is the **identity on the terms the target holds** — not "syntactic equality", which was the old
+phrasing and is wrong now that `Cong` has no `refl` rule. `Cong` reads `eqs` and nothing else, so no
+table of the target can add a derivation. It is the one M11 side condition that survived both the
+congruence collapse and the deletion.
+
+**What it is worth has grown, and this is the finding to restate M11 around.** On a diagonal state
+`Database.Recorded` **is** `Database.Contained` — nothing is congruent-but-distinct, so a re-keying
+has nothing to hide behind. That is a library theorem now, `Database.Recorded.contained_of_diag`,
+and it is what proves the two surviving `Recorded` transports, which accordingly carry `C.Diag`. By
+the side condition every state an encoded program reaches is diagonal, so **a restated M11 can use
+those transports directly**, with no congruence-stability hypothesis; and `encode`'s output lands in
+the same arm as `execM_contained`'s `p.UnionFree`, the exact hypothesis under which that theorem is
+proved — `encode` uses `ordering-max` *inside a rule action*, so it would fail an ordering-free
+hypothesis and passes a union-free one. (`encode_unionFree` checked that by compiled proof, axioms
+`[propext, Quot.sound]`; it is a third missing probe.) The refutations are not thereby harmless —
+they say where the danger lives, which is a *source* program combining a `union` with a user
+`:merge` that calls `ordering-min`. A restatement that stays on encoded programs never meets one;
+one that quantifies over source programs must.
 
 The proof checker was never written. `CHECKER.md` scopes it; `Checks` was an opaque
 stand-in in the deleted statements.

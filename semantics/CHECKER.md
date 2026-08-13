@@ -17,8 +17,9 @@ refinement-chain statements were false as written, and *those* had proved M10 co
 `Encode.lean`'s own docstrings were making false claims about the encoding, and porting
 `Proofs/Merge.lean` turned up three more — `Cong.mono_recorded` in its old shape, the
 `ValidEnv`/`ValidSubst`/`ValidQuerySubst` family at a fixed substitution, and "a run under a
-congruent environment records the run under the original". Staleness and falsity look identical
-from the outside.
+congruent environment records the run under the original". Getting the last two `sorry`s out found
+one more, `Database.Out.mono_recorded`, false in every form that would have served its consumer.
+Staleness and falsity look identical from the outside.
 
 **Assume predictions about the *proofs* are wrong too.** `Database.Recorded.trans` was expected to
 need congruence-closure completeness; what proved it was 315 lines of conservativity machinery
@@ -250,7 +251,6 @@ rather than existential (a stronger claim, about the rebuild having converged, a
 because nothing is ever removed); and whether `encode` should emit `@fTerm` at all (nothing reads
 it, and with structural ids its id column is redundant with its key).
 
-One more, and it is the one to settle before restating anything: **congruence on the target is
-trivial**, because `encode` emits no `union` and `Cong` reads `eqs` and nothing else, so no table
-of the target can add a derivation. `ENCODING.md`, "What survives", states it exactly — the
-version of it that says "syntactic equality" is wrong, and was wrong in `Encode.lean` too.
+Read `ENCODING.md`, "What survives", before restating any of them: congruence on the target is
+trivial, which is what makes the `Recorded` transports usable there and is stated exactly only in
+that file.

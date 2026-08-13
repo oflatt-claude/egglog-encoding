@@ -29,8 +29,9 @@ deleted, and [`CHECKER.md`](CHECKER.md), what a Lean model of egglog's proof che
 Two things worth knowing before reading any of it.
 
 **`Spec/` is frozen** at 8 files and ~975 lines. `Impl/` is ported against it, difftest is green,
-and the whole library builds — `PLAN.md`, "Current priority", has the frontier, which is now three
-`Recorded` transports and nothing else.
+the whole library builds and **there are no `sorry`s left**. What is open is coverage rather than
+proof: `PLAN.md`, "What is covered, and what is not", has the one combination — a `union` together
+with a `:merge` function — that neither top-level theorem reaches, and which difftest exercises.
 
 **`Spec/` is append-only and `Impl/` is not.** Nothing is ever removed from `Database.eqs`,
 where a function's whole table lives as terms; `Impl/` keeps a `Row` index it re-keys and
@@ -50,7 +51,7 @@ read closely and the second skimmed.
 | `EgglogSemantics/Proofs/` | everything proved about the two, one file per subject |
 | `EgglogSemantics/Tests/` | example programs as proofs and `#guard`s, and the `.egg` emitter |
 | `EgglogSemantics/Encoding/` | **parked M11** — the encoder `encode` and nothing else; its theorems were deleted, and [`ENCODING.md`](ENCODING.md) is what survives them |
-| `Scratch/` | witnesses that are not yet homed in `Proofs/`; outside the library |
+| `Scratch/` | one surviving witness file, outside the library and so outside `lake build` — which is how the others were lost; `PLAN.md`, "Checking a change" |
 
 `Spec/` and `Impl/` are **definitions**, with what the language forces inlined rather than
 named: `decreasing_by` on `Impl/Closure.lean`'s `closure`, decidability instances. Two
@@ -84,9 +85,8 @@ lake build
 
 or, from the workspace root:
 
-- `make lean-check` — builds and fails on any `sorry`. **A whole-library build does not
-  pass right now**: `Proofs/Counterexamples.lean` and `Proofs/Lattice.lean` are not yet
-  ported to the rewritten `Spec/`. `PLAN.md` has the frontier.
+- `make lean-check` — builds and fails on any `sorry`. It passes, over the whole library,
+  `Proofs/Counterexamples.lean` and `Proofs/Lattice.lean` included, so any hit is a regression.
 - `make lean-difftest` — runs the interpreter and egglog on the same generated programs and
   compares per-function row counts, for the constructor fragment and for M9's `:merge`
   functions. 166 cases, all passing. Needs a release `egglog` binary. It reaches the
