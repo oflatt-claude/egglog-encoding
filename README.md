@@ -393,13 +393,13 @@ offset. `!` on a Residual cell means at least one endpoint's mean recorded total
 exceeded its wall time.
 
 A compact suite-level `Optimization ceilings` table then resets selected
-candidate-minus-baseline deltas to zero and reports the remaining wall-time
-change and implied point ratio. It distinguishes removing only Equality
-ruleset assembly from making the entire net Equality/rebuild responsibility
-match the baseline. These rows are optimistic additive accounting bounds, not
-predictions: they hold every other measured mean fixed, omit confidence
-intervals, and cannot model interactions between optimizations. Residual is
-never treated as removable work.
+positive candidate-minus-baseline deltas to zero and reports the remaining
+wall-time change and implied point ratio. Candidate-side speedups are retained.
+It distinguishes removing only Equality ruleset assembly from making the
+entire net Equality/rebuild responsibility match the baseline. These rows are
+optimistic additive accounting bounds, not predictions: they hold every other
+measured mean fixed, omit confidence intervals, and cannot model interactions
+between optimizations. Residual is never treated as removable work.
 
 At `--detail rulesets`, one compact driver table appears per file. Its
 `Program rules — own work` and `Equality/rebuild — net` parent rows exactly
@@ -619,9 +619,9 @@ shown. No median or geometric mean is mixed into this minimal headline.
 
 A timed-out, failed, or otherwise incomplete selected result invalidates the
 suite result that depends on it. Valid per-file tail comparisons remain useful
-when an unrelated file is incomplete. Mechanism contributions and individual
-ruleset component deltas are descriptive diagnostics; ruleset totals receive
-confidence intervals.
+when an unrelated file is incomplete. Mechanism contributions, optimization
+ceilings, and ruleset totals or component deltas are descriptive diagnostics;
+only endpoint estimates and ratios receive confidence intervals.
 
 The `<2x` proof goal is established only when the upper bound of the suite wall
 ratio's 95% confidence interval is below `2x` for a proofs-versus-off
