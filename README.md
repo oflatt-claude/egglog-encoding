@@ -218,8 +218,8 @@ path.
 | --- | --- |
 | `summary` | comparison selection and headline summary |
 | `files` | per-file wall time and peak RSS estimates |
-| `phases` | per-file phase confidence intervals, wall shares, and change contributions |
-| `rulesets` | the top 10 changed rulesets per file, including phase deltas |
+| `phases` | one additive slowdown decomposition across files and mechanisms |
+| `rulesets` | Program/Equality driver groups and changed rulesets per file |
 
 The default is `summary`. For example:
 
@@ -272,46 +272,95 @@ Every successful benchmark observation records timing from the same measured
 process. Timing collection is always enabled; requesting a detailed report does
 not rerun a diagnostic process or change the cache key.
 
-The engine records these components per ruleset and the JSONL stores their raw
-nanosecond totals:
+The JSONL stores one sorted list of exclusive timing leaves. Each leaf has a
+segmented `path` and a raw nanosecond total; parent totals are never stored.
+Segmented paths keep a ruleset name such as `rules/λ` or one containing `/`
+unambiguous.
 
+Ruleset leaves have one of these shapes:
+
+- `program/<phase>/<ruleset>` for source-origin ruleset work;
+- `equality/<phase>/<ruleset>` for encoded equality-maintenance work;
+- `equality/rebuild/<ruleset>` for native Rebuild tails from source rulesets as
+  well as rebuild tails from maintenance rulesets.
+
+Rulesets receive an explicit semantic role when declared. Generated equality
+maintenance is therefore not inferred from an `@` name prefix. Moving both
+native and encoded implementations under `equality` makes their net cost an
+ordinary candidate-minus-baseline difference.
+
+The recorded ruleset phases are:
+
+- Ruleset assembly: lazy cached-plan creation and per-invocation executable
+  ruleset construction.
 - Search: matching and join execution.
 - Apply: executing rule-head instructions and staging updates.
-- Unattributed: measured pre-merge work that cannot be accurately classified
-  as Search or Apply.
+- Execution: measured pre-merge work that cannot be accurately classified as
+  Search or Apply.
 - Merge: resolving and installing staged updates.
 - Rebuild: rebuilding indexes and e-graph state.
 
-The engine measures one contiguous pre-merge interval and records the remainder
-after Search and Apply as Unattributed.
+The engine measures one contiguous pre-merge interval, including per-run setup,
+and records the remainder after Search and Apply as Execution. Assembly done
+inside native rebuild remains part of Rebuild rather than being counted twice.
+All six leaves are retained for every invoked ruleset, including zero values.
 
-The phase report aggregates all rulesets and keeps two kinds of otherwise
-hidden time distinct:
+The same list contains these process leaves outside ordinary ruleset execution:
 
-- Execution overhead is the stored Unattributed component: measured work
-  inside ruleset execution that cannot be split accurately into Search or
-  Apply.
-- Outside recorded rulesets is derived as process wall time minus Search,
-  Apply, Execution overhead, Merge, and Rebuild. It includes process setup,
-  reporting, teardown, and other work outside timed ruleset execution.
+- `typecheck/total`: total source and generated typechecking, including source
+  checking performed by the encoded mode's cloned checker;
+- `frontend/parse`, `frontend/other`, and `frontend/install`: parsing, other
+  lowering work, and post-resolution execution of declarations;
+- `commands/actions`, `commands/check`, and `commands/other`: actions/input,
+  complete check evaluation, and other commands or schedule driving.
 
-Each file gets its own phase table. For both endpoints, it displays the phase
-mean's 95% confidence interval and the phase's share of that endpoint's wall
-time. It also displays the signed mean change and that phase's contribution to
-the file's total wall-time change. Contributions may be negative or exceed
-100% when phases offset each other. A negative Outside recorded rulesets value
-is prefixed with `!`; it means recorded phase totals exceed wall time and should
-be treated as an attribution warning.
+Check queries are transient backend rules in both encoded and unencoded modes.
+Their backend execution and surrounding compilation/validation overhead are
+charged together to `commands/check`; they do not appear as program rulesets.
+One known command boundary remains: if a top-level action such as `(union ...)`
+causes `flush_updates` to rebuild, that rebuild stays in `commands/actions`.
+Top-level actions are timed as commands and their transient backend report is
+not inserted into the named-ruleset ledger, so this work does not appear under
+Equality.
 
-The ruleset report totals all five stored components for each ruleset, aligns
-the union of names across the two endpoints, and ranks by the absolute
-candidate-minus-baseline total difference. It omits exact-zero changes and
-displays at most 10 rulesets per file. Each row includes the baseline and
-candidate total confidence intervals, total change, and descriptive Search,
-Apply, Execution overhead, Merge, and Rebuild changes. Timings are aggregated
-across the selected observations; iterations are not separate report rows. A
-ruleset absent from one endpoint is displayed as `—`, while a measured zero
-remains `0 ns`.
+Residual is derived per observation as external wall time minus every recorded
+leaf. It includes process setup, reporting, teardown, and any still-
+uninstrumented work.
+
+At `--detail phases`, one additive slowdown-decomposition table has a suite row
+and one row per file. Its rendered headers are `Wall Δ`, `Typecheck`,
+`Frontend`, `Program`, `Equality`, `Commands`, and `Residual`. Every mechanism
+cell displays its share of the wall-time change first, then
+candidate-minus-baseline milliseconds. `◆` marks the largest absolute
+mechanism share in each row; Rich and interactive reports also bold that cell,
+dim contributions below 5%, and color improvements green. Expected overhead is
+neutral rather than red; warning and error colors are reserved for suspect
+measurements. Percentages may be negative or exceed 100% when mechanisms
+offset. `!` on a Residual cell means at least one endpoint's mean recorded total
+exceeded its wall time.
+
+At `--detail rulesets`, one compact driver table appears per file. Its
+`Program rules — own work` and `Equality/rebuild — net` parent rows exactly
+match the corresponding cells in the decomposition, show their wall share,
+and report what fraction of the file's wall-time change they jointly account
+for. Child rows use a `↳` prefix in Rich, Markdown, and interactive reports.
+
+Program children contain only source-rule Assembly, Search, Apply, Execution,
+and Merge. They never inherit the native Rebuild tail that happened to follow
+their invocation. At most five changed source rulesets are ranked by absolute
+own-work difference; `Other (N more source rulesets)` is the exact additive
+sum of the omitted source children. Equality children contain every changed
+encoded-maintenance ruleset and, when nonzero, one global
+`Native rebuild replaced` row. Thus the children beneath each parent add
+exactly to that parent without a cross-mechanism reconciliation convention.
+Zero children are omitted.
+
+Only parent rows show wall share. Every row retains a compact phase summary.
+That summary includes every phase whose absolute change is at least
+`max(1 ms, 10% of |row change|)`, always includes the dominant phase marked
+with `◆`, and uses fixed Assembly, Search, Apply, Execution, Merge, Rebuild
+order. `…` means smaller nonzero phase changes were omitted from display, not
+from accounting.
 
 Benchmarks run single-threaded. This keeps Search and Apply attribution
 additive for egglog's interleaved executor.
@@ -447,9 +496,11 @@ Each observation contains target and workload
 provenance, exact cache coordinates, status, wall time, peak RSS, and failure
 details. A top-level report schema version covers both the persisted shape and
 measurement semantics, so methodology changes cannot silently reuse stale
-measurements. Successful observations also contain the version-2 per-ruleset
-timing summary: name plus Search, Apply, Unattributed, Merge, and Rebuild
-nanoseconds.
+measurements. Successful observations also contain the version-3 timing
+summary: one open list of exclusive `{path: [segment, ...], ns: value}` leaves.
+Adding detail below an existing responsibility prefix does not require another
+parallel record shape. Changes to timing coverage or meaning still require a
+schema-version change so stale measurements cannot be reused silently.
 
 Timed-out rows have null wall time, peak RSS, and timing summary. Failed rows
 have no timing summary and retain whatever process measurements the operating
@@ -461,13 +512,15 @@ and timing-summary schema versions and requires successful rows to contain
 timing data. It trusts the tool's typed writer rather than repeating the
 `TypedDict` as runtime field-by-field validation. A schema change intentionally
 invalidates existing caches: move or remove an incompatible report and recompute
-it.
+it. Analysis invariants use ordinary exceptions rather than `assert`, so
+optimized Python does not silently accept a persisted Residual leaf or an
+unknown top-level timing responsibility.
 
 ### Report-analysis ownership
 
 `ComparisonSpec` owns the exact endpoints, files, rounds, and timeout;
 `store.py` owns physical row order and cache selection. `analysis.py` computes
-immutable summary, file, phase, and ruleset rows, while `presentation.py` maps
+immutable summary, file, mechanism-decomposition, and ruleset rows, while `presentation.py` maps
 them to the renderer-neutral catalog. Rich, Markdown, and the interactive page
 serialize that catalog without recomputing report facts.
 
@@ -504,9 +557,9 @@ shown. No median or geometric mean is mixed into this minimal headline.
 
 A timed-out, failed, or otherwise incomplete selected result invalidates the
 suite result that depends on it. Valid per-file tail comparisons remain useful
-when an unrelated file is incomplete. Phase endpoint means and ruleset totals
-receive confidence intervals; phase contributions and individual ruleset
-component deltas are descriptive diagnostics.
+when an unrelated file is incomplete. Mechanism contributions and individual
+ruleset component deltas are descriptive diagnostics; ruleset totals receive
+confidence intervals.
 
 The `<2x` proof goal is established only when the upper bound of the suite wall
 ratio's 95% confidence interval is below `2x` for a proofs-versus-off

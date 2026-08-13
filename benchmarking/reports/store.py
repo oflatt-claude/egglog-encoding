@@ -22,29 +22,25 @@ from ..models import (
     Treatment,
 )
 
-type ReportSchemaVersion = Literal[2]
-REPORT_SCHEMA_VERSION: Final[ReportSchemaVersion] = 2
+type ReportSchemaVersion = Literal[3]
+REPORT_SCHEMA_VERSION: Final[ReportSchemaVersion] = 3
 
-type TimingSummarySchemaVersion = Literal[2]
-TIMING_SUMMARY_SCHEMA_VERSION: Final[TimingSummarySchemaVersion] = 2
+type TimingSummarySchemaVersion = Literal[3]
+TIMING_SUMMARY_SCHEMA_VERSION: Final[TimingSummarySchemaVersion] = 3
 
 
-class RulesetTimingRecord(TypedDict):
-    """Persisted engine time for one ruleset."""
+class TimingLeafRecord(TypedDict):
+    """One exclusive timing leaf with unambiguous path segments."""
 
-    name: str
-    search_ns: int
-    apply_ns: int
-    unattributed_ns: int
-    merge_ns: int
-    rebuild_ns: int
+    path: list[str]
+    ns: int
 
 
 class TimingSummaryRecord(TypedDict):
     """Versioned engine timing summary embedded in one successful row."""
 
     schema_version: TimingSummarySchemaVersion
-    rulesets: list[RulesetTimingRecord]
+    timings: list[TimingLeafRecord]
 
 
 class ReportRecord(TypedDict):

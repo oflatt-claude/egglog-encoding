@@ -28,7 +28,7 @@ RICH_SECTION_ORDER = ("rulesets", "phases", "files", "selection", "summary")
 TONE_STYLES: dict[CellTone, str] = {
     "default": "",
     "positive": "green",
-    "negative": "red",
+    "emphasis": "bold",
     "warning": "yellow",
     "error": "bold red",
     "muted": "dim",
@@ -53,7 +53,10 @@ def report_table(title: str | None, *, caption: str | None = None) -> Table:
 def render_rich_table(table_data: ReportTable, *, show_title: bool = True) -> Table:
     """Render one catalog table without interpreting its display strings."""
 
-    table = report_table(table_data.title if show_title else None, caption=table_data.caption)
+    table = report_table(
+        table_data.title if show_title else None,
+        caption=table_data.caption,
+    )
     for column in table_data.columns:
         table.add_column(
             Text(column.label),
@@ -136,8 +139,7 @@ def _markdown_section_parts(section: ReportSection) -> tuple[str, ...]:
     if section.title is not None:
         parts.append(f"## {_markdown_heading(section.title)}")
     for index, block in enumerate(section.blocks):
-        if index == 0 and _first_table_repeats_section_title(section):
-            assert isinstance(block, ReportTable)
+        if isinstance(block, ReportTable) and index == 0 and block.title == section.title:
             parts.append(render_markdown_table(block, heading_level=None))
         else:
             parts.append(_render_markdown_block(block))

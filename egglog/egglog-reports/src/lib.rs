@@ -142,6 +142,9 @@ impl PreMergeTiming {
 /// Aggregated timing for all iterations of one ruleset.
 #[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq, Default)]
 pub struct RulesetTiming {
+    /// Building the executable ruleset for each invocation, including lazy
+    /// cached-plan creation on first use.
+    pub assembly: Duration,
     /// Execution before staged updates are merged.
     pub pre_merge: PreMergeTiming,
     /// Resolving and installing staged updates.
@@ -152,10 +155,11 @@ pub struct RulesetTiming {
 
 impl RulesetTiming {
     pub fn total(self) -> Duration {
-        self.pre_merge.total() + self.merge + self.rebuild
+        self.assembly + self.pre_merge.total() + self.merge + self.rebuild
     }
 
     fn union(&mut self, other: Self) {
+        self.assembly += other.assembly;
         self.pre_merge.union(other.pre_merge);
         self.merge += other.merge;
         self.rebuild += other.rebuild;
@@ -180,6 +184,8 @@ impl RuleSetReport {
 
 #[derive(Debug, Serialize, Clone, Default)]
 pub struct IterationReport {
+    /// Preparing this invocation's executable ruleset before execution starts.
+    pub assembly_time: Duration,
     pub rule_set_report: RuleSetReport,
     pub rebuild_time: Duration,
 }
@@ -195,6 +201,14 @@ impl IterationReport {
 
     pub fn rules(&self) -> impl Iterator<Item = &Arc<str>> {
         self.rule_set_report.rule_reports.keys()
+    }
+
+    /// Total exclusive wall-clock work recorded for this invocation.
+    pub fn total_time(&self) -> Duration {
+        self.assembly_time
+            + self.rule_set_report.pre_merge.total()
+            + self.rule_set_report.merge_time
+            + self.rebuild_time
     }
 }
 
@@ -247,6 +261,7 @@ impl Display for RunReport {
         }
 
         for (ruleset, timing) in &self.ruleset_timings {
+            let assembly_time = timing.assembly.as_secs_f64();
             let merge_time = timing.merge.as_secs_f64();
             let rebuild_time = timing.rebuild.as_secs_f64();
             match timing.pre_merge {
@@ -257,7 +272,7 @@ impl Display for RunReport {
                 } => {
                     writeln!(
                         f,
-                        "Ruleset {ruleset}: search {:.3}s, apply {:.3}s, unattributed {:.3}s, merge {merge_time:.3}s, rebuild {rebuild_time:.3}s",
+                        "Ruleset {ruleset}: assembly {assembly_time:.3}s, search {:.3}s, apply {:.3}s, unattributed {:.3}s, merge {merge_time:.3}s, rebuild {rebuild_time:.3}s",
                         search.as_secs_f64(),
                         apply.as_secs_f64(),
                         unattributed.as_secs_f64(),
@@ -266,7 +281,7 @@ impl Display for RunReport {
                 PreMergeTiming::Combined { elapsed } => {
                     writeln!(
                         f,
-                        "Ruleset {ruleset}: pre-merge {:.3}s, merge {merge_time:.3}s, rebuild {rebuild_time:.3}s",
+                        "Ruleset {ruleset}: assembly {assembly_time:.3}s, pre-merge {:.3}s, merge {merge_time:.3}s, rebuild {rebuild_time:.3}s",
                         elapsed.as_secs_f64(),
                     )?;
                 }
@@ -321,6 +336,7 @@ impl RunReport {
         report.ruleset_timings.insert(
             ruleset,
             RulesetTiming {
+                assembly: iteration.assembly_time,
                 pre_merge: iteration.rule_set_report.pre_merge,
                 merge: iteration.rule_set_report.merge_time,
                 rebuild: iteration.rebuild_time,
@@ -335,6 +351,15 @@ impl RunReport {
 
     pub fn add_iteration(&mut self, ruleset: &str, iteration: IterationReport) {
         self.union(RunReport::singleton(ruleset, iteration));
+    }
+
+    /// Total wall-clock work recorded by all ruleset phase timers.
+    pub fn total_ruleset_time(&self) -> Duration {
+        self.ruleset_timings
+            .values()
+            .copied()
+            .map(RulesetTiming::total)
+            .sum()
     }
 
     /// Merge two reports.
@@ -356,29 +381,28 @@ impl RunReport {
     }
 }
 
-/// Compact, deterministic timing transport for benchmark runners.
+/// One exclusive timing leaf in the benchmark transport.
+///
+/// Static mechanism and phase names occupy the first two segments. Ruleset
+/// leaves add the exact ruleset name as a third segment. Segments are stored
+/// separately so user names containing `/` remain unambiguous.
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
-pub struct RulesetTimingV2 {
-    pub name: String,
-    pub search_ns: u64,
-    pub apply_ns: u64,
-    pub unattributed_ns: u64,
-    pub merge_ns: u64,
-    pub rebuild_ns: u64,
+pub struct TimingLeafV3 {
+    pub path: Vec<String>,
+    pub ns: u64,
 }
 
-/// Versioned ruleset timing summary for successful egglog runs.
+/// Versioned, deterministic timing transport for successful egglog runs.
 ///
-/// V2 includes every name in [`RunReport::ruleset_timings`], preserves the
-/// empty name used by the default ruleset, and sorts names lexicographically.
-/// Split pre-merge timing must be available for every included ruleset;
-/// otherwise construction returns [`PhaseTimingUnavailable`]. Durations are
-/// converted to nanoseconds with saturation at [`u64::MAX`], and the ruleset
-/// list is never truncated.
+/// The values are exclusive wall-clock leaves: their sum can be subtracted
+/// once from process wall time to derive residual. Parent totals are never
+/// stored. Construction sorts paths lexicographically, rejects duplicate paths
+/// as a producer bug, saturates nanoseconds at [`u64::MAX`], and never
+/// truncates the leaf list.
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
-pub struct TimingSummaryV2 {
+pub struct TimingSummaryV3 {
     pub schema_version: u32,
-    pub rulesets: Vec<RulesetTimingV2>,
+    pub timings: Vec<TimingLeafV3>,
 }
 
 /// A requested timing summary contains a ruleset whose split phase timing was
@@ -400,39 +424,29 @@ impl Display for PhaseTimingUnavailable {
 
 impl std::error::Error for PhaseTimingUnavailable {}
 
-impl TimingSummaryV2 {
-    pub fn from_run_report(report: &RunReport) -> Result<Self, PhaseTimingUnavailable> {
-        let mut timings = report.ruleset_timings.iter().collect::<Vec<_>>();
-        timings.sort_unstable_by(|(left, _), (right, _)| left.as_ref().cmp(right.as_ref()));
-
-        let rulesets = timings
+impl TimingSummaryV3 {
+    pub fn new(timings: impl IntoIterator<Item = (Vec<String>, Duration)>) -> Self {
+        let mut timings = timings
             .into_iter()
-            .map(|(name, timing)| {
-                let PreMergeTiming::Split {
-                    search,
-                    apply,
-                    unattributed,
-                } = timing.pre_merge
-                else {
-                    return Err(PhaseTimingUnavailable {
-                        ruleset: name.to_string(),
-                    });
-                };
-                Ok(RulesetTimingV2 {
-                    search_ns: duration_ns(search),
-                    apply_ns: duration_ns(apply),
-                    unattributed_ns: duration_ns(unattributed),
-                    merge_ns: duration_ns(timing.merge),
-                    rebuild_ns: duration_ns(timing.rebuild),
-                    name: name.to_string(),
-                })
+            .map(|(path, duration)| TimingLeafV3 {
+                path,
+                ns: duration_ns(duration),
             })
-            .collect::<Result<Vec<_>, PhaseTimingUnavailable>>()?;
+            .collect::<Vec<_>>();
+        assert!(
+            timings.iter().all(|timing| !timing.path.is_empty()),
+            "timing paths must not be empty"
+        );
+        timings.sort_unstable_by(|left, right| left.path.cmp(&right.path));
+        assert!(
+            timings.windows(2).all(|pair| pair[0].path != pair[1].path),
+            "duplicate timing path"
+        );
 
-        Ok(Self {
-            schema_version: 2,
-            rulesets,
-        })
+        Self {
+            schema_version: 3,
+            timings,
+        }
     }
 }
 
@@ -453,62 +467,53 @@ mod tests {
     }
 
     #[test]
-    fn timing_summary_v2_exact_json_is_sorted() {
-        let mut report = RunReport::default();
-        report.ruleset_timings.insert(
-            "zeta".into(),
-            RulesetTiming {
-                pre_merge: PreMergeTiming::Split {
-                    search: Duration::new(1, 234),
-                    apply: Duration::ZERO,
-                    unattributed: Duration::from_nanos(89),
-                },
-                ..RulesetTiming::default()
-            },
-        );
-        report.ruleset_timings.insert(
-            "beta".into(),
-            RulesetTiming {
-                pre_merge: split(0, 23, 0),
-                ..RulesetTiming::default()
-            },
-        );
-        report.ruleset_timings.insert(
-            "".into(),
-            RulesetTiming {
-                pre_merge: split(0, 0, 0),
-                merge: Duration::from_nanos(45),
-                ..RulesetTiming::default()
-            },
-        );
-        report.ruleset_timings.insert(
-            "alpha".into(),
-            RulesetTiming {
-                pre_merge: split(0, 0, 0),
-                rebuild: Duration::from_nanos(67),
-                ..RulesetTiming::default()
-            },
-        );
-
-        let summary = TimingSummaryV2::from_run_report(&report).unwrap();
+    fn timing_summary_v3_exact_json_is_sorted_and_segmented() {
+        let summary = TimingSummaryV3::new([
+            (
+                vec!["program".into(), "search".into(), "rules/λ".into()],
+                Duration::new(1, 234),
+            ),
+            (
+                vec!["commands".into(), "check".into()],
+                Duration::from_nanos(6),
+            ),
+            (
+                vec!["equality".into(), "rebuild".into(), "rules/λ".into()],
+                Duration::from_nanos(67),
+            ),
+            (
+                vec!["frontend".into(), "parse".into()],
+                Duration::from_nanos(1),
+            ),
+            (
+                vec!["typecheck".into(), "total".into()],
+                Duration::from_nanos(2),
+            ),
+        ]);
         let json = serde_json::to_string(&summary).unwrap();
 
         assert_eq!(
             json,
-            r#"{"schema_version":2,"rulesets":[{"name":"","search_ns":0,"apply_ns":0,"unattributed_ns":0,"merge_ns":45,"rebuild_ns":0},{"name":"alpha","search_ns":0,"apply_ns":0,"unattributed_ns":0,"merge_ns":0,"rebuild_ns":67},{"name":"beta","search_ns":0,"apply_ns":23,"unattributed_ns":0,"merge_ns":0,"rebuild_ns":0},{"name":"zeta","search_ns":1000000234,"apply_ns":0,"unattributed_ns":89,"merge_ns":0,"rebuild_ns":0}]}"#
+            r#"{"schema_version":3,"timings":[{"path":["commands","check"],"ns":6},{"path":["equality","rebuild","rules/λ"],"ns":67},{"path":["frontend","parse"],"ns":1},{"path":["program","search","rules/λ"],"ns":1000000234},{"path":["typecheck","total"],"ns":2}]}"#
         );
     }
 
     #[test]
-    fn timing_summary_v2_empty_report_golden() {
-        let summary = TimingSummaryV2::from_run_report(&RunReport::default()).unwrap();
+    fn timing_summary_v3_empty_report_golden() {
+        let summary = TimingSummaryV3::new([]);
         let json = serde_json::to_string(&summary).unwrap();
 
-        assert_eq!(json, r#"{"schema_version":2,"rulesets":[]}"#);
+        assert_eq!(json, r#"{"schema_version":3,"timings":[]}"#);
     }
 
     #[test]
-    fn timing_summary_v2_aggregates_every_iteration_of_a_ruleset() {
+    #[should_panic(expected = "timing paths must not be empty")]
+    fn timing_summary_v3_rejects_an_empty_path() {
+        TimingSummaryV3::new([(vec![], Duration::ZERO)]);
+    }
+
+    #[test]
+    fn run_report_aggregates_every_iteration_of_a_ruleset() {
         let mut report = RunReport::default();
         report.add_iteration(
             "timed",
@@ -519,6 +524,7 @@ mod tests {
                     ..RuleSetReport::default()
                 },
                 rebuild_time: Duration::from_nanos(17),
+                assembly_time: Duration::from_nanos(2),
             },
         );
         report.add_iteration(
@@ -530,10 +536,9 @@ mod tests {
                     ..RuleSetReport::default()
                 },
                 rebuild_time: Duration::from_nanos(29),
+                assembly_time: Duration::from_nanos(3),
             },
         );
-
-        let summary = TimingSummaryV2::from_run_report(&report).unwrap();
 
         assert_eq!(
             report.ruleset_timings["timed"].pre_merge.total(),
@@ -541,81 +546,45 @@ mod tests {
         );
         assert_eq!(
             report.ruleset_timings["timed"].total(),
-            Duration::from_nanos(131)
-        );
-
-        assert_eq!(
-            summary.rulesets,
-            [RulesetTimingV2 {
-                name: "timed".to_owned(),
-                search_ns: 30,
-                apply_ns: 12,
-                unattributed_ns: 7,
-                merge_ns: 36,
-                rebuild_ns: 46,
-            }]
+            Duration::from_nanos(136)
         );
     }
 
     #[test]
-    fn timing_summary_v2_does_not_truncate_rulesets() {
-        let mut report = RunReport::default();
-        for index in (0..40).rev() {
-            report.ruleset_timings.insert(
-                format!("ruleset-{index:02}").into(),
-                RulesetTiming {
-                    pre_merge: split(index + 1, 0, 0),
-                    ..RulesetTiming::default()
-                },
-            );
-        }
+    fn timing_summary_v3_does_not_truncate_leaves() {
+        let summary = TimingSummaryV3::new((0..40).rev().map(|index| {
+            (
+                vec![
+                    "program".into(),
+                    "search".into(),
+                    format!("ruleset-{index:02}"),
+                ],
+                Duration::from_nanos(index + 1),
+            )
+        }));
 
-        let summary = TimingSummaryV2::from_run_report(&report).unwrap();
-
-        assert_eq!(summary.rulesets.len(), 40);
-        assert_eq!(summary.rulesets.first().unwrap().name, "ruleset-00");
-        assert_eq!(summary.rulesets.last().unwrap().name, "ruleset-39");
+        assert_eq!(summary.timings.len(), 40);
+        assert_eq!(summary.timings.first().unwrap().path[2], "ruleset-00");
+        assert_eq!(summary.timings.last().unwrap().path[2], "ruleset-39");
     }
 
     #[test]
-    fn timing_summary_v2_saturates_nanoseconds_to_u64() {
-        let mut report = RunReport::default();
-        report.ruleset_timings.insert(
-            "long".into(),
-            RulesetTiming {
-                pre_merge: PreMergeTiming::Split {
-                    search: Duration::from_secs(u64::MAX),
-                    apply: Duration::ZERO,
-                    unattributed: Duration::ZERO,
-                },
-                ..RulesetTiming::default()
-            },
-        );
+    fn timing_summary_v3_saturates_nanoseconds_to_u64() {
+        let summary = TimingSummaryV3::new([(
+            vec!["program".into(), "search".into(), "long".into()],
+            Duration::from_secs(u64::MAX),
+        )]);
 
-        let summary = TimingSummaryV2::from_run_report(&report).unwrap();
-
-        assert_eq!(summary.rulesets[0].search_ns, u64::MAX);
+        assert_eq!(summary.timings[0].ns, u64::MAX);
     }
 
     #[test]
-    fn timing_summary_v2_rejects_unavailable_split_timing() {
-        let mut report = RunReport::default();
-        report.ruleset_timings.insert(
-            "default".into(),
-            RulesetTiming {
-                pre_merge: PreMergeTiming::Combined {
-                    elapsed: Duration::from_nanos(42),
-                },
-                ..RulesetTiming::default()
-            },
-        );
-
-        assert_eq!(
-            TimingSummaryV2::from_run_report(&report),
-            Err(PhaseTimingUnavailable {
-                ruleset: "default".to_owned(),
-            })
-        );
+    #[should_panic(expected = "duplicate timing path")]
+    fn timing_summary_v3_rejects_duplicate_paths() {
+        TimingSummaryV3::new([
+            (vec!["commands".into(), "check".into()], Duration::ZERO),
+            (vec!["commands".into(), "check".into()], Duration::ZERO),
+        ]);
     }
 
     #[test]
@@ -630,6 +599,7 @@ mod tests {
                     ..RuleSetReport::default()
                 },
                 rebuild_time: Duration::from_nanos(11),
+                assembly_time: Duration::from_nanos(2),
             },
         );
         report.add_iteration(
@@ -643,12 +613,14 @@ mod tests {
                     ..RuleSetReport::default()
                 },
                 rebuild_time: Duration::from_nanos(17),
+                assembly_time: Duration::from_nanos(3),
             },
         );
 
         assert_eq!(
             report.ruleset_timings["mixed"],
             RulesetTiming {
+                assembly: Duration::from_nanos(5),
                 pre_merge: PreMergeTiming::Combined {
                     elapsed: Duration::from_nanos(11),
                 },
@@ -658,7 +630,7 @@ mod tests {
         );
         assert_eq!(
             report.ruleset_timings["mixed"].total(),
-            Duration::from_nanos(59)
+            Duration::from_nanos(64)
         );
     }
 }

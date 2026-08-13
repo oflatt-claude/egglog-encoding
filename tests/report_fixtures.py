@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 from benchmarking import models
 from benchmarking.reports.store import (
     REPORT_SCHEMA_VERSION,
     ReportRecord,
     ReportStore,
-    RulesetTimingRecord,
+    TimingLeafRecord,
     TimingSummaryRecord,
 )
 
@@ -62,30 +63,54 @@ def make_record(
 def make_ruleset_timing(
     name: str = "rules",
     *,
+    assembly_ns: int = 0,
     search_ns: int = 400_000_000,
     apply_ns: int = 200_000_000,
-    unattributed_ns: int = 0,
+    execution_ns: int = 0,
     merge_ns: int = 200_000_000,
     rebuild_ns: int = 100_000_000,
-) -> RulesetTimingRecord:
+    role: Literal["program", "equality"] = "program",
+) -> tuple[TimingLeafRecord, ...]:
     """Construct one valid ruleset timing fixture."""
 
+    responsibility = "equality" if role == "equality" else "program"
+    return (
+        {"path": [responsibility, "assembly", name], "ns": assembly_ns},
+        {"path": [responsibility, "search", name], "ns": search_ns},
+        {"path": [responsibility, "apply", name], "ns": apply_ns},
+        {"path": [responsibility, "execution", name], "ns": execution_ns},
+        {"path": [responsibility, "merge", name], "ns": merge_ns},
+        {"path": ["equality", "rebuild", name], "ns": rebuild_ns},
+    )
+
+
+def make_timing_summary(
+    *rulesets: tuple[TimingLeafRecord, ...],
+    typecheck_ns: int = 0,
+    frontend_parse_ns: int = 0,
+    frontend_other_ns: int = 0,
+    frontend_install_ns: int = 0,
+    commands_actions_ns: int = 0,
+    commands_check_ns: int = 0,
+    commands_other_ns: int = 0,
+) -> TimingSummaryRecord:
+    """Construct a valid V3 timing-summary fixture."""
+
+    timing_groups = rulesets or (make_ruleset_timing(),)
+    timings: list[TimingLeafRecord] = [
+        {"path": ["typecheck", "total"], "ns": typecheck_ns},
+        {"path": ["frontend", "parse"], "ns": frontend_parse_ns},
+        {"path": ["frontend", "other"], "ns": frontend_other_ns},
+        {"path": ["frontend", "install"], "ns": frontend_install_ns},
+        {"path": ["commands", "actions"], "ns": commands_actions_ns},
+        {"path": ["commands", "check"], "ns": commands_check_ns},
+        {"path": ["commands", "other"], "ns": commands_other_ns},
+    ]
+    timings.extend(leaf for group in timing_groups for leaf in group)
+    timings.sort(key=lambda leaf: leaf["path"])
     return {
-        "name": name,
-        "search_ns": search_ns,
-        "apply_ns": apply_ns,
-        "unattributed_ns": unattributed_ns,
-        "merge_ns": merge_ns,
-        "rebuild_ns": rebuild_ns,
-    }
-
-
-def make_timing_summary(*rulesets: RulesetTimingRecord) -> TimingSummaryRecord:
-    """Construct a valid v2 timing-summary fixture."""
-
-    return {
-        "schema_version": 2,
-        "rulesets": list(rulesets or (make_ruleset_timing(),)),
+        "schema_version": 3,
+        "timings": timings,
     }
 
 

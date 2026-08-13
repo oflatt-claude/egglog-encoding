@@ -455,16 +455,12 @@ def test_run_process_passes_treatment_flags(
         summary_path.write_text(
             json.dumps(
                 {
-                    "schema_version": 2,
-                    "rulesets": [
-                        {
-                            "name": "rules",
-                            "search_ns": 4,
-                            "apply_ns": 6,
-                            "unattributed_ns": 10,
-                            "merge_ns": 20,
-                            "rebuild_ns": 30,
-                        }
+                    "schema_version": 3,
+                    "timings": [
+                        {"path": ["program", "search", "rules"], "ns": 4},
+                        {"path": ["program", "apply", "rules"], "ns": 6},
+                        {"path": ["program", "execution", "rules"], "ns": 10},
+                        {"path": ["program", "merge", "rules"], "ns": 20},
                     ],
                 }
             ),
@@ -480,10 +476,12 @@ def test_run_process_passes_treatment_flags(
     assert "--proofs" not in commands[0]
     assert "--proofs" in commands[1]
     assert off.timing_summary is not None
-    assert off.timing_summary["rulesets"][0]["search_ns"] == 4
-    assert off.timing_summary["rulesets"][0]["apply_ns"] == 6
-    assert off.timing_summary["rulesets"][0]["unattributed_ns"] == 10
-    assert off.timing_summary["rulesets"][0]["merge_ns"] == 20
+    assert off.timing_summary["timings"] == [
+        {"path": ["program", "search", "rules"], "ns": 4},
+        {"path": ["program", "apply", "rules"], "ns": 6},
+        {"path": ["program", "execution", "rules"], "ns": 10},
+        {"path": ["program", "merge", "rules"], "ns": 20},
+    ]
     assert proofs.timing_summary is not None
 
 

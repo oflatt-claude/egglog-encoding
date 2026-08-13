@@ -309,6 +309,7 @@ impl EGraph {
         self.schedulers = schedulers;
 
         if let Ok(report) = &result {
+            self.record_ruleset_timing_role(ruleset);
             self.overall_run_report.union(report.clone());
         }
         result
