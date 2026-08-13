@@ -428,9 +428,12 @@ while its independent default-ruleset Search means are 60.349 ms and 84.870
 ms. Herbie records 0.175 ms and 0.241 ms for checks. Check evaluation is
 therefore visible without being mistaken for transformed program-rule Search.
 
-At `--detail phases`, presentation starts with one additive
-slowdown-decomposition table with a Suite row and one row per file. At
-`--detail rulesets`, one driver panel per file unfolds exactly the Program and
+At `--detail phases`, presentation starts with an additive
+slowdown-decomposition table with a Suite row and one row per file, followed
+by a compact suite-level table of optimistic accounting ceilings. The latter
+distinguishes removing Equality assembly from making net Equality/rebuild
+baseline-equivalent and labels its implied point ratios as non-causal bounds.
+At `--detail rulesets`, one driver panel per file unfolds exactly the Program and
 Equality cells from that table. Program children contain source rules' own five
 execution phases; Equality children contain every encoded-maintenance ruleset
 and one global native-Rebuild replacement row when its delta is nonzero. The
@@ -476,7 +479,7 @@ requirements and which are only report presentation.
 | Scope-safe accounting | Preserve roles and accumulated time across push/pop, and subtract nested process/ruleset intervals from command timers | Otherwise nested schedules, checks, and rulesets are double-counted | One exclusive-subtraction boundary around commands and lowering; Residual verifies closure |
 | Wire format | Persist exact measurements without fixing the set of diagnostic counters | A five-field record could answer today's headline but would lose the Assembly/Search evidence that chose different optimization PRs | One sorted open list of segmented `path -> ns` leaves; no parent totals and no separate per-ruleset record |
 | Analysis | Align independent endpoint samples, derive Residual, and unfold Program and Equality into named children | Source own work, encoded maintenance, and native Rebuild must remain separate to keep every sign truthful | One generic exact-path sample map; the two parent groups equal the decomposition directly |
-| Presentation and validation | Render one scan-first mechanism table and one compact driver panel per file; test additive closure at both hierarchy levels | Only the five buckets hides which ruleset carries Assembly/Search, while role totals falsely attach global Rebuild to source rules | Two mechanism parents, source top five plus exact Other, all maintenance children, and one native-Rebuild child |
+| Presentation and validation | Render one scan-first mechanism table, one suite counterfactual table, and one compact driver panel per file; test additive closure at both hierarchy levels | Only the five buckets hides which ruleset carries Assembly/Search, while raw deltas still require manual arithmetic to answer optimization-ceiling questions and role totals falsely attach global Rebuild to source rules | Static delta-reset scenarios plus two mechanism parents, source top five plus exact Other, all maintenance children, and one native-Rebuild child |
 
 The minimization pass removed or avoided the main sources of accidental
 complexity:

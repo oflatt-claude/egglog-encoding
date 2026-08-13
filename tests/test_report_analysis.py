@@ -371,6 +371,84 @@ def test_nested_process_and_ruleset_leaves_are_each_subtracted_from_residual(tmp
     assert native_rebuild.delta == equality.delta
 
 
+def test_optimization_ceilings_reset_suite_deltas_without_claiming_implementation_speedups(
+    tmp_path: Path,
+) -> None:
+    report = tmp_path / "report.jsonl"
+    comparison = _comparison(tmp_path)
+    candidate_timing = make_timing_summary(
+        make_ruleset_timing(
+            assembly_ns=31,
+            search_ns=37,
+            apply_ns=41,
+            execution_ns=43,
+            merge_ns=47,
+            rebuild_ns=53,
+        ),
+        make_ruleset_timing(
+            name="@rebuilding",
+            role="equality",
+            assembly_ns=61,
+            search_ns=0,
+            apply_ns=0,
+            execution_ns=0,
+            merge_ns=0,
+            rebuild_ns=0,
+        ),
+        typecheck_ns=13,
+        frontend_parse_ns=11,
+        frontend_other_ns=17,
+        frontend_install_ns=19,
+        commands_actions_ns=23,
+        commands_check_ns=7,
+        commands_other_ns=29,
+    )
+    write_report(
+        report,
+        make_record(
+            0,
+            started_at="2026-07-15T12:00:00Z",
+            binary_sha256="sha256:baseline",
+            wall_sec=0.000001,
+            timing_summary=make_timing_summary(
+                make_ruleset_timing(
+                    assembly_ns=0,
+                    search_ns=0,
+                    apply_ns=0,
+                    execution_ns=0,
+                    merge_ns=0,
+                    rebuild_ns=0,
+                )
+            ),
+        ),
+        make_record(
+            1,
+            started_at="2026-07-15T12:00:01Z",
+            binary_sha256="sha256:candidate",
+            wall_sec=0.0000015,
+            timing_summary=candidate_timing,
+        ),
+    )
+
+    ceilings = analyze_pair(ReportStore(report), comparison, "phases").ceilings
+
+    assert [row.scenario for row in ceilings] == [
+        "typecheck",
+        "frontend",
+        "frontend_and_typecheck",
+        "equality_assembly",
+        "equality",
+        "program",
+        "non_program",
+        "all_recorded",
+    ]
+    assert [row.reset_delta_ns for row in ceilings] == pytest.approx([13, 47, 60, 61, 114, 199, 233, 432])
+    assert [row.remaining_delta_ns for row in ceilings] == pytest.approx([487, 453, 440, 439, 386, 301, 267, 68])
+    assert [row.counterfactual_ratio for row in ceilings] == pytest.approx(
+        [1.487, 1.453, 1.440, 1.439, 1.386, 1.301, 1.267, 1.068]
+    )
+
+
 @pytest.mark.parametrize(
     ("path", "message"),
     ((["residual", "stored"], "residual is derived"), (["mystery", "work"], "unknown timing responsibility")),

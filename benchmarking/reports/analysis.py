@@ -24,6 +24,16 @@ MechanismName = Literal["typecheck", "frontend", "program", "equality", "command
 RulesetPhaseName = Literal["assembly", "search", "apply", "execution", "merge", "rebuild"]
 RulesetMechanism = Literal["program", "equality"]
 RulesetRowKind = Literal["aggregate", "ruleset", "native_rebuild", "other"]
+OptimizationScenario = Literal[
+    "typecheck",
+    "frontend",
+    "frontend_and_typecheck",
+    "equality_assembly",
+    "equality",
+    "program",
+    "non_program",
+    "all_recorded",
+]
 
 type _MetricKey = tuple[int, int, MetricName]
 type _ObservationKey = tuple[int, int]
@@ -142,12 +152,22 @@ class RulesetContributorView(NamedTuple):
     delta: RulesetDelta
 
 
+class OptimizationCeilingView(NamedTuple):
+    """One suite-wide accounting counterfactual with no causal-speedup claim."""
+
+    scenario: OptimizationScenario
+    reset_delta_ns: float
+    remaining_delta_ns: float
+    counterfactual_ratio: float
+
+
 class PairReportViewData(NamedTuple):
     """Typed analysis collections requested by one cumulative detail level."""
 
     summary: tuple[SummaryView, ...]
     files: tuple[FileComparisonView, ...]
     decomposition: tuple[SlowdownDecompositionView, ...]
+    ceilings: tuple[OptimizationCeilingView, ...]
     rulesets: tuple[RulesetContributorView, ...]
 
 
@@ -181,16 +201,17 @@ def analyze_pair(
     summary = _summary_rows(comparison, estimates, file_rows, t_critical)
 
     if detail == "summary":
-        return PairReportViewData(summary, (), (), ())
+        return PairReportViewData(summary, (), (), (), ())
     if detail == "files":
-        return PairReportViewData(summary, file_rows, (), ())
+        return PairReportViewData(summary, file_rows, (), (), ())
 
     timing = _timing_aggregates(observations)
     decomposition = _slowdown_decomposition(comparison, timing, issues, estimates)
+    ceilings = _optimization_ceilings(comparison, timing, estimates, decomposition)
     if detail == "phases":
-        return PairReportViewData(summary, file_rows, decomposition, ())
+        return PairReportViewData(summary, file_rows, decomposition, ceilings, ())
     rulesets = _ruleset_contributors(comparison, timing, issues)
-    return PairReportViewData(summary, file_rows, decomposition, rulesets)
+    return PairReportViewData(summary, file_rows, decomposition, ceilings, rulesets)
 
 
 def _selected_observations(
@@ -433,6 +454,85 @@ def _slowdown_decomposition(
         suite_issue,
     )
     return (suite, *result)
+
+
+def _optimization_ceilings(
+    comparison: ComparisonSpec,
+    timing: dict[_ObservationKey, _TimingAggregate],
+    metric_estimates: dict[_MetricKey, _MetricEstimate],
+    decomposition: tuple[SlowdownDecompositionView, ...],
+) -> tuple[OptimizationCeilingView, ...]:
+    """Reset selected suite deltas to zero as optimistic accounting bounds."""
+
+    scenarios: tuple[OptimizationScenario, ...] = (
+        "typecheck",
+        "frontend",
+        "frontend_and_typecheck",
+        "equality_assembly",
+        "equality",
+        "program",
+        "non_program",
+        "all_recorded",
+    )
+    if decomposition[0].issue is not None:
+        return ()
+    baseline_points = [
+        metric_estimates[(0, file_order, "wall_sec")].estimate.point for file_order in range(len(comparison.files))
+    ]
+    candidate_points = [
+        metric_estimates[(1, file_order, "wall_sec")].estimate.point for file_order in range(len(comparison.files))
+    ]
+    if None in baseline_points or None in candidate_points:
+        return ()
+
+    baseline_wall_ns = math.fsum(cast(float, point) for point in baseline_points) * 1_000_000_000.0
+    candidate_wall_ns = math.fsum(cast(float, point) for point in candidate_points) * 1_000_000_000.0
+    if baseline_wall_ns <= 0 or candidate_wall_ns <= baseline_wall_ns:
+        return ()
+
+    equality_assembly_delta = 0.0
+    for file_order in range(len(comparison.files)):
+        endpoint_means = []
+        for endpoint_order in (0, 1):
+            aggregate = timing[(endpoint_order, file_order)]
+            paths = [
+                path for path in aggregate.paths if len(path) >= 2 and path[0] == "equality" and path[1] == "assembly"
+            ]
+            endpoint_means.append(statistics.fmean(_sum_path_samples(aggregate, paths)))
+        equality_assembly_delta += endpoint_means[1] - endpoint_means[0]
+
+    suite = decomposition[0]
+    deltas = suite.mechanisms
+    mechanism_deltas = (deltas.typecheck, deltas.frontend, deltas.program, deltas.equality, deltas.commands)
+    if any(cell.delta_ns is None for cell in mechanism_deltas):
+        return ()
+    typecheck = cast(float, deltas.typecheck.delta_ns)
+    frontend = cast(float, deltas.frontend.delta_ns)
+    program = cast(float, deltas.program.delta_ns)
+    equality = cast(float, deltas.equality.delta_ns)
+    commands = cast(float, deltas.commands.delta_ns)
+    positive = tuple(max(delta, 0.0) for delta in (typecheck, frontend, program, equality, commands))
+    typecheck_added, frontend_added, program_added, equality_added, commands_added = positive
+    reset_deltas = (
+        typecheck_added,
+        frontend_added,
+        typecheck_added + frontend_added,
+        max(equality_assembly_delta, 0.0),
+        equality_added,
+        program_added,
+        typecheck_added + frontend_added + equality_added + commands_added,
+        math.fsum(positive),
+    )
+    wall_delta = candidate_wall_ns - baseline_wall_ns
+    return tuple(
+        OptimizationCeilingView(
+            scenario,
+            reset_delta,
+            wall_delta - reset_delta,
+            (candidate_wall_ns - reset_delta) / baseline_wall_ns,
+        )
+        for scenario, reset_delta in zip(scenarios, reset_deltas, strict=True)
+    )
 
 
 def _timing_aggregates(

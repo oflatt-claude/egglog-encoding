@@ -52,6 +52,21 @@
   
   *Each mechanism cell is its share of the wall-time slowdown followed by candidate − baseline mean time. Frontend includes parsing, other lowering, and declaration/install commands. Program rules includes every phase of source-origin rulesets except rebuild. Equality/rebuild combines encoded maintenance rulesets with native rebuild tails. Commands includes actions/input, checks, and other schedules. Shares may be negative or exceed 100% when mechanisms offset. ◆ and bold type mark each row's largest absolute share; contributions below 5% are dimmed and improvements are green in Rich and interactive reports. Signed values carry the same information without styling. Residual is wall time minus every recorded leaf; ! means an endpoint's mean residual is negative.*
   
+  ### Optimization ceilings
+  
+  | Hypothetical change | Time removed | Remaining wall Δ | Implied ratio |
+  | --- | ---: | ---: | ---: |
+  | Remove added typechecking time | 0 ns | +200 ms | 1.07x |
+  | Remove added frontend/install time | 0 ns | +200 ms | 1.07x |
+  | Remove added typechecking + frontend time | 0 ns | +200 ms | 1.07x |
+  | Remove added Equality assembly time | 0 ns | +200 ms | 1.07x |
+  | Remove added net Equality/rebuild time | 0 ns | +200 ms | 1.07x |
+  | Remove added source-rule execution time | +116 ms | +84.0 ms | 1.03x |
+  | Remove every added non-program mechanism | 0 ns | +200 ms | 1.07x |
+  | Remove every recorded added mechanism | +116 ms | +84.0 ms | 1.03x |
+  
+  *Each row mechanically removes the named positive candidate − baseline timing deltas while holding every other measured mean fixed; candidate advantages are retained. Equality assembly removes only ruleset assembly, while net Equality/rebuild removes the whole positive Equality bucket. These are optimistic additive accounting bounds, not implementation predictions; point ratios have no confidence intervals and interactions can invalidate them. Residual is never removed.*
+  
   ## Ruleset drivers
   
   *Each panel unfolds the Program and Equality cells from the decomposition. Parent rows exactly match those cells and alone show wall share. Program children contain only source-rule Assembly, Search, Apply, Execution, and Merge; Equality children contain every encoded maintenance ruleset plus one global Native rebuild replaced row. ↳ marks children in every format. Zero children are hidden. Source children are ranked by absolute own-work Δ (top 5 plus an exact per-group Other); every nonzero maintenance child is shown. Important phases include every \|phase Δ\| ≥ max(1 ms, 10% of \|row Δ\|), always include the dominant phase (◆), and appear in Assembly, Search, Apply, Execution, Merge, Rebuild order; … marks omitted nonzero phases.*
@@ -205,6 +220,24 @@
   type mark each row's largest absolute share; contributions below 5% are dimmed and improvements are green in Rich and   
   interactive reports. Signed values carry the same information without styling. Residual is wall time minus every        
   recorded leaf; ! means an endpoint's mean residual is negative.                                                         
+                                                   Optimization ceilings                                                  
+                                                                                                                          
+    Hypothetical change                                           Time removed       Remaining wall Δ      Implied ratio  
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 
+    Remove added typechecking time                                        0 ns               +1550 ms              1.11x  
+    Remove added frontend/install time                                    0 ns               +1550 ms              1.11x  
+    Remove added typechecking + frontend time                             0 ns               +1550 ms              1.11x  
+    Remove added Equality assembly time                                   0 ns               +1550 ms              1.11x  
+    Remove added net Equality/rebuild time                                0 ns               +1550 ms              1.11x  
+    Remove added source-rule execution time                            +165 ms               +1385 ms              1.10x  
+    Remove every added non-program mechanism                              0 ns               +1550 ms              1.11x  
+    Remove every recorded added mechanism                              +165 ms               +1385 ms              1.10x  
+                                                                                                                          
+  Each row mechanically removes the named positive candidate − baseline timing deltas while holding every other measured  
+  mean fixed; candidate advantages are retained. Equality assembly removes only ruleset assembly, while net               
+  Equality/rebuild removes the whole positive Equality bucket. These are optimistic additive accounting bounds, not       
+  implementation predictions; point ratios have no confidence intervals and interactions can invalidate them. Residual is 
+  never removed.                                                                                                          
   ─────────────────────────────────────────────────── Per-file results ───────────────────────────────────────────────────
                                                          Wall time                                                        
                                                                                                                           

@@ -271,7 +271,7 @@ path.
 | --- | --- |
 | `summary` | comparison selection and headline summary |
 | `files` | per-file wall time and peak RSS estimates |
-| `phases` | one additive slowdown decomposition across files and mechanisms |
+| `phases` | additive slowdown decomposition plus suite optimization ceilings |
 | `rulesets` | Program/Equality driver groups and changed rulesets per file |
 
 The default is `summary`. For example:
@@ -380,7 +380,7 @@ Residual is derived per observation as external wall time minus every recorded
 leaf. It includes process setup, reporting, teardown, and any still-
 uninstrumented work.
 
-At `--detail phases`, one additive slowdown-decomposition table has a suite row
+At `--detail phases`, the additive slowdown-decomposition table has a suite row
 and one row per file. Its rendered headers are `Wall Δ`, `Typecheck`,
 `Frontend`, `Program`, `Equality`, `Commands`, and `Residual`. Every mechanism
 cell displays its share of the wall-time change first, then
@@ -391,6 +391,15 @@ neutral rather than red; warning and error colors are reserved for suspect
 measurements. Percentages may be negative or exceed 100% when mechanisms
 offset. `!` on a Residual cell means at least one endpoint's mean recorded total
 exceeded its wall time.
+
+A compact suite-level `Optimization ceilings` table then resets selected
+candidate-minus-baseline deltas to zero and reports the remaining wall-time
+change and implied point ratio. It distinguishes removing only Equality
+ruleset assembly from making the entire net Equality/rebuild responsibility
+match the baseline. These rows are optimistic additive accounting bounds, not
+predictions: they hold every other measured mean fixed, omit confidence
+intervals, and cannot model interactions between optimizations. Residual is
+never treated as removable work.
 
 At `--detail rulesets`, one compact driver table appears per file. Its
 `Program rules — own work` and `Equality/rebuild — net` parent rows exactly

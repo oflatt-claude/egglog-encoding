@@ -19,6 +19,7 @@ from .analysis import (
     Estimate,
     FileComparisonView,
     MetricName,
+    OptimizationCeilingView,
     PairReportViewData,
     RatioEstimate,
     ResultClass,
@@ -73,6 +74,13 @@ RULESET_CAPTION = (
     "Important phases include every |phase Δ| ≥ max(1 ms, 10% of |row Δ|), always include the dominant phase (◆), "
     "and appear in Assembly, Search, Apply, Execution, Merge, Rebuild order; … marks omitted nonzero phases."
 )
+OPTIMIZATION_CAPTION = (
+    "Each row mechanically removes the named positive candidate − baseline timing deltas while holding every other "
+    "measured mean fixed; candidate advantages are retained. Equality assembly removes only ruleset assembly, while "
+    "net Equality/rebuild removes the whole positive Equality bucket. These are optimistic additive accounting "
+    "bounds, not implementation predictions; point ratios have no confidence intervals and interactions can "
+    "invalidate them. Residual is never removed."
+)
 
 
 def build_report_catalog(
@@ -92,7 +100,7 @@ def build_report_catalog(
     if _includes(detail, "files"):
         sections.append(_files_section(views.files, comparison, file_labels))
     if _includes(detail, "phases"):
-        sections.append(_phases_section(views.decomposition, comparison, file_labels))
+        sections.append(_phases_section(views.decomposition, views.ceilings, comparison, file_labels))
     if _includes(detail, "rulesets"):
         sections.append(_rulesets_section(views, comparison, file_labels))
     return ReportCatalog(tuple(sections))
@@ -319,6 +327,7 @@ def _files_section(
 
 def _phases_section(
     rows: Sequence[SlowdownDecompositionView],
+    ceilings: Sequence[OptimizationCeilingView],
     comparison: ComparisonSpec,
     file_labels: dict[FileSpec, str],
 ) -> ReportSection:
@@ -373,7 +382,45 @@ def _phases_section(
         caption=DECOMPOSITION_CAPTION,
         alignments=("left", "right", "right", "right", "right", "right", "right", "right"),
     )
-    return ReportSection("phases", "Slowdown decomposition", (table,))
+    scenario_labels = {
+        "typecheck": "Remove added typechecking time",
+        "frontend": "Remove added frontend/install time",
+        "frontend_and_typecheck": "Remove added typechecking + frontend time",
+        "equality_assembly": "Remove added Equality assembly time",
+        "equality": "Remove added net Equality/rebuild time",
+        "program": "Remove added source-rule execution time",
+        "non_program": "Remove every added non-program mechanism",
+        "all_recorded": "Remove every recorded added mechanism",
+    }
+    ceiling_rows = tuple(
+        _row(
+            report_id("row", "phases", "ceiling", row.scenario),
+            text_cell(row.scenario, scenario_labels[row.scenario]),
+            text_cell(row.reset_delta_ns, format_duration(row.reset_delta_ns, signed=True)),
+            text_cell(
+                row.remaining_delta_ns,
+                _format_delta_ms(row.remaining_delta_ns),
+                tone=_delta_tone(row.remaining_delta_ns),
+            ),
+            text_cell(
+                row.counterfactual_ratio,
+                f"{_three_significant_digits(row.counterfactual_ratio)}x",
+                tone="positive" if row.counterfactual_ratio < 1 else "default",
+            ),
+        )
+        for row in ceilings
+    )
+    ceiling_table = _table(
+        report_id("table", "phases", "optimization-ceilings"),
+        "Optimization ceilings",
+        ("scenario", "reset_delta", "remaining_delta", "counterfactual_ratio"),
+        ("Hypothetical change", "Time removed", "Remaining wall Δ", "Implied ratio"),
+        ceiling_rows,
+        caption=OPTIMIZATION_CAPTION,
+        alignments=("left", "right", "right", "right"),
+    )
+    blocks = (table, ceiling_table) if ceilings else (table,)
+    return ReportSection("phases", "Slowdown decomposition", blocks)
 
 
 def _slowdown_cell(cell: SlowdownCell, *, leader: bool, warning: bool) -> ReportCell:
