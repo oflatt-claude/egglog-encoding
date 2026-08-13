@@ -1490,18 +1490,6 @@ theorem Database.out_self {db : Database} {f : FnName} {as vs : List Term}
     (hmem : Term.app f (as ++ vs) ∈ db.terms) (hargs : ∀ a ∈ as, a ∈ db.terms) :
     db.Out f as vs := ⟨as, CongList.refl hargs, hmem⟩
 
-/-- `Expr.evalList` is length-preserving, which is how a `set`'s declared column widths
-become the *term* widths `MergeStep.collide` asks about. -/
-theorem Expr.evalList_length {sig : Signature} {σ : Env} {es : List Expr} {ts : List Term}
-    (h : Expr.evalList sig es σ = some ts) : ts.length = es.length := by
-  induction es generalizing ts with
-  | nil => rw [Expr.evalList_nil, Option.some.injEq] at h; exact h ▸ rfl
-  | cons e es ih =>
-    rw [Expr.evalList_cons] at h
-    obtain ⟨t, -, h'⟩ := Option.bind_eq_some_iff.mp h
-    obtain ⟨us, hus, rfl⟩ := Option.map_eq_some_iff.mp h'
-    simp [ih hus]
-
 /-! ### The column widths
 
 `Action.SetLegal` asks that a `set`'s head be a merge function and says nothing about how
@@ -2902,6 +2890,185 @@ theorem ProgramStep.wf {db db' : Database} {p : Program} (h : ProgramStep db p d
   induction h with
   | nil => exact id
   | cons hcmd _ ih => exact fun hw => ih (CmdStep.wf hw hcmd)
+
+/-! ### `DeclaredTerms` over the step relations
+
+Every application a reachable state holds is a declared function's entry, `entryWidth`
+children wide. `Proofs/Eval.lean` carries the action half; what is left is the merge phase,
+the rule phase, and a declaration.
+
+Three front-end checks pay for it: `Program.WidthOk` for the terms a command builds,
+`Program.SetLegal` for the entries a `set` records, and `Program.DeclsFresh` for the
+signature a `.decl` writes. Two conditions no signature-level check can deliver are carried
+by `Database.RunLegal`. -/
+
+/-- Every declared `:merge`'s body and result pass the width check, read of a *signature*
+because a `MergeStep` reads the body it runs from one. `Signature.MergesLegal`'s width twin,
+and what `Cmd.WidthOk (.decl _ _)` establishes of the signature a declaration installs. -/
+def Signature.MergesWidthOk (sig : Signature) : Prop :=
+  ∀ g dc ms, sig g = some dc → dc.merge = some ms → MergeSpec.WidthOk ms dc.outArity sig
+
+/-- **`DeclaredTerms` is preserved by a merge firing**, under the two signature-level
+invariants and no premise on the firing itself. `MergesLegal` supplies the body's
+`Actions.SetLegal` and `MergesWidthOk` its `Actions.WidthOk`, which is what running the body
+needs; the combined entry is `arity + outArity` wide because `res` has one expression per
+value column. -/
+theorem mergeStep_declaredTerms {db db' : Database} (hwf : db.WF) (hdt : db.DeclaredTerms)
+    (hml : db.sig.MergesLegal) (hmw : db.sig.MergesWidthOk) (h : MergeStep db db') :
+    db'.DeclaredTerms := by
+  cases h with
+  | @collide d f decl as bs a b vs body res hd hmerge hasl _ hae hbe _ hbody hres =>
+  have hmemab : ∀ p ∈ mergeEnv a b, p.2 ∈ db.terms := by
+    intro p hp
+    rcases mem_mergeEnv hp with hp' | hp'
+    · exact Database.mem_terms_of_arg hwf hae (List.mem_append_right as hp')
+    · exact Database.mem_terms_of_arg hwf hbe (List.mem_append_right bs hp')
+  have hwf₀ : ({ db with env := mergeEnv a b } : Database).WF := hwf.setEnv hmemab
+  have hdt₀ : ({ db with env := mergeEnv a b } : Database).DeclaredTerms := by
+    intro g cs hmem; rw [Database.terms_setEnv] at hmem; exact hdt g cs hmem
+  have hspec := hmw f decl _ hd hmerge
+  have hlegal : Actions.SetLegal body db.sig := (hml f decl body res hd hmerge).1.1
+  have hdsig : d.sig = db.sig :=
+    evalActions_sig (db := { db with env := mergeEnv a b }) hbody
+  have hdwf : d.WF := evalActions_wf hwf₀ hbody
+  have hddt : d.DeclaredTerms := evalActions_declaredTerms hwf₀ hdt₀ hspec.2.1 hlegal hbody
+  have hvsd : ∀ t ∈ vs, Term.DeclaredTerm db.sig t := by
+    have := Expr.evalList_declaredTerm (Database.env_declaredTerm hdwf hddt)
+      (sig := d.sig) (by rw [hdsig]; exact hspec.2.2) hres
+    intro t ht; rw [← hdsig]; exact this t ht
+  have hvsl : vs.length = decl.outArity := (Expr.evalList_length hres).trans hspec.1
+  have hentry : Term.DeclaredTerm db.sig (.app f (as ++ vs)) := by
+    intro g cs hsub
+    rw [Term.subterms_app] at hsub
+    rcases Set.mem_insert_iff.mp hsub with heq | hmem
+    · obtain ⟨rfl, rfl⟩ := Term.app.injEq .. ▸ heq
+      refine ⟨decl, hd, ?_⟩
+      rw [List.length_append, hasl, hvsl, FnDecl.entryWidth, if_neg]
+      simp [hmerge]
+    · obtain ⟨x, hx, hxs⟩ := Set.mem_iUnion₂.mp hmem
+      rcases List.mem_append.mp hx with hx | hx
+      · exact Database.declaredTerm_of_mem hwf hdt
+          (Database.mem_terms_of_arg hwf hae (List.mem_append_left a hx)) g cs hxs
+      · exact hvsd x hx g cs hxs
+  intro g cs hmem
+  rw [Database.terms_setEnvRules, Database.addTerm_terms] at hmem
+  rcases hmem with hmem | hmem
+  · exact hdsig ▸ hddt g cs hmem
+  · exact hdsig ▸ hentry g cs hmem
+
+theorem mergeClosure_declaredTerms {db db' : Database} (hwf : db.WF) (hdt : db.DeclaredTerms)
+    (hml : db.sig.MergesLegal) (hmw : db.sig.MergesWidthOk) (h : MergeClosure db db') :
+    db'.DeclaredTerms := by
+  induction h with
+  | refl => exact hdt
+  | @tail x y hcl hstep ih =>
+    have hsx : x.sig = db.sig := MergeClosure.sig hcl
+    exact mergeStep_declaredTerms (MergeClosure.wf hwf hcl) ih
+      (by rw [hsx]; exact hml) (by rw [hsx]; exact hmw) hstep
+
+/-- The rules the state holds obey the two checks `evalLocalActions_declaredTerms` asks of an
+action block. `RunRules` fires the rules in `db.rules`, which no signature-level check
+reaches. -/
+def Database.RulesOk (db : Database) : Prop :=
+  ∀ r ∈ db.rules, Actions.WidthOk r.actions db.sig ∧ Actions.SetLegal r.actions db.sig
+
+theorem runRules_declaredTerms {db : Database} (hwf : db.WF) (hdt : db.DeclaredTerms)
+    (hr : db.RulesOk) : (RunRules db).DeclaredTerms := by
+  intro g cs hmem
+  rw [RunRules, Database.sUnion_terms] at hmem
+  rcases hmem with hmem | hmem
+  · exact hdt g cs hmem
+  · obtain ⟨e, he, hmem⟩ := Set.mem_iUnion₂.mp hmem
+    obtain ⟨r, hrmem, σ, hq, hstep⟩ := he
+    have hes : e.sig = db.sig := evalLocalActions_sig hstep
+    change ∃ x, db.sig g = some x ∧ cs.length = x.entryWidth
+    rw [← hes]
+    exact evalLocalActions_declaredTerms hwf hdt hq.mem_terms (hr r hrmem).1 (hr r hrmem).2
+      hstep g cs hmem
+
+/-- **A declaration preserves `DeclaredTerms` exactly when it is fresh**, and needs nothing
+else. A `DeclaredTerms` state holds no application of an undeclared name, so writing the
+signature at a fresh name cannot invalidate a term it already holds. -/
+theorem decl_declaredTerms {db : Database} (hdt : db.DeclaredTerms) {f : FnName}
+    {dc : FnDecl} (hf : db.sig f = none) :
+    ({ db with sig := Function.update db.sig f (some dc) } : Database).DeclaredTerms := by
+  intro g cs hmem
+  rw [Database.terms_setSig] at hmem
+  obtain ⟨d, hd, hlen⟩ := hdt g cs hmem
+  have hgf : g ≠ f := by rintro rfl; rw [hf] at hd; exact absurd hd (by simp)
+  refine ⟨d, ?_, hlen⟩
+  change Function.update db.sig f (some dc) g = some d
+  rw [Function.update_of_ne hgf]; exact hd
+
+theorem cmdEffect_declaredTerms {db d : Database} (hwf : db.WF) (hdt : db.DeclaredTerms)
+    (hr : db.RulesOk) {c : Cmd} (hw : c.WidthOk db.sig) (hsl : c.SetLegal db.sig)
+    (hfresh : c.DeclFresh db.sig) (h : cmdEffect db c = some d) : d.DeclaredTerms := by
+  cases c with
+  | action a => exact evalAction_declaredTerms hwf hdt hw hsl h
+  | rule r =>
+    rw [cmdEffect, Option.some_inj] at h
+    subst h
+    intro g cs hmem
+    rw [Database.terms_setRules] at hmem
+    exact hdt g cs hmem
+  | run =>
+    rw [cmdEffect, Option.some_inj] at h
+    subst h; exact runRules_declaredTerms hwf hdt hr
+  | decl f dc =>
+    rw [cmdEffect, Option.some_inj] at h
+    subst h; exact decl_declaredTerms hdt hfresh
+
+/-- The two signature-level invariants are read at the signature the command *installs*, as
+`Cmd.WidthOk` and `Cmd.MergeDeclared` are: that is the signature the merge phase runs
+against. -/
+theorem cmdStep_declaredTerms {db d : Database} (hwf : db.WF) (hdt : db.DeclaredTerms)
+    (hr : db.RulesOk) {c : Cmd} (hw : c.WidthOk db.sig) (hsl : c.SetLegal db.sig)
+    (hfresh : c.DeclFresh db.sig) (hml : (c.sigBind db.sig).MergesLegal)
+    (hmw : (c.sigBind db.sig).MergesWidthOk) (h : CmdStep db c d) : d.DeclaredTerms := by
+  obtain ⟨x, hx, hcl⟩ := h
+  have hxs : x.sig = c.sigBind db.sig := cmdEffect_sig hx
+  exact mergeClosure_declaredTerms (cmdEffect_wf hwf hx)
+    (cmdEffect_declaredTerms hwf hdt hr hw hsl hfresh hx)
+    (by rw [hxs]; exact hml) (by rw [hxs]; exact hmw) hcl
+
+/-- What `Program.WidthOk`, `Program.SetLegal` and `Program.DeclsFresh` cannot say, checked
+at the state each command actually runs in — the weakest place to check it, as
+`FDatabase.ProgramLegal` does. Two things: the rules the state holds pass the action-block
+checks, and the signature the command leaves has width-checked, `set`-legal `:merge` bodies.
+Neither is a condition on the program text — a rule outlives the signature it was added
+under, and `Cmd.WidthOk` reaches a `:merge` only at the declaration that installs it. -/
+def Database.RunLegal : Database → Program → Prop
+  | _, [] => True
+  | db, c :: cs =>
+      db.RulesOk ∧ Signature.MergesLegal (c.sigBind db.sig) ∧
+        Signature.MergesWidthOk (c.sigBind db.sig) ∧
+        ∀ d, CmdStep db c d → Database.RunLegal d cs
+
+/-- **A run preserves `DeclaredTerms`.** The three front-end checks thread through the
+induction on their own: each is read at the signature the earlier commands leave, which is
+the signature the run has reached by `CmdStep.sig`. -/
+theorem programStep_declaredTerms {db db' : Database} {p : Program}
+    (h : ProgramStep db p db') :
+    db.WF → db.DeclaredTerms → Program.WidthOk p db.sig → Program.SetLegal p db.sig →
+      Program.DeclsFresh p db.sig → db.RunLegal p → db'.DeclaredTerms := by
+  induction h with
+  | nil => exact fun _ hdt _ _ _ _ => hdt
+  | @cons db x d' c cs hstep _ ih =>
+    intro hwf hdt hw hsl hfresh hl
+    have hxs : x.sig = c.sigBind db.sig := CmdStep.sig hstep
+    exact ih (CmdStep.wf hwf hstep)
+      (cmdStep_declaredTerms hwf hdt hl.1 hw.1 hsl.1 hfresh.1 hl.2.1 hl.2.2.1 hstep)
+      (by rw [hxs]; exact hw.2) (by rw [hxs]; exact hsl.2) (by rw [hxs]; exact hfresh.2)
+      (hl.2.2.2 x hstep)
+
+/-- **Every state a legal run reaches from `Database.empty` is `DeclaredTerms`.** -/
+theorem reachable_declaredTerms {p : Program} {db : Database}
+    (hw : Program.WidthOk p Database.empty.sig)
+    (hsl : Program.SetLegal p Database.empty.sig)
+    (hfresh : Program.DeclsFresh p Database.empty.sig)
+    (hl : Database.empty.RunLegal p) (h : ProgramStep Database.empty p db) :
+    db.DeclaredTerms :=
+  programStep_declaredTerms h Database.WF.empty Database.empty_declaredTerms hw hsl hfresh hl
 
 /-! ### Union-freedom, and where it puts `Recorded`
 

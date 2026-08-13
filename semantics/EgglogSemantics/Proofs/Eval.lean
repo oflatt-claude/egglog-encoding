@@ -1,4 +1,5 @@
 import EgglogSemantics.Spec.Eval
+import EgglogSemantics.Spec.Scope
 import EgglogSemantics.Proofs.Congruence
 
 namespace Egglog
@@ -19,6 +20,12 @@ theorem Database.terms_eq_of_eqs_eq {d₁ d₂ : Database} (h : d₁.eqs = d₂.
 
 @[simp] theorem Database.terms_setEnvRules {db : Database} {σ : Env} {R : Set Rule} :
     ({ db with env := σ, rules := R } : Database).terms = db.terms := terms_eq_of_eqs_eq rfl
+
+theorem Database.terms_setSig {db : Database} {s : Signature} :
+    ({ db with sig := s } : Database).terms = db.terms := terms_eq_of_eqs_eq rfl
+
+theorem Database.terms_setRules {db : Database} {R : Set Rule} :
+    ({ db with rules := R } : Database).terms = db.terms := terms_eq_of_eqs_eq rfl
 
 /-- `WF` reads `eqs` and `env` only: a database agreeing in both is well formed too. -/
 theorem Database.WF.congr {d₁ d₂ : Database} (hw : d₁.WF) (heqs : d₁.eqs = d₂.eqs)
@@ -46,6 +53,14 @@ rule-local substitution. -/
 theorem Database.WF.appendEnv {db : Database} (hw : db.WF) {σ : Env}
     (hσ : ∀ b ∈ σ, b.2 ∈ db.terms) : Database.WF { db with env := db.env ++ σ } :=
   hw.setEnv fun b hb => (List.mem_append.mp hb).elim (hw.envInTerms b) (hσ b)
+
+/-- Each argument of an application the database holds is a term the database holds:
+`WF.subtermClosed` at depth one. -/
+theorem Database.mem_terms_of_arg {db : Database} (hwf : db.WF) {f : FnName}
+    {args : List Term} (h : Term.app f args ∈ db.terms) {t : Term} (ht : t ∈ args) :
+    t ∈ db.terms :=
+  hwf.subtermClosed _ h
+    (Term.mem_subterms.mpr (Term.IsSubterm.arg ht (Term.IsSubterm.refl t)))
 
 namespace Expr
 @[simp] theorem eval_lit {sig : Signature} {l : Lit} {σ : Env} :
@@ -102,6 +117,18 @@ theorem eval_app_undeclared {sig : Signature} {f : FnName} {args : List Expr} {�
 @[simp] theorem evalList_cons {sig : Signature} {e : Expr} {es : List Expr} {σ : Env} :
     Expr.evalList sig (e :: es) σ =
       (e.eval sig σ).bind fun t => (Expr.evalList sig es σ).map (t :: ·) := rfl
+
+/-- `Expr.evalList` is length-preserving, which is how a `set`'s declared column widths
+become the *term* widths `MergeStep.collide` asks about. -/
+theorem evalList_length {sig : Signature} {σ : Env} {es : List Expr} {ts : List Term}
+    (h : Expr.evalList sig es σ = some ts) : ts.length = es.length := by
+  induction es generalizing ts with
+  | nil => rw [Expr.evalList_nil, Option.some.injEq] at h; exact h ▸ rfl
+  | cons e es ih =>
+    rw [Expr.evalList_cons] at h
+    obtain ⟨t, -, h'⟩ := Option.bind_eq_some_iff.mp h
+    obtain ⟨us, hus, rfl⟩ := Option.map_eq_some_iff.mp h'
+    simp [ih hus]
 
 end Expr
 /-! ### Evaluation stays inside the constructor fragment
@@ -200,6 +227,142 @@ theorem Expr.evalList_ctorTerm {sig : Signature} {σ : Env}
     · exact Expr.evalList_ctorTerm hσ hrest x hx
 
 end
+
+/-! ### Evaluation builds terms of the declared width
+
+`Term.CtorTerm`'s width twin: it reads a head's *column counts* where that reads its kind,
+and it is `Database.DeclaredTerms` on a single term. The check that supplies the counts is
+`Expr.WidthOk`. -/
+
+/-- `Database.DeclaredTerms` on a single term: the condition the operations that *insert* a
+term have to be given. -/
+def Term.DeclaredTerm (sig : Signature) (t : Term) : Prop :=
+  ∀ f as, Term.app f as ∈ t.subterms → ∃ d, sig f = some d ∧ as.length = d.entryWidth
+
+/-- A literal mentions no application. -/
+theorem Term.declaredTerm_lit {sig : Signature} {l : Lit} :
+    Term.DeclaredTerm sig (.lit l) := by
+  intro f as hsub
+  rw [Term.subterms_lit] at hsub
+  exact absurd hsub (by simp)
+
+/-- A primitive returns one of its operands or a fresh literal, so it builds no application
+of its own. -/
+theorem Prim.apply_declaredTerm {sig : Signature} {p : Prim} {ts : List Term} {v : Term}
+    (hts : ∀ t ∈ ts, Term.DeclaredTerm sig t) (h : p.apply ts = some v) :
+    Term.DeclaredTerm sig v := by
+  unfold Prim.apply at h
+  split at h
+  · simp only [Option.some_inj] at h
+    subst h
+    unfold Term.orderingMin
+    split
+    · exact hts _ (by simp)
+    · exact hts _ (by simp)
+  · simp only [Option.some_inj] at h
+    subst h
+    unfold Term.orderingMax
+    split
+    · exact hts _ (by simp)
+    · exact hts _ (by simp)
+  · simp only [Option.some_inj] at h; subst h; exact Term.declaredTerm_lit
+  · simp only [Option.some_inj] at h; subst h; exact Term.declaredTerm_lit
+  · exact absurd h (by simp)
+
+mutual
+
+/-- **A width-checked expression evaluates to a term of the declared width.** The building
+branch's head is a declared constructor, whose `entryWidth` is its `arity`, and `WidthOk`
+supplies the argument count; a primitive returns an operand or a literal. -/
+theorem Expr.eval_declaredTerm {sig : Signature} {σ : Env}
+    (hσ : ∀ b ∈ σ, Term.DeclaredTerm sig b.2) {e : Expr} {t : Term}
+    (hw : e.WidthOk sig) (hs : e.eval sig σ = some t) : Term.DeclaredTerm sig t := by
+  match e with
+  | .lit l =>
+    rw [Expr.eval_lit, Option.some_inj] at hs
+    subst hs; exact Term.declaredTerm_lit
+  | .var v =>
+    rw [Expr.eval_var] at hs
+    exact hσ (v, t) (Env.mem_of_lookup hs)
+  | .app f args =>
+    cases hp : Prim.ofName f with
+    | some p =>
+      rw [Expr.eval_app_prim hp, Option.bind_eq_some_iff] at hs
+      obtain ⟨ts, hts, happ⟩ := hs
+      exact Prim.apply_declaredTerm (Expr.evalList_declaredTerm hσ hw.2 hts) happ
+    | none =>
+      by_cases hu : sig.IsCtor f
+      · rw [Expr.eval_app_ctor hp hu, Option.map_eq_some_iff] at hs
+        obtain ⟨ts, hts, rfl⟩ := hs
+        have hts' := Expr.evalList_declaredTerm hσ hw.2 hts
+        obtain ⟨d, hd, hdm⟩ := hu
+        intro g bs hsub
+        rw [Term.subterms_app] at hsub
+        rcases Set.mem_insert_iff.mp hsub with heq | hmem
+        · obtain ⟨rfl, rfl⟩ := Term.app.injEq .. ▸ heq
+          refine ⟨d, hd, ?_⟩
+          rw [Expr.evalList_length hts, hw.1 d hd, FnDecl.entryWidth, if_pos]
+          simp [hdm]
+        · obtain ⟨x, hx, hxs⟩ := Set.mem_iUnion₂.mp hmem
+          exact hts' x hx g bs hxs
+      · rw [Expr.eval_app_not_ctor hp hu] at hs; exact absurd hs (by simp)
+
+theorem Expr.evalList_declaredTerm {sig : Signature} {σ : Env}
+    (hσ : ∀ b ∈ σ, Term.DeclaredTerm sig b.2) {es : List Expr} {ts : List Term}
+    (hw : Expr.WidthOkList es sig) (hs : Expr.evalList sig es σ = some ts) :
+    ∀ t ∈ ts, Term.DeclaredTerm sig t := by
+  match es with
+  | [] =>
+    rw [Expr.evalList_nil, Option.some_inj] at hs
+    subst hs; simp
+  | e :: es =>
+    rw [Expr.evalList_cons, Option.bind_eq_some_iff] at hs
+    obtain ⟨t, ht, hmap⟩ := hs
+    obtain ⟨rest, hrest, heq⟩ := Option.map_eq_some_iff.mp hmap
+    subst heq
+    intro x hx
+    rcases List.mem_cons.mp hx with rfl | hx
+    · exact Expr.eval_declaredTerm hσ hw.1 ht
+    · exact Expr.evalList_declaredTerm hσ hw.2 hrest x hx
+
+end
+
+/-! ### `DeclaredTerms`, term by term
+
+`Database.DeclaredTerms` and `Term.DeclaredTerm` are the same condition read of a state and
+of a term. `WF.subtermClosed` moves it in one direction, and the two `add` operations move
+it back. -/
+
+theorem Database.declaredTerm_of_mem {db : Database} (hwf : db.WF) (hdt : db.DeclaredTerms)
+    {t : Term} (ht : t ∈ db.terms) : Term.DeclaredTerm db.sig t := fun f as hsub =>
+  hdt f as (hwf.subtermClosed t ht hsub)
+
+theorem Database.env_declaredTerm {db : Database} (hwf : db.WF) (hdt : db.DeclaredTerms) :
+    ∀ b ∈ db.env, Term.DeclaredTerm db.sig b.2 :=
+  fun b hb => Database.declaredTerm_of_mem hwf hdt (hwf.envInTerms b hb)
+
+theorem Database.declaredTerms_addTerm {db : Database} (hdt : db.DeclaredTerms) {t : Term}
+    (ht : Term.DeclaredTerm db.sig t) : (db.addTerm t).DeclaredTerms := by
+  intro f as hmem
+  rw [Database.addTerm_terms] at hmem
+  rcases hmem with h | h
+  · exact hdt f as h
+  · exact ht f as h
+
+theorem Database.declaredTerms_addEq {db : Database} (hdt : db.DeclaredTerms) {a b : Term}
+    (ha : Term.DeclaredTerm db.sig a) (hb : Term.DeclaredTerm db.sig b) :
+    (db.addEq a b).DeclaredTerms := by
+  intro f as hmem
+  rw [Database.addEq_terms] at hmem
+  rcases hmem with (h | h) | h
+  · exact hdt f as h
+  · exact ha f as h
+  · exact hb f as h
+
+theorem Database.empty_declaredTerms : Database.empty.DeclaredTerms := by
+  intro f as hmem
+  rw [Database.empty_terms] at hmem
+  exact absurd hmem (by simp)
 
 mutual
 
@@ -392,6 +555,61 @@ theorem evalActions_wf {db db' : Database} (hw : db.WF) {as : List Action}
       simp only [evalActions_cons, hv, Option.bind_some] at h
       exact ih (evalAction_wf hw hv) h
 
+/-! ### Actions keep `DeclaredTerms`
+
+The two front-end checks that bear on what an action *writes*: `Action.WidthOk` for the
+terms it builds, `Action.SetLegal` for the entry a `set` records. `SetLegal` is load-bearing
+in the `set` case and not decoration — it is what turns `args.length = arity` and
+`out.length = outArity` into `FnDecl.entryWidth`, which is `arity + outArity` for a merge
+function and `arity` alone for a constructor. `Proofs/Counterexamples.lean`'s
+`setCtor_not_declaredTerms` is a `set` on a constructor that passes `WidthOk` and breaks
+`DeclaredTerms`. -/
+
+/-- **`DeclaredTerms` is preserved by an action.** -/
+theorem evalAction_declaredTerms {db db' : Database} (hwf : db.WF) (hdt : db.DeclaredTerms)
+    {a : Action} (hw : a.WidthOk db.sig) (hsl : a.SetLegal db.sig)
+    (h : evalAction db a = some db') : db'.DeclaredTerms := by
+  have henv := Database.env_declaredTerm hwf hdt
+  rcases evalAction_eq_some h with ⟨e, t, rfl, ht, rfl⟩ | ⟨v, e, t, rfl, ht, rfl⟩ |
+    ⟨e₁, e₂, t₁, t₂, rfl, ht₁, ht₂, -, rfl⟩ | ⟨f, args, out, as, vs, rfl, has, hvs, rfl⟩
+  · exact Database.declaredTerms_addTerm hdt (Expr.eval_declaredTerm henv hw ht)
+  · intro g bs hmem
+    rw [Database.terms_setEnv] at hmem
+    exact Database.declaredTerms_addTerm hdt (Expr.eval_declaredTerm henv hw ht) g bs hmem
+  · exact Database.declaredTerms_addEq hdt (Expr.eval_declaredTerm henv hw.1 ht₁)
+      (Expr.eval_declaredTerm henv hw.2 ht₂)
+  · obtain ⟨d, hd⟩ : ∃ d, db.sig f = some d := by
+      cases hdf : db.sig f with
+      | none => exact absurd (by simp [Signature.mergeOf, hdf]) hsl
+      | some d => exact ⟨d, rfl⟩
+    have hdm : d.merge ≠ none := fun hne => hsl (by simp [Signature.mergeOf, hd, hne])
+    obtain ⟨hka, hkv⟩ := hw.1 d hd
+    refine Database.declaredTerms_addTerm hdt ?_
+    intro g bs hsub
+    rw [Term.subterms_app] at hsub
+    rcases Set.mem_insert_iff.mp hsub with heq | hmem
+    · obtain ⟨rfl, rfl⟩ := Term.app.injEq .. ▸ heq
+      refine ⟨d, hd, ?_⟩
+      rw [List.length_append, (Expr.evalList_length has).trans hka,
+        (Expr.evalList_length hvs).trans hkv, FnDecl.entryWidth, if_neg]
+      simpa using hdm
+    · obtain ⟨x, hx, hxs⟩ := Set.mem_iUnion₂.mp hmem
+      rcases List.mem_append.mp hx with hx | hx
+      · exact Expr.evalList_declaredTerm henv hw.2.1 has x hx g bs hxs
+      · exact Expr.evalList_declaredTerm henv hw.2.2 hvs x hx g bs hxs
+
+theorem evalActions_declaredTerms {db db' : Database} (hwf : db.WF) (hdt : db.DeclaredTerms)
+    {as : List Action} (hw : Actions.WidthOk as db.sig) (hsl : Actions.SetLegal as db.sig)
+    (h : evalActions db as = some db') : db'.DeclaredTerms := by
+  induction as generalizing db with
+  | nil => rw [evalActions_nil, Option.some_inj] at h; exact h ▸ hdt
+  | cons a as ih =>
+    rw [evalActions_cons, Option.bind_eq_some_iff] at h
+    obtain ⟨d, hd, hrest⟩ := h
+    have hsig : d.sig = db.sig := evalAction_sig hd
+    exact ih (evalAction_wf hwf hd) (evalAction_declaredTerms hwf hdt hw.1 hsl.1 hd)
+      (by rw [hsig]; exact hw.2) (by rw [hsig]; exact hsl.2) hrest
+
 /-! ### Agreeing environments are interchangeable
 
 `Expr.eval_agree` says evaluation reads the environment only through `lookup`. Lifting
@@ -520,5 +738,18 @@ theorem evalLocalActions_wf {db db' : Database} (hw : db.WF) {as : List Action} 
     fun b hb => Database.terms_setEnvRules ▸ (evalActions_contained hv).terms
       (Database.terms_setEnv ▸ hw.envInTerms b hb),
     hd.litsIsolated⟩
+
+/-- Local actions keep `DeclaredTerms`, under `evalLocalActions_wf`'s condition on the
+substitution and the two checks `evalActions_declaredTerms` asks of the block. -/
+theorem evalLocalActions_declaredTerms {db db' : Database} (hwf : db.WF)
+    (hdt : db.DeclaredTerms) {as : List Action} {σ : Env}
+    (hσ : ∀ b ∈ σ, b.2 ∈ db.terms) (hw : Actions.WidthOk as db.sig)
+    (hsl : Actions.SetLegal as db.sig) (h : evalLocalActions db as σ = some db') :
+    db'.DeclaredTerms := by
+  obtain ⟨d, hv, rfl⟩ := evalLocalActions_eq_some h
+  intro g cs hmem
+  rw [Database.terms_setEnvRules] at hmem
+  exact evalActions_declaredTerms (hwf.appendEnv hσ)
+    (by intro g cs hm; rw [Database.terms_setEnv] at hm; exact hdt g cs hm) hw hsl hv g cs hmem
 
 end Egglog
