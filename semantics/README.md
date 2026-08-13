@@ -28,9 +28,9 @@ deleted, and [`CHECKER.md`](CHECKER.md), what a Lean model of egglog's proof che
 
 Two things worth knowing before reading any of it.
 
-**`Spec/` is frozen** at 8 files and ~975 lines. `Impl/` is ported against it, difftest is
-green, and `Proofs/` builds through `Merge`; `Proofs/Counterexamples.lean` and
-`Proofs/Lattice.lean` are still red — `PLAN.md`, "Current priority", has the frontier.
+**`Spec/` is frozen** at 8 files and ~975 lines. `Impl/` is ported against it, difftest is green,
+and the whole library builds — `PLAN.md`, "Current priority", has the frontier, which is now three
+`Recorded` transports and nothing else.
 
 **`Spec/` is append-only and `Impl/` is not.** Nothing is ever removed from `Database.eqs`,
 where a function's whole table lives as terms; `Impl/` keeps a `Row` index it re-keys and

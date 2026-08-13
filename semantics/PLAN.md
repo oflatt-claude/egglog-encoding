@@ -80,29 +80,33 @@ yet.
 
 | open | where |
 | --- | --- |
-| **port `Proofs/Counterexamples.lean` and `Proofs/Lattice.lean`** — all that is left of the port, and the only red files | both are row-shaped throughout (`Database.rows`, `CtorTerms`, `RowsComplete`) |
-| the three `Recorded` transports, the only `sorry`s | `Proofs/Merge.lean`, header |
-| home the two witness files, which compile but are outside the library | `Scratch/` → `Proofs/Counterexamples.lean` |
+| `Database.Out.mono_recorded` — a **restatement**, at the congruent key `Recorded` supplies | `Proofs/Merge.lean`; it changes two call sites in `mergeOneOriented_mergeStep` |
+| `MergeStep.transport_recorded` — **false as stated** at `c5682e0`, refuted at the encoding's own `mergeBody` | `ENCODING.md` |
+| `RuleResults.mono_recorded` — the one genuinely open proof | `Proofs/Merge.lean` |
+| home `Scratch/CmdMergePhase.lean`, and the choice-operator and merge-round refutations, all outside the library | `Scratch/` → `Proofs/Counterexamples.lean` |
 | `Matches.values` is split-blind and e-class-blind | `MERGE.md`, open question 1 |
 | base sorts, in place of the single untyped `Term` | `MERGE.md`, constraint (5) |
 | restating M11 against a reachable saturation condition | `ENCODING.md` |
 
-**Where the port stands.** `Spec/`, `Impl/`, `Encoding/Encode.lean`, `DiffTest`, `Tests/Egg`,
-`Tests/Examples` and `Proofs/` through `Merge` all build. Difftest is **166 passed / 0 failed**.
-A whole-library build is still red, at the two files above and nowhere else.
+**The three `sorry`s are not three open proofs**, and that is a change of plan rather than of
+wording. One is a restatement whose proof is not in doubt. One is **false**, with a machine-checked
+counterexample, and is being restated; until a corrected form lands, nothing downstream should be
+written against its current shape. Only `RuleResults.mono_recorded` is an open proof,
+and what it waits on is a *restriction* rather than an idea: no choice operator is
+congruence-stable (`MERGE.md`, "The representative deviation"), so confining the transported
+positions to ordering-free expressions is forced. **And the encoding may need none of the three** —
+on encoded programs `Recorded` collapses to `Contained`, whose transports are already proved
+([`ENCODING.md`](ENCODING.md)).
+
+**Where the port stands.** The whole library builds, `Proofs/Lattice.lean` and
+`Proofs/Counterexamples.lean` included. Difftest is **166 passed / 0 failed**.
 
 **The headline: `execM_eq_exec` and `exec_programStep` are `sorryAx`-free**, so the chain from the
 egglog binary to `ProgramStep` is unbroken. Difftest compares egglog against `execM`;
 `execM_eq_exec` carries `execM` to `exec` on the constructor fragment; `exec_programStep` is a
 biconditional against `ProgramStep`. The 166 cases therefore constrain the **specification**, not
-only the interpreter. `execM_contained` builds but still depends on `sorryAx`: three `sorry`s at
-`a95d680`, being reduced, all of them `Recorded` transports.
-
-Do not read a statement in an unported file as a claim about the current `Spec/`; several have
-turned out to be false rather than stale. In particular
-`Falsity.exec_programStep_needs_ctorDecls`, which `exec_programStep` and `execM_reachable` both
-cite as the witness that `Program.CtorDecls` is not removable, lives in a red file and is
-currently unchecked.
+only the interpreter. `execM_contained` is the one theorem that still depends on `sorryAx`, at the
+three transports above.
 
 The three things this note used to name — arity checking, reading a `:merge` function in a
 query, and the rule-head restriction — are now done: `Impl/Check.lean`'s "Arity" and
@@ -190,15 +194,11 @@ select (`old`, `new`) or build a term, so there are no lattice merges and no ana
   new)) (ordering-min old new))`, so `encode` cannot be stated without them. Only a
   union-find-free encoding would retire them.
   - They also carry the model's one **accepted deviation** on merge results: `Term.blt` is a
-    deterministic structural order, egglog's is the allocation order of value ids, so the two
-    keep different representatives. **No longer merely a fidelity gap**, and any text calling it
-    cosmetic or retirable-on-demand is superseded: a structural order is not congruence-stable —
-    after `(union (f 1) (g 1))`, `orderingMin (f 1) (f 2) = f 1` but `orderingMin (g 1) (f 2) =
-    f 2`, and those two are not congruent — so "a run under a congruent environment records the
-    run under the original" is false at a primitive, and two of `Proofs/Merge.lean`'s three
-    remaining `sorry`s spend exactly that lemma. Since `mergeBody`/`mergeResult` are built from
-    the two primitives, `Term.blt` cannot leave `Spec/` either. `MERGE.md`, "The representative
-    deviation", has the repros, the mechanism and the way out.
+    deterministic structural order, egglog's is the allocation order of value ids, so the two keep
+    different representatives. It is not a fidelity gap only, and it is not a defect of `Term.blt`
+    either: **no** choice operator is congruence-stable across the two databases `Recorded`
+    relates, so there is nothing to switch to and no repair to look for. `MERGE.md`, "The
+    representative deviation", has the repros, the impossibility and what it forces.
 
 Dropping all four would take `Prim` out of `Expr.eval` entirely, which is the smallest the
 semantics can be — at the price of `:merge` becoming decorative, with no lattice for the
@@ -225,9 +225,10 @@ until the transports land.
 
 Statements known to be **false** carry compiling counterexamples in
 `Proofs/Counterexamples.lean` and `Proofs/Lattice.lean`, so a refuted statement cannot
-quietly come back — read them before trying to prove anything they refute. Both are
-unported, so right now they are a record rather than a check, and re-greening them is part of the
-port rather than optional.
+quietly come back — read them before trying to prove anything they refute. Two refutations are
+not yet homed there and are the reason the work queue's fourth row exists: that no choice
+operator is congruence-stable, and that `MergeStep.transport_recorded` and a `Contained`-strength
+`mergeRound_contained` are both false.
 
 Two traps that a green build will not catch. Writing `h.ge` for a set inclusion silently
 pulls `Classical.choice` into every downstream axiom set. And `lake build` does not rebuild
@@ -417,7 +418,7 @@ an `@UF` leader on the encoded side.
 The witness formulation: a substitution is valid when the pattern instance is
 `Cong`-equal, *in the database extended with that instance*, to some witness term
 already in the database. The witness is what forbids matching a term the e-graph
-does not contain, and it is what `Scratch/NonVacuity.lean`'s `not_matches_empty` checks is not
+does not contain, and it is what `Proofs/Counterexamples.lean`'s `not_matches_empty` checks is not
 vacuous.
 
 Two deviations, both recorded elsewhere and neither closed: `ValidEnv` fixes the domain only up to
@@ -539,8 +540,9 @@ Follow-ups, in rough dependency order:
     `Cong.mono_recorded` in its old shape, the `ValidEnv`/`ValidSubst`/`ValidQuerySubst` family at
     the same substitution, and "a run under a congruent environment records the run under the
     original".
-  - Remaining: the three `Recorded` transports, and re-greening the two witness files. Everything
-    else M9 named is done.
+    A fourth joined them since: `MergeStep.transport_recorded`.
+  - Remaining: the three `Recorded` transports, in the three different senses "Current priority"
+    gives them. Everything else M9 named is done.
 - **M10 — executable layer.** A `Finset`-based interpreter, a decidable congruence
   closure, and a refinement *biconditional* between the interpreter and `ProgramStep`.
   Proved end to end. Five design notes are worth more than the lemma inventory, which is
@@ -774,9 +776,10 @@ per-constructor views, rebuild rules, path compression — and the three theorem
 that, then deleted (`ENCODING.md`). Of what this sketch proposed dropping — the union-find, the
 view tables, the proof skeletons — **only the third held**, and structural fresh ids are what
 replaced `get-fresh!`. It is kept for the three things below that are still current, and because
-it is the cheapest picture of a union-find-free encoding, which is also the only thing that would
-retire `ordering-min`/`ordering-max` and with them the congruence-instability now blocking two
-`sorry`s.
+it is the cheapest picture of a union-find-free encoding, which is the only thing that would
+retire `ordering-min`/`ordering-max` and with them a congruence-instability that **no** operator
+repairs (`MERGE.md`). It is no longer the only way *M11* escapes that instability — the encoded
+fragment escapes it outright, `ENCODING.md` — but it is the only way the model as a whole does.
 
 **Proved against the specification, not against the Rust.** That is the decision that makes
 this tractable, and it did carry over: no differential testing against real egglog, no
@@ -875,13 +878,11 @@ Other omissions, unaddressed since the port: schedules, extraction, containers.
 
 ## Verification
 
-- `cd semantics && lake build` — the whole development typechecks. **Red at
-  `Proofs/Counterexamples.lean` and `Proofs/Lattice.lean`**, and nowhere else; that is the goal
-  state, and the check that must stay green afterwards.
+- `cd semantics && lake build` — the whole development typechecks, and that is the state to keep.
 - `make lean-difftest` — 166 cases against the real egglog binary. Watch the profile
-  distribution, not only the pass count. Runnable throughout the port, because it reaches `Impl/`
-  through `Tests/Egg.lean` without touching `Proofs/`. It shares one scratch directory, so two
-  runs at once will report spurious failures.
+  distribution, not only the pass count. It reaches `Impl/` through `Tests/Egg.lean` without
+  touching `Proofs/`. It shares one scratch directory, so two runs at once will report spurious
+  failures.
 - `make lean-check` additionally fails on any `sorry`. Use it to check that a change adds no
   *new* one; the standing ones are the three `Recorded` transports in `Proofs/Merge.lean`. The
   five defective M9 statements are gone — deleted, not sorried.

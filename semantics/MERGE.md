@@ -33,8 +33,7 @@ left.
 (`Proofs/Merge.lean`, "Known-broken statements, removed" and "Two statements removed rather than
 carried"); the fifth went with `RunStep` itself, whose job is now `CmdStep` at `.run`. Only
 `execM_current_of_lattice` has compiled refutations, in `Proofs/Lattice.lean` — the other three
-are argued at the deletion notes. `Proofs/Lattice.lean` and `Proofs/Counterexamples.lean` are the
-two files still red against the rewritten `Spec/`, so those witnesses are unchecked meanwhile.
+are argued at the deletion notes.
 
 ## The framing: invariants over a step relation
 
@@ -296,19 +295,22 @@ makes the interpreter's choice deterministic. **The spec stays non-deterministic
 **`Term.blt` keeps a deterministic structural order and does not model egglog's allocation order.
 The claim that used to sit here — "invisible to `(print-size)`, so differential testing is
 unaffected" — is false.** It was recorded as an accepted decision rather than a defect; the
-subsection at the end of this one revises even that, since a structural order is not
-congruence-stable and that now blocks a proof.
+subsection at the end of this one revises even that, since the operator is not congruence-stable
+and that blocks a proof — and it is not the *order* that is at fault.
 
 Scope, since it narrowed: this is about `ordering-min`/`ordering-max`, and *not* about which of two
 colliding rows is `old`. That one is allocation order too, and `Impl/` does model it, by reading
 `FDatabase.terms`' order — see "`old` is the row at the canonical key". The same repair is not
-available here, because `Prim.apply` is `List Term → Option Term` and has no database to read.
+available here, and the reason is **not** the one this used to give ("`Prim.apply` is
+`List Term → Option Term` and has no database to read"): handing the operator a database changes
+nothing, as the subsection below proves.
 
 egglog's `ordering-min`/`ordering-max` compare the `Value` word a term is stored as
 (`egglog/src/lib.rs`, `add_primitive!(&mut eg, "ordering-min" = |a: #, b: #| -> # { if a < b { a }
 else { b } })`), and a `Value` is a `u32` **id handed out in allocation order** within a session.
 `Term.blt` compares structure. So the two pick different class **representatives**, deliberately —
-matching egglog would mean threading a session-wide allocation counter through `Database`.
+matching egglog would mean threading a session-wide allocation counter through `Database`, which
+would not buy congruence-stability anyway.
 
 The invisibility claim holds only under two side conditions, and both are routinely violated: the
 merge function must never be **read**, and its representative must never be used as a **key**. The
@@ -332,40 +334,57 @@ first interning (`egglog/core-relations/src/base_values/`, `impl_medium_base_val
 `BaseInternTable::intern`). So `1` sorts below `-1`, and between two *interned* literals egglog's
 answer is not even a function of the two numbers — it depends on which the session saw first.
 
-#### It is a proof obstruction, not only a fidelity gap
+#### It is not the order: **no** choice operator is stable
 
-**Superseding the paragraph that used to close this section.** `Term.blt`'s order is not merely
-*different* from egglog's — it is not **congruence-stable**, and no order the model can compute
-is. egglog's `ordering-min`/`ordering-max` read the e-class id, so congruent arguments give
-congruent answers by construction; `Term.blt` reads the term, and congruent terms differ. After
-`(union (f 1) (g 1))`:
+The cheapest witness first: after `(union (f 1) (g 1))`, `orderingMin (f 1) (f 2) = f 1` while
+`orderingMin (g 1) (f 2) = f 2`, so replacing an operand by a congruent one gives a non-congruent
+answer. That kills "a run under a congruent environment records the run under the original", which
+two of the three `Recorded` transports spend.
 
-```
-Term.orderingMin (f 1) (f 2) = f 1     -- one head, 1 < 2
-Term.orderingMin (g 1) (f 2) = f 2     -- heads differ, "f" < "g"
-```
+**Superseding everything that treated this as a defect of `Term.blt`.** The obstruction is not the
+order and not the missing database: it is that a choice operator has to commit to a **side**, and
+`Recorded` lets a congruence identify any two non-literal terms. The condition the transports need
+is *stability*: for `A.Recorded C` with both states well formed, on arguments `C` sees as
+congruent, evaluation in the specification's `A` and in the implementation's `C` must give
+congruent answers. Stated at the strongest hypothesis (bare `Cong C`) and the weakest conclusion
+(`CongOn C`), so refuting it refutes every weaker reading. Against it — machine-checked and
+`sorryAx`-free, though the names below are still probes awaiting a home in
+`Proofs/Counterexamples.lean`:
 
-`f 1` and `g 1` are congruent; `f 1` and `f 2` are not. So replacing an operand by a congruent one
-changes the answer to a non-congruent term. That is exactly the lemma "a run under a congruent
-environment records the run under the original", which is therefore **false at a primitive** and
-true only primitive-free — `Proofs/Merge.lean`'s header states it. Two of the three open
-`Recorded` transports spend it: `RuleResults.mono_recorded` re-evaluates a head under a
-substitution `Recorded` supplies only up to congruence, and `MergeStep.transport_recorded` re-runs
-a `:merge` body under a `mergeEnv` built from the colliding outputs, congruent rather than equal.
-`min`/`max` break the same lemma for a second and **separable** reason: `Prim.apply` matches on
-`Lit`, so a term congruent to `.lit 1` but unequal computes `none` rather than a wrong answer.
-That half is repairable by a state invariant — a literal's congruence class is a singleton, which
-holds of every state a program reaches — and the `ordering-*` half is not, because they apply to
-arbitrary terms and there is no invariant that makes a structural order respect congruence.
+* **The general impossibility** (`no_stable_choice`). No operator that answers with something
+  congruent to one of its arguments and makes the same choice on `(x, y)` as on `(y, x)` is
+  stable. The condition is not vacuous — projections and constants satisfy it (`fst_stable`,
+  `const_stable`) — but a union-find parent chosen by argument *position* is not a parent, since
+  `MergeStep.collide` fires on the two colliding entries in either order and would write both
+  `@UF(y) ↦ x` and `@UF(x) ↦ y`. Symmetry up to congruence, which is all a union-find needs, is
+  refuted too. `orderingMin_not_stable` then refutes today's operator **from its shape**, so
+  swapping `Term.blt` for e-class ids changes nothing.
+* **A database argument buys nothing.** The impossibility is proved of operators that *take* a
+  `Database`, so neither the allocation counter above nor a new operator baked into the language is
+  a way out. A database-aware `Expr.eval` would also stop being computable, so `Impl/` would
+  compute a different function and would need exactly the condition just refuted.
+* **Class-min fails, and the reason is the shape of the refinement** (`cmin_not_stable`). Picking
+  the least member of the argument's congruence class *is* a function of the classes **within one
+  database** — `cmin_congr` gets the answers literally equal, not merely congruent — which is why
+  it looks like the fix and why egglog's e-class-id order is stable *in one run*. The refinement
+  compares two databases: `C` holds terms `A` never built, so a class of `C` is a larger set, its
+  minimum can be a term `A` has never seen, and that term can sit on the far side of the other
+  argument and flip which class the operator answers from. A class minimum also need not **exist**
+  — `Term.blt` orders by an unbounded integer over a `Set`.
 
-**Consequence, revised.** The deviation is a hypothesis of any future simulation theorem against
-real egglog **and** an obstruction inside this development. `Term.blt` cannot leave `Spec/` —
-`Encoding/Encode.lean`'s `mergeBody`/`mergeResult` are `(set (@UF (ordering-max old new))
-(ordering-min old new))` at its single value column, so `encode` is unstatable without the two
-primitives — so the fix is
-to restrict the transported positions to primitive-free expressions, not to look for a proof and
-not to complicate `Term.blt`. Only a union-find-free encoding retires the primitives, and with
-them both halves of this.
+`min`/`max` broke the same lemma for a second and **separable** reason, matching on `Lit`; that
+half is **closed** — `evalAction` refuses a `union` on a literal, so a literal's class is a
+singleton and `Prim.apply_cong` follows. The `ordering-*` half is what is left, and nothing closes
+it.
+
+**Consequence.** The deviation is a hypothesis of any future simulation theorem against real
+egglog **and** a permanent obstruction inside this development. `Term.blt` cannot leave `Spec/`,
+because `encode` is unstatable without the two primitives ("The term order", above). The fix is
+therefore to restrict the transported positions to ordering-free expressions: not a better proof,
+not a better order, and not a better operator, because there is none. Only a union-find-free
+encoding retires the primitives, and with them both halves of this.
+The *encoded* fragment escapes by a different route, which is the more useful finding —
+`ENCODING.md`.
 
 ## Multi-column outputs
 
@@ -438,9 +457,31 @@ them to marker relations and deletes only the *view* entry.
 
 ### Why `Recorded` is weaker than `Contained`, and weaker than it was
 
-`Database.Recorded` is the containment an implementation that **re-keys** can satisfy, and it is
-why the refinement chain cannot run on `Contained` alone: a rebuild moves an entry onto the
-canonical key of its class, which congruence still sees and `⊆` does not.
+`Database.Recorded` is the containment an implementation that **re-keys** can satisfy, and the
+refinement chain cannot run on `Contained` alone. That is now **proved rather than asserted**, and
+it bites inside a *single* merge round rather than only across commands:
+`mergeRound_contained_needs_recorded` exhibits a state satisfying both of `mergeRound_contained`'s
+own premises — `FDatabase.Inv` and `Signature.MergesLegal` — whose one pass reaches a database
+that **no** merge closure from that same state contains. The two sides start out literally equal,
+so the gap is not an artifact of an already-weakened relation.
+
+**The rebuild is not what moves the denotation, and text blaming it is imprecise.**
+`rebuild_toDatabase` is `rfl`: a rebuild writes `rows`, which `toDatabase` drops. What moves the
+denotation is the merge write *after* it. `rebuild` re-keys a `:merge` row onto its class's
+canonical member — the oldest congruent term — and `mergeOneOriented` then writes the combined
+**entry term** at that rebuilt key, into `terms`. `MergeStep.collide` may write only where an
+entry already sits, at one of the two colliding keys, and it is symmetric, so both of its choices
+are ruled out at once. When the canonical key belongs to a **third, older term carrying no
+entry**, the implementation writes where no specification run can.
+
+The witness is minimal: `(A) (B) (C)` nullary and `(function Dist (Math) i64 :merge new)`, with
+`(A)` built first so that it is canonical and carries no `Dist` entry; then `set (Dist B) 1`,
+`set (Dist C) 2`, `union C A`, `union B A`. One implementation pass writes `Dist(A, 2)`, and
+`spec_never_distA` shows no `ProgramStep` on that program ever reaches a state holding any
+`Dist(A, …)`. Kernel-checked: the sealed well-founded `closure` is replaced by a proved
+description of it, thirteen pairs, after which the pass reduces and `decide` goes through. These
+two are probes as well, awaiting the same home as the refutations under "The representative
+deviation".
 
 It used to be three clauses — `terms ⊆ terms`, a row clause through `Out`, and `eqs ⊆ eqs`. It is
 **one** now, and uniformly weakened: every `p ∈ d₁.eqs` is matched by *some* `q ∈ d₂.eqs` whose two
@@ -453,11 +494,16 @@ the implementation's re-keyed entry. `CongOn` can, because it adds the operands 
 through `CongOn` for the same reason everywhere rather than only at entries, because there is no
 longer a row clause to treat specially.
 
-Checked non-vacuous rather than assumed so: with no asserted equalities it collapses to plain
-subset, and the only database `Recorded` in the empty one is a database with no equations at all
-(`Scratch/NonVacuity.lean`'s `recorded_empty`). That check is
-worth repeating on anything else phrased through `CongOn` — `ENCODING.md`'s second finding is a
+Checked non-vacuous rather than assumed so: the only database `Recorded` in the empty one is a
+database with no equations at all (`Proofs/Counterexamples.lean`'s `recorded_empty`). That check
+is worth repeating on anything else phrased through `CongOn` — `ENCODING.md`'s second finding is a
 statement of exactly this shape that turned out to say nothing.
+
+**Where it is not weaker at all.** `recorded_iff_subset`: on a target state whose asserted pairs
+are *all reflexive*, `d₁.Recorded d₂` is exactly `d₁.eqs ⊆ d₂.eqs`, because nothing is
+congruent-but-distinct for the re-keying to hide behind. That is not a corner case — it is every
+state an encoded program reaches, and it is why M11 may need none of the transports below
+(`ENCODING.md`).
 
 **`Recorded` is transitive, and what it took is worth recording.** The obstacle is the `CongOn`:
 composing two hops leaves a derivation in `d₃` extended by the *middle* database's terms, which
@@ -466,11 +512,12 @@ adding reflexive equations for terms a database does not hold cannot relate two 
 proved through a `Quot (Cong db)` model, roughly 315 lines. Not the congruence-closure-completeness
 induction that was predicted, and it is what `Cong.mono_recorded` needs too, pinned to the ambient
 `trans` actually uses. The price is two `WF` premises on `trans`, discharged locally at both call
-sites. Conservativity does **not** rescue the three remaining transports: `Database.Out` and
-`MergeStep.collide`'s `CongList` premise want *bare* `Cong` at `d₂`, and conservativity discharges
-the ambient only when both endpoints are already terms of `d₂`, which `Recorded` does not supply —
-the key `d₁` searched at need not be a term of `d₂` at all. Those have to be restated at the
-congruent key, which changes what they say.
+sites. Conservativity does **not** rescue the transports the development still owes:
+`Database.Out` and `MergeStep.collide`'s `CongList` premise want *bare* `Cong` at `d₂`, and
+conservativity discharges the ambient only when both endpoints are already terms of `d₂`, which
+`Recorded` does not supply — the key `d₁` searched at need not be a term of `d₂` at all. Those
+have to be restated at the congruent key, which changes what they say; and one of the three is
+false rather than merely open. `PLAN.md`'s work queue has the current standing of each.
 
 **What monotonicity costs.** egglog *deletes* the displaced row and `Spec/` keeps it, so `Out` is a
 sound over-approximation: every value egglog computes is derivable here, plus stale ones it has
@@ -812,9 +859,8 @@ non-lattice merge `Current` does not exist and nothing was ever claimed.
 
 `execM_reachable` applies to `exec` only, under `Program.CtorDecls` alone, whose necessity is
 `Falsity.exec_programStep_needs_ctorDecls`: a `:merge` declaration lets an entry collide with
-itself, so the specification reaches two states where the interpreter returns one. (That witness
-lives in `Proofs/Counterexamples.lean` and is currently unchecked, the file being red.)
-`Program.SetLegal` used to sit beside it and is gone — what it maintained was `Database.CtorRows`,
+itself, so the specification reaches two states where the interpreter returns one (the witness is
+in `Proofs/Counterexamples.lean`). `Program.SetLegal` used to sit beside it and is gone — what it maintained was `Database.CtorRows`,
 which the refinement stopped reading when congruence did, and which is now deleted outright. What
 replaced it on `execM_contained` is `FDatabase.ProgramLegal`, checked at the state each command
 reaches rather than on the syntax: the legal-`set` clause got the column widths beside it
@@ -908,13 +954,13 @@ pins that. Two further residuals, both inherited from "quantifying over congruen
 re-keying rows":
 
 * When neither colliding key is canonical, egglog's survivor sits at the canonical key and this
-  model's sits at the older row's key. `Database.Out` reads a row from every congruent key, so this
-  is invisible until a row appears at that third key *later*, when the two disagree about which of
-  the pair is resident. Writing at the canonical key is not an option: `MergeStep.collide` writes
-  at one of the two rows' keys, and there is no row at the third.
-* `ordering-min`/`ordering-max` keep using the structural `Term.blt` and remain the deviation
-  recorded under "The representative deviation" — a `Prim` is `List Term → Option Term` with no
-  database to consult, so the term list is not reachable from there.
+  model's sits at one of the two colliding keys, which is the only place `MergeStep.collide` can
+  write. Invisible to `Database.Out`, which reads a row from every congruent key — and **not**
+  invisible to containment: the entry term the implementation writes at that third key is one no
+  specification run holds. That is the whole reason the refinement runs on `Recorded`, and it is
+  proved, not conjectured — "Why `Recorded` is weaker than `Contained`".
+* `ordering-min`/`ordering-max` keep using the structural `Term.blt` — "The representative
+  deviation", where the reason no repair exists turned out **not** to be the missing database.
 
 **The read path had no coverage at all**, which is how this stayed invisible: the lookup branch,
 reachable through `execM` from a pattern's `expr` case, was exercised zero times. One finding from
@@ -1094,9 +1140,13 @@ bugs is outside its reach, and reading the typechecker is the only way in.
    `diamond_of_join` wants", and `Proofs/Merge.lean`'s "Transporting a step" says what exactness
    would need. **Demoted**: no safety theorem needs it. It buys one thing, strengthening M10's
    refinement from "spec-reachable" to an equality.
-3. **`ordering-min`/`ordering-max` are congruence-unstable**, which is now blocking two of the
-   three open `Recorded` transports and not merely a fidelity gap — "The representative deviation",
-   above, has it.
+3. **Settled: `ordering-min`/`ordering-max` are congruence-unstable, and no operator repairs it.**
+   The question was whether a better choice — e-class ids, a class minimum, a database-aware
+   primitive, a new operator baked into the language — would restore the stability two of the
+   `Recorded` transports want. **None does**, and the refutation is from the shape of a choice
+   operator rather than from `Term.blt`: "The representative deviation", above. What is left is
+   not a search for an operator but a restriction of the transported positions — and on the
+   encoded fragment not even that, since there `Recorded` is `Contained` (`ENCODING.md`).
 4. **Settled: `WellScoped` should not carry `DeclsFresh`, and the checks are not bundled at all.**
    The question was whether the static check forbidding a redeclaration belongs inside `WellScoped`
    or beside it. The reason it looked urgent is gone: `CmdStep.mono_recorded`'s `.decl` case needed

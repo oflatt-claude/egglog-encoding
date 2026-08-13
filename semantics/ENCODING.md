@@ -2,7 +2,10 @@
 
 `Encoding/Encode.lean` defines the encoding. Its theorems and their vacuity witnesses are
 **deleted**; this file is what survives of them, and it exists so the design is not
-re-attempted with the same defects.
+re-attempted with the same defects. One thing has since moved in M11's favour, and it is the
+reason to restate rather than abandon: the congruence obstruction that blocks the refinement chain
+on *source* programs provably does not arise on encoded ones — "What survives", last two
+paragraphs.
 
 The Lean is recoverable at commit `0836127`:
 
@@ -46,7 +49,7 @@ line.
 
 **It survived `Cong` losing its `refl` rule**, which is worth checking rather than
 assuming, since that deletion is what re-examined every other reflexivity guard
-(`Scratch/NonVacuity.lean`). `Database.addTerm` writes a reflexive *equation* per subterm,
+(`Proofs/Counterexamples.lean`). `Database.addTerm` writes a reflexive *equation* per subterm,
 so `(a, a) ∈ (db.addTerms [a, a]).eqs` and `Cong.assert` reads it straight back.
 
 Five of the M11 statements conclude `CongOn`, so each says nothing wherever its two terms
@@ -89,24 +92,40 @@ depend on none of the deleted files. Note that `Rebuilt` as defined there is the
 finding 1 refutes; it is kept because re-deriving M11 will want to state something in its
 place, not because it is right, and its docstring now says so.
 
-**A third obstacle, not a defect of these statements but of what they are stated over.**
-`mergeBody`/`mergeResult` — the `:merge` shared by `@UF` and every view — are built from
-`ordering-min`/`ordering-max`, and those are **not congruence-stable** in this model, because
-`Term.blt` is a structural order and no function of the term can be. A simulation theorem has to
-either carry that as a hypothesis or restrict its transported positions to primitive-free
-expressions; it is already blocking two `sorry`s in `Proofs/Merge.lean`. `MERGE.md`, "The
-representative deviation".
+**A third obstacle, and it is unrepairable in general.** `mergeBody`/`mergeResult` — the `:merge`
+shared by `@UF` and every view — are built from `ordering-min`/`ordering-max`, which are **not
+congruence-stable**, and no operator is: the obstruction is that a choice operator has to commit
+to a side, not that `Term.blt` reads structure, so e-class ids, a class minimum, a database-aware
+primitive and a new operator baked into the language fail alike (`MERGE.md`, "The representative
+deviation"). It bites this encoder concretely rather than abstractly:
+`MergeStep.transport_recorded` is **false as stated at `c5682e0`**, refuted at `mergeBody` itself
+(`transport_recorded_false`, with both states well formed and `A.Recorded C`). The specification's
+collision keeps one parent, every collision the implementation can run keeps another, and a
+`MergeStep` **asserts no equation** — the union-find edge is a *term*, `@UF(max, min)`, and `.set`
+records reflexive pairs only — so the two candidate parents are exactly as unrelated after the
+merge as before. That refutes the "any consistent choice of parent induces the same equivalence"
+argument at its root: the union-find does not absorb a different choice. (Treat the statement as
+being restated, not as pinned; a corrected form has not landed. The refutation and
+`recorded_iff_subset` below are probes, not yet homed in `Proofs/Counterexamples.lean`.)
 
-**The M11 side condition, restated.** `encode` emits no `union`, so the target asserts no
-equality between distinct terms — which used to be written "`Cong` on the target degenerates
-to syntactic equality". That is wrong now, and it is the cheap kind of wrong to leave lying
-around: `Cong` has no `refl` rule, so the target relation is the **identity on the terms the
-target holds**, and it relates nothing else at all. The condition still holds exactly, and
-for one less reason than before — `Cong` reads `eqs` and nothing else, so no table of the
-target can add a derivation. Checked by reading the encoder: it emits only `.set` and
-`.letBind`, never `.union`, so from `Database.empty` the target's `eqs` really is
-diagonal-only. Any restatement gets this for free; it is the one M11 side condition that
-survived both the congruence collapse and the deletion.
+**The M11 side condition, restated — and it now buys the transports.** `encode` emits only `.set`
+and `.letBind`, never `.union`; a source `union` becomes a `.set @UF …`. So from `Database.empty`
+the target's `eqs` is diagonal-only, and `Cong` on the target is the **identity on the terms the
+target holds** — not "syntactic equality", which was the old phrasing and is wrong now that `Cong`
+has no `refl` rule. `Cong` reads `eqs` and nothing else, so no table of the target can add a
+derivation. It is the one M11 side condition that survived both the congruence collapse and the
+deletion, and any restatement gets it for free.
+
+**What it is worth has grown, and this is the finding to restate M11 around.** On a state whose
+asserted pairs are all reflexive, `Database.Recorded` **is** `Database.Contained`
+(`recorded_iff_subset`; `MERGE.md`, "Why `Recorded` is weaker than `Contained`") — nothing is
+congruent-but-distinct, so there is nothing for a re-keying to hide behind. By the side condition
+that is every state an encoded program reaches. `MergeStep.transport` and `MergeClosure.transport`
+along `Contained` are **already proved**, so a restated M11 may need no `Recorded` transport at
+all, and no congruence-stability hypothesis with it. The refutations above are not thereby
+harmless — they say where the danger lives, which is a *source* program combining a `union` with a
+user `:merge` that calls `ordering-min`. A restatement that stays on encoded programs never meets
+one; one that quantifies over source programs must.
 
 The proof checker was never written. `CHECKER.md` scopes it; `Checks` was an opaque
 stand-in in the deleted statements.
