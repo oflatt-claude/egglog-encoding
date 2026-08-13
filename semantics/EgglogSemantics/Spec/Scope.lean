@@ -275,4 +275,53 @@ it resolves. The opposite of `Cmd.DeclFresh`, which is asked before. -/
   | [], _ => True
   | c :: cs, sig => c.MergeDeclared sig ∧ Program.MergeDeclared cs (c.sigBind sig)
 
+/-! ### Union-freedom
+
+The one check that reads no signature, because it is about *positions* rather than names:
+where a program may assert an equation. `Action.union` is the only action that asserts one
+between distinct terms — every other write goes through `Database.addTerm`, which records
+reflexive pairs alone — so a program with none keeps every state it reaches **diagonal**,
+and on a diagonal state nothing is congruent to anything but itself. That is what makes
+`Database.Recorded` and `Database.Contained` agree there, which is what
+`Proofs/Merge.lean`'s two `Recorded` transports need; `Database.Diag` is the state-level
+reading and `Proofs/Merge.lean` carries it.
+
+It walks into a rule and into a `:merge`, since a `union` runs in either. -/
+
+/-- The action that asserts an equation between distinct terms, ruled out. -/
+def Action.UnionFree : Action → Prop
+  | .union _ _ => False
+  | _ => True
+
+@[simp] def Actions.UnionFree : List Action → Prop
+  | [] => True
+  | a :: as => a.UnionFree ∧ Actions.UnionFree as
+
+@[simp] def Rule.UnionFree (r : Rule) : Prop := Actions.UnionFree r.actions
+
+/-- `.noMerge` runs nothing, and `res` is evaluated rather than run. -/
+@[simp] def MergeSpec.UnionFree : MergeSpec → Prop
+  | .merge body _ => Actions.UnionFree body
+  | .noMerge => True
+
+/-- A declaration is union-free when its `:merge` body is: the body is what a collision
+runs. -/
+def FnDecl.UnionFree (d : FnDecl) : Prop := ∀ ms ∈ d.merge, ms.UnionFree
+
+/-- Every declared function's `:merge` body is union-free. Read of a *signature* because a
+`MergeStep` reads the body it runs from one. -/
+def Signature.UnionFree (sig : Signature) : Prop := ∀ f d, sig f = some d → d.UnionFree
+
+@[simp] def Cmd.UnionFree : Cmd → Prop
+  | .action a => a.UnionFree
+  | .rule r => r.UnionFree
+  | .run => True
+  | .decl _ d => d.UnionFree
+
+/-- No signature threading: which actions a command carries does not depend on what is
+declared. -/
+@[simp] def Program.UnionFree : Program → Prop
+  | [] => True
+  | c :: cs => c.UnionFree ∧ Program.UnionFree cs
+
 end Egglog

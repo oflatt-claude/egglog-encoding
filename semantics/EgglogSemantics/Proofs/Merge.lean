@@ -9,12 +9,14 @@ import EgglogSemantics.Proofs.Interp
 
 `MERGE.md` says which theorem buys what.
 
-## The two remaining transports, and what they are
+## The two transports, and the condition that buys them
 
-Everything in this file is proved except two lemmas, each of which transports a
-*specification* fact along `Database.Recorded`. They are the only `sorry`s and they are
-listed here rather than only at their statements: `MergeStep.transport_recorded` and
-`RuleResults.mono_recorded`.
+Everything in this file is proved, and there are no `sorry`s. Two lemmas transport a
+*specification* fact along `Database.Recorded` — `MergeStep.transport_recorded` and
+`RuleResults.mono_recorded` — and **both are false at an arbitrary recorder**. What makes
+them true is a legality condition, `Program.UnionFree`, which reaches
+`execM_contained`'s statement; the section "Union-freedom, and where it puts `Recorded`"
+below is where it is developed.
 
 `Recorded` says every equation of `d₁` is matched by an equation of `d₂` whose endpoints
 are congruent **in `d₂` extended by the two terms in question** — `Database.CongOn`, which
@@ -28,7 +30,7 @@ database does not hold cannot relate two terms it does. That is what proves
 `Cong.mono_recorded` at the pinned ambient and, with it, `Database.Recorded.trans` — both
 under `WF`, which is where the two new `WF` premises on `trans` come from.
 
-Conservativity rescues neither of the two, and the obstruction is the same both times: a
+Conservativity rescues neither transport, and the obstruction is the same both times: a
 run under a *congruent* environment does not record the run under the original.
 `min`/`max` matching on literals is fixed — `evalAction` refuses a `union` on a literal, so
 `Database.WF.litsIsolated` holds, `Cong.eq_of_isLit` makes a literal's class a singleton
@@ -36,16 +38,24 @@ and `Prim.apply_cong` is the resulting stability. What is left is
 `ordering-min`/`ordering-max`, which choose by `Term.blt`, a *structural* order, where
 egglog chooses by e-class id. `union (f 1) (g 1)` sends `ordering-min (f 1) (f 2)` to
 `f 1` and `ordering-min (g 1) (f 2)` to `f 2`, which are not congruent, with no literal
-anywhere and every state well formed. No condition on the database repairs it; only
-restricting the transported positions to ordering-free expressions does, and
-`Encoding/Encode.lean`'s `mergeBody`/`mergeResult` are built from exactly these two.
+anywhere and every state well formed. No condition on the *database* repairs it. Two
+conditions on the *program* do, and they are different conditions:
 
-`MergeStep.transport_recorded` is not merely unproved: it is **false as stated**, refuted
-at that encoding's own `:merge` body, and its statement carries the counterexample. Its two
-consumers — `mergeSaturateF_contained_aux` and `CmdStep.mono_recorded` — hold a genuine
-`Recorded` and not a `Contained`, so the proved `MergeStep.transport`/`MergeClosure.transport`
-do not serve them, and any hypothesis that excludes the counterexample restricts which
-programs the contract covers. That is a change to `execM_contained`, so it is not made here.
+* restricting the transported positions to ordering-free expressions closes
+  `RuleResults.mono_recorded` and does **not** close `MergeStep.transport_recorded`, whose
+  environment moves before any expression is evaluated;
+* **`Program.UnionFree` closes both**, and is what this file carries. `Action.union` is the
+  only action that asserts an equation between distinct terms, so a program with none
+  reaches only states whose `eqs` are diagonal, and there congruence is equality:
+  `Database.Recorded` and `Database.Contained` coincide, and the transports along
+  `Contained` are `MergeStep.transport` and `MergeClosure.transport`, already proved.
+
+`MergeStep.transport_recorded` without the condition is not merely unproved but **false**,
+refuted at `Encoding/Encode.lean`'s own `:merge` body, and its statement carries the
+counterexample. The condition is not vacuous and does not exclude that encoding:
+`encodeAction` turns a source `union` into `.set @UF [ordering-max x₁ x₂] [ordering-min
+x₁ x₂]`, so `encode` uses `ordering-max` in a rule action — the position an ordering-free
+condition would forbid — and emits no `Action.union` at all.
 
 Also **false**, and so restated or deleted rather than left open:
 
@@ -1180,15 +1190,20 @@ the same variable; per-pattern transports may pick different congruent represent
 answer is a single witness **function** `Term → Term` rather than a witness per use site —
 then equal terms get equal images and `Union2` still joins.
 
-*Costs a lemma that is false*: `RuleResults.mono_recorded`, which is where one of the two
-`sorry`s sits. It re-evaluates under the substitution, and `Expr.eval` is **not**
-congruence-stable at a primitive — `Prim.apply` matches on literals, so a term congruent to
-`.lit 1` but not equal to it does not compute the same answer, or any answer. What is true
-is the primitive-free half, so the fix is to restrict the transported positions and not to
-look for a proof. `MergeStep.transport_recorded` is defeated by the same instability one
-step earlier: its body runs under a `mergeEnv` built from the colliding outputs, congruent
-rather than equal on the specification side, so no restriction on the *transported
-positions* reaches it. -/
+*Costs a lemma that is false*: `RuleResults.mono_recorded`. It re-evaluates under the
+substitution, and `Expr.eval` is **not** congruence-stable at a primitive — `Prim.apply`
+matches on literals, so a term congruent to `.lit 1` but not equal to it does not compute
+the same answer, or any answer. What is true is the primitive-free half, so one fix is to
+restrict the transported positions. `MergeStep.transport_recorded` is defeated by the same
+instability one step earlier: its body runs under a `mergeEnv` built from the colliding
+outputs, congruent rather than equal on the specification side, so no restriction on the
+*transported positions* reaches it.
+
+The fix this file takes instead makes the whole family moot at once: on a **diagonal**
+recorder there is no congruent-but-distinct term for any of this to go wrong at, so
+`Database.Recorded.contained_of_diag` hands both lemmas back to `ValidQuerySubst.mono` and
+`MergeStep.transport` above. `Program.UnionFree` is what keeps every reachable state
+diagonal. -/
 
 /-! ### Transporting a step
 
@@ -1419,9 +1434,10 @@ semantically new is claimed: `Out` is the only read there is.
 
 A step-by-step account of the merge interpreter against the merge specification. It runs
 from `Inv` preservation through evaluation, actions and matching to containment, and it
-is proved all the way to `execM_contained`, except at the two `Recorded` transports the
-file header lists. What is *not* here at all is completeness — see "Two statements removed
-rather than carried" below.
+is proved all the way to `execM_contained` — under `Program.UnionFree`, which is what the
+two `Recorded` transports the file header lists need and which they carry up the chain.
+What is *not* here at all is completeness — see "Two statements removed rather than
+carried" below.
 
 `execCmdM_contained` was once false, and the defect was in the *specification*:
 `CmdStep.action` had no merge phase and `execCmdM` runs one, so the interpreter reached a
@@ -2877,55 +2893,214 @@ theorem ProgramStep.wf {db db' : Database} {p : Program} (h : ProgramStep db p d
   | nil => exact id
   | cons hcmd _ ih => exact fun hw => ih (CmdStep.wf hw hcmd)
 
-/-- **A merge collision available at `A` is available at any `C` that *records* it.**
+/-! ### Union-freedom, and where it puts `Recorded`
 
-**False as stated**, and not merely unproved. `Recorded` moves an entry's value columns as
-well as its key, so the body runs under a *congruent* `mergeEnv` on the `C` side, and
-`ordering-min`/`ordering-max` are not stable there: the two runs settle on incongruent
-parents and the union-find edge one writes is congruent to nothing the other can write. The
-counterexample is at the encoding's own `mergeBody`/`mergeResult` and one `viewDecl`, with
-`A.Recorded C`, both states well formed and one signature: `A` holds `@fView(k) ↦ p`
-alongside `@fView(k) ↦ r`, `C` holds the first re-keyed to the congruent `s`, and with
-`p < r < s` the step from `A` writes `@UF(r) ↦ p` while every step from `C` writes
-`@UF(s) ↦ s`, `@UF(s) ↦ r` or `@UF(r) ↦ r`. A merge asserts no equation, so nothing relates
-`r` to `p` afterwards either. Adding `C.WF` does not rescue it.
+The two transports below move a *specification* fact along `Database.Recorded`, and both
+are false in general for one reason: `Recorded` matches an equation only up to congruence,
+so the run on the right-hand side happens under a *congruent* environment, and
+`ordering-min`/`ordering-max` choose by `Term.blt` rather than by e-class, so they are not
+stable there.
 
-Kept rather than deleted because its two consumers need exactly this shape and have no
-weaker one available. `mergeSaturateF_contained_aux` and `CmdStep.mono_recorded` both hold
-a genuine `Recorded` — `FDatabase.mergeRound_contained`'s conclusion cannot be strengthened
-to `Contained`, the interpreter's rebuild being what moves the key — so the proved
-`MergeStep.transport` and `MergeClosure.transport` do not apply. Every repair adds a
-hypothesis those consumers cannot discharge without restricting which programs the
-contract covers, which would change `execM_contained`; that is not a bookkeeping decision
-and is deliberately not made here.
+What buys them back is `Action.UnionFree`. A `union` is the only action that asserts an
+equation between distinct terms, so a program with none keeps every state's `eqs`
+**diagonal**; on a diagonal state `Cong` is the identity, and `Database.Recorded` collapses
+to `Database.Contained` — along which both transports are already proved
+(`MergeStep.transport`, `MergeClosure.transport`). Nothing is congruent but equal, so no
+choice operator is ever asked to be stable.
 
-What such a repair looks like: the interpreter never moves a value column, so what it
-actually maintains is `Recorded` *plus* "every entry of `A` is `Database.Out` in `C` at its
-own value columns" — the clause `mergeRound_contained` already carries for one pass. Under
-it the body runs under the same environment on both sides, `Expr.eval` reading only `sig`
-and `env`, and only the key moves. Carrying that clause through `evalActions`, `RunRules`
-and the whole chain is the work, and `RuleResults.mono_recorded` stays open regardless.
+This is where `Encoding/Encode.lean` lives: `encodeAction` turns a source `union` into
+`.set @UF [ordering-max x₁ x₂] [ordering-min x₁ x₂]`, so `encode` emits `ordering-max`
+inside a rule action and *no* `Action.union` at all.
+
+`Database.Diag` is the state-level reading; `Signature.UnionFree` and `Database.NoUnions`
+are what carry it across a merge phase and a rule phase, which read their actions from the
+signature and the rule set rather than from the command. -/
+
+/-- Every asserted equation is reflexive. -/
+def Database.Diag (db : Database) : Prop := ∀ p ∈ db.eqs, p.1 = p.2
+
+/-- A state whose merge bodies and rule heads assert nothing either. The three fields are
+what the three phases read: `diag` is the state, `sig` is what a `MergeStep` runs, `rules`
+is what a `RunRules` runs. -/
+structure Database.NoUnions (db : Database) : Prop where
+  diag : db.Diag
+  sig : Signature.UnionFree db.sig
+  rules : ∀ r ∈ db.rules, Actions.UnionFree r.actions
+
+namespace Database
+
+/-- A subset of a diagonal is diagonal. -/
+theorem Diag.mono {d₁ d₂ : Database} (h : d₁.Contained d₂) (hd : d₂.Diag) : d₁.Diag :=
+  fun p hp => hd p (h.eqs hp)
+
+theorem Diag.addTerm {db : Database} (h : db.Diag) (t : Term) : (db.addTerm t).Diag := by
+  rintro p (hp | ⟨s, -, rfl⟩)
+  · exact h p hp
+  · rfl
+
+theorem Diag.addTerms {db : Database} (h : db.Diag) (ts : List Term) :
+    (db.addTerms ts).Diag := by
+  induction ts generalizing db with
+  | nil => exact h
+  | cons t ts ih => exact ih (h.addTerm t)
+
+/-- `withOperands` posits its operands reflexively, so it cannot break diagonality. -/
+theorem Diag.withOperands {db : Database} (h : db.Diag) (ts : List Term) :
+    (db.withOperands ts).Diag := h.addTerms ts
+
+end Database
+
+/-- **On a diagonal state congruence is equality.** No equation relates two distinct terms,
+so `assert` cannot and neither can `congr`, whose arguments are equal by the pointwise
+hypothesis. -/
+theorem Cong.eq_of_diag {E : Database} (h : E.Diag) : ∀ {a b : Term}, Cong E a b → a = b := by
+  intro a b hc
+  induction hc using Cong.rec (motive_2 := fun as bs _ => as = bs) with
+  | assert hab => exact h _ hab
+  | symm _ ih => exact ih.symm
+  | trans _ _ ih₁ ih₂ => exact ih₁.trans ih₂
+  | congr _ _ _ _ _ ihl => exact congrArg _ ihl
+  | nil => rfl
+  | cons _ _ ih ihl => exact congrArg₂ List.cons ih ihl
+
+theorem congOn_eq_of_diag {E : Database} (h : E.Diag) {ts : List Term} {a b : Term}
+    (hc : CongOn E ts a b) : a = b := Cong.eq_of_diag (h.withOperands ts) hc
+
+/-- **`Recorded` is `Contained` on a diagonal recorder.** The witness equation is congruent
+to the recorded one, and on a diagonal state that means equal. This is the whole content of
+union-freedom: each of the two `Recorded` transports is the proved `Contained` one composed
+with this and with `Database.Recorded.of_contained`. -/
+theorem Database.Recorded.contained_of_diag {A C : Database} (hc : A.Recorded C)
+    (hd : C.Diag) : A.Contained C := by
+  refine ⟨fun p hp => ?_⟩
+  obtain ⟨q, hq, h₁, h₂⟩ := hc.eqs p hp
+  have : p = q := Prod.ext (congOn_eq_of_diag hd h₁) (congOn_eq_of_diag hd h₂)
+  exact this ▸ hq
+
+/-- What the interpreter's own state inherits: it records into a diagonal witness, so its
+equations are among that witness's and diagonal too. -/
+theorem Database.NoUnions.of_recorded {A C : Database} (hn : C.NoUnions) (hc : A.Recorded C)
+    (hsig : A.sig = C.sig) (hrules : A.rules = C.rules) : A.NoUnions where
+  diag := Diag.mono (hc.contained_of_diag hn.diag) hn.diag
+  sig := by rw [hsig]; exact hn.sig
+  rules := by rw [hrules]; exact hn.rules
+
+/-! #### Diagonality is preserved
+
+One clause per way the specification writes `eqs`. Only `evalAction`'s `.union` writes a
+pair between distinct terms, so each of these is the corresponding case analysis with that
+case discharged by the hypothesis. -/
+
+/-- Every action but `union` writes through `addTerm`. -/
+theorem evalAction_diag {db db' : Database} {a : Action} (hu : a.UnionFree)
+    (hd : db.Diag) (h : evalAction db a = some db') : db'.Diag := by
+  cases a with
+  | expr e =>
+    rw [evalAction, Option.map_eq_some_iff] at h
+    obtain ⟨t, -, rfl⟩ := h
+    exact hd.addTerm t
+  | letBind v e =>
+    rw [evalAction, Option.map_eq_some_iff] at h
+    obtain ⟨t, -, rfl⟩ := h
+    exact hd.addTerm t
+  | union e₁ e₂ => exact absurd hu id
+  | set f args out =>
+    rw [evalAction, Option.bind_eq_some_iff] at h
+    obtain ⟨as, -, h⟩ := h
+    rw [Option.map_eq_some_iff] at h
+    obtain ⟨vs, -, rfl⟩ := h
+    exact hd.addTerm _
+
+theorem evalActions_diag {db db' : Database} {as : List Action} (hu : Actions.UnionFree as)
+    (hd : db.Diag) (h : evalActions db as = some db') : db'.Diag := by
+  induction as generalizing db with
+  | nil => rw [evalActions_nil, Option.some.injEq] at h; exact h ▸ hd
+  | cons a as ih =>
+    cases hv : evalAction db a with
+    | none => simp [hv] at h
+    | some db₁ =>
+      rw [evalActions_cons, hv, Option.bind_some] at h
+      exact ih hu.2 (evalAction_diag hu.1 hd hv) h
+
+theorem evalLocalActions_diag {db db' : Database} {as : List Action} {σ : Env}
+    (hu : Actions.UnionFree as) (hd : db.Diag) (h : evalLocalActions db as σ = some db') :
+    db'.Diag := by
+  obtain ⟨d, hv, rfl⟩ := evalLocalActions_eq_some h
+  exact evalActions_diag (db := { db with env := db.env ++ σ }) (db' := d) hu hd hv
+
+/-- A merge phase runs the body the *signature* names, so this is where
+`Signature.UnionFree` is spent. -/
+theorem MergeStep.diag {d₁ d₂ : Database} (hs : Signature.UnionFree d₁.sig)
+    (hd : d₁.Diag) (h : MergeStep d₁ d₂) : d₂.Diag := by
+  cases h with
+  | @collide d f dc as bs a b vs body res hdc hmg _ _ _ _ _ hbody _ =>
+    exact (evalActions_diag (db := { d₁ with env := mergeEnv a b })
+      (hs f dc hdc _ hmg) hd hbody).addTerm _
+
+theorem MergeClosure.diag {d₁ d₂ : Database} (hs : Signature.UnionFree d₁.sig)
+    (hd : d₁.Diag) (h : MergeClosure d₁ d₂) : d₂.Diag := by
+  induction h with
+  | refl => exact hd
+  | @tail b c hcl hstep ih =>
+    exact hstep.diag (by rw [MergeClosure.sig hcl]; exact hs) ih
+
+/-- A round's rule phase runs every rule the state carries, so this is where the `rules`
+clause is spent. -/
+theorem RunRules.diag {db : Database} (hn : db.NoUnions) : (RunRules db).Diag := by
+  rintro p (hp | hp)
+  · exact hn.diag p hp
+  · obtain ⟨d, ⟨r, hr, σ, -, hσ⟩, hp'⟩ := Set.mem_iUnion₂.mp hp
+    exact evalLocalActions_diag (hn.rules r hr) hn.diag hσ p hp'
+
+/-- **A merge collision available at `A` is available at any `C` that *records* it — when
+`C` is diagonal.**
+
+`hdiag` is not bookkeeping: **without it the statement is false**, and not merely unproved.
+`Recorded` moves an entry's value columns as well as its key, so the body runs under a
+*congruent* `mergeEnv` on the `C` side, and `ordering-min`/`ordering-max` are not stable
+there: the two runs settle on incongruent parents and the union-find edge one writes is
+congruent to nothing the other can write. The counterexample is at the encoding's own
+`mergeBody`/`mergeResult` and one `viewDecl`, with `A.Recorded C`, both states well formed
+and one signature: `A` holds `@fView(k) ↦ p` alongside `@fView(k) ↦ r`, `C` holds the first
+re-keyed to the congruent `s`, and with `p < r < s` the step from `A` writes `@UF(r) ↦ p`
+while every step from `C` writes `@UF(s) ↦ s`, `@UF(s) ↦ r` or `@UF(r) ↦ r`. A merge
+asserts no equation, so nothing relates `r` to `p` afterwards either. Adding `C.WF` does
+not rescue it; `hdiag` does, by making `C` a state where `p` and `s` could not have been
+congruent in the first place.
+
+Under `hdiag` there is nothing left to prove here: `Database.Recorded.contained_of_diag`
+turns `hc` into a `Database.Contained` and `MergeStep.transport` is the proved transport
+along that. `hw` is no longer needed and is gone.
+
+The two consumers — `mergeSaturateF_contained_aux` and `CmdStep.mono_recorded` — discharge
+`hdiag` from `Database.NoUnions`, which is what puts `Program.UnionFree` in
+`execM_contained`'s statement.
+
+There is a second repair, for the record, which restricts no program at all but needs a
+great deal of threading: the interpreter never moves a value column, so what it actually
+maintains is `Recorded` *plus* "every entry of `A` is `Database.Out` in `C` at its own
+value columns" — the clause `mergeRound_contained` already carries for one pass. Under it
+the body runs under the same environment on both sides, `Expr.eval` reading only `sig` and
+`env`, and only the key moves. Carrying that clause through `evalActions`, `RunRules` and
+the whole chain is the work, and it would not help `RuleResults.mono_recorded`, which needs
+a condition on the program either way.
 
 `Database.Recorded.addRow_congr`, which used to supply this, is deleted: it rested on
 `addTerms_eq_self` at a row-shaped `Recorded` that no longer exists. -/
 theorem MergeStep.transport_recorded {A C B : Database} (hc : A.Recorded C)
-    (hsig : A.sig = C.sig) (hw : A.WF) (h : MergeStep A B) :
+    (hsig : A.sig = C.sig) (hdiag : C.Diag) (h : MergeStep A B) :
     ∃ D, MergeStep C D ∧ B.Recorded D ∧ B.sig = D.sig := by
-  -- False as stated: `Recorded` moves the colliding value columns, and the body's
-  -- `ordering-min`/`ordering-max` are not stable under that. See the docstring.
-  sorry
+  obtain ⟨D, hstep, hcont, hsig'⟩ := h.transport (hc.contained_of_diag hdiag) hsig
+  exact ⟨D, hstep, .of_contained hcont, hsig'⟩
 
-/-- `MergeStep.transport_recorded` iterated. -/
+/-- `MergeStep.transport_recorded` iterated — and not by iterating it: `hdiag` is about `C`
+alone, so `MergeClosure.transport` closes the whole closure in one go and no diagonality
+has to be re-established at the intermediate states. -/
 theorem MergeClosure.transport_recorded {A C B : Database} (hc : A.Recorded C)
-    (hsig : A.sig = C.sig) (hw : A.WF) (h : MergeClosure A B) :
+    (hsig : A.sig = C.sig) (hdiag : C.Diag) (h : MergeClosure A B) :
     ∃ D, MergeClosure C D ∧ B.Recorded D ∧ B.sig = D.sig := by
-  induction h with
-  | refl => exact ⟨C, Relation.ReflTransGen.refl, hc, hsig⟩
-  | @tail b c hcl hstep ih =>
-    obtain ⟨D, hclD, hcontD, hsigD⟩ := ih
-    obtain ⟨D', hstepD', hcont', hsig'⟩ :=
-      hstep.transport_recorded hcontD hsigD (MergeClosure.wf hw hcl)
-    exact ⟨D', hclD.tail hstepD', hcont', hsig'⟩
+  obtain ⟨D, hcl, hcont, hsig'⟩ := h.transport (hc.contained_of_diag hdiag) hsig
+  exact ⟨D, hcl, .of_contained hcont, hsig'⟩
 
 /-! ### Containment for the merge interpreter
 
@@ -3187,21 +3362,27 @@ theorem mergeRound_contained {d : FDatabase} (h : d.Inv)
     exact ⟨D, hcl, hc⟩
 
 /-- `mergeSaturateF_contained`, with the fuel first so the induction can generalize the
-database. -/
+database.
+
+`hufree` and `hdiag` are `MergeClosure.transport_recorded`'s premise, pulled back one step:
+the witness `db₁` this re-bases onto is reached from `d.toDatabase` by a merge closure, so
+it is diagonal as soon as `d.toDatabase` is and the merge bodies assert nothing. They also
+carry themselves across a round — `mergeRound_confined` pins `sig`, and the round's own
+`Recorded` conclusion pushes diagonality back down onto the interpreter's state. -/
 theorem mergeSaturateF_contained_aux {n : Nat} : ∀ {d e : FDatabase}, d.Inv →
-    Signature.MergesLegal d.sig →
+    Signature.MergesLegal d.sig → Signature.UnionFree d.sig → d.toDatabase.Diag →
     d.mergeSaturateF n = some e →
     ∃ db, MergeClosure d.toDatabase db ∧ e.toDatabase.Recorded db := by
   induction n with
   | zero =>
-    intro d e h _ hs
+    intro d e h _ _ _ hs
     rw [FDatabase.mergeSaturateF] at hs
     split at hs
     · rw [Option.some.injEq] at hs
       exact ⟨d.toDatabase, .refl, hs ▸ Database.Recorded.refl⟩
     · exact absurd hs (by simp)
   | succ n ih =>
-    intro d e h hlegal hs
+    intro d e h hlegal hufree hdiag hs
     rw [FDatabase.mergeSaturateF] at hs
     split at hs
     · rw [Option.some.injEq] at hs
@@ -3209,27 +3390,30 @@ theorem mergeSaturateF_contained_aux {n : Nat} : ∀ {d e : FDatabase}, d.Inv �
     · have hsigR : d.mergeRound.sig = d.sig := FDatabase.mergeRound_confined.2.2.1
       have hlegal' : Signature.MergesLegal d.mergeRound.sig := by rw [hsigR]; exact hlegal
       have hround : d.mergeRound.Inv := h.mergeRound_of_legalMerges hlegal
-      obtain ⟨db₂, hcl₂, hcont₂⟩ := ih hround hlegal' hs
       obtain ⟨db₁, hcl₁, hcont₁⟩ := mergeRound_contained h hlegal
+      have hdiag₁ : db₁.Diag := MergeClosure.diag hufree hdiag hcl₁
+      obtain ⟨db₂, hcl₂, hcont₂⟩ := ih hround hlegal' (by rw [hsigR]; exact hufree)
+        (Database.Diag.mono (hcont₁.contained_of_diag hdiag₁) hdiag₁) hs
       have hsig₁ : d.mergeRound.toDatabase.sig = db₁.sig := by
         change d.mergeRound.sig = db₁.sig
         rw [hsigR]
         exact (MergeClosure.sig hcl₁).symm
       obtain ⟨db₃, hcl₃, hcont₃, hsig₃⟩ :=
-        MergeClosure.transport_recorded hcont₁ hsig₁ hround.wf hcl₂
+        MergeClosure.transport_recorded hcont₁ hsig₁ hdiag₁ hcl₂
       exact ⟨db₃, hcl₁.trans hcl₃, hcont₂.trans hcont₃ (MergeClosure.wf hround.wf hcl₂)
         (MergeClosure.wf (MergeClosure.wf h.wf hcl₁) hcl₃)⟩
 
 /-- **The merge phase run to a fixpoint stays inside the merge closure.**
 
-`mergeRound_contained` once per round, with `MergeClosure.transport` re-basing the tail's
-closure onto the head's witness. `mergeRound_confined` is what keeps `hlegal` applicable
-at the next round: a pass does not touch `sig`. -/
+`mergeRound_contained` once per round, with `MergeClosure.transport_recorded` re-basing the
+tail's closure onto the head's witness. `mergeRound_confined` is what keeps `hlegal` and
+`hufree` applicable at the next round: a pass does not touch `sig`. -/
 theorem mergeSaturateF_contained {d e : FDatabase} (h : d.Inv)
-    (hlegal : Signature.MergesLegal d.sig)
+    (hlegal : Signature.MergesLegal d.sig) (hufree : Signature.UnionFree d.sig)
+    (hdiag : d.toDatabase.Diag)
     {n : Nat} (hs : d.mergeSaturateF n = some e) :
     ∃ db, MergeClosure d.toDatabase db ∧ e.toDatabase.Recorded db :=
-  mergeSaturateF_contained_aux h hlegal hs
+  mergeSaturateF_contained_aux h hlegal hufree hdiag hs
 
 /-- **A round's rule firings stay inside `RunRules`.**
 
@@ -3336,6 +3520,7 @@ interpreter's, and without it this statement is false. -/
 theorem execCmdM_action_contained {d e : FDatabase} (h : d.Inv) {a : Action}
     (halegal : a.WriteLegal d.sig)
     (hlegal : Signature.MergesLegal d.sig)
+    (hufree : Signature.UnionFree d.sig) (hdiag : d.toDatabase.Diag) (hau : a.UnionFree)
     (hs : d.execCmdM (.action a) = some e) :
     ∃ d₁ db, evalAction d.toDatabase a = some d₁ ∧ MergeClosure d₁ db ∧
       e.toDatabase.Recorded db := by
@@ -3343,9 +3528,12 @@ theorem execCmdM_action_contained {d e : FDatabase} (h : d.Inv) {a : Action}
   obtain ⟨d₁, hd₁, hsat⟩ := Option.bind_eq_some_iff.mp hs
   have hsig₁ : d₁.sig = d.sig := execAction_sig hd₁
   have hlegal₁ : Signature.MergesLegal d₁.sig := by rw [hsig₁]; exact hlegal
+  have heval : evalAction d.toDatabase a = some d₁.toDatabase :=
+    FDatabase.execAction_evalAction h.eqs hd₁
   obtain ⟨db, hcl, hcont⟩ :=
-    mergeSaturateF_contained (h.execAction halegal hd₁) hlegal₁ hsat
-  exact ⟨d₁.toDatabase, db, FDatabase.execAction_evalAction h.eqs hd₁, hcl, hcont⟩
+    mergeSaturateF_contained (h.execAction halegal hd₁) hlegal₁ (by rw [hsig₁]; exact hufree)
+      (evalAction_diag hau hdiag heval) hsat
+  exact ⟨d₁.toDatabase, db, heval, hcl, hcont⟩
 
 end FDatabase
 
@@ -3381,6 +3569,43 @@ theorem MergeClosure.envRules {d₁ d₂ : Database} (h : MergeClosure d₁ d₂
   induction h with
   | refl => exact ⟨rfl, rfl⟩
   | tail _ hstep ih => exact ⟨hstep.envRules.1.trans ih.1, hstep.envRules.2.trans ih.2⟩
+
+/-- **One command preserves union-freedom, all three clauses.** `.decl` is the only case
+that moves `sig` and `.rule` the only one that moves `rules`, which is why `Cmd.UnionFree`
+constrains exactly those two alongside a top-level action; the merge phase every command
+ends with moves neither, and `MergeClosure.diag` is what keeps the state diagonal across
+it. -/
+theorem CmdStep.noUnions {A B : Database} (hn : A.NoUnions) {c : Cmd} (hu : c.UnionFree)
+    (h : CmdStep A c B) : B.NoUnions := by
+  obtain ⟨e, heff, hcl⟩ := h
+  have hE : e.NoUnions := by
+    cases c with
+    | action a =>
+      exact ⟨evalAction_diag hu hn.diag heff, by rw [evalAction_sig heff]; exact hn.sig,
+        by rw [evalAction_rules heff]; exact hn.rules⟩
+    | rule r =>
+      rw [cmdEffect, Option.some.injEq] at heff
+      subst heff
+      refine ⟨hn.diag, hn.sig, fun r' hr' => ?_⟩
+      rcases hr' with rfl | hr'
+      exacts [hu, hn.rules r' hr']
+    | run =>
+      rw [cmdEffect, Option.some.injEq] at heff
+      subst heff
+      exact ⟨RunRules.diag hn, hn.sig, hn.rules⟩
+    | decl f dc =>
+      rw [cmdEffect, Option.some.injEq] at heff
+      subst heff
+      refine ⟨hn.diag, fun g dc' hg => ?_, hn.rules⟩
+      have hg' : Function.update A.sig f (some dc) g = some dc' := hg
+      by_cases hgf : g = f
+      · rw [hgf, Function.update_self, Option.some.injEq] at hg'
+        exact hg' ▸ hu
+      · rw [Function.update_of_ne hgf] at hg'
+        exact hn.sig g dc' hg'
+  exact ⟨MergeClosure.diag hE.sig hE.diag hcl,
+    by rw [MergeClosure.sig hcl]; exact hE.sig,
+    by rw [(MergeClosure.envRules hcl).2]; exact hE.rules⟩
 
 /-- **A firing available at `A` is available at any `C` containing it.**
 `ValidQuerySubst.mono` finds the same match and `evalActions_mono` re-runs the
@@ -3475,121 +3700,73 @@ theorem ProgramStep.mono {A C B : Database} (hc : A.Contained C) (hsig : A.sig =
 
 /-! #### The same, along `Recorded`
 
-The re-keying contract needs the transport lemmas again, and this is where the file's open
-obligations sit. `ValidSubst.mono_recorded` is **deleted** — see the heading above
-`ValidEnv.mono`, it is false — so `RuleResults.mono_recorded` cannot be proved by
-transporting the same substitution and is left open; `MergeStep.transport_recorded` is
-false as stated, for the reason its own docstring gives. `Database.Recorded.trans`, which
-used to be a third, is proved from `Conservativity` under two `WF` premises. The three
-lemmas below are the composites, and each is proved from those. -/
+The re-keying contract needs the transport lemmas again, and **`hdiag` is what makes them
+true**. `ValidSubst.mono_recorded` is **deleted** — see the heading above `ValidEnv.mono`,
+it is false — so `RuleResults.mono_recorded` cannot be proved by transporting the same
+substitution at an arbitrary recorder; `MergeStep.transport_recorded` is false at an
+arbitrary recorder too, for the reason its own docstring gives. On a **diagonal** `C` both
+obstructions vanish at once, because there is nothing congruent but equal:
+`Database.Recorded.contained_of_diag` turns the hypothesis into a `Database.Contained` and
+the four `mono`/`transport` lemmas above are the proofs. `Database.Recorded.trans`, which
+used to be a third open obligation, is proved from `Conservativity` under two `WF`
+premises.
 
-/-- `RuleResults.mono` along `Recorded`.
+Each lemma below therefore keeps its old statement plus `hdiag`, and loses whatever
+premise only the old proof route needed — `A.WF` in the last two. -/
 
-**Open.** `ValidQuerySubst.mono_recorded` is false at the same `σ`, so the substitution the
-firing runs under has to be replaced by a congruent one — chosen once for the whole query,
-because `Env.UnionAll` makes the per-pattern choices agree — and then the head has to be
-re-run under it. `Expr.eval` is not congruence-stable at `ordering-min`/`ordering-max`, so
-"a congruent environment gives a recording result" is a real lemma, and it is **false** as
-stated: put `ordering-max` in the *action* and no substitution on the implementation side
-repairs it. The substitution side *is* available: one witness function chosen for the whole
-query keeps `Env.Union2` joining.
+/-- `RuleResults.mono` along `Recorded`, on a diagonal `C`.
+
+`hdiag` is not bookkeeping: without it this is **not provable**, and the obstruction is
+double. `ValidQuerySubst.mono_recorded` is false at the same `σ`, so the substitution the
+firing runs under would have to be replaced by a congruent one — chosen once for the whole
+query, because `Env.UnionAll` makes the per-pattern choices agree — and then the head
+re-run under it; and `Expr.eval` is not congruence-stable at `ordering-min`/`ordering-max`,
+so "a congruent environment gives a recording result" is itself **false** with
+`ordering-max` in the action. Restricting the rule's actions to ordering-free expressions
+is the other repair, and it is a genuinely different one: it closes this lemma and does
+**not** close `MergeStep.transport_recorded`, whose environment moves before any expression
+is evaluated.
 
 The general form is what the consumer needs — `RunRules.mono_recorded` transports every
-member of `RuleResults A r`, at an arbitrary `Recorded` reaching back to
-`execProgramM_contained_aux` — so this cannot be narrowed to a special case. What would
-make it provable is the transported positions restricted to ordering-free expressions,
-which is a restriction on the *actions a rule may carry*: it belongs in
-`FDatabase.ProgramLegal` and therefore in `execM_contained`'s statement, and that is not
-decided here. Note that the analogous restriction does **not** rescue
-`MergeStep.transport_recorded`, whose environment moves before any expression is
-evaluated. -/
+member of `RuleResults A r`, at a `Recorded` reaching back to `execProgramM_contained_aux`
+— so this cannot be narrowed to a special case. -/
 theorem RuleResults.mono_recorded {A C : Database} (hc : A.Recorded C) (hsig : A.sig = C.sig)
-    (henv : A.env = C.env) {r : Rule} {d : Database} (hd : d ∈ RuleResults A r) :
+    (henv : A.env = C.env) (hdiag : C.Diag) {r : Rule} {d : Database}
+    (hd : d ∈ RuleResults A r) :
     ∃ D ∈ RuleResults C r, d.Recorded D ∧ D.sig = C.sig := by
-  -- Open: needs the head re-run under a congruent environment, which is false at
-  -- `ordering-min`/`ordering-max` and holds only for ordering-free expressions.
-  sorry
+  obtain ⟨D, hD, hcont⟩ := RuleResults.mono (hc.contained_of_diag hdiag) hsig henv hd
+  obtain ⟨σ, hq, hσ⟩ := hD
+  exact ⟨D, ⟨σ, hq, hσ⟩, .of_contained hcont, evalLocalActions_sig hσ⟩
 
-/-- `RunRules.mono` along `Recorded`. -/
+/-- `RunRules.mono` along `Recorded`, on a diagonal `C`. -/
 theorem RunRules.mono_recorded {A C : Database} (hc : A.Recorded C) (hsig : A.sig = C.sig)
-    (henv : A.env = C.env) (hrules : A.rules = C.rules) :
-    (RunRules A).Recorded (RunRules C) := by
-  have key : ∀ d ∈ {d | ∃ r ∈ A.rules, d ∈ RuleResults A r}, d.Recorded (RunRules C) := by
-    rintro d ⟨r, hr, hdr⟩
-    obtain ⟨D, hD, hcd, hDsig⟩ := RuleResults.mono_recorded hc hsig henv hdr
-    exact hcd.trans_contained (Database.Contained.mem_sUnion ⟨r, hrules ▸ hr, hD⟩)
-  have hbase : A.Recorded (RunRules C) :=
-    hc.trans_contained (Database.Contained.sUnion C _)
-  refine ⟨fun p hp => ?_⟩
-  rcases hp with hp | hp
-  · exact hbase.eqs p hp
-  · obtain ⟨d, hd, hp'⟩ := Set.mem_iUnion₂.mp hp
-    exact (key d hd).eqs p hp'
+    (henv : A.env = C.env) (hrules : A.rules = C.rules) (hdiag : C.Diag) :
+    (RunRules A).Recorded (RunRules C) :=
+  .of_contained (RunRules.mono (hc.contained_of_diag hdiag) hsig henv hrules)
 
-/-- `CmdStep.mono` along `Recorded`.
-
-The `.decl` case asks nothing of the declaration: `Cong` reads no `sig`, so
-`Cong.mono_update` transports every derivation whatever the name already was. `.action` and
-`.run` spend `MergeStep.transport_recorded`, which is open. -/
+/-- `CmdStep.mono` along `Recorded`, on a diagonal `C`. `A.WF` is gone: it paid for the
+`Recorded`-specific route through `MergeClosure.transport_recorded`, and the
+`Contained` route needs nothing of `A`. -/
 theorem CmdStep.mono_recorded {A C B : Database} (hc : A.Recorded C) (hsig : A.sig = C.sig)
-    (henv : A.env = C.env) (hrules : A.rules = C.rules) (hwf : A.WF) {c : Cmd}
+    (henv : A.env = C.env) (hrules : A.rules = C.rules) (hdiag : C.Diag) {c : Cmd}
     (h : CmdStep A c B) :
     ∃ D, CmdStep C c D ∧ B.Recorded D ∧ B.sig = D.sig ∧ B.env = D.env ∧
       B.rules = D.rules := by
-  obtain ⟨e, heff, hcl⟩ := h
-  have key : ∃ E, cmdEffect C c = some E ∧ e.Recorded E ∧ e.sig = E.sig ∧ e.env = E.env ∧
-      e.rules = E.rules ∧ e.WF := by
-    cases c with
-    | action a =>
-      obtain ⟨E, hE, hcont, hs, he⟩ := evalAction_mono_recorded hc hsig henv heff
-      exact ⟨E, hE, hcont, hs, he,
-        by rw [evalAction_rules heff, evalAction_rules hE, hrules], evalAction_wf hwf heff⟩
-    | rule r =>
-      rw [cmdEffect, Option.some.injEq] at heff
-      subst heff
-      exact ⟨_, rfl, hc.setEnvRules _ _ _ _, hsig, henv, by
-        change insert r A.rules = insert r C.rules
-        rw [hrules], hwf.congr rfl rfl⟩
-    | run =>
-      rw [cmdEffect, Option.some.injEq] at heff
-      subst heff
-      refine ⟨_, rfl, RunRules.mono_recorded hc hsig henv hrules, ?_, ?_, ?_, RunRules.wf hwf⟩
-      · show (RunRules A).sig = (RunRules C).sig
-        simp only [RunRules, Database.sUnion_sig]; exact hsig
-      · show (RunRules A).env = (RunRules C).env
-        simp only [RunRules, Database.sUnion_env]; exact henv
-      · show (RunRules A).rules = (RunRules C).rules
-        simp only [RunRules, Database.sUnion_rules]; exact hrules
-    | decl f dc =>
-      rw [cmdEffect, Option.some.injEq] at heff
-      subst heff
-      refine ⟨_, rfl, ⟨fun p hp => ?_⟩, by
-        change Function.update A.sig f (some dc) = Function.update C.sig f (some dc)
-        rw [hsig], henv, hrules, hwf.congr rfl rfl⟩
-      obtain ⟨q, hq, hc₁, hc₂⟩ := hc.eqs p hp
-      exact ⟨q, hq, congOn_setSig hc₁, congOn_setSig hc₂⟩
-  obtain ⟨E, hE, hcont, hs, he, hr, hwfE⟩ := key
-  obtain ⟨D, hclD, hcontD, hsigD⟩ := MergeClosure.transport_recorded hcont hs hwfE hcl
-  exact ⟨D, ⟨E, hE, hclD⟩, hcontD, hsigD,
-    by rw [(MergeClosure.envRules hcl).1, (MergeClosure.envRules hclD).1, he],
-    by rw [(MergeClosure.envRules hcl).2, (MergeClosure.envRules hclD).2, hr]⟩
+  obtain ⟨D, hstep, hcont, hs, he, hr⟩ :=
+    h.mono (hc.contained_of_diag hdiag) hsig henv hrules
+  exact ⟨D, hstep, .of_contained hcont, hs, he, hr⟩
 
-/-- `ProgramStep.mono` along `Recorded`. `hwf` replaces the deleted `A.Solid`: an entry is a
-term now, so what the transports need of the left-hand side is `Database.WF` and nothing
-more. -/
+/-- `ProgramStep.mono` along `Recorded`, on a diagonal `C`. The induction is
+`ProgramStep.mono`'s: `hdiag` is about `C` alone, so no diagonality has to be
+re-established at the intermediate witnesses. -/
 theorem ProgramStep.mono_recorded {A C B : Database} (hc : A.Recorded C)
     (hsig : A.sig = C.sig) (henv : A.env = C.env) (hrules : A.rules = C.rules)
-    (hwf : A.WF) {p : Program} (h : ProgramStep A p B) :
+    (hdiag : C.Diag) {p : Program} (h : ProgramStep A p B) :
     ∃ D, ProgramStep C p D ∧ B.Recorded D ∧ B.sig = D.sig ∧ B.env = D.env ∧
       B.rules = D.rules := by
-  induction h generalizing C with
-  | nil => exact ⟨C, .nil, hc, hsig, henv, hrules⟩
-  | @cons A d B c cs hcmd _ ih =>
-    obtain ⟨D₀, hD₀, hc₀, hs₀, he₀, hr₀⟩ :=
-      hcmd.mono_recorded hc hsig henv hrules hwf
-    obtain ⟨D₁, hD₁, hc₁, hs₁, he₁, hr₁⟩ :=
-      ih hc₀ hs₀ he₀ hr₀ (CmdStep.wf hwf hcmd)
-    exact ⟨D₁, .cons hD₀ hD₁, hc₁, hs₁, he₁, hr₁⟩
+  obtain ⟨D, hstep, hcont, hs, he, hr⟩ :=
+    h.mono (hc.contained_of_diag hdiag) hsig henv hrules
+  exact ⟨D, hstep, .of_contained hcont, hs, he, hr⟩
 
 /-! #### Declaring a fresh name
 
@@ -4132,6 +4309,7 @@ from the witness the head produced. -/
 theorem execCmdM_contained' {d d' : FDatabase} (h : d.Inv) {c : Cmd}
     (hlegal : c.WriteLegal d.sig) (hmerges : Signature.MergesLegal d.sig)
     (hrules : ∀ r ∈ d.rules, Actions.WriteLegal r.actions d.sig)
+    (hnu : d.toDatabase.NoUnions) (hcu : c.UnionFree)
     (hs : d.execCmdM c = some d') :
     ∃ db, CmdStep d.toDatabase c db ∧ d'.toDatabase.Recorded db ∧
       d'.toDatabase.sig = db.sig ∧ d'.toDatabase.env = db.env ∧
@@ -4142,9 +4320,13 @@ theorem execCmdM_contained' {d d' : FDatabase} (h : d.Inv) {c : Cmd}
     obtain ⟨d₁, hd₁, hsat⟩ := Option.bind_eq_some_iff.mp hs
     have hmerges₁ : Signature.MergesLegal d₁.sig := by
       rw [execAction_sig hd₁]; exact hmerges
+    have heval : evalAction d.toDatabase a = some d₁.toDatabase :=
+      FDatabase.execAction_evalAction h.eqs hd₁
     obtain ⟨db, hcl, hcont⟩ :=
-      mergeSaturateF_contained (h.execAction hlegal hd₁) hmerges₁ hsat
-    refine ⟨db, ⟨d₁.toDatabase, FDatabase.execAction_evalAction h.eqs hd₁, hcl⟩, hcont,
+      mergeSaturateF_contained (h.execAction hlegal hd₁) hmerges₁
+        (by rw [execAction_sig hd₁]; exact hnu.sig)
+        (evalAction_diag hcu hnu.diag heval) hsat
+    refine ⟨db, ⟨d₁.toDatabase, heval, hcl⟩, hcont,
       ?_, ?_, ?_⟩
     · change d'.sig = db.sig
       rw [MergeClosure.sig hcl]; exact (mergeSaturateF_fields hsat).1
@@ -4171,7 +4353,9 @@ theorem execCmdM_contained' {d d' : FDatabase} (h : d.Inv) {c : Cmd}
     have hmerges₁ : Signature.MergesLegal (execRunRules d).sig := by
       rw [execRunRules_fields.1]; exact hmerges
     obtain ⟨db₂, hcl₂, hcont₂⟩ :=
-      mergeSaturateF_contained (h.execRunRules hrules) hmerges₁ hs
+      mergeSaturateF_contained (h.execRunRules hrules) hmerges₁
+        (by rw [execRunRules_fields.1]; exact hnu.sig)
+        (Database.Diag.mono hRcont (RunRules.diag hnu)) hs
     obtain ⟨db₃, hcl₃, hcont₃, hsig₃⟩ :=
       MergeClosure.transport hRcont (by
         change (execRunRules d).sig = (RunRules d.toDatabase).sig
@@ -4214,78 +4398,112 @@ for the interpreter's, and before every command carried one this theorem was **f
 `.decl` land on the specification's state on the nose.
 
 `hlegal` and `hrules` are `Inv.execAction`'s and `Inv.execActions`'s premises; `hmerges`
-is what a merge body needs and `Program.SetLegal` does not supply. -/
+is what a merge body needs and `Program.SetLegal` does not supply; `hnu` and `hcu` are what
+`MergeStep.transport_recorded` needs, since the merge phase is where the interpreter's
+re-keying has to be matched at a *congruent* key. -/
 theorem execCmdM_contained {d d' : FDatabase} (h : d.Inv) {c : Cmd}
     (hlegal : c.WriteLegal d.sig) (hmerges : Signature.MergesLegal d.sig)
     (hrules : ∀ r ∈ d.rules, Actions.WriteLegal r.actions d.sig)
+    (hnu : d.toDatabase.NoUnions) (hcu : c.UnionFree)
     (hs : d.execCmdM c = some d') :
     ∃ db, CmdStep d.toDatabase c db ∧ d'.toDatabase.Recorded db := by
-  obtain ⟨db, hstep, hcont, -, -, -⟩ := execCmdM_contained' h hlegal hmerges hrules hs
+  obtain ⟨db, hstep, hcont, -, -, -⟩ :=
+    execCmdM_contained' h hlegal hmerges hrules hnu hcu hs
   exact ⟨db, hstep, hcont⟩
 
+/-- `execProgramM_contained`, with the program first so the induction can generalize the
+database.
+
+`Database.NoUnions` carries itself: `CmdStep.noUnions` moves it onto the *specification*
+witness `db₁`, and `Database.NoUnions.of_recorded` pushes it back down onto the
+interpreter's `d₁`, which records into `db₁` and so has a subset of its equations. That is
+why no union-freedom lemma about the interpreter is needed anywhere. -/
 theorem execProgramM_contained_aux {p : Program} : ∀ {d d' : FDatabase}, d.Inv →
     Signature.MergesLegal d.sig →
     (∀ r ∈ d.rules, Actions.WriteLegal r.actions d.sig) →
+    d.toDatabase.NoUnions → p.UnionFree →
     d.ProgramLegal p → d.execProgramM p = some d' →
     ∃ db, ProgramStep d.toDatabase p db ∧ d'.toDatabase.Recorded db := by
   induction p with
   | nil =>
-    intro d d' hinv _ _ _ hs
+    intro d d' hinv _ _ _ _ _ hs
     rw [FDatabase.execProgramM, Option.some.injEq] at hs
     exact ⟨d.toDatabase, .nil, hs ▸ Database.Recorded.refl⟩
   | cons c cs ih =>
-    intro d d' h hmerges hrules hp hs
+    intro d d' h hmerges hrules hnu hcu hp hs
     rw [FDatabase.execProgramM] at hs
     obtain ⟨d₁, hd₁, hcs⟩ := Option.bind_eq_some_iff.mp hs
     rw [FDatabase.ProgramLegal] at hp
     obtain ⟨hlegal, hunused, hmerges', hnext⟩ := hp
     obtain ⟨db₁, hstep₁, hcont₁, hsig₁, henv₁, hrules₁⟩ :=
-      execCmdM_contained' h hlegal hmerges hrules hd₁
+      execCmdM_contained' h hlegal hmerges hrules hnu hcu.1 hd₁
     have hinv₁ : d₁.Inv := h.execCmdM hlegal hmerges hunused hrules hd₁
+    have hnu₁ : d₁.toDatabase.NoUnions :=
+      (CmdStep.noUnions hnu hcu.1 hstep₁).of_recorded hcont₁ hsig₁ hrules₁
     obtain ⟨db₂, hstep₂, hcont₂⟩ :=
       ih hinv₁ (by rw [execCmdM_sig hd₁]; exact hmerges')
-        (execCmdM_rulesLegal hlegal hunused hrules hd₁) (hnext d₁ hd₁) hcs
+        (execCmdM_rulesLegal hlegal hunused hrules hd₁) hnu₁ hcu.2 (hnext d₁ hd₁) hcs
     obtain ⟨db₃, hstep₃, hcont₃, hsig₃, -, -⟩ :=
-      ProgramStep.mono_recorded hcont₁ hsig₁ henv₁ hrules₁ hinv₁.wf hstep₂
+      ProgramStep.mono_recorded hcont₁ hsig₁ henv₁ hrules₁
+        (CmdStep.noUnions hnu hcu.1 hstep₁).diag hstep₂
     exact ⟨db₃, .cons hstep₁ hstep₃, hcont₂.trans hcont₃ (hstep₂.wf hinv₁.wf)
       (hstep₃.wf (CmdStep.wf h.wf hstep₁))⟩
 
 /-- **The interpreter's answer to a whole program is contained in one the specification
 reaches.**
 
-`execCmdM_contained'` per command, with `ProgramStep.mono` re-basing the tail's witness
-onto the head's — which is where `ValidSubst.mono` is spent, read forwards: a larger
-specification state still admits every match, so the specification can follow along.
+`execCmdM_contained'` per command, with `ProgramStep.mono_recorded` re-basing the tail's
+witness onto the head's — which is where `ValidSubst.mono` is spent, read forwards: a
+larger specification state still admits every match, so the specification can follow along.
 
 `hp` is the per-command bundle. It is what carries the induction across a `.decl`:
 `FDatabase.Inv` is not preserved by an arbitrary declaration (`FDatabase.Inv.decl`), and
 `FDatabase.Unused` is the weakest thing that restores it — the declaration names
 something the state does not yet mention, which is what egglog's front end requires
 anyway. It does not restrict which `:merge` functions a program may declare, so the
-merge fragment is not excluded. -/
+merge fragment is not excluded.
+
+`hnu` and `hufree` are the union-freedom side condition; see the section "Union-freedom,
+and where it puts `Recorded`". They *do* restrict which programs are covered, and they are
+the price of the re-keying contract: without them the two `Recorded` transports the
+induction runs on are false. -/
 theorem execProgramM_contained {d d' : FDatabase} (h : d.Inv) {p : Program}
     (hmerges : Signature.MergesLegal d.sig)
     (hrules : ∀ r ∈ d.rules, Actions.WriteLegal r.actions d.sig)
+    (hnu : d.toDatabase.NoUnions) (hufree : p.UnionFree)
     (hp : d.ProgramLegal p) (hs : d.execProgramM p = some d') :
     ∃ db, ProgramStep d.toDatabase p db ∧ d'.toDatabase.Recorded db :=
-  execProgramM_contained_aux h hmerges hrules hp hs
+  execProgramM_contained_aux h hmerges hrules hnu hufree hp hs
 
 end FDatabase
 
 /-- **The contract for `execM`.** `execProgramM_contained` from `FDatabase.empty`, whose
-two global side conditions discharge themselves: the empty signature declares no merge
-body and the empty state has no rules. `hp` is what remains, and `FDatabase.ProgramLegal`
-is stated so that a front end which declares before use and type-checks its merge bodies
-satisfies it.
+three global side conditions discharge themselves: the empty signature declares no merge
+body, the empty state has no rules, and it asserts no equation. `hp` and `hufree` are what
+remain, and `FDatabase.ProgramLegal` is stated so that a front end which declares before
+use and type-checks its merge bodies satisfies it.
+
+`hufree` — **the program emits no `Action.union`, in a command, a rule head or a `:merge`
+body** — is the legality condition the two `Recorded` transports need, and it is not
+removable: both are false without it, `MergeStep.transport_recorded` refutably so. A
+union-free program keeps every state it reaches diagonal, and there `Database.Recorded` and
+`Database.Contained` agree, so the proved `Contained` transports serve. It does not exclude
+`Encoding/Encode.lean`: `encodeAction` turns a source `union` into a `set` of a `@UF` edge,
+and no `encode` output — prelude, maintenance rule, merge body or encoded head — contains
+an `Action.union`.
 
 See the section header above for why the contract is `Database.Recorded` rather than the
 equality `exec_programStep` enjoys, and `Spec/Merge.lean` for why it is that rather than
 `Database.Contained`. -/
 theorem execM_contained {p : Program} (hp : FDatabase.empty.ProgramLegal p)
-    {d : FDatabase} (h : execM p = some d) :
+    (hufree : p.UnionFree) {d : FDatabase} (h : execM p = some d) :
     ∃ db, ProgramStep FDatabase.empty.toDatabase p db ∧ d.toDatabase.Recorded db :=
   FDatabase.execProgramM_contained FDatabase.Inv.empty
     (fun g dc body res hg _ => absurd hg (by simp [FDatabase.empty]))
-    (fun r hr => absurd hr (by simp [FDatabase.empty])) hp h
+    (fun r hr => absurd hr (by simp [FDatabase.empty]))
+    ⟨by simp [FDatabase.toDatabase_empty, Database.Diag, Database.empty],
+      by simp [FDatabase.toDatabase_empty, Database.empty, Signature.UnionFree],
+      by simp [FDatabase.toDatabase_empty, Database.empty]⟩
+    hufree hp h
 
 end Egglog
