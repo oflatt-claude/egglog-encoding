@@ -409,7 +409,14 @@ def compile_rule(atoms, action):
                 body.append(f"(= {m} (compose {mp} {e}))")
                 mp_of[cp] = m
         if root not in mp_of:
-            mp_of[root] = mp
+            # `mp` has the matched NODE's slots for its domain, but a variable's
+            # renaming must have its CLASS's -- the two differ exactly when the
+            # node carries a redundant slot. Using the wider one puts slots into a
+            # built node that its child does not have, and the action then forces
+            # them redundant. Composing with a symmetry, whose domain is the live
+            # slots, restricts it; under `per-class` that join is shared with
+            # every other use of this class, so it is nearly free.
+            mp_of[root] = f"(compose {mp} {sym_for(root)})"
 
     root, op, a, b = action
     # egglog's `union` equates e-classes, i.e. it can only assert an equation
@@ -534,7 +541,8 @@ def run_reference(case, atoms=None):
 
 def run_encoding(case, atoms=None, keep=None, mult=3):
     prog = egg_program(case, atoms, mult)
-    path = keep or (ROOT / "xdiff-tmp.egg")
+    # per-process, so two harness runs cannot clobber each other
+    path = keep or (ROOT / f"xdiff-tmp-{os.getpid()}.egg")
     path.write_text(prog)
     try:
         r = subprocess.run(
