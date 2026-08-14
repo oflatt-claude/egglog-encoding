@@ -298,8 +298,13 @@ def compile_rule(atoms, action):
             if cp.startswith("$"):
                 continue
             if cp in mp_of:
-                if cp not in bound_before:
-                    # second occurrence within this atom: post-hoc Def. 6 check
+                # A child bound by an EARLIER atom is already handled: it went
+                # into the renaming as a constraint, so the equation holds by
+                # construction. One bound in THIS atom still needs checking.
+                # Under `root-only` the constraint was skipped, so the check is
+                # what the original bug had in its place -- emitting neither
+                # would be a different, more permissive mutant.
+                if cp not in bound_before or "root-only" in BUGS:
                     sym = fresh("sym")
                     body.append(
                         f"(= {sym} (compose (inverse {mp_of[cp]}) (compose {mp} {e})))"

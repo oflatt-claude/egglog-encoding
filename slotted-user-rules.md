@@ -362,22 +362,39 @@ XDIFF_BUGS=binder-1st ./xdiff.py     the first atom may be a binder
 XDIFF_BUGS=union-id   ./xdiff.py     the action unions classes, not invocations
 ```
 
-This is worth having because **coverage decays silently**. Changing minting to
-smallest-unused made two cases stop testing what they were written for: `R2` in
-`tests/slotted-multipat-diff.egg` and, worse, `C11` — the witness for the only
-unsoundness found — because under the new policy their root renamings come out as
-the identity, where the right and wrong spellings agree. For a while nothing
-anywhere caught `union-id`. `C14` replaces it, with the action rooted at a *child*
-variable so its renaming is a stored edge rather than the identity.
+Where each is caught:
 
-Finding `C14` also exposed a blind spot in the generator: it only ever rooted the
-action at an atom root, and those usually carry the identity, so the whole
-class-versus-invocation distinction went unexercised. Rooting the action at any
-bound variable finds witnesses immediately.
+| bug | caught by | how |
+| --- | --- | --- |
+| `root-only` | C3, C5, C6, C9, C10 (+3 more) | disagrees with the reference |
+| `unordered` | C12, C13 | disagrees with the reference |
+| `slot-late` | B3 | disagrees with the reference |
+| `union-id` | C14 | disagrees with the reference |
+| `binder-1st` | C13 | order-independence check only |
 
-Two bugs are still caught only *indirectly*, by the order-independence check
-rather than by disagreeing with the reference: `root-only` (via `C11`) and
-`binder-1st` (via `C13`). Direct witnesses for those would be better.
+Two things this was worth doing for.
+
+**Coverage decays silently.** Changing minting to smallest-unused made `C11` — the
+witness for the only unsoundness found — stop testing what it was written for,
+because under the new policy its root renaming comes out as the identity, and at
+the identity the right and wrong spellings agree. The same happened to `R2` in
+`tests/slotted-multipat-diff.egg`. For a while nothing anywhere caught `union-id`.
+`C14` replaces `C11`, with the action rooted at a *child* variable so its renaming
+is a stored edge rather than the identity.
+
+That also exposed a blind spot in the generator: it only ever rooted an action at
+an atom root, and those usually carry the identity, so the class-versus-invocation
+distinction went unexercised. Rooting the action at any bound variable finds
+witnesses in the first handful of cases.
+
+**A mutant has to be faithful, or it measures nothing.** The first `root-only`
+switch dropped the child constraint *and* the occurrence check that the original
+bug still performed, which makes the rule more permissive rather than
+under-constrained — so it looked as though nothing caught `root-only`, when in
+fact eight cases do.
+
+`binder-1st` is still caught only indirectly, by order-independence rather than by
+disagreeing with the reference. A direct witness would be better.
 
 ### Not covered
 
@@ -430,6 +447,9 @@ Each of these was silent, and each cost a round of confusion.
 * *A regression case can stop being one.* Changing the minting policy left `C11`
   and `R2` passing whether or not the bug they were written for was present. Put
   the bug back and check the test fails — `XDIFF_BUGS=` exists for that.
+* *And so can a mutant.* If the switch that puts a bug back does not reproduce
+  what the bug actually did, the coverage it reports is fiction in either
+  direction.
 * *A generator's defaults are part of its coverage.* Rooting every action at an
   atom root meant the action's renaming was almost always the identity, so nothing
   exercised the difference between unioning classes and unioning invocations.
