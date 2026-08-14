@@ -119,6 +119,31 @@ class Case:
 
 
 # -------------------------------------------------------------- rule compiler
+def order_atoms(atoms):
+    """Reorder so every atom after the first shares a variable with the prefix.
+
+    Required, not an optimisation. An atom sharing nothing has no constraint on
+    its `mp`, so every slot it needs is *minted* -- and the mint is a commitment
+    the encoding cannot revisit. If a later atom then shows that a minted slot is
+    really one the pattern already named, the two disagree and `find-mapping`
+    fails, losing a match the reference finds. `multi_ematch` does not have this
+    problem: it keeps such a slot flexible and lets `unify` merge it later.
+
+    The first atom is left where it is, since it is the one that fixes
+    slots(pattern) and callers vary it deliberately.
+    """
+    rest = list(atoms[1:])
+    out = [atoms[0]]
+    seen = {atoms[0][0], atoms[0][2], atoms[0][3]}
+    while rest:
+        i = next((j for j, a in enumerate(rest)
+                  if {a[0], a[2], a[3]} & seen), 0)
+        a = rest.pop(i)
+        out.append(a)
+        seen |= {a[0], a[2], a[3]}
+    return out
+
+
 def compile_rule(atoms, action):
     """Compile a flattened multipattern into an egglog rule body + action.
 
@@ -127,6 +152,7 @@ def compile_rule(atoms, action):
     every child bound by an earlier atom -- with `find-mapping-total` so slots
     the constraints do not reach are minted rather than dropped.
     """
+    atoms = order_atoms(atoms)
     body, uid = [], [0]
 
     def fresh(p):
@@ -181,6 +207,20 @@ def compile_rule(atoms, action):
             body.append(
                 f"(= {mp} (find-mapping-total {pat} {dom} (map-empty) (map-empty)))"
             )
+
+        # Accumulate the avoid-set. Passing only the initial atom's slots would
+        # let two atoms that both mint choose the same slot, since the primitive
+        # is pure and sees one atom at a time. `compose m (inverse m)` is the
+        # identity on im(m), and identity maps never conflict under map-union, so
+        # the running union is always well defined.
+        idm = fresh("idm")
+        body.append(f"(= {idm} (compose {mp} (inverse {mp})))")
+        if idx == 0:
+            pat = idm
+        else:
+            nxt = fresh("av")
+            body.append(f"(= {nxt} (map-union {pat} {idm}))")
+            pat = nxt
 
         # walk the children: bind the new ones, check the ones bound in THIS atom
         for cp, e in ((c1, e1), (c2, e2)):
@@ -533,6 +573,27 @@ def curated():
         rounds=6,
     ))
 
+    # C12 -- regression for atom ordering, found by `fuzz 250 555` as fuzz61.
+    #
+    # As written, atom 2 shares no variable with atom 1, so nothing constrains
+    # its mp and every slot it needs is minted. Atom 3 then shows that k2's slot
+    # 0 and k1's slot 0 are the *same* slot of the h node, while the mint had
+    # already sent them to different pattern slots -- the constraints conflict,
+    # find-mapping fails, and a match the reference finds is lost.
+    #
+    # Reordering to atom 1, atom 3, atom 2 keeps every atom connected to the
+    # prefix, so nothing is minted and the match comes back. `multi_ematch` never
+    # had the problem: it keeps such a slot flexible and lets `unify` merge it.
+    cs.append(Case(
+        "C12-atom-order-must-stay-connected",
+        [("h", ("k", V0, V0), ("k", V2, V0))],
+        [],
+        [("x3", "k", "x1", "x2"), ("x6", "k", "x4", "x5"), ("x7", "h", "x3", "x6")],
+        ("x7", "h", "x2", "x4"),
+        [("h", ("k", V0, V0), ("k", V2, V0)), ("h", V0, V1), ("h", V0, V0), NUL, V0],
+        rounds=6,
+    ))
+
     return cs
 
 
@@ -559,20 +620,38 @@ def flatten_to_atoms(t, ctr):
     return root, aa + ab + [(root, op, pa, pb)]
 
 
+def rand_top(rng, depth):
+    """A term safe to use at top level.
+
+    A bare leaf cannot be encoded faithfully: an encoding `U` value is a *node*,
+    not an invocation, so `(var $n)` collapses to `(Var 0)` and loses `n`. Then
+    `union (var $0) (var $2)` -- a real statement about the variable class in the
+    reference -- becomes a no-op in the encoding, and the two sides diverge for
+    reasons that have nothing to do with matching. Slots inside a compound term
+    ride in the stored edges and survive.
+    """
+    t = rand_term(rng, depth)
+    if t[0] in ("var", "null"):
+        t = (rng.choice(BINOPS), t, rand_term(rng, 0))
+    return t
+
+
 def rand_case(rng, i):
     # A small term set over few ops, so patterns and terms collide often.
-    terms = [rand_term(rng, rng.randrange(1, 3)) for _ in range(rng.randrange(1, 3))]
+    terms = [rand_top(rng, rng.randrange(1, 3)) for _ in range(rng.randrange(1, 3))]
 
     # Unions biased towards creating redundancy: equating a term that has slots
     # with one that has fewer forces the difference to become redundant, which
     # is where matching gets interesting.
     unions = []
     for _ in range(rng.randrange(0, 3)):
-        a = rand_term(rng, rng.randrange(1, 3))
+        a = rand_top(rng, rng.randrange(1, 3))
         if rng.random() < 0.5 and slots(a):
+            # `(var $0)` is safe: slot 0 is the canonical leader's own slot, so
+            # the invocation is the identity and nothing is lost.
             b = ("null",) if rng.random() < 0.5 else ("var", 0)
         else:
-            b = rand_term(rng, rng.randrange(0, 2))
+            b = rand_top(rng, rng.randrange(0, 2))
         unions.append((a, b))
 
     # The pattern is read off a term that is actually in the e-graph, so it
@@ -582,20 +661,24 @@ def rand_case(rng, i):
     if not atoms:
         atoms = [("r0", rng.choice(BINOPS), "u", "v")]
 
-    pvs = sorted({v for at in atoms for v in (at[2], at[3])})
-    # perturb: identify two child pvars (tests repeated-variable semantics)
-    if pvs and rng.random() < 0.6:
-        keep, drop = rng.choice(pvs), rng.choice(pvs)
-        atoms = [(r, o, keep if c1 == drop else c1, keep if c2 == drop else c2)
-                 for (r, o, c1, c2) in atoms]
-    # perturb: drop a trailing atom (leaves a pvar unconstrained)
-    if len(atoms) > 1 and rng.random() < 0.3:
-        atoms = atoms[:-1]
-    # perturb: swap an atom's children
-    if rng.random() < 0.3:
-        j = rng.randrange(len(atoms))
-        r, o, c1, c2 = atoms[j]
-        atoms[j] = (r, o, c2, c1)
+    # Perturbations make the pattern more interesting but often stop it matching
+    # at all, and a case that never fires tests nothing. Half are left alone so
+    # the sweep keeps a healthy share of firing cases.
+    if rng.random() < 0.5:
+        pvs = sorted({v for at in atoms for v in (at[2], at[3])})
+        # identify two child pvars (tests repeated-variable semantics)
+        if pvs and rng.random() < 0.5:
+            keep, drop = rng.choice(pvs), rng.choice(pvs)
+            atoms = [(r, o, keep if c1 == drop else c1, keep if c2 == drop else c2)
+                     for (r, o, c1, c2) in atoms]
+        # drop a trailing atom (leaves a pvar unconstrained)
+        if len(atoms) > 1 and rng.random() < 0.3:
+            atoms = atoms[:-1]
+        # swap an atom's children
+        if rng.random() < 0.4:
+            j = rng.randrange(len(atoms))
+            r, o, c1, c2 = atoms[j]
+            atoms[j] = (r, o, c2, c1)
 
     allv = sorted({v for at in atoms for v in (at[0], at[2], at[3])})
     # the action's root must be an atom root, so it is bound

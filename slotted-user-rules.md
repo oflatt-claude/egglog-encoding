@@ -248,7 +248,15 @@ e-classes, i.e. only the case where both renamings are the identity. So:
 So the surface language wants an action that takes renamed ids, or the encoder
 has to synthesise the `RenamesToLeader` insert itself.
 
-**This is not a nicety, and getting it wrong is silent.** A plain
+The same gap shows up outside rules, for plain input terms. A `U` value is an
+e-*node*, not an invocation, so a bare leaf has nowhere to carry its slot:
+`(var $0)` and `(var $2)` both encode as `(Var 0)`, and `union (var $0) (var $2)`
+— which in the reference makes the variable class slotless, collapsing every
+`h(var, var)` — becomes a no-op. Slots inside a compound term ride in the stored
+edges and survive; only a top-level leaf loses them. Writing such a union needs
+the `RenamesToLeader` form too, here as a self-loop on the variable class.
+
+**Getting the rule case wrong is silent.** A plain
 `(union root built)` asserts an equation whose two renamings are the identity.
 When the root's renaming is not the identity, that equation is simply *false* —
 it conflates two distinct pattern slots — and the e-graph absorbs it as spurious
@@ -366,8 +374,38 @@ nondeterminism `unify` gets from branching has to come from.
 `slotted-experiments/xdiff/xdiff.py` generates cases, compiles each
 multipattern, runs both sides, and compares the probe partition. Results:
 
-Over 150 generated cases plus the curated corpus, on a run where 21 of 141
-usable cases actually fired the rule:
+Current state: **199/200 generated cases agree**, with 39 of them actually firing
+the rule, plus 11/11 curated. The single failure is a timeout — the encoding
+blowing past 25s on one e-graph, a performance problem rather than a wrong
+answer. No matching divergence, no order dependence, no machinery difference.
+
+Getting there took fixing three real bugs and three of the harness's own. The
+history is worth keeping, because every one of them was silent:
+
+**In the encoding**
+
+* *The action unioned e-classes instead of renamed ids.* See Actions above; this
+  was an unsoundness, and the only source of order dependence.
+* *Each atom's `mp` was solved from its root alone.* Under-constrained whenever
+  the node carries slots the root's renaming does not cover, i.e. redundant
+  slots. Fixed by solving from every constraint available at that point.
+* *Minted slots could collide across atoms.* `find-mapping-total` is pure and
+  sees one atom at a time, so passing only the initial atom's slots as the
+  avoid-set let two minting atoms pick the same slot. The compiler now threads a
+  running avoid-set — `compose m (inverse m)` is the identity on `im(m)`, and
+  identity maps never conflict under `map-union`, so the union is always defined.
+  This is the concrete answer to what the avoid-set has to contain.
+
+**In the harness** — worth reading before writing another one:
+
+* *A slotted e-class is not an egglog e-class* (see below).
+* *`eg.eq` is not e-class identity* (see below).
+* *A bare leaf at top level loses its slot*, so `union (var $0) (var $2)` became
+  a no-op. This one alone accounted for **every** apparent machinery divergence:
+  13 of 200 before the fix, 0 after.
+
+Over the earlier 150-case run, before those fixes, where 21 of 141 usable cases
+fired:
 
 * **One unsoundness, and it is also the one order dependence.** Kept as curated
   case `C11`. The encoding derives `h(x,y) = h(x,x)`; the reference refuses, and
