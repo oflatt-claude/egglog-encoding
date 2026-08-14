@@ -958,6 +958,13 @@ def curated():
     # are derived from nodes" as the cause. Both cases share one shape: the
     # action's root is a CHILD and the node it builds contains that child's own
     # parent, so the assertion relates a class to a node built over it.
+    #
+    # Timeline: the variable class holds its slot for six egglog iterations and
+    # loses it on about the seventh. Both sides do reach a fixpoint -- the
+    # encoding agrees with itself at N and 2N iterations -- so this is not the
+    # encoding being run longer than the reference. They saturate at DIFFERENT
+    # fixpoints, which means the encoding has a derivation the reference does not,
+    # reached only after the rule has fired on nodes the rule itself built.
     cs.append(Case(
         "X2-KNOWN-FAIL-minimal-over-merge",
         [("h", V2, V1)], [],
