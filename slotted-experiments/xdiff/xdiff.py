@@ -51,6 +51,8 @@ def slots(t):
         return {t[1]}
     if t[0] == "null":
         return set()
+    if t[0] == "lam":
+        return slots(t[2]) - {t[1][1]}      # the bound slot is not free
     return slots(t[1]) | slots(t[2])
 
 
@@ -60,7 +62,16 @@ def sexpr(t):
         return f"(var ${t[1]})"
     if t[0] == "null":
         return "null"
+    if t[0] == "lam":
+        return f"(lam ${t[1][1]} {sexpr(t[2])})"
     return f"({t[0]} {sexpr(t[1])} {sexpr(t[2])})"
+
+
+def enc_op(op):
+    """The operator name the encoding uses. The machinery's alpha-equivalence
+    rule is written against the literal string "lambda", so the binder has a
+    different name on each side."""
+    return "lambda" if op == "lam" else op
 
 
 def mapof(d):
@@ -89,8 +100,15 @@ def enc(t):
         return "(Var 0)"
     if t[0] == "null":
         return "(Null)"
+    if t[0] == "lam":
+        # The body's edge is the identity on the body's slots -- which still
+        # contains the bound slot, since the lambda *node* carries it and only
+        # the class drops it.
+        x, body = t[1][1], t[2]
+        return (f'(App "lambda" {mapof({0: x})} (Var 0) '
+                f"{mapof(edge(body))} {enc(body)})")
     op, a, b = t
-    return f'(App "{op}" {mapof(edge(a))} {enc(a)} {mapof(edge(b))} {enc(b)})'
+    return f'(App "{enc_op(op)}" {mapof(edge(a))} {enc(a)} {mapof(edge(b))} {enc(b)})'
 
 
 # ------------------------------------------------------------------------ specs
@@ -129,19 +147,32 @@ def order_atoms(atoms):
     fails, losing a match the reference finds. `multi_ematch` does not have this
     problem: it keeps such a slot flexible and lets `unify` merge it later.
 
-    The first atom is left where it is, since it is the one that fixes
-    slots(pattern) and callers vary it deliberately.
+    The first atom fixes slots(pattern), so it must not be a binder: a binder's
+    node carries the *bound* slot, which would put a bound slot into the pattern's
+    slot space and stop the rule firing. `C13` is the case. Otherwise the caller's
+    preference is kept, since callers vary the first atom deliberately.
     """
+    atoms = list(atoms)
+    first = next((j for j, a in enumerate(atoms) if a[1] != "lam"), 0)
+    atoms = [atoms[first]] + atoms[:first] + atoms[first + 1:]
+
     rest = list(atoms[1:])
     out = [atoms[0]]
-    seen = {atoms[0][0], atoms[0][2], atoms[0][3]}
+    seen = pvars_of(atoms[0])
     while rest:
         i = next((j for j, a in enumerate(rest)
-                  if {a[0], a[2], a[3]} & seen), 0)
+                  if pvars_of(a) & seen), 0)
         a = rest.pop(i)
         out.append(a)
-        seen |= {a[0], a[2], a[3]}
+        seen |= pvars_of(a)
     return out
+
+
+def pvars_of(atom):
+    """An atom's pattern variables. A slot literal is excluded: its constraint is
+    an equality on one slot, applied after `mp` is solved, so it does not help
+    pin `mp` down and does not count as connectivity."""
+    return {v for v in (atom[0], atom[2], atom[3]) if not v.startswith("$")}
 
 
 def compile_rule(atoms, action):
@@ -161,15 +192,21 @@ def compile_rule(atoms, action):
 
     mp_of = {}      # pvar -> egglog var holding its renaming into slots(pattern)
     cls_of = {}     # pvar -> egglog var holding its leader
+    slot_of = {}    # "$v" -> egglog i64 var holding that pattern slot
     pat = None      # identity on slots(pattern)
 
     for idx, (root, op, c1, c2) in enumerate(atoms):
         e1, e2 = fresh("p"), fresh("p")
         rv = cls_of.setdefault(root, fresh("V"))
+        # A child written `$v` is a slot literal, not a pattern variable. The
+        # encoding stores a binder's slot as an edge to `(Var 0)`, so the child
+        # position is that literal class and the slot itself is read out of the
+        # edge below.
         kids = []
         for cp in (c1, c2):
-            kids.append(cls_of.setdefault(cp, fresh("C")))
-        body.append(f'(= {rv} (App "{op}" {e1} {kids[0]} {e2} {kids[1]}))')
+            kids.append("(Var 0)" if cp.startswith("$")
+                        else cls_of.setdefault(cp, fresh("C")))
+        body.append(f'(= {rv} (App "{enc_op(op)}" {e1} {kids[0]} {e2} {kids[1]}))')
 
         dom = fresh("dom")
         body.append(f"(= {dom} (find-mapping {e1} {e2} {e1} {e2}))")
@@ -187,11 +224,22 @@ def compile_rule(atoms, action):
         # every child an earlier atom already named
         bound_before = set(mp_of)
         for cp, e in ((c1, e1), (c2, e2)):
+            if cp.startswith("$"):
+                continue
             if cp in bound_before:
                 mx = mp_of[cp]
                 sym = fresh("sym")
                 body.append(f"(RenamesToLeader {cls_of[cp]} {sym} {cls_of[cp]})")
                 firsts.append(f"(compose {mx} {sym})")
+                seconds.append(e)
+
+        # A slot literal an earlier atom already pinned constrains this atom's mp
+        # too: `mp . edge = {0 -> that slot}`. Checking it afterwards instead is
+        # too late -- mp would already have minted a different slot for the same
+        # binder, and nothing can revise a mint.
+        for cp, e in ((c1, e1), (c2, e2)):
+            if cp.startswith("$") and cp in slot_of:
+                firsts.append(f"(map-insert (map-empty) 0 {slot_of[cp]})")
                 seconds.append(e)
 
         mp = fresh("mp")
@@ -222,8 +270,18 @@ def compile_rule(atoms, action):
             body.append(f"(= {nxt} (map-union {pat} {idm}))")
             pat = nxt
 
+        # A slot literal names one slot in pattern space. `(= v ...)` binds it on
+        # first use and constrains it on every later one, which is how the same
+        # `$v` written twice forces the two slots to agree.
+        for cp, e in ((c1, e1), (c2, e2)):
+            if cp.startswith("$"):
+                sv = slot_of.setdefault(cp, "s" + cp[1:])
+                body.append(f"(= {sv} (map-get (compose {mp} {e}) 0))")
+
         # walk the children: bind the new ones, check the ones bound in THIS atom
         for cp, e in ((c1, e1), (c2, e2)):
+            if cp.startswith("$"):
+                continue
             if cp in mp_of:
                 if cp not in bound_before:
                     # second occurrence within this atom: post-hoc Def. 6 check
@@ -257,7 +315,7 @@ def compile_rule(atoms, action):
     # and let the machinery's transitivity / single-parent rules re-orient it.
     mr = mp_of[root]
     act = (
-        f'(let _hn (App "{op}" {mp_of[a]} {cls_of[a]} {mp_of[b]} {cls_of[b]}))\n'
+        f'(let _hn (App "{enc_op(op)}" {mp_of[a]} {cls_of[a]} {mp_of[b]} {cls_of[b]}))\n'
         f"       (RenamesToLeader _hn {mr} {cls_of[root]})"
     )
     return "(rule (" + "\n       ".join(body) + f")\n      ({act}))"
@@ -407,10 +465,19 @@ def check_case(case, verbose=False, stats=None):
         fails.append(f"{case.name}: MISMATCH vs reference\n"
                      f"    ref {rv}\n    enc {ev}")
 
-    # 3. order independence, both sides. Every permutation for 2-3 atoms; a
-    # sample beyond that, since each one costs a full saturation on both sides.
+    # 3. determinism: the same program twice must give the same answer. Checked
+    # separately so it cannot be mistaken for order dependence.
+    ds, dv = run_encoding(case)
+    if ds == "OK" and dv != ev:
+        fails.append(f"{case.name}: ENCODING is nondeterministic\n"
+                     f"    run 1 {ev}\n    run 2 {dv}")
+
+    # 4. order independence, both sides. Every distinct reordering for 2-3 atoms;
+    # a sample beyond that, since each costs a full saturation on both sides. The
+    # original order is excluded -- rerunning it would test determinism, not order.
     if len(case.atoms) > 1:
-        perms = list(itertools.permutations(case.atoms))
+        perms = [p for p in itertools.permutations(case.atoms)
+                 if list(p) != list(case.atoms)]
         if len(perms) > PERM_CAP:
             perms = random.Random(0).sample(perms, PERM_CAP)
         ref_vals, enc_vals = {rv}, {ev}
@@ -594,6 +661,109 @@ def curated():
         rounds=6,
     ))
 
+    # C13 -- regression for first-atom choice, found by `fuzz 250 777` as fuzz194.
+    #
+    # The first atom's node slots become the pattern's slots. For a binder that
+    # node carries the *bound* slot, so choosing one as the first atom puts a
+    # bound slot into the pattern's space and the rule stops firing. With `k`
+    # first, both sides agree; with the `lam` first, the encoding derives nothing.
+    # The reference does not care about atom order, so neither may the encoding:
+    # `order_atoms` therefore picks a non-binder to go first when it can.
+    cs.append(Case(
+        "C13-first-atom-must-not-be-a-binder",
+        [("h", ("k", V2, NUL), ("lam", V0, V1))],
+        [(("g", ("h", V2, NUL), ("lam", V2, V1)), V0),
+         (("h", NUL, V2), ("add", NUL, NUL))],
+        [("x3", "k", "x1", "x2"), ("x5", "lam", "$s5", "x4"),
+         ("x6", "h", "x3", "x5")],
+        ("x6", "h", "x4", "x4"),
+        [("h", ("k", V2, NUL), ("lam", V0, V1)),
+         ("g", ("h", V2, NUL), ("lam", V2, V1)),
+         ("h", NUL, V2), ("h", V0, V1), ("h", V0, V0), NUL, V0],
+        rounds=6,
+    ))
+
+    # ---- ported from the reference's own test suite (tests/multipat) ----------
+    # Where a test is not portable, it is listed under "Not ported" in
+    # slotted-user-rules.md rather than approximated here.
+
+    # regress::same_node_redundant_slots_stay_distinct. Unioning f's two-slot
+    # term into a slotless one makes both slots redundant. A pattern that would
+    # have to identify them must not match; one that keeps them apart must.
+    red = [(("f", V0, V1), NUL)]
+    cs.append(Case(
+        "P1a-redundant-slots-may-not-collapse",
+        [NUL], red,
+        [("p", "f", "a", "a")], ("p", "h", "a", "a"),
+        [NUL, ("f", V0, V1), ("h", V0, V0), ("h", V0, V1)],
+    ))
+    cs.append(Case(
+        "P1b-redundant-slots-kept-apart",
+        [NUL], red,
+        [("p", "f", "a", "b")], ("p", "h", "a", "b"),
+        [NUL, ("f", V0, V1), ("h", V0, V0), ("h", V0, V1)],
+    ))
+
+    # regress::live_slots_of_one_class_stay_distinct. Same question with no
+    # redundancy at all: a class's own live slots are distinct.
+    cs.append(Case(
+        "P2a-live-slots-may-not-collapse",
+        [("k", V0, V1)], [],
+        [("p", "k", "u", "u")], ("p", "h", "u", "u"),
+        [("k", V0, V1), ("h", V0, V0), ("h", V0, V1)],
+    ))
+    cs.append(Case(
+        "P2b-live-slots-kept-apart",
+        [("k", V0, V1)], [],
+        [("p", "k", "u", "v")], ("p", "h", "u", "v"),
+        [("k", V0, V1), ("h", V0, V0), ("h", V0, V1)],
+    ))
+
+    # ---- binders -------------------------------------------------------------
+    # The point of slotted e-graphs, and untested until now. `$v` is a slot
+    # literal: the reference's `Bind` has no room for a pattern variable there.
+
+    # B1 -- reading a binder's body, and chaining through it.
+    cs.append(Case(
+        "B1-binder-chain",
+        [("lam", V0, ("f", V0, V1))], [],
+        [("p", "lam", "$v", "b"), ("b", "f", "x", "y")],
+        ("p", "h", "x", "y"),
+        [("lam", V0, ("f", V0, V1)), ("h", V0, V1), ("h", V0, V0)],
+    ))
+
+    # B2 -- alpha-equivalence: two spellings of the identity function are one
+    # class, so a rule matching one must fire for both.
+    cs.append(Case(
+        "B2-alpha-equivalent-binders",
+        [("lam", V0, V0), ("lam", V1, V1)], [],
+        [("p", "lam", "$v", "b")], ("p", "h", "b", "b"),
+        [("lam", V0, V0), ("lam", V1, V1), ("h", V0, V0), ("h", V0, V1)],
+    ))
+
+    # B3 -- known_bugs::lambda_bug_reaches_the_goal_under_multipat. The pattern
+    # writes `$x` for two binders that have nothing to do with each other. Each
+    # equation looks its node up separately and gets its own name for that node's
+    # bound slot, so setting both to `$x` constrains nothing and it matches --
+    # which the nested matcher does not do.
+    cs.append(Case(
+        "B3-same-slot-literal-two-binders",
+        [("f", ("lam", V0, V0), ("lam", V0, V0))], [],
+        [("p", "f", "a", "b"), ("a", "lam", "$x", "c"), ("b", "lam", "$x", "d")],
+        ("p", "h", "c", "d"),
+        [("f", ("lam", V0, V0), ("lam", V0, V0)), ("h", V0, V0), ("h", V0, V1)],
+    ))
+
+    # B4 -- the same, with the two binders over different bodies.
+    cs.append(Case(
+        "B4-same-slot-literal-different-bodies",
+        [("f", ("lam", V0, V0), ("lam", V0, ("f", V0, V1)))], [],
+        [("p", "f", "a", "b"), ("a", "lam", "$x", "c"), ("b", "lam", "$x", "d")],
+        ("p", "h", "c", "d"),
+        [("f", ("lam", V0, V0), ("lam", V0, ("f", V0, V1))),
+         ("h", V0, V0), ("h", V0, V1)],
+    ))
+
     return cs
 
 
@@ -601,20 +771,33 @@ def curated():
 def rand_term(rng, depth):
     if depth == 0 or rng.random() < 0.3:
         return rng.choice([("var", rng.randrange(3)), ("null",)])
+    if rng.random() < 0.2:
+        return ("lam", ("var", rng.randrange(3)), rand_term(rng, depth - 1))
     op = rng.choice(BINOPS)
     return (op, rand_term(rng, depth - 1), rand_term(rng, depth - 1))
 
 
-def flatten_to_atoms(t, ctr):
+def flatten_to_atoms(t, ctr, rng=None):
     """Flatten a term into depth-1 atoms with fresh pvars, so the resulting
     multipattern is guaranteed to match that term. Leaves become bare pvars,
     which is what a multipattern does with them anyway."""
     if t[0] in ("var", "null"):
         ctr[0] += 1
         return f"x{ctr[0]}", []
+    if t[0] == "lam":
+        pb, ab = flatten_to_atoms(t[2], ctr, rng)
+        ctr[0] += 1
+        root = f"x{ctr[0]}"
+        # a binder's slot must be a literal; reuse one sometimes, so that two
+        # binders written with the same slot get exercised
+        if rng is not None and rng.random() < 0.3:
+            sl = "$s0"
+        else:
+            sl = f"$s{ctr[0]}"
+        return root, ab + [(root, "lam", sl, pb)]
     op, a, b = t
-    pa, aa = flatten_to_atoms(a, ctr)
-    pb, ab = flatten_to_atoms(b, ctr)
+    pa, aa = flatten_to_atoms(a, ctr, rng)
+    pb, ab = flatten_to_atoms(b, ctr, rng)
     ctr[0] += 1
     root = f"x{ctr[0]}"
     return root, aa + ab + [(root, op, pa, pb)]
@@ -657,7 +840,7 @@ def rand_case(rng, i):
     # The pattern is read off a term that is actually in the e-graph, so it
     # matches by construction; then it is perturbed.
     seed_term = rng.choice(terms + [a for a, _ in unions])
-    _, atoms = flatten_to_atoms(seed_term, [0])
+    _, atoms = flatten_to_atoms(seed_term, [0], rng)
     if not atoms:
         atoms = [("r0", rng.choice(BINOPS), "u", "v")]
 
@@ -665,7 +848,8 @@ def rand_case(rng, i):
     # at all, and a case that never fires tests nothing. Half are left alone so
     # the sweep keeps a healthy share of firing cases.
     if rng.random() < 0.5:
-        pvs = sorted({v for at in atoms for v in (at[2], at[3])})
+        pvs = sorted({v for at in atoms for v in (at[2], at[3])
+                      if not v.startswith("$")})
         # identify two child pvars (tests repeated-variable semantics)
         if pvs and rng.random() < 0.5:
             keep, drop = rng.choice(pvs), rng.choice(pvs)
@@ -674,13 +858,16 @@ def rand_case(rng, i):
         # drop a trailing atom (leaves a pvar unconstrained)
         if len(atoms) > 1 and rng.random() < 0.3:
             atoms = atoms[:-1]
-        # swap an atom's children
-        if rng.random() < 0.4:
-            j = rng.randrange(len(atoms))
+        # swap an atom's children -- never a binder's, whose slot has to stay
+        # first: `(lam ?x $s)` is not valid syntax on the reference side.
+        swappable = [j for j, a in enumerate(atoms) if a[1] != "lam"]
+        if swappable and rng.random() < 0.4:
+            j = rng.choice(swappable)
             r, o, c1, c2 = atoms[j]
             atoms[j] = (r, o, c2, c1)
 
-    allv = sorted({v for at in atoms for v in (at[0], at[2], at[3])})
+    allv = sorted({v for at in atoms for v in (at[0], at[2], at[3])
+                   if not v.startswith("$")})
     # the action's root must be an atom root, so it is bound
     action = (atoms[-1][0], "h", rng.choice(allv), rng.choice(allv))
 
@@ -694,9 +881,14 @@ def main():
     args = sys.argv[1:]
     if args and args[0] == "show":
         # ./xdiff.py show <index> <seed> [perm...]  -- dump one fuzz case
-        i, seed = int(args[1]), int(args[2] if len(args) > 2 else 0)
-        rng = random.Random(seed)
-        case = [rand_case(rng, k) for k in range(i + 1)][i]
+        if not args[1].isdigit():
+            # a curated case, by name prefix
+            case = next(c for c in curated() if c.name.startswith(args[1]))
+            i = case.name
+        else:
+            i, seed = int(args[1]), int(args[2] if len(args) > 2 else 0)
+            rng = random.Random(seed)
+            case = [rand_case(rng, k) for k in range(i + 1)][i]
         order = [int(x) for x in args[3:]] or list(range(len(case.atoms)))
         atoms = [case.atoms[k] for k in order]
         print("=== spec ===")
@@ -722,6 +914,7 @@ def main():
         "timeout (excluded)": ["timeout"],
         "harness/crash": ["crashed"],
         "machinery baseline": ["BASELINE differs"],
+        "nondeterminism": ["nondeterministic"],
         "order dependence": ["order dependent"],
         "MATCHING mismatch": ["MISMATCH vs reference"],
     }

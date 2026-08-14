@@ -1,663 +1,429 @@
-# Encoding user rules into the slotted encoding
+# Compiling user rules into the slotted encoding
 
-Companion to `tests/slotted-egraph-encoding-11.egg` (the machinery) and
-`tests/slotted-user-rules.egg` (hand-encoded user rules, all runnable).
-See [Easy things to get wrong](#easy-things-to-get-wrong) for the design points
-an earlier draft of this encoding got backwards.
+Companion to three runnable files:
 
-Ground truth for the semantics is Schneider et al., *Slotted E-Graphs*, PLDI
-2025 ([PDF](https://steuwer.info/files/publications/2025/PLDI-Slotted-E-Graphs.pdf),
-[impl](https://github.com/memoryleak47/slotted-egraphs)) — in particular
-Definition 6 (equivalence of renamed ids), Definition 8 (which e-nodes a
-renamed id represents), §3.5 (`union`), and §3.6 (e-matching).
-
-## Notation
-
-This document uses the paper's names throughout. From §3.6, `match(p, m * a, β, mp)`:
-
-| symbol | paper's words |
+| file | what it is |
 | --- | --- |
-| `slots(a)` | the e-class's slots, `M[a].S` — "the free variables, or free slots, of this e-class" |
-| `m * a` | a **renamed id**: an e-class plus a renaming of its slots (the crate calls it an "invocation") |
-| `β` | "a substitution mapping from pattern variables to renamed ids" |
-| `mp` | "a renaming that maps the slots from the e-graph to the slots of the pattern" |
-| `mp′` | "the minimal renaming, s.t. `mp′ * f(nc)` matches `f(pc)`, and where `mp ∪ mp′` is a bijective renaming" |
-| `G(a)` | the e-class's permutation group, `M[a].G` |
-| `≡` | equivalence of renamed ids (Def. 6) |
+| `tests/slotted-egraph-encoding-11.egg` | the machinery: union, congruence, redundancy, symmetry |
+| `tests/slotted-user-rules.egg` | hand-encoded user rules, M1–M8 |
+| `slotted-experiments/xdiff/xdiff.py` | differential tests against the reference implementation |
 
-The only term added here is **initial atom**, for the atom matching starts
-from — the paper's `match` is "initially called with `β = mp = ∅`, and where
-`m` is the identity renaming from `slots(a)` to itself", and with a
-single-rooted pattern there is nothing to name. egglog rule bodies are
-conjunctive and multi-rooted, so there is a choice to make.
+Semantics come from Schneider et al., *Slotted E-Graphs*, PLDI 2025
+([PDF](https://steuwer.info/files/publications/2025/PLDI-Slotted-E-Graphs.pdf),
+[code](https://github.com/memoryleak47/slotted-egraphs)) — mainly Definition 6
+(when two invocations are equal), Definition 8 (which e-nodes an invocation
+stands for), §3.5 (union) and §3.6 (matching).
 
-Two facts about slots that everything below rests on. Slots are named *locally*
-to whatever owns them — `(Var 0)`'s `$0` and some `f` node's `$0` are unrelated
-names that happen to coincide — so the only way to relate one e-class's slots
-to another's is to write down a renaming. And the pattern has slots of its own:
-a match must carry every variable it binds into `slots(pattern)` before those
-variables can be compared or used.
+## Vocabulary
 
-## Conventions of the machinery file
+Only three terms are needed.
 
-| notation | meaning |
+A **slot** is a variable name. An e-class is parameterised by the slots of the
+terms it holds, so referring to one means saying what goes into each slot — an
+**invocation**, written `m*c` for a class `c` and a renaming `m`. (The paper calls
+this a *renamed id*; the Rust crate calls it an `AppliedId`.) A **renaming** is a
+one-to-one map between slots.
+
+Slot names are local. `(Var 0)`'s `$0` and some `f` node's `$0` are unrelated
+names that happen to look alike, so relating one class's slots to another's always
+means writing down a renaming.
+
+Notation used below:
+
+| | |
 | --- | --- |
-| `(compose a b)` | `a ∘ b` — `b` applies first: `(compose a b)[x] = a[b[x]]` |
-| `(App f m1 c1 m2 c2)` | `f(m1*c1, m2*c2)`; each `mi : slots(ci) → slots(node)` |
-| `(RenamesToLeader a m b)` | `a = m*b`, so `m : slots(b) → slots(a)` |
-| `(RenamesToLeader c m c)` | `m ∈ G(c)` — the group, materialised as self-loops |
-| `(find-mapping a1 … an b1 … bn)` | least `m` with `m ∘ bi = ai` for every `i`; fails if no injective `m` exists |
+| `(compose a b)` | `b` first: `(compose a b)[x] = a[b[x]]` |
+| `(App f m1 c1 m2 c2)` | the node `f(m1*c1, m2*c2)`; each `mi` maps its child's slots into the node's |
+| `(RenamesToLeader a m b)` | `a = m*b` |
+| `(RenamesToLeader c m c)` | `m` is a symmetry of `c` |
+| `(find-mapping a… b…)` | the least `m` with `m ∘ bi = ai`; fails if no one-to-one `m` exists |
 
-Note `compose`'s order is the *opposite* of `SlotMap::compose` in the Rust
-crate, which applies the receiver first.
+Note `compose` runs in the opposite order from `SlotMap::compose` in the crate.
 
-The self-loops are really an inverse monoid of partial injections rather than
-`G(c)` exactly: the idempotents (`m ∘ m = m`, i.e. partial identities) are how
-the machinery records *redundant* slots, and the "single parent for symmetries"
-rule shrinks every self-map down to the live slot set. On a saturated e-graph
-they are a group on the live slots, which is what makes the reasoning below
-work.
+Two facts about the machinery that matter later. A slotted e-class is **not** one
+egglog e-class: nodes equal up to renaming are linked by `RenamesToLeader` and one
+is deleted, so a slotted class is a set of `U` values sharing a leader. And every
+`(Var v)` collapses to `[0↦v] * (Var 0)`, so the leaves are one class, not many.
 
-## The model: a U-variable is a renamed id, not an e-class
+## The model
 
-This is the whole design in one sentence: **the compiled rule body computes the
-paper's `β` and `mp` explicitly.**
+**A rule variable is an invocation, not a class.** So a user variable `x`
+compiles to two egglog variables: the class `X`, and a renaming `mx` carrying
+`X`'s slots into the pattern's.
 
-`β` maps a pattern variable to a renamed id, so a user rule variable `x : U`
-compiles to *two* egglog variables — the leader `X : U` and a renaming
-`mx : slots(X) → slots(pattern)` — together standing for `β(x) = mx * X`.
+The pattern's slots are not invented. One atom is chosen as the **first atom**,
+its matched node's slots *are* the pattern's, and its own renaming is therefore
+the identity and never written down.
 
-`slots(pattern)` is not invented. We take one atom, the **initial atom**, and
-declare its matched node's slots to be the pattern's; its `mp` is then the
-identity and never has to be written down.
+## Compiling a rule body
 
-Everything else follows mechanically.
+**Step 1 — flatten.** Rewrite the left-hand side as depth-1 atoms
 
-## Compiling the body
+```text
+?v == (Op ?c1 ?c2)
+```
 
-First **flatten** the rule's LHS into depth-1 atoms `?v == (Op ?c1 ?c2)`, one
-per e-node, every child a bare pattern variable — the reference crate's
-`MultiPattern`, and the shape an egglog rule body already wants. Depth 0 is
-preprocessing and depth >1 flattens by naming intermediate nodes.
+one per e-node, every child a bare variable. This is `MultiPattern` in the crate,
+and it is already the shape of an egglog rule body, which is what makes the rest
+mechanical. `(f (g ?x) ?y)` becomes `?t == (f ?u ?y), ?u == (g ?x)`.
 
-Flattening is not meaning-preserving in general: a nested pattern is matched
-under one renaming for the whole pattern, a flattened one gets a renaming per
-atom, so a slot literal written both under a binder and outside it lets the
-binder escape. A flattener has to reject or rename those.
+Flattening is not always meaning-preserving: a nested pattern is matched under one
+renaming for the whole pattern, a flattened one gets a renaming per atom. A slot
+written both under a binder and outside it therefore means different things in the
+two forms, and the binder escapes. A flattener must reject or rename those.
 
-Then process the atoms in an order where each atom after the first shares a
-variable with the already-processed part. **This is a correctness condition, not
-a heuristic.** An atom sharing nothing has no constraint on its `mp`, so every
-slot it needs is *minted* — and a mint is a commitment the encoding cannot
-revisit. If a later atom then shows that a minted slot is really one the pattern
-had already named, the constraints conflict, `find-mapping` fails, and a match is
-lost. `multi_ematch` is immune: it keeps such a slot flexible and lets `unify`
-merge it later. `C12` in `xdiff.py` is the worked case, and `order_atoms` is the
-greedy reordering that avoids it.
+**Step 2 — order the atoms so each one shares a variable with the ones before
+it.** This is a correctness condition, not a heuristic. An atom sharing nothing
+has no constraint on its renaming, so every slot it needs is *invented* — and an
+invented slot cannot be revised later. If a following atom then shows that slot is
+really one the pattern already named, the two disagree and the match is lost.
+`order_atoms` in `xdiff.py` does the reordering; `C12` is the case that motivated
+it. A body no ordering can connect has to invent slots, and there the gap is real.
 
-A body that cannot be connected at all — no two atoms share a variable — has no
-such order, and then minting is unavoidable and the gap is real.
+**Step 3 — give each atom a renaming.** One rule:
 
-Each atom needs an `mp` carrying its node's slots into `slots(pattern)`. There is
-**one** rule for getting it, and it is worth stating before the three cases below,
-because reading them as three different shapes is what produced two of the bugs
-in the history at the end of this document:
+> An atom's renaming is the least renaming, total on its node's slots, agreeing
+> with **everything already known about that atom**: its root if an earlier atom
+> bound it, every child an earlier atom bound, and every slot literal an earlier
+> atom pinned. Collect them into a single `find-mapping-total`, whose avoid-set is
+> every slot named so far.
 
-> `mp` is the least renaming, total on the atom's node slots, consistent with
-> *every* constraint already available — the atom's root if it is already bound,
-> **and** every child an earlier atom already bound. Collect them all into one
-> `find-mapping-total`, whose avoid-set is every slot named so far.
+It is tempting to read this as three separate cases — first atom, root known,
+children known — and that reading caused three of the four bugs listed at the end.
+The cases are only *which* constraints happen to exist:
 
-The three cases are just which constraints happen to exist. The initial atom has
-none, so `mp` is the identity and it *defines* `slots(pattern)`. A chain atom
-knows its root. A join atom knows some children. An atom that knows both must use
-both — using only the root is the under-constrained mistake, and it is invisible
-until a node carries a redundant slot.
+* nothing known — the atom is first; its renaming is the identity and it defines
+  the pattern's slots;
+* root known — join `(RenamesToLeader V symV V)` and constrain by
+  `(compose mv symV)`;
+* children known — constrain by `(compose mx sym)` against the stored edge, with a
+  `(RenamesToLeader X sym X)` join per child.
 
-With that said, the three instances:
+An atom that knows several of these must use all of them.
 
-1. **Initial atom** — `mp = id`. Nothing is emitted; the children's stored edges
-   *are* their pattern-slot renamings.
-2. **Root already in `dom(β)`** — the atom's root variable is one `β` already
-   binds. This is the eta case: `b` is a child of atom 1 and the root of atom 2.
-   Then `mp = (compose mb symB)`, joining `(RenamesToLeader B symB B)`, i.e.
-   picking `symB ∈ G(B)`.
-3. **`mp` must be extended** — the atom's root is a variable seen for the first
-   time, so nothing yet relates its node's slots to the pattern's. This is the
-   paper's `mp′`: the minimal renaming making the node match, solved for through
-   the *children* the atom shares with `dom(β)`. With shared children `x_i` at
-   stored edges `p_i`, `mp′` is the least map with `mp′ ∘ p_i = mx_i ∘ sym_i`:
+**Step 4 — walk the children.** A child at stored edge `p` has candidate renaming
+`(compose mp p)`. If its variable is new, that *is* its renaming. If it is already
+bound, check the two agree.
 
-   ```text
-   (RenamesToLeader X1 sym1 X1)
-   (RenamesToLeader X2 sym2 X2)
-   (= mp' (find-mapping (compose mx1 sym1) (compose mx2 sym2) p1 p2))
-   ```
+## Checking that two occurrences agree
 
-   With one shared child, equivalently `(compose (compose mx1 sym1) (inverse p1))`.
-   `find-mapping`'s injectivity check is the paper's requirement that
-   `mp ∪ mp′` be bijective. M4 and M5 are the worked examples; M6 is what goes wrong when
-   `mp′` does not cover the whole node.
-
-Then walk the atom's children. A child at stored edge `p` has candidate
-renaming `(compose mp p)`. If its variable is not in `dom(β)`, that *is* its
-`mx` — `β` grows. If it is, emit the equivalence check.
-
-## The equivalence check
-
-This is the answer to "what does the query need to check". It is the second
-case of the paper's `match(x, m * a, β, mp)`: when `x ∈ dom(β)`, keep the match
-only if `β(x) ≡ m * a`. Definition 6, for two renamed ids of the same leader:
-
-> `m1 * c ≡ m2 * c`  iff  `m2⁻¹ ∘ m1 ∈ G(c)`
-
-Both renamings are bound by the time this runs, so the group element it would
-need is *determined*. Compute it and look it up — do not enumerate:
+This is the whole of what a repeated variable costs. Definition 6: two invocations
+of the same class are equal exactly when one renaming differs from the other by a
+symmetry of that class. Both renamings are known by the time this runs, so the
+symmetry it would need is *determined* — compute it and look it up:
 
 ```text
 (= sym (compose (inverse mx) (compose mp p)))
 (RenamesToLeader X sym X)
 ```
 
-`(RenamesToLeader X sym X)` with all three arguments bound is an existence
-check on an already-indexed relation, not a join that fans out over `G(X)`.
-The enumerate-then-compare spelling
+With all three arguments bound that is an index lookup, not a join. The
+enumerate-and-compare spelling means the same thing but makes the planner produce
+one row per symmetry and discard all but one:
 
 ```text
 (RenamesToLeader X sym X)
 (= (compose mp p) (compose mx sym))
 ```
 
-means the same thing and is what the machinery file's own rules use, but it
-makes the planner produce `|G(X)|` candidate rows per match and discard all but
-one. `tests/slotted-user-rules.egg` M2 runs both and checks they agree,
-including on the case that needs a real swap.
+`M2` runs both and checks they agree, including on a case needing a real swap.
 
-The two can only diverge if the computed `sym` comes out *shorter* than `mx`
-(when `im(mp ∘ p) ⊄ im(mx)`, composition truncates) and that shorter map happens
-to be a recorded self-loop. The machinery's shrinking rule keeps every self-map
-at the live slot set, so on a saturated e-graph there is only one domain in play
-and no shorter map to hit. Add `(= (map-length sym) (map-length mx))` if you
-want that independent of saturation.
+**Neither may be weakened to `(= (compose mp p) mx)`.** Equality of renamings is
+strictly weaker than equality of invocations, and the difference shows: `M2(c)`
+matches `f(?x, ?x)` against `f(a[$0,$1], a[$1,$0])` where `a` is symmetric. The two
+occurrences *are* the same invocation, the symmetry-aware rule fires, and the naive
+one does not. The machinery will not normalise the two edges to be equal either, so
+this is not a case you can pre-process away.
 
-What you cannot drop is the group *membership test*: that is Definition 6. What
-you drop is the enumeration.
+## Symmetry joins: where they are needed
 
-*Neither* form may be weakened to `(= (compose mp p) mx)`. Syntactic equality of
-renamings is strictly weaker than `≡`, and the difference is observable.
-M2(c) matches `f(x, x)` against `f(a[$0,$1], a[$1,$0])` where `a` is symmetric:
-the two occurrences of `x` *are* the same renamed id, the `≡`-aware rule fires,
-and the `NaiveHit` witness relation stays empty. The machinery will not rewrite
-the node so the two edges become equal — the child-update rule explicitly
-excludes non-idempotent self-maps — so this is not a case you can normalise away
-first.
+Matching in the paper considers every node an invocation stands for, including all
+symmetry-permuted variants. The encoding stores one variant per orbit, so those
+have to be regenerated. The claim is that regenerating them where occurrences are
+checked suffices:
 
-### Extending `mp` is the exception
+> Every occurrence of a variable after the first costs one symmetry lookup. The
+> first occurrence costs nothing.
 
-Case 3 above looks like the same check, and it is — but it cannot be demoted to
-a lookup, because there `mp′` is the *unknown*. Every shared variable
-contributes part of it as well as constraining it, and until the last one is in,
-`mp′` is still partial: `(compose mp' p)` for a not-yet-covered child truncates
-to something meaningless, so there is nothing to compute a group element from.
-That is why all the pairs go into one `find-mapping`, and why its `sym_i` are
-genuinely enumerated.
+The first occurrence is free because binding `mx` pre-composed with a symmetry
+just reparameterises every later constraint by it. The first atom needs no join,
+because permuting its root relabels the pattern's slots, and the action is built
+in pattern slots, so the result is an α-variant the machinery identifies anyway.
+Variables used once need no join for the same reason.
 
-M4 makes this concrete. `TooEager` there builds `mp′` from `x` alone and then
-probes `y` against it; on M4(a) — `f(v[$0], v[$1])` against `g(v[$0], v[$1])` —
-`im(p2)` is only `{$0}`, `mp′` never reaches `$1`, and the match is silently
-lost. On M4(c) the same demotion happens to work, because there `im(p2)` covers
-all of the node's slots. Whether `mp′` is already total is a property of the
-data, not of the rule, so a compiler cannot rely on it.
-
-The general shape, then: **a group element is a lookup when the renamings on
-both sides are known, and an enumeration when one of them is being solved for.**
-
-`find-mapping` fails when the constraints disagree or when the result is not
-injective. M4(b) is the negative: `f(x,y)` against `g(x,x)` admits no `mp′`.
-
-## Where group joins are needed, and where they are not
-
-The paper's `match` unions over every e-node *represented by* the renamed id
-(Def. 8), which includes all group-permuted variants. The reference
-implementation does this explicitly in `get_group_compatible_weak_variants`.
-The encoding stores only one variant per orbit — the α-finder deletes the
-others and records the symmetry — so those variants must be regenerated.
-
-The claim is that regenerating them where `≡` is checked is enough:
-
-> **Every occurrence of a U-variable after the first contributes one `G` lookup
-> and one constraint. The first occurrence contributes neither.**
-
-* *First occurrence is free.* Binding `mx := (compose mp p) ∘ σ` instead of
-  `(compose mp p)` just reparameterises every later constraint by `σ`, and
-  `σ ∘ G(X) = G(X)`.
-* *The initial atom needs no join.* A group element of its root relabels
-  `slots(pattern)` by a bijection; since the action is built entirely in pattern
-  slots, the result is an α-variant, which the machinery identifies anyway.
-* *An atom that extends `mp` needs no separate `G(root)` join.* `mp′` is pinned
-  on `⋃ im(p_i)` by the constraints, and the valid `mp′` are enumerated exactly
-  by the `sym_i`. Applying a root permutation afterwards either breaks a
-  constraint or reproduces an `mp′` already enumerated.
-* *Variables used only once need no join*, because differing by a group element
-  produces an α-variant of the action's output.
-
-In practice `G(X)` is trivial, and `≡` checks are lookups rather than joins
-(above), so the only real fan-out left is the `sym_i` of case 3.
-
-The one place this reasoning leans on an assumption is the group-ness of the
-self-loops: with a non-invertible idempotent in the monoid, `σ ∘ G = G` can fail
-and "first occurrence is free" would need re-checking. Saturation should
-restrict self-maps to live slots, making them a group, but that is worth
-verifying.
+This leans on the self-loops forming a group on the live slots. They are really an
+inverse monoid: the idempotents are how redundant slots are recorded. On a
+saturated e-graph the shrinking rule restricts them to live slots, which is what
+makes the argument work — worth checking if that ever changes.
 
 ## Actions
 
-Each U-variable at a child position in the action uses its `mx`. New nodes are
-built in pattern slots.
+Each variable at a child position uses its renaming. New nodes are built in
+pattern slots.
 
-`union` needs care. The paper's `union` takes *renamed ids* — §3.5 is
-`union(m1 * a1, m2 * a2)`, and which of redundancy, a new group element, or an
-e-class merge it produces depends on those renamings. egglog's `union` takes
-e-classes, i.e. only the case where both renamings are the identity. So:
+**`union` is only correct at the identity.** The paper's union takes invocations,
+and whether it produces a redundancy, a new symmetry, or a class merge depends on
+their renamings. egglog's `union` takes classes, i.e. only the case where both
+renamings are the identity. So:
 
-* both operands at the identity → plain `(union A B)`;
-* otherwise → insert the `RenamesToLeader` fact directly:
+* the action's root is the first atom's root → plain `(union A B)` is fine;
+* anywhere else → build the node and insert the fact instead:
 
   ```text
-  ;; user:  (union e x)   with  e at the identity, x at mx
-  (RenamesToLeader E mx X)
+  (let _hn (App "h" ma A mb B))
+  (RenamesToLeader _hn mp_root Root)
   ```
 
-  The machinery's transitivity / single-parent rules re-orient it, and the
-  `MISC` rule promotes it to a real `union` once the renaming turns out to be an
-  identity. M2 and M7 both need this; M8 states it as a relation.
+  The machinery re-orients it, and promotes it to a real union if the renaming
+  turns out to be an identity.
 
-So the surface language wants an action that takes renamed ids, or the encoder
-has to synthesise the `RenamesToLeader` insert itself.
+**Getting this wrong is silent**, which is why it is stated twice. A plain
+`(union root built)` asserts an equation whose renamings are both the identity.
+When the root's renaming is not, the equation is simply false — it merges two
+distinct pattern slots — and the e-graph absorbs it as a redundancy rather than
+complaining. `C11` is the case: a root renaming of `{$0↦$3, $2↦$2}` drove
+`(Var 0)` from one live slot to none, after which every edge was emptied and
+`h(x,y)` collapsed with `h(x,x)`. Two things make it hard to spot: the built node
+is *correct*, so inspecting it tells you nothing; and an edge-width check misses it
+because the children's classes go slotless too and the widths agree again.
 
-The same gap shows up outside rules, for plain input terms. A `U` value is an
-e-*node*, not an invocation, so a bare leaf has nowhere to carry its slot:
-`(var $0)` and `(var $2)` both encode as `(Var 0)`, and `union (var $0) (var $2)`
-— which in the reference makes the variable class slotless, collapsing every
-`h(var, var)` — becomes a no-op. Slots inside a compound term ride in the stored
-edges and survive; only a top-level leaf loses them. Writing such a union needs
-the `RenamesToLeader` form too, here as a self-loop on the variable class.
+Restricting the built node to the root's slot space instead — composing each child
+renaming through `inverse mp_root` — is also sound, but needs a totality guard and
+then declines to fire on cases the fact-insert handles.
 
-**Getting the rule case wrong is silent.** A plain
-`(union root built)` asserts an equation whose two renamings are the identity.
-When the root's renaming is not the identity, that equation is simply *false* —
-it conflates two distinct pattern slots — and the e-graph absorbs it as spurious
-redundancy rather than complaining. `C11` in `xdiff.py` is the worked case: a
-root renaming of `{$0↦$3, $2↦$2}` drove `(Var 0)` from one live slot to none,
-after which child-update emptied every edge and `h(x,y)` collapsed with
-`h(x,x)`. Two things about the failure are worth remembering:
+The same gap appears for plain input terms. A `U` value is a node, not an
+invocation, so a bare leaf has nowhere to carry its slot: `(var $0)` and
+`(var $2)` both encode as `(Var 0)`, and `union (var $0) (var $2)` — which makes
+the variable class slotless in the reference, collapsing every `h(var, var)` —
+becomes a no-op. Slots inside a compound term ride in the stored edges and
+survive; only a top-level leaf loses them.
 
-* the built node was *correct* — the corruption was entirely in how it was
-  attached, so inspecting the action's output tells you nothing;
-* an edge-width check does not catch it, because the children's classes go
-  slotless too and the widths agree again by the end.
+## Slots the constraints never reach
 
-The safe rule for a compiler: emit `union` **only** when the action's root is the
-initial atom's root, whose `mp` is the identity by construction. Anywhere else,
-emit the `RenamesToLeader` fact. Restricting the built node to the root's slot
-space instead (composing every child renaming through `inverse mp_root`) is also
-sound, but it needs a totality guard and then declines to fire on cases the
-`RenamesToLeader` form handles.
+`find-mapping` returns the *least* renaming, so a node slot outside the
+constraints gets no name, and dropping a slot leaves an edge narrower than its
+child's slot set, which Definition 4 forbids. The paper's §3.6 handles this by
+picking any fresh slot; the crate does it in `enodes_applied`, so it never has an
+unnamed slot to drop.
 
-## Fresh slots
-
-`find-mapping` gives the *minimal* `mp′`, exactly as Definition 8 asks, so a
-slot of the node outside `⋃ im(p_i)` gets no name in `slots(pattern)`. The paper
-covers this in the last line of §3.6 — a redundant or bound slot would stand for
-infinitely many e-nodes, but "for the purpose of this algorithm, it suffices to
-pick any fresh slot for them". A `Renaming` is only a map, so minimal `mp′`
-silently *drops* the slot, leaving an edge whose domain is smaller than its
-child's slot set — which Definition 4 forbids.
-
-M6 is the worked case. For
-
-```text
-(rule ((= p (App "f" x y)) (= q (App "g" x z))) ((union p (App "h" y z))))
-```
-
-with `p = f(v[$0], v[$1])` and `q = g(v[$0], v[$5])`, minimal `mp′` is `{$0↦$0}`,
-`z`'s renaming comes out empty, and the action builds `h(y, z)` with an empty
-edge to `z`.
-
-**What to measure.** Not "did `p` lose a slot?" — that assertion does not
-isolate the bug. `f(x,y) = h(y,z)` genuinely says `f` does not depend on `x`, so
-`p` losing `$0` is the correct reading of the rule and happens in the fixed
-version too. The narrow observable is the malformed edge; M6's `BadEdge`
-relation witnesses it directly, and that is what separates the two.
-
-`find-mapping-total` closes the gap: same constraints and same injectivity check
-as `find-mapping`, plus a fresh name for every domain slot the constraints leave
-unnamed.
+`find-mapping-total` ports that: same constraints and same one-to-one check as
+`find-mapping`, plus a fresh name for every domain slot left unnamed.
 
 ```text
 (find-mapping-total avoid domain first… second…)
 ```
 
-`domain`'s keys are the slots the result must cover and `avoid`'s slots are the
-ones it may not mint over; both are identity maps the caller already has, since
-`(find-mapping p1 p2 p1 p2)` is the identity on a node's slots. Minted slots go
-strictly above everything mentioned, so the result stays injective and cannot
-collide with a slot in play. Any deterministic choice works, because differing
-choices produce α-variants that the machinery identifies anyway.
+`domain`'s keys are the slots the result must cover, `avoid`'s slots are the ones
+it may not reuse. Both are identity maps the caller already has, since
+`(find-mapping p1 p2 p1 p2)` is the identity on a node's slots. New slots go
+strictly above everything mentioned, so the result stays one-to-one. Any
+deterministic choice works, because different choices give α-variants that the
+machinery identifies.
 
-The sound-but-incomplete alternative is still worth knowing, since it needs no
-primitive: guard every action-used variable with
-`(= (map-length (compose mp' p)) (map-length p))`. M6(b) shows the rule then
-declines to fire in the bad case and still fires in the good one. `≡` checks are
-self-guarding already, since a dropped slot changes the domain and breaks the
-equation.
+**The avoid-set must accumulate.** The primitive is pure and sees one atom at a
+time, so passing only the first atom's slots lets two inventing atoms pick the
+same slot. Thread a running union: `compose m (inverse m)` is the identity on
+`m`'s image, and identity maps never conflict under `map-union`, so the union is
+always defined.
 
-The same gap in its extreme form: a body whose atoms share *no* variable gives
-no constraint on `mp′` at all, so that node's slots are named entirely by
-minting. Rules whose RHS introduces a binder (eta-expansion) need this too.
+The alternative, if you would rather not invent slots: guard every variable the
+action uses with `(= (map-length (compose mp p)) (map-length p))`. Sound but
+incomplete — `M6(b)` shows the rule declining to fire in the bad case and still
+firing in the good one. Occurrence checks are self-guarding already, since a
+dropped slot changes the domain and breaks the equation.
 
-## Fidelity to `multi_ematch`
+## What the differential tests cover
 
-Differentially tested against the reference implementation
-(`slotted-experiments/xmulti` runs the oracle; `tests/slotted-multipat-diff.egg`
-runs the encoded form).
+`xdiff.py` builds a case, runs it through the reference (`xmulti`, which drives the
+crate directly) and through a compiled egglog rule, and compares which probe terms
+end up equal. Per case it checks three things:
 
-The uniform rule stated under [Compiling the body](#compiling-the-body) is what
-this section established: treating the three cases as three shapes, and deriving a
-chain atom's `mp` from its root alone, is under-constrained exactly when the node
-carries slots the root's renaming does not cover — redundant slots. The atom then
-names those slots independently of an earlier atom that already named the same
-ones, and the repeated variable's `≡` check fails.
+1. **baseline** — with no rule at all both sides must already agree, so a
+   difference is attributed to matching rather than to the machinery;
+2. **agreement** — the compiled rule against the reference;
+3. **determinism** — the same program twice must give the same answer, checked
+   separately so it cannot be mistaken for the next one;
+4. **order independence** — the answer must not change when the atoms are compiled
+   in a *different* order, which moves which atom is first and hence every slot.
 
-Two cases pin it. Both use `add(zero, zero)` over nodes with a redundant slot,
-with `?u` written in two atoms so its occurrences must be identified.
+```text
+./xdiff.py              the curated cases
+./xdiff.py fuzz 250 7   250 random cases, seed 7
+./xdiff.py show C11     dump one case: spec, both answers, compiled rule
+./xdiff.py show 61 555  the same, for a random case
+```
 
-* **R1**, both atoms over the *same* node — agrees under either spelling, but by
-  coincidence: `find-mapping-total` is a pure function, both atoms hand it the
-  same arguments, so it returns the same minted slot. Determinism stands in for
-  unification, which is why R1 alone would not have caught this.
-* **R2**, two *different* nodes with redundant slots named `$9` and `$7` —
-  root-only mints `$10` and `$8` and loses the match (reference 1, encoding 0).
-  Folding `?u`'s known renaming in as a constraint pins atom 3 to `$10` and the
-  reference's match comes back.
+Touching the generator renumbers every random case, since they share one RNG
+stream — so a failing index does not reproduce across a generator change. Copy an
+interesting case into `curated()` before changing anything, which is where `C11`
+and `C12` came from.
 
-"Extending `mp` is the exception" understates it — extension is the *general*
-case, and initial/chain are just the instances with no constraints and with
-root-only constraints respectively.
-
-Worth being clear about what this is **not**: not a limit of egglog, and not a
-missing merge step. Solving for a renaming *is* construction, and a constraint
-computed in an earlier atom threads into a later one as an ordinary value, so
-purity is no obstacle. What genuinely cannot move into a primitive is the group
-membership test, since a primitive cannot query the database —
-`(RenamesToLeader c sym c)` stays an egglog join, and it is also where the
-nondeterminism `unify` gets from branching has to come from.
-
-### What the sweep found
-
-`slotted-experiments/xdiff/xdiff.py` generates cases, compiles each
-multipattern, runs both sides, and compares the probe partition. Results:
-
-Current state, `fuzz 300 90210` plus the curated corpus:
+Current state:
 
 | | |
 | --- | --- |
-| cases agreeing | **298/300**, and **12/12** curated |
-| matching divergence | 0 |
+| curated | 20/20 agree, 16 of them firing |
+| random | 250 cases, seed 777 |
+| matching differences | 0 |
 | order dependence | 0 |
-| machinery difference | 0 |
-| timeouts (excluded) | 2 |
-| cases where the rule fired | 61/300 |
+| machinery differences | 0 |
 
-Read the last row before trusting the first: a case where the rule never fires
-says nothing about matching, so the harness always reports it.
+**Read the firing count before the agreement count.** A case whose rule never
+fires says nothing about matching, and random patterns mostly do not fire, so the
+harness always reports how many did. Getting that number up was most of the work
+of making the sweep mean anything: it went 1/53 → 21/141 → 61/300 as the generator
+learned to read patterns off terms that are actually in the e-graph.
 
-Getting there took fixing four real bugs and three of the harness's own. The
-history is worth keeping, because every one of them was silent:
+Curated cases, and what each is for:
+
+| | |
+| --- | --- |
+| `C1`–`C10` | repeated variables, chains, joins, symmetry, redundancy, three-atom bodies |
+| `C11` | the action must not use `union` off the identity |
+| `C12` | atoms must be compiled in a connected order |
+| `P1`,`P2` | ported: a node's distinct slots may not be merged, with and without redundancy |
+| `B1`–`B4` | binders: chaining through one, α-equivalence, the same slot literal on two binders |
+
+### Ported from the crate's own suite, and what is not
+
+`P1` and `P2` are `regress::same_node_redundant_slots_stay_distinct` and
+`live_slots_of_one_class_stay_distinct`. `B3` is
+`known_bugs::lambda_bug_reaches_the_goal_under_multipat`.
+
+Not ported, with the reason:
+
+* **`?q == (var $s)` atoms** (`slot_literal_over_redundancy`, and the eta tests) —
+  the encoding has no `var` *node* to match. `(Var 0)` is a leaf class and the slot
+  lives in the parent's edge, so there is no atom to write.
+* **`known_bugs::bug2` / `bug3`** — they need three rules interleaved to
+  saturation, and the harness runs one rule per case.
+* **`props.rs` slot-renaming invariance** — the generator does not shift every
+  slot in a program yet. Worth adding.
+* **`refine.rs`** — both sides are incomplete in the same way, so there is nothing
+  to compare; the crate marks them `#[ignore]` for the same reason.
+* **`flattening_is_not_faithful_for_a_sibling_slot_literal`** — it compares nested
+  against flattened matching *inside* the crate, and the encoding has no nested
+  matcher to compare against.
+
+### Not covered
+
+* **Symmetry branching.** Matching in the crate can return several results where a
+  primitive returns one. No generated case has forced the difference.
+* **Other action shapes.** Only `union ?root (h ?a ?b)` is generated. Nothing
+  exercises a union of two non-identity invocations, which egglog's `union` cannot
+  express at all.
+* **Cost.** Roughly 1 in 150 generated e-graphs makes the machinery run for tens
+  of seconds on input the reference finishes instantly. Wrong-cost, not
+  wrong-answer, and now the only category the sweep reports — but worth profiling
+  before this is used on anything large.
+
+## Mistakes worth not repeating
+
+Each of these was silent, and each cost a round of confusion.
 
 **In the encoding**
 
-* *The action unioned e-classes instead of renamed ids.* See Actions above. An
-  unsoundness, and the source of the only order dependence found.
-* *Each atom's `mp` was solved from its root alone.* Under-constrained whenever
-  the node carries slots the root's renaming does not cover, i.e. redundant
-  slots. Fixed by the uniform rule above.
-* *Atoms were compiled in the order written.* An atom sharing no variable with
-  the prefix mints slots it cannot later revise, which loses matches — `C12`.
-  Fixed by `order_atoms`.
-* *Minted slots could collide across atoms.* `find-mapping-total` is pure and
-  sees one atom at a time, so passing only the initial atom's slots as the
-  avoid-set let two minting atoms pick the same slot. The compiler now threads a
-  running avoid-set — `compose m (inverse m)` is the identity on `im(m)`, and
-  identity maps never conflict under `map-union`, so the union is always defined.
-  This is the concrete answer to what the avoid-set has to contain.
+* *`union` in an action off the identity renaming* — asserts a false equation,
+  absorbed as a spurious redundancy. `C11`.
+* *An atom's renaming solved from its root alone* — under-constrained as soon as a
+  node carries a redundant slot.
+* *Atoms compiled in the order written* — an unconnected atom invents slots it
+  cannot revise, and loses matches. `C12`.
+* *A slot literal checked after the renaming was solved* — same failure: two
+  binders written with the same slot each invent their own, then cannot agree.
+  Constrain with it, do not check against it.
+* *Invented slots colliding across atoms* — the avoid-set has to accumulate.
+* *Argument order.* The renaming comes *before* each child:
+  `(App String Renaming U Renaming U)`, `(RenamesToLeader U Renaming U)`.
+* *Child rewrite direction.* It is `(compose m1 m)`, not
+  `(compose r_i (inverse R))`.
+* *A variable reached two ways does not compile to `(= path_i path_j)`.* That is
+  equality of renamings; it has to be the symmetry lookup above.
+* *A head is not special.* A variable used as both a constructor head and a child
+  is just a variable with two occurrences.
 
-**In the harness** — worth reading before writing another one:
+**In the test harness**
 
-* *A slotted e-class is not an egglog e-class* (see below).
-* *`eg.eq` is not e-class identity* (see below).
-* *A bare leaf at top level loses its slot*, so `union (var $0) (var $2)` became
-  a no-op. This one alone accounted for **every** apparent machinery divergence:
-  13 of 200 before the fix, 0 after.
+* *A slotted e-class is not an egglog e-class.* Grouping probes by egglog class is
+  strictly finer and reports differences that are not there.
+* *`eg.eq` is not class identity.* It compares invocations, so it depends on which
+  slot names survive a redundancy.
+* *A bare leaf at top level loses its slot.* This alone accounted for every
+  apparent machinery difference: 13 of 200 before the fix, 0 after.
+* *An operator can be named differently on the two sides.* The machinery's
+  α-equivalence rule is written against the literal string `"lambda"`, so a rule
+  compiled for `"lam"` silently matches nothing.
 
-Over the earlier 150-case run, before those fixes, where 21 of 141 usable cases
-fired:
+## Cost
 
-* **One unsoundness, and it is also the one order dependence.** Kept as curated
-  case `C11`. The encoding derives `h(x,y) = h(x,x)`; the reference refuses, and
-  is right to — Def. 8 makes each lookup's renaming injective, so a node with two
-  distinct slots can never represent `h(x,x)`
-  (`regress::same_node_redundant_slots_stay_distinct` in the crate).
-
-  The reference builds `h` over two distinct slots and keeps the probes apart.
-  The encoding ends up with exactly **one** `h` node, **both edges empty**, and
-  its class carrying no slots, so both probes collapse into it. That is a dropped
-  slot again — the same family as the fresh-slot gap above, but reached through
-  the *action* rather than through `find-mapping`. A `BadEdge`-style width check
-  does **not** catch it: by the end the children's classes have gone slotless
-  too, so the widths agree.
-
-  The order dependence is consistent with the cause: `C11` has two atoms sharing
-  no variable, so one of them mints, and which slot space it mints into depends
-  on which atom went first.
-* **Order independence otherwise holds**, across every permutation of every other
-  multi-atom case. Minting made the compilation order-sensitive by construction,
-  so this was expected to break much more widely than it did.
-* **No other matching divergence** in any case where the machinery agreed.
-* **The machinery under-merges.** Nine of 150 differ with no user rule at all,
-  always in the direction of the encoding deriving *fewer* equalities. Traced in
-  one case to leaf-class redundancy: `union (var $0) (var $2)` makes the variable
-  class slotless, so in the crate every `h(var, var)` collapses into one class;
-  the encoding does not propagate that. Incompleteness rather than unsoundness,
-  and outside matching.
-
-### Two ways to measure this wrong
-
-Both cost a round of false findings, so they are worth stating:
-
-1. **A slotted e-class is not an egglog e-class.** The α-finder relates
-   equal-up-to-renaming nodes with `RenamesToLeader` and *deletes* one rather
-   than unioning them, so a slotted class is a set of `U` values sharing a
-   leader. Grouping probes by egglog e-class is strictly finer and reports
-   differences that are not there.
-2. **`eg.eq` is not e-class identity.** It is equality of *renamed ids*, so it
-   depends on which slot names the invocation carries: after a redundancy two
-   probe terms can sit in one class while naming different surviving slots, and
-   `eg.eq` calls those unequal. Use it deliberately, not as "are these the same".
-
-### Still unverified
-
-1. **Coverage.** A case where the rule never fires tests nothing about matching,
-   and random patterns mostly do not fire; the harness reports the firing count
-   for exactly this reason. Read the "of those had the rule actually change the
-   partition" line before believing an agreement count.
-2. **Branching.** `unify` returns *several* states; a primitive returns one. The
-   claim that enumerating `G` through `RenamesToLeader` covers the difference is
-   still just a claim — no generated case has forced it.
-3. **Actions.** Only one action shape is generated (`union ?root (h ?a ?b)`).
-   Nothing exercises `union` over two non-identity renamings, which is the case
-   egglog's `union` cannot express at all.
-
-## Unresolved: self-edges are derived from nodes
-
-Flagging this as an open question, not a fixed bug — the evidence is thinner
-than it first looked.
-
-Two rules derive a self-edge from a node's own edges (`find-mapping m1 m1' m1
-m1'`, the identity on the node's slots). Redundancy is *defined* as a node
-keeping slots its class has dropped (Def. 4: slots in `im(m)` but not in `S`),
-so under redundancy those rules state something false about the class. The
-shrinking rule deletes the too-wide identity, but only once — semi-naive never
-re-runs a derivation on an already-consumed `App` row — so the saturated state
-is not a fixpoint of its own rules.
-
-It reproduces in eight lines. `(Null)` has no slots — that is asserted, not
-derived — yet a monotone observer catches it transiently carrying a two-slot
-identity:
-
-```text
-(relation SymSeen (U Renaming))
-(rule ((RenamesToLeader c m c)) ((SymSeen c m)))
-
-(let $f (App "f" (map-insert (map-empty) 0 0) (Var 0)
-                 (map-insert (map-empty) 1 1) (Var 1)))
-(union $f (Null))                        ; both of $f's slots go redundant
-(run-schedule (saturate (run)))
-
-(check      (SymSeen (Null) (map-empty)))
-(fail (check (SymSeen (Null) m) (!= m (map-empty))))   ; fails: {$0↦$0,$1↦$1}
-```
-
-Note the machinery's own Case 13 asserts the same thing about the *end* state
-and passes — the wide identity is deleted by then. The two differ only in
-whether they can see inside the phase.
-
-**Why it probably does not matter.** Two things came out of trying to turn this
-into a wrong answer, and both cut against acting on it:
-
-* A too-wide identity is *inert*. Every consumer of `RenamesToLeader c sym c`
-  uses `sym` by composing it with an edge, and once child-update has narrowed
-  the edges to the live slots, `compose edge wide == compose edge narrow`. Seven
-  scenarios — re-triggering the derivation after saturation, parents built
-  before the redundancy, fresh α-equivalent rows, interacting redundancies, the
-  M4 glue rule over a redundant shared variable — all came out byte-identical.
-* **Phasing hides it entirely.** The wide edge is only observable by a rule
-  co-scheduled with maintenance. Introduce the observer *after* the maintenance
-  phase and the check above passes, because `saturate`
-  runs to fixpoint and the shrinking rule wins by the end of every phase. So if
-  user rules run only at phase boundaries, this cannot reach them.
-
-A candidate fix exists — `LiveId`, a function whose merge intersects, so
-re-deriving a wider identity is absorbed instead of having to be deleted — but
-it is not recommended on this evidence and is not part of this change.
-
-What is worth carrying into a rewrite is the shape of the mistake, not the
-patch: **don't derive a class-level fact from a node**, and prefer a merge that
-can only move one way over two rules that derive-and-delete against each other.
-The machinery has other derive/delete pairs (the α-finder deletes `App` rows,
-single-parent deletes `RenamesToLeader` rows) that I have not examined.
-
-## Cost sketch
-
-Per rule, relative to a non-slotted encoding: one extra `Renaming` column per
-child position in every atom; one fully-bound `RenamesToLeader` *lookup* per
-repeated-variable occurrence; one `find-mapping` per atom that extends `mp`,
-with a `RenamesToLeader` *join* per variable it is constrained through; and one
-totality guard per action-used variable. Only the joins fan out, and
-`RenamesToLeader` is small — usually one self-loop per e-class.
-
-Measured caveat: a small fraction of generated e-graphs (roughly 1 in 200) make
-the machinery run for tens of seconds on inputs the reference finishes instantly,
-so `xdiff.py` bounds every run and reports those separately. They are wrong-cost,
-not wrong-answer, but they are the only category the sweep still reports and are
-worth profiling before this encoding is used on anything large.
-
-## Easy things to get wrong
-
-An earlier draft of this encoding (`slotted-encoding.md`, kept out of the
-branch as historical) got each of the following wrong. They are the places
-where a plausible reading of the design diverges from what the machinery
-actually does, so they are worth stating positively:
-
-* **Argument order.** The renaming comes *before* each child, not after:
-  `(App String Renaming U Renaming U)` and `(RenamesToLeader U Renaming U)`.
-* **Child rewrite direction.** It is `(compose m1 m)`, not
-  `(compose r_i (inverse R))` — the inverse is wrong given
-  `RenamesToLeader c1 m c'` meaning `c1 = m*c'`.
-* **Leaves.** Every `(Var v)` collapses to `[0↦v] * (Var 0)` and the original
-  is deleted — the leaves are not kept as distinct e-classes with pair rules
-  between them.
-* **The group is load-bearing.** An α-finder, migration, or child-rewrite rule
-  written without a `G` join cannot see α-equivalences that hold only through a
-  child's symmetry.
-* **Rule compilation.** A variable reached by two paths does *not* compile to
-  `(= path_i path_j)`. That is equality of renamings, not `≡`; it has to be
-  `(= path_i (compose path_j sym))` with a `G` join, or the lookup form above.
-* **`(union e x)`.** Without a union over renamed ids, any rule equating
-  `m1 * a1` with `m2 * a2` for non-identity renamings is inexpressible.
-* **A head is not special.** A variable used as both a constructor head and a
-  child is just a variable with two occurrences, so it takes the same `≡` check
-  as any other repeat — no separate head-identity synthesis is needed.
+Per rule, against a non-slotted encoding: one extra `Renaming` column per child
+position per atom; one fully-bound `RenamesToLeader` *lookup* per repeated
+occurrence; one `find-mapping-total` per atom, with a `RenamesToLeader` *join* per
+variable it is constrained through. Only the joins fan out, and `RenamesToLeader`
+is small — usually one self-loop per class.
 
 ## Primitives
 
-The machinery file did not run in this tree: `compose`, `inverse`,
-`find-mapping` and `bool=` did not exist, and `and` was binary while the file
-uses it variadically. They are ported from
-[`memoryleak47/egglog@slotted-encoding2`](https://github.com/memoryleak47/egglog/tree/slotted-encoding2)
-— same names and semantics, rewritten against this tree's `add_primitive!`
-macro instead of hand-rolled `Primitive` impls.
+Ported from
+[`memoryleak47/egglog@slotted-encoding2`](https://github.com/memoryleak47/egglog/tree/slotted-encoding2),
+rewritten against this tree's `add_primitive!`:
 
 * `egglog/src/sort/map.rs`
-  * `map-union` — partial-map union for any `Map`, fails on a conflicting key.
-  * `compose` — `(compose a b)[x] = a[b[x]]`; explicit partial maps, so a
-    missing key means "no mapping", not identity.
-  * `inverse` (also `map-inverse`) — total, matching upstream: a repeated value
-    keeps the last key. Only meaningful on injective input, which is all the
-    encoding ever builds. Making it fail instead changes no behaviour in any
-    test here, so the port keeps upstream's.
-  * `find-mapping` — variadic, taking the two tuples flat as
-    `[first…, second…]`; returns the least `R` with `R ∘ second[i] = first[i]`.
-    Strict: a paired `(first[i], second[i])` must carry exactly the same key
-    set, and `R` must come out functional and injective.
-  * `find-mapping-total` — `find-mapping` extended to be total on a domain,
-    minting fresh slots for the keys the constraints leave unnamed. Takes
-    `[avoid, domain, first…, second…]`. Registered only for `Map i64 i64`,
-    since minting needs the slot space ordered and unbounded above.
+  * `map-union` — partial-map union, fails on a conflicting key.
+  * `compose` — `(compose a b)[x] = a[b[x]]`; explicit partial maps, so a missing
+    key means "no mapping", not "identity".
+  * `inverse` (also `map-inverse`) — total, matching upstream; only meaningful on
+    one-to-one input, which is all the encoding builds.
+  * `find-mapping` — variadic, taking the two tuples flat as `[first…, second…]`.
+    Strict: a paired `(first[i], second[i])` must carry the same key set, and the
+    result must come out functional and one-to-one. That one-to-one check is
+    load-bearing — it is what keeps `k($50,$50)` and `k($50,$60)` apart.
+  * `find-mapping-total` — as above, extended to be total on a domain, inventing
+    slots for the keys the constraints leave unnamed. `Map i64 i64` only, since
+    inventing a slot needs the space ordered and unbounded above.
 * `egglog/src/lib.rs` — `bool=`.
 * `egglog/src/sort/bool.rs` — `and` made variadic, like `or`.
 
-The three renaming primitives are registered only when the key and value sorts
-coincide, and deliberately **not** listed in `reserved_primitives`: reserving
-`compose` breaks `egglog/tests/tricky-type-checking.egg`, which declares
-`(constructor compose (TERM TERM) TERM)`. Registration happens when a `Map`
-sort is created, so a program that never declares one keeps the names.
+The renaming primitives are registered only when the key and value sorts match,
+and deliberately not reserved: reserving `compose` breaks
+`egglog/tests/tricky-type-checking.egg`, which declares its own.
 
-The injectivity check in `find-mapping` is load-bearing: it is what makes the
-machinery's negative case 4 (`k($50,$50)` vs `k($50,$60)`) stay separate.
-
-Not ported from that branch: `shape2` (canonical slot numbering — no consumer
-here yet), `has_delta` (a stub whose comparison is `false // TODO`), and the
-`Vec i64` flavour of `find-mapping` (a different renaming representation).
+Not ported: `shape2` (no consumer here), `has_delta` (a stub), and the `Vec i64`
+flavour of `find-mapping` (a different representation).
 
 ## Open questions
 
-1. **Which slots `avoid` must contain.** `find-mapping-total` takes the
-   avoid-set from its caller, and the rules here pass `slots(pattern)`. That is
-   enough for one atom; a rule that mints in two different atoms should probably
-   avoid the union of everything minted so far, which the current spelling does
-   not thread through.
-2. **Choice of initial atom.** Any atom can be it; the choice determines which
-   atoms have to extend `mp`, hence how many `find-mapping`s and how early the
-   query is constrained. Probably worth choosing the atom with the most shared
-   variables, or leaving it to the query planner.
-3. **Verify or construct?** See [Fidelity to `multi_ematch`](#fidelity-to-multi_ematch)
-   — differential testing found the encoding strictly less complete. The
-   remaining sub-question is whether the "one `G` lookup per later occurrence"
-   claim is complete *given* a merge step; the argument for it is informal and
-   rests on the self-loops being a group on live slots.
-4. **Redundant slots in `slots(pattern)`.** The pattern's slots are the initial
-   atom's *node* slots, which may include slots the *e-class* has already made
-   redundant (Def. 8's `m'' ⊇ m'`). That falls out for free here, but it means
-   `slots(pattern)` is not always a subset of the initial e-class's live slots —
-   check nothing downstream assumes otherwise.
+1. **Choice of first atom.** Any atom can be it, and the choice decides how many
+   atoms have to solve for a renaming. Probably pick the one with the most shared
+   variables, or leave it to the query planner.
+2. **Are self-edges derived from nodes a problem?** Two machinery rules derive a
+   class-level self-edge from a node's own edges. Under redundancy that states
+   something false about the class, and although the shrinking rule deletes the
+   too-wide identity, semi-naive never re-runs the derivation, so the saturated
+   state is not a fixpoint of its own rules. It reproduces in eight lines:
+
+   ```text
+   (relation SymSeen (U Renaming))
+   (rule ((RenamesToLeader c m c)) ((SymSeen c m)))
+
+   (let $f (App "f" (map-insert (map-empty) 0 0) (Var 0)
+                    (map-insert (map-empty) 1 1) (Var 1)))
+   (union $f (Null))
+   (run-schedule (saturate (run)))
+
+   (check      (SymSeen (Null) (map-empty)))
+   (fail (check (SymSeen (Null) m) (!= m (map-empty))))   ; fails
+   ```
+
+   Probably harmless: a too-wide identity is inert, because every consumer
+   composes it with an edge and the edges have already been narrowed. It is also
+   only visible to a rule co-scheduled with maintenance, so user rules running at
+   phase boundaries cannot see it. The lesson to carry forward is the shape of the
+   mistake — **do not derive a class-level fact from a node** — and to prefer a
+   merge that can only move one way over two rules that derive and delete against
+   each other.
+3. **Redundant slots in the pattern's slots.** The pattern's slots are the first
+   atom's *node* slots, which may include slots the class has already made
+   redundant. That falls out for free, but it means the pattern's slots are not
+   always a subset of the class's live slots — check nothing downstream assumes
+   otherwise.

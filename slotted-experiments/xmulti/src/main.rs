@@ -24,6 +24,9 @@ define_language! {
     pub enum L {
         Var(Slot) = "var",
         Null() = "null",
+        // The machinery encodes this as `(App "lambda" {0->x} (Var 0) mb body)`,
+        // so the bound slot rides in the first child's edge on that side.
+        Lam(Bind<AppliedId>) = "lam",
         F(AppliedId, AppliedId) = "f",
         G(AppliedId, AppliedId) = "g",
         H(AppliedId, AppliedId) = "h",
@@ -71,10 +74,18 @@ fn parse_spec(src: &str) -> Spec {
             }
             // `?p == (op ?c1 ?c2)` is rebuilt from the four names, so the
             // generator does not have to agree on pattern syntax.
+            // A child written `$v` is a slot literal and goes through as-is; a
+            // binder's slot must be one, since `Bind` has no room for a pattern
+            // variable there.
             "atom" => {
                 let w: Vec<&str> = rest.split_whitespace().collect();
-                s.atoms
-                    .push(format!("?{} == ({} ?{} ?{})", w[0], w[1], w[2], w[3]));
+                let kid = |c: &str| {
+                    if c.starts_with('$') { c.to_string() } else { format!("?{c}") }
+                };
+                s.atoms.push(format!(
+                    "?{} == ({} {} {})",
+                    w[0], w[1], kid(w[2]), kid(w[3])
+                ));
             }
             "action" => {
                 let w: Vec<&str> = rest.split_whitespace().collect();
