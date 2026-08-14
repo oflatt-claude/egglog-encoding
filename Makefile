@@ -77,11 +77,8 @@ benchmark-smoke:
 		'from pathlib import Path; import sys; from benchmarking.reports.store import ReportStore; assert ReportStore(Path(sys.argv[1])).row_count > 0' \
 		"$(BENCHMARK_SMOKE_REPORT)"
 
-# Benchmark each treatment in nightly_bench.py's TREATMENTS on this checkout and
-# on main into nightly/output/index.jsonl, rendering eval-live's interactive
-# report beside it. The egraphs-good nightly service (nightly.cs.washington.edu)
-# runs this target and serves that directory, matching `report=` in the nightly
-# configuration.
+# Publish nightly/output/ for the egraphs-good nightly service
+# (nightly.cs.washington.edu), which runs this target and serves that directory.
 nightly: nightly-uv nightly-rustup
 	CARGO_HOME="$(CARGO_HOME_DIR)" $(NIGHTLY_UV) run --locked python scripts/nightly_bench.py
 

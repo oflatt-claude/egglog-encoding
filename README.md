@@ -373,8 +373,7 @@ sharing it.
 
 `make nightly` benchmarks each treatment in `TREATMENTS` — `term`, `proofs`,
 and `proof-extraction` — on the current checkout and on the latest `main`,
-accumulating them all in `nightly/output/index.jsonl` and rendering the
-interactive page beside it as `nightly/output/index.html`:
+writing `nightly/output/index.jsonl` and the interactive page beside it:
 
 ```bash
 make nightly
@@ -389,14 +388,8 @@ endpoint that fails to build or run drops one dropdown option rather than
 failing the run. Edit `TARGETS` and `TREATMENTS` in `scripts/nightly_bench.py`
 to change what is measured.
 
-The published `index.jsonl` is the cache the run measured into, not a copy of
-the shared `.reports.jsonl`, so the served page and the rows behind it always
-belong to the same run. Both published names are deleted before measuring
-starts: report JSONL is a disposable cache with no migrations, so rows an
-earlier run appended — under an older schema version, on a host that keeps its
-checkout between runs — would otherwise fail every `bench.py` invocation
-instead of being recomputed. A run that fails therefore publishes no page,
-rather than leaving the previous one up to make a broken nightly look healthy.
+Each run replaces both published files, so `index.jsonl` is the cache that run
+measured into and a failed run publishes no page.
 
 `make nightly-local` is the same run at `--rounds 1`, for trying the whole
 pipeline out without waiting for a full nightly.

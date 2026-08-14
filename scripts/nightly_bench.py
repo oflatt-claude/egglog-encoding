@@ -1,30 +1,10 @@
 #!/usr/bin/env python3
 """Generate the egglog-encoding nightly benchmark webpage.
 
-Runs the public benchmark entrypoint (``bench.py``) once per treatment and
-target, on the current checkout and on the latest ``main``, accumulating every
-endpoint in a report cache this run owns. eval-live's interactive report
-discovers its dropdown from every cached endpoint, so the page can compare any
-two of them — including branch against main. Each endpoint is labelled by target
-(``branch`` / ``main``) and commit hash, so it is clear which commit each side
-is.
-
-That cache is ``nightly/output/index.jsonl`` itself, so the nightly server
-serves the run's rows next to the page they render. Each run deletes what it
-publishes before measuring: report JSONL is a disposable cache with no
-migrations, so rows an earlier run wrote under another schema version would
-fail every ``bench.py`` invocation rather than be recomputed.
-
-The last run writes the page beside that cache. A failed run therefore
-publishes no page rather than leaving the previous one up, which is what kept a
-broken nightly looking healthy.
-
-The egraphs-good nightly service (``nightly.cs.washington.edu``) checks out this
-repository, runs ``make nightly``, and serves that directory, matching
-``report=`` in the nightly configuration.
-
-``nightly/`` is git-ignored, so this runs the same way locally as it does on the
-host. ``make nightly-local`` is that run at ``--rounds 1``.
+Runs ``bench.py`` once per target and treatment into ``<output_dir>/index.jsonl``,
+then re-renders that cache as the interactive page beside it. Both files are
+replaced each run, so the cache never outlives the schema version that wrote it
+and a failed run publishes no page.
 """
 
 from __future__ import annotations
@@ -44,8 +24,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 BENCH_SCRIPT = REPO_ROOT / "bench.py"
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "nightly" / "output"
 
-# The published names. bench.py writes the page next to the report cache it is
-# given, deriving index.html from index.jsonl.
+# bench.py derives the page name from the cache name, so these two must match.
 REPORT_NAME = "index.jsonl"
 PAGE_NAME = "index.html"
 
