@@ -300,6 +300,46 @@ The same gap in its extreme form: a body whose atoms share *no* variable gives
 no constraint on `mp′` at all, so that node's slots are named entirely by
 minting. Rules whose RHS introduces a binder (eta-expansion) need this too.
 
+## Fidelity to `multi_ematch`
+
+Differentially tested against the reference implementation
+(`slotted-experiments/xmulti` runs the oracle; `tests/slotted-multipat-diff.egg`
+runs the encoded form). **The encoding is strictly less complete**, and the
+reason is structural rather than a missing case:
+
+> `multi_ematch` mints a fresh slot per *lookup* and lets `unify` **merge** two
+> of them when a repeated variable demands it. The encoding has no merge step —
+> `find-mapping` is injective by construction, so it never identifies two node
+> slots, and the Def. 6 check is a lookup. **It can only verify a slot equality,
+> never construct one.**
+
+Two cases pin the boundary. Both use `sub($9,$9) = zero` and `add(zero, zero)`,
+with `?u` written in two atoms so its two occurrences must be identified.
+
+* **R1**, both atoms over the *same* node — agrees, 1 match each side. But by
+  coincidence: `find-mapping-total` is a pure function, both atoms hand it the
+  same arguments, so it returns the same minted slot. Determinism is standing in
+  for unification.
+* **R2**, two *different* nodes with redundant slots named `$9` and `$7` — the
+  atoms mint `$10` and `$8`, the Def. 6 check fails, and the match the reference
+  finds is lost. Reference 1, encoding 0.
+
+So `find-mapping-total` closes the fresh-slot gap (an edge no longer loses a
+slot) without closing this one. Closing it needs what a merge needs: a slot
+union-find threaded through the rule body, solving for identifications across
+atoms. That is a stateful Rust side-condition carried between atoms, not another
+pure map primitive — and it is close to what `MultiState` is in the crate.
+
+The part that cannot move into Rust is the group membership test, since a
+primitive cannot query the database; `(RenamesToLeader c sym c)` has to stay an
+egglog join. So a faithful encoding is a hybrid: slot unification in Rust,
+group membership in egglog.
+
+Not yet tested: everything else. The corpus is two cases, chosen to probe one
+predicted divergence. Random differential testing over generated e-graphs and
+patterns is the obvious next step, and the crate ships the generator half of it
+in `tests/multipat/fuzz.rs`.
+
 ## Unresolved: self-edges are derived from nodes
 
 Flagging this as an open question, not a fixed bug — the evidence is thinner
@@ -447,9 +487,11 @@ here yet), `has_delta` (a stub whose comparison is `false // TODO`), and the
    atoms have to extend `mp`, hence how many `find-mapping`s and how early the
    query is constrained. Probably worth choosing the atom with the most shared
    variables, or leaving it to the query planner.
-3. **Is the "one `G` lookup per later occurrence" claim actually complete?** The
-   argument above is informal and rests on the self-loops being a group on live
-   slots. Worth a differential test against the `slotted-egraphs` crate.
+3. **Verify or construct?** See [Fidelity to `multi_ematch`](#fidelity-to-multi_ematch)
+   — differential testing found the encoding strictly less complete. The
+   remaining sub-question is whether the "one `G` lookup per later occurrence"
+   claim is complete *given* a merge step; the argument for it is informal and
+   rests on the self-loops being a group on live slots.
 4. **Redundant slots in `slots(pattern)`.** The pattern's slots are the initial
    atom's *node* slots, which may include slots the *e-class* has already made
    redundant (Def. 8's `m'' ⊇ m'`). That falls out for free here, but it means
