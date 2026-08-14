@@ -12,3 +12,5 @@
 __pycache__/
 *.py[cod]
 slotted-experiments/output.egg
+xdiff-tmp.egg
+xdiff-run.log

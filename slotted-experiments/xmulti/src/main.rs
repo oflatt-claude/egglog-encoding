@@ -1,60 +1,193 @@
-//! Oracle for differential-testing the egglog slotted encoding's multipattern
-//! matching against the reference `slotted-egraphs` implementation.
+//! Reference oracle for differential-testing the egglog slotted encoding's
+//! multipattern matching against `slotted-egraphs`.
 //!
-//! Prints, per case, how many matches `multi_ematch` finds and what each
-//! substitution binds, so the encoded rule can be diffed against it.
+//! Reads a spec on stdin and prints one `PARTITION <groups>` line: the probe
+//! terms grouped by the e-graph's own equality after saturating the given rule.
+//! The encoding side runs the same spec and the two lines are compared.
+//!
+//! Spec lines (`#` comments and blanks ignored):
+//!
+//! ```text
+//! term   <sexpr>              add a term
+//! union  <sexpr> <sexpr>      union two terms
+//! atom   <root> <op> <c1> <c2>    one depth-1 multipattern atom (pvar names)
+//! action <root> <op> <a> <b>  union ?root with (op ?a ?b)
+//! probe  <sexpr>              term to include in the reported partition
+//! rounds <n>                  saturation rounds (default 10)
+//! ```
 
 use slotted_egraphs::*;
+use std::collections::BTreeSet;
+use std::io::Read;
 
 define_language! {
-    pub enum MP {
+    pub enum L {
         Var(Slot) = "var",
-        Add(AppliedId, AppliedId) = "add",
+        Null() = "null",
+        F(AppliedId, AppliedId) = "f",
+        G(AppliedId, AppliedId) = "g",
+        H(AppliedId, AppliedId) = "h",
+        K(AppliedId, AppliedId) = "k",
         Sub(AppliedId, AppliedId) = "sub",
         Sub2(AppliedId, AppliedId) = "sub2",
-        Zero() = "zero",
+        Add(AppliedId, AppliedId) = "add",
     }
 }
 
-type G = EGraph<MP>;
+type G = EGraph<L>;
+
+struct Spec {
+    terms: Vec<String>,
+    unions: Vec<(String, String)>,
+    atoms: Vec<String>,
+    action: Option<(String, String, String, String)>,
+    probes: Vec<String>,
+    rounds: usize,
+}
+
+fn parse_spec(src: &str) -> Spec {
+    let mut s = Spec {
+        terms: vec![],
+        unions: vec![],
+        atoms: vec![],
+        action: None,
+        probes: vec![],
+        rounds: 10,
+    };
+    for line in src.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let (kind, rest) = line.split_once(char::is_whitespace).unwrap_or((line, ""));
+        let rest = rest.trim();
+        match kind {
+            "term" => s.terms.push(rest.to_string()),
+            "probe" => s.probes.push(rest.to_string()),
+            "rounds" => s.rounds = rest.parse().unwrap(),
+            "union" => {
+                let (a, b) = split_two_sexprs(rest);
+                s.unions.push((a, b));
+            }
+            // `?p == (op ?c1 ?c2)` is rebuilt from the four names, so the
+            // generator does not have to agree on pattern syntax.
+            "atom" => {
+                let w: Vec<&str> = rest.split_whitespace().collect();
+                s.atoms
+                    .push(format!("?{} == ({} ?{} ?{})", w[0], w[1], w[2], w[3]));
+            }
+            "action" => {
+                let w: Vec<&str> = rest.split_whitespace().collect();
+                s.action = Some((
+                    w[0].to_string(),
+                    w[1].to_string(),
+                    w[2].to_string(),
+                    w[3].to_string(),
+                ));
+            }
+            other => panic!("unknown spec line kind: {other}"),
+        }
+    }
+    s
+}
+
+/// Split `"<sexpr> <sexpr>"` at the top-level boundary between the two.
+fn split_two_sexprs(s: &str) -> (String, String) {
+    let mut depth = 0i32;
+    for (i, ch) in s.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return (s[..=i].trim().to_string(), s[i + 1..].trim().to_string());
+                }
+            }
+            ' ' if depth == 0 && i > 0 => {
+                return (s[..i].trim().to_string(), s[i + 1..].trim().to_string());
+            }
+            _ => {}
+        }
+    }
+    panic!("cannot split two s-exprs from {s:?}");
+}
 
 fn add(eg: &mut G, s: &str) -> AppliedId {
-    eg.add_expr(RecExpr::<MP>::parse(s).unwrap())
-}
-
-fn probe(eg: &G, p: &str) {
-    let pat: MultiPattern<MP> = MultiPattern::parse(p).unwrap();
-    let ms = multi_ematch(&pat, eg);
-    println!("  {:>2} match   `{}`", ms.len(), p);
-    for s in &ms {
-        let mut ks: Vec<&String> = s.keys().collect();
-        ks.sort();
-        let body: Vec<String> = ks.iter().map(|k| format!("?{k}={:?}", s[*k])).collect();
-        println!("        {}", body.join("  "));
-    }
+    eg.add_expr(RecExpr::<L>::parse(s).unwrap())
 }
 
 fn main() {
-    // R1: one node with a redundant slot, reached through two atoms.
-    let mut eg = G::default();
-    let s = add(&mut eg, "(sub (var $9) (var $9))");
-    let z = add(&mut eg, "zero");
-    eg.union(&s, &z);
-    add(&mut eg, "(add zero zero)");
-    println!("R1: same node through both atoms");
-    probe(&eg, "?p == (add ?a ?b), ?a == (sub ?u ?u), ?b == (sub ?u ?u)");
+    let mut src = String::new();
+    std::io::stdin().read_to_string(&mut src).unwrap();
+    let spec = parse_spec(&src);
 
-    // R2: two DIFFERENT nodes, each with its own redundant slot, named
-    // differently. `?u` in both atoms forces the two to be identified.
     let mut eg = G::default();
-    let s1 = add(&mut eg, "(sub (var $9) (var $9))");
-    let z = add(&mut eg, "zero");
-    eg.union(&s1, &z);
-    let s2 = add(&mut eg, "(sub2 (var $7) (var $7))");
-    eg.union(&s2, &z);
-    add(&mut eg, "(add zero zero)");
-    println!("R2: two different nodes, ?u forced equal across them");
-    probe(&eg, "?p == (add ?a ?b), ?a == (sub ?u ?u), ?b == (sub2 ?u ?u)");
-    println!("R2 control: distinct pvars");
-    probe(&eg, "?p == (add ?a ?b), ?a == (sub ?u ?u), ?b == (sub2 ?v ?v)");
+    for t in &spec.terms {
+        add(&mut eg, t);
+    }
+    for (a, b) in &spec.unions {
+        let x = add(&mut eg, a);
+        let y = add(&mut eg, b);
+        eg.union(&x, &y);
+    }
+    for p in &spec.probes {
+        add(&mut eg, p);
+    }
+
+    if !spec.atoms.is_empty() {
+        if let Some((root, op, a, b)) = &spec.action {
+            let pat: MultiPattern<L> = MultiPattern::parse(&spec.atoms.join(", ")).unwrap();
+            let from = Pattern::PVar(root.clone());
+            let to: Pattern<L> = Pattern::parse(&format!("({op} ?{a} ?{b})")).unwrap();
+            for _ in 0..spec.rounds {
+                let before = eg.progress();
+                for s in multi_ematch(&pat, &eg) {
+                    eg.union_instantiations(&from, &to, &s, None);
+                }
+                if before == eg.progress() {
+                    break;
+                }
+            }
+        }
+    }
+
+    println!("PARTITION {}", partition(&eg, &spec.probes));
+}
+
+/// Probe indices grouped by the e-graph's equality, as a canonical string.
+fn partition(eg: &G, probes: &[String]) -> String {
+    let ids: Vec<Option<AppliedId>> = probes
+        .iter()
+        .map(|p| lookup_rec_expr(&RecExpr::<L>::parse(p).unwrap(), eg))
+        .collect();
+
+    let mut groups: Vec<BTreeSet<usize>> = Vec::new();
+    let mut missing: Vec<usize> = Vec::new();
+    for i in 0..probes.len() {
+        let Some(a) = &ids[i] else {
+            missing.push(i);
+            continue;
+        };
+        let mut placed = false;
+        for g in groups.iter_mut() {
+            let j = *g.iter().next().unwrap();
+            if eg.eq(a, ids[j].as_ref().unwrap()) {
+                g.insert(i);
+                placed = true;
+                break;
+            }
+        }
+        if !placed {
+            groups.push([i].into_iter().collect());
+        }
+    }
+    let mut gs: Vec<String> = groups
+        .iter()
+        .map(|g| {
+            let v: Vec<String> = g.iter().map(|i| i.to_string()).collect();
+            format!("[{}]", v.join(","))
+        })
+        .collect();
+    gs.sort();
+    format!("{} missing[{:?}]", gs.join(""), missing)
 }
