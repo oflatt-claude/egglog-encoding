@@ -22,6 +22,7 @@ Usage:
 """
 
 import itertools
+import os
 import random
 import subprocess
 import sys
@@ -41,6 +42,15 @@ PERM_CAP = 4
 # Some generated e-graphs blow the machinery up, so every run is bounded and a
 # timeout is reported as its own category rather than stalling the sweep.
 RUN_TIMEOUT = 25
+
+# Past bugs, re-introducible so the corpus can be checked for still catching
+# them. A bug nothing fails under is a bug that could come back unnoticed.
+#   XDIFF_BUGS=root-only   an atom's renaming solved from its root alone
+#   XDIFF_BUGS=slot-late   a slot literal checked after the renaming, not with it
+#   XDIFF_BUGS=unordered   atoms compiled in the order written
+#   XDIFF_BUGS=binder-1st  the first atom is allowed to be a binder
+#   XDIFF_BUGS=union-id    the action unions classes instead of invocations
+BUGS = {b for b in os.environ.get("XDIFF_BUGS", "").split(",") if b}
 
 # ---------------------------------------------------------------- neutral terms
 # term := ('var', n) | ('null',) | (op, t1, t2)
@@ -153,8 +163,11 @@ def order_atoms(atoms):
     preference is kept, since callers vary the first atom deliberately.
     """
     atoms = list(atoms)
-    first = next((j for j, a in enumerate(atoms) if a[1] != "lam"), 0)
-    atoms = [atoms[first]] + atoms[:first] + atoms[first + 1:]
+    if "unordered" in BUGS:
+        return atoms
+    if "binder-1st" not in BUGS:
+        first = next((j for j, a in enumerate(atoms) if a[1] != "lam"), 0)
+        atoms = [atoms[first]] + atoms[:first] + atoms[first + 1:]
 
     rest = list(atoms[1:])
     out = [atoms[0]]
@@ -226,6 +239,8 @@ def compile_rule(atoms, action):
         for cp, e in ((c1, e1), (c2, e2)):
             if cp.startswith("$"):
                 continue
+            if "root-only" in BUGS:
+                continue
             if cp in bound_before:
                 mx = mp_of[cp]
                 sym = fresh("sym")
@@ -238,7 +253,7 @@ def compile_rule(atoms, action):
         # too late -- mp would already have minted a different slot for the same
         # binder, and nothing can revise a mint.
         for cp, e in ((c1, e1), (c2, e2)):
-            if cp.startswith("$") and cp in slot_of:
+            if cp.startswith("$") and cp in slot_of and "slot-late" not in BUGS:
                 firsts.append(f"(map-insert (map-empty) 0 {slot_of[cp]})")
                 seconds.append(e)
 
@@ -325,10 +340,14 @@ def compile_rule(atoms, action):
     # both renamings are the identity). Insert the RenamesToLeader fact instead
     # and let the machinery's transitivity / single-parent rules re-orient it.
     mr = mp_of[root]
-    act = (
-        f'(let _hn (App "{enc_op(op)}" {mp_of[a]} {cls_of[a]} {mp_of[b]} {cls_of[b]}))\n'
-        f"       (RenamesToLeader _hn {mr} {cls_of[root]})"
-    )
+    if "union-id" in BUGS:
+        act = (f'(union {cls_of[root]} (App "{enc_op(op)}" '
+               f"{mp_of[a]} {cls_of[a]} {mp_of[b]} {cls_of[b]}))")
+    else:
+        act = (
+            f'(let _hn (App "{enc_op(op)}" {mp_of[a]} {cls_of[a]} {mp_of[b]} {cls_of[b]}))\n'
+            f"       (RenamesToLeader _hn {mr} {cls_of[root]})"
+        )
     return "(rule (" + "\n       ".join(body) + f")\n      ({act}))"
 
 
@@ -743,6 +762,26 @@ def curated():
         [("k", V0, V1), ("h", V0, V0), ("h", V0, V1)],
     ))
 
+    # C14 -- regression for `union-id`, found by mutation testing after C11
+    # stopped catching it. The action's root is a CHILD variable, so its renaming
+    # is the stored edge {$0 -> $2} rather than the identity, and unioning
+    # classes instead of invocations asserts a different equation.
+    #
+    # C11 was the original witness for this and no longer discriminates: after
+    # minting changed to smallest-unused, C11's root renaming came out as the
+    # identity, where the two spellings agree. Kept as a lesson -- a case written
+    # against one policy can quietly stop testing what it was written for.
+    cs.append(Case(
+        "C14-action-root-with-a-nonidentity-renaming",
+        [("f", V2, NUL), ("k", V2, NUL)],
+        [(("g", V1, NUL), ("k", NUL, V0))],
+        [("x3", "f", "x1", "x2")],
+        ("x1", "h", "x3", "x2"),
+        [("f", V2, NUL), ("k", V2, NUL), ("g", V1, NUL),
+         ("h", V0, V1), ("h", V0, V0), NUL, V0],
+        rounds=6,
+    ))
+
     # ---- symmetries ----------------------------------------------------------
     # The encoding keeps a class's symmetries as self-loops in RenamesToLeader,
     # and a repeated variable is checked by computing the symmetry it would need
@@ -936,8 +975,11 @@ def rand_case(rng, i):
 
     allv = sorted({v for at in atoms for v in (at[0], at[2], at[3])
                    if not v.startswith("$")})
-    # the action's root must be an atom root, so it is bound
-    action = (atoms[-1][0], "h", rng.choice(allv), rng.choice(allv))
+    # Any bound variable can be the action's root, and it matters which: an atom
+    # ROOT often has the identity for its renaming, so an action rooted there
+    # cannot tell a union of classes from a union of invocations. A CHILD's
+    # renaming is its stored edge, which generally is not the identity.
+    action = (rng.choice(allv), "h", rng.choice(allv), rng.choice(allv))
 
     probes = terms + [a for a, _ in unions] + [
         ("h", V0, V1), ("h", V0, V0), ("null",), ("var", 0)]

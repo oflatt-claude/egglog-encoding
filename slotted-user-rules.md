@@ -322,6 +322,7 @@ Curated cases, and what each is for:
 | `C11` | the action must not use `union` off the identity |
 | `C12` | atoms must be compiled in a connected order |
 | `C13` | the first atom must not be a binder |
+| `C14` | the action's root may carry a non-identity renaming (replaces `C11`) |
 | `P1`,`P2` | ported: a node's distinct slots may not be merged, with and without redundancy |
 | `S1`,`S1b` | the stored symmetries are closed, so a lookup finds a composite element |
 | `S2` | a symmetry and a redundancy in play at once |
@@ -347,6 +348,36 @@ Not ported, with the reason:
 * **`flattening_is_not_faithful_for_a_sibling_slot_literal`** — it compares nested
   against flattened matching *inside* the crate, and the encoding has no nested
   matcher to compare against.
+
+### Checking that the tests still test something
+
+Each past bug can be put back with `XDIFF_BUGS=`, and the corpus is expected to
+notice:
+
+```text
+XDIFF_BUGS=root-only  ./xdiff.py     an atom's renaming from its root alone
+XDIFF_BUGS=slot-late  ./xdiff.py     a slot literal checked after the renaming
+XDIFF_BUGS=unordered  ./xdiff.py     atoms compiled in the order written
+XDIFF_BUGS=binder-1st ./xdiff.py     the first atom may be a binder
+XDIFF_BUGS=union-id   ./xdiff.py     the action unions classes, not invocations
+```
+
+This is worth having because **coverage decays silently**. Changing minting to
+smallest-unused made two cases stop testing what they were written for: `R2` in
+`tests/slotted-multipat-diff.egg` and, worse, `C11` — the witness for the only
+unsoundness found — because under the new policy their root renamings come out as
+the identity, where the right and wrong spellings agree. For a while nothing
+anywhere caught `union-id`. `C14` replaces it, with the action rooted at a *child*
+variable so its renaming is a stored edge rather than the identity.
+
+Finding `C14` also exposed a blind spot in the generator: it only ever rooted the
+action at an atom root, and those usually carry the identity, so the whole
+class-versus-invocation distinction went unexercised. Rooting the action at any
+bound variable finds witnesses immediately.
+
+Two bugs are still caught only *indirectly*, by the order-independence check
+rather than by disagreeing with the reference: `root-only` (via `C11`) and
+`binder-1st` (via `C13`). Direct witnesses for those would be better.
 
 ### Not covered
 
@@ -396,6 +427,12 @@ Each of these was silent, and each cost a round of confusion.
 * *An operator can be named differently on the two sides.* The machinery's
   α-equivalence rule is written against the literal string `"lambda"`, so a rule
   compiled for `"lam"` silently matches nothing.
+* *A regression case can stop being one.* Changing the minting policy left `C11`
+  and `R2` passing whether or not the bug they were written for was present. Put
+  the bug back and check the test fails — `XDIFF_BUGS=` exists for that.
+* *A generator's defaults are part of its coverage.* Rooting every action at an
+  atom root meant the action's renaming was almost always the identity, so nothing
+  exercised the difference between unioning classes and unioning invocations.
 
 ## Cost
 
