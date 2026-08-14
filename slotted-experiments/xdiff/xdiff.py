@@ -56,6 +56,15 @@ BUGS = {b for b in os.environ.get("XDIFF_BUGS", "").split(",") if b}
 # ground: XDIFF_LAM=0.55
 LAM_PROB = float(os.environ.get("XDIFF_LAM", "0.2"))
 
+# How symmetries reach the primitives.
+#   per-use    (default) a fresh symmetry joined at each place one is needed, and
+#              a repeated occurrence checked by computing the symmetry it would
+#              need and looking that up
+#   per-class  one symmetry joined per e-class and reused everywhere that class's
+#              renaming is used, with repeated occurrences checked by comparing
+#              against it rather than by a determined lookup
+SYM_SCHEME = os.environ.get("XDIFF_SYM", "per-use")
+
 # ---------------------------------------------------------------- neutral terms
 # term := ('var', n) | ('null',) | (op, t1, t2)
 
@@ -258,7 +267,23 @@ def compile_rule(atoms, action):
     mp_of = {}      # pvar -> egglog var holding its renaming into slots(pattern)
     cls_of = {}     # pvar -> egglog var holding its leader
     slot_of = {}    # "$v" -> egglog i64 var holding that pattern slot
+    sym_of = {}     # pvar -> its symmetry variable, under `per-class`
     pat = None      # identity on slots(pattern)
+
+    def sym_for(pvar):
+        """A symmetry of `pvar`'s class, joined from RenamesToLeader.
+
+        Under `per-class` one is joined per class and shared by every use, so all
+        uses must agree on it. Under `per-use` each place gets its own, so they
+        may differ.
+        """
+        if SYM_SCHEME == "per-class" and pvar in sym_of:
+            return sym_of[pvar]
+        sv = fresh("sym")
+        body.append(f"(RenamesToLeader {cls_of[pvar]} {sv} {cls_of[pvar]})")
+        if SYM_SCHEME == "per-class":
+            sym_of[pvar] = sv
+        return sv
 
     for idx, (root, op, c1, c2) in enumerate(atoms):
         e1, e2 = fresh("p"), fresh("p")
@@ -281,8 +306,7 @@ def compile_rule(atoms, action):
         # the root, if an earlier atom already named its slots
         if root in mp_of:
             mv = mp_of[root]
-            sym = fresh("sym")
-            body.append(f"(RenamesToLeader {rv} {sym} {rv})")
+            sym = sym_for(root)
             firsts.append(f"(compose {mv} {sym})")
             seconds.append(f"(compose (inverse {mv}) {mv})")
 
@@ -295,8 +319,7 @@ def compile_rule(atoms, action):
                 continue
             if cp in bound_before:
                 mx = mp_of[cp]
-                sym = fresh("sym")
-                body.append(f"(RenamesToLeader {cls_of[cp]} {sym} {cls_of[cp]})")
+                sym = sym_for(cp)
                 firsts.append(f"(compose {mx} {sym})")
                 seconds.append(e)
 
@@ -357,11 +380,19 @@ def compile_rule(atoms, action):
                 # what the original bug had in its place -- emitting neither
                 # would be a different, more permissive mutant.
                 if cp not in bound_before or "root-only" in BUGS:
-                    sym = fresh("sym")
-                    body.append(
-                        f"(= {sym} (compose (inverse {mp_of[cp]}) (compose {mp} {e})))"
-                    )
-                    body.append(f"(RenamesToLeader {cls_of[cp]} {sym} {cls_of[cp]})")
+                    if SYM_SCHEME == "per-class":
+                        # compare against the class's one symmetry rather than
+                        # solving for the symmetry this pair would need
+                        sym = sym_for(cp)
+                        body.append(
+                            f"(= (compose {mp} {e}) (compose {mp_of[cp]} {sym}))")
+                    else:
+                        sym = fresh("sym")
+                        body.append(
+                            f"(= {sym} (compose (inverse {mp_of[cp]}) (compose {mp} {e})))"
+                        )
+                        body.append(
+                            f"(RenamesToLeader {cls_of[cp]} {sym} {cls_of[cp]})")
                     # A redundant slot is recorded as a *partial* self-loop, so
                     # the stored set is an inverse monoid, not a group. If the
                     # composition above truncated, the short map could match one
@@ -370,9 +401,9 @@ def compile_rule(atoms, action):
                     # on the e-graph being saturated -- which matters here,
                     # because user rules share a ruleset with the machinery and
                     # so can match mid-repair.
-                    body.append(
-                        f"(= (map-length {sym}) (map-length {mp_of[cp]}))"
-                    )
+                    if SYM_SCHEME != "per-class":
+                        body.append(
+                            f"(= (map-length {sym}) (map-length {mp_of[cp]}))")
             else:
                 m = fresh("m")
                 body.append(f"(= {m} (compose {mp} {e}))")
@@ -877,10 +908,20 @@ def curated():
     # h(x,x) apart afterwards. The encoding finishes with an h node whose two
     # edges are identical, `{2->2}` and `{2->2}`, to the same child class.
     #
-    # Not yet localised to either the action or the machinery's redundancy
-    # handling. The baseline agrees, so the rule triggers it, but both sides make
-    # the same assertion -- which points at how the e-graph absorbs it rather
-    # than at how the rule was compiled.
+    # Localised as far as: the encoding drives the VARIABLE class slotless (its
+    # self-map reaches length 0) where the reference keeps its slot. Once the
+    # variable class has no slots, collapsing h(x,y) with h(x,x) is *consistent* --
+    # both are then h over the one slotless invocation -- so the error is upstream,
+    # in whatever makes it slotless.
+    #
+    # Matching is not implicated: the reference matches the same things, including
+    # both children at one invocation, and still saturates keeping h(x,x) apart.
+    # The two sides agree after one round and diverge in the second.
+    #
+    # A length-TWO self-map is observed on the one-slot variable class along the
+    # way, which is the "self-edges are derived from nodes" problem the doc lists
+    # as an open question and calls probably harmless. This is evidence against
+    # "harmless" and is the first thing to check.
     cs.append(Case(
         "X1-KNOWN-FAIL-over-merges-h-x-x",
         [("add", ("sub2", V0, V0), NUL)],
