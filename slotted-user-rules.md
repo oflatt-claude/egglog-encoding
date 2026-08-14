@@ -128,6 +128,18 @@ one row per symmetry and discard all but one:
 
 `M2` runs both and checks they agree, including on a case needing a real swap.
 
+Add one guard to either spelling:
+
+```text
+(= (map-length sym) (map-length mx))
+```
+
+Composition truncates silently, and a redundant slot is stored as a *partial*
+self-loop, so a short symmetry could match one of those and be accepted wrongly.
+The guard rules that out without relying on the e-graph being saturated — which
+matters, because user rules share a ruleset with the machinery and can therefore
+match mid-repair. It costs nothing on the test corpus.
+
 **Neither may be weakened to `(= (compose mp p) mx)`.** Equality of renamings is
 strictly weaker than equality of invocations, and the difference shows: `M2(c)`
 matches `f(?x, ?x)` against `f(a[$0,$1], a[$1,$0])` where `a` is symmetric. The two
@@ -151,10 +163,22 @@ because permuting its root relabels the pattern's slots, and the action is built
 in pattern slots, so the result is an α-variant the machinery identifies anyway.
 Variables used once need no join for the same reason.
 
-This leans on the self-loops forming a group on the live slots. They are really an
-inverse monoid: the idempotents are how redundant slots are recorded. On a
-saturated e-graph the shrinking rule restricts them to live slots, which is what
-makes the argument work — worth checking if that ever changes.
+**The stored set has to be closed, not just a set of generators**, or a lookup for
+a composite element would fail and lose matches. It is: the machinery's
+transitivity rule composes self-loops, because its guard has an `e1 = e3` escape.
+`S1` pins this down — a class is given one 3-cycle, and the parent then holds it
+at the identity beside it at the cycle's *square*, which is never unioned in. The
+rule fires, so the lookup found the composite. `S1b` is the control: without the
+3-cycle there is no match, so `S1` is not passing for some other reason.
+
+The set is not quite a group, though: a redundant slot is recorded as a *partial*
+self-loop, so it is an inverse monoid. That matters for the occurrence check —
+if the computed symmetry came out short, because a composition truncated, it could
+match one of those partial loops and be accepted wrongly. Hence the width guard
+above. On a saturated e-graph the shrinking rule keeps self-loops at the live
+slots and the question does not arise, but user rules share a ruleset with the
+machinery and so can match mid-repair, which is exactly when it would. `S2` covers
+a symmetry and a redundancy in play together.
 
 ## Actions
 
@@ -215,10 +239,23 @@ unnamed slot to drop.
 
 `domain`'s keys are the slots the result must cover, `avoid`'s slots are the ones
 it may not reuse. Both are identity maps the caller already has, since
-`(find-mapping p1 p2 p1 p2)` is the identity on a node's slots. New slots go
-strictly above everything mentioned, so the result stays one-to-one. Any
-deterministic choice works, because different choices give α-variants that the
-machinery identifies.
+`(find-mapping p1 p2 p1 p2)` is the identity on a node's slots.
+
+**It picks the smallest unused slot, and that is not a detail.** Picking one above
+the maximum instead makes the name depend on how large the existing names happen
+to be — so a rule whose action builds a node of the same operator its premise
+matches mints a *higher* slot every round, building an endless run of
+α-equivalent-but-distinct nodes and never reaching a fixpoint. That was the
+encoding's only observed performance problem, and it was really
+non-termination: on one generated case the node count climbed 16, 18, 30, 28, 38,
+47, 50, 59 with no sign of settling, while the reference saturated in two rounds.
+The built nodes' edges were visibly escalating, `{$0↦$0}, {$0↦$1}, … {$0↦$6}`.
+Smallest-unused gives the same situation the same name, so those nodes coincide;
+the same case then settles.
+
+So: any deterministic choice is *sound*, because different choices give
+α-variants the machinery identifies — but only a choice that does not drift
+terminates.
 
 **The avoid-set must accumulate.** The primitive is pure and sees one atom at a
 time, so passing only the first atom's slots lets two inventing atoms pick the
@@ -241,8 +278,10 @@ end up equal. Per case it checks three things:
 1. **baseline** — with no rule at all both sides must already agree, so a
    difference is attributed to matching rather than to the machinery;
 2. **agreement** — the compiled rule against the reference;
-3. **determinism** — the same program twice must give the same answer, checked
-   separately so it cannot be mistaken for the next one;
+3. **fixpoint** — both sides must have settled. A case that hasn't means the two
+   ran different amounts of work, so comparing them says nothing: the reference
+   reports whether it saturated, and the encoding is rerun at twice the iterations
+   and must agree. That doubles as a determinism check;
 4. **order independence** — the answer must not change when the atoms are compiled
    in a *different* order, which moves which atom is first and hence every slot.
 
@@ -262,13 +301,12 @@ Current state — `./xdiff.py` and `./xdiff.py fuzz 250 777`:
 
 | | curated | random |
 | --- | --- | --- |
-| cases agreeing | 21/21 | 249/250 |
-| of which the rule fired | 17 | 52 |
+| cases agreeing | 24/24 | 250/250 |
+| of which the rule fired | 19 | 52 |
 | matching differences | 0 | 0 |
 | order dependence | 0 | 0 |
-| nondeterminism | 0 | 0 |
 | machinery differences | 0 | 0 |
-| timeouts, excluded | 0 | 1 |
+| excluded: timeout or unsettled | 0 | 0 |
 
 **Read the firing count before the agreement count.** A case whose rule never
 fires says nothing about matching, and random patterns mostly do not fire, so the
@@ -285,6 +323,8 @@ Curated cases, and what each is for:
 | `C12` | atoms must be compiled in a connected order |
 | `C13` | the first atom must not be a binder |
 | `P1`,`P2` | ported: a node's distinct slots may not be merged, with and without redundancy |
+| `S1`,`S1b` | the stored symmetries are closed, so a lookup finds a composite element |
+| `S2` | a symmetry and a redundancy in play at once |
 | `B1`–`B4` | binders: chaining through one, α-equivalence, the same slot literal on two binders |
 
 ### Ported from the crate's own suite, and what is not
@@ -315,10 +355,10 @@ Not ported, with the reason:
 * **Other action shapes.** Only `union ?root (h ?a ?b)` is generated. Nothing
   exercises a union of two non-identity invocations, which egglog's `union` cannot
   express at all.
-* **Cost.** Roughly 1 in 150 generated e-graphs makes the machinery run for tens
-  of seconds on input the reference finishes instantly. Wrong-cost, not
-  wrong-answer, and now the only category the sweep reports — but worth profiling
-  before this is used on anything large.
+* **Cost.** The one performance problem found turned out to be the minting policy
+  above, and no case in 250 now times out or fails to settle. That is not the same
+  as knowing the encoding is fast: nothing here is a benchmark, the terms are tiny,
+  and the machinery has known derive-and-delete pairs that do redundant work.
 
 ## Mistakes worth not repeating
 
