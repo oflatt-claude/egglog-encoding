@@ -304,41 +304,54 @@ minting. Rules whose RHS introduces a binder (eta-expansion) need this too.
 
 Differentially tested against the reference implementation
 (`slotted-experiments/xmulti` runs the oracle; `tests/slotted-multipat-diff.egg`
-runs the encoded form). **The encoding is strictly less complete**, and the
-reason is structural rather than a missing case:
+runs the encoded form).
 
-> `multi_ematch` mints a fresh slot per *lookup* and lets `unify` **merge** two
-> of them when a repeated variable demands it. The encoding has no merge step —
-> `find-mapping` is injective by construction, so it never identifies two node
-> slots, and the Def. 6 check is a lookup. **It can only verify a slot equality,
-> never construct one.**
+**The three cases above are really one, and splitting them loses matches.** An
+atom's `mp` must be the least total renaming consistent with *everything already
+known about that atom* — its root **and** every already-bound child. Case 2 as
+written derives `mp` from the root alone, which is under-constrained exactly when
+the node carries slots the root's renaming does not cover, i.e. redundant slots.
+The atom then names those slots independently of an earlier atom that already
+named the same ones, and the repeated variable's `≡` check fails.
 
-Two cases pin the boundary. Both use `sub($9,$9) = zero` and `add(zero, zero)`,
-with `?u` written in two atoms so its two occurrences must be identified.
+Two cases pin it. Both use `add(zero, zero)` over nodes with a redundant slot,
+with `?u` written in two atoms so its occurrences must be identified.
 
-* **R1**, both atoms over the *same* node — agrees, 1 match each side. But by
+* **R1**, both atoms over the *same* node — agrees under either spelling, but by
   coincidence: `find-mapping-total` is a pure function, both atoms hand it the
-  same arguments, so it returns the same minted slot. Determinism is standing in
-  for unification.
-* **R2**, two *different* nodes with redundant slots named `$9` and `$7` — the
-  atoms mint `$10` and `$8`, the Def. 6 check fails, and the match the reference
-  finds is lost. Reference 1, encoding 0.
+  same arguments, so it returns the same minted slot. Determinism stands in for
+  unification, which is why R1 alone would not have caught this.
+* **R2**, two *different* nodes with redundant slots named `$9` and `$7` —
+  root-only mints `$10` and `$8` and loses the match (reference 1, encoding 0).
+  Folding `?u`'s known renaming in as a constraint pins atom 3 to `$10` and the
+  reference's match comes back.
 
-So `find-mapping-total` closes the fresh-slot gap (an edge no longer loses a
-slot) without closing this one. Closing it needs what a merge needs: a slot
-union-find threaded through the rule body, solving for identifications across
-atoms. That is a stateful Rust side-condition carried between atoms, not another
-pure map primitive — and it is close to what `MultiState` is in the crate.
+So the fix is to stop treating the three cases as different shapes: emit one
+`find-mapping-total` per atom over every constraint available at that point.
+"Extending `mp` is the exception" understates it — extension is the *general*
+case, and initial/chain are just the instances with no constraints and with
+root-only constraints respectively.
 
-The part that cannot move into Rust is the group membership test, since a
-primitive cannot query the database; `(RenamesToLeader c sym c)` has to stay an
-egglog join. So a faithful encoding is a hybrid: slot unification in Rust,
-group membership in egglog.
+Worth being clear about what this is **not**: not a limit of egglog, and not a
+missing merge step. Solving for a renaming *is* construction, and a constraint
+computed in an earlier atom threads into a later one as an ordinary value, so
+purity is no obstacle. What genuinely cannot move into a primitive is the group
+membership test, since a primitive cannot query the database —
+`(RenamesToLeader c sym c)` stays an egglog join, and it is also where the
+nondeterminism `unify` gets from branching has to come from.
 
-Not yet tested: everything else. The corpus is two cases, chosen to probe one
-predicted divergence. Random differential testing over generated e-graphs and
-patterns is the obvious next step, and the crate ships the generator half of it
-in `tests/multipat/fuzz.rs`.
+Still unverified, in rough order of risk:
+
+1. **Order independence.** Whichever atom mints first fixes the slot names.
+   `multi_ematch`'s answers do not depend on atom order (`props.rs` checks every
+   permutation); the encoding's are now order-sensitive by construction, and
+   nothing checks that the *result* is not.
+2. **Branching.** `unify` returns *several* states; a primitive returns one. The
+   claim that enumerating `G` through `RenamesToLeader` covers the difference is
+   still just a claim.
+3. **Everything else.** The corpus is two cases, chosen to probe one predicted
+   divergence. Random differential testing over generated e-graphs and patterns
+   is the real bar; the crate ships the generator half in `tests/multipat/fuzz.rs`.
 
 ## Unresolved: self-edges are derived from nodes
 
