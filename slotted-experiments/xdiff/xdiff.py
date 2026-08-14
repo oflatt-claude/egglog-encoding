@@ -52,6 +52,10 @@ RUN_TIMEOUT = 25
 #   XDIFF_BUGS=union-id    the action unions classes instead of invocations
 BUGS = {b for b in os.environ.get("XDIFF_BUGS", "").split(",") if b}
 
+# How often a generated subterm is a binder. Raise it to search binder-heavy
+# ground: XDIFF_LAM=0.55
+LAM_PROB = float(os.environ.get("XDIFF_LAM", "0.2"))
+
 # ---------------------------------------------------------------- neutral terms
 # term := ('var', n) | ('null',) | (op, t1, t2)
 
@@ -393,6 +397,14 @@ def compile_rule(atoms, action):
     # both renamings are the identity). Insert the RenamesToLeader fact instead
     # and let the machinery's transitivity / single-parent rules re-orient it.
     mr = mp_of[root]
+    if op == "=":
+        # Equate two variables. Both carry a renaming into pattern slots and
+        # neither need be the identity, which is the one action egglog's `union`
+        # cannot express: it would assert the equation at the identity. Solve
+        # instead -- from mr*Root = ma*A follows Root = (mr^-1 . ma) * A.
+        return ("(rule (" + "\n       ".join(body) + ")\n"
+                f"      ((RenamesToLeader {cls_of[root]} "
+                f"(compose (inverse {mr}) {mp_of[a]}) {cls_of[a]})))")
     if "union-id" in BUGS:
         act = (f'(union {cls_of[root]} (App "{enc_op(op)}" '
                f"{mp_of[a]} {cls_of[a]} {mp_of[b]} {cls_of[b]}))")
@@ -774,16 +786,18 @@ def curated():
         rounds=6,
     ))
 
-    # C13 -- regression for first-atom choice, found by `fuzz 250 777` as fuzz194.
+    # C13 -- a three-atom body mixing a binder, a chain and a join.
     #
-    # The first atom's node slots become the pattern's slots. For a binder that
-    # node carries the *bound* slot, so choosing one as the first atom puts a
-    # bound slot into the pattern's space and the rule stops firing. With `k`
-    # first, both sides agree; with the `lam` first, the encoding derives nothing.
-    # The reference does not care about atom order, so neither may the encoding:
-    # `order_atoms` therefore picks a non-binder to go first when it can.
+    # Found as a witness that the first atom must not be a binder, and
+    # `order_atoms` still avoids choosing one. It is NOT that witness any more,
+    # and probably never was a clean one: its discrimination came from a union
+    # whose operand was a bare leaf, which the encoding cannot represent
+    # faithfully. With the leaf replaced no ordering disagrees, and 200
+    # binder-dense generated cases with the restriction lifted found nothing. The
+    # restriction is kept as conservative -- a bound slot in the pattern's slot
+    # space is a real oddity, see open question 3 -- but it is unwitnessed.
     cs.append(Case(
-        "C13-first-atom-must-not-be-a-binder",
+        "C13-binder-chain-and-join",
         [("h", ("k", V2, NUL), ("lam", V0, V1))],
         [(("g", ("h", V2, NUL), ("lam", V2, V1)), LEAF0),
          (("h", NUL, V2), ("add", NUL, NUL))],
@@ -850,6 +864,63 @@ def curated():
         [("f", V2, NUL), ("k", V2, NUL), ("g", V1, NUL),
          ("h", V0, V1), ("h", V0, V0), NUL, LEAF0],
         rounds=6,
+    ))
+
+    # ---- branching in unify --------------------------------------------------
+    # The reference's `unify` returns SEVERAL states when two invocations of one
+    # class differ in two or more slots and more than one pairing is legal. A
+    # primitive returns one answer and `find-mapping` takes the least, so this is
+    # where the encoding could lose a match.
+    #
+    # `f(k(v0,v1), g(v0,v1))` unioned into `null` makes both of f's slots
+    # redundant, so every lookup mints new names for them; two atoms over that
+    # node see two different pairs, and `?x` must be unified across them with two
+    # candidate pairings. The second children are bound to DIFFERENT variables so
+    # which pairing was taken is visible in the action.
+    #
+    # Both sides agree here, so this does not force the difference -- see the
+    # doc. Kept because it exercises the shape.
+    BR = ("f", ("k", V0, V1), ("g", V0, V1))
+    cs.append(Case(
+        "U1-two-pairings-across-two-lookups",
+        [BR], [(BR, NUL)],
+        [("p", "f", "x", "y"), ("q", "f", "x", "z")],
+        ("p", "h", "y", "z"),
+        [BR, NUL, ("h", ("g", V0, V1), ("g", V0, V1)),
+         ("h", ("g", V0, V1), ("g", V1, V0))],
+    ))
+
+    # ---- actions that equate two invocations ---------------------------------
+    # `action <root> = <x> <x>` equates two pattern variables rather than building
+    # a node, so both sides carry a renaming and neither need be the identity.
+
+    # E1 -- equate the two CHILDREN of one node, so both are stored edges. This
+    # asserts (var $1) = (var $2) -- the statement a top-level term cannot express
+    # in the encoding, since a `U` value is a node rather than an invocation, but
+    # an action can. It makes the variable class slotless.
+    cs.append(Case(
+        "E1-equate-two-children",
+        [("f", V1, V2), ("f", V1, V1)], [],
+        [("p", "f", "a", "b")], ("a", "=", "b", "b"),
+        [("f", V1, V2), ("f", V1, V1), ("h", V0, V1), ("h", V0, V0)],
+    ))
+
+    # E2 -- the same, one atom deeper, through a chain.
+    cs.append(Case(
+        "E2-equate-through-a-chain",
+        [("f", V0, ("k", V1, V2)), ("k", V1, V1)], [],
+        [("p", "f", "a", "b"), ("b", "k", "c", "d")], ("c", "=", "d", "d"),
+        [("f", V0, ("k", V1, V2)), ("k", V1, V1), ("k", V1, V2), ("h", V0, V0)],
+    ))
+
+    # E3 -- eta's shape: equate a binder with its own body, so one side is the
+    # identity and the other carries the bound slot. Unsound as maths; the point
+    # is that both sides derive the same thing from it.
+    cs.append(Case(
+        "E3-equate-binder-with-body",
+        [("lam", V0, V0), ("f", V0, V1)], [],
+        [("p", "lam", "$v", "b")], ("p", "=", "b", "b"),
+        [("lam", V0, V0), ("f", V0, V1), ("f", V0, V0), ("h", V0, V0)],
     ))
 
     # ---- symmetries ----------------------------------------------------------
@@ -948,7 +1019,7 @@ def curated():
 def rand_term(rng, depth):
     if depth == 0 or rng.random() < 0.3:
         return rng.choice([("var", rng.randrange(3)), ("null",)])
-    if rng.random() < 0.2:
+    if rng.random() < LAM_PROB:
         return ("lam", ("var", rng.randrange(3)), rand_term(rng, depth - 1))
     op = rng.choice(BINOPS)
     return (op, rand_term(rng, depth - 1), rand_term(rng, depth - 1))
@@ -1050,7 +1121,11 @@ def rand_case(rng, i):
     # ROOT often has the identity for its renaming, so an action rooted there
     # cannot tell a union of classes from a union of invocations. A CHILD's
     # renaming is its stored edge, which generally is not the identity.
-    action = (rng.choice(allv), "h", rng.choice(allv), rng.choice(allv))
+    if rng.random() < 0.3:
+        x, y = rng.choice(allv), rng.choice(allv)
+        action = (x, "=", y, y)          # equate two invocations
+    else:
+        action = (rng.choice(allv), "h", rng.choice(allv), rng.choice(allv))
 
     probes = terms + [a for a, _ in unions] + [
         ("h", V0, V1), ("h", V0, V0), ("null",), LEAF0]

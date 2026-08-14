@@ -149,7 +149,14 @@ fn main() {
         if let Some((root, op, a, b)) = &spec.action {
             let pat: MultiPattern<L> = MultiPattern::parse(&spec.atoms.join(", ")).unwrap();
             let from = Pattern::PVar(root.clone());
-            let to: Pattern<L> = Pattern::parse(&format!("({op} ?{a} ?{b})")).unwrap();
+            // `action <root> = <x> <x>` equates two pattern variables directly,
+            // so both sides can carry a non-identity renaming. Anything else
+            // builds a node, which is always at the identity in pattern slots.
+            let to: Pattern<L> = if op == "=" {
+                Pattern::PVar(a.clone())
+            } else {
+                Pattern::parse(&format!("({op} ?{a} ?{b})")).unwrap()
+            };
             let debug = std::env::var("XMULTI_DEBUG").is_ok();
             let mut saturated = false;
             for round in 0..spec.rounds {
