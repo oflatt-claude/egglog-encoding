@@ -283,7 +283,11 @@ end up equal. Per case it checks three things:
    reports whether it saturated, and the encoding is rerun at twice the iterations
    and must agree. That doubles as a determinism check;
 4. **order independence** — the answer must not change when the atoms are compiled
-   in a *different* order, which moves which atom is first and hence every slot.
+   in a *different* order, which moves which atom is first and hence every slot;
+5. **slot-renaming invariance** — renaming every slot in the program must not
+   change either side's answer. This is a per-side property needing no
+   cross-system comparison, and it asks a different question from agreeing with
+   the reference: a side can be consistently wrong and still invariant.
 
 ```text
 ./xdiff.py              the curated cases
@@ -301,12 +305,21 @@ Current state — `./xdiff.py` and `./xdiff.py fuzz 250 777`:
 
 | | curated | random |
 | --- | --- | --- |
-| cases agreeing | 24/24 | 250/250 |
-| of which the rule fired | 19 | 52 |
-| matching differences | 0 | 0 |
+| cases agreeing | 29/30 | 248/250 |
+| of which the rule fired | 23 | 57 |
+| matching differences | **1 (`X1`, known)** | 1 |
 | order dependence | 0 | 0 |
+| slot-renaming | 0 | 0 |
 | machinery differences | 0 | 0 |
-| excluded: timeout or unsettled | 0 | 0 |
+| excluded: timeout or unsettled | 0 | 1 |
+
+`X1` is a known failure kept in the corpus, so `./xdiff.py` exits non-zero by
+design until it is fixed. The encoding merges `h(x,y)` with `h(x,x)`, which the
+reference refuses since a node whose two slots are distinct cannot represent
+`h(x,x)`. The action asserts `?x = h(?y, ?x)` — a node equal to its own child —
+and both sides make that assertion and both merge classes over it; only the
+reference still keeps `h(x,x)` apart afterwards. Not yet localised to the action
+or to the machinery's redundancy handling.
 
 **Read the firing count before the agreement count.** A case whose rule never
 fires says nothing about matching, and random patterns mostly do not fire, so the
@@ -398,11 +411,17 @@ disagreeing with the reference. A direct witness would be better.
 
 ### Not covered
 
-* **Symmetry branching.** Matching in the crate can return several results where a
-  primitive returns one. No generated case has forced the difference.
-* **Other action shapes.** Only `union ?root (h ?a ?b)` is generated. Nothing
-  exercises a union of two non-identity invocations, which egglog's `union` cannot
-  express at all.
+* **Symmetry branching.** The reference's `unify` returns several states when two
+  invocations differ in two or more slots and more than one pairing is legal,
+  where a primitive returns one. `U1` builds the shape deliberately — two atoms
+  over a node whose slots are both redundant, so each lookup freshens them
+  independently — and both sides still agree. Two constructions tried, neither
+  discriminates, so the question is *open, not settled*: the encoding may be fine
+  here, or the observable may simply be too coarse to see it.
+* **Other action shapes.** Two are now generated: building a node, and equating
+  two variables (`E1`–`E3`), which is the union of two invocations egglog's own
+  `union` cannot express. Nothing exercises a right-hand side deeper than one
+  level, or the `Subst` form.
 * **Cost.** The one performance problem found turned out to be the minting policy
   above, and no case in 250 now times out or fails to settle. That is not the same
   as knowing the encoding is fast: nothing here is a benchmark, the terms are tiny,

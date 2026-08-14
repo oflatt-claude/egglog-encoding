@@ -866,6 +866,32 @@ def curated():
         rounds=6,
     ))
 
+    # X1 -- KNOWN FAILING. Found by `fuzz 250 6161` as fuzz85, in the
+    # over-deriving direction: the encoding merges h(x,y) with h(x,x), which the
+    # reference refuses because a node whose two slots are distinct cannot
+    # represent h(x,x) (Def. 8's per-lookup injectivity).
+    #
+    # The action asserts ?x1 = h(?x3, ?x1) -- a node equal to its own child --
+    # which merges the h class into the variable class. BOTH sides assert that
+    # and both merge; the difference is only that the reference still keeps
+    # h(x,x) apart afterwards. The encoding finishes with an h node whose two
+    # edges are identical, `{2->2}` and `{2->2}`, to the same child class.
+    #
+    # Not yet localised to either the action or the machinery's redundancy
+    # handling. The baseline agrees, so the rule triggers it, but both sides make
+    # the same assertion -- which points at how the e-graph absorbs it rather
+    # than at how the rule was compiled.
+    cs.append(Case(
+        "X1-KNOWN-FAIL-over-merges-h-x-x",
+        [("add", ("sub2", V0, V0), NUL)],
+        [(("h", V0, V2), NUL)],
+        [("x3", "h", "x1", "x2")],
+        ("x1", "h", "x3", "x1"),
+        [("add", ("sub2", V0, V0), NUL), ("h", V0, V2), ("h", V0, V1),
+         ("h", V0, V0), NUL, ("sub", V0, V0)],
+        rounds=6,
+    ))
+
     # ---- branching in unify --------------------------------------------------
     # The reference's `unify` returns SEVERAL states when two invocations of one
     # class differ in two or more slots and more than one pairing is legal. A
