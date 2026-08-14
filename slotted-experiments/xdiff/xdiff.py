@@ -121,6 +121,32 @@ def enc(t):
     return f'(App "{enc_op(op)}" {mapof(edge(a))} {enc(a)} {mapof(edge(b))} {enc(b)})'
 
 
+def shift_term(t, k):
+    """Add `k` to every slot in a term."""
+    if t[0] == "var":
+        return ("var", t[1] + k)
+    if t[0] == "null":
+        return t
+    if t[0] == "lam":
+        return ("lam", shift_term(t[1], k), shift_term(t[2], k))
+    return (t[0], shift_term(t[1], k), shift_term(t[2], k))
+
+
+def shift_case(case, k):
+    """The same case with every slot in the program renamed by `+k`.
+
+    Slot names carry no meaning, so this must not change any answer. It is a
+    per-side property, needing no cross-system comparison, and it is a different
+    question from agreeing with the reference: a side could be consistently wrong
+    and still shift-invariant, or right on one naming and wrong on another. The
+    reference's own suite checks it (`props.rs`).
+    """
+    return Case(case.name, [shift_term(t, k) for t in case.terms],
+                [(shift_term(a, k), shift_term(b, k)) for a, b in case.unions],
+                case.atoms, case.action,
+                [shift_term(t, k) for t in case.probes], case.rounds)
+
+
 # ------------------------------------------------------------------------ specs
 
 
@@ -144,6 +170,28 @@ class Case:
             out.append("action {} {} {} {}".format(*self.action))
         out += [f"probe {sexpr(t)}" for t in self.probes]
         return "\n".join(out) + "\n"
+
+
+def check_encodable(case):
+    """Reject a case the encoding cannot represent faithfully.
+
+    A `U` value is an e-node, not an invocation, so a bare `(var $k)` at top level
+    encodes as `(Var 0)` for every k -- the slot is lost. Such a case is not a
+    faithful translation, and it is not shift-equivalent either, since shifting
+    changes what it means on one side only. Slots inside a compound term ride in
+    the stored edges and are fine; `null` has no slot to lose.
+
+    This has been mistaken for a machinery bug twice. Use a compound term with the
+    same slots instead -- `LEAF0` below.
+    """
+    tops = list(case.terms) + list(case.probes)
+    for a, b in case.unions:
+        tops += [a, b]
+    bad = [t for t in tops if t[0] == "var"]
+    if bad:
+        raise AssertionError(
+            f"{case.name}: bare leaf at top level {bad} -- the encoding cannot "
+            f"carry its slot; use a compound term with the same slots")
 
 
 # -------------------------------------------------------------- rule compiler
@@ -473,6 +521,7 @@ def check_case(case, verbose=False, stats=None):
     fails = []
     if stats is None:
         stats = {}
+    check_encodable(case)
 
     # 1. machinery baseline: no rule, both sides must already agree
     bare = Case(case.name, case.terms, case.unions, [], None, case.probes, case.rounds)
@@ -543,6 +592,18 @@ def check_case(case, verbose=False, stats=None):
         if len(enc_vals) > 1:
             fails.append(f"{case.name}: ENCODING is order dependent: {sorted(enc_vals)}")
 
+    # 5. slot-renaming invariance: shifting every slot in the program must not
+    # change either side's answer.
+    shifted = shift_case(case, 40)
+    xs, xv = run_reference(shifted)
+    ys, yv = run_encoding(shifted)
+    if xs == "OK" and xv != rv:
+        fails.append(f"{case.name}: REFERENCE is not slot-renaming invariant\n"
+                     f"    as written {rv}\n    slots +40  {xv}")
+    if ys == "OK" and yv != ev:
+        fails.append(f"{case.name}: ENCODING is not slot-renaming invariant\n"
+                     f"    as written {ev}\n    slots +40  {yv}")
+
     if verbose and not fails:
         print(f"  ok  {case.name}  {rv}")
     return fails
@@ -550,6 +611,9 @@ def check_case(case, verbose=False, stats=None):
 
 # ------------------------------------------------------------- curated corpus
 V0, V1, V2 = ("var", 0), ("var", 1), ("var", 2)
+# A compound term whose only slot is V0, for the top-level positions
+# where a bare leaf would lose its slot (see check_encodable).
+LEAF0 = ("sub", V0, V0)
 NUL = ("null",)
 
 
@@ -679,12 +743,12 @@ def curated():
         "C11-action-renamed-id-union",
         [NUL],
         [(("g", ("sub2", NUL, NUL), ("sub", V1, V0)), NUL),
-         (("add", ("k", V2, NUL), ("k", V0, NUL)), V0)],
+         (("add", ("k", V2, NUL), ("k", V0, NUL)), LEAF0)],
         [("x3", "k", "x1", "x2"), ("x6", "k", "x4", "x5"), ("x7", "add", "x3", "x6")],
         ("x7", "h", "x3", "x6"),
         [NUL, ("g", ("sub2", NUL, NUL), ("sub", V1, V0)),
          ("add", ("k", V2, NUL), ("k", V0, NUL)),
-         ("h", V0, V1), ("h", V0, V0), NUL, V0],
+         ("h", V0, V1), ("h", V0, V0), NUL, LEAF0],
         rounds=6,
     ))
 
@@ -705,7 +769,8 @@ def curated():
         [],
         [("x3", "k", "x1", "x2"), ("x6", "k", "x4", "x5"), ("x7", "h", "x3", "x6")],
         ("x7", "h", "x2", "x4"),
-        [("h", ("k", V0, V0), ("k", V2, V0)), ("h", V0, V1), ("h", V0, V0), NUL, V0],
+        [("h", ("k", V0, V0), ("k", V2, V0)), ("h", V0, V1), ("h", V0, V0),
+         NUL, LEAF0],
         rounds=6,
     ))
 
@@ -720,14 +785,14 @@ def curated():
     cs.append(Case(
         "C13-first-atom-must-not-be-a-binder",
         [("h", ("k", V2, NUL), ("lam", V0, V1))],
-        [(("g", ("h", V2, NUL), ("lam", V2, V1)), V0),
+        [(("g", ("h", V2, NUL), ("lam", V2, V1)), LEAF0),
          (("h", NUL, V2), ("add", NUL, NUL))],
         [("x3", "k", "x1", "x2"), ("x5", "lam", "$s5", "x4"),
          ("x6", "h", "x3", "x5")],
         ("x6", "h", "x4", "x4"),
         [("h", ("k", V2, NUL), ("lam", V0, V1)),
          ("g", ("h", V2, NUL), ("lam", V2, V1)),
-         ("h", NUL, V2), ("h", V0, V1), ("h", V0, V0), NUL, V0],
+         ("h", NUL, V2), ("h", V0, V1), ("h", V0, V0), NUL, LEAF0],
         rounds=6,
     ))
 
@@ -783,7 +848,7 @@ def curated():
         [("x3", "f", "x1", "x2")],
         ("x1", "h", "x3", "x2"),
         [("f", V2, NUL), ("k", V2, NUL), ("g", V1, NUL),
-         ("h", V0, V1), ("h", V0, V0), NUL, V0],
+         ("h", V0, V1), ("h", V0, V0), NUL, LEAF0],
         rounds=6,
     ))
 
@@ -942,9 +1007,10 @@ def rand_case(rng, i):
     for _ in range(rng.randrange(0, 3)):
         a = rand_top(rng, rng.randrange(1, 3))
         if rng.random() < 0.5 and slots(a):
-            # `(var $0)` is safe: slot 0 is the canonical leader's own slot, so
-            # the invocation is the identity and nothing is lost.
-            b = ("null",) if rng.random() < 0.5 else ("var", 0)
+            # `LEAF0` rather than a bare `(var $0)`: a bare leaf loses its slot
+            # (see check_encodable), and although slot 0 happens to survive, the
+            # slot-renaming check shifts it to one that would not.
+            b = ("null",) if rng.random() < 0.5 else LEAF0
         else:
             b = rand_top(rng, rng.randrange(0, 2))
         unions.append((a, b))
@@ -987,7 +1053,7 @@ def rand_case(rng, i):
     action = (rng.choice(allv), "h", rng.choice(allv), rng.choice(allv))
 
     probes = terms + [a for a, _ in unions] + [
-        ("h", V0, V1), ("h", V0, V0), ("null",), ("var", 0)]
+        ("h", V0, V1), ("h", V0, V0), ("null",), LEAF0]
     return Case(f"fuzz{i}", terms, unions, atoms, action, probes, rounds=6)
 
 
@@ -1032,6 +1098,7 @@ def main():
         "machinery baseline": ["BASELINE differs"],
         "nondeterminism": ["nondeterministic"],
         "order dependence": ["order dependent"],
+        "slot-renaming": ["not slot-renaming invariant"],
         "MATCHING mismatch": ["MISMATCH vs reference"],
     }
     counts = {k: 0 for k in cats}
