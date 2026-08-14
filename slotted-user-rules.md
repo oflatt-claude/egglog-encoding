@@ -163,6 +163,30 @@ because permuting its root relabels the pattern's slots, and the action is built
 in pattern slots, so the result is an α-variant the machinery identifies anyway.
 Variables used once need no join for the same reason.
 
+### One symmetry per class, handed to the primitives
+
+The intended shape, and the better one: join **one** `(RenamesToLeader C sym C)`
+per e-class and use that `sym` everywhere that class's renaming is used, rather
+than joining a fresh one at each site. The primitives then receive
+`(compose mx sym)` and work out whether it fits — solving the constraint is what
+decides, instead of the query enumerating candidates site by site.
+
+Two consequences worth stating:
+
+* **Fewer joins.** One per class, not one per use, and each is a small relation.
+* **It makes a correctness fix affordable.** A variable bound as an atom's root
+  gets `mp`, whose domain is the matched *node's* slots — but a variable's
+  renaming must have its *class's* slots for a domain, and the two differ exactly
+  when the node carries a redundant slot. Restricting it needs the live slot set,
+  which is precisely what a symmetry's domain is: `(compose mp sym)`. With a
+  per-class join that costs nothing extra.
+
+Measured against the per-use scheme it is indistinguishable — same answers, same
+firing count, same single known failure. `XDIFF_SYM` selects between them.
+
+The scheme does **not** address the branching question above, and did not fix
+`X1`: both are about redundancy, not symmetry.
+
 **The stored set has to be closed, not just a set of generators**, or a lookup for
 a composite element would fail and lose matches. It is: the machinery's
 transitivity rule composes self-loops, because its guard has an `e1 = e3` escape.

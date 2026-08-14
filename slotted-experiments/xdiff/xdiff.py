@@ -63,7 +63,7 @@ LAM_PROB = float(os.environ.get("XDIFF_LAM", "0.2"))
 #   per-class  one symmetry joined per e-class and reused everywhere that class's
 #              renaming is used, with repeated occurrences checked by comparing
 #              against it rather than by a determined lookup
-SYM_SCHEME = os.environ.get("XDIFF_SYM", "per-use")
+SYM_SCHEME = os.environ.get("XDIFF_SYM", "per-class")
 
 # ---------------------------------------------------------------- neutral terms
 # term := ('var', n) | ('null',) | (op, t1, t2)
@@ -938,6 +938,32 @@ def curated():
         ("x1", "h", "x3", "x1"),
         [("add", ("sub2", V0, V0), NUL), ("h", V0, V2), ("h", V0, V1),
          ("h", V0, V0), NUL, ("sub", V0, V0)],
+        rounds=6,
+    ))
+
+    # X2 -- KNOWN FAILING, and the MINIMAL form of X1: one term, one rule, no
+    # unions at all. `fuzz 250 6161` as fuzz206, which the per-use scheme had been
+    # hiding behind a timeout.
+    #
+    #     term   h(var $2, var $1)
+    #     rule   ?c == (h ?a ?b)  =>  union ?a (h ?b ?c)
+    #
+    # The reference merges h(v2,v1) with h(v0,v1), which are alpha-variants, and
+    # keeps h(v0,v0) apart. The encoding merges all three. As in X1 the variable
+    # class goes slotless where the reference keeps its slot, and once it has no
+    # slots the merge is consistent -- so the error is in whatever makes it
+    # slotless.
+    #
+    # Unlike X1 no over-wide self-map appears here, which rules out "self-edges
+    # are derived from nodes" as the cause. Both cases share one shape: the
+    # action's root is a CHILD and the node it builds contains that child's own
+    # parent, so the assertion relates a class to a node built over it.
+    cs.append(Case(
+        "X2-KNOWN-FAIL-minimal-over-merge",
+        [("h", V2, V1)], [],
+        [("x3", "h", "x1", "x2")],
+        ("x1", "h", "x2", "x3"),
+        [("h", V2, V1), ("h", V0, V1), ("h", V0, V0), NUL, ("sub", V0, V0)],
         rounds=6,
     ))
 
