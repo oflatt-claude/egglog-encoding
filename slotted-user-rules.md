@@ -340,18 +340,68 @@ membership test, since a primitive cannot query the database —
 `(RenamesToLeader c sym c)` stays an egglog join, and it is also where the
 nondeterminism `unify` gets from branching has to come from.
 
-Still unverified, in rough order of risk:
+### What the sweep found
 
-1. **Order independence.** Whichever atom mints first fixes the slot names.
-   `multi_ematch`'s answers do not depend on atom order (`props.rs` checks every
-   permutation); the encoding's are now order-sensitive by construction, and
-   nothing checks that the *result* is not.
+`slotted-experiments/xdiff/xdiff.py` generates cases, compiles each
+multipattern, runs both sides, and compares the probe partition. Results:
+
+Over 150 generated cases plus the curated corpus, on a run where 21 of 141
+usable cases actually fired the rule:
+
+* **One unsoundness, and it is also the one order dependence.** Kept as curated
+  case `C11`. The encoding derives `h(x,y) = h(x,x)`; the reference refuses, and
+  is right to — Def. 8 makes each lookup's renaming injective, so a node with two
+  distinct slots can never represent `h(x,x)`
+  (`regress::same_node_redundant_slots_stay_distinct` in the crate).
+
+  The reference builds `h` over two distinct slots and keeps the probes apart.
+  The encoding ends up with exactly **one** `h` node, **both edges empty**, and
+  its class carrying no slots, so both probes collapse into it. That is a dropped
+  slot again — the same family as the fresh-slot gap above, but reached through
+  the *action* rather than through `find-mapping`. A `BadEdge`-style width check
+  does **not** catch it: by the end the children's classes have gone slotless
+  too, so the widths agree.
+
+  The order dependence is consistent with the cause: `C11` has two atoms sharing
+  no variable, so one of them mints, and which slot space it mints into depends
+  on which atom went first.
+* **Order independence otherwise holds**, across every permutation of every other
+  multi-atom case. Minting made the compilation order-sensitive by construction,
+  so this was expected to break much more widely than it did.
+* **No other matching divergence** in any case where the machinery agreed.
+* **The machinery under-merges.** Nine of 150 differ with no user rule at all,
+  always in the direction of the encoding deriving *fewer* equalities. Traced in
+  one case to leaf-class redundancy: `union (var $0) (var $2)` makes the variable
+  class slotless, so in the crate every `h(var, var)` collapses into one class;
+  the encoding does not propagate that. Incompleteness rather than unsoundness,
+  and outside matching.
+
+### Two ways to measure this wrong
+
+Both cost a round of false findings, so they are worth stating:
+
+1. **A slotted e-class is not an egglog e-class.** The α-finder relates
+   equal-up-to-renaming nodes with `RenamesToLeader` and *deletes* one rather
+   than unioning them, so a slotted class is a set of `U` values sharing a
+   leader. Grouping probes by egglog e-class is strictly finer and reports
+   differences that are not there.
+2. **`eg.eq` is not e-class identity.** It is equality of *renamed ids*, so it
+   depends on which slot names the invocation carries: after a redundancy two
+   probe terms can sit in one class while naming different surviving slots, and
+   `eg.eq` calls those unequal. Use it deliberately, not as "are these the same".
+
+### Still unverified
+
+1. **Coverage.** A case where the rule never fires tests nothing about matching,
+   and random patterns mostly do not fire; the harness reports the firing count
+   for exactly this reason. Read the "of those had the rule actually change the
+   partition" line before believing an agreement count.
 2. **Branching.** `unify` returns *several* states; a primitive returns one. The
    claim that enumerating `G` through `RenamesToLeader` covers the difference is
-   still just a claim.
-3. **Everything else.** The corpus is two cases, chosen to probe one predicted
-   divergence. Random differential testing over generated e-graphs and patterns
-   is the real bar; the crate ships the generator half in `tests/multipat/fuzz.rs`.
+   still just a claim — no generated case has forced it.
+3. **Actions.** Only one action shape is generated (`union ?root (h ?a ?b)`).
+   Nothing exercises `union` over two non-identity renamings, which is the case
+   egglog's `union` cannot express at all.
 
 ## Unresolved: self-edges are derived from nodes
 

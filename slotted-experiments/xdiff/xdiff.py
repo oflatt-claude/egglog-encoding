@@ -38,6 +38,10 @@ BINOPS = ["f", "g", "h", "k", "sub", "sub2", "add"]
 # saturation on both sides, so this is the main knob on runtime.
 PERM_CAP = 4
 
+# Some generated e-graphs blow the machinery up, so every run is bounded and a
+# timeout is reported as its own category rather than stalling the sweep.
+RUN_TIMEOUT = 25
+
 # ---------------------------------------------------------------- neutral terms
 # term := ('var', n) | ('null',) | (op, t1, t2)
 
@@ -207,11 +211,15 @@ def compile_rule(atoms, action):
 def egg_program(case, atoms=None):
     atoms = case.atoms if atoms is None else atoms
     out = [f'(include "{MACHINERY}")']
-    # probes get an index; two probes in one e-class share the U value, so the
-    # rule below reports exactly the partition.
+    # A slotted e-class is NOT one egglog e-class: the alpha-finder relates
+    # equal-up-to-renaming nodes with `RenamesToLeader` and deletes one, rather
+    # than unioning them. So two probes are in the same slotted class when they
+    # reach a common leader, which is also what the machinery's own tests check.
     out.append("(relation ProbeId (U i64))")
     out.append("(relation SameClass (i64 i64))")
-    out.append("(rule ((ProbeId x i) (ProbeId x j)) ((SameClass i j)))")
+    out.append("(rule ((ProbeId a i) (ProbeId b j)\n"
+               "       (RenamesToLeader a m1 l) (RenamesToLeader b m2 l))\n"
+               "      ((SameClass i j)))")
     if atoms:
         out.append(compile_rule(atoms, case.action))
     for i, t in enumerate(case.terms):
@@ -261,13 +269,16 @@ def parse_same_class(stdout, n):
 
 # ------------------------------------------------------------------ the runners
 def run_reference(case, atoms=None):
-    r = subprocess.run(
-        [str(XMULTI / "target" / "debug" / "xmulti")],
-        input=case.spec(atoms),
-        capture_output=True,
-        text=True,
-        timeout=300,
-    )
+    try:
+        r = subprocess.run(
+            [str(XMULTI / "target" / "debug" / "xmulti")],
+            input=case.spec(atoms),
+            capture_output=True,
+            text=True,
+            timeout=RUN_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        return ("TIMEOUT", f">{RUN_TIMEOUT}s")
     if r.returncode != 0:
         return ("ERROR", r.stderr.strip().splitlines()[-1] if r.stderr else "?")
     for line in r.stdout.splitlines():
@@ -280,9 +291,16 @@ def run_encoding(case, atoms=None, keep=None):
     prog = egg_program(case, atoms)
     path = keep or (ROOT / "xdiff-tmp.egg")
     path.write_text(prog)
-    r = subprocess.run(
-        [str(EGGLOG), str(path)], capture_output=True, text=True, timeout=600, cwd=ROOT
-    )
+    try:
+        r = subprocess.run(
+            [str(EGGLOG), str(path)],
+            capture_output=True,
+            text=True,
+            timeout=RUN_TIMEOUT,
+            cwd=ROOT,
+        )
+    except subprocess.TimeoutExpired:
+        return ("TIMEOUT", f">{RUN_TIMEOUT}s (program kept at {path})")
     if r.returncode != 0:
         err = [l for l in r.stderr.splitlines() if "ERROR" in l]
         msg = err[-1] if err else r.stderr.strip()[:400]
@@ -306,6 +324,8 @@ def check_case(case, verbose=False, stats=None):
     bare = Case(case.name, case.terms, case.unions, [], None, case.probes, case.rounds)
     rs, rv = run_reference(bare, atoms=[])
     es, ev = run_encoding(bare, atoms=[])
+    if rs == "TIMEOUT" or es == "TIMEOUT":
+        return [f"{case.name}: baseline timeout ref={rs} enc={es}"]
     if rs != "OK" or es != "OK":
         return [f"{case.name}: baseline crashed ref={rs}:{rv} enc={es}:{ev}"]
     if rv != ev:
@@ -320,6 +340,8 @@ def check_case(case, verbose=False, stats=None):
     es, ev = run_encoding(case)
     if rs == "OK" and rv != baseline:
         stats["fired"] = stats.get("fired", 0) + 1
+    if rs == "TIMEOUT" or es == "TIMEOUT":
+        return [f"{case.name}: rule timeout ref={rs} enc={es}"]
     if rs != "OK":
         return [f"{case.name}: reference crashed: {rv}"]
     if es != "OK":
@@ -337,10 +359,14 @@ def check_case(case, verbose=False, stats=None):
             perms = random.Random(0).sample(perms, PERM_CAP)
         ref_vals, enc_vals = {rv}, {ev}
         for p in perms:
-            _, x = run_reference(case, atoms=list(p))
-            _, y = run_encoding(case, atoms=list(p))
-            ref_vals.add(x)
-            enc_vals.add(y)
+            xs, x = run_reference(case, atoms=list(p))
+            ys, y = run_encoding(case, atoms=list(p))
+            # A timeout or crash is not a partition; folding it into the value
+            # set would report spurious order dependence.
+            if xs == "OK":
+                ref_vals.add(x)
+            if ys == "OK":
+                enc_vals.add(y)
         if len(ref_vals) > 1:
             fails.append(f"{case.name}: REFERENCE is order dependent: {sorted(ref_vals)}")
         if len(enc_vals) > 1:
@@ -459,6 +485,38 @@ def curated():
         [("f", V0, ("g", V0, V1)), ("k", V0, V0), ("h", V0, V1)],
     ))
 
+    # C11 -- KNOWN FAILING, found by `fuzz 150 2024` as fuzz56. Kept as a
+    # regression case: it should start passing when the bug is fixed.
+    #
+    # The encoding derives h(x,y) = h(x,x); the reference does not, and is right
+    # to refuse -- Def. 8 makes each lookup's renaming injective, so a node with
+    # two distinct slots can never represent h(x,x) (the crate pins this as
+    # `regress::same_node_redundant_slots_stay_distinct`).
+    #
+    # Symptom: the reference builds h over two distinct slots ($f20, $f33) and
+    # keeps the two probes apart. The encoding ends up with exactly ONE h node,
+    # both of its edges empty, and its class carrying no slots, so both probes
+    # collapse into it. A dropped slot propagating through the action's union --
+    # the same family as M6, reached through the action rather than through
+    # `find-mapping`. Note a `BadEdge`-style width check does NOT catch it: by
+    # the end the children's classes have gone slotless too, so the widths agree.
+    #
+    # Also the only case in 150 where the encoding is order dependent, which is
+    # consistent with the two atoms that share no variable minting into spaces
+    # whose relationship depends on which atom went first.
+    cs.append(Case(
+        "C11-KNOWN-FAIL-unsound-slot-loss",
+        [NUL],
+        [(("g", ("sub2", NUL, NUL), ("sub", V1, V0)), NUL),
+         (("add", ("k", V2, NUL), ("k", V0, NUL)), V0)],
+        [("x3", "k", "x1", "x2"), ("x6", "k", "x4", "x5"), ("x7", "add", "x3", "x6")],
+        ("x7", "h", "x3", "x6"),
+        [NUL, ("g", ("sub2", NUL, NUL), ("sub", V1, V0)),
+         ("add", ("k", V2, NUL), ("k", V0, NUL)),
+         ("h", V0, V1), ("h", V0, V0), NUL, V0],
+        rounds=6,
+    ))
+
     return cs
 
 
@@ -535,6 +593,22 @@ def rand_case(rng, i):
 # ------------------------------------------------------------------------ main
 def main():
     args = sys.argv[1:]
+    if args and args[0] == "show":
+        # ./xdiff.py show <index> <seed> [perm...]  -- dump one fuzz case
+        i, seed = int(args[1]), int(args[2] if len(args) > 2 else 0)
+        rng = random.Random(seed)
+        case = [rand_case(rng, k) for k in range(i + 1)][i]
+        order = [int(x) for x in args[3:]] or list(range(len(case.atoms)))
+        atoms = [case.atoms[k] for k in order]
+        print("=== spec ===")
+        print(case.spec(atoms), end="")
+        # its own scratch file, so `show` can be used while a sweep is running
+        keep = ROOT / f"xdiff-show-{i}.egg"
+        print("=== reference ===", run_reference(case, atoms))
+        print("=== encoding  ===", run_encoding(case, atoms, keep=keep))
+        print("=== rule ===")
+        print(compile_rule(atoms, case.action))
+        return 0
     if args and args[0] == "fuzz":
         n = int(args[1]) if len(args) > 1 else 100
         seed = int(args[2]) if len(args) > 2 else 0
@@ -546,6 +620,7 @@ def main():
     # Categories, most-interesting last: a baseline difference is the machinery
     # disagreeing before any rule runs, so it says nothing about matching.
     cats = {
+        "timeout (excluded)": ["timeout"],
         "harness/crash": ["crashed"],
         "machinery baseline": ["BASELINE differs"],
         "order dependence": ["order dependent"],

@@ -139,9 +139,21 @@ fn main() {
             let pat: MultiPattern<L> = MultiPattern::parse(&spec.atoms.join(", ")).unwrap();
             let from = Pattern::PVar(root.clone());
             let to: Pattern<L> = Pattern::parse(&format!("({op} ?{a} ?{b})")).unwrap();
-            for _ in 0..spec.rounds {
+            let debug = std::env::var("XMULTI_DEBUG").is_ok();
+            for round in 0..spec.rounds {
                 let before = eg.progress();
-                for s in multi_ematch(&pat, &eg) {
+                let substs = multi_ematch(&pat, &eg);
+                if debug {
+                    eprintln!("round {round}: {} match(es)", substs.len());
+                    for s in &substs {
+                        let mut ks: Vec<&String> = s.keys().collect();
+                        ks.sort();
+                        let body: Vec<String> =
+                            ks.iter().map(|k| format!("?{k}={:?}", s[*k])).collect();
+                        eprintln!("    {}", body.join("  "));
+                    }
+                }
+                for s in substs {
                     eg.union_instantiations(&from, &to, &s, None);
                 }
                 if before == eg.progress() {
@@ -154,7 +166,13 @@ fn main() {
     println!("PARTITION {}", partition(&eg, &spec.probes));
 }
 
-/// Probe indices grouped by the e-graph's equality, as a canonical string.
+/// Probe indices grouped by **e-class identity**, as a canonical string.
+///
+/// Deliberately not `eg.eq`, which is equality of *renamed ids* and so depends
+/// on which slot names the invocation carries: after a redundancy two probe
+/// terms can sit in one e-class while naming different surviving slots, and
+/// `eg.eq` calls those unequal. The encoding side reads e-class identity out of
+/// egglog, so this is the notion that makes the two comparable.
 fn partition(eg: &G, probes: &[String]) -> String {
     let ids: Vec<Option<AppliedId>> = probes
         .iter()
@@ -171,7 +189,8 @@ fn partition(eg: &G, probes: &[String]) -> String {
         let mut placed = false;
         for g in groups.iter_mut() {
             let j = *g.iter().next().unwrap();
-            if eg.eq(a, ids[j].as_ref().unwrap()) {
+            let b = ids[j].as_ref().unwrap();
+            if eg.find_applied_id(a).id == eg.find_applied_id(b).id {
                 g.insert(i);
                 placed = true;
                 break;
