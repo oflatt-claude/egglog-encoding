@@ -959,6 +959,28 @@ def curated():
     # action's root is a CHILD and the node it builds contains that child's own
     # parent, so the assertion relates a class to a node built over it.
     #
+    # TRIGGER, minimised by varying only the action over one e-graph and pattern:
+    #
+    #     union ?a (h ?b ?c)   OVER-MERGES
+    #     union ?a (h ?c ?b)   agrees          <- same variables, swapped
+    #     union ?a (h ?b ?b)   agrees
+    #     union ?a (h ?a ?b)   agrees
+    #     union ?c (h ?a ?b)   agrees
+    #     union ?a ?b          agrees
+    #     union ?a ?c          agrees
+    #
+    # The reference gives the SAME answer for both argument orders; the encoding
+    # does not. So the encoding is sensitive to which child position a class sits
+    # in, and it over-merges only when the atom root -- the class the assertion is
+    # about -- is the SECOND child. The machinery has separate child-update rules
+    # for the first and second child, which is where to look.
+    #
+    # Ruled out along the way: malformed self-loops are a symptom (deleting them
+    # does not help, and neither does guarding transitivity, which is what derives
+    # them); it is not the refinement gap (writing the refinement into the pattern
+    # makes both sides agree, and both keep the slots apart); and it is not
+    # "self-edges derived from nodes" (no over-wide self-map appears here).
+    #
     # Timeline: the variable class holds its slot for six egglog iterations and
     # loses it on about the seventh. Both sides do reach a fixpoint -- the
     # encoding agrees with itself at N and 2N iterations -- so this is not the
