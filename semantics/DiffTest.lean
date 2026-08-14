@@ -1834,17 +1834,19 @@ set_option linter.hashCommand false in
 #guard (allCases.filter fun c => !(c.2.declared).encodeDomainB).all fun c =>
   !((c.2.declared).all Cmd.ctorDeclB)
 
-/-! **`encode` as written does not run.** The read-back is rejected statically by the
-front-end check, as `Encode.lean` says — and it is worse than that: `Expr.eval` has no rule
-for an application of a `.merge` function either, so the interpreter stops at the first one.
-For the one-construction program that is command 18, before any count exists. -/
+/-! **`encode` runs.** It did not while `encodeBuild` read its view back to get the
+canonical member: `(let x (@fView c…))` is a lookup, which `Program.illegalReads` rejects
+statically and `Expr.eval` has no rule for at all, so the interpreter stopped at the first
+one — command 18 of the one-construction program, before any count existed. The skolem
+`.app f es` names the class as well as the canonical member does, since equality on the
+target is only what `@UF` records, so the read-back was an optimization and dropping it
+leaves a head with no read in it. -/
 set_option linter.hashCommand false in
-#guard (encode buildCase.declared).illegalReads.length = 3
+#guard (encode buildCase.declared).illegalReads.length = 0
 set_option linter.hashCommand false in
-#guard (execM (encode buildCase.declared)).isNone
+#guard (execM (encode buildCase.declared)).isSome
 set_option linter.hashCommand false in
-#guard ((stuckAt runFuel FDatabase.empty 0 (encode buildCase.declared)).map fun ic =>
-  (ic.1, ic.2.toEgg)) = some (18, "(let @v0 (@OneView))")
+#guard stuckAt runFuel FDatabase.empty 0 (encode buildCase.declared) = none
 
 /-! With the read-back standing in as the skolem id, the same program passes all four
 front-end checks and runs. -/

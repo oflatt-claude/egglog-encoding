@@ -273,18 +273,25 @@ theorems that would have are deleted (`ENCODING.md`). -/
 mutual
 
 /-- Build `e` in the target. Returns the expression naming `e`'s e-class, the actions
-that create it, and the next variable number. -/
+that create it, and the next variable number.
+
+**The skolem is the answer; nothing is read back.** `.app f es` names the class as well as
+any member does, because equality on the target is what `@UF` records and every reader
+goes through `UFLeader`. egglog reads its view back to return the *canonical* member — an
+optimization, and the reason it needs `set-if-empty` as a primitive, since
+`(let x (@fView c…))` is a lookup its own
+`check_no_function_lookups_in_actions` refuses. Skipping it costs the rebuild more
+re-keying and buys a head with no read in it at all. -/
 def encodeBuild : Expr → Nat → Expr × List Action × Nat
   | .lit l, n => (.lit l, [], n)
   | .var v, n => (.var v, [], n)
   | .app f args, n =>
       match encodeBuildArgs args n with
       | (es, as, n₁) =>
-          (.var (freshVar n₁),
+          (.app f es,
            as ++ [.set (termName f) (es ++ [.app f es]) [unitE],
-                  .set (viewName f) es [.app f es],
-                  .letBind (freshVar n₁) (.app (viewName f) es)],
-           n₁ + 1)
+                  .set (viewName f) es [.app f es]],
+           n₁)
 
 /-- `encodeBuild` over an argument list. -/
 def encodeBuildArgs : List Expr → Nat → List Expr × List Action × Nat
