@@ -258,15 +258,17 @@ stream — so a failing index does not reproduce across a generator change. Copy
 interesting case into `curated()` before changing anything, which is where `C11`
 and `C12` came from.
 
-Current state:
+Current state — `./xdiff.py` and `./xdiff.py fuzz 250 777`:
 
-| | |
-| --- | --- |
-| curated | 20/20 agree, 16 of them firing |
-| random | 250 cases, seed 777 |
-| matching differences | 0 |
-| order dependence | 0 |
-| machinery differences | 0 |
+| | curated | random |
+| --- | --- | --- |
+| cases agreeing | 21/21 | 249/250 |
+| of which the rule fired | 17 | 52 |
+| matching differences | 0 | 0 |
+| order dependence | 0 | 0 |
+| nondeterminism | 0 | 0 |
+| machinery differences | 0 | 0 |
+| timeouts, excluded | 0 | 1 |
 
 **Read the firing count before the agreement count.** A case whose rule never
 fires says nothing about matching, and random patterns mostly do not fire, so the
@@ -281,6 +283,7 @@ Curated cases, and what each is for:
 | `C1`–`C10` | repeated variables, chains, joins, symmetry, redundancy, three-atom bodies |
 | `C11` | the action must not use `union` off the identity |
 | `C12` | atoms must be compiled in a connected order |
+| `C13` | the first atom must not be a binder |
 | `P1`,`P2` | ported: a node's distinct slots may not be merged, with and without redundancy |
 | `B1`–`B4` | binders: chaining through one, α-equivalence, the same slot literal on two binders |
 
@@ -393,9 +396,11 @@ flavour of `find-mapping` (a different representation).
 
 ## Open questions
 
-1. **Choice of first atom.** Any atom can be it, and the choice decides how many
-   atoms have to solve for a renaming. Probably pick the one with the most shared
-   variables, or leave it to the query planner.
+1. **Choice of first atom.** It must not be a binder (`C13`), and beyond that the
+   choice decides how many atoms have to solve for a renaming. Probably pick the
+   one with the most shared variables, or leave it to the query planner. Also
+   unsettled: what to do when *every* atom is a binder — the compiler currently
+   just takes the first, and no test forces the question.
 2. **Are self-edges derived from nodes a problem?** Two machinery rules derive a
    class-level self-edge from a node's own edges. Under redundancy that states
    something false about the class, and although the shrinking rule deletes the
