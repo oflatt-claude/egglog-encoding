@@ -3,22 +3,28 @@
 
 Runs the public benchmark entrypoint (``bench.py``) once per treatment and
 target, on the current checkout and on the latest ``main``, accumulating every
-endpoint in the ordinary report cache. eval-live's interactive report discovers
-its dropdown from every cached endpoint, so the page can compare any two of
-them — including branch against main. Each endpoint is labelled by target
+endpoint in a report cache this run owns. eval-live's interactive report
+discovers its dropdown from every cached endpoint, so the page can compare any
+two of them — including branch against main. Each endpoint is labelled by target
 (``branch`` / ``main``) and commit hash, so it is clear which commit each side
 is.
 
-The last run writes the page, opening on proof overhead of the current
-checkout. Its cache and page are copied to ``nightly/output/`` only after that
-run succeeds, so a failed run leaves the previously published page in place.
+That cache is the published ``index.jsonl``, so the nightly server serves the
+run's rows next to the page they render. Each run builds in an empty directory:
+report JSONL is a disposable cache with no migrations, so rows an earlier run
+wrote under another schema version would fail every ``bench.py`` invocation
+rather than be recomputed.
+
+The last run writes the page. The finished directory replaces
+``nightly/output/`` only after that run succeeds, so a failed run leaves the
+previously published page in place.
 
 The egraphs-good nightly service (``nightly.cs.washington.edu``) checks out this
 repository, runs ``make nightly``, and serves that directory, matching
 ``report=`` in the nightly configuration.
 
-``nightly/output/`` is git-ignored, so this runs the same way locally as it does
-on the host. ``make nightly-local`` is that run at ``--rounds 1``.
+``nightly/`` is git-ignored, so this runs the same way locally as it does on the
+host. ``make nightly-local`` is that run at ``--rounds 1``.
 """
 
 from __future__ import annotations
@@ -39,10 +45,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 BENCH_SCRIPT = REPO_ROOT / "bench.py"
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "nightly" / "output"
 
-# bench.py's default report cache, shared with every other local invocation, and
-# the page --open derives from it.
-REPORT_PATH = REPO_ROOT / ".reports.jsonl"
-PAGE_PATH = REPO_ROOT / ".reports.html"
+# The published names. bench.py writes the page next to the report cache it is
+# given, deriving index.html from index.jsonl.
+REPORT_NAME = "index.jsonl"
+PAGE_NAME = "index.html"
 
 # Checkouts to measure, each with a stable label so the dropdown shows which
 # commit an endpoint belongs to. Endpoint identity is (binary, treatment), so a
@@ -82,7 +88,14 @@ def _bench_env() -> dict[str, str]:
     return {**os.environ, "PATH": os.pathsep.join(path), "BROWSER": "true"}
 
 
-def _run(target: Target, treatment: Treatment, *, open_report: bool, rounds: int | None) -> int:
+def _run(
+    target: Target,
+    treatment: Treatment,
+    *,
+    report_path: Path,
+    open_report: bool,
+    rounds: int | None,
+) -> int:
     """Benchmark one endpoint against the baseline on the same checkout."""
 
     label, source = target
@@ -97,6 +110,9 @@ def _run(target: Target, treatment: Treatment, *, open_report: bool, rounds: int
         f"{label}={source}",
         "--compare-treatment",
         BASELINE,
+        # This run's own cache, never the checkout-wide default one.
+        "--report",
+        str(report_path),
         # Per-file tables make a long run's progress legible.
         "--detail",
         "files",
@@ -105,6 +121,23 @@ def _run(target: Target, treatment: Treatment, *, open_report: bool, rounds: int
     ]
     print(f"nightly: {' '.join(shlex.quote(part) for part in command)}", file=sys.stderr)
     return subprocess.run(command, cwd=REPO_ROOT, env=_bench_env(), check=False).returncode
+
+
+def _staging_dir(output_dir: Path) -> Path:
+    """Return an empty directory beside ``output_dir`` to build this run in."""
+
+    staging_dir = output_dir.with_name(output_dir.name + ".next")
+    shutil.rmtree(staging_dir, ignore_errors=True)
+    staging_dir.mkdir(parents=True)
+    return staging_dir
+
+
+def _publish(staging_dir: Path, output_dir: Path) -> None:
+    """Replace the published directory with the finished run."""
+
+    output_dir.parent.mkdir(parents=True, exist_ok=True)
+    shutil.rmtree(output_dir, ignore_errors=True)
+    staging_dir.replace(output_dir)
 
 
 def _positive_int(value: str) -> int:
@@ -117,7 +150,7 @@ def _positive_int(value: str) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Populate the endpoint cache and publish ``<output_dir>/index.html``."""
+    """Populate this run's cache and publish it as ``<output_dir>/index.jsonl`` beside the page."""
 
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
@@ -134,23 +167,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     args = parser.parse_args(list(argv) if argv is not None else None)
     output_dir = args.output_dir.expanduser().resolve()
+    staging_dir = _staging_dir(output_dir)
+    report_path = staging_dir / REPORT_NAME
 
     # Populate the dropdown with every endpoint. A combination that fails to
     # build or run drops one option instead of failing the whole nightly.
     for target in TARGETS:
         for treatment in TREATMENTS:
-            if _run(target, treatment, open_report=False, rounds=args.rounds) != 0:
+            if _run(target, treatment, report_path=report_path, open_report=False, rounds=args.rounds) != 0:
                 print(f"nightly: skipped {target[0]} {treatment}", file=sys.stderr)
 
     # The whole cache is now populated, so this last run re-renders it as the
     # page. Its rows are already cached, so it only rebuilds the report.
-    if _run(BRANCH, HEADLINE, open_report=True, rounds=args.rounds) != 0 or not PAGE_PATH.is_file():
+    rendered = _run(BRANCH, HEADLINE, report_path=report_path, open_report=True, rounds=args.rounds) == 0
+    if not rendered or not (staging_dir / PAGE_NAME).is_file():
         print("nightly: benchmark did not produce a report", file=sys.stderr)
         return 1
-    output_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(PAGE_PATH, output_dir / "index.html")
-    shutil.copyfile(REPORT_PATH, output_dir / "index.jsonl")
-    print(f"nightly: wrote report to {output_dir / 'index.html'}", file=sys.stderr)
+    _publish(staging_dir, output_dir)
+    print(f"nightly: wrote report to {output_dir / PAGE_NAME}", file=sys.stderr)
     return 0
 
 
