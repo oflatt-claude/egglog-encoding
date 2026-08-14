@@ -248,6 +248,27 @@ e-classes, i.e. only the case where both renamings are the identity. So:
 So the surface language wants an action that takes renamed ids, or the encoder
 has to synthesise the `RenamesToLeader` insert itself.
 
+**This is not a nicety, and getting it wrong is silent.** A plain
+`(union root built)` asserts an equation whose two renamings are the identity.
+When the root's renaming is not the identity, that equation is simply *false* —
+it conflates two distinct pattern slots — and the e-graph absorbs it as spurious
+redundancy rather than complaining. `C11` in `xdiff.py` is the worked case: a
+root renaming of `{$0↦$3, $2↦$2}` drove `(Var 0)` from one live slot to none,
+after which child-update emptied every edge and `h(x,y)` collapsed with
+`h(x,x)`. Two things about the failure are worth remembering:
+
+* the built node was *correct* — the corruption was entirely in how it was
+  attached, so inspecting the action's output tells you nothing;
+* an edge-width check does not catch it, because the children's classes go
+  slotless too and the widths agree again by the end.
+
+The safe rule for a compiler: emit `union` **only** when the action's root is the
+initial atom's root, whose `mp` is the identity by construction. Anywhere else,
+emit the `RenamesToLeader` fact. Restricting the built node to the root's slot
+space instead (composing every child renaming through `inverse mp_root`) is also
+sound, but it needs a totality guard and then declines to fire on cases the
+`RenamesToLeader` form handles.
+
 ## Fresh slots
 
 `find-mapping` gives the *minimal* `mp′`, exactly as Definition 8 asks, so a

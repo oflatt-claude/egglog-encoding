@@ -200,9 +200,25 @@ def compile_rule(atoms, action):
             mp_of[root] = mp
 
     root, op, a, b = action
+    # egglog's `union` equates e-classes, i.e. it can only assert an equation
+    # whose two renamings are the identity. The root's renaming `mp_of[root]`
+    # generally is NOT: it carries the matched node's slots into the pattern's.
+    # Unioning the built node with the root as-is therefore asserts a *false*
+    # equation whenever they differ, which shows up as spurious redundancy.
+    #
+    # So build the node in the root's own slot space instead, by pulling every
+    # child renaming back through `inverse mp_root`, and guard that doing so
+    # keeps all of the child's slots -- `compose` truncates silently, and a
+    # dropped slot asserts that slot is redundant.
+    # The built node lives in pattern slots, so the equation to assert is
+    # `built = mp_root * X_root` -- a union over *renamed ids*, which egglog's
+    # `union` cannot express (it equates e-classes, i.e. only the case where
+    # both renamings are the identity). Insert the RenamesToLeader fact instead
+    # and let the machinery's transitivity / single-parent rules re-orient it.
+    mr = mp_of[root]
     act = (
-        f'(union {cls_of[root]} (App "{op}" {mp_of[a]} {cls_of[a]} '
-        f"{mp_of[b]} {cls_of[b]}))"
+        f'(let _hn (App "{op}" {mp_of[a]} {cls_of[a]} {mp_of[b]} {cls_of[b]}))\n'
+        f"       (RenamesToLeader _hn {mr} {cls_of[root]})"
     )
     return "(rule (" + "\n       ".join(body) + f")\n      ({act}))"
 
@@ -485,27 +501,27 @@ def curated():
         [("f", V0, ("g", V0, V1)), ("k", V0, V0), ("h", V0, V1)],
     ))
 
-    # C11 -- KNOWN FAILING, found by `fuzz 150 2024` as fuzz56. Kept as a
-    # regression case: it should start passing when the bug is fixed.
+    # C11 -- regression for the action bug, found by `fuzz 150 2024` as fuzz56.
     #
-    # The encoding derives h(x,y) = h(x,x); the reference does not, and is right
-    # to refuse -- Def. 8 makes each lookup's renaming injective, so a node with
-    # two distinct slots can never represent h(x,x) (the crate pins this as
+    # The compiled action used to emit a plain `(union root built)`, which
+    # asserts an equation whose two renamings are the identity. The root's
+    # renaming here is {0->3, 2->2}, so that equation was false: it conflated
+    # slot 0 with slot 3. The e-graph absorbed it as spurious redundancy -- the
+    # `(Var 0)` class went from 1 live slot to 0 -- and child-update then emptied
+    # every edge, collapsing h(x,y) with h(x,x). The reference refuses that, and
+    # is right to: Def. 8 makes each lookup's renaming injective, so a node with
+    # two distinct slots cannot represent h(x,x) (the crate pins this as
     # `regress::same_node_redundant_slots_stay_distinct`).
     #
-    # Symptom: the reference builds h over two distinct slots ($f20, $f33) and
-    # keeps the two probes apart. The encoding ends up with exactly ONE h node,
-    # both of its edges empty, and its class carrying no slots, so both probes
-    # collapse into it. A dropped slot propagating through the action's union --
-    # the same family as M6, reached through the action rather than through
-    # `find-mapping`. Note a `BadEdge`-style width check does NOT catch it: by
-    # the end the children's classes have gone slotless too, so the widths agree.
+    # It was also the only order-dependent case in 150, which fits: the two atoms
+    # share no variable, so one of them mints, and the root's renaming -- hence
+    # how wrong the union was -- depended on which atom went first.
     #
-    # Also the only case in 150 where the encoding is order dependent, which is
-    # consistent with the two atoms that share no variable minting into spaces
-    # whose relationship depends on which atom went first.
+    # Worth knowing for the next such hunt: a `BadEdge` width check does NOT
+    # catch this, because by the end the children's classes have gone slotless
+    # too and the widths agree again.
     cs.append(Case(
-        "C11-KNOWN-FAIL-unsound-slot-loss",
+        "C11-action-renamed-id-union",
         [NUL],
         [(("g", ("sub2", NUL, NUL), ("sub", V1, V0)), NUL),
          (("add", ("k", V2, NUL), ("k", V0, NUL)), V0)],
