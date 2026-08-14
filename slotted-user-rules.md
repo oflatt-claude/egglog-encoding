@@ -86,8 +86,35 @@ atom, so a slot literal written both under a binder and outside it lets the
 binder escape. A flattener has to reject or rename those.
 
 Then process the atoms in an order where each atom after the first shares a
-variable with the already-processed part. Each atom needs an `mp` carrying its
-node's slots into `slots(pattern)`, and there are exactly three ways to get one:
+variable with the already-processed part. **This is a correctness condition, not
+a heuristic.** An atom sharing nothing has no constraint on its `mp`, so every
+slot it needs is *minted* — and a mint is a commitment the encoding cannot
+revisit. If a later atom then shows that a minted slot is really one the pattern
+had already named, the constraints conflict, `find-mapping` fails, and a match is
+lost. `multi_ematch` is immune: it keeps such a slot flexible and lets `unify`
+merge it later. `C12` in `xdiff.py` is the worked case, and `order_atoms` is the
+greedy reordering that avoids it.
+
+A body that cannot be connected at all — no two atoms share a variable — has no
+such order, and then minting is unavoidable and the gap is real.
+
+Each atom needs an `mp` carrying its node's slots into `slots(pattern)`. There is
+**one** rule for getting it, and it is worth stating before the three cases below,
+because reading them as three different shapes is what produced two of the bugs
+in the history at the end of this document:
+
+> `mp` is the least renaming, total on the atom's node slots, consistent with
+> *every* constraint already available — the atom's root if it is already bound,
+> **and** every child an earlier atom already bound. Collect them all into one
+> `find-mapping-total`, whose avoid-set is every slot named so far.
+
+The three cases are just which constraints happen to exist. The initial atom has
+none, so `mp` is the identity and it *defines* `slots(pattern)`. A chain atom
+knows its root. A join atom knows some children. An atom that knows both must use
+both — using only the root is the under-constrained mistake, and it is invisible
+until a node carries a redundant slot.
+
+With that said, the three instances:
 
 1. **Initial atom** — `mp = id`. Nothing is emitted; the children's stored edges
    *are* their pattern-slot renamings.
@@ -335,13 +362,12 @@ Differentially tested against the reference implementation
 (`slotted-experiments/xmulti` runs the oracle; `tests/slotted-multipat-diff.egg`
 runs the encoded form).
 
-**The three cases above are really one, and splitting them loses matches.** An
-atom's `mp` must be the least total renaming consistent with *everything already
-known about that atom* — its root **and** every already-bound child. Case 2 as
-written derives `mp` from the root alone, which is under-constrained exactly when
-the node carries slots the root's renaming does not cover, i.e. redundant slots.
-The atom then names those slots independently of an earlier atom that already
-named the same ones, and the repeated variable's `≡` check fails.
+The uniform rule stated under [Compiling the body](#compiling-the-body) is what
+this section established: treating the three cases as three shapes, and deriving a
+chain atom's `mp` from its root alone, is under-constrained exactly when the node
+carries slots the root's renaming does not cover — redundant slots. The atom then
+names those slots independently of an earlier atom that already named the same
+ones, and the repeated variable's `≡` check fails.
 
 Two cases pin it. Both use `add(zero, zero)` over nodes with a redundant slot,
 with `?u` written in two atoms so its occurrences must be identified.
@@ -355,8 +381,6 @@ with `?u` written in two atoms so its occurrences must be identified.
   Folding `?u`'s known renaming in as a constraint pins atom 3 to `$10` and the
   reference's match comes back.
 
-So the fix is to stop treating the three cases as different shapes: emit one
-`find-mapping-total` per atom over every constraint available at that point.
 "Extending `mp` is the exception" understates it — extension is the *general*
 case, and initial/chain are just the instances with no constraints and with
 root-only constraints respectively.
@@ -374,21 +398,33 @@ nondeterminism `unify` gets from branching has to come from.
 `slotted-experiments/xdiff/xdiff.py` generates cases, compiles each
 multipattern, runs both sides, and compares the probe partition. Results:
 
-Current state: **199/200 generated cases agree**, with 39 of them actually firing
-the rule, plus 11/11 curated. The single failure is a timeout — the encoding
-blowing past 25s on one e-graph, a performance problem rather than a wrong
-answer. No matching divergence, no order dependence, no machinery difference.
+Current state, `fuzz 300 90210` plus the curated corpus:
 
-Getting there took fixing three real bugs and three of the harness's own. The
+| | |
+| --- | --- |
+| cases agreeing | **298/300**, and **12/12** curated |
+| matching divergence | 0 |
+| order dependence | 0 |
+| machinery difference | 0 |
+| timeouts (excluded) | 2 |
+| cases where the rule fired | 61/300 |
+
+Read the last row before trusting the first: a case where the rule never fires
+says nothing about matching, so the harness always reports it.
+
+Getting there took fixing four real bugs and three of the harness's own. The
 history is worth keeping, because every one of them was silent:
 
 **In the encoding**
 
-* *The action unioned e-classes instead of renamed ids.* See Actions above; this
-  was an unsoundness, and the only source of order dependence.
+* *The action unioned e-classes instead of renamed ids.* See Actions above. An
+  unsoundness, and the source of the only order dependence found.
 * *Each atom's `mp` was solved from its root alone.* Under-constrained whenever
   the node carries slots the root's renaming does not cover, i.e. redundant
-  slots. Fixed by solving from every constraint available at that point.
+  slots. Fixed by the uniform rule above.
+* *Atoms were compiled in the order written.* An atom sharing no variable with
+  the prefix mints slots it cannot later revise, which loses matches — `C12`.
+  Fixed by `order_atoms`.
 * *Minted slots could collide across atoms.* `find-mapping-total` is pure and
   sees one atom at a time, so passing only the initial atom's slots as the
   avoid-set let two minting atoms pick the same slot. The compiler now threads a
@@ -529,6 +565,12 @@ repeated-variable occurrence; one `find-mapping` per atom that extends `mp`,
 with a `RenamesToLeader` *join* per variable it is constrained through; and one
 totality guard per action-used variable. Only the joins fan out, and
 `RenamesToLeader` is small — usually one self-loop per e-class.
+
+Measured caveat: a small fraction of generated e-graphs (roughly 1 in 200) make
+the machinery run for tens of seconds on inputs the reference finishes instantly,
+so `xdiff.py` bounds every run and reports those separately. They are wrong-cost,
+not wrong-answer, but they are the only category the sweep still reports and are
+worth profiling before this encoding is used on anything large.
 
 ## Easy things to get wrong
 
