@@ -78,7 +78,14 @@
 ;;;   pattern:  ?p == (add ?a ?b), ?a == (sub ?u ?u), ?b == (sub2 ?u ?u)
 ;;;   reference: 1 match, the two slots MERGED
 ;;;
-;;; This is the case that separates the two spellings.
+;;; NOTE: this no longer separates the two spellings. `find-mapping-total` now
+;;; mints the SMALLEST unused slot rather than one above the maximum, so both
+;;; atoms here mint the same name and the root-only rule fires too. The defect is
+;;; still real -- it is under-constrained whenever a node carries slots the root's
+;;; renaming does not cover -- and the coverage that still catches it is `C6` and
+;;; `C12` in `slotted-experiments/xdiff/xdiff.py`, which are checked against the
+;;; reference rather than against hand-written expectations. This file is kept as
+;;; a compact runnable illustration of the shape.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
 
@@ -136,6 +143,7 @@
        (= s4  (compose (inverse mu) (compose mp3 v2)))
        (RenamesToLeader u s4 u))
       ((Hit "R2-solved" p)
+       (Mu "R2-solved-atom2" mu)
        (Mu "R2-solved-atom3" (compose mp3 v1))))
 
 (let $sub  (App "sub"  (map-of 0 9) (Var 0) (map-of 0 9) (Var 0)))
@@ -145,14 +153,13 @@
 (let $add  (App "add" (map-empty) (Null) (map-empty) (Null)))
 (run 25)
 
-;; (a) the two atoms mint different names, so the match is lost
-(check (Mu "R2-root-only-atom2" (map-of 0 10)))
-(check (Mu "R2-root-only-atom3" (map-of 0 8)))
-(fail (check (Hit "R2-root-only" p)))
+;; both spellings mint the same name under the current policy, so both fire
+(check (Mu "R2-root-only-atom2" m) (Mu "R2-root-only-atom3" m))
+(check (Hit "R2-root-only" p))
 
-;; (b) solving through ?u pins atom 3 to atom 2's name, and the reference's
-;;     match comes back
-(check (Mu "R2-solved-atom3" (map-of 0 10)))
+;; solving through ?u pins atom 3 to atom 2's name -- correct by construction
+;; rather than by coincidence
+(check (Mu "R2-solved-atom2" m) (Mu "R2-solved-atom3" m))
 (check (Hit "R2-solved" p))
 
 (pop)

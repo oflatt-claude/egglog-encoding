@@ -151,6 +151,7 @@ fn main() {
             let from = Pattern::PVar(root.clone());
             let to: Pattern<L> = Pattern::parse(&format!("({op} ?{a} ?{b})")).unwrap();
             let debug = std::env::var("XMULTI_DEBUG").is_ok();
+            let mut saturated = false;
             for round in 0..spec.rounds {
                 let before = eg.progress();
                 let substs = multi_ematch(&pat, &eg);
@@ -168,9 +169,13 @@ fn main() {
                     eg.union_instantiations(&from, &to, &s, None);
                 }
                 if before == eg.progress() {
+                    saturated = true;
                     break;
                 }
             }
+            // A case that hit the round cap without settling means the two sides
+            // ran different amounts of work, so comparing them says nothing.
+            println!("SATURATED {}", if saturated { "yes" } else { "no" });
         }
     }
 

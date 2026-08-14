@@ -290,6 +290,17 @@ def compile_rule(atoms, action):
                         f"(= {sym} (compose (inverse {mp_of[cp]}) (compose {mp} {e})))"
                     )
                     body.append(f"(RenamesToLeader {cls_of[cp]} {sym} {cls_of[cp]})")
+                    # A redundant slot is recorded as a *partial* self-loop, so
+                    # the stored set is an inverse monoid, not a group. If the
+                    # composition above truncated, the short map could match one
+                    # of those partial loops and be accepted wrongly. Requiring
+                    # the width to be unchanged rules that out without depending
+                    # on the e-graph being saturated -- which matters here,
+                    # because user rules share a ruleset with the machinery and
+                    # so can match mid-repair.
+                    body.append(
+                        f"(= (map-length {sym}) (map-length {mp_of[cp]}))"
+                    )
             else:
                 m = fresh("m")
                 body.append(f"(= {m} (compose {mp} {e}))")
@@ -322,7 +333,7 @@ def compile_rule(atoms, action):
 
 
 # -------------------------------------------------------------- egg generation
-def egg_program(case, atoms=None):
+def egg_program(case, atoms=None, mult=3):
     atoms = case.atoms if atoms is None else atoms
     out = [f'(include "{MACHINERY}")']
     # A slotted e-class is NOT one egglog e-class: the alpha-finder relates
@@ -344,10 +355,10 @@ def egg_program(case, atoms=None):
         out.append(f"(union _ua{i} _ub{i})")
     for i, t in enumerate(case.probes):
         out.append(f"(let _p{i} {enc(t)})")
-    out.append(f"(run {case.rounds * 3})")
+    out.append(f"(run {case.rounds * mult})")
     for i, _ in enumerate(case.probes):
         out.append(f"(ProbeId _p{i} {i})")
-    out.append(f"(run {case.rounds * 3})")
+    out.append(f"(run {case.rounds * mult})")
     out.append("(print-function SameClass 100000)")
     return "\n".join(out) + "\n"
 
@@ -395,14 +406,19 @@ def run_reference(case, atoms=None):
         return ("TIMEOUT", f">{RUN_TIMEOUT}s")
     if r.returncode != 0:
         return ("ERROR", r.stderr.strip().splitlines()[-1] if r.stderr else "?")
+    part, sat = None, True
     for line in r.stdout.splitlines():
         if line.startswith("PARTITION "):
-            return ("OK", line[len("PARTITION "):].strip())
-    return ("ERROR", "no PARTITION line")
+            part = line[len("PARTITION "):].strip()
+        elif line.startswith("SATURATED "):
+            sat = line.split()[1] == "yes"
+    if part is None:
+        return ("ERROR", "no PARTITION line")
+    return ("OK" if sat else "UNSATURATED", part)
 
 
-def run_encoding(case, atoms=None, keep=None):
-    prog = egg_program(case, atoms)
+def run_encoding(case, atoms=None, keep=None, mult=3):
+    prog = egg_program(case, atoms, mult)
     path = keep or (ROOT / "xdiff-tmp.egg")
     path.write_text(prog)
     try:
@@ -456,6 +472,8 @@ def check_case(case, verbose=False, stats=None):
         stats["fired"] = stats.get("fired", 0) + 1
     if rs == "TIMEOUT" or es == "TIMEOUT":
         return [f"{case.name}: rule timeout ref={rs} enc={es}"]
+    if rs == "UNSATURATED":
+        return [f"{case.name}: unsaturated, excluded (reference hit its round cap)"]
     if rs != "OK":
         return [f"{case.name}: reference crashed: {rv}"]
     if es != "OK":
@@ -465,12 +483,18 @@ def check_case(case, verbose=False, stats=None):
         fails.append(f"{case.name}: MISMATCH vs reference\n"
                      f"    ref {rv}\n    enc {ev}")
 
-    # 3. determinism: the same program twice must give the same answer. Checked
-    # separately so it cannot be mistaken for order dependence.
-    ds, dv = run_encoding(case)
+    # 3. did both sides reach a fixpoint? If not, they ran different amounts of
+    # work and comparing them says nothing, so the case is excluded. The
+    # reference reports this itself; the encoding is checked by running twice as
+    # many iterations and requiring the same answer -- which doubles as a
+    # determinism check.
+    ds, dv = run_encoding(case, mult=6)
+    if rs == "UNSATURATED" or ds == "UNSATURATED":
+        return [f"{case.name}: unsaturated, excluded (ref={rs} enc={ds})"]
     if ds == "OK" and dv != ev:
-        fails.append(f"{case.name}: ENCODING is nondeterministic\n"
-                     f"    run 1 {ev}\n    run 2 {dv}")
+        return [f"{case.name}: unsaturated or nondeterministic in the encoding\n"
+                f"    {case.rounds * 3} iterations {ev}\n"
+                f"    {case.rounds * 6} iterations {dv}"]
 
     # 4. order independence, both sides. Every distinct reordering for 2-3 atoms;
     # a sample beyond that, since each costs a full saturation on both sides. The
@@ -719,6 +743,50 @@ def curated():
         [("k", V0, V1), ("h", V0, V0), ("h", V0, V1)],
     ))
 
+    # ---- symmetries ----------------------------------------------------------
+    # The encoding keeps a class's symmetries as self-loops in RenamesToLeader,
+    # and a repeated variable is checked by computing the symmetry it would need
+    # and looking it up. That only works if the stored set is CLOSED, not just a
+    # set of generators: a lookup for a composite element has to succeed.
+    #
+    # `a` below has three slots and is given one 3-cycle. The parent then holds
+    # `a` at the identity beside `a` at the cycle's SQUARE, which is never
+    # unioned in, so `(f ?x ?x)` matches only if the square is stored too.
+    A3 = ("k", ("g", V0, V1), V2)            # a, at the identity
+    A3s = ("k", ("g", V1, V2), V0)           # a, under 0->1->2->0
+    A3ss = ("k", ("g", V2, V0), V1)          # a, under the square of that
+    cs.append(Case(
+        "S1-symmetry-group-is-closed",
+        [("f", A3, A3ss)], [(A3, A3s)],
+        [("p", "f", "x", "x")], ("p", "h", "x", "x"),
+        [("f", A3, A3ss), ("h", A3, A3), ("h", A3, A3s)],
+    ))
+    # control: without the 3-cycle there is no symmetry to find, so no match
+    cs.append(Case(
+        "S1b-no-symmetry-no-match",
+        [("f", A3, A3ss)], [],
+        [("p", "f", "x", "x")], ("p", "h", "x", "x"),
+        [("f", A3, A3ss), ("h", A3, A3), ("h", A3, A3s)],
+    ))
+
+    # S2 -- symmetry and redundancy at once. A redundant slot is recorded as a
+    # *partial* self-loop, so the self-loops are not a group but an inverse
+    # monoid. The worry is a computed symmetry that came out short (composition
+    # truncates) matching one of those partial maps and being accepted wrongly.
+    # `a` keeps two live slots with a swap between them, and a third slot that a
+    # union has made redundant. The parent holds `a` at the identity beside `a`
+    # under the swap, so the match needs the real symmetry while a partial
+    # self-loop is also present to be confused with it.
+    Ar = ("k", ("g", V0, V1), V2)
+    Arsw = ("k", ("g", V1, V0), V2)
+    cs.append(Case(
+        "S2-symmetry-beside-redundancy",
+        [("f", Ar, Arsw)],
+        [(Ar, Arsw), (Ar, ("k", ("g", V0, V1), NUL))],
+        [("p", "f", "x", "x")], ("p", "h", "x", "x"),
+        [("f", Ar, Arsw), ("h", Ar, Ar), ("h", Ar, Arsw)],
+    ))
+
     # ---- binders -------------------------------------------------------------
     # The point of slotted e-graphs, and untested until now. `$v` is a slot
     # literal: the reference's `Bind` has no room for a pattern variable there.
@@ -912,6 +980,7 @@ def main():
     # disagreeing before any rule runs, so it says nothing about matching.
     cats = {
         "timeout (excluded)": ["timeout"],
+        "unsaturated (excluded)": ["unsaturated"],
         "harness/crash": ["crashed"],
         "machinery baseline": ["BASELINE differs"],
         "nondeterminism": ["nondeterministic"],

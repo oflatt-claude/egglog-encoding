@@ -1,5 +1,5 @@
 use super::*;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct MapContainer {
@@ -151,31 +151,41 @@ fn renaming_find_mapping<T: Copy + Ord>(maps: &[BTreeMap<T, T>]) -> Option<BTree
 ///
 /// Arguments come flat as `[avoid, domain, first..., second...]`. The
 /// constraint part is solved exactly as in [`renaming_find_mapping`]; each
-/// remaining key of `domain` is then named with a slot strictly greater than
-/// every slot mentioned in `avoid`, `domain`, or the solved part, which keeps
-/// the result injective and disjoint from the slots already in play.
+/// remaining key of `domain` is then named with the *smallest* non-negative
+/// value not already spoken for, which keeps the result injective and disjoint
+/// from `avoid`.
 ///
-/// `None` on the same conditions as [`renaming_find_mapping`], on fewer than
-/// two leading maps, or on `i64` overflow.
+/// Smallest-unused rather than above-the-maximum, and that choice is
+/// load-bearing. Above-the-maximum makes the name depend on how large the
+/// existing names happen to be, so a rule whose own output feeds back into its
+/// premise mints a higher value every round and keeps building fresh
+/// alpha-equivalent nodes instead of reaching a fixpoint. Smallest-unused gives
+/// the same situation the same name, so those nodes coincide.
+///
+/// `None` on the same conditions as [`renaming_find_mapping`], or on fewer than
+/// two leading maps.
 fn renaming_find_mapping_total(maps: &[BTreeMap<i64, i64>]) -> Option<BTreeMap<i64, i64>> {
     let (head, pairs) = maps.split_at_checked(2)?;
     let (avoid, domain) = (&head[0], &head[1]);
 
     let mut mapping = renaming_find_mapping(pairs)?;
 
-    let mentioned = mapping
+    let mut used: BTreeSet<i64> = mapping
         .values()
         .chain(avoid.keys())
         .chain(avoid.values())
-        .chain(domain.keys())
-        .chain(domain.values());
-    let mut next = mentioned.copied().max().unwrap_or(0).max(0);
+        .copied()
+        .collect();
 
+    let mut next = 0;
     for k in domain.keys() {
         if mapping.contains_key(k) {
             continue;
         }
-        next = next.checked_add(1)?;
+        while used.contains(&next) {
+            next += 1;
+        }
+        used.insert(next);
         mapping.insert(*k, next);
     }
     Some(mapping)
