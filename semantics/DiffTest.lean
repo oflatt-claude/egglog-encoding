@@ -1840,26 +1840,21 @@ statically and `Expr.eval` has no rule for at all, so the interpreter stopped at
 one — command 18 of the one-construction program, before any count existed. The skolem
 `.app f es` names the class as well as the canonical member does, since equality on the
 target is only what `@UF` records, so the read-back was an optimization and dropping it
-leaves a head with no read in it. -/
-set_option linter.hashCommand false in
-#guard (encode buildCase.declared).illegalReads.length = 0
-set_option linter.hashCommand false in
-#guard (execM (encode buildCase.declared)).isSome
-set_option linter.hashCommand false in
-#guard stuckAt runFuel FDatabase.empty 0 (encode buildCase.declared) = none
+leaves a head with no read in it.
 
-/-! With the read-back standing in as the skolem id, the same program passes all four
-front-end checks and runs. -/
+The four front-end checks are static analysis and stay compile-time. Anything that *runs* a
+program does not: a rebuild now follows every writing command, so executing an encoded
+program saturates a ruleset once per action, and doing that during elaboration made
+`lake build difftest` exceed fifteen minutes. Those moved to `encodeSelfTests`, run by
+`difftest encode-selftest`. -/
 set_option linter.hashCommand false in
-#guard (skolemizeReadBack buildCase.declared).illegalReads.isEmpty
+#guard (encode buildCase.declared).illegalReads.isEmpty
 set_option linter.hashCommand false in
-#guard (skolemizeReadBack buildCase.declared).illegalSets.isEmpty
+#guard (encode buildCase.declared).illegalSets.isEmpty
 set_option linter.hashCommand false in
-#guard (skolemizeReadBack buildCase.declared).arityErrors.isEmpty
+#guard (encode buildCase.declared).arityErrors.isEmpty
 set_option linter.hashCommand false in
-#guard (skolemizeReadBack buildCase.declared).arityConflicts.isEmpty
-set_option linter.hashCommand false in
-#guard (execM (skolemizeReadBack buildCase.declared)).isSome
+#guard (encode buildCase.declared).arityConflicts.isEmpty
 
 /-! **The class count is the claim; the entry count is the price.** `unionCase` builds
 `Add(One, Two)` and `Add(Two, One)` and unions the leaves, so the source has one key class.
@@ -1867,14 +1862,22 @@ The encoded view holds two entries — `[One, Two]` and `[Two, One]` — and the
 `delete` to retire either, so `viewEntryCount` is 2 where `viewClassCount` is 1. This is the
 one case where the two target-side numbers come apart at a size a `#guard` can run, and it
 is the whole reason the harness reports both. -/
-set_option linter.hashCommand false in
-#guard (encodeCompare runFuel buildCase).render = "AGREE  Add:1/1/1 One:1/1/1 Two:1/1/1"
-set_option linter.hashCommand false in
-#guard (encodeCompare runFuel unionCase).render = "AGREE  Add:1/1/2 One:1/1/1 Two:1/1/1"
-set_option linter.hashCommand false in
-#guard (encodeCompare runFuel unionCase).agrees
-set_option linter.hashCommand false in
-#guard !(encodeCompare runFuel unionCase).entriesAgree
+/-- The checks that have to **run** a program. Compile-time `#guard`s cannot carry these:
+each encoded action is followed by a saturating rebuild, so elaborating them ran the
+e-matcher tens of times. `difftest encode-selftest` executes them and reports failures. -/
+def encodeSelfTests : List (String × (Unit → Bool)) :=
+  [ ("encode buildCase runs", fun _ => (execM (encode buildCase.declared)).isSome),
+    ("encode buildCase never sticks", fun _ =>
+      stuckAt runFuel FDatabase.empty 0 (encode buildCase.declared) = none),
+    ("buildCase agrees", fun _ =>
+      (encodeCompare runFuel buildCase).render = "AGREE  Add:1/1/1 One:1/1/1 Two:1/1/1"),
+    ("unionCase agrees on classes", fun _ => (encodeCompare runFuel unionCase).agrees),
+    ("unionCase entries exceed classes", fun _ =>
+      !(encodeCompare runFuel unionCase).entriesAgree),
+    -- The regression test for the rebuild-after-action fix. Before it, `upCase` reported
+    -- `DIFFER Wrapper:1/2/2` — the source's one `Wrapper` class against the target's two,
+    -- because the congruence a top-level `union` creates never travelled up a level.
+    ("upCase agrees on classes", fun _ => (encodeCompare runFuel upCase).agrees) ]
 
 /-! **The negative control, and a defect it exposes.** Put `unionCase`'s two applications
 under a `Wrapper` and the congruence has to travel up a level: the source says one `Wrapper`
@@ -1891,21 +1894,18 @@ source's congruence is a closure and holds the moment the `union` lands; the tar
 ruleset, and `execCmdM` runs a merge phase after every top-level action but nothing runs the
 rebuild.
 
-**One empty round repairs it**, which is what says the rebuild is the missing piece and
-nothing else is: the `up-thin-run` probe is `upThinCase ++ [.run ""]`, whose source counts
-are unchanged and whose encoded counts then agree (`H:1/1/2 F:1/1/2` — classes right, the
-stale entries still there). Whether `encodeCmd` should emit a `Cmd.saturate rebuildRuleset`
-after `.action` as well, as `execCmdM` runs a merge phase there, is the question this
-raises. The probe is not a guard because running one rebuild takes minutes.
+**One empty round repaired it**, which is what said the rebuild was the missing piece and
+nothing else was: the `up-thin-run` probe is `upThinCase ++ [.run ""]`, whose source counts
+are unchanged and whose encoded counts then agreed. **`encodeCmd` now emits
+`Cmd.saturate rebuildRuleset` after a top-level action too**, which is where egglog puts it
+— after every command but a function, rule or sort declaration. `upCase` is kept as the
+regression test for that, in `encodeSelfTests` rather than as a `#guard`, because running
+the rebuild after each action costs a saturation per action.
 
-It is also what makes the corpus result readable: the curated `actions` case is action-only
-too, and agrees only because the congruence it asserts is `One = One`. Every other in-domain
-case ends in a `run`, so every other one does get a rebuild. -/
-set_option linter.hashCommand false in
-#guard (encodeCompare runFuel upCase).render
-  = "DIFFER Wrapper:1/2/2 Add:1/1/2 One:1/1/1 Two:1/1/1"
-set_option linter.hashCommand false in
-#guard !(encodeCompare runFuel upCase).agrees
+It is also what makes the corpus result readable: the curated `actions` case was action-only
+too, and agreed only because the congruence it asserts is `One = One`. Every other in-domain
+case ends in a `run`, so every other one got a rebuild even before the fix — which is why the
+corpus could not see this and a probe was needed. -/
 
 /-! And `actions` is the only in-domain case the gap can reach, because it is the only one
 with no `run` in it — so the corpus cannot see this defect and a probe was needed. -/
@@ -1987,8 +1987,15 @@ def main (args : List String) : IO UInt32 := do
     for (name, p₀) in allCases do
       let p := p₀.declared
       if p.encodeDomainB then
-        IO.println s!"{name} {p.widestRule} {(Egglog.skolemizeReadBack p).widestRule}"
+        IO.println s!"{name} {p.widestRule} {(Egglog.encode p).widestRule}"
     return 0
+  | ["encode-selftest"] =>
+    let mut bad := 0
+    for (name, t) in encodeSelfTests do
+      if t () then IO.println s!"ok   {name}"
+      else do IO.println s!"FAIL {name}"; bad := bad + 1
+    IO.println s!"encode-selftest: {encodeSelfTests.length - bad} passed, {bad} failed"
+    return (if bad == 0 then 0 else 1)
   | "encode" :: fuel :: names =>
     match fuel.toNat? with
     | none => IO.eprintln s!"difftest: bad fuel {fuel}"; return 1

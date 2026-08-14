@@ -397,9 +397,19 @@ def encodePrelude (P : Program) : Program :=
 
 /-- Encode one command. A source declaration is dropped: the prelude has already declared
 its function as the skolem-id constructor and emitted its table triple, and re-emitting it
-would be a redeclaration (`Cmd.DeclFresh`). -/
+would be a redeclaration (`Cmd.DeclFresh`).
+
+**Every command that writes is followed by a rebuild**, which is where egglog puts it —
+after each one except a function, rule or sort declaration
+(`egglog/src/proofs/proof_encoding.rs:1655-1662`). A top-level action writes, so a `union`
+there creates congruence the views must be re-keyed for; without the rebuild it propagates
+only to the columns the union names directly, and `Wrapper(Add One Two)`,
+`Wrapper(Add Two One)`, `union One Two` leaves `Wrapper` as two classes where the source
+has one. A declaration writes nothing and a rule only registers itself. -/
 def encodeCmd : Cmd → Nat → Program × Nat
-  | .action a, n => match encodeAction a n with | (as, n₁) => (as.map .action, n₁)
+  | .action a, n =>
+      match encodeAction a n with
+      | (as, n₁) => (as.map .action ++ [.saturate rebuildRuleset], n₁)
   | .rule r, n => match encodeRule r n with | (r', n₁) => ([.rule r'], n₁)
   | .run R, n => ([.run R, .saturate rebuildRuleset], n)
   | .saturate R, n => ([.saturate R, .saturate rebuildRuleset], n)
