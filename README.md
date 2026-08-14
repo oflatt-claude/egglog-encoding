@@ -372,9 +372,9 @@ sharing it.
 ### Nightly
 
 `make nightly` benchmarks each treatment in `TREATMENTS` — `term`, `proofs`,
-and `proof-extraction` — on the current checkout and on the latest `main`, accumulating them all in
-the ordinary report cache, and copies the resulting interactive page and its
-cache to `nightly/output/index.html` and `index.jsonl`:
+and `proof-extraction` — on the current checkout and on the latest `main`,
+accumulating them all in `nightly/output/index.jsonl` and rendering the
+interactive page beside it as `nightly/output/index.html`:
 
 ```bash
 make nightly
@@ -386,9 +386,17 @@ page's dropdown can compare any two of them and it is clear which commit each
 side is; endpoints with identical binaries collapse to one option. The page
 opens on proof overhead of the current checkout. Populating is best effort: an
 endpoint that fails to build or run drops one dropdown option rather than
-failing the run, and the output directory is only overwritten after a
-successful run. Edit `TARGETS` and `TREATMENTS` in `scripts/nightly_bench.py` to
-change what is measured.
+failing the run. Edit `TARGETS` and `TREATMENTS` in `scripts/nightly_bench.py`
+to change what is measured.
+
+The published `index.jsonl` is the cache the run measured into, not a copy of
+the shared `.reports.jsonl`, so the served page and the rows behind it always
+belong to the same run. Both published names are deleted before measuring
+starts: report JSONL is a disposable cache with no migrations, so rows an
+earlier run appended — under an older schema version, on a host that keeps its
+checkout between runs — would otherwise fail every `bench.py` invocation
+instead of being recomputed. A run that fails therefore publishes no page,
+rather than leaving the previous one up to make a broken nightly look healthy.
 
 `make nightly-local` is the same run at `--rounds 1`, for trying the whole
 pipeline out without waiting for a full nightly.
