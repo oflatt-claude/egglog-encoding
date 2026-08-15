@@ -139,7 +139,11 @@
 ;; if `e2 = f(m1*c1, m2*c2)` /\ `e2 = m*e1`, then `e1 = m⁻¹*e2 = m⁻¹*f(m1*c1, m2*c2) = f(m⁻¹*m1*c1, m⁻¹*m2*c2)`
 (rule ((RenamesToLeader e2 m e1)
        (= e2 (App f m1 c1 m2 c2))
-       (!= e1 e2))
+       (!= e1 e2)
+       ; `compose` truncates when an edge reaches outside im(m); a narrowed edge
+       ; asserts its child is slotless, so decline instead
+       (= (map-length (compose (inverse m) m1)) (map-length m1))
+       (= (map-length (compose (inverse m) m2)) (map-length m2)))
       (
         (union e1 (App f (compose (inverse m) m1) c1 (compose (inverse m) m2) c2))
         (delete (App f m1 c1 m2 c2))

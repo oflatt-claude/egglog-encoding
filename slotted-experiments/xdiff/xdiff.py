@@ -905,10 +905,11 @@ def curated():
         rounds=6,
     ))
 
-    # X1 -- KNOWN FAILING. Found by `fuzz 250 6161` as fuzz85, in the
-    # over-deriving direction: the encoding merges h(x,y) with h(x,x), which the
-    # reference refuses because a node whose two slots are distinct cannot
-    # represent h(x,x) (Def. 8's per-lookup injectivity).
+    # X1 -- regression for the migration-truncation bug (FIXED). Found by
+    # `fuzz 250 6161` as fuzz85, in the over-deriving direction: the encoding
+    # merged h(x,y) with h(x,x), which the reference refuses because a node whose
+    # two slots are distinct cannot represent h(x,x) (Def. 8's per-lookup
+    # injectivity). See X2 for the minimal form and the mechanism.
     #
     # The action asserts ?x1 = h(?x3, ?x1) -- a node equal to its own child --
     # which merges the h class into the variable class. BOTH sides assert that
@@ -931,7 +932,7 @@ def curated():
     # as an open question and calls probably harmless. This is evidence against
     # "harmless" and is the first thing to check.
     cs.append(Case(
-        "X1-KNOWN-FAIL-over-merges-h-x-x",
+        "X1-migration-must-not-truncate",
         [("add", ("sub2", V0, V0), NUL)],
         [(("h", V0, V2), NUL)],
         [("x3", "h", "x1", "x2")],
@@ -941,9 +942,24 @@ def curated():
         rounds=6,
     ))
 
-    # X2 -- KNOWN FAILING, and the MINIMAL form of X1: one term, one rule, no
-    # unions at all. `fuzz 250 6161` as fuzz206, which the per-use scheme had been
-    # hiding behind a timeout.
+    # X2 -- the minimal form, and the one that produced the diagnosis (FIXED).
+    # `fuzz 250 6161` as fuzz206, which the per-use scheme had been hiding behind
+    # a timeout. It needs ONE term and no unions; the h(v0,v0) probe is not even
+    # required to drive the collapse.
+    #
+    # CAUSE, found by stepping the minimal case one iteration at a time: the
+    # machinery's MIGRATION rule truncates a child edge. It rewrites
+    # `e2 = f(m1*c1, m2*c2)` with `e2 = m*e1` into `e1 = f((m^-1.m1)*c1, ...)`,
+    # and `compose` keeps only the keys whose value lies in the left map's domain.
+    # When m1 reaches outside im(m) -- exactly when e2 has a slot that is
+    # redundant in e1 -- the edge silently narrows. Here m = {0->0} and
+    # m1 = {0->1} compose to the EMPTY map, and an empty edge to (Var 0) asserts
+    # the variable class has no slots, after which every h(var, var) collapses.
+    #
+    # It is the same dropped-slot bug as M6, inside the machinery: the redundant
+    # slot has no name in e1's space and gets dropped rather than named. Fixed by
+    # guarding migration to decline when it would truncate -- sound but
+    # incomplete, like M6(b); minting a fresh name would be the complete fix.
     #
     #     term   h(var $2, var $1)
     #     rule   ?c == (h ?a ?b)  =>  union ?a (h ?b ?c)
@@ -988,7 +1004,7 @@ def curated():
     # fixpoints, which means the encoding has a derivation the reference does not,
     # reached only after the rule has fired on nodes the rule itself built.
     cs.append(Case(
-        "X2-KNOWN-FAIL-minimal-over-merge",
+        "X2-migration-truncation-minimal",
         [("h", V2, V1)], [],
         [("x3", "h", "x1", "x2")],
         ("x1", "h", "x2", "x3"),

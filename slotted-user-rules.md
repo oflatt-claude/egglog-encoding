@@ -331,19 +331,47 @@ Current state — `./xdiff.py` and `./xdiff.py fuzz 250 777`:
 | --- | --- | --- |
 | cases agreeing | 29/30 | 248/250 |
 | of which the rule fired | 23 | 57 |
-| matching differences | **1 (`X1`, known)** | 1 |
+| matching differences | 0 | 0 |
 | order dependence | 0 | 0 |
 | slot-renaming | 0 | 0 |
 | machinery differences | 0 | 0 |
 | excluded: timeout or unsettled | 0 | 1 |
 
-`X1` is a known failure kept in the corpus, so `./xdiff.py` exits non-zero by
-design until it is fixed. The encoding merges `h(x,y)` with `h(x,x)`, which the
-reference refuses since a node whose two slots are distinct cannot represent
-`h(x,x)`. The action asserts `?x = h(?y, ?x)` — a node equal to its own child —
-and both sides make that assertion and both merge classes over it; only the
-reference still keeps `h(x,x)` apart afterwards. Not yet localised to the action
-or to the machinery's redundancy handling.
+## A soundness bug in the machinery: migration truncates edges
+
+Found by the differential suite as `X1`/`X2`, and fixed. It is worth reading
+because it is the *same* dropped-slot mistake as the fresh-slot section above,
+one level down.
+
+The migration rule rewrites a node into its leader's slot space:
+
+```text
+e2 = m*e1  and  e2 = f(m1*c1, m2*c2)   =>   e1 = f((m⁻¹∘m1)*c1, (m⁻¹∘m2)*c2)
+```
+
+`compose` keeps only the keys whose value lies in the left map's domain. So when
+`m1` reaches outside `im(m)` — exactly when `e2` has a slot that is redundant in
+`e1` — the rewritten edge **silently narrows**. In the minimal case `m = {$0↦$0}`
+and `m1 = {$0↦$1}` compose to the *empty* map, and an empty edge to `(Var 0)`
+asserts the variable class has no slots. Every `h(var, var)` then collapses.
+
+The minimal reproducer is one term and one rule, no unions:
+
+```text
+term   h(v0, v1)
+rule   ?c == (h ?a ?b)  =>  union ?a (h ?b ?c)
+```
+
+Two things made it hard to see. It is **child-position sensitive** — swapping the
+action's two arguments makes it disappear, because the truncation only hits the
+edge that reaches the dropped slot — and every visible symptom is downstream:
+malformed self-loops appear (derived by transitivity closing a cycle), the
+variable class loses its slot, and `h(x,y)` merges with `h(x,x)`. Deleting the
+self-loops does not help, and neither does guarding transitivity.
+
+Fixed by declining to migrate when either edge would narrow. Sound but
+incomplete, exactly like the totality guard in `M6(b)`: the redundant slot has no
+name in `e1`'s space, and the complete fix is to mint one.
 
 **Read the firing count before the agreement count.** A case whose rule never
 fires says nothing about matching, and random patterns mostly do not fire, so the
@@ -467,6 +495,11 @@ Each of these was silent, and each cost a round of confusion.
   binders written with the same slot each invent their own, then cannot agree.
   Constrain with it, do not check against it.
 * *Invented slots colliding across atoms* — the avoid-set has to accumulate.
+* ***`compose` truncates, silently.*** It keeps only the keys whose value lies in
+  the left map's domain, so every `(compose a b)` on an edge is a place a slot can
+  disappear — and a narrowed edge asserts its child is slotless. This one mistake
+  is behind the fresh-slot gap, the `M6` unsoundness, and the migration bug above.
+  Wherever you compose, ask what happens when the image escapes the domain.
 * *Argument order.* The renaming comes *before* each child:
   `(App String Renaming U Renaming U)`, `(RenamesToLeader U Renaming U)`.
 * *Child rewrite direction.* It is `(compose m1 m)`, not
