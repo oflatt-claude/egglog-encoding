@@ -128,10 +128,10 @@ def enc(t):
         # contains the bound slot, since the lambda *node* carries it and only
         # the class drops it.
         x, body = t[1][1], t[2]
-        return (f'(App "lambda" {mapof({0: x})} (Var 0) '
+        return (f'(App2 "lambda" {mapof({0: x})} (Var 0) '
                 f"{mapof(edge(body))} {enc(body)})")
     op, a, b = t
-    return f'(App "{enc_op(op)}" {mapof(edge(a))} {enc(a)} {mapof(edge(b))} {enc(b)})'
+    return f'(App2 "{enc_op(op)}" {mapof(edge(a))} {enc(a)} {mapof(edge(b))} {enc(b)})'
 
 
 def shift_term(t, k):
@@ -296,7 +296,7 @@ def compile_rule(atoms, action):
         for cp in (c1, c2):
             kids.append("(Var 0)" if cp.startswith("$")
                         else cls_of.setdefault(cp, fresh("C")))
-        body.append(f'(= {rv} (App "{enc_op(op)}" {e1} {kids[0]} {e2} {kids[1]}))')
+        body.append(f'(= {rv} (App2 "{enc_op(op)}" {e1} {kids[0]} {e2} {kids[1]}))')
 
         dom = fresh("dom")
         body.append(f"(= {dom} (map-union (map-image {e1}) (map-image {e2})))")
@@ -443,11 +443,11 @@ def compile_rule(atoms, action):
                 f"      ((RenamesToLeader {cls_of[root]} "
                 f"(compose (inverse {mr}) {mp_of[a]}) {cls_of[a]})))")
     if "union-id" in BUGS:
-        act = (f'(union {cls_of[root]} (App "{enc_op(op)}" '
+        act = (f'(union {cls_of[root]} (App2 "{enc_op(op)}" '
                f"{mp_of[a]} {cls_of[a]} {mp_of[b]} {cls_of[b]}))")
     else:
         act = (
-            f'(let _hn (App "{enc_op(op)}" {mp_of[a]} {cls_of[a]} {mp_of[b]} {cls_of[b]}))\n'
+            f'(let _hn (App2 "{enc_op(op)}" {mp_of[a]} {cls_of[a]} {mp_of[b]} {cls_of[b]}))\n'
             f"       (RenamesToLeader _hn {mr} {cls_of[root]})"
         )
     return "(rule (" + "\n       ".join(body) + f")\n      ({act}))"

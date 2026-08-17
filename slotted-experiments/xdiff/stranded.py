@@ -18,12 +18,12 @@ import xdiff as X
 
 OBS = """
 (relation WithSym (String Renaming U Renaming U))
-(rule ((= V (App f p1 C1 p2 C2)) (RenamesToLeader V s V)) ((WithSym f p1 C1 p2 C2)))
+(rule ((= V (App2 f p1 C1 p2 C2)) (RenamesToLeader V s V)) ((WithSym f p1 C1 p2 C2)))
 (relation NoSym (String Renaming U Renaming U))
-(rule ((= V (App f p1 C1 p2 C2))) ((NoSym f p1 C1 p2 C2)))
-(print-size App)
+(rule ((= V (App2 f p1 C1 p2 C2))) ((NoSym f p1 C1 p2 C2)))
+(print-size App2)
 (run 40)
-(print-size App)
+(print-size App2)
 (print-function WithSym 100000)
 (print-function NoSym 100000)
 """
@@ -67,8 +67,8 @@ def slots_of(term):
         return {int(re.findall(r"-?\d+", term)[0])}
     if term.startswith("(Null"):
         return set()
-    if term.startswith("(App "):
-        a = split_args(term[len("(App "):-1])
+    if term.startswith("(App2 "):
+        a = split_args(term[len("(App2 "):-1])
         out = set()
         for m, c in ((parse_map(a[1]), a[2]), (parse_map(a[3]), a[4])):
             cs = slots_of(c)

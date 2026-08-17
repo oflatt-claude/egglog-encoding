@@ -10,7 +10,7 @@ import sys
 sys.path.insert(0, "slotted-experiments/xdiff")
 import xdiff as X
 
-TAIL = "(run-schedule (saturate (run)))\n(print-size App)\n"
+TAIL = "(run-schedule (saturate (run)))\n(print-size App2)\n"
 
 for name in ("X1", "X2", "C5", "S2", "B2"):
     case = next((c for c in X.curated() if c.name.startswith(name)), None)

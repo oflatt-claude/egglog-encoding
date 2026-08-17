@@ -8,7 +8,7 @@
 ;;; Flatten the rule's LHS into depth-1 atoms `?v == (Op ?c1 ?c2)`, one per e-node,
 ;;; every child a bare variable.  Each becomes one egglog atom
 ;;;
-;;;     (= V (App "Op" p1 C1 p2 C2))
+;;;     (= V (App2 "Op" p1 C1 p2 C2))
 ;;;
 ;;; and egglog's join does the e-class level for free.  What it does not give is
 ;;; agreement of the *renamings*: its variable equality is e-class equality, while
@@ -34,7 +34,7 @@
 ;;;   (compose a b)           = a . b, b first: (compose a b)[x] = a[b[x]]
 ;;;   (compose-total a b)     = the same, but fails rather than dropping a key
 ;;;   (map-image m)           = identity on im(m);  (map-domain m) = on dom(m)
-;;;   (App f m1 c1 m2 c2)     = f(m1*c1, m2*c2),  mi : slots(ci) -> slots(node)
+;;;   (App2 f m1 c1 m2 c2)     = f(m1*c1, m2*c2),  mi : slots(ci) -> slots(node)
 ;;;   (RenamesToLeader a m b) = a = m*b,          m  : slots(b)  -> slots(a)
 ;;;   (RenamesToLeader c m c) = m is in G(c)
 ;;;
@@ -73,10 +73,10 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
 
-(rule ((= e (App "f" ma a mb b)))
-      ((union e (App "f" mb b ma a))))
+(rule ((= e (App2 "f" ma a mb b)))
+      ((union e (App2 "f" mb b ma a))))
 
-(let $f01 (App "f" (map-of 0 0) (Var 0)
+(let $f01 (App2 "f" (map-of 0 0) (Var 0)
                    (map-of 1 1) (Var 1)))
 (run 15)
 
@@ -108,7 +108,7 @@
 (relation Hit (U U))
 
 ;; the lookup form: sym is computed, then checked for membership
-(rule ((= e (App "f" m1 x m2 x))
+(rule ((= e (App2 "f" m1 x m2 x))
        (= sym (compose (inverse m1) m2))
        (RenamesToLeader x sym x))
       ((Hit e x)))
@@ -116,7 +116,7 @@
 ;; the enumerate-then-compare spelling -- same meaning, but the planner fans
 ;; out over G(X) and discards all but one row
 (relation Enum (U U))
-(rule ((= e (App "f" m1 x m2 x))
+(rule ((= e (App2 "f" m1 x m2 x))
        (RenamesToLeader x sym x)
        (= m2 (compose m1 sym)))
       ((Enum e x)))
@@ -124,11 +124,11 @@
 ;; what a non-slotted encoding would write: demand the two edges be *equal*.
 ;; Strictly weaker than Def. 6, and the difference is observable in (c).
 (relation NaiveHit (U U))
-(rule ((= e (App "f" m1 x m1 x))) ((NaiveHit e x)))
+(rule ((= e (App2 "f" m1 x m1 x))) ((NaiveHit e x)))
 
 ;; (a) both occurrences at the same slot
 (push)
-(let $ff (App "f" (map-of 7 7) (Var 7)
+(let $ff (App2 "f" (map-of 7 7) (Var 7)
                   (map-of 7 7) (Var 7)))
 (run 15)
 (check (Hit $ff (Var 0)))
@@ -139,7 +139,7 @@
 ;;     The crate refuses this via a disequality constraint; here the group
 ;;     lookup for the required swap just is not there.
 (push)
-(let $fg (App "f" (map-of 7 7) (Var 7)
+(let $fg (App2 "f" (map-of 7 7) (Var 7)
                   (map-of 8 8) (Var 8)))
 (run 15)
 (fail (check (Hit $fg x)))
@@ -150,14 +150,14 @@
 ;;     The machinery never normalises the two edges to be equal, so the naive
 ;;     spelling misses it while the Def. 6 spellings both fire.
 (push)
-(let $a01 (App "a" (map-of 0 0) (Var 0)
+(let $a01 (App2 "a" (map-of 0 0) (Var 0)
                    (map-of 1 1) (Var 1)))
-(let $a10 (App "a" (map-of 1 1) (Var 1)
+(let $a10 (App2 "a" (map-of 1 1) (Var 1)
                    (map-of 0 0) (Var 0)))
 (union $a01 $a10)
 (run 20)
 
-(let $t (App "f" (map-of 0 0 1 1) $a01
+(let $t (App2 "f" (map-of 0 0 1 1) $a01
                  (map-of 0 1 1 0) $a01))
 (run 20)
 (check (Hit $t $a01))
@@ -190,12 +190,12 @@
 (relation Chain (U Renaming Renaming))
 
 (rule (;; atom 1 -- its node's slots are the pattern's
-       (= p (App "f" pa a pb b))
+       (= p (App2 "f" pa a pb b))
        (= mp1 (map-union (map-image pa) (map-image pb)))     ; identity on atom 1's node slots
        (= avoid1 (map-image mp1)) ; slots already spoken for
        (= mb (compose mp1 pb))                ; ?b's renaming into slots(pattern)
        ;; atom 2 -- constrained by its root ?b, and by nothing else
-       (= b (App "g" pc c pd d))
+       (= b (App2 "g" pc c pd d))
        (= dom2 (map-union (map-image pc) (map-image pd)))    ; identity on atom 2's node slots
        (RenamesToLeader b symb b)             ; symb in G(B)  -- Def. 6 for ?b
        (= mp2 (find-mapping-total avoid1 dom2
@@ -208,16 +208,16 @@
 ;; the shorter spelling this replaced, kept to show the two agree here -- they
 ;; part company only when the inner node has a slot `mb` does not cover
 (relation ChainShort (U Renaming Renaming))
-(rule ((= p (App "f" pa a pb b))
-       (= b (App "g" pc c pd d))
+(rule ((= p (App2 "f" pa a pb b))
+       (= b (App2 "g" pc c pd d))
        (RenamesToLeader b symb b)
        (= mp2 (compose pb symb)))
       ((ChainShort p (compose mp2 pc) (compose mp2 pd))))
 
 ;; f( v[$0], g[$0,$1] )   with   g = g( v[$0], v[$1] )
-(let $g  (App "g" (map-of 0 0) (Var 0)
+(let $g  (App2 "g" (map-of 0 0) (Var 0)
                   (map-of 0 1) (Var 0)))
-(let $f  (App "f" (map-of 0 0) (Var 0)
+(let $f  (App2 "f" (map-of 0 0) (Var 0)
                   (map-of 0 0 1 1) $g))
 (run 20)
 
@@ -246,11 +246,11 @@
 (push)
 
 (relation Chain (U Renaming Renaming))
-(rule ((= p (App "f" pa a pb b))
+(rule ((= p (App2 "f" pa a pb b))
        (= mp1 (map-union (map-image pa) (map-image pb)))
        (= avoid1 (map-image mp1))
        (= mb (compose mp1 pb))
-       (= b (App "g" pc c pd d))
+       (= b (App2 "g" pc c pd d))
        (= dom2 (map-union (map-image pc) (map-image pd)))
        (RenamesToLeader b symb b)
        (= mp2 (find-mapping-total avoid1 dom2
@@ -261,16 +261,16 @@
       ((Chain p mc md)))
 
 (relation ChainShort (U Renaming Renaming))
-(rule ((= p (App "f" pa a pb b))
-       (= b (App "g" pc c pd d))
+(rule ((= p (App2 "f" pa a pb b))
+       (= b (App2 "g" pc c pd d))
        (RenamesToLeader b symb b)
        (= mp2 (compose pb symb)))
       ((ChainShort p (compose mp2 pc) (compose mp2 pd))))
 
-(let $g (App "g" (map-of 0 0) (Var 0) (map-of 0 1) (Var 0)))
-(let $k (App "k" (map-of 0 0) (Var 0) (map-of 0 0) (Var 0)))
+(let $g (App2 "g" (map-of 0 0) (Var 0) (map-of 0 1) (Var 0)))
+(let $k (App2 "k" (map-of 0 0) (Var 0) (map-of 0 0) (Var 0)))
 (union $g $k)
-(let $f (App "f" (map-of 0 0) (Var 0) (map-of 0 0) $g))
+(let $f (App2 "f" (map-of 0 0) (Var 0) (map-of 0 0) $g))
 
 (run 25)
 
@@ -305,14 +305,14 @@
 (relation Join (U U Renaming))
 
 (rule (;; atom 1 -- nothing known yet, so mp is the identity
-       (= p (App "f" p1 x q1 y))
+       (= p (App2 "f" p1 x q1 y))
        (= mp1 (map-union (map-image p1) (map-image q1)))     ; identity on atom 1's node slots
        (= avoid1 (map-image mp1))
        (= mx (compose mp1 p1))
        (= my (compose mp1 q1))
        ;; atom 2 -- root fresh, so both shared children constrain mp' and both
        ;; contribute part of it.  All the pairs go into one call.
-       (= q (App "g" p2 x q2 y))
+       (= q (App2 "g" p2 x q2 y))
        (= dom2 (map-union (map-image p2) (map-image q2)))    ; identity on atom 2's node slots
        (RenamesToLeader x sx x)
        (RenamesToLeader y sy y)
@@ -322,8 +322,8 @@
       ((Join p q mp')))
 
 (relation TooEager (U U))
-(rule ((= p (App "f" p1 x q1 y))
-       (= q (App "g" p2 x q2 y))
+(rule ((= p (App2 "f" p1 x q1 y))
+       (= q (App2 "g" p2 x q2 y))
        (RenamesToLeader x sx x)
        (= mp' (compose (compose p1 sx) (inverse p2)))   ; from ?x alone
        (= sy (compose (inverse q1) (compose mp' q2)))   ; then probe ?y
@@ -331,15 +331,15 @@
       ((TooEager p q)))
 
 (relation NaiveJoin (U U))
-(rule ((= p (App "f" p1 x q1 y))
-       (= q (App "g" p1 x q1 y)))                       ; same edges, no mp'
+(rule ((= p (App2 "f" p1 x q1 y))
+       (= q (App2 "g" p1 x q1 y)))                       ; same edges, no mp'
       ((NaiveJoin p q)))
 
 ;; (a) positive, mp' = identity.  im(p2) is only {$0}, so it never reaches $1
 ;;     and TooEager silently loses the match.
 (push)
-(let $P (App "f" (map-of 0 0) (Var 0) (map-of 1 1) (Var 1)))
-(let $Q (App "g" (map-of 0 0) (Var 0) (map-of 1 1) (Var 1)))
+(let $P (App2 "f" (map-of 0 0) (Var 0) (map-of 1 1) (Var 1)))
+(let $Q (App2 "g" (map-of 0 0) (Var 0) (map-of 1 1) (Var 1)))
 (run 20)
 (check (Join $P $Q m) (= (map-length m) 2))
 (fail (check (TooEager $P $Q)))
@@ -349,8 +349,8 @@
 ;;     injective mp' exists.  This is find-mapping's injectivity check doing
 ;;     the job of the crate's per-node disequality clique.
 (push)
-(let $P (App "f" (map-of 0 0) (Var 0) (map-of 1 1) (Var 1)))
-(let $Q (App "g" (map-of 0 0) (Var 0) (map-of 0 0) (Var 0)))
+(let $P (App2 "f" (map-of 0 0) (Var 0) (map-of 1 1) (Var 1)))
+(let $Q (App2 "g" (map-of 0 0) (Var 0) (map-of 0 0) (Var 0)))
 (run 20)
 (fail (check (Join $P $Q m)))
 (fail (check (Join $Q $P m)))
@@ -360,13 +360,13 @@
 ;;     must be the real swap.  Here im(p2) happens to cover all of q's slots,
 ;;     so TooEager works -- again a property of the data.
 (push)
-(let $a01 (App "a" (map-of 0 0) (Var 0) (map-of 1 1) (Var 1)))
-(let $a10 (App "a" (map-of 1 1) (Var 1) (map-of 0 0) (Var 0)))
+(let $a01 (App2 "a" (map-of 0 0) (Var 0) (map-of 1 1) (Var 1)))
+(let $a10 (App2 "a" (map-of 1 1) (Var 1) (map-of 0 0) (Var 0)))
 (union $a01 $a10)
 (run 20)
 
-(let $P (App "f" (map-of 0 0 1 1) $a01 (map-of 0 0) (Var 0)))
-(let $Q (App "g" (map-of 0 1 1 0) $a01 (map-of 0 0) (Var 0)))
+(let $P (App2 "f" (map-of 0 0 1 1) $a01 (map-of 0 0) (Var 0)))
+(let $Q (App2 "g" (map-of 0 1 1 0) $a01 (map-of 0 0) (Var 0)))
 (run 20)
 (check (Join $P $Q m))
 (check (TooEager $P $Q))
@@ -392,13 +392,13 @@
 (relation Tri (U U Renaming))
 
 (rule (;; atom 1 -- nothing known yet, so mp is the identity
-       (= p (App "f" pa a pb b))
+       (= p (App2 "f" pa a pb b))
        (= mp1 (map-union (map-image pa) (map-image pb)))
        (= avoid1 (map-image mp1))
        (= ma (compose mp1 pa))
        (= mb (compose mp1 pb))
        ;; atom 2 -- constrained by its root ?b
-       (= b (App "g" pc c pd d))
+       (= b (App2 "g" pc c pd d))
        (= dom2 (map-union (map-image pc) (map-image pd)))
        (RenamesToLeader b symb b)
        (= mp2 (find-mapping-total avoid1 dom2
@@ -409,7 +409,7 @@
        (= avoid2 (map-union avoid1 (map-image mp2)))
        (= mc (compose mp2 pc))
        ;; atom 3 -- root fresh, constrained through ?c (depth 2) and ?a (depth 1)
-       (= q (App "h" qc c qa a))
+       (= q (App2 "h" qc c qa a))
        (= dom3 (map-union (map-image qc) (map-image qa)))
        (RenamesToLeader c sc c)
        (RenamesToLeader a sa a)
@@ -418,15 +418,15 @@
                                   qc qa)))
       ((Tri p q mp3)))
 
-(let $g (App "g" (map-of 0 0) (Var 0)
+(let $g (App2 "g" (map-of 0 0) (Var 0)
                  (map-of 0 1) (Var 0)))
-(let $f (App "f" (map-of 0 0) (Var 0)
+(let $f (App2 "f" (map-of 0 0) (Var 0)
                  (map-of 0 0 1 1) $g))
 
 ;; (a) positive.  ?a and ?c are both v[$0] in pattern slots, and h's two
 ;;     children sit at the same slot $5, so mp' = {$5 -> $0}.
 (push)
-(let $h (App "h" (map-of 0 5) (Var 0)
+(let $h (App2 "h" (map-of 0 5) (Var 0)
                  (map-of 0 5) (Var 0)))
 (run 25)
 (check (Tri $f q m)
@@ -437,7 +437,7 @@
 ;; (b) negative.  h's children sit at *different* slots, so mp' would have to
 ;;     send both $5 and $6 to $0 -- not injective, no match.
 (push)
-(let $h2 (App "h" (map-of 0 5) (Var 0)
+(let $h2 (App2 "h" (map-of 0 5) (Var 0)
                   (map-of 0 6) (Var 0)))
 (run 25)
 (fail (check (Tri $f q m)))
@@ -484,41 +484,41 @@
 ;; live slot count is the length of its self-map, so a row where the two
 ;; disagree is malformed.
 (relation BadEdge (String Renaming U))
-(rule ((= n (App f m1 c1 m2 c2))
+(rule ((= n (App2 f m1 c1 m2 c2))
        (RenamesToLeader c1 s c1)
        (!= (map-length m1) (map-length s)))
       ((BadEdge f m1 c1)))
-(rule ((= n (App f m1 c1 m2 c2))
+(rule ((= n (App2 f m1 c1 m2 c2))
        (RenamesToLeader c2 s c2)
        (!= (map-length m2) (map-length s)))
       ((BadEdge f m2 c2)))
 
 ;; (a) minimal mp' -- unsound: ?z's edge comes out empty
 (push)
-(rule ((= p (App "f" p1 x q1 y))
-       (= q (App "g" p2 x q2 z))
+(rule ((= p (App2 "f" p1 x q1 y))
+       (= q (App2 "g" p2 x q2 z))
        (RenamesToLeader x sx x)
        (= mp' (compose (compose p1 sx) (inverse p2))))
-      ((union p (App "h" q1 y (compose mp' q2) z))))
+      ((union p (App2 "h" q1 y (compose mp' q2) z))))
 
-(let $P (App "f" (map-of 0 0) (Var 0) (map-of 1 1) (Var 1)))
-(let $Q (App "g" (map-of 0 0) (Var 0) (map-of 5 5) (Var 5)))
+(let $P (App2 "f" (map-of 0 0) (Var 0) (map-of 1 1) (Var 1)))
+(let $Q (App2 "g" (map-of 0 0) (Var 0) (map-of 5 5) (Var 5)))
 (run 20)
 (check (BadEdge "h" m c))                    ; the empty edge to ?z
 (pop)
 
 ;; (b) guarded -- sound but incomplete: the rule simply declines to fire
 (push)
-(rule ((= p (App "f" p1 x q1 y))
-       (= q (App "g" p2 x q2 z))
+(rule ((= p (App2 "f" p1 x q1 y))
+       (= q (App2 "g" p2 x q2 z))
        (RenamesToLeader x sx x)
        (= mp' (compose (compose p1 sx) (inverse p2)))
        (= mz (compose-total mp' q2)))     ; declines rather than dropping ?z's slot
-      ((union p (App "h" q1 y mz z))))
+      ((union p (App2 "h" q1 y mz z))))
 
 (push)
-(let $P (App "f" (map-of 0 0) (Var 0) (map-of 1 1) (Var 1)))
-(let $Q (App "g" (map-of 0 0) (Var 0) (map-of 5 5) (Var 5)))
+(let $P (App2 "f" (map-of 0 0) (Var 0) (map-of 1 1) (Var 1)))
+(let $Q (App2 "g" (map-of 0 0) (Var 0) (map-of 5 5) (Var 5)))
 (run 20)
 (fail (check (BadEdge f m c)))                       ; nothing malformed ...
 (fail (check (RenamesToLeader $P m $P) (= (map-length m) 1)))  ; ... and nothing derived
@@ -526,8 +526,8 @@
 
 ;; where ?z's slots are determined it still fires
 (push)
-(let $P (App "f" (map-of 0 0) (Var 0) (map-of 1 1) (Var 1)))
-(let $Q (App "g" (map-of 0 0) (Var 0) (map-of 0 0) (Var 0)))
+(let $P (App2 "f" (map-of 0 0) (Var 0) (map-of 1 1) (Var 1)))
+(let $Q (App2 "g" (map-of 0 0) (Var 0) (map-of 0 0) (Var 0)))
 (run 20)
 (check (RenamesToLeader $P m $P) (= (map-length m) 2))
 (pop)
@@ -536,17 +536,17 @@
 
 ;; (c) total mp' -- sound AND fires
 (push)
-(rule ((= p (App "f" p1 x q1 y))
-       (= q (App "g" p2 x q2 z))
+(rule ((= p (App2 "f" p1 x q1 y))
+       (= q (App2 "g" p2 x q2 z))
        (RenamesToLeader x sx x)
        (= pat (map-union (map-image p1) (map-image q1)))            ; identity on slots(pattern)
        (= dom (map-union (map-image p2) (map-image q2)))            ; identity on slots(node 2)
        (= mp' (find-mapping-total pat dom (compose p1 sx) p2)))
-      ((union p (App "h" q1 y (compose mp' q2) z))))
+      ((union p (App2 "h" q1 y (compose mp' q2) z))))
 
 (push)
-(let $P (App "f" (map-of 0 0) (Var 0) (map-of 1 1) (Var 1)))
-(let $Q (App "g" (map-of 0 0) (Var 0) (map-of 5 5) (Var 5)))
+(let $P (App2 "f" (map-of 0 0) (Var 0) (map-of 1 1) (Var 1)))
+(let $Q (App2 "g" (map-of 0 0) (Var 0) (map-of 5 5) (Var 5)))
 (run 20)
 (fail (check (BadEdge f m c)))                       ; ?z keeps its slot
 ;; and the redundancy the rule really does imply is still derived -- which is
@@ -556,8 +556,8 @@
 
 ;; the determined case is unchanged: nothing is minted
 (push)
-(let $P (App "f" (map-of 0 0) (Var 0) (map-of 1 1) (Var 1)))
-(let $Q (App "g" (map-of 0 0) (Var 0) (map-of 0 0) (Var 0)))
+(let $P (App2 "f" (map-of 0 0) (Var 0) (map-of 1 1) (Var 1)))
+(let $Q (App2 "g" (map-of 0 0) (Var 0) (map-of 0 0) (Var 0)))
 (run 20)
 (check (RenamesToLeader $P m $P) (= (map-length m) 2))
 (pop)
@@ -589,7 +589,7 @@
 (push)
 
 (rule (;; atom 1 -- nothing known yet, so mp is the identity
-       (= e (App "lambda" mvar (Var 0) mb b))
+       (= e (App2 "lambda" mvar (Var 0) mb b))
        (= mp1 (map-union (map-image mvar) (map-image mb)))
        (= avoid1 (map-image mp1))
        (= v (map-get (compose mp1 mvar) 0))       ; the bound slot, in pattern slots
@@ -599,7 +599,7 @@
        ;; checking `(= (compose m2 mv) mvar)` afterwards comes too late, because by
        ;; then mp2 has already minted its own name for the same binder and nothing
        ;; can revise a mint.
-       (= b (App "app" mf f mv (Var 0)))
+       (= b (App2 "app" mf f mv (Var 0)))
        (= dom2 (map-union (map-image mf) (map-image mv)))
        (RenamesToLeader b symb b)
        (= mp2 (find-mapping-total avoid1 dom2
@@ -610,9 +610,9 @@
 
 ;; positive: (lambda $5 (app c (var $5)))  ->  c
 (push)
-(let $c    (App "c" (map-empty) (Null) (map-empty) (Null)))
-(let $body (App "app" (map-empty) $c (map-of 5 5) (Var 5)))
-(let $lam  (App "lambda" (map-of 5 5) (Var 5)
+(let $c    (App2 "c" (map-empty) (Null) (map-empty) (Null)))
+(let $body (App2 "app" (map-empty) $c (map-of 5 5) (Var 5)))
+(let $lam  (App2 "lambda" (map-of 5 5) (Var 5)
                          (map-of 5 5) $body))
 (run 30)
 (check (RenamesToLeader $lam m $c))
@@ -620,9 +620,9 @@
 
 ;; negative: the bound slot is free in ?f -- (lambda $5 (app (var $5) (var $5)))
 (push)
-(let $body (App "app" (map-of 5 5) (Var 5)
+(let $body (App2 "app" (map-of 5 5) (Var 5)
                       (map-of 5 5) (Var 5)))
-(let $lam  (App "lambda" (map-of 5 5) (Var 5)
+(let $lam  (App2 "lambda" (map-of 5 5) (Var 5)
                          (map-of 5 5) $body))
 (run 30)
 (fail (check (RenamesToLeader $lam m (Var 0))))
@@ -630,9 +630,9 @@
 
 ;; negative: wrong slot -- (lambda $5 (app c (var $6)))
 (push)
-(let $c    (App "c" (map-empty) (Null) (map-empty) (Null)))
-(let $body (App "app" (map-empty) $c (map-of 6 6) (Var 6)))
-(let $lam  (App "lambda" (map-of 5 5) (Var 5)
+(let $c    (App2 "c" (map-empty) (Null) (map-empty) (Null)))
+(let $body (App2 "app" (map-empty) $c (map-of 6 6) (Var 6)))
+(let $lam  (App2 "lambda" (map-of 5 5) (Var 5)
                          (map-of 5 5 6 6) $body))
 (run 30)
 (fail (check (RenamesToLeader $lam m $c)))
@@ -660,10 +660,10 @@
 
 (relation Union' (Renaming U Renaming U))
 
-(rule ((= p (App "f" p1 x q1 y))
+(rule ((= p (App2 "f" p1 x q1 y))
        (= mp1 (map-union (map-image p1) (map-image q1)))
        (= avoid1 (map-image mp1))
-       (= q (App "g" p2 x q2 y))
+       (= q (App2 "g" p2 x q2 y))
        (= dom2 (map-union (map-image p2) (map-image q2)))
        (RenamesToLeader x sx x)
        (RenamesToLeader y sy y)
@@ -674,8 +674,8 @@
                                 p2 q2)))
       ((Union' s p (compose s r) q)))
 
-(let $P (App "f" (map-of 0 0) (Var 0) (map-of 1 1) (Var 1)))
-(let $Q (App "g" (map-of 0 0) (Var 0) (map-of 1 1) (Var 1)))
+(let $P (App2 "f" (map-of 0 0) (Var 0) (map-of 1 1) (Var 1)))
+(let $Q (App2 "g" (map-of 0 0) (Var 0) (map-of 1 1) (Var 1)))
 (run 20)
 (check (Union' s $P r $Q))
 
@@ -714,41 +714,41 @@
 ;;; its class does not depend on.  The root `add(null,null)` has no slots at all, so
 ;;; nothing pins `?u` or `?v` and both atoms have to invent.
 
-(let $sub  (App "sub"  (map-of 0 0) (Var 0) (map-of 0 0) (Var 0)))
-(let $sub2 (App "sub2" (map-of 0 1) (Var 0) (map-of 0 1) (Var 0)))
+(let $sub  (App2 "sub"  (map-of 0 0) (Var 0) (map-of 0 0) (Var 0)))
+(let $sub2 (App2 "sub2" (map-of 0 1) (Var 0) (map-of 0 1) (Var 0)))
 (union $sub  (Null))
 (union $sub2 (Null))
-(let $add (App "add" (map-empty) (Null) (map-empty) (Null)))
+(let $add (App2 "add" (map-empty) (Null) (map-empty) (Null)))
 
 ;; what each atom invents for ?u and ?v, accumulated and not
 (relation Accum   (Renaming Renaming))
 (relation NoAccum (Renaming Renaming))
 
-(rule ((= V (App "add" p1 C4 p2 C5))
+(rule ((= V (App2 "add" p1 C4 p2 C5))
        (= mp1 (map-union (map-image p1) (map-image p2)))
        (= idm1 (map-image mp1))
-       (= C4 (App "sub" p12 K1 p13 K1))
+       (= C4 (App2 "sub" p12 K1 p13 K1))
        (RenamesToLeader C4 sym2 C4)
        (= mp2 (find-mapping-total idm1 (map-union (map-image p12) (map-image p13))
                                   (compose (compose mp1 p1) sym2)
                                   (map-domain (compose mp1 p1))))
        (= av (map-union idm1 (map-image mp2)))     ; accumulate
-       (= C5 (App "sub2" p24 K2 p25 K2))
+       (= C5 (App2 "sub2" p24 K2 p25 K2))
        (RenamesToLeader C5 sym3 C5)
        (= mp3 (find-mapping-total av (map-union (map-image p24) (map-image p25))
                                   (compose (compose mp1 p2) sym3)
                                   (map-domain (compose mp1 p2)))))
       ((Accum (compose mp2 p12) (compose mp3 p24))))
 
-(rule ((= V (App "add" p1 C4 p2 C5))
+(rule ((= V (App2 "add" p1 C4 p2 C5))
        (= mp1 (map-union (map-image p1) (map-image p2)))
        (= idm1 (map-image mp1))
-       (= C4 (App "sub" p12 K1 p13 K1))
+       (= C4 (App2 "sub" p12 K1 p13 K1))
        (RenamesToLeader C4 sym2 C4)
        (= mp2 (find-mapping-total idm1 (map-union (map-image p12) (map-image p13))
                                   (compose (compose mp1 p1) sym2)
                                   (map-domain (compose mp1 p1))))
-       (= C5 (App "sub2" p24 K2 p25 K2))
+       (= C5 (App2 "sub2" p24 K2 p25 K2))
        (RenamesToLeader C5 sym3 C5)
        (= mp3 (find-mapping-total idm1 (map-union (map-image p24) (map-image p25))
                                   (compose (compose mp1 p2) sym3)

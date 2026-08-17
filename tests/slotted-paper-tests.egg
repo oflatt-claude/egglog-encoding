@@ -6,7 +6,7 @@
 ;;; These are the suites that need nothing the encoding does not have: every
 ;;; operator takes two children, and a binder's slot rides in the first child's
 ;;; edge. The paper's `lambda` and `arith` suites also use `let`, which binds a slot
-;;; *and* takes two children -- three positions where `App` offers two -- so they
+;;; *and* takes two children -- three positions where `App2` offers two -- so they
 ;;; are not portable without an n-ary constructor.
 
 (include "tests/slotted-egraph-encoding-11.egg")
@@ -25,8 +25,8 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
 
-(let $f01 (App "f" (map-of 0 0) (Var 0) (map-of 0 1) (Var 0)))
-(let $f12 (App "f" (map-of 0 1) (Var 0) (map-of 0 2) (Var 0)))
+(let $f01 (App2 "f" (map-of 0 0) (Var 0) (map-of 0 1) (Var 0)))
+(let $f12 (App2 "f" (map-of 0 1) (Var 0) (map-of 0 2) (Var 0)))
 (union $f01 $f12)
 
 (run 30)
@@ -52,11 +52,11 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
 
-(let $f12 (App "f" (map-of 0 1) (Var 0) (map-of 0 2) (Var 0)))
-(let $g21 (App "g" (map-of 0 2) (Var 0) (map-of 0 1) (Var 0)))
-(let $g12 (App "g" (map-of 0 1) (Var 0) (map-of 0 2) (Var 0)))
-(let $h12 (App "h" (map-of 0 1) (Var 0) (map-of 0 2) (Var 0)))
-(let $h21 (App "h" (map-of 0 2) (Var 0) (map-of 0 1) (Var 0)))
+(let $f12 (App2 "f" (map-of 0 1) (Var 0) (map-of 0 2) (Var 0)))
+(let $g21 (App2 "g" (map-of 0 2) (Var 0) (map-of 0 1) (Var 0)))
+(let $g12 (App2 "g" (map-of 0 1) (Var 0) (map-of 0 2) (Var 0)))
+(let $h12 (App2 "h" (map-of 0 1) (Var 0) (map-of 0 2) (Var 0)))
+(let $h21 (App2 "h" (map-of 0 2) (Var 0) (map-of 0 1) (Var 0)))
 
 (union $f12 $g21)
 (union $g12 $h12)

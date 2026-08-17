@@ -13,8 +13,8 @@
 
 (constructor Var (i64) U)
 
-;; `(App f m1 c1 m2 c2)` corresponds to the term `f(m1*c1, m2*c2)`
-(constructor App (String Renaming U Renaming U) U)
+;; `(App2 f m1 c1 m2 c2)` corresponds to the term `f(m1*c1, m2*c2)`
+(constructor App2 (String Renaming U Renaming U) U)
 
 ;; `(RenamesToLeader follower m leader)` corresponds to `follower = m*leader`.
 ;; We require `leader <= follower` in terms of ordering-max.
@@ -81,14 +81,14 @@
       )
 )
 
-;; α-finder: Will find two App nodes that are equal up to renaming, and eliminate one in favor of the other.
+;; α-finder: Will find two App2 nodes that are equal up to renaming, and eliminate one in favor of the other.
 
 ;; Input: e1 = f(m1*c1, m1'*c2) /\ e2 = f(m2*c1, m2'*c2),
 ;; then m = (find-mapping m1 m1' m2 m2') is the smallest renaming, s.t. m*m2 = m1 /\ m*m2' = m1'
 ;; so that m*e2 = m*f(m2*c1, m2'*c2) = f(m*m2*c1, m*m2'*c2) = f(m1*c1, m1'*c2) = e1
 ;; so in short m*e2 = e1.
-(rule ((= e1 (App f m1_o c1 m1'_o c2))
-       (= e2 (App f m2 c1 m2' c2))
+(rule ((= e1 (App2 f m1_o c1 m1'_o c2))
+       (= e2 (App2 f m2 c1 m2' c2))
        (= e1 (ordering-max e1 e2))
        (RenamesToLeader c1 sym c1)
        (RenamesToLeader c2 sym' c2)
@@ -106,12 +106,12 @@
                      (bool= (ordering-max m1' m2') m2')))))))
       (
         (RenamesToLeader e1 m e2)
-        (delete (App f m1 c1 m1' c2)) ; delete the e-node from e1
+        (delete (App2 f m1 c1 m1' c2)) ; delete the e-node from e1
       )
 )
 
 ; non-destructive symmetry-finder based on the above.
-(rule ((= e (App f m_o c1 m'_o c2))
+(rule ((= e (App2 f m_o c1 m'_o c2))
        (RenamesToLeader c1 sym c1)
        (RenamesToLeader c2 sym' c2)
        (= m (compose m_o sym))
@@ -130,7 +130,7 @@
 (RenamesToLeader (Var 0) (map-insert (map-empty) 0 0) (Var 0))
 (RenamesToLeader (Null) (map-empty) (Null))
 
-(rule ((= e1 (App f m1 c1 m1' c2))
+(rule ((= e1 (App2 f m1 c1 m1' c2))
        (= m (map-union (map-image m1) (map-image m1'))))
       ((RenamesToLeader e1 m e1))
 )
@@ -141,7 +141,7 @@
 
 ;; if `e2 = f(m1*c1, m2*c2)` /\ `e2 = m*e1`, then `e1 = m⁻¹*e2 = m⁻¹*f(m1*c1, m2*c2) = f(m⁻¹*m1*c1, m⁻¹*m2*c2)`
 (rule ((RenamesToLeader e2 m e1)
-       (= e2 (App f m1 c1 m2 c2))
+       (= e2 (App2 f m1 c1 m2 c2))
        (!= e1 e2)
        ; `m` need not cover slots(e2): the uncovered ones are redundant in e1 and
        ; have no name there. Pulling an edge back through `inverse m` would drop
@@ -152,8 +152,8 @@
        (= domNode (map-union (map-image m1) (map-image m2)))      ; identity on the node's slots
        (= R (find-mapping-total idE1 domNode idE1 m)))
       (
-        (union e1 (App f (compose R m1) c1 (compose R m2) c2))
-        (delete (App f m1 c1 m2 c2))
+        (union e1 (App2 f (compose R m1) c1 (compose R m2) c2))
+        (delete (App2 f m1 c1 m2 c2))
       ))
 
 ;;;;;;;;;;;;;;;;;;;;;;;
@@ -166,7 +166,7 @@
 ;;;; First child:
 
 (rule ((RenamesToLeader c1 m c')
-       (= node (App f m1 c1 m2 c2))
+       (= node (App2 f m1 c1 m2 c2))
        (guard ; if c1=c' then m is idempotent (we don't want self-symmetries here)
             (or (bool-!= c1 c')
                 (bool= (compose m m) m))
@@ -176,15 +176,15 @@
                 (bool-!= (compose m1 m) m1))
        ))
       (
-        (union node (App f (compose m1 m) c' m2 c2))
-        (delete (App f m1 c1 m2 c2))
+        (union node (App2 f (compose m1 m) c' m2 c2))
+        (delete (App2 f m1 c1 m2 c2))
       )
 )
 
 ;;;; Second child:
 
 (rule ((RenamesToLeader c2 m c')
-       (= node (App f m1 c1 m2 c2))
+       (= node (App2 f m1 c1 m2 c2))
        (guard ; if c2=c' then m is idempotent (we don't want self-symmetries here)
             (or (bool-!= c2 c')
                 (bool= (compose m m) m))
@@ -194,8 +194,8 @@
                 (bool-!= (compose m2 m) m2))
        ))
       (
-        (union node (App f m1 c1 (compose m2 m) c'))
-        (delete (App f m1 c1 m2 c2))
+        (union node (App2 f m1 c1 (compose m2 m) c'))
+        (delete (App2 f m1 c1 m2 c2))
       )
 )
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -205,13 +205,13 @@
 (rule
     (
         (RenamesToLeader
-            (App "lambda" mvar (Var 0) m b)
+            (App2 "lambda" mvar (Var 0) m b)
             ml l)
         (= v (map-get mvar 0))
     )
     (
         (RenamesToLeader
-            (App "lambda" mvar (Var 0) m b)
+            (App2 "lambda" mvar (Var 0) m b)
             (inverse (map-remove (inverse ml) v)) l)
     )
 )
@@ -243,10 +243,10 @@
 ;;; Case 1: swap of two free variables ;;;
 (push)
 
-(let $a1 (App "f" (map-insert (map-empty) 20 20) (Var 20)
+(let $a1 (App2 "f" (map-insert (map-empty) 20 20) (Var 20)
                   (map-insert (map-empty)  1  1) (Var 1)))
 
-(let $a2 (App "f" (map-insert (map-empty)  1  1) (Var 1)
+(let $a2 (App2 "f" (map-insert (map-empty)  1  1) (Var 1)
                   (map-insert (map-empty) 20 20) (Var 20)))
 
 (run 10)
@@ -261,15 +261,15 @@
 ;;; Case 2: three-variable cyclic permutation, nested ;;;
 (push)
 
-(let $b1 (App "f"
+(let $b1 (App2 "f"
               (map-insert (map-insert (map-empty) 100 100) 200 200)
-              (App "g" (map-insert (map-empty) 100 100) (Var 100)
+              (App2 "g" (map-insert (map-empty) 100 100) (Var 100)
                        (map-insert (map-empty) 200 200) (Var 200))
               (map-insert (map-empty) 300 300) (Var 300)))
 
-(let $b2 (App "f"
+(let $b2 (App2 "f"
               (map-insert (map-insert (map-empty) 100 100) 300 300)
-              (App "g" (map-insert (map-empty) 300 300) (Var 300)
+              (App2 "g" (map-insert (map-empty) 300 300) (Var 300)
                        (map-insert (map-empty) 100 100) (Var 100))
               (map-insert (map-empty) 200 200) (Var 200)))
 
@@ -284,10 +284,10 @@
 ;;; Case 3: same shape, different slot ids ;;;
 (push)
 
-(let $c1 (App "h" (map-insert (map-empty) 50 50) (Var 50)
+(let $c1 (App2 "h" (map-insert (map-empty) 50 50) (Var 50)
                   (map-insert (map-empty) 50 50) (Var 50)))
 
-(let $c2 (App "h" (map-insert (map-empty) 60 60) (Var 60)
+(let $c2 (App2 "h" (map-insert (map-empty) 60 60) (Var 60)
                   (map-insert (map-empty) 60 60) (Var 60)))
 
 (run 10)
@@ -301,10 +301,10 @@
 ;;; Case 4 (negative): different free-slot counts ;;;
 (push)
 
-(let $d1 (App "k" (map-insert (map-empty) 50 50) (Var 50)
+(let $d1 (App2 "k" (map-insert (map-empty) 50 50) (Var 50)
                   (map-insert (map-empty) 50 50) (Var 50)))
 
-(let $d2 (App "k" (map-insert (map-empty) 50 50) (Var 50)
+(let $d2 (App2 "k" (map-insert (map-empty) 50 50) (Var 50)
                   (map-insert (map-empty) 60 60) (Var 60)))
 
 
@@ -321,16 +321,16 @@
 ;;; Case 5- redundancies
 (push)
 
-(let $c1 (App "f" (map-insert (map-empty) 20 20) (Var 20)
+(let $c1 (App2 "f" (map-insert (map-empty) 20 20) (Var 20)
                   (map-insert (map-empty) 1 1) (Var 1)))
-(let $c2 (App "g" (map-insert (map-empty) 20 20) (Var 20)
+(let $c2 (App2 "g" (map-insert (map-empty) 20 20) (Var 20)
                   (map-insert (map-empty) 20 20) (Var 20)))
 
 (union $c1 $c2)
 
-(let $c3 (App "f" (map-insert (map-empty) 23 23) (Var 23)
+(let $c3 (App2 "f" (map-insert (map-empty) 23 23) (Var 23)
                   (map-insert (map-empty) 24 24) (Var 24) ))
-(let $c4 (App "f" (map-insert (map-empty) 23 23) (Var 23)
+(let $c4 (App2 "f" (map-insert (map-empty) 23 23) (Var 23)
                   (map-insert (map-empty) 25 25) (Var 25) ))
 
 (run 10)
@@ -366,14 +366,14 @@
 (push)
 
 ; If you look at the --to-svg of this (without the push/pop),
-; we get one App node in the end due to the symmetry rule above
+; we get one App2 node in the end due to the symmetry rule above
 
 ; 1 - 1
-(let $m11 (App "m" (map-insert (map-empty) 1 1) (Var 1)
+(let $m11 (App2 "m" (map-insert (map-empty) 1 1) (Var 1)
                   (map-insert (map-empty) 1 1) (Var 1)))
 
 ; 2 - 2
-(let $m22 (App "m" (map-insert (map-empty) 2 2) (Var 2)
+(let $m22 (App2 "m" (map-insert (map-empty) 2 2) (Var 2)
                   (map-insert (map-empty) 2 2) (Var 2)))
 
 (union $m11 $m22)
@@ -388,13 +388,13 @@
 (let $v7 (Var 7))
 (let $v0 (Var 0))
 
-(let $f7 (App "f" (map-insert (map-empty) 7 7) (Var 7) (map-empty) (Null)))
-(let $g7 (App "g" (map-insert (map-empty) 7 7) (Var 7) (map-empty) (Null)))
+(let $f7 (App2 "f" (map-insert (map-empty) 7 7) (Var 7) (map-empty) (Null)))
+(let $g7 (App2 "g" (map-insert (map-empty) 7 7) (Var 7) (map-empty) (Null)))
 
 (union $f7 $g7)
 
-(let $f8 (App "f" (map-insert (map-empty) 8 8) (Var 8) (map-empty) (Null)))
-(let $h8 (App "h" (map-insert (map-empty) 8 8) (Var 8) (map-empty) (Null)))
+(let $f8 (App2 "f" (map-insert (map-empty) 8 8) (Var 8) (map-empty) (Null)))
+(let $h8 (App2 "h" (map-insert (map-empty) 8 8) (Var 8) (map-empty) (Null)))
 (union $f8 $h8)
 
 (run 10)
@@ -410,8 +410,8 @@
 (let $v0 (Var 0))
 (let $v7 (Var 7))
 
-(let $f0 (App "f" (map-insert (map-empty) 0 0) (Var 0) (map-empty) (Null)))
-(let $f7 (App "f" (map-insert (map-empty) 7 7) (Var 7) (map-empty) (Null)))
+(let $f0 (App2 "f" (map-insert (map-empty) 0 0) (Var 0) (map-empty) (Null)))
+(let $f7 (App2 "f" (map-insert (map-empty) 7 7) (Var 7) (map-empty) (Null)))
 
 (union $v0 $v7)
 
@@ -425,11 +425,11 @@
 ;;; Case 10- lambda alpha equivalence.
 (push)
 
-(let $lam00 (App "lambda"
+(let $lam00 (App2 "lambda"
                 (map-insert (map-empty) 0 0) (Var 0)
                 (map-insert (map-empty) 0 0) (Var 0)))
 
-(let $lam11 (App "lambda"
+(let $lam11 (App2 "lambda"
                 (map-insert (map-empty) 1 1) (Var 1)
                 (map-insert (map-empty) 1 1) (Var 1)))
 
@@ -443,19 +443,19 @@
 ;;; Case 11- f(0, 1) = f(1, 0)
 (push)
 
-(let $f01 (App "f"
+(let $f01 (App2 "f"
                 (map-insert (map-empty) 0 0) (Var 0)
                 (map-insert (map-empty) 1 1) (Var 1)))
 
-(let $f10 (App "f"
+(let $f10 (App2 "f"
                 (map-insert (map-empty) 1 1) (Var 1)
                 (map-insert (map-empty) 0 0) (Var 0)))
 
-(let $node1 (App "g"
+(let $node1 (App2 "g"
                 (map-insert (map-insert (map-empty) 1 1) 0 0) $f01
                 (map-insert (map-insert (map-empty) 1 1) 0 0) $f01))
 
-(let $node2 (App "g"
+(let $node2 (App2 "g"
                 (map-insert (map-insert (map-empty) 1 1) 0 0) $f01
                 (map-insert (map-insert (map-empty) 0 1) 1 0) $f01))
 
@@ -470,27 +470,27 @@
 ;;; Case 12- f(0, 1) = f(1, 0) -> g(f(0, 1)) = g(f(1, 0))
 (push)
 
-(let $f01 (App "f"
+(let $f01 (App2 "f"
                 (map-insert (map-empty) 0 0) (Var 0)
                 (map-insert (map-empty) 1 1) (Var 1)))
 
-(let $f10 (App "f"
+(let $f10 (App2 "f"
                 (map-insert (map-empty) 1 1) (Var 1)
                 (map-insert (map-empty) 0 0) (Var 0)))
 
-(let $g01 (App "g"
+(let $g01 (App2 "g"
                 (map-insert (map-insert (map-empty) 1 1) 0 0) $f01
                 (map-empty) (Null)))
 
-(let $g10 (App "g"
+(let $g10 (App2 "g"
                 (map-insert (map-insert (map-empty) 1 1) 0 0) $f10
                 (map-empty) (Null)))
 
-(let $node1 (App "h"
+(let $node1 (App2 "h"
                 (map-insert (map-insert (map-empty) 1 1) 0 0) $g01
                 (map-insert (map-insert (map-empty) 1 1) 0 0) $g01))
 
-(let $node2 (App "h"
+(let $node2 (App2 "h"
                 (map-insert (map-insert (map-empty) 1 1) 0 0) $g01
                 (map-insert (map-insert (map-empty) 0 1) 1 0) $g01))
 
@@ -506,7 +506,7 @@
 (push)
 
 (let $null (Null))
-(let $f (App "f"
+(let $f (App2 "f"
                 (map-insert (map-empty) 0 0) (Var 0)
                 (map-insert (map-empty) 1 1) (Var 1)))
 
