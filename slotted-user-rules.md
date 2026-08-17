@@ -405,9 +405,47 @@ it from the complete version. Minting is the principled fix and is kept alongsid
 measured, for whoever wants to revisit it — the open question is why it fans out so
 far, not whether it is correct.
 
-A witness for the guard's incompleteness would be a case where a *derived
-equality* needs a node that only exists un-migrated. None was found in 231 cases,
-and none is constructed here: reporting the search rather than inventing one.
+### Is there a path to a witness?
+
+There is one mechanism, and both halves of it are confirmed:
+
+* **Nodes really do get stranded.** Declining leaves a node on a follower, and a
+  follower can have *no self-loop*, because single-parent deletes `RenamesToLeader`
+  rows once a class acquires a parent. On `X2`: 6 nodes, only 4 with a self-loop.
+  Under minting: 13 of 13 have one, so minting strands nothing.
+* **A stranded node is invisible to every compiled rule**, because they all join
+  `(RenamesToLeader V sym V)` for the class holding the node.
+
+So a witness must be a case where a stranded node is the *only* carrier of some
+fact. Three searches and four constructions did not find one:
+
+| attempt | result |
+| --- | --- |
+| guarded vs minting, 31 curated + 200 generated | identical answers |
+| an operator present *only* on stranded nodes, 181 cases | 0 |
+| hand-built: an operator occurring once, forced onto a stranded class (4 shapes) | identical answers |
+
+There is a structural reason to expect that. Every `App` row gets a self-loop from
+the "everything must have a self-loop" rule, so a row loses one only when
+single-parent deletes it — which happens once the class has a parent, by which
+point its content has already been related to the leader. The leader's class then
+holds an equivalent node, so nothing is uniquely stranded.
+
+**Two honest ways to finish this**, neither of which is more sampling:
+
+1. **Enumerate a tiny space exhaustively** — every e-graph of at most two nodes over
+   two operators and two slots, crossed with every depth-1 pattern and both action
+   shapes. That space is small enough to cover completely, which is much stronger
+   than sampling.
+2. **Prove the invariant instead**: *every fact carried by a node on a
+   self-loop-less class is also carried by a node on a self-looped one.* If that
+   holds, the guard is complete and calling it "incomplete" is simply wrong. It is
+   a claim about the α-finder, single-parent and self-loop rules read together, not
+   something a fuzzer settles.
+
+Until one of those is done, the accurate statement is: **the guard has no known
+incompleteness, and the mechanism by which it could have one is present but has
+never been observed to matter.**
 
 **Read the firing count before the agreement count.** A case whose rule never
 fires says nothing about matching, and random patterns mostly do not fire, so the
