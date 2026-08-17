@@ -525,3 +525,60 @@
 
 (pop)
 
+;;; Case 18- leaves carrying a payload.
+;;;
+;;; `Number(u32)` and `Symbol` in the paper's arith, rise and array languages. A
+;;; payload leaf has no slots, so it behaves like `Null` except that there are
+;;; infinitely many, which is why its self-loop is a rule.
+(push)
+
+(let $one (Num 1))
+(let $two (Num 2))
+
+(run 20)
+
+;; slotless, like Null
+(check (RenamesToLeader $one (map-empty) $one))
+
+;; distinct payloads stay distinct
+(fail (check (= $one $two)))
+
+;; and they compose into nodes: f(1, $0) and f(1, $1) are alpha-equivalent
+(let $f1a (App2 "f" (map-empty) $one (map-of 0 0) (Var 0)))
+(let $f1b (App2 "f" (map-empty) $one (map-of 0 1) (Var 0)))
+(run 20)
+(check (RenamesToLeader $f1a m1 leader)
+       (RenamesToLeader $f1b m2 leader))
+
+;; but f(1, ...) and f(2, ...) are not
+(let $f2a (App2 "f" (map-empty) $two (map-of 0 0) (Var 0)))
+(run 20)
+(fail (check (= $f1a $f2a)))
+
+(pop)
+
+;;; Case 19- a payload column beside a slotted child.
+;;;
+;;; `Scale :: i64 child`. The payload is an ordinary column, so it takes part in the
+;;; node's identity; the child is the only source of slots. Nothing special is
+;;; needed for the mix -- a payload just never appears in a renaming.
+(push)
+
+(let $s2a (Scale 2 (map-of 0 0) (Var 0)))
+(let $s2b (Scale 2 (map-of 0 1) (Var 0)))
+(let $s3a (Scale 3 (map-of 0 0) (Var 0)))
+
+(run 20)
+
+;; same payload, child at a different slot: alpha-equivalent
+(check (RenamesToLeader $s2a m1 leader)
+       (RenamesToLeader $s2b m2 leader))
+
+;; different payload: a different node
+(fail (check (= $s2a $s3a)))
+
+;; the slots come from the child alone
+(check (RenamesToLeader $s2a (map-of 0 0) $s2a))
+
+(pop)
+
