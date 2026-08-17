@@ -748,9 +748,10 @@ actually wrong.
 
 ## Primitives
 
-Ported from
-[`memoryleak47/egglog@slotted-encoding2`](https://github.com/memoryleak47/egglog/tree/slotted-encoding2),
-rewritten against this tree's `add_primitive!`:
+What the encoding relies on. All of these were already here, ported from
+[`memoryleak47/egglog@slotted-encoding2`](https://github.com/memoryleak47/egglog/tree/slotted-encoding2)
+and rewritten against this tree's `add_primitive!`, **except
+`find-mapping-total`**, which is new:
 
 * `egglog/src/sort/map.rs`
   * `map-union` — partial-map union, fails on a conflicting key.
