@@ -45,12 +45,8 @@
        (RenamesToLeader a m2 c)
 
        (!= a c) ; We don't want this rule to fire for a=b=c, as it would remove symmetries from our group.
-       ;; Nor for b=a: that deletes a's self-loop, and a class that still holds an
-       ;; e-node needs one, since every query joins `(RenamesToLeader v sym v)` to
-       ;; reach the class's symmetries. Nothing would put it back -- the rule that
-       ;; makes one fires on a *new* `App` row (Case 14). The edge this rule would
-       ;; add is not lost: transitivity already derives `a = m1*m2*c` from the same
-       ;; two rows, and a symmetry group is closed under inverse.
+       ;; Nor for b=a: deleting a's self-loop hides a class that still holds an
+       ;; e-node (Case 14), and transitivity already derives the edge this adds.
        (!= a b)
        (= (ordering-max b c) b) ; c <= b
 
@@ -147,10 +143,7 @@
 (rule ((RenamesToLeader e2 m e1)
        (= e2 (App f m1 c1 m2 c2))
        (!= e1 e2)
-       ; The results become EDGES, whose domains must stay their children's slot
-       ; sets, so `compose-total` is used rather than `compose`: it refuses to drop
-       ; a key, and the rule declines instead of asserting a narrowed edge -- which
-       ; would claim the child has fewer slots than it does.
+       ; narrowing would understate the child's slots, so decline instead
        (= n1 (compose-total (inverse m) m1))
        (= n2 (compose-total (inverse m) m2)))
       (

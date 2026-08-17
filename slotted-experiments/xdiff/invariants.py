@@ -1,25 +1,24 @@
-"""Are the unchecked invariants the primitives rely on actually maintained?
+"""Are the invariants the primitives and Def. 4 rely on actually maintained?
 
-`inverse` is total and only meaningful on a one-to-one map; nothing checks that its
-input is one-to-one. A composition of one-to-one maps is one-to-one, so it is
-enough to ask whether every renaming the machinery *stores* is one-to-one.
+Two checks, both sound -- no proxy, no false positives.
 
-Non-injectivity is detectable without a new primitive: for one-to-one `m`,
-`(compose m (inverse m))` is the identity on `im(m)` and so has as many keys as `m`.
-For non-injective `m` the image is smaller, so the lengths differ.
+`inverse` is total on injective input only, and nothing checks that. A composition
+of injective maps is injective, so it is enough to ask whether every renaming the
+machinery *stores* is injective. Non-injectivity is detectable without a new
+primitive: for injective `m`, `(map-image m)` has as many keys as `m`; for a
+non-injective one the image is smaller.
 
-Also reports malformed App edges -- an edge whose domain is not its child's slot
-set, which Def. 4 forbids and which is what the migration bug produced.
+Def. 4 requires an edge's domain to be exactly its child's slot set. The too-wide
+direction is provable: an idempotent self-loop `s` on the child is a partial
+identity, so `child = s*child` and every slot outside `dom(s)` is redundant --
+the child's live slots are contained in `dom(s)`. An idempotent self-loop with
+FEWER keys than the edge therefore proves the edge names slots the child does not
+have. Looking only for narrower witnesses is what makes this immune to the too-wide
+self-loops of open question 2, which an earlier version of this probe mistook for
+bad edges.
 
-CAUTION: the edge check OVER-REPORTS as things stand. It reads a child's slot count
-off the length of a self-loop, and a class can carry a too-wide identity self-loop
-(open question 2 in the doc), which makes the comparison fail on a perfectly good
-edge. On `X1` most of what it flags is that, not a bad edge: an edge `{0->0}` to
-`(Var 0)` is correct and only looks wrong beside a self-loop `{0->0, 2->2}` that
-`(Var 0)` should never have had. Read the rows, do not trust the count. Fixing
-question 2 would turn this into a real well-formedness check.
-
-The injectivity check has no such caveat -- it is self-contained.
+The too-narrow direction is not checked here: it is what `compose-total` now
+prevents where it was reachable.
 """
 import subprocess
 import sys
@@ -27,32 +26,37 @@ sys.path.insert(0, "slotted-experiments/xdiff")
 import xdiff as X
 
 OBS = """
-;; a stored renaming that is not one-to-one
-(relation NotInjective (Renaming))
-(rule ((RenamesToLeader a m b)
-       (!= (map-length m) (map-length (compose m (inverse m)))))
-      ((NotInjective m)))
-(rule ((= n (App f m1 c1 m2 c2))
-       (!= (map-length m1) (map-length (compose m1 (inverse m1)))))
-      ((NotInjective m1)))
-(rule ((= n (App f m1 c1 m2 c2))
-       (!= (map-length m2) (map-length (compose m2 (inverse m2)))))
-      ((NotInjective m2)))
+;; Observers live in their own ruleset and are run ALONE, so the machinery cannot
+;; churn while they look. Running them alongside it would answer a question about
+;; history instead: these are relations, and a row deleted later still leaves its
+;; observation behind.
+(ruleset obs)
 
-;; an edge whose domain is not its child's slot set (Def. 4)
-(relation BadEdge (String Renaming U))
+;; a stored renaming that is not injective
+(relation NotInjective (Renaming))
+(rule ((RenamesToLeader a m b) (!= (map-length m) (map-length (map-image m))))
+      ((NotInjective m)) :ruleset obs)
+(rule ((= n (App f m1 c1 m2 c2)) (!= (map-length m1) (map-length (map-image m1))))
+      ((NotInjective m1)) :ruleset obs)
+(rule ((= n (App f m1 c1 m2 c2)) (!= (map-length m2) (map-length (map-image m2))))
+      ((NotInjective m2)) :ruleset obs)
+
+;; an edge naming more slots than its child has
+(relation WideEdge (String Renaming U Renaming))
 (rule ((= n (App f m1 c1 m2 c2))
        (RenamesToLeader c1 s c1)
-       (!= (map-length m1) (map-length s)))
-      ((BadEdge f m1 c1)))
+       (= s (compose s s))
+       (< (map-length s) (map-length m1)))
+      ((WideEdge f m1 c1 s)) :ruleset obs)
 (rule ((= n (App f m1 c1 m2 c2))
        (RenamesToLeader c2 s c2)
-       (!= (map-length m2) (map-length s)))
-      ((BadEdge f m2 c2)))
+       (= s (compose s s))
+       (< (map-length s) (map-length m2)))
+      ((WideEdge f m2 c2 s)) :ruleset obs)
 
-(run 4)
+(run obs 1)
 (print-size NotInjective)
-(print-size BadEdge)
+(print-function WideEdge 200)
 """
 
 
@@ -67,20 +71,24 @@ def probe(case):
         return None
     finally:
         p.unlink(missing_ok=True)
-    n = [int(x.strip()) for x in r.stdout.splitlines() if x.strip().isdigit()]
-    return tuple(n[-2:]) if len(n) >= 2 else None
+    ni = next((int(x.strip()) for x in r.stdout.splitlines()
+               if x.strip().isdigit()), None)
+    wide = [l.strip().split(" -> ")[0][len("(WideEdge "):-1]
+            for l in r.stdout.splitlines() if l.strip().startswith("(WideEdge ")]
+    return ni, wide
 
 
-tot_ni = tot_be = 0
+tot_ni = tot_wide = 0
 for c in X.curated():
     got = probe(c)
     if got is None:
         print(f"  {c.name:34} timeout")
         continue
-    ni, be = got
-    tot_ni += ni
-    tot_be += be
-    if ni or be:
-        print(f"  {c.name:34} non-injective {ni}  malformed edges {be}")
-print(f"\ntotals across the curated corpus: non-injective {tot_ni}, "
-      f"malformed edges {tot_be}")
+    ni, wide = got
+    tot_ni += ni or 0
+    tot_wide += len(wide)
+    if ni or wide:
+        print(f"  {c.name:34} non-injective {ni}  wide edges {len(wide)}")
+        for w in wide[:4]:
+            print(f"       {w[:120]}")
+print(f"\ntotals: non-injective {tot_ni}, edges wider than their child {tot_wide}")

@@ -826,13 +826,21 @@ flavour of `find-mapping` (a different representation).
    (fail (check (SymSeen (Null) m) (!= m (map-empty))))   ; fails
    ```
 
-   Probably harmless: a too-wide identity is inert, because every consumer
-   composes it with an edge and the edges have already been narrowed. It is also
-   only visible to a rule co-scheduled with maintenance, so user rules running at
-   phase boundaries cannot see it. The lesson to carry forward is the shape of the
-   mistake — **do not derive a class-level fact from a node** — and to prefer a
-   merge that can only move one way over two rules that derive and delete against
-   each other.
+   **Measured, and there is no rule to fix.** The shrinking rule does narrow the
+   too-wide identity away: with a narrow idempotent `m` beside a wide `m1`,
+   `compose m (compose m1 m)` is the narrow one, so the rule deletes `m1`. In the
+   eight-line case above the wide loop is derived and then gone. Under
+   `run-schedule (saturate (run))`, `X2`, `C5`, `S2` and `B2` all reach a genuine
+   fixpoint; only `X1` does not, and that is its *rule* growing — its action is
+   `union ?x1 (h ?x3 ?x1)`, which builds a new node every round. A program that
+   never saturates keeps creating nodes, each of which re-derives the wide loop, so
+   there it survives; on the same e-graph with no rule, nothing does.
+   `slotted-experiments/xdiff/fixpoint.py` is the check.
+
+   So the derive/delete pair converges whenever the program does. What is left is
+   the shape of the mistake, worth not repeating: **do not derive a class-level
+   fact from a node**, and prefer a merge that can only move one way over two rules
+   that derive and delete against each other.
 3. **Redundant slots in the pattern's slots.** The pattern's slots are the first
    atom's *node* slots, which may include slots the class has already made
    redundant. That falls out for free, but it means the pattern's slots are not
@@ -840,9 +848,35 @@ flavour of `find-mapping` (a different representation).
    otherwise.
 4. **Stranded nodes.** Fixed for the single-parent mechanism (`Case 14`), but `X1`
    still strands one row via the shrinking rule deleting a too-wide identity
-   self-loop — question 2 above, same root cause of deriving a class-level fact from
-   a node. That row is harmless (it has a visible α-variant), so the open part is
-   whether the shrinking rule can strand a row that does not.
+   self-loop — question 2 above. That row is harmless (it has a visible α-variant),
+   so the open part is whether the shrinking rule can strand a row that does not.
    `slotted-experiments/xdiff/stranded.py` is the detector: it reports, per case, how
    many rows no symmetry-joining rule can see and how many of those are α-variants
    of nothing visible. Worth running after any change to the maintenance rules.
+
+## Machine-checked invariants
+
+Def. 4 — an edge's domain is exactly its child's slot set — used to be maintained by
+discipline alone. `slotted-experiments/xdiff/invariants.py` checks the half that is
+provable, plus the precondition `inverse` relies on:
+
+* **An edge wider than its child.** An idempotent self-loop `s` on the child is a
+  partial identity, so `child = s*child` and every slot outside `dom(s)` is
+  redundant: the child's live slots are inside `dom(s)`. An idempotent self-loop
+  with *fewer* keys than the edge therefore proves the edge names slots the child
+  does not have. Looking only for narrower witnesses is what makes this immune to
+  question 2's too-wide loops — an earlier version compared against an arbitrary
+  self-loop and reported eight "bad edges" on `X1` that were all a correct `{0→0}`
+  edge to `(Var 0)` sitting beside a bogus `{0→0, 2→2}` loop.
+* **A stored renaming that is not injective**, which is what `inverse` needs and
+  nothing checked. Zero across the corpus, so `inverse` being strict costs nothing.
+
+The narrow direction is not checkable this way, and is what `compose-total` now
+prevents where it was reachable.
+
+Across the corpus: 0 non-injective renamings, and one wide edge, on `X1`. It is
+built by the compiled action out of question 2's surviving too-wide loop, and it is
+inert — the slots it names are redundant for that child, so `m*c = c` either way.
+Both probes take a snapshot: they declare their rules in their own ruleset and run
+only that, because a relation keeps an observation after the row that caused it is
+deleted, which answers a question about history instead.
