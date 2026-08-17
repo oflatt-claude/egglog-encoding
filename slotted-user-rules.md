@@ -407,8 +407,9 @@ does, though never yet in a way that changes an answer.
 it from the complete version on what gets proved. Its one real cost — leaving a node
 on a class no query could see — turned out to be fixable in the *maintenance* rules
 instead, for about 9% more union-find rows; see two sections down. Minting is kept
-alongside, measured, for whoever wants to revisit it — the open question is why it
-fans out so far, not whether it is correct.
+alongside, measured, for whoever wants to revisit it; it is correct, and its fan-out
+is explained under "Why minting" below — it is a consequence of keying a node by its
+renamings, which the reference avoids by keying on a shape.
 
 ### The guard really is incomplete: the invariant is false
 
@@ -579,6 +580,66 @@ independently, a symmetry group being closed under inverse. Nothing is lost from
 by joining `(RenamesToLeader v sym v)`, so a class holding a node and no self-loop
 cannot be matched, and having its symmetry on the leader does not help because the
 node is not on the leader. The guard moves the symmetry but not the node.
+
+## Why minting, and why the reference gets away with it
+
+### What forces a mint
+
+An edge's domain must be its child's slot set. Migration rewrites a node's edges out
+of its own class's frame and into the leader's, and the leader's frame may have no
+slot to name one of them with — which is exactly what a *redundant* slot is. The edge
+still needs a name for it, so one is invented.
+
+`Case 14`'s e-graph is the smallest instance. `B = h($2,$1)` and `N = h($1, B)` both
+have slots `{1,2}`; unioning `N` with `(Var 2)` makes `N`'s class the variable `$2`,
+which has one slot, so slot 1 becomes redundant. The leader is `(Var 0)` reached by
+`{0→2}`, whose image is `{2}`. Rewriting `N`'s second edge `{1→1, 2→2}` through that
+frame sends 2 to the leader's slot 0 and leaves 1 with nothing:
+
+| | `N`'s second edge, after migration |
+| --- | --- |
+| guarded | declines; the node stays as written, on a follower |
+| minting | `{1→1, 2→0}` — 2 to the leader's real slot, 1 to an invented name |
+
+Note that `(union $h (Null))` on its own does *not* force a mint: egglog's `union`
+merges the two into one class, so there is no follower and migration never applies.
+It takes a class related to its leader by a non-identity renaming.
+
+### The reference mints too — with an ever-increasing counter
+
+`compose_fresh` in `slotmap.rs` is the same operation, called from `union.rs` with the
+comment *"if `sh` contains redundant slots, these won't be covered by `map`. Thus we
+need compose_fresh."* It fills any uncovered key with `Slot::fresh()`, and
+`Slot::fresh` is a global counter (`fresh_idx += 4`) that never reuses a name — the
+above-the-maximum policy that made *this* encoding diverge.
+
+It gets away with it because of how a class stores its nodes:
+
+```rust
+nodes: HashMap<L, ProvenSourceNode>     // keyed by canonical SHAPE
+```
+
+A node's identity is its shape; the minted slot lives in the *bijection*, which is the
+value. Moving a node is `remove(sh)` then `insert(sh, new_bij)`, so a class holds at
+most one entry per shape and a fresh name can never multiply nodes. The reference also
+shrinks a class's slot set to the *intersection* on union (`cap` in `union_leaders`)
+and restricts the symmetry group to it, so the class's frame only ever gets smaller.
+
+Here an `App` row is keyed by the whole tuple, renamings included, so two α-variants
+differing only in a minted name are two distinct rows. That is the fan-out: `X2` under
+minting holds 1224 rows that are largely the same structure at different names —
+
+```text
+(App "h" {0→0,1→1} (App "h" {0→0} (Var 0) {0→1} (Var 0)) {0→0,1→1} (Var 0))
+(App "h" {0→0,1→1} (App "h" {0→0} (Var 0) {0→1} (Var 0)) {0→0,2→1} (Var 0))
+(App "h" {0→0,1→1} (App "h" {0→0} (Var 0) {0→1} (Var 0)) {0→0}     (Var 0))
+```
+
+— waiting on the α-finder to merge them. Smallest-unused minting at least makes each
+mint deterministic, so the set is finite; an ever-increasing counter is what made it
+never settle. **This is why the encoding cannot simply copy the reference's policy:
+the reference's key is a shape, and ours is a shape plus its renamings.** Getting the
+reference's behaviour would mean keying nodes by something α-invariant.
 
 **Read the firing count before the agreement count.** A case whose rule never
 fires says nothing about matching, and random patterns mostly do not fire, so the
