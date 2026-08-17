@@ -550,3 +550,29 @@
 (check (RenamesToLeader $N sym $N))
 
 (pop)
+
+;;; Case 15- migration must not narrow an edge.
+;;;
+;;; Same e-graph as Case 14, which is also where migration wants to truncate:
+;;; rewriting `$N`'s first edge {0->1} through the leader's frame {0->2} drops the
+;;; entry, since 1 is not in the frame. `compose` would narrow it silently and the
+;;; result is asserted as an edge, so the e-graph would end up holding
+;;;
+;;;     (App "h" (map-of) (Var 0) ...)
+;;;
+;;; an empty edge to a child that has a slot -- Def. 4 says an edge's domain is its
+;;; child's slot set, so this states that `(Var 0)` has none. `compose-total`
+;;; declines instead. `(Var 0)` is the one child whose slots are known statically,
+;;; which is what makes this checkable here.
+(push)
+
+(let $B (App "h" (map-of 0 2) (Var 0) (map-of 0 1) (Var 0)))
+(let $N (App "h" (map-of 0 1) (Var 0) (map-of 1 1 2 2) $B))
+(union $N (Var 2))
+
+(run 20)
+
+(fail (check (= x (App f m1 (Var 0) m2 c2)) (= (map-length m1) 0)))
+(fail (check (= x (App f m1 c1 m2 (Var 0))) (= (map-length m2) 0)))
+
+(pop)
