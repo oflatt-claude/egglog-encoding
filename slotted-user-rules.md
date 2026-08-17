@@ -268,26 +268,41 @@ unnamed slot to drop.
 it may not reuse. Both are identity maps the caller already has: a node's slots are
 `(map-union (map-image p1) (map-image p2))`.
 
-**It picks the smallest unused slot, and that is not a detail.** Picking one above
-the maximum instead makes the name depend on how large the existing names happen
-to be — so a rule whose action builds a node of the same operator its premise
-matches mints a *higher* slot every round, building an endless run of
-α-equivalent-but-distinct nodes and never reaching a fixpoint. That was the
-encoding's only observed performance problem, and it was really
-non-termination: on one generated case the node count climbed 16, 18, 30, 28, 38,
-47, 50, 59 with no sign of settling, while the reference saturated in two rounds.
-The built nodes' edges were visibly escalating, `{$0↦$0}, {$0↦$1}, … {$0↦$6}`.
-Smallest-unused gives the same situation the same name, so those nodes coincide;
-the same case then settles.
+**It picks the smallest unused slot.** This was once recorded here as load-bearing,
+on the strength of a generated case whose node count climbed 16, 18, 30, 28, 38, 47,
+50, 59 under an above-the-maximum policy while the reference saturated in two rounds.
+**That no longer reproduces.** Re-measured on the current machinery, minting one above
+the largest name mentioned locally settles just as well:
 
-So: any deterministic choice is *sound*, because different choices give
-α-variants the machinery identifies — but only a choice that does not drift
-terminates.
+| above-the-local-maximum | result |
+| --- | --- |
+| curated | 33/33 agree, 0 unsaturated, 0 nondeterministic |
+| generated | 250/250 agree, 0 unsaturated, 0 nondeterministic |
+| slot names in play, rounds 5→80 | bounded, stable from 10 rounds on (max 2–3) |
+| same, with the avoid-set not accumulated | 33/33, still settles |
 
-**The avoid-set must accumulate.** The primitive is pure and sees one atom at a
-time, so passing only the first atom's slots lets two inventing atoms pick the
-same slot. Thread a running union of `(map-image mp)`; identity maps never conflict
-under `map-union`, so the union is always defined.
+The α-finder is what makes any deterministic policy converge: `h($5)` and `h($0)` are
+α-equivalent, so minted names are merged back down to the canonical smallest form
+rather than accumulating. Why the earlier case escalated is **not established** — it
+predates the migration and single-parent fixes, both of which interfered with exactly
+that canonicalization, but it cannot be reproduced now to confirm.
+
+Smallest-unused is kept because names stay small, which keeps `ordering-max`
+comparisons and printed output readable — not because the alternative diverges.
+
+So: any deterministic choice is *sound*, because different choices give α-variants
+the machinery identifies.
+
+**The avoid-set must accumulate — for this policy.** The primitive is pure and sees
+one atom at a time, so passing only the first atom's slots lets two inventing atoms
+pick the same slot. Thread a running union of `(map-image mp)`; identity maps never
+conflict under `map-union`, so the union is always defined. Checked by removing the
+accumulation: `C7-redundant-distinct-vars` becomes order dependent and loses a match.
+
+This is the one place the two policies genuinely differ. Smallest-unused *reuses* low
+names, so it has to be told which are taken; minting above the local maximum is
+self-avoiding, and passes 33/33 with no accumulation at all. So the avoid-set is the
+price of keeping names small, not a requirement of minting as such.
 
 The alternative, if you would rather not invent slots: guard every variable the
 action uses with `(= (map-length (compose mp p)) (map-length p))`. Sound but

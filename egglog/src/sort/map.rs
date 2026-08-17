@@ -185,13 +185,6 @@ fn renaming_find_mapping<T: Copy + Ord>(maps: &[BTreeMap<T, T>]) -> Option<BTree
 /// value not already spoken for, which keeps the result injective and disjoint
 /// from `avoid`.
 ///
-/// Smallest-unused rather than above-the-maximum, and that choice is
-/// load-bearing. Above-the-maximum makes the name depend on how large the
-/// existing names happen to be, so a rule whose own output feeds back into its
-/// premise mints a higher value every round and keeps building fresh
-/// alpha-equivalent nodes instead of reaching a fixpoint. Smallest-unused gives
-/// the same situation the same name, so those nodes coincide.
-///
 /// `None` on the same conditions as [`renaming_find_mapping`], or on fewer than
 /// two leading maps.
 fn renaming_find_mapping_total(maps: &[BTreeMap<i64, i64>]) -> Option<BTreeMap<i64, i64>> {
