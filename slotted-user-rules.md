@@ -265,8 +265,8 @@ unnamed slot to drop.
 ```
 
 `domain`'s keys are the slots the result must cover, `avoid`'s slots are the ones
-it may not reuse. Both are identity maps the caller already has, since
-`(find-mapping p1 p2 p1 p2)` is the identity on a node's slots.
+it may not reuse. Both are identity maps the caller already has: a node's slots are
+`(map-union (map-image p1) (map-image p2))`.
 
 **It picks the smallest unused slot, and that is not a detail.** Picking one above
 the maximum instead makes the name depend on how large the existing names happen
@@ -286,9 +286,8 @@ terminates.
 
 **The avoid-set must accumulate.** The primitive is pure and sees one atom at a
 time, so passing only the first atom's slots lets two inventing atoms pick the
-same slot. Thread a running union: `compose m (inverse m)` is the identity on
-`m`'s image, and identity maps never conflict under `map-union`, so the union is
-always defined.
+same slot. Thread a running union of `(map-image mp)`; identity maps never conflict
+under `map-union`, so the union is always defined.
 
 The alternative, if you would rather not invent slots: guard every variable the
 action uses with `(= (map-length (compose mp p)) (map-length p))`. Sound but
@@ -680,7 +679,10 @@ Each of these was silent, and each cost a round of confusion.
   the left map's domain, so every `(compose a b)` on an edge is a place a slot can
   disappear — and a narrowed edge asserts its child is slotless. This one mistake
   is behind the fresh-slot gap, the `M6` unsoundness, and the migration bug above.
-  Wherever you compose, ask what happens when the image escapes the domain.
+  The lesson is not "avoid `compose`" — narrowing is correct for partial maps, and
+  two rules depend on it. It is that **an `App` edge is the one place narrowing is
+  always wrong**, so use `compose-total` there and let the primitive hold the
+  invariant. Wherever you use plain `compose`, ask where the result lands.
 * ***A deleted fact does not come back.*** If rule A derives a fact from a row and
   rule B deletes that fact, A will not re-derive it — semi-naive fires A on a *new*
   row, and the row is no longer new. So a maintenance rule that deletes another
@@ -728,23 +730,37 @@ is small — usually one self-loop per class.
 ## Where `compose` can lose a slot
 
 `(compose a b)` keeps only the keys of `b` whose value lies in `a`'s domain, so
-every composition is a place a slot can silently vanish. Auditing each site in the
-machinery, and checking on real cases which ones actually truncate:
+every composition is a place a slot can silently vanish. That is not a defect —
+it is the composition of partial maps, and two things depend on it. Auditing each
+site in the machinery, and checking on real cases which ones actually truncate:
 
 | site | truncation | why it is or is not a problem |
 | --- | --- | --- |
 | idempotence tests — `(bool= (compose m m) m)`, and the shrinking rule | intended | truncation *is* the test: it is how a non-permutation is detected |
 | child-update, `(compose m1 m)` | impossible | `m`'s image is inside `m1`'s domain by well-formedness |
-| **migration**, `(compose (inverse m) m1)` | **observed** | **was unsound**: the narrowed edge is asserted as fact, claiming its child is slotless. Guarded |
-| single-parent, `(compose (inverse m1) m2)` | possible, never observed | also inserts a fact, so the same risk. 0 occurrences across the corpus |
-| transitivity, `(compose m12 m23)` | observed on `X1` | inserts a fact; this is what derived the malformed self-loops, but they were downstream and guarding it fixed nothing |
+| **migration**, `(compose (inverse m) m1)` | **observed** | **was unsound**: the narrowed edge is asserted as fact, claiming its child is slotless. Now `compose-total` |
+| single-parent, `(compose (inverse m1) m2)` | possible, never observed | lands in a `RenamesToLeader` row, where a partial map is meaningful. 0 occurrences across the corpus |
+| transitivity, `(compose m12 m23)` | observed on `X1` | same: narrowing through a partial self-loop says the slots are redundant, which is what a partial map means there |
 | α-finder and symmetry-finder, `(compose m_o sym)` | observed on `X1` | feeds `find-mapping`, which requires equal key sets, so a narrowed map makes the rule *not fire*: incomplete, not unsound |
 | `MISC`, `(compose m1 (inverse m2))` | possible | only feeds an idempotence test, so a truncation means no union: incomplete, not unsound |
 
-The rule of thumb: **truncation is harmless where it makes a rule decline, and
-dangerous where the composed map is inserted as a fact.** Three sites insert —
-migration, single-parent, transitivity — and migration is the one that was
-actually wrong.
+The first reading of this table was "truncation is harmless where it makes a rule
+decline, dangerous where the composed map is inserted as a fact". That is wrong:
+single-parent and transitivity both insert composed maps and are fine. **What
+matters is where the map lands:**
+
+| landing site | may it narrow? | why |
+| --- | --- | --- |
+| an `App` **edge** (`m1`/`m2`) | **never** | Def. 4 requires `dom(m) = slots(child)`, so a narrowed edge misstates *the child* |
+| a `RenamesToLeader` renaming | yes | a partial map is meaningful there — it is how a redundant slot is recorded |
+| the input to a test | yes | failure just makes the rule decline |
+
+Only the first line needs anything from the primitives, and only two sites produce
+an edge from a composition: migration, and child-update where it cannot happen. So
+migration uses `compose-total`, which refuses to drop a key, and the guard that
+used to compare `map-length` by hand is gone — the invariant is stated once, in the
+name of the primitive, instead of re-derived per site. A narrowing composition can
+no longer reach an edge position by accident.
 
 ## Primitives
 
@@ -757,8 +773,16 @@ and rewritten against this tree's `add_primitive!`, **except
   * `map-union` — partial-map union, fails on a conflicting key.
   * `compose` — `(compose a b)[x] = a[b[x]]`; explicit partial maps, so a missing
     key means "no mapping", not "identity".
-  * `inverse` (also `map-inverse`) — total, matching upstream; only meaningful on
-    one-to-one input, which is all the encoding builds.
+  * `compose-total` — the same composition, refusing to drop a key. For the one
+    place narrowing is always wrong: a result that becomes an `App` edge.
+  * `map-image`, `map-domain` — a renaming's two slot sets, as identity maps.
+    Slot sets *are* identity renamings here, so these name what used to be spelled
+    `(compose m (inverse m))` and `(compose (inverse m) m)`. The node-slots idiom
+    `(find-mapping p1 p2 p1 p2)` becomes
+    `(map-union (map-image p1) (map-image p2))`, which says what it is.
+  * `inverse` (also `map-inverse`) — rejects a non-injective map, whose inverse is
+    not meaningful. Measured: the machinery never builds one, so this only turns a
+    silently wrong answer into a rule that does not fire.
   * `find-mapping` — variadic, taking the two tuples flat as `[first…, second…]`.
     Strict: a paired `(first[i], second[i])` must carry the same key set, and the
     result must come out functional and one-to-one. That one-to-one check is

@@ -131,7 +131,7 @@
 (RenamesToLeader (Null) (map-empty) (Null))
 
 (rule ((= e1 (App f m1 c1 m1' c2))
-       (= m (find-mapping m1 m1' m1 m1')))
+       (= m (map-union (map-image m1) (map-image m1'))))
       ((RenamesToLeader e1 m e1))
 )
 
@@ -148,8 +148,8 @@
        ; them, and a narrowed edge asserts its child is slotless -- so extend the
        ; pullback to be total on the node's slots, minting names for the rest.
        (RenamesToLeader e1 sE1 e1)                 ; only migrate into a leader
-       (= idE1 (compose (inverse m) m))            ; identity on slots(e1)
-       (= domNode (find-mapping m1 m2 m1 m2))      ; identity on the node's slots
+       (= idE1 (map-domain m))            ; identity on slots(e1)
+       (= domNode (map-union (map-image m1) (map-image m2)))      ; identity on the node's slots
        (= R (find-mapping-total idE1 domNode idE1 m)))
       (
         (union e1 (App f (compose R m1) c1 (compose R m2) c2))

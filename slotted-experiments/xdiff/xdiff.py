@@ -299,7 +299,7 @@ def compile_rule(atoms, action):
         body.append(f'(= {rv} (App "{enc_op(op)}" {e1} {kids[0]} {e2} {kids[1]}))')
 
         dom = fresh("dom")
-        body.append(f"(= {dom} (find-mapping {e1} {e2} {e1} {e2}))")
+        body.append(f"(= {dom} (map-union (map-image {e1}) (map-image {e2})))")
 
         firsts, seconds = [], []
 
@@ -308,7 +308,7 @@ def compile_rule(atoms, action):
             mv = mp_of[root]
             sym = sym_for(root)
             firsts.append(f"(compose {mv} {sym})")
-            seconds.append(f"(compose (inverse {mv}) {mv})")
+            seconds.append(f"(map-domain {mv})")
 
         # every child an earlier atom already named
         bound_before = set(mp_of)
@@ -348,11 +348,10 @@ def compile_rule(atoms, action):
 
         # Accumulate the avoid-set. Passing only the initial atom's slots would
         # let two atoms that both mint choose the same slot, since the primitive
-        # is pure and sees one atom at a time. `compose m (inverse m)` is the
-        # identity on im(m), and identity maps never conflict under map-union, so
-        # the running union is always well defined.
+        # is pure and sees one atom at a time. Identity maps never conflict under
+        # map-union, so the running union is always well defined.
         idm = fresh("idm")
-        body.append(f"(= {idm} (compose {mp} (inverse {mp})))")
+        body.append(f"(= {idm} (map-image {mp}))")
         if idx == 0:
             pat = idm
         else:

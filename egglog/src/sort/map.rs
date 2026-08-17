@@ -90,13 +90,43 @@ fn renaming_compose(
         .collect()
 }
 
-/// The inverse map. A renaming is a partial injection, so this is only
-/// meaningful on injective input; a repeated value keeps the last key, matching
-/// upstream. Unreachable in practice — every renaming the encoding builds comes
-/// from a literal, from `compose` of injectives, or from `find-mapping`, which
-/// checks injectivity.
-fn renaming_inverse(m: &BTreeMap<Value, Value>) -> BTreeMap<Value, Value> {
-    m.iter().map(|(k, v)| (*v, *k)).collect()
+/// `a ∘ b` where every key of `b` must survive; `None` if any is lost.
+///
+/// [`renaming_compose`] narrows silently when `b`'s image escapes `a`'s domain,
+/// which is correct for composing partial maps but wrong wherever the result
+/// becomes an *edge* of an e-node: an edge's domain must be its child's slot set,
+/// so a narrowed edge misstates which slots the child has. Use this there, and
+/// the rule declines instead of asserting something false.
+fn renaming_compose_total(
+    a: &BTreeMap<Value, Value>,
+    b: &BTreeMap<Value, Value>,
+) -> Option<BTreeMap<Value, Value>> {
+    let out = renaming_compose(a, b);
+    (out.len() == b.len()).then_some(out)
+}
+
+/// The inverse map; `None` unless the input is injective.
+///
+/// A renaming is a partial injection, so the inverse of a non-injective map is
+/// not meaningful. Rejecting it turns a silently wrong answer into a rule that
+/// does not fire.
+fn renaming_inverse(m: &BTreeMap<Value, Value>) -> Option<BTreeMap<Value, Value>> {
+    let out: BTreeMap<Value, Value> = m.iter().map(|(k, v)| (*v, *k)).collect();
+    (out.len() == m.len()).then_some(out)
+}
+
+/// The identity map on `im(m)`.
+///
+/// A set of slots is represented as an identity renaming, so this is how to name
+/// "the slots `m` maps onto" — the long way round being `(compose m (inverse m))`.
+fn renaming_image(m: &BTreeMap<Value, Value>) -> BTreeMap<Value, Value> {
+    m.values().map(|v| (*v, *v)).collect()
+}
+
+/// The identity map on `dom(m)`; the counterpart of [`renaming_image`], spelled
+/// the long way round as `(compose (inverse m) m)`.
+fn renaming_domain(m: &BTreeMap<Value, Value>) -> BTreeMap<Value, Value> {
+    m.keys().map(|k| (*k, *k)).collect()
 }
 
 /// Union of partial maps; `None` if they disagree on a shared key.
@@ -203,12 +233,13 @@ fn renaming_find_mapping_total(maps: &[BTreeMap<i64, i64>]) -> Option<BTreeMap<i
 ///
 /// When the key and value sorts coincide, a map also reads as a partial
 /// injection on a single space (a "renaming"), and these are registered too:
-/// - `compose`
+/// - `compose`, and `compose-total`, which refuses to drop a key
 /// - `inverse` (also spelled `map-inverse`)
+/// - `map-image` and `map-domain`, naming a renaming's two slot sets
 /// - `find-mapping`
 ///
-/// Those three are not in [`Presort::reserved_primitives`], so a program that
-/// never declares a `Map` sort may still use the names itself.
+/// These are not in [`Presort::reserved_primitives`], so a program that never
+/// declares a `Map` sort may still use the names itself.
 #[derive(Clone, Debug)]
 pub struct MapSort {
     name: String,
@@ -383,8 +414,11 @@ impl ContainerSort for MapSort {
         // edges onto another; it is variadic, taking the two tuples flat.
         if self.key.name() == self.value.name() {
             add_primitive!(eg, "compose" = |a: @MapContainer (arc), b: @MapContainer (arc)| -> @MapContainer (arc) { MapContainer { data: renaming_compose(&a.data, &b.data), ..b } });
-            add_primitive!(eg, "inverse"     = |a: @MapContainer (arc)| -> @MapContainer (arc) { MapContainer { data: renaming_inverse(&a.data), ..a } });
-            add_primitive!(eg, "map-inverse" = |a: @MapContainer (arc)| -> @MapContainer (arc) { MapContainer { data: renaming_inverse(&a.data), ..a } });
+            add_primitive!(eg, "compose-total" = |a: @MapContainer (arc), b: @MapContainer (arc)| -?> @MapContainer (arc) { Some(MapContainer { data: renaming_compose_total(&a.data, &b.data)?, ..b }) });
+            add_primitive!(eg, "inverse"     = |a: @MapContainer (arc)| -?> @MapContainer (arc) { Some(MapContainer { data: renaming_inverse(&a.data)?, ..a }) });
+            add_primitive!(eg, "map-inverse" = |a: @MapContainer (arc)| -?> @MapContainer (arc) { Some(MapContainer { data: renaming_inverse(&a.data)?, ..a }) });
+            add_primitive!(eg, "map-image"   = |a: @MapContainer (arc)| -> @MapContainer (arc) { MapContainer { data: renaming_image(&a.data), ..a } });
+            add_primitive!(eg, "map-domain"  = |a: @MapContainer (arc)| -> @MapContainer (arc) { MapContainer { data: renaming_domain(&a.data), ..a } });
             add_primitive!(eg, "find-mapping" = {self.clone(): MapSort} [xs: @MapContainer (arc)] -?> @MapContainer (arc) {{
                 let maps: Vec<BTreeMap<Value, Value>> = xs.map(|m| m.data).collect();
                 Some(MapContainer {

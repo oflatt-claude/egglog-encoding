@@ -66,7 +66,7 @@
 ;;;
 ;;; which is one call:
 ;;;
-;;;     (= dom (find-mapping p1 p2 p1 p2))        ; identity on the node's slots
+;;;     (= dom (map-union (map-image p1) (map-image p2)))        ; identity on the node's slots
 ;;;     (= mp  (find-mapping-total avoid dom first... second...))
 ;;;
 ;;; `find-mapping-total` is `find-mapping` -- least map with `mp . second_i =
@@ -290,16 +290,16 @@
 
 (rule (;; atom 1 -- INITIAL.  Its node's slots ARE the pattern's.
        (= p (App "f" pa a pb b))
-       (= mp1 (find-mapping pa pb pa pb))     ; identity on atom 1's node slots
-       (= avoid1 (compose mp1 (inverse mp1))) ; slots already spoken for
+       (= mp1 (map-union (map-image pa) (map-image pb)))     ; identity on atom 1's node slots
+       (= avoid1 (map-image mp1)) ; slots already spoken for
        (= mb (compose mp1 pb))                ; ?b's renaming into slots(pattern)
        ;; atom 2 -- constrained by its root ?b, and by nothing else
        (= b (App "g" pc c pd d))
-       (= dom2 (find-mapping pc pd pc pd))    ; identity on atom 2's node slots
+       (= dom2 (map-union (map-image pc) (map-image pd)))    ; identity on atom 2's node slots
        (RenamesToLeader b symb b)             ; symb in G(B)  -- Def. 6 for ?b
        (= mp2 (find-mapping-total avoid1 dom2
                                   (compose mb symb)          ; first
-                                  (compose (inverse mb) mb))) ; second: id on dom(mb)
+                                  (map-domain mb))) ; second: id on dom(mb)
        (= mc (compose mp2 pc))                ; ?c's renaming into slots(pattern)
        (= md (compose mp2 pd)))               ; ?d's
       ((Chain p mc md)))
@@ -346,15 +346,15 @@
 
 (relation Chain (U Renaming Renaming))
 (rule ((= p (App "f" pa a pb b))
-       (= mp1 (find-mapping pa pb pa pb))
-       (= avoid1 (compose mp1 (inverse mp1)))
+       (= mp1 (map-union (map-image pa) (map-image pb)))
+       (= avoid1 (map-image mp1))
        (= mb (compose mp1 pb))
        (= b (App "g" pc c pd d))
-       (= dom2 (find-mapping pc pd pc pd))
+       (= dom2 (map-union (map-image pc) (map-image pd)))
        (RenamesToLeader b symb b)
        (= mp2 (find-mapping-total avoid1 dom2
                                   (compose mb symb)
-                                  (compose (inverse mb) mb)))
+                                  (map-domain mb)))
        (= mc (compose mp2 pc))
        (= md (compose mp2 pd)))
       ((Chain p mc md)))
@@ -405,14 +405,14 @@
 
 (rule (;; atom 1 -- INITIAL
        (= p (App "f" p1 x q1 y))
-       (= mp1 (find-mapping p1 q1 p1 q1))     ; identity on atom 1's node slots
-       (= avoid1 (compose mp1 (inverse mp1)))
+       (= mp1 (map-union (map-image p1) (map-image q1)))     ; identity on atom 1's node slots
+       (= avoid1 (map-image mp1))
        (= mx (compose mp1 p1))
        (= my (compose mp1 q1))
        ;; atom 2 -- root fresh, so both shared children constrain mp' and both
        ;; contribute part of it.  All the pairs go into ONE call.
        (= q (App "g" p2 x q2 y))
-       (= dom2 (find-mapping p2 q2 p2 q2))    ; identity on atom 2's node slots
+       (= dom2 (map-union (map-image p2) (map-image q2)))    ; identity on atom 2's node slots
        (RenamesToLeader x sx x)
        (RenamesToLeader y sy y)
        (= mp' (find-mapping-total avoid1 dom2
@@ -492,24 +492,24 @@
 
 (rule (;; atom 1 -- INITIAL, mp = id
        (= p (App "f" pa a pb b))
-       (= mp1 (find-mapping pa pb pa pb))
-       (= avoid1 (compose mp1 (inverse mp1)))
+       (= mp1 (map-union (map-image pa) (map-image pb)))
+       (= avoid1 (map-image mp1))
        (= ma (compose mp1 pa))
        (= mb (compose mp1 pb))
        ;; atom 2 -- constrained by its root ?b
        (= b (App "g" pc c pd d))
-       (= dom2 (find-mapping pc pd pc pd))
+       (= dom2 (map-union (map-image pc) (map-image pd)))
        (RenamesToLeader b symb b)
        (= mp2 (find-mapping-total avoid1 dom2
                                   (compose mb symb)
-                                  (compose (inverse mb) mb)))
+                                  (map-domain mb)))
        ;; the avoid-set accumulates: atom 3 may not mint over anything atom 1 or
        ;; atom 2 already named
-       (= avoid2 (map-union avoid1 (compose mp2 (inverse mp2))))
+       (= avoid2 (map-union avoid1 (map-image mp2)))
        (= mc (compose mp2 pc))
        ;; atom 3 -- root fresh, constrained through ?c (depth 2) and ?a (depth 1)
        (= q (App "h" qc c qa a))
-       (= dom3 (find-mapping qc qa qc qa))
+       (= dom3 (map-union (map-image qc) (map-image qa)))
        (RenamesToLeader c sc c)
        (RenamesToLeader a sa a)
        (= mp3 (find-mapping-total avoid2 dom3
@@ -567,7 +567,7 @@
 ;;;
 ;;; where `domain`'s keys are the slots the result must cover and `avoid`'s
 ;;; slots are the ones it may not mint over.  Both are identity maps the caller
-;;; already has: `(find-mapping p1 p2 p1 p2)` is the identity on a node's slots.
+;;; already has: `(map-union (map-image p1) (map-image p2))` is the identity on a node's slots.
 ;;;
 ;;; WHAT TO MEASURE.  The natural check -- "did `?p` lose a slot?" -- does NOT
 ;;; isolate this bug.  `f(?x,?y) = h(?y,?z)` genuinely says `f` does not depend
@@ -639,8 +639,8 @@
 (rule ((= p (App "f" p1 x q1 y))
        (= q (App "g" p2 x q2 z))
        (RenamesToLeader x sx x)
-       (= pat (find-mapping p1 q1 p1 q1))            ; identity on slots(pattern)
-       (= dom (find-mapping p2 q2 p2 q2))            ; identity on slots(node 2)
+       (= pat (map-union (map-image p1) (map-image q1)))            ; identity on slots(pattern)
+       (= dom (map-union (map-image p2) (map-image q2)))            ; identity on slots(node 2)
        (= mp' (find-mapping-total pat dom (compose p1 sx) p2)))
       ((union p (App "h" q1 y (compose mp' q2) z))))
 
@@ -690,8 +690,8 @@
 
 (rule (;; atom 1 -- INITIAL
        (= e (App "lambda" mvar (Var 0) mb b))
-       (= mp1 (find-mapping mvar mb mvar mb))
-       (= avoid1 (compose mp1 (inverse mp1)))
+       (= mp1 (map-union (map-image mvar) (map-image mb)))
+       (= avoid1 (map-image mp1))
        (= v (map-get (compose mp1 mvar) 0))       ; the bound slot, in pattern slots
        (= mb1 (compose mp1 mb))
        ;; atom 2 -- constrained by its root ?b AND by the slot literal `$s`, which
@@ -700,11 +700,11 @@
        ;; then mp2 has already minted its own name for the same binder and nothing
        ;; can revise a mint.
        (= b (App "app" mf f mv (Var 0)))
-       (= dom2 (find-mapping mf mv mf mv))
+       (= dom2 (map-union (map-image mf) (map-image mv)))
        (RenamesToLeader b symb b)
        (= mp2 (find-mapping-total avoid1 dom2
                                   (compose mb1 symb) (map-insert (map-empty) 0 v)
-                                  (compose (inverse mb1) mb1) mv))
+                                  (map-domain mb1) mv))
        (map-not-contains (inverse (compose mp2 mf)) v))   ; $s not free in ?f
       ((RenamesToLeader e (compose mp2 mf) f)))
 
@@ -761,10 +761,10 @@
 (relation Union' (Renaming U Renaming U))
 
 (rule ((= p (App "f" p1 x q1 y))
-       (= mp1 (find-mapping p1 q1 p1 q1))
-       (= avoid1 (compose mp1 (inverse mp1)))
+       (= mp1 (map-union (map-image p1) (map-image q1)))
+       (= avoid1 (map-image mp1))
        (= q (App "g" p2 x q2 y))
-       (= dom2 (find-mapping p2 q2 p2 q2))
+       (= dom2 (map-union (map-image p2) (map-image q2)))
        (RenamesToLeader x sx x)
        (RenamesToLeader y sy y)
        (RenamesToLeader p s p)

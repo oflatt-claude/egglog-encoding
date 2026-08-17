@@ -135,7 +135,7 @@
 (RenamesToLeader (Null) (map-empty) (Null))
 
 (rule ((= e1 (App f m1 c1 m1' c2))
-       (= m (find-mapping m1 m1' m1 m1')))
+       (= m (map-union (map-image m1) (map-image m1'))))
       ((RenamesToLeader e1 m e1))
 )
 
@@ -147,12 +147,14 @@
 (rule ((RenamesToLeader e2 m e1)
        (= e2 (App f m1 c1 m2 c2))
        (!= e1 e2)
-       ; `compose` truncates when an edge reaches outside im(m); a narrowed edge
-       ; asserts its child is slotless, so decline instead
-       (= (map-length (compose (inverse m) m1)) (map-length m1))
-       (= (map-length (compose (inverse m) m2)) (map-length m2)))
+       ; The results become EDGES, whose domains must stay their children's slot
+       ; sets, so `compose-total` is used rather than `compose`: it refuses to drop
+       ; a key, and the rule declines instead of asserting a narrowed edge -- which
+       ; would claim the child has fewer slots than it does.
+       (= n1 (compose-total (inverse m) m1))
+       (= n2 (compose-total (inverse m) m2)))
       (
-        (union e1 (App f (compose (inverse m) m1) c1 (compose (inverse m) m2) c2))
+        (union e1 (App f n1 c1 n2 c2))
         (delete (App f m1 c1 m2 c2))
       ))
 
