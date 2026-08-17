@@ -51,12 +51,14 @@
 ;;;   M6 one shared variable, minting   M6-one-shared-var-two-ops, U1
 ;;;   M8 action over renamed ids        C11, C14, E1-E3
 ;;;   M9 the accumulating avoid-set     C7-redundant-distinct-vars
+;;;   M10 nested right-hand side       NR1-nested-build, NR2, NR3-assoc
 ;;;
 ;;; M7 is not covered and cannot be as the oracle stands: it puts a slot literal in a
 ;;; non-binder child position, which the reference admits only via `Bind` or as a
 ;;; unary `Var(Slot)` atom, and the harness's atoms take two children.  The mechanism
 ;;; it turns on -- constraining with a pinned literal rather than checking afterwards
-;;; -- is covered on binder shapes by B3, B4 and the `slot-late` mutant.
+;;; -- is covered on binder shapes by B3, B4 and the `slot-late` mutant, and its slot
+;;; side condition by CD1-CD4.
 
 (include "tests/slotted-egraph-encoding-11.egg")
 
@@ -763,5 +765,44 @@
 
 ;; not accumulated: both invent slot 0, so the two variables collapse
 (check (NoAccum mu mv) (= mu mv))
+
+(pop)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; M10.  A nested right-hand side.
+;;;
+;;;     ?p == (f ?a ?b)   =>   union ?p (h (g ?a ?b) ?b)
+;;;
+;;; The paper's `let_app` and its associativity rules build a right-hand side that
+;;; is a *tree*, so an intermediate node has to exist before the outer one can point
+;;; at it -- one `let` per built node, innermost first.
+;;;
+;;; The edge from the outer node to the inner one is the identity on the inner
+;;; node's slots.  An action is already in pattern slot space, so there is no
+;;; renaming between two built nodes; and a built node's slots are the union of its
+;;; edges' images, which is what makes the walk bottom-up.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(push)
+
+(rule ((= p (App2 "f" pa a pb b))
+       (= mp1 (map-union (map-image pa) (map-image pb)))   ; atom 1, mp = identity
+       (= ma (compose mp1 pa))                             ; ?a into pattern slots
+       (= mb (compose mp1 pb))                             ; ?b's
+       (RenamesToLeader p symp p))
+      ((let inner (App2 "g" ma a mb b))
+       ;; identity on `$inner`'s slots, not a renaming
+       (let outer (App2 "h" (map-union (map-image ma) (map-image mb)) inner mb b))
+       (RenamesToLeader outer (compose mp1 symp) p)))
+
+(let $f (App2 "f" (map-of 0 0) (Var 0) (map-of 0 1) (Var 0)))
+(run 20)
+
+;; h(g($0,$1), $1) has been put in f($0,$1)'s class
+(let $g (App2 "g" (map-of 0 0) (Var 0) (map-of 0 1) (Var 0)))
+(let $h (App2 "h" (map-of 0 0 1 1) $g (map-of 0 1) (Var 0)))
+(run 20)
+
+(check (RenamesToLeader $f m1 leader)
+       (RenamesToLeader $h m2 leader))
 
 (pop)

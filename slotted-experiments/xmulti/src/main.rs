@@ -14,6 +14,7 @@
 //! atom   <root> <op> <c1> <c2>    one depth-1 multipattern atom (pvar names)
 //! cond   in|notin $<slot> <pvar>...   side condition on the match
 //! action <root> <op> <a> <b>  union ?root with (op ?a ?b)
+//! rhs    <root> <pattern>    union ?root with a nested right-hand side
 //! probe  <sexpr>              term to include in the reported partition
 //! rounds <n>                  saturation rounds (default 10)
 //! ```
@@ -58,6 +59,9 @@ struct RuleSpec {
     atoms: Vec<String>,
     conds: Vec<Cond>,
     action: Option<(String, String, String, String)>,
+    /// `(root, pattern)` for a right-hand side that is not depth-1. The reference's
+    /// pattern parser handles nesting, so this only has to be handed over as text.
+    rhs: Option<(String, String)>,
 }
 
 struct Spec {
@@ -128,6 +132,15 @@ fn parse_spec(src: &str) -> Spec {
                     "?{} == ({} {} {})",
                     w[0], w[1], kid(w[2]), kid(w[3])
                 ));
+            }
+            // `rhs <root> <pattern>`, e.g. `rhs p (h (g ?a ?b) ?b)`
+            "rhs" => {
+                let (root, pat) = rest.split_once(char::is_whitespace).unwrap();
+                if s.rules.is_empty() {
+                    s.rules.push(RuleSpec::default());
+                }
+                s.rules.last_mut().unwrap().rhs =
+                    Some((root.to_string(), pat.trim().to_string()));
             }
             "action" => {
                 let w: Vec<&str> = rest.split_whitespace().collect();
@@ -205,11 +218,16 @@ fn main() {
         .iter()
         .enumerate()
         .filter_map(|(i, r)| {
-            let (root, op, a, b) = r.action.as_ref()?;
             if r.atoms.is_empty() {
                 return None;
             }
             let pat = MultiPattern::parse(&r.atoms.join(", ")).unwrap();
+            if let Some((root, text)) = &r.rhs {
+                let from = Pattern::PVar(root.clone());
+                let to = Pattern::parse(text).unwrap();
+                return Some((i, pat, from, to));
+            }
+            let (root, op, a, b) = r.action.as_ref()?;
             let from = Pattern::PVar(root.clone());
             // `action <root> = <x> <x>` equates two pattern variables directly, so
             // both sides can carry a non-identity renaming. Anything else builds a

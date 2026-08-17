@@ -181,7 +181,15 @@ class Case:
         self.unions = unions        # [(term, term)]
         # [(atoms, action, conds)]; atoms are [(root, op, c1, c2)] over pvar names
         rules = list(rules) if rules is not None else [(atoms, action)]
-        self.rules = [r if len(r) == 3 else (r[0], r[1], []) for r in rules]
+        rules = [r if len(r) == 3 else (r[0], r[1], []) for r in rules]
+        # Two identical rules are one rule, and emitting both makes egglog reject the
+        # program: it names a rule by its text, so the second is a duplicate name.
+        seen, deduped = set(), []
+        for r in rules:
+            if repr(r) not in seen:
+                seen.add(repr(r))
+                deduped.append(r)
+        self.rules = deduped
         self.probes = probes        # [term]
         self.rounds = rounds
 
@@ -212,10 +220,24 @@ class Case:
             for want, slot, pvars in conds:
                 kind = "in" if want else "notin"
                 out.append(f"cond {kind} {slot} {' '.join(pvars)}")
-            if action:
+            if action and len(action) == 2:
+                out.append(f"rhs {action[0]} {rhs_text(action[1])}")
+            elif action:
                 out.append("action {} {} {} {}".format(*action))
         out += [f"probe {sexpr(t)}" for t in self.probes]
         return "\n".join(out) + "\n"
+
+
+def enc_op_ref(op):
+    """The operator name the reference uses; only `lam` differs on our side."""
+    return op
+
+
+def rhs_text(t):
+    """An RHS tree as reference pattern text: `(h (g ?a ?b) ?b)`."""
+    if isinstance(t, str):
+        return t if t.startswith("$") else f"?{t}"
+    return "({} {})".format(t[0], " ".join(rhs_text(k) for k in t[1:]))
 
 
 def check_encodable(case):
@@ -468,6 +490,50 @@ def compile_rule(atoms, action, conds=()):
             expr = f"(or {any_of})"
             body.append(f"(guard {expr})" if want
                         else f"(guard (bool= {expr} false))")
+
+    def rhs_sexpr(t):
+        """The RHS as reference pattern text, for the spec's `rhs` line."""
+        if isinstance(t, str):
+            return t if t.startswith("$") else f"?{t}"
+        return "({} {})".format(enc_op_ref(t[0]),
+                                " ".join(rhs_sexpr(k) for k in t[1:]))
+
+    def build_rhs(t, lets):
+        """Edge and class for an RHS term, emitting one `let` per built node.
+
+        Everything in an action is already in pattern slot space, so a built node's
+        edge to another built node is the identity on that child's slots: there is
+        no renaming between them. A built node's slots are the union of its edges'
+        images, which is what makes this a bottom-up walk.
+        """
+        if isinstance(t, str):
+            if t.startswith("$"):
+                # the machinery carries a bound slot as an edge to `(Var 0)`
+                return f"(map-insert (map-empty) 0 {slot_of[t]})", "(Var 0)"
+            return mp_of[t], cls_of[t]
+        kids = [build_rhs(k, lets) for k in t[1:]]
+        node = fresh("_rhs")
+        cols = " ".join(f"{e} {c}" for e, c in kids)
+        lets.append(f'(let {node} (App{len(kids)} "{enc_op(t[0])}" {cols}))')
+        slots = "(map-empty)"
+        for e, _ in reversed(kids):
+            slots = (f"(map-image {e})" if slots == "(map-empty)"
+                     else f"(map-union (map-image {e}) {slots})")
+        return slots, node
+
+    # A two-element action is `(root, rhs-tree)`; the four-element forms are the
+    # flat build and the equate.
+    if len(action) == 2:
+        root, rhs = action
+        mr = mp_of[root]
+        if isinstance(rhs, str) and not rhs.startswith("$"):
+            action = (root, "=", rhs, rhs)          # a bare variable is an equate
+        else:
+            lets = []
+            _, built = build_rhs(rhs, lets)
+            act = "\n       ".join(
+                lets + [f"(RenamesToLeader {built} {mr} {cls_of[root]})"])
+            return "(rule (" + "\n       ".join(body) + f")\n      ({act}))"
 
     root, op, a, b = action
     # egglog's `union` equates e-classes, i.e. it can only assert an equation
@@ -1332,6 +1398,45 @@ def curated():
                 ("p", "h", "a", "b"), [(True, "$s", ["a", "b"])])],
     ))
 
+    # ---- nested right-hand sides --------------------------------------------
+    # Until now an action built one depth-1 node. The paper's `let_app` and the
+    # associativity rules build a *tree*, so intermediate nodes have to be created
+    # and referenced. An action is already in pattern slot space, so a built node's
+    # edge to another built node is the identity on that child's slots.
+
+    # NR1 -- one level of nesting: f(a,b) becomes h(g(a,b), b), so `g` must be built
+    # before `h` can point at it.
+    cs.append(Case(
+        "NR1-nested-build",
+        [("f", V0, V1)], [], None, None,
+        [("f", V0, V1), ("h", ("g", V0, V1), V1), ("g", V0, V1),
+         ("h", ("g", V1, V0), V0)],
+        rules=[([("p", "f", "a", "b")], ("p", ("h", ("g", "a", "b"), "b")))],
+    ))
+
+    # NR2 -- two levels, and the same variable reused at different depths, which is
+    # where a wrong slot set for an intermediate node would show up.
+    cs.append(Case(
+        "NR2-two-levels",
+        [("f", V0, V1)], [], None, None,
+        [("f", V0, V1), ("h", ("g", ("k", V0, V1), V0), V1),
+         ("g", ("k", V0, V1), V0), ("k", V0, V1)],
+        rules=[([("p", "f", "a", "b")],
+                ("p", ("h", ("g", ("k", "a", "b"), "a"), "b")))],
+    ))
+
+    # NR3 -- associativity, the shape the paper's arith rules use: the right-hand
+    # side regroups the same three variables.
+    cs.append(Case(
+        "NR3-assoc",
+        [("add", LEAF0, ("add", ("g", V1, V1), ("k", V2, V2)))], [], None, None,
+        [("add", LEAF0, ("add", ("g", V1, V1), ("k", V2, V2))),
+         ("add", ("add", LEAF0, ("g", V1, V1)), ("k", V2, V2)),
+         ("add", LEAF0, ("g", V1, V1)), NUL],
+        rules=[([("p", "add", "a", "x"), ("x", "add", "b", "c")],
+                ("p", ("add", ("add", "a", "b"), "c")))],
+    ))
+
     return cs
 
 
@@ -1425,9 +1530,21 @@ def rand_rule(rng, terms, unions):
     # ROOT often has the identity for its renaming, so an action rooted there
     # cannot tell a union of classes from a union of invocations. A CHILD's
     # renaming is its stored edge, which generally is not the identity.
-    if rng.random() < 0.3:
+    r = rng.random()
+    if r < 0.3:
         x, y = rng.choice(allv), rng.choice(allv)
         action = (x, "=", y, y)          # equate two invocations
+    elif r < 0.55:
+        # a nested right-hand side, which has to build an intermediate node before
+        # the outer one can point at it. Binders are excluded: their first child has
+        # to be a slot literal. Operators the pattern itself matches are avoided too
+        # -- rebuilding one makes the rule feed itself forever, and a case that never
+        # saturates is excluded from the comparison, so it would test nothing.
+        used = {at[1] for at in atoms}
+        fresh_ops = [o for o in BINOPS if o not in used] or BINOPS
+        inner = (rng.choice(fresh_ops), rng.choice(allv), rng.choice(allv))
+        action = (rng.choice(allv),
+                  (rng.choice(fresh_ops), inner, rng.choice(allv)))
     else:
         action = (rng.choice(allv), "h", rng.choice(allv), rng.choice(allv))
     return atoms, action
