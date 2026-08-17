@@ -401,6 +401,10 @@ impl ContainerSort for MapSort {
 
         add_primitive!(eg, "map-union" = |xs: @MapContainer (arc), ys: @MapContainer (arc)| -?> @MapContainer (arc) { Some(MapContainer { data: renaming_union(&xs.data, &ys.data)?, ..xs }) });
 
+        // `map-contains` is a fact, so it cannot be combined with `or`/`and`; this
+        // is the same test as a value, for use inside a `guard`.
+        add_primitive!(eg, "bool-map-contains" = |xs: @MapContainer (arc), x: # (self.key())| -> bool { xs.data.contains_key(&x) });
+
         // With matching key and value sorts a map is a partial injection on one
         // space — a renaming, in the slotted-e-graph sense — so it composes and
         // inverts. `find-mapping` solves for the renaming carrying one tuple of

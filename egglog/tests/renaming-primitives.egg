@@ -41,3 +41,10 @@
 ;;; Here `1` is unconstrained, and 0 is both avoided and taken, so it mints 1.
 (check (= (find-mapping-total (map-of 0 0) (map-of 0 0 1 1) (map-of 0 0) (map-of 0 0))
           (map-of 0 0 1 1)))
+
+;;; bool-map-contains is the same test as map-contains, as a value, so it can go
+;;; inside a `guard` where a fact cannot be combined with `or`.
+(check (= (bool-map-contains (map-of 0 5 1 7) 0) true))
+(check (= (bool-map-contains (map-of 0 5 1 7) 9) false))
+(check (= (bool-map-contains (map-of) 0) false))
+

@@ -167,7 +167,9 @@ def shift_case(case, k):
 class Case:
     """One e-graph, one rule *set*, and the probes whose partition is compared.
 
-    A rule is `(atoms, action)`. Pass `rules=[...]` for a set, or the single-rule
+    A rule is `(atoms, action)` or `(atoms, action, conds)`, where a condition is
+    `(want, slot, pvars)`: `want` says whether the slot should be among the slots of
+    any listed variable. Pass `rules=[...]` for a set, or the single-rule
     `atoms, action` form; `case.atoms` and `case.action` then read rule 0, which is
     what the single-rule checks and `show` use.
     """
@@ -177,8 +179,9 @@ class Case:
         self.name = name
         self.terms = terms          # [term]
         self.unions = unions        # [(term, term)]
-        # [(atoms, action)]; atoms are [(root, op, c1, c2)] over pvar names
-        self.rules = list(rules) if rules is not None else [(atoms, action)]
+        # [(atoms, action, conds)]; atoms are [(root, op, c1, c2)] over pvar names
+        rules = list(rules) if rules is not None else [(atoms, action)]
+        self.rules = [r if len(r) == 3 else (r[0], r[1], []) for r in rules]
         self.probes = probes        # [term]
         self.rounds = rounds
 
@@ -190,18 +193,25 @@ class Case:
     def action(self):
         return self.rules[0][1]
 
+    @property
+    def conds(self):
+        return self.rules[0][2]
+
     def spec(self, rules=None):
         rules = self.rules if rules is None else rules
         out = [f"rounds {self.rounds}"]
         out += [f"term {sexpr(t)}" for t in self.terms]
         out += [f"union {sexpr(a)} {sexpr(b)}" for a, b in self.unions]
-        for atoms, action in rules:
+        for atoms, action, conds in rules:
             if not atoms:
                 continue
             # the separator is only needed from the second rule on, but emitting it
             # always keeps the spec readable
             out.append("rule")
             out += [f"atom {r} {o} {c1} {c2}" for (r, o, c1, c2) in atoms]
+            for want, slot, pvars in conds:
+                kind = "in" if want else "notin"
+                out.append(f"cond {kind} {slot} {' '.join(pvars)}")
             if action:
                 out.append("action {} {} {} {}".format(*action))
         out += [f"probe {sexpr(t)}" for t in self.probes]
@@ -272,13 +282,16 @@ def pvars_of(atom):
     return {v for v in (atom[0], atom[2], atom[3]) if not v.startswith("$")}
 
 
-def compile_rule(atoms, action):
+def compile_rule(atoms, action, conds=()):
     """Compile a flattened multipattern into an egglog rule body + action.
 
     Atoms are processed in the given order. Each atom's `mp` is solved from
     EVERY constraint available at that point -- its root if already bound, and
     every child bound by an earlier atom -- with `find-mapping-total` so slots
     the constraints do not reach are minted rather than dropped.
+
+    `conds` are side conditions `(want, slot, pvars)`, compiled last so that every
+    variable they mention is bound and every slot literal is pinned.
     """
     atoms = order_atoms(atoms)
     body, uid = [], [0]
@@ -440,6 +453,22 @@ def compile_rule(atoms, action):
             # every other use of this class, so it is nearly free.
             mp_of[root] = f"(compose {mp} {sym_for(root)})"
 
+    # Side conditions. A variable's slots in pattern space are the image of its
+    # renaming, so `$s in slots(?x)` is membership in `(map-image mx)`. With one
+    # variable that is a fact; with several the disjunction has to be a value, since
+    # a fact cannot be combined with `or`.
+    for want, slot, pvars in conds:
+        sv = slot_of[slot]
+        images = [f"(map-image {mp_of[v]})" for v in pvars]
+        if len(images) == 1:
+            kind = "map-contains" if want else "map-not-contains"
+            body.append(f"({kind} {images[0]} {sv})")
+        else:
+            any_of = " ".join(f"(bool-map-contains {im} {sv})" for im in images)
+            expr = f"(or {any_of})"
+            body.append(f"(guard {expr})" if want
+                        else f"(guard (bool= {expr} false))")
+
     root, op, a, b = action
     # egglog's `union` equates e-classes, i.e. it can only assert an equation
     # whose two renamings are the identity. The root's renaming `mp_of[root]`
@@ -489,9 +518,9 @@ def egg_program(case, rules=None, mult=3):
     out.append("(rule ((ProbeId a i) (ProbeId b j)\n"
                "       (RenamesToLeader a m1 l) (RenamesToLeader b m2 l))\n"
                "      ((SameClass i j)))")
-    for atoms, action in rules:
+    for atoms, action, conds in rules:
         if atoms:
-            out.append(compile_rule(atoms, action))
+            out.append(compile_rule(atoms, action, conds))
     for i, t in enumerate(case.terms):
         out.append(f"(let _t{i} {enc(t)})")
     for i, (a, b) in enumerate(case.unions):
@@ -648,7 +677,7 @@ def check_case(case, verbose=False, stats=None):
     # original order is excluded -- rerunning it would test determinism, not order.
     # With a rule set, the same permutation index is applied to every rule rather
     # than taking the product of their orderings.
-    widest = max(len(a) for a, _ in case.rules) if case.rules else 0
+    widest = max(len(a) for a, _, _ in case.rules) if case.rules else 0
     if widest > 1:
         perms = [p for p in itertools.permutations(range(widest))
                  if list(p) != list(range(widest))]
@@ -656,8 +685,8 @@ def check_case(case, verbose=False, stats=None):
             perms = random.Random(0).sample(perms, PERM_CAP)
         ref_vals, enc_vals = {rv}, {ev}
         for p in perms:
-            reordered = [([a[k] for k in p if k < len(a)], act)
-                         for a, act in case.rules]
+            reordered = [([a[k] for k in p if k < len(a)], act, cs)
+                         for a, act, cs in case.rules]
             xs, x = run_reference(case, rules=reordered)
             ys, y = run_encoding(case, rules=reordered)
             # A timeout or crash is not a partition; folding it into the value
@@ -1251,6 +1280,58 @@ def curated():
                ([("q", "g", "x", "y")], ("q", "h", "y", "x"))],
     ))
 
+    # ---- conditional rewrites -----------------------------------------------
+    # The paper's rules that are guarded by a slot condition: `my_let_unused` and
+    # `eta` need `$1 not in slots(?b)`, `let_lam_diff` needs it in, and `let_app`
+    # needs it in either of two variables. A condition asks about the *slots* of what
+    # a variable matched, which is why it cannot be folded into the pattern.
+
+    # CD1 -- `notin`, with a match on each side of the condition: one body ignores
+    # the bound slot and is equated with its binder, the other uses it and must not
+    # be. Both are present so that dropping the condition changes the answer.
+    cs.append(Case(
+        "CD1-notin-decides",
+        [("lam", V0, ("g", V1, V1)), ("lam", V0, ("g", V0, V0))], [], None, None,
+        [("lam", V0, ("g", V1, V1)), ("g", V1, V1),
+         ("lam", V0, ("g", V0, V0)), ("g", V0, V0)],
+        rules=[([("p", "lam", "$s", "b")], ("p", "=", "b", "b"),
+                [(False, "$s", ["b"])])],
+    ))
+
+    # CD2 -- the same rule where the condition fails: the body does use the bound
+    # slot, so nothing may fire.
+    cs.append(Case(
+        "CD2-notin-blocks",
+        [("lam", V0, ("g", V0, V0))], [], None, None,
+        [("lam", V0, ("g", V0, V0)), ("g", V0, V0), ("g", V1, V1), NUL],
+        rules=[([("p", "lam", "$s", "b")], ("p", "=", "b", "b"),
+                [(False, "$s", ["b"])])],
+    ))
+
+    # CD3 -- `in`, the other direction.
+    cs.append(Case(
+        "CD3-in-fires",
+        [("lam", V0, ("g", V0, V0)), ("lam", V0, ("g", V1, V1))], [], None, None,
+        [("lam", V0, ("g", V0, V0)), ("lam", V0, ("g", V1, V1)),
+         ("h", ("g", V0, V0), ("g", V0, V0)), NUL],
+        rules=[([("p", "lam", "$s", "b")], ("p", "h", "b", "b"),
+                [(True, "$s", ["b"])])],
+    ))
+
+    # CD4 -- a disjunction over two variables, which needs the condition as a value
+    # rather than a fact. Again one match satisfies it and one does not.
+    cs.append(Case(
+        "CD4-in-either-decides",
+        [("lam", V0, ("f", ("g", V0, V0), ("k", V1, V1))),
+         ("lam", V0, ("f", ("g", V1, V1), ("k", V1, V1)))], [], None, None,
+        [("lam", V0, ("f", ("g", V0, V0), ("k", V1, V1))),
+         ("h", ("g", V0, V0), ("k", V1, V1)),
+         ("lam", V0, ("f", ("g", V1, V1), ("k", V1, V1))),
+         ("h", ("g", V1, V1), ("k", V1, V1))],
+        rules=[([("p", "lam", "$s", "x"), ("x", "f", "a", "b")],
+                ("p", "h", "a", "b"), [(True, "$s", ["a", "b"])])],
+    ))
+
     return cs
 
 
@@ -1395,17 +1476,17 @@ def main():
             rng = random.Random(seed)
             case = [rand_case(rng, k) for k in range(i + 1)][i]
         order = [int(x) for x in args[3:]]
-        rules = [([a[k] for k in order if k < len(a)] if order else a, act)
-                 for a, act in case.rules]
+        rules = [([a[k] for k in order if k < len(a)] if order else a, act, cs)
+                 for a, act, cs in case.rules]
         print("=== spec ===")
         print(case.spec(rules), end="")
         # its own scratch file, so `show` can be used while a sweep is running
         keep = ROOT / f"xdiff-show-{i}.egg"
         print("=== reference ===", run_reference(case, rules))
         print("=== encoding  ===", run_encoding(case, rules, keep=keep))
-        for n, (atoms, act) in enumerate(rules):
+        for n, (atoms, act, cs) in enumerate(rules):
             print(f"=== rule {n} ===")
-            print(compile_rule(atoms, act))
+            print(compile_rule(atoms, act, cs))
         return 0
     if args and args[0] == "fuzz":
         n = int(args[1]) if len(args) > 1 else 100

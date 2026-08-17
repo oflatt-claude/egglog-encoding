@@ -10,7 +10,9 @@
 //! ```text
 //! term   <sexpr>              add a term
 //! union  <sexpr> <sexpr>      union two terms
+//! rule                        start a new rule (the first `atom` opens one)
 //! atom   <root> <op> <c1> <c2>    one depth-1 multipattern atom (pvar names)
+//! cond   in|notin $<slot> <pvar>...   side condition on the match
 //! action <root> <op> <a> <b>  union ?root with (op ?a ?b)
 //! probe  <sexpr>              term to include in the reported partition
 //! rounds <n>                  saturation rounds (default 10)
@@ -39,10 +41,22 @@ define_language! {
 
 type G = EGraph<L>;
 
-/// One rewrite: a multipattern and what to do with each match.
+/// A side condition on a match: is the slot among the variable's slots?
+///
+/// `want` says whether the slot should appear in the slots of *any* listed
+/// variable, which covers the reference's conditions: `$1 not in slots(?b)`,
+/// `$1 in slots(?b)`, and `let-app`'s `$1 in slots(?a) or $1 in slots(?b)`.
+struct Cond {
+    slot: Slot,
+    pvars: Vec<String>,
+    want: bool,
+}
+
+/// One rewrite: a multipattern, side conditions, and what to do with each match.
 #[derive(Default)]
 struct RuleSpec {
     atoms: Vec<String>,
+    conds: Vec<Cond>,
     action: Option<(String, String, String, String)>,
 }
 
@@ -85,6 +99,23 @@ fn parse_spec(src: &str) -> Spec {
             // binder's slot must be one, since `Bind` has no room for a pattern
             // variable there.
             "rule" => s.rules.push(RuleSpec::default()),
+            // `cond in|notin $slot pvar...`
+            "cond" => {
+                let w: Vec<&str> = rest.split_whitespace().collect();
+                let want = match w[0] {
+                    "in" => true,
+                    "notin" => false,
+                    other => panic!("unknown cond kind: {other}"),
+                };
+                if s.rules.is_empty() {
+                    s.rules.push(RuleSpec::default());
+                }
+                s.rules.last_mut().unwrap().conds.push(Cond {
+                    slot: Slot::named(w[1].trim_start_matches('$')),
+                    pvars: w[2..].iter().map(|v| v.to_string()).collect(),
+                    want,
+                });
+            }
             "atom" => {
                 let w: Vec<&str> = rest.split_whitespace().collect();
                 let kid = |c: &str| {
@@ -137,6 +168,15 @@ fn split_two_sexprs(s: &str) -> (String, String) {
     panic!("cannot split two s-exprs from {s:?}");
 }
 
+/// Does the match satisfy the condition?
+fn holds(c: &Cond, subst: &Subst) -> bool {
+    let found = c
+        .pvars
+        .iter()
+        .any(|v| subst.get(v).is_some_and(|a| a.slots().contains(&c.slot)));
+    found == c.want
+}
+
 fn add(eg: &mut G, s: &str) -> AppliedId {
     eg.add_expr(RecExpr::<L>::parse(s).unwrap())
 }
@@ -160,10 +200,11 @@ fn main() {
     }
 
     // Every rule with both a pattern and an action, compiled once.
-    let compiled: Vec<(MultiPattern<L>, Pattern<L>, Pattern<L>)> = spec
+    let compiled: Vec<(usize, MultiPattern<L>, Pattern<L>, Pattern<L>)> = spec
         .rules
         .iter()
-        .filter_map(|r| {
+        .enumerate()
+        .filter_map(|(i, r)| {
             let (root, op, a, b) = r.action.as_ref()?;
             if r.atoms.is_empty() {
                 return None;
@@ -178,7 +219,7 @@ fn main() {
             } else {
                 Pattern::parse(&format!("({op} ?{a} ?{b})")).unwrap()
             };
-            Some((pat, from, to))
+            Some((i, pat, from, to))
         })
         .collect();
 
@@ -192,7 +233,7 @@ fn main() {
             let found: Vec<(usize, Vec<Subst>)> = compiled
                 .iter()
                 .enumerate()
-                .map(|(i, (pat, _, _))| (i, multi_ematch(pat, &eg)))
+                .map(|(i, (_, pat, _, _))| (i, multi_ematch(pat, &eg)))
                 .collect();
             if debug {
                 for (i, substs) in &found {
@@ -200,8 +241,15 @@ fn main() {
                 }
             }
             for (i, substs) in found {
-                let (_, from, to) = &compiled[i];
+                let (ri, _, from, to) = &compiled[i];
+                let conds = &spec.rules[*ri].conds;
                 for s in substs {
+                    // A side condition asks about the *slots* of what a variable
+                    // matched, which is why it cannot be a pattern: it is a property
+                    // of the match, not of the shape.
+                    if !conds.iter().all(|c| holds(c, &s)) {
+                        continue;
+                    }
                     eg.union_instantiations(from, to, &s, None);
                 }
             }
