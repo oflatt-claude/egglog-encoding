@@ -397,55 +397,97 @@ canonical leader does not reduce it.
 
 That fits what migration is for. The encoding's own header calls it compression —
 "we delete nodes which are not canonical" — so declining leaves a node
-un-canonicalised rather than losing a fact. Both versions leave one node
-un-migrated on `X1` and `X2` either way.
+un-canonicalised. Whether it also loses a *fact* is settled in the next section: it
+does, though never yet in a way that changes an answer.
 
 **Recommendation: keep the guard.** It is sound, cheap, and no test distinguishes
-it from the complete version. Minting is the principled fix and is kept alongside,
-measured, for whoever wants to revisit it — the open question is why it fans out so
-far, not whether it is correct.
+it from the complete version on what gets proved. Minting is the principled fix and
+is kept alongside, measured, for whoever wants to revisit it — the open question is
+why it fans out so far, not whether it is correct.
 
-### Is there a path to a witness?
+### The guard really is incomplete: the invariant is false
 
-There is one mechanism, and both halves of it are confirmed:
+The question was whether this holds:
 
-* **Nodes really do get stranded.** Declining leaves a node on a follower, and a
-  follower can have *no self-loop*, because single-parent deletes `RenamesToLeader`
-  rows once a class acquires a parent. On `X2`: 6 nodes, only 4 with a self-loop.
-  Under minting: 13 of 13 have one, so minting strands nothing.
-* **A stranded node is invisible to every compiled rule**, because they all join
-  `(RenamesToLeader V sym V)` for the class holding the node.
+> every fact carried by a node on a self-loop-less class is also carried by a node
+> on a self-looped one
 
-So a witness must be a case where a stranded node is the *only* carrier of some
-fact. Three searches and four constructions did not find one:
+If it did, the guard would be complete and "incomplete" would be the wrong word,
+since a compiled rule only ever misses a node whose content it can reach anyway.
 
-| attempt | result |
-| --- | --- |
-| guarded vs minting, 31 curated + 200 generated | identical answers |
-| an operator present *only* on stranded nodes, 181 cases | 0 |
-| hand-built: an operator occurring once, forced onto a stranded class (4 shapes) | identical answers |
+**It is false.** `X2`, under the guard, reaches a fixpoint holding two nodes that
+no compiled rule can see and that are α-variants of nothing visible:
 
-There is a structural reason to expect that. Every `App` row gets a self-loop from
-the "everything must have a self-loop" rule, so a row loses one only when
-single-parent deletes it — which happens once the class has a parent, by which
-point its content has already been related to the leader. The leader's class then
-holds an equivalent node, so nothing is uniquely stranded.
+```
+h( {1→1,2→2}·h( {1→1,2→2}·B, {0→2}·Var0 ),  {1→1,2→2}·B )
+h( {1→1,2→2}·B,  {1→1,2→2}·h( {0→1}·Var0, {1→1,2→2}·B ) )
+        where  B = h( {0→2}·Var0, {0→1}·Var0 )
+```
 
-**Two honest ways to finish this**, neither of which is more sampling:
+`slotted-experiments/xdiff/stranded.py` reproduces this. It works in two steps:
 
-1. **Enumerate a tiny space exhaustively** — every e-graph of at most two nodes over
-   two operators and two slots, crossed with every depth-1 pattern and both action
-   shapes. That space is small enough to cover completely, which is much stronger
-   than sampling.
-2. **Prove the invariant instead**: *every fact carried by a node on a
-   self-loop-less class is also carried by a node on a self-looped one.* If that
-   holds, the guard is complete and calling it "incomplete" is simply wrong. It is
-   a claim about the α-finder, single-parent and self-loop rules read together, not
-   something a fuzzer settles.
+1. Declare two observer relations *after* the machinery reaches a fixpoint, one
+   joining `RenamesToLeader V s V` and one not, both keyed on the whole `App` row.
+   The difference is exactly the set of rows a symmetry-joining rule cannot see.
+   Counting relation rows during the run instead would answer a question about
+   history, since rows outlive the `delete` in the migration rule; and reading
+   `print-function` output instead would merge classes, since a class with no
+   extractable term prints as `Unextractable`.
+2. For each invisible row, search the visible ones for an α-variant — same operator,
+   same children, edges equal under one injective renaming — with each edge first
+   restricted to the slots its child actually has, because the machinery does not
+   force an edge's domain to match its child and an unrestricted comparison reports
+   false uniques.
 
-Until one of those is done, the accurate statement is: **the guard has no known
-incompleteness, and the mechanism by which it could have one is present but has
-never been observed to matter.**
+| | stranded | of those, no visible α-variant |
+| --- | --- | --- |
+| `X1` guarded | 1 | 0 |
+| `X2` guarded | 2 | **2** |
+| `X2` minting | 0 | 0 |
+
+Minting strands nothing, which attributes the stranding to the guard rather than to
+anything else in the machinery.
+
+**Why the earlier structural argument fails.** It went: every `App` row gets a
+self-loop from the "everything must have a self-loop" rule, so a row only loses one
+when single-parent deletes it, by which point its content is already related to the
+leader. The gap is the last step. Single-parent deletes the self-loop, and nothing
+re-derives it — that rule fires on a *new* `App` row, and the row is not new any
+more. If migration was also declined, the leader never received the node. So the
+relation `e2 = m·e1` is recorded while the node itself sits only on `e2`, reachable
+in principle and unreachable by any rule that joins a self-loop.
+
+**Not every decline strands something.** Declining means `compose (inverse m) m1`
+lost a key, i.e. the child edge maps into slots outside the leader's frame. Two
+kinds:
+
+* **(a) the lost key is junk** — the child does not have that slot, so the entry
+  meant nothing and dropping it would have been safe. This is `X1`'s only decline:
+  `m1 = {0→0, 2→2}` into `Null`, which has no slots at all. Harmless, and the reason
+  `X1`'s one stranded row *does* have a visible α-variant.
+* **(b) the lost key is live** — the child genuinely uses it, so the class really has
+  a slot its leader cannot name. This is `X2`, and it is the harmful kind.
+
+The whole curated suite declines only 4 times: 1 on `X1` (kind a) and 3 on `X2`
+(kind b). Aiming at kind (b) directly does *not* work: five cases built by unioning
+a wider term with a narrower one, so the leader's frame is too small, all strand
+nothing, because the redundancy path records a partial-identity self-loop that
+widens the frame before migration is ever asked. `X2`'s kind-(b) declines arise
+instead from the machinery's own churn on nested nodes, which is why they were hard
+to construct on purpose.
+
+**What this does and does not establish.** The guard is genuinely incomplete: there
+are reachable, stable states whose content no compiled rule can reach. It is still
+true that no case changes an *answer* — `X2` itself agrees with the reference. So
+the incompleteness is confirmed at the level of what rules can see, not at the level
+of what gets proved. Turning it into an answer difference now has a concrete target
+rather than a blind search: a pattern matching one of the two shapes above, with an
+action whose result is not derivable another way.
+
+Minting remains the principled fix, and the recommendation to keep the guard for now
+is unchanged — it is sound, it is ~150× cheaper on `X2`, and the incompleteness has
+no observed consequence. What has changed is that it should no longer be described
+as having "no known incompleteness".
 
 **Read the firing count before the agreement count.** A case whose rule never
 fires says nothing about matching, and random patterns mostly do not fire, so the
@@ -700,3 +742,8 @@ flavour of `find-mapping` (a different representation).
    redundant. That falls out for free, but it means the pattern's slots are not
    always a subset of the class's live slots — check nothing downstream assumes
    otherwise.
+4. **The migration guard strands nodes no rule can see.** Confirmed, with two named
+   shapes on `X2` and a reproducer in `slotted-experiments/xdiff/stranded.py`. Open:
+   whether a pattern matching one of those shapes changes an answer, and if so
+   whether the fix is minting (correct, ~150× the rows) or keeping a class's
+   self-loop alive once it acquires a parent.
