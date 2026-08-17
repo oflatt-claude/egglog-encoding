@@ -321,6 +321,179 @@ def matchQuery (d : FDatabase) (q : Query) : List Env :=
   (assignments d.valueTerms (Query.freeVars q d.env)).filter fun σ =>
     q.all fun p => patternHolds d p (Env.canon (p.freeVars d.env) σ)
 
+/-! ### Hoisting the closure out of the candidate loop
+
+`patternHolds` computes `(d.addTerms ts).closureF` where `ts` is the pattern *instance*, so
+the closure is nominally per-substitution and `matchQuery` pays one per candidate. It is
+nominal: `addTerms` only ever *adds* to `terms` and never touches `eqs`, and `closureF`
+reads nothing else, so a candidate whose instance the database already holds — every
+subterm of it — gets `d`'s own closure back. That is the common case and on an encoded
+program it is every case: a view atom's operands are the variables' bindings, which
+`assignments` drew from `valueTerms`.
+
+So the closure is computed **once per query** and reused wherever the instance adds
+nothing. What that is worth: the encoded `assoc-1`'s five-variable rule enumerates 7776
+candidates, and `matchQuery` took 39.4 s on it — of which 15 ms was the enumeration, the
+substitutions and the row scans, and the rest one closure per candidate. All 7776 instances
+were already held.
+
+`csimp` is what redirects the executable. Every theorem in `Proofs/` is stated and proved
+over `matchQuery`, whose definition is untouched; `matchQueryFast_eq` is the only new
+obligation, and it is an equality on the nose. -/
+/-- Whether the database already holds every subterm of every one of `ts`, which is when
+`addTerms ts` leaves `termsF` — and so `closureF` — alone. -/
+def FDatabase.holdsAll (d : FDatabase) (ts : List Term) : Bool :=
+  ts.all fun t => t.subtermList.all fun s => decide (s ∈ d.terms)
+
+/-- `(d.addTerms ts).closureF`, given `d`'s own closure `cl` to reuse where `ts` adds
+nothing. `closureWith_eq` is the equation; nothing else should call this with a `cl` that is
+not `d.closureF`. -/
+def FDatabase.closureWith (cl : Finset (Term × Term)) (d : FDatabase) (ts : List Term) :
+    Finset (Term × Term) :=
+  if d.holdsAll ts then cl else (d.addTerms ts).closureF
+
+/-- `addTerm` only grows `terms`. -/
+theorem FDatabase.mem_terms_addTerm {d : FDatabase} {t s : Term} (h : s ∈ d.terms) :
+    s ∈ (d.addTerm t).terms := by
+  simp only [FDatabase.addTerm, List.mem_dedup, List.mem_append]
+  exact Or.inr h
+
+/-- **A term the database already holds adds nothing to the candidate universe.** -/
+theorem FDatabase.termsF_addTerm_of_mem {d : FDatabase} {t : Term}
+    (h : ∀ s ∈ t.subtermList, s ∈ d.terms) : (d.addTerm t).termsF = d.termsF := by
+  ext s
+  simp only [FDatabase.termsF, FDatabase.addTerm, List.mem_toFinset, List.mem_dedup,
+    List.mem_append]
+  exact ⟨fun hs => hs.elim (h s) id, Or.inr⟩
+
+/-- …and so nothing to the closure, `addTerm` not touching `eqs`. -/
+theorem FDatabase.closureF_addTerm_of_mem {d : FDatabase} {t : Term}
+    (h : ∀ s ∈ t.subtermList, s ∈ d.terms) : (d.addTerm t).closureF = d.closureF := by
+  unfold FDatabase.closureF
+  rw [FDatabase.termsF_addTerm_of_mem h]
+  rfl
+
+/-- `addTerms` over a list the database already holds, likewise. -/
+theorem FDatabase.closureF_addTerms_of_mem {ts : List Term} : ∀ {d : FDatabase},
+    (∀ t ∈ ts, ∀ s ∈ t.subtermList, s ∈ d.terms) →
+    (d.addTerms ts).closureF = d.closureF := by
+  induction ts with
+  | nil => intro _ _; rfl
+  | cons t ts ih =>
+    intro d h
+    have hstep : ∀ u ∈ ts, ∀ s ∈ u.subtermList, s ∈ (d.addTerm t).terms := fun u hu s hs =>
+      FDatabase.mem_terms_addTerm (h u (List.mem_cons_of_mem _ hu) s hs)
+    calc (d.addTerms (t :: ts)).closureF = ((d.addTerm t).addTerms ts).closureF := rfl
+      _ = (d.addTerm t).closureF := ih hstep
+      _ = d.closureF := FDatabase.closureF_addTerm_of_mem (h t (List.mem_cons_self ..))
+
+/-- `addTerms` over a concatenation is `addTerms` twice. -/
+theorem FDatabase.addTerms_append (d : FDatabase) (ts us : List Term) :
+    d.addTerms (ts ++ us) = (d.addTerms ts).addTerms us :=
+  List.foldl_append ..
+
+/-- **What the reuse is allowed to be.** -/
+theorem FDatabase.closureWith_eq (d : FDatabase) (ts : List Term) :
+    d.closureWith d.closureF ts = (d.addTerms ts).closureF := by
+  unfold FDatabase.closureWith
+  split
+  · rename_i h
+    simp only [FDatabase.holdsAll, List.all_eq_true, decide_eq_true_eq] at h
+    exact (FDatabase.closureF_addTerms_of_mem h).symm
+  · rfl
+
+/-- `patternHolds` with the closure taken as a parameter. -/
+def patternHoldsWith (cl : Finset (Term × Term)) (d : FDatabase) (p : Pattern) (σ : Env) :
+    Bool :=
+  match p with
+  | .values vs f as =>
+    match Expr.evalList d.sig vs (d.env ++ σ), Expr.evalList d.sig as (d.env ++ σ) with
+    | some us, some ts =>
+      if (d.sig.mergeOf f).isSome then
+        let cl' := d.closureWith cl (ts ++ us)
+        d.rows.any fun r =>
+          decide (r.fn = f) && FDatabase.congrTuple cl' ts r.args
+            && FDatabase.congrTuple cl' us r.out
+      else
+        let t := Term.app f (ts ++ us)
+        let cl' := d.closureWith cl [t]
+        decide (∃ w ∈ d.terms, (w, t) ∈ cl')
+    | _, _ => false
+  | .expr e =>
+    match e.eval d.sig (d.env ++ σ) with
+    | none => false
+    | some t =>
+      let cl' := d.closureWith cl [t]
+      decide (∃ w ∈ d.terms, (w, t) ∈ cl')
+  | .eq e₁ e₂ =>
+    match e₁.eval d.sig (d.env ++ σ), e₂.eval d.sig (d.env ++ σ) with
+    | some t₁, some t₂ =>
+      let cl' := d.closureWith cl [t₁, t₂]
+      decide ((t₁, t₂) ∈ cl') && decide (∃ w ∈ d.terms, (w, t₁) ∈ cl')
+    | _, _ => false
+
+/-- At `d`'s own closure it is `patternHolds`, on the nose. -/
+theorem patternHoldsWith_eq (d : FDatabase) (p : Pattern) (σ : Env) :
+    patternHoldsWith d.closureF d p σ = patternHolds d p σ := by
+  have h1 : ∀ t : Term, d.closureWith d.closureF [t] = (d.addTerm t).closureF := fun t =>
+    FDatabase.closureWith_eq d [t]
+  have h2 : ∀ ts us : List Term,
+      d.closureWith d.closureF (ts ++ us) = ((d.addTerms ts).addTerms us).closureF := by
+    intro ts us
+    rw [FDatabase.closureWith_eq, FDatabase.addTerms_append]
+  have h3 : ∀ t₁ t₂ : Term,
+      d.closureWith d.closureF [t₁, t₂] = ((d.addTerm t₁).addTerm t₂).closureF := fun t₁ t₂ =>
+    FDatabase.closureWith_eq d [t₁, t₂]
+  cases p with
+  | expr e =>
+    cases he : e.eval d.sig (d.env ++ σ) with
+    | none => simp only [patternHoldsWith, patternHolds, he]
+    | some t => simp only [patternHoldsWith, patternHolds, he, h1]
+  | eq e₁ e₂ =>
+    cases he₁ : e₁.eval d.sig (d.env ++ σ) with
+    | none => simp only [patternHoldsWith, patternHolds, he₁]
+    | some t₁ =>
+      cases he₂ : e₂.eval d.sig (d.env ++ σ) with
+      | none => simp only [patternHoldsWith, patternHolds, he₁, he₂]
+      | some t₂ => simp only [patternHoldsWith, patternHolds, he₁, he₂, h3]
+  | values vs f as =>
+    cases hv : Expr.evalList d.sig vs (d.env ++ σ) with
+    | none => simp only [patternHoldsWith, patternHolds, hv]
+    | some us =>
+      cases ha : Expr.evalList d.sig as (d.env ++ σ) with
+      | none => simp only [patternHoldsWith, patternHolds, hv, ha]
+      | some ts =>
+        simp only [patternHoldsWith, patternHolds, hv, ha, h1, h2]
+
+/-- `matchQuery` with the closure computed once, as a parameter. -/
+def matchQueryWith (cl : Finset (Term × Term)) (d : FDatabase) (q : Query) : List Env :=
+  (assignments d.valueTerms (Query.freeVars q d.env)).filter fun σ =>
+    q.all fun p => patternHoldsWith cl d p (Env.canon (p.freeVars d.env) σ)
+
+/-- **The fast path.** `matchQuery` with one congruence closure per query instead of one
+per candidate. Taking `cl` through `matchQueryWith`'s parameter rather than a `let` is what
+keeps it shared: a `let` used once inside the filter's closure is one the compiler may
+inline back into it. -/
+def matchQueryFast (d : FDatabase) (q : Query) : List Env :=
+  matchQueryWith d.closureF d q
+
+/-- At `d`'s own closure, `matchQueryWith` is `matchQuery`. -/
+theorem matchQueryWith_eq (d : FDatabase) (q : Query) :
+    matchQueryWith d.closureF d q = matchQuery d q := by
+  simp only [matchQueryWith, matchQuery, patternHoldsWith_eq]
+
+/-- **The fast path is the slow path**, on the nose — not up to `Env.Agree`, not up to
+list permutation. -/
+theorem matchQueryFast_eq (d : FDatabase) (q : Query) : matchQueryFast d q = matchQuery d q :=
+  matchQueryWith_eq d q
+
+/-- What points compiled code at the fast path. `execRunRulesFast` below shares one closure
+across a round's rules and so calls `matchQueryWith` directly; this is what every *other*
+caller of `matchQuery` gets. -/
+@[csimp] theorem matchQuery_eq_matchQueryFast : @matchQuery = @matchQueryFast := by
+  funext d q
+  exact (matchQueryFast_eq d q).symm
+
 /-! ### Running -/
 /-- `evalAction`, computed. -/
 def execAction (d : FDatabase) : Action → Option FDatabase
@@ -359,6 +532,34 @@ read off the pre-state. -/
 def execRunRules (R : RulesetName) (d : FDatabase) : FDatabase :=
   (d.rules.filter fun r => r.ruleset == R).foldl (fireRule d) d
 
+/-! #### One closure per round
+
+Every rule of a round matches against the *same* pre-state, so the closure
+`matchQueryFast` computes once per query can be computed once per **round** instead. On the
+encoded `both-2` at 53 terms that is 0.5 s per rule against six rules a round. Same
+discipline as above: `execRunRules`' definition is untouched and `csimp` is what redirects
+the executable. -/
+/-- `fireRule` with the closure taken as a parameter. -/
+def fireRuleWith (cl : Finset (Term × Term)) (d : FDatabase) (acc : FDatabase) (r : Rule) :
+    FDatabase :=
+  (matchQueryWith cl d r.query).foldl (fireInto d r) acc
+
+theorem fireRuleWith_eq (d : FDatabase) : fireRuleWith d.closureF d = fireRule d := by
+  funext acc r
+  simp only [fireRuleWith, fireRule, matchQueryWith_eq]
+
+/-- **The fast round.** One congruence closure, shared by every rule of the ruleset. -/
+def execRunRulesFast (R : RulesetName) (d : FDatabase) : FDatabase :=
+  (d.rules.filter fun r => r.ruleset == R).foldl (fireRuleWith d.closureF d) d
+
+theorem execRunRulesFast_eq (R : RulesetName) (d : FDatabase) :
+    execRunRulesFast R d = execRunRules R d := by
+  rw [execRunRulesFast, execRunRules, fireRuleWith_eq]
+
+@[csimp] theorem execRunRules_eq_execRunRulesFast : @execRunRules = @execRunRulesFast := by
+  funext R d
+  exact (execRunRulesFast_eq R d).symm
+
 /-- Whether two states agree on the fields a round can change. `sig` is a function, and
 `env`/`rules` no round touches. -/
 def FDatabase.sameData (d e : FDatabase) : Bool :=
@@ -393,6 +594,27 @@ def FDatabase.runSaturateF (R : RulesetName) : Nat → FDatabase → Option FDat
   | n + 1, d =>
       if d.sameData (execRunRules R d) then some d
       else FDatabase.runSaturateF R n (execRunRules R d)
+
+/-- `runSaturateF` with the round computed **once**. Its `n + 1` branch names
+`execRunRules R d` twice, which the compiler has no reason to share, so every non-final
+round of a saturation was searched twice over. -/
+def FDatabase.runSaturateFast (R : RulesetName) : Nat → FDatabase → Option FDatabase
+  | 0, d => if d.sameData (execRunRules R d) then some d else none
+  | n + 1, d =>
+      let e := execRunRules R d
+      if d.sameData e then some d else FDatabase.runSaturateFast R n e
+
+theorem FDatabase.runSaturateFast_eq (R : RulesetName) (n : Nat) (d : FDatabase) :
+    FDatabase.runSaturateFast R n d = FDatabase.runSaturateF R n d := by
+  induction n generalizing d with
+  | zero => rfl
+  | succ n ih =>
+    simp only [FDatabase.runSaturateFast, FDatabase.runSaturateF, ih]
+
+@[csimp] theorem FDatabase.runSaturateF_eq_fast :
+    @FDatabase.runSaturateF = @FDatabase.runSaturateFast := by
+  funext R n d
+  exact (FDatabase.runSaturateFast_eq R n d).symm
 
 /-- Rounds a run allows before declaring a ruleset divergent. Unlike `mergeFuel` this
 bounds no structural quantity: rounds add terms rather than shrink a class, so a

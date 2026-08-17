@@ -489,6 +489,29 @@ def FDatabase.mergeSaturateF : Nat → FDatabase → Option FDatabase
   | 0, d => if d.settled then some d else none
   | n + 1, d => if d.settled then some d else FDatabase.mergeSaturateF n d.mergeRound
 
+/-- `mergeSaturateF` with the pass computed **once**. `settled` *is* a pass — it compares
+`d` against `d.mergeRound` — so the `n + 1` branch above runs one where the compiler cannot
+see that the pass it tested and the pass it recurses on are the same, and every non-final
+pass was run twice. `Impl/Interp.lean`'s `runSaturateFast` is this one level up. -/
+def FDatabase.mergeSaturateFast : Nat → FDatabase → Option FDatabase
+  | 0, d => if d.settled then some d else none
+  | n + 1, d =>
+      let e := d.mergeRound
+      if d.sameData e then some d else FDatabase.mergeSaturateFast n e
+
+theorem FDatabase.mergeSaturateFast_eq (n : Nat) (d : FDatabase) :
+    FDatabase.mergeSaturateFast n d = FDatabase.mergeSaturateF n d := by
+  induction n generalizing d with
+  | zero => rfl
+  | succ n ih =>
+    simp only [FDatabase.mergeSaturateFast, FDatabase.mergeSaturateF, FDatabase.settled, ih]
+    rfl
+
+@[csimp] theorem FDatabase.mergeSaturateF_eq_fast :
+    @FDatabase.mergeSaturateF = @FDatabase.mergeSaturateFast := by
+  funext n d
+  exact (FDatabase.mergeSaturateFast_eq n d).symm
+
 /-- Passes `execM` allows before declaring a merge divergent. A pass strictly shrinks the
 rows at every key class that collided, so this is a bound on the largest such class rather
 than on the run. -/

@@ -1574,11 +1574,16 @@ been wrong about it.
 
 Encoding a query multiplies the e-matcher's exponent: one view read per subterm, each
 binding an id variable, so `Program.widestRule` goes from 0–3 across the in-domain corpus to
-3–12, and `matchQuery` is `|valueTerms| ^ that` with a congruence closure computed per
-candidate. Most of the corpus is therefore out of the reference interpreter's reach on the
-target side however long it is given — the width-3 and width-4 cases finish, the width-5 and
-up do not. `difftest encode-cost` prints both exponents per case, which is the number to look
-at before waiting on one.
+3–12, and `matchQuery` is `|valueTerms| ^ that`. `difftest encode-cost` prints both
+exponents per case, which is the number to look at before waiting on one — though it is only
+half the answer, since `|valueTerms|` varies as much as the exponent does.
+
+**64 of the 70 in-domain cases finish** at a 300 s budget each, 58 within 60 s and 50 within
+10 s, all reporting `AGREE`. The six that do not are `rand-0`, `rand-9`, `rand-24`,
+`rand-25`, `rand-30` and `rand-44`. What is left in the loop after
+`Impl/Interp.lean`'s "Hoisting the closure out of the candidate loop" is the cross product
+itself and a scan of `rows` per candidate, so the six need the enumeration replaced by a
+join over the index rather than another constant factor.
 -/
 
 /-! #### `encode`'s domain, decided
@@ -1713,11 +1718,10 @@ def stuckAt (fuel : Nat) (d : FDatabase) (i : Nat) : Program → Option (Nat × 
       | some d' => stuckAt fuel d' (i + 1) cs
 
 /-- The exponent the e-matcher runs at: the most free variables any one rule's query has.
-`matchQuery` assigns a query's free variables all at once from `valueTerms` and computes a
-congruence closure per candidate, so a case costs `|valueTerms| ^ this`, and encoding
-multiplies it — one view read per subterm binds an id variable for each. An upper bound,
-since a global would already be bound; it is a cost proxy and nothing reads it but the
-report. -/
+`matchQuery` assigns a query's free variables all at once from `valueTerms`, so a case costs
+`|valueTerms| ^ this`, and encoding multiplies it — one view read per subterm binds an id
+variable for each. An upper bound, since a global would already be bound; it is a cost proxy
+and nothing reads it but the report. -/
 def Program.widestRule (p : Program) : Nat :=
   (p.filterMap fun c => match c with
     | .rule r => some (Query.freeVars r.query []).length
