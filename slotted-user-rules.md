@@ -369,9 +369,45 @@ malformed self-loops appear (derived by transitivity closing a cycle), the
 variable class loses its slot, and `h(x,y)` merges with `h(x,x)`. Deleting the
 self-loops does not help, and neither does guarding transitivity.
 
-Fixed by declining to migrate when either edge would narrow. Sound but
-incomplete, exactly like the totality guard in `M6(b)`: the redundant slot has no
-name in `e1`'s space, and the complete fix is to mint one.
+Fixed by declining to migrate when either edge would narrow — the guard now in
+`tests/slotted-egraph-encoding-11.egg`.
+
+### What declining costs, measured
+
+The complete alternative is to mint a name for the uncovered slot instead of
+dropping it: extend the pullback to be total on the node's slots, which is
+`(find-mapping-total idE1 domNode idE1 m)` where `idE1` is the identity on
+`slots(e1)` and `domNode` the identity on the node's. That version is in
+`tests/slotted-egraph-encoding-11-minting.egg`.
+
+Comparing the two, the guard's "incompleteness" turns out **not** to be about
+derived equalities:
+
+| | |
+| --- | --- |
+| machinery's own 13 tests | both pass |
+| curated (31 cases) | identical answers |
+| generated (200 cases) | identical answers |
+| App rows on `X2` | guarded 8, **minting 1224** |
+
+So no case distinguishes them on *what they prove*, and minting costs about 150×
+the rows on `X2` — created in the first iteration and stable after, so it
+terminates, but the fan-out is real. Restricting migration to fire only into a
+canonical leader does not reduce it.
+
+That fits what migration is for. The encoding's own header calls it compression —
+"we delete nodes which are not canonical" — so declining leaves a node
+un-canonicalised rather than losing a fact. Both versions leave one node
+un-migrated on `X1` and `X2` either way.
+
+**Recommendation: keep the guard.** It is sound, cheap, and no test distinguishes
+it from the complete version. Minting is the principled fix and is kept alongside,
+measured, for whoever wants to revisit it — the open question is why it fans out so
+far, not whether it is correct.
+
+A witness for the guard's incompleteness would be a case where a *derived
+equality* needs a node that only exists un-migrated. None was found in 231 cases,
+and none is constructed here: reporting the search rather than inventing one.
 
 **Read the firing count before the agreement count.** A case whose rule never
 fires says nothing about matching, and random patterns mostly do not fire, so the
@@ -537,6 +573,27 @@ position per atom; one fully-bound `RenamesToLeader` *lookup* per repeated
 occurrence; one `find-mapping-total` per atom, with a `RenamesToLeader` *join* per
 variable it is constrained through. Only the joins fan out, and `RenamesToLeader`
 is small — usually one self-loop per class.
+
+## Where `compose` can lose a slot
+
+`(compose a b)` keeps only the keys of `b` whose value lies in `a`'s domain, so
+every composition is a place a slot can silently vanish. Auditing each site in the
+machinery, and checking on real cases which ones actually truncate:
+
+| site | truncation | why it is or is not a problem |
+| --- | --- | --- |
+| idempotence tests — `(bool= (compose m m) m)`, and the shrinking rule | intended | truncation *is* the test: it is how a non-permutation is detected |
+| child-update, `(compose m1 m)` | impossible | `m`'s image is inside `m1`'s domain by well-formedness |
+| **migration**, `(compose (inverse m) m1)` | **observed** | **was unsound**: the narrowed edge is asserted as fact, claiming its child is slotless. Guarded |
+| single-parent, `(compose (inverse m1) m2)` | possible, never observed | also inserts a fact, so the same risk. 0 occurrences across the corpus |
+| transitivity, `(compose m12 m23)` | observed on `X1` | inserts a fact; this is what derived the malformed self-loops, but they were downstream and guarding it fixed nothing |
+| α-finder and symmetry-finder, `(compose m_o sym)` | observed on `X1` | feeds `find-mapping`, which requires equal key sets, so a narrowed map makes the rule *not fire*: incomplete, not unsound |
+| `MISC`, `(compose m1 (inverse m2))` | possible | only feeds an idempotence test, so a truncation means no union: incomplete, not unsound |
+
+The rule of thumb: **truncation is harmless where it makes a rule decline, and
+dangerous where the composed map is inserted as a fact.** Three sites insert —
+migration, single-parent, transitivity — and migration is the one that was
+actually wrong.
 
 ## Primitives
 
