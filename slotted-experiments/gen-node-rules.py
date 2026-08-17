@@ -3,9 +3,13 @@
 
 Every rule that pattern-matches an e-node has to name each column, so it cannot be
 written once for all shapes in egglog. It *can* be written once here. This emits
-`tests/slotted-node-rules.egg`; the arity-independent half -- the sorts, the
-union-find rules, `Var` normalisation, the tests -- stays hand-written in
-`tests/slotted-egraph-encoding-11.egg`.
+two kinds of output. GENERIC is the string-headed encoding included by
+`tests/slotted-egraph-encoding-11.egg`, where the operator is a payload column so any
+operator can be written without regenerating. LANGUAGES holds per-language encodings
+with one constructor per operator, the shape the reference crate's `define_language!`
+produces. The constructor-independent half -- the sorts, the union-find rules, `Var`
+normalisation -- stays hand-written in `slotted-egraph-encoding-11.egg`, which the
+per-language files include.
 
 A constructor's signature is a list of columns, each either
 
@@ -18,7 +22,8 @@ So a node's slots come from its `CHILD` columns alone, and payloads ride along
 untouched. `(Num i64)` is then just the zero-child case rather than a special kind
 of leaf, and mixed shapes like `(Index i64 CHILD)` work with no indirection.
 
-Add a constructor to LANGUAGE, a binder to BINDERS, and re-run. Do not edit output.
+Add a constructor to GENERIC or a language to LANGUAGES, and re-run. Do not edit
+the output.
 
     python3 slotted-experiments/gen-node-rules.py
 """
@@ -26,32 +31,42 @@ Add a constructor to LANGUAGE, a binder to BINDERS, and re-run. Do not edit outp
 import pathlib
 
 CHILD = object()          # a slotted child: `Renaming U`
-OUT = pathlib.Path("tests/slotted-node-rules.egg")
+BINDER = object()         # a slotted child that also binds its slot
 
-LANGUAGE = {
-    # String-headed constructors, one per arity: what the differential harness and
-    # the hand-written rules use. The head is an ordinary payload column.
+# The generic, string-headed encoding: what `slotted-egraph-encoding-11.egg` and the
+# differential harness use. One constructor per arity with the operator in a payload
+# column, so any operator can be written without regenerating anything.
+GENERIC = {
     "App2": ["String", CHILD, CHILD],
     "App3": ["String", CHILD, CHILD, CHILD],
     "App4": ["String", CHILD, CHILD, CHILD, CHILD],
-    # payloads from the paper's arith / rise / array languages
     "Num": ["i64"],
     "Sym": ["String"],
-    # a payload beside a slotted child, to keep the mixed case exercised
-    "Scale": ["i64", CHILD],
+    "Scale": ["i64", CHILD],       # keeps the mixed payload/child case exercised
 }
 
-# String-headed operators that bind their first child's slot: (head, constructor).
-# The slot rides in an edge to `(Var 0)`, and this is what takes it out of the
-# class's slot set -- without it a bound slot stays free.
-BINDERS = (("lambda", "App2"), ("let", "App3"))
+# There the operator is in the head, so a binder cannot be declared structurally and
+# has to name the string: (head, constructor).
+GENERIC_BINDERS = (("lambda", "App2"), ("let", "App3"))
+
+# Per-language encodings, one constructor per operator -- the shape the reference
+# crate's `define_language!` produces, with no head to indirect through. A binder is
+# declared by its column, so no string is involved.
+LANGUAGES = {
+    # the paper's `lambda`, and the core of its `arith`, `rise` and `array`
+    "lambda": {
+        "Lam": [BINDER, CHILD],
+        "App": [CHILD, CHILD],
+        "Let": [BINDER, CHILD, CHILD],
+    },
+}
 
 
 def cols_of(sig):
     """Column names for a signature: payload vars, and (edge, child) per CHILD."""
     payloads, edges, kids, order = [], [], [], []
     for i, col in enumerate(sig):
-        if col is CHILD:
+        if col in (CHILD, BINDER):
             e, k = f"m{len(kids) + 1}", f"c{len(kids) + 1}"
             edges.append(e)
             kids.append(k)
@@ -79,7 +94,7 @@ def pattern(name, sig, edges=None, kids=None, payloads=None):
 
 
 def declare(name, sig):
-    cols = " ".join("Renaming U" if c is CHILD else c for c in sig)
+    cols = " ".join("Renaming U" if c in (CHILD, BINDER) else c for c in sig)
     return f"(constructor {name} ({cols}) U)\n"
 
 
@@ -201,14 +216,19 @@ def child_update(name, sig, pos):
 """
 
 
-def binder(head, name):
-    """Take a binder's bound slot out of its class's slot set."""
-    sig = LANGUAGE[name]
+def binder(name, sig, pos, head=None):
+    """Take a binder's bound slot out of its class's slot set.
+
+    The slot rides in the binding child's edge, so it is a slot of the *node* but
+    must not be one of the class: removing it from the edge to the leader is what
+    makes two spellings of the same binder alpha-equivalent. `head` pins the
+    operator string for the generic encoding, where the operator is a payload.
+    """
     _, edges, kids, _ = cols_of(sig)
-    e = list(edges)
-    k = list(kids)
-    e[0], k[0] = "mvar", "(Var 0)"
-    node = pattern(name, sig, edges=e, kids=k, payloads=[f'"{head}"'])
+    e, k = list(edges), list(kids)
+    e[pos], k[pos] = "mvar", "(Var 0)"
+    payloads = [f'"{head}"'] if head is not None else None
+    node = pattern(name, sig, edges=e, kids=k, payloads=payloads)
     return f"""\
 (rule ((RenamesToLeader {node} ml l)
        (= v (map-get mvar 0)))
@@ -221,19 +241,21 @@ def banner(text):
     return [bar, f";;; {text}", bar, ""]
 
 
-def main():
-    out = [
-        ";;; GENERATED by slotted-experiments/gen-node-rules.py -- do not edit.",
-        ";;;",
-        ";;; One block per constructor. A CHILD column occupies `Renaming U` and",
-        ";;; contributes its slots; a payload column is one column and contributes",
-        ";;; none, so a zero-child constructor is just a payload leaf.",
-        "",
-    ]
-    for name, sig in LANGUAGE.items():
+def shape_of(col):
+    return {CHILD: "child", BINDER: "binder"}.get(col, str(col))
+
+
+def emit(language, binders=()):
+    """All the rules for one language: `{constructor: signature}`.
+
+    `binders` pins binders by operator string, for the generic encoding where the
+    operator is a payload rather than the constructor. A `BINDER` column declares
+    one structurally and needs no entry.
+    """
+    out = []
+    for name, sig in language.items():
         _, edges, kids, _ = cols_of(sig)
-        shape = " ".join("child" if c is CHILD else str(c) for c in sig)
-        out += banner(f"{name} :: {shape}")
+        out += banner(f"{name} :: {' '.join(shape_of(c) for c in sig)}")
         out += [declare(name, sig),
                 ";; every class holding a node has a self-loop, so a query can reach it",
                 self_loop(name, sig)]
@@ -248,13 +270,44 @@ def main():
         for pos in range(len(kids)):
             out += [f";; child-update, child {pos + 1}", child_update(name, sig, pos)]
 
-    out += banner("binders")
-    for head, name in BINDERS:
-        out += [f';; `{head}` binds its first child\'s slot', binder(head, name)]
+    binder_rules = []
+    for name, sig in language.items():
+        for pos, col in enumerate(c for c in sig if c in (CHILD, BINDER)):
+            if col is BINDER:
+                binder_rules.append(
+                    (f";; `{name}` binds child {pos + 1}", binder(name, sig, pos)))
+    for head, name in binders:
+        binder_rules.append((f';; `{head}` binds its first child\'s slot',
+                             binder(name, language[name], 0, head=head)))
+    if binder_rules:
+        out += banner("binders")
+        for comment, rule in binder_rules:
+            out += [comment, rule]
+    return out
 
-    OUT.write_text("\n".join(out))
-    print(f"wrote {OUT} ({len(OUT.read_text().splitlines())} lines, "
-          f"{len(LANGUAGE)} constructors)")
+
+HEADER = """\
+;;; GENERATED by slotted-experiments/gen-node-rules.py -- do not edit.
+;;;
+;;; One block per constructor. A `child` column occupies `Renaming U` and
+;;; contributes its slots; a payload column is one column and contributes none, so a
+;;; zero-child constructor is just a payload leaf. A `binder` is a child whose slot
+;;; the node binds.
+"""
+
+
+def main():
+    generic = pathlib.Path("tests/slotted-node-rules.egg")
+    generic.write_text(HEADER + "\n" + "\n".join(emit(GENERIC, GENERIC_BINDERS)))
+    print(f"wrote {generic} ({len(GENERIC)} constructors, string-headed)")
+
+    for lang, spec in LANGUAGES.items():
+        p = pathlib.Path(f"tests/slotted-lang-{lang}.egg")
+        body = HEADER + f';;;\n;;; Language: {lang}\n\n' \
+            '(include "tests/slotted-egraph-encoding-11.egg")\n\n' \
+            + "\n".join(emit(spec))
+        p.write_text(body)
+        print(f"wrote {p} ({len(spec)} constructors, one per operator)")
 
 
 if __name__ == "__main__":
