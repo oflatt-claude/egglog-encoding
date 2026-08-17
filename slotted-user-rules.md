@@ -686,6 +686,39 @@ in a non-binder child position, and the reference admits a slot there only via
 `Bind` or as the whole of `Var(Slot)`, which is a unary atom the harness's
 two-child format cannot express.
 
+### Which slotted-egraphs is this compared against?
+
+`memoryleak47/slotted-egraphs` PR #45, and the distinction matters. `multipat.rs` is
+in `main` too, so the multipattern matcher is not new; what the PR adds is a one-line
+fix, `extend_subst` canonicalising the child `AppliedId` through the slot union-find.
+Without it a child bound after the matcher merges a freshened bound slot keeps the
+pre-merge name -- surviving into the returned `Subst` only when the child binding is
+the last thing to happen, so a single-atom pattern or the last child of the last atom.
+For a binder that means the body comes back over a *fresh* slot instead of the bound
+one, and the binding escapes.
+
+Six of the curated cases can tell the two apart, and the encoding agrees with the
+fixed one:
+
+| case | fixed | buggy |
+| --- | --- | --- |
+| `U1` | `[0,1,2][3]` | `[0,1][2][3]` |
+| `B3` | `[0,1][2]` | `[0,2][1]` |
+| `CD1` | `[0,1,3][2]` | `[0,1,2,3]` |
+| `CD2` | `[0][1,2][3]` | `[0,1,2][3]` |
+| `CD3` | `[0,2][1][3]` | `[0][1][2][3]` |
+| `CD4` | `[0,1][2][3]` | `[0][1][2][3]` |
+
+All four conditional cases are sensitive, which follows from the symptom: a slot
+condition asks about the body's slots, which is exactly what the bug corrupts. Under
+the buggy version `notin` wrongly succeeds, so `CD1` and `CD2` over-fire, and `in`
+wrongly fails, so `CD3` and `CD4` never fire at all.
+
+`slotted-experiments/xdiff/oracle-diff.py` runs the corpus through two oracle
+binaries and reports which cases separate them. Worth running whenever the reference
+is bumped: a case that stops distinguishing them has lost coverage, and a new
+disagreement is either a fix or a regression upstream.
+
 ### Ported from the crate's own suite, and what is not
 
 `P1` and `P2` are `regress::same_node_redundant_slots_stay_distinct` and
