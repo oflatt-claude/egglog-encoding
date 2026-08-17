@@ -45,6 +45,13 @@
        (RenamesToLeader a m2 c)
 
        (!= a c) ; We don't want this rule to fire for a=b=c, as it would remove symmetries from our group.
+       ;; Nor for b=a: that deletes a's self-loop, and a class that still holds an
+       ;; e-node needs one, since every query joins `(RenamesToLeader v sym v)` to
+       ;; reach the class's symmetries. Nothing would put it back -- the rule that
+       ;; makes one fires on a *new* `App` row (Case 14). The edge this rule would
+       ;; add is not lost: transitivity already derives `a = m1*m2*c` from the same
+       ;; two rows, and a symmetry group is closed under inverse.
+       (!= a b)
        (= (ordering-max b c) b) ; c <= b
 
                                             ; either
@@ -510,5 +517,41 @@
 (fail (check (RenamesToLeader $f m l)
              (RenamesToLeader l sym l)
              (!= sym (map-empty))))
+
+(pop)
+
+;;; Case 14- a class holding an e-node must keep a self-loop.
+;;;
+;;; Every user-rule query reaches a class's symmetries by joining
+;;; `(RenamesToLeader v sym v)`, so a class that still holds an e-node but has no
+;;; self-loop is invisible to matching and its node cannot be found.
+;;;
+;;; Two rules together used to produce exactly that. `$N` uses slots {1,2} while
+;;; its class is just the variable $2, so slot 1 is redundant; migration declines
+;;; to move the node to the leader, because rewriting the child edge {0->1} through
+;;; the leader's frame {0->2} would drop the entry and so assert that the child is
+;;; slotless. Meanwhile single-parent deleted `$N`'s self-loop as soon as `$N`
+;;; acquired the leader, and nothing re-derived it -- the rule that makes one fires
+;;; on a *new* `App` row, and the row was not new any more. The node was left on a
+;;; class no query could see.
+(push)
+
+; B = h($2, $1), slots {1,2}
+(let $B (App "h" (map-of 0 2) (Var 0) (map-of 0 1) (Var 0)))
+
+; N = h($1, B), also slots {1,2}
+(let $N (App "h" (map-of 0 1) (Var 0) (map-of 1 1 2 2) $B))
+
+; N's class is the variable $2, so slot 1 is redundant for it
+(union $N (Var 2))
+
+(run 20)
+
+; the node is still there, on a follower class
+(check (RenamesToLeader $N m (Var 0))
+       (!= $N (Var 0)))
+
+; ...so that class must still carry a self-loop for a query to reach it
+(check (RenamesToLeader $N sym $N))
 
 (pop)

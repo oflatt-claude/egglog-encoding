@@ -401,9 +401,11 @@ un-canonicalised. Whether it also loses a *fact* is settled in the next section:
 does, though never yet in a way that changes an answer.
 
 **Recommendation: keep the guard.** It is sound, cheap, and no test distinguishes
-it from the complete version on what gets proved. Minting is the principled fix and
-is kept alongside, measured, for whoever wants to revisit it — the open question is
-why it fans out so far, not whether it is correct.
+it from the complete version on what gets proved. Its one real cost — leaving a node
+on a class no query could see — turned out to be fixable in the *maintenance* rules
+instead, for about 9% more union-find rows; see two sections down. Minting is kept
+alongside, measured, for whoever wants to revisit it — the open question is why it
+fans out so far, not whether it is correct.
 
 ### The guard really is incomplete: the invariant is false
 
@@ -476,18 +478,68 @@ widens the frame before migration is ever asked. `X2`'s kind-(b) declines arise
 instead from the machinery's own churn on nested nodes, which is why they were hard
 to construct on purpose.
 
-**What this does and does not establish.** The guard is genuinely incomplete: there
-are reachable, stable states whose content no compiled rule can reach. It is still
-true that no case changes an *answer* — `X2` itself agrees with the reference. So
-the incompleteness is confirmed at the level of what rules can see, not at the level
-of what gets proved. Turning it into an answer difference now has a concrete target
-rather than a blind search: a pattern matching one of the two shapes above, with an
-action whose result is not derivable another way.
+**What this establishes.** There are reachable, stable states whose content no
+compiled rule can reach. No case changes an *answer* — `X2` itself agrees with the
+reference — so the defect is in what rules can see, not yet in what gets proved. But
+"invisible to every query" is not a state the encoding should be allowed to reach,
+so it is worth fixing on its own.
 
-Minting remains the principled fix, and the recommendation to keep the guard for now
-is unchanged — it is sound, it is ~150× cheaper on `X2`, and the incompleteness has
-no observed consequence. What has changed is that it should no longer be described
-as having "no known incompleteness".
+### The fix: don't delete a self-loop that a class still needs
+
+The two-rule interaction reduces to four lines of machinery, with no user rule
+involved — `Case 14` in `tests/slotted-egraph-encoding-11.egg`:
+
+```lisp
+(let $B (App "h" (map-of 0 2) (Var 0) (map-of 0 1) (Var 0)))     ; h($2,$1), slots {1,2}
+(let $N (App "h" (map-of 0 1) (Var 0) (map-of 1 1 2 2) $B))      ; h($1,B), slots {1,2}
+(union $N (Var 2))          ; N's class is just $2, so slot 1 is redundant for it
+(run 20)
+```
+
+At the fixpoint `$N` holds an `App` row and its only `RenamesToLeader` row is
+`$N → {0→2} → (Var 0)`. No self-loop, so no query can see the node.
+
+The instinct is to blame the guard on migration, but the cheaper culprit is
+**single-parent**, whose `b = a` branch deletes a class's self-loop the moment the
+class acquires a leader:
+
+```lisp
+(rule ((RenamesToLeader a m1 b) (RenamesToLeader a m2 c) (!= a c) ...)
+      ((delete (RenamesToLeader a m1 b))
+       (RenamesToLeader b (compose (inverse m1) m2) c)))
+```
+
+With `b = a` that deletes `RenamesToLeader a m1 a`. The edge it adds in exchange is
+**already derivable**: transitivity turns the same two rows into
+`a = (compose m1 m2)·c`, and a symmetry group is closed under inverse, so
+`compose (inverse m1) m2` and `compose m1 m2` generate the same set. So that branch
+contributes nothing but the deletion. One guard removes it:
+
+```lisp
+       (!= a b)
+```
+
+| | before | after |
+| --- | --- | --- |
+| `X1` stranded / of those unique | 1 / 0 | 1 / 0 |
+| `X2` stranded / of those unique | 2 / **2** | **0 / 0** |
+| machinery's own tests | 13 pass | **14** pass (`Case 14` is new) |
+| curated differential | 31/31 | 31/31 |
+| generated differential | 250/250 | 250/250 |
+| curated `RenamesToLeader` rows | 183 | 199 (+9%) |
+| curated `App` rows | 144 | 143 |
+
+So the cost is about 9% more union-find rows and slightly *fewer* e-nodes — `X2`
+compresses to 7 `App` rows instead of 8, because a class that keeps its self-loop
+can still be migrated into later. Compare minting, the other candidate fix, at ~150×
+the rows on `X2`.
+
+`X1`'s one remaining stranded row is the harmless junk-edge kind and is stranded by
+a *different* mechanism: the shrinking rule deleting a too-wide identity self-loop,
+which is open question 2. It has a visible α-variant, so nothing is lost.
+
+The same guard is mirrored into `slotted-egraph-encoding-11-minting.egg` so the two
+files still differ only in the migration rule.
 
 **Read the firing count before the agreement count.** A case whose rule never
 fires says nothing about matching, and random patterns mostly do not fire, so the
@@ -616,6 +668,12 @@ Each of these was silent, and each cost a round of confusion.
   disappear — and a narrowed edge asserts its child is slotless. This one mistake
   is behind the fresh-slot gap, the `M6` unsoundness, and the migration bug above.
   Wherever you compose, ask what happens when the image escapes the domain.
+* ***A deleted fact does not come back.*** If rule A derives a fact from a row and
+  rule B deletes that fact, A will not re-derive it — semi-naive fires A on a *new*
+  row, and the row is no longer new. So a maintenance rule that deletes another
+  rule's output has permanently overridden it, not temporarily. This is the whole of
+  `Case 14`, and it is the same shape as open question 2. Before writing a `delete`,
+  ask which rule produced the thing and whether it could ever fire again.
 * *Argument order.* The renaming comes *before* each child:
   `(App String Renaming U Renaming U)`, `(RenamesToLeader U Renaming U)`.
 * *Child rewrite direction.* It is `(compose m1 m)`, not
@@ -742,8 +800,11 @@ flavour of `find-mapping` (a different representation).
    redundant. That falls out for free, but it means the pattern's slots are not
    always a subset of the class's live slots — check nothing downstream assumes
    otherwise.
-4. **The migration guard strands nodes no rule can see.** Confirmed, with two named
-   shapes on `X2` and a reproducer in `slotted-experiments/xdiff/stranded.py`. Open:
-   whether a pattern matching one of those shapes changes an answer, and if so
-   whether the fix is minting (correct, ~150× the rows) or keeping a class's
-   self-loop alive once it acquires a parent.
+4. **Stranded nodes.** Fixed for the single-parent mechanism (`Case 14`), but `X1`
+   still strands one row via the shrinking rule deleting a too-wide identity
+   self-loop — question 2 above, same root cause of deriving a class-level fact from
+   a node. That row is harmless (it has a visible α-variant), so the open part is
+   whether the shrinking rule can strand a row that does not.
+   `slotted-experiments/xdiff/stranded.py` is the detector: it reports, per case, how
+   many rows no symmetry-joining rule can see and how many of those are α-variants
+   of nothing visible. Worth running after any change to the maintenance rules.

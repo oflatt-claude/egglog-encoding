@@ -45,6 +45,9 @@
        (RenamesToLeader a m2 c)
 
        (!= a c) ; We don't want this rule to fire for a=b=c, as it would remove symmetries from our group.
+       ;; Nor for b=a -- see the same guard in `slotted-egraph-encoding-11.egg`.
+       ;; Kept identical here so the two files differ only in the migration rule.
+       (!= a b)
        (= (ordering-max b c) b) ; c <= b
 
                                             ; either
