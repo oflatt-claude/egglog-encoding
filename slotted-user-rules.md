@@ -719,6 +719,36 @@ binaries and reports which cases separate them. Worth running whenever the refer
 is bumped: a case that stops distinguishing them has lost coverage, and a new
 disagreement is either a fix or a regression upstream.
 
+### Multipattern matching is strictly stronger than single-pattern
+
+Worth knowing before porting the paper's experiments, because those are written as
+*nested single patterns* while this encoding matches the *flattened* form. The
+reference's own property test is deliberately one-directional -- every equality the
+nested form proves must also be proved by the flattened one, and "the converse is
+deliberately not required: the depth-1 matcher sees through redundant slots that
+`ematch_all` does not, which is the point of it".
+
+Measured, rather than assumed. `slotted-experiments/xdiff/nested-vs-multi.py`
+reconstructs a nested pattern from a case's atoms where they form a tree, runs the
+reference both ways, and compares: **27 of the curated cases run both ways, and 3
+differ** -- and in each the multipattern proves more, never less.
+
+| case | multipattern | single nested |
+| --- | --- | --- |
+| `C5-redundant-same-node` | `[0,1][2]` | `[0][1][2]` |
+| `C6-redundant-two-nodes` | `[0,1][2]` | `[0][1][2]` |
+| `B3-same-slot-literal-two-binders` | `[0,1][2]` | `[0][1][2]` |
+
+All three turn on a redundant slot or a slot literal, which is exactly the case the
+upstream comment names. So a ported experiment can legitimately derive *more* than the
+paper's original run did; that is the flattening being stronger, not a divergence to
+fix. Whether it shows up on the paper's own rules is open until those cases exist --
+they do create redundancy, through a `let` whose body ignores the bound variable.
+
+Sixteen cases cannot be compared this way at all: a shared subterm (which is the whole
+reason multipatterns exist), a side condition, an `=` action, or an action naming an
+intermediate atom root, which nesting absorbs.
+
 ### Ported from the crate's own suite, and what is not
 
 `P1` and `P2` are `regress::same_node_redundant_slots_stay_distinct` and

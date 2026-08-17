@@ -15,6 +15,7 @@
 //! cond   in|notin $<slot> <pvar>...   side condition on the match
 //! action <root> <op> <a> <b>  union ?root with (op ?a ?b)
 //! rhs    <root> <pattern>    union ?root with a nested right-hand side
+//! nested <pattern>           run this rule through the single-pattern matcher
 //! probe  <sexpr>              term to include in the reported partition
 //! rounds <n>                  saturation rounds (default 10)
 //! ```
@@ -62,6 +63,11 @@ struct RuleSpec {
     /// `(root, pattern)` for a right-hand side that is not depth-1. The reference's
     /// pattern parser handles nesting, so this only has to be handed over as text.
     rhs: Option<(String, String)>,
+    /// The same rule as one *nested* pattern, run through the single-pattern
+    /// matcher instead of `multi_ematch`. The two are not equivalent: the depth-1
+    /// matcher sees through redundant slots that `ematch_all` does not, so it proves
+    /// at least as much and sometimes more. This is how the difference is measured.
+    nested_lhs: Option<String>,
 }
 
 struct Spec {
@@ -132,6 +138,13 @@ fn parse_spec(src: &str) -> Spec {
                     "?{} == ({} {} {})",
                     w[0], w[1], kid(w[2]), kid(w[3])
                 ));
+            }
+            // `nested <pattern>` runs the rule through the single-pattern matcher
+            "nested" => {
+                if s.rules.is_empty() {
+                    s.rules.push(RuleSpec::default());
+                }
+                s.rules.last_mut().unwrap().nested_lhs = Some(rest.to_string());
             }
             // `rhs <root> <pattern>`, e.g. `rhs p (h (g ?a ?b) ?b)`
             "rhs" => {
@@ -218,7 +231,7 @@ fn main() {
         .iter()
         .enumerate()
         .filter_map(|(i, r)| {
-            if r.atoms.is_empty() {
+            if r.atoms.is_empty() || r.nested_lhs.is_some() {
                 return None;
             }
             let pat = MultiPattern::parse(&r.atoms.join(", ")).unwrap();
@@ -240,6 +253,28 @@ fn main() {
             Some((i, pat, from, to))
         })
         .collect();
+
+    // Rules given in nested form go through the single-pattern matcher. A spec uses
+    // one form or the other, never both, so the two loops do not interact.
+    let nested: Vec<Rewrite<L>> = spec
+        .rules
+        .iter()
+        .filter_map(|r| {
+            let lhs = r.nested_lhs.as_ref()?;
+            let (_, text) = r.rhs.as_ref()?;
+            Some(Rewrite::new("r", lhs, text))
+        })
+        .collect();
+    if !nested.is_empty() {
+        let mut saturated = false;
+        for _ in 0..spec.rounds {
+            if !apply_rewrites(&mut eg, &nested) {
+                saturated = true;
+                break;
+            }
+        }
+        println!("SATURATED {}", if saturated { "yes" } else { "no" });
+    }
 
     if !compiled.is_empty() {
         let debug = std::env::var("XMULTI_DEBUG").is_ok();
