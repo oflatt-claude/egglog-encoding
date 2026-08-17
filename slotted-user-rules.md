@@ -392,10 +392,11 @@ derived equalities:
 | generated (200 cases) | identical answers |
 | App rows on `X2` | guarded 8, **minting 1224** |
 
-So no case distinguishes them on *what they prove*, and minting costs about 150×
-the rows on `X2` — created in the first iteration and stable after, so it
-terminates, but the fan-out is real. Restricting migration to fire only into a
-canonical leader does not reduce it.
+So no case distinguishes them on *what they prove*, and minting costs about 150× the
+rows on `X2`. Its `App` count is stable after the first iteration, which is not the
+same as settling: under `(saturate (run))` minting does not reach a fixpoint on `X2`
+in 600s, where the guard settles at 7 rows. Restricting migration to fire only into a
+canonical leader does not reduce the fan-out.
 
 That fits what migration is for. The encoding's own header calls it compression —
 "we delete nodes which are not canonical" — so declining leaves a node
@@ -542,6 +543,42 @@ which is open question 2. It has a visible α-variant, so nothing is lost.
 
 The same guard is mirrored into `slotted-egraph-encoding-11-minting.egg` so the two
 files still differ only in the migration rule.
+
+### Do follower classes need self-loops at all?
+
+They should not, and mostly they do not. A follower is supposed to be *emptied*:
+migration moves each of its nodes into the leader's frame and deletes the original,
+so nothing is left to match on and a self-loop would be dead weight. Measured at a
+genuine fixpoint, that is what happens — `C1`, `C2`, `C5`, `S2` and `B2` all end with
+zero followers holding an e-node.
+
+The exception is exactly where migration **declines**. Then the node stays on the
+follower forever, and with no self-loop no compiled rule can see it. So the follower
+self-loop is not a general requirement; it is the price of the guard. `X2` is the
+case that shows it: 2 followers still hold a node at its fixpoint.
+
+Which suggests the obvious alternative — mint instead of declining, so followers
+really are emptied, and go back to deleting their self-loops. That works:
+
+| | |
+| --- | --- |
+| minting + follower self-loop deleted | 33/33 agree, 24 firing |
+| `X2` rows, guarded vs minting | 7 vs 1224 |
+| `X2` under `(saturate (run))` | guarded settles at 7 rows; minting does not reach a fixpoint in 600s |
+
+So both designs are correct, and the current one is kept for cost: minting's fan-out
+does not converge on `X2` where the guard does. The row count alone understated
+this — the fan-out was previously described as "created in the first iteration and
+stable after", which is true of `App` rows and not of the database.
+
+**Migrating the self-loop to the leader does not substitute for keeping it.** The old
+single-parent rule already did that — `RenamesToLeader b (compose (inverse m1) m2) c`
+carries the symmetry onto the parent edge, and transitivity derives the same set
+independently, a symmetry group being closed under inverse. Nothing is lost from the
+*information*. What is lost is being addressable: a rule reaches a class's symmetries
+by joining `(RenamesToLeader v sym v)`, so a class holding a node and no self-loop
+cannot be matched, and having its symmetry on the leader does not help because the
+node is not on the leader. The guard moves the symmetry but not the node.
 
 **Read the firing count before the agreement count.** A case whose rule never
 fires says nothing about matching, and random patterns mostly do not fire, so the
