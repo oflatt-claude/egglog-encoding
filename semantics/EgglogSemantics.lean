@@ -7,3 +7,4 @@ import EgglogSemantics.Tests.Examples
 
 -- Parked M11: the encoder only. Its theorems were deleted; see `ENCODING.md`.
 import EgglogSemantics.Encoding.Encode
+import EgglogSemantics.Encoding.Checker
