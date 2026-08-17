@@ -348,11 +348,11 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;; `lambda` binds its first child's slot
-(rule ((RenamesToLeader (App2 "lambda" mvar (Var 0) m2 c2) ml l)
-       (= v (map-get mvar 0)))
-      ((RenamesToLeader (App2 "lambda" mvar (Var 0) m2 c2) (inverse (map-remove (inverse ml) v)) l)))
+(rule ((RenamesToLeader (App2 "lambda" mvar0 (Var 0) m2 c2) ml l)
+       (= v0 (map-get mvar0 0)))
+      ((RenamesToLeader (App2 "lambda" mvar0 (Var 0) m2 c2) (inverse (map-remove (inverse ml) v0)) l)))
 
 ;; `let` binds its first child's slot
-(rule ((RenamesToLeader (App3 "let" mvar (Var 0) m2 c2 m3 c3) ml l)
-       (= v (map-get mvar 0)))
-      ((RenamesToLeader (App3 "let" mvar (Var 0) m2 c2 m3 c3) (inverse (map-remove (inverse ml) v)) l)))
+(rule ((RenamesToLeader (App3 "let" mvar0 (Var 0) m2 c2 m3 c3) ml l)
+       (= v0 (map-get mvar0 0)))
+      ((RenamesToLeader (App3 "let" mvar0 (Var 0) m2 c2 m3 c3) (inverse (map-remove (inverse ml) v0)) l)))

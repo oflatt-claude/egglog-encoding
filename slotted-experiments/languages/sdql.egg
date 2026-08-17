@@ -1,0 +1,8 @@
+;;; The paper's `sdql` language.
+;;;
+;;; `Sum(AppliedId, Bind<Bind<AppliedId>>)` binds TWO slots on one node, which is
+;;; what a multi-index `:binder` is for.
+
+(constructor Lambda (U U) U :binder 0)
+(constructor Sing (U U) U)
+(constructor Sum (U U U U) U :binder 1 2)

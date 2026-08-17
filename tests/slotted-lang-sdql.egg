@@ -5,24 +5,24 @@
 ;;; zero-child constructor is just a payload leaf. A `binder` is a child whose slot
 ;;; the node binds.
 ;;;
-;;; Language: lambda
+;;; Language: sdql
 
 (include "tests/slotted-egraph-encoding-11.egg")
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Lam :: binder child
+;;; Lambda :: binder child
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(constructor Lam (Renaming U Renaming U) U)
+(constructor Lambda (Renaming U Renaming U) U)
 
 ;; every class holding a node has a self-loop, so a query can reach it
-(rule ((= e1 (Lam m1 c1 m2 c2))
+(rule ((= e1 (Lambda m1 c1 m2 c2))
        (= m (map-union (map-image m1) (map-image m2))))
       ((RenamesToLeader e1 m e1)))
 
 ;; alpha-finder: two nodes equal up to renaming, one eliminated
-(rule ((= e1 (Lam m1_o c1 m2_o c2))
-       (= e2 (Lam b1 c1 b2 c2))
+(rule ((= e1 (Lambda m1_o c1 m2_o c2))
+       (= e2 (Lambda b1 c1 b2 c2))
        (= e1 (ordering-max e1 e2))
        (RenamesToLeader c1 sym1 c1)
        (RenamesToLeader c2 sym2 c2)
@@ -36,10 +36,10 @@
               (and (bool= m1 b1)
                    (and (bool= (ordering-max m2 b2) b2) (bool-!= m2 b2))))))))
       ((RenamesToLeader e1 m e2)
-       (delete (Lam m1 c1 m2 c2))))
+       (delete (Lambda m1 c1 m2 c2))))
 
 ;; the same solve kept as a symmetry, non-destructively
-(rule ((= e (Lam m1_o c1 m2_o c2))
+(rule ((= e (Lambda m1_o c1 m2_o c2))
        (RenamesToLeader c1 sym1 c1)
        (RenamesToLeader c2 sym2 c2)
        (= m1 (compose m1_o sym1))
@@ -49,50 +49,50 @@
 
 ;; migration: move a follower's node into the leader's frame
 (rule ((RenamesToLeader e2 m e1)
-       (= e2 (Lam m1 c1 m2 c2))
+       (= e2 (Lambda m1 c1 m2 c2))
        (!= e1 e2)
        ; narrowing would understate the child's slots, so decline instead
        (= n1 (compose-total (inverse m) m1))
        (= n2 (compose-total (inverse m) m2)))
-      ((union e1 (Lam n1 c1 n2 c2))
-       (delete (Lam m1 c1 m2 c2))))
+      ((union e1 (Lambda n1 c1 n2 c2))
+       (delete (Lambda m1 c1 m2 c2))))
 
 ;; child-update, child 1
 (rule ((RenamesToLeader c1 m c')
-       (= node (Lam m1 c1 m2 c2))
+       (= node (Lambda m1 c1 m2 c2))
        ; if the class is unchanged then m must be idempotent: no self-symmetries
        (guard (or (bool-!= c1 c') (bool= (compose m m) m)))
        ; and the new node must differ from the old one
        (guard (or (bool-!= c1 c')
                   (bool-!= (compose m1 m) m1))))
-      ((union node (Lam (compose m1 m) c' m2 c2))
-       (delete (Lam m1 c1 m2 c2))))
+      ((union node (Lambda (compose m1 m) c' m2 c2))
+       (delete (Lambda m1 c1 m2 c2))))
 
 ;; child-update, child 2
 (rule ((RenamesToLeader c2 m c')
-       (= node (Lam m1 c1 m2 c2))
+       (= node (Lambda m1 c1 m2 c2))
        ; if the class is unchanged then m must be idempotent: no self-symmetries
        (guard (or (bool-!= c2 c') (bool= (compose m m) m)))
        ; and the new node must differ from the old one
        (guard (or (bool-!= c2 c')
                   (bool-!= (compose m2 m) m2))))
-      ((union node (Lam m1 c1 (compose m2 m) c'))
-       (delete (Lam m1 c1 m2 c2))))
+      ((union node (Lambda m1 c1 (compose m2 m) c'))
+       (delete (Lambda m1 c1 m2 c2))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; App :: child child
+;;; Sing :: child child
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(constructor App (Renaming U Renaming U) U)
+(constructor Sing (Renaming U Renaming U) U)
 
 ;; every class holding a node has a self-loop, so a query can reach it
-(rule ((= e1 (App m1 c1 m2 c2))
+(rule ((= e1 (Sing m1 c1 m2 c2))
        (= m (map-union (map-image m1) (map-image m2))))
       ((RenamesToLeader e1 m e1)))
 
 ;; alpha-finder: two nodes equal up to renaming, one eliminated
-(rule ((= e1 (App m1_o c1 m2_o c2))
-       (= e2 (App b1 c1 b2 c2))
+(rule ((= e1 (Sing m1_o c1 m2_o c2))
+       (= e2 (Sing b1 c1 b2 c2))
        (= e1 (ordering-max e1 e2))
        (RenamesToLeader c1 sym1 c1)
        (RenamesToLeader c2 sym2 c2)
@@ -106,10 +106,10 @@
               (and (bool= m1 b1)
                    (and (bool= (ordering-max m2 b2) b2) (bool-!= m2 b2))))))))
       ((RenamesToLeader e1 m e2)
-       (delete (App m1 c1 m2 c2))))
+       (delete (Sing m1 c1 m2 c2))))
 
 ;; the same solve kept as a symmetry, non-destructively
-(rule ((= e (App m1_o c1 m2_o c2))
+(rule ((= e (Sing m1_o c1 m2_o c2))
        (RenamesToLeader c1 sym1 c1)
        (RenamesToLeader c2 sym2 c2)
        (= m1 (compose m1_o sym1))
@@ -119,58 +119,60 @@
 
 ;; migration: move a follower's node into the leader's frame
 (rule ((RenamesToLeader e2 m e1)
-       (= e2 (App m1 c1 m2 c2))
+       (= e2 (Sing m1 c1 m2 c2))
        (!= e1 e2)
        ; narrowing would understate the child's slots, so decline instead
        (= n1 (compose-total (inverse m) m1))
        (= n2 (compose-total (inverse m) m2)))
-      ((union e1 (App n1 c1 n2 c2))
-       (delete (App m1 c1 m2 c2))))
+      ((union e1 (Sing n1 c1 n2 c2))
+       (delete (Sing m1 c1 m2 c2))))
 
 ;; child-update, child 1
 (rule ((RenamesToLeader c1 m c')
-       (= node (App m1 c1 m2 c2))
+       (= node (Sing m1 c1 m2 c2))
        ; if the class is unchanged then m must be idempotent: no self-symmetries
        (guard (or (bool-!= c1 c') (bool= (compose m m) m)))
        ; and the new node must differ from the old one
        (guard (or (bool-!= c1 c')
                   (bool-!= (compose m1 m) m1))))
-      ((union node (App (compose m1 m) c' m2 c2))
-       (delete (App m1 c1 m2 c2))))
+      ((union node (Sing (compose m1 m) c' m2 c2))
+       (delete (Sing m1 c1 m2 c2))))
 
 ;; child-update, child 2
 (rule ((RenamesToLeader c2 m c')
-       (= node (App m1 c1 m2 c2))
+       (= node (Sing m1 c1 m2 c2))
        ; if the class is unchanged then m must be idempotent: no self-symmetries
        (guard (or (bool-!= c2 c') (bool= (compose m m) m)))
        ; and the new node must differ from the old one
        (guard (or (bool-!= c2 c')
                   (bool-!= (compose m2 m) m2))))
-      ((union node (App m1 c1 (compose m2 m) c'))
-       (delete (App m1 c1 m2 c2))))
+      ((union node (Sing m1 c1 (compose m2 m) c'))
+       (delete (Sing m1 c1 m2 c2))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Let :: binder child child
+;;; Sum :: child binder binder child
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(constructor Let (Renaming U Renaming U Renaming U) U)
+(constructor Sum (Renaming U Renaming U Renaming U Renaming U) U)
 
 ;; every class holding a node has a self-loop, so a query can reach it
-(rule ((= e1 (Let m1 c1 m2 c2 m3 c3))
-       (= m (map-union (map-image m1) (map-union (map-image m2) (map-image m3)))))
+(rule ((= e1 (Sum m1 c1 m2 c2 m3 c3 m4 c4))
+       (= m (map-union (map-image m1) (map-union (map-image m2) (map-union (map-image m3) (map-image m4))))))
       ((RenamesToLeader e1 m e1)))
 
 ;; alpha-finder: two nodes equal up to renaming, one eliminated
-(rule ((= e1 (Let m1_o c1 m2_o c2 m3_o c3))
-       (= e2 (Let b1 c1 b2 c2 b3 c3))
+(rule ((= e1 (Sum m1_o c1 m2_o c2 m3_o c3 m4_o c4))
+       (= e2 (Sum b1 c1 b2 c2 b3 c3 b4 c4))
        (= e1 (ordering-max e1 e2))
        (RenamesToLeader c1 sym1 c1)
        (RenamesToLeader c2 sym2 c2)
        (RenamesToLeader c3 sym3 c3)
+       (RenamesToLeader c4 sym4 c4)
        (= m1 (compose m1_o sym1))
        (= m2 (compose m2_o sym2))
        (= m3 (compose m3_o sym3))
-       (= m (find-mapping m1 m2 m3 b1 b2 b3))
+       (= m4 (compose m4_o sym4))
+       (= m (find-mapping m1 m2 m3 m4 b1 b2 b3 b4))
        (guard
          (or (bool-!= e1 e2)
              (and (bool= e1 e2)
@@ -178,75 +180,92 @@
               (and (bool= m1 b1)
                    (or (and (bool= (ordering-max m2 b2) b2) (bool-!= m2 b2))
               (and (bool= m2 b2)
-                   (and (bool= (ordering-max m3 b3) b3) (bool-!= m3 b3))))))))))
+                   (or (and (bool= (ordering-max m3 b3) b3) (bool-!= m3 b3))
+              (and (bool= m3 b3)
+                   (and (bool= (ordering-max m4 b4) b4) (bool-!= m4 b4))))))))))))
       ((RenamesToLeader e1 m e2)
-       (delete (Let m1 c1 m2 c2 m3 c3))))
+       (delete (Sum m1 c1 m2 c2 m3 c3 m4 c4))))
 
 ;; the same solve kept as a symmetry, non-destructively
-(rule ((= e (Let m1_o c1 m2_o c2 m3_o c3))
+(rule ((= e (Sum m1_o c1 m2_o c2 m3_o c3 m4_o c4))
        (RenamesToLeader c1 sym1 c1)
        (RenamesToLeader c2 sym2 c2)
        (RenamesToLeader c3 sym3 c3)
+       (RenamesToLeader c4 sym4 c4)
        (= m1 (compose m1_o sym1))
        (= m2 (compose m2_o sym2))
        (= m3 (compose m3_o sym3))
-       (= sym_out (find-mapping m1_o m2_o m3_o m1 m2 m3)))
+       (= m4 (compose m4_o sym4))
+       (= sym_out (find-mapping m1_o m2_o m3_o m4_o m1 m2 m3 m4)))
       ((RenamesToLeader e sym_out e)))
 
 ;; migration: move a follower's node into the leader's frame
 (rule ((RenamesToLeader e2 m e1)
-       (= e2 (Let m1 c1 m2 c2 m3 c3))
+       (= e2 (Sum m1 c1 m2 c2 m3 c3 m4 c4))
        (!= e1 e2)
        ; narrowing would understate the child's slots, so decline instead
        (= n1 (compose-total (inverse m) m1))
        (= n2 (compose-total (inverse m) m2))
-       (= n3 (compose-total (inverse m) m3)))
-      ((union e1 (Let n1 c1 n2 c2 n3 c3))
-       (delete (Let m1 c1 m2 c2 m3 c3))))
+       (= n3 (compose-total (inverse m) m3))
+       (= n4 (compose-total (inverse m) m4)))
+      ((union e1 (Sum n1 c1 n2 c2 n3 c3 n4 c4))
+       (delete (Sum m1 c1 m2 c2 m3 c3 m4 c4))))
 
 ;; child-update, child 1
 (rule ((RenamesToLeader c1 m c')
-       (= node (Let m1 c1 m2 c2 m3 c3))
+       (= node (Sum m1 c1 m2 c2 m3 c3 m4 c4))
        ; if the class is unchanged then m must be idempotent: no self-symmetries
        (guard (or (bool-!= c1 c') (bool= (compose m m) m)))
        ; and the new node must differ from the old one
        (guard (or (bool-!= c1 c')
                   (bool-!= (compose m1 m) m1))))
-      ((union node (Let (compose m1 m) c' m2 c2 m3 c3))
-       (delete (Let m1 c1 m2 c2 m3 c3))))
+      ((union node (Sum (compose m1 m) c' m2 c2 m3 c3 m4 c4))
+       (delete (Sum m1 c1 m2 c2 m3 c3 m4 c4))))
 
 ;; child-update, child 2
 (rule ((RenamesToLeader c2 m c')
-       (= node (Let m1 c1 m2 c2 m3 c3))
+       (= node (Sum m1 c1 m2 c2 m3 c3 m4 c4))
        ; if the class is unchanged then m must be idempotent: no self-symmetries
        (guard (or (bool-!= c2 c') (bool= (compose m m) m)))
        ; and the new node must differ from the old one
        (guard (or (bool-!= c2 c')
                   (bool-!= (compose m2 m) m2))))
-      ((union node (Let m1 c1 (compose m2 m) c' m3 c3))
-       (delete (Let m1 c1 m2 c2 m3 c3))))
+      ((union node (Sum m1 c1 (compose m2 m) c' m3 c3 m4 c4))
+       (delete (Sum m1 c1 m2 c2 m3 c3 m4 c4))))
 
 ;; child-update, child 3
 (rule ((RenamesToLeader c3 m c')
-       (= node (Let m1 c1 m2 c2 m3 c3))
+       (= node (Sum m1 c1 m2 c2 m3 c3 m4 c4))
        ; if the class is unchanged then m must be idempotent: no self-symmetries
        (guard (or (bool-!= c3 c') (bool= (compose m m) m)))
        ; and the new node must differ from the old one
        (guard (or (bool-!= c3 c')
                   (bool-!= (compose m3 m) m3))))
-      ((union node (Let m1 c1 m2 c2 (compose m3 m) c'))
-       (delete (Let m1 c1 m2 c2 m3 c3))))
+      ((union node (Sum m1 c1 m2 c2 (compose m3 m) c' m4 c4))
+       (delete (Sum m1 c1 m2 c2 m3 c3 m4 c4))))
+
+;; child-update, child 4
+(rule ((RenamesToLeader c4 m c')
+       (= node (Sum m1 c1 m2 c2 m3 c3 m4 c4))
+       ; if the class is unchanged then m must be idempotent: no self-symmetries
+       (guard (or (bool-!= c4 c') (bool= (compose m m) m)))
+       ; and the new node must differ from the old one
+       (guard (or (bool-!= c4 c')
+                  (bool-!= (compose m4 m) m4))))
+      ((union node (Sum m1 c1 m2 c2 m3 c3 (compose m4 m) c'))
+       (delete (Sum m1 c1 m2 c2 m3 c3 m4 c4))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; binders
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-;; `Lam` binds child 1
-(rule ((RenamesToLeader (Lam mvar0 (Var 0) m2 c2) ml l)
+;; `Lambda` binds child 1
+(rule ((RenamesToLeader (Lambda mvar0 (Var 0) m2 c2) ml l)
        (= v0 (map-get mvar0 0)))
-      ((RenamesToLeader (Lam mvar0 (Var 0) m2 c2) (inverse (map-remove (inverse ml) v0)) l)))
+      ((RenamesToLeader (Lambda mvar0 (Var 0) m2 c2) (inverse (map-remove (inverse ml) v0)) l)))
 
-;; `Let` binds child 1
-(rule ((RenamesToLeader (Let mvar0 (Var 0) m2 c2 m3 c3) ml l)
-       (= v0 (map-get mvar0 0)))
-      ((RenamesToLeader (Let mvar0 (Var 0) m2 c2 m3 c3) (inverse (map-remove (inverse ml) v0)) l)))
+;; `Sum` binds child 2, 3
+(rule ((RenamesToLeader (Sum m1 c1 mvar0 (Var 0) mvar1 (Var 0) m4 c4) ml l)
+       (= v0 (map-get mvar0 0))
+       (= v1 (map-get mvar1 0)))
+      ((RenamesToLeader (Sum m1 c1 mvar0 (Var 0) mvar1 (Var 0) m4 c4) (inverse (map-remove (map-remove (inverse ml) v0) v1)) l)))

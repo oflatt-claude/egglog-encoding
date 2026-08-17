@@ -29,6 +29,7 @@ the output.
 """
 
 import pathlib
+import re
 
 CHILD = object()          # a slotted child: `Renaming U`
 BINDER = object()         # a slotted child that also binds its slot
@@ -49,17 +50,51 @@ GENERIC = {
 # has to name the string: (head, constructor).
 GENERIC_BINDERS = (("lambda", "App2"), ("let", "App3"))
 
-# Per-language encodings, one constructor per operator -- the shape the reference
-# crate's `define_language!` produces, with no head to indirect through. A binder is
-# declared by its column, so no string is involved.
-LANGUAGES = {
-    # the paper's `lambda`, and the core of its `arith`, `rise` and `array`
-    "lambda": {
-        "Lam": [BINDER, CHILD],
-        "App": [CHILD, CHILD],
-        "Let": [BINDER, CHILD, CHILD],
-    },
-}
+# Per-language encodings are read from `slotted-experiments/languages/*.egg`, one
+# constructor per operator -- the shape the reference crate's `define_language!`
+# produces, with no head to indirect through.
+LANG_DIR = pathlib.Path("slotted-experiments/languages")
+
+
+def read_language(path):
+    """Parse annotated constructor declarations.
+
+        (constructor Lam (U U) U :binder 0)
+        (constructor Sum (U U U U) U :binder 1 2)
+        (constructor Num (i64) U)
+
+    A `U` column is a slotted child and expands to `Renaming U`; anything else is a
+    payload and passes through. `:binder` names the child positions -- counted over
+    children, not over columns -- whose slot the node binds. This is the syntax the
+    encoder recognises today; the intent is for egglog-experimental to accept it and
+    strip it on the way down to core egglog, where nothing about a binder is
+    primitive.
+    """
+    language = {}
+    for raw in path.read_text().splitlines():
+        line = raw.split(";")[0].strip()
+        if not line.startswith("(constructor "):
+            continue
+        head, _, rest = line[len("(constructor "):].partition("(")
+        name = head.strip()
+        cols_text, _, tail = rest.partition(")")
+        binders = []
+        if ":binder" in tail:
+            # the closing paren sticks to the last index, so scan for integers
+            binders = [int(x) for x in re.findall(r"\d+", tail.split(":binder")[1])]
+        sig, seen_kids = [], 0
+        for col in cols_text.split():
+            if col == "U":
+                sig.append(BINDER if seen_kids in binders else CHILD)
+                seen_kids += 1
+            else:
+                sig.append(col)
+        language[name] = sig
+    return language
+
+
+LANGUAGES = {p.stem: read_language(p)
+             for p in sorted(LANG_DIR.glob("*.egg"))} if LANG_DIR.is_dir() else {}
 
 
 def cols_of(sig):
@@ -216,23 +251,31 @@ def child_update(name, sig, pos):
 """
 
 
-def binder(name, sig, pos, head=None):
-    """Take a binder's bound slot out of its class's slot set.
+def binder(name, sig, positions, head=None):
+    """Take the bound slots out of the node's class's slot set.
 
-    The slot rides in the binding child's edge, so it is a slot of the *node* but
-    must not be one of the class: removing it from the edge to the leader is what
-    makes two spellings of the same binder alpha-equivalent. `head` pins the
-    operator string for the generic encoding, where the operator is a payload.
+    A bound slot rides in its child's edge, so it is a slot of the *node* but must
+    not be one of the class: removing it from the edge to the leader is what makes
+    two spellings of the same binder alpha-equivalent. A node that binds several
+    slots -- `sdql`'s `Sum` -- removes each of them. `head` pins the operator string
+    for the generic encoding, where the operator is a payload rather than the
+    constructor.
     """
     _, edges, kids, _ = cols_of(sig)
     e, k = list(edges), list(kids)
-    e[pos], k[pos] = "mvar", "(Var 0)"
+    for n, pos in enumerate(positions):
+        e[pos], k[pos] = f"mvar{n}", "(Var 0)"
     payloads = [f'"{head}"'] if head is not None else None
     node = pattern(name, sig, edges=e, kids=k, payloads=payloads)
+    gets = "\n       ".join(
+        f"(= v{n} (map-get mvar{n} 0))" for n in range(len(positions)))
+    stripped = "(inverse ml)"
+    for n in range(len(positions)):
+        stripped = f"(map-remove {stripped} v{n})"
     return f"""\
 (rule ((RenamesToLeader {node} ml l)
-       (= v (map-get mvar 0)))
-      ((RenamesToLeader {node} (inverse (map-remove (inverse ml) v)) l)))
+       {gets})
+      ((RenamesToLeader {node} (inverse {stripped}) l)))
 """
 
 
@@ -272,13 +315,15 @@ def emit(language, binders=()):
 
     binder_rules = []
     for name, sig in language.items():
-        for pos, col in enumerate(c for c in sig if c in (CHILD, BINDER)):
-            if col is BINDER:
-                binder_rules.append(
-                    (f";; `{name}` binds child {pos + 1}", binder(name, sig, pos)))
+        kid_cols = [c for c in sig if c in (CHILD, BINDER)]
+        bound = [i for i, c in enumerate(kid_cols) if c is BINDER]
+        if bound:
+            which = ", ".join(str(i + 1) for i in bound)
+            binder_rules.append(
+                (f";; `{name}` binds child {which}", binder(name, sig, bound)))
     for head, name in binders:
         binder_rules.append((f';; `{head}` binds its first child\'s slot',
-                             binder(name, language[name], 0, head=head)))
+                             binder(name, language[name], [0], head=head)))
     if binder_rules:
         out += banner("binders")
         for comment, rule in binder_rules:
