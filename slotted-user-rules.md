@@ -90,6 +90,9 @@ it. A body no ordering can connect has to invent slots, and there the gap is rea
 
 It is tempting to read this as three separate cases — first atom, root known,
 children known — and that reading caused three of the four bugs listed at the end.
+`tests/slotted-user-rules.egg` had drifted back to it and has been brought into
+line; `M3b` there is an e-graph where the two readings visibly disagree, the short
+one computing an *empty* renaming for a child that has a slot.
 The cases are only *which* constraints happen to exist:
 
 * nothing known — the atom is first; its renaming is the identity and it defines
@@ -560,6 +563,16 @@ Curated cases, and what each is for:
 | `S1`,`S1b` | the stored symmetries are closed, so a lookup finds a composite element |
 | `S2` | a symmetry and a redundancy in play at once |
 | `B1`–`B4` | binders: chaining through one, α-equivalence, the same slot literal on two binders |
+| `M1`,`M6` | shapes `tests/slotted-user-rules.egg` teaches that nothing else covered: a swapped action, and one shared variable across two operators |
+
+`tests/slotted-user-rules.egg` is the readable form of this same recipe, so its
+header maps each of its sections to the case above that covers the shape. Keep the
+two in step — the hand-written file passing its own assertions only says it does
+what it expects, and it had drifted to the three-case reading once already. One
+shape there, `M7`, cannot be covered as the oracle stands: it puts a slot literal
+in a non-binder child position, and the reference admits a slot there only via
+`Bind` or as the whole of `Var(Slot)`, which is a unary atom the harness's
+two-child format cannot express.
 
 ### Ported from the crate's own suite, and what is not
 

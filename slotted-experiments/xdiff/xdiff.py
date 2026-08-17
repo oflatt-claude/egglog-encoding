@@ -1158,6 +1158,35 @@ def curated():
          ("h", V0, V0), ("h", V0, V1)],
     ))
 
+    # ---- shapes taught by tests/slotted-user-rules.egg -----------------------
+    # That file is the readable form of this compiler's recipe, so every shape it
+    # teaches should be checked here too. The mapping is in its header; these two
+    # were the shapes it had that nothing here covered.
+
+    # M1 -- commutativity: one atom, no repeated variable, and an action that
+    # rebuilds the node with its children swapped. The cheapest slotted rule
+    # there is, and the only one whose action reuses both children in new
+    # positions.
+    cs.append(Case(
+        "M1-commutativity",
+        [("f", V0, V1)], [],
+        [("p", "f", "a", "b")],
+        ("p", "f", "b", "a"),
+        [("f", V0, V1), ("f", V1, V0), ("h", V0, V1)],
+    ))
+
+    # M6 -- only ONE variable shared, across two different operators, so the
+    # second atom's renaming is pinned on part of its node and must mint a name
+    # for the rest. `U1` has this shape with one operator; two make the join
+    # unambiguous, which is what the doc's M6 discusses.
+    cs.append(Case(
+        "M6-one-shared-var-two-ops",
+        [("f", V0, V1), ("g", V0, V2)], [],
+        [("p", "f", "x", "y"), ("q", "g", "x", "z")],
+        ("p", "h", "y", "z"),
+        [("f", V0, V1), ("g", V0, V2), ("h", V1, V2), ("h", V1, V1)],
+    ))
+
     return cs
 
 
