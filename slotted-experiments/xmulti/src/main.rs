@@ -39,11 +39,19 @@ define_language! {
 
 type G = EGraph<L>;
 
+/// One rewrite: a multipattern and what to do with each match.
+#[derive(Default)]
+struct RuleSpec {
+    atoms: Vec<String>,
+    action: Option<(String, String, String, String)>,
+}
+
 struct Spec {
     terms: Vec<String>,
     unions: Vec<(String, String)>,
-    atoms: Vec<String>,
-    action: Option<(String, String, String, String)>,
+    /// A `rule` line starts a new one; with none, the first `atom` opens one, so a
+    /// single-rule spec needs no separator.
+    rules: Vec<RuleSpec>,
     probes: Vec<String>,
     rounds: usize,
 }
@@ -52,8 +60,7 @@ fn parse_spec(src: &str) -> Spec {
     let mut s = Spec {
         terms: vec![],
         unions: vec![],
-        atoms: vec![],
-        action: None,
+        rules: vec![],
         probes: vec![],
         rounds: 10,
     };
@@ -77,19 +84,26 @@ fn parse_spec(src: &str) -> Spec {
             // A child written `$v` is a slot literal and goes through as-is; a
             // binder's slot must be one, since `Bind` has no room for a pattern
             // variable there.
+            "rule" => s.rules.push(RuleSpec::default()),
             "atom" => {
                 let w: Vec<&str> = rest.split_whitespace().collect();
                 let kid = |c: &str| {
                     if c.starts_with('$') { c.to_string() } else { format!("?{c}") }
                 };
-                s.atoms.push(format!(
+                if s.rules.is_empty() {
+                    s.rules.push(RuleSpec::default());
+                }
+                s.rules.last_mut().unwrap().atoms.push(format!(
                     "?{} == ({} {} {})",
                     w[0], w[1], kid(w[2]), kid(w[3])
                 ));
             }
             "action" => {
                 let w: Vec<&str> = rest.split_whitespace().collect();
-                s.action = Some((
+                if s.rules.is_empty() {
+                    s.rules.push(RuleSpec::default());
+                }
+                s.rules.last_mut().unwrap().action = Some((
                     w[0].to_string(),
                     w[1].to_string(),
                     w[2].to_string(),
@@ -145,45 +159,60 @@ fn main() {
         add(&mut eg, p);
     }
 
-    if !spec.atoms.is_empty() {
-        if let Some((root, op, a, b)) = &spec.action {
-            let pat: MultiPattern<L> = MultiPattern::parse(&spec.atoms.join(", ")).unwrap();
+    // Every rule with both a pattern and an action, compiled once.
+    let compiled: Vec<(MultiPattern<L>, Pattern<L>, Pattern<L>)> = spec
+        .rules
+        .iter()
+        .filter_map(|r| {
+            let (root, op, a, b) = r.action.as_ref()?;
+            if r.atoms.is_empty() {
+                return None;
+            }
+            let pat = MultiPattern::parse(&r.atoms.join(", ")).unwrap();
             let from = Pattern::PVar(root.clone());
-            // `action <root> = <x> <x>` equates two pattern variables directly,
-            // so both sides can carry a non-identity renaming. Anything else
-            // builds a node, which is always at the identity in pattern slots.
+            // `action <root> = <x> <x>` equates two pattern variables directly, so
+            // both sides can carry a non-identity renaming. Anything else builds a
+            // node, which is always at the identity in pattern slots.
             let to: Pattern<L> = if op == "=" {
                 Pattern::PVar(a.clone())
             } else {
                 Pattern::parse(&format!("({op} ?{a} ?{b})")).unwrap()
             };
-            let debug = std::env::var("XMULTI_DEBUG").is_ok();
-            let mut saturated = false;
-            for round in 0..spec.rounds {
-                let before = eg.progress();
-                let substs = multi_ematch(&pat, &eg);
-                if debug {
-                    eprintln!("round {round}: {} match(es)", substs.len());
-                    for s in &substs {
-                        let mut ks: Vec<&String> = s.keys().collect();
-                        ks.sort();
-                        let body: Vec<String> =
-                            ks.iter().map(|k| format!("?{k}={:?}", s[*k])).collect();
-                        eprintln!("    {}", body.join("  "));
-                    }
-                }
-                for s in substs {
-                    eg.union_instantiations(&from, &to, &s, None);
-                }
-                if before == eg.progress() {
-                    saturated = true;
-                    break;
+            Some((pat, from, to))
+        })
+        .collect();
+
+    if !compiled.is_empty() {
+        let debug = std::env::var("XMULTI_DEBUG").is_ok();
+        let mut saturated = false;
+        for round in 0..spec.rounds {
+            let before = eg.progress();
+            // Match every rule against the same e-graph, then apply: a rule set is
+            // one step of all rules, not a sequence of separate runs.
+            let found: Vec<(usize, Vec<Subst>)> = compiled
+                .iter()
+                .enumerate()
+                .map(|(i, (pat, _, _))| (i, multi_ematch(pat, &eg)))
+                .collect();
+            if debug {
+                for (i, substs) in &found {
+                    eprintln!("round {round} rule {i}: {} match(es)", substs.len());
                 }
             }
-            // A case that hit the round cap without settling means the two sides
-            // ran different amounts of work, so comparing them says nothing.
-            println!("SATURATED {}", if saturated { "yes" } else { "no" });
+            for (i, substs) in found {
+                let (_, from, to) = &compiled[i];
+                for s in substs {
+                    eg.union_instantiations(from, to, &s, None);
+                }
+            }
+            if before == eg.progress() {
+                saturated = true;
+                break;
+            }
         }
+        // A case that hit the round cap without settling means the two sides ran
+        // different amounts of work, so comparing them says nothing.
+        println!("SATURATED {}", if saturated { "yes" } else { "no" });
     }
 
     println!("PARTITION {}", partition(&eg, &spec.probes));

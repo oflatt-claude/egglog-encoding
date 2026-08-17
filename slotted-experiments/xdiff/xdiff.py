@@ -156,31 +156,54 @@ def shift_case(case, k):
     """
     return Case(case.name, [shift_term(t, k) for t in case.terms],
                 [(shift_term(a, k), shift_term(b, k)) for a, b in case.unions],
-                case.atoms, case.action,
-                [shift_term(t, k) for t in case.probes], case.rounds)
+                None, None,
+                [shift_term(t, k) for t in case.probes], case.rounds,
+                rules=case.rules)
 
 
 # ------------------------------------------------------------------------ specs
 
 
 class Case:
-    def __init__(self, name, terms, unions, atoms, action, probes, rounds=10):
+    """One e-graph, one rule *set*, and the probes whose partition is compared.
+
+    A rule is `(atoms, action)`. Pass `rules=[...]` for a set, or the single-rule
+    `atoms, action` form; `case.atoms` and `case.action` then read rule 0, which is
+    what the single-rule checks and `show` use.
+    """
+
+    def __init__(self, name, terms, unions, atoms, action, probes, rounds=10,
+                 rules=None):
         self.name = name
         self.terms = terms          # [term]
         self.unions = unions        # [(term, term)]
-        self.atoms = atoms          # [(root, op, c1, c2)] pvar names
-        self.action = action        # (root, op, a, b) or None
+        # [(atoms, action)]; atoms are [(root, op, c1, c2)] over pvar names
+        self.rules = list(rules) if rules is not None else [(atoms, action)]
         self.probes = probes        # [term]
         self.rounds = rounds
 
-    def spec(self, atoms=None):
-        atoms = self.atoms if atoms is None else atoms
+    @property
+    def atoms(self):
+        return self.rules[0][0]
+
+    @property
+    def action(self):
+        return self.rules[0][1]
+
+    def spec(self, rules=None):
+        rules = self.rules if rules is None else rules
         out = [f"rounds {self.rounds}"]
         out += [f"term {sexpr(t)}" for t in self.terms]
         out += [f"union {sexpr(a)} {sexpr(b)}" for a, b in self.unions]
-        out += [f"atom {r} {o} {c1} {c2}" for (r, o, c1, c2) in atoms]
-        if self.action:
-            out.append("action {} {} {} {}".format(*self.action))
+        for atoms, action in rules:
+            if not atoms:
+                continue
+            # the separator is only needed from the second rule on, but emitting it
+            # always keeps the spec readable
+            out.append("rule")
+            out += [f"atom {r} {o} {c1} {c2}" for (r, o, c1, c2) in atoms]
+            if action:
+                out.append("action {} {} {} {}".format(*action))
         out += [f"probe {sexpr(t)}" for t in self.probes]
         return "\n".join(out) + "\n"
 
@@ -454,8 +477,8 @@ def compile_rule(atoms, action):
 
 
 # -------------------------------------------------------------- egg generation
-def egg_program(case, atoms=None, mult=3):
-    atoms = case.atoms if atoms is None else atoms
+def egg_program(case, rules=None, mult=3):
+    rules = case.rules if rules is None else rules
     out = [f'(include "{MACHINERY}")']
     # A slotted e-class is NOT one egglog e-class: the alpha-finder relates
     # equal-up-to-renaming nodes with `RenamesToLeader` and deletes one, rather
@@ -466,8 +489,9 @@ def egg_program(case, atoms=None, mult=3):
     out.append("(rule ((ProbeId a i) (ProbeId b j)\n"
                "       (RenamesToLeader a m1 l) (RenamesToLeader b m2 l))\n"
                "      ((SameClass i j)))")
-    if atoms:
-        out.append(compile_rule(atoms, case.action))
+    for atoms, action in rules:
+        if atoms:
+            out.append(compile_rule(atoms, action))
     for i, t in enumerate(case.terms):
         out.append(f"(let _t{i} {enc(t)})")
     for i, (a, b) in enumerate(case.unions):
@@ -514,11 +538,11 @@ def parse_same_class(stdout, n):
 
 
 # ------------------------------------------------------------------ the runners
-def run_reference(case, atoms=None):
+def run_reference(case, rules=None):
     try:
         r = subprocess.run(
             [str(XMULTI / "target" / "debug" / "xmulti")],
-            input=case.spec(atoms),
+            input=case.spec(rules),
             capture_output=True,
             text=True,
             timeout=RUN_TIMEOUT,
@@ -538,8 +562,8 @@ def run_reference(case, atoms=None):
     return ("OK" if sat else "UNSATURATED", part)
 
 
-def run_encoding(case, atoms=None, keep=None, mult=3):
-    prog = egg_program(case, atoms, mult)
+def run_encoding(case, rules=None, keep=None, mult=3):
+    prog = egg_program(case, rules, mult)
     # per-process, so two harness runs cannot clobber each other
     path = keep or (ROOT / f"xdiff-tmp-{os.getpid()}.egg")
     path.write_text(prog)
@@ -575,8 +599,8 @@ def check_case(case, verbose=False, stats=None):
 
     # 1. machinery baseline: no rule, both sides must already agree
     bare = Case(case.name, case.terms, case.unions, [], None, case.probes, case.rounds)
-    rs, rv = run_reference(bare, atoms=[])
-    es, ev = run_encoding(bare, atoms=[])
+    rs, rv = run_reference(bare, rules=[])
+    es, ev = run_encoding(bare, rules=[])
     if rs == "TIMEOUT" or es == "TIMEOUT":
         return [f"{case.name}: baseline timeout ref={rs} enc={es}"]
     if rs != "OK" or es != "OK":
@@ -622,15 +646,20 @@ def check_case(case, verbose=False, stats=None):
     # 4. order independence, both sides. Every distinct reordering for 2-3 atoms;
     # a sample beyond that, since each costs a full saturation on both sides. The
     # original order is excluded -- rerunning it would test determinism, not order.
-    if len(case.atoms) > 1:
-        perms = [p for p in itertools.permutations(case.atoms)
-                 if list(p) != list(case.atoms)]
+    # With a rule set, the same permutation index is applied to every rule rather
+    # than taking the product of their orderings.
+    widest = max(len(a) for a, _ in case.rules) if case.rules else 0
+    if widest > 1:
+        perms = [p for p in itertools.permutations(range(widest))
+                 if list(p) != list(range(widest))]
         if len(perms) > PERM_CAP:
             perms = random.Random(0).sample(perms, PERM_CAP)
         ref_vals, enc_vals = {rv}, {ev}
         for p in perms:
-            xs, x = run_reference(case, atoms=list(p))
-            ys, y = run_encoding(case, atoms=list(p))
+            reordered = [([a[k] for k in p if k < len(a)], act)
+                         for a, act in case.rules]
+            xs, x = run_reference(case, rules=reordered)
+            ys, y = run_encoding(case, rules=reordered)
             # A timeout or crash is not a partition; folding it into the value
             # set would report spurious order dependence.
             if xs == "OK":
@@ -1186,6 +1215,42 @@ def curated():
         [("f", V0, V1), ("g", V0, V2), ("h", V1, V2), ("h", V1, V1)],
     ))
 
+    # ---- rule sets ----------------------------------------------------------
+    # Until now every case ran a single rule. The paper's experiments are sets run
+    # to a common fixpoint, so the rules interact: one produces what another
+    # matches. `rules=` takes a list of (atoms, action).
+
+    # MR1 -- a chain: f becomes g, then g becomes h with its children swapped, so
+    # the answer needs both rules and the order they fire in must not matter.
+    cs.append(Case(
+        "MR1-rule-chain",
+        [("f", V0, V1)], [], None, None,
+        [("f", V0, V1), ("g", V0, V1), ("h", V0, V1), ("h", V1, V0)],
+        rules=[([("p", "f", "a", "b")], ("p", "g", "a", "b")),
+               ([("q", "g", "x", "y")], ("q", "h", "y", "x"))],
+    ))
+
+    # MR2 -- commutativity beside a renaming rule, so the second keeps feeding the
+    # first new nodes to commute.
+    cs.append(Case(
+        "MR2-comm-plus-rename",
+        [("add", LEAF0, ("g", V1, V1))], [], None, None,
+        [("add", LEAF0, ("g", V1, V1)), ("add", ("g", V1, V1), LEAF0),
+         ("add", LEAF0, ("k", V1, V1)), ("k", V1, V1)],
+        rules=[([("p", "add", "a", "b")], ("p", "add", "b", "a")),
+               ([("q", "g", "x", "y")], ("q", "k", "x", "y"))],
+    ))
+
+    # MR3 -- two rules over one shared operator, reaching the same class by
+    # different routes.
+    cs.append(Case(
+        "MR3-two-routes",
+        [("f", V0, V1), ("g", V0, V1)], [], None, None,
+        [("f", V0, V1), ("g", V0, V1), ("h", V0, V1), ("h", V1, V0)],
+        rules=[([("p", "f", "a", "b")], ("p", "h", "a", "b")),
+               ([("q", "g", "x", "y")], ("q", "h", "y", "x"))],
+    ))
+
     return cs
 
 
@@ -1241,25 +1306,9 @@ def rand_top(rng, depth):
     return t
 
 
-def rand_case(rng, i):
-    # A small term set over few ops, so patterns and terms collide often.
-    terms = [rand_top(rng, rng.randrange(1, 3)) for _ in range(rng.randrange(1, 3))]
-
-    # Unions biased towards creating redundancy: equating a term that has slots
-    # with one that has fewer forces the difference to become redundant, which
-    # is where matching gets interesting.
-    unions = []
-    for _ in range(rng.randrange(0, 3)):
-        a = rand_top(rng, rng.randrange(1, 3))
-        if rng.random() < 0.5 and slots(a):
-            # `LEAF0` rather than a bare `(var $0)`: a bare leaf loses its slot
-            # (see check_encodable), and although slot 0 happens to survive, the
-            # slot-renaming check shifts it to one that would not.
-            b = ("null",) if rng.random() < 0.5 else LEAF0
-        else:
-            b = rand_top(rng, rng.randrange(0, 2))
-        unions.append((a, b))
-
+def rand_rule(rng, terms, unions):
+    """One random rule: a pattern read off a term that is in the e-graph,
+    then perturbed, plus an action over its bound variables."""
     # The pattern is read off a term that is actually in the e-graph, so it
     # matches by construction; then it is perturbed.
     seed_term = rng.choice(terms + [a for a, _ in unions])
@@ -1300,10 +1349,36 @@ def rand_case(rng, i):
         action = (x, "=", y, y)          # equate two invocations
     else:
         action = (rng.choice(allv), "h", rng.choice(allv), rng.choice(allv))
+    return atoms, action
 
+
+def rand_case(rng, i):
+    # A small term set over few ops, so patterns and terms collide often.
+    terms = [rand_top(rng, rng.randrange(1, 3)) for _ in range(rng.randrange(1, 3))]
+
+    # Unions biased towards creating redundancy: equating a term that has slots
+    # with one that has fewer forces the difference to become redundant, which
+    # is where matching gets interesting.
+    unions = []
+    for _ in range(rng.randrange(0, 3)):
+        a = rand_top(rng, rng.randrange(1, 3))
+        if rng.random() < 0.5 and slots(a):
+            # `LEAF0` rather than a bare `(var $0)`: a bare leaf loses its slot
+            # (see check_encodable), and although slot 0 happens to survive, the
+            # slot-renaming check shifts it to one that would not.
+            b = ("null",) if rng.random() < 0.5 else LEAF0
+        else:
+            b = rand_top(rng, rng.randrange(0, 2))
+        unions.append((a, b))
+
+    # Mostly one rule. Sometimes two, so the sweep covers rules interacting -- one
+    # producing what the other matches -- which a single rule cannot exercise.
+    rules = [rand_rule(rng, terms, unions)
+             for _ in range(2 if rng.random() < 0.25 else 1)]
     probes = terms + [a for a, _ in unions] + [
         ("h", V0, V1), ("h", V0, V0), ("null",), LEAF0]
-    return Case(f"fuzz{i}", terms, unions, atoms, action, probes, rounds=6)
+    return Case(f"fuzz{i}", terms, unions, None, None, probes, rounds=6,
+                rules=rules)
 
 
 # ------------------------------------------------------------------------ main
@@ -1319,16 +1394,18 @@ def main():
             i, seed = int(args[1]), int(args[2] if len(args) > 2 else 0)
             rng = random.Random(seed)
             case = [rand_case(rng, k) for k in range(i + 1)][i]
-        order = [int(x) for x in args[3:]] or list(range(len(case.atoms)))
-        atoms = [case.atoms[k] for k in order]
+        order = [int(x) for x in args[3:]]
+        rules = [([a[k] for k in order if k < len(a)] if order else a, act)
+                 for a, act in case.rules]
         print("=== spec ===")
-        print(case.spec(atoms), end="")
+        print(case.spec(rules), end="")
         # its own scratch file, so `show` can be used while a sweep is running
         keep = ROOT / f"xdiff-show-{i}.egg"
-        print("=== reference ===", run_reference(case, atoms))
-        print("=== encoding  ===", run_encoding(case, atoms, keep=keep))
-        print("=== rule ===")
-        print(compile_rule(atoms, case.action))
+        print("=== reference ===", run_reference(case, rules))
+        print("=== encoding  ===", run_encoding(case, rules, keep=keep))
+        for n, (atoms, act) in enumerate(rules):
+            print(f"=== rule {n} ===")
+            print(compile_rule(atoms, act))
         return 0
     if args and args[0] == "fuzz":
         n = int(args[1]) if len(args) > 1 else 100
