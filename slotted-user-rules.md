@@ -1104,6 +1104,55 @@ flavour of `find-mapping` (a different representation).
    many rows no symmetry-joining rule can see and how many of those are α-variants
    of nothing visible. Worth running after any change to the maintenance rules.
 
+## Def. 4 is checked, and the encoding breaks it
+
+The reference asserts this outright, in `check_internal_applied_id`:
+
+```rust
+// 2. It needs to have exactly the same slots as the underlying EClass.
+assert_eq!(&app_id.m.keys(), &eg.classes[&app_id.id].slots);
+```
+
+An edge's domain is *exactly* its child class's slots -- not wider, not narrower --
+while a *node* may carry more slots than its class (`real.slots().is_superset`), which
+is what redundancy is. The encoding has no such assertion, and `check_case`'s sixth
+check now supplies one: wide edges and non-injective renamings in the final state,
+with `KNOWN_WIDE` recording the accepted violations so a *new* one still fails.
+
+It is not a curiosity. **Ten of 150 generated cases violate it**, all wide edges, none
+non-injective -- while every one of the 150 still agrees with the reference on the
+partition. So this is invisible to the comparison the suite was built around.
+
+What is established about it:
+
+* Only the **action** creates a wide edge. Baseline runs -- the same e-graph with no
+  rule -- are clean in every case checked. `child-update` composes, which can only
+  narrow; `migration` uses `compose-total`, which preserves the domain.
+* Both failing curated shapes use the atom **root** as an action operand, and a root's
+  renaming carries the matched *node's* slots, which exceed its class's under
+  redundancy. The compiler knows and narrows by composing with a class self-loop.
+* That narrowing is only as good as the self-loops. Question 2 means a class can carry
+  a self-loop derived from a node, wider than the class, and composing with *that* one
+  narrows nothing.
+* The end state is not a fixpoint of the machinery's own rules. `child-update`'s
+  premise still matches the offending row, so the count is stable at one because
+  creation and deletion balance, not because nothing is happening. `X1` shows the same
+  as an oscillation, 1, 2, 2, 1.
+
+**A candidate fix, not yet tried.** The gap is that a class's slot set is only ever
+implied by self-loops, which are derived from nodes and so can over-state it. egglog
+can hold it directly, with the shrinking built into a merge:
+
+```text
+(function ClassSlots (U) Renaming :merge (map-intersect old new))
+```
+
+Each class then has exactly one slot set, monotonically decreasing, which is what
+`c.slots` and `cap` are in the reference's `union_leaders`. Rules that currently mean
+"the class's slots" would read `ClassSlots` instead of picking a self-loop. It needs a
+`map-intersect` primitive, and care that intersecting over a class's nodes really does
+give the live slots.
+
 ## Machine-checked invariants
 
 Def. 4 — an edge's domain is exactly its child's slot set — used to be maintained by
