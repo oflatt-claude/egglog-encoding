@@ -866,14 +866,15 @@ follower handling here was dropping 16 e-classes, and the count is what showed i
 
 ```text
 curated      44/44  isomorphic   217 e-classes,  282 e-nodes,  226 symmetries
-generated   244/250 isomorphic  1893 e-classes, 2499 e-nodes, 1893 symmetries
-                    0 differ, 6 not comparable
+generated   248/250 isomorphic  1920 e-classes, 2540 e-nodes, 1920 symmetries
+                    0 differ, 2 not comparable
 ```
 
-Nothing differs. The six are limits of reading the encoding through printed output, listed
-below: four are distinct classes sharing the one name `Unextractable`, and two are a
-slotted class whose nodes sit on two values. Four more cases are compared at a fixpoint of
-the database rather than of the rules, for the reason in the next section.
+Nothing differs. The two are limits of reading the encoding through printed output, listed
+below: one is several classes sharing the single name `Unextractable`, the other a slotted
+class whose nodes sit on two values. Four more cases are compared at a fixpoint of the
+database rather than of the rules, for the reason in the next section. Orienting
+`child-update` is what took this from 244/250 with 6 not comparable.
 
 Three things had to be handled rather than assumed.
 
