@@ -910,12 +910,42 @@ the *database* instead, established by two different round budgets producing the
 graph, which is the standard the partition comparison already uses. Those cases are
 counted separately so the two are not conflated.
 
-### A binder makes open question 2's pair permanent
+### The node row itself oscillates, on an edge narrower than its child
+
+**Corrects the account below, which had the self-loop rule re-deriving from "a node row
+that never changed".** Sizes are stable; contents are not. Keyed on the payload and
+renamings — which print structurally, unlike child values, which print by extraction and
+so change whenever a class becomes unextractable — `fuzz77`'s lambda row alternates every
+round:
+
+```text
+run 120  (App2 "lambda" {0→1} (Var 0) {0→2} K)
+run 121  (App2 "lambda" {0→1} (Var 0) {2→2} K)
+run 122  (App2 "lambda" {0→1} (Var 0) {0→2} K)      -- and so on
+```
+
+`ClassSlots K` is `{0→0, 2→2}`, so K's class has *both* slots, and each spelling gives the
+second edge a domain of size one. **Both are Def. 4 violations in the narrow direction** —
+an edge whose domain is smaller than its child's slot set — and that is the direction the
+invariant check does not test: `check 6` looks for edges *wider* than the child, and the
+narrow direction was recorded as "not checkable this way" and left to `compose-total`.
+
+So the self-loop rule is not the driver. It re-fires because its one input table really
+does have a new row each round, which is what semi-naive requires; the pair below is
+downstream of the node-row churn, not the cause of it. `child-update` is among the rules
+firing, and rewriting an edge by composing with a child renaming is how a spelling changes,
+but which firing produces which spelling is not established here.
+
+**Open item.** The unchecked direction of Def. 4 now has a witness, and it is worth an
+invariant of its own: an edge whose domain is *narrower* than `ClassSlots` of its child.
+That check would have caught this without needing `saturate`.
+
+### Downstream: a binder makes open question 2's pair permanent
 
 Asking for `saturate` on the generated corpus turned up cases that never terminate,
-and they are *not* the α-variant growth below: every table is stable, `App2` and
-`RenamesToLeader` and `ClassSlots` all unchanged from 10 rounds to 240. Only the
-database size oscillates, by one row, forever.
+and they are *not* the α-variant growth below: every table keeps the same *size* from 10
+rounds to 240, and the database size oscillates by one row forever. Row *contents* do
+change, which is the section above.
 
 `RUST_LOG=debug` makes egglog name the rules that still match, which is quicker than
 guessing at it:
@@ -936,9 +966,9 @@ rule — and the binder rule is what makes it permanent. On `fuzz77` the lambda 
 
 The shrinking rule then has `m1 = {1→1,2→2}` and `m = {2→2}`: `m` is idempotent,
 `m2 = m·(m1·m) = {2→2} ≠ m1`, so it deletes the wide loop. Next round the self-loop rule
-re-derives it from the node row, which never changed. `RenamesToLeader` flips 13 → 12 → 13
-with period 2, forever, and `single-parent` is not involved at all — its `(!= a b)` and
-`(!= a c)` guards stop it firing on a self-loop.
+re-derives it — from a node row that has itself been re-created, per the section above.
+`RenamesToLeader` flips 13 → 12 → 13 with period 2, forever, and `single-parent` is not
+involved at all: its `(!= a b)` and `(!= a c)` guards stop it firing on a self-loop.
 
 **This falsifies the convergence claim in open question 2.** That claim was measured on
 five curated cases, where the too-wide loop is derived once and then gone. A binder is
