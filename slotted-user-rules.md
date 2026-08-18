@@ -790,10 +790,17 @@ The reference's suite is unchanged by it -- 105 pass before and after, with the 
 three pre-existing `redundancy_matching_bug` failures -- and our corpus still agrees
 43/43.
 
-**The oracle now depends on this patch**, which lives on a branch of the local
-slotted-egraphs checkout rather than upstream, so a fresh clone would still crash on
-those shapes. `slotted-experiments/upstream-shrink-orbit-closure.patch` is the change,
-kept here so the dependency is not silent. It is worth sending to memoryleak47.
+The fix is part of PR #45 itself -- pushed to its head branch,
+`oflatt-claude/slotted-egraphs:multipat-subst-canonicalisation` -- so the oracle and the
+reference we claim to match are the same code, with no out-of-band patch to remember.
+It carries `tests/fgh/shrink_with_symmetry`, which reproduces the panic without it.
+
+That test asserts the surviving slot count is what it is, not that it is optimal. One
+slot is redundant and the class is symmetric in the two, so a stronger shrink may be
+justified -- and the class does come out with one slot, not none, so using `final_cap`
+is not by itself the orbit-closure the discarded code was reaching for. Whether the slot
+set should shrink further is a separate question from the crash, and this does not
+settle it.
 
 ### Which slotted-egraphs is this compared against?
 
