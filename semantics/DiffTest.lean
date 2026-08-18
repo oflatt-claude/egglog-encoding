@@ -1812,16 +1812,18 @@ resident row's proof (`Encode.lean`'s `mergeResult`), which proves `k = old0` an
 `old0 = new0` the edge claims — egglog's `MergeFn`, the sixth justification `CHECKER.md`'s
 minimal subset excludes. The report counts those apart from proofs that justify nothing.
 
-**Measured.** `difftest check 64` at a 3600 s budget per case, run 76-way parallel: 75 of the
-76 — the 70 in-domain corpus cases and the six probes — finish, and over them **724 of 824
-recorded equalities check, 93 are merge-displaced, and 7 are unjustified**. `rand-19` is the
-one that does not. `both-2` accounts for 14 of the 93 and `rand-43` for 13; `rand-15`,
-`rand-18`, `rand-45`, `up-thin` and `up-thin-run` have four apiece, `up`, `up-run` and
-`rand-59` three, five cases two, and 27 one. Seventy-seven of the 93 carry `(@Fiat)`. The 7
-unjustified are three in `rand-57`, two in `rand-45`, and one each in `rand-33` and `both-2`.
-The budget bounds the sweep and not the checker: `check 64 union` is 1.0 s where `encode 64
-union` is 1.3 s, and the difference is the source run `encodeCompare` does and this does not —
-reading and checking every proof is inside the noise of producing them.
+**Measured.** `difftest check 64`, all 76 cases — the 70 in-domain corpus cases and the six
+probes — finish, and over them **741 of 854 recorded equalities check, 103 are
+merge-displaced, and 10 are unjustified**. `both-2` accounts for 14 of the 103, `rand-43` 13
+and `rand-19` 10; `rand-15`, `rand-18`, `rand-45`, `up-thin` and `up-thin-run` have four
+apiece, `up`, `up-run` and `rand-59` three, five cases two, and 27 one. The 10 unjustified
+are three in `rand-57`, three in `rand-19`, two in `rand-45`, and one each in `rand-33` and
+`both-2`. `rand-19` is the case that never finished before `congStepFast`, and its 17/10/3
+had never been observed; the sweep that reported 724/93/7 covered the other 75.
+
+Checking is not what costs: `check 64 union` is 0.22 s where `encode 64 union` is 0.32 s, and
+the difference is the source run `encodeCompare` does and this does not — reading and
+checking every proof is inside the noise of producing them.
 
 **What running it found** was a third disagreement, and this was the only thing that could:
 `@Fiat` reads the top-level actions of the source, but `encodeBuild` writes its view entry
