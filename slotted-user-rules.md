@@ -988,19 +988,58 @@ for the class whose self-loop churns, so a self-loop naming slot 1 cannot come f
 That experiment is what pointed at the symmetry-finder instead.
 
 **The one that remains is not a maintenance-rule cycle.** `fuzz179` has period *three*,
-and what churns are α-variants — same operator, same children, renamings differing by
-swapping slot names `0` and `2`:
+and both of its rules are self-referential:
 
 ```text
-(App2 "h" {0→2} … {0→2} …)      (App2 "h" {2→0} … {2→0} …)
+?x3 == h(?x1,?x2)   =>   ?x2 = h(?x3, ?x2)      the class becomes a node containing itself
+?x3 == h(?x2,?x1)   =>   ?x3 = h(?x3, ?x3)      ... in both positions
 ```
 
-Its two rules are self-referential (`?x3 == h(?x1,?x2) ⇒ ?x2 = h(?x3,?x2)`), so they
-rebuild α-variants as fast as the α-finder retires them. That is the divergence already
-recorded under "The other divergence is growth, not a missing merge": the encoding keys a
-row by its renamings where the reference keys a node by its shape. It wants an α-invariant
-key, not an orientation, so it is left open — and it is also the last case where a follower
-holds a node.
+Six rules fire on every round of the orbit, named from egglog's per-rule log
+(`RUST_LOG=debug`) matched back against the rule texts:
+
+| | |
+| --- | --- |
+| both compiled user rules | build a node containing the class being defined |
+| migration | re-frames those nodes onto the leader |
+| the self-loop rule, the symmetry-finder, `ClassSlots` | react to each new node |
+| `encoding-11`'s "equal up to some identity renaming" merge | retires variants |
+
+What churns are α-variants: same operator, same children, renamings differing by swapping
+slot names `0` and `2`.
+
+```text
+run 120 -> 121   gone  h {2→2}/{2→2}
+                 new   h {0→0}/{2→0}   h {0→2}/{0→2}   h {2→0}/{0→0}   h {2→0}/{2→0}
+run 121 -> 122   gone  h {0→2}/{2→2}   h {2→0}/{2→0}   h {2→2}/{0→2}
+                 new   h {2→2}/{2→2}
+```
+
+The mechanism is a loop through *spellings*, not through facts. An action builds a node
+with whatever renamings the compiled rule solves for; the maintenance rules re-frame or
+retire it, which changes rows; a changed row is a new row, so the user rule matches again
+and builds the next spelling. Only slots `0` and `2` are ever in play, so the set of
+spellings is finite and the state orbits instead of growing.
+
+**The reference settles on the same input**, because a class stores
+`nodes: HashMap<L, ProvenSourceNode>` keyed by canonical *shape*: building `h(x,x)` under
+any slot naming hits the same key, the second build is a no-op, and nothing re-fires. Here
+a row is keyed by the whole tuple, renamings included, so each spelling is a distinct row.
+That is the divergence recorded under "growth, not a missing merge", and this is its
+sharpest instance.
+
+Worth being clear about severity: **no answer is wrong**. The partition agrees on this case,
+and the isomorphism check finds 0 differences on all 248 comparable cases. What diverges is
+termination, so it is a cost-and-schedule problem rather than a soundness one.
+
+Two candidate fixes, neither a one-atom orientation:
+
+* **An α-invariant key for rows**, which is what the reference has. The real fix, and a
+  redesign of how nodes are stored.
+* **Phasing with rulesets** — saturate the machinery, so α-canonicalisation completes,
+  before letting user rules fire, so an action's build lands on an already-canonical row
+  and produces no new row. Cheaper, and it only needs the machinery to be in a named
+  ruleset; untested.
 
 ### Downstream: a binder makes open question 2's pair permanent
 
