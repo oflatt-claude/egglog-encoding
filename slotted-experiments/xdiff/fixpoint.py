@@ -23,8 +23,20 @@ import xdiff as X
 TIMEOUT = 60
 SCHEDULE = "(run-schedule (saturate (run)))"
 
+# The generated corpus is where the second instance turned up, so it has to be reachable
+# from here -- checking only the curated cases is what let it hide.
+#     python3 slotted-experiments/xdiff/fixpoint.py            curated
+#     python3 slotted-experiments/xdiff/fixpoint.py fuzz 250    generated
+if len(sys.argv) > 1 and sys.argv[1] == "fuzz":
+    import random
+    rng = random.Random(0)
+    cases = [X.rand_case(rng, i)
+             for i in range(int(sys.argv[2]) if len(sys.argv) > 2 else 250)]
+else:
+    cases = X.curated()
+
 bad = []
-for case in X.curated():
+for case in cases:
     # the case's own `(run N)` is what saturation replaces
     prog = re.sub(r"\(run\s+\d+\)", SCHEDULE, X.egg_program(case))
     prog = prog.replace("(print-function SameClass 100000)", "(print-size App2)")
@@ -43,5 +55,5 @@ for case in X.curated():
         bad.append(case.name)
         print(f"  {case.name:44} {verdict}  {time.time() - t:.0f}s", flush=True)
 
-print(f"\n{len(X.curated()) - len(bad)}/{len(X.curated())} reach a fixpoint")
+print(f"\n{len(cases) - len(bad)}/{len(cases)} reach a fixpoint")
 sys.exit(1 if bad else 0)

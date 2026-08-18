@@ -910,35 +910,72 @@ the *database* instead, established by two different round budgets producing the
 graph, which is the standard the partition comparison already uses. Those cases are
 counted separately so the two are not conflated.
 
-### The node row itself oscillates, on an edge narrower than its child
+### Child-update needs the same orientation migration does
 
-**Corrects the account below, which had the self-loop rule re-deriving from "a node row
-that never changed".** Sizes are stable; contents are not. Keyed on the payload and
-renamings — which print structurally, unlike child values, which print by extraction and
-so change whenever a class becomes unextractable — `fuzz77`'s lambda row alternates every
-round:
+**Corrects two earlier accounts of this.** It was first reported as the binder rule
+against single-parent, which cannot fire on a self-loop at all; then as an edge narrower
+than its child, which it is not. Both are wrong. What follows is traced rather than
+inferred.
 
-```text
-run 120  (App2 "lambda" {0→1} (Var 0) {0→2} K)
-run 121  (App2 "lambda" {0→1} (Var 0) {2→2} K)
-run 122  (App2 "lambda" {0→1} (Var 0) {0→2} K)      -- and so on
+Table *sizes* are stable but contents are not. Keyed on payload and renamings -- which
+print structurally, unlike child values, which print by extraction and so change whenever a
+class becomes unextractable -- `fuzz77`'s lambda row alternates every round, and so does
+its child's slot set:
+
+| | the lambda's 2nd edge | its child's `ClassSlots` | Def. 4 |
+| --- | --- | --- | --- |
+| run 120 | `{0→2}` | `{0}` | domain = child's slots ✓ |
+| run 121 | `{2→2}` | `{2}` | domain = child's slots ✓ |
+
+Both spellings are *well formed*. What alternates is which value of the child's slotted
+class the edge points at: one names its slot `0`, the other names it `2`, and they are two
+members of one slotted class. At each phase there is a `RenamesToLeader` edge from the
+current child to the other one.
+
+**So it is the same bug as migration's ping-pong, in a rule that never got the fix.**
+`RenamesToLeader` holds both directions between two values of one class, and
+`child-update` follows *any* edge:
+
+```lisp
+(rule ((RenamesToLeader c2 m c')
+       (= node (App2 p1 m1 c1 m2 c2))
+       ...)
+      ((union node (App2 p1 m1 c1 (compose m2 m) c'))
+       (delete (App2 p1 m1 c1 m2 c2))))
 ```
 
-`ClassSlots K` is `{0→0, 2→2}`, so K's class has *both* slots, and each spelling gives the
-second edge a domain of size one. **Both are Def. 4 violations in the narrow direction** —
-an edge whose domain is smaller than its child's slot set — and that is the direction the
-invariant check does not test: `check 6` looks for edges *wider* than the child, and the
-narrow direction was recorded as "not checkable this way" and left to `compose-total`.
+Nothing says which of `c2` and `c'` is more canonical, so it rewrites the pointer one way
+and back, deleting and rebuilding the node row each round. The fix is the atom migration
+already carries:
 
-So the self-loop rule is not the driver. It re-fires because its one input table really
-does have a new row each round, which is what semi-naive requires; the pair below is
-downstream of the node-row churn, not the cause of it. `child-update` is among the rules
-firing, and rewriting an edge by composing with a child renaming is how a spelling changes,
-but which firing produces which spelling is not established here.
+```lisp
+(= c2 (ordering-max c2 c'))       ; toward the leader only
+```
 
-**Open item.** The unchecked direction of Def. 4 now has a witness, and it is worth an
-invariant of its own: an edge whose domain is *narrower* than `ClassSlots` of its child.
-That check would have caught this without needing `saturate`.
+When the child's class is unchanged the atom holds trivially, so the self-symmetry case the
+rule also handles is unaffected.
+
+This is why the self-loop rule looked like the culprit: its one input table genuinely does
+have a new row each round, which is all semi-naive needs to re-fire it. The pair below is
+downstream of the node-row churn, not the cause, and **asking whether the self-loop rule is
+needed at all was what exposed that** -- a rule cannot re-derive from an unchanged row, so
+the row could not have been unchanged.
+
+**What is left, and what has been ruled out.** Orienting `child-update` takes the
+generated corpus from at least 8 non-saturating cases to 5 (`fixpoint.py fuzz 250`:
+245/250), and `fuzz77`'s node row is stable across rounds afterwards. The remaining five
+churn differently: the database size does *not* move, and `RenamesToLeader` content
+alternates with period 2. On `fuzz52` it is a self-loop on a **slotless** class, renaming
+`{1→1}` one round and `{0→0}` the next -- both naming slots the class does not have.
+
+The obvious suspect was the self-loop rule, and **it is not**. Deriving every self-loop
+from `ClassSlots` -- which only ever narrows, so there would be nothing to shrink -- leaves
+all five non-terminating, with `encoding-11` still passing. Since `ClassSlots` is empty for
+that class, a self-loop naming slot 1 cannot have come from that rule. Per egglog's
+per-rule log the active rules there are single-parent, the symmetry-finder and
+transitivity, all three of which can produce a self-loop; which pair actually cycles is
+**not established**, and three attributions in this section have already been wrong, so it
+is left open rather than guessed at.
 
 ### Downstream: a binder makes open question 2's pair permanent
 

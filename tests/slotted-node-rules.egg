@@ -87,6 +87,7 @@
 ;; child-update, child 1
 (rule ((RenamesToLeader c1 m c')
        (= node (App2 p1 m1 c1 m2 c2))
+       (= c1 (ordering-max c1 c'))    ; toward the leader only
        ; if the class is unchanged then m must be idempotent: no self-symmetries
        (guard (or (bool-!= c1 c') (bool= (compose m m) m)))
        ; and the new node must differ from the old one
@@ -98,6 +99,7 @@
 ;; child-update, child 2
 (rule ((RenamesToLeader c2 m c')
        (= node (App2 p1 m1 c1 m2 c2))
+       (= c2 (ordering-max c2 c'))    ; toward the leader only
        ; if the class is unchanged then m must be idempotent: no self-symmetries
        (guard (or (bool-!= c2 c') (bool= (compose m m) m)))
        ; and the new node must differ from the old one
@@ -172,6 +174,7 @@
 ;; child-update, child 1
 (rule ((RenamesToLeader c1 m c')
        (= node (App3 p1 m1 c1 m2 c2 m3 c3))
+       (= c1 (ordering-max c1 c'))    ; toward the leader only
        ; if the class is unchanged then m must be idempotent: no self-symmetries
        (guard (or (bool-!= c1 c') (bool= (compose m m) m)))
        ; and the new node must differ from the old one
@@ -183,6 +186,7 @@
 ;; child-update, child 2
 (rule ((RenamesToLeader c2 m c')
        (= node (App3 p1 m1 c1 m2 c2 m3 c3))
+       (= c2 (ordering-max c2 c'))    ; toward the leader only
        ; if the class is unchanged then m must be idempotent: no self-symmetries
        (guard (or (bool-!= c2 c') (bool= (compose m m) m)))
        ; and the new node must differ from the old one
@@ -194,6 +198,7 @@
 ;; child-update, child 3
 (rule ((RenamesToLeader c3 m c')
        (= node (App3 p1 m1 c1 m2 c2 m3 c3))
+       (= c3 (ordering-max c3 c'))    ; toward the leader only
        ; if the class is unchanged then m must be idempotent: no self-symmetries
        (guard (or (bool-!= c3 c') (bool= (compose m m) m)))
        ; and the new node must differ from the old one
@@ -275,6 +280,7 @@
 ;; child-update, child 1
 (rule ((RenamesToLeader c1 m c')
        (= node (App4 p1 m1 c1 m2 c2 m3 c3 m4 c4))
+       (= c1 (ordering-max c1 c'))    ; toward the leader only
        ; if the class is unchanged then m must be idempotent: no self-symmetries
        (guard (or (bool-!= c1 c') (bool= (compose m m) m)))
        ; and the new node must differ from the old one
@@ -286,6 +292,7 @@
 ;; child-update, child 2
 (rule ((RenamesToLeader c2 m c')
        (= node (App4 p1 m1 c1 m2 c2 m3 c3 m4 c4))
+       (= c2 (ordering-max c2 c'))    ; toward the leader only
        ; if the class is unchanged then m must be idempotent: no self-symmetries
        (guard (or (bool-!= c2 c') (bool= (compose m m) m)))
        ; and the new node must differ from the old one
@@ -297,6 +304,7 @@
 ;; child-update, child 3
 (rule ((RenamesToLeader c3 m c')
        (= node (App4 p1 m1 c1 m2 c2 m3 c3 m4 c4))
+       (= c3 (ordering-max c3 c'))    ; toward the leader only
        ; if the class is unchanged then m must be idempotent: no self-symmetries
        (guard (or (bool-!= c3 c') (bool= (compose m m) m)))
        ; and the new node must differ from the old one
@@ -308,6 +316,7 @@
 ;; child-update, child 4
 (rule ((RenamesToLeader c4 m c')
        (= node (App4 p1 m1 c1 m2 c2 m3 c3 m4 c4))
+       (= c4 (ordering-max c4 c'))    ; toward the leader only
        ; if the class is unchanged then m must be idempotent: no self-symmetries
        (guard (or (bool-!= c4 c') (bool= (compose m m) m)))
        ; and the new node must differ from the old one
@@ -398,6 +407,7 @@
 ;; child-update, child 1
 (rule ((RenamesToLeader c1 m c')
        (= node (Scale p1 m1 c1))
+       (= c1 (ordering-max c1 c'))    ; toward the leader only
        ; if the class is unchanged then m must be idempotent: no self-symmetries
        (guard (or (bool-!= c1 c') (bool= (compose m m) m)))
        ; and the new node must differ from the old one

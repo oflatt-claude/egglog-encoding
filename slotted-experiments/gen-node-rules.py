@@ -282,7 +282,15 @@ def migration(name, sig):
 
 
 def child_update(name, sig, pos):
-    """Replace child `pos` with its more canonical `m*c'`."""
+    """Replace child `pos` with its more canonical `m*c'`.
+
+    Only ever toward the leader, for the same reason migration needs it: a slotted class
+    spans several values and `RenamesToLeader` holds both directions between them, so
+    without an orientation the child pointer follows an edge one way, is rewritten back
+    the next round, and the node row is deleted and rebuilt forever. `ordering-min` is
+    the direction the single-parent rule already establishes. When the class is unchanged
+    the atom holds trivially, so the self-symmetry case below is unaffected.
+    """
     _, edges, kids, _ = cols_of(sig)
     new_e, new_k = list(edges), list(kids)
     new_e[pos] = f"(compose {edges[pos]} m)"
@@ -290,6 +298,7 @@ def child_update(name, sig, pos):
     return f"""\
 (rule ((RenamesToLeader {kids[pos]} m c')
        (= node {pattern(name, sig)})
+       (= {kids[pos]} (ordering-max {kids[pos]} c'))    ; toward the leader only
        ; if the class is unchanged then m must be idempotent: no self-symmetries
        (guard (or (bool-!= {kids[pos]} c') (bool= (compose m m) m)))
        ; and the new node must differ from the old one
