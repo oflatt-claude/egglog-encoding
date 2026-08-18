@@ -222,7 +222,18 @@ def alpha_finder(name, sig):
 
 
 def symmetry_finder(name, sig):
-    """The same solve, kept non-destructively as a symmetry of the class."""
+    """The same solve, kept non-destructively as a symmetry of the class.
+
+    Restricted to the class's slots. `sym_out` is solved from a *node's* edges, so its
+    domain is the node's slots, and a node may carry slots its class does not depend on --
+    so unrestricted it asserts a symmetry the class does not have. The shrinking rule then
+    deletes that, this rule derives it again, and neither ever wins: four generated cases
+    never reached a fixpoint of the rules for exactly this reason. `ClassSlots` only
+    narrows, so restricting on both sides leaves nothing to shrink.
+
+    This is the same mistake as the self-loop rule's, and the same one open question 2
+    warns about -- do not derive a class-level fact from a node.
+    """
     _, edges, kids, _ = cols_of(sig)
     a_o = [f"{e}_o" for e in edges]
     a = list(edges)
@@ -235,8 +246,9 @@ def symmetry_finder(name, sig):
 (rule ((= e {pattern(name, sig, edges=a_o)})
        {loops}
        {composed}
-       (= sym_out (find-mapping {' '.join(a_o)} {' '.join(a)})))
-      ((RenamesToLeader e sym_out e)))
+       (= sym_out (find-mapping {' '.join(a_o)} {' '.join(a)}))
+       (= cs (ClassSlots e)))
+      ((RenamesToLeader e (compose cs (compose sym_out cs)) e)))
 """
 
 

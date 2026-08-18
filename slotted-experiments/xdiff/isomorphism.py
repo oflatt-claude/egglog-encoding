@@ -233,8 +233,9 @@ def parse_encoding(out, tables):
     # Two values of one slotted class both holding rows. Modelling them as two classes
     # would be a difference invented here rather than a real one, and merging them means
     # translating one frame into the other and deduplicating what then coincides -- which
-    # this does not do. Reported, not guessed at. It means a *follower is holding a node*,
-    # so it is worth knowing about on its own.
+    # this does not do. Reported, not guessed at. Note this is *not* the same as a follower
+    # holding a node: the var class always holds one, so it fires whenever the var class
+    # shares a slotted class with a row-holding one, whichever of them is the leader.
     split = [(a, b) for a, m, b in loops
              if a != b and a in holds and b in holds and a in slots_of]
 
@@ -602,8 +603,8 @@ def _dump(case, schedule, timeout):
         return None, ("limit", f"{unextractable} classes share the name "
                                "`Unextractable`, so they cannot be told apart")
     if split:
-        return None, ("limit", "a follower holds a node, so one slotted class spans two "
-                               "values that both have rows -- not merged here")
+        return None, ("limit", "one slotted class spans two values that both hold rows"
+                               " -- merging their frames is not done here")
     if ambiguous:
         return None, f"could not place {len(ambiguous)} follower value(s): {ambiguous[:2]}"
     g, unfaithful = to_reference_shape(g, leaf.get("var"))

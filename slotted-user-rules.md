@@ -872,9 +872,10 @@ generated   248/250 isomorphic  1920 e-classes, 2540 e-nodes, 1920 symmetries
 
 Nothing differs. The two are limits of reading the encoding through printed output, listed
 below: one is several classes sharing the single name `Unextractable`, the other a slotted
-class whose nodes sit on two values. Four more cases are compared at a fixpoint of the
-database rather than of the rules, for the reason in the next section. Orienting
-`child-update` is what took this from 244/250 with 6 not comparable.
+class whose nodes sit on two values. Every compared case reaches a fixpoint of its own
+*rules*, so the database-fixpoint fallback below is currently unused — it was needed for
+four cases before the two orientation fixes, which also took this from 244/250 with 6 not
+comparable.
 
 Three things had to be handled rather than assumed.
 
@@ -962,21 +963,44 @@ downstream of the node-row churn, not the cause, and **asking whether the self-l
 needed at all was what exposed that** -- a rule cannot re-derive from an unchanged row, so
 the row could not have been unchanged.
 
-**What is left, and what has been ruled out.** Orienting `child-update` takes the
-generated corpus from at least 8 non-saturating cases to 5 (`fixpoint.py fuzz 250`:
-245/250), and `fuzz77`'s node row is stable across rounds afterwards. The remaining five
-churn differently: the database size does *not* move, and `RenamesToLeader` content
-alternates with period 2. On `fuzz52` it is a self-loop on a **slotless** class, renaming
-`{1→1}` one round and `{0→0}` the next -- both naming slots the class does not have.
+**The symmetry-finder had the same defect, and fixing it closes all but one case.**
+`sym_out` is solved from a *node's* edges, so its domain is the node's slots, and a node
+may carry slots its class does not depend on — so unrestricted it asserts a symmetry the
+class does not have. The shrinking rule deletes that, the rule derives it again, and
+neither wins. On `fuzz52` the visible symptom is a self-loop on a **slotless** class,
+renaming `{1→1}` one round and `{0→0}` the next. Restricting on both sides by
+`ClassSlots`, which only narrows, leaves nothing to shrink:
 
-The obvious suspect was the self-loop rule, and **it is not**. Deriving every self-loop
-from `ClassSlots` -- which only ever narrows, so there would be nothing to shrink -- leaves
-all five non-terminating, with `encoding-11` still passing. Since `ClassSlots` is empty for
-that class, a self-loop naming slot 1 cannot have come from that rule. Per egglog's
-per-rule log the active rules there are single-parent, the symmetry-finder and
-transitivity, all three of which can produce a self-loop; which pair actually cycles is
-**not established**, and three attributions in this section have already been wrong, so it
-is left open rather than guessed at.
+```lisp
+(= cs (ClassSlots e)))
+((RenamesToLeader e (compose cs (compose sym_out cs)) e))
+```
+
+| `fixpoint.py fuzz 250` | |
+| --- | --- |
+| before either orientation fix | 8 known failures |
+| after orienting `child-update` | 245/250 |
+| after restricting the symmetry-finder | **249/250** |
+
+The self-loop rule was the obvious suspect and is **not** the cause: rewriting every
+self-loop to derive from `ClassSlots` leaves all five failing, and `ClassSlots` is empty
+for the class whose self-loop churns, so a self-loop naming slot 1 cannot come from it.
+That experiment is what pointed at the symmetry-finder instead.
+
+**The one that remains is not a maintenance-rule cycle.** `fuzz179` has period *three*,
+and what churns are α-variants — same operator, same children, renamings differing by
+swapping slot names `0` and `2`:
+
+```text
+(App2 "h" {0→2} … {0→2} …)      (App2 "h" {2→0} … {2→0} …)
+```
+
+Its two rules are self-referential (`?x3 == h(?x1,?x2) ⇒ ?x2 = h(?x3,?x2)`), so they
+rebuild α-variants as fast as the α-finder retires them. That is the divergence already
+recorded under "The other divergence is growth, not a missing merge": the encoding keys a
+row by its renamings where the reference keys a node by its shape. It wants an α-invariant
+key, not an orientation, so it is left open — and it is also the last case where a follower
+holds a node.
 
 ### Downstream: a binder makes open question 2's pair permanent
 
@@ -1062,10 +1086,12 @@ Three limits worth stating.
   identity is the empty permutation and the reference prints it as an empty field. So a
   *missing* identity self-loop is not what this check detects — that is a reachability
   question, and `stranded.py` is what asks it.
-* A slotted class whose nodes sit on two different values — which is what a follower
-  holding a node means — is reported rather than merged. Merging would mean translating
-  one frame into the other and deduplicating what then coincides, and modelling it as two
-  classes instead would invent a difference that is not there.
+* A slotted class whose nodes sit on two different values is reported rather than merged.
+  Merging would mean translating one frame into the other and deduplicating what then
+  coincides, and modelling it as two classes instead would invent a difference that is not
+  there. This is *not* the same condition as a follower holding a node: the variable class
+  always holds a node, so it also fires when the variable class shares a slotted class with
+  a row-holding one, whichever of the two is the leader.
 
 Each of those is counted as *not comparable*, separately from *differ*, so a limit of the
 tooling is never presented as a finding about the encoding.

@@ -48,8 +48,9 @@
        (RenamesToLeader c2 sym2 c2)
        (= m1 (compose m1_o sym1))
        (= m2 (compose m2_o sym2))
-       (= sym_out (find-mapping m1_o m2_o m1 m2)))
-      ((RenamesToLeader e sym_out e)))
+       (= sym_out (find-mapping m1_o m2_o m1 m2))
+       (= cs (ClassSlots e)))
+      ((RenamesToLeader e (compose cs (compose sym_out cs)) e)))
 
 ;; migration: move a follower's node into the leader's frame
 (rule ((RenamesToLeader e2 m e1)
@@ -128,8 +129,9 @@
        (RenamesToLeader c2 sym2 c2)
        (= m1 (compose m1_o sym1))
        (= m2 (compose m2_o sym2))
-       (= sym_out (find-mapping m1_o m2_o m1 m2)))
-      ((RenamesToLeader e sym_out e)))
+       (= sym_out (find-mapping m1_o m2_o m1 m2))
+       (= cs (ClassSlots e)))
+      ((RenamesToLeader e (compose cs (compose sym_out cs)) e)))
 
 ;; migration: move a follower's node into the leader's frame
 (rule ((RenamesToLeader e2 m e1)
@@ -220,8 +222,9 @@
        (= m2 (compose m2_o sym2))
        (= m3 (compose m3_o sym3))
        (= m4 (compose m4_o sym4))
-       (= sym_out (find-mapping m1_o m2_o m3_o m4_o m1 m2 m3 m4)))
-      ((RenamesToLeader e sym_out e)))
+       (= sym_out (find-mapping m1_o m2_o m3_o m4_o m1 m2 m3 m4))
+       (= cs (ClassSlots e)))
+      ((RenamesToLeader e (compose cs (compose sym_out cs)) e)))
 
 ;; migration: move a follower's node into the leader's frame
 (rule ((RenamesToLeader e2 m e1)
