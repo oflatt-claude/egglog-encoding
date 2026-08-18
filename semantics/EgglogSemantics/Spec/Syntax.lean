@@ -22,9 +22,10 @@ abbrev Var := String
 /-- The name of a constructor or function. -/
 abbrev FnName := String
 
-/-- A base value. `Int` is the only one modelled. -/
+/-- A base value: egglog's `i64` and `bool` sorts (`egglog/src/sort/bool.rs`). -/
 inductive Lit where
   | int : Int → Lit
+  | bool : Bool → Lit
   deriving DecidableEq, Repr, Inhabited
 
 /-- An expression. Evaluated against an environment to build a `Term`. -/

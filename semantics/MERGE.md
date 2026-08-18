@@ -262,8 +262,8 @@ settle its columns jointly.
 
 ### Primitives without churning `Expr`
 
-`ordering-min`/`ordering-max`/`min`/`max` are `Expr.app` of a *reserved name* resolved by
-`Prim.ofName` ahead of the signature, not a new `Expr` constructor. It is what egglog does (a
+`ordering-gt`/`if`/`min`/`max` are `Expr.app` of a *reserved name* resolved by `Prim.ofName`
+ahead of the signature, not a new `Expr` constructor. It is what egglog does (a
 primitive shares a namespace with user functions and shadows one of the same name), and a new
 `Expr` constructor would make every existing `cases e` in `Proofs/Eval.lean`, `Proofs/Match.lean`
 and `Proofs/Interp.lean` non-exhaustive, an error rather than a `sorry`. While two evaluators
@@ -283,8 +283,8 @@ merge body is `(set (@UF_<S> (ordering-max old0 new0)) (values (ordering-min old
 emitted. Either way M11 cannot state `encode` without them, and they are where a termination
 witness comes from, since a merge that keeps the smaller side descends. **(b) An implementation tie-break**:
 `MergeStep` is non-deterministic in which collision fires, and ordering candidates by `Term.blt` —
-literals, then arity, then name, then lex, with `orderingMin`/`orderingMax` defined from it —
-makes the interpreter's choice deterministic. **The spec stays non-deterministic**; this is an
+literals, then arity, then name, then lex, with `ordering-gt` answering it and the four bundled
+choices `if`s over that — makes the interpreter's choice deterministic. **The spec stays non-deterministic**; this is an
 `Impl/` choice only. Structural size before lexicographic, so "keep the smaller side" descends;
 `Term.blt_linear` follows from `blt_asymm`/`blt_total`/`blt_trans`.
 
@@ -969,8 +969,9 @@ re-keying rows":
   invisible to containment: the entry term the implementation writes at that third key is one no
   specification run holds. That is the whole reason the refinement runs on `Recorded`, and it is
   proved, not conjectured — "Why `Recorded` is weaker than `Contained`".
-* `ordering-min`/`ordering-max` keep using the structural `Term.blt` — "The representative
-  deviation", where the reason no repair exists turned out **not** to be the missing database.
+* `ordering-gt`, and so the four choices built over it, keeps using the structural `Term.blt`
+  — "The representative deviation", where the reason no repair exists turned out **not** to be
+  the missing database.
 
 **The read path had no coverage at all**, which is how this stayed invisible: the lookup branch,
 reachable through `execM` from a pattern's `expr` case, was exercised zero times. One finding from

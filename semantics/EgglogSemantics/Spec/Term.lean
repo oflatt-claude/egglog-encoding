@@ -86,14 +86,22 @@ end
 end Term
 /-! ### The term order
 
-`ordering-min`/`ordering-max` are primitives a `:merge` body calls, and `Term.blt` is the
-order they read. -/
+`ordering-gt` is the primitive a `:merge` body compares with; `Term.blt` is what it reads. -/
+
+/-- A total order on base values: integers by `<`, `false` below `true`, every integer below
+every boolean. -/
+def Lit.blt : Lit → Lit → Bool
+  | .int m, .int n => decide (m < n)
+  | .bool a, .bool b => !a && b
+  | .int _, .bool _ => true
+  | .bool _, .int _ => false
+
 mutual
 
 /-- A total order on terms: literals below applications, then by argument count, then by
 name, then lexicographically. -/
 def Term.blt : Term → Term → Bool
-  | .lit (.int m), .lit (.int n) => decide (m < n)
+  | .lit l, .lit m => Lit.blt l m
   | .lit _, .app _ _ => true
   | .app _ _, .lit _ => false
   | .app f as, .app g bs =>
@@ -109,26 +117,18 @@ def Term.bltList : List Term → List Term → Bool
 
 end
 
-/-- egglog's `ordering-min`. -/
-def Term.orderingMin (s t : Term) : Term := if Term.blt s t then s else t
-
-/-- egglog's `ordering-max`. -/
-def Term.orderingMax (s t : Term) : Term := if Term.blt s t then t else s
-
 /-! ### Primitives -/
 /-- The primitives this fragment has. A primitive is applied as `Expr.app` of a reserved
-name, not by a constructor of its own. -/
+name, not by a constructor of its own. egglog's `ordering-min`, `ordering-max`,
+`proof-of-min` and `proof-of-max` are `if`s over `ordering-gt`, spelled out in
+`Encoding/Encode.lean`. -/
 inductive Prim where
-  | orderingMin
-  | orderingMax
-  /-- egglog's `proof-of-min` (`src/proofs/proof_encoding_helpers.rs:1233-1283`): the proof
-  paired with the smaller value. -/
-  | proofOfMin
-  /-- egglog's `proof-of-max`: the proof paired with the larger value.
-
-  Both select on a *strict* comparison of the values and fall through to the second proof,
-  so a tie takes the second either way — egglog tests `a < b` and `a > b`, never `≤`. -/
-  | proofOfMax
+  /-- egglog's value ordering as a `bool`: `(ordering-gt s t)` is `t < s`
+  (`egglog/src/lib.rs:530-535`). **Strict**, so a tie is `false` and every `if` over it
+  takes its `else` branch. -/
+  | orderingGt
+  /-- `(if c a b)`: selection on a `bool`, between two values already computed. -/
+  | ifThenElse
   /-- egglog's `i64` `min`. -/
   | intMin
   /-- egglog's `i64` `max`. -/
@@ -137,21 +137,17 @@ inductive Prim where
 
 /-- The reserved names; a user function of the same name is shadowed. -/
 def Prim.ofName : FnName → Option Prim
-  | "ordering-min" => some .orderingMin
-  | "ordering-max" => some .orderingMax
-  | "proof-of-min" => some .proofOfMin
-  | "proof-of-max" => some .proofOfMax
+  | "ordering-gt" => some .orderingGt
+  | "if" => some .ifThenElse
   | "min" => some .intMin
   | "max" => some .intMax
   | _ => none
 
-/-- A primitive's meaning. `none` for the wrong arity, and for `min`/`max` also for a
-non-literal operand. -/
+/-- A primitive's meaning. `none` for the wrong arity, for an `if` on a non-`bool`, and for
+`min`/`max` on a non-`i64`. -/
 def Prim.apply : Prim → List Term → Option Term
-  | .orderingMin, [s, t] => some (Term.orderingMin s t)
-  | .orderingMax, [s, t] => some (Term.orderingMax s t)
-  | .proofOfMin, [a, pa, b, pb] => some (if Term.blt a b then pa else pb)
-  | .proofOfMax, [a, pa, b, pb] => some (if Term.blt b a then pa else pb)
+  | .orderingGt, [s, t] => some (.lit (.bool (Term.blt t s)))
+  | .ifThenElse, [.lit (.bool c), a, b] => some (if c then a else b)
   | .intMin, [.lit (.int m), .lit (.int n)] => some (.lit (.int (min m n)))
   | .intMax, [.lit (.int m), .lit (.int n)] => some (.lit (.int (max m n)))
   | _, _ => none

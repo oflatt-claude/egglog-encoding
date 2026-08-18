@@ -215,11 +215,13 @@ select (`old`, `new`) or build a term, so there are no lattice merges and no ana
 - **`min`/`max`** are what make `:merge` mean anything — every differential merge case uses
   them, `execM_current_of_lattice` is about them, and without them `:merge (min old new)`
   silently built the *term* `min(5, 3)`.
-- **`ordering-min`/`ordering-max`** serve the encoding's union-find leader selection and
-  nothing else. They are live: `Encoding/Encode.lean`'s `mergeBody` and `mergeResult` —
-  the `:merge` shared by `@UF` and every view — are literally `(set (@UF (ordering-max old
-  new)) (ordering-min old new))`, so `encode` cannot be stated without them. Only a
-  union-find-free encoding would retire them.
+- **`ordering-gt`/`if`** serve the encoding's union-find leader selection and nothing else.
+  `ordering-min`, `ordering-max`, `proof-of-min` and `proof-of-max` are *derived* from them —
+  one `if` over one `ordering-gt` each, in `Encoding/Encode.lean`, which is also where the
+  tie behaviour is now readable rather than documented. They are live: `mergeBody` and
+  `mergeResult` — the `:merge` shared by `@UF` and every view — are literally `(set (@UF
+  (ordering-max old new)) (ordering-min old new))`, so `encode` cannot be stated without them.
+  Only a union-find-free encoding would retire them.
   - They also carry the model's one deviation on merge results — `Term.blt` is structural where
     egglog's order is allocation order — and it is not repairable by a better operator, because
     **no** choice operator is congruence-stable across the two databases `Recorded` relates.

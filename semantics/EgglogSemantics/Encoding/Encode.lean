@@ -99,11 +99,24 @@ def freshVar (n : Nat) : Var := "@v" ++ toString n
 relation's output is the only place it appears, and nothing reads it. -/
 def unitE : Expr := .lit (.int 0)
 
-/-- `(ordering-max x y)`, egglog's tie-break, resolved by `Prim.ofName`. -/
-def maxE (x y : Expr) : Expr := .app "ordering-max" [x, y]
+/-! ### The four bundled choices, spelled out
 
-/-- `(ordering-min x y)`. -/
-def minE (x y : Expr) : Expr := .app "ordering-min" [x, y]
+egglog's `ordering-min`, `ordering-max`, `proof-of-min` and `proof-of-max` are one `if`
+over one `ordering-gt` each. The names below are egglog's, so the encoder still reads the
+way egglog spells it; what they expand to is what the model has to say about them, and
+because `ordering-gt` is **strict** a tie takes the `else` branch — visibly, in the term. -/
+
+/-- `(ordering-gt x y)`: egglog's value ordering, `y < x`. -/
+def gtE (x y : Expr) : Expr := .app "ordering-gt" [x, y]
+
+/-- `(if c a b)`: strict three-way selection. -/
+def ifE (c a b : Expr) : Expr := .app "if" [c, a, b]
+
+/-- `(ordering-max x y)`, egglog's tie-break: `x` when `x > y`, else `y`. -/
+def maxE (x y : Expr) : Expr := ifE (gtE x y) x y
+
+/-- `(ordering-min x y)`: `y` when `x > y`, else `x`. -/
+def minE (x y : Expr) : Expr := ifE (gtE x y) y x
 
 /-! ### Proof terms
 
@@ -176,11 +189,51 @@ def ruleE (i : Nat) (ps : List Expr) : Expr := .app (ruleName i) ps
 The `:merge` body shared by `@UF` and every view: keep the smaller side, and `set` the
 larger side's union-find edge to it. With two value columns `mergeEnv` binds `old0`/`new0`
 for the e-class and `old1`/`new1` for its proof, which is egglog's naming. -/
-/-- egglog's `lo_pf`: the proof paired with the smaller e-class. -/
-def loPfE : Expr := .app "proof-of-min" [.var "old0", .var "old1", .var "new0", .var "new1"]
+/-- egglog's `lo_pf`, `(proof-of-min old0 old1 new0 new1)`: the proof paired with the
+smaller e-class — `old1` when `new0 > old0`, else `new1`, so a tie keeps `new1`. -/
+def loPfE : Expr :=
+  ifE (gtE (.var "new0") (.var "old0")) (.var "old1") (.var "new1")
 
-/-- egglog's `hi_pf`: the proof paired with the larger e-class. -/
-def hiPfE : Expr := .app "proof-of-max" [.var "old0", .var "old1", .var "new0", .var "new1"]
+/-- egglog's `hi_pf`, `(proof-of-max old0 old1 new0 new1)`: the proof paired with the larger
+e-class — `old1` when `old0 > new0`, else `new1`, so a tie keeps `new1` here too. -/
+def hiPfE : Expr :=
+  ifE (gtE (.var "old0") (.var "new0")) (.var "old1") (.var "new1")
+
+/-! **The four expansions, evaluated.** `Proofs/Merge.lean`'s `Prim.ifGt_*` prove the
+agreement in general; these run the actual expressions in the environment `mergeEnv` builds,
+at both strict orders and at a tie. `(A)` is below `(B)` in `Term.blt`, `(P)` is `old1` and
+`(Q)` is `new1`, and the signature declares nothing because every head here is a primitive.
+
+Read the tie off the third column: both proof selectors take `(Q)`, the *second* proof, as
+egglog's do — `ordering-gt` is strict, so a tie is `false` and the `else` branch wins. -/
+private def choiceA : Term := .app "A" []
+private def choiceB : Term := .app "B" []
+private def choiceP : Term := .app "P" []
+private def choiceQ : Term := .app "Q" []
+
+/-- The three orders `Term.blt` distinguishes, as `(old0, new0)` pairs: below, above, tie. -/
+private def choiceOrders : List (Term × Term) :=
+  [(choiceA, choiceB), (choiceB, choiceA), (choiceA, choiceA)]
+
+/-- One expansion at each of the three orders. -/
+private def choiceRun (e : Expr) : List (Option Term) :=
+  choiceOrders.map fun o =>
+    e.eval (fun _ => none)
+      [("old0", o.1), ("old1", choiceP), ("new0", o.2), ("new1", choiceQ)]
+
+section
+set_option linter.hashCommand false
+
+-- `ordering-min old0 new0` was `if blt old0 new0 then old0 else new0`.
+#guard choiceRun (minE (.var "old0") (.var "new0")) == [choiceA, choiceA, choiceA].map some
+-- `ordering-max old0 new0` was `if blt old0 new0 then new0 else old0`.
+#guard choiceRun (maxE (.var "old0") (.var "new0")) == [choiceB, choiceB, choiceA].map some
+-- `proof-of-min old0 old1 new0 new1` was `if blt old0 new0 then old1 else new1`.
+#guard choiceRun loPfE == [choiceP, choiceQ, choiceQ].map some
+-- `proof-of-max old0 old1 new0 new1` was `if blt new0 old0 then old1 else new1`.
+#guard choiceRun hiPfE == [choiceQ, choiceP, choiceQ].map some
+
+end
 
 /-- The body both `:merge`s run: the larger e-class gets a union-find edge to the smaller,
 proved by `@Trans (@Sym hi_pf) lo_pf` — `mx = key` joined to `key = mn`. -/

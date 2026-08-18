@@ -335,27 +335,26 @@ declared. -/
 /-! ### Ordering-freedom
 
 The second condition on *positions* rather than names, and the alternative to union-freedom:
-where a program may apply a **choice** primitive. `ordering-min`/`ordering-max` pick between
-two terms by `Term.blt`, a structural order, where egglog picks by e-class id, so they are
-the one part of `Expr.eval` that is not stable under congruence — `union (f 1) (g 1)` sends
-`ordering-min (f 1) (f 2)` to `f 1` and `ordering-min (g 1) (f 2)` to `f 2`, which are not
-congruent. `min`/`max` are **not** excluded: they answer only on literals, and
-`Cong.eq_of_isLit` makes a literal's class a singleton, so `Prim.apply_cong` is stability
-for them.
+where a program may apply `ordering-gt`. It compares two terms by `Term.blt`, a structural
+order, where egglog compares by e-class id, so it is the one part of `Expr.eval` that is not
+stable under congruence — `union (f 1) (g 1)` sends `ordering-gt (f 1) (f 2)` and
+`ordering-gt (g 1) (f 2)` to different booleans. Excluding it excludes all four of egglog's
+bundled choices, which are `if`s over it. The other three primitives stay: `min`/`max`
+answer only on literals, and `Cong.eq_of_isLit` makes a literal's class a singleton, so
+congruent operands to them *are* those operands (`Prim.apply_cong`); `if` returns an operand
+unexamined, so congruent operands give a congruent answer.
 
 It walks into a rule — both its query, which evaluates its patterns, and its head — and
 into a `:merge`, since a body and its result are evaluated too. -/
 
-/-- No application in `e` names a choice primitive. -/
+/-- No application in `e` names the choice primitive. -/
 def Expr.OrderingFree (e : Expr) : Prop :=
-  ∀ f ∈ e.fns, Prim.ofName f ≠ some .orderingMin ∧ Prim.ofName f ≠ some .orderingMax
-    ∧ Prim.ofName f ≠ some .proofOfMin ∧ Prim.ofName f ≠ some .proofOfMax
+  ∀ f ∈ e.fns, Prim.ofName f ≠ some .orderingGt
 
 /-- `Expr.OrderingFree` over an argument list. Stated on `Expr.fnsList` rather than
 pointwise because that is what the evaluation induction reads. -/
 def Expr.OrderingFreeList (es : List Expr) : Prop :=
-  ∀ f ∈ Expr.fnsList es, Prim.ofName f ≠ some .orderingMin ∧ Prim.ofName f ≠ some .orderingMax
-    ∧ Prim.ofName f ≠ some .proofOfMin ∧ Prim.ofName f ≠ some .proofOfMax
+  ∀ f ∈ Expr.fnsList es, Prim.ofName f ≠ some .orderingGt
 
 /-- A query pattern is evaluated, so it carries the condition too. -/
 def Pattern.OrderingFree : Pattern → Prop

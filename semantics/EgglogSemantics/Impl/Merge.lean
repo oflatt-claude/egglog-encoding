@@ -233,8 +233,8 @@ Four shapes checked against the release binary, all with
 list position is fixed when the term is *first* added, which matches egglog for terms
 built by actions and by rule heads in the order the interpreter runs them, but a round
 that fires several rules is free to build terms in another order than egglog's; and
-`ordering-min`/`ordering-max` continue to use the structural `Term.blt`, since a `Prim`
-has no database to consult. `MERGE.md` records both. -/
+`ordering-gt` continues to compare by the structural `Term.blt`, since a `Prim` has no
+database to consult. `MERGE.md` records both. -/
 /-- Whether `t` is the canonical member of its congruence class — no congruent term was
 created before it — which is what makes egglog's rebuild leave a row keyed on `t` alone.
 

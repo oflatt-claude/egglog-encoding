@@ -199,12 +199,28 @@ theorem Prim.isLit_of_apply : ∀ {p : Prim} {as : List Term} {t : Term},
   | _, _ :: .app _ _ :: _, _, hp, h => by rcases hp with rfl | rfl <;> simp [Prim.apply] at h
   | _, _ :: _ :: _ :: _, _, hp, h => by rcases hp with rfl | rfl <;> simp [Prim.apply] at h
 
+/-- `if`'s operands, read off a successful application: a `bool` literal and two branches.
+Only the condition is examined, which is what makes `if` congruence-stable where
+`ordering-gt` is not. -/
+theorem Prim.if_apply_inv : ∀ {as : List Term} {t : Term},
+    Prim.ifThenElse.apply as = some t →
+      ∃ c a b, as = [.lit (.bool c), a, b] ∧ t = if c then a else b
+  | [.lit (.bool c), a, b], _, h => ⟨c, a, b, rfl, (Option.some.inj h).symm⟩
+  | [], _, h => by simp [Prim.apply] at h
+  | [_], _, h => by simp [Prim.apply] at h
+  | [_, _], _, h => by simp [Prim.apply] at h
+  | [.lit (.int _), _, _], _, h => by simp [Prim.apply] at h
+  | [.app _ _, _, _], _, h => by simp [Prim.apply] at h
+  | _ :: _ :: _ :: _ :: _, _, h => by simp [Prim.apply] at h
+
 /-- **`min` and `max` are congruence-stable.** They read a literal, and a literal is alone
 in its class, so operands congruent to ones they answer on *are* those operands.
 
-`ordering-min`/`ordering-max` are excluded and cannot be included: they choose by
-`Term.blt`, a structural order, where egglog chooses by e-class id, so `f 1 ≅ g 1` already
-sends them to incongruent answers with no literal anywhere. -/
+`ordering-gt` is excluded and cannot be included: it compares by `Term.blt`, a structural
+order, where egglog compares by e-class id, so `f 1 ≅ g 1` already sends it to a different
+boolean with no literal anywhere. `if` is stable too, but for the opposite reason — it
+returns an operand unexamined — so it is `Merge.lean`'s `prim_apply_owes` that carries
+it, over `Owes` rather than over equality. -/
 theorem Prim.apply_cong {db : Database} (hl : db.LitsIsolated) {p : Prim}
     (hp : p = .intMin ∨ p = .intMax) {as bs : List Term} (hc : CongList db as bs)
     {t : Term} (h : p.apply as = some t) : p.apply bs = some t := by

@@ -35,12 +35,12 @@ Conservativity rescues neither transport, and the obstruction is the same both t
 run under a *congruent* environment does not record the run under the original.
 `min`/`max` matching on literals is fixed — `evalAction` refuses a `union` on a literal, so
 `Database.WF.litsIsolated` holds, `Cong.eq_of_isLit` makes a literal's class a singleton
-and `Prim.apply_cong` is the resulting stability. What is left is
-`ordering-min`/`ordering-max`, which choose by `Term.blt`, a *structural* order, where
-egglog chooses by e-class id. `union (f 1) (g 1)` sends `ordering-min (f 1) (f 2)` to
-`f 1` and `ordering-min (g 1) (f 2)` to `f 2`, which are not congruent, with no literal
-anywhere and every state well formed. No condition on the *database* repairs it. Two
-conditions on the *program* do, and each closes **both** transports:
+and `Prim.apply_cong` is the resulting stability. What is left is `ordering-gt`, which
+compares by `Term.blt`, a *structural* order, where egglog compares by e-class id. `union
+(f 1) (g 1)` sends `ordering-gt (f 1) (f 2)` and `ordering-gt (g 1) (f 2)` to different
+booleans, so the `if`s built over it — `ordering-min` and the rest — settle on incongruent
+terms, with no literal anywhere and every state well formed. No condition on the *database*
+repairs it. Two conditions on the *program* do, and each closes **both** transports:
 
 * **`Program.UnionFree`.** `Action.union` is the only action that asserts an equation
   between distinct terms, so a program with none reaches only states whose `eqs` are
@@ -61,7 +61,7 @@ conditions on the *program* do, and each closes **both** transports:
 **false**, refuted at `Encoding/Encode.lean`'s own `:merge` body, and its statement carries
 the counterexample. Neither arm is vacuous, and between them they cover the encoding and
 the equational fragment: `encodeAction` turns a source `union` into `.set @UF [ordering-max
-x₁ x₂] [ordering-min x₁ x₂]`, so `encode` uses `ordering-max` — which the second arm
+x₁ x₂] [ordering-min x₁ x₂]`, so `encode` applies `ordering-gt` — which the second arm
 forbids — and emits no `Action.union` at all, which is the first arm; while a source
 program with `(union (add a b) (add b a))` and `min`/`max` merges is the second arm and not
 the first.
@@ -810,16 +810,40 @@ theorem Database.current_unique {db : Database} {le : List Term → List Term �
 /-! ### The term order
 
 `Term.blt` unfolds definitionally in every case, so the equation lemmas below are `rfl`
-and the three order laws are ordinary case analyses over the (length, name, lex) key.
+and the three order laws are ordinary case analyses over the (base value, length, name, lex)
+key, with the base-value level factored out as `Lit.blt`'s own three laws.
 `Term.bltList` is only used at equal lengths, which is why *totality* is the one law
 that needs a length hypothesis on the list level — `bltList [] (b :: bs)` and
 `bltList (b :: bs) []` are both `false`. -/
+namespace Lit
+
+/-- Asymmetry, totality and transitivity of the base-value order, each a case analysis over
+the two constructors. `Term.blt`'s literal case is this one. -/
+theorem blt_asymm {l m : Lit} (h : Lit.blt l m = true) : Lit.blt m l = false := by
+  cases l <;> cases m <;> simp_all [Lit.blt]
+  omega
+
+theorem blt_total {l m : Lit} (h : l ≠ m) : Lit.blt l m = true ∨ Lit.blt m l = true := by
+  cases l with
+  | int a => cases m with
+    | int b => simp_all [Lit.blt]
+    | bool _ => exact Or.inl rfl
+  | bool a => cases m with
+    | int _ => exact Or.inr rfl
+    | bool b => revert h; cases a <;> cases b <;> simp [Lit.blt]
+
+theorem blt_trans {l m n : Lit} (h₁ : Lit.blt l m = true) (h₂ : Lit.blt m n = true) :
+    Lit.blt l n = true := by
+  cases l <;> cases m <;> cases n <;> simp_all [Lit.blt]
+  omega
+
+end Lit
+
 namespace Term
-@[simp] theorem blt_lit_lit {m n : Int} :
-    Term.blt (.lit (.int m)) (.lit (.int n)) = decide (m < n) := rfl
+@[simp] theorem blt_lit_lit {l m : Lit} : Term.blt (.lit l) (.lit m) = Lit.blt l m := rfl
 
 @[simp] theorem blt_lit_app {l : Lit} {f : FnName} {as : List Term} :
-    Term.blt (.lit l) (.app f as) = true := by cases l; rfl
+    Term.blt (.lit l) (.app f as) = true := rfl
 
 @[simp] theorem blt_app_lit {f : FnName} {as : List Term} {l : Lit} :
     Term.blt (.app f as) (.lit l) = false := rfl
@@ -845,11 +869,9 @@ mutual
 lists of different lengths is `false` in both directions. -/
 theorem Term.blt_asymm (s t : Term) (h : Term.blt s t = true) : Term.blt t s = false := by
   match s, t with
-  | .lit (.int m), .lit (.int n) =>
-    rw [Term.blt_lit_lit] at h
-    rw [Term.blt_lit_lit, decide_eq_false_iff_not]
-    simp only [decide_eq_true_eq] at h
-    omega
+  | .lit _, .lit _ =>
+    rw [Term.blt_lit_lit] at h ⊢
+    exact Lit.blt_asymm h
   | .lit _, .app _ _ => rfl
   | .app _ _, .lit _ => simp at h
   | .app f as, .app g bs =>
@@ -896,12 +918,9 @@ mutual
 theorem Term.blt_total (s t : Term) (h : s ≠ t) :
     Term.blt s t = true ∨ Term.blt t s = true := by
   match s, t with
-  | .lit (.int m), .lit (.int n) =>
-    have hmn : m ≠ n := fun hmn => h (by rw [hmn])
-    have : m < n ∨ n < m := by omega
-    rcases this with hh | hh
-    · exact Or.inl (by simp [hh])
-    · exact Or.inr (by simp [hh])
+  | .lit _, .lit _ =>
+    rw [Term.blt_lit_lit, Term.blt_lit_lit]
+    exact Lit.blt_total fun hlm => h (by rw [hlm])
   | .lit _, .app _ _ => exact Or.inl (by simp)
   | .app _ _, .lit _ => exact Or.inr (by simp)
   | .app f as, .app g bs =>
@@ -947,10 +966,9 @@ derived from `blt a b` and `blt b c` before the lexicographic step can fire. -/
 theorem Term.blt_trans (s t u : Term) (h₁ : Term.blt s t = true)
     (h₂ : Term.blt t u = true) : Term.blt s u = true := by
   match s, t, u with
-  | .lit (.int m), .lit (.int n), .lit (.int p) =>
+  | .lit _, .lit _, .lit _ =>
     rw [Term.blt_lit_lit] at h₁ h₂ ⊢
-    simp only [decide_eq_true_eq] at h₁ h₂ ⊢
-    omega
+    exact Lit.blt_trans h₁ h₂
   | .lit _, .lit _, .app _ _ => simp
   | .lit _, .app _ _, .lit _ => simp at h₂
   | .lit _, .app _ _, .app _ _ => simp
@@ -1040,12 +1058,68 @@ theorem Term.bltList_trans (as bs cs : List Term) (h₁ : Term.bltList as bs = t
 
 end
 
-/-- `Term.blt` is a strict linear order. Needed for `ordering-min`/`ordering-max` to be
-a deterministic choice, and for "keep the smaller side" to descend. -/
+/-- `Term.blt` is a strict linear order. Needed for `ordering-gt` to be a deterministic
+choice, and for "keep the smaller side" to descend. -/
 theorem Term.blt_linear : (∀ s t : Term, Term.blt s t = true → Term.blt t s = false) ∧
     (∀ s t : Term, s ≠ t → Term.blt s t = true ∨ Term.blt t s = true) ∧
     (∀ s t u : Term, Term.blt s t = true → Term.blt t u = true → Term.blt s u = true) :=
   ⟨Term.blt_asymm, Term.blt_total, Term.blt_trans⟩
+
+/-! ### The four bundled choices, against what they replace
+
+`Encoding/Encode.lean` spells egglog's `ordering-min`, `ordering-max`, `proof-of-min` and
+`proof-of-max` as one `if` over one `ordering-gt` each. The four lemmas below hold each
+expansion against the bundled semantics it replaced, **tie included**.
+
+The two proof selectors agree *definitionally*: both read `Term.blt` of the same pair, and
+because `ordering-gt` is strict a tie is `false` and the `else` branch — the second proof —
+is taken, which is what egglog does (`proof_encoding_helpers.rs:1233-1283`, "a tie takes
+`bp`"). The two value selectors need `Term.blt_total`: they branch the other way round, and
+the only inputs where that shows are the ones with neither term below the other, where
+totality says the two terms are equal and both branches are the same term. -/
+
+/-- `ordering-gt` and then `if`, which is what each expansion evaluates to. -/
+def Prim.ifGt (x y a b : Term) : Option Term :=
+  (Prim.orderingGt.apply [x, y]).bind fun c => Prim.ifThenElse.apply [c, a, b]
+
+theorem Prim.ifGt_eq (x y a b : Term) :
+    Prim.ifGt x y a b = some (if Term.blt y x then a else b) := rfl
+
+/-- `(if (ordering-gt s t) t s)` is `ordering-min s t`. -/
+theorem Prim.ifGt_orderingMin (s t : Term) :
+    Prim.ifGt s t t s = some (if Term.blt s t then s else t) := by
+  rw [Prim.ifGt_eq, Option.some_inj]
+  by_cases hst : Term.blt s t = true
+  · rw [if_pos hst, if_neg (by rw [Term.blt_asymm s t hst]; simp)]
+  · rw [if_neg hst]
+    by_cases hts : Term.blt t s = true
+    · rw [if_pos hts]
+    · rw [if_neg hts]
+      rcases eq_or_ne s t with rfl | hne
+      · rfl
+      · exact (Term.blt_total s t hne).elim (absurd · hst) (absurd · hts)
+
+/-- `(if (ordering-gt s t) s t)` is `ordering-max s t`. -/
+theorem Prim.ifGt_orderingMax (s t : Term) :
+    Prim.ifGt s t s t = some (if Term.blt s t then t else s) := by
+  rw [Prim.ifGt_eq, Option.some_inj]
+  by_cases hst : Term.blt s t = true
+  · rw [if_pos hst, if_neg (by rw [Term.blt_asymm s t hst]; simp)]
+  · rw [if_neg hst]
+    by_cases hts : Term.blt t s = true
+    · rw [if_pos hts]
+    · rw [if_neg hts]
+      rcases eq_or_ne s t with rfl | hne
+      · rfl
+      · exact (Term.blt_total s t hne).elim (absurd · hst) (absurd · hts)
+
+/-- `(if (ordering-gt b a) pa pb)` is `proof-of-min a pa b pb`: a tie takes `pb`. -/
+theorem Prim.ifGt_proofOfMin (a pa b pb : Term) :
+    Prim.ifGt b a pa pb = some (if Term.blt a b then pa else pb) := rfl
+
+/-- `(if (ordering-gt a b) pa pb)` is `proof-of-max a pa b pb`: a tie takes `pb` here too. -/
+theorem Prim.ifGt_proofOfMax (a pa b pb : Term) :
+    Prim.ifGt a b pa pb = some (if Term.blt b a then pa else pb) := rfl
 
 /-! ### Invariants over the step relation
 
@@ -1213,12 +1287,13 @@ answer is a single witness **function** `Term → Term` rather than a witness pe
 then equal terms get equal images and `Union2` still joins.
 
 *Costs a lemma that is false*: `RuleResults.mono_recorded`. It re-evaluates under the
-substitution, and `Expr.eval` is **not** congruence-stable at `ordering-min`/`ordering-max`,
-which choose by `Term.blt`. It *is* stable at `min`/`max`, which answer only on literals
-(`Prim.apply_cong`), so restricting the transported positions to ordering-free expressions
-is a fix — and it is a fix for `MergeStep.transport_recorded` too, whose body runs under a
-`mergeEnv` that `Recorded` may have moved: a moved environment is congruent, and congruent
-environments give congruent results.
+substitution, and `Expr.eval` is **not** congruence-stable at `ordering-gt`, which compares
+by `Term.blt`. It *is* stable at `min`/`max`, which answer only on literals
+(`Prim.apply_cong`), and at `if`, which returns an operand unexamined, so restricting the
+transported positions to ordering-free expressions is a fix — and it is a fix for
+`MergeStep.transport_recorded` too, whose body runs under a `mergeEnv` that `Recorded` may
+have moved: a moved environment is congruent, and congruent environments give congruent
+results.
 
 This file carries both fixes. On a **diagonal** recorder there is no congruent-but-distinct
 term for any of this to go wrong at, so `Database.Recorded.contained_of_diag` hands both
@@ -3165,8 +3240,7 @@ theorem reachable_declaredTerms {p : Program} {db : Database}
 The two transports below move a *specification* fact along `Database.Recorded`, and both
 are false in general for one reason: `Recorded` matches an equation only up to congruence,
 so the run on the right-hand side happens under a *congruent* environment, and
-`ordering-min`/`ordering-max` choose by `Term.blt` rather than by e-class, so they are not
-stable there.
+`ordering-gt` compares by `Term.blt` rather than by e-class, so it is not stable there.
 
 One of the two things that buys them back is `Action.UnionFree`. A `union` is the only
 action that asserts an equation between distinct terms, so a program with none keeps every
@@ -3176,10 +3250,11 @@ already proved (`MergeStep.transport`, `MergeClosure.transport`). Nothing is con
 equal, so no choice operator is ever asked to be stable.
 
 This is where `Encoding/Encode.lean` lives: `encodeAction` turns a source `union` into
-`.set @UF [ordering-max x₁ x₂] [ordering-min x₁ x₂]`, so `encode` emits `ordering-max`
-inside a rule action and *no* `Action.union` at all. The other thing that buys them back —
-ordering-freedom, which covers the programs this one excludes and vice versa — is the
-section "Ordering-freedom, and where it puts `Recorded`" below.
+`.set @UF [ordering-max x₁ x₂] [ordering-min x₁ x₂]`, and both of those expand to an
+`ordering-gt`, so `encode` applies one inside a rule action and emits *no* `Action.union` at
+all. The other thing that buys them back — ordering-freedom, which covers the programs this
+one excludes and vice versa — is the section "Ordering-freedom, and where it puts
+`Recorded`" below.
 
 `Database.Diag` is the state-level reading; `Signature.UnionFree` and `Database.NoUnions`
 are what carry it across a merge phase and a rule phase, which read their actions from the
@@ -3336,9 +3411,10 @@ The other condition that buys the two transports, and the one that admits `union
 
 `Recorded` matches an equation only up to congruence, so the run on the right-hand side
 happens under a *congruent* environment. Everything `Expr.eval` does is stable there except
-the two choice primitives: `ordering-min`/`ordering-max` read `Term.blt`. `min`/`max` are
-**not** a problem — `Database.WF.litsIsolated` and `Cong.eq_of_isLit` make a literal's class
-a singleton, so congruent operands to them *are* those operands (`Prim.apply_cong`).
+the one choice primitive: `ordering-gt` reads `Term.blt`. `min`/`max` are **not** a problem —
+`Database.WF.litsIsolated` and `Cong.eq_of_isLit` make a literal's class a singleton, so
+congruent operands to them *are* those operands (`Prim.apply_cong`); nor is `if`, which
+returns an operand unexamined (`prim_apply_owes`).
 
 So `Spec/Scope.lean`'s `Program.OrderingFree` is enough, and unlike `Program.UnionFree` it
 restricts no `union` at all. Four things carry it:
@@ -3479,18 +3555,10 @@ theorem litsIsolated_addTerms {db : Database} (h : db.LitsIsolated) (ts : List T
     (db.addTerms ts).LitsIsolated := fun p hp =>
   (mem_addTerms_eqs ts db p hp).elim (h p) (fun hq _ => hq)
 
-/-- The two `i64` primitives are the ordering-free ones. -/
-theorem prim_int_of_orderingFree {f : FnName} {p : Prim} (hp : Prim.ofName f = some p)
-    (hof : Prim.ofName f ≠ some .orderingMin ∧ Prim.ofName f ≠ some .orderingMax
-      ∧ Prim.ofName f ≠ some .proofOfMin ∧ Prim.ofName f ≠ some .proofOfMax) :
-    p = .intMin ∨ p = .intMax := by
-  cases p with
-  | orderingMin => exact absurd hp hof.1
-  | orderingMax => exact absurd hp hof.2.1
-  | proofOfMin => exact absurd hp hof.2.2.1
-  | proofOfMax => exact absurd hp hof.2.2.2
-  | intMin => exact Or.inl rfl
-  | intMax => exact Or.inr rfl
+/-- The primitive an ordering-free position may not apply, read through the name table. -/
+theorem prim_ne_orderingGt {f : FnName} {p : Prim} (hp : Prim.ofName f = some p)
+    (hof : Prim.ofName f ≠ some .orderingGt) : p ≠ .orderingGt := by
+  rintro rfl; exact hof hp
 
 /-- A value the recorder owes and that is a **literal** it holds verbatim: a literal's
 class is a singleton, so the two values are equal. -/
@@ -3506,13 +3574,47 @@ theorem owes_eq_of_isLit {E : Database} (hlit : E.LitsIsolated) : ∀ {ts ts' : 
         (Or.inl (hl a (by simp)))
       rw [this, owes_eq_of_isLit hlit hrest (fun x hx => hl x (by simp [hx]))]
 
+/-- The singleton case: a literal the recorder owes is that literal. -/
+theorem owes_lit {E : Database} (hlit : E.LitsIsolated) {l : Lit} {x : Term}
+    (ho : Owes E (.lit l) x) : x = .lit l := by
+  have h := owes_eq_of_isLit hlit (List.Forall₂.cons ho .nil) (by simp [Term.isLit])
+  simpa using h.symm
+
+/-- **Every primitive but `ordering-gt` is congruence-stable**, and for two different
+reasons. `min`/`max` read only literals, and a literal's class is a singleton, so operands
+congruent to theirs *are* theirs. `if` reads only its condition — also a literal, so it
+moves unchanged — and returns a branch unexamined, so the recorder owes whichever branch is
+taken. That is why forbidding `ordering-gt` alone suffices: the four bundled choices are
+`if`s over it, and the `if` half of each was never the unstable half. -/
+theorem prim_apply_owes {E : Database} (hlit : E.LitsIsolated) {p : Prim}
+    (hp : p ≠ .orderingGt) {ts ts' : List Term} (hall : List.Forall₂ (Owes E) ts ts')
+    {t : Term} (h : p.apply ts = some t) : ∃ t', p.apply ts' = some t' ∧ Owes E t t' := by
+  cases p with
+  | orderingGt => exact absurd rfl hp
+  | intMin =>
+    rw [owes_eq_of_isLit hlit hall (Prim.isLit_of_apply (Or.inl rfl) h)] at h
+    exact ⟨t, h, Owes.refl⟩
+  | intMax =>
+    rw [owes_eq_of_isLit hlit hall (Prim.isLit_of_apply (Or.inr rfl) h)] at h
+    exact ⟨t, h, Owes.refl⟩
+  | ifThenElse =>
+    obtain ⟨c, a, b, rfl, rfl⟩ := Prim.if_apply_inv h
+    cases hall with | cons hx hall₁ =>
+    cases hall₁ with | cons ha hall₂ =>
+    cases hall₂ with | cons hb hall₃ =>
+    cases hall₃ with | nil =>
+    obtain rfl := owes_lit hlit hx
+    refine ⟨if c then _ else _, rfl, ?_⟩
+    cases c
+    · simpa using hb
+    · simpa using ha
+
 mutual
 
 /-- **Ordering-free evaluation is congruence-stable.** Under an environment whose values
 the recorder owes, the expression evaluates there too, and the recorder owes its value.
-`min`/`max` survive: they answer only on literals, a literal's class is a singleton, so
-congruent operands *are* the operands. `ordering-min`/`ordering-max` are what the
-hypothesis excludes. -/
+Every primitive but `ordering-gt` survives (`prim_apply_owes`), and `ordering-gt` is what
+the hypothesis excludes. -/
 theorem eval_owes {E : Database} (hlit : E.LitsIsolated) {sig : Signature} {σ σ' : Env}
     (henv : ∀ (v : Var) (t : Term), Env.lookup v σ = some t →
       ∃ t', Env.lookup v σ' = some t' ∧ Owes E t t')
@@ -3532,11 +3634,9 @@ theorem eval_owes {E : Database} (hlit : E.LitsIsolated) {sig : Signature} {σ �
       rw [Expr.eval_app_prim hp, Option.bind_eq_some_iff] at he
       obtain ⟨ts, hts, happ⟩ := he
       obtain ⟨ts', hts', hall⟩ := evalList_owes hlit henv hargs hts
-      have hpm := prim_int_of_orderingFree hp (hof f (by simp [Expr.fns]))
-      have heq : ts = ts' :=
-        owes_eq_of_isLit hlit hall (Prim.isLit_of_apply hpm happ)
-      refine ⟨t, ?_, Owes.refl⟩
-      rw [Expr.eval_app_prim hp, hts', Option.bind_some, ← heq, happ]
+      obtain ⟨t', happ', ho⟩ :=
+        prim_apply_owes hlit (prim_ne_orderingGt hp (hof f (by simp [Expr.fns]))) hall happ
+      exact ⟨t', by rw [Expr.eval_app_prim hp, hts', Option.bind_some, happ'], ho⟩
     | none =>
       by_cases hc : sig.IsCtor f
       · rw [Expr.eval_app_ctor hp hc, Option.map_eq_some_iff] at he
@@ -4246,15 +4346,15 @@ end OrderingFree
 
 `hcond` is not bookkeeping: **without it the statement is false**, and not merely unproved.
 `Recorded` moves an entry's value columns as well as its key, so the body runs under a
-*congruent* `mergeEnv` on the `C` side, and `ordering-min`/`ordering-max` are not stable
-there: the two runs settle on incongruent parents and the union-find edge one writes is
-congruent to nothing the other can write. The counterexample is at the encoding's own
-`mergeBody`/`mergeResult` and one `viewDecl`, with `A.Recorded C`, both states well formed
-and one signature: `A` holds `@fView(k) ↦ p` alongside `@fView(k) ↦ r`, `C` holds the first
-re-keyed to the congruent `s`, and with `p < r < s` the step from `A` writes `@UF(r) ↦ p`
-while every step from `C` writes `@UF(s) ↦ s`, `@UF(s) ↦ r` or `@UF(r) ↦ r`. A merge
-asserts no equation, so nothing relates `r` to `p` afterwards either. Adding `C.WF` does
-not rescue it.
+*congruent* `mergeEnv` on the `C` side, and the `ordering-gt` inside `ordering-min`/
+`ordering-max` is not stable there: the two runs settle on incongruent parents and the
+union-find edge one writes is congruent to nothing the other can write. The counterexample
+is at the encoding's own `mergeBody`/`mergeResult` and one `viewDecl`, with `A.Recorded C`,
+both states well formed and one signature: `A` holds `@fView(k) ↦ p` alongside
+`@fView(k) ↦ r`, `C` holds the first re-keyed to the congruent `s`, and with `p < r < s`
+the step from `A` writes `@UF(r) ↦ p` while every step from `C` writes `@UF(s) ↦ s`,
+`@UF(s) ↦ r` or `@UF(r) ↦ r`. A merge asserts no equation, so nothing relates `r` to `p`
+afterwards either. Adding `C.WF` does not rescue it.
 
 Either arm of `hcond` does. Under `C.Diag` there is nothing left to prove:
 `Database.Recorded.contained_of_diag` turns `hc` into a `Database.Contained` and
@@ -5001,10 +5101,10 @@ both `Database.WF.subtermClosed` and `Database.WF.eqsRefl` are read to establish
 double. `ValidQuerySubst.mono_recorded` is false at the same `σ`, so the substitution the
 firing runs under has to be replaced by a congruent one — chosen once for the whole query,
 because `Env.UnionAll` makes the per-pattern choices agree — and then the head re-run under
-it; and `Expr.eval` is not congruence-stable at `ordering-min`/`ordering-max`, so "a
-congruent environment gives a recording result" is itself **false** with `ordering-max` in
-the rule. `Rule.OrderingFree` is exactly what closes the second gap, and `Env.mapVals` over
-the witness of `exists_witness` closes the first.
+it; and `Expr.eval` is not congruence-stable at `ordering-gt`, so "a congruent environment
+gives a recording result" is itself **false** with `ordering-max` in the rule.
+`Rule.OrderingFree` is exactly what closes the second gap, and `Env.mapVals` over the
+witness of `exists_witness` closes the first.
 
 The general form is what the consumer needs — `RunRules.mono_recorded` transports every
 member of `RuleResults A r`, at a `Recorded` reaching back to `execProgramM_contained_aux`
@@ -5946,15 +6046,16 @@ body. Then every state it reaches is diagonal, and there `Database.Recorded` and
 and no `encode` output — prelude, maintenance rule, merge body or encoded head — contains
 an `Action.union`.
 
-*Ordering-free* — no expression the program evaluates applies `ordering-min` or
-`ordering-max`, in a rule's query or head, in a command, or in a `:merge` body or result.
-Then evaluation is congruence-stable (`eval_owes`), so a run under the congruent
-environment a `Recorded` witness supplies produces a congruent result, which is what
-recording asks for. This arm restricts **no** `union`: `(union (add a b) (add b a))` and
-every other equational program is covered, as is every `:merge` body built from `min`/`max`
-— those two are stable, since `Database.WF.litsIsolated` makes a literal's class a
-singleton. What it excludes is `Encoding/Encode.lean`, whose `encodeAction` emits
-`ordering-max`; that encoding is what the first arm is for.
+*Ordering-free* — no expression the program evaluates applies `ordering-gt`, in a rule's
+query or head, in a command, or in a `:merge` body or result. That one exclusion covers all
+four of egglog's bundled choices, which are `if`s over it. Then evaluation is
+congruence-stable (`eval_owes`), so a run under the congruent environment a `Recorded`
+witness supplies produces a congruent result, which is what recording asks for. This arm
+restricts **no** `union`: `(union (add a b) (add b a))` and every other equational program
+is covered, as is every `:merge` body built from `min`/`max` — those two are stable, since
+`Database.WF.litsIsolated` makes a literal's class a singleton, and every body built from
+`if`, which returns an operand unexamined. What it excludes is `Encoding/Encode.lean`, whose
+`encodeAction` emits `ordering-max`; that encoding is what the first arm is for.
 
 See the section header above for why the contract is `Database.Recorded` rather than the
 equality `exec_programStep` enjoys, and `Spec/Merge.lean` for why it is that rather than

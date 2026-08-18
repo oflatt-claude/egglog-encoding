@@ -31,6 +31,7 @@ mutual
 /-- An expression as egglog source. -/
 def Expr.toEgg : Expr → String
   | .lit (.int n) => toString n
+  | .lit (.bool b) => toString b
   | .var v => v
   | .app f args => "(" ++ f ++ Expr.toEggArgs args ++ ")"
 
@@ -98,11 +99,13 @@ def MergeSpec.toEgg : MergeSpec → String
 **Sorts finally bite** (M9): egglog typechecks a `(function …)`, so a merge function
 needs a real output sort. Keys are the one eq-sort `Math`; the output is `i64`, as
 `tests/interval.egg` and `tests/merge-during-rebuild.egg` do. An eq-sorted output would
-dodge the base sort, but then `ordering-min` has to render — and `Term.blt` is
-*structural* where egglog's `ordering-min` is by insertion order, so the two would pick
-different representatives. Row counts are per key class and would survive that; nothing
-else would. Keeping keys eq-sorted also keeps `Term.lit` out of constructor arguments,
-so this file's standing literal mismatch stays out of the way.
+dodge the base sort, but then the leader choice has to render — and this model spells
+`ordering-min` as `(if (ordering-gt …) …)`, which egglog has under neither name. Even
+reaching for egglog's own `ordering-min`, `Term.blt` is *structural* where that is by
+insertion order, so the two would pick different representatives. Row counts are per key
+class and would survive that; nothing else would. Keeping keys eq-sorted also keeps
+`Term.lit` out of constructor arguments, so this file's standing literal mismatch stays out
+of the way.
 
 A multi-column output is a parenthesized sort list, `(i64 i64)`, as
 `egglog/tests/tuple-output.egg` writes it. egglog accepts `(i64)` for one column too,
@@ -135,11 +138,12 @@ side's declarations, so the two descriptions of a program's constructors cannot 
 
 Two names must be kept out of the result, and for opposite reasons. A **declared `:merge`
 function** has its own `function` command, and `Program.ctorArities` filters it. A
-**primitive** has no declaration at all: `min`, `max`, `ordering-min` and `ordering-max`
-are resolved by `Prim.ofName` before the signature is consulted, and egglog resolves them
-out of a table that is already populated, so a `datatype` entry for one is rejected with
-`Primitive min already declared.` `Program.fnArities` filters those, which also keeps them
-out of `Program.fnNames` — a primitive is not a table and `(print-size)` never reports one.
+**primitive** has no declaration at all: `min`, `max`, `ordering-gt` and `if` are resolved
+by `Prim.ofName` before the signature is consulted, and egglog resolves `min`/`max` out of a
+table that is already populated, so a `datatype` entry for one is rejected with `Primitive
+min already declared.` `Program.fnArities` filters all four, which also keeps them out of
+`Program.fnNames` — a primitive is not a table and `(print-size)` never reports one. No case
+this file generates applies the two choice primitives, which egglog does not have.
 -/
 
 mutual

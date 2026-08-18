@@ -1977,6 +1977,7 @@ mutual
 evaluates to, which is what a row holds. -/
 def Term.toEgg : Term → String
   | .lit (.int i) => toString i
+  | .lit (.bool b) => toString b
   | .app f args => "(" ++ f ++ Term.toEggArgs args ++ ")"
 
 /-- `Term.toEgg` over an argument list, each preceded by a space. -/

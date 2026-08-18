@@ -99,18 +99,19 @@ depend on none of the deleted files. `Rebuilt` is now reachable — see finding 
 three payoff theorems next to it are the only proofs the file carries.
 
 **A third obstacle, and it is unrepairable in general.** `mergeBody`/`mergeResult` — the `:merge`
-shared by `@UF` and every view — are built from `ordering-min`/`ordering-max`, which are **not
-congruence-stable**, and no operator is: the obstruction is that a choice operator has to commit
-to a side, not that `Term.blt` reads structure, so e-class ids, a class minimum, a database-aware
-primitive and a new operator baked into the language fail alike (`MERGE.md`, "The representative
-deviation"). It bites this encoder concretely rather than abstractly: an unrestricted
-`MergeStep.transport_recorded` is **false**, refuted at `mergeBody` itself
-(`transport_recorded_false`, with both states well formed and `A.Recorded C`). The specification's
-collision keeps one parent, every collision the implementation can run keeps another, and a
-`MergeStep` **asserts no equation** — the union-find edge is a *term*, `@UF(max, min)`, and `.set`
-records reflexive pairs only — so the two candidate parents are exactly as unrelated after the
-merge as before. That refutes the "any consistent choice of parent induces the same equivalence"
-argument at its root: the union-find does not absorb a different choice.
+shared by `@UF` and every view — are built from `ordering-min`/`ordering-max`, hence from the
+`ordering-gt` inside them, which is **not congruence-stable**, and no operator is: the
+obstruction is that a choice operator has to commit to a side, not that `Term.blt` reads
+structure, so e-class ids, a class minimum, a database-aware primitive and a new operator baked
+into the language fail alike (`MERGE.md`, "The representative deviation"). It bites this encoder
+concretely rather than abstractly: an unrestricted `MergeStep.transport_recorded` is **false**,
+refuted at `mergeBody` itself (`transport_recorded_false`, with both states well formed and
+`A.Recorded C`). The specification's collision keeps one parent, every collision the
+implementation can run keeps another, and a `MergeStep` **asserts no equation** — the union-find
+edge is a *term*, `@UF(max, min)`, and `.set` records reflexive pairs only — so the two
+candidate parents are exactly as unrelated after the merge as before. That refutes the "any
+consistent choice of parent induces the same equivalence" argument at its root: the union-find
+does not absorb a different choice.
 
 The lemma that carries that name today is the *restricted* one — it takes `C.Diag` and is proved,
 by the collapse below, having also dropped `A.WF`. The refutation is why the hypothesis is there,

@@ -148,30 +148,14 @@ theorem Term.ctorTerm_lit {sig : Signature} {l : Lit} : Term.CtorTerm sig (.lit 
   rw [Term.subterms_lit] at hsub
   exact absurd hsub (by simp)
 
-/-- A primitive returns one of its operands or a fresh literal, so it cannot introduce a
-non-constructor application. -/
+/-- A primitive returns one of its operands (`if`) or a fresh literal, so it cannot
+introduce a non-constructor application. -/
 theorem Prim.apply_ctorTerm {sig : Signature} {p : Prim} {ts : List Term} {v : Term}
     (hts : ∀ t ∈ ts, Term.CtorTerm sig t) (h : p.apply ts = some v) :
     Term.CtorTerm sig v := by
   unfold Prim.apply at h
   split at h
-  · simp only [Option.some_inj] at h
-    subst h
-    unfold Term.orderingMin
-    split
-    · exact hts _ (by simp)
-    · exact hts _ (by simp)
-  · simp only [Option.some_inj] at h
-    subst h
-    unfold Term.orderingMax
-    split
-    · exact hts _ (by simp)
-    · exact hts _ (by simp)
-  · simp only [Option.some_inj] at h
-    subst h
-    split
-    · exact hts _ (by simp)
-    · exact hts _ (by simp)
+  · simp only [Option.some_inj] at h; subst h; exact Term.ctorTerm_lit
   · simp only [Option.some_inj] at h
     subst h
     split
@@ -256,30 +240,14 @@ theorem Term.declaredTerm_lit {sig : Signature} {l : Lit} :
   rw [Term.subterms_lit] at hsub
   exact absurd hsub (by simp)
 
-/-- A primitive returns one of its operands or a fresh literal, so it builds no application
-of its own. -/
+/-- A primitive returns one of its operands (`if`) or a fresh literal, so it builds no
+application of its own. -/
 theorem Prim.apply_declaredTerm {sig : Signature} {p : Prim} {ts : List Term} {v : Term}
     (hts : ∀ t ∈ ts, Term.DeclaredTerm sig t) (h : p.apply ts = some v) :
     Term.DeclaredTerm sig v := by
   unfold Prim.apply at h
   split at h
-  · simp only [Option.some_inj] at h
-    subst h
-    unfold Term.orderingMin
-    split
-    · exact hts _ (by simp)
-    · exact hts _ (by simp)
-  · simp only [Option.some_inj] at h
-    subst h
-    unfold Term.orderingMax
-    split
-    · exact hts _ (by simp)
-    · exact hts _ (by simp)
-  · simp only [Option.some_inj] at h
-    subst h
-    split
-    · exact hts _ (by simp)
-    · exact hts _ (by simp)
+  · simp only [Option.some_inj] at h; subst h; exact Term.declaredTerm_lit
   · simp only [Option.some_inj] at h
     subst h
     split
