@@ -40,6 +40,11 @@ fn flat_storage_accepts_append_and_scan_semantics() {
     let mut egraph = EGraph::default();
     let table = egraph.add_internal_flat_table(valid_flat_config("flat"));
     assert!(egraph.table_is_flat(table));
+    assert!(egraph.funcs[table].incremental_rebuild_rules.is_empty());
+    assert_ne!(
+        egraph.funcs[table].nonincremental_rebuild_rule,
+        crate::RuleId::new(!0)
+    );
 }
 
 #[test]

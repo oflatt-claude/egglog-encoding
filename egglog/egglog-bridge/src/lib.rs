@@ -747,6 +747,10 @@ impl EGraph {
     /// unsupported. In particular, any id columns must be immutable snapshots
     /// that never require canonicalization. Violating that contract can panic
     /// or leave stale ids in the table.
+    ///
+    /// This is public only so the sibling `egglog` crate can install its
+    /// internal proof-record tables. It is hidden because it is a semantic
+    /// trust boundary, not a general-purpose storage option.
     #[doc(hidden)]
     pub fn add_internal_flat_table(&mut self, config: FunctionConfig) -> FunctionId {
         self.add_table_with_storage(config, TableStorage::Flat)
@@ -894,8 +898,16 @@ impl EGraph {
             assigned_table_id, table_id,
             "reserved table id did not match the id assigned by add_table_named"
         );
-        let incremental_rebuild_rules = self.incremental_rebuild_rules(res, &schema);
-        let nonincremental_rebuild_rule = self.nonincremental_rebuild(res, &schema);
+        let (incremental_rebuild_rules, nonincremental_rebuild_rule) = match storage {
+            TableStorage::SortedWrites => (
+                self.incremental_rebuild_rules(res, &schema),
+                self.nonincremental_rebuild(res, &schema),
+            ),
+            // The fallback rebuild scheduler expects one bookkeeping rule per
+            // function. Flat proof records are immutable, so give them an
+            // inert rule instead of generating keyed remove/reinsert actions.
+            TableStorage::Flat => (Vec::new(), self.inert_rebuild_rule(res)),
+        };
         let info = &mut self.funcs[res];
         info.incremental_rebuild_rules = incremental_rebuild_rules;
         info.nonincremental_rebuild_rule = nonincremental_rebuild_rule;
@@ -1182,6 +1194,11 @@ impl EGraph {
                 ColumnTy::Base(_) => None,
             })
             .collect()
+    }
+
+    fn inert_rebuild_rule(&mut self, table: FunctionId) -> RuleId {
+        self.new_rule(&format!("inert rebuild {table:?}"), false)
+            .build()
     }
 
     fn incremental_rebuild_rule(
