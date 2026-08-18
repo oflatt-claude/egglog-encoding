@@ -5,6 +5,12 @@ prints as `Unextractable` when its defining `App` rows have all been deleted, an
 rules that delete -- the alpha-finder and migration -- delete on the *follower* side.
 So leaders keep their rows and stay printable. That is only useful if followers hold no
 nodes, since otherwise leader-only enumeration would miss structure.
+
+A value is a follower when a peer of its slotted class is strictly *smaller*, which is
+the orientation the single-parent rule establishes. "Has an edge to a different value"
+is not the test: `RenamesToLeader` holds both directions for a pair, so that is true of
+the leader as well, and an earlier version of this probe counted both -- reporting a
+follower holding a node where the node was on the leader.
 """
 import subprocess
 import sys
@@ -15,7 +21,8 @@ OBS_HEAD = """
 (ruleset obs)
 (relation FollowerWithNode (U))
 (relation Follower (U))
-(rule ((RenamesToLeader a m l) (!= a l)) ((Follower a)) :ruleset obs)
+(rule ((RenamesToLeader a m l) (!= a l) (= a (ordering-max a l)))
+      ((Follower a)) :ruleset obs)
 """
 
 
@@ -24,10 +31,9 @@ def obs():
     for n in (2, 3, 4):
         cols = " ".join(f"m{i} c{i}" for i in range(1, n + 1))
         out.append(f"(rule ((= v (App{n} f {cols}))\n"
-                   f"       (RenamesToLeader v m l)\n"
-                   f"       (!= v l))\n"
+                   f"       (Follower v))\n"
                    f"      ((FollowerWithNode v)) :ruleset obs)")
-    out += ["(run obs 1)", "(print-size Follower)", "(print-size FollowerWithNode)"]
+    out += ["(run obs 2)", "(print-size Follower)", "(print-size FollowerWithNode)"]
     return "\n".join(out)
 
 

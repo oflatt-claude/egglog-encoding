@@ -559,11 +559,11 @@ the two versions differ by exactly the migration rule by construction.
 
 ### Do follower classes need self-loops at all?
 
-They should not, and mostly they do not. A follower is supposed to be *emptied*:
-migration moves each of its nodes into the leader's frame and deletes the original,
-so nothing is left to match on and a self-loop would be dead weight. Measured at a
-genuine fixpoint, that is what happens — `C1`, `C2`, `C5`, `S2` and `B2` all end with
-zero followers holding an e-node.
+They should not, and — with minting and an oriented migration — they do not: every
+follower across the corpus is empty. A follower is supposed to be *emptied*: migration
+moves each of its nodes into the leader's frame and deletes the original, so nothing is
+left to match on and a self-loop would be dead weight. Getting there took the two fixes
+below; what follows is the state each one was found from.
 
 The exception is exactly where migration **declines**. Then the node stays on the
 follower forever, and with no self-loop no compiled rule can see it. So the follower
@@ -581,8 +581,11 @@ Switching found one thing the guard had been hiding:
 | generated | 250/250 | 250/250 |
 | node counts vs reference | 44/44 | 44/44 |
 | corpus e-node rows | 194 | 194 |
-| followers holding an e-node | 3 of 26 | **1 of 27** |
+| followers holding an e-node | 3 | **0 of 26** |
 | wide edges, generated | 0 of 250 | **1 of 250** (`fuzz236`) — until fixed, then 0 |
+
+Minting reached zero followers only once migration was also *oriented*; both fixes are
+below.
 
 `fuzz236` was a real defect, not a cost of minting: **the action narrowed only the
 root by `ClassSlots`, not the other pattern variables.** A variable's renaming is read
@@ -604,26 +607,56 @@ price of the guard", and the guard is no longer the default. It is still kept, b
 the remaining case below is a class that holds a node on a non-leader `U` value and so
 still needs to be addressable. Whether *that* one needs the self-loop is unmeasured.
 
-### The one follower that still holds a node
+### Migration has to be oriented
 
-Under minting, exactly one does across the corpus — `MR1`, and it is not a migration
-failure. The class is `f` with commutativity, so it has the swap `{0↔1}` as a symmetry,
-and it holds one surviving row:
+Switching to minting left one follower holding a node, in `MR1`. The cause was not the
+α-finder picking a spelling, and the node was not stranded — **migration had no fixed
+target and was moving it back and forth.**
+
+`RenamesToLeader` holds *both* directions for a pair: `MR1` ends with
 
 ```text
-(App2 "f" {0→1} (Var 0) {0→0} (Var 0))          -- f($1,$0), survives
-(App2 "f" {0→0} (Var 0) {0→1} (Var 0))          -- f($0,$1), deleted
+(RenamesToLeader A            {0↔1} Unextractable)
+(RenamesToLeader Unextractable {0↔1} A)
 ```
 
-The α-finder found the two spellings α-equivalent and deleted one. Which one it keeps
-is a tie-break, and the survivor's own `U` value need not be the union-find leader — so
-the class's leader has no row left, which is also why it prints as `Unextractable`.
-Nothing is stranded: the surviving row is reachable through the `RenamesToLeader` swap,
-which is how a slotted class spans several egglog classes in the first place.
+so migration's `(!= e1 e2)` was satisfied either way round. It moved the node onto one
+value, deleted it from the other, and next round moved it straight back. The database is
+a fixpoint — every table is size-stable from round 4 to round 200 — but the *rules* are
+not, and `(run N)` cannot tell the difference because it stops after N rounds either
+way. `(run-schedule (saturate (run)))` can: `MR1` was the only case in the corpus that
+never terminated.
 
-So "followers are empty" holds for migration, which is what it was ever a claim about.
-An isomorphism check still cannot enumerate leaders only; it has to walk each slotted
-class's `U` values.
+The fix is one atom. The encoding already fixes an orientation — the single-parent rule
+points every edge at the `ordering-min` value — so migration follows it:
+
+```lisp
+(= e2 (ordering-max e1 e2))       ; toward the leader only
+```
+
+| | before | after |
+| --- | --- | --- |
+| followers holding an e-node | 1 | **0 of 26** |
+| curated cases that saturate | 43 of 44 | **44 of 44** |
+
+Everything else is unchanged: curated 44/44, generated 250/250, node counts 44/44, row
+counts identical case by case, mutation matrix unchanged.
+
+Two things this cost before it was found:
+
+* **A stable row count is not a fixpoint.** Every probe here reads the state after
+  `(run N)`, which cannot see a rule that deletes what another rebuilds.
+  `slotted-experiments/xdiff/saturates.py` now checks the corpus with `saturate`, and
+  it is the only check that would have caught this.
+* **"Has an edge to a different value" is not "is a follower".** Since the relation
+  holds both directions, that test is true of the leader too, and the probe reported a
+  follower holding a node when the node was on the leader. A follower is a value with a
+  strictly *smaller* peer.
+
+With followers actually empty, an isomorphism check may enumerate leaders only. The
+empty peer is what prints as `Unextractable` — a value whose `App` rows have all been
+deleted — so `Unextractable` marks the side with nothing on it, which is the arrangement
+wanted rather than a problem.
 
 **Migrating the self-loop to the leader does not substitute for keeping it.** The old
 single-parent rule already did that — `RenamesToLeader b (compose (inverse m1) m2) c`
@@ -791,7 +824,7 @@ that was matched rather than its composed form, or it removes a row that may not
 exist.
 
 `S1` now agrees, so 42 of 43 cases match on node counts. Curated 43/43, generated
-250/250, all six egg files pass, and the mutation matrix is unchanged (`root-only` 11
+250/250, all eight egg files pass, and the mutation matrix is unchanged (`root-only` 11
 cases, `union-id` 2, `unordered` 1, `slot-late` 1).
 
 ### The other divergence is growth, not a missing merge
@@ -1065,6 +1098,17 @@ Each of these was silent, and each cost a round of confusion.
 * *A generator's defaults are part of its coverage.* Rooting every action at an
   atom root meant the action's renaming was almost always the identity, so nothing
   exercised the difference between unioning classes and unioning invocations.
+* ***A stable row count is not a fixpoint.*** Every probe here reads the state after
+  `(run N)`, which stops after N rounds whether or not anything is still firing. Two
+  rules deleting and rebuilding the same row leave every table size-stable — `MR1` was
+  constant from round 4 to round 200 while never terminating. Only `saturate` separates
+  them, which is `fixpoint.py`.
+* *A probe over hand-picked cases measures those cases.* `fixpoint.py` checked five,
+  and the one case that did not terminate was not among them. It now runs the corpus.
+* *Read the relation's direction before reading its name.* `RenamesToLeader` holds
+  both directions for a pair, so "has an edge to a different value" is true of the
+  leader too. A probe built on that reported a follower holding a node when the node
+  was on the leader; a follower is a value with a strictly *smaller* peer.
 
 ## Cost
 
@@ -1177,17 +1221,21 @@ flavour of `find-mapping` (a different representation).
    too-wide identity away: with a narrow idempotent `m` beside a wide `m1`,
    `compose m (compose m1 m)` is the narrow one, so the rule deletes `m1`. In the
    eight-line case above the wide loop is derived and then gone. Under
-   `run-schedule (saturate (run))`, `X2`, `C5`, `S2` and `B2` all reach a genuine
-   fixpoint; only `X1` does not, and that is its *rule* growing — its action is
-   `union ?x1 (h ?x3 ?x1)`, which builds a new node every round. A program that
-   never saturates keeps creating nodes, each of which re-derives the wide loop, so
-   there it survives; on the same e-graph with no rule, nothing does.
-   `slotted-experiments/xdiff/fixpoint.py` is the check.
+   `run-schedule (saturate (run))` all 44 curated cases now reach a genuine fixpoint,
+   `X1` included. `slotted-experiments/xdiff/fixpoint.py` is the check, and it runs
+   the whole corpus — it used to check five hand-picked cases and so missed the one
+   case that did not terminate.
 
    So the derive/delete pair converges whenever the program does. What is left is
    the shape of the mistake, worth not repeating: **do not derive a class-level
    fact from a node**, and prefer a merge that can only move one way over two rules
    that derive and delete against each other.
+
+   That warning then caught a second, unrelated instance — migration deleting a node
+   from one value and rebuilding it on the other, in both directions, because
+   `RenamesToLeader` is symmetric. See "Migration has to be oriented" above. The
+   generalisation: **a rule that both builds and deletes needs an orientation that
+   strictly decreases**, or it is only a fixpoint of the database and not of itself.
 3. **Redundant slots in the pattern's slots.** The pattern's slots are the first
    atom's *node* slots, which may include slots the class has already made
    redundant. That falls out for free, but it means the pattern's slots are not

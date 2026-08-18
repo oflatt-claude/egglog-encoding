@@ -55,6 +55,7 @@
 (rule ((RenamesToLeader e2 m e1)
        (= e2 (Lam m1 c1 m2 c2))
        (!= e1 e2)
+       (= e2 (ordering-max e1 e2))       ; toward the leader only
        (= nodeslots (map-union (map-image m1) (map-image m2)))
        ; R takes the node's slots to the leader's, agreeing with m inverse where
        ; that is defined and minting a name where it is not
@@ -132,6 +133,7 @@
 (rule ((RenamesToLeader e2 m e1)
        (= e2 (App m1 c1 m2 c2))
        (!= e1 e2)
+       (= e2 (ordering-max e1 e2))       ; toward the leader only
        (= nodeslots (map-union (map-image m1) (map-image m2)))
        ; R takes the node's slots to the leader's, agreeing with m inverse where
        ; that is defined and minting a name where it is not
@@ -215,6 +217,7 @@
 (rule ((RenamesToLeader e2 m e1)
        (= e2 (Let m1 c1 m2 c2 m3 c3))
        (!= e1 e2)
+       (= e2 (ordering-max e1 e2))       ; toward the leader only
        (= nodeslots (map-union (map-image m1) (map-union (map-image m2) (map-image m3))))
        ; R takes the node's slots to the leader's, agreeing with m inverse where
        ; that is defined and minting a name where it is not

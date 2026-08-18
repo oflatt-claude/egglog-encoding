@@ -247,6 +247,12 @@ def migration(name, sig):
     depend on. MIGRATION says what to do then: `decline` leaves the node where it is,
     so followers are not emptied; `mint` invents a name, as the reference's
     `compose_fresh` does, so they are.
+
+    Only ever toward the leader. `RenamesToLeader` holds both directions for a pair, so
+    `(!= e1 e2)` alone lets a node be moved either way: it is deleted from one value,
+    rebuilt on the other, and moved straight back, which is a fixpoint of the database
+    but not of the rules. `ordering-min` is the orientation the single-parent rule
+    already establishes, so following it here makes migration idempotent.
     """
     _, edges, _, _ = cols_of(sig)
     ns = [f"n{i + 1}" for i in range(len(edges))]
@@ -268,6 +274,7 @@ def migration(name, sig):
 (rule ((RenamesToLeader e2 m e1)
        (= e2 {pattern(name, sig)})
        (!= e1 e2)
+       (= e2 (ordering-max e1 e2))       ; toward the leader only
        {pulled})
       ((union e1 {pattern(name, sig, edges=ns)})
        (delete {pattern(name, sig)})))
