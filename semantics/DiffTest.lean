@@ -1,4 +1,5 @@
 import EgglogSemantics.Encoding.Encode
+import EgglogSemantics.Encoding.Checker
 import EgglogSemantics.Tests.Egg
 
 /-!
@@ -1792,6 +1793,299 @@ def EncOutcome.render (o : EncOutcome) : String :=
       String.intercalate " "
         (rows.map fun r => s!"{r.1}:{r.2.1}/{r.2.2.1}/{r.2.2.2}")
 
+/-! #### The proofs the encoding writes, checked
+
+`Encoding/Checker.lean` reads the **source** program and nothing else; the encoded run is
+what writes the proofs. This runs one against the other — `difftest check <fuel> [case…]`.
+
+The two were written in parallel and disagreed in three places, every one of them with the
+checker on the wrong side of a shape the encoder had measured its way to: `@Congr` at one
+name where the encoding writes the family `@Congr_k`, `@Rule_i` counting source patterns
+where the encoding counts view reads, and `@Fiat` reading only the top-level actions. The
+first two are visible on the syntax, and the theorems below are what keeps them fixed; the
+third took running this to see, and is the last paragraph here.
+
+**What a merge records is refused by design.** Both rows a collision settles keep the
+resident row's proof (`Encode.lean`'s `mergeResult`), which proves `k = old0` and not the
+`old0 = new0` the edge claims — egglog's `MergeFn`, the sixth justification `CHECKER.md`'s
+minimal subset excludes. The report counts those apart from proofs that justify nothing.
+
+**Measured.** `difftest check 64` at a 900 s budget per case: 35 of the 76 — the 70 in-domain
+corpus cases and the six probes — finish, and over them **244 of 259 recorded equalities
+check, 15 are merge-displaced, and none is unjustified**. `union` accounts for one of the 15
+and `up-thin` for four, one per row a collision settles; the other cases with a merge in them
+have one apiece. The budget bounds the sweep and not the checker: `check 64 union` is 5 min
+11 s where `encode 64 union` is 6 min 5 s, and the difference is the source run `encodeCompare`
+does and this does not — reading and checking every proof is inside the noise of producing
+them.
+
+**What running it found** was a third disagreement, and this was the only thing that could:
+`@Fiat` reads the top-level actions of the source, but `encodeBuild` writes its view entry
+`f(c…) = f(c…)` under `@Fiat` *whatever context the build is in*, so a term a **rule head**
+constructs has no action to point at. egglog's `Fiat` has the other disjunct for exactly
+this — `lhs == rhs && reflexive_value_term lhs` (`CHECKER.md`, "Node kinds") — and the
+checker did not. It accounted for every rejection in the first sweep and nothing else did:
+`seed-2` checked 0 of 3, `swap-1` 3 of 4, and both are 3 of 3 and 4 of 4 with
+`Proof.reflProps` in. A corpus of *top-level* builds could not have seen it. -/
+
+/-! ##### The two flattenings agree
+
+`props` accepts `@Rule_i` at `Proof.premiseCount` premises and `encode` declares it at
+`ruleProofArity`. They are computed on opposite sides — the source query flattened, and the
+encoded query's view reads counted — so nothing but a proof keeps them equal. -/
+
+/-- The generated variable is the same one on both sides. -/
+theorem flatVar_eq_freshVar : Proof.flatVar = freshVar := rfl
+
+mutual
+
+/-- One application, flattened: the same e-class expression, the same premise count, and the
+same next variable. -/
+theorem flatExpr_agrees (e : Expr) (n : Nat) :
+    (Proof.flatExpr e n).1 = (encodeQueryExpr e n).1 ∧
+    ((Proof.flatExpr e n).2.1.filter Prod.snd).length
+      = (queryProofs (encodeQueryExpr e n).2.1).length ∧
+    (Proof.flatExpr e n).2.2 = (encodeQueryExpr e n).2.2 := by
+  match e with
+  | .lit l => simp [Proof.flatExpr, encodeQueryExpr, queryProofs]
+  | .var v => simp [Proof.flatExpr, encodeQueryExpr, queryProofs]
+  | .app f args =>
+    obtain ⟨h1, h2, h3⟩ := flatArgs_agrees args n
+    rcases hf : Proof.flatArgs args n with ⟨es, qs, n₁⟩
+    rcases hg : encodeQueryArgs args n with ⟨es', ps, n₁'⟩
+    rw [hf, hg] at h1 h2 h3
+    simp only at h1 h2 h3
+    subst h1; subst h3
+    simp only [Proof.flatExpr, encodeQueryExpr, hf, hg]
+    refine ⟨rfl, ?_, trivial⟩
+    simp [queryProofs, List.filter_append, List.filterMap_append] at h2 ⊢
+    omega
+
+/-- `flatExpr_agrees` over an argument list. -/
+theorem flatArgs_agrees (es : List Expr) (n : Nat) :
+    (Proof.flatArgs es n).1 = (encodeQueryArgs es n).1 ∧
+    ((Proof.flatArgs es n).2.1.filter Prod.snd).length
+      = (queryProofs (encodeQueryArgs es n).2.1).length ∧
+    (Proof.flatArgs es n).2.2 = (encodeQueryArgs es n).2.2 := by
+  match es with
+  | [] => simp [Proof.flatArgs, encodeQueryArgs, queryProofs]
+  | e :: es =>
+    obtain ⟨h1, h2, h3⟩ := flatExpr_agrees e n
+    rcases hf : Proof.flatExpr e n with ⟨x, qs, n₁⟩
+    rcases hg : encodeQueryExpr e n with ⟨x', ps, n₁'⟩
+    rw [hf, hg] at h1 h2 h3
+    simp only at h1 h2 h3
+    subst h1; subst h3
+    obtain ⟨k1, k2, k3⟩ := flatArgs_agrees es n₁
+    rcases hf' : Proof.flatArgs es n₁ with ⟨ys, qs2, n₂⟩
+    rcases hg' : encodeQueryArgs es n₁ with ⟨ys', ps2, n₂'⟩
+    rw [hf', hg'] at k1 k2 k3
+    simp only at k1 k2 k3
+    subst k1; subst k3
+    simp only [Proof.flatArgs, encodeQueryArgs, hf, hg, hf', hg']
+    refine ⟨trivial, ?_, trivial⟩
+    simp [queryProofs, List.filter_append, List.filterMap_append] at h2 k2 ⊢
+    omega
+
+end
+
+/-- One source pattern. The entry atom carries a premise proof on both sides exactly when it
+has two value columns, which under `EncodeDomain` no source pattern has. -/
+theorem flatPattern_agrees (p : Pattern) (n : Nat) :
+    ((Proof.flatPattern p n).1.filter Prod.snd).length
+      = (queryProofs (encodePattern p n).1).length ∧
+    (Proof.flatPattern p n).2 = (encodePattern p n).2 := by
+  match p with
+  | .values vs f as =>
+    rcases vs with _ | ⟨a, _ | ⟨b, _ | ⟨c, r⟩⟩⟩ <;>
+      simp [Proof.flatPattern, encodePattern, queryProofs]
+  | .expr e =>
+    obtain ⟨_, h2, h3⟩ := flatExpr_agrees e n
+    rcases hf : Proof.flatExpr e n with ⟨x, qs, n₁⟩
+    rcases hg : encodeQueryExpr e n with ⟨x', ps, n₁'⟩
+    rw [hf, hg] at h2 h3
+    simp only at h2 h3
+    subst h3
+    simp only [Proof.flatPattern, encodePattern, hf, hg]
+    exact ⟨h2, trivial⟩
+  | .eq e₁ e₂ =>
+    obtain ⟨_, h2, h3⟩ := flatExpr_agrees e₁ n
+    rcases hf : Proof.flatExpr e₁ n with ⟨x, qs, n₁⟩
+    rcases hg : encodeQueryExpr e₁ n with ⟨x', ps, n₁'⟩
+    rw [hf, hg] at h2 h3
+    simp only at h2 h3
+    subst h3
+    obtain ⟨_, k2, k3⟩ := flatExpr_agrees e₂ n₁
+    rcases hf' : Proof.flatExpr e₂ n₁ with ⟨y, qs2, n₂⟩
+    rcases hg' : encodeQueryExpr e₂ n₁ with ⟨y', ps2, n₂'⟩
+    rw [hf', hg'] at k2 k3
+    simp only at k2 k3
+    subst k3
+    simp only [Proof.flatPattern, encodePattern, hf, hg, hf', hg']
+    refine ⟨?_, trivial⟩
+    simp [queryProofs, List.filter_append, List.filterMap_append] at h2 k2 ⊢
+    omega
+
+/-- A whole query. -/
+theorem flatQuery_agrees (q : Query) (n : Nat) :
+    ((Proof.flatQuery q n).1.filter Prod.snd).length
+      = (queryProofs (encodeQuery q n).1).length ∧
+    (Proof.flatQuery q n).2 = (encodeQuery q n).2 := by
+  match q with
+  | [] => simp [Proof.flatQuery, encodeQuery, queryProofs]
+  | p :: ps =>
+    obtain ⟨h2, h3⟩ := flatPattern_agrees p n
+    rcases hf : Proof.flatPattern p n with ⟨qs, n₁⟩
+    rcases hg : encodePattern p n with ⟨rs, n₁'⟩
+    rw [hf, hg] at h2 h3
+    simp only at h2 h3
+    subst h3
+    obtain ⟨k2, k3⟩ := flatQuery_agrees ps n₁
+    rcases hf' : Proof.flatQuery ps n₁ with ⟨qs2, n₂⟩
+    rcases hg' : encodeQuery ps n₁ with ⟨rs2, n₂'⟩
+    rw [hf', hg'] at k2 k3
+    simp only at k2 k3
+    subst k3
+    simp only [Proof.flatQuery, encodeQuery, hf, hg, hf', hg']
+    refine ⟨?_, trivial⟩
+    simp [queryProofs, List.filter_append, List.filterMap_append] at h2 k2 ⊢
+    omega
+
+/-- **The arity the checker demands is the arity the encoding declares.** `props` refuses an
+`@Rule_i` whose argument list is not `premiseCount` long, and `proofDecls` declares it at
+`ruleProofArity`; a program `encode` writes can therefore never be refused for its premise
+count. -/
+theorem premiseCount_eq_ruleProofArity (r : Rule) :
+    Proof.premiseCount r = ruleProofArity r := (flatQuery_agrees r.query 0).1
+
+/-! ##### Reading the proofs out of the final state -/
+
+mutual
+
+/-- A term as egglog writes it. `Expr.toEgg` prints the syntax; this prints what it
+evaluates to, which is what a row holds. -/
+def Term.toEgg : Term → String
+  | .lit (.int i) => toString i
+  | .app f args => "(" ++ f ++ Term.toEggArgs args ++ ")"
+
+/-- `Term.toEgg` over an argument list, each preceded by a space. -/
+def Term.toEggArgs : List Term → String
+  | [] => ""
+  | t :: ts => " " ++ t.toEgg ++ Term.toEggArgs ts
+
+end
+
+/-- Every equality the encoded database records, with the proof it was recorded with:
+`@UF (t) ↦ (p, pf)` is `pf : t = p` and `@fView (c…) ↦ (e, pf)` is `pf : f(c…) = e`, both
+read key-to-value (`Encode.lean`, "Proof terms").
+
+Those are the only two tables with a proof column. `@fTerm` has one value column and the
+proof terms' own rows — a proof node is an ordinary constructor application, so `addTerm`
+indexes it — have none, so matching on two value columns picks out exactly the claims. -/
+def proofRows (p : Program) (d : FDatabase) : List (Term × Term × Term) :=
+  d.rows.filterMap fun r =>
+    match r.out with
+    | [b, pf] =>
+        if r.fn == ufName then
+          match r.args with
+          | [t] => some (t, b, pf)
+          | _ => none
+        else (p.ctors.find? fun fk => viewName fk.1 == r.fn).map fun fk =>
+          (.app fk.1 r.args, b, pf)
+    | _ => none
+
+/-- How one recorded equality came out. -/
+inductive Verdict where
+  /-- The proof justifies the equality its row claims. -/
+  | checks
+  /-- The proof is a **copy**: another row records the same proof term for a claim it does
+  justify, carried here. That is what a merge leaves — both rows a collision settles keep
+  the *resident* row's `old1` (`Encode.lean`, `mergeResult`), which proves `k = old0` and
+  not the `old0 = new0` the edge then claims, and the row it was taken from survives because
+  a merge in this model displaces rather than deletes. A classifier and not a provenance:
+  `@Fiat` is written by every build, so the witness row this finds need not be the one the
+  merge read. Both claims are printed, so the reading is the reader's. -/
+  | displaced (a b : Term)
+  /-- It justifies nothing, and no other row records it either. -/
+  | unjustified
+  deriving DecidableEq
+
+/-- The verdict is `checks`. -/
+def Verdict.isChecks : Verdict → Bool
+  | .checks => true
+  | _ => false
+
+/-- The verdict is `displaced`. -/
+def Verdict.isDisplaced : Verdict → Bool
+  | .displaced _ _ => true
+  | _ => false
+
+/-- The claim some other row records this proof for and which it does justify, if there is
+one. A row ending where this claim ends is preferred, since that is where a merge's `old1`
+came from — `old0` is one of the two endpoints of the edge `mergeBody` writes. `ChecksAt` is
+asked only of rows carrying the same proof term, so the scan is cheap. -/
+def displacedBy (C : Proof.Ctx) (rows : List (Term × Term × Term))
+    (cl : Term × Term × Term) : Option (Term × Term) :=
+  let ok := fun (r : Term × Term × Term) =>
+    r.2.2 == cl.2.2 && !((r.1, r.2.1) == (cl.1, cl.2.1)) && Proof.ChecksAt C r.2.2 r.1 r.2.1
+  let hit : Option (Term × Term × Term) :=
+    match rows.find? fun (r : Term × Term × Term) =>
+        (r.2.1 == cl.1 || r.2.1 == cl.2.1) && ok r with
+    | some r => some r
+    | none => rows.find? ok
+  hit.map fun r => (r.1, r.2.1)
+
+/-- One row's verdict. -/
+def verdictOf (C : Proof.Ctx) (rows : List (Term × Term × Term))
+    (cl : Term × Term × Term) : Verdict :=
+  if Proof.ChecksAt C cl.2.2 cl.1 cl.2.1 then .checks
+  else match displacedBy C rows cl with
+    | some (a, b) => .displaced a b
+    | none => .unjustified
+
+/-- What checking one case reports. -/
+inductive CheckOutcome where
+  /-- Not in `Program.EncodeDomain`, so `encode` says nothing about it. -/
+  | outOfDomain
+  /-- The encoded run did not finish, so there is no final state to read. -/
+  | encodedStuck (at? : Option (Nat × Cmd))
+  /-- Every recorded equality, with its verdict. -/
+  | verdicts (vs : List (Verdict × Term × Term × Term))
+
+/-- Encode one case, run it, and check every proof the final state holds against the
+**source** program. `fuel` is `.saturate`'s, as in `encodeCompare`. -/
+def encodeCheck (fuel : Nat) (p₀ : Program) : CheckOutcome :=
+  let p := p₀.declared
+  if !p.encodeDomainB then .outOfDomain
+  else
+    let q := encode p
+    match execAt fuel FDatabase.empty q with
+    | none => .encodedStuck (stuckAt fuel FDatabase.empty 0 q)
+    | some e =>
+      let C := Proof.ctxOf p
+      let rows := proofRows p e
+      .verdicts (rows.map fun cl => (verdictOf C rows cl, cl))
+
+/-- One line per case, plus one per equality the checker does not accept. -/
+def CheckOutcome.render (o : CheckOutcome) : String :=
+  match o with
+  | .outOfDomain => "out-of-domain"
+  | .encodedStuck none => "encoded-stuck (no command)"
+  | .encodedStuck (some (i, c)) => s!"encoded-stuck at #{i} {c.toEgg}"
+  | .verdicts vs =>
+    let nc := (vs.filter fun p => p.1.isChecks).length
+    let nd := (vs.filter fun p => p.1.isDisplaced).length
+    let bad := (vs.filter fun p => !p.1.isChecks).map fun p =>
+      let claim := p.2.1.toEgg ++ " = " ++ p.2.2.1.toEgg ++ " by " ++ p.2.2.2.toEgg
+      match p.1 with
+      | .displaced a b =>
+        "\n  displaced   " ++ claim ++ ", which proves " ++ a.toEgg ++ " = " ++ b.toEgg
+      | _ => "\n  unjustified " ++ claim
+    (if vs.length == nc + nd then "CHECKS " else "REJECT ")
+      ++ s!"{nc} checked, {nd} merge-displaced, \
+            {vs.length - nc - nd} unjustified of {vs.length}"
+      ++ String.join bad
+
 /-! #### What the harness pins
 
 The census. `encode`'s fragment is the constructor one, so the in-domain cases are exactly
@@ -1851,10 +2145,16 @@ def encodeSelfTests : List (String × (Unit → Bool)) :=
     ("unionCase agrees on classes", fun _ => (encodeCompare runFuel unionCase).agrees),
     ("unionCase entries exceed classes", fun _ =>
       !(encodeCompare runFuel unionCase).entriesAgree),
-    -- The regression test for the rebuild-after-action fix. Before it, `upCase` reported
-    -- `DIFFER Wrapper:1/2/2` — the source's one `Wrapper` class against the target's two,
-    -- because the congruence a top-level `union` creates never travelled up a level.
-    ("upCase agrees on classes", fun _ => (encodeCompare runFuel upCase).agrees) ]
+    -- The regression test for the rebuild-after-action fix: the congruence a top-level
+    -- `union` creates has to travel up a level, and did not until `encodeCmd` emitted a
+    -- rebuild after an action. `upCase` is the same shape at binary `Add` and is what stood
+    -- here, reporting `DIFFER Wrapper:1/2/2` before the fix. **The proof column retired
+    -- it**: 1.1 s before, about 1 h 50 m after, which was the whole of this selftest's two
+    -- hours — the enumerator costs `|valueTerms| ^ |vars|` and a binary view's rebuild rule
+    -- has one variable more than a unary one. `upThinCase` is that unary shape, `AGREE
+    -- H:1/1/2 F:1/1/2 A:1/1/1 B:1/1/1` in 98 s, and it fails the same way for the same
+    -- reason. The swap takes the whole list to 7 min 3 s, which is a gate again.
+    ("upThinCase agrees on classes", fun _ => (encodeCompare runFuel upThinCase).agrees) ]
 
 /-! **The negative control, and a defect it exposes.** Put `unionCase`'s two applications
 under a `Wrapper` and the congruence has to travel up a level: the source says one `Wrapper`
@@ -1875,7 +2175,7 @@ rebuild.
 nothing else was: the `up-thin-run` probe is `upThinCase ++ [.run ""]`, whose source counts
 are unchanged and whose encoded counts then agreed. **`encodeCmd` now emits
 `Cmd.saturate rebuildRuleset` after a top-level action too**, which is where egglog puts it
-— after every command but a function, rule or sort declaration. `upCase` is kept as the
+— after every command but a function, rule or sort declaration. `upThinCase` is kept as the
 regression test for that, in `encodeSelfTests` rather than as a `#guard`, because running
 the rebuild after each action costs a saturation per action.
 
@@ -1948,10 +2248,11 @@ The two random families are named apart so the script can report a profile distr
 for each — a collapsing distribution is how a generator that has stopped exercising
 anything shows up, and a single pooled number would hide it.
 
-`difftest encode-domain` prints how much of the corpus `encode` is defined on, and
+`difftest encode-domain` prints how much of the corpus `encode` is defined on,
 `difftest encode <fuel> [case…]` runs the tuple-count comparison — every case, or the named
-ones. These write nothing and never invoke egglog; the comparison is between the model and
-itself (`Egglog.encodeCompare`). -/
+ones — and `difftest check <fuel> [case…]` runs the encoded program and checks every proof
+its final state records against the source program (`Egglog.encodeCheck`). These write
+nothing and never invoke egglog; the comparison is between the model and itself. -/
 def main (args : List String) : IO UInt32 := do
   match args with
   | ["encode-domain"] =>
@@ -1981,6 +2282,14 @@ def main (args : List String) : IO UInt32 := do
         else (allCases ++ probeCases).filter fun c => names.contains c.1
       for c in cases do IO.println (encodeLine n c)
       return 0
+  | "check" :: fuel :: names =>
+    match fuel.toNat? with
+    | none => IO.eprintln s!"difftest: bad fuel {fuel}"; return 1
+    | some n =>
+      let cases := if names.isEmpty then allCases
+        else (allCases ++ probeCases).filter fun c => names.contains c.1
+      for c in cases do IO.println s!"{c.1}: {(Egglog.encodeCheck n c.2).render}"
+      return 0
   | [dir, "curated"] =>
     IO.FS.createDirAll dir
     for (name, p) in curated do writeCase dir name p
@@ -2007,4 +2316,6 @@ def main (args : List String) : IO UInt32 := do
       return 0
   | _ =>
     IO.eprintln "usage: difftest <dir> curated | merge | seed <n> | mergeseed <n>"
+    IO.eprintln "       difftest encode-domain | encode-cost | encode-selftest"
+    IO.eprintln "       difftest encode <fuel> [case…] | check <fuel> [case…]"
     return 1
