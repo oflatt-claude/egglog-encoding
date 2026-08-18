@@ -32,11 +32,11 @@
        (guard
          (or (bool-!= e1 e2)
              (and (bool= e1 e2)
-                  (or (and (bool= (ordering-max m1 b1) b1) (bool-!= m1 b1))
-              (and (bool= m1 b1)
-                   (and (bool= (ordering-max m2 b2) b2) (bool-!= m2 b2))))))))
+                  (or (and (bool= (ordering-max m1_o b1) b1) (bool-!= m1_o b1))
+              (and (bool= m1_o b1)
+                   (and (bool= (ordering-max m2_o b2) b2) (bool-!= m2_o b2))))))))
       ((RenamesToLeader e1 m e2)
-       (delete (Lam m1 c1 m2 c2))))
+       (delete (Lam m1_o c1 m2_o c2))))
 
 ;; the same solve kept as a symmetry, non-destructively
 (rule ((= e (Lam m1_o c1 m2_o c2))
@@ -102,11 +102,11 @@
        (guard
          (or (bool-!= e1 e2)
              (and (bool= e1 e2)
-                  (or (and (bool= (ordering-max m1 b1) b1) (bool-!= m1 b1))
-              (and (bool= m1 b1)
-                   (and (bool= (ordering-max m2 b2) b2) (bool-!= m2 b2))))))))
+                  (or (and (bool= (ordering-max m1_o b1) b1) (bool-!= m1_o b1))
+              (and (bool= m1_o b1)
+                   (and (bool= (ordering-max m2_o b2) b2) (bool-!= m2_o b2))))))))
       ((RenamesToLeader e1 m e2)
-       (delete (App m1 c1 m2 c2))))
+       (delete (App m1_o c1 m2_o c2))))
 
 ;; the same solve kept as a symmetry, non-destructively
 (rule ((= e (App m1_o c1 m2_o c2))
@@ -174,13 +174,13 @@
        (guard
          (or (bool-!= e1 e2)
              (and (bool= e1 e2)
-                  (or (and (bool= (ordering-max m1 b1) b1) (bool-!= m1 b1))
-              (and (bool= m1 b1)
-                   (or (and (bool= (ordering-max m2 b2) b2) (bool-!= m2 b2))
-              (and (bool= m2 b2)
-                   (and (bool= (ordering-max m3 b3) b3) (bool-!= m3 b3))))))))))
+                  (or (and (bool= (ordering-max m1_o b1) b1) (bool-!= m1_o b1))
+              (and (bool= m1_o b1)
+                   (or (and (bool= (ordering-max m2_o b2) b2) (bool-!= m2_o b2))
+              (and (bool= m2_o b2)
+                   (and (bool= (ordering-max m3_o b3) b3) (bool-!= m3_o b3))))))))))
       ((RenamesToLeader e1 m e2)
-       (delete (Let m1 c1 m2 c2 m3 c3))))
+       (delete (Let m1_o c1 m2_o c2 m3_o c3))))
 
 ;; the same solve kept as a symmetry, non-destructively
 (rule ((= e (Let m1_o c1 m2_o c2 m3_o c3))

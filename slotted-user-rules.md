@@ -731,9 +731,34 @@ maintenance. Changing which spelling the `delete` targets -- the matched edges r
 than the composed ones -- does not help.
 
 No equality is at stake, since the two rows are already one class: like the migration
-guard, this leaves a node un-canonicalised rather than losing a fact. It is recorded
-rather than fixed, because the guard's direction is what keeps the alpha-finder from
-firing both ways on every pair.
+guard, this leaves a node un-canonicalised rather than losing a fact.
+
+**Fixed.** The tie-break was comparing the *composed* edges against the stored ones,
+which mixes two different things -- and composing with a symmetry can raise the tuple
+past every stored spelling, so no instantiation qualifies. Comparing stored against
+stored is a total order on row spellings, so for two distinct rows exactly one
+direction fires, which is all the guard was for. The `delete` then has to name the row
+that was matched rather than its composed form, or it removes a row that may not
+exist.
+
+`S1` now agrees, so 42 of 43 cases match on node counts. Curated 43/43, generated
+250/250, all six egg files pass, and the mutation matrix is unchanged (`root-only` 15
+cases, `union-id` 3, `unordered` 1, `slot-late` 1).
+
+### The other divergence is growth, not a missing merge
+
+`X1` looks like the same kind of gap -- one `h` node too many -- but it is not. Its
+node count *grows* with the round budget: 7, 7, 7, then 9 at eighty extra rounds, and
+identically so under the old tie-break, so this is neither caused nor cured by the
+change above. `X1`'s rule builds a node equal to its own child, and the encoding makes
+a new row per spelling where the reference keeps one entry per *shape*, so alpha-
+variants accumulate faster than the alpha-finder retires them. The reference saturates
+at six.
+
+That is the same root cause as the minting fan-out: a row is keyed by its renamings,
+and the reference's node key is a shape. It is not a local rule fix -- it wants either
+an alpha-invariant key for rows, or an alpha-finder that keeps pace with what the
+actions build.
 
 ### Which slotted-egraphs is this compared against?
 

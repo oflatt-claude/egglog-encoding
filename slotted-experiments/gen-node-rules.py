@@ -190,9 +190,9 @@ def alpha_finder(name, sig):
        (guard
          (or (bool-!= e1 e2)
              (and (bool= e1 e2)
-                  {lex_greater(a, b)}))))
+                  {lex_greater(a_o, b)}))))
       ((RenamesToLeader e1 m e2)
-       (delete {pattern(name, sig, edges=a)})))
+       (delete {pattern(name, sig, edges=a_o)})))
 """
 
 

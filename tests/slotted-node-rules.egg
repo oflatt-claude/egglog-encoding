@@ -28,11 +28,11 @@
        (guard
          (or (bool-!= e1 e2)
              (and (bool= e1 e2)
-                  (or (and (bool= (ordering-max m1 b1) b1) (bool-!= m1 b1))
-              (and (bool= m1 b1)
-                   (and (bool= (ordering-max m2 b2) b2) (bool-!= m2 b2))))))))
+                  (or (and (bool= (ordering-max m1_o b1) b1) (bool-!= m1_o b1))
+              (and (bool= m1_o b1)
+                   (and (bool= (ordering-max m2_o b2) b2) (bool-!= m2_o b2))))))))
       ((RenamesToLeader e1 m e2)
-       (delete (App2 p1 m1 c1 m2 c2))))
+       (delete (App2 p1 m1_o c1 m2_o c2))))
 
 ;; the same solve kept as a symmetry, non-destructively
 (rule ((= e (App2 p1 m1_o c1 m2_o c2))
@@ -100,13 +100,13 @@
        (guard
          (or (bool-!= e1 e2)
              (and (bool= e1 e2)
-                  (or (and (bool= (ordering-max m1 b1) b1) (bool-!= m1 b1))
-              (and (bool= m1 b1)
-                   (or (and (bool= (ordering-max m2 b2) b2) (bool-!= m2 b2))
-              (and (bool= m2 b2)
-                   (and (bool= (ordering-max m3 b3) b3) (bool-!= m3 b3))))))))))
+                  (or (and (bool= (ordering-max m1_o b1) b1) (bool-!= m1_o b1))
+              (and (bool= m1_o b1)
+                   (or (and (bool= (ordering-max m2_o b2) b2) (bool-!= m2_o b2))
+              (and (bool= m2_o b2)
+                   (and (bool= (ordering-max m3_o b3) b3) (bool-!= m3_o b3))))))))))
       ((RenamesToLeader e1 m e2)
-       (delete (App3 p1 m1 c1 m2 c2 m3 c3))))
+       (delete (App3 p1 m1_o c1 m2_o c2 m3_o c3))))
 
 ;; the same solve kept as a symmetry, non-destructively
 (rule ((= e (App3 p1 m1_o c1 m2_o c2 m3_o c3))
@@ -190,15 +190,15 @@
        (guard
          (or (bool-!= e1 e2)
              (and (bool= e1 e2)
-                  (or (and (bool= (ordering-max m1 b1) b1) (bool-!= m1 b1))
-              (and (bool= m1 b1)
-                   (or (and (bool= (ordering-max m2 b2) b2) (bool-!= m2 b2))
-              (and (bool= m2 b2)
-                   (or (and (bool= (ordering-max m3 b3) b3) (bool-!= m3 b3))
-              (and (bool= m3 b3)
-                   (and (bool= (ordering-max m4 b4) b4) (bool-!= m4 b4))))))))))))
+                  (or (and (bool= (ordering-max m1_o b1) b1) (bool-!= m1_o b1))
+              (and (bool= m1_o b1)
+                   (or (and (bool= (ordering-max m2_o b2) b2) (bool-!= m2_o b2))
+              (and (bool= m2_o b2)
+                   (or (and (bool= (ordering-max m3_o b3) b3) (bool-!= m3_o b3))
+              (and (bool= m3_o b3)
+                   (and (bool= (ordering-max m4_o b4) b4) (bool-!= m4_o b4))))))))))))
       ((RenamesToLeader e1 m e2)
-       (delete (App4 p1 m1 c1 m2 c2 m3 c3 m4 c4))))
+       (delete (App4 p1 m1_o c1 m2_o c2 m3_o c3 m4_o c4))))
 
 ;; the same solve kept as a symmetry, non-destructively
 (rule ((= e (App4 p1 m1_o c1 m2_o c2 m3_o c3 m4_o c4))
@@ -312,9 +312,9 @@
        (guard
          (or (bool-!= e1 e2)
              (and (bool= e1 e2)
-                  (and (bool= (ordering-max m1 b1) b1) (bool-!= m1 b1))))))
+                  (and (bool= (ordering-max m1_o b1) b1) (bool-!= m1_o b1))))))
       ((RenamesToLeader e1 m e2)
-       (delete (Scale p1 m1 c1))))
+       (delete (Scale p1 m1_o c1))))
 
 ;; the same solve kept as a symmetry, non-destructively
 (rule ((= e (Scale p1 m1_o c1))
