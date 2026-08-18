@@ -411,6 +411,8 @@ beside it, each over the whole corpus:
 ```text
 isomorphism.py     the two e-graphs are isomorphic -- classes, slots, symmetry
                    groups and nodes -- by constructing and checking a witness
+narrow-edges.py    no edge's domain is narrower than its child's slot set, the
+                   direction check 6 does not test
 nodecounts.py      e-nodes per operator, against the reference
 fixpoint.py        each case reaches a fixpoint of the *rules*, not just of the
                    database, which `(run N)` cannot distinguish
@@ -1165,6 +1167,41 @@ with no egglog and no reference involved: a graph with every slot renamed must b
 missing one symmetry, and one edge moved onto another slot — must be *rejected*. The
 second of those is rejected by exhausting the search, which is what makes a negative
 answer worth anything.
+
+### The narrow direction of Def. 4 is now checked
+
+`check 6` looks for an edge *wider* than its child's slot set. The narrow direction — an
+edge whose domain is *smaller* — was recorded as "not checkable this way" and left to
+`compose-total`. It is checkable against `ClassSlots`, and
+`slotted-experiments/xdiff/narrow-edges.py` does it: **0 narrow edges over 44 curated and
+250 generated cases.**
+
+That probe earned its keep immediately, by refuting a claim rather than confirming one. The
+one case the isomorphism check cannot decide, `fuzz130`, appeared under an attempted fix to
+have an edge whose domain was empty where the reference's was not — which would have been a
+narrow violation and the first real difference found. It was not: the probe queries egglog
+directly for `map-length m < map-length (ClassSlots child)` and reported zero, so the empty
+edge was manufactured by the fix, not present in the encoding.
+
+The mechanism was this file's own most-repeated warning. Translating a node into another
+frame by composing with a map over the *class's* slots truncates any slot the node carries
+that its class does not — which Def. 4 permits nodes to do — so the redundant slot is
+silently dropped:
+
+```text
+u = {2→0}   the value's class slots to its representative's
+m = {0→0}   an edge whose image is the node-local slot 0
+compose(u, m) = {}          the slot is gone
+```
+
+**The merge that needed it is not in the tree.** Making one class out of the several `U`
+values of a slotted class needs more than a frame translation: only a *bijection* between
+two slot sets means "the same class named differently" — a partial renaming is the
+redundancy relation, and merging on it collapses classes the reference keeps apart — and
+even with that restriction two curated cases came out wrong in *opposite* directions, one
+over-merged and one under-merged. A comparison that invents differences is worse than one
+that admits it cannot decide, so `fuzz130` stays "not comparable" and the merge stays an
+open problem.
 
 Three limits worth stating.
 
