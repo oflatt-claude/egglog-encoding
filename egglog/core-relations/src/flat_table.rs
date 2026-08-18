@@ -5,10 +5,7 @@
 //! private [`RowBuffer`] batches and submit them to a shared queue when dropped;
 //! [`Table::merge`] appends those batches to the table's row buffer in parallel.
 
-use std::{
-    any::Any,
-    sync::{Arc, Mutex},
-};
+use std::{any::Any, sync::Arc};
 
 use crossbeam_queue::SegQueue;
 
@@ -21,7 +18,8 @@ use crate::{
     parallel,
     row_buffer::RowBuffer,
     table_spec::{
-        Constraint, Generation, MutationBuffer, Offset, Row, Table, TableSpec, TableVersion,
+        Constraint, Generation, MutationBuffer, Offset, Row, Table, TableSchema, TableSpec,
+        TableVersion,
     },
 };
 
@@ -85,28 +83,14 @@ pub struct FlatTable {
     generation: Generation,
     rows: RowBuffer,
     pending: Arc<SegQueue<RowBuffer>>,
-    snapshot_lock: Arc<Mutex<()>>,
 }
 
 impl Clone for FlatTable {
     fn clone(&self) -> Self {
-        // Taking a snapshot temporarily drains the queue. Serialize snapshots
-        // so concurrent clones cannot observe that transient empty state.
-        let _snapshot = self.snapshot_lock.lock().unwrap();
-        let cloned_pending = SegQueue::new();
-        let mut submitted = Vec::new();
-        while let Some(rows) = self.pending.pop() {
-            submitted.push(rows);
-        }
-        for rows in submitted {
-            cloned_pending.push(rows.clone());
-            self.pending.push(rows);
-        }
         Self {
             generation: self.generation,
             rows: self.rows.clone(),
-            pending: Arc::new(cloned_pending),
-            snapshot_lock: Arc::new(Mutex::new(())),
+            pending: Arc::new(SegQueue::new()),
         }
     }
 }
@@ -118,7 +102,6 @@ impl FlatTable {
             generation: Generation::new(0),
             rows: RowBuffer::new(n_columns),
             pending: Arc::new(SegQueue::new()),
-            snapshot_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -149,11 +132,9 @@ impl Table for FlatTable {
 
     fn spec(&self) -> TableSpec {
         TableSpec {
-            // Treat the physical row as a relation. Advertising a key/value
-            // split would grant the query planner a functional dependency that
-            // this table deliberately does not enforce.
-            n_keys: self.rows.arity(),
-            n_vals: 0,
+            schema: TableSchema::Flat {
+                n_cols: self.rows.arity(),
+            },
             uncacheable_columns: Default::default(),
             allows_delete: false,
         }

@@ -1,7 +1,8 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use crate::{
-    FlatTable, Table, Value,
+    Database, ExternalFunctionId, FlatTable, QueryError, Table, TableSchema, Value,
+    action::WriteVal,
     numeric_id::NumericId,
     offsets::{OffsetRange, RowId, SubsetRef},
     table_shortcuts::v,
@@ -35,8 +36,7 @@ fn appends_preserve_rows_duplicates_and_deltas() {
     let mut table = WrappedTable::new(FlatTable::new(3));
 
     let spec = table.spec();
-    assert_eq!(spec.n_keys, 3);
-    assert_eq!(spec.n_vals, 0);
+    assert_eq!(spec.schema, TableSchema::Flat { n_cols: 3 });
     assert!(!spec.allows_delete);
     assert!(!table.has_stale_rows());
 
@@ -253,7 +253,7 @@ fn clear_discards_submitted_and_late_batches() {
 }
 
 #[test]
-fn clone_owns_an_independent_pending_snapshot() {
+fn clone_copies_committed_rows_and_has_independent_pending_state() {
     empty_execution_state!(exec_state);
     let mut original = WrappedTable::new(FlatTable::new(2));
     stage(&original, &[[v(0), v(0)]]);
@@ -272,15 +272,16 @@ fn clone_owns_an_independent_pending_snapshot() {
     );
     assert_eq!(
         sorted_rows(&cloned),
-        vec![vec![v(0), v(0)], vec![v(1), v(1)], vec![v(3), v(3)]]
+        vec![vec![v(0), v(0)], vec![v(3), v(3)]]
     );
 }
 
 #[test]
-fn concurrent_clones_see_the_same_pending_snapshot() {
+fn concurrent_clones_see_the_same_committed_snapshot() {
     empty_execution_state!(exec_state);
-    let original = WrappedTable::new(FlatTable::new(2));
+    let mut original = WrappedTable::new(FlatTable::new(2));
     stage(&original, &[[v(1), v(1)], [v(2), v(2)]]);
+    original.merge(&mut exec_state);
 
     let (mut left, mut right) = std::thread::scope(|scope| {
         let left = scope.spawn(|| original.dyn_clone());
@@ -292,6 +293,54 @@ fn concurrent_clones_see_the_same_pending_snapshot() {
 
     assert_eq!(sorted_rows(&left), sorted_rows(&right));
     assert_eq!(left.len(), 2);
+}
+
+#[test]
+fn rule_builder_allows_scans_but_rejects_keyed_operations() {
+    let mut db = Database::default();
+    let flat = db.add_table(FlatTable::new(2), [], []);
+    let mut rules = db.new_rule_set();
+    let mut query = rules.new_rule();
+    let left = query.new_var_named("left");
+    let right = query.new_var_named("right");
+    query
+        .add_atom(flat, &[left.into(), right.into()], &[])
+        .unwrap();
+
+    let mut action = query.build();
+    assert!(matches!(
+        action.lookup_or_insert(
+            flat,
+            &[left.into()],
+            &[WriteVal::QueryEntry(right.into())],
+            ColumnId::new(1),
+        ),
+        Err(QueryError::UnsupportedKeyedOperation { table }) if table == flat
+    ));
+    assert!(matches!(
+        action.lookup_with_default(flat, &[left.into()], right.into(), ColumnId::new(1)),
+        Err(QueryError::UnsupportedKeyedOperation { table }) if table == flat
+    ));
+    assert!(matches!(
+        action.lookup(flat, &[left.into()], ColumnId::new(1)),
+        Err(QueryError::UnsupportedKeyedOperation { table }) if table == flat
+    ));
+    assert!(matches!(
+        action.lookup_with_fallback(
+            flat,
+            &[left.into()],
+            ColumnId::new(1),
+            ExternalFunctionId::new(0),
+            &[],
+        ),
+        Err(QueryError::UnsupportedKeyedOperation { table }) if table == flat
+    ));
+    assert!(matches!(
+        action.remove(flat, &[left.into()]),
+        Err(QueryError::UnsupportedKeyedOperation { table }) if table == flat
+    ));
+    action.insert(flat, &[left.into(), right.into()]).unwrap();
+    action.build();
 }
 
 #[test]
