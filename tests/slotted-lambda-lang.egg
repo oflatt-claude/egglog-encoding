@@ -22,7 +22,7 @@
 (let $id5 (Lam (map-of 0 5) (Var 0) (map-of 0 5) (Var 0)))
 (let $id6 (Lam (map-of 0 6) (Var 0) (map-of 0 6) (Var 0)))
 
-(run 20)
+(run-schedule (saturate (run slotted)))
 
 (check (= $id5 $id6))
 ;; the bound slot is not free, so the class has no slots
@@ -39,7 +39,7 @@
 (let $id5   (Lam (map-of 0 5) (Var 0) (map-of 0 5) (Var 0)))
 (let $const (Lam (map-of 0 5) (Var 0) (map-of 0 7) (Var 0)))
 
-(run 20)
+(run-schedule (saturate (run slotted)))
 
 (fail (check (= $id5 $const)))
 ;; and the constant function keeps $7 free
@@ -59,7 +59,7 @@
 (let $l5 (Let (map-of 0 5) (Var 0) (map-of 0 5) (Var 0) (map-empty) $f))
 (let $l6 (Let (map-of 0 6) (Var 0) (map-of 0 6) (Var 0) (map-empty) $f))
 
-(run 20)
+(run-schedule (saturate (run slotted)))
 
 (check (= $l5 $l6))
 (check (RenamesToLeader $l5 (map-empty) $l5))
@@ -75,7 +75,7 @@
 (let $a (App (map-of 0 5) (Var 0) (map-of 0 5) (Var 0)))
 (let $l (Lam (map-of 0 5) (Var 0) (map-of 0 5) (Var 0)))
 
-(run 20)
+(run-schedule (saturate (run slotted)))
 
 (fail (check (= $a $l)))
 ;; App binds nothing, so $5 stays free

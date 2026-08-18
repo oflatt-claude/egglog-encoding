@@ -25,7 +25,7 @@
 (let $b (Sum (map-empty) $r (map-of 0 7) (Var 0) (map-of 0 8) (Var 0)
              (map-empty) (Null)))
 
-(run 25)
+(run-schedule (saturate (run slotted)))
 
 (check (= $a $b))
 ;; neither bound slot is free, so the class has none
@@ -43,7 +43,7 @@
 (let $c (Sum (map-empty) (Null) (map-of 0 5) (Var 0) (map-of 0 6) (Var 0)
              (map-of 0 9) (Var 0)))
 
-(run 25)
+(run-schedule (saturate (run slotted)))
 
 (check (RenamesToLeader $c (map-of 9 9) $c))
 
@@ -63,7 +63,7 @@
 (let $second (Sum (map-empty) (Null) (map-of 0 5) (Var 0) (map-of 0 6) (Var 0)
                   (map-of 0 6) (Var 0)))
 
-(run 25)
+(run-schedule (saturate (run slotted)))
 
 ;; both have no free slots ...
 (check (RenamesToLeader $first (map-empty) $first))

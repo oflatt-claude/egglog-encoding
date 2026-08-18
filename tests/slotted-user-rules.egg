@@ -80,7 +80,8 @@
 
 (let $f01 (App2 "f" (map-of 0 0) (Var 0)
                    (map-of 1 1) (Var 1)))
-(run 15)
+(run-schedule (saturate (run slotted))
+              (repeat 15 (seq (run) (saturate (run slotted)))))
 
 ;; commutativity shows up as the e-class gaining the swap symmetry
 (check (RenamesToLeader $f01 m $f01)
@@ -132,7 +133,8 @@
 (push)
 (let $ff (App2 "f" (map-of 7 7) (Var 7)
                   (map-of 7 7) (Var 7)))
-(run 15)
+(run-schedule (saturate (run slotted))
+              (repeat 15 (seq (run) (saturate (run slotted)))))
 (check (Hit $ff (Var 0)))
 (check (Enum $ff (Var 0)))
 (pop)
@@ -143,7 +145,8 @@
 (push)
 (let $fg (App2 "f" (map-of 7 7) (Var 7)
                   (map-of 8 8) (Var 8)))
-(run 15)
+(run-schedule (saturate (run slotted))
+              (repeat 15 (seq (run) (saturate (run slotted)))))
 (fail (check (Hit $fg x)))
 (fail (check (Enum $fg x)))
 (pop)
@@ -157,11 +160,13 @@
 (let $a10 (App2 "a" (map-of 1 1) (Var 1)
                    (map-of 0 0) (Var 0)))
 (union $a01 $a10)
-(run 20)
+(run-schedule (saturate (run slotted))
+              (repeat 20 (seq (run) (saturate (run slotted)))))
 
 (let $t (App2 "f" (map-of 0 0 1 1) $a01
                  (map-of 0 1 1 0) $a01))
-(run 20)
+(run-schedule (saturate (run slotted))
+              (repeat 20 (seq (run) (saturate (run slotted)))))
 (check (Hit $t $a01))
 (check (Enum $t $a01))
 (fail (check (NaiveHit $t $a01)))
@@ -221,7 +226,8 @@
                   (map-of 0 1) (Var 0)))
 (let $f  (App2 "f" (map-of 0 0) (Var 0)
                   (map-of 0 0 1 1) $g))
-(run 20)
+(run-schedule (saturate (run slotted))
+              (repeat 20 (seq (run) (saturate (run slotted)))))
 
 ;; mp2 is the identity, so ?c lands on $0 and ?d on $1 -- both in the pattern
 ;; slot space fixed by atom 1.
@@ -274,7 +280,8 @@
 (union $g $k)
 (let $f (App2 "f" (map-of 0 0) (Var 0) (map-of 0 0) $g))
 
-(run 25)
+(run-schedule (saturate (run slotted))
+              (repeat 25 (seq (run) (saturate (run slotted)))))
 
 ;; the total spelling keeps a slot for ?d ...
 (check (Chain $f mc md) (= (map-length md) 1))
@@ -342,7 +349,8 @@
 (push)
 (let $P (App2 "f" (map-of 0 0) (Var 0) (map-of 1 1) (Var 1)))
 (let $Q (App2 "g" (map-of 0 0) (Var 0) (map-of 1 1) (Var 1)))
-(run 20)
+(run-schedule (saturate (run slotted))
+              (repeat 20 (seq (run) (saturate (run slotted)))))
 (check (Join $P $Q m) (= (map-length m) 2))
 (fail (check (TooEager $P $Q)))
 (pop)
@@ -353,7 +361,8 @@
 (push)
 (let $P (App2 "f" (map-of 0 0) (Var 0) (map-of 1 1) (Var 1)))
 (let $Q (App2 "g" (map-of 0 0) (Var 0) (map-of 0 0) (Var 0)))
-(run 20)
+(run-schedule (saturate (run slotted))
+              (repeat 20 (seq (run) (saturate (run slotted)))))
 (fail (check (Join $P $Q m)))
 (fail (check (Join $Q $P m)))
 (pop)
@@ -365,11 +374,13 @@
 (let $a01 (App2 "a" (map-of 0 0) (Var 0) (map-of 1 1) (Var 1)))
 (let $a10 (App2 "a" (map-of 1 1) (Var 1) (map-of 0 0) (Var 0)))
 (union $a01 $a10)
-(run 20)
+(run-schedule (saturate (run slotted))
+              (repeat 20 (seq (run) (saturate (run slotted)))))
 
 (let $P (App2 "f" (map-of 0 0 1 1) $a01 (map-of 0 0) (Var 0)))
 (let $Q (App2 "g" (map-of 0 1 1 0) $a01 (map-of 0 0) (Var 0)))
-(run 20)
+(run-schedule (saturate (run slotted))
+              (repeat 20 (seq (run) (saturate (run slotted)))))
 (check (Join $P $Q m))
 (check (TooEager $P $Q))
 (fail (check (NaiveJoin $P $Q)))
@@ -430,7 +441,8 @@
 (push)
 (let $h (App2 "h" (map-of 0 5) (Var 0)
                  (map-of 0 5) (Var 0)))
-(run 25)
+(run-schedule (saturate (run slotted))
+              (repeat 25 (seq (run) (saturate (run slotted)))))
 (check (Tri $f q m)
        (= (map-get m 5) 0)
        (= (map-length m) 1))
@@ -441,7 +453,8 @@
 (push)
 (let $h2 (App2 "h" (map-of 0 5) (Var 0)
                   (map-of 0 6) (Var 0)))
-(run 25)
+(run-schedule (saturate (run slotted))
+              (repeat 25 (seq (run) (saturate (run slotted)))))
 (fail (check (Tri $f q m)))
 (pop)
 
@@ -505,7 +518,8 @@
 
 (let $P (App2 "f" (map-of 0 0) (Var 0) (map-of 1 1) (Var 1)))
 (let $Q (App2 "g" (map-of 0 0) (Var 0) (map-of 5 5) (Var 5)))
-(run 20)
+(run-schedule (saturate (run slotted))
+              (repeat 20 (seq (run) (saturate (run slotted)))))
 (check (BadEdge "h" m c))                    ; the empty edge to ?z
 (pop)
 
@@ -521,7 +535,8 @@
 (push)
 (let $P (App2 "f" (map-of 0 0) (Var 0) (map-of 1 1) (Var 1)))
 (let $Q (App2 "g" (map-of 0 0) (Var 0) (map-of 5 5) (Var 5)))
-(run 20)
+(run-schedule (saturate (run slotted))
+              (repeat 20 (seq (run) (saturate (run slotted)))))
 (fail (check (BadEdge f m c)))                       ; nothing malformed ...
 (fail (check (RenamesToLeader $P m $P) (= (map-length m) 1)))  ; ... and nothing derived
 (pop)
@@ -530,7 +545,8 @@
 (push)
 (let $P (App2 "f" (map-of 0 0) (Var 0) (map-of 1 1) (Var 1)))
 (let $Q (App2 "g" (map-of 0 0) (Var 0) (map-of 0 0) (Var 0)))
-(run 20)
+(run-schedule (saturate (run slotted))
+              (repeat 20 (seq (run) (saturate (run slotted)))))
 (check (RenamesToLeader $P m $P) (= (map-length m) 2))
 (pop)
 
@@ -549,7 +565,8 @@
 (push)
 (let $P (App2 "f" (map-of 0 0) (Var 0) (map-of 1 1) (Var 1)))
 (let $Q (App2 "g" (map-of 0 0) (Var 0) (map-of 5 5) (Var 5)))
-(run 20)
+(run-schedule (saturate (run slotted))
+              (repeat 20 (seq (run) (saturate (run slotted)))))
 (fail (check (BadEdge f m c)))                       ; ?z keeps its slot
 ;; and the redundancy the rule really does imply is still derived -- which is
 ;; why this assertion cannot be used to tell (a) from (c)
@@ -560,7 +577,8 @@
 (push)
 (let $P (App2 "f" (map-of 0 0) (Var 0) (map-of 1 1) (Var 1)))
 (let $Q (App2 "g" (map-of 0 0) (Var 0) (map-of 0 0) (Var 0)))
-(run 20)
+(run-schedule (saturate (run slotted))
+              (repeat 20 (seq (run) (saturate (run slotted)))))
 (check (RenamesToLeader $P m $P) (= (map-length m) 2))
 (pop)
 
@@ -590,7 +608,7 @@
 ;;; Note this does NOT repair itself.  The machinery's child-update rule deletes a
 ;;; row whose child has since narrowed, but the action rebuilds it on the next
 ;;; iteration, so the violation is a stable oscillation rather than a transient.
-;;; It survives to `(run 200)`.
+;;; It survives 200 rounds.
 ;;;
 ;;; `C15-action-child-narrowed-to-its-class` in `xdiff.py` is this e-graph, and
 ;;; `XDIFF_BUGS=wide-kids` is the version below without the narrowing.
@@ -627,13 +645,23 @@
 (union $h $s)
 (union $g $s)
 
-;; (a) stored renamings used as written -- this is `XDIFF_BUGS=wide-kids`
+;; (a) stored renamings used as written -- `XDIFF_BUGS=wide-kids`.  Sound under the
+;; phased schedule, which was not true when the machinery ran in one ruleset with the
+;; user's rules.
 (push)
 (rule ((= x3 (App2 "h" m1 x1 m2 x2)))
       ((union x1 (App2 "h" m2 x2 m1 x1))))
-(run 20)
+(run-schedule (saturate (run slotted))
+              (repeat 20 (seq (run) (saturate (run slotted)))))
 (run m6b 1)
-(check (BadEdge "h" m c))            ; an edge naming a slot its child lacks
+;; This used to produce a malformed edge, and no longer does.  The renamings an action
+;; reads off a matched node are only stale while the invariant rules have not finished
+;; canonicalising that node, and saturating them between user steps means a user rule
+;; never sees such a state.  So under this schedule the narrowing below is belt and
+;; braces rather than load-bearing here, and `XDIFF_BUGS=wide-kids` no longer
+;; discriminates on this e-graph -- recorded because a test that stops testing what it
+;; was written for is worse than no test.
+(fail (check (BadEdge "h" m c)))
 (pop)
 
 ;; (b) every variable narrowed to its class
@@ -642,7 +670,8 @@
        (= cs1 (ClassSlots x1))
        (= cs2 (ClassSlots x2)))
       ((union x1 (App2 "h" (compose m2 cs2) x2 (compose m1 cs1) x1))))
-(run 20)
+(run-schedule (saturate (run slotted))
+              (repeat 20 (seq (run) (saturate (run slotted)))))
 (run m6b 1)
 (fail (check (BadEdge "h" m c)))     ; nothing malformed
 (pop)
@@ -697,7 +726,8 @@
 (let $body (App2 "app" (map-empty) $c (map-of 5 5) (Var 5)))
 (let $lam  (App2 "lambda" (map-of 5 5) (Var 5)
                          (map-of 5 5) $body))
-(run 30)
+(run-schedule (saturate (run slotted))
+              (repeat 30 (seq (run) (saturate (run slotted)))))
 (check (RenamesToLeader $lam m $c))
 (pop)
 
@@ -707,7 +737,8 @@
                       (map-of 5 5) (Var 5)))
 (let $lam  (App2 "lambda" (map-of 5 5) (Var 5)
                          (map-of 5 5) $body))
-(run 30)
+(run-schedule (saturate (run slotted))
+              (repeat 30 (seq (run) (saturate (run slotted)))))
 (fail (check (RenamesToLeader $lam m (Var 0))))
 (pop)
 
@@ -717,7 +748,8 @@
 (let $body (App2 "app" (map-empty) $c (map-of 6 6) (Var 6)))
 (let $lam  (App2 "lambda" (map-of 5 5) (Var 5)
                          (map-of 5 5 6 6) $body))
-(run 30)
+(run-schedule (saturate (run slotted))
+              (repeat 30 (seq (run) (saturate (run slotted)))))
 (fail (check (RenamesToLeader $lam m $c)))
 (pop)
 
@@ -759,7 +791,8 @@
 
 (let $P (App2 "f" (map-of 0 0) (Var 0) (map-of 1 1) (Var 1)))
 (let $Q (App2 "g" (map-of 0 0) (Var 0) (map-of 1 1) (Var 1)))
-(run 20)
+(run-schedule (saturate (run slotted))
+              (repeat 20 (seq (run) (saturate (run slotted)))))
 (check (Union' s $P r $Q))
 
 (pop)
@@ -838,7 +871,8 @@
                                   (map-domain (compose mp1 p2)))))
       ((NoAccum (compose mp2 p12) (compose mp3 p24))))
 
-(run 20)
+(run-schedule (saturate (run slotted))
+              (repeat 20 (seq (run) (saturate (run slotted)))))
 
 ;; accumulated: ?u and ?v land on different pattern slots
 (check (Accum (map-of 0 0) (map-of 0 1)))
@@ -876,12 +910,14 @@
        (RenamesToLeader outer (compose mp1 symp) p)))
 
 (let $f (App2 "f" (map-of 0 0) (Var 0) (map-of 0 1) (Var 0)))
-(run 20)
+(run-schedule (saturate (run slotted))
+              (repeat 20 (seq (run) (saturate (run slotted)))))
 
 ;; h(g($0,$1), $1) has been put in f($0,$1)'s class
 (let $g (App2 "g" (map-of 0 0) (Var 0) (map-of 0 1) (Var 0)))
 (let $h (App2 "h" (map-of 0 0 1 1) $g (map-of 0 1) (Var 0)))
-(run 20)
+(run-schedule (saturate (run slotted))
+              (repeat 20 (seq (run) (saturate (run slotted)))))
 
 (check (RenamesToLeader $f m1 leader)
        (RenamesToLeader $h m2 leader))

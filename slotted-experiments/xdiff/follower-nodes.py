@@ -52,8 +52,7 @@ else:
 
 total_followers = total_with_nodes = 0
 for c in cases:
-    prog = re.sub(r"\(run\s+\d+\)", f"(run {c.rounds * 6})", X.egg_program(c))
-    prog = prog.replace("(print-function SameClass 100000)", obs())
+    prog = X.egg_program(c, mult=6).replace("(print-function SameClass 100000)", obs())
     p = X.ROOT / f"fn-{abs(hash(c.name)) % 99999}.egg"
     p.write_text(prog)
     try:

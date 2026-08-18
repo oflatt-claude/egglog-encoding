@@ -21,7 +21,6 @@ sys.path.insert(0, "slotted-experiments/xdiff")
 import xdiff as X
 
 TIMEOUT = 60
-SCHEDULE = "(run-schedule (saturate (run)))"
 
 # The generated corpus is where the second instance turned up, so it has to be reachable
 # from here -- checking only the curated cases is what let it hide.
@@ -37,8 +36,10 @@ else:
 
 bad = []
 for case in cases:
-    # the case's own `(run N)` is what saturation replaces
-    prog = re.sub(r"\(run\s+\d+\)", SCHEDULE, X.egg_program(case))
+    # The harness's schedule already saturates the `slotted` ruleset between user steps,
+    # so the program only fails to finish if that saturation does not converge. User rules
+    # get a finite step count and are not expected to.
+    prog = X.egg_program(case)
     prog = prog.replace("(print-function SameClass 100000)", "(print-size App2)")
     p = X.ROOT / f"sat-{abs(hash(case.name)) % 99999}.egg"
     p.write_text(prog)

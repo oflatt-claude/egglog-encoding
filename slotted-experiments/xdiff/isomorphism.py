@@ -34,9 +34,6 @@ import sys
 sys.path.insert(0, "slotted-experiments/xdiff")
 import xdiff as X
 
-# Both sides are compared at a true fixpoint of their own rules, which is only
-# meaningful because every case now saturates.
-SATURATE = "(run-schedule (saturate (run)))"
 TABLES = ["IsVarClass", "IsNullClass", "ClassSlots", "RenamesToLeader",
           "App2", "App3", "App4", "Num", "Sym", "Scale"]
 
@@ -565,11 +562,11 @@ def canonical(g):
                  for c in g.ids()])
 
 
-def _dump(case, schedule, timeout):
+def _dump(case, mult, timeout):
     dump = MARKERS + "\n".join(f"(print-function {t} 100000)" for t in TABLES)
-    prog = re.sub(r"\(run\s+\d+\)", schedule, X.egg_program(case))
+    prog = X.egg_program(case, mult=mult)
     prog = prog.replace("(print-function SameClass 100000)", dump)
-    p = X.ROOT / f"xdiff-tmp-iso-{abs(hash(case.name + schedule)) % 99999}.egg"
+    p = X.ROOT / f"xdiff-tmp-iso-{abs(hash(case.name)) % 99999}-{mult}.egg"
     p.write_text(prog)
     try:
         r = subprocess.run([str(X.EGGLOG), str(p)], capture_output=True,
@@ -616,21 +613,20 @@ def _dump(case, schedule, timeout):
 def encoding_graph(case):
     """The encoding's final graph, at the strongest fixpoint available to it.
 
-    `saturate` is preferred, and is what makes the comparison a comparison of settled
-    states. Some cases never reach a fixpoint of the *rules* -- a pair that derives and
-    deletes one another's output keeps firing on an unchanging database -- so for those
-    the state is taken at a fixpoint of the *database* instead, established by two
-    different round budgets producing the same graph. That is the same standard the
-    partition comparison uses, and it is reported separately so the two are not conflated.
+    The harness's schedule saturates the `slotted` invariants between user-rule steps and
+    gives the user rules a finite step count, since user rules are not expected to
+    terminate. If that does not finish, the state is taken at a fixpoint of the *database*
+    instead, established by two different step counts producing the same graph -- the same
+    standard the partition comparison uses -- and reported separately.
     """
-    g, err = _dump(case, SATURATE, timeout=60)
+    g, err = _dump(case, 3, timeout=60)
     if err != "timeout":
         return g, err
-    a, e1 = _dump(case, f"(run {case.rounds * 6})", timeout=180)
+    a, e1 = _dump(case, 6, timeout=180)
     if e1:
         return None, ("limit" if e1 == "timeout" else "FAIL",
                       "encoding too slow to settle") if e1 == "timeout" else e1
-    b, e2 = _dump(case, f"(run {case.rounds * 12})", timeout=180)
+    b, e2 = _dump(case, 12, timeout=180)
     if e2:
         return None, e2 if e2 != "timeout" else ("limit", "encoding too slow to settle")
     if canonical(a) != canonical(b):

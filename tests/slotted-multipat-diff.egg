@@ -64,7 +64,8 @@
 (let $sub (App2 "sub" (map-of 0 9) (Var 0) (map-of 0 9) (Var 0)))
 (union $sub (Null))
 (let $add (App2 "add" (map-empty) (Null) (map-empty) (Null)))
-(run 25)
+(run-schedule (saturate (run slotted))
+              (repeat 25 (seq (run) (saturate (run slotted)))))
 
 (check (Hit "R1" p))
 (pop)
@@ -151,7 +152,8 @@
 (union $sub  (Null))
 (union $sub2 (Null))
 (let $add  (App2 "add" (map-empty) (Null) (map-empty) (Null)))
-(run 25)
+(run-schedule (saturate (run slotted))
+              (repeat 25 (seq (run) (saturate (run slotted)))))
 
 ;; both spellings mint the same name under the current policy, so both fire
 (check (Mu "R2-root-only-atom2" m) (Mu "R2-root-only-atom3" m))

@@ -438,9 +438,37 @@ HEADER = """\
 """
 
 
+def in_slotted_ruleset(text):
+    """Put every emitted rule in the `slotted` ruleset.
+
+    These rules maintain the encoding's invariants, and they have to be *saturated*
+    between the user's rule steps: a user rule that matches a node before the alpha- and
+    slot-canonicalisation of that node has finished sees a spelling that is about to
+    change, and then matches again when it does. `slotted-egraph-encoding-11.egg` says
+    what schedule to write; this only puts the rules where a schedule can name them.
+    """
+    out, depth, form, buf = [], 0, [], []
+    for line in text.splitlines(keepends=True):
+        if depth == 0 and not line.lstrip().startswith("("):
+            buf.append(line)
+            continue
+        depth += line.count("(") - line.count(")")
+        form.append(line)
+        if depth <= 0:
+            body = "".join(form)
+            head = body.lstrip()[:6]
+            if head in ("(rule ", "(rule\n") and ":ruleset" not in body:
+                i = body.rindex(")")
+                body = body[:i] + " :ruleset slotted)" + body[i + 1:]
+            out.append("".join(buf) + body)
+            buf, form, depth = [], [], 0
+    return "".join(out) + "".join(buf)
+
+
 def main():
     generic = pathlib.Path("tests/slotted-node-rules.egg")
-    generic.write_text(HEADER + "\n" + SHARED + "\n" + "\n".join(emit(GENERIC, GENERIC_BINDERS)))
+    generic.write_text(in_slotted_ruleset(
+        HEADER + "\n" + SHARED + "\n" + "\n".join(emit(GENERIC, GENERIC_BINDERS))))
     print(f"wrote {generic} ({len(GENERIC)} constructors, string-headed)")
 
     for lang, spec in LANGUAGES.items():
@@ -448,7 +476,7 @@ def main():
         body = HEADER + f';;;\n;;; Language: {lang}\n\n' \
             '(include "tests/slotted-egraph-encoding-11.egg")\n\n' \
             + "\n".join(emit(spec))
-        p.write_text(body)
+        p.write_text(in_slotted_ruleset(body))
         print(f"wrote {p} ({len(spec)} constructors, one per operator)")
 
 

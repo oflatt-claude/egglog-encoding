@@ -310,6 +310,57 @@ incomplete — `M6(b)` shows the rule declining to fire in the bad case and stil
 firing in the good one. Occurrence checks are self-guarding already, since a
 dropped slot changes the domain and breaks the equation.
 
+## The invariant rules are saturated between user-rule steps
+
+The rules that maintain the encoding live in a `slotted` ruleset, and the schedule is
+
+```lisp
+(run-schedule (saturate (run slotted))                  ; before any user rule
+              (repeat N (seq (run) (saturate (run slotted)))))
+```
+
+**Why saturate them, rather than run them alongside.** A user rule that matches a node
+before that node's α- and slot-canonicalisation has finished sees a spelling which is about
+to change — and matches again when it does. Interleaved in one ruleset the two never settle:
+that is what `fuzz179` was, a period-3 orbit in which the user rules rebuilt α-variants as
+fast as the machinery retired them.
+
+**Why the user's side is finite.** User rules are not expected to terminate — equality
+saturation generally does not — so they get a step count while the invariants get
+`saturate`. Termination of a program is then a statement about the *machinery* only, which
+is the property worth checking.
+
+This is the shape egglog's own proof encoding uses for its maintenance rulesets:
+`instrument_schedule` walks the user's schedule and rewrites every `Run` as
+`(seq <that run> <rebuild>)`, where `rebuild` saturates the proof rulesets. Since `(run N)`
+is `(repeat N (run))`, instrumenting it gives exactly the alternation above.
+
+A file with no user rules of its own — `slotted-egraph-encoding-11.egg` and the per-language
+files — only needs `(saturate (run slotted))`, which also reads better than the iteration
+counts it replaced.
+
+| | |
+| --- | --- |
+| generated cases reaching a fixpoint | **250/250**, from 249 |
+| generated isomorphic | **249/250**, 0 differ, from 248/250 |
+| curated | 44/44 differential, fixpoint, node counts, isomorphism |
+
+Two consequences worth stating plainly.
+
+**It removed a mutation's bite.** `wide-kids` — the compiled action not narrowing its
+non-root variables by `ClassSlots` — is no longer caught, on 44 curated *or* 250 generated
+cases. Not masked: observing inside a user step, before any repair, the action does not write
+a wide edge at all. With the invariants saturated first, the renamings an action reads off a
+node are already canonical, so that narrowing is now belt-and-braces where it used to be
+load-bearing. It is kept, and the mutation is kept as a record, but it no longer
+discriminates — recorded because a test that has stopped testing what it was written for is
+worse than no test.
+
+**One demo in `slotted-user-rules.egg` inverted.** `M6b` asserted that a malformed edge
+appears; under this schedule none does, so it now asserts the opposite and says why. The
+alternative — contriving an unphased schedule to keep the old assertion alive — would have
+preserved a test of a state the encoding no longer reaches.
+
 ## What the differential tests cover
 
 `xdiff.py` builds a case, runs it through the reference (`xmulti`, which drives the
@@ -866,16 +917,15 @@ follower handling here was dropping 16 e-classes, and the count is what showed i
 
 ```text
 curated      44/44  isomorphic   217 e-classes,  282 e-nodes,  226 symmetries
-generated   248/250 isomorphic  1920 e-classes, 2540 e-nodes, 1920 symmetries
-                    0 differ, 2 not comparable
+generated   249/250 isomorphic  1925 e-classes, 2549 e-nodes, 1925 symmetries
+                    0 differ, 1 not comparable
 ```
 
-Nothing differs. The two are limits of reading the encoding through printed output, listed
-below: one is several classes sharing the single name `Unextractable`, the other a slotted
-class whose nodes sit on two values. Every compared case reaches a fixpoint of its own
-*rules*, so the database-fixpoint fallback below is currently unused — it was needed for
-four cases before the two orientation fixes, which also took this from 244/250 with 6 not
-comparable.
+Nothing differs. The one is a limit of reading the encoding through printed output, listed
+below: a slotted class whose nodes sit on two values, which is not merged here. Every case
+reaches a fixpoint, so the database-fixpoint fallback below is unused — it was needed for
+four cases before the two orientation fixes and the phased schedule, which together took
+this from 244/250 with 6 not comparable.
 
 Three things had to be handled rather than assumed.
 
@@ -987,7 +1037,8 @@ self-loop to derive from `ClassSlots` leaves all five failing, and `ClassSlots` 
 for the class whose self-loop churns, so a self-loop naming slot 1 cannot come from it.
 That experiment is what pointed at the symmetry-finder instead.
 
-**The one that remains is not a maintenance-rule cycle.** `fuzz179` has period *three*,
+**The one that remained was not a maintenance-rule cycle, and the schedule is what fixed
+it.** `fuzz179` has period *three*,
 and both of its rules are self-referential:
 
 ```text
@@ -1032,14 +1083,15 @@ Worth being clear about severity: **no answer is wrong**. The partition agrees o
 and the isomorphism check finds 0 differences on all 248 comparable cases. What diverges is
 termination, so it is a cost-and-schedule problem rather than a soundness one.
 
-Two candidate fixes, neither a one-atom orientation:
+Two candidate fixes were on the table, and the second turned out to be enough:
 
-* **An α-invariant key for rows**, which is what the reference has. The real fix, and a
-  redesign of how nodes are stored.
-* **Phasing with rulesets** — saturate the machinery, so α-canonicalisation completes,
-  before letting user rules fire, so an action's build lands on an already-canonical row
-  and produces no new row. Cheaper, and it only needs the machinery to be in a named
-  ruleset; untested.
+* **An α-invariant key for rows**, which is what the reference has — a redesign of how
+  nodes are stored, and still the deeper answer to the row-keying difference.
+* **Phasing with rulesets**, which is what was done: saturating the invariants before any
+  user rule fires means an action's build lands on an already-canonical row and creates
+  nothing new, so the user rule does not re-fire on its own output. See "The invariant
+  rules are saturated between user-rule steps" above. `fuzz179` now finishes and the
+  generated corpus is 250/250.
 
 ### Downstream: a binder makes open question 2's pair permanent
 
@@ -1091,8 +1143,9 @@ bisect that was run for migration.
 
 **It is strictly sharper than the partition.** Put each known bug back and it fails on
 more cases than the matching comparison does, and it is the only comparison against the
-reference that sees `wide-kids` at all, which until now only an internal invariant
-caught:
+reference that saw `wide-kids` at all, which until then only an internal invariant caught.
+The figures below are from *before* the schedule was phased; that change made `wide-kids`
+benign, so it is now caught by nothing:
 
 | | matching mismatches | non-isomorphic |
 | --- | --- | --- |
@@ -1101,7 +1154,7 @@ caught:
 | `slot-late` | 1 | **2** |
 | `unordered` | 1 | 1 |
 | `binder-1st` | 0 | 0 |
-| `wide-kids` | 0 | **1** |
+| `wide-kids` | 0 | **1** (0 since the schedule was phased) |
 
 `binder-1st` remains caught only indirectly, by the order-independence check.
 
@@ -1288,6 +1341,7 @@ XDIFF_BUGS=unordered  ./xdiff.py     atoms compiled in the order written
 XDIFF_BUGS=binder-1st ./xdiff.py     the first atom may be a binder
 XDIFF_BUGS=union-id   ./xdiff.py     the action unions classes, not invocations
 XDIFF_BUGS=wide-kids  ./xdiff.py     only the action's root narrowed to its class
+                                     (benign since the schedule was phased)
 ```
 
 Where each is caught:
@@ -1298,15 +1352,16 @@ Where each is caught:
 | `unordered` | C12, C13 | disagrees with the reference |
 | `slot-late` | B3 | disagrees with the reference |
 | `union-id` | C14 | disagrees with the reference |
-| `wide-kids` | C15 | Def. 4 invariant, not the reference |
+| `wide-kids` | — | nothing: benign since the schedule was phased |
 | `binder-1st` | C13 | order-independence check only |
 
-`wide-kids` is the one no *partition* comparison sees: the probe groups and the node
-counts are right either way. The Def. 4 check catches it directly, and the isomorphism
-check catches it as a consequence — the encoding stops settling, because the action
-rebuilds each round what `child-update` deletes, so it has no fixpoint to compare with
-the reference's. It is also the one that needed `MIGRATION = "mint"` to be reachable at
-all.
+`wide-kids` **no longer discriminates anywhere** — not the partition, not the node counts,
+not the Def. 4 invariant, not the isomorphism check. Saturating the invariants between user
+steps means the renamings an action reads off a node are already canonical, so omitting the
+narrowing changes nothing to observe. It is kept as a record rather than as coverage; see
+"The invariant rules are saturated between user-rule steps". Before that change it was
+caught by the Def. 4 check directly and by the isomorphism check as a consequence, and it
+needed `MIGRATION = "mint"` to be reachable at all.
 
 Two things this was worth doing for.
 

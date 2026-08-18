@@ -19,6 +19,20 @@
 ;; We require `leader <= follower` in terms of ordering-max.
 (relation RenamesToLeader (U Renaming U))
 
+;; The invariant rules below, and every rule the generator emits, live in `slotted`.
+;; They must be SATURATED between the user's rule steps: a user rule that matches a node
+;; before that node's alpha- and slot-canonicalisation has finished sees a spelling which
+;; is about to change, and matches again when it does -- so the two never settle. User
+;; rules themselves are not expected to terminate, so they get a finite step count:
+;;
+;;   (run-schedule (saturate (run slotted))                  ; before any user rule
+;;                 (repeat N (seq (run) (saturate (run slotted)))))
+;;
+;; which is the shape egglog's proof encoding uses for its own maintenance rulesets --
+;; `instrument_schedule` wraps every user run as `(seq <run> <rebuild>)`. A file with no
+;; user rules of its own, such as this one, only needs `(saturate (run slotted))`.
+(ruleset slotted)
+
 ; This is a basic object not depending on any variables.
 (constructor Null () U)
 
@@ -40,7 +54,7 @@
                   (bool= (compose m23 m23) m23)
                   (bool= e1 e3))))
 
-      ((RenamesToLeader e1 (compose m12 m23) e3)))
+      ((RenamesToLeader e1 (compose m12 m23) e3)) :ruleset slotted)
 
 ;; single parent
 ;; a = m1*b /\ a = m2*c  --> b = m1⁻¹*m2*c
@@ -60,7 +74,7 @@
                        (bool= (ordering-max m1 m2) m1)))))
 
       ((delete (RenamesToLeader a m1 b))
-       (RenamesToLeader b (compose (inverse m1) m2) c)))
+       (RenamesToLeader b (compose (inverse m1) m2) c)) :ruleset slotted)
 
 ; single parent for symmetries, this does shrinking.
 (rule ((RenamesToLeader a m1 a)
@@ -70,7 +84,7 @@
        (!= m1 m2))
       ((delete (RenamesToLeader a m1 a))
         (RenamesToLeader a m2 a))
-)
+ :ruleset slotted)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Deduplicate nodes that are equal up to renaming ;;
@@ -82,7 +96,7 @@
       ((RenamesToLeader e (map-insert (map-empty) 0 v) (Var 0))
        (delete (Var v))
       )
-)
+ :ruleset slotted)
 
 ;; α-finder: Will find two App2 nodes that are equal up to renaming, and eliminate one in favor of the other.
 
@@ -137,7 +151,7 @@
     (
         (union a b)
     )
-)
+ :ruleset slotted)
 
 ;;; Tests ;;;
 
@@ -151,7 +165,7 @@
 (let $a2 (App2 "f" (map-insert (map-empty)  1  1) (Var 1)
                   (map-insert (map-empty) 20 20) (Var 20)))
 
-(run 10)
+(run-schedule (saturate (run slotted)))
 
 (fail (check (= $a1 $a2)))
 (check (RenamesToLeader $a2 m1 leader)
@@ -175,7 +189,7 @@
                        (map-insert (map-empty) 100 100) (Var 100))
               (map-insert (map-empty) 200 200) (Var 200)))
 
-(run 10)
+(run-schedule (saturate (run slotted)))
 
 (check (RenamesToLeader $b1 m1 leader)
        (RenamesToLeader $b2 m2 leader))
@@ -192,7 +206,7 @@
 (let $c2 (App2 "h" (map-insert (map-empty) 60 60) (Var 60)
                   (map-insert (map-empty) 60 60) (Var 60)))
 
-(run 10)
+(run-schedule (saturate (run slotted)))
 
 (check (RenamesToLeader $c1 m1 leader)
        (RenamesToLeader $c2 m2 leader))
@@ -210,7 +224,7 @@
                   (map-insert (map-empty) 60 60) (Var 60)))
 
 
-(run 10)
+(run-schedule (saturate (run slotted)))
 
 ;; negative — should remain in distinct e-classes.
 (fail (check (= $d1 $d2)))
@@ -235,7 +249,7 @@
 (let $c4 (App2 "f" (map-insert (map-empty) 23 23) (Var 23)
                   (map-insert (map-empty) 25 25) (Var 25) ))
 
-(run 10)
+(run-schedule (saturate (run slotted)))
 
 (check (RenamesToLeader $c3 m1 leader)
        (RenamesToLeader $c1 m2 leader))
@@ -252,7 +266,7 @@
 (let $v1 (Var 1))
 (let $v2 (Var 2))
 
-(run 10)
+(run-schedule (saturate (run slotted)))
 (check (RenamesToLeader $v1 m1 leader)
        (RenamesToLeader $v2 m2 leader))
 
@@ -280,7 +294,7 @@
 
 (union $m11 $m22)
 
-(run 10)
+(run-schedule (saturate (run slotted)))
 
 (pop)
 
@@ -299,7 +313,7 @@
 (let $h8 (App2 "h" (map-insert (map-empty) 8 8) (Var 8) (map-empty) (Null)))
 (union $f8 $h8)
 
-(run 10)
+(run-schedule (saturate (run slotted)))
 
 (check (RenamesToLeader $g7 m1 leader)
        (RenamesToLeader $h8 m2 leader))
@@ -317,7 +331,7 @@
 
 (union $v0 $v7)
 
-(run 10)
+(run-schedule (saturate (run slotted)))
 
 (check (RenamesToLeader $f0 m1 leader) (RenamesToLeader $f7 m2 leader))
 
@@ -335,7 +349,7 @@
                 (map-insert (map-empty) 1 1) (Var 1)
                 (map-insert (map-empty) 1 1) (Var 1)))
 
-(run 10)
+(run-schedule (saturate (run slotted)))
 
 (check (= $lam00 $lam11))
 
@@ -363,7 +377,7 @@
 
 (union $f01 $f10)
 
-(run 10)
+(run-schedule (saturate (run slotted)))
 
 (check (= $node1 $node2))
 
@@ -398,7 +412,7 @@
 
 (union $f01 $f10)
 
-(run 10)
+(run-schedule (saturate (run slotted)))
 
 (check (= $node1 $node2))
 
@@ -414,7 +428,7 @@
 
 (union $f $null)
 
-(run 10)
+(run-schedule (saturate (run slotted)))
 
 (fail (check (RenamesToLeader $f m l)
              (RenamesToLeader l sym l)
@@ -447,7 +461,7 @@
 ; N's class is the variable $2, so slot 1 is redundant for it
 (union $N (Var 2))
 
-(run 20)
+(run-schedule (saturate (run slotted)))
 
 ; the node is still there, on a follower class
 (check (RenamesToLeader $N m (Var 0))
@@ -477,7 +491,7 @@
 (let $N (App2 "h" (map-of 0 1) (Var 0) (map-of 1 1 2 2) $B))
 (union $N (Var 2))
 
-(run 20)
+(run-schedule (saturate (run slotted)))
 
 (fail (check (= x (App2 f m1 (Var 0) m2 c2)) (= (map-length m1) 0)))
 (fail (check (= x (App2 f m1 c1 m2 (Var 0))) (= (map-length m2) 0)))
@@ -494,14 +508,14 @@
 (let $f3a (App3 "f3" (map-of 0 0) (Var 0) (map-of 0 1) (Var 0) (map-of 0 2) (Var 0)))
 (let $f3b (App3 "f3" (map-of 0 3) (Var 0) (map-of 0 4) (Var 0) (map-of 0 5) (Var 0)))
 
-(run 20)
+(run-schedule (saturate (run slotted)))
 
 (check (RenamesToLeader $f3a m1 leader)
        (RenamesToLeader $f3b m2 leader))
 
 ;; and three distinct slots may not collapse: f3($0,$1,$2) is not f3($0,$0,$2)
 (let $f3c (App3 "f3" (map-of 0 0) (Var 0) (map-of 0 0) (Var 0) (map-of 0 2) (Var 0)))
-(run 20)
+(run-schedule (saturate (run slotted)))
 (fail (check (= $f3a $f3c)))
 
 (pop)
@@ -516,7 +530,7 @@
 (let $let5 (App3 "let" (map-of 0 5) (Var 0) (map-of 0 5) (Var 0) (map-empty) (Null)))
 (let $let6 (App3 "let" (map-of 0 6) (Var 0) (map-of 0 6) (Var 0) (map-empty) (Null)))
 
-(run 20)
+(run-schedule (saturate (run slotted)))
 
 (check (= $let5 $let6))
 
@@ -535,7 +549,7 @@
 (let $one (Num 1))
 (let $two (Num 2))
 
-(run 20)
+(run-schedule (saturate (run slotted)))
 
 ;; slotless, like Null
 (check (RenamesToLeader $one (map-empty) $one))
@@ -546,13 +560,13 @@
 ;; and they compose into nodes: f(1, $0) and f(1, $1) are alpha-equivalent
 (let $f1a (App2 "f" (map-empty) $one (map-of 0 0) (Var 0)))
 (let $f1b (App2 "f" (map-empty) $one (map-of 0 1) (Var 0)))
-(run 20)
+(run-schedule (saturate (run slotted)))
 (check (RenamesToLeader $f1a m1 leader)
        (RenamesToLeader $f1b m2 leader))
 
 ;; but f(1, ...) and f(2, ...) are not
 (let $f2a (App2 "f" (map-empty) $two (map-of 0 0) (Var 0)))
-(run 20)
+(run-schedule (saturate (run slotted)))
 (fail (check (= $f1a $f2a)))
 
 (pop)
@@ -568,7 +582,7 @@
 (let $s2b (Scale 2 (map-of 0 1) (Var 0)))
 (let $s3a (Scale 3 (map-of 0 0) (Var 0)))
 
-(run 20)
+(run-schedule (saturate (run slotted)))
 
 ;; same payload, child at a different slot: alpha-equivalent
 (check (RenamesToLeader $s2a m1 leader)

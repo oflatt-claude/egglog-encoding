@@ -29,7 +29,7 @@
 (let $f12 (App2 "f" (map-of 0 1) (Var 0) (map-of 0 2) (Var 0)))
 (union $f01 $f12)
 
-(run 30)
+(run-schedule (saturate (run slotted)))
 
 ;; one class
 (check (= $f01 $f12))
@@ -61,7 +61,7 @@
 (union $f12 $g21)
 (union $g12 $h12)
 
-(run 30)
+(run-schedule (saturate (run slotted)))
 
 ;; f($1,$2) and h($2,$1) are the same invocation, so the renaming carrying one to
 ;; the other is the identity ...

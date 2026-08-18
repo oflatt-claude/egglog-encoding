@@ -283,14 +283,21 @@ def _invariant_rules():
 
 
 def check_invariants(case):
-    """Wide edges and non-injective renamings in the encoding's final state.
+    """Wide edges and non-injective renamings, observed after a user step.
 
-    The observers run in their own ruleset *after* the machinery has stopped, so they
-    see a snapshot: a relation keeps an observation after the row that caused it is
-    deleted, which would answer a question about history instead.
+    The observers run in their own ruleset so they see a snapshot rather than a history: a
+    relation keeps an observation after the row that caused it is deleted.
+
+    One extra user step runs first, *without* the machinery saturation that normally
+    follows it. Saturating the invariant rules repairs a malformed edge, so observing
+    after that would report a clean state whatever the action wrote -- which is exactly
+    what happened when the schedule became phased, and it made `wide-kids` undetectable.
+    The contract being checked is the stronger one: an action must not write an edge that
+    breaks Def. 4, even transiently.
     """
-    prog = egg_program(case).replace("(print-function SameClass 100000)",
-                                     _invariant_rules())
+    prog = egg_program(case).replace(
+        "(print-function SameClass 100000)",
+        "(run-schedule (run))\n" + _invariant_rules())
     path = ROOT / f"xdiff-inv-{os.getpid()}.egg"
     path.write_text(prog)
     try:
@@ -647,6 +654,20 @@ def compile_rule(atoms, action, conds=()):
 
 
 # -------------------------------------------------------------- egg generation
+def schedule(steps):
+    """`steps` user-rule iterations, with the slotted invariants saturated between them.
+
+    The invariant rules maintain the encoding, and a user rule that matches a node before
+    its alpha- and slot-canonicalisation has finished sees a spelling about to change --
+    and matches again when it does, so neither settles. User rules are not expected to
+    terminate, so they get a finite step count while the machinery gets `saturate`. This
+    is the shape egglog's proof encoding uses for its own maintenance rulesets, where
+    `instrument_schedule` wraps every user run as `(seq <run> <rebuild>)`.
+    """
+    return (f"(run-schedule (saturate (run slotted))\n"
+            f"              (repeat {steps} (seq (run) (saturate (run slotted)))))")
+
+
 def egg_program(case, rules=None, mult=3):
     rules = case.rules if rules is None else rules
     out = [f'(include "{MACHINERY}")']
@@ -670,10 +691,10 @@ def egg_program(case, rules=None, mult=3):
         out.append(f"(union _ua{i} _ub{i})")
     for i, t in enumerate(case.probes):
         out.append(f"(let _p{i} {enc(t)})")
-    out.append(f"(run {case.rounds * mult})")
+    out.append(schedule(case.rounds * mult))
     for i, _ in enumerate(case.probes):
         out.append(f"(ProbeId _p{i} {i})")
-    out.append(f"(run {case.rounds * mult})")
+    out.append(schedule(case.rounds * mult))
     out.append("(print-function SameClass 100000)")
     return "\n".join(out) + "\n"
 

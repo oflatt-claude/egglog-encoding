@@ -24,9 +24,9 @@
 ;; `m` takes b's slots to a's. Transporting a set S through a renaming is the image of
 ;; the renaming restricted to S.
 (rule ((RenamesToLeader a m b) (= S (ClassSlots a)))
-      ((set (ClassSlots b) (map-image (compose (inverse m) S)))))
+      ((set (ClassSlots b) (map-image (compose (inverse m) S)))) :ruleset slotted)
 (rule ((RenamesToLeader a m b) (= S (ClassSlots b)))
-      ((set (ClassSlots a) (map-image (compose m S)))))
+      ((set (ClassSlots a) (map-image (compose m S)))) :ruleset slotted)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; App2 :: String child child
@@ -36,12 +36,12 @@
 
 ;; an upper bound on the class's slots; the merge narrows it
 (rule ((= e1 (App2 p1 m1 c1 m2 c2)))
-      ((set (ClassSlots e1) (map-union (map-image m1) (map-image m2)))))
+      ((set (ClassSlots e1) (map-union (map-image m1) (map-image m2)))) :ruleset slotted)
 
 ;; every class holding a node has a self-loop, so a query can reach it
 (rule ((= e1 (App2 p1 m1 c1 m2 c2))
        (= m (map-union (map-image m1) (map-image m2))))
-      ((RenamesToLeader e1 m e1)))
+      ((RenamesToLeader e1 m e1)) :ruleset slotted)
 
 ;; alpha-finder: two nodes equal up to renaming, one eliminated
 (rule ((= e1 (App2 p1 m1_o c1 m2_o c2))
@@ -59,7 +59,7 @@
               (and (bool= m1_o b1)
                    (and (bool= (ordering-max m2_o b2) b2) (bool-!= m2_o b2))))))))
       ((RenamesToLeader e1 m e2)
-       (delete (App2 p1 m1_o c1 m2_o c2))))
+       (delete (App2 p1 m1_o c1 m2_o c2))) :ruleset slotted)
 
 ;; the same solve kept as a symmetry, non-destructively
 (rule ((= e (App2 p1 m1_o c1 m2_o c2))
@@ -69,7 +69,7 @@
        (= m2 (compose m2_o sym2))
        (= sym_out (find-mapping m1_o m2_o m1 m2))
        (= cs (ClassSlots e)))
-      ((RenamesToLeader e (compose cs (compose sym_out cs)) e)))
+      ((RenamesToLeader e (compose cs (compose sym_out cs)) e)) :ruleset slotted)
 
 ;; migration: move a follower's node into the leader's frame
 (rule ((RenamesToLeader e2 m e1)
@@ -83,7 +83,7 @@
        (= n1 (compose R m1))
        (= n2 (compose R m2)))
       ((union e1 (App2 p1 n1 c1 n2 c2))
-       (delete (App2 p1 m1 c1 m2 c2))))
+       (delete (App2 p1 m1 c1 m2 c2))) :ruleset slotted)
 
 ;; child-update, child 1
 (rule ((RenamesToLeader c1 m c')
@@ -95,7 +95,7 @@
        (guard (or (bool-!= c1 c')
                   (bool-!= (compose m1 m) m1))))
       ((union node (App2 p1 (compose m1 m) c' m2 c2))
-       (delete (App2 p1 m1 c1 m2 c2))))
+       (delete (App2 p1 m1 c1 m2 c2))) :ruleset slotted)
 
 ;; child-update, child 2
 (rule ((RenamesToLeader c2 m c')
@@ -107,7 +107,7 @@
        (guard (or (bool-!= c2 c')
                   (bool-!= (compose m2 m) m2))))
       ((union node (App2 p1 m1 c1 (compose m2 m) c'))
-       (delete (App2 p1 m1 c1 m2 c2))))
+       (delete (App2 p1 m1 c1 m2 c2))) :ruleset slotted)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; App3 :: String child child child
@@ -117,12 +117,12 @@
 
 ;; an upper bound on the class's slots; the merge narrows it
 (rule ((= e1 (App3 p1 m1 c1 m2 c2 m3 c3)))
-      ((set (ClassSlots e1) (map-union (map-image m1) (map-union (map-image m2) (map-image m3))))))
+      ((set (ClassSlots e1) (map-union (map-image m1) (map-union (map-image m2) (map-image m3))))) :ruleset slotted)
 
 ;; every class holding a node has a self-loop, so a query can reach it
 (rule ((= e1 (App3 p1 m1 c1 m2 c2 m3 c3))
        (= m (map-union (map-image m1) (map-union (map-image m2) (map-image m3)))))
-      ((RenamesToLeader e1 m e1)))
+      ((RenamesToLeader e1 m e1)) :ruleset slotted)
 
 ;; alpha-finder: two nodes equal up to renaming, one eliminated
 (rule ((= e1 (App3 p1 m1_o c1 m2_o c2 m3_o c3))
@@ -144,7 +144,7 @@
               (and (bool= m2_o b2)
                    (and (bool= (ordering-max m3_o b3) b3) (bool-!= m3_o b3))))))))))
       ((RenamesToLeader e1 m e2)
-       (delete (App3 p1 m1_o c1 m2_o c2 m3_o c3))))
+       (delete (App3 p1 m1_o c1 m2_o c2 m3_o c3))) :ruleset slotted)
 
 ;; the same solve kept as a symmetry, non-destructively
 (rule ((= e (App3 p1 m1_o c1 m2_o c2 m3_o c3))
@@ -156,7 +156,7 @@
        (= m3 (compose m3_o sym3))
        (= sym_out (find-mapping m1_o m2_o m3_o m1 m2 m3))
        (= cs (ClassSlots e)))
-      ((RenamesToLeader e (compose cs (compose sym_out cs)) e)))
+      ((RenamesToLeader e (compose cs (compose sym_out cs)) e)) :ruleset slotted)
 
 ;; migration: move a follower's node into the leader's frame
 (rule ((RenamesToLeader e2 m e1)
@@ -171,7 +171,7 @@
        (= n2 (compose R m2))
        (= n3 (compose R m3)))
       ((union e1 (App3 p1 n1 c1 n2 c2 n3 c3))
-       (delete (App3 p1 m1 c1 m2 c2 m3 c3))))
+       (delete (App3 p1 m1 c1 m2 c2 m3 c3))) :ruleset slotted)
 
 ;; child-update, child 1
 (rule ((RenamesToLeader c1 m c')
@@ -183,7 +183,7 @@
        (guard (or (bool-!= c1 c')
                   (bool-!= (compose m1 m) m1))))
       ((union node (App3 p1 (compose m1 m) c' m2 c2 m3 c3))
-       (delete (App3 p1 m1 c1 m2 c2 m3 c3))))
+       (delete (App3 p1 m1 c1 m2 c2 m3 c3))) :ruleset slotted)
 
 ;; child-update, child 2
 (rule ((RenamesToLeader c2 m c')
@@ -195,7 +195,7 @@
        (guard (or (bool-!= c2 c')
                   (bool-!= (compose m2 m) m2))))
       ((union node (App3 p1 m1 c1 (compose m2 m) c' m3 c3))
-       (delete (App3 p1 m1 c1 m2 c2 m3 c3))))
+       (delete (App3 p1 m1 c1 m2 c2 m3 c3))) :ruleset slotted)
 
 ;; child-update, child 3
 (rule ((RenamesToLeader c3 m c')
@@ -207,7 +207,7 @@
        (guard (or (bool-!= c3 c')
                   (bool-!= (compose m3 m) m3))))
       ((union node (App3 p1 m1 c1 m2 c2 (compose m3 m) c'))
-       (delete (App3 p1 m1 c1 m2 c2 m3 c3))))
+       (delete (App3 p1 m1 c1 m2 c2 m3 c3))) :ruleset slotted)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; App4 :: String child child child child
@@ -217,12 +217,12 @@
 
 ;; an upper bound on the class's slots; the merge narrows it
 (rule ((= e1 (App4 p1 m1 c1 m2 c2 m3 c3 m4 c4)))
-      ((set (ClassSlots e1) (map-union (map-image m1) (map-union (map-image m2) (map-union (map-image m3) (map-image m4)))))))
+      ((set (ClassSlots e1) (map-union (map-image m1) (map-union (map-image m2) (map-union (map-image m3) (map-image m4)))))) :ruleset slotted)
 
 ;; every class holding a node has a self-loop, so a query can reach it
 (rule ((= e1 (App4 p1 m1 c1 m2 c2 m3 c3 m4 c4))
        (= m (map-union (map-image m1) (map-union (map-image m2) (map-union (map-image m3) (map-image m4))))))
-      ((RenamesToLeader e1 m e1)))
+      ((RenamesToLeader e1 m e1)) :ruleset slotted)
 
 ;; alpha-finder: two nodes equal up to renaming, one eliminated
 (rule ((= e1 (App4 p1 m1_o c1 m2_o c2 m3_o c3 m4_o c4))
@@ -248,7 +248,7 @@
               (and (bool= m3_o b3)
                    (and (bool= (ordering-max m4_o b4) b4) (bool-!= m4_o b4))))))))))))
       ((RenamesToLeader e1 m e2)
-       (delete (App4 p1 m1_o c1 m2_o c2 m3_o c3 m4_o c4))))
+       (delete (App4 p1 m1_o c1 m2_o c2 m3_o c3 m4_o c4))) :ruleset slotted)
 
 ;; the same solve kept as a symmetry, non-destructively
 (rule ((= e (App4 p1 m1_o c1 m2_o c2 m3_o c3 m4_o c4))
@@ -262,7 +262,7 @@
        (= m4 (compose m4_o sym4))
        (= sym_out (find-mapping m1_o m2_o m3_o m4_o m1 m2 m3 m4))
        (= cs (ClassSlots e)))
-      ((RenamesToLeader e (compose cs (compose sym_out cs)) e)))
+      ((RenamesToLeader e (compose cs (compose sym_out cs)) e)) :ruleset slotted)
 
 ;; migration: move a follower's node into the leader's frame
 (rule ((RenamesToLeader e2 m e1)
@@ -278,7 +278,7 @@
        (= n3 (compose R m3))
        (= n4 (compose R m4)))
       ((union e1 (App4 p1 n1 c1 n2 c2 n3 c3 n4 c4))
-       (delete (App4 p1 m1 c1 m2 c2 m3 c3 m4 c4))))
+       (delete (App4 p1 m1 c1 m2 c2 m3 c3 m4 c4))) :ruleset slotted)
 
 ;; child-update, child 1
 (rule ((RenamesToLeader c1 m c')
@@ -290,7 +290,7 @@
        (guard (or (bool-!= c1 c')
                   (bool-!= (compose m1 m) m1))))
       ((union node (App4 p1 (compose m1 m) c' m2 c2 m3 c3 m4 c4))
-       (delete (App4 p1 m1 c1 m2 c2 m3 c3 m4 c4))))
+       (delete (App4 p1 m1 c1 m2 c2 m3 c3 m4 c4))) :ruleset slotted)
 
 ;; child-update, child 2
 (rule ((RenamesToLeader c2 m c')
@@ -302,7 +302,7 @@
        (guard (or (bool-!= c2 c')
                   (bool-!= (compose m2 m) m2))))
       ((union node (App4 p1 m1 c1 (compose m2 m) c' m3 c3 m4 c4))
-       (delete (App4 p1 m1 c1 m2 c2 m3 c3 m4 c4))))
+       (delete (App4 p1 m1 c1 m2 c2 m3 c3 m4 c4))) :ruleset slotted)
 
 ;; child-update, child 3
 (rule ((RenamesToLeader c3 m c')
@@ -314,7 +314,7 @@
        (guard (or (bool-!= c3 c')
                   (bool-!= (compose m3 m) m3))))
       ((union node (App4 p1 m1 c1 m2 c2 (compose m3 m) c' m4 c4))
-       (delete (App4 p1 m1 c1 m2 c2 m3 c3 m4 c4))))
+       (delete (App4 p1 m1 c1 m2 c2 m3 c3 m4 c4))) :ruleset slotted)
 
 ;; child-update, child 4
 (rule ((RenamesToLeader c4 m c')
@@ -326,7 +326,7 @@
        (guard (or (bool-!= c4 c')
                   (bool-!= (compose m4 m) m4))))
       ((union node (App4 p1 m1 c1 m2 c2 m3 c3 (compose m4 m) c'))
-       (delete (App4 p1 m1 c1 m2 c2 m3 c3 m4 c4))))
+       (delete (App4 p1 m1 c1 m2 c2 m3 c3 m4 c4))) :ruleset slotted)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Num :: i64
@@ -336,12 +336,12 @@
 
 ;; an upper bound on the class's slots; the merge narrows it
 (rule ((= e1 (Num p1)))
-      ((set (ClassSlots e1) (map-empty))))
+      ((set (ClassSlots e1) (map-empty))) :ruleset slotted)
 
 ;; every class holding a node has a self-loop, so a query can reach it
 (rule ((= e1 (Num p1))
        (= m (map-empty)))
-      ((RenamesToLeader e1 m e1)))
+      ((RenamesToLeader e1 m e1)) :ruleset slotted)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Sym :: String
@@ -351,12 +351,12 @@
 
 ;; an upper bound on the class's slots; the merge narrows it
 (rule ((= e1 (Sym p1)))
-      ((set (ClassSlots e1) (map-empty))))
+      ((set (ClassSlots e1) (map-empty))) :ruleset slotted)
 
 ;; every class holding a node has a self-loop, so a query can reach it
 (rule ((= e1 (Sym p1))
        (= m (map-empty)))
-      ((RenamesToLeader e1 m e1)))
+      ((RenamesToLeader e1 m e1)) :ruleset slotted)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Scale :: i64 child
@@ -366,12 +366,12 @@
 
 ;; an upper bound on the class's slots; the merge narrows it
 (rule ((= e1 (Scale p1 m1 c1)))
-      ((set (ClassSlots e1) (map-image m1))))
+      ((set (ClassSlots e1) (map-image m1))) :ruleset slotted)
 
 ;; every class holding a node has a self-loop, so a query can reach it
 (rule ((= e1 (Scale p1 m1 c1))
        (= m (map-image m1)))
-      ((RenamesToLeader e1 m e1)))
+      ((RenamesToLeader e1 m e1)) :ruleset slotted)
 
 ;; alpha-finder: two nodes equal up to renaming, one eliminated
 (rule ((= e1 (Scale p1 m1_o c1))
@@ -385,7 +385,7 @@
              (and (bool= e1 e2)
                   (and (bool= (ordering-max m1_o b1) b1) (bool-!= m1_o b1))))))
       ((RenamesToLeader e1 m e2)
-       (delete (Scale p1 m1_o c1))))
+       (delete (Scale p1 m1_o c1))) :ruleset slotted)
 
 ;; the same solve kept as a symmetry, non-destructively
 (rule ((= e (Scale p1 m1_o c1))
@@ -393,7 +393,7 @@
        (= m1 (compose m1_o sym1))
        (= sym_out (find-mapping m1_o m1))
        (= cs (ClassSlots e)))
-      ((RenamesToLeader e (compose cs (compose sym_out cs)) e)))
+      ((RenamesToLeader e (compose cs (compose sym_out cs)) e)) :ruleset slotted)
 
 ;; migration: move a follower's node into the leader's frame
 (rule ((RenamesToLeader e2 m e1)
@@ -406,7 +406,7 @@
        (= R (find-mapping-total (map-domain m) nodeslots (map-domain m) m))
        (= n1 (compose R m1)))
       ((union e1 (Scale p1 n1 c1))
-       (delete (Scale p1 m1 c1))))
+       (delete (Scale p1 m1 c1))) :ruleset slotted)
 
 ;; child-update, child 1
 (rule ((RenamesToLeader c1 m c')
@@ -418,7 +418,7 @@
        (guard (or (bool-!= c1 c')
                   (bool-!= (compose m1 m) m1))))
       ((union node (Scale p1 (compose m1 m) c'))
-       (delete (Scale p1 m1 c1))))
+       (delete (Scale p1 m1 c1))) :ruleset slotted)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; binders
@@ -427,9 +427,9 @@
 ;; `lambda` binds its first child's slot
 (rule ((RenamesToLeader (App2 "lambda" mvar0 (Var 0) m2 c2) ml l)
        (= v0 (map-get mvar0 0)))
-      ((RenamesToLeader (App2 "lambda" mvar0 (Var 0) m2 c2) (inverse (map-remove (inverse ml) v0)) l)))
+      ((RenamesToLeader (App2 "lambda" mvar0 (Var 0) m2 c2) (inverse (map-remove (inverse ml) v0)) l)) :ruleset slotted)
 
 ;; `let` binds its first child's slot
 (rule ((RenamesToLeader (App3 "let" mvar0 (Var 0) m2 c2 m3 c3) ml l)
        (= v0 (map-get mvar0 0)))
-      ((RenamesToLeader (App3 "let" mvar0 (Var 0) m2 c2 m3 c3) (inverse (map-remove (inverse ml) v0)) l)))
+      ((RenamesToLeader (App3 "let" mvar0 (Var 0) m2 c2 m3 c3) (inverse (map-remove (inverse ml) v0)) l)) :ruleset slotted)
