@@ -19,7 +19,7 @@ use std::{
 use crate::core_relations::{
     BaseValue, BaseValueId, BaseValues, ColumnId, Constraint, ContainerValue, ContainerValues,
     CounterId, Database, DisplacedTable, ExecutionState, ExternalFunction, ExternalFunctionId,
-    MergeVal, Offset, PlanStrategy, SortedWritesTable, TableId, TaggedRowBuffer, Value,
+    FlatTable, MergeVal, Offset, PlanStrategy, SortedWritesTable, TableId, TaggedRowBuffer, Value,
     WrappedTable, make_external_func,
 };
 use crate::numeric_id::{DenseIdMap, DenseIdMapWithReuse, NumericId, define_id};
@@ -202,6 +202,12 @@ pub struct FunctionConfig {
     pub name: String,
     /// Whether or not subsumption is enabled for this function.
     pub can_subsume: bool,
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+enum TableStorage {
+    SortedWrites,
+    Flat,
 }
 
 impl EGraph {
@@ -613,6 +619,21 @@ impl EGraph {
         self.db.get_table(self.funcs[table].table).len()
     }
 
+    /// Whether a function uses the internal append-and-scan storage.
+    #[doc(hidden)]
+    pub fn table_is_flat(&self, table: FunctionId) -> bool {
+        let table = self.db.get_table(self.funcs[table].table);
+        if table.as_any().is::<FlatTable>() {
+            true
+        } else {
+            assert!(
+                table.as_any().is::<SortedWritesTable>(),
+                "function table uses an unknown storage implementation"
+            );
+            false
+        }
+    }
+
     /// Remove every row from the given function's backing table.
     ///
     /// This is the bulk counterpart to staging a `remove` for every key in the
@@ -716,6 +737,26 @@ impl EGraph {
     }
 
     pub fn add_table(&mut self, config: FunctionConfig) -> FunctionId {
+        self.add_table_with_storage(config, TableStorage::SortedWrites)
+    }
+
+    /// Add a trusted internal function backed by append-and-scan storage.
+    ///
+    /// The caller must guarantee that the function is only directly inserted
+    /// and scanned: lookup, removal, conflict resolution, and rebuilding are
+    /// unsupported. In particular, any id columns must be immutable snapshots
+    /// that never require canonicalization. Violating that contract can panic
+    /// or leave stale ids in the table.
+    #[doc(hidden)]
+    pub fn add_internal_flat_table(&mut self, config: FunctionConfig) -> FunctionId {
+        self.add_table_with_storage(config, TableStorage::Flat)
+    }
+
+    fn add_table_with_storage(
+        &mut self,
+        config: FunctionConfig,
+        storage: TableStorage,
+    ) -> FunctionId {
         let FunctionConfig {
             schema,
             n_vals,
@@ -742,6 +783,28 @@ impl EGraph {
             assert!(
                 (1..=n_vals).contains(&k),
                 "function {name} declares {k} identity columns but has {n_vals} value columns"
+            );
+        }
+        if storage == TableStorage::Flat {
+            assert_eq!(
+                n_vals, 1,
+                "flat function `{name}` must have exactly one inert value column"
+            );
+            assert!(
+                n_identity_vals.is_none(),
+                "flat function `{name}` cannot declare identity value columns"
+            );
+            assert!(
+                matches!(default, DefaultVal::Fail),
+                "flat function `{name}` cannot provide a lookup default"
+            );
+            assert!(
+                matches!(&merge, MergeFn::AssertEq),
+                "flat function `{name}` cannot provide merge behavior"
+            );
+            assert!(
+                !can_subsume,
+                "flat function `{name}` cannot support subsumption"
             );
         }
         merge.check_value_col_indices(n_vals, &name);
@@ -798,22 +861,35 @@ impl EGraph {
             !read_deps.contains(&table_id),
             "self-referential merge for `{name}` may only write to its own table, not read it"
         );
-        let merge_fn = merge.to_callback(schema_math, &name, self);
-        let table = install_thread_pool(self.thread_pool(), || {
-            SortedWritesTable::new(
-                n_args,
-                n_cols,
-                Some(ColumnId::from_usize(schema.len())),
-                to_rebuild,
-                merge_fn,
-            )
-        });
-        let assigned_table_id = self.db.add_table_named(
-            table,
-            name.clone(),
-            read_deps.iter().copied(),
-            write_deps.iter().copied(),
-        );
+        let assigned_table_id = match storage {
+            TableStorage::SortedWrites => {
+                let merge_fn = merge.to_callback(schema_math, &name, self);
+                let table = install_thread_pool(self.thread_pool(), || {
+                    SortedWritesTable::new(
+                        n_args,
+                        n_cols,
+                        Some(ColumnId::from_usize(schema.len())),
+                        to_rebuild,
+                        merge_fn,
+                    )
+                });
+                self.db.add_table_named(
+                    table,
+                    name.clone(),
+                    read_deps.iter().copied(),
+                    write_deps.iter().copied(),
+                )
+            }
+            TableStorage::Flat => {
+                let table = install_thread_pool(self.thread_pool(), || FlatTable::new(n_cols));
+                self.db.add_table_named(
+                    table,
+                    name.clone(),
+                    read_deps.iter().copied(),
+                    write_deps.iter().copied(),
+                )
+            }
+        };
         assert_eq!(
             assigned_table_id, table_id,
             "reserved table id did not match the id assigned by add_table_named"
