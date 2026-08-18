@@ -1582,10 +1582,12 @@ does, and the proof column moves that too: a proof node is an ordinary construct
 every proof the rebuild composes joins the candidate universe.
 
 `Impl/Interp.lean`'s "Pruning the candidate cross product" is what keeps the second variable
-per read from multiplying the whole search rather than its own atom's block. It is not
-enough. **12 of the 70 in-domain cases finish** at a 60 s budget each and 20 at 300 s, all
-reporting `AGREE`; the same sweeps were 58 and 64 before the proof column, and 10 and 14
-with the pruning turned off.
+per read from multiplying the whole search rather than its own atom's block. It was not
+enough on its own — 12 of 70 at a 60 s budget — and "Joining over the row index" is what
+followed it. **63 of the 70 in-domain cases finish** at 60 s and 65 at 300 s, all reporting
+`AGREE`, against 58 and 64 *before* the proof column: the enumerator now more than pays for
+the column it was struggling under. Nothing regressed — every case that finished under the
+older enumerators is faster, `union` 6 min 5 s → 1.3 s and `actions` 253 s → 1.1 s.
 
 Where it goes is measured, and it is e-matching and not the merge phase: on `unionCase`'s
 last rebuild the round costs 207 s, of which the congruence closure is 106 ms, one merge
