@@ -327,6 +327,62 @@ fn main() {
     println!("PARTITION {}", partition(&eg, &spec.probes));
 }
 
+/// A class's symmetry group, as every permutation of its slots that it proves.
+///
+/// The group is not part of the node set: a commutative class holds *one* node and a
+/// swap, where a class without the swap holds the same one node. So a comparison that
+/// looks only at nodes cannot tell them apart, and this is the missing half.
+///
+/// `group` itself is crate-private, but `eq` on two AppliedIds over the same class is
+/// exactly a membership test on `a.m * b.m^-1`, so enumerating permutations recovers it.
+/// A class with more slots than `SLOT_CAP` is reported as `?` rather than silently
+/// skipped, since 6! is where this stops being cheap.
+fn group_of(eg: &G, id: Id) -> Vec<String> {
+    const SLOT_CAP: usize = 6;
+    let mut slots: Vec<Slot> = eg.slots(id).iter().copied().collect();
+    slots.sort_by_key(|s| s.to_string());
+    if slots.len() > SLOT_CAP {
+        return vec!["?".to_string()];
+    }
+    let ident = SlotMap::identity(&slots.iter().copied().collect());
+    let mut out = Vec::new();
+    for perm in permutations(&slots) {
+        let mut m = SlotMap::new();
+        for (a, b) in slots.iter().zip(&perm) {
+            m.insert(*a, *b);
+        }
+        let x = AppliedId::new(id, ident.clone());
+        let y = AppliedId::new(id, m.clone());
+        if eg.eq(&x, &y) {
+            let mut parts: Vec<String> = slots
+                .iter()
+                .zip(&perm)
+                .map(|(a, b)| format!("{a}>{b}"))
+                .collect();
+            parts.sort();
+            out.push(parts.join("|"));
+        }
+    }
+    out.sort();
+    out
+}
+
+fn permutations(xs: &[Slot]) -> Vec<Vec<Slot>> {
+    if xs.is_empty() {
+        return vec![vec![]];
+    }
+    let mut out = Vec::new();
+    for i in 0..xs.len() {
+        let mut rest = xs.to_vec();
+        let head = rest.remove(i);
+        for mut p in permutations(&rest) {
+            p.insert(0, head);
+            out.push(p);
+        }
+    }
+    out
+}
+
 /// Every class and node, in a form the encoding side can be compared against.
 ///
 /// `to_syntax` gives a node as a sequence of operator/payload strings, child
@@ -340,6 +396,7 @@ fn dump_structured(eg: &G) {
         let mut slots: Vec<String> = eg.slots(id).iter().map(|s| s.to_string()).collect();
         slots.sort();
         println!("CLASS {:?} SLOTS {}", id, slots.join(","));
+        println!("GROUP {:?} {}", id, group_of(eg, id).join(";"));
         let mut lines: Vec<String> = Vec::new();
         for node in eg.enodes(id) {
             let mut parts: Vec<String> = Vec::new();

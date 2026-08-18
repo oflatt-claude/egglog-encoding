@@ -314,7 +314,7 @@ dropped slot changes the domain and breaks the equation.
 
 `xdiff.py` builds a case, runs it through the reference (`xmulti`, which drives the
 crate directly) and through a compiled egglog rule, and compares which probe terms
-end up equal. Per case it checks three things:
+end up equal. Per case it checks five things:
 
 1. **baseline** — with no rule at all both sides must already agree, so a
    difference is attributed to matching rather than to the machinery;
@@ -342,17 +342,30 @@ stream — so a failing index does not reproduce across a generator change. Copy
 interesting case into `curated()` before changing anything, which is where `C11`
 and `C12` came from.
 
-Current state — `./xdiff.py` and `./xdiff.py fuzz 250 777`:
+Current state — `./xdiff.py` and `./xdiff.py fuzz 250`:
 
 | | curated | random |
 | --- | --- | --- |
-| cases agreeing | 29/30 | 248/250 |
-| of which the rule fired | 23 | 57 |
+| cases agreeing | 44/44 | 250/250 |
+| of which the rule fired | 34 | 65 |
 | matching differences | 0 | 0 |
 | order dependence | 0 | 0 |
 | slot-renaming | 0 | 0 |
 | machinery differences | 0 | 0 |
-| excluded: timeout or unsettled | 0 | 1 |
+| excluded: timeout or unsettled | 0 | 0 |
+
+The probe partition is only one projection of the e-graph, so four more comparisons run
+beside it, each over the whole corpus:
+
+```text
+isomorphism.py     the two e-graphs are isomorphic -- classes, slots, symmetry
+                   groups and nodes -- by constructing and checking a witness
+nodecounts.py      e-nodes per operator, against the reference
+fixpoint.py        each case reaches a fixpoint of the *rules*, not just of the
+                   database, which `(run N)` cannot distinguish
+follower-nodes.py  no e-node sits on a follower class
+invariants.py      Def. 4 on every edge, and that no stored renaming is non-injective
+```
 
 ## A soundness bug in the machinery: migration truncates edges
 
@@ -636,11 +649,20 @@ points every edge at the `ordering-min` value — so migration follows it:
 
 | | before | after |
 | --- | --- | --- |
-| followers holding an e-node | 1 | **0 of 26** |
+| followers holding an e-node, curated | 1 | **0 of 26** |
 | curated cases that saturate | 43 of 44 | **44 of 44** |
 
 Everything else is unchanged: curated 44/44, generated 250/250, node counts 44/44, row
 counts identical case by case, mutation matrix unchanged.
+
+**Zero on the curated corpus is not the property.** Measured over `fuzz 250` — which is
+where the claim had never been tested — 3 cases still end with a follower holding a node,
+5 nodes in total out of 93 followers. `follower-nodes.py fuzz 250` is that measurement,
+and the isomorphism check independently refuses those same cases, since a slotted class
+spanning two values that both have rows cannot be modelled as one class without merging
+their frames. So orienting migration closed the curated cases and `MR1`'s
+non-termination; it did not close the general property, and what is left is the same
+family — a rule pair with no orientation that strictly decreases.
 
 Two things this cost before it was found:
 
@@ -653,10 +675,12 @@ Two things this cost before it was found:
   follower holding a node when the node was on the leader. A follower is a value with a
   strictly *smaller* peer.
 
-With followers actually empty, an isomorphism check may enumerate leaders only. The
-empty peer is what prints as `Unextractable` — a value whose `App` rows have all been
-deleted — so `Unextractable` marks the side with nothing on it, which is the arrangement
-wanted rather than a problem.
+Where followers are empty, an isomorphism check may enumerate leaders only, and the empty
+peer is what prints as `Unextractable` — a value whose `App` rows have all been deleted —
+so there `Unextractable` marks the side with nothing on it rather than a problem. It is
+not safe to *assume* that, though: three of 250 generated cases end with a follower
+holding a node, and the isomorphism check has to detect and report them rather than
+enumerate leaders and quietly miss what they hold.
 
 **Migrating the self-loop to the leader does not substitute for keeping it.** The old
 single-parent rule already did that — `RenamesToLeader b (compose (inverse m1) m2) c`
@@ -827,6 +851,137 @@ exist.
 250/250, all eight egg files pass, and the mutation matrix is unchanged (`root-only` 11
 cases, `union-id` 2, `unordered` 1, `slot-late` 1).
 
+### The whole e-graph, not a projection of it
+
+Node counts and the probe partition are both *projections*: two different e-graphs can
+agree on either. `slotted-experiments/xdiff/isomorphism.py` compares the thing itself,
+by constructing a witness — a bijection between the two sides' e-classes, and one
+between each matched pair's slots, under which the node sets are equal. The witness is
+then re-checked, so a pass is a proof; a failure to find one is reported as "none found"
+rather than as a difference, and the search cap is named when it is hit.
+
+The sizes are printed with the verdict, because a comparison that quietly matched nothing
+would otherwise look the same as one that matched everything — an earlier version of the
+follower handling here was dropping 16 e-classes, and the count is what showed it:
+
+```text
+curated      44/44  isomorphic   217 e-classes,  282 e-nodes,  226 symmetries
+generated   244/250 isomorphic  1893 e-classes, 2499 e-nodes, 1893 symmetries
+                    0 differ, 6 not comparable
+```
+
+Nothing differs. The six are limits of reading the encoding through printed output, listed
+below: four are distinct classes sharing the one name `Unextractable`, and two are a
+slotted class whose nodes sit on two values. Four more cases are compared at a fixpoint of
+the database rather than of the rules, for the reason in the next section.
+
+Three things had to be handled rather than assumed.
+
+**Slot names are unrelated.** The reference mints `$f0, $f1, …` from a global counter,
+the encoding the smallest unused integer, so the per-class slot bijection is searched
+for, not read off. Colour refinement narrows the candidates first; the sizes here make
+exhaustive search cheap, and exhausting it is what makes a negative answer meaningful.
+
+**A class's symmetry group is not in its node set.** `C4`'s commutative `k` class holds
+*one* node and a swap; a class without the swap holds the same one node. So the group is
+compared too — recovered from the reference by testing every permutation of a class's
+slots with `eq` on two invocations, which is a group-membership test, and from the
+encoding as the self-loops `(RenamesToLeader c p c)` whose `p` permutes the class's
+slots.
+
+**A node is only defined up to those groups.** The two sides need not store the same
+representative: on `C4` the encoding's row is `k($1,$0)` where the reference's is
+`k($0,$1)`. So node equality quantifies over the parent's group and each child's group —
+the reference's "strong shape" — and over renamings of slots a node carries but its
+class does not, which is α-equivalence for a binder's bound slot.
+
+Two differences in *representation* are translated rather than compared, and both are
+checked instead of trusted: the encoding spells the binder `lambda` and rides its bound
+slot in a child edge to the variable class, where the reference has `lam` with a slot
+literal, so the translation asserts that position really is the variable class; and the
+machinery seeds `(Var 0)` and `(Null)` unconditionally, so the same two terms are added
+to the reference rather than dropping classes from one side by a rule about which ones
+"do not count".
+
+It compares the two sides at the strongest fixpoint each can reach:
+`(run-schedule (saturate (run)))` against the reference's own saturation loop. Where the
+encoding has no fixpoint of its *rules* — see below — the state is taken at a fixpoint of
+the *database* instead, established by two different round budgets producing the same
+graph, which is the standard the partition comparison already uses. Those cases are
+counted separately so the two are not conflated.
+
+### A second derive/delete pair, found by requiring a fixpoint
+
+Asking for `saturate` on the generated corpus turned up cases that never terminate,
+and they are *not* the α-variant growth below: every table is stable, `App2` and
+`RenamesToLeader` and `ClassSlots` all unchanged from 10 rounds to 240. Only the
+database size oscillates, by one row, forever.
+
+`RUST_LOG=debug` makes egglog name the rules that still match, which is quicker than
+guessing at it:
+
+```text
+size 51, updated=true, top_matches=[... (rule ((RenamesToLeader (App2 'lambda' ...
+size 50, updated=true, top_matches=[(rule ((RenamesToLeader a m1_o c) ... =7, ...
+```
+
+The binder rule derives the narrowed `RenamesToLeader` row that makes two spellings of a
+binder α-equivalent; the single-parent rule deletes a `RenamesToLeader` row. Each undoes
+the other, on an unchanging database. That is the third instance of one shape — after the
+self-loop pair of open question 2 and migration's ping-pong — and the same lesson: **a
+rule that both builds and deletes needs an orientation that strictly decreases.**
+
+Bisecting by rule kind is worth distrusting here. Removing migration makes these cases
+terminate, which looks like an accusation but is not one: removing it changes the state
+the run ends in, and *that* state happens to be a rule fixpoint. Migration cannot fire at
+the oscillating state at all — a faithful copy of its premise matches zero times. The
+per-rule log is what actually identifies the pair, and the same caution applies to the
+bisect that was run for migration.
+
+**It is strictly sharper than the partition.** Put each known bug back and it fails on
+more cases than the matching comparison does, and it is the only comparison against the
+reference that sees `wide-kids` at all, which until now only an internal invariant
+caught:
+
+| | matching mismatches | non-isomorphic |
+| --- | --- | --- |
+| `root-only` | 11 | **12** |
+| `union-id` | 2 | **4** |
+| `slot-late` | 1 | **2** |
+| `unordered` | 1 | 1 |
+| `binder-1st` | 0 | 0 |
+| `wide-kids` | 0 | **1** |
+
+`binder-1st` remains caught only indirectly, by the order-independence check.
+
+A comparison that always answers "isomorphic" would pass every corpus just as quietly,
+so `isomorphism.py selftest` pins the three answers that matter on hand-built graphs,
+with no egglog and no reference involved: a graph with every slot renamed must be
+*accepted* and its witness must verify, and the two subtlest ways to differ — a class
+missing one symmetry, and one edge moved onto another slot — must be *rejected*. The
+second of those is rejected by exhausting the search, which is what makes a negative
+answer worth anything.
+
+Three limits worth stating.
+
+* A class with more than six slots is reported rather than enumerated, since the group
+  is recovered by trying every permutation.
+* A value with no rows of its own prints as `Unextractable`, which is not a unique
+  name — two empty followers share it. One that nothing references is dropped, since it
+  contributes nothing; one that something references and that is offered two different
+  representatives is reported, rather than resolved by guessing.
+* The identity is added to every group before comparing, because a slotless class's
+  identity is the empty permutation and the reference prints it as an empty field. So a
+  *missing* identity self-loop is not what this check detects — that is a reachability
+  question, and `stranded.py` is what asks it.
+* A slotted class whose nodes sit on two different values — which is what a follower
+  holding a node means — is reported rather than merged. Merging would mean translating
+  one frame into the other and deduplicating what then coincides, and modelling it as two
+  classes instead would invent a difference that is not there.
+
+Each of those is counted as *not comparable*, separately from *differ*, so a limit of the
+tooling is never presented as a finding about the encoding.
+
 ### The other divergence is growth, not a missing merge
 
 `X1` looks like the same kind of gap -- one `h` node too many -- but it is not. Its
@@ -993,9 +1148,12 @@ Where each is caught:
 | `wide-kids` | C15 | Def. 4 invariant, not the reference |
 | `binder-1st` | C13 | order-independence check only |
 
-`wide-kids` is the one caught by an *internal* check rather than by disagreement: the
-partition and the node counts are right either way, and only the Def. 4 check sees it.
-It is also the one that needed `MIGRATION = "mint"` to be reachable at all.
+`wide-kids` is the one no *partition* comparison sees: the probe groups and the node
+counts are right either way. The Def. 4 check catches it directly, and the isomorphism
+check catches it as a consequence — the encoding stops settling, because the action
+rebuilds each round what `child-update` deletes, so it has no fixpoint to compare with
+the reference's. It is also the one that needed `MIGRATION = "mint"` to be reachable at
+all.
 
 Two things this was worth doing for.
 

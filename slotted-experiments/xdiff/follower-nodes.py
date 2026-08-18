@@ -12,6 +12,8 @@ is not the test: `RenamesToLeader` holds both directions for a pair, so that is 
 the leader as well, and an earlier version of this probe counted both -- reporting a
 follower holding a node where the node was on the leader.
 """
+import random
+import re
 import subprocess
 import sys
 sys.path.insert(0, "slotted-experiments/xdiff")
@@ -37,9 +39,21 @@ def obs():
     return "\n".join(out)
 
 
+# The curated corpus reports zero, and that is not the same as the property holding:
+# `fuzz 250` finds three cases where a follower still holds a node, so run both.
+#     python3 slotted-experiments/xdiff/follower-nodes.py            curated
+#     python3 slotted-experiments/xdiff/follower-nodes.py fuzz 250   generated
+if len(sys.argv) > 1 and sys.argv[1] == "fuzz":
+    n = int(sys.argv[2]) if len(sys.argv) > 2 else 250
+    rng = random.Random(0)
+    cases = [X.rand_case(rng, i) for i in range(n)]
+else:
+    cases = X.curated()
+
 total_followers = total_with_nodes = 0
-for c in X.curated():
-    prog = X.egg_program(c).replace("(print-function SameClass 100000)", obs())
+for c in cases:
+    prog = re.sub(r"\(run\s+\d+\)", f"(run {c.rounds * 6})", X.egg_program(c))
+    prog = prog.replace("(print-function SameClass 100000)", obs())
     p = X.ROOT / f"fn-{abs(hash(c.name)) % 99999}.egg"
     p.write_text(prog)
     try:
@@ -61,5 +75,5 @@ for c in X.curated():
         print(f"  {c.name:38} followers {followers}, of those holding a node "
               f"{with_nodes}")
 
-print(f"\n{total_followers} follower classes across the corpus, "
+print(f"\n{total_followers} follower classes over {len(cases)} cases, "
       f"{total_with_nodes} of them holding an e-node")
