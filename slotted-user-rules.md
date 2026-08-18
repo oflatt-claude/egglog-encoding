@@ -910,7 +910,7 @@ the *database* instead, established by two different round budgets producing the
 graph, which is the standard the partition comparison already uses. Those cases are
 counted separately so the two are not conflated.
 
-### A second derive/delete pair, found by requiring a fixpoint
+### A binder makes open question 2's pair permanent
 
 Asking for `saturate` on the generated corpus turned up cases that never terminate,
 and they are *not* the α-variant growth below: every table is stable, `App2` and
@@ -925,11 +925,31 @@ size 51, updated=true, top_matches=[... (rule ((RenamesToLeader (App2 'lambda' .
 size 50, updated=true, top_matches=[(rule ((RenamesToLeader a m1_o c) ... =7, ...
 ```
 
-The binder rule derives the narrowed `RenamesToLeader` row that makes two spellings of a
-binder α-equivalent; the single-parent rule deletes a `RenamesToLeader` row. Each undoes
-the other, on an unchanging database. That is the third instance of one shape — after the
-self-loop pair of open question 2 and migration's ping-pong — and the same lesson: **a
-rule that both builds and deletes needs an orientation that strictly decreases.**
+The cycle is **open question 2's own pair** — the self-loop rule against the shrinking
+rule — and the binder rule is what makes it permanent. On `fuzz77` the lambda node is
+`L = lambda {0→1}(Var 0) {2→2}K`, whose own slots are `{1,2}`:
+
+| | derives | |
+| --- | --- | --- |
+| self-loop rule | `RenamesToLeader L {1→1,2→2} L` | the identity on the *node's* slots |
+| binder rule | `RenamesToLeader L {2→2} L` | the same, bound slot `1` removed |
+
+The shrinking rule then has `m1 = {1→1,2→2}` and `m = {2→2}`: `m` is idempotent,
+`m2 = m·(m1·m) = {2→2} ≠ m1`, so it deletes the wide loop. Next round the self-loop rule
+re-derives it from the node row, which never changed. `RenamesToLeader` flips 13 → 12 → 13
+with period 2, forever, and `single-parent` is not involved at all — its `(!= a b)` and
+`(!= a c)` guards stop it firing on a self-loop.
+
+**This falsifies the convergence claim in open question 2.** That claim was measured on
+five curated cases, where the too-wide loop is derived once and then gone. A binder is
+different: the narrow loop is not a transient to be cleaned up, it is *permanently*
+correct and permanently narrower than what the self-loop rule keeps re-deriving. So the
+two rules sit in a stable disagreement rather than converging.
+
+The lesson from migration applies unchanged — **a rule that both builds and deletes needs
+an orientation that strictly decreases** — and here the fix would have to stop the
+self-loop rule asserting the node's slots as the class's, which is the "do not derive a
+class-level fact from a node" advice that question 2 already draws.
 
 Bisecting by rule kind is worth distrusting here. Removing migration makes these cases
 terminate, which looks like an accusation but is not one: removing it changes the state
@@ -1384,12 +1404,21 @@ flavour of `find-mapping` (a different representation).
    the whole corpus — it used to check five hand-picked cases and so missed the one
    case that did not terminate.
 
-   So the derive/delete pair converges whenever the program does. What is left is
-   the shape of the mistake, worth not repeating: **do not derive a class-level
-   fact from a node**, and prefer a merge that can only move one way over two rules
-   that derive and delete against each other.
+   **It does not converge with a binder, and that was measured later.** The claim above
+   that "the pair converges whenever the program does" came from five curated cases,
+   where the wide loop is derived once and then gone. Four generated cases show
+   otherwise: the binder rule's narrowed self-loop is not a transient, it is
+   *permanently* correct and permanently narrower than the identity the self-loop rule
+   keeps re-deriving from the node, so the two sit in a stable disagreement.
+   `RenamesToLeader` flips by one row with period 2 forever while every table stays the
+   same size. Worked through under "A binder makes open question 2's pair permanent"
+   above.
 
-   That warning then caught a second, unrelated instance — migration deleting a node
+   So the shape of the mistake stands, and is now known to bite: **do not derive a
+   class-level fact from a node**, and prefer a merge that can only move one way over
+   two rules that derive and delete against each other.
+
+   The same warning also caught an unrelated instance — migration deleting a node
    from one value and rebuilding it on the other, in both directions, because
    `RenamesToLeader` is symmetric. See "Migration has to be oriented" above. The
    generalisation: **a rule that both builds and deletes needs an orientation that
