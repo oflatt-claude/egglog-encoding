@@ -760,6 +760,41 @@ and the reference's node key is a shape. It is not a local rule fix -- it wants 
 an alpha-invariant key for rows, or an alpha-finder that keeps pace with what the
 actions build.
 
+### An upstream crash, found while modelling the class slot set
+
+Looking at how the reference holds a class's slots turned up a panic in it. Shrinking
+a class whose symmetry group is non-trivial:
+
+```text
+term  (f (var $0) (var $1))
+union (f (var $0) (var $1)) (f (var $1) (var $0))     ; the class becomes symmetric
+union (f (var $0) (var $1)) (g (var $1) (var $1))     ; and then its slots shrink
+
+SlotMap::index($f2): index missing!                   (group/mod.rs, build_ot)
+```
+
+Neither union alone does it; the symmetry and the shrink are both needed.
+
+`restrict_proven` filters a permutation by its *keys*, so with `cap = {1}` the swap
+`{0→1, 1→0}` becomes `{1→0}` -- which maps a surviving slot outside `cap`. That is not
+a permutation of `cap`, and composing it later indexes a slot the map does not have.
+
+The fix was already written in the same function and thrown away. `final_cap` removes
+the orbit of every newly redundant slot, so no surviving slot can be moved out, but
+`c.slots` and the generator restriction both took `cap` instead. Using `final_cap`
+fixes the panic, and in the case above gives the right answer for a second reason:
+`orbit(0) = {0,1}`, so both slots are redundant, which is what the comment on that loop
+says should happen.
+
+The reference's suite is unchanged by it -- 105 pass before and after, with the same
+three pre-existing `redundancy_matching_bug` failures -- and our corpus still agrees
+43/43.
+
+**The oracle now depends on this patch**, which lives on a branch of the local
+slotted-egraphs checkout rather than upstream, so a fresh clone would still crash on
+those shapes. `slotted-experiments/upstream-shrink-orbit-closure.patch` is the change,
+kept here so the dependency is not silent. It is worth sending to memoryleak47.
+
 ### Which slotted-egraphs is this compared against?
 
 `memoryleak47/slotted-egraphs` PR #45, and the distinction matters. `multipat.rs` is
