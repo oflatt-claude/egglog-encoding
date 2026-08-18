@@ -15,6 +15,10 @@
 
 (constructor Lam (Renaming U Renaming U) U)
 
+;; an upper bound on the class's slots; the merge narrows it
+(rule ((= e1 (Lam m1 c1 m2 c2)))
+      ((set (ClassSlots e1) (map-union (map-image m1) (map-image m2)))))
+
 ;; every class holding a node has a self-loop, so a query can reach it
 (rule ((= e1 (Lam m1 c1 m2 c2))
        (= m (map-union (map-image m1) (map-image m2))))
@@ -85,6 +89,10 @@
 
 (constructor App (Renaming U Renaming U) U)
 
+;; an upper bound on the class's slots; the merge narrows it
+(rule ((= e1 (App m1 c1 m2 c2)))
+      ((set (ClassSlots e1) (map-union (map-image m1) (map-image m2)))))
+
 ;; every class holding a node has a self-loop, so a query can reach it
 (rule ((= e1 (App m1 c1 m2 c2))
        (= m (map-union (map-image m1) (map-image m2))))
@@ -154,6 +162,10 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (constructor Let (Renaming U Renaming U Renaming U) U)
+
+;; an upper bound on the class's slots; the merge narrows it
+(rule ((= e1 (Let m1 c1 m2 c2 m3 c3)))
+      ((set (ClassSlots e1) (map-union (map-image m1) (map-union (map-image m2) (map-image m3))))))
 
 ;; every class holding a node has a self-loop, so a query can reach it
 (rule ((= e1 (Let m1 c1 m2 c2 m3 c3))

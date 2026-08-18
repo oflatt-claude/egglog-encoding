@@ -1181,19 +1181,34 @@ What is established about it:
   creation and deletion balance, not because nothing is happening. `X1` shows the same
   as an oscillation, 1, 2, 2, 1.
 
-**A candidate fix, not yet tried.** The gap is that a class's slot set is only ever
-implied by self-loops, which are derived from nodes and so can over-state it. egglog
-can hold it directly, with the shrinking built into a merge:
+**Fixed, by holding the slot set directly.** The gap was that a class's slot set was
+only ever implied by self-loops, which are derived from nodes and so can over-state it,
+and a rule got whichever one the join bound.
 
 ```text
 (function ClassSlots (U) Renaming :merge (map-intersect old new))
 ```
 
-Each class then has exactly one slot set, monotonically decreasing, which is what
-`c.slots` and `cap` are in the reference's `union_leaders`. Rules that currently mean
-"the class's slots" would read `ClassSlots` instead of picking a self-loop. It needs a
-`map-intersect` primitive, and care that intersecting over a class's nodes really does
-give the live slots.
+One slot set per class, narrowing on merge and so only ever shrinking -- what `c.slots`
+and `cap` are in the reference's `union_leaders`. Each node offers its own slots as an
+upper bound, and the merge keeps what *every* node of the class has, so anything only
+some of them carry is redundant. Deriving it from a node is safe here precisely because
+the merge can only narrow, which is the difference from the self-loop rule. Two rules
+carry a slot set along a `RenamesToLeader` edge in both directions, since a slotted
+class spans several egglog classes.
+
+The compiled action then restricts a root's renaming by `ClassSlots` rather than by a
+symmetry, and every violation goes:
+
+| | before | after |
+| --- | --- | --- |
+| wide edges, curated | 1 (`X1`, allowlisted) | **0**, allowlist empty |
+| wide edges, generated | 10 of 150 | **0** of 250 |
+| node counts vs the reference | 41 of 43 | **43 of 43** |
+
+`X1`'s extra `h` node was the same cause and went with it. Partitions are unchanged --
+43/43 curated and 250/250 generated -- and the mutation matrix still discriminates
+(`root-only` 15 cases, `union-id` 3, `unordered` 1, `slot-late` 1).
 
 ## Machine-checked invariants
 

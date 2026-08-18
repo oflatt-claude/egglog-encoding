@@ -6,10 +6,37 @@
 ;;; the node binds.
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; a class's slot set, held once
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; The slots a class actually depends on, as an identity renaming. Held directly
+;; rather than read off a self-loop: a self-loop is derived from a node, so it can
+;; name more slots than the class has, and a rule that picks one to mean "the class's
+;; slots" gets whichever the join happened to bind. This narrows on merge and so can
+;; only ever shrink, which is what the reference's `c.slots` does.
+(function ClassSlots (U) Renaming :merge (map-intersect old new))
+
+;; the leaves, whose slots are known outright
+(set (ClassSlots (Var 0)) (map-of 0 0))
+(set (ClassSlots (Null)) (map-empty))
+
+;; Carry a slot set along a `RenamesToLeader` edge, in both directions: `a = m*b`, so
+;; `m` takes b's slots to a's. Transporting a set S through a renaming is the image of
+;; the renaming restricted to S.
+(rule ((RenamesToLeader a m b) (= S (ClassSlots a)))
+      ((set (ClassSlots b) (map-image (compose (inverse m) S)))))
+(rule ((RenamesToLeader a m b) (= S (ClassSlots b)))
+      ((set (ClassSlots a) (map-image (compose m S)))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; App2 :: String child child
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (constructor App2 (String Renaming U Renaming U) U)
+
+;; an upper bound on the class's slots; the merge narrows it
+(rule ((= e1 (App2 p1 m1 c1 m2 c2)))
+      ((set (ClassSlots e1) (map-union (map-image m1) (map-image m2)))))
 
 ;; every class holding a node has a self-loop, so a query can reach it
 (rule ((= e1 (App2 p1 m1 c1 m2 c2))
@@ -80,6 +107,10 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (constructor App3 (String Renaming U Renaming U Renaming U) U)
+
+;; an upper bound on the class's slots; the merge narrows it
+(rule ((= e1 (App3 p1 m1 c1 m2 c2 m3 c3)))
+      ((set (ClassSlots e1) (map-union (map-image m1) (map-union (map-image m2) (map-image m3))))))
 
 ;; every class holding a node has a self-loop, so a query can reach it
 (rule ((= e1 (App3 p1 m1 c1 m2 c2 m3 c3))
@@ -168,6 +199,10 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (constructor App4 (String Renaming U Renaming U Renaming U Renaming U) U)
+
+;; an upper bound on the class's slots; the merge narrows it
+(rule ((= e1 (App4 p1 m1 c1 m2 c2 m3 c3 m4 c4)))
+      ((set (ClassSlots e1) (map-union (map-image m1) (map-union (map-image m2) (map-union (map-image m3) (map-image m4)))))))
 
 ;; every class holding a node has a self-loop, so a query can reach it
 (rule ((= e1 (App4 p1 m1 c1 m2 c2 m3 c3 m4 c4))
@@ -275,6 +310,10 @@
 
 (constructor Num (i64) U)
 
+;; an upper bound on the class's slots; the merge narrows it
+(rule ((= e1 (Num p1)))
+      ((set (ClassSlots e1) (map-empty))))
+
 ;; every class holding a node has a self-loop, so a query can reach it
 (rule ((= e1 (Num p1))
        (= m (map-empty)))
@@ -286,6 +325,10 @@
 
 (constructor Sym (String) U)
 
+;; an upper bound on the class's slots; the merge narrows it
+(rule ((= e1 (Sym p1)))
+      ((set (ClassSlots e1) (map-empty))))
+
 ;; every class holding a node has a self-loop, so a query can reach it
 (rule ((= e1 (Sym p1))
        (= m (map-empty)))
@@ -296,6 +339,10 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (constructor Scale (i64 Renaming U) U)
+
+;; an upper bound on the class's slots; the merge narrows it
+(rule ((= e1 (Scale p1 m1 c1)))
+      ((set (ClassSlots e1) (map-image m1))))
 
 ;; every class holding a node has a self-loop, so a query can reach it
 (rule ((= e1 (Scale p1 m1 c1))

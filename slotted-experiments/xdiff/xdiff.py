@@ -244,7 +244,7 @@ def rhs_text(t):
 # domain is exactly its child's slot set -- the reference asserts it outright, in
 # `check_internal_applied_id`. The encoding does not enforce it, and `X1` reaches a
 # state that breaks it; that is recorded here so a *new* violation still fails.
-KNOWN_WIDE = {"X1-migration-must-not-truncate": 1}
+KNOWN_WIDE = {}
 
 # An idempotent self-loop on the child is a partial identity, so the child's live
 # slots are inside its domain: one with fewer keys than the edge proves the edge names
@@ -530,13 +530,16 @@ def compile_rule(atoms, action, conds=()):
                 mp_of[cp] = m
         if root not in mp_of:
             # `mp` has the matched NODE's slots for its domain, but a variable's
-            # renaming must have its CLASS's -- the two differ exactly when the
-            # node carries a redundant slot. Using the wider one puts slots into a
-            # built node that its child does not have, and the action then forces
-            # them redundant. Composing with a symmetry, whose domain is the live
-            # slots, restricts it; under `per-class` that join is shared with
-            # every other use of this class, so it is nearly free.
-            mp_of[root] = f"(compose {mp} {sym_for(root)})"
+            # renaming must have its CLASS's -- the two differ exactly when the node
+            # carries a redundant slot. Using the wider one puts slots into a built
+            # node that its child does not have, breaking Def. 4.
+            #
+            # Restricting by `ClassSlots` rather than by a symmetry: a symmetry is
+            # whichever self-loop the join binds, and one of those can itself be wider
+            # than the class, in which case it narrows nothing.
+            cs = fresh("cs")
+            body.append(f"(= {cs} (ClassSlots {rv}))")
+            mp_of[root] = f"(compose {mp} {cs})"
 
     # Side conditions. A variable's slots in pattern space are the image of its
     # renaming, so `$s in slots(?x)` is membership in `(map-image mx)`. With one

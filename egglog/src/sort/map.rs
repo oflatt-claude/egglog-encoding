@@ -129,6 +129,20 @@ fn renaming_domain(m: &BTreeMap<Value, Value>) -> BTreeMap<Value, Value> {
     m.keys().map(|k| (*k, *k)).collect()
 }
 
+/// The entries two maps agree on.
+///
+/// A slot set is an identity renaming, so this is how one narrows: intersecting two
+/// identity maps gives the identity on the intersection of their domains.
+fn renaming_intersect(
+    a: &BTreeMap<Value, Value>,
+    b: &BTreeMap<Value, Value>,
+) -> BTreeMap<Value, Value> {
+    a.iter()
+        .filter(|(k, v)| b.get(k) == Some(v))
+        .map(|(k, v)| (*k, *v))
+        .collect()
+}
+
 /// Union of partial maps; `None` if they disagree on a shared key.
 fn renaming_union(
     a: &BTreeMap<Value, Value>,
@@ -223,6 +237,7 @@ fn renaming_find_mapping_total(maps: &[BTreeMap<i64, i64>]) -> Option<BTreeMap<i
 /// - `map-remove`
 /// - `map-length`
 /// - `map-union`
+/// - `map-intersect`
 ///
 /// When the key and value sorts coincide, a map also reads as a partial
 /// injection on a single space (a "renaming"), and these are registered too:
@@ -400,6 +415,7 @@ impl ContainerSort for MapSort {
         add_primitive_with_validator!(eg, "map-not-contains" = |xs: @MapContainer (arc), x: # (self.key())| -?> () { (!xs.data.contains_key(&x)).then_some(()) }, map_not_contains_validator);
 
         add_primitive!(eg, "map-union" = |xs: @MapContainer (arc), ys: @MapContainer (arc)| -?> @MapContainer (arc) { Some(MapContainer { data: renaming_union(&xs.data, &ys.data)?, ..xs }) });
+        add_primitive!(eg, "map-intersect" = |xs: @MapContainer (arc), ys: @MapContainer (arc)| -> @MapContainer (arc) { MapContainer { data: renaming_intersect(&xs.data, &ys.data), ..xs } });
 
         // `map-contains` is a fact, so it cannot be combined with `or`/`and`; this
         // is the same test as a value, for use inside a `guard`.
