@@ -35,13 +35,12 @@ ground under the substitution built so far is rejected. A body fact reading a me
 function's row is rejected for the same reason, `Expr.eval` having no case for one. Both are
 refusals, so the checker stays sound; `Proof.Sound` is the statement that says so.
 
-**What a merge records is refused by design.** Both rows a collision settles — the `@UF`
-edge `mergeBody` writes and the row `mergeResult` keeps — carry the *resident* row's proof
-`old1` rather than egglog's `(@Trans (@Sym old1) new1)`, so `old1 : k = old0` stands where
-the row now claims `max = min`. That is `MergeFn`, the sixth justification `CHECKER.md`'s
-minimal subset excludes, and refusing it is correct: `Encode.lean`'s `mergeResult` records
-what the alternative cost. `difftest check` counts those apart from proofs that justify
-nothing.
+**A merge needs no justification of its own.** A collision keeps the proof carried by
+whichever side's value survives and composes the displaced edge as
+`(@Trans (@Sym hi_pf) lo_pf)` (`Encode.lean`'s `mergeResult`), so both settled rows carry a
+proof of what they claim, built from `@Sym` and `@Trans` alone. `MergeFn` — the justification
+that would need this checker to re-run a `:merge` body — is therefore never reached.
+`difftest check` still counts `merge-displaced` apart from proofs that justify nothing.
 -/
 
 namespace Egglog

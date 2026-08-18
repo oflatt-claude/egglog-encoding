@@ -241,9 +241,10 @@ Each is recorded at its definition in `Encoding/Encode.lean`; the reasons in one
   literal columns so the firing shows in its head constructor's count. **The encoder now emits the
   column**: `@UF` and every view have `outArity 2`, the prelude declares `@Fiat`, `@Sym`, `@Trans`,
   one `@Congr_k` per source arity and one `@Rule_i` per source rule, and every `set` and every view
-  read carries the proof. Five of the eight `Justification`s are reachable that way; the sixth,
-  `MergeFn`, is what a view collision would need and what `Encode.lean`'s `mergeResult` records
-  instead of naming.
+  read carries the proof. Five of the eight `Justification`s are reachable that way, and those five
+  suffice: a view collision keeps the surviving value's proof and composes the displaced edge out
+  of `@Sym` and `@Trans` (`Encode.lean`'s `mergeResult`), so `MergeFn` — which would need the
+  checker to re-run a `:merge` body — is never required.
 
 ### Open design questions
 
