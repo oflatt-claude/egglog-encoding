@@ -1812,14 +1812,16 @@ resident row's proof (`Encode.lean`'s `mergeResult`), which proves `k = old0` an
 `old0 = new0` the edge claims — egglog's `MergeFn`, the sixth justification `CHECKER.md`'s
 minimal subset excludes. The report counts those apart from proofs that justify nothing.
 
-**Measured.** `difftest check 64` at a 900 s budget per case: 35 of the 76 — the 70 in-domain
-corpus cases and the six probes — finish, and over them **244 of 259 recorded equalities
-check, 15 are merge-displaced, and none is unjustified**. `union` accounts for one of the 15
-and `up-thin` for four, one per row a collision settles; the other cases with a merge in them
-have one apiece. The budget bounds the sweep and not the checker: `check 64 union` is 5 min
-11 s where `encode 64 union` is 6 min 5 s, and the difference is the source run `encodeCompare`
-does and this does not — reading and checking every proof is inside the noise of producing
-them.
+**Measured.** `difftest check 64` at a 3600 s budget per case, run 76-way parallel: 75 of the
+76 — the 70 in-domain corpus cases and the six probes — finish, and over them **724 of 824
+recorded equalities check, 93 are merge-displaced, and 7 are unjustified**. `rand-19` is the
+one that does not. `both-2` accounts for 14 of the 93 and `rand-43` for 13; `rand-15`,
+`rand-18`, `rand-45`, `up-thin` and `up-thin-run` have four apiece, `up`, `up-run` and
+`rand-59` three, five cases two, and 27 one. Seventy-seven of the 93 carry `(@Fiat)`. The 7
+unjustified are three in `rand-57`, two in `rand-45`, and one each in `rand-33` and `both-2`.
+The budget bounds the sweep and not the checker: `check 64 union` is 1.0 s where `encode 64
+union` is 1.3 s, and the difference is the source run `encodeCompare` does and this does not —
+reading and checking every proof is inside the noise of producing them.
 
 **What running it found** was a third disagreement, and this was the only thing that could:
 `@Fiat` reads the top-level actions of the source, but `encodeBuild` writes its view entry
