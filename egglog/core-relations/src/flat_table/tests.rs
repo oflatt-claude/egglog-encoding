@@ -142,6 +142,24 @@ fn clone_owns_an_independent_pending_snapshot() {
 }
 
 #[test]
+fn concurrent_clones_see_the_same_pending_snapshot() {
+    empty_execution_state!(exec_state);
+    let original = WrappedTable::new(FlatTable::new(2));
+    stage(&original, &[[v(1), v(1)], [v(2), v(2)]]);
+
+    let (mut left, mut right) = std::thread::scope(|scope| {
+        let left = scope.spawn(|| original.dyn_clone());
+        let right = scope.spawn(|| original.dyn_clone());
+        (left.join().unwrap(), right.join().unwrap())
+    });
+    left.merge(&mut exec_state);
+    right.merge(&mut exec_state);
+
+    assert_eq!(sorted_rows(&left), sorted_rows(&right));
+    assert_eq!(left.len(), 2);
+}
+
+#[test]
 fn parallel_batches_are_appended_without_loss() {
     empty_execution_state!(exec_state);
     let mut table = WrappedTable::new(FlatTable::new(2));
