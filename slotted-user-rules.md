@@ -686,6 +686,55 @@ in a non-binder child position, and the reference admits a slot there only via
 `Bind` or as the whole of `Var(Slot)`, which is a unary atom the harness's
 two-child format cannot express.
 
+### Comparing more than the probe partition
+
+A probe partition only sees what someone thought to probe. Counting e-nodes per
+operator sees the whole e-graph, so a spurious node, a missing one, or a merge that
+should not have happened shows up whether or not a probe was aimed at it.
+`slotted-experiments/xdiff/nodecounts.py` does that: the oracle grows a `dump` line
+that prints every class and node through `to_syntax` -- operator, children with their
+slotmaps, slot literals -- and the encoding side counts `App{n}` rows by operator.
+
+`var` and `null` are excluded: the reference holds a variable as a `var` *node* in its
+own class while the encoding holds it as the nullary `(Var 0)` value, so counting them
+would compare bookkeeping rather than content.
+
+**41 of 43 curated cases agree on node counts. Two do not**, and neither was visible
+to the probe check:
+
+| case | reference | encoding |
+| --- | --- | --- |
+| `X1-migration-must-not-truncate` | `h`: 6 | `h`: 7 |
+| `S1-symmetry-group-is-closed` | `f`: 1 | `f`: 2 |
+
+`X1` is the stranded row already documented above. `S1` was new, and diagnosing it
+gives a second, independent compression gap.
+
+Its two `f` rows have *identical children* and differ only in the second edge, by a
+rotation that is in the class's stored symmetry group -- both `k` and `f` do hold the
+full cyclic group of three, so closure is not the problem. Their outputs are already
+in one class, so `e1 == e2` in the alpha-finder and its tie-break guard decides the
+case. Instrumenting the premise shows it matches six times, and of the instantiations
+where the two spellings genuinely differ, `b1` is always the identity while `a1` is a
+non-identity rotation:
+
+```text
+(a1 b1 a2 b2 m) = (c   e  e   c²  c )
+                  (c²  e  c   c²  c²)
+                  (e   e  c²  c²  e )   <- a1 = b1 and a2 = b2, so "same node"
+```
+
+The guard fires only when the composed spelling sorts *below* the stored one, and
+composing with a symmetry here always sorts it above, so every instantiation declines.
+Stable at 5 `App2` rows through 60 extra rounds, so this is a fixpoint and not pending
+maintenance. Changing which spelling the `delete` targets -- the matched edges rather
+than the composed ones -- does not help.
+
+No equality is at stake, since the two rows are already one class: like the migration
+guard, this leaves a node un-canonicalised rather than losing a fact. It is recorded
+rather than fixed, because the guard's direction is what keeps the alpha-finder from
+firing both ways on every pair.
+
 ### Which slotted-egraphs is this compared against?
 
 `memoryleak47/slotted-egraphs` PR #45, and the distinction matters. `multipat.rs` is

@@ -71,6 +71,9 @@ struct RuleSpec {
 }
 
 struct Spec {
+    /// Print a structured dump of every class and node after saturating, so the two
+    /// sides can be compared on more than the probe partition.
+    dump: bool,
     terms: Vec<String>,
     unions: Vec<(String, String)>,
     /// A `rule` line starts a new one; with none, the first `atom` opens one, so a
@@ -82,6 +85,7 @@ struct Spec {
 
 fn parse_spec(src: &str) -> Spec {
     let mut s = Spec {
+        dump: false,
         terms: vec![],
         unions: vec![],
         rules: vec![],
@@ -96,6 +100,7 @@ fn parse_spec(src: &str) -> Spec {
         let (kind, rest) = line.split_once(char::is_whitespace).unwrap_or((line, ""));
         let rest = rest.trim();
         match kind {
+            "dump" => s.dump = true,
             "term" => s.terms.push(rest.to_string()),
             "probe" => s.probes.push(rest.to_string()),
             "rounds" => s.rounds = rest.parse().unwrap(),
@@ -316,7 +321,50 @@ fn main() {
         println!("SATURATED {}", if saturated { "yes" } else { "no" });
     }
 
+    if spec.dump {
+        dump_structured(&eg);
+    }
     println!("PARTITION {}", partition(&eg, &spec.probes));
+}
+
+/// Every class and node, in a form the encoding side can be compared against.
+///
+/// `to_syntax` gives a node as a sequence of operator/payload strings, child
+/// invocations and slot literals, so nothing has to be recovered from `Debug`
+/// output. Slot *names* are printed as they are; the comparison is what
+/// canonicalises them away, since the two sides pick names independently.
+fn dump_structured(eg: &G) {
+    let mut ids = eg.ids();
+    ids.sort_by_key(|i| format!("{i:?}"));
+    for id in ids {
+        let mut slots: Vec<String> = eg.slots(id).iter().map(|s| s.to_string()).collect();
+        slots.sort();
+        println!("CLASS {:?} SLOTS {}", id, slots.join(","));
+        let mut lines: Vec<String> = Vec::new();
+        for node in eg.enodes(id) {
+            let mut parts: Vec<String> = Vec::new();
+            for e in node.to_syntax() {
+                match e {
+                    SyntaxElem::String(t) => parts.push(format!("o:{t}")),
+                    SyntaxElem::Slot(s) => parts.push(format!("s:{s}")),
+                    SyntaxElem::AppliedId(a) => {
+                        let mut m: Vec<String> = a
+                            .m
+                            .iter()
+                            .map(|(k, v)| format!("{k}>{v}"))
+                            .collect();
+                        m.sort();
+                        parts.push(format!("c:{:?}:{}", eg.find_applied_id(&a).id, m.join("|")));
+                    }
+                }
+            }
+            lines.push(format!("NODE {:?} {}", id, parts.join(" ")));
+        }
+        lines.sort();
+        for l in lines {
+            println!("{l}");
+        }
+    }
 }
 
 /// Probe indices grouped by **e-class identity**, as a canonical string.
