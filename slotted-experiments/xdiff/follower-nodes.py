@@ -1,0 +1,59 @@
+"""Do any e-nodes sit on a follower class, at the fixpoint?
+
+It decides whether an isomorphism check can enumerate leader classes only. A value
+prints as `Unextractable` when its defining `App` rows have all been deleted, and both
+rules that delete -- the alpha-finder and migration -- delete on the *follower* side.
+So leaders keep their rows and stay printable. That is only useful if followers hold no
+nodes, since otherwise leader-only enumeration would miss structure.
+"""
+import subprocess
+import sys
+sys.path.insert(0, "slotted-experiments/xdiff")
+import xdiff as X
+
+OBS_HEAD = """
+(ruleset obs)
+(relation FollowerWithNode (U))
+(relation Follower (U))
+(rule ((RenamesToLeader a m l) (!= a l)) ((Follower a)) :ruleset obs)
+"""
+
+
+def obs():
+    out = [OBS_HEAD]
+    for n in (2, 3, 4):
+        cols = " ".join(f"m{i} c{i}" for i in range(1, n + 1))
+        out.append(f"(rule ((= v (App{n} f {cols}))\n"
+                   f"       (RenamesToLeader v m l)\n"
+                   f"       (!= v l))\n"
+                   f"      ((FollowerWithNode v)) :ruleset obs)")
+    out += ["(run obs 1)", "(print-size Follower)", "(print-size FollowerWithNode)"]
+    return "\n".join(out)
+
+
+total_followers = total_with_nodes = 0
+for c in X.curated():
+    prog = X.egg_program(c).replace("(print-function SameClass 100000)", obs())
+    p = X.ROOT / f"fn-{abs(hash(c.name)) % 99999}.egg"
+    p.write_text(prog)
+    try:
+        r = subprocess.run([str(X.EGGLOG), str(p)], capture_output=True,
+                           text=True, timeout=X.RUN_TIMEOUT, cwd=X.ROOT)
+    except subprocess.TimeoutExpired:
+        print(f"  {c.name:38} timeout")
+        continue
+    finally:
+        p.unlink(missing_ok=True)
+    nums = [int(x.strip()) for x in r.stdout.splitlines() if x.strip().isdigit()]
+    if len(nums) < 2:
+        print(f"  {c.name:38} no output")
+        continue
+    followers, with_nodes = nums[-2], nums[-1]
+    total_followers += followers
+    total_with_nodes += with_nodes
+    if with_nodes:
+        print(f"  {c.name:38} followers {followers}, of those holding a node "
+              f"{with_nodes}")
+
+print(f"\n{total_followers} follower classes across the corpus, "
+      f"{total_with_nodes} of them holding an e-node")
