@@ -121,6 +121,11 @@ name, not by a constructor of its own. -/
 inductive Prim where
   | orderingMin
   | orderingMax
+  /-- egglog's `proof-of-min` (`src/proofs/proof_encoding_helpers.rs:1233-1283`): the proof
+  paired with the smaller value. A tie takes the second, as `ordering-min` keeps `t`. -/
+  | proofOfMin
+  /-- egglog's `proof-of-max`. -/
+  | proofOfMax
   /-- egglog's `i64` `min`. -/
   | intMin
   /-- egglog's `i64` `max`. -/
@@ -131,6 +136,8 @@ inductive Prim where
 def Prim.ofName : FnName → Option Prim
   | "ordering-min" => some .orderingMin
   | "ordering-max" => some .orderingMax
+  | "proof-of-min" => some .proofOfMin
+  | "proof-of-max" => some .proofOfMax
   | "min" => some .intMin
   | "max" => some .intMax
   | _ => none
@@ -140,6 +147,8 @@ non-literal operand. -/
 def Prim.apply : Prim → List Term → Option Term
   | .orderingMin, [s, t] => some (Term.orderingMin s t)
   | .orderingMax, [s, t] => some (Term.orderingMax s t)
+  | .proofOfMin, [a, pa, b, pb] => some (if Term.blt a b then pa else pb)
+  | .proofOfMax, [a, pa, b, pb] => some (if Term.blt a b then pb else pa)
   | .intMin, [.lit (.int m), .lit (.int n)] => some (.lit (.int (min m n)))
   | .intMax, [.lit (.int m), .lit (.int n)] => some (.lit (.int (max m n)))
   | _, _ => none

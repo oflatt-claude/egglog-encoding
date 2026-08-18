@@ -349,11 +349,13 @@ into a `:merge`, since a body and its result are evaluated too. -/
 /-- No application in `e` names a choice primitive. -/
 def Expr.OrderingFree (e : Expr) : Prop :=
   ∀ f ∈ e.fns, Prim.ofName f ≠ some .orderingMin ∧ Prim.ofName f ≠ some .orderingMax
+    ∧ Prim.ofName f ≠ some .proofOfMin ∧ Prim.ofName f ≠ some .proofOfMax
 
 /-- `Expr.OrderingFree` over an argument list. Stated on `Expr.fnsList` rather than
 pointwise because that is what the evaluation induction reads. -/
 def Expr.OrderingFreeList (es : List Expr) : Prop :=
   ∀ f ∈ Expr.fnsList es, Prim.ofName f ≠ some .orderingMin ∧ Prim.ofName f ≠ some .orderingMax
+    ∧ Prim.ofName f ≠ some .proofOfMin ∧ Prim.ofName f ≠ some .proofOfMax
 
 /-- A query pattern is evaluated, so it carries the condition too. -/
 def Pattern.OrderingFree : Pattern → Prop

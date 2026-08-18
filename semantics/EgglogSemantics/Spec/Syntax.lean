@@ -84,6 +84,10 @@ structure FnDecl where
   outArity : Nat
   /-- How collisions are resolved, or `none` for a constructor. -/
   merge : Option MergeSpec
+  /-- `:internal-identity-vals k` (`egglog-bridge/src/lib.rs:227-235`): the first `k` value
+  columns decide whether a collision changed anything. `none` is egglog's default — every
+  value column, for a merge with a body. -/
+  identityVals : Option Nat := none
 
 /-- How many children a term recording an entry of this function carries: a constructor's
 entry is `f(a…)`, a merge function's `f(a…, v…)`. -/

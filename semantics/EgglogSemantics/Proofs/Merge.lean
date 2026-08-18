@@ -3481,11 +3481,14 @@ theorem litsIsolated_addTerms {db : Database} (h : db.LitsIsolated) (ts : List T
 
 /-- The two `i64` primitives are the ordering-free ones. -/
 theorem prim_int_of_orderingFree {f : FnName} {p : Prim} (hp : Prim.ofName f = some p)
-    (hof : Prim.ofName f ≠ some .orderingMin ∧ Prim.ofName f ≠ some .orderingMax) :
+    (hof : Prim.ofName f ≠ some .orderingMin ∧ Prim.ofName f ≠ some .orderingMax
+      ∧ Prim.ofName f ≠ some .proofOfMin ∧ Prim.ofName f ≠ some .proofOfMax) :
     p = .intMin ∨ p = .intMax := by
   cases p with
   | orderingMin => exact absurd hp hof.1
-  | orderingMax => exact absurd hp hof.2
+  | orderingMax => exact absurd hp hof.2.1
+  | proofOfMin => exact absurd hp hof.2.2.1
+  | proofOfMax => exact absurd hp hof.2.2.2
   | intMin => exact Or.inl rfl
   | intMax => exact Or.inr rfl
 

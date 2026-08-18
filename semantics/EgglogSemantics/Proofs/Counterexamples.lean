@@ -164,7 +164,7 @@ entry term, which is all `ctor` then asks for. -/
 
 /-- `(function f () i64 :merge ((set (F) 3)) old)`. `F` is declared nowhere, so its row is
 read by `IndexOk.ctor` — the clause that requires no value column. -/
-def cexDecl : FnDecl := ⟨0, 1, some (.merge [.set "F" [] [.lit (.int 3)]] [.var "old"])⟩
+def cexDecl : FnDecl := ⟨0, 1, some (.merge [.set "F" [] [.lit (.int 3)]] [.var "old"]), none⟩
 
 /-- After `(function f () i64 :merge …)`. -/
 def cexSig : FDatabase :=
@@ -518,7 +518,7 @@ the rule contributes nothing, and no term of `f` is ever built. The program *is*
 refinement chain carries — so `Program.Evaluable` is isolated as what rejects it. -/
 
 /-- `(function M () i64 :merge new)`. -/
-def staleDecl : FnDecl := ⟨0, 1, some (.merge [] [.var "new"])⟩
+def staleDecl : FnDecl := ⟨0, 1, some (.merge [] [.var "new"]), none⟩
 
 /-- `(rule ((= 0 (M))) ((f)))`. Its head names `f`, which nothing has declared; only a
 `set` is constrained by `Action.SetLegal`, so the rule is still legal, and it is

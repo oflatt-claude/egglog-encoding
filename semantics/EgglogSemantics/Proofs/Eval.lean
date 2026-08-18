@@ -167,6 +167,16 @@ theorem Prim.apply_ctorTerm {sig : Signature} {p : Prim} {ts : List Term} {v : T
     split
     · exact hts _ (by simp)
     · exact hts _ (by simp)
+  · simp only [Option.some_inj] at h
+    subst h
+    split
+    · exact hts _ (by simp)
+    · exact hts _ (by simp)
+  · simp only [Option.some_inj] at h
+    subst h
+    split
+    · exact hts _ (by simp)
+    · exact hts _ (by simp)
   · simp only [Option.some_inj] at h; subst h; exact Term.ctorTerm_lit
   · simp only [Option.some_inj] at h; subst h; exact Term.ctorTerm_lit
   · exact absurd h (by simp)
@@ -262,6 +272,16 @@ theorem Prim.apply_declaredTerm {sig : Signature} {p : Prim} {ts : List Term} {v
   · simp only [Option.some_inj] at h
     subst h
     unfold Term.orderingMax
+    split
+    · exact hts _ (by simp)
+    · exact hts _ (by simp)
+  · simp only [Option.some_inj] at h
+    subst h
+    split
+    · exact hts _ (by simp)
+    · exact hts _ (by simp)
+  · simp only [Option.some_inj] at h
+    subst h
     split
     · exact hts _ (by simp)
     · exact hts _ (by simp)

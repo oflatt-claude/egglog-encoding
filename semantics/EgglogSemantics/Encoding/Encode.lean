@@ -36,9 +36,10 @@ the row that records it. "Proof terms" below is the vocabulary and the reading.
 ## One deviation forced by the modelled language
 
 **No disequality.** `Pattern` has no `!=`, so the `(!= b c)` guards on path compression
-and on the rebuild rule are dropped. They no longer only suppress no-op firings: with a
-proof column a re-firing writes a *different* row, so what egglog drops as a duplicate is
-here a fresh collision. `mergeBody` is where that is paid for.
+and on the rebuild rule are dropped, and a re-firing re-`set`s a row the table already
+holds. `viewDecl` and `ufDecl` declare `identityVals := some 1`, which keeps a row that
+differs only in its proof column from counting as a change; that is what stops the
+re-firing from becoming a fresh collision.
 
 **One flat rebuild ruleset.** The maintenance rules join `rebuildRuleset` and every encoded
 run is followed by `Cmd.saturate rebuildRuleset`. egglog nests three rulesets in a
@@ -175,49 +176,44 @@ def ruleE (i : Nat) (ps : List Expr) : Expr := .app (ruleName i) ps
 The `:merge` body shared by `@UF` and every view: keep the smaller side, and `set` the
 larger side's union-find edge to it. With two value columns `mergeEnv` binds `old0`/`new0`
 for the e-class and `old1`/`new1` for its proof, which is egglog's naming. -/
+/-- egglog's `lo_pf`: the proof paired with the smaller e-class. -/
+def loPfE : Expr := .app "proof-of-min" [.var "old0", .var "old1", .var "new0", .var "new1"]
+
+/-- egglog's `hi_pf`: the proof paired with the larger e-class. -/
+def hiPfE : Expr := .app "proof-of-max" [.var "old0", .var "old1", .var "new0", .var "new1"]
+
 /-- The body both `:merge`s run: the larger e-class gets a union-find edge to the smaller,
-carrying the resident row's proof for the reason `mergeResult` gives. -/
+proved by `@Trans (@Sym hi_pf) lo_pf` — `mx = key` joined to `key = mn`. -/
 def mergeBody : List Action :=
   [.set ufName [maxE (.var "old0") (.var "new0")]
-    [minE (.var "old0") (.var "new0"), .var "old1"]]
+    [minE (.var "old0") (.var "new0"), transE (symE hiPfE) loPfE]]
 
-/-- The values both `:merge`s settle on: the smaller e-class, and **the resident row's
-proof**.
+/-- The values both `:merge`s settle on: the smaller e-class, and the proof paired with it
+— egglog's `lo_pf` (`ordered_union_merge`, `proof_encoding.rs:634-660`).
 
-egglog settles the proof column the honest way — the displaced edge `old0 = new0` proved by
-`(@Trans (@Sym old1) new1)`, its `@Packed_2 "trans_sym_p0_p1"` — and pairs it with
-`:internal-identity-vals 1`, which excludes the proof column from the test for whether a
-collision changed anything, "so re-setting an existing edge leaves the row untouched, skips
-the `:merge` block, and does not re-stage the same union forever"
-(`proof_encoding.md`, "Union-find").
+Both tables carry a proof whose **left** side is the key term: `@UF(t) ↦ (p, pf)` is
+`pf : t = p` and `@fView(c…) ↦ (e, pf)` is `pf : f(c…) = e`. So `lo_pf` already proves what
+the surviving row claims, and one composition serves both tables — egglog needs a second
+skeleton for its views only because theirs runs the other way.
 
-`MergeSpec` has no such declaration and `FDatabase.noConflict` compares every value column,
-so here two rows agreeing on the e-class and differing on the proof *are* a collision, and
-the honest term makes each one write a **strictly larger** proof at the edge it displaces
-to — which is a fresh row, which collides in turn. Measured on `unionCase`: the honest term
-takes one rebuild round from 15 terms and 14 rows to 31 and 26, and the round after it does
-not finish; keeping `old1` takes the same round to 24 and 20, and the rebuild settles in
-four. Keeping `old1` is what recovers `:internal-identity-vals`: a collision that changes
-only the proof resolves to the resident row itself, so it is idempotent.
-
-The price is exact and local. A merge-created equality is *recorded* with the surviving
-row's proof, which proves `k = old0` and not the `old0 = new0` its edge claims, so that one
-step is unjustified. It is the step egglog justifies with `MergeFn` — the sixth
-`Justification`, the one `CHECKER.md`'s minimal subset excludes, and the one that needs the
-checker to re-run the `:merge` body. -/
-def mergeResult : List Expr := [minE (.var "old0") (.var "new0"), .var "old1"]
+`identityVals := some 1` on both declarations is what lets the rebuild terminate: the proof
+column sits outside the change test, so a collision that moves only the proof resolves to
+the resident row. -/
+def mergeResult : List Expr := [minE (.var "old0") (.var "new0"), loPfE]
 
 /-- `(function @UF (S) (S @Proof) :merge …)`. A term with no entry is its own
 representative, so the lookup is identity on miss — which the model expresses by there
 simply being no `@UF(t, p, pf)` term to read. -/
 def ufDecl : FnDecl :=
-  { arity := 1, outArity := 2, merge := some (.merge mergeBody mergeResult) }
+  { arity := 1, outArity := 2, merge := some (.merge mergeBody mergeResult),
+    identityVals := some 1 }
 
 /-- `(function @fView (S…) (S @Proof) :merge …)` for a constructor of arity `k`. Two
 entries colliding on one key are congruent, and the merge resolves that by unioning
 them. -/
 def viewDecl (k : Nat) : FnDecl :=
-  { arity := k, outArity := 2, merge := some (.merge mergeBody mergeResult) }
+  { arity := k, outArity := 2, merge := some (.merge mergeBody mergeResult),
+    identityVals := some 1 }
 
 /-- `(function @fTerm (S… S) Unit :no-merge)`. Keyed on children *and* id, so distinct
 constructions never collide. -/

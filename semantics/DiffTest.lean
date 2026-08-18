@@ -1807,19 +1807,24 @@ where the encoding counts view reads, and `@Fiat` reading only the top-level act
 first two are visible on the syntax, and the theorems below are what keeps them fixed; the
 third took running this to see, and is the last paragraph here.
 
-**What a merge records is refused by design.** Both rows a collision settles keep the
-resident row's proof (`Encode.lean`'s `mergeResult`), which proves `k = old0` and not the
-`old0 = new0` the edge claims — egglog's `MergeFn`, the sixth justification `CHECKER.md`'s
-minimal subset excludes. The report counts those apart from proofs that justify nothing.
+**What a merge records.** A collision keeps the proof carried by whichever side's value
+survives (`Encode.lean`'s `mergeResult`, `lo_pf`) and proves the displaced edge with
+`@Trans (@Sym hi_pf) lo_pf` — egglog's `ordered_union_merge`, with `identityVals := some 1`
+keeping the rebuild terminating under it. So a merge-created equality is justified rather
+than refused. `merge-displaced` counts what is left: a proof the checker can ground only at
+a term the source names, reported against a row whose claim sits at a rule-created one. The
+report counts those apart from proofs that justify nothing.
 
 **Measured.** `difftest check 64`, all 76 cases — the 70 in-domain corpus cases and the six
-probes — finish, and over them **741 of 854 recorded equalities check, 103 are
-merge-displaced, and 10 are unjustified**. `both-2` accounts for 14 of the 103, `rand-43` 13
-and `rand-19` 10; `rand-15`, `rand-18`, `rand-45`, `up-thin` and `up-thin-run` have four
-apiece, `up`, `up-run` and `rand-59` three, five cases two, and 27 one. The 10 unjustified
-are three in `rand-57`, three in `rand-19`, two in `rand-45`, and one each in `rand-33` and
-`both-2`. `rand-19` is the case that never finished before `congStepFast`, and its 17/10/3
-had never been observed; the sweep that reported 724/93/7 covered the other 75.
+probes — in 47 s: **673 of 683 recorded equalities check, 6 are merge-displaced, and 4 are
+unjustified**. Only `both-2` (17/4/2) and `rand-43` (22/2/2) reject; every other case is
+clean, `rand-19`, `rand-33`, `rand-45` and `rand-57` among them.
+
+All ten non-checking rows are the one mechanism, and it is the checker's and not the
+encoder's: `props` seeds a `@Rule_i` node's premises from the source's top-level actions, so
+a term existing only because an earlier rule fired cannot anchor one. Measured, `@Rule_1
+(@Fiat)` yields four propositions at a top-level term, two one step off it, and none at a
+rule-created one.
 
 Checking is not what costs: `check 64 union` is 0.22 s where `encode 64 union` is 0.32 s, and
 the difference is the source run `encodeCompare` does and this does not — reading and

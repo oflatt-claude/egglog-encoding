@@ -139,8 +139,10 @@ The one residual is eq-sorted value columns, which the difftest fragment does no
 egglog compares canonical e-class ids, so two congruent-but-unequal output terms are
 unchanged there and distinct here, and the model would fire where egglog skips — the safe
 direction again. -/
-def FDatabase.noConflict (body : List Action) (r₁ r₂ : Row) : Bool :=
-  !body.isEmpty && r₁.out == r₂.out
+def FDatabase.noConflict (w : Option Nat) (body : List Action) (r₁ r₂ : Row) : Bool :=
+  match w with
+  | some k => r₁.out.take k == r₂.out.take k
+  | none => !body.isEmpty && r₁.out == r₂.out
 
 /-- One `:merge` firing on an *oriented* pair of rows, if it applies: `r₂` is the row
 already in the table and `r₁` the one arriving, so the body runs under
@@ -180,7 +182,7 @@ def FDatabase.mergeOneOriented (cl : Finset (Term × Term)) (d : FDatabase) (r�
   | some (.merge body res) =>
     if r₁.fn = r₂.fn && congrKeys cl r₁.args r₂.args
         && d.rows.contains r₁ && d.rows.contains r₂ then
-      if FDatabase.noConflict body r₁ r₂ then
+      if FDatabase.noConflict ((d.sig r₁.fn).bind FnDecl.identityVals) body r₁ r₂ then
         some { d with rows := d.rows.filter fun r => r ≠ r₁ }
       else
         (execActions { d with env := mergeEnv r₂.out r₁.out } body).bind
