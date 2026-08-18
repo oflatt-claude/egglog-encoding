@@ -34,6 +34,14 @@ import re
 CHILD = object()          # a slotted child: `Renaming U`
 BINDER = object()         # a slotted child that also binds its slot
 
+# What migration does when a node uses a slot its leader's frame cannot name:
+# "decline" leaves the node on the follower, "mint" invents a name and moves it, which
+# is what the reference does and what empties follower classes. Both agree with the
+# reference on partitions and node counts; `mint` is the default because it is the only
+# one that empties followers, and the fan-out that once ruled it out is gone.
+# `slotted-experiments/xdiff/migration-modes.py` measures the difference.
+MIGRATION = "mint"
+
 # The generic, string-headed encoding: what `slotted-egraph-encoding-11.egg` and the
 # differential harness use. One constructor per arity with the operator in a payload
 # column, so any operator can be written without regenerating anything.
@@ -233,16 +241,33 @@ def symmetry_finder(name, sig):
 
 
 def migration(name, sig):
-    """Rewrite a follower's node into its leader's frame, or decline."""
+    """Rewrite a follower's node into its leader's frame.
+
+    A node can use a slot its leader's frame cannot name -- a slot the class does not
+    depend on. MIGRATION says what to do then: `decline` leaves the node where it is,
+    so followers are not emptied; `mint` invents a name, as the reference's
+    `compose_fresh` does, so they are.
+    """
     _, edges, _, _ = cols_of(sig)
     ns = [f"n{i + 1}" for i in range(len(edges))]
-    pulled = "\n       ".join(
-        f"(= {ns[i]} (compose-total (inverse m) {edges[i]}))" for i in range(len(edges)))
+    if MIGRATION == "mint":
+        node_slots = fold("map-union", [f"(map-image {m})" for m in edges],
+                          "(map-empty)")
+        pulled = "\n       ".join(
+            [f"(= nodeslots {node_slots})",
+             "; R takes the node's slots to the leader's, agreeing with m inverse where",
+             "; that is defined and minting a name where it is not",
+             "(= R (find-mapping-total (map-domain m) nodeslots (map-domain m) m))"]
+            + [f"(= {ns[i]} (compose R {edges[i]}))" for i in range(len(edges))])
+    else:
+        pulled = "\n       ".join(
+            [";; narrowing would understate the child's slots, so decline instead"]
+            + [f"(= {ns[i]} (compose-total (inverse m) {edges[i]}))"
+               for i in range(len(edges))])
     return f"""\
 (rule ((RenamesToLeader e2 m e1)
        (= e2 {pattern(name, sig)})
        (!= e1 e2)
-       ; narrowing would understate the child's slots, so decline instead
        {pulled})
       ((union e1 {pattern(name, sig, edges=ns)})
        (delete {pattern(name, sig)})))

@@ -55,9 +55,12 @@
 (rule ((RenamesToLeader e2 m e1)
        (= e2 (Lam m1 c1 m2 c2))
        (!= e1 e2)
-       ; narrowing would understate the child's slots, so decline instead
-       (= n1 (compose-total (inverse m) m1))
-       (= n2 (compose-total (inverse m) m2)))
+       (= nodeslots (map-union (map-image m1) (map-image m2)))
+       ; R takes the node's slots to the leader's, agreeing with m inverse where
+       ; that is defined and minting a name where it is not
+       (= R (find-mapping-total (map-domain m) nodeslots (map-domain m) m))
+       (= n1 (compose R m1))
+       (= n2 (compose R m2)))
       ((union e1 (Lam n1 c1 n2 c2))
        (delete (Lam m1 c1 m2 c2))))
 
@@ -129,9 +132,12 @@
 (rule ((RenamesToLeader e2 m e1)
        (= e2 (App m1 c1 m2 c2))
        (!= e1 e2)
-       ; narrowing would understate the child's slots, so decline instead
-       (= n1 (compose-total (inverse m) m1))
-       (= n2 (compose-total (inverse m) m2)))
+       (= nodeslots (map-union (map-image m1) (map-image m2)))
+       ; R takes the node's slots to the leader's, agreeing with m inverse where
+       ; that is defined and minting a name where it is not
+       (= R (find-mapping-total (map-domain m) nodeslots (map-domain m) m))
+       (= n1 (compose R m1))
+       (= n2 (compose R m2)))
       ((union e1 (App n1 c1 n2 c2))
        (delete (App m1 c1 m2 c2))))
 
@@ -209,10 +215,13 @@
 (rule ((RenamesToLeader e2 m e1)
        (= e2 (Let m1 c1 m2 c2 m3 c3))
        (!= e1 e2)
-       ; narrowing would understate the child's slots, so decline instead
-       (= n1 (compose-total (inverse m) m1))
-       (= n2 (compose-total (inverse m) m2))
-       (= n3 (compose-total (inverse m) m3)))
+       (= nodeslots (map-union (map-image m1) (map-union (map-image m2) (map-image m3))))
+       ; R takes the node's slots to the leader's, agreeing with m inverse where
+       ; that is defined and minting a name where it is not
+       (= R (find-mapping-total (map-domain m) nodeslots (map-domain m) m))
+       (= n1 (compose R m1))
+       (= n2 (compose R m2))
+       (= n3 (compose R m3)))
       ((union e1 (Let n1 c1 n2 c2 n3 c3))
        (delete (Let m1 c1 m2 c2 m3 c3))))
 

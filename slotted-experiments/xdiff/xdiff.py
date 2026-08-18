@@ -50,6 +50,9 @@ RUN_TIMEOUT = 25
 #   XDIFF_BUGS=unordered   atoms compiled in the order written
 #   XDIFF_BUGS=binder-1st  the first atom is allowed to be a binder
 #   XDIFF_BUGS=union-id    the action unions classes instead of invocations
+#   XDIFF_BUGS=wide-kids   only the root is narrowed to its class's slots, not the
+#                          other variables, so a built node can name a slot its child
+#                          does not have
 BUGS = {b for b in os.environ.get("XDIFF_BUGS", "").split(",") if b}
 
 # How often a generated subterm is a binder. Raise it to search binder-heavy
@@ -391,6 +394,22 @@ def compile_rule(atoms, action, conds=()):
     sym_of = {}     # pvar -> its symmetry variable, under `per-class`
     pat = None      # identity on slots(pattern)
 
+    def narrow(m, cls):
+        """Cut `m` down from the matched node's slots to its class's.
+
+        A renaming read off a node has the *node's* slots for its domain, and a node
+        may carry slots its class does not depend on. A variable stands for a class, so
+        using the wider map writes a slot into a built node that the child does not
+        have, breaking Def. 4.
+
+        Restricting by `ClassSlots` rather than by a symmetry: a symmetry is whichever
+        self-loop the join happens to bind, and one of those can itself be wider than
+        the class, in which case it narrows nothing.
+        """
+        cs = fresh("cs")
+        body.append(f"(= {cs} (ClassSlots {cls}))")
+        return f"(compose {m} {cs})"
+
     def sym_for(pvar):
         """A symmetry of `pvar`'s class, joined from RenamesToLeader.
 
@@ -527,19 +546,9 @@ def compile_rule(atoms, action, conds=()):
             else:
                 m = fresh("m")
                 body.append(f"(= {m} (compose {mp} {e}))")
-                mp_of[cp] = m
+                mp_of[cp] = m if "wide-kids" in BUGS else narrow(m, cls_of[cp])
         if root not in mp_of:
-            # `mp` has the matched NODE's slots for its domain, but a variable's
-            # renaming must have its CLASS's -- the two differ exactly when the node
-            # carries a redundant slot. Using the wider one puts slots into a built
-            # node that its child does not have, breaking Def. 4.
-            #
-            # Restricting by `ClassSlots` rather than by a symmetry: a symmetry is
-            # whichever self-loop the join binds, and one of those can itself be wider
-            # than the class, in which case it narrows nothing.
-            cs = fresh("cs")
-            body.append(f"(= {cs} (ClassSlots {rv}))")
-            mp_of[root] = f"(compose {mp} {cs})"
+            mp_of[root] = narrow(mp, rv)
 
     # Side conditions. A variable's slots in pattern space are the image of its
     # renaming, so `$s in slots(?x)` is membership in `(map-image mx)`. With one
@@ -1103,6 +1112,30 @@ def curated():
         [("x3", "f", "x1", "x2")],
         ("x1", "h", "x3", "x2"),
         [("f", V2, NUL), ("k", V2, NUL), ("g", V1, NUL),
+         ("h", V0, V1), ("h", V0, V0), NUL, LEAF0],
+        rounds=6,
+    ))
+
+    # C15 -- regression for `wide-kids`. Minimised from `fuzz 250`'s fuzz236, the
+    # only case in the corpus that caught it, and only once migration started
+    # minting: with the node left on a follower instead, the class never reached
+    # the state where its slot set had narrowed underneath a live edge.
+    #
+    # Two unions through a shared `sub($0,$0)` drive the `h` class's slot set down,
+    # so a renaming read off an `h` node names a slot the class no longer has. The
+    # action's root is a child variable and its other child is a variable too, which
+    # is what makes narrowing only the root insufficient.
+    #
+    # The violation does not repair itself: `child-update` deletes the wide row and
+    # the action rebuilds it, so it is still there at `(run 200)`.
+    cs.append(Case(
+        "C15-action-child-narrowed-to-its-class",
+        [],
+        [(("h", NUL, V0), ("sub", V0, V0)),
+         (("g", NUL, V2), ("sub", V0, V0))],
+        [("x3", "h", "x1", "x2")],
+        ("x1", "h", "x2", "x1"),
+        [("h", NUL, V0), ("g", NUL, V2), ("sub", V0, V0),
          ("h", V0, V1), ("h", V0, V0), NUL, LEAF0],
         rounds=6,
     ))

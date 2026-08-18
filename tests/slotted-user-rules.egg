@@ -570,6 +570,87 @@
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; M6b.  The other way to break Def. 4: a variable wider than its class.
+;;;
+;;; M6 above is about a slot the *root's* edge fails to reach.  This one needs no
+;;; minting at all and no chain -- a single atom does it.
+;;;
+;;; A renaming is read off a matched NODE, so its domain is the node's slots.  A
+;;; node may carry a slot its class does not depend on -- that is what redundancy
+;;; is, and Def. 4 permits it for nodes while forbidding it for edges.  A pattern
+;;; variable stands for a CLASS, so writing its renaming straight into a built
+;;; node gives that node an edge naming a slot the child does not have.
+;;;
+;;; The fix is one atom per variable: `(= cs (ClassSlots X))` and use
+;;; `(compose m cs)`, which restricts `m` to the slots the class really has.
+;;; `ClassSlots` is the right thing to restrict by and a symmetry is not: a
+;;; symmetry is whichever self-loop the join happens to bind, and one of those can
+;;; itself be wider than the class, in which case it narrows nothing.
+;;;
+;;; Note this does NOT repair itself.  The machinery's child-update rule deletes a
+;;; row whose child has since narrowed, but the action rebuilds it on the next
+;;; iteration, so the violation is a stable oscillation rather than a transient.
+;;; It survives to `(run 200)`.
+;;;
+;;; `C15-action-child-narrowed-to-its-class` in `xdiff.py` is this e-graph, and
+;;; `XDIFF_BUGS=wide-kids` is the version below without the narrowing.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(push)
+
+;; The witness goes in its OWN ruleset and is run once at the end.  A relation is
+;; monotone, so a witness sharing the default ruleset also fires mid-repair and
+;; keeps the fact after the offending row is gone -- it would answer "was there
+;; ever a bad edge?", and the answer to that is yes even when all is well.
+(ruleset m6b)
+(relation BadEdge (String Renaming U))
+(rule ((= n (App2 f m1 c1 m2 c2))
+       (RenamesToLeader c1 s c1)
+       (= s (compose s s))                   ; a partial identity: c1's slots are inside dom(s)
+       (< (map-length s) (map-length m1)))
+      ((BadEdge f m1 c1)) :ruleset m6b)
+(rule ((= n (App2 f m1 c1 m2 c2))
+       (RenamesToLeader c2 s c2)
+       (= s (compose s s))
+       (< (map-length s) (map-length m2)))
+      ((BadEdge f m2 c2)) :ruleset m6b)
+
+;; ?x3 == (h ?x1 ?x2)  =>  union ?x1 (h ?x2 ?x1)
+;;
+;; The action's root ?x1 is a child variable and so is the other child ?x2, so
+;; both renamings come off the matched node and both need narrowing.
+
+;; two unions through a shared sub($0,$0) drive the h class's slot set down, so a
+;; renaming read off an h node names a slot the class no longer has
+(let $h  (App2 "h" (map-empty) (Null) (map-of 0 0) (Var 0)))
+(let $g  (App2 "g" (map-empty) (Null) (map-of 0 2) (Var 0)))
+(let $s  (App2 "sub" (map-of 0 0) (Var 0) (map-of 0 0) (Var 0)))
+(union $h $s)
+(union $g $s)
+
+;; (a) stored renamings used as written -- this is `XDIFF_BUGS=wide-kids`
+(push)
+(rule ((= x3 (App2 "h" m1 x1 m2 x2)))
+      ((union x1 (App2 "h" m2 x2 m1 x1))))
+(run 20)
+(run m6b 1)
+(check (BadEdge "h" m c))            ; an edge naming a slot its child lacks
+(pop)
+
+;; (b) every variable narrowed to its class
+(push)
+(rule ((= x3 (App2 "h" m1 x1 m2 x2))
+       (= cs1 (ClassSlots x1))
+       (= cs2 (ClassSlots x2)))
+      ((union x1 (App2 "h" (compose m2 cs2) x2 (compose m1 cs1) x1))))
+(run 20)
+(run m6b 1)
+(fail (check (BadEdge "h" m c)))     ; nothing malformed
+(pop)
+
+(pop)
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; M7.  A slot literal: eta.
 ;;;
 ;;;     ?e == (lambda $s ?b),  ?b == (app ?f ?arg),  ?arg == (var $s)

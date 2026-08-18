@@ -74,9 +74,12 @@
 (rule ((RenamesToLeader e2 m e1)
        (= e2 (App2 p1 m1 c1 m2 c2))
        (!= e1 e2)
-       ; narrowing would understate the child's slots, so decline instead
-       (= n1 (compose-total (inverse m) m1))
-       (= n2 (compose-total (inverse m) m2)))
+       (= nodeslots (map-union (map-image m1) (map-image m2)))
+       ; R takes the node's slots to the leader's, agreeing with m inverse where
+       ; that is defined and minting a name where it is not
+       (= R (find-mapping-total (map-domain m) nodeslots (map-domain m) m))
+       (= n1 (compose R m1))
+       (= n2 (compose R m2)))
       ((union e1 (App2 p1 n1 c1 n2 c2))
        (delete (App2 p1 m1 c1 m2 c2))))
 
@@ -154,10 +157,13 @@
 (rule ((RenamesToLeader e2 m e1)
        (= e2 (App3 p1 m1 c1 m2 c2 m3 c3))
        (!= e1 e2)
-       ; narrowing would understate the child's slots, so decline instead
-       (= n1 (compose-total (inverse m) m1))
-       (= n2 (compose-total (inverse m) m2))
-       (= n3 (compose-total (inverse m) m3)))
+       (= nodeslots (map-union (map-image m1) (map-union (map-image m2) (map-image m3))))
+       ; R takes the node's slots to the leader's, agreeing with m inverse where
+       ; that is defined and minting a name where it is not
+       (= R (find-mapping-total (map-domain m) nodeslots (map-domain m) m))
+       (= n1 (compose R m1))
+       (= n2 (compose R m2))
+       (= n3 (compose R m3)))
       ((union e1 (App3 p1 n1 c1 n2 c2 n3 c3))
        (delete (App3 p1 m1 c1 m2 c2 m3 c3))))
 
@@ -252,11 +258,14 @@
 (rule ((RenamesToLeader e2 m e1)
        (= e2 (App4 p1 m1 c1 m2 c2 m3 c3 m4 c4))
        (!= e1 e2)
-       ; narrowing would understate the child's slots, so decline instead
-       (= n1 (compose-total (inverse m) m1))
-       (= n2 (compose-total (inverse m) m2))
-       (= n3 (compose-total (inverse m) m3))
-       (= n4 (compose-total (inverse m) m4)))
+       (= nodeslots (map-union (map-image m1) (map-union (map-image m2) (map-union (map-image m3) (map-image m4)))))
+       ; R takes the node's slots to the leader's, agreeing with m inverse where
+       ; that is defined and minting a name where it is not
+       (= R (find-mapping-total (map-domain m) nodeslots (map-domain m) m))
+       (= n1 (compose R m1))
+       (= n2 (compose R m2))
+       (= n3 (compose R m3))
+       (= n4 (compose R m4)))
       ((union e1 (App4 p1 n1 c1 n2 c2 n3 c3 n4 c4))
        (delete (App4 p1 m1 c1 m2 c2 m3 c3 m4 c4))))
 
@@ -374,8 +383,11 @@
 (rule ((RenamesToLeader e2 m e1)
        (= e2 (Scale p1 m1 c1))
        (!= e1 e2)
-       ; narrowing would understate the child's slots, so decline instead
-       (= n1 (compose-total (inverse m) m1)))
+       (= nodeslots (map-image m1))
+       ; R takes the node's slots to the leader's, agreeing with m inverse where
+       ; that is defined and minting a name where it is not
+       (= R (find-mapping-total (map-domain m) nodeslots (map-domain m) m))
+       (= n1 (compose R m1)))
       ((union e1 (Scale p1 n1 c1))
        (delete (Scale p1 m1 c1))))
 

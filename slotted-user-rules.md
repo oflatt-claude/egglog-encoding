@@ -392,31 +392,29 @@ Fixed by declining to migrate when either edge would narrow — the guard now in
 ### What declining costs, measured
 
 The complete alternative is to mint a name for the uncovered slot instead of
-dropping it: extend the pullback to be total on the node's slots, which is
-`(find-mapping-total idE1 domNode idE1 m)` where `idE1` is the identity on
-`slots(e1)` and `domNode` the identity on the node's. That version is in
-`tests/slotted-egraph-encoding-11-minting.egg`.
+dropping it: extend the pullback to be total on the node's slots. Both are generated
+from one source — `MIGRATION` in `slotted-experiments/gen-node-rules.py` selects
+`"decline"` or `"mint"` — so the comparison is a regeneration, not a second copy of
+the machinery to keep in step. There used to be such a copy, and by the time anyone
+looked at it, it had drifted to none of `ClassSlots`, `compose-total` or the current
+alpha-finder tie-break.
 
-Comparing the two, the guard's "incompleteness" turns out **not** to be about
-derived equalities:
+Neither mode distinguishes itself on *what it proves*: curated 44/44, generated
+250/250, node counts against the reference 44/44, either way. What used to separate
+them was cost, and that has gone:
 
-| | |
-| --- | --- |
-| machinery's own 13 tests | both pass |
-| curated (31 cases) | identical answers |
-| generated (200 cases) | identical answers |
-| App rows on `X2` | guarded 8, **minting 1224** |
+| | then | now |
+| --- | --- | --- |
+| App rows on `X2`, declining | 7 | 7 |
+| App rows on `X2`, minting | **1224** | **7** |
+| `X2` at `(run 200)`, minting | no fixpoint in 600s | settles, instantly |
+| corpus e-node rows | — | **194 either way** |
 
-So no case distinguishes them on *what they prove*, and minting costs about 150× the
-rows on `X2`. Its `App` count is stable after the first iteration, which is not the
-same as settling: under `(saturate (run))` minting does not reach a fixpoint on `X2`
-in 600s, where the guard settles at 7 rows. Restricting migration to fire only into a
-canonical leader does not reduce the fan-out.
-
-That fits what migration is for. The encoding's own header calls it compression —
-"we delete nodes which are not canonical" — so declining leaves a node
-un-canonicalised. Whether it also loses a *fact* is settled in the next section: it
-does, though never yet in a way that changes an answer.
+The fan-out was never inherent to minting. It was α-variants multiplying, and both
+sources of that have since been fixed — `ClassSlots` (Def. 4, below) and the
+alpha-finder's tie-break. So the argument that decided this originally no longer
+holds, and the choice comes down to which mode keeps the encoding's own invariants,
+which is settled under "Do follower classes need self-loops at all?" below.
 
 **Recommendation: keep the guard.** It is sound, cheap, and no test distinguishes
 it from the complete version on what gets proved. Its one real cost — leaving a node
@@ -550,15 +548,14 @@ contributes nothing but the deletion. One guard removes it:
 
 So the cost is about 9% more union-find rows and slightly *fewer* e-nodes — `X2`
 compresses to 7 `App` rows instead of 8, because a class that keeps its self-loop
-can still be migrated into later. Compare minting, the other candidate fix, at ~150×
-the rows on `X2`.
+can still be migrated into later.
 
 `X1`'s one remaining stranded row is the harmless junk-edge kind and is stranded by
 a *different* mechanism: the shrinking rule deleting a too-wide identity self-loop,
 which is open question 2. It has a visible α-variant, so nothing is lost.
 
-The same guard is mirrored into `slotted-egraph-encoding-11-minting.egg` so the two
-files still differ only in the migration rule.
+The guard is one branch of `MIGRATION` in `slotted-experiments/gen-node-rules.py`, so
+the two versions differ by exactly the migration rule by construction.
 
 ### Do follower classes need self-loops at all?
 
@@ -574,18 +571,59 @@ self-loop is not a general requirement; it is the price of the guard. `X2` is th
 case that shows it: 2 followers still hold a node at its fixpoint.
 
 Which suggests the obvious alternative — mint instead of declining, so followers
-really are emptied, and go back to deleting their self-loops. That works:
+really are emptied. Minting was originally rejected on cost, and that reason has
+expired (above): both modes settle on `X2` at 7 rows and total 194 across the corpus.
+Switching found one thing the guard had been hiding:
 
-| | |
-| --- | --- |
-| minting + follower self-loop deleted | 33/33 agree, 24 firing |
-| `X2` rows, guarded vs minting | 7 vs 1224 |
-| `X2` under `(saturate (run))` | guarded settles at 7 rows; minting does not reach a fixpoint in 600s |
+| | declining | minting |
+| --- | --- | --- |
+| curated | 44/44 | 44/44 |
+| generated | 250/250 | 250/250 |
+| node counts vs reference | 44/44 | 44/44 |
+| corpus e-node rows | 194 | 194 |
+| followers holding an e-node | 3 of 26 | **1 of 27** |
+| wide edges, generated | 0 of 250 | **1 of 250** (`fuzz236`) — until fixed, then 0 |
 
-So both designs are correct, and the current one is kept for cost: minting's fan-out
-does not converge on `X2` where the guard does. The row count alone understated
-this — the fan-out was previously described as "created in the first iteration and
-stable after", which is true of `App` rows and not of the database.
+`fuzz236` was a real defect, not a cost of minting: **the action narrowed only the
+root by `ClassSlots`, not the other pattern variables.** A variable's renaming is read
+off the matched node, so its domain is the *node's* slots; written into a built node as
+a child edge, it can name a slot the child's class has since proven redundant. That is
+a Def. 4 violation, `child-update` deletes the row, and the action rebuilds it next
+iteration — a stable oscillation, which is why it survived to `(run 200)` rather than
+being repaired. Narrowing every variable rather than just the root fixes it and
+compresses `fuzz236` from 9 `App` rows to 6. It is now the `wide-kids` mutation.
+
+Declining was masking it: with the node left behind, the class never reached the state
+where its slot set had narrowed under a live edge.
+
+**Minting is therefore the better mode, and it is the default.** One follower still
+holds a node, and that one is *not* a declined migration — see below.
+
+Which reopens the question this section asked: the follower self-loop was kept as "the
+price of the guard", and the guard is no longer the default. It is still kept, because
+the remaining case below is a class that holds a node on a non-leader `U` value and so
+still needs to be addressable. Whether *that* one needs the self-loop is unmeasured.
+
+### The one follower that still holds a node
+
+Under minting, exactly one does across the corpus — `MR1`, and it is not a migration
+failure. The class is `f` with commutativity, so it has the swap `{0↔1}` as a symmetry,
+and it holds one surviving row:
+
+```text
+(App2 "f" {0→1} (Var 0) {0→0} (Var 0))          -- f($1,$0), survives
+(App2 "f" {0→0} (Var 0) {0→1} (Var 0))          -- f($0,$1), deleted
+```
+
+The α-finder found the two spellings α-equivalent and deleted one. Which one it keeps
+is a tie-break, and the survivor's own `U` value need not be the union-find leader — so
+the class's leader has no row left, which is also why it prints as `Unextractable`.
+Nothing is stranded: the surviving row is reachable through the `RenamesToLeader` swap,
+which is how a slotted class spans several egglog classes in the first place.
+
+So "followers are empty" holds for migration, which is what it was ever a claim about.
+An isomorphism check still cannot enumerate leaders only; it has to walk each slotted
+class's `U` values.
 
 **Migrating the self-loop to the leader does not substitute for keeping it.** The old
 single-parent rule already did that — `RenamesToLeader b (compose (inverse m1) m2) c`
@@ -641,8 +679,9 @@ shrinks a class's slot set to the *intersection* on union (`cap` in `union_leade
 and restricts the symmetry group to it, so the class's frame only ever gets smaller.
 
 Here an `App` row is keyed by the whole tuple, renamings included, so two α-variants
-differing only in a minted name are two distinct rows. That is the fan-out: `X2` under
-minting holds 1224 rows that are largely the same structure at different names —
+differing only in a minted name are two distinct rows. That used to fan out badly —
+`X2` under minting once held 1224 rows that were largely the same structure at
+different names —
 
 ```text
 (App "h" {0→0,1→1} (App "h" {0→0} (Var 0) {0→1} (Var 0)) {0→0,1→1} (Var 0))
@@ -650,11 +689,21 @@ minting holds 1224 rows that are largely the same structure at different names �
 (App "h" {0→0,1→1} (App "h" {0→0} (Var 0) {0→1} (Var 0)) {0→0}     (Var 0))
 ```
 
-— waiting on the α-finder to merge them. Smallest-unused minting at least makes each
-mint deterministic, so the set is finite; an ever-increasing counter is what made it
-never settle. **This is why the encoding cannot simply copy the reference's policy:
-the reference's key is a shape, and ours is a shape plus its renamings.** Getting the
-reference's behaviour would mean keying nodes by something α-invariant.
+— waiting on the α-finder to merge them. Three things had to be right before it
+stopped:
+
+* **Smallest-unused minting**, so each mint is deterministic and the set is finite.
+  An ever-increasing counter, which is what the reference uses, is what made it never
+  settle here.
+* **`ClassSlots`**, so a class's slot set narrows once rather than being re-read from
+  whichever self-loop a join happened to bind.
+* **The α-finder's tie-break**, which was itself manufacturing variants.
+
+With all three, `X2` settles at 7 rows either way and the corpus totals 189. So the
+keying difference is real but no longer costly on anything measured: it needs the
+α-finder to converge the variants, and it now does. What remains true is that a
+reference-style *ever-increasing* counter cannot be copied — that is a property of the
+minting policy, not of keying by shape-plus-renamings.
 
 **Read the firing count before the agreement count.** A case whose rule never
 fires says nothing about matching, and random patterns mostly do not fire, so the
@@ -742,8 +791,8 @@ that was matched rather than its composed form, or it removes a row that may not
 exist.
 
 `S1` now agrees, so 42 of 43 cases match on node counts. Curated 43/43, generated
-250/250, all six egg files pass, and the mutation matrix is unchanged (`root-only` 15
-cases, `union-id` 3, `unordered` 1, `slot-late` 1).
+250/250, all six egg files pass, and the mutation matrix is unchanged (`root-only` 11
+cases, `union-id` 2, `unordered` 1, `slot-late` 1).
 
 ### The other divergence is growth, not a missing merge
 
@@ -897,17 +946,23 @@ XDIFF_BUGS=slot-late  ./xdiff.py     a slot literal checked after the renaming
 XDIFF_BUGS=unordered  ./xdiff.py     atoms compiled in the order written
 XDIFF_BUGS=binder-1st ./xdiff.py     the first atom may be a binder
 XDIFF_BUGS=union-id   ./xdiff.py     the action unions classes, not invocations
+XDIFF_BUGS=wide-kids  ./xdiff.py     only the action's root narrowed to its class
 ```
 
 Where each is caught:
 
 | bug | caught by | how |
 | --- | --- | --- |
-| `root-only` | C3, C5, C6, C9, C10 (+3 more) | disagrees with the reference |
+| `root-only` | C3, C5, C6, C9, C10 (+6 more) | disagrees with the reference |
 | `unordered` | C12, C13 | disagrees with the reference |
 | `slot-late` | B3 | disagrees with the reference |
 | `union-id` | C14 | disagrees with the reference |
+| `wide-kids` | C15 | Def. 4 invariant, not the reference |
 | `binder-1st` | C13 | order-independence check only |
+
+`wide-kids` is the one caught by an *internal* check rather than by disagreement: the
+partition and the node counts are right either way, and only the Def. 4 check sees it.
+It is also the one that needed `MIGRATION = "mint"` to be reachable at all.
 
 Two things this was worth doing for.
 
@@ -1208,7 +1263,11 @@ symmetry, and every violation goes:
 
 `X1`'s extra `h` node was the same cause and went with it. Partitions are unchanged --
 43/43 curated and 250/250 generated -- and the mutation matrix still discriminates
-(`root-only` 15 cases, `union-id` 3, `unordered` 1, `slot-late` 1).
+(`root-only` 11 cases, `union-id` 2, `unordered` 1, `slot-late` 1).
+
+`ClassSlots` restricted only the action's *root*, which left the same violation
+reachable through the action's other variables; `wide-kids` and `C15` are that gap,
+under "Do follower classes need self-loops at all?" above.
 
 ## Machine-checked invariants
 
