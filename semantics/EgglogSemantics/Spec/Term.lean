@@ -122,9 +122,12 @@ inductive Prim where
   | orderingMin
   | orderingMax
   /-- egglog's `proof-of-min` (`src/proofs/proof_encoding_helpers.rs:1233-1283`): the proof
-  paired with the smaller value. A tie takes the second, as `ordering-min` keeps `t`. -/
+  paired with the smaller value. -/
   | proofOfMin
-  /-- egglog's `proof-of-max`. -/
+  /-- egglog's `proof-of-max`: the proof paired with the larger value.
+
+  Both select on a *strict* comparison of the values and fall through to the second proof,
+  so a tie takes the second either way — egglog tests `a < b` and `a > b`, never `≤`. -/
   | proofOfMax
   /-- egglog's `i64` `min`. -/
   | intMin
@@ -148,7 +151,7 @@ def Prim.apply : Prim → List Term → Option Term
   | .orderingMin, [s, t] => some (Term.orderingMin s t)
   | .orderingMax, [s, t] => some (Term.orderingMax s t)
   | .proofOfMin, [a, pa, b, pb] => some (if Term.blt a b then pa else pb)
-  | .proofOfMax, [a, pa, b, pb] => some (if Term.blt a b then pb else pa)
+  | .proofOfMax, [a, pa, b, pb] => some (if Term.blt b a then pa else pb)
   | .intMin, [.lit (.int m), .lit (.int n)] => some (.lit (.int (min m n)))
   | .intMax, [.lit (.int m), .lit (.int n)] => some (.lit (.int (max m n)))
   | _, _ => none
