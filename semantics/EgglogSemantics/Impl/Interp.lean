@@ -487,6 +487,142 @@ list permutation. -/
 theorem matchQueryFast_eq (d : FDatabase) (q : Query) : matchQueryFast d q = matchQuery d q :=
   matchQueryWith_eq d q
 
+/-! ### Pruning the candidate cross product
+
+`matchQueryWith` assigns every free variable before it checks anything, so a query of `n`
+variables enumerates `|valueTerms| ^ n` candidates however early its patterns decide.
+Nothing of a candidate reaches a pattern's check but the pattern's **own** variables —
+`patternHolds` is applied to `Env.canon (p.freeVars d.env) σ` and reads no more of `σ` — so
+a prefix that already falsifies a pattern falsifies every extension of it, and those
+extensions need never be built.
+
+`matchPrune` is that: the same enumeration, in the same order, with each pattern checked at
+the depth that binds its last variable. `matchPrune_eq` is the equality, on the nose, so the
+enumerator's order — which decides row age and so a merge's `old`/`new` — is untouched.
+
+**It is an asymptotic win with a constant-factor cost, and both are measured.** Encoding
+adds a proof variable per view read, and pruning is what keeps that variable inside its own
+atom's block instead of multiplying the whole search: at a 300 s budget the in-domain sweep
+goes from 14 cases to 20, and at 60 s from 10 to 12. The cost is the readiness test at every
+node, which mid-sized cases pay without earning it back — `up-thin` runs in 73 s unpruned
+and 90 s pruned, the curated `actions` in 177 s and 235 s. What removes the exponent rather
+than trimming it is a join over the index — binding a value column *from the rows* instead
+of guessing it — which this approximates and does not replace. -/
+/-- The patterns a substitution already decides: those whose free variables it binds. -/
+def Query.decided (d : FDatabase) (pre : Env) (q : Query) : Query :=
+  q.filter fun p => (p.freeVars d.env).all fun v => decide (v ∈ Env.dom pre)
+
+/-- `lookup` reads past an extension that cannot rebind. `Proofs/Database.lean`'s
+`Env.lookup_append_of_mem` is the same fact; `Impl/` does not import `Proofs/`, and the
+`csimp` below has to be registered before the callers this file compiles. -/
+private theorem lookup_append_dom {v : Var} {σ₁ σ₂ : Env} (h : v ∈ Env.dom σ₁) :
+    Env.lookup v (σ₁ ++ σ₂) = Env.lookup v σ₁ := by
+  induction σ₁ with
+  | nil => simp [Env.dom] at h
+  | cons b σ ih =>
+    obtain ⟨w, t⟩ := b
+    by_cases hv : v = w
+    · simp [Env.lookup, hv]
+    · simp only [Env.dom, List.map_cons, List.mem_cons] at h
+      simp [Env.lookup, hv, ih (h.resolve_left hv)]
+
+/-- A pattern's operand environment does not move once its variables are bound. -/
+theorem Env.canon_append_of_dom {vars : List Var} {pre σ : Env}
+    (h : ∀ v ∈ vars, v ∈ Env.dom pre) : Env.canon vars (pre ++ σ) = Env.canon vars pre := by
+  induction vars with
+  | nil => rfl
+  | cons w ws ih =>
+    have hw := lookup_append_dom (σ₂ := σ) (h w List.mem_cons_self)
+    have hws := ih fun v hv => h v (List.mem_cons_of_mem _ hv)
+    simp only [Env.canon, List.filterMap_cons, hw] at *
+    rw [hws]
+
+/-- `filter` distributes over `flatMap`. -/
+private theorem filter_flatMap {α β : Type} (p : β → Bool) (f : α → List β) (l : List α) :
+    (l.flatMap f).filter p = l.flatMap fun a => (f a).filter p := by
+  induction l with
+  | nil => rfl
+  | cons a l ih => simp [List.filter_append, ih]
+
+/-- `filter` past a `map`, as the composed predicate. -/
+private theorem filter_map_comp {α β : Type} (p : β → Bool) (f : α → β) (l : List α) :
+    (l.map f).filter p = (l.filter fun a => p (f a)).map f := by
+  induction l with
+  | nil => rfl
+  | cons a l ih => by_cases h : p (f a) <;> simp [h, ih]
+
+/-- The enumeration of `vs` out of `ts`, extending `pre`, with every decided pattern checked
+as it is decided.
+
+`ts` is a parameter rather than `d.valueTerms`, for the reason the closure is one: it would
+otherwise be recomputed at every node of the tree, and filtering `terms` through the
+signature costs more than the pruning saves. -/
+def matchPrune (cl : Finset (Term × Term)) (d : FDatabase) (q : Query) (ts : List Term)
+    (pre : Env) : List Var → List Env
+  | [] =>
+      if q.all fun p => patternHoldsWith cl d p (Env.canon (p.freeVars d.env) pre) then [[]]
+      else []
+  | v :: vs =>
+      ts.flatMap fun t =>
+        let pre' := pre ++ [(v, t)]
+        if (Query.decided d pre' q).all fun p =>
+              patternHoldsWith cl d p (Env.canon (p.freeVars d.env) pre') then
+          (matchPrune cl d q ts pre' vs).map fun σ => (v, t) :: σ
+        else []
+
+/-- **Pruning drops exactly the candidates the final filter would have.** -/
+theorem matchPrune_eq (cl : Finset (Term × Term)) (d : FDatabase) (q : Query)
+    (ts : List Term) :
+    ∀ (vs : List Var) (pre : Env), matchPrune cl d q ts pre vs
+      = (assignments ts vs).filter fun σ =>
+          q.all fun p => patternHoldsWith cl d p (Env.canon (p.freeVars d.env) (pre ++ σ)) := by
+  intro vs
+  induction vs with
+  | nil =>
+    intro pre
+    simp [matchPrune, assignments, List.filter_cons, List.append_nil]
+  | cons v vs ih =>
+    intro pre
+    rw [matchPrune, assignments, filter_flatMap]
+    refine List.flatMap_congr fun t _ => ?_
+    rw [filter_map_comp]
+    by_cases hg : (Query.decided d (pre ++ [(v, t)]) q).all fun p =>
+        patternHoldsWith cl d p (Env.canon (p.freeVars d.env) (pre ++ [(v, t)]))
+    · rw [if_pos hg, ih (pre ++ [(v, t)])]
+      congr 1
+      refine List.filter_congr fun σ _ => ?_
+      simp only [List.append_assoc, List.singleton_append]
+    · -- the prefix already falsifies a pattern, so no extension of it survives
+      have hnil : ((assignments ts vs).filter fun σ =>
+          q.all fun p => patternHoldsWith cl d p
+            (Env.canon (p.freeVars d.env) (pre ++ (v, t) :: σ))) = [] := by
+        rw [Bool.not_eq_true, List.all_eq_false] at hg
+        obtain ⟨p, hp, hfail⟩ := hg
+        obtain ⟨hpq, hdecB⟩ := List.mem_filter.mp hp
+        have hdec : ∀ w ∈ p.freeVars d.env, w ∈ Env.dom (pre ++ [(v, t)]) := fun w hw =>
+          of_decide_eq_true (List.all_eq_true.mp hdecB w hw)
+        refine List.filter_eq_nil_iff.mpr fun σ _ hall => hfail ?_
+        have hp' := List.all_eq_true.mp hall p hpq
+        rw [show pre ++ (v, t) :: σ = (pre ++ [(v, t)]) ++ σ by simp,
+          Env.canon_append_of_dom hdec] at hp'
+        exact hp'
+      rw [if_neg hg, hnil, List.map_nil]
+
+/-- `matchQueryWith`, pruned. -/
+def matchQueryPruned (cl : Finset (Term × Term)) (d : FDatabase) (q : Query) : List Env :=
+  matchPrune cl d q d.valueTerms [] (Query.freeVars q d.env)
+
+theorem matchQueryPruned_eq (cl : Finset (Term × Term)) (d : FDatabase) (q : Query) :
+    matchQueryPruned cl d q = matchQueryWith cl d q := by
+  rw [matchQueryPruned, matchPrune_eq, matchQueryWith]
+  simp
+
+/-- What points compiled code at the pruned enumeration — every caller of `matchQueryWith`,
+which after the `csimp` below is every caller of `matchQuery` too. -/
+@[csimp] theorem matchQueryWith_eq_pruned : @matchQueryWith = @matchQueryPruned := by
+  funext cl d q
+  exact (matchQueryPruned_eq cl d q).symm
+
 /-- What points compiled code at the fast path. `execRunRulesFast` below shares one closure
 across a round's rules and so calls `matchQueryWith` directly; this is what every *other*
 caller of `matchQuery` gets. -/

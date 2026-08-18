@@ -19,8 +19,8 @@ Three tables per source constructor `f`, plus one union-find for the (single) so
 
 | target table | shape | role |
 | --- | --- | --- |
-| `@UF` | `(t) ↦ parent` | `t`'s parent, identity on miss |
-| `@fView` | `(children) ↦ eclass` | the functional dependency; its `:merge` *is* congruence |
+| `@UF` | `(t) ↦ (parent, proof)` | `t`'s parent, identity on miss |
+| `@fView` | `(children) ↦ (eclass, proof)` | the functional dependency; `:merge` *is* congruence |
 | `@fTerm` | `(children, id) ↦ ()` | every application ever built; write-only |
 
 `@UF` and `@fView` share one `:merge` body — keep the smaller side and `set` the
@@ -30,23 +30,15 @@ program has **no** constructor table at all: it asserts no equation but the refl
 `addTerm` records, so `Cong` on the target is the identity relation on the terms it holds
 and congruence there is entirely simulated.
 
-## Two deviations forced by the modelled language
+**Every equality the encoding records carries its proof**, in the second value column of
+the row that records it. "Proof terms" below is the vocabulary and the reading.
 
-**Proofs are off, but no longer because the language cannot say them.** egglog's `@UF`
-and `@fView` carry a parent/e-class *and* a proof. That column used to be inexpressible:
-`Action.set` took a single output expression and so could write only one column.
-`Action.set` now takes a `List Expr`, `evalAction`'s `set` case records the whole entry
-as the term `.app f (args ++ out)`, and `Pattern.values` — egglog's entry atom, and now
-the only read the language has — binds every value column. So what remains between this
-file and a proofs-on encoding is *encoder* work: emitting a `@Proof` sort, the
-`@Rule_<k>` and `@Congr` node families, and a second column on every `set` and every view
-read. `encode` here still emits one-column entries, so anything said about the proof
-column is vacuous for that reason — a shape the encoder does not yet write, rather than
-one the language cannot express. `Lit` still wants `.unit` and `.str`, which is what the
-proof column's `Unit` and `@Rule_<k>`'s rule name need.
+## One deviation forced by the modelled language
 
 **No disequality.** `Pattern` has no `!=`, so the `(!= b c)` guards on path compression
-and on the rebuild rule are dropped; they only suppressed no-op firings.
+and on the rebuild rule are dropped. They no longer only suppress no-op firings: with a
+proof column a re-firing writes a *different* row, so what egglog drops as a duplicate is
+here a fresh collision. `mergeBody` is where that is paid for.
 
 **One flat rebuild ruleset.** The maintenance rules join `rebuildRuleset` and every encoded
 run is followed by `Cmd.saturate rebuildRuleset`. egglog nests three rulesets in a
@@ -89,7 +81,8 @@ fixpoint of the union of rulesets is a fixpoint of each, and `Cmd.saturate` runs
 fixpoint. -/
 def rebuildRuleset : RulesetName := "@rebuild"
 
-/-- `f`'s view: the functional dependency `children ↦ eclass`. All queries read it. -/
+/-- `f`'s view: the functional dependency `children ↦ (eclass, proof)`. All queries read
+it. -/
 def viewName (f : FnName) : FnName := "@" ++ f ++ "View"
 
 /-- `f`'s term relation. egglog names it `f`; here `f` is needed as the skolem-id
@@ -111,28 +104,120 @@ def maxE (x y : Expr) : Expr := .app "ordering-max" [x, y]
 /-- `(ordering-min x y)`. -/
 def minE (x y : Expr) : Expr := .app "ordering-min" [x, y]
 
+/-! ### Proof terms
+
+A proof is an **ordinary term**: an application of a declared constructor, built by
+`Expr.eval` like every other term the encoding writes.
+
+**A proof term does not carry its proposition** — the row it sits in does. `@UF(t) ↦ (p,
+pf)` is `pf : t = p`, and `@fView(c…) ↦ (e, pf)` is `pf : f(c…) = e`; both read key-to-value,
+where egglog's view runs the other way (`proof_encoding.md`, "Union-find"). This is a real
+simplification over egglog, whose proof nodes carry propositions, and it is available
+because the proof is stored *in the table*.
+
+Five heads, which is the subset `CHECKER.md` measured on the constructor-only fragment:
+
+| head | arity | reading |
+| --- | --- | --- |
+| `@Fiat` | 0 | asserted by a top-level action, or reflexive |
+| `@Sym` | 1 | the row's equality reversed |
+| `@Trans` | 2 | the two rows' equalities composed |
+| `@Congr_k` | k | congruence at a `k`-ary constructor, one proof per child |
+| `@Rule_i` | n | source rule `i` fired on `n` premises |
+
+`@Sym`, `@Trans` and `@Congr` are one-to-one with `Cong`'s constructors. Two of the five
+are **families indexed at the name**, because the modelled language fixes one arity per
+name — a name used at two arities is `Program.arityConflicts`, egglog's "Function already
+bound" — and congruence is needed at every source arity. egglog indexes `@Rule_<k>` and
+`@Packed_<k>` for the same reason.
+
+`Lit` needs nothing here: a rule's name is *in* its constructor's name rather than in a
+`.str` argument, and no proof node carries a literal. The one remaining `.unit` want is
+`unitE`, the term relation's output, which nothing reads. -/
+/-- A proof constructor of arity `k`. Declared, because `Expr.eval` has no rule for an
+undeclared name, and a **constructor** rather than egglog's `(… → Unit :no-merge)` relation:
+that shape exists to keep two structurally equal proofs from being merged into one, and
+with structural freshness a proof node simply *is* its own term. -/
+def proofDecl (k : Nat) : FnDecl := { arity := k, outArity := 1, merge := none }
+
+/-- `@Fiat`'s name. -/
+def fiatName : FnName := "@Fiat"
+
+/-- `@Sym`'s name. -/
+def symName : FnName := "@Sym"
+
+/-- `@Trans`'s name. -/
+def transName : FnName := "@Trans"
+
+/-- `(@Fiat)`. -/
+def fiatE : Expr := .app fiatName []
+
+/-- `(@Sym p)`. -/
+def symE (p : Expr) : Expr := .app symName [p]
+
+/-- `(@Trans p q)`. -/
+def transE (p q : Expr) : Expr := .app transName [p, q]
+
+/-- The congruence head at a `k`-ary constructor. -/
+def congrName (k : Nat) : FnName := "@Congr_" ++ toString k
+
+/-- `(@Congr_k p₁ … p_k)`, one proof per child. -/
+def congrE (ps : List Expr) : Expr := .app (congrName ps.length) ps
+
+/-- The proof head for the `i`th source rule. -/
+def ruleName (i : Nat) : FnName := "@Rule_" ++ toString i
+
+/-- `(@Rule_i p₁ … p_n)`, one proof per premise. -/
+def ruleE (i : Nat) (ps : List Expr) : Expr := .app (ruleName i) ps
+
 /-! ### Declarations
 
 The `:merge` body shared by `@UF` and every view: keep the smaller side, and `set` the
-larger side's union-find edge to it. With one value column `mergeEnv` binds `old`/`new`,
-which is egglog's naming for a single-column function. -/
-/-- The body both `:merge`s run. -/
+larger side's union-find edge to it. With two value columns `mergeEnv` binds `old0`/`new0`
+for the e-class and `old1`/`new1` for its proof, which is egglog's naming. -/
+/-- The body both `:merge`s run: the larger e-class gets a union-find edge to the smaller,
+carrying the resident row's proof for the reason `mergeResult` gives. -/
 def mergeBody : List Action :=
-  [.set ufName [maxE (.var "old") (.var "new")] [minE (.var "old") (.var "new")]]
+  [.set ufName [maxE (.var "old0") (.var "new0")]
+    [minE (.var "old0") (.var "new0"), .var "old1"]]
 
-/-- The value both `:merge`s settle on. -/
-def mergeResult : List Expr := [minE (.var "old") (.var "new")]
+/-- The values both `:merge`s settle on: the smaller e-class, and **the resident row's
+proof**.
 
-/-- `(function @UF (S) (S) :merge …)`. A term with no entry is its own representative, so
-the lookup is identity on miss — which the model expresses by there simply being no
-`@UF(t, p)` term to read. -/
+egglog settles the proof column the honest way — the displaced edge `old0 = new0` proved by
+`(@Trans (@Sym old1) new1)`, its `@Packed_2 "trans_sym_p0_p1"` — and pairs it with
+`:internal-identity-vals 1`, which excludes the proof column from the test for whether a
+collision changed anything, "so re-setting an existing edge leaves the row untouched, skips
+the `:merge` block, and does not re-stage the same union forever"
+(`proof_encoding.md`, "Union-find").
+
+`MergeSpec` has no such declaration and `FDatabase.noConflict` compares every value column,
+so here two rows agreeing on the e-class and differing on the proof *are* a collision, and
+the honest term makes each one write a **strictly larger** proof at the edge it displaces
+to — which is a fresh row, which collides in turn. Measured on `unionCase`: the honest term
+takes one rebuild round from 15 terms and 14 rows to 31 and 26, and the round after it does
+not finish; keeping `old1` takes the same round to 24 and 20, and the rebuild settles in
+four. Keeping `old1` is what recovers `:internal-identity-vals`: a collision that changes
+only the proof resolves to the resident row itself, so it is idempotent.
+
+The price is exact and local. A merge-created equality is *recorded* with the surviving
+row's proof, which proves `k = old0` and not the `old0 = new0` its edge claims, so that one
+step is unjustified. It is the step egglog justifies with `MergeFn` — the sixth
+`Justification`, the one `CHECKER.md`'s minimal subset excludes, and the one that needs the
+checker to re-run the `:merge` body. -/
+def mergeResult : List Expr := [minE (.var "old0") (.var "new0"), .var "old1"]
+
+/-- `(function @UF (S) (S @Proof) :merge …)`. A term with no entry is its own
+representative, so the lookup is identity on miss — which the model expresses by there
+simply being no `@UF(t, p, pf)` term to read. -/
 def ufDecl : FnDecl :=
-  { arity := 1, outArity := 1, merge := some (.merge mergeBody mergeResult) }
+  { arity := 1, outArity := 2, merge := some (.merge mergeBody mergeResult) }
 
-/-- `(function @fView (S…) (S) :merge …)` for a constructor of arity `k`. Two entries
-colliding on one key are congruent, and the merge resolves that by unioning them. -/
+/-- `(function @fView (S…) (S @Proof) :merge …)` for a constructor of arity `k`. Two
+entries colliding on one key are congruent, and the merge resolves that by unioning
+them. -/
 def viewDecl (k : Nat) : FnDecl :=
-  { arity := k, outArity := 1, merge := some (.merge mergeBody mergeResult) }
+  { arity := k, outArity := 2, merge := some (.merge mergeBody mergeResult) }
 
 /-- `(function @fTerm (S… S) Unit :no-merge)`. Keyed on children *and* id, so distinct
 constructions never collide. -/
@@ -206,7 +291,9 @@ and the next variable number.
 
 A view read is a `Pattern.values` atom, which is what egglog lowers `(= e (@fView c…))` to
 and the only form the model admits: `Expr.eval` does not read, so a non-constructor
-application is not an expression here. -/
+application is not an expression here. It binds **both** value columns — a read that fixed
+the proof column to anything but a fresh variable would match only the rows carrying that
+proof — so each read consumes two generated variables, an e-class and a premise proof. -/
 def encodeQueryExpr : Expr → Nat → Expr × List Pattern × Nat
   | .lit l, n => (.lit l, [], n)
   | .var v, n => (.var v, [], n)
@@ -214,8 +301,8 @@ def encodeQueryExpr : Expr → Nat → Expr × List Pattern × Nat
       match encodeQueryArgs args n with
       | (es, ps, n₁) =>
           (.var (freshVar n₁),
-           ps ++ [.values [.var (freshVar n₁)] (viewName f) es],
-           n₁ + 1)
+           ps ++ [.values [.var (freshVar n₁), .var (freshVar (n₁ + 1))] (viewName f) es],
+           n₁ + 2)
 
 /-- `encodeQueryExpr` over an argument list. -/
 def encodeQueryArgs : List Expr → Nat → List Expr × List Pattern × Nat
@@ -245,6 +332,22 @@ def encodeQuery : Query → Nat → Query × Nat
   | p :: ps, n =>
       match encodePattern p n with
       | (qs, n₁) => match encodeQuery ps n₁ with | (qs', n₂) => (qs ++ qs', n₂)
+
+/-- The premise proofs an encoded query binds: the second value column of every view read,
+in query order. This is `@Rule_i`'s argument list, and its length is `@Rule_i`'s arity.
+
+Read back off the emitted query rather than threaded out of `encodeQueryExpr`, which is
+sound because a two-column read atom in an encoded query is one this file wrote: under
+`Program.EncodeDomain` the source has no `Pattern.values` at all. -/
+def queryProofs (q : Query) : List Expr :=
+  q.filterMap fun p => match p with
+    | .values [_, pf] _ _ => some pf
+    | _ => none
+
+/-- `@Rule_i`'s arity: how many premises rule `r`'s encoded query reads. Independent of the
+variable supply the encoding is at, so the prelude's declaration and the head's application
+agree. -/
+def ruleProofArity (r : Rule) : Nat := (queryProofs (encodeQuery r.query 0).1).length
 
 /-! ### Building a term
 
@@ -281,7 +384,12 @@ goes through `UFLeader`. egglog reads its view back to return the *canonical* me
 optimization, and the reason it needs `set-if-empty` as a primitive, since
 `(let x (@fView c…))` is a lookup its own
 `check_no_function_lookups_in_actions` refuses. Skipping it costs the rebuild more
-re-keying and buys a head with no read in it at all. -/
+re-keying and buys a head with no read in it at all.
+
+**The view entry's proof is `@Fiat`**, whatever context the build is in: with a structural
+id the entry a construction writes is `f(c…) = f(c…)`, and reflexivity is what `@Fiat`
+proves when its two sides coincide. Only an equality between *distinct* terms — a `union`
+head — needs the firing's own justification. -/
 def encodeBuild : Expr → Nat → Expr × List Action × Nat
   | .lit l, n => (.lit l, [], n)
   | .var v, n => (.var v, [], n)
@@ -290,7 +398,7 @@ def encodeBuild : Expr → Nat → Expr × List Action × Nat
       | (es, as, n₁) =>
           (.app f es,
            as ++ [.set (termName f) (es ++ [.app f es]) [unitE],
-                  .set (viewName f) es [.app f es]],
+                  .set (viewName f) es [.app f es, fiatE]],
            n₁)
 
 /-- `encodeBuild` over an argument list. -/
@@ -312,8 +420,14 @@ other operand's e-class, dropping the union — is deliberately **not** modelled
 stated effect is "exactly the edge the explicit union would have produced"
 (`proof_encoding.md`, "Union in a rule"), so it changes which entries are written and not
 which equalities hold. -/
-/-- Encode one head action. -/
-def encodeAction : Action → Nat → List Action × Nat
+/-- Encode one head action, under the justification `pf` for the equalities it asserts:
+`@Fiat` at top level, and the firing's `@Rule_i` inside a rule.
+
+The two writes that need it are `union` and `set`, which are the two that can relate
+distinct terms. A build needs nothing from the context (`encodeBuild`). Direction does not:
+a `union` contributes its pair *both ways* to the propositions of the action it comes from,
+so the edge is justified whichever endpoint `ordering-max` picks. -/
+def encodeAction (pf : Expr) : Action → Nat → List Action × Nat
   | .expr e, n => match encodeBuild e n with | (_, as, n₁) => (as, n₁)
   | .letBind v e, n =>
       match encodeBuild e n with | (x, as, n₁) => (as ++ [.letBind v x], n₁)
@@ -322,42 +436,57 @@ def encodeAction : Action → Nat → List Action × Nat
       | (x₁, as₁, n₁) =>
           match encodeBuild e₂ n₁ with
           | (x₂, as₂, n₂) =>
-              (as₁ ++ as₂ ++ [.set ufName [maxE x₁ x₂] [minE x₁ x₂]], n₂)
+              (as₁ ++ as₂ ++ [.set ufName [maxE x₁ x₂] [minE x₁ x₂, pf]], n₂)
   | .set f args out, n =>
       match encodeBuildArgs args n with
       | (es, as, n₁) =>
           match encodeBuildArgs out n₁ with
-          | (xs, as', n₂) => (as ++ as' ++ [.set (viewName f) es xs], n₂)
+          | (xs, as', n₂) => (as ++ as' ++ [.set (viewName f) es (xs ++ [pf])], n₂)
 
-/-- `encodeAction` over an action list. -/
-def encodeActions : List Action → Nat → List Action × Nat
+/-- `encodeAction` over an action list, all under one justification. -/
+def encodeActions (pf : Expr) : List Action → Nat → List Action × Nat
   | [], n => ([], n)
   | a :: as, n =>
-      match encodeAction a n with
-      | (bs, n₁) => match encodeActions as n₁ with | (bs', n₂) => (bs ++ bs', n₂)
+      match encodeAction pf a n with
+      | (bs, n₁) => match encodeActions pf as n₁ with | (bs', n₂) => (bs ++ bs', n₂)
 
-/-- Encode a rule: view reads for the body, builds and `@UF` edges for the head. -/
-def encodeRule (r : Rule) (n : Nat) : Rule × Nat :=
+/-- Encode the `i`th rule: view reads for the body, builds and `@UF` edges for the head,
+and `(@Rule_i p…)` over the premises' proofs as the head's justification.
+
+The premise proofs are exactly the proof variables the query's view reads bind, so the
+justification is assembled out of what the match already delivers and the head reads
+nothing. -/
+def encodeRule (i : Nat) (r : Rule) (n : Nat) : Rule × Nat :=
   match encodeQuery r.query n with
   | (q, n₁) =>
-      match encodeActions r.actions n₁ with
+      match encodeActions (ruleE i (queryProofs q)) r.actions n₁ with
       | (as, n₂) => ({ query := q, actions := as, ruleset := r.ruleset }, n₂)
 
 /-! ### Maintenance
 
 `proof_encoding.md`, "Rebuilding". Two families, both ordinary rules. -/
-/-- Path compression, `a → b → c` to `a → c`. egglog guards it with `(!= b c)`; without
-disequality the unguarded rule additionally re-`set`s edges it already holds, which
-changes nothing. -/
+/-- Path compression, `a → b → c` to `a → c`, the new edge proved by composing the two it
+walked. egglog guards it with `(!= b c)`; without disequality the unguarded rule
+additionally re-`set`s edges it already holds, whose proof column the merge then settles.
+
+This is the one site that writes a bare `@Trans`, which is what `--proofs` on a
+constructor-only program emits too (`CHECKER.md`, "The minimal subset"). -/
 def pathCompressRule : Rule :=
-  { query := [.values [.var "@b"] ufName [.var "@a"],
-              .values [.var "@c"] ufName [.var "@b"]],
-    actions := [.set ufName [.var "@a"] [.var "@c"]],
+  { query := [.values [.var "@b", .var "@p"] ufName [.var "@a"],
+              .values [.var "@c", .var "@q"] ufName [.var "@b"]],
+    actions := [.set ufName [.var "@a"] [.var "@c", transE (.var "@p") (.var "@q")]],
     ruleset := rebuildRuleset }
 
 /-- `@c0 … @c(k-1)`, a rebuild rule's column variables. -/
 def rebuildVars (k : Nat) : List Expr :=
   (List.range k).map fun i => .var ("@c" ++ toString i)
+
+/-- The child proofs of a congruence step that moves column `i` of a `k`-ary constructor:
+the `@UF` edge's proof there, and reflexivity — `@Fiat` at equal sides — everywhere else.
+egglog spells the same thing `@UF_<Sort>_canon_proof`, "reflexive for a column that did not
+move". -/
+def congrChildren (k i : Nat) : List Expr :=
+  (List.range k).map fun j => if j = i then .var "@q" else fiatE
 
 /-- The rebuild rules for a constructor of arity `k`: one per child column, moving that
 column to its union-find leader, and one for the e-class column.
@@ -369,17 +498,25 @@ stale entry. Neither piece is available here — there is no index, no `delete`,
 identity-on-miss read, since "no entry" is not a matchable fact. Neither is needed for
 the equalities: entries are never removed in this model, so a half-rewritten entry is an
 extra entry rather than a lost one, and `Database.Out` reads any of them. What egglog
-buys with the one-firing form is entry count. -/
+buys with the one-firing form is entry count.
+
+**Each re-keyed entry carries the proof of what it now claims.** With `@p : f(c…) = @e` and
+`@q` the `@UF` edge's proof, moving the e-class composes on the left, `(@Trans @p @q) :
+f(c…) = @x`; moving column `i` composes a congruence step on the right, `(@Trans (@Sym
+(@Congr_k … @q …)) @p) : f(c… @x …) = @e`. That the e-class step is a `@Trans` and not a
+`@Congr` child is egglog's split too — "an e-class can equal one of its own children's
+terms". -/
 def rebuildRules (f : FnName) (k : Nat) : List Rule :=
   let cs := rebuildVars k
-  let view : Pattern := .values [.var "@e"] (viewName f) cs
+  let view : Pattern := .values [.var "@e", .var "@p"] (viewName f) cs
   let eclassRule : Rule :=
-    { query := [view, .values [.var "@x"] ufName [.var "@e"]],
-      actions := [.set (viewName f) cs [.var "@x"]],
+    { query := [view, .values [.var "@x", .var "@q"] ufName [.var "@e"]],
+      actions := [.set (viewName f) cs [.var "@x", transE (.var "@p") (.var "@q")]],
       ruleset := rebuildRuleset }
   eclassRule :: (List.range k).map fun i =>
-    { query := [view, .values [.var "@x"] ufName [.var ("@c" ++ toString i)]],
-      actions := [.set (viewName f) (cs.set i (.var "@x")) [.var "@e"]],
+    { query := [view, .values [.var "@x", .var "@q"] ufName [.var ("@c" ++ toString i)]],
+      actions := [.set (viewName f) (cs.set i (.var "@x"))
+        [.var "@e", transE (symE (congrE (congrChildren k i))) (.var "@p")]],
       ruleset := rebuildRuleset }
 
 /-- Every maintenance rule the encoding of `P` emits. `Rebuilt` is stated over it. -/
@@ -387,9 +524,33 @@ def maintenanceRules (P : Program) : List Rule :=
   pathCompressRule :: P.ctors.flatMap fun fk => rebuildRules fk.1 fk.2
 
 /-! ### The transformation -/
+/-- The source rules, in the order `encodeCmds` numbers them. -/
+def Program.srcRules (P : Program) : List Rule :=
+  P.filterMap fun c => match c with | .rule r => some r | _ => none
+
+/-- The arities congruence is needed at: one `@Congr_k` per source constructor arity, and
+none at 0 — a nullary constructor has no child column for a rebuild rule to move. -/
+def congrArities (P : Program) : List Nat := (P.ctors.map Prod.snd).dedup.filter (· ≠ 0)
+
+/-- `(constructor @Rule_i (@Proof…) @Proof)` per source rule, at the arity that rule's
+encoded query reads. -/
+def ruleProofDecls : List Rule → Nat → Program
+  | [], _ => []
+  | r :: rs, i => .decl (ruleName i) (proofDecl (ruleProofArity r)) :: ruleProofDecls rs (i + 1)
+
+/-- The proof vocabulary: three fixed heads and the two arity-indexed families.
+
+**First in the prelude**, because a declaration's `:merge` body and a rule's head are
+checked and evaluated against the signature standing when they are read, and both apply
+these. -/
+def proofDecls (P : Program) : Program :=
+  [.decl fiatName (proofDecl 0), .decl symName (proofDecl 1), .decl transName (proofDecl 2)] ++
+    (congrArities P).map (fun k => .decl (congrName k) (proofDecl k)) ++
+    ruleProofDecls P.srcRules 0
+
 /-- The declarations and maintenance rules, emitted once at the top. -/
 def encodePrelude (P : Program) : Program :=
-  .decl ufName ufDecl ::
+  proofDecls P ++ .decl ufName ufDecl ::
     (P.ctors.flatMap fun fk =>
       [.decl fk.1 (skolemDecl fk.2), .decl (viewName fk.1) (viewDecl fk.2),
        .decl (termName fk.1) (termDecl fk.2)]) ++
@@ -405,25 +566,28 @@ after each one except a function, rule or sort declaration
 there creates congruence the views must be re-keyed for; without the rebuild it propagates
 only to the columns the union names directly, and `Wrapper(Add One Two)`,
 `Wrapper(Add Two One)`, `union One Two` leaves `Wrapper` as two classes where the source
-has one. A declaration writes nothing and a rule only registers itself. -/
-def encodeCmd : Cmd → Nat → Program × Nat
-  | .action a, n =>
-      match encodeAction a n with
-      | (as, n₁) => (as.map .action ++ [.saturate rebuildRuleset], n₁)
-  | .rule r, n => match encodeRule r n with | (r', n₁) => ([.rule r'], n₁)
-  | .run R, n => ([.run R, .saturate rebuildRuleset], n)
-  | .saturate R, n => ([.saturate R, .saturate rebuildRuleset], n)
-  | .decl _ _, n => ([], n)
+has one. A declaration writes nothing and a rule only registers itself.
+
+Two supplies are threaded: `n` numbers generated variables, and `i` numbers the rules, so
+that the `@Rule_i` a head names is the one the prelude declared for it. -/
+def encodeCmd : Cmd → Nat → Nat → Program × Nat × Nat
+  | .action a, n, i =>
+      match encodeAction fiatE a n with
+      | (as, n₁) => (as.map .action ++ [.saturate rebuildRuleset], n₁, i)
+  | .rule r, n, i => match encodeRule i r n with | (r', n₁) => ([.rule r'], n₁, i + 1)
+  | .run R, n, i => ([.run R, .saturate rebuildRuleset], n, i)
+  | .saturate R, n, i => ([.saturate R, .saturate rebuildRuleset], n, i)
+  | .decl _ _, n, i => ([], n, i)
 
 /-- `encodeCmd` over a program. -/
-def encodeCmds : Program → Nat → Program × Nat
-  | [], n => ([], n)
-  | c :: cs, n =>
-      match encodeCmd c n with
-      | (p, n₁) => match encodeCmds cs n₁ with | (p', n₂) => (p ++ p', n₂)
+def encodeCmds : Program → Nat → Nat → Program × Nat × Nat
+  | [], n, i => ([], n, i)
+  | c :: cs, n, i =>
+      match encodeCmd c n i with
+      | (p, n₁, i₁) => match encodeCmds cs n₁ i₁ with | (p', n₂, i₂) => (p ++ p', n₂, i₂)
 
 /-- **The encoding.** -/
-def encode (P : Program) : Program := encodePrelude P ++ (encodeCmds P 0).1
+def encode (P : Program) : Program := encodePrelude P ++ (encodeCmds P 0 0).1
 
 /-! ### The source programs `encode` is defined for
 
@@ -501,9 +665,13 @@ about applications the source never built — `@AddView [1,1] ↦ Add[1,2]` afte
 and `(union 1 2)`. Those entries are still *true*, but only in that sense. `ENCODING.md`
 records why `CongOn` is nevertheless too weak to state a theorem over unmodified. -/
 /-- A union-find edge that moves. The `:merge` writes `@UF (ordering-max p p) ↦
-ordering-min p p` on a self-collision, so reflexive self-loops are ordinary entries and a
-leader is "no edge that moves" rather than "no entry". -/
-def UFEdge (d : Database) (t p : Term) : Prop := d.Out ufName [t] [p] ∧ p ≠ t
+(ordering-min p p, _)` on a self-collision, so reflexive self-loops are ordinary entries and
+a leader is "no edge that moves" rather than "no entry".
+
+Existential in the proof column: which justification an edge carries is not what being an
+edge means. -/
+def UFEdge (d : Database) (t p : Term) : Prop :=
+  (∃ pf, d.Out ufName [t] [p, pf]) ∧ p ≠ t
 
 /-- `l` is `t`'s representative: reachable along edges, and itself at the end of one.
 
@@ -522,8 +690,8 @@ is the source-to-target correspondence the simulation theorem needs.
 A literal is its own id — it has no view, since only an application does. -/
 inductive ViewRepr (d : Database) : Term → Term → Prop where
   | lit {l : Lit} : Term.lit l ∈ d.terms → ViewRepr d (.lit l) (.lit l)
-  | app {f : FnName} {as es : List Term} {e : Term} :
-      ViewReprList d as es → d.Out (viewName f) es [e] → ViewRepr d (.app f as) e
+  | app {f : FnName} {as es : List Term} {e pf : Term} :
+      ViewReprList d as es → d.Out (viewName f) es [e, pf] → ViewRepr d (.app f as) e
 
 /-- `ViewRepr` over an argument list. -/
 inductive ViewReprList (d : Database) : List Term → List Term → Prop where
@@ -577,32 +745,5 @@ theorem cmdStep_rebuilt {P : Program} {db d : Database}
     (hR : ∀ r, (r ∈ d.rules ∧ r.ruleset = rebuildRuleset) ↔ r ∈ maintenanceRules P)
     (h : CmdStep db (.saturate rebuildRuleset) d) : Rebuilt P d :=
   saturateReach_rebuilt hR (cmdStep_saturate_iff.mp h)
-
-/-! ### Proof nodes
-
-`encode` writes none of these — the proof column is what the one-value-column
-restriction blocks (see the header). The vocabulary is fixed here so the M11 proof
-theorems would have something to quantify over, and so the shape is reviewable now.
-
-egglog declares each as a *relation* whose last input column is a `get-fresh! "@Proof"`
-id, deliberately so that two structurally equal proofs are never merged into one. With
-structural freshness there is no id to mint and a proof node simply *is* its own term;
-the two coincide except that equal proofs are equal here. -/
-/-- `@Fiat`: a top-level action asserted `a = b`. -/
-def pFiat (a b : Term) : Term := .app "@Fiat" [a, b]
-
-/-- `@Trans`. -/
-def pTrans (p q : Term) : Term := .app "@Trans" [p, q]
-
-/-- `@Sym`. -/
-def pSym (p : Term) : Term := .app "@Sym" [p]
-
-/-- `@Congr`: `p` proves `t = t'`, `q` proves the `i`th child's step. -/
-def pCongr (p : Term) (i : Nat) (q : Term) : Term := .app "@Congr" [p, .lit (.int i), q]
-
-/-- `@Rule_<k>`: the rule named by `nm`, fired on the premises `prems`. Which of the
-head's conclusions this is — layer 2's *column* — is the last argument. -/
-def pRule (nm : Term) (prems : List Term) (col : Nat) : Term :=
-  .app "@Rule" (nm :: prems ++ [.lit (.int col)])
 
 end Egglog

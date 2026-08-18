@@ -1566,24 +1566,35 @@ the stale one, so "a half-rewritten entry is an extra entry rather than a lost o
 (`rebuildRules`). The class count is the claim; the entry count is the price.
 
 The two numbers really do come apart, and the guards below pin the smallest case where they
-do: `unionCase` is one source key class, one view class and **two** view entries. A harness
+do: `unionCase` is one source key class, one view class and **three** view entries. A harness
 that had reached for `keyRowCount` on both sides would have reported a mismatch there and
 been wrong about it.
 
 #### What is actually runnable
 
 Encoding a query multiplies the e-matcher's exponent: one view read per subterm, each
-binding an id variable, so `Program.widestRule` goes from 0–3 across the in-domain corpus to
-3–12, and `matchQuery` is `|valueTerms| ^ that`. `difftest encode-cost` prints both
-exponents per case, which is the number to look at before waiting on one — though it is only
-half the answer, since `|valueTerms|` varies as much as the exponent does.
+binding an id variable **and a proof variable**, so `Program.widestRule` goes from 0–3 across
+the in-domain corpus to 5–23, and `matchQuery` is `|valueTerms| ^ that`. `difftest
+encode-cost` prints both exponents per case, which is the number to look at before waiting on
+one — though it is only half the answer, since `|valueTerms|` varies as much as the exponent
+does, and the proof column moves that too: a proof node is an ordinary constructor term, so
+every proof the rebuild composes joins the candidate universe.
 
-**64 of the 70 in-domain cases finish** at a 300 s budget each, 58 within 60 s and 50 within
-10 s, all reporting `AGREE`. The six that do not are `rand-0`, `rand-9`, `rand-24`,
-`rand-25`, `rand-30` and `rand-44`. What is left in the loop after
-`Impl/Interp.lean`'s "Hoisting the closure out of the candidate loop" is the cross product
-itself and a scan of `rows` per candidate, so the six need the enumeration replaced by a
-join over the index rather than another constant factor.
+`Impl/Interp.lean`'s "Pruning the candidate cross product" is what keeps the second variable
+per read from multiplying the whole search rather than its own atom's block. It is not
+enough. **12 of the 70 in-domain cases finish** at a 60 s budget each and 20 at 300 s, all
+reporting `AGREE`; the same sweeps were 58 and 64 before the proof column, and 10 and 14
+with the pruning turned off.
+
+Where it goes is measured, and it is e-matching and not the merge phase: on `unionCase`'s
+last rebuild the round costs 207 s, of which the congruence closure is 106 ms, one merge
+pass 1 ms and the whole merge saturation 322 ms. The rest is `execRunRules`. Two things
+multiply there and neither is the encoder's shape: the view read's proof variable adds a
+`|valueTerms|` factor **inside its own atom's block**, which pruning cannot remove because
+the atom is not decided until its last column is bound; and every proof the rebuild composes
+is an ordinary constructor term, so it joins `valueTerms` and raises the base. What that
+needs is the enumeration replaced by a join over the index — bind a value column *from the
+rows* rather than guess it — which pruning approximates and does not replace.
 -/
 
 /-! #### `encode`'s domain, decided
@@ -1641,46 +1652,6 @@ theorem Program.encodeDomainB_iff (p : Program) :
   exact ⟨fun h => ⟨h.1.1.1.1, h.1.1.1.2, h.1.1.2, h.1.2, h.2⟩,
     fun h => ⟨⟨⟨⟨h.ctorsOnly, h.noSet⟩, h.noPrim⟩, h.noAt⟩, h.noAtVar⟩⟩
 
-/-! #### Standing in for `set-if-empty`
-
-`encodeBuild` ends every construction with `(let x (@fView c…))`, a **lookup** in a rule
-head. `Encode.lean` records that egglog rejects the shape and that `Program.noLookup` is the
-transcribed check — but it is worse than a static rejection here: `Expr.eval` has no rule
-for an application of a declared `.merge` function either, so the *interpreter* gets stuck
-on the very first construction and `execM (encode P)` is `none` for every program that
-builds anything. `stuckAt` below reports where, and it is why nothing about counts can be
-said of `encode` as written.
-
-`skolemizeReadBack` is the harness's stand-in, and it is not a repair of `encode`: it
-rewrites the read-back to bind the id the `set` on the line above just interned, which is
-the skolem `f(c…)`. egglog's `set-if-empty-<View>!` returns the **resident** e-class where
-one was already there, so the two differ exactly when the view already held that key —
-where egglog keeps the resident id, this binds the skolem, and the two are `@UF`-unioned by
-the `set`'s own merge in either case. So the parent is built over a non-leader child and the
-rebuild moves it, which costs entries and not equalities. What it does *not* do is invent a
-missing action: a real fix is a `Prim`-style get-or-insert, which is a write, and that is
-M11 encoder work (`Encode.lean`, "Building a term"). Everything below the stand-in is
-`encode`'s own output, unedited. -/
-/-- The read-back rewritten to the skolem id, given the source constructors. Matching on the
-name rather than on the string shape keeps `viewName`'s spelling in one place. -/
-def unLookupAction (fs : List FnName) : Action → Action
-  | .letBind v (.app g es) =>
-      match fs.find? fun f => viewName f == g with
-      | some f => .letBind v (.app f es)
-      | none => .letBind v (.app g es)
-  | a => a
-
-/-- `unLookupAction` over a command: top-level actions and rule heads, which are the only
-places `encodeBuild`'s output lands. -/
-def unLookupCmd (fs : List FnName) : Cmd → Cmd
-  | .action a => .action (unLookupAction fs a)
-  | .rule r => .rule { r with actions := r.actions.map (unLookupAction fs) }
-  | c => c
-
-/-- `encode`, with every view read-back standing in as its skolem id. -/
-def skolemizeReadBack (p : Program) : Program :=
-  (encode p).map (unLookupCmd (p.ctors.map Prod.fst))
-
 /-! #### Running the encoded program
 
 `encode` emits `Cmd.saturate rebuildRuleset` after every run, so an encoded program is
@@ -1737,11 +1708,12 @@ through the index, and `ufLeader` is only ever called with it.
 
 A self-loop is an ordinary entry rather than the absence of one — `UFEdge` carries `p ≠ t`
 for that reason — so the walk stops at an edge that does not move. -/
-/-- `@UF`'s recorded parent for `t`, if it moves. -/
+/-- `@UF`'s recorded parent for `t`, if it moves. The proof column is read past: which
+justification an edge carries is not what being an edge means (`Encode.lean`, `UFEdge`). -/
 def ufParent (d : FDatabase) (t : Term) : Option Term :=
   (d.rows.find? fun r => r.fn == ufName && r.args == [t]).bind fun r =>
     match r.out with
-    | [p] => if p == t then none else some p
+    | [p, _] => if p == t then none else some p
     | _ => none
 
 /-- `t`'s union-find leader. -/
@@ -1788,7 +1760,7 @@ def encodeCompare (fuel : Nat) (p₀ : Program) : EncOutcome :=
     match execAt fuel FDatabase.empty p with
     | none => .sourceStuck (stuckAt fuel FDatabase.empty 0 p)
     | some d =>
-      let q := skolemizeReadBack p
+      let q := encode p
       match execAt fuel FDatabase.empty q with
       | none => .encodedStuck (stuckAt fuel FDatabase.empty 0 q)
       | some e =>
@@ -1862,10 +1834,11 @@ set_option linter.hashCommand false in
 
 /-! **The class count is the claim; the entry count is the price.** `unionCase` builds
 `Add(One, Two)` and `Add(Two, One)` and unions the leaves, so the source has one key class.
-The encoded view holds two entries — `[One, Two]` and `[Two, One]` — and there is no
-`delete` to retire either, so `viewEntryCount` is 2 where `viewClassCount` is 1. This is the
-one case where the two target-side numbers come apart at a size a `#guard` can run, and it
-is the whole reason the harness reports both. -/
+The encoded view holds three entries — the two the builds wrote, `[One, Two]` and
+`[Two, One]`, and the `[One, One]` the rebuild re-keyed them both onto — and there is no
+`delete` to retire the two stale ones, so `viewEntryCount` is 3 where `viewClassCount` is 1.
+This is the smallest case where the two target-side numbers come apart, and it is the whole
+reason the harness reports both. -/
 /-- The checks that have to **run** a program. Compile-time `#guard`s cannot carry these:
 each encoded action is followed by a saturating rebuild, so elaborating them ran the
 e-matcher tens of times. `difftest encode-selftest` executes them and reports failures. -/
@@ -1892,7 +1865,7 @@ program made of top-level actions gets no rebuild at all and the target simulate
 congruence above the columns a `union` names directly.
 
 That is a defect in `encode` rather than in the correspondence, and it is not an artefact of
-the stand-in above: egglog's `set-if-empty` would mint the same two distinct ids for the two
+the skolem ids: egglog's `set-if-empty` would mint the same two distinct ids for the two
 `Add` shapes, so the two `Wrapper` entries sit at distinct keys under either reading. The
 source's congruence is a closure and holds the moment the `union` lands; the target's is a
 ruleset, and `execCmdM` runs a merge phase after every top-level action but nothing runs the

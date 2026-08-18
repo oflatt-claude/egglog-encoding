@@ -451,6 +451,38 @@ def FDatabase.mergeRound (d : FDatabase) : FDatabase :=
           | some acc'' => acc''
           | none => acc') acc) e
 
+/-! #### One closure and one rebuild per pass
+
+`mergeRound` names its closure and its rebuilt state with `let`, and both are used inside
+the fold's closures, where the compiler is free to inline them back — the hazard
+`Impl/Interp.lean`'s `matchQueryFast` records. It does inline them, so a pass recomputes the
+congruence closure it already has: on the last rebuild round of the encoding's `unionCase`,
+one pass costs 109 ms through `mergeRound` and 1 ms with the closure and the rebuilt state
+passed in. Parameters are what keep them shared, and `mergeRoundFast_eq` is an equality on
+the nose. -/
+/-- `mergeRound`'s fold, with the closure and the rebuilt state as parameters. -/
+def FDatabase.mergeRoundWith (cl : Finset (Term × Term)) (e : FDatabase) : FDatabase :=
+  e.rows.foldl (fun acc r₁ =>
+    e.rows.foldl (fun acc' r₂ =>
+      if r₁ == r₂ then acc'
+      else match FDatabase.mergeOneWith cl acc' r₁ r₂ with
+        | some acc'' => acc''
+        | none => acc') acc) e
+
+/-- **The fast pass.** -/
+def FDatabase.mergeRoundFast (d : FDatabase) : FDatabase :=
+  if !d.hasMergeRow then d else
+    let cl := d.closureF
+    FDatabase.mergeRoundWith cl (FDatabase.rebuild cl d)
+
+theorem FDatabase.mergeRoundFast_eq (d : FDatabase) : d.mergeRoundFast = d.mergeRound := rfl
+
+/-- What points compiled code at the shared pass. -/
+@[csimp] theorem FDatabase.mergeRound_eq_fast :
+    @FDatabase.mergeRound = @FDatabase.mergeRoundFast := by
+  funext d
+  exact (FDatabase.mergeRoundFast_eq d).symm
+
 /-! ### Running -/
 /-- Whether a merge pass changed anything. Compares the decidable fields; `sig` is a
 function and `env`/`rules` a merge cannot touch. -/

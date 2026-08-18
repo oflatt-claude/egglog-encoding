@@ -188,7 +188,7 @@ the rows are not the proofs.
 ## `Encoding/Encode.lean`
 
 `encode : Program → Program` for constructors only, `Program.EncodeDomain` stating that fragment.
-Per source constructor `f` it emits `@fView` (`children ↦ eclass`, the FD) and `@fTerm`
+Per source constructor `f` it emits `@fView` (`children ↦ (eclass, proof)`, the FD) and `@fTerm`
 (write-only), plus one `@UF` per sort; the `:merge` body of `@UF` and of every view is egglog's
 own, "keep the smaller side and `set` the larger's `@UF` edge to it", so a view collision *is*
 congruence resolution and no congruence rule is emitted. Rendering it on `proof_encoding.md`'s
@@ -238,9 +238,12 @@ Each is recorded at its definition in `Encoding/Encode.lean`; the reasons in one
   `tuple-read-congr` exercise it and agree — but `(print-size)` counts key classes and is blind to
   value columns, so a row-count comparison validates the declaration, the `set` and that the
   destructure *fires*, not the merged values; `tuple-read` reaches the values by guarding on
-  literal columns so the firing shows in its head constructor's count. So when a proof-column
-  theorem is restated, the language will not be what stops it — the encoder not emitting the column
-  will.
+  literal columns so the firing shows in its head constructor's count. **The encoder now emits the
+  column**: `@UF` and every view have `outArity 2`, the prelude declares `@Fiat`, `@Sym`, `@Trans`,
+  one `@Congr_k` per source arity and one `@Rule_i` per source rule, and every `set` and every view
+  read carries the proof. Five of the eight `Justification`s are reachable that way; the sixth,
+  `MergeFn`, is what a view collision would need and what `Encode.lean`'s `mergeResult` records
+  instead of naming.
 
 ### Open design questions
 
