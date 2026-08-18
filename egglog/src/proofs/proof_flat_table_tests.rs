@@ -1,6 +1,6 @@
 use std::fmt::Write as _;
 
-use crate::EGraph;
+use crate::{EGraph, ast::FunctionSubtype};
 
 const PRELUDE: &str = r#"
     (datatype Math (Num i64) (Add Math Math))
@@ -31,6 +31,19 @@ fn flat_row_count(egraph: &EGraph) -> usize {
         .sum()
 }
 
+fn egraph_and_proof_node_decl() -> (EGraph, crate::ast::ResolvedFunctionDecl) {
+    let mut egraph = EGraph::new_with_proofs();
+    egraph.parse_and_run_program(None, PRELUDE).unwrap();
+    let decl = egraph
+        .functions
+        .values()
+        .find(|function| is_proof_node(&egraph, function))
+        .expect("expected a generated proof-node relation")
+        .decl
+        .clone();
+    (egraph, decl)
+}
+
 #[test]
 fn only_proof_node_relations_use_flat_storage() {
     let mut egraph = EGraph::new_with_proofs();
@@ -42,6 +55,12 @@ fn only_proof_node_relations_use_flat_storage() {
         let is_flat = egraph.backend.table_is_flat(function.backend_id);
         if is_proof_node(&egraph, function) {
             assert!(is_flat, "{}", function.name());
+            assert_eq!(
+                function.decl.subtype,
+                FunctionSubtype::Custom,
+                "{}",
+                function.name()
+            );
             assert_eq!(function.schema.outputs.len(), 1, "{}", function.name());
             assert_eq!(
                 function.schema.outputs[0].name(),
@@ -50,6 +69,20 @@ fn only_proof_node_relations_use_flat_storage() {
                 function.name()
             );
             assert!(function.decl.merge.is_none(), "{}", function.name());
+            assert!(
+                function.decl.term_constructor.is_none(),
+                "{}",
+                function.name()
+            );
+            assert!(
+                function
+                    .schema
+                    .input
+                    .last()
+                    .is_some_and(|sort| sort.is_eq_sort()),
+                "{}",
+                function.name()
+            );
             assert!(!function.can_subsume, "{}", function.name());
             flat_proof_nodes += 1;
         } else {
@@ -68,6 +101,56 @@ fn only_proof_node_relations_use_flat_storage() {
         keyed_term_nodes > 0,
         "term-node relations should remain on keyed storage"
     );
+}
+
+#[test]
+#[should_panic(expected = "must be a custom function")]
+fn proof_node_storage_rejects_constructor_semantics() {
+    let (mut egraph, mut decl) = egraph_and_proof_node_decl();
+    decl.name = "invalid-proof-constructor".into();
+    decl.subtype = FunctionSubtype::Constructor;
+    egraph.declare_function(&decl).unwrap();
+}
+
+#[test]
+#[should_panic(expected = "cannot declare merge behavior")]
+fn proof_node_storage_rejects_merge_semantics() {
+    let (mut egraph, mut decl) = egraph_and_proof_node_decl();
+    let output_sort = egraph
+        .type_info
+        .get_sort_by_name(&decl.schema.outputs[0])
+        .unwrap()
+        .clone();
+    decl.name = "invalid-proof-merge".into();
+    decl.merge = Some(crate::ast::ResolvedMerge::result_only(
+        crate::ast::GenericExpr::Var(
+            crate::span!(),
+            crate::ast::ResolvedVar {
+                name: "old".into(),
+                sort: output_sort,
+                is_global_ref: false,
+            },
+        ),
+    ));
+    egraph.declare_function(&decl).unwrap();
+}
+
+#[test]
+#[should_panic(expected = "cannot be an FD view")]
+fn proof_node_storage_rejects_view_semantics() {
+    let (mut egraph, mut decl) = egraph_and_proof_node_decl();
+    decl.name = "invalid-proof-view".into();
+    decl.term_constructor = Some("unused-constructor".into());
+    egraph.declare_function(&decl).unwrap();
+}
+
+#[test]
+#[should_panic(expected = "must have exactly one Unit output")]
+fn proof_node_storage_rejects_non_unit_outputs() {
+    let (mut egraph, mut decl) = egraph_and_proof_node_decl();
+    decl.name = "invalid-proof-output".into();
+    decl.schema.outputs = vec![egraph.proof_state.proof_names.proof_datatype.clone()];
+    egraph.declare_function(&decl).unwrap();
 }
 
 #[test]
