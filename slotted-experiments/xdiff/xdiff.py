@@ -59,15 +59,6 @@ BUGS = {b for b in os.environ.get("XDIFF_BUGS", "").split(",") if b}
 # ground: XDIFF_LAM=0.55
 LAM_PROB = float(os.environ.get("XDIFF_LAM", "0.2"))
 
-# How symmetries reach the primitives.
-#   per-use    (default) a fresh symmetry joined at each place one is needed, and
-#              a repeated occurrence checked by computing the symmetry it would
-#              need and looking that up
-#   per-class  one symmetry joined per e-class and reused everywhere that class's
-#              renaming is used, with repeated occurrences checked by comparing
-#              against it rather than by a determined lookup
-SYM_SCHEME = os.environ.get("XDIFF_SYM", "per-class")
-
 # ---------------------------------------------------------------- neutral terms
 # term := ('var', n) | ('null',) | (op, t1, t2)
 
@@ -247,8 +238,6 @@ def rhs_text(t):
 # domain is exactly its child's slot set -- the reference asserts it outright, in
 # `check_internal_applied_id`. The encoding does not enforce it, and `X1` reaches a
 # state that breaks it; that is recorded here so a *new* violation still fails.
-KNOWN_WIDE = {}
-
 # An idempotent self-loop on the child is a partial identity, so the child's live
 # slots are inside its domain: one with fewer keys than the edge proves the edge names
 # slots the child does not have. Only narrower witnesses are used, which is what makes
@@ -429,16 +418,14 @@ def compile_rule(atoms, action, conds=()):
     def sym_for(pvar):
         """A symmetry of `pvar`'s class, joined from RenamesToLeader.
 
-        Under `per-class` one is joined per class and shared by every use, so all
-        uses must agree on it. Under `per-use` each place gets its own, so they
-        may differ.
+        One per class, shared by every use, so all uses must agree on it -- which is also
+        what makes restricting a root's renaming by the live slot set affordable.
         """
-        if SYM_SCHEME == "per-class" and pvar in sym_of:
+        if pvar in sym_of:
             return sym_of[pvar]
         sv = fresh("sym")
         body.append(f"(RenamesToLeader {cls_of[pvar]} {sv} {cls_of[pvar]})")
-        if SYM_SCHEME == "per-class":
-            sym_of[pvar] = sv
+        sym_of[pvar] = sv
         return sv
 
     for idx, (root, op, c1, c2) in enumerate(atoms):
@@ -535,30 +522,11 @@ def compile_rule(atoms, action, conds=()):
                 # what the original bug had in its place -- emitting neither
                 # would be a different, more permissive mutant.
                 if cp not in bound_before or "root-only" in BUGS:
-                    if SYM_SCHEME == "per-class":
-                        # compare against the class's one symmetry rather than
-                        # solving for the symmetry this pair would need
-                        sym = sym_for(cp)
-                        body.append(
-                            f"(= (compose {mp} {e}) (compose {mp_of[cp]} {sym}))")
-                    else:
-                        sym = fresh("sym")
-                        body.append(
-                            f"(= {sym} (compose (inverse {mp_of[cp]}) (compose {mp} {e})))"
-                        )
-                        body.append(
-                            f"(RenamesToLeader {cls_of[cp]} {sym} {cls_of[cp]})")
-                    # A redundant slot is recorded as a *partial* self-loop, so
-                    # the stored set is an inverse monoid, not a group. If the
-                    # composition above truncated, the short map could match one
-                    # of those partial loops and be accepted wrongly. Requiring
-                    # the width to be unchanged rules that out without depending
-                    # on the e-graph being saturated -- which matters here,
-                    # because user rules share a ruleset with the machinery and
-                    # so can match mid-repair.
-                    if SYM_SCHEME != "per-class":
-                        body.append(
-                            f"(= (map-length {sym}) (map-length {mp_of[cp]}))")
+                    # compare against the class's one symmetry rather than solving for
+                    # the symmetry this pair would need
+                    sym = sym_for(cp)
+                    body.append(
+                        f"(= (compose {mp} {e}) (compose {mp_of[cp]} {sym}))")
             else:
                 m = fresh("m")
                 body.append(f"(= {m} (compose {mp} {e}))")
@@ -889,7 +857,7 @@ def check_case(case, verbose=False, stats=None):
     got = check_invariants(case)
     if got is not None:
         wide, noninj = got
-        allowed = KNOWN_WIDE.get(case.name, 0)
+        allowed = 0
         if wide > allowed:
             fails.append(f"{case.name}: INVARIANT wide edges {wide}, "
                          f"expected at most {allowed}")

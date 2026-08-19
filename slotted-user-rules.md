@@ -184,8 +184,9 @@ Two consequences worth stating:
   which is precisely what a symmetry's domain is: `(compose mp sym)`. With a
   per-class join that costs nothing extra.
 
-Measured against the per-use scheme it is indistinguishable — same answers, same
-firing count, same single known failure. `XDIFF_SYM` selects between them.
+Measured against a per-use scheme -- a fresh symmetry joined at each place one is needed --
+it was indistinguishable: same answers, same firing count, same single known failure. Only
+per-class is in the tree; keeping both meant carrying an alternative nothing exercised.
 
 The scheme does **not** address the branching question above, and did not fix
 `X1`: both are about redundancy, not symmetry.
@@ -459,11 +460,11 @@ Fixed by declining to migrate when either edge would narrow — the guard now in
 
 The complete alternative is to mint a name for the uncovered slot instead of
 dropping it: extend the pullback to be total on the node's slots. Both are generated
-from one source — `MIGRATION` in `slotted-experiments/gen-node-rules.py` selects
-`"decline"` or `"mint"` — so the comparison is a regeneration, not a second copy of
-the machinery to keep in step. There used to be such a copy, and by the time anyone
-looked at it, it had drifted to none of `ClassSlots`, `compose-total` or the current
-alpha-finder tie-break.
+from one source. It was selected by a `MIGRATION` knob for a while, which was better than
+the copy of the whole machinery that preceded it -- by the time anyone looked at that copy it
+had drifted to none of `ClassSlots`, `compose-total` or the current alpha-finder tie-break.
+Only minting is in the tree now: it is the only mode that empties followers, so the knob was
+carrying a branch nothing used.
 
 Neither mode distinguishes itself on *what it proves*: curated 44/44, generated
 250/250, node counts against the reference 44/44, either way. What used to separate
@@ -620,8 +621,7 @@ can still be migrated into later.
 a *different* mechanism: the shrinking rule deleting a too-wide identity self-loop,
 which is open question 2. It has a visible α-variant, so nothing is lost.
 
-The guard is one branch of `MIGRATION` in `slotted-experiments/gen-node-rules.py`, so
-the two versions differ by exactly the migration rule by construction.
+The guard was one branch of a `MIGRATION` knob; only minting is in the tree now.
 
 ### Do follower classes need self-loops at all?
 
@@ -1479,7 +1479,7 @@ steps means the renamings an action reads off a node are already canonical, so o
 narrowing changes nothing to observe. It is kept as a record rather than as coverage; see
 "The invariant rules are saturated between user-rule steps". Before that change it was
 caught by the Def. 4 check directly and by the isomorphism check as a consequence, and it
-needed `MIGRATION = "mint"` to be reachable at all.
+needed minting -- rather than declining to migrate -- to be reachable at all.
 
 Two things this was worth doing for.
 
