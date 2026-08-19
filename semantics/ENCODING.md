@@ -165,8 +165,8 @@ were never checked for vacuity.
 
 `Encoding/Encode.lean` — `encode`, `encodeBuild`, `maintenanceRules`, `Rebuilt`,
 `EncodeDomain`, `viewName`/`termName`/`ufName`, `rebuildRuleset`. The encoder's definitions
-depend on none of the deleted files. `Rebuilt` is now reachable — see finding 1 — and the
-three payoff theorems next to it are the only proofs the file carries.
+depend on none of the deleted files. `Rebuilt` is now reachable — see finding 1 — and the proofs
+the file carries are the three payoff theorems next to it and `encode_unionFree`.
 
 **A third obstacle, and it is unrepairable in general.** `mergeBody`/`mergeResult` — the `:merge`
 shared by `@UF` and every view — are built from `ordering-min`/`ordering-max`, hence from the
@@ -178,17 +178,19 @@ concretely rather than abstractly: an unrestricted `MergeStep.transport_recorded
 refuted at `mergeBody` itself (`transport_recorded_false`, with both states well formed and
 `A.Recorded C`). The specification's collision keeps one parent, every collision the
 implementation can run keeps another, and a `MergeStep` **asserts no equation** — the union-find
-edge is a *term*, `@UF(max, min)`, and `.set` records reflexive pairs only — so the two
+edge is a *term*, `@UF(max, min, pf)`, and `.set` records reflexive pairs only — so the two
 candidate parents are exactly as unrelated after the merge as before. That refutes the "any
 consistent choice of parent induces the same equivalence" argument at its root: the union-find
 does not absorb a different choice.
 
-The lemma that carries that name today is the *restricted* one — it takes `C.Diag` and is proved,
-by the collapse below, having also dropped `A.WF`. The refutation is why the hypothesis is there,
-and it stands against dropping it. `transport_recorded_false` and `recorded_iff_subset` were
-probes living outside the repository
-(`.claude/jobs/0f6e77e4/tmp/Choice3.lean`); they compile, but nothing in `lake build` checks them,
-so this description is what a reader of the tree alone has.
+The lemma that carries that name today is the *restricted* one: it takes
+`C.Diag ∨ Signature.OrderingFree C.sig`, and each arm proves it — the first by the collapse below,
+the second at `MergeStep.transport_owes`. The refutation is why the hypothesis is there, and it
+stands against dropping it. It is in the tree and `lake build` checks it:
+`Proofs/Counterexamples.lean`'s `transport_recorded_false`, `transport_recorded_false'` — the same
+with `C.WF` added, which the counterexample also satisfies — and `recorded_iff_subset`, the positive
+companion. Axioms `[propext, Classical.choice, Quot.sound]` for the two refutations, and
+`[propext, Quot.sound]` for `recorded_iff_subset`.
 
 **The M11 side condition, restated — and it is now the delivered hypothesis, not just an
 observation.** `encode` emits only `.set` and `.letBind`, never `.union`; a source `union` becomes a
@@ -206,8 +208,8 @@ the side condition every state an encoded program reaches is diagonal, so **a re
 those transports directly**, with no congruence-stability hypothesis; and `encode`'s output lands in
 the same arm as `execM_contained`'s `p.UnionFree`, the exact hypothesis under which that theorem is
 proved — `encode` uses `ordering-max` *inside a rule action*, so it would fail an ordering-free
-hypothesis and passes a union-free one. (`encode_unionFree` checked that by compiled proof, axioms
-`[propext, Quot.sound]`; it is a third missing probe.) The refutations are not thereby harmless —
+hypothesis and passes a union-free one. (`encode_unionFree`, in `Encoding/Encode.lean`, is that by
+compiled proof, axioms `[propext, Quot.sound]`.) The refutations are not thereby harmless —
 they say where the danger lives, which is a *source* program combining a `union` with a user
 `:merge` that calls `ordering-min`. A restatement that stays on encoded programs never meets one;
 one that quantifies over source programs must.

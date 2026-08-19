@@ -144,11 +144,11 @@ interpreter-side union-freedom lemma anywhere. It follows that on this arm the c
 in the statement for the arm being added, not for the one that landed.
 
 **It does not exclude M11**, which is why this arm was worth landing first. `encodeAction` turns a
-source `union` into `.set @UF [ordering-max x₁ x₂] [ordering-min x₁ x₂]`: `encode` emits
+source `union` into `.set @UF [ordering-max x₁ x₂] [ordering-min x₁ x₂, pf]`: `encode` emits
 `ordering-max` inside a rule action — the position an ordering-free hypothesis forbids — and no
-`Action.union` at all. That was checked by a compiled proof, `encode_unionFree`, axioms
-`[propext, Quot.sound]`; **that proof is one of the probes now missing from the tree**, and what
-survives it is the argument at `Proofs/Merge.lean`'s "Union-freedom, and where it puts `Recorded`".
+`Action.union` at all. `Encoding/Encode.lean`'s `encode_unionFree` is that by compiled proof, axioms
+`[propext, Quot.sound]`; the argument is at `Proofs/Merge.lean`'s "Union-freedom, and where it puts
+`Recorded`".
 
 **`Database.Out.mono_recorded` is deleted as false** in every form that would serve. The queue row
 that called it "a restatement, at the congruent key `Recorded` supplies" was wrong: `Out` reads the
@@ -259,10 +259,11 @@ quietly come back — read them before trying to prove anything they refute. **S
 the other documents cite by name are in neither file and in no file at all**: they were checked as
 scratch probes and the scratch was not kept. That is the work queue's second row, and it is worse
 than "unhomed" — `no_stable_choice`, `fst_stable`, `const_stable`, `orderingMin_not_stable`,
-`cmin_not_stable`, `transport_recorded_false`, `recorded_iff_subset`,
-`mergeRound_contained_needs_recorded`, `spec_never_distA` and `encode_unionFree` are prose now. Two
+`cmin_not_stable`, `mergeRound_contained_needs_recorded` and `spec_never_distA` are prose now. Two
 separate sessions have found a scratch file silently red, so this is a known failure mode rather
-than bad luck.
+than bad luck. `transport_recorded_false`, `recorded_iff_subset` and `encode_unionFree` came back in
+— the first two in `Proofs/Counterexamples.lean`, the third in `Encoding/Encode.lean` — so
+`lake build` checks them.
 
 Two traps that a green build will not catch. Writing `h.ge` for a set inclusion silently
 pulls `Classical.choice` into every downstream axiom set. And `lake build` does not rebuild

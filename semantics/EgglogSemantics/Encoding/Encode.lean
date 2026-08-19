@@ -644,6 +644,268 @@ def encodeCmds : Program → Nat → Nat → Program × Nat × Nat
 /-- **The encoding.** -/
 def encode (P : Program) : Program := encodePrelude P ++ (encodeCmds P 0 0).1
 
+/-! ### The encoded program asserts no equation
+
+`Proofs/Merge.lean`'s two `Recorded` transports need `Database.Diag` or
+`Signature.OrderingFree`, and `execM_contained` is proved under `Program.UnionFree`. That is
+the arm `encode` lands in: a source `union` becomes `.set @UF [ordering-max …] [ordering-min
+…, pf]`, so no `Action.union` survives, while `ordering-max` inside a rule action is exactly
+what an ordering-free hypothesis forbids. `Proofs/Counterexamples.lean`'s
+`transport_recorded_false` is what the hypothesis costs when neither arm is available.
+
+The shape equations below hold by `rfl` — each `encode*` function destructures a tuple its
+recursive call returns, and projection is definitional. -/
+
+theorem Actions.unionFree_of_mem {as : List Action} (h : ∀ a ∈ as, a.UnionFree) :
+    Actions.UnionFree as := by
+  induction as with
+  | nil => trivial
+  | cons a as ih => exact ⟨h a (by simp), ih fun b hb => h b (by simp [hb])⟩
+
+theorem Program.unionFree_of_mem {p : Program} (h : ∀ c ∈ p, Cmd.UnionFree c) :
+    Program.UnionFree p := by
+  induction p with
+  | nil => trivial
+  | cons c cs ih => exact ⟨h c (by simp), ih fun d hd => h d (by simp [hd])⟩
+
+/-- A declaration with no `:merge` runs nothing. -/
+theorem unionFree_decl_none {f : FnName} {d : FnDecl} (h : d.merge = none) :
+    Cmd.UnionFree (.decl f d) := by
+  change d.UnionFree
+  intro ms hms
+  rw [h] at hms
+  exact absurd hms (by simp)
+
+/-- A declaration whose `:merge` body is `mergeBody`, which is one `set`. -/
+theorem unionFree_decl_merge {f : FnName} {d : FnDecl} {res : List Expr}
+    (h : d.merge = some (.merge mergeBody res)) : Cmd.UnionFree (.decl f d) := by
+  change d.UnionFree
+  intro ms hms
+  rw [h] at hms
+  obtain rfl := Option.some.inj hms
+  exact ⟨trivial, trivial⟩
+
+/-- A `:no-merge` declaration runs nothing either. -/
+theorem unionFree_decl_noMerge {f : FnName} {d : FnDecl} (h : d.merge = some .noMerge) :
+    Cmd.UnionFree (.decl f d) := by
+  change d.UnionFree
+  intro ms hms
+  rw [h] at hms
+  obtain rfl := Option.some.inj hms
+  trivial
+
+theorem encodeBuild_app_actions (f : FnName) (args : List Expr) (n : Nat) :
+    (encodeBuild (.app f args) n).2.1
+      = (encodeBuildArgs args n).2.1 ++
+        [.set (termName f)
+            ((encodeBuildArgs args n).1 ++ [.app f (encodeBuildArgs args n).1]) [],
+         .set (viewName f) (encodeBuildArgs args n).1
+            [.app f (encodeBuildArgs args n).1, fiatE]] := rfl
+
+theorem encodeBuildArgs_cons_actions (e : Expr) (es : List Expr) (n : Nat) :
+    (encodeBuildArgs (e :: es) n).2.1
+      = (encodeBuild e n).2.1 ++ (encodeBuildArgs es (encodeBuild e n).2.2).2.1 := rfl
+
+mutual
+
+/-- A build emits `set`s and nothing else. -/
+theorem encodeBuild_unionFree : ∀ (e : Expr) (n : Nat),
+    ∀ a ∈ (encodeBuild e n).2.1, a.UnionFree
+  | .lit _, _ => by simp [encodeBuild]
+  | .var _, _ => by simp [encodeBuild]
+  | .app f args, n => by
+      intro a ha
+      rw [encodeBuild_app_actions] at ha
+      rcases List.mem_append.mp ha with h | h
+      · exact encodeBuildArgs_unionFree args n a h
+      · simp only [List.mem_cons, List.not_mem_nil, or_false] at h
+        rcases h with rfl | rfl <;> trivial
+
+@[inherit_doc encodeBuild_unionFree]
+theorem encodeBuildArgs_unionFree : ∀ (es : List Expr) (n : Nat),
+    ∀ a ∈ (encodeBuildArgs es n).2.1, a.UnionFree
+  | [], _ => by simp [encodeBuildArgs]
+  | e :: es, n => by
+      intro a ha
+      rw [encodeBuildArgs_cons_actions] at ha
+      rcases List.mem_append.mp ha with h | h
+      · exact encodeBuild_unionFree e n a h
+      · exact encodeBuildArgs_unionFree es _ a h
+
+end
+
+theorem encodeAction_expr_actions (pf : Expr) (e : Expr) (n : Nat) :
+    (encodeAction pf (.expr e) n).1 = (encodeBuild e n).2.1 := rfl
+
+theorem encodeAction_letBind_actions (pf : Expr) (v : Var) (e : Expr) (n : Nat) :
+    (encodeAction pf (.letBind v e) n).1
+      = (encodeBuild e n).2.1 ++ [.letBind v (encodeBuild e n).1] := rfl
+
+theorem encodeAction_union_actions (pf : Expr) (e₁ e₂ : Expr) (n : Nat) :
+    (encodeAction pf (.union e₁ e₂) n).1
+      = (encodeBuild e₁ n).2.1 ++ (encodeBuild e₂ (encodeBuild e₁ n).2.2).2.1 ++
+        [.set ufName [maxE (encodeBuild e₁ n).1 (encodeBuild e₂ (encodeBuild e₁ n).2.2).1]
+          [minE (encodeBuild e₁ n).1 (encodeBuild e₂ (encodeBuild e₁ n).2.2).1, pf]] := rfl
+
+theorem encodeAction_set_actions (pf : Expr) (f : FnName) (args out : List Expr) (n : Nat) :
+    (encodeAction pf (.set f args out) n).1
+      = (encodeBuildArgs args n).2.1 ++
+        (encodeBuildArgs out (encodeBuildArgs args n).2.2).2.1 ++
+        [.set (viewName f) (encodeBuildArgs args n).1
+          ((encodeBuildArgs out (encodeBuildArgs args n).2.2).1 ++ [pf])] := rfl
+
+theorem encodeActions_cons_actions (pf : Expr) (a : Action) (as : List Action) (n : Nat) :
+    (encodeActions pf (a :: as) n).1
+      = (encodeAction pf a n).1 ++ (encodeActions pf as (encodeAction pf a n).2).1 := rfl
+
+/-- **A source `union` becomes a `set`.** This is the case the whole statement rests on. -/
+theorem encodeAction_unionFree (pf : Expr) : ∀ (a : Action) (n : Nat),
+    ∀ b ∈ (encodeAction pf a n).1, b.UnionFree := by
+  rintro (e | ⟨v, e⟩ | ⟨e₁, e₂⟩ | ⟨f, args, out⟩) n b hb
+  · exact encodeBuild_unionFree e n b (encodeAction_expr_actions .. ▸ hb)
+  · rw [encodeAction_letBind_actions] at hb
+    rcases List.mem_append.mp hb with h | h
+    · exact encodeBuild_unionFree e n b h
+    · simp only [List.mem_cons, List.not_mem_nil, or_false] at h
+      rcases h with rfl; trivial
+  · rw [encodeAction_union_actions] at hb
+    rcases List.mem_append.mp hb with h | h
+    · rcases List.mem_append.mp h with h' | h'
+      · exact encodeBuild_unionFree e₁ n b h'
+      · exact encodeBuild_unionFree e₂ _ b h'
+    · simp only [List.mem_cons, List.not_mem_nil, or_false] at h
+      rcases h with rfl; trivial
+  · rw [encodeAction_set_actions] at hb
+    rcases List.mem_append.mp hb with h | h
+    · rcases List.mem_append.mp h with h' | h'
+      · exact encodeBuildArgs_unionFree args n b h'
+      · exact encodeBuildArgs_unionFree out _ b h'
+    · simp only [List.mem_cons, List.not_mem_nil, or_false] at h
+      rcases h with rfl; trivial
+
+@[inherit_doc encodeAction_unionFree]
+theorem encodeActions_unionFree (pf : Expr) : ∀ (as : List Action) (n : Nat),
+    ∀ b ∈ (encodeActions pf as n).1, b.UnionFree
+  | [], _ => by simp [encodeActions]
+  | a :: as, n => by
+      intro b hb
+      rw [encodeActions_cons_actions] at hb
+      rcases List.mem_append.mp hb with h | h
+      · exact encodeAction_unionFree pf a n b h
+      · exact encodeActions_unionFree pf as _ b h
+
+/-- Every maintenance rule's head is one `set`. -/
+theorem rebuildRules_unionFree (f : FnName) (k : Nat) :
+    ∀ r ∈ rebuildRules f k, Actions.UnionFree r.actions := by
+  intro r hr
+  simp only [rebuildRules, List.mem_cons, List.mem_map, List.mem_range] at hr
+  rcases hr with rfl | ⟨i, -, rfl⟩ <;> exact ⟨trivial, trivial⟩
+
+@[inherit_doc rebuildRules_unionFree]
+theorem maintenanceRules_unionFree (P : Program) :
+    ∀ r ∈ maintenanceRules P, Actions.UnionFree r.actions := by
+  intro r hr
+  simp only [maintenanceRules, List.mem_cons, List.mem_flatMap] at hr
+  rcases hr with rfl | ⟨fk, -, hmem⟩
+  · exact ⟨trivial, trivial⟩
+  · exact rebuildRules_unionFree fk.1 fk.2 r hmem
+
+theorem ruleProofDecls_unionFree : ∀ (rs : List Rule) (i : Nat),
+    ∀ c ∈ ruleProofDecls rs i, Cmd.UnionFree c
+  | [], _ => by simp [ruleProofDecls]
+  | r :: rs, i => by
+      intro c hc
+      rw [ruleProofDecls] at hc
+      rcases List.mem_cons.mp hc with rfl | h
+      · exact unionFree_decl_none rfl
+      · exact ruleProofDecls_unionFree rs (i + 1) c h
+
+/-- The prelude is declarations and maintenance rules, and every one of them is union-free:
+the proof and skolem heads are constructors, `@UF` and the views share `mergeBody`, the term
+relations are `:no-merge`. -/
+theorem encodePrelude_unionFree (P : Program) : ∀ c ∈ encodePrelude P, Cmd.UnionFree c := by
+  intro c hc
+  simp only [encodePrelude, proofDecls, List.mem_append, List.mem_cons, List.mem_map,
+    List.mem_flatMap, List.not_mem_nil, or_false] at hc
+  rcases hc with ((((rfl | rfl | rfl) | ⟨k, -, rfl⟩) | h) | rfl | ⟨fk, -, (rfl | rfl | rfl)⟩) |
+      ⟨r, hr, rfl⟩
+  · exact unionFree_decl_none rfl
+  · exact unionFree_decl_none rfl
+  · exact unionFree_decl_none rfl
+  · exact unionFree_decl_none rfl
+  · exact ruleProofDecls_unionFree _ 0 c h
+  · exact unionFree_decl_merge rfl
+  · exact unionFree_decl_none rfl
+  · exact unionFree_decl_merge rfl
+  · exact unionFree_decl_noMerge rfl
+  · exact maintenanceRules_unionFree P r hr
+
+theorem encodeRule_actions (i : Nat) (r : Rule) (n : Nat) :
+    (encodeRule i r n).1.actions
+      = (encodeActions (ruleE i (queryProofs (encodeQuery r.query n).1)) r.actions
+          (encodeQuery r.query n).2).1 := rfl
+
+theorem encodeCmd_action_fst (a : Action) (n i : Nat) :
+    (encodeCmd (.action a) n i).1
+      = (encodeAction fiatE a n).1.map .action ++ [.saturate rebuildRuleset] := rfl
+
+theorem encodeCmd_rule_fst (r : Rule) (n i : Nat) :
+    (encodeCmd (.rule r) n i).1 = [.rule (encodeRule i r n).1] := rfl
+
+theorem encodeCmds_cons_fst (c : Cmd) (cs : Program) (n i : Nat) :
+    (encodeCmds (c :: cs) n i).1
+      = (encodeCmd c n i).1 ++
+        (encodeCmds cs (encodeCmd c n i).2.1 (encodeCmd c n i).2.2).1 := rfl
+
+/-- Every command the encoding of one source command emits is union-free. -/
+theorem encodeCmd_unionFree (c : Cmd) (n i : Nat) :
+    ∀ d ∈ (encodeCmd c n i).1, Cmd.UnionFree d := by
+  cases c with
+  | action a =>
+    intro d hd
+    rw [encodeCmd_action_fst] at hd
+    rcases List.mem_append.mp hd with h | h
+    · obtain ⟨b, hb, rfl⟩ := List.mem_map.mp h
+      exact encodeAction_unionFree fiatE a n b hb
+    · simp only [List.mem_cons, List.not_mem_nil, or_false] at h
+      rcases h with rfl; trivial
+  | rule r =>
+    intro d hd
+    rw [encodeCmd_rule_fst] at hd
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at hd
+    rcases hd with rfl
+    change Actions.UnionFree (encodeRule i r n).1.actions
+    rw [encodeRule_actions]
+    exact Actions.unionFree_of_mem (encodeActions_unionFree _ r.actions _)
+  | run R =>
+    intro d hd
+    simp only [encodeCmd, List.mem_cons, List.not_mem_nil, or_false] at hd
+    rcases hd with rfl | rfl <;> trivial
+  | saturate R =>
+    intro d hd
+    simp only [encodeCmd, List.mem_cons, List.not_mem_nil, or_false] at hd
+    rcases hd with rfl | rfl <;> trivial
+  | decl f dd => intro d hd; simp [encodeCmd] at hd
+
+@[inherit_doc encodeCmd_unionFree]
+theorem encodeCmds_unionFree : ∀ (P : Program) (n i : Nat),
+    ∀ d ∈ (encodeCmds P n i).1, Cmd.UnionFree d
+  | [], _, _ => by simp [encodeCmds]
+  | c :: cs, n, i => by
+      intro d hd
+      rw [encodeCmds_cons_fst] at hd
+      rcases List.mem_append.mp hd with h | h
+      · exact encodeCmd_unionFree c n i d h
+      · exact encodeCmds_unionFree cs _ _ d h
+
+/-- **`encode`'s output is union-free**, for every source program. -/
+theorem encode_unionFree (P : Program) : Program.UnionFree (encode P) := by
+  refine Program.unionFree_of_mem fun c hc => ?_
+  rw [encode] at hc
+  rcases List.mem_append.mp hc with h | h
+  · exact encodePrelude_unionFree P c h
+  · exact encodeCmds_unionFree P 0 0 c h
+
 /-! ### The source programs `encode` is defined for
 
 `PLAN.md`'s fragment. `MERGE.md`, "Restrictions on `encode`'s domain", records the one
