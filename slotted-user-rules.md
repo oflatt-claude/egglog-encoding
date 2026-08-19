@@ -709,13 +709,13 @@ Everything else is unchanged: curated 44/44, generated 250/250, node counts 44/4
 counts identical case by case, mutation matrix unchanged.
 
 **Zero on the curated corpus is not the property.** Measured over `fuzz 250` — which is
-where the claim had never been tested — 3 cases still end with a follower holding a node,
-5 nodes in total out of 93 followers. `follower-nodes.py fuzz 250` is that measurement,
-and the isomorphism check independently refuses those same cases, since a slotted class
-spanning two values that both have rows cannot be modelled as one class without merging
-their frames. So orienting migration closed the curated cases and `MR1`'s
-non-termination; it did not close the general property, and what is left is the same
-family — a rule pair with no orientation that strictly decreases.
+where the claim had never been tested — 3 cases ended with a follower holding a node, 5
+nodes out of 93 followers. `follower-nodes.py fuzz 250` is that measurement, and it took
+three changes to reach zero: orienting migration closed the curated cases and `MR1`'s
+non-termination, orienting `child-update` took the generated ones from 5 nodes to 1, and
+saturating the invariants between user steps closed the last. **Now 0 of 93 over 250
+generated cases**, so the property holds where it is measured rather than only where it was
+first checked.
 
 Two things this cost before it was found:
 
@@ -731,9 +731,10 @@ Two things this cost before it was found:
 Where followers are empty, an isomorphism check may enumerate leaders only, and the empty
 peer is what prints as `Unextractable` — a value whose `App` rows have all been deleted —
 so there `Unextractable` marks the side with nothing on it rather than a problem. It is
-not safe to *assume* that, though: three of 250 generated cases end with a follower
-holding a node, and the isomorphism check has to detect and report them rather than
-enumerate leaders and quietly miss what they hold.
+not safe to *assume* it: three of 250 generated cases used to end with a follower holding a
+node, so the isomorphism check detects and reports that rather than enumerating leaders and
+quietly missing what they hold. It is zero across both corpora now, but the check does not
+rely on that.
 
 **Migrating the self-loop to the leader does not substitute for keeping it.** The old
 single-parent rule already did that — `RenamesToLeader b (compose (inverse m1) m2) c`
