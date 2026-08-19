@@ -1246,14 +1246,25 @@ m = {0→0}   an edge whose image is the node-local slot 0
 compose(u, m) = {}          the slot is gone
 ```
 
-**The merge that needed it is not in the tree.** Making one class out of the several `U`
-values of a slotted class needs more than a frame translation: only a *bijection* between
-two slot sets means "the same class named differently" — a partial renaming is the
-redundancy relation, and merging on it collapses classes the reference keeps apart — and
-even with that restriction two curated cases came out wrong in *opposite* directions, one
-over-merged and one under-merged. A comparison that invents differences is worse than one
-that admits it cannot decide, so `fuzz130` stays "not comparable" and the merge stays an
-open problem.
+**The merge that needed it is not in the tree, and the reason is now known.** Making one
+class out of the several `U` values of a slotted class is blocked by the printed name, not by
+the criterion: membership is any `RenamesToLeader` link (settled above, and checked
+independently by `class-count.py` at 44/44 and 250/250), but the merge keys values by the term
+they print as, and several distinct classes print as `Unextractable`. They then collapse into
+one value, their components join, and the result has *fewer* classes than the reference:
+
+| | classes printing `Unextractable` | merged result |
+| --- | --- | --- |
+| `X2` | 4 | 4 classes where the reference has 5 |
+| `S1b` | 4 | 6 where the reference has 7 |
+| `NR1` | 2 | 3 where the reference has 4 |
+| `C13` | 1 | correct |
+
+Only the cases with more than one such class come out wrong, which is the whole story. The
+version in the tree works by *excluding* those values -- they hold no rows, so dropping them
+costs nothing -- where a merge has to place them and cannot. So this waits on a way to name a
+class that does not go through extraction; `class-count.py` shows the shape of the answer, by
+counting inside egglog where no names are needed.
 
 Three limits worth stating.
 
