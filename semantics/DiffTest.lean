@@ -2529,12 +2529,14 @@ def correspondSelfTests : List (String × (Unit → Bool)) :=
       match (correspond runFuel unionCase).report? with
       | some r => r.lost.isEmpty && r.agreeTrueOff == 2
       | none => false),
-    -- **The literal clause, pinned.** `unitE` is `0`, the term relation's output, so the
-    -- target holds a literal the source never built and `ViewRepr.lit` gives it an e-class
-    -- anyway. That is the one disagreement every in-domain case reports.
-    ("correspond unionCase invents the unit literal", fun _ =>
+    -- **The literal clause, pinned.** `ViewRepr.lit` gives an e-class to every literal the
+    -- target holds, so it is exact only while the target holds no literal of its own. The
+    -- term relation is a relation — `outArity 0` — which is what keeps that true; when it
+    -- carried a `unitE` output column, every in-domain case reported that literal as
+    -- invented.
+    ("correspond unionCase invents nothing", fun _ =>
       match (correspond runFuel unionCase).report? with
-      | some r => r.invented == [(Term.lit (.int 0), Term.lit (.int 0))]
+      | some r => r.invented.isEmpty
       | none => false),
     -- **The negative control.** A sweep that cannot report LOST would report the corpus's
     -- zero just as loudly, so one is provoked: with the views dropped no source term has an

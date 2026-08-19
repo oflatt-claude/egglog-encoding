@@ -95,10 +95,6 @@ def termName (f : FnName) : FnName := "@" ++ f ++ "Term"
 /-- The `n`th generated variable. -/
 def freshVar (n : Nat) : Var := "@v" ++ toString n
 
-/-- `()`. A stand-in until `Lit` gains `.unit` (`MERGE.md`, "Constraint (5)"); the term
-relation's output is the only place it appears, and nothing reads it. -/
-def unitE : Expr := .lit (.int 0)
-
 /-! ### The four bundled choices, spelled out
 
 egglog's `ordering-min`, `ordering-max`, `proof-of-min` and `proof-of-max` are one `if`
@@ -146,8 +142,8 @@ bound" — and congruence is needed at every source arity. egglog indexes `@Rule
 `@Packed_<k>` for the same reason.
 
 `Lit` needs nothing here: a rule's name is *in* its constructor's name rather than in a
-`.str` argument, and no proof node carries a literal. The one remaining `.unit` want is
-`unitE`, the term relation's output, which nothing reads. -/
+`.str` argument, and no proof node carries a literal. Nor is a `.unit` wanted any more —
+the term relation carries no output column at all. -/
 /-- A proof constructor of arity `k`. Declared, because `Expr.eval` has no rule for an
 undeclared name, and a **constructor** rather than egglog's `(… → Unit :no-merge)` relation:
 that shape exists to keep two structurally equal proofs from being merged into one, and
@@ -268,10 +264,15 @@ def viewDecl (k : Nat) : FnDecl :=
   { arity := k, outArity := 2, merge := some (.merge mergeBody mergeResult),
     identityVals := some 1 }
 
-/-- `(function @fTerm (S… S) Unit :no-merge)`. Keyed on children *and* id, so distinct
-constructions never collide. -/
+/-- `(relation @fTerm (S… S))`. Keyed on children *and* id, so distinct constructions
+never collide.
+
+**No output column** (`outArity 0`), which is what a relation is. A unit column would put a
+literal in the database that no source program built, and `difftest correspond` reports
+exactly that as an invented equality — the target's `ViewRepr` classes every literal it
+holds, so the correspondence is exact only while the encoding contributes none. -/
 def termDecl (k : Nat) : FnDecl :=
-  { arity := k + 1, outArity := 1, merge := some .noMerge }
+  { arity := k + 1, outArity := 0, merge := some .noMerge }
 
 /-- `(constructor f (S…) S)`: the source name, kept as the **skolem-id** constructor.
 
@@ -446,7 +447,7 @@ def encodeBuild : Expr → Nat → Expr × List Action × Nat
       match encodeBuildArgs args n with
       | (es, as, n₁) =>
           (.app f es,
-           as ++ [.set (termName f) (es ++ [.app f es]) [unitE],
+           as ++ [.set (termName f) (es ++ [.app f es]) [],
                   .set (viewName f) es [.app f es, fiatE]],
            n₁)
 
