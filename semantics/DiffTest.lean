@@ -1512,6 +1512,18 @@ private def upThinCase : Program :=
    .action (.expr (.app "H" [.app "F" [C "B"]])),
    .action (.union (C "A") (C "B"))]
 
+/-! **The literal probes are model-only.** Every case in the corpus proper uses nullary
+constructors, because egglog's `i64` is a distinct primitive sort and `(Add 1 2)` would not
+typecheck there, while `Term.lit` shares a sort with applications here. These two are the
+only way to ask what `ViewRepr`'s literal clause does when a literal is a *source* term, so
+they live among the probes, which `writeCase` never sees. -/
+
+/-- A literal the encoding also mints (`unitE` is `0`) is absent from this source. -/
+private def litCase : Program := [.action (.expr (add (.lit (.int 1)) (.lit (.int 2))))]
+
+/-- The same, with `0` among the source's own literals. -/
+private def litZeroCase : Program := [.action (.expr (add (.lit (.int 0)) (.lit (.int 1))))]
+
 /-- The probes, reachable from `difftest encode <fuel> <name>` by name. The `-run` variants
 append one empty round, which is what makes `encode` emit a `Cmd.saturate rebuildRuleset` and
 so the only way to ask whether the rebuild repairs the gap `upCase` shows. They are out of
@@ -1519,7 +1531,8 @@ the guards because running a rebuild is far too slow to sit in a build. -/
 private def probeCases : List (String × Program) :=
   [("build", buildCase), ("union", unionCase),
    ("up", upCase), ("up-run", upCase ++ [.run ""]),
-   ("up-thin", upThinCase), ("up-thin-run", upThinCase ++ [.run ""])]
+   ("up-thin", upThinCase), ("up-thin-run", upThinCase ++ [.run ""]),
+   ("lit", litCase), ("lit-zero", litZeroCase)]
 
 namespace Egglog
 /-! ### The proof encoding, by tuple count
@@ -2098,6 +2111,492 @@ def CheckOutcome.render (o : CheckOutcome) : String :=
             {vs.length - nc - nd} unjustified of {vs.length}"
       ++ String.join bad
 
+/-! #### The correspondence, executable
+
+The claim a simulation theorem would state, run rather than assumed. For a source program
+`P`, with `src` the database its run leaves and `tgt` the database the run of `encode P`
+leaves, every pair of terms should satisfy
+
+```
+Cong src a b  ↔  SameClass tgt a b
+```
+
+with `SameClass` as `Encode.lean` reads it: a view entry per subterm, joined through `@UF`.
+The two halves fail differently and are counted apart.
+
+* **LOST** is `Cong src a b` without `SameClass tgt a b` — an equality the encoding dropped.
+* **INVENTED** is `SameClass tgt a b` without `Cong src a b` — one it made up.
+
+`a` and `b` range over `src.terms ++ tgt.terms`, unordered pairs with the diagonal included.
+Both relations are symmetric — `Cong` by `Cong.symm`, `SameClass` by construction — so the
+unordered sweep decides the ordered claim.
+
+**The diagonal is the e-node correspondence.** `Database.terms` is `{t | Cong db t t}`, so
+`Cong src a a ↔ SameClass tgt a a` says `a` is a source e-node exactly when the target gives
+it an e-class. The encoding's own terms — proof nodes, `@fView` and `@UF` entry terms — are
+in the universe for that reason: both sides have to be false on every one of them.
+
+**The tables are read out of `terms`, not out of `rows`.** `Database.Out` is a term-set
+query and the index is derived, so a row a merge displaced is still an entry term and `Out`
+still reads it. Every disagreement is re-tested against the index reading (`corrReadRows`)
+and the report says how many survive it.
+
+**Target-side congruence is identity.** `encode` emits no `union`, so the target asserts no
+equation but the reflexive one `addTerm` records, and `Cong tgt` is the identity on the terms
+it holds. The readings below use that; `CorrReport.tgtEqs` counts the equations that would
+invalidate it, and is expected to be zero.
+
+**A green sweep is a claim about one reading**, so `corrReading` names three others and the
+report says how much work each part of `SameClass` did: `CorrReport.agreeTrue` is how many
+pairs both sides said *yes* to, without which agreement is all double negation, and
+`CorrReport.viaUF` is how many of those needed a `@UF` step at all.
+-/
+
+/-- The most terms one case sweeps. Beyond it the sweep runs on a prefix of the universe and
+the report says so, since a silent truncation reads as a clean case. No case in the corpus
+or among the probes comes near it; the widest is 146 terms. -/
+def corrCap : Nat := 512
+
+/-- How many disagreements of each kind a case prints before it says how many it dropped. -/
+def corrPrintCap : Nat := 12
+
+/-- The target tables as the correspondence reads them. Two instances per case: one off
+`terms`, which is what `Database.Out` says, and one off the row index. -/
+structure CorrRead where
+  /-- One per `@fView` entry: the source constructor, the key columns, the e-class. -/
+  entries : List (FnName × List Term × Term)
+  /-- One per `@UF` entry, key to parent. Self-loops are ordinary entries and are kept. -/
+  edges : List (Term × Term)
+  /-- The terms the target holds, which is what the literal clause tests. -/
+  held : List Term
+  /-- Whether an application's children are themselves read through the views.
+  `Encode.lean`'s `ViewRepr` is the nested reading — `ViewReprList` on the children, then a
+  view entry at the ids it returns — and the flat one asks for a view entry keyed by the
+  children as written. Flat is contained in nested, since a build writes its own view entry
+  at its own children. -/
+  nested : Bool
+
+/-- `Database.Out` over the term set: `@fView (c…, e, pf)` and `@UF (t, p, pf)` split into
+the columns their readers want. A view name is matched against the source constructors, so
+the arity that says where the key ends is the source one. -/
+def corrReadTerms (P : Program) (d : FDatabase) : CorrRead where
+  entries := d.terms.filterMap fun t =>
+    match t with
+    | .app g cs => (P.ctors.find? fun fk => viewName fk.1 == g).bind fun fk =>
+        match cs.drop fk.2 with
+        | [e, _] => some (fk.1, cs.take fk.2, e)
+        | _ => none
+    | _ => none
+  edges := d.terms.filterMap fun t =>
+    match t with
+    | .app g [a, b, _] => if g == ufName then some (a, b) else none
+    | _ => none
+  held := d.terms
+  nested := true
+
+/-- The same reading off the row index, which a merge deletes from and a rebuild re-keys.
+Every row is also an entry term, so this reading is contained in the term-set one. -/
+def corrReadRows (P : Program) (d : FDatabase) : CorrRead where
+  entries := d.rows.filterMap fun r =>
+    (P.ctors.find? fun fk => viewName fk.1 == r.fn).bind fun fk =>
+      match r.out with
+      | [e, _] => if r.args.length == fk.2 then some (fk.1, r.args, e) else none
+      | _ => none
+  edges := d.rows.filterMap fun r =>
+    if r.fn == ufName then
+      match r.args, r.out with
+      | [a], [b, _] => some (a, b)
+      | _, _ => none
+    else none
+  held := d.terms
+  nested := true
+
+mutual
+
+/-- `ViewRepr`, computed: the e-classes the target gives `t`.
+
+An application's are the e-class columns of every view entry of its head whose key columns
+are, pointwise, e-classes of its children — which is `Out`'s `CongList` premise with the
+target's congruence, the identity, in it. The pointwise reading is why nothing enumerates
+child tuples.
+
+A literal is its own e-class where the target holds it, and has none where it does not:
+`encodeBuild` emits no action for a literal, so a literal never gets a view entry. -/
+def viewReprs (R : CorrRead) : Term → List Term
+  | .lit l => if R.held.contains (.lit l) then [.lit l] else []
+  | .app f as =>
+      let rs := if R.nested then viewReprsList R as else as.map ([·])
+      (R.entries.filterMap fun e =>
+        if e.1 == f && e.2.1.length == as.length &&
+            (rs.zip e.2.1).all (fun q => q.1.contains q.2)
+          then some e.2.2 else none).dedup
+
+/-- `viewReprs` over an argument list, one e-class list per argument. -/
+def viewReprsList (R : CorrRead) : List Term → List (List Term)
+  | [] => []
+  | t :: ts => viewReprs R t :: viewReprsList R ts
+
+end
+
+/-- The `@UF` nodes reachable from a frontier, and whether the walk ran out of rounds.
+
+Visited-set *and* fuelled: the visited set is what makes a cycle terminate, and the fuel is
+what makes a bug in the visited set terminate too. A round that does not stop adds a fresh
+node, and there are at most `edges.length + 1` to add, so the bound below is out of reach
+and `CorrReport.fuelHits` reports a defect rather than a cycle. `CorrReport.ufCycles` is
+the cycle census. -/
+def corrReachAux (R : CorrRead) : Nat → List Term → List Term → List Term × Bool
+  | 0, seen, front => (seen, !front.isEmpty)
+  | n + 1, seen, front =>
+      if front.isEmpty then (seen, false)
+      else
+        let next := (front.flatMap fun t =>
+          R.edges.filterMap fun e => if e.1 == t then some e.2 else none).dedup
+        let fresh := next.filter fun t => !seen.contains t
+        corrReachAux R n (seen ++ fresh) fresh
+
+/-- `UFReach`: the reflexive-transitive closure of `UFEdge`, as the set reachable from `t`.
+One round per edge is more than any walk that terminates needs. -/
+def corrReachOf (R : CorrRead) (t : Term) : List Term × Bool :=
+  corrReachAux R (R.edges.length + 1) [t] [t]
+
+/-- Everything `t`'s e-classes reach, and whether any walk hit the bound. `SameClass a b` is
+this set meeting `b`'s. -/
+def corrClassOf (R : CorrRead) (t : Term) : List Term × Bool :=
+  (viewReprs R t).foldl (fun acc e =>
+    let r := corrReachOf R e
+    ((acc.1 ++ r.1).dedup, acc.2 || r.2)) ([], false)
+
+/-- Moving `@UF` edges whose parent reaches back to the key: the union-find's cycles, which
+are what leaves a term with no `UFLeader` at all. -/
+def corrCycles (R : CorrRead) : Nat :=
+  (R.edges.filter fun p => p.1 != p.2 && (corrReachOf R p.2).1.contains p.1).length
+
+/-- `l` is a `UFLeader`: no `@UF` edge out of it moves. -/
+def corrIsLeader (R : CorrRead) (l : Term) : Bool :=
+  !R.edges.any fun e => e.1 == l && e.2 != l
+
+/-- `SameClass`, computed, for one pair — used to re-read a disagreement off the index. -/
+def corrSameClass (R : CorrRead) (a b : Term) : Bool :=
+  let x := (corrClassOf R a).1
+  let y := (corrClassOf R b).1
+  x.any y.contains
+
+/-- What the sweep precomputes per term: its source congruence class, the target nodes its
+e-classes reach, which of those are leaders, and whether a walk hit the bound. -/
+structure CorrInfo where
+  /-- The term itself. -/
+  term : Term
+  /-- `{b | Cong src term b}`, read off the computed closure. -/
+  cls : Finset Term
+  /-- `ViewRepr`: the e-classes the target gives it. -/
+  reprs : List Term
+  /-- `UFReach` from every `ViewRepr` of `term`. -/
+  reach : List Term
+  /-- The leaders among them, which is what `Encode.lean`'s `UFLeader` asks for. -/
+  leaders : List Term
+  /-- A reach walk ran out of rounds. -/
+  hit : Bool
+
+/-- One term's row of the sweep. -/
+def corrInfo (R : CorrRead) (cl : Finset (Term × Term)) (u : Term) : CorrInfo :=
+  let c := corrClassOf R u
+  { term := u,
+    cls := (cl.filter fun pr => pr.1 = u).image Prod.snd,
+    reprs := viewReprs R u,
+    reach := c.1,
+    leaders := c.1.filter (corrIsLeader R),
+    hit := c.2 }
+
+/-- The sweep's running totals. -/
+structure CorrAcc where
+  /-- Pairs the two sides agree on. -/
+  agree : Nat
+  /-- Of those, the ones both sides say **yes** to. A sweep whose agreement is all
+  double-negation has tested nothing, so this is the number that says the case is not
+  vacuous. -/
+  agreeTrue : Nat
+  /-- Of those, the ones off the diagonal: an equality between *distinct* terms that the
+  source derives and the encoding reproduces. This is the left-to-right claim's workload. -/
+  agreeTrueOff : Nat
+  /-- `Cong src` with no target class, newest first. -/
+  lost : List (Term × Term)
+  /-- A target class with no `Cong src`, newest first. -/
+  invented : List (Term × Term)
+  /-- LOST pairs the index reading loses too. -/
+  lostRows : Nat
+  /-- INVENTED pairs the index reading invents too. -/
+  inventedRows : Nat
+  /-- Pairs on which joining at a leader and joining anywhere disagree. -/
+  leaderDiff : Nat
+  /-- `SameClass` pairs whose two terms share no e-class outright, so that the join needed a
+  `@UF` step. The number `UFReach` is load-bearing for; zero means the sweep decided every
+  pair on the views alone. -/
+  viaUF : Nat
+
+/-- One pair, classified. `SameClass` is joinability — a node both e-classes reach — and
+`Encode.lean`'s `UFLeader` reading additionally asks that the node be a leader; the two are
+counted apart so a difference between them cannot hide inside a verdict. -/
+def corrPair (Rrows : CorrRead) (acc : CorrAcc) (x y : CorrInfo) : CorrAcc :=
+  let cong := decide (y.term ∈ x.cls)
+  let same := x.reach.any y.reach.contains
+  let lead := x.leaders.any y.leaders.contains
+  let acc := if same == lead then acc else { acc with leaderDiff := acc.leaderDiff + 1 }
+  let acc := if same && !x.reprs.any y.reprs.contains then { acc with viaUF := acc.viaUF + 1 }
+    else acc
+  if cong == same then
+    { acc with agree := acc.agree + 1,
+               agreeTrue := acc.agreeTrue + (if cong then 1 else 0),
+               agreeTrueOff := acc.agreeTrueOff +
+                 (if cong && x.term != y.term then 1 else 0) }
+  else
+    let rows := corrSameClass Rrows x.term y.term
+    if cong then
+      { acc with lost := (x.term, y.term) :: acc.lost,
+                 lostRows := acc.lostRows + (if rows then 0 else 1) }
+    else
+      { acc with invented := (x.term, y.term) :: acc.invented,
+                 inventedRows := acc.inventedRows + (if rows then 1 else 0) }
+
+/-- Every unordered pair of the universe, the diagonal included. -/
+def corrSweep (Rrows : CorrRead) : CorrAcc → List CorrInfo → CorrAcc
+  | acc, [] => acc
+  | acc, x :: xs =>
+      corrSweep Rrows (xs.foldl (fun a y => corrPair Rrows a x y) (corrPair Rrows acc x x)) xs
+
+/-- One case's correspondence report. -/
+structure CorrReport where
+  /-- Terms swept, and terms the pool holds. They differ only under `corrCap`. -/
+  swept : Nat
+  /-- The size of `src.terms ++ tgt.terms`, deduplicated: the term universe. -/
+  pool : Nat
+  /-- `src.terms`' length. -/
+  srcTerms : Nat
+  /-- `tgt.terms`' length. -/
+  tgtTerms : Nat
+  /-- Pairs the two sides agree on. -/
+  agree : Nat
+  /-- Of those, the ones both sides say yes to: the sweep's non-vacuity. -/
+  agreeTrue : Nat
+  /-- Of those, the ones between distinct terms. -/
+  agreeTrueOff : Nat
+  /-- Equalities the encoding lost. -/
+  lost : List (Term × Term)
+  /-- Equalities the encoding invented. -/
+  invented : List (Term × Term)
+  /-- Of `lost`, how many the index reading loses too. -/
+  lostRows : Nat
+  /-- Of `invented`, how many the index reading invents too. -/
+  inventedRows : Nat
+  /-- Pairs on which the leader reading and the joinability reading disagree. -/
+  leaderDiff : Nat
+  /-- `SameClass` pairs the union-find was needed for. -/
+  viaUF : Nat
+  /-- `@UF` entries the reading holds, and how many of them move. -/
+  ufEdges : Nat
+  /-- Of `ufEdges`, the ones whose parent is not the key. -/
+  ufMoving : Nat
+  /-- Moving edges that lie on a cycle. A term on one has no `UFLeader`. -/
+  ufCycles : Nat
+  /-- Terms whose `@UF` walk ran out of rounds. Unreachable except through a defect in the
+  walk; see `corrReachAux`. -/
+  fuelHits : Nat
+  /-- Non-reflexive equations the target asserted. The readings assume none. -/
+  tgtEqs : Nat
+
+/-- What running one case reports. -/
+inductive CorrOutcome where
+  /-- Not in `Program.EncodeDomain`, so `encode` says nothing about it. -/
+  | outOfDomain
+  /-- The **source** run did not finish, so there is nothing to compare against. -/
+  | sourceStuck (at? : Option (Nat × Cmd))
+  /-- The encoded run did not finish. -/
+  | encodedStuck (at? : Option (Nat × Cmd))
+  /-- The sweep. -/
+  | report (r : CorrReport)
+
+/-- The sweep, if the case got one. -/
+def CorrOutcome.report? : CorrOutcome → Option CorrReport
+  | .report r => some r
+  | _ => none
+
+/-- The sweep, with both readings supplied. Taking them as arguments is what lets a
+self-test drive the classifier off a reading it has doctored, so that "no LOST" is a
+measurement and not a branch nothing reaches. -/
+def corrReport (R Rrows : CorrRead) (d e : FDatabase) : CorrReport :=
+  let cl := d.closureF
+  let all := (d.terms ++ e.terms).dedup
+  let us := all.take corrCap
+  let info := us.map (corrInfo R cl)
+  let acc := corrSweep Rrows ⟨0, 0, 0, [], [], 0, 0, 0, 0⟩ info
+  { swept := us.length, pool := all.length,
+    srcTerms := d.terms.length, tgtTerms := e.terms.length,
+    agree := acc.agree, agreeTrue := acc.agreeTrue, agreeTrueOff := acc.agreeTrueOff,
+    lost := acc.lost.reverse, invented := acc.invented.reverse,
+    lostRows := acc.lostRows, inventedRows := acc.inventedRows,
+    leaderDiff := acc.leaderDiff, viaUF := acc.viaUF,
+    ufEdges := R.edges.length, ufMoving := (R.edges.filter fun p => p.1 != p.2).length,
+    ufCycles := corrCycles R,
+    fuelHits := (info.filter (·.hit)).length,
+    tgtEqs := (e.eqs.filter fun pr => pr.1 != pr.2).length }
+
+/-- Run one source program against its encoding and compare every pair of terms, under a
+reading of the target the caller may narrow. `fuel` is `.saturate`'s, as in
+`encodeCompare`. The index reading is left alone, so a narrowed `g` also says whether the
+index carries what the term set no longer does.
+
+`g` picks the reading to sweep with out of the two, and exists for the negative control:
+with the term reading taken as it stands the sweep reports no LOST on this corpus, and a
+sweep that cannot report LOST at all would report the same thing. -/
+def correspondWith (fuel : Nat) (p₀ : Program) (g : CorrRead → CorrRead → CorrRead) :
+    CorrOutcome :=
+  let p := p₀.declared
+  if !p.encodeDomainB then .outOfDomain
+  else
+    match execAt fuel FDatabase.empty p with
+    | none => .sourceStuck (stuckAt fuel FDatabase.empty 0 p)
+    | some d =>
+      let q := encode p
+      match execAt fuel FDatabase.empty q with
+      | none => .encodedStuck (stuckAt fuel FDatabase.empty 0 q)
+      | some e =>
+        let R := corrReadTerms p e
+        let Rrows := corrReadRows p e
+        .report (corrReport (g R Rrows) Rrows d e)
+
+/-- The sweep as the report runs it: the target read exactly as `Database.Out` reads it. -/
+def correspond (fuel : Nat) (p₀ : Program) : CorrOutcome :=
+  correspondWith fuel p₀ fun R _ => R
+
+/-- The readings `difftest correspond-alt` names, each a question the default sweep cannot
+ask on its own.
+
+* `flat` reads a view entry keyed by an application's children as written, instead of by
+  the ids its children's own views return. This is the *non*-inductive reading of
+  `ViewRepr`, and the encoding does not satisfy it: a rule head builds over canonical ids,
+  so a source term the head produced need not key any entry.
+* `rows` sweeps the row index instead of the term set, which is the same tables with every
+  entry a merge displaced or a rebuild re-keyed removed.
+* `no-uf` drops every `@UF` edge, so `SameClass` becomes "shares an e-class outright".
+* `no-view` drops every view entry, so no term has an e-class at all. The control that
+  makes the sweep report LOST. -/
+def corrReading : String → Option (CorrRead → CorrRead → CorrRead)
+  | "flat" => some fun R _ => { R with nested := false }
+  | "rows" => some fun _ Rrows => Rrows
+  | "no-uf" => some fun R _ => { R with edges := [] }
+  | "no-view" => some fun R _ => { R with entries := [] }
+  | _ => none
+
+/-- The disagreements, one per line, capped. -/
+def CorrReport.lines (r : CorrReport) : String :=
+  let fmt := fun (tag : String) (ps : List (Term × Term)) =>
+    String.join ((ps.take corrPrintCap).map fun p =>
+      "\n  " ++ tag ++ " " ++ p.1.toEgg ++ " = " ++ p.2.toEgg) ++
+      (if ps.length ≤ corrPrintCap then ""
+       else s!"\n  {tag} … and {ps.length - corrPrintCap} more, not printed")
+  fmt "LOST    " r.lost ++ fmt "INVENTED" r.invented
+
+/-- One line per case, plus one per disagreement. -/
+def CorrOutcome.render (o : CorrOutcome) : String :=
+  match o with
+  | .outOfDomain => "out-of-domain"
+  | .sourceStuck none => "source-stuck (no command)"
+  | .sourceStuck (some (i, c)) => s!"source-stuck at #{i} {c.toEgg}"
+  | .encodedStuck none => "encoded-stuck (no command)"
+  | .encodedStuck (some (i, c)) => s!"encoded-stuck at #{i} {c.toEgg}"
+  | .report r =>
+    (if r.lost.isEmpty && r.invented.isEmpty then "AGREE  " else "DIFFER ")
+      ++ s!"terms={r.swept}/{r.pool} (src {r.srcTerms}, tgt {r.tgtTerms}) \
+            agree={r.agree} same={r.agreeTrue}/{r.agreeTrueOff}-off \
+            lost={r.lost.length} invented={r.invented.length} \
+            rows-lost={r.lostRows} rows-invented={r.inventedRows} \
+            uf={r.ufMoving}/{r.ufEdges} via-uf={r.viaUF} uf-cycles={r.ufCycles} \
+            leader-diff={r.leaderDiff} fuel-hits={r.fuelHits} tgt-eqs={r.tgtEqs}"
+      ++ (if r.swept < r.pool then
+            s!"\n  CAPPED at {corrCap}: {r.pool - r.swept} terms not swept" else "")
+      ++ r.lines
+
+/-- The sweep's own controls, on `unionCase` — the smallest program with a congruence in
+it, so that each runs in a fraction of a second. Runtime rather than `#guard` for the reason
+`encodeSelfTests` is: each one executes an encoded program, and a rebuild saturates after
+every action. -/
+def correspondSelfTests : List (String × (Unit → Bool)) :=
+  [
+    -- The correspondence sweep, on the smallest case with a congruence in it. `unionCase`
+    -- derives two equalities between distinct terms — `One = Two` and the `Add`s above
+    -- them — and the sweep has to find both in the encoded state.
+    ("correspond unionCase loses nothing", fun _ =>
+      match (correspond runFuel unionCase).report? with
+      | some r => r.lost.isEmpty && r.agreeTrueOff == 2
+      | none => false),
+    -- **The literal clause, pinned.** `unitE` is `0`, the term relation's output, so the
+    -- target holds a literal the source never built and `ViewRepr.lit` gives it an e-class
+    -- anyway. That is the one disagreement every in-domain case reports.
+    ("correspond unionCase invents the unit literal", fun _ =>
+      match (correspond runFuel unionCase).report? with
+      | some r => r.invented == [(Term.lit (.int 0), Term.lit (.int 0))]
+      | none => false),
+    -- **The negative control.** A sweep that cannot report LOST would report the corpus's
+    -- zero just as loudly, so one is provoked: with the views dropped no source term has an
+    -- e-class, and every equality `unionCase` derives — its four reflexive ones included —
+    -- has to come back LOST. `rows-lost` stays 0 because the index reading is not dropped,
+    -- which is what says the two readings are read apart.
+    ("correspond sees a lost equality", fun _ =>
+      match (correspondWith runFuel unionCase fun R _ => { R with entries := [] }).report? with
+      | some r => r.lost.length == 6 && r.lostRows == 0
+      | none => false),
+    -- **The union-find is not load-bearing here.** Dropping every `@UF` edge changes
+    -- nothing: the rebuild has already re-keyed each view's e-class column onto the common
+    -- leader, and `terms` keeps both versions, so the two terms share an e-class outright.
+    -- `CorrReport.viaUF` is that number over the whole corpus, and it is zero.
+    ("correspond decides unionCase without the union-find", fun _ =>
+      match (correspondWith runFuel unionCase fun R _ => { R with edges := [] }).report? with
+      | some r => r.lost.isEmpty && r.agreeTrueOff == 2 && r.ufEdges == 0
+      | none => false) ]
+
+/-! #### What the sweep reports
+
+`difftest correspond 64` over the 70 in-domain cases and the eight probes. Nothing is
+capped — the widest pool is 146 terms — no `@UF` walk hits its bound, no `@UF` cycle
+exists, no target equation is asserted, and the leader reading of `SameClass` and the
+joinability reading agree on every pair.
+
+**No LOST, anywhere.** Every equality the source derives, the encoding reproduces. Over the
+corpus that is 778 pairs both sides say yes to, 159 of them between *distinct* terms; the
+counts below are the corpus's too.
+
+**One INVENTED, in every case but one.** It is always the pair `0 = 0`. `unitE` is
+`.lit (.int 0)` — the term relation's output, a stand-in until `Lit` gains `.unit` — so the
+target holds a literal the source never built, and `ViewRepr`'s literal clause gives any
+literal the target holds an e-class of its own. The diagonal then says `0` is a source
+e-node, which it is not.
+
+**The literal clause is right for a source literal and wrong for this one.** The `lit` probe
+builds `(Add 1 2)`: its three source terms, literals included, sit on the diagonal correctly
+and the `0 = 0` remains. The `lit-zero` probe builds `(Add 0 1)`, and the disagreement
+disappears — because the source now builds `0` itself. That is the sharper reading of the
+same defect: the encoding's `()` and a source `0` are **one term**, so a program that uses
+the literal `0` cannot tell the two apart, and `lit-zero` is green by collision rather than
+by correspondence. `Lit.unit` retires it; narrowing the clause to literals the views
+actually key would too.
+
+**The union-find does no work.** 175 of the 180 `@UF` entries the corpus writes move, and
+`CorrReport.viaUF` is 0 in every case: no pair is joined by a `@UF` step. The `no-uf`
+reading — every edge dropped — reproduces the verdict exactly, because the rebuild has
+already re-keyed each view's e-class column onto the common leader. The `rows` reading
+reproduces it too, so this is not an artefact of `Out` reading a term set that never shrinks.
+
+**The inductive reading is load-bearing.** The `flat` reading — a view entry keyed by an
+application's children as written — loses 91 equalities across 5 cases, `both-2` and
+`rand-43` among them, and finds only 88 of the 159 off-diagonal ones. A rule head builds
+over the ids its query bound, so a source term a head produced keys no entry under its own
+children.
+
+**What a green LOST column does not establish.** 32 of the 70 in-domain cases derive no
+equality between distinct terms at all, so their whole left-to-right test is the e-node
+diagonal; 25 more derive exactly one. Two cases carry 86 of the 159. The claim is tested at
+depth on very few programs. -/
+
 /-! #### What the harness pins
 
 The census. `encode`'s fragment is the constructor one, so the in-domain cases are exactly
@@ -2262,9 +2761,14 @@ anything shows up, and a single pooled number would hide it.
 
 `difftest encode-domain` prints how much of the corpus `encode` is defined on,
 `difftest encode <fuel> [case…]` runs the tuple-count comparison — every case, or the named
-ones — and `difftest check <fuel> [case…]` runs the encoded program and checks every proof
-its final state records against the source program (`Egglog.encodeCheck`). These write
-nothing and never invoke egglog; the comparison is between the model and itself. -/
+ones — `difftest check <fuel> [case…]` runs the encoded program and checks every proof its
+final state records against the source program (`Egglog.encodeCheck`), and
+`difftest correspond <fuel> [case…]` sweeps every pair of terms for
+`Cong src a b ↔ SameClass tgt a b` (`Egglog.correspond`). Its own controls — including the
+one that provokes a LOST — are `difftest correspond-selftest`, and
+`difftest correspond-alt <reading> <fuel> [case…]` runs the same sweep under one of
+`Egglog.corrReading`'s alternative readings of the target. These write nothing and never
+invoke egglog; the comparison is between the model and itself. -/
 def main (args : List String) : IO UInt32 := do
   match args with
   | ["encode-domain"] =>
@@ -2286,6 +2790,13 @@ def main (args : List String) : IO UInt32 := do
       else do IO.println s!"FAIL {name}"; bad := bad + 1
     IO.println s!"encode-selftest: {encodeSelfTests.length - bad} passed, {bad} failed"
     return (if bad == 0 then 0 else 1)
+  | ["correspond-selftest"] =>
+    let mut bad := 0
+    for (name, t) in correspondSelfTests do
+      if t () then IO.println s!"ok   {name}"
+      else do IO.println s!"FAIL {name}"; bad := bad + 1
+    IO.println s!"correspond-selftest: {correspondSelfTests.length - bad} passed, {bad} failed"
+    return (if bad == 0 then 0 else 1)
   | "encode" :: fuel :: names =>
     match fuel.toNat? with
     | none => IO.eprintln s!"difftest: bad fuel {fuel}"; return 1
@@ -2301,6 +2812,43 @@ def main (args : List String) : IO UInt32 := do
       let cases := if names.isEmpty then allCases
         else (allCases ++ probeCases).filter fun c => names.contains c.1
       for c in cases do IO.println s!"{c.1}: {(Egglog.encodeCheck n c.2).render}"
+      return 0
+  | "correspond-alt" :: reading :: fuel :: names =>
+    match Egglog.corrReading reading, fuel.toNat? with
+    | none, _ => IO.eprintln s!"difftest: no reading {reading}"; return 1
+    | _, none => IO.eprintln s!"difftest: bad fuel {fuel}"; return 1
+    | some g, some n =>
+      let cases := if names.isEmpty then allCases
+        else (allCases ++ probeCases).filter fun c => names.contains c.1
+      for c in cases do IO.println s!"{c.1}: {(Egglog.correspondWith n c.2 g).render}"
+      return 0
+  | "correspond" :: fuel :: names =>
+    match fuel.toNat? with
+    | none => IO.eprintln s!"difftest: bad fuel {fuel}"; return 1
+    | some n =>
+      let cases := if names.isEmpty then allCases
+        else (allCases ++ probeCases).filter fun c => names.contains c.1
+      let mut agreeing := 0
+      let mut differing := 0
+      let mut lost := 0
+      let mut invented := 0
+      let mut hits := 0
+      let mut cycles := 0
+      let mut capped := 0
+      for c in cases do
+        let o := Egglog.correspond n c.2
+        IO.println s!"{c.1}: {o.render}"
+        if let some r := o.report? then
+          lost := lost + r.lost.length
+          invented := invented + r.invented.length
+          hits := hits + r.fuelHits
+          cycles := cycles + r.ufCycles
+          if r.swept < r.pool then capped := capped + 1
+          if r.lost.isEmpty && r.invented.isEmpty then agreeing := agreeing + 1
+          else differing := differing + 1
+      IO.println s!"correspond: {agreeing} agreeing, {differing} disagreeing, {lost} LOST, \
+                    {invented} INVENTED, {cycles} union-find cycles, {hits} fuel-bound hits, \
+                    {capped} capped"
       return 0
   | [dir, "curated"] =>
     IO.FS.createDirAll dir
@@ -2330,4 +2878,6 @@ def main (args : List String) : IO UInt32 := do
     IO.eprintln "usage: difftest <dir> curated | merge | seed <n> | mergeseed <n>"
     IO.eprintln "       difftest encode-domain | encode-cost | encode-selftest"
     IO.eprintln "       difftest encode <fuel> [case…] | check <fuel> [case…]"
+    IO.eprintln "       difftest correspond <fuel> [case…] | correspond-selftest"
+    IO.eprintln "       difftest correspond-alt flat|rows|no-uf|no-view <fuel> [case…]"
     return 1
