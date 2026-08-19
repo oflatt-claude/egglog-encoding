@@ -112,9 +112,18 @@ nightly-local: nightly-uv nightly-rustup
 # see semantics/README.md. `lake build` only warns on a `sorry`, so the sources are
 # grepped for one as well. The second grep drops backtick-quoted prose: two module
 # docstrings discuss `sorry`, and without it the target can never pass.
+# M11's correspondence statement is stated and not proved: `Encoding/Correspond.lean`
+# carries exactly LEAN_OPEN_SORRIES of them, one per named obligation, each with a compiled
+# vacuity witness beside it (`semantics/ENCODING.md`). Everywhere else a `sorry` is a
+# regression, and a new one in that file changes the count.
+LEAN_OPEN_SORRIES = 4
+LEAN_OPEN_SORRY_FILE = semantics/EgglogSemantics/Encoding/Correspond.lean
+
 lean-check:
 	cd semantics && PATH="$(LEAN_BIN_DIR):$$PATH" lake build
-	! grep -rnw --include='*.lean' sorry semantics/EgglogSemantics | grep -v '`sorry`'
+	! grep -rnw --include='*.lean' sorry semantics/EgglogSemantics | grep -v '`sorry`' | \
+		grep -v '^$(LEAN_OPEN_SORRY_FILE):'
+	test "$$(grep -nw sorry $(LEAN_OPEN_SORRY_FILE) | grep -cv '`sorry`')" -eq $(LEAN_OPEN_SORRIES)
 
 # Differentially test the Lean semantics against egglog: for each generated program, the
 # Lean interpreter's per-constructor row counts against egglog's `(print-size)`. Needs a

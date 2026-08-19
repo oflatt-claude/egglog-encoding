@@ -84,11 +84,14 @@ yet.
 | `Database.DeclaredTerms` has no preservation lemma, so `WidthOk` funds nothing yet | `Spec/Congruence.lean`, `Proofs/` |
 | `Matches.values` is split-blind and e-class-blind | `MERGE.md`, open question 1 |
 | base sorts, in place of the single untyped `Term` | `MERGE.md`, constraint (5) |
-| restating M11 against a reachable saturation condition | `ENCODING.md` |
+| restating M11 against a reachable saturation condition — **still open**, and now with a machine-checked refutation of the current one | `ENCODING.md`, finding 3 |
 
-**Where the library stands.** **Zero `sorry` and zero `sorryAx`.** `execM_contained` was the last
-theorem depending on either and lost them at `04eb89e`; `execM_eq_exec` and `exec_programStep` were
-already clean and are unchanged. The whole library builds, `Proofs/Lattice.lean` and
+**Where the library stands.** **`Spec/`, `Impl/`, `Proofs/` and `Tests/`: zero `sorry` and zero
+`sorryAx`.** `execM_contained` was the last theorem depending on either and lost them at
+`04eb89e`; `execM_eq_exec` and `exec_programStep` were already clean and are unchanged. Parked
+M11's `Encoding/Correspond.lean` has four, one per named obligation of `encode_corresponds`
+(`ENCODING.md`); `make lean-check` pins the number and the file, and nothing outside that file
+depends on them. The whole library builds, `Proofs/Lattice.lean` and
 `Proofs/Counterexamples.lean` included, and difftest is **166 passed / 0 failed**. So the chain from
 the egglog binary to `ProgramStep` is unbroken: difftest compares egglog against `execM`,
 `execM_eq_exec` carries `execM` to `exec` on the constructor fragment, and `exec_programStep` is a
@@ -246,8 +249,9 @@ The first is the canary the `Spec/` rewrite left behind: it is the bridge from t
 interpreter's term list to the diagonal of `eqs`, every refinement theorem reads through it,
 and it is short enough that anything appearing in its axiom set got there by accident. The second
 row is the load-bearing one: `execM_eq_exec` and `exec_programStep` clean together are what make
-difftest a check on `Spec/`. **`sorryAx` is no longer allowed anywhere**, which is a change from
-"allowed at `execM_contained` until the transports land".
+difftest a check on `Spec/`. **`sorryAx` is allowed nowhere but at parked M11's four named
+obligations** (`Encoding/Correspond.lean`), which is a change from "allowed at `execM_contained`
+until the transports land"; `make lean-check` pins that file and that count.
 
 Statements known to be **false** carry compiling counterexamples in
 `Proofs/Counterexamples.lean` and `Proofs/Lattice.lean`, so a refuted statement cannot
@@ -911,8 +915,8 @@ Other omissions, unaddressed since the port: schedules, extraction, containers.
   distribution, not only the pass count. It reaches `Impl/` through `Tests/Egg.lean` without
   touching `Proofs/`. It shares one scratch directory, so two runs at once will report spurious
   failures.
-- `make lean-check` additionally fails on any `sorry`. There are none, so it is a regression check
-  rather than a count: any hit is new.
+- `make lean-check` additionally fails on any `sorry` outside `Encoding/Correspond.lean`, and on
+  any change to the four it carries. Outside that file any hit is new.
 - Axioms, on every change: `lean_verify` or `#print axioms` against the table in "Checking a
   change". A green build does not catch an axiom leak.
 - `Tests/Examples.lean` compiling *is* the M7 suite — each check is a closed proof or a

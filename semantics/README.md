@@ -29,9 +29,12 @@ deleted, and [`CHECKER.md`](CHECKER.md), what a Lean model of egglog's proof che
 Two things worth knowing before reading any of it.
 
 **`Spec/` is frozen** at 8 files and ~975 lines. `Impl/` is ported against it, difftest is green,
-the whole library builds and **there are no `sorry`s left**. What is open is coverage rather than
-proof: `PLAN.md`, "What is covered, and what is not", has the one combination — a `union` together
-with a `:merge` function — that neither top-level theorem reaches, and which difftest exercises.
+the whole library builds and **`Spec/`, `Impl/` and `Proofs/` carry no `sorry`**. What is open
+there is coverage rather than proof: `PLAN.md`, "What is covered, and what is not", has the one
+combination — a `union` together with a `:merge` function — that neither top-level theorem
+reaches, and which difftest exercises. The four `sorry`s in the library are all in parked M11's
+`Encoding/Correspond.lean`, one per named obligation of `encode_corresponds`, and
+`make lean-check` pins their number and their file.
 
 **`Spec/` is append-only and `Impl/` is not.** Nothing is ever removed from `Database.eqs`,
 where a function's whole table lives as terms; `Impl/` keeps a `Row` index it re-keys and
@@ -50,7 +53,7 @@ read closely and the second skimmed.
 | `EgglogSemantics/Impl/` | the reference implementation, which computes it |
 | `EgglogSemantics/Proofs/` | everything proved about the two, one file per subject |
 | `EgglogSemantics/Tests/` | example programs as proofs and `#guard`s, and the `.egg` emitter |
-| `EgglogSemantics/Encoding/` | **parked M11** — the encoder `encode` and nothing else; its theorems were deleted, and [`ENCODING.md`](ENCODING.md) is what survives them |
+| `EgglogSemantics/Encoding/` | **parked M11** — the encoder `encode`, the proof checker, and `Correspond.lean`: the correspondence `difftest correspond` measures, the decision procedure proved equal to it, and the vacuity results. Its original theorems were deleted; [`ENCODING.md`](ENCODING.md) is what survives them |
 | `Scratch/` | one surviving witness file, outside the library and so outside `lake build` — which is how the others were lost; `PLAN.md`, "Checking a change" |
 
 `Spec/` and `Impl/` are **definitions**, with what the language forces inlined rather than
@@ -85,7 +88,8 @@ lake build
 
 or, from the workspace root:
 
-- `make lean-check` — builds and fails on any `sorry`. It passes, over the whole library,
+- `make lean-check` — builds, and fails on any `sorry` outside `Encoding/Correspond.lean`
+  *and* on any change to the four that file is allowed. It passes over the whole library,
   `Proofs/Counterexamples.lean` and `Proofs/Lattice.lean` included, so any hit is a regression.
 - `make lean-difftest` — runs the interpreter and egglog on the same generated programs and
   compares per-function row counts, for the constructor fragment and for M9's `:merge`

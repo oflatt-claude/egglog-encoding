@@ -45,7 +45,12 @@ re-firing from becoming a fresh collision.
 run is followed by `Cmd.saturate rebuildRuleset`. egglog nests three rulesets in a
 `run-schedule`; one flat ruleset run to a fixpoint is exactly as strong, since a fixpoint of
 a union of rulesets is a fixpoint of each. `Rebuilt` is that command's postcondition
-(`saturateReach_rebuilt`).
+(`saturateReach_rebuilt`) — **and nothing satisfies it**, because `MergeSaturated` counts
+the proof column and `mergeBody` composes a bigger proof at every collision, a self-collision
+included. `Encoding/Correspond.lean`'s `not_mergeSaturated_of_entry` is the refutation, and
+`ENCODING.md`, finding 3, is what it means: the specification has no notion of
+`identityVals`, so a postcondition of `Cmd.saturate` is a postcondition of a command that
+cannot step.
 
 ## Fresh ids
 
@@ -688,6 +693,17 @@ def Cmd.vars : Cmd → List Var
 /-- Every variable the program mentions. -/
 def Program.vars (P : Program) : List Var := (P.flatMap Cmd.vars).dedup
 
+/-- The ruleset names a command mentions: the one a rule joins, and the one a run fires. -/
+def Cmd.rulesets : Cmd → List RulesetName
+  | .rule r => [r.ruleset]
+  | .run R => [R]
+  | .saturate R => [R]
+  | .action _ => []
+  | .decl _ _ => []
+
+/-- Every ruleset name the program mentions. -/
+def Program.rulesets (P : Program) : List RulesetName := (P.flatMap Cmd.rulesets).dedup
+
 /-- Constructors only, and no name that would collide with a generated one. -/
 structure Program.EncodeDomain (P : Program) : Prop where
   /-- Every declared function is a constructor. -/
@@ -701,6 +717,13 @@ structure Program.EncodeDomain (P : Program) : Prop where
   /-- Nor any source variable: the generated `@v0`, `@v1`, … are numbered from one
   supply for the whole program, so they collide with nothing but a source `@` name. -/
   noAtVar : ∀ v ∈ P.vars, ¬ "@".isPrefixOf v
+  /-- Nor any source **ruleset**. The maintenance rules join `rebuildRuleset`, which is
+  `@rebuild`, and `encodeRule` keeps a source rule's own ruleset — so a source rule joining
+  `@rebuild` would be fired by every `Cmd.saturate rebuildRuleset` the encoding emits, where
+  the source fires it only under a run naming it. That is an equality in the target the
+  source never derives, and neither `noAt` nor `noAtVar` excludes it: a ruleset name is
+  neither a function name nor a variable. -/
+  noAtRuleset : ∀ R ∈ P.rulesets, ¬ "@".isPrefixOf R
 
 /-! ### Reading the target
 
@@ -751,13 +774,27 @@ inductive ViewReprList (d : Database) : List Term → List Term → Prop where
 
 end
 
-/-- Two source terms are in one e-class of the encoded database: their view reads land
-on ids with a common union-find leader.
+/-- Two source terms are in one e-class of the encoded database: **one id is a `ViewRepr`
+of both**.
 
-Existential in the reads because `ViewRepr` is, and because that is the direction both
-halves of the simulation want — a match exists iff the equality holds. -/
+Existential in the read because `ViewRepr` is, and because that is the direction both
+halves of the simulation want — a match exists iff the equality holds.
+
+**No union-find walk.** The reading through `UFLeader` — two ids with a common leader — is
+the one egglog's `check` compiles, and it is *equivalent* at a rebuilt state: the e-class
+rebuild rule re-`set`s a view entry at each `@UF` parent in turn and `terms` keeps both
+versions, so a term's `ViewRepr` set is already closed under `UFEdge` and already contains
+the leader. `difftest correspond`'s `via-uf` column measures the difference and it is 0 on
+every case of the corpus and of the union-find probes, while dropping the rebuild makes it
+71 pairs — so the walk is redundant *because of* `Rebuilt`, not intrinsically. The flat
+reading is the one this file states a correspondence over, because it is the one the walk
+adds nothing to and the smaller relation to prove things about. -/
 def SameClass (d : Database) (a b : Term) : Prop :=
-  ∃ ea eb l, ViewRepr d a ea ∧ ViewRepr d b eb ∧ UFLeader d ea l ∧ UFLeader d eb l
+  ∃ e, ViewRepr d a e ∧ ViewRepr d b e
+
+/-- `SameClass` is symmetric, in one step from the definition. -/
+theorem SameClass.symm {d : Database} {a b : Term} (h : SameClass d a b) : SameClass d b a :=
+  let ⟨e, ha, hb⟩ := h; ⟨e, hb, ha⟩
 
 /-- The rebuild schedule has run out: no maintenance rule adds anything, and no merge
 step changes anything. It is the hypothesis the completeness half of simulation needs —
@@ -767,7 +804,14 @@ happened.
 `ENCODING.md`, finding 1, was that no state `encode` ran to satisfied this, because
 `Cmd.run` carried no ruleset and the number of rounds needed to re-key grows with term
 depth. `encode` now emits `Cmd.saturate rebuildRuleset` after every run, and
-`saturateReach_rebuilt` below is the repair: this is that command's *postcondition*. -/
+`saturateReach_rebuilt` below is that repair: this is that command's *postcondition*.
+
+**It is still unsatisfiable, for a second reason.** The proof column landed after the
+repair. `MergeSaturated`, the second conjunct, asks that *no* collision change anything, and
+every entry collides with itself: `mergeBody` writes `@UF(v) ↦ (v, @Trans (@Sym pf) pf)` for
+the colliding pair, a term one composition larger than the proof it started from. So a
+`Rebuilt` state must hold the whole tower, and no state with finitely many terms does —
+`Encoding/Correspond.lean`'s `not_mergeSaturated_of_entry`, `not_rebuilt_toDatabase`. -/
 def Rebuilt (P : Program) (d : Database) : Prop :=
   (∀ r ∈ maintenanceRules P, ∀ d' ∈ RuleResults d r, Database.Contained d' d) ∧
     MergeSaturated d

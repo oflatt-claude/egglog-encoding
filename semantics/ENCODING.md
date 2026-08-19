@@ -1,11 +1,23 @@
 # M11, the proof encoding — parked
 
-`Encoding/Encode.lean` defines the encoding. Its theorems and their vacuity witnesses are
-**deleted**; this file is what survives of them, and it exists so the design is not
-re-attempted with the same defects. One thing has since moved in M11's favour, and it is the
-reason to restate rather than abandon: the congruence obstruction that constrains the refinement
-chain on *source* programs provably does not arise on encoded ones, and the hypothesis the chain
-was finally proved under is one `encode` satisfies — "What survives", last three paragraphs.
+`Encoding/Encode.lean` defines the encoding. Its *original* theorems and their vacuity
+witnesses are **deleted**; this file is what survives of them, and it exists so the design is
+not re-attempted with the same defects.
+
+**One statement is back, and it is stated where it can be measured.**
+`Encoding/Correspond.lean` has `encode_corresponds` — `Cong src a b ↔ SameClass tgt a b` —
+together with the decision procedure `sameClassF`, the proof that the two agree
+(`sameClassF_iff`, both directions, no `sorry`), and a compiled witness that its hypotheses
+are jointly satisfiable at a state where both sides of the `iff` are non-trivial
+(`encode_corresponds_witness`). `difftest correspond 64` sweeps exactly that relation over
+the corpus and reports 70 of 70 agreeing, 0 LOST, 0 INVENTED, 0 `link-diff`. The theorem
+itself carries `sorry`, in four named obligations; finding 3 below is why its target is the
+interpreter's state and not `ProgramStep`'s.
+
+One thing has since moved in M11's favour, and it is the reason to restate rather than
+abandon: the congruence obstruction that constrains the refinement chain on *source* programs
+provably does not arise on encoded ones, and the hypothesis the chain was finally proved under
+is one `encode` satisfies — "What survives", last three paragraphs.
 
 The Lean is recoverable at commit `0836127`:
 
@@ -18,9 +30,12 @@ They were deleted rather than carried through the `Spec/` simplification work: b
 row-shaped throughout — `Spec/` has no rows now, a function entry is a term — the
 statements are known defective, and porting proofs of nothing is not worth the maintenance.
 
-## Two findings, both machine-checked before deletion
+## Three findings, each machine-checked
 
-### 1. `Rebuilt` was unsatisfiable at the states `encode` ran to — **fixed**
+The first two were checked before the theorems were deleted; the third is checked in
+`Encoding/Correspond.lean` and is what the restated theorem ran into.
+
+### 1. `Rebuilt` was unsatisfiable at the states `encode` ran to — **fixed, then reopened by finding 3**
 
 `Rebuilt P d` is the saturation hypothesis `encode_complete`, `encode_simulation` and
 `encode_simulation_of_domain` all carry. It is satisfiable for some states and not for the ones
@@ -47,6 +62,9 @@ every run, so `Rebuilt` is now a *postcondition* rather than a hypothesis:
 suffices where egglog nests three, because a fixpoint of a union of rulesets is a fixpoint
 of each.
 
+**And that repair is undone by the proof column**, which landed after it. The rule half of
+`RunSaturated` is reachable; the *merge* half is not — see finding 3.
+
 ### 2. `CongOn` cannot express existence
 
 `CongOn db ts a b` is definitionally `Cong (db.addTerms ts) a b`, so
@@ -69,6 +87,11 @@ looking at the source, the program, the target, or the row. Likewise
 `encode_rows_sound`'s first conjunct at a `@UF` row whose key is its own parent — which
 every interned term is until something unions it.
 
+`Encoding/Correspond.lean`'s `SameClass` avoids the trap a third way: it is an existential
+over view entries, so its diagonal `SameClass d a a` says "the target gives `a` an id",
+which is exactly the e-node correspondence and is false for most terms. The sweep's
+`agree-true` column (778 over the corpus, 159 of them off the diagonal) is what says so.
+
 **Do not "fix" this by replacing `CongOn` with `Cong`.** `CongOn` is the right relation
 for the job it was introduced for: after `(Add 1 2)` and `(union 1 2)` the rebuild re-keys
 `@AddView [1,1] ↦ Add[1,2]`, and `CongOn src [Add 1 1, Add 1 2] (Add 1 1) (Add 1 2)` is a
@@ -81,15 +104,62 @@ is confined to the diagonal. Two repairs that keep what `CongOn` is for:
   `{t | Cong db t t}`, so `Cong src a a` and `a ∈ src.terms` are the same proposition.
 * **split the cases** — `CongOn` only where the rebuild has re-keyed, `Cong` elsewhere.
 
+### 3. `MergeSaturated` counts the proof column, so nothing is `Rebuilt` — **open**
+
+Machine-checked, in `Encoding/Correspond.lean`, with no `sorry`:
+`mergeStep_selfCollision`, `mergeSaturated_selfProof_tower`, `not_mergeSaturated_of_entry`,
+`not_mergeSaturated_toDatabase`, `not_rebuilt_toDatabase`, `not_cmdStep_saturate`.
+
+`Spec/Step.lean`'s `MergeSaturated db` is "no merge collision *changes* anything", and it is
+phrased that way because **every entry collides with itself** — "no step applies" is
+unsatisfiable. With a proof column a self-collision does change something. `mergeBody` writes
+
+```
+@UF (ordering-max old0 new0) ↦ (ordering-min old0 new0, @Trans (@Sym hi_pf) lo_pf)
+```
+
+and at a self-collision `old0 = new0 = v`, `old1 = new1 = pf`, so it writes the self-loop
+`@UF(v) ↦ (v, @Trans (@Sym pf) pf)` — a term one composition **larger** than the proof it
+started from. A `MergeSaturated` state must therefore already hold that entry, and the
+entry's own self-collision demands the next one: the whole tower `selfProof^[n] pf`. No state
+with finitely many terms holds it, so no state the interpreter can represent and no state a
+run can reach is `MergeSaturated` once it holds one `@UF` or view entry — which is any state
+that has built one term.
+
+Consequences, in order of what they cost:
+
+* `Rebuilt P d` is **unsatisfiable** again. Its second conjunct is `MergeSaturated`.
+* `ProgramStep Database.empty (encode P) tgt` is unsatisfiable for every `P` that builds a
+  term, because `encode` emits `Cmd.saturate rebuildRuleset` after every writing command and
+  `SaturateReach` ends at a `RunSaturated` state. A correspondence theorem carrying that
+  hypothesis would say nothing, so `encode_corresponds` carries `execM (encode P) = some tgt`
+  instead and says so.
+* It is a **specification/implementation gap, not an encoder bug**. `viewDecl` and `ufDecl`
+  declare `identityVals := some 1`, which takes the proof column out of the change test, and
+  `Impl/Merge.lean` reads it — which is why the interpreter terminates and `difftest` is
+  green. `MergeStep` and `MergeSaturated` do not read it: `Spec/` has no notion of a column
+  that does not count. Closing it is a change to `Spec/Step.lean` — `MergeSaturated` up to
+  `identityVals` — and `Spec/` is frozen, so it is a decision rather than an edit.
+
+The shape of the defect is the same as finding 1's and it was found the same way: by
+insisting on a witness before accepting a `sorry`.
+
 ## The lesson worth keeping
 
-Both defects were invisible while the statements carried `sorry`. A statement nothing
+All three defects were invisible while the statements carried `sorry`. A statement nothing
 discharges can be trivially true without anyone noticing, and two of thirteen were. Before
 proving an M11 statement, check that it is not already provable for the wrong reason —
 `#print axioms` on a hypothesis-free proof of the conclusion is the cheap test.
 
-A third of the same kind is recorded but unswept: the remaining eleven statements were
-never checked for vacuity.
+**And check the other direction too.** `encode_corresponds` is an `iff`, which is trivially
+true if `SameClass` is accidentally always false, so `encode_corresponds_witness` exhibits a
+pair both sides say yes to as well as a pair both say no to, and `CorrReport.agreeTrue` is
+that measurement over the corpus. Finding 3 came out of the first half of the same
+discipline: the hypotheses were checked for joint satisfiability before the `sorry` was
+allowed to stand, and they are not.
+
+A fourth of the same kind is recorded but unswept: the remaining eleven original statements
+were never checked for vacuity.
 
 ## What survives
 
