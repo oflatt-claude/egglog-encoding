@@ -194,6 +194,13 @@ def self_loop(name, sig):
 def alpha_finder(name, sig):
     """Two nodes equal up to renaming: keep one, record how the other renames to it.
 
+    For `e1 = f(m1*c1, m1'*c2)` and `e2 = f(m2*c1, m2'*c2)`, the solve
+    `(find-mapping m1 m1' m2 m2')` is the least `m` with `m*m2 = m1` and `m*m2' = m1'`, so
+
+        m*e2 = f(m*m2*c1, m*m2'*c2) = f(m1*c1, m1'*c2) = e1
+
+    which is the `RenamesToLeader` this records before deleting `e2`'s row.
+
     Payload columns are named by the same variable on both sides, so a difference
     there simply does not match -- no separate check needed.
     """
@@ -255,6 +262,12 @@ def symmetry_finder(name, sig):
 def migration(name, sig):
     """Rewrite a follower's node into its leader's frame.
 
+    For `e2 = f(m1*c1, m2*c2)` and `e2 = m*e1`, rewriting into e1's frame gives
+
+        e1 = m^-1*e2 = f(m^-1*m1*c1, m^-1*m2*c2)
+
+    so each edge composes with `m^-1` and the original row goes.
+
     A node can use a slot its leader's frame cannot name -- a slot the class does not
     depend on. MIGRATION says what to do then: `decline` leaves the node where it is,
     so followers are not emptied; `mint` invents a name, as the reference's
@@ -295,6 +308,9 @@ def migration(name, sig):
 
 def child_update(name, sig, pos):
     """Replace child `pos` with its more canonical `m*c'`.
+
+    One rule per child position, canonicalising that child to the class's representative:
+    the stored edge composes with the child's renaming, `m1` becoming `m1 . m`.
 
     Only ever toward the leader, for the same reason migration needs it: a slotted class
     spans several values and `RenamesToLeader` holds both directions between them, so

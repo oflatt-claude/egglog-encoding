@@ -346,10 +346,19 @@ def order_atoms(atoms):
     fails, losing a match the reference finds. `multi_ematch` does not have this
     problem: it keeps such a slot flexible and lets `unify` merge it later.
 
-    The first atom fixes slots(pattern), so it must not be a binder: a binder's
-    node carries the *bound* slot, which would put a bound slot into the pattern's
-    slot space and stop the rule firing. `C13` is the case. Otherwise the caller's
-    preference is kept, since callers vary the first atom deliberately.
+    The first atom fixes slots(pattern), so it must not be a binder: a binder's node carries
+    the *bound* slot, and putting one first puts a bound slot into the pattern's slot space,
+    which is a scope error on its face. Otherwise the caller's preference is kept, since
+    callers vary the first atom deliberately.
+
+    The restriction is **unwitnessed**, and kept because it is cheap rather than because
+    anything fails without it: `XDIFF_BUGS=binder-1st` changes nothing on 44 curated or 250
+    generated cases -- not the partition, not order dependence, not the isomorphism -- nor on
+    200 binder-dense generated cases, nor on five shapes built to make a leaked bound slot
+    visible. What would most plausibly witness it is an *action* naming the bound slot, which
+    references it outside its binder; the harness cannot express that, because a slot literal
+    in an action's child position has no case in `compile_rule`. Adding it would settle this,
+    and would also reach `M7`, the other shape listed as not covered.
     """
     atoms = list(atoms)
     if "unordered" in BUGS:

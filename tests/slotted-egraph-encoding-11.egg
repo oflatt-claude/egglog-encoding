@@ -1,69 +1,90 @@
-;; Oliver's favorite encoding as july 2
-;; Keeps track of a canonical renamed form for each eclass using a union-find table called
-;; "RenamesToLeader".
-;; The job of shape computation rules is to find collisions, pick one of them to be the leader, then add a RenamesToLeader entry for the other eclass to point to the leader, with the appropriate renaming.
-;; Footgun: RenamesToLeader needs to be initialized for each thing you add to the egraph, otherwise you might miss things in your query at the end. 
-;; We delete nodes which are not canonical, compressing the e-graph. So you can't match on them anymore, but you can use their value and RenamesToLeader to find the canonical representative.
+;;; A slotted e-graph in egglog.
+;;;
+;;; An e-class is a *set* of `U` values denoting the same class under different slot namings.
+;;; `(RenamesToLeader a m b)` reads `a = m*b`, where `m` carries b's slots to a's, so a class
+;;; is a connected component of that relation. A *self*-loop `(RenamesToLeader c p c)` says
+;;; `p` is a symmetry: a permutation of c's slots that the class proves. Both readings matter,
+;;; and a rule that wants "the class's symmetries" joins on the self-loop form.
+;;;
+;;; A node may carry slots its class does not depend on -- a *redundant* slot, which Def. 4
+;;; permits for nodes while requiring an *edge*'s domain to be exactly its child's slot set.
+;;; `(ClassSlots c)` is where a class's own slots live, as an identity renaming. It only ever
+;;; narrows, and that is what makes it safe to derive from a node: each node offers its own
+;;; slots as an upper bound and the merge keeps what every node of the class has.
+;;;
+;;; Compression: a node that is not canonical is deleted. Its value stays usable -- follow
+;;; `RenamesToLeader` to the class's canonical member -- but nothing can match on it any more.
+;;; So anything put into the e-graph needs a `RenamesToLeader` entry, or a later query will
+;;; not see it.
+;;;
+;;; Two habits the rules below keep, each learned from a bug that took a while to find:
+;;;
+;;;   * A rule that both builds and deletes needs an orientation that strictly decreases, or
+;;;     it undoes itself forever while the tables look settled. `ordering-min` is that
+;;;     direction throughout -- `(= x (ordering-max x y))` fires only downhill.
+;;;   * Do not assert a class-level fact from one node. Offer it to a merge that can only
+;;;     narrow, as `ClassSlots` does.
 
-;;; Machinery ;;;
 
+;; A renaming is a partial injection on slots. `(compose a b)` is `a . b`, b first,
+;; and it TRUNCATES: keys b sends outside a's domain are dropped. That is correct for
+;; partial maps and wrong on an edge, where `compose-total` refuses instead.
 (sort Renaming (Map i64 i64))
 
+;; One `U` value per e-node and per class; a slotted class spans several of them.
 (sort U)
 
+;; A variable. Normalised below so only `(Var 0)` survives, with the slot in the edge.
 (constructor Var (i64) U)
 
-;; `(App2 f m1 c1 m2 c2)` corresponds to the term `f(m1*c1, m2*c2)`
-
-;; `(RenamesToLeader follower m leader)` corresponds to `follower = m*leader`.
-;; We require `leader <= follower` in terms of ordering-max.
+;; `(RenamesToLeader follower m leader)` is `follower = m*leader`, with `leader <= follower`
+;; under `ordering-max`.
 (relation RenamesToLeader (U Renaming U))
 
-;; The invariant rules below, and every rule the generator emits, live in `slotted`.
-;; They must be SATURATED between the user's rule steps: a user rule that matches a node
-;; before that node's alpha- and slot-canonicalisation has finished sees a spelling which
-;; is about to change, and matches again when it does -- so the two never settle. User
-;; rules themselves are not expected to terminate, so they get a finite step count:
+;; The invariant rules -- these and every rule the generator emits -- must be SATURATED
+;; between the user's rule steps:
 ;;
-;;   (run-schedule (saturate (run slotted))                  ; before any user rule
+;;   (run-schedule (saturate (run slotted))
 ;;                 (repeat N (seq (run) (saturate (run slotted)))))
 ;;
-;; which is the shape egglog's proof encoding uses for its own maintenance rulesets --
-;; `instrument_schedule` wraps every user run as `(seq <run> <rebuild>)`. A file with no
-;; user rules of its own, such as this one, only needs `(saturate (run slotted))`.
+;; A user rule that matches a node before that node's canonicalisation has finished sees
+;; a spelling about to change, and matches again when it does, so neither settles. User
+;; rules are not expected to terminate, hence the finite step count; the invariants are.
+;; A file with no user rules of its own, this one included, needs only the first line.
 (ruleset slotted)
 
-; This is a basic object not depending on any variables.
+;; The nullary object, depending on no slots.
 (constructor Null () U)
 
-;; Every rule that names a child position is generated, once per arity, by
-;; `slotted-experiments/gen-node-rules.py`. Add an arity there and re-run.
+;; One family of rules per constructor, since a rule naming child positions cannot be
+;; written once for all arities. `gen-node-rules.py` emits them: a class's slot set, its
+;; self-loop, the alpha-finder that retires a node equal to another up to renaming, the
+;; symmetry-finder that keeps the same solve non-destructively, migration into a
+;; leader's frame, per-child canonicalisation, and binders. Add an arity there.
 (include "tests/slotted-node-rules.egg")
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; General Unionfind Properties ;;
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-;; transitivity / path compression
-;; e1 = m12*e2 /\ e2 = m23*e3 --> e1 = m12*m23*e3
+;; Transitivity, which is also path compression: `e1 = m12*e2` and `e2 = m23*e3` give
+;; `e1 = m12*m23*e3`. Non-idempotent self-symmetries are excluded so the union-find part
+;; does not enumerate a group.
 (rule ((RenamesToLeader e1 m12 e2)
        (RenamesToLeader e2 m23 e3)
 
-       ; we exclude non-idempotent self-symmetries for the unionfind
        (guard (or (bool-!= e2 e3)
                   (bool= (compose m23 m23) m23)
                   (bool= e1 e3))))
 
       ((RenamesToLeader e1 (compose m12 m23) e3)) :ruleset slotted)
 
-;; single parent
-;; a = m1*b /\ a = m2*c  --> b = m1⁻¹*m2*c
+;; Single parent: `a = m1*b` and `a = m2*c` give `b = m1^-1*m2*c`, so `a`'s two edges
+;; become one, pointing at the smaller of b and c.
+;;
+;; Neither `a = c` nor `a = b`: for `a = c` it would delete a symmetry from the group,
+;; and for `a = b` it would delete the self-loop of a class that still holds an e-node,
+;; leaving that node unmatchable -- while transitivity derives the same edge anyway.
 (rule ((RenamesToLeader a m1 b)
        (RenamesToLeader a m2 c)
 
-       (!= a c) ; We don't want this rule to fire for a=b=c, as it would remove symmetries from our group.
-       ;; Nor for b=a: deleting a's self-loop hides a class that still holds an
-       ;; e-node (Case 14), and transitivity already derives the edge this adds.
+       (!= a c)
        (!= a b)
        (= (ordering-max b c) b) ; c <= b
 
@@ -76,7 +97,8 @@
       ((delete (RenamesToLeader a m1 b))
        (RenamesToLeader b (compose (inverse m1) m2) c)) :ruleset slotted)
 
-; single parent for symmetries, this does shrinking.
+;; Shrinking: a narrow idempotent self-loop `m` beside a wider `m1` means the slots
+;; outside `m` are redundant, so the wide one goes.
 (rule ((RenamesToLeader a m1 a)
        (RenamesToLeader a m a)
        (= m (compose m m))
@@ -86,11 +108,8 @@
         (RenamesToLeader a m2 a))
  :ruleset slotted)
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; Deduplicate nodes that are equal up to renaming ;;
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-;; replace (Var v) by [0 -> v] * (Var 0)
+;; Normalise a variable: `(Var v)` becomes `[0 -> v] * (Var 0)`, putting the slot in the
+;; renaming so one value represents every variable.
 (rule ((= e (Var v))
        (!= v 0))
       ((RenamesToLeader e (map-insert (map-empty) 0 v) (Var 0))
@@ -98,45 +117,13 @@
       )
  :ruleset slotted)
 
-;; α-finder: Will find two App2 nodes that are equal up to renaming, and eliminate one in favor of the other.
-
-;; Input: e1 = f(m1*c1, m1'*c2) /\ e2 = f(m2*c1, m2'*c2),
-;; then m = (find-mapping m1 m1' m2 m2') is the smallest renaming, s.t. m*m2 = m1 /\ m*m2' = m1'
-;; so that m*e2 = m*f(m2*c1, m2'*c2) = f(m*m2*c1, m*m2'*c2) = f(m1*c1, m1'*c2) = e1
-;; so in short m*e2 = e1.
-
-; non-destructive symmetry-finder based on the above.
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-; Everything has to have a self-loop ;;
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-; This guarantees that (Var 0) is the lowest ordering-max variable, and it has a reflexive RenamesToLeader entry.
+;; Seeds. `(Var 0)` and `(Null)` are the two values every program starts with, and each
+;; needs its self-loop for a query to reach it. `(Var 0)` is also the smallest variable
+;; under `ordering-max`, so normalisation always has somewhere to point.
 (RenamesToLeader (Var 0) (map-insert (map-empty) 0 0) (Var 0))
 (RenamesToLeader (Null) (map-empty) (Null))
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; Migration of e-nodes ;;
-;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-;; if `e2 = f(m1*c1, m2*c2)` /\ `e2 = m*e1`, then `e1 = m⁻¹*e2 = m⁻¹*f(m1*c1, m2*c2) = f(m⁻¹*m1*c1, m⁻¹*m2*c2)`
-
-;;;;;;;;;;;;;;;;;;;;;;;
-;; Child-Update rule ;;
-;;;;;;;;;;;;;;;;;;;;;;;
-
-;; per-position child rewrites- canonicalize children to use representatives
-;; These replace `c` with the more canonical `m*c'`.
-
-;;;; First child:
-
-;;;; Second child:
-
-;;;;;;;;;;
-;; MISC ;;
-;;;;;;;;;;
-
-; if two things are equal up to some identity renaming, let's merge them.
+;; Two classes equal up to an identity renaming are one class.
 (rule
     (
         (RenamesToLeader a m1_o c)
@@ -152,6 +139,7 @@
         (union a b)
     )
  :ruleset slotted)
+
 
 ;;; Tests ;;;
 
@@ -442,14 +430,12 @@
 ;;; `(RenamesToLeader v sym v)`, so a class that still holds an e-node but has no
 ;;; self-loop is invisible to matching and its node cannot be found.
 ;;;
-;;; Two rules together used to produce exactly that. `$N` uses slots {1,2} while
-;;; its class is just the variable $2, so slot 1 is redundant; migration declines
-;;; to move the node to the leader, because rewriting the child edge {0->1} through
-;;; the leader's frame {0->2} would drop the entry and so assert that the child is
-;;; slotless. Meanwhile single-parent deleted `$N`'s self-loop as soon as `$N`
-;;; acquired the leader, and nothing re-derived it -- the rule that makes one fires
-;;; on a *new* `App2` row, and the row was not new any more. The node was left on a
-;;; class no query could see.
+;;; `$N` uses slots {1,2} while its class is just the variable $2, so slot 1 is
+;;; redundant and the node stays on a value that is not the class's smallest. What
+;;; used to lose it was single-parent: it deleted `$N`'s self-loop as soon as `$N`
+;;; acquired the leader, and nothing re-derived one -- the rule that makes a
+;;; self-loop fires on a *new* `App2` row, and the row was not new any more. Its
+;;; `(!= a b)` guard is what keeps the loop, and this checks that it does.
 (push)
 
 ; B = h($2, $1), slots {1,2}

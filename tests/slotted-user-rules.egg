@@ -30,6 +30,19 @@
 ;;; cases -- initial / chain / join -- and taking one constraint per case is
 ;;; under-constrained; M3b shows the two spellings disagreeing.
 ;;;
+;;; A variable stands for a CLASS, but `mp` is read off a matched NODE, and a node may carry
+;;; slots its class does not.  So every variable's renaming is cut down by its class's slot
+;;; set -- `(compose m (ClassSlots X))` -- before it is used or written into a built node.
+;;; M6b is that step.  Restricting by a symmetry instead is not equivalent: a symmetry is
+;;; whichever self-loop the join happens to bind, and one of those can be wider than the
+;;; class, in which case it narrows nothing.
+;;;
+;;; The machinery's invariant rules are saturated between user-rule steps, so a rule here
+;;; only ever matches nodes that are already canonical:
+;;;
+;;;     (run-schedule (saturate (run slotted))
+;;;                   (repeat N (seq (run) (saturate (run slotted)))))
+;;;
 ;;; Conventions:
 ;;;   (compose a b)           = a . b, b first: (compose a b)[x] = a[b[x]]
 ;;;   (compose-total a b)     = the same, but fails rather than dropping a key
@@ -37,6 +50,7 @@
 ;;;   (App2 f m1 c1 m2 c2)     = f(m1*c1, m2*c2),  mi : slots(ci) -> slots(node)
 ;;;   (RenamesToLeader a m b) = a = m*b,          m  : slots(b)  -> slots(a)
 ;;;   (RenamesToLeader c m c) = m is in G(c)
+;;;   (ClassSlots c)          = identity on the slots c depends on; only ever narrows
 ;;;
 ;;; Each section is its own (push)/(pop).  Match tests assert through a witness
 ;;; relation carrying the computed renamings, which is what is under test; the
@@ -49,6 +63,7 @@
 ;;;   M4 join on two shared variables   C3-join
 ;;;   M5 chain then join                C10-chain-then-join
 ;;;   M6 one shared variable, minting   M6-one-shared-var-two-ops, U1
+;;;   M6b a variable wider than its class  C15-action-child-narrowed-to-its-class
 ;;;   M8 action over renamed ids        C11, C14, E1-E3
 ;;;   M9 the accumulating avoid-set     C7-redundant-distinct-vars
 ;;;   M10 nested right-hand side       NR1-nested-build, NR2, NR3-assoc
@@ -605,10 +620,11 @@
 ;;; symmetry is whichever self-loop the join happens to bind, and one of those can
 ;;; itself be wider than the class, in which case it narrows nothing.
 ;;;
-;;; Note this does NOT repair itself.  The machinery's child-update rule deletes a
-;;; row whose child has since narrowed, but the action rebuilds it on the next
-;;; iteration, so the violation is a stable oscillation rather than a transient.
-;;; It survives 200 rounds.
+;;; Under the phased schedule the narrowing is belt and braces here: the invariants are
+;;; saturated before a user rule can match, so the renamings an action reads off a node
+;;; already have the child's slots for their domain and (a) below builds nothing malformed.
+;;; `def4-edges.py` is what checks that precondition.  It was load-bearing when the
+;;; machinery ran in one ruleset with the user's rules.
 ;;;
 ;;; `C15-action-child-narrowed-to-its-class` in `xdiff.py` is this e-graph, and
 ;;; `XDIFF_BUGS=wide-kids` is the version below without the narrowing.
