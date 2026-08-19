@@ -1169,6 +1169,42 @@ missing one symmetry, and one edge moved onto another slot — must be *rejected
 second of those is rejected by exhausting the search, which is what makes a negative
 answer worth anything.
 
+### What "the same slotted class" means, settled by counting
+
+A slotted class spans several `U` values, and which values are one class was not pinned down
+-- two attempts at merging them for the isomorphism check failed in *opposite* directions,
+one over-merging and one under-merging. Counting settles it, without needing to merge
+anything:
+
+    slotted classes  =  ClassSlots rows  -  values with a strictly smaller peer
+
+Compared against the reference's class count, with "peer" read two ways:
+
+| | reference | bijective links only | any link |
+| --- | --- | --- | --- |
+| `C13` | 9 | 10 | **9** |
+| `NR1` | 4 | 4 | **4** |
+| `fuzz42` / `fuzz79` / `fuzz140` | 9 / 7 / 9 | 10 / 8 / 10 | **9 / 7 / 9** |
+
+So it is **any** `RenamesToLeader` link, partial ones included, and the count has to mark the
+larger value whichever way round the row names the pair -- a link is not always stored both
+ways, and marking only one side reported a class with no non-canonical members when it plainly
+had a peer.
+
+That reading is right because a
+partial `m` in `a = m*b` is the redundancy relation, saying b's class does not depend on the
+slots `m` drops, and the reference models that as one class with the smaller slot set rather
+than as two classes. `class-count.py` is the check, at **44/44 curated and 250/250 generated**. `fuzz130` agrees
+too, once both directions are marked: its apparent extra class was this check's own hole, not
+the encoding's.
+
+Two things follow. `NR1` counts correctly under either reading, so the over-merge my second
+merge attempt showed there was its *frame translation* and not its criterion -- which is the
+remaining work for `fuzz130`. And no case in either corpus has the encoding with *fewer*
+classes than the reference, which is the direction that would mean merging two classes the
+reference keeps apart -- invisible to the probe partition, since that only compares the terms
+it was given.
+
 ### Def. 4 is checked exactly, in one comparison
 
 The two halves used to be checked separately and partially: `check 6` looks for an edge
