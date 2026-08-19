@@ -67,7 +67,19 @@ def encoding_counts(case):
 
 
 agree = differ = skipped = 0
-for c in X.curated():
+# The curated corpus is not where a surplus alpha-variant row would first show up, so this
+# takes `fuzz N` as well:
+#     python3 slotted-experiments/xdiff/nodecounts.py            curated
+#     python3 slotted-experiments/xdiff/nodecounts.py fuzz 250   generated
+if len(sys.argv) > 1 and sys.argv[1] == "fuzz":
+    import random
+    _rng = random.Random(0)
+    _cases = [X.rand_case(_rng, i)
+              for i in range(int(sys.argv[2]) if len(sys.argv) > 2 else 250)]
+else:
+    _cases = X.curated()
+
+for c in _cases:
     ref, why = reference_counts(c)
     if ref is None:
         skipped += 1

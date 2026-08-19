@@ -411,8 +411,8 @@ beside it, each over the whole corpus:
 ```text
 isomorphism.py     the two e-graphs are isomorphic -- classes, slots, symmetry
                    groups and nodes -- by constructing and checking a witness
-narrow-edges.py    no edge's domain is narrower than its child's slot set, the
-                   direction check 6 does not test
+def4-edges.py      every edge's domain is *exactly* its child's slot set -- both
+                   directions of Def. 4 in one comparison
 nodecounts.py      e-nodes per operator, against the reference
 fixpoint.py        each case reaches a fixpoint of the *rules*, not just of the
                    database, which `(run N)` cannot distinguish
@@ -1169,13 +1169,28 @@ missing one symmetry, and one edge moved onto another slot — must be *rejected
 second of those is rejected by exhausting the search, which is what makes a negative
 answer worth anything.
 
-### The narrow direction of Def. 4 is now checked
+### Def. 4 is checked exactly, in one comparison
 
-`check 6` looks for an edge *wider* than its child's slot set. The narrow direction — an
-edge whose domain is *smaller* — was recorded as "not checkable this way" and left to
-`compose-total`. It is checkable against `ClassSlots`, and
-`slotted-experiments/xdiff/narrow-edges.py` does it: **0 narrow edges over 44 curated and
-250 generated cases.**
+The two halves used to be checked separately and partially: `check 6` looks for an edge
+wider than an idempotent self-loop on its child, and the narrow half was recorded as "not
+checkable this way" and left to `compose-total`. Both are one comparison against
+`ClassSlots`, which is where a class's slots are held —
+
+```lisp
+(!= (map-domain m) (ClassSlots c))
+```
+
+— since `map-domain` and `ClassSlots` are both identity maps, so comparing them is set
+equality. `slotted-experiments/xdiff/def4-edges.py` reports **0 over 44 curated and 250
+generated cases**.
+
+**This is what makes `wide-kids` benign rather than luckily undetected.** An action reads
+renamings off a matched node, and narrowing them by `ClassSlots` is a no-op exactly when
+those renamings already have the child's slots for their domain — which is what this checks,
+and what the phased schedule guarantees by saturating the invariants before a user rule can
+match. So the mutation is undetectable *because* of a property now checked on every case,
+and if this check ever fires the mutation becomes live again. That is the honest form of
+"this test no longer discriminates": a reason, mechanically monitored, rather than a gap.
 
 That probe earned its keep immediately, by refuting a claim rather than confirming one. The
 one case the isomorphism check cannot decide, `fuzz130`, appeared under an attempted fix to
@@ -1236,10 +1251,16 @@ a new row per spelling where the reference keeps one entry per *shape*, so alpha
 variants accumulate faster than the alpha-finder retires them. The reference saturates
 at six.
 
-That is the same root cause as the minting fan-out: a row is keyed by its renamings,
-and the reference's node key is a shape. It is not a local rule fix -- it wants either
-an alpha-invariant key for rows, or an alpha-finder that keeps pace with what the
-actions build.
+That is the same root cause as the minting fan-out: a row is keyed by its renamings, and
+the reference's node key is a shape.
+
+**The alpha-finder does keep pace, and that is measured.** An alpha-invariant key for rows
+would remove the difference at the source, but it is not needed to match the reference: the
+encoding ends with the same number of e-nodes per operator on **250 of 250** generated cases
+and 44 of 44 curated, and the isomorphism check -- which compares node sets and needs equal
+multiplicities -- finds **0 differences** on all 249 comparable generated cases. So no
+surplus alpha-variant row survives to the fixpoint. What the keying difference costs is
+transient rows during the run, not a different answer.
 
 ### An upstream crash, found while modelling the class slot set
 
