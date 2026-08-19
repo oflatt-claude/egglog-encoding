@@ -2,6 +2,8 @@
 
 ## [Unreleased] - ReleaseDate
 
+- Add `eclass_enodes` on `Read` and `EGraph`, and a `name` field on `Enode`: the e-nodes of an e-class, across every table that reads as one, with the constructor each row came from. `constructor_enodes` answers the transpose -- the e-nodes of one named table -- so walking a term previously meant enumerating tables and filtering, which requires knowing the language up front. A row whose eclass column has since been merged is matched under the id it stores, not its canonical one. Mirrors egglog PR #1003.
+
 - Add `find-mapping-total`, a `Map i64 i64` primitive: `find-mapping` extended to be total on a domain, minting a fresh value for every domain key the constraints leave unnamed. Arguments come flat as `[avoid, domain, first…, second…]`; each minted value is the smallest not already used by `avoid` or by the solved part, so the result stays injective and cannot collide with a value already in play, and repeated application does not drift upwards. Registered only when key and value are both `i64`, since minting needs the space ordered. `find-mapping` is unchanged, and returns the minimal (possibly partial) solution as before.
 
 - Add `map-intersect`, the entries two maps agree on. For identity maps -- which is how the slotted encoding represents a slot set -- that is the intersection of their domains, so it works as a `:merge` for a quantity that may only ever shrink.
