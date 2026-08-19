@@ -920,15 +920,14 @@ follower handling here was dropping 16 e-classes, and the count is what showed i
 
 ```text
 curated      44/44  isomorphic   217 e-classes,  282 e-nodes,  226 symmetries
-generated   249/250 isomorphic  1925 e-classes, 2549 e-nodes, 1925 symmetries
-                    0 differ, 1 not comparable
+generated   250/250 isomorphic  1931 e-classes, 2557 e-nodes, 1931 symmetries
+                    0 differ, 0 not comparable
 ```
 
-Nothing differs. The one is a limit of reading the encoding through printed output, listed
-below: a slotted class whose nodes sit on two values, which is not merged here. Every case
-reaches a fixpoint, so the database-fixpoint fallback below is unused — it was needed for
-four cases before the two orientation fixes and the phased schedule, which together took
-this from 244/250 with 6 not comparable.
+Nothing differs and nothing is left undecided. Getting there took the two orientation fixes,
+the phased schedule, and reading the encoding by class *identity* rather than by the term a
+class renders as; this was 244/250 with 6 not comparable before them. Every case reaches a
+fixpoint, so the database-fixpoint fallback below is unused.
 
 Three things had to be handled rather than assumed.
 
@@ -1246,12 +1245,11 @@ m = {0→0}   an edge whose image is the node-local slot 0
 compose(u, m) = {}          the slot is gone
 ```
 
-**The merge that needed it is not in the tree, and the reason is now known.** Making one
-class out of the several `U` values of a slotted class is blocked by the printed name, not by
-the criterion: membership is any `RenamesToLeader` link (settled above, and checked
-independently by `class-count.py` at 44/44 and 250/250), but the merge keys values by the term
-they print as, and several distinct classes print as `Unextractable`. They then collapse into
-one value, their components join, and the result has *fewer* classes than the reference:
+**The merge is in the tree now, and the printed name was what blocked it.** Membership is any
+`RenamesToLeader` link (settled above, and checked independently by `class-count.py`), but
+while the merge keyed values by the term they printed as, several distinct classes printed as
+`Unextractable`, collapsed into one value, joined components, and left *fewer* classes than the
+reference:
 
 | | classes printing `Unextractable` | merged result |
 | --- | --- | --- |
@@ -1260,33 +1258,47 @@ one value, their components join, and the result has *fewer* classes than the re
 | `NR1` | 2 | 3 where the reference has 4 |
 | `C13` | 1 | correct |
 
-Only the cases with more than one such class come out wrong, which is the whole story. The
-version in the tree works by *excluding* those values -- they hold no rows, so dropping them
-costs nothing -- where a merge has to place them and cannot. So this waits on a way to name a
-class that does not go through extraction; `class-count.py` shows the shape of the answer, by
-counting inside egglog where no names are needed.
+Only the cases with more than one such class came out wrong, which was the whole story --
+`C13`, with one, was correct. Reading the serialized e-graph instead of the printed tables gives
+each class an identity and the merge then works; see "Reading the encoding by identity, not by
+rendering" above.
 
-Three limits worth stating.
+Two limits worth stating.
 
 * A class with more than six slots is reported rather than enumerated, since the group
   is recovered by trying every permutation.
-* A value with no rows of its own prints as `Unextractable`, which is not a unique
-  name — two empty followers share it. One that nothing references is dropped, since it
-  contributes nothing; one that something references and that is offered two different
-  representatives is reported, rather than resolved by guessing.
 * The identity is added to every group before comparing, because a slotless class's
   identity is the empty permutation and the reference prints it as an empty field. So a
   *missing* identity self-loop is not what this check detects — that is a reachability
   question, and `stranded.py` is what asks it.
-* A slotted class whose nodes sit on two different values is reported rather than merged.
-  Merging would mean translating one frame into the other and deduplicating what then
-  coincides, and modelling it as two classes instead would invent a difference that is not
-  there. This is *not* the same condition as a follower holding a node: the variable class
-  always holds a node, so it also fires when the variable class shares a slotted class with
-  a row-holding one, whichever of the two is the leader.
 
-Each of those is counted as *not comparable*, separately from *differ*, so a limit of the
-tooling is never presented as a finding about the encoding.
+Either is counted as *not comparable*, separately from *differ*, so a limit of the tooling is
+never presented as a finding about the encoding. Neither occurs on the corpus.
+
+### Reading the encoding by identity, not by rendering
+
+The encoding side used to be read from `print-function`, which renders a `U` value by
+*extracting* a term for it — and a value whose rows have been deleted, or whose child's have,
+has no term and prints as the single word `Unextractable`. Several distinct classes then share
+that one name. That cost the comparison two things: the several `U` values of one slotted class
+could not be merged into one class, so a case where they both held nodes was undecidable; and
+three attempts at merging them all failed, each collapsing exactly the classes whose names had
+collided.
+
+`--to-json` names a class `{sort}-{canonical value}`, which is an *identity* rather than a
+rendering, so the problem disappears. Everything needed is in that serialization: each row is a
+node with an `op`, the `eclass` it belongs to, and `children` naming other nodes; renamings come
+back as `map-of` nodes over `i64` nodes, so their contents are readable too.
+
+With identities in hand the merge is straightforward — components of any `RenamesToLeader`
+link, each member's contents carried into the representative's frame, and rows that then
+coincide treated as one node, as in the reference, whose class keys its nodes by shape.
+
+| | before | after |
+| --- | --- | --- |
+| generated isomorphic | 249/250, 1 not comparable | **250/250, 0 not comparable** |
+| curated | 44/44 | 44/44 |
+| mutation sensitivity | root-only 12, union-id 4, slot-late 2 | unchanged |
 
 ### The other divergence is growth, not a missing merge
 

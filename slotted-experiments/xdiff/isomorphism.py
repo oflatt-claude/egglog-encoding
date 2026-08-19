@@ -27,6 +27,7 @@ away:
 Run: `python3 slotted-experiments/xdiff/isomorphism.py [name-prefix|fuzz N [seed]]`
 """
 import itertools
+import json
 import random
 import re
 import subprocess
@@ -165,121 +166,175 @@ def parse_reference(out):
     return g
 
 
-def parse_encoding(out, tables):
-    """Read the printed tables into a Graph, resolving followers onto leaders."""
-    slots_of, loops, rows = {}, [], []
-    leaf = {}
-    for name, block in tables.items():
-        for line in block:
-            lhs, _, rhs = line.partition(" -> ")
-            t, _ = parse_sexpr(lhs.strip())
-            if name in ("IsVarClass", "IsNullClass"):
-                leaf["var" if name == "IsVarClass" else "null"] = unparse(t[1])
-            elif name == "ClassSlots":
-                slots_of[unparse(t[1])] = tuple(sorted(as_map(parse_sexpr(rhs)[0])))
-            elif name == "RenamesToLeader":
-                loops.append((unparse(t[1]), as_map(t[2]), unparse(t[3])))
-            else:
-                rows.append((name, t, unparse(parse_sexpr(rhs)[0])))
+def read_json_graph(doc):
+    """The encoding's tables, out of egglog's serialized e-graph.
 
-    # `Unextractable` is what a value with no extractable term prints as, and it is
-    # contagious: a class holding a row whose *child* is unextractable cannot be printed
-    # either. Several distinct classes then share that one name, and nothing in the
-    # printed output tells them apart -- so the graph cannot be rebuilt from it. That is a
-    # limit of reading the encoding through extraction, not a difference from the
-    # reference, and it is reported as its own outcome.
-    unextractable = sum(1 for line in tables.get("ClassSlots", [])
-                        if line.split(" -> ")[0].strip() == "(ClassSlots Unextractable)")
+    Every row is a node with an `op`, the `eclass` it belongs to, and `children` naming other
+    nodes. A class id is `{sort}-{canonical value}`, so it identifies a class instead of
+    describing one -- which is the whole reason for reading the JSON rather than the printed
+    tables. Renamings come back as `map-of` nodes over `i64` nodes, so their contents are
+    readable too.
+    """
+    nodes = doc.get("nodes", {})
 
-    # A slotted class spans several U values, and only one of them holds its rows now
-    # that followers are empty -- that one is the class. An empty follower needs a
-    # representative only if some edge points *at* it; one that nothing references
-    # contributes nothing and is dropped, which matters because several of them print
-    # as the same `Unextractable` and so cannot be told apart.
-    holds = {cid for _, _, cid in rows}
-    holds |= set(leaf.values())
-    referenced = set()
-    for _, t, _ in rows:
-        for i in range(1, len(t) - 1):
-            # a child column is a renaming followed by the child itself
-            if not isinstance(t[i], str) and t[i] and t[i][0] in ("map-of", "map-empty"):
-                referenced.add(unparse(t[i + 1]))
-    rep, ren = {}, {}
-    for v in holds:
-        rep[v], ren[v] = v, {s: s for s in slots_of.get(v, ())}
-    # Collected rather than assigned, because a value printing as `Unextractable` --
-    # which is what a value with no rows of its own prints as -- is not a unique name:
-    # two distinct empty followers share it. Redirecting on the last one seen would be a
-    # silent guess, so a value offered two different representatives is reported instead.
-    proposals = {}
+    def cls(node_id):
+        return nodes[node_id]["eclass"]
+
+    def is_renaming(node_id):
+        return cls(node_id).startswith("Renaming-")
+
+    # a renaming's contents, from the `map-of` node in its class
+    maps = {}
+    for n in nodes.values():
+        if n.get("op") == "map-of" and n["eclass"].startswith("Renaming-"):
+            xs = [int(nodes[c]["op"]) for c in n.get("children", [])]
+            maps[n["eclass"]] = dict(zip(xs[0::2], xs[1::2]))
+
+    def as_renaming(node_id):
+        return maps.get(cls(node_id), {})
+
+    slots_of, loops, rows, leaf = {}, [], [], {}
+    for n in nodes.values():
+        op, kids = n.get("op"), n.get("children", [])
+        if op == "ClassSlots" and kids:
+            slots_of[cls(kids[0])] = tuple(sorted(maps.get(n["eclass"], {})))
+        elif op == "RenamesToLeader" and len(kids) == 3:
+            loops.append((cls(kids[0]), as_renaming(kids[1]), cls(kids[2])))
+        elif op == "Var":
+            leaf["var"] = n["eclass"]
+        elif op == "Null":
+            leaf["null"] = n["eclass"]
+        elif op in ("App2", "App3", "App4", "Num", "Sym", "Scale"):
+            payloads, elems, i = [], [], 0
+            while i < len(kids):
+                if is_renaming(kids[i]) and i + 1 < len(kids):
+                    elems.append(("child", cls(kids[i + 1]), as_renaming(kids[i])))
+                    i += 2
+                else:
+                    payloads.append(nodes[kids[i]]["op"].strip('"'))
+                    i += 1
+            name = op if not payloads else "/".join([payloads[0]] + payloads[1:])
+            rows.append((name, elems, n["eclass"]))
+    return slots_of, loops, rows, leaf
+
+
+def compose_maps(a, b):
+    """`a . b`: apply `b` then `a`, dropping keys `b` sends outside `a`'s domain."""
+    return {k: a[v] for k, v in b.items() if v in a}
+
+
+def rename_image(u, m):
+    """`m` with its image carried through `u`, leaving what `u` does not cover alone.
+
+    Composing with `u` would *truncate*: `u` covers a class's slots, and a node may carry
+    slots its class does not -- Def. 4 permits exactly that -- so the redundant ones are not in
+    `u` and a plain compose drops them. They are node-local and quantified per node when nodes
+    are matched, so they only need a name that cannot collide with a class slot, an int here.
+    """
+    return {k: u[v] if v in u else f"~{v}" for k, v in m.items()}
+
+
+def invert_map(m):
+    inv = {v: k for k, v in m.items()}
+    return inv if len(inv) == len(m) else None
+
+
+def build_encoding_graph(doc):
+    """One class per *slotted* class, merging the `U` values that make one up.
+
+    Membership is a connected component of *any* `RenamesToLeader` link, partial ones
+    included: a partial `m` in `a = m*b` is the redundancy relation, saying b's class does not
+    depend on the slots `m` drops, and the reference models that as one class with the smaller
+    slot set. `class-count.py` is the independent check on that reading.
+    """
+    slots_of, loops, rows, leaf = read_json_graph(doc)
+    values = set(slots_of) | {c for _, _, c in rows} | {l for l in leaf.values()}
     for a, m, b in loops:
-        if a == b:
-            continue
-        # `a = m*b`: m takes b's slots to a's
-        if a not in holds and b in holds:
-            proposals.setdefault(a, {})[b] = m
-        elif b not in holds and a in holds:
-            inv = {v: k for k, v in m.items()}
-            if len(inv) == len(m):
-                proposals.setdefault(b, {})[a] = inv
-    # only a referenced follower has to be placed, and then unambiguously
-    need = referenced - holds
-    ambiguous = [v for v in need if len(proposals.get(v, {})) != 1]
-    for v in need - set(ambiguous):
-        (rep[v], ren[v]), = proposals[v].items()
-    # Two values of one slotted class both holding rows. Modelling them as two classes
-    # would be a difference invented here rather than a real one, and merging them means
-    # translating one frame into the other and deduplicating what then coincides -- which
-    # this does not do. Reported, not guessed at. Note this is *not* the same as a follower
-    # holding a node: the var class always holds one, so it fires whenever the var class
-    # shares a slotted class with a row-holding one, whichever of them is the leader.
-    split = [(a, b) for a, m, b in loops
-             if a != b and a in holds and b in holds and a in slots_of]
+        values |= {a, b}
+
+    parent = {v: v for v in values}
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    linked = [(a, m, b) for a, m, b in loops if a != b]
+    for a, m, b in linked:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    members = {}
+    for v in values:
+        members.setdefault(find(v), []).append(v)
+
+    rep_of, frame = {}, {}
+    for root, group in members.items():
+        # the member with the most slots is the one whose frame can express the others
+        rep = max(sorted(group), key=lambda v: len(slots_of.get(v, ())))
+        for v in group:
+            rep_of[v] = rep
+        frame[rep] = {s: s for s in slots_of.get(rep, ())}
+        edges = [(a, m, b) for a, m, b in linked if find(a) == root]
+        for _ in range(len(group) + 1):
+            for a, m, b in edges:
+                if b in frame and a not in frame:
+                    frame[a] = compose_maps(m, frame[b])
+                elif a in frame and b not in frame:
+                    inv = invert_map(m)
+                    if inv is not None:
+                        frame[b] = compose_maps(inv, frame[a])
+        # Where two paths disagree they differ by a symmetry of the class, and either is a
+        # valid choice of frame; the group comparison accounts for it.
+
+    unplaced = sorted(v for v in values if v not in frame)
+
+    def up(v):
+        return invert_map(frame[v]) or {}
 
     g = Graph()
-    for v in sorted(holds):
-        g.add_class(v, slots_of.get(v, ()))
-    # the group: a self-loop whose renaming permutes the class's slots
-    for a, m, b in loops:
-        if a == b and rep.get(a, a) == a and a in g.slots:
-            dom, im = set(m), set(m.values())
-            if dom == im == set(g.slots[a]):
-                g.group[a].add(frozenset(m.items()))
-    # `Var`/`Null` are constructors rather than rows, so their nodes are added here --
-    # into whichever class each one actually landed in, which is what the markers say
-    if "var" in leaf and leaf["var"] in g.slots:
-        g.nodes[leaf["var"]].append(("var", (("slot", 0),)))
-    if "null" in leaf and leaf["null"] in g.slots:
-        g.nodes[leaf["null"]].append(("null", ()))
+    for rep in set(rep_of.values()):
+        g.add_class(rep, slots_of.get(rep, ()))
 
-    for name, t, cid in rows:
-        cid = rep.get(cid, cid)
-        if cid not in g.slots:
+    for a, m, b in loops:
+        if a != b or a in unplaced:
             continue
-        op, elems, i = None, [], 1
-        while i < len(t):
-            a = t[i]
-            if isinstance(a, str) and a.startswith('"'):
-                lit = a.strip('"')
-                op = lit if op is None else f"{op}/{lit}"
-                i += 1
-            elif isinstance(a, str):
-                op = f"{name}/{a}" if op is None else f"{op}/{a}"
-                i += 1
-            else:
-                m, child = as_map(a), unparse(t[i + 1])
-                r = rep.get(child, child)
-                if r != child:
-                    # express the edge in the representative's frame: e' = e . ren
-                    m = {k: m[v] for k, v in ren[child].items() if v in m}
-                    child = r
-                elems.append(("child", child, m))
-                i += 2
-        if op is None:
-            op = name
-        g.nodes[cid].append((op, tuple(elems)))
+        rep = rep_of[a]
+        sym = compose_maps(up(a), compose_maps(m, frame[a]))
+        if set(sym) == set(sym.values()) == set(g.slots[rep]):
+            g.group[rep].add(frozenset(sym.items()))
+
+    for kind, op in (("var", "var"), ("null", "null")):
+        v = leaf.get(kind)
+        if v is None or v in unplaced:
+            continue
+        u = up(v)
+        elems = ((("slot", u[0] if 0 in u else "~0"),) if kind == "var" else ())
+        g.nodes[rep_of[v]].append((op, elems))
+
+    for name, elems, cid in rows:
+        if cid in unplaced or any(c in unplaced for _, c, _ in elems):
+            continue
+        u = up(cid)
+        moved = tuple(("child", rep_of[c], tuple(sorted(
+            rename_image(u, compose_maps(m, frame[c])).items())))
+            for _, c, m in elems)
+        g.nodes[rep_of[cid]].append((name, moved))
+
+    # rows that coincide after translating are one node, as in the reference, whose class
+    # keys its nodes by shape
+    for cid in list(g.nodes):
+        seen, uniq = set(), []
+        for n in g.nodes[cid]:
+            if repr(n) not in seen:
+                seen.add(repr(n))
+                uniq.append(n)
+        g.nodes[cid] = uniq
+
     g.close_groups()
-    return g, ambiguous, leaf, unextractable, split
+    return g, unplaced
 
 
 # ------------------------------------------------------- the encoding's own ops
@@ -563,47 +618,41 @@ def canonical(g):
 
 
 def _dump(case, mult, timeout):
-    dump = MARKERS + "\n".join(f"(print-function {t} 100000)" for t in TABLES)
+    """The encoding's graph, from egglog's serialized e-graph.
+
+    `--to-json` writes `<input>.json` and names a class `{sort}-{canonical value}`, an
+    identity rather than a rendering, so a class whose rows have been deleted is still
+    distinguishable -- where `print-function` renders every such class as the one word
+    `Unextractable` and the graph cannot be rebuilt.
+    """
     prog = X.egg_program(case, mult=mult)
-    prog = prog.replace("(print-function SameClass 100000)", dump)
+    prog = prog.replace("(print-function SameClass 100000)", "")
     p = X.ROOT / f"xdiff-tmp-iso-{abs(hash(case.name)) % 99999}-{mult}.egg"
+    j = p.with_suffix(".json")
     p.write_text(prog)
     try:
-        r = subprocess.run([str(X.EGGLOG), str(p)], capture_output=True,
+        r = subprocess.run([str(X.EGGLOG), "--to-json", str(p)], capture_output=True,
                            text=True, cwd=X.ROOT, timeout=timeout)
     except subprocess.TimeoutExpired:
         return None, "timeout"
     finally:
         p.unlink(missing_ok=True)
-    if r.returncode != 0:
-        err = [l for l in r.stderr.splitlines() if "ERROR" in l]
-        return None, f"encoding error: {err[-1] if err else r.stderr[:120]}"
-    # the printed blocks come back in the order the prints were issued
-    blocks, cur, depth, order = {}, None, 0, list(TABLES)
-    for line in r.stdout.splitlines():
-        t = line.strip()
-        if t == "(":
-            cur = order.pop(0) if order else None
-            blocks[cur] = []
-            depth = 1
-            continue
-        if t == ")" and depth:
-            depth = 0
-            continue
-        if cur and depth and t:
-            blocks[cur].append(t)
-    g, ambiguous, leaf, unextractable, split = parse_encoding(r.stdout, blocks)
-    # The name collision is checked first because it *manufactures* the other symptom:
-    # several classes sharing one name look like one class linked to itself, which is
-    # indistinguishable here from a class whose nodes really do sit on two values.
-    if unextractable > 1 and (split or ambiguous):
-        return None, ("limit", f"{unextractable} classes share the name "
-                               "`Unextractable`, so they cannot be told apart")
-    if split:
-        return None, ("limit", "one slotted class spans two values that both hold rows"
-                               " -- merging their frames is not done here")
-    if ambiguous:
-        return None, f"could not place {len(ambiguous)} follower value(s): {ambiguous[:2]}"
+    try:
+        if r.returncode != 0:
+            err = [l for l in r.stderr.splitlines() if "ERROR" in l]
+            return None, f"encoding error: {err[-1] if err else r.stderr[:120]}"
+        if not j.exists():
+            return None, "encoding produced no serialized e-graph"
+        g, unplaced = build_encoding_graph(json.loads(j.read_text()))
+    finally:
+        j.unlink(missing_ok=True)
+    if unplaced:
+        return None, ("limit", f"{len(unplaced)} value(s) could not be placed in a frame: "
+                               f"{unplaced[:2]}")
+    leaf = {"var": None}
+    for cid in g.ids():
+        if any(n[0] == "var" for n in g.nodes[cid]):
+            leaf["var"] = cid
     g, unfaithful = to_reference_shape(g, leaf.get("var"))
     if unfaithful:
         return None, f"binder position is not the variable class: {unfaithful[:2]}"

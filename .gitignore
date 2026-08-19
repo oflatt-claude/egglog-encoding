@@ -13,6 +13,7 @@ __pycache__/
 *.py[cod]
 slotted-experiments/output.egg
 xdiff-tmp-*.egg
+xdiff-tmp-*.json
 xdiff-run.log
 xdiff-show-*.egg
 xdiff-big.log
