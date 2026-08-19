@@ -412,6 +412,8 @@ beside it, each over the whole corpus:
 ```text
 isomorphism.py     the two e-graphs are isomorphic -- classes, slots, symmetry
                    groups and nodes -- by constructing and checking a witness
+mutations.py       each past bug, put back, still breaks the corpus by the amount
+                   recorded for it
 def4-edges.py      every edge's domain is *exactly* its child's slot set -- both
                    directions of Def. 4 in one comparison
 nodecounts.py      e-nodes per operator, against the reference
@@ -1456,11 +1458,24 @@ notice:
 XDIFF_BUGS=root-only  ./xdiff.py     an atom's renaming from its root alone
 XDIFF_BUGS=slot-late  ./xdiff.py     a slot literal checked after the renaming
 XDIFF_BUGS=unordered  ./xdiff.py     atoms compiled in the order written
-XDIFF_BUGS=binder-1st ./xdiff.py     the first atom may be a binder
 XDIFF_BUGS=union-id   ./xdiff.py     the action unions classes, not invocations
-XDIFF_BUGS=wide-kids  ./xdiff.py     only the action's root narrowed to its class
-                                     (benign since the schedule was phased)
 ```
+
+**Coverage is a property, so `mutations.py` asserts it** rather than leaving it to be
+inspected by hand. Each mutation must still break the corpus by a recorded amount — fewer
+means the corpus has stopped testing something, more means a case newly disagrees — and the
+script exits non-zero either way.
+
+A mutation earns its place by failing there. Two were removed once they stopped
+discriminating, rather than kept as decoration:
+
+* `wide-kids`, which left only the action's root narrowed to its class's slots. The property
+  it stood for is checked directly by `def4-edges.py`, and that check is what makes the
+  mutation benign — so the check is the thing to keep.
+* `binder-1st`, which let a binder fix the pattern's slot space. That one was mis-framed as
+  empirical: `slots(pattern)` is the pattern's *free* slots and a bound slot is not free, so
+  the restriction follows from what the terms mean. Nothing observes it because there is
+  nothing to observe, not because coverage is missing.
 
 Where each is caught:
 
@@ -1470,8 +1485,7 @@ Where each is caught:
 | `unordered` | C12, C13 | disagrees with the reference |
 | `slot-late` | B3 | disagrees with the reference |
 | `union-id` | C14 | disagrees with the reference |
-| `wide-kids` | — | nothing: benign since the schedule was phased |
-| `binder-1st` | C13 | order-independence check only |
+
 
 `wide-kids` **no longer discriminates anywhere** — not the partition, not the node counts,
 not the Def. 4 invariant, not the isomorphism check. Saturating the invariants between user

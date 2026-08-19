@@ -48,11 +48,13 @@ RUN_TIMEOUT = 25
 #   XDIFF_BUGS=root-only   an atom's renaming solved from its root alone
 #   XDIFF_BUGS=slot-late   a slot literal checked after the renaming, not with it
 #   XDIFF_BUGS=unordered   atoms compiled in the order written
-#   XDIFF_BUGS=binder-1st  the first atom is allowed to be a binder
 #   XDIFF_BUGS=union-id    the action unions classes instead of invocations
-#   XDIFF_BUGS=wide-kids   only the root is narrowed to its class's slots, not the
-#                          other variables, so a built node can name a slot its child
-#                          does not have
+#
+# `mutations.py` asserts that each of these still breaks the corpus by a recorded amount, so
+# a mutation that stops discriminating is a failure rather than a quiet gap. Two were removed
+# once they stopped: `wide-kids` (only the root narrowed to its class's slots), whose property
+# `def4-edges.py` checks directly, and `binder-1st` (a binder allowed to fix the pattern's
+# slot space), which violates a definition rather than an observable.
 BUGS = {b for b in os.environ.get("XDIFF_BUGS", "").split(",") if b}
 
 # How often a generated subterm is a binder. Raise it to search binder-heavy
@@ -278,11 +280,9 @@ def check_invariants(case):
     relation keeps an observation after the row that caused it is deleted.
 
     One extra user step runs first, *without* the machinery saturation that normally
-    follows it. Saturating the invariant rules repairs a malformed edge, so observing
-    after that would report a clean state whatever the action wrote -- which is exactly
-    what happened when the schedule became phased, and it made `wide-kids` undetectable.
-    The contract being checked is the stronger one: an action must not write an edge that
-    breaks Def. 4, even transiently.
+    follows it. Saturating the invariant rules repairs a malformed edge, so observing after
+    that would report a clean state whatever the action wrote. The contract being checked is
+    the stronger one: an action must not write an edge that breaks Def. 4, even transiently.
     """
     prog = egg_program(case).replace(
         "(print-function SameClass 100000)",
@@ -335,26 +335,17 @@ def order_atoms(atoms):
     fails, losing a match the reference finds. `multi_ematch` does not have this
     problem: it keeps such a slot flexible and lets `unify` merge it later.
 
-    The first atom fixes slots(pattern), so it must not be a binder: a binder's node carries
-    the *bound* slot, and putting one first puts a bound slot into the pattern's slot space,
-    which is a scope error on its face. Otherwise the caller's preference is kept, since
-    callers vary the first atom deliberately.
-
-    The restriction is **unwitnessed**, and kept because it is cheap rather than because
-    anything fails without it: `XDIFF_BUGS=binder-1st` changes nothing on 44 curated or 250
-    generated cases -- not the partition, not order dependence, not the isomorphism -- nor on
-    200 binder-dense generated cases, nor on five shapes built to make a leaked bound slot
-    visible. What would most plausibly witness it is an *action* naming the bound slot, which
-    references it outside its binder; the harness cannot express that, because a slot literal
-    in an action's child position has no case in `compile_rule`. Adding it would settle this,
-    and would also reach `M7`, the other shape listed as not covered.
+    The first atom fixes slots(pattern), and those are the pattern's *free* slots. A binder's
+    bound slot is not free, so a binder cannot be the atom that fixes them: that follows from
+    what the terms mean, not from a measurement, which is why no case observes it and why
+    there is no mutation for it. Otherwise the caller's preference is kept, since callers vary
+    the first atom deliberately.
     """
     atoms = list(atoms)
     if "unordered" in BUGS:
         return atoms
-    if "binder-1st" not in BUGS:
-        first = next((j for j, a in enumerate(atoms) if a[1] != "lam"), 0)
-        atoms = [atoms[first]] + atoms[:first] + atoms[first + 1:]
+    first = next((j for j, a in enumerate(atoms) if a[1] != "lam"), 0)
+    atoms = [atoms[first]] + atoms[:first] + atoms[first + 1:]
 
     rest = list(atoms[1:])
     out = [atoms[0]]
@@ -530,7 +521,7 @@ def compile_rule(atoms, action, conds=()):
             else:
                 m = fresh("m")
                 body.append(f"(= {m} (compose {mp} {e}))")
-                mp_of[cp] = m if "wide-kids" in BUGS else narrow(m, cls_of[cp])
+                mp_of[cp] = narrow(m, cls_of[cp])
         if root not in mp_of:
             mp_of[root] = narrow(mp, rv)
 
@@ -1114,18 +1105,10 @@ def curated():
         rounds=6,
     ))
 
-    # C15 -- regression for `wide-kids`. Minimised from `fuzz 250`'s fuzz236, the
-    # only case in the corpus that caught it, and only once migration started
-    # minting: with the node left on a follower instead, the class never reached
-    # the state where its slot set had narrowed underneath a live edge.
-    #
-    # Two unions through a shared `sub($0,$0)` drive the `h` class's slot set down,
-    # so a renaming read off an `h` node names a slot the class no longer has. The
-    # action's root is a child variable and its other child is a variable too, which
-    # is what makes narrowing only the root insufficient.
-    #
-    # The violation does not repair itself: `child-update` deletes the wide row and
-    # the action rebuilds it, so it is still there at `(run 200)`.
+    # C15 -- an action whose variables are wider than their classes. Two unions through a
+    # shared `sub($0,$0)` drive the `h` class's slot set down, so a renaming read off an `h`
+    # node names a slot the class no longer has. Its root is a child variable and its other
+    # child is a variable too, so narrowing only the root would not cover it.
     cs.append(Case(
         "C15-action-child-narrowed-to-its-class",
         [],
