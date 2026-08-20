@@ -1,0 +1,58 @@
+;;; KNOWN BUG, reduced to five lines: `union` turns an oriented edge backwards.
+;;;
+;;; `(RenamesToLeader follower m leader)` is meant to store the SMALLER of the two
+;;; as the leader -- `slotted-egraph-encoding-11.egg` says so where the relation is
+;;; declared. `union` rewrites a row's endpoints to their canonical values, so if
+;;; the FOLLOWER merges with a value below its leader, the row is left naming the
+;;; larger value as leader. Nothing re-orients it afterwards: single parent only
+;;; fires when a value has TWO edges, so a lone backwards row is never touched.
+;;;
+;;; A backwards row is what lets transitivity and single parent disagree forever.
+;;; Build a three-member chain by hand and it hangs with the edges pointing away
+;;; from the leader, and terminates with them pointing at it. On the SDQL batax
+;;; term the machinery forms backwards rows itself -- none at four user steps, two
+;;; at five, seven at six, which is exactly where `(saturate (run slotted))` stops
+;;; returning. `child-update`'s `(union node (Ctor ...))` is the site: disabling
+;;; that family takes the count to zero.
+;;;
+;;; This file asserts the CURRENT, WRONG behaviour, so it is a live demonstration
+;;; rather than a wish. When the orientation is repaired, the `check` at the bottom
+;;; should be changed to a `fail (check ...)`.
+;;;
+;;; The repair this points at: `slotted-user-rules.egg` M8 already has the right
+;;; idea in its `Union'` relation -- state an equality covariantly, so no rule has
+;;; to pick an orientation -- but it lives inside a `(push)`/`(pop)` demo block and
+;;; nothing consumes it. Route every equality-asserting site through it and let one
+;;; rule pick the orientation by `ordering-max`. Merely flipping a backwards row is
+;;; not enough: it gets batax to step 7 and then hangs, because flipping fights
+;;; single parent instead of the union that keeps re-creating the row.
+
+(include "tests/slotted-egraph-encoding-11.egg")
+
+;; Creation order fixes the value order, so $y is smallest and $f largest.
+(let $y (App2 "y" (map-of 0 1) (Var 0) (map-of 0 2) (Var 0)))
+(let $l (App2 "l" (map-of 0 3) (Var 0) (map-of 0 4) (Var 0)))
+(let $f (App2 "f" (map-of 0 5) (Var 0) (map-of 0 6) (Var 0)))
+
+;; the ordering this test relies on
+(check (= (ordering-max $l $y) $l))    ; y <= l
+(check (= (ordering-max $f $l) $f))    ; l <= f
+
+;; an oriented row: the leader $l is the smaller of the two
+(RenamesToLeader $f (map-of 3 5 4 6) $l)
+
+;; now the FOLLOWER merges with something below its leader
+(union $f $y)
+
+;; a backwards row is one whose stored leader is the larger of the pair
+(relation Backwards (U Renaming U))
+(ruleset orientcheck)
+(rule ((RenamesToLeader fo mo lo)
+       (!= fo lo)
+       (= lo (ordering-max fo lo)))
+      ((Backwards fo mo lo)) :ruleset orientcheck)
+
+(run-schedule (run orientcheck))
+
+;; the bug: one row now names the larger value as leader
+(check (Backwards fo mo lo))

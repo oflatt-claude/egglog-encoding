@@ -51,16 +51,41 @@
 ;;; same three-member chain by hand and it hangs with the edges pointing away from the
 ;;; leader and terminates with them pointing at it, with the symmetry anywhere.
 ;;;
-;;; `union` is the suspect: it rewrites a row's endpoints, so a row that was oriented
-;;; before a merge can be backwards after it, and no rule puts it back.
+;;; Where the backwards row is formed: `child-update`'s `union`. Counting rows whose
+;;; stored leader is the larger, with one rule family moved to a ruleset nothing runs:
 ;;;
-;;; Two candidate repairs were tried and neither is sufficient. Guarding transitivity
-;;; against composing a self-loop on its left stops the hand-built case but not this one,
-;;; and it stops the class's symmetry ever reaching its other members, which is a
-;;; regression -- so it was backed out. A rule that flips a backwards row keeps the
-;;; curated differential at 44/44 and 60/60 isomorphic and gets batax to step 7, but
-;;; then hangs at step 8 and also hangs on the hand-built case, presumably cycling
-;;; against single parent. Neither is committed.
+;;;     baseline          step 4: 0   step 5: 2   step 6: 7
+;;;     migration off                 step 5: 3   step 6: 8    (more, so not it)
+;;;     child-update off              step 5: 0   step 6: 0
+;;;     union-identity off            step 5: 0   step 6: 1
+;;;
+;;; No rule WRITES a backwards row -- transitivity gives `e3 <= e2 <= e1`, single parent
+;;; tests `(= (ordering-max b c) b)`, the alpha-finder tests `(= e1 (ordering-max e1 e2))`,
+;;; and the rest emit self-loops or reuse a matched row's endpoints. The five user rules
+;;; that assert `RenamesToLeader` directly are not it either: disabling all five leaves the
+;;; counts unchanged.
+;;;
+;;; It is `union` REWRITING an existing row. `child-update` does
+;;; `(union node (Ctor (compose m1 m) c' m2 c2))`, and when the built node already exists
+;;; as a value that merges two live values; every row mentioning them is canonicalised, so
+;;; a follower can end up below its leader. Reduced to five lines: assert an oriented
+;;; `(RenamesToLeader f m l)`, then union `f` with a value smaller than `l`, and the row is
+;;; backwards.
+;;;
+;;; Nothing puts it back. `slotted-user-rules.egg` M8 says a compiler may insert a
+;;; `RenamesToLeader` fact directly "and lets the machinery's transitivity / single-parent
+;;; rules re-orient it", but no rule does: single parent only fires when a value has TWO
+;;; edges, so a lone backwards row is never touched. The `Union'` relation in that same
+;;; section is the right idea -- it states an equality covariantly so no orientation need be
+;;; picked -- but it is declared inside a `(push)`/`(pop)` demo block and nothing consumes
+;;; it. Wiring it in, so every equality-asserting site goes through it and ONE rule picks
+;;; the orientation by `ordering-max`, is the repair this points at.
+;;;
+;;; A rule that merely flips a backwards row is not enough, and is not committed: it keeps
+;;; the curated differential at 44/44 and 60/60 isomorphic and gets batax from hanging at
+;;; step 6 to terminating through step 7, then hangs at step 8, and it hangs on the
+;;; hand-built case -- flipping after the fact fights single parent instead of the union
+;;; that keeps re-creating the row.
 ;;;
 ;;; This blocks a differential sweep: `check_case` allows 25s per case, so sdql cases
 ;;; would report TIMEOUT rather than agreement or disagreement.
