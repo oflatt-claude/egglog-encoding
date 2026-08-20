@@ -47,24 +47,38 @@ both are decided at the witness at the end of this file.
   `sameClass_congr_of_keyed`, `viewRepr_total`, `sameClass_self_of_viewsCover`) are proved
   outright. So the forward half is one lemma from done, and that lemma is "the state `execM`
   returned has the three properties".
+* **Proved, and the completeness half's whole argument**: `sameClass_cong_of_state`, the
+  same shape. `SameClass d a b → Cong src a b` holds at any target with *one* named property
+  — `Database.ViewsSound`, that every view entry claims only what the source derives — over
+  any source with `Database.WF`, at the source's own e-nodes. The reduction is
+  `sameClass_cong_of_justified` (three lines: `SameClass` is flat) plus `cong_of_viewRepr`,
+  and the per-writer obligations `ViewsSound`'s preservation leaves are each discharged
+  outright: `entrySound_build`, `EntrySound.eclass`, `EntrySound.column`,
+  `EntrySound.select`, `cong_of_entrySound_collide`, `cong_of_eqs`, `cong_of_pathCompress`.
 * **Proved, and what says the specification's own target is reachable**:
   `not_mergeConflict_self`, `refutationState_mergeSaturated`, and
   `satProgram_programStep` — a compiled `ProgramStep Database.empty (encode P) tgt` for a
   `P` that builds a term. Each of the three is the negation of a lemma that stood here
   before `Spec/Step.lean` read `identityVals`, and that refutation is why the statement
   below reads `execM`; the reason it still does is a different one.
-  `satTarget_viewLeader` is the same discipline applied to the new residues: one of the
-  three, discharged at that reachable state.
+  `satTarget_viewLeader`, `satTarget_viewsSound` and `refutationState_edgesSound` are the
+  same discipline applied to the new residues: each discharged at a state a program reaches,
+  non-vacuously.
 * **`sorry`**, the only four in the library, and none of them an obligation any more:
-  `execM_viewLeader`, `execM_viewsCover` and `execM_unionsRead` — each one property of the
-  state `execM` returned, satisfiable at this file's own witness — and
-  `encode_corresponds_complete`. `encode_assert`, `encode_trans`, `encode_congr`,
-  `encode_corresponds_forward` and `encode_corresponds` are assembled from them and carry
+  `execM_viewLeader`, `execM_viewsCover`, `execM_unionsRead` and `execM_viewsSound` — each
+  one property of the state `execM` returned, satisfiable at this file's own witness.
+  `encode_assert`, `encode_trans`, `encode_congr`, `encode_corresponds_forward`,
+  `encode_corresponds_complete` and `encode_corresponds` are assembled from them and carry
   `sorryAx` through them.
 * **Refuted, and recorded so it is not tried again**: the view's *functional dependency*,
   which is the obvious reduction of `trans` and is false at the witness program. The section
   "What the three obligations reduce to" has the state that refutes it, and the same state
   refutes `MergeSaturated` at an `execM` target.
+* **Refuted, and it moved the statement**: the *unrestricted* completeness half.
+  `encode_corresponds_invents_enode` is a compiled refutation of
+  `SameClass tgt a b → Cong src a b` at `witnessProgram`, whose rebuild gives `(Add One One)`
+  an e-class the source has no e-node for. Both halves are now stated at the source's own
+  e-nodes, which costs the forward half nothing and is what the corpus sweep measures.
 -/
 
 namespace Egglog
@@ -376,16 +390,16 @@ def refutationState : FDatabase where
   env := []
   rules := []
 
-/-- The one `@UF` entry pins both value tuples of any collision at it, so every collision
-there is a collision of that entry with itself. -/
+/-- The one `@UF` entry pins the key and both value tuples of any collision at it, so every
+collision there is a collision of that entry with itself. -/
 private theorem refutationState_pin {cs vals : List Term} (hl : cs.length = 1)
     (hmem : Term.app ufName (cs ++ vals) ∈ refutationState.toDatabase.terms) :
-    vals = [refA, .app fiatName []] := by
+    cs = [refA] ∧ vals = [refA, .app fiatName []] := by
   rw [FDatabase.mem_toDatabase_terms] at hmem
   match cs with
   | [] => simp at hl
   | [x] =>
-    suffices h : x = refA ∧ vals = [refA, .app fiatName []] from h.2
+    suffices h : x = refA ∧ vals = [refA, .app fiatName []] from ⟨by rw [h.1], h.2⟩
     simpa [refutationState, refA, ufName, fiatName] using hmem
   | _ :: _ :: _ => simp at hl
 
@@ -407,8 +421,8 @@ theorem refutationState_mergeSaturated : MergeSaturated refutationState.toDataba
           | simp [proofDecl] at hm
     obtain ⟨rfl, rfl⟩ : body = mergeBody ∧ res = mergeResult := by
       simpa [ufDecl] using hm.symm
-    have hab : a = b := (refutationState_pin (by simpa [ufDecl] using hla) hma).trans
-      (refutationState_pin (by simpa [ufDecl] using hlb) hmb).symm
+    have hab : a = b := (refutationState_pin (by simpa [ufDecl] using hla) hma).2.trans
+      (refutationState_pin (by simpa [ufDecl] using hlb) hmb).2.symm
     rw [hab] at hconf
     exact (not_mergeConflict_self mergeBody_ne_nil b hconf).elim
 
@@ -987,15 +1001,350 @@ theorem encode_corresponds_forward {P : Program} {src : Database} {tgt : FDataba
   cong_sameClass ⟨encode_assert hdom hsrc htgt, encode_trans hdom hsrc htgt,
     encode_congr hdom hsrc htgt⟩ h
 
-/-- **No equality is invented.** The target-side induction has no `Cong.le` to lean on:
-`SameClass` is an existential over view entries, so this half is an invariant over the
-commands that write them — every view entry the encoding records is an equality the source
-derives. **Not proved.** -/
+/-! ### The completeness half
+
+`SameClass` is flat — `∃ e, ViewRepr d a e ∧ ViewRepr d b e` — so this half needs no
+induction on the target side at all. It reduces to a single **no-junk** invariant on the
+target, and `sameClass_cong_of_state` is that reduction: no `encode`, no `execM`, one
+property of the state, exactly the shape `cong_sameClass_of_state` has for the forward half.
+
+**The obvious form of the invariant is false, and so is the obvious statement of this half.**
+"Every id a term reads is congruent to it" is not what an `execM` target satisfies: the
+rebuild's column rules re-key an entry onto its children's leaders and nothing is ever
+removed, so `difftest correspond-dump 64 union` prints, for `witnessProgram`,
+
+```
+  view @AddView((One), (One)) ↦ (Add (One) (Two))
+```
+
+and `(Add One One)` is a term the source never built — `Cong src` relates it to nothing, its
+own self included, since `Cong.congr` needs both sides self-congruent and no other rule
+produces an application. So the target hands `(Add One One)` an e-class the source has no
+e-node for: `SameClass tgt (Add One One) (Add One One)` holds where
+`Cong src (Add One One) (Add One One)` fails, and **`SameClass tgt a b → Cong src a b` is
+refuted at this file's own witness program**. `encode_corresponds_invents_enode` is that
+refutation, its two measurements decided by `difftest correspond-selftest`.
+
+The corpus sweep does not see it because its universe is `src.terms ++ tgt.terms` and
+`(Add One One)` is in neither: it is a *key tuple* of an entry term, not a subterm of one. So
+`difftest correspond`'s 0 INVENTED is a claim about the source's own e-nodes, and that is
+what the statement below is restricted to — `a ∈ src.terms` and `b ∈ src.terms`, which
+`Cong src a b` implies anyway, so the forward half pays nothing for them.
+
+The other repair, not taken: conclude `CongOn src [a, b] a b` instead of `Cong src a b`.
+`withOperands` records the missing e-node and adds no equation between distinct terms, so the
+invented class is congruent *there* — but then the two halves of `encode_corresponds` are
+relations over different sources, and `ENCODING.md` records why `CongOn` is too weak to state
+this correspondence over. -/
+
+/-- One column of the right-hand list moved along a congruence. What the rebuild's column
+rules do to a key, pointwise. -/
+theorem CongList.setAt {db : Database} {as cs : List Term} {c x : Term} (i : Nat)
+    (h : CongList db as cs) (hget : cs[i]? = some c) (hcx : Cong db c x) :
+    CongList db as (cs.set i x) := by
+  rw [CongList.forall₂] at h ⊢
+  induction i generalizing as cs with
+  | zero =>
+    cases h with
+    | nil => simp at hget
+    | cons hab hl =>
+      obtain rfl : _ = c := by simpa using hget
+      simpa using List.Forall₂.cons (hab.trans hcx) hl
+  | succ n ih =>
+    cases h with
+    | nil => simp at hget
+    | cons hab hl => simpa using List.Forall₂.cons hab (ih hl (by simpa using hget))
+
+/-- **What one view entry claims about the source**: `f` applied to *some* source term list
+that reads the key `cs` is congruent to the entry's e-class column `e`.
+
+Existential in `as`, and that is the whole of why the invariant is this and not "`f` applied
+to `cs` is congruent to `e`". The latter is the false reading refuted above:
+`@AddView(One,One) ↦ (Add One Two)` is an entry no source application of `Add` keys, and two
+that *read* it — `(Add One Two)` and `(Add Two One)`. The universal reading over source
+applications follows (`EntrySound.cong_of_congList`); the reading at the key itself does
+not. -/
+def EntrySound (src : Database) (f : FnName) (cs : List Term) (e : Term) : Prop :=
+  ∃ as, Term.app f as ∈ src.terms ∧ CongList src as cs ∧ Cong src (.app f as) e
+
+/-- **Any source application that reads the key is congruent to the e-class column**, from
+the one that witnesses the entry: the two argument lists are congruent through the key, so
+the two applications are. This is the only place `Cong.congr` is used, and the two
+self-congruences it wants are exactly what `EntrySound` and the hypothesis carry — no
+"the unmoved children are still present" side condition enters. -/
+theorem EntrySound.cong_of_congList {src : Database} {f : FnName} {cs : List Term} {e : Term}
+    (h : EntrySound src f cs e) {as : List Term} (ha : Term.app f as ∈ src.terms)
+    (hl : CongList src as cs) : Cong src (.app f as) e :=
+  let ⟨_, hbm, hbl, hbe⟩ := h
+  (Cong.congr ha hbm (hl.trans hbl.symm)).trans hbe
+
+/-- **Every view entry the target holds claims only what the source derives.** The invariant
+the whole half rests on, and the only one it needs: `ViewRepr` reads view entries and nothing
+else. -/
+def Database.ViewsSound (d src : Database) : Prop :=
+  ∀ f cs e pf, d.Out (viewName f) cs [e, pf] → EntrySound src f cs e
+
+/-- **And every union-find edge is an equation the source derives.** Not used by the
+reduction — `SameClass` never reads `@UF` — but used to *preserve* `ViewsSound`: every
+rebuild rule moves a column or an e-class along an edge. -/
+def Database.EdgesSound (d src : Database) : Prop :=
+  ∀ t p pf, d.Out ufName [t] [p, pf] → Cong src t p
+
+mutual
+
+/-- **Every id a source term reads is congruent to it.** By recursion on the term: the
+literal case *is* the hypothesis, and at an application `ViewsSound` supplies a source
+argument list congruent to the key. `Database.WF` says the children are source terms and is
+used for nothing else. -/
+theorem cong_of_viewRepr {src d : Database} (hw : src.WF) (hs : d.ViewsSound src) :
+    ∀ (a : Term) {e : Term}, a ∈ src.terms → ViewRepr d a e → Cong src a e
+  | .lit _, _, ha, .lit _ => ha
+  | .app f as, _, ha, .app hl ho =>
+      (hs f _ _ _ ho).cong_of_congList ha
+        (congList_of_viewReprList hw hs as
+          (fun a h => hw.subtermClosed _ ha (Term.arg_subterms h (Term.self_mem_subterms a)))
+          hl)
+
+@[inherit_doc cong_of_viewRepr]
+theorem congList_of_viewReprList {src d : Database} (hw : src.WF) (hs : d.ViewsSound src) :
+    ∀ (as : List Term) {es : List Term}, (∀ a ∈ as, a ∈ src.terms) →
+      ViewReprList d as es → CongList src as es
+  | [], _, _, .nil => .nil
+  | a :: as, _, ha, .cons h₁ h₂ =>
+      .cons (cong_of_viewRepr hw hs a (ha a (List.mem_cons_self ..)) h₁)
+        (congList_of_viewReprList hw hs as (fun b hb => ha b (List.mem_cons_of_mem _ hb)) h₂)
+
+end
+
+/-- The invariant in the form the reduction consumes: `ViewsJustified` is what `ViewsSound`
+buys, and the step between them is the recursion above. -/
+def Database.ViewsJustified (d src : Database) : Prop :=
+  ∀ a e, a ∈ src.terms → ViewRepr d a e → Cong src a e
+
+@[inherit_doc cong_of_viewRepr]
+theorem Database.ViewsSound.justified {src d : Database} (hw : src.WF)
+    (hs : d.ViewsSound src) : d.ViewsJustified src := fun a _ ha h => cong_of_viewRepr hw hs a ha h
+
+/-- **The completeness half reduces to `Database.ViewsJustified`, in three steps.** The two
+terms read one id, that id is congruent to each of them, and `symm`/`trans` close it. This is
+the whole of the target-side induction, and there is none. -/
+theorem sameClass_cong_of_justified {src d : Database} (hj : d.ViewsJustified src) {a b : Term}
+    (ha : a ∈ src.terms) (hb : b ∈ src.terms) (h : SameClass d a b) : Cong src a b :=
+  let ⟨e, hae, hbe⟩ := h
+  (hj a e ha hae).trans (hj b e hb hbe).symm
+
+/-- **The whole completeness half, from one property of the target and nothing else.**
+
+No `execM`, no `encode`, no `sorry`: `SameClass d a b → Cong src a b` at any target with
+`ViewsSound`, over any source with `Database.WF`, at the source's own e-nodes. The
+counterpart of `cong_sameClass_of_state`, and what is left unproved is exactly that an
+`execM` target has the property. -/
+theorem sameClass_cong_of_state {src d : Database} (hw : src.WF) (hs : d.ViewsSound src)
+    {a b : Term} (ha : a ∈ src.terms) (hb : b ∈ src.terms) (h : SameClass d a b) :
+    Cong src a b :=
+  sameClass_cong_of_justified (hs.justified hw) ha hb h
+
+/-! #### What each writer owes
+
+`ViewsSound` and `EdgesSound` are per-*entry* conditions over a **fixed** source, and
+`Cong src` does not move when the target does — so preservation under a writer is one
+obligation about the one entry the writer adds, and an entry once justified stays justified.
+That is also why `mergeResult`'s choice operator costs nothing here: the refutation
+`ENCODING.md` records (`Falsity.Choice.transport_recorded_false`) is about relating two
+*target* states, and this invariant relates a target to a fixed source, so whichever of two
+colliding rows survives is justified against the same source. `EntrySound.select` is that,
+stated.
+
+One lemma per writer follows, each a fact about `EntrySound` and `Cong src` alone. -/
+
+/-- **A build.** `encodeBuild` writes `@fView(es) ↦ (f(es), @Fiat)`, whose e-class column is
+its own key applied — so `as := cs` witnesses the entry, and the obligation is that the source
+holds the term the build built. -/
+theorem entrySound_build {src : Database} (hw : src.WF) {f : FnName} {cs : List Term}
+    (h : Term.app f cs ∈ src.terms) : EntrySound src f cs (.app f cs) :=
+  ⟨cs, h, CongList.refl fun a ha =>
+    hw.subtermClosed _ h (Term.arg_subterms ha (Term.self_mem_subterms a)), h⟩
+
+/-- **The rebuild's e-class rule.** The entry keeps its key and moves its e-class along an
+edge, so the witness is unchanged and the justification composes. -/
+theorem EntrySound.eclass {src : Database} {f : FnName} {cs : List Term} {e x : Term}
+    (h : EntrySound src f cs e) (hx : Cong src e x) : EntrySound src f cs x :=
+  let ⟨as, ham, hal, hae⟩ := h
+  ⟨as, ham, hal, hae.trans hx⟩
+
+/-- **The rebuild's column rule.** Column `i` of the key moves along an edge and the e-class
+stays. The witness is unchanged again — the existential in `EntrySound` is what pays for
+that, and it is why this case needs neither a congruence step nor the unmoved children. -/
+theorem EntrySound.column {src : Database} {f : FnName} {cs : List Term} {e c x : Term}
+    (h : EntrySound src f cs e) {i : Nat} (hi : cs[i]? = some c) (hx : Cong src c x) :
+    EntrySound src f (cs.set i x) e :=
+  let ⟨as, ham, hal, hae⟩ := h
+  ⟨as, ham, hal.setAt i hi hx, hae⟩
+
+/-- **The merge step's edge.** Two entries have collided at one key and `mergeBody` writes
+the `@UF` edge between their e-class columns; both are congruent to one source application,
+so the edge is an equation the source derives — in either orientation, which is what
+`ordering-max`/`ordering-min` leave open. -/
+theorem cong_of_entrySound_collide {src : Database} {f : FnName} {cs : List Term}
+    {e₁ e₂ : Term} (h₁ : EntrySound src f cs e₁) (h₂ : EntrySound src f cs e₂) :
+    Cong src e₁ e₂ :=
+  let ⟨_, ham, hal, hae⟩ := h₁
+  hae.symm.trans (h₂.cong_of_congList ham hal)
+
+/-- **The merge step's surviving row.** `mergeResult` settles the collision on one of the two
+e-class columns, and either choice is justified — the selection is between two rows the
+invariant already covers. -/
+theorem EntrySound.select {src : Database} {f : FnName} {cs : List Term} {e₁ e₂ e : Term}
+    (h₁ : EntrySound src f cs e₁) (h₂ : EntrySound src f cs e₂) (h : e = e₁ ∨ e = e₂) :
+    EntrySound src f cs e := by
+  rcases h with rfl | rfl <;> assumption
+
+/-- **A source `union`.** `encodeAction` writes `@UF (ordering-max x₁ x₂) ↦ (ordering-min x₁
+x₂, pf)`, and the source asserts the pair; `Cong.symm` covers whichever orientation
+`ordering-max` picks. -/
+theorem cong_of_eqs {src : Database} {a b t p : Term} (h : (a, b) ∈ src.eqs)
+    (ho : (t = a ∧ p = b) ∨ (t = b ∧ p = a)) : Cong src t p := by
+  rcases ho with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩
+  · exact .assert h
+  · exact (Cong.assert h).symm
+
+/-- **Path compression.** `pathCompressRule` writes `a → c` out of `a → b` and `b → c`: two
+sound edges compose, and that is `Cong.trans` with nothing added. -/
+theorem cong_of_pathCompress {src : Database} {a b c : Term} (h₁ : Cong src a b)
+    (h₂ : Cong src b c) : Cong src a c := h₁.trans h₂
+
+/-! #### And at a state a program reaches
+
+The same discipline the forward half's residues get: `Database.ViewsSound` is what the
+completeness half is reduced to, so here it is at `satTarget`, the state
+`satProgram_programStep` steps to, over the source `satProgram`'s own run leaves. The one
+view entry the run wrote is discharged by `entrySound_build`, non-vacuously; the `@UF` clause
+is vacuous there — `satProgram` has no `union` — and is discharged non-vacuously at
+`refutationState`, which holds one edge and nothing else. -/
+
+/-- `viewName` is injective, which is what lets an entry term name its constructor. -/
+private theorem viewName_inj {f g : FnName} (h : viewName f = viewName g) : f = g := by
+  have h2 := congrArg String.toList h
+  rw [viewName, viewName, String.toList_append, String.toList_append, String.toList_append,
+    String.toList_append] at h2
+  exact String.toList_inj.mp (List.append_cancel_left (List.append_cancel_right h2))
+
+/-- The source state `satProgram` runs to: the one term it builds, and nothing else. -/
+def satSrc : Database := Database.empty.addTerm (.app "A" [])
+
+theorem satSrc_wf : satSrc.WF := Database.WF.empty.addTerm _
+
+theorem satSrc_mem : Term.app "A" [] ∈ satSrc.terms := Database.mem_addTerm _ _
+
+/-- **`Database.ViewsSound` holds at `satTarget`.** Three of the four terms the run holds are
+too short to be a view entry — a key plus the two value columns is two columns at least — and
+`@AView(A, @Fiat)` is what is left: key `[]`, e-class `A`, and `A` is the term
+`satProgram` built. -/
+theorem satTarget_viewsSound : satTarget.ViewsSound satSrc := by
+  intro f cs e pf ho
+  obtain ⟨bs, hcl, hmem⟩ := ho
+  obtain rfl : cs = bs :=
+    List.forall₂_eq_eq_eq ▸ (hcl.toForall₂.imp fun _ _ h => Cong.eq_of_diag satTarget_diag h)
+  rcases satTarget_mem_cases hmem with h' | h' | h' | h' <;>
+      simp only [satTermEntry, satViewEntry, Term.app.injEq] at h' <;>
+    [skip; skip; skip; skip]
+  · obtain rfl : cs = [] := by
+      have hl : (cs ++ [e, pf]).length = 2 := by rw [h'.2]; rfl
+      simp only [List.length_append, List.length_cons] at hl
+      exact List.eq_nil_of_length_eq_zero (by omega)
+    obtain rfl : f = "A" := viewName_inj h'.1
+    obtain ⟨rfl, -⟩ : e = Term.app "A" [] ∧ pf = Term.app fiatName [] := by simpa using h'.2
+    exact entrySound_build satSrc_wf satSrc_mem
+  · have hl : (cs ++ [e, pf]).length = 0 := by rw [h'.2]; rfl
+    simp only [List.length_append, List.length_cons] at hl
+    omega
+  · have hl : (cs ++ [e, pf]).length = 1 := by rw [h'.2]; rfl
+    simp only [List.length_append, List.length_cons] at hl
+    omega
+  · have hl : (cs ++ [e, pf]).length = 0 := by rw [h'.2]; rfl
+    simp only [List.length_append, List.length_cons] at hl
+    omega
+
+/-- **`Database.EdgesSound` holds at `satTarget` too**, and vacuously: `satProgram` has no
+`union`, so nothing writes a `@UF` entry. -/
+theorem satTarget_edgesSound : satTarget.EdgesSound satSrc := by
+  intro t p pf ho
+  obtain ⟨bs, -, hmem⟩ := ho
+  exact absurd hmem (satTarget_no_uf (bs ++ [p, pf]))
+
+/-- **`Database.EdgesSound` at a state that holds an edge**, so the clause is not carried by
+its vacuous case alone: `refutationState`'s one entry is `@UF(A) ↦ (A, @Fiat)`, and `A` is
+self-congruent in `satSrc`. -/
+theorem refutationState_edgesSound : refutationState.toDatabase.EdgesSound satSrc := by
+  intro t p pf ho
+  obtain ⟨bs, hcl, hmem⟩ := ho
+  have hr : refutationState.toDatabase.EqsRefl :=
+    FDatabase.EqsRefl.toDatabase (by intro q hq; simp [refutationState] at hq)
+  obtain rfl : [t] = bs := CongList.eq_of_eqsRefl hr hcl
+  obtain ⟨hk, hv⟩ := refutationState_pin (by simp) hmem
+  obtain rfl : t = refA := by simpa using hk
+  obtain ⟨rfl, -⟩ : p = refA ∧ pf = Term.app fiatName [] := by simpa using hv
+  exact satSrc_mem
+
+/-- **`SameClass` is inhabited at that state**, so the reduction is not discharged by a
+premise nothing satisfies: `A` reads its own view entry. -/
+theorem satTarget_sameClass_self : SameClass satTarget (.app "A" []) (.app "A" []) :=
+  let hv : ViewRepr satTarget (.app "A" []) (.app "A" []) :=
+    .app .nil ⟨[], .nil, satTarget_mem_view⟩
+  ⟨_, hv, hv⟩
+
+/-- **All of `sameClass_cong_of_state`'s hypotheses hold together at a reachable state, and
+its premise is inhabited there.** `satProgram_programStep` is the reachability. -/
+theorem sameClass_cong_of_state_witness :
+    satSrc.WF ∧ satTarget.ViewsSound satSrc ∧ satTarget.EdgesSound satSrc ∧
+      Term.app "A" [] ∈ satSrc.terms ∧ SameClass satTarget (.app "A" []) (.app "A" []) ∧
+      Cong satSrc (.app "A" []) (.app "A" []) :=
+  ⟨satSrc_wf, satTarget_viewsSound, satTarget_edgesSound, satSrc_mem,
+    satTarget_sameClass_self,
+    sameClass_cong_of_state satSrc_wf satTarget_viewsSound satSrc_mem satSrc_mem
+      satTarget_sameClass_self⟩
+
+/-- **The residue of the completeness half. Not proved.**
+
+What is missing: that the state `execM` returned satisfies `Database.ViewsSound` and
+`Database.EdgesSound` over the source. Every *per-entry* obligation is discharged above, one
+per writer `encode` emits — `entrySound_build`, `EntrySound.eclass`, `EntrySound.column`,
+`EntrySound.select`, `cong_of_entrySound_collide`, `cong_of_eqs`, `cong_of_pathCompress` —
+and three things stand between them and this statement.
+
+* The encoded action list has to be read back off `execAction`, one `set` at a time, so that
+  "these are the writers" is a theorem rather than a reading of `encodeBuild`. This is the
+  same missing step `execM_viewsCover` needs, in the opposite direction.
+* A build or a `union` **inside a rule head** is justified by the *source* rule firing, not by
+  the source program's text, so `entrySound_build`'s hypothesis has to come from a match
+  correspondence: the encoded query matched, therefore the source query matched at congruent
+  terms. There is no separate writer for it — it is `encodeBuild` read at a rule head — and it
+  is the largest of the three. At a program with no rule the hypothesis is the source's own
+  `evalAction`, and `satTarget_viewsSound` is that case discharged.
+* `execM`'s rule firing is `FDatabase.runSaturateM`'s fixpoint, which is strictly weaker than
+  `RunSaturated` (`execM_contained`: the enumerator under-fires), so it is that fixpoint the
+  two properties have to be proved from. -/
+theorem execM_viewsSound {P : Program} {src : Database} {tgt : FDatabase}
+    (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
+    (htgt : execM (encode P) = some tgt) :
+    tgt.toDatabase.ViewsSound src ∧ tgt.toDatabase.EdgesSound src := by
+  sorry
+
+/-- **No equality is invented, at the source's own e-nodes.** Proved from
+`execM_viewsSound`, through `sameClass_cong_of_state` — the target-side half needs no
+induction, only the invariant.
+
+**The two membership hypotheses are not bookkeeping and cannot be dropped**: without them the
+statement is false at `witnessProgram`, where the rebuild gives `(Add One One)` an e-class and
+the source has no e-node for it (`encode_corresponds_invents_enode`). `Cong src a b` implies
+both, so the forward half pays nothing for them, and `difftest correspond`'s universe is the
+two term sets, so the corpus result is a measurement of exactly this restricted claim. -/
 theorem encode_corresponds_complete {P : Program} {src : Database} {tgt : FDatabase}
     (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
-    (htgt : execM (encode P) = some tgt) {a b : Term} (h : SameClass tgt.toDatabase a b) :
-    Cong src a b := by
-  sorry
+    (htgt : execM (encode P) = some tgt) {a b : Term} (ha : a ∈ src.terms)
+    (hb : b ∈ src.terms) (h : SameClass tgt.toDatabase a b) : Cong src a b :=
+  sameClass_cong_of_state (hsrc.wf Database.WF.empty)
+    (execM_viewsSound hdom hsrc htgt).1 ha hb h
 
 /-- **The correspondence.** `difftest correspond 64` runs exactly this claim over the 70
 in-domain cases and the seventeen probes, through `sameClassF` and `closureF`, and reports
@@ -1007,12 +1356,19 @@ a `:merge` declaration has no table triple to emit, and a source name in the gen
 namespace collides with one. `Rebuilt` is *not* a hypothesis: it is a postcondition of the
 specification's rebuild command (`cmdStep_rebuilt`), and the hypothesis here names an
 `execM` target, so what the two unproved halves have to lean on is the interpreter's own
-`mergeSaturateF` fixpoint instead. -/
+`mergeSaturateF` fixpoint instead.
+
+**Stated at the source's e-nodes**, which is where the encoding is faithful and where the
+corpus sweep measures it. The two membership hypotheses cost the forward direction nothing —
+`Cong src a b` implies both — and the backward direction cannot do without them:
+`encode_corresponds_invents_enode` refutes the unrestricted `iff` at this file's own witness
+program. -/
 theorem encode_corresponds {P : Program} {src : Database} {tgt : FDatabase}
     (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
-    (htgt : execM (encode P) = some tgt) (a b : Term) :
+    (htgt : execM (encode P) = some tgt) (a b : Term) (ha : a ∈ src.terms)
+    (hb : b ∈ src.terms) :
     Cong src a b ↔ SameClass tgt.toDatabase a b :=
-  ⟨encode_corresponds_forward hdom hsrc htgt, encode_corresponds_complete hdom hsrc htgt⟩
+  ⟨encode_corresponds_forward hdom hsrc htgt, encode_corresponds_complete hdom hsrc htgt ha hb⟩
 
 /-! ### The witness
 
@@ -1049,6 +1405,13 @@ def witnessTwo : Term := .app "Two" []
 
 /-- `(Add One Two)`, which is congruent to `(Add Two One)` and *not* to `(One)`. -/
 def witnessAdd : Term := .app "Add" [witnessOne, witnessTwo]
+
+/-- `(Add One One)` — a term `witnessProgram` never builds, and the one the rebuild gives an
+e-class anyway. `(union One Two)` puts `(One)` in `(Two)`'s `reprs`, so the column rule
+re-keys `@AddView((One), (Two))` to `@AddView((One), (One))`, and there is the entry
+`(Add One One)` reads. Nothing writes `(Add One One)` into either database's term set, which
+is why the corpus sweep never puts it on a pair. -/
+def witnessAddOneOne : Term := .app "Add" [witnessOne, witnessOne]
 
 /-- The witness is in `encode`'s domain, at compile time: `Program.encodeDomainB` and its
 equivalence live downstream in `DiffTest.lean`, so the six clauses are discharged here
@@ -1090,5 +1453,32 @@ theorem encode_corresponds_witness {d e : FDatabase} {a b c₁ c₂ : Term}
   · exact (sameClassF_iff hsc hr a b).mp hyes₂
   · exact fun h => hno₁ (FDatabase.mem_closureF_iff.mpr h)
   · exact fun h => by simp [(sameClassF_iff hsc hr c₁ c₂).mpr h] at hno₂
+
+/-- **The encoding invents an e-node, so the unrestricted completeness half is false.**
+
+Same shape as `encode_corresponds_witness` and the same discipline: every hypothesis is a
+*decidable* fact about one concrete program's two runs, and `difftest correspond-selftest`
+evaluates them. With them, all three hypotheses of `encode_corresponds_complete` hold, the
+target puts `(Add One One)` in an e-class with itself, and the source holds no such term — so
+`SameClass tgt a b → Cong src a b` cannot be proved without the membership hypotheses
+`encode_corresponds_complete` now carries.
+
+`(Add One One)` is *not* a defect in `encode`: the entry the rebuild wrote is true of the
+terms it is about, and every source e-node still corresponds. What is a defect is stating the
+correspondence as an unrestricted `iff`, which is what this refutes. -/
+theorem encode_corresponds_invents_enode {d e : FDatabase}
+    (hd : exec witnessProgram = some d) (he : execM (encode witnessProgram) = some e)
+    (hsc : e.SubtermClosed) (hr : e.EqsRefl)
+    (hyes : sameClassF e witnessAddOneOne witnessAddOneOne = true)
+    (hno : (witnessAddOneOne, witnessAddOneOne) ∉ d.closureF) :
+    ∃ src, witnessProgram.EncodeDomain ∧ ProgramStep Database.empty witnessProgram src ∧
+      execM (encode witnessProgram) = some e ∧
+      SameClass e.toDatabase witnessAddOneOne witnessAddOneOne ∧
+      witnessAddOneOne ∉ src.terms := by
+  refine ⟨d.toDatabase, witnessProgram_encodeDomain, ?_, he,
+    (sameClassF_iff hsc hr _ _).mp hyes, fun hmem => hno ?_⟩
+  · exact (exec_programStep witnessProgram_encodeDomain.ctorDecls
+      (Or.inr (by rw [hd]; simp))).mp (by rw [hd]; rfl)
+  · exact FDatabase.mem_closureF_iff.mpr hmem
 
 end Egglog

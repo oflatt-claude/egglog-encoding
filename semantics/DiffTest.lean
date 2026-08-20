@@ -2801,6 +2801,12 @@ def correspondSelfTests : List (String × (Unit → Bool)) :=
     -- true because neither side ever holds is excluded, at a real state of a real run.
     -- It is a runtime test for the reason the rest of `encodeSelfTests` is: the second run
     -- saturates a rebuild per action, which no `#guard` can afford.
+    -- **And the refutation, run.** `encode_corresponds_invents_enode` takes the last two
+    -- lines as hypotheses: the rebuild's column rules re-key `@AddView((One), (Two))` onto
+    -- `@AddView((One), (One))`, so the target gives `(Add One One)` an e-class and the source
+    -- has no e-node for it. That is why `encode_corresponds` is stated at the source's own
+    -- e-nodes; the sweep cannot see the pair, since `(Add One One)` is a key tuple of an
+    -- entry term rather than a subterm of one, so it is in neither term set it sweeps.
     ("the correspondence witness runs and is non-trivial", fun _ =>
       match exec witnessProgram, execM (encode witnessProgram) with
       | some d, some e =>
@@ -2812,6 +2818,9 @@ def correspondSelfTests : List (String × (Unit → Bool)) :=
           -- and both say no: `One` is not `(Add One Two)`
           && !decide ((witnessOne, witnessAdd) ∈ d.closureF)
           && !sameClassF e witnessOne witnessAdd
+          -- and the target invents an e-node the source has not got
+          && sameClassF e witnessAddOneOne witnessAddOneOne
+          && !decide ((witnessAddOneOne, witnessAddOneOne) ∈ d.closureF)
       | _, _ => false),
     -- **The state the sweep reads holds `@UF` entries.**
     -- That used to be the refutation: `MergeSaturated` counted the proof column, so no such

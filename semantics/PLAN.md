@@ -89,8 +89,8 @@ yet.
 **Where the library stands.** **`Spec/`, `Impl/`, `Proofs/` and `Tests/`: zero `sorry` and zero
 `sorryAx`.** `execM_contained` was the last theorem depending on either and lost them at
 `04eb89e`; `execM_eq_exec` and `exec_programStep` were already clean and are unchanged. Parked
-M11's `Encoding/Correspond.lean` has four, one per named obligation of `encode_corresponds`
-(`ENCODING.md`); `make lean-check` pins the number and the file, and nothing outside that file
+M11's `Encoding/Correspond.lean` has four, one per named property of the state `execM`
+returned that `encode_corresponds` is reduced to (`ENCODING.md`); `make lean-check` pins the number and the file, and nothing outside that file
 depends on them. The whole library builds, `Proofs/Lattice.lean` and
 `Proofs/Counterexamples.lean` included, and difftest is **166 passed / 0 failed**. So the chain from
 the egglog binary to `ProgramStep` is unbroken: difftest compares egglog against `execM`,

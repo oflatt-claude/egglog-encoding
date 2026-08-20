@@ -11,9 +11,10 @@ together with the decision procedure `sameClassF`, the proof that the two agree
 are jointly satisfiable at a state where both sides of the `iff` are non-trivial
 (`encode_corresponds_witness`). `difftest correspond 64` sweeps exactly that relation over
 the corpus and reports 70 of 70 agreeing, 0 LOST, 0 INVENTED, 0 `link-diff`. The theorem
-itself carries `sorry`, in four named obligations; finding 3 below is why its target is the
-interpreter's state and not `ProgramStep`'s — the vacuity is gone, but the decision procedure
-still needs an `FDatabase`.
+itself carries `sorry`, in four named properties of the state the run reached; finding 3 below
+is why its target is the interpreter's state and not `ProgramStep`'s — the vacuity is gone,
+but the decision procedure still needs an `FDatabase` — and finding 4 is why the `iff` is
+stated at `a ∈ src.terms` and `b ∈ src.terms`.
 
 One thing has since moved in M11's favour, and it is the reason to restate rather than
 abandon: the congruence obstruction that constrains the refinement chain on *source* programs
@@ -31,10 +32,11 @@ They were deleted rather than carried through the `Spec/` simplification work: b
 row-shaped throughout — `Spec/` has no rows now, a function entry is a term — the
 statements are known defective, and porting proofs of nothing is not worth the maintenance.
 
-## Three findings, each machine-checked
+## Four findings, each machine-checked
 
-The first two were checked before the theorems were deleted; the third is checked in
-`Encoding/Correspond.lean`, is what the restated theorem ran into, and is now closed.
+The first two were checked before the theorems were deleted; the third and fourth are checked
+in `Encoding/Correspond.lean` and are what the restated theorem ran into. The third is
+closed; the fourth moved the statement.
 
 ### 1. `Rebuilt` was unsatisfiable at the states `encode` ran to — **fixed**
 
@@ -154,12 +156,47 @@ before: the hypothesis has to name the state the corpus sweep decides, and `same
 The shape of the defect is the same as finding 1's and it was found the same way: by
 insisting on a witness before accepting a `sorry`.
 
+### 4. The unrestricted `iff` was false, and finding 2 said where — **statement moved**
+
+Finding 2's own example is the counterexample, one step further on. The rebuild's column
+rules re-key `@AddView [1,2]` onto `@AddView [1,1]` after `(union 1 2)`, so `(Add 1 1)` reads
+an id — and `Cong src` relates `(Add 1 1)` to nothing at all, its own self included, because
+`Cong.congr` wants both sides self-congruent and no other rule produces an application. So
+
+```
+SameClass tgt (Add 1 1) (Add 1 1)   holds
+Cong src   (Add 1 1) (Add 1 1)      does not
+```
+
+and `SameClass tgt a b → Cong src a b` is false at `witnessProgram`, the program
+`encode_corresponds_witness` is already stated over. `encode_corresponds_invents_enode` is
+that refutation compiled, its two measurements decided by
+`difftest correspond-selftest`'s witness case.
+
+**Why the sweep is green anyway, and what it therefore measures.** `difftest correspond`'s
+universe is `src.terms ++ tgt.terms`, and `(Add 1 1)` is in neither: it is a *key tuple* of an
+entry term, not a subterm of one, and nothing writes it into either term set. So the sweep
+never puts it on a pair, and its 0 INVENTED is a claim about the two databases' e-nodes — which
+is exactly what the statement now says.
+
+**The repair is finding 2's own first repair**, "conjoin membership": both halves of
+`encode_corresponds` are stated at `a ∈ src.terms` and `b ∈ src.terms`. `Cong src a b` implies
+both, so the forward half pays nothing for them. The alternative — conclude
+`CongOn src [a, b] a b`, which the invented e-node does satisfy — is finding 2's second
+repair and is *not* taken: it would leave the two halves of one `iff` quantified over
+different sources.
+
+**And it is not a defect in `encode`.** The entry the rebuild wrote is true of the terms it is
+about; what was defective is stating the correspondence as an unrestricted `iff`.
+
 ## The lesson worth keeping
 
-All three defects were invisible while the statements carried `sorry`. A statement nothing
-discharges can be trivially true without anyone noticing, and two of thirteen were. Before
-proving an M11 statement, check that it is not already provable for the wrong reason —
-`#print axioms` on a hypothesis-free proof of the conclusion is the cheap test.
+All four defects were invisible while the statements carried `sorry`. A statement nothing
+discharges can be trivially true without anyone noticing, and two of thirteen were; a
+statement nothing discharges can equally be *false* without anyone noticing, which is finding
+4. Before proving an M11 statement, check that it is not already provable for the wrong reason
+— `#print axioms` on a hypothesis-free proof of the conclusion is the cheap test — and check
+its conclusion at the witness, which is the test finding 4 came out of.
 
 **And check the other direction too.** `encode_corresponds` is an `iff`, which is trivially
 true if `SameClass` is accidentally always false, so `encode_corresponds_witness` exhibits a
@@ -168,7 +205,7 @@ that measurement over the corpus. Finding 3 came out of the first half of the sa
 discipline: the hypotheses were checked for joint satisfiability before the `sorry` was
 allowed to stand, and they were not.
 
-A fourth of the same kind is recorded but unswept: the remaining eleven original statements
+One more of the same kind is recorded but unswept: the remaining eleven original statements
 were never checked for vacuity.
 
 ## What survives
