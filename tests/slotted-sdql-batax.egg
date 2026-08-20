@@ -35,38 +35,32 @@
 ;;; failure mode the header of `slotted-egraph-encoding-11.egg` warns about, reachable
 ;;; from this term at six steps. Two steps is what this file runs.
 ;;;
-;;; Narrowed. It is a period-2 cycle, exactly:
+;;; Narrowed, and the cause is an invariant violation rather than one bad rule.
 ;;;
-;;;   - `RUST_LOG=debug` shows the ruleset reporting `updated=true` forever with
-;;;     `database size` pinned at 648, the dominant rule alternating between 26 and 27
-;;;     matches. That rule is transitivity (`slotted-egraph-encoding-11.egg`).
-;;;   - Dumping `RenamesToLeader` on consecutive iterations: 233 rows throughout, with
-;;;     4 added and 4 removed each iteration, and the row *sets* two iterations apart
-;;;     identical. So the cycle is 4 edges being swapped back and forth.
-;;;   - Transitivity only ever adds, so it cannot cycle alone. Disabling transitivity
-;;;     stops the hang; so does disabling single-parent, the rule that deletes a
-;;;     `RenamesToLeader` row. Those two are the pair.
-;;;   - The swapped edges carry 5-slot permutations that come in inverse pairs, i.e. a
-;;;     symmetry group, over a `Mult` of an `Equality`. Single-parent's own comment
-;;;     already excludes `a = c` and `a = b` to avoid deleting a symmetry; this is the
-;;;     same hazard reached along a longer path.
+;;; The shape of it. `RUST_LOG=debug` shows the ruleset reporting `updated=true` forever
+;;; with `database size` pinned at 648, transitivity dominant and alternating 26/27
+;;; matches. Dumping `RenamesToLeader` on consecutive iterations: 233 rows throughout, 4
+;;; added and 4 removed each iteration, and the row sets two iterations apart identical.
+;;; So it is a period-2 cycle over 4 edges. The 4 are edges between two members that are
+;;; both followers, existing in two spellings that differ by a symmetry of the class.
 ;;;
-;;; Both endpoints of the swapped edges print as `Unextractable`, which is the printer
-;;; failing to name a class, NOT evidence that they are the same class -- so whether
-;;; these are self-loops is deliberately not claimed here.
+;;; What actually goes wrong. `(RenamesToLeader follower m leader)` is supposed to store
+;;; the SMALLER of the two as the leader. That holds for the first four user steps; at
+;;; step 5 two rows violate it, and by step 6 -- where the hang starts -- seven do. A
+;;; backwards row is what lets transitivity and single parent disagree forever: build the
+;;; same three-member chain by hand and it hangs with the edges pointing away from the
+;;; leader and terminates with them pointing at it, with the symmetry anywhere.
 ;;;
-;;; Still open. One cycle of this family has since been fixed -- transitivity composing
-;;; a non-idempotent self-loop on its LEFT, see Case 20 in `slotted-egraph-encoding-11.egg`
-;;; -- but this is a different instance and the fix does not reach it. The same 4 rows flip
-;;; as before, and they are edges between two members that are BOTH followers, whose two
-;;; spellings differ by a symmetry that transitivity composes with `e1`, `e2` and `e3` all
-;;; distinct. A guard about `e1 = e2` cannot apply there.
+;;; `union` is the suspect: it rewrites a row's endpoints, so a row that was oriented
+;;; before a merge can be backwards after it, and no rule puts it back.
 ;;;
-;;; The family, stated generally: transitivity closes the set of spellings of an edge under
-;;; the class's symmetry group, while single-parent prunes to one spelling per source and
-;;; target. Neither is a fixed point of the other, so with a non-trivial group they alternate.
-;;; Disabling single-parent is the only one of the four `RenamesToLeader` rules whose removal
-;;; leaves every other check passing, which is where a real repair would start.
+;;; Two candidate repairs were tried and neither is sufficient. Guarding transitivity
+;;; against composing a self-loop on its left stops the hand-built case but not this one,
+;;; and it stops the class's symmetry ever reaching its other members, which is a
+;;; regression -- so it was backed out. A rule that flips a backwards row keeps the
+;;; curated differential at 44/44 and 60/60 isomorphic and gets batax to step 7, but
+;;; then hangs at step 8 and also hangs on the hand-built case, presumably cycling
+;;; against single parent. Neither is committed.
 ;;;
 ;;; This blocks a differential sweep: `check_case` allows 25s per case, so sdql cases
 ;;; would report TIMEOUT rather than agreement or disagreement.

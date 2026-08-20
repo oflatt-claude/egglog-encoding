@@ -64,26 +64,13 @@
 (include "tests/slotted-node-rules.egg")
 
 ;; Transitivity, which is also path compression: `e1 = m12*e2` and `e2 = m23*e3` give
-;; `e1 = m12*m23*e3`. Non-idempotent self-symmetries are excluded, on BOTH sides, so the
-;; union-find part does not enumerate a group.
-;;
-;; Both guards are needed, and the second one was once missing. Composing a
-;; non-idempotent self-loop of `e1` onto an outgoing edge does not find a new class
-;; member -- it only respells an edge already present, by a symmetry. Single parent then
-;; deletes the respelling, because a value keeps one edge per target, and transitivity
-;; derives it again from the same self-loop. The two rules never agree, so `saturate`
-;; reports progress forever with the tables stationary. Three members in a chain, each
-;; naming its slots differently, and one non-trivial symmetry at either end are enough;
-;; two members are not, and a symmetry in the middle is not.
+;; `e1 = m12*m23*e3`. Non-idempotent self-symmetries are excluded so the union-find part
+;; does not enumerate a group.
 (rule ((RenamesToLeader e1 m12 e2)
        (RenamesToLeader e2 m23 e3)
 
        (guard (or (bool-!= e2 e3)
                   (bool= (compose m23 m23) m23)
-                  (bool= e1 e3)))
-
-       (guard (or (bool-!= e1 e2)
-                  (bool= (compose m12 m12) m12)
                   (bool= e1 e3))))
 
       ((RenamesToLeader e1 (compose m12 m23) e3)) :ruleset slotted)
@@ -595,43 +582,3 @@
 
 (pop)
 
-;;; Case 20- a symmetry at the end of a chain must not respell the chain forever.
-;;;
-;;; Regression test for a non-termination, which is why it is written as three
-;;; hand-made `RenamesToLeader` facts rather than as a term: the shape is what
-;;; matters, and reaching it from a term takes 6 steps of 43 SDQL rules.
-;;;
-;;; Three members of one class, each naming its slots differently, in a chain
-;;; `$a -> $b -> $c`, plus one non-trivial symmetry on `$a`:
-;;;
-;;;   transitivity   with `e1 = e2 = $a` composes the self-loop onto `$a -> $b`.
-;;;                  That finds no new member -- it respells an edge already
-;;;                  there, by a symmetry.
-;;;   single parent  deletes the respelling, since a value keeps one edge per
-;;;                  target, and records the symmetry on `$b`.
-;;;   transitivity   derives the respelling again from the same self-loop.
-;;;
-;;; Left alone the two alternate forever, +2/-2 rows an iteration, with the tables
-;;; stationary and `saturate` reporting progress. Transitivity's second guard is
-;;; what stops it. Two members do not suffice, nor does a symmetry in the middle
-;;; of the chain, nor three members that all name their slots the same way -- in
-;;; that last case the "equal up to an identity renaming" rule merges them first.
-(push)
-
-(let $ca (App2 "f" (map-of 0 3) (Var 0) (map-of 0 4) (Var 0)))   ; slots {3,4}
-(let $cb (App2 "g" (map-of 0 1) (Var 0) (map-of 0 2) (Var 0)))   ; slots {1,2}
-(let $cc (App2 "h" (map-of 0 5) (Var 0) (map-of 0 6) (Var 0)))   ; slots {5,6}
-
-(RenamesToLeader $ca (map-of 1 3 2 4) $cb)
-(RenamesToLeader $cb (map-of 5 1 6 2) $cc)
-(RenamesToLeader $ca (map-of 3 4 4 3) $ca)
-
-;; the content of the test is that this returns at all
-(run-schedule (saturate (run slotted)))
-
-;; and that the three are still one class, with the symmetry carried to each
-(check (RenamesToLeader $ca m1 l) (RenamesToLeader $cb m2 l))
-(check (RenamesToLeader $ca m3 l) (RenamesToLeader $cc m4 l))
-(check (RenamesToLeader $ca (map-of 3 4 4 3) $ca))
-
-(pop)
