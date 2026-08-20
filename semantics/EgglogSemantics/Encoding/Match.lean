@@ -57,7 +57,22 @@ dropped constraint is a rule the target fires and the source does not, and
 `encodeQuery_drops_literal_pattern` is that refuted: at `satProgram`'s own source state, the
 source query `[(1)]` matches under no substitution while its encoding, the empty query,
 matches under the empty one. `Pattern.Grounded` is the side condition that excludes it, and
-it is a restriction on the *source program's text*, decidable and checkable.
+`Query.VarsKeyed` is its counterpart for the bare-*variable* half. Both are restrictions on
+the *source program's text*, and both are now clauses of **`Program.EncodeDomain`**
+(`EncodeDomain.noLeafPattern`), so the program the refutation is about is outside the
+encoder's declared domain rather than inside it — `litProgram_not_encodeDomain`.
+
+## Where it is checked
+
+`Encoding/Correspond.lean`'s discipline: every hypothesis is discharged at a state some
+program *reaches*, and the premise it guards is checked inhabited there.
+`exists_validQuerySubst_witness` does that at `satProgram`, whose one constructor is
+**nullary** — so `congUp_of_queryRead`'s application case runs at an empty argument list,
+there is no key column anywhere, and `Query.VarsKeyed` is vacuous.
+`exists_validQuerySubst_composed_witness` is the case the correspondence was written for: a
+**unary** constructor, a rule whose query is `((F x))`, both runs stepped, and `VarsKeyed`
+non-vacuous. `Database.GlobalsRead` is the one clause no pair reached here makes non-vacuous,
+and `globalsRead_nonvacuous` is that clause at a state binding a global.
 -/
 
 namespace Egglog
@@ -284,15 +299,6 @@ theorem matches_eq_of_queryRead {src d : Database} (hb : src.TermsBuild)
   exact .eq hi ht₁ ht₂ hu₁.congOn_pair_left.symm
     (hu₁.congOn_pair_left.trans hu₂.congOn_pair_right.symm)
 
-/-- **The pattern has a witness position.** `Matches` asks for a term the source *holds*
-congruent to the instance, and a bare literal has none: the source may never have built it,
-and `encodePattern` emits no atom that would say it did. Decidable, and a condition on the
-source program's text rather than on either state. -/
-def Pattern.Grounded : Pattern → Prop
-  | .expr e => ∀ l, e ≠ .lit l
-  | .eq e₁ e₂ => (∀ l, e₁ ≠ .lit l) ∨ (∀ l, e₂ ≠ .lit l)
-  | .values _ _ _ => True
-
 @[inherit_doc matches_expr_of_queryRead]
 theorem matches_of_patternRead {src d : Database} (hb : src.TermsBuild)
     (hs : d.ViewsSound src) {τ ρt : Env} {p : Pattern} (hg : p.Grounded)
@@ -407,34 +413,8 @@ query reads **at a key column** and for no other: `EntrySound`'s existential *is
 argument list a key stands for, so the key's `j`th column hands back the source term
 `g` needs. A variable that is a whole pattern, or a whole side of an equality, sits at no key
 column — `encodeQueryExpr` returns a leaf unchanged and emits no atom for it — and there is
-nothing to read it back from. -/
-
-mutual
-
-/-- The variable occurs as an **argument of an application**: a key column of one of the view
-reads `encodeQueryExpr` emits. -/
-def Expr.ArgVar (v : Var) : Expr → Prop
-  | .lit _ => False
-  | .var _ => False
-  | .app _ args => Expr.var v ∈ args ∨ Expr.ArgVarList v args
-
-/-- `Expr.ArgVar` over an argument list. -/
-def Expr.ArgVarList (v : Var) : List Expr → Prop
-  | [] => False
-  | e :: es => Expr.ArgVar v e ∨ Expr.ArgVarList v es
-
-end
-
-@[inherit_doc Expr.ArgVar]
-def Pattern.ArgVar (v : Var) : Pattern → Prop
-  | .expr e => Expr.ArgVar v e
-  | .eq e₁ e₂ => Expr.ArgVar v e₁ ∨ Expr.ArgVar v e₂
-  | .values vs _ as => Expr.ArgVarList v vs ∨ Expr.ArgVarList v as
-
-/-- **Every variable the query mentions sits at a key column.** The condition under which the
-source-side reading `g` exists — a restriction on the source program's text, like
-`Pattern.Grounded`, and refuted by the same patterns. -/
-def Query.VarsKeyed (q : Query) : Prop := ∀ v ∈ Query.vars q, ∃ p ∈ q, Pattern.ArgVar v p
+nothing to read it back from. `Expr.ArgVar` and `Query.VarsKeyed` are `Encoding/Encode.lean`'s,
+next to the domain clause that now demands them. -/
 
 mutual
 
@@ -544,7 +524,7 @@ source contributes is `Database.WF` and `Database.TermsBuild`. `PatternRead` is 
 reading of the flattened query, `out_of_matches_values` is what establishes it from one
 encoded view read, and `Pattern.Grounded`/`Query.VarsKeyed` are the two side conditions on
 the source program's text that the flattening forces — both refuted below at the pattern that
-violates them. -/
+violates them, and both folded into `Program.EncodeDomain`. -/
 theorem exists_validQuerySubst_of_patternReads {src d : Database} (hw : src.WF)
     (hb : src.TermsBuild) (hs : d.ViewsSound src) {q : Query} {ρt : Env}
     (hglob : src.GlobalsRead ρt) (hgr : ∀ p ∈ q, p.Grounded) (hk : Query.VarsKeyed q)
@@ -649,6 +629,13 @@ theorem exists_validQuerySubst_of_encodeQuery {src tgt : Database} (hw : src.WF)
   exists_validQuerySubst_of_patternReads hw hb hs hglob hgr hk
     (patternReads_of_encodeQuery hd hsc hnv hk h)
 
+/-- **And the domain supplies the two source-text conditions.** `EncodeDomain.noLeafPattern`
+is stated per command; this is it at a rule, which is the form the correspondence consumes —
+so a program `encode` claims never needs `hgr` and `hk` assumed separately. -/
+theorem Program.EncodeDomain.noLeafPattern_of_mem {P : Program} (h : P.EncodeDomain) {r : Rule}
+    (hr : Cmd.rule r ∈ P) : (∀ p ∈ r.query, p.Grounded) ∧ Query.VarsKeyed r.query :=
+  h.noLeafPattern _ hr
+
 /-! ### The refutation: `encodeQuery` drops a leaf pattern
 
 `encodeQueryExpr` flattens an *application* and returns a leaf unchanged, emitting no atom
@@ -660,8 +647,11 @@ The same defect at a bare *variable* is `Query.VarsKeyed`: `.expr (.var v)` gets
 either, so nothing in the encoded query binds `v` and the head reads it unbound — which the
 source rule, whose `ValidEnv` must bind it to a term the source holds, does not do.
 
-Both are conditions on the source program's **text**, decidable, and neither is implied by
-`Program.EncodeDomain` — `litProgram` below is in the domain. -/
+Both are conditions on the source program's **text** and decidable, and both are now clauses
+of `Program.EncodeDomain`: `litProgram` below *was* in the domain, which is what made the
+refutation a program the encoder claimed and got wrong, and
+`litProgram_not_encodeDomain` is that closed. The refutation stays as the reason the clause is
+there. -/
 
 /-- The source state `satProgram` reaches, read for its terms: `(A)` and nothing else. -/
 theorem satSrc_terms : satSrc.terms = (Term.app "A" []).subterms := by simp [satSrc]
@@ -678,19 +668,16 @@ def litQuery : Query := [.expr (.lit (.int 1))]
 /-- The program that is nothing but that rule. -/
 def litProgram : Program := [.rule { query := litQuery, actions := [], ruleset := "" }]
 
-/-- **It is inside the encoder's declared domain.** -/
-theorem litProgram_encodeDomain : litProgram.EncodeDomain where
-  ctorsOnly := by simp [litProgram]
-  noSet := by simp [litProgram, Cmd.NoSet, litQuery, Pattern.NoValues]
-  noPrim := by simp [litProgram, Program.ctors, Cmd.ctors, litQuery, Pattern.ctors, Expr.ctors]
-  noAt := by simp [litProgram, Program.ctors, Cmd.ctors, litQuery, Pattern.ctors, Expr.ctors]
-  noAtVar := by
-    simp [litProgram, Program.vars, Cmd.vars, litQuery, Query.vars, Pattern.vars, Expr.vars]
-  noAtRuleset := by
-    simp only [litProgram, Program.rulesets, Cmd.rulesets, List.flatMap_cons,
-      List.flatMap_nil, List.append_nil, List.mem_dedup, List.mem_singleton]
-    rintro R rfl
-    exact of_decide_eq_false rfl
+/-- **And it is *outside* the encoder's declared domain**, which is the repair: every other
+clause of `Program.EncodeDomain` holds of it — one constructor-free rule, no `set`, no
+generated name anywhere — and `EncodeDomain.noLeafPattern` is the one it fails. Before that
+clause was folded in, this program was in the domain and the refutation below was a program
+the encoder claimed and got wrong. -/
+theorem litProgram_not_encodeDomain : ¬ litProgram.EncodeDomain := by
+  intro h
+  have hq := h.noLeafPattern (.rule { query := litQuery, actions := [], ruleset := "" })
+    (by simp [litProgram])
+  exact hq.1 (.expr (.lit (.int 1))) (by simp [litQuery]) (.int 1) rfl
 
 /-- **And `encodeQuery` emits nothing for it.** -/
 theorem encodeQuery_litQuery : (encodeQuery litQuery 0).1 = [] := rfl
@@ -845,9 +832,10 @@ end-to-end witness below drives `congUp_of_queryRead` through its application ca
 same pair of states: a variable read as an id, and `exists_source_of_memVar` handing the source
 term back out of one `CongList`.
 
-What no reachable witness checks is the two *composed* — a source application one of whose
-arguments is a variable — because no program `Encoding/Correspond.lean` steps declares a
-constructor of positive arity. -/
+The two *composed* — a source application one of whose arguments is a variable — needs a
+program declaring a constructor of **positive arity**, which no program
+`Encoding/Correspond.lean` steps does. `wProgram` below is that program, and
+`exists_validQuerySubst_composed_witness` is the composition run at the pair it reaches. -/
 theorem congUp_var_witness :
     ∃ t, (Expr.var "x").eval satSrcD.sig [("x", Term.app "A" [])] = some t ∧
       CongUp satSrcD t (Term.app "A" []) := by
@@ -884,5 +872,525 @@ theorem exists_validQuerySubst_witness :
     (by intro v hv; simp [Query.vars, Pattern.vars, Expr.vars, Expr.varsList] at hv)
     (by intro p hp; obtain rfl := List.mem_singleton.mp hp; exact satTarget_patternRead)
   exact ⟨τ, hτ⟩
+
+/-! ### The composed witness: an application whose argument is a variable
+
+Everything above is exercised at `satProgram`, whose one constructor is **nullary** — so
+`congUp_of_queryRead`'s application case runs at an empty argument list and its variable case
+runs only in isolation (`congUp_var_witness`). Composing the two is the case the
+correspondence was written for and the one nothing reached: a source pattern `(F x)`, whose
+encoding is the single view read `(= (@v0 @v1) (@FView x))` — the query variable at a *key
+column*.
+
+`wProgram` is that program — one nullary constructor, one **unary** one, a build of `(F (A))`,
+and a rule whose query is `((F x))` — stepped on both sides and run end to end at the pair.
+`Query.VarsKeyed` is non-vacuous there for the first time: `x` is a query variable, it sits at
+a key column, and `exists_sourceReading` reads it back through `Database.ViewsSound` at the
+entry the build wrote. -/
+
+/-- `(constructor A () S)`. -/
+def wADecl : FnDecl := { arity := 0, outArity := 1, merge := none }
+
+/-- `(constructor F (S) S)`, the positive-arity declaration `satProgram` has none of. -/
+def wFDecl : FnDecl := { arity := 1, outArity := 1, merge := none }
+
+/-- `(rule ((F x)) ())`: one pattern, an application whose argument is a variable. -/
+def wSrcRule : Rule :=
+  { query := [.expr (.app "F" [.var "x"])], actions := [], ruleset := "" }
+
+/-- Two constructors, the rule, and the build of `(F (A))`. The rule precedes the action so
+that the encoding's one `Cmd.saturate` is its last command. -/
+def wProgram : Program :=
+  [.decl "A" wADecl, .decl "F" wFDecl, .rule wSrcRule,
+   .action (.expr (.app "F" [.app "A" []]))]
+
+/-! #### The source side -/
+
+/-- The signature the two declarations install. -/
+def wSrcSig : Signature :=
+  Function.update (Function.update Database.empty.sig "A" (some wADecl)) "F" (some wFDecl)
+
+/-- After the two declarations and the rule: no term yet. -/
+def wSrcBase : Database :=
+  { Database.empty with
+    sig := wSrcSig,
+    rules := insert wSrcRule Database.empty.rules }
+
+/-- **The source state `wProgram` runs to**: the rule registered, and `(F (A))` built. -/
+def wSrcD : Database := wSrcBase.addTerm (.app "F" [.app "A" []])
+
+private theorem wSrcBase_terms : wSrcBase.terms = ∅ := by
+  refine Set.eq_empty_of_forall_notMem fun t ht => ?_
+  obtain ⟨u, hu⟩ := Database.mem_terms_iff.mp ht
+  simp [wSrcBase, Database.empty] at hu
+
+theorem wSrcD_terms : wSrcD.terms = (Term.app "F" [.app "A" []]).subterms := by
+  rw [wSrcD, Database.addTerm_terms, wSrcBase_terms, Set.empty_union]
+
+/-- **And it is reachable**: two declarations, the rule, and the build. -/
+theorem wProgramStep_src : ProgramStep Database.empty wProgram wSrcD := by
+  refine .cons ⟨_, rfl, .refl⟩ (.cons ⟨_, rfl, .refl⟩
+    (.cons ⟨_, rfl, .refl⟩ (.cons ⟨wSrcD, ?_, .refl⟩ .nil)))
+  change cmdEffect _ (.action (.expr (.app "F" [.app "A" []]))) = some wSrcD
+  simp only [cmdEffect, evalAction, Expr.eval, Expr.evalList, wSrcD]
+  rfl
+
+private theorem wSrcBase_wf : wSrcBase.WF where
+  eqsRefl := fun t ht => absurd (wSrcBase_terms ▸ ht) (by simp)
+  subtermClosed := fun t ht => absurd (wSrcBase_terms ▸ ht) (by simp)
+  envInTerms := by simp [wSrcBase, Database.empty]
+  litsIsolated := by simp [Database.LitsIsolated, wSrcBase, Database.empty]
+
+theorem wSrcD_wf : wSrcD.WF := wSrcBase_wf.addTerm _
+
+theorem wSrcD_mem_F : Term.app "F" [.app "A" []] ∈ wSrcD.terms := by
+  rw [wSrcD_terms]; exact Term.self_mem_subterms _
+
+theorem wSrcD_mem_A : Term.app "A" [] ∈ wSrcD.terms := by
+  rw [wSrcD_terms]
+  exact Term.arg_subterms (List.mem_singleton_self _) (Term.self_mem_subterms _)
+
+/-- **`Database.TermsBuild` holds**, at both arities: the two applications the state holds are
+the declared `F` and the declared `A`, neither shadowing a primitive. -/
+theorem wSrcD_termsBuild : wSrcD.TermsBuild := by
+  intro f as hm
+  rw [wSrcD_terms] at hm
+  have h : (f = "F" ∧ as = [Term.app "A" []]) ∨ (f = "A" ∧ as = []) := by
+    simpa [Term.subterms_app, or_comm] using hm
+  rcases h with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩
+  · exact ⟨rfl, wFDecl, by simp [wSrcD, wSrcBase, wSrcSig], rfl⟩
+  · exact ⟨rfl, wADecl, by simp [wSrcD, wSrcBase, wSrcSig], rfl⟩
+
+/-! #### The target side
+
+`satProgram_programStep`'s shape at twenty-two commands instead of twelve: `congrArities` is
+non-empty now, so the prelude declares `@Congr_1`; the rule contributes `@Rule_0`; and
+`rebuildRules "F" 1` emits a **column** rule beside the e-class one. The one `Cmd.saturate`
+is still discharged rather than assumed, and for the same two reasons — nothing wrote a `@UF`
+entry, and each view holds a single row. -/
+
+/-- The signature `encode wProgram`'s prelude installs, in declaration order. -/
+def wSig : Signature :=
+  Function.update (Function.update (Function.update (Function.update
+    (Function.update (Function.update (Function.update (Function.update
+      (Function.update (Function.update (Function.update (Function.update
+        Database.empty.sig
+        fiatName (some (proofDecl 0))) symName (some (proofDecl 1)))
+        transName (some (proofDecl 2))) (congrName 1) (some (proofDecl 1)))
+        (ruleName 0) (some (proofDecl 1))) ufName (some ufDecl))
+        "F" (some (skolemDecl 1))) (viewName "F") (some (viewDecl 1)))
+        (termName "F") (some (termDecl 1))) "A" (some (skolemDecl 0)))
+        (viewName "A") (some (viewDecl 0))) (termName "A") (some (termDecl 0))
+
+set_option maxHeartbeats 2000000 in
+-- `split_ifs` on a twelve-deep `Function.update` chain is thirteen goals, and each one
+-- decides a `FnDecl` equality through `viewName`/`termName`; the default budget is short.
+/-- **The three `:merge` functions with a body are `@UF` and the two views.** The two term
+relations are `:no-merge` and everything else is a constructor. -/
+private theorem wSig_merge {f : FnName} {decl : FnDecl} {body : List Action} {res : List Expr}
+    (hsig : wSig f = some decl) (hm : decl.merge = some (.merge body res)) :
+    (f = ufName ∧ decl = ufDecl) ∨ (f = viewName "F" ∧ decl = viewDecl 1) ∨
+      (f = viewName "A" ∧ decl = viewDecl 0) := by
+  simp only [wSig, Function.update_apply, Database.empty] at hsig
+  split_ifs at hsig <;>
+    obtain rfl := Option.some.inj hsig
+    <;> first
+      | exact Or.inl ⟨by assumption, rfl⟩
+      | exact Or.inr (Or.inl ⟨by assumption, rfl⟩)
+      | exact Or.inr (Or.inr ⟨by assumption, rfl⟩)
+      | simp [proofDecl, skolemDecl, termDecl] at hm
+
+/-- `F`'s e-class rebuild rule: `@FView(@c0) ↦ (@e, @p)` follows `@e`'s union-find edge. -/
+def wRebuildFEclass : Rule :=
+  { query := [.values [.var "@e", .var "@p"] (viewName "F") [.var "@c0"],
+              .values [.var "@x", .var "@q"] ufName [.var "@e"]],
+    actions := [.set (viewName "F") [.var "@c0"] [.var "@x", transE (.var "@p") (.var "@q")]],
+    ruleset := rebuildRuleset }
+
+/-- `F`'s **column** rebuild rule, the one a nullary constructor has no counterpart for: the
+key's single column follows its edge, and the entry keeps its e-class. -/
+def wRebuildFCol : Rule :=
+  { query := [.values [.var "@e", .var "@p"] (viewName "F") [.var "@c0"],
+              .values [.var "@x", .var "@q"] ufName [.var "@c0"]],
+    actions := [.set (viewName "F") [.var "@x"]
+      [.var "@e", transE (symE (congrE [.var "@q"])) (.var "@p")]],
+    ruleset := rebuildRuleset }
+
+/-- The source rule's encoding: one view read, keyed on the query variable. -/
+def wEncRule : Rule :=
+  { query := [.values [.var "@v0", .var "@v1"] (viewName "F") [.var "x"]],
+    actions := [], ruleset := "" }
+
+/-- After the prelude and the encoded rule: twelve declarations and five rules. `A`'s rebuild
+rule is `satRebuildRule`, unchanged. -/
+def wPrelude : Database :=
+  { Database.empty with
+    sig := wSig,
+    rules := insert wEncRule (insert satRebuildRule (insert wRebuildFCol
+      (insert wRebuildFEclass (insert pathCompressRule Database.empty.rules)))) }
+
+/-- `@ATerm(A)`. -/
+def wATermE : Term := .app (termName "A") [.app "A" []]
+
+/-- `@AView() ↦ (A, @Fiat)`. -/
+def wAViewE : Term := .app (viewName "A") [.app "A" [], .app fiatName []]
+
+/-- `@FTerm(A, F(A))`: a term-relation row **two** columns wide, which is what makes
+`viewName_ne_termName` necessary. -/
+def wFTermE : Term := .app (termName "F") [.app "A" [], .app "F" [.app "A" []]]
+
+/-- `@FView(A) ↦ (F(A), @Fiat)`, the entry the correspondence reads. -/
+def wFViewE : Term :=
+  .app (viewName "F") [.app "A" [], .app "F" [.app "A" []], .app fiatName []]
+
+/-- **The state `encode wProgram` runs to.** -/
+def wTarget : Database :=
+  (((wPrelude.addTerm wATermE).addTerm wAViewE).addTerm wFTermE).addTerm wFViewE
+
+theorem wTarget_sig : wTarget.sig = wSig := rfl
+
+theorem wTarget_rules : wTarget.rules = wPrelude.rules := rfl
+
+theorem wPrelude_terms : wPrelude.terms = ∅ := by
+  refine Set.eq_empty_of_forall_notMem fun t ht => ?_
+  obtain ⟨u, hu⟩ := Database.mem_terms_iff.mp ht
+  simp [wPrelude, Database.empty] at hu
+
+theorem wTarget_terms : wTarget.terms =
+    wATermE.subterms ∪ wAViewE.subterms ∪ wFTermE.subterms ∪ wFViewE.subterms := by
+  simp [wTarget, wPrelude_terms, Set.union_assoc]
+
+/-- The seven terms the run holds, enumerated. -/
+private theorem wTarget_mem_cases {t : Term} (h : t ∈ wTarget.terms) :
+    t = wFViewE ∨ t = wFTermE ∨ t = Term.app "F" [.app "A" []] ∨ t = wAViewE ∨
+      t = Term.app fiatName [] ∨ t = wATermE ∨ t = Term.app "A" [] := by
+  rw [wTarget_terms] at h
+  simpa [wATermE, wAViewE, wFTermE, wFViewE] using h
+
+/-- Only `Database.addTerm` writes, so the state is diagonal. -/
+theorem wTarget_diag : wTarget.Diag := by
+  have h : wPrelude.Diag := fun p hp => absurd hp (by simp [wPrelude, Database.empty])
+  exact (((h.addTerm _).addTerm _).addTerm _).addTerm _
+
+/-- **No `@UF` entry.** `wProgram` has no `union`, so nothing writes one. -/
+theorem wTarget_no_uf (ts : List Term) : Term.app ufName ts ∉ wTarget.terms := by
+  intro h
+  rcases wTarget_mem_cases h with h' | h' | h' | h' | h' | h' | h' <;>
+    simp [wATermE, wAViewE, wFTermE, wFViewE, ufName, viewName, termName, fiatName] at h'
+
+/-- The `@FView` entry is there, so the correspondence has something to read at a key
+column. -/
+theorem wTarget_mem_view : wFViewE ∈ wTarget.terms := Database.mem_addTerm _ _
+
+/-- The one `@AView` row pins its value tuple. -/
+private theorem wTarget_pin_A {vals : List Term}
+    (hmem : Term.app (viewName "A") ([] ++ vals) ∈ wTarget.terms) :
+    vals = [.app "A" [], .app fiatName []] := by
+  rcases wTarget_mem_cases hmem with h' | h' | h' | h' | h' | h' | h' <;>
+    simp_all [wATermE, wAViewE, wFTermE, wFViewE, viewName, termName, fiatName]
+
+/-- And the one `@FView` row pins both its key and its value tuple. -/
+private theorem wTarget_pin_F {as vals : List Term} (hlen : as.length = 1)
+    (hmem : Term.app (viewName "F") (as ++ vals) ∈ wTarget.terms) :
+    as = [.app "A" []] ∧ vals = [.app "F" [.app "A" []], .app fiatName []] := by
+  obtain ⟨a, rfl⟩ : ∃ a, as = [a] := by
+    match as, hlen with
+    | [a], _ => exact ⟨a, rfl⟩
+  rcases wTarget_mem_cases hmem with h' | h' | h' | h' | h' | h' | h' <;>
+    simp_all [wATermE, wAViewE, wFTermE, wFViewE, viewName, termName, fiatName]
+
+/-- **The state is merge-saturated.** `@UF` has no entry, and each view has exactly one — so
+its only collision is with itself, and `identityVals := some 1` makes that no conflict. -/
+theorem wTarget_mergeSaturated : MergeSaturated wTarget := by
+  intro db' h
+  cases h with
+  | @collide _ f decl as bs a b vs body res hsig hm hconf hla hlb hma hmb _ _ _ =>
+    rcases wSig_merge (wTarget_sig ▸ hsig) hm with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩
+    · exact absurd hma (wTarget_no_uf _)
+    · obtain ⟨rfl, rfl⟩ : body = mergeBody ∧ res = mergeResult := by
+        simpa [viewDecl] using hm.symm
+      have hab : a = b :=
+        (wTarget_pin_F (by simpa [viewDecl] using hla) hma).2.trans
+          (wTarget_pin_F (by simpa [viewDecl] using hlb) hmb).2.symm
+      rw [hab] at hconf
+      exact (not_mergeConflict_self mergeBody_ne_nil b hconf).elim
+    · obtain ⟨rfl, rfl⟩ : body = mergeBody ∧ res = mergeResult := by
+        simpa [viewDecl] using hm.symm
+      obtain rfl : as = [] := List.eq_nil_of_length_eq_zero (by simpa [viewDecl] using hla)
+      obtain rfl : bs = [] := List.eq_nil_of_length_eq_zero (by simpa [viewDecl] using hlb)
+      have hab : a = b := (wTarget_pin_A hma).trans (wTarget_pin_A hmb).symm
+      rw [hab] at hconf
+      exact (not_mergeConflict_self mergeBody_ne_nil b hconf).elim
+
+/-- No `@UF` read matches: a `Pattern.values` match needs the entry term itself, and on a
+diagonal state `withOperands` cannot supply one. -/
+theorem wTarget_not_matches_uf {vs as : List Expr} {σ : Env} :
+    ¬ Matches wTarget (.values vs ufName as) σ := by
+  intro h
+  cases h with
+  | values hw _ _ hcong =>
+    exact absurd (congOn_eq_of_diag wTarget_diag hcong ▸ hw) (wTarget_no_uf _)
+
+private theorem wTarget_not_forall₂ : ∀ {q : Query} {σs : List Env},
+    List.Forall₂ (ValidSubst wTarget) q σs →
+    ∀ {vs as : List Expr}, Pattern.values vs ufName as ∈ q → False
+  | _, _, .nil, _, _, h => absurd h (by simp)
+  | _ :: _, _, .cons hp hrest, _, _, h => by
+    rcases List.mem_cons.mp h with rfl | h'
+    · exact wTarget_not_matches_uf hp.2
+    · exact wTarget_not_forall₂ hrest h'
+
+/-- **The rebuild ruleset has reached its fixpoint.** Every maintenance rule reads `@UF` and
+there is no `@UF` entry; the encoded source rule is in another ruleset. -/
+theorem wTarget_runRules : RunRules rebuildRuleset wTarget = wTarget := by
+  have hS : {d | ∃ r ∈ wTarget.rules, r.ruleset = rebuildRuleset ∧
+      d ∈ RuleResults wTarget r} = (∅ : Set Database) := by
+    refine Set.eq_empty_of_forall_notMem ?_
+    rintro d ⟨r, hr, hR, σ, ⟨σs, hall, -⟩, -⟩
+    rw [wTarget_rules] at hr
+    have hr' : r = wEncRule ∨ r = satRebuildRule ∨ r = wRebuildFCol ∨
+        r = wRebuildFEclass ∨ r = pathCompressRule := by
+      simpa [wPrelude, Database.empty] using hr
+    rcases hr' with rfl | rfl | rfl | rfl | rfl
+    · exact absurd hR (by simp [wEncRule, rebuildRuleset])
+    · exact wTarget_not_forall₂ hall (vs := [.var "@x", .var "@q"]) (as := [.var "@e"])
+        (by simp [satRebuildRule])
+    · exact wTarget_not_forall₂ hall (vs := [.var "@x", .var "@q"]) (as := [.var "@c0"])
+        (by simp [wRebuildFCol])
+    · exact wTarget_not_forall₂ hall (vs := [.var "@x", .var "@q"]) (as := [.var "@e"])
+        (by simp [wRebuildFEclass])
+    · exact wTarget_not_forall₂ hall (vs := [.var "@b", .var "@p"]) (as := [.var "@a"])
+        (by simp [pathCompressRule])
+  unfold RunRules
+  rw [hS]
+  exact Database.ext rfl (by simp) rfl rfl
+
+/-- **The trailing `Cmd.saturate rebuildRuleset` steps from this state to itself.** -/
+theorem wTarget_cmdStep_saturate :
+    CmdStep wTarget (.saturate rebuildRuleset) wTarget :=
+  ⟨wTarget, ⟨.refl, wTarget_runRules, wTarget_mergeSaturated⟩, .refl⟩
+
+/-- **The prelude `encode wProgram` emits**: twelve declarations — the three fixed proof
+heads, `@Congr_1`, `@Rule_0`, `@UF` and the two table triples — and then five rules. -/
+def wEncodedPrelude : Program :=
+  [.decl fiatName (proofDecl 0), .decl symName (proofDecl 1), .decl transName (proofDecl 2),
+   .decl (congrName 1) (proofDecl 1), .decl (ruleName 0) (proofDecl 1),
+   .decl ufName ufDecl,
+   .decl "F" (skolemDecl 1), .decl (viewName "F") (viewDecl 1),
+   .decl (termName "F") (termDecl 1),
+   .decl "A" (skolemDecl 0), .decl (viewName "A") (viewDecl 0),
+   .decl (termName "A") (termDecl 0),
+   .rule pathCompressRule, .rule wRebuildFEclass, .rule wRebuildFCol, .rule satRebuildRule,
+   .rule wEncRule]
+
+/-- **And what the one source action becomes**: four `set`s and the rebuild. -/
+def wEncodedActions : Program :=
+  [.action (.set (termName "A") [.app "A" []] []),
+   .action (.set (viewName "A") [] [.app "A" [], fiatE]),
+   .action (.set (termName "F") [.app "A" [], .app "F" [.app "A" []]] []),
+   .action (.set (viewName "F") [.app "A" []] [.app "F" [.app "A" []], fiatE]),
+   .saturate rebuildRuleset]
+
+/-- The twenty-two commands, as `satEncoded` is. -/
+def wEncoded : Program := wEncodedPrelude ++ wEncodedActions
+
+theorem wEncoded_eq : encode wProgram = wEncoded := rfl
+
+/-- The three states the four `set`s pass through. **Named, and that is not cosmetic**: a
+`set` reduces `Expr.eval`, which decides `Signature.IsCtor` through the whole twelve-deep
+declaration chain, and asking the kernel to do that at a state written as seventeen nested
+structure updates costs minutes where doing it at a constant costs milliseconds. -/
+private def wS1 : Database := wPrelude.addTerm wATermE
+
+@[inherit_doc wS1] private def wS2 : Database := wS1.addTerm wAViewE
+
+@[inherit_doc wS1] private def wS3 : Database := wS2.addTerm wFTermE
+
+/-- The seventeen declaration and rule commands, stepped: each a `cmdEffect` and a reflexive
+merge phase. -/
+theorem wPreludeStep : ProgramStep Database.empty wEncodedPrelude wPrelude := by
+  iterate 16 refine .cons ⟨_, rfl, .refl⟩ ?_
+  exact .cons ⟨wPrelude, rfl, .refl⟩ .nil
+
+/-- The four `set`s and the rebuild. -/
+theorem wActionsStep : ProgramStep wPrelude wEncodedActions wTarget :=
+  .cons ⟨wS1, rfl, .refl⟩ (.cons ⟨wS2, rfl, .refl⟩ (.cons ⟨wS3, rfl, .refl⟩
+    (.cons ⟨wTarget, rfl, .refl⟩ (.cons wTarget_cmdStep_saturate .nil))))
+
+/-- **And the encoded run is reachable**, the target's half of the pair. -/
+theorem wProgram_programStep :
+    ProgramStep Database.empty (encode wProgram) wTarget := by
+  rw [wEncoded_eq, wEncoded]
+  exact wPreludeStep.append wActionsStep
+
+/-! #### The correspondence, run at the pair -/
+
+/-- Only `Database.addTerm` writes on the source side either. -/
+theorem wSrcD_diag : wSrcD.Diag := by
+  have h : wSrcBase.Diag := fun p hp => absurd hp (by simp [wSrcBase, Database.empty])
+  exact h.addTerm _
+
+/-- **`Database.ViewsSound` holds at `wTarget`**, and at *two* view entries rather than one.
+Three of the seven terms are too short to be a view entry — a key plus the two value columns
+is two columns at least — and the two term-relation rows go by **name**: `@ATerm`'s row is one
+column and a length would have done, but `@FTerm`'s is two, exactly as wide as a nullary view
+entry, so at a constructor of positive arity `viewName_ne_termName` is the only thing that
+excludes it. What is left is `@AView() ↦ (A, @Fiat)` and `@FView(A) ↦ (F(A), @Fiat)`, and both
+are `entrySound_build` at a term the source holds. -/
+theorem wTarget_viewsSound : wTarget.ViewsSound wSrcD := by
+  intro f cs e pf ho
+  obtain ⟨bs, hcl, hmem⟩ := ho
+  obtain rfl : cs = bs :=
+    List.forall₂_eq_eq_eq ▸ (hcl.toForall₂.imp fun _ _ h => Cong.eq_of_diag wTarget_diag h)
+  rcases wTarget_mem_cases hmem with h' | h' | h' | h' | h' | h' | h' <;>
+      simp only [wFViewE, wFTermE, wAViewE, wATermE, Term.app.injEq] at h' <;>
+    [skip; skip; skip; skip; skip; skip; skip]
+  · obtain rfl : f = "F" := viewName_inj h'.1
+    obtain ⟨c, rfl⟩ : ∃ c, cs = [c] := by
+      have hl : (cs ++ [e, pf]).length = 3 := by rw [h'.2]; rfl
+      simp only [List.length_append, List.length_cons] at hl
+      match cs, hl with | [c], _ => exact ⟨c, rfl⟩
+    obtain ⟨rfl, rfl, -⟩ : c = Term.app "A" [] ∧ e = Term.app "F" [.app "A" []] ∧
+        pf = Term.app fiatName [] := by simpa using h'.2
+    exact entrySound_build wSrcD_wf wSrcD_mem_F
+  · exact absurd h'.1 viewName_ne_termName
+  · have hl : (cs ++ [e, pf]).length = 1 := by rw [h'.2]; rfl
+    simp only [List.length_append, List.length_cons] at hl
+    omega
+  · obtain rfl : f = "A" := viewName_inj h'.1
+    obtain rfl : cs = [] := by
+      have hl : (cs ++ [e, pf]).length = 2 := by rw [h'.2]; rfl
+      simp only [List.length_append, List.length_cons] at hl
+      exact List.eq_nil_of_length_eq_zero (by omega)
+    obtain ⟨rfl, -⟩ : e = Term.app "A" [] ∧ pf = Term.app fiatName [] := by simpa using h'.2
+    exact entrySound_build wSrcD_wf wSrcD_mem_A
+  · have hl : (cs ++ [e, pf]).length = 0 := by rw [h'.2]; rfl
+    simp only [List.length_append, List.length_cons] at hl
+    omega
+  · exact absurd h'.1 viewName_ne_termName
+  · have hl : (cs ++ [e, pf]).length = 0 := by rw [h'.2]; rfl
+    simp only [List.length_append, List.length_cons] at hl
+    omega
+
+/-- The target's subterm closure, which is what turns a matched view read into a
+`Database.Out`. -/
+theorem wTarget_subtermClosed : ∀ t ∈ wTarget.terms, t.subterms ⊆ wTarget.terms := by
+  intro t ht
+  rw [wTarget_terms] at ht ⊢
+  rcases ht with ((h | h) | h) | h <;> intro s hs <;>
+    first
+      | exact Or.inl (Or.inl (Or.inl (Term.subterms_subset_of_mem h hs)))
+      | exact Or.inl (Or.inl (Or.inr (Term.subterms_subset_of_mem h hs)))
+      | exact Or.inl (Or.inr (Term.subterms_subset_of_mem h hs))
+      | exact Or.inr (Term.subterms_subset_of_mem h hs)
+
+/-- **The view read matches, with a variable in its key column.** `wEncRule`'s own atom, at
+the entry the build wrote: the key is `x`, and the substitution binds it to `(A)`. -/
+theorem wTarget_matches_view :
+    Matches wTarget (.values [.var "@e", .var "@p"] (viewName "F") [.var "x"])
+      [("x", .app "A" []), ("@e", .app "F" [.app "A" []]), ("@p", .app fiatName [])] :=
+  .values wTarget_mem_view rfl rfl (Database.mem_addTerm _ _)
+
+/-- **And `out_of_matches_values` reads it back as a lookup.** -/
+theorem wTarget_out_view :
+    wTarget.Out (viewName "F") [.app "A" []]
+      [.app "F" [.app "A" []], .app fiatName []] := by
+  obtain ⟨ts, us, hts, hus, -, ho⟩ :=
+    out_of_matches_values wTarget_diag wTarget_subtermClosed wTarget_matches_view
+  obtain rfl : ts = [Term.app "A" []] := Option.some.inj hts.symm
+  obtain rfl : us = [Term.app "F" [.app "A" []], Term.app fiatName []] :=
+    Option.some.inj hus.symm
+  exact ho
+
+/-- **The premise of the correspondence at the composed case**: the target's reading of `(F
+x)`, which drives `congUp_of_queryRead` through its application case *and* its variable case,
+at one reading. -/
+theorem wTarget_patternRead :
+    PatternRead wTarget [("x", .app "A" [])] (.expr (.app "F" [.var "x"])) :=
+  .expr (.app (.cons (.var (by simp)) .nil) wTarget_out_view)
+
+/-- The query binds one variable, so `Query.VarsKeyed` has something to say about it. -/
+theorem wSrcRule_query_vars : Query.vars wSrcRule.query = ["x"] := rfl
+
+/-- **`Query.VarsKeyed` holds non-vacuously**: the query has a variable, and it sits at the
+key column of the read `encodeQueryExpr` emits for `(F x)`. -/
+theorem wSrcRule_varsKeyed : Query.VarsKeyed wSrcRule.query := by
+  intro v hv
+  obtain rfl : v = "x" := by
+    rw [wSrcRule_query_vars, List.mem_singleton] at hv; exact hv
+  exact ⟨.expr (.app "F" [.var "x"]), by simp [wSrcRule],
+    by simp [Pattern.ArgVar, Expr.ArgVar]⟩
+
+/-- And its one pattern is not a bare leaf. -/
+theorem wSrcRule_grounded : ∀ p ∈ wSrcRule.query, p.Grounded := by
+  intro p hp
+  obtain rfl : p = .expr (.app "F" [.var "x"]) := by simpa [wSrcRule] using hp
+  intro l
+  simp
+
+/-- **And the witness program is inside the encoder's declared domain**, the narrowed one:
+the clause that puts `litProgram` out keeps this in, so the composed case is a case `encode`
+claims rather than one it is excused from. -/
+theorem wProgram_encodeDomain : wProgram.EncodeDomain where
+  ctorsOnly := by
+    intro c hc f d heq
+    subst heq
+    simp only [wProgram, List.mem_cons] at hc
+    rcases hc with h | h | h | h | h <;> simp_all [wADecl, wFDecl]
+  noSet := by
+    intro c hc
+    simp only [wProgram, List.mem_cons] at hc
+    rcases hc with rfl | rfl | rfl | rfl | h <;>
+      simp_all [Cmd.NoSet, Action.NoSet, Pattern.NoValues, wSrcRule]
+  noPrim := by decide
+  -- `String.isPrefixOf` does not reduce under `decide`'s evaluator; the kernel's does.
+  noAt := by decide +kernel
+  noAtVar := by decide +kernel
+  noAtRuleset := by decide +kernel
+  noLeafPattern := by
+    intro c hc
+    simp only [wProgram, List.mem_cons] at hc
+    rcases hc with rfl | rfl | rfl | rfl | h
+    · trivial
+    · trivial
+    · exact ⟨wSrcRule_grounded, wSrcRule_varsKeyed⟩
+    · trivial
+    · exact absurd h (by simp)
+
+/-- **The correspondence, run end to end at the composed case.**
+
+The first three conjuncts are that the pair is reachable and in the encoder's domain, and
+every hypothesis of the correspondence holds there: `Database.WF` and `Database.TermsBuild`
+on the source, `Database.ViewsSound` on the target, `Pattern.Grounded` and — for the first
+time non-vacuously — `Query.VarsKeyed` on the source text. The premise is inhabited
+(`wTarget_patternRead`), and the conclusion is the last conjunct: the source query `((F x))`
+matches, at a substitution binding `x` to the source term `(A)` — the very term the id the
+target read it as stands for. That is what a rule head building over `x` needs, and it is the
+composition `congUp_var_witness` and `satTarget_patternRead` could only check apart.
+
+`Database.GlobalsRead` is the one clause vacuous here — `wProgram` has no `let` — and is
+discharged non-vacuously at `globalsRead_nonvacuous`. -/
+theorem exists_validQuerySubst_composed_witness :
+    wProgram.EncodeDomain ∧ ProgramStep Database.empty wProgram wSrcD ∧
+      ProgramStep Database.empty (encode wProgram) wTarget ∧
+      wSrcD.WF ∧ wSrcD.TermsBuild ∧ wTarget.ViewsSound wSrcD ∧
+      Query.vars wSrcRule.query = ["x"] ∧ Query.VarsKeyed wSrcRule.query ∧
+      PatternRead wTarget [("x", .app "A" [])] (.expr (.app "F" [.var "x"])) ∧
+      ∃ τ, ValidQuerySubst wSrcD wSrcRule.query τ ∧
+        Env.lookup "x" (wSrcD.env ++ τ) = some (.app "A" []) := by
+  refine ⟨wProgram_encodeDomain, wProgramStep_src, wProgram_programStep, wSrcD_wf,
+    wSrcD_termsBuild, wTarget_viewsSound, wSrcRule_query_vars, wSrcRule_varsKeyed,
+    wTarget_patternRead, ?_⟩
+  obtain ⟨τ, hv, hτ⟩ := exists_validQuerySubst_of_patternReads (d := wTarget)
+    (q := wSrcRule.query) (ρt := [("x", Term.app "A" [])]) wSrcD_wf wSrcD_termsBuild
+    wTarget_viewsSound (by simp [Database.GlobalsRead, wSrcD, wSrcBase, Database.empty])
+    wSrcRule_grounded wSrcRule_varsKeyed
+    (by
+      intro p hp
+      obtain rfl : p = .expr (.app "F" [.var "x"]) := by simpa [wSrcRule] using hp
+      exact wTarget_patternRead)
+  obtain ⟨t, hlk, hc⟩ := hτ "x" (by rw [wSrcRule_query_vars]; simp) (.app "A" []) (by simp)
+  obtain rfl : t = Term.app "A" [] := Cong.eq_of_diag wSrcD_diag hc
+  exact ⟨τ, hv, hlk⟩
 
 end Egglog

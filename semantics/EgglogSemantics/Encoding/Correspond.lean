@@ -1236,11 +1236,20 @@ is vacuous there — `satProgram` has no `union` — and is discharged non-vacuo
 `refutationState`, which holds one edge and nothing else. -/
 
 /-- `viewName` is injective, which is what lets an entry term name its constructor. -/
-private theorem viewName_inj {f g : FnName} (h : viewName f = viewName g) : f = g := by
+theorem viewName_inj {f g : FnName} (h : viewName f = viewName g) : f = g := by
   have h2 := congrArg String.toList h
   rw [viewName, viewName, String.toList_append, String.toList_append, String.toList_append,
     String.toList_append] at h2
   exact String.toList_inj.mp (List.append_cancel_left (List.append_cancel_right h2))
+
+/-- **A view is never a term relation**, whatever the two constructors: the two suffixes
+differ in their last character. Needed wherever a term-relation row is as wide as a view
+entry, which it is at every constructor of positive arity — a nullary one's row has a single
+column and is excluded by length alone. -/
+theorem viewName_ne_termName {f g : FnName} : viewName f ≠ termName g := by
+  intro h
+  have h2 := congrArg (fun s => (String.toList s).reverse) h
+  simp [viewName, termName, String.toList_append, List.reverse_append] at h2
 
 /-- The source state `satProgram` runs to: the one term it builds, and nothing else. -/
 def satSrc : Database := Database.empty.addTerm (.app "A" [])
@@ -1455,6 +1464,10 @@ theorem witnessProgram_encodeDomain : witnessProgram.EncodeDomain where
   noAt := by decide +kernel
   noAtVar := by decide +kernel
   noAtRuleset := by decide +kernel
+  noLeafPattern := by
+    intro c hc
+    simp only [witnessProgram, List.mem_cons] at hc
+    rcases hc with rfl | rfl | rfl | rfl | rfl | rfl | h <;> trivial
 
 /-- **The hypotheses of `encode_corresponds` are simultaneously satisfiable, and both sides
 of its conclusion are inhabited and refutable at the witness.**

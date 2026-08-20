@@ -965,6 +965,60 @@ def Cmd.rulesets : Cmd → List RulesetName
 /-- Every ruleset name the program mentions. -/
 def Program.rulesets (P : Program) : List RulesetName := (P.flatMap Cmd.rulesets).dedup
 
+/-! ### What the query flattening drops
+
+`encodeQueryExpr` flattens an *application* and returns a leaf unchanged, so `encodePattern`
+emits **no atom** for a source pattern whose expression is a bare literal or a bare variable.
+Both are conditions on the source program's **text**, decidable, and both are folded into
+`Program.EncodeDomain` below; `Encoding/Match.lean` is where each is consumed and where each
+is refuted. -/
+/-- **The pattern has a witness position.** `Matches` asks for a term the source *holds*
+congruent to the instance, and a bare literal has none: the source may never have built it,
+and `encodePattern` emits no atom that would say it did. -/
+def Pattern.Grounded : Pattern → Prop
+  | .expr e => ∀ l, e ≠ .lit l
+  | .eq e₁ e₂ => (∀ l, e₁ ≠ .lit l) ∨ (∀ l, e₂ ≠ .lit l)
+  | .values _ _ _ => True
+
+mutual
+
+/-- The variable occurs as an **argument of an application**: a key column of one of the view
+reads `encodeQueryExpr` emits. -/
+def Expr.ArgVar (v : Var) : Expr → Prop
+  | .lit _ => False
+  | .var _ => False
+  | .app _ args => Expr.var v ∈ args ∨ Expr.ArgVarList v args
+
+/-- `Expr.ArgVar` over an argument list. -/
+def Expr.ArgVarList (v : Var) : List Expr → Prop
+  | [] => False
+  | e :: es => Expr.ArgVar v e ∨ Expr.ArgVarList v es
+
+end
+
+@[inherit_doc Expr.ArgVar]
+def Pattern.ArgVar (v : Var) : Pattern → Prop
+  | .expr e => Expr.ArgVar v e
+  | .eq e₁ e₂ => Expr.ArgVar v e₁ ∨ Expr.ArgVar v e₂
+  | .values vs _ as => Expr.ArgVarList v vs ∨ Expr.ArgVarList v as
+
+/-- **Every variable the query mentions sits at a key column.** The condition under which the
+source-side reading of a query variable exists: a variable at a key column is read back by
+`Database.ViewsSound`, and one at no key column — a whole pattern, or a whole side of an
+equality — is read back by nothing.
+
+Stronger than `exists_sourceReading` strictly needs: a variable the source's own environment
+binds is read back from `Database.GlobalsRead` instead, and needs no key column. Stated this
+way because the weaker condition would have to ask which variables a top-level `let` binds,
+and this one is a property of the query alone. -/
+def Query.VarsKeyed (q : Query) : Prop := ∀ v ∈ Query.vars q, ∃ p ∈ q, Pattern.ArgVar v p
+
+/-- `Pattern.Grounded` at every pattern of a rule's query, and `Query.VarsKeyed` at the
+query. Vacuous at every other command. -/
+def Cmd.NoLeafPattern : Cmd → Prop
+  | .rule r => (∀ p ∈ r.query, p.Grounded) ∧ Query.VarsKeyed r.query
+  | _ => True
+
 /-- Constructors only, and no name that would collide with a generated one. -/
 structure Program.EncodeDomain (P : Program) : Prop where
   /-- Every declared function is a constructor. -/
@@ -985,6 +1039,17 @@ structure Program.EncodeDomain (P : Program) : Prop where
   source never derives, and neither `noAt` nor `noAtVar` excludes it: a ruleset name is
   neither a function name nor a variable. -/
   noAtRuleset : ∀ R ∈ P.rulesets, ¬ "@".isPrefixOf R
+  /-- **No pattern the flattening drops.** `encodePattern` emits no atom for a source
+  pattern whose expression is a bare leaf, so `.expr (.lit l)` becomes the *empty*
+  constraint — which every target matches where the source pattern matches nothing
+  (`encodeQuery_drops_literal_pattern`) — and `.expr (.var v)` leaves its variable bound by
+  nothing, where the source rule's `ValidEnv` must bind it to a term the source holds.
+  `Pattern.Grounded` excludes the first and `Query.VarsKeyed` the second. Like `noAtRuleset`
+  this is a condition on the source text that no other clause implies —
+  `Encoding/Match.lean`'s `litProgram` is the program it excludes, and
+  `litProgram_not_encodeDomain` is that recorded — and it costs the corpus nothing: all
+  seventy in-domain cases satisfy it. -/
+  noLeafPattern : ∀ c ∈ P, c.NoLeafPattern
 
 /-! ### Reading the target
 

@@ -451,6 +451,19 @@ contradiction with the encoder *emitting* such blocks — `@UF_<Sort>` and `@<C>
 that shape — since it knows what its own blocks prove and not what a user's does. Same check also
 rejects `:no-merge` on an eq-sorted output (`NoMergeEqSortFunction`).
 
+A second restriction is a **gap in this encoder** rather than in egglog's, and it was folded into
+`Program.EncodeDomain` only once the rule-head match correspondence forced it
+(`EncodeDomain.noLeafPattern`): `encodeQueryExpr` flattens an application and returns a leaf
+unchanged, so `encodePattern` emits **no atom** for a source pattern whose expression is a bare
+literal or a bare variable. `(rule ((1)) ())` therefore encodes to the *empty* query, which every
+target matches and whose source matches nothing — `Encoding/Match.lean`'s
+`encodeQuery_drops_literal_pattern`, compiled. `Pattern.Grounded` excludes the literal case and
+`Query.VarsKeyed` the variable one; both are decidable conditions on the source **text**, and
+`difftest encode-domain` is unchanged at 70 of 166 with them, so the clause costs the corpus
+nothing. The encoder cannot be repaired here instead: there is no atom that asserts a literal
+exists — a literal has no view entry, which is the same root cause as `ViewRepr`'s literal clause
+taking its membership as a hypothesis.
+
 ## Constraint (3): monotonicity
 
 Discharged by the representation: in `Spec/` asserted equations only accumulate, a merge adds the

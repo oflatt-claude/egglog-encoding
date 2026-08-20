@@ -1770,6 +1770,102 @@ theorem Cmd.noSetB_iff (c : Cmd) : c.noSetB = true ↔ c.NoSet := by
   cases c <;>
     simp [Cmd.noSetB, Cmd.NoSet, Action.noSetB_iff, Pattern.noValuesB_iff, List.all_eq_true]
 
+/-- A bare literal, computed. -/
+def Expr.isLitB : Expr → Bool
+  | .lit _ => true
+  | _ => false
+
+theorem Expr.isLitB_eq_false_iff (e : Expr) : e.isLitB = false ↔ ∀ l, e ≠ .lit l := by
+  cases e <;> simp [Expr.isLitB]
+
+/-- `Pattern.Grounded`, computed. -/
+def Pattern.groundedB : Pattern → Bool
+  | .expr e => !e.isLitB
+  | .eq e₁ e₂ => !e₁.isLitB || !e₂.isLitB
+  | .values _ _ _ => true
+
+theorem Pattern.groundedB_iff (p : Pattern) : p.groundedB = true ↔ p.Grounded := by
+  cases p <;>
+    simp [Pattern.groundedB, Pattern.Grounded, ← Expr.isLitB_eq_false_iff]
+
+/-- `Expr.var v ∈ args`, computed: `Expr` carries no `BEq`. -/
+def Expr.memVarB (v : Var) : List Expr → Bool
+  | [] => false
+  | .var w :: es => w == v || Expr.memVarB v es
+  | _ :: es => Expr.memVarB v es
+
+theorem Expr.memVarB_iff (v : Var) : ∀ args : List Expr,
+    Expr.memVarB v args = true ↔ Expr.var v ∈ args
+  | [] => by simp [Expr.memVarB]
+  | .lit _ :: es => by simpa [Expr.memVarB] using Expr.memVarB_iff v es
+  | .var w :: es => by
+      simp only [Expr.memVarB, Bool.or_eq_true, beq_iff_eq, List.mem_cons, Expr.var.injEq,
+        Expr.memVarB_iff v es]
+      exact or_congr_left eq_comm
+  | .app _ _ :: es => by simpa [Expr.memVarB] using Expr.memVarB_iff v es
+
+mutual
+
+/-- `Expr.ArgVar`, computed. -/
+def Expr.argVarB (v : Var) : Expr → Bool
+  | .lit _ => false
+  | .var _ => false
+  | .app _ args => Expr.memVarB v args || Expr.argVarListB v args
+
+/-- `Expr.ArgVarList`, computed. -/
+def Expr.argVarListB (v : Var) : List Expr → Bool
+  | [] => false
+  | e :: es => Expr.argVarB v e || Expr.argVarListB v es
+
+end
+
+mutual
+
+theorem Expr.argVarB_iff (v : Var) : ∀ e : Expr, Expr.argVarB v e = true ↔ Expr.ArgVar v e
+  | .lit _ => by simp [Expr.argVarB, Expr.ArgVar]
+  | .var _ => by simp [Expr.argVarB, Expr.ArgVar]
+  | .app _ args => by
+      simp only [Expr.argVarB, Expr.ArgVar, Bool.or_eq_true, Expr.memVarB_iff,
+        Expr.argVarListB_iff v args]
+
+theorem Expr.argVarListB_iff (v : Var) : ∀ es : List Expr,
+    Expr.argVarListB v es = true ↔ Expr.ArgVarList v es
+  | [] => by simp [Expr.argVarListB, Expr.ArgVarList]
+  | e :: es => by
+      simp only [Expr.argVarListB, Expr.ArgVarList, Bool.or_eq_true, Expr.argVarB_iff v e,
+        Expr.argVarListB_iff v es]
+
+end
+
+/-- `Pattern.ArgVar`, computed. -/
+def Pattern.argVarB (v : Var) : Pattern → Bool
+  | .expr e => e.argVarB v
+  | .eq e₁ e₂ => e₁.argVarB v || e₂.argVarB v
+  | .values vs _ as => Expr.argVarListB v vs || Expr.argVarListB v as
+
+theorem Pattern.argVarB_iff (v : Var) (p : Pattern) :
+    p.argVarB v = true ↔ Pattern.ArgVar v p := by
+  cases p <;>
+    simp [Pattern.argVarB, Pattern.ArgVar, Expr.argVarB_iff, Expr.argVarListB_iff]
+
+/-- `Query.VarsKeyed`, computed. -/
+def Query.varsKeyedB (q : Query) : Bool :=
+  (Query.vars q).all fun v => q.any fun p => Pattern.argVarB v p
+
+theorem Query.varsKeyedB_iff (q : Query) : q.varsKeyedB = true ↔ Query.VarsKeyed q := by
+  simp [Query.varsKeyedB, Query.VarsKeyed, List.all_eq_true, List.any_eq_true,
+    Pattern.argVarB_iff]
+
+/-- `Cmd.NoLeafPattern`, computed. -/
+def Cmd.noLeafPatternB : Cmd → Bool
+  | .rule r => r.query.all Pattern.groundedB && Query.varsKeyedB r.query
+  | _ => true
+
+theorem Cmd.noLeafPatternB_iff (c : Cmd) : c.noLeafPatternB = true ↔ c.NoLeafPattern := by
+  cases c <;>
+    simp [Cmd.noLeafPatternB, Cmd.NoLeafPattern, List.all_eq_true, Pattern.groundedB_iff,
+      Query.varsKeyedB_iff]
+
 /-- `Program.EncodeDomain`, computed. -/
 def Program.encodeDomainB (p : Program) : Bool :=
   p.all Cmd.ctorDeclB && p.all Cmd.noSetB
@@ -1777,16 +1873,18 @@ def Program.encodeDomainB (p : Program) : Bool :=
     && p.ctors.all (fun fk => !"@".isPrefixOf fk.1)
     && p.vars.all (fun v => !"@".isPrefixOf v)
     && p.rulesets.all (fun R => !"@".isPrefixOf R)
+    && p.all Cmd.noLeafPatternB
 
 /-- **The census below counts exactly `EncodeDomain`.** -/
 theorem Program.encodeDomainB_iff (p : Program) :
     p.encodeDomainB = true ↔ p.EncodeDomain := by
   simp only [Program.encodeDomainB, Bool.and_eq_true, List.all_eq_true, Cmd.ctorDeclB_iff,
-    Cmd.noSetB_iff, Option.isNone_iff_eq_none, Bool.not_eq_eq_eq_not, Bool.not_true,
-    Bool.eq_false_iff, ne_eq]
-  exact ⟨fun h => ⟨h.1.1.1.1.1, h.1.1.1.1.2, h.1.1.1.2, h.1.1.2, h.1.2, h.2⟩,
-    fun h => ⟨⟨⟨⟨⟨h.ctorsOnly, h.noSet⟩, h.noPrim⟩, h.noAt⟩, h.noAtVar⟩,
-      h.noAtRuleset⟩⟩
+    Cmd.noSetB_iff, Cmd.noLeafPatternB_iff, Option.isNone_iff_eq_none,
+    Bool.not_eq_eq_eq_not, Bool.not_true, Bool.eq_false_iff, ne_eq]
+  exact ⟨fun h => ⟨h.1.1.1.1.1.1, h.1.1.1.1.1.2, h.1.1.1.1.2, h.1.1.1.2, h.1.1.2, h.1.2,
+      h.2⟩,
+    fun h => ⟨⟨⟨⟨⟨⟨h.ctorsOnly, h.noSet⟩, h.noPrim⟩, h.noAt⟩, h.noAtVar⟩,
+      h.noAtRuleset⟩, h.noLeafPattern⟩⟩
 
 /-! #### Running the encoded program
 
@@ -2934,7 +3032,14 @@ set_option linter.hashCommand false in
 
 /-! And they are out for the one reason `MERGE.md` calls permanent rather than a gap: every
 one of the 96 declares a `:merge` function, so it is `EncodeDomain.ctorsOnly` that fails and
-not a generated-name clash or a shadowed primitive. -/
+not a generated-name clash or a shadowed primitive.
+
+That is also what says the newest clause, `EncodeDomain.noLeafPattern`, **costs the corpus
+nothing**: the count is 70 with it as it was without, and the 70 pinned above is what would
+move if a generated program ever wrote a bare-leaf pattern. What the clause does exclude is
+`Encoding/Match.lean`'s `litProgram`, a program the domain used to admit and the encoder gets
+wrong — so the clause is not decoration, it is the only thing standing between the domain and
+a refuted case. -/
 set_option linter.hashCommand false in
 #guard (allCases.filter fun c => !(c.2.declared).encodeDomainB).all fun c =>
   !((c.2.declared).all Cmd.ctorDeclB)
