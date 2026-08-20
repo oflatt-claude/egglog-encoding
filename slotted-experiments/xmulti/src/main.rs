@@ -15,7 +15,8 @@
 //! cond   in|notin $<slot> <pvar>...   side condition on the match
 //! action <root> <op> <a> <b>  union ?root with (op ?a ?b)
 //! rhs    <root> <pattern>    union ?root with a nested right-hand side
-//! nested <pattern>           run this rule through the single-pattern matcher
+//! nested <pattern>           run this rule through the single-pattern matcher;
+//!                            its `cond` lines still apply
 //! probe  <sexpr>              term to include in the reported partition
 //! rounds <n>                  saturation rounds (default 10)
 //! ```
@@ -38,6 +39,16 @@ define_language! {
         Sub(AppliedId, AppliedId) = "sub",
         Sub2(AppliedId, AppliedId) = "sub2",
         Add(AppliedId, AppliedId) = "add",
+        // The paper's S4.1 array language (Listing 1). `Lam` and `Var` above are
+        // already its binder and its variable; these are the rest. The paper
+        // writes `Let(RenamedId, Bind<RenamedId>)`, i.e. `(let ?e $x ?body)`;
+        // this is the same constructor with its columns in the order the
+        // reference's own `tests/rise` and `tests/array` use, `(let $x ?body ?e)`,
+        // which is also the order the encoding's `App3 "let"` has.
+        App(AppliedId, AppliedId) = "app",
+        Let(Bind<AppliedId>, AppliedId) = "let",
+        Number(u32),
+        Symbol(Symbol),
     }
 }
 
@@ -48,6 +59,7 @@ type G = EGraph<L>;
 /// `want` says whether the slot should appear in the slots of *any* listed
 /// variable, which covers the reference's conditions: `$1 not in slots(?b)`,
 /// `$1 in slots(?b)`, and `let-app`'s `$1 in slots(?a) or $1 in slots(?b)`.
+#[derive(Clone)]
 struct Cond {
     slot: Slot,
     pvars: Vec<String>,
@@ -267,7 +279,14 @@ fn main() {
         .filter_map(|r| {
             let lhs = r.nested_lhs.as_ref()?;
             let (_, text) = r.rhs.as_ref()?;
-            Some(Rewrite::new("r", lhs, text))
+            // A nested rule's `cond` lines have to be applied here too. They used
+            // not to be, so a conditional rule written in nested form compared the
+            // encoding's guarded rule against an *unguarded* reference, and the
+            // reference fired where the rule says it must not.
+            let conds = r.conds.clone();
+            Some(Rewrite::new_if("r", lhs, text, move |subst, _| {
+                conds.iter().all(|c| holds(c, subst))
+            }))
         })
         .collect();
     if !nested.is_empty() {

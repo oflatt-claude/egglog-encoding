@@ -569,6 +569,14 @@ def compile_rule(atoms, action, conds=()):
         for e, _ in reversed(kids):
             slots = (f"(map-image {e})" if slots == "(map-empty)"
                      else f"(map-union (map-image {e}) {slots})")
+        if t[0] == "lam":
+            # A binder's bound slot is on the node but not on the class, so the
+            # parent's edge must not name it -- an edge naming a slot its child
+            # does not have breaks Def. 4. No case here builds a binder (the
+            # fuzzer excludes them and no curated action nests one), so this is
+            # correctness for the compiler rather than something a case observes;
+            # `xarray.py` builds binders and needs it.
+            slots = f"(map-remove {slots} {slot_of[t[1]]})"
         return slots, node
 
     # A two-element action is `(root, rhs-tree)`; the four-element forms are the

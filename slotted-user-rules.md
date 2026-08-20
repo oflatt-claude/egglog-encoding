@@ -7,6 +7,8 @@ Companion to three runnable files:
 | `tests/slotted-egraph-encoding-11.egg` | the machinery: union, congruence, redundancy, symmetry |
 | `tests/slotted-user-rules.egg` | hand-encoded user rules, M1–M8 |
 | `slotted-experiments/xdiff/xdiff.py` | differential tests against the reference implementation |
+| `tests/slotted-array-rules.egg` | the paper's §4.1 array language, 8 rules, self-checking |
+| `slotted-experiments/xdiff/xarray.py` | the same 8 rules, differentially tested |
 
 Semantics come from Schneider et al., *Slotted E-Graphs*, PLDI 2025
 ([PDF](https://steuwer.info/files/publications/2025/PLDI-Slotted-E-Graphs.pdf),
@@ -422,6 +424,159 @@ fixpoint.py        each case reaches a fixpoint of the *rules*, not just of the
 follower-nodes.py  no e-node sits on a follower class
 invariants.py      Def. 4 on every edge, and that no stored renaming is non-injective
 ```
+
+## The paper's §4.1 array language, ported and compared
+
+The headline efficiency result of the paper is a functional array language whose
+`map`s are fused and fissioned (Listing 1, and the (A) → (B) transformation of §4.1).
+Nothing had to be added to the encoding for it: the array language *is* the generic
+string-headed encoding, with `lambda` and `let` as its two declared binders.
+
+| Listing 1 | surface | encoding |
+| --- | --- | --- |
+| `Lam(Bind<RenamedId>)` | `(lam $x b)` | `(App2 "lambda" {0↦x} (Var 0) mb b)` |
+| `App(RenamedId, RenamedId)` | `(app a b)` | `(App2 "app" ma a mb b)` |
+| `Let(RenamedId, Bind<RenamedId>)` | `(let $x b e)` | `(App3 "let" {0↦x} (Var 0) mb b me e)` |
+| `Var(Slot)` | `(var $x)` | an edge `{0↦x}` to the `(Var 0)` class |
+| `Number(u32)` / `Symbol(Symbol)` | `7`, `map` | `(Num 7)`, `(Sym "map")` |
+
+Only `let`'s columns are reordered: Listing 1 writes `(let ?e $x ?body)`, value first,
+where the encoding — and the reference crate's own `tests/rise` and `tests/array` —
+write `(let $x ?body ?e)`. Same constructor, and the binder is column 0 on this side
+because that is where the generated binder rule looks for it.
+
+Eight of the nine rules are ported: `eta`, `let-intro`, `let-unused`,
+`let-var-same`, `let-app`, `let-lam-diff`, `map-fusion`, `map-fission`. `beta` is
+left out because its right-hand side is `?body[(var $x) := ?e]`, and the oracle's
+spec language cannot express substitution; the paper's own benchmarks use the
+let-based rules instead (footnote 4).
+
+`xarray.py` compiles each rule by the recipe above and compares it against the
+reference crate's *own* `Rewrite::new_if`, so the reference sees the rule as one
+nested pattern while the encoding sees it flattened into depth-1 atoms.
+
+```text
+./xarray.py            each rule firing, and each guard blocking      14/14 agree
+./xarray.py vac        drop each guard: the answer must change         5/5 load-bearing
+./xarray.py iso        whole-e-graph isomorphism, not just probes     14/14 (+ the one
+                                                                     known difference)
+./xarray.py fuzz 60    random array terms, two seeds                 60/60 and 59/59 agree
+./xarray.py goal       (A) → (B), the paper's transformation           see below
+./xarray.py egg        regenerate tests/slotted-array-rules.egg
+```
+
+Flattening is safe for these eight even though it is not safe in general. The one
+shape where the depth-1 form proves *more* than a nested pattern is the same slot
+literal on two binders in different atoms (`B3` in `xdiff.py`): each atom looks its
+own node up and gets its own name for that node's bound slot, so writing `$x` twice
+constrains nothing. None of the eight does that. `let-var-same` writes `$x` twice but
+both occurrences are children of one atom, so one `mp` pins both; `eta`'s second `$x`
+is a *free* occurrence inside `?b`, which is a public slot of `?b`'s class and so is
+reached through the root constraint.
+
+Three things the port needed that the toy language never exercised:
+
+* **A constant leaf in a child position.** `(app map ?f)` pins a child to the
+  `(Sym "map")` class rather than to a pattern variable.
+* **A slot the right-hand side binds but the left-hand side never named.**
+  `map-fusion` writes `(lam $x …)` for an `$x` nowhere in its pattern. The
+  reference writes a literal named slot; the encoding has to *mint* one, which is
+  `find-mapping-total` over the accumulated avoid-set with a one-key domain.
+* **Building a binder in an action.** A built `lam`'s bound slot is on the node but
+  not on the class, so the parent's edge must not name it — `map-remove` on the
+  identity map. Getting this wrong writes an edge that breaks Def. 4. `xdiff.py`'s
+  own `build_rhs` had the same gap; no case there builds a binder, so nothing
+  observed it.
+
+### (A) → (B), measured
+
+`./xarray.py goal 0 1`. "reaches" means (A) and (B) end in one e-class.
+
+| program | reference | encoding |
+| --- | --- | --- |
+| 1-D, 2 functions | reaches, saturates | reaches |
+| 2-D, 4 functions, N=0 extra params | reaches, 2.1s | reaches, saturates, 1.0s |
+| 2-D, 4 functions, N=1 | reaches, 2.5s | reaches, saturates, 1.3s |
+| 2-D, 4 functions, N=2 | reaches, 2.8s | reaches, saturates, 1.6s |
+| 2-D, 4 functions, N=3 | reaches, 3.2s | reaches, saturates, 1.6s |
+| the same, with `λf1…λf4.λm.` wrapped round it | reaches | > 30 min, see below |
+
+`N` is the paper's difficulty knob: "by adding 2 parameters, we use `((f1 p1) p2)`
+instead of `f1`". The functions and the matrix are free symbols in the rows above
+rather than λ-bound at the top as Listing 1 writes them; that is the same rewriting
+problem, and it is the last row that says why the distinction matters.
+
+Neither side saturates in general — `map-fusion`/`map-fission` and `let-app` keep
+producing work — so this is a *bounded* comparison. The reference gets 10 rounds and
+the encoding 30 user steps with the invariants saturated between them, so "reaches"
+means within that budget. The times are not a like-for-like cost comparison either:
+`egglog` here is a debug build, and the encoding does the machinery's work in datalog
+rather than in Rust. They are in the table only because they are the same order of
+magnitude, which is worth knowing.
+
+**Enclosing binders are what the encoding pays for, and the reference does not.**
+Writing the *same* 2-D four-function program with binders around it, `k` of `λm`,
+`λf4`, `λf3`, `λf2`, `λf1`:
+
+| enclosing binders | 0 | 1 | 2 | 3 | 4 | 5 |
+| --- | --- | --- | --- | --- | --- | --- |
+| reference | 2.1s | 1.6s | 1.7s | 6.3s | 6.3s | 5.3s |
+| encoding | 1.0s | > 10 min | not run | not run | not run | > 25 min |
+
+Every reference entry reaches (A) = (B). The reference is flat across the whole row;
+the encoding falls off a cliff at the *first* enclosing binder, which is too early for
+"the problem got harder" to be the whole story, since the reference is doing the same
+rewriting. The encoding entries marked `>` were stopped without a verdict, so they are
+lower bounds and not "does not reach".
+
+Two things it is *not*: no single rule is expensive on its own — each of the eight,
+run alone on the one-binder program, finishes in 0.1s — and it is not the paper's own
+difficulty knob, which the encoding tracks fine (the N=0…3 table above). So it is the
+rule *set* interacting on a program with a binder around it. The suspected mechanism
+is that every atom's renaming is solved by joining against a `RenamesToLeader`
+self-loop of each variable's class, and a class with `k` slots can carry up to `k!` of
+them, where the reference's `ematch_all` walks down from a class and never enumerates
+them. That is a hypothesis: a leave-one-out over the eight rules was started and not
+finished, so which rule and which join dominate is not isolated. It is a different
+axis in any case from the paper's Figure 8, which counts e-nodes and memory.
+
+### Where the encoding and the reference genuinely differ
+
+One shape, and it is a *language* difference rather than a matching one — it shows
+up as a baseline disagreement, before any rule runs.
+
+`Bind` covers one column. `Let(Bind<body>, value)` hides the bound slot from the
+body's public slots only, so in `let x = x in f1 x` the value's `x` is the ambient
+one and the class keeps that slot. The generated binder rule removes the bound slot
+from the whole node, so the class comes out with no slots at all, and two
+applications the reference keeps apart become one class:
+
+```text
+(app (let $0 (app f1 (var $0)) (var $0)) (var $0))
+(app (let $0 (app f1 (var $0)) (var $0)) (var $1))
+```
+
+`xarray.py extra` is that case; the section at the end of
+`tests/slotted-array-rules.egg` asserts the encoding's side of it. Fixing it needs
+`:binder` to name the columns a binder *covers*, not only the column its slot sits
+in. Nothing the eight rules build has the shape, because a pattern's `?e` never
+carries the pattern slot that same pattern binds.
+
+### Two discrepancies in the reference checkout, not in our encoding
+
+Both in `slotted-egraphs/tests/array/mod.rs`, which looks stale next to
+`tests/rise/`, whose language and rules are the paper's:
+
+* `Lam(Slot, AppliedId)` — a *free* slot where Listing 1 and `tests/rise` both have
+  `Lam(Bind<…>)`. A non-binding `lam`.
+* `slot_free_in(slot, var)` returns `!…contains(slot)`, i.e. it computes "**not**
+  free in". Every use in that file therefore has the opposite polarity to Listing 1:
+  `eta` fires only when `$x` *is* free in `?f`, `let-app` only when it is free in
+  neither child, and so on. Measurably wrong: with Listing 1's polarity the
+  reference rewrites (A) into (B); with this file's, it does not.
+
+Both are worked around by targeting the paper's semantics, which is what `tests/rise`
+implements and what `xmulti`'s `define_language!` declares.
 
 ## A soundness bug in the machinery: migration truncates edges
 

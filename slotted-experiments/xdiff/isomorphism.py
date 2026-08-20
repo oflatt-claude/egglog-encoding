@@ -338,14 +338,21 @@ def build_encoding_graph(doc):
 
 
 # ------------------------------------------------------- the encoding's own ops
+#: the encoding's binder operators and what the reference calls them. A binder's
+#: bound slot rides in child column 0 as an edge to the var class, where the
+#: reference has a `Bind`, i.e. a slot literal in that position.
+ENC_BINDERS = {"lambda": "lam", "let": "let"}
+
+
 def to_reference_shape(g, var_class=None):
     """Rewrite the encoding's node forms into the reference's.
 
-    Two operators are spelled differently by construction, and both are documented
-    where they are built (`enc` in xdiff.py, `define_language!` in xmulti):
+    Two things are spelled differently by construction, and both are documented
+    where they are built (`enc` in xdiff.py / xarray.py, `define_language!` in
+    xmulti):
 
-      * `lambda` is `lam`, and its bound slot rides in a child edge to the var class
-        rather than being a slot literal on the node.
+      * a binder -- `lambda` is `lam` -- has its bound slot in a child edge to the
+        var class rather than as a slot literal on the node.
       * a child edge is a dict here and a sorted pair tuple there.
     """
     out = Graph()
@@ -356,7 +363,7 @@ def to_reference_shape(g, var_class=None):
     unfaithful = []
     for cid in g.ids():
         for op, elems in g.nodes[cid]:
-            if op == "lambda" and elems and elems[0][0] == "child":
+            if op in ENC_BINDERS and elems and elems[0][0] == "child":
                 child, m = elems[0][1], dict(elems[0][2])
                 # The bound slot rides in this edge. It can have been dropped -- a
                 # binder whose slot nothing uses -- and then there is no name left to
@@ -373,7 +380,7 @@ def to_reference_shape(g, var_class=None):
                 if var_class is not None and child != var_class:
                     unfaithful.append((cid, child))
                 elems = (("slot", bound),) + elems[1:]
-                op = "lam"
+                op = ENC_BINDERS[op]
             fixed = []
             for e in elems:
                 if e[0] == "child":
@@ -598,6 +605,11 @@ def verify(ga, gb, phi, sig):
 #: encoding's copies too.
 SEED = "term (null)\nterm (var $0)\n"
 
+#: How the encoding's program is built. `xarray.py` swaps in the array language's
+#: builder so the same isomorphism check can be run on its cases; the signature is
+#: `(case, mult)`.
+EGG_PROGRAM = None
+
 
 def reference_graph(case):
     spec = case.spec() + SEED + "dump\n"
@@ -625,7 +637,7 @@ def _dump(case, mult, timeout):
     distinguishable -- where `print-function` renders every such class as the one word
     `Unextractable` and the graph cannot be rebuilt.
     """
-    prog = X.egg_program(case, mult=mult)
+    prog = (EGG_PROGRAM or X.egg_program)(case, mult=mult)
     prog = prog.replace("(print-function SameClass 100000)", "")
     p = X.ROOT / f"xdiff-tmp-iso-{abs(hash(case.name)) % 99999}-{mult}.egg"
     j = p.with_suffix(".json")
