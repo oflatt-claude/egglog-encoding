@@ -198,3 +198,50 @@ fn a_payload_column_is_copied_through() -> Result<(), Error> {
     )?;
     Ok(())
 }
+
+/// `slotted-subst-frame` answers the renaming placing the result in `body`'s
+/// frame. Without it the two shortcut cases below are unreadable: each returns a
+/// class that already existed, and only the renaming says where it sits.
+#[test]
+fn slotted_subst_frame_places_the_result_in_the_bodys_frame() -> Result<(), Error> {
+    // Both halves read the database, so both are callable only from an action:
+    // bind the answer with `let`, then compare it in a `check`.
+
+    // A rebuilt root is spelled in the ambient frame, so its renaming is the
+    // identity on the slots that survive: $0 is substituted away, $1 remains.
+    egraph(
+        "
+(let $body (H (map-of 0 0) (Var 0) (map-of 0 1) (Var 0)))
+(let $fr (slotted-subst-frame $body 0 (Var 0) (map-empty) (Null)))
+(check (= $fr (map-of 1 1)))
+",
+    )?;
+
+    // A body that cannot name the slot comes back as itself, under the renaming
+    // it was reached by -- here the identity on its own two slots.
+    egraph(
+        "
+(let $body (H (map-of 0 2) (Var 0) (map-of 0 3) (Var 0)))
+(let $out (slotted-subst $body 0 (Var 0) (map-empty) (Null)))
+(let $fr (slotted-subst-frame $body 0 (Var 0) (map-empty) (Null)))
+(check (= $out $body))
+(check (= $fr (map-of 2 2 3 3)))
+",
+    )?;
+
+    // Substituting into the variable itself gives `t` under `t_ren`. The class is
+    // `(Var 0)` whatever `t_ren` is, so the renaming carries all the information.
+    // `(Var 0)` is bound by an earlier command so that its row is on the table
+    // by the time the substitution reads it.
+    egraph(
+        "
+(let $v (Var 0))
+(let $out (slotted-subst $v 0 $v (map-of 0 7) $v))
+(let $fr (slotted-subst-frame $v 0 $v (map-of 0 7) $v))
+(check (= $out $v))
+(check (= $fr (map-of 0 7)))
+(fail (check (= $fr (map-of 0 0))))
+",
+    )?;
+    Ok(())
+}

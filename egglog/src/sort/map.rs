@@ -267,7 +267,8 @@ fn renaming_find_mapping_total(maps: &[BTreeMap<i64, i64>]) -> Option<BTreeMap<i
 /// With `i64` keys a renaming also names slots, and the slotted-e-graph
 /// primitives are registered:
 /// - `find-mapping-total`
-/// - `slotted-subst` (see [`crate::sort::SLOTTED_SUBST`])
+/// - `slotted-subst` and `slotted-subst-frame`, the two halves of one
+///   substitution's result (see [`crate::sort::SLOTTED_SUBST`])
 ///
 /// These are not in [`Presort::reserved_primitives`], so a program that never
 /// declares a `Map` sort may still use the names itself.
@@ -482,14 +483,22 @@ impl ContainerSort for MapSort {
 
                 // Substitution needs both a read (to extract a term) and a
                 // write (to add the substituted one), so it is registered as a
-                // `FullPrim`: see `crate::sort::slotted_subst`.
-                eg.add_full_primitive(
-                    crate::sort::slotted_subst::SlottedSubst {
-                        renaming: arc.clone(),
-                        slot: self.key.clone(),
-                    },
-                    None,
-                );
+                // `FullPrim`: see `crate::sort::slotted_subst`. Its result is an
+                // invocation, so it takes two names to read one -- the class and
+                // the renaming placing it in `body`'s frame.
+                for half in [
+                    crate::sort::slotted_subst::Half::Class,
+                    crate::sort::slotted_subst::Half::Frame,
+                ] {
+                    eg.add_full_primitive(
+                        crate::sort::slotted_subst::SlottedSubst {
+                            half,
+                            renaming: arc.clone(),
+                            slot: self.key.clone(),
+                        },
+                        None,
+                    );
+                }
             }
         }
     }

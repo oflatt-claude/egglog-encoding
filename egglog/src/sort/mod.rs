@@ -36,7 +36,7 @@ pub use self::f64::*;
 mod map;
 pub use map::*;
 mod slotted_subst;
-pub use slotted_subst::SLOTTED_SUBST;
+pub use slotted_subst::{SLOTTED_SUBST, SLOTTED_SUBST_FRAME};
 mod set;
 pub use set::*;
 mod vec;

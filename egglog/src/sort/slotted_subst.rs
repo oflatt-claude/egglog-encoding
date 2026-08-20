@@ -49,6 +49,9 @@ use std::collections::BTreeMap;
 /// The name of the primitive, as written in an egglog program.
 pub const SLOTTED_SUBST: &str = "slotted-subst";
 
+/// The name of the companion that answers the same call's renaming.
+pub const SLOTTED_SUBST_FRAME: &str = "slotted-subst-frame";
+
 /// A slot name, as a renaming spells it.
 type Slot = i64;
 
@@ -116,8 +119,11 @@ fn image(m: &Ren) -> Ren {
 /// Substitute `t_ren * t` for the variable at slot `x` of `body`'s frame.
 ///
 /// `var` is the class every variable lives in; `x` names the slot in `body`'s
-/// own frame. Returns `None` when `body` has no finite term, so nothing can be
-/// substituted into.
+/// own frame. Returns the result as an invocation -- the class, and the renaming
+/// carrying its slots into `body`'s frame -- because the result is not always a
+/// freshly built node: a body that cannot name `x` comes back as itself, and the
+/// variable itself comes back as `t`, each under the renaming it was reached by.
+/// `None` when `body` has no finite term, so nothing can be substituted into.
 fn substitute(
     state: &mut FullState<'_, '_>,
     body: Value,
@@ -125,7 +131,7 @@ fn substitute(
     var: Value,
     t_ren: &Ren,
     t: Value,
-) -> Option<Value> {
+) -> Option<(Value, Ren)> {
     let terms = collect_terms(state, body);
     let root = terms.best.get(&body).copied()?;
 
@@ -153,7 +159,7 @@ fn substitute(
         t,
         memo: HashMap::new(),
     };
-    rebuild.go(state, body, frame).map(|(class, _)| class)
+    rebuild.go(state, body, frame)
 }
 
 struct Rebuild {
@@ -383,9 +389,26 @@ fn schema_of(state: &FullState<'_, '_>, ctor: &str) -> Option<Schema> {
     })
 }
 
-/// The `slotted-subst` primitive, for one `Renaming` sort.
+/// Which half of a substitution's result a primitive answers.
+///
+/// A substitution's result is an invocation, and a primitive returns one value,
+/// so it takes two calls to read one. `slotted-subst` gives the class and
+/// `slotted-subst-frame` the renaming; called with the same arguments they
+/// describe the same result, and the pair is what the caller wants. The work is
+/// repeated, so prefer one call each rather than either in a loop.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Half {
+    /// The result class.
+    Class,
+    /// The renaming carrying that class's slots into `body`'s frame.
+    Frame,
+}
+
+/// The `slotted-subst` primitives, for one `Renaming` sort.
 #[derive(Clone)]
 pub(crate) struct SlottedSubst {
+    /// Which half of the result this one answers.
+    pub(crate) half: Half,
     /// The `Map i64 i64` sort renamings are values of.
     pub(crate) renaming: ArcSort,
     /// The sort of a slot name: the renaming sort's key sort, `i64`.
@@ -394,11 +417,16 @@ pub(crate) struct SlottedSubst {
 
 impl Primitive for SlottedSubst {
     fn name(&self) -> &str {
-        SLOTTED_SUBST
+        match self.half {
+            Half::Class => SLOTTED_SUBST,
+            Half::Frame => SLOTTED_SUBST_FRAME,
+        }
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         Box::new(SlottedSubstTypeConstraint {
+            half: self.half,
+            name: self.name().to_owned(),
             renaming: self.renaming.clone(),
             slot: self.slot.clone(),
             span: span.clone(),
@@ -410,7 +438,8 @@ impl FullPrim for SlottedSubst {
     fn apply<'a, 'db>(&self, mut state: FullState<'a, 'db>, args: &[Value]) -> Option<Value> {
         let [body, x, var, t_ren, t] = args else {
             panic!(
-                "{SLOTTED_SUBST} takes five arguments; the typechecker admitted {}",
+                "{} takes five arguments; the typechecker admitted {}",
+                self.name(),
                 args.len()
             )
         };
@@ -420,7 +449,7 @@ impl FullPrim for SlottedSubst {
         let t_ren: Ren = state
             .value_to_container::<MapContainer>(*t_ren)
             .unwrap_or_else(|| {
-                panic!("{SLOTTED_SUBST}'s type constraint admits only renaming values")
+                panic!("{}'s type constraint admits only renaming values", self.name())
             })
             .data
             .iter()
@@ -431,13 +460,19 @@ impl FullPrim for SlottedSubst {
                 )
             })
             .collect();
-        substitute(&mut state, *body, x, *var, &t_ren, *t)
+        let (class, frame) = substitute(&mut state, *body, x, *var, &t_ren, *t)?;
+        Some(match self.half {
+            Half::Class => class,
+            Half::Frame => intern(&mut state, &frame),
+        })
     }
 }
 
-/// `(slotted-subst body x var t_ren t) : (R, i64, R, Renaming, R) -> R` for any
-/// eq-sort `R`.
+/// `(slotted-subst body x var t_ren t) : (R, i64, R, Renaming, R) -> R`, and
+/// `slotted-subst-frame` the same with a `Renaming` result, for any eq-sort `R`.
 struct SlottedSubstTypeConstraint {
+    half: Half,
+    name: String,
     renaming: ArcSort,
     slot: ArcSort,
     span: Span,
@@ -454,7 +489,7 @@ impl TypeConstraint for SlottedSubstTypeConstraint {
                 constraint::ImpossibleConstraint::ArityMismatch {
                     atom: Atom {
                         span: self.span.clone(),
-                        head: SLOTTED_SUBST.to_owned(),
+                        head: self.name.clone(),
                         args: arguments.to_vec(),
                     },
                     expected: 6,
@@ -467,8 +502,14 @@ impl TypeConstraint for SlottedSubstTypeConstraint {
             constraint::assign(t_ren.clone(), self.renaming.clone()),
         ];
 
-        // The class arguments and the result share one eq-sort; `xor` defers
-        // the choice until the surrounding program pins it down.
+        // The class arguments share one eq-sort, as does the result when it is
+        // the class half; `xor` defers the choice until the surrounding program
+        // pins it down.
+        let mut shared = vec![body, var, t];
+        match self.half {
+            Half::Class => shared.push(out),
+            Half::Frame => cs.push(constraint::assign(out.clone(), self.renaming.clone())),
+        }
         let mut eq_sorts = typeinfo.get_arcsorts_by(|sort| sort.is_eq_sort());
         eq_sorts.sort_by_key(|sort| sort.name().to_owned());
         cs.push(constraint::xor(
@@ -476,9 +517,9 @@ impl TypeConstraint for SlottedSubstTypeConstraint {
                 .into_iter()
                 .map(|sort| {
                     constraint::and(
-                        [body, var, t, out]
-                            .into_iter()
-                            .map(|arg| constraint::assign(arg.clone(), sort.clone()))
+                        shared
+                            .iter()
+                            .map(|arg| constraint::assign((*arg).clone(), sort.clone()))
                             .collect(),
                     )
                 })
