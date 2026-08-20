@@ -723,7 +723,7 @@ M9 unchanged. -/
 theorem MergeStep.contained {d₁ d₂ : Database} (h : MergeStep d₁ d₂) :
     d₁.Contained d₂ := by
   cases h with
-  | @collide d f _ as _ _ _ vs _ _ _ _ _ _ _ _ _ hbody _ =>
+  | @collide d f _ as _ _ _ vs _ _ _ _ _ _ _ _ _ _ hbody _ =>
     have hb : d₁.Contained d := ⟨(evalActions_contained hbody).eqs⟩
     exact ⟨(hb.trans (Database.Contained.addTerm _ d)).eqs⟩
 
@@ -1460,12 +1460,12 @@ afterwards, so neither field is ever read. `sig` is needed, because `CongList.mo
 theorem MergeStep.transport {A C B : Database} (hc : A.Contained C) (hsig : A.sig = C.sig)
     (h : MergeStep A B) : ∃ D, MergeStep C D ∧ B.Contained D ∧ B.sig = D.sig := by
   cases h with
-  | @collide dA f dc as bs a b vs body res hdc hmg hla hlb hra hrb hcong hbody hres =>
+  | @collide dA f dc as bs a b vs body res hdc hmg hcf hla hlb hra hrb hcong hbody hres =>
     have hc0 : ({ A with env := mergeEnv a b } : Database).Contained
         { C with env := mergeEnv a b } := ⟨hc.eqs⟩
     obtain ⟨dC, hstepC, hcont, hsig', henv'⟩ := evalActions_mono hc0 hsig rfl hbody
     refine ⟨{ dC.addTerm (.app f (as ++ vs)) with env := C.env, rules := C.rules },
-      .collide (by rw [← hsig]; exact hdc) hmg hla hlb (hc.terms hra) (hc.terms hrb)
+      .collide (by rw [← hsig]; exact hdc) hmg hcf hla hlb (hc.terms hra) (hc.terms hrb)
         (CongList.mono hc hcong) hstepC (hsig' ▸ henv' ▸ hres), ?_, ?_⟩
     · exact ⟨(hcont.addTerm_mono (.app f (as ++ vs))).eqs⟩
     · simpa using hsig'
@@ -2971,7 +2971,7 @@ so `WF.subtermClosed` already puts the colliding entries' value columns in `term
 is what `WF.envInTerms` needs of `mergeEnv a b` before the body runs. -/
 theorem MergeStep.wf {d₁ d₂ : Database} (hw : d₁.WF) (h : MergeStep d₁ d₂) : d₂.WF := by
   cases h with
-  | @collide d f dc as bs a b vs body res hdc hmg hla hlb hra hrb hcong hbody hres =>
+  | @collide d f dc as bs a b vs body res hdc hmg _ hla hlb hra hrb hcong hbody hres =>
     have hout : ∀ (cs os : List Term), Term.app f (cs ++ os) ∈ d₁.terms →
         ∀ x ∈ os, x ∈ d₁.terms := by
       intro cs os hmem x hx
@@ -3047,7 +3047,7 @@ theorem mergeStep_declaredTerms {db db' : Database} (hwf : db.WF) (hdt : db.Decl
     (hml : db.sig.MergesLegal) (hmw : db.sig.MergesWidthOk) (h : MergeStep db db') :
     db'.DeclaredTerms := by
   cases h with
-  | @collide d f decl as bs a b vs body res hd hmerge hasl _ hae hbe _ hbody hres =>
+  | @collide d f decl as bs a b vs body res hd hmerge _ hasl _ hae hbe _ hbody hres =>
   have hmemab : ∀ p ∈ mergeEnv a b, p.2 ∈ db.terms := by
     intro p hp
     rcases mem_mergeEnv hp with hp' | hp'
@@ -3385,7 +3385,7 @@ theorem evalLocalActions_diag {db db' : Database} {as : List Action} {σ : Env}
 theorem MergeStep.diag {d₁ d₂ : Database} (hs : Signature.UnionFree d₁.sig)
     (hd : d₁.Diag) (h : MergeStep d₁ d₂) : d₂.Diag := by
   cases h with
-  | @collide d f dc as bs a b vs body res hdc hmg _ _ _ _ _ hbody _ =>
+  | @collide d f dc as bs a b vs body res hdc hmg _ _ _ _ _ _ hbody _ =>
     exact (evalActions_diag (db := { d₁ with env := mergeEnv a b })
       (hs f dc hdc _ hmg) hd hbody).addTerm _
 
@@ -4014,7 +4014,7 @@ theorem MergeStep.transport_owes {A C B : Database} (hc : A.Recorded C) (hwfA : 
     (hwfC : C.WF) (hsig : A.sig = C.sig) (hof : Signature.OrderingFree C.sig)
     (h : MergeStep A B) : ∃ D, MergeStep C D ∧ B.Recorded D ∧ B.sig = D.sig := by
   cases h with
-  | @collide dA f dc as bs a b vs body res hdc hmg hla hlb hra hrb hcong hbody hres =>
+  | @collide dA f dc as bs a b vs body res hdc hmg _ hla hlb hra hrb hcong hbody hres =>
     -- the two colliding entries, matched column by column at `C`
     obtain ⟨cs, hcs, howcs⟩ := recorded_entry hc hwfA hwfC hra
     obtain ⟨es, hes, howes⟩ := recorded_entry hc hwfA hwfC hrb
@@ -4034,9 +4034,10 @@ theorem MergeStep.transport_owes {A C B : Database} (hc : A.Recorded C) (hwfA : 
         (fun hm => hmemC hes p.2 (List.mem_append_right _ hm))
     have hfollows : StateOwes { A with env := mergeEnv a b } { C with env := mergeEnv a' b' } :=
       ⟨hc.setEnv _ _, hsig, (mergeEnv_owes howa howb).setEnv⟩
+    have hdcof : dc.OrderingFree := hof f dc (hsig ▸ hdc)
     obtain ⟨hbodyof, hresof⟩ : Actions.OrderingFree body ∧ Expr.OrderingFreeList res := by
-      have := hof f dc (hsig ▸ hdc) (MergeSpec.merge body res) (by rw [hmg]; rfl)
-      exact this
+      obtain ⟨hnil, hres'⟩ := hdcof.2 (MergeSpec.merge body res) (by rw [hmg]; rfl)
+      exact ⟨by rw [hnil]; trivial, hres'⟩
     obtain ⟨dC, hdC, hfd⟩ := evalActions_owes hfollows hwfCe hbodyof hbody
     have hwfdC : dC.WF := evalActions_wf hwfCe hdC
     -- the result columns follow
@@ -4048,7 +4049,8 @@ theorem MergeStep.transport_owes {A C B : Database} (hc : A.Recorded C) (hwfA : 
     have howentry : Owes dC (.app f (as ++ vs)) (.app f (as' ++ vs')) :=
       owes_append (howas.imp (fun {_ _} ho => Owes.mono ⟨hcontCd.eqs⟩ (Owes.setEnv ho))) howvs
     refine ⟨{ dC.addTerm (.app f (as' ++ vs')) with env := C.env, rules := C.rules },
-      .collide (hsig ▸ hdc) hmg ?_ ?_ ?_ ?_ hkey hdC hvs', ?_, ?_⟩
+      .collide (hsig ▸ hdc) hmg (mergeConflict_of_ordering_free hdcof hmg a' b')
+        ?_ ?_ ?_ ?_ hkey hdC hvs', ?_, ?_⟩
     · rw [← hla]; exact (howas.length_eq).symm
     · rw [← hlb]; exact (howbs.length_eq).symm
     · exact hcs
@@ -4402,6 +4404,32 @@ reads something stated above: `execAction_sig`, `mergeOneWith_inv`,
 declared widths, and its result has one expression per value column — recurs throughout,
 for `Inv.mergeRound_of_legalMerges`'s reason. -/
 
+/-- **The implementation's skip test is the specification's conflict, negated.**
+`FDatabase.noConflict` is the `Bool` `mergeOneOriented` branches on and takes the arriving
+row first; `MergeConflict` is the `Prop` `MergeStep.collide` demands and takes the resident
+row's values first. The test is symmetric in the two, so the two line up column for
+column. -/
+theorem mergeConflict_of_noConflict {dc : FnDecl} {body : List Action} {r₁ r₂ : Row}
+    (h : FDatabase.noConflict dc.identityVals body r₁ r₂ = false) :
+    MergeConflict dc body r₂.out r₁.out := by
+  unfold FDatabase.noConflict at h
+  unfold MergeConflict
+  cases hk : dc.identityVals with
+  | some k =>
+    rw [hk] at h
+    replace h : (List.take k r₁.out == List.take k r₂.out) = false := h
+    intro hcon
+    rw [hcon] at h
+    simp at h
+  | none =>
+    rw [hk] at h
+    replace h : (!body.isEmpty && (r₁.out == r₂.out)) = false := h
+    by_cases hb : body = []
+    · exact Or.inl hb
+    · refine Or.inr fun hcon => ?_
+      rw [hcon] at h
+      simp [List.isEmpty_iff, hb] at h
+
 namespace FDatabase
 
 /-- **One firing of the pass lands in a state the merge closure reaches.**
@@ -4483,7 +4511,11 @@ theorem mergeOneOriented_mergeStep {d x y : FDatabase} {r₁ r₂ : Row} {D : Da
         rw [Option.some.injEq] at hm
         subst hm
         exact ⟨D, Relation.ReflTransGen.refl, hxc⟩
-      case isFalse =>
+      case isFalse hnc =>
+      have hconf : MergeConflict dc body r₂.out r₁.out := by
+        refine mergeConflict_of_noConflict (r₁ := r₁) (r₂ := r₂) ?_
+        rw [hdc] at hnc
+        simpa using hnc
       cases hb : execActions { x with env := mergeEnv r₂.out r₁.out } body with
       | none => rw [hb] at hm; simp at hm
       | some eb =>
@@ -4528,7 +4560,7 @@ theorem mergeOneOriented_mergeStep {d x y : FDatabase} {r₁ r₂ : Row} {D : Da
         have hD₁wf : D₁.WF := evalActions_wf (hDwf.setEnvRules (R := D.rules) hσD) hD₁step
         refine ⟨{ D₁.addTerm (.app r₂.fn (bs₂ ++ vs)) with env := D.env, rules := D.rules },
           Relation.ReflTransGen.single
-            (MergeStep.collide hdcD hdcm hlen₂ hlen₁ hr₂D hr₁D hcongB hD₁step hmlD), ?_⟩
+            (MergeStep.collide hdcD hdcm hconf hlen₂ hlen₁ hr₂D hr₁D hcongB hD₁step hmlD), ?_⟩
         -- The interpreter records the combined entry at `r₂.args`, the specification at
         -- `bs₂`; `Recorded.addTerm_congr` is exactly that slack.
         have hDD₁ : D.Contained D₁ := ⟨(evalActions_contained hD₁step).eqs⟩

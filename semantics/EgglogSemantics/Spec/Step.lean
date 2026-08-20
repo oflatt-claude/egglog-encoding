@@ -31,15 +31,32 @@ def mergeEnv : List Term → List Term → Env
   | [o], [n] => [("old", o), ("new", n)]
   | os, ns => mergeEnvIdx 0 os ns
 
-/-- One `:merge` firing: two entries of `f` on congruent keys, resolved by running `f`'s
-body once and then evaluating `res`, one expression per value column, and recorded at the
-key `as` alone. The `arity` premises supply the key/value split, without which the split
-`key = []` fires every entry of `f` against every other; an entry also collides with
-itself. -/
+/-- The two colliding value tuples **conflict**: they differ in a value column that counts,
+which is the whole of when a collision resolves to anything.
+
+`:internal-identity-vals k` (`FnDecl.identityVals`) declares that only the first `k` value
+columns count, so a collision that moves only the columns past them changes nothing and the
+resident entry stands. Without it every column counts — except that a single-expression
+`:merge` has no block to skip and may be non-idempotent, `:merge (+ old new)` on two rows
+both holding `2` still giving `4`, so an empty `body` conflicts whatever the columns hold.
+
+`Impl/Merge.lean`'s `noConflict` is this test, decided and negated. -/
+def MergeConflict (decl : FnDecl) (body : List Action) (a b : List Term) : Prop :=
+  match decl.identityVals with
+  | some k => a.take k ≠ b.take k
+  | none => body = [] ∨ a ≠ b
+
+/-- One `:merge` firing: two entries of `f` on congruent keys **whose values conflict**,
+resolved by running `f`'s body once and then evaluating `res`, one expression per value
+column, and recorded at the key `as` alone. The `arity` premises supply the key/value
+split, without which the split `key = []` fires every entry of `f` against every other; an
+entry also collides with itself, and `MergeConflict` is what keeps that collision from
+resolving to anything unless the function asked for it. -/
 inductive MergeStep : Database → Database → Prop where
   | collide {db d : Database} {f : FnName} {decl : FnDecl} {as bs a b vs : List Term}
       {body : List Action} {res : List Expr} :
       db.sig f = some decl → decl.merge = some (.merge body res) →
+      MergeConflict decl body a b →
       as.length = decl.arity → bs.length = decl.arity →
       Term.app f (as ++ a) ∈ db.terms → Term.app f (bs ++ b) ∈ db.terms →
       CongList db as bs →
@@ -51,8 +68,8 @@ inductive MergeStep : Database → Database → Prop where
 /-- Merge closure: any number of merge steps. -/
 def MergeClosure : Database → Database → Prop := Relation.ReflTransGen MergeStep
 
-/-- No merge collision *changes* anything. Not "no step applies", which is unsatisfiable:
-every entry collides with itself, so a step always applies. -/
+/-- No merge collision *changes* anything. Not "no step applies": a `:merge` with no block
+conflicts with itself (`MergeConflict`), so at such a function a step always applies. -/
 def MergeSaturated (db : Database) : Prop := ∀ db', MergeStep db db' → db' = db
 
 /-- `:no-merge` is respected: no two entries of a `.noMerge` function collide on congruent

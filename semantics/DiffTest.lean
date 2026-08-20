@@ -2813,13 +2813,13 @@ def correspondSelfTests : List (String × (Unit → Bool)) :=
           && !decide ((witnessOne, witnessAdd) ∈ d.closureF)
           && !sameClassF e witnessOne witnessAdd
       | _, _ => false),
-    -- **The vacuity result reaches this state too.**
-    -- `Encoding/Correspond.lean`'s `not_mergeSaturated_of_entry` refutes `MergeSaturated` at
-    -- any state holding one `@UF` or view entry, and `refutationState_not_mergeSaturated`
-    -- instantiates it. This says the state the sweep actually reads is such a state, so the
-    -- specification's `Cmd.saturate` cannot step to it and `Rebuilt` fails there: what the
-    -- corpus measures is the interpreter's target and not `ProgramStep`'s.
-    ("the swept target is a state nothing can be Rebuilt at", fun _ =>
+    -- **The state the sweep reads holds `@UF` entries.**
+    -- That used to be the refutation: `MergeSaturated` counted the proof column, so no such
+    -- state was one the specification's `Cmd.saturate` could step to. `Spec/Step.lean`'s
+    -- `MergeConflict` reads `identityVals` now and `Encoding/Correspond.lean`'s
+    -- `refutationState_mergeSaturated` is the same shape of state, saturated; what this
+    -- column still pins is that the sweep is reading a state with a union-find in it.
+    ("the swept target holds @UF entries", fun _ =>
       match execM (encode witnessProgram) with
       | some e => e.terms.any fun t =>
           match t with
@@ -2905,13 +2905,12 @@ diagonal; 25 more derive exactly one. Two cases carry 86 of the 159. The claim i
 depth on very few programs.
 
 **And what no column of it establishes.** The sweep runs `execM`, and `execM` is not
-`ProgramStep`: the encoded program saturates a ruleset, and `Encoding/Correspond.lean`'s
-`not_mergeSaturated_of_entry` shows that *no* state holding a single view entry is
-`MergeSaturated`, because the shared `:merge` body composes a strictly larger proof at every
-collision and every entry collides with itself. So the specification's `Cmd.saturate` cannot
-step at all from these states, `Rebuilt` is unsatisfiable again, and every number here is a
-statement about the reference implementation's target rather than about a state `Spec/`
-reaches. -/
+`ProgramStep`. `Spec/Step.lean` now reads `identityVals`, so the specification *can* reach a
+state like these — `Encoding/Correspond.lean`'s `satProgram_programStep` is a compiled
+`ProgramStep` for an encoded program — but the states are not the same one: `execM`'s
+enumerator is stricter than `ValidEnv` and its merge pass fires a strict subset of
+`MergeStep`, so every number here is a statement about the reference implementation's target
+and not about the state a `ProgramStep` picks. -/
 
 /-! #### What the harness pins
 

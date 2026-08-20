@@ -45,12 +45,11 @@ re-firing from becoming a fresh collision.
 run is followed by `Cmd.saturate rebuildRuleset`. egglog nests three rulesets in a
 `run-schedule`; one flat ruleset run to a fixpoint is exactly as strong, since a fixpoint of
 a union of rulesets is a fixpoint of each. `Rebuilt` is that command's postcondition
-(`saturateReach_rebuilt`) — **and nothing satisfies it**, because `MergeSaturated` counts
-the proof column and `mergeBody` composes a bigger proof at every collision, a self-collision
-included. `Encoding/Correspond.lean`'s `not_mergeSaturated_of_entry` is the refutation, and
-`ENCODING.md`, finding 3, is what it means: the specification has no notion of
-`identityVals`, so a postcondition of `Cmd.saturate` is a postcondition of a command that
-cannot step.
+(`saturateReach_rebuilt`), and it is satisfiable: `Spec/Step.lean`'s `MergeConflict` reads
+`identityVals`, so the proof column is outside the change test on the specification side too
+and a self-collision at `@UF` or a view is not a step. `ENCODING.md`, finding 3, was that it
+*was not*, before that repair; `Encoding/Correspond.lean`'s `satProgram_programStep` is the
+satisfiability that replaced the refutation.
 
 ## Fresh ids
 
@@ -806,12 +805,15 @@ happened.
 depth. `encode` now emits `Cmd.saturate rebuildRuleset` after every run, and
 `saturateReach_rebuilt` below is that repair: this is that command's *postcondition*.
 
-**It is still unsatisfiable, for a second reason.** The proof column landed after the
-repair. `MergeSaturated`, the second conjunct, asks that *no* collision change anything, and
+**A second reason it was unsatisfiable, since removed.** The proof column landed after that
+repair. `MergeSaturated`, the second conjunct, asks that no collision change anything, and
 every entry collides with itself: `mergeBody` writes `@UF(v) ↦ (v, @Trans (@Sym pf) pf)` for
-the colliding pair, a term one composition larger than the proof it started from. So a
-`Rebuilt` state must hold the whole tower, and no state with finitely many terms does —
-`Encoding/Correspond.lean`'s `not_mergeSaturated_of_entry`, `not_rebuilt_toDatabase`. -/
+the colliding pair, a term one composition larger than the proof it started from, so a
+`Rebuilt` state had to hold the whole tower and no state with finitely many terms does. What
+closed it is `Spec/Step.lean`'s `MergeConflict`: a self-collision at a table declaring
+`identityVals := some 1` moves no counted column, so it is not a `MergeStep` and there is no
+tower. `Encoding/Correspond.lean`'s `refutationState_mergeSaturated` and
+`satProgram_programStep` are the two readings of that. -/
 def Rebuilt (P : Program) (d : Database) : Prop :=
   (∀ r ∈ maintenanceRules P, ∀ d' ∈ RuleResults d r, Database.Contained d' d) ∧
     MergeSaturated d

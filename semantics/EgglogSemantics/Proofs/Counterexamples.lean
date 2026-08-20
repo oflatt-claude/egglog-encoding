@@ -312,12 +312,12 @@ fire the specification reaches states the interpreter does not — and the `←`
 `exec_programStep`, which is what makes the refinement an equality rather than a soundness
 claim, fails.
 
-`(function f () i64 :merge 7) (set (f) 0)` is the smallest program where it can. There is
-no `a ≠ b` guard on `MergeStep.collide`, so the single entry `f(0)` collides with *itself*
-and `f`'s body writes `7` at the same key; the merge closure after the action may take that
-step or not, and the two results differ. Every other check the front end runs holds of the
-program — `mergeDeclProgram_checks` — so `Program.CtorDecls` is isolated as the one thing
-that fails. -/
+`(function f () i64 :merge 7) (set (f) 0)` is the smallest program where it can. A
+single-expression `:merge` has no block for `MergeConflict` to skip, so the single entry
+`f(0)` conflicts with *itself* and `f`'s body writes `7` at the same key; the merge closure
+after the action may take that step or not, and the two results differ. Every other check
+the front end runs holds of the program — `mergeDeclProgram_checks` — so `Program.CtorDecls`
+is isolated as the one thing that fails. -/
 
 /-- `(function f () i64 :merge 7) (set (f) 0)`. -/
 def mergeDeclProgram : Program :=
@@ -348,7 +348,7 @@ so every premise is `rfl` or `.nil`. -/
 theorem mergeDecl_mergeStep : MergeStep mergeSetDb mergeCollideDb :=
   MergeStep.collide (f := "f") (decl := fDecl) (as := []) (bs := []) (a := [.lit (.int 0)])
     (b := [.lit (.int 0)]) (vs := [.lit (.int 7)]) (body := []) (res := [.lit (.int 7)])
-    rfl rfl rfl rfl mergeSetDb_mem mergeSetDb_mem .nil rfl rfl
+    rfl rfl (Or.inl rfl) rfl rfl mergeSetDb_mem mergeSetDb_mem .nil rfl rfl
 
 /-- **Both states are reachable.** The merge phase after the action is a `MergeClosure`,
 which may be reflexive or take the one step. -/
@@ -677,7 +677,7 @@ undeclared, so `Expr.evalList` returns `none` and `MergeStep.collide` cannot fir
 theorem no_merge_before (x : Database) : ¬ MergeStep db₀ x := by
   intro h
   cases h with
-  | @collide d f decl as bs a b vs body res hsig hmerge _ _ _ _ _ heval hres =>
+  | @collide d f decl as bs a b vs body res hsig hmerge _ _ _ _ _ _ heval hres =>
     have hdecl : decl = gdecl := by
       by_cases hf : f = "g"
       · subst hf; simpa [db₀] using hsig.symm
@@ -703,7 +703,8 @@ theorem decl_enables_merge :
     simp [Expr.evalList, Expr.eval, Prim.ofName, hctor]
   refine ⟨_, ⟨db₁, rfl, Relation.ReflTransGen.single (MergeStep.collide (f := "g")
     (d := { db₁ with env := mergeEnv [t0] [t0] }) (as := [t0]) (bs := [t0]) (a := [t0])
-    (b := [t0]) hg rfl rfl rfl hentry hentry (CongList.cons ht0 CongList.nil) rfl hres)⟩, ?_⟩
+    (b := [t0]) hg rfl (Or.inl rfl) rfl rfl hentry hentry
+      (CongList.cons ht0 CongList.nil) rfl hres)⟩, ?_⟩
   intro hcontra
   have hmem : (Term.app "g" [t0, .app "f" []], Term.app "g" [t0, .app "f" []]) ∈ db₁.eqs := by
     rw [← hcontra]
@@ -765,7 +766,7 @@ vacuously rather than by a step that changes nothing. -/
 theorem not_mergeStep_empty (db' : Database) : ¬ MergeStep Database.empty db' := by
   intro h
   cases h with
-  | collide _ _ _ _ hmem _ _ _ _ => exact not_cong_of_no_eqs rfl hmem
+  | collide _ _ _ _ _ hmem _ _ _ _ => exact not_cong_of_no_eqs rfl hmem
 
 end Falsity
 end Egglog

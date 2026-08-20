@@ -377,12 +377,22 @@ the substitution. -/
 @[simp] def Rule.OrderingFree (r : Rule) : Prop :=
   (∀ p ∈ r.query, p.OrderingFree) ∧ Actions.OrderingFree r.actions
 
-/-- `.noMerge` runs nothing; a `:merge` evaluates both its body and its result. -/
+/-- `.noMerge` runs nothing; a `:merge` evaluates both its body and its result — and it
+*compares* the two colliding value tuples, which is the second instability here.
+`Spec/Step.lean`'s `MergeConflict` decides whether a collision fires by **identity** on
+those tuples, and identity is no more stable under congruence than `ordering-gt` is: moved
+to congruent values a firing can become a skip. Only a declaration whose test is constantly
+true survives the move, and with no `:internal-identity-vals` that is exactly a `:merge`
+with no action block — `body = []`, which every `:merge` *expression* is, including
+`:merge (min old new)` and every lattice in this development. `FnDecl.OrderingFree` carries
+the `:internal-identity-vals` half. -/
 @[simp] def MergeSpec.OrderingFree : MergeSpec → Prop
-  | .merge body res => Actions.OrderingFree body ∧ Expr.OrderingFreeList res
+  | .merge body res => body = [] ∧ Expr.OrderingFreeList res
   | .noMerge => True
 
-def FnDecl.OrderingFree (d : FnDecl) : Prop := ∀ ms ∈ d.merge, ms.OrderingFree
+@[inherit_doc MergeSpec.OrderingFree]
+def FnDecl.OrderingFree (d : FnDecl) : Prop :=
+  d.identityVals = none ∧ ∀ ms ∈ d.merge, ms.OrderingFree
 
 /-- Read of a *signature*, because a `MergeStep` reads the body it runs from one, as
 `Signature.UnionFree`. -/

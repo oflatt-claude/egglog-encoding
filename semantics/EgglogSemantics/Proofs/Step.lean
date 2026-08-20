@@ -94,7 +94,7 @@ theorem Signature.IsCtor.update_of_fresh {sig : Signature} {f g : FnName} {dc : 
 /-! ### The merge phase -/
 theorem MergeStep.sig {d₁ d₂ : Database} (h : MergeStep d₁ d₂) : d₂.sig = d₁.sig := by
   cases h with
-  | collide _ _ _ _ _ _ _ hbody _ => simpa using evalActions_sig hbody
+  | collide _ _ _ _ _ _ _ _ hbody _ => simpa using evalActions_sig hbody
 
 theorem MergeClosure.sig {d₁ d₂ : Database} (h : MergeClosure d₁ d₂) :
     d₂.sig = d₁.sig := by
@@ -115,12 +115,23 @@ theorem MergeClosure.envRules {d₁ d₂ : Database} (h : MergeClosure d₁ d₂
   | refl => exact ⟨rfl, rfl⟩
   | tail _ hstep ih => exact ⟨hstep.envRules.1.trans ih.1, hstep.envRules.2.trans ih.2⟩
 
+/-- **A `:merge` expression with no `:internal-identity-vals` conflicts on every pair**:
+there is no action block for egglog to skip and no column excused from the test, so the
+collision always resolves. This is the whole of `MergeConflict` on the fragment
+`Signature.OrderingFree` admits. -/
+theorem mergeConflict_of_ordering_free {decl : FnDecl} (h : decl.OrderingFree)
+    {body : List Action} {res : List Expr} (hm : decl.merge = some (.merge body res))
+    (a b : List Term) : MergeConflict decl body a b := by
+  obtain ⟨hid, hms⟩ := h
+  obtain ⟨hbody, -⟩ := hms (.merge body res) (by rw [hm]; rfl)
+  simp [MergeConflict, hid, hbody]
+
 /-- **No merge fires on an all-constructors signature.** `MergeStep.collide` needs a
 `.merge` function and there is none, so every command's merge phase is empty. -/
 theorem MergeStep.not_of_allConstructors {db db' : Database}
     (hsig : db.sig.AllConstructors) (h : MergeStep db db') : False := by
   cases h with
-  | @collide _ f _ _ _ _ _ _ _ _ hd hm _ _ _ _ _ _ _ =>
+  | @collide _ f _ _ _ _ _ _ _ _ hd hm _ _ _ _ _ _ _ _ =>
     have hno := hsig f
     rw [Signature.mergeOf, hd, Option.bind_some, hm] at hno
     simp at hno

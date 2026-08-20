@@ -40,9 +40,12 @@ both are decided at the witness at the end of this file.
 * **Proved**, no `sorry`: `sameClassF_iff` and `mem_viewReprsF_iff`, both directions;
   `cong_sameClass`, which reduces the forward half to three obligations with `symm`
   discharged; `witnessProgram_encodeDomain` and `encode_corresponds_witness`.
-* **Proved, and the reason the statement reads the interpreter's target**:
-  `mergeStep_selfCollision`, `not_mergeSaturated_of_entry`, `not_rebuilt_toDatabase`,
-  `not_cmdStep_saturate`, with `refutationState_not_mergeSaturated` instantiating them.
+* **Proved, and what says the specification's own target is reachable**:
+  `not_mergeConflict_self`, `refutationState_mergeSaturated`, and
+  `satProgram_programStep` — a compiled `ProgramStep Database.empty (encode P) tgt` for a
+  `P` that builds a term. Each of the three is the negation of a lemma that stood here
+  before `Spec/Step.lean` read `identityVals`, and that refutation is why the statement
+  below reads `execM`; the reason it still does is a different one.
 * **`sorry`**, one per obligation and the only four in the library: `encode_assert`,
   `encode_trans`, `encode_congr`, `encode_corresponds_complete`. `encode_corresponds` and
   `encode_corresponds_forward` are assembled from them and carry `sorryAx` through them.
@@ -292,186 +295,52 @@ theorem sameClassF_iff {d : FDatabase} (hsc : d.SubtermClosed) (hr : d.EqsRefl)
   · rintro ⟨e, hea, heb⟩
     exact ⟨e, (mem_viewReprsF_iff hsc hr a e).mpr hea, (mem_viewReprsF_iff hsc hr b e).mpr heb⟩
 
-/-! ### The proof column against `MergeSaturated`
+/-! ### The proof column and `MergeSaturated`
 
-**`Rebuilt` is unsatisfiable again**, and this time it is `mergeBody` that does it rather
-than the rebuild rules. `ENCODING.md`'s finding 1 was that no state `encode` ran to
-satisfied `Rebuilt`, and `Cmd.saturate rebuildRuleset` was the repair; the proof column
-(`@UF(t) ↦ (p, pf)`) landed after it and reopened the hole one level down.
+`ENCODING.md`'s finding 1 was that no state `encode` ran to satisfied `Rebuilt`, and
+`Cmd.saturate rebuildRuleset` was the repair. The proof column (`@UF(t) ↦ (p, pf)`) landed
+after it and reopened the hole one level down, and this section is what closed it again.
 
-The mechanism is `Spec/Step.lean`'s own reading of a collision: **every entry collides with
-itself** — `MergeSaturated` is "no collision *changes* anything" for exactly that reason —
-and the shared `:merge` body writes, for the colliding pair, the edge
+The mechanism was `Spec/Step.lean`'s own reading of a collision. **Every entry collides with
+itself**, and the shared `:merge` body writes, for the colliding pair, the edge
 
 ```
 @UF (ordering-max old0 new0) ↦ (ordering-min old0 new0, @Trans (@Sym hi_pf) lo_pf)
 ```
 
-At a self-collision `old0 = new0` and `old1 = new1 = pf`, so the body writes the self-loop
-`@UF(v) ↦ (v, @Trans (@Sym pf) pf)`: a **new term**, one composition larger than the proof
-it started from. `MergeSaturated` therefore forces the whole tower `selfProof^[n] pf` into
-the state, so no state with finitely many terms — no state the interpreter can hold, and no
-state a run can reach — is `MergeSaturated` once it holds one `@UF` entry.
+At a self-collision `old0 = new0` and `old1 = new1 = pf`, so the body wrote the self-loop
+`@UF(v) ↦ (v, @Trans (@Sym pf) pf)`: a **new term**, one composition larger than the proof it
+started from. `MergeSaturated` therefore forced the whole tower into the state, no state with
+finitely many terms holds it, and `ProgramStep Database.empty (encode P) tgt` was
+unsatisfiable for every `P` that built a term.
 
-`identityVals := some 1` is what keeps the *implementation* out of this: it takes the proof
-column out of the change test, so a collision that moves only the proof resolves to the
-resident row. `Spec/Step.lean`'s `MergeStep` and `MergeSaturated` do not read
-`identityVals` — the specification has no notion of a column that does not count — so the
-gap is between the two, and closing it is a change to `Spec/`. -/
+`identityVals := some 1` is what kept the *implementation* out of it: the proof column sits
+outside the change test, so a collision that moves only the proof resolves to the resident
+row. `Spec/Step.lean` reads `identityVals` too now — `MergeConflict`, which is
+`Impl/Merge.lean`'s `noConflict` negated — so a self-collision at either encoded table is no
+longer a step at all, and the tower is what is unreachable. `satProgram_programStep` below is
+the satisfiability that replaced the refutation. -/
 
-/-- The proof the shared `:merge` body composes when an entry collides with **itself**:
-`@Trans (@Sym pf) pf`, one composition larger than `pf`. -/
-def selfProof (pf : Term) : Term := .app transName [.app symName [pf], pf]
+/-- **An entry does not conflict with itself**, so no `MergeStep` fires at a self-collision
+of a `:merge` with a block: with `:internal-identity-vals k` the two tuples agree on every
+counted column because they *are* the same tuple, and without it the only arm left is the
+empty body. -/
+theorem not_mergeConflict_self {decl : FnDecl} {body : List Action} (hb : body ≠ [])
+    (a : List Term) : ¬ MergeConflict decl body a a := by
+  unfold MergeConflict
+  cases decl.identityVals <;> simp [hb]
 
-/-- `Term.blt` is irreflexive, so every `ordering-gt` on a tie is `false` and every one of
-the four bundled choices takes its `else` branch. -/
-theorem Term.blt_self (t : Term) : Term.blt t t = false := by
-  by_cases h : Term.blt t t = true
-  · rw [Term.blt_asymm t t h] at h; exact absurd h (by simp)
-  · simpa using h
+/-- The body both encoded `:merge`s run is one `set`, so it never takes `MergeConflict`'s
+empty-body arm. -/
+theorem mergeBody_ne_nil : mergeBody ≠ [] := by simp [mergeBody]
 
-/-- **Every entry of a table carrying the encoding's `:merge` collides with itself**, and
-the body writes a `@UF` self-loop at the entry's value column whose proof is `selfProof` of
-the entry's own. -/
-theorem mergeStep_selfCollision {d : Database} {f : FnName} {decl : FnDecl}
-    (hsig : d.sig f = some decl) (hm : decl.merge = some (.merge mergeBody mergeResult))
-    (hsym : d.sig.IsCtor symName) (htr : d.sig.IsCtor transName)
-    {as : List Term} {v pf : Term} (hlen : as.length = decl.arity)
-    (hargs : ∀ a ∈ as, a ∈ d.terms) (hmem : Term.app f (as ++ [v, pf]) ∈ d.terms) :
-    ∃ d', MergeStep d d' ∧ Term.app ufName [v, v, selfProof pf] ∈ d'.terms := by
-  simp only [symName, transName] at hsym htr
-  have henv : mergeEnv [v, pf] [v, pf] =
-      [("old0", v), ("new0", v), ("old1", pf), ("new1", pf)] := rfl
-  have hbody : evalActions { d with env := mergeEnv [v, pf] [v, pf] } mergeBody =
-      some (({ d with env := mergeEnv [v, pf] [v, pf] }).addTerm
-        (.app ufName [v, v, selfProof pf])) := by
-    simp [mergeBody, evalActions, evalAction, Expr.eval, Expr.evalList, Prim.ofName,
-      Prim.apply, maxE, minE, ifE, gtE, transE, symE, hiPfE, loPfE, henv, Env.lookup,
-      Term.blt_self, hsym, htr, selfProof, symName, transName]
-  have hres : Expr.evalList ({ d with env := mergeEnv [v, pf] [v, pf] }).sig mergeResult
-      (mergeEnv [v, pf] [v, pf]) = some [v, pf] := by
-    simp [mergeResult, Expr.eval, Expr.evalList, Prim.ofName, Prim.apply, minE, ifE, gtE,
-      loPfE, henv, Env.lookup, Term.blt_self]
-  refine ⟨_, MergeStep.collide hsig hm hlen hlen hmem hmem (CongList.refl hargs) hbody hres,
-    ?_⟩
-  have h1 : Term.app ufName [v, v, selfProof pf] ∈
-      (({ d with env := mergeEnv [v, pf] [v, pf] }).addTerm
-        (.app ufName [v, v, selfProof pf])).terms := Database.mem_addTerm _ _
-  have h2 := (Database.Contained.addTerm (Term.app f (as ++ [v, pf])) _).terms h1
-  refine Cong.mono ?_ h2
-  exact ⟨subset_rfl⟩
-
-/-- **The tower.** A `MergeSaturated` state holding one `@UF` self-loop holds every
-`selfProof` iterate of its proof. -/
-theorem mergeSaturated_selfProof_tower {d : Database} (hsat : MergeSaturated d)
-    (hsig : d.sig ufName = some ufDecl) (hsym : d.sig.IsCtor symName)
-    (htr : d.sig.IsCtor transName) {v pf : Term} (hv : v ∈ d.terms)
-    (hmem : Term.app ufName [v, v, pf] ∈ d.terms) :
-    ∀ n, Term.app ufName [v, v, selfProof^[n] pf] ∈ d.terms := by
-  intro n
-  induction n with
-  | zero => simpa using hmem
-  | succ n ih =>
-    obtain ⟨d', hstep, hmem'⟩ :=
-      mergeStep_selfCollision (as := [v]) hsig rfl hsym htr rfl
-        (by intro a ha; rw [List.mem_singleton] at ha; exact ha ▸ hv) (by simpa using ih)
-    rw [Function.iterate_succ_apply']
-    exact hsat d' hstep ▸ hmem'
-
-/-- `selfProof` strictly grows a term, so the tower is an injection of `ℕ` into the state. -/
-theorem sizeOf_lt_selfProof (pf : Term) : sizeOf pf < sizeOf (selfProof pf) := by
-  simp only [selfProof, Term.app.sizeOf_spec, List.cons.sizeOf_spec, List.nil.sizeOf_spec]
-  omega
-
-/-- The tower's proofs grow without bound: `selfProof^[n] pf` is at least `n` big. -/
-theorem le_sizeOf_selfProof_iterate (pf : Term) : ∀ n, n ≤ sizeOf (selfProof^[n] pf)
-  | 0 => Nat.zero_le _
-  | n + 1 => by
-    rw [Function.iterate_succ_apply']
-    exact Nat.lt_of_le_of_lt (le_sizeOf_selfProof_iterate pf n) (sizeOf_lt_selfProof _)
-
-/-- **No state whose terms fit in a list is `MergeSaturated` once it holds a `@UF` entry.**
-
-The hypothesis is "listable" rather than `Set.Finite` because that is the form the states
-this is about come in: `FDatabase.toDatabase`'s terms are exactly a list, and a state a run
-reaches is built from `Database.empty` by finitely many steps each adding finitely many
-terms. `not_mergeSaturated_toDatabase` is the reading at an interpreter state. -/
-theorem not_mergeSaturated_of_ufEntry {d : Database} {l : List Term}
-    (hfin : ∀ t ∈ d.terms, t ∈ l) (hsig : d.sig ufName = some ufDecl)
-    (hsym : d.sig.IsCtor symName) (htr : d.sig.IsCtor transName) {v pf : Term}
-    (hv : v ∈ d.terms) (hmem : Term.app ufName [v, v, pf] ∈ d.terms) :
-    ¬ MergeSaturated d := by
-  intro hsat
-  set n := sizeOf l with hn
-  have hin := hfin _ (mergeSaturated_selfProof_tower hsat hsig hsym htr hv hmem n)
-  have hlt : sizeOf (Term.app ufName [v, v, selfProof^[n] pf]) < sizeOf l :=
-    List.sizeOf_lt_of_mem hin
-  have hsub : sizeOf (selfProof^[n] pf) < sizeOf (Term.app ufName [v, v, selfProof^[n] pf]) := by
-    simp only [Term.app.sizeOf_spec, List.cons.sizeOf_spec, List.nil.sizeOf_spec]
-    omega
-  have := le_sizeOf_selfProof_iterate pf n
-  omega
-
-/-- **One entry of one view is enough.** The `:merge` body is shared by `@UF` and every
-view, so a state holding a single view entry — which is a state that has built a single
-term — already fails `MergeSaturated`. -/
-theorem not_mergeSaturated_of_entry {d : Database} {l : List Term}
-    (hfin : ∀ t ∈ d.terms, t ∈ l) (hsub : ∀ t ∈ d.terms, t.subterms ⊆ d.terms)
-    (hufsig : d.sig ufName = some ufDecl)
-    (hsym : d.sig.IsCtor symName) (htr : d.sig.IsCtor transName)
-    {f : FnName} {decl : FnDecl} (hsigf : d.sig f = some decl)
-    (hm : decl.merge = some (.merge mergeBody mergeResult))
-    {as : List Term} {v pf : Term} (hlen : as.length = decl.arity)
-    (hmem : Term.app f (as ++ [v, pf]) ∈ d.terms) : ¬ MergeSaturated d := by
-  intro hsat
-  have hargs : ∀ a ∈ as, a ∈ d.terms := fun a ha =>
-    hsub _ hmem (Term.IsSubterm.arg (List.mem_append_left _ ha) (.refl a))
-  have hv : v ∈ d.terms := hsub _ hmem (Term.IsSubterm.arg (by simp) (.refl v))
-  obtain ⟨d', hstep, hmem'⟩ := mergeStep_selfCollision hsigf hm hsym htr hlen hargs hmem
-  rw [hsat d' hstep] at hmem'
-  exact not_mergeSaturated_of_ufEntry hfin hufsig hsym htr hv hmem' hsat
-
-/-- The same at an interpreter state, where the list is `terms` itself. **This is the state
-`difftest correspond` computes**: the target of every case in the corpus holds `@UF` entries
-— 180 of them — so none of them is a state `Cmd.saturate` can step to. -/
-theorem not_mergeSaturated_toDatabase {d : FDatabase}
-    (hsig : d.sig ufName = some ufDecl) (hsym : d.sig.IsCtor symName)
-    (htr : d.sig.IsCtor transName) {v pf : Term} (hv : v ∈ d.terms)
-    (hmem : Term.app ufName [v, v, pf] ∈ d.terms) : ¬ MergeSaturated d.toDatabase := by
-  refine not_mergeSaturated_of_ufEntry (l := d.terms) (v := v) (pf := pf) ?_ hsig hsym htr ?_ ?_
-  · intro t ht; rwa [FDatabase.toDatabase_terms] at ht
-  · rw [FDatabase.toDatabase_terms]; exact hv
-  · rw [FDatabase.toDatabase_terms]; exact hmem
-
-/-- **And so `Rebuilt` is unsatisfiable there**, which is the hypothesis `ENCODING.md`'s
-finding 1 was about: `Rebuilt`'s second conjunct *is* `MergeSaturated`. -/
-theorem not_rebuilt_toDatabase {P : Program} {d : FDatabase}
-    (hsig : d.sig ufName = some ufDecl) (hsym : d.sig.IsCtor symName)
-    (htr : d.sig.IsCtor transName) {v pf : Term} (hv : v ∈ d.terms)
-    (hmem : Term.app ufName [v, v, pf] ∈ d.terms) : ¬ Rebuilt P d.toDatabase :=
-  fun h => not_mergeSaturated_toDatabase hsig hsym htr hv hmem h.2
-
-/-- **And no `Cmd.saturate` steps from such a state**, whatever its ruleset: `SaturateReach`
-ends `RunSaturated`, whose second conjunct is `MergeSaturated`, and `MergeStep` only ever
-adds — so the state it ends at holds the `@UF` entry this one did. -/
-theorem not_cmdStep_saturate {R : RulesetName} {d : FDatabase} {d' : Database}
-    (hsig : d'.sig ufName = some ufDecl) (hsym : d'.sig.IsCtor symName)
-    (htr : d'.sig.IsCtor transName) {l : List Term} (hfin : ∀ t ∈ d'.terms, t ∈ l)
-    {v pf : Term} (hv : v ∈ d.terms) (hmem : Term.app ufName [v, v, pf] ∈ d.terms) :
-    ¬ CmdStep d.toDatabase (.saturate R) d' := by
-  intro h
-  have hsat : SaturateReach R d.toDatabase d' := cmdStep_saturate_iff.mp h
-  have hcont : d.toDatabase.Contained d' := RunReach.contained hsat.1
-  refine not_mergeSaturated_of_ufEntry hfin hsig hsym htr (v := v) (pf := pf) ?_ ?_ hsat.2.2
-  · exact hcont.terms (by rw [FDatabase.toDatabase_terms]; exact hv)
-  · exact hcont.terms (by rw [FDatabase.toDatabase_terms]; exact hmem)
-
-/-! #### The refutation, instantiated
+/-! #### Satisfaction, instantiated
 
 A refutation whose hypotheses nothing satisfies is worth as little as a theorem whose
-hypotheses nothing satisfies, so here is a state that satisfies them: the encoding's own
-`@UF` and proof declarations, one `@UF` self-loop, and nothing else. No run is needed to
-build it and none is run to check it. -/
+hypotheses nothing satisfies, and the burden has changed sides: what needs a witness now is
+that a state holding a `@UF` self-loop **is** merge-saturated. Here is the state the old
+refutation was instantiated at — the encoding's own declarations, one `@UF` self-loop, and
+nothing else. No run is needed to build it and none is run to check it. -/
 
 /-- A term to hang the state on. -/
 private def refA : Term := .app "A" []
@@ -490,34 +359,269 @@ def refutationState : FDatabase where
   env := []
   rules := []
 
-/-- **And it is not `MergeSaturated`**, so `not_mergeSaturated_toDatabase` refutes something
-that exists. The state is the shape every encoded run reaches: `encodePrelude` emits
-`.decl ufName ufDecl` and the proof declarations, and the shared `:merge` writes a `@UF`
-edge at the first collision of the first view entry. -/
-theorem refutationState_not_mergeSaturated :
-    ¬ MergeSaturated refutationState.toDatabase := by
-  refine not_mergeSaturated_toDatabase (v := refA) (pf := .app fiatName []) rfl
-    ⟨proofDecl 1, by simp [refutationState, ufName, symName], rfl⟩
-    ⟨proofDecl 2, by simp [refutationState, ufName, symName, transName], rfl⟩
-    (by simp [refutationState, refA]) (by simp [refutationState, refA])
+/-- The one `@UF` entry pins both value tuples of any collision at it, so every collision
+there is a collision of that entry with itself. -/
+private theorem refutationState_pin {cs vals : List Term} (hl : cs.length = 1)
+    (hmem : Term.app ufName (cs ++ vals) ∈ refutationState.toDatabase.terms) :
+    vals = [refA, .app fiatName []] := by
+  rw [FDatabase.mem_toDatabase_terms] at hmem
+  match cs with
+  | [] => simp at hl
+  | [x] =>
+    suffices h : x = refA ∧ vals = [refA, .app fiatName []] from h.2
+    simpa [refutationState, refA, ufName, fiatName] using hmem
+  | _ :: _ :: _ => simp at hl
+
+/-- **And the state is `MergeSaturated`.** `@UF` is the one `:merge` its signature declares,
+its one entry collides with nothing but itself, and `identityVals := some 1` makes that
+collision no conflict. -/
+theorem refutationState_mergeSaturated : MergeSaturated refutationState.toDatabase := by
+  intro db' h
+  cases h with
+  | @collide _ f decl as bs a b vs body res hsig hm hconf hla hlb hma hmb _ _ _ =>
+    replace hsig : (if f = ufName then some ufDecl
+        else if f = symName then some (proofDecl 1)
+        else if f = transName then some (proofDecl 2) else none) = some decl := hsig
+    obtain ⟨rfl, rfl⟩ : f = ufName ∧ decl = ufDecl := by
+      split_ifs at hsig <;>
+        obtain rfl := Option.some.inj hsig
+        <;> first
+          | exact ⟨by assumption, rfl⟩
+          | simp [proofDecl] at hm
+    obtain ⟨rfl, rfl⟩ : body = mergeBody ∧ res = mergeResult := by
+      simpa [ufDecl] using hm.symm
+    have hab : a = b := (refutationState_pin (by simpa [ufDecl] using hla) hma).trans
+      (refutationState_pin (by simpa [ufDecl] using hlb) hmb).symm
+    rw [hab] at hconf
+    exact (not_mergeConflict_self mergeBody_ne_nil b hconf).elim
+
+/-! ### The statement is satisfiable
+
+`ProgramStep Database.empty (encode P) tgt` is what the correspondence would like to carry,
+and the refutation above used to say that nothing satisfies it. Here is a `P` that builds a
+term and the state its encoding runs to — compiled, with the two fixpoint conditions
+`Cmd.saturate` demands discharged rather than assumed.
+
+`not_mergeSaturated_of_entry`, the deleted lemma, said that **one view entry is enough** to
+break saturation, so the smallest program with a view table is exactly where the defect bit;
+that is what this witness is chosen to be. Nothing here executes a program: the twelve
+commands are stepped one at a time, each `CmdStep` a `cmdEffect` and a reflexive merge phase,
+and the trailing `Cmd.saturate` is discharged by `satTarget_runRules` and
+`satTarget_mergeSaturated`. -/
+
+/-- One nullary constructor, declared, and one action that builds it: the smallest source
+program that builds a term. -/
+def satProgram : Program :=
+  [.decl "A" { arity := 0, outArity := 1, merge := none },
+   .action (.expr (.app "A" []))]
+
+/-- The signature `encode satProgram`'s prelude installs, in the order it declares them: the
+three fixed proof heads, `@UF`, and `A`'s table triple. `congrArities` is empty at a nullary
+constructor and `Program.srcRules` is empty at a program with no rule, so neither
+arity-indexed family contributes. -/
+def satSig : Signature :=
+  Function.update (Function.update (Function.update (Function.update
+    (Function.update (Function.update (Function.update Database.empty.sig
+      fiatName (some (proofDecl 0))) symName (some (proofDecl 1)))
+      transName (some (proofDecl 2))) ufName (some ufDecl))
+      "A" (some (skolemDecl 0))) (viewName "A") (some (viewDecl 0)))
+      (termName "A") (some (termDecl 0))
+
+/-- **The two `:merge` functions the prelude declares with a body are `@UF` and `@AView`.**
+`@ATerm` is `:no-merge` and everything else is a constructor, so those are the only two a
+`MergeStep` can fire at. -/
+private theorem satSig_merge {f : FnName} {decl : FnDecl} {body : List Action} {res : List Expr}
+    (hsig : satSig f = some decl) (hm : decl.merge = some (.merge body res)) :
+    (f = ufName ∧ decl = ufDecl) ∨ (f = viewName "A" ∧ decl = viewDecl 0) := by
+  simp only [satSig, Function.update_apply, Database.empty] at hsig
+  split_ifs at hsig <;>
+    obtain rfl := Option.some.inj hsig
+    <;> first
+      | exact Or.inl ⟨by assumption, rfl⟩
+      | exact Or.inr ⟨by assumption, rfl⟩
+      | simp [proofDecl, skolemDecl, termDecl] at hm
+
+/-- `A`'s one rebuild rule: the e-class column of `@AView() ↦ (@e, @p)` follows `@e`'s
+union-find edge. A nullary constructor has no child column, so `rebuildRules` emits no
+other. -/
+def satRebuildRule : Rule :=
+  { query := [.values [.var "@e", .var "@p"] (viewName "A") [],
+              .values [.var "@x", .var "@q"] ufName [.var "@e"]],
+    actions := [.set (viewName "A") [] [.var "@x", transE (.var "@p") (.var "@q")]],
+    ruleset := rebuildRuleset }
+
+/-- After the prelude: the seven declarations and the two maintenance rules. -/
+def satPrelude : Database :=
+  { Database.empty with
+    sig := satSig,
+    rules := insert satRebuildRule (insert pathCompressRule Database.empty.rules) }
+
+/-- `@ATerm(A)`, the term-relation row `(A)`'s build writes. -/
+def satTermEntry : Term := .app (termName "A") [.app "A" []]
+
+/-- `@AView() ↦ (A, @Fiat)`, the view row `(A)`'s build writes. -/
+def satViewEntry : Term := .app (viewName "A") [.app "A" [], .app fiatName []]
+
+/-- **The state `encode satProgram` runs to.** Definitionally the chain of `cmdEffect`s, so
+every `CmdStep` in `satProgram_programStep` is `rfl`. -/
+def satTarget : Database := (satPrelude.addTerm satTermEntry).addTerm satViewEntry
+
+theorem satTarget_sig : satTarget.sig = satSig := rfl
+
+theorem satTarget_rules :
+    satTarget.rules = insert satRebuildRule (insert pathCompressRule Database.empty.rules) :=
+  rfl
+
+/-- The prelude asserts no equation, so it holds no term. -/
+theorem satPrelude_terms : satPrelude.terms = ∅ := by
+  refine Set.eq_empty_of_forall_notMem fun t ht => ?_
+  obtain ⟨u, hu⟩ := Database.mem_terms_iff.mp ht
+  simp [satPrelude, Database.empty] at hu
+
+/-- The four terms the run holds: the two entries and their arguments. -/
+theorem satTarget_terms :
+    satTarget.terms = satTermEntry.subterms ∪ satViewEntry.subterms := by
+  simp [satTarget, satPrelude_terms]
+
+/-- Only `Database.addTerm` ever writes here, so the state is diagonal — which is what makes
+a query read the key up to *equality*. -/
+theorem satTarget_diag : satTarget.Diag := by
+  have h : satPrelude.Diag := fun p hp => absurd hp (by simp [satPrelude, Database.empty])
+  exact (h.addTerm _).addTerm _
+
+/-- **The state holds no `@UF` entry.** `satProgram` has no `union`, so nothing writes one:
+the four terms are `@ATerm(A)`, `@AView(A, @Fiat)`, `(A)` and `(@Fiat)`. -/
+theorem satTarget_no_uf (ts : List Term) : Term.app ufName ts ∉ satTarget.terms := by
+  rw [satTarget_terms]
+  simp [satTermEntry, satViewEntry, ufName, termName, viewName, fiatName]
+
+/-- The view entry is there, so the correspondence has something to read: the run does its
+job rather than stopping short. -/
+theorem satTarget_mem_view : satViewEntry ∈ satTarget.terms := by
+  rw [satTarget_terms]; exact Or.inr (Term.self_mem_subterms _)
+
+/-- The one `@AView` entry pins both value tuples, as `refutationState_pin` does for `@UF`. -/
+private theorem satTarget_pin {vals : List Term}
+    (hmem : Term.app (viewName "A") ([] ++ vals) ∈ satTarget.terms) :
+    vals = [.app "A" [], .app fiatName []] := by
+  rw [satTarget_terms] at hmem
+  simpa [satTermEntry, satViewEntry, viewName, termName, fiatName] using hmem
+
+/-- **The state is merge-saturated.** `satSig_merge` leaves two functions to check: `@UF`,
+which has no entry at all, and `@AView`, which has exactly one — so its only collision is
+with itself, and `identityVals := some 1` makes that no conflict. -/
+theorem satTarget_mergeSaturated : MergeSaturated satTarget := by
+  intro db' h
+  cases h with
+  | @collide _ f decl as bs a b vs body res hsig hm hconf hla hlb hma hmb _ _ _ =>
+    rcases satSig_merge (satTarget_sig ▸ hsig) hm with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩
+    · exact absurd hma (satTarget_no_uf _)
+    · obtain ⟨rfl, rfl⟩ : body = mergeBody ∧ res = mergeResult := by
+        simpa [viewDecl] using hm.symm
+      obtain rfl : as = [] := List.eq_nil_of_length_eq_zero (by simpa [viewDecl] using hla)
+      obtain rfl : bs = [] := List.eq_nil_of_length_eq_zero (by simpa [viewDecl] using hlb)
+      have hab : a = b := (satTarget_pin hma).trans (satTarget_pin hmb).symm
+      rw [hab] at hconf
+      exact (not_mergeConflict_self mergeBody_ne_nil b hconf).elim
+
+/-- **No `@UF` read matches.** A `Pattern.values` match needs the entry term itself: the
+witness has to be a term the state already holds, and on a diagonal state `withOperands`
+cannot supply one. -/
+theorem satTarget_not_matches_uf {vs as : List Expr} {σ : Env} :
+    ¬ Matches satTarget (.values vs ufName as) σ := by
+  intro h
+  cases h with
+  | values hw _ _ hcong =>
+    exact absurd (congOn_eq_of_diag satTarget_diag hcong ▸ hw) (satTarget_no_uf _)
+
+/-- A query with a `@UF` read in it admits no substitution here. -/
+private theorem satTarget_not_forall₂ : ∀ {q : Query} {σs : List Env},
+    List.Forall₂ (ValidSubst satTarget) q σs →
+    ∀ {vs as : List Expr}, Pattern.values vs ufName as ∈ q → False
+  | _, _, .nil, _, _, h => absurd h (by simp)
+  | _ :: _, _, .cons hp hrest, _, _, h => by
+    rcases List.mem_cons.mp h with rfl | h'
+    · exact satTarget_not_matches_uf hp.2
+    · exact satTarget_not_forall₂ hrest h'
+
+/-- **The rebuild ruleset has reached its fixpoint**, which is `RunSaturated`'s first
+conjunct. Both maintenance rules read `@UF` and there is no `@UF` entry to read. -/
+theorem satTarget_runRules : RunRules rebuildRuleset satTarget = satTarget := by
+  have hS : {d | ∃ r ∈ satTarget.rules, r.ruleset = rebuildRuleset ∧
+      d ∈ RuleResults satTarget r} = (∅ : Set Database) := by
+    refine Set.eq_empty_of_forall_notMem ?_
+    rintro d ⟨r, hr, -, σ, ⟨σs, hall, -⟩, -⟩
+    rw [satTarget_rules] at hr
+    have hr' : r = satRebuildRule ∨ r = pathCompressRule := by
+      simpa [Database.empty] using hr
+    rcases hr' with rfl | rfl
+    · exact satTarget_not_forall₂ hall (vs := [.var "@x", .var "@q"]) (as := [.var "@e"])
+        (by simp [satRebuildRule])
+    · exact satTarget_not_forall₂ hall (vs := [.var "@b", .var "@p"]) (as := [.var "@a"])
+        (by simp [pathCompressRule])
+  unfold RunRules
+  rw [hS]
+  exact Database.ext rfl (by simp) rfl rfl
+
+/-- **The trailing `Cmd.saturate rebuildRuleset` steps from this state to itself**: no round
+of `@rebuild` adds anything and no collision changes anything, so the fixpoint is reached in
+zero rounds and the merge phase after it is reflexive. -/
+theorem satTarget_cmdStep_saturate :
+    CmdStep satTarget (.saturate rebuildRuleset) satTarget :=
+  ⟨satTarget, ⟨.refl, satTarget_runRules, satTarget_mergeSaturated⟩, .refl⟩
+
+/-- **The twelve commands `encode satProgram` emits**, written out: the three fixed proof
+heads, `@UF`, `A`'s table triple, the two maintenance rules, the two `set`s the build of
+`(A)` becomes, and the rebuild. Naming them is what keeps `satProgram_programStep` cheap —
+stepping through `encode satProgram` itself re-reduces the encoder once per command. -/
+def satEncoded : Program :=
+  [.decl fiatName (proofDecl 0), .decl symName (proofDecl 1), .decl transName (proofDecl 2),
+   .decl ufName ufDecl, .decl "A" (skolemDecl 0), .decl (viewName "A") (viewDecl 0),
+   .decl (termName "A") (termDecl 0),
+   .rule pathCompressRule, .rule satRebuildRule,
+   .action (.set (termName "A") [.app "A" []] []),
+   .action (.set (viewName "A") [] [.app "A" [], fiatE]),
+   .saturate rebuildRuleset]
+
+theorem satEncoded_eq : encode satProgram = satEncoded := rfl
+
+set_option maxHeartbeats 2000000 in
+-- Twelve `cmdEffect` reductions at a state that grows by a `Function.update` or an
+-- `addTerm` each time, and the two `set`s decide `Signature.IsCtor` through the whole
+-- declaration chain; the default budget is short.
+/-- **`ProgramStep Database.empty (encode P) tgt` is satisfiable at a `P` that builds a
+term.** Each of the first eleven commands is a `cmdEffect` followed by a reflexive merge
+phase; the twelfth is `satTarget_cmdStep_saturate`. -/
+theorem satProgram_programStep :
+    ProgramStep Database.empty (encode satProgram) satTarget := by
+  rw [satEncoded_eq]
+  -- the seven declarations, the two maintenance rules, and the first of the two `set`s
+  iterate 10 refine .cons ⟨_, rfl, .refl⟩ ?_
+  exact .cons ⟨satTarget, rfl, .refl⟩ (.cons satTarget_cmdStep_saturate .nil)
+
+/-- **And the state it reaches holds a view entry**, so the run is not satisfiable only by
+doing nothing. -/
+theorem satProgram_programStep_view :
+    ∃ tgt, ProgramStep Database.empty (encode satProgram) tgt ∧ satViewEntry ∈ tgt.terms :=
+  ⟨satTarget, satProgram_programStep, satTarget_mem_view⟩
 
 /-! ### The statement
 
-**The target is the interpreter's, not the specification's.** The natural statement carries
-`ProgramStep Database.empty (encode P) tgt`, and that hypothesis is unsatisfiable for every
-`P` that builds a term: `encode` emits `Cmd.saturate rebuildRuleset` after every writing
-command, `SaturateReach` ends at a `RunSaturated` state, `RunSaturated`'s second conjunct is
-`MergeSaturated`, and `not_mergeSaturated_of_entry` above refutes that at any state holding
-one view entry. Stating it anyway would be stating a theorem that says nothing — which is
-the failure `ENCODING.md` records — so the hypothesis is `execM (encode P) = some tgt`
-instead: the run `difftest` performs, and the state the corpus result is about.
+**The target is the interpreter's, not the specification's** — and no longer because the
+specification's is unreachable. `ProgramStep Database.empty (encode P) tgt` is satisfiable
+(`satProgram_programStep`); what it is not is **decidable**. The corpus result is a decision
+procedure's answer at a concrete state, and every piece of that procedure is shaped for an
+`FDatabase`: `sameClassF` reads a term list, and its two side conditions
+`FDatabase.SubtermClosed` and `FDatabase.EqsRefl` are `Bool`-decided at the state itself
+(`subtermClosedB`, `eqsReflB`). `ProgramStep` mentions a `Database`, whose `terms` is a
+`Prop`-valued congruence over a `Set`, and it does not determine one state but a family. So
+the hypothesis is `execM (encode P) = some tgt`: the run `difftest` performs, and the state
+the corpus result is about.
 
-The two are not the same claim. `execM` under-fires relative to the specification
-(`Proofs/Merge.lean`, `execM_contained`: the enumerator is stricter than `ValidEnv`, and
-`Impl/`'s merge phase reads `identityVals` where `MergeStep` does not), so this is a
-statement about the reference implementation's target. Turning it back into a statement
-about `Spec/` needs `MergeSaturated` to stop counting the proof column, which is a change to
-`Spec/Step.lean`.
+The two are still not the same claim. `execM` under-fires relative to the specification
+(`Proofs/Merge.lean`, `execM_contained`: the enumerator is stricter than `ValidEnv`), so this
+is a statement about the reference implementation's target — but it is now a target the
+specification can reach, which is what changed.
 
 The source side keeps `ProgramStep`: a source program is constructor-only, `exec_programStep`
 is an equality there, and the witness discharges the hypothesis through it. -/
@@ -615,9 +719,10 @@ is this one.
 
 `EncodeDomain` is still needed: outside it `encode` is not defined for the program at all —
 a `:merge` declaration has no table triple to emit, and a source name in the generated
-namespace collides with one. `Rebuilt` is *not* a hypothesis: it is a postcondition
-(`cmdStep_rebuilt`), and one nothing satisfies (`not_rebuilt_toDatabase`), so what the two
-unproved halves have to lean on is the interpreter's own saturation instead. -/
+namespace collides with one. `Rebuilt` is *not* a hypothesis: it is a postcondition of the
+specification's rebuild command (`cmdStep_rebuilt`), and the hypothesis here names an
+`execM` target, so what the two unproved halves have to lean on is the interpreter's own
+`mergeSaturateF` fixpoint instead. -/
 theorem encode_corresponds {P : Program} {src : Database} {tgt : FDatabase}
     (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
     (htgt : execM (encode P) = some tgt) (a b : Term) :

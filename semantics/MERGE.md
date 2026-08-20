@@ -186,7 +186,8 @@ inductive MergeStep : Database → Database → Prop where
   `Database.NoMergeOk` carries the same two premises for the same reason.
 * **Nothing is removed** — `db.Contained` the result, both colliding entries survive. That keeps
   every monotonicity lemma alive and leaves the old entries' proofs available for the `@MergeRow`
-  naming them. **No guard on the collision** either; see the section of that name.
+  naming them. **The one guard on the collision is `MergeConflict`**, egglog's own skip test; see
+  the section of that name.
 * **The combined entry is written at key `as` only.** Reads go through `Out`, which quantifies over
   congruent keys, so it is visible from `bs` too. This replaces egglog's rebuild-driven re-keying:
   keys are compared up to congruence rather than canonicalized.
@@ -564,15 +565,15 @@ Merge closure is a *phase* of a command — `CmdStep` is `cmdEffect` then `Merge
 merged value within a round. But `CmdStep` deliberately does **not** require the closure to have
 saturated, and an earlier draft that did was *wrong*, not merely strict: `∀ db', ¬ MergeStep db db'`
 is **unsatisfiable**, because nothing is removed, so both colliding entries are still present after
-the step and it applies again — forever. (With no guard on the collision there is a second,
-independent reason: every entry collides with itself.) Under that definition `CmdStep … .run` is
+the step and it applies again — forever. (At a single-expression `:merge` there is a second,
+independent reason: every entry conflicts with itself.) Under that definition `CmdStep … .run` is
 vacuous for every program with a real merge collision. The corrected form is "every step is the
 identity",
 `MergeSaturated db := ∀ db', MergeStep db db' → db' = db`, **assumed by the theorems that need it**
 — simulation, and matching egglog's row counts — rather than built into the step. This removes
 termination from the spec entirely, which is what the invariant framing buys.
 
-### No guard on the collision
+### The only guard on the collision is egglog's own
 
 `CongList` is reflexive on terms the database holds, so an entry collides with **itself**, and
 `MergeStep` has no `a ≠ b` side condition to stop it. An earlier draft had one, reasoning that
@@ -582,14 +583,21 @@ it made the guard the one **under**-approximation in an otherwise over-approxima
 unsafe direction: it leaves egglog reaching states the model never checks, so the safety invariant
 does not transfer to real egglog.
 
-Without the guard the model covers egglog unconditionally. egglog skips a collision that changes no
-value column whenever the function declares `:internal-identity-vals` **or** its `:merge` carries an
-action block, and fires on it otherwise; `MergeStep` fires either way, and on the self-collision
-egglog never even sees. Over-approximate in every case. **The safety theorem therefore needs no
-scope condition on the signature at all** — no `merge (x, x) = x`, no identity-guardedness
-hypothesis. (`Impl/` does take the skip, because it has to predict row counts and a `:merge` body
-*writes*; that is `FDatabase.noConflict`, and firing fewer steps is what its containment contract
-allows. See "A collision that changes nothing runs no body" below.)
+What `MergeStep.collide` does carry is `Spec/Step.lean`'s `MergeConflict`, which is not that guard
+but **egglog's** — `FDatabase.noConflict` negated, the same test on both sides of the refinement.
+egglog skips a collision that changes no *counted* value column whenever the function declares
+`:internal-identity-vals` or its `:merge` carries an action block, and fires on it otherwise, and
+`MergeStep` now does exactly that. A self-collision at a `:merge` with a block is therefore not a
+step, which is what makes `MergeSaturated` reachable once a value column carries a payload the body
+rewrites (`Encoding/Correspond.lean`, finding 3 of `ENCODING.md`); a single-expression `:merge`
+still fires on itself, deliberately, since it may be non-idempotent.
+
+**The safety theorem needs no scope condition on the signature** — no `merge (x, x) = x`, no
+identity-guardedness hypothesis. What the guard does cost is the *ordering-free* arm of
+`execM_contained`'s side condition: `MergeConflict` compares tuples by identity, which no congruence
+transport preserves, so `Signature.OrderingFree` now asks that a merge read nothing
+congruence-unstable — `identityVals = none` and `body = []` — which keeps every `:merge` expression
+and drops `:merge` action blocks from that arm alone.
 
 ~~Congruence **monotonicity** does need a signature condition, and it is not optional.~~
 **Superseded, and this is where the second congruence relation cost the most.** `MCong.fd` fired
@@ -656,10 +664,11 @@ either" — was about the *declared* form, which only the encoding's own views u
 columns cost a real divergence (recorded below). `Impl/Merge.lean`'s `FDatabase.noConflict` is the
 model of the default form.
 
-**`identityVals` stays out of `FnDecl`**, now for a narrower reason: what is left unmodelled is the
-*prefix* — `k < n_vals`, where the payload columns may differ and the row is still kept. Nothing in
-the difftest fragment declares it, and the trigger to revisit is unchanged: rendering `encode`'s
-output to `.egg` and running it in real egglog.
+**`identityVals` is a field of `FnDecl` and both sides read it**: `FDatabase.noConflict` decides it
+and `Spec/Step.lean`'s `MergeConflict` states it. What is left unmodelled is the old timestamp — the
+skip keeps the row's age so seminaive does not re-fire, and this model has no firing count. Nothing
+in the difftest fragment declares `:internal-identity-vals`, so the trigger to revisit is unchanged:
+rendering `encode`'s output to `.egg` and running it in real egglog.
 
 ### `:no-merge` collisions, out of scope
 
