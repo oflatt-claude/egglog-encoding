@@ -359,15 +359,26 @@ def shape_of(col):
     return {CHILD: "child", BINDER: "binder"}.get(col, str(col))
 
 
-def emit(language, binders=()):
+def emit(language, binders=(), provided=None):
     """All the rules for one language: `{constructor: signature}`.
 
     `binders` pins binders by operator string, for the generic encoding where the
     operator is a payload rather than the constructor. A `BINDER` column declares
     one structurally and needs no entry.
+
+    `provided` names constructors the generic encoding already declares. A language
+    file includes that encoding, so re-declaring one is a duplicate binding; its
+    signature must match, and then its rules are already there too.
     """
     out = []
     for name, sig in language.items():
+        if provided and name in provided:
+            if provided[name] != sig:
+                raise SystemExit(
+                    f"{name} clashes with the generic encoding at a different signature")
+            out += banner(f"{name} :: {' '.join(shape_of(c) for c in sig)}"
+                          " -- declared by the generic encoding")
+            continue
         _, edges, kids, _ = cols_of(sig)
         out += banner(f"{name} :: {' '.join(shape_of(c) for c in sig)}")
         out += [declare(name, sig),
@@ -476,7 +487,7 @@ def main():
         p = pathlib.Path(f"tests/slotted-lang-{lang}.egg")
         body = HEADER + f';;;\n;;; Language: {lang}\n\n' \
             '(include "tests/slotted-egraph-encoding-11.egg")\n\n' \
-            + "\n".join(emit(spec))
+            + "\n".join(emit(spec, provided=GENERIC))
         p.write_text(in_slotted_ruleset(body))
         print(f"wrote {p} ({len(spec)} constructors, one per operator)")
 
