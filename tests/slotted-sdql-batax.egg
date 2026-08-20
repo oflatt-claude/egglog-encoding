@@ -55,6 +55,19 @@
 ;;; failing to name a class, NOT evidence that they are the same class -- so whether
 ;;; these are self-loops is deliberately not claimed here.
 ;;;
+;;; Still open. One cycle of this family has since been fixed -- transitivity composing
+;;; a non-idempotent self-loop on its LEFT, see Case 20 in `slotted-egraph-encoding-11.egg`
+;;; -- but this is a different instance and the fix does not reach it. The same 4 rows flip
+;;; as before, and they are edges between two members that are BOTH followers, whose two
+;;; spellings differ by a symmetry that transitivity composes with `e1`, `e2` and `e3` all
+;;; distinct. A guard about `e1 = e2` cannot apply there.
+;;;
+;;; The family, stated generally: transitivity closes the set of spellings of an edge under
+;;; the class's symmetry group, while single-parent prunes to one spelling per source and
+;;; target. Neither is a fixed point of the other, so with a non-trivial group they alternate.
+;;; Disabling single-parent is the only one of the four `RenamesToLeader` rules whose removal
+;;; leaves every other check passing, which is where a real repair would start.
+;;;
 ;;; This blocks a differential sweep: `check_case` allows 25s per case, so sdql cases
 ;;; would report TIMEOUT rather than agreement or disagreement.
 
