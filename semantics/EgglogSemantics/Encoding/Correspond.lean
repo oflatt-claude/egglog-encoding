@@ -65,17 +65,17 @@ both are decided at the witness at the end of this file.
   same discipline applied to the new residues: each discharged at a state a program reaches,
   non-vacuously.
 * **Proved, and the shared crux of both residues**: the rule-head match correspondence, in
-  `Encoding/Match.lean`. `exists_validQuerySubst_of_patternReads` is the property of the two
-  states, and `encodeQuery_drops_literal_pattern` is the compiled refutation of the two
-  side conditions' necessity. What is left there is one `sorry`,
-  `patternReads_of_encodeQuery`.
-* **`sorry`**, five now, and none of them an obligation any more:
+  `Encoding/Match.lean`, and now with nothing left over.
+  `exists_validQuerySubst_of_patternReads` is the property of the two states,
+  `patternReads_of_encodeQuery` reads the encoded query back off `encodeQuery` to establish
+  its premise, and `encodeQuery_drops_literal_pattern` is the compiled refutation of the two
+  side conditions' necessity.
+* **`sorry`**, four, and none of them an obligation any more:
   `execM_viewLeader`, `execM_viewsCover`, `execM_unionsRead` and `execM_viewsSound` — each
   one property of the state `execM` returned, satisfiable at this file's own witness.
   `encode_assert`, `encode_trans`, `encode_congr`, `encode_corresponds_forward`,
   `encode_corresponds_complete` and `encode_corresponds` are assembled from them and carry
-  `sorryAx` through them. The fifth is `Encoding/Match.lean`'s `patternReads_of_encodeQuery`,
-  which reads the encoded query back off `encodeQuery`.
+  `sorryAx` through them.
 * **Refuted, and recorded so it is not tried again**: the view's *functional dependency*,
   which is the obvious reduction of `trans` and is false at the witness program. The section
   "What the three obligations reduce to" has the state that refutes it, and the same state
@@ -952,10 +952,10 @@ sets.
 
 **One of the two is no longer this file's.** For a build inside a rule *head* the source-side
 hypothesis is the source rule firing, and `Encoding/Match.lean`'s
-`exists_validQuerySubst_of_patternReads` is that, proved: the encoded query matched, therefore
-the source query matches at congruent terms. What is left there is reading the encoded query
-back off `encodeQuery` (`patternReads_of_encodeQuery`), which is the same missing step as the
-`set` read-back here, in the query rather than the head. -/
+`exists_validQuerySubst_of_encodeQuery` is that, proved end to end: the encoded query matched,
+therefore the source query matches at congruent terms. So what remains here is the `set`
+read-back alone — the invariant that an emitted `set` has run — with no query-side gap behind
+it. -/
 theorem execM_viewsCover {P : Program} {src : Database} {tgt : FDatabase}
     (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
     (htgt : execM (encode P) = some tgt) : tgt.toDatabase.ViewsCover src := by

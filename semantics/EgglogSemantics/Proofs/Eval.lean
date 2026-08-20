@@ -130,6 +130,24 @@ theorem evalList_length {sig : Signature} {σ : Env} {es : List Expr} {ts : List
     obtain ⟨us, hus, rfl⟩ := Option.map_eq_some_iff.mp h'
     simp [ih hus]
 
+/-- **A variable that is one of the evaluated expressions is bound.** `Expr.evalList`
+succeeding is the only way a query atom's key columns can be read, so this is how matching an
+atom witnesses that its key variables have values. -/
+theorem lookup_isSome_of_mem_evalList {sig : Signature} {ρ : Env} {v : Var}
+    {es : List Expr} {ts : List Term} (h : Expr.evalList sig es ρ = some ts)
+    (hv : Expr.var v ∈ es) : (Env.lookup v ρ).isSome := by
+  induction es generalizing ts with
+  | nil => simp at hv
+  | cons e es ih =>
+    rw [Expr.evalList_cons, Option.bind_eq_some_iff] at h
+    obtain ⟨t, ht, h'⟩ := h
+    obtain ⟨us, hus, -⟩ := Option.map_eq_some_iff.mp h'
+    rcases List.mem_cons.mp hv with rfl | hv'
+    · rw [Expr.eval_var] at ht
+      rw [ht]
+      rfl
+    · exact ih hus hv'
+
 end Expr
 /-! ### Evaluation stays inside the constructor fragment
 
@@ -370,6 +388,36 @@ theorem Expr.evalList_agree {sig : Signature} {σ₁ σ₂ : Env} (h : Env.Agree
   | [] => rfl
   | e :: es =>
     rw [Expr.evalList_cons, Expr.evalList_cons, Expr.eval_agree h e, Expr.evalList_agree h es]
+
+end
+
+mutual
+
+/-- **Evaluation depends only on the variables the expression mentions.** The partial form of
+`Expr.eval_agree`: the two environments need agree nowhere else, so a substitution may be
+extended or narrowed away from `e.vars` freely.
+
+`Env.Agree` is the total case, and total agreement is more than a caller usually has — one
+atom of a joined query is matched under its own substitution and read under the union, and
+those agree only on that atom's own variables. -/
+theorem Expr.eval_agreeOn {sig : Signature} {σ₁ σ₂ : Env} (e : Expr)
+    (h : ∀ v ∈ e.vars, Env.lookup v σ₁ = Env.lookup v σ₂) :
+    e.eval sig σ₁ = e.eval sig σ₂ := by
+  match e with
+  | .lit _ => rfl
+  | .var v => exact h v (by simp)
+  | .app f args => simp only [Expr.eval, Expr.evalList_agreeOn args (by simpa using h)]
+
+@[inherit_doc Expr.eval_agreeOn]
+theorem Expr.evalList_agreeOn {sig : Signature} {σ₁ σ₂ : Env} (es : List Expr)
+    (h : ∀ v ∈ Expr.varsList es, Env.lookup v σ₁ = Env.lookup v σ₂) :
+    Expr.evalList sig es σ₁ = Expr.evalList sig es σ₂ := by
+  match es with
+  | [] => rfl
+  | e :: es =>
+    rw [Expr.evalList_cons, Expr.evalList_cons,
+      Expr.eval_agreeOn e (fun v hv => h v (List.mem_union_iff.mpr (Or.inl hv))),
+      Expr.evalList_agreeOn es (fun v hv => h v (List.mem_union_iff.mpr (Or.inr hv)))]
 
 end
 

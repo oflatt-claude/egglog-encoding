@@ -118,11 +118,10 @@ nightly-local: nightly-uv nightly-rustup
 # now proved from properties of the state `execM` returned (`cong_sameClass_of_state`,
 # `sameClass_cong_of_state`) — so what is left is exactly those properties:
 # `execM_viewLeader`, `execM_viewsCover` and `execM_unionsRead` for the forward half and
-# `execM_viewsSound` for the completeness half; plus `patternReads_of_encodeQuery`, the
-# encoder read-back the rule-head match correspondence of `Encoding/Match.lean` needs — that
-# correspondence itself is proved, from properties of the two states. Everywhere outside
+# `execM_viewsSound` for the completeness half. The rule-head match correspondence of
+# `Encoding/Match.lean` is proved outright, encoder read-back included. Everywhere outside
 # `Encoding/` a `sorry` is a regression, and a new one inside it changes the count.
-LEAN_OPEN_SORRIES = 5
+LEAN_OPEN_SORRIES = 4
 LEAN_OPEN_SORRY_DIR = semantics/EgglogSemantics/Encoding
 
 lean-check:

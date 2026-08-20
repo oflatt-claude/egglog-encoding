@@ -20,7 +20,9 @@ The target-side hypothesis is `QueryRead`: the ids the flattened query bound, re
 `Database.Out` rather than off `Matches`. `out_of_matches_values` is what turns one encoded
 view read into one `Database.Out`, and it needs `Database.Diag` — which is the *already
 established* fact that `encode` emits no `union`, so `Cong tgt` is equality and a read is a
-lookup. `encodeQuery` **flattens**, so one source pattern becomes several reads and
+lookup. `patternReads_of_encodeQuery` is that hypothesis established from the encoder itself,
+so `exists_validQuerySubst_of_encodeQuery` consumes a match of the *emitted* query and nothing
+hand-written. `encodeQuery` **flattens**, so one source pattern becomes several reads and
 `@Rule_i`'s premise count is the read count; `QueryRead` is indexed by the *source*
 expression and mirrors that flattening as a recursion, which is what makes the
 correspondence one-pattern-to-one-derivation rather than one-atom-to-one-atom.
@@ -71,8 +73,10 @@ program *reaches*, and the premise it guards is checked inhabited there.
 there is no key column anywhere, and `Query.VarsKeyed` is vacuous.
 `exists_validQuerySubst_composed_witness` is the case the correspondence was written for: a
 **unary** constructor, a rule whose query is `((F x))`, both runs stepped, and `VarsKeyed`
-non-vacuous. `Database.GlobalsRead` is the one clause no pair reached here makes non-vacuous,
-and `globalsRead_nonvacuous` is that clause at a state binding a global.
+non-vacuous. It runs the whole path, `encodeQuery`'s own output included — the encoded query's
+match is `wTarget_validQuerySubst`, and `patternReads_of_encodeQuery` is what turns it into the
+reading. `Database.GlobalsRead` is the one clause no pair reached here makes non-vacuous, and
+`globalsRead_nonvacuous` is that clause at a state binding a global.
 -/
 
 namespace Egglog
@@ -583,40 +587,315 @@ theorem out_of_matches_values {d : Database} (hd : d.Diag)
     refine ⟨ts, us, hts, hus, hw, ts, CongList.refl fun a ha => ?_, hw⟩
     exact hsc _ hw (Term.arg_subterms (List.mem_append_left _ ha) (Term.self_mem_subterms a))
 
-/-- **The residue: reading the encoded query back off the encoder. Not proved.**
+/-! ### Reading the encoded query back off the encoder
 
-What is missing, and nothing else: that a matched *encoded* query is a `PatternRead` of the
-source query it came from. Three steps stand between `out_of_matches_values` and this.
+`encodeQuery` **flattens**: one source pattern becomes a contiguous run of view reads, and the
+runs of the whole query are concatenated with the fresh-variable counter threaded through. So
+recovering the source pattern from the matched encoding is three separate moves — pick the run
+belonging to one pattern out of the concatenation, see each atom of that run as matching under
+the *joined* substitution rather than its own, and fold the run's reads back into the single
+`QueryRead` the source expression's shape calls for.
 
-* **The per-atom substitutions have to be merged into one.** `ValidQuerySubst` gives one
-  substitution per encoded atom, each refining `σ` (`Env.UnionAll.refines_of_mem`), and
-  `Matches` reads only the atom's own variables — so each atom matches under `σ` too. What is
-  absent is the partial-agreement congruence for `Expr.eval`: `ValidSubst.of_agree` asks
-  agreement everywhere, and here the two environments agree only on the atom's variables.
-* **The atoms of one source pattern have to be located in the encoded query.**
-  `encodeQuery` is a concatenation and `encodePattern` threads a counter, so
-  `∀ p ∈ q, ∃ m, (encodePattern p m).1 ⊆ (encodeQuery q n).1` is an induction on `q` carrying
-  the counter. Nothing subtle, but it is the *flattening*: `@Rule_i`'s premise count is the
-  emitted read count, not the source pattern count, and the block belonging to one source
-  pattern is what this identifies.
-* **The reads of one source expression have to be folded into one `QueryRead`.** A mutual
-  induction over `encodeQueryExpr`/`encodeQueryArgs`, one `out_of_matches_values` per emitted
-  read, joined on the generated e-class variable — which the emitted atom binds as its first
-  value column and the parent atom reads as a key column, so the join is by construction.
+The counter is never reasoned about, only carried: every statement below is existential in it
+or quantified over it, so no two patterns' atoms are conflated through it. -/
+
+/-! #### The emitted atoms, per case
+
+`rfl` for each projection of the encoder's output tuples that the induction rewrites with. -/
+
+theorem encodeQueryExpr_var {v : Var} {n : Nat} :
+    encodeQueryExpr (.var v) n = (.var v, [], n) := rfl
+
+/-- An application's naming expression is the **generated e-class variable**, numbered after
+its arguments' reads. -/
+theorem encodeQueryExpr_app_expr {f : FnName} {args : List Expr} {n : Nat} :
+    (encodeQueryExpr (.app f args) n).1 = .var (freshVar (encodeQueryArgs args n).2.2) := rfl
+
+/-- And its atoms are its arguments' reads, then **one** view read keyed on their naming
+expressions and binding both value columns. -/
+theorem encodeQueryExpr_app_atoms {f : FnName} {args : List Expr} {n : Nat} :
+    (encodeQueryExpr (.app f args) n).2.1 =
+      (encodeQueryArgs args n).2.1 ++
+        [.values [.var (freshVar (encodeQueryArgs args n).2.2),
+            .var (freshVar ((encodeQueryArgs args n).2.2 + 1))]
+          (viewName f) (encodeQueryArgs args n).1] := rfl
+
+@[inherit_doc encodeQueryExpr_app_expr]
+theorem encodeQueryArgs_cons_exprs {e : Expr} {es : List Expr} {n : Nat} :
+    (encodeQueryArgs (e :: es) n).1 =
+      (encodeQueryExpr e n).1 :: (encodeQueryArgs es (encodeQueryExpr e n).2.2).1 := rfl
+
+@[inherit_doc encodeQueryExpr_app_atoms]
+theorem encodeQueryArgs_cons_atoms {e : Expr} {es : List Expr} {n : Nat} :
+    (encodeQueryArgs (e :: es) n).2.1 =
+      (encodeQueryExpr e n).2.1 ++ (encodeQueryArgs es (encodeQueryExpr e n).2.2).2.1 := rfl
+
+/-- `.expr e` emits exactly `e`'s reads, and **discards** the naming expression: "`e` is
+present" is what the reads already say. -/
+theorem encodePattern_expr_atoms {e : Expr} {n : Nat} :
+    (encodePattern (.expr e) n).1 = (encodeQueryExpr e n).2.1 := rfl
+
+/-- `.eq` emits both sides' reads and then compares the two naming expressions — id equality,
+which at a diagonal target is equality. -/
+theorem encodePattern_eq_atoms {e₁ e₂ : Expr} {n : Nat} :
+    (encodePattern (.eq e₁ e₂) n).1 =
+      (encodeQueryExpr e₁ n).2.1 ++
+        (encodeQueryExpr e₂ (encodeQueryExpr e₁ n).2.2).2.1 ++
+        [.eq (encodeQueryExpr e₁ n).1 (encodeQueryExpr e₂ (encodeQueryExpr e₁ n).2.2).1] := rfl
+
+@[inherit_doc encodeQuery]
+theorem encodeQuery_cons_atoms {p : Pattern} {ps : Query} {n : Nat} :
+    (encodeQuery (p :: ps) n).1 =
+      (encodePattern p n).1 ++ (encodeQuery ps (encodePattern p n).2).1 := rfl
+
+/-! #### Locating one source pattern's block -/
+
+/-- **One source pattern's atoms are among the query's.** The flattening in the form the
+correspondence uses: `@Rule_i`'s premise count is the emitted read count and not the source
+pattern count, and this is what picks out the block belonging to one source pattern.
+
+The counter it is emitted at is existential, because the block sits at whatever number the
+patterns before it left behind. A `⊆` and not a `Sublist`: nothing downstream needs the run to
+be contiguous, only that every atom of it is an atom of the whole query. -/
+theorem encodePattern_subset_encodeQuery {p : Pattern} : ∀ {q : Query}, p ∈ q → ∀ n : Nat,
+    ∃ m, (encodePattern p m).1 ⊆ (encodeQuery q n).1
+  | [], hp, _ => absurd hp (by simp)
+  | p' :: ps, hp, n => by
+    rcases List.mem_cons.mp hp with rfl | hp'
+    · exact ⟨n, by
+        rw [encodeQuery_cons_atoms]; exact fun a ha => List.mem_append.mpr (Or.inl ha)⟩
+    · obtain ⟨m, hm⟩ := encodePattern_subset_encodeQuery hp' (encodePattern p' n).2
+      exact ⟨m, by
+        rw [encodeQuery_cons_atoms]; exact fun a ha => List.mem_append.mpr (Or.inr (hm ha))⟩
+
+/-! #### Folding one source expression's reads into one `QueryRead`
+
+The atoms of one block all match under the joined substitution — `ValidQuerySubst.matches_of_mem`,
+which is where the partial-agreement congruence `Expr.eval_agreeOn` is spent — and from there
+the recursion is `encodeQueryExpr`'s own: one `out_of_matches_values` per emitted read, joined
+on the generated e-class variable, which the emitted atom binds as its first value column and
+the parent atom reads as a key column.
+
+Nothing here asks a view table to be functional. Each read is turned into a `Database.Out`
+independently and `QueryRead` carries the id the *substitution* bound, so two entries at one
+key are two readings rather than a contradiction. -/
+
+/-- A variable argument is its own naming expression, so it survives into the emitted atom's
+key columns. -/
+theorem mem_encodeQueryArgs_of_mem {v : Var} : ∀ {args : List Expr} {n : Nat},
+    Expr.var v ∈ args → Expr.var v ∈ (encodeQueryArgs args n).1
+  | [], _, h => absurd h (by simp)
+  | a :: as, n, h => by
+    rw [encodeQueryArgs_cons_exprs]
+    rcases List.mem_cons.mp h with rfl | h'
+    · rw [encodeQueryExpr_var]
+      exact List.mem_cons_self ..
+    · exact List.mem_cons_of_mem _ (mem_encodeQueryArgs_of_mem h')
+
+mutual
+
+/-- **A variable at a key column is bound by the match.** The emitted read that has `v` in its
+key columns cannot match without `Expr.evalList` succeeding there, and that is a lookup.
+
+This is the target-side half of what `Query.VarsKeyed` buys: a source pattern that is a bare
+variable emits no atom, so its own reads say nothing about it, and the *other* pattern that
+mentions it at a key column is where its binding comes from. -/
+theorem lookup_isSome_of_argVar {d : Database} {σ : Env} {v : Var} :
+    ∀ (e : Expr) (n : Nat), (∀ a ∈ (encodeQueryExpr e n).2.1, Matches d a σ) →
+      Expr.ArgVar v e → (Env.lookup v (d.env ++ σ)).isSome
+  | .lit _, _, _, hv => absurd hv (by simp [Expr.ArgVar])
+  | .var _, _, _, hv => absurd hv (by simp [Expr.ArgVar])
+  | .app f args, n, hm, hv => by
+    rw [encodeQueryExpr_app_atoms] at hm
+    rcases hv with hv | hv
+    · cases hm (.values [.var (freshVar (encodeQueryArgs args n).2.2),
+          .var (freshVar ((encodeQueryArgs args n).2.2 + 1))]
+          (viewName f) (encodeQueryArgs args n).1) (by simp) with
+      | values _ hts _ _ =>
+        exact Expr.lookup_isSome_of_mem_evalList hts (mem_encodeQueryArgs_of_mem hv)
+    · exact lookup_isSome_of_argVarList args n
+        (fun a ha => hm a (List.mem_append.mpr (Or.inl ha))) hv
+
+@[inherit_doc lookup_isSome_of_argVar]
+theorem lookup_isSome_of_argVarList {d : Database} {σ : Env} {v : Var} :
+    ∀ (es : List Expr) (n : Nat), (∀ a ∈ (encodeQueryArgs es n).2.1, Matches d a σ) →
+      Expr.ArgVarList v es → (Env.lookup v (d.env ++ σ)).isSome
+  | [], _, _, hv => absurd hv (by simp [Expr.ArgVarList])
+  | e :: es, n, hm, hv => by
+    rw [encodeQueryArgs_cons_atoms] at hm
+    rcases hv with hv | hv
+    · exact lookup_isSome_of_argVar e n
+        (fun a ha => hm a (List.mem_append.mpr (Or.inl ha))) hv
+    · exact lookup_isSome_of_argVarList es (encodeQueryExpr e n).2.2
+        (fun a ha => hm a (List.mem_append.mpr (Or.inr ha))) hv
+
+end
+
+@[inherit_doc lookup_isSome_of_argVar]
+theorem lookup_isSome_of_patternArgVar {d : Database} {σ : Env} {v : Var} :
+    ∀ (p : Pattern) (n : Nat), p.NoValues →
+      (∀ a ∈ (encodePattern p n).1, Matches d a σ) → Pattern.ArgVar v p →
+      (Env.lookup v (d.env ++ σ)).isSome
+  | .expr e, n, _, hm, hv => lookup_isSome_of_argVar e n hm hv
+  | .eq e₁ e₂, n, _, hm, hv => by
+    rw [encodePattern_eq_atoms] at hm
+    rcases hv with hv | hv
+    · exact lookup_isSome_of_argVar e₁ n
+        (fun a ha => hm a (List.mem_append.mpr (Or.inl (List.mem_append.mpr (Or.inl ha))))) hv
+    · exact lookup_isSome_of_argVar e₂ (encodeQueryExpr e₁ n).2.2
+        (fun a ha => hm a (List.mem_append.mpr (Or.inl (List.mem_append.mpr (Or.inr ha))))) hv
+  | .values _ _ _, _, hnv, _, _ => absurd hnv id
+
+/-- **The naming expression evaluates.** An application's is the e-class variable its own read
+binds, a literal's is itself — and a bare *variable*'s is the variable, which no emitted atom
+binds, so that case is exactly where the hypothesis is spent. -/
+theorem exists_eval_encodeQueryExpr {d : Database} {σ : Env} :
+    ∀ (e : Expr) (n : Nat), (∀ a ∈ (encodeQueryExpr e n).2.1, Matches d a σ) →
+      (∀ v ∈ e.vars, (Env.lookup v (d.env ++ σ)).isSome) →
+      ∃ i, Expr.eval d.sig (encodeQueryExpr e n).1 (d.env ++ σ) = some i
+  | .lit l, _, _, _ => ⟨.lit l, rfl⟩
+  | .var v, _, _, hb => Option.isSome_iff_exists.mp (hb v (by simp))
+  | .app f args, n, hm, _ => by
+    rw [encodeQueryExpr_app_atoms] at hm
+    rw [encodeQueryExpr_app_expr, Expr.eval_var]
+    cases hm (.values [.var (freshVar (encodeQueryArgs args n).2.2),
+        .var (freshVar ((encodeQueryArgs args n).2.2 + 1))]
+        (viewName f) (encodeQueryArgs args n).1) (by simp) with
+    | values _ _ hus _ =>
+      exact Option.isSome_iff_exists.mp (Expr.lookup_isSome_of_mem_evalList hus (by simp))
+
+/-- A read binds two value columns, so its match pins a two-element list: the e-class and the
+premise proof, in that order. -/
+private theorem evalList_two_vars {sig : Signature} {x y : Var} {ρ : Env} {us : List Term}
+    (h : Expr.evalList sig [.var x, .var y] ρ = some us) :
+    ∃ a b, Env.lookup x ρ = some a ∧ Env.lookup y ρ = some b ∧ us = [a, b] := by
+  rw [Expr.evalList_cons, Option.bind_eq_some_iff] at h
+  obtain ⟨a, ha, h⟩ := h
+  obtain ⟨us', hus', rfl⟩ := Option.map_eq_some_iff.mp h
+  rw [Expr.evalList_cons, Option.bind_eq_some_iff] at hus'
+  obtain ⟨b, hb, hus'⟩ := hus'
+  obtain ⟨w, hw, rfl⟩ := Option.map_eq_some_iff.mp hus'
+  obtain rfl : w = [] := (Option.some.inj hw).symm
+  rw [Expr.eval_var] at ha hb
+  exact ⟨a, b, ha, hb, rfl⟩
+
+mutual
+
+/-- **One source expression's emitted reads, folded into one `QueryRead`.** The id is the one
+the naming expression evaluates to: for an application, the value the match gave the generated
+e-class variable, which the emitted read's own `Database.Out` carries as its first value
+column.
+
+`Database.Diag` is spent once per read, inside `out_of_matches_values`. -/
+theorem queryRead_of_matches {d : Database} (hd : d.Diag)
+    (hsc : ∀ t ∈ d.terms, t.subterms ⊆ d.terms) {σ : Env} :
+    ∀ (e : Expr) (n : Nat) {i : Term}, (∀ a ∈ (encodeQueryExpr e n).2.1, Matches d a σ) →
+      Expr.eval d.sig (encodeQueryExpr e n).1 (d.env ++ σ) = some i →
+      QueryRead d (d.env ++ σ) e i
+  | .lit l, _, _, _, hi => by
+    obtain rfl : Term.lit l = _ := Option.some.inj hi
+    exact .lit
+  | .var _, _, _, _, hi => .var hi
+  | .app f args, n, i, hm, hi => by
+    rw [encodeQueryExpr_app_atoms] at hm
+    rw [encodeQueryExpr_app_expr, Expr.eval_var] at hi
+    obtain ⟨ts, us, hts, hus, -, ho⟩ :=
+      out_of_matches_values hd hsc (hm (.values
+        [.var (freshVar (encodeQueryArgs args n).2.2),
+          .var (freshVar ((encodeQueryArgs args n).2.2 + 1))]
+        (viewName f) (encodeQueryArgs args n).1) (by simp))
+    obtain ⟨a, b, ha, -, rfl⟩ := evalList_two_vars hus
+    obtain rfl : a = i := Option.some.inj (ha.symm.trans hi)
+    exact .app (queryReadList_of_matches hd hsc args n
+      (fun x hx => hm x (List.mem_append.mpr (Or.inl hx))) hts) ho
+
+@[inherit_doc queryRead_of_matches]
+theorem queryReadList_of_matches {d : Database} (hd : d.Diag)
+    (hsc : ∀ t ∈ d.terms, t.subterms ⊆ d.terms) {σ : Env} :
+    ∀ (es : List Expr) (n : Nat) {ts : List Term},
+      (∀ a ∈ (encodeQueryArgs es n).2.1, Matches d a σ) →
+      Expr.evalList d.sig (encodeQueryArgs es n).1 (d.env ++ σ) = some ts →
+      QueryReadList d (d.env ++ σ) es ts
+  | [], _, _, _, h => by
+    obtain rfl : ([] : List Term) = _ := Option.some.inj h
+    exact .nil
+  | e :: es, n, ts, hm, h => by
+    rw [encodeQueryArgs_cons_atoms] at hm
+    rw [encodeQueryArgs_cons_exprs, Expr.evalList_cons, Option.bind_eq_some_iff] at h
+    obtain ⟨t, ht, h'⟩ := h
+    obtain ⟨us, hus, rfl⟩ := Option.map_eq_some_iff.mp h'
+    exact .cons (queryRead_of_matches hd hsc e n
+        (fun x hx => hm x (List.mem_append.mpr (Or.inl hx))) ht)
+      (queryReadList_of_matches hd hsc es (encodeQueryExpr e n).2.2
+        (fun x hx => hm x (List.mem_append.mpr (Or.inr hx))) hus)
+
+end
+
+/-- **One source pattern's block, folded into one `PatternRead`.**
+
+A `.eq` needs no bound-variables hypothesis: its emitted `.eq` atom evaluates *both* naming
+expressions itself, and at a diagonal target it forces the two ids equal — which is the single
+id `PatternRead.eq` asks for. A `.expr` needs one, and only at a bare variable.
+
+`Pattern.NoValues` is a fragment restriction and not a gap: `encodePattern` passes a source
+entry atom through unchanged and `PatternRead` has no case for it. -/
+theorem patternRead_of_matches {d : Database} (hd : d.Diag)
+    (hsc : ∀ t ∈ d.terms, t.subterms ⊆ d.terms) {σ : Env} :
+    ∀ (p : Pattern) (n : Nat), p.NoValues →
+      (∀ v ∈ p.vars, (Env.lookup v (d.env ++ σ)).isSome) →
+      (∀ a ∈ (encodePattern p n).1, Matches d a σ) → PatternRead d (d.env ++ σ) p
+  | .expr e, n, _, hb, hm => by
+    rw [encodePattern_expr_atoms] at hm
+    obtain ⟨i, hi⟩ := exists_eval_encodeQueryExpr e n hm hb
+    exact .expr (queryRead_of_matches hd hsc e n hm hi)
+  | .eq e₁ e₂, n, _, _, hm => by
+    rw [encodePattern_eq_atoms] at hm
+    cases hm (.eq (encodeQueryExpr e₁ n).1 (encodeQueryExpr e₂ (encodeQueryExpr e₁ n).2.2).1)
+        (by simp) with
+    | @eq _ _ _ w t₁ t₂ hw he₁ he₂ hc₁ hc₂ =>
+      obtain rfl : t₁ = t₂ := congOn_eq_of_diag hd hc₂
+      exact .eq
+        (queryRead_of_matches hd hsc e₁ n
+          (fun a ha => hm a (List.mem_append.mpr (Or.inl (List.mem_append.mpr (Or.inl ha)))))
+          he₁)
+        (queryRead_of_matches hd hsc e₂ (encodeQueryExpr e₁ n).2.2
+          (fun a ha => hm a (List.mem_append.mpr (Or.inl (List.mem_append.mpr (Or.inr ha)))))
+          he₂)
+  | .values _ _ _, _, hnv, _, _ => absurd hnv id
+
+/-- **A matched encoded query is a `PatternRead` of the source query it came from.** The
+target-side hypothesis of the correspondence, established from the encoder.
 
 `Query.VarsKeyed` is needed here and not only downstream: a source pattern that is a bare
-variable gets no atom, so nothing in the encoded query binds it, and `QueryRead.var` has no
-premise to offer unless some *other* pattern reads it at a key column. -/
+variable emits no atom, so nothing in *its* block binds it, and `PatternRead.expr` has no
+`QueryRead.var` to offer unless some other pattern reads it at a key column.
+
+`Pattern.Grounded` is **not** needed. A bare *literal* pattern emits no atom either, but
+`QueryRead.lit` reads a literal back with no premise at all, so the reading exists whether or
+not the target holds the term — which is exactly why `encodeQuery_drops_literal_pattern`
+refutes the correspondence downstream rather than this. -/
 theorem patternReads_of_encodeQuery {tgt : Database} (hd : tgt.Diag)
     (hsc : ∀ t ∈ tgt.terms, t.subterms ⊆ tgt.terms) {q : Query} {n : Nat} {σ : Env}
     (hnv : ∀ p ∈ q, p.NoValues) (hk : Query.VarsKeyed q)
     (h : ValidQuerySubst tgt (encodeQuery q n).1 σ) :
     ∀ p ∈ q, PatternRead tgt (tgt.env ++ σ) p := by
-  sorry
+  have hblock : ∀ p ∈ q, ∃ m, ∀ a ∈ (encodePattern p m).1, Matches tgt a σ := by
+    intro p hp
+    obtain ⟨m, hsub⟩ := encodePattern_subset_encodeQuery hp n
+    exact ⟨m, fun a ha => h.matches_of_mem (hsub ha)⟩
+  have hbound : ∀ v ∈ Query.vars q, (Env.lookup v (tgt.env ++ σ)).isSome := by
+    intro v hv
+    obtain ⟨p, hp, ha⟩ := hk v hv
+    obtain ⟨m, hm⟩ := hblock p hp
+    exact lookup_isSome_of_patternArgVar p m (hnv p hp) hm ha
+  intro p hp
+  obtain ⟨m, hm⟩ := hblock p hp
+  exact patternRead_of_matches hd hsc p m (hnv p hp)
+    (fun v hv => hbound v (Query.mem_vars.mpr ⟨p, hp, hv⟩)) hm
 
 /-- **The correspondence in the form a rule head consumes.** The state-level theorem composed
-with the residue above, so this is what carries `sorryAx`: the mathematics is
-`exists_validQuerySubst_of_patternReads`, and what is missing is reading the encoder. -/
+with the encoder read-back above: `exists_validQuerySubst_of_patternReads` is the mathematics
+and `patternReads_of_encodeQuery` establishes its premise from a matched encoded query. -/
 theorem exists_validQuerySubst_of_encodeQuery {src tgt : Database} (hw : src.WF)
     (hb : src.TermsBuild) (hs : tgt.ViewsSound src) (hd : tgt.Diag)
     (hsc : ∀ t ∈ tgt.terms, t.subterms ⊆ tgt.terms) {q : Query} {n : Nat} {σ : Env}
@@ -1328,6 +1607,53 @@ theorem wSrcRule_grounded : ∀ p ∈ wSrcRule.query, p.Grounded := by
   intro l
   simp
 
+/-! #### The encoder read-back, run at the witness
+
+`patternReads_of_encodeQuery`'s hypothesis is a match of the *encoded* query, so it is checked
+inhabited here rather than assumed: `wEncRule`'s query **is** what `encodeQuery` emits for the
+source query, and the substitution below is the one the run's single `@FView` row admits. -/
+
+/-- The rule the prelude installed is the encoding of the source rule's query, at the counter
+`encodeRule` starts it from. -/
+theorem wEncRule_query_eq : (encodeQuery wSrcRule.query 0).1 = wEncRule.query := rfl
+
+/-- What the encoded query matched under: the source key variable, and the read's two
+generated columns — the e-class and the premise proof. -/
+def wSubst : Env :=
+  [("@v0", .app "F" [.app "A" []]), ("@v1", .app fiatName []), ("x", .app "A" [])]
+
+private theorem wTarget_mem_of_sub {t : Term} (h : t ∈ wFViewE.subterms) :
+    t ∈ wTarget.terms := wTarget_subtermClosed _ wTarget_mem_view h
+
+/-- The one emitted atom matches, at the one entry the build wrote. -/
+theorem wTarget_validSubst :
+    ValidSubst wTarget (.values [.var "@v0", .var "@v1"] (viewName "F") [.var "x"]) wSubst := by
+  refine ⟨⟨List.Perm.refl _, ?_⟩, .values wTarget_mem_view rfl rfl (Database.mem_addTerm _ _)⟩
+  intro b hb
+  simp only [wSubst, List.mem_cons, List.not_mem_nil, or_false] at hb
+  rcases hb with rfl | rfl | rfl <;>
+    exact wTarget_mem_of_sub (Term.arg_subterms (by simp) (Term.self_mem_subterms _))
+
+/-- **And so the encoded query matches** — the hypothesis `patternReads_of_encodeQuery`
+consumes, inhabited at a state the encoded program reaches. -/
+theorem wTarget_validQuerySubst :
+    ValidQuerySubst wTarget (encodeQuery wSrcRule.query 0).1 wSubst :=
+  ⟨[wSubst], .cons wTarget_validSubst .nil, .single _⟩
+
+/-- Its one pattern is a source `.expr`, so nothing in the query is an entry atom. -/
+theorem wSrcRule_noValues : ∀ p ∈ wSrcRule.query, p.NoValues := by
+  intro p hp
+  obtain rfl : p = .expr (.app "F" [.var "x"]) := by simpa [wSrcRule] using hp
+  trivial
+
+/-- **The read-back, run at the witness**: the emitted view read, folded back into the target's
+reading of the *source* expression `(F x)`. Definitionally `wTarget_patternRead` extended by
+the two generated columns the encoded query also binds. -/
+theorem wTarget_patternRead_encoded :
+    PatternRead wTarget (wTarget.env ++ wSubst) (.expr (.app "F" [.var "x"])) :=
+  patternReads_of_encodeQuery wTarget_diag wTarget_subtermClosed wSrcRule_noValues
+    wSrcRule_varsKeyed wTarget_validQuerySubst _ (by simp [wSrcRule])
+
 /-- **And the witness program is inside the encoder's declared domain**, the narrowed one:
 the clause that puts `litProgram` out keeps this in, so the composed case is a case `encode`
 claims rather than one it is excused from. -/
@@ -1362,11 +1688,13 @@ theorem wProgram_encodeDomain : wProgram.EncodeDomain where
 The first three conjuncts are that the pair is reachable and in the encoder's domain, and
 every hypothesis of the correspondence holds there: `Database.WF` and `Database.TermsBuild`
 on the source, `Database.ViewsSound` on the target, `Pattern.Grounded` and — for the first
-time non-vacuously — `Query.VarsKeyed` on the source text. The premise is inhabited
-(`wTarget_patternRead`), and the conclusion is the last conjunct: the source query `((F x))`
-matches, at a substitution binding `x` to the source term `(A)` — the very term the id the
-target read it as stands for. That is what a rule head building over `x` needs, and it is the
-composition `congUp_var_witness` and `satTarget_patternRead` could only check apart.
+time non-vacuously — `Query.VarsKeyed` on the source text. Both premises are inhabited: the
+target's reading (`wTarget_patternRead`) and, upstream of it, a match of the **encoded** query
+itself (`wTarget_validQuerySubst`), so the composition runs from the encoder's own output
+rather than from a hand-written reading. The conclusion is the last conjunct: the source query
+`((F x))` matches, at a substitution binding `x` to the source term `(A)` — the very term the
+id the target read it as stands for. That is what a rule head building over `x` needs, and it
+is the composition `congUp_var_witness` and `satTarget_patternRead` could only check apart.
 
 `Database.GlobalsRead` is the one clause vacuous here — `wProgram` has no `let` — and is
 discharged non-vacuously at `globalsRead_nonvacuous`. -/
@@ -1376,20 +1704,17 @@ theorem exists_validQuerySubst_composed_witness :
       wSrcD.WF ∧ wSrcD.TermsBuild ∧ wTarget.ViewsSound wSrcD ∧
       Query.vars wSrcRule.query = ["x"] ∧ Query.VarsKeyed wSrcRule.query ∧
       PatternRead wTarget [("x", .app "A" [])] (.expr (.app "F" [.var "x"])) ∧
+      ValidQuerySubst wTarget (encodeQuery wSrcRule.query 0).1 wSubst ∧
       ∃ τ, ValidQuerySubst wSrcD wSrcRule.query τ ∧
         Env.lookup "x" (wSrcD.env ++ τ) = some (.app "A" []) := by
   refine ⟨wProgram_encodeDomain, wProgramStep_src, wProgram_programStep, wSrcD_wf,
     wSrcD_termsBuild, wTarget_viewsSound, wSrcRule_query_vars, wSrcRule_varsKeyed,
-    wTarget_patternRead, ?_⟩
-  obtain ⟨τ, hv, hτ⟩ := exists_validQuerySubst_of_patternReads (d := wTarget)
-    (q := wSrcRule.query) (ρt := [("x", Term.app "A" [])]) wSrcD_wf wSrcD_termsBuild
-    wTarget_viewsSound (by simp [Database.GlobalsRead, wSrcD, wSrcBase, Database.empty])
-    wSrcRule_grounded wSrcRule_varsKeyed
-    (by
-      intro p hp
-      obtain rfl : p = .expr (.app "F" [.var "x"]) := by simpa [wSrcRule] using hp
-      exact wTarget_patternRead)
-  obtain ⟨t, hlk, hc⟩ := hτ "x" (by rw [wSrcRule_query_vars]; simp) (.app "A" []) (by simp)
+    wTarget_patternRead, wTarget_validQuerySubst, ?_⟩
+  obtain ⟨τ, hv, hτ⟩ := exists_validQuerySubst_of_encodeQuery wSrcD_wf wSrcD_termsBuild
+    wTarget_viewsSound wTarget_diag wTarget_subtermClosed
+    (by simp [Database.GlobalsRead, wSrcD, wSrcBase, Database.empty])
+    wSrcRule_noValues wSrcRule_grounded wSrcRule_varsKeyed wTarget_validQuerySubst
+  obtain ⟨t, hlk, hc⟩ := hτ "x" (by rw [wSrcRule_query_vars]; simp) (.app "A" []) rfl
   obtain rfl : t = Term.app "A" [] := Cong.eq_of_diag wSrcD_diag hc
   exact ⟨τ, hv, hlk⟩
 

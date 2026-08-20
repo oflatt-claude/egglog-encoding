@@ -371,6 +371,37 @@ theorem ValidSubst.of_agree {db : Database} {p : Pattern} {σ σ' : Env}
   | values hwm hts hus hc =>
     exact .values hwm (by rw [hevl]; exact hts) (by rw [hevl]; exact hus) hc
 
+/-- **Matching transfers along agreement on the pattern's own variables.** `Matches` reads
+the environment only through the `Expr.eval` of the pattern's expressions, so `Expr.vars` is
+the whole of what it can see.
+
+Unlike `ValidSubst.of_agree` there is no domain condition, because `Matches` alone says
+nothing about a domain: the `ValidEnv` half of `ValidSubst` is what pins it, and this is
+stated without it precisely so that a substitution *larger* than the pattern's free variables
+— a whole query's union — can be substituted for one atom's own. -/
+theorem Matches.of_agreeOn {db : Database} {p : Pattern} {σ σ' : Env} (h : Matches db p σ)
+    (hag : ∀ v ∈ p.vars, Env.lookup v (db.env ++ σ) = Env.lookup v (db.env ++ σ')) :
+    Matches db p σ' := by
+  cases h with
+  | @expr e _ w t hwm he hc =>
+    exact .expr hwm (by rw [Expr.eval_agreeOn e fun v hv => (hag v hv).symm]; exact he) hc
+  | @eq e₁ e₂ _ w t₁ t₂ hwm he₁ he₂ hc₁ hc₂ =>
+    refine .eq hwm ?_ ?_ hc₁ hc₂
+    · rw [Expr.eval_agreeOn e₁ fun v hv =>
+        (hag v (List.mem_union_iff.mpr (Or.inl hv))).symm]
+      exact he₁
+    · rw [Expr.eval_agreeOn e₂ fun v hv =>
+        (hag v (List.mem_union_iff.mpr (Or.inr hv))).symm]
+      exact he₂
+  | @values vs f as _ us ts w hwm hts hus hc =>
+    refine .values hwm ?_ ?_ hc
+    · rw [Expr.evalList_agreeOn as fun v hv =>
+        (hag v (List.mem_union_iff.mpr (Or.inr hv))).symm]
+      exact hts
+    · rw [Expr.evalList_agreeOn vs fun v hv =>
+        (hag v (List.mem_union_iff.mpr (Or.inl hv))).symm]
+      exact hus
+
 namespace ValidQuerySubst
 variable {db : Database} {q : Query} {σ : Env}
 
@@ -394,6 +425,32 @@ theorem mem_dom_iff (h : ValidQuerySubst db q σ) {v : Var} :
   · rintro ⟨p, hp, hv⟩
     obtain ⟨σ', hσ', hvs⟩ := hall.flip.exists_left hp
     exact ⟨σ', hσ', (ValidSubst.mem_dom_iff hvs).mpr hv⟩
+
+/-- **Every pattern of a satisfied query matches under the *joined* substitution.** The
+per-pattern substitutions `ValidQuerySubst` quantifies over are an artefact of how the join is
+stated; each of them binds exactly its own pattern's free variables and refines the union
+(`Env.UnionAll.refines_of_mem`), so on the variables that pattern can see the union is
+indistinguishable from it — `Matches.of_agreeOn`.
+
+Only `Matches` survives, not `ValidSubst`: the union binds the *other* patterns' variables
+too, so its domain is wrong for `ValidEnv`. -/
+theorem matches_of_mem (h : ValidQuerySubst db q σ) {p : Pattern} (hp : p ∈ q) :
+    Matches db p σ := by
+  obtain ⟨σs, hall, hu⟩ := h
+  obtain ⟨σp, hσp, hvs⟩ := hall.flip.exists_left hp
+  have hsc : ∀ ρ ∈ σs, Env.Refines ρ ρ := by
+    intro ρ hρ
+    obtain ⟨p', -, hvs'⟩ := hall.exists_left hρ
+    exact Env.Refines.self_of_nodup (hvs'.validEnv.1.symm.nodup (p'.freeVars_nodup _))
+  have hrp : Env.Refines σp σ := (hu.refines_of_mem hsc).1 σp hσp
+  refine hvs.2.of_agreeOn fun v hv => ?_
+  by_cases hd : v ∈ Env.dom db.env
+  · rw [Env.lookup_append_of_mem hd, Env.lookup_append_of_mem hd]
+  rw [Env.lookup_append_of_not_mem hd, Env.lookup_append_of_not_mem hd]
+  have hfv : v ∈ p.freeVars db.env := p.mem_freeVars.mpr ⟨hv, hd⟩
+  obtain ⟨t, ht⟩ := Option.isSome_iff_exists.mp
+    (Env.lookup_isSome_iff_mem_dom.mpr ((ValidSubst.mem_dom_iff hvs).mpr hfv))
+  rw [ht, hrp (v, t) (Env.mem_of_lookup ht)]
 
 /-- The empty query is satisfied by exactly the empty substitution: a rule with no
 patterns fires once. -/
