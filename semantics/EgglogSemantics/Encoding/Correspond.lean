@@ -40,15 +40,31 @@ both are decided at the witness at the end of this file.
 * **Proved**, no `sorry`: `sameClassF_iff` and `mem_viewReprsF_iff`, both directions;
   `cong_sameClass`, which reduces the forward half to three obligations with `symm`
   discharged; `witnessProgram_encodeDomain` and `encode_corresponds_witness`.
+* **Proved, and the forward half's whole argument**: `cong_sameClass_of_state`. The three
+  obligations `cong_sameClass` leaves hold at *any* target with three named properties —
+  `Database.ViewLeader`, `Database.ViewsCover` and `Database.UnionsRead` — over any source
+  with `Database.WF`, and the four reductions that make it up (`trans_of_viewLeader`,
+  `sameClass_congr_of_keyed`, `viewRepr_total`, `sameClass_self_of_viewsCover`) are proved
+  outright. So the forward half is one lemma from done, and that lemma is "the state `execM`
+  returned has the three properties".
 * **Proved, and what says the specification's own target is reachable**:
   `not_mergeConflict_self`, `refutationState_mergeSaturated`, and
   `satProgram_programStep` — a compiled `ProgramStep Database.empty (encode P) tgt` for a
   `P` that builds a term. Each of the three is the negation of a lemma that stood here
   before `Spec/Step.lean` read `identityVals`, and that refutation is why the statement
   below reads `execM`; the reason it still does is a different one.
-* **`sorry`**, one per obligation and the only four in the library: `encode_assert`,
-  `encode_trans`, `encode_congr`, `encode_corresponds_complete`. `encode_corresponds` and
-  `encode_corresponds_forward` are assembled from them and carry `sorryAx` through them.
+  `satTarget_viewLeader` is the same discipline applied to the new residues: one of the
+  three, discharged at that reachable state.
+* **`sorry`**, the only four in the library, and none of them an obligation any more:
+  `execM_viewLeader`, `execM_viewsCover` and `execM_unionsRead` — each one property of the
+  state `execM` returned, satisfiable at this file's own witness — and
+  `encode_corresponds_complete`. `encode_assert`, `encode_trans`, `encode_congr`,
+  `encode_corresponds_forward` and `encode_corresponds` are assembled from them and carry
+  `sorryAx` through them.
+* **Refuted, and recorded so it is not tried again**: the view's *functional dependency*,
+  which is the obvious reduction of `trans` and is false at the witness program. The section
+  "What the three obligations reduce to" has the state that refutes it, and the same state
+  refutes `MergeSaturated` at an `execM` target.
 -/
 
 namespace Egglog
@@ -662,37 +678,305 @@ theorem cong_sameClass {src tgt : Database} (h : CongObligations src tgt) {a b :
     (hc : Cong src a b) : SameClass tgt a b :=
   Cong.le h.assert (fun _ _ hab => hab.symm) h.trans h.congr hc
 
-/-- **Obligation `assert`, at the encoding.** Two writers to cover. `Database.addTerm`
-writes a reflexive equation per subterm and `encodeBuild` writes `@fView(es) ↦ (f es, @Fiat)`
-for the application it encodes, which is the id `ViewRepr` reads; `evalAction`'s `union`
-writes a `@UF` edge, whose two endpoints share a view id only once the rebuild has re-keyed
-them, so this clause rests on the rebuild exactly as `congr` does. **Not proved.** -/
+/-! #### What the three obligations reduce to
+
+Each of the three is a *reduction* plus one property of the state `execM` returned. The
+reductions are proved below; the properties are the residue, one `sorry` each, and each is
+stated as a fact about a `Database` rather than as a restatement of the obligation, so what
+is missing is visible and each is checkable at a concrete state.
+
+**`Database.Out` is not functional at a view key, and the obligations must not be reduced to
+saying it is.** The natural reading of `trans` — two entries at one key have collided, the
+`:merge` resolved them, so their e-class columns coincide — is *refuted at this file's own
+witness program*. `difftest correspond-dump 64 union` prints, for `witnessProgram`,
+
+```
+  view @TwoView() ↦ (One)
+  view @TwoView() ↦ (Two)
+```
+
+and both are in `terms`: `mergeOneOriented` overwrites the resident *row* and `addTerm`s the
+combined entry, and nothing is ever removed from `terms` (`MERGE.md`, "Constraint (3):
+monotonicity"). So `ViewRepr tgt (Two)` holds of `(One)` and of `(Two)` alike.
+
+`MergeSaturated` is not available at such a state either, which is why neither it nor
+`Rebuilt` appears below: the displaced entry still *collides* with the survivor —
+`identityVals := some 1` counts the e-class column and `[(Two)] ≠ [(One)]`, so
+`MergeConflict` holds — and a `MergeStep` fires at a collision the interpreter had already
+settled by deleting the row.
+
+What *is* true there is the next thing down: two ids one source term reads are
+`@UF`-connected, so they share a leader. `correspond-dump 64 union`'s `leaders` column is a
+single term for each of the four source terms, and `difftest correspond`'s **`leader-diff`**
+column is the corpus-wide measurement of the same thing — the pairs on which joining at a
+*leader* and joining at any shared node disagree, 0 on every case. `Database.ViewLeader` is
+that. -/
+
+/-- **A leader for the view reading.** `lead` picks, per id, one that every source term
+reading that id also reads; and two ids one source term reads have the same `lead`.
+
+Not `Database.Out`'s functionality, which is false — see the section header. `lead` is
+egglog's union-find representative, but it is existentially quantified rather than computed:
+`Database.Out` records every parent a merge displaced, so `UFLeader` is a relation. -/
+def Database.ViewLeader (d : Database) : Prop :=
+  ∃ lead : Term → Term,
+    (∀ t e, ViewRepr d t e → ViewRepr d t (lead e)) ∧
+    (∀ t e₁ e₂, ViewRepr d t e₁ → ViewRepr d t e₂ → lead e₁ = lead e₂)
+
+/-- **Obligation `trans` reduces to `Database.ViewLeader`.** The two witnesses are both ids
+of `b`, so they share a `lead`, and that `lead` is an id of `a` and of `c`. -/
+theorem SameClass.trans_of_viewLeader {d : Database} (h : d.ViewLeader) {a b c : Term}
+    (hab : SameClass d a b) (hbc : SameClass d b c) : SameClass d a c := by
+  obtain ⟨lead, hmem, huniq⟩ := h
+  obtain ⟨e₁, ha₁, hb₁⟩ := hab
+  obtain ⟨e₂, hb₂, hc₂⟩ := hbc
+  refine ⟨lead e₁, hmem a e₁ ha₁, ?_⟩
+  rw [← huniq b e₂ e₁ hb₂ hb₁]
+  exact hmem c e₂ hc₂
+
+/-! #### And at a state a program reaches
+
+`Database.ViewLeader` is the residue `trans` is reduced to, so it had better hold somewhere:
+here it is at `satTarget`, the state `satProgram_programStep` steps to. This is the
+*degenerate* case of the property — one nullary constructor and no `union`, so a term has at
+most one id and the identity is a `lead` — and it is the case every program with no `union` is
+in. Where two ids do appear, `difftest correspond-dump 64 union` is the reading, and the
+section above is why `lead` and not equality is what survives there. -/
+
+/-- The four terms the run holds, enumerated. -/
+private theorem satTarget_mem_cases {t : Term} (h : t ∈ satTarget.terms) :
+    t = satViewEntry ∨ t = Term.app fiatName [] ∨ t = satTermEntry ∨ t = Term.app "A" [] := by
+  rw [satTarget_terms] at h
+  simpa [satTermEntry, satViewEntry] using h
+
+/-- **At `satTarget` a source term has at most one id.** Two of the four terms are too short
+to be a view entry at all — a key plus the two value columns is two columns at least — one is
+`@ATerm`'s row, which is one column, and `@AView(A, @Fiat)` is what is left, its e-class
+column `A`. `satTarget_diag` is what lets the key be read up to equality. -/
+private theorem satTarget_viewRepr {t e : Term} (h : ViewRepr satTarget t e) :
+    e = Term.app "A" [] := by
+  match h with
+  | .lit hm => exact absurd (satTarget_mem_cases hm) (by simp [satTermEntry, satViewEntry])
+  | @ViewRepr.app _ f as es e pf _ ho =>
+    obtain ⟨bs, hcl, hmem⟩ := ho
+    obtain rfl : es = bs :=
+      List.forall₂_eq_eq_eq ▸ (hcl.toForall₂.imp fun _ _ h => Cong.eq_of_diag satTarget_diag h)
+    rcases satTarget_mem_cases hmem with h' | h' | h' | h' <;>
+        simp only [satTermEntry, satViewEntry, Term.app.injEq] at h' <;>
+      [skip; skip; skip; skip]
+    · obtain rfl : es = [] := by
+        have hl : (es ++ [e, pf]).length = 2 := by rw [h'.2]; rfl
+        simp only [List.length_append, List.length_cons] at hl
+        exact List.eq_nil_of_length_eq_zero (by omega)
+      exact (show e = Term.app "A" [] ∧ pf = Term.app fiatName [] by simpa using h'.2).1
+    · have hl : (es ++ [e, pf]).length = 0 := by rw [h'.2]; rfl
+      simp only [List.length_append, List.length_cons] at hl
+      omega
+    · have hl : (es ++ [e, pf]).length = 1 := by rw [h'.2]; rfl
+      simp only [List.length_append, List.length_cons] at hl
+      omega
+    · have hl : (es ++ [e, pf]).length = 0 := by rw [h'.2]; rfl
+      simp only [List.length_append, List.length_cons] at hl
+      omega
+
+/-- **`Database.ViewLeader` holds at `satTarget`**, with the identity as its `lead`. -/
+theorem satTarget_viewLeader : satTarget.ViewLeader :=
+  ⟨id, fun _ _ h => h, fun _ _ _ h₁ h₂ =>
+    show id _ = id _ from (satTarget_viewRepr h₁).trans (satTarget_viewRepr h₂).symm⟩
+
+/-- **The keys the target's views carry**, relative to what the source holds.
+
+`keyed` is the rebuild, stated: an entry for `f` at *every* tuple of ids its children are
+given, not only at the tuple the build wrote. `rebuildRules`' column rules are what put them
+there — one `set` per column per `@UF` edge, so a saturated ruleset covers the product — and
+`difftest correspond-dump 64 union` shows the product covered and nothing outside it: keys
+`(One,One)`, `(One,Two)` and `(Two,One)` for `@AddView`, and no `(Two,Two)`, since `(One)` is
+a leader and reads only to itself.
+
+`lits` is the one thing no view entry can say. `encodeBuild` emits no action for a literal,
+so a literal is its own id exactly where the target holds it, and it is held as a key column
+of the entry its parent's build wrote. -/
+structure Database.ViewsCover (d src : Database) : Prop where
+  /-- A literal the source holds, the target holds too. -/
+  lits : ∀ l : Lit, Term.lit l ∈ src.terms → Term.lit l ∈ d.terms
+  /-- An application the source holds has a view entry at every key its children's ids
+  form. -/
+  keyed : ∀ f as es, Term.app f as ∈ src.terms → ViewReprList d as es →
+    ∃ e pf, d.Out (viewName f) es [e, pf]
+
+/-- A pointwise `SameClass` is one shared id tuple: exactly what a view read needs, since
+`Database.Out` is keyed on the tuple. -/
+theorem viewReprList_of_forall₂ {d : Database} : ∀ {as bs : List Term},
+    List.Forall₂ (SameClass d) as bs → ∃ es, ViewReprList d as es ∧ ViewReprList d bs es
+  | [], [], .nil => ⟨[], .nil, .nil⟩
+  | _ :: _, _ :: _, .cons hab hl => by
+      obtain ⟨e, hae, hbe⟩ := hab
+      obtain ⟨es, h₁, h₂⟩ := viewReprList_of_forall₂ hl
+      exact ⟨e :: es, .cons hae h₁, .cons hbe h₂⟩
+
+/-- **Obligation `congr` reduces to `Database.ViewsCover.keyed`.** The pointwise hypothesis
+gives one id tuple both argument lists read to, `keyed` gives a view entry at it, and that
+entry's e-class column is an id of both applications. The second self-congruence premise is not
+used, nor is the rest of `ViewsCover`. -/
+theorem sameClass_congr_of_keyed {src d : Database} (hc : d.ViewsCover src) {f : FnName}
+    {as bs : List Term} (ha : Term.app f as ∈ src.terms)
+    (hl : List.Forall₂ (SameClass d) as bs) :
+    SameClass d (.app f as) (.app f bs) := by
+  obtain ⟨es, h₁, h₂⟩ := viewReprList_of_forall₂ hl
+  obtain ⟨e, pf, ho⟩ := hc.keyed f as es ha h₁
+  exact ⟨e, .app h₁ ho, .app h₂ ho⟩
+
+mutual
+
+/-- **Every term the source holds has an id**, by `ViewsCover` and structural recursion:
+`lits` at a literal, and `keyed` at an application whose children's ids the recursion
+supplies. `Database.WF` is what says the children are held, and `ProgramStep.wf` delivers it
+from the empty state. -/
+theorem viewRepr_total {d src : Database} (hc : d.ViewsCover src) (hw : src.WF) :
+    ∀ t : Term, t ∈ src.terms → ∃ e, ViewRepr d t e
+  | .lit l, ht => ⟨.lit l, .lit (hc.lits l ht)⟩
+  | .app f as, ht => by
+      obtain ⟨es, hes⟩ := viewRepr_list_total hc hw as fun a ha =>
+        hw.subtermClosed _ ht (Term.arg_subterms ha (Term.self_mem_subterms a))
+      obtain ⟨e, pf, ho⟩ := hc.keyed f as es ht hes
+      exact ⟨e, .app hes ho⟩
+
+@[inherit_doc viewRepr_total]
+theorem viewRepr_list_total {d src : Database} (hc : d.ViewsCover src) (hw : src.WF) :
+    ∀ as : List Term, (∀ a ∈ as, a ∈ src.terms) → ∃ es, ViewReprList d as es
+  | [], _ => ⟨[], .nil⟩
+  | a :: as, ht => by
+      obtain ⟨e, he⟩ := viewRepr_total hc hw a (ht a (List.mem_cons_self ..))
+      obtain ⟨es, hes⟩ := viewRepr_list_total hc hw as fun b hb =>
+        ht b (List.mem_cons_of_mem _ hb)
+      exact ⟨e :: es, .cons he hes⟩
+
+end
+
+/-- **The reflexive half of obligation `assert` reduces to `Database.ViewsCover`.** A
+reflexive equation is a term the source holds, and a term with an id is in one class with
+itself. -/
+theorem sameClass_self_of_viewsCover {src d : Database} (hc : d.ViewsCover src) (hw : src.WF)
+    {a : Term} (h : (a, a) ∈ src.eqs) : SameClass d a a :=
+  let ⟨e, he⟩ := viewRepr_total hc hw a (Cong.assert h)
+  ⟨e, he, he⟩
+
+/-- **What is left of obligation `assert`**: the equations `Database.addTerm` did *not*
+write. `encode`'s source fragment has one other writer, `evalAction`'s `union`, and it is the
+only one that can relate distinct terms — so this is the `union` clause alone, and it rests
+on the rebuild exactly as `congr` does: the two endpoints get a `@UF` edge between their
+ids, and the views share an id only once the e-class rebuild rule has followed it. -/
+def Database.UnionsRead (d src : Database) : Prop :=
+  ∀ a b, (a, b) ∈ src.eqs → a ≠ b → SameClass d a b
+
+/-- **The whole forward half, from three properties of the target and nothing else.**
+
+No `execM`, no `encode`, no `sorry`: `Cong src a b → SameClass d a b` at any target with
+`ViewLeader`, `ViewsCover` and `UnionsRead`, over any source with `Database.WF`. That is what
+the reduction buys — the three `encode_*` obligations below are this theorem instantiated at
+an `execM` target, and what is left unproved is exactly that an `execM` target has the three
+properties. -/
+theorem cong_sameClass_of_state {src d : Database} (hw : src.WF) (hlead : d.ViewLeader)
+    (hcov : d.ViewsCover src) (hun : d.UnionsRead src) {a b : Term} (h : Cong src a b) :
+    SameClass d a b :=
+  cong_sameClass
+    ⟨fun x y hxy => if hxyeq : x = y then hxyeq ▸ sameClass_self_of_viewsCover hcov hw
+        (hxyeq ▸ hxy) else hun x y hxy hxyeq,
+     fun _ _ _ => SameClass.trans_of_viewLeader hlead,
+     fun _ _ _ ha _ hl => sameClass_congr_of_keyed hcov ha hl⟩ h
+
+/-! #### The three residues
+
+One `sorry` each, and each of the three is a property of the state `execM` returned rather
+than a restatement of an obligation. All three hold at `witnessProgram`, the program the
+vacuity witness at the end of this file is stated over; `difftest correspond-dump 64 union`
+prints the state and its `reprs`/`leaders` block is the reading.
+
+* `Database.ViewLeader` — `leaders` is a single term for every source term: `(One)` for
+  `(One)` and for `(Two)`, `(Add (One) (Two))` for both `Add`s. `difftest correspond`'s
+  `leader-diff` column is the same reading over the whole corpus, and it is 0.
+* `Database.ViewsCover` — the three `@AddView` keys are exactly the product of the two
+  children's `reprs`, and the source holds no literal.
+* `Database.UnionsRead` — `reprs` of `(One)` and of `(Two)` share `(One)`.
+
+So none of the three is a hypothesis nothing reachable satisfies, which is the failure
+`ENCODING.md` records twice.
+
+What all three still need is one missing piece in three shapes: an invariant carried through
+`FDatabase.execProgramM` that reads the encoded program's *own* commands — the two `set`s per
+build, the `@UF` edge per `union`, and the `Cmd.saturate rebuildRuleset` after each. The
+nearest thing the library has is `execM_contained`, and it does not reach: it is proved under
+`Program.NoSaturate`, and `encode` emits a `Cmd.saturate` after every command that writes. -/
+
+/-- **The residue of obligation `trans`. Not proved.**
+
+What is missing: that the ids a source term reads to at an `execM` target are `@UF`-connected
+and that the connection has a unique endpoint. Two entries at one view key collide, and
+`mergeBody` writes the edge between their e-class columns; `rebuildRules`' e-class rule
+follows an edge, so an id's `lead` is read by every term that reads the id;
+`pathCompressRule` is what makes the endpoint unique. All three are *specification* rules
+fired to saturation, and the hypothesis here is an `execM` target — so what it has to be
+proved from is `FDatabase.runSaturateM`'s own fixpoint, and that is strictly weaker than
+`RunSaturated` (`execM_contained`: the enumerator under-fires). -/
+theorem execM_viewLeader {P : Program} {tgt : FDatabase} (hdom : P.EncodeDomain)
+    (htgt : execM (encode P) = some tgt) : tgt.toDatabase.ViewLeader := by
+  sorry
+
+/-- **The residue of obligations `congr` and of `assert`'s reflexive half. Not proved.**
+
+What is missing: that `encodeBuild`'s two `set`s per subterm have run — which needs the
+encoded action list read back off `execAction`, one `set` at a time — and that
+`rebuildRules`' column rules have then covered every key in the product of the children's id
+sets. -/
+theorem execM_viewsCover {P : Program} {src : Database} {tgt : FDatabase}
+    (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
+    (htgt : execM (encode P) = some tgt) : tgt.toDatabase.ViewsCover src := by
+  sorry
+
+/-- **The residue of obligation `assert`'s `union` half. Not proved.**
+
+What is missing: that a source `union`'s two endpoints share an id. `encodeAction` writes
+`@UF (ordering-max x₁ x₂) ↦ (ordering-min x₁ x₂, pf)` for it, and the e-class rebuild rule
+carries that edge into both endpoints' views — the same rebuild `execM_viewLeader` needs, so
+the two residues are one mechanism read twice. -/
+theorem execM_unionsRead {P : Program} {src : Database} {tgt : FDatabase}
+    (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
+    (htgt : execM (encode P) = some tgt) : tgt.toDatabase.UnionsRead src := by
+  sorry
+
+/-- **Obligation `assert`, at the encoding**, split by writer. `Database.addTerm` writes a
+reflexive equation per subterm built, and `sameClass_self_of_viewsCover` discharges those out
+of `execM_viewsCover`; `evalAction`'s `union` is the only other writer the source fragment
+has, and `execM_unionsRead` is it. **Proved from the two residues.** -/
 theorem encode_assert {P : Program} {src : Database} {tgt : FDatabase} (hdom : P.EncodeDomain)
     (hsrc : ProgramStep Database.empty P src) (htgt : execM (encode P) = some tgt)
     (a b : Term) (h : (a, b) ∈ src.eqs) : SameClass tgt.toDatabase a b := by
-  sorry
+  by_cases hab : a = b
+  · subst hab
+    exact sameClass_self_of_viewsCover (execM_viewsCover hdom hsrc htgt)
+      (hsrc.wf Database.WF.empty) h
+  · exact execM_unionsRead hdom hsrc htgt a b h hab
 
-/-- **Obligation `trans`, at the encoding.** Needs the view's functional dependency: if `b`
-reads to `e₁` and to `e₂` then the two entries collided on a congruent key and the `:merge`
-unioned them, so `e₁` and `e₂` are one class — and, at a rebuilt state, one id. Not free
-from the flat reading, which is why the union-find walk was there. **Not proved.** -/
+/-- **Obligation `trans`, at the encoding. Proved from `execM_viewLeader`.** Not from the
+view's functional dependency, which is false at this file's own witness — the section header
+above has the refutation. -/
 theorem encode_trans {P : Program} {src : Database} {tgt : FDatabase} (hdom : P.EncodeDomain)
-    (hsrc : ProgramStep Database.empty P src) (htgt : execM (encode P) = some tgt)
+    (_hsrc : ProgramStep Database.empty P src) (htgt : execM (encode P) = some tgt)
     (a b c : Term) (hab : SameClass tgt.toDatabase a b) (hbc : SameClass tgt.toDatabase b c) :
-    SameClass tgt.toDatabase a c := by
-  sorry
+    SameClass tgt.toDatabase a c :=
+  SameClass.trans_of_viewLeader (execM_viewLeader hdom htgt) hab hbc
 
-/-- **Obligation `congr`, at the encoding.** The rebuild rules re-key a view entry to its
-children's `@UF` leaders, so two applications whose children share ids key the *same* view
-entry and the `:merge` unions their e-class columns. This is the whole difficulty and it is
-what a rebuilt state buys. **Not proved.** -/
+/-- **Obligation `congr`, at the encoding. Proved from `execM_viewsCover`.** The pointwise
+hypothesis is one shared id tuple, and `ViewsCover.keyed` is the view entry at it — the
+rebuild's whole contribution, isolated. The second self-congruence premise is unused. -/
 theorem encode_congr {P : Program} {src : Database} {tgt : FDatabase} (hdom : P.EncodeDomain)
     (hsrc : ProgramStep Database.empty P src) (htgt : execM (encode P) = some tgt)
     (f : FnName) (as bs : List Term) (ha : Cong src (.app f as) (.app f as))
-    (hb : Cong src (.app f bs) (.app f bs))
+    (_hb : Cong src (.app f bs) (.app f bs))
     (hl : List.Forall₂ (SameClass tgt.toDatabase) as bs) :
-    SameClass tgt.toDatabase (.app f as) (.app f bs) := by
-  sorry
+    SameClass tgt.toDatabase (.app f as) (.app f bs) :=
+  sameClass_congr_of_keyed (execM_viewsCover hdom hsrc htgt) ha hl
+
 
 /-- **No equality is lost**: assembled from the three obligations, with `symm` free. -/
 theorem encode_corresponds_forward {P : Program} {src : Database} {tgt : FDatabase}

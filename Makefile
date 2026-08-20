@@ -113,9 +113,12 @@ nightly-local: nightly-uv nightly-rustup
 # grepped for one as well. The second grep drops backtick-quoted prose: two module
 # docstrings discuss `sorry`, and without it the target can never pass.
 # M11's correspondence statement is stated and not proved: `Encoding/Correspond.lean`
-# carries exactly LEAN_OPEN_SORRIES of them, one per named obligation, each with a compiled
-# vacuity witness beside it (`semantics/ENCODING.md`). Everywhere else a `sorry` is a
-# regression, and a new one in that file changes the count.
+# carries exactly LEAN_OPEN_SORRIES of them, each with a vacuity witness beside it
+# (`semantics/ENCODING.md`). They are no longer the named obligations — those are now proved
+# from three properties of the state `execM` returned (`cong_sameClass_of_state`) — but those
+# three properties, `execM_viewLeader`, `execM_viewsCover` and `execM_unionsRead`, plus the
+# completeness half `encode_corresponds_complete`. Everywhere else a `sorry` is a regression,
+# and a new one in that file changes the count.
 LEAN_OPEN_SORRIES = 4
 LEAN_OPEN_SORRY_FILE = semantics/EgglogSemantics/Encoding/Correspond.lean
 
