@@ -8,6 +8,24 @@ pub struct MapContainer {
     pub data: BTreeMap<Value, Value>,
 }
 
+impl MapContainer {
+    /// A renaming: a map whose keys and values are slot names, so its contents
+    /// never need rebuilding.
+    pub(crate) fn renaming(data: BTreeMap<Value, Value>) -> Self {
+        MapContainer {
+            do_rebuild_keys: false,
+            do_rebuild_vals: false,
+            data,
+        }
+    }
+
+    /// Whether this map's keys or values are e-classes, and so are rebuilt when
+    /// the e-graph merges classes.
+    pub(crate) fn rebuilds_contents(&self) -> bool {
+        self.do_rebuild_keys || self.do_rebuild_vals
+    }
+}
+
 impl ContainerValue for MapContainer {
     fn rebuild_contents(&mut self, rebuilder: &dyn ValueRebuilder) -> bool {
         let mut changed = false;
@@ -246,6 +264,11 @@ fn renaming_find_mapping_total(maps: &[BTreeMap<i64, i64>]) -> Option<BTreeMap<i
 /// - `map-image` and `map-domain`, naming a renaming's two slot sets
 /// - `find-mapping`
 ///
+/// With `i64` keys a renaming also names slots, and the slotted-e-graph
+/// primitives are registered:
+/// - `find-mapping-total`
+/// - `slotted-subst` (see [`crate::sort::SLOTTED_SUBST`])
+///
 /// These are not in [`Presort::reserved_primitives`], so a program that never
 /// declares a `Map` sort may still use the names itself.
 #[derive(Clone, Debug)]
@@ -456,6 +479,17 @@ impl ContainerSort for MapSort {
                         data: solved.into_iter().map(|(k, v)| (bv.get::<i64>(k), bv.get::<i64>(v))).collect(),
                     })
                 }});
+
+                // Substitution needs both a read (to extract a term) and a
+                // write (to add the substituted one), so it is registered as a
+                // `FullPrim`: see `crate::sort::slotted_subst`.
+                eg.add_full_primitive(
+                    crate::sort::slotted_subst::SlottedSubst {
+                        renaming: arc.clone(),
+                        slot: self.key.clone(),
+                    },
+                    None,
+                );
             }
         }
     }
