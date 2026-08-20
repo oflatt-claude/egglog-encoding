@@ -781,11 +781,20 @@
 ;;; case where both renamings are the identity.  So a compiler emits either
 ;;;
 ;;;   * both operands at the identity          ->  (union A B)
-;;;   * otherwise, insert the fact directly    ->  (RenamesToLeader A m B)
+;;;   * otherwise, assert the fact             ->  (Equated A m B)
 ;;;
-;;; and lets the machinery's transitivity / single-parent rules re-orient it.
-;;; The relation form below states it covariantly in G(p) so the rule does not
-;;; have to pick an orientation at all.
+;;; `Equated` is the machinery's unoriented form of `RenamesToLeader`, and writing
+;;; it is what a compiler should do: an action has no way to know which of the two
+;;; values is the smaller, and the machinery picks the side.
+;;;
+;;; Do NOT write `RenamesToLeader` directly from an action. It carries an
+;;; orientation -- the leader is the smaller of the pair -- and a row that gets it
+;;; wrong is deleted as stale, so the fact is silently lost. An earlier version of
+;;; this file said the machinery would "re-orient it"; nothing did, and a backwards
+;;; row let transitivity and single parent disagree forever.
+;;;
+;;; The relation form below states the fact covariantly in G(p), so the test does
+;;; not have to pick an orientation either.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
 

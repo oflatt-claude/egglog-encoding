@@ -41,6 +41,19 @@
 ;; under `ordering-max`.
 (relation RenamesToLeader (U Renaming U))
 
+;; `(Equated a m b)` is the same fact with NO orientation chosen: `a = m*b`, either way
+;; round. Every rule relating two DIFFERENT values writes here, and the rules that read it
+;; below are the only things that write `RenamesToLeader`, so that relation cannot come to
+;; hold a backwards row.
+;;
+;; The indirection is what makes the orientation survive `union`. Orientation is a
+;; function of value order, and `union` rewrites a row's endpoints, so a row oriented
+;; before a merge can be backwards after it. Deleting such a row is safe here because the
+;; fact itself is still in `Equated` and is re-derived the right way round. Writing
+;; `RenamesToLeader` directly and repairing afterwards does NOT work: transitivity keeps
+;; re-deriving the backwards row and the repair keeps flipping it, forever.
+(relation Equated (U Renaming U))
+
 ;; The invariant rules -- these and every rule the generator emits -- must be SATURATED
 ;; between the user's rule steps:
 ;;
@@ -52,6 +65,29 @@
 ;; rules are not expected to terminate, hence the finite step count; the invariants are.
 ;; A file with no user rules of its own, this one included, needs only the first line.
 (ruleset slotted)
+
+;; The only writers of `RenamesToLeader` that relate two different values. Both read
+;; `Equated` and put the smaller of the pair in the leader column.
+(rule ((Equated a m b)
+       (!= a b)
+       (= a (ordering-max a b)))            ; b <= a, so b is the leader
+      ((RenamesToLeader a m b)) :ruleset slotted)
+
+(rule ((Equated a m b)
+       (!= a b)
+       (= b (ordering-max a b)))            ; a <= b, so a is the leader
+      ((RenamesToLeader b (inverse m) a)) :ruleset slotted)
+
+;; `a = m*a` is a symmetry; there is no orientation to pick.
+(rule ((Equated a m a))
+      ((RenamesToLeader a m a)) :ruleset slotted)
+
+;; A row left backwards by a `union`. The fact survives in `Equated`, so this removes
+;; only the stale spelling.
+(rule ((RenamesToLeader f m l)
+       (!= f l)
+       (= l (ordering-max f l)))
+      ((delete (RenamesToLeader f m l))) :ruleset slotted)
 
 ;; The nullary object, depending on no slots.
 (constructor Null () U)
@@ -73,7 +109,7 @@
                   (bool= (compose m23 m23) m23)
                   (bool= e1 e3))))
 
-      ((RenamesToLeader e1 (compose m12 m23) e3)) :ruleset slotted)
+      ((Equated e1 (compose m12 m23) e3)) :ruleset slotted)
 
 ;; Single parent: `a = m1*b` and `a = m2*c` give `b = m1^-1*m2*c`, so `a`'s two edges
 ;; become one, pointing at the smaller of b and c.
@@ -95,7 +131,7 @@
                        (bool= (ordering-max m1 m2) m1)))))
 
       ((delete (RenamesToLeader a m1 b))
-       (RenamesToLeader b (compose (inverse m1) m2) c)) :ruleset slotted)
+       (Equated b (compose (inverse m1) m2) c)) :ruleset slotted)
 
 ;; Shrinking: a narrow idempotent self-loop `m` beside a wider `m1` means the slots
 ;; outside `m` are redundant, so the wide one goes.
@@ -112,7 +148,7 @@
 ;; renaming so one value represents every variable.
 (rule ((= e (Var v))
        (!= v 0))
-      ((RenamesToLeader e (map-insert (map-empty) 0 v) (Var 0))
+      ((Equated e (map-insert (map-empty) 0 v) (Var 0))
        (delete (Var v))
       )
  :ruleset slotted)

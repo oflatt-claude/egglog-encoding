@@ -582,7 +582,7 @@ def compile_rule(atoms, action, conds=()):
             lets = []
             _, built = build_rhs(rhs, lets)
             act = "\n       ".join(
-                lets + [f"(RenamesToLeader {built} {mr} {cls_of[root]})"])
+                lets + [f"(Equated {built} {mr} {cls_of[root]})"])
             return "(rule (" + "\n       ".join(body) + f")\n      ({act}))"
 
     root, op, a, b = action
@@ -608,7 +608,7 @@ def compile_rule(atoms, action, conds=()):
         # cannot express: it would assert the equation at the identity. Solve
         # instead -- from mr*Root = ma*A follows Root = (mr^-1 . ma) * A.
         return ("(rule (" + "\n       ".join(body) + ")\n"
-                f"      ((RenamesToLeader {cls_of[root]} "
+                f"      ((Equated {cls_of[root]} "
                 f"(compose (inverse {mr}) {mp_of[a]}) {cls_of[a]})))")
     if "union-id" in BUGS:
         act = (f'(union {cls_of[root]} (App2 "{enc_op(op)}" '

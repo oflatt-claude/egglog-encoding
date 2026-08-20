@@ -42,7 +42,7 @@
        (= cs27 (ClassSlots C18)))
       ((let _rhs28 (Mult (compose m26 cs27) C18 (compose m11 cs12) C5))
        (let _rhs29 (Mult (compose m24 cs25) C17 (map-union (map-image (compose m26 cs27)) (map-image (compose m11 cs12))) _rhs28))
-       (RenamesToLeader _rhs29 (compose mp7 cs13) V3))
+       (Equated _rhs29 (compose mp7 cs13) V3))
       :ruleset sdql :name "mult-assoc1")
 
 ;; mult-assoc2
@@ -67,7 +67,7 @@
        (= cs27 (ClassSlots C18)))
       ((let _rhs28 (Mult (compose m9 cs10) C4 (compose m24 cs25) C17))
        (let _rhs29 (Mult (map-union (map-image (compose m9 cs10)) (map-image (compose m24 cs25))) _rhs28 (compose m26 cs27) C18))
-       (RenamesToLeader _rhs29 (compose mp7 cs13) V3))
+       (Equated _rhs29 (compose mp7 cs13) V3))
       :ruleset sdql :name "mult-assoc2")
 
 ;; sub-identity
@@ -80,7 +80,7 @@
        (RenamesToLeader C4 sym11 C4)
        (= (compose mp7 p2) (compose (compose m9 cs10) sym11))
        (= cs12 (ClassSlots V3)))
-      ((RenamesToLeader (Num 0) (compose mp7 cs12) V3))
+      ((Equated (Num 0) (compose mp7 cs12) V3))
       :ruleset sdql :name "sub-identity")
 
 ;; add-zero
@@ -92,7 +92,7 @@
        (= m10 (compose mp8 p1))
        (= cs11 (ClassSlots C4))
        (= cs12 (ClassSlots V3)))
-      ((RenamesToLeader V3 (compose (inverse (compose mp8 cs12)) (compose m10 cs11)) C4))
+      ((Equated V3 (compose (inverse (compose mp8 cs12)) (compose m10 cs11)) C4))
       :ruleset sdql :name "add-zero")
 
 ;; sub-zero
@@ -104,7 +104,7 @@
        (= m10 (compose mp8 p1))
        (= cs11 (ClassSlots C4))
        (= cs12 (ClassSlots V3)))
-      ((RenamesToLeader V3 (compose (inverse (compose mp8 cs12)) (compose m10 cs11)) C4))
+      ((Equated V3 (compose (inverse (compose mp8 cs12)) (compose m10 cs11)) C4))
       :ruleset sdql :name "sub-zero")
 
 ;; eq-comm
@@ -118,7 +118,7 @@
        (= cs12 (ClassSlots C5))
        (= cs13 (ClassSlots V3)))
       ((let _rhs14 (Equality (compose m11 cs12) C5 (compose m9 cs10) C4))
-       (RenamesToLeader _rhs14 (compose mp7 cs13) V3))
+       (Equated _rhs14 (compose mp7 cs13) V3))
       :ruleset sdql :name "eq-comm")
 
 ;; mult-app1
@@ -132,7 +132,7 @@
        (= cs12 (ClassSlots C5))
        (= cs13 (ClassSlots V3)))
       ((let _rhs14 (Binop (map-empty) (Symbol "mult") (compose m9 cs10) C4 (compose m11 cs12) C5))
-       (RenamesToLeader _rhs14 (compose mp7 cs13) V3))
+       (Equated _rhs14 (compose mp7 cs13) V3))
       :ruleset sdql :name "mult-app1")
 
 ;; mult-app2
@@ -147,7 +147,7 @@
        (= cs15 (ClassSlots C7))
        (= cs16 (ClassSlots V4)))
       ((let _rhs17 (Mult (compose m12 cs13) C6 (compose m14 cs15) C7))
-       (RenamesToLeader _rhs17 (compose mp10 cs16) V4))
+       (Equated _rhs17 (compose mp10 cs16) V4))
       :ruleset sdql :name "mult-app2")
 
 ;; add-app1
@@ -161,7 +161,7 @@
        (= cs12 (ClassSlots C5))
        (= cs13 (ClassSlots V3)))
       ((let _rhs14 (Binop (map-empty) (Symbol "add") (compose m9 cs10) C4 (compose m11 cs12) C5))
-       (RenamesToLeader _rhs14 (compose mp7 cs13) V3))
+       (Equated _rhs14 (compose mp7 cs13) V3))
       :ruleset sdql :name "add-app1")
 
 ;; add-app2
@@ -176,7 +176,7 @@
        (= cs15 (ClassSlots C7))
        (= cs16 (ClassSlots V4)))
       ((let _rhs17 (Add (compose m12 cs13) C6 (compose m14 cs15) C7))
-       (RenamesToLeader _rhs17 (compose mp10 cs16) V4))
+       (Equated _rhs17 (compose mp10 cs16) V4))
       :ruleset sdql :name "add-app2")
 
 ;; sub-app1
@@ -190,7 +190,7 @@
        (= cs12 (ClassSlots C5))
        (= cs13 (ClassSlots V3)))
       ((let _rhs14 (Binop (map-empty) (Symbol "sub") (compose m9 cs10) C4 (compose m11 cs12) C5))
-       (RenamesToLeader _rhs14 (compose mp7 cs13) V3))
+       (Equated _rhs14 (compose mp7 cs13) V3))
       :ruleset sdql :name "sub-app1")
 
 ;; sub-app2
@@ -205,7 +205,7 @@
        (= cs15 (ClassSlots C7))
        (= cs16 (ClassSlots V4)))
       ((let _rhs17 (Sub (compose m12 cs13) C6 (compose m14 cs15) C7))
-       (RenamesToLeader _rhs17 (compose mp10 cs16) V4))
+       (Equated _rhs17 (compose mp10 cs16) V4))
       :ruleset sdql :name "sub-app2")
 
 ;; get-app1
@@ -219,7 +219,7 @@
        (= cs12 (ClassSlots C5))
        (= cs13 (ClassSlots V3)))
       ((let _rhs14 (Binop (map-empty) (Symbol "getf") (compose m9 cs10) C4 (compose m11 cs12) C5))
-       (RenamesToLeader _rhs14 (compose mp7 cs13) V3))
+       (Equated _rhs14 (compose mp7 cs13) V3))
       :ruleset sdql :name "get-app1")
 
 ;; get-app2
@@ -234,7 +234,7 @@
        (= cs15 (ClassSlots C7))
        (= cs16 (ClassSlots V4)))
       ((let _rhs17 (Get (compose m12 cs13) C6 (compose m14 cs15) C7))
-       (RenamesToLeader _rhs17 (compose mp10 cs16) V4))
+       (Equated _rhs17 (compose mp10 cs16) V4))
       :ruleset sdql :name "get-app2")
 
 ;; sing-app1
@@ -248,7 +248,7 @@
        (= cs12 (ClassSlots C5))
        (= cs13 (ClassSlots V3)))
       ((let _rhs14 (Binop (map-empty) (Symbol "singf") (compose m9 cs10) C4 (compose m11 cs12) C5))
-       (RenamesToLeader _rhs14 (compose mp7 cs13) V3))
+       (Equated _rhs14 (compose mp7 cs13) V3))
       :ruleset sdql :name "sing-app1")
 
 ;; sing-app2
@@ -263,7 +263,7 @@
        (= cs15 (ClassSlots C7))
        (= cs16 (ClassSlots V4)))
       ((let _rhs17 (Sing (compose m12 cs13) C6 (compose m14 cs15) C7))
-       (RenamesToLeader _rhs17 (compose mp10 cs16) V4))
+       (Equated _rhs17 (compose mp10 cs16) V4))
       :ruleset sdql :name "sing-app2")
 
 ;; unique-app1
@@ -275,7 +275,7 @@
        (= cs8 (ClassSlots C3))
        (= cs9 (ClassSlots V2)))
       ((let _rhs10 (App (map-empty) (Symbol "uniquef") (compose m7 cs8) C3))
-       (RenamesToLeader _rhs10 (compose mp5 cs9) V2))
+       (Equated _rhs10 (compose mp5 cs9) V2))
       :ruleset sdql :name "unique-app1")
 
 ;; unique-app2
@@ -288,7 +288,7 @@
        (= cs11 (ClassSlots C5))
        (= cs12 (ClassSlots V3)))
       ((let _rhs13 (Unique (compose m10 cs11) C5))
-       (RenamesToLeader _rhs13 (compose mp8 cs12) V3))
+       (Equated _rhs13 (compose mp8 cs12) V3))
       :ruleset sdql :name "unique-app2")
 
 ;; let-binop3
@@ -317,7 +317,7 @@
       ((let _rhs33 (Let (compose m10 cs11) C5 (map-insert (map-empty) 0 sx) (Var 0) (compose m29 cs30) C20))
        (let _rhs34 (Let (compose m10 cs11) C5 (map-insert (map-empty) 0 sx) (Var 0) (compose m31 cs32) C21))
        (let _rhs35 (Binop (compose m27 cs28) C19 (map-remove (map-union (map-image (compose m10 cs11)) (map-union (map-image (map-insert (map-empty) 0 sx)) (map-image (compose m29 cs30)))) sx) _rhs33 (map-remove (map-union (map-image (compose m10 cs11)) (map-union (map-image (map-insert (map-empty) 0 sx)) (map-image (compose m31 cs32)))) sx) _rhs34))
-       (RenamesToLeader _rhs35 (compose mp8 cs14) V4))
+       (Equated _rhs35 (compose mp8 cs14) V4))
       :ruleset sdql :name "let-binop3")
 
 ;; let-binop4
@@ -355,7 +355,7 @@
        (= cs46 (ClassSlots C38)))
       ((let _rhs47 (Binop (compose m11 cs12) C5 (compose m31 cs32) C23 (compose m45 cs46) C38))
        (let _rhs48 (Let (compose m29 cs30) C22 (map-insert (map-empty) 0 sx) (Var 0) (map-union (map-image (compose m11 cs12)) (map-union (map-image (compose m31 cs32)) (map-image (compose m45 cs46)))) _rhs47))
-       (RenamesToLeader _rhs48 (compose mp9 cs17) V4))
+       (Equated _rhs48 (compose mp9 cs17) V4))
       :ruleset sdql :name "let-binop4")
 
 ;; let-apply1
@@ -381,7 +381,7 @@
        (= cs28 (ClassSlots C19)))
       ((let _rhs29 (Let (compose m10 cs11) C5 (map-insert (map-empty) 0 sx) (Var 0) (compose m27 cs28) C19))
        (let _rhs30 (App (compose m25 cs26) C18 (map-remove (map-union (map-image (compose m10 cs11)) (map-union (map-image (map-insert (map-empty) 0 sx)) (map-image (compose m27 cs28)))) sx) _rhs29))
-       (RenamesToLeader _rhs30 (compose mp8 cs14) V4))
+       (Equated _rhs30 (compose mp8 cs14) V4))
       :ruleset sdql :name "let-apply1")
 
 ;; let-apply2
@@ -407,7 +407,7 @@
        (= cs28 (ClassSlots C19)))
       ((let _rhs29 (App (compose m9 cs10) C4 (compose m27 cs28) C19))
        (let _rhs30 (Let (compose m25 cs26) C18 (map-insert (map-empty) 0 sx) (Var 0) (map-union (map-image (compose m9 cs10)) (map-image (compose m27 cs28))) _rhs29))
-       (RenamesToLeader _rhs30 (compose mp7 cs13) V3))
+       (Equated _rhs30 (compose mp7 cs13) V3))
       :ruleset sdql :name "let-apply2")
 
 ;; if-mult2
@@ -432,7 +432,7 @@
        (= cs27 (ClassSlots C18)))
       ((let _rhs28 (Mult (compose m9 cs10) C4 (compose m26 cs27) C18))
        (let _rhs29 (IfThen (compose m24 cs25) C17 (map-union (map-image (compose m9 cs10)) (map-image (compose m26 cs27))) _rhs28))
-       (RenamesToLeader _rhs29 (compose mp7 cs13) V3))
+       (Equated _rhs29 (compose mp7 cs13) V3))
       :ruleset sdql :name "if-mult2")
 
 ;; if-to-mult
@@ -446,7 +446,7 @@
        (= cs12 (ClassSlots C5))
        (= cs13 (ClassSlots V3)))
       ((let _rhs14 (Mult (compose m9 cs10) C4 (compose m11 cs12) C5))
-       (RenamesToLeader _rhs14 (compose mp7 cs13) V3))
+       (Equated _rhs14 (compose mp7 cs13) V3))
       :ruleset sdql :name "if-to-mult")
 
 ;; mult-to-if
@@ -471,7 +471,7 @@
        (= cs27 (ClassSlots C18)))
       ((let _rhs28 (Equality (compose m24 cs25) C17 (compose m26 cs27) C18))
        (let _rhs29 (IfThen (map-union (map-image (compose m24 cs25)) (map-image (compose m26 cs27))) _rhs28 (compose m11 cs12) C5))
-       (RenamesToLeader _rhs29 (compose mp7 cs13) V3))
+       (Equated _rhs29 (compose mp7 cs13) V3))
       :ruleset sdql :name "mult-to-if")
 
 ;; sum-fact-1
@@ -500,7 +500,7 @@
        (map-not-contains (map-image (compose m26 cs27)) sy))
       ((let _rhs30 (Sum (compose m11 cs12) C6 (map-insert (map-empty) 0 sx) (Var 0) (map-insert (map-empty) 0 sy) (Var 0) (compose m28 cs29) C20))
        (let _rhs31 (Mult (compose m26 cs27) C19 (map-remove (map-remove (map-union (map-image (compose m11 cs12)) (map-union (map-image (map-insert (map-empty) 0 sx)) (map-union (map-image (map-insert (map-empty) 0 sy)) (map-image (compose m28 cs29))))) sx) sy) _rhs30))
-       (RenamesToLeader _rhs31 (compose mp9 cs15) V5))
+       (Equated _rhs31 (compose mp9 cs15) V5))
       :ruleset sdql :name "sum-fact-1")
 
 ;; sum-fact-2
@@ -529,7 +529,7 @@
        (map-not-contains (map-image (compose m28 cs29)) sy))
       ((let _rhs30 (Sum (compose m11 cs12) C6 (map-insert (map-empty) 0 sx) (Var 0) (map-insert (map-empty) 0 sy) (Var 0) (compose m26 cs27) C19))
        (let _rhs31 (Mult (map-remove (map-remove (map-union (map-image (compose m11 cs12)) (map-union (map-image (map-insert (map-empty) 0 sx)) (map-union (map-image (map-insert (map-empty) 0 sy)) (map-image (compose m26 cs27))))) sx) sy) _rhs30 (compose m28 cs29) C20))
-       (RenamesToLeader _rhs31 (compose mp9 cs15) V5))
+       (Equated _rhs31 (compose mp9 cs15) V5))
       :ruleset sdql :name "sum-fact-2")
 
 ;; sum-fact-3
@@ -558,7 +558,7 @@
        (map-not-contains (map-image (compose m26 cs27)) sy))
       ((let _rhs30 (Sum (compose m11 cs12) C6 (map-insert (map-empty) 0 sx) (Var 0) (map-insert (map-empty) 0 sy) (Var 0) (compose m28 cs29) C20))
        (let _rhs31 (Sing (compose m26 cs27) C19 (map-remove (map-remove (map-union (map-image (compose m11 cs12)) (map-union (map-image (map-insert (map-empty) 0 sx)) (map-union (map-image (map-insert (map-empty) 0 sy)) (map-image (compose m28 cs29))))) sx) sy) _rhs30))
-       (RenamesToLeader _rhs31 (compose mp9 cs15) V5))
+       (Equated _rhs31 (compose mp9 cs15) V5))
       :ruleset sdql :name "sum-fact-3")
 
 ;; sing-mult-1
@@ -583,7 +583,7 @@
        (= cs27 (ClassSlots C18)))
       ((let _rhs28 (Sing (compose m9 cs10) C4 (compose m24 cs25) C17))
        (let _rhs29 (Mult (map-union (map-image (compose m9 cs10)) (map-image (compose m24 cs25))) _rhs28 (compose m26 cs27) C18))
-       (RenamesToLeader _rhs29 (compose mp7 cs13) V3))
+       (Equated _rhs29 (compose mp7 cs13) V3))
       :ruleset sdql :name "sing-mult-1")
 
 ;; sing-mult-2
@@ -608,7 +608,7 @@
        (= cs27 (ClassSlots C18)))
       ((let _rhs28 (Sing (compose m9 cs10) C4 (compose m26 cs27) C18))
        (let _rhs29 (Mult (compose m24 cs25) C17 (map-union (map-image (compose m9 cs10)) (map-image (compose m26 cs27))) _rhs28))
-       (RenamesToLeader _rhs29 (compose mp7 cs13) V3))
+       (Equated _rhs29 (compose mp7 cs13) V3))
       :ruleset sdql :name "sing-mult-2")
 
 ;; sing-mult-3
@@ -633,7 +633,7 @@
        (= cs27 (ClassSlots C18)))
       ((let _rhs28 (Mult (compose m26 cs27) C18 (compose m11 cs12) C5))
        (let _rhs29 (Sing (compose m24 cs25) C17 (map-union (map-image (compose m26 cs27)) (map-image (compose m11 cs12))) _rhs28))
-       (RenamesToLeader _rhs29 (compose mp7 cs13) V3))
+       (Equated _rhs29 (compose mp7 cs13) V3))
       :ruleset sdql :name "sing-mult-3")
 
 ;; sing-mult-4
@@ -658,7 +658,7 @@
        (= cs27 (ClassSlots C18)))
       ((let _rhs28 (Mult (compose m9 cs10) C4 (compose m26 cs27) C18))
        (let _rhs29 (Sing (compose m24 cs25) C17 (map-union (map-image (compose m9 cs10)) (map-image (compose m26 cs27))) _rhs28))
-       (RenamesToLeader _rhs29 (compose mp7 cs13) V3))
+       (Equated _rhs29 (compose mp7 cs13) V3))
       :ruleset sdql :name "sing-mult-4")
 
 ;; sum-fact-inv-1
@@ -685,7 +685,7 @@
        (= cs29 (ClassSlots C20)))
       ((let _rhs30 (Mult (compose m9 cs10) C4 (compose m28 cs29) C20))
        (let _rhs31 (Sum (compose m26 cs27) C19 (map-insert (map-empty) 0 sk) (Var 0) (map-insert (map-empty) 0 sv) (Var 0) (map-union (map-image (compose m9 cs10)) (map-image (compose m28 cs29))) _rhs30))
-       (RenamesToLeader _rhs31 (compose mp7 cs13) V3))
+       (Equated _rhs31 (compose mp7 cs13) V3))
       :ruleset sdql :name "sum-fact-inv-1")
 
 ;; sum-fact-inv-3
@@ -712,7 +712,7 @@
        (= cs29 (ClassSlots C20)))
       ((let _rhs30 (Sing (compose m9 cs10) C4 (compose m28 cs29) C20))
        (let _rhs31 (Sum (compose m26 cs27) C19 (map-insert (map-empty) 0 sk) (Var 0) (map-insert (map-empty) 0 sv) (Var 0) (map-union (map-image (compose m9 cs10)) (map-image (compose m28 cs29))) _rhs30))
-       (RenamesToLeader _rhs31 (compose mp7 cs13) V3))
+       (Equated _rhs31 (compose mp7 cs13) V3))
       :ruleset sdql :name "sum-fact-inv-3")
 
 ;; sum-sum-vert-fuse-1
@@ -751,7 +751,7 @@
       ((let _rhs43 (Let (compose m41 cs42) C35 (map-insert (map-empty) 0 sv1) (Var 0) (compose m13 cs14) C7))
        (let _rhs44 (Let (map-insert (map-empty) 0 sk2) (Var 0) (map-insert (map-empty) 0 sk1) (Var 0) (map-remove (map-union (map-image (compose m41 cs42)) (map-union (map-image (map-insert (map-empty) 0 sv1)) (map-image (compose m13 cs14)))) sv1) _rhs43))
        (let _rhs45 (Sum (compose m28 cs29) C21 (map-insert (map-empty) 0 sk2) (Var 0) (map-insert (map-empty) 0 sv2) (Var 0) (map-remove (map-union (map-image (map-insert (map-empty) 0 sk2)) (map-union (map-image (map-insert (map-empty) 0 sk1)) (map-image (map-remove (map-union (map-image (compose m41 cs42)) (map-union (map-image (map-insert (map-empty) 0 sv1)) (map-image (compose m13 cs14)))) sv1)))) sk1) _rhs44))
-       (RenamesToLeader _rhs45 (compose mp9 cs15) V5))
+       (Equated _rhs45 (compose mp9 cs15) V5))
       :ruleset sdql :name "sum-sum-vert-fuse-1")
 
 ;; sum-sum-vert-fuse-2
@@ -800,7 +800,7 @@
        (let _rhs57 (Let (compose m44 cs45) C36 (map-insert (map-empty) 0 sv1) (Var 0) (compose m13 cs14) C7))
        (let _rhs58 (Let (map-image (compose m54 cs55)) _rhs56 (map-insert (map-empty) 0 sk1) (Var 0) (map-remove (map-union (map-image (compose m44 cs45)) (map-union (map-image (map-insert (map-empty) 0 sv1)) (map-image (compose m13 cs14)))) sv1) _rhs57))
        (let _rhs59 (Sum (compose m28 cs29) C21 (map-insert (map-empty) 0 sk2) (Var 0) (map-insert (map-empty) 0 sv2) (Var 0) (map-remove (map-union (map-image (map-image (compose m54 cs55))) (map-union (map-image (map-insert (map-empty) 0 sk1)) (map-image (map-remove (map-union (map-image (compose m44 cs45)) (map-union (map-image (map-insert (map-empty) 0 sv1)) (map-image (compose m13 cs14)))) sv1)))) sk1) _rhs58))
-       (RenamesToLeader _rhs59 (compose mp9 cs15) V5))
+       (Equated _rhs59 (compose mp9 cs15) V5))
       :ruleset sdql :name "sum-sum-vert-fuse-2")
 
 ;; sum-range-1
@@ -850,7 +850,7 @@
        (let _rhs58 (Equality (map-insert (map-empty) 0 sk) (Var 0) (map-union (map-image (compose m53 cs54)) (map-image (map-union (map-image (compose m26 cs27)) (map-image (map-empty))))) _rhs57))
        (let _rhs59 (IfThen (map-union (map-image (map-insert (map-empty) 0 sk)) (map-image (map-union (map-image (compose m53 cs54)) (map-image (map-union (map-image (compose m26 cs27)) (map-image (map-empty))))))) _rhs58 (compose m42 cs43) C34))
        (let _rhs60 (Sum (map-union (map-image (compose m26 cs27)) (map-image (compose m28 cs29))) _rhs55 (map-insert (map-empty) 0 sk) (Var 0) (map-insert (map-empty) 0 sv) (Var 0) (map-union (map-image (map-union (map-image (map-insert (map-empty) 0 sk)) (map-image (map-union (map-image (compose m53 cs54)) (map-image (map-union (map-image (compose m26 cs27)) (map-image (map-empty)))))))) (map-image (compose m42 cs43))) _rhs59))
-       (RenamesToLeader _rhs60 (compose mp9 cs15) V5))
+       (Equated _rhs60 (compose mp9 cs15) V5))
       :ruleset sdql :name "sum-range-1")
 
 ;; sum-merge
@@ -897,7 +897,7 @@
        (= sv2 (map-get (compose mp51 p47) 0)))
       ((let _rhs54 (Let (map-insert (map-empty) 0 sv1) (Var 0) (map-insert (map-empty) 0 sv2) (Var 0) (compose m44 cs45) C36))
        (let _rhs55 (Merge (compose m11 cs12) C6 (compose m28 cs29) C21 (map-insert (map-empty) 0 sk1) (Var 0) (map-insert (map-empty) 0 sk2) (Var 0) (map-insert (map-empty) 0 sv1) (Var 0) (map-remove (map-union (map-image (map-insert (map-empty) 0 sv1)) (map-union (map-image (map-insert (map-empty) 0 sv2)) (map-image (compose m44 cs45)))) sv2) _rhs54))
-       (RenamesToLeader _rhs55 (compose mp9 cs15) V5))
+       (Equated _rhs55 (compose mp9 cs15) V5))
       :ruleset sdql :name "sum-merge")
 
 ;; get-to-sum
@@ -916,7 +916,7 @@
       ((let _rhs15 (Equality (map-insert (map-empty) 0 sk) (Var 0) (compose m11 cs12) C5))
        (let _rhs16 (IfThen (map-union (map-image (map-insert (map-empty) 0 sk)) (map-image (compose m11 cs12))) _rhs15 (map-insert (map-empty) 0 sv) (Var 0)))
        (let _rhs17 (Sum (compose m9 cs10) C4 (map-insert (map-empty) 0 sk) (Var 0) (map-insert (map-empty) 0 sv) (Var 0) (map-union (map-image (map-union (map-image (map-insert (map-empty) 0 sk)) (map-image (compose m11 cs12)))) (map-image (map-insert (map-empty) 0 sv))) _rhs16))
-       (RenamesToLeader _rhs17 (compose mp7 cs13) V3))
+       (Equated _rhs17 (compose mp7 cs13) V3))
       :ruleset sdql :name "get-to-sum")
 
 ;; sum-to-get
@@ -955,7 +955,7 @@
       ((let _rhs41 (Get (compose m11 cs12) C6 (map-insert (map-empty) 0 sk) (Var 0)))
        (let _rhs42 (Let (map-union (map-image (compose m11 cs12)) (map-image (map-insert (map-empty) 0 sk))) _rhs41 (map-insert (map-empty) 0 sv) (Var 0) (compose m28 cs29) C20))
        (let _rhs43 (Let (compose m39 cs40) C33 (map-insert (map-empty) 0 sk) (Var 0) (map-remove (map-union (map-image (map-union (map-image (compose m11 cs12)) (map-image (map-insert (map-empty) 0 sk)))) (map-union (map-image (map-insert (map-empty) 0 sv)) (map-image (compose m28 cs29)))) sv) _rhs42))
-       (RenamesToLeader _rhs43 (compose mp9 cs15) V5))
+       (Equated _rhs43 (compose mp9 cs15) V5))
       :ruleset sdql :name "sum-to-get")
 
 ;; get-range
@@ -980,7 +980,7 @@
        (= cs27 (ClassSlots C18)))
       ((let _rhs28 (Sub (compose m24 cs25) C17 (map-empty) (Num 1)))
        (let _rhs29 (Add (compose m11 cs12) C5 (map-union (map-image (compose m24 cs25)) (map-image (map-empty))) _rhs28))
-       (RenamesToLeader _rhs29 (compose mp7 cs13) V3))
+       (Equated _rhs29 (compose mp7 cs13) V3))
       :ruleset sdql :name "get-range")
 
 ;; sum-sing
@@ -1003,7 +1003,7 @@
        (= av23 (map-union idm10 idm22))
        (= sk (map-get (compose mp21 p16) 0))
        (= sv (map-get (compose mp21 p17) 0)))
-      ((RenamesToLeader V5 (compose (inverse (compose mp9 cs15)) (compose m11 cs12)) C6))
+      ((Equated V5 (compose (inverse (compose mp9 cs15)) (compose m11 cs12)) C6))
       :ruleset sdql :name "sum-sing")
 
 ;; unique-rm
@@ -1014,5 +1014,5 @@
        (= m7 (compose mp5 p1))
        (= cs8 (ClassSlots C3))
        (= cs9 (ClassSlots V2)))
-      ((RenamesToLeader V2 (compose (inverse (compose mp5 cs9)) (compose m7 cs8)) C3))
+      ((Equated V2 (compose (inverse (compose mp5 cs9)) (compose m7 cs8)) C3))
       :ruleset sdql :name "unique-rm")

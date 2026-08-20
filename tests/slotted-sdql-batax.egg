@@ -26,69 +26,24 @@
 ;;;
 ;;;     0    21      1    44      2    62      3    90      4   132      5   187
 ;;;
-;;; Six steps does NOT finish: `(saturate (run slotted))` after the sixth user step
-;;; had not returned in 600s. It is not e-graph growth -- replacing that `saturate`
-;;; with `(repeat 40 (run slotted))` finishes in well under a second and leaves the
-;;; tables stationary at 255 e-nodes over the next 40, 100 and 200 iterations alike,
-;;; and `saturate` from *that* state still does not return. So some machinery rule is
-;;; deleting and rebuilding the same rows, which egglog sees as progress forever: the
-;;; failure mode the header of `slotted-egraph-encoding-11.egg` warns about, reachable
-;;; from this term at six steps. Two steps is what this file runs.
+;;; The machinery now saturates through ten user steps. E-nodes after N:
 ;;;
-;;; Narrowed, and the cause is an invariant violation rather than one bad rule.
+;;;     6   255      7   338      8   430     10   922
 ;;;
-;;; The shape of it. `RUST_LOG=debug` shows the ruleset reporting `updated=true` forever
-;;; with `database size` pinned at 648, transitivity dominant and alternating 26/27
-;;; matches. Dumping `RenamesToLeader` on consecutive iterations: 233 rows throughout, 4
-;;; added and 4 removed each iteration, and the row sets two iterations apart identical.
-;;; So it is a period-2 cycle over 4 edges. The 4 are edges between two members that are
-;;; both followers, existing in two spellings that differ by a symmetry of the class.
+;;; It used to stop saturating at six. The cause was an orientation bug, now fixed:
+;;; `union` could leave a `RenamesToLeader` row naming the LARGER of its two values
+;;; as the leader, and a backwards row let transitivity and single parent disagree
+;;; forever -- the tables stationary at 648 rows while `saturate` reported progress,
+;;; four edges swapped every iteration, period two. Backwards rows by user step were
+;;; 0 0 0 0 2 7; they are 0 at every step now. `tests/slotted-orientation.egg` is the
+;;; regression test and `slotted-egraph-encoding-11.egg` has the fix: `Equated`, the
+;;; unoriented form of the relation, from which the oriented rows are derived.
 ;;;
-;;; What actually goes wrong. `(RenamesToLeader follower m leader)` is supposed to store
-;;; the SMALLER of the two as the leader. That holds for the first four user steps; at
-;;; step 5 two rows violate it, and by step 6 -- where the hang starts -- seven do. A
-;;; backwards row is what lets transitivity and single parent disagree forever: build the
-;;; same three-member chain by hand and it hangs with the edges pointing away from the
-;;; leader and terminates with them pointing at it, with the symmetry anywhere.
-;;;
-;;; Where the backwards row is formed: `child-update`'s `union`. Counting rows whose
-;;; stored leader is the larger, with one rule family moved to a ruleset nothing runs:
-;;;
-;;;     baseline          step 4: 0   step 5: 2   step 6: 7
-;;;     migration off                 step 5: 3   step 6: 8    (more, so not it)
-;;;     child-update off              step 5: 0   step 6: 0
-;;;     union-identity off            step 5: 0   step 6: 1
-;;;
-;;; No rule WRITES a backwards row -- transitivity gives `e3 <= e2 <= e1`, single parent
-;;; tests `(= (ordering-max b c) b)`, the alpha-finder tests `(= e1 (ordering-max e1 e2))`,
-;;; and the rest emit self-loops or reuse a matched row's endpoints. The five user rules
-;;; that assert `RenamesToLeader` directly are not it either: disabling all five leaves the
-;;; counts unchanged.
-;;;
-;;; It is `union` REWRITING an existing row. `child-update` does
-;;; `(union node (Ctor (compose m1 m) c' m2 c2))`, and when the built node already exists
-;;; as a value that merges two live values; every row mentioning them is canonicalised, so
-;;; a follower can end up below its leader. Reduced to five lines: assert an oriented
-;;; `(RenamesToLeader f m l)`, then union `f` with a value smaller than `l`, and the row is
-;;; backwards.
-;;;
-;;; Nothing puts it back. `slotted-user-rules.egg` M8 says a compiler may insert a
-;;; `RenamesToLeader` fact directly "and lets the machinery's transitivity / single-parent
-;;; rules re-orient it", but no rule does: single parent only fires when a value has TWO
-;;; edges, so a lone backwards row is never touched. The `Union'` relation in that same
-;;; section is the right idea -- it states an equality covariantly so no orientation need be
-;;; picked -- but it is declared inside a `(push)`/`(pop)` demo block and nothing consumes
-;;; it. Wiring it in, so every equality-asserting site goes through it and ONE rule picks
-;;; the orientation by `ordering-max`, is the repair this points at.
-;;;
-;;; A rule that merely flips a backwards row is not enough, and is not committed: it keeps
-;;; the curated differential at 44/44 and 60/60 isomorphic and gets batax from hanging at
-;;; step 6 to terminating through step 7, then hangs at step 8, and it hangs on the
-;;; hand-built case -- flipping after the fact fights single parent instead of the union
-;;; that keeps re-creating the row.
-;;;
-;;; This blocks a differential sweep: `check_case` allows 25s per case, so sdql cases
-;;; would report TIMEOUT rather than agreement or disagreement.
+;;; Twelve steps does not finish, and this file does not claim which it is: at ten
+;;; steps the graph is 922 e-nodes and growing steeply, so slow and stuck look alike
+;;; from outside. The user rules are not expected to terminate -- `get-to-sum` and
+;;; `sum-to-get` alone loop -- so a step count that runs forever is not by itself a
+;;; defect. Two steps is what this file runs.
 
 (include "tests/slotted-sdql-rules.egg")
 

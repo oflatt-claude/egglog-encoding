@@ -44,10 +44,12 @@
 
 ;;; The result's own slots are not known until the machinery has seen its node,
 ;;; so the edge back into the node's frame is narrowed one phase later -- the M6b
-;;; habit, applied across a phase boundary rather than inside one rule.
+;;; habit, applied across a phase boundary rather than inside one rule. The
+;;; conclusion goes to `Equated`, which has no orientation, and the machinery picks
+;;; the side.
 (rule ((SdqlBetaPending e Rb mr r)
        (= cs (ClassSlots r)))
-      ((RenamesToLeader e (compose (inverse Rb) (compose mr cs)) r))
+      ((Equated e (compose (inverse Rb) (compose mr cs)) r))
       :ruleset slotted)
 
 

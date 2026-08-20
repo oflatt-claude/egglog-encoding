@@ -449,11 +449,11 @@ def compile_rule(name, lhs, rhs, conds=(), fresh=()):
         # neither need be the identity, which is the one action egglog's `union`
         # cannot express -- so solve: from mr*Root = ma*A follows
         # Root = (mr^-1 . ma) * A, and let the machinery re-orient it.
-        act = [f"(RenamesToLeader {cls_of[root]} "
+        act = [f"(Equated {cls_of[root]} "
                f"(compose (inverse {mr}) {mp_of[rhs]}) {cls_of[rhs]})"]
     else:
         _, built = build(rhs)
-        act = lets + [f"(RenamesToLeader {built} {mr} {cls_of[root]})"]
+        act = lets + [f"(Equated {built} {mr} {cls_of[root]})"]
 
     return ("(rule (" + "\n       ".join(body) + ")\n      ("
             + "\n       ".join(act) + f")\n      :ruleset sdql :name \"{name}\")")
