@@ -748,10 +748,12 @@ without it, at the encoding's own `:merge` — `Encoding/Encode.lean`'s `mergeBo
 `A` holds the view entries `@fView(k) ↦ (p, @Fiat)` and `@fView(k) ↦ (r, @Fiat)`; `C` holds
 the same with the first re-keyed to the congruent `s`, and asserts `p = s`. With `p < r < s`
 in `Term.blt`, `A`'s collision keeps `p` and writes `@UF(r) ↦ (p, _)`, while `C`'s two
-entries are `s` and `r`, so every collision it can run writes `@UF(s) ↦ (s, _)`,
-`@UF(s) ↦ (r, _)` or `@UF(r) ↦ (r, _)`. None is congruent to `@UF(r) ↦ (p, _)`: that needs
-`r ≈ p`, and a `MergeStep` asserts no equation — `.set` is `Database.addTerm`, which records
-reflexive pairs only — so nothing in either state relates them.
+entries are `s` and `r` — `viewDecl`'s `:internal-identity-vals 1` rules the two
+self-collisions out — so the only collision it can run writes `@UF(s) ↦ (r, _)`, whichever
+way round the pair is taken. That is not
+congruent to `@UF(r) ↦ (p, _)`: that needs `r ≈ p`, and a `MergeStep` asserts no equation —
+`.set` is `Database.addTerm`, which records reflexive pairs only — so nothing in either state
+relates them.
 
 `ufPhi` is what separates them: it reads a `@UF` row's columns through a colouring of nullary
 heads that gives `p` and `s` one colour and `r` another, and it is an invariant of any
@@ -962,9 +964,14 @@ theorem evalA : evalActions ({ A with env := mergeEnv [P1, F] [R, F] } : Databas
 
 theorem resA : Expr.evalList dA.sig mergeResult dA.env = some [P1, F] := rfl
 
+/-- The collision conflicts: `viewDecl` counts one value column, and the two entries hold
+distinct e-classes there. -/
+theorem conflict_P1_R : MergeConflict (viewDecl 1) mergeBody [P1, F] [R, F] := by
+  simp [MergeConflict, viewDecl, P1, R]
+
 theorem stepA : MergeStep A B :=
   MergeStep.collide (f := V) (decl := viewDecl 1) (as := [K]) (bs := [K]) (a := [P1, F])
-    (b := [R, F]) sg_V rfl rfl rfl (Cong.assert A_vP1) (Cong.assert A_vR)
+    (b := [R, F]) sg_V rfl conflict_P1_R rfl rfl (Cong.assert A_vP1) (Cong.assert A_vR)
     (.cons (Cong.assert A_K) .nil) evalA resA
 
 /-- The edge the specification wrote. -/
@@ -1175,7 +1182,8 @@ theorem step_phiInv {x y : Term} (hx : x = S ∨ x = R) (hy : y = S ∨ y = R) :
 /-- Every state one merge step of `C` reaches satisfies the invariant. -/
 theorem C_step_phiInv {D : Database} (h : MergeStep C D) : PhiInv D := by
   cases h with
-  | @collide d f decl as bs a b vs body res hdecl hmerge hla hlb hra hrb hcong hbody hres =>
+  | @collide d f decl as bs a b vs body res hdecl hmerge _hconf hla hlb hra hrb hcong hbody
+      hres =>
     have hm : decl.merge ≠ none := by rw [hmerge]; simp
     rcases sg_merge hdecl hm with rfl | rfl
     · have hdc : decl = viewDecl 1 := (Option.some.inj (sg_V.symm.trans hdecl)).symm
@@ -1199,11 +1207,17 @@ theorem C_step_phiInv {D : Database} (h : MergeStep C D) : PhiInv D := by
       exact step_phiInv hx hy
     · exact absurd hra (fun hmem => no_uf_entry _ hmem)
 
-/-- `C` does step, so `C_step_phiInv` says something: the entry at `s` collides with itself. -/
+/-- The collision conflicts on `C`'s side too: `s` and `r` are distinct e-classes. The two
+self-collisions do **not** — `not_mergeConflict_self` — so this is the only pair left. -/
+theorem conflict_S_R : MergeConflict (viewDecl 1) mergeBody [S, F] [R, F] := by
+  simp [MergeConflict, viewDecl, S, R]
+
+/-- `C` does step, so `C_step_phiInv` says something: the entry at `s` collides with the
+entry at `r`. -/
 theorem C_steps : ∃ D, MergeStep C D :=
   ⟨_, MergeStep.collide (f := V) (decl := viewDecl 1) (as := [K]) (bs := [K]) (a := [S, F])
-    (b := [S, F]) sg_V rfl rfl rfl (Cong.assert C_vS) (Cong.assert C_vS)
-    (.cons (Cong.assert C_K) .nil) (evalC S S) (resC S S)⟩
+    (b := [R, F]) sg_V rfl conflict_S_R rfl rfl (Cong.assert C_vS) (Cong.assert C_vR)
+    (.cons (Cong.assert C_K) .nil) (evalC S R) (resC S R)⟩
 
 /-! ### The verdict -/
 
