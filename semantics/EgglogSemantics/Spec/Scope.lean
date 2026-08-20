@@ -381,11 +381,10 @@ the substitution. -/
 *compares* the two colliding value tuples, which is the second instability here.
 `Spec/Step.lean`'s `MergeConflict` decides whether a collision fires by **identity** on
 those tuples, and identity is no more stable under congruence than `ordering-gt` is: moved
-to congruent values a firing can become a skip. Only a declaration whose test is constantly
-true survives the move, and with no `:internal-identity-vals` that is exactly a `:merge`
-with no action block — `body = []`, which every `:merge` *expression* is, including
-`:merge (min old new)` and every lattice in this development. `FnDecl.OrderingFree` carries
-the `:internal-identity-vals` half. -/
+to congruent values a firing can become a skip. Only a declaration that always conflicts
+survives the move — `FnDecl.unchangedWidth = none`, which is `body = []` with no
+`:internal-identity-vals`. Every `:merge` *expression* is that, `:merge (min old new)` and
+every lattice in this development included; `FnDecl.OrderingFree` carries the other half. -/
 @[simp] def MergeSpec.OrderingFree : MergeSpec → Prop
   | .merge body res => body = [] ∧ Expr.OrderingFreeList res
   | .noMerge => True

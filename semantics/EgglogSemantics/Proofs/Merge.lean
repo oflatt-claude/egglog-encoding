@@ -4410,25 +4410,18 @@ row first; `MergeConflict` is the `Prop` `MergeStep.collide` demands and takes t
 row's values first. The test is symmetric in the two, so the two line up column for
 column. -/
 theorem mergeConflict_of_noConflict {dc : FnDecl} {body : List Action} {r₁ r₂ : Row}
-    (h : FDatabase.noConflict dc.identityVals body r₁ r₂ = false) :
+    (h : FDatabase.noConflict (dc.unchangedWidth body) r₁ r₂ = false) :
     MergeConflict dc body r₂.out r₁.out := by
   unfold FDatabase.noConflict at h
   unfold MergeConflict
-  cases hk : dc.identityVals with
+  cases hk : dc.unchangedWidth body with
   | some k =>
     rw [hk] at h
     replace h : (List.take k r₁.out == List.take k r₂.out) = false := h
     intro hcon
     rw [hcon] at h
     simp at h
-  | none =>
-    rw [hk] at h
-    replace h : (!body.isEmpty && (r₁.out == r₂.out)) = false := h
-    by_cases hb : body = []
-    · exact Or.inl hb
-    · refine Or.inr fun hcon => ?_
-      rw [hcon] at h
-      simp [List.isEmpty_iff, hb] at h
+  | none => trivial
 
 namespace FDatabase
 

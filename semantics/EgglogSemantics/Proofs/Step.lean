@@ -115,16 +115,52 @@ theorem MergeClosure.envRules {d₁ d₂ : Database} (h : MergeClosure d₁ d₂
   | refl => exact ⟨rfl, rfl⟩
   | tail _ hstep ih => exact ⟨hstep.envRules.1.trans ih.1, hstep.envRules.2.trans ih.2⟩
 
-/-- **A `:merge` expression with no `:internal-identity-vals` conflicts on every pair**:
-there is no action block for egglog to skip and no column excused from the test, so the
-collision always resolves. This is the whole of `MergeConflict` on the fragment
-`Signature.OrderingFree` admits. -/
+/-- **A `:merge` expression with no `:internal-identity-vals` conflicts on every pair**: it
+has no action block, so `FnDecl.unchangedWidth` gives it no width and every collision
+resolves. This is the whole of `MergeConflict` on the fragment `Signature.OrderingFree`
+admits. -/
 theorem mergeConflict_of_ordering_free {decl : FnDecl} (h : decl.OrderingFree)
     {body : List Action} {res : List Expr} (hm : decl.merge = some (.merge body res))
     (a b : List Term) : MergeConflict decl body a b := by
   obtain ⟨hid, hms⟩ := h
   obtain ⟨hbody, -⟩ := hms (.merge body res) (by rw [hm]; rfl)
-  simp [MergeConflict, hid, hbody]
+  simp [MergeConflict, FnDecl.unchangedWidth, hid, hbody]
+
+/-- **A collision's value tuples have the declared width.** `MergeStep.collide` fixes the
+key/value split with its `arity` premise, and `Database.DeclaredTerms` — which every state a
+legal run reaches has (`Proofs/Merge.lean`'s `reachable_declaredTerms`) — fixes the entry
+width, so what is left over is `outArity` wide. -/
+theorem outLength_of_declaredTerms {db : Database} (hdt : db.DeclaredTerms) {f : FnName}
+    {decl : FnDecl} {as a : List Term} (hsig : db.sig f = some decl) (hm : decl.merge ≠ none)
+    (has : as.length = decl.arity) (hmem : Term.app f (as ++ a) ∈ db.terms) :
+    a.length = decl.outArity := by
+  obtain ⟨d, hd, hw⟩ := hdt f (as ++ a) hmem
+  obtain rfl : decl = d := Option.some.inj (hsig.symm.trans hd)
+  have hnn : ¬ decl.merge.isNone = true := by simp [Option.isNone_iff_eq_none, hm]
+  rw [List.length_append, has, FnDecl.entryWidth, if_neg hnn] at hw
+  omega
+
+/-- **The case split on `identityVals` that `MergeConflict` used to make.** The comparison is
+at `FnDecl.unchangedWidth`, as egglog's is; where that width is every value column — a
+`:merge` with a block and no `:internal-identity-vals` — comparing the counted prefixes is
+comparing the whole tuples, *provided* the tuples have the declared width, which
+`outLength_of_declaredTerms` supplies at every collision `MergeStep` can see. On a tuple wider
+than the declaration the prefix test is the weaker one, and no reachable state has one. -/
+theorem mergeConflict_iff_split {decl : FnDecl} {body : List Action} {a b : List Term}
+    (ha : a.length = decl.outArity) (hb : b.length = decl.outArity) :
+    MergeConflict decl body a b ↔
+      (match decl.identityVals with
+        | some k => a.take k ≠ b.take k
+        | none => body = [] ∨ a ≠ b) := by
+  have hta : a.take decl.outArity = a := by rw [← ha]; simp
+  have htb : b.take decl.outArity = b := by rw [← hb]; simp
+  unfold MergeConflict FnDecl.unchangedWidth
+  cases hid : decl.identityVals with
+  | some k => simp
+  | none =>
+    by_cases hbody : body = []
+    · simp [hbody]
+    · simp [hbody, hta, htb, List.isEmpty_iff]
 
 /-- **No merge fires on an all-constructors signature.** `MergeStep.collide` needs a
 `.merge` function and there is none, so every command's merge phase is empty. -/

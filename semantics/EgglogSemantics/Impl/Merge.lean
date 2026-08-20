@@ -102,12 +102,11 @@ Saturation becomes genuinely reachable rather than approximated: two rows at one
 become one, so the pair that fired is gone and the pass converges. -/
 /-- Whether the collision resolves to nothing, so that egglog runs no body at all.
 
-egglog's `MergeFn` (`egglog-bridge/src/lib.rs`) computes an `unchanged_width`: the
-declared `:internal-identity-vals` columns, or — for a merge with an **action block** —
-*every* value column. When the resident row and the arriving row agree on those columns
-the collision "is not a real value conflict", so the block's actions do not run and the
-resident value columns are kept. That is the whole of this test, and both halves of it
-are load-bearing.
+`w` is `FnDecl.unchangedWidth`, egglog's own `unchanged_width`
+(`egglog-bridge/src/lib.rs:1418`). When the resident row and the arriving row agree on that
+many value columns the collision "is not a real value conflict", so the block's actions do
+not run and the resident value columns are kept. That is the whole of this test, and both
+halves of the width are load-bearing.
 
 **The comparison is on the values and says nothing about the keys.** Two rows at
 *congruent but unequal* keys holding the same value are therefore a no-op there, where
@@ -124,12 +123,11 @@ egglog answers `L 0, Log 0` and this model answered `L 1, Log 1`. The two agree 
 soon as any column differs, so this is all-or-nothing over the value tuple and not per
 column — a width-2 body with one column equal and one different runs on both sides.
 
-**The body must be non-empty.** A single-expression `:merge` does not short-circuit in
-egglog and deliberately so, since it may be non-idempotent: `:merge (+ old new)` on two
-rows both holding `2` still gives `4` there. `MergeSpec.merge body res` with `body = []`
-is exactly that form, so the guard is `body ≠ []` and nothing else. The `let`-only block
-form does take the skip, unobservably — such a body writes nothing and its result is
-`min v v = v` either way.
+**No width means no skip.** A single-expression `:merge` does not short-circuit in egglog
+and deliberately so, since it may be non-idempotent: `:merge (+ old new)` on two rows both
+holding `2` still gives `4` there. `MergeSpec.merge body res` with `body = []` is exactly
+that form, and `unchangedWidth` gives it no width. The `let`-only block form does take the
+skip, unobservably — such a body writes nothing and its result is `min v v = v` either way.
 
 **Firing less is always sound**, which is why this is a repair rather than a new fragment
 boundary: `mergeRound` already fires a strict subset of `MergeStep`, and its contract is
@@ -139,10 +137,10 @@ The one residual is eq-sorted value columns, which the difftest fragment does no
 egglog compares canonical e-class ids, so two congruent-but-unequal output terms are
 unchanged there and distinct here, and the model would fire where egglog skips — the safe
 direction again. -/
-def FDatabase.noConflict (w : Option Nat) (body : List Action) (r₁ r₂ : Row) : Bool :=
+def FDatabase.noConflict (w : Option Nat) (r₁ r₂ : Row) : Bool :=
   match w with
   | some k => r₁.out.take k == r₂.out.take k
-  | none => !body.isEmpty && r₁.out == r₂.out
+  | none => false
 
 /-- One `:merge` firing on an *oriented* pair of rows, if it applies: `r₂` is the row
 already in the table and `r₁` the one arriving, so the body runs under
@@ -182,7 +180,7 @@ def FDatabase.mergeOneOriented (cl : Finset (Term × Term)) (d : FDatabase) (r�
   | some (.merge body res) =>
     if r₁.fn = r₂.fn && congrKeys cl r₁.args r₂.args
         && d.rows.contains r₁ && d.rows.contains r₂ then
-      if FDatabase.noConflict ((d.sig r₁.fn).bind FnDecl.identityVals) body r₁ r₂ then
+      if FDatabase.noConflict ((d.sig r₁.fn).bind (·.unchangedWidth body)) r₁ r₂ then
         some { d with rows := d.rows.filter fun r => r ≠ r₁ }
       else
         (execActions { d with env := mergeEnv r₂.out r₁.out } body).bind

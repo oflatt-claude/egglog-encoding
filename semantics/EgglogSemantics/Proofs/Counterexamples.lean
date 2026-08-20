@@ -355,7 +355,7 @@ so every premise is `rfl` or `.nil`. -/
 theorem mergeDecl_mergeStep : MergeStep mergeSetDb mergeCollideDb :=
   MergeStep.collide (f := "f") (decl := fDecl) (as := []) (bs := []) (a := [.lit (.int 0)])
     (b := [.lit (.int 0)]) (vs := [.lit (.int 7)]) (body := []) (res := [.lit (.int 7)])
-    rfl rfl (Or.inl rfl) rfl rfl mergeSetDb_mem mergeSetDb_mem .nil rfl rfl
+    rfl rfl trivial rfl rfl mergeSetDb_mem mergeSetDb_mem .nil rfl rfl
 
 /-- **Both states are reachable.** The merge phase after the action is a `MergeClosure`,
 which may be reflexive or take the one step. -/
@@ -710,7 +710,7 @@ theorem decl_enables_merge :
     simp [Expr.evalList, Expr.eval, Prim.ofName, hctor]
   refine ⟨_, ⟨db₁, rfl, Relation.ReflTransGen.single (MergeStep.collide (f := "g")
     (d := { db₁ with env := mergeEnv [t0] [t0] }) (as := [t0]) (bs := [t0]) (a := [t0])
-    (b := [t0]) hg rfl (Or.inl rfl) rfl rfl hentry hentry
+    (b := [t0]) hg rfl trivial rfl rfl hentry hentry
       (CongList.cons ht0 CongList.nil) rfl hres)⟩, ?_⟩
   intro hcontra
   have hmem : (Term.app "g" [t0, .app "f" []], Term.app "g" [t0, .app "f" []]) ∈ db₁.eqs := by
@@ -967,7 +967,7 @@ theorem resA : Expr.evalList dA.sig mergeResult dA.env = some [P1, F] := rfl
 /-- The collision conflicts: `viewDecl` counts one value column, and the two entries hold
 distinct e-classes there. -/
 theorem conflict_P1_R : MergeConflict (viewDecl 1) mergeBody [P1, F] [R, F] := by
-  simp [MergeConflict, viewDecl, P1, R]
+  simp [MergeConflict, FnDecl.unchangedWidth, viewDecl, P1, R]
 
 theorem stepA : MergeStep A B :=
   MergeStep.collide (f := V) (decl := viewDecl 1) (as := [K]) (bs := [K]) (a := [P1, F])
@@ -1210,7 +1210,7 @@ theorem C_step_phiInv {D : Database} (h : MergeStep C D) : PhiInv D := by
 /-- The collision conflicts on `C`'s side too: `s` and `r` are distinct e-classes. The two
 self-collisions do **not** — `not_mergeConflict_self` — so this is the only pair left. -/
 theorem conflict_S_R : MergeConflict (viewDecl 1) mergeBody [S, F] [R, F] := by
-  simp [MergeConflict, viewDecl, S, R]
+  simp [MergeConflict, FnDecl.unchangedWidth, viewDecl, S, R]
 
 /-- `C` does step, so `C_step_phiInv` says something: the entry at `s` collides with the
 entry at `r`. -/

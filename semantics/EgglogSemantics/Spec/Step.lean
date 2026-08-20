@@ -31,20 +31,21 @@ def mergeEnv : List Term → List Term → Env
   | [o], [n] => [("old", o), ("new", n)]
   | os, ns => mergeEnvIdx 0 os ns
 
-/-- The two colliding value tuples **conflict**: they differ in a value column that counts,
-which is the whole of when a collision resolves to anything.
+/-- How many leading value columns a collision must leave unchanged to count as no change
+at all (`egglog-bridge/src/lib.rs:1418`): the declared identity columns, or — for a `:merge`
+with an action block — every value column. A single-expression `:merge` has no width and so
+resolves every collision, since it may be non-idempotent: `:merge (+ old new)` on two rows
+both holding `2` still gives `4`. -/
+def FnDecl.unchangedWidth (d : FnDecl) (body : List Action) : Option Nat :=
+  d.identityVals <|> if body.isEmpty then none else some d.outArity
 
-`:internal-identity-vals k` (`FnDecl.identityVals`) declares that only the first `k` value
-columns count, so a collision that moves only the columns past them changes nothing and the
-resident entry stands. Without it every column counts — except that a single-expression
-`:merge` has no block to skip and may be non-idempotent, `:merge (+ old new)` on two rows
-both holding `2` still giving `4`, so an empty `body` conflicts whatever the columns hold.
-
+/-- The two colliding value tuples **conflict**: they differ in a value column that counts
+(`FnDecl.unchangedWidth`), which is the whole of when a collision resolves to anything.
 `Impl/Merge.lean`'s `noConflict` is this test, decided and negated. -/
 def MergeConflict (decl : FnDecl) (body : List Action) (a b : List Term) : Prop :=
-  match decl.identityVals with
+  match decl.unchangedWidth body with
   | some k => a.take k ≠ b.take k
-  | none => body = [] ∨ a ≠ b
+  | none => True
 
 /-- One `:merge` firing: two entries of `f` on congruent keys **whose values conflict**,
 resolved by running `f`'s body once and then evaluating `res`, one expression per value

@@ -343,8 +343,9 @@ counted column because they *are* the same tuple, and without it the only arm le
 empty body. -/
 theorem not_mergeConflict_self {decl : FnDecl} {body : List Action} (hb : body ≠ [])
     (a : List Term) : ¬ MergeConflict decl body a a := by
-  unfold MergeConflict
-  cases decl.identityVals <;> simp [hb]
+  unfold MergeConflict FnDecl.unchangedWidth
+  have hbe : body.isEmpty = false := by simpa [List.isEmpty_iff] using hb
+  cases decl.identityVals <;> simp [hbe]
 
 /-- The body both encoded `:merge`s run is one `set`, so it never takes `MergeConflict`'s
 empty-body arm. -/
