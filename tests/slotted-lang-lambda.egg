@@ -275,12 +275,13 @@
 ;;; binders
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-;; `Lam` binds child 1
+;; `Lam` binds child 1, one rule per bound slot
 (rule ((RenamesToLeader (Lam mvar0 (Var 0) m2 c2) ml l)
        (= v0 (map-get mvar0 0)))
       ((RenamesToLeader (Lam mvar0 (Var 0) m2 c2) (inverse (map-remove (inverse ml) v0)) l)) :ruleset slotted)
 
-;; `Let` binds child 1
+;; `Let` binds child 1, one rule per bound slot
 (rule ((RenamesToLeader (Let mvar0 (Var 0) m2 c2 m3 c3) ml l)
-       (= v0 (map-get mvar0 0)))
+       (= v0 (map-get mvar0 0))
+       (map-not-contains (map-image m3) v0))
       ((RenamesToLeader (Let mvar0 (Var 0) m2 c2 m3 c3) (inverse (map-remove (inverse ml) v0)) l)) :ruleset slotted)

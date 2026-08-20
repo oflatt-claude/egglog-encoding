@@ -1126,15 +1126,13 @@
 ;;; `let x = x in f1 x`.  The paper's `Let(RenamedId, Bind<RenamedId>)` -- and the
 ;;; reference's `Let(Bind<AppliedId>, AppliedId)` -- puts the `Bind` on the body
 ;;; column alone, so the value's `x` is the ambient one and the class keeps the
-;;; slot.  The generated binder rule here removes the bound slot from the whole
-;;; node, so the class comes out with no slots at all.  The two are then not the
-;;; same language on this term, and `xarray.py extra` sees the difference as a
-;;; BASELINE disagreement -- before any rule runs.
-;;;
-;;; Recorded rather than fixed: expressing it needs `:binder` to name the columns
-;;; a binder covers, not just the column its slot sits in.  Nothing the 8 rules
-;;; build has this shape, because a pattern's `?e` never carries the pattern slot
-;;; the same pattern binds.
+;;; slot.  This used to be a BASELINE disagreement, before any rule ran: the
+;;; generated binder rule stripped the bound slot from the node's whole slot set,
+;;; leaving the class with no slots and merging two terms the reference keeps
+;;; apart.  `:binder` now covers ONE column -- the one after the binder slots,
+;;; which is what `Bind<T>` wrapping a single child means -- so a bound slot is
+;;; removed only where it is bound, and an occurrence in an uncovered column stays
+;;; free.  `xarray.py extra` is the comparison this came from.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
 
@@ -1142,16 +1140,16 @@
 (let $L (App3 "let" (map-of 0 0) (Var 0) (map-of 0 0) $B (map-of 0 0) (Var 0)))
 (run-schedule (saturate (run slotted)))
 
-;; the reference says this class has one slot; here it has none
-(check (= (ClassSlots $L) (map-empty)))
-(check (RenamesToLeader $L m $L) (= (map-length m) 0))
+;; the value's occurrence keeps the slot free, so the class has exactly one
+(check (= (ClassSlots $L) (map-of 0 0)))
+(check (RenamesToLeader $L m $L) (= (map-length m) 1))
 
-;; and so the two applications below, which the reference keeps apart, are one
-;; class here
-(let $a0 (App2 "app" (map-empty) $L (map-of 0 0) (Var 0)))
-(let $a1 (App2 "app" (map-empty) $L (map-of 0 1) (Var 0)))
+;; and the two applications below stay apart, as they do in the reference
+;; the edge to $L must cover its slot now that it has one
+(let $a0 (App2 "app" (map-of 0 0) $L (map-of 0 0) (Var 0)))
+(let $a1 (App2 "app" (map-of 0 0) $L (map-of 0 1) (Var 0)))
 (run-schedule (saturate (run slotted)))
-(check (RenamesToLeader $a0 m1 l) (RenamesToLeader $a1 m2 l))
+(fail (check (RenamesToLeader $a0 m1 l) (RenamesToLeader $a1 m2 l)))
 
 (pop)
 

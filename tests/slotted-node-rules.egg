@@ -431,5 +431,6 @@
 
 ;; `let` binds its first child's slot
 (rule ((RenamesToLeader (App3 "let" mvar0 (Var 0) m2 c2 m3 c3) ml l)
-       (= v0 (map-get mvar0 0)))
+       (= v0 (map-get mvar0 0))
+       (map-not-contains (map-image m3) v0))
       ((RenamesToLeader (App3 "let" mvar0 (Var 0) m2 c2 m3 c3) (inverse (map-remove (inverse ml) v0)) l)) :ruleset slotted)

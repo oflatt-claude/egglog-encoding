@@ -323,14 +323,21 @@ def child_update(name, sig, pos):
 
 
 def binder(name, sig, positions, head=None):
-    """Take the bound slots out of the node's class's slot set.
+    """Take a bound slot out of the node's class's slot set, where it is bound.
 
     A bound slot rides in its child's edge, so it is a slot of the *node* but must
     not be one of the class: removing it from the edge to the leader is what makes
-    two spellings of the same binder alpha-equivalent. A node that binds several
-    slots -- `sdql`'s `Sum` -- removes each of them. `head` pins the operator string
-    for the generic encoding, where the operator is a payload rather than the
-    constructor.
+    two spellings of the same binder alpha-equivalent. `head` pins the operator
+    string for the generic encoding, where the operator is a payload rather than
+    the constructor.
+
+    A binder covers ONE column -- the one right after the binder slots, which is
+    what `Bind<T>` wrapping a single child means -- so the slot is removed only
+    when no other child column names it. `Let(Bind<body>, value)` binds the slot
+    in the body and leaves a `value` occurrence free, and stripping it from the
+    whole node instead merges terms the reference keeps apart. Each bound slot
+    gets its own rule, since one may be free in an uncovered column while another
+    is not: `sdql`'s `Sum` binds two over one body, beside an uncovered range.
     """
     _, edges, kids, _ = cols_of(sig)
     e, k = list(edges), list(kids)
@@ -338,16 +345,22 @@ def binder(name, sig, positions, head=None):
         e[pos], k[pos] = f"mvar{n}", "(Var 0)"
     payloads = [f'"{head}"'] if head is not None else None
     node = pattern(name, sig, edges=e, kids=k, payloads=payloads)
-    gets = "\n       ".join(
-        f"(= v{n} (map-get mvar{n} 0))" for n in range(len(positions)))
-    stripped = "(inverse ml)"
-    for n in range(len(positions)):
-        stripped = f"(map-remove {stripped} v{n})"
-    return f"""\
+
+    covered = max(positions) + 1
+    assert covered < len(kids), f"{name}: a binder must cover a following column"
+    uncovered = [i for i in range(len(kids)) if i not in positions and i != covered]
+
+    rules = []
+    for n, _pos in enumerate(positions):
+        free_elsewhere = "".join(
+            f"\n       (map-not-contains (map-image {edges[u]}) v{n})"
+            for u in uncovered)
+        rules.append(f"""\
 (rule ((RenamesToLeader {node} ml l)
-       {gets})
-      ((RenamesToLeader {node} (inverse {stripped}) l)))
-"""
+       (= v{n} (map-get mvar{n} 0)){free_elsewhere})
+      ((RenamesToLeader {node} (inverse (map-remove (inverse ml) v{n})) l)))
+""")
+    return "\n".join(rules)
 
 
 def banner(text):
@@ -404,7 +417,8 @@ def emit(language, binders=(), provided=None):
         if bound:
             which = ", ".join(str(i + 1) for i in bound)
             binder_rules.append(
-                (f";; `{name}` binds child {which}", binder(name, sig, bound)))
+                (f";; `{name}` binds child {which}, one rule per bound slot",
+                 binder(name, sig, bound)))
     for head, name in binders:
         binder_rules.append((f';; `{head}` binds its first child\'s slot',
                              binder(name, language[name], [0], head=head)))
