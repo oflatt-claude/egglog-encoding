@@ -112,22 +112,25 @@ nightly-local: nightly-uv nightly-rustup
 # see semantics/README.md. `lake build` only warns on a `sorry`, so the sources are
 # grepped for one as well. The second grep drops backtick-quoted prose: two module
 # docstrings discuss `sorry`, and without it the target can never pass.
-# M11's correspondence statement is stated and not proved: `Encoding/Correspond.lean`
+# M11's correspondence statement is stated and not proved: `EgglogSemantics/Encoding/`
 # carries exactly LEAN_OPEN_SORRIES of them, each with a vacuity witness beside it
 # (`semantics/ENCODING.md`). None of them is a named obligation any more — both halves are
 # now proved from properties of the state `execM` returned (`cong_sameClass_of_state`,
 # `sameClass_cong_of_state`) — so what is left is exactly those properties:
 # `execM_viewLeader`, `execM_viewsCover` and `execM_unionsRead` for the forward half and
-# `execM_viewsSound` for the completeness half. Everywhere else a `sorry` is a regression,
-# and a new one in that file changes the count.
-LEAN_OPEN_SORRIES = 4
-LEAN_OPEN_SORRY_FILE = semantics/EgglogSemantics/Encoding/Correspond.lean
+# `execM_viewsSound` for the completeness half; plus `patternReads_of_encodeQuery`, the
+# encoder read-back the rule-head match correspondence of `Encoding/Match.lean` needs — that
+# correspondence itself is proved, from properties of the two states. Everywhere outside
+# `Encoding/` a `sorry` is a regression, and a new one inside it changes the count.
+LEAN_OPEN_SORRIES = 5
+LEAN_OPEN_SORRY_DIR = semantics/EgglogSemantics/Encoding
 
 lean-check:
 	cd semantics && PATH="$(LEAN_BIN_DIR):$$PATH" lake build
 	! grep -rnw --include='*.lean' sorry semantics/EgglogSemantics | grep -v '`sorry`' | \
-		grep -v '^$(LEAN_OPEN_SORRY_FILE):'
-	test "$$(grep -nw sorry $(LEAN_OPEN_SORRY_FILE) | grep -cv '`sorry`')" -eq $(LEAN_OPEN_SORRIES)
+		grep -v '^$(LEAN_OPEN_SORRY_DIR)/'
+	test "$$(grep -rnw --include='*.lean' sorry $(LEAN_OPEN_SORRY_DIR) | \
+		grep -cv '`sorry`')" -eq $(LEAN_OPEN_SORRIES)
 
 # Differentially test the Lean semantics against egglog: for each generated program, the
 # Lean interpreter's per-constructor row counts against egglog's `(print-size)`. Needs a

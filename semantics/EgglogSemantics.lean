@@ -10,3 +10,4 @@ import EgglogSemantics.Tests.Examples
 import EgglogSemantics.Encoding.Encode
 import EgglogSemantics.Encoding.Checker
 import EgglogSemantics.Encoding.Correspond
+import EgglogSemantics.Encoding.Match
