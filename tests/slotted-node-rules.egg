@@ -4,6 +4,13 @@
 ;;; contributes its slots; a payload column is one column and contributes none, so a
 ;;; zero-child constructor is just a payload leaf. A `binder` is a child whose slot
 ;;; the node binds.
+;;;
+;;; A binder COVERS one column -- the one right after the binder slots, which is what
+;;; `Bind<T>` wrapping a single child means. Its slot is taken out of the class's slot
+;;; set only where it is bound, so an occurrence in an uncovered column stays free:
+;;; `let` binds in its body and leaves its value's occurrence alone. When the two
+;;; collide the bound slot is first renamed to one the node does not use, which keeps
+;;; it alpha-renameable.
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; a class's slot set, held once
@@ -434,3 +441,13 @@
        (= v0 (map-get mvar0 0))
        (map-not-contains (map-image m3) v0))
       ((RenamesToLeader (App3 "let" mvar0 (Var 0) m2 c2 m3 c3) (inverse (map-remove (inverse ml) v0)) l)) :ruleset slotted)
+
+(rule ((= node (App3 "let" mvar0 (Var 0) m2 c2 m3 c3))
+       (= v0 (map-get mvar0 0))
+       (map-contains (map-image m3) v0)   ; bound slot is free here too
+       (= used (map-union (map-union (map-image mvar0) (map-image m2)) (map-image m3)))
+       ; the smallest slot the node does not use
+       (= fresh0 (find-mapping-total used (map-of 0 0) (map-empty) (map-empty)))
+       (= w0 (map-get fresh0 0)))
+      ((union node (App3 "let" (map-of 0 w0) (Var 0) (compose (map-insert (map-image m2) v0 w0) m2) c2 m3 c3))
+       (delete (App3 "let" mvar0 (Var 0) m2 c2 m3 c3))) :ruleset slotted)

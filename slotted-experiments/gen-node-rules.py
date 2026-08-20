@@ -351,7 +351,7 @@ def binder(name, sig, positions, head=None):
     uncovered = [i for i in range(len(kids)) if i not in positions and i != covered]
 
     rules = []
-    for n, _pos in enumerate(positions):
+    for n, pos in enumerate(positions):
         free_elsewhere = "".join(
             f"\n       (map-not-contains (map-image {edges[u]}) v{n})"
             for u in uncovered)
@@ -359,6 +359,34 @@ def binder(name, sig, positions, head=None):
 (rule ((RenamesToLeader {node} ml l)
        (= v{n} (map-get mvar{n} 0)){free_elsewhere})
       ((RenamesToLeader {node} (inverse (map-remove (inverse ml) v{n})) l)))
+""")
+
+        # A collision with an uncovered column blocks the strip above, which would
+        # leave the bound slot in the class's slot set and stop it being renameable.
+        # Move it to a slot the node does not use; the strip then applies. One rule
+        # per uncovered column, so the guard stays a single fact.
+        # built from the PATTERN's edge names: the binder columns are bound as
+        # `mvarN` there, not by their positional name.
+        union_of = f"(map-image {e[0]})"
+        for x in e[1:]:
+            union_of = f"(map-union {union_of} (map-image {x}))"
+        for u in uncovered:
+            fresh_e = list(e)
+            fresh_e[pos] = f"(map-of 0 w{n})"
+            fresh_e[covered] = (
+                f"(compose (map-insert (map-image {edges[covered]}) v{n} w{n})"
+                f" {edges[covered]})")
+            renamed = pattern(name, sig, edges=fresh_e, kids=k, payloads=payloads)
+            rules.append(f"""\
+(rule ((= node {node})
+       (= v{n} (map-get mvar{n} 0))
+       (map-contains (map-image {edges[u]}) v{n})   ; bound slot is free here too
+       (= used {union_of})
+       ; the smallest slot the node does not use
+       (= fresh{n} (find-mapping-total used (map-of 0 0) (map-empty) (map-empty)))
+       (= w{n} (map-get fresh{n} 0)))
+      ((union node {renamed})
+       (delete {node})))
 """)
     return "\n".join(rules)
 
@@ -461,6 +489,13 @@ HEADER = """\
 ;;; contributes its slots; a payload column is one column and contributes none, so a
 ;;; zero-child constructor is just a payload leaf. A `binder` is a child whose slot
 ;;; the node binds.
+;;;
+;;; A binder COVERS one column -- the one right after the binder slots, which is what
+;;; `Bind<T>` wrapping a single child means. Its slot is taken out of the class's slot
+;;; set only where it is bound, so an occurrence in an uncovered column stays free:
+;;; `let` binds in its body and leaves its value's occurrence alone. When the two
+;;; collide the bound slot is first renamed to one the node does not use, which keeps
+;;; it alpha-renameable.
 """
 
 

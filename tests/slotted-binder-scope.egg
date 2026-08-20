@@ -1,55 +1,42 @@
-;;; KNOWN GAP: a bound slot shares a namespace with the ambient slots.
+;;; A bound slot stays renameable even when it collides with a free one.
 ;;;
-;;; `Bind<T>` in the reference SCOPES its slot, so the body's occurrence and an
-;;; ambient occurrence spelled the same way are different slots. This encoding
-;;; flattens the binder into an ordinary child column, so the two share one
-;;; namespace and only the binder rule distinguishes them.
+;;; `Bind<T>` in the reference SCOPES its slot, so renaming it is invisible. This
+;;; encoding flattens the binder into an ordinary child column, so the bound slot
+;;; shares a namespace with the ambient slots and two rules keep them apart:
 ;;;
-;;; `:binder` now covers one column, so a slot free in an UNCOVERED column is no
-;;; longer stripped -- `slotted-array-rules.egg` has that case, and it fixed a
-;;; baseline disagreement where the encoding merged two terms the reference keeps
-;;; apart (8 classes against 9). What it did not fix is the collision below.
+;;;   * a binder covers ONE column -- the one after the binder slots, which is what
+;;;     `Bind<T>` wrapping a single child means -- so a slot free in an UNCOVERED
+;;;     column is not stripped. Without that, `let x = x in f1 x` lost the value's
+;;;     occurrence too and the class came out with no slots, merging terms the
+;;;     reference keeps apart.
 ;;;
-;;;     let $0 = (var $0) in f1 (var $0)
-;;;     let $1 = (var $0) in f1 (var $1)
+;;;   * but then the collision blocks the strip, which would leave the bound slot in
+;;;     the class's slot set and stop it being renameable -- separating two terms the
+;;;     reference identifies, the opposite error. So a colliding bound slot is first
+;;;     renamed to a slot the node does not use, and the strip then applies. That
+;;;     fires at most once per collision: the slot it picks is by construction absent
+;;;     from the uncovered column's image.
 ;;;
-;;; The bound slot is renamed; nothing else moves. The reference calls these the
-;;; same term, because renaming a scoped slot is invisible. Here the strip is
-;;; blocked -- slot 0 IS free in the value -- so the bound slot stays in the class's
-;;; slot set and the two spellings never meet. Before the coverage fix they were
-;;; equal for the wrong reason: the strip removed slot 0 from the whole node, which
-;;; also lost the value's occurrence.
-;;;
-;;; So this is a narrower gap than the one that was fixed, and the opposite way
-;;; round: the encoding now keeps apart two terms the reference identifies, rather
-;;; than merging two it separates. `xarray.py iso let-slot-free-in-value` shows it
-;;; as 9 classes on both sides with no isomorphism between them.
-;;;
-;;; Fixing it means normalising the collision away: when a binder's slot is free in
-;;; an uncovered column, rename the bound slot -- in the binder column and in the
-;;; covered column's edge -- to one the node does not use, then strip it. That is a
-;;; node rewrite, so it needs an orientation to terminate, which is why it is not
-;;; done here.
-;;;
-;;; This file asserts the CURRENT behaviour. When the collision is normalised, the
-;;; last `fail (check ...)` becomes a `check`.
+;;; Both spellings below share one body class and differ only in their edges, so
+;;; each edge's domain is exactly the body's slot set. Written with two different
+;;; body classes instead, the edges violate Def. 4 and the case proves nothing.
 
 (include "tests/slotted-egraph-encoding-11.egg")
 
-;; let $0 = (var $0) in f1 (var $0)
-(let $v0 (App2 "app" (map-empty) (Sym "f1") (map-of 0 0) (Var 0)))
-(let $l0 (App3 "let" (map-of 0 0) (Var 0) (map-of 0 0) $v0 (map-of 0 0) (Var 0)))
+;; the body `f1 (var .)`, one class, slots {0}
+(let $b (App2 "app" (map-empty) (Sym "f1") (map-of 0 0) (Var 0)))
 
-;; let $1 = (var $0) in f1 (var $1)
-(let $v1 (App2 "app" (map-empty) (Sym "f1") (map-of 0 1) (Var 0)))
-(let $l1 (App3 "let" (map-of 0 1) (Var 0) (map-of 0 1) $v1 (map-of 0 0) (Var 0)))
+;; let $0 = (var $0) in f1 (var $0) -- the bound slot collides with the value's
+(let $l0 (App3 "let" (map-of 0 0) (Var 0) (map-of 0 0) $b (map-of 0 0) (Var 0)))
+
+;; let $1 = (var $0) in f1 (var $1) -- the same term, bound slot renamed
+(let $l1 (App3 "let" (map-of 0 1) (Var 0) (map-of 0 1) $b (map-of 0 0) (Var 0)))
 
 (run-schedule (saturate (run slotted)))
 
-;; Fixed by the coverage change: the value's occurrence keeps slot 0 free, so
-;; neither class is left with an empty slot set.
+;; the value's occurrence keeps slot 0 free in both, and only that one
 (check (= (ClassSlots $l0) (map-of 0 0)))
 (check (= (ClassSlots $l1) (map-of 0 0)))
 
-;; Still wrong: the reference identifies these two, and here they stay apart.
-(fail (check (RenamesToLeader $l0 m1 leader) (RenamesToLeader $l1 m2 leader)))
+;; and renaming a bound slot changes nothing, so the two are one class
+(check (RenamesToLeader $l0 m1 leader) (RenamesToLeader $l1 m2 leader))

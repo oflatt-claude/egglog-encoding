@@ -97,6 +97,12 @@
 ;; self-loop, the alpha-finder that retires a node equal to another up to renaming, the
 ;; symmetry-finder that keeps the same solve non-destructively, migration into a
 ;; leader's frame, per-child canonicalisation, and binders. Add an arity there.
+;;
+;; A binder covers ONE column, the one after its slot, matching `Bind<T>` around a
+;; single child. So a bound slot leaves the class's slot set only where it is bound --
+;; `let` binds in its body, and a `value` occurrence of the same slot stays free -- and
+;; a collision between the two is renamed apart first, so the bound slot stays
+;; alpha-renameable. `tests/slotted-binder-scope.egg` is the pair of cases.
 (include "tests/slotted-node-rules.egg")
 
 ;; Transitivity, which is also path compression: `e1 = m12*e2` and `e2 = m23*e3` give
