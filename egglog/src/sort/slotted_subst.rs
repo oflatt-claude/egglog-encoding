@@ -27,10 +27,16 @@
 //! # Bound slots are not renamed
 //!
 //! Nothing tells this primitive which of a node's children is a binder, so it
-//! substitutes into the extracted term as it stands. A slot in `im(t_ren)` that
-//! the extracted term already uses as a bound slot is captured. The caller
-//! chooses `t_ren`, so it is the caller's job to keep its image away from the
-//! slots `body`'s term binds.
+//! substitutes into the extracted term as it stands: a slot in `im(t_ren)` that
+//! the term already uses as a bound slot is captured. The caller chooses `t_ren`,
+//! so keeping its image clear of the slots `body`'s term binds is the caller's
+//! job.
+//!
+//! This matches the reference implementation rather than falling short of it. Its
+//! `do_term_subst` is the same structural walk with no binder handling -- it
+//! rebuilds each node and returns `t` where the rebuilt id equals the one being
+//! replaced -- so capture is ruled out by how the representation names bound
+//! slots, not by renaming them during substitution.
 //!
 //! # `Context::Full`
 //!
