@@ -40,16 +40,30 @@ The source-side conclusion is `ValidQuerySubst src r.query τ` together with
   existentially and `EntrySound` is stated per entry, so two entries at one key are two
   hypotheses rather than a contradiction.
 
-## What it does **not** deliver
+## The head build, and why it is not obstructed
 
-A rule head's `entrySound_build`. `encodeBuild` mints the skolem over its arguments' **ids**,
-so the entry a head writes is keyed and valued at ids where the correspondence delivers the
-source application over the source *terms* the query matched.
-`mem_terms_of_entrySound_skolem` is that gap compiled: `Database.ViewsSound` at a freshly
-built entry is *equivalent* to the minted id being a source term, which it is only where no
-`union` has re-canonicalized an argument. So the head-build case of `execM_viewsSound` needs
-one more fact than this file proves, and it is the same fact
-`encode_corresponds_invents_enode` refutes at a key column.
+`encodeBuild` mints the skolem over its arguments' **ids**, so the entry a head writes is keyed
+and valued at ids. `mem_terms_of_entrySound_skolem` is what that costs, compiled:
+`Database.ViewsSound` at a freshly built entry is *equivalent* to the minted id being a source
+term. Read off the key that is the fact `encode_corresponds_invents_enode` refutes, and the
+head-build case looks obstructed.
+
+It is not, because **which source terms the correspondence delivers is a choice**. A variable at
+a key column is read back by `Database.ViewsSound` as a source term *congruent* to the id, and
+both endpoints of a congruence are present — so the id is itself a term the source holds, and
+the reading may be taken to be the ids. `exists_validQuerySubst_at_ids` is that reading;
+`Matches` is congruence-closed, so nothing about the source match is lost. Then the source's own
+head evaluation is the same expression at the same values — `encodeBuild_fst` says the naming
+expression *is* the source expression, `Expr.eval_transport` says the two signatures and
+environments agree where a head reads — so it builds the very term the target's skolem names.
+`entrySound_headBuild` and `cong_headUnion` are the two head writers, and what they owe is only
+`hfired`: the source rule fired, and holds what its own head built. That is `RunRules`' fixpoint
+and belongs to `execM_viewsSound`.
+
+What the head's path costs is `Database.GlobalsAgree` where the plain correspondence asks only
+`Database.GlobalsRead`: a source global and the target's reading of it must be the *same* term,
+not merely congruent ones, which is what the encoding gives (`encodeBuild_fst` again, at a
+top-level `let`).
 
 ## And what it is false for
 
@@ -76,7 +90,9 @@ there is no key column anywhere, and `Query.VarsKeyed` is vacuous.
 non-vacuous. It runs the whole path, `encodeQuery`'s own output included — the encoded query's
 match is `wTarget_validQuerySubst`, and `patternReads_of_encodeQuery` is what turns it into the
 reading. `Database.GlobalsRead` is the one clause no pair reached here makes non-vacuous, and
-`globalsRead_nonvacuous` is that clause at a state binding a global.
+`globalsRead_nonvacuous` — with `globalsAgree_nonvacuous` for the strengthening — is that clause
+at a state binding a global. `entrySound_headBuild_witness` is the head-build case run at the
+same pair, at the view entry that run really wrote.
 -/
 
 namespace Egglog
@@ -540,21 +556,28 @@ theorem exists_validQuerySubst_of_patternReads {src d : Database} (hw : src.WF)
   obtain ⟨τ, hv, hτ⟩ := validQuerySubst_of_patternReads hb hs hg hgt hlink hgr hread
   exact ⟨τ, hv, fun v hv' i hi => ⟨g v, hτ v hv', hlink v hv' i hi⟩⟩
 
-/-! ### What a head build still owes, and it is not this
+/-! ### What a head build owes
 
-The correspondence hands a rule head the source application over the source *terms* the query
-matched. `encodeBuild` writes its entry over their **ids**: "the skolem is the answer, nothing
-is read back", so building `(f x y)` at a head whose query bound `x`, `y` to the ids `i₁`, `i₂`
-writes `@fView(i₁, i₂) ↦ (f i₁ i₂, @Fiat)` and `Database.addTerm` records the term `f(i₁, i₂)`.
-`Database.ViewsSound` at that entry is then a statement about `f(i₁, i₂)` and not about
-`f(τx, τy)`, and the two coincide only where no `union` has re-canonicalized an argument. -/
+The correspondence as stated hands a rule head the source application over *some* source terms
+the query matched. `encodeBuild` writes its entry over the **ids**: "the skolem is the answer,
+nothing is read back", so building `(f x y)` at a head whose query bound `x`, `y` to the ids
+`i₁`, `i₂` writes `@fView(i₁, i₂) ↦ (f i₁ i₂, @Fiat)` and `Database.addTerm` records the term
+`f(i₁, i₂)`. `Database.ViewsSound` at that entry is a statement about `f(i₁, i₂)` and not about
+`f(τx, τy)`, and read that way it asks for the fact `encode_corresponds_invents_enode` refutes
+at a key column: that the key's own application is a source term.
+
+**The reading is a choice, and the other choice closes it.** `exists_validQuerySubst_at_ids`
+below takes the source reading to be the ids themselves, which is legitimate because a variable
+at a key column is read back by `Database.ViewsSound` as something *congruent* to the id and a
+congruence's endpoints are both present. Then `τx = i₁`, `τy = i₂`, the source's own head
+evaluation is the same expression at the same values (`encodeBuild_fst`,
+`Expr.eval_transport`), and what the head owes is only that the source's firing built it —
+`entrySound_headBuild`. -/
 
 /-- **A fresh build's obligation is exactly that its minted id is a source term.**
-`entrySound_build`'s hypothesis is necessary and not only sufficient, so the match
-correspondence does not discharge the rule-head case of `Database.ViewsSound` by itself: it
-gives the source application over the terms the query matched, and this asks for the one over
-their ids. `encode_corresponds_invents_enode` is the same gap read at a key column instead of
-an e-class one. -/
+`entrySound_build`'s hypothesis is necessary and not only sufficient, which is why the reading
+the correspondence delivers matters: read at arbitrary congruent terms it does not discharge
+the rule-head case, and read at the ids (`entrySound_headBuild`) it does. -/
 theorem mem_terms_of_entrySound_skolem {src : Database} {f : FnName} {cs : List Term}
     (h : EntrySound src f cs (.app f cs)) : Term.app f cs ∈ src.terms := by
   obtain ⟨_, _, _, hae⟩ := h
@@ -914,6 +937,242 @@ so a program `encode` claims never needs `hgr` and `hk` assumed separately. -/
 theorem Program.EncodeDomain.noLeafPattern_of_mem {P : Program} (h : P.EncodeDomain) {r : Rule}
     (hr : Cmd.rule r ∈ P) : (∀ p ∈ r.query, p.Grounded) ∧ Query.VarsKeyed r.query :=
   h.noLeafPattern _ hr
+
+/-! ### The source reading at the ids themselves
+
+`exists_sourceReading` picks *some* source term per query variable. A rule **head** cannot use
+just any: `encodeBuild` mints its skolem over the ids the query bound, so the entry a head
+writes is valued at `f` applied to those ids, and `mem_terms_of_entrySound_skolem` says
+`Database.ViewsSound` there is *equivalent* to that application being a source term. Reading the
+variables back as arbitrary congruent terms leaves exactly the gap
+`encode_corresponds_invents_enode` refutes, read at a key column.
+
+**The gap closes because the reading may be chosen to be the ids.** A variable at a key column
+is read back by `Database.ViewsSound`, which hands out a source argument list *congruent* to the
+key — and a congruence's endpoints are both present, so the id is itself a term the source
+holds. `Matches` is congruence-closed (that is the whole of `CongUp`), so the source query
+matches at the ids just as it matches at any other reading, and then the source's own head
+evaluation builds the very term the target's head did. Nothing about `encode` is used; what
+replaces `Database.GlobalsRead` is the stronger `Database.GlobalsAgree`, and the encoder
+supplies it because a source `let` becomes a `let` of the *same* expression
+(`encodeBuild_fst`). -/
+
+/-- **The target's environment binds every source global to the same term.** Stronger than
+`Database.GlobalsRead`, which allows a congruent one, and what the encoding gives: a source
+`let` becomes `.letBind v (encodeBuild e n).1` and that expression *is* `e`. -/
+def Database.GlobalsAgree (src : Database) (ρ : Env) : Prop :=
+  ∀ v t, Env.lookup v src.env = some t → Env.lookup v ρ = some t
+
+/-- Agreement is a reading: a global is a term the source holds, so it is congruent to
+itself. -/
+theorem Database.GlobalsAgree.globalsRead {src : Database} {ρ : Env} (hw : src.WF)
+    (h : src.GlobalsAgree ρ) : src.GlobalsRead ρ := by
+  intro v t i ht hi
+  obtain rfl : t = i := Option.some.inj ((h v t ht).symm.trans hi)
+  exact hw.envInTerms _ (Env.mem_of_lookup ht)
+
+/-- **The id at a key column is itself a term the source holds.** `Database.ViewsSound` at the
+enclosing read hands back a source argument list congruent to the key, and both endpoints of a
+congruence are present. This is the fact the head-build case turns on, and it is what makes the
+reading below well defined. -/
+theorem mem_terms_of_patternArgVar {src d : Database} (hs : d.ViewsSound src) {ρt : Env}
+    {v : Var} {p : Pattern} (h : PatternRead d ρt p) (hv : Pattern.ArgVar v p) :
+    ∃ i, Env.lookup v ρt = some i ∧ i ∈ src.terms := by
+  obtain ⟨j, t, hj, hc⟩ := exists_source_of_patternArgVar hs h hv
+  exact ⟨j, hj, hc.mem_right⟩
+
+/-- The reading that takes every variable to **the id itself**. Total, because
+`Query.VarsKeyed` and `Database.GlobalsAgree` between them make `ρt` bind everything the query
+mentions; the default value is never reached. -/
+def idReading (ρt : Env) : Var → Term := fun v => (Env.lookup v ρt).getD (.lit (.int 0))
+
+theorem idReading_eq {ρt : Env} {v : Var} {i : Term} (h : Env.lookup v ρt = some i) :
+    idReading ρt v = i := by simp [idReading, h]
+
+/-- **The source query matches at the ids the target read.** The reading of
+`validQuerySubst_of_patternReads`, pinned: the substitution it returns binds every query
+variable to *the id itself*, not merely to something congruent to it.
+
+That is what a rule head needs and the weaker form does not give. `encodeBuild` writes
+`@fView(is) ↦ (f(is), @Fiat)` over the ids, so `entrySound_build`'s hypothesis is
+`f(is) ∈ src.terms`; with this substitution the source's own head evaluation is the same
+expression at the same values, so the term it builds is that one and no congruence step is
+needed at the key. -/
+theorem exists_validQuerySubst_at_ids {src d : Database} (hb : src.TermsBuild)
+    (hs : d.ViewsSound src) {q : Query} {ρt : Env} (hglob : src.GlobalsAgree ρt)
+    (hgr : ∀ p ∈ q, p.Grounded) (hk : Query.VarsKeyed q)
+    (hread : ∀ p ∈ q, PatternRead d ρt p) :
+    ∃ τ, ValidQuerySubst src q τ ∧
+      ∀ v ∈ Query.vars q, ∀ i, Env.lookup v ρt = some i →
+        Env.lookup v (src.env ++ τ) = some i := by
+  have hbound : ∀ v ∈ Query.vars q, ∃ i, Env.lookup v ρt = some i ∧ i ∈ src.terms := by
+    intro v hv
+    obtain ⟨p, hp, ha⟩ := hk v hv
+    exact mem_terms_of_patternArgVar hs (hread p hp) ha
+  have hgt : ∀ v ∈ Query.vars q, idReading ρt v ∈ src.terms := by
+    intro v hv
+    obtain ⟨i, hi, hm⟩ := hbound v hv
+    rw [idReading_eq hi]; exact hm
+  obtain ⟨τ, hv, hτ⟩ := validQuerySubst_of_patternReads hb hs
+    (g := idReading ρt) (fun v t ht => idReading_eq (hglob v t ht)) hgt
+    (fun v hv i hi => idReading_eq hi ▸ hgt v hv) hgr hread
+  exact ⟨τ, hv, fun v hvq i hi => by rw [hτ v hvq, idReading_eq hi]⟩
+
+/-- **And the two environments agree wherever a rule head may read.** A head variable is either
+one the query binds — read as the id on both sides, by the substitution above — or a source
+global, which `Database.GlobalsAgree` pins and which shadows the substitution on the source
+side. This is the hypothesis `Expr.eval_transport` consumes. -/
+theorem lookup_eq_of_at_ids {src d : Database} (hs : d.ViewsSound src) {q : Query} {ρt τ : Env}
+    (hglob : src.GlobalsAgree ρt) (hk : Query.VarsKeyed q)
+    (hread : ∀ p ∈ q, PatternRead d ρt p)
+    (hτ : ∀ v ∈ Query.vars q, ∀ i, Env.lookup v ρt = some i →
+      Env.lookup v (src.env ++ τ) = some i)
+    {v : Var} (hv : v ∈ Query.vars q ∨ (Env.lookup v src.env).isSome) :
+    Env.lookup v ρt = Env.lookup v (src.env ++ τ) := by
+  rcases hv with hv | hv
+  · obtain ⟨p, hp, ha⟩ := hk v hv
+    obtain ⟨i, hi, -⟩ := mem_terms_of_patternArgVar hs (hread p hp) ha
+    rw [hi, hτ v hv i hi]
+  · obtain ⟨t, ht⟩ : ∃ t, Env.lookup v src.env = some t := Option.isSome_iff_exists.mp hv
+    rw [hglob v t ht,
+      Env.lookup_append_of_mem (Env.lookup_isSome_iff_mem_dom.mp (by rw [ht]; rfl)), ht]
+
+/-! ### Transporting an evaluation between the two states
+
+`Expr.eval` consults the primitive table — which no signature owns — and then
+`Signature.IsCtor`, and nothing else. So an evaluation moves between the source and the target
+on two conditions: the names it applies build in both, and the two environments agree on the
+variables it reads. Both are supplied above at a rule head, which is what makes a head's two
+evaluations the *same* term rather than congruent ones. -/
+
+mutual
+
+/-- **An evaluation transports along `Signature.IsCtor` at the names it applies.** -/
+theorem Expr.eval_transport {s₁ s₂ : Signature} :
+    ∀ (e : Expr) {ρ₁ ρ₂ : Env} {t : Term}, (∀ f ∈ e.fns, s₁.IsCtor f → s₂.IsCtor f) →
+      (∀ v ∈ e.vars, Env.lookup v ρ₁ = Env.lookup v ρ₂) → e.eval s₁ ρ₁ = some t →
+      e.eval s₂ ρ₂ = some t
+  | .lit _, _, _, _, _, _, h => h
+  | .var v, _, _, _, _, hv, h => by
+      rw [Expr.eval] at h ⊢
+      rw [← hv v (by simp [Expr.vars]), h]
+  | .app f args, _, _, _, hc, hv, h => by
+      have hfn : ∀ g ∈ Expr.fnsList args, s₁.IsCtor g → s₂.IsCtor g :=
+        fun g hg => hc g (by simp [Expr.fns, hg])
+      have hvl : ∀ v ∈ Expr.varsList args, Env.lookup v _ = Env.lookup v _ :=
+        fun w hw => hv w (by simpa [Expr.vars] using hw)
+      cases hp : Prim.ofName f with
+      | some p =>
+        simp only [Expr.eval, hp] at h ⊢
+        obtain ⟨ts, hts, hap⟩ := Option.bind_eq_some_iff.mp h
+        rw [Expr.evalList_transport args hfn hvl hts]
+        exact hap
+      | none =>
+        simp only [Expr.eval, hp] at h ⊢
+        by_cases hct : s₁.IsCtor f
+        · rw [if_pos hct] at h
+          obtain ⟨ts, hts, hap⟩ := Option.map_eq_some_iff.mp h
+          rw [if_pos (hc f (by simp [Expr.fns]) hct),
+            Expr.evalList_transport args hfn hvl hts]
+          exact congrArg some hap
+        · rw [if_neg hct] at h
+          exact absurd h (by simp)
+
+@[inherit_doc Expr.eval_transport]
+theorem Expr.evalList_transport {s₁ s₂ : Signature} :
+    ∀ (es : List Expr) {ρ₁ ρ₂ : Env} {ts : List Term},
+      (∀ f ∈ Expr.fnsList es, s₁.IsCtor f → s₂.IsCtor f) →
+      (∀ v ∈ Expr.varsList es, Env.lookup v ρ₁ = Env.lookup v ρ₂) →
+      Expr.evalList s₁ es ρ₁ = some ts → Expr.evalList s₂ es ρ₂ = some ts
+  | [], _, _, _, _, _, h => h
+  | e :: es, _, _, _, hc, hv, h => by
+      rw [Expr.evalList] at h ⊢
+      obtain ⟨t, ht, hrest⟩ := Option.bind_eq_some_iff.mp h
+      obtain ⟨ts, hts, hcons⟩ := Option.map_eq_some_iff.mp hrest
+      rw [Expr.eval_transport e (fun g hg => hc g (by simp [Expr.fnsList, hg]))
+          (fun w hw => hv w (by simp [Expr.varsList, hw])) ht,
+        Expr.evalList_transport es (fun g hg => hc g (by simp [Expr.fnsList, hg]))
+          (fun w hw => hv w (by simp [Expr.varsList, hw])) hts]
+      exact congrArg some hcons
+
+end
+
+/-! ### The head-build case, discharged
+
+Everything above composes into the case the completeness half's rule-head obligation is: the
+target matched the encoded query, its head built `.app f args`, and the entry it wrote is
+`@fView(is) ↦ (f(is), @Fiat)` for `is` the arguments' values *in the target*. Because the source
+reading is the ids, the source's evaluation of the same expression gives the same `is`, and
+`entrySound_build` needs only that the source holds `f(is)`.
+
+That last thing is `hfired`, and it is the honest residue: it is the source's own rule firing,
+which is `RunRules`' fixpoint and not a property of either state alone. The refuted fact — that
+the key's application is a source term for no reason but that the target keyed on it — is *not*
+among the hypotheses. -/
+
+/-- **A rule head's build writes a sound view entry.**
+
+`hfired` is the only thing not supplied by the two states: that the source rule, fired at the
+substitution the correspondence returns, holds the term its own head evaluation built. Every
+other hypothesis is either an invariant this file already carries (`Database.ViewsSound`,
+`Database.Diag`, subterm closure), a property of the source (`Database.WF`,
+`Database.TermsBuild`, `Database.GlobalsAgree`), or a decidable condition on the source text
+(`Pattern.NoValues`, `Pattern.Grounded`, `Query.VarsKeyed`, and that the head's names build and
+its variables are the query's or globals).
+
+`hval` is what the target wrote, read off the encoder: `encodeBuild`'s naming expression *is*
+`.app f args` (`encodeBuild_fst`), so the value column is that expression evaluated in the
+target and the key is its arguments'. -/
+theorem entrySound_headBuild {src tgt : Database} (hw : src.WF) (hb : src.TermsBuild)
+    (hs : tgt.ViewsSound src) (hd : tgt.Diag)
+    (hsc : ∀ t ∈ tgt.terms, t.subterms ⊆ tgt.terms) {q : Query} {n : Nat} {σ : Env}
+    (hglob : src.GlobalsAgree (tgt.env ++ σ)) (hnv : ∀ p ∈ q, p.NoValues)
+    (hgr : ∀ p ∈ q, p.Grounded) (hk : Query.VarsKeyed q)
+    (hmatch : ValidQuerySubst tgt (encodeQuery q n).1 σ)
+    {f : FnName} {args : List Expr} {is : List Term} {m : Nat}
+    (hctor : ∀ g ∈ (Expr.app f args).fns, tgt.sig.IsCtor g → src.sig.IsCtor g)
+    (hvars : ∀ v ∈ (Expr.app f args).vars, v ∈ Query.vars q ∨ (Env.lookup v src.env).isSome)
+    (hval : (encodeBuild (.app f args) m).1.eval tgt.sig (tgt.env ++ σ) = some (.app f is))
+    (hfired : ∀ τ, ValidQuerySubst src q τ →
+      (Expr.app f args).eval src.sig (src.env ++ τ) = some (.app f is) →
+      Term.app f is ∈ src.terms) :
+    EntrySound src f is (.app f is) := by
+  rw [encodeBuild_fst] at hval
+  have hread := patternReads_of_encodeQuery hd hsc hnv hk hmatch
+  obtain ⟨τ, hv, hτ⟩ := exists_validQuerySubst_at_ids hb hs hglob hgr hk hread
+  exact entrySound_build hw (hfired τ hv (Expr.eval_transport _ hctor
+    (fun v hvv => lookup_eq_of_at_ids hs hglob hk hread hτ (hvars v hvv)) hval))
+
+/-- **And a rule head's `union` writes a sound edge.** The `Database.EdgesSound` counterpart:
+`encodeAction` writes `@UF (ordering-max x₁ x₂) ↦ (ordering-min x₁ x₂, pf)` over the two
+operands' naming expressions, which are the operands themselves, so the pair the edge relates
+is the pair the source's own `union` asserted. `ho` absorbs whichever order `ordering-max`
+picked, as `cong_of_eqs` does for a top-level `union`. -/
+theorem cong_headUnion {src tgt : Database} (hb : src.TermsBuild) (hs : tgt.ViewsSound src)
+    (hd : tgt.Diag) (hsc : ∀ t ∈ tgt.terms, t.subterms ⊆ tgt.terms) {q : Query} {n : Nat}
+    {σ : Env} (hglob : src.GlobalsAgree (tgt.env ++ σ)) (hnv : ∀ p ∈ q, p.NoValues)
+    (hgr : ∀ p ∈ q, p.Grounded) (hk : Query.VarsKeyed q)
+    (hmatch : ValidQuerySubst tgt (encodeQuery q n).1 σ)
+    {e₁ e₂ : Expr} {t₁ t₂ : Term} {m₁ m₂ : Nat}
+    (hctor : ∀ g ∈ e₁.fns ∪ e₂.fns, tgt.sig.IsCtor g → src.sig.IsCtor g)
+    (hvars : ∀ v ∈ e₁.vars ∪ e₂.vars, v ∈ Query.vars q ∨ (Env.lookup v src.env).isSome)
+    (hv₁ : (encodeBuild e₁ m₁).1.eval tgt.sig (tgt.env ++ σ) = some t₁)
+    (hv₂ : (encodeBuild e₂ m₂).1.eval tgt.sig (tgt.env ++ σ) = some t₂)
+    (hfired : ∀ τ, ValidQuerySubst src q τ → e₁.eval src.sig (src.env ++ τ) = some t₁ →
+      e₂.eval src.sig (src.env ++ τ) = some t₂ → (t₁, t₂) ∈ src.eqs)
+    {t p : Term} (ho : (t = t₁ ∧ p = t₂) ∨ (t = t₂ ∧ p = t₁)) : Cong src t p := by
+  rw [encodeBuild_fst] at hv₁
+  rw [encodeBuild_fst] at hv₂
+  have hread := patternReads_of_encodeQuery hd hsc hnv hk hmatch
+  obtain ⟨τ, hv, hτ⟩ := exists_validQuerySubst_at_ids hb hs hglob hgr hk hread
+  have hlk : ∀ v ∈ e₁.vars ∪ e₂.vars,
+      Env.lookup v (tgt.env ++ σ) = Env.lookup v (src.env ++ τ) :=
+    fun v hvv => lookup_eq_of_at_ids hs hglob hk hread hτ (hvars v hvv)
+  exact cong_of_eqs (hfired τ hv
+    (Expr.eval_transport _ (fun g hg => hctor g (by simp [hg]))
+      (fun v hvv => hlk v (by simp [hvv])) hv₁)
+    (Expr.eval_transport _ (fun g hg => hctor g (by simp [hg]))
+      (fun v hvv => hlk v (by simp [hvv])) hv₂)) ho
 
 /-! ### The refutation: `encodeQuery` drops a leaf pattern
 
@@ -1717,5 +1976,80 @@ theorem exists_validQuerySubst_composed_witness :
   obtain ⟨t, hlk, hc⟩ := hτ "x" (by rw [wSrcRule_query_vars]; simp) (.app "A" []) rfl
   obtain rfl : t = Term.app "A" [] := Cong.eq_of_diag wSrcD_diag hc
   exact ⟨τ, hv, hlk⟩
+
+/-! #### The head-build case, run at the pair
+
+`exists_validQuerySubst_composed_witness` checks the correspondence; these check the *head's*
+use of it. `wProgram`'s rule has an empty head, so the expression below is a build the rule
+could have made rather than one it did — which is the point: `entrySound_headBuild` is a
+statement about the two states and one head expression, and `hfired` is where a real head's
+obligation lives. -/
+
+/-- **`Database.GlobalsAgree` at a state that binds a global**, so the strengthening of
+`Database.GlobalsRead` is not carried by its vacuous case at `wProgram`, which has no `let`.
+The two environments bind `x` to the *same* term, which is what it adds. -/
+theorem globalsAgree_nonvacuous :
+    ({ satSrcD with env := [("x", .app "A" [])] } : Database).GlobalsAgree
+      [("x", .app "A" [])] := by
+  intro v t ht
+  obtain ⟨rfl, rfl⟩ : v = "x" ∧ Term.app "A" [] = t := by simpa using ht
+  simp
+
+/-- **The reading at the ids, run at the pair.** `exists_validQuerySubst_composed_witness`'s
+last conjunct with the reading pinned: the source substitution binds `x` to the very term
+`wSubst` bound it to, and not merely to something congruent to it. -/
+theorem exists_validQuerySubst_at_ids_witness :
+    ∃ τ, ValidQuerySubst wSrcD wSrcRule.query τ ∧
+      Env.lookup "x" (wSrcD.env ++ τ) = some (.app "A" []) := by
+  obtain ⟨τ, hv, hτ⟩ := exists_validQuerySubst_at_ids wSrcD_termsBuild wTarget_viewsSound
+    (by simp [Database.GlobalsAgree, wSrcD, wSrcBase, Database.empty])
+    wSrcRule_grounded wSrcRule_varsKeyed
+    (patternReads_of_encodeQuery wTarget_diag wTarget_subtermClosed wSrcRule_noValues
+      wSrcRule_varsKeyed wTarget_validQuerySubst)
+  exact ⟨τ, hv, hτ "x" (by rw [wSrcRule_query_vars]; simp) (.app "A" []) rfl⟩
+
+/-- `F` is a constructor on the source side too, which is what `entrySound_headBuild`'s
+`hctor` asks at the one name the head expression applies. -/
+theorem wSrcSig_isCtor_F : wSrcSig.IsCtor "F" := ⟨wFDecl, rfl, rfl⟩
+
+/-- **All of `entrySound_headBuild`'s hypotheses hold together at the reachable pair, and its
+conclusion is a view entry the target actually holds.**
+
+The head expression is `(F x)`, the build a rule with that head would make: `encodeBuild`'s
+naming expression is `(F x)` itself, the target evaluates it to `F(A)` at the substitution the
+encoded query matched under, and the entry that pins is `@FView(A) ↦ (F(A), @Fiat)` —
+`wTarget_out_view`, the row the run really wrote. `hfired` is `wSrcD_mem_F`. -/
+theorem entrySound_headBuild_witness :
+    wTarget.Out (viewName "F") [.app "A" []] [.app "F" [.app "A" []], .app fiatName []] ∧
+      EntrySound wSrcD "F" [.app "A" []] (.app "F" [.app "A" []]) := by
+  refine ⟨wTarget_out_view, entrySound_headBuild (q := wSrcRule.query) (n := 0) (m := 0)
+    wSrcD_wf wSrcD_termsBuild wTarget_viewsSound wTarget_diag wTarget_subtermClosed
+    (by simp [Database.GlobalsAgree, wSrcD, wSrcBase, Database.empty])
+    wSrcRule_noValues wSrcRule_grounded wSrcRule_varsKeyed wTarget_validQuerySubst
+    (f := "F") (args := [.var "x"]) (fun g hg _ => ?_) (fun v hv => ?_) rfl
+    (fun _ _ _ => wSrcD_mem_F)⟩
+  · obtain rfl : g = "F" := by simpa [Expr.fns, Expr.fnsList] using hg
+    exact wSrcSig_isCtor_F
+  · obtain rfl : v = "x" := by simpa [Expr.vars, Expr.varsList] using hv
+    exact Or.inl (by rw [wSrcRule_query_vars]; simp)
+
+/-- **`cong_headUnion` run at the same pair.** What it checks is that the composition typechecks
+against a reachable pair with every hypothesis discharged; what it does **not** check is a
+non-reflexive edge, because no program either encoding file steps has a `union` inside a rule
+head and `wSrcD.eqs` is the diagonal. The non-reflexive case is `cong_of_eqs`', witnessed at a
+state holding a `@UF` entry by `refutationState_edgesSound`. -/
+theorem cong_headUnion_witness :
+    Cong wSrcD (.app "F" [.app "A" []]) (.app "F" [.app "A" []]) := by
+  refine cong_headUnion (q := wSrcRule.query) (n := 0) (m₁ := 0) (m₂ := 0)
+    wSrcD_termsBuild wTarget_viewsSound wTarget_diag wTarget_subtermClosed
+    (by simp [Database.GlobalsAgree, wSrcD, wSrcBase, Database.empty])
+    wSrcRule_noValues wSrcRule_grounded wSrcRule_varsKeyed wTarget_validQuerySubst
+    (e₁ := .app "F" [.var "x"]) (e₂ := .app "F" [.var "x"])
+    (fun g hg _ => ?_) (fun v hv => ?_) rfl rfl
+    (fun _ _ _ _ => wSrcD_wf.eqsRefl _ wSrcD_mem_F) (Or.inl ⟨rfl, rfl⟩)
+  · obtain rfl : g = "F" := by simpa [Expr.fns, Expr.fnsList] using hg
+    exact wSrcSig_isCtor_F
+  · obtain rfl : v = "x" := by simpa [Expr.vars, Expr.varsList] using hv
+    exact Or.inl (by rw [wSrcRule_query_vars]; simp)
 
 end Egglog

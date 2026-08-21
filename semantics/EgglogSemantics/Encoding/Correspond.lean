@@ -70,6 +70,12 @@ both are decided at the witness at the end of this file.
   `patternReads_of_encodeQuery` reads the encoded query back off `encodeQuery` to establish
   its premise, and `encodeQuery_drops_literal_pattern` is the compiled refutation of the two
   side conditions' necessity.
+* **Proved, and the case the completeness half was expected to founder on**: a rule *head*'s
+  build. `exists_validQuerySubst_at_ids` pins the source reading to the ids the target read
+  rather than to arbitrary congruent terms, which is what makes the source's own head
+  evaluation build the very term `encodeBuild`'s skolem names — so the head owes only its
+  firing (`entrySound_headBuild`, `cong_headUnion`), and not the fact
+  `encode_corresponds_invents_enode` refutes at a key column.
 * **`sorry`**, four, and none of them an obligation any more:
   `execM_viewLeader`, `execM_viewsCover`, `execM_unionsRead` and `execM_viewsSound` — each
   one property of the state `execM` returned, satisfiable at this file's own witness.
@@ -1329,34 +1335,40 @@ theorem sameClass_cong_of_state_witness :
 /-- **The residue of the completeness half. Not proved.**
 
 What is missing: that the state `execM` returned satisfies `Database.ViewsSound` and
-`Database.EdgesSound` over the source. Every *per-entry* obligation is discharged above, one
-per writer `encode` emits — `entrySound_build`, `EntrySound.eclass`, `EntrySound.column`,
-`EntrySound.select`, `cong_of_entrySound_collide`, `cong_of_eqs`, `cong_of_pathCompress` —
-and three things stand between them and this statement.
+`Database.EdgesSound` over the source. Every *per-entry* obligation is discharged, one per
+writer `encode` emits — `entrySound_build`, `EntrySound.eclass`, `EntrySound.column`,
+`EntrySound.select`, `cong_of_entrySound_collide`, `cong_of_eqs`, `cong_of_pathCompress` here,
+and `entrySound_headBuild`/`cong_headUnion` in `Encoding/Match.lean` for the two writers a rule
+head has. What is left is two things, and the rule head is no longer one of them.
 
 * The encoded action list has to be read back off `execAction`, one `set` at a time, so that
-  "these are the writers" is a theorem rather than a reading of `encodeBuild`. This is the
-  same missing step `execM_viewsCover` needs, in the opposite direction.
-* A build or a `union` **inside a rule head** is justified by the *source* rule firing, not by
-  the source program's text, so `entrySound_build`'s hypothesis has to come from a match
-  correspondence: the encoded query matched, therefore the source query matched at congruent
-  terms. **That is now proved**, as a property of the two states and not of `execM`:
-  `Encoding/Match.lean`'s `exists_validQuerySubst_of_patternReads`, from
-  `Database.ViewsSound` — this file's own invariant — and nothing about the encoder. Two side
-  conditions on the source program's text come with it, `Pattern.Grounded` and
-  `Query.VarsKeyed`, and `encodeQuery_drops_literal_pattern` is the compiled refutation that
-  says neither can be dropped: `encodePattern` emits no atom for a source pattern that is a
-  bare literal, so the target fires where the source does not. What is left of this bullet is
-  `patternReads_of_encodeQuery`, the same encoder read-back as the first, **and one fact the
-  correspondence does not give**: `encodeBuild` mints its skolem over its arguments' *ids*, so
-  the entry a head writes is valued at ids where the correspondence delivers the source
-  application over the source terms — and `mem_terms_of_entrySound_skolem` shows `EntrySound`
-  there is *equivalent* to the minted id being a source term. At a program with no rule the
-  hypothesis is the source's own `evalAction`, and `satTarget_viewsSound` is that case
-  discharged.
+  "these are the writers" is a theorem rather than a reading of `encodeBuild`. This is the same
+  missing step `execM_viewsCover` needs, in the opposite direction, and `encodeBuild_fst` is
+  what makes it a *syntactic* read-back: the naming expression a build returns is the
+  expression it was given, so the entry is keyed on the source argument expressions and valued
+  at the source expression, both evaluated in the target.
 * `execM`'s rule firing is `FDatabase.runSaturateM`'s fixpoint, which is strictly weaker than
   `RunSaturated` (`execM_contained`: the enumerator under-fires), so it is that fixpoint the
-  two properties have to be proved from. -/
+  two properties have to be proved from — and it is the *source* side of the same alignment
+  that `entrySound_headBuild`'s `hfired` names: the source rule fired, at the substitution the
+  correspondence returns, and holds what its own head built. `RunRules` fires only the
+  substitutions valid in the pre-state, so this is a per-command alignment and not a fact about
+  either final state.
+
+**The rule head is closed, and was the case worth doubting.** `encodeBuild` mints its skolem
+over the arguments' *ids*, so `mem_terms_of_entrySound_skolem` makes the head's obligation
+equivalent to the minted id being a source term — which, read off the key, is the fact
+`encode_corresponds_invents_enode` refutes. It is not needed: the source reading the
+correspondence delivers is a *choice*, and taking it to be the ids themselves is legitimate
+because `Database.ViewsSound` reads a key column back as something congruent to the id and both
+endpoints of a congruence are present. `Encoding/Match.lean`'s `exists_validQuerySubst_at_ids`
+is that reading, `Expr.eval_transport` is why the source's head evaluation then gives the same
+term rather than a congruent one, and `entrySound_headBuild` is the case — with `hfired`, the
+source's own firing, as its only residue. `entrySound_headBuild_witness` is all of its
+hypotheses holding together at `wProgram`, at the view entry that run really wrote.
+
+At a program with no rule the hypothesis is the source's own `evalAction`, and
+`satTarget_viewsSound` is that case discharged. -/
 theorem execM_viewsSound {P : Program} {src : Database} {tgt : FDatabase}
     (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
     (htgt : execM (encode P) = some tgt) :

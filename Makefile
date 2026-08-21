@@ -119,7 +119,8 @@ nightly-local: nightly-uv nightly-rustup
 # `sameClass_cong_of_state`) — so what is left is exactly those properties:
 # `execM_viewLeader`, `execM_viewsCover` and `execM_unionsRead` for the forward half and
 # `execM_viewsSound` for the completeness half. The rule-head match correspondence of
-# `Encoding/Match.lean` is proved outright, encoder read-back included. Everywhere outside
+# `Encoding/Match.lean` is proved outright, encoder read-back included, and so is the
+# rule-head build case it feeds (`entrySound_headBuild`). Everywhere outside
 # `Encoding/` a `sorry` is a regression, and a new one inside it changes the count.
 LEAN_OPEN_SORRIES = 4
 LEAN_OPEN_SORRY_DIR = semantics/EgglogSemantics/Encoding

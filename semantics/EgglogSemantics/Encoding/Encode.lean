@@ -705,6 +705,66 @@ theorem encodeBuildArgs_cons_actions (e : Expr) (es : List Expr) (n : Nat) :
     (encodeBuildArgs (e :: es) n).2.1
       = (encodeBuild e n).2.1 ++ (encodeBuildArgs es (encodeBuild e n).2.2).2.1 := rfl
 
+/-! ### The naming expression is the source expression
+
+`encodeBuild` returns `.app f es` where `es` are the arguments' own naming expressions, and a
+leaf unchanged — so by induction the expression it hands back is the one it was given, and the
+counter it hands back is the one it was given too. "The skolem is the answer" is *this*: a head
+build reads nothing and renames nothing, so the entry it writes is keyed on the source
+argument expressions and valued at the source expression. What makes the two evaluate to the
+same term is that the target declares every source constructor as its skolem
+(`skolemDecl`), which is a fact about the two signatures and not about the encoder.
+-/
+
+mutual
+
+/-- **A build's naming expression is the expression itself.** -/
+theorem encodeBuild_fst : ∀ (e : Expr) (n : Nat), (encodeBuild e n).1 = e
+  | .lit _, _ => rfl
+  | .var _, _ => rfl
+  | .app f args, n => by
+      change Expr.app f (encodeBuildArgs args n).1 = _
+      rw [encodeBuildArgs_fst]
+
+@[inherit_doc encodeBuild_fst]
+theorem encodeBuildArgs_fst : ∀ (es : List Expr) (n : Nat), (encodeBuildArgs es n).1 = es
+  | [], _ => rfl
+  | e :: es, n => by
+      change (encodeBuild e n).1 :: (encodeBuildArgs es (encodeBuild e n).2.2).1 = _
+      rw [encodeBuild_fst, encodeBuildArgs_fst]
+
+end
+
+mutual
+
+/-- **A build consumes no fresh variables.** It emits `set`s over expressions it already has,
+so the counter passes through; only `encodeQuery` advances it. -/
+theorem encodeBuild_snd_snd : ∀ (e : Expr) (n : Nat), (encodeBuild e n).2.2 = n
+  | .lit _, _ => rfl
+  | .var _, _ => rfl
+  | .app _ args, n => by
+      change (encodeBuildArgs args n).2.2 = _
+      rw [encodeBuildArgs_snd_snd]
+
+@[inherit_doc encodeBuild_snd_snd]
+theorem encodeBuildArgs_snd_snd : ∀ (es : List Expr) (n : Nat), (encodeBuildArgs es n).2.2 = n
+  | [], _ => rfl
+  | e :: es, n => by
+      change (encodeBuildArgs es (encodeBuild e n).2.2).2.2 = _
+      rw [encodeBuildArgs_snd_snd, encodeBuild_snd_snd]
+
+end
+
+/-- **A build's entry is keyed on the source argument expressions and valued at the source
+expression.** `encodeBuild_app_actions` with `encodeBuildArgs_fst` applied, which is the form
+a read-back consumes. -/
+theorem encodeBuild_app_actions_eq (f : FnName) (args : List Expr) (n : Nat) :
+    (encodeBuild (.app f args) n).2.1
+      = (encodeBuildArgs args n).2.1 ++
+        [.set (termName f) (args ++ [.app f args]) [],
+         .set (viewName f) args [.app f args, fiatE]] := by
+  rw [encodeBuild_app_actions, encodeBuildArgs_fst]
+
 mutual
 
 /-- A build emits `set`s and nothing else. -/
