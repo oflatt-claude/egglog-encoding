@@ -423,12 +423,12 @@ impl RuleBuilder<'_> {
                 let (keys, vals) = all.split_at(plan.n_keys);
                 let ts = rb.read_counter(plan.ts_counter);
                 let mut default: Vec<WriteVal> =
-                    vals.iter().cloned().map(WriteVal::QueryEntry).collect();
+                    vals.iter().copied().map(WriteVal::QueryEntry).collect();
                 default.push(WriteVal::QueryEntry(ts.into()));
                 if plan.subsume {
-                    default.push(WriteVal::QueryEntry(
-                        core_relations::QueryEntry::Const(NOT_SUBSUMED),
-                    ));
+                    default.push(WriteVal::QueryEntry(core_relations::QueryEntry::Const(
+                        NOT_SUBSUMED,
+                    )));
                 }
                 let var = rb.lookup_or_insert(plan.table, keys, &default, plan.ret_val_col)?;
                 inner.mapping.insert(res.id, var.into());
@@ -442,7 +442,7 @@ impl RuleBuilder<'_> {
             self.query.add_rule.push(Box::new(move |inner, rb| {
                 let all = inner.convert_all(&args);
                 let (keys, rest) = all.split_at(plan.n_keys);
-                let default = rest[0].clone();
+                let default = rest[0];
                 let var = rb.lookup_with_default(plan.table, keys, default, plan.dst_col)?;
                 inner.mapping.insert(res.id, var.into());
                 Ok(())
