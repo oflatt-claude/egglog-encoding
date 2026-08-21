@@ -156,13 +156,9 @@ pub(crate) fn register_container_rebuild_from_spec(
     if let Some(proof_prim) = &spec.internal_rebuild_proof_prim {
         let id_counter = eg.backend.id_counter();
         // The global proof constructors, recovered from proof_state (repopulated
-        // from the `Proof` sort's `:internal-proof-names` on re-parse). A nested
-        // container is projected out by its own sort's `ProjAll_<CSort>`, derived
-        // from the same prefix.
+        // from the `Proof` sort's `:internal-proof-names` on re-parse).
         let names = &eg.proof_state.proof_names;
         let congr_all_name = names.congr_all_constructor.clone();
-        let mut proj_all_names = HashMap::default();
-        collect_container_proj_all_names(eg, &container_sort, &mut proj_all_names);
         let container_normalize_name = names.container_normalize_constructor.clone();
         let proof_sort: ArcSort = std::sync::Arc::new(EqSort {
             name: names.proof_datatype.clone(),
@@ -174,7 +170,6 @@ pub(crate) fn register_container_rebuild_from_spec(
                 proof_sort,
                 uf_names,
                 congr_all_name,
-                proj_all_names,
                 container_normalize_name,
                 id_counter,
             },
@@ -193,24 +188,6 @@ fn collect_element_uf_names(eg: &EGraph, sort: &ArcSort, out: &mut HashMap<Strin
             }
         } else if elem.is_eq_container_sort() {
             collect_element_uf_names(eg, &elem, out);
-        }
-    }
-}
-
-/// The `@ProjAll_<CSort>` projection of `sort` and every nested container sort,
-/// derived from the prefix `proof_state` recovers from `:internal-proof-names`.
-fn collect_container_proj_all_names(
-    eg: &EGraph,
-    sort: &ArcSort,
-    out: &mut HashMap<String, String>,
-) {
-    out.insert(
-        sort.name().to_string(),
-        eg.proof_state.proof_names.proj_all(sort.name()),
-    );
-    for elem in sort.inner_sorts() {
-        if elem.is_eq_container_sort() {
-            collect_container_proj_all_names(eg, &elem, out);
         }
     }
 }
@@ -344,8 +321,6 @@ struct ContainerRebuildProof {
     uf_names: HashMap<String, String>,
     /// `CongrAll` proof constructor name
     congr_all_name: String,
-    /// container-sort name -> `@ProjAll_<CSort>` name (all reachable containers)
-    proj_all_names: HashMap<String, String>,
     /// `ContainerNormalize` proof constructor name
     container_normalize_name: String,
     /// Counter for minting fresh proof ids (see [`mint_proof_row`]).
@@ -402,7 +377,8 @@ fn rebuild_container_proof_rec(
     // `rebuild_with_leaders`.
     let mut changed: HashMap<Value, Value> = HashMap::default();
     let mut child_proofs: Vec<Value> = vec![];
-    let rebuilt = rebuild_leaves_with_proofs(state, prim, sort, value, &mut changed, &mut child_proofs)?;
+    let rebuilt =
+        rebuild_leaves_with_proofs(state, prim, sort, value, &mut changed, &mut child_proofs)?;
 
     let congr_all_action = state.registry().lookup_table(&prim.congr_all_name)?.clone();
     let mut current = base;
