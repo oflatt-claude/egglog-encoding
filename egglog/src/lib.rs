@@ -2318,7 +2318,12 @@ impl EGraph {
                     return Err(Error::ExpectFail(span));
                 }
             }
-            ResolvedNCommand::Input { span, name, file } => {
+            ResolvedNCommand::Input {
+                span,
+                name,
+                file,
+                proof_base,
+            } => {
                 // An encoded program (term/proof mode, or a replayed desugared
                 // program) keeps `(input …)` targeting the encoded *term relation*,
                 // loaded natively into the encoded tables; a plain program targets a
@@ -2328,7 +2333,7 @@ impl EGraph {
                     .get(&name)
                     .is_some_and(|f| f.is_relation_term())
                 {
-                    self.native_input(span, &name, file)?;
+                    self.native_input(span, &name, file, proof_base)?;
                 } else {
                     self.input_file(span, &name, file)?;
                 }
@@ -2574,7 +2579,13 @@ impl EGraph {
     /// * custom `:merge` / `:no-merge` (`term_inputs == view_inputs + 2`) — term
     ///   row `(f children… output term-id) Unit` and view row `(children… output
     ///   proof)`.
-    fn native_input(&mut self, span: Span, func_name: &str, file: String) -> Result<(), Error> {
+    fn native_input(
+        &mut self,
+        span: Span,
+        func_name: &str,
+        file: String,
+        proof_base: Option<usize>,
+    ) -> Result<(), Error> {
         // The encoded term relation keeps the user's original name. Its last input
         // column is the minted term id; the columns before it are the CSV base
         // columns (children, plus a custom function's output value).
@@ -2585,7 +2596,6 @@ impl EGraph {
         let f_id = term.backend_id;
         let term_input = term.schema.input.clone();
         let n_term_input = term_input.len();
-        let term_id_sort = term_input[n_term_input - 1].name().to_string();
         let csv_sorts: Vec<ArcSort> = term_input[..n_term_input - 1].to_vec();
 
         // Locate the view by its `:internal-term-constructor` back-reference (as
@@ -2626,19 +2636,28 @@ impl EGraph {
             })
             .collect();
 
-        // The term-id sort's fiat relation, named off the prefix the `Proof`
-        // sort's `:internal-proof-names` records.
-        let fiat_table = proofs.then(|| {
-            let fiat = self.proof_state.proof_names.fiat(&term_id_sort);
-            self.functions
-                .get(&fiat)
-                .unwrap_or_else(|| panic!("no fiat relation for sort {term_id_sort}"))
-                .backend_id
+        // Each row's existence is justified by the per-row action `lower_inputs`
+        // put in the program proof checking reads, named by position like every
+        // other fiat, so nothing here names the term the row built. The encoder
+        // stamped where those actions start onto the command.
+        let fiat_term = proofs.then(|| {
+            let relation = self.proof_state.proof_names.fiat_term_constructor.clone();
+            let table = self
+                .functions
+                .get(&relation)
+                .unwrap_or_else(|| panic!("no fiat-term relation"))
+                .backend_id;
+            let base = proof_base.expect("an encoded input carries where its rows start");
+            // A constructor row is the whole per-row action; a custom row is the
+            // `set`'s row node, which follows its argument and value nodes — one
+            // literal each, so one per CSV column.
+            let node = if is_constructor { 0 } else { csv_sorts.len() };
+            (table, base, node)
         });
 
         let num_facts = value_rows.len();
         let mut batch: Vec<(egglog_bridge::FunctionId, Vec<Value>)> = Vec::new();
-        for value_row in value_rows {
+        for (row_index, value_row) in value_rows.into_iter().enumerate() {
             let fv = self.backend.fresh_id();
             // Term-relation row: CSV columns (children [+ output]) + term id + Unit.
             let mut frow = value_row.clone();
@@ -2646,11 +2665,12 @@ impl EGraph {
             frow.push(unit_val);
             batch.push((f_id, frow));
 
-            let view_proof = if let Some(fiat_id) = fiat_table {
-                // Fiat proof of the base fact: `@Fiat_<Sort>(fv, fv)` (see
-                // `fiat_reflexive_proof`).
+            let view_proof = if let Some((fiat_id, base, node)) = fiat_term {
+                // `(FiatTerm <this row's action> <node> pf)`.
                 let pf = self.backend.fresh_id();
-                batch.push((fiat_id, vec![fv, fv, pf, unit_val]));
+                let at = self.backend.base_values().get((base + row_index) as i64);
+                let node = self.backend.base_values().get(node as i64);
+                batch.push((fiat_id, vec![at, node, pf, unit_val]));
                 pf
             } else {
                 unit_val

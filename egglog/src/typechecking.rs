@@ -843,10 +843,16 @@ impl EGraph {
                     exprs,
                 }
             }
-            NCommand::Input { span, name, file } => ResolvedNCommand::Input {
+            NCommand::Input {
+                span,
+                name,
+                file,
+                proof_base,
+            } => ResolvedNCommand::Input {
                 span: span.clone(),
                 name: name.clone(),
                 file: file.clone(),
+                proof_base: *proof_base,
             },
             NCommand::UserDefined(span, name, exprs) => {
                 ResolvedNCommand::UserDefined(span.clone(), name.clone(), exprs.clone())

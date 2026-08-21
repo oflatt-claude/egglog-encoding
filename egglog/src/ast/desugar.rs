@@ -231,8 +231,18 @@ pub(crate) fn desugar_command(
             }
             return Ok(vec![NCommand::Fail(span, desugared)]);
         }
-        Command::Input { span, name, file } => {
-            vec![NCommand::Input { span, name, file }]
+        Command::Input {
+            span,
+            name,
+            file,
+            proof_base,
+        } => {
+            vec![NCommand::Input {
+                span,
+                name,
+                file,
+                proof_base,
+            }]
         }
         Command::UserDefined(span, name, args) => {
             vec![NCommand::UserDefined(span, name, args)]

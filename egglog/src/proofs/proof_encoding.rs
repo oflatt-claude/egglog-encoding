@@ -471,9 +471,9 @@ impl<'a> ProofInstrumentor<'a> {
     fn global_actions_in(&self, command: &ResolvedNCommand) -> Result<usize, Error> {
         Ok(match command {
             ResolvedNCommand::CoreAction(_) => 1,
-            ResolvedNCommand::Input { span, name, file } => {
-                Self::input_actions(self.egraph, span, name, file)?.len()
-            }
+            ResolvedNCommand::Input {
+                span, name, file, ..
+            } => Self::input_actions(self.egraph, span, name, file)?.len(),
             _ => 0,
         })
     }
@@ -484,7 +484,10 @@ impl<'a> ProofInstrumentor<'a> {
     ) -> Result<Vec<ResolvedNCommand>, Error> {
         let mut lowered = Vec::with_capacity(program.len());
         for command in program {
-            if let ResolvedNCommand::Input { span, name, file } = &command {
+            if let ResolvedNCommand::Input {
+                span, name, file, ..
+            } = &command
+            {
                 lowered.extend(
                     Self::input_actions(egraph, span, name, file)?
                         .into_iter()
@@ -1215,6 +1218,17 @@ impl<'a> ProofInstrumentor<'a> {
         fv: &str,
         sort: &str,
     ) -> String {
+        // Only a base value is still named by a fiat: its term is the value
+        // itself, so proof extraction rebuilds it without reading a term
+        // relation. Everything on an eq-sort is named by position instead.
+        debug_assert!(
+            self.egraph
+                .type_info
+                .get_sort_by_name(sort)
+                .is_none_or(|sort| !sort.is_eq_sort()),
+            "`{sort}` is an eq-sort, so naming its value in a fiat would make \
+             proof extraction rebuild a term for it"
+        );
         let fiat = self.fiat_constructor(sort);
         let proof = self.mint(stmts, &fiat, &format!("{fv} {fv}"));
         self.mark_reflexive(&proof);
@@ -2527,17 +2541,21 @@ impl<'a> ProofInstrumentor<'a> {
                 }
                 res.push(Command::Fail(span.clone(), encoded));
             }
-            ResolvedNCommand::Input { name, .. } => {
+            ResolvedNCommand::Input { .. } => {
                 // Loaded natively at run time (see `EGraph::native_input`), inserting
                 // straight into the encoded tables. Pass the command through so
-                // `run_command` dispatches it. The load writes a reflexive fiat per
-                // row, so the loaded sort's fiat relation has to be declared here:
-                // nothing the encoder emits mentions it.
-                if self.proofs_enabled() {
-                    let sort = self.term_sort(name);
-                    self.fiat_constructor(&sort);
+                // `run_command` dispatches it. Each row's fiat names the per-row
+                // action `lower_inputs` put in the program proof checking reads,
+                // so stamp where this input's rows start there. It has to ride on
+                // the command: the encoded program is re-parsed and re-run
+                // elsewhere, by an e-graph that did no encoding of its own.
+                let mut command = command.to_command().make_unresolved();
+                if self.proofs_enabled()
+                    && let Command::Input { proof_base, .. } = &mut command
+                {
+                    *proof_base = Some(self.global_action);
                 }
-                res.push(command.to_command().make_unresolved());
+                res.push(command);
             }
             ResolvedNCommand::Extract(span, expr, variants) => {
                 // Instrument the expressions to use view tables (like actions, not facts)

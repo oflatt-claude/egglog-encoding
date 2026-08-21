@@ -167,6 +167,11 @@ where
         span: Span,
         name: String,
         file: String,
+        /// `:internal-proof-base`: where this input's per-row actions start in
+        /// the program proof checking reads. The rows are loaded at run time,
+        /// possibly by an e-graph that did no encoding, so the fiat justifying
+        /// each row gets its position from here rather than from encoder state.
+        proof_base: Option<usize>,
     },
     UserDefined(Span, String, Vec<Expr>),
 }
@@ -273,10 +278,16 @@ where
                 span.clone(),
                 cmds.iter().map(|cmd| cmd.to_command()).collect(),
             ),
-            GenericNCommand::Input { span, name, file } => GenericCommand::Input {
+            GenericNCommand::Input {
+                span,
+                name,
+                file,
+                proof_base,
+            } => GenericCommand::Input {
                 span: span.clone(),
                 name: name.clone(),
                 file: file.clone(),
+                proof_base: *proof_base,
             },
             GenericNCommand::UserDefined(span, name, exprs) => {
                 GenericCommand::UserDefined(span.clone(), name.clone(), exprs.clone())
@@ -409,9 +420,17 @@ where
                     .map(|cmd| cmd.visit_exprs(&mut *f))
                     .collect(),
             ),
-            GenericNCommand::Input { span, name, file } => {
-                GenericNCommand::Input { span, name, file }
-            }
+            GenericNCommand::Input {
+                span,
+                name,
+                file,
+                proof_base,
+            } => GenericNCommand::Input {
+                span,
+                name,
+                file,
+                proof_base,
+            },
             GenericNCommand::UserDefined(span, name, exprs) => {
                 // We can't map `f` over UserDefined because UserDefined always assumes plain `Expr`s
                 GenericNCommand::UserDefined(span, name, exprs)
@@ -1073,6 +1092,8 @@ where
         span: Span,
         name: String,
         file: String,
+        /// See [`GenericNCommand::Input`].
+        proof_base: Option<usize>,
     },
     /// Extract and output a set of expressions to a file.
     Output {
@@ -1315,8 +1336,13 @@ where
                 span: _,
                 name,
                 file,
+                proof_base,
             } => {
-                write!(f, "(input {name} {file:?})")
+                write!(f, "(input {name} {file:?}")?;
+                if let Some(base) = proof_base {
+                    write!(f, " :internal-proof-base {base}")?;
+                }
+                write!(f, ")")
             }
             GenericCommand::Output {
                 span: _,
@@ -2142,10 +2168,16 @@ where
                 GenericCommand::PrintFunction(span, fun(name), n, file, mode)
             }
             GenericCommand::PrintSize(span, name) => GenericCommand::PrintSize(span, name.map(fun)),
-            GenericCommand::Input { span, name, file } => GenericCommand::Input {
+            GenericCommand::Input {
+                span,
+                name,
+                file,
+                proof_base,
+            } => GenericCommand::Input {
                 span,
                 name: fun(name),
                 file,
+                proof_base,
             },
             GenericCommand::Output { span, file, exprs } => {
                 GenericCommand::Output { span, file, exprs }
@@ -2415,9 +2447,17 @@ where
                 GenericCommand::PrintFunction(span, name, n, file, mode)
             }
             GenericCommand::PrintSize(span, name) => GenericCommand::PrintSize(span, name),
-            GenericCommand::Input { span, name, file } => {
-                GenericCommand::Input { span, name, file }
-            }
+            GenericCommand::Input {
+                span,
+                name,
+                file,
+                proof_base,
+            } => GenericCommand::Input {
+                span,
+                name,
+                file,
+                proof_base,
+            },
             GenericCommand::Output { span, file, exprs } => GenericCommand::Output {
                 span,
                 file,

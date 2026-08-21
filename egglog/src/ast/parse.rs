@@ -983,7 +983,21 @@ impl Parser {
                     span,
                     name: name.expect_atom("table name")?,
                     file: file.expect_string("file name")?,
+                    proof_base: None,
                 }],
+                // `:internal-proof-base` survives a re-parse of the encoded
+                // program, which is where the loader reads it (see
+                // `EGraph::native_input`).
+                [name, file, base_kw, base]
+                    if base_kw.expect_atom("keyword")? == ":internal-proof-base" =>
+                {
+                    vec![Command::Input {
+                        span,
+                        name: name.expect_atom("table name")?,
+                        file: file.expect_string("file name")?,
+                        proof_base: Some(base.expect_uint("proof base")?),
+                    }]
+                }
                 _ => return error!(span, "usage: (input <table name> \"<file name>\")"),
             },
             "output" => match tail {
