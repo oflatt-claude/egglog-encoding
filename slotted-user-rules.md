@@ -994,8 +994,8 @@ Curated cases, and what each is for:
 | `B1`–`B4` | binders: chaining through one, α-equivalence, the same slot literal on two binders |
 | `M1`,`M6` | shapes `tests/slotted-user-rules.egg` teaches that nothing else covered: a swapped action, and one shared variable across two operators |
 
-`tests/slotted-user-rules.egg` is the readable form of this same recipe, so its
-header maps each of its sections to the case above that covers the shape. Keep the
+`tests/slotted-user-rules.egg` is the readable form of this same recipe, so each of
+its sections names the case above that covers its shape. Keep the
 two in step — the hand-written file passing its own assertions only says it does
 what it expects, and it had drifted to the three-case reading once already. One
 shape there, `M7`, cannot be covered as the oracle stands: it puts a slot literal
