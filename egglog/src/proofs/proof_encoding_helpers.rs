@@ -28,6 +28,9 @@ pub(crate) struct EncodingNames {
     /// The fiat justification of a top-level `union`, which names the global
     /// action it came from rather than its two endpoints.
     pub(crate) fiat_union_constructor: String,
+    /// The fiat justification that a term a top-level action built exists, which
+    /// names where that term is written rather than naming the term.
+    pub(crate) fiat_term_constructor: String,
     /// The sorts [`ProofInstrumentor::fiat_constructor`] has declared.
     pub(crate) fiat_declared: HashSet<String>,
     /// Prefix of the rule proofs carrying their body premises inline: premise
@@ -434,6 +437,7 @@ impl EncodingNames {
             proof_datatype: symbol_gen.fresh("Proof"),
             fiat_prefix: symbol_gen.fresh("Fiat"),
             fiat_union_constructor: symbol_gen.fresh("FiatUnion"),
+            fiat_term_constructor: symbol_gen.fresh("FiatTerm"),
             fiat_declared: HashSet::default(),
             rule_fused_prefix: symbol_gen.fresh("Rule"),
             rule_fused_declared: HashSet::default(),
@@ -717,6 +721,7 @@ impl ProofInstrumentor<'_> {
             ref proof_datatype,
             ref fiat_prefix,
             ref fiat_union_constructor,
+            ref fiat_term_constructor,
             ref rule_link_constructor,
             ref merge_fn_idx_constructor,
             ref merge_fn_row_constructor,
@@ -749,6 +754,13 @@ impl ProofInstrumentor<'_> {
 ;; neither of them:
 ;;   (FiatUnion <global action index> <0 or 1> <proof>)
 (function {fiat_union_constructor} (i64 i64 {proof_datatype}) Unit :no-merge :internal-hidden :internal-term-node)
+
+;; Fiat justification that a term a top-level action builds exists, stating
+;; `t = t`. It names where the term is written — which global action, and which
+;; node of it in `action_exprs` order — so conversion evaluates that node instead
+;; of the row naming the term:
+;;   (FiatTerm <global action index> <expression index> <proof>)
+(function {fiat_term_constructor} (i64 i64 {proof_datatype}) Unit :no-merge :internal-hidden :internal-term-node)
 
 ;; Fiat justification for globals and primitives, gives two terms t1 = t2 for the
 ;; proposition being justified. Its endpoints are values of one sort, so there is
@@ -1876,4 +1888,48 @@ pub(crate) fn body_expr_index(body: &[ResolvedFact], expr: &ResolvedExpr) -> Opt
     body_exprs(body)
         .into_iter()
         .position(|candidate| std::ptr::eq(candidate, expr))
+}
+
+/// Every expression node of a top-level action, in a canonical pre-order: the
+/// action's own expressions in written order, and each call's arguments after
+/// the call itself.
+///
+/// A reflexive fiat names the term it is about by its index into this list (see
+/// [`ProofInstrumentor::reflexive_for_justification`]), and proof conversion
+/// evaluates the same node to recover the term. Both sides go through this
+/// function, so their numbering cannot drift.
+///
+/// `remove_globals` rewrites a global reference into a nullary call, which is
+/// one node either way, so the encoded action numbers the same as the one proof
+/// checking reads.
+pub(crate) fn action_exprs(action: &ResolvedAction) -> Vec<&ResolvedExpr> {
+    fn walk<'a>(expr: &'a ResolvedExpr, out: &mut Vec<&'a ResolvedExpr>) {
+        out.push(expr);
+        if let ResolvedExpr::Call(_, _, args) = expr {
+            for arg in args {
+                walk(arg, out);
+            }
+        }
+    }
+    let mut out = vec![];
+    match action {
+        ResolvedAction::Let(_, _, expr) | ResolvedAction::Expr(_, expr) => walk(expr, &mut out),
+        ResolvedAction::Set(_, _, args, value) => {
+            for arg in args {
+                walk(arg, &mut out);
+            }
+            walk(value, &mut out);
+        }
+        ResolvedAction::Change(_, _, _, args) => {
+            for arg in args {
+                walk(arg, &mut out);
+            }
+        }
+        ResolvedAction::Union(_, lhs, rhs) => {
+            walk(lhs, &mut out);
+            walk(rhs, &mut out);
+        }
+        ResolvedAction::Panic(..) => {}
+    }
+    out
 }

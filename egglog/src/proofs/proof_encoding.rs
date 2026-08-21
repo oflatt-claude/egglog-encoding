@@ -257,6 +257,13 @@ pub(crate) struct ProofInstrumentor<'a> {
     /// conversion recovers them by evaluating the action. Advanced per command
     /// by [`ProofInstrumentor::global_actions_in`].
     global_action: usize,
+    /// Which node of the current action, in
+    /// [`action_exprs`](crate::proofs::proof_encoding_helpers::action_exprs)
+    /// order, is being instrumented. A reflexive fiat names this rather than the
+    /// term it is about.
+    action_expr: usize,
+    /// That action's nodes by address, for finding the index of the one in hand.
+    action_expr_index: HashMap<usize, usize>,
 }
 
 /// Where a variable a rule body binds gets its reflexive `t = t` proof from: a
@@ -426,6 +433,8 @@ impl<'a> ProofInstrumentor<'a> {
         let global_action = egraph.proof_state.global_actions_numbered;
         Self {
             global_action,
+            action_expr: 0,
+            action_expr_index: HashMap::default(),
             egraph,
             reflexive: HashSet::default(),
             deferred: HashMap::default(),
@@ -894,7 +903,7 @@ impl<'a> ProofInstrumentor<'a> {
         // with; whatever is still deferred reached no statement.
         self.drop_pending_lookups();
         let row_proof = if self.egraph.proof_state.proofs_enabled {
-            let fresh = self.reflexive_for_justification(&mut emit, "", "");
+            let fresh = self.reflexive_for_justification(&mut emit);
             // Keep the proof column stable: when the merged output equals a
             // colliding premise's output (as with idempotent `min`/`max`/... merges
             // that keep one input), reuse that premise's existing proof so the row
@@ -1143,7 +1152,7 @@ impl<'a> ProofInstrumentor<'a> {
     /// justification's proof states whatever its column says and is marked
     /// reflexive regardless, so calling this at an equality — a `union`'s — would
     /// have the compositions built on it silently drop a real proof.
-    fn reflexive_for_justification(&mut self, emit: &mut Emit, fv: &str, sort: &str) -> String {
+    fn reflexive_for_justification(&mut self, emit: &mut Emit) -> String {
         match emit.justification {
             // The head's own conclusion here is `fv = fv` (`fv`/`sort` unused:
             // the proposition comes from the column).
@@ -1152,7 +1161,13 @@ impl<'a> ProofInstrumentor<'a> {
                 self.mark_reflexive(&proof);
                 proof
             }
-            Justification::Fiat => self.fiat_reflexive_proof(emit.stmts, fv, sort),
+            Justification::Fiat => {
+                let fiat_term = self.proof_names().fiat_term_constructor.clone();
+                let (at, node) = (self.global_action, self.action_expr);
+                let proof = self.mint(emit.stmts, &fiat_term, &format!("{at} {node}"));
+                self.mark_reflexive(&proof);
+                proof
+            }
             // Term-free: no endpoint named (`fv`/`sort` unused). The checker
             // reconstructs the conclusion from the merge body + premise outputs.
             Justification::MergeIdx(fn_name, p1, p2, idx) => {
@@ -1219,7 +1234,7 @@ impl<'a> ProofInstrumentor<'a> {
             }
             None => {
                 let sort = self.term_sort(&func_type.name);
-                self.reflexive_for_justification(emit, value, &sort)
+                self.reflexive_for_justification(emit)
             }
         }
     }
@@ -1761,7 +1776,7 @@ impl<'a> ProofInstrumentor<'a> {
         );
         let view_proof_var = if self.egraph.proof_state.proofs_enabled {
             let sort = self.term_sort(&func_type.name);
-            self.reflexive_for_justification(emit, &fv, &sort)
+            self.reflexive_for_justification(emit)
         } else {
             "()".to_string()
         };
@@ -1811,7 +1826,7 @@ impl<'a> ProofInstrumentor<'a> {
         // chain below, so a head that numbers its proofs instead of composing
         // them writes no row for it: conversion recovers it from the column.
         let to_dedup = emit.head.composes().then(|| {
-            let nat_prf = self.reflexive_for_justification(emit, &fv_nat, &sort);
+            let nat_prf = self.reflexive_for_justification(emit);
             let mut steps = vec![];
             for (i, arg) in args.iter().enumerate() {
                 if let Some(conn) = &arg.connector {
@@ -2039,6 +2054,26 @@ impl<'a> ProofInstrumentor<'a> {
         emit: &mut Emit,
         scope: &Scope,
     ) -> Operand {
+        // A reflexive fiat minted under this node names it, so record which one
+        // we are at and restore the enclosing one on the way out.
+        let enclosing = self.action_expr;
+        if let Some(&at) = self
+            .action_expr_index
+            .get(&(std::ptr::from_ref(expr) as usize))
+        {
+            self.action_expr = at;
+        }
+        let operand = self.instrument_action_expr_inner(expr, emit, scope);
+        self.action_expr = enclosing;
+        operand
+    }
+
+    fn instrument_action_expr_inner(
+        &mut self,
+        expr: &ResolvedExpr,
+        emit: &mut Emit,
+        scope: &Scope,
+    ) -> Operand {
         match expr {
             ResolvedExpr::Lit(_, lit) => Operand::plain(format!("{lit}")),
             ResolvedExpr::Var(_, resolved_var) => scope.read(&resolved_var.name),
@@ -2130,6 +2165,17 @@ impl<'a> ProofInstrumentor<'a> {
         let symbol_gen = &mut self.egraph.parser.symbol_gen;
         let mut fresh = || symbol_gen.fresh("union_operand");
         let plan = HeadPlan::new(actions, &mut fresh);
+        // Numbered over the planned actions, not the written ones: normalization
+        // lifts a union's constructor operands into fresh `let`s, so the two do
+        // not have the same nodes. Conversion plans the same source the same way
+        // to get the same numbering (see `ProofStore::action_term`).
+        self.action_expr_index = plan
+            .actions
+            .iter()
+            .flat_map(crate::proofs::proof_encoding_helpers::action_exprs)
+            .enumerate()
+            .map(|(at, expr)| (std::ptr::from_ref(expr) as usize, at))
+            .collect();
         // A rule head is a format proof conversion can replay, so its proofs are
         // named by column; everywhere else the encoder composes them itself.
         let mut head = match justification {

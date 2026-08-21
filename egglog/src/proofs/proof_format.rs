@@ -159,6 +159,10 @@ enum RawProof {
     /// whether the edge runs against that action's operand order. Conversion
     /// evaluates the action to recover the equality, so the row stores no term.
     FiatUnion(usize, bool),
+    /// A term a top-level action builds, named by where it is written rather
+    /// than by the term: which global action, and which node of it in
+    /// `action_exprs` order. States `t = t`; conversion evaluates that node.
+    FiatTerm(usize, usize),
     /// Given a rule name and proofs for each premise, produces a proof of a
     /// grounded equality from the head of the rule. The substitution is implicit —
     /// in [`Justification::Rule`] it is explicit.
@@ -493,7 +497,11 @@ impl RawProofStore {
                 build,
             })
         };
-        if head == names.fiat_union_constructor {
+        if head == names.fiat_term_constructor {
+            shape(2, &[], |store, args, _| {
+                RawProof::FiatTerm(store.parse_index(args[0]), store.parse_index(args[1]))
+            })
+        } else if head == names.fiat_union_constructor {
             shape(2, &[], |store, args, _| {
                 RawProof::FiatUnion(store.parse_index(args[0]), store.parse_index(args[1]) != 0)
             })
@@ -834,6 +842,53 @@ impl ProofStore {
         if swapped { (rhs, lhs) } else { (lhs, rhs) }
     }
 
+    /// The term written at node `node` of the `at`th global action of `prog`.
+    ///
+    /// A reflexive fiat names that position instead of the term, so the term is
+    /// recovered by evaluating the node — under the global bindings, since it
+    /// may name a global.
+    fn action_term(
+        &mut self,
+        prog: &[ResolvedNCommand],
+        globals: &HashMap<String, TermId>,
+        at: usize,
+        node: usize,
+    ) -> TermId {
+        let action = crate::proofs::proof_checker::gather_global_actions(prog)
+            .nth(at)
+            .unwrap_or_else(|| {
+                panic!("a fiat names global action {at}, which the program does not have")
+            });
+        // The encoder numbers the *planned* action, so plan this one the same
+        // way. Only the shape matters here, so the lifted `let`s get a local
+        // counter rather than the encoder's fresh names.
+        let mut next = 0usize;
+        let mut fresh = || {
+            next += 1;
+            format!("@plan{next}")
+        };
+        let plan = crate::proofs::proof_head::HeadPlan::new(
+            std::slice::from_ref(action),
+            &mut fresh,
+        );
+        let exprs: Vec<&crate::ast::ResolvedExpr> = plan
+            .actions
+            .iter()
+            .flat_map(crate::proofs::proof_encoding_helpers::action_exprs)
+            .collect();
+        let expr = exprs.get(node).unwrap_or_else(|| {
+            panic!("a fiat names node {node} of global action {at}, which has {} nodes", exprs.len())
+        });
+        crate::proofs::proof_checker::eval_expr_with_subst(
+            "global_action",
+            expr,
+            &mut self.term_dag,
+            globals,
+        )
+        .unwrap_or_else(|err| panic!("could not evaluate node {node} of global action {at}: {err}"))
+        .0
+    }
+
     /// Get the [`Proof`] with the given id.
     /// Panics if the id is invalid (if it came from another proof store, for example).
     pub fn get(&self, proof_id: ProofId) -> &Proof {
@@ -996,6 +1051,13 @@ impl ProofStore {
                 let (lhs, rhs) = self.union_endpoints(prog, globals, *at, *swapped);
                 Proof {
                     proposition: Proposition::new(lhs, rhs),
+                    justification: Justification::Fiat,
+                }
+            }
+            RawProof::FiatTerm(at, node) => {
+                let term = self.action_term(prog, globals, *at, *node);
+                Proof {
+                    proposition: Proposition::new(term, term),
                     justification: Justification::Fiat,
                 }
             }

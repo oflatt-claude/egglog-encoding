@@ -859,6 +859,13 @@ impl EGraph {
                 // Preserve the symbol generator so that fresh symbols
                 // generated after pop don't collide with ones generated before pop.
                 std::mem::swap(&mut self.parser.symbol_gen, &mut e.parser.symbol_gen);
+                // Likewise the global-action numbering a fiat names: the program
+                // proof checking reads keeps what the popped scope contributed,
+                // so the count it is an index into must not go back either.
+                std::mem::swap(
+                    &mut self.proof_state.global_actions_numbered,
+                    &mut e.proof_state.global_actions_numbered,
+                );
                 *self = *e;
                 Ok(())
             }
