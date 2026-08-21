@@ -395,6 +395,25 @@ impl RuleBuilder<'_> {
     ) -> Variable {
         let args = args.to_vec();
         let res = self.new_var(ret_ty);
+        // A mint cannot fail, so it needs no panic fallback and no per-row
+        // external dispatch: lower it to the batched instruction.
+        if let Some(mint) = self.egraph.mint_insert_plan(func) {
+            self.query.add_rule.push(Box::new(move |inner, rb| {
+                let args = inner.convert_all(&args);
+                let var = rb.mint_insert(
+                    mint.table,
+                    &args,
+                    mint.tail.clone(),
+                    mint.n_cols,
+                    mint.ts_col,
+                    mint.counter,
+                    mint.ts_counter,
+                )?;
+                inner.mapping.insert(res.id, var.into());
+                Ok(())
+            }));
+            return res;
+        }
         // External functions that fail on the RHS of a rule should cause a panic.
         let panic_fn = self.egraph.new_panic_lazy(panic_msg);
         self.query.add_rule.push(Box::new(move |inner, rb| {
