@@ -1821,3 +1821,40 @@ impl crate::constraint::TypeConstraint for DropReflexiveStepTypeConstraint {
         constraints
     }
 }
+
+/// Every expression node of a rule body, in a canonical pre-order: the facts in
+/// written order, each `Eq` fact's two sides left to right, and each call's
+/// arguments after the call itself.
+///
+/// A body primitive that reads an element out of a container is named by its
+/// index into this list (see [`ProofInstrumentor::request_element_anchor`]), and
+/// proof conversion looks the resolved call back up the same way. Both sides go
+/// through this function, so their numbering cannot drift.
+pub(crate) fn body_exprs(body: &[ResolvedFact]) -> Vec<&ResolvedExpr> {
+    fn walk<'a>(expr: &'a ResolvedExpr, out: &mut Vec<&'a ResolvedExpr>) {
+        out.push(expr);
+        if let ResolvedExpr::Call(_, _, args) = expr {
+            for arg in args {
+                walk(arg, out);
+            }
+        }
+    }
+    let mut out = vec![];
+    for fact in body {
+        match fact {
+            ResolvedFact::Fact(expr) => walk(expr, &mut out),
+            ResolvedFact::Eq(_, lhs, rhs) => {
+                walk(lhs, &mut out);
+                walk(rhs, &mut out);
+            }
+        }
+    }
+    out
+}
+
+/// The index `expr` has in [`body_exprs`], by node identity.
+pub(crate) fn body_expr_index(body: &[ResolvedFact], expr: &ResolvedExpr) -> Option<usize> {
+    body_exprs(body)
+        .into_iter()
+        .position(|candidate| std::ptr::eq(candidate, expr))
+}

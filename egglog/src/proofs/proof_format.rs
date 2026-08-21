@@ -1363,6 +1363,28 @@ impl ProofStore {
         if child_lhs == child_rhs {
             return current;
         }
+        current = self.congr_all_direct(current, child_id, child_lhs, child_rhs);
+        self.congr_all_nested(current, child_id)
+    }
+
+    /// Whether `term` is a container application, i.e. one whose head has a
+    /// normalizer. The same lookup answers both whether [`Self::expand_congr_all`]
+    /// recurses into it and how to canonicalize it afterwards.
+    fn is_container_term(&self, term: TermId) -> bool {
+        matches!(self.term_dag.get(term), Term::App(head, _)
+            if self.container_normalizers.contains_key(head))
+    }
+
+    /// Rewrite `child_lhs` to `child_rhs` at every direct child of `current`'s
+    /// right-hand side.
+    fn congr_all_direct(
+        &mut self,
+        base_id: ProofId,
+        child_id: ProofId,
+        child_lhs: TermId,
+        child_rhs: TermId,
+    ) -> ProofId {
+        let mut current = base_id;
         loop {
             let lhs = self.id_to_proof[current].lhs();
             let rhs = self.id_to_proof[current].rhs();
@@ -1383,6 +1405,73 @@ impl ProofStore {
             });
         }
         current
+    }
+
+    /// Rewrite inside every container child of `current`'s right-hand side, then
+    /// canonicalize that child and congruence it back into its parent.
+    ///
+    /// The value-level rebuild recurses through container elements and treats an
+    /// eq-sort element as atomic (see `rebuild_container_value_rec`), so the
+    /// proof follows containers to the same depth and stops where it does. A
+    /// child's canonical form fixes its parent's element order, so the child is
+    /// normalized before the step that puts it back.
+    fn congr_all_nested(&mut self, base_id: ProofId, child_id: ProofId) -> ProofId {
+        let mut current = base_id;
+        let mut child_index = 0;
+        loop {
+            let rhs = self.id_to_proof[current].rhs();
+            let Term::App(_, children) = self.term_dag.get(rhs) else {
+                return current;
+            };
+            let Some(nested) = children.get(child_index).copied() else {
+                return current;
+            };
+            child_index += 1;
+            if !self.is_container_term(nested) {
+                continue;
+            }
+            // The reflexive base the nested rewrite stands on. At conversion the
+            // term is in hand, so the child's position is known here — which is
+            // why the encoding needs to record none of this.
+            let nested_base = self.id_to_proof.push(Proof {
+                proposition: Proposition::new(nested, nested),
+                justification: Justification::Proj {
+                    proof: current,
+                    child_index: child_index - 1,
+                },
+            });
+            let rewritten = self.expand_congr_all(nested_base, child_id);
+            let rewritten = self.normalize_step(rewritten);
+            let new_nested = self.id_to_proof[rewritten].rhs();
+            if new_nested == nested {
+                continue;
+            }
+            let lhs = self.id_to_proof[current].lhs();
+            let new_rhs = self.replace_term_child(rhs, child_index - 1, new_nested);
+            current = self.id_to_proof.push(Proof {
+                proposition: Proposition::new(lhs, new_rhs),
+                justification: Justification::Congr {
+                    proof: current,
+                    child_index: child_index - 1,
+                    child_proof: rewritten,
+                },
+            });
+        }
+    }
+
+    /// `proof` followed by the canonicalization of its right-hand side, or
+    /// `proof` unchanged when that container is already canonical.
+    fn normalize_step(&mut self, proof: ProofId) -> ProofId {
+        let lhs = self.id_to_proof[proof].lhs();
+        let rhs = self.id_to_proof[proof].rhs();
+        let normalized = self.normalize_container(rhs);
+        if normalized == rhs {
+            return proof;
+        }
+        self.id_to_proof.push(Proof {
+            proposition: Proposition::new(lhs, normalized),
+            justification: Justification::ContainerNormalize { proof },
+        })
     }
 
     /// A congruence step's middle-term check, the counterpart of the one
