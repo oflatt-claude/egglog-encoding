@@ -818,7 +818,11 @@ impl ProofStore {
         let action = crate::proofs::proof_checker::gather_global_actions(prog)
             .nth(at)
             .unwrap_or_else(|| {
-                panic!("a fiat names global action {at}, which the program does not have")
+                {
+                    let all: Vec<String> = crate::proofs::proof_checker::gather_global_actions(prog)
+                        .enumerate().map(|(i, a)| format!("[{i}] {a}")).collect();
+                    panic!("fiat names action {at}; program has {} actions: {all:?}", all.len())
+                }
             });
         let crate::GenericAction::Union(_, lhs, rhs) = action else {
             {
@@ -857,7 +861,11 @@ impl ProofStore {
         let action = crate::proofs::proof_checker::gather_global_actions(prog)
             .nth(at)
             .unwrap_or_else(|| {
-                panic!("a fiat names global action {at}, which the program does not have")
+                {
+                    let all: Vec<String> = crate::proofs::proof_checker::gather_global_actions(prog)
+                        .enumerate().map(|(i, a)| format!("[{i}] {a}")).collect();
+                    panic!("fiat names action {at}; program has {} actions: {all:?}", all.len())
+                }
             });
         // The encoder numbers the *planned* action, so plan this one the same
         // way. Only the shape matters here, so the lifted `let`s get a local
@@ -871,22 +879,35 @@ impl ProofStore {
             std::slice::from_ref(action),
             &mut fresh,
         );
-        let exprs: Vec<&crate::ast::ResolvedExpr> = plan
-            .actions
-            .iter()
-            .flat_map(crate::proofs::proof_encoding_helpers::action_exprs)
-            .collect();
-        let expr = exprs.get(node).unwrap_or_else(|| {
-            panic!("a fiat names node {node} of global action {at}, which has {} nodes", exprs.len())
-        });
-        crate::proofs::proof_checker::eval_expr_with_subst(
-            "global_action",
-            expr,
-            &mut self.term_dag,
-            globals,
-        )
-        .unwrap_or_else(|err| panic!("could not evaluate node {node} of global action {at}: {err}"))
-        .0
+        use crate::proofs::proof_encoding_helpers::{ActionNode, action_nodes};
+        let nodes: Vec<ActionNode<'_>> = plan.actions.iter().flat_map(action_nodes).collect();
+        let mut eval = |expr| {
+            crate::proofs::proof_checker::eval_expr_with_subst(
+                "global_action",
+                expr,
+                &mut self.term_dag,
+                globals,
+            )
+            .unwrap_or_else(|err| {
+                panic!("could not evaluate node {node} of global action {at}: {err}")
+            })
+            .0
+        };
+        match nodes.get(node) {
+            Some(ActionNode::Expr(expr)) => eval(expr),
+            // The row a `set` writes is the application of the function to its
+            // arguments and the value, which no expression of the action denotes.
+            Some(ActionNode::Row(crate::GenericAction::Set(_, head, args, value))) => {
+                let mut children: Vec<TermId> = args.iter().map(&mut eval).collect();
+                children.push(eval(value));
+                self.term_dag.app(head.name().to_string(), children)
+            }
+            Some(ActionNode::Row(other)) => panic!("{other} writes no row"),
+            None => panic!(
+                "a fiat names node {node} of global action {at}, which has {} nodes",
+                nodes.len()
+            ),
+        }
     }
 
     /// Get the [`Proof`] with the given id.

@@ -866,6 +866,10 @@ impl EGraph {
                     &mut self.proof_state.global_actions_numbered,
                     &mut e.proof_state.global_actions_numbered,
                 );
+                // And the program itself, for the same reason: a command that
+                // ran is one proof checking has to know about, and dropping it
+                // would renumber everything a later fiat names.
+                std::mem::swap(&mut self.proof_check_program, &mut e.proof_check_program);
                 *self = *e;
                 Ok(())
             }

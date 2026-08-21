@@ -1890,9 +1890,19 @@ pub(crate) fn body_expr_index(body: &[ResolvedFact], expr: &ResolvedExpr) -> Opt
         .position(|candidate| std::ptr::eq(candidate, expr))
 }
 
-/// Every expression node of a top-level action, in a canonical pre-order: the
-/// action's own expressions in written order, and each call's arguments after
-/// the call itself.
+/// A term a top-level action names, for the fiats that say a term exists.
+#[derive(Clone, Copy)]
+pub(crate) enum ActionNode<'a> {
+    /// A node written in the action.
+    Expr(&'a ResolvedExpr),
+    /// The row a `set` writes, `f(args…, value)`. The encoding proves that term
+    /// exists, but no expression of the action denotes it.
+    Row(&'a ResolvedAction),
+}
+
+/// Every term a top-level action names, in a canonical order: the action's
+/// expressions in written order with each call's arguments after the call, then
+/// the row a `set` writes.
 ///
 /// A reflexive fiat names the term it is about by its index into this list (see
 /// [`ProofInstrumentor::reflexive_for_justification`]), and proof conversion
@@ -1902,9 +1912,9 @@ pub(crate) fn body_expr_index(body: &[ResolvedFact], expr: &ResolvedExpr) -> Opt
 /// `remove_globals` rewrites a global reference into a nullary call, which is
 /// one node either way, so the encoded action numbers the same as the one proof
 /// checking reads.
-pub(crate) fn action_exprs(action: &ResolvedAction) -> Vec<&ResolvedExpr> {
-    fn walk<'a>(expr: &'a ResolvedExpr, out: &mut Vec<&'a ResolvedExpr>) {
-        out.push(expr);
+pub(crate) fn action_nodes(action: &ResolvedAction) -> Vec<ActionNode<'_>> {
+    fn walk<'a>(expr: &'a ResolvedExpr, out: &mut Vec<ActionNode<'a>>) {
+        out.push(ActionNode::Expr(expr));
         if let ResolvedExpr::Call(_, _, args) = expr {
             for arg in args {
                 walk(arg, out);
@@ -1919,6 +1929,7 @@ pub(crate) fn action_exprs(action: &ResolvedAction) -> Vec<&ResolvedExpr> {
                 walk(arg, &mut out);
             }
             walk(value, &mut out);
+            out.push(ActionNode::Row(action));
         }
         ResolvedAction::Change(_, _, _, args) => {
             for arg in args {

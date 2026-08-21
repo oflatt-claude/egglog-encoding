@@ -264,6 +264,10 @@ pub(crate) struct ProofInstrumentor<'a> {
     action_expr: usize,
     /// That action's nodes by address, for finding the index of the one in hand.
     action_expr_index: HashMap<usize, usize>,
+    /// Each planned action's row node, or `usize::MAX` when it writes no row.
+    action_row_index: Vec<usize>,
+    /// The row node of the planned action being instrumented.
+    action_row: usize,
 }
 
 /// Where a variable a rule body binds gets its reflexive `t = t` proof from: a
@@ -435,6 +439,8 @@ impl<'a> ProofInstrumentor<'a> {
             global_action,
             action_expr: 0,
             action_expr_index: HashMap::default(),
+            action_row_index: vec![],
+            action_row: usize::MAX,
             egraph,
             reflexive: HashSet::default(),
             deferred: HashMap::default(),
@@ -1153,6 +1159,19 @@ impl<'a> ProofInstrumentor<'a> {
     /// reflexive regardless, so calling this at an equality — a `union`'s — would
     /// have the compositions built on it silently drop a real proof.
     fn reflexive_for_justification(&mut self, emit: &mut Emit) -> String {
+        let node = self.action_expr;
+        self.reflexive_at(emit, node)
+    }
+
+    /// [`Self::reflexive_for_justification`] for the row a `set` writes, which is
+    /// the term a custom function's view proof is about and which no expression
+    /// of the action denotes.
+    fn reflexive_for_row(&mut self, emit: &mut Emit) -> String {
+        let node = self.action_row;
+        self.reflexive_at(emit, node)
+    }
+
+    fn reflexive_at(&mut self, emit: &mut Emit, node: usize) -> String {
         match emit.justification {
             // The head's own conclusion here is `fv = fv` (`fv`/`sort` unused:
             // the proposition comes from the column).
@@ -1163,7 +1182,7 @@ impl<'a> ProofInstrumentor<'a> {
             }
             Justification::Fiat => {
                 let fiat_term = self.proof_names().fiat_term_constructor.clone();
-                let (at, node) = (self.global_action, self.action_expr);
+                let at = self.global_action;
                 let proof = self.mint(emit.stmts, &fiat_term, &format!("{at} {node}"));
                 self.mark_reflexive(&proof);
                 proof
@@ -1232,10 +1251,7 @@ impl<'a> ProofInstrumentor<'a> {
             Some(Connector::Column(column)) => {
                 panic!("a global's value cannot be named by rule head column {column}")
             }
-            None => {
-                let sort = self.term_sort(&func_type.name);
-                self.reflexive_for_justification(emit)
-            }
+            None => self.reflexive_for_justification(emit),
         }
     }
 
@@ -1775,8 +1791,7 @@ impl<'a> ProofInstrumentor<'a> {
             &ListDisplay(args, " ").to_string(),
         );
         let view_proof_var = if self.egraph.proof_state.proofs_enabled {
-            let sort = self.term_sort(&func_type.name);
-            self.reflexive_for_justification(emit)
+            self.reflexive_for_row(emit)
         } else {
             "()".to_string()
         };
@@ -2169,13 +2184,24 @@ impl<'a> ProofInstrumentor<'a> {
         // lifts a union's constructor operands into fresh `let`s, so the two do
         // not have the same nodes. Conversion plans the same source the same way
         // to get the same numbering (see `ProofStore::action_term`).
-        self.action_expr_index = plan
-            .actions
-            .iter()
-            .flat_map(crate::proofs::proof_encoding_helpers::action_exprs)
-            .enumerate()
-            .map(|(at, expr)| (std::ptr::from_ref(expr) as usize, at))
-            .collect();
+        use crate::proofs::proof_encoding_helpers::{ActionNode, action_nodes};
+        self.action_expr_index = HashMap::default();
+        self.action_row_index = vec![];
+        let mut at = 0;
+        for action in &plan.actions {
+            let mut row = usize::MAX;
+            for node in action_nodes(action) {
+                match node {
+                    ActionNode::Expr(expr) => {
+                        self.action_expr_index
+                            .insert(std::ptr::from_ref(expr) as usize, at);
+                    }
+                    ActionNode::Row(_) => row = at,
+                }
+                at += 1;
+            }
+            self.action_row_index.push(row);
+        }
         // A rule head is a format proof conversion can replay, so its proofs are
         // named by column; everywhere else the encoder composes them itself.
         let mut head = match justification {
@@ -2193,6 +2219,7 @@ impl<'a> ProofInstrumentor<'a> {
             if plan.dropped.contains(&i) {
                 continue;
             }
+            self.action_row = self.action_row_index[i];
             match action {
                 ResolvedAction::Let(_, v, expr) if plan.construct_into.contains_key(&v.name) => {
                     let into = &plan.construct_into[&v.name];
