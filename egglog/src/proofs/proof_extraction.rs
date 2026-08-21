@@ -61,11 +61,11 @@ impl ProofInstrumentor<'_> {
         };
 
         // The witness is a row of the constructor's view, whose proof column
-        // states `eclass = f(children)` — the constructor's existence. Every
-        // encoded function has such a view, so the two guards below only catch a
-        // name the encoding never rewrote: reject it rather than panic.
-        let view_name = self.view_name(&func.name);
-        let Some(view) = self.egraph.functions.get(&view_name) else {
+        // states `eclass = f(children)` — the constructor's existence. The
+        // command names the view directly, since the encoding declares nothing
+        // under the function's own name; the guards below only catch a name the
+        // encoding never rewrote.
+        let Some(view) = self.egraph.functions.get(&func.name) else {
             return Err(ProveExistsError::RequiresConstructor);
         };
         let view_id = view.backend_id;

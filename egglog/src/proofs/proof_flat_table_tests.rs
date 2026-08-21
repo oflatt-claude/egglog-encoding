@@ -97,9 +97,10 @@ fn only_proof_node_relations_use_flat_storage() {
         flat_proof_nodes > 0,
         "expected generated proof-node relations"
     );
-    assert!(
-        keyed_term_nodes > 0,
-        "term-node relations should remain on keyed storage"
+    assert_eq!(
+        keyed_term_nodes, 0,
+        "the encoding declares no term-node relation but the proof ones, which \
+         are all on flat storage"
     );
 }
 

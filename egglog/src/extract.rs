@@ -846,12 +846,18 @@ impl EGraph {
         include_output: bool,
     ) -> Result<(Vec<TermId>, Option<Vec<TermId>>, TermDag), Error> {
         let func = self
-            .functions
-            .get(sym)
+            .function_or_view(sym)
             .ok_or(TypeError::UnboundFunction(sym.to_owned(), span!()))?;
+        // A view stands in for the function the user named, and its last output
+        // is the row's proof — an internal column, and not extractable.
+        let outputs = if func.is_fd_view() {
+            &func.schema.outputs[..func.schema.outputs.len() - 1]
+        } else {
+            &func.schema.outputs[..]
+        };
         let mut rootsorts = func.schema.input.clone();
         if include_output {
-            rootsorts.extend(func.schema.outputs.iter().cloned());
+            rootsorts.extend(outputs.iter().cloned());
         }
         let extractor = Extractor::compute_costs_from_rootsorts(
             Some(rootsorts),
@@ -883,7 +889,7 @@ impl EGraph {
                     // one; we display them wrapped in a `(values ...)` term to mirror the surface
                     // syntax.
                     let mut out_terms = Vec::new();
-                    for (i, sort) in func.schema.outputs.iter().enumerate() {
+                    for (i, sort) in outputs.iter().enumerate() {
                         let value = row.vals[func.schema.input.len() + i];
                         let (_, term) = extractor
                             .extract_best_with_sort(self, &mut termdag, value, sort.clone())

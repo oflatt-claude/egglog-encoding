@@ -1187,6 +1187,19 @@ impl EGraph {
     /// For functions, the output column is usually useful
     /// Print up to `n` the tuples in a given function.
     /// Print all tuples if `n` is not provided.
+    /// The function `sym` names, or the view standing in for it.
+    ///
+    /// The encoding declares nothing under a function's own name — its rows live
+    /// in the view, which carries the name as its `:internal-term-constructor` —
+    /// so a name the user wrote resolves through that. Checked without consulting
+    /// the proof-mode flag, so it still works on a replayed desugared program.
+    pub(crate) fn function_or_view(&self, sym: &str) -> Option<&Function> {
+        self.functions
+            .values()
+            .find(|f| f.decl.term_constructor.as_deref() == Some(sym))
+            .or_else(|| self.functions.get(sym))
+    }
+
     pub fn print_function(
         &mut self,
         sym: &str,
@@ -1208,9 +1221,8 @@ impl EGraph {
 
         let (terms, outputs, termdag) = self.function_to_dag(sym, n, true)?;
         let f = self
-            .functions
-            .get(sym)
-            // function_to_dag should have checked this
+            .function_or_view(sym)
+            // function_to_dag resolved the same name, so this cannot miss
             .unwrap();
         let terms_and_outputs: Vec<_> = terms.into_iter().zip(outputs.unwrap()).collect();
         let output = CommandOutput::PrintFunction(f.clone(), termdag, terms_and_outputs, mode);
@@ -1258,10 +1270,7 @@ impl EGraph {
             // So we do a linear scan to find the view table first, falling back on the normal table otherwise.
             // (We don't check the proof mode flag so that this still works after desugaring)
             let f = self
-                .functions
-                .values()
-                .find(|f| f.decl.term_constructor.as_deref() == Some(sym))
-                .or_else(|| self.functions.get(sym))
+                .function_or_view(sym)
                 .ok_or(TypeError::UnboundFunction(sym.to_owned(), span!()))?;
             // Skip hidden and let_binding functions
             if f.decl.internal_hidden || f.decl.internal_let {
@@ -1671,17 +1680,16 @@ impl EGraph {
         mut f: impl FnMut(Enode<'_>) -> bool,
     ) -> Result<(), Error> {
         let function =
-            self.functions
-                .get(name)
+            self.function_or_view(name)
                 .ok_or_else(|| crate::api::ApiError::MissingTable {
                     name: name.to_owned(),
                 })?;
-        // A real constructor, or (under term encoding) an internal term relation,
-        // reads as enodes. The eclass id is the row's output column for a real
-        // constructor, or the last input column for a term relation (whose trailing
-        // `Unit` output is then ignored) — `extraction_output_index` picks the right
-        // one and `extraction_num_children` the matching children count.
-        if function.subtype() != FunctionSubtype::Constructor && !function.is_relation_term() {
+        // A real constructor reads as enodes, and so does the view standing in
+        // for one under the encoding. The eclass id is the row's output column
+        // for a real constructor and the view's first output column for a view —
+        // `extraction_output_index` picks the right one and
+        // `extraction_num_children` the matching children count.
+        if function.subtype() != FunctionSubtype::Constructor && !function.is_fd_view() {
             return Err(crate::api::ApiError::WrongSubtype {
                 name: name.to_owned(),
                 expected: "constructor",
@@ -2325,13 +2333,14 @@ impl EGraph {
                 proof_base,
             } => {
                 // An encoded program (term/proof mode, or a replayed desugared
-                // program) keeps `(input …)` targeting the encoded *term relation*,
-                // loaded natively into the encoded tables; a plain program targets a
-                // user relation/constructor loaded by the relation loader.
+                // program) declares nothing under the function's own name, so the
+                // name resolving to a view is what says the rows go into the
+                // encoded tables; a plain program targets a user
+                // relation/constructor loaded by the relation loader.
                 if self
                     .functions
-                    .get(&name)
-                    .is_some_and(|f| f.is_relation_term())
+                    .values()
+                    .any(|f| f.decl.term_constructor.as_deref() == Some(name.as_str()))
                 {
                     self.native_input(span, &name, file, proof_base)?;
                 } else {
@@ -2586,34 +2595,27 @@ impl EGraph {
         file: String,
         proof_base: Option<usize>,
     ) -> Result<(), Error> {
-        // The encoded term relation keeps the user's original name. Its last input
-        // column is the minted term id; the columns before it are the CSV base
-        // columns (children, plus a custom function's output value).
-        let term = self
-            .functions
-            .get(func_name)
-            .unwrap_or_else(|| panic!("Unrecognized function name {func_name}"));
-        let f_id = term.backend_id;
-        let term_input = term.schema.input.clone();
-        let n_term_input = term_input.len();
-        let csv_sorts: Vec<ArcSort> = term_input[..n_term_input - 1].to_vec();
-
-        // Locate the view by its `:internal-term-constructor` back-reference (as
-        // extraction / print-size do) and read the encoded shape off it.
+        // The encoding declares nothing under the function's own name, so the
+        // shape comes off the view, found by its `:internal-term-constructor`
+        // back-reference (as extraction and print-size do).
         let view = self
             .functions
             .values()
             .find(|g| g.decl.term_constructor.as_deref() == Some(func_name))
             .unwrap_or_else(|| panic!("no encoded view for {func_name}"));
         let view_id = view.backend_id;
-        let view_n_inputs = view.schema.input.len();
         // Proofs are on for this relation iff the view's proof column (its last
         // output) is not `Unit`; term-encoding-only mode uses `Unit` there.
         let proofs = view.schema.outputs.last().unwrap().name() != "Unit";
-        // Constructor iff the FD view keys on all children and the term relation
-        // adds exactly the term id; a custom's (`:merge` or `:no-merge`) term
-        // relation also carries the output column.
-        let is_constructor = view.is_fd_view() && n_term_input == view_n_inputs + 1;
+        // A CSV column is always a base value, so a base-sorted view output is
+        // one the rows carry — that is a custom function. A constructor's and a
+        // relation's output is its e-class, which the load mints instead.
+        let is_constructor = view.schema.outputs[0].is_eq_sort();
+        // The CSV columns: the view's children, plus a custom function's output.
+        let mut csv_sorts: Vec<ArcSort> = view.schema.input.clone();
+        if !is_constructor {
+            csv_sorts.push(view.schema.outputs[0].clone());
+        }
 
         let rows = Self::read_input_rows(self.fact_directory.as_deref(), &csv_sorts, &span, &file)?;
         let unit_val = self.backend.base_values().get(());
@@ -2659,11 +2661,6 @@ impl EGraph {
         let mut batch: Vec<(egglog_bridge::FunctionId, Vec<Value>)> = Vec::new();
         for (row_index, value_row) in value_rows.into_iter().enumerate() {
             let fv = self.backend.fresh_id();
-            // Term-relation row: CSV columns (children [+ output]) + term id + Unit.
-            let mut frow = value_row.clone();
-            frow.push(fv);
-            frow.push(unit_val);
-            batch.push((f_id, frow));
 
             let view_proof = if let Some((fiat_id, base, node)) = fiat_term {
                 // `(FiatTerm <this row's action> <node> pf)`.

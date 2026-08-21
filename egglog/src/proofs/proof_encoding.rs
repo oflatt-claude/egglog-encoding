@@ -713,10 +713,6 @@ impl<'a> ProofInstrumentor<'a> {
 
         if !self.proofs_enabled() {
             let child_ids = ids(&child_vals);
-            emit.stmts.push(format!(
-                "(set ({ctor_name} {} {target_id}) ())",
-                ListDisplay(&child_ids, " ")
-            ));
             let update = self.update_fd_view(&ctor_name, &child_ids, target_id, "()");
             emit.stmts.push(update);
             self.action_expr = enclosing;
@@ -953,14 +949,6 @@ impl<'a> ProofInstrumentor<'a> {
         // a Custom function returning a distinct value (e.g. `-> i64`) keeps an
         // output column plus a fresh eclass column.
         let output_is_eclass = self.output_is_eclass(fdecl);
-        let term_sorts = format!(
-            "{in_sorts} {}",
-            if output_is_eclass {
-                "".to_string()
-            } else {
-                schema.output().to_string()
-            }
-        );
 
         let view_sort = if output_is_eclass {
             schema.output().clone()
@@ -1037,12 +1025,9 @@ impl<'a> ProofInstrumentor<'a> {
         } else {
             format!("(sort {fresh_sort})")
         };
-        // The term relation is a term node (`:internal-term-node`): its rows are
-        // reconstructed by proof extraction, with the minted id as the last input.
         self.parse_program(&format!(
             "
             {fresh_sort_decl}
-            (function {name} ({term_sorts} {view_sort}) Unit :no-merge :internal-hidden :internal-term-node)
             {packed_decl}{view_decl}
             {index_decls}",
         ))
@@ -1094,10 +1079,8 @@ impl<'a> ProofInstrumentor<'a> {
                     } else {
                         "()".to_string()
                     };
-                    // Term row (`x`'s e-class is e's) + the FD view `() -> (val, proof)`.
+                    // The FD view `() -> (val, proof)` records `x`'s e-class.
                     let e_value = e_value.value;
-                    emit.stmts
-                        .push(format!("(set ({} {e_value}) ())", func_type.name));
                     let update = self.update_fd_view(&func_type.name, &[], &e_value, &proof);
                     emit.stmts.push(update);
                     return;
@@ -1798,11 +1781,8 @@ impl<'a> ProofInstrumentor<'a> {
     /// Custom functions: mint the term-relation row and update the FD view. No
     /// canonicalization threading.
     fn add_custom_row(&mut self, emit: &mut Emit, func_type: &FuncType, args: &[String]) -> String {
-        let fv = self.mint(
-            emit.stmts,
-            &func_type.name,
-            &ListDisplay(args, " ").to_string(),
-        );
+        let sort = self.term_sort(&func_type.name);
+        let fv = self.fresh_id(emit.stmts, &sort);
         let view_proof_var = if self.egraph.proof_state.proofs_enabled {
             self.reflexive_for_row(emit)
         } else {
@@ -1830,7 +1810,8 @@ impl<'a> ProofInstrumentor<'a> {
     ) -> String {
         let view = self.view_name(&func_type.name);
         let set_if_empty = crate::proofs::proof_fresh::set_if_empty_prim_name(&view);
-        let fv = self.mint(res, &func_type.name, &ListDisplay(args, " ").to_string());
+        let sort = self.term_sort(&func_type.name);
+        let fv = self.fresh_id(res, &sort);
         let canon = self.fresh_var();
         res.push(format!(
             "(let {canon} ({set_if_empty} {} {fv} ()))",
@@ -1846,9 +1827,9 @@ impl<'a> ProofInstrumentor<'a> {
         fname: &str,
         args: &[Operand],
     ) -> Natural {
-        let nat_args: Vec<String> = args.iter().map(|a| a.natural.clone()).collect();
         let dedup_args = ids(args);
-        let fv_nat = self.mint(emit.stmts, fname, &ListDisplay(&nat_args, " ").to_string());
+        let sort = self.term_sort(fname);
+        let fv_nat = self.fresh_id(emit.stmts, &sort);
         // The head's own conclusion here is only ever read by the congruence
         // chain below, so a head that numbers its proofs instead of composing
         // them writes no row for it: conversion recovers it from the column.
@@ -1897,11 +1878,8 @@ impl<'a> ProofInstrumentor<'a> {
             fv_nat,
             to_dedup,
         } = self.build_natural_with_congr(emit, &func_type.name, args);
-        let fv_can = self.mint(
-            emit.stmts,
-            &func_type.name,
-            &ListDisplay(&dedup_args, " ").to_string(),
-        );
+        let sort = self.term_sort(&func_type.name);
+        let fv_can = self.fresh_id(emit.stmts, &sort);
         let can_prf = match &to_dedup {
             Some(chain) => self.reflexive(chain.clone()),
             // One row records the composition proof conversion rebuilds.
@@ -2610,9 +2588,17 @@ impl<'a> ProofInstrumentor<'a> {
             | ResolvedNCommand::Output { .. }
             | ResolvedNCommand::UnstableCombinedRuleset(..)
             | ResolvedNCommand::PrintOverallStatistics(..)
-            | ResolvedNCommand::PrintFunction(..)
-            | ResolvedNCommand::ProveExists(..) => {
+            | ResolvedNCommand::PrintFunction(..) => {
                 res.push(command.to_command().make_unresolved());
+            }
+            // The encoding declares no relation under the function's own name,
+            // so point the command at the view, which is where the witness row
+            // and its proof live anyway.
+            ResolvedNCommand::ProveExists(span, call) => {
+                res.push(Command::ProveExists(
+                    span.clone(),
+                    self.view_name(call.name()),
+                ));
             }
             ResolvedNCommand::UserDefined(..) => {
                 panic!("User defined commands unsupported in term encoding");
