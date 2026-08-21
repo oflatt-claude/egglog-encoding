@@ -524,6 +524,13 @@ impl EGraph {
         add_primitive!(&mut eg, "ordering-max" = |a: #, b: #| -> # {
             if a > b { a } else { b }
         });
+        // Whether `ordering-min`/`ordering-max` swap their arguments: 0 when `a`
+        // is the max, 1 when `b` is. A top-level `union`'s fiat records this so
+        // proof conversion can orient the action's two operands the way the
+        // encoding did, without the row naming either of them.
+        add_primitive!(&mut eg, "ordering-swapped" = |a: #, b: #| -> i64 {
+            if a > b { 0 } else { 1 }
+        });
 
         // Orientation helpers for the proof-encoding UF/view merges; see
         // [`crate::proofs::proof_encoding_helpers::OrientProof`].
@@ -2749,6 +2756,7 @@ impl EGraph {
                 self.names.check_shadowing(command)?;
             }
 
+            let numbered_before = self.proof_state.global_actions_numbered;
             let term_encoding_added =
                 ProofInstrumentor::add_term_encoding(self, typechecked_no_globals)?;
             // A fiat names a global action by index, so the encoder's numbering
@@ -2757,12 +2765,10 @@ impl EGraph {
             // one; the two agree only because neither lowering changes how many
             // global actions a command contributes.
             debug_assert_eq!(
-                self.proof_state.global_actions_numbered,
-                crate::proofs::proof_checker::gather_global_actions(&self.proof_check_program)
-                    .count()
-                    + crate::proofs::proof_checker::gather_global_actions(&per_row_before_proofs)
-                        .count(),
-                "the encoder's global-action numbering drifted from the checker's program"
+                self.proof_state.global_actions_numbered - numbered_before,
+                crate::proofs::proof_checker::gather_global_actions(&per_row_before_proofs).count(),
+                "the encoder numbered a different number of global actions than this command \
+                 contributes to the program proof checking reads"
             );
             let mut new_typechecked = vec![];
             for new_cmd in term_encoding_added {

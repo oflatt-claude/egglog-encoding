@@ -25,6 +25,9 @@ pub(crate) struct EncodingNames {
     /// value: sort `S`'s constructor is [`Self::fiat`]. Derived from one name
     /// for the same reason as [`Self::rule_fused_prefix`].
     pub(crate) fiat_prefix: String,
+    /// The fiat justification of a top-level `union`, which names the global
+    /// action it came from rather than its two endpoints.
+    pub(crate) fiat_union_constructor: String,
     /// The sorts [`ProofInstrumentor::fiat_constructor`] has declared.
     pub(crate) fiat_declared: HashSet<String>,
     /// Prefix of the rule proofs carrying their body premises inline: premise
@@ -430,6 +433,7 @@ impl EncodingNames {
         Self {
             proof_datatype: symbol_gen.fresh("Proof"),
             fiat_prefix: symbol_gen.fresh("Fiat"),
+            fiat_union_constructor: symbol_gen.fresh("FiatUnion"),
             fiat_declared: HashSet::default(),
             rule_fused_prefix: symbol_gen.fresh("Rule"),
             rule_fused_declared: HashSet::default(),
@@ -712,6 +716,7 @@ impl ProofInstrumentor<'_> {
         let EncodingNames {
             ref proof_datatype,
             ref fiat_prefix,
+            ref fiat_union_constructor,
             ref rule_link_constructor,
             ref merge_fn_idx_constructor,
             ref merge_fn_row_constructor,
@@ -736,6 +741,14 @@ impl ProofInstrumentor<'_> {
 ;; and asserts the row (both in one `mint-<Relation>!` call), so congruent
 ;; duplicates are kept (never merged away) rather than relying on native
 ;; congruence. The final column of each relation is the minted output id.
+
+;; Fiat justification of a top-level `union`: which global action it is in the
+;; program proof checking reads, and whether the encoding oriented the edge
+;; against that action's operand order (see the `ordering-swapped` primitive).
+;; Conversion evaluates the action to recover both endpoints, so the row names
+;; neither of them:
+;;   (FiatUnion <global action index> <0 or 1> <proof>)
+(function {fiat_union_constructor} (i64 i64 {proof_datatype}) Unit :no-merge :internal-hidden :internal-term-node)
 
 ;; Fiat justification for globals and primitives, gives two terms t1 = t2 for the
 ;; proposition being justified. Its endpoints are values of one sort, so there is

@@ -154,6 +154,11 @@ pub(crate) fn proof_store_from_term(
 enum RawProof {
     /// Equalities added at the top level are justified by fiat.
     Fiat(TermId, TermId),
+    /// A top-level `union`, named by which global action it is rather than by
+    /// its two endpoints: the action's index in the program being checked, and
+    /// whether the edge runs against that action's operand order. Conversion
+    /// evaluates the action to recover the equality, so the row stores no term.
+    FiatUnion(usize, bool),
     /// Given a rule name and proofs for each premise, produces a proof of a
     /// grounded equality from the head of the rule. The substitution is implicit —
     /// in [`Justification::Rule`] it is explicit.
@@ -488,7 +493,11 @@ impl RawProofStore {
                 build,
             })
         };
-        if names.is_fiat(head) {
+        if head == names.fiat_union_constructor {
+            shape(2, &[], |store, args, _| {
+                RawProof::FiatUnion(store.parse_index(args[0]), store.parse_index(args[1]) != 0)
+            })
+        } else if names.is_fiat(head) {
             shape(2, &[], |_, args, _| RawProof::Fiat(args[0], args[1]))
         } else if head == names.merge_fn_idx_constructor {
             shape(4, &[1, 2], |store, args, kids| {
@@ -785,6 +794,46 @@ impl ProofStore {
         })
     }
 
+    /// The equality the `at`th global action of `prog` states, oriented the way
+    /// the encoding wrote it.
+    ///
+    /// A top-level `union`'s fiat names the action instead of its endpoints, so
+    /// they are recovered by evaluating the action's two operands — under the
+    /// global bindings, since an operand may name a global.
+    fn union_endpoints(
+        &mut self,
+        prog: &[ResolvedNCommand],
+        globals: &HashMap<String, TermId>,
+        at: usize,
+        swapped: bool,
+    ) -> (TermId, TermId) {
+        let action = crate::proofs::proof_checker::gather_global_actions(prog)
+            .nth(at)
+            .unwrap_or_else(|| {
+                panic!("a fiat names global action {at}, which the program does not have")
+            });
+        let crate::GenericAction::Union(_, lhs, rhs) = action else {
+            {
+                let all: Vec<String> = crate::proofs::proof_checker::gather_global_actions(prog)
+                    .map(|a| format!("{a}"))
+                    .collect();
+                panic!("fiat names action {at} as a union; actions are {all:?}");
+            }
+        };
+        let mut side = |expr| {
+            crate::proofs::proof_checker::eval_expr_with_subst(
+                "global_action",
+                expr,
+                &mut self.term_dag,
+                globals,
+            )
+            .unwrap_or_else(|err| panic!("could not evaluate global action {at}: {err}"))
+            .0
+        };
+        let (lhs, rhs) = (side(lhs), side(rhs));
+        if swapped { (rhs, lhs) } else { (lhs, rhs) }
+    }
+
     /// Get the [`Proof`] with the given id.
     /// Panics if the id is invalid (if it came from another proof store, for example).
     pub fn get(&self, proof_id: ProofId) -> &Proof {
@@ -943,6 +992,13 @@ impl ProofStore {
         let raw_proof = &raw_store.store[raw_proof_id.index()];
 
         let proof = match raw_proof {
+            RawProof::FiatUnion(at, swapped) => {
+                let (lhs, rhs) = self.union_endpoints(prog, globals, *at, *swapped);
+                Proof {
+                    proposition: Proposition::new(lhs, rhs),
+                    justification: Justification::Fiat,
+                }
+            }
             RawProof::Fiat(lhs, rhs) => Proof {
                 proposition: Proposition::new(*lhs, *rhs),
                 justification: Justification::Fiat,

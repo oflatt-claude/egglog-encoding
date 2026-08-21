@@ -419,11 +419,11 @@ fn read_vars(args_joined: &str) -> impl Iterator<Item = &str> {
 impl<'a> ProofInstrumentor<'a> {
     pub(crate) fn new(egraph: &'a mut EGraph) -> Self {
         // Where this program's global actions start in the one proof checking
-        // reads, which is what a fiat names instead of naming its endpoints.
-        // Everything already there is from commands run before this one.
-        let global_action =
-            crate::proofs::proof_checker::gather_global_actions(&egraph.proof_check_program)
-                .count();
+        // reads, which is what a fiat names instead of naming its endpoints. The
+        // instrumentor is rebuilt for each command, so the count carries across
+        // them in the e-graph; `pop` restores the whole e-graph, so it rolls back
+        // with the checker's program rather than drifting from it.
+        let global_action = egraph.proof_state.global_actions_numbered;
         Self {
             global_action,
             egraph,
@@ -482,16 +482,19 @@ impl<'a> ProofInstrumentor<'a> {
         Ok(lowered)
     }
 
-    /// Mint a `Rule` or `Fiat` proof of the equality `a = b`, both values of
-    /// `sort`. Only `Fiat` names the two endpoints; a rule proof's proposition
-    /// comes from its column. Panics on merge justifications (merge bodies
-    /// contain no `union` actions).
-    fn edge_proof(&mut self, emit: &mut Emit, sort: &str, a: &str, b: &str) -> String {
+    /// Mint a `Rule` or `Fiat` proof of the equality this edge states. Neither
+    /// names its endpoints: a rule proof's proposition comes from its column, and
+    /// a fiat's from the global action it names. `swapped` is the `i64`-valued
+    /// expression saying whether the edge runs against that action's operand
+    /// order. Panics on merge justifications (merge bodies contain no `union`
+    /// actions).
+    fn edge_proof(&mut self, emit: &mut Emit, swapped: &str) -> String {
         match emit.justification {
             Justification::Rule(..) => self.rule_row(emit),
             Justification::Fiat => {
-                let fiat = self.fiat_constructor(sort);
-                self.mint(emit.stmts, &fiat, &format!("{a} {b}"))
+                let fiat_union = self.proof_names().fiat_union_constructor.clone();
+                let at = self.global_action;
+                self.mint(emit.stmts, &fiat_union, &format!("{at} {swapped}"))
             }
             Justification::MergeIdx(..) | Justification::MergeRow(..) => panic!(
                 "Merge functions do not include union actions, so proof should not be by merge"
@@ -578,7 +581,7 @@ impl<'a> ProofInstrumentor<'a> {
         let proof = if !self.egraph.proof_state.proofs_enabled {
             "()".to_string()
         } else if emit.head.composes() {
-            self.composed_union_edge(emit, type_name, lhs, rhs)
+            self.composed_union_edge(emit, lhs, rhs)
         } else {
             self.skeleton_union_edge(emit, lhs, rhs, run)
         };
@@ -612,13 +615,7 @@ impl<'a> ProofInstrumentor<'a> {
 
     /// The `larger = smaller` proof a `union` outside a rule head stores in `@UF`,
     /// composed here rather than recorded: nothing downstream rebuilds it.
-    fn composed_union_edge(
-        &mut self,
-        emit: &mut Emit,
-        type_name: &str,
-        lhs: &Operand,
-        rhs: &Operand,
-    ) -> String {
+    fn composed_union_edge(&mut self, emit: &mut Emit, lhs: &Operand, rhs: &Operand) -> String {
         // No column names any of these rows, so each states its own conclusion.
         let fiat = Justification::Fiat;
         let emit = &mut emit.justified_by(&fiat);
@@ -626,8 +623,10 @@ impl<'a> ProofInstrumentor<'a> {
         // Neither operand was a canonicalized constructor term (no connector), so
         // both e-classes' terms are stable: build the edge proof directly over them.
         if lhs.connector.is_none() && rhs.connector.is_none() {
-            let (larger, smaller) = ordered_endpoints(lhs, rhs);
-            return self.edge_proof(emit, type_name, &larger, &smaller);
+            // The edge runs `larger = smaller` by value order, which is only known
+            // at run time, so the row carries which way round that came out.
+            let swapped = format!("(ordering-swapped {} {})", lhs.value, rhs.value);
+            return self.edge_proof(emit, &swapped);
         }
 
         // A canonicalized operand's deduped e-class may already be unioned with a
@@ -638,7 +637,8 @@ impl<'a> ProofInstrumentor<'a> {
         //
         // Built over the operands in source order, so it states the conclusion
         // forwards.
-        let base_proof = self.edge_proof(emit, type_name, &lhs.natural, &rhs.natural);
+        // Built over the operands in source order, so the edge runs the action's way.
+        let base_proof = self.edge_proof(emit, "0");
 
         // The shared natural form is the canonicalized side's natural (pinned to
         // the enode the rule built), so the Trans goes through it rather than
@@ -678,6 +678,7 @@ impl<'a> ProofInstrumentor<'a> {
         expr: &ResolvedExpr,
         target: &Operand,
         scope: &Scope,
+        swapped: &str,
     ) -> Operand {
         let (func_type, args) = constructor_operand(expr)
             .expect("construct-into guest must be a constructor application");
@@ -700,7 +701,6 @@ impl<'a> ProofInstrumentor<'a> {
             return Operand::plain(target_id.clone());
         }
 
-        let sort_name = func_type.output().name().to_string();
         let view = self.view_name(&ctor_name);
         let own = emit.justification.at(head_column(run, HeadProof::Own));
         let Natural {
@@ -710,7 +710,7 @@ impl<'a> ProofInstrumentor<'a> {
         } = self.build_natural_with_congr(&mut emit.justified_by(&own), &ctor_name, &child_vals);
         let view_proof = match &nat_to_dedup {
             Some(chain) => {
-                let edge = self.edge_proof(emit, &sort_name, &target.natural, &fv_nat);
+                let edge = self.edge_proof(emit, swapped);
                 let target_conn = target
                     .connector
                     .as_ref()
@@ -2149,8 +2149,13 @@ impl<'a> ProofInstrumentor<'a> {
             }
             match action {
                 ResolvedAction::Let(_, v, expr) if plan.construct_into.contains_key(&v.name) => {
-                    let target = scope.read(&plan.construct_into[&v.name]);
-                    let guest = self.instrument_construct_into(&mut emit, expr, &target, &scope);
+                    let into = &plan.construct_into[&v.name];
+                    let target = scope.read(&into.target);
+                    // The dropped `union`'s edge states `target = F(args)`, so it
+                    // runs the action's way only when the target was written first.
+                    let swapped = if into.target_is_lhs { "0" } else { "1" };
+                    let guest =
+                        self.instrument_construct_into(&mut emit, expr, &target, &scope, swapped);
                     emit.stmts.push(format!("(let {} {})", v.name, guest.value));
                     scope.bind(&v.name, &guest);
                 }
