@@ -106,7 +106,7 @@ def alpha_eq(x, y):
 def run_case(case, machinery=None):
     prog = X.egg_program(case).replace("(print-function SameClass 100000)", OBS)
     if machinery:
-        prog = prog.replace("slotted-egraph-encoding-11.egg", machinery)
+        prog = prog.replace(X.MACHINERY, machinery)
     p = X.ROOT / f"inv2-{abs(hash(case.name)) % 99999}.egg"
     p.write_text(prog)
     try:

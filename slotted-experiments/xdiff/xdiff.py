@@ -31,7 +31,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 EGGLOG = ROOT / "target" / "debug" / "egglog"
 XMULTI = ROOT / "slotted-experiments" / "xmulti"
-MACHINERY = "tests/slotted-egraph-encoding-11.egg"
+MACHINERY = "tests/slotted-node-rules.egg"
 
 BINOPS = ["f", "g", "h", "k", "sub", "sub2", "add"]
 

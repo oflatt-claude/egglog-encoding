@@ -11,110 +11,15 @@
 ;;; `let` binds in its body and leaves its value's occurrence alone. When the two
 ;;; collide the bound slot is first renamed to one the node does not use, which keeps
 ;;; it alpha-renameable.
+;;;
+;;; The generic, string-headed encoding: one constructor per arity, the operator in a
+;;; payload column. Arity 2 is hand-written in the file included below.
+
+(include "tests/slotted-egraph-encoding-11.egg")
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; a class's slot set, held once
+;;; App2 :: String child child -- hand-written in slotted-egraph-encoding-11.egg
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-;; The slots a class actually depends on, as an identity renaming. Held directly
-;; rather than read off a self-loop: a self-loop is derived from a node, so it can
-;; name more slots than the class has, and a rule that picks one to mean "the class's
-;; slots" gets whichever the join happened to bind. This narrows on merge and so can
-;; only ever shrink, which is what the reference's `c.slots` does.
-(function ClassSlots (U) Renaming :merge (map-intersect old new))
-
-;; the leaves, whose slots are known outright
-(set (ClassSlots (Var 0)) (map-of 0 0))
-(set (ClassSlots (Null)) (map-empty))
-
-;; Carry a slot set along a `RenamesToLeader` edge, in both directions: `a = m*b`, so
-;; `m` takes b's slots to a's. Transporting a set S through a renaming is the image of
-;; the renaming restricted to S.
-(rule ((RenamesToLeader a m b) (= S (ClassSlots a)))
-      ((set (ClassSlots b) (map-image (compose (inverse m) S)))) :ruleset slotted)
-(rule ((RenamesToLeader a m b) (= S (ClassSlots b)))
-      ((set (ClassSlots a) (map-image (compose m S)))) :ruleset slotted)
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; App2 :: String child child
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-(constructor App2 (String Renaming U Renaming U) U)
-
-;; an upper bound on the class's slots; the merge narrows it
-(rule ((= e1 (App2 p1 m1 c1 m2 c2)))
-      ((set (ClassSlots e1) (map-union (map-image m1) (map-image m2)))) :ruleset slotted)
-
-;; every class holding a node has a self-loop, so a query can reach it
-(rule ((= e1 (App2 p1 m1 c1 m2 c2))
-       (= m (map-union (map-image m1) (map-image m2))))
-      ((RenamesToLeader e1 m e1)) :ruleset slotted)
-
-;; alpha-finder: two nodes equal up to renaming, one eliminated
-(rule ((= e1 (App2 p1 m1_o c1 m2_o c2))
-       (= e2 (App2 p1 b1 c1 b2 c2))
-       (= e1 (ordering-max e1 e2))
-       (RenamesToLeader c1 sym1 c1)
-       (RenamesToLeader c2 sym2 c2)
-       (= m1 (compose m1_o sym1))
-       (= m2 (compose m2_o sym2))
-       (= m (find-mapping m1 m2 b1 b2))
-       (guard
-         (or (bool-!= e1 e2)
-             (and (bool= e1 e2)
-                  (or (and (bool= (ordering-max m1_o b1) b1) (bool-!= m1_o b1))
-              (and (bool= m1_o b1)
-                   (and (bool= (ordering-max m2_o b2) b2) (bool-!= m2_o b2))))))))
-      ((Equated e1 m e2)
-       (delete (App2 p1 m1_o c1 m2_o c2))) :ruleset slotted)
-
-;; the same solve kept as a symmetry, non-destructively
-(rule ((= e (App2 p1 m1_o c1 m2_o c2))
-       (RenamesToLeader c1 sym1 c1)
-       (RenamesToLeader c2 sym2 c2)
-       (= m1 (compose m1_o sym1))
-       (= m2 (compose m2_o sym2))
-       (= sym_out (find-mapping m1_o m2_o m1 m2))
-       (= cs (ClassSlots e)))
-      ((RenamesToLeader e (compose cs (compose sym_out cs)) e)) :ruleset slotted)
-
-;; migration: move a follower's node into the leader's frame
-(rule ((RenamesToLeader e2 m e1)
-       (= e2 (App2 p1 m1 c1 m2 c2))
-       (!= e1 e2)
-       (= e2 (ordering-max e1 e2))       ; toward the leader only
-       (= nodeslots (map-union (map-image m1) (map-image m2)))
-       ; R takes the node's slots to the leader's, agreeing with m inverse where
-       ; that is defined and minting a name where it is not
-       (= R (find-mapping-total (map-domain m) nodeslots (map-domain m) m))
-       (= n1 (compose R m1))
-       (= n2 (compose R m2)))
-      ((union e1 (App2 p1 n1 c1 n2 c2))
-       (delete (App2 p1 m1 c1 m2 c2))) :ruleset slotted)
-
-;; child-update, child 1
-(rule ((RenamesToLeader c1 m c')
-       (= node (App2 p1 m1 c1 m2 c2))
-       (= c1 (ordering-max c1 c'))    ; toward the leader only
-       ; if the class is unchanged then m must be idempotent: no self-symmetries
-       (guard (or (bool-!= c1 c') (bool= (compose m m) m)))
-       ; and the new node must differ from the old one
-       (guard (or (bool-!= c1 c')
-                  (bool-!= (compose m1 m) m1))))
-      ((union node (App2 p1 (compose m1 m) c' m2 c2))
-       (delete (App2 p1 m1 c1 m2 c2))) :ruleset slotted)
-
-;; child-update, child 2
-(rule ((RenamesToLeader c2 m c')
-       (= node (App2 p1 m1 c1 m2 c2))
-       (= c2 (ordering-max c2 c'))    ; toward the leader only
-       ; if the class is unchanged then m must be idempotent: no self-symmetries
-       (guard (or (bool-!= c2 c') (bool= (compose m m) m)))
-       ; and the new node must differ from the old one
-       (guard (or (bool-!= c2 c')
-                  (bool-!= (compose m2 m) m2))))
-      ((union node (App2 p1 m1 c1 (compose m2 m) c'))
-       (delete (App2 p1 m1 c1 m2 c2))) :ruleset slotted)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; App3 :: String child child child
@@ -430,11 +335,6 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; binders
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-;; `lambda` binds its first child's slot
-(rule ((RenamesToLeader (App2 "lambda" mvar0 (Var 0) m2 c2) ml l)
-       (= v0 (map-get mvar0 0)))
-      ((Equated (App2 "lambda" mvar0 (Var 0) m2 c2) (inverse (map-remove (inverse ml) v0)) l)) :ruleset slotted)
 
 ;; `let` binds its first child's slot
 (rule ((RenamesToLeader (App3 "let" mvar0 (Var 0) m2 c2 m3 c3) ml l)

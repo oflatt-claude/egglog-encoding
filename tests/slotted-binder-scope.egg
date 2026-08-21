@@ -21,7 +21,7 @@
 ;;; each edge's domain is exactly the body's slot set. Written with two different
 ;;; body classes instead, the edges violate Def. 4 and the case proves nothing.
 
-(include "tests/slotted-egraph-encoding-11.egg")
+(include "tests/slotted-node-rules.egg")
 
 ;; the body `f1 (var .)`, one class, slots {0}
 (let $b (App2 "app" (map-empty) (Sym "f1") (map-of 0 0) (Var 0)))

@@ -14,7 +14,7 @@
 ;;;
 ;;; Language: sdql
 
-(include "tests/slotted-egraph-encoding-11.egg")
+(include "tests/slotted-node-rules.egg")
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Lambda :: binder child

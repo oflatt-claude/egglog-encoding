@@ -3,13 +3,19 @@
 
 Every rule that pattern-matches an e-node has to name each column, so it cannot be
 written once for all shapes in egglog. It *can* be written once here. This emits
-two kinds of output. GENERIC is the string-headed encoding included by
-`tests/slotted-egraph-encoding-11.egg`, where the operator is a payload column so any
+two kinds of output. GENERIC is the string-headed encoding in
+`tests/slotted-node-rules.egg`, where the operator is a payload column so any
 operator can be written without regenerating. LANGUAGES holds per-language encodings
 with one constructor per operator, the shape the reference crate's `define_language!`
-produces. The constructor-independent half -- the sorts, the union-find rules, `Var`
-normalisation -- stays hand-written in `slotted-egraph-encoding-11.egg`, which the
-per-language files include.
+produces. Both include `tests/slotted-egraph-encoding-11.egg`, which is hand-written
+and holds the constructor-independent half -- the sorts, the union-find rules, `Var`
+normalisation -- plus the ONE constructor family it works through as a worked example.
+
+That family is arity 2, and HANDWRITTEN names it: its rules are hand-written there
+rather than emitted here, so a reader gets a whole constructor's machinery in one
+file. `handwritten_region()` returns what this generator *would* emit for it, and
+`slotted-experiments/check-handwritten-encoding.py` asserts the two agree, so the
+worked example cannot drift away from what every other arity gets.
 
 A constructor's signature is a list of columns, each either
 
@@ -34,8 +40,8 @@ import re
 CHILD = object()          # a slotted child: `Renaming U`
 BINDER = object()         # a slotted child that also binds its slot
 
-# The generic, string-headed encoding: what `slotted-egraph-encoding-11.egg` and the
-# differential harness use. One constructor per arity with the operator in a payload
+# The generic, string-headed encoding: what the differential harness and the
+# per-language files use. One constructor per arity with the operator in a payload
 # column, so any operator can be written without regenerating anything.
 GENERIC = {
     "App2": ["String", CHILD, CHILD],
@@ -49,6 +55,13 @@ GENERIC = {
 # There the operator is in the head, so a binder cannot be declared structurally and
 # has to name the string: (head, constructor).
 GENERIC_BINDERS = (("lambda", "App2"), ("let", "App3"))
+
+# Constructors whose rules `tests/slotted-egraph-encoding-11.egg` hand-writes, along
+# with any binder over them and the SHARED block below. They are left out of the
+# generated file, which includes that one, so each is declared exactly once.
+# `check-handwritten-encoding.py` compares the hand-written text against
+# `handwritten_region()` below.
+HANDWRITTEN = ("App2",)
 
 # Per-language encodings are read from `slotted-experiments/languages/*.egg`, one
 # constructor per operator -- the shape the reference crate's `define_language!`
@@ -400,7 +413,7 @@ def shape_of(col):
     return {CHILD: "child", BINDER: "binder"}.get(col, str(col))
 
 
-def emit(language, binders=(), provided=None):
+def emit(language, binders=(), provided=None, omit=()):
     """All the rules for one language: `{constructor: signature}`.
 
     `binders` pins binders by operator string, for the generic encoding where the
@@ -410,9 +423,17 @@ def emit(language, binders=(), provided=None):
     `provided` names constructors the generic encoding already declares. A language
     file includes that encoding, so re-declaring one is a duplicate binding; its
     signature must match, and then its rules are already there too.
+
+    `omit` names constructors written out by hand in the file this output includes,
+    so emitting them would be a duplicate binding too. Binders over them are left
+    out with them.
     """
     out = []
     for name, sig in language.items():
+        if name in omit:
+            out += banner(f"{name} :: {' '.join(shape_of(c) for c in sig)}"
+                          " -- hand-written in slotted-egraph-encoding-11.egg")
+            continue
         if provided and name in provided:
             if provided[name] != sig:
                 raise SystemExit(
@@ -442,12 +463,14 @@ def emit(language, binders=(), provided=None):
     for name, sig in language.items():
         kid_cols = [c for c in sig if c in (CHILD, BINDER)]
         bound = [i for i, c in enumerate(kid_cols) if c is BINDER]
-        if bound:
+        if bound and name not in omit:
             which = ", ".join(str(i + 1) for i in bound)
             binder_rules.append(
                 (f";; `{name}` binds child {which}, one rule per bound slot",
                  binder(name, sig, bound)))
     for head, name in binders:
+        if name in omit:
+            continue
         binder_rules.append((f';; `{head}` binds its first child\'s slot',
                              binder(name, language[name], [0], head=head)))
     if binder_rules:
@@ -457,6 +480,9 @@ def emit(language, binders=(), provided=None):
     return out
 
 
+# The constructor-independent half of the node machinery. Hand-written in
+# `tests/slotted-egraph-encoding-11.egg` along with the HANDWRITTEN family, and kept
+# here so `handwritten_region()` can state what that text has to say.
 SHARED = """\
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; a class's slot set, held once
@@ -526,16 +552,39 @@ def in_slotted_ruleset(text):
     return "".join(out) + "".join(buf)
 
 
+# The hand-written half, and the generated file that includes it. A language file
+# includes the generated one, so it gets both.
+MACHINERY = "tests/slotted-egraph-encoding-11.egg"
+GENERIC_FILE = "tests/slotted-node-rules.egg"
+
+
+def handwritten_region():
+    """What `tests/slotted-egraph-encoding-11.egg` has to hold, rules only.
+
+    The SHARED block plus the HANDWRITTEN constructors and their binders: everything
+    this generator knows how to emit but leaves to that file. Comments and blank lines
+    are part of the string; the checker strips them before comparing.
+    """
+    lang = {name: GENERIC[name] for name in HANDWRITTEN}
+    binders = tuple((head, name) for head, name in GENERIC_BINDERS
+                    if name in HANDWRITTEN)
+    return in_slotted_ruleset(SHARED + "\n" + "\n".join(emit(lang, binders)))
+
+
 def main():
-    generic = pathlib.Path("tests/slotted-node-rules.egg")
+    generic = pathlib.Path(GENERIC_FILE)
     generic.write_text(in_slotted_ruleset(
-        HEADER + "\n" + SHARED + "\n" + "\n".join(emit(GENERIC, GENERIC_BINDERS))))
+        HEADER + ';;;\n;;; The generic, string-headed encoding: one constructor per'
+        ' arity, the operator in a\n;;; payload column. Arity 2 is hand-written in the'
+        ' file included below.\n\n'
+        f'(include "{MACHINERY}")\n\n'
+        + "\n".join(emit(GENERIC, GENERIC_BINDERS, omit=HANDWRITTEN))))
     print(f"wrote {generic} ({len(GENERIC)} constructors, string-headed)")
 
     for lang, spec in LANGUAGES.items():
         p = pathlib.Path(f"tests/slotted-lang-{lang}.egg")
         body = HEADER + f';;;\n;;; Language: {lang}\n\n' \
-            '(include "tests/slotted-egraph-encoding-11.egg")\n\n' \
+            f'(include "{GENERIC_FILE}")\n\n' \
             + "\n".join(emit(spec, provided=GENERIC))
         p.write_text(in_slotted_ruleset(body))
         print(f"wrote {p} ({len(spec)} constructors, one per operator)")

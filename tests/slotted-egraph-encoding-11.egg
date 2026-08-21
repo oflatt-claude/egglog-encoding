@@ -1,40 +1,25 @@
-;;; A slotted e-graph in egglog.
+;;; A slotted e-graph in egglog, hand-written for one binary constructor so that the whole
+;;; machinery reads in one place. `slotted-experiments/gen-node-rules.py` emits the same
+;;; rules for the other arities and the payload leaves.
 ;;;
-;;; An e-class is a *set* of `U` values denoting the same class under different slot namings.
-;;; `(RenamesToLeader a m b)` reads `a = m*b`, where `m` carries b's slots to a's, so a class
-;;; is a connected component of that relation. A *self*-loop `(RenamesToLeader c p c)` says
-;;; `p` is a symmetry: a permutation of c's slots that the class proves. Both readings matter,
-;;; and a rule that wants "the class's symmetries" joins on the self-loop form.
+;;; A class is a connected component of `RenamesToLeader`: `(RenamesToLeader a m b)` is
+;;; `a = m*b`, with `m` carrying b's slots to a's. A *self*-loop `(RenamesToLeader c p c)`
+;;; says `p` is a symmetry of c, so a rule wanting the class's symmetries joins on that
+;;; form. `Equated` is the same fact with no orientation picked, and is what an action
+;;; writes: `RenamesToLeader` is derived, and a row whose orientation a later `union`
+;;; invalidates is deleted as stale, taking the fact with it.
 ;;;
-;;; A node may carry slots its class does not depend on -- a *redundant* slot, which Def. 4
-;;; permits for nodes while requiring an *edge*'s domain to be exactly its child's slot set.
-;;; `(ClassSlots c)` is where a class's own slots live, as an identity renaming. It only ever
-;;; narrows, and that is what makes it safe to derive from a node: each node offers its own
-;;; slots as an upper bound and the merge keeps what every node of the class has.
+;;; A node may carry slots its class does not -- Def. 4 permits that for a node, while
+;;; requiring an *edge*'s domain to be exactly its child's slot set. `(ClassSlots c)` holds
+;;; a class's own slots and only ever narrows, which is what makes it safe to offer one from
+;;; a node. A node that is not canonical is deleted, so anything added needs an `Equated`
+;;; entry or a later query will not see it.
 ;;;
-;;; Compression: a node that is not canonical is deleted. Its value stays usable -- follow
-;;; `RenamesToLeader` to the class's canonical member -- but nothing can match on it any more.
-;;; So anything put into the e-graph needs to be related to its class, or a later query will
-;;; not see it. Assert that as `Equated`, never as `RenamesToLeader`: the latter is derived
-;;; and carries an orientation, so a row that gets it wrong is deleted as stale and the fact
-;;; goes with it.
-;;;
-;;; Two habits the rules below keep, each learned from a bug that took a while to find:
-;;;
-;;;   * A rule that both builds and deletes needs an orientation that strictly decreases, or
-;;;     it undoes itself forever while the tables look settled. `ordering-min` is that
-;;;     direction throughout -- `(= x (ordering-max x y))` fires only downhill.
-;;;   * Do not assert a class-level fact from one node. Offer it to a merge that can only
-;;;     narrow, as `ClassSlots` does.
-;;;   * Do not store a fact in a form that a later `union` can invalidate. `union` rewrites
-;;;     a row's endpoints, so an orientation chosen when the row was written can be wrong
-;;;     afterwards. Keep the orientation-free fact and derive the oriented one, which is
-;;;     what `Equated` below is for.
+;;; `(compose a b)` is `a . b`, b first, and it TRUNCATES: keys b sends outside a's domain
+;;; are dropped. Correct for partial maps, wrong on an edge, where `compose-total` refuses.
 
 
-;; A renaming is a partial injection on slots. `(compose a b)` is `a . b`, b first,
-;; and it TRUNCATES: keys b sends outside a's domain are dropped. That is correct for
-;; partial maps and wrong on an edge, where `compose-total` refuses instead.
+;; A renaming is a partial injection on slots.
 (sort Renaming (Map i64 i64))
 
 ;; One `U` value per e-node and per class; a slotted class spans several of them.
@@ -47,17 +32,10 @@
 ;; under `ordering-max`.
 (relation RenamesToLeader (U Renaming U))
 
-;; `(Equated a m b)` is the same fact with NO orientation chosen: `a = m*b`, either way
-;; round. Every rule relating two DIFFERENT values writes here, and the rules that read it
-;; below are the only things that write `RenamesToLeader`, so that relation cannot come to
-;; hold a backwards row.
-;;
-;; The indirection is what makes the orientation survive `union`. Orientation is a
-;; function of value order, and `union` rewrites a row's endpoints, so a row oriented
-;; before a merge can be backwards after it. Deleting such a row is safe here because the
-;; fact itself is still in `Equated` and is re-derived the right way round. Writing
-;; `RenamesToLeader` directly and repairing afterwards does NOT work: transitivity keeps
-;; re-deriving the backwards row and the repair keeps flipping it, forever.
+;; `a = m*b` with no orientation picked. Everything relating two DIFFERENT values writes
+;; here; only the readers below write `RenamesToLeader`, so it cannot hold a backwards row.
+;; Repairing that relation in place instead does not work -- transitivity re-derives the
+;; backwards row as fast as the repair flips it.
 (relation Equated (U Renaming U))
 
 ;; The invariant rules -- these and every rule the generator emits -- must be SATURATED
@@ -98,27 +76,146 @@
 ;; The nullary object, depending on no slots.
 (constructor Null () U)
 
-;; One family of rules per constructor, since a rule naming child positions cannot be
-;; written once for all arities. `gen-node-rules.py` emits them: a class's slot set, its
-;; self-loop, the alpha-finder that retires a node equal to another up to renaming, the
-;; symmetry-finder that keeps the same solve non-destructively, migration into a
-;; leader's frame, per-child canonicalisation, and binders. Add an arity there.
-;;
-;; A binder covers ONE column, the one after its slot, matching `Bind<T>` around a
-;; single child. So a bound slot leaves the class's slot set only where it is bound --
-;; `let` binds in its body, and a `value` occurrence of the same slot stays free -- and
-;; a collision between the two is renamed apart first, so the bound slot stays
-;; alpha-renameable. `tests/slotted-binder-scope.egg` is the pair of cases.
-(include "tests/slotted-node-rules.egg")
+;; One family of rules per constructor: a rule naming child positions cannot be written
+;; once for all arities. Arity 2 is spelled out below -- class slots, self-loop,
+;; alpha-finder, symmetry-finder, migration, per-child canonicalisation, binder -- and the
+;; generator emits the same for the others. Add an arity there, not here.
+;; `check-handwritten-encoding.py` asserts the region between the markers equals what the
+;; generator emits for arity 2, so the two cannot drift apart.
+
+;;; BEGIN generated-equivalent region -- checked by check-handwritten-encoding.py
+
+;; The slots a class actually depends on, as an identity renaming. Held directly
+;; rather than read off a self-loop: a self-loop is derived from a node, so it can
+;; name more slots than the class has, and a rule that picks one to mean "the class's
+;; slots" gets whichever the join happened to bind. This narrows on merge and so can
+;; only ever shrink, which is what the reference's `c.slots` does.
+(function ClassSlots (U) Renaming :merge (map-intersect old new))
+
+;; the leaves, whose slots are known outright
+(set (ClassSlots (Var 0)) (map-of 0 0))
+(set (ClassSlots (Null)) (map-empty))
+
+;; Carry a slot set along a `RenamesToLeader` edge, in both directions: `a = m*b`, so
+;; `m` takes b's slots to a's. Transporting a set S through a renaming is the image of
+;; the renaming restricted to S.
+(rule ((RenamesToLeader a m b) (= S (ClassSlots a)))
+      ((set (ClassSlots b) (map-image (compose (inverse m) S)))) :ruleset slotted)
+(rule ((RenamesToLeader a m b) (= S (ClassSlots b)))
+      ((set (ClassSlots a) (map-image (compose m S)))) :ruleset slotted)
+
+;; `(App2 f m1 c1 m2 c2)` is the term `f(m1*c1, m2*c2)`. The operator rides in a
+;; payload column, so this one constructor covers every binary operator, and a
+;; payload never appears in a renaming.
+(constructor App2 (String Renaming U Renaming U) U)
+
+;; an upper bound on the class's slots; the merge narrows it
+(rule ((= e1 (App2 p1 m1 c1 m2 c2)))
+      ((set (ClassSlots e1) (map-union (map-image m1) (map-image m2)))) :ruleset slotted)
+
+;; every class holding a node has a self-loop, so a query can reach it
+(rule ((= e1 (App2 p1 m1 c1 m2 c2))
+       (= m (map-union (map-image m1) (map-image m2))))
+      ((RenamesToLeader e1 m e1)) :ruleset slotted)
+
+;; alpha-finder: two nodes equal up to renaming, one eliminated. For
+;; `e1 = f(m1*c1, m2*c2)` and `e2 = f(b1*c1, b2*c2)`, `(find-mapping m1 m2 b1 b2)` is the
+;; least `m` with `m*e2 = e1`. Each edge is first composed with a symmetry of its child,
+;; so the two are compared up to what their children already prove. A payload column is
+;; named by the same variable on both sides, so a difference there does not match.
+(rule ((= e1 (App2 p1 m1_o c1 m2_o c2))
+       (= e2 (App2 p1 b1 c1 b2 c2))
+       (= e1 (ordering-max e1 e2))
+       (RenamesToLeader c1 sym1 c1)
+       (RenamesToLeader c2 sym2 c2)
+       (= m1 (compose m1_o sym1))
+       (= m2 (compose m2_o sym2))
+       (= m (find-mapping m1 m2 b1 b2))
+       (guard
+         (or (bool-!= e1 e2)
+             (and (bool= e1 e2)
+                  (or (and (bool= (ordering-max m1_o b1) b1) (bool-!= m1_o b1))
+              (and (bool= m1_o b1)
+                   (and (bool= (ordering-max m2_o b2) b2) (bool-!= m2_o b2))))))))
+      ((Equated e1 m e2)
+       (delete (App2 p1 m1_o c1 m2_o c2))) :ruleset slotted)
+
+;; The same solve kept as a symmetry, non-destructively, restricted to the class's slots
+;; on both sides. `sym_out` comes from a NODE's edges, so unrestricted it would assert a
+;; symmetry the class does not have; the shrinking rule below would delete that and this
+;; rule would derive it again, forever.
+(rule ((= e (App2 p1 m1_o c1 m2_o c2))
+       (RenamesToLeader c1 sym1 c1)
+       (RenamesToLeader c2 sym2 c2)
+       (= m1 (compose m1_o sym1))
+       (= m2 (compose m2_o sym2))
+       (= sym_out (find-mapping m1_o m2_o m1 m2))
+       (= cs (ClassSlots e)))
+      ((RenamesToLeader e (compose cs (compose sym_out cs)) e)) :ruleset slotted)
+
+;; Migration: move a follower's node into the leader's frame. For `e2 = f(m1*c1, m2*c2)`
+;; and `e2 = m*e1`, that is `e1 = f(m^-1*m1*c1, m^-1*m2*c2)`. `compose` would TRUNCATE a
+;; slot the leader's frame cannot name, leaving an edge narrower than its child's slot set,
+;; so `find-mapping-total` mints a name instead -- the reference's `compose_fresh`. Only
+;; ever toward the leader: the relation holds both directions for a pair, so without the
+;; orientation a node moves back and forth forever while the tables look settled.
+(rule ((RenamesToLeader e2 m e1)
+       (= e2 (App2 p1 m1 c1 m2 c2))
+       (!= e1 e2)
+       (= e2 (ordering-max e1 e2))       ; toward the leader only
+       (= nodeslots (map-union (map-image m1) (map-image m2)))
+       ; R takes the node's slots to the leader's, agreeing with m inverse where
+       ; that is defined and minting a name where it is not
+       (= R (find-mapping-total (map-domain m) nodeslots (map-domain m) m))
+       (= n1 (compose R m1))
+       (= n2 (compose R m2)))
+      ((union e1 (App2 p1 n1 c1 n2 c2))
+       (delete (App2 p1 m1 c1 m2 c2))) :ruleset slotted)
+
+;; Child-update, one rule per child position: replace child `c1` with its more
+;; canonical `m*c'`, the stored edge composing with the child's renaming. Toward the
+;; leader only, for the same reason migration needs it -- without an orientation the
+;; child pointer follows an edge one way and is rewritten back the next round, forever.
+(rule ((RenamesToLeader c1 m c')
+       (= node (App2 p1 m1 c1 m2 c2))
+       (= c1 (ordering-max c1 c'))    ; toward the leader only
+       ; if the class is unchanged then m must be idempotent: no self-symmetries
+       (guard (or (bool-!= c1 c') (bool= (compose m m) m)))
+       ; and the new node must differ from the old one
+       (guard (or (bool-!= c1 c')
+                  (bool-!= (compose m1 m) m1))))
+      ((union node (App2 p1 (compose m1 m) c' m2 c2))
+       (delete (App2 p1 m1 c1 m2 c2))) :ruleset slotted)
+
+;; child-update, child 2
+(rule ((RenamesToLeader c2 m c')
+       (= node (App2 p1 m1 c1 m2 c2))
+       (= c2 (ordering-max c2 c'))    ; toward the leader only
+       ; if the class is unchanged then m must be idempotent: no self-symmetries
+       (guard (or (bool-!= c2 c') (bool= (compose m m) m)))
+       ; and the new node must differ from the old one
+       (guard (or (bool-!= c2 c')
+                  (bool-!= (compose m2 m) m2))))
+      ((union node (App2 p1 m1 c1 (compose m2 m) c'))
+       (delete (App2 p1 m1 c1 m2 c2))) :ruleset slotted)
+
+;; `lambda` binds its first child's slot. The slot rides in that child's edge, so it is a
+;; slot of the NODE but not of its class; removing it from the edge to the leader is what
+;; makes two spellings of the same binder alpha-equivalent. A binder covers ONE column,
+;; the one after its own -- `Bind<T>` around a single child -- which at arity 2 leaves no
+;; other column, so there is nothing to check for a free occurrence and nothing to rename
+;; apart. Both appear from arity 3 on; `tests/slotted-binder-scope.egg` has those cases.
+(rule ((RenamesToLeader (App2 "lambda" mvar0 (Var 0) m2 c2) ml l)
+       (= v0 (map-get mvar0 0)))
+      ((Equated (App2 "lambda" mvar0 (Var 0) m2 c2) (inverse (map-remove (inverse ml) v0)) l)) :ruleset slotted)
+
+;;; END generated-equivalent region
 
 ;; Transitivity, which is also path compression: `e1 = m12*e2` and `e2 = m23*e3` give
 ;; `e1 = m12*m23*e3`. A non-idempotent self-symmetry on the RIGHT is excluded, so the
-;; union-find part does not enumerate a group.
-;;
-;; Only on the right. Composing one on the left is what carries a symmetry from a class
-;; member to the rest of its component, via single parent recording `m1^-1 m2` as a
-;; self-loop, so guarding that side too leaves a symmetry stranded on whichever member
-;; first exhibited it and never reaching the leader. That was tried and reverted.
+;; union-find part does not enumerate a group -- but only on the right. Composing one on
+;; the left is what carries a symmetry to the rest of the component, so guarding that side
+;; too strands it on whichever member first showed it. Tried, and reverted.
 (rule ((RenamesToLeader e1 m12 e2)
        (RenamesToLeader e2 m23 e3)
 
@@ -483,12 +580,11 @@
 ;;; `(RenamesToLeader v sym v)`, so a class that still holds an e-node but has no
 ;;; self-loop is invisible to matching and its node cannot be found.
 ;;;
-;;; `$N` uses slots {1,2} while its class is just the variable $2, so slot 1 is
-;;; redundant and the node stays on a value that is not the class's smallest. What
-;;; used to lose it was single-parent: it deleted `$N`'s self-loop as soon as `$N`
-;;; acquired the leader, and nothing re-derived one -- the rule that makes a
-;;; self-loop fires on a *new* `App2` row, and the row was not new any more. Its
-;;; `(!= a b)` guard is what keeps the loop, and this checks that it does.
+;;; `$N` uses slots {1,2} while its class is just the variable $2, so slot 1 is redundant
+;;; and the node stays on a value that is not the class's smallest. Single parent used to
+;;; delete `$N`'s self-loop once `$N` acquired the leader, and nothing re-derived one --
+;;; the self-loop rule fires on a *new* row, and the row was no longer new. Its `(!= a b)`
+;;; guard is what keeps the loop; this checks that it does.
 (push)
 
 ; B = h($2, $1), slots {1,2}
@@ -513,17 +609,12 @@
 
 ;;; Case 15- migration must not narrow an edge.
 ;;;
-;;; Same e-graph as Case 14, which is also where migration wants to truncate:
-;;; rewriting `$N`'s first edge {0->1} through the leader's frame {0->2} drops the
-;;; entry, since 1 is not in the frame. `compose` would narrow it silently and the
-;;; result is asserted as an edge, so the e-graph would end up holding
-;;;
-;;;     (App2 "h" (map-of) (Var 0) ...)
-;;;
-;;; an empty edge to a child that has a slot -- Def. 4 says an edge's domain is its
-;;; child's slot set, so this states that `(Var 0)` has none. `compose-total`
-;;; declines instead. `(Var 0)` is the one child whose slots are known statically,
-;;; which is what makes this checkable here.
+;;; Same e-graph as Case 14, and also where migration wants to truncate: rewriting `$N`'s
+;;; first edge {0->1} through the leader's frame {0->2} drops the entry, since 1 is not in
+;;; the frame, leaving `(App2 "h" (map-of) (Var 0) ...)` -- an empty edge to a child that
+;;; has a slot, which Def. 4 forbids. Migration composes through a renaming TOTAL on the
+;;; node's slots instead, minting a name rather than dropping one. `(Var 0)` is the one
+;;; child whose slots are known statically, which is what makes this checkable here.
 (push)
 
 (let $B (App2 "h" (map-of 0 2) (Var 0) (map-of 0 1) (Var 0)))
@@ -536,102 +627,3 @@
 (fail (check (= x (App2 f m1 c1 m2 (Var 0))) (= (map-length m2) 0)))
 
 (pop)
-
-;;; Case 16- a ternary node, alpha-equivalent up to renaming.
-;;;
-;;; Nothing binder-specific: f3 over three distinct variables is the same node
-;;; whatever the three slots are called, so the alpha-finder identifies the two and
-;;; records the renaming between them. Exercises the generated arity-3 rules.
-(push)
-
-(let $f3a (App3 "f3" (map-of 0 0) (Var 0) (map-of 0 1) (Var 0) (map-of 0 2) (Var 0)))
-(let $f3b (App3 "f3" (map-of 0 3) (Var 0) (map-of 0 4) (Var 0) (map-of 0 5) (Var 0)))
-
-(run-schedule (saturate (run slotted)))
-
-(check (RenamesToLeader $f3a m1 leader)
-       (RenamesToLeader $f3b m2 leader))
-
-;; and three distinct slots may not collapse: f3($0,$1,$2) is not f3($0,$0,$2)
-(let $f3c (App3 "f3" (map-of 0 0) (Var 0) (map-of 0 0) (Var 0) (map-of 0 2) (Var 0)))
-(run-schedule (saturate (run slotted)))
-(fail (check (= $f3a $f3c)))
-
-(pop)
-
-;;; Case 17- `let` alpha-equivalence, the arity-3 binder.
-;;;
-;;; Case 10 at arity 3: `(let $5 (var $5) e)` and `(let $6 (var $6) e)` are the same
-;;; term, so the generated binder rule has to take the bound slot out of the class
-;;; and leave the two identified.
-(push)
-
-(let $let5 (App3 "let" (map-of 0 5) (Var 0) (map-of 0 5) (Var 0) (map-empty) (Null)))
-(let $let6 (App3 "let" (map-of 0 6) (Var 0) (map-of 0 6) (Var 0) (map-empty) (Null)))
-
-(run-schedule (saturate (run slotted)))
-
-(check (= $let5 $let6))
-
-;; the bound slot is not free: the class has no slots
-(check (RenamesToLeader $let5 (map-empty) $let5))
-
-(pop)
-
-;;; Case 18- leaves carrying a payload.
-;;;
-;;; `Number(u32)` and `Symbol` in the paper's arith, rise and array languages. A
-;;; payload leaf has no slots, so it behaves like `Null` except that there are
-;;; infinitely many, which is why its self-loop is a rule.
-(push)
-
-(let $one (Num 1))
-(let $two (Num 2))
-
-(run-schedule (saturate (run slotted)))
-
-;; slotless, like Null
-(check (RenamesToLeader $one (map-empty) $one))
-
-;; distinct payloads stay distinct
-(fail (check (= $one $two)))
-
-;; and they compose into nodes: f(1, $0) and f(1, $1) are alpha-equivalent
-(let $f1a (App2 "f" (map-empty) $one (map-of 0 0) (Var 0)))
-(let $f1b (App2 "f" (map-empty) $one (map-of 0 1) (Var 0)))
-(run-schedule (saturate (run slotted)))
-(check (RenamesToLeader $f1a m1 leader)
-       (RenamesToLeader $f1b m2 leader))
-
-;; but f(1, ...) and f(2, ...) are not
-(let $f2a (App2 "f" (map-empty) $two (map-of 0 0) (Var 0)))
-(run-schedule (saturate (run slotted)))
-(fail (check (= $f1a $f2a)))
-
-(pop)
-
-;;; Case 19- a payload column beside a slotted child.
-;;;
-;;; `Scale :: i64 child`. The payload is an ordinary column, so it takes part in the
-;;; node's identity; the child is the only source of slots. Nothing special is
-;;; needed for the mix -- a payload just never appears in a renaming.
-(push)
-
-(let $s2a (Scale 2 (map-of 0 0) (Var 0)))
-(let $s2b (Scale 2 (map-of 0 1) (Var 0)))
-(let $s3a (Scale 3 (map-of 0 0) (Var 0)))
-
-(run-schedule (saturate (run slotted)))
-
-;; same payload, child at a different slot: alpha-equivalent
-(check (RenamesToLeader $s2a m1 leader)
-       (RenamesToLeader $s2b m2 leader))
-
-;; different payload: a different node
-(fail (check (= $s2a $s3a)))
-
-;; the slots come from the child alone
-(check (RenamesToLeader $s2a (map-of 0 0) $s2a))
-
-(pop)
-
