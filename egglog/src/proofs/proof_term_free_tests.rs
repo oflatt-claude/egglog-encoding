@@ -28,12 +28,16 @@ const PROGRAM: &str = r#"
     (prove (Got (S (Z))))
 "#;
 
-/// Only the fiat justifications name a term. Everything else — the rule proofs,
-/// the merge justifications, the compositions, and the projection of an element
-/// a rule body read out of a container — is stated over other proofs, so
-/// nothing else reaches into the term relations.
+/// No proof relation names a term. Rule proofs, merge justifications and
+/// compositions are stated over other proofs; a body element read out of a
+/// container is stated over the reading call; and a fiat is stated over the
+/// global action it came from. So nothing in a proof reaches into the term
+/// relations.
+///
+/// `(input …)` is the exception this does not cover: its rows are loaded at run
+/// time and still justified by a term-naming fiat.
 #[test]
-fn fiat_is_the_only_proof_relation_naming_a_term() {
+fn no_proof_relation_names_a_term() {
     let mut egraph = EGraph::new_with_proofs();
     egraph.parse_and_run_program(None, PROGRAM).unwrap();
 
@@ -47,7 +51,7 @@ fn fiat_is_the_only_proof_relation_naming_a_term() {
                 .input
                 .last()
                 .is_some_and(|sort| sort.name() == proof_sort);
-        if !is_proof_node || names.is_fiat(function.name()) {
+        if !is_proof_node {
             continue;
         }
         if function
