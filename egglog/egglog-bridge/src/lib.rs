@@ -141,6 +141,9 @@ pub struct EGraph {
     // Avoid introducing another randomly seeded hash table: row iteration order
     // in proof extraction can depend on the seed sequence of existing maps.
     external_write_deps: BTreeMap<ExternalFunctionId, String>,
+    /// Lowering data for the encoding's write primitives, keyed by the runtime
+    /// id their call sites resolve to. See [`EGraph::mint_insert_plan`].
+    mint_specs: BTreeMap<ExternalFunctionId, MintSpec>,
     threads: usize,
     thread_pool: Option<Arc<ThreadPool>>,
 }
@@ -268,6 +271,7 @@ impl EGraph {
             report_level: Default::default(),
             action_registry,
             external_write_deps: Default::default(),
+            mint_specs: Default::default(),
             threads,
             thread_pool,
         }
@@ -464,6 +468,8 @@ impl EGraph {
         let registry = self.action_registry.clone();
         let counter = self.id_counter;
         let dep = table_name.clone();
+        let spec_name = table_name.clone();
+        let spec_vals = vals.clone();
         let id = self.register_external_func(Box::new(make_external_func(
             move |state: &mut ExecutionState, args: &[Value]| {
                 let action = registry.read().unwrap().lookup_table(&table_name)?.clone();
@@ -481,7 +487,41 @@ impl EGraph {
             },
         )));
         self.external_write_deps.insert(id, dep);
+        self.mint_specs.insert(
+            id,
+            MintSpec {
+                table_name: spec_name,
+                n_args,
+                vals: spec_vals,
+                counter,
+            },
+        );
         id
+    }
+
+    /// The batched-instruction lowering of a `mint-<Relation>!` primitive, or
+    /// `None` if `func` is not one, its table is not installed yet, or its row
+    /// shape is one the instruction does not cover.
+    pub(crate) fn mint_insert_plan(&self, func: ExternalFunctionId) -> Option<MintInsertPlan> {
+        let spec = self.mint_specs.get(&func)?;
+        let registry = self.action_registry.read().unwrap();
+        let action = registry.lookup_table(&spec.table_name)?;
+        let math = action.table_math;
+        // The instruction writes `args ++ [fresh] ++ vals` and pads to the
+        // physical width with the timestamp, exactly as `TableAction::insert`
+        // does through `write_table_row`. A subsumption column would need its
+        // own value, so leave those tables on the external path.
+        if math.subsume || spec.n_args + 1 + spec.vals.len() != math.func_cols {
+            return None;
+        }
+        Some(MintInsertPlan {
+            table: action.table,
+            tail: spec.vals.clone(),
+            n_cols: math.table_columns(),
+            ts_col: math.ts_col(),
+            counter: spec.counter,
+            ts_counter: self.timestamp_counter,
+        })
     }
 
     /// The table an external function inserts into, for the merge dependency
@@ -500,6 +540,7 @@ impl EGraph {
 
     pub fn free_external_func(&mut self, func: ExternalFunctionId) {
         self.external_write_deps.remove(&func);
+        self.mint_specs.remove(&func);
         self.db.free_external_function(func);
     }
 
@@ -2571,6 +2612,29 @@ struct SchemaMath {
     func_cols: usize,
     /// Opt-in identity-column guard (see [`FunctionConfig::n_identity_vals`]).
     n_identity_vals: Option<usize>,
+}
+
+/// What a `mint-<Relation>!` primitive would do, kept so the rule builder can
+/// lower a call site to a batched [`core_relations`] instruction instead of a
+/// per-row external call.
+#[derive(Clone)]
+struct MintSpec {
+    table_name: String,
+    n_args: usize,
+    vals: Vec<Value>,
+    counter: CounterId,
+}
+
+/// A lowered mint: everything [`core_relations`] needs to stage the row without
+/// consulting the action registry per row.
+#[derive(Clone)]
+pub(crate) struct MintInsertPlan {
+    pub(crate) table: TableId,
+    pub(crate) tail: Vec<Value>,
+    pub(crate) n_cols: usize,
+    pub(crate) ts_col: usize,
+    pub(crate) counter: CounterId,
+    pub(crate) ts_counter: CounterId,
 }
 
 /// A struct containing possible non-key portions of a table row. To be used with

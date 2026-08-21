@@ -819,6 +819,41 @@ impl ExecutionState<'_> {
                     }
                 });
             }
+            Instr::MintInsert {
+                table,
+                args,
+                tail,
+                n_cols,
+                ts_col,
+                counter,
+                ts_counter,
+                dst,
+            } => {
+                let ts = Value::from_usize(self.read_counter(*ts_counter));
+                let mut out = with_pool_set(|ps| ps.get::<Vec<Value>>());
+                out.resize(bindings.matches, Value::stale());
+                let counter = *counter;
+                let counters = self.db.counters;
+                {
+                    let sources = row_sources(args, bindings);
+                    let mut row = RowScratch::new();
+                    self.stage_batch(*table, |buf| {
+                        for idx in mask.ones() {
+                            gather_row(&sources, idx, &mut row);
+                            let fresh = Value::from_usize(counters.inc(counter));
+                            row.push(fresh);
+                            row.extend_from_slice(tail);
+                            // Pad to the physical width and stamp the
+                            // timestamp, matching `write_table_row`.
+                            row.resize(*n_cols, ts);
+                            row[*ts_col] = ts;
+                            buf.stage_insert(&row);
+                            out[idx] = fresh;
+                        }
+                    });
+                }
+                bindings.insert(*dst, &out);
+            }
             Instr::InsertIfEq { table, l, r, vals } => match (l, r) {
                 (QueryEntry::Var(v1), QueryEntry::Var(v2)) => {
                     for_each_binding_with_mask!(mask, vals.as_slice(), bindings, |iter| {
@@ -1021,6 +1056,30 @@ pub(crate) enum Instr {
     AssertAnyNe {
         ops: Vec<QueryEntry>,
         divider: usize,
+    },
+
+    /// Mint a fresh id from `counter`, append it to `args` (followed by the
+    /// constant `tail`), stage the resulting row into `table`, and bind the
+    /// fresh id to `dst`.
+    ///
+    /// This is the batched form of the term encoding's `mint-<Relation>!`
+    /// primitive: the whole batch is gathered once and staged through a single
+    /// mutation buffer, rather than resolving the target table and staging one
+    /// row per call.
+    MintInsert {
+        table: TableId,
+        args: Vec<QueryEntry>,
+        /// Constant value columns written after the minted id.
+        tail: Vec<Value>,
+        /// Total physical column count of a row in `table`.
+        n_cols: usize,
+        /// Index of the timestamp column.
+        ts_col: usize,
+        /// Counter minting the fresh id.
+        counter: CounterId,
+        /// Counter holding the current timestamp.
+        ts_counter: CounterId,
+        dst: Variable,
     },
 
     /// Read the value of a counter and write it to the given variable.
