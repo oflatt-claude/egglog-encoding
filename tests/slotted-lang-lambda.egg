@@ -46,7 +46,7 @@
                   (or (and (bool= (ordering-max m1_o b1) b1) (bool-!= m1_o b1))
               (and (bool= m1_o b1)
                    (and (bool= (ordering-max m2_o b2) b2) (bool-!= m2_o b2))))))))
-      ((RenamesToLeader e1 m e2)
+      ((Equated e1 m e2)
        (delete (Lam m1_o c1 m2_o c2))) :ruleset slotted)
 
 ;; the same solve kept as a symmetry, non-destructively
@@ -127,7 +127,7 @@
                   (or (and (bool= (ordering-max m1_o b1) b1) (bool-!= m1_o b1))
               (and (bool= m1_o b1)
                    (and (bool= (ordering-max m2_o b2) b2) (bool-!= m2_o b2))))))))
-      ((RenamesToLeader e1 m e2)
+      ((Equated e1 m e2)
        (delete (App m1_o c1 m2_o c2))) :ruleset slotted)
 
 ;; the same solve kept as a symmetry, non-destructively
@@ -212,7 +212,7 @@
                    (or (and (bool= (ordering-max m2_o b2) b2) (bool-!= m2_o b2))
               (and (bool= m2_o b2)
                    (and (bool= (ordering-max m3_o b3) b3) (bool-!= m3_o b3))))))))))
-      ((RenamesToLeader e1 m e2)
+      ((Equated e1 m e2)
        (delete (Let m1_o c1 m2_o c2 m3_o c3))) :ruleset slotted)
 
 ;; the same solve kept as a symmetry, non-destructively
@@ -285,13 +285,13 @@
 ;; `Lam` binds child 1, one rule per bound slot
 (rule ((RenamesToLeader (Lam mvar0 (Var 0) m2 c2) ml l)
        (= v0 (map-get mvar0 0)))
-      ((RenamesToLeader (Lam mvar0 (Var 0) m2 c2) (inverse (map-remove (inverse ml) v0)) l)) :ruleset slotted)
+      ((Equated (Lam mvar0 (Var 0) m2 c2) (inverse (map-remove (inverse ml) v0)) l)) :ruleset slotted)
 
 ;; `Let` binds child 1, one rule per bound slot
 (rule ((RenamesToLeader (Let mvar0 (Var 0) m2 c2 m3 c3) ml l)
        (= v0 (map-get mvar0 0))
        (map-not-contains (map-image m3) v0))
-      ((RenamesToLeader (Let mvar0 (Var 0) m2 c2 m3 c3) (inverse (map-remove (inverse ml) v0)) l)) :ruleset slotted)
+      ((Equated (Let mvar0 (Var 0) m2 c2 m3 c3) (inverse (map-remove (inverse ml) v0)) l)) :ruleset slotted)
 
 (rule ((= node (Let mvar0 (Var 0) m2 c2 m3 c3))
        (= v0 (map-get mvar0 0))

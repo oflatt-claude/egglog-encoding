@@ -1,9 +1,13 @@
 ;;; Multipattern e-matching, hand-encoded on top of the slotted machinery.
 ;;;
-;;; The readable form of the recipe `compile_rule` compiles
-;;; (`slotted-experiments/xdiff/xdiff.py`), which is the version checked against the
-;;; reference crate.  Keep the two in step.  Reasoning lives in
-;;; `slotted-user-rules.md`; this file is the runnable version.
+;;; The readable form of a recipe that three compilers implement, all of which must
+;;; stay in step with it:
+;;;
+;;;   xdiff.py         compile_rule        the toy language, checked against the crate
+;;;   xarray.py        compile_array_rule  the paper's array language, likewise
+;;;   gen-sdql-rules.py                    SDQL, self-checked only so far
+;;;
+;;; Reasoning lives in `slotted-user-rules.md`; this file is the runnable version.
 ;;;
 ;;; Flatten the rule's LHS into depth-1 atoms `?v == (Op ?c1 ?c2)`, one per e-node,
 ;;; every child a bare variable.  Each becomes one egglog atom
@@ -50,6 +54,8 @@
 ;;;   (App2 f m1 c1 m2 c2)     = f(m1*c1, m2*c2),  mi : slots(ci) -> slots(node)
 ;;;   (RenamesToLeader a m b) = a = m*b,          m  : slots(b)  -> slots(a)
 ;;;   (RenamesToLeader c m c) = m is in G(c)
+;;;   (Equated a m b)         = a = m*b with no orientation picked -- what an ACTION
+;;;                             writes; the machinery derives the oriented row
 ;;;   (ClassSlots c)          = identity on the slots c depends on; only ever narrows
 ;;;
 ;;; Each section is its own (push)/(pop).  Match tests assert through a witness
@@ -68,12 +74,17 @@
 ;;;   M9 the accumulating avoid-set     C7-redundant-distinct-vars
 ;;;   M10 nested right-hand side       NR1-nested-build, NR2, NR3-assoc
 ;;;
-;;; M7 is not covered and cannot be as the oracle stands: it puts a slot literal in a
-;;; non-binder child position, which the reference admits only via `Bind` or as a
-;;; unary `Var(Slot)` atom, and the harness's atoms take two children.  The mechanism
-;;; it turns on -- constraining with a pinned literal rather than checking afterwards
-;;; -- is covered on binder shapes by B3, B4 and the `slot-late` mutant, and its slot
-;;; side condition by CD1-CD4.
+;;;   M7 slot literal in a non-binder child  eta-fires, eta-blocked (xarray.py)
+;;;
+;;; M7 was long uncovered, because the oracle's `atom` form takes exactly two children
+;;; and the reference admits a slot literal in that position only via `Bind` or a unary
+;;; `Var(Slot)`.  Its `nested` form sidesteps that: the whole pattern goes to the
+;;; reference's own parser.  M7 is the array language's `eta`, so
+;;; `slotted-experiments/xdiff/xarray.py` compares it directly, firing and blocked, and
+;;; `vac` mode confirms the side condition changes the answer on both sides.  The
+;;; mechanism it turns on -- constraining with a pinned literal rather than checking
+;;; afterwards -- is also covered on binder shapes by B3, B4 and the `slot-late` mutant,
+;;; and its slot side condition by CD1-CD4.
 
 (include "tests/slotted-egraph-encoding-11.egg")
 
@@ -734,7 +745,7 @@
                                   (compose mb1 symb) (map-insert (map-empty) 0 v)
                                   (map-domain mb1) mv))
        (map-not-contains (inverse (compose mp2 mf)) v))   ; $s not free in ?f
-      ((RenamesToLeader e (compose mp2 mf) f)))
+      ((Equated e (compose mp2 mf) f)))
 
 ;; positive: (lambda $5 (app c (var $5)))  ->  c
 (push)

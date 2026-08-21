@@ -65,7 +65,7 @@
                   (or (and (bool= (ordering-max m1_o b1) b1) (bool-!= m1_o b1))
               (and (bool= m1_o b1)
                    (and (bool= (ordering-max m2_o b2) b2) (bool-!= m2_o b2))))))))
-      ((RenamesToLeader e1 m e2)
+      ((Equated e1 m e2)
        (delete (App2 p1 m1_o c1 m2_o c2))) :ruleset slotted)
 
 ;; the same solve kept as a symmetry, non-destructively
@@ -150,7 +150,7 @@
                    (or (and (bool= (ordering-max m2_o b2) b2) (bool-!= m2_o b2))
               (and (bool= m2_o b2)
                    (and (bool= (ordering-max m3_o b3) b3) (bool-!= m3_o b3))))))))))
-      ((RenamesToLeader e1 m e2)
+      ((Equated e1 m e2)
        (delete (App3 p1 m1_o c1 m2_o c2 m3_o c3))) :ruleset slotted)
 
 ;; the same solve kept as a symmetry, non-destructively
@@ -254,7 +254,7 @@
                    (or (and (bool= (ordering-max m3_o b3) b3) (bool-!= m3_o b3))
               (and (bool= m3_o b3)
                    (and (bool= (ordering-max m4_o b4) b4) (bool-!= m4_o b4))))))))))))
-      ((RenamesToLeader e1 m e2)
+      ((Equated e1 m e2)
        (delete (App4 p1 m1_o c1 m2_o c2 m3_o c3 m4_o c4))) :ruleset slotted)
 
 ;; the same solve kept as a symmetry, non-destructively
@@ -391,7 +391,7 @@
          (or (bool-!= e1 e2)
              (and (bool= e1 e2)
                   (and (bool= (ordering-max m1_o b1) b1) (bool-!= m1_o b1))))))
-      ((RenamesToLeader e1 m e2)
+      ((Equated e1 m e2)
        (delete (Scale p1 m1_o c1))) :ruleset slotted)
 
 ;; the same solve kept as a symmetry, non-destructively
@@ -434,13 +434,13 @@
 ;; `lambda` binds its first child's slot
 (rule ((RenamesToLeader (App2 "lambda" mvar0 (Var 0) m2 c2) ml l)
        (= v0 (map-get mvar0 0)))
-      ((RenamesToLeader (App2 "lambda" mvar0 (Var 0) m2 c2) (inverse (map-remove (inverse ml) v0)) l)) :ruleset slotted)
+      ((Equated (App2 "lambda" mvar0 (Var 0) m2 c2) (inverse (map-remove (inverse ml) v0)) l)) :ruleset slotted)
 
 ;; `let` binds its first child's slot
 (rule ((RenamesToLeader (App3 "let" mvar0 (Var 0) m2 c2 m3 c3) ml l)
        (= v0 (map-get mvar0 0))
        (map-not-contains (map-image m3) v0))
-      ((RenamesToLeader (App3 "let" mvar0 (Var 0) m2 c2 m3 c3) (inverse (map-remove (inverse ml) v0)) l)) :ruleset slotted)
+      ((Equated (App3 "let" mvar0 (Var 0) m2 c2 m3 c3) (inverse (map-remove (inverse ml) v0)) l)) :ruleset slotted)
 
 (rule ((= node (App3 "let" mvar0 (Var 0) m2 c2 m3 c3))
        (= v0 (map-get mvar0 0))

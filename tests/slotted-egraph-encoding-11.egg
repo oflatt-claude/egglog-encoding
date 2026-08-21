@@ -14,8 +14,10 @@
 ;;;
 ;;; Compression: a node that is not canonical is deleted. Its value stays usable -- follow
 ;;; `RenamesToLeader` to the class's canonical member -- but nothing can match on it any more.
-;;; So anything put into the e-graph needs a `RenamesToLeader` entry, or a later query will
-;;; not see it.
+;;; So anything put into the e-graph needs to be related to its class, or a later query will
+;;; not see it. Assert that as `Equated`, never as `RenamesToLeader`: the latter is derived
+;;; and carries an orientation, so a row that gets it wrong is deleted as stale and the fact
+;;; goes with it.
 ;;;
 ;;; Two habits the rules below keep, each learned from a bug that took a while to find:
 ;;;
@@ -24,6 +26,10 @@
 ;;;     direction throughout -- `(= x (ordering-max x y))` fires only downhill.
 ;;;   * Do not assert a class-level fact from one node. Offer it to a merge that can only
 ;;;     narrow, as `ClassSlots` does.
+;;;   * Do not store a fact in a form that a later `union` can invalidate. `union` rewrites
+;;;     a row's endpoints, so an orientation chosen when the row was written can be wrong
+;;;     afterwards. Keep the orientation-free fact and derive the oriented one, which is
+;;;     what `Equated` below is for.
 
 
 ;; A renaming is a partial injection on slots. `(compose a b)` is `a . b`, b first,
@@ -106,8 +112,13 @@
 (include "tests/slotted-node-rules.egg")
 
 ;; Transitivity, which is also path compression: `e1 = m12*e2` and `e2 = m23*e3` give
-;; `e1 = m12*m23*e3`. Non-idempotent self-symmetries are excluded so the union-find part
-;; does not enumerate a group.
+;; `e1 = m12*m23*e3`. A non-idempotent self-symmetry on the RIGHT is excluded, so the
+;; union-find part does not enumerate a group.
+;;
+;; Only on the right. Composing one on the left is what carries a symmetry from a class
+;; member to the rest of its component, via single parent recording `m1^-1 m2` as a
+;; self-loop, so guarding that side too leaves a symmetry stranded on whichever member
+;; first exhibited it and never reaching the leader. That was tried and reverted.
 (rule ((RenamesToLeader e1 m12 e2)
        (RenamesToLeader e2 m23 e3)
 

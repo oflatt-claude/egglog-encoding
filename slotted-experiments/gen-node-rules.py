@@ -215,7 +215,7 @@ def alpha_finder(name, sig):
          (or (bool-!= e1 e2)
              (and (bool= e1 e2)
                   {lex_greater(a_o, b)}))))
-      ((RenamesToLeader e1 m e2)
+      ((Equated e1 m e2)
        (delete {pattern(name, sig, edges=a_o)})))
 """
 
@@ -358,7 +358,7 @@ def binder(name, sig, positions, head=None):
         rules.append(f"""\
 (rule ((RenamesToLeader {node} ml l)
        (= v{n} (map-get mvar{n} 0)){free_elsewhere})
-      ((RenamesToLeader {node} (inverse (map-remove (inverse ml) v{n})) l)))
+      ((Equated {node} (inverse (map-remove (inverse ml) v{n})) l)))
 """)
 
         # A collision with an uncovered column blocks the strip above, which would
