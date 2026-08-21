@@ -818,11 +818,14 @@ impl ProofStore {
         let action = crate::proofs::proof_checker::gather_global_actions(prog)
             .nth(at)
             .unwrap_or_else(|| {
-                {
-                    let all: Vec<String> = crate::proofs::proof_checker::gather_global_actions(prog)
-                        .enumerate().map(|(i, a)| format!("[{i}] {a}")).collect();
-                    panic!("fiat names action {at}; program has {} actions: {all:?}", all.len())
-                }
+                let all: Vec<String> = crate::proofs::proof_checker::gather_global_actions(prog)
+                    .enumerate()
+                    .map(|(i, a)| format!("[{i}] {a}"))
+                    .collect();
+                panic!(
+                    "fiat names action {at}; program has {} actions: {all:?}",
+                    all.len()
+                )
             });
         let crate::GenericAction::Union(_, lhs, rhs) = action else {
             {
@@ -861,11 +864,14 @@ impl ProofStore {
         let action = crate::proofs::proof_checker::gather_global_actions(prog)
             .nth(at)
             .unwrap_or_else(|| {
-                {
-                    let all: Vec<String> = crate::proofs::proof_checker::gather_global_actions(prog)
-                        .enumerate().map(|(i, a)| format!("[{i}] {a}")).collect();
-                    panic!("fiat names action {at}; program has {} actions: {all:?}", all.len())
-                }
+                let all: Vec<String> = crate::proofs::proof_checker::gather_global_actions(prog)
+                    .enumerate()
+                    .map(|(i, a)| format!("[{i}] {a}"))
+                    .collect();
+                panic!(
+                    "fiat names action {at}; program has {} actions: {all:?}",
+                    all.len()
+                )
             });
         // The encoder numbers the *planned* action, so plan this one the same
         // way. Only the shape matters here, so the lifted `let`s get a local
@@ -875,10 +881,8 @@ impl ProofStore {
             next += 1;
             format!("@plan{next}")
         };
-        let plan = crate::proofs::proof_head::HeadPlan::new(
-            std::slice::from_ref(action),
-            &mut fresh,
-        );
+        let plan =
+            crate::proofs::proof_head::HeadPlan::new(std::slice::from_ref(action), &mut fresh);
         use crate::proofs::proof_encoding_helpers::{ActionNode, action_nodes};
         let nodes: Vec<ActionNode<'_>> = plan.actions.iter().flat_map(action_nodes).collect();
         let mut eval = |expr| {
@@ -1707,7 +1711,9 @@ impl ProofStore {
         assert_eq!(
             base_child,
             Some(child_lhs),
-            "congruence step {child_index} does not start at that child"
+            "congruence step {child_index} does not start at that child\n  base = {}\n  child lhs = {}",
+            self.term_dag.to_string(base),
+            self.term_dag.to_string(child_lhs),
         );
     }
 

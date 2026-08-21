@@ -258,7 +258,7 @@ pub(crate) struct ProofInstrumentor<'a> {
     /// by [`ProofInstrumentor::global_actions_in`].
     global_action: usize,
     /// Which node of the current action, in
-    /// [`action_exprs`](crate::proofs::proof_encoding_helpers::action_exprs)
+    /// [`action_nodes`](crate::proofs::proof_encoding_helpers::action_nodes)
     /// order, is being instrumented. A reflexive fiat names this rather than the
     /// term it is about.
     action_expr: usize,
@@ -695,6 +695,9 @@ impl<'a> ProofInstrumentor<'a> {
         scope: &Scope,
         swapped: &str,
     ) -> Operand {
+        // The guest's own node is instrumented here rather than through
+        // `instrument_action_expr`, so name it here too.
+        let enclosing = self.enter_action_expr(expr);
         let (func_type, args) = constructor_operand(expr)
             .expect("construct-into guest must be a constructor application");
         let ctor_name = func_type.name.clone();
@@ -713,6 +716,7 @@ impl<'a> ProofInstrumentor<'a> {
             ));
             let update = self.update_fd_view(&ctor_name, &child_ids, target_id, "()");
             emit.stmts.push(update);
+            self.action_expr = enclosing;
             return Operand::plain(target_id.clone());
         }
 
@@ -759,6 +763,7 @@ impl<'a> ProofInstrumentor<'a> {
                     .column(HeadProof::Connector),
             ),
         };
+        self.action_expr = enclosing;
         Operand::built(target_id.clone(), fv_nat, guest_conn)
     }
 
@@ -1082,7 +1087,7 @@ impl<'a> ProofInstrumentor<'a> {
                 if generic_exprs.is_empty() && self.egraph.type_info.is_global(&func_type.name) {
                     let e_value = exprs.pop().expect("a set has a value");
                     let proof = if self.proofs_enabled() {
-                        self.global_value_proof(emit, func_type, &e_value)
+                        self.global_value_proof(emit, &e_value)
                     } else {
                         "()".to_string()
                     };
@@ -1232,13 +1237,7 @@ impl<'a> ProofInstrumentor<'a> {
     /// A global is only ever set by a top-level action — a rule head that names
     /// one reads it as a query variable — so the connector here is always a proof
     /// node the encoder minted, never a rule head's column.
-    fn global_value_proof(
-        &mut self,
-        emit: &mut Emit,
-        func_type: &FuncType,
-        e_value: &Operand,
-    ) -> String {
-        let value = &e_value.value;
+    fn global_value_proof(&mut self, emit: &mut Emit, e_value: &Operand) -> String {
         match &e_value.connector {
             Some(Connector::Node(connector)) => {
                 let connector = connector.clone();
@@ -1833,7 +1832,6 @@ impl<'a> ProofInstrumentor<'a> {
         fname: &str,
         args: &[Operand],
     ) -> Natural {
-        let sort = self.term_sort(fname);
         let nat_args: Vec<String> = args.iter().map(|a| a.natural.clone()).collect();
         let dedup_args = ids(args);
         let fv_nat = self.mint(emit.stmts, fname, &ListDisplay(&nat_args, " ").to_string());
@@ -2069,8 +2067,16 @@ impl<'a> ProofInstrumentor<'a> {
         emit: &mut Emit,
         scope: &Scope,
     ) -> Operand {
-        // A reflexive fiat minted under this node names it, so record which one
-        // we are at and restore the enclosing one on the way out.
+        let enclosing = self.enter_action_expr(expr);
+        let operand = self.instrument_action_expr_inner(expr, emit, scope);
+        self.action_expr = enclosing;
+        operand
+    }
+
+    /// Record that statements written from here on are about `expr`, so a
+    /// reflexive fiat minted under it names that node. Returns the enclosing
+    /// node, which the caller restores on the way out.
+    fn enter_action_expr(&mut self, expr: &ResolvedExpr) -> usize {
         let enclosing = self.action_expr;
         if let Some(&at) = self
             .action_expr_index
@@ -2078,9 +2084,7 @@ impl<'a> ProofInstrumentor<'a> {
         {
             self.action_expr = at;
         }
-        let operand = self.instrument_action_expr_inner(expr, emit, scope);
-        self.action_expr = enclosing;
-        operand
+        enclosing
     }
 
     fn instrument_action_expr_inner(
