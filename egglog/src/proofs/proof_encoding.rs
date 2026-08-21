@@ -193,6 +193,9 @@ pub(crate) struct EncodingState {
     /// distinct eq-sort among the view's columns (see [`ViewIndex`]).
     pub view_index: HashMap<String, Vec<ViewIndex>>,
     pub term_header_added: bool,
+    /// How many global actions the encoder has numbered, for the debug check
+    /// that its numbering tracks the program proof checking reads.
+    pub global_actions_numbered: usize,
     // TODO this is very ugly- we should separate out a typechecking struct
     // since we didn't need an entire e-graph
     // When Some term encoding is enabled.
@@ -216,6 +219,7 @@ impl EncodingState {
             container_rebuild_proof_name: HashMap::default(),
             view_index: HashMap::default(),
             term_header_added: false,
+            global_actions_numbered: 0,
             original_typechecking: None,
             proofs_enabled: false,
             proof_names: EncodingNames::new(symbol_gen),
@@ -248,6 +252,11 @@ pub(crate) struct ProofInstrumentor<'a> {
     /// Anchor requests no body atom could reach, as proof variable and the
     /// value variable asked about. Reading one is an error.
     unanchored: HashMap<String, String>,
+    /// The index, in the program proof checking reads, of the global action
+    /// being encoded. A fiat names this rather than its own endpoints, so
+    /// conversion recovers them by evaluating the action. Advanced per command
+    /// by [`ProofInstrumentor::global_actions_in`].
+    global_action: usize,
 }
 
 /// Where a variable a rule body binds gets its reflexive `t = t` proof from: a
@@ -409,7 +418,14 @@ fn read_vars(args_joined: &str) -> impl Iterator<Item = &str> {
 
 impl<'a> ProofInstrumentor<'a> {
     pub(crate) fn new(egraph: &'a mut EGraph) -> Self {
+        // Where this program's global actions start in the one proof checking
+        // reads, which is what a fiat names instead of naming its endpoints.
+        // Everything already there is from commands run before this one.
+        let global_action =
+            crate::proofs::proof_checker::gather_global_actions(&egraph.proof_check_program)
+                .count();
         Self {
+            global_action,
             egraph,
             reflexive: HashSet::default(),
             deferred: HashMap::default(),
@@ -426,6 +442,25 @@ impl<'a> ProofInstrumentor<'a> {
         program: Vec<ResolvedNCommand>,
     ) -> Result<Vec<Command>, Error> {
         Self::new(egraph).add_term_encoding_helper(program)
+    }
+
+    /// How many global actions `command` contributes to the program proof
+    /// checking reads, matching what
+    /// [`gather_global_actions`](crate::proofs::proof_checker::gather_global_actions)
+    /// will enumerate over it.
+    ///
+    /// [`Self::lower_inputs`] has already replaced each `(input …)` with one
+    /// action per row in that program, while the encoded program keeps the
+    /// command and loads it at run time, so an input counts its rows. Both call
+    /// [`Self::input_actions`], so the two counts cannot drift.
+    fn global_actions_in(&self, command: &ResolvedNCommand) -> Result<usize, Error> {
+        Ok(match command {
+            ResolvedNCommand::CoreAction(_) => 1,
+            ResolvedNCommand::Input { span, name, file } => {
+                Self::input_actions(self.egraph, span, name, file)?.len()
+            }
+            _ => 0,
+        })
     }
 
     pub(crate) fn lower_inputs(
@@ -2507,7 +2542,10 @@ impl<'a> ProofInstrumentor<'a> {
 
         for command in program {
             let at = res.len();
+            let global_actions = self.global_actions_in(&command)?;
             self.term_encode_command(&command, &mut res)?;
+            self.global_action += global_actions;
+            self.egraph.proof_state.global_actions_numbered = self.global_action;
             // A packed constructor and a subsumption marker are properties of the
             // statements written, so each is declared with the first command using
             // it — ahead of that command, and outside any `fail` wrapping it.

@@ -2751,6 +2751,19 @@ impl EGraph {
 
             let term_encoding_added =
                 ProofInstrumentor::add_term_encoding(self, typechecked_no_globals)?;
+            // A fiat names a global action by index, so the encoder's numbering
+            // has to be the one `gather_global_actions` will walk. It counts the
+            // encoded program's commands while the checker walks the lowered
+            // one; the two agree only because neither lowering changes how many
+            // global actions a command contributes.
+            debug_assert_eq!(
+                self.proof_state.global_actions_numbered,
+                crate::proofs::proof_checker::gather_global_actions(&self.proof_check_program)
+                    .count()
+                    + crate::proofs::proof_checker::gather_global_actions(&per_row_before_proofs)
+                        .count(),
+                "the encoder's global-action numbering drifted from the checker's program"
+            );
             let mut new_typechecked = vec![];
             for new_cmd in term_encoding_added {
                 let desugared =
