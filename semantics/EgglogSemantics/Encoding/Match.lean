@@ -93,6 +93,18 @@ reading. `Database.GlobalsRead` is the one clause no pair reached here makes non
 `globalsRead_nonvacuous` — with `globalsAgree_nonvacuous` for the strengthening — is that clause
 at a state binding a global. `entrySound_headBuild_witness` is the head-build case run at the
 same pair, at the view entry that run really wrote.
+
+`uProgram`, at the end, is the pair the head's *`union`* case needs: a rule head that unions
+two distinct nullary constructors, so that `cong_headUnion` is discharged where the source
+state is **not** diagonal — which `cong_headUnion_witness` cannot check and which is the whole
+of what that lemma is for. Its target-side run stops one command short of `encode`'s output,
+and `uTgt_saturate_infinite` is the compiled reason: `encode`'s rebuild has **no fixpoint**
+after a `union` between distinct built terms, so `ProgramStep Database.empty (encode P) tgt`
+— satisfiable at a program that only builds (`satProgram_programStep`) — is satisfiable at no
+program that asserts an equation. `Database.UnionsJoined`, which is what
+`Encoding/Correspond.lean` now reduces `execM_unionsRead` to, is witnessed there too:
+`uTgt_not_unionsRead` is the obligation failing before the rebuild's one firing and
+`uRebuilt_unionsJoined` is all three clauses holding after it.
 -/
 
 namespace Egglog
@@ -2035,9 +2047,12 @@ theorem entrySound_headBuild_witness :
 
 /-- **`cong_headUnion` run at the same pair.** What it checks is that the composition typechecks
 against a reachable pair with every hypothesis discharged; what it does **not** check is a
-non-reflexive edge, because no program either encoding file steps has a `union` inside a rule
-head and `wSrcD.eqs` is the diagonal. The non-reflexive case is `cong_of_eqs`', witnessed at a
-state holding a `@UF` entry by `refutationState_edgesSound`. -/
+non-reflexive edge, because `wProgram` has no `union` inside its rule head and `wSrcD.eqs` is
+the diagonal.
+
+**The non-reflexive case is `cong_headUnion_union_witness`**, at the end of this file: a rule
+head that unions two distinct terms, both runs stepped, and `Cong` concluded between terms
+that are not equal. -/
 theorem cong_headUnion_witness :
     Cong wSrcD (.app "F" [.app "A" []]) (.app "F" [.app "A" []]) := by
   refine cong_headUnion (q := wSrcRule.query) (n := 0) (m₁ := 0) (m₂ := 0)
@@ -2051,5 +2066,934 @@ theorem cong_headUnion_witness :
     exact wSrcSig_isCtor_F
   · obtain rfl : v = "x" := by simpa [Expr.vars, Expr.varsList] using hv
     exact Or.inl (by rw [wSrcRule_query_vars]; simp)
+
+/-! ### A `union` inside a rule head
+
+`cong_headUnion_witness` above runs the head's `union` case at `wProgram`, where `wSrcD.eqs`
+is the diagonal: the pair it concludes about is `t = t`, and the case the lemma exists for —
+an equation between **distinct** terms — is untested. `uProgram` below is the program that
+tests it.
+
+`(union (A) (B))` is a rule *head*, `(A)` and `(B)` are two distinct nullary constructors,
+and both runs are stepped. `hfired` is discharged from the source's own top-level `union` of
+the same pair, exactly as `entrySound_headBuild_witness` discharges its `hfired` from the
+term `wProgram`'s own action built: the hypothesis is "the source rule, fired at the
+substitution the correspondence returns, asserted this pair", and what a witness owes is a
+reachable state where the pair *is* asserted and the head's two operands evaluate to it.
+
+**The encoded run is stepped up to its last command, and that is a finding rather than an
+omission.** `encode` emits `Cmd.saturate rebuildRuleset` after the top-level `union`, and
+`uTgt_saturate_infinite` below is the compiled reason no state satisfies it: a `union`
+between distinct built terms puts a `@UF` edge on a view's e-class column, the e-class
+rebuild rule re-keys that view row, the displaced row *stays* (`terms` only grows), and the
+collision between the two rows builds the proof tower `Encoding/Encode.lean`'s `Rebuilt`
+docstring describes — the one `identityVals := some 1` disarms for a *self*-collision only.
+So `ProgramStep Database.empty (encode P) tgt` is satisfiable at a `P` that only builds
+(`satProgram_programStep`) and unsatisfiable as soon as `P` asserts an equation between
+distinct terms. -/
+
+/-- `(A)`. -/
+def uA : Term := .app "A" []
+
+/-- `(B)`, the term `uProgram` unions `uA` with. Above `uA` in `Term.blt`, so it is the
+`ordering-max` endpoint and the `@UF` edge is keyed at it. -/
+def uB : Term := .app "B" []
+
+theorem uA_ne_uB : uA ≠ uB := by simp [uA, uB]
+
+/-- `(rule ((A)) ((union (A) (B))))`: one grounded pattern, and a head that is a `union` of
+two distinct terms. -/
+def uSrcRule : Rule :=
+  { query := [.expr (.app "A" [])],
+    actions := [.union (.app "A" []) (.app "B" [])], ruleset := "" }
+
+/-- Two nullary constructors, the rule whose head unions them, and the same `union` at top
+level — which is what puts the pair in `eqs` and what gives the encoded query a row to match
+on. -/
+def uProgram : Program :=
+  [.decl "A" wADecl, .decl "B" wADecl, .rule uSrcRule,
+   .action (.union (.app "A" []) (.app "B" []))]
+
+/-! #### The source side -/
+
+/-- The signature the two declarations install. -/
+def uSrcSig : Signature :=
+  Function.update (Function.update Database.empty.sig "A" (some wADecl)) "B" (some wADecl)
+
+/-- After the two declarations and the rule: no term yet. -/
+def uSrcBase : Database :=
+  { Database.empty with
+    sig := uSrcSig,
+    rules := insert uSrcRule Database.empty.rules }
+
+/-- **The source state `uProgram` runs to**: the rule registered, `(A)` and `(B)` built, and
+the equation between them asserted. -/
+def uSrcD : Database := uSrcBase.addEq uA uB
+
+private theorem uSrcBase_terms : uSrcBase.terms = ∅ := by
+  refine Set.eq_empty_of_forall_notMem fun t ht => ?_
+  obtain ⟨u, hu⟩ := Database.mem_terms_iff.mp ht
+  simp [uSrcBase, Database.empty] at hu
+
+theorem uSrcD_terms : uSrcD.terms = uA.subterms ∪ uB.subterms := by
+  rw [uSrcD, Database.addEq_terms, uSrcBase_terms, Set.empty_union]
+
+/-- **And it is reachable**: two declarations, the rule, and the `union`. -/
+theorem uProgramStep_src : ProgramStep Database.empty uProgram uSrcD := by
+  refine .cons ⟨_, rfl, .refl⟩ (.cons ⟨_, rfl, .refl⟩
+    (.cons ⟨_, rfl, .refl⟩ (.cons ⟨uSrcD, ?_, .refl⟩ .nil)))
+  change cmdEffect _ (.action (.union (.app "A" []) (.app "B" []))) = some uSrcD
+  simp only [cmdEffect, evalAction, Expr.eval, Expr.evalList, uSrcD, uA, uB]
+  rfl
+
+/-- **The pair is asserted**, which is what makes the witness non-reflexive. -/
+theorem uSrcD_mem_eq : (uA, uB) ∈ uSrcD.eqs := by
+  rw [uSrcD, Database.addEq_eqs]; exact Set.mem_insert _ _
+
+/-- **So the source state is not diagonal** — the one thing `wSrcD` is and this is not. -/
+theorem uSrcD_not_diag : ¬ uSrcD.Diag := fun h => uA_ne_uB (h _ uSrcD_mem_eq)
+
+theorem uSrcD_mem_A : uA ∈ uSrcD.terms := by
+  rw [uSrcD_terms]; exact Or.inl (Term.self_mem_subterms _)
+
+theorem uSrcD_mem_B : uB ∈ uSrcD.terms := by
+  rw [uSrcD_terms]; exact Or.inr (Term.self_mem_subterms _)
+
+theorem uSrcD_wf : uSrcD.WF := by
+  refine Database.WF.addEq ?_ _ _ (by simp [uA, uB, Term.isLit])
+  exact { eqsRefl := fun t ht => absurd (uSrcBase_terms ▸ ht) (by simp),
+          subtermClosed := fun t ht => absurd (uSrcBase_terms ▸ ht) (by simp),
+          envInTerms := by simp [uSrcBase, Database.empty],
+          litsIsolated := by simp [Database.LitsIsolated, uSrcBase, Database.empty] }
+
+/-- The two terms the state holds, enumerated. -/
+private theorem uSrcD_mem_cases {t : Term} (h : t ∈ uSrcD.terms) : t = uA ∨ t = uB := by
+  rw [uSrcD_terms] at h
+  simpa [uA, uB, or_comm] using h
+
+/-- **`Database.TermsBuild` holds**: both applications the state holds are declared
+constructors, neither shadowing a primitive. -/
+theorem uSrcD_termsBuild : uSrcD.TermsBuild := by
+  intro f as hm
+  rcases uSrcD_mem_cases hm with h | h
+  · obtain ⟨rfl, rfl⟩ : f = "A" ∧ as = [] := by simpa [uA] using h
+    exact ⟨rfl, wADecl, by simp [uSrcD, uSrcBase, uSrcSig], rfl⟩
+  · obtain ⟨rfl, rfl⟩ : f = "B" ∧ as = [] := by simpa [uB] using h
+    exact ⟨rfl, wADecl, by simp [uSrcD, uSrcBase, uSrcSig], rfl⟩
+
+/-! #### The target side
+
+`wProgram_programStep`'s shape at one command more and one command short: `@Rule_0` is
+declared at arity 1 as there, two table triples instead of two, and the encoded rule's head
+is where the `@UF` set appears — but the trailing `Cmd.saturate rebuildRuleset` is *not*
+stepped, and `uTgt_saturate_infinite` is why. -/
+
+/-- `(ordering-max (A) (B))`, the `@UF` key the encoded `union` writes at. `(A)` is below
+`(B)` in `Term.blt`, so this is `(B)`. -/
+def uMaxE : Expr := maxE (.app "A" []) (.app "B" [])
+
+/-- `(ordering-min (A) (B))`, which is `(A)`. -/
+def uMinE : Expr := minE (.app "A" []) (.app "B" [])
+
+/-- `B`'s e-class rebuild rule, `satRebuildRule` at the other constructor. This is the rule
+that fires here and does not fire at `wProgram`: its `@UF` premise has a row to read. -/
+def uRebuildB : Rule :=
+  { query := [.values [.var "@e", .var "@p"] (viewName "B") [],
+              .values [.var "@x", .var "@q"] ufName [.var "@e"]],
+    actions := [.set (viewName "B") [] [.var "@x", transE (.var "@p") (.var "@q")]],
+    ruleset := rebuildRuleset }
+
+/-- The source rule's encoding: one view read, and a head that `set`s the `@UF` edge under
+the firing's own `@Rule_0` justification. -/
+def uEncRule : Rule :=
+  { query := [.values [.var "@v0", .var "@v1"] (viewName "A") []],
+    actions := [.set (termName "A") [.app "A" []] [],
+                .set (viewName "A") [] [.app "A" [], fiatE],
+                .set (termName "B") [.app "B" []] [],
+                .set (viewName "B") [] [.app "B" [], fiatE],
+                .set ufName [uMaxE] [uMinE, ruleE 0 [.var "@v1"]]],
+    ruleset := "" }
+
+/-- **The prelude `encode uProgram` emits**: eleven declarations — the three fixed proof
+heads, `@Rule_0`, `@UF` and the two table triples — and then three rules. `congrArities` is
+empty at two nullary constructors, so no `@Congr_k` is declared. -/
+def uEncodedPrelude : Program :=
+  [.decl fiatName (proofDecl 0), .decl symName (proofDecl 1), .decl transName (proofDecl 2),
+   .decl (ruleName 0) (proofDecl 1),
+   .decl ufName ufDecl,
+   .decl "A" (skolemDecl 0), .decl (viewName "A") (viewDecl 0),
+   .decl (termName "A") (termDecl 0),
+   .decl "B" (skolemDecl 0), .decl (viewName "B") (viewDecl 0),
+   .decl (termName "B") (termDecl 0),
+   .rule pathCompressRule, .rule satRebuildRule, .rule uRebuildB, .rule uEncRule]
+
+/-- **And what the one source action becomes**: four `set`s for the two operands' builds and
+the `@UF` edge. `wEncodedActions`' counterpart minus its last command, which is the one no
+state satisfies. -/
+def uEncodedSets : Program :=
+  [.action (.set (termName "A") [.app "A" []] []),
+   .action (.set (viewName "A") [] [.app "A" [], fiatE]),
+   .action (.set (termName "B") [.app "B" []] []),
+   .action (.set (viewName "B") [] [.app "B" [], fiatE]),
+   .action (.set ufName [uMaxE] [uMinE, fiatE])]
+
+/-- The twenty commands the run below steps, as `satEncoded` and `wEncoded` are stepped. -/
+def uEncodedPrefix : Program := uEncodedPrelude ++ uEncodedSets
+
+/-- **And the twenty-first, which is the whole of what is left.** -/
+theorem uEncoded_eq : encode uProgram = uEncodedPrefix ++ [.saturate rebuildRuleset] := rfl
+
+/-- The signature `encode uProgram`'s prelude installs, in declaration order. -/
+def uSig : Signature :=
+  Function.update (Function.update (Function.update (Function.update
+    (Function.update (Function.update (Function.update (Function.update
+      (Function.update (Function.update (Function.update
+        Database.empty.sig
+        fiatName (some (proofDecl 0))) symName (some (proofDecl 1)))
+        transName (some (proofDecl 2))) (ruleName 0) (some (proofDecl 1)))
+        ufName (some ufDecl))
+        "A" (some (skolemDecl 0))) (viewName "A") (some (viewDecl 0)))
+        (termName "A") (some (termDecl 0))
+        ) "B" (some (skolemDecl 0))) (viewName "B") (some (viewDecl 0)))
+        (termName "B") (some (termDecl 0))
+
+set_option maxHeartbeats 2000000 in
+-- As `wSig_merge`: `split_ifs` on an eleven-deep `Function.update` chain, each goal
+-- deciding an `FnDecl` equality through `viewName`/`termName`.
+/-- **The three `:merge` functions with a body are `@UF` and the two views.** The two term
+relations are `:no-merge` and everything else is a constructor. -/
+private theorem uSig_merge {f : FnName} {decl : FnDecl} {body : List Action} {res : List Expr}
+    (hsig : uSig f = some decl) (hm : decl.merge = some (.merge body res)) :
+    (f = ufName ∧ decl = ufDecl) ∨ (f = viewName "A" ∧ decl = viewDecl 0) ∨
+      (f = viewName "B" ∧ decl = viewDecl 0) := by
+  simp only [uSig, Function.update_apply, Database.empty] at hsig
+  split_ifs at hsig <;>
+    obtain rfl := Option.some.inj hsig
+    <;> first
+      | exact Or.inl ⟨by assumption, rfl⟩
+      | exact Or.inr (Or.inl ⟨by assumption, rfl⟩)
+      | exact Or.inr (Or.inr ⟨by assumption, rfl⟩)
+      | simp [proofDecl, skolemDecl, termDecl] at hm
+
+/-- After the prelude and the encoded rule: eleven declarations and four rules. -/
+def uPrelude : Database :=
+  { Database.empty with
+    sig := uSig,
+    rules := insert uEncRule (insert uRebuildB (insert satRebuildRule
+      (insert pathCompressRule Database.empty.rules))) }
+
+/-- `@ATerm(A)`. -/
+def uATermE : Term := .app (termName "A") [uA]
+
+/-- `@AView() ↦ (A, @Fiat)`. -/
+def uAViewE : Term := .app (viewName "A") [uA, .app fiatName []]
+
+/-- `@BTerm(B)`. -/
+def uBTermE : Term := .app (termName "B") [uB]
+
+/-- `@BView() ↦ (B, @Fiat)`, the row the rebuild displaces and `terms` keeps. -/
+def uBViewE : Term := .app (viewName "B") [uB, .app fiatName []]
+
+/-- `@UF(B) ↦ (A, @Fiat)`, the edge the top-level `union` writes: keyed at `ordering-max`,
+which is `(B)`. -/
+def uUFE : Term := .app ufName [uB, uA, .app fiatName []]
+
+/-- The three states the five `set`s pass through, named for the reason `wS1` is. -/
+private def uS1 : Database := uPrelude.addTerm uATermE
+
+@[inherit_doc uS1] private def uS2 : Database := uS1.addTerm uAViewE
+
+@[inherit_doc uS1] private def uS3 : Database := uS2.addTerm uBTermE
+
+@[inherit_doc uS1] private def uS4 : Database := uS3.addTerm uBViewE
+
+/-- **The state `encode uProgram` runs to before its rebuild.** -/
+def uTgt : Database := uS4.addTerm uUFE
+
+theorem uTgt_sig : uTgt.sig = uSig := rfl
+
+theorem uTgt_rules : uTgt.rules = uPrelude.rules := rfl
+
+theorem uTgt_env : uTgt.env = [] := rfl
+
+theorem uPrelude_terms : uPrelude.terms = ∅ := by
+  refine Set.eq_empty_of_forall_notMem fun t ht => ?_
+  obtain ⟨u, hu⟩ := Database.mem_terms_iff.mp ht
+  simp [uPrelude, Database.empty] at hu
+
+theorem uTgt_terms : uTgt.terms =
+    uATermE.subterms ∪ uAViewE.subterms ∪ uBTermE.subterms ∪ uBViewE.subterms ∪
+      uUFE.subterms := by
+  simp [uTgt, uS4, uS3, uS2, uS1, uPrelude_terms, Set.union_assoc]
+
+/-- The eight terms the run holds, enumerated. -/
+private theorem uTgt_mem_cases {t : Term} (h : t ∈ uTgt.terms) :
+    t = uUFE ∨ t = uBViewE ∨ t = uBTermE ∨ t = uB ∨ t = uAViewE ∨
+      t = Term.app fiatName [] ∨ t = uATermE ∨ t = uA := by
+  rw [uTgt_terms] at h
+  simpa [uATermE, uAViewE, uBTermE, uBViewE, uUFE, uA, uB] using h
+
+/-- Only `Database.addTerm` writes, so the state is diagonal — the encoded program asserts
+no equation even here, where the source it encodes asserts one. -/
+theorem uTgt_diag : uTgt.Diag := by
+  have h : uPrelude.Diag := fun p hp => absurd hp (by simp [uPrelude, Database.empty])
+  exact ((((h.addTerm _).addTerm _).addTerm _).addTerm _).addTerm _
+
+/-- The target's subterm closure. -/
+theorem uTgt_subtermClosed : ∀ t ∈ uTgt.terms, t.subterms ⊆ uTgt.terms := by
+  intro t ht
+  rw [uTgt_terms] at ht ⊢
+  rcases ht with (((h | h) | h) | h) | h <;> intro s hs <;>
+    first
+      | exact Or.inl (Or.inl (Or.inl (Or.inl (Term.subterms_subset_of_mem h hs))))
+      | exact Or.inl (Or.inl (Or.inl (Or.inr (Term.subterms_subset_of_mem h hs))))
+      | exact Or.inl (Or.inl (Or.inr (Term.subterms_subset_of_mem h hs)))
+      | exact Or.inl (Or.inr (Term.subterms_subset_of_mem h hs))
+      | exact Or.inr (Term.subterms_subset_of_mem h hs)
+
+theorem uTgt_mem_viewA : uAViewE ∈ uTgt.terms := by
+  rw [uTgt_terms]
+  exact Or.inl (Or.inl (Or.inl (Or.inr (Term.self_mem_subterms _))))
+
+theorem uTgt_mem_viewB : uBViewE ∈ uTgt.terms := by
+  rw [uTgt_terms]
+  exact Or.inl (Or.inr (Term.self_mem_subterms _))
+
+theorem uTgt_mem_uf : uUFE ∈ uTgt.terms := Database.mem_addTerm _ _
+
+theorem uTgt_mem_A : uA ∈ uTgt.terms :=
+  uTgt_subtermClosed _ uTgt_mem_viewA
+    (Term.arg_subterms (show uA ∈ [uA, Term.app fiatName []] by simp)
+      (Term.self_mem_subterms _))
+
+theorem uTgt_mem_B : uB ∈ uTgt.terms :=
+  uTgt_subtermClosed _ uTgt_mem_viewB
+    (Term.arg_subterms (show uB ∈ [uB, Term.app fiatName []] by simp)
+      (Term.self_mem_subterms _))
+
+theorem uTgt_mem_fiat : Term.app fiatName [] ∈ uTgt.terms :=
+  uTgt_subtermClosed _ uTgt_mem_viewA
+    (Term.arg_subterms (show Term.app fiatName [] ∈ [uA, Term.app fiatName []] by simp)
+      (Term.self_mem_subterms _))
+
+/-- **A view is never the union-find table**, whatever the constructor: the two names differ
+in their last character. The `@UF` row is as wide as a nullary view entry plus a column, so
+nothing about lengths excludes it. -/
+theorem viewName_ne_ufName {f : FnName} : viewName f ≠ ufName := by
+  intro h
+  have h2 := congrArg (fun s => (String.toList s).reverse) h
+  simp [viewName, ufName, String.toList_append, List.reverse_append] at h2
+
+/-- **The two view rows `uTgt` holds**, pinned: of the eight terms, three are too short to be
+a view entry at all, the two term-relation rows are one column wide, and the `@UF` row goes by
+name (`viewName_ne_ufName`) — its width is a nullary view entry's plus one. -/
+private theorem uTgt_mem_view {f : FnName} {cs : List Term} {e pf : Term}
+    (hmem : Term.app (viewName f) (cs ++ [e, pf]) ∈ uTgt.terms) :
+    (f = "A" ∧ cs = [] ∧ e = uA) ∨ (f = "B" ∧ cs = [] ∧ e = uB) := by
+  rcases uTgt_mem_cases hmem with h' | h' | h' | h' | h' | h' | h' | h' <;>
+      simp only [uUFE, uBViewE, uBTermE, uAViewE, uATermE, uA, uB, Term.app.injEq] at h' <;>
+    [skip; skip; skip; skip; skip; skip; skip; skip]
+  · exact absurd h'.1 viewName_ne_ufName
+  · refine Or.inr ⟨viewName_inj h'.1, ?_⟩
+    obtain rfl : cs = [] := by
+      have hl : (cs ++ [e, pf]).length = 2 := by rw [h'.2]; rfl
+      simp only [List.length_append, List.length_cons] at hl
+      exact List.eq_nil_of_length_eq_zero (by omega)
+    exact ⟨rfl, (show e = uB ∧ pf = Term.app fiatName [] by simpa [uB] using h'.2).1⟩
+  · have hl : (cs ++ [e, pf]).length = 1 := by rw [h'.2]; rfl
+    simp only [List.length_append, List.length_cons] at hl
+    omega
+  · have hl : (cs ++ [e, pf]).length = 0 := by rw [h'.2]; rfl
+    simp only [List.length_append, List.length_cons] at hl
+    omega
+  · refine Or.inl ⟨viewName_inj h'.1, ?_⟩
+    obtain rfl : cs = [] := by
+      have hl : (cs ++ [e, pf]).length = 2 := by rw [h'.2]; rfl
+      simp only [List.length_append, List.length_cons] at hl
+      exact List.eq_nil_of_length_eq_zero (by omega)
+    exact ⟨rfl, (show e = uA ∧ pf = Term.app fiatName [] by simpa [uA] using h'.2).1⟩
+  · have hl : (cs ++ [e, pf]).length = 0 := by rw [h'.2]; rfl
+    simp only [List.length_append, List.length_cons] at hl
+    omega
+  · have hl : (cs ++ [e, pf]).length = 1 := by rw [h'.2]; rfl
+    simp only [List.length_append, List.length_cons] at hl
+    omega
+  · have hl : (cs ++ [e, pf]).length = 0 := by rw [h'.2]; rfl
+    simp only [List.length_append, List.length_cons] at hl
+    omega
+
+/-- The same read through `Database.Out`, which on a diagonal state is a lookup. -/
+private theorem uTgt_out_view {f : FnName} {cs : List Term} {e pf : Term}
+    (ho : uTgt.Out (viewName f) cs [e, pf]) :
+    (f = "A" ∧ cs = [] ∧ e = uA) ∨ (f = "B" ∧ cs = [] ∧ e = uB) := by
+  obtain ⟨bs, hcl, hmem⟩ := ho
+  obtain rfl : cs = bs :=
+    List.forall₂_eq_eq_eq ▸ (hcl.toForall₂.imp fun _ _ h => Cong.eq_of_diag uTgt_diag h)
+  exact uTgt_mem_view hmem
+
+/-- **`Database.ViewsSound` holds at `uTgt`**: the two rows the builds wrote, each
+`entrySound_build` at a term the source holds. -/
+theorem uTgt_viewsSound : uTgt.ViewsSound uSrcD := by
+  intro f cs e pf ho
+  rcases uTgt_out_view ho with ⟨rfl, rfl, rfl⟩ | ⟨rfl, rfl, rfl⟩
+  · exact entrySound_build uSrcD_wf uSrcD_mem_A
+  · exact entrySound_build uSrcD_wf uSrcD_mem_B
+
+/-! #### The run, and the head's `union` at it -/
+
+set_option maxHeartbeats 2000000 in
+-- Fifteen `cmdEffect` reductions at a state that grows by a `Function.update` each time, as
+-- `satProgram_programStep`; the default budget is short.
+/-- The fifteen declaration and rule commands, stepped: each a `cmdEffect` and a reflexive
+merge phase. -/
+theorem uPreludeStep : ProgramStep Database.empty uEncodedPrelude uPrelude := by
+  iterate 14 refine .cons ⟨_, rfl, .refl⟩ ?_
+  exact .cons ⟨uPrelude, rfl, .refl⟩ .nil
+
+set_option maxHeartbeats 2000000 in
+-- Each `set` decides `Signature.IsCtor` through the whole eleven-deep declaration chain, and
+-- the last one runs two primitives on top of that.
+/-- The five `set`s. The last one is the `@UF` edge, and stepping it is where
+`ordering-max`/`ordering-min` are actually run: they pick `(B)` for the key and `(A)` for the
+value, which is what makes `uUFE` the row. -/
+theorem uSetsStep : ProgramStep uPrelude uEncodedSets uTgt :=
+  .cons ⟨uS1, rfl, .refl⟩ (.cons ⟨uS2, rfl, .refl⟩ (.cons ⟨uS3, rfl, .refl⟩
+    (.cons ⟨uS4, rfl, .refl⟩ (.cons ⟨uTgt, rfl, .refl⟩ .nil))))
+
+/-- **And the encoded run is reachable up to its rebuild**, which is every command of
+`encode uProgram` but the last (`uEncoded_eq`). -/
+theorem uProgram_programStep_prefix :
+    ProgramStep Database.empty uEncodedPrefix uTgt := uPreludeStep.append uSetsStep
+
+/-- The rule the prelude installed is the encoding of the source rule's query. -/
+theorem uEncRule_query_eq : (encodeQuery uSrcRule.query 0).1 = uEncRule.query := rfl
+
+/-- What the encoded query matched under: the view read's two generated columns. The source
+query has no variable of its own, so this is all of it. -/
+def uSubst : Env := [("@v0", uA), ("@v1", .app fiatName [])]
+
+/-- The one emitted atom matches, at `(A)`'s view row. -/
+theorem uTgt_validSubst :
+    ValidSubst uTgt (.values [.var "@v0", .var "@v1"] (viewName "A") []) uSubst := by
+  refine ⟨⟨List.Perm.refl _, ?_⟩, .values uTgt_mem_viewA rfl rfl (Database.mem_addTerm _ _)⟩
+  intro b hb
+  simp only [uSubst, List.mem_cons, List.not_mem_nil, or_false] at hb
+  rcases hb with rfl | rfl
+  · exact uTgt_mem_A
+  · exact uTgt_mem_fiat
+
+/-- **So the encoded query matches** — `cong_headUnion`'s target-side premise, inhabited at a
+state the encoded program reaches. -/
+theorem uTgt_validQuerySubst :
+    ValidQuerySubst uTgt (encodeQuery uSrcRule.query 0).1 uSubst :=
+  ⟨[uSubst], .cons uTgt_validSubst .nil, .single _⟩
+
+theorem uSrcRule_noValues : ∀ p ∈ uSrcRule.query, p.NoValues := by
+  intro p hp
+  obtain rfl : p = .expr (.app "A" []) := by simpa [uSrcRule] using hp
+  trivial
+
+theorem uSrcRule_grounded : ∀ p ∈ uSrcRule.query, p.Grounded := by
+  intro p hp
+  obtain rfl : p = .expr (.app "A" []) := by simpa [uSrcRule] using hp
+  intro l
+  simp
+
+/-- Vacuously — the query has no variable. `Query.VarsKeyed` is exercised non-vacuously at
+`wProgram`; what this program is for is the *head*. -/
+theorem uSrcRule_varsKeyed : Query.VarsKeyed uSrcRule.query := by
+  intro v hv
+  simp [uSrcRule, Query.vars, Pattern.vars, Expr.vars, Expr.varsList] at hv
+
+/-- **And the program is inside the encoder's declared domain.** A `union` in a rule head is
+`Action.NoSet`, and the query's one pattern is neither a bare literal nor a bare variable. -/
+theorem uProgram_encodeDomain : uProgram.EncodeDomain where
+  ctorsOnly := by
+    intro c hc f d heq
+    subst heq
+    simp only [uProgram, List.mem_cons] at hc
+    rcases hc with h | h | h | h | h <;> simp_all [wADecl]
+  noSet := by
+    intro c hc
+    simp only [uProgram, List.mem_cons] at hc
+    rcases hc with rfl | rfl | rfl | rfl | h <;>
+      simp_all [Cmd.NoSet, Action.NoSet, Pattern.NoValues, uSrcRule]
+  noPrim := by decide
+  -- `String.isPrefixOf` does not reduce under `decide`'s evaluator; the kernel's does.
+  noAt := by decide +kernel
+  noAtVar := by decide +kernel
+  noAtRuleset := by decide +kernel
+  noLeafPattern := by
+    intro c hc
+    simp only [uProgram, List.mem_cons] at hc
+    rcases hc with rfl | rfl | rfl | rfl | h
+    · trivial
+    · trivial
+    · exact ⟨uSrcRule_grounded, uSrcRule_varsKeyed⟩
+    · trivial
+    · exact absurd h (by simp)
+
+/-- **`cong_headUnion` at a non-reflexive equation.**
+
+Every hypothesis discharged at the reachable pair, and the conclusion is `Cong` between two
+terms that are *not* equal — which is what `cong_headUnion_witness` cannot check and what the
+lemma exists for. `hfired` is the source's own assertion of the pair (`uSrcD_mem_eq`), and
+both operands' naming expressions are the operands themselves (`encodeBuild_fst`), evaluated
+in the target at the substitution the encoded query matched under.
+
+`ho` is taken at `Or.inl`, so the conclusion is the edge in the orientation `(A) = (B)`;
+`Or.inr` gives the other, which is what `ordering-max` leaves open. -/
+theorem cong_headUnion_union_witness :
+    uProgram.EncodeDomain ∧ ProgramStep Database.empty uProgram uSrcD ∧
+      ProgramStep Database.empty uEncodedPrefix uTgt ∧
+      ¬ uSrcD.Diag ∧ uA ≠ uB ∧ Cong uSrcD uA uB := by
+  refine ⟨uProgram_encodeDomain, uProgramStep_src, uProgram_programStep_prefix,
+    uSrcD_not_diag, uA_ne_uB, ?_⟩
+  refine cong_headUnion (q := uSrcRule.query) (n := 0) (m₁ := 0) (m₂ := 0)
+    uSrcD_termsBuild uTgt_viewsSound uTgt_diag uTgt_subtermClosed
+    (by simp [Database.GlobalsAgree, uSrcD, uSrcBase, Database.empty])
+    uSrcRule_noValues uSrcRule_grounded uSrcRule_varsKeyed uTgt_validQuerySubst
+    (e₁ := .app "A" []) (e₂ := .app "B" []) (t₁ := uA) (t₂ := uB)
+    (fun g hg _ => ?_) (fun v hv => ?_) rfl rfl
+    (fun _ _ _ _ => uSrcD_mem_eq) (Or.inl ⟨rfl, rfl⟩)
+  · have hg' : g = "A" ∨ g = "B" := by
+      simpa [Expr.fns, Expr.fnsList] using hg
+    rcases hg' with rfl | rfl <;>
+      exact ⟨wADecl, by simp [uSrcD, uSrcBase, uSrcSig], rfl⟩
+  · simp [Expr.vars, Expr.varsList] at hv
+
+/-! #### What the rebuild is for, at the state that needs it
+
+`Database.UnionsRead` — obligation `assert`'s `union` half — is **false** at `uTgt`, and
+`Database.UnionsJoined`'s third clause is exactly what fails there: the `@UF` edge is written
+and nothing has followed it, so `(A)` reads only `(A)` and `(B)` reads only `(B)`. One firing
+of `uRebuildB` repairs it, and the two states either side of that firing are what say the
+clause is load-bearing rather than decoration. -/
+
+/-- A literal is not among the eight terms, so a `ViewRepr` at `uTgt` is never `.lit`. -/
+private theorem uTgt_not_lit {l : Lit} : Term.lit l ∉ uTgt.terms := by
+  intro h
+  rcases uTgt_mem_cases h with h' | h' | h' | h' | h' | h' | h' | h' <;>
+    simp [uUFE, uBViewE, uBTermE, uAViewE, uATermE, uA, uB] at h'
+
+/-- **What `uTgt` reads a source term as**: itself, and nothing else. -/
+private theorem uTgt_viewRepr {t e : Term} (h : ViewRepr uTgt t e) :
+    (t = uA ∧ e = uA) ∨ (t = uB ∧ e = uB) := by
+  match h with
+  | .lit hm => exact absurd hm uTgt_not_lit
+  | @ViewRepr.app _ f as es e pf hl ho =>
+    rcases uTgt_out_view ho with ⟨rfl, rfl, rfl⟩ | ⟨rfl, rfl, rfl⟩
+    · obtain rfl : as = [] := by cases hl with | nil => rfl
+      exact Or.inl ⟨rfl, rfl⟩
+    · obtain rfl : as = [] := by cases hl with | nil => rfl
+      exact Or.inr ⟨rfl, rfl⟩
+
+/-- **`Database.UnionsRead` fails at `uTgt`.** The equation `(A) = (B)` is asserted by the
+source and the two terms share no id here: the `@UF` edge is present and unfollowed, so this
+is the obligation the rebuild — and nothing else — discharges. -/
+theorem uTgt_not_unionsRead : ¬ uTgt.UnionsRead uSrcD := by
+  intro h
+  obtain ⟨e, h₁, h₂⟩ := h uA uB uSrcD_mem_eq uA_ne_uB
+  rcases uTgt_viewRepr h₁ with ⟨-, h₁'⟩ | ⟨h₁', -⟩
+  · rcases uTgt_viewRepr h₂ with ⟨h₂', -⟩ | ⟨-, h₂'⟩
+    · exact uA_ne_uB h₂'.symm
+    · exact uA_ne_uB (h₁'.symm.trans h₂')
+  · exact uA_ne_uB h₁' 
+
+/-- `(@Trans @Fiat @Fiat)`: the row's own proof composed with the edge's. -/
+def uTransE : Term := .app transName [.app fiatName [], .app fiatName []]
+
+/-- `@BView() ↦ (A, @Trans @Fiat @Fiat)`, the row `uRebuildB` writes at `uTgt`. -/
+def uBView2E : Term := .app (viewName "B") [uA, uTransE]
+
+/-- **`uTgt` plus that one row.** Not a state `ProgramStep` reaches — the command that would
+reach it is the `Cmd.saturate` no state satisfies — but the row is exactly the one the
+rebuild rule fires and writes there (`uRebuilt_mem_ruleResults`). -/
+def uRebuilt : Database := uTgt.addTerm uBView2E
+
+theorem uRebuilt_diag : uRebuilt.Diag := uTgt_diag.addTerm _
+
+/-- The two terms the firing adds, and everything else is `uTgt`'s. -/
+private theorem uRebuilt_mem_cases {t : Term} (h : t ∈ uRebuilt.terms) :
+    t = uBView2E ∨ t = uTransE ∨ t ∈ uTgt.terms := by
+  rw [uRebuilt, Database.addTerm_terms] at h
+  rcases h with h | h
+  · exact Or.inr (Or.inr h)
+  · have h' : t = uBView2E ∨ t = uTransE ∨ t = Term.app fiatName [] ∨ t = uA := by
+      simpa [uBView2E, uTransE, uA] using h
+    rcases h' with rfl | rfl | rfl | rfl
+    · exact Or.inl rfl
+    · exact Or.inr (Or.inl rfl)
+    · exact Or.inr (Or.inr uTgt_mem_fiat)
+    · exact Or.inr (Or.inr uTgt_mem_A)
+
+/-- **A view is never a proof head**, by the same last character. -/
+theorem viewName_ne_transName {f : FnName} : viewName f ≠ transName := by
+  intro h
+  have h2 := congrArg (fun s => (String.toList s).reverse) h
+  simp [viewName, transName, String.toList_append, List.reverse_append] at h2
+
+/-- **The three view rows `uRebuilt` holds.** `(B)`'s key now carries two e-classes, which is
+the "view tables are not functional" phenomenon appearing here for the first time in a state
+this file steps to. -/
+private theorem uRebuilt_out_view {f : FnName} {cs : List Term} {e pf : Term}
+    (ho : uRebuilt.Out (viewName f) cs [e, pf]) :
+    (f = "A" ∧ cs = [] ∧ e = uA) ∨ (f = "B" ∧ cs = [] ∧ (e = uB ∨ e = uA)) := by
+  obtain ⟨bs, hcl, hmem⟩ := ho
+  obtain rfl : cs = bs :=
+    List.forall₂_eq_eq_eq ▸ (hcl.toForall₂.imp fun _ _ h => Cong.eq_of_diag uRebuilt_diag h)
+  rcases uRebuilt_mem_cases hmem with h' | h' | h'
+  · simp only [uBView2E, Term.app.injEq] at h'
+    refine Or.inr ⟨viewName_inj h'.1, ?_⟩
+    obtain rfl : cs = [] := by
+      have hl : (cs ++ [e, pf]).length = 2 := by rw [h'.2]; rfl
+      simp only [List.length_append, List.length_cons] at hl
+      exact List.eq_nil_of_length_eq_zero (by omega)
+    exact ⟨rfl, Or.inr (show e = uA ∧ pf = uTransE by simpa using h'.2).1⟩
+  · simp only [uTransE, Term.app.injEq] at h'
+    exact absurd h'.1 viewName_ne_transName
+  · exact (uTgt_mem_view h').imp (fun h => h) fun h => ⟨h.1, h.2.1, Or.inl h.2.2⟩
+
+/-- **And the one `@UF` row**, which is the only three-column term either state holds. -/
+private theorem uRebuilt_out_uf {t p pf : Term} (ho : uRebuilt.Out ufName [t] [p, pf]) :
+    t = uB ∧ p = uA := by
+  obtain ⟨bs, hcl, hmem⟩ := ho
+  obtain rfl : [t] = bs :=
+    List.forall₂_eq_eq_eq ▸ (hcl.toForall₂.imp fun _ _ h => Cong.eq_of_diag uRebuilt_diag h)
+  rcases uRebuilt_mem_cases hmem with h' | h' | h'
+  · simp only [uBView2E, Term.app.injEq] at h'
+    exact absurd h'.1.symm viewName_ne_ufName
+  · simp [uTransE] at h'
+  · rcases uTgt_mem_cases h' with h'' | h'' | h'' | h'' | h'' | h'' | h'' | h'' <;>
+      simp_all [uUFE, uBViewE, uBTermE, uAViewE, uATermE, uA, uB, ufName, viewName, termName,
+        fiatName]
+
+/-- **`Database.ViewsSound` survives the rebuild's re-keying**, and here it needs the source's
+*non-reflexive* congruence for the first time: the row `uRebuildB` wrote claims that `(B)`'s
+view holds `(A)`, which is `EntrySound` at `Cong uSrcD (B) (A)` — the `union`'s own equation,
+symmetrised. Every earlier witness discharged `EntrySound` at a reflexive `Cong`. -/
+theorem uRebuilt_viewsSound : uRebuilt.ViewsSound uSrcD := by
+  intro f cs e pf ho
+  rcases uRebuilt_out_view ho with ⟨rfl, rfl, rfl⟩ | ⟨rfl, rfl, (rfl | rfl)⟩
+  · exact entrySound_build uSrcD_wf uSrcD_mem_A
+  · exact entrySound_build uSrcD_wf uSrcD_mem_B
+  · exact ⟨[], uSrcD_mem_B, .nil, (Cong.assert uSrcD_mem_eq).symm⟩
+
+theorem uRebuilt_mem_viewA : uAViewE ∈ uRebuilt.terms := by
+  rw [uRebuilt, Database.addTerm_terms]; exact Or.inl uTgt_mem_viewA
+
+theorem uRebuilt_mem_viewB : uBViewE ∈ uRebuilt.terms := by
+  rw [uRebuilt, Database.addTerm_terms]; exact Or.inl uTgt_mem_viewB
+
+theorem uRebuilt_mem_uf : uUFE ∈ uRebuilt.terms := by
+  rw [uRebuilt, Database.addTerm_terms]; exact Or.inl uTgt_mem_uf
+
+theorem uRebuilt_mem_B : uB ∈ uRebuilt.terms := by
+  rw [uRebuilt, Database.addTerm_terms]; exact Or.inl uTgt_mem_B
+
+/-- **Every equation `uSrcD` asserts is the `union`'s pair or reflexive**: `Database.addTerm`
+writes only the diagonal, and `Database.addEq` writes the one pair on top of it. -/
+private theorem uSrcD_eq_or_diag {a b : Term} (hab : (a, b) ∈ uSrcD.eqs) :
+    ((a, b) = (uA, uB)) ∨ a = b := by
+  rw [uSrcD, Database.addEq_eqs] at hab
+  rcases hab with h | h
+  · exact Or.inl h
+  · have hd : uSrcBase.Diag := fun p hp => absurd hp (by simp [uSrcBase, Database.empty])
+    exact Or.inr (((hd.addTerm uA).addTerm uB) (a, b) h)
+
+/-- **All three clauses of `Database.UnionsJoined` hold at `uRebuilt`, and two of them
+non-vacuously.**
+
+* `readsSelf` — `(A)` and `(B)` each read their own build's row.
+* `edges` — the source's one non-reflexive equation, at the `@UF` row the encoded `union`
+  wrote, keyed at `ordering-max` and so in the `Or.inr` orientation.
+* `eclassFollowed` — at `(B)`, whose id has a parent, this is the row `uRebuildB` wrote; at
+  `(A)`, whose id has none, it is vacuous. So the clause is exercised where it bites.
+
+`uTgt_not_unionsRead` is the same three clauses one firing earlier, where `eclassFollowed`
+fails and the conclusion fails with it. -/
+theorem uRebuilt_unionsJoined : uRebuilt.UnionsJoined uSrcD where
+  readsSelf := by
+    intro t ht
+    rcases uSrcD_mem_cases ht with rfl | rfl
+    · exact .app .nil ⟨[], .nil, uRebuilt_mem_viewA⟩
+    · exact .app .nil ⟨[], .nil, uRebuilt_mem_viewB⟩
+  edges := by
+    intro a b hab hne
+    rcases uSrcD_eq_or_diag hab with h | h
+    · obtain ⟨rfl, rfl⟩ : a = uA ∧ b = uB := by simpa using h
+      exact Or.inr ⟨Term.app fiatName [], [uB], .cons uRebuilt_mem_B .nil, uRebuilt_mem_uf⟩
+    · exact absurd h hne
+  eclassFollowed := by
+    intro t p pf ht hself ho
+    obtain ⟨rfl, rfl⟩ := uRebuilt_out_uf ho
+    exact .app .nil ⟨[], .nil, Database.mem_addTerm _ _⟩
+
+/-- **So `Database.UnionsRead` holds at `uRebuilt`**, through the reduction — which is
+therefore exercised at a state with a real edge and a non-diagonal source, not only at the
+diagonal. -/
+theorem uRebuilt_unionsRead : uRebuilt.UnionsRead uSrcD :=
+  unionsRead_of_unionsJoined uRebuilt_unionsJoined
+
+/-- **And its conclusion is inhabited there**: the two endpoints share the id `(A)`. -/
+theorem uRebuilt_sameClass : SameClass uRebuilt uA uB :=
+  uRebuilt_unionsRead uA uB uSrcD_mem_eq uA_ne_uB
+
+/-! #### And the row is the rebuild's own
+
+`uRebuilt` is `uTgt` plus one row, and this is what says which row: the e-class rebuild rule
+for `B`, at the substitution `uTgt`'s two rows admit, evaluates to exactly it. So the witness
+above is not a hand-picked state — it is one firing of `encode`'s own maintenance rule, and
+`uRebuilt_contained_runRules` places it inside the round `Cmd.saturate rebuildRuleset` starts
+with. -/
+
+/-- What the view atom of `uRebuildB` binds: `(B)`'s row. -/
+def uRSubst1 : Env := [("@e", uB), ("@p", .app fiatName [])]
+
+/-- And what its `@UF` atom binds. `@e` is bound here too — the atom's key is `.var "@e"`,
+which `Pattern.freeVars` counts as free at an empty environment. -/
+def uRSubst2 : Env := [("@x", uA), ("@q", .app fiatName []), ("@e", uB)]
+
+@[inherit_doc uRSubst1] def uRSubst : Env := uRSubst1 ++ uRSubst2
+
+theorem uTgt_validSubst_view :
+    ValidSubst uTgt (.values [.var "@e", .var "@p"] (viewName "B") []) uRSubst1 := by
+  refine ⟨⟨List.Perm.refl _, ?_⟩, .values uTgt_mem_viewB rfl rfl (Database.mem_addTerm _ _)⟩
+  intro b hb
+  simp only [uRSubst1, List.mem_cons, List.not_mem_nil, or_false] at hb
+  rcases hb with rfl | rfl
+  · exact uTgt_mem_B
+  · exact uTgt_mem_fiat
+
+theorem uTgt_validSubst_uf :
+    ValidSubst uTgt (.values [.var "@x", .var "@q"] ufName [.var "@e"]) uRSubst2 := by
+  refine ⟨⟨List.Perm.refl _, ?_⟩, .values uTgt_mem_uf rfl rfl (Database.mem_addTerm _ _)⟩
+  intro b hb
+  simp only [uRSubst2, List.mem_cons, List.not_mem_nil, or_false] at hb
+  rcases hb with rfl | rfl | rfl
+  · exact uTgt_mem_A
+  · exact uTgt_mem_fiat
+  · exact uTgt_mem_B
+
+/-- **The rebuild rule's query matches at `uTgt`**, the two atoms joined on `@e`. -/
+theorem uTgt_validQuerySubst_rebuild : ValidQuerySubst uTgt uRebuildB.query uRSubst :=
+  ⟨[uRSubst1, uRSubst2], .cons uTgt_validSubst_view (.cons uTgt_validSubst_uf .nil),
+    .step ⟨by
+      intro b hb t ht
+      simp only [uRSubst1, List.mem_cons, List.not_mem_nil, or_false] at hb
+      rcases hb with rfl | rfl
+      · exact Option.some.inj ht
+      · exact absurd ht (by simp [uRSubst2, Env.lookup]), rfl⟩ (.single _)⟩
+
+/-- **And its head writes `uBView2E`.** The e-class column moves to `(A)`, the `@UF` edge's
+target, and the proof column is the row's own composed with the edge's. -/
+theorem uRebuilt_evalLocalActions :
+    evalLocalActions uTgt uRebuildB.actions uRSubst = some uRebuilt := rfl
+
+/-- The rule is one of the four the prelude installed. -/
+theorem uRebuildB_mem_rules : uRebuildB ∈ uTgt.rules := by
+  rw [uTgt_rules]
+  exact Set.mem_insert_of_mem _ (Set.mem_insert _ _)
+
+@[inherit_doc uRebuilt_evalLocalActions]
+theorem uRebuilt_mem_ruleResults : uRebuilt ∈ RuleResults uTgt uRebuildB :=
+  ⟨uRSubst, uTgt_validQuerySubst_rebuild, uRebuilt_evalLocalActions⟩
+
+/-- **So `uRebuilt` is inside the first round of the rebuild ruleset at `uTgt`.** Not the
+whole round — `RunRules` unions every firing of every rule — but the part `Database.UnionsRead`
+needs, which is what makes the witness above a state the rebuild is *going* to. -/
+theorem uRebuilt_contained_runRules :
+    uRebuilt.Contained (RunRules rebuildRuleset uTgt) :=
+  Database.Contained.mem_sUnion
+    (show uRebuilt ∈ {d | ∃ r ∈ uTgt.rules, r.ruleset = rebuildRuleset ∧
+      d ∈ RuleResults uTgt r} from ⟨uRebuildB, uRebuildB_mem_rules, rfl,
+        uRebuilt_mem_ruleResults⟩)
+
+/-! ### The finding: the rebuild after a `union` has no fixpoint
+
+`satProgram_programStep` says `ProgramStep Database.empty (encode P) tgt` is satisfiable, and
+it is — at a `P` that only *builds*. As soon as `P` asserts an equation between distinct
+terms it is not, and the reason is the proof tower `Encoding/Encode.lean`'s `Rebuilt`
+docstring describes for a *self*-collision, which `identityVals := some 1` disarms. A
+collision the e-class rebuild rule creates is not a self-collision, and nothing disarms it:
+
+1. The `union` writes `@UF(B) ↦ (A, @Fiat)`, keyed at `ordering-max`, which is the e-class
+   column of `(B)`'s own view row.
+2. `uRebuildB` re-keys that row to `@BView() ↦ (A, @Trans @Fiat @Fiat)`, and the row it
+   displaced **stays** — nothing is ever removed from `terms`.
+3. The two rows now collide at one key with different *counted* columns, so `MergeConflict`
+   holds and `mergeBody` writes `@UF(B) ↦ (A, @Trans (@Sym @Fiat) (@Trans @Fiat q))` — one
+   composition larger than the `q` it started from.
+4. And that new edge feeds step 2 again, through the *stale* row, forever.
+
+`uf_row_succ` is one turn of that crank, stated at any state where the rebuild ruleset has
+saturated; `uTgt_saturate_infinite` iterates it. So the specification can only reach a state
+holding infinitely many terms, which is what `Cmd.saturate`'s divergence looks like in a
+fixpoint semantics — `Spec/Syntax.lean`'s `Cmd.NoSaturate` names exactly this failure mode
+("a ruleset that keeps adding terms has no fixpoint"). This is why the run above stops at
+`uEncodedPrefix`, and it is a property of `encode` and the specification's monotone `terms`,
+not of this program: any source `union` between two distinct built terms puts the edge of
+step 1 on a view e-class, because `encodeBuild` gives every built application a view row
+whose e-class column is the application itself. -/
+
+/-- `@UF(B) ↦ (A, q)`: the union-find row at `(B)`, carrying the proof `q`. -/
+def uUFRow (q : Term) : Term := .app ufName [uB, uA, q]
+
+theorem uUFRow_fiat : uUFRow (.app fiatName []) = uUFE := rfl
+
+/-- What one turn of the tower does to that proof: `@Trans (@Sym @Fiat) (@Trans @Fiat q)`,
+which is `mergeBody`'s `@Trans (@Sym hi_pf) lo_pf` at the two colliding rows. -/
+def uStepPf (q : Term) : Term :=
+  .app transName [.app symName [.app fiatName []], .app transName [.app fiatName [], q]]
+
+/-- **One turn of the crank.** At any state where the rebuild ruleset has saturated, which is
+what `Cmd.saturate rebuildRuleset` demands: `uRebuildB` fires against the stale row and the
+merge phase settles the collision it makes, and the settlement is a strictly larger `@UF` row
+at the same key and the same parent.
+
+Every hypothesis is a fact about `uTgt` that a saturating run preserves — its signature, its
+empty environment, its rules, and the rows — so `uTgt_saturate_infinite` is this iterated.
+`identityVals := some 1` is what makes the *new* `@UF` row no further conflict, and it is
+exactly what does not stop this one: the counted column moves from `(B)` to `(A)`. -/
+theorem uf_row_succ {d : Database} (hrun : RunRules rebuildRuleset d = d)
+    (hmerge : MergeSaturated d) (henv : d.env = []) (hsig : d.sig = uSig)
+    (hrule : uRebuildB ∈ d.rules) (hstale : uBViewE ∈ d.terms) (hA : uA ∈ d.terms)
+    (hB : uB ∈ d.terms) (hfiat : Term.app fiatName [] ∈ d.terms)
+    {q : Term} (hq : uUFRow q ∈ d.terms) (hqt : q ∈ d.terms) :
+    uUFRow (uStepPf q) ∈ d.terms ∧ uStepPf q ∈ d.terms := by
+  obtain ⟨dsig, deqs, denv, drules⟩ := d
+  subst henv
+  subst hsig
+  -- Step 2: the e-class rule fires against the stale row, at the edge carrying `q`.
+  have hev : Term.app (viewName "B") [uA, .app transName [.app fiatName [], q]] ∈
+      Database.terms ⟨uSig, deqs, [], drules⟩ := by
+    have hσ₁ : ValidSubst ⟨uSig, deqs, [], drules⟩
+        (.values [.var "@e", .var "@p"] (viewName "B") []) uRSubst1 := by
+      refine ⟨⟨List.Perm.refl _, ?_⟩,
+        .values (ts := []) (us := [uB, .app fiatName []]) hstale rfl rfl
+          (Database.mem_addTerm _ _)⟩
+      intro b hb
+      simp only [uRSubst1, List.mem_cons, List.not_mem_nil, or_false] at hb
+      rcases hb with rfl | rfl
+      · exact hB
+      · exact hfiat
+    have hσ₂ : ValidSubst ⟨uSig, deqs, [], drules⟩
+        (.values [.var "@x", .var "@q"] ufName [.var "@e"])
+        [("@x", uA), ("@q", q), ("@e", uB)] := by
+      refine ⟨⟨List.Perm.refl _, ?_⟩,
+        .values (ts := [uB]) (us := [uA, q]) hq rfl rfl (Database.mem_addTerm _ _)⟩
+      intro b hb
+      simp only [List.mem_cons, List.not_mem_nil, or_false] at hb
+      rcases hb with rfl | rfl | rfl
+      · exact hA
+      · exact hqt
+      · exact hB
+    have hc := (runRules_eq_self_iff rebuildRuleset ⟨uSig, deqs, [], drules⟩).mp hrun
+      uRebuildB hrule rfl _
+      ⟨uRSubst1 ++ [("@x", uA), ("@q", q), ("@e", uB)],
+        ⟨[uRSubst1, [("@x", uA), ("@q", q), ("@e", uB)]], .cons hσ₁ (.cons hσ₂ .nil),
+          .step ⟨by
+            intro b hb t ht
+            simp only [uRSubst1, List.mem_cons, List.not_mem_nil, or_false] at hb
+            rcases hb with rfl | rfl
+            · exact Option.some.inj ht
+            · exact absurd ht (by simp [Env.lookup]), rfl⟩ (.single _)⟩,
+        rfl⟩
+    exact Cong.assert (hc.eqs (Or.inr ⟨_, Term.self_mem_subterms _, rfl⟩))
+  -- Step 3: the collision the new row makes, settled — and the settlement is the tower.
+  obtain ⟨S, hs, hmem⟩ : ∃ S, MergeStep ⟨uSig, deqs, [], drules⟩ S ∧
+      ∀ x ∈ (uUFRow (uStepPf q)).subterms, (x, x) ∈ S.eqs :=
+    ⟨_, .collide (f := viewName "B") (decl := viewDecl 0) (as := []) (bs := [])
+      (a := [uB, .app fiatName []]) (b := [uA, .app transName [.app fiatName [], q]])
+      (body := mergeBody) (res := mergeResult) rfl rfl
+      (by simp [MergeConflict, FnDecl.unchangedWidth, viewDecl, uA, uB]) rfl rfl hstale hev
+      .nil rfl rfl,
+      fun x hx => Or.inl (Or.inr ⟨x, hx, rfl⟩)⟩
+  obtain rfl := hmerge _ hs
+  exact ⟨Cong.assert (hmem _ (Term.self_mem_subterms _)),
+    Cong.assert (hmem _ (Term.arg_subterms (by simp) (Term.self_mem_subterms _)))⟩
+
+/-- Rounds of a ruleset move neither the environment nor the rules: `RunRules` is a
+`Database.sUnion`, which takes both from its argument, and `MergeStep` restores both. -/
+theorem runReach_envRules {R : RulesetName} {db d : Database}
+    (h : Relation.ReflTransGen (RunStep R) db d) : d.env = db.env ∧ d.rules = db.rules := by
+  refine RunReach.induction (P := fun x => x.env = db.env ∧ x.rules = db.rules)
+    (fun x x' hp hstep => ?_) h ⟨rfl, rfl⟩
+  obtain ⟨he, hr⟩ := MergeClosure.envRules hstep
+  exact ⟨he.trans hp.1, hr.trans hp.2⟩
+
+/-- The tower of proofs the crank builds, from the `@Fiat` the `union` wrote. -/
+def uTower : Nat → Term
+  | 0 => .app fiatName []
+  | n + 1 => uStepPf (uTower n)
+
+/-- **Every one of them is a `@UF` row the state holds.** The hypotheses of `uf_row_succ`,
+transported along the rounds: the signature (`RunReach.sig`), the environment and the rules
+(`runReach_envRules`), and the rows (`RunReach.contained`). -/
+theorem uTgt_saturate_tower {d : Database} (h : SaturateReach rebuildRuleset uTgt d) :
+    ∀ n, uUFRow (uTower n) ∈ d.terms ∧ uTower n ∈ d.terms := by
+  have hcon : uTgt.terms ⊆ d.terms := (RunReach.contained h.1).terms
+  have hsig : d.sig = uSig := (RunReach.sig h.1).trans uTgt_sig
+  have henv : d.env = [] := (runReach_envRules h.1).1.trans uTgt_env
+  have hrule : uRebuildB ∈ d.rules := by
+    rw [(runReach_envRules h.1).2]; exact uRebuildB_mem_rules
+  intro n
+  induction n with
+  | zero => exact ⟨hcon (uUFRow_fiat ▸ uTgt_mem_uf), hcon uTgt_mem_fiat⟩
+  | succ n ih =>
+    exact uf_row_succ h.2.1 h.2.2 henv hsig hrule (hcon uTgt_mem_viewB) (hcon uTgt_mem_A)
+      (hcon uTgt_mem_B) (hcon uTgt_mem_fiat) ih.1 ih.2
+
+/-- Each turn is strictly larger than the last, which is the whole of why the tower has no
+top. -/
+theorem sizeOf_lt_uStepPf (q : Term) : sizeOf q < sizeOf (uStepPf q) := by
+  simp only [uStepPf, Term.app.sizeOf_spec, List.cons.sizeOf_spec, List.nil.sizeOf_spec]
+  omega
+
+theorem uTower_injective : Function.Injective uTower := by
+  have hm : StrictMono fun n => sizeOf (uTower n) :=
+    strictMono_nat_of_lt_succ fun n => sizeOf_lt_uStepPf (uTower n)
+  exact fun a b hab => hm.injective (congrArg sizeOf hab)
+
+/-- **So `Cmd.saturate rebuildRuleset` can only reach a state holding infinitely many terms** —
+an injection from `Nat` into them, which is the statement rather than `Set.Infinite` because
+this file's imports carry no cardinality API, and
+the specification's run of `encode uProgram` stops one command short of finishing.
+
+This is the finding. `satProgram_programStep` remains true — a program that only builds
+reaches its target — and this is what happens the moment a program asserts an equation
+between distinct terms, which is every program `Database.UnionsRead` is about. The two facts
+together say the specification's `ProgramStep` is available for the encoded program exactly
+where the obligation it would discharge is vacuous.
+
+**Read as an implication, and its antecedent is what is in doubt.** The content is
+`uf_row_succ` and `uTgt_saturate_tower`: *if* a state satisfies the fixpoint condition
+`Cmd.saturate rebuildRuleset` demands, it holds an injective image of `Nat`. Concluding "so
+there is no such state" needs one more step — that rounds from `Database.empty` reach only
+finitely many terms — which is not formalized here and is not needed: what the run above
+needed was a state to step *to*, and this says any such state is not one a finite chain of
+rounds from a finite state produces. -/
+theorem uTgt_saturate_infinite {d : Database} (h : SaturateReach rebuildRuleset uTgt d) :
+    ∃ f : Nat → Term, Function.Injective f ∧ ∀ n, f n ∈ d.terms :=
+  ⟨fun n => uUFRow (uTower n),
+    fun a b hab => uTower_injective (by
+      simpa only [uUFRow, Term.app.injEq, List.cons.injEq, true_and, and_true] using hab),
+    fun n => (uTgt_saturate_tower h n).1⟩
+
+@[inherit_doc uTgt_saturate_infinite]
+theorem uTgt_cmdStep_saturate_infinite {d : Database}
+    (h : CmdStep uTgt (.saturate rebuildRuleset) d) :
+    ∃ f : Nat → Term, Function.Injective f ∧ ∀ n, f n ∈ d.terms :=
+  uTgt_saturate_infinite (cmdStep_saturate_iff.mp h)
+
+/-- **The finding, at the program.** `uEncoded_eq` splits `encode uProgram` into the twenty
+commands `uProgram_programStep_prefix` steps and this one. -/
+theorem uProgram_last_command_infinite {d : Database}
+    (h : ProgramStep uTgt [.saturate rebuildRuleset] d) :
+    ∃ f : Nat → Term, Function.Injective f ∧ ∀ n, f n ∈ d.terms := by
+  cases h with
+  | cons hc hrest =>
+    cases hrest with
+    | nil => exact uTgt_cmdStep_saturate_infinite hc
 
 end Egglog

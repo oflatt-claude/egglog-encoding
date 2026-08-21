@@ -77,8 +77,12 @@ both are decided at the witness at the end of this file.
   firing (`entrySound_headBuild`, `cong_headUnion`), and not the fact
   `encode_corresponds_invents_enode` refutes at a key column.
 * **`sorry`**, four, and none of them an obligation any more:
-  `execM_viewLeader`, `execM_viewsCover`, `execM_unionsRead` and `execM_viewsSound` — each
+  `execM_viewLeader`, `execM_viewsCover`, `execM_unionsJoined` and `execM_viewsSound` — each
   one property of the state `execM` returned, satisfiable at this file's own witness.
+  `execM_unionsRead` is no longer one of them: `Database.UnionsJoined` splits it into three
+  clauses, one writer each, and `unionsRead_of_unionsJoined` is the reduction, proved.
+  `Encoding/Match.lean`'s `uRebuilt_unionsJoined` is all three at a state a program reaches
+  and `uTgt_not_unionsRead` is the third failing one rebuild firing earlier.
   `encode_assert`, `encode_trans`, `encode_congr`, `encode_corresponds_forward`,
   `encode_corresponds_complete` and `encode_corresponds` are assembled from them and carry
   `sorryAx` through them.
@@ -634,7 +638,14 @@ set_option maxHeartbeats 2000000 in
 -- declaration chain; the default budget is short.
 /-- **`ProgramStep Database.empty (encode P) tgt` is satisfiable at a `P` that builds a
 term.** Each of the first eleven commands is a `cmdEffect` followed by a reflexive merge
-phase; the twelfth is `satTarget_cmdStep_saturate`. -/
+phase; the twelfth is `satTarget_cmdStep_saturate`.
+
+**At a `P` that asserts an equation between distinct terms it is not**, and that is not this
+program's doing: the trailing `Cmd.saturate rebuildRuleset` has no fixpoint once a `@UF` edge
+sits on a view's e-class column, which every source `union` puts there.
+`Encoding/Match.lean`'s `uTgt_saturate_infinite` is the compiled statement. So this witness is
+exactly as strong as it reads — a program with no `union` — and the specification's target is
+unavailable for the rest. -/
 theorem satProgram_programStep :
     ProgramStep Database.empty (encode satProgram) satTarget := by
   rw [satEncoded_eq]
@@ -650,21 +661,29 @@ theorem satProgram_programStep_view :
 
 /-! ### The statement
 
-**The target is the interpreter's, not the specification's** — and no longer because the
-specification's is unreachable. `ProgramStep Database.empty (encode P) tgt` is satisfiable
-(`satProgram_programStep`); what it is not is **decidable**. The corpus result is a decision
-procedure's answer at a concrete state, and every piece of that procedure is shaped for an
-`FDatabase`: `sameClassF` reads a term list, and its two side conditions
-`FDatabase.SubtermClosed` and `FDatabase.EqsRefl` are `Bool`-decided at the state itself
-(`subtermClosedB`, `eqsReflB`). `ProgramStep` mentions a `Database`, whose `terms` is a
-`Prop`-valued congruence over a `Set`, and it does not determine one state but a family. So
-the hypothesis is `execM (encode P) = some tgt`: the run `difftest` performs, and the state
-the corpus result is about.
+**The target is the interpreter's, not the specification's.** Two reasons now, and neither is
+the one `ENCODING.md` records. `ProgramStep Database.empty (encode P) tgt` is satisfiable at a
+program that only builds (`satProgram_programStep`) and is **not decidable**; and at a program
+that asserts an equation between distinct terms — which is every program this half's `union`
+clause is about — it is not satisfiable either, because `encode`'s rebuild has no fixpoint there
+(`Encoding/Match.lean`'s `uTgt_saturate_infinite`). The interpreter's `execM` reaches its target
+because `mergeOneOriented` *deletes* the row a collision displaces, and the specification's
+`terms` is monotone; that difference is the whole of it.
 
-The two are still not the same claim. `execM` under-fires relative to the specification
-(`Proofs/Merge.lean`, `execM_contained`: the enumerator is stricter than `ValidEnv`), so this
-is a statement about the reference implementation's target — but it is now a target the
-specification can reach, which is what changed.
+The corpus result is a decision procedure's answer at a concrete state, and every piece of that
+procedure is shaped for an `FDatabase`: `sameClassF` reads a term list, and its two side
+conditions `FDatabase.SubtermClosed` and `FDatabase.EqsRefl` are `Bool`-decided at the state
+itself (`subtermClosedB`, `eqsReflB`). `ProgramStep` mentions a `Database`, whose `terms` is a
+`Prop`-valued congruence over a `Set`, and it does not determine one state but a family. So the
+hypothesis is `execM (encode P) = some tgt`: the run `difftest` performs, and the state the
+corpus result is about.
+
+The two are still not the same claim, and the gap is wider than under-firing. `execM`
+under-fires relative to the specification (`Proofs/Merge.lean`, `execM_contained`: the
+enumerator is stricter than `ValidEnv`), and it also *deletes*, which is what lets it reach a
+target at all on a program with a `union`. So this is a statement about the reference
+implementation's target, and on the programs the `union` clause is about there is no
+specification target to compare it with.
 
 The source side keeps `ProgramStep`: a source program is constructor-only, `exec_programStep`
 is an equality there, and the witness discharges the hypothesis through it. -/
@@ -896,6 +915,49 @@ ids, and the views share an id only once the e-class rebuild rule has followed i
 def Database.UnionsRead (d src : Database) : Prop :=
   ∀ a b, (a, b) ∈ src.eqs → a ≠ b → SameClass d a b
 
+/-- **`Database.UnionsRead`, split into the three writers it needs.**
+
+`UnionsRead` is a statement about `SameClass`, which is two `ViewRepr`s at one id; the three
+clauses below are the three separate things that have to have happened for the id to be
+shared, one writer each. The reduction (`unionsRead_of_unionsJoined`) uses nothing else.
+
+Stated at *source* terms and source equations throughout, so no clause quantifies over the
+stale view rows a rebuild displaced — `Database.Out` reads every row `terms` ever held
+(`MERGE.md`, "Constraint (3): monotonicity"), and the fixpoint the interpreter reaches is a
+fixpoint over its *current* tables. A clause about arbitrary entries would be a claim about
+rows the rebuild may have stopped following; these three are not. -/
+structure Database.UnionsJoined (d src : Database) : Prop where
+  /-- **Every source term reads to itself.** The entry its own build wrote, read with each
+  child read as itself. Nothing removes it: `terms` only grows. -/
+  readsSelf : ∀ t ∈ src.terms, ViewRepr d t t
+  /-- **A source `union` wrote its edge.** `encodeAction` emits
+  `@UF (ordering-max x₁ x₂) ↦ (ordering-min x₁ x₂, pf)`, and which endpoint is the key is
+  whichever `ordering-max` picked — so the clause is the disjunction, exactly as
+  `cong_of_eqs` and `cong_headUnion` take `ho`. -/
+  edges : ∀ a b, (a, b) ∈ src.eqs → a ≠ b →
+    (∃ pf, d.Out ufName [a] [b, pf]) ∨ (∃ pf, d.Out ufName [b] [a, pf])
+  /-- **And the rebuild followed it.** The e-class rebuild rule re-`set`s a view entry at
+  the `@UF` parent of its e-class column; at a source term's own reading that is this. The
+  one clause that is a *fixpoint* property rather than a read-back of an emitted action. -/
+  eclassFollowed : ∀ t p pf, t ∈ src.terms → ViewRepr d t t → d.Out ufName [t] [p, pf] →
+    ViewRepr d t p
+
+/-- **Obligation `assert`'s `union` half reduces to `Database.UnionsJoined`.** The edge runs
+between the two endpoints; the one it is keyed at reads to the other, and the other reads to
+itself, so that other *is* the shared id.
+
+No `Database.WF`, and in particular no `LitsIsolated`: the literal case is not excluded here
+but discharged, since `readsSelf` covers a literal too (`ViewRepr.lit`) and `eclassFollowed`
+is only ever applied at the endpoint the edge is keyed at. -/
+theorem unionsRead_of_unionsJoined {src d : Database} (h : d.UnionsJoined src) :
+    d.UnionsRead src := by
+  intro a b hab hne
+  have ha : a ∈ src.terms := (eqsInTerms_free (Cong.assert hab)).1
+  have hb : b ∈ src.terms := (eqsInTerms_free (Cong.assert hab)).2
+  rcases h.edges a b hab hne with ⟨pf, ho⟩ | ⟨pf, ho⟩
+  · exact ⟨b, h.eclassFollowed a b pf ha (h.readsSelf a ha) ho, h.readsSelf b hb⟩
+  · exact ⟨a, h.readsSelf a ha, h.eclassFollowed b a pf hb (h.readsSelf b hb) ho⟩
+
 /-- **The whole forward half, from three properties of the target and nothing else.**
 
 No `execM`, no `encode`, no `sorry`: `Cong src a b → SameClass d a b` at any target with
@@ -967,16 +1029,31 @@ theorem execM_viewsCover {P : Program} {src : Database} {tgt : FDatabase}
     (htgt : execM (encode P) = some tgt) : tgt.toDatabase.ViewsCover src := by
   sorry
 
-/-- **The residue of obligation `assert`'s `union` half. Not proved.**
+/-- **The residue of obligation `assert`'s `union` half. Not proved**, and split into the
+three things it needs (`Database.UnionsJoined`) rather than left as the obligation restated.
 
-What is missing: that a source `union`'s two endpoints share an id. `encodeAction` writes
-`@UF (ordering-max x₁ x₂) ↦ (ordering-min x₁ x₂, pf)` for it, and the e-class rebuild rule
-carries that edge into both endpoints' views — the same rebuild `execM_viewLeader` needs, so
-the two residues are one mechanism read twice. -/
+What is missing, per clause: that `encodeBuild`'s view `set` has run for every source term
+(`readsSelf`) and that `encodeAction`'s `@UF` set has run for every source `union` (`edges`)
+— the same action read-back `execM_viewsCover` needs — and that
+`FDatabase.runSaturateM`'s fixpoint has followed the edge into the endpoint's own view row
+(`eclassFollowed`), which is the same rebuild `execM_viewLeader` needs. So the two residues
+are one mechanism read twice, and the third clause is the only one that is a fixpoint claim.
+
+**All three hold at a state a program reaches, and two of them non-vacuously**:
+`unionsJoined_witness` in `Encoding/Match.lean`, over `uProgram`, whose rule head unions two
+distinct terms. `uTgt_not_unionsRead` there is the same three clauses one rebuild firing
+*earlier*, where `eclassFollowed` fails and the conclusion with it — so the clause is
+load-bearing and not decoration. -/
+theorem execM_unionsJoined {P : Program} {src : Database} {tgt : FDatabase}
+    (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
+    (htgt : execM (encode P) = some tgt) : tgt.toDatabase.UnionsJoined src := by
+  sorry
+
+@[inherit_doc execM_unionsJoined]
 theorem execM_unionsRead {P : Program} {src : Database} {tgt : FDatabase}
     (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
-    (htgt : execM (encode P) = some tgt) : tgt.toDatabase.UnionsRead src := by
-  sorry
+    (htgt : execM (encode P) = some tgt) : tgt.toDatabase.UnionsRead src :=
+  unionsRead_of_unionsJoined (execM_unionsJoined hdom hsrc htgt)
 
 /-- **Obligation `assert`, at the encoding**, split by writer. `Database.addTerm` writes a
 reflexive equation per subterm built, and `sameClass_self_of_viewsCover` discharges those out
