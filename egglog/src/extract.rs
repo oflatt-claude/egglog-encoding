@@ -728,20 +728,33 @@ impl Function {
         self.decl.term_constructor.is_some() && self.schema.outputs.len() > 1
     }
 
-    /// A term or proof node relation created by the term/proof encoding, marked
+    /// A proof-node relation created by the proof encoding, marked
     /// `:internal-term-node`. Its rows are reconstructed during extraction with
     /// the minted id as the last input column and the earlier inputs as the
-    /// term's children. Views (which carry `term_constructor` and a non-`Unit`
-    /// output) and plain bookkeeping relations such as the subsumption markers
-    /// are unmarked, so extraction never reads them as terms.
-    pub(crate) fn is_relation_term(&self) -> bool {
+    /// proof's children. Views and plain bookkeeping relations such as the
+    /// subsumption markers are unmarked, so extraction never reads them.
+    pub(crate) fn is_proof_node_relation(&self) -> bool {
         self.decl.internal_term_node
+    }
+
+    /// Whether this relation's rows are the proof encoding's own, which is what
+    /// puts them on append-and-scan storage: a proof node marked
+    /// `:internal-term-node` whose minted last input is a `Proof`.
+    #[cfg(test)]
+    pub(crate) fn is_proof_node_of(&self, proof_sort: &str) -> bool {
+        self.is_proof_node_relation()
+            && self
+                .schema
+                .input
+                .last()
+                .is_some_and(|sort| sort.name() == proof_sort)
     }
 
     /// True when the id is the last input column (old-form views and encoding
     /// relations), rather than a real output column.
     fn id_is_last_input(&self) -> bool {
-        (self.decl.term_constructor.is_some() && !self.is_fd_view()) || self.is_relation_term()
+        (self.decl.term_constructor.is_some() && !self.is_fd_view())
+            || self.is_proof_node_relation()
     }
 
     /// For view tables (with term_constructor), the effective output sort is the last input column

@@ -858,9 +858,9 @@ where
         /// Extraction head cost, from `:internal-cost`. Used by view tables to
         /// record the user operation's cost for the extractor.
         cost: Option<DefaultCost>,
-        /// `:internal-term-node`: an internal term or proof node relation
-        /// (minted id as the last input), which proof extraction reconstructs.
-        /// Unset for views and plain bookkeeping relations.
+        /// `:internal-term-node`: an internal proof-node relation (minted id as
+        /// the last input), which proof extraction reconstructs. Unset for views
+        /// and plain bookkeeping relations.
         term_node: bool,
     },
 
@@ -1516,10 +1516,10 @@ where
     /// columns — a merge that leaves them unchanged is skipped and the existing
     /// row kept. Only valid for merges that are idempotent on equal inputs.
     pub identity_vals: Option<usize>,
-    /// `:internal-term-node`: an internal term or proof node relation created by
-    /// the term/proof encoding, with the minted id as its last input. Proof
-    /// extraction reconstructs these; views and plain bookkeeping relations
-    /// (e.g. subsumption markers) are unmarked and never read as terms.
+    /// `:internal-term-node`: an internal proof-node relation created by the
+    /// proof encoding, with the minted id as its last input. Proof extraction
+    /// reconstructs these; views and plain bookkeeping relations (e.g.
+    /// subsumption markers) are unmarked and never read.
     pub internal_term_node: bool,
 }
 

@@ -620,7 +620,7 @@ impl EGraph {
     /// Create a new e-graph with the term-encoding pipeline enabled.
     ///
     /// In term-encoding mode the e-graph eagerly instruments every constructor
-    /// and function with auxiliary term tables, view tables, and per-sort
+    /// and function with auxiliary view tables and per-sort
     /// union-finds so that canonical representatives and their justifications are
     /// materialized explicitly.  This makes it possible to record and emit
     /// equality proofs while preserving the observable behaviour of supported
@@ -1106,9 +1106,7 @@ impl EGraph {
             },
         };
         // Proof-node relations are write-once records identified by a freshly
-        // minted final id; extraction only scans them. Keep ordinary term-node
-        // relations keyed in this rollout to preserve their existing exact-row
-        // deduplication and public function compatibility.
+        // minted final id; extraction only scans them.
         let is_proof_node = decl.internal_term_node
             && input
                 .last()
@@ -1182,11 +1180,6 @@ impl EGraph {
         Ok(())
     }
 
-    /// Extract rows of a table using the default cost model with name sym
-    /// The `include_output` parameter controls whether the output column is always extracted
-    /// For functions, the output column is usually useful
-    /// Print up to `n` the tuples in a given function.
-    /// Print all tuples if `n` is not provided.
     /// The function `sym` names, or the view standing in for it.
     ///
     /// The encoding declares nothing under a function's own name — its rows live
@@ -1200,6 +1193,8 @@ impl EGraph {
             .or_else(|| self.functions.get(sym))
     }
 
+    /// Print up to `n` of a function's tuples, or all of them when `n` is
+    /// `None`.
     pub fn print_function(
         &mut self,
         sym: &str,
@@ -1266,9 +1261,6 @@ impl EGraph {
     /// `(name size)` pairs, e.g. `((name size) ...)`.
     pub fn print_size(&self, sym: Option<&str>) -> Result<CommandOutput, Error> {
         if let Some(sym) = sym {
-            // In proof mode, we have view tables instead of term tables.
-            // So we do a linear scan to find the view table first, falling back on the normal table otherwise.
-            // (We don't check the proof mode flag so that this still works after desugaring)
             let f = self
                 .function_or_view(sym)
                 .ok_or(TypeError::UnboundFunction(sym.to_owned(), span!()))?;
@@ -1622,15 +1614,15 @@ impl EGraph {
         mut f: impl FnMut(FunctionEntry<'_>) -> bool,
     ) -> Result<(), Error> {
         let function =
-            self.functions
-                .get(name)
+            self.function_or_view(name)
                 .ok_or_else(|| crate::api::ApiError::MissingTable {
                     name: name.to_owned(),
                 })?;
-        // An internal term relation (under term encoding) has `Custom` subtype but
-        // is not a user-facing function table — it reads as enodes via
-        // `constructor_enodes`, so reject it here.
-        if function.subtype() != FunctionSubtype::Custom || function.is_relation_term() {
+        // A view stands in for the function the user named. Its output columns
+        // are that function's output followed by the row's proof, which is
+        // internal, so an entry reads the first and stops.
+        let is_view = function.is_fd_view();
+        if function.subtype() != FunctionSubtype::Custom && !is_view {
             return Err(crate::api::ApiError::WrongSubtype {
                 name: name.to_owned(),
                 expected: "function",
@@ -1638,21 +1630,23 @@ impl EGraph {
             }
             .into());
         }
-        if function.schema.outputs.len() != 1 {
+        let n_outputs = if is_view {
+            function.schema.outputs.len() - 1
+        } else {
+            function.schema.outputs.len()
+        };
+        if n_outputs != 1 {
             return Err(crate::api::ApiError::TupleOutputUnsupported {
                 name: name.to_owned(),
                 method: "function_entries",
             }
             .into());
         }
+        let n_inputs = function.schema.input.len();
         self.backend.for_each_while(function.backend_id, |row| {
-            let (output, inputs) = row
-                .vals
-                .split_last()
-                .expect("function row has at least an output column");
             f(FunctionEntry {
-                inputs,
-                output: *output,
+                inputs: &row.vals[..n_inputs],
+                output: row.vals[n_inputs],
                 subsumed: row.subsumed,
             })
         });
@@ -2337,11 +2331,7 @@ impl EGraph {
                 // name resolving to a view is what says the rows go into the
                 // encoded tables; a plain program targets a user
                 // relation/constructor loaded by the relation loader.
-                if self
-                    .functions
-                    .values()
-                    .any(|f| f.decl.term_constructor.as_deref() == Some(name.as_str()))
-                {
+                if self.function_or_view(&name).is_some_and(|f| f.is_fd_view()) {
                     self.native_input(span, &name, file, proof_base)?;
                 } else {
                     self.input_file(span, &name, file)?;
@@ -2570,24 +2560,17 @@ impl EGraph {
         Ok(())
     }
 
-    /// Load `(input …)` facts natively into the term/proof encoding's tables. For
-    /// each row we mint a term id (and, when the encoding carries proofs, its
-    /// fiat-proof id) and insert the encoded term-relation, view, and proof rows
-    /// directly. Rows are plain-inserted (no get-or-insert): a duplicate view key
-    /// is left to the view's merge/no-merge handling. The proof checker keeps using
-    /// the per-row top-level fiat actions (`desugared_before_proofs`); this just
-    /// materializes the same table state.
+    /// Load `(input …)` facts natively into the encoding's tables. Each row gets
+    /// a fresh e-class and goes straight into the function's view, with the fiat
+    /// justifying it when the encoding carries proofs. Rows are plain-inserted
+    /// (no get-or-insert): a duplicate view key is left to the view's
+    /// merge/no-merge handling.
     ///
-    /// Everything is derived from the encoded schema + annotations (never the
-    /// pre-encoding `FuncType`), so it also works when a desugared program is
-    /// replayed in a fresh e-graph. `func_name` names the encoded *term relation*;
-    /// the encoded shape is read off the term and view schemas:
-    /// * constructor / relation (`term_inputs == view_inputs + 1`) — term row
-    ///   `(F children… term-id) Unit` and FD view `(children…) -> (term-id,
-    ///   proof)`.
-    /// * custom `:merge` / `:no-merge` (`term_inputs == view_inputs + 2`) — term
-    ///   row `(f children… output term-id) Unit` and view row `(children… output
-    ///   proof)`.
+    /// Everything is read off the view, never the pre-encoding `FuncType`, so
+    /// this also works when a desugared program is replayed in a fresh e-graph.
+    /// `proof_base` is where `lower_inputs` put this input's per-row actions in
+    /// the program proof checking reads: row `i` is justified by naming the
+    /// action at `proof_base + i`, so the row itself names no term.
     fn native_input(
         &mut self,
         span: Span,
@@ -2608,12 +2591,11 @@ impl EGraph {
         // output) is not `Unit`; term-encoding-only mode uses `Unit` there.
         let proofs = view.schema.outputs.last().unwrap().name() != "Unit";
         // A CSV column is always a base value, so a base-sorted view output is
-        // one the rows carry — that is a custom function. A constructor's and a
-        // relation's output is its e-class, which the load mints instead.
-        let is_constructor = view.schema.outputs[0].is_eq_sort();
-        // The CSV columns: the view's children, plus a custom function's output.
+        // one the rows carry; an e-class one is minted by the load instead.
+        let output_is_minted = view.schema.outputs[0].is_eq_sort();
+        // The CSV columns: the view's children, plus any output they carry.
         let mut csv_sorts: Vec<ArcSort> = view.schema.input.clone();
-        if !is_constructor {
+        if !output_is_minted {
             csv_sorts.push(view.schema.outputs[0].clone());
         }
 
@@ -2653,7 +2635,7 @@ impl EGraph {
             // A constructor row is the whole per-row action; a custom row is the
             // `set`'s row node, which follows its argument and value nodes — one
             // literal each, so one per CSV column.
-            let node = if is_constructor { 0 } else { csv_sorts.len() };
+            let node = if output_is_minted { 0 } else { csv_sorts.len() };
             (table, base, node)
         });
 
@@ -2677,7 +2659,7 @@ impl EGraph {
             // custom view stores the base output (already in `value_row`). The
             // proof column follows (`Unit` when the encoding carries no proofs).
             let mut vrow = value_row;
-            if is_constructor {
+            if output_is_minted {
                 vrow.push(fv);
             }
             vrow.push(view_proof);

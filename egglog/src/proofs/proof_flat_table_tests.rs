@@ -14,12 +14,7 @@ const PRELUDE: &str = r#"
 "#;
 
 fn is_proof_node(egraph: &EGraph, function: &crate::Function) -> bool {
-    function.decl.internal_term_node
-        && function
-            .schema
-            .input
-            .last()
-            .is_some_and(|sort| sort.name() == egraph.proof_state.proof_names.proof_datatype)
+    function.is_proof_node_of(&egraph.proof_state.proof_names.proof_datatype)
 }
 
 fn flat_row_count(egraph: &EGraph) -> usize {
@@ -50,7 +45,6 @@ fn only_proof_node_relations_use_flat_storage() {
     egraph.parse_and_run_program(None, PRELUDE).unwrap();
 
     let mut flat_proof_nodes = 0;
-    let mut keyed_term_nodes = 0;
     for function in egraph.functions.values() {
         let is_flat = egraph.backend.table_is_flat(function.backend_id);
         if is_proof_node(&egraph, function) {
@@ -87,20 +81,18 @@ fn only_proof_node_relations_use_flat_storage() {
             flat_proof_nodes += 1;
         } else {
             assert!(!is_flat, "{}", function.name());
-            if function.decl.internal_term_node {
-                keyed_term_nodes += 1;
-            }
+            assert!(
+                !function.decl.internal_term_node,
+                "the encoding declares no term-node relation but the proof ones, \
+                 which are all on flat storage: {}",
+                function.name()
+            );
         }
     }
 
     assert!(
         flat_proof_nodes > 0,
         "expected generated proof-node relations"
-    );
-    assert_eq!(
-        keyed_term_nodes, 0,
-        "the encoding declares no term-node relation but the proof ones, which \
-         are all on flat storage"
     );
 }
 

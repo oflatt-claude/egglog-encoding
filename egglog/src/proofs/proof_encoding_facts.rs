@@ -292,13 +292,14 @@ impl ProofInstrumentor<'_> {
                                 };
                                 proofs.push(Some(proof));
                             }
-                            let body_index = body_expr_index(ctx.body, expr).unwrap_or_default();
+                            let body_index = body_expr_index(ctx.body, expr)
+                                .expect("the call being instrumented is a node of this body");
                             self.request_element_anchor(
                                 &fv,
                                 ctx.rule_name,
                                 body_index,
                                 container_index,
-                                vec![new_args[container_index].clone()],
+                                new_args[container_index].clone(),
                                 proofs,
                             )
                         } else {

@@ -350,7 +350,7 @@ impl Primitive for ContainerRebuildProof {
 impl FullPrim for ContainerRebuildProof {
     fn apply<'a, 'db>(&self, mut state: FullState<'a, 'db>, args: &[Value]) -> Option<Value> {
         let (_rebuilt, proof) =
-            rebuild_container_proof_rec(&mut state, self, &self.container_sort, args[0], args[1])?;
+            rebuild_container_proof(&mut state, self, &self.container_sort, args[0], args[1])?;
         Some(proof)
     }
 }
@@ -365,7 +365,7 @@ impl FullPrim for ContainerRebuildProof {
 /// during proof conversion, which follows containers to the same depth the value
 /// rebuild does and knows each child's position there — so nothing here has to
 /// name a nested container or its position.
-fn rebuild_container_proof_rec(
+fn rebuild_container_proof(
     state: &mut FullState,
     prim: &ContainerRebuildProof,
     sort: &ArcSort,
@@ -375,7 +375,7 @@ fn rebuild_container_proof_rec(
     // One entry per distinct changed element, so a value reached twice folds one
     // step. `CongrAll` replaces every occurrence at once, matching
     // `rebuild_with_leaders`.
-    let mut changed: HashMap<Value, Value> = HashMap::default();
+    let mut changed: HashSet<Value> = HashSet::default();
     let mut child_proofs: Vec<Value> = vec![];
     let rebuilt =
         rebuild_leaves_with_proofs(state, prim, sort, value, &mut changed, &mut child_proofs)?;
@@ -411,7 +411,7 @@ fn rebuild_leaves_with_proofs(
     prim: &ContainerRebuildProof,
     sort: &ArcSort,
     value: Value,
-    changed: &mut HashMap<Value, Value>,
+    changed: &mut HashSet<Value>,
     child_proofs: &mut Vec<Value>,
 ) -> Option<Value> {
     let elements = {
@@ -432,7 +432,7 @@ fn rebuild_leaves_with_proofs(
                 && leader != *eval
             {
                 leaders.insert(*eval, leader);
-                if changed.insert(*eval, leader).is_none() {
+                if changed.insert(*eval) {
                     child_proofs.push(proof);
                 }
             }

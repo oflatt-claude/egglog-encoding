@@ -1,9 +1,9 @@
 //! What the proof relations still name by term.
 //!
-//! A proof row that carries an eq-sort value is what forces proof extraction to
-//! reconstruct user terms, and so what keeps the term relations alive. Every
-//! other proof relation states its conclusion out of rule names, body indices,
-//! and other proofs, and needs no term.
+//! A proof row that carries an eq-sort value would force proof extraction to
+//! reconstruct a user term. Every proof relation states its conclusion out of
+//! rule names, positions in the program, and other proofs instead, so none of
+//! them needs one.
 
 use crate::EGraph;
 
@@ -31,11 +31,7 @@ const PROGRAM: &str = r#"
 /// No proof relation names a term. Rule proofs, merge justifications and
 /// compositions are stated over other proofs; a body element read out of a
 /// container is stated over the reading call; and a fiat is stated over the
-/// global action it came from. So nothing in a proof reaches into the term
-/// relations.
-///
-/// `(input …)` is the exception this does not cover: its rows are loaded at run
-/// time and still justified by a term-naming fiat.
+/// global action it came from.
 #[test]
 fn no_proof_relation_names_a_term() {
     let mut egraph = EGraph::new_with_proofs();
@@ -45,13 +41,7 @@ fn no_proof_relation_names_a_term() {
     let proof_sort = names.proof_datatype.clone();
     let mut naming_a_term = vec![];
     for function in egraph.functions.values() {
-        let is_proof_node = function.decl.internal_term_node
-            && function
-                .schema
-                .input
-                .last()
-                .is_some_and(|sort| sort.name() == proof_sort);
-        if !is_proof_node {
+        if !function.is_proof_node_of(&proof_sort) {
             continue;
         }
         if function

@@ -226,6 +226,20 @@ enum RawProof {
     Eval,
 }
 
+/// The `at`th global action of `prog`, which a fiat names instead of naming its
+/// own conclusion.
+fn global_action_at(
+    prog: &[ResolvedNCommand],
+    at: usize,
+) -> &crate::GenericAction<ResolvedCall, crate::ast::ResolvedVar> {
+    crate::proofs::proof_checker::gather_global_actions(prog)
+        .nth(at)
+        .unwrap_or_else(|| {
+            let count = crate::proofs::proof_checker::gather_global_actions(prog).count();
+            panic!("a fiat names global action {at}, but the program has {count}")
+        })
+}
+
 /// A [`ProofStore`] is similar to a [`TermDag`].
 /// It's a hash-consed arena enabling proofs to share sub-proofs.
 /// We refer to proofs with a [`ProofId`] which is an index into the store, used with [`ProofStore::get`] to retrieve the proof.
@@ -815,37 +829,14 @@ impl ProofStore {
         at: usize,
         swapped: bool,
     ) -> (TermId, TermId) {
-        let action = crate::proofs::proof_checker::gather_global_actions(prog)
-            .nth(at)
-            .unwrap_or_else(|| {
-                let all: Vec<String> = crate::proofs::proof_checker::gather_global_actions(prog)
-                    .enumerate()
-                    .map(|(i, a)| format!("[{i}] {a}"))
-                    .collect();
-                panic!(
-                    "fiat names action {at}; program has {} actions: {all:?}",
-                    all.len()
-                )
-            });
+        let action = global_action_at(prog, at);
         let crate::GenericAction::Union(_, lhs, rhs) = action else {
-            {
-                let all: Vec<String> = crate::proofs::proof_checker::gather_global_actions(prog)
-                    .map(|a| format!("{a}"))
-                    .collect();
-                panic!("fiat names action {at} as a union; actions are {all:?}");
-            }
+            panic!("a fiat names global action {at} as a union, but it is not one");
         };
-        let mut side = |expr| {
-            crate::proofs::proof_checker::eval_expr_with_subst(
-                "global_action",
-                expr,
-                &mut self.term_dag,
-                globals,
-            )
-            .unwrap_or_else(|err| panic!("could not evaluate global action {at}: {err}"))
-            .0
-        };
-        let (lhs, rhs) = (side(lhs), side(rhs));
+        let (lhs, rhs) = (
+            self.eval_global(globals, at, lhs),
+            self.eval_global(globals, at, rhs),
+        );
         if swapped { (rhs, lhs) } else { (lhs, rhs) }
     }
 
@@ -861,18 +852,7 @@ impl ProofStore {
         at: usize,
         node: usize,
     ) -> TermId {
-        let action = crate::proofs::proof_checker::gather_global_actions(prog)
-            .nth(at)
-            .unwrap_or_else(|| {
-                let all: Vec<String> = crate::proofs::proof_checker::gather_global_actions(prog)
-                    .enumerate()
-                    .map(|(i, a)| format!("[{i}] {a}"))
-                    .collect();
-                panic!(
-                    "fiat names action {at}; program has {} actions: {all:?}",
-                    all.len()
-                )
-            });
+        let action = global_action_at(prog, at);
         // The encoder numbers the *planned* action, so plan this one the same
         // way. Only the shape matters here, so the lifted `let`s get a local
         // counter rather than the encoder's fresh names.
@@ -885,25 +865,16 @@ impl ProofStore {
             crate::proofs::proof_head::HeadPlan::new(std::slice::from_ref(action), &mut fresh);
         use crate::proofs::proof_encoding_helpers::{ActionNode, action_nodes};
         let nodes: Vec<ActionNode<'_>> = plan.actions.iter().flat_map(action_nodes).collect();
-        let mut eval = |expr| {
-            crate::proofs::proof_checker::eval_expr_with_subst(
-                "global_action",
-                expr,
-                &mut self.term_dag,
-                globals,
-            )
-            .unwrap_or_else(|err| {
-                panic!("could not evaluate node {node} of global action {at}: {err}")
-            })
-            .0
-        };
         match nodes.get(node) {
-            Some(ActionNode::Expr(expr)) => eval(expr),
+            Some(ActionNode::Expr(expr)) => self.eval_global(globals, at, expr),
             // The row a `set` writes is the application of the function to its
             // arguments and the value, which no expression of the action denotes.
             Some(ActionNode::Row(crate::GenericAction::Set(_, head, args, value))) => {
-                let mut children: Vec<TermId> = args.iter().map(&mut eval).collect();
-                children.push(eval(value));
+                let mut children: Vec<TermId> = args
+                    .iter()
+                    .map(|arg| self.eval_global(globals, at, arg))
+                    .collect();
+                children.push(self.eval_global(globals, at, value));
                 self.term_dag.app(head.name().to_string(), children)
             }
             Some(ActionNode::Row(other)) => panic!("{other} writes no row"),
@@ -912,6 +883,24 @@ impl ProofStore {
                 nodes.len()
             ),
         }
+    }
+
+    /// Evaluate `expr`, written in the `at`th global action, under the global
+    /// bindings — an expression a fiat names may itself name a global.
+    fn eval_global(
+        &mut self,
+        globals: &HashMap<String, TermId>,
+        at: usize,
+        expr: &crate::ast::ResolvedExpr,
+    ) -> TermId {
+        crate::proofs::proof_checker::eval_expr_with_subst(
+            "global_action",
+            expr,
+            &mut self.term_dag,
+            globals,
+        )
+        .unwrap_or_else(|err| panic!("could not evaluate global action {at}: {err}"))
+        .0
     }
 
     /// Get the [`Proof`] with the given id.
@@ -1250,15 +1239,16 @@ impl ProofStore {
                 let element = self.run_body_primitive(prog, rule, *body_index, &arg_terms);
                 // The element is a child of the container the read took it out
                 // of, which is whichever argument's term holds it.
-                let (container_id, child_index) = arg_ids
+                let (container_raw, container_id, child_index) = arg_raws
                     .iter()
+                    .zip(&arg_ids)
                     .zip(&arg_terms)
-                    .find_map(|(id, term)| {
+                    .find_map(|((raw, id), term)| {
                         let Term::App(_, children) = self.term_dag.get(*term) else {
                             return None;
                         };
                         let at = children.iter().position(|child| *child == element)?;
-                        Some((*id, at))
+                        Some((*raw, *id, at))
                     })
                     .unwrap_or_else(|| {
                         panic!(
@@ -1267,7 +1257,7 @@ impl ProofStore {
                             self.term_dag.to_string(element)
                         )
                     });
-                let positional = RawProof::Proj(arg_raws[0], child_index);
+                let positional = RawProof::Proj(container_raw, child_index);
                 let projected = match self.proof_id.get(&positional) {
                     Some(&id) => id,
                     None => {

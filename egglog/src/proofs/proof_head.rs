@@ -408,26 +408,27 @@ fn lift_union_operand(
     GenericExpr::Var(span, var)
 }
 
+/// Where a construct-into guest's e-class comes from.
+#[derive(Clone, Debug)]
+pub(crate) struct ConstructInto {
+    /// The variable holding the e-class the guest is built into.
+    pub target: String,
+    /// Whether that variable is the dropped `union`'s left operand. The proof of
+    /// the dropped edge names the action rather than its endpoints, so it has to
+    /// say which way round the edge runs against the action as written.
+    pub target_is_lhs: bool,
+}
+
 /// Plan the construct-into optimization over normalized actions (union operands
 /// are variables). Returns a map from each guest variable — whose constructor is
-/// built into the target's e-class instead of a fresh one — to the target
-/// variable, and the set of union action indices it makes redundant.
+/// built into the target's e-class instead of a fresh one — to where that e-class
+/// comes from, and the set of union action indices it makes redundant.
 ///
 /// Conservative: only a `union` of two distinct, not-yet-touched variables where
 /// at least one is a constructor-`let` is optimized. The guest is the
 /// later-defined constructor operand (so the target's e-class is already bound
 /// where the guest is built); a matched (un-`let`) variable is always an eligible
 /// target.
-/// Where a construct-into guest's e-class comes from: the variable holding it,
-/// and whether that variable is the dropped `union`'s left operand. The proof of
-/// the dropped edge names the action rather than its endpoints, so it has to say
-/// which way round the edge runs against the action as written.
-#[derive(Clone, Debug)]
-pub struct ConstructInto {
-    pub target: String,
-    pub target_is_lhs: bool,
-}
-
 fn plan_construct_into(
     actions: &[ResolvedAction],
 ) -> (HashMap<String, ConstructInto>, HashSet<usize>) {

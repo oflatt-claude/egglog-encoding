@@ -1,6 +1,6 @@
 #[doc = include_str!("proof_encoding.md")]
 use crate::proofs::proof_encoding_helpers::{
-    Composition, EncodingNames, HeadColumn, Justification, Skeleton,
+    ActionNode, Composition, EncodingNames, HeadColumn, Justification, Skeleton, action_nodes,
 };
 use crate::proofs::proof_head::{
     Head, HeadPlan, HeadPosition, HeadProof, HeadRun, ProofAlgebra, constructor_operand,
@@ -193,8 +193,10 @@ pub(crate) struct EncodingState {
     /// distinct eq-sort among the view's columns (see [`ViewIndex`]).
     pub view_index: HashMap<String, Vec<ViewIndex>>,
     pub term_header_added: bool,
-    /// How many global actions the encoder has numbered, for the debug check
-    /// that its numbering tracks the program proof checking reads.
+    /// The running index a `FiatUnion` or `FiatTerm` names: how many global
+    /// actions the encoding has numbered so far, in the program proof checking
+    /// reads. Carried in the e-graph because the instrumentor is rebuilt for
+    /// each command, and restored by `pop` along with that program.
     pub global_actions_numbered: usize,
     // TODO this is very ugly- we should separate out a typechecking struct
     // since we didn't need an entire e-graph
@@ -258,16 +260,16 @@ pub(crate) struct ProofInstrumentor<'a> {
     /// by [`ProofInstrumentor::global_actions_in`].
     global_action: usize,
     /// Which node of the current action, in
-    /// [`action_nodes`](crate::proofs::proof_encoding_helpers::action_nodes)
+    /// [`action_nodes`]
     /// order, is being instrumented. A reflexive fiat names this rather than the
     /// term it is about.
     action_expr: usize,
     /// That action's nodes by address, for finding the index of the one in hand.
     action_expr_index: HashMap<usize, usize>,
-    /// Each planned action's row node, or `usize::MAX` when it writes no row.
-    action_row_index: Vec<usize>,
+    /// Each planned action's row node, or `None` when it writes no row.
+    action_row_index: Vec<Option<usize>>,
     /// The row node of the planned action being instrumented.
-    action_row: usize,
+    action_row: Option<usize>,
 }
 
 /// Where a variable a rule body binds gets its reflexive `t = t` proof from: a
@@ -286,7 +288,8 @@ pub(crate) enum Anchor {
 /// so an anchor for one of those projects it out by term.
 #[derive(Clone)]
 struct Element {
-    containers: Vec<String>,
+    /// The container variable the element was read out of.
+    container: String,
     /// The value variable the projection anchoring it names.
     value: String,
     /// The variable holding the name of the rule whose body read the element.
@@ -393,10 +396,7 @@ impl BodyAnchors {
         match self.resolve(value)? {
             Source::Row(row_proof, anchor) => Some((row_proof, anchor, vec![])),
             Source::Element(element) => {
-                let (row_proof, anchor, mut chain) = element
-                    .containers
-                    .iter()
-                    .find_map(|container| self.anchor_chain(container))?;
+                let (row_proof, anchor, mut chain) = self.anchor_chain(&element.container)?;
                 chain.push(element);
                 Some((row_proof, anchor, chain))
             }
@@ -440,7 +440,7 @@ impl<'a> ProofInstrumentor<'a> {
             action_expr: 0,
             action_expr_index: HashMap::default(),
             action_row_index: vec![],
-            action_row: usize::MAX,
+            action_row: None,
             egraph,
             reflexive: HashSet::default(),
             deferred: HashMap::default(),
@@ -653,8 +653,6 @@ impl<'a> ProofInstrumentor<'a> {
         // each deduped e-class to a shared natural form and orient the edge to
         // `larger = smaller` with proof-of-max/min.
         //
-        // Built over the operands in source order, so it states the conclusion
-        // forwards.
         // Built over the operands in source order, so the edge runs the action's way.
         let base_proof = self.edge_proof(emit, "0");
 
@@ -746,9 +744,7 @@ impl<'a> ProofInstrumentor<'a> {
             }
         };
         // The guest's term keeps its own id (`fv_nat`); only the view VALUE uses
-        // the target. Emitting `(F dedup_args target)` would add the guest's
-        // shape to `target`'s term relation, making the term proof reconstruction
-        // picks for `target` ambiguous (it reads term rows, not views).
+        // the target.
         let dedup_disp = ListDisplay(&dedup_args, " ").to_string();
         // The view row below carries the proof directly, not through a mint.
         self.emit_pending_group(emit.stmts, &view_proof);
@@ -869,9 +865,9 @@ impl<'a> ProofInstrumentor<'a> {
         fdecl.internal_let
     }
 
-    /// Whether the function's output value *is* its e-class, so the term relation
-    /// needs no separate output column and the view is the congruence FD
-    /// `(children) -> (eclass, proof)`. Holds for constructors and encoded globals.
+    /// Whether the function's output value *is* its e-class,
+    /// so the view is the congruence FD `(children) -> (eclass, proof)`. Holds
+    /// for constructors and encoded globals.
     pub(super) fn output_is_eclass(&self, fdecl: &ResolvedFunctionDecl) -> bool {
         fdecl.subtype == FunctionSubtype::Constructor || self.is_encoded_global(fdecl)
     }
@@ -885,7 +881,7 @@ impl<'a> ProofInstrumentor<'a> {
     /// body and `rowproof` is a children-free `MergeRow` (`()` in term mode).
     ///
     /// Running the merge inside the view's `:merge` computes the body exactly
-    /// once; computing it twice mints extra, over-merged term rows.
+    /// once; computing it twice mints extra, over-merged rows.
     fn custom_view_merge(&mut self, fdecl: &ResolvedFunctionDecl) -> String {
         let name = fdecl.name.clone();
         let merge = fdecl
@@ -931,11 +927,8 @@ impl<'a> ProofInstrumentor<'a> {
         }
     }
 
-    /// Each function/constructor gets a term table and a view table.
-    /// The term table stores underlying representative terms.
+    /// Each function/constructor gets a view table.
     /// The view table stores child terms and their eclass.
-    /// The view table is mutated using delete, but we never delete from term tables.
-    /// We re-use the original name of the function for the term table.
     fn term_and_view(&mut self, fdecl: &ResolvedFunctionDecl) -> Vec<Command> {
         let schema = &fdecl.schema;
         let out_type = schema.output().clone();
@@ -973,8 +966,8 @@ impl<'a> ProofInstrumentor<'a> {
         if fdecl.internal_let {
             view_flags.push_str(" :internal-let");
         }
-        // The view carries the user operation's extraction cost (the term table
-        // is a relation and can't carry `:cost`); the extractor reads it here.
+        // The view carries the user operation's extraction cost; the extractor
+        // reads it here.
         if let Some(cost) = fdecl.cost {
             view_flags.push_str(&format!(" :internal-cost {cost}"));
         }
@@ -1069,9 +1062,7 @@ impl<'a> ProofInstrumentor<'a> {
 
                 // Global definition `(set (x) e)`: x is a nullary `:internal-let`
                 // function aliasing e. Store e's value+proof directly in x's FD view
-                // (x's e-class *is* e's) — no term mint, which would use the wrong
-                // arity for x's term relation (its output is the eclass, so it has
-                // no separate output column).
+                // (x's e-class *is* e's), so it takes no e-class of its own.
                 if generic_exprs.is_empty() && self.egraph.type_info.is_global(&func_type.name) {
                     let e_value = exprs.pop().expect("a set has a value");
                     let proof = if self.proofs_enabled() {
@@ -1105,9 +1096,10 @@ impl<'a> ProofInstrumentor<'a> {
                     match change {
                         // Removing the view row here is the uninstrumented meaning
                         // of `delete`: execution stages the removal to the batch
-                        // commit, which applies removals ahead of insertions. The
-                        // term relation keeps its row so proofs can still name the
-                        // deleted term.
+                        // commit, which applies removals ahead of insertions. A
+                        // proof already written about the deleted row still
+                        // stands, since it names the row's position rather than
+                        // reading the row.
                         Change::Delete => {
                             let view = self.view_name(&func_type.name);
                             emit.stmts.push(format!("(delete ({view} {args}))"));
@@ -1143,7 +1135,8 @@ impl<'a> ProofInstrumentor<'a> {
         }
     }
 
-    /// A proof of `fv = fv` under the emit's justification.
+    /// A proof that the term being built exists, under the emit's
+    /// justification.
     ///
     /// The caller must be at a position whose own conclusion is reflexive: a rule
     /// justification's proof states whatever its column says and is marked
@@ -1158,14 +1151,16 @@ impl<'a> ProofInstrumentor<'a> {
     /// the term a custom function's view proof is about and which no expression
     /// of the action denotes.
     fn reflexive_for_row(&mut self, emit: &mut Emit) -> String {
-        let node = self.action_row;
+        let node = self
+            .action_row
+            .expect("a custom function's row is written by a `set`, which has one");
         self.reflexive_at(emit, node)
     }
 
     fn reflexive_at(&mut self, emit: &mut Emit, node: usize) -> String {
         match emit.justification {
-            // The head's own conclusion here is `fv = fv` (`fv`/`sort` unused:
-            // the proposition comes from the column).
+            // The head's own conclusion here is that the term exists; the
+            // proposition comes from the column.
             Justification::Rule(..) => {
                 let proof = self.rule_row(emit);
                 self.mark_reflexive(&proof);
@@ -1178,8 +1173,8 @@ impl<'a> ProofInstrumentor<'a> {
                 self.mark_reflexive(&proof);
                 proof
             }
-            // Term-free: no endpoint named (`fv`/`sort` unused). The checker
-            // reconstructs the conclusion from the merge body + premise outputs.
+            // Term-free: no endpoint named. The checker reconstructs the
+            // conclusion from the merge body + premise outputs.
             Justification::MergeIdx(fn_name, p1, p2, idx) => {
                 let merge_idx = self.proof_names().merge_fn_idx_constructor.clone();
                 let row = format!("\"{fn_name}\" {p1} {p2} {idx}");
@@ -1372,12 +1367,12 @@ impl<'a> ProofInstrumentor<'a> {
         rule_name: Option<&str>,
         body_index: usize,
         container_index: usize,
-        containers: Vec<String>,
+        container: String,
         arg_proofs: Vec<Option<String>>,
     ) -> String {
         if let Some(rule_name) = rule_name {
             self.anchors.offer_element(Element {
-                containers,
+                container,
                 value: value.to_string(),
                 rule_name: rule_name.to_string(),
                 body_index,
@@ -1581,7 +1576,7 @@ impl<'a> ProofInstrumentor<'a> {
     /// An argument count is a property of the call sites a program has, not of
     /// the proof format, so the declaration is emitted with the first commands
     /// using it — as [`Self::packed_proof_constructor`] does.
-    pub(crate) fn proj_prim_constructor(&mut self, args: usize) -> String {
+    fn proj_prim_constructor(&mut self, args: usize) -> String {
         let name = self.proof_names().proj_prim(args);
         if !self
             .egraph
@@ -1629,12 +1624,7 @@ impl<'a> ProofInstrumentor<'a> {
 
     /// [`Self::defer_lookup`] for a group standing on other held-back proofs,
     /// which are emitted ahead of it wherever it lands.
-    pub(crate) fn defer_lookup_reading(
-        &mut self,
-        proof: &str,
-        stmts: Vec<String>,
-        reads: Vec<String>,
-    ) {
+    fn defer_lookup_reading(&mut self, proof: &str, stmts: Vec<String>, reads: Vec<String>) {
         self.deferred
             .insert(proof.to_string(), Deferred::Stmts { stmts, reads });
     }
@@ -1683,6 +1673,12 @@ impl<'a> ProofInstrumentor<'a> {
                 );
             }
         }
+    }
+
+    /// Bind a fresh e-class for a term of `fname`, asserting nothing about it.
+    fn fresh_term_id(&mut self, stmts: &mut Vec<String>, fname: &str) -> String {
+        let sort = self.term_sort(fname);
+        self.fresh_id(stmts, &sort)
     }
 
     /// Bind a fresh id of `sort`, asserting nothing about it.
@@ -1743,7 +1739,7 @@ impl<'a> ProofInstrumentor<'a> {
         self.proof_names().proof_datatype.clone()
     }
 
-    /// The sort of `fname`'s e-class, which its term rows are minted into (see
+    /// The sort of `fname`'s e-class (see
     /// [`Self::term_and_view`]).
     fn term_sort(&self, fname: &str) -> String {
         self.proof_names()
@@ -1778,11 +1774,10 @@ impl<'a> ProofInstrumentor<'a> {
         }
     }
 
-    /// Custom functions: mint the term-relation row and update the FD view. No
-    /// canonicalization threading.
+    /// Custom functions: take a fresh e-class for the row and update the FD
+    /// view. No canonicalization threading.
     fn add_custom_row(&mut self, emit: &mut Emit, func_type: &FuncType, args: &[String]) -> String {
-        let sort = self.term_sort(&func_type.name);
-        let fv = self.fresh_id(emit.stmts, &sort);
+        let fv = self.fresh_term_id(emit.stmts, &func_type.name);
         let view_proof_var = if self.egraph.proof_state.proofs_enabled {
             self.reflexive_for_row(emit)
         } else {
@@ -1810,8 +1805,7 @@ impl<'a> ProofInstrumentor<'a> {
     ) -> String {
         let view = self.view_name(&func_type.name);
         let set_if_empty = crate::proofs::proof_fresh::set_if_empty_prim_name(&view);
-        let sort = self.term_sort(&func_type.name);
-        let fv = self.fresh_id(res, &sort);
+        let fv = self.fresh_term_id(res, &func_type.name);
         let canon = self.fresh_var();
         res.push(format!(
             "(let {canon} ({set_if_empty} {} {fv} ()))",
@@ -1828,8 +1822,7 @@ impl<'a> ProofInstrumentor<'a> {
         args: &[Operand],
     ) -> Natural {
         let dedup_args = ids(args);
-        let sort = self.term_sort(fname);
-        let fv_nat = self.fresh_id(emit.stmts, &sort);
+        let fv_nat = self.fresh_term_id(emit.stmts, fname);
         // The head's own conclusion here is only ever read by the congruence
         // chain below, so a head that numbers its proofs instead of composing
         // them writes no row for it: conversion recovers it from the column.
@@ -1878,8 +1871,7 @@ impl<'a> ProofInstrumentor<'a> {
             fv_nat,
             to_dedup,
         } = self.build_natural_with_congr(emit, &func_type.name, args);
-        let sort = self.term_sort(&func_type.name);
-        let fv_can = self.fresh_id(emit.stmts, &sort);
+        let fv_can = self.fresh_term_id(emit.stmts, &func_type.name);
         let can_prf = match &to_dedup {
             Some(chain) => self.reflexive(chain.clone()),
             // One row records the composition proof conversion rebuilds.
@@ -2048,7 +2040,7 @@ impl<'a> ProofInstrumentor<'a> {
         }
     }
 
-    // Add to view and term tables, returning a variable for the created term.
+    // Add to the view, returning a variable for the created term.
     //
     // A call claims its columns after its arguments have claimed theirs, so the
     // walk numbers a term's children before the term (see
@@ -2180,19 +2172,18 @@ impl<'a> ProofInstrumentor<'a> {
         // lifts a union's constructor operands into fresh `let`s, so the two do
         // not have the same nodes. Conversion plans the same source the same way
         // to get the same numbering (see `ProofStore::action_term`).
-        use crate::proofs::proof_encoding_helpers::{ActionNode, action_nodes};
         self.action_expr_index = HashMap::default();
         self.action_row_index = vec![];
         let mut at = 0;
         for action in &plan.actions {
-            let mut row = usize::MAX;
+            let mut row = None;
             for node in action_nodes(action) {
                 match node {
                     ActionNode::Expr(expr) => {
                         self.action_expr_index
                             .insert(std::ptr::from_ref(expr) as usize, at);
                     }
-                    ActionNode::Row(_) => row = at,
+                    ActionNode::Row(_) => row = Some(at),
                 }
                 at += 1;
             }

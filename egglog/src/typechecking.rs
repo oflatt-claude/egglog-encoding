@@ -816,8 +816,8 @@ impl EGraph {
                 ResolvedNCommand::PrintSize(span.clone(), n.clone())
             }
             NCommand::ProveExists(span, constructor) => {
-                // prove-exists targets a table: a constructor, or its lowering to
-                // a term relation (a function) under the term/proof encoding.
+                // prove-exists targets a table: a constructor, or the view
+                // standing in for one under the term/proof encoding.
                 // `get_func_type` already rejects primitives/unbound names.
                 let func_type = self
                     .type_info

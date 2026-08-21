@@ -69,6 +69,12 @@ impl ProofInstrumentor<'_> {
             return Err(ProveExistsError::RequiresConstructor);
         };
         let view_id = view.backend_id;
+        // The command names the view; messages should name what the user wrote.
+        let named = view
+            .decl
+            .term_constructor
+            .clone()
+            .unwrap_or_else(|| func.name.clone());
         let Some(proof_sort) = view.schema.outputs.last().cloned() else {
             return Err(ProveExistsError::RequiresConstructor);
         };
@@ -88,14 +94,12 @@ impl ProofInstrumentor<'_> {
         });
         let proof_value = best_row.map(|row| row[proof_index]).ok_or_else(|| {
             ProveExistsError::QueryDidNotMatch {
-                constructor: func.name.clone(),
+                constructor: named.clone(),
             }
         })?;
 
         let proof_term_id = extract_root(self.egraph, &mut termdag, proof_value, proof_sort)
-            .unwrap_or_else(|| {
-                panic!("failed to extract proof term for constructor {}", func.name)
-            });
+            .unwrap_or_else(|| panic!("failed to extract proof term for constructor {named}"));
 
         let container_normalizers = self
             .egraph
