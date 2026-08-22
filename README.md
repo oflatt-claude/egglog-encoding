@@ -243,10 +243,14 @@ corpus:
 ### ParaBit proof-stress regression
 
 [`benchmarks/parabit-unsigned-rounding-v1-to-v2.egg`](benchmarks/parabit-unsigned-rounding-v1-to-v2.egg)
-is a standalone extraction of the CAV 2026 ParaBit artifact's
-`cadence/unsigned_rounding_v1_to_v2` query. It inlines the complete translated
-rule set and preserves the phased schedule used to replace ParaBit's Rust
-analysis and e-graph callbacks. Run it explicitly with:
+comes from [*A Multi-width Parametric Bitvector Equivalence
+Solver*](https://link.springer.com/chapter/10.1007/978-3-032-32519-8_20) by
+Luigi Rinaldi, John Wickerson, and Samuel Coward (CAV 2026). It makes the
+authors' [MIT-licensed ParaBit
+example](https://github.com/luigirinaldi/parabit/blob/221c2f05b2260377c3cd70b31b9ae6d0158fffab/benchmarks/cadence/unsigned_rounding_v1_to_v2.bwlang)
+standalone by inlining the complete translated rule set and replacing ParaBit's
+Rust analysis and e-graph callbacks with phased Egglog rules. Run it explicitly
+with:
 
 ```bash
 ./bench.py benchmarks/parabit-unsigned-rounding-v1-to-v2.egg \

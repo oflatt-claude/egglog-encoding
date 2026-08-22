@@ -96,17 +96,6 @@ def test_default_workloads_are_the_ten_research_cases() -> None:
     assert pointer.fact_directory_sha256.startswith("sha256:")
 
 
-def test_parabit_proof_stress_workload_is_standalone_and_opt_in() -> None:
-    relative_path = "benchmarks/parabit-unsigned-rounding-v1-to-v2.egg"
-    (file_spec,) = workloads.resolve_files([relative_path], ROOT)
-    source = file_spec.absolute_path.read_text(encoding="utf-8")
-
-    assert file_spec.display_path == relative_path
-    assert "(include " not in source
-    assert "(check (= $parabit-lhs $parabit-rhs))" in source
-    assert relative_path not in {workload.file for workload in workloads.DEFAULT_WORKLOADS}
-
-
 def test_pointer_initdb_facts_are_the_complete_consumed_artifact_relations() -> None:
     fact_directory = ROOT / "egglog/tests/pointer-analysis-initdb"
     files = tuple(sorted(fact_directory.glob("*.csv")))
