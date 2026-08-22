@@ -195,8 +195,7 @@ pub(crate) struct EncodingState {
     pub term_header_added: bool,
     /// The running index a `FiatUnion` or `FiatTerm` names: how many global
     /// actions the encoding has numbered so far, in the program proof checking
-    /// reads. Carried in the e-graph because the instrumentor is rebuilt for
-    /// each command, and restored by `pop` along with that program.
+    /// reads. Tracks that program, including across a `pop`.
     pub global_actions_numbered: usize,
     // TODO this is very ugly- we should separate out a typechecking struct
     // since we didn't need an entire e-graph
@@ -254,10 +253,8 @@ pub(crate) struct ProofInstrumentor<'a> {
     /// Anchor requests no body atom could reach, as proof variable and the
     /// value variable asked about. Reading one is an error.
     unanchored: HashMap<String, String>,
-    /// The index, in the program proof checking reads, of the global action
-    /// being encoded. A fiat names this rather than its own endpoints, so
-    /// conversion recovers them by evaluating the action. Advanced per command
-    /// by [`ProofInstrumentor::global_actions_in`].
+    /// The global action being encoded, as
+    /// [`EncodingState::global_actions_numbered`] indexes it.
     global_action: usize,
     /// Which node of the current action, in
     /// [`action_nodes`]
@@ -299,9 +296,8 @@ struct Element {
     /// proof conversion recovers the resolved primitive, which a name alone
     /// could not, since primitives are overloaded.
     body_index: usize,
-    /// One proof per argument of the reading call, in order, with the container
-    /// argument left empty — the anchor chain resolves that one, so it is only
-    /// known once the whole body is walked.
+    /// One proof per argument of the reading call, in order. The container
+    /// argument is empty: the anchor chain fills it.
     arg_proofs: Vec<Option<String>>,
     /// Which argument the container is.
     container_index: usize,
@@ -464,10 +460,9 @@ impl<'a> ProofInstrumentor<'a> {
     /// [`gather_global_actions`](crate::proofs::proof_checker::gather_global_actions)
     /// will enumerate over it.
     ///
-    /// [`Self::lower_inputs`] has already replaced each `(input …)` with one
-    /// action per row in that program, while the encoded program keeps the
-    /// command and loads it at run time, so an input counts its rows. Both call
-    /// [`Self::input_actions`], so the two counts cannot drift.
+    /// An `(input …)` counts its rows, since [`Self::lower_inputs`] gave that
+    /// program one action per row while the encoded one keeps the command. Both
+    /// go through [`Self::input_actions`], so the counts cannot drift.
     fn global_actions_in(&self, command: &ResolvedNCommand) -> Result<usize, Error> {
         Ok(match command {
             ResolvedNCommand::CoreAction(_) => 1,

@@ -1184,8 +1184,7 @@ impl EGraph {
     ///
     /// The encoding declares nothing under a function's own name — its rows live
     /// in the view, which carries the name as its `:internal-term-constructor` —
-    /// so a name the user wrote resolves through that. Checked without consulting
-    /// the proof-mode flag, so it still works on a replayed desugared program.
+    /// so a name the user wrote resolves through that, encoded or not.
     pub(crate) fn function_or_view(&self, sym: &str) -> Option<&Function> {
         self.functions
             .values()
@@ -1679,10 +1678,7 @@ impl EGraph {
                     name: name.to_owned(),
                 })?;
         // A real constructor reads as enodes, and so does the view standing in
-        // for one under the encoding. The eclass id is the row's output column
-        // for a real constructor and the view's first output column for a view —
-        // `extraction_output_index` picks the right one and
-        // `extraction_num_children` the matching children count.
+        // for one under the encoding.
         if function.subtype() != FunctionSubtype::Constructor && !function.is_fd_view() {
             return Err(crate::api::ApiError::WrongSubtype {
                 name: name.to_owned(),
@@ -2566,11 +2562,11 @@ impl EGraph {
     /// (no get-or-insert): a duplicate view key is left to the view's
     /// merge/no-merge handling.
     ///
-    /// Everything is read off the view, never the pre-encoding `FuncType`, so
-    /// this also works when a desugared program is replayed in a fresh e-graph.
-    /// `proof_base` is where `lower_inputs` put this input's per-row actions in
-    /// the program proof checking reads: row `i` is justified by naming the
-    /// action at `proof_base + i`, so the row itself names no term.
+    /// The row shape is read off the view, so this also works when a desugared
+    /// program is replayed in a fresh e-graph. `proof_base` is where
+    /// `lower_inputs` put this input's per-row actions in the program proof
+    /// checking reads: row `i` is justified by naming the action at
+    /// `proof_base + i`.
     fn native_input(
         &mut self,
         span: Span,
