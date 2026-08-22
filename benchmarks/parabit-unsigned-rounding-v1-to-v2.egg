@@ -1,34 +1,14 @@
 ;; This example comes from “A Multi-width Parametric Bitvector Equivalence
 ;; Solver” by Luigi Rinaldi, John Wickerson, and Samuel Coward (CAV 2026).
 ;; Their ParaBit implementation is MIT licensed:
-;; https://github.com/luigirinaldi/parabit/tree/221c2f05b2260377c3cd70b31b9ae6d0158fffab
+;; https://github.com/luigirinaldi/parabit
 ;;
-;; The original unsigned_rounding_v1_to_v2 query is here:
-;; https://github.com/luigirinaldi/parabit/blob/221c2f05b2260377c3cd70b31b9ae6d0158fffab/benchmarks/cadence/unsigned_rounding_v1_to_v2.bwlang
-;;
-;; ParaBit is a Rust program built on egg, rather than an .egg source file. It
-;; parses the BWLang query, adds its left- and right-hand sides to the e-graph,
-;; identifies the supplied preconditions with true, and runs the rewrite set.
-;; After every egg iteration, a Rust runner hook calls EGraph::equivs on the two
-;; input terms. A non-empty result stops the run successfully; 2,000 iterations
-;; is the fallback limit.
-;;
-;; This file makes the same problem self-contained in Egglog. It inlines the
-;; translated rewrite set and keeps ParaBit's single untyped term language.
-;; ParaBit's Rust ModAnalysis becomes the ConstValue and PowValue rules below;
-;; infer_conditions becomes the NeedTrue/KnownTrue demand and inference phases;
-;; and not_already_bw becomes the phased NotYetBw seed, prune, and propagation
-;; rules. The explicit epoch driver gives those phases ParaBit's per-iteration
-;; ordering and stops when either the equality is found or the same 2,000-step
-;; limit is reached.
-;;
-;; The original Rust hook asks egg whether the two terms are already equivalent.
-;; Here the driver watches that equality so it can stop early, and the final
-;; (check ...) asks Egglog to establish it. Reaching only the epoch limit still
-;; fails that check. The benchmark's off treatment performs this ordinary check;
-;; its proofs treatment records provenance for the same run. ParaBit's later egg
-;; explanation extraction and Isabelle certificate generation are deliberately
-;; outside this benchmark.
+;; ParaBit uses custom Rust logic for constant folding (`ConstValue` /
+;; `PowValue`) and simple condition inference (see `NeedTrue` / `KnownTrue`),
+;; which are implemented here in native egglog. ParaBit also adds a check that
+;; looks for `Bw` nodes in a particular e-class before running the RHS of the
+;; rule. This is implemented as the non-monotone / phased `NotYetBw` relation
+;; and related demand, prune, and propagation rules.
 
 (datatype Expr
   (Bw Expr Expr)

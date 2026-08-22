@@ -246,8 +246,8 @@ corpus:
 comes from [*A Multi-width Parametric Bitvector Equivalence
 Solver*](https://link.springer.com/chapter/10.1007/978-3-032-32519-8_20) by
 Luigi Rinaldi, John Wickerson, and Samuel Coward (CAV 2026). It makes the
-authors' [MIT-licensed ParaBit
-example](https://github.com/luigirinaldi/parabit/blob/221c2f05b2260377c3cd70b31b9ae6d0158fffab/benchmarks/cadence/unsigned_rounding_v1_to_v2.bwlang)
+`cadence/unsigned_rounding_v1_to_v2` example from the authors'
+[MIT-licensed ParaBit repository](https://github.com/luigirinaldi/parabit)
 standalone by inlining the complete translated rule set and replacing ParaBit's
 Rust analysis and e-graph callbacks with phased Egglog rules. Run it explicitly
 with:
