@@ -570,5 +570,50 @@ private def prog2 : Program :=
 #guard !Checks prog2 (pRule 0 [pFiat]) (tF (tF tA)) tB
 #guard !Checks prog2 (pRule 0 [pFiat, pFiat, pFiat]) (tF (tF tA)) tB
 
+/-! ### A premise proof has to reach outside `C.eqs`
+
+`props C p` is the **only** generator of premise propositions, and at `@Fiat` it generates
+`C.eqs` and nothing else. So a rule whose body joins two reads through a middle term the
+program never asserted fires only under a *composed* premise proof, and acceptance flips on
+the shape of that proof rather than on the claim. `@Rule_i`'s premise arguments are
+load-bearing, not decoration.
+
+`chain` asserts `(F (A)) = H1`, `H1 = H2` and `H2 = (G (B))`, so `(F (A)) = (G (B))` is
+derivable and not asserted, and the rule's two reads join on it. -/
+private def eH1 : Expr := .app "H1" []
+private def eH2 : Expr := .app "H2" []
+private def tH2 : Term := .app "H2" []
+private def tG (t : Term) : Term := .app "G" [t]
+
+private def chainRule : Rule :=
+  ⟨[.eq (.app "F" [.var "x"]) (.app "G" [.var "y"])],
+   [.union (.var "x") (.var "y")], ""⟩
+
+private def chain : Program :=
+  [.decl "A" (cnst 0), .decl "B" (cnst 0), .decl "H1" (cnst 0), .decl "H2" (cnst 0),
+   .decl "F" (cnst 1), .decl "G" (cnst 1),
+   .action (.union (.app "F" [eA]) eH1),
+   .action (.union eH1 eH2),
+   .action (.union eH2 (.app "G" [eB])),
+   .rule chainRule, .run ""]
+
+/-! The join itself: a two-step `@Trans` reaches the middle term `H2`, and no number of steps
+makes `(F (A)) = (G (B))` a `@Fiat`. -/
+#guard premiseCount chainRule = 2
+#guard Checks chain (pTrans pFiat pFiat) (tF tA) tH2
+#guard !Checks chain pFiat (tF tA) tH2
+#guard !Checks chain (pTrans pFiat pFiat) (tF tA) (tG tB)
+#guard Checks chain (pTrans pFiat (pTrans pFiat pFiat)) (tF tA) (tG tB)
+
+/-! And the flip, at the rule. Two `@Fiat` premises cannot meet, because each is confined to
+`C.eqs` and the meet is `H2`; either premise composed to reach `H2` fires it. Direction is
+free — `@Sym` inside a premise walks the chain the other way — and the arity test still runs
+ahead of everything. -/
+#guard !Checks chain (pRule 0 [pFiat, pFiat]) tA tB
+#guard Checks chain (pRule 0 [pTrans pFiat pFiat, pFiat]) tA tB
+#guard Checks chain (pRule 0 [pFiat, pTrans (pSym pFiat) (pSym pFiat)]) tA tB
+#guard !Checks chain (pRule 0 [pSym pFiat, pFiat]) tA tB
+#guard !Checks chain (pRule 0 []) tA tB
+
 end Witnesses
 end Egglog

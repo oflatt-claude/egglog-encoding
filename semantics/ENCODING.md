@@ -189,6 +189,162 @@ different sources.
 **And it is not a defect in `encode`.** The entry the rebuild wrote is true of the terms it is
 about; what was defective is stating the correspondence as an unrestricted `iff`.
 
+## The rebuild has no fixpoint, and every proof-side repair is dead
+
+`Encoding/Match.lean` carries the statement: `uf_row_succ` and `uTgt_saturate_infinite` say
+that after a `union` between two distinct built terms, `Cmd.saturate rebuildRuleset` can only
+reach a state holding an injective image of `Nat`. One turn of the crank re-keys the `@UF` row
+through a *stale* view row; the collision that makes is not a self-collision, so
+`identityVals := some 1` does not disarm it; and `mergeBody` settles it at a proof one
+composition larger — proof sizes 6, 11, 16, 21, … from the `@Fiat` the `union` wrote. Its
+docstring has the four steps.
+
+Four repairs to the proof vocabulary have been investigated and all four are dead. **The
+characterisation is the part worth keeping**, so it comes first.
+
+### Proofs are paths, so normalisation is path reduction
+
+A proof term denotes a walk in the graph whose nodes are terms and whose edges are the steps
+something puts there: an asserted `union`, a rule head's `union`, and one congruence edge per
+constructor position. `@Sym` reverses a walk, `@Trans` concatenates two, `@Congr_k` lifts `k`
+walks through a constructor. Cancellation — `@Trans (@Sym p) (@Trans p r) → r` and its mirror
+— quotients out backtracking, so a normal form is a **reduced walk**. The reduced walks
+between two nodes are the cosets of the graph's fundamental group: one per pair when the graph
+is a forest, and **infinitely many as soon as the graph has a cycle**. So a canonical proof per
+proposition exists exactly on forests, and on nothing else.
+
+Two data points, both checked against a spec-faithful harness (`Term.blt` and `bltList`
+comparing whole terms, `mergeBody`/`mergeResult`/`loPfE`/`hiPfE`, and `pathCompressRule`
+plus `rebuildRules`' e-class and column rules transcribed; validated against `uf_row_succ`'s
+tower):
+
+* The **tower** is a forest — `union A B` at two nullary constructors is two nodes and one
+  edge — and identity collapse alone converges on it, in one round.
+* `(F A) (F B) (union A B)` **with a rule** `(F x) ⇒ (union (F x) x)` is not. Its nodes are
+  `A`, `B`, `F(A)`, `F(B)`; its edges are `A–B` asserted, `A–F(A)` and `B–F(B)` from the rule
+  head, and `F(A)–F(B)` by congruence. Four nodes, four edges, connected, so cycle rank
+  `4 − 4 + 1 = 1`. It is the one shape of fourteen that **no** law set converges on — all nine
+  tried, including the maximal unsound one, in both the shared-`@Fiat` and the
+  per-assertion-`@Fiat_j` reading.
+
+**Rebuild convergence is weaker than canonicity, and the harness says so in both directions**,
+which is why the forest condition is a statement about normal forms and not a decision
+procedure for termination:
+
+* A forest is not sufficient. `(F A) (F B) (union A B)` without the rule is a forest — nodes
+  `A, B, F(A), F(B)`, edges `A–B` and `F(A)–F(B)`, cycle rank 0 — and **no cancellation-free
+  law set converges on it**. Reaching the canonical walk needs cancellation, which is the
+  unsound fragment below.
+* A cycle is not fatal. `A B C` with all three of `(union A B) (union B C) (union A C)` is a
+  triangle, cycle rank 1, and it converges under cancellation: the rebuild composes only the
+  walks its own three rules compose and never enumerates the coset.
+
+What makes the cycle-rank-1 shape fatal is *which* edge closes its cycle. `F(A)–F(B)` is a
+**congruence** edge, and the column rule re-derives it every round from the round's current
+proof, wrapping it in `@Congr_1`. So the round-`n+1` proof carries a round-`n`-shaped proof
+one `@Congr_1` deeper — 14 symbols to 99 in one round under the sound law set — and no law
+that keeps `@Congr_k` meaningful can strip the wrapper. The successor is not literally the
+predecessor plus a constructor, because normalisation reshuffles the interior; the invariant
+is the nesting depth, and it grows by one per round.
+
+**Consequence: the only proof-side cure is proof irrelevance**, and proof irrelevance is not a
+rewrite system. The two designs that remain are therefore changes to what `Spec/Step.lean`
+counts as a *step*, not to the proof vocabulary — last subsection.
+
+### 1. Identity collapse — fixes only forests
+
+`@Trans @Refl q → q`, `@Sym @Refl → @Refl`, `@Congr_k @Refl … → @Refl`. The vocabulary
+has no `@Refl` to collapse — `encodeBuild` writes `fiatE` in every view row — so this is
+"add one, and collapse it", and the harness is *generous* to the candidate by modelling it.
+Even so it converges on four of fourteen shapes, and all four are forests. It is not a
+sufficient condition on forests: the forest above defeats it.
+
+### 2. A pinned proof table (`:merge old`) — fails, and is worse
+
+egglog's own `<S>Proof` is `:merge old` (`egglog/src/proofs/proof_encoding.rs:617,685`), which
+suggests pinning the proof column into a sidecar table that never composes. It does not
+transfer, for two reasons.
+
+**egglog's pinned table is not carrying the interesting proof.** `<S>Proof` holds a
+*reflexive anchor*, read only as a fallback when a term has no `@UF` row
+(`proof_container_rebuild.rs:50-56`: `uf_canon_proof` returns "the `@UF_<S>` row's proof
+`term = leader`, or `fallback`", and the caller passes `<S>Proof(term)`). egglog still composes
+in `ordered_union_merge` — `@Sym(hi_pf) ; lo_pf`, the same skeleton as `mergeBody` — and in
+`path_compress` — `@Trans pb pc`. What actually terminates egglog's rebuild is
+`(delete (view keys))` in `proof_encoding_rebuild.rs` (lines 55-56, 151, 318, 363, 405): the
+displaced row is *removed*, so there is no stale row to fire against next round. `Spec/`'s
+`terms` never shrinks, which is the whole gap.
+
+**And simulated, it is worse than the status quo.** `:merge old` is a don't-add, not a remove,
+and `Database.Out` is existential — `∃ bs, CongList db as bs ∧ Term.app f (bs ++ vs) ∈ db.terms`
+— so every historical proof at a key stays readable and every reader multiplies over all of
+them. It fails all three shapes tried. On chained unions (`X Y Z`, `(union Y Z) (union X Y)`)
+it adds 6, 6, 13, 51, 263, 1633 rows per round, where the status quo adds one.
+
+### 3. `rewrite` rules over the proof tables — cannot remove, and would break a proved theorem
+
+Four independent refutations, any one sufficient.
+
+* A `rewrite` **desugars to a `union`** (`egglog/src/ast/desugar.rs`, `desugar_rewrite` emits
+  `Action::Union`), so it equates the big proof with the small one and leaves both in `terms`.
+  Equating is not removing, and it is removal the fixpoint needs.
+* It fires only once the bad term exists, so it is a round behind the rule that made it.
+* The colliding column is the **e-class**, not the proof: `MergeConflict` at
+  `identityVals := some 1` compares column 0, and the tower's growth is in column 1. Making
+  two proofs equal does not stop the collision that mints them.
+* `encode` would stop being union-free, which falsifies the *proved* `encode_unionFree`
+  (`Encoding/Encode.lean`, axioms `[propext, Quot.sound]`). That is load-bearing: it is what
+  makes every state an encoded program reaches diagonal, hence `Cong` on the target the
+  identity on the terms it holds, hence `Database.Out` a syntactic lookup — which is exactly
+  what `Encoding/Match.lean`'s `out_of_matches_values` needs, and what puts `encode` in
+  `execM_contained`'s union-free arm.
+
+### 4. Normalise on build, via a `Prim` — sound fragment insufficient, sufficient fragment unsound
+
+The sound fragment is `@Sym`/`@Trans`/`@Congr_k` bookkeeping — `@Sym (@Sym p) → p`,
+`@Sym (@Trans p q) → @Trans (@Sym q) (@Sym p)`, associativity, identity collapse, and
+`@Congr_k` distribution. It converges on four of fourteen shapes. The tower's own shape and
+the forest above are both outside it.
+
+The sufficient fragment adds cancellation and reaches thirteen of fourteen — and is
+**unsound**, refuted on two lines. Take `(union B D) (union C D)` with `B < C < D` under
+`Term.blt`. Both edges key at `@UF(D)`, so they collide; `mergeBody` writes
+`@Trans (@Sym @Fiat) @Fiat`; cancellation reduces that to the identity; and the settled row is
+`@UF(C) ↦ (B, @Refl)`, a claim that `C = B` which is neither asserted nor reflexive. The
+checker refuses it whichever way the identity is spelled: `@Refl` is not one of
+`Checker.lean`'s node kinds at all, and at `@Fiat` `props` offers `C.eqs` filtered by the
+endpoints plus `reflProps`, and `(C, B)` is in neither. So the state carries a row no proof
+justifies. Cancellation is unsound precisely because `@Fiat` is **non-functional**: one
+nullary node stands for every assertion, so `@Trans (@Sym @Fiat) @Fiat` looks like a round
+trip along one edge when it is a path along two.
+
+**Per-assertion `@Fiat_j` does not rescue it.** Indexing the constant by the assertion repairs
+that counterexample — `@Trans (@Sym @Fiat_1) @Fiat_0` no longer cancels — and repairs the two
+unjustified rows the audit finds on the triangle as well. It changes **zero** convergence
+cells: all fourteen shapes × nine law sets are bit-identical between the shared and indexed
+readings. And it does not restore cancellation's soundness, because `@Rule_i` is non-functional
+for the same reason: `Checker.lean`'s `headEqs` is multi-valued per head, so a head asserting
+two `union`s that share their maximal endpoint gives both `@UF` edges the *same* proof
+`@Rule_0(pf)`. On `(F x) ⇒ (union (F x) B) (union (F x) C)` with `B < C < F(A)`, cancellation
+produces `@UF(C) ↦ (B, @Refl)` again, with `@Fiat_j` on. Indexing `@Rule_i` per head action
+would meet the same wall one level up: any proof constructor whose denotation is a *set* of
+propositions makes `@Trans (@Sym p) p` mean less than it looks like.
+
+### What is left, and it is not in the proof vocabulary
+
+Both remaining designs change `Spec/Step.lean`'s notion of a step.
+
+* **A re-derived equality is not a change.** A row's identity is `(key, e-class)` and the proof
+  is metadata: `MergeConflict` already reads only the counted columns, and this extends the
+  same idea to `RunRules`, so a firing that re-proves a row the state holds is not a firing
+  that changes it. This is proof irrelevance at the level of the state, which is where the
+  characterisation above says it has to live.
+* **The rebuild replaces rather than accumulates.** A fifth field, `entries : Set Term`, with
+  `Impl/Interp.lean`'s `toDatabase` setting `entries := rows`, is egglog's `(delete (view keys))`
+  in the specification. `Database.Contained` and `Database.Recorded` are stated on `eqs` alone
+  (`Spec/Database.lean`, `Spec/Congruence.lean`), so `execM_contained` and both `Recorded`
+  transports survive verbatim; what changes is which table reads see the displaced row.
+
 ## The lesson worth keeping
 
 All four defects were invisible while the statements carried `sorry`. A statement nothing

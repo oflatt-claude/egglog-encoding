@@ -2913,6 +2913,29 @@ theorem uf_row_succ {d : Database} (hrun : RunRules rebuildRuleset d = d)
   exact ⟨Cong.assert (hmem _ (Term.self_mem_subterms _)),
     Cong.assert (hmem _ (Term.arg_subterms (by simp) (Term.self_mem_subterms _)))⟩
 
+/-! #### `Cmd.saturate` of the *source* ruleset inherits it, and by a second mechanism
+
+`encodeQueryExpr` emits `.values [freshVar n₁, freshVar (n₁ + 1)] (viewName f) es`, so a read
+binds the **proof column** as an output variable, and `ValidSubst.values` asks only that
+`Term.app (viewName f) (es ++ [x, pf]) ∈ d.terms`. There is therefore one substitution per
+distinct recorded `(e-class, proof)` pair at that key: **a rule's firing count is the number
+of proofs at the matched row, not the number of e-node facts it stands for.** The head mints
+`@Rule_i` at that argument list, and `@Rule_i p ≠ @Rule_i q` whenever `p ≠ q`, so each of
+those firings writes a term the state lacked.
+
+So wherever the proof set at a matched view row is unbounded — which is what
+`uTgt_saturate_tower` produces — `RunRules` over the *source* ruleset has no fixpoint either,
+and normalising proof terms cannot reach it: a normal form is still one term per reduced
+proof, and no law relates `@Rule_i p` to `@Rule_i q`.
+
+**It compounds the tower rather than standing on its own, and that is worth being exact
+about.** The multiplicity is structural and holds at every state. The unboundedness is not: a
+view key gains a second output pair only when two rows collide there, `encodeBuild` writes
+every view row as the key's own application under `fiatE`, and so nothing but the re-keying
+rules above ever creates a view collision. With those rules withheld the source ruleset does
+reach a fixpoint. Hence no compiled witness here: the unconditional statement is false, and
+the conditional one adds nothing to `uf_row_succ`. -/
+
 /-- Rounds of a ruleset move neither the environment nor the rules: `RunRules` is a
 `Database.sUnion`, which takes both from its argument, and `MergeStep` restores both. -/
 theorem runReach_envRules {R : RulesetName} {db d : Database}
