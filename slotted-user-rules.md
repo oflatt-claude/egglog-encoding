@@ -5,7 +5,7 @@ Companion to three runnable files:
 | file | what it is |
 | --- | --- |
 | `tests/slotted-egraph-encoding-11.egg` | the machinery: union, congruence, redundancy, symmetry |
-| `tests/slotted-user-rules.egg` | hand-encoded user rules, M1–M8 |
+| `tests/slotted-user-rules.egg` | hand-encoded user rules as a tutorial: M1, M2, M6, M3, M9, M4, M5, M6b, M7, M8, M10, then M3b as a counter-example |
 | `slotted-experiments/xdiff/xdiff.py` | differential tests against the reference implementation |
 | `tests/slotted-array-rules.egg` | the paper's §4.1 array language, 8 rules, self-checking |
 | `slotted-experiments/xdiff/xarray.py` | the same 8 rules, differentially tested |
@@ -221,15 +221,25 @@ their renamings. egglog's `union` takes classes, i.e. only the case where both
 renamings are the identity. So:
 
 * the action's root is the first atom's root → plain `(union A B)` is fine;
-* anywhere else → build the node and insert the fact instead:
+* anywhere else → build the node and assert the fact instead:
 
   ```text
-  (let _hn (App "h" ma A mb B))
-  (RenamesToLeader _hn mp_root Root)
+  (let _hn (App2 "h" ma A mb B))
+  (Equated _hn mp_root Root)
   ```
 
-  The machinery re-orients it, and promotes it to a real union if the renaming
-  turns out to be an identity.
+  `Equated` is the machinery's orientation-free form: it states `_hn = mp_root * Root`
+  without saying which of the two is the leader, and the machinery derives the oriented
+  `RenamesToLeader` row from it, promoting it to a real union when the renaming turns out
+  to be an identity.
+
+  **Do not write `RenamesToLeader` from an action.** It carries an orientation — the
+  leader is the smaller of the pair under `ordering-max` — and `union` rewrites a row's
+  endpoints, so an orientation that was right when the row was written can be wrong
+  afterwards. Such a row is deleted as stale, and the fact goes with it. An earlier
+  version of this document said the machinery would "re-orient it"; nothing did, and a
+  backwards row is what let transitivity and single parent disagree forever on the SDQL
+  batax term.
 
 **Getting this wrong is silent**, which is why it is stated twice. A plain
 `(union root built)` asserts an equation whose renamings are both the identity.
@@ -540,43 +550,48 @@ them. That is a hypothesis: a leave-one-out over the eight rules was started and
 finished, so which rule and which join dominate is not isolated. It is a different
 axis in any case from the paper's Figure 8, which counts e-nodes and memory.
 
-### Where the encoding and the reference genuinely differ
+### A language difference the array comparison found, since fixed
 
-One shape, and it is a *language* difference rather than a matching one — it shows
-up as a baseline disagreement, before any rule runs.
+It showed up as a baseline disagreement, before any rule ran, and took two fixes.
 
-`Bind` covers one column. `Let(Bind<body>, value)` hides the bound slot from the
-body's public slots only, so in `let x = x in f1 x` the value's `x` is the ambient
-one and the class keeps that slot. The generated binder rule removes the bound slot
-from the whole node, so the class comes out with no slots at all, and two
-applications the reference keeps apart become one class:
+`Bind` covers one column. `Let(Bind<body>, value)` hides the bound slot from the body
+only, so in `let x = x in f1 x` the value's `x` is ambient and the class keeps that
+slot. The generated binder rule used to strip the bound slot from the *whole* node, so
+the class came out with no slots at all and two applications the reference keeps apart
+became one class — 8 classes against 9:
 
 ```text
 (app (let $0 (app f1 (var $0)) (var $0)) (var $0))
 (app (let $0 (app f1 (var $0)) (var $0)) (var $1))
 ```
 
-`xarray.py extra` is that case; the section at the end of
-`tests/slotted-array-rules.egg` asserts the encoding's side of it. Fixing it needs
-`:binder` to name the columns a binder *covers*, not only the column its slot sits
-in. Nothing the eight rules build has the shape, because a pattern's `?e` never
-carries the pattern slot that same pattern binds.
+`:binder` now names the column a binder *covers* — the one after its slot, matching
+`Bind<T>` around a single child — so a slot free in an uncovered column is not
+stripped. That alone was not enough: with the strip blocked, the bound slot stayed in
+the class's slot set and stopped being renameable, which separates two terms the
+reference *identifies* — the opposite error. A colliding bound slot is therefore
+renamed to a slot the node does not use before the strip applies. Both halves were
+needed: `xarray.py iso` went 8-vs-9 classes, to 9-vs-9 but non-isomorphic, to 15/15.
+`tests/slotted-binder-scope.egg` is the pair of cases, and `xarray.py extra` the
+comparison.
 
-### Two discrepancies in the reference checkout, not in our encoding
+### Two discrepancies in the reference checkout, one now fixed upstream
 
 Both in `slotted-egraphs/tests/array/mod.rs`, which looks stale next to
 `tests/rise/`, whose language and rules are the paper's:
 
 * `Lam(Slot, AppliedId)` — a *free* slot where Listing 1 and `tests/rise` both have
   `Lam(Bind<…>)`. A non-binding `lam`.
-* `slot_free_in(slot, var)` returns `!…contains(slot)`, i.e. it computes "**not**
-  free in". Every use in that file therefore has the opposite polarity to Listing 1:
-  `eta` fires only when `$x` *is* free in `?f`, `let-app` only when it is free in
-  neither child, and so on. Measurably wrong: with Listing 1's polarity the
-  reference rewrites (A) into (B); with this file's, it does not.
+* `slot_free_in(slot, var)` returned `!…contains(slot)`, i.e. it computed "**not**
+  free in". Every use in that file therefore had the opposite polarity to Listing 1:
+  `eta` fired only when `$x` *is* free in `?f`, and so on. Measurably wrong: with
+  Listing 1's polarity the reference rewrites (A) into (B); with that file's, it does
+  not. **Fixed upstream** on PR #45, with a test that pins the direction — the file had
+  none, which is how it survived. `tests/rise/rewrite.rs` writes its conditions inline
+  and was never affected.
 
-Both are worked around by targeting the paper's semantics, which is what `tests/rise`
-implements and what `xmulti`'s `define_language!` declares.
+The `Lam` one is still worked around by targeting the paper's semantics, which is what
+`tests/rise` implements and what `xmulti`'s `define_language!` declares.
 
 ## A soundness bug in the machinery: migration truncates edges
 
@@ -610,8 +625,11 @@ malformed self-loops appear (derived by transitivity closing a cycle), the
 variable class loses its slot, and `h(x,y)` merges with `h(x,x)`. Deleting the
 self-loops does not help, and neither does guarding transitivity.
 
-Fixed by declining to migrate when either edge would narrow — the guard now in
-`tests/slotted-egraph-encoding-11.egg`.
+Fixed by minting a name for the uncovered slot instead of dropping it: migration
+composes through a renaming that is total on the node's slots, which is
+`find-mapping-total` in `tests/slotted-egraph-encoding-11.egg`. The alternative —
+declining to migrate whenever an edge would narrow — was in the tree for a while and is
+measured in the next section.
 
 ### What declining costs, measured
 
@@ -640,13 +658,13 @@ alpha-finder's tie-break. So the argument that decided this originally no longer
 holds, and the choice comes down to which mode keeps the encoding's own invariants,
 which is settled under "Do follower classes need self-loops at all?" below.
 
-**Recommendation: keep the guard.** It is sound, cheap, and no test distinguishes
-it from the complete version on what gets proved. Its one real cost — leaving a node
-on a class no query could see — turned out to be fixable in the *maintenance* rules
-instead, for about 9% more union-find rows; see two sections down. Minting is kept
-alongside, measured, for whoever wants to revisit it; it is correct, and its fan-out
-is explained under "Why minting" below — it is a consequence of keying a node by its
-renamings, which the reference avoids by keying on a shape.
+**Settled: minting, and the guard is gone.** No test distinguishes the two on what
+gets proved, so the deciding argument is the one under "Do follower classes need
+self-loops at all?" below: minting is the only mode that empties follower classes, and
+declining leaves a node on a class no query can see. The fan-out that once argued
+against minting is explained under "Why minting" — a consequence of keying a node by
+its renamings, which the reference avoids by keying on a shape — and both of its
+sources have since been fixed, so it no longer applies.
 
 ### The guard really is incomplete: the invariant is false
 
@@ -731,8 +749,8 @@ The two-rule interaction reduces to four lines of machinery, with no user rule
 involved — `Case 14` in `tests/slotted-egraph-encoding-11.egg`:
 
 ```lisp
-(let $B (App "h" (map-of 0 2) (Var 0) (map-of 0 1) (Var 0)))     ; h($2,$1), slots {1,2}
-(let $N (App "h" (map-of 0 1) (Var 0) (map-of 1 1 2 2) $B))      ; h($1,B), slots {1,2}
+(let $B (App2 "h" (map-of 0 2) (Var 0) (map-of 0 1) (Var 0)))     ; h($2,$1), slots {1,2}
+(let $N (App2 "h" (map-of 0 1) (Var 0) (map-of 1 1 2 2) $B))      ; h($1,B), slots {1,2}
 (union $N (Var 2))          ; N's class is just $2, so slot 1 is redundant for it
 (run 20)
 ```
@@ -764,7 +782,7 @@ contributes nothing but the deletion. One guard removes it:
 | --- | --- | --- |
 | `X1` stranded / of those unique | 1 / 0 | 1 / 0 |
 | `X2` stranded / of those unique | 2 / **2** | **0 / 0** |
-| machinery's own tests | 13 pass | **14** pass (`Case 14` is new) |
+| machinery's own tests, at the time | 13 pass | **14** pass (`Case 14` is new) |
 | curated differential | 31/31 | 31/31 |
 | generated differential | 250/250 | 250/250 |
 | curated `RenamesToLeader` rows | 183 | 199 (+9%) |
@@ -952,9 +970,9 @@ differing only in a minted name are two distinct rows. That used to fan out badl
 different names —
 
 ```text
-(App "h" {0→0,1→1} (App "h" {0→0} (Var 0) {0→1} (Var 0)) {0→0,1→1} (Var 0))
-(App "h" {0→0,1→1} (App "h" {0→0} (Var 0) {0→1} (Var 0)) {0→0,2→1} (Var 0))
-(App "h" {0→0,1→1} (App "h" {0→0} (Var 0) {0→1} (Var 0)) {0→0}     (Var 0))
+(App2 "h" {0→0,1→1} (App2 "h" {0→0} (Var 0) {0→1} (Var 0)) {0→0,1→1} (Var 0))
+(App2 "h" {0→0,1→1} (App2 "h" {0→0} (Var 0) {0→1} (Var 0)) {0→0,2→1} (Var 0))
+(App2 "h" {0→0,1→1} (App2 "h" {0→0} (Var 0) {0→1} (Var 0)) {0→0}     (Var 0))
 ```
 
 — waiting on the α-finder to merge them. Three things had to be right before it
@@ -1120,6 +1138,37 @@ encoding has no fixpoint of its *rules* — see below — the state is taken at 
 the *database* instead, established by two different round budgets producing the same
 graph, which is the standard the partition comparison already uses. Those cases are
 counted separately so the two are not conflated.
+
+### `RenamesToLeader` cannot store its own orientation
+
+The two sections above orient a *rule*. This one is about the relation: its orientation
+is a function of value order, and `union` rewrites a row's endpoints, so a row that was
+oriented when written can be backwards afterwards. Nothing put it back.
+
+A backwards row is what lets transitivity and single parent disagree forever. On the
+SDQL batax term the tables sat at 648 rows with `saturate` reporting progress, four
+edges swapped every iteration, period two. Backwards rows by user step were 0 0 0 0 2 7,
+and the machinery stopped saturating at step 6 — exactly where the seventh appeared.
+`child-update`'s `(union node (Ctor …))` is the site: disable that family and the count
+goes to zero. No rule *writes* a backwards row; every writer checks.
+
+Repairing the row in place does not work, and this is the part worth remembering.
+Transitivity has no orientation awareness, so it re-derives the backwards row as fast as
+a repair flips it — measured, oscillating between 24 and 26 rows forever. The fix has to
+be structural: `Equated` holds the fact with no orientation picked, three rules derive
+`RenamesToLeader` from it always putting the smaller value in the leader column, and a
+stale row is simply deleted, which is safe because the fact survives in `Equated`. With
+one writer, the delete cannot fight anything.
+
+Everything relating two *different* values writes `Equated` — transitivity, single
+parent, `Var` normalisation, the alpha-finder, the binder strip, and every compiled user
+action. Self-loops keep writing directly; there is no orientation to pick. Afterwards the
+machinery saturates to step 11 on batax rather than step 5, with no derivation lost:
+100/100 isomorphic at identical class, node and symmetry counts.
+
+One deliberate consequence: a class's symmetry group now lives on the *leader* only,
+where it used to be copied to every member. Followers hold no e-nodes once the machinery
+has saturated, so the leader is where a query reaches it.
 
 ### Child-update needs the same orientation migration does
 
@@ -1861,7 +1910,7 @@ flavour of `find-mapping` (a different representation).
    (relation SymSeen (U Renaming))
    (rule ((RenamesToLeader c m c)) ((SymSeen c m)))
 
-   (let $f (App "f" (map-insert (map-empty) 0 0) (Var 0)
+   (let $f (App2 "f" (map-insert (map-empty) 0 0) (Var 0)
                     (map-insert (map-empty) 1 1) (Var 1)))
    (union $f (Null))
    (run-schedule (saturate (run)))
