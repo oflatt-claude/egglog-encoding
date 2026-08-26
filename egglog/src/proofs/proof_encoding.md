@@ -20,10 +20,11 @@ with them on.
 This document has two parts.
 [**The equality encoding**](#the-equality-encoding) is the tables, actions,
 queries, and maintenance rules; its snippets are all shown with proofs off.
-[**Proofs**](#proofs) is what fills the proof column, told in two layers: an
-encoding that builds each proof as the rule runs, and the *skeleton* the encoder
-actually emits, which records just enough for proof conversion to rebuild that
-same proof afterwards.
+[**Proofs**](#proofs) is what fills the proof column. A proof row records how an
+equality was derived and what it was derived from, never the equality itself;
+proof conversion computes that afterwards. For a rule head the row records less
+still — a *skeleton* naming the firing — which is the second of the two layers
+that part is told in.
 
 The running example throughout is:
 
@@ -367,33 +368,43 @@ See [`crate::proofs::proof_container_rebuild`] for the rebuild primitives, and
 
 # Proofs
 
-With proofs enabled, the encoding first emits a header defining the proof format
-(see [`crate::proofs::proof_format`] and `proof_encoding_helpers.rs`): the
-`@Proof` sort and the proof-node relations `@RuleLink`, `@MergeIdx`,
-`@MergeRow`, `@Trans`, `@Sym`, `@Congr`, `@CongrAll`, `@Proj`,
-`@ContainerNormalize`, `@Eval`, `@FiatUnion`, `@FiatTerm` — each a
-`(function … Unit :no-merge)`, not a constructor, so a proof node is a fresh id
-plus a row, both written by that relation's `mint-<Relation>!`. Three further
-families have their shape fixed by the site rather than by the format, so each
-is declared where it is first needed rather than in the header: `@Rule_<k>`, a
-rule proof carrying its `k` body premises inline; `@Packed_<k>`, one row standing
-for a whole composition over `k` proofs (see [Packed rows](#packed-rows)); and
-`@ProjPrim_<k>`, a body call reading an element out of a container, carrying a
-proof per argument.
+A proof in the e-graph is a *raw proof*: a justification, plus references to the
+proofs it is built from. It does not carry the equality it proves. Proof
+conversion turns each one into a
+[`Proof`](crate::proofs::proof_format::Proof) — the same justification paired
+with the [`Proposition`](crate::proofs::proof_format::Proposition) `t1 = t2` it
+proves (see [`crate::proofs::proof_format`]). The checker reads propositions;
+the e-graph never stores one.
 
-No proof row names a term. A conclusion is stated over other proofs, or over a
-*position* in the program: a rule proof names its rule and which of the head's
-proofs it is, `@FiatUnion` and `@FiatTerm` name the global action they came from
-(and, for a term, which node of it), and `@ProjPrim_<k>` names the rule and the
-index of the reading call in its body. Conversion recovers the terms by
-evaluating what those positions point at, which is why nothing has to reconstruct
-a term to read a proof.
+Conversion computes each proposition from what the raw node references. A node
+references other proofs, or a *position* in the program that conversion can
+evaluate:
 
-`@ProjPrim_<k>` is raw-only: conversion runs the named primitive's validator on
-the argument terms and desugars the node into the `@Proj` at the position that
-result occupies. `@CongrAll` is raw-only for the same kind of reason — it names
-a child by term rather than by position, and conversion expands it against the
-term, following container children to the depth the value rebuild does.
+| Raw node | Names | Conversion computes the equality by |
+| --- | --- | --- |
+| `@Rule_<k>` / `@RuleLink` | the rule, and which of the head's proofs this is | replaying the head — see the two layers below |
+| `@FiatUnion` | a global action | evaluating that action's two operands |
+| `@FiatTerm` | a global action and one of its nodes | evaluating that node |
+| `@ProjPrim_<k>` | the rule and the index of a call in its body | running that primitive's validator on the argument terms |
+| `@MergeIdx` / `@MergeRow` | a function and a subexpression of its merge body | running the merge body on the premise outputs |
+| `@Trans`, `@Sym`, `@Congr`, `@Proj`, … | only other proofs | composing their conclusions |
+
+Two raw nodes have no converted counterpart at all. `@ProjPrim_<k>` becomes the
+`@Proj` at the position its validator's result occupies, and `@CongrAll` becomes
+the positional `@Congr` steps it stands for, expanded against the term.
+
+With proofs enabled the encoding first emits a header defining the format (see
+[`crate::proofs::proof_format`] and `proof_encoding_helpers.rs`): the `@Proof`
+sort and the proof-node relations `@RuleLink`, `@MergeIdx`, `@MergeRow`,
+`@Trans`, `@Sym`, `@Congr`, `@CongrAll`, `@Proj`, `@ContainerNormalize`,
+`@Eval`, `@FiatUnion`, `@FiatTerm` — each a `(function … Unit :no-merge)`, not a
+constructor, so a proof node is a fresh id plus a row, both written by that
+relation's `mint-<Relation>!`. Three further families have their shape fixed by
+the site rather than by the format, so each is declared where it is first needed
+rather than in the header: `@Rule_<k>`, a rule proof carrying its `k` body
+premises inline; `@Packed_<k>`, one row standing for a whole composition over
+`k` proofs (see [Packed rows](#packed-rows)); and `@ProjPrim_<k>`, a body call
+reading an element out of a container, carrying a proof per argument.
 
 The union-find and view proof columns become real:
 
@@ -407,12 +418,13 @@ If term `k` has parent `p`, `(@UF_Math k)` returns `(values p proof)` where
 way, `eclass = f(children)`.
 
 The rest of this part is [reflexive anchors](#reflexive-anchors) and then the two
-layers. [**Layer 1**](#layer-1-building-the-proof-as-the-rule-runs) is a rule
-that builds each proof as it goes; it is the specification.
-[**Layer 2**](#layer-2-proof-skeletons) is what the encoder emits for a rule
-head: a skeleton naming the firing, from which proof conversion recovers layer
-1's proof. Everything after those two — body premises, rebuild rows, merge
-collisions, containers — is stated against layer 1.
+layers, which are how a *rule head* uses the reference-and-convert split above.
+[**Layer 1**](#layer-1-building-the-proof-as-the-rule-runs) is a rule that builds
+each proof as it goes; it is the specification.
+[**Layer 2**](#layer-2-proof-skeletons) is what the encoder actually emits: a
+skeleton naming the firing, from which conversion recovers layer 1's proof.
+Everything after those two — body premises, rebuild rows, merge collisions,
+containers — is stated against layer 1.
 
 ## Reflexive anchors
 
@@ -634,8 +646,8 @@ into a `HeadLayout`: the encoder claims a position's run as it lowers, and
 `Firing` fills the same run as it rebuilds the array, so a row's column indexes
 straight into the result.
 
-A rule proof stores no terms at all. The column, plus the premises, is the whole
-conclusion.
+The column and the premises are the whole conclusion: they fix the firing, and
+conversion replays the head from there.
 
 ### Bridges
 
@@ -861,10 +873,9 @@ order the primitive sees elements in. A *nested* container needs no anchor of
 its own: `@CongrAll` is expanded against the term during conversion, which
 follows container children to the same depth the value rebuild does and knows
 each child's position there. So the primitive folds one `@CongrAll` per changed
-eq-sort element, at any depth, onto the outer anchor. `@CongrAll` exists only in
-the raw e-graph proof; conversion desugars it into positional `@Congr` steps
-computed against the actual term, canonicalizing each rewritten child before the
-step that puts it back.
+eq-sort element, at any depth, onto the outer anchor. Conversion desugars each
+into positional `@Congr` steps against the actual term, canonicalizing a
+rewritten child before the step that puts it back.
 
 For reordering or merging containers (`Set`, `Map`, `MultiSet`) the term after
 those steps can be out of order or hold duplicates, so a `@ContainerNormalize`
