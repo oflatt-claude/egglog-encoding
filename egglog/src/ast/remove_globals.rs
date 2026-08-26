@@ -113,7 +113,7 @@ impl GlobalRemover<'_> {
                         internal_hidden: false,
                         internal_let: true,
                         span: span.clone(),
-                        term_constructor: None,
+                        internal_view: false,
                         identity_vals: None,
                         internal_term_node: false,
                     };
@@ -164,7 +164,7 @@ impl GlobalRemover<'_> {
                     internal_hidden: false,
                     internal_let: true,
                     span: span.clone(),
-                    term_constructor: None,
+                    internal_view: false,
                     identity_vals: None,
                     internal_term_node: false,
                 };

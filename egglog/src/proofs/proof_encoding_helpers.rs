@@ -75,7 +75,6 @@ pub(crate) struct EncodingNames {
     pub(crate) rebuilding_cleanup_ruleset_name: String,
     pub(crate) subsume_ruleset_name: String,
     // Per-function fresh names
-    pub(crate) view_name: HashMap<String, String>,
     pub(crate) subsumed_name: HashMap<String, String>,
     /// The functions whose subsumption scaffolding some program has already
     /// declared (see [`ProofInstrumentor::subsume_marker`]).
@@ -460,7 +459,6 @@ impl EncodingNames {
             rebuilding_ruleset_name: symbol_gen.fresh("rebuilding"),
             rebuilding_cleanup_ruleset_name: symbol_gen.fresh("rebuilding_cleanup"),
             subsume_ruleset_name: symbol_gen.fresh("subsume_ruleset"),
-            view_name: HashMap::default(),
             subsumed_name: HashMap::default(),
             subsume_declared: HashSet::default(),
         }
@@ -640,21 +638,6 @@ impl ProofInstrumentor<'_> {
         let res = self.egraph.parser.get_expr_from_string(None, input);
         self.egraph.parser.ensure_no_reserved_symbols = true;
         res.expect("internally generated term-encoding expression must parse")
-    }
-
-    // Each function/constructor gets a view table, the canonicalized e-nodes to accelerate e-matching.
-    pub(crate) fn view_name(&mut self, name: &str) -> String {
-        if let Some(n) = self.egraph.proof_state.proof_names.view_name.get(name) {
-            n.clone()
-        } else {
-            let fresh_name = self.egraph.parser.symbol_gen.fresh(&format!("{name}View"));
-            self.egraph
-                .proof_state
-                .proof_names
-                .view_name
-                .insert(name.to_string(), fresh_name.clone());
-            fresh_name
-        }
     }
 
     pub(crate) fn subsumed_name(&mut self, name: &str) -> String {

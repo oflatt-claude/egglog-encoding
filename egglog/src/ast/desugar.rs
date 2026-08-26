@@ -18,7 +18,7 @@ pub(crate) fn desugar_command(
             merge,
             hidden,
             let_binding,
-            term_constructor,
+            internal_view,
             unextractable,
             identity_vals,
             cost,
@@ -27,18 +27,17 @@ pub(crate) fn desugar_command(
             let mut fdecl = FunctionDecl::function(span, name, schema, merge);
             fdecl.internal_hidden = hidden;
             fdecl.internal_let = let_binding;
-            fdecl.term_constructor = term_constructor;
+            fdecl.internal_view = internal_view;
             fdecl.identity_vals = identity_vals;
             fdecl.cost = cost;
             fdecl.internal_term_node = term_node;
-            // Functions with term_constructor are view tables that should be
-            // extractable unless explicitly marked unextractable
-            if fdecl.term_constructor.is_some() {
+            // A view table is extractable unless explicitly marked unextractable
+            if fdecl.internal_view {
                 fdecl.unextractable = unextractable;
             } else if unextractable {
                 fdecl.unextractable = true;
             }
-            // For regular functions without term_constructor, keep the default
+            // For regular functions, keep the default
             // unextractable=true from FunctionDecl::function()
             vec![NCommand::Function(fdecl)]
         }
@@ -50,12 +49,12 @@ pub(crate) fn desugar_command(
             unextractable,
             hidden,
             let_binding,
-            term_constructor,
+            internal_view,
         } => {
             let mut fdecl =
                 FunctionDecl::constructor(span, name, schema, cost, unextractable, hidden);
             fdecl.internal_let = let_binding;
-            fdecl.term_constructor = term_constructor;
+            fdecl.internal_view = internal_view;
             std::iter::once(NCommand::Function(fdecl)).collect()
         }
         Command::Relation { span, name, inputs } => desugar_relation(parser, span, name, inputs),

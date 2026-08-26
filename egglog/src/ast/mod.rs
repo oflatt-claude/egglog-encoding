@@ -209,7 +209,7 @@ where
                     unextractable: f.unextractable,
                     hidden: f.internal_hidden,
                     let_binding: f.internal_let,
-                    term_constructor: f.term_constructor.clone(),
+                    internal_view: f.internal_view,
                 },
                 FunctionSubtype::Custom => GenericCommand::Function {
                     span: f.span.clone(),
@@ -218,7 +218,7 @@ where
                     merge: f.merge.clone(),
                     hidden: f.internal_hidden,
                     let_binding: f.internal_let,
-                    term_constructor: f.term_constructor.clone(),
+                    internal_view: f.internal_view,
                     unextractable: f.unextractable,
                     identity_vals: f.identity_vals,
                     cost: f.cost,
@@ -780,8 +780,8 @@ where
         /// Used for global let bindings that are converted to constructors.
         let_binding: bool,
         /// Internal-only metadata for proof-encoding view tables.
-        /// Parsed user syntax only supports `:internal-term-constructor` on `function`.
-        term_constructor: Option<String>,
+        /// Parsed user syntax only supports `:internal-view` on `function`.
+        internal_view: bool,
     },
 
     /// The `relation` command declares a named relation
@@ -849,7 +849,7 @@ where
         merge: Option<GenericMerge<Head, Leaf>>,
         hidden: bool,
         let_binding: bool,
-        term_constructor: Option<String>,
+        internal_view: bool,
         unextractable: bool,
         /// Marks the first `k` value columns as identity columns: a merge that
         /// leaves them unchanged is skipped and the existing row kept. Only
@@ -1202,7 +1202,7 @@ where
                 merge,
                 hidden,
                 let_binding,
-                term_constructor,
+                internal_view,
                 unextractable,
                 identity_vals,
                 cost,
@@ -1223,8 +1223,8 @@ where
                 if *let_binding {
                     write!(f, " :internal-let")?;
                 }
-                if let Some(tc) = term_constructor {
-                    write!(f, " :internal-term-constructor {tc}")?;
+                if *internal_view {
+                    write!(f, " :internal-view")?;
                 }
                 if let Some(k) = identity_vals {
                     write!(f, " :internal-identity-vals {k}")?;
@@ -1245,7 +1245,7 @@ where
                 unextractable,
                 hidden,
                 let_binding,
-                term_constructor,
+                internal_view,
             } => {
                 write!(f, "(constructor {name} {schema}")?;
                 if let Some(cost) = cost {
@@ -1260,8 +1260,8 @@ where
                 if *let_binding {
                     write!(f, " :internal-let")?;
                 }
-                if let Some(tc) = term_constructor {
-                    write!(f, " :internal-term-constructor {tc}")?;
+                if *internal_view {
+                    write!(f, " :internal-view")?;
                 }
                 write!(f, ")")
             }
@@ -1511,7 +1511,7 @@ where
     pub span: Span,
     /// For view tables in proof encoding: the constructor to use for building
     /// terms from the first n-1 children during extraction.
-    pub term_constructor: Option<String>,
+    pub internal_view: bool,
     /// `:internal-identity-vals k`: the first `k` value columns are identity
     /// columns — a merge that leaves them unchanged is skipped and the existing
     /// row kept. Only valid for merges that are idempotent on equal inputs.
@@ -1618,7 +1618,7 @@ impl FunctionDecl {
             internal_hidden: false,
             internal_let: false,
             span,
-            term_constructor: None,
+            internal_view: false,
             identity_vals: None,
             internal_term_node: false,
         }
@@ -1644,7 +1644,7 @@ impl FunctionDecl {
             internal_hidden: hidden,
             internal_let: false,
             span,
-            term_constructor: None,
+            internal_view: false,
             identity_vals: None,
             internal_term_node: false,
         }
@@ -1671,7 +1671,7 @@ where
             internal_hidden: self.internal_hidden,
             internal_let: self.internal_let,
             span: self.span,
-            term_constructor: self.term_constructor,
+            internal_view: self.internal_view,
             identity_vals: self.identity_vals,
             internal_term_node: self.internal_term_node,
         }
@@ -2060,7 +2060,7 @@ where
                 unextractable,
                 hidden,
                 let_binding,
-                term_constructor,
+                internal_view,
             } => GenericCommand::Constructor {
                 span,
                 name: fun(name),
@@ -2072,7 +2072,7 @@ where
                 unextractable,
                 hidden,
                 let_binding,
-                term_constructor: term_constructor.map(&mut *fun),
+                internal_view,
             },
             GenericCommand::Relation { span, name, inputs } => GenericCommand::Relation {
                 span,
@@ -2086,7 +2086,7 @@ where
                 merge,
                 hidden,
                 let_binding,
-                term_constructor,
+                internal_view,
                 unextractable,
                 identity_vals,
                 cost,
@@ -2101,7 +2101,7 @@ where
                 merge,
                 hidden,
                 let_binding,
-                term_constructor: term_constructor.map(&mut *fun),
+                internal_view,
                 unextractable,
                 identity_vals,
                 cost,
@@ -2210,7 +2210,7 @@ where
                 merge,
                 hidden,
                 let_binding,
-                term_constructor,
+                internal_view,
                 unextractable,
                 identity_vals,
                 cost,
@@ -2222,7 +2222,7 @@ where
                 merge: merge.map(|e| e.visit_exprs(f)),
                 hidden,
                 let_binding,
-                term_constructor,
+                internal_view,
                 unextractable,
                 identity_vals,
                 cost,
@@ -2343,7 +2343,7 @@ where
                 unextractable,
                 hidden,
                 let_binding,
-                term_constructor,
+                internal_view,
             } => GenericCommand::Constructor {
                 span,
                 name,
@@ -2352,7 +2352,7 @@ where
                 unextractable,
                 hidden,
                 let_binding,
-                term_constructor,
+                internal_view,
             },
             GenericCommand::Relation { span, name, inputs } => {
                 GenericCommand::Relation { span, name, inputs }
@@ -2364,7 +2364,7 @@ where
                 merge,
                 hidden,
                 let_binding,
-                term_constructor,
+                internal_view,
                 unextractable,
                 identity_vals,
                 cost,
@@ -2376,7 +2376,7 @@ where
                 merge: merge.map(|expr| expr.map_symbols(head, leaf)),
                 hidden,
                 let_binding,
-                term_constructor,
+                internal_view,
                 unextractable,
                 identity_vals,
                 cost,

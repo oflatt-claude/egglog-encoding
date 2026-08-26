@@ -712,7 +712,7 @@ impl<'a> ProofInstrumentor<'a> {
             return Operand::plain(target_id.clone());
         }
 
-        let view = self.view_name(&ctor_name);
+        let view = ctor_name.to_string();
         let own = emit.justification.at(head_column(run, HeadProof::Own));
         let Natural {
             dedup_args,
@@ -929,7 +929,7 @@ impl<'a> ProofInstrumentor<'a> {
         let out_type = schema.output().clone();
 
         let name = &fdecl.name;
-        let view_name = self.view_name(&fdecl.name);
+        let view_name = fdecl.name.to_string();
         let in_sorts = ListDisplay(schema.input.clone(), " ");
         let fresh_sort = self.egraph.parser.symbol_gen.fresh("view");
         let index_decls = self.declare_view_indexes(fdecl);
@@ -981,14 +981,14 @@ impl<'a> ProofInstrumentor<'a> {
                 .ordered_union_merge(&uf_name, Skeleton::Leaf(0).trans(Skeleton::Leaf(1).sym()));
             packed_decl = decl;
             format!(
-                "(function {view_name} ({in_sorts}) ({out_type} {proof_type}) :merge {congruence_merge} :internal-term-constructor {name}{view_flags} :internal-identity-vals 1)"
+                "(function {view_name} ({in_sorts}) ({out_type} {proof_type}) :merge {congruence_merge} :internal-view{view_flags} :internal-identity-vals 1)"
             )
         } else if fdecl.merge.is_some() {
             // Custom function with a `:merge`: the view `:merge` runs the user
             // merge once (see `custom_view_merge`). No `@UF` union.
             let custom_merge = self.custom_view_merge(fdecl);
             format!(
-                "(function {view_name} ({in_sorts}) ({out_type} {proof_type}) :merge {custom_merge} :internal-term-constructor {name}{view_flags} :internal-identity-vals 1)"
+                "(function {view_name} ({in_sorts}) ({out_type} {proof_type}) :merge {custom_merge} :internal-view{view_flags} :internal-identity-vals 1)"
             )
         } else {
             // Primitive/`Unit`-output `:no-merge` custom: the view is declared native
@@ -1002,7 +1002,7 @@ impl<'a> ProofInstrumentor<'a> {
                 "eq-sort `:no-merge` must be rejected by command_supports_proof_encoding"
             );
             format!(
-                "(function {view_name} ({in_sorts}) ({out_type} {proof_type}) :no-merge :internal-term-constructor {name}{view_flags} :internal-identity-vals 1)"
+                "(function {view_name} ({in_sorts}) ({out_type} {proof_type}) :no-merge :internal-view{view_flags} :internal-identity-vals 1)"
             )
         };
         // `fresh_sort` is the term's e-class sort only for a custom function whose
@@ -1096,7 +1096,7 @@ impl<'a> ProofInstrumentor<'a> {
                         // stands, since it names the row's position rather than
                         // reading the row.
                         Change::Delete => {
-                            let view = self.view_name(&func_type.name);
+                            let view = func_type.name.to_string();
                             emit.stmts.push(format!("(delete ({view} {args}))"));
                         }
                         Change::Subsume => {
@@ -1251,7 +1251,7 @@ impl<'a> ProofInstrumentor<'a> {
         value: &str,
         proof: &str,
     ) -> String {
-        let view_name = self.view_name(fname);
+        let view_name = fname.to_string();
         format!(
             "(set ({view_name} {}) (values {value} {proof}))",
             ListDisplay(children, " ")
@@ -1711,7 +1711,7 @@ impl<'a> ProofInstrumentor<'a> {
     /// The signature requires the fallback pair, so both are bare fresh ids: no
     /// row says anything about either, since nothing ever reads them.
     fn lookup_global(&mut self, name: &str, res: &mut Vec<String>) -> String {
-        let view = self.view_name(name);
+        let view = name.to_string();
         let set_if_empty = crate::proofs::proof_fresh::set_if_empty_prim_name(&view);
         let view_sort = self.term_sort(name);
         let fresh_e = self.fresh_id(res, &view_sort);
@@ -1797,7 +1797,7 @@ impl<'a> ProofInstrumentor<'a> {
         func_type: &FuncType,
         args: &[String],
     ) -> String {
-        let view = self.view_name(&func_type.name);
+        let view = func_type.name.to_string();
         let set_if_empty = crate::proofs::proof_fresh::set_if_empty_prim_name(&view);
         let fv = self.fresh_term_id(res, &func_type.name);
         let canon = self.fresh_var();
@@ -1853,7 +1853,7 @@ impl<'a> ProofInstrumentor<'a> {
         args: &[Operand],
         run: Option<HeadRun>,
     ) -> Operand {
-        let view = self.view_name(&func_type.name);
+        let view = func_type.name.to_string();
         let set_if_empty = crate::proofs::proof_fresh::set_if_empty_prim_name(&view);
 
         // `fv_nat` stays *unseeded* — only `fv_can` is written to the view — so the
@@ -1935,7 +1935,7 @@ impl<'a> ProofInstrumentor<'a> {
                 None => by_sort.push((sort, vec![i])),
             }
         }
-        let view_name = self.view_name(&fdecl.name);
+        let view_name = fdecl.name.to_string();
         let mut decls = String::new();
         let mut entries = Vec::new();
         for (sort_name, positions) in by_sort {
@@ -1970,7 +1970,7 @@ impl<'a> ProofInstrumentor<'a> {
         fname: &str,
         children: &[String],
     ) -> (String, String, String) {
-        let view_name = self.view_name(fname);
+        let view_name = fname.to_string();
         let value_var = self.fresh_var();
         let pf_var = self.fresh_var();
         let query = format!(
@@ -2559,7 +2559,7 @@ impl<'a> ProofInstrumentor<'a> {
                         .get_func_type(n)
                         .is_some_and(|f| f.subtype == FunctionSubtype::Constructor)
                     {
-                        self.view_name(n)
+                        n.to_string()
                     } else {
                         n.clone()
                     }
@@ -2573,18 +2573,11 @@ impl<'a> ProofInstrumentor<'a> {
             | ResolvedNCommand::Output { .. }
             | ResolvedNCommand::UnstableCombinedRuleset(..)
             | ResolvedNCommand::PrintOverallStatistics(..)
-            | ResolvedNCommand::PrintFunction(..) => {
+            | ResolvedNCommand::PrintFunction(..)
+            | ResolvedNCommand::ProveExists(..) => {
                 res.push(command.to_command().make_unresolved());
             }
-            // The encoding declares no relation under the function's own name,
-            // so point the command at the view, which is where the witness row
-            // and its proof live anyway.
-            ResolvedNCommand::ProveExists(span, call) => {
-                res.push(Command::ProveExists(
-                    span.clone(),
-                    self.view_name(call.name()),
-                ));
-            }
+
             ResolvedNCommand::UserDefined(..) => {
                 panic!("User defined commands unsupported in term encoding");
             }

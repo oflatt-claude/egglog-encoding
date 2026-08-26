@@ -69,7 +69,7 @@ impl ProofInstrumentor<'_> {
                     arg_proofs.push(proof);
                 }
 
-                let view_name = self.view_name(head.name());
+                let view_name = head.name().to_string();
 
                 // The custom function's FD view is keyed by children: bind the
                 // output `v` (pair-first) and the row's existence proof
@@ -196,7 +196,7 @@ impl ProofInstrumentor<'_> {
                         );
 
                         let fv = self.fresh_var();
-                        let view_name = self.view_name(&func_type.name);
+                        let view_name = func_type.name.to_string();
                         let args_str = ListDisplay(&new_args, " ");
 
                         let proof = {

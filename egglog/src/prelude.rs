@@ -777,7 +777,7 @@ pub fn add_function(
         merge: merge.map(GenericMerge::result_only),
         hidden: false,
         let_binding: false,
-        term_constructor: None,
+        internal_view: false,
         unextractable: false,
         identity_vals: None,
         cost: None,
@@ -801,7 +801,7 @@ pub fn add_constructor(
         unextractable,
         hidden: false,
         let_binding: false,
-        term_constructor: None,
+        internal_view: false,
     }])
 }
 

@@ -550,12 +550,12 @@ impl EGraph {
         let command: ResolvedNCommand = match command {
             NCommand::Function(fdecl) => {
                 let resolved = self.type_info.typecheck_function(symbol_gen, fdecl)?;
-                // An FD view (function carrying `term_constructor` with a tuple
+                // An FD view (a function marked `:internal-view`, with a tuple
                 // `(eclass, proof)` output) gets a `set-if-empty` primitive (+ a
                 // proof-column reader) so the encoding can canonicalize a term to
                 // the view's e-class at insertion time. Registered here so it
                 // survives re-parse of the desugared program.
-                if resolved.term_constructor.is_some()
+                if resolved.internal_view
                     && let ResolvedCall::Func(ft) = &resolved.resolved_schema
                     && ft.outputs.len() >= 2
                 {
@@ -1031,13 +1031,10 @@ impl TypeInfo {
                 fdecl.span.clone(),
             ));
         }
-        // View tables (with term_constructor) must have at least one input (the e-class), except the
+        // View tables must have at least one input (the e-class), except the
         // proof-mode functional-dependency tuple view `(children) -> (eclass, proof)`, which keys on
         // children only (a 0-arg constructor's view then has no inputs).
-        if fdecl.term_constructor.is_some()
-            && fdecl.schema.input.is_empty()
-            && !fdecl.schema.is_tuple_output()
-        {
+        if fdecl.internal_view && fdecl.schema.input.is_empty() && !fdecl.schema.is_tuple_output() {
             return Err(TypeError::TermConstructorNoInputs(
                 fdecl.name.clone(),
                 fdecl.span.clone(),
@@ -1154,7 +1151,7 @@ impl TypeInfo {
             internal_hidden: fdecl.internal_hidden,
             internal_let: fdecl.internal_let,
             span: fdecl.span.clone(),
-            term_constructor: fdecl.term_constructor.clone(),
+            internal_view: fdecl.internal_view,
             identity_vals: fdecl.identity_vals,
             internal_term_node: fdecl.internal_term_node,
         })

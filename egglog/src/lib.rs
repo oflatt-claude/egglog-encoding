@@ -393,11 +393,10 @@ impl Function {
         self.decl.internal_hidden
     }
 
-    /// The term-constructor name associated with this function table, if
-    /// any. Set on view tables created by the term/proof encoding to refer
-    /// back to the user-visible constructor name.
-    pub fn term_constructor(&self) -> Option<&str> {
-        self.decl.term_constructor.as_deref()
+    /// Whether this table is a view created by the term/proof encoding: the
+    /// function's own rows, keyed on canonicalized children.
+    pub fn is_view(&self) -> bool {
+        self.decl.internal_view
     }
 }
 
@@ -1086,8 +1085,8 @@ impl EGraph {
 
         let can_subsume = match decl.subtype {
             FunctionSubtype::Constructor => true,
-            // View tables (functions with term_constructor) need subsumption support
-            FunctionSubtype::Custom => decl.term_constructor.is_some(),
+            // View tables need subsumption support
+            FunctionSubtype::Custom => decl.internal_view,
         };
 
         use egglog_bridge::{DefaultVal, MergeFn};
@@ -1124,7 +1123,7 @@ impl EGraph {
                 decl.name
             );
             assert!(
-                decl.term_constructor.is_none(),
+                !decl.internal_view,
                 "proof-node relation `{}` cannot be an FD view",
                 decl.name
             );
@@ -1180,18 +1179,6 @@ impl EGraph {
         Ok(())
     }
 
-    /// The function `sym` names, or the view standing in for it.
-    ///
-    /// The encoding declares nothing under a function's own name — its rows live
-    /// in the view, which carries the name as its `:internal-term-constructor` —
-    /// so a name the user wrote resolves through that, encoded or not.
-    pub(crate) fn function_or_view(&self, sym: &str) -> Option<&Function> {
-        self.functions
-            .values()
-            .find(|f| f.decl.term_constructor.as_deref() == Some(sym))
-            .or_else(|| self.functions.get(sym))
-    }
-
     /// Print up to `n` of a function's tuples, or all of them when `n` is
     /// `None`.
     pub fn print_function(
@@ -1215,7 +1202,8 @@ impl EGraph {
 
         let (terms, outputs, termdag) = self.function_to_dag(sym, n, true)?;
         let f = self
-            .function_or_view(sym)
+            .functions
+            .get(sym)
             // function_to_dag resolved the same name, so this cannot miss
             .unwrap();
         let terms_and_outputs: Vec<_> = terms.into_iter().zip(outputs.unwrap()).collect();
@@ -1261,7 +1249,8 @@ impl EGraph {
     pub fn print_size(&self, sym: Option<&str>) -> Result<CommandOutput, Error> {
         if let Some(sym) = sym {
             let f = self
-                .function_or_view(sym)
+                .functions
+                .get(sym)
                 .ok_or(TypeError::UnboundFunction(sym.to_owned(), span!()))?;
             // Skip hidden and let_binding functions
             if f.decl.internal_hidden || f.decl.internal_let {
@@ -1272,19 +1261,11 @@ impl EGraph {
             Ok(CommandOutput::PrintFunctionSize(size))
         } else {
             // Print size of all non-hidden, non-let_binding functions
-            // For view tables, use the term_constructor name instead
             let mut lens = self
                 .functions
                 .iter()
                 .filter(|(_, f)| !f.decl.internal_hidden && !f.decl.internal_let)
-                .map(|(sym, f)| {
-                    let name = f
-                        .decl
-                        .term_constructor
-                        .clone()
-                        .unwrap_or_else(|| sym.clone());
-                    (name, self.backend.table_size(f.backend_id))
-                })
+                .map(|(sym, f)| (sym.clone(), self.backend.table_size(f.backend_id)))
                 .collect::<Vec<_>>();
 
             // Function name's alphabetical order
@@ -1613,7 +1594,8 @@ impl EGraph {
         mut f: impl FnMut(FunctionEntry<'_>) -> bool,
     ) -> Result<(), Error> {
         let function =
-            self.function_or_view(name)
+            self.functions
+                .get(name)
                 .ok_or_else(|| crate::api::ApiError::MissingTable {
                     name: name.to_owned(),
                 })?;
@@ -1673,7 +1655,8 @@ impl EGraph {
         mut f: impl FnMut(Enode<'_>) -> bool,
     ) -> Result<(), Error> {
         let function =
-            self.function_or_view(name)
+            self.functions
+                .get(name)
                 .ok_or_else(|| crate::api::ApiError::MissingTable {
                     name: name.to_owned(),
                 })?;
@@ -2327,7 +2310,7 @@ impl EGraph {
                 // name resolving to a view is what says the rows go into the
                 // encoded tables; a plain program targets a user
                 // relation/constructor loaded by the relation loader.
-                if self.function_or_view(&name).is_some_and(|f| f.is_fd_view()) {
+                if self.functions.get(&name).is_some_and(|f| f.is_fd_view()) {
                     self.native_input(span, &name, file, proof_base)?;
                 } else {
                     self.input_file(span, &name, file)?;
@@ -2574,14 +2557,10 @@ impl EGraph {
         file: String,
         proof_base: Option<usize>,
     ) -> Result<(), Error> {
-        // The encoding declares nothing under the function's own name, so the
-        // shape comes off the view, found by its `:internal-term-constructor`
-        // back-reference (as extraction and print-size do).
         let view = self
             .functions
-            .values()
-            .find(|g| g.decl.term_constructor.as_deref() == Some(func_name))
-            .unwrap_or_else(|| panic!("no encoded view for {func_name}"));
+            .get(func_name)
+            .unwrap_or_else(|| panic!("Unrecognized function name {func_name}"));
         let view_id = view.backend_id;
         // Proofs are on for this relation iff the view's proof column (its last
         // output) is not `Unit`; term-encoding-only mode uses `Unit` there.

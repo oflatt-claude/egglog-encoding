@@ -37,7 +37,7 @@ The running example throughout is:
 (delete (Add (Num 1) (Num 2)))
 ```
 
-Generated names keep the `@` prefix the encoding gives them (`@AddView`), but
+Generated names keep the `@` prefix the encoding gives them (`@UF_Math`), but
 the fresh variables it numbers `@pv0`, `@pv1`, … are renamed to something
 readable.
 
@@ -70,23 +70,22 @@ at one parent.
 
 ## The view
 
-Each constructor expands to a **view** and a rebuild index:
+A constructor becomes an e-node table — its **view** — plus a rebuild index:
 
 ```text
-(function @AddView (Math Math) (Math Unit)
+(function Add (Math Math) (Math Unit)
     :merge ((set (@UF_Math (ordering-max old0 new0)) (values (ordering-min old0 new0) ()))
             (values (ordering-min old0 new0) ()))
-    :internal-term-constructor Add :internal-identity-vals 1)
-(index @AddOcc_Math @AddView (any 0 1 2))
+    :internal-view :internal-identity-vals 1)
+(index @AddOcc_Math Add (any 0 1 2))
 ```
 
-The view is the functional dependency `children -> (eclass, proof)` over a term's
-*canonicalized* children, and the only table holding the function's rows — the
-encoding declares nothing under the function's own name, which the view records
-as its `:internal-term-constructor`. Two view rows that collide on the same
-children are congruent, so the view's `:merge` resolves congruence directly — it
-keeps the smaller e-class and unions the two in `@UF_<Sort>`, and no separate
-congruence rule is needed.
+The view keeps the function's name: the encoding rewrites the declaration rather
+than adding a table beside it. What changes is the shape — the functional
+dependency `children -> (eclass, proof)` over a term's *canonicalized* children.
+Two rows that collide on the same children are congruent, so the `:merge`
+resolves congruence directly: it keeps the smaller e-class and unions the two in
+`@UF_<Sort>`, and no separate congruence rule is needed.
 
 ## Building a term
 
@@ -95,13 +94,13 @@ application into its view. Top level `(Add (Num 1) (Num 2))` lowers to:
 
 ```text
 (let n1 (get-fresh! "Math"))
-(let n1_can (set-if-empty-@NumView! 1 n1 ()))
+(let n1_can (set-if-empty-Num! 1 n1 ()))
 …                                                       ;; the same for (Num 2)
 (let ab (get-fresh! "Math"))
-(let ab_can (set-if-empty-@AddView! n1_can n2_can ab ()))
+(let ab_can (set-if-empty-Add! n1_can n2_can ab ()))
 ```
 
-`set-if-empty-<View>!` interns the application and returns the view's *existing*
+`set-if-empty-<F>!` interns the application and returns the view's *existing*
 e-class if the term was already there, so `ab_can` is always canonical. A parent
 is built over its children's canonical ids, which is what keeps views canonical.
 A freshly minted term needs no `@UF_<Sort>` row — identity-on-miss makes it its
@@ -130,10 +129,10 @@ The running example's `rewrite` matches `(Add a b)` into `rewrite_var` and build
 `(Add b a)` as a guest into it:
 
 ```text
-(rule ((= (values e p) (@AddView a b))
+(rule ((= (values e p) (Add a b))
        (= rewrite_var e))
       ((set (Add b a rewrite_var) ())
-       (set (@AddView b a) (values rewrite_var ())))
+       (set (Add b a) (values rewrite_var ())))
         :name "(rewrite (Add a b) (Add b a))")
 ```
 
@@ -156,7 +155,7 @@ position in the program rather than reading the row.
 `(delete (Add (Num 1) (Num 2)))` deletes the view row in the action:
 
 ```text
-(delete (@AddView n1_can n2_can))
+(delete (Add n1_can n2_can))
 ```
 
 No extra deferral is added. A `delete` is staged into a mutation buffer and
@@ -175,8 +174,8 @@ which `@subsume_ruleset` consumes during maintenance:
 
 ```text
 (rule ((@to_subsume_Add c0_ c1_)
-       (= (values e pf) (@AddView c0_ c1_)))
-      ((subsume (@AddView c0_ c1_)))
+       (= (values e pf) (Add c0_ c1_)))
+      ((subsume (Add c0_ c1_)))
         :ruleset @subsume_ruleset :name "@subsume_rule")
 ```
 
@@ -201,19 +200,19 @@ All queries — rule bodies, `check`, and `prove` — read the **view**. A view 
 binds both the e-class and the proof column:
 
 ```text
-(= (values e p) (@AddView a b))
+(= (values e p) (Add a b))
 ```
 
 A nested term flattens into one view read per subterm, joined on shared e-class
 variables. The running example's `check` expands to:
 
 ```text
-(check (= (values e1 p1) (@NumView 1))
-       (= (values e2 p2) (@NumView 2))
-       (= (values e3 p3) (@AddView e1 e2))
-       (= (values e4 p4) (@NumView 2))
-       (= (values e5 p5) (@NumView 1))
-       (= (values e6 p6) (@AddView e4 e5))
+(check (= (values e1 p1) (Num 1))
+       (= (values e2 p2) (Num 2))
+       (= (values e3 p3) (Add e1 e2))
+       (= (values e4 p4) (Num 2))
+       (= (values e5 p5) (Num 1))
+       (= (values e6 p6) (Add e4 e5))
        (= e3 e6))
 ```
 
@@ -262,7 +261,7 @@ Each view gets one *rebuild index* per distinct eq-sort among its columns,
 covering that sort's children **and** the e-class:
 
 ```text
-(index @AddOcc_Math @AddView (any 0 1 2))
+(index @AddOcc_Math Add (any 0 1 2))
 ```
 
 `@AddOcc_Math` is an ordinary declared index: for every view row and every listed
@@ -280,8 +279,8 @@ matching the view:
       ((let c0_canon_ (@UF_Math_canon c0_ c0_))
        (let c1_canon_ (@UF_Math_canon c1_ c1_))
        (let e2_canon_ (@UF_Math_canon e2_ e2_))
-       (delete (@AddView c0_ c1_))
-       (set (@AddView c0_canon_ c1_canon_) (values e2_canon_ ())))
+       (delete (Add c0_ c1_))
+       (set (Add c0_canon_ c1_canon_) (values e2_canon_ ())))
         :ruleset @rebuilding :unsafe-seminaive :name "@rebuild_rule" :internal-include-subsumed)
 ```
 
@@ -321,7 +320,7 @@ becomes
 
 and references to `g1` become the lookup `(g1)`. The encoding then treats
 `:internal-let` like a nullary constructor: it gets an FD view
-`@g1View : () -> (Math, proof)` with the congruence `:merge`, a rebuild index, and
+`g1 : () -> (Math, proof)` with the congruence `:merge`, a rebuild index, and
 rebuild rules like any other function. Because the definition is a `set` and not
 a `union`, a global adds no e-class merge of its own.
 
@@ -346,11 +345,11 @@ the per-container *rebuild primitive* the encoding registers on the sort
 (`@container_rebuild`, with `@container_rebuild_proof` beside it in proof mode):
 
 ```text
-(rule ((= (values e pf) (@WrapView c0_))
+(rule ((= (values e pf) (Wrap c0_))
        (= c0_canon_ (@container_rebuild c0_))
        (!= c0_ c0_canon_))
-      ((set (@WrapView c0_canon_) (values e ()))
-       (delete (@WrapView c0_)))
+      ((set (Wrap c0_canon_) (values e ()))
+       (delete (Wrap c0_)))
         :ruleset @rebuilding :naive :name "@rebuild_rule" :internal-include-subsumed)
 ```
 
@@ -359,7 +358,7 @@ and re-interns it. Because it reads the elements' `@UF_<E>` tables rather than
 joining a tracked table, the rule is `:naive`: an element becoming equal to
 another produces no delta on the container's own view row, so the rule must
 rescan the view each round. Nested containers (e.g. `(Vec (Vec Math))`) rebuild
-by recursing through container-typed elements. The e-class column of `@WrapView`
+by recursing through container-typed elements. The e-class column of `Wrap`
 is an ordinary eq-sort column and gets the indexed rule from
 [Keeping the view canonical](#keeping-the-view-canonical).
 
@@ -410,7 +409,7 @@ The union-find and view proof columns become real:
 
 ```text
 (function @UF_Math (Math) (Math @Proof) :merge (… @Packed_2 "trans_sym_p0_p1" …) …)
-(function @AddView (Math Math) (Math @Proof) :merge (… @Packed_2 "trans_p0_sym_p1" …) …)
+(function Add (Math Math) (Math @Proof) :merge (… @Packed_2 "trans_p0_sym_p1" …) …)
 ```
 
 If term `k` has parent `p`, `(@UF_Math k)` returns `(values p proof)` where
@@ -512,7 +511,7 @@ body and whose result is a construct-into guest, layer 1 would emit five proofs
 (let view (@Trans edge own))                 ;; rewrite_var = (Add b a), the view row
 (let back (@Sym view))
 (let conn (@Trans own back))                 ;; ba = rewrite_var, the connector
-(set (@AddView b a) (values rewrite_var view))
+(set (Add b a) (values rewrite_var view))
 ```
 
 The compositions are not written per site. They are four operations over
@@ -555,7 +554,7 @@ there is no congruence step — the natural node is the only one built:
 ```text
 (let d (get-fresh! "Math"))
 (let d-prf (rule-proof rule_name prems))              ;; d = d
-(let (values d' d-to-d'-prf) (set-if-empty (@AddView b c) d d-prf))
+(let (values d' d-to-d'-prf) (set-if-empty (Add b c) d d-prf))
 ```
 
 **`(let e (Add a d))`.** The child `d` moved, so this level needs both nodes. The
@@ -570,7 +569,7 @@ position carries the first to the second:
 (let e-to-e'-prf (@Congr e-prf 1 d-to-d'-prf))        ;; e = e'
 (let e'-prf (@Trans (@Sym e-to-e'-prf) e-to-e'-prf))  ;; e' = e'
 
-(let (values e'' e'-to-e''-prf) (set-if-empty (@AddView a d') e' e'-prf))
+(let (values e'' e'-to-e''-prf) (set-if-empty (Add a d') e' e'-prf))
 (let e-to-e''-prf (@Trans e-to-e'-prf e'-to-e''-prf)) ;; e = e'', for the level above
 ```
 
@@ -585,7 +584,7 @@ congruence step:
 (let f-to-f'-prf (@Congr f-prf 0 e-to-e''-prf))       ;; f = f'
 (let f'-prf (@Trans (@Sym f-to-f'-prf) f-to-f'-prf))  ;; f' = f'
 
-(let (values f'' f'-to-f''-prf) (set-if-empty (@NegView e'') f' f'-prf))
+(let (values f'' f'-to-f''-prf) (set-if-empty (Neg e'') f' f'-prf))
 (let f-to-f''-prf (@Trans f-to-f'-prf f'-to-f''-prf)) ;; f = f''
 ```
 
@@ -672,12 +671,12 @@ The `rewrite`'s head builds one guest over two matched variables. It writes two
 proof rows:
 
 ```text
-(rule ((= (values e p) (@AddView a b))
+(rule ((= (values e p) (Add a b))
        (= rewrite_var e))
       ((let rule_name "(rewrite (Add a b) (Add b a))")
        (let ba (get-fresh! "Math"))
        (let view (mint-@Rule_1! rule_name p 2))
-       (set (@AddView b a) (values rewrite_var view)))
+       (set (Add b a) (values rewrite_var view)))
         :name "(rewrite (Add a b) (Add b a))" :unsafe-seminaive)
 ```
 
@@ -697,13 +696,13 @@ the walk numbers `(Num 1)` at columns 0–2, `(Num 2)` at 3–5, and the guest
 
 ```text
 (let num1_pf1   (mint-@Rule_1! rule_name prems 1))       ;; (Num 1) over canonical children
-(let num1_e     (set-if-empty-@NumView! 1 …))
-(let num1_bridge (view-proof-@NumView 1 …))
+(let num1_e     (set-if-empty-Num! 1 …))
+(let num1_bridge (view-proof-Num 1 …))
 (let num2_pf1   (mint-@RuleLink! num1_pf1 num1_bridge 4))
-(let num2_e     (set-if-empty-@NumView! 2 …))
-(let num2_bridge (view-proof-@NumView 2 …))
+(let num2_e     (set-if-empty-Num! 2 …))
+(let num2_bridge (view-proof-Num 2 …))
 (let add_view   (mint-@RuleLink! num2_pf1 num2_bridge 8))
-(set (@AddView num1_e num2_e) (values r add_view))
+(set (Add num1_e num2_e) (values r add_view))
 ```
 
 The last row carries both bridges, reached through the chain. Layer 1's walk of

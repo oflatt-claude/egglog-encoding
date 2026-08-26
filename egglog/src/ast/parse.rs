@@ -509,7 +509,7 @@ impl Parser {
                     let mut merge = None;
                     let mut hidden = false;
                     let mut let_binding = false;
-                    let mut term_constructor = None;
+                    let mut internal_view = false;
                     let mut unextractable = false;
                     let mut identity_vals = None;
                     let mut cost = None;
@@ -567,9 +567,7 @@ impl Parser {
                             (":internal-hidden", []) => hidden = true,
                             (":internal-let", []) => let_binding = true,
                             (":unextractable", []) => unextractable = true,
-                            (":internal-term-constructor", [tc]) => {
-                                term_constructor = Some(tc.expect_atom("term constructor name")?)
-                            }
+                            (":internal-view", []) => internal_view = true,
                             (":internal-identity-vals", [k]) => {
                                 identity_vals =
                                     Some(k.expect_uint::<usize>("identity value column count")?)
@@ -594,7 +592,7 @@ impl Parser {
                         merge,
                         hidden,
                         let_binding,
-                        term_constructor,
+                        internal_view,
                         unextractable,
                         identity_vals,
                         cost,
@@ -614,7 +612,7 @@ impl Parser {
                 // (constructor <name> (<input sort>*) <output sort>)
                 // (constructor <name> (<input sort>*) <output sort> :cost <cost>)
                 // (constructor <name> (<input sort>*) <output sort> :unextractable)
-                // (constructor <name> (<input sort>*) <output sort> :internal-term-constructor <constructor name>)
+                // (constructor <name> (<input sort>*) <output sort> :internal-view)
                 match tail {
                     [name, inputs, output, rest @ ..] => {
                         let mut cost = None;
@@ -639,7 +637,7 @@ impl Parser {
                             unextractable,
                             hidden,
                             let_binding,
-                            term_constructor: None,
+                            internal_view: false,
                         }]
                     }
                     _ => {

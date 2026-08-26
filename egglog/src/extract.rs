@@ -160,15 +160,15 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
             let hidden = func.1.decl.internal_hidden;
 
             // Only extract constructors and view tables, which reconstruct as their
-            // term_constructor. Proof extraction uses its own root-directed extractor
+            // their own head. Proof extraction uses its own root-directed extractor
             // and does not need alternate behavior here.
             if !unextractable
                 && !hidden
                 && (func.1.decl.subtype == FunctionSubtype::Constructor
-                    || func.1.decl.term_constructor.is_some())
+                    || func.1.decl.internal_view)
             {
                 let func_name = func.0.clone();
-                // For view tables (with term_constructor in proof mode), the e-class is the last input column
+                // For view tables, the e-class is the first output column
                 let output_sort_name = func.1.extraction_output_sort().name();
                 if let Some(v) = rev_index.get_mut(output_sort_name) {
                     v.push(func_name);
@@ -725,7 +725,7 @@ impl Function {
     /// Whether this is the functional-dependency view `(children) -> (eclass, {Unit|Proof})`,
     /// where the e-class is the first output column rather than the last input column.
     pub(crate) fn is_fd_view(&self) -> bool {
-        self.decl.term_constructor.is_some() && self.schema.outputs.len() > 1
+        self.decl.internal_view && self.schema.outputs.len() > 1
     }
 
     /// A proof-node relation created by the proof encoding, marked
@@ -753,8 +753,7 @@ impl Function {
     /// True when the id is the last input column (old-form views and encoding
     /// relations), rather than a real output column.
     fn id_is_last_input(&self) -> bool {
-        (self.decl.term_constructor.is_some() && !self.is_fd_view())
-            || self.is_proof_node_relation()
+        (self.decl.internal_view && !self.is_fd_view()) || self.is_proof_node_relation()
     }
 
     /// For view tables (with term_constructor), the effective output sort is the last input column
@@ -781,13 +780,9 @@ impl Function {
         }
     }
 
-    /// Returns the name to use when building terms during extraction.
-    /// For view tables, this is the term_constructor name.
+    /// The head to build terms under during extraction.
     pub(crate) fn extraction_term_name(&self) -> &str {
-        self.decl
-            .term_constructor
-            .as_ref()
-            .unwrap_or(&self.decl.name)
+        &self.decl.name
     }
 
     /// Returns the index of the output value in a row for extraction purposes.
@@ -859,7 +854,8 @@ impl EGraph {
         include_output: bool,
     ) -> Result<(Vec<TermId>, Option<Vec<TermId>>, TermDag), Error> {
         let func = self
-            .function_or_view(sym)
+            .functions
+            .get(sym)
             .ok_or(TypeError::UnboundFunction(sym.to_owned(), span!()))?;
         // A view stands in for the function the user named, and its last output
         // is the row's proof — an internal column, and not extractable.
