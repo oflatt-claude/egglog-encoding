@@ -1953,6 +1953,11 @@ theorem wProgram_encodeDomain : wProgram.EncodeDomain where
     · exact ⟨wSrcRule_grounded, wSrcRule_varsKeyed⟩
     · trivial
     · exact absurd h (by simp)
+  noBareBuild := by
+    intro c hc
+    simp only [wProgram, List.mem_cons] at hc
+    rcases hc with rfl | rfl | rfl | rfl | h <;>
+      simp_all [Cmd.NoBareBuild, Action.NoBareBuild, Expr.IsApp, wSrcRule]
 
 /-- **The correspondence, run end to end at the composed case.**
 
@@ -2532,6 +2537,11 @@ theorem uProgram_encodeDomain : uProgram.EncodeDomain where
     · exact ⟨uSrcRule_grounded, uSrcRule_varsKeyed⟩
     · trivial
     · exact absurd h (by simp)
+  noBareBuild := by
+    intro c hc
+    simp only [uProgram, List.mem_cons] at hc
+    rcases hc with rfl | rfl | rfl | rfl | h <;>
+      simp_all [Cmd.NoBareBuild, Action.NoBareBuild, uSrcRule]
 
 /-- **`cong_headUnion` at a non-reflexive equation.**
 

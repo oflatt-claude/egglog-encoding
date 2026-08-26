@@ -116,13 +116,17 @@ nightly-local: nightly-uv nightly-rustup
 # carries exactly LEAN_OPEN_SORRIES of them, each with a vacuity witness beside it
 # (`semantics/ENCODING.md`). None of them is a named obligation any more — both halves are
 # now proved from properties of the state `execM` returned (`cong_sameClass_of_state`,
-# `sameClass_cong_of_state`) — so what is left is exactly those properties:
-# `execM_viewLeader`, `execM_viewsCover` and `execM_unionsRead` for the forward half and
-# `execM_viewsSound` for the completeness half. The rule-head match correspondence of
+# `sameClass_cong_of_state`) — so what is left is exactly those properties, and each is now
+# stated one *clause* at a time so that the two missing mechanisms are separated. Four of the
+# seven need the induction over `encode P`'s commands (`execM_viewsCover_lits`,
+# `execM_viewsCover_keyed`, `execM_readsSelf`, `execM_edges`) on top of the action read-back,
+# which is proved (`holdsBuild_of_execProgramM`, `viewRepr_self_of_execProgramM`); two need
+# the interpreter's rebuild fixpoint (`execM_viewLeader`, `execM_eclassFollowed`); and
+# `execM_viewsSound` is the completeness half. The rule-head match correspondence of
 # `Encoding/Match.lean` is proved outright, encoder read-back included, and so is the
 # rule-head build case it feeds (`entrySound_headBuild`). Everywhere outside
 # `Encoding/` a `sorry` is a regression, and a new one inside it changes the count.
-LEAN_OPEN_SORRIES = 4
+LEAN_OPEN_SORRIES = 7
 LEAN_OPEN_SORRY_DIR = semantics/EgglogSemantics/Encoding
 
 lean-check:

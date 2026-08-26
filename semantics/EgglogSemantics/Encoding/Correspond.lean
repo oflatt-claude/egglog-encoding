@@ -76,16 +76,32 @@ both are decided at the witness at the end of this file.
   evaluation build the very term `encodeBuild`'s skolem names — so the head owes only its
   firing (`entrySound_headBuild`, `cong_headUnion`), and not the fact
   `encode_corresponds_invents_enode` refutes at a key column.
-* **`sorry`**, four, and none of them an obligation any more:
-  `execM_viewLeader`, `execM_viewsCover`, `execM_unionsJoined` and `execM_viewsSound` — each
-  one property of the state `execM` returned, satisfiable at this file's own witness.
-  `execM_unionsRead` is no longer one of them: `Database.UnionsJoined` splits it into three
-  clauses, one writer each, and `unionsRead_of_unionsJoined` is the reduction, proved.
-  `Encoding/Match.lean`'s `uRebuilt_unionsJoined` is all three at a state a program reaches
-  and `uTgt_not_unionsRead` is the third failing one rebuild firing earlier.
-  `encode_assert`, `encode_trans`, `encode_congr`, `encode_corresponds_forward`,
-  `encode_corresponds_complete` and `encode_corresponds` are assembled from them and carry
-  `sorryAx` through them.
+* **Proved, and the shared crux of three of the four residues**: the **action read-back**.
+  `holdsBuild_of_execActions` reads both rows a build's `set`s wrote off the block that ran
+  them, `viewRepr_self_of_execActions` assembles them into the reading a `SameClass` is two
+  of, and `holdsBuild_of_execProgramM`/`viewRepr_self_of_execProgramM` are the same where the
+  block is the *top-level* `Cmd.action`s `encodeCmd` emits. `FDatabase.execProgramM_terms` is
+  what carries the rows to the end of the run, and it is the only form the read-back can take:
+  the row a rebuild displaced is gone, the entry term is not.
+* **`sorry`**, seven, one *clause* each and none of them an obligation any more.
+  `execM_viewsCover_lits`, `execM_viewsCover_keyed`, `execM_readsSelf` and `execM_edges` need
+  the induction over `encode P`'s commands that the read-back does not supply;
+  `execM_viewLeader` and `execM_eclassFollowed` need the interpreter's rebuild fixpoint;
+  `execM_viewsSound` is the completeness half. `execM_viewsCover`, `execM_unionsJoined` and
+  `execM_unionsRead` are assembled from them, proved.
+  `Encoding/Match.lean`'s `uRebuilt_unionsJoined` is `Database.UnionsJoined`'s three clauses
+  at a state a program reaches and `uTgt_not_unionsRead` is the third failing one rebuild
+  firing earlier. `encode_assert`, `encode_trans`, `encode_congr`,
+  `encode_corresponds_forward`, `encode_corresponds_complete` and `encode_corresponds` are
+  assembled from them and carry `sorryAx` through them.
+* **Refuted, and it narrowed the domain**: two of those clauses were *false*.
+  `litBuild_not_viewsCover` and `litBuild_not_readsSelf` are compiled refutations at
+  `litBuildProgram`, one `.action (.expr (.lit 5))`, whose build emits no action at all — so
+  the source holds the literal and the target holds nothing.
+  `litBuildProgram_domain_but_bare` is every other clause of the domain holding there, and
+  `Program.EncodeDomain.noBareBuild` is the repair: a decidable condition on the source text,
+  implied by `Spec/Scope.lean`'s own `Action.Scoped`, costing the corpus nothing (still 70 of
+  166 in domain).
 * **Refuted, and recorded so it is not tried again**: the view's *functional dependency*,
   which is the obvious reduction of `trans` and is false at the witness program. The section
   "What the three obligations reduce to" has the state that refutes it, and the same state
@@ -974,6 +990,633 @@ theorem cong_sameClass_of_state {src d : Database} (hw : src.WF) (hlead : d.View
      fun _ _ _ => SameClass.trans_of_viewLeader hlead,
      fun _ _ _ ha _ hl => sameClass_congr_of_keyed hcov ha hl⟩ h
 
+/-! ### The action read-back
+
+`encodeBuild` emits two `set`s per application — the term-relation row and the view row — and
+every residue below needs to know they *ran*. This section is that read-back, in four steps and
+with no `execM` and no `encode` beyond `encodeBuild`:
+
+* **terms persist.** `FDatabase.execProgramM_terms` and the chain under it. This is the one
+  thing the read-back must not overstate: `mergeOneOriented` overwrites the resident *row* and
+  `addTerm`s the survivor, and `Impl/` never removes a term (`mergeOneOriented_confined`,
+  `mergeRound_confined`), so "the `set` ran" survives as *the entry term is still held* and not
+  as "the row is still current", which is false.
+* **the rows.** `holdsBuild_of_execActions`: after a build's block, every application the built
+  expression applies has both of its rows, keyed on the arguments' values.
+* **the reading.** `viewRepr_self_of_execActions`: those rows, assembled into
+  `ViewRepr d t t` — what `Database.UnionsJoined.readsSelf` asks for and what a `SameClass` is
+  two of.
+* **at a run of commands.** `holdsBuild_of_execProgramM` and
+  `viewRepr_self_of_execProgramM`: the same, where the block is the *top-level* `Cmd.action`s
+  `encodeCmd` emits, each with its own merge phase. A rule head needs no bridge —
+  `execLocalActions` *is* `execActions`.
+
+`Encoding/Match.lean`'s head-build case consumes the second and third directly; what neither
+reaches is the induction over `encode P`'s commands that says every source term came from a
+block the run passed, which is what the residues below are still missing. -/
+
+/-! #### Terms persist -/
+
+namespace FDatabase
+
+theorem mergeSaturateF_terms {n : Nat} : ∀ {d e : FDatabase},
+    d.mergeSaturateF n = some e → ∀ t ∈ d.terms, t ∈ e.terms := by
+  induction n with
+  | zero =>
+    intro d e hs
+    rw [FDatabase.mergeSaturateF] at hs
+    split at hs
+    · rw [Option.some.injEq] at hs; exact hs ▸ fun _ h => h
+    · exact absurd hs (by simp)
+  | succ n ih =>
+    intro d e hs
+    rw [FDatabase.mergeSaturateF] at hs
+    split at hs
+    · rw [Option.some.injEq] at hs; exact hs ▸ fun _ h => h
+    · exact fun t ht => ih hs t (mergeRound_confined.1 t ht)
+
+theorem execRunRules_terms {R : RulesetName} {d : FDatabase} :
+    ∀ t ∈ d.terms, t ∈ (execRunRules R d).terms :=
+  execRunRules_induction (P := fun x => ∀ t ∈ d.terms, t ∈ x.terms) (fun _ h => h)
+    fun _ _ _ _ hacc _ _ _ t ht => mem_terms_union.mpr (Or.inl (hacc t ht))
+
+theorem runRoundM_terms {R : RulesetName} {d e : FDatabase} (h : d.runRoundM R = some e) :
+    ∀ t ∈ d.terms, t ∈ e.terms :=
+  fun t ht => mergeSaturateF_terms h t (execRunRules_terms t ht)
+
+theorem runSaturateM_terms {R : RulesetName} : ∀ (n : Nat) {d e : FDatabase},
+    d.runSaturateM R n = some e → ∀ t ∈ d.terms, t ∈ e.terms := by
+  intro n
+  induction n with
+  | zero =>
+    intro d e hs
+    rw [FDatabase.runSaturateM] at hs
+    obtain ⟨x, -, hxe⟩ := Option.bind_eq_some_iff.mp hs
+    split at hxe
+    · rw [Option.some.injEq] at hxe; exact hxe ▸ fun _ h => h
+    · exact absurd hxe (by simp)
+  | succ n ih =>
+    intro d e hs
+    rw [FDatabase.runSaturateM] at hs
+    obtain ⟨x, hx, hxe⟩ := Option.bind_eq_some_iff.mp hs
+    split at hxe
+    · rw [Option.some.injEq] at hxe; exact hxe ▸ fun _ h => h
+    · exact fun t ht => ih hxe t (runRoundM_terms hx t ht)
+
+theorem execCmdM_terms {d d' : FDatabase} {c : Cmd} (hs : d.execCmdM c = some d') :
+    ∀ t ∈ d.terms, t ∈ d'.terms := by
+  cases c with
+  | action a =>
+    rw [FDatabase.execCmdM] at hs
+    obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp hs
+    exact fun t ht => mergeSaturateF_terms h₂ t ((execAction_lists h₁).1 t ht)
+  | rule r => rw [FDatabase.execCmdM, Option.some.injEq] at hs; exact hs ▸ fun _ h => h
+  | run R => exact runRoundM_terms hs
+  | saturate R => exact runSaturateM_terms _ hs
+  | decl f dc => rw [FDatabase.execCmdM, Option.some.injEq] at hs; exact hs ▸ fun _ h => h
+
+theorem execProgramM_terms {p : Program} : ∀ {d d' : FDatabase},
+    d.execProgramM p = some d' → ∀ t ∈ d.terms, t ∈ d'.terms := by
+  induction p with
+  | nil =>
+    intro d d' hs
+    rw [FDatabase.execProgramM, Option.some.injEq] at hs
+    exact hs ▸ fun _ h => h
+  | cons c cs ih =>
+    intro d d' hs
+    rw [FDatabase.execProgramM] at hs
+    obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp hs
+    exact fun t ht => ih h₂ t (execCmdM_terms h₁ t ht)
+
+theorem execProgramM_append {p q : Program} : ∀ {d D : FDatabase},
+    d.execProgramM (p ++ q) = some D →
+      ∃ m, d.execProgramM p = some m ∧ m.execProgramM q = some D := by
+  induction p with
+  | nil => intro d D h; exact ⟨d, rfl, h⟩
+  | cons c cs ih =>
+    intro d D h
+    rw [List.cons_append, FDatabase.execProgramM] at h
+    obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp h
+    obtain ⟨m, hm, hmD⟩ := ih h₂
+    exact ⟨m, by rw [FDatabase.execProgramM, h₁, Option.bind_some]; exact hm, hmD⟩
+
+@[simp] theorem addRow_env {d : FDatabase} {f : FnName} {as vs : List Term} :
+    (FDatabase.addRow f as vs d).env = d.env := rfl
+
+@[simp] theorem mem_addRow_terms {d : FDatabase} {f : FnName} {as vs : List Term}
+    {s : Term} : s ∈ (FDatabase.addRow f as vs d).terms ↔
+      s ∈ (Term.app f (as ++ vs)).subtermList ∨ s ∈ d.terms :=
+  FDatabase.mem_addTerm_terms
+
+end FDatabase
+
+/-! #### The rows a build writes -/
+
+mutual
+/-- The applications an expression *applies*, head and argument list each. A leaf contributes
+none, and neither does a variable's value: `encodeBuild` emits no action for a leaf, so the rows
+a build writes are indexed by the built expression's own syntax. -/
+def Expr.apps : Expr → List (FnName × List Expr)
+  | .lit _ => []
+  | .var _ => []
+  | .app f args => (f, args) :: Expr.appsList args
+
+/-- `Expr.apps` over an argument list. -/
+def Expr.appsList : List Expr → List (FnName × List Expr)
+  | [] => []
+  | e :: es => e.apps ++ Expr.appsList es
+end
+
+/-- A `set` and nothing else, which is all a build emits. -/
+def Action.IsSet : Action → Prop
+  | .set _ _ _ => True
+  | _ => False
+
+mutual
+/-- **A build emits `set`s and nothing else.** In particular no `letBind`, which is why a build
+moves neither the signature nor the environment, and why every one of its `set`s evaluates its
+operands in the state the block started in. -/
+theorem encodeBuild_isSet : ∀ (e : Expr) (n : Nat), ∀ a ∈ (encodeBuild e n).2.1, a.IsSet
+  | .lit _, _ => by simp [encodeBuild]
+  | .var _, _ => by simp [encodeBuild]
+  | .app f args, n => by
+      intro a ha
+      rw [encodeBuild_app_actions] at ha
+      rcases List.mem_append.mp ha with h | h
+      · exact encodeBuildArgs_isSet args n a h
+      · simp only [List.mem_cons, List.not_mem_nil, or_false] at h
+        rcases h with rfl | rfl <;> trivial
+
+@[inherit_doc encodeBuild_isSet]
+theorem encodeBuildArgs_isSet : ∀ (es : List Expr) (n : Nat),
+    ∀ a ∈ (encodeBuildArgs es n).2.1, a.IsSet
+  | [], _ => by simp [encodeBuildArgs]
+  | e :: es, n => by
+      intro a ha
+      rw [encodeBuildArgs_cons_actions] at ha
+      rcases List.mem_append.mp ha with h | h
+      · exact encodeBuild_isSet e n a h
+      · exact encodeBuildArgs_isSet es _ a h
+end
+
+/-- **What one `set` records**: the row `FDatabase.addRow` writes, at the key and value tuples
+the operands evaluated to in the state the action ran in. `addRow` is `addTerm` on the entry
+term, so this is also the read-back of the *entry term* and of all of its subterms. -/
+theorem execAction_set {d e : FDatabase} {f : FnName} {args out : List Expr}
+    (h : execAction d (.set f args out) = some e) :
+    ∃ as vs, Expr.evalList d.sig args d.env = some as ∧
+      Expr.evalList d.sig out d.env = some vs ∧ e = FDatabase.addRow f as vs d := by
+  simp only [execAction] at h
+  obtain ⟨as, has, h⟩ := Option.bind_eq_some_iff.mp h
+  obtain ⟨vs, hvs, rfl⟩ := Option.map_eq_some_iff.mp h
+  exact ⟨as, vs, has, hvs, rfl⟩
+
+/-- A `set` leaves the environment alone. -/
+theorem execAction_env_of_isSet {d e : FDatabase} : ∀ {a : Action}, a.IsSet →
+    execAction d a = some e → e.env = d.env
+  | .set _ _ _, _, h => by
+      obtain ⟨-, -, -, -, rfl⟩ := execAction_set h
+      rfl
+
+/-- A block of `set`s leaves the environment alone. -/
+theorem execActions_env_of_isSet {as : List Action} (ha : ∀ a ∈ as, a.IsSet) :
+    ∀ {d e : FDatabase}, execActions d as = some e → e.env = d.env := by
+  induction as with
+  | nil => intro d e h; rw [execActions, Option.some.injEq] at h; exact h ▸ rfl
+  | cons a as ih =>
+    intro d e h
+    cases hv : execAction d a with
+    | none => rw [execActions, hv] at h; simp at h
+    | some d' =>
+      rw [execActions, hv, Option.bind_some] at h
+      exact (ih (fun b hb => ha b (List.mem_cons_of_mem _ hb)) h).trans
+        (execAction_env_of_isSet (ha a List.mem_cons_self) hv)
+
+/-- Running a concatenation of action blocks runs the first and then the second. -/
+theorem execActions_append {as bs : List Action} : ∀ {d e : FDatabase},
+    execActions d (as ++ bs) = some e →
+      ∃ m, execActions d as = some m ∧ execActions m bs = some e := by
+  induction as with
+  | nil => intro d e h; exact ⟨d, rfl, h⟩
+  | cons a as ih =>
+    intro d e h
+    cases hv : execAction d a with
+    | none => rw [List.cons_append, execActions, hv] at h; simp at h
+    | some d' =>
+      rw [List.cons_append, execActions, hv, Option.bind_some] at h
+      obtain ⟨m, hm, hme⟩ := ih h
+      exact ⟨m, by rw [execActions, hv, Option.bind_some]; exact hm, hme⟩
+
+/-- Evaluating a concatenation evaluates each part. -/
+theorem Expr.evalList_append {sig : Signature} {σ : Env} :
+    ∀ {es fs : List Expr} {ts : List Term}, Expr.evalList sig (es ++ fs) σ = some ts →
+      ∃ as bs, Expr.evalList sig es σ = some as ∧ Expr.evalList sig fs σ = some bs ∧
+        ts = as ++ bs := by
+  intro es
+  induction es with
+  | nil => intro fs ts h; exact ⟨[], ts, rfl, h, rfl⟩
+  | cons e es ih =>
+    intro fs ts h
+    rw [List.cons_append, Expr.evalList] at h
+    obtain ⟨t, ht, h⟩ := Option.bind_eq_some_iff.mp h
+    obtain ⟨us, hus, rfl⟩ := Option.map_eq_some_iff.mp h
+    obtain ⟨as, bs, has, hbs, rfl⟩ := ih hus
+    exact ⟨t :: as, bs, by rw [Expr.evalList, ht, Option.bind_some, has, Option.map_some],
+      hbs, rfl⟩
+
+/-- A one-element operand list. -/
+theorem Expr.evalList_singleton {sig : Signature} {σ : Env} {e : Expr} {ts : List Term}
+    (h : Expr.evalList sig [e] σ = some ts) : ∃ t, e.eval sig σ = some t ∧ ts = [t] := by
+  rw [Expr.evalList] at h
+  obtain ⟨t, ht, h⟩ := Option.bind_eq_some_iff.mp h
+  rw [Expr.evalList, Option.map_some, Option.some.injEq] at h
+  exact ⟨t, ht, h.symm⟩
+
+/-- A two-element operand list: a view row's value tuple. -/
+theorem Expr.evalList_pair {sig : Signature} {σ : Env} {e₁ e₂ : Expr} {ts : List Term}
+    (h : Expr.evalList sig [e₁, e₂] σ = some ts) :
+    ∃ t₁ t₂, e₁.eval sig σ = some t₁ ∧ e₂.eval sig σ = some t₂ ∧ ts = [t₁, t₂] := by
+  rw [Expr.evalList] at h
+  obtain ⟨t₁, ht₁, h⟩ := Option.bind_eq_some_iff.mp h
+  obtain ⟨us, hus, rfl⟩ := Option.map_eq_some_iff.mp h
+  obtain ⟨t₂, ht₂, rfl⟩ := Expr.evalList_singleton hus
+  exact ⟨t₁, t₂, ht₁, ht₂, rfl⟩
+
+/-- **The two rows one `encodeBuild` application writes**: the view row `@fView(is) ↦ (v, pf)`
+and the term-relation row `@fTerm(is, v)`, at the key tuple `is` the arguments evaluated to and
+the value `v` the naming expression evaluated to.
+
+Existential in the proof column: which justification the entry carries is not what being the
+entry is. Read as *entry terms*, not as current rows — `mergeOneOriented` overwrites a row and
+`addTerm`s the survivor, and nothing in `Impl/` ever removes a term
+(`mergeOneOriented_confined`, `mergeRound_confined`), so the row a rebuild displaced is still
+the entry term `Database.Out` reads, and "the row is still current" would be false. -/
+structure Database.HoldsBuild (d : Database) (f : FnName) (is : List Term) (v : Term) :
+    Prop where
+  /-- The view row. -/
+  view : ∃ pf, Term.app (viewName f) (is ++ [v, pf]) ∈ d.terms
+  /-- The term-relation row. -/
+  term : Term.app (termName f) (is ++ [v]) ∈ d.terms
+
+/-- Both rows are memberships, so they survive anything that only adds terms. -/
+theorem Database.HoldsBuild.mono {d₁ d₂ : Database} (h : d₁.terms ⊆ d₂.terms)
+    {f : FnName} {is : List Term} {v : Term} (hb : d₁.HoldsBuild f is v) :
+    d₂.HoldsBuild f is v :=
+  ⟨hb.view.imp fun _ hp => h hp, h hb.term⟩
+
+/-- `Database.HoldsBuild.mono` along an inclusion of term *lists*, which is the form the
+interpreter's monotonicity lemmas deliver. -/
+theorem Database.HoldsBuild.monoF {d₁ d₂ : FDatabase} (h : ∀ t ∈ d₁.terms, t ∈ d₂.terms)
+    {f : FnName} {is : List Term} {v : Term} (hb : d₁.toDatabase.HoldsBuild f is v) :
+    d₂.toDatabase.HoldsBuild f is v :=
+  hb.mono fun t ht => FDatabase.mem_toDatabase_terms.mpr
+    (h t (FDatabase.mem_toDatabase_terms.mp ht))
+
+/-- **One application's build, read back.** The block splits into the arguments' builds and the
+two `set`s, and this is what the second half writes: the term row `@fTerm(is, v)` and the view
+row `@fView(is) ↦ (v, pf)`, keyed on the arguments' values `is` and valued at whatever the
+naming expression evaluated to. The view row's *subterms* come back too, since
+`FDatabase.addTerm` inserts them and every consumer needs the key columns.
+
+Both evaluations are taken in the state the block started in: a build emits `set`s only
+(`encodeBuild_isSet`), so neither the signature nor the environment moves inside it. -/
+theorem execActions_encodeBuild_app {f : FnName} {args : List Expr} {n : Nat}
+    {d d' : FDatabase} (hrun : execActions d (encodeBuild (.app f args) n).2.1 = some d') :
+    ∃ d₁ is v pf, execActions d (encodeBuildArgs args n).2.1 = some d₁ ∧
+      d₁.sig = d.sig ∧ d₁.env = d.env ∧ (∀ t ∈ d₁.terms, t ∈ d'.terms) ∧
+      Expr.evalList d.sig args d.env = some is ∧
+      Expr.eval d.sig (.app f args) d.env = some v ∧
+      (∀ s ∈ (Term.app (viewName f) (is ++ [v, pf])).subterms, s ∈ d'.terms) ∧
+      Term.app (termName f) (is ++ [v]) ∈ d'.terms := by
+  rw [encodeBuild_app_actions_eq] at hrun
+  obtain ⟨d₁, hargs, htail⟩ := execActions_append hrun
+  have hsig₁ : d₁.sig = d.sig := FDatabase.execActions_sig hargs
+  have henv₁ : d₁.env = d.env := execActions_env_of_isSet (encodeBuildArgs_isSet args n) hargs
+  rw [execActions] at htail
+  obtain ⟨d₂, h₁, htail₂⟩ := Option.bind_eq_some_iff.mp htail
+  rw [execActions] at htail₂
+  obtain ⟨d₃, h₂', htail₃⟩ := Option.bind_eq_some_iff.mp htail₂
+  rw [execActions, Option.some.injEq] at htail₃
+  have h₂ : execAction d₂ (.set (viewName f) args [.app f args, fiatE]) = some d' :=
+    h₂'.trans (congrArg some htail₃)
+  obtain ⟨ks, kvs, hks, hkvs, rfl⟩ := execAction_set h₁
+  obtain ⟨is, vs, his, hvs, rfl⟩ := execAction_set h₂
+  simp only [FDatabase.addRow_sig, FDatabase.addRow_env, hsig₁, henv₁] at hks hkvs his hvs
+  obtain ⟨v, pf, hv, -, rfl⟩ := Expr.evalList_pair hvs
+  obtain ⟨is₀, vs₀, his₀, hvs₀, rfl⟩ := Expr.evalList_append hks
+  obtain ⟨v₀, hv₀, rfl⟩ := Expr.evalList_singleton hvs₀
+  obtain rfl : kvs = [] := (Option.some.inj hkvs).symm
+  refine ⟨d₁, is, v, pf, hargs, hsig₁, henv₁, fun t ht => ?_, his, hv, fun s hs => ?_, ?_⟩
+  · exact FDatabase.mem_addRow_terms.mpr (Or.inr (FDatabase.mem_addRow_terms.mpr (Or.inr ht)))
+  · exact FDatabase.mem_addRow_terms.mpr (Or.inl ((Term.mem_subtermList _).mpr hs))
+  · refine FDatabase.mem_addRow_terms.mpr (Or.inr (FDatabase.mem_addRow_terms.mpr
+      (Or.inl ((Term.mem_subtermList _).mpr ?_))))
+    rw [Option.some.inj (his₀.symm.trans his), Option.some.inj (hv₀.symm.trans hv),
+      List.append_nil]
+    exact Term.self_mem_subterms _
+
+mutual
+/-- **The action read-back.** Once a build's actions have run, every application the built
+expression applies has its two rows in the resulting state — keyed on the arguments' values and
+valued at the application's own value, both evaluated in the state the block *started* in,
+which is the state every one of its actions ran in.
+
+No `encode` beyond `encodeBuild` and no `execM`: this is about one action block and the state it
+ran from, so a top-level action (through `exists_execActions_of_execProgramM`) and a rule head
+(`execLocalActions` *is* `execActions`) consume the same lemma. What it does not say is that the
+rows are still the current ones: `mergeOneOriented` overwrites a row and `addTerm`s the
+survivor, so what persists is the entry term, which is what `Database.Out` reads. -/
+theorem holdsBuild_of_execActions : ∀ (e : Expr) (n : Nat) {d d' : FDatabase},
+    execActions d (encodeBuild e n).2.1 = some d' →
+    ∀ (f : FnName) (args : List Expr), (f, args) ∈ e.apps →
+      ∃ is v, Expr.evalList d.sig args d.env = some is ∧
+        Expr.eval d.sig (.app f args) d.env = some v ∧
+        d'.toDatabase.HoldsBuild f is v
+  | .lit _, _, _, _, _, _, _, hm => absurd hm (by simp [Expr.apps])
+  | .var _, _, _, _, _, _, _, hm => absurd hm (by simp [Expr.apps])
+  | .app f args, n, d, d', hrun, g, gargs, hm => by
+      obtain ⟨d₁, is, v, pf, hargs, -, -, hmono, his, hv, hview, hterm⟩ :=
+        execActions_encodeBuild_app hrun
+      rw [Expr.apps, List.mem_cons] at hm
+      rcases hm with hm | hm
+      · obtain ⟨rfl, rfl⟩ : g = f ∧ gargs = args := by simpa using hm
+        exact ⟨is, v, his, hv,
+          ⟨⟨pf, FDatabase.mem_toDatabase_terms.mpr (hview _ (Term.self_mem_subterms _))⟩,
+            FDatabase.mem_toDatabase_terms.mpr hterm⟩⟩
+      · obtain ⟨is', v', hk', hv', hb'⟩ :=
+          holdsBuildArgs_of_execActions args n hargs g gargs hm
+        exact ⟨is', v', hk', hv', hb'.monoF hmono⟩
+
+@[inherit_doc holdsBuild_of_execActions]
+theorem holdsBuildArgs_of_execActions : ∀ (es : List Expr) (n : Nat) {d d' : FDatabase},
+    execActions d (encodeBuildArgs es n).2.1 = some d' →
+    ∀ (f : FnName) (args : List Expr), (f, args) ∈ Expr.appsList es →
+      ∃ is v, Expr.evalList d.sig args d.env = some is ∧
+        Expr.eval d.sig (.app f args) d.env = some v ∧
+        d'.toDatabase.HoldsBuild f is v
+  | [], _, _, _, _, _, _, hm => absurd hm (by simp [Expr.appsList])
+  | e :: es, n, d, d', hrun, g, gargs, hm => by
+      rw [encodeBuildArgs_cons_actions] at hrun
+      obtain ⟨d₁, hhead, htail⟩ := execActions_append hrun
+      have hsig₁ : d₁.sig = d.sig := FDatabase.execActions_sig hhead
+      have henv₁ : d₁.env = d.env := execActions_env_of_isSet (encodeBuild_isSet e n) hhead
+      rw [Expr.appsList, List.mem_append] at hm
+      rcases hm with hm | hm
+      · obtain ⟨is, v, hk, hv, hb⟩ := holdsBuild_of_execActions e n hhead g gargs hm
+        exact ⟨is, v, hk, hv, hb.monoF (FDatabase.execActions_lists htail).1⟩
+      · obtain ⟨is, v, hk, hv, hb⟩ :=
+          holdsBuildArgs_of_execActions es (encodeBuild e n).2.2 htail g gargs hm
+        rw [hsig₁, henv₁] at hk hv
+        exact ⟨is, v, hk, hv, hb⟩
+end
+
+/-! #### From the rows to the reading -/
+
+/-- A non-primitive application evaluates to its head applied to the arguments' values. -/
+theorem Expr.eval_app_of_noPrim {sig : Signature} {σ : Env} {f : FnName} {args : List Expr}
+    {t : Term} (hp : Prim.ofName f = none) (h : (Expr.app f args).eval sig σ = some t) :
+    ∃ is, Expr.evalList sig args σ = some is ∧ t = .app f is := by
+  simp only [Expr.eval, hp] at h
+  split at h
+  · obtain ⟨is, his, rfl⟩ := Option.map_eq_some_iff.mp h
+    exact ⟨is, his, rfl⟩
+  · exact absurd h (by simp)
+
+mutual
+/-- **A build's own term reads to itself at any state the run passes to.** The read-back turned
+into `ViewRepr`, which is what `Database.UnionsJoined.readsSelf` asks for and what a `SameClass`
+is two of.
+
+`D` is any state the block's result state is contained in, so this survives everything the rest
+of the run does — `FDatabase.execProgramM_terms` is that inclusion, and it is the whole of what
+`D` has to satisfy.
+
+The two side hypotheses are exactly the two leaves a build emits no action for. `hprim` is
+`Program.EncodeDomain.noPrim`: a source name shadowing a primitive would make the value column
+the primitive's *result* rather than the application, and the entry would be keyed on nothing
+the source built. `hvar` is the earlier top-level `let`s' own read-back — a variable's value gets
+no row from *this* build. A bare literal is why the statement carries `hmem`: nothing at all is
+emitted for it, which is what `litBuild_not_viewsCover` refutes and
+`Cmd.NoBareBuild` excludes. -/
+theorem viewRepr_self_of_execActions : ∀ (e : Expr) (n : Nat) {d d' D : FDatabase},
+    execActions d (encodeBuild e n).2.1 = some d' → (∀ t ∈ d'.terms, t ∈ D.terms) →
+    (∀ g ∈ e.fns, Prim.ofName g = none) →
+    (∀ w ∈ e.vars, ∀ u, Env.lookup w d.env = some u → ViewRepr D.toDatabase u u) →
+    ∀ t, e.eval d.sig d.env = some t → t ∈ D.toDatabase.terms → ViewRepr D.toDatabase t t
+  | .lit l, _, _, _, _, _, _, _, _, t, hev, hmem => by
+      obtain rfl : Term.lit l = t := Option.some.inj hev
+      exact .lit hmem
+  | .var w, _, _, _, _, _, _, _, hvar, t, hev, _ => hvar w (by simp [Expr.vars]) t hev
+  | .app f args, n, d, d', D, hrun, hD, hprim, hvar, t, hev, _ => by
+      obtain ⟨d₁, is, v, pf, hargs, hsig₁, henv₁, hmono, his, hv, hview, -⟩ :=
+        execActions_encodeBuild_app hrun
+      have hvapp : v = Term.app f is := by
+        obtain ⟨is', his', hveq⟩ := Expr.eval_app_of_noPrim (hprim f (by simp [Expr.fns])) hv
+        rw [hveq, Option.some.inj (his'.symm.trans his)]
+      have htv : t = Term.app f is := (Option.some.inj (hev.symm.trans hv)).trans hvapp
+      rw [hvapp] at hview
+      subst htv
+      have hmemis : ∀ i ∈ is, i ∈ D.toDatabase.terms := fun i hi =>
+        FDatabase.mem_toDatabase_terms.mpr (hD _ (hview i
+          (Term.arg_subterms (List.mem_append_left _ hi) (Term.self_mem_subterms i))))
+      refine .app (viewReprList_self_of_execActions args n hargs
+        (fun x hx => hD x (hmono x hx)) (fun g hg => hprim g (by simp [Expr.fns, hg]))
+        (fun w hw u hu => hvar w (by simpa [Expr.vars] using hw) u hu) is his hmemis)
+        ⟨is, CongList.refl hmemis, FDatabase.mem_toDatabase_terms.mpr
+          (hD _ (hview _ (Term.self_mem_subterms _)))⟩
+
+@[inherit_doc viewRepr_self_of_execActions]
+theorem viewReprList_self_of_execActions : ∀ (es : List Expr) (n : Nat) {d d' D : FDatabase},
+    execActions d (encodeBuildArgs es n).2.1 = some d' → (∀ t ∈ d'.terms, t ∈ D.terms) →
+    (∀ g ∈ Expr.fnsList es, Prim.ofName g = none) →
+    (∀ w ∈ Expr.varsList es, ∀ u, Env.lookup w d.env = some u → ViewRepr D.toDatabase u u) →
+    ∀ ts, Expr.evalList d.sig es d.env = some ts → (∀ t ∈ ts, t ∈ D.toDatabase.terms) →
+      ViewReprList D.toDatabase ts ts
+  | [], _, _, _, _, _, _, _, _, ts, hev, _ => by
+      obtain rfl : ([] : List Term) = ts := Option.some.inj hev
+      exact .nil
+  | e :: es, n, d, d', D, hrun, hD, hprim, hvar, ts, hev, hmem => by
+      rw [encodeBuildArgs_cons_actions] at hrun
+      obtain ⟨d₁, hhead, htail⟩ := execActions_append hrun
+      have hsig₁ : d₁.sig = d.sig := FDatabase.execActions_sig hhead
+      have henv₁ : d₁.env = d.env := execActions_env_of_isSet (encodeBuild_isSet e n) hhead
+      rw [Expr.evalList] at hev
+      obtain ⟨t, ht, hev⟩ := Option.bind_eq_some_iff.mp hev
+      obtain ⟨ts', hts', rfl⟩ := Option.map_eq_some_iff.mp hev
+      refine .cons (viewRepr_self_of_execActions e n hhead
+          (fun x hx => hD x ((FDatabase.execActions_lists htail).1 x hx))
+          (fun g hg => hprim g (by simp [Expr.fnsList, hg]))
+          (fun w hw u hu => hvar w (by simp [Expr.varsList, hw]) u hu) t ht
+          (hmem t List.mem_cons_self))
+        (viewReprList_self_of_execActions es (encodeBuild e n).2.2 htail hD
+          (fun g hg => hprim g (by simp [Expr.fnsList, hg]))
+          (fun w hw u hu => hvar w (by simp [Expr.varsList, hw]) u
+            (by rw [henv₁] at hu; exact hu))
+          ts' (by rw [hsig₁, henv₁]; exact hts')
+          fun x hx => hmem x (List.mem_cons_of_mem _ hx))
+end
+
+/-! #### From an action block to a run of top-level commands -/
+
+/-- **Two runs of the same block of `set`s agree on what they write.** `Expr.eval` reads the
+signature and the environment and nothing else, so the run from a *smaller* state — same
+signature, same environment, fewer terms — succeeds wherever the larger one does and writes the
+same entry terms. This is what lets a block's own `execActions` run stand in for `execProgramM`
+over the block's `Cmd.action`s, where each command is followed by its own merge phase. -/
+theorem execActions_parallel {as : List Action} (hs : ∀ a ∈ as, a.IsSet) :
+    ∀ {d₁ d₂ e₂ : FDatabase}, d₂.sig = d₁.sig → d₂.env = d₁.env →
+      (∀ t ∈ d₁.terms, t ∈ d₂.terms) → execActions d₂ as = some e₂ →
+      ∃ e₁, execActions d₁ as = some e₁ ∧ (∀ t ∈ e₁.terms, t ∈ e₂.terms) := by
+  induction as with
+  | nil =>
+    intro d₁ d₂ e₂ _ _ hmem h
+    rw [execActions, Option.some.injEq] at h
+    exact ⟨d₁, rfl, h ▸ hmem⟩
+  | cons a as ih =>
+    intro d₁ d₂ e₂ hsig henv hmem h
+    match a, hs a List.mem_cons_self with
+    | .set f args out, _ =>
+      rw [execActions] at h
+      obtain ⟨m₂, hm₂, hrest⟩ := Option.bind_eq_some_iff.mp h
+      obtain ⟨ks, vs, hks, hvs, rfl⟩ := execAction_set hm₂
+      rw [hsig, henv] at hks hvs
+      have hm₁ : execAction d₁ (.set f args out) = some (FDatabase.addRow f ks vs d₁) := by
+        simp only [execAction, hks, hvs, Option.bind_some, Option.map_some]
+      obtain ⟨e₁, he₁, hmem₁⟩ :=
+        ih (fun b hb => hs b (List.mem_cons_of_mem _ hb))
+          (d₁ := FDatabase.addRow f ks vs d₁) (d₂ := FDatabase.addRow f ks vs d₂)
+          (by simp only [FDatabase.addRow_sig]; exact hsig)
+          (by simp only [FDatabase.addRow_env]; exact henv)
+          (fun t ht => FDatabase.mem_addRow_terms.mpr
+            ((FDatabase.mem_addRow_terms.mp ht).imp id (hmem t))) hrest
+      exact ⟨e₁, by rw [execActions, hm₁, Option.bind_some]; exact he₁, hmem₁⟩
+
+/-- **A block of top-level `set` commands runs the block.** `execCmdM` follows each action with a
+merge phase, which adds terms and moves neither the signature nor the environment
+(`FDatabase.mergeSaturateF_terms`, `mergeSaturateF_fields`), so `execActions_parallel` carries
+the block's own `execActions` run along it. -/
+theorem exists_execActions_of_execProgramM {as : List Action} (hs : ∀ a ∈ as, a.IsSet) :
+    ∀ {d D : FDatabase}, d.execProgramM (as.map Cmd.action) = some D →
+      ∃ e, execActions d as = some e ∧ (∀ t ∈ e.terms, t ∈ D.terms) := by
+  induction as with
+  | nil =>
+    intro d D h
+    rw [List.map_nil, FDatabase.execProgramM, Option.some.injEq] at h
+    exact ⟨d, rfl, h ▸ fun _ ht => ht⟩
+  | cons a as ih =>
+    intro d D h
+    rw [List.map_cons, FDatabase.execProgramM] at h
+    obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp h
+    rw [FDatabase.execCmdM] at h₁
+    obtain ⟨d₀, hact, hmerge⟩ := Option.bind_eq_some_iff.mp h₁
+    obtain ⟨e₁, he₁, hmem₁⟩ := ih (fun b hb => hs b (List.mem_cons_of_mem _ hb)) h₂
+    obtain ⟨hsig, henv, -⟩ := FDatabase.mergeSaturateF_fields hmerge
+    obtain ⟨e₀, he₀, hmem₀⟩ :=
+      execActions_parallel (fun b hb => hs b (List.mem_cons_of_mem _ hb))
+        (d₁ := d₀) (d₂ := d₁) hsig henv (FDatabase.mergeSaturateF_terms hmerge) he₁
+    exact ⟨e₀, by rw [execActions, hact, Option.bind_some]; exact he₀,
+      fun t ht => hmem₁ t (hmem₀ t ht)⟩
+
+/-- **The action read-back at a run of top-level commands.** The build's `set`s are the block's
+own `Cmd.action`s, `p` is everything the run does after them, and the rows are in the state it
+finishes at: `exists_execActions_of_execProgramM` reduces the block to one `execActions` run and
+`FDatabase.execProgramM_terms` carries the entry terms through the rest — the rebuild's
+`Cmd.saturate` included, since a merge phase deletes rows and never a term.
+
+This is the form an induction over `encode P`'s commands consumes, one top-level
+`.action (.expr e)` at a time: `encodeCmd` emits exactly
+`(encodeBuild e n).2.1.map Cmd.action ++ [Cmd.saturate rebuildRuleset]`. -/
+theorem holdsBuild_of_execProgramM (e : Expr) (n : Nat) {d D : FDatabase} {p : Program}
+    (hrun : d.execProgramM ((encodeBuild e n).2.1.map Cmd.action ++ p) = some D) :
+    ∀ (f : FnName) (args : List Expr), (f, args) ∈ e.apps →
+      ∃ is v, Expr.evalList d.sig args d.env = some is ∧
+        Expr.eval d.sig (.app f args) d.env = some v ∧
+        D.toDatabase.HoldsBuild f is v := by
+  obtain ⟨D₁, hblock, hafter⟩ := FDatabase.execProgramM_append hrun
+  obtain ⟨m, hm, hmem⟩ := exists_execActions_of_execProgramM (encodeBuild_isSet e n) hblock
+  intro f args hfa
+  obtain ⟨is, v, his, hv, hb⟩ := holdsBuild_of_execActions e n hm f args hfa
+  exact ⟨is, v, his, hv,
+    hb.monoF fun t ht => FDatabase.execProgramM_terms hafter t (hmem t ht)⟩
+
+@[inherit_doc holdsBuild_of_execProgramM]
+theorem viewRepr_self_of_execProgramM (e : Expr) (n : Nat) {d D : FDatabase} {p : Program}
+    (hrun : d.execProgramM ((encodeBuild e n).2.1.map Cmd.action ++ p) = some D)
+    (hprim : ∀ g ∈ e.fns, Prim.ofName g = none)
+    (hvar : ∀ w ∈ e.vars, ∀ u, Env.lookup w d.env = some u → ViewRepr D.toDatabase u u)
+    {t : Term} (hev : e.eval d.sig d.env = some t) (hmem : t ∈ D.toDatabase.terms) :
+    ViewRepr D.toDatabase t t := by
+  obtain ⟨D₁, hblock, hafter⟩ := FDatabase.execProgramM_append hrun
+  obtain ⟨m, hm, hmm⟩ := exists_execActions_of_execProgramM (encodeBuild_isSet e n) hblock
+  exact viewRepr_self_of_execActions e n hm
+    (fun x hx => FDatabase.execProgramM_terms hafter x (hmm x hx)) hprim hvar t hev hmem
+
+/-! #### The read-back is not vacuous
+
+`ENCODING.md`'s discipline again: a lemma whose premise nothing satisfies proves nothing. Here
+is the read-back run, at the signature `encode satProgram`'s prelude installs plus a unary `W`'s
+table triple. Two builds, and the second's operand is a **variable** — so the `hvar` hypothesis
+of `viewRepr_self_of_execActions` is discharged non-vacuously, by the first build's own reading,
+which is exactly the shape the missing command induction has to carry. -/
+
+/-- `satSig` with a unary `W`'s table triple added. -/
+def rbSig : Signature :=
+  Function.update (Function.update (Function.update satSig
+    "W" (some (skolemDecl 1))) (viewName "W") (some (viewDecl 1)))
+    (termName "W") (some (termDecl 1))
+
+/-- The state the prelude leaves: declarations and nothing built. -/
+def rbState : FDatabase := { FDatabase.empty with sig := rbSig }
+
+/-- After `(A)`'s build: its two rows and their subterms, four terms. -/
+def rbState1 : FDatabase :=
+  (execActions rbState (encodeBuild (.app "A" []) 0).2.1).getD FDatabase.empty
+
+theorem rbState1_eq : execActions rbState (encodeBuild (.app "A" []) 0).2.1 = some rbState1 :=
+  rfl
+
+/-- A global binding `x ↦ (A)`, as a top-level `let` leaves it. -/
+def rbEnv : Env := [("x", Term.app "A" [])]
+
+/-- After `(W x)`'s build, in that environment: seven terms. -/
+def rbState2 : FDatabase :=
+  (execActions { rbState1 with env := rbEnv }
+    (encodeBuild (.app "W" [.var "x"]) 0).2.1).getD FDatabase.empty
+
+theorem rbState2_eq : execActions { rbState1 with env := rbEnv }
+    (encodeBuild (.app "W" [.var "x"]) 0).2.1 = some rbState2 := rfl
+
+/-- **`(A)`'s build reads to itself, at the *later* state.** The `D` parameter of
+`viewRepr_self_of_execActions` doing its job: the reading survives the second build. -/
+theorem rbState2_viewRepr_A : ViewRepr rbState2.toDatabase (.app "A" []) (.app "A" []) :=
+  viewRepr_self_of_execActions (.app "A" []) 0 rbState1_eq (by decide) (by decide)
+    (fun w hw => absurd hw (by simp [Expr.vars, Expr.varsList])) _ rfl
+    (FDatabase.mem_toDatabase_terms.mpr (by decide))
+
+/-- **And `(W x)`'s build reads to itself**, with `hvar` discharged at the variable `x` by the
+reading above. This is the composition the residues below still need an induction to perform
+once per command. -/
+theorem rbState2_viewRepr_W :
+    ViewRepr rbState2.toDatabase (.app "W" [.app "A" []]) (.app "W" [.app "A" []]) :=
+  viewRepr_self_of_execActions (.app "W" [.var "x"]) 0 rbState2_eq (fun _ h => h) (by decide)
+    (fun w hw u hu => by
+      obtain rfl : w = "x" := by simpa [Expr.vars, Expr.varsList] using hw
+      obtain rfl : u = Term.app "A" [] := by simpa [rbEnv, Env.lookup] using hu.symm
+      exact rbState2_viewRepr_A)
+    _ rfl (FDatabase.mem_toDatabase_terms.mpr (by decide))
+
+/-- **And the rows themselves come back**, keyed on the variable's value: `@WView((A)) ↦
+(W((A)), @Fiat)` and `@WTerm((A), W((A)))`. `Expr.apps` is what indexes them, and it is
+non-empty here. -/
+theorem rbState2_holdsBuild : rbState2.toDatabase.HoldsBuild "W" [Term.app "A" []]
+    (Term.app "W" [Term.app "A" []]) := by
+  obtain ⟨is, v, hk, hv, hb⟩ :=
+    holdsBuild_of_execActions (.app "W" [.var "x"]) 0 rbState2_eq "W" [.var "x"]
+      (by simp [Expr.apps])
+  obtain rfl : is = [Term.app "A" []] := Option.some.inj hk.symm
+  obtain rfl : v = Term.app "W" [Term.app "A" []] := Option.some.inj hv.symm
+  exact hb
+
 /-! #### The three residues
 
 One `sorry` each, and each of the three is a property of the state `execM` returned rather
@@ -995,7 +1638,112 @@ What all three still need is one missing piece in three shapes: an invariant car
 `FDatabase.execProgramM` that reads the encoded program's *own* commands — the two `set`s per
 build, the `@UF` edge per `union`, and the `Cmd.saturate rebuildRuleset` after each. The
 nearest thing the library has is `execM_contained`, and it does not reach: it is proved under
-`Program.NoSaturate`, and `encode` emits a `Cmd.saturate` after every command that writes. -/
+`Program.NoSaturate`, and `encode` emits a `Cmd.saturate` after every command that writes.
+
+**What the section above supplies, and what is left.** The action read-back is proved: at a
+block of a build's own commands, both of its rows are entry terms of whatever the run finishes
+at (`holdsBuild_of_execProgramM`), and they assemble into the reading
+(`viewRepr_self_of_execProgramM`). What no lemma here supplies is the **induction over
+`encode P`'s commands** that finds, for each source term, the block that built it. Two things
+make that induction more than bookkeeping, and each residue below names the ones it needs:
+
+* a source term built by a **rule firing** needs the source's firing to have a target firing
+  behind it, which is the *opposite* direction from `exists_validQuerySubst_of_encodeQuery`;
+* a source term reached through a **variable** needs the earlier `let`'s own read-back, which
+  is the `hvar` hypothesis of `viewRepr_self_of_execActions` and is what the induction's
+  hypothesis has to carry.
+
+**Two of these statements were false before `Program.EncodeDomain.noBareBuild`**, and the
+refutation is compiled below: `litBuild_not_viewsCover` and `litBuild_not_readsSelf` at
+`litBuildProgram`, one `.action (.expr (.lit 5))`, which satisfied every other clause of the
+domain (`litBuildProgram_domain_but_bare`). -/
+
+/-! #### The bare-leaf refutation
+
+`ENCODING.md`'s discipline: a residue that is *false* must not stand as a `sorry`. Two of the
+three below were, at a program the domain admitted, and this is the state that shows it. -/
+
+/-- One top-level action that builds a bare literal, and its constructor-free program. -/
+def litBuildProgram : Program := [.action (.expr (.lit (.int 5)))]
+
+/-- **Every clause of `Program.EncodeDomain` but `noBareBuild` holds of it**, so the clause is
+not implied by the rest. -/
+theorem litBuildProgram_domain_but_bare :
+    (∀ c ∈ litBuildProgram, ∀ f d, c = Cmd.decl f d → d.merge = none) ∧
+      (∀ c ∈ litBuildProgram, c.NoSet) ∧
+      (∀ fk ∈ litBuildProgram.ctors, Prim.ofName fk.1 = none) ∧
+      (∀ fk ∈ litBuildProgram.ctors, ¬ "@".isPrefixOf fk.1) ∧
+      (∀ v ∈ litBuildProgram.vars, ¬ "@".isPrefixOf v) ∧
+      (∀ R ∈ litBuildProgram.rulesets, ¬ "@".isPrefixOf R) ∧
+      (∀ c ∈ litBuildProgram, c.NoLeafPattern) := by
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_⟩ <;>
+    simp [litBuildProgram, Program.ctors, Cmd.ctors, Action.ctors, Expr.ctors, Program.vars,
+      Cmd.vars, Action.vars, Expr.vars, Program.rulesets, Cmd.rulesets, Cmd.NoSet,
+      Action.NoSet, Cmd.NoLeafPattern]
+
+/-- **And `noBareBuild` is the clause it fails.** -/
+theorem litBuildProgram_not_encodeDomain : ¬ litBuildProgram.EncodeDomain := by
+  intro h
+  exact h.noBareBuild (.action (.expr (.lit (.int 5)))) (by simp [litBuildProgram])
+
+/-- The state the one action reaches: the literal, and nothing else. -/
+def litBuildSrc : Database := Database.empty.addTerm (.lit (.int 5))
+
+theorem litBuildProgram_programStep : ProgramStep Database.empty litBuildProgram litBuildSrc :=
+  .cons ⟨litBuildSrc, rfl, .refl⟩ .nil
+
+theorem litBuildSrc_mem : Term.lit (.int 5) ∈ litBuildSrc.terms :=
+  Cong.assert (by simp [litBuildSrc, Database.addTerm, Database.empty])
+
+/-- **The encoded run holds nothing at all.** `encodeBuild` emits no action for a leaf, so the
+six commands `encode` produces are five declarations and a rebuild that fires nothing. -/
+theorem execM_litBuild_terms :
+    (execM (encode litBuildProgram)).map FDatabase.terms = some [] := rfl
+
+theorem litBuild_terms {tgt : FDatabase} (htgt : execM (encode litBuildProgram) = some tgt) :
+    tgt.terms = [] := by
+  have h := execM_litBuild_terms
+  rw [htgt] at h
+  exact Option.some.inj h
+
+/-- **The literal has no reading at all in the target.** -/
+theorem litBuild_not_viewRepr {tgt : FDatabase}
+    (htgt : execM (encode litBuildProgram) = some tgt) (e : Term) :
+    ¬ ViewRepr tgt.toDatabase (.lit (.int 5)) e := by
+  intro h
+  match h with
+  | .lit hm =>
+    rw [FDatabase.mem_toDatabase_terms, litBuild_terms htgt] at hm
+    exact absurd hm (by simp)
+
+/-- **`Database.ViewsCover` is false at an `execM` target of an in-domain-but-for-`noBareBuild`
+program.** The source holds the literal and the target holds nothing, so the `lits` clause
+fails — which is why `Program.EncodeDomain.noBareBuild` exists. -/
+theorem litBuild_not_viewsCover {tgt : FDatabase}
+    (htgt : execM (encode litBuildProgram) = some tgt) :
+    ¬ tgt.toDatabase.ViewsCover litBuildSrc := by
+  intro h
+  have hm := h.lits (.int 5) litBuildSrc_mem
+  rw [FDatabase.mem_toDatabase_terms, litBuild_terms htgt] at hm
+  exact absurd hm (by simp)
+
+/-- **And so is `Database.UnionsJoined.readsSelf`.** -/
+theorem litBuild_not_readsSelf {tgt : FDatabase}
+    (htgt : execM (encode litBuildProgram) = some tgt) :
+    ¬ tgt.toDatabase.UnionsJoined litBuildSrc := fun h =>
+  litBuild_not_viewRepr htgt _ (h.readsSelf _ litBuildSrc_mem)
+
+/-- **The forward half itself is false there**: the source asserts the literal's reflexive
+equation and the target has no reading of it, so `Cong src a a` holds where
+`SameClass tgt a a` does not. This is what `noBareBuild` buys, and it is why the clause is a
+domain restriction rather than a convenience. -/
+theorem litBuild_forward_false {tgt : FDatabase}
+    (htgt : execM (encode litBuildProgram) = some tgt) :
+    Cong litBuildSrc (.lit (.int 5)) (.lit (.int 5)) ∧
+      ¬ SameClass tgt.toDatabase (.lit (.int 5)) (.lit (.int 5)) :=
+  ⟨litBuildSrc_mem, fun h => litBuild_not_viewRepr htgt h.choose h.choose_spec.1⟩
+
+/-! #### The three residues, by clause -/
 
 /-- **The residue of obligation `trans`. Not proved.**
 
@@ -1011,33 +1759,101 @@ theorem execM_viewLeader {P : Program} {tgt : FDatabase} (hdom : P.EncodeDomain)
     (htgt : execM (encode P) = some tgt) : tgt.toDatabase.ViewLeader := by
   sorry
 
-/-- **The residue of obligations `congr` and of `assert`'s reflexive half. Not proved.**
+/-- **`Database.ViewsCover.lits`, at an `execM` target. Not proved**, and *false* without
+`Program.EncodeDomain.noBareBuild` — `litBuild_not_viewsCover` is the refutation, and this is
+the clause it refutes.
 
-What is missing: that `encodeBuild`'s two `set`s per subterm have run — which needs the
-encoded action list read back off `execAction`, one `set` at a time — and that
-`rebuildRules`' column rules have then covered every key in the product of the children's id
-sets.
-
-**One of the two is no longer this file's.** For a build inside a rule *head* the source-side
-hypothesis is the source rule firing, and `Encoding/Match.lean`'s
-`exists_validQuerySubst_of_encodeQuery` is that, proved end to end: the encoded query matched,
-therefore the source query matches at congruent terms. So what remains here is the `set`
-read-back alone — the invariant that an emitted `set` has run — with no query-side gap behind
-it. -/
-theorem execM_viewsCover {P : Program} {src : Database} {tgt : FDatabase}
+What is missing: the induction over `encode P`'s commands. With the domain clause every source
+term is built by an action whose expression is an application or bound by a `let`, so a literal
+the source holds is a key column of some view row the target wrote
+(`execActions_encodeBuild_app` returns the row's *subterms* for exactly this reason) — but
+which row that is comes from the induction, and a literal reached through a rule firing needs
+the firing's target counterpart, which this file does not have. -/
+theorem execM_viewsCover_lits {P : Program} {src : Database} {tgt : FDatabase}
     (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
-    (htgt : execM (encode P) = some tgt) : tgt.toDatabase.ViewsCover src := by
+    (htgt : execM (encode P) = some tgt) :
+    ∀ l : Lit, Term.lit l ∈ src.terms → Term.lit l ∈ tgt.toDatabase.terms := by
   sorry
 
-/-- **The residue of obligation `assert`'s `union` half. Not proved**, and split into the
-three things it needs (`Database.UnionsJoined`) rather than left as the obligation restated.
+/-- **`Database.ViewsCover.keyed`, at an `execM` target. Not proved**, and the one residue that
+needs *both* halves of the missing mechanism.
 
-What is missing, per clause: that `encodeBuild`'s view `set` has run for every source term
-(`readsSelf`) and that `encodeAction`'s `@UF` set has run for every source `union` (`edges`)
-— the same action read-back `execM_viewsCover` needs — and that
-`FDatabase.runSaturateM`'s fixpoint has followed the edge into the endpoint's own view row
-(`eclassFollowed`), which is the same rebuild `execM_viewLeader` needs. So the two residues
-are one mechanism read twice, and the third clause is the only one that is a fixpoint claim.
+The read-back gives the entry at the key the build itself wrote — the tuple where each child
+reads to itself (`holdsBuild_of_execProgramM`). `keyed` asks for an entry at *every* tuple of
+ids the children are given, which is the product `rebuildRules`' column rules cover, so what is
+missing beyond the induction is `FDatabase.runSaturateM`'s own fixpoint — the same thing
+`execM_viewLeader` and `execM_eclassFollowed` need. -/
+theorem execM_viewsCover_keyed {P : Program} {src : Database} {tgt : FDatabase}
+    (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
+    (htgt : execM (encode P) = some tgt) :
+    ∀ f as es, Term.app f as ∈ src.terms → ViewReprList tgt.toDatabase as es →
+      ∃ e pf, tgt.toDatabase.Out (viewName f) es [e, pf] := by
+  sorry
+
+/-- **The residue of obligations `congr` and of `assert`'s reflexive half**, assembled from its
+two clauses. -/
+theorem execM_viewsCover {P : Program} {src : Database} {tgt : FDatabase}
+    (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
+    (htgt : execM (encode P) = some tgt) : tgt.toDatabase.ViewsCover src :=
+  ⟨execM_viewsCover_lits hdom hsrc htgt, execM_viewsCover_keyed hdom hsrc htgt⟩
+
+/-- **`Database.UnionsJoined.readsSelf`, at an `execM` target. Not proved**, and *false*
+without `Program.EncodeDomain.noBareBuild` — `litBuild_not_readsSelf` is the refutation.
+
+**This is the clause the action read-back is for, and the read-back is proved.**
+`viewRepr_self_of_execProgramM` is exactly this statement for *one* build's block: the block's
+`set`s ran, the rows are entry terms of the state the run finishes at, and they assemble into
+`ViewRepr tgt t t`. What is missing is only the induction over `encode P`'s commands, and it
+needs two things this file does not have: the `hvar` hypothesis carried along the run — a
+variable's value gets its rows from whichever earlier build bound it — and, for a term a source
+rule built, a target firing behind the source firing, which is the opposite direction from
+`exists_validQuerySubst_of_encodeQuery`. -/
+theorem execM_readsSelf {P : Program} {src : Database} {tgt : FDatabase}
+    (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
+    (htgt : execM (encode P) = some tgt) :
+    ∀ t ∈ src.terms, ViewRepr tgt.toDatabase t t := by
+  sorry
+
+/-- **`Database.UnionsJoined.edges`, at an `execM` target. Not proved.**
+
+The same shape as `execM_readsSelf` and the same missing induction, at `encodeAction`'s
+`union` case rather than at `encodeBuild`: the emitted action is
+`.set @UF [ordering-max x₁ x₂] [ordering-min x₁ x₂, pf]`, so `execAction_set` reads the row
+back off it just as `execActions_encodeBuild_app` does for a build, and the disjunction is
+which endpoint `ordering-max` picked. Not proved because the *`union` is not the last action of
+its block* — the two operands' builds precede it — so the read-back has to be threaded through
+`execActions_append` at `encodeAction`'s shape, and then the same command induction applies. -/
+theorem execM_edges {P : Program} {src : Database} {tgt : FDatabase}
+    (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
+    (htgt : execM (encode P) = some tgt) :
+    ∀ a b, (a, b) ∈ src.eqs → a ≠ b →
+      (∃ pf, tgt.toDatabase.Out ufName [a] [b, pf]) ∨
+        (∃ pf, tgt.toDatabase.Out ufName [b] [a, pf]) := by
+  sorry
+
+/-- **`Database.UnionsJoined.eclassFollowed`, at an `execM` target. Not proved**, and the one
+clause of the three that is a *fixpoint* claim rather than a read-back of an emitted action.
+
+`rebuildRules`' e-class rule re-`set`s a view entry at the `@UF` parent of its e-class column,
+and what has to be shown is that `FDatabase.runSaturateM` ran it — which is the same thing
+`execM_viewLeader` and `execM_viewsCover_keyed` need and is strictly weaker than `RunSaturated`
+(`execM_contained`: the enumerator under-fires). The action read-back says nothing about it:
+no `set` the encoder emitted writes this row. -/
+theorem execM_eclassFollowed {P : Program} {src : Database} {tgt : FDatabase}
+    (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
+    (htgt : execM (encode P) = some tgt) :
+    ∀ t p pf, t ∈ src.terms → ViewRepr tgt.toDatabase t t →
+      tgt.toDatabase.Out ufName [t] [p, pf] → ViewRepr tgt.toDatabase t p := by
+  sorry
+
+/-- **The residue of obligation `assert`'s `union` half**, assembled from the three things it
+needs (`Database.UnionsJoined`) rather than left as the obligation restated.
+
+Two of the three are the action read-back and one is the rebuild: `execM_readsSelf` is
+`encodeBuild`'s view `set` having run for every source term, `execM_edges` is `encodeAction`'s
+`@UF` set having run for every source `union`, and `execM_eclassFollowed` is
+`FDatabase.runSaturateM`'s fixpoint having followed the edge into the endpoint's own view row —
+the same rebuild `execM_viewLeader` needs.
 
 **All three hold at a state a program reaches, and two of them non-vacuously**:
 `unionsJoined_witness` in `Encoding/Match.lean`, over `uProgram`, whose rule head unions two
@@ -1046,8 +1862,9 @@ distinct terms. `uTgt_not_unionsRead` there is the same three clauses one rebuil
 load-bearing and not decoration. -/
 theorem execM_unionsJoined {P : Program} {src : Database} {tgt : FDatabase}
     (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
-    (htgt : execM (encode P) = some tgt) : tgt.toDatabase.UnionsJoined src := by
-  sorry
+    (htgt : execM (encode P) = some tgt) : tgt.toDatabase.UnionsJoined src :=
+  ⟨execM_readsSelf hdom hsrc htgt, execM_edges hdom hsrc htgt,
+    execM_eclassFollowed hdom hsrc htgt⟩
 
 @[inherit_doc execM_unionsJoined]
 theorem execM_unionsRead {P : Program} {src : Database} {tgt : FDatabase}
@@ -1557,6 +2374,11 @@ theorem witnessProgram_encodeDomain : witnessProgram.EncodeDomain where
     intro c hc
     simp only [witnessProgram, List.mem_cons] at hc
     rcases hc with rfl | rfl | rfl | rfl | rfl | rfl | h <;> trivial
+  noBareBuild := by
+    intro c hc
+    simp only [witnessProgram, List.mem_cons] at hc
+    rcases hc with rfl | rfl | rfl | rfl | rfl | rfl | h <;>
+      simp_all [Cmd.NoBareBuild, Action.NoBareBuild, Expr.IsApp]
 
 /-- **The hypotheses of `encode_corresponds` are simultaneously satisfiable, and both sides
 of its conclusion are inhabited and refutable at the witness.**

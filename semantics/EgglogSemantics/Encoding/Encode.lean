@@ -993,6 +993,35 @@ def Cmd.NoSet : Cmd → Prop
   | .rule r => (∀ a ∈ r.actions, a.NoSet) ∧ ∀ p ∈ r.query, p.NoValues
   | _ => True
 
+/-- **A bare `expr` action builds an application.** `encodeBuild` emits no action at all for a
+leaf, so a source `.expr (.lit l)` records `l` as a term the source holds and writes *nothing*
+in the target — and then `Database.ViewsCover.lits` and `Database.UnionsJoined.readsSelf` are
+both false there (`Encoding/Correspond.lean`'s `litBuild_not_viewsCover`,
+`litBuild_not_readsSelf`).
+
+`.letBind v e` needs no clause: `execAction` evaluates its naming expression and `addTerm`s the
+result, so a `let` of a leaf does hold it. Nor does a literal *inside* an application: it is a
+key column of its parent's view row.
+
+This is the restriction `Spec/Scope.lean`'s `Action.Scoped` already imposes on a bare `expr`
+(`Action.NoBareBuild.of_scoped`), so it costs a well-scoped program nothing. -/
+def Action.NoBareBuild : Action → Prop
+  | .expr e => e.IsApp
+  | _ => True
+
+@[inherit_doc Action.NoBareBuild]
+def Cmd.NoBareBuild : Cmd → Prop
+  | .action a => a.NoBareBuild
+  | .rule r => ∀ a ∈ r.actions, a.NoBareBuild
+  | _ => True
+
+/-- **A well-scoped action builds no bare leaf.** `Action.Scoped` carries the application
+restriction on a bare `expr` and nothing else does, so the clause below is free for any program
+that passes the specification's own scope check. -/
+theorem Action.NoBareBuild.of_scoped {a : Action} {Γ : Scope} (h : a.Scoped Γ) :
+    a.NoBareBuild := by
+  cases a <;> first | exact h.1 | trivial
+
 /-- The variables a pattern mentions. -/
 def Pattern.varsOf : Pattern → List Var := Pattern.vars
 
@@ -1110,6 +1139,15 @@ structure Program.EncodeDomain (P : Program) : Prop where
   `litProgram_not_encodeDomain` is that recorded — and it costs the corpus nothing: all
   seventy in-domain cases satisfy it. -/
   noLeafPattern : ∀ c ∈ P, c.NoLeafPattern
+  /-- **No bare `expr` action builds a leaf.** `encodeBuild` emits no action for a leaf, so
+  `.action (.expr (.lit l))` puts `l` in the source's terms and writes nothing at all in the
+  target: `Encoding/Correspond.lean`'s `litBuild_not_viewsCover` is the compiled refutation of
+  `Database.ViewsCover` there, and `litBuild_not_readsSelf` of
+  `Database.UnionsJoined.readsSelf`. Like `noLeafPattern` this is a decidable condition on the
+  source text that no other clause implies; unlike it, it is implied by well-scopedness
+  (`Action.NoBareBuild.of_scoped`), and it costs the corpus nothing — no case of the 166, in
+  domain or out, builds a bare leaf. -/
+  noBareBuild : ∀ c ∈ P, c.NoBareBuild
 
 /-! ### Reading the target
 

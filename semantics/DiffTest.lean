@@ -1866,6 +1866,32 @@ theorem Cmd.noLeafPatternB_iff (c : Cmd) : c.noLeafPatternB = true ↔ c.NoLeafP
     simp [Cmd.noLeafPatternB, Cmd.NoLeafPattern, List.all_eq_true, Pattern.groundedB_iff,
       Query.varsKeyedB_iff]
 
+/-- `Expr.IsApp`, computed. -/
+def Expr.isAppB : Expr → Bool
+  | .app _ _ => true
+  | _ => false
+
+theorem Expr.isAppB_iff (e : Expr) : e.isAppB = true ↔ e.IsApp := by
+  cases e <;> simp [Expr.isAppB, Expr.IsApp]
+
+/-- `Action.NoBareBuild`, computed. -/
+def Action.noBareBuildB : Action → Bool
+  | .expr e => e.isAppB
+  | _ => true
+
+theorem Action.noBareBuildB_iff (a : Action) : a.noBareBuildB = true ↔ a.NoBareBuild := by
+  cases a <;> simp [Action.noBareBuildB, Action.NoBareBuild, Expr.isAppB_iff]
+
+/-- `Cmd.NoBareBuild`, computed. -/
+def Cmd.noBareBuildB : Cmd → Bool
+  | .action a => a.noBareBuildB
+  | .rule r => r.actions.all Action.noBareBuildB
+  | _ => true
+
+theorem Cmd.noBareBuildB_iff (c : Cmd) : c.noBareBuildB = true ↔ c.NoBareBuild := by
+  cases c <;>
+    simp [Cmd.noBareBuildB, Cmd.NoBareBuild, List.all_eq_true, Action.noBareBuildB_iff]
+
 /-- `Program.EncodeDomain`, computed. -/
 def Program.encodeDomainB (p : Program) : Bool :=
   p.all Cmd.ctorDeclB && p.all Cmd.noSetB
@@ -1874,17 +1900,18 @@ def Program.encodeDomainB (p : Program) : Bool :=
     && p.vars.all (fun v => !"@".isPrefixOf v)
     && p.rulesets.all (fun R => !"@".isPrefixOf R)
     && p.all Cmd.noLeafPatternB
+    && p.all Cmd.noBareBuildB
 
 /-- **The census below counts exactly `EncodeDomain`.** -/
 theorem Program.encodeDomainB_iff (p : Program) :
     p.encodeDomainB = true ↔ p.EncodeDomain := by
   simp only [Program.encodeDomainB, Bool.and_eq_true, List.all_eq_true, Cmd.ctorDeclB_iff,
-    Cmd.noSetB_iff, Cmd.noLeafPatternB_iff, Option.isNone_iff_eq_none,
+    Cmd.noSetB_iff, Cmd.noLeafPatternB_iff, Cmd.noBareBuildB_iff, Option.isNone_iff_eq_none,
     Bool.not_eq_eq_eq_not, Bool.not_true, Bool.eq_false_iff, ne_eq]
-  exact ⟨fun h => ⟨h.1.1.1.1.1.1, h.1.1.1.1.1.2, h.1.1.1.1.2, h.1.1.1.2, h.1.1.2, h.1.2,
-      h.2⟩,
-    fun h => ⟨⟨⟨⟨⟨⟨h.ctorsOnly, h.noSet⟩, h.noPrim⟩, h.noAt⟩, h.noAtVar⟩,
-      h.noAtRuleset⟩, h.noLeafPattern⟩⟩
+  exact ⟨fun h => ⟨h.1.1.1.1.1.1.1, h.1.1.1.1.1.1.2, h.1.1.1.1.1.2, h.1.1.1.1.2, h.1.1.1.2,
+      h.1.1.2, h.1.2, h.2⟩,
+    fun h => ⟨⟨⟨⟨⟨⟨⟨h.ctorsOnly, h.noSet⟩, h.noPrim⟩, h.noAt⟩, h.noAtVar⟩,
+      h.noAtRuleset⟩, h.noLeafPattern⟩, h.noBareBuild⟩⟩
 
 /-! #### Running the encoded program
 
