@@ -360,11 +360,9 @@ impl FullPrim for ContainerRebuildProof {
 /// `value = value`.
 ///
 /// The proof is one `CongrAll` step per distinct changed eq-sort element, at any
-/// depth, folded onto `base` and closed with the container normalization. Nested
-/// containers need no step of their own: `CongrAll` is expanded against the term
-/// during proof conversion, which follows containers to the same depth the value
-/// rebuild does and knows each child's position there — so nothing here has to
-/// name a nested container or its position.
+/// depth, folded onto `base` and closed with the container normalization. A
+/// nested container needs no step of its own: proof conversion expands
+/// `CongrAll` against the term, where positions are known.
 fn rebuild_container_proof(
     state: &mut FullState,
     prim: &ContainerRebuildProof,

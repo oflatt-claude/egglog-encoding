@@ -30,7 +30,7 @@ const PROGRAM: &str = r#"
 
 /// No proof relation names a term. Rule proofs, merge justifications and
 /// compositions are stated over other proofs; a body element read out of a
-/// container is stated over the reading call; and a fiat is stated over the
+/// container is stated over the call that read it; and a fiat is stated over the
 /// global action it came from.
 #[test]
 fn no_proof_relation_names_a_term() {

@@ -203,17 +203,15 @@ enum RawProof {
     /// given a proof that t1 = f(..., ci, ...) and the child index i,
     /// produces a justification that ci = ci.
     Proj(RawProofId, usize),
-    /// A rule body read an element out of a container with a primitive: the rule
-    /// name, the reading call's index in that rule's body, and a proof per
-    /// argument of the call. Produces a justification that the element equals
-    /// itself.
+    /// A rule body read an element out of a container with a primitive: the
+    /// rule, the call's index in that rule's body, and a proof per argument.
+    /// Justifies that the element equals itself.
     ///
     /// The call is named by where it sits rather than by the primitive's name,
     /// which would not pin down a validator since primitives are overloaded.
-    /// Desugared by [`ProofStore::from_raw`] into the positional
-    /// [`RawProof::Proj`]: running the resolved primitive's validator on the
-    /// argument terms gives the element's term, which is a child of the
-    /// container argument's.
+    /// [`ProofStore::from_raw`] runs that validator on the argument terms and
+    /// desugars this into the [`RawProof::Proj`] at the position the result
+    /// occupies.
     ProjPrim(String, usize, Vec<RawProofId>),
     /// Given a proof that `t1 = c` for a container term `c`, produces a proof of
     /// `t1 = normalize(c)` — the container's canonicalization (reorder/dedup/
@@ -772,11 +770,8 @@ impl ProofStore {
     }
 
     /// The term a rule body's element read produces: the resolved primitive at
-    /// `body_index` of `rule`'s body, run on `arg_terms` through its validator.
-    ///
-    /// The validator is the primitive's meaning on terms — the same one the
-    /// checker runs when it re-evaluates a body — so this is what the read means
-    /// here, without the proof having stored any term.
+    /// `body_index` of `rule`'s body, run on `arg_terms` through its validator,
+    /// which is the same one the checker runs when it re-evaluates a body.
     fn run_body_primitive(
         &mut self,
         prog: &[ResolvedNCommand],
@@ -1625,11 +1620,10 @@ impl ProofStore {
     /// Rewrite inside every container child of `current`'s right-hand side, then
     /// canonicalize that child and congruence it back into its parent.
     ///
-    /// The value-level rebuild recurses through container elements and treats an
-    /// eq-sort element as atomic (see `rebuild_container_value_rec`), so the
-    /// proof follows containers to the same depth and stops where it does. A
-    /// child's canonical form fixes its parent's element order, so the child is
-    /// normalized before the step that puts it back.
+    /// Recurses through containers and stops at eq-sort elements, matching what
+    /// the value rebuild does (see `rebuild_container_value_rec`). A child's
+    /// canonical form fixes its parent's element order, so it is normalized
+    /// before the step that puts it back.
     fn congr_all_nested(&mut self, base_id: ProofId, child_id: ProofId) -> ProofId {
         let mut current = base_id;
         let mut child_index = 0;

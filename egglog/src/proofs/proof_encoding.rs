@@ -291,13 +291,13 @@ struct Element {
     value: String,
     /// The variable holding the name of the rule whose body read the element.
     rule_name: String,
-    /// The reading call's index in the rule body's
-    /// [`body_exprs`](crate::proofs::proof_encoding_helpers::body_exprs): how
-    /// proof conversion recovers the resolved primitive, which a name alone
+    /// The call's index in the rule body's
+    /// [`body_exprs`](crate::proofs::proof_encoding_helpers::body_exprs), which
+    /// is how proof conversion recovers the resolved primitive — a name alone
     /// could not, since primitives are overloaded.
     body_index: usize,
-    /// One proof per argument of the reading call, in order. The container
-    /// argument is empty: the anchor chain fills it.
+    /// One proof per argument, in order. The container's is empty: the anchor
+    /// chain fills it.
     arg_proofs: Vec<Option<String>>,
     /// Which argument the container is.
     container_index: usize,
@@ -1351,11 +1351,10 @@ impl<'a> ProofInstrumentor<'a> {
     /// container: nothing in the query names it as a term, but it is a child of
     /// the container it came out of, and the body anchors that.
     ///
-    /// `rule_name` and `body_index` locate the reading call in its rule's body so
-    /// proof conversion can recover the resolved primitive and run its validator
-    /// on the argument terms. Outside a rule body there is no such locator, and
-    /// the anchor is left unsupplied — every such context drops its anchors
-    /// unread.
+    /// `rule_name` and `body_index` locate the call so proof conversion can
+    /// recover the resolved primitive and run its validator on the argument
+    /// terms. Outside a rule body there is nothing to locate it by, so the
+    /// anchor is left unsupplied — every such context drops its anchors unread.
     pub(crate) fn request_element_anchor(
         &mut self,
         value: &str,
@@ -2229,7 +2228,7 @@ impl<'a> ProofInstrumentor<'a> {
         // would be harmless but unbounded.
         self.reflexive.clear();
         // Named before the body is walked: an element anchor records the rule its
-        // reading call sits in.
+        // call sits in.
         let rule_name_var = if self.egraph.proof_state.proofs_enabled {
             self.egraph.parser.symbol_gen.fresh("rule_name")
         } else {

@@ -60,7 +60,7 @@ pub(crate) struct EncodingNames {
     pub(crate) proj_constructor: String,
     /// Prefix of the primitive projections, minted where a rule body reads an
     /// element out of a container and the child's position in the term is not
-    /// known at the site. The row names the reading call by where it sits in the
+    /// known at the site. The row names that call by where it sits in the
     /// rule body, so a call taking `k` arguments uses [`Self::proj_prim`] of `k`.
     /// Derived from one name for the same reason as [`Self::rule_fused_prefix`].
     pub(crate) proj_prim_prefix: String,
@@ -1857,10 +1857,9 @@ impl crate::constraint::TypeConstraint for DropReflexiveStepTypeConstraint {
 /// written order, each `Eq` fact's two sides left to right, and each call's
 /// arguments after the call itself.
 ///
-/// A body primitive that reads an element out of a container is named by its
-/// index into this list (see [`ProofInstrumentor::request_element_anchor`]), and
-/// proof conversion looks the resolved call back up the same way. Both sides go
-/// through this function, so their numbering cannot drift.
+/// A proof names a body call by its index here (see
+/// [`ProofInstrumentor::request_element_anchor`]). The encoder and proof
+/// conversion both index through this function, so they cannot disagree.
 pub(crate) fn body_exprs(body: &[ResolvedFact]) -> Vec<&ResolvedExpr> {
     fn walk<'a>(expr: &'a ResolvedExpr, out: &mut Vec<&'a ResolvedExpr>) {
         out.push(expr);
@@ -1904,14 +1903,11 @@ pub(crate) enum ActionNode<'a> {
 /// expressions in written order with each call's arguments after the call, then
 /// the row a `set` writes.
 ///
-/// A reflexive fiat names the term it is about by its index into this list (see
-/// [`ProofInstrumentor::reflexive_for_justification`]), and proof conversion
-/// evaluates the same node to recover the term. Both sides go through this
-/// function, so their numbering cannot drift.
-///
-/// `remove_globals` rewrites a global reference into a nullary call, which is
-/// one node either way, so the encoded action numbers the same as the one proof
-/// checking reads.
+/// A fiat names a term by its index here (see
+/// [`ProofInstrumentor::reflexive_for_justification`]); [`body_exprs`] says
+/// what keeps the two sides agreeing. `remove_globals` turns a global reference
+/// into a nullary call, one node either way, so the encoded action numbers the
+/// same as the one proof checking reads.
 pub(crate) fn action_nodes(action: &ResolvedAction) -> Vec<ActionNode<'_>> {
     fn walk<'a>(expr: &'a ResolvedExpr, out: &mut Vec<ActionNode<'a>>) {
         out.push(ActionNode::Expr(expr));
