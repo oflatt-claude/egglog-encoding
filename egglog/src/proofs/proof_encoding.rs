@@ -113,6 +113,17 @@ struct Emit<'a> {
     stmts: &'a mut Vec<String>,
     head: &'a mut Head,
     justification: &'a Justification,
+    /// Which node of the top-level action being lowered this is writing about,
+    /// and that action's row node if it writes one. A fiat names these rather
+    /// than the term it is about; outside a top-level action nothing reads them.
+    at: ActionNodes,
+}
+
+/// Where in a top-level action the encoder is writing.
+#[derive(Clone, Copy, Default)]
+struct ActionNodes {
+    node: usize,
+    row: Option<usize>,
 }
 
 impl<'a> Emit<'a> {
@@ -123,6 +134,20 @@ impl<'a> Emit<'a> {
             stmts: &mut *self.stmts,
             head: &mut *self.head,
             justification,
+            at: self.at,
+        }
+    }
+
+    /// The same place, writing rows about action node `node` instead.
+    fn at_node<'b>(&'b mut self, node: usize) -> Emit<'b> {
+        Emit {
+            stmts: &mut *self.stmts,
+            head: &mut *self.head,
+            justification: self.justification,
+            at: ActionNodes {
+                node,
+                row: self.at.row,
+            },
         }
     }
 
@@ -133,13 +158,15 @@ impl<'a> Emit<'a> {
             stmts,
             head,
             justification,
+            at,
         } = self;
-        let justification = *justification;
+        let (justification, at) = (*justification, *at);
         head.composing(|head| {
             lower(&mut Emit {
                 stmts,
                 head,
                 justification,
+                at,
             })
         })
     }
@@ -256,17 +283,10 @@ pub(crate) struct ProofInstrumentor<'a> {
     /// The global action being encoded, as
     /// [`EncodingState::global_actions_numbered`] indexes it.
     global_action: usize,
-    /// Which node of the current action, in
-    /// [`action_nodes`]
-    /// order, is being instrumented. A reflexive fiat names this rather than the
-    /// term it is about.
-    action_expr: usize,
-    /// That action's nodes by address, for finding the index of the one in hand.
+    /// The nodes of the actions being lowered, by address, so the one in hand
+    /// can be named. Rebuilt per command, like the anchors above; where in them
+    /// the encoder is writing rides on [`Emit`] instead.
     action_expr_index: HashMap<usize, usize>,
-    /// Each planned action's row node, or `None` when it writes no row.
-    action_row_index: Vec<Option<usize>>,
-    /// The row node of the planned action being instrumented.
-    action_row: Option<usize>,
 }
 
 /// Where a variable a rule body binds gets its reflexive `t = t` proof from: a
@@ -433,10 +453,7 @@ impl<'a> ProofInstrumentor<'a> {
         let global_action = egraph.proof_state.global_actions_numbered;
         Self {
             global_action,
-            action_expr: 0,
             action_expr_index: HashMap::default(),
-            action_row_index: vec![],
-            action_row: None,
             egraph,
             reflexive: HashSet::default(),
             deferred: HashMap::default(),
@@ -691,9 +708,24 @@ impl<'a> ProofInstrumentor<'a> {
         scope: &Scope,
         swapped: &str,
     ) -> Operand {
-        // The guest's own node is instrumented here rather than through
-        // `instrument_action_expr`, so name it here too.
-        let enclosing = self.enter_action_expr(expr);
+        // The guest is lowered here rather than through `instrument_action_expr`,
+        // so name its node here too.
+        match self.action_node(expr) {
+            Some(node) => {
+                self.construct_into_inner(&mut emit.at_node(node), expr, target, scope, swapped)
+            }
+            None => self.construct_into_inner(emit, expr, target, scope, swapped),
+        }
+    }
+
+    fn construct_into_inner(
+        &mut self,
+        emit: &mut Emit,
+        expr: &ResolvedExpr,
+        target: &Operand,
+        scope: &Scope,
+        swapped: &str,
+    ) -> Operand {
         let (func_type, args) = constructor_operand(expr)
             .expect("construct-into guest must be a constructor application");
         let ctor_name = func_type.name.clone();
@@ -708,7 +740,6 @@ impl<'a> ProofInstrumentor<'a> {
             let child_ids = ids(&child_vals);
             let update = self.update_fd_view(&ctor_name, &child_ids, target_id, "()");
             emit.stmts.push(update);
-            self.action_expr = enclosing;
             return Operand::plain(target_id.clone());
         }
 
@@ -753,7 +784,6 @@ impl<'a> ProofInstrumentor<'a> {
                     .column(HeadProof::Connector),
             ),
         };
-        self.action_expr = enclosing;
         Operand::built(target_id.clone(), fv_nat, guest_conn)
     }
 
@@ -896,6 +926,7 @@ impl<'a> ProofInstrumentor<'a> {
             stmts: &mut body_code,
             head: &mut head,
             justification: &row,
+            at: ActionNodes::default(),
         };
         let merged = self
             .instrument_merge_body(&mut emit, &merge.result, &name, &mut idx)
@@ -1138,7 +1169,7 @@ impl<'a> ProofInstrumentor<'a> {
     /// reflexive regardless, so calling this at an equality — a `union`'s — would
     /// have the compositions built on it silently drop a real proof.
     fn reflexive_for_justification(&mut self, emit: &mut Emit) -> String {
-        let node = self.action_expr;
+        let node = emit.at.node;
         self.reflexive_at(emit, node)
     }
 
@@ -1146,8 +1177,9 @@ impl<'a> ProofInstrumentor<'a> {
     /// the term a custom function's view proof is about and which no expression
     /// of the action denotes.
     fn reflexive_for_row(&mut self, emit: &mut Emit) -> String {
-        let node = self
-            .action_row
+        let node = emit
+            .at
+            .row
             .expect("a custom function's row is written by a `set`, which has one");
         self.reflexive_at(emit, node)
     }
@@ -2045,24 +2077,18 @@ impl<'a> ProofInstrumentor<'a> {
         emit: &mut Emit,
         scope: &Scope,
     ) -> Operand {
-        let enclosing = self.enter_action_expr(expr);
-        let operand = self.instrument_action_expr_inner(expr, emit, scope);
-        self.action_expr = enclosing;
-        operand
+        match self.action_node(expr) {
+            Some(node) => self.instrument_action_expr_inner(expr, &mut emit.at_node(node), scope),
+            None => self.instrument_action_expr_inner(expr, emit, scope),
+        }
     }
 
-    /// Record that statements written from here on are about `expr`, so a
-    /// reflexive fiat minted under it names that node. Returns the enclosing
-    /// node, which the caller restores on the way out.
-    fn enter_action_expr(&mut self, expr: &ResolvedExpr) -> usize {
-        let enclosing = self.action_expr;
-        if let Some(&at) = self
-            .action_expr_index
+    /// Which node of the action being lowered `expr` is, when it is one. A
+    /// fiat minted under it names that node.
+    fn action_node(&self, expr: &ResolvedExpr) -> Option<usize> {
+        self.action_expr_index
             .get(&(std::ptr::from_ref(expr) as usize))
-        {
-            self.action_expr = at;
-        }
-        enclosing
+            .copied()
     }
 
     fn instrument_action_expr_inner(
@@ -2167,7 +2193,7 @@ impl<'a> ProofInstrumentor<'a> {
         // not have the same nodes. Conversion plans the same source the same way
         // to get the same numbering (see `ProofStore::action_term`).
         self.action_expr_index = HashMap::default();
-        self.action_row_index = vec![];
+        let mut rows: Vec<Option<usize>> = vec![];
         let mut at = 0;
         for action in &plan.actions {
             let mut row = None;
@@ -2181,7 +2207,7 @@ impl<'a> ProofInstrumentor<'a> {
                 }
                 at += 1;
             }
-            self.action_row_index.push(row);
+            rows.push(row);
         }
         // A rule head is a format proof conversion can replay, so its proofs are
         // named by column; everywhere else the encoder composes them itself.
@@ -2195,12 +2221,13 @@ impl<'a> ProofInstrumentor<'a> {
             stmts: &mut res,
             head: &mut head,
             justification,
+            at: ActionNodes::default(),
         };
         for (i, action) in plan.actions.iter().enumerate() {
             if plan.dropped.contains(&i) {
                 continue;
             }
-            self.action_row = self.action_row_index[i];
+            emit.at.row = rows[i];
             match action {
                 ResolvedAction::Let(_, v, expr) if plan.construct_into.contains_key(&v.name) => {
                     let into = &plan.construct_into[&v.name];
@@ -2532,6 +2559,7 @@ impl<'a> ProofInstrumentor<'a> {
                     stmts: &mut action_stmts,
                     head: &mut head,
                     justification: &fiat,
+                    at: ActionNodes::default(),
                 };
                 let instrumented_expr = self.instrument_action_expr(expr, &mut emit, &scope).value;
                 let instrumented_variants = self
