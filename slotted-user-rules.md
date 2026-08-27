@@ -1,11 +1,12 @@
 # Compiling user rules into the slotted encoding
 
-Companion to five runnable files:
+Companion to six runnable files:
 
 | file | what it is |
 | --- | --- |
 | `tests/slotted-egraph-encoding-11.egg` | the machinery: union, congruence, redundancy, symmetry |
-| `tests/slotted-user-rules.egg` | hand-encoded user rules as a tutorial: M1, M2, M3, M4, M5, M6, M7, M8, M9, M10, M11, then M4b as a counter-example |
+| `tests/slotted-user-rules.egg` | the tutorial: one shape of user rule per section — M1–M11 — each stated as prose plus the single rule a compiler emits, and nothing else |
+| `tests/slotted-user-rules-tests.egg` | the cases for it: it includes the tutorial, then adds the terms, schedules, assertions and counter-examples |
 | `slotted-experiments/xdiff/xdiff.py` | differential tests against the reference implementation |
 | `tests/slotted-array-rules.egg` | the paper's §4.1 array language, 8 rules, self-checking |
 | `slotted-experiments/xdiff/xarray.py` | the same 8 rules, differentially tested |
@@ -98,8 +99,9 @@ it. A body no ordering can connect has to invent slots, and there the gap is rea
 It is tempting to read this as three separate cases — first atom, root known,
 children known — and that reading caused three of the four bugs listed at the end.
 `tests/slotted-user-rules.egg` had drifted back to it and has been brought into
-line; `M4b` there is an e-graph where the two readings visibly disagree, the short
-one computing an *empty* renaming for a child that has a slot.
+line; the counter-example under `M4` in `tests/slotted-user-rules-tests.egg` is an
+e-graph where the two readings visibly disagree, the short one computing an *empty*
+renaming for a child that has a slot.
 The cases are only *which* constraints happen to exist:
 
 * nothing known — the atom is first; its renaming is the identity and it defines
@@ -374,7 +376,7 @@ load-bearing. It is kept, and the mutation is kept as a record, but it no longer
 discriminates — recorded because a test that has stopped testing what it was written for is
 worse than no test.
 
-**One demo in `slotted-user-rules.egg` inverted.** `M8` asserted that a malformed edge
+**One demo in the user-rules cases inverted.** `M8` asserted that a malformed edge
 appears; under this schedule none does, so it now asserts the opposite and says why. The
 alternative — contriving an unphased schedule to keep the old assertion alive — would have
 preserved a test of a state the encoding no longer reaches.

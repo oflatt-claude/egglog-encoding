@@ -1,11 +1,26 @@
 ;;; Multipattern e-matching, hand-encoded on top of the slotted machinery.
 ;;;
-;;; A TUTORIAL: one shape of user rule per section, encoded by hand, with the theory stated
-;;; where it is first needed.  Read it top to bottom.  `slotted-user-rules.md` is the prose
+;;; THE ENCODING, one shape of user rule per section: the problem the shape poses, the
+;;; construction that solves it, and then the rule -- the one a compiler emits, one per
+;;; section and nothing else.  Read it top to bottom.  `slotted-user-rules.md` is the prose
 ;;; version; three compilers emit this same recipe and must stay in step with it --
 ;;; `xdiff.py compile_rule` (the toy language, checked against the crate),
 ;;; `xarray.py compile_array_rule` (the paper's array language, likewise) and
 ;;; `gen-sdql-rules.py` (SDQL, self-checked only so far).
+;;;
+;;; No terms, no schedules, no assertions, no wrong versions.
+;;; `tests/slotted-user-rules-tests.egg` includes this file and supplies all of those, so
+;;; the rules below are the ones under test rather than a copy of them, and it is also where
+;;; the counter-examples live -- for each construction, the spelling it rules out together
+;;; with the e-graph that tells the two apart.
+;;;
+;;; OPERATOR NAMES.  Every rule below is live at once, so each section gets operators of its
+;;; own: section N spells them `fN`, `gN`, `hN` (M9 keeps `lambda9`/`app9`, whose shape is
+;;; the point).  A term built for one section therefore cannot match another section's rule,
+;;; which is what lets the tests include this file whole instead of copying rules out of it.
+;;; A counter-example over there takes a further letter where it would otherwise collide with
+;;; the rule it is contrasted with -- `f3a`, `f3b` against this file's `f3` -- so that rule
+;;; cannot mask it.
 ;;;
 ;;; Conventions:
 ;;;   (compose a b)           = a . b, b first, and TRUNCATES: keys b sends outside dom(a)
@@ -30,8 +45,6 @@
 ;;;   avoidN   identity on the pattern slots already named after atom N
 ;;;   csX      (ClassSlots X), the narrowing for pattern variable X
 ;;;   symX     a self-loop of X, i.e. a symmetry
-;;; The well-formedness witnesses range over arbitrary nodes rather than over one atom, so
-;;; they keep the `App2` signature's own m1/c1/m2/c2.
 ;;;
 ;;; Contents, in order.  Each section names the harness cases covering it, and
 ;;; `slotted-user-rules.md` refers to these labels.
@@ -46,12 +59,10 @@
 ;;;   M9   a slot literal (eta)
 ;;;   M10  actions: concluding over renamed ids
 ;;;   M11  a nested right-hand side
-;;;   M4b  counter-example, not a step: what the naive chain spelling does instead
 ;;;
-;;; Each section is its own (push)/(pop) and asserts through a witness relation carrying the
-;;; computed renamings -- that is what is under test, and the machinery is free to rewrite
-;;; the nodes afterwards.  The invariant rules are saturated between user-rule steps, so a
-;;; rule here only ever matches nodes that are already canonical:
+;;; Every rule below assumes the phased schedule the tests run: the invariant rules are
+;;; saturated between user-rule steps, so a rule here only ever matches nodes that are
+;;; already canonical.
 ;;;
 ;;;     (run-schedule (saturate (run slotted))
 ;;;                   (repeat N (seq (run) (saturate (run slotted)))))
@@ -62,7 +73,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; M1.  One atom, nothing shared.
 ;;;
-;;;     ?e == (f ?a ?b)   =>   union ?e (f ?b ?a)
+;;;     ?e == (f1 ?a ?b)   =>   union ?e (f1 ?b ?a)
 ;;;
 ;;; The LHS is flattened into depth-1 atoms `?v == (Op ?c1 ?c2)`, one per e-node with every
 ;;; child a bare variable, and each becomes one egglog atom, so egglog's join does the
@@ -72,28 +83,15 @@
 ;;;
 ;;; Covered by: M1-commutativity.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-(push)
 
-(rule ((= e (App2 "f" p1 a q1 b)))
-      ((union e (App2 "f" q1 b p1 a))))
-
-(let $f01 (App2 "f" (map-of 0 0) (Var 0)
-                   (map-of 1 1) (Var 1)))
-(run-schedule (saturate (run slotted))
-              (repeat 15 (seq (run) (saturate (run slotted)))))
-
-;; commutativity shows up as the e-class gaining the swap symmetry
-(check (RenamesToLeader $f01 m $f01)
-       (= (map-get m 0) 1)
-       (= (map-get m 1) 0))
-
-(pop)
+(rule ((= e (App2 "f1" p1 a q1 b)))
+      ((union e (App2 "f1" q1 b p1 a))))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; M2.  One atom, a repeated variable -- the Def. 6 check.
 ;;;
-;;;     ?e == (f ?x ?x)   =>   union ?e ?x
+;;;     ?e == (f2 ?x ?x)   =>   union ?e ?x
 ;;;
 ;;; What the join does NOT give is agreement of the renamings: egglog's variable equality
 ;;; is e-class equality, while slotted equality is equality of renamed ids.  Supplying that
@@ -102,223 +100,109 @@
 ;;; A variable `x` compiles to two egglog variables -- its leader `X` and a renaming
 ;;; `mx : slots(X) -> slots(pattern)` -- standing for the paper's `beta(x) = mx * X`.  Here
 ;;; the two occurrences are `p1*X` and `q1*X`, and Def. 6 says they agree iff `p1^-1 . q1`
-;;; is in G(X).  Both edges are bound, so that group element is determined, and the rule
-;;; states exactly the condition: a self-loop of `X` carrying it must exist.
+;;; is in G(X).  Both edges come off the matched row, so that group element is determined,
+;;; and the rule states exactly the condition: a self-loop of `X` carrying it must exist.
+;;;
+;;; Demanding instead that the two edges be *equal* -- what a non-slotted encoding would
+;;; write -- is a strictly STRONGER condition than Def. 6, since `p1 = q1` makes the group
+;;; element the identity, which is in every G(X).  So that rule is incomplete: it misses
+;;; matches Def. 6 admits, and a symmetric child is where the two part ways.  `NaiveHit` in
+;;; the tests file is that rule.
 ;;;
 ;;; Covered by: C1, C4, S1.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-(push)
 
 (relation Hit (U U))
 
-;; Both edges are bound, so the group element Def. 6 asks for is determined: it is
-;; `p1^-1 . q1`, and the rule requires a self-loop of `X` carrying exactly it.
-(rule ((= e (App2 "f" p1 x q1 x))
+;; Both edges come off the matched row, so the group element Def. 6 asks for is determined:
+;; it is `p1^-1 . q1`, and the rule requires a self-loop of `X` carrying exactly it.
+(rule ((= e (App2 "f2" p1 x q1 x))
        (= symx (compose (inverse p1) q1))
        (RenamesToLeader x symx x))
       ((Hit e x)))
-
-;; what a non-slotted encoding would write: demand the two edges be *equal*.  Strictly
-;; weaker than Def. 6, and the difference is observable in (c).
-(relation NaiveHit (U U))
-(rule ((= e (App2 "f" p1 x p1 x))) ((NaiveHit e x)))
-
-;; (a) both occurrences at the same slot
-(push)
-(let $ff (App2 "f" (map-of 7 7) (Var 7)
-                  (map-of 7 7) (Var 7)))
-(run-schedule (saturate (run slotted))
-              (repeat 15 (seq (run) (saturate (run slotted)))))
-(check (Hit $ff (Var 0)))
-(pop)
-
-;; (b) negative: distinct slots, so distinct renamed ids, so no match.  This is where the
-;;     crate's disequality constraints land -- `same_node_redundant_slots_stay_distinct` and
-;;     `live_slots_of_one_class_stay_distinct`, both saying a node's two distinct slots may
-;;     not be identified.  Here the lookup for the required swap simply is not there.
-(push)
-(let $fg (App2 "f" (map-of 7 7) (Var 7)
-                  (map-of 8 8) (Var 8)))
-(run-schedule (saturate (run slotted))
-              (repeat 15 (seq (run) (saturate (run slotted)))))
-(fail (check (Hit $fg x)))
-(pop)
-
-;; (c) f(a[$0,$1], a[$1,$0]) matches f(?x,?x) *only* because `a` is symmetric.  The
-;;     machinery never normalises the two edges to be equal, so the naive rule misses it
-;;     while the Def. 6 rule fires -- which is what makes the two observably different.
-(push)
-(let $a01 (App2 "a" (map-of 0 0) (Var 0)
-                   (map-of 1 1) (Var 1)))
-(let $a10 (App2 "a" (map-of 1 1) (Var 1)
-                   (map-of 0 0) (Var 0)))
-(union $a01 $a10)
-(run-schedule (saturate (run slotted))
-              (repeat 20 (seq (run) (saturate (run slotted)))))
-
-(let $t (App2 "f" (map-of 0 0 1 1) $a01
-                 (map-of 0 1 1 0) $a01))
-(run-schedule (saturate (run slotted))
-              (repeat 20 (seq (run) (saturate (run slotted)))))
-(check (Hit $t $a01))
-(fail (check (NaiveHit $t $a01)))
-(pop)
-
-(pop)
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; M3.  Why an atom's renaming has to be TOTAL.
 ;;;
-;;;     ?p == (f ?x ?y),  ?q == (g ?x ?z)   =>   union ?p (h ?y ?z)
+;;;     ?p == (f3 ?x ?y),  ?q == (g3 ?x ?z)   =>   union ?p (h3 ?y ?z)
 ;;;
 ;;; The smallest shape whose renamings are not determined, and the reason every atom from M4
 ;;; on is solved with `find-mapping-total`.  Only `?x` is shared, so atom 2's renaming is
-;;; pinned on im(p2) and nowhere else: a slot of `q` outside it gets NO name in
-;;; slots(pattern), and the *minimal* map Def. 8 asks for simply DROPS it, which asserts the
-;;; slot is redundant and is unsound.  (a) is that bug, (b) a sound but incomplete guard,
-;;; (c) the fix.
+;;; pinned on im(p2) and nowhere else: a slot of `?q` outside it gets NO name in
+;;; slots(pattern).  S3.6 asks for the *minimal* renaming carrying the node into pattern
+;;; slots, and a minimal one simply omits that slot.
+;;;
+;;; An EDGE may not omit a slot.  Def. 5 makes `dom(m) = slots(a)` the leader condition on a
+;;; renamed id `m*a`, and Def. 7 requires every renamed id inside a shape to be a leader, so
+;;; a stored edge's domain is exactly its child's slot set.  A dropped slot leaves a row
+;;; asserting the child does not depend on a slot it has -- unsound, and the tests file's
+;;; counter-example (a) is that rule.
+;;;
+;;; What licenses the fix is Def. 8, which asks only for SOME extension `m''` of `m'` and
+;;; says so: it "allows an arbitrary renaming for the redundant slots".  Any total extension
+;;; over the unpinned slots therefore represents the same e-nodes.  S3.6 says it operationally in its closing line -- if a class "contains an
+;;; e-node with a redundant or bound slot ... it suffices to pick any fresh slot for them" --
+;;; and the crate does exactly that in `enodes_applied`, freshening every slot outside the
+;;; class's slot set before it matches.  `find-mapping-total` is that: `find-mapping`'s
+;;; constraints and injectivity check, plus a minted name for every domain slot they leave
+;;; unnamed.  `domain`'s keys are the slots the result must cover, `avoid`'s are the ones it
+;;; may not mint over, and both are identity maps the caller already has.  This is the
+;;; spelling every section below uses.
+;;;
+;;; Declining to fire instead -- `compose-total` in place of `compose` -- is sound but
+;;; incomplete; that is counter-example (b).  Note that `?p` losing a slot is NOT the
+;;; symptom: `f3(?x,?y) = h3(?y,?z)` genuinely says `f3` does not depend on `?x`, so the
+;;; redundancy is derived by the fixed rule too.
 ;;;
 ;;; Covered by: M3-one-shared-var-two-ops, U1.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-(push)
 
-;; An edge `m : slots(c) -> slots(node)` must have dom(m) = slots(c).  A child's live slot
-;; count is the length of its self-map, so a row where the two disagree is malformed.
-;;
-;; This, and not the natural "did ?p lose a slot?", is what separates (a) from (c):
-;; `f(?x,?y) = h(?y,?z)` genuinely says `f` does not depend on `?x`, so `?p` losing `$0` is
-;; the correct reading of the rule and happens in the fixed version too.
-(relation BadEdge (String Renaming U))
-(rule ((= n (App2 f m1 c1 m2 c2))
-       (RenamesToLeader c1 symc1 c1)
-       (!= (map-length m1) (map-length symc1)))
-      ((BadEdge f m1 c1)))
-(rule ((= n (App2 f m1 c1 m2 c2))
-       (RenamesToLeader c2 symc2 c2)
-       (!= (map-length m2) (map-length symc2)))
-      ((BadEdge f m2 c2)))
-
-;; (a) minimal mp2 -- unsound: ?z's edge comes out empty
-(push)
-(rule ((= p (App2 "f" p1 x q1 y))
-       (= q (App2 "g" p2 x q2 z))
-       (RenamesToLeader x symx x)
-       (= mp2 (compose (compose p1 symx) (inverse p2))))
-      ((union p (App2 "h" q1 y (compose mp2 q2) z))))
-
-(let $P (App2 "f" (map-of 0 0) (Var 0) (map-of 1 1) (Var 1)))
-(let $Q (App2 "g" (map-of 0 0) (Var 0) (map-of 5 5) (Var 5)))
-(run-schedule (saturate (run slotted))
-              (repeat 20 (seq (run) (saturate (run slotted)))))
-(check (BadEdge "h" m c))                    ; the empty edge to ?z
-(pop)
-
-;; (b) guarded -- sound but incomplete: the rule simply declines to fire
-(push)
-(rule ((= p (App2 "f" p1 x q1 y))
-       (= q (App2 "g" p2 x q2 z))
-       (RenamesToLeader x symx x)
-       (= mp2 (compose (compose p1 symx) (inverse p2)))
-       (= mz (compose-total mp2 q2)))     ; declines rather than dropping ?z's slot
-      ((union p (App2 "h" q1 y mz z))))
-
-(push)
-(let $P (App2 "f" (map-of 0 0) (Var 0) (map-of 1 1) (Var 1)))
-(let $Q (App2 "g" (map-of 0 0) (Var 0) (map-of 5 5) (Var 5)))
-(run-schedule (saturate (run slotted))
-              (repeat 20 (seq (run) (saturate (run slotted)))))
-(fail (check (BadEdge f m c)))                       ; nothing malformed ...
-(fail (check (RenamesToLeader $P m $P) (= (map-length m) 1)))  ; ... and nothing derived
-(pop)
-
-;; where ?z's slots are determined it still fires
-(push)
-(let $P (App2 "f" (map-of 0 0) (Var 0) (map-of 1 1) (Var 1)))
-(let $Q (App2 "g" (map-of 0 0) (Var 0) (map-of 0 0) (Var 0)))
-(run-schedule (saturate (run slotted))
-              (repeat 20 (seq (run) (saturate (run slotted)))))
-(check (RenamesToLeader $P m $P) (= (map-length m) 2))
-(pop)
-
-(pop)
-
-;; (c) total mp2 -- sound AND fires; the spelling every section below uses.  It ports the
-;;     crate's behaviour: `enodes_applied` gives every bound or redundant slot a fresh name
-;;     up front, the last line of the paper's S3.6 -- "it suffices to pick any fresh slot
-;;     for them".  So `find-mapping-total` keeps `find-mapping`'s constraints and
-;;     injectivity check and mints a name for every domain slot they leave unnamed.
-;;     `domain`'s keys are the slots the result must cover, `avoid`'s are the ones it may
-;;     not mint over, and both are identity maps the caller already has.
-(push)
-(rule ((= p (App2 "f" p1 x q1 y))
-       (= q (App2 "g" p2 x q2 z))
+(rule ((= p (App2 "f3" p1 x q1 y))
+       (= q (App2 "g3" p2 x q2 z))
        (RenamesToLeader x symx x)
        (= avoid1 (map-union (map-image p1) (map-image q1)))         ; identity on slots(pattern)
        (= dom2 (map-union (map-image p2) (map-image q2)))           ; identity on slots(node 2)
        (= mp2 (find-mapping-total avoid1 dom2 (compose p1 symx) p2)))
-      ((union p (App2 "h" q1 y (compose mp2 q2) z))))
-
-(push)
-(let $P (App2 "f" (map-of 0 0) (Var 0) (map-of 1 1) (Var 1)))
-(let $Q (App2 "g" (map-of 0 0) (Var 0) (map-of 5 5) (Var 5)))
-(run-schedule (saturate (run slotted))
-              (repeat 20 (seq (run) (saturate (run slotted)))))
-(fail (check (BadEdge f m c)))                       ; ?z keeps its slot
-;; and the redundancy the rule really does imply is still derived -- which is why this
-;; assertion cannot be used to tell (a) from (c)
-(check (RenamesToLeader $P m $P) (= (map-length m) 1))
-(pop)
-
-;; the determined case is unchanged: nothing is minted
-(push)
-(let $P (App2 "f" (map-of 0 0) (Var 0) (map-of 1 1) (Var 1)))
-(let $Q (App2 "g" (map-of 0 0) (Var 0) (map-of 0 0) (Var 0)))
-(run-schedule (saturate (run slotted))
-              (repeat 20 (seq (run) (saturate (run slotted)))))
-(check (RenamesToLeader $P m $P) (= (map-length m) 2))
-(pop)
-
-(pop)
-
-(pop)
+      ((union p (App2 "h3" q1 y (compose mp2 q2) z))))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; M4.  Two atoms, chained -- the primitive in use.
 ;;;
-;;;     ?p == (f ?a ?b),  ?b == (g ?c ?d)
+;;;     ?p == (f4 ?a ?b),  ?b == (g4 ?c ?d)
 ;;;
 ;;; Every flattened nested pattern produces this shape, so it is the one that has to be
-;;; cheap.  It is also where the per-atom step the rest of the file reuses first appears:
+;;; cheap.  It is also where the per-atom step the rest of the file reuses first appears.  A
+;;; compiler walks the atoms in a connected order -- that is compile time, not an order egglog
+;;; evaluates the finished body in -- and for atom N it emits:
 ;;;
-;;;     mpN is the least renaming, total on atom N's node slots, agreeing with everything
-;;;     already known about that atom -- its root if an earlier atom bound it, every child
-;;;     an earlier atom bound, every slot literal an earlier atom pinned.  One
-;;;     `find-mapping-total`, avoiding the slots named so far.
+;;;     mpN is the least renaming, total on atom N's node slots, agreeing with every
+;;;     constraint the atoms before it left -- its root if one of them bound it, every child
+;;;     one of them bound, every slot literal one of them pinned.  One `find-mapping-total`,
+;;;     avoiding the slots named so far.
 ;;;
 ;;; The cases -- first atom / root known / children known -- are only which constraints
 ;;; happen to exist, not three different rules.  Taking one constraint per case is
 ;;; under-constrained: for a chain the tempting `(compose q1 symb)` drops an inner slot the
-;;; root's edge does not reach, M3's bug again, and M4b at the end of the file is an e-graph
-;;; where the two visibly disagree.
+;;; root's edge does not reach, M3's bug again, and the tests file's counter-example is an
+;;; e-graph where the two visibly disagree.
 ;;;
 ;;; Covered by: C2-chain.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-(push)
 
 ;; witness carries the two renamings the chain computes for atom 2's children
 (relation Chain (U Renaming Renaming))
 
 (rule (;; atom 1 -- nothing known, so mp1 is the identity on its node's slots, and those
        ;; slots ARE slots(pattern)
-       (= p (App2 "f" p1 a q1 b))
+       (= p (App2 "f4" p1 a q1 b))
        (= mp1 (map-union (map-image p1) (map-image q1)))
        (= avoid1 (map-image mp1))             ; slots already spoken for
        (= mb (compose mp1 q1))                ; ?b's renaming into slots(pattern)
        ;; atom 2 -- its root ?b is the only constraint there is, and that one G-join is
        ;; also the Def. 6 check for ?b's second occurrence
-       (= b (App2 "g" p2 c q2 d))
+       (= b (App2 "g4" p2 c q2 d))
        (= dom2 (map-union (map-image p2) (map-image q2)))
        (RenamesToLeader b symb b)             ; symb in G(B)
        (= mp2 (find-mapping-total avoid1 dom2
@@ -328,139 +212,91 @@
        (= md (compose mp2 q2)))               ; ?d's
       ((Chain p mc md)))
 
-;; f( v[$0], g[$0,$1] )   with   g = g( v[$0], v[$1] )
-(let $g  (App2 "g" (map-of 0 0) (Var 0)
-                  (map-of 0 1) (Var 0)))
-(let $f  (App2 "f" (map-of 0 0) (Var 0)
-                  (map-of 0 0 1 1) $g))
-(run-schedule (saturate (run slotted))
-              (repeat 20 (seq (run) (saturate (run slotted)))))
-
-;; mp2 is the identity, so ?c lands on $0 and ?d on $1 -- both in the pattern slot space
-;; fixed by atom 1.
-(check (Chain $f mc md)
-       (= (map-get mc 0) 0)
-       (= (map-get md 0) 1)
-       (= (map-length mc) 1)
-       (= (map-length md) 1))
-
-(pop)
-
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; M5.  The avoid-set, and why it accumulates.
 ;;;
-;;;     ?p == (add ?a ?b),  ?a == (sub ?u ?u),  ?b == (sub2 ?v ?v)
+;;;     ?p == (f5 ?a ?b),  ?a == (g5 ?u ?u),  ?b == (h5 ?v ?v)
 ;;;
-;;; `find-mapping-total` is a pure function of its arguments: it sees one atom at a time and
-;;; cannot know what another atom invented.  The avoid-set threads that through as an
-;;; ordinary value -- a running `map-union` of `(map-image mpN)`, one per atom compiled:
+;;; `find-mapping-total` is a pure function of its arguments: one call sees one atom's
+;;; constraints, and nothing of what another atom invented.  The avoid-set threads that
+;;; through as an ordinary value -- a running `map-union` of `(map-image mpN)`, one per atom
+;;; the compiler has emitted:
 ;;;
 ;;;     (= avoid1 (map-image mp1))                      ; atom 1's slots
 ;;;     (= mp2    (find-mapping-total avoid1 dom2 ...))  ; atom 2 avoids them
 ;;;     (= avoid2 (map-union avoid1 (map-image mp2)))    ; accumulate
 ;;;     (= mp3    (find-mapping-total avoid2 dom3 ...))  ; atom 3 avoids both
 ;;;
-;;; Identity maps never conflict under `map-union`, so the union is always defined.  Drop the
-;;; accumulation and two atoms that both invent pick the same slot, each choosing the
-;;; smallest it believes to be free -- here that identifies `?u` with `?v`.  Only
-;;; smallest-unused minting needs this: minting above the largest name in play is
-;;; self-avoiding and passes the corpus with no accumulation at all, so the avoid-set is the
-;;; price of keeping slot names small.
+;;; This is S3.6's own condition.  Its matching step requires the union of `m_p` and `m'_p`
+;;; to be a bijective renaming, where `m'_p` is the atom's own minimal renaming and `m_p` is
+;;; what the atoms before it accumulated -- exactly `avoid` plus `find-mapping`'s injectivity
+;;; check.  Identity maps never conflict under `map-union`, so the union is always defined.
+;;;
+;;; Drop the accumulation and two atoms that both invent pick the same slot, each choosing
+;;; the smallest it believes to be free -- here that identifies `?u` with `?v`, which is
+;;; `NoAccum` in the tests file.  The accumulation is what smallest-unused minting costs: it
+;;; reuses low names, so it has to be told which are taken.  `slotted-user-rules.md` records
+;;; the measurements behind that policy choice and what the alternative was.
 ;;;
 ;;; Covered by: C7-redundant-distinct-vars, which without the accumulation goes order
 ;;; dependent and loses a match.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-(push)
 
-;; `sub($0,$0)` and `sub2($1,$1)` are each unioned with `null`, so each has a slot its class
-;; does not depend on.  The root `add(null,null)` has no slots at all, so nothing pins `?u`
-;; or `?v` and both atoms have to invent.
-(let $sub  (App2 "sub"  (map-of 0 0) (Var 0) (map-of 0 0) (Var 0)))
-(let $sub2 (App2 "sub2" (map-of 0 1) (Var 0) (map-of 0 1) (Var 0)))
-(union $sub  (Null))
-(union $sub2 (Null))
-(let $add (App2 "add" (map-empty) (Null) (map-empty) (Null)))
+;; witness carries what each of the two inventing atoms picked for ?u and ?v
+(relation Accum (Renaming Renaming))
 
-;; what each atom invents for ?u and ?v, accumulated and not
-(relation Accum   (Renaming Renaming))
-(relation NoAccum (Renaming Renaming))
-
-(rule ((= p (App2 "add" p1 a q1 b))
+(rule ((= p (App2 "f5" p1 a q1 b))
        (= mp1 (map-union (map-image p1) (map-image q1)))
        (= avoid1 (map-image mp1))
-       (= a (App2 "sub" p2 u q2 u))
+       (= a (App2 "g5" p2 u q2 u))
        (RenamesToLeader a syma a)
        (= mp2 (find-mapping-total avoid1 (map-union (map-image p2) (map-image q2))
                                   (compose (compose mp1 p1) syma)
                                   (map-domain (compose mp1 p1))))
        (= avoid2 (map-union avoid1 (map-image mp2)))     ; accumulate
-       (= b (App2 "sub2" p3 v q3 v))
+       (= b (App2 "h5" p3 v q3 v))
        (RenamesToLeader b symb b)
        (= mp3 (find-mapping-total avoid2 (map-union (map-image p3) (map-image q3))
                                   (compose (compose mp1 q1) symb)
                                   (map-domain (compose mp1 q1)))))
       ((Accum (compose mp2 p2) (compose mp3 p3))))
 
-(rule ((= p (App2 "add" p1 a q1 b))
-       (= mp1 (map-union (map-image p1) (map-image q1)))
-       (= avoid1 (map-image mp1))
-       (= a (App2 "sub" p2 u q2 u))
-       (RenamesToLeader a syma a)
-       (= mp2 (find-mapping-total avoid1 (map-union (map-image p2) (map-image q2))
-                                  (compose (compose mp1 p1) syma)
-                                  (map-domain (compose mp1 p1))))
-       (= b (App2 "sub2" p3 v q3 v))
-       (RenamesToLeader b symb b)
-       (= mp3 (find-mapping-total avoid1 (map-union (map-image p3) (map-image q3))
-                                  (compose (compose mp1 q1) symb)
-                                  (map-domain (compose mp1 q1)))))
-      ((NoAccum (compose mp2 p2) (compose mp3 p3))))
-
-(run-schedule (saturate (run slotted))
-              (repeat 20 (seq (run) (saturate (run slotted)))))
-
-;; accumulated: ?u and ?v land on different pattern slots
-(check (Accum (map-of 0 0) (map-of 0 1)))
-(check (Accum mu mv) (!= mu mv))
-
-;; not accumulated: both invent slot 0, so the two variables collapse
-(check (NoAccum mu mv) (= mu mv))
-
-(pop)
-
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; M6.  Two atoms, joined on a fresh root.
 ;;;
-;;;     ?p == (f ?x ?y),  ?q == (g ?x ?y)   =>   union ?p ?q
+;;;     ?p == (f6 ?x ?y),  ?q == (g6 ?x ?y)   =>   union ?p ?q
 ;;;
 ;;; Atom 2's root is fresh, so `mp2` is entirely unknown and every shared variable both
-;;; constrains it and contributes part of it: all the pairs go into ONE `find-mapping-total`,
-;;; and the symmetries are genuinely enumerated here, unlike the determined lookups of M2
-;;; and M4.
+;;; constrains it and contributes part of it: all the pairs go into ONE `find-mapping-total`.
+;;; `symx` and `symy` are free variables, so the join enumerates G(X) and G(Y) -- as it does
+;;; for `symb` in M4, but several groups at once, and every element feeds the same call.  M2
+;;; is the contrast: there both edges come off one matched row, so the group element is
+;;; determined and the `RenamesToLeader` atom is a lookup.
 ;;;
-;;; `TooEager` is the tempting demotion -- build `mp2` from `?x` alone, then probe `?y`
-;;; against it.  It is incomplete: until the last shared variable is in, `mp2` is partial, so
-;;; `(compose mp2 q2)` for a not-yet-covered child truncates to nothing meaningful.  Whether
-;;; it is already total is a property of the data, not of the rule: (a) loses a match,
-;;; (c) happens to work.
+;;; The tempting demotion is `TooEager` in the tests file: solve `mp2` from `?x` alone, giving
+;;; `p1 . symx . p2^-1`, and require `?y` to agree with THAT.  That map is defined only on
+;;; im(p2), the slots `?x`'s edge reaches, so `(compose mp2 q2)` truncates wherever `?y`'s
+;;; edge leaves im(p2): the agreement it asks of `?y` is about a map that does not cover
+;;; `?y`'s slots.  One call over all the pairs states a single condition instead, with no
+;;; operand partial.  Whether im(p2) happens to cover the whole node is a property of the
+;;; data, not of the rule.
 ;;;
 ;;; Covered by: C3-join.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-(push)
 
 (relation Join (U U Renaming))
 
 (rule (;; atom 1 -- nothing known, so mp1 is the identity on its node's slots
-       (= p (App2 "f" p1 x q1 y))
+       (= p (App2 "f6" p1 x q1 y))
        (= mp1 (map-union (map-image p1) (map-image q1)))
        (= avoid1 (map-image mp1))
        (= mx (compose mp1 p1))
        (= my (compose mp1 q1))
        ;; atom 2 -- root fresh, so every shared child both constrains mp2 and contributes
        ;; part of it, in one call
-       (= q (App2 "g" p2 x q2 y))
+       (= q (App2 "g6" p2 x q2 y))
        (= dom2 (map-union (map-image p2) (map-image q2)))
        (RenamesToLeader x symx x)
        (RenamesToLeader y symy y)
@@ -469,69 +305,11 @@
                                   p2 q2)))                              ; seconds
       ((Join p q mp2)))
 
-(relation TooEager (U U))
-(rule ((= p (App2 "f" p1 x q1 y))
-       (= q (App2 "g" p2 x q2 y))
-       (RenamesToLeader x symx x)
-       (= mp2 (compose (compose p1 symx) (inverse p2)))   ; from ?x alone
-       (= symy (compose (inverse q1) (compose mp2 q2)))   ; then probe ?y
-       (RenamesToLeader y symy y))
-      ((TooEager p q)))
-
-(relation NaiveJoin (U U))
-(rule ((= p (App2 "f" p1 x q1 y))
-       (= q (App2 "g" p1 x q1 y)))                       ; same edges, no mp2
-      ((NaiveJoin p q)))
-
-;; (a) positive, mp2 = identity.  im(p2) is only {$0}, so it never reaches $1 and TooEager
-;;     silently loses the match.
-(push)
-(let $P (App2 "f" (map-of 0 0) (Var 0) (map-of 1 1) (Var 1)))
-(let $Q (App2 "g" (map-of 0 0) (Var 0) (map-of 1 1) (Var 1)))
-(run-schedule (saturate (run slotted))
-              (repeat 20 (seq (run) (saturate (run slotted)))))
-(check (Join $P $Q m) (= (map-length m) 2))
-(fail (check (TooEager $P $Q)))
-(pop)
-
-;; (b) negative: g's two children are one renamed id where f's are two, so no injective
-;;     mp2 exists.  This is find-mapping's injectivity check doing the job of the crate's
-;;     per-node disequality clique.
-(push)
-(let $P (App2 "f" (map-of 0 0) (Var 0) (map-of 1 1) (Var 1)))
-(let $Q (App2 "g" (map-of 0 0) (Var 0) (map-of 0 0) (Var 0)))
-(run-schedule (saturate (run slotted))
-              (repeat 20 (seq (run) (saturate (run slotted)))))
-(fail (check (Join $P $Q m)))
-(fail (check (Join $Q $P m)))
-(pop)
-
-;; (c) f(a[$0,$1], v[$0]) vs g(a[$1,$0], v[$0]): `?y` pins mp2[$0] = $0, so symx must be
-;;     the real swap.  Here im(p2) happens to cover all of q's slots, so TooEager works --
-;;     again a property of the data.
-(push)
-(let $a01 (App2 "a" (map-of 0 0) (Var 0) (map-of 1 1) (Var 1)))
-(let $a10 (App2 "a" (map-of 1 1) (Var 1) (map-of 0 0) (Var 0)))
-(union $a01 $a10)
-(run-schedule (saturate (run slotted))
-              (repeat 20 (seq (run) (saturate (run slotted)))))
-
-(let $P (App2 "f" (map-of 0 0 1 1) $a01 (map-of 0 0) (Var 0)))
-(let $Q (App2 "g" (map-of 0 1 1 0) $a01 (map-of 0 0) (Var 0)))
-(run-schedule (saturate (run slotted))
-              (repeat 20 (seq (run) (saturate (run slotted)))))
-(check (Join $P $Q m))
-(check (TooEager $P $Q))
-(fail (check (NaiveJoin $P $Q)))
-(pop)
-
-(pop)
-
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; M7.  Three atoms -- the cases compose.
 ;;;
-;;;     ?p == (f ?a ?b),  ?b == (g ?c ?d),  ?q == (h ?c ?a)
+;;;     ?p == (f7 ?a ?b),  ?b == (g7 ?c ?d),  ?q == (h7 ?c ?a)
 ;;;
 ;;; Atom 2 is M4's chain, atom 3 is M6's join, and every renaming they produce lives in one
 ;;; slot space -- the one atom 1 fixed.  Atom 3 is constrained through `?c`, reached via the
@@ -540,18 +318,17 @@
 ;;;
 ;;; Covered by: C10-chain-then-join.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-(push)
 
 (relation Tri (U U Renaming))
 
 (rule (;; atom 1 -- nothing known, so mp1 is the identity on its node's slots
-       (= p (App2 "f" p1 a q1 b))
+       (= p (App2 "f7" p1 a q1 b))
        (= mp1 (map-union (map-image p1) (map-image q1)))
        (= avoid1 (map-image mp1))
        (= ma (compose mp1 p1))
        (= mb (compose mp1 q1))
        ;; atom 2 -- constrained by its root ?b
-       (= b (App2 "g" p2 c q2 d))
+       (= b (App2 "g7" p2 c q2 d))
        (= dom2 (map-union (map-image p2) (map-image q2)))
        (RenamesToLeader b symb b)
        (= mp2 (find-mapping-total avoid1 dom2
@@ -561,7 +338,7 @@
        (= avoid2 (map-union avoid1 (map-image mp2)))
        (= mc (compose mp2 p2))
        ;; atom 3 -- root fresh, constrained through ?c (depth 2) and ?a (depth 1)
-       (= q (App2 "h" p3 c q3 a))
+       (= q (App2 "h7" p3 c q3 a))
        (= dom3 (map-union (map-image p3) (map-image q3)))
        (RenamesToLeader c symc c)
        (RenamesToLeader a syma a)
@@ -570,125 +347,54 @@
                                   p3 q3)))
       ((Tri p q mp3)))
 
-(let $g (App2 "g" (map-of 0 0) (Var 0)
-                 (map-of 0 1) (Var 0)))
-(let $f (App2 "f" (map-of 0 0) (Var 0)
-                 (map-of 0 0 1 1) $g))
-
-;; (a) positive.  ?a and ?c are both v[$0] in pattern slots, and h's two children sit at
-;;     the same slot $5, so mp3 = {$5 -> $0}.
-(push)
-(let $h (App2 "h" (map-of 0 5) (Var 0)
-                 (map-of 0 5) (Var 0)))
-(run-schedule (saturate (run slotted))
-              (repeat 25 (seq (run) (saturate (run slotted)))))
-(check (Tri $f q m)
-       (= (map-get m 5) 0)
-       (= (map-length m) 1))
-(pop)
-
-;; (b) negative.  h's children sit at *different* slots, so mp3 would have to send both $5
-;;     and $6 to $0 -- not injective, no match.
-(push)
-(let $h2 (App2 "h" (map-of 0 5) (Var 0)
-                  (map-of 0 6) (Var 0)))
-(run-schedule (saturate (run slotted))
-              (repeat 25 (seq (run) (saturate (run slotted)))))
-(fail (check (Tri $f q m)))
-(pop)
-
-(pop)
-
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; M8.  A variable wider than its class -- the ClassSlots narrowing.
 ;;;
-;;;     ?x3 == (h ?x1 ?x2)   =>   union ?x1 (h ?x2 ?x1)
+;;;     ?x3 == (f8 ?x1 ?x2)   =>   union ?x1 (f8 ?x2 ?x1)
 ;;;
-;;; The other way to break Def. 4, needing no minting and no chain -- one atom does it.  A
-;;; renaming is read off a matched NODE, so its domain is the node's slots, and a node may
-;;; carry a slot its class does not depend on: that is what redundancy is, and Def. 4 permits
-;;; it for a node while forbidding it for an edge.  A variable stands for a CLASS, so writing
-;;; its renaming straight into a built node would name a slot the child does not have.
+;;; The other way to break the edge condition, needing no minting and no chain -- one atom
+;;; does it.  A renaming is read off a matched NODE, so its domain is the node's slots, and
+;;; Def. 4 permits a node to carry slots its class does not: it requires only `S` included in
+;;; `im(m)`, and calls the extras redundant.  An edge has no such slack (M3).  A variable
+;;; stands for a CLASS, so writing a renaming read off a node straight into a built node would
+;;; name a slot the child does not have.
 ;;;
 ;;; The fix is one atom per variable -- `(= csX (ClassSlots X))` -- and `(compose m csX)`
-;;; wherever the renaming is used or written.  A symmetry is NOT a substitute: it is
-;;; whichever self-loop the join happens to bind, and one of those can itself be wider than
-;;; the class, in which case it narrows nothing.
+;;; wherever the renaming is used or written.  A symmetry is NOT a substitute: the self-loop
+;;; the machinery stores for a node is the identity on that NODE's slot set, so it can be
+;;; exactly as wide as the renaming it was meant to narrow.
 ;;;
-;;; Covered by: C15-action-child-narrowed-to-its-class; `XDIFF_BUGS=wide-kids` is (a).
+;;; The action's root ?x1 is a child variable and so is the other child ?x2, so both
+;;; renamings come off the matched node and both need narrowing.
+;;;
+;;; Covered by: C15-action-child-narrowed-to-its-class.  The un-narrowed spelling was the
+;;; `wide-kids` mutant, removed from `XDIFF_BUGS` once it stopped discriminating -- the
+;;; property is checked directly by `def4-edges.py` instead.  The tests file keeps the
+;;; spelling as a counter-example.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-(push)
 
-;; The witness goes in its OWN ruleset and is run once at the end.  A relation is monotone,
-;; so a witness sharing the default ruleset also fires mid-repair and keeps the fact after
-;; the offending row is gone -- it would answer "was there ever a bad edge?", and the answer
-;; to that is yes even when all is well.
-(ruleset m6b)
-(relation BadEdge (String Renaming U))
-(rule ((= n (App2 f m1 c1 m2 c2))
-       (RenamesToLeader c1 symc1 c1)
-       (= symc1 (compose symc1 symc1))       ; a partial identity: c1's slots are in its domain
-       (< (map-length symc1) (map-length m1)))
-      ((BadEdge f m1 c1)) :ruleset m6b)
-(rule ((= n (App2 f m1 c1 m2 c2))
-       (RenamesToLeader c2 symc2 c2)
-       (= symc2 (compose symc2 symc2))
-       (< (map-length symc2) (map-length m2)))
-      ((BadEdge f m2 c2)) :ruleset m6b)
-
-;; The action's root ?x1 is a child variable and so is the other child ?x2, so both
-;; renamings come off the matched node and both need narrowing.  Two unions through a shared
-;; sub($0,$0) drive the h class's slot set down, so a renaming read off an h node names a
-;; slot the class no longer has.
-(let $h  (App2 "h" (map-empty) (Null) (map-of 0 0) (Var 0)))
-(let $g  (App2 "g" (map-empty) (Null) (map-of 0 2) (Var 0)))
-(let $s  (App2 "sub" (map-of 0 0) (Var 0) (map-of 0 0) (Var 0)))
-(union $h $s)
-(union $g $s)
-
-;; (a) stored renamings used as written -- `XDIFF_BUGS=wide-kids`.  Under the phased schedule
-;;     the invariants are saturated before a user rule can match, so the renamings an action
-;;     reads off a node already have the child's slots for their domain: this used to produce
-;;     a malformed edge and no longer does, so the assertion is now the negative.
-;;     `def4-edges.py` is what checks that precondition.  Kept as a record -- a test that has
-;;     stopped testing what it was written for is worse than no test.
-(push)
-(rule ((= x3 (App2 "h" p1 x1 q1 x2)))
-      ((union x1 (App2 "h" q1 x2 p1 x1))))
-(run-schedule (saturate (run slotted))
-              (repeat 20 (seq (run) (saturate (run slotted)))))
-(run m6b 1)
-(fail (check (BadEdge "h" m c)))
-(pop)
-
-;; (b) every variable narrowed to its class.  Belt and braces under this schedule; it was
-;;     load-bearing when the machinery ran in one ruleset with the user's rules.
-(push)
-(rule ((= x3 (App2 "h" p1 x1 q1 x2))
+(rule ((= x3 (App2 "f8" p1 x1 q1 x2))
        (= csx1 (ClassSlots x1))
        (= csx2 (ClassSlots x2)))
-      ((union x1 (App2 "h" (compose q1 csx2) x2 (compose p1 csx1) x1))))
-(run-schedule (saturate (run slotted))
-              (repeat 20 (seq (run) (saturate (run slotted)))))
-(run m6b 1)
-(fail (check (BadEdge "h" m c)))     ; nothing malformed
-(pop)
-
-(pop)
+      ((union x1 (App2 "f8" (compose q1 csx2) x2 (compose p1 csx1) x1))))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; M9.  A slot literal: eta.
 ;;;
-;;;     ?e == (lambda $s ?b),  ?b == (app ?f ?arg),  ?arg == (var $s)
+;;;     ?e == (lambda9 $s ?b),  ?b == (app9 ?f ?arg),  ?arg == (var $s)
 ;;;       =>  ?e = ?f      if $s not in slots(?f)
 ;;;
 ;;; Flattened this is a pure chain, and it is where flattening needs care, because `$s` is
 ;;; written both as the binder and inside atom 3.  It works because the machinery represents
 ;;; `(var $s)` as a `(Var 0)` child, so "the argument is the bound slot" reduces to an
-;;; ordinary Def. 6 check on that child.  HAZARD: write a slot literal that a *sibling* atom
-;;; also mentions and the binder escapes instead.
+;;; ordinary Def. 6 check on that child.  HAZARD: flattening is not always meaning-preserving.
+;;; A nested pattern is matched under one renaming for the whole pattern, a flattened one gets
+;;; a renaming per atom, so a slot written both under a binder and outside it means different
+;;; things in the two forms and the binder escapes.  The crate's
+;;; `flattening_is_not_faithful_for_a_sibling_slot_literal` is that case; a flattener has to
+;;; reject or rename those.
 ;;;
 ;;; The side condition is a `map-not-contains` on the inverse -- what "$s is not free in ?f"
 ;;; becomes once slots are explicit.
@@ -699,19 +405,19 @@
 ;;; `atom` form cannot express this shape: two children only, and a slot literal there needs
 ;;; `Bind` or a unary `Var(Slot)`.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-(push)
 
 (rule (;; atom 1 -- nothing known, so mp1 is the identity on its node's slots
-       (= e (App2 "lambda" p1 (Var 0) q1 b))
+       (= e (App2 "lambda9" p1 (Var 0) q1 b))
        (= mp1 (map-union (map-image p1) (map-image q1)))
        (= avoid1 (map-image mp1))
        (= v (map-get (compose mp1 p1) 0))       ; the bound slot, in pattern slots
        (= mb (compose mp1 q1))
        ;; atom 2 -- constrained by its root ?b AND by the slot literal `$s`, which atom 1
-       ;; already pinned to `v`: a pinned literal constrains as `mp2 . q2 = {0 -> v}` and has
-       ;; to be passed in, not checked afterwards.  By then mp2 has minted its own name for
-       ;; the same binder, and nothing can revise a mint.
-       (= b (App2 "app" p2 f q2 (Var 0)))
+       ;; pinned to `v`.  The pinning has to be one of `find-mapping-total`'s constraints --
+       ;; `mp2 . q2 = {0 -> v}` -- and not a test on its result: a call that does not carry
+       ;; it is free to mint a fresh name for that slot, and `mp2` is then a map no later
+       ;; equality can repair.
+       (= b (App2 "app9" p2 f q2 (Var 0)))
        (= dom2 (map-union (map-image p2) (map-image q2)))
        (RenamesToLeader b symb b)
        (= mp2 (find-mapping-total avoid1 dom2
@@ -720,44 +426,11 @@
        (map-not-contains (inverse (compose mp2 p2)) v))   ; $s not free in ?f
       ((Equated e (compose mp2 p2) f)))
 
-;; positive: (lambda $5 (app c (var $5)))  ->  c
-(push)
-(let $c    (App2 "c" (map-empty) (Null) (map-empty) (Null)))
-(let $body (App2 "app" (map-empty) $c (map-of 5 5) (Var 5)))
-(let $lam  (App2 "lambda" (map-of 5 5) (Var 5)
-                         (map-of 5 5) $body))
-(run-schedule (saturate (run slotted))
-              (repeat 30 (seq (run) (saturate (run slotted)))))
-(check (RenamesToLeader $lam m $c))
-(pop)
-
-;; negative: the bound slot is free in ?f -- (lambda $5 (app (var $5) (var $5)))
-(push)
-(let $body (App2 "app" (map-of 5 5) (Var 5)
-                      (map-of 5 5) (Var 5)))
-(let $lam  (App2 "lambda" (map-of 5 5) (Var 5)
-                         (map-of 5 5) $body))
-(run-schedule (saturate (run slotted))
-              (repeat 30 (seq (run) (saturate (run slotted)))))
-(fail (check (RenamesToLeader $lam m (Var 0))))
-(pop)
-
-;; negative: wrong slot -- (lambda $5 (app c (var $6)))
-(push)
-(let $c    (App2 "c" (map-empty) (Null) (map-empty) (Null)))
-(let $body (App2 "app" (map-empty) $c (map-of 6 6) (Var 6)))
-(let $lam  (App2 "lambda" (map-of 5 5) (Var 5)
-                         (map-of 5 5 6 6) $body))
-(run-schedule (saturate (run slotted))
-              (repeat 30 (seq (run) (saturate (run slotted)))))
-(fail (check (RenamesToLeader $lam m $c)))
-(pop)
-
-(pop)
-
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; M10.  Actions: concluding over renamed ids.
+;;;
+;;;     ?p == (f10 ?x ?y),  ?q == (g10 ?x ?y)   =>   union ?p ?q
 ;;;
 ;;; The paper's union takes renamed ids -- S3.5 is union(m1*a1, m2*a2) -- and which of
 ;;; redundancy, a new group element, or an e-class merge it produces depends on those
@@ -778,15 +451,15 @@
 ;;;
 ;;; Covered by: C11, C14, E1-E3.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-(push)
 
-;; stated covariantly in G(p), so the test does not have to pick an orientation either
+;; the pair of renamed ids the action would union, stated covariantly in G(p) so that
+;; nothing here has to pick an orientation either
 (relation Union' (Renaming U Renaming U))
 
-(rule ((= p (App2 "f" p1 x q1 y))
+(rule ((= p (App2 "f10" p1 x q1 y))
        (= mp1 (map-union (map-image p1) (map-image q1)))
        (= avoid1 (map-image mp1))
-       (= q (App2 "g" p2 x q2 y))
+       (= q (App2 "g10" p2 x q2 y))
        (= dom2 (map-union (map-image p2) (map-image q2)))
        (RenamesToLeader x symx x)
        (RenamesToLeader y symy y)
@@ -797,22 +470,15 @@
                                   p2 q2)))
       ((Union' symp p (compose symp mp2) q)))
 
-(let $P (App2 "f" (map-of 0 0) (Var 0) (map-of 1 1) (Var 1)))
-(let $Q (App2 "g" (map-of 0 0) (Var 0) (map-of 1 1) (Var 1)))
-(run-schedule (saturate (run slotted))
-              (repeat 20 (seq (run) (saturate (run slotted)))))
-(check (Union' s $P r $Q))
-
-(pop)
-
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; M11.  A nested right-hand side.
 ;;;
-;;;     ?p == (f ?a ?b)   =>   union ?p (h (g ?a ?b) ?b)
+;;;     ?p == (f11 ?a ?b)   =>   union ?p (h11 (g11 ?a ?b) ?b)
 ;;;
-;;; The paper's `let_app` and its associativity rules build a right-hand side that is a
-;;; *tree*, so an intermediate node must exist before the outer one can point at it: one
+;;; The paper's `let-app` -- `(let ?e $x (app ?a ?b))` becoming
+;;; `(app (let ?e $x ?a) (let ?e $x ?b))` -- and associativity have a right-hand side that is
+;;; a *tree*, so an intermediate node must exist before the outer one can point at it: one
 ;;; `let` per built node, innermost first.  An action is already in pattern slot space, so
 ;;; there is no renaming between two built nodes -- the edge from outer to inner is the
 ;;; identity on the inner node's slots -- and a built node's slots are the union of its
@@ -820,108 +486,13 @@
 ;;;
 ;;; Covered by: NR1-nested-build, NR2, NR3-assoc.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-(push)
 
-(rule ((= p (App2 "f" p1 a q1 b))
+(rule ((= p (App2 "f11" p1 a q1 b))
        (= mp1 (map-union (map-image p1) (map-image q1)))   ; atom 1, mp1 = identity
        (= ma (compose mp1 p1))                             ; ?a into pattern slots
        (= mb (compose mp1 q1))                             ; ?b's
        (RenamesToLeader p symp p))
-      ((let inner (App2 "g" ma a mb b))
-       ;; identity on `$inner`'s slots, not a renaming
-       (let outer (App2 "h" (map-union (map-image ma) (map-image mb)) inner mb b))
+      ((let inner (App2 "g11" ma a mb b))
+       ;; identity on `inner`'s slots, not a renaming
+       (let outer (App2 "h11" (map-union (map-image ma) (map-image mb)) inner mb b))
        (Equated outer (compose mp1 symp) p)))
-
-(let $f (App2 "f" (map-of 0 0) (Var 0) (map-of 0 1) (Var 0)))
-(run-schedule (saturate (run slotted))
-              (repeat 20 (seq (run) (saturate (run slotted)))))
-
-;; h(g($0,$1), $1) has been put in f($0,$1)'s class
-(let $g (App2 "g" (map-of 0 0) (Var 0) (map-of 0 1) (Var 0)))
-(let $h (App2 "h" (map-of 0 0 1 1) $g (map-of 0 1) (Var 0)))
-(run-schedule (saturate (run slotted))
-              (repeat 20 (seq (run) (saturate (run slotted)))))
-
-(check (RenamesToLeader $f m1 leader)
-       (RenamesToLeader $h m2 leader))
-
-(pop)
-
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;;;;;;;;;;;;;;;;;   COUNTER-EXAMPLES -- not steps of the recipe.  ;;;;;;;;;;;;;
-;;;;;;;;;;;;;;;;;;   Skippable on a first pass.                    ;;;;;;;;;;;;;
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; M4b.  What the naive chain spelling does instead -- this is what justifies M4.
-;;;
-;;; M4 solves atom 2 with `find-mapping-total`.  Taking the root's stored edge as atom 2's
-;;; whole renaming -- `(compose q1 symb)`, the rule `ChainShort` below -- looks equivalent,
-;;; and on (a) it is.
-;;;
-;;; In (b) `g`'s class is given a slot the parent's edge cannot name: g($0,$1) is unioned
-;;; with a one-slot term, so $1 becomes redundant and the parent holds `g` at an edge whose
-;;; domain is narrower than `g`'s own node slots.  The short spelling then computes an EMPTY
-;;; renaming for `?d` -- a child with slot 0 reached by an edge with no entries, which
-;;; Def. 4 forbids and which asserts the child is slotless.  `find-mapping-total` mints a
-;;; name instead.  Which of the two happens is a property of the data, so the recipe cannot
-;;; take the short spelling anywhere.
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-(push)
-
-;; M4's spelling
-(relation Chain (U Renaming Renaming))
-(rule ((= p (App2 "f" p1 a q1 b))
-       (= mp1 (map-union (map-image p1) (map-image q1)))
-       (= avoid1 (map-image mp1))
-       (= mb (compose mp1 q1))
-       (= b (App2 "g" p2 c q2 d))
-       (= dom2 (map-union (map-image p2) (map-image q2)))
-       (RenamesToLeader b symb b)
-       (= mp2 (find-mapping-total avoid1 dom2
-                                  (compose mb symb)
-                                  (map-domain mb)))
-       (= mc (compose mp2 p2))
-       (= md (compose mp2 q2)))
-      ((Chain p mc md)))
-
-;; the short spelling
-(relation ChainShort (U Renaming Renaming))
-(rule ((= p (App2 "f" p1 a q1 b))
-       (= b (App2 "g" p2 c q2 d))
-       (RenamesToLeader b symb b)
-       (= mp2 (compose q1 symb)))
-      ((ChainShort p (compose mp2 p2) (compose mp2 q2))))
-
-;; (a) M4's e-graph: `mb` covers every slot of the inner node, so the two agree
-(push)
-(let $g  (App2 "g" (map-of 0 0) (Var 0)
-                  (map-of 0 1) (Var 0)))
-(let $f  (App2 "f" (map-of 0 0) (Var 0)
-                  (map-of 0 0 1 1) $g))
-(run-schedule (saturate (run slotted))
-              (repeat 20 (seq (run) (saturate (run slotted)))))
-(check (Chain $f mc md) (ChainShort $f mc md))
-(pop)
-
-;; (b) g($0,$1) unioned with a one-slot term, so the parent's edge to `g` no longer covers
-;;     g's node slots
-(push)
-(let $g (App2 "g" (map-of 0 0) (Var 0) (map-of 0 1) (Var 0)))
-(let $k (App2 "k" (map-of 0 0) (Var 0) (map-of 0 0) (Var 0)))
-(union $g $k)
-(let $f (App2 "f" (map-of 0 0) (Var 0) (map-of 0 0) $g))
-
-(run-schedule (saturate (run slotted))
-              (repeat 25 (seq (run) (saturate (run slotted)))))
-
-;; the total spelling keeps a slot for ?d ...
-(check (Chain $f mc md) (= (map-length md) 1))
-;; ... the short one drops it, leaving a malformed empty edge
-(check (ChainShort $f mc md) (= (map-length md) 0))
-;; so on this e-graph they genuinely disagree
-(fail (check (Chain $f mc md) (ChainShort $f mc md)))
-(pop)
-
-(pop)
