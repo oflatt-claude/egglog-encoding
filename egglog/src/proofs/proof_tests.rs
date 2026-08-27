@@ -1718,4 +1718,51 @@ mod tests {
 
         insta::assert_snapshot!("doc_example_add_eqsort_children", snapshot);
     }
+
+    // A `fail`-wrapped action can leave a term behind when it errors part way,
+    // and a failed command is not one proof checking reads, so there is no
+    // global action for that term's fiat to name. Rejected up front rather than
+    // left to name whichever action comes next.
+    #[test]
+    fn proof_mode_rejects_a_fail_wrapping_an_action_that_builds_a_term() {
+        let err = EGraph::new_with_proofs()
+            .parse_and_run_program(
+                None,
+                r#"
+                (datatype N (Z) (S N))
+                (sort VN (Vec N))
+                (fail (vec-get (vec-of (Z)) 5))
+                (let a (S (Z)))
+                (check (Z))
+                "#,
+            )
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                Error::UnsupportedProofCommand {
+                    reason: ProofEncodingUnsupportedReason::FailActionCommand,
+                    ..
+                }
+            ),
+            "expected FailActionCommand, got {err:?}"
+        );
+    }
+
+    // Only when the action builds one: a `fail` over a base-sorted computation
+    // leaves nothing behind to justify.
+    #[test]
+    fn proof_mode_allows_a_fail_wrapping_an_action_that_builds_no_term() {
+        EGraph::new_with_proofs()
+            .parse_and_run_program(
+                None,
+                r#"
+                (datatype N (Z))
+                (fail (log 0.0))
+                (Z)
+                (check (Z))
+                "#,
+            )
+            .unwrap();
+    }
 }

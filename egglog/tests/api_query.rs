@@ -253,3 +253,32 @@ fn constructor_enodes_reports_subsumed() -> Result<(), Error> {
 // Suppress unused-import warning when no test uses Value directly.
 #[allow(dead_code)]
 fn _value_import_check(_: Value) {}
+
+/// The encoding replaces a function's table with its view, so the two
+/// introspection APIs have to keep splitting on what the rows are, not on
+/// which table holds them: `constructor_enodes` reads e-nodes and
+/// `function_entries` reads a function's entries, encoded or not.
+#[test]
+fn the_introspection_apis_split_the_same_way_under_the_encoding() -> Result<(), Error> {
+    const PROGRAM: &str = "
+        (datatype Math (Num i64) (Add Math Math))
+        (function f (i64) i64 :no-merge)
+        (relation R (i64))
+        (set (f 1) 2)
+        (Add (Num 1) (Num 2))
+        (R 3)
+    ";
+    for mut egraph in [EGraph::default(), EGraph::new_with_proofs()] {
+        egraph.parse_and_run_program(None, PROGRAM)?;
+        // A constructor's and a relation's rows are e-nodes; a function's are
+        // entries. Under the encoding a view stands in for each, and a view for
+        // a function holds that function's value, not an e-class.
+        assert!(egraph.constructor_enodes("Add", |_| {}).is_ok());
+        assert!(egraph.constructor_enodes("R", |_| {}).is_ok());
+        assert!(egraph.constructor_enodes("f", |_| {}).is_err());
+        assert!(egraph.function_entries("f", |_| {}).is_ok());
+        assert!(egraph.function_entries("Add", |_| {}).is_err());
+        assert!(egraph.function_entries("R", |_| {}).is_err());
+    }
+    Ok(())
+}
