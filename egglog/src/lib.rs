@@ -1603,7 +1603,7 @@ impl EGraph {
         // are that function's output followed by the row's proof, which is
         // internal, so an entry reads the first and stops.
         let is_view = function.is_fd_view();
-        if function.subtype() != FunctionSubtype::Custom && !is_view {
+        if function.rows_are_enodes() {
             return Err(crate::api::ApiError::WrongSubtype {
                 name: name.to_owned(),
                 expected: "function",
@@ -1660,9 +1660,7 @@ impl EGraph {
                 .ok_or_else(|| crate::api::ApiError::MissingTable {
                     name: name.to_owned(),
                 })?;
-        // A real constructor reads as enodes, and so does the view standing in
-        // for one under the encoding.
-        if function.subtype() != FunctionSubtype::Constructor && !function.is_fd_view() {
+        if !function.rows_are_enodes() {
             return Err(crate::api::ApiError::WrongSubtype {
                 name: name.to_owned(),
                 expected: "constructor",
@@ -2566,8 +2564,11 @@ impl EGraph {
         // output) is not `Unit`; term-encoding-only mode uses `Unit` there.
         let proofs = view.schema.outputs.last().unwrap().name() != "Unit";
         // A CSV column is always a base value, so a base-sorted view output is
-        // one the rows carry; an e-class one is minted by the load instead.
-        let output_is_minted = view.schema.outputs[0].is_eq_sort();
+        // one the rows carry; an e-class one is minted by the load instead. That
+        // is the same split as `rows_are_enodes`, and it has to agree with the
+        // one `input_actions` made when it built the per-row actions a fiat now
+        // names.
+        let output_is_minted = view.rows_are_enodes();
         // The CSV columns: the view's children, plus any output they carry.
         let mut csv_sorts: Vec<ArcSort> = view.schema.input.clone();
         if !output_is_minted {

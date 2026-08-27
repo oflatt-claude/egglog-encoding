@@ -892,6 +892,12 @@ pub enum ProofEncodingUnsupportedReason {
     #[error("`fail` wrapping an `input` command is not supported by proof encoding.")]
     FailInputCommand,
     #[error(
+        "`fail` wrapping an action is not supported by proof encoding. The action can leave a \
+         the term behind when it errors part way, and a failed command is not one the proof \
+         checker reads, so there is nothing for that term's proof to name."
+    )]
+    FailActionCommand,
+    #[error(
         "let binding with a primitive in the body. For silly internal reasons, we don't support primitive bindings for proofs at the moment, sorry."
     )]
     LetBindingWithNonEqSort,
@@ -1562,8 +1568,17 @@ fn command_supports_proof_encoding_impl(
         }
         GenericCommand::Fail(_, commands) => {
             for command in commands {
-                if let GenericCommand::Input { .. } = command {
-                    return Err(ProofEncodingUnsupportedReason::FailInputCommand);
+                match command {
+                    GenericCommand::Input { .. } => {
+                        return Err(ProofEncodingUnsupportedReason::FailInputCommand);
+                    }
+                    GenericCommand::Action(action) if builds_a_term(action) => {
+                        return Err(ProofEncodingUnsupportedReason::FailActionCommand);
+                    }
+                    GenericCommand::Actions(actions) if actions.0.iter().any(builds_a_term) => {
+                        return Err(ProofEncodingUnsupportedReason::FailActionCommand);
+                    }
+                    _ => {}
                 }
                 command_supports_proof_encoding(command, type_info)?;
             }
@@ -1834,6 +1849,17 @@ impl crate::constraint::TypeConstraint for DropReflexiveStepTypeConstraint {
         }
         constraints
     }
+}
+
+/// Whether `action` interns a term, which is what a failed command can leave
+/// behind with nothing to justify it.
+fn builds_a_term(action: &ResolvedAction) -> bool {
+    action_nodes(action).into_iter().any(|node| match node {
+        ActionNode::Expr(expr) => {
+            matches!(expr, ResolvedExpr::Call(..)) && expr.output_type().is_eq_sort()
+        }
+        ActionNode::Row(_) => false,
+    })
 }
 
 /// Every expression node of a rule body, in a canonical pre-order: the facts in

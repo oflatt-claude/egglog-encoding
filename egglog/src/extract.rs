@@ -722,6 +722,16 @@ impl Function {
         self.decl.cost.unwrap_or(DefaultCost::unit())
     }
 
+    /// Whether this table's rows read as e-nodes: a real constructor, or the
+    /// view standing in for one. A view for a custom function does not — its
+    /// first output is that function's value, not an e-class.
+    pub(crate) fn rows_are_enodes(&self) -> bool {
+        match self.decl.subtype {
+            FunctionSubtype::Constructor => true,
+            FunctionSubtype::Custom => self.is_fd_view() && self.schema.outputs[0].is_eq_sort(),
+        }
+    }
+
     /// Whether this is the functional-dependency view `(children) -> (eclass, {Unit|Proof})`,
     /// where the e-class is the first output column rather than the last input column.
     pub(crate) fn is_fd_view(&self) -> bool {
