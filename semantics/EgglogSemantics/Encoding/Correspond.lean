@@ -2957,10 +2957,12 @@ The state: one nullary constructor `B`, its view entry `@BView() ↦ ((B), @Fiat
 rebuild rule re-keys onto the leader. Written with `FDatabase.addRow`, which is what
 `execAction` runs at a `set`, and then one `FDatabase.mergeRound`, which is what a merge phase
 runs — the same discipline as `Proofs/Counterexamples.lean`'s `cexD`. Running the whole
-`encode` of the source program through the *kernel* instead is not available: `matchQuery`'s
-own definition computes one congruence closure per candidate substitution, and a rebuild
-saturation over it exhausts the elaborator's heartbeat budget. `difftest correspond`'s
-`unionCase` is the same program measured rather than compiled. -/
+`encode` of the source program through the *kernel* instead is not available, and that is
+measured rather than assumed: `matchQuery`'s own definition computes one congruence closure
+per candidate substitution — the `csimp` fast paths are compiled code, which the elaborator
+does not use — and `execM (encode …) = some _` on the two-constructor, one-`union` source did
+not reduce to a value in 29 minutes at eight million heartbeats. `difftest correspond`'s
+`unionCase` is that program measured rather than compiled. -/
 
 /-- `satSig` with a nullary `B`'s table triple added. -/
 def cxSig : Signature :=
