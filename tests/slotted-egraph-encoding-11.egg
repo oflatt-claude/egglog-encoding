@@ -17,6 +17,10 @@
 ;;;
 ;;; `(compose a b)` is `a . b`, b first, and it TRUNCATES: keys b sends outside a's domain
 ;;; are dropped. Correct for partial maps, wrong on an edge, where `compose-total` refuses.
+;;;
+;;; "The reference", below and throughout these files, is `memoryleak47/slotted-egraphs` --
+;;; the Rust implementation from Schneider et al., Slotted E-Graphs, PLDI 2025 -- on its
+;;; PR #45, which is the branch this encoding is differentially tested against.
 
 
 ;; A renaming is a partial injection on slots.

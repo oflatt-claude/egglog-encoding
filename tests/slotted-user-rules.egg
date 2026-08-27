@@ -4,9 +4,15 @@
 ;;; construction that solves it, and then the rule -- the one a compiler emits, one per
 ;;; section and nothing else.  Read it top to bottom.  `slotted-user-rules.md` is the prose
 ;;; version; three compilers emit this same recipe and must stay in step with it --
-;;; `xdiff.py compile_rule` (the toy language, checked against the crate),
+;;; `xdiff.py compile_rule` (the toy language, checked against the reference),
 ;;; `xarray.py compile_array_rule` (the paper's array language, likewise) and
 ;;; `gen-sdql-rules.py` (SDQL, self-checked only so far).
+;;;
+;;; THE REFERENCE, wherever one is mentioned below, is `memoryleak47/slotted-egraphs` --
+;;; the Rust implementation from the PLDI 2025 paper -- on its PR #45.  The multipattern
+;;; e-matcher (`src/rewrite/multipat.rs`) is already in that crate's `main`; what #45 adds
+;;; is a canonicalisation fix in `extend_subst` plus a multipattern test suite, and it is
+;;; the branch this encoding is differentially tested against.
 ;;;
 ;;; No terms, no schedules, no assertions, no wrong versions.
 ;;; `tests/slotted-user-rules-tests.egg` includes this file and supplies all of those, so
@@ -143,7 +149,7 @@
 ;;; says so: it "allows an arbitrary renaming for the redundant slots".  Any total extension
 ;;; over the unpinned slots therefore represents the same e-nodes.  S3.6 says it operationally in its closing line -- if a class "contains an
 ;;; e-node with a redundant or bound slot ... it suffices to pick any fresh slot for them" --
-;;; and the crate does exactly that in `enodes_applied`, freshening every slot outside the
+;;; and the reference does exactly that in `enodes_applied`, freshening every slot outside the
 ;;; class's slot set before it matches.  `find-mapping-total` is that: `find-mapping`'s
 ;;; constraints and injectivity check, plus a minted name for every domain slot they leave
 ;;; unnamed.  `domain`'s keys are the slots the result must cover, `avoid`'s are the ones it

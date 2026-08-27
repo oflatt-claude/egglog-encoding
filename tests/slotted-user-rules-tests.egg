@@ -362,7 +362,7 @@
 (pop)
 
 ;; (b) negative: g6's two children are one renamed id where f6's are two, so no injective
-;;     mp2 exists.  This is find-mapping's injectivity check doing the job of the crate's
+;;     mp2 exists.  This is find-mapping's injectivity check doing the job of the reference's
 ;;     per-node disequality clique.
 (push)
 (let $P6 (App2 "f6" (map-of 0 0) (Var 0) (map-of 1 1) (Var 1)))
