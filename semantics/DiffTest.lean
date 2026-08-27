@@ -1516,8 +1516,9 @@ private def upThinCase : Program :=
 /-! **The literal probes are model-only.** Every case in the corpus proper uses nullary
 constructors, because egglog's `i64` is a distinct primitive sort and `(Add 1 2)` would not
 typecheck there, while `Term.lit` shares a sort with applications here. These two are the
-only way to ask what `ViewRepr`'s literal clause does when a literal is a *source* term, so
-they live among the probes, which `writeCase` never sees. -/
+only way to ask what `ViewRepr`'s literal clause does when a literal is a *source* term — a
+literal in a key column, which is the only place a source literal can be — so they live among
+the probes, which `writeCase` never sees. -/
 
 /-- A literal the encoding also mints (`unitE` is `0`) is absent from this source. -/
 private def litCase : Program := [.action (.expr (add (.lit (.int 1)) (.lit (.int 2))))]
@@ -1866,32 +1867,6 @@ theorem Cmd.noLeafPatternB_iff (c : Cmd) : c.noLeafPatternB = true ↔ c.NoLeafP
     simp [Cmd.noLeafPatternB, Cmd.NoLeafPattern, List.all_eq_true, Pattern.groundedB_iff,
       Query.varsKeyedB_iff]
 
-/-- `Expr.IsApp`, computed. -/
-def Expr.isAppB : Expr → Bool
-  | .app _ _ => true
-  | _ => false
-
-theorem Expr.isAppB_iff (e : Expr) : e.isAppB = true ↔ e.IsApp := by
-  cases e <;> simp [Expr.isAppB, Expr.IsApp]
-
-/-- `Action.NoBareBuild`, computed. -/
-def Action.noBareBuildB : Action → Bool
-  | .expr e => e.isAppB
-  | _ => true
-
-theorem Action.noBareBuildB_iff (a : Action) : a.noBareBuildB = true ↔ a.NoBareBuild := by
-  cases a <;> simp [Action.noBareBuildB, Action.NoBareBuild, Expr.isAppB_iff]
-
-/-- `Cmd.NoBareBuild`, computed. -/
-def Cmd.noBareBuildB : Cmd → Bool
-  | .action a => a.noBareBuildB
-  | .rule r => r.actions.all Action.noBareBuildB
-  | _ => true
-
-theorem Cmd.noBareBuildB_iff (c : Cmd) : c.noBareBuildB = true ↔ c.NoBareBuild := by
-  cases c <;>
-    simp [Cmd.noBareBuildB, Cmd.NoBareBuild, List.all_eq_true, Action.noBareBuildB_iff]
-
 /-- `Program.EncodeDomain`, computed. -/
 def Program.encodeDomainB (p : Program) : Bool :=
   p.all Cmd.ctorDeclB && p.all Cmd.noSetB
@@ -1900,18 +1875,17 @@ def Program.encodeDomainB (p : Program) : Bool :=
     && p.vars.all (fun v => !"@".isPrefixOf v)
     && p.rulesets.all (fun R => !"@".isPrefixOf R)
     && p.all Cmd.noLeafPatternB
-    && p.all Cmd.noBareBuildB
 
 /-- **The census below counts exactly `EncodeDomain`.** -/
 theorem Program.encodeDomainB_iff (p : Program) :
     p.encodeDomainB = true ↔ p.EncodeDomain := by
   simp only [Program.encodeDomainB, Bool.and_eq_true, List.all_eq_true, Cmd.ctorDeclB_iff,
-    Cmd.noSetB_iff, Cmd.noLeafPatternB_iff, Cmd.noBareBuildB_iff, Option.isNone_iff_eq_none,
+    Cmd.noSetB_iff, Cmd.noLeafPatternB_iff, Option.isNone_iff_eq_none,
     Bool.not_eq_eq_eq_not, Bool.not_true, Bool.eq_false_iff, ne_eq]
-  exact ⟨fun h => ⟨h.1.1.1.1.1.1.1, h.1.1.1.1.1.1.2, h.1.1.1.1.1.2, h.1.1.1.1.2, h.1.1.1.2,
-      h.1.1.2, h.1.2, h.2⟩,
-    fun h => ⟨⟨⟨⟨⟨⟨⟨h.ctorsOnly, h.noSet⟩, h.noPrim⟩, h.noAt⟩, h.noAtVar⟩,
-      h.noAtRuleset⟩, h.noLeafPattern⟩, h.noBareBuild⟩⟩
+  exact ⟨fun h => ⟨h.1.1.1.1.1.1, h.1.1.1.1.1.2, h.1.1.1.1.2, h.1.1.1.2, h.1.1.2,
+      h.1.2, h.2⟩,
+    fun h => ⟨⟨⟨⟨⟨⟨h.ctorsOnly, h.noSet⟩, h.noPrim⟩, h.noAt⟩, h.noAtVar⟩,
+      h.noAtRuleset⟩, h.noLeafPattern⟩⟩
 
 /-! #### Running the encoded program
 
@@ -2435,8 +2409,6 @@ structure CorrRead where
   entries : List (FnName × List Term × Term)
   /-- One per `@UF` entry, key to parent. Self-loops are ordinary entries and are kept. -/
   edges : List (Term × Term)
-  /-- The terms the target holds, which is what the literal clause tests. -/
-  held : List Term
   /-- Whether an application's children are themselves read through the views.
   `Encode.lean`'s `ViewRepr` is the nested reading — `ViewReprList` on the children, then a
   view entry at the ids it returns — and the flat one asks for a view entry keyed by the
@@ -2459,7 +2431,6 @@ def corrReadTerms (P : Program) (d : FDatabase) : CorrRead where
     match t with
     | .app g [a, b, _] => if g == ufName then some (a, b) else none
     | _ => none
-  held := d.terms
   nested := true
 
 /-- The same reading off the row index, which a merge deletes from and a rebuild re-keys.
@@ -2476,7 +2447,6 @@ def corrReadRows (P : Program) (d : FDatabase) : CorrRead where
       | [a], [b, _] => some (a, b)
       | _, _ => none
     else none
-  held := d.terms
   nested := true
 
 mutual
@@ -2488,10 +2458,11 @@ are, pointwise, e-classes of its children — which is `Out`'s `CongList` premis
 target's congruence, the identity, in it. The pointwise reading is why nothing enumerates
 child tuples.
 
-A literal is its own e-class where the target holds it, and has none where it does not:
-`encodeBuild` emits no action for a literal, so a literal never gets a view entry. -/
+A literal is its own e-class, whether the target holds it or not: `encodeBuild` emits no
+action for a literal, so a literal never gets a view entry and the encoding owes it no
+e-node. -/
 def viewReprs (R : CorrRead) : Term → List Term
-  | .lit l => if R.held.contains (.lit l) then [.lit l] else []
+  | .lit l => [.lit l]
   | .app f as =>
       let rs := if R.nested then viewReprsList R as else as.map ([·])
       (R.entries.filterMap fun e =>
@@ -2883,9 +2854,10 @@ def correspondSelfTests : List (String × (Unit → Bool)) :=
       match (correspond runFuel unionCase).report? with
       | some r => r.lost.isEmpty && r.agreeTrueOff == 2
       | none => false),
-    -- **The literal clause, pinned.** `ViewRepr.lit` gives an e-class to every literal the
-    -- target holds, so it is exact only while the target holds no literal of its own. The
-    -- term relation is a relation — `outArity 0` — which is what keeps that true; when it
+    -- **The literal clause, pinned.** `ViewRepr.lit` gives an e-class to every literal,
+    -- held or not, so the sweep is exact only while every literal in its universe —
+    -- `src.terms ++ tgt.terms` — is one the source holds. The term relation is a relation
+    -- — `outArity 0` — which is what keeps the encoding from contributing one; when it
     -- carried a `unitE` output column, every in-domain case reported that literal as
     -- invented.
     ("correspond unionCase invents nothing", fun _ =>
@@ -2989,9 +2961,12 @@ measurement of `Cong src a b ↔ SameClass tgt a b` and not of a near neighbour 
 theorem is `encode_corresponds`, and this is the evidence for it; what the sweep cannot
 supply is the *hypothesis* it is stated under, for which see `encode_corresponds_witness`.
 
-**The literal clause.** `ViewRepr` gives an e-class to every literal the target holds, so it
-is exact only while the target holds no literal of its own — which is what makes the term
-relation a relation (`termDecl`, `outArity 0`). While it carried a `unitE` output column,
+**The literal clause.** `ViewRepr` gives an e-class to every literal, held or not, so the
+sweep is exact only while every literal in `src.terms ++ tgt.terms` is one the source holds —
+which is what makes the term relation a relation (`termDecl`, `outArity 0`). Dropping the
+membership premise did not move that condition: the universe is the *union*, so a literal the
+sweep can see and the source does not hold is a literal the target contributed either way.
+While the term relation carried a `unitE` output column,
 `.lit (.int 0)`, every in-domain case reported `0 = 0` as invented, and the `lit-zero` probe
 — which builds `(Add 0 1)` — was green by collision rather than by correspondence. The
 `lit` and `lit-zero` probes are kept as the regression test for that.

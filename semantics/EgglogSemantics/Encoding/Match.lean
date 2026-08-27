@@ -1953,11 +1953,6 @@ theorem wProgram_encodeDomain : wProgram.EncodeDomain where
     · exact ⟨wSrcRule_grounded, wSrcRule_varsKeyed⟩
     · trivial
     · exact absurd h (by simp)
-  noBareBuild := by
-    intro c hc
-    simp only [wProgram, List.mem_cons] at hc
-    rcases hc with rfl | rfl | rfl | rfl | h <;>
-      simp_all [Cmd.NoBareBuild, Action.NoBareBuild, Expr.IsApp, wSrcRule]
 
 /-- **The correspondence, run end to end at the composed case.**
 
@@ -2537,11 +2532,6 @@ theorem uProgram_encodeDomain : uProgram.EncodeDomain where
     · exact ⟨uSrcRule_grounded, uSrcRule_varsKeyed⟩
     · trivial
     · exact absurd h (by simp)
-  noBareBuild := by
-    intro c hc
-    simp only [uProgram, List.mem_cons] at hc
-    rcases hc with rfl | rfl | rfl | rfl | h <;>
-      simp_all [Cmd.NoBareBuild, Action.NoBareBuild, uSrcRule]
 
 /-- **`cong_headUnion` at a non-reflexive equation.**
 
@@ -2580,17 +2570,13 @@ and nothing has followed it, so `(A)` reads only `(A)` and `(B)` reads only `(B)
 of `uRebuildB` repairs it, and the two states either side of that firing are what say the
 clause is load-bearing rather than decoration. -/
 
-/-- A literal is not among the eight terms, so a `ViewRepr` at `uTgt` is never `.lit`. -/
-private theorem uTgt_not_lit {l : Lit} : Term.lit l ∉ uTgt.terms := by
-  intro h
-  rcases uTgt_mem_cases h with h' | h' | h' | h' | h' | h' | h' | h' <;>
-    simp [uUFE, uBViewE, uBTermE, uAViewE, uATermE, uA, uB] at h'
-
-/-- **What `uTgt` reads a source term as**: itself, and nothing else. -/
-private theorem uTgt_viewRepr {t e : Term} (h : ViewRepr uTgt t e) :
-    (t = uA ∧ e = uA) ∨ (t = uB ∧ e = uB) := by
+/-- **What `uTgt` reads a source term as**: itself, and nothing else. Stated at an application
+because `uA` and `uB` are the two source terms and both are; a literal's id is the literal
+(`ViewRepr.eq_of_lit`), which is neither. -/
+private theorem uTgt_viewRepr {g : FnName} {bs : List Term} {e : Term}
+    (h : ViewRepr uTgt (.app g bs) e) :
+    (Term.app g bs = uA ∧ e = uA) ∨ (Term.app g bs = uB ∧ e = uB) := by
   match h with
-  | .lit hm => exact absurd hm uTgt_not_lit
   | @ViewRepr.app _ f as es e pf hl ho =>
     rcases uTgt_out_view ho with ⟨rfl, rfl, rfl⟩ | ⟨rfl, rfl, rfl⟩
     · obtain rfl : as = [] := by cases hl with | nil => rfl

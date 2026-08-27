@@ -273,8 +273,9 @@ never collide.
 
 **No output column** (`outArity 0`), which is what a relation is. A unit column would put a
 literal in the database that no source program built, and `difftest correspond` reports
-exactly that as an invented equality — the target's `ViewRepr` classes every literal it
-holds, so the correspondence is exact only while the encoding contributes none. -/
+exactly that as an invented equality — `ViewRepr` classes every literal, and a literal the
+target holds and the source does not is in the sweep's term universe. The correspondence is
+exact only while the encoding contributes none. -/
 def termDecl (k : Nat) : FnDecl :=
   { arity := k + 1, outArity := 0, merge := some .noMerge }
 
@@ -993,35 +994,6 @@ def Cmd.NoSet : Cmd → Prop
   | .rule r => (∀ a ∈ r.actions, a.NoSet) ∧ ∀ p ∈ r.query, p.NoValues
   | _ => True
 
-/-- **A bare `expr` action builds an application.** `encodeBuild` emits no action at all for a
-leaf, so a source `.expr (.lit l)` records `l` as a term the source holds and writes *nothing*
-in the target — and then `Database.ViewsCover.lits` and `Database.UnionsJoined.readsSelf` are
-both false there (`Encoding/Correspond.lean`'s `litBuild_not_viewsCover`,
-`litBuild_not_readsSelf`).
-
-`.letBind v e` needs no clause: `execAction` evaluates its naming expression and `addTerm`s the
-result, so a `let` of a leaf does hold it. Nor does a literal *inside* an application: it is a
-key column of its parent's view row.
-
-This is the restriction `Spec/Scope.lean`'s `Action.Scoped` already imposes on a bare `expr`
-(`Action.NoBareBuild.of_scoped`), so it costs a well-scoped program nothing. -/
-def Action.NoBareBuild : Action → Prop
-  | .expr e => e.IsApp
-  | _ => True
-
-@[inherit_doc Action.NoBareBuild]
-def Cmd.NoBareBuild : Cmd → Prop
-  | .action a => a.NoBareBuild
-  | .rule r => ∀ a ∈ r.actions, a.NoBareBuild
-  | _ => True
-
-/-- **A well-scoped action builds no bare leaf.** `Action.Scoped` carries the application
-restriction on a bare `expr` and nothing else does, so the clause below is free for any program
-that passes the specification's own scope check. -/
-theorem Action.NoBareBuild.of_scoped {a : Action} {Γ : Scope} (h : a.Scoped Γ) :
-    a.NoBareBuild := by
-  cases a <;> first | exact h.1 | trivial
-
 /-- The variables a pattern mentions. -/
 def Pattern.varsOf : Pattern → List Var := Pattern.vars
 
@@ -1139,15 +1111,6 @@ structure Program.EncodeDomain (P : Program) : Prop where
   `litProgram_not_encodeDomain` is that recorded — and it costs the corpus nothing: all
   seventy in-domain cases satisfy it. -/
   noLeafPattern : ∀ c ∈ P, c.NoLeafPattern
-  /-- **No bare `expr` action builds a leaf.** `encodeBuild` emits no action for a leaf, so
-  `.action (.expr (.lit l))` puts `l` in the source's terms and writes nothing at all in the
-  target: `Encoding/Correspond.lean`'s `litBuild_not_viewsCover` is the compiled refutation of
-  `Database.ViewsCover` there, and `litBuild_not_readsSelf` of
-  `Database.UnionsJoined.readsSelf`. Like `noLeafPattern` this is a decidable condition on the
-  source text that no other clause implies; unlike it, it is implied by well-scopedness
-  (`Action.NoBareBuild.of_scoped`), and it costs the corpus nothing — no case of the 166, in
-  domain or out, builds a bare leaf. -/
-  noBareBuild : ∀ c ∈ P, c.NoBareBuild
 
 /-! ### Reading the target
 
@@ -1184,9 +1147,13 @@ mutual
 joined on ids. This is what `check` compiles to (`proof_encoding.md`, "Queries"), and it
 is the source-to-target correspondence the simulation theorem needs.
 
-A literal is its own id — it has no view, since only an application does. -/
+A literal is its own id — it has no view, since only an application does — and **without a
+premise**: a literal needs no justification in the encoding, so nothing about the *target* is
+asked for it. Asking `Term.lit l ∈ d.terms` would be asking the target to hold a term the
+encoding never emits an e-node for; `ViewRepr.eq_of_lit` is what keeps that from classing two
+literals together. -/
 inductive ViewRepr (d : Database) : Term → Term → Prop where
-  | lit {l : Lit} : Term.lit l ∈ d.terms → ViewRepr d (.lit l) (.lit l)
+  | lit {l : Lit} : ViewRepr d (.lit l) (.lit l)
   | app {f : FnName} {as es : List Term} {e pf : Term} :
       ViewReprList d as es → d.Out (viewName f) es [e, pf] → ViewRepr d (.app f as) e
 
@@ -1219,6 +1186,35 @@ def SameClass (d : Database) (a b : Term) : Prop :=
 /-- `SameClass` is symmetric, in one step from the definition. -/
 theorem SameClass.symm {d : Database} {a b : Term} (h : SameClass d a b) : SameClass d b a :=
   let ⟨e, ha, hb⟩ := h; ⟨e, hb, ha⟩
+
+/-! #### What a literal's class can contain
+
+Dropping the membership premise gives *every* literal an id, held or not. Two things have to
+stay impossible, and both are one inversion: `ViewRepr` has exactly one clause whose
+conclusion matches a literal, and it returns the literal itself. -/
+
+/-- **A literal's only id is itself.** The `app` clause concludes at `Term.app`, so `lit` is
+the only case, and it is not existential. -/
+theorem ViewRepr.eq_of_lit {d : Database} {l : Lit} {e : Term}
+    (h : ViewRepr d (.lit l) e) : e = .lit l := by
+  cases h with | lit => rfl
+
+/-- **Distinct literals are never in one class**: one id equal to both is `.lit l₁ = .lit l₂`. -/
+theorem SameClass.eq_of_lit {d : Database} {l₁ l₂ : Lit}
+    (h : SameClass d (.lit l₁) (.lit l₂)) : l₁ = l₂ := by
+  obtain ⟨e, h₁, h₂⟩ := h
+  exact Term.lit.inj ((h₁.eq_of_lit).symm.trans h₂.eq_of_lit)
+
+/-- **A literal is in an application's class only through a view row whose e-class column is
+that literal.** The `app` clause is the only one that concludes at an application, so its
+entry has to carry the literal in the column an id is read from. `Correspond.lean`'s
+`not_sameClass_lit_app` is that row ruled out at any target `ViewsSound` holds of. -/
+theorem SameClass.out_of_lit_app {d : Database} {l : Lit} {f : FnName} {as : List Term}
+    (h : SameClass d (.lit l) (.app f as)) :
+    ∃ es pf, ViewReprList d as es ∧ d.Out (viewName f) es [.lit l, pf] := by
+  obtain ⟨e, h₁, h₂⟩ := h
+  obtain rfl : e = Term.lit l := h₁.eq_of_lit
+  cases h₂ with | app hl ho => exact ⟨_, _, hl, ho⟩
 
 /-- The rebuild schedule has run out: no maintenance rule adds anything, and no merge
 step changes anything. It is the hypothesis the completeness half of simulation needs —

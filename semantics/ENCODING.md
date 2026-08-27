@@ -11,13 +11,16 @@ together with the decision procedure `sameClassF`, the proof that the two agree
 are jointly satisfiable at a state where both sides of the `iff` are non-trivial
 (`encode_corresponds_witness`). `difftest correspond 64` sweeps exactly that relation over
 the corpus and reports 70 of 70 agreeing, 0 LOST, 0 INVENTED, 0 `link-diff`. The theorem
-itself carries `sorry`, in seven named clauses of properties of the state the run reached —
-four of them needing the induction over `encode P`'s commands on top of the **action
+itself carries `sorry`, in six named clauses of properties of the state the run reached —
+three of them needing the induction over `encode P`'s commands on top of the **action
 read-back**, which is proved (`holdsBuild_of_execProgramM`,
 `viewRepr_self_of_execProgramM`), and two needing the interpreter's rebuild fixpoint. Two of
-those clauses were *false* before `Program.EncodeDomain.noBareBuild`, and
-`litBuild_not_viewsCover`/`litBuild_not_readsSelf` are the compiled refutation at
-`.action (.expr (.lit 5))`; the clause costs the corpus nothing (70 of 166, unchanged).
+those clauses were once *false* at `.action (.expr (.lit 5))`, and the defect was
+`ViewRepr`'s literal clause asking the target to hold the literal: egglog mints no e-node for
+one. Without the premise the clause `Program.EncodeDomain.noBareBuild` added is gone, that
+program is in the domain, and both statements hold there
+(`litBuild_viewsCover`, `litBuild_unionsJoined`); the reading stays exact because a literal's
+only id is itself (`ViewRepr.eq_of_lit`, `not_sameClass_lit_app`). Still 70 of 166 in domain.
 Finding 3 below
 is why its target is the interpreter's state and not `ProgramStep`'s — the vacuity is gone,
 but the decision procedure still needs an `FDatabase` — and finding 4 is why the `iff` is

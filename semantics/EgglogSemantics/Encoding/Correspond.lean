@@ -83,8 +83,8 @@ both are decided at the witness at the end of this file.
   block is the *top-level* `Cmd.action`s `encodeCmd` emits. `FDatabase.execProgramM_terms` is
   what carries the rows to the end of the run, and it is the only form the read-back can take:
   the row a rebuild displaced is gone, the entry term is not.
-* **`sorry`**, seven, one *clause* each and none of them an obligation any more.
-  `execM_viewsCover_lits`, `execM_viewsCover_keyed`, `execM_readsSelf` and `execM_edges` need
+* **`sorry`**, six, one *clause* each and none of them an obligation any more.
+  `execM_viewsCover_keyed`, `execM_readsSelf` and `execM_edges` need
   the induction over `encode P`'s commands that the read-back does not supply;
   `execM_viewLeader` and `execM_eclassFollowed` need the interpreter's rebuild fixpoint;
   `execM_viewsSound` is the completeness half. `execM_viewsCover`, `execM_unionsJoined` and
@@ -94,14 +94,16 @@ both are decided at the witness at the end of this file.
   firing earlier. `encode_assert`, `encode_trans`, `encode_congr`,
   `encode_corresponds_forward`, `encode_corresponds_complete` and `encode_corresponds` are
   assembled from them and carry `sorryAx` through them.
-* **Refuted, and it narrowed the domain**: two of those clauses were *false*.
-  `litBuild_not_viewsCover` and `litBuild_not_readsSelf` are compiled refutations at
-  `litBuildProgram`, one `.action (.expr (.lit 5))`, whose build emits no action at all — so
-  the source holds the literal and the target holds nothing.
-  `litBuildProgram_domain_but_bare` is every other clause of the domain holding there, and
-  `Program.EncodeDomain.noBareBuild` is the repair: a decidable condition on the source text,
-  implied by `Spec/Scope.lean`'s own `Action.Scoped`, costing the corpus nothing (still 70 of
-  166 in domain).
+* **Refuted, and it was the *reading* that was wrong**: two of those clauses were once false
+  at `litBuildProgram`, one `.action (.expr (.lit 5))`, whose build emits no action at all, and
+  `Program.EncodeDomain.noBareBuild` was the repair. The defect was `ViewRepr`'s literal clause
+  asking the target to hold the literal, where the encoding mints no e-node for one. The
+  premise is gone and the domain clause with it;
+  `litBuild_viewsCover`/`litBuild_unionsJoined`/`litBuild_forward` are the two once-false
+  statements holding at that program, now in the domain (`litBuildProgram_encodeDomain`). What
+  keeps the reading exact is `ViewRepr.eq_of_lit`: a literal's only id is itself, so distinct
+  literals are never in one class (`SameClass.eq_of_lit`) and `not_sameClass_lit_app` rules out
+  the view row a literal would need to join an application.
 * **Refuted, and recorded so it is not tried again**: the view's *functional dependency*,
   which is the obvious reduction of `trans` and is false at the witness program. The section
   "What the three obligations reduce to" has the state that refutes it, and the same state
@@ -239,10 +241,11 @@ mutual
 
 /-- The ids the target gives a source term: `ViewRepr d.toDatabase t`, computed.
 
-A literal is its own id where the target holds it and has none where it does not:
-`encodeBuild` emits no action for a literal, so a literal never keys a view entry. -/
+A literal is its own id and nothing else's, whether the target holds it or not: `encodeBuild`
+emits no action for a literal, so a literal never keys a view entry and the encoding owes it
+no e-node. -/
 def viewReprsF (d : FDatabase) : Term → List Term
-  | .lit l => if (Term.lit l) ∈ d.terms then [Term.lit l] else []
+  | .lit l => [Term.lit l]
   | .app f as => d.terms.filterMap (viewIdOf (viewReprsListF d as) f as.length)
 
 /-- `viewReprsF` over an argument list, one id list per column. -/
@@ -266,13 +269,9 @@ mutual
 theorem viewRepr_of_mem_viewReprsF {d : FDatabase} (hsc : d.SubtermClosed) :
     ∀ (t e : Term), e ∈ viewReprsF d t → ViewRepr d.toDatabase t e
   | .lit l, e, h => by
-    simp only [viewReprsF] at h
-    split at h
-    · rename_i hm
-      rw [List.mem_singleton] at h
-      subst h
-      exact .lit (by rw [FDatabase.toDatabase_terms]; exact hm)
-    · exact absurd h (by simp)
+    rw [viewReprsF, List.mem_singleton] at h
+    subst h
+    exact .lit
   | .app f as, e, h => by
     simp only [viewReprsF, List.mem_filterMap] at h
     obtain ⟨t, ht, hid⟩ := h
@@ -314,10 +313,7 @@ mutual
 theorem mem_viewReprsF_of_viewRepr {d : FDatabase} (hr : d.EqsRefl) {t e : Term}
     (h : ViewRepr d.toDatabase t e) : e ∈ viewReprsF d t := by
   match h with
-  | .lit hm =>
-    rw [FDatabase.toDatabase_terms] at hm
-    have hm' : (Term.lit _) ∈ d.terms := hm
-    simp only [viewReprsF, if_pos hm', List.mem_singleton]
+  | .lit => simp [viewReprsF]
   | @ViewRepr.app _ f as es e pf hl ho =>
     obtain ⟨bs, hcl, hmem⟩ := ho
     obtain rfl : es = bs := CongList.eq_of_eqsRefl hr.toDatabase hcl
@@ -811,14 +807,16 @@ private theorem satTarget_mem_cases {t : Term} (h : t ∈ satTarget.terms) :
   rw [satTarget_terms] at h
   simpa [satTermEntry, satViewEntry] using h
 
-/-- **At `satTarget` a source term has at most one id.** Two of the four terms are too short
-to be a view entry at all — a key plus the two value columns is two columns at least — one is
-`@ATerm`'s row, which is one column, and `@AView(A, @Fiat)` is what is left, its e-class
-column `A`. `satTarget_diag` is what lets the key be read up to equality. -/
-private theorem satTarget_viewRepr {t e : Term} (h : ViewRepr satTarget t e) :
-    e = Term.app "A" [] := by
+/-- **At `satTarget` an application has at most one id, and it is `(A)`.** Two of the four
+terms are too short to be a view entry at all — a key plus the two value columns is two
+columns at least — one is `@ATerm`'s row, which is one column, and `@AView(A, @Fiat)` is what
+is left, its e-class column `A`. `satTarget_diag` is what lets the key be read up to equality.
+
+Stated at an application because a literal's id is the literal (`ViewRepr.eq_of_lit`), which
+this state holds none of. -/
+private theorem satTarget_viewRepr {g : FnName} {bs : List Term} {e : Term}
+    (h : ViewRepr satTarget (.app g bs) e) : e = Term.app "A" [] := by
   match h with
-  | .lit hm => exact absurd (satTarget_mem_cases hm) (by simp [satTermEntry, satViewEntry])
   | @ViewRepr.app _ f as es e pf _ ho =>
     obtain ⟨bs, hcl, hmem⟩ := ho
     obtain rfl : es = bs :=
@@ -841,10 +839,13 @@ private theorem satTarget_viewRepr {t e : Term} (h : ViewRepr satTarget t e) :
       simp only [List.length_append, List.length_cons] at hl
       omega
 
-/-- **`Database.ViewLeader` holds at `satTarget`**, with the identity as its `lead`. -/
+/-- **`Database.ViewLeader` holds at `satTarget`**, with the identity as its `lead`. The
+literal case needs nothing of the state: a literal's only id is itself. -/
 theorem satTarget_viewLeader : satTarget.ViewLeader :=
-  ⟨id, fun _ _ h => h, fun _ _ _ h₁ h₂ =>
-    show id _ = id _ from (satTarget_viewRepr h₁).trans (satTarget_viewRepr h₂).symm⟩
+  ⟨id, fun _ _ h => h, fun t _ _ h₁ h₂ =>
+    show id _ = id _ from match t with
+      | .lit _ => (h₁.eq_of_lit).trans h₂.eq_of_lit.symm
+      | .app _ _ => (satTarget_viewRepr h₁).trans (satTarget_viewRepr h₂).symm⟩
 
 /-- **The keys the target's views carry**, relative to what the source holds.
 
@@ -855,12 +856,10 @@ there — one `set` per column per `@UF` edge, so a saturated ruleset covers the
 `(One,One)`, `(One,Two)` and `(Two,One)` for `@AddView`, and no `(Two,Two)`, since `(One)` is
 a leader and reads only to itself.
 
-`lits` is the one thing no view entry can say. `encodeBuild` emits no action for a literal,
-so a literal is its own id exactly where the target holds it, and it is held as a key column
-of the entry its parent's build wrote. -/
+**One clause, and it is about applications only.** A literal is its own id unconditionally
+(`ViewRepr.lit`), so the target owes it nothing — which is why there is no `lits` clause here
+and why a source action building a bare literal costs the domain nothing. -/
 structure Database.ViewsCover (d src : Database) : Prop where
-  /-- A literal the source holds, the target holds too. -/
-  lits : ∀ l : Lit, Term.lit l ∈ src.terms → Term.lit l ∈ d.terms
   /-- An application the source holds has a view entry at every key its children's ids
   form. -/
   keyed : ∀ f as es, Term.app f as ∈ src.terms → ViewReprList d as es →
@@ -891,12 +890,12 @@ theorem sameClass_congr_of_keyed {src d : Database} (hc : d.ViewsCover src) {f :
 mutual
 
 /-- **Every term the source holds has an id**, by `ViewsCover` and structural recursion:
-`lits` at a literal, and `keyed` at an application whose children's ids the recursion
+`ViewRepr.lit` at a literal, and `keyed` at an application whose children's ids the recursion
 supplies. `Database.WF` is what says the children are held, and `ProgramStep.wf` delivers it
 from the empty state. -/
 theorem viewRepr_total {d src : Database} (hc : d.ViewsCover src) (hw : src.WF) :
     ∀ t : Term, t ∈ src.terms → ∃ e, ViewRepr d t e
-  | .lit l, ht => ⟨.lit l, .lit (hc.lits l ht)⟩
+  | .lit l, _ => ⟨.lit l, .lit⟩
   | .app f as, ht => by
       obtain ⟨es, hes⟩ := viewRepr_list_total hc hw as fun a ha =>
         hw.subtermClosed _ ht (Term.arg_subterms ha (Term.self_mem_subterms a))
@@ -1395,19 +1394,18 @@ The two side hypotheses are exactly the two leaves a build emits no action for. 
 `Program.EncodeDomain.noPrim`: a source name shadowing a primitive would make the value column
 the primitive's *result* rather than the application, and the entry would be keyed on nothing
 the source built. `hvar` is the earlier top-level `let`s' own read-back — a variable's value gets
-no row from *this* build. A bare literal is why the statement carries `hmem`: nothing at all is
-emitted for it, which is what `litBuild_not_viewsCover` refutes and
-`Cmd.NoBareBuild` excludes. -/
+no row from *this* build. A bare literal needs neither, and nothing about `D` either: its id is
+itself (`ViewRepr.lit`). -/
 theorem viewRepr_self_of_execActions : ∀ (e : Expr) (n : Nat) {d d' D : FDatabase},
     execActions d (encodeBuild e n).2.1 = some d' → (∀ t ∈ d'.terms, t ∈ D.terms) →
     (∀ g ∈ e.fns, Prim.ofName g = none) →
     (∀ w ∈ e.vars, ∀ u, Env.lookup w d.env = some u → ViewRepr D.toDatabase u u) →
-    ∀ t, e.eval d.sig d.env = some t → t ∈ D.toDatabase.terms → ViewRepr D.toDatabase t t
-  | .lit l, _, _, _, _, _, _, _, _, t, hev, hmem => by
+    ∀ t, e.eval d.sig d.env = some t → ViewRepr D.toDatabase t t
+  | .lit l, _, _, _, _, _, _, _, _, t, hev => by
       obtain rfl : Term.lit l = t := Option.some.inj hev
-      exact .lit hmem
-  | .var w, _, _, _, _, _, _, _, hvar, t, hev, _ => hvar w (by simp [Expr.vars]) t hev
-  | .app f args, n, d, d', D, hrun, hD, hprim, hvar, t, hev, _ => by
+      exact .lit
+  | .var w, _, _, _, _, _, _, _, hvar, t, hev => hvar w (by simp [Expr.vars]) t hev
+  | .app f args, n, d, d', D, hrun, hD, hprim, hvar, t, hev => by
       obtain ⟨d₁, is, v, pf, hargs, hsig₁, henv₁, hmono, his, hv, hview, -⟩ :=
         execActions_encodeBuild_app hrun
       have hvapp : v = Term.app f is := by
@@ -1421,7 +1419,7 @@ theorem viewRepr_self_of_execActions : ∀ (e : Expr) (n : Nat) {d d' D : FDatab
           (Term.arg_subterms (List.mem_append_left _ hi) (Term.self_mem_subterms i))))
       refine .app (viewReprList_self_of_execActions args n hargs
         (fun x hx => hD x (hmono x hx)) (fun g hg => hprim g (by simp [Expr.fns, hg]))
-        (fun w hw u hu => hvar w (by simpa [Expr.vars] using hw) u hu) is his hmemis)
+        (fun w hw u hu => hvar w (by simpa [Expr.vars] using hw) u hu) is his)
         ⟨is, CongList.refl hmemis, FDatabase.mem_toDatabase_terms.mpr
           (hD _ (hview _ (Term.self_mem_subterms _)))⟩
 
@@ -1430,12 +1428,11 @@ theorem viewReprList_self_of_execActions : ∀ (es : List Expr) (n : Nat) {d d' 
     execActions d (encodeBuildArgs es n).2.1 = some d' → (∀ t ∈ d'.terms, t ∈ D.terms) →
     (∀ g ∈ Expr.fnsList es, Prim.ofName g = none) →
     (∀ w ∈ Expr.varsList es, ∀ u, Env.lookup w d.env = some u → ViewRepr D.toDatabase u u) →
-    ∀ ts, Expr.evalList d.sig es d.env = some ts → (∀ t ∈ ts, t ∈ D.toDatabase.terms) →
-      ViewReprList D.toDatabase ts ts
-  | [], _, _, _, _, _, _, _, _, ts, hev, _ => by
+    ∀ ts, Expr.evalList d.sig es d.env = some ts → ViewReprList D.toDatabase ts ts
+  | [], _, _, _, _, _, _, _, _, ts, hev => by
       obtain rfl : ([] : List Term) = ts := Option.some.inj hev
       exact .nil
-  | e :: es, n, d, d', D, hrun, hD, hprim, hvar, ts, hev, hmem => by
+  | e :: es, n, d, d', D, hrun, hD, hprim, hvar, ts, hev => by
       rw [encodeBuildArgs_cons_actions] at hrun
       obtain ⟨d₁, hhead, htail⟩ := execActions_append hrun
       have hsig₁ : d₁.sig = d.sig := FDatabase.execActions_sig hhead
@@ -1446,14 +1443,12 @@ theorem viewReprList_self_of_execActions : ∀ (es : List Expr) (n : Nat) {d d' 
       refine .cons (viewRepr_self_of_execActions e n hhead
           (fun x hx => hD x ((FDatabase.execActions_lists htail).1 x hx))
           (fun g hg => hprim g (by simp [Expr.fnsList, hg]))
-          (fun w hw u hu => hvar w (by simp [Expr.varsList, hw]) u hu) t ht
-          (hmem t List.mem_cons_self))
+          (fun w hw u hu => hvar w (by simp [Expr.varsList, hw]) u hu) t ht)
         (viewReprList_self_of_execActions es (encodeBuild e n).2.2 htail hD
           (fun g hg => hprim g (by simp [Expr.fnsList, hg]))
           (fun w hw u hu => hvar w (by simp [Expr.varsList, hw]) u
             (by rw [henv₁] at hu; exact hu))
-          ts' (by rw [hsig₁, henv₁]; exact hts')
-          fun x hx => hmem x (List.mem_cons_of_mem _ hx))
+          ts' (by rw [hsig₁, henv₁]; exact hts'))
 end
 
 /-! #### From an action block to a run of top-level commands -/
@@ -1544,12 +1539,12 @@ theorem viewRepr_self_of_execProgramM (e : Expr) (n : Nat) {d D : FDatabase} {p 
     (hrun : d.execProgramM ((encodeBuild e n).2.1.map Cmd.action ++ p) = some D)
     (hprim : ∀ g ∈ e.fns, Prim.ofName g = none)
     (hvar : ∀ w ∈ e.vars, ∀ u, Env.lookup w d.env = some u → ViewRepr D.toDatabase u u)
-    {t : Term} (hev : e.eval d.sig d.env = some t) (hmem : t ∈ D.toDatabase.terms) :
+    {t : Term} (hev : e.eval d.sig d.env = some t) :
     ViewRepr D.toDatabase t t := by
   obtain ⟨D₁, hblock, hafter⟩ := FDatabase.execProgramM_append hrun
   obtain ⟨m, hm, hmm⟩ := exists_execActions_of_execProgramM (encodeBuild_isSet e n) hblock
   exact viewRepr_self_of_execActions e n hm
-    (fun x hx => FDatabase.execProgramM_terms hafter x (hmm x hx)) hprim hvar t hev hmem
+    (fun x hx => FDatabase.execProgramM_terms hafter x (hmm x hx)) hprim hvar t hev
 
 /-! #### The read-back is not vacuous
 
@@ -1591,7 +1586,6 @@ theorem rbState2_eq : execActions { rbState1 with env := rbEnv }
 theorem rbState2_viewRepr_A : ViewRepr rbState2.toDatabase (.app "A" []) (.app "A" []) :=
   viewRepr_self_of_execActions (.app "A" []) 0 rbState1_eq (by decide) (by decide)
     (fun w hw => absurd hw (by simp [Expr.vars, Expr.varsList])) _ rfl
-    (FDatabase.mem_toDatabase_terms.mpr (by decide))
 
 /-- **And `(W x)`'s build reads to itself**, with `hvar` discharged at the variable `x` by the
 reading above. This is the composition the residues below still need an induction to perform
@@ -1603,7 +1597,7 @@ theorem rbState2_viewRepr_W :
       obtain rfl : w = "x" := by simpa [Expr.vars, Expr.varsList] using hw
       obtain rfl : u = Term.app "A" [] := by simpa [rbEnv, Env.lookup] using hu.symm
       exact rbState2_viewRepr_A)
-    _ rfl (FDatabase.mem_toDatabase_terms.mpr (by decide))
+    _ rfl
 
 /-- **And the rows themselves come back**, keyed on the variable's value: `@WView((A)) ↦
 (W((A)), @Fiat)` and `@WTerm((A), W((A)))`. `Expr.apps` is what indexes them, and it is
@@ -1616,6 +1610,33 @@ theorem rbState2_holdsBuild : rbState2.toDatabase.HoldsBuild "W" [Term.app "A" [
   obtain rfl : is = [Term.app "A" []] := Option.some.inj hk.symm
   obtain rfl : v = Term.app "W" [Term.app "A" []] := Option.some.inj hv.symm
   exact hb
+
+/-- After `(W 5)`'s build from the prelude: a **literal in a key column**, which is the one
+place a source literal can be and the case `ViewRepr`'s clause is about. -/
+def rbLitState : FDatabase :=
+  (execActions rbState (encodeBuild (.app "W" [.lit (.int 5)]) 0).2.1).getD FDatabase.empty
+
+theorem rbLitState_eq :
+    execActions rbState (encodeBuild (.app "W" [.lit (.int 5)]) 0).2.1 = some rbLitState := rfl
+
+/-- **A build over a literal key reads back**, with the literal column supplied by
+`ViewRepr.lit` and nothing asked of the state for it. -/
+theorem rbLitState_viewRepr :
+    ViewRepr rbLitState.toDatabase (.app "W" [.lit (.int 5)]) (.app "W" [.lit (.int 5)]) :=
+  viewRepr_self_of_execActions (.app "W" [.lit (.int 5)]) 0 rbLitState_eq (fun _ h => h)
+    (by decide) (fun w hw => absurd hw (by simp [Expr.vars, Expr.varsList])) _ rfl
+
+/-- **And the literal in that key column joins nothing to its parent.** Both readings are
+decided at the state: the literal's ids are exactly itself, `(W 5)`'s is the skolem `W(5)`,
+and `sameClassF_iff` carries the second to `SameClass` — so `ViewRepr.lit` giving every
+literal an id costs the key column nothing. -/
+theorem rbLitState_lit :
+    viewReprsF rbLitState (.lit (.int 5)) = [Term.lit (.int 5)] ∧
+      ¬ SameClass rbLitState.toDatabase (.lit (.int 5)) (.app "W" [.lit (.int 5)]) :=
+  ⟨rfl, fun h => by
+    have := (sameClassF_iff (d := rbLitState) ((FDatabase.subtermClosedB_iff _).mp rfl)
+      ((FDatabase.eqsReflB_iff _).mp rfl) _ _).mpr h
+    exact absurd this (by decide)⟩
 
 /-! #### The three residues
 
@@ -1653,38 +1674,33 @@ make that induction more than bookkeeping, and each residue below names the ones
   is the `hvar` hypothesis of `viewRepr_self_of_execActions` and is what the induction's
   hypothesis has to carry.
 
-**Two of these statements were false before `Program.EncodeDomain.noBareBuild`**, and the
-refutation is compiled below: `litBuild_not_viewsCover` and `litBuild_not_readsSelf` at
-`litBuildProgram`, one `.action (.expr (.lit 5))`, which satisfied every other clause of the
-domain (`litBuildProgram_domain_but_bare`). -/
+**Two of these statements were once false**, at a program the domain admitted, and the state
+that showed it is below — now with the sign reversed: `ViewRepr`'s literal clause carries no
+membership premise, so the bare-literal build is in the domain and both statements hold there
+(`litBuild_viewsCover`, `litBuild_unionsJoined`). -/
 
-/-! #### The bare-leaf refutation
+/-! #### The bare leaf, admitted
 
-`ENCODING.md`'s discipline: a residue that is *false* must not stand as a `sorry`. Two of the
-three below were, at a program the domain admitted, and this is the state that shows it. -/
+`.action (.expr (.lit 5))` writes nothing at all in the target — `encodeBuild` emits no action
+for a leaf — and for that reason used to refute `Database.ViewsCover`'s since-deleted `lits`
+clause and `Database.UnionsJoined.readsSelf`, which is what
+`Program.EncodeDomain.noBareBuild` was added to exclude. It excludes nothing now: a literal's
+id is itself and the target is asked for nothing, so the clause is gone and this is the
+witness that its absence costs the two statements nothing. -/
 
 /-- One top-level action that builds a bare literal, and its constructor-free program. -/
 def litBuildProgram : Program := [.action (.expr (.lit (.int 5)))]
 
-/-- **Every clause of `Program.EncodeDomain` but `noBareBuild` holds of it**, so the clause is
-not implied by the rest. -/
-theorem litBuildProgram_domain_but_bare :
-    (∀ c ∈ litBuildProgram, ∀ f d, c = Cmd.decl f d → d.merge = none) ∧
-      (∀ c ∈ litBuildProgram, c.NoSet) ∧
-      (∀ fk ∈ litBuildProgram.ctors, Prim.ofName fk.1 = none) ∧
-      (∀ fk ∈ litBuildProgram.ctors, ¬ "@".isPrefixOf fk.1) ∧
-      (∀ v ∈ litBuildProgram.vars, ¬ "@".isPrefixOf v) ∧
-      (∀ R ∈ litBuildProgram.rulesets, ¬ "@".isPrefixOf R) ∧
-      (∀ c ∈ litBuildProgram, c.NoLeafPattern) := by
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_⟩ <;>
-    simp [litBuildProgram, Program.ctors, Cmd.ctors, Action.ctors, Expr.ctors, Program.vars,
-      Cmd.vars, Action.vars, Expr.vars, Program.rulesets, Cmd.rulesets, Cmd.NoSet,
-      Action.NoSet, Cmd.NoLeafPattern]
-
-/-- **And `noBareBuild` is the clause it fails.** -/
-theorem litBuildProgram_not_encodeDomain : ¬ litBuildProgram.EncodeDomain := by
-  intro h
-  exact h.noBareBuild (.action (.expr (.lit (.int 5)))) (by simp [litBuildProgram])
+/-- **And it is in the domain.** The clause that excluded it is gone; every other one holds. -/
+theorem litBuildProgram_encodeDomain : litBuildProgram.EncodeDomain where
+  ctorsOnly := by simp [litBuildProgram]
+  noSet := by simp [litBuildProgram, Cmd.NoSet, Action.NoSet]
+  noPrim := by simp [litBuildProgram, Program.ctors, Cmd.ctors, Action.ctors, Expr.ctors]
+  noAt := by simp [litBuildProgram, Program.ctors, Cmd.ctors, Action.ctors, Expr.ctors]
+  noAtVar := by
+    simp [litBuildProgram, Program.vars, Cmd.vars, Action.vars, Expr.vars]
+  noAtRuleset := by simp [litBuildProgram, Program.rulesets, Cmd.rulesets]
+  noLeafPattern := by simp [litBuildProgram, Cmd.NoLeafPattern]
 
 /-- The state the one action reaches: the literal, and nothing else. -/
 def litBuildSrc : Database := Database.empty.addTerm (.lit (.int 5))
@@ -1706,42 +1722,47 @@ theorem litBuild_terms {tgt : FDatabase} (htgt : execM (encode litBuildProgram) 
   rw [htgt] at h
   exact Option.some.inj h
 
-/-- **The literal has no reading at all in the target.** -/
-theorem litBuild_not_viewRepr {tgt : FDatabase}
-    (htgt : execM (encode litBuildProgram) = some tgt) (e : Term) :
-    ¬ ViewRepr tgt.toDatabase (.lit (.int 5)) e := by
-  intro h
-  match h with
-  | .lit hm =>
-    rw [FDatabase.mem_toDatabase_terms, litBuild_terms htgt] at hm
-    exact absurd hm (by simp)
+/-- The one term the source holds. -/
+theorem litBuildSrc_terms : litBuildSrc.terms = {Term.lit (.int 5)} := by
+  simp [litBuildSrc, Term.subterms_lit]
 
-/-- **`Database.ViewsCover` is false at an `execM` target of an in-domain-but-for-`noBareBuild`
-program.** The source holds the literal and the target holds nothing, so the `lits` clause
-fails — which is why `Program.EncodeDomain.noBareBuild` exists. -/
-theorem litBuild_not_viewsCover {tgt : FDatabase}
-    (htgt : execM (encode litBuildProgram) = some tgt) :
-    ¬ tgt.toDatabase.ViewsCover litBuildSrc := by
-  intro h
-  have hm := h.lits (.int 5) litBuildSrc_mem
-  rw [FDatabase.mem_toDatabase_terms, litBuild_terms htgt] at hm
-  exact absurd hm (by simp)
+/-- It asserts nothing but that term's reflexive equation. -/
+theorem litBuildSrc_diag : litBuildSrc.Diag :=
+  Database.Diag.addTerm (fun p hp => absurd hp (by simp [Database.empty])) _
 
-/-- **And so is `Database.UnionsJoined.readsSelf`.** -/
-theorem litBuild_not_readsSelf {tgt : FDatabase}
-    (htgt : execM (encode litBuildProgram) = some tgt) :
-    ¬ tgt.toDatabase.UnionsJoined litBuildSrc := fun h =>
-  litBuild_not_viewRepr htgt _ (h.readsSelf _ litBuildSrc_mem)
+/-- **`Database.ViewsCover` holds** — vacuously in `keyed`, the only clause, since the source
+holds no application. The literal is covered by the reading itself (`ViewRepr.lit`), which asks
+the target for no e-node because the encoding writes none. -/
+theorem litBuild_viewsCover {tgt : FDatabase} : tgt.toDatabase.ViewsCover litBuildSrc where
+  keyed := by
+    intro f as es hmem
+    rw [litBuildSrc_terms] at hmem
+    exact absurd hmem (by simp)
 
-/-- **The forward half itself is false there**: the source asserts the literal's reflexive
-equation and the target has no reading of it, so `Cong src a a` holds where
-`SameClass tgt a a` does not. This is what `noBareBuild` buys, and it is why the clause is a
-domain restriction rather than a convenience. -/
-theorem litBuild_forward_false {tgt : FDatabase}
+/-- **And so does `Database.UnionsJoined`**: `readsSelf` at the one term is `ViewRepr.lit`, the
+source asserts no equation between distinct terms, and the target holds no `@UF` entry to
+follow. -/
+theorem litBuild_unionsJoined {tgt : FDatabase}
     (htgt : execM (encode litBuildProgram) = some tgt) :
+    tgt.toDatabase.UnionsJoined litBuildSrc where
+  readsSelf := by
+    intro t hmem
+    rw [litBuildSrc_terms, Set.mem_singleton_iff] at hmem
+    exact hmem ▸ .lit
+  edges := fun a b hab hne => absurd (litBuildSrc_diag (a, b) hab) hne
+  eclassFollowed := by
+    intro t p pf _ _ ho
+    obtain ⟨bs, -, hmem⟩ := ho
+    rw [FDatabase.mem_toDatabase_terms, litBuild_terms htgt] at hmem
+    exact absurd hmem (by simp)
+
+/-- **The forward half holds at the very program that refuted it**: the source asserts the
+literal's reflexive equation and the target reads it back, with nothing in the target at
+all. -/
+theorem litBuild_forward {tgt : FDatabase} :
     Cong litBuildSrc (.lit (.int 5)) (.lit (.int 5)) ∧
-      ¬ SameClass tgt.toDatabase (.lit (.int 5)) (.lit (.int 5)) :=
-  ⟨litBuildSrc_mem, fun h => litBuild_not_viewRepr htgt h.choose h.choose_spec.1⟩
+      SameClass tgt.toDatabase (.lit (.int 5)) (.lit (.int 5)) :=
+  ⟨litBuildSrc_mem, ⟨_, .lit, .lit⟩⟩
 
 /-! #### The three residues, by clause -/
 
@@ -1759,22 +1780,6 @@ theorem execM_viewLeader {P : Program} {tgt : FDatabase} (hdom : P.EncodeDomain)
     (htgt : execM (encode P) = some tgt) : tgt.toDatabase.ViewLeader := by
   sorry
 
-/-- **`Database.ViewsCover.lits`, at an `execM` target. Not proved**, and *false* without
-`Program.EncodeDomain.noBareBuild` — `litBuild_not_viewsCover` is the refutation, and this is
-the clause it refutes.
-
-What is missing: the induction over `encode P`'s commands. With the domain clause every source
-term is built by an action whose expression is an application or bound by a `let`, so a literal
-the source holds is a key column of some view row the target wrote
-(`execActions_encodeBuild_app` returns the row's *subterms* for exactly this reason) — but
-which row that is comes from the induction, and a literal reached through a rule firing needs
-the firing's target counterpart, which this file does not have. -/
-theorem execM_viewsCover_lits {P : Program} {src : Database} {tgt : FDatabase}
-    (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
-    (htgt : execM (encode P) = some tgt) :
-    ∀ l : Lit, Term.lit l ∈ src.terms → Term.lit l ∈ tgt.toDatabase.terms := by
-  sorry
-
 /-- **`Database.ViewsCover.keyed`, at an `execM` target. Not proved**, and the one residue that
 needs *both* halves of the missing mechanism.
 
@@ -1790,15 +1795,15 @@ theorem execM_viewsCover_keyed {P : Program} {src : Database} {tgt : FDatabase}
       ∃ e pf, tgt.toDatabase.Out (viewName f) es [e, pf] := by
   sorry
 
-/-- **The residue of obligations `congr` and of `assert`'s reflexive half**, assembled from its
-two clauses. -/
+/-- **The residue of obligations `congr` and of `assert`'s reflexive half**, which is its one
+clause. -/
 theorem execM_viewsCover {P : Program} {src : Database} {tgt : FDatabase}
     (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
     (htgt : execM (encode P) = some tgt) : tgt.toDatabase.ViewsCover src :=
-  ⟨execM_viewsCover_lits hdom hsrc htgt, execM_viewsCover_keyed hdom hsrc htgt⟩
+  ⟨execM_viewsCover_keyed hdom hsrc htgt⟩
 
-/-- **`Database.UnionsJoined.readsSelf`, at an `execM` target. Not proved**, and *false*
-without `Program.EncodeDomain.noBareBuild` — `litBuild_not_readsSelf` is the refutation.
+/-- **`Database.UnionsJoined.readsSelf`, at an `execM` target. Not proved.** A literal is free
+(`ViewRepr.lit`); what is left is the applications.
 
 **This is the clause the action read-back is for, and the read-back is proved.**
 `viewRepr_self_of_execProgramM` is exactly this statement for *one* build's block: the block's
@@ -2011,7 +2016,7 @@ argument list congruent to the key. `Database.WF` says the children are source t
 used for nothing else. -/
 theorem cong_of_viewRepr {src d : Database} (hw : src.WF) (hs : d.ViewsSound src) :
     ∀ (a : Term) {e : Term}, a ∈ src.terms → ViewRepr d a e → Cong src a e
-  | .lit _, _, ha, .lit _ => ha
+  | .lit _, _, ha, .lit => ha
   | .app f as, _, ha, .app hl ho =>
       (hs f _ _ _ ho).cong_of_congList ha
         (congList_of_viewReprList hw hs as
@@ -2056,6 +2061,24 @@ theorem sameClass_cong_of_state {src d : Database} (hw : src.WF) (hs : d.ViewsSo
     {a b : Term} (ha : a ∈ src.terms) (hb : b ∈ src.terms) (h : SameClass d a b) :
     Cong src a b :=
   sameClass_cong_of_justified (hs.justified hw) ha hb h
+
+/-- **A literal is never in one class with an application**, at any target `ViewsSound` holds
+of. This is the literal clause's soundness, and it is a property of the *source*: the join
+would need a view row with a literal in its e-class column
+(`SameClass.out_of_lit_app`), `ViewsSound` turns that row into `Cong src (.app f as) (.lit l)`,
+and `Database.WF.litsIsolated` — which `evalAction`'s refusal of a `union` on a literal
+establishes and `ProgramStep.wf` carries — says a literal is congruent to nothing but itself.
+
+Every writer is covered at once, the rebuild rules included: they preserve `ViewsSound`
+(`EntrySound.eclass`, `EntrySound.column`, `EntrySound.select`), which is all this needs. -/
+theorem not_sameClass_lit_app {src d : Database} (hw : src.WF) (hs : d.ViewsSound src)
+    {l : Lit} {f : FnName} {as : List Term} (ha : Term.app f as ∈ src.terms) :
+    ¬ SameClass d (.lit l) (.app f as) := by
+  intro h
+  obtain ⟨es, pf, hl, ho⟩ := h.out_of_lit_app
+  have hcong : Cong src (.app f as) (.lit l) :=
+    cong_of_viewRepr hw hs (.app f as) ha (.app hl ho)
+  exact absurd (Cong.eq_of_isLit hw.litsIsolated hcong (Or.inr rfl)) (by simp)
 
 /-! #### What each writer owes
 
@@ -2186,6 +2209,14 @@ theorem satTarget_viewsSound : satTarget.ViewsSound satSrc := by
   · have hl : (cs ++ [e, pf]).length = 0 := by rw [h'.2]; rfl
     simp only [List.length_append, List.length_cons] at hl
     omega
+
+/-- **The literal clause's soundness, at a state a program reaches.** Every literal has an id
+here — the state holds none of them, and the clause asks for nothing — and none of those ids is
+`(A)`'s. Non-vacuous in both halves: `ViewRepr satTarget (.lit l) (.lit l)` holds and
+`satSrc_mem` says `(A)` is a source e-node. -/
+theorem satTarget_not_sameClass_lit_app (l : Lit) :
+    ViewRepr satTarget (.lit l) (.lit l) ∧ ¬ SameClass satTarget (.lit l) (.app "A" []) :=
+  ⟨.lit, not_sameClass_lit_app satSrc_wf satTarget_viewsSound satSrc_mem⟩
 
 /-- **`Database.EdgesSound` holds at `satTarget` too**, and vacuously: `satProgram` has no
 `union`, so nothing writes a `@UF` entry. -/
@@ -2353,7 +2384,7 @@ is why the corpus sweep never puts it on a pair. -/
 def witnessAddOneOne : Term := .app "Add" [witnessOne, witnessOne]
 
 /-- The witness is in `encode`'s domain, at compile time: `Program.encodeDomainB` and its
-equivalence live downstream in `DiffTest.lean`, so the six clauses are discharged here
+equivalence live downstream in `DiffTest.lean`, so the clauses are discharged here
 directly. -/
 theorem witnessProgram_encodeDomain : witnessProgram.EncodeDomain where
   ctorsOnly := by
@@ -2374,11 +2405,6 @@ theorem witnessProgram_encodeDomain : witnessProgram.EncodeDomain where
     intro c hc
     simp only [witnessProgram, List.mem_cons] at hc
     rcases hc with rfl | rfl | rfl | rfl | rfl | rfl | h <;> trivial
-  noBareBuild := by
-    intro c hc
-    simp only [witnessProgram, List.mem_cons] at hc
-    rcases hc with rfl | rfl | rfl | rfl | rfl | rfl | h <;>
-      simp_all [Cmd.NoBareBuild, Action.NoBareBuild, Expr.IsApp]
 
 /-- **The hypotheses of `encode_corresponds` are simultaneously satisfiable, and both sides
 of its conclusion are inhabited and refutable at the witness.**
