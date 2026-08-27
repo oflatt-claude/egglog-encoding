@@ -485,18 +485,44 @@
 ;;; The paper's `let-app` -- `(let ?e $x (app ?a ?b))` becoming
 ;;; `(app (let ?e $x ?a) (let ?e $x ?b))` -- and associativity have a right-hand side that is
 ;;; a *tree*, so an intermediate node must exist before the outer one can point at it: one
-;;; `let` per built node, innermost first.  An action is already in pattern slot space, so
-;;; there is no renaming between two built nodes -- the edge from outer to inner is the
-;;; identity on the inner node's slots -- and a built node's slots are the union of its
-;;; edges' images, which is what makes the walk bottom-up.
+;;; `let` per built node, innermost first.
+;;;
+;;; WHICH RENAMINGS AN ACTION USES, since this is the part that looks like it needs a choice
+;;; and does not.  An action never solves a renaming.  It is written in PATTERN slot space,
+;;; and every renaming it needs already exists:
+;;;
+;;;   * a child that is a pattern variable `x` takes the pair `(mx, X)` -- the renaming the
+;;;     LHS already computed for that variable, and its leader.  `mx` is
+;;;     `(compose mpN <the column of the atom that bound x>)`, narrowed by `(ClassSlots X)`
+;;;     as M8 requires.  Nothing is recomputed here.
+;;;   * a child that is another built node takes the IDENTITY on that node's own slots.  Both
+;;;     nodes are already in pattern slot space, so there is no renaming between them.
+;;;   * a built node's slots are the union of its edges' images.  That is what forces the walk
+;;;     to be bottom-up: the inner node's edges must exist before the outer node's edge to it
+;;;     can be written.
+;;;
+;;; So `find-mapping-total` never appears in an action.  It appears only INSIDE an `mx`, and
+;;; only when `x` was bound by an atom whose renaming had to be solved -- atom 2 onward.
+;;; Atom 1's `mp1` is the identity on the pattern's slots, so a variable it bound contributes
+;;; its stored edge essentially unchanged, while a variable atom 2 bound contributes
+;;; `(compose mp2 <col>)` with `mp2` from `find-mapping-total`.  The action does not
+;;; distinguish the two: it writes `mx` either way, and the LHS decided what that is.
+;;;
+;;; The conclusion needs one renaming that is not a child's: the built node is in pattern
+;;; slots and the matched root is in its own, so the edge between them is the root's renaming
+;;; into pattern slots -- `mp1` here, composed with a symmetry of the root to state it
+;;; covariantly.  That is the only renaming in an action that is about the ROOT rather than a
+;;; child, which is why M10 treats concluding as its own step.
 ;;;
 ;;; Covered by: NR1-nested-build, NR2, NR3-assoc.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (rule ((= p (App2 "f11" p1 a q1 b))
        (= mp1 (map-union (map-image p1) (map-image q1)))   ; atom 1, mp1 = identity
-       (= ma (compose mp1 p1))                             ; ?a into pattern slots
-       (= mb (compose mp1 q1))                             ; ?b's
+       (= csa (ClassSlots a))
+       (= csb (ClassSlots b))
+       (= ma (compose (compose mp1 p1) csa))               ; ?a into pattern slots, narrowed
+       (= mb (compose (compose mp1 q1) csb))               ; ?b's
        (RenamesToLeader p symp p))
       ((let inner (App2 "g11" ma a mb b))
        ;; identity on `inner`'s slots, not a renaming
