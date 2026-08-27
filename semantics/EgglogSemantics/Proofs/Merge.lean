@@ -1649,6 +1649,24 @@ structure FDatabase.IndexOk (d : FDatabase) : Prop where
   width : ∀ r ∈ d.rows, ∀ dc, d.sig r.fn = some dc → d.sig.mergeOf r.fn ≠ none →
     r.args.length = dc.arity ∧ r.out.length = dc.outArity
 
+/-- **The converse of `FDatabase.IndexOk.entry`, and the companion `IndexOk` does not have**:
+every entry term a merge function's table records is still *current* in the index, at a
+congruent key and the value columns it was written with.
+
+`IndexOk` says the index is no bigger than the denotation; this says it is no smaller. It is
+what a rule firing needs of its **premise**, because `matchQuery` reads `d.rows` at a
+`.merge` function (`patternHolds`) while `Database.Out` reads `d.terms` — so a rule whose
+head is a `set` has a conclusion `IndexOk.entry` can supply and a premise only this can.
+
+**It is false**, and not marginally: `Encoding/Correspond.lean`'s `cxTgt_not_indexCurrent`
+refutes it at a state built by the interpreter's own writers over the encoding's own
+declarations. A collision deletes the displaced row (`mergeOneOriented`) and `terms` keeps its
+entry term, so the two part company at the first `union` between distinct built terms. That is
+why it is a named property here rather than a fourth field of `IndexOk`: nothing preserves it. -/
+def FDatabase.IndexCurrent (d : FDatabase) : Prop :=
+  ∀ f as vs, d.sig.mergeOf f ≠ none → d.toDatabase.Out f as vs →
+    ∃ r ∈ d.rows, r.fn = f ∧ CongList d.toDatabase as r.args ∧ r.out = vs
+
 /-- The invariant the refinement chain carries: the denotation is well formed, the equation
 list names only terms the term list holds, and the index is faithful.
 
@@ -5745,6 +5763,148 @@ theorem Inv.runSaturateM {R : RulesetName} : ∀ (n : Nat) {d e : FDatabase}, d.
     · obtain ⟨g₁, -, g₃⟩ := runRoundM_fields hx
       exact ih (h.runRoundM hmerges hrules hx) (by rw [g₁]; exact hmerges)
         (fun r hr => by rw [g₁]; exact hrules r (g₃ ▸ hr)) hxe
+
+/-! #### The fixpoint a saturating run returns at
+
+`runSaturateM` returns its **input** and never the round's output, and only from the branch
+that tested `sameData` — so what a successful call delivers is a state at which one more
+round of `R` changes nothing. That fixpoint is the only one available about `execM`'s rule
+firing: `execM_contained` says the enumerator under-fires, so `RunSaturated` is not a
+consequence, and `Encoding/Encode.lean`'s `Rebuilt` — which is `RunSaturated rebuildRuleset`
+— is out of reach at an `execM` target for that reason and refuted there for another.
+
+**The fixpoint is a statement about `terms`, and it cannot be made one about `rows`.** A
+round is `execRunRules`, which unions each firing into the accumulator and so only ever
+adds, followed by `mergeSaturateF`, which adds terms (`mergeRound_confined`) and *deletes*
+rows — `mergeOneOriented` drops the row a collision displaced. So the round's output holds
+the pre-state's terms, the fixpoint pins the two term lists equal, and `execRunRules`' terms
+are sandwiched between them; the same sandwich does not close over `rows`, since the merge
+phase is free to remove what the rule phase added. `Database.Out` reads `terms` and
+`patternHolds` reads `rows`, so this fixpoint is exactly as strong as the *conclusions* of
+`Encoding/Correspond.lean`'s residues and says nothing about their *premises*.
+`Encoding/Correspond.lean`'s `cxTgt_not_indexCurrent` is the compiled statement of that gap. -/
+/-- **A merge phase removes no term.** `mergeRound_confined`'s first clause along the fuel. -/
+theorem mergeSaturateF_terms {n : Nat} : ∀ {d e : FDatabase},
+    d.mergeSaturateF n = some e → ∀ t ∈ d.terms, t ∈ e.terms := by
+  induction n with
+  | zero =>
+    intro d e hs
+    rw [FDatabase.mergeSaturateF] at hs
+    split at hs
+    · rw [Option.some.injEq] at hs; exact fun t ht => hs ▸ ht
+    · exact absurd hs (by simp)
+  | succ n ih =>
+    intro d e hs
+    rw [FDatabase.mergeSaturateF] at hs
+    split at hs
+    · rw [Option.some.injEq] at hs; exact fun t ht => hs ▸ ht
+    · exact fun t ht => ih hs t (mergeRound_confined.1 t ht)
+
+/-- **What a successful `runSaturateM` returns is a round fixpoint.** Both branches that
+produce a result produce the state they tested, so the test is a postcondition. -/
+theorem runSaturateM_settled {R : RulesetName} : ∀ (n : Nat) {d e : FDatabase},
+    d.runSaturateM R n = some e → ∃ e', e.runRoundM R = some e' ∧ e.sameData e' = true := by
+  intro n
+  induction n with
+  | zero =>
+    intro d e hs
+    rw [FDatabase.runSaturateM] at hs
+    obtain ⟨x, hx, hxe⟩ := Option.bind_eq_some_iff.mp hs
+    by_cases hsd : d.sameData x = true
+    · rw [if_pos hsd, Option.some.injEq] at hxe
+      obtain rfl : d = e := hxe
+      exact ⟨x, hx, hsd⟩
+    · rw [if_neg hsd] at hxe; exact absurd hxe (by simp)
+  | succ n ih =>
+    intro d e hs
+    rw [FDatabase.runSaturateM] at hs
+    obtain ⟨x, hx, hxe⟩ := Option.bind_eq_some_iff.mp hs
+    by_cases hsd : d.sameData x = true
+    · rw [if_pos hsd, Option.some.injEq] at hxe
+      obtain rfl : d = e := hxe
+      exact ⟨x, hx, hsd⟩
+    · rw [if_neg hsd] at hxe; exact ih hxe
+
+/-- **The invariant a saturating run leaves**: every term one more round of `R` would derive
+is already held.
+
+Stated over `terms` because that is the field the sandwich closes over, and consumed through
+`Database.Out`, which reads no other. It is *weaker* than `RunSaturated R`, which quantifies
+over every specification-valid substitution rather than over the ones `matchQuery`
+enumerates. -/
+def RoundClosed (R : RulesetName) (d : FDatabase) : Prop :=
+  ∀ t ∈ (execRunRules R d).terms, t ∈ d.terms
+
+/-- **`Cmd.saturate R` delivers it**, with no hypothesis at all. -/
+theorem runSaturateM_roundClosed {R : RulesetName} {n : Nat} {d e : FDatabase}
+    (h : d.runSaturateM R n = some e) : e.RoundClosed R := by
+  obtain ⟨e', hround, hsame⟩ := runSaturateM_settled n h
+  have hterms : e'.terms = e.terms := by
+    simp only [FDatabase.sameData, Bool.and_eq_true, beq_iff_eq] at hsame
+    exact hsame.1.1
+  intro t ht
+  have hround' : (execRunRules R e).mergeSaturateF mergeFuel = some e' := hround
+  exact hterms ▸ mergeSaturateF_terms hround' t ht
+
+/-- **What a `RoundClosed` state already holds**: every term one firing of one rule of `R`
+would build, at any substitution the enumerator finds.
+
+This is the form the encoding's rebuild is consumed in. A rebuild rule's head is a `set`,
+`FDatabase.addRow` records its entry term, and `Database.Out` reads exactly that — so "the
+rebuild rule has fired here" and "its entry term is present" are the same statement, and
+this is the second one. What it does **not** give is the premise: `hσ` is a fact about
+`d.rows`, which the fixpoint says nothing about. -/
+theorem RoundClosed.fired {R : RulesetName} {d : FDatabase} (h : d.RoundClosed R)
+    {r : Rule} (hr : r ∈ d.rules) (hR : r.ruleset = R) {σ : Env}
+    (hσ : σ ∈ matchQuery d r.query) {d' : FDatabase} (hf : Fired d r σ d')
+    {t : Term} (ht : t ∈ d'.terms) : t ∈ d.terms :=
+  h t (mem_terms_execRunRules.mpr (Or.inr ⟨r, hr, hR, σ, hσ, d', hf, ht⟩))
+
+/-- **No pattern holds at a state with nothing in it.** Every clause of `patternHolds` ends in
+a search of `d.terms` or — at a merge function's entry atom — of `d.rows`, so both being empty
+settles all three. -/
+theorem patternHolds_eq_false_of_empty {d : FDatabase} (ht : d.terms = [])
+    (hr : d.rows = []) (p : Pattern) (σ : Env) : patternHolds d p σ = false := by
+  cases p with
+  | values vs f as =>
+    rw [patternHolds]
+    split
+    · split
+      · rw [hr]; simp
+      · rw [ht]; simp
+    · rfl
+  | expr e =>
+    rw [patternHolds]
+    split
+    · rfl
+    · rw [ht]; simp
+  | eq e₁ e₂ =>
+    rw [patternHolds]
+    split
+    · rw [ht]; simp
+    · rfl
+
+@[inherit_doc patternHolds_eq_false_of_empty]
+theorem matchQuery_eq_nil_of_empty {d : FDatabase} (ht : d.terms = []) (hr : d.rows = [])
+    {q : Query} (hq : q ≠ []) : matchQuery d q = [] := by
+  rw [matchQuery]
+  refine List.filter_eq_nil_iff.mpr fun σ _ => ?_
+  cases q with
+  | nil => exact absurd rfl hq
+  | cons p ps => simp [patternHolds_eq_false_of_empty ht hr]
+
+/-- **A state with nothing in it is round-closed**, for any ruleset whose rules all have a
+non-empty query. The base case of an induction over an encoded program: the prelude declares
+and registers, and writes nothing, so the state its commands leave has empty `terms` and
+empty `rows`. -/
+theorem roundClosed_of_empty {R : RulesetName} {d : FDatabase} (ht : d.terms = [])
+    (hr : d.rows = []) (hq : ∀ r ∈ d.rules, r.ruleset = R → r.query ≠ []) :
+    d.RoundClosed R := by
+  intro t htm
+  rcases mem_terms_execRunRules.mp htm with h | ⟨r, hrm, hrR, σ, hσ, -, -, -⟩
+  · exact h
+  · rw [matchQuery_eq_nil_of_empty ht hr (hq r hrm hrR)] at hσ
+    exact absurd hσ (by simp)
 
 /-- The signature after a command is the one `Cmd.sigBind` predicts: only `.decl` moves
 it, and neither an action nor a merge phase does. -/

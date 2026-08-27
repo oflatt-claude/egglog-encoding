@@ -100,9 +100,26 @@ both are decided at the witness at the end of this file.
   (`rbProgram_programStep`) with the `terms` clause asked at positive arity and the environment
   non-empty, `rbState2_readsSelfInv_hvar` is the `hvar` composition read off it, and
   `builtRead_fire_satisfiable` is the residue's five hypotheses holding together.
+* **Proved, and the rebuild fixpoint the five residues were waiting for**:
+  `FDatabase.RoundClosed` (`Proofs/Merge.lean`). `runSaturateM` returns only from the branch
+  that tested `sameData`, so a successful `Cmd.saturate R` leaves a state where **one more
+  round of `R` derives no new term**; `roundClosed_of_execProgramM` locates one at the end of
+  every block `encodeCmd` emits for a writing command. It is the only fixpoint available —
+  `execM_contained` says the enumerator under-fires, so `RunSaturated`, and `Rebuilt` with it,
+  is not a consequence — and it is a `terms` fact, because a round adds terms and *deletes*
+  rows, so the sandwich that closes over the first does not close over the second.
+* **Refuted, and it is why the fixpoint closes none of the five**: `FDatabase.IndexCurrent`,
+  the converse of `FDatabase.IndexOk.entry` — every entry term still current in the index.
+  `cxTgt_not_indexCurrent` refutes it at a state built by the interpreter's own writers at the
+  encoding's own declarations, where a source `union` collides two e-classes at one view key,
+  `mergeOneOriented` deletes the displaced row, and `Database.Out` still reads its entry term.
+  A rebuild rule's *conclusion* is a `terms` fact the fixpoint supplies; its *premise* is a
+  `rows` fact only this would, so `IndexOk` needs a companion rather than a fourth field, and
+  the companion is false. What survives is the same claim up to the union-find
+  (`cxTgt_out_uf`), which does not compose with the clauses as stated.
 * **`sorry`**, five, one *clause* each and none of them an obligation any more.
-  `execM_viewsCover_keyed` needs the command induction *and* the rebuild fixpoint;
-  `execM_viewLeader` and `execM_eclassFollowed` need the rebuild fixpoint;
+  `execM_viewsCover_keyed` needs the command induction *and* the index argument;
+  `execM_viewLeader` and `execM_eclassFollowed` need the index argument;
   `execM_viewsSound` is the completeness half; and `builtRead_fire` is the command induction's
   one open case — a source command that fires rules, which needs the premise row to be
   **current in the index**, not merely an entry term. `execM_viewsCover`, `execM_unionsJoined`
@@ -1035,22 +1052,6 @@ block the run passed, which is what the residues below are still missing. -/
 /-! #### Terms persist -/
 
 namespace FDatabase
-
-theorem mergeSaturateF_terms {n : Nat} : ∀ {d e : FDatabase},
-    d.mergeSaturateF n = some e → ∀ t ∈ d.terms, t ∈ e.terms := by
-  induction n with
-  | zero =>
-    intro d e hs
-    rw [FDatabase.mergeSaturateF] at hs
-    split at hs
-    · rw [Option.some.injEq] at hs; exact hs ▸ fun _ h => h
-    · exact absurd hs (by simp)
-  | succ n ih =>
-    intro d e hs
-    rw [FDatabase.mergeSaturateF] at hs
-    split at hs
-    · rw [Option.some.injEq] at hs; exact hs ▸ fun _ h => h
-    · exact fun t ht => ih hs t (mergeRound_confined.1 t ht)
 
 theorem execRunRules_terms {R : RulesetName} {d : FDatabase} :
     ∀ t ∈ d.terms, t ∈ (execRunRules R d).terms :=
@@ -2350,9 +2351,16 @@ function (`patternHolds`), and every `@fView` is one, so a firing needs the prem
 **current in the index at the state the round starts from**, while the invariant carries
 entry-term membership at the state the run *finishes* at. Those are different claims and the
 difference is not bookkeeping: `mergeOneOriented` deletes the row a collision displaces and the
-rebuild re-`set`s it at the leader, so between a build and a run the row moves. Closing this
-needs an invariant about the *index*, which is the same missing mechanism `execM_viewLeader` and
-`execM_eclassFollowed` need, seen from the other side.
+rebuild re-`set`s it at the leader, so between a build and a run the row moves.
+
+**The invariant that would supply it is named and refuted.** `FDatabase.IndexCurrent`
+(`Proofs/Merge.lean`) is the converse of `FDatabase.IndexOk.entry` — every entry term still
+current in the index — and `cxTgt_not_indexCurrent` is a compiled state, built by the
+interpreter's own writers over a source `union`, where it fails. So what is missing here is not
+a property of the final index but a run-wide one: the rows a block writes are current at the
+`Cmd.saturate rebuildRuleset` that immediately follows it, and only `terms` carries the result
+past a later merge. `FDatabase.RoundClosed` is the fixpoint half of it, proved
+(`roundClosed_of_execProgramM`); this is the half that is not.
 
 Stated over both firing commands at once, because `encodeCmd` gives them the same block:
 `[c, Cmd.saturate rebuildRuleset]`. -/
@@ -2882,6 +2890,182 @@ theorem builtRead_fire_satisfiable :
       (∀ t ∈ rbState2.terms, t ∈ rbState2.terms) ∧ ReadsSelfInv rbSrc rbState2 rbState2 :=
   ⟨rbSrc_cmdStep_run rbRuleset, rbState2_execProgramM_run, fun _ h => h, rbState2_readsSelfInv⟩
 
+/-! #### The rebuild fixpoint, and the row it does not reach
+
+All five residues want one mechanism, and it is a postcondition of `FDatabase.runSaturateM
+rebuildRuleset` — the interpreter's own rebuild fixpoint, which is the only one available:
+`execM_contained` says the enumerator under-fires, so `RunSaturated`, and with it `Rebuilt`,
+is not a consequence of a successful run. `Proofs/Merge.lean` states and proves that
+postcondition. `FDatabase.runSaturateM_roundClosed`: the state a `Cmd.saturate R` returns is
+`FDatabase.RoundClosed R` — **every term one more round of `R` would derive is already
+held** — and `roundClosed_of_execProgramM` below locates one at the end of every block
+`encodeCmd` emits for a writing command, since every such block ends with `Cmd.saturate
+rebuildRuleset`.
+
+**That is the right shape for the residues' conclusions.** A rebuild rule's head is a `set`,
+`FDatabase.addRow` records its entry term, and `Database.Out` reads `terms` and nothing else —
+so "the e-class rule has fired here" and "its entry term is present" are the same statement,
+and `FDatabase.RoundClosed.fired` is the second one.
+
+**It is not the right shape for their premises, and `rows` against `terms` is exactly why.**
+A round is `execRunRules`, which unions each firing into the accumulator and so only ever
+adds, followed by `mergeSaturateF`, which adds terms (`mergeRound_confined`) and *deletes*
+rows — `mergeOneOriented` drops the row a collision displaced. The fixpoint pins the round's
+terms equal to the pre-state's, which sandwiches `execRunRules`' terms between the two; over
+`rows` the sandwich does not close, because the merge phase is free to remove what the rule
+phase added. So `terms` is the only field the fixpoint speaks about, while `matchQuery` — what
+"the rule fired" needs — reads `d.rows` at a `.merge` function (`patternHolds`), which every
+`@fView` is. The two fields genuinely differ here, and this section is the compiled statement
+of the difference. -/
+
+/-- **Where a `RoundClosed` state is.** `runSaturateM` returns only from the branch that tested
+`sameData`, so the state a trailing `Cmd.saturate R` produces is a round fixpoint — and
+`encodeCmd` ends every block that writes with one. -/
+theorem roundClosed_of_execProgramM {R : RulesetName} {d D : FDatabase} {p : Program}
+    (h : d.execProgramM (p ++ [Cmd.saturate R]) = some D) : D.RoundClosed R := by
+  obtain ⟨td, -, hlast⟩ := FDatabase.execProgramM_append h
+  rw [FDatabase.execProgramM] at hlast
+  obtain ⟨e, he, he'⟩ := Option.bind_eq_some_iff.mp hlast
+  obtain rfl : e = D := by
+    rw [FDatabase.execProgramM, Option.some.injEq] at he'; exact he'
+  exact FDatabase.runSaturateM_roundClosed he
+
+/-- **And that its hypothesis is the shape `encodeCmd` emits.** A `Cmd.run`'s block is the
+source round followed by the rebuild; the `.saturate` and top-level-action blocks are the same
+shape (`encodeCmd`). -/
+theorem encodeCmd_run_tail (R : RulesetName) (n i : Nat) :
+    (encodeCmd (.run R) n i).1 = [Cmd.run R] ++ [Cmd.saturate rebuildRuleset] := rfl
+
+/-- **The fixpoint at a state a program reaches.** Degenerately, as `builtRead_fire_satisfiable`
+is: `rbState2` holds no rule, so the round it is a fixpoint of fires nothing. The
+non-degenerate reading is measured rather than compiled — every one of `difftest correspond`'s
+70 in-domain cases ends at a `Cmd.saturate rebuildRuleset`. -/
+theorem rbState2_roundClosed : rbState2.RoundClosed rebuildRuleset :=
+  roundClosed_of_execProgramM (p := [Cmd.run rbRuleset]) rbState2_execProgramM_run
+
+/-! ##### And the half it does not give, refuted
+
+`FDatabase.IndexCurrent` (`Proofs/Merge.lean`) is the converse of `FDatabase.IndexOk.entry`:
+every merge function's entry term still current in the index, at a congruent key and the value
+columns it was written with. That is what a rule firing needs of its premise, and
+`cxTgt_not_indexCurrent` below refutes it — so `IndexOk` is *not* the right home for the
+currency claim, and the claim is not a fourth field of it, because nothing preserves it.
+
+The state: one nullary constructor `B`, its view entry `@BView() ↦ ((B), @Fiat)` as
+`encodeBuild` writes it, the `@UF` edge `@UF((B)) ↦ ((A), @Fiat)` as a source `union` between
+`(A)` and `(B)` becomes it, and the entry `@BView() ↦ ((A), @Trans @Fiat @Fiat)` the e-class
+rebuild rule re-keys onto the leader. Written with `FDatabase.addRow`, which is what
+`execAction` runs at a `set`, and then one `FDatabase.mergeRound`, which is what a merge phase
+runs — the same discipline as `Proofs/Counterexamples.lean`'s `cexD`. Running the whole
+`encode` of the source program through the *kernel* instead is not available: `matchQuery`'s
+own definition computes one congruence closure per candidate substitution, and a rebuild
+saturation over it exhausts the elaborator's heartbeat budget. `difftest correspond`'s
+`unionCase` is the same program measured rather than compiled. -/
+
+/-- `satSig` with a nullary `B`'s table triple added. -/
+def cxSig : Signature :=
+  Function.update (Function.update (Function.update satSig
+    "B" (some (skolemDecl 0))) (viewName "B") (some (viewDecl 0)))
+    (termName "B") (some (termDecl 0))
+
+/-- The two e-classes the `union` puts at one view key. -/
+def cxA : Term := .app "A" []
+
+@[inherit_doc cxA] def cxB : Term := .app "B" []
+
+/-- `@Fiat`, the justification a build writes. -/
+def cxFiat : Term := .app fiatName []
+
+/-- `@Trans @Fiat @Fiat`, the justification the e-class rebuild rule composes. -/
+def cxTransFiat : Term := .app transName [cxFiat, cxFiat]
+
+/-- The state the prelude leaves. -/
+def cxBase : FDatabase := { FDatabase.empty with sig := cxSig }
+
+/-- The three `set`s: `(B)`'s own view entry, the `union`'s `@UF` edge, and the entry the
+e-class rebuild rule re-keys onto `(A)`. -/
+def cxPre : FDatabase :=
+  ((cxBase.addRow (viewName "B") [] [cxB, cxFiat]).addRow ufName [cxB] [cxA, cxFiat]).addRow
+    (viewName "B") [] [cxA, cxTransFiat]
+
+/-- And the merge phase that resolves the collision the third `set` created. -/
+def cxTgt : FDatabase := cxPre.mergeRound
+
+set_option maxRecDepth 100000 in
+/-- **The entry term is still there.** `terms` is monotone: `mergeOneOriented` deletes rows and
+never a term (`mergeOneOriented_confined`). -/
+theorem cxTgt_mem_entry : Term.app (viewName "B") ([] ++ [cxB, cxFiat]) ∈ cxTgt.terms := by decide
+
+set_option maxRecDepth 100000 in
+/-- The `@UF` edge the `union` wrote, likewise. -/
+theorem cxTgt_mem_uf : Term.app ufName ([cxB] ++ [cxA, cxFiat]) ∈ cxTgt.terms := by decide
+
+set_option maxRecDepth 100000 in
+theorem cxTgt_mem_B : cxB ∈ cxTgt.terms := by decide
+
+set_option maxRecDepth 100000 in
+/-- **And the index no longer holds it.** One `@BView` row survives the pass and its e-class
+column is `(A)`: the two rows collided at the one (empty) key, `mergeOneOriented` kept the
+smaller e-class — `mergeResult` is `ordering-min` — and dropped the other. -/
+theorem cxTgt_rows_view : ∀ r ∈ cxTgt.rows, r.fn = viewName "B" →
+    r = ⟨viewName "B", [], [cxA, cxTransFiat]⟩ := by decide
+
+set_option maxRecDepth 100000 in
+theorem cxTgt_mergeOf : cxTgt.sig.mergeOf (viewName "B") ≠ none := by decide
+
+@[inherit_doc cxTgt_mem_entry]
+theorem cxTgt_out_view : cxTgt.toDatabase.Out (viewName "B") [] [cxB, cxFiat] :=
+  ⟨[], CongList.refl (by simp), by rw [FDatabase.toDatabase_terms]; exact cxTgt_mem_entry⟩
+
+@[inherit_doc cxTgt_mem_uf]
+theorem cxTgt_out_uf : cxTgt.toDatabase.Out ufName [cxB] [cxA, cxFiat] :=
+  ⟨[cxB], CongList.refl (by
+      intro a ha
+      obtain rfl : a = cxB := by simpa using ha
+      rw [FDatabase.toDatabase_terms]; exact cxTgt_mem_B),
+    by rw [FDatabase.toDatabase_terms]; exact cxTgt_mem_uf⟩
+
+set_option maxRecDepth 100000 in
+/-- **`FDatabase.IndexCurrent` is false**, at a state built by the interpreter's own writers,
+at the encoding's own declarations, over the collision a source `union` creates. This is why
+`FDatabase.RoundClosed` closes none of the five residues by itself: it delivers a rule's
+conclusion and the premise has to come from the index, which no longer records what
+`Database.Out` still reads. -/
+theorem cxTgt_not_indexCurrent : ¬ cxTgt.IndexCurrent := by
+  intro h
+  obtain ⟨r, hr, hfn, -, hout⟩ :=
+    h (viewName "B") [] [cxB, cxFiat] cxTgt_mergeOf cxTgt_out_view
+  rw [cxTgt_rows_view r hr hfn] at hout
+  exact absurd hout (by decide)
+
+/-! ##### What restores it, and what that costs
+
+**The row the merge kept is not arbitrary.** It carries the `@UF` *parent* of the e-class
+column the displaced row carried — `mergeBody` writes `@UF (ordering-max) ↦ (ordering-min, …)`
+and `mergeResult` keeps `ordering-min`, so the survivor sits at the smaller class and the
+larger one gets an edge to it. `cxTgt_rows_view` is the survivor here and `cxTgt_out_uf` is
+the edge — written by the `union` and written again by `mergeBody`. So the repaired invariant
+is *current up to the union-find*: for every merge-function entry term there is a row at a
+congruent key whose e-class column is `@UF`-reachable from the entry's.
+
+**That weakening does not close the residues as they stand.** `execM_eclassFollowed` is handed
+an edge out of `t` and would be handed a row at some `u` further down the chain; the two do not
+compose, and the entry its conclusion needs is one an *earlier* round wrote and only `terms`
+remembers. The mechanism is therefore run-wide — each writing block's rows are current at the
+`Cmd.saturate rebuildRuleset` that immediately follows it, and `terms` carries the result
+forward past every later merge — and not a property of the final index. That is a stronger
+induction than `ReadsSelfInv`, carrying a clause per *entry term* rather than per source term,
+and it is what `builtRead_fire` needs at the round's pre-state as well.
+
+**Restoring `IndexCurrent` outright is not a side condition worth having.** What it needs is
+that the source assert no equation between distinct terms (`Database.Diag`), decidable on the
+source text as "no `union` action and no `union` in any rule head" — a `union` between distinct
+built terms is exactly what puts two e-classes at one view key. The in-domain census is 70 of
+166 and the `union` cases are the ones the correspondence exists for: `Encoding/Match.lean`'s
+`uProgram` and `witnessProgram` would both leave the domain, and with them the only witnesses
+`execM_edges` and `execM_unionsJoined` are non-vacuous at. The clause is therefore not added,
+and the census stays 70. -/
+
 /-! #### The three residues, by clause -/
 
 /-- **The residue of obligation `trans`. Not proved.**
@@ -2893,7 +3077,15 @@ follows an edge, so an id's `lead` is read by every term that reads the id;
 `pathCompressRule` is what makes the endpoint unique. All three are *specification* rules
 fired to saturation, and the hypothesis here is an `execM` target — so what it has to be
 proved from is `FDatabase.runSaturateM`'s own fixpoint, and that is strictly weaker than
-`RunSaturated` (`execM_contained`: the enumerator under-fires). -/
+`RunSaturated` (`execM_contained`: the enumerator under-fires).
+
+**That fixpoint is now proved and is not enough.** `FDatabase.RoundClosed` gives every term one
+more rebuild round would derive, which is the *conclusion* of each of those three rules; their
+*premise* is a row, and `cxTgt_not_indexCurrent` is the compiled statement that the index need
+not hold every entry term `Database.Out` reads. What is left is the
+run-wide index argument described at "What restores it, and what that costs", plus — for `lead`
+being a *function* rather than a relation — `pathCompressRule`'s own fixpoint, which is a
+second, independent use of it. -/
 theorem execM_viewLeader {P : Program} {tgt : FDatabase} (hdom : P.EncodeDomain)
     (htgt : execM (encode P) = some tgt) : tgt.toDatabase.ViewLeader := by
   sorry
@@ -2905,7 +3097,13 @@ The read-back gives the entry at the key the build itself wrote — the tuple wh
 reads to itself (`holdsBuild_of_execProgramM`). `keyed` asks for an entry at *every* tuple of
 ids the children are given, which is the product `rebuildRules`' column rules cover, so what is
 missing beyond the induction is `FDatabase.runSaturateM`'s own fixpoint — the same thing
-`execM_viewLeader` and `execM_eclassFollowed` need. -/
+`execM_viewLeader` and `execM_eclassFollowed` need.
+
+That fixpoint is `FDatabase.RoundClosed`, proved, and it supplies the column rules'
+conclusions; their premises are the view row and the `@UF` row, and those are what
+`cxTgt_not_indexCurrent` says the index need not still hold. This residue needs the
+command induction *and* that run-wide index argument, which is why it is the last of the five
+to be reachable. -/
 theorem execM_viewsCover_keyed {P : Program} {src : Database} {tgt : FDatabase}
     (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
     (htgt : execM (encode P) = some tgt) :
@@ -2956,7 +3154,17 @@ clause of the three that is a *fixpoint* claim rather than a read-back of an emi
 and what has to be shown is that `FDatabase.runSaturateM` ran it — which is the same thing
 `execM_viewLeader` and `execM_viewsCover_keyed` need and is strictly weaker than `RunSaturated`
 (`execM_contained`: the enumerator under-fires). The action read-back says nothing about it:
-no `set` the encoder emitted writes this row. -/
+no `set` the encoder emitted writes this row.
+
+**Exactly one step is missing, and it is named.** `FDatabase.RoundClosed` (proved, and located
+at every encoded block's end by `roundClosed_of_execProgramM`) turns "the e-class rule fired at
+this row pair" into the entry term this clause concludes with — `FDatabase.RoundClosed.fired`.
+Its hypothesis is a *row* pair, and the two hypotheses here are `Database.Out` facts, which read
+`terms`. `FDatabase.IndexCurrent` is the bridge and `cxTgt_not_indexCurrent` refutes it: the
+row carrying `t` is deleted the moment a `union` collides it with a smaller class, while the
+entry term stays. Weakened to "current up to the union-find" the bridge survives — the surviving
+row sits at the `@UF` leader (`cxTgt_out_uf`) — but the weakening does not compose with this
+clause's edge, which starts at `t` rather than at the leader. -/
 theorem execM_eclassFollowed {P : Program} {src : Database} {tgt : FDatabase}
     (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
     (htgt : execM (encode P) = some tgt) :
@@ -3385,7 +3593,9 @@ head has. What is left is two things, and the rule head is no longer one of them
   what makes it a *syntactic* read-back: the naming expression a build returns is the
   expression it was given, so the entry is keyed on the source argument expressions and valued
   at the source expression, both evaluated in the target.
-* `execM`'s rule firing is `FDatabase.runSaturateM`'s fixpoint, which is strictly weaker than
+* `execM`'s rule firing is `FDatabase.runSaturateM`'s fixpoint — now proved, as
+  `FDatabase.RoundClosed` (`Proofs/Merge.lean`), and located at every encoded block's end by
+  `roundClosed_of_execProgramM`. It is strictly weaker than
   `RunSaturated` (`execM_contained`: the enumerator under-fires), so it is that fixpoint the
   two properties have to be proved from — and it is the *source* side of the same alignment
   that `entrySound_headBuild`'s `hfired` names: the source rule fired, at the substitution the
