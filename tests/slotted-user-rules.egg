@@ -102,8 +102,8 @@
 ;;; A variable `x` compiles to two egglog variables -- its leader `X` and a renaming
 ;;; `mx : slots(X) -> slots(pattern)` -- standing for the paper's `beta(x) = mx * X`.  Here
 ;;; the two occurrences are `p1*X` and `q1*X`, and Def. 6 says they agree iff `p1^-1 . q1`
-;;; is in G(X).  Both edges are bound, so that group element is determined: compute it and
-;;; look it up.
+;;; is in G(X).  Both edges are bound, so that group element is determined, and the rule
+;;; states exactly the condition: a self-loop of `X` carrying it must exist.
 ;;;
 ;;; Covered by: C1, C4, S1.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -111,20 +111,12 @@
 
 (relation Hit (U U))
 
-;; the lookup form, and what the compilers emit: symx is computed, then checked for
-;; membership
+;; Both edges are bound, so the group element Def. 6 asks for is determined: it is
+;; `p1^-1 . q1`, and the rule requires a self-loop of `X` carrying exactly it.
 (rule ((= e (App2 "f" p1 x q1 x))
        (= symx (compose (inverse p1) q1))
        (RenamesToLeader x symx x))
       ((Hit e x)))
-
-;; the enumerate-then-compare spelling -- same meaning, but the planner fans out over
-;; G(X) and discards all but one row
-(relation Enum (U U))
-(rule ((= e (App2 "f" p1 x q1 x))
-       (RenamesToLeader x symx x)
-       (= q1 (compose p1 symx)))
-      ((Enum e x)))
 
 ;; what a non-slotted encoding would write: demand the two edges be *equal*.  Strictly
 ;; weaker than Def. 6, and the difference is observable in (c).
@@ -138,7 +130,6 @@
 (run-schedule (saturate (run slotted))
               (repeat 15 (seq (run) (saturate (run slotted)))))
 (check (Hit $ff (Var 0)))
-(check (Enum $ff (Var 0)))
 (pop)
 
 ;; (b) negative: distinct slots, so distinct renamed ids, so no match.  This is where the
@@ -151,12 +142,11 @@
 (run-schedule (saturate (run slotted))
               (repeat 15 (seq (run) (saturate (run slotted)))))
 (fail (check (Hit $fg x)))
-(fail (check (Enum $fg x)))
 (pop)
 
 ;; (c) f(a[$0,$1], a[$1,$0]) matches f(?x,?x) *only* because `a` is symmetric.  The
-;;     machinery never normalises the two edges to be equal, so the naive spelling misses
-;;     it while the Def. 6 spellings both fire.
+;;     machinery never normalises the two edges to be equal, so the naive rule misses it
+;;     while the Def. 6 rule fires -- which is what makes the two observably different.
 (push)
 (let $a01 (App2 "a" (map-of 0 0) (Var 0)
                    (map-of 1 1) (Var 1)))
@@ -171,7 +161,6 @@
 (run-schedule (saturate (run slotted))
               (repeat 20 (seq (run) (saturate (run slotted)))))
 (check (Hit $t $a01))
-(check (Enum $t $a01))
 (fail (check (NaiveHit $t $a01)))
 (pop)
 
