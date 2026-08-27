@@ -11,10 +11,13 @@ together with the decision procedure `sameClassF`, the proof that the two agree
 are jointly satisfiable at a state where both sides of the `iff` are non-trivial
 (`encode_corresponds_witness`). `difftest correspond 64` sweeps exactly that relation over
 the corpus and reports 70 of 70 agreeing, 0 LOST, 0 INVENTED, 0 `link-diff`. The theorem
-itself carries `sorry`, in six named clauses of properties of the state the run reached —
-three of them needing the induction over `encode P`'s commands on top of the **action
-read-back**, which is proved (`holdsBuild_of_execProgramM`,
-`viewRepr_self_of_execProgramM`), and two needing the interpreter's rebuild fixpoint. Two of
+itself carries `sorry`, in five named clauses of properties of the state the run reached. The
+**action read-back** is proved (`holdsBuild_of_execProgramM`,
+`viewRepr_self_of_execProgramM`) and so is the **induction over `encode P`'s commands** built
+on it (`ReadsSelfInv`, `readsSelfInv_execM`), which closed two of the six — `execM_readsSelf`
+and `execM_edges`. Of the five left, one is that induction's own open case
+(`builtRead_fire`: a source command that fires rules needs the premise row to be current in
+the *index*, not merely an entry term) and three need the interpreter's rebuild fixpoint. Two of
 those clauses were once *false* at `.action (.expr (.lit 5))`, and the defect was
 `ViewRepr`'s literal clause asking the target to hold the literal: egglog mints no e-node for
 one. Without the premise the clause `Program.EncodeDomain.noBareBuild` added is gone, that
