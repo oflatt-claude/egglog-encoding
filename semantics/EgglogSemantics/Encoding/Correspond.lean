@@ -117,12 +117,37 @@ both are decided at the witness at the end of this file.
   `rows` fact only this would, so `IndexOk` needs a companion rather than a fourth field, and
   the companion is false. What survives is the same claim up to the union-find
   (`cxTgt_out_uf`), which does not compose with the clauses as stated.
+* **Refuted, and it is what the fixpoint was being sought for**: `readsSelf` and `keyed`.
+  `ncTgt_not_readsSelf` and `ncTgt_not_viewsCover` are a compiled source state a program
+  reaches, paired with the state the encoded program runs to, at which
+  `Database.UnionsJoined.readsSelf` and `Database.ViewsCover.keyed` both **fail**. A source rule
+  fires once per *member* of a premise's congruence class (`ValidEnv` binds any held term,
+  `Matches` reads up to congruence) while the encoded rule reads `d.rows`, and the rows sit at
+  the union-find leader — so a source term a firing built over a non-leader member has no view
+  entry carrying it in an e-class column. `encode_readsSelf_false` and
+  `encode_viewsCover_false` are the same two with the encoded run as a hypothesis, in
+  `encode_corresponds_witness`'s discipline. What survives is `Database.UnionsRead`
+  (`ncTgt_unionsRead`) and the correspondence at the pair the clauses fail on
+  (`ncSrc_cong_FA_FB`, `ncTgt_sameClass_FA_FB`) — which is why `difftest correspond` still
+  agrees on all seventy in-domain cases: the sweep measures the conclusion, and it is the
+  *factorisation* that is false. So `builtRead_fire`, `readsSelfInv_execM`, `execM_readsSelf`,
+  `execM_unionsJoined`, `execM_viewsCover` and `execM_viewsCover_keyed` are statements that
+  cannot be proved, and the repair is to weaken the two clauses to what their own consumers
+  spend — `readsSelf` at the endpoints of a source *equation*
+  (`unionsRead_of_unionsJoined`), `keyed` at a *shared* id tuple
+  (`sameClass_congr_of_keyed`, `viewRepr_total`) — which is a change to what the forward half is
+  proved from and is therefore reported rather than made.
+* **Measured, and now exact**: the kernel cannot run an encoded program because
+  `Impl/Closure.lean`'s `closure` is well-founded-recursive, so `FDatabase.closureF` is
+  *irreducible* and `patternHolds` gets stuck rather than slow. `unseal Egglog.closure` makes it
+  reduce and one `FDatabase.mergeRound` on a sixteen-term state then runs past ten minutes,
+  against 0.2 s compiled. Witnesses on the target side are therefore built from
+  `FDatabase.addRow`/`addTerm` (the `cexD` idiom) or take the run as a hypothesis; witnesses on
+  the *source* side run in the kernel outright (`ncSrc_exec`).
 * **`sorry`**, five, one *clause* each and none of them an obligation any more.
-  `execM_viewsCover_keyed` needs the command induction *and* the index argument;
-  `execM_viewLeader` and `execM_eclassFollowed` need the index argument;
-  `execM_viewsSound` is the completeness half; and `builtRead_fire` is the command induction's
-  one open case — a source command that fires rules, which needs the premise row to be
-  **current in the index**, not merely an entry term. `execM_viewsCover`, `execM_unionsJoined`
+  `execM_viewsCover_keyed` and `builtRead_fire` are the two the paragraph above refutes;
+  `execM_viewLeader` and `execM_eclassFollowed` need the index argument; and
+  `execM_viewsSound` is the completeness half. `execM_viewsCover`, `execM_unionsJoined`
   and `execM_unionsRead` are assembled from them, proved.
   `Encoding/Match.lean`'s `uRebuilt_unionsJoined` is `Database.UnionsJoined`'s three clauses
   at a state a program reaches and `uTgt_not_unionsRead` is the third failing one rebuild
@@ -2247,7 +2272,9 @@ theorem out_uf_of_execProgramM {td D : FDatabase} {e₁ e₂ : Expr} {t₁ t₂ 
 
 /-! ##### The invariant -/
 
-/-- **What the command induction carries.**
+/-- **What the command induction carries. The `terms` clause is false** —
+`ncTgt_not_readsSelf` — so this invariant cannot be carried across a command that fires rules,
+and `builtRead_fire` is where that shows.
 
 The first two clauses are the two clauses of `Database.UnionsJoined` this induction is for, at
 the state `D` the *whole* run finishes at. That is what makes them composable: the rebuild
@@ -2259,7 +2286,8 @@ value — `encodeBuild`'s naming expression *is* the source expression (`encodeB
 `Expr.eval_sigIndep` needs nothing of the two signatures. `state` is what makes every source
 command's merge phase empty. -/
 structure ReadsSelfInv (sd : Database) (td D : FDatabase) : Prop where
-  /-- Every source term reads to itself at the state the run finishes at. -/
+  /-- Every source term reads to itself at the state the run finishes at. **False** at a
+  source term a rule firing built over a non-leader member of a class (`ncTgt_not_readsSelf`). -/
   terms : ∀ t ∈ sd.terms, ViewRepr D.toDatabase t t
   /-- Every equation the source asserts between distinct terms has its `@UF` edge there. -/
   edges : ∀ a b, (a, b) ∈ sd.eqs → a ≠ b →
@@ -2331,36 +2359,37 @@ theorem mem_addEq_eqs {db : Database} {a b : Term} {p : Term × Term}
       · exact Or.inr (Or.inr h'')
     · exact Or.inr (Or.inr h')
 
-/-! ##### The one case that does not close -/
+/-! ##### The one case that does not close, and is false -/
 
-/-- **The command induction's rule-firing case. Not proved.**
+/-- **The command induction's rule-firing case. REFUTED — do not attempt.**
 
 The five other commands are read-backs of `set`s the encoder emitted, and those read-backs are
 proved (`viewReprAll_self_of_execProgramM`, `out_uf_of_execProgramM`). A `Cmd.run` or a
 `Cmd.saturate` is not one: the terms it adds are the ones a **source rule firing** built, and to
-read them back the encoded rule has to have fired at the substitution the source fired at.
+read them back the encoded rule has to have fired at the substitution the source fired at. It
+did not, and it cannot.
 
-**Why the invariant is the right hypothesis for that, and still not enough.** `ViewRepr D t t` —
-the reading at the term *itself* rather than at some id of it — is what makes the target's
-substitution available: a source premise term `t` is matched by the encoded query at the id `t`,
-because the invariant says the target holds a view row whose e-class column is `t`. That is why
-`readsSelf` has to be *carried* rather than proved command by command, and it is why a head that
-builds over an id the source query never named is no obstacle — the ids are the source terms
-themselves. What is missing is one step further down: `matchQuery` reads `d.rows` at a `.merge`
-function (`patternHolds`), and every `@fView` is one, so a firing needs the premise row to be
-**current in the index at the state the round starts from**, while the invariant carries
-entry-term membership at the state the run *finishes* at. Those are different claims and the
-difference is not bookkeeping: `mergeOneOriented` deletes the row a collision displaces and the
-rebuild re-`set`s it at the leader, so between a build and a run the row moves.
+**What refutes it**: `ncTgt_not_readsSelf` below. A source rule fires once per *member* of a
+premise's congruence class — `Spec/Match.lean`'s `ValidEnv` binds a variable to any term the
+source holds and `Matches` reads the instance up to congruence — while the encoded rule reads
+`d.rows` at a `.merge` function (`patternHolds`) and the target holds one row per recorded key.
+The rows sit at the union-find *leader*, because `mergeResult` keeps `ordering-min` and `@UF`'s
+edges run max-to-min, so a source term built over a non-leader member of the class is a term no
+view entry carries in its e-class column. `builtRead_fire`'s conclusion `BuiltRead sd' D` asks
+`ViewRepr D t t` at exactly such a `t`.
 
-**The invariant that would supply it is named and refuted.** `FDatabase.IndexCurrent`
-(`Proofs/Merge.lean`) is the converse of `FDatabase.IndexOk.entry` — every entry term still
-current in the index — and `cxTgt_not_indexCurrent` is a compiled state, built by the
-interpreter's own writers over a source `union`, where it fails. So what is missing here is not
-a property of the final index but a run-wide one: the rows a block writes are current at the
-`Cmd.saturate rebuildRuleset` that immediately follows it, and only `terms` carries the result
-past a later merge. `FDatabase.RoundClosed` is the fixpoint half of it, proved
-(`roundClosed_of_execProgramM`); this is the half that is not.
+**So this is not the located hole it was written as.** `ReadsSelfInv.terms` is false at the state
+an encoded run reaches, which makes `readsSelfInv_step`, `readsSelfInv_of_programStep`,
+`readsSelfInv_execM`, `execM_readsSelf` and `execM_unionsJoined` statements that cannot be
+proved rather than statements not yet proved. The `sorry` stays here because this is where the
+falsity enters and because what replaces the induction — `readsSelf` weakened to the endpoints
+of a source *equation*, which is all `unionsRead_of_unionsJoined` spends — changes what the
+forward half is proved from. `Database.UnionsRead` itself survives (`ncTgt_unionsRead`).
+
+**What it was blamed on before, and what that turned out to be.** `FDatabase.IndexCurrent`
+(`Proofs/Merge.lean`, refuted by `cxTgt_not_indexCurrent`) and the run-wide index argument that
+would replace it are about the row a *rebuild* displaced. They are real, and they are not this:
+here the row was never written, at any state, by any block.
 
 Stated over both firing commands at once, because `encodeCmd` gives them the same block:
 `[c, Cmd.saturate rebuildRuleset]`. -/
@@ -2874,16 +2903,17 @@ encoding emits — the source's own, followed by the rebuild — leaves the stat
 theorem rbState2_execProgramM_run :
     rbState2.execProgramM [Cmd.run rbRuleset, Cmd.saturate rebuildRuleset] = some rbState2 := rfl
 
-/-- **And `builtRead_fire`'s hypotheses are simultaneously satisfiable**, so the residue is not
-a statement nothing reaches — `ENCODING.md`'s failure, twice.
+/-- **`builtRead_fire`'s hypotheses are simultaneously satisfiable**, so the residue was never
+vacuous — `ENCODING.md`'s failure, twice. What it is instead is *false*
+(`ncTgt_not_readsSelf`).
 
-Degenerately, and deliberately so: the source holds no rule, so the round adds nothing and the
-encoded round writes nothing either, while the fifth hypothesis is the invariant above. The case
-with content is a round that *fires*, and that one is measured rather than compiled:
-`difftest correspond`'s **LOST** column is `Cong src a b` without `SameClass tgt a b`, swept with
-the diagonal included over the 70 cases in `encode`'s domain — rules and runs among them — and it
-is 0. That says every source term has *some* id in the target; `readsSelf` asks for the id to be
-the term itself, which is the stronger claim `builtRead_fire` would supply. -/
+Satisfiable degenerately, and deliberately so: the source holds no rule, so the round adds
+nothing and the encoded round writes nothing either, while the fifth hypothesis is the invariant
+above. The case with content is a round that *fires*, and that is where the conclusion fails.
+`difftest correspond`'s **LOST** column — `Cong src a b` without `SameClass tgt a b`, swept with
+the diagonal included over the 70 in-domain cases, rules and runs among them — is 0 and stays 0:
+every source term has *some* id in the target. `readsSelf` asks for the id to be the term
+itself, and that is the stronger claim the counterexample refutes. -/
 theorem builtRead_fire_satisfiable :
     CmdStep rbSrc (.run rbRuleset) rbSrc ∧
       rbState2.execProgramM [Cmd.run rbRuleset, Cmd.saturate rebuildRuleset] = some rbState2 ∧
@@ -3055,9 +3085,13 @@ an edge out of `t` and would be handed a row at some `u` further down the chain;
 compose, and the entry its conclusion needs is one an *earlier* round wrote and only `terms`
 remembers. The mechanism is therefore run-wide — each writing block's rows are current at the
 `Cmd.saturate rebuildRuleset` that immediately follows it, and `terms` carries the result
-forward past every later merge — and not a property of the final index. That is a stronger
-induction than `ReadsSelfInv`, carrying a clause per *entry term* rather than per source term,
-and it is what `builtRead_fire` needs at the round's pre-state as well.
+forward past every later merge — and not a property of the final index.
+
+**And it would not close `builtRead_fire`, because nothing would.** The next section refutes
+that residue outright: the row a firing needs was never written at any state, so no statement
+about which rows are *current* reaches it. The run-wide argument is what
+`execM_viewLeader`, `execM_eclassFollowed` and — after `keyed` is weakened to a shared id tuple
+— `execM_viewsCover_keyed` still want; it is not what the command induction wanted.
 
 **Restoring `IndexCurrent` outright is not a side condition worth having.** What it needs is
 that the source assert no equation between distinct terms (`Database.Diag`), decidable on the
@@ -3067,6 +3101,360 @@ built terms is exactly what puts two e-classes at one view key. The in-domain ce
 `uProgram` and `witnessProgram` would both leave the domain, and with them the only witnesses
 `execM_edges` and `execM_unionsJoined` are non-vacuous at. The clause is therefore not added,
 and the census stays 70. -/
+
+/-! #### The clause the fixpoint was for, refuted
+
+`FDatabase.RoundClosed` is not the missing step, because there is no missing step:
+`Database.UnionsJoined.readsSelf` — every source term reads to **itself** — and
+`Database.ViewsCover.keyed` — a view entry at every id tuple the children form — are both
+*false* at the state an encoded program runs to. `builtRead_fire` is `readsSelf` at one
+command, so it is false too, and `ReadsSelfInv.terms` with it: the induction
+`readsSelfInv_step` carries is not incomplete, it is unsound.
+
+**The mechanism, in one sentence.** A rule head builds over the ids the *target* matched, and
+those are the keys the target's rows carry, while the source's own substitution ranges over
+the whole congruence class. `Spec/Match.lean`'s `ValidEnv` binds a variable to any term the
+source holds and `Matches` reads the instance up to congruence, so a source rule fires once
+per class *member*; `matchQuery` reads `d.rows` at a `.merge` function and the target holds
+one row per recorded key. Where a class's rows sit at the smaller e-class — which is where
+`mergeResult`'s `ordering-min` and `@UF`'s max-to-min edges put them — the target fires at
+the leader alone, and the term the source built over a non-leader member is a term no view
+entry carries in its e-class column.
+
+**The program.** `(F (A))`, `(B)`, `(union (A) (B))`, and `(rule ((F ?x)) ((F ?x)))` run
+once. `(A)` is below `(B)` in `Term.blt`, so the `union` writes `@UF((B)) ↦ ((A), @Fiat)` and
+`(A)` is the leader; `@FView` is keyed at `((A))` and nothing re-keys it, since the rebuild's
+column rule needs an edge *out of* `(A)`. The source rule fires at `x := (A)` and at
+`x := (B)` — `(F (B))` is congruent to the held `(F (A))`, and `Cong.congr`'s two
+self-congruence premises are met because `Matches` adds the instance — and builds `(F (B))`.
+The encoded rule fires at `x := (A)` alone and re-`set`s the row it already holds, so the
+encoded run's final state is the state before it and `(F (B))` is in no e-class column.
+
+**Both halves are compiled.** The source side runs in the *kernel*: `ncSrc_exec` is `exec
+ncProgram` evaluated, `ncProgram_programStep` lifts it through `exec_programStep`, and
+`ncSrc_mem_FB` is `(F (B))` at a state a program reaches. The target side is written with
+`FDatabase.addRow` and `FDatabase.addTerm` — the writers `execAction` and the merge phase run
+— because the kernel cannot run the encoded program, and that limit is now exact rather than a
+timeout: `Impl/Closure.lean`'s `closure` is well-founded-recursive, so `closureF` is
+irreducible and `patternHolds` gets **stuck** rather than slow. `unseal Egglog.closure` makes
+it reduce, and then one `FDatabase.mergeRound` on this sixteen-term state runs past ten
+minutes against 0.2 s compiled. `ncTgt` is the encoded run's final state row for row and term
+for term; `encode_readsSelf_false` and `encode_viewsCover_false` are the same two refutations
+with that run as a *hypothesis*, in `encode_corresponds_witness`'s discipline, so nothing
+rests on the transcription.
+
+**What survives, and it is why the corpus agrees.** `Database.UnionsRead` — the property
+`cong_sameClass_of_state` actually consumes — holds here (`ncTgt_unionsRead`), and so does the
+correspondence at the very pair the two clauses fail on: `Cong src (F (A)) (F (B))` and
+`SameClass tgt (F (A)) (F (B))`, both compiled. `(F (B))` has an id; it is `(F (A))` and not
+itself. So `difftest correspond` stays 70 agreeing with 0 LOST — the sweep measures the
+conclusion, and it is the *factorisation* that is false.
+
+**What that costs the five residues.** `readsSelf` and `keyed` are over-strong
+factorisations, and the weakenings that survive this counterexample are visible in their own
+consumers: `unionsRead_of_unionsJoined` uses `readsSelf` only at the endpoints of a source
+*equation*, `sameClass_congr_of_keyed` uses `keyed` only at an id tuple *shared* by both
+argument lists (`viewReprList_of_forall₂`), and `viewRepr_total` needs only *some* id tuple.
+Even the weakened `edges` is not free — a rule head's `union` at a non-leader substitution is
+an equation of the source with no target edge between those two terms — so restating the three
+residues over the weaker clauses is a change to what the forward half is proved *from*, and it
+is recorded here rather than made. -/
+
+/-- The source rule: it fires once per member of `?x`'s class and builds `F` over each. Its
+head is the premise, so the target's own firing writes a row it already holds and the encoded
+run adds nothing at all — the smallest shape in which the source outruns it. -/
+def ncRule : Rule where
+  query := [.expr (.app "F" [.var "x"])]
+  actions := [.expr (.app "F" [.var "x"])]
+  ruleset := "r"
+
+/-- Two nullary constructors and one unary, a build over the *smaller* of the two, a `union`
+that puts the larger in its class, and one round. -/
+def ncProgram : Program :=
+  [.decl "A" { arity := 0, outArity := 1, merge := none },
+   .decl "B" { arity := 0, outArity := 1, merge := none },
+   .decl "F" { arity := 1, outArity := 1, merge := none },
+   .action (.expr (.app "F" [.app "A" []])),
+   .action (.expr (.app "B" [])),
+   .action (.union (.app "A" []) (.app "B" [])),
+   .rule ncRule,
+   .run "r"]
+
+/-- `(A)`, the leader: `Term.blt` puts it below `(B)`, so `ordering-min` keeps it. -/
+def ncA : Term := .app "A" []
+
+/-- `(B)`, the member whose row moves. -/
+def ncB : Term := .app "B" []
+
+/-- `(F (A))`, the application the program builds and the only e-class `@FView` records. -/
+def ncFA : Term := .app "F" [ncA]
+
+/-- `(F (B))`, the application the *source* rule builds and the target never names. -/
+def ncFB : Term := .app "F" [ncB]
+
+/-- `@Fiat`, the justification every build writes. -/
+def ncFiat : Term := .app fiatName []
+
+/-- `@Trans @Fiat @Fiat`, the e-class rebuild rule's composition at `@BView`. -/
+def ncTFF : Term := .app transName [ncFiat, ncFiat]
+
+/-- `@Trans (@Sym @Fiat) (@Trans @Fiat @Fiat)`, what `mergeBody` writes at the collision. -/
+def ncTST : Term := .app transName [.app symName [ncFiat], ncTFF]
+
+private theorem ncRule_noSet : (Cmd.rule ncRule).NoSet := by
+  refine ⟨?_, ?_⟩
+  · intro a ha
+    obtain rfl : a = Action.expr (.app "F" [.var "x"]) := by simpa [ncRule] using ha
+    trivial
+  · intro p hp
+    obtain rfl : p = Pattern.expr (.app "F" [.var "x"]) := by simpa [ncRule] using hp
+    trivial
+
+private theorem ncRule_noLeafPattern : (Cmd.rule ncRule).NoLeafPattern := by
+  refine ⟨?_, ?_⟩
+  · intro p hp
+    obtain rfl : p = Pattern.expr (.app "F" [.var "x"]) := by simpa [ncRule] using hp
+    intro l
+    simp
+  · intro v hv
+    obtain rfl : v = "x" := by
+      simpa [ncRule, Query.vars, Pattern.vars, Expr.vars, Expr.varsList] using hv
+    refine ⟨Pattern.expr (.app "F" [.var "x"]), by simp [ncRule], ?_⟩
+    simp [Pattern.ArgVar, Expr.ArgVar]
+
+/-- **The program is in `encode`'s domain.** `Query.VarsKeyed` is the clause to check: `?x`
+sits at `F`'s key column, which is what makes the encoded query read it at all. -/
+theorem ncProgram_encodeDomain : ncProgram.EncodeDomain where
+  ctorsOnly := by
+    intro c hc f dc heq
+    subst heq
+    simp only [ncProgram, List.mem_cons] at hc
+    rcases hc with h | h | h | h | h | h | h | h <;> simp_all
+  noSet := by
+    intro c hc
+    simp only [ncProgram, List.mem_cons] at hc
+    rcases hc with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | h
+    · trivial
+    · trivial
+    · trivial
+    · trivial
+    · trivial
+    · trivial
+    · exact ncRule_noSet
+    · trivial
+    · exact absurd h (by simp)
+  noPrim := by decide
+  -- `String.isPrefixOf` does not reduce under `decide`'s evaluator; the kernel's does.
+  noAt := by decide +kernel
+  noAtVar := by decide +kernel
+  noAtRuleset := by decide +kernel
+  noLeafPattern := by
+    intro c hc
+    simp only [ncProgram, List.mem_cons] at hc
+    rcases hc with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | h
+    · trivial
+    · trivial
+    · trivial
+    · trivial
+    · trivial
+    · trivial
+    · exact ncRule_noLeafPattern
+    · trivial
+    · exact absurd h (by simp)
+
+/-! ##### The source side, in the kernel
+
+The source is in the constructor fragment, so `exec` and the specification agree on it
+(`exec_programStep`) and there is nothing to transcribe: `valueTerms` is `terms` there, one
+free variable is enumerated over four terms, and the four congruence closures the round pays
+for reduce. -/
+
+/-- The state `ncProgram` runs to. -/
+def ncSrc : FDatabase := (exec ncProgram).getD FDatabase.empty
+
+set_option maxRecDepth 100000 in
+unseal Egglog.closure in
+theorem ncSrc_exec : exec ncProgram = some ncSrc := by
+  obtain ⟨d, hd⟩ : ∃ d, exec ncProgram = some d := Option.isSome_iff_exists.mp (by decide)
+  rw [hd, ncSrc, hd]
+  rfl
+
+set_option maxRecDepth 100000 in
+unseal Egglog.closure in
+/-- **The source rule built `(F (B))`**, at the substitution `x := (B)` the target's query
+cannot offer. -/
+theorem ncSrc_mem_FB : ncFB ∈ ncSrc.terms := by decide
+
+set_option maxRecDepth 100000 in
+unseal Egglog.closure in
+/-- The `union`'s equation, and the only non-reflexive one the source asserts. -/
+theorem ncSrc_eqs : ncSrc.eqs = [(ncA, ncB)] := by decide
+
+/-- **And the source state is reachable**, through the refinement theorem rather than by
+hand. -/
+theorem ncProgram_programStep : ProgramStep Database.empty ncProgram ncSrc.toDatabase :=
+  (exec_programStep ncProgram_encodeDomain.ctorDecls
+    (Or.inr (by rw [ncSrc_exec]; simp))).mp (by rw [ncSrc_exec]; rfl)
+
+/-! ##### The target side, by the interpreter's own writers
+
+`ncBase` is the state the encoded prelude leaves, computed — eighteen declarations and five
+maintenance rules, nothing written. Everything after it is `FDatabase.addRow`, which is what
+`execAction` runs at a `set`, plus two `FDatabase.addTerm`s for the entry terms a collision
+displaced: `@BView((B), @Fiat)`, the row the e-class rebuild rule's re-keying overwrote, and
+`@UF((B), (A), @Trans (@Sym @Fiat) (@Trans @Fiat @Fiat))`, `mergeBody`'s own write settling
+against the resident row `identityVals := some 1` keeps. `ncTgt.terms` and `ncTgt.rows` are
+`execM (encode ncProgram)`'s, element for element. -/
+
+/-- The state the encoded prelude leaves. -/
+def ncBase : FDatabase := (execM (encodePrelude ncProgram)).getD FDatabase.empty
+
+/-- The state `encode ncProgram` runs to: the seven `set`s the blocks emit, and the two entry
+terms the merge phases displaced. -/
+def ncTgt : FDatabase :=
+  ((((((({ ncBase with rules := (encodeRule 0 ncRule 0).1 :: ncBase.rules }
+    ).addRow (termName "A") [ncA] []).addRow (viewName "A") [] [ncA, ncFiat]
+    ).addRow (termName "F") [ncA, ncFA] []).addRow (viewName "F") [ncA] [ncFA, ncFiat]
+    ).addRow (termName "B") [ncB] []).addRow ufName [ncB] [ncA, ncFiat]
+    ).addRow (viewName "B") [] [ncA, ncTFF]
+    |>.addTerm (Term.app (viewName "B") [ncB, ncFiat])
+    |>.addTerm (Term.app ufName [ncB, ncA, ncTST])
+
+/-- Whether `t` is *not* an `@FView` entry keyed at `(B)`. Decidable, and the whole of what
+the `keyed` refutation spends. -/
+def ncNoFViewAtB (t : Term) : Bool :=
+  match t with
+  | .app g (c :: _) => !(g == viewName "F" && c == ncB)
+  | _ => true
+
+set_option maxRecDepth 100000 in
+theorem ncTgt_subtermClosed : ncTgt.SubtermClosed :=
+  (FDatabase.subtermClosedB_iff ncTgt).mp (by decide)
+
+set_option maxRecDepth 100000 in
+theorem ncTgt_eqsRefl : ncTgt.EqsRefl := (FDatabase.eqsReflB_iff ncTgt).mp (by decide)
+
+set_option maxRecDepth 100000 in
+/-- **`(F (B))`'s only id is `(F (A))`.** The reading is `viewReprsF`, which `mem_viewReprsF_iff`
+proves decides `ViewRepr`. -/
+theorem ncTgt_viewReprs_FB : viewReprsF ncTgt ncFB = [ncFA] := by decide
+
+/-- **So `(F (B))` does not read to itself**, which is `Database.UnionsJoined.readsSelf` at one
+term. -/
+theorem ncTgt_not_viewRepr_FB : ¬ ViewRepr ncTgt.toDatabase ncFB ncFB := by
+  intro h
+  have hm := mem_viewReprsF_of_viewRepr ncTgt_eqsRefl h
+  rw [ncTgt_viewReprs_FB, List.mem_singleton] at hm
+  exact absurd hm (by decide)
+
+set_option maxRecDepth 100000 in
+/-- `(B)` *does* read to itself: its own build's view entry survives the collision as an entry
+term. This is what makes `keyed`'s premise available at the key `((B))`. -/
+theorem ncTgt_viewRepr_B : ViewRepr ncTgt.toDatabase ncB ncB :=
+  viewRepr_of_mem_viewReprsF ncTgt_subtermClosed ncB ncB (by decide)
+
+set_option maxRecDepth 100000 in
+/-- **No `@FView` row is keyed at `(B)`**: the index fact `patternHolds` reads, and the reason
+the encoded rule cannot fire at the source's own substitution. -/
+theorem ncTgt_rows_fview : ∀ r ∈ ncTgt.rows, r.fn = viewName "F" → r.args = [ncA] := by decide
+
+set_option maxRecDepth 100000 in
+/-- And no `@FView` **entry term** is keyed there either, which is what `Database.Out`
+reads. -/
+theorem ncTgt_terms_noFViewAtB : ncTgt.terms.all ncNoFViewAtB = true := by decide
+
+@[inherit_doc ncTgt_terms_noFViewAtB]
+theorem noFViewAtB_of_all {d : FDatabase} (h : d.terms.all ncNoFViewAtB = true) (e pf : Term) :
+    Term.app (viewName "F") [ncB, e, pf] ∉ d.terms := by
+  intro hm
+  have h' := List.all_eq_true.mp h _ hm
+  rw [show ncNoFViewAtB (Term.app (viewName "F") [ncB, e, pf]) = false from rfl] at h'
+  exact absurd h' (by simp)
+
+/-! ##### The two clauses, refuted -/
+
+/-- **`Database.UnionsJoined.readsSelf` is false at the state the encoded program runs to**, so
+`ReadsSelfInv.terms` is, and so is `builtRead_fire` — the command whose case it is is the one
+that fires rules. -/
+theorem ncTgt_not_readsSelf :
+    ¬ ∀ t ∈ ncSrc.toDatabase.terms, ViewRepr ncTgt.toDatabase t t := fun h =>
+  ncTgt_not_viewRepr_FB (h ncFB (by rw [FDatabase.toDatabase_terms]; exact ncSrc_mem_FB))
+
+/-- **And so is `Database.ViewsCover`**, at `f := F`, `as := ((B))` and the id tuple `((B))`
+that `ncTgt_viewRepr_B` supplies: `(F (B))` is a source term, `(B)` reads to itself, and there
+is no `@FView` entry at that key at all. -/
+theorem ncTgt_not_viewsCover : ¬ ncTgt.toDatabase.ViewsCover ncSrc.toDatabase := by
+  intro h
+  obtain ⟨e, pf, bs, hcl, hmem⟩ := h.keyed "F" [ncB] [ncB]
+    (by rw [FDatabase.toDatabase_terms]; exact ncSrc_mem_FB)
+    (.cons ncTgt_viewRepr_B .nil)
+  obtain rfl : [ncB] = bs := CongList.eq_of_eqsRefl ncTgt_eqsRefl.toDatabase hcl
+  rw [FDatabase.toDatabase_terms] at hmem
+  exact noFViewAtB_of_all ncTgt_terms_noFViewAtB e pf hmem
+
+/-! ##### And the conclusions that survive
+
+Which is what says the counterexample kills the *reduction* and not the theorem: the property
+`cong_sameClass_of_state` consumes still holds, and so does the correspondence at the pair the
+two clauses fail on. -/
+
+/-- **`Database.UnionsRead` holds here.** The source asserts one non-reflexive equation and its
+two endpoints share the id `(A)`. -/
+theorem ncTgt_unionsRead : ncTgt.toDatabase.UnionsRead ncSrc.toDatabase := by
+  intro a b hab hne
+  rcases FDatabase.mem_toDatabase_eqs.mp hab with ⟨he, -⟩ | ⟨hm, -, -⟩
+  · exact absurd he hne
+  · rw [ncSrc_eqs, List.mem_singleton] at hm
+    obtain ⟨rfl, rfl⟩ : a = ncA ∧ b = ncB := by
+      constructor <;> simp_all [Prod.ext_iff]
+    exact (sameClassF_iff ncTgt_subtermClosed ncTgt_eqsRefl ncA ncB).mp (by decide)
+
+set_option maxRecDepth 100000 in
+unseal Egglog.closure in
+/-- **And the correspondence holds at `(F (A))`, `(F (B))`** — the source derives the equation
+and the target shares an id for it, which is why the corpus sweep reports nothing here. -/
+theorem ncSrc_cong_FA_FB : Cong ncSrc.toDatabase ncFA ncFB :=
+  FDatabase.mem_closureF_iff.mp (by decide)
+
+set_option maxRecDepth 100000 in
+@[inherit_doc ncSrc_cong_FA_FB]
+theorem ncTgt_sameClass_FA_FB : SameClass ncTgt.toDatabase ncFA ncFB :=
+  (sameClassF_iff ncTgt_subtermClosed ncTgt_eqsRefl ncFA ncFB).mp (by decide)
+
+/-! ##### The same two refutations at the state `execM` returns
+
+`ncTgt` above is the encoded run's state transcribed; these two do not rely on the
+transcription. Their hypotheses are the encoded run and three *decidable* facts about the state
+it returns, which is `encode_corresponds_witness`'s discipline — the kernel cannot run an
+encoded program, so the run is a hypothesis and the facts are evaluated. -/
+
+/-- **`Database.UnionsJoined.readsSelf` is false at `execM (encode ncProgram)`'s own state.** -/
+theorem encode_readsSelf_false {e : FDatabase}
+    (he : execM (encode ncProgram) = some e) (hr : e.EqsRefl)
+    (hno : ncFB ∉ viewReprsF e ncFB) :
+    ∃ src, ncProgram.EncodeDomain ∧ ProgramStep Database.empty ncProgram src ∧
+      execM (encode ncProgram) = some e ∧
+      ncFB ∈ src.terms ∧ ¬ ViewRepr e.toDatabase ncFB ncFB :=
+  ⟨ncSrc.toDatabase, ncProgram_encodeDomain, ncProgram_programStep, he,
+    by rw [FDatabase.toDatabase_terms]; exact ncSrc_mem_FB,
+    fun h => hno (mem_viewReprsF_of_viewRepr hr h)⟩
+
+/-- **And so is `Database.ViewsCover`.** -/
+theorem encode_viewsCover_false {e : FDatabase}
+    (he : execM (encode ncProgram) = some e) (hr : e.EqsRefl) (hsc : e.SubtermClosed)
+    (hB : ncB ∈ viewReprsF e ncB) (hno : e.terms.all ncNoFViewAtB = true) :
+    ∃ src, ncProgram.EncodeDomain ∧ ProgramStep Database.empty ncProgram src ∧
+      execM (encode ncProgram) = some e ∧
+      ncFB ∈ src.terms ∧ ¬ e.toDatabase.ViewsCover src := by
+  refine ⟨ncSrc.toDatabase, ncProgram_encodeDomain, ncProgram_programStep, he,
+    by rw [FDatabase.toDatabase_terms]; exact ncSrc_mem_FB, ?_⟩
+  intro h
+  obtain ⟨ee, pf, bs, hcl, hmem⟩ := h.keyed "F" [ncB] [ncB]
+    (by rw [FDatabase.toDatabase_terms]; exact ncSrc_mem_FB)
+    (.cons (viewRepr_of_mem_viewReprsF hsc ncB ncB hB) .nil)
+  obtain rfl : [ncB] = bs := CongList.eq_of_eqsRefl hr.toDatabase hcl
+  rw [FDatabase.toDatabase_terms] at hmem
+  exact noFViewAtB_of_all hno ee pf hmem
 
 /-! #### The three residues, by clause -/
 
@@ -3092,20 +3480,20 @@ theorem execM_viewLeader {P : Program} {tgt : FDatabase} (hdom : P.EncodeDomain)
     (htgt : execM (encode P) = some tgt) : tgt.toDatabase.ViewLeader := by
   sorry
 
-/-- **`Database.ViewsCover.keyed`, at an `execM` target. Not proved**, and the one residue that
-needs *both* halves of the missing mechanism.
+/-- **`Database.ViewsCover.keyed`, at an `execM` target. REFUTED — do not attempt.**
 
-The read-back gives the entry at the key the build itself wrote — the tuple where each child
-reads to itself (`holdsBuild_of_execProgramM`). `keyed` asks for an entry at *every* tuple of
-ids the children are given, which is the product `rebuildRules`' column rules cover, so what is
-missing beyond the induction is `FDatabase.runSaturateM`'s own fixpoint — the same thing
-`execM_viewLeader` and `execM_eclassFollowed` need.
+`ncTgt_not_viewsCover` and `encode_viewsCover_false` are the counterexample, and it is the same
+one that kills `readsSelf`: `keyed` asks for an entry at *every* tuple of ids the children are
+given, and after `(union (A) (B))` the term `(B)` is an id of itself while no `@FView` row is
+keyed there — the rows sit at the leader `(A)`. `(F (B))` is a source term because a rule fired
+at `x := (B)`, so `keyed`'s hypothesis holds and its conclusion does not.
 
-That fixpoint is `FDatabase.RoundClosed`, proved, and it supplies the column rules'
-conclusions; their premises are the view row and the `@UF` row, and those are what
-`cxTgt_not_indexCurrent` says the index need not still hold. This residue needs the
-command induction *and* that run-wide index argument, which is why it is the last of the five
-to be reachable. -/
+**What the consumers actually need is weaker, and that is where a repair would start.**
+`sameClass_congr_of_keyed` applies `keyed` only at an id tuple *shared* by both argument lists
+(`viewReprList_of_forall₂` produces it), and `viewRepr_total` needs only *some* id tuple per
+term. Neither asks for the product, which is what `rebuildRules`' column rules cover and what
+this clause states. Restating it is a change to what the forward half is proved from, so it is
+reported rather than made. -/
 theorem execM_viewsCover_keyed {P : Program} {src : Database} {tgt : FDatabase}
     (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
     (htgt : execM (encode P) = some tgt) :
@@ -3114,18 +3502,20 @@ theorem execM_viewsCover_keyed {P : Program} {src : Database} {tgt : FDatabase}
   sorry
 
 /-- **The residue of obligations `congr` and of `assert`'s reflexive half**, which is its one
-clause. -/
+clause — and false as stated (`execM_viewsCover_keyed`). -/
 theorem execM_viewsCover {P : Program} {src : Database} {tgt : FDatabase}
     (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
     (htgt : execM (encode P) = some tgt) : tgt.toDatabase.ViewsCover src :=
   ⟨execM_viewsCover_keyed hdom hsrc htgt⟩
 
-/-- **`Database.UnionsJoined.readsSelf`, at an `execM` target. Proved from the command
-induction**, whose one open case is `builtRead_fire`.
+/-- **`Database.UnionsJoined.readsSelf`, at an `execM` target. FALSE** —
+`ncTgt_not_readsSelf`, `encode_readsSelf_false`.
 
-The `terms` clause of `ReadsSelfInv`, read off `readsSelfInv_execM`. A literal is free
-(`ViewRepr.lit`); an application the source built is the read-back of its own block's two `set`s
-(`viewReprAll_self_of_execProgramM`), located by the induction over `encode P`'s commands. -/
+Assembled from `readsSelfInv_execM`, whose one open case `builtRead_fire` is the false step, so
+this carries `sorryAx` and will keep carrying it. A literal is free (`ViewRepr.lit`) and an
+application the source built *at top level* is the read-back of its own block's two `set`s
+(`viewReprAll_self_of_execProgramM`); an application a **rule firing** built over a non-leader
+member of a class is neither, and the encoding never mints an e-node for it. -/
 theorem execM_readsSelf {P : Program} {src : Database} {tgt : FDatabase}
     (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
     (htgt : execM (encode P) = some tgt) :
@@ -3187,7 +3577,11 @@ the same rebuild `execM_viewLeader` needs.
 `unionsJoined_witness` in `Encoding/Match.lean`, over `uProgram`, whose rule head unions two
 distinct terms. `uTgt_not_unionsRead` there is the same three clauses one rebuild firing
 *earlier*, where `eclassFollowed` fails and the conclusion with it — so the clause is
-load-bearing and not decoration. -/
+load-bearing and not decoration.
+
+**And `readsSelf` is false in general** (`ncTgt_not_readsSelf`), so this factorisation of
+`Database.UnionsRead` is unavailable at an `execM` target even though `UnionsRead` itself holds
+there (`ncTgt_unionsRead`). -/
 theorem execM_unionsJoined {P : Program} {src : Database} {tgt : FDatabase}
     (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
     (htgt : execM (encode P) = some tgt) : tgt.toDatabase.UnionsJoined src :=

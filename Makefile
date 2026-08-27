@@ -119,15 +119,20 @@ nightly-local: nightly-uv nightly-rustup
 # `sameClass_cong_of_state`) — so what is left is exactly those properties, and each is now
 # stated one *clause* at a time so that the two missing mechanisms are separated. The action
 # read-back is proved (`holdsBuild_of_execProgramM`, `viewRepr_self_of_execProgramM`) and so is
-# the induction over `encode P`'s commands built on it (`ReadsSelfInv`, `readsSelfInv_execM`),
-# which is what closed `execM_readsSelf` and `execM_edges`. Of the five left: `builtRead_fire`
-# is that induction's one open case, a source command that fires rules, which needs the premise
-# row to be current in the *index* and not merely an entry term; `execM_viewLeader` and
-# `execM_eclassFollowed` need the interpreter's rebuild fixpoint; `execM_viewsCover_keyed` needs
-# that fixpoint too; and `execM_viewsSound` is the completeness half. The rule-head match
-# correspondence of `Encoding/Match.lean` is proved outright, encoder read-back included, and so
-# is the rule-head build case it feeds (`entrySound_headBuild`). Everywhere outside
-# `Encoding/` a `sorry` is a regression, and a new one inside it changes the count.
+# the induction over `encode P`'s commands built on it (`ReadsSelfInv`, `readsSelfInv_execM`).
+# Two of the five are now **refuted** rather than open: `builtRead_fire` and
+# `execM_viewsCover_keyed`, by `ncTgt_not_readsSelf` and `ncTgt_not_viewsCover` — a source rule
+# fires once per member of a premise's congruence class while the encoded rule reads rows that
+# sit at the union-find leader, so `Database.UnionsJoined.readsSelf` and
+# `Database.ViewsCover.keyed` are both false at the state an encoded run reaches. Their `sorry`s
+# stay where the falsity enters, because weakening the two clauses to what their consumers spend
+# changes what the forward half is proved from. `Database.UnionsRead` and the correspondence
+# itself survive, which is why `correspond` still agrees on all 70 in-domain cases. Of the other
+# three: `execM_viewLeader` and `execM_eclassFollowed` need the interpreter's rebuild fixpoint,
+# and `execM_viewsSound` is the completeness half. The rule-head match correspondence of
+# `Encoding/Match.lean` is proved outright, encoder read-back included, and so is the rule-head
+# build case it feeds (`entrySound_headBuild`). Everywhere outside `Encoding/` a `sorry` is a
+# regression, and a new one inside it changes the count.
 LEAN_OPEN_SORRIES = 5
 LEAN_OPEN_SORRY_DIR = semantics/EgglogSemantics/Encoding
 
