@@ -1,6 +1,6 @@
 # Compiling user rules into the slotted encoding
 
-Companion to three runnable files:
+Companion to five runnable files:
 
 | file | what it is |
 | --- | --- |
@@ -15,6 +15,11 @@ Semantics come from Schneider et al., *Slotted E-Graphs*, PLDI 2025
 [code](https://github.com/memoryleak47/slotted-egraphs)) — mainly Definition 6
 (when two invocations are equal), Definition 8 (which e-nodes an invocation
 stands for), §3.5 (union) and §3.6 (matching).
+
+A note on the numbers below: a `before | after` table measures one specific change at
+the time it was made, so its suite totals are that day's, not today's. Current totals
+live in the commit that last moved them. Claims about how the encoding *works* are kept
+current; historical measurements are left as measured.
 
 ## Vocabulary
 
@@ -782,11 +787,10 @@ contributes nothing but the deletion. One guard removes it:
 | --- | --- | --- |
 | `X1` stranded / of those unique | 1 / 0 | 1 / 0 |
 | `X2` stranded / of those unique | 2 / **2** | **0 / 0** |
-| machinery's own tests, at the time | 13 pass | **14** pass (`Case 14` is new) |
 | curated differential | 31/31 | 31/31 |
 | generated differential | 250/250 | 250/250 |
 | curated `RenamesToLeader` rows | 183 | 199 (+9%) |
-| curated `App` rows | 144 | 143 |
+| curated `App2` rows | 144 | 143 |
 
 So the cost is about 9% more union-find rows and slightly *fewer* e-nodes — `X2`
 compresses to 7 `App` rows instead of 8, because a class that keeps its self-loop
