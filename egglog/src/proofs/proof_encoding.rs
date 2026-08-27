@@ -205,6 +205,12 @@ pub(crate) struct ViewIndex {
     pub sort_name: String,
 }
 
+/// The encoding's state for a whole program, kept on the [`EGraph`] because it
+/// outlives any one command: the names the encoding has minted, what it has
+/// already declared, and how far its global-action numbering has got.
+///
+/// The per-command half is [`ProofInstrumentor`], which is rebuilt for each
+/// command and reads what it needs from here.
 // TODO refactor so that encoding state is optional on the e-graph, ProofNames not optional on EncodingState. Then we don't have to clone proof names everywhere.
 #[derive(Clone)]
 pub(crate) struct EncodingState {
@@ -258,7 +264,15 @@ impl EncodingState {
     }
 }
 
-/// Thin wrapper around an [`EGraph`] for the term encoding
+/// Lowers one command, wrapping the [`EGraph`] it reads and writes.
+///
+/// A fresh one is built per command (see
+/// [`ProofInstrumentor::add_term_encoding`]), so every field below is scratch
+/// for that command — proofs held back until something reads them, declarations
+/// owed by the statements written so far, the anchors of the body being walked.
+/// Anything that has to outlive the command belongs in [`EncodingState`], which
+/// is where the global-action numbering a fiat names is read from and written
+/// back to.
 pub(crate) struct ProofInstrumentor<'a> {
     pub(crate) egraph: &'a mut EGraph,
     /// Proof variables the encoder knows prove `t = t`, keyed by the emitted
@@ -281,11 +295,11 @@ pub(crate) struct ProofInstrumentor<'a> {
     /// value variable asked about. Reading one is an error.
     unanchored: HashMap<String, String>,
     /// The global action being encoded, as
-    /// [`EncodingState::global_actions_numbered`] indexes it.
+    /// [`EncodingState::global_actions_numbered`] indexes it. Seeded from there
+    /// and written back, since the numbering outlives this command.
     global_action: usize,
     /// The nodes of the actions being lowered, by address, so the one in hand
-    /// can be named. Rebuilt per command, like the anchors above; where in them
-    /// the encoder is writing rides on [`Emit`] instead.
+    /// can be named. Where in them the encoder is writing rides on [`Emit`].
     action_expr_index: HashMap<usize, usize>,
 }
 
