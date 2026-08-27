@@ -5,7 +5,7 @@ Companion to five runnable files:
 | file | what it is |
 | --- | --- |
 | `tests/slotted-egraph-encoding-11.egg` | the machinery: union, congruence, redundancy, symmetry |
-| `tests/slotted-user-rules.egg` | hand-encoded user rules as a tutorial: M1, M2, M6, M3, M9, M4, M5, M6b, M7, M8, M10, then M3b as a counter-example |
+| `tests/slotted-user-rules.egg` | hand-encoded user rules as a tutorial: M1, M2, M3, M4, M5, M6, M7, M8, M9, M10, M11, then M4b as a counter-example |
 | `slotted-experiments/xdiff/xdiff.py` | differential tests against the reference implementation |
 | `tests/slotted-array-rules.egg` | the paper's §4.1 array language, 8 rules, self-checking |
 | `slotted-experiments/xdiff/xarray.py` | the same 8 rules, differentially tested |
@@ -98,7 +98,7 @@ it. A body no ordering can connect has to invent slots, and there the gap is rea
 It is tempting to read this as three separate cases — first atom, root known,
 children known — and that reading caused three of the four bugs listed at the end.
 `tests/slotted-user-rules.egg` had drifted back to it and has been brought into
-line; `M3b` there is an e-graph where the two readings visibly disagree, the short
+line; `M4b` there is an e-graph where the two readings visibly disagree, the short
 one computing an *empty* renaming for a child that has a slot.
 The cases are only *which* constraints happen to exist:
 
@@ -324,7 +324,7 @@ price of keeping names small, not a requirement of minting as such.
 
 The alternative, if you would rather not invent slots: guard every variable the
 action uses with `(= (map-length (compose mp p)) (map-length p))`. Sound but
-incomplete — `M6(b)` shows the rule declining to fire in the bad case and still
+incomplete — `M3(b)` shows the rule declining to fire in the bad case and still
 firing in the good one. Occurrence checks are self-guarding already, since a
 dropped slot changes the domain and breaks the equation.
 
@@ -374,7 +374,7 @@ load-bearing. It is kept, and the mutation is kept as a record, but it no longer
 discriminates — recorded because a test that has stopped testing what it was written for is
 worse than no test.
 
-**One demo in `slotted-user-rules.egg` inverted.** `M6b` asserted that a malformed edge
+**One demo in `slotted-user-rules.egg` inverted.** `M8` asserted that a malformed edge
 appears; under this schedule none does, so it now asserts the opposite and says why. The
 alternative — contriving an unphased schedule to keep the old assertion alive — would have
 preserved a test of a state the encoding no longer reaches.
@@ -1014,13 +1014,13 @@ Curated cases, and what each is for:
 | `S1`,`S1b` | the stored symmetries are closed, so a lookup finds a composite element |
 | `S2` | a symmetry and a redundancy in play at once |
 | `B1`–`B4` | binders: chaining through one, α-equivalence, the same slot literal on two binders |
-| `M1`,`M6` | shapes `tests/slotted-user-rules.egg` teaches that nothing else covered: a swapped action, and one shared variable across two operators |
+| `M1`,`M3` | shapes `tests/slotted-user-rules.egg` teaches that nothing else covered: a swapped action, and one shared variable across two operators |
 
 `tests/slotted-user-rules.egg` is the readable form of this same recipe, so each of
 its sections names the case above that covers its shape. Keep the
 two in step — the hand-written file passing its own assertions only says it does
 what it expects, and it had drifted to the three-case reading once already. One
-shape there, `M7`, cannot be covered as the oracle stands: it puts a slot literal
+shape there, `M9`, cannot be covered as the oracle stands: it puts a slot literal
 in a non-binder child position, and the reference admits a slot there only via
 `Bind` or as the whole of `Var(Slot)`, which is a unary atom the harness's
 two-child format cannot express.
@@ -1764,7 +1764,7 @@ Each of these was silent, and each cost a round of confusion.
 * ***`compose` truncates, silently.*** It keeps only the keys whose value lies in
   the left map's domain, so every `(compose a b)` on an edge is a place a slot can
   disappear — and a narrowed edge asserts its child is slotless. This one mistake
-  is behind the fresh-slot gap, the `M6` unsoundness, and the migration bug above.
+  is behind the fresh-slot gap, the `M3` unsoundness, and the migration bug above.
   The lesson is not "avoid `compose`" — narrowing is correct for partial maps, and
   two rules depend on it. It is that **an `App` edge is the one place narrowing is
   always wrong**, so use `compose-total` there and let the primitive hold the

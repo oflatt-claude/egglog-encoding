@@ -43,7 +43,7 @@
       :ruleset sdql-beta :naive)
 
 ;;; The result's own slots are not known until the machinery has seen its node,
-;;; so the edge back into the node's frame is narrowed one phase later -- the M6b
+;;; so the edge back into the node's frame is narrowed one phase later -- the M8
 ;;; habit, applied across a phase boundary rather than inside one rule. The
 ;;; conclusion goes to `Equated`, which has no orientation, and the machinery picks
 ;;; the side.

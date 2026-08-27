@@ -969,7 +969,7 @@ def curated():
         [("f", V0, V1), ("g", V0, V1), ("h", V0, V1)],
     ))
 
-    # C10 -- three atoms, chain then join (the M5 shape)
+    # C10 -- three atoms, chain then join (the M7 shape)
     cs.append(Case(
         "C10-chain-then-join",
         [("f", V0, ("g", V0, V1)), ("k", V0, V0)],
@@ -1180,10 +1180,10 @@ def curated():
     # m1 = {0->1} compose to the EMPTY map, and an empty edge to (Var 0) asserts
     # the variable class has no slots, after which every h(var, var) collapses.
     #
-    # It is the same dropped-slot bug as M6, inside the machinery: the redundant
+    # It is the same dropped-slot bug as M3, inside the machinery: the redundant
     # slot has no name in e1's space and gets dropped rather than named. Fixed by
     # guarding migration to decline when it would truncate -- sound but
-    # incomplete, like M6(b); minting a fresh name would be the complete fix.
+    # incomplete, like M3(b); minting a fresh name would be the complete fix.
     #
     #     term   h(var $2, var $1)
     #     rule   ?c == (h ?a ?b)  =>  union ?a (h ?b ?c)
@@ -1399,12 +1399,12 @@ def curated():
         [("f", V0, V1), ("f", V1, V0), ("h", V0, V1)],
     ))
 
-    # M6 -- only ONE variable shared, across two different operators, so the
+    # M3 -- only ONE variable shared, across two different operators, so the
     # second atom's renaming is pinned on part of its node and must mint a name
     # for the rest. `U1` has this shape with one operator; two make the join
-    # unambiguous, which is what the doc's M6 discusses.
+    # unambiguous, which is what the doc's M3 discusses.
     cs.append(Case(
-        "M6-one-shared-var-two-ops",
+        "M3-one-shared-var-two-ops",
         [("f", V0, V1), ("g", V0, V2)], [],
         [("p", "f", "x", "y"), ("q", "g", "x", "z")],
         ("p", "h", "y", "z"),

@@ -254,9 +254,9 @@ def compile_array_rule(rule, atom_order=None):
     Each atom's `mp` is solved from EVERY constraint available at that point --
     its root if an earlier atom bound it, every child an earlier atom bound, and
     every slot literal an earlier atom pinned -- with `find-mapping-total`, so a
-    slot the constraints do not reach is minted rather than dropped (M6). Every
-    variable is narrowed to its class's slots before use (M6b), and the action
-    asserts `Equated`, never `RenamesToLeader` (M8).
+    slot the constraints do not reach is minted rather than dropped (M3). Every
+    variable is narrowed to its class's slots before use (M8), and the action
+    asserts `Equated`, never `RenamesToLeader` (M10).
     """
     lead = 0 if atom_order is None else min(atom_order, len(rule.atoms) - 1)
     atoms = connected_order(rule.atoms, lead)
@@ -331,7 +331,7 @@ def compile_array_rule(rule, atom_order=None):
                         "(map-empty) (map-empty)))")
 
         # the avoid-set accumulates: an atom may not mint over anything an
-        # earlier atom already named (M9)
+        # earlier atom already named (M5)
         idm = fresh_var("idm")
         body.append(f"(= {idm} (map-image {mp}))")
         if idx == 0:

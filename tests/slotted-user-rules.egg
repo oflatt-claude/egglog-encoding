@@ -14,13 +14,13 @@
 ;;;   (map-image m)           = identity on im(m);  (map-domain m) = identity on dom(m)
 ;;;   (find-mapping-total avoid domain first... second...)
 ;;;                           = least injective m with m . second_i = first_i, made total on
-;;;                             the keys of `domain`, minting outside `avoid`'s slots (M6)
+;;;                             the keys of `domain`, minting outside `avoid`'s slots (M3)
 ;;;   (App2 f m1 c1 m2 c2)    = f(m1*c1, m2*c2),  mi : slots(ci) -> slots(node)
 ;;;   (RenamesToLeader a m b) = a = m*b, m : slots(b) -> slots(a); a self-loop is a member
 ;;;                             of G(a)
 ;;;   (Equated a m b)         = the same fact with no orientation picked -- what an ACTION
-;;;                             writes; the machinery derives the oriented row (M8)
-;;;   (ClassSlots c)          = identity on the slots c depends on; only ever narrows (M6b)
+;;;                             writes; the machinery derives the oriented row (M10)
+;;;   (ClassSlots c)          = identity on the slots c depends on; only ever narrows (M8)
 ;;;
 ;;; Scaffolding names, the same in every section:
 ;;;   pN, qN   atom N's own stored edges -- its first and second child column
@@ -33,20 +33,20 @@
 ;;; The well-formedness witnesses range over arbitrary nodes rather than over one atom, so
 ;;; they keep the `App2` signature's own m1/c1/m2/c2.
 ;;;
-;;; Contents.  The M-names are labels, not an order -- `slotted-user-rules.md` and the
-;;; xdiff/xarray cases refer to them, and each section names the cases covering it.
+;;; Contents, in order.  Each section names the harness cases covering it, and
+;;; `slotted-user-rules.md` refers to these labels.
 ;;;   M1   one atom, nothing shared
 ;;;   M2   a repeated variable -- the Def. 6 check
-;;;   M6   why an atom's renaming has to be total
-;;;   M3   two atoms, chained -- the primitive in use
-;;;   M9   the avoid-set, and why it accumulates
-;;;   M4   two atoms, joined on a fresh root
-;;;   M5   three atoms -- the cases compose
-;;;   M6b  a variable wider than its class
-;;;   M7   a slot literal (eta)
-;;;   M8   actions: concluding over renamed ids
-;;;   M10  a nested right-hand side
-;;;   M3b  counter-example, not a step: what the naive chain spelling does instead
+;;;   M3   why an atom's renaming has to be total
+;;;   M4   two atoms, chained -- the primitive in use
+;;;   M5   the avoid-set, and why it accumulates
+;;;   M6   two atoms, joined on a fresh root
+;;;   M7   three atoms -- the cases compose
+;;;   M8   a variable wider than its class
+;;;   M9   a slot literal (eta)
+;;;   M10  actions: concluding over renamed ids
+;;;   M11  a nested right-hand side
+;;;   M4b  counter-example, not a step: what the naive chain spelling does instead
 ;;;
 ;;; Each section is its own (push)/(pop) and asserts through a witness relation carrying the
 ;;; computed renamings -- that is what is under test, and the machinery is free to rewrite
@@ -168,18 +168,18 @@
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; M6.  Why an atom's renaming has to be TOTAL.
+;;; M3.  Why an atom's renaming has to be TOTAL.
 ;;;
 ;;;     ?p == (f ?x ?y),  ?q == (g ?x ?z)   =>   union ?p (h ?y ?z)
 ;;;
-;;; The smallest shape whose renamings are not determined, and the reason every atom from M3
+;;; The smallest shape whose renamings are not determined, and the reason every atom from M4
 ;;; on is solved with `find-mapping-total`.  Only `?x` is shared, so atom 2's renaming is
 ;;; pinned on im(p2) and nowhere else: a slot of `q` outside it gets NO name in
 ;;; slots(pattern), and the *minimal* map Def. 8 asks for simply DROPS it, which asserts the
 ;;; slot is redundant and is unsound.  (a) is that bug, (b) a sound but incomplete guard,
 ;;; (c) the fix.
 ;;;
-;;; Covered by: M6-one-shared-var-two-ops, U1.
+;;; Covered by: M3-one-shared-var-two-ops, U1.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
 
@@ -285,7 +285,7 @@
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; M3.  Two atoms, chained -- the primitive in use.
+;;; M4.  Two atoms, chained -- the primitive in use.
 ;;;
 ;;;     ?p == (f ?a ?b),  ?b == (g ?c ?d)
 ;;;
@@ -300,7 +300,7 @@
 ;;; The cases -- first atom / root known / children known -- are only which constraints
 ;;; happen to exist, not three different rules.  Taking one constraint per case is
 ;;; under-constrained: for a chain the tempting `(compose q1 symb)` drops an inner slot the
-;;; root's edge does not reach, M6's bug again, and M3b at the end of the file is an e-graph
+;;; root's edge does not reach, M3's bug again, and M4b at the end of the file is an e-graph
 ;;; where the two visibly disagree.
 ;;;
 ;;; Covered by: C2-chain.
@@ -348,7 +348,7 @@
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; M9.  The avoid-set, and why it accumulates.
+;;; M5.  The avoid-set, and why it accumulates.
 ;;;
 ;;;     ?p == (add ?a ?b),  ?a == (sub ?u ?u),  ?b == (sub2 ?v ?v)
 ;;;
@@ -431,14 +431,14 @@
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; M4.  Two atoms, joined on a fresh root.
+;;; M6.  Two atoms, joined on a fresh root.
 ;;;
 ;;;     ?p == (f ?x ?y),  ?q == (g ?x ?y)   =>   union ?p ?q
 ;;;
 ;;; Atom 2's root is fresh, so `mp2` is entirely unknown and every shared variable both
 ;;; constrains it and contributes part of it: all the pairs go into ONE `find-mapping-total`,
 ;;; and the symmetries are genuinely enumerated here, unlike the determined lookups of M2
-;;; and M3.
+;;; and M4.
 ;;;
 ;;; `TooEager` is the tempting demotion -- build `mp2` from `?x` alone, then probe `?y`
 ;;; against it.  It is incomplete: until the last shared variable is in, `mp2` is partial, so
@@ -529,14 +529,14 @@
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; M5.  Three atoms -- the cases compose.
+;;; M7.  Three atoms -- the cases compose.
 ;;;
 ;;;     ?p == (f ?a ?b),  ?b == (g ?c ?d),  ?q == (h ?c ?a)
 ;;;
-;;; Atom 2 is M3's chain, atom 3 is M4's join, and every renaming they produce lives in one
+;;; Atom 2 is M4's chain, atom 3 is M6's join, and every renaming they produce lives in one
 ;;; slot space -- the one atom 1 fixed.  Atom 3 is constrained through `?c`, reached via the
 ;;; chain two atoms deep, and through `?a`, reached straight from atom 1: the case no
-;;; two-atom test can exercise.  The avoid-set accumulates across all three (M9).
+;;; two-atom test can exercise.  The avoid-set accumulates across all three (M5).
 ;;;
 ;;; Covered by: C10-chain-then-join.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -601,7 +601,7 @@
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; M6b.  A variable wider than its class -- the ClassSlots narrowing.
+;;; M8.  A variable wider than its class -- the ClassSlots narrowing.
 ;;;
 ;;;     ?x3 == (h ?x1 ?x2)   =>   union ?x1 (h ?x2 ?x1)
 ;;;
@@ -679,7 +679,7 @@
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; M7.  A slot literal: eta.
+;;; M9.  A slot literal: eta.
 ;;;
 ;;;     ?e == (lambda $s ?b),  ?b == (app ?f ?arg),  ?arg == (var $s)
 ;;;       =>  ?e = ?f      if $s not in slots(?f)
@@ -757,7 +757,7 @@
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; M8.  Actions: concluding over renamed ids.
+;;; M10.  Actions: concluding over renamed ids.
 ;;;
 ;;; The paper's union takes renamed ids -- S3.5 is union(m1*a1, m2*a2) -- and which of
 ;;; redundancy, a new group element, or an e-class merge it produces depends on those
@@ -807,7 +807,7 @@
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; M10.  A nested right-hand side.
+;;; M11.  A nested right-hand side.
 ;;;
 ;;;     ?p == (f ?a ?b)   =>   union ?p (h (g ?a ?b) ?b)
 ;;;
@@ -854,9 +854,9 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; M3b.  What the naive chain spelling does instead -- this is what justifies M3.
+;;; M4b.  What the naive chain spelling does instead -- this is what justifies M4.
 ;;;
-;;; M3 solves atom 2 with `find-mapping-total`.  Taking the root's stored edge as atom 2's
+;;; M4 solves atom 2 with `find-mapping-total`.  Taking the root's stored edge as atom 2's
 ;;; whole renaming -- `(compose q1 symb)`, the rule `ChainShort` below -- looks equivalent,
 ;;; and on (a) it is.
 ;;;
@@ -870,7 +870,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
 
-;; M3's spelling
+;; M4's spelling
 (relation Chain (U Renaming Renaming))
 (rule ((= p (App2 "f" p1 a q1 b))
        (= mp1 (map-union (map-image p1) (map-image q1)))
@@ -894,7 +894,7 @@
        (= mp2 (compose q1 symb)))
       ((ChainShort p (compose mp2 p2) (compose mp2 q2))))
 
-;; (a) M3's e-graph: `mb` covers every slot of the inner node, so the two agree
+;; (a) M4's e-graph: `mb` covers every slot of the inner node, so the two agree
 (push)
 (let $g  (App2 "g" (map-of 0 0) (Var 0)
                   (map-of 0 1) (Var 0)))
