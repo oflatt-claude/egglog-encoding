@@ -101,10 +101,12 @@ of what that lemma is for. Its target-side run stops one command short of `encod
 and `uTgt_saturate_infinite` is the compiled reason: `encode`'s rebuild has **no fixpoint**
 after a `union` between distinct built terms, so `ProgramStep Database.empty (encode P) tgt`
 — satisfiable at a program that only builds (`satProgram_programStep`) — is satisfiable at no
-program that asserts an equation. `Database.UnionsJoined`, which is what
-`Encoding/Correspond.lean` now reduces `execM_unionsRead` to, is witnessed there too:
-`uTgt_not_unionsRead` is the obligation failing before the rebuild's one firing and
-`uRebuilt_unionsJoined` is all three clauses holding after it.
+program that asserts an equation. `Database.UnionsJoined` and `Database.ViewLeader`, which is
+what `Encoding/Correspond.lean` now reduces `execM_unionsRead` to, are witnessed there too:
+`uTgt_not_unionsRead` is the obligation failing before the rebuild's one firing,
+`uTgt_not_viewLeader` is which of the two properties fails there, and
+`uRebuilt_unionsJoined`/`uRebuilt_viewLeader` are both holding after it — the second with all
+three of its clauses non-vacuous, which no other state in the tree makes them.
 -/
 
 namespace Egglog
@@ -2565,10 +2567,12 @@ theorem cong_headUnion_union_witness :
 /-! #### What the rebuild is for, at the state that needs it
 
 `Database.UnionsRead` — obligation `assert`'s `union` half — is **false** at `uTgt`, and
-`Database.UnionsJoined`'s third clause is exactly what fails there: the `@UF` edge is written
-and nothing has followed it, so `(A)` reads only `(A)` and `(B)` reads only `(B)`. One firing
-of `uRebuildB` repairs it, and the two states either side of that firing are what say the
-clause is load-bearing rather than decoration. -/
+`Database.ViewLeader.ufClosed` is exactly what fails there: the `@UF` edge is written and
+nothing has followed it, so `(A)` reads only `(A)` and `(B)` reads only `(B)`, which leaves the
+edge's two ends no common `lead`. `Database.UnionsJoined` — the `union`'s own write, at ids —
+holds on both sides of the firing. One firing of `uRebuildB` repairs the rest, and the two
+states either side of it are what say the two properties are load-bearing separately rather
+than decoration. -/
 
 /-- **What `uTgt` reads a source term as**: itself, and nothing else. Stated at an application
 because `uA` and `uB` are the two source terms and both are; a literal's id is the literal
@@ -2697,39 +2701,124 @@ private theorem uSrcD_eq_or_diag {a b : Term} (hab : (a, b) ∈ uSrcD.eqs) :
   · have hd : uSrcBase.Diag := fun p hp => absurd hp (by simp [uSrcBase, Database.empty])
     exact Or.inr (((hd.addTerm uA).addTerm uB) (a, b) h)
 
-/-- **All three clauses of `Database.UnionsJoined` hold at `uRebuilt`, and two of them
-non-vacuously.**
+/-- **`Database.UnionsJoined` holds at `uRebuilt`, non-vacuously**: the source's one
+non-reflexive equation, the two endpoints' own build rows as their ids, and the `@UF` row the
+encoded `union` wrote between them — keyed at `ordering-max` and so in the `Or.inr` orientation.
 
-* `readsSelf` — `(A)` and `(B)` each read their own build's row.
-* `edges` — the source's one non-reflexive equation, at the `@UF` row the encoded `union`
-  wrote, keyed at `ordering-max` and so in the `Or.inr` orientation.
-* `eclassFollowed` — at `(B)`, whose id has a parent, this is the row `uRebuildB` wrote; at
-  `(A)`, whose id has none, it is vacuous. So the clause is exercised where it bites.
+The clause reads *ids* and not the endpoints themselves, so this witness answers with the ids
+`(A)` and `(B)`; where the two come apart is a rule head's `union` at a non-leader
+substitution, which `Encoding/Correspond.lean`'s `ncProgram` is the state for. -/
+theorem uRebuilt_unionsJoined : uRebuilt.UnionsJoined uSrcD := by
+  intro a b hab hne
+  rcases uSrcD_eq_or_diag hab with h | h
+  · obtain ⟨rfl, rfl⟩ : a = uA ∧ b = uB := by simpa using h
+    exact ⟨uA, uB, Term.app fiatName [],
+      .app .nil ⟨[], .nil, uRebuilt_mem_viewA⟩, .app .nil ⟨[], .nil, uRebuilt_mem_viewB⟩,
+      Or.inr ⟨[uB], .cons uRebuilt_mem_B .nil, uRebuilt_mem_uf⟩⟩
+  · exact absurd h hne
 
-`uTgt_not_unionsRead` is the same three clauses one firing earlier, where `eclassFollowed`
-fails and the conclusion fails with it. -/
-theorem uRebuilt_unionsJoined : uRebuilt.UnionsJoined uSrcD where
-  readsSelf := by
-    intro t ht
-    rcases uSrcD_mem_cases ht with rfl | rfl
-    · exact .app .nil ⟨[], .nil, uRebuilt_mem_viewA⟩
-    · exact .app .nil ⟨[], .nil, uRebuilt_mem_viewB⟩
-  edges := by
-    intro a b hab hne
-    rcases uSrcD_eq_or_diag hab with h | h
-    · obtain ⟨rfl, rfl⟩ : a = uA ∧ b = uB := by simpa using h
-      exact Or.inr ⟨Term.app fiatName [], [uB], .cons uRebuilt_mem_B .nil, uRebuilt_mem_uf⟩
-    · exact absurd h hne
-  eclassFollowed := by
-    intro t p pf ht hself ho
+/-- **What `uRebuilt` reads a source term as**, after the rebuild's one firing: `(A)` still
+only `(A)`, and `(B)` now `(B)` *or* `(A)` — the row that firing wrote. -/
+private theorem uRebuilt_viewRepr {g : FnName} {bs : List Term} {e : Term}
+    (h : ViewRepr uRebuilt (.app g bs) e) :
+    (Term.app g bs = uA ∧ e = uA) ∨ (Term.app g bs = uB ∧ (e = uB ∨ e = uA)) := by
+  match h with
+  | @ViewRepr.app _ f as es e pf hl ho =>
+    rcases uRebuilt_out_view ho with ⟨rfl, rfl, rfl⟩ | ⟨rfl, rfl, hE⟩
+    · obtain rfl : as = [] := by cases hl with | nil => rfl
+      exact Or.inl ⟨rfl, rfl⟩
+    · obtain rfl : as = [] := by cases hl with | nil => rfl
+      exact Or.inr ⟨rfl, hE⟩
+
+/-- The union-find representative at `uRebuilt`: `(B)`'s class is `(A)`'s and nothing else
+moves. -/
+def uLead (t : Term) : Term := if t = uB then uA else t
+
+theorem uLead_uA : uLead uA = uA := by simp [uLead, uA, uB]
+
+theorem uLead_uB : uLead uB = uA := by simp [uLead]
+
+theorem uLead_lit (l : Lit) : uLead (.lit l) = .lit l := by simp [uLead, uB]
+
+/-- **`Database.ViewLeader` holds at `uRebuilt`, with every clause doing work.** Two ids, an
+edge between them, and a term that reads both — which is what the degenerate witness
+(`satTarget_viewLeader`: the identity `lead`, and no `@UF` row at all) cannot exhibit.
+
+* the first clause is asked at `(B)`, which reads `(B)` and whose `lead` is `(A)`: the row
+  `uRebuildB` wrote is what answers it;
+* the second at `(B)`'s two ids, which is the only term in the tree with two;
+* `ufClosed` at the one `@UF` row, whose ends are `(B)` and `(A)`.
+
+`uTgt_not_viewLeader` is the same property one firing earlier, where it fails. -/
+theorem uRebuilt_viewLeader : uRebuilt.ViewLeader := by
+  have hAA : ViewRepr uRebuilt uA uA := .app .nil ⟨[], .nil, uRebuilt_mem_viewA⟩
+  have hBA : ViewRepr uRebuilt uB uA := .app .nil ⟨[], .nil, Database.mem_addTerm _ _⟩
+  refine ⟨uLead, ?_, ?_, ?_⟩
+  · intro t e h
+    cases t with
+    | lit l => rw [h.eq_of_lit, uLead_lit]; exact .lit
+    | app g bs =>
+      rcases uRebuilt_viewRepr h with ⟨ht, rfl⟩ | ⟨ht, (rfl | rfl)⟩
+      · rw [ht, uLead_uA]; exact hAA
+      · rw [ht, uLead_uB]; exact hBA
+      · rw [ht, uLead_uA]; exact hBA
+  · intro t e₁ e₂ h₁ h₂
+    cases t with
+    | lit l => rw [h₁.eq_of_lit, h₂.eq_of_lit]
+    | app g bs =>
+      rcases uRebuilt_viewRepr h₁ with ⟨-, rfl⟩ | ⟨-, (rfl | rfl)⟩ <;>
+          rcases uRebuilt_viewRepr h₂ with ⟨-, rfl⟩ | ⟨-, (rfl | rfl)⟩ <;>
+        simp [uLead_uA, uLead_uB]
+  · intro x y pf ho
     obtain ⟨rfl, rfl⟩ := uRebuilt_out_uf ho
-    exact .app .nil ⟨[], .nil, Database.mem_addTerm _ _⟩
+    rw [uLead_uB, uLead_uA]
+
+/-- **And `Database.ViewLeader` fails at `uTgt`**, which is where `Database.UnionsRead` fails
+too: the edge is written and unfollowed, so `(A)`'s only `lead` is `(A)` and `(B)`'s is `(B)`,
+and `ufClosed` asks the two to be equal. This is the clause the rebuild discharges, isolated
+from the `union`'s own write — which holds on both sides of the firing. -/
+theorem uTgt_not_viewLeader : ¬ uTgt.ViewLeader := by
+  rintro ⟨lead, hmem, -, huf⟩
+  have hA : ViewRepr uTgt uA uA := .app .nil ⟨[], .nil, uTgt_mem_viewA⟩
+  have hB : ViewRepr uTgt uB uB := .app .nil ⟨[], .nil, uTgt_mem_viewB⟩
+  have hlA : lead uA = uA := by
+    rcases uTgt_viewRepr (hmem uA uA hA) with ⟨-, h⟩ | ⟨h, -⟩
+    · exact h
+    · exact absurd h uA_ne_uB
+  have hlB : lead uB = uB := by
+    rcases uTgt_viewRepr (hmem uB uB hB) with ⟨h, -⟩ | ⟨-, h⟩
+    · exact absurd h.symm uA_ne_uB
+    · exact h
+  exact uA_ne_uB ((hlB.symm.trans (huf uB uA (Term.app fiatName [])
+    ⟨[uB], .cons uTgt_mem_B .nil, uTgt_mem_uf⟩)).trans hlA).symm
+
+/-- **`Database.ViewsCover` holds at `uRebuilt` too**, so all three of the forward half's
+properties are discharged at one state, and at the state with the `union` rather than at the
+degenerate one. Both source terms are nullary, so the shared tuple is the empty one and the
+clause is the two build rows; `ncTgt_shared_FB` is the same clause at positive arity, where the
+tuple it answers with is not the one handed in. -/
+theorem uRebuilt_viewsCover : uRebuilt.ViewsCover uSrcD where
+  shared := by
+    intro f as bs ht hl
+    rcases uSrcD_mem_cases ht with h | h <;>
+        (simp only [uA, uB, Term.app.injEq] at h; obtain ⟨rfl, rfl⟩ := h) <;> cases hl
+    · exact ⟨[], _, _, .nil, .nil, ⟨[], .nil, uRebuilt_mem_viewA⟩⟩
+    · exact ⟨[], _, _, .nil, .nil, ⟨[], .nil, uRebuilt_mem_viewB⟩⟩
 
 /-- **So `Database.UnionsRead` holds at `uRebuilt`**, through the reduction — which is
 therefore exercised at a state with a real edge and a non-diagonal source, not only at the
 diagonal. -/
 theorem uRebuilt_unionsRead : uRebuilt.UnionsRead uSrcD :=
-  unionsRead_of_unionsJoined uRebuilt_unionsJoined
+  unionsRead_of_unionsJoined uRebuilt_viewLeader uRebuilt_unionsJoined
+
+/-- **And the forward half's whole argument runs there**: `cong_sameClass_of_state` at the three
+properties above, over a source that derives an equation between *distinct* terms. Nothing in
+this is vacuous — the hypothesis is the `union`'s own equation and the conclusion is an id the
+rebuild's firing put in both readings. -/
+theorem uRebuilt_cong_sameClass : Cong uSrcD uA uB ∧ SameClass uRebuilt uA uB :=
+  ⟨Cong.assert uSrcD_mem_eq,
+   cong_sameClass_of_state uSrcD_wf uRebuilt_viewLeader uRebuilt_viewsCover
+     uRebuilt_unionsRead (Cong.assert uSrcD_mem_eq)⟩
 
 /-- **And its conclusion is inhabited there**: the two endpoints share the id `(A)`. -/
 theorem uRebuilt_sameClass : SameClass uRebuilt uA uB :=
