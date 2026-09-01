@@ -28,9 +28,11 @@ under two conditions on the target — one per direction of the iff.
   swept.
 * **`EqsRefl`**, for `SameClass → sameClassF`. `Database.Out` reads the key up to
   congruence and the procedure reads it up to equality; the two agree exactly where the
-  target asserts no equation but a reflexive one. `encode` emits no `union` — a source
-  `union` becomes a `set` of a `@UF` edge — so its targets satisfy it, and
-  `difftest correspond`'s `tgt-eqs` column is that measurement, 0 on every case.
+  target asserts no equation but a reflexive one. At an `execM` target this is now a
+  **theorem** — `execM_encode_eqsRefl`, out of `execM_noUnions`: `encode` emits no
+  `Action.union` anywhere (a source `union` becomes a `set` of a `@UF` edge) and
+  `FDatabase.addEq` is the interpreter's only writer of `eqs`. `difftest correspond`'s
+  `tgt-eqs` column is the same quantity measured, 0 on every case.
 
 Neither is an artefact: both are properties of the state the encoded program runs to, and
 both are decided at the witness at the end of this file.
@@ -183,7 +185,16 @@ both are decided at the witness at the end of this file.
   whole of a **target firing behind a source firing** — the one command case the read-back does
   not reach — and it now carries both of the command induction's data clauses, `joined` and
   `reads`, because a rule head builds as well as unions and one firing answers both.
-  `execM_viewsSound` is the completeness half. `execM_viewLeader`, `execM_viewsCover`,
+  `execM_soundTerms` is the completeness half, and the state's own equations are no longer part
+  of it: `execM_encode_eqsRefl` makes the target's `Cong` the identity, so
+  `Database.ViewsSound` and `Database.EdgesSound` there are two clauses about the **term list**
+  (`viewsSound_of_soundTerms` is the step back, `soundTerms_of_viewsSound` the step out), which
+  is the form that is monotone along a run and so the form an induction can carry. What it still
+  needs is the interpreter's writers enumerated — every term `execRunRules` and
+  `FDatabase.mergeRound` add — and a *source* firing behind the target's; no target fixpoint,
+  since soundness is indifferent to the under-firing `execM_contained` records.
+  `ncTgt_soundTerms` is both clauses at the state the two refuted forward clauses fail at, with
+  a real `@UF` edge and positive arity. `execM_viewLeader`, `execM_viewsCover`,
   `execM_viewsCover_shared`, `execM_unionsJoined` and `execM_unionsRead` are assembled from
   them, proved. `Encoding/Match.lean`'s `uRebuilt_unionsJoined`, `uRebuilt_viewLeaderRows` and
   `uRebuilt_viewsCover` are the properties at a state a program reaches, with
@@ -4476,30 +4487,527 @@ theorem sameClass_cong_of_state_witness :
     sameClass_cong_of_state satSrc_wf satTarget_viewsSound satSrc_mem satSrc_mem
       satTarget_sameClass_self⟩
 
+/-! #### The target asserts no equation
+
+`Database.Out` searches the key's *congruence class*, so an invariant about view entries is a
+statement about the term list only where the target's `Cong` is the identity. That is
+`FDatabase.EqsRefl`, which `sameClassF_iff` takes as a hypothesis and `difftest correspond`
+measures as its `tgt-eqs` column; at an `execM` target it is a **theorem**. `encodeAction`
+turns a source `union` into a `set` of a `@UF` edge, so no `encode` output contains an
+`Action.union` — command, rule head or `:merge` body (`encode_unionFree`) — and
+`FDatabase.addEq` is the interpreter's only writer of `eqs`.
+
+`Proofs/Merge.lean` carries `Database.NoUnions` along `Database.Recorded` instead, which costs
+`Program.NoSaturate`; every writing command `encodeCmd` emits ends in
+`Cmd.saturate rebuildRuleset`, so that route is closed at exactly the programs this file is
+about, and what follows is the same fact proved on the interpreter's own components. -/
+
+/-- **A state whose equations, merge bodies and rule heads are all union-free.**
+`Database.NoUnions`' three fields, read off an `FDatabase`: the three phases read one
+each. -/
+structure FDatabase.NoUnions (d : FDatabase) : Prop where
+  /-- The state asserts nothing, which is `Database.Diag` in its strongest form. -/
+  eqs : d.eqs = []
+  /-- No `:merge` body asserts anything, which is what a merge phase runs. -/
+  sig : Signature.UnionFree d.sig
+  /-- No rule head asserts anything, which is what a round runs. -/
+  rules : ∀ r ∈ d.rules, Actions.UnionFree r.actions
+
+/-- `addTerm` writes `terms` and `rows`, and nothing else. -/
+theorem FDatabase.addTerm_eqs (t : Term) (d : FDatabase) : (d.addTerm t).eqs = d.eqs := rfl
+
+/-- `addRow` is an `addTerm` and an index write. -/
+theorem FDatabase.addRow_eqs (f : FnName) (as vs : List Term) (d : FDatabase) :
+    (d.addRow f as vs).eqs = d.eqs := rfl
+
+/-- A round's accumulator takes its signature and rules from the left and its equations from
+both. -/
+theorem FDatabase.NoUnions.union {d₁ d₂ : FDatabase} (h₁ : d₁.NoUnions) (h₂ : d₂.eqs = []) :
+    (d₁.union d₂).NoUnions where
+  eqs := by simp [FDatabase.union, h₁.eqs, h₂]
+  sig := h₁.sig
+  rules := h₁.rules
+
+/-- **One action.** `Action.union` is the only case that reaches `addEq`, and `Action.UnionFree`
+is exactly its exclusion. -/
+theorem execAction_noUnions {d d' : FDatabase} {a : Action} (hu : a.UnionFree)
+    (hn : d.NoUnions) (h : execAction d a = some d') : d'.NoUnions := by
+  cases a with
+  | expr e =>
+      obtain ⟨t, -, rfl⟩ := Option.map_eq_some_iff.mp h
+      exact ⟨by rw [FDatabase.addTerm_eqs]; exact hn.eqs, hn.sig, hn.rules⟩
+  | letBind v e =>
+      obtain ⟨t, -, rfl⟩ := Option.map_eq_some_iff.mp h
+      exact ⟨by rw [show ({(d.addTerm t) with env := (v, t) :: d.env} : FDatabase).eqs
+        = (d.addTerm t).eqs from rfl, FDatabase.addTerm_eqs]; exact hn.eqs, hn.sig, hn.rules⟩
+  | union e₁ e₂ => exact absurd hu (by simp [Action.UnionFree])
+  | set f args out =>
+      rw [execAction] at h
+      obtain ⟨as, -, h⟩ := Option.bind_eq_some_iff.mp h
+      obtain ⟨vs, -, rfl⟩ := Option.map_eq_some_iff.mp h
+      exact ⟨by rw [FDatabase.addRow_eqs]; exact hn.eqs, hn.sig, hn.rules⟩
+
+@[inherit_doc execAction_noUnions]
+theorem execActions_noUnions : ∀ {as : List Action} {d d' : FDatabase},
+    Actions.UnionFree as → d.NoUnions → execActions d as = some d' → d'.NoUnions
+  | [], _, _, _, hn, h => by rw [execActions, Option.some.injEq] at h; exact h ▸ hn
+  | a :: as, _, _, hu, hn, h => by
+      rw [execActions] at h
+      obtain ⟨e, he, hrest⟩ := Option.bind_eq_some_iff.mp h
+      exact execActions_noUnions hu.2 (execAction_noUnions hu.1 hn he) hrest
+
+/-- A rule head runs its block under the match and then restores the environment and the rule
+set. -/
+theorem execLocalActions_noUnions {d d' : FDatabase} {as : List Action} {σ : Env}
+    (hu : Actions.UnionFree as) (hn : d.NoUnions) (h : execLocalActions d as σ = some d') :
+    d'.NoUnions := by
+  rw [execLocalActions] at h
+  obtain ⟨e, he, rfl⟩ := Option.map_eq_some_iff.mp h
+  have := execActions_noUnions hu (show ({d with env := d.env ++ σ} : FDatabase).NoUnions from
+    ⟨hn.eqs, hn.sig, hn.rules⟩) he
+  exact ⟨this.eqs, this.sig, hn.rules⟩
+
+/-- One firing, unioned into the accumulator. -/
+theorem fireInto_noUnions {d acc : FDatabase} {r : Rule} {σ : Env}
+    (hu : Actions.UnionFree r.actions) (hn : d.NoUnions) (ha : acc.NoUnions) :
+    (fireInto d r acc σ).NoUnions := by
+  rw [fireInto]
+  cases hf : execLocalActions d r.actions σ with
+  | none => exact ha
+  | some d' => exact ha.union (execLocalActions_noUnions hu hn hf).eqs
+
+@[inherit_doc fireInto_noUnions]
+theorem fireRule_noUnions {d acc : FDatabase} {r : Rule}
+    (hu : Actions.UnionFree r.actions) (hn : d.NoUnions) (ha : acc.NoUnions) :
+    (fireRule d acc r).NoUnions := by
+  rw [fireRule]
+  induction matchQuery d r.query generalizing acc with
+  | nil => exact ha
+  | cons σ σs ih => exact ih (fireInto_noUnions hu hn ha)
+
+/-- The round's fold, with the accumulator generalized; the pre-state the matches are read off
+is fixed. -/
+theorem foldl_fireRule_noUnions {d : FDatabase} (hn : d.NoUnions) :
+    ∀ (rs : List Rule), (∀ r ∈ rs, Actions.UnionFree r.actions) →
+      ∀ {acc : FDatabase}, acc.NoUnions → (rs.foldl (fireRule d) acc).NoUnions
+  | [], _, _, ha => ha
+  | r :: rs, hu, _, ha =>
+      foldl_fireRule_noUnions hn rs (fun r' hr' => hu r' (List.mem_cons_of_mem _ hr'))
+        (fireRule_noUnions (hu r List.mem_cons_self) hn ha)
+
+/-- **One round.** Every rule of the ruleset is one the state holds, so `rules` covers them. -/
+theorem execRunRules_noUnions {R : RulesetName} {d : FDatabase} (hn : d.NoUnions) :
+    (execRunRules R d).NoUnions :=
+  foldl_fireRule_noUnions hn _ (fun r hr => hn.rules r (List.mem_of_mem_filter hr)) hn
+
+/-- **One `:merge` firing.** The body is read from the signature, which is where `sig` is
+spent; the surviving row is an `addTerm`, and `env`/`rules` come back from the pre-state. -/
+theorem mergeOneOriented_noUnions {cl : Finset (Term × Term)} {d d' : FDatabase} {r₁ r₂ : Row}
+    (hn : d.NoUnions) (h : d.mergeOneOriented cl r₁ r₂ = some d') : d'.NoUnions := by
+  rw [FDatabase.mergeOneOriented] at h
+  split at h
+  · rename_i body res hm
+    obtain ⟨dc, hdc, hmm⟩ := Option.bind_eq_some_iff.mp hm
+    have hbody : Actions.UnionFree body := hn.sig _ _ hdc _ hmm
+    split at h
+    · split at h
+      · rw [Option.some.injEq] at h
+        exact ⟨by rw [← h]; exact hn.eqs, by rw [← h]; exact hn.sig, by rw [← h]; exact hn.rules⟩
+      · obtain ⟨e, he, h⟩ := Option.bind_eq_some_iff.mp h
+        obtain ⟨vs, -, rfl⟩ := Option.map_eq_some_iff.mp h
+        have hE : e.NoUnions :=
+          execActions_noUnions hbody
+            (show ({d with env := mergeEnv r₂.out r₁.out} : FDatabase).NoUnions from
+              ⟨hn.eqs, hn.sig, hn.rules⟩) he
+        exact ⟨by rw [show _ = (e.addTerm (.app r₂.fn (r₂.args ++ vs))).eqs from rfl,
+                  FDatabase.addTerm_eqs]; exact hE.eqs,
+          hE.sig, hn.rules⟩
+    · exact absurd h (by simp)
+  · exact absurd h (by simp)
+
+@[inherit_doc mergeOneOriented_noUnions]
+theorem mergeOneWith_noUnions {cl : Finset (Term × Term)} {d d' : FDatabase} {r₁ r₂ : Row}
+    (hn : d.NoUnions) (h : FDatabase.mergeOneWith cl d r₁ r₂ = some d') : d'.NoUnions := by
+  rw [FDatabase.mergeOneWith] at h
+  split at h
+  · exact mergeOneOriented_noUnions hn h
+  · exact mergeOneOriented_noUnions hn h
+
+/-- A rebuild moves rows only. -/
+theorem rebuild_noUnions {cl : Finset (Term × Term)} {d : FDatabase} (hn : d.NoUnions) :
+    (FDatabase.rebuild cl d).NoUnions := ⟨hn.eqs, hn.sig, hn.rules⟩
+
+/-- A merge pass's inner fold: every firing runs at the accumulator. -/
+theorem foldl_mergeInner_noUnions {cl : Finset (Term × Term)} {r₁ : Row} :
+    ∀ (rows : List Row) {acc : FDatabase}, acc.NoUnions →
+      (rows.foldl (fun acc' r₂ => if r₁ == r₂ then acc' else
+        match FDatabase.mergeOneWith cl acc' r₁ r₂ with
+        | some acc'' => acc''
+        | none => acc') acc).NoUnions
+  | [], _, ha => ha
+  | _ :: rows, acc, ha => by
+      rename_i r₂
+      refine foldl_mergeInner_noUnions rows ?_
+      by_cases hb : r₁ == r₂
+      · simpa [hb] using ha
+      · simp only [hb, Bool.false_eq_true, if_false]
+        cases hm : FDatabase.mergeOneWith cl acc r₁ r₂ with
+        | none => exact ha
+        | some acc'' => exact mergeOneWith_noUnions ha hm
+
+@[inherit_doc foldl_mergeInner_noUnions]
+theorem foldl_mergeOuter_noUnions {cl : Finset (Term × Term)} {e : FDatabase} :
+    ∀ (rows : List Row) {acc : FDatabase}, acc.NoUnions →
+      (rows.foldl (fun acc r₁ =>
+        e.rows.foldl (fun acc' r₂ => if r₁ == r₂ then acc' else
+          match FDatabase.mergeOneWith cl acc' r₁ r₂ with
+          | some acc'' => acc''
+          | none => acc') acc) acc).NoUnions
+  | [], _, ha => ha
+  | _ :: rows, _, ha =>
+      foldl_mergeOuter_noUnions rows (foldl_mergeInner_noUnions e.rows ha)
+
+/-- **One merge pass.** -/
+theorem mergeRound_noUnions {d : FDatabase} (hn : d.NoUnions) : d.mergeRound.NoUnions := by
+  rw [FDatabase.mergeRound]
+  split
+  · exact hn
+  · exact foldl_mergeOuter_noUnions _ (rebuild_noUnions hn)
+
+/-- **A merge phase**, however many passes it takes. -/
+theorem mergeSaturateF_noUnions : ∀ (n : Nat) {d d' : FDatabase}, d.NoUnions →
+    FDatabase.mergeSaturateF n d = some d' → d'.NoUnions
+  | 0, _, _, hn, h => by
+      rw [FDatabase.mergeSaturateF] at h
+      split at h
+      · rw [Option.some.injEq] at h; exact h ▸ hn
+      · exact absurd h (by simp)
+  | n + 1, _, _, hn, h => by
+      rw [FDatabase.mergeSaturateF] at h
+      split at h
+      · rw [Option.some.injEq] at h; exact h ▸ hn
+      · exact mergeSaturateF_noUnions n (mergeRound_noUnions hn) h
+
+/-- **One round of a ruleset, with its merge phase.** -/
+theorem runRoundM_noUnions {R : RulesetName} {d d' : FDatabase} (hn : d.NoUnions)
+    (h : d.runRoundM R = some d') : d'.NoUnions :=
+  mergeSaturateF_noUnions _ (execRunRules_noUnions hn) h
+
+/-- **Rounds to the interpreter's fixpoint.** -/
+theorem runSaturateM_noUnions {R : RulesetName} : ∀ (n : Nat) {d d' : FDatabase}, d.NoUnions →
+    FDatabase.runSaturateM R n d = some d' → d'.NoUnions
+  | 0, _, _, hn, h => by
+      rw [FDatabase.runSaturateM] at h
+      obtain ⟨e, -, h⟩ := Option.bind_eq_some_iff.mp h
+      split at h
+      · rw [Option.some.injEq] at h; exact h ▸ hn
+      · exact absurd h (by simp)
+  | n + 1, _, _, hn, h => by
+      rw [FDatabase.runSaturateM] at h
+      obtain ⟨e, he, h⟩ := Option.bind_eq_some_iff.mp h
+      split at h
+      · rw [Option.some.injEq] at h; exact h ▸ hn
+      · exact runSaturateM_noUnions n (runRoundM_noUnions hn he) h
+
+/-- **One command.** `.decl` is the only writer of `sig` and `.rule` the only writer of
+`rules`, which is why `Cmd.UnionFree` is stated at those two and at an action. -/
+theorem execCmdM_noUnions {d d' : FDatabase} {c : Cmd} (hu : c.UnionFree) (hn : d.NoUnions)
+    (h : d.execCmdM c = some d') : d'.NoUnions := by
+  cases c with
+  | action a =>
+      rw [FDatabase.execCmdM] at h
+      obtain ⟨e, he, h⟩ := Option.bind_eq_some_iff.mp h
+      exact mergeSaturateF_noUnions _ (execAction_noUnions hu hn he) h
+  | rule r =>
+      rw [FDatabase.execCmdM, Option.some.injEq] at h
+      refine ⟨by rw [← h]; exact hn.eqs, by rw [← h]; exact hn.sig, ?_⟩
+      intro r' hr'
+      rcases List.mem_cons.mp (show r' ∈ r :: d.rules by rw [← h] at hr'; exact hr') with rfl | h'
+      · exact hu
+      · exact hn.rules r' h'
+  | run R => exact runRoundM_noUnions hn h
+  | saturate R => exact runSaturateM_noUnions _ hn h
+  | decl f dc =>
+      rw [FDatabase.execCmdM, Option.some.injEq] at h
+      refine ⟨by rw [← h]; exact hn.eqs, ?_, by rw [← h]; exact hn.rules⟩
+      intro g dc' hg
+      rw [← h] at hg
+      have hg' : Function.update d.sig f (some dc) g = some dc' := hg
+      by_cases hgf : g = f
+      · subst hgf
+        rw [Function.update_self, Option.some.injEq] at hg'
+        exact hg' ▸ hu
+      · rw [Function.update_of_ne hgf] at hg'
+        exact hn.sig g dc' hg' 
+
+@[inherit_doc execCmdM_noUnions]
+theorem execProgramM_noUnions : ∀ {p : Program} {d d' : FDatabase}, Program.UnionFree p →
+    d.NoUnions → d.execProgramM p = some d' → d'.NoUnions
+  | [], _, _, _, hn, h => by rw [FDatabase.execProgramM, Option.some.injEq] at h; exact h ▸ hn
+  | c :: cs, _, _, hu, hn, h => by
+      rw [FDatabase.execProgramM] at h
+      obtain ⟨e, he, hrest⟩ := Option.bind_eq_some_iff.mp h
+      exact execProgramM_noUnions hu.2 (execCmdM_noUnions hu.1 hn he) hrest
+
+/-- The initial state asserts nothing, declares nothing and holds no rule. -/
+theorem empty_noUnions : FDatabase.empty.NoUnions :=
+  ⟨rfl, by intro f dc h; exact absurd h (by simp [FDatabase.empty]),
+    by intro r hr; exact absurd hr (by simp [FDatabase.empty])⟩
+
+/-- **A union-free program reaches no state that asserts anything.** -/
+theorem execM_noUnions {p : Program} (hu : Program.UnionFree p) {d : FDatabase}
+    (h : execM p = some d) : d.NoUnions :=
+  execProgramM_noUnions hu empty_noUnions h
+
+/-- **An `execM` target of an encoded program asserts no equation**, so its `Cong` is the
+identity (`Cong.eq_of_eqsRefl`) and `Database.Out` reads its key up to equality.
+
+This is `sameClassF_iff`'s second hypothesis, discharged: `difftest correspond`'s `tgt-eqs`
+column reports 0 on every case, and this is why. -/
+theorem execM_encode_eqsRefl {P : Program} {tgt : FDatabase}
+    (h : execM (encode P) = some tgt) : tgt.EqsRefl := by
+  intro p hp
+  rw [(execM_noUnions (encode_unionFree P) h).eqs] at hp
+  exact absurd hp (by simp)
+
+
+/-! #### The invariant, as a property of the term list
+
+`Database.Out` is not monotone along a run — a round adds terms and *deletes* rows, and the
+displaced row's entry term is what survives (`mergeOneOriented_confined`) — so an invariant a
+per-command induction can carry has to be stated on `terms`. With the target's `Cong` the
+identity, that costs nothing: the two clauses say exactly that every term of the two shapes
+the encoding writes is justified, and `Database.Out` at such a term is the same statement
+back. -/
+
+/-- **`Database.ViewsSound` and `Database.EdgesSound`, as one condition on the term list.**
+A view entry term and a `@UF` entry term are the only two shapes either clause reads. -/
+def FDatabase.SoundTerms (d : FDatabase) (src : Database) : Prop :=
+  (∀ f cs e pf, Term.app (viewName f) (cs ++ [e, pf]) ∈ d.terms → EntrySound src f cs e) ∧
+  (∀ t p pf, Term.app ufName [t, p, pf] ∈ d.terms → Cong src t p)
+
+/-- **The term-list form is enough**, where the target asserts nothing: `Database.Out` reads
+the key up to a congruence that is the identity there (`CongList.eq_of_eqsRefl`), so the row
+it answers with is the entry term itself. `execM_encode_eqsRefl` is the hypothesis, at an
+`execM` target. -/
+theorem viewsSound_of_soundTerms {src : Database} {d : FDatabase} (hr : d.EqsRefl)
+    (h : d.SoundTerms src) :
+    d.toDatabase.ViewsSound src ∧ d.toDatabase.EdgesSound src := by
+  refine ⟨fun f cs e pf ho => ?_, fun t p pf ho => ?_⟩
+  · obtain ⟨bs, hcl, hmem⟩ := ho
+    obtain rfl : cs = bs := CongList.eq_of_eqsRefl hr.toDatabase hcl
+    exact h.1 f cs e pf (by rw [FDatabase.toDatabase_terms] at hmem; exact hmem)
+  · obtain ⟨bs, hcl, hmem⟩ := ho
+    obtain rfl : [t] = bs := CongList.eq_of_eqsRefl hr.toDatabase hcl
+    refine h.2 t p pf ?_
+    rw [FDatabase.toDatabase_terms] at hmem
+    exact hmem
+
+/-- **And it is no stronger**, where the target is subterm-closed: a key column of an entry
+term is a term the state holds, which is the reflexivity `Database.out_self` wants. So the
+residue below is the two clauses and not a strengthening of them. -/
+theorem soundTerms_of_viewsSound {src : Database} {d : FDatabase} (hsc : d.SubtermClosed)
+    (hv : d.toDatabase.ViewsSound src) (he : d.toDatabase.EdgesSound src) : d.SoundTerms src := by
+  have hout : ∀ (f : FnName) (as vs : List Term), Term.app f (as ++ vs) ∈ d.terms →
+      d.toDatabase.Out f as vs := by
+    intro f as vs hmem
+    refine Database.out_self (by rw [FDatabase.toDatabase_terms]; exact hmem) (fun a ha => ?_)
+    rw [FDatabase.toDatabase_terms]
+    exact hsc _ hmem a ((Term.mem_subtermList (Term.app f (as ++ vs))).mpr
+      (Term.arg_subterms (List.mem_append_left _ ha) (Term.self_mem_subterms a)))
+  exact ⟨fun f cs e pf hmem => hv f cs e pf (hout _ _ _ hmem),
+    fun t p pf hmem => he t p pf (hout ufName [t] [p, pf] hmem)⟩
+
+/-! ##### The three writers of `terms`
+
+`FDatabase.addTerm`, `FDatabase.addRow` — which is an `addTerm` and an index write — and
+`FDatabase.union`, which is what a round's accumulator folds with. Every other component
+update leaves the list alone, so the induction below owes one obligation per `addTerm` the
+run performs and nothing else. `addTerm` records every *subterm*, which is why the obligation
+is stated over `Term.subtermList` and not at the term alone. -/
+
+/-- `EntrySound` moves along a source that grows: `Cong` and `CongList` are monotone in `eqs`,
+and `Database.terms` is read out of them. What transports a clause proved at a command's
+pre-state onto the state the whole source run finishes at. -/
+theorem EntrySound.mono {src src' : Database} (h : src.eqs ⊆ src'.eqs) {f : FnName}
+    {cs : List Term} {e : Term} (hs : EntrySound src f cs e) : EntrySound src' f cs e :=
+  let ⟨as, ham, hal, hae⟩ := hs
+  ⟨as, Cong.mono ⟨h⟩ ham, hal.mono ⟨h⟩, Cong.mono ⟨h⟩ hae⟩
+
+@[inherit_doc EntrySound.mono]
+theorem FDatabase.SoundTerms.mono_src {src src' : Database} {d : FDatabase}
+    (h : src.eqs ⊆ src'.eqs) (hs : d.SoundTerms src) : d.SoundTerms src' :=
+  ⟨fun f cs e pf hm => (hs.1 f cs e pf hm).mono h,
+    fun t p pf hm => Cong.mono ⟨h⟩ (hs.2 t p pf hm)⟩
+
+/-- **One `addTerm`**, which is the only writer of `terms` there is. The two obligations are
+about the term's *subterms*, since that is what the list records. -/
+theorem FDatabase.SoundTerms.addTerm {src : Database} {d : FDatabase} {t : Term}
+    (h : d.SoundTerms src)
+    (hv : ∀ f cs e pf, Term.app (viewName f) (cs ++ [e, pf]) ∈ t.subtermList →
+      EntrySound src f cs e)
+    (hu : ∀ x p pf, Term.app ufName [x, p, pf] ∈ t.subtermList → Cong src x p) :
+    (d.addTerm t).SoundTerms src := by
+  constructor
+  · intro f cs e pf hm
+    rcases List.mem_append.mp (List.mem_dedup.mp hm) with hm' | hm'
+    · exact hv f cs e pf hm'
+    · exact h.1 f cs e pf hm'
+  · intro x p pf hm
+    rcases List.mem_append.mp (List.mem_dedup.mp hm) with hm' | hm'
+    · exact hu x p pf hm'
+    · exact h.2 x p pf hm'
+
+/-- **One `set`.** The entry term is the whole of what the denotation sees; the index row is
+not a term. -/
+theorem FDatabase.SoundTerms.addRow {src : Database} {d : FDatabase} {g : FnName}
+    {as vs : List Term} (h : d.SoundTerms src)
+    (hv : ∀ f cs e pf,
+      Term.app (viewName f) (cs ++ [e, pf]) ∈ (Term.app g (as ++ vs)).subtermList →
+      EntrySound src f cs e)
+    (hu : ∀ x p pf, Term.app ufName [x, p, pf] ∈ (Term.app g (as ++ vs)).subtermList →
+      Cong src x p) :
+    (d.addRow g as vs).SoundTerms src := h.addTerm hv hu
+
+/-- **One firing, unioned into the accumulator.** -/
+theorem FDatabase.SoundTerms.union {src : Database} {d₁ d₂ : FDatabase}
+    (h₁ : d₁.SoundTerms src) (h₂ : d₂.SoundTerms src) : (d₁.union d₂).SoundTerms src := by
+  constructor
+  · intro f cs e pf hm
+    rcases List.mem_append.mp (List.mem_dedup.mp hm) with hm' | hm'
+    · exact h₁.1 f cs e pf hm'
+    · exact h₂.1 f cs e pf hm'
+  · intro x p pf hm
+    rcases List.mem_append.mp (List.mem_dedup.mp hm) with hm' | hm'
+    · exact h₁.2 x p pf hm'
+    · exact h₂.2 x p pf hm'
+
+/-- The base case: the initial state holds no term. -/
+theorem FDatabase.empty_soundTerms {src : Database} : FDatabase.empty.SoundTerms src :=
+  ⟨fun _ _ _ _ hm => absurd hm (by simp [FDatabase.empty]),
+    fun _ _ _ hm => absurd hm (by simp [FDatabase.empty])⟩
+
+/-! #### Both clauses at the state the forward half's two clauses fail at
+
+`ncTgt_not_readsSelf` and `ncTgt_not_viewsProduct` are the two over-strong forward clauses
+refuted at `ncTgt`, the state the encoded `ncProgram` reaches. The completeness half's
+invariant **survives** there, at positive arity and at a real `@UF` edge: the source rule
+fired over the non-leader member `(B)` and the encoded rule did not, and under-firing is
+exactly what soundness is indifferent to. -/
+
+/-- Membership in the source's term list, as membership in its denotation. -/
+private theorem ncSrc_memD {t : Term} (h : t ∈ ncSrc.terms) : t ∈ ncSrc.toDatabase.terms := by
+  rw [FDatabase.toDatabase_terms]; exact h
+
+/-- `(A)` is in the source's term list. -/
+private theorem ncSrc_memL_A : ncA ∈ ncSrc.terms := by rw [ncSrc_terms_eq]; simp
+
+/-- `(B)` is in the source's term list. -/
+private theorem ncSrc_memL_B : ncB ∈ ncSrc.terms := by rw [ncSrc_terms_eq]; simp
+
+/-- `(F (A))` is in the source's term list. -/
+private theorem ncSrc_memL_FA : ncFA ∈ ncSrc.terms := by rw [ncSrc_terms_eq]; simp
+
+/-- `(A)` is a source term, so it is congruent to itself. -/
+private theorem ncSrc_mem_A : ncA ∈ ncSrc.toDatabase.terms := ncSrc_memD ncSrc_memL_A
+
+/-- `(B)` is a source term. -/
+private theorem ncSrc_mem_B : ncB ∈ ncSrc.toDatabase.terms := ncSrc_memD ncSrc_memL_B
+
+/-- `(F (A))` is a source term. -/
+private theorem ncSrc_mem_FA : ncFA ∈ ncSrc.toDatabase.terms := ncSrc_memD ncSrc_memL_FA
+
+/-- The `union`'s own equation, symmetrised: the edge `ncTgt` holds runs from `(B)` to `(A)`
+and the source asserts the pair the other way round. -/
+private theorem ncSrc_cong_B_A : Cong ncSrc.toDatabase ncB ncA :=
+  (Cong.assert (FDatabase.mem_toDatabase_eqs.mpr
+    (Or.inr ⟨by rw [ncSrc_eqs]; simp [ncA, ncB], ncSrc_memL_A, ncSrc_memL_B⟩))).symm
+
+/-- **`Database.ViewsSound` holds at `ncTgt`.** Four view entries over three constructors:
+`@AView` and `@FView` are reflexive, and `(B)`'s key carries two e-class columns — its own
+build's `(B)` and the leader's `(A)`, which the rebuild's e-class rule wrote — so the second
+is `EntrySound` at the `union`'s own equation and not at a reflexive `Cong`. `@FView` is keyed
+at `((A))`, which is the positive-arity case. -/
+theorem ncTgt_viewsSound : ncTgt.toDatabase.ViewsSound ncSrc.toDatabase := by
+  intro f cs e pf ho
+  rcases ncTgt_out_view ho with ⟨rfl, rfl, rfl⟩ | ⟨rfl, rfl, hE⟩ | ⟨rfl, rfl, rfl⟩
+  · exact ⟨[], ncSrc_mem_A, .nil, ncSrc_mem_A⟩
+  · rcases hE with rfl | rfl
+    · exact ⟨[], ncSrc_mem_B, .nil, ncSrc_cong_B_A⟩
+    · exact ⟨[], ncSrc_mem_B, .nil, ncSrc_mem_B⟩
+  · exact ⟨[ncA], ncSrc_mem_FA, CongList.refl (by
+      intro a ha
+      obtain rfl : a = ncA := by simpa using ha
+      exact ncSrc_mem_A), ncSrc_mem_FA⟩
+
+/-- **And `Database.EdgesSound` holds at `ncTgt`, with an edge to discharge it at.**
+`ncTgt_out_uf` is the edge — `@UF((B)) ↦ ((A), …)`, written by the source `union` and settled
+against by `mergeBody` — so the clause is not carried here by its vacuous case, which is the
+trap `satTarget_edgesSound` is. -/
+theorem ncTgt_edgesSound : ncTgt.toDatabase.EdgesSound ncSrc.toDatabase := by
+  intro t p pf ho
+  obtain ⟨rfl, rfl⟩ := ncTgt_out_uf_cases ho
+  exact ncSrc_cong_B_A
+
+/-- **The term-list form at the same state**, through `soundTerms_of_viewsSound` and back
+through `viewsSound_of_soundTerms`: the two forms agree at a state that holds four view
+entries and two `@UF` edges, so the residue below is stated at neither more nor less than the
+two clauses. -/
+theorem ncTgt_soundTerms : ncTgt.SoundTerms ncSrc.toDatabase ∧
+    ncTgt.toDatabase.ViewsSound ncSrc.toDatabase ∧
+    ncTgt.toDatabase.EdgesSound ncSrc.toDatabase :=
+  let hs := soundTerms_of_viewsSound ncTgt_subtermClosed ncTgt_viewsSound ncTgt_edgesSound
+  ⟨hs, viewsSound_of_soundTerms ncTgt_eqsRefl hs⟩
+
+/-- **The completeness half's whole conclusion, at `ncTgt`.** `sameClass_cong_of_state` run at
+the state the two forward clauses fail at, over the pair the source really does equate. -/
+theorem ncTgt_sameClass_cong : Cong ncSrc.toDatabase ncFA ncFB :=
+  sameClass_cong_of_state (ncProgram_programStep.wf Database.WF.empty) ncTgt_viewsSound
+    ncSrc_mem_FA (ncSrc_memD ncSrc_mem_FB) ncTgt_sameClass_FA_FB
+
 /-- **The residue of the completeness half. Not proved.**
 
-What is missing: that the state `execM` returned satisfies `Database.ViewsSound` and
-`Database.EdgesSound` over the source. Every *per-entry* obligation is discharged, one per
-writer `encode` emits — `entrySound_build`, `EntrySound.eclass`, `EntrySound.column`,
-`EntrySound.select`, `cong_of_entrySound_collide`, `cong_of_eqs`, `cong_of_pathCompress` here,
-and `entrySound_headBuild`/`cong_headUnion` in `Encoding/Match.lean` for the two writers a rule
-head has. What is left is two things, and the rule head is no longer one of them.
+`Database.ViewsSound` and `Database.EdgesSound` at the state `execM` returned, in the term-list
+form the run can carry (`viewsSound_of_soundTerms` is the step back). Every *per-entry*
+obligation is discharged, one per writer `encode` emits — `entrySound_build`,
+`EntrySound.eclass`, `EntrySound.column`, `EntrySound.select`, `cong_of_entrySound_collide`,
+`cong_of_eqs`, `cong_of_pathCompress` here, and `entrySound_headBuild`/`cong_headUnion` in
+`Encoding/Match.lean` for the two writers a rule head has — so what is missing is the
+*induction that applies them*, and three things it needs.
 
-* The encoded action list has to be read back off `execAction`, one `set` at a time, so that
-  "these are the writers" is a theorem rather than a reading of `encodeBuild`. This is the same
-  missing step `execM_viewsCover` needs, in the opposite direction, and `encodeBuild_fst` is
-  what makes it a *syntactic* read-back: the naming expression a build returns is the
-  expression it was given, so the entry is keyed on the source argument expressions and valued
-  at the source expression, both evaluated in the target.
-* `execM`'s rule firing is `FDatabase.runSaturateM`'s fixpoint — now proved, as
-  `FDatabase.RoundClosed` (`Proofs/Merge.lean`), and located at every encoded block's end by
-  `roundClosed_of_execProgramM`. It is strictly weaker than
-  `RunSaturated` (`execM_contained`: the enumerator under-fires), so it is that fixpoint the
-  two properties have to be proved from — and it is the *source* side of the same alignment
-  that `entrySound_headBuild`'s `hfired` names: the source rule fired, at the substitution the
-  correspondence returns, and holds what its own head built. `RunRules` fires only the
-  substitutions valid in the pre-state, so this is a per-command alignment and not a fact about
-  either final state.
+* **The interpreter's writers, enumerated.** `unionsInv_step`'s five closed cases only ever
+  need the terms a block of `set`s wrote, which `holdsBuild_of_execProgramM` reads back off
+  `execActions`. This invariant owes *every* term the run adds, and every command `encodeCmd`
+  emits for a writing source command ends in `Cmd.saturate rebuildRuleset` — so no case closes
+  without "every term `execRunRules` and `FDatabase.mergeRound` add is one of these `set`s'".
+  That lemma does not exist, and it is the bulk of what is left: a fold over rule firings and
+  a double fold over row pairs, with `mergeOneOriented`'s two branches — the surviving entry
+  term and whatever `mergeBody` writes — as the two shapes at the bottom. What the fold has to
+  compose is settled: `FDatabase.SoundTerms.addTerm`, `.addRow` and `.union` are the three
+  writers of `terms` there are, `FDatabase.empty_soundTerms` is the base case, and
+  `FDatabase.SoundTerms.mono_src` is what carries a clause proved at a command's pre-state
+  onto the source the whole run finishes at.
+* **The row-to-entry direction, which is the one that is *not* refuted.** A rule fires off
+  `d.rows` (`patternHolds`), and turning a matched row into a `Database.Out` is
+  `FDatabase.IndexOk.entry` — a row is an entry term. That is the direction soundness needs.
+  `FDatabase.IndexCurrent` is its converse, and `cxTgt_not_indexCurrent` refutes *that*; so the
+  refutation that blocks `execM_viewLeaderRows` does not block this residue, which is why the
+  two are separate holes.
+* **`hfired`, and it is a per-command alignment.** `entrySound_headBuild` and `cong_headUnion`
+  ask that the *source* rule fired at the substitution the correspondence returns.
+  `exists_validQuerySubst_of_encodeQuery` delivers the substitution, valid in whatever source
+  state the clause is instantiated at; what is missing is that the source's own `RunRules` ran
+  it. `encodeCmd` gives `.run R` and `.saturate R` the same round structure they have on the
+  source, so this is round-by-round and the clause has to be instantiated at the round's
+  *pre-state*, with `EntrySound` transported forward along the source's growth. It is the
+  mirror of `unionsJoined_fire` — a source firing behind the target's, where that one needs a
+  target firing behind the source's.
+
+**No fixpoint is needed on the target.** `FDatabase.RoundClosed` was named as this residue's
+third missing piece; it is not one. Soundness is indifferent to under-firing — `execM_contained`
+says the encoded round fires a subset, and a subset of justified writes is justified — so what
+this needs is the *containment*, not the fixpoint. The fixpoint is what `execM_viewLeaderRows`
+and `unionsJoined_fire` want, where a firing has to be shown to have *happened*.
 
 **The rule head is closed, and was the case worth doubting.** `encodeBuild` mints its skolem
 over the arguments' *ids*, so `mem_terms_of_entrySound_skolem` makes the head's obligation
@@ -4509,17 +5017,33 @@ correspondence delivers is a *choice*, and taking it to be the ids themselves is
 because `Database.ViewsSound` reads a key column back as something congruent to the id and both
 endpoints of a congruence are present. `Encoding/Match.lean`'s `exists_validQuerySubst_at_ids`
 is that reading, `Expr.eval_transport` is why the source's head evaluation then gives the same
-term rather than a congruent one, and `entrySound_headBuild` is the case — with `hfired`, the
-source's own firing, as its only residue. `entrySound_headBuild_witness` is all of its
-hypotheses holding together at `wProgram`, at the view entry that run really wrote.
+term rather than a congruent one, and `entrySound_headBuild` is the case — with `hfired` as its
+only residue. `entrySound_headBuild_witness` is all of its hypotheses holding together at
+`wProgram`, at the view entry that run really wrote.
+
+**`addTerm` records every subterm**, so the induction also owes that no *id* and no *proof*
+term is view- or `@UF`-shaped. The names are already separated (`viewName_inj`,
+`viewName_ne_ufName`, `viewName_ne_termName`, `viewName_ne_transName`) and
+`Program.EncodeDomain.noAt` keeps every source constructor out of the generated namespace; what
+is missing is the invariant that says an id is a source application and a proof is built from
+the proof vocabulary.
 
 At a program with no rule the hypothesis is the source's own `evalAction`, and
-`satTarget_viewsSound` is that case discharged. -/
+`satTarget_viewsSound` is that case discharged; `ncTgt_soundTerms` is both clauses at a state
+an encoded program reaches with a rule, a non-leader firing and a real `@UF` edge. -/
+theorem execM_soundTerms {P : Program} {src : Database} {tgt : FDatabase}
+    (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
+    (htgt : execM (encode P) = some tgt) : tgt.SoundTerms src := by
+  sorry
+
+/-- **The completeness half's invariant at the state `execM` returned.** `execM_soundTerms` is
+the residue; the step from it is `viewsSound_of_soundTerms`, whose hypothesis
+`execM_encode_eqsRefl` discharges. -/
 theorem execM_viewsSound {P : Program} {src : Database} {tgt : FDatabase}
     (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
     (htgt : execM (encode P) = some tgt) :
-    tgt.toDatabase.ViewsSound src ∧ tgt.toDatabase.EdgesSound src := by
-  sorry
+    tgt.toDatabase.ViewsSound src ∧ tgt.toDatabase.EdgesSound src :=
+  viewsSound_of_soundTerms (execM_encode_eqsRefl htgt) (execM_soundTerms hdom hsrc htgt)
 
 /-- **No equality is invented, at the source's own e-nodes.** Proved from
 `execM_viewsSound`, through `sameClass_cong_of_state` — the target-side half needs no
