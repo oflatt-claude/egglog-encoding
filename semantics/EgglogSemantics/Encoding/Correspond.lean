@@ -53,6 +53,16 @@ both are decided at the witness at the end of this file.
   edge-following in `ViewLeader.ufClosed` where both halves of it are needed at once.
   `Encoding/Match.lean`'s `uRebuilt_cong_sameClass` runs the whole argument at a state with a
   real `union`, with all three properties discharged there and no clause vacuous.
+* **Proved, and it is where the weakened coverage clause pays**:
+  `Database.ViewsCover.of_viewLeaderRows`. The tuple `ViewsCover.shared` answers with is the
+  *leader* tuple, always — so the clause follows from two things and nothing else: an id for
+  the source's own term, and a row at the leader tuple (`Database.ViewLeaderRows`' `rowLead`,
+  the rebuild's **column** rules where `ViewLeader.ufClosed` is its e-class rule). No index
+  argument beyond the one `ViewLeader` already needs, and the transport that puts a
+  pointwise-congruent argument list on the same tuple is `viewReprList_map_lead_of_forall₂`,
+  proved. `ncTgt_viewsCover` runs the reduction at the state that refutes
+  `Database.ViewsProduct` — positive arity, the key `((B))` moved to `((A))` — which is what
+  says the leader tuple generalises the instance `ncTgt_shared_FB` answers by hand.
 * **Proved, and the completeness half's whole argument**: `sameClass_cong_of_state`, the
   same shape. `SameClass d a b → Cong src a b` holds at any target with *one* named property
   — `Database.ViewsSound`, that every view entry claims only what the source derives — over
@@ -82,7 +92,8 @@ both are decided at the witness at the end of this file.
   evaluation build the very term `encodeBuild`'s skolem names — so the head owes only its
   firing (`entrySound_headBuild`, `cong_headUnion`), and not the fact
   `encode_corresponds_invents_enode` refutes at a key column.
-* **Proved, and the shared crux of three of the four residues**: the **action read-back**.
+* **Proved, and the shared crux of the command induction's five closed cases**: the
+  **action read-back**.
   `holdsBuild_of_execActions` reads both rows a build's `set`s wrote off the block that ran
   them, `viewRepr_self_of_execActions` assembles them into the reading a `SameClass` is two
   of, and `holdsBuild_of_execProgramM`/`viewRepr_self_of_execProgramM` are the same where the
@@ -93,11 +104,14 @@ both are decided at the witness at the end of this file.
   where the weakening pays. `UnionsInv` is the invariant it carries — `Database.UnionsJoined`
   at the state the *whole* run finishes at, every global binding's value reading to itself
   there, the two environments coinciding, and the source staying in the constructor fragment —
+  every source term having an id there, every global binding's value reading to itself there,
+  the two environments coinciding, and the source staying in the constructor fragment —
   and `unionsInv_step` carries it across a source command in five of its six cases: `.decl`,
-  `.rule`, a top-level build (now trivial: `addTerm` writes only reflexive equations, which
-  the clause skips), a top-level `let` (whose `hvar` obligation the invariant supplies,
-  `UnionsInv.hvar`) and a top-level `union` (whose edge `out_uf_of_execProgramM` reads back off
-  the emitted `set`, between ids the same block's builds made). `unionsInv_execM` runs it from
+  `.rule`, a top-level build (whose `joined` clause is trivial, `addTerm` writing only
+  reflexive equations, and whose `reads` clause is the block's own read-back), a top-level
+  `let` (whose `hvar` obligation the invariant supplies, `UnionsInv.hvar`) and a top-level
+  `union` (whose edge `out_uf_of_execProgramM` reads back off the emitted `set`, between ids
+  the same block's builds made). `unionsInv_execM` runs it from
   the empty source database and the state the prelude leaves, and `execM_unionsJoined` is its
   data clause. Three lemmas make it go through and each is worth naming:
   `Expr.eval_sigIndep` — two successful evaluations in one environment agree, whatever the two
@@ -114,7 +128,7 @@ both are decided at the witness at the end of this file.
   edge between its two endpoints; both fail at `ncTgt`, so its rule-firing case was refuted
   rather than open. `Database.UnionsJoined.of_readsSelf` is the proof that what is carried now
   is weaker than what was carried then.
-* **Proved, and the rebuild fixpoint the five residues were waiting for**:
+* **Proved, and the rebuild fixpoint the residues were waiting for**:
   `FDatabase.RoundClosed` (`Proofs/Merge.lean`). `runSaturateM` returns only from the branch
   that tested `sameData`, so a successful `Cmd.saturate R` leaves a state where **one more
   round of `R` derives no new term**; `roundClosed_of_execProgramM` locates one at the end of
@@ -122,7 +136,8 @@ both are decided at the witness at the end of this file.
   `execM_contained` says the enumerator under-fires, so `RunSaturated`, and `Rebuilt` with it,
   is not a consequence — and it is a `terms` fact, because a round adds terms and *deletes*
   rows, so the sandwich that closes over the first does not close over the second.
-* **Refuted, and it is why the fixpoint closes none of the five**: `FDatabase.IndexCurrent`,
+* **Refuted, and it is why the fixpoint closes neither target-side residue**:
+  `FDatabase.IndexCurrent`,
   the converse of `FDatabase.IndexOk.entry` — every entry term still current in the index.
   `cxTgt_not_indexCurrent` refutes it at a state built by the interpreter's own writers at the
   encoding's own declarations, where a source `union` collides two e-classes at one view key,
@@ -161,20 +176,23 @@ both are decided at the witness at the end of this file.
   against 0.2 s compiled. Witnesses on the target side are therefore built from
   `FDatabase.addRow`/`addTerm` (the `cexD` idiom) or take the run as a hypothesis; witnesses on
   the *source* side run in the kernel outright (`ncSrc_exec`).
-* **`sorry`**, four, one *clause* each and none of them an obligation or a refuted statement
-  any more. `execM_viewLeader` needs the index argument, and now carries the rebuild's
-  edge-following for the `union` half as well (`ufClosed`), which is why there are four and not
-  five; `execM_viewsCover_shared` needs the same argument for the column rules;
-  `unionsJoined_fire` needs a target firing behind a source firing, which is the one command
-  case the read-back does not reach; and `execM_viewsSound` is the completeness half.
-  `execM_viewsCover`, `execM_unionsJoined` and `execM_unionsRead` are assembled from them,
-  proved. `Encoding/Match.lean`'s `uRebuilt_unionsJoined`, `uRebuilt_viewLeader` and
-  `uRebuilt_viewsCover` are the three properties at a state a program reaches, with
+* **`sorry`**, three, and they are three *mechanisms* rather than three clauses — which is
+  what the factorisation above bought. `execM_viewLeaderRows` is the whole of the run-wide
+  **index** argument: `rebuildRules`' e-class rule in `ufClosed`, its column rules in
+  `rowLead`, and `pathCompressRule` for `lead` being a function. `unionsJoined_fire` is the
+  whole of a **target firing behind a source firing** — the one command case the read-back does
+  not reach — and it now carries both of the command induction's data clauses, `joined` and
+  `reads`, because a rule head builds as well as unions and one firing answers both.
+  `execM_viewsSound` is the completeness half. `execM_viewLeader`, `execM_viewsCover`,
+  `execM_viewsCover_shared`, `execM_unionsJoined` and `execM_unionsRead` are assembled from
+  them, proved. `Encoding/Match.lean`'s `uRebuilt_unionsJoined`, `uRebuilt_viewLeaderRows` and
+  `uRebuilt_viewsCover` are the properties at a state a program reaches, with
   `uRebuilt_cong_sameClass` running the forward half there; `uTgt_not_unionsRead` and
   `uTgt_not_viewLeader` are the conclusion and the responsible clause failing one rebuild
-  firing earlier. `encode_assert`, `encode_trans`, `encode_congr`,
-  `encode_corresponds_forward`, `encode_corresponds_complete` and `encode_corresponds` are
-  assembled from them and carry `sorryAx` through them.
+  firing earlier; `ncTgt_viewLeaderRows` is the fourth clause at positive arity, where the
+  three earlier witnesses have only the empty key. `encode_assert`, `encode_trans`,
+  `encode_congr`, `encode_corresponds_forward`, `encode_corresponds_complete` and
+  `encode_corresponds` are assembled from them and carry `sorryAx` through them.
 * **Refuted, and it was the *reading* that was wrong**: two of those clauses were once false
   at `litBuildProgram`, one `.action (.expr (.lit 5))`, whose build emits no action at all, and
   `Program.EncodeDomain.noBareBuild` was the repair. The defect was `ViewRepr`'s literal clause
@@ -883,6 +901,34 @@ theorem SameClass.trans_of_viewLeader {d : Database} (h : d.ViewLeader) {a b c :
   rw [← huniq b e₂ e₁ hb₂ hb₁]
   exact hmem c e₂ hc₂
 
+/-- **`Database.ViewLeader`, and the rows keyed at the leader tuple.**
+
+The three clauses above, and a fourth: a view row's key transports along `lead`, so the tuple
+of leaders carries a row wherever any tuple does. That fourth clause is the whole of what
+`Database.ViewsCover` costs beyond *every source term having an id* —
+`Database.ViewsCover.of_viewLeaderRows` is the reduction — and it is the same mechanism the
+first three are, one step over: `rebuildRules`' **column** rules follow an `@UF` edge into a
+*key* column exactly as its e-class rule follows one into a value column.
+
+Kept apart from `Database.ViewLeader` rather than made a fourth field of it because
+`cong_sameClass_of_state` spends only the three — the forward half's reading never looks at a
+key — and because `satTarget_viewLeader` and `uTgt_not_viewLeader` are statements about those
+three. `Database.ViewLeaderRows.toViewLeader` is the forgetting. -/
+def Database.ViewLeaderRows (d : Database) : Prop :=
+  ∃ lead : Term → Term,
+    (∀ t e, ViewRepr d t e → ViewRepr d t (lead e)) ∧
+    (∀ t e₁ e₂, ViewRepr d t e₁ → ViewRepr d t e₂ → lead e₁ = lead e₂) ∧
+    (∀ x y pf, d.Out ufName [x] [y, pf] → lead x = lead y) ∧
+    (∀ f es e pf, d.Out (viewName f) es [e, pf] →
+      ∃ e' pf', d.Out (viewName f) (es.map lead) [e', pf'])
+
+/-- The three clauses `Database.ViewLeader` is, out of the four. -/
+theorem Database.ViewLeaderRows.toViewLeader {d : Database} (h : d.ViewLeaderRows) :
+    d.ViewLeader := by
+  obtain ⟨lead, hmem, huniq, huf, -⟩ := h
+  exact ⟨lead, hmem, huniq, huf⟩
+
+
 /-! #### And at a state a program reaches
 
 `Database.ViewLeader` is the residue `trans` is reduced to, so it had better hold somewhere:
@@ -930,16 +976,23 @@ private theorem satTarget_viewRepr {g : FnName} {bs : List Term} {e : Term}
       simp only [List.length_append, List.length_cons] at hl
       omega
 
-/-- **`Database.ViewLeader` holds at `satTarget`**, with the identity as its `lead`. The
+/-- **`Database.ViewLeaderRows` holds at `satTarget`**, with the identity as its `lead`. The
 literal case needs nothing of the state: a literal's only id is itself. `ufClosed` is vacuous
-here and `satTarget_no_uf` is why — `satProgram` has no `union`, so nothing writes an edge;
-`uRebuilt_viewLeader` is the clause at a state that does. -/
-theorem satTarget_viewLeader : satTarget.ViewLeader :=
+here and `satTarget_no_uf` is why — `satProgram` has no `union`, so nothing writes an edge —
+and `rowLead` is the identity on keys for the same reason; `uRebuilt_viewLeaderRows` is the
+property at a state that writes an edge and `ncTgt_viewLeaderRows` at one where `rowLead` moves
+a key. -/
+theorem satTarget_viewLeaderRows : satTarget.ViewLeaderRows :=
   ⟨id, fun _ _ h => h, fun t _ _ h₁ h₂ =>
     show id _ = id _ from match t with
       | .lit _ => (h₁.eq_of_lit).trans h₂.eq_of_lit.symm
       | .app _ _ => (satTarget_viewRepr h₁).trans (satTarget_viewRepr h₂).symm,
-    fun _ _ _ ⟨_, _, hmem⟩ => absurd hmem (satTarget_no_uf _)⟩
+    fun _ _ _ ⟨_, _, hmem⟩ => absurd hmem (satTarget_no_uf _),
+    fun _ _ e pf ho => ⟨e, pf, by simpa using ho⟩⟩
+
+@[inherit_doc satTarget_viewLeaderRows]
+theorem satTarget_viewLeader : satTarget.ViewLeader :=
+  satTarget_viewLeaderRows.toViewLeader
 
 /-- **The keys the target's views carry**, relative to what the source holds.
 
@@ -996,6 +1049,50 @@ theorem Database.ViewsCover.of_viewsProduct {src d : Database} (h : d.ViewsProdu
     obtain ⟨es, h₁, h₂⟩ := viewReprList_of_forall₂ hl
     obtain ⟨e, pf, ho⟩ := h f as es ha h₁
     exact ⟨es, e, pf, h₁, h₂, ho⟩
+
+/-- A reading transported to the leader tuple, pointwise. -/
+theorem viewReprList_map_lead {d : Database} {lead : Term → Term}
+    (hmem : ∀ t e, ViewRepr d t e → ViewRepr d t (lead e)) :
+    ∀ {as es : List Term}, ViewReprList d as es → ViewReprList d as (es.map lead)
+  | [], [], .nil => .nil
+  | _ :: _, _ :: _, .cons h hl => .cons (hmem _ _ h) (viewReprList_map_lead hmem hl)
+
+/-- **A pointwise-congruent list reads the same leader tuple.** This is what makes the tuple
+`Database.ViewsCover.shared` answers with independent of the list handed in: the two lists
+share an id per position, `huniq` makes that id's `lead` the `lead` of the first list's own,
+and `hmem` hands it to the second. Nothing here is about a row. -/
+theorem viewReprList_map_lead_of_forall₂ {d : Database} {lead : Term → Term}
+    (hmem : ∀ t e, ViewRepr d t e → ViewRepr d t (lead e))
+    (huniq : ∀ t e₁ e₂, ViewRepr d t e₁ → ViewRepr d t e₂ → lead e₁ = lead e₂)
+    : ∀ {as bs : List Term}, List.Forall₂ (SameClass d) as bs →
+      ∀ {es : List Term}, ViewReprList d as es → ViewReprList d bs (es.map lead)
+  | [], [], .nil, [], .nil => .nil
+  | a :: _, b :: _, .cons hab hl, e :: _, .cons ha hes => by
+      obtain ⟨c, hac, hbc⟩ := hab
+      refine .cons ?_ (viewReprList_map_lead_of_forall₂ hmem huniq hl hes)
+      rw [huniq a e c ha hac]
+      exact hmem b c hbc
+
+/-- **The leader tuple answers the clause**, given an id for the source's own term: this is the
+reduction that says `Database.ViewsCover` is `Database.ViewLeaderRows` plus *totality* and
+nothing else.
+
+The tuple handed in is never used. The source term's own reading supplies a tuple carrying a
+row, `rowLead` moves that row to the leader tuple, and `viewReprList_map_lead_of_forall₂` puts
+both argument lists on it — which is exactly the shape `ncTgt_shared_FB` exhibits by hand at
+the instance where `Database.ViewsProduct` fails, and `ncTgt_viewsCover` is this reduction run
+there. -/
+theorem Database.ViewsCover.of_viewLeaderRows {src d : Database} (h : d.ViewLeaderRows)
+    (ht : ∀ t ∈ src.terms, ∃ e, ViewRepr d t e) : d.ViewsCover src where
+  shared f as bs ha hl := by
+    obtain ⟨lead, hmem, huniq, -, hrow⟩ := h
+    obtain ⟨e, he⟩ := ht _ ha
+    match he with
+    | @ViewRepr.app _ _ _ es _ pf hes ho =>
+      obtain ⟨e', pf', ho'⟩ := hrow _ _ _ _ ho
+      exact ⟨es.map lead, e', pf', viewReprList_map_lead hmem hes,
+        viewReprList_map_lead_of_forall₂ hmem huniq hl hes, ho'⟩
+
 
 /-- **Obligation `congr` reduces to `Database.ViewsCover.shared`.** The clause *is* that
 obligation with the target's side spelled out — one shared id tuple and an entry keyed at it —
@@ -1781,19 +1878,23 @@ theorem rbLitState_lit :
       ((FDatabase.eqsReflB_iff _).mp rfl) _ _).mpr h
     exact absurd this (by decide)⟩
 
-/-! #### The three residues
+/-! #### The three properties
 
-One `sorry` each, and each of the three is a property of the state `execM` returned rather
-than a restatement of an obligation. All three hold at `witnessProgram`, the program the
-vacuity witness at the end of this file is stated over; `difftest correspond-dump 64 union`
-prints the state and its `reprs`/`leaders` block is the reading.
+Each is a property of the state `execM` returned rather than a restatement of an obligation,
+and each holds at `witnessProgram`, the program the vacuity witness at the end of this file is
+stated over; `difftest correspond-dump 64 union` prints the state and its `reprs`/`leaders`
+block is the reading. Two of the three are *derived* below —
+`Database.ViewsCover.of_viewLeaderRows` and `unionsRead_of_unionsJoined` — so what carries a
+`sorry` is not three properties but two mechanisms.
 
 * `Database.ViewLeader` — `leaders` is a single term for every source term: `(One)` for
   `(One)` and for `(Two)`, `(Add (One) (Two))` for both `Add`s. `difftest correspond`'s
   `leader-diff` column is the same reading over the whole corpus, and it is 0.
 * `Database.ViewsCover` — every pointwise-equal pair of argument lists reads to one of the
   three `@AddView` keys, which are the product of the two children's `reprs`; the clause asks
-  for one such key and not for the product, and the source holds no literal.
+  for one such key and not for the product, and the source holds no literal. It is *derived*
+  from the first, strengthened by `rowLead` to `Database.ViewLeaderRows`, plus every source
+  term having an id (`Database.ViewsCover.of_viewLeaderRows`).
 * `Database.UnionsRead` — `reprs` of `(One)` and of `(Two)` share `(One)`.
 
 So none of the three is a hypothesis nothing reachable satisfies, which is the failure
@@ -1809,9 +1910,10 @@ emits a `Cmd.saturate` after every command that writes.
 block of a build's own commands, both of its rows are entry terms of whatever the run finishes
 at (`holdsBuild_of_execProgramM`), and they assemble into the reading
 (`viewRepr_self_of_execProgramM`). The **command induction** is proved on top of it, save one
-case: `UnionsInv` is its invariant, `unionsInv_execM` runs it over `encode P`, and
-`execM_unionsJoined` — `Database.UnionsRead`'s one write clause — comes out of it. Both of the
-two things that make the induction more than bookkeeping are handled there:
+case: `UnionsInv` is its invariant, `unionsInv_execM` runs it over `encode P`, and both of its
+data clauses come out of it — `execM_unionsJoined`, `Database.UnionsRead`'s one write clause,
+and the totality `Database.ViewsCover` is derived from. Both of the two things that make the
+induction more than bookkeeping are handled there:
 
 * a source term reached through a **variable** needs the earlier `let`'s own read-back, which is
   the `hvar` hypothesis of `viewRepr_self_of_execActions`; the invariant's `env` and `envReads`
@@ -2396,6 +2498,10 @@ structure UnionsInv (sd : Database) (td D : FDatabase) : Prop where
   /-- Every equation the source asserts between distinct terms has ids for both endpoints and
   a `@UF` edge between those, at the state the run finishes at. -/
   joined : D.toDatabase.UnionsJoined sd
+  /-- Every term the source holds has *some* id there. Not the term itself
+  (`Database.ReadsSelf`, refuted by `ncTgt_not_readsSelf`) — a term a rule firing built over a
+  non-leader class member is an id of nothing, and reads the leader's row instead. -/
+  reads : ∀ t ∈ sd.terms, ∃ e, ViewRepr D.toDatabase t e
   /-- Every subterm of a value the source's environment binds reads to itself there. -/
   envReads : ∀ b ∈ sd.env, ∀ s ∈ b.2.subterms, ViewRepr D.toDatabase s s
   /-- The two environments are the same list. -/
@@ -2488,10 +2594,22 @@ so this is a hole and not a falsity. What has to fill it is a target firing behi
 which is `Encoding/Match.lean`'s correspondence in the direction
 `exists_validQuerySubst_of_encodeQuery` does not run.
 
+**Both data clauses at once, and for the same reason.** `reads` — every source term having
+*some* id — is the other half of the conclusion, and its five other command cases are the
+build read-back (`viewReprAll_self_of_execProgramM`), discharged in `unionsInv_step`. A rule
+head **builds** as well as unions, and the term it builds at a non-leader substitution is a
+term no block ran a `set` for; the id it has is the leader's row, and the leader's row is the
+target's own firing. One firing answers both clauses, which is why they are one residue rather
+than two: `Database.ViewsCover` is now `Database.ViewLeaderRows` plus `reads`
+(`Database.ViewsCover.of_viewLeaderRows`), so this residue and `execM_viewLeaderRows` between
+them are the whole forward half.
+
 **What it was blamed on before, and what that turned out to be.** `FDatabase.IndexCurrent`
 (`Proofs/Merge.lean`, refuted by `cxTgt_not_indexCurrent`) and the run-wide index argument that
 would replace it are about the row a *rebuild* displaced. They are real, and they are not this:
-here the row was never written, at any state, by any block.
+here the row was never written, at any state, by any block. That argument is
+`execM_viewLeaderRows`'s, and this residue does not share it — a target firing is a `rows`
+fact about the state the encoded rule ran at, not about a row the rebuild moved.
 
 Stated over both firing commands at once, because `encodeCmd` gives them the same block:
 `[c, Cmd.saturate rebuildRuleset]`. -/
@@ -2499,13 +2617,14 @@ theorem unionsJoined_fire {R : RulesetName} {c : Cmd} {sd sd' : Database} {td td
     (hfire : c = Cmd.run R ∨ c = Cmd.saturate R) (hstep : CmdStep sd c sd')
     (hrun : td.execProgramM [c, Cmd.saturate rebuildRuleset] = some td')
     (hmono : ∀ t ∈ td'.terms, t ∈ D.terms) (hinv : UnionsInv sd td D) :
-    D.toDatabase.UnionsJoined sd' := by
+    D.toDatabase.UnionsJoined sd' ∧ ∀ t ∈ sd'.terms, ∃ e, ViewRepr D.toDatabase t e := by
   sorry
 
 /-! ##### One command -/
 
 /-- **The invariant survives one source command.** Six cases: five read-backs of the `set`s
-`encodeCmd` emitted for that command, and `unionsJoined_fire`. -/
+`encodeCmd` emitted for that command — `reads` off the build's own reading, `joined` off the
+`union`'s own `@UF` write — and `unionsJoined_fire`, which is both data clauses at once. -/
 theorem unionsInv_step {Q : Program} (hQ : Q.EncodeDomain) {c : Cmd} (hc : c ∈ Q)
     {n i : Nat} {sd sd' : Database} {td D : FDatabase} {rest : Program}
     (hstep : CmdStep sd c sd')
@@ -2524,7 +2643,9 @@ theorem unionsInv_step {Q : Program} (hQ : Q.EncodeDomain) {c : Cmd} (hc : c ∈
           Option.some.injEq] at hblock
         exact hblock.symm
       have hsub : sd'.eqs ⊆ sd.eqs := fun p hp => by rw [heqs] at hp; exact hp
-      refine ⟨fun a b hab hne => hinv.joined a b (hsub hab) hne, ?_, ?_, hstate'⟩
+      have hterms : sd'.terms = sd.terms := Database.terms_eq_of_eqs_eq heqs
+      refine ⟨fun a b hab hne => hinv.joined a b (hsub hab) hne,
+        fun t ht => hinv.reads t (by rw [hterms] at ht; exact ht), ?_, ?_, hstate'⟩
       · rw [henv]; exact hinv.envReads
       · rw [hinv.env, henv]
   | rule r =>
@@ -2535,7 +2656,9 @@ theorem unionsInv_step {Q : Program} (hQ : Q.EncodeDomain) {c : Cmd} (hc : c ∈
         obtain rfl : c' = Cmd.rule (encodeRule i r n).1 := by simpa using hc2
         trivial
       have hsub : sd'.eqs ⊆ sd.eqs := fun p hp => by rw [heqs] at hp; exact hp
-      refine ⟨fun a b hab hne => hinv.joined a b (hsub hab) hne, ?_, ?_, hstate'⟩
+      have hterms : sd'.terms = sd.terms := Database.terms_eq_of_eqs_eq heqs
+      refine ⟨fun a b hab hne => hinv.joined a b (hsub hab) hne,
+        fun t ht => hinv.reads t (by rw [hterms] at ht; exact ht), ?_, ?_, hstate'⟩
       · rw [henv]; exact hinv.envReads
       · rw [FDatabase.execProgramM_env hsets hblock, hinv.env, henv]
   | run R =>
@@ -2545,7 +2668,7 @@ theorem unionsInv_step {Q : Program} (hQ : Q.EncodeDomain) {c : Cmd} (hc : c ∈
         have hc2 : c' ∈ [Cmd.run R, Cmd.saturate rebuildRuleset] := hc'
         have hd : c' = Cmd.run R ∨ c' = Cmd.saturate rebuildRuleset := by simpa using hc2
         rcases hd with rfl | rfl <;> trivial
-      refine ⟨hjoin, ?_, ?_, hstate'⟩
+      refine ⟨hjoin.1, hjoin.2, ?_, ?_, hstate'⟩
       · rw [cmdStep_env_of_run hstep]; exact hinv.envReads
       · rw [FDatabase.execProgramM_env hsets hblock, hinv.env, cmdStep_env_of_run hstep]
   | saturate R =>
@@ -2555,27 +2678,45 @@ theorem unionsInv_step {Q : Program} (hQ : Q.EncodeDomain) {c : Cmd} (hc : c ∈
         have hc2 : c' ∈ [Cmd.saturate R, Cmd.saturate rebuildRuleset] := hc'
         have hd : c' = Cmd.saturate R ∨ c' = Cmd.saturate rebuildRuleset := by simpa using hc2
         rcases hd with rfl | rfl <;> trivial
-      refine ⟨hjoin, ?_, ?_, hstate'⟩
+      refine ⟨hjoin.1, hjoin.2, ?_, ?_, hstate'⟩
       · rw [cmdStep_env_of_saturate hstep]; exact hinv.envReads
       · rw [FDatabase.execProgramM_env hsets hblock, hinv.env, cmdStep_env_of_saturate hstep]
   | action a =>
       have hev : evalAction sd a = some sd' := cmdStep_action_eq hinv.state.sig hstep
       rcases evalAction_eq_some hev with
-        ⟨e, tS, rfl, -, rfl⟩ | ⟨v, e, tS, rfl, htS, rfl⟩ |
+        ⟨e, tS, rfl, htS, rfl⟩ | ⟨v, e, tS, rfl, htS, rfl⟩ |
         ⟨e₁, e₂, t₁, t₂, rfl, ht₁, ht₂, -, rfl⟩ | ⟨f, args, out, as, vs, rfl, -, -, -⟩
       · -- a top-level build: `addTerm` writes only reflexive equations, so `joined` is
-        -- untouched and the read-back is not needed at all — which is the weakened clause's
-        -- first dividend.
+        -- untouched — which is the weakened clause's first dividend — and `reads` is the
+        -- block's own read-back, at every subterm `addTerm` recorded.
+        have hprim : ∀ g ∈ e.fns, Prim.ofName g = none :=
+          noPrim_of_mem_ctors hQ (fun p hp => mem_program_ctors hc hp)
         have hsets : ∀ c' ∈ (encodeCmd (Cmd.action (Action.expr e)) n i).1,
             c'.ActionsAreSets := by
           change ∀ c' ∈ (encodeBuild e n).2.1.map Cmd.action
             ++ [Cmd.saturate rebuildRuleset], c'.ActionsAreSets
           exact actionsAreSets_block (encodeBuild_isSet e n)
-        refine ⟨?_, ?_, ?_, hstate'⟩
+        have hblk : (encodeCmd (Cmd.action (Action.expr e)) n i).1
+            = (encodeBuild e n).2.1.map Cmd.action ++ [Cmd.saturate rebuildRuleset] := rfl
+        have hrun' : td.execProgramM ((encodeBuild e n).2.1.map Cmd.action
+            ++ ([Cmd.saturate rebuildRuleset] ++ rest)) = some D := by
+          rw [← List.append_assoc, ← hblk]; exact hrun
+        have htS2 : e.eval sd.sig td.env = some tS := by rw [hinv.env]; exact htS
+        obtain ⟨tT, htT⟩ := exists_eval_of_execProgramM_encodeBuild e n hrun'
+          (fun w hw => Expr.exists_lookup_of_eval e htS2 w hw)
+        have htT2 : e.eval td.sig td.env = some tS := by
+          rw [htT, Expr.eval_sigIndep e htT htS2]
+        have hall : ∀ s ∈ tS.subterms, ViewRepr D.toDatabase s s :=
+          viewReprAll_self_of_execProgramM e n hrun' hprim (fun w _ u hu => hinv.hvar hu) htT2
+        refine ⟨?_, ?_, ?_, ?_, hstate'⟩
         · intro x y hxy hne
           rcases eq_of_mem_addTerm_eqs hxy with hxy' | hxy'
           · exact hinv.joined x y hxy' hne
           · exact absurd hxy' hne
+        · intro t ht
+          rcases Database.addTerm_terms ▸ ht with ht' | ht'
+          · exact hinv.reads t ht'
+          · exact ⟨t, hall t ht'⟩
         · exact hinv.envReads
         · rw [FDatabase.execProgramM_env hsets hblock]; exact hinv.env
       · -- a top-level let
@@ -2622,11 +2763,15 @@ theorem unionsInv_step {Q : Program} (hQ : Q.EncodeDomain) {c : Cmd} (hc : c ∈
                   have hc2 : c' ∈ [Cmd.saturate rebuildRuleset] := hc'
                   obtain rfl : c' = Cmd.saturate rebuildRuleset := by simpa using hc2
                   trivial) hsat, henv₂, henv₁]
-        refine ⟨?_, ?_, ?_, hstate'⟩
+        refine ⟨?_, ?_, ?_, ?_, hstate'⟩
         · intro x y hxy hne
           rcases eq_of_mem_addTerm_eqs (hxy : (x, y) ∈ (sd.addTerm tS).eqs) with hxy' | hxy'
           · exact hinv.joined x y hxy' hne
           · exact absurd hxy' hne
+        · intro t ht
+          rcases Database.addTerm_terms ▸ Database.terms_setEnv ▸ ht with ht' | ht'
+          · exact hinv.reads t ht'
+          · exact ⟨t, hall t ht'⟩
         · intro b hb s hs
           have hb2 : b ∈ (v, tS) :: sd.env := hb
           rcases List.mem_cons.mp hb2 with rfl | hb'
@@ -2717,7 +2862,7 @@ theorem unionsInv_step {Q : Program} (hQ : Q.EncodeDomain) {c : Cmd} (hc : c ∈
             (∃ pf, D.toDatabase.Out ufName [t₂] [t₁, pf]) :=
           out_uf_of_execProgramM hrest₂ (by rw [hsig₂, hsig₁, henv₂, henv₁]; exact htT1')
             (by rw [hsig₂, henv₂]; exact htT2')
-        refine ⟨?_, ?_, ?_, hstate'⟩
+        refine ⟨?_, ?_, ?_, ?_, hstate'⟩
         · intro x y hxy hne
           rcases mem_addEq_eqs hxy with hxy' | hxy' | hxy'
           · obtain ⟨rfl, rfl⟩ : x = t₁ ∧ y = t₂ := by
@@ -2732,6 +2877,12 @@ theorem unionsInv_step {Q : Program} (hQ : Q.EncodeDomain) {c : Cmd} (hc : c ∈
                 hall₂ y (Term.self_mem_subterms _), Or.inr ho⟩
           · exact hinv.joined x y hxy' hne
           · exact absurd hxy' hne
+        · intro t ht
+          rcases Database.addEq_terms ▸ ht with ht' | ht'
+          · rcases ht' with ht'' | ht''
+            · exact hinv.reads t ht''
+            · exact ⟨t, hall₁ t ht''⟩
+          · exact ⟨t, hall₂ t ht'⟩
         · exact hinv.envReads
         · rw [FDatabase.execProgramM_env hsets hblock]; exact hinv.env
       · exact (show False from hQ.noSet _ hc).elim
@@ -2843,9 +2994,11 @@ theorem unionsInv_execM {P : Program} {src : Database} {tgt : FDatabase}
     rw [FDatabase.execProgramM_env (actionsAreSets_encodePrelude P) hprel]
     rfl
   have hinv₀ : UnionsInv Database.empty td₀ tgt := by
-    refine ⟨?_, ?_, ?_, Database.CtorState.empty⟩
+    refine ⟨?_, ?_, ?_, ?_, Database.CtorState.empty⟩
     · intro a b hab
       exact absurd hab (by simp [Database.empty])
+    · intro t ht
+      exact absurd ht (by simp)
     · intro b hb
       exact absurd hb (by simp [Database.empty])
     · rw [henv₀]
@@ -2948,6 +3101,16 @@ still carries about terms. `joined` is vacuous here (`rbSrc_diag`); `uRebuilt_un
 that clause at a source with a real equation. -/
 theorem rbState2_unionsInv : UnionsInv rbSrc rbState2 rbState2 where
   joined := fun a b hab hne => absurd (rbSrc_diag (a, b) hab) hne
+  reads := by
+    intro t ht
+    rw [rbSrc_terms] at ht
+    have ht' : t = Term.app "A" [] ∨ t = Term.app "W" [Term.app "A" []] := by
+      rcases ht with h | h
+      · exact Or.inl (by simpa using h)
+      · simpa [or_comm] using h
+    rcases ht' with rfl | rfl
+    · exact ⟨_, rbState2_viewRepr_A⟩
+    · exact ⟨_, rbState2_viewRepr_W⟩
   envReads := by
     intro b hb s hs
     have hb2 : b ∈ rbEnv := hb
@@ -2987,11 +3150,12 @@ vacuous — `ENCODING.md`'s failure, twice.
 
 Satisfiable degenerately, and deliberately so: the source holds no rule, so the round adds
 nothing and the encoded round writes nothing either, while the fifth hypothesis is the invariant
-above. The case with content is a round that fires a head `union`, and that is where the
-conclusion is open. `difftest correspond`'s **LOST** column — `Cong src a b` without
-`SameClass tgt a b`, swept with the diagonal included over the 70 in-domain cases, rules and runs
-among them — is 0 and stays 0: every source term has *some* id in the target. Asking for that id
-to be the term itself is the stronger claim the counterexample refutes
+above. The case with content is a round that fires a head `union` — or, for the `reads` half of
+the conclusion, one that fires a head **build** — and that is where it is open.
+`difftest correspond`'s **LOST** column — `Cong src a b` without `SameClass tgt a b`, swept with
+the diagonal included over the 70 in-domain cases, rules and runs among them — is 0 and stays 0,
+which is the `reads` clause measured: every source term has *some* id in the target. Asking for
+that id to be the term itself is the stronger claim the counterexample refutes
 (`Database.ReadsSelf`, `ncTgt_not_readsSelf`), and this clause does not ask it. -/
 theorem unionsJoined_fire_satisfiable :
     CmdStep rbSrc (.run rbRuleset) rbSrc ∧
@@ -3001,7 +3165,7 @@ theorem unionsJoined_fire_satisfiable :
 
 /-! #### The rebuild fixpoint, and the row it does not reach
 
-All five residues want one mechanism, and it is a postcondition of `FDatabase.runSaturateM
+The target-side residue wants one mechanism, and it is a postcondition of `FDatabase.runSaturateM
 rebuildRuleset` — the interpreter's own rebuild fixpoint, which is the only one available:
 `execM_contained` says the enumerator under-fires, so `RunSaturated`, and with it `Rebuilt`,
 is not a consequence of a successful run. `Proofs/Merge.lean` states and proves that
@@ -3139,7 +3303,7 @@ theorem cxTgt_out_uf : cxTgt.toDatabase.Out ufName [cxB] [cxA, cxFiat] :=
 set_option maxRecDepth 100000 in
 /-- **`FDatabase.IndexCurrent` is false**, at a state built by the interpreter's own writers,
 at the encoding's own declarations, over the collision a source `union` creates. This is why
-`FDatabase.RoundClosed` closes none of the five residues by itself: it delivers a rule's
+`FDatabase.RoundClosed` closes neither residue by itself: it delivers a rule's
 conclusion and the premise has to come from the index, which no longer records what
 `Database.Out` still reads. -/
 theorem cxTgt_not_indexCurrent : ¬ cxTgt.IndexCurrent := by
@@ -3169,8 +3333,9 @@ result forward past every later merge — and not a property of the final index.
 **And it would not close `unionsJoined_fire`, because nothing about currency would.** The next
 section is the counterexample the induction's old invariant died on: the row a firing needs was
 never written at any state, so no statement about which rows are *current* reaches it. The
-run-wide argument is what `execM_viewLeader` and `execM_viewsCover_shared` still want; it is not
-what the command induction wants.
+run-wide argument is what `execM_viewLeaderRows` still wants — its `rowLead` clause as much as
+its `ufClosed` one, since `Database.ViewsCover` is now derived from those
+(`Database.ViewsCover.of_viewLeaderRows`) — and it is not what the command induction wants.
 
 **Restoring `IndexCurrent` outright is not a side condition worth having.** What it needs is
 that the source assert no equation between distinct terms (`Database.Diag`), decidable on the
@@ -3242,7 +3407,39 @@ the same reason `readsSelf` does. The edge-following that is left is
 `Database.ViewLeader.ufClosed`, which is one residue instead of two.
 
 `ncTgt_shared_FB` and `ncTgt_unionsJoined` are the two weakened clauses holding at this state,
-at the very instances the strong ones fail on. -/
+at the very instances the strong ones fail on — and `ncTgt_viewsCover` is the first of them
+holding *derivably*, out of `ncTgt_viewLeaderRows` and `ncTgt_viewRepr_total` rather than by
+hand, which is what says the leader tuple answers every instance and not just this one. -/
+
+/-- `viewName` is injective, which is what lets an entry term name its constructor. -/
+theorem viewName_inj {f g : FnName} (h : viewName f = viewName g) : f = g := by
+  have h2 := congrArg String.toList h
+  rw [viewName, viewName, String.toList_append, String.toList_append, String.toList_append,
+    String.toList_append] at h2
+  exact String.toList_inj.mp (List.append_cancel_left (List.append_cancel_right h2))
+
+/-- **A view is never a term relation**, whatever the two constructors: the two suffixes
+differ in their last character. Needed wherever a term-relation row is as wide as a view
+entry, which it is at every constructor of positive arity — a nullary one's row has a single
+column and is excluded by length alone. -/
+theorem viewName_ne_termName {f g : FnName} : viewName f ≠ termName g := by
+  intro h
+  have h2 := congrArg (fun s => (String.toList s).reverse) h
+  simp [viewName, termName, String.toList_append, List.reverse_append] at h2
+
+/-- **A view is never the union-find table**, whatever the constructor: the two names differ
+in their last character. The `@UF` row is as wide as a nullary view entry plus a column, so
+nothing about lengths excludes it. -/
+theorem viewName_ne_ufName {f : FnName} : viewName f ≠ ufName := by
+  intro h
+  have h2 := congrArg (fun s => (String.toList s).reverse) h
+  simp [viewName, ufName, String.toList_append, List.reverse_append] at h2
+
+/-- **A view is never a proof head**, by the same last character. -/
+theorem viewName_ne_transName {f : FnName} : viewName f ≠ transName := by
+  intro h
+  have h2 := congrArg (fun s => (String.toList s).reverse) h
+  simp [viewName, transName, String.toList_append, List.reverse_append] at h2
 
 /-- The source rule: it fires once per member of `?x`'s class and builds `F` over each. Its
 head is the premise, so the target's own firing writes a row it already holds and the encoded
@@ -3538,6 +3735,197 @@ theorem ncTgt_shared_FB :
    [ncA], ncFA, ncFiat, .cons ncTgt_viewRepr_B_A .nil, .cons ncTgt_viewRepr_B_A .nil,
    ncTgt_out_fview⟩
 
+
+/-! ##### And the reduction that answers the clause, here
+
+`ncTgt_shared_FB` is one instance answered by hand. `Database.ViewsCover.of_viewLeaderRows`
+answers every instance from two things — an id for the source's own term, and a row at the
+*leader* tuple — and this is that reduction run at the state whose non-leader firing refutes the
+product form. `rowLead` does real work here and at no earlier witness: the key `((B))` is moved
+to `((A))`, which is a positive-arity key, where `satTarget_viewLeaderRows` and
+`uRebuilt_viewLeaderRows` have only the empty one. -/
+
+/-- The sixteen terms `ncTgt` holds, as a decidable predicate: seven rows' entry terms, the two
+entry terms a merge phase displaced, and their subterms. -/
+def ncTermB (t : Term) : Bool :=
+  t == Term.app ufName [ncB, ncA, ncTST] || t == ncTST || t == Term.app symName [ncFiat] ||
+  t == Term.app (viewName "B") [ncB, ncFiat] || t == Term.app (viewName "B") [ncA, ncTFF] ||
+  t == ncTFF || t == Term.app ufName [ncB, ncA, ncFiat] ||
+  t == Term.app (termName "B") [ncB] || t == ncB ||
+  t == Term.app (viewName "F") [ncA, ncFA, ncFiat] ||
+  t == Term.app (termName "F") [ncA, ncFA] || t == ncFA ||
+  t == Term.app (viewName "A") [ncA, ncFiat] || t == ncFiat ||
+  t == Term.app (termName "A") [ncA] || t == ncA
+
+set_option maxRecDepth 100000 in
+@[inherit_doc ncTermB]
+theorem ncTgt_terms_all : ncTgt.terms.all ncTermB = true := by decide
+
+@[inherit_doc ncTermB]
+private theorem ncTgt_mem_cases {t : Term} (h : t ∈ ncTgt.toDatabase.terms) :
+    ncTermB t = true := by
+  rw [FDatabase.toDatabase_terms] at h
+  exact List.all_eq_true.mp ncTgt_terms_all _ h
+
+/-- A view entry's key is empty when the row is two columns wide. -/
+private theorem nc_nil_of_len {cs : List Term} {e pf a b : Term}
+    (h : cs ++ [e, pf] = [a, b]) : cs = [] := by
+  have hl := congrArg List.length h
+  simp only [List.length_append, List.length_cons, List.length_nil] at hl
+  exact List.eq_nil_of_length_eq_zero (by omega)
+
+@[inherit_doc nc_nil_of_len]
+private theorem nc_singleton_of_len {cs : List Term} {e pf a b c : Term}
+    (h : cs ++ [e, pf] = [a, b, c]) : ∃ x, cs = [x] := by
+  rcases cs with _ | ⟨x, _ | ⟨y, ys⟩⟩
+  · exact absurd (congrArg List.length h)
+      (by simp only [List.length_append, List.length_cons, List.length_nil]; omega)
+  · exact ⟨x, rfl⟩
+  · exact absurd (congrArg List.length h)
+      (by simp only [List.length_append, List.length_cons, List.length_nil]; omega)
+
+/-- **The four view rows `ncTgt` holds.** `(B)`'s key carries two e-classes — its own build's,
+which the collision displaced but did not delete, and the leader's, which the e-class rebuild
+rule wrote — and `@FView` is keyed at `((A))` alone. Of the twelve other terms, three go by
+name (`viewName_ne_ufName`, `viewName_ne_termName`, `viewName_ne_transName`) and the rest are
+too narrow to be a view entry: a key plus two value columns is two columns at least. -/
+private theorem ncTgt_out_view {f : FnName} {cs : List Term} {e pf : Term}
+    (ho : ncTgt.toDatabase.Out (viewName f) cs [e, pf]) :
+    (f = "A" ∧ cs = [] ∧ e = ncA) ∨ (f = "B" ∧ cs = [] ∧ (e = ncA ∨ e = ncB)) ∨
+      (f = "F" ∧ cs = [ncA] ∧ e = ncFA) := by
+  obtain ⟨bs, hcl, hmem⟩ := ho
+  obtain rfl : cs = bs := CongList.eq_of_eqsRefl ncTgt_eqsRefl.toDatabase hcl
+  have h := ncTgt_mem_cases hmem
+  simp only [ncTermB, ncA, ncB, ncFA, ncFiat, ncTFF, ncTST, Bool.or_eq_true, beq_iff_eq] at h
+  repeat' rcases h with h | h
+  all_goals rw [Term.app.injEq] at h
+  all_goals first
+    | exact absurd h.1 viewName_ne_ufName
+    | exact absurd h.1 viewName_ne_termName
+    | exact absurd h.1 viewName_ne_transName
+    | (exfalso; have hl := congrArg List.length h.2
+       simp only [List.length_append, List.length_cons, List.length_nil] at hl
+       all_goals omega)
+    | skip
+  · obtain rfl : cs = [] := nc_nil_of_len h.2
+    obtain rfl : f = "B" := viewName_inj h.1
+    have h2 : e = ncB ∧ pf = ncFiat := by simpa [ncB, ncFiat] using h.2
+    exact Or.inr (Or.inl ⟨rfl, rfl, Or.inr h2.1⟩)
+  · obtain rfl : cs = [] := nc_nil_of_len h.2
+    obtain rfl : f = "B" := viewName_inj h.1
+    have h2 : e = ncA ∧ pf = ncTFF := by simpa [ncA, ncTFF, ncFiat] using h.2
+    exact Or.inr (Or.inl ⟨rfl, rfl, Or.inl h2.1⟩)
+  · obtain rfl : f = "F" := viewName_inj h.1
+    obtain ⟨x, rfl⟩ : ∃ x, cs = [x] := nc_singleton_of_len h.2
+    have h2 : x = ncA ∧ e = ncFA ∧ pf = ncFiat := by simpa [ncA, ncFA, ncFiat] using h.2
+    exact Or.inr (Or.inr ⟨rfl, by rw [h2.1], h2.2.1⟩)
+  · obtain rfl : cs = [] := nc_nil_of_len h.2
+    obtain rfl : f = "A" := viewName_inj h.1
+    have h2 : e = ncA ∧ pf = ncFiat := by simpa [ncA, ncFiat] using h.2
+    exact Or.inl ⟨rfl, rfl, h2.1⟩
+
+/-- **And the two `@UF` rows, whose ends are both `(B)` and `(A)`**: the `union`'s own write and
+`mergeBody`'s settling against it. The only other three-column term is `@FView((A))`, and that
+goes by name. -/
+private theorem ncTgt_out_uf_cases {x y pf : Term}
+    (ho : ncTgt.toDatabase.Out ufName [x] [y, pf]) : x = ncB ∧ y = ncA := by
+  obtain ⟨bs, hcl, hmem⟩ := ho
+  obtain rfl : [x] = bs := CongList.eq_of_eqsRefl ncTgt_eqsRefl.toDatabase hcl
+  have h := ncTgt_mem_cases hmem
+  simp only [ncTermB, ncA, ncB, ncFA, ncFiat, ncTFF, ncTST, Bool.or_eq_true, beq_iff_eq] at h
+  repeat' rcases h with h | h
+  all_goals first
+    | exact ⟨rfl, rfl⟩
+    | (rw [Term.app.injEq] at h
+       first
+         | exact absurd h.1.symm viewName_ne_ufName
+         | (exfalso; have hl := congrArg List.length h.2
+            simp only [List.length_append, List.length_cons, List.length_nil] at hl
+            all_goals omega))
+
+/-- **What `ncTgt` reads a source application as.** Three constructors, and `(B)` is the one
+with two ids: its own displaced entry and the leader's. -/
+private theorem ncTgt_viewRepr_cases {g : FnName} {bs : List Term} {e : Term}
+    (h : ViewRepr ncTgt.toDatabase (.app g bs) e) :
+    (g = "A" ∧ e = ncA) ∨ (g = "B" ∧ bs = [] ∧ (e = ncA ∨ e = ncB)) ∨ (g = "F" ∧ e = ncFA) := by
+  match h with
+  | @ViewRepr.app _ f as cs e pf hl ho =>
+    rcases ncTgt_out_view ho with ⟨rfl, rfl, rfl⟩ | ⟨rfl, rfl, hE⟩ | ⟨rfl, -, rfl⟩
+    · exact Or.inl ⟨rfl, rfl⟩
+    · exact Or.inr (Or.inl ⟨rfl, by cases hl with | nil => rfl, hE⟩)
+    · exact Or.inr (Or.inr ⟨rfl, rfl⟩)
+
+/-- The union-find representative at `ncTgt`: `(B)`'s class is `(A)`'s and nothing else
+moves. -/
+def ncLead (t : Term) : Term := if t = ncB then ncA else t
+
+theorem ncLead_ncB : ncLead ncB = ncA := by simp [ncLead]
+
+theorem ncLead_of_ne {t : Term} (h : t ≠ ncB) : ncLead t = t := by simp [ncLead, h]
+
+/-- **`Database.ViewLeaderRows` holds at `ncTgt`, with every clause doing work**, and `rowLead`
+at a *key* column for the first time: `@FView` is keyed at `((A))`, which is where `((B))` —
+the tuple the source's own build over the non-leader member would name — goes under `lead`.
+That is the whole of what `Database.ViewsCover.shared` needed and `Database.ViewsProduct` asked
+for at every tuple instead (`ncTgt_not_viewsProduct`). -/
+theorem ncTgt_viewLeaderRows : ncTgt.toDatabase.ViewLeaderRows := by
+  refine ⟨ncLead, ?_, ?_, ?_, ?_⟩
+  · intro t e h
+    cases t with
+    | lit l =>
+        rw [h.eq_of_lit, ncLead_of_ne (by simp [ncB])]
+        exact .lit
+    | app g bs =>
+        rcases ncTgt_viewRepr_cases h with ⟨-, rfl⟩ | ⟨rfl, rfl, (rfl | rfl)⟩ | ⟨-, rfl⟩
+        · rwa [ncLead_of_ne (by simp [ncA, ncB])]
+        · rwa [ncLead_of_ne (by simp [ncA, ncB])]
+        · rw [ncLead_ncB]; exact ncTgt_viewRepr_B_A
+        · rwa [ncLead_of_ne (by simp [ncFA, ncB])]
+  · intro t e₁ e₂ h₁ h₂
+    cases t with
+    | lit l => rw [h₁.eq_of_lit, h₂.eq_of_lit]
+    | app g bs =>
+        rcases ncTgt_viewRepr_cases h₁ with ⟨rfl, rfl⟩ | ⟨rfl, -, (rfl | rfl)⟩ | ⟨rfl, rfl⟩ <;>
+            rcases ncTgt_viewRepr_cases h₂ with ⟨h', rfl⟩ | ⟨h', -, (rfl | rfl)⟩ | ⟨h', rfl⟩ <;>
+          simp_all [ncLead, ncA, ncB, ncFA]
+  · intro x y pf ho
+    obtain ⟨rfl, rfl⟩ := ncTgt_out_uf_cases ho
+    rw [ncLead_ncB, ncLead_of_ne (by simp [ncA, ncB])]
+  · intro f es e pf ho
+    refine ⟨e, pf, ?_⟩
+    rcases ncTgt_out_view ho with ⟨-, rfl, -⟩ | ⟨-, rfl, -⟩ | ⟨-, rfl, -⟩ <;>
+      simpa [ncLead, ncA, ncB] using ho
+
+set_option maxRecDepth 100000 in
+unseal Egglog.closure in
+/-- The four terms the source run leaves. -/
+theorem ncSrc_terms_eq : ncSrc.terms = [ncFB, ncB, ncFA, ncA] := by decide
+
+set_option maxRecDepth 100000 in
+/-- **Every term the source holds has an id here**, which is the command induction's `reads`
+clause at this state: four terms, and `(F (B))` — the one a firing built over the non-leader
+member — reads the leader's `(F (A))` and nothing else (`ncTgt_viewReprs_FB`). -/
+theorem ncTgt_viewRepr_total :
+    ∀ t ∈ ncSrc.toDatabase.terms, ∃ e, ViewRepr ncTgt.toDatabase t e := by
+  intro t ht
+  rw [FDatabase.toDatabase_terms] at ht
+  have h : t = ncFB ∨ t = ncB ∨ t = ncFA ∨ t = ncA := by
+    rw [ncSrc_terms_eq] at ht
+    simpa using ht
+  rcases h with rfl | rfl | rfl | rfl
+  · exact ⟨ncFA, viewRepr_of_mem_viewReprsF ncTgt_subtermClosed ncFB ncFA (by decide)⟩
+  · exact ⟨ncB, ncTgt_viewRepr_B⟩
+  · exact ⟨ncFA, viewRepr_of_mem_viewReprsF ncTgt_subtermClosed ncFA ncFA (by decide)⟩
+  · exact ⟨ncA, ncTgt_viewRepr_A⟩
+
+/-- **So `Database.ViewsCover` holds at `ncTgt`, out of the reduction and not by hand.**
+This is the leader-tuple hypothesis checked where it matters: at the state that refutes
+`Database.ViewsProduct`, the weakened clause is not merely true (`ncTgt_shared_FB`) but
+*derivable* from a row-transport clause and totality, which is the factorisation
+`execM_viewsCover` runs. -/
+theorem ncTgt_viewsCover : ncTgt.toDatabase.ViewsCover ncSrc.toDatabase :=
+  Database.ViewsCover.of_viewLeaderRows ncTgt_viewLeaderRows ncTgt_viewRepr_total
+
 /-- **And `Database.UnionsJoined` holds here**, at the ids: `(A)` and `(B)` are ids of
 themselves and the `@UF` edge the `union` wrote runs between them, keyed at `ordering-max`.
 This is the clause `unionsJoined_fire` has to preserve, at the state the refutation of its
@@ -3610,10 +3998,10 @@ theorem encode_viewsProduct_false {e : FDatabase}
   rw [FDatabase.toDatabase_terms] at hmem
   exact noFViewAtB_of_all hno ee pf hmem
 
-/-! #### The three residues, by clause -/
+/-! #### The two target-side residues, by clause -/
 
-/-- **The residue of obligation `trans`, and of the rebuild half of obligation `assert`'s
-`union` case. Not proved.**
+/-- **The residue of obligation `trans`, of the rebuild half of obligation `assert`'s `union`
+case, and of the *key* half of obligation `congr`. Not proved.**
 
 What is missing: that the ids a source term reads to at an `execM` target are `@UF`-connected
 and that the connection has a unique endpoint. Two entries at one view key collide, and
@@ -3631,16 +4019,33 @@ restated: the edge-following the `union` half needs is edge-following *between i
 two, and no weaker for it: `uTgt_not_viewLeader` is `ufClosed` failing one rebuild firing
 early, at the state where `Database.UnionsRead` fails with it.
 
+**`rowLead` is the fourth clause and it is the *column* rules, same mechanism one step over**,
+which is why `execM_viewsCover_shared` is no longer a residue of its own: obligation `congr`
+splits into an id for the source's own term — the command induction's `reads`, whose one open
+case is `unionsJoined_fire` — and a row at the leader tuple, which is this. The split is
+`Database.ViewsCover.of_viewLeaderRows`, and `ncTgt_viewsCover` is it run at the state whose
+non-leader firing refutes `Database.ViewsProduct`.
+
 **That fixpoint is now proved and is not enough.** `FDatabase.RoundClosed` gives every term one
-more rebuild round would derive, which is the *conclusion* of each of those three rules; their
+more rebuild round would derive, which is the *conclusion* of each of those four rules; their
 *premise* is a row, and `cxTgt_not_indexCurrent` is the compiled statement that the index need
 not hold every entry term `Database.Out` reads. What is left is the
 run-wide index argument described at "What restores it, and what that costs", plus — for `lead`
 being a *function* rather than a relation — `pathCompressRule`'s own fixpoint, which is a
-second, independent use of it. -/
-theorem execM_viewLeader {P : Program} {tgt : FDatabase} (hdom : P.EncodeDomain)
-    (htgt : execM (encode P) = some tgt) : tgt.toDatabase.ViewLeader := by
+second, independent use of it.
+
+**Non-vacuous at three states, with every clause doing work at one of them**:
+`satTarget_viewLeaderRows` (the degenerate one), `Encoding/Match.lean`'s
+`uRebuilt_viewLeaderRows` (a real `@UF` edge, two ids for one term) and `ncTgt_viewLeaderRows`
+(positive arity, and `rowLead` at a key column the `union` moved). -/
+theorem execM_viewLeaderRows {P : Program} {tgt : FDatabase} (hdom : P.EncodeDomain)
+    (htgt : execM (encode P) = some tgt) : tgt.toDatabase.ViewLeaderRows := by
   sorry
+
+/-- **The three clauses obligation `trans` spends**, out of the four above. -/
+theorem execM_viewLeader {P : Program} {tgt : FDatabase} (hdom : P.EncodeDomain)
+    (htgt : execM (encode P) = some tgt) : tgt.toDatabase.ViewLeader :=
+  (execM_viewLeaderRows hdom htgt).toViewLeader
 
 /-- **`Database.ViewsCover.shared`, at an `execM` target. Not proved.**
 
@@ -3656,23 +4061,26 @@ uses the clause only at an id tuple *shared* by both argument lists, and `viewRe
 at the diagonal — neither asks for the product. `ncTgt_shared_FB` is the surviving instance at
 the failing key: `(F (B))` and `(F (B))` share the tuple `((A))`, and `@FView((A))` is keyed.
 
-What is left to prove is that the rebuild's column rules reach *a* common tuple for every
-pointwise-equal pair, which is the same `FDatabase.runSaturateM` fixpoint `execM_viewLeader`
-needs and the reason both are still open. -/
+**And that instance generalises, so this is no longer a residue.** The tuple the clause answers
+with is the *leader* tuple, and the two things needed to produce it are already residues of
+their own: an id for the source's own term, which is the command induction's `reads`, and a row
+at the leader tuple, which is `Database.ViewLeaderRows`' `rowLead`.
+`Database.ViewsCover.of_viewLeaderRows` is the assembly and it spends nothing else — in
+particular no run-wide index argument beyond the one `execM_viewLeaderRows` already carries. -/
+theorem execM_viewsCover {P : Program} {src : Database} {tgt : FDatabase}
+    (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
+    (htgt : execM (encode P) = some tgt) : tgt.toDatabase.ViewsCover src :=
+  Database.ViewsCover.of_viewLeaderRows (execM_viewLeaderRows hdom htgt)
+    (unionsInv_execM hdom hsrc htgt).reads
+
+@[inherit_doc execM_viewsCover]
 theorem execM_viewsCover_shared {P : Program} {src : Database} {tgt : FDatabase}
     (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
     (htgt : execM (encode P) = some tgt) :
     ∀ f as bs, Term.app f as ∈ src.terms → List.Forall₂ (SameClass tgt.toDatabase) as bs →
       ∃ es e pf, ViewReprList tgt.toDatabase as es ∧ ViewReprList tgt.toDatabase bs es ∧
-        tgt.toDatabase.Out (viewName f) es [e, pf] := by
-  sorry
-
-/-- **The residue of obligations `congr` and of `assert`'s reflexive half**, which is its one
-clause. -/
-theorem execM_viewsCover {P : Program} {src : Database} {tgt : FDatabase}
-    (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
-    (htgt : execM (encode P) = some tgt) : tgt.toDatabase.ViewsCover src :=
-  ⟨execM_viewsCover_shared hdom hsrc htgt⟩
+        tgt.toDatabase.Out (viewName f) es [e, pf] :=
+  (execM_viewsCover hdom hsrc htgt).shared
 
 /-- **The write half of obligation `assert`'s `union` case, at an `execM` target. Proved from
 the command induction**, whose one open case is `unionsJoined_fire`.
@@ -3984,22 +4392,6 @@ completeness half is reduced to, so here it is at `satTarget`, the state
 view entry the run wrote is discharged by `entrySound_build`, non-vacuously; the `@UF` clause
 is vacuous there — `satProgram` has no `union` — and is discharged non-vacuously at
 `refutationState`, which holds one edge and nothing else. -/
-
-/-- `viewName` is injective, which is what lets an entry term name its constructor. -/
-theorem viewName_inj {f g : FnName} (h : viewName f = viewName g) : f = g := by
-  have h2 := congrArg String.toList h
-  rw [viewName, viewName, String.toList_append, String.toList_append, String.toList_append,
-    String.toList_append] at h2
-  exact String.toList_inj.mp (List.append_cancel_left (List.append_cancel_right h2))
-
-/-- **A view is never a term relation**, whatever the two constructors: the two suffixes
-differ in their last character. Needed wherever a term-relation row is as wide as a view
-entry, which it is at every constructor of positive arity — a nullary one's row has a single
-column and is excluded by length alone. -/
-theorem viewName_ne_termName {f g : FnName} : viewName f ≠ termName g := by
-  intro h
-  have h2 := congrArg (fun s => (String.toList s).reverse) h
-  simp [viewName, termName, String.toList_append, List.reverse_append] at h2
 
 /-- The source state `satProgram` runs to: the one term it builds, and nothing else. -/
 def satSrc : Database := Database.empty.addTerm (.app "A" [])

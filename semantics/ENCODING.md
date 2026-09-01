@@ -11,13 +11,17 @@ together with the decision procedure `sameClassF`, the proof that the two agree
 are jointly satisfiable at a state where both sides of the `iff` are non-trivial
 (`encode_corresponds_witness`). `difftest correspond 64` sweeps exactly that relation over
 the corpus and reports 70 of 70 agreeing, 0 LOST, 0 INVENTED, 0 `link-diff`. The theorem
-itself carries `sorry`, in four named clauses of properties of the state the run reached. The
-**action read-back** is proved (`holdsBuild_of_execProgramM`,
+itself carries `sorry`, in three named properties of the state the run reached — and they are
+three *mechanisms* rather than three clauses, because the clauses are derived from one another.
+The **action read-back** is proved (`holdsBuild_of_execProgramM`,
 `viewRepr_self_of_execProgramM`) and so is the **induction over `encode P`'s commands** built
-on it (`UnionsInv`, `unionsInv_execM`), which closes `execM_unionsJoined`. Of the four left,
-one is that induction's own open case (`unionsJoined_fire`: a source command that fires rules
-needs the premise row to be current in the *index*, not merely an entry term) and two need the
-interpreter's rebuild fixpoint. **Two clauses this factorisation used to run through are
+on it (`UnionsInv`, `unionsInv_execM`), which closes `execM_unionsJoined` and supplies the
+totality `Database.ViewsCover` is derived from. Of the three left, one is that induction's own
+open case (`unionsJoined_fire`: a source command that fires rules needs a target firing behind
+the source's, and one step below that the premise row must be current in the *index*, not merely
+an entry term), one is the run-wide index argument itself (`execM_viewLeaderRows`: the rebuild's
+e-class rule, its column rules and path compression), and one is the completeness half.
+**Two clauses this factorisation used to run through are
 refuted** and kept as records — `Database.ReadsSelf` (every source term is an id of itself) and
 `Database.ViewsProduct` (a view entry at every id tuple the children form), both false at
 `ncProgram`'s state because a source rule fires once per class *member* while the encoded rule
@@ -26,7 +30,10 @@ and the same two with the encoded run as a hypothesis). What replaced them is wh
 consumers actually spend: `Database.ViewsCover.shared`, one *shared* id tuple with an entry
 keyed at it, and `Database.UnionsJoined`, the `@UF` edge between the endpoints' *ids* — both
 holding at that same state (`ncTgt_shared_FB`, `ncTgt_unionsJoined`), with the rebuild's
-edge-following moved into `Database.ViewLeader.ufClosed`. Two of
+edge-following moved into `Database.ViewLeader.ufClosed`. The first of the two is now *derived*
+rather than assumed: the tuple it answers with is always the union-find leader's, so
+`Database.ViewsCover.of_viewLeaderRows` gets it from a row-transport clause and totality, and
+`ncTgt_viewsCover` runs that reduction at the very state the product form fails at. Two of
 those clauses were once *false* at `.action (.expr (.lit 5))`, and the defect was
 `ViewRepr`'s literal clause asking the target to hold the literal: egglog mints no e-node for
 one. Without the premise the clause `Program.EncodeDomain.noBareBuild` added is gone, that

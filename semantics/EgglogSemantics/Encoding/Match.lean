@@ -2378,14 +2378,6 @@ theorem uTgt_mem_fiat : Term.app fiatName [] ∈ uTgt.terms :=
     (Term.arg_subterms (show Term.app fiatName [] ∈ [uA, Term.app fiatName []] by simp)
       (Term.self_mem_subterms _))
 
-/-- **A view is never the union-find table**, whatever the constructor: the two names differ
-in their last character. The `@UF` row is as wide as a nullary view entry plus a column, so
-nothing about lengths excludes it. -/
-theorem viewName_ne_ufName {f : FnName} : viewName f ≠ ufName := by
-  intro h
-  have h2 := congrArg (fun s => (String.toList s).reverse) h
-  simp [viewName, ufName, String.toList_append, List.reverse_append] at h2
-
 /-- **The two view rows `uTgt` holds**, pinned: of the eight terms, three are too short to be
 a view entry at all, the two term-relation rows are one column wide, and the `@UF` row goes by
 name (`viewName_ne_ufName`) — its width is a nullary view entry's plus one. -/
@@ -2627,12 +2619,6 @@ private theorem uRebuilt_mem_cases {t : Term} (h : t ∈ uRebuilt.terms) :
     · exact Or.inr (Or.inr uTgt_mem_fiat)
     · exact Or.inr (Or.inr uTgt_mem_A)
 
-/-- **A view is never a proof head**, by the same last character. -/
-theorem viewName_ne_transName {f : FnName} : viewName f ≠ transName := by
-  intro h
-  have h2 := congrArg (fun s => (String.toList s).reverse) h
-  simp [viewName, transName, String.toList_append, List.reverse_append] at h2
-
 /-- **The three view rows `uRebuilt` holds.** `(B)`'s key now carries two e-classes, which is
 the "view tables are not functional" phenomenon appearing here for the first time in a state
 this file steps to. -/
@@ -2740,20 +2726,25 @@ theorem uLead_uB : uLead uB = uA := by simp [uLead]
 
 theorem uLead_lit (l : Lit) : uLead (.lit l) = .lit l := by simp [uLead, uB]
 
-/-- **`Database.ViewLeader` holds at `uRebuilt`, with every clause doing work.** Two ids, an
-edge between them, and a term that reads both — which is what the degenerate witness
-(`satTarget_viewLeader`: the identity `lead`, and no `@UF` row at all) cannot exhibit.
+/-- **`Database.ViewLeaderRows` holds at `uRebuilt`, with three of its four clauses doing
+work.** Two ids, an edge between them, and a term that reads both — which is what the
+degenerate witness (`satTarget_viewLeaderRows`: the identity `lead`, and no `@UF` row at all)
+cannot exhibit.
 
 * the first clause is asked at `(B)`, which reads `(B)` and whose `lead` is `(A)`: the row
   `uRebuildB` wrote is what answers it;
 * the second at `(B)`'s two ids, which is the only term in the tree with two;
 * `ufClosed` at the one `@UF` row, whose ends are `(B)` and `(A)`.
+* `rowLead` is the one that is degenerate here, and `uRebuilt_out_view` is why: both source
+  terms are nullary, so every key is the empty tuple and `lead` moves it nowhere.
+  `Encoding/Correspond.lean`'s `ncTgt_viewLeaderRows` is that clause at positive arity, where
+  the key the `union` moved is `((B))` and the row sits at `((A))`.
 
-`uTgt_not_viewLeader` is the same property one firing earlier, where it fails. -/
-theorem uRebuilt_viewLeader : uRebuilt.ViewLeader := by
+`uTgt_not_viewLeader` is the first three one firing earlier, where they fail. -/
+theorem uRebuilt_viewLeaderRows : uRebuilt.ViewLeaderRows := by
   have hAA : ViewRepr uRebuilt uA uA := .app .nil ⟨[], .nil, uRebuilt_mem_viewA⟩
   have hBA : ViewRepr uRebuilt uB uA := .app .nil ⟨[], .nil, Database.mem_addTerm _ _⟩
-  refine ⟨uLead, ?_, ?_, ?_⟩
+  refine ⟨uLead, ?_, ?_, ?_, ?_⟩
   · intro t e h
     cases t with
     | lit l => rw [h.eq_of_lit, uLead_lit]; exact .lit
@@ -2772,6 +2763,12 @@ theorem uRebuilt_viewLeader : uRebuilt.ViewLeader := by
   · intro x y pf ho
     obtain ⟨rfl, rfl⟩ := uRebuilt_out_uf ho
     rw [uLead_uB, uLead_uA]
+  · intro f es e pf ho
+    rcases uRebuilt_out_view ho with ⟨-, rfl, -⟩ | ⟨-, rfl, -⟩ <;>
+      exact ⟨e, pf, by simpa using ho⟩
+
+@[inherit_doc uRebuilt_viewLeaderRows]
+theorem uRebuilt_viewLeader : uRebuilt.ViewLeader := uRebuilt_viewLeaderRows.toViewLeader
 
 /-- **And `Database.ViewLeader` fails at `uTgt`**, which is where `Database.UnionsRead` fails
 too: the edge is written and unfollowed, so `(A)`'s only `lead` is `(A)` and `(B)`'s is `(B)`,

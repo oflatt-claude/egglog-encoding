@@ -116,26 +116,30 @@ nightly-local: nightly-uv nightly-rustup
 # carries exactly LEAN_OPEN_SORRIES of them, each with a vacuity witness beside it
 # (`semantics/ENCODING.md`). None of them is a named obligation any more — both halves are
 # now proved from properties of the state `execM` returned (`cong_sameClass_of_state`,
-# `sameClass_cong_of_state`) — so what is left is exactly those properties, and each is now
-# stated one *clause* at a time so that the two missing mechanisms are separated. The action
-# read-back is proved (`holdsBuild_of_execProgramM`, `viewRepr_self_of_execProgramM`) and so is
-# the induction over `encode P`'s commands built on it (`UnionsInv`, `unionsInv_execM`), which
-# closes `execM_unionsJoined`. The two clauses the factorisation used to run through are
-# **refuted** and kept as records: `Database.ReadsSelf` and `Database.ViewsProduct`, by
-# `ncTgt_not_readsSelf` and `ncTgt_not_viewsProduct` — a source rule fires once per member of a
-# premise's congruence class while the encoded rule reads rows that sit at the union-find leader.
-# Each is now stated at what its consumers spend instead: `Database.ViewsCover.shared` at one
-# *shared* id tuple, `Database.UnionsJoined` at the endpoints' *ids*, and the rebuild's
-# edge-following in `Database.ViewLeader.ufClosed` — which is why there are four residues and not
-# five. Both weakened clauses hold at the counterexample's own state (`ncTgt_shared_FB`,
-# `ncTgt_unionsJoined`), as does `Database.UnionsRead` and the correspondence itself, which is why
-# `correspond` still agrees on all 70 in-domain cases. Of the other three: `execM_viewLeader` and
-# `execM_viewsCover_shared` need the interpreter's rebuild fixpoint, `unionsJoined_fire` needs a
-# target firing behind a source firing, and `execM_viewsSound` is the completeness half. The
-# rule-head match correspondence of `Encoding/Match.lean` is proved outright, encoder read-back
-# included, and so is the rule-head build case it feeds (`entrySound_headBuild`). Everywhere
-# outside `Encoding/` a `sorry` is a regression, and a new one inside it changes the count.
-LEAN_OPEN_SORRIES = 4
+# `sameClass_cong_of_state`) — and the three that are left are three *mechanisms* rather than
+# three clauses, because the clauses are now derived from one another. The action read-back is
+# proved (`holdsBuild_of_execProgramM`, `viewRepr_self_of_execProgramM`) and so is the
+# induction over `encode P`'s commands built on it (`UnionsInv`, `unionsInv_execM`), which
+# closes `execM_unionsJoined` and supplies the totality `Database.ViewsCover` needs. The two
+# clauses the factorisation used to run through are **refuted** and kept as records:
+# `Database.ReadsSelf` and `Database.ViewsProduct`, by `ncTgt_not_readsSelf` and
+# `ncTgt_not_viewsProduct` — a source rule fires once per member of a premise's congruence class
+# while the encoded rule reads rows that sit at the union-find leader. Each is now stated at what
+# its consumers spend instead: `Database.ViewsCover.shared` at one *shared* id tuple and
+# `Database.UnionsJoined` at the endpoints' *ids*, both holding at the counterexample's own state
+# (`ncTgt_shared_FB`, `ncTgt_unionsJoined`), as does `Database.UnionsRead` and the correspondence
+# itself, which is why `correspond` still agrees on all 70 in-domain cases. And the coverage
+# clause is now *derived*: the tuple it answers with is always the union-find leader's, so
+# `Database.ViewsCover.of_viewLeaderRows` gets it from a row-transport clause plus totality, with
+# `ncTgt_viewsCover` running that reduction at the very state the product form fails at. What is
+# left: `execM_viewLeaderRows` is the whole run-wide index argument (the rebuild's e-class rule,
+# its column rules, and path compression), `unionsJoined_fire` is a target firing behind a source
+# firing — the one command case the read-back does not reach, and it carries both of the
+# induction's data clauses — and `execM_viewsSound` is the completeness half. The rule-head match
+# correspondence of `Encoding/Match.lean` is proved outright, encoder read-back included, and so
+# is the rule-head build case it feeds (`entrySound_headBuild`). Everywhere outside `Encoding/` a
+# `sorry` is a regression, and a new one inside it changes the count.
+LEAN_OPEN_SORRIES = 3
 LEAN_OPEN_SORRY_DIR = semantics/EgglogSemantics/Encoding
 
 lean-check:
