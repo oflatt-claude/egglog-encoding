@@ -1736,22 +1736,13 @@ rows* rather than guess it — which pruning approximates and does not replace.
 
 `Program.EncodeDomain` as a `Bool`, with the equivalence proved, so that the census below
 and the hypothesis a theorem would carry cannot drift apart. -/
-/-- `EncodeDomain.ctorsOnly` at one command. -/
+/-- `Cmd.CtorDecl`, computed: `EncodeDomain.ctorsOnly` at one command. -/
 def Cmd.ctorDeclB : Cmd → Bool
   | .decl _ d => d.merge.isNone
   | _ => true
 
-theorem Cmd.ctorDeclB_iff (c : Cmd) :
-    c.ctorDeclB = true ↔ ∀ f d, c = Cmd.decl f d → d.merge = none := by
-  cases c <;> simp [Cmd.ctorDeclB, Option.isNone_iff_eq_none]
-
-/-- `Action.NoSet`, computed. -/
-def Action.noSetB : Action → Bool
-  | .set _ _ _ => false
-  | _ => true
-
-theorem Action.noSetB_iff (a : Action) : a.noSetB = true ↔ a.NoSet := by
-  cases a <;> simp [Action.noSetB, Action.NoSet]
+theorem Cmd.ctorDeclB_iff (c : Cmd) : c.ctorDeclB = true ↔ c.CtorDecl := by
+  cases c <;> simp [Cmd.ctorDeclB, Cmd.CtorDecl, Option.isNone_iff_eq_none]
 
 /-- `Pattern.NoValues`, computed. -/
 def Pattern.noValuesB : Pattern → Bool
@@ -1760,16 +1751,6 @@ def Pattern.noValuesB : Pattern → Bool
 
 theorem Pattern.noValuesB_iff (p : Pattern) : p.noValuesB = true ↔ p.NoValues := by
   cases p <;> simp [Pattern.noValuesB, Pattern.NoValues]
-
-/-- `Cmd.NoSet`, computed. -/
-def Cmd.noSetB : Cmd → Bool
-  | .action a => a.noSetB
-  | .rule r => r.actions.all Action.noSetB && r.query.all Pattern.noValuesB
-  | _ => true
-
-theorem Cmd.noSetB_iff (c : Cmd) : c.noSetB = true ↔ c.NoSet := by
-  cases c <;>
-    simp [Cmd.noSetB, Cmd.NoSet, Action.noSetB_iff, Pattern.noValuesB_iff, List.all_eq_true]
 
 /-- A bare literal, computed. -/
 def Expr.isLitB : Expr → Bool
@@ -1857,39 +1838,39 @@ theorem Query.varsKeyedB_iff (q : Query) : q.varsKeyedB = true ↔ Query.VarsKey
   simp [Query.varsKeyedB, Query.VarsKeyed, List.all_eq_true, List.any_eq_true,
     Pattern.argVarB_iff]
 
-/-- `Cmd.NoLeafPattern`, computed. -/
-def Cmd.noLeafPatternB : Cmd → Bool
-  | .rule r => r.query.all Pattern.groundedB && Query.varsKeyedB r.query
+/-- `Cmd.QueryEncodable`, computed. -/
+def Cmd.queryEncodableB : Cmd → Bool
+  | .rule r =>
+      r.query.all (fun p => p.groundedB && p.noValuesB) && Query.varsKeyedB r.query
   | _ => true
 
-theorem Cmd.noLeafPatternB_iff (c : Cmd) : c.noLeafPatternB = true ↔ c.NoLeafPattern := by
+theorem Cmd.queryEncodableB_iff (c : Cmd) : c.queryEncodableB = true ↔ c.QueryEncodable := by
   cases c <;>
-    simp [Cmd.noLeafPatternB, Cmd.NoLeafPattern, List.all_eq_true, Pattern.groundedB_iff,
-      Query.varsKeyedB_iff]
+    simp [Cmd.queryEncodableB, Cmd.QueryEncodable, List.all_eq_true, Pattern.groundedB_iff,
+      Pattern.noValuesB_iff, Query.varsKeyedB_iff]
 
-/-- `Program.EncodeDomain`, computed. `EncodeDomain.noLitUnion` and
-`EncodeDomain.headCtorsDeclared` are `Bool` at the source, so the last two conjuncts are the
-clauses themselves rather than a mirror of them. -/
+/-- `Program.EncodeDomain`, computed. `EncodeDomain.setLegal` and
+`EncodeDomain.headsDeclared` are `Spec/Scope.lean` checks with `Decidable` instances, so those
+two conjuncts are `decide` of the clause itself; `EncodeDomain.noLitUnion` is `Bool` at the
+source. -/
 def Program.encodeDomainB (p : Program) : Bool :=
-  p.all Cmd.ctorDeclB && p.all Cmd.noSetB
+  p.all Cmd.ctorDeclB && decide (Program.SetLegal p (fun _ => none))
     && p.ctors.all (fun fk => (Prim.ofName fk.1).isNone)
-    && p.ctors.all (fun fk => !"@".isPrefixOf fk.1)
-    && p.vars.all (fun v => !"@".isPrefixOf v)
-    && p.rulesets.all (fun R => !"@".isPrefixOf R)
-    && p.all Cmd.noLeafPatternB
+    && p.names.all (fun n => !"@".isPrefixOf n)
+    && p.all Cmd.queryEncodableB
     && (p.all Cmd.ruleUnionFreeB || p.all Cmd.litFreeB)
-    && Program.headCtorsDeclaredB [] p
+    && decide (Program.HeadsDeclared p (fun _ => none))
 
 /-- **The census below counts exactly `EncodeDomain`.** -/
 theorem Program.encodeDomainB_iff (p : Program) :
     p.encodeDomainB = true ↔ p.EncodeDomain := by
   simp only [Program.encodeDomainB, Bool.and_eq_true, Bool.or_eq_true, List.all_eq_true,
-    Cmd.ctorDeclB_iff, Cmd.noSetB_iff, Cmd.noLeafPatternB_iff, Option.isNone_iff_eq_none,
-    Bool.not_eq_eq_eq_not, Bool.not_true, Bool.eq_false_iff, ne_eq]
-  exact ⟨fun h => ⟨h.1.1.1.1.1.1.1.1, h.1.1.1.1.1.1.1.2, h.1.1.1.1.1.1.2, h.1.1.1.1.1.2,
-      h.1.1.1.1.2, h.1.1.1.2, h.1.1.2, h.1.2, h.2⟩,
-    fun h => ⟨⟨⟨⟨⟨⟨⟨⟨h.ctorsOnly, h.noSet⟩, h.noPrim⟩, h.noAt⟩, h.noAtVar⟩,
-      h.noAtRuleset⟩, h.noLeafPattern⟩, h.noLitUnion⟩, h.headCtorsDeclared⟩⟩
+    Cmd.ctorDeclB_iff, Cmd.queryEncodableB_iff, Option.isNone_iff_eq_none,
+    Bool.not_eq_eq_eq_not, Bool.not_true, Bool.eq_false_iff, ne_eq, decide_eq_true_eq]
+  exact ⟨fun h => ⟨h.1.1.1.1.1.1, h.1.1.1.1.1.2, h.1.1.1.1.2, h.1.1.1.2, h.1.1.2, h.1.2,
+      h.2⟩,
+    fun h => ⟨⟨⟨⟨⟨⟨h.ctorsOnly, h.setLegal⟩, h.noPrim⟩, h.noAt⟩, h.queryEncodable⟩,
+      h.noLitUnion⟩, h.headsDeclared⟩⟩
 
 /-! #### Running the encoded program
 
@@ -2945,7 +2926,7 @@ def correspondSelfTests : List (String × (Unit → Bool)) :=
     -- the source head applying an undeclared `Z` is stuck, while `encodePrelude` declares a
     -- skolem for every name `Program.ctors` reads off the *uses*. The encoded head builds
     -- `(Z (A))` and writes its view entry, which claims a source term the source has not
-    -- got. `EncodeDomain.headCtorsDeclared` is the clause.
+    -- got. `EncodeDomain.headsDeclared` is the clause.
     ("the undeclared-head refutation runs", fun _ =>
       match exec udProgram, execM (encode udProgram) with
       | some d, some e =>
@@ -3068,8 +3049,8 @@ set_option linter.hashCommand false in
 one of the 96 declares a `:merge` function, so it is `EncodeDomain.ctorsOnly` that fails and
 not a generated-name clash or a shadowed primitive.
 
-That is also what says the three newest clauses — `EncodeDomain.noLeafPattern`,
-`noLitUnion` and `headCtorsDeclared` — **cost the corpus nothing**: the count is 70 with them
+That is also what says the three newest clauses — `EncodeDomain.queryEncodable`,
+`noLitUnion` and `headsDeclared` — **cost the corpus nothing**: the count is 70 with them
 as it was without, and the 70 pinned above is what would move if a generated program ever
 wrote a bare-leaf pattern, built a literal under a rule that unions, or applied a name it does
 not declare. What each clause excludes is a program the domain used to admit and the encoder

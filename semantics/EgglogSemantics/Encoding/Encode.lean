@@ -972,9 +972,11 @@ theorem encode_unionFree (P : Program) : Program.UnionFree (encode P) := by
 restriction that is permanent rather than a gap: egglog refuses to encode a function
 with a `:merge` action block. -/
 /-- No `set` action. `Action.set` is what a `:merge` function and an encoded rule head
-need; the constructor fragment has neither, and under `EncodeDomain.ctorsOnly` a `set`
-could only name a constructor or an undeclared function — which is exactly what
-`Action.SetLegal` refuses. -/
+need; the constructor fragment has neither. **Not a domain clause**: under
+`EncodeDomain.ctorsOnly` a `set` could only name a constructor or an undeclared function,
+which is exactly what `Spec/Scope.lean`'s `Action.SetLegal` refuses. So the domain states
+`Program.SetLegal` and `Program.setLegal_iff_noSet` records that the two are one
+condition. -/
 def Action.NoSet : Action → Prop
   | .set _ _ _ => False
   | _ => True
@@ -983,16 +985,58 @@ def Action.NoSet : Action → Prop
 the constructor fragment has none of — so like `Action.NoSet` this is a fragment
 restriction rather than a limitation, and it is why `encodePattern` leaves the case alone
 instead of encoding it. The encoding's *own* queries are all entry atoms; this constrains
-the source. -/
+the source, and `EncodeDomain.queryEncodable` is where it is asked. -/
 def Pattern.NoValues : Pattern → Prop
   | .values _ _ _ => False
   | _ => True
 
-/-- `Action.NoSet` over a command, together with `Pattern.NoValues` over its query. -/
+/-- `Action.NoSet` at every action a command runs. -/
 def Cmd.NoSet : Cmd → Prop
   | .action a => a.NoSet
-  | .rule r => (∀ a ∈ r.actions, a.NoSet) ∧ ∀ p ∈ r.query, p.NoValues
+  | .rule r => ∀ a ∈ r.actions, a.NoSet
   | _ => True
+
+/-- The signature a constructor declaration installs declares constructors only. -/
+theorem Signature.allConstructors_sigBind {sig : Signature} (hsig : sig.AllConstructors)
+    {c : Cmd} (hc : c.CtorDecl) : (c.sigBind sig).AllConstructors := by
+  cases c with
+  | decl f d =>
+      intro g
+      by_cases h : g = f
+      · subst h
+        rw [Cmd.sigBind, Signature.mergeOf, Function.update_self]
+        exact hc
+      · rw [Cmd.sigBind, Signature.mergeOf, Function.update_of_ne h]
+        exact hsig g
+  | _ => exact hsig
+
+/-- `Action.SetLegal` at a state that declares constructors only **is** `Action.NoSet`: a
+`set` head has to be a `:merge` or `:no-merge` function, and there are none. -/
+theorem Cmd.setLegal_iff_noSet {sig : Signature} (hsig : sig.AllConstructors) (c : Cmd) :
+    c.SetLegal sig ↔ c.NoSet := by
+  have hact : ∀ a : Action, a.SetLegal sig ↔ a.NoSet := by
+    intro a
+    cases a <;> simp [Action.SetLegal, Action.NoSet, hsig _]
+  have hacts : ∀ as : List Action, Actions.SetLegal as sig ↔ ∀ a ∈ as, a.NoSet := by
+    intro as
+    induction as with
+    | nil => simp
+    | cons a as ih => simp [hact a, ih]
+  cases c <;> simp [Cmd.NoSet, hact, hacts]
+
+/-- **`Spec/Scope.lean`'s `set` legality *is* the domain's "no `set` anywhere".** The
+equivalence the `setLegal` clause is stated on: one direction is that a non-`set` action is
+vacuously legal, the other that `Program.CtorDecls` leaves no merge function for a `set` to
+name. -/
+theorem Program.setLegal_iff_noSet : ∀ {P : Program} {sig : Signature}, sig.AllConstructors →
+    P.CtorDecls → (Program.SetLegal P sig ↔ ∀ c ∈ P, c.NoSet)
+  | [], _, _, _ => by simp
+  | c :: cs, sig, hsig, hctor => by
+      have hc : c.CtorDecl := hctor c (List.mem_cons_self ..)
+      have htail : Program.CtorDecls cs := fun c' hc' => hctor c' (List.mem_cons_of_mem _ hc')
+      rw [Program.SetLegal, Cmd.setLegal_iff_noSet hsig c,
+        Program.setLegal_iff_noSet (Signature.allConstructors_sigBind hsig hc) htail]
+      simp
 
 /-- The variables a pattern mentions. -/
 def Pattern.varsOf : Pattern → List Var := Pattern.vars
@@ -1025,6 +1069,12 @@ def Cmd.rulesets : Cmd → List RulesetName
 
 /-- Every ruleset name the program mentions. -/
 def Program.rulesets (P : Program) : List RulesetName := (P.flatMap Cmd.rulesets).dedup
+
+/-- **Every name the source text mentions**, of the three kinds the generated namespace has
+to stay clear of: a function name, a variable, a ruleset. One list because one condition is
+asked of all three (`EncodeDomain.noAt`). -/
+def Program.names (P : Program) : List String :=
+  P.ctors.map Prod.fst ++ P.vars ++ P.rulesets
 
 /-! ### What the query flattening drops
 
@@ -1074,10 +1124,11 @@ way because the weaker condition would have to ask which variables a top-level `
 and this one is a property of the query alone. -/
 def Query.VarsKeyed (q : Query) : Prop := ∀ v ∈ Query.vars q, ∃ p ∈ q, Pattern.ArgVar v p
 
-/-- `Pattern.Grounded` at every pattern of a rule's query, and `Query.VarsKeyed` at the
-query. Vacuous at every other command. -/
-def Cmd.NoLeafPattern : Cmd → Prop
-  | .rule r => (∀ p ∈ r.query, p.Grounded) ∧ Query.VarsKeyed r.query
+/-- **The queries the flattening handles.** `Pattern.Grounded` and `Pattern.NoValues` at
+every pattern of a rule's query, and `Query.VarsKeyed` at the query. Vacuous at every other
+command, which is the only place a query can occur. -/
+def Cmd.QueryEncodable : Cmd → Prop
+  | .rule r => (∀ p ∈ r.query, p.Grounded ∧ p.NoValues) ∧ Query.VarsKeyed r.query
   | _ => True
 
 /-! ### The heads the source cannot run
@@ -1102,8 +1153,8 @@ shapes do it, and each of the two clauses below excludes one:
   name `Program.ctors` reads off the uses — declared or not. `execM_soundTerms_false` is that
   program.
 
-Both are conditions on the source program's text and both are `Bool`, so a witness discharges
-them by `decide` and `difftest`'s census counts exactly them. Neither costs the corpus
+Both are decidable conditions on the source program's text, so a witness discharges them by
+`decide` and `difftest`'s census counts exactly them. Neither costs the corpus
 anything: all seventy in-domain cases are literal-free and are run with their constructors
 declared up front (`Program.declared`). -/
 
@@ -1164,59 +1215,196 @@ theorem Cmd.ruleUnionFreeB_iff (r : Rule) :
     (Cmd.rule r).ruleUnionFreeB = true ↔ r.UnionFree :=
   Actions.unionFreeB_iff r.actions
 
-/-- **Every constructor a rule head applies is declared before the rule.** The accumulator
-is the names declared so far, so this is "declared *earlier in the program*" and not merely
-"declared somewhere": a declaration after the run that fires the rule is not in the signature
-the firing reads, and a declaration is the only thing that grows it. A rule cannot fire before
-its own `Cmd.rule`, so declared-before-the-rule is declared-before-every-firing. -/
-def Program.headCtorsDeclaredB : List FnName → Program → Bool
-  | _, [] => true
-  | ds, .decl f _ :: cs => Program.headCtorsDeclaredB (f :: ds) cs
-  | ds, .rule r :: cs =>
-      (r.actions.all fun a => a.ctors.all fun fk => ds.contains fk.1)
-        && Program.headCtorsDeclaredB ds cs
-  | ds, _ :: cs => Program.headCtorsDeclaredB ds cs
+/-- `Spec/Scope.lean`'s `Action.Declared` at a rule's head, and nothing at any other
+command: a stuck **top-level** action drops `ProgramStep` and makes the claim vacuous, so
+only a head needs the condition. -/
+def Cmd.HeadsDeclared : Cmd → Signature → Prop
+  | .rule r, sig => Actions.Declared r.actions sig
+  | _, _ => True
 
-/-- Constructors only, and no name that would collide with a generated one. -/
+/-- **Every name a rule head applies is declared before the rule.** `Actions.Declared` at
+the signature `Cmd.sigBind` has reached, so this is "declared *earlier in the program*" and
+not merely "declared somewhere": a declaration after the run that fires the rule is not in
+the signature the firing reads, and `Cmd.sigBind` is the only thing that grows it. A rule
+cannot fire before its own `Cmd.rule`, so declared-before-the-rule is
+declared-before-every-firing.
+
+`Action.Declared` lets a **primitive** stand in for a declaration, since a `:merge` body is
+where primitives are legal; `EncodeDomain.noPrim` closes that off for a source program, and a
+rule head's names are among `Program.ctors`. -/
+@[simp] def Program.HeadsDeclared : Program → Signature → Prop
+  | [], _ => True
+  | c :: cs, sig => c.HeadsDeclared sig ∧ Program.HeadsDeclared cs (c.sigBind sig)
+
+/-! #### Deciding the two checks the domain takes from `Spec/Scope.lean`
+
+Both read a signature entry, and `FnDecl` carries no `DecidableEq`, so the instances go
+through `Option.isSome`. With them a witness discharges either clause by `decide`, as it did
+the `Bool` these replaced. -/
+
+instance decidableNeNone {α : Type u} (o : Option α) : Decidable (o ≠ none) :=
+  decidable_of_iff (o.isSome = true) (by cases o <;> simp)
+
+instance Expr.decidableDeclared (e : Expr) (sig : Signature) : Decidable (e.Declared sig) :=
+  inferInstanceAs (Decidable (∀ f ∈ e.fns, Prim.ofName f ≠ none ∨ sig f ≠ none))
+
+instance Action.decidableDeclared : ∀ (a : Action) (sig : Signature),
+    Decidable (a.Declared sig)
+  | .expr e, sig => inferInstanceAs (Decidable (e.Declared sig))
+  | .letBind _ e, sig => inferInstanceAs (Decidable (e.Declared sig))
+  | .union e₁ e₂, sig => inferInstanceAs (Decidable (e₁.Declared sig ∧ e₂.Declared sig))
+  | .set f args out, sig =>
+      inferInstanceAs (Decidable (sig f ≠ none ∧ (∀ e ∈ args, e.Declared sig) ∧
+        ∀ e ∈ out, e.Declared sig))
+
+instance Actions.decidableDeclared : ∀ (as : List Action) (sig : Signature),
+    Decidable (Actions.Declared as sig)
+  | [], _ => .isTrue trivial
+  | a :: as, sig =>
+      @instDecidableAnd _ _ (Action.decidableDeclared a sig) (Actions.decidableDeclared as sig)
+
+instance Cmd.decidableHeadsDeclared : ∀ (c : Cmd) (sig : Signature),
+    Decidable (c.HeadsDeclared sig)
+  | .rule r, sig => inferInstanceAs (Decidable (Actions.Declared r.actions sig))
+  | .action _, _ => .isTrue trivial
+  | .run _, _ => .isTrue trivial
+  | .saturate _, _ => .isTrue trivial
+  | .decl _ _, _ => .isTrue trivial
+
+instance Program.decidableHeadsDeclared : ∀ (P : Program) (sig : Signature),
+    Decidable (Program.HeadsDeclared P sig)
+  | [], _ => .isTrue trivial
+  | c :: cs, sig => @instDecidableAnd _ _ (Cmd.decidableHeadsDeclared c sig)
+      (Program.decidableHeadsDeclared cs (c.sigBind sig))
+
+instance Action.decidableSetLegal : ∀ (a : Action) (sig : Signature),
+    Decidable (a.SetLegal sig)
+  | .expr _, _ => .isTrue trivial
+  | .letBind _ _, _ => .isTrue trivial
+  | .union _ _, _ => .isTrue trivial
+  | .set f _ _, sig => inferInstanceAs (Decidable (sig.mergeOf f ≠ none))
+
+instance Actions.decidableSetLegal : ∀ (as : List Action) (sig : Signature),
+    Decidable (Actions.SetLegal as sig)
+  | [], _ => .isTrue trivial
+  | a :: as, sig =>
+      @instDecidableAnd _ _ (Action.decidableSetLegal a sig) (Actions.decidableSetLegal as sig)
+
+instance Cmd.decidableSetLegal : ∀ (c : Cmd) (sig : Signature), Decidable (c.SetLegal sig)
+  | .action a, sig => inferInstanceAs (Decidable (a.SetLegal sig))
+  | .rule r, sig => inferInstanceAs (Decidable (Actions.SetLegal r.actions sig))
+  | .run _, _ => .isTrue trivial
+  | .saturate _, _ => .isTrue trivial
+  | .decl _ _, _ => .isTrue trivial
+
+instance Program.decidableSetLegal : ∀ (P : Program) (sig : Signature),
+    Decidable (Program.SetLegal P sig)
+  | [], _ => .isTrue trivial
+  | c :: cs, sig => @instDecidableAnd _ _ (Cmd.decidableSetLegal c sig)
+      (Program.decidableSetLegal cs (c.sigBind sig))
+
+/-- **Legality plus the encoding-specific residue.** Three clauses are `Spec`'s own static
+checks — `Program.CtorDecls`, `Program.SetLegal`, and `Action.Declared` threaded along
+`Cmd.sigBind` — and four are conditions only the encoding needs: the generated namespace has
+to be fresh, the query flattening has to be total, and a rule head has to be one the source
+can run. -/
 structure Program.EncodeDomain (P : Program) : Prop where
-  /-- Every declared function is a constructor. -/
-  ctorsOnly : ∀ c ∈ P, ∀ f d, c = Cmd.decl f d → d.merge = none
-  /-- No `set` action anywhere. -/
-  noSet : ∀ c ∈ P, c.NoSet
-  /-- No source function shadows a primitive, so every application builds. -/
+  /-- Every declared function is a constructor: `Spec/Syntax.lean`'s own
+  `Program.CtorDecls`, which is what `exec_programStep` asks for. -/
+  ctorsOnly : P.CtorDecls
+  /-- No `set` writes a table. Stated as `Spec/Scope.lean`'s `Action.SetLegal` threaded along
+  `Cmd.sigBind`, which under `ctorsOnly` is exactly "no `set` anywhere"
+  (`Program.setLegal_iff_noSet`): a `set` head must be a `:merge` or `:no-merge` function and
+  a constructor-only program declares none. `Action.set` is what a `:merge` function and an
+  encoded rule head need, and the constructor fragment has neither. -/
+  setLegal : Program.SetLegal P (fun _ => none)
+  /-- No source function shadows a primitive, so every application builds. Not implied by
+  `Program.Evaluable`, which says nothing of a **query** pattern's names; `P.ctors` reads
+  them too. -/
   noPrim : ∀ fk ∈ P.ctors, Prim.ofName fk.1 = none
-  /-- No source function is in the generated namespace. -/
-  noAt : ∀ fk ∈ P.ctors, ¬ "@".isPrefixOf fk.1
-  /-- Nor any source variable: the generated `@v0`, `@v1`, … are numbered from one
-  supply for the whole program, so they collide with nothing but a source `@` name. -/
-  noAtVar : ∀ v ∈ P.vars, ¬ "@".isPrefixOf v
-  /-- Nor any source **ruleset**. The maintenance rules join `rebuildRuleset`, which is
-  `@rebuild`, and `encodeRule` keeps a source rule's own ruleset — so a source rule joining
-  `@rebuild` would be fired by every `Cmd.saturate rebuildRuleset` the encoding emits, where
-  the source fires it only under a run naming it. That is an equality in the target the
-  source never derives, and neither `noAt` nor `noAtVar` excludes it: a ruleset name is
-  neither a function name nor a variable. -/
-  noAtRuleset : ∀ R ∈ P.rulesets, ¬ "@".isPrefixOf R
-  /-- **No pattern the flattening drops.** `encodePattern` emits no atom for a source
-  pattern whose expression is a bare leaf, so `.expr (.lit l)` becomes the *empty*
+  /-- **No source name is in the generated namespace**, over all three kinds of name at once
+  (`Program.names`), because one collision is one defect however the name is used.
+
+  * A **function** name: the prelude's tables and skolems are `@`-prefixed.
+  * A **variable**: the generated `@v0`, `@v1`, … are numbered from one supply for the whole
+    program, so they collide with nothing but a source `@` name.
+  * A **ruleset**: the maintenance rules join `rebuildRuleset`, which is `@rebuild`, and
+    `encodeRule` keeps a source rule's own ruleset — so a source rule joining `@rebuild`
+    would be fired by every `Cmd.saturate rebuildRuleset` the encoding emits, where the
+    source fires it only under a run naming it. That is an equality in the target the source
+    never derives, and it is a name that is neither a function nor a variable. -/
+  noAt : ∀ n ∈ P.names, ¬ "@".isPrefixOf n
+  /-- **Every source query is one the flattening handles.** `encodePattern` emits no atom for
+  a source pattern whose expression is a bare leaf, so `.expr (.lit l)` becomes the *empty*
   constraint — which every target matches where the source pattern matches nothing
   (`encodeQuery_drops_literal_pattern`) — and `.expr (.var v)` leaves its variable bound by
   nothing, where the source rule's `ValidEnv` must bind it to a term the source holds.
-  `Pattern.Grounded` excludes the first and `Query.VarsKeyed` the second. Like `noAtRuleset`
-  this is a condition on the source text that no other clause implies —
+  `Pattern.Grounded` excludes the first and `Query.VarsKeyed` the second, and
+  `Pattern.NoValues` excludes the entry atom the fragment has no table for.
+  A condition on the source text that no other clause implies —
   `Encoding/Match.lean`'s `litProgram` is the program it excludes, and
   `litProgram_not_encodeDomain` is that recorded — and it costs the corpus nothing: all
   seventy in-domain cases satisfy it. -/
-  noLeafPattern : ∀ c ∈ P, c.NoLeafPattern
+  queryEncodable : ∀ c ∈ P, c.QueryEncodable
   /-- **No `union` is handed a literal.** Either the program asserts no `union` at all, or
   it builds no literal — and then no term it holds is one, so no operand can evaluate to
-  one. `encode_corresponds_unions_literals` is the program this excludes, and it refutes
+  one. `Spec/Scope.lean`'s `Action.UnionLegal` is the syntactic half of this, and the clause
+  implies it at every rule head (`Program.EncodeDomain.unionLegal_of_mem`); the converse
+  fails, since `UnionLegal` says nothing about a **variable** operand and a query binds one
+  under a literal argument, so the clause has to read the whole program.
+  `encode_corresponds_unions_literals` is the program this excludes, and it refutes
   `encode_corresponds_complete` rather than only its residue. -/
   noLitUnion : (∀ c ∈ P, c.ruleUnionFreeB = true) ∨ ∀ c ∈ P, c.litFreeB = true
-  /-- **Every constructor a rule head applies is declared before the rule**, so the source's
-  head builds wherever the encoded head does. `execM_soundTerms_false` is the program this
-  excludes: `encodePrelude` declares a skolem for every applied name, declared or not. -/
-  headCtorsDeclared : Program.headCtorsDeclaredB [] P = true
+  /-- **Every name a rule head applies is declared before the rule**, so the source's head
+  builds wherever the encoded head does. `Spec/Scope.lean`'s `Actions.Declared` along
+  `Cmd.sigBind`. `execM_soundTerms_false` is the program this excludes: `encodePrelude`
+  declares a skolem for every applied name, declared or not. -/
+  headsDeclared : Program.HeadsDeclared P (fun _ => none)
+
+/-! #### The `union` legality the clause implies
+
+`Spec/Scope.lean`'s `Action.UnionLegal` at a rule head, from either disjunct of
+`noLitUnion`: with no `union` in a head there is nothing to check, and with no literal in the
+program an operand is not one. -/
+
+/-- An action that asserts no equation asserts none on a literal. -/
+theorem Action.UnionLegal.of_unionFree {a : Action} (h : a.UnionFree) : a.UnionLegal := by
+  cases a <;> first | trivial | exact absurd h id
+
+/-- An action that evaluates no literal hands none to a `union`. -/
+theorem Action.UnionLegal.of_litFreeB {a : Action} (h : a.litFreeB = true) : a.UnionLegal := by
+  cases a with
+  | union e₁ e₂ =>
+      simp only [Action.litFreeB, Bool.and_eq_true] at h
+      refine ⟨fun l hl => ?_, fun l hl => ?_⟩
+      · rw [hl] at h; simp [Expr.litFreeB] at h
+      · rw [hl] at h; simp [Expr.litFreeB] at h
+  | expr _ => trivial
+  | letBind _ _ => trivial
+  | set _ _ _ => trivial
+
+@[inherit_doc Action.UnionLegal.of_unionFree]
+theorem Actions.UnionLegal.of_mem : ∀ {as : List Action}, (∀ a ∈ as, a.UnionLegal) →
+    Actions.UnionLegal as
+  | [], _ => trivial
+  | _ :: as, hall =>
+      ⟨hall _ (List.mem_cons_self ..),
+        Actions.UnionLegal.of_mem fun b hb => hall b (List.mem_cons_of_mem _ hb)⟩
+
+/-- **The domain's `noLitUnion` implies `union` legality at every rule head.** Not the
+converse: `Action.UnionLegal` reads the operand expressions, and a *variable* operand bound to
+a literal is what the clause's second disjunct is for. -/
+theorem Program.EncodeDomain.unionLegal_of_mem {P : Program} (h : P.EncodeDomain) {r : Rule}
+    (hr : Cmd.rule r ∈ P) : Actions.UnionLegal r.actions := by
+  rcases h.noLitUnion with hfree | hlit
+  · refine Actions.UnionLegal.of_mem fun a ha => Action.UnionLegal.of_unionFree ?_
+    have hb := hfree _ hr
+    simp only [Cmd.ruleUnionFreeB, List.all_eq_true] at hb
+    exact (Action.unionFreeB_iff a).mp (hb a ha)
+  · refine Actions.UnionLegal.of_mem fun a ha => Action.UnionLegal.of_litFreeB ?_
+    have hb := hlit _ hr
+    simp only [Cmd.litFreeB, List.all_eq_true] at hb
+    exact hb a ha
 
 /-! ### Reading the target
 

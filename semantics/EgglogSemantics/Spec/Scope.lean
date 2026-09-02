@@ -4,12 +4,13 @@ import EgglogSemantics.Spec.Term
 /-!
 # The front end's static checks
 
-Six checks: `Scoped` — every variable used is bound; `Evaluable` — every applied name is a
-declared constructor; `SetLegal` — no `set` writes a constructor; `WidthOk` — every
-application carries its declaration's column counts; `DeclsFresh` — no name is declared
-twice; `MergeDeclared` — every name a `:merge` applies is declared or a primitive.
-`Scoped` threads a `Scope`, extended by a `let` and by a query; the other five thread a
-`Signature`, moved only by `Cmd.sigBind`.
+Seven checks: `Scoped` — every variable used is bound; `Evaluable` — every applied name is a
+declared constructor; `UnionLegal` — no `union` names a literal; `SetLegal` — no `set` writes
+a constructor; `WidthOk` — every application carries its declaration's column counts;
+`DeclsFresh` — no name is declared twice; `MergeDeclared` — every name a `:merge` applies is
+declared or a primitive. `Scoped` threads a `Scope`, extended by a `let` and by a query;
+`UnionLegal` reads no context at all; the other five thread a `Signature`, moved only by
+`Cmd.sigBind`.
 -/
 
 namespace Egglog
@@ -128,6 +129,64 @@ def Action.Evaluable : Action → Signature → Prop
 @[simp] def Program.Evaluable : Program → Signature → Prop
   | [], _ => True
   | c :: cs, sig => c.Evaluable sig ∧ Program.Evaluable cs (c.sigBind sig)
+
+/-! ### `union` legality
+
+egglog unions two **eq-sort** values: `typechecking.rs:966-969` marks a sort unionable when
+`sort.is_eq_sort() && !non_unionable_sorts.contains(…)` and raises a type error otherwise, and
+`core.rs:514` says the same of the lowering — "top-level egglog expects only Union on
+constructors". So a program that unions two literals is one egglog **rejects statically**,
+where `Spec/Eval.lean`'s `evalAction` gets stuck on it instead.
+
+The typed rule needs sorts, which this model does not have (`PLAN.md:86`, base sorts in place
+of the single untyped `Term`). This is the part expressible without them: an operand is not a
+literal **expression**. It is strictly weaker — a *variable* operand may still be bound to a
+literal, since a query binds one under a literal argument — so `evalAction`'s refusal stays
+load-bearing and this is a static approximation on top of it, not a replacement.
+
+`Action.Evaluable` asks the stronger `Expr.IsApp` of an operand and so implies this wherever
+it is asked (`Action.UnionLegal.of_evaluable`). What it does not reach is a `:merge` body: no
+`Evaluable` walks into one, and this does, as `UnionFree` below does. -/
+
+/-- Neither operand of a `union` is a literal. -/
+def Action.UnionLegal : Action → Prop
+  | .union e₁ e₂ => (∀ l, e₁ ≠ .lit l) ∧ ∀ l, e₂ ≠ .lit l
+  | _ => True
+
+@[inherit_doc Action.UnionLegal]
+theorem Action.UnionLegal.of_evaluable {a : Action} {sig : Signature} (h : a.Evaluable sig) :
+    a.UnionLegal := by
+  cases a with
+  | union e₁ e₂ =>
+      refine ⟨fun l hl => ?_, fun l hl => ?_⟩
+      · rw [hl] at h; exact h.1.1
+      · rw [hl] at h; exact h.2.1
+  | expr _ => trivial
+  | letBind _ _ => trivial
+  | set _ _ _ => trivial
+
+@[simp] def Actions.UnionLegal : List Action → Prop
+  | [] => True
+  | a :: as => a.UnionLegal ∧ Actions.UnionLegal as
+
+/-- `.noMerge` runs nothing, and `res` is evaluated rather than run. -/
+@[simp] def MergeSpec.UnionLegal : MergeSpec → Prop
+  | .merge body _ => Actions.UnionLegal body
+  | .noMerge => True
+
+/-- Its actions, and its `:merge` bodies: a `union` runs in either. -/
+@[simp] def Cmd.UnionLegal : Cmd → Prop
+  | .action a => a.UnionLegal
+  | .rule r => Actions.UnionLegal r.actions
+  | .run _ => True
+  | .saturate _ => True
+  | .decl _ d => ∀ ms ∈ d.merge, ms.UnionLegal
+
+/-- No signature threading: which actions a command carries does not depend on what is
+declared. -/
+@[simp] def Program.UnionLegal : Program → Prop
+  | [] => True
+  | c :: cs => c.UnionLegal ∧ Program.UnionLegal cs
 
 /-! ### `set` legality -/
 

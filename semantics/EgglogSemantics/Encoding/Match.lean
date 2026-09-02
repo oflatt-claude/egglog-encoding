@@ -75,7 +75,7 @@ source query `[(1)]` matches under no substitution while its encoding, the empty
 matches under the empty one. `Pattern.Grounded` is the side condition that excludes it, and
 `Query.VarsKeyed` is its counterpart for the bare-*variable* half. Both are restrictions on
 the *source program's text*, and both are now clauses of **`Program.EncodeDomain`**
-(`EncodeDomain.noLeafPattern`), so the program the refutation is about is outside the
+(`EncodeDomain.queryEncodable`), so the program the refutation is about is outside the
 encoder's declared domain rather than inside it — `litProgram_not_encodeDomain`.
 
 ## Where it is checked
@@ -945,12 +945,15 @@ theorem exists_validQuerySubst_of_encodeQuery {src tgt : Database} (hw : src.WF)
   exists_validQuerySubst_of_patternReads hw hb hs hglob hgr hk
     (patternReads_of_encodeQuery hd hsc hnv hk h)
 
-/-- **And the domain supplies the two source-text conditions.** `EncodeDomain.noLeafPattern`
-is stated per command; this is it at a rule, which is the form the correspondence consumes —
-so a program `encode` claims never needs `hgr` and `hk` assumed separately. -/
-theorem Program.EncodeDomain.noLeafPattern_of_mem {P : Program} (h : P.EncodeDomain) {r : Rule}
-    (hr : Cmd.rule r ∈ P) : (∀ p ∈ r.query, p.Grounded) ∧ Query.VarsKeyed r.query :=
-  h.noLeafPattern _ hr
+/-- **And the domain supplies the three source-text conditions.**
+`EncodeDomain.queryEncodable` is stated per command; this is it at a rule, split the way the
+correspondence consumes it — so a program `encode` claims never needs `hnv`, `hgr` and `hk`
+assumed separately. -/
+theorem Program.EncodeDomain.queryEncodable_of_mem {P : Program} (h : P.EncodeDomain)
+    {r : Rule} (hr : Cmd.rule r ∈ P) :
+    (∀ p ∈ r.query, p.Grounded) ∧ (∀ p ∈ r.query, p.NoValues) ∧ Query.VarsKeyed r.query :=
+  ⟨fun p hp => ((h.queryEncodable _ hr).1 p hp).1,
+    fun p hp => ((h.queryEncodable _ hr).1 p hp).2, (h.queryEncodable _ hr).2⟩
 
 /-! ### The source reading at the ids themselves
 
@@ -1256,14 +1259,14 @@ def litProgram : Program := [.rule { query := litQuery, actions := [], ruleset :
 
 /-- **And it is *outside* the encoder's declared domain**, which is the repair: every other
 clause of `Program.EncodeDomain` holds of it — one constructor-free rule, no `set`, no
-generated name anywhere — and `EncodeDomain.noLeafPattern` is the one it fails. Before that
+generated name anywhere — and `EncodeDomain.queryEncodable` is the one it fails. Before that
 clause was folded in, this program was in the domain and the refutation below was a program
 the encoder claimed and got wrong. -/
 theorem litProgram_not_encodeDomain : ¬ litProgram.EncodeDomain := by
   intro h
-  have hq := h.noLeafPattern (.rule { query := litQuery, actions := [], ruleset := "" })
+  have hq := h.queryEncodable (.rule { query := litQuery, actions := [], ruleset := "" })
     (by simp [litProgram])
-  exact hq.1 (.expr (.lit (.int 1))) (by simp [litQuery]) (.int 1) rfl
+  exact (hq.1 (.expr (.lit (.int 1))) (by simp [litQuery])).1 (.int 1) rfl
 
 /-- **And `encodeQuery` emits nothing for it.** -/
 theorem encodeQuery_litQuery : (encodeQuery litQuery 0).1 = [] := rfl
@@ -1966,31 +1969,25 @@ the clause that puts `litProgram` out keeps this in, so the composed case is a c
 claims rather than one it is excused from. -/
 theorem wProgram_encodeDomain : wProgram.EncodeDomain where
   ctorsOnly := by
-    intro c hc f d heq
-    subst heq
-    simp only [wProgram, List.mem_cons] at hc
-    rcases hc with h | h | h | h | h <;> simp_all [wADecl, wFDecl]
-  noSet := by
     intro c hc
     simp only [wProgram, List.mem_cons] at hc
     rcases hc with rfl | rfl | rfl | rfl | h <;>
-      simp_all [Cmd.NoSet, Action.NoSet, Pattern.NoValues, wSrcRule]
+      simp_all [Cmd.CtorDecl, wADecl, wFDecl]
+  setLegal := by decide
   noPrim := by decide
   -- `String.isPrefixOf` does not reduce under `decide`'s evaluator; the kernel's does.
   noAt := by decide +kernel
-  noAtVar := by decide +kernel
-  noAtRuleset := by decide +kernel
-  noLeafPattern := by
+  queryEncodable := by
     intro c hc
     simp only [wProgram, List.mem_cons] at hc
     rcases hc with rfl | rfl | rfl | rfl | h
     · trivial
     · trivial
-    · exact ⟨wSrcRule_grounded, wSrcRule_varsKeyed⟩
+    · exact ⟨fun p hp => ⟨wSrcRule_grounded p hp, wSrcRule_noValues p hp⟩, wSrcRule_varsKeyed⟩
     · trivial
     · exact absurd h (by simp)
   noLitUnion := Or.inr (by decide)
-  headCtorsDeclared := by decide +kernel
+  headsDeclared := by decide
 
 /-- **The correspondence, run end to end at the composed case.**
 
@@ -2539,31 +2536,24 @@ theorem uSrcRule_varsKeyed : Query.VarsKeyed uSrcRule.query := by
 `Action.NoSet`, and the query's one pattern is neither a bare literal nor a bare variable. -/
 theorem uProgram_encodeDomain : uProgram.EncodeDomain where
   ctorsOnly := by
-    intro c hc f d heq
-    subst heq
-    simp only [uProgram, List.mem_cons] at hc
-    rcases hc with h | h | h | h | h <;> simp_all [wADecl]
-  noSet := by
     intro c hc
     simp only [uProgram, List.mem_cons] at hc
-    rcases hc with rfl | rfl | rfl | rfl | h <;>
-      simp_all [Cmd.NoSet, Action.NoSet, Pattern.NoValues, uSrcRule]
+    rcases hc with rfl | rfl | rfl | rfl | h <;> simp_all [Cmd.CtorDecl, wADecl]
+  setLegal := by decide
   noPrim := by decide
   -- `String.isPrefixOf` does not reduce under `decide`'s evaluator; the kernel's does.
   noAt := by decide +kernel
-  noAtVar := by decide +kernel
-  noAtRuleset := by decide +kernel
-  noLeafPattern := by
+  queryEncodable := by
     intro c hc
     simp only [uProgram, List.mem_cons] at hc
     rcases hc with rfl | rfl | rfl | rfl | h
     · trivial
     · trivial
-    · exact ⟨uSrcRule_grounded, uSrcRule_varsKeyed⟩
+    · exact ⟨fun p hp => ⟨uSrcRule_grounded p hp, uSrcRule_noValues p hp⟩, uSrcRule_varsKeyed⟩
     · trivial
     · exact absurd h (by simp)
   noLitUnion := Or.inr (by decide)
-  headCtorsDeclared := by decide +kernel
+  headsDeclared := by decide
 
 /-- **`cong_headUnion` at a non-reflexive equation.**
 

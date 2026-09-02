@@ -83,7 +83,7 @@ yet.
 | `Proofs/Merge.lean`'s `Action.SetWidthOk` against `Spec/Scope.lean`'s `WidthOk`, and the `ProgramLegal` clause that would let them be one predicate | `MERGE.md`, constraint (5) |
 | `Database.DeclaredTerms` has no preservation lemma, so `WidthOk` funds nothing yet | `Spec/Congruence.lean`, `Proofs/` |
 | `Matches.values` is split-blind and e-class-blind | `MERGE.md`, open question 1 |
-| base sorts, in place of the single untyped `Term` | `MERGE.md`, constraint (5) |
+| base sorts, in place of the single untyped `Term` — until then `Spec/Scope.lean`'s `Action.UnionLegal` is only the syntactic half of egglog's eq-sort rule on a `union` | `MERGE.md`, constraint (5) |
 | restating M11 against a reachable saturation condition — **still open**, and now with a machine-checked refutation of the current one | `ENCODING.md`, finding 3 |
 
 **Where the library stands.** **`Spec/`, `Impl/`, `Proofs/` and `Tests/`: zero `sorry` and zero

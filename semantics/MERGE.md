@@ -453,7 +453,7 @@ rejects `:no-merge` on an eq-sorted output (`NoMergeEqSortFunction`).
 
 A second restriction is a **gap in this encoder** rather than in egglog's, and it was folded into
 `Program.EncodeDomain` only once the rule-head match correspondence forced it
-(`EncodeDomain.noLeafPattern`): `encodeQueryExpr` flattens an application and returns a leaf
+(`EncodeDomain.queryEncodable`): `encodeQueryExpr` flattens an application and returns a leaf
 unchanged, so `encodePattern` emits **no atom** for a source pattern whose expression is a bare
 literal or a bare variable. `(rule ((1)) ())` therefore encodes to the *empty* query, which every
 target matches and whose source matches nothing — `Encoding/Match.lean`'s

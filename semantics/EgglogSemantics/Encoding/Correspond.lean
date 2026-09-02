@@ -811,15 +811,10 @@ specification target to compare it with.
 The source side keeps `ProgramStep`: a source program is constructor-only, `exec_programStep`
 is an equality there, and the witness discharges the hypothesis through it. -/
 
-/-- `EncodeDomain.ctorsOnly`, in the form `exec_programStep` asks for. -/
-theorem Program.EncodeDomain.ctorDecls {P : Program} (h : P.EncodeDomain) : P.CtorDecls := by
-  intro c hc
-  match c with
-  | .decl f dc => exact h.ctorsOnly _ hc f dc rfl
-  | .action _ => trivial
-  | .rule _ => trivial
-  | .run _ => trivial
-  | .saturate _ => trivial
+/-- **`EncodeDomain.setLegal` is "no `set` anywhere", in the form the cases below use.**
+`Program.setLegal_iff_noSet` at the empty signature, which declares constructors only. -/
+theorem Program.EncodeDomain.noSet {P : Program} (h : P.EncodeDomain) : ∀ c ∈ P, c.NoSet :=
+  (Program.setLegal_iff_noSet (fun _ => rfl) h.ctorsOnly).mp h.setLegal
 
 /-! #### The forward half, by cases on `Cong`
 
@@ -1958,17 +1953,20 @@ def litBuildProgram : Program := [.action (.expr (.lit (.int 5)))]
 
 /-- **And it is in the domain.** The clause that excluded it is gone; every other one holds. -/
 theorem litBuildProgram_encodeDomain : litBuildProgram.EncodeDomain where
-  ctorsOnly := by simp [litBuildProgram]
-  noSet := by simp [litBuildProgram, Cmd.NoSet, Action.NoSet]
+  ctorsOnly := by
+    intro c hc
+    simp only [litBuildProgram, List.mem_singleton] at hc
+    subst hc
+    trivial
+  setLegal := by decide
   noPrim := by simp [litBuildProgram, Program.ctors, Cmd.ctors, Action.ctors, Expr.ctors]
-  noAt := by simp [litBuildProgram, Program.ctors, Cmd.ctors, Action.ctors, Expr.ctors]
-  noAtVar := by
-    simp [litBuildProgram, Program.vars, Cmd.vars, Action.vars, Expr.vars]
-  noAtRuleset := by simp [litBuildProgram, Program.rulesets, Cmd.rulesets]
-  noLeafPattern := by simp [litBuildProgram, Cmd.NoLeafPattern]
+  noAt := by
+    simp [litBuildProgram, Program.names, Program.ctors, Cmd.ctors, Action.ctors, Expr.ctors,
+      Program.vars, Cmd.vars, Action.vars, Expr.vars, Program.rulesets, Cmd.rulesets]
+  queryEncodable := by simp [litBuildProgram, Cmd.QueryEncodable]
   -- No `union`, so the literal it builds is never one.
   noLitUnion := Or.inl (by decide)
-  headCtorsDeclared := by decide
+  headsDeclared := by decide
 
 /-- The state the one action reaches: the literal, and nothing else. -/
 def litBuildSrc : Database := Database.empty.addTerm (.lit (.int 5))
@@ -2645,13 +2643,13 @@ theorem unionsInv_step {Q : Program} (hQ : Q.EncodeDomain) {c : Cmd} (hc : c ∈
     (hrun : td.execProgramM ((encodeCmd c n i).1 ++ rest) = some D)
     (hinv : UnionsInv sd td D) :
     ∃ td', td.execProgramM (encodeCmd c n i).1 = some td' ∧ UnionsInv sd' td' D := by
-  have hstate' : sd'.CtorState := hstep.ctorState hinv.state (hQ.ctorDecls c hc)
+  have hstate' : sd'.CtorState := hstep.ctorState hinv.state (hQ.ctorsOnly c hc)
   obtain ⟨td', hblock, hafter⟩ := FDatabase.execProgramM_append hrun
   have hmono : ∀ t ∈ td'.terms, t ∈ D.terms := FDatabase.execProgramM_terms hafter
   refine ⟨td', hblock, ?_⟩
   cases c with
   | decl f dc =>
-      obtain ⟨heqs, henv⟩ := cmdStep_decl_fields hinv.state.sig (hQ.ctorDecls _ hc) hstep
+      obtain ⟨heqs, henv⟩ := cmdStep_decl_fields hinv.state.sig (hQ.ctorsOnly _ hc) hstep
       obtain rfl : td' = td := by
         rw [show (encodeCmd (Cmd.decl f dc) n i).1 = [] from rfl, FDatabase.execProgramM,
           Option.some.injEq] at hblock
@@ -3496,19 +3494,11 @@ def ncTFF : Term := .app transName [ncFiat, ncFiat]
 /-- `@Trans (@Sym @Fiat) (@Trans @Fiat @Fiat)`, what `mergeBody` writes at the collision. -/
 def ncTST : Term := .app transName [.app symName [ncFiat], ncTFF]
 
-private theorem ncRule_noSet : (Cmd.rule ncRule).NoSet := by
-  refine ⟨?_, ?_⟩
-  · intro a ha
-    obtain rfl : a = Action.expr (.app "F" [.var "x"]) := by simpa [ncRule] using ha
-    trivial
-  · intro p hp
-    obtain rfl : p = Pattern.expr (.app "F" [.var "x"]) := by simpa [ncRule] using hp
-    trivial
-
-private theorem ncRule_noLeafPattern : (Cmd.rule ncRule).NoLeafPattern := by
+private theorem ncRule_queryEncodable : (Cmd.rule ncRule).QueryEncodable := by
   refine ⟨?_, ?_⟩
   · intro p hp
     obtain rfl : p = Pattern.expr (.app "F" [.var "x"]) := by simpa [ncRule] using hp
+    refine ⟨?_, trivial⟩
     intro l
     simp
   · intro v hv
@@ -3521,29 +3511,15 @@ private theorem ncRule_noLeafPattern : (Cmd.rule ncRule).NoLeafPattern := by
 sits at `F`'s key column, which is what makes the encoded query read it at all. -/
 theorem ncProgram_encodeDomain : ncProgram.EncodeDomain where
   ctorsOnly := by
-    intro c hc f dc heq
-    subst heq
-    simp only [ncProgram, List.mem_cons] at hc
-    rcases hc with h | h | h | h | h | h | h | h <;> simp_all
-  noSet := by
     intro c hc
     simp only [ncProgram, List.mem_cons] at hc
-    rcases hc with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | h
-    · trivial
-    · trivial
-    · trivial
-    · trivial
-    · trivial
-    · trivial
-    · exact ncRule_noSet
-    · trivial
-    · exact absurd h (by simp)
+    rcases hc with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | h <;>
+      simp_all [Cmd.CtorDecl]
+  setLegal := by decide
   noPrim := by decide
   -- `String.isPrefixOf` does not reduce under `decide`'s evaluator; the kernel's does.
   noAt := by decide +kernel
-  noAtVar := by decide +kernel
-  noAtRuleset := by decide +kernel
-  noLeafPattern := by
+  queryEncodable := by
     intro c hc
     simp only [ncProgram, List.mem_cons] at hc
     rcases hc with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | h
@@ -3553,11 +3529,11 @@ theorem ncProgram_encodeDomain : ncProgram.EncodeDomain where
     · trivial
     · trivial
     · trivial
-    · exact ncRule_noLeafPattern
+    · exact ncRule_queryEncodable
     · trivial
     · exact absurd h (by simp)
   noLitUnion := Or.inr (by decide)
-  headCtorsDeclared := by decide +kernel
+  headsDeclared := by decide
 
 /-! ##### The source side, in the kernel
 
@@ -3590,7 +3566,7 @@ theorem ncSrc_eqs : ncSrc.eqs = [(ncA, ncB)] := by decide
 /-- **And the source state is reachable**, through the refinement theorem rather than by
 hand. -/
 theorem ncProgram_programStep : ProgramStep Database.empty ncProgram ncSrc.toDatabase :=
-  (exec_programStep ncProgram_encodeDomain.ctorDecls
+  (exec_programStep ncProgram_encodeDomain.ctorsOnly
     (Or.inr (by rw [ncSrc_exec]; simp))).mp (by rw [ncSrc_exec]; rfl)
 
 /-! ##### The target side, by the interpreter's own writers
@@ -4981,7 +4957,7 @@ since `encodeCmd` gives them the same block.
 What these do **not** give is that the source's block evaluates at all. `RuleResults` asks
 `evalLocalActions` for a `some`, and a stuck head is exactly the two refutations at the end of
 this file — so `evalLocalActions … = some d` is a hypothesis here, and discharging it from
-`EncodeDomain.noLitUnion` and `EncodeDomain.headCtorsDeclared` is what is left of `hfired`. -/
+`EncodeDomain.noLitUnion` and `EncodeDomain.headsDeclared` is what is left of `hfired`. -/
 
 /-- **The round's rule-firing half is contained in the round's post-state.** One `MergeClosure`
 for a `.run`; for a `.saturate`, the first round's phase and then every round after it — or,
@@ -5031,7 +5007,7 @@ file is a head applying a constructor nobody declared, and
 `encode_corresponds_unions_literals` is a head unioning two literals; the second refutes not
 this residue but `encode_corresponds_complete` **itself**, at a pair of terms the source holds
 and the two membership hypotheses are satisfied at. So `EncodeDomain.noLitUnion` and
-`EncodeDomain.headCtorsDeclared` are load-bearing for the conclusion and not only for the
+`EncodeDomain.headsDeclared` are load-bearing for the conclusion and not only for the
 proof, and everything below is stated under them.
 
 `Database.ViewsSound` and `Database.EdgesSound` at the state `execM` returned, in the term-list
@@ -5219,25 +5195,19 @@ equivalence live downstream in `DiffTest.lean`, so the clauses are discharged he
 directly. -/
 theorem witnessProgram_encodeDomain : witnessProgram.EncodeDomain where
   ctorsOnly := by
-    intro c hc f dc heq
-    subst heq
-    simp only [witnessProgram, List.mem_cons] at hc
-    rcases hc with h | h | h | h | h | h | h <;> simp_all
-  noSet := by
     intro c hc
     simp only [witnessProgram, List.mem_cons] at hc
-    rcases hc with rfl | rfl | rfl | rfl | rfl | rfl | h <;> trivial
+    rcases hc with rfl | rfl | rfl | rfl | rfl | rfl | h <;> simp_all [Cmd.CtorDecl]
+  setLegal := by decide
   noPrim := by decide
   -- `String.isPrefixOf` does not reduce under `decide`'s evaluator; the kernel's does.
   noAt := by decide +kernel
-  noAtVar := by decide +kernel
-  noAtRuleset := by decide +kernel
-  noLeafPattern := by
+  queryEncodable := by
     intro c hc
     simp only [witnessProgram, List.mem_cons] at hc
     rcases hc with rfl | rfl | rfl | rfl | rfl | rfl | h <;> trivial
   noLitUnion := Or.inr (by decide)
-  headCtorsDeclared := by decide
+  headsDeclared := by decide
 
 /-- **The hypotheses of `encode_corresponds` are simultaneously satisfiable, and both sides
 of its conclusion are inhabited and refutable at the witness.**
@@ -5254,7 +5224,7 @@ theorem encode_corresponds_witness {d e : FDatabase} {a b c₁ c₂ : Term}
       (Cong src a b ∧ SameClass e.toDatabase a b) ∧
       (¬ Cong src c₁ c₂ ∧ ¬ SameClass e.toDatabase c₁ c₂) := by
   refine ⟨d.toDatabase, witnessProgram_encodeDomain, ?_, he, ⟨?_, ?_⟩, ?_, ?_⟩
-  · exact (exec_programStep witnessProgram_encodeDomain.ctorDecls
+  · exact (exec_programStep witnessProgram_encodeDomain.ctorsOnly
       (Or.inr (by rw [hd]; simp))).mp (by rw [hd]; rfl)
   · exact FDatabase.mem_closureF_iff.mp hyes₁
   · exact (sameClassF_iff hsc hr a b).mp hyes₂
@@ -5284,13 +5254,13 @@ theorem encode_corresponds_invents_enode {d e : FDatabase}
       witnessAddOneOne ∉ src.terms := by
   refine ⟨d.toDatabase, witnessProgram_encodeDomain, ?_, he,
     (sameClassF_iff hsc hr _ _).mp hyes, fun hmem => hno ?_⟩
-  · exact (exec_programStep witnessProgram_encodeDomain.ctorDecls
+  · exact (exec_programStep witnessProgram_encodeDomain.ctorsOnly
       (Or.inr (by rw [hd]; simp))).mp (by rw [hd]; rfl)
   · exact FDatabase.mem_closureF_iff.mpr hmem
 
 /-! ### The two refutations the domain's last two clauses answer
 
-`Program.EncodeDomain` gained `noLitUnion` and `headCtorsDeclared` because the completeness
+`Program.EncodeDomain` gained `noLitUnion` and `headsDeclared` because the completeness
 half is **false** without them, and these are the two programs. Both are one defect:
 `RuleResults` asks `evalLocalActions` for a `some`, so a source rule head that gets *stuck*
 drops the firing silently, while the encoded head — which `encodeAction` emits as `.set`s —
@@ -5337,30 +5307,22 @@ theorem luProgram_not_encodeDomain : ¬ luProgram.EncodeDomain :=
 
 /-- **And every other clause holds of it**, which is what makes it a program the encoder
 claimed before `noLitUnion` was folded in — the same standing `litProgram` had before
-`noLeafPattern` was. -/
+`queryEncodable` was. -/
 theorem luProgram_encodeDomain_but_noLitUnion :
-    (∀ c ∈ luProgram, ∀ f dc, c = Cmd.decl f dc → dc.merge = none) ∧
-      (∀ c ∈ luProgram, c.NoSet) ∧ (∀ fk ∈ luProgram.ctors, Prim.ofName fk.1 = none) ∧
-      (∀ fk ∈ luProgram.ctors, ¬ "@".isPrefixOf fk.1) ∧
-      (∀ v ∈ luProgram.vars, ¬ "@".isPrefixOf v) ∧
-      (∀ R ∈ luProgram.rulesets, ¬ "@".isPrefixOf R) ∧
-      (∀ c ∈ luProgram, c.NoLeafPattern) ∧
-      Program.headCtorsDeclaredB [] luProgram = true := by
-  refine ⟨?_, ?_, by decide, by decide +kernel, by decide +kernel, by decide +kernel, ?_,
-    by decide +kernel⟩
-  · intro c hc f dc heq
-    subst heq
+    luProgram.CtorDecls ∧ Program.SetLegal luProgram (fun _ => none) ∧
+      (∀ fk ∈ luProgram.ctors, Prim.ofName fk.1 = none) ∧
+      (∀ n ∈ luProgram.names, ¬ "@".isPrefixOf n) ∧
+      (∀ c ∈ luProgram, c.QueryEncodable) ∧
+      Program.HeadsDeclared luProgram (fun _ => none) := by
+  refine ⟨?_, by decide, by decide, by decide +kernel, ?_, by decide⟩
+  · intro c hc
     simp only [luProgram, List.mem_cons] at hc
-    rcases hc with h | h | h | h | h | h <;> simp_all
+    rcases hc with rfl | rfl | rfl | rfl | rfl | h <;> simp_all [Cmd.CtorDecl]
   · intro c hc
     simp only [luProgram, List.mem_cons] at hc
     rcases hc with rfl | rfl | rfl | rfl | rfl | h <;>
-      simp_all [Cmd.NoSet, Action.NoSet, Pattern.NoValues]
-  · intro c hc
-    simp only [luProgram, List.mem_cons] at hc
-    rcases hc with rfl | rfl | rfl | rfl | rfl | h <;>
-      simp_all [Cmd.NoLeafPattern, Pattern.Grounded, Query.VarsKeyed, Query.vars,
-        Pattern.vars, Expr.vars]
+      simp_all [Cmd.QueryEncodable, Pattern.Grounded, Pattern.NoValues, Query.VarsKeyed,
+        Query.vars, Pattern.vars, Expr.vars]
 
 /-- **The encoding equates two source e-nodes the source does not, so
 `encode_corresponds_complete` is false without `noLitUnion`.**
@@ -5415,43 +5377,32 @@ theorem udProgram_ctorDecls : udProgram.CtorDecls := by
   simp only [udProgram, List.mem_cons] at hc
   rcases hc with rfl | rfl | rfl | rfl | rfl | h <;> simp_all [Cmd.CtorDecl]
 
-/-- **`headCtorsDeclared` is the clause it fails.** -/
-theorem udProgram_not_headCtorsDeclared :
-    Program.headCtorsDeclaredB [] udProgram = false := by decide +kernel
+/-- **`headsDeclared` is the clause it fails.** -/
+theorem udProgram_not_headsDeclared :
+    ¬ Program.HeadsDeclared udProgram (fun _ => none) := by decide
 
-theorem udProgram_not_encodeDomain : ¬ udProgram.EncodeDomain := by
-  intro h
-  have hb := h.headCtorsDeclared
-  rw [udProgram_not_headCtorsDeclared] at hb
-  exact absurd hb (by simp)
+theorem udProgram_not_encodeDomain : ¬ udProgram.EncodeDomain :=
+  fun h => udProgram_not_headsDeclared h.headsDeclared
 
 /-- **And every other clause holds of it.** -/
-theorem udProgram_encodeDomain_but_headCtorsDeclared :
-    (∀ c ∈ udProgram, ∀ f dc, c = Cmd.decl f dc → dc.merge = none) ∧
-      (∀ c ∈ udProgram, c.NoSet) ∧ (∀ fk ∈ udProgram.ctors, Prim.ofName fk.1 = none) ∧
-      (∀ fk ∈ udProgram.ctors, ¬ "@".isPrefixOf fk.1) ∧
-      (∀ v ∈ udProgram.vars, ¬ "@".isPrefixOf v) ∧
-      (∀ R ∈ udProgram.rulesets, ¬ "@".isPrefixOf R) ∧
-      (∀ c ∈ udProgram, c.NoLeafPattern) ∧
+theorem udProgram_encodeDomain_but_headsDeclared :
+    udProgram.CtorDecls ∧ Program.SetLegal udProgram (fun _ => none) ∧
+      (∀ fk ∈ udProgram.ctors, Prim.ofName fk.1 = none) ∧
+      (∀ n ∈ udProgram.names, ¬ "@".isPrefixOf n) ∧
+      (∀ c ∈ udProgram, c.QueryEncodable) ∧
       (∀ c ∈ udProgram, c.ruleUnionFreeB = true) := by
-  refine ⟨?_, ?_, by decide, by decide +kernel, by decide +kernel, by decide +kernel, ?_,
-    by decide⟩
-  · intro c hc f dc heq
-    subst heq
+  refine ⟨?_, by decide, by decide, by decide +kernel, ?_, by decide⟩
+  · intro c hc
     simp only [udProgram, List.mem_cons] at hc
-    rcases hc with h | h | h | h | h | h <;> simp_all
+    rcases hc with rfl | rfl | rfl | rfl | rfl | h <;> simp_all [Cmd.CtorDecl]
   · intro c hc
     simp only [udProgram, List.mem_cons] at hc
     rcases hc with rfl | rfl | rfl | rfl | rfl | h <;>
-      simp_all [Cmd.NoSet, Action.NoSet, Pattern.NoValues]
-  · intro c hc
-    simp only [udProgram, List.mem_cons] at hc
-    rcases hc with rfl | rfl | rfl | rfl | rfl | h <;>
-      simp_all [Cmd.NoLeafPattern, Pattern.Grounded, Query.VarsKeyed, Query.vars,
-        Pattern.vars, Expr.vars, Pattern.ArgVar, Expr.ArgVar]
+      simp_all [Cmd.QueryEncodable, Pattern.Grounded, Pattern.NoValues, Query.VarsKeyed,
+        Query.vars, Pattern.vars, Expr.vars, Pattern.ArgVar, Expr.ArgVar]
 
 /-- **`FDatabase.SoundTerms` is false at an `execM` target, so `execM_soundTerms` needs
-`headCtorsDeclared`.** The view entry the encoded head wrote claims `∃ as, (Z as)` is a
+`headsDeclared`.** The view entry the encoded head wrote claims `∃ as, (Z as)` is a
 source term, and the source holds no `Z`-application whatever.
 
 Weaker than the refutation above — it does not reach `SameClass`, since `(Z (A))` is not a

@@ -182,7 +182,7 @@ source `(= e₁ e₂)` adds the id equality joining the two, which the encoding 
 no premise proof stands for.
 
 The generated names are the encoding's own `@v0`, `@v1`, …, so they collide with nothing a
-source program in `Program.EncodeDomain` can write (`EncodeDomain.noAtVar`).
+source program in `Program.EncodeDomain` can write (`EncodeDomain.noAt`).
 `DiffTest.lean`'s `premiseCount_eq_ruleProofArity` is what keeps the two in step: it proves
 the arity this demands is the arity `proofDecls` declares. -/
 
