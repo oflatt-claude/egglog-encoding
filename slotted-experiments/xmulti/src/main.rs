@@ -20,6 +20,20 @@
 //! probe  <sexpr>              term to include in the reported partition
 //! rounds <n>                  saturation rounds (default 10)
 //! ```
+//!
+//! Two limits of that language, both about payload leaves:
+//!
+//! * `atom` is exactly two children and every child that does not start with `$`
+//!   becomes a *pattern variable*, so `atom p add e 0` is `?p == (add ?e ?0)` and
+//!   matches any second child rather than the literal `0`. A rule over a payload
+//!   literal, or over a node of any other arity, goes through `nested`/`rhs`,
+//!   which hand the pattern to the reference's own parser.
+//! * On that path a payload leaf is only a payload if its spelling is not also an
+//!   operator tag. `from_syntax` matches the tags first, so `add` and `sub` are
+//!   the array language's binary nodes here (and fail to parse, having no
+//!   children), while `null` would silently parse as the `Null` node instead of
+//!   `Symbol("null")`. A generator that needs payload symbols should spell them
+//!   so they cannot collide; `xdiff/xsdql.py` prefixes every one.
 
 use slotted_egraphs::*;
 use std::collections::BTreeSet;
@@ -49,6 +63,53 @@ define_language! {
         Let(Bind<AppliedId>, AppliedId) = "let",
         Number(u32),
         Symbol(Symbol),
+
+        // The `sdql` language, `slotted-egraphs/benches/sdql.rs` column for
+        // column. `define_language!` dispatches parsing on the operator string
+        // alone -- the generated `from_syntax` is a `match` on it -- so a tag
+        // may appear once in the enum, and a variant name once. Where the toy
+        // and array languages above already took one, the *variant* is renamed
+        // and the reference's tag kept, since only the tag is what rule and
+        // term text says:
+        //
+        //     Lam    -> Lambda    Add -> Plus    Sub -> Minus    App -> Apply
+        //
+        // `Var(Slot) = "var"`, `Number(u32)` and `Symbol(Symbol)` are shared
+        // outright: `sdql`'s are the same three constructors.
+        //
+        // `Let` is the one that could not keep its tag. `sdql`'s is
+        // `Let(AppliedId, Bind<AppliedId>)`, i.e. `(let ?v $x ?body)`, while
+        // "let" above is `Let(Bind<AppliedId>, AppliedId)`, i.e.
+        // `(let $x ?body ?v)` -- the same information in another column order,
+        // but a *different* node. Two arms for one tag would leave the second
+        // unreachable and parse `sdql`'s `let` as the array one, so this one is
+        // tagged "sdql-let" and the harness writes that.
+        Lambda(Bind<AppliedId>) = "lambda",
+        Sing(AppliedId, AppliedId) = "sing",
+        Plus(AppliedId, AppliedId) = "+",
+        Mult(AppliedId, AppliedId) = "*",
+        Minus(AppliedId, AppliedId) = "-",
+        Equality(AppliedId, AppliedId) = "eq",
+        Get(AppliedId, AppliedId) = "get",
+        Range(AppliedId, AppliedId) = "range",
+        Apply(AppliedId, AppliedId) = "apply",
+        IfThen(AppliedId, AppliedId) = "ifthen",
+        Binop(AppliedId, AppliedId, AppliedId) = "binop",
+        SubArray(AppliedId, AppliedId, AppliedId) = "subarray",
+        Unique(AppliedId) = "unique",
+        Sum(
+            /*  range: */ AppliedId,
+            /*   body: */ Bind<Bind<AppliedId>>,
+        ) = "sum",
+        Merge(
+            /* range1: */ AppliedId,
+            /* range2: */ AppliedId,
+            /*   body: */ Bind<Bind<Bind<AppliedId>>>,
+        ) = "merge",
+        SdqlLet(
+            /*      v: */ AppliedId,
+            /*   body: */ Bind<AppliedId>,
+        ) = "sdql-let",
     }
 }
 
