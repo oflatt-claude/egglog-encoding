@@ -18,14 +18,19 @@
 ;;; `Equated` the encoder emits, so what the tests observe is what the rule DOES.  There is
 ;;; no `relation` declaration in this file.
 ;;;
-;;; All eleven are the encoder's own output, variable names, line breaks and comments aside,
-;;; and for the six real ones it is the SAME output as the committed generated files: M9 and
-;;; M11 match `eta` and `let-app` in `tests/slotted-array-rules.egg` exactly, and M1, M2, M4
-;;; and M10 match `eq-comm`, `sub-identity`, `mult-assoc1` and `add-zero` in
-;;; `tests/slotted-sdql-rules.egg` up to the constructor spelling -- that file gives sdql its
-;;; own `Equality`/`Sub`/`Mult`/`Add` constructors, where this one uses the generic
-;;; `(App2 "eq" ...)` with the operator in a payload column.  Nothing about the recipe
-;;; depends on which.
+;;; All eleven are the encoder's own output, variable names, line breaks and comments aside.
+;;; What they are not is byte-identical to the committed generated files, and the reason is
+;;; worth stating.  Each of those gives its language its OWN constructors -- sdql's
+;;; `Equality`/`Sub`/`Mult`/`Add` in `tests/slotted-sdql-rules.egg`, the array language's
+;;; `App`/`Lam`/`Let` in `tests/slotted-array-rules.egg` -- while this file uses the generic
+;;; string-headed `(App2 "eq" ...)`, with the operator in a payload column.
+;;;
+;;; It has to.  This file draws rules from BOTH languages, and the two disagree about `Let`:
+;;; sdql's binds its column 1 and the array language's its column 0, so no one file can
+;;; declare both per-constructor.  The generic encoding is what lets eleven rules from two
+;;; languages sit in one tutorial.  Nothing about the recipe depends on the spelling, and
+;;; `slotted-experiments/check-tutorial.py` compiles each rule the way this file writes it,
+;;; so the check is exact either way.
 ;;;
 ;;; THE REFERENCE, wherever one is mentioned below, is `memoryleak47/slotted-egraphs` --
 ;;; the Rust implementation from the PLDI 2025 paper -- on its PR #45.  The multipattern
@@ -364,7 +369,7 @@
 ;;; check.  Identity maps never conflict under `map-union`, so the union is always defined.
 ;;;
 ;;; Covered by: `map-fission-fires` and `map-fission-blocked` in xarray.py -- the same rule,
-;;; so this section and `tests/slotted-array-rules.egg` hold the same compiled body -- and
+;;; so this section and `tests/slotted-array-rules.egg` compile the same rule -- and
 ;;; `map-fission-fires-from-atom-2`, which is this rule at another lead.  C5-redundant-same-node
 ;;; through C9-redundancy-and-live are the minting cases in xdiff.py.  The tests file's M5
 ;;; fixture makes two ATOM mints visible in one match, and its counter-example drops the
@@ -687,7 +692,7 @@
 ;;; (M10).
 ;;;
 ;;; Covered by: `let-var-same-fires` and `let-var-same-blocked` in xarray.py -- the same
-;;; rule, so this section and `tests/slotted-array-rules.egg` hold the same compiled body --
+;;; rule, so this section and `tests/slotted-array-rules.egg` compile the same one --
 ;;; C14-action-root-with-a-nonidentity-renaming and
 ;;; C15-action-child-narrowed-to-its-class in xdiff.py, and the tests file's M8 fixture for
 ;;; the child case, with the un-narrowed spelling kept there as a counter-example.
@@ -727,7 +732,7 @@
 ;;; and every literal pinned.
 ;;;
 ;;; Covered by: `eta-fires` and `eta-blocked` in xarray.py -- the same rule, so this section
-;;; and `tests/slotted-array-rules.egg` hold the same compiled body -- whose `vac` mode
+;;; and `tests/slotted-array-rules.egg` compile the same rule -- whose `vac` mode
 ;;; also confirms the side condition changes the answer on both sides; the same mechanism
 ;;; on binder shapes is B3, B4 and the `slot-late` mutant, and the slot side condition is
 ;;; CD1-CD4.  xdiff.py's
@@ -856,8 +861,8 @@
 ;;; step.
 ;;;
 ;;; Covered by: NR1-nested-build, NR2, NR3-assoc, and `let-app-fires` / `let-app-blocked`
-;;; in xarray.py -- again the same rule, so this section and `tests/slotted-array-rules.egg`
-;;; hold the same compiled body.
+;;; in xarray.py -- again the same rule, which `tests/slotted-array-rules.egg` compiles in
+;;; the array language's own constructors.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (rule ((= p (App3 "let" p1 (Var 0) q1 ab r1 e))

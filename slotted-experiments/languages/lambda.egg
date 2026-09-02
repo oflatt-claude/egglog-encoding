@@ -8,6 +8,13 @@
 ;;;
 ;;; Expand with: python3 slotted-experiments/gen-node-rules.py
 
-(constructor Lam (U U) U :binder 0)
-(constructor App (U U) U)
-(constructor Let (U U U) U :binder 0)
+(constructor Lam (U U) U :binder 0)              ; Lam(Bind<AppliedId>)      "lam"
+(constructor App (U U) U)                        ; App(AppliedId, AppliedId) "app"
+(constructor Let (U U U) U :binder 0)            ; Let(Bind<AppliedId>, ..)  "let"
+
+;;; The two leaves the paper's programs are built from. Both already exist in the
+;;; generic encoding, so `emit` skips their rules here -- they are declared for the
+;;; record, the way `sdql.egg` declares `Num`, so this file names every constructor a
+;;; program in this language can contain.
+(constructor Sym (String) U)
+(constructor Num (i64) U)

@@ -1,0 +1,15 @@
+;;; How `lambda.egg` corresponds to the reference crate.
+;;;
+;;; See `sdql.ref` for the format. This is the paper's Listing 1 language, which
+;;; `tests/array/mod.rs` and `tests/rise/rewrite.rs` both use, and its tags are the
+;;; reference's own -- only `Lam` is spelled differently on the two sides.
+;;;
+;;; `lambda` and `lam` are one operator under two names: rules are written with the
+;;; first and terms with the second, which is how both corpora already read.
+
+app         App     app
+lambda      Lam     lam
+lam         Lam     lam
+let         Let     let
+sym         Sym     =payload
+num         Num     =payload

@@ -71,15 +71,15 @@ MACHINERY = "tests/slotted-lang-sdql.egg"
 # `Bind<>` layers put the bound slots: `Sum(AppliedId, Bind<Bind<AppliedId>>)`
 # prints as `(sum ?R $k $v ?body)`.
 #
-# What that file does not say in machine-readable form is the NAMING -- its tags
-# are in comments, `; Add(A, A)  "+"` -- so the operator table below is written
-# out, and asserted against the file so a renamed constructor is an error here.
+# What that file does not say is the NAMING -- what the reference calls each
+# constructor -- because that is a fact about the harness and not about the
+# encoding. `languages/sdql.ref` beside it says that, including the two
+# workarounds below.
 
 # `let` is the one tag the oracle could not keep: `xmulti`'s language already has
 # the array `Let(Bind<AppliedId>, AppliedId) = "let"`, a different node, and
 # `define_language!` dispatches on the tag alone. See the comment in
 # `xmulti/src/main.rs`.
-LET_TAG = "sdql-let"
 
 # Every `Symbol` payload is written with this prefix on the REFERENCE side, and
 # without it on the encoding side.
@@ -102,56 +102,19 @@ LET_TAG = "sdql-let"
 # `Symbol(x) == Symbol(y)` is ever asked -- and the prefix is applied to every
 # symbol on that side, terms and rules alike, so the two e-graphs stay isomorphic
 # and the probe partitions stay comparable.
-SYM_PREFIX = "sym:"
+LANG_DIR = ROOT / "slotted-experiments" / "languages"
+# The language file says what the constructors are; the `.ref` beside it says what the
+# reference calls them, including the two workarounds above. `slotenc.language` checks
+# that the two name the same constructors, so an operator added to one and not the other
+# is an error here rather than a corpus that quietly stops covering the language the
+# rules were compiled from.
+LANG = slotenc.language(LANG_DIR / "sdql.egg", LANG_DIR / "sdql.ref")
 
-# operator -> (constructor, the reference's tag). A tag of `None` marks a payload
-# leaf, which the reference writes as the payload itself.
-OPS = {
-    "lambda": ("Lambda", "lambda"),
-    "sing": ("Sing", "sing"),
-    "add": ("Add", "+"),
-    "mult": ("Mult", "*"),
-    "sub": ("Sub", "-"),
-    "eq": ("Equality", "eq"),
-    "get": ("Get", "get"),
-    "range": ("Range", "range"),
-    "apply": ("App", "apply"),
-    "ifthen": ("IfThen", "ifthen"),
-    "binop": ("Binop", "binop"),
-    "subarray": ("SubArray", "subarray"),
-    "unique": ("Unique", "unique"),
-    "sum": ("Sum", "sum"),
-    "merge": ("Merge", "merge"),
-    "let": ("Let", LET_TAG),
-    "num": ("Num", None),
-    "sym": ("Symbol", None),
-}
-
-SIGS = slotenc.read_language(ROOT / "slotted-experiments" / "languages" / "sdql.egg")
-# The table above is the one thing not read off that file, so it is checked against
-# it: a constructor renamed, added or dropped there is an error here rather than a
-# corpus that quietly stops covering the language the rules were compiled from.
-assert {ctor for ctor, _ in OPS.values()} == set(SIGS), (
-    "the operator table and languages/sdql.egg name different constructors"
-)
-
-
-class SdqlTerms(slotenc.TermLang):
-    """The shared term language, plus the one thing the two sides spell differently.
-
-    A payload leaf is written as its payload, which for a `Symbol` is the same
-    spelling on both sides EXCEPT for `SYM_PREFIX`. That is the reference's parser
-    working around itself, not part of the encoding, so it is overridden here rather
-    than given a hook in the encoder.
-    """
-
-    def sexpr(self, t):
-        if t[0] == "sym":
-            return SYM_PREFIX + t[1]
-        return super().sexpr(t)
-
-
-LANG = SdqlTerms({op: slotenc.Op(op, ctor, SIGS[ctor], ref=ref) for op, (ctor, ref) in OPS.items()})
+CORR = slotenc.read_correspondence(LANG_DIR / "sdql.ref")
+OPS = {op: (ctor, tag) for op, (ctor, tag, _) in CORR.items()}
+SYM_PREFIX = CORR["sym"][2]
+LET_TAG = CORR["let"][1]
+assert SYM_PREFIX and LET_TAG != "let", "sdql.ref lost one of the two workarounds above"
 
 enc, sexpr, shift = LANG.enc, LANG.sexpr, LANG.shift
 

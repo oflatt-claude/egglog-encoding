@@ -94,6 +94,52 @@ def read_language(path):
     return language
 
 
+def read_correspondence(path):
+    """Parse a `.ref` file: how a language's operators are spelled by the reference.
+
+        app     App     app
+        sym     Sym     =payload sym:
+
+    Returns `{operator: (constructor, ref, prefix)}`, where `ref` is `None` for
+    `=payload` -- an operator the reference writes as its payload rather than under a
+    tag -- and `prefix` is what that payload needs in front of it, or `""`.
+
+    This is deliberately not in the `.egg` language file: what the reference calls a
+    constructor is a fact about the harness, not about the encoding.
+    """
+    out = {}
+    for raw in path.read_text().splitlines():
+        line = raw.split(";")[0].strip()
+        if not line:
+            continue
+        op, ctor, ref, *rest = line.split()
+        if ref == "=payload":
+            assert len(rest) <= 1, f"{op}: one prefix at most, got {rest}"
+            out[op] = (ctor, None, rest[0] if rest else "")
+        else:
+            assert not rest, f"{op}: a tag takes no further field, got {rest}"
+            out[op] = (ctor, ref, "")
+    return out
+
+
+def language(spec, ref):
+    """A `TermLang` from a language file and its correspondence file.
+
+    The two must name the same constructors, so an operator added to one and not the
+    other is an error here rather than a harness that quietly stops covering it.
+    """
+    sigs = read_language(spec)
+    corr = read_correspondence(ref)
+    named = {ctor for ctor, _, _ in corr.values()}
+    assert named == set(sigs), (
+        f"{spec.name} declares {sorted(set(sigs) - named)} that {ref.name} does not name, "
+        f"and {ref.name} names {sorted(named - set(sigs))} that it does not declare"
+    )
+    return TermLang(
+        {op: Op(op, ctor, sigs[ctor], ref=tag, ref_prefix=prefix) for op, (ctor, tag, prefix) in corr.items()}
+    )
+
+
 def cols_of(sig):
     """Column names for a signature: payload vars, and (edge, child) per child."""
     payloads, edges, kids, order = [], [], [], []
@@ -622,12 +668,15 @@ class Op:
             or `None` to take the value from the term's argument in that column.
     `ref`   the operator's name in the oracle's syntax. `None` marks a payload leaf,
             which the oracle writes as the payload itself.
+    `ref_prefix`
+            what that payload needs in front of it for the oracle to read it as a
+            payload rather than a tag.
 
     A term's arguments line up with the columns that consume one: a sub-term for a
     `CHILD`, a slot for a `BINDER`, a value for a payload the operator does not pin.
     """
 
-    def __init__(self, name, ctor, sig=(), pays=None, ref=None):
+    def __init__(self, name, ctor, sig=(), pays=None, ref=None, ref_prefix=""):
         self.name = name
         self.ctor = ctor
         self.sig = list(sig)
@@ -635,6 +684,7 @@ class Op:
         self.pays = list(pays) if pays is not None else [None] * npay
         assert len(self.pays) == npay, f"{name}: {npay} payload column(s)"
         self.ref = ref
+        self.ref_prefix = ref_prefix
 
     @property
     def kid_cols(self):
@@ -791,7 +841,8 @@ class TermLang:
         op = self.ops[t[0]]
         kids, pays = op.split(t[1:])
         if op.ref is None:
-            return pays[0].strip('"')  # a payload leaf, written as its payload
+            # a payload leaf, written as its payload
+            return op.ref_prefix + pays[0].strip('"')
         assert not (kids and None in op.pays), f"{op.name}: no oracle syntax for a payload argument beside a child"
         parts = [f"${self.slot(k)}" if i in op.binders else self.sexpr(k) for i, k in enumerate(kids)]
         return f"({op.ref} {' '.join(parts)})" if parts else op.ref

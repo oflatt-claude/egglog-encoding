@@ -122,6 +122,12 @@ CHECKS = [
     ("generated-drift", check_generated, None, False),
     ("handwritten-drift", ("slotted-experiments/check-handwritten-encoding.py",), starts_ok, False),
     (
+        "correspondence",
+        ("slotted-experiments/check-correspondence.py",),
+        ratio(r"OK: (\d+)/(\d+) correspondence files", 2),
+        False,
+    ),
+    (
         "tutorial-drift",
         ("slotted-experiments/check-tutorial.py",),
         ratio(r"(\d+)/(\d+) sections are the encoder's own output", 11),

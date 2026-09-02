@@ -36,8 +36,6 @@ import sys
 sys.path.insert(0, "slotted-experiments/xdiff")
 import xdiff as X
 
-TABLES = ["IsVarClass", "IsNullClass", "ClassSlots", "RenamesToLeader", "App2", "App3", "App4", "Num", "Sym", "Scale"]
-
 # `Var` and `Null` are constructors, not rows, so which class holds one cannot be read
 # off the tables -- and it cannot be recovered from the printed name either: a value
 # prints as *some* term of its class, so once `(Var 0)` is unioned with `(Null)` the var
@@ -203,7 +201,7 @@ def read_json_graph(doc):
             leaf["var"] = n["eclass"]
         elif op == "Null":
             leaf["null"] = n["eclass"]
-        elif op in ("App2", "App3", "App4", "Num", "Sym", "Scale"):
+        elif op in NODE_OPS:
             payloads, elems, i = [], [], 0
             while i < len(kids):
                 if is_renaming(kids[i]) and i + 1 < len(kids):
@@ -212,7 +210,9 @@ def read_json_graph(doc):
                 else:
                     payloads.append(nodes[kids[i]]["op"].strip('"'))
                     i += 1
-            name = op if not payloads else "/".join([payloads[0]] + payloads[1:])
+            # a payload-headed row is named by its payload, which is already the
+            # reference's tag; a per-constructor row is named by the tag itself
+            name = "/".join(payloads) if payloads else (NODE_OPS[op] or op)
             rows.append((name, elems, n["eclass"]))
     return slots_of, loops, rows, leaf
 
@@ -337,10 +337,28 @@ def build_encoding_graph(doc):
 
 
 # ------------------------------------------------------- the encoding's own ops
-#: the encoding's binder operators and what the reference calls them. A binder's
-#: bound slot rides in child column 0 as an edge to the var class, where the
+#: The node constructors to read, mapped to what the reference calls each. `None`
+#: means the constructor is payload-headed -- the generic encoding's `App2 "app"` --
+#: so a row names itself by its payload, which is already the reference's tag.
+NODE_OPS = {"App2": None, "App3": None, "App4": None, "Num": None, "Sym": None, "Scale": None}
+
+#: A row's name mapped to what the reference calls it, for the BINDER operators. A
+#: binder's bound slot rides in child column 0 as an edge to the var class, where the
 #: reference has a `Bind`, i.e. a slot literal in that position.
 ENC_BINDERS = {"lambda": "lam", "let": "let"}
+
+
+def use_language(lang):
+    """Read the two tables above off a `TermLang`.
+
+    The defaults are the generic string-headed encoding, which the toy corpus uses. A
+    per-constructor language names a row by its CONSTRUCTOR and the reference names it
+    by its own tag, so the tag has to become the row's name for the two to line up --
+    which is what a `None` entry cannot express and a tag entry does.
+    """
+    global NODE_OPS, ENC_BINDERS
+    NODE_OPS = {op.ctor: op.ref for op in lang.ops.values()}
+    ENC_BINDERS = {op.ref or op.ctor: op.ref for op in lang.ops.values() if op.binders}
 
 
 def to_reference_shape(g, var_class=None):

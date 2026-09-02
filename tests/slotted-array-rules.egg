@@ -5,16 +5,18 @@
 ;;; `slotted-experiments/xdiff/xarray.py` runs the same rules against the reference
 ;;; `slotted-egraphs` crate; this file is the runnable, self-checking half.
 ;;;
-;;; No new language is needed. The array language IS the generic encoding:
+;;; The language is `slotted-experiments/languages/lambda.egg`, one constructor per
+;;; operator -- the shape the reference's `define_language!` produces -- with
+;;; `lambda.ref` beside it saying what the reference calls each one:
 ;;;
-;;;   Lam(Bind<body>)          (lam $x b)      (App2 "lambda" {0->x} (Var 0) mb b)
-;;;   App(a, b)                (app a b)       (App2 "app"    ma a mb b)
-;;;   Let(Bind<body>, value)   (let $x b e)    (App3 "let"    {0->x} (Var 0) mb b me e)
+;;;   Lam(Bind<body>)          (lam $x b)      (Lam {0->x} (Var 0) mb b)
+;;;   App(a, b)                (app a b)       (App ma a mb b)
+;;;   Let(Bind<body>, value)   (let $x b e)    (Let {0->x} (Var 0) mb b me e)
 ;;;   Var(Slot)                (var $x)        an edge {0->x} to the `(Var 0)` class
 ;;;   Symbol / Number          map, f1, 7      (Sym "map"), (Num 7)
 ;;;
-;;; `lambda` and `let` are the generic encoding's two declared binders
-;;; (`GENERIC_BINDERS` in `gen-node-rules.py`), so nothing had to be added.
+;;; `Lam` and `Let` bind their column 0 because that file's `:binder` says so, so the
+;;; binder rules below are generated from the same declaration these terms are.
 ;;;
 ;;; `beta` is left out: it rewrites to `?body[(var $x) := ?e]`, and the differential
 ;;; oracle's spec language cannot say "substitute", so it could not be compared. The
@@ -23,7 +25,7 @@
 ;;; Each section is its own (push)/(pop). Two terms are in one slotted e-class when
 ;;; they reach a common leader, which is what every `check` below asks.
 
-(include "tests/slotted-node-rules.egg")
+(include "tests/slotted-lang-lambda.egg")
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -33,7 +35,7 @@
 (push)
 
 ;; eta
-(rule ((= V3 (App2 "lambda" p1 (Var 0) p2 C4))
+(rule ((= V3 (Lam p1 (Var 0) p2 C4))
        (= dom5 (map-union (map-image p1) (map-image p2)))
        (= mp6 dom5)
        (= idm7 (map-image mp6))
@@ -41,7 +43,7 @@
        (= m8 (compose mp6 p2))
        (= cs9 (ClassSlots C4))
        (= cs10 (ClassSlots V3))
-       (= C4 (App2 "app" p11 C14 p12 (Var 0)))
+       (= C4 (App p11 C14 p12 (Var 0)))
        (= dom15 (map-union (map-image p11) (map-image p12)))
        (RenamesToLeader C4 sym16 C4)
        (= mp17 (find-mapping-total idm7 dom15 (compose (compose m8 cs9) sym16) (map-insert (map-empty) 0 s_x) (map-domain (compose m8 cs9)) p12))
@@ -54,7 +56,7 @@
       ((Equated V3 (compose (inverse (compose mp6 cs10)) (compose m20 cs21)) C14)))
 
 ;; (lam $0 (app f1 (var $0)))
-(let $p0 (App2 "lambda" (map-of 0 0) (Var 0) (map-of 0 0) (App2 "app" (map-empty) (Sym "f1") (map-of 0 0) (Var 0))))
+(let $p0 (Lam (map-of 0 0) (Var 0) (map-of 0 0) (App (map-empty) (Sym "f1") (map-of 0 0) (Var 0))))
 ;; f1
 (let $p1 (Sym "f1"))
 
@@ -72,7 +74,7 @@
 (push)
 
 ;; eta
-(rule ((= V3 (App2 "lambda" p1 (Var 0) p2 C4))
+(rule ((= V3 (Lam p1 (Var 0) p2 C4))
        (= dom5 (map-union (map-image p1) (map-image p2)))
        (= mp6 dom5)
        (= idm7 (map-image mp6))
@@ -80,7 +82,7 @@
        (= m8 (compose mp6 p2))
        (= cs9 (ClassSlots C4))
        (= cs10 (ClassSlots V3))
-       (= C4 (App2 "app" p11 C14 p12 (Var 0)))
+       (= C4 (App p11 C14 p12 (Var 0)))
        (= dom15 (map-union (map-image p11) (map-image p12)))
        (RenamesToLeader C4 sym16 C4)
        (= mp17 (find-mapping-total idm7 dom15 (compose (compose m8 cs9) sym16) (map-insert (map-empty) 0 s_x) (map-domain (compose m8 cs9)) p12))
@@ -93,9 +95,9 @@
       ((Equated V3 (compose (inverse (compose mp6 cs10)) (compose m20 cs21)) C14)))
 
 ;; (lam $0 (app (app f1 (var $0)) (var $0)))
-(let $p0 (App2 "lambda" (map-of 0 0) (Var 0) (map-of 0 0) (App2 "app" (map-of 0 0) (App2 "app" (map-empty) (Sym "f1") (map-of 0 0) (Var 0)) (map-of 0 0) (Var 0))))
+(let $p0 (Lam (map-of 0 0) (Var 0) (map-of 0 0) (App (map-of 0 0) (App (map-empty) (Sym "f1") (map-of 0 0) (Var 0)) (map-of 0 0) (Var 0))))
 ;; (app f1 (var $0))
-(let $p1 (App2 "app" (map-empty) (Sym "f1") (map-of 0 0) (Var 0)))
+(let $p1 (App (map-empty) (Sym "f1") (map-of 0 0) (Var 0)))
 
 (run-schedule (saturate (run slotted))
               (repeat 24 (seq (run) (saturate (run slotted)))))
@@ -112,7 +114,7 @@
 (push)
 
 ;; eta
-(rule ((= V3 (App2 "lambda" p1 (Var 0) p2 C4))
+(rule ((= V3 (Lam p1 (Var 0) p2 C4))
        (= dom5 (map-union (map-image p1) (map-image p2)))
        (= mp6 dom5)
        (= idm7 (map-image mp6))
@@ -120,7 +122,7 @@
        (= m8 (compose mp6 p2))
        (= cs9 (ClassSlots C4))
        (= cs10 (ClassSlots V3))
-       (= C4 (App2 "app" p11 C14 p12 (Var 0)))
+       (= C4 (App p11 C14 p12 (Var 0)))
        (= dom15 (map-union (map-image p11) (map-image p12)))
        (RenamesToLeader C4 sym16 C4)
        (= mp17 (find-mapping-total idm7 dom15 (compose (compose m8 cs9) sym16) (map-insert (map-empty) 0 s_x) (map-domain (compose m8 cs9)) p12))
@@ -132,9 +134,9 @@
       ((Equated V3 (compose (inverse (compose mp6 cs10)) (compose m20 cs21)) C14)))
 
 ;; (lam $0 (app (app f1 (var $0)) (var $0)))
-(let $p0 (App2 "lambda" (map-of 0 0) (Var 0) (map-of 0 0) (App2 "app" (map-of 0 0) (App2 "app" (map-empty) (Sym "f1") (map-of 0 0) (Var 0)) (map-of 0 0) (Var 0))))
+(let $p0 (Lam (map-of 0 0) (Var 0) (map-of 0 0) (App (map-of 0 0) (App (map-empty) (Sym "f1") (map-of 0 0) (Var 0)) (map-of 0 0) (Var 0))))
 ;; (app f1 (var $0))
-(let $p1 (App2 "app" (map-empty) (Sym "f1") (map-of 0 0) (Var 0)))
+(let $p1 (App (map-empty) (Sym "f1") (map-of 0 0) (Var 0)))
 
 (run-schedule (saturate (run slotted))
               (repeat 24 (seq (run) (saturate (run slotted)))))
@@ -150,7 +152,7 @@
 (push)
 
 ;; let-intro
-(rule ((= V3 (App2 "app" p1 C4 p2 C5))
+(rule ((= V3 (App p1 C4 p2 C5))
        (= dom6 (map-union (map-image p1) (map-image p2)))
        (= mp7 dom6)
        (= idm8 (map-image mp7))
@@ -159,7 +161,7 @@
        (= m11 (compose mp7 p2))
        (= cs12 (ClassSlots C5))
        (= cs13 (ClassSlots V3))
-       (= C4 (App2 "lambda" p14 (Var 0) p15 C17))
+       (= C4 (Lam p14 (Var 0) p15 C17))
        (= dom18 (map-union (map-image p14) (map-image p15)))
        (RenamesToLeader C4 sym19 C4)
        (= mp20 (find-mapping-total idm8 dom18 (compose (compose m9 cs10) sym19) (map-domain (compose m9 cs10))))
@@ -168,13 +170,13 @@
        (= s_x (map-get (compose mp20 p14) 0))
        (= m23 (compose mp20 p15))
        (= cs24 (ClassSlots C17)))
-      ((let _rhs25 (App3 "let" (map-insert (map-empty) 0 s_x) (Var 0) (compose m23 cs24) C17 (compose m11 cs12) C5))
+      ((let _rhs25 (Let (map-insert (map-empty) 0 s_x) (Var 0) (compose m23 cs24) C17 (compose m11 cs12) C5))
        (Equated _rhs25 (compose mp7 cs13) V3)))
 
 ;; (app (lam $0 (app f1 (var $0))) aa)
-(let $p0 (App2 "app" (map-empty) (App2 "lambda" (map-of 0 0) (Var 0) (map-of 0 0) (App2 "app" (map-empty) (Sym "f1") (map-of 0 0) (Var 0))) (map-empty) (Sym "aa")))
+(let $p0 (App (map-empty) (Lam (map-of 0 0) (Var 0) (map-of 0 0) (App (map-empty) (Sym "f1") (map-of 0 0) (Var 0))) (map-empty) (Sym "aa")))
 ;; (let $0 (app f1 (var $0)) aa)
-(let $p1 (App3 "let" (map-of 0 0) (Var 0) (map-of 0 0) (App2 "app" (map-empty) (Sym "f1") (map-of 0 0) (Var 0)) (map-empty) (Sym "aa")))
+(let $p1 (Let (map-of 0 0) (Var 0) (map-of 0 0) (App (map-empty) (Sym "f1") (map-of 0 0) (Var 0)) (map-empty) (Sym "aa")))
 
 (run-schedule (saturate (run slotted))
               (repeat 24 (seq (run) (saturate (run slotted)))))
@@ -190,7 +192,7 @@
 (push)
 
 ;; let-unused
-(rule ((= V4 (App3 "let" p1 (Var 0) p2 C5 p3 C6))
+(rule ((= V4 (Let p1 (Var 0) p2 C5 p3 C6))
        (= dom7 (map-union (map-image p1) (map-union (map-image p2) (map-image p3))))
        (= mp8 dom7)
        (= idm9 (map-image mp8))
@@ -204,9 +206,9 @@
       ((Equated V4 (compose (inverse (compose mp8 cs14)) (compose m10 cs11)) C5)))
 
 ;; (let $0 (app f1 cc) aa)
-(let $p0 (App3 "let" (map-of 0 0) (Var 0) (map-empty) (App2 "app" (map-empty) (Sym "f1") (map-empty) (Sym "cc")) (map-empty) (Sym "aa")))
+(let $p0 (Let (map-of 0 0) (Var 0) (map-empty) (App (map-empty) (Sym "f1") (map-empty) (Sym "cc")) (map-empty) (Sym "aa")))
 ;; (app f1 cc)
-(let $p1 (App2 "app" (map-empty) (Sym "f1") (map-empty) (Sym "cc")))
+(let $p1 (App (map-empty) (Sym "f1") (map-empty) (Sym "cc")))
 
 (run-schedule (saturate (run slotted))
               (repeat 24 (seq (run) (saturate (run slotted)))))
@@ -222,7 +224,7 @@
 (push)
 
 ;; let-unused
-(rule ((= V4 (App3 "let" p1 (Var 0) p2 C5 p3 C6))
+(rule ((= V4 (Let p1 (Var 0) p2 C5 p3 C6))
        (= dom7 (map-union (map-image p1) (map-union (map-image p2) (map-image p3))))
        (= mp8 dom7)
        (= idm9 (map-image mp8))
@@ -236,9 +238,9 @@
       ((Equated V4 (compose (inverse (compose mp8 cs14)) (compose m10 cs11)) C5)))
 
 ;; (let $0 (app f1 (var $0)) aa)
-(let $p0 (App3 "let" (map-of 0 0) (Var 0) (map-of 0 0) (App2 "app" (map-empty) (Sym "f1") (map-of 0 0) (Var 0)) (map-empty) (Sym "aa")))
+(let $p0 (Let (map-of 0 0) (Var 0) (map-of 0 0) (App (map-empty) (Sym "f1") (map-of 0 0) (Var 0)) (map-empty) (Sym "aa")))
 ;; (app f1 (var $0))
-(let $p1 (App2 "app" (map-empty) (Sym "f1") (map-of 0 0) (Var 0)))
+(let $p1 (App (map-empty) (Sym "f1") (map-of 0 0) (Var 0)))
 
 (run-schedule (saturate (run slotted))
               (repeat 24 (seq (run) (saturate (run slotted)))))
@@ -255,7 +257,7 @@
 (push)
 
 ;; let-unused
-(rule ((= V4 (App3 "let" p1 (Var 0) p2 C5 p3 C6))
+(rule ((= V4 (Let p1 (Var 0) p2 C5 p3 C6))
        (= dom7 (map-union (map-image p1) (map-union (map-image p2) (map-image p3))))
        (= mp8 dom7)
        (= idm9 (map-image mp8))
@@ -268,9 +270,9 @@
       ((Equated V4 (compose (inverse (compose mp8 cs14)) (compose m10 cs11)) C5)))
 
 ;; (let $0 (app f1 (var $0)) aa)
-(let $p0 (App3 "let" (map-of 0 0) (Var 0) (map-of 0 0) (App2 "app" (map-empty) (Sym "f1") (map-of 0 0) (Var 0)) (map-empty) (Sym "aa")))
+(let $p0 (Let (map-of 0 0) (Var 0) (map-of 0 0) (App (map-empty) (Sym "f1") (map-of 0 0) (Var 0)) (map-empty) (Sym "aa")))
 ;; (app f1 (var $0))
-(let $p1 (App2 "app" (map-empty) (Sym "f1") (map-of 0 0) (Var 0)))
+(let $p1 (App (map-empty) (Sym "f1") (map-of 0 0) (Var 0)))
 
 (run-schedule (saturate (run slotted))
               (repeat 24 (seq (run) (saturate (run slotted)))))
@@ -286,7 +288,7 @@
 (push)
 
 ;; let-var-same
-(rule ((= V4 (App3 "let" p1 (Var 0) p2 (Var 0) p3 C5))
+(rule ((= V4 (Let p1 (Var 0) p2 (Var 0) p3 C5))
        (= dom6 (map-union (map-image p1) (map-union (map-image p2) (map-image p3))))
        (= mp7 dom6)
        (= idm8 (map-image mp7))
@@ -298,7 +300,7 @@
       ((Equated V4 (compose (inverse (compose mp7 cs11)) (compose m9 cs10)) C5)))
 
 ;; (let $0 (var $0) aa)
-(let $p0 (App3 "let" (map-of 0 0) (Var 0) (map-of 0 0) (Var 0) (map-empty) (Sym "aa")))
+(let $p0 (Let (map-of 0 0) (Var 0) (map-of 0 0) (Var 0) (map-empty) (Sym "aa")))
 ;; aa
 (let $p1 (Sym "aa"))
 
@@ -316,7 +318,7 @@
 (push)
 
 ;; let-var-same
-(rule ((= V4 (App3 "let" p1 (Var 0) p2 (Var 0) p3 C5))
+(rule ((= V4 (Let p1 (Var 0) p2 (Var 0) p3 C5))
        (= dom6 (map-union (map-image p1) (map-union (map-image p2) (map-image p3))))
        (= mp7 dom6)
        (= idm8 (map-image mp7))
@@ -328,9 +330,9 @@
       ((Equated V4 (compose (inverse (compose mp7 cs11)) (compose m9 cs10)) C5)))
 
 ;; (lam $1 (let $0 (var $1) aa))
-(let $p0 (App2 "lambda" (map-of 0 1) (Var 0) (map-of 1 1) (App3 "let" (map-of 0 0) (Var 0) (map-of 0 1) (Var 0) (map-empty) (Sym "aa"))))
+(let $p0 (Lam (map-of 0 1) (Var 0) (map-of 1 1) (Let (map-of 0 0) (Var 0) (map-of 0 1) (Var 0) (map-empty) (Sym "aa"))))
 ;; (lam $1 aa)
-(let $p1 (App2 "lambda" (map-of 0 1) (Var 0) (map-empty) (Sym "aa")))
+(let $p1 (Lam (map-of 0 1) (Var 0) (map-empty) (Sym "aa")))
 
 (run-schedule (saturate (run slotted))
               (repeat 24 (seq (run) (saturate (run slotted)))))
@@ -346,7 +348,7 @@
 (push)
 
 ;; let-app
-(rule ((= V4 (App3 "let" p1 (Var 0) p2 C5 p3 C6))
+(rule ((= V4 (Let p1 (Var 0) p2 C5 p3 C6))
        (= dom7 (map-union (map-image p1) (map-union (map-image p2) (map-image p3))))
        (= mp8 dom7)
        (= idm9 (map-image mp8))
@@ -356,7 +358,7 @@
        (= m12 (compose mp8 p3))
        (= cs13 (ClassSlots C6))
        (= cs14 (ClassSlots V4))
-       (= C5 (App2 "app" p15 C18 p16 C19))
+       (= C5 (App p15 C18 p16 C19))
        (= dom20 (map-union (map-image p15) (map-image p16)))
        (RenamesToLeader C5 sym21 C5)
        (= mp22 (find-mapping-total idm9 dom20 (compose (compose m10 cs11) sym21) (map-domain (compose m10 cs11))))
@@ -367,15 +369,15 @@
        (= m27 (compose mp22 p16))
        (= cs28 (ClassSlots C19))
        (guard (or (bool-map-contains (map-image (compose m25 cs26)) s_x) (bool-map-contains (map-image (compose m27 cs28)) s_x))))
-      ((let _rhs29 (App3 "let" (map-insert (map-empty) 0 s_x) (Var 0) (compose m25 cs26) C18 (compose m12 cs13) C6))
-       (let _rhs30 (App3 "let" (map-insert (map-empty) 0 s_x) (Var 0) (compose m27 cs28) C19 (compose m12 cs13) C6))
-       (let _rhs31 (App2 "app" (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-union (map-image (compose m25 cs26)) (map-image (compose m12 cs13)))) s_x) _rhs29 (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-union (map-image (compose m27 cs28)) (map-image (compose m12 cs13)))) s_x) _rhs30))
+      ((let _rhs29 (Let (map-insert (map-empty) 0 s_x) (Var 0) (compose m25 cs26) C18 (compose m12 cs13) C6))
+       (let _rhs30 (Let (map-insert (map-empty) 0 s_x) (Var 0) (compose m27 cs28) C19 (compose m12 cs13) C6))
+       (let _rhs31 (App (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-union (map-image (compose m25 cs26)) (map-image (compose m12 cs13)))) s_x) _rhs29 (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-union (map-image (compose m27 cs28)) (map-image (compose m12 cs13)))) s_x) _rhs30))
        (Equated _rhs31 (compose mp8 cs14) V4)))
 
 ;; (let $0 (app (var $0) cc) aa)
-(let $p0 (App3 "let" (map-of 0 0) (Var 0) (map-of 0 0) (App2 "app" (map-of 0 0) (Var 0) (map-empty) (Sym "cc")) (map-empty) (Sym "aa")))
+(let $p0 (Let (map-of 0 0) (Var 0) (map-of 0 0) (App (map-of 0 0) (Var 0) (map-empty) (Sym "cc")) (map-empty) (Sym "aa")))
 ;; (app (let $0 (var $0) aa) (let $0 cc aa))
-(let $p1 (App2 "app" (map-empty) (App3 "let" (map-of 0 0) (Var 0) (map-of 0 0) (Var 0) (map-empty) (Sym "aa")) (map-empty) (App3 "let" (map-of 0 0) (Var 0) (map-empty) (Sym "cc") (map-empty) (Sym "aa"))))
+(let $p1 (App (map-empty) (Let (map-of 0 0) (Var 0) (map-of 0 0) (Var 0) (map-empty) (Sym "aa")) (map-empty) (Let (map-of 0 0) (Var 0) (map-empty) (Sym "cc") (map-empty) (Sym "aa"))))
 
 (run-schedule (saturate (run slotted))
               (repeat 24 (seq (run) (saturate (run slotted)))))
@@ -391,7 +393,7 @@
 (push)
 
 ;; let-app
-(rule ((= V4 (App3 "let" p1 (Var 0) p2 C5 p3 C6))
+(rule ((= V4 (Let p1 (Var 0) p2 C5 p3 C6))
        (= dom7 (map-union (map-image p1) (map-union (map-image p2) (map-image p3))))
        (= mp8 dom7)
        (= idm9 (map-image mp8))
@@ -401,7 +403,7 @@
        (= m12 (compose mp8 p3))
        (= cs13 (ClassSlots C6))
        (= cs14 (ClassSlots V4))
-       (= C5 (App2 "app" p15 C18 p16 C19))
+       (= C5 (App p15 C18 p16 C19))
        (= dom20 (map-union (map-image p15) (map-image p16)))
        (RenamesToLeader C5 sym21 C5)
        (= mp22 (find-mapping-total idm9 dom20 (compose (compose m10 cs11) sym21) (map-domain (compose m10 cs11))))
@@ -412,15 +414,15 @@
        (= m27 (compose mp22 p16))
        (= cs28 (ClassSlots C19))
        (guard (or (bool-map-contains (map-image (compose m25 cs26)) s_x) (bool-map-contains (map-image (compose m27 cs28)) s_x))))
-      ((let _rhs29 (App3 "let" (map-insert (map-empty) 0 s_x) (Var 0) (compose m25 cs26) C18 (compose m12 cs13) C6))
-       (let _rhs30 (App3 "let" (map-insert (map-empty) 0 s_x) (Var 0) (compose m27 cs28) C19 (compose m12 cs13) C6))
-       (let _rhs31 (App2 "app" (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-union (map-image (compose m25 cs26)) (map-image (compose m12 cs13)))) s_x) _rhs29 (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-union (map-image (compose m27 cs28)) (map-image (compose m12 cs13)))) s_x) _rhs30))
+      ((let _rhs29 (Let (map-insert (map-empty) 0 s_x) (Var 0) (compose m25 cs26) C18 (compose m12 cs13) C6))
+       (let _rhs30 (Let (map-insert (map-empty) 0 s_x) (Var 0) (compose m27 cs28) C19 (compose m12 cs13) C6))
+       (let _rhs31 (App (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-union (map-image (compose m25 cs26)) (map-image (compose m12 cs13)))) s_x) _rhs29 (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-union (map-image (compose m27 cs28)) (map-image (compose m12 cs13)))) s_x) _rhs30))
        (Equated _rhs31 (compose mp8 cs14) V4)))
 
 ;; (let $0 (app dd cc) aa)
-(let $p0 (App3 "let" (map-of 0 0) (Var 0) (map-empty) (App2 "app" (map-empty) (Sym "dd") (map-empty) (Sym "cc")) (map-empty) (Sym "aa")))
+(let $p0 (Let (map-of 0 0) (Var 0) (map-empty) (App (map-empty) (Sym "dd") (map-empty) (Sym "cc")) (map-empty) (Sym "aa")))
 ;; (app (let $0 dd aa) (let $0 cc aa))
-(let $p1 (App2 "app" (map-empty) (App3 "let" (map-of 0 0) (Var 0) (map-empty) (Sym "dd") (map-empty) (Sym "aa")) (map-empty) (App3 "let" (map-of 0 0) (Var 0) (map-empty) (Sym "cc") (map-empty) (Sym "aa"))))
+(let $p1 (App (map-empty) (Let (map-of 0 0) (Var 0) (map-empty) (Sym "dd") (map-empty) (Sym "aa")) (map-empty) (Let (map-of 0 0) (Var 0) (map-empty) (Sym "cc") (map-empty) (Sym "aa"))))
 
 (run-schedule (saturate (run slotted))
               (repeat 24 (seq (run) (saturate (run slotted)))))
@@ -437,7 +439,7 @@
 (push)
 
 ;; let-app
-(rule ((= V4 (App3 "let" p1 (Var 0) p2 C5 p3 C6))
+(rule ((= V4 (Let p1 (Var 0) p2 C5 p3 C6))
        (= dom7 (map-union (map-image p1) (map-union (map-image p2) (map-image p3))))
        (= mp8 dom7)
        (= idm9 (map-image mp8))
@@ -447,7 +449,7 @@
        (= m12 (compose mp8 p3))
        (= cs13 (ClassSlots C6))
        (= cs14 (ClassSlots V4))
-       (= C5 (App2 "app" p15 C18 p16 C19))
+       (= C5 (App p15 C18 p16 C19))
        (= dom20 (map-union (map-image p15) (map-image p16)))
        (RenamesToLeader C5 sym21 C5)
        (= mp22 (find-mapping-total idm9 dom20 (compose (compose m10 cs11) sym21) (map-domain (compose m10 cs11))))
@@ -457,15 +459,15 @@
        (= cs26 (ClassSlots C18))
        (= m27 (compose mp22 p16))
        (= cs28 (ClassSlots C19)))
-      ((let _rhs29 (App3 "let" (map-insert (map-empty) 0 s_x) (Var 0) (compose m25 cs26) C18 (compose m12 cs13) C6))
-       (let _rhs30 (App3 "let" (map-insert (map-empty) 0 s_x) (Var 0) (compose m27 cs28) C19 (compose m12 cs13) C6))
-       (let _rhs31 (App2 "app" (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-union (map-image (compose m25 cs26)) (map-image (compose m12 cs13)))) s_x) _rhs29 (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-union (map-image (compose m27 cs28)) (map-image (compose m12 cs13)))) s_x) _rhs30))
+      ((let _rhs29 (Let (map-insert (map-empty) 0 s_x) (Var 0) (compose m25 cs26) C18 (compose m12 cs13) C6))
+       (let _rhs30 (Let (map-insert (map-empty) 0 s_x) (Var 0) (compose m27 cs28) C19 (compose m12 cs13) C6))
+       (let _rhs31 (App (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-union (map-image (compose m25 cs26)) (map-image (compose m12 cs13)))) s_x) _rhs29 (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-union (map-image (compose m27 cs28)) (map-image (compose m12 cs13)))) s_x) _rhs30))
        (Equated _rhs31 (compose mp8 cs14) V4)))
 
 ;; (let $0 (app dd cc) aa)
-(let $p0 (App3 "let" (map-of 0 0) (Var 0) (map-empty) (App2 "app" (map-empty) (Sym "dd") (map-empty) (Sym "cc")) (map-empty) (Sym "aa")))
+(let $p0 (Let (map-of 0 0) (Var 0) (map-empty) (App (map-empty) (Sym "dd") (map-empty) (Sym "cc")) (map-empty) (Sym "aa")))
 ;; (app (let $0 dd aa) (let $0 cc aa))
-(let $p1 (App2 "app" (map-empty) (App3 "let" (map-of 0 0) (Var 0) (map-empty) (Sym "dd") (map-empty) (Sym "aa")) (map-empty) (App3 "let" (map-of 0 0) (Var 0) (map-empty) (Sym "cc") (map-empty) (Sym "aa"))))
+(let $p1 (App (map-empty) (Let (map-of 0 0) (Var 0) (map-empty) (Sym "dd") (map-empty) (Sym "aa")) (map-empty) (Let (map-of 0 0) (Var 0) (map-empty) (Sym "cc") (map-empty) (Sym "aa"))))
 
 (run-schedule (saturate (run slotted))
               (repeat 24 (seq (run) (saturate (run slotted)))))
@@ -481,7 +483,7 @@
 (push)
 
 ;; let-lam-diff
-(rule ((= V4 (App3 "let" p1 (Var 0) p2 C5 p3 C6))
+(rule ((= V4 (Let p1 (Var 0) p2 C5 p3 C6))
        (= dom7 (map-union (map-image p1) (map-union (map-image p2) (map-image p3))))
        (= mp8 dom7)
        (= idm9 (map-image mp8))
@@ -491,7 +493,7 @@
        (= m12 (compose mp8 p3))
        (= cs13 (ClassSlots C6))
        (= cs14 (ClassSlots V4))
-       (= C5 (App2 "lambda" p15 (Var 0) p16 C18))
+       (= C5 (Lam p15 (Var 0) p16 C18))
        (= dom19 (map-union (map-image p15) (map-image p16)))
        (RenamesToLeader C5 sym20 C5)
        (= mp21 (find-mapping-total idm9 dom19 (compose (compose m10 cs11) sym20) (map-domain (compose m10 cs11))))
@@ -501,14 +503,14 @@
        (= m24 (compose mp21 p16))
        (= cs25 (ClassSlots C18))
        (map-contains (map-image (compose m24 cs25)) s_x))
-      ((let _rhs26 (App3 "let" (map-insert (map-empty) 0 s_x) (Var 0) (compose m24 cs25) C18 (compose m12 cs13) C6))
-       (let _rhs27 (App2 "lambda" (map-insert (map-empty) 0 s_y) (Var 0) (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-union (map-image (compose m24 cs25)) (map-image (compose m12 cs13)))) s_x) _rhs26))
+      ((let _rhs26 (Let (map-insert (map-empty) 0 s_x) (Var 0) (compose m24 cs25) C18 (compose m12 cs13) C6))
+       (let _rhs27 (Lam (map-insert (map-empty) 0 s_y) (Var 0) (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-union (map-image (compose m24 cs25)) (map-image (compose m12 cs13)))) s_x) _rhs26))
        (Equated _rhs27 (compose mp8 cs14) V4)))
 
 ;; (let $0 (lam $1 (app (var $1) (var $0))) aa)
-(let $p0 (App3 "let" (map-of 0 0) (Var 0) (map-of 0 0) (App2 "lambda" (map-of 0 1) (Var 0) (map-of 0 0 1 1) (App2 "app" (map-of 0 1) (Var 0) (map-of 0 0) (Var 0))) (map-empty) (Sym "aa")))
+(let $p0 (Let (map-of 0 0) (Var 0) (map-of 0 0) (Lam (map-of 0 1) (Var 0) (map-of 0 0 1 1) (App (map-of 0 1) (Var 0) (map-of 0 0) (Var 0))) (map-empty) (Sym "aa")))
 ;; (lam $1 (let $0 (app (var $1) (var $0)) aa))
-(let $p1 (App2 "lambda" (map-of 0 1) (Var 0) (map-of 1 1) (App3 "let" (map-of 0 0) (Var 0) (map-of 0 0 1 1) (App2 "app" (map-of 0 1) (Var 0) (map-of 0 0) (Var 0)) (map-empty) (Sym "aa"))))
+(let $p1 (Lam (map-of 0 1) (Var 0) (map-of 1 1) (Let (map-of 0 0) (Var 0) (map-of 0 0 1 1) (App (map-of 0 1) (Var 0) (map-of 0 0) (Var 0)) (map-empty) (Sym "aa"))))
 
 (run-schedule (saturate (run slotted))
               (repeat 24 (seq (run) (saturate (run slotted)))))
@@ -524,7 +526,7 @@
 (push)
 
 ;; let-lam-diff
-(rule ((= V4 (App3 "let" p1 (Var 0) p2 C5 p3 C6))
+(rule ((= V4 (Let p1 (Var 0) p2 C5 p3 C6))
        (= dom7 (map-union (map-image p1) (map-union (map-image p2) (map-image p3))))
        (= mp8 dom7)
        (= idm9 (map-image mp8))
@@ -534,7 +536,7 @@
        (= m12 (compose mp8 p3))
        (= cs13 (ClassSlots C6))
        (= cs14 (ClassSlots V4))
-       (= C5 (App2 "lambda" p15 (Var 0) p16 C18))
+       (= C5 (Lam p15 (Var 0) p16 C18))
        (= dom19 (map-union (map-image p15) (map-image p16)))
        (RenamesToLeader C5 sym20 C5)
        (= mp21 (find-mapping-total idm9 dom19 (compose (compose m10 cs11) sym20) (map-domain (compose m10 cs11))))
@@ -544,14 +546,14 @@
        (= m24 (compose mp21 p16))
        (= cs25 (ClassSlots C18))
        (map-contains (map-image (compose m24 cs25)) s_x))
-      ((let _rhs26 (App3 "let" (map-insert (map-empty) 0 s_x) (Var 0) (compose m24 cs25) C18 (compose m12 cs13) C6))
-       (let _rhs27 (App2 "lambda" (map-insert (map-empty) 0 s_y) (Var 0) (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-union (map-image (compose m24 cs25)) (map-image (compose m12 cs13)))) s_x) _rhs26))
+      ((let _rhs26 (Let (map-insert (map-empty) 0 s_x) (Var 0) (compose m24 cs25) C18 (compose m12 cs13) C6))
+       (let _rhs27 (Lam (map-insert (map-empty) 0 s_y) (Var 0) (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-union (map-image (compose m24 cs25)) (map-image (compose m12 cs13)))) s_x) _rhs26))
        (Equated _rhs27 (compose mp8 cs14) V4)))
 
 ;; (let $0 (lam $1 (app (var $1) cc)) aa)
-(let $p0 (App3 "let" (map-of 0 0) (Var 0) (map-empty) (App2 "lambda" (map-of 0 1) (Var 0) (map-of 1 1) (App2 "app" (map-of 0 1) (Var 0) (map-empty) (Sym "cc"))) (map-empty) (Sym "aa")))
+(let $p0 (Let (map-of 0 0) (Var 0) (map-empty) (Lam (map-of 0 1) (Var 0) (map-of 1 1) (App (map-of 0 1) (Var 0) (map-empty) (Sym "cc"))) (map-empty) (Sym "aa")))
 ;; (lam $1 (let $0 (app (var $1) cc) aa))
-(let $p1 (App2 "lambda" (map-of 0 1) (Var 0) (map-of 1 1) (App3 "let" (map-of 0 0) (Var 0) (map-of 1 1) (App2 "app" (map-of 0 1) (Var 0) (map-empty) (Sym "cc")) (map-empty) (Sym "aa"))))
+(let $p1 (Lam (map-of 0 1) (Var 0) (map-of 1 1) (Let (map-of 0 0) (Var 0) (map-of 1 1) (App (map-of 0 1) (Var 0) (map-empty) (Sym "cc")) (map-empty) (Sym "aa"))))
 
 (run-schedule (saturate (run slotted))
               (repeat 24 (seq (run) (saturate (run slotted)))))
@@ -568,7 +570,7 @@
 (push)
 
 ;; let-lam-diff
-(rule ((= V4 (App3 "let" p1 (Var 0) p2 C5 p3 C6))
+(rule ((= V4 (Let p1 (Var 0) p2 C5 p3 C6))
        (= dom7 (map-union (map-image p1) (map-union (map-image p2) (map-image p3))))
        (= mp8 dom7)
        (= idm9 (map-image mp8))
@@ -578,7 +580,7 @@
        (= m12 (compose mp8 p3))
        (= cs13 (ClassSlots C6))
        (= cs14 (ClassSlots V4))
-       (= C5 (App2 "lambda" p15 (Var 0) p16 C18))
+       (= C5 (Lam p15 (Var 0) p16 C18))
        (= dom19 (map-union (map-image p15) (map-image p16)))
        (RenamesToLeader C5 sym20 C5)
        (= mp21 (find-mapping-total idm9 dom19 (compose (compose m10 cs11) sym20) (map-domain (compose m10 cs11))))
@@ -587,14 +589,14 @@
        (= s_y (map-get (compose mp21 p15) 0))
        (= m24 (compose mp21 p16))
        (= cs25 (ClassSlots C18)))
-      ((let _rhs26 (App3 "let" (map-insert (map-empty) 0 s_x) (Var 0) (compose m24 cs25) C18 (compose m12 cs13) C6))
-       (let _rhs27 (App2 "lambda" (map-insert (map-empty) 0 s_y) (Var 0) (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-union (map-image (compose m24 cs25)) (map-image (compose m12 cs13)))) s_x) _rhs26))
+      ((let _rhs26 (Let (map-insert (map-empty) 0 s_x) (Var 0) (compose m24 cs25) C18 (compose m12 cs13) C6))
+       (let _rhs27 (Lam (map-insert (map-empty) 0 s_y) (Var 0) (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-union (map-image (compose m24 cs25)) (map-image (compose m12 cs13)))) s_x) _rhs26))
        (Equated _rhs27 (compose mp8 cs14) V4)))
 
 ;; (let $0 (lam $1 (app (var $1) cc)) aa)
-(let $p0 (App3 "let" (map-of 0 0) (Var 0) (map-empty) (App2 "lambda" (map-of 0 1) (Var 0) (map-of 1 1) (App2 "app" (map-of 0 1) (Var 0) (map-empty) (Sym "cc"))) (map-empty) (Sym "aa")))
+(let $p0 (Let (map-of 0 0) (Var 0) (map-empty) (Lam (map-of 0 1) (Var 0) (map-of 1 1) (App (map-of 0 1) (Var 0) (map-empty) (Sym "cc"))) (map-empty) (Sym "aa")))
 ;; (lam $1 (let $0 (app (var $1) cc) aa))
-(let $p1 (App2 "lambda" (map-of 0 1) (Var 0) (map-of 1 1) (App3 "let" (map-of 0 0) (Var 0) (map-of 1 1) (App2 "app" (map-of 0 1) (Var 0) (map-empty) (Sym "cc")) (map-empty) (Sym "aa"))))
+(let $p1 (Lam (map-of 0 1) (Var 0) (map-of 1 1) (Let (map-of 0 0) (Var 0) (map-of 1 1) (App (map-of 0 1) (Var 0) (map-empty) (Sym "cc")) (map-empty) (Sym "aa"))))
 
 (run-schedule (saturate (run slotted))
               (repeat 24 (seq (run) (saturate (run slotted)))))
@@ -610,7 +612,7 @@
 (push)
 
 ;; map-fusion
-(rule ((= V3 (App2 "app" p1 C4 p2 C5))
+(rule ((= V3 (App p1 C4 p2 C5))
        (= dom6 (map-union (map-image p1) (map-image p2)))
        (= mp7 dom6)
        (= idm8 (map-image mp7))
@@ -619,7 +621,7 @@
        (= m11 (compose mp7 p2))
        (= cs12 (ClassSlots C5))
        (= cs13 (ClassSlots V3))
-       (= C4 (App2 "app" p14 L17 p15 C18))
+       (= C4 (App p14 L17 p15 C18))
        (RenamesToLeader (Sym "map") ml19 L17)
        (= dom20 (map-union (map-image p14) (map-image p15)))
        (RenamesToLeader C4 sym21 C4)
@@ -628,7 +630,7 @@
        (= av24 (map-union idm8 idm23))
        (= m25 (compose mp22 p15))
        (= cs26 (ClassSlots C18))
-       (= C5 (App2 "app" p27 C30 p28 C31))
+       (= C5 (App p27 C30 p28 C31))
        (= dom32 (map-union (map-image p27) (map-image p28)))
        (RenamesToLeader C5 sym33 C5)
        (= mp34 (find-mapping-total av24 dom32 (compose (compose m11 cs12) sym33) (map-domain (compose m11 cs12))))
@@ -638,7 +640,7 @@
        (= cs38 (ClassSlots C30))
        (= m39 (compose mp34 p28))
        (= cs40 (ClassSlots C31))
-       (= C30 (App2 "app" p41 L44 p42 C45))
+       (= C30 (App p41 L44 p42 C45))
        (RenamesToLeader (Sym "map") ml46 L44)
        (= dom47 (map-union (map-image p41) (map-image p42)))
        (RenamesToLeader C30 sym48 C30)
@@ -650,17 +652,17 @@
        (= fm54 (find-mapping-total av51 (map-of 0 0) (map-empty) (map-empty)))
        (= s_fu (map-get fm54 0))
        (= av55 (map-union av51 (map-image fm54))))
-      ((let _rhs56 (App2 "app" (compose m52 cs53) C45 (map-insert (map-empty) 0 s_fu) (Var 0)))
-       (let _rhs57 (App2 "app" (compose m25 cs26) C18 (map-union (map-image (compose m52 cs53)) (map-image (map-insert (map-empty) 0 s_fu))) _rhs56))
-       (let _rhs58 (App2 "lambda" (map-insert (map-empty) 0 s_fu) (Var 0) (map-union (map-image (compose m25 cs26)) (map-image (map-union (map-image (compose m52 cs53)) (map-image (map-insert (map-empty) 0 s_fu))))) _rhs57))
-       (let _rhs59 (App2 "app" (map-empty) (Sym "map") (map-remove (map-union (map-image (map-insert (map-empty) 0 s_fu)) (map-image (map-union (map-image (compose m25 cs26)) (map-image (map-union (map-image (compose m52 cs53)) (map-image (map-insert (map-empty) 0 s_fu))))))) s_fu) _rhs58))
-       (let _rhs60 (App2 "app" (map-union (map-image (map-empty)) (map-image (map-remove (map-union (map-image (map-insert (map-empty) 0 s_fu)) (map-image (map-union (map-image (compose m25 cs26)) (map-image (map-union (map-image (compose m52 cs53)) (map-image (map-insert (map-empty) 0 s_fu))))))) s_fu))) _rhs59 (compose m39 cs40) C31))
+      ((let _rhs56 (App (compose m52 cs53) C45 (map-insert (map-empty) 0 s_fu) (Var 0)))
+       (let _rhs57 (App (compose m25 cs26) C18 (map-union (map-image (compose m52 cs53)) (map-image (map-insert (map-empty) 0 s_fu))) _rhs56))
+       (let _rhs58 (Lam (map-insert (map-empty) 0 s_fu) (Var 0) (map-union (map-image (compose m25 cs26)) (map-image (map-union (map-image (compose m52 cs53)) (map-image (map-insert (map-empty) 0 s_fu))))) _rhs57))
+       (let _rhs59 (App (map-empty) (Sym "map") (map-remove (map-union (map-image (map-insert (map-empty) 0 s_fu)) (map-image (map-union (map-image (compose m25 cs26)) (map-image (map-union (map-image (compose m52 cs53)) (map-image (map-insert (map-empty) 0 s_fu))))))) s_fu) _rhs58))
+       (let _rhs60 (App (map-union (map-image (map-empty)) (map-image (map-remove (map-union (map-image (map-insert (map-empty) 0 s_fu)) (map-image (map-union (map-image (compose m25 cs26)) (map-image (map-union (map-image (compose m52 cs53)) (map-image (map-insert (map-empty) 0 s_fu))))))) s_fu))) _rhs59 (compose m39 cs40) C31))
        (Equated _rhs60 (compose mp7 cs13) V3)))
 
 ;; (app (app map f1) (app (app map f2) arr))
-(let $p0 (App2 "app" (map-empty) (App2 "app" (map-empty) (Sym "map") (map-empty) (Sym "f1")) (map-empty) (App2 "app" (map-empty) (App2 "app" (map-empty) (Sym "map") (map-empty) (Sym "f2")) (map-empty) (Sym "arr"))))
+(let $p0 (App (map-empty) (App (map-empty) (Sym "map") (map-empty) (Sym "f1")) (map-empty) (App (map-empty) (App (map-empty) (Sym "map") (map-empty) (Sym "f2")) (map-empty) (Sym "arr"))))
 ;; (app (app map (lam $0 (app f1 (app f2 (var $0))))) arr)
-(let $p1 (App2 "app" (map-empty) (App2 "app" (map-empty) (Sym "map") (map-empty) (App2 "lambda" (map-of 0 0) (Var 0) (map-of 0 0) (App2 "app" (map-empty) (Sym "f1") (map-of 0 0) (App2 "app" (map-empty) (Sym "f2") (map-of 0 0) (Var 0))))) (map-empty) (Sym "arr")))
+(let $p1 (App (map-empty) (App (map-empty) (Sym "map") (map-empty) (Lam (map-of 0 0) (Var 0) (map-of 0 0) (App (map-empty) (Sym "f1") (map-of 0 0) (App (map-empty) (Sym "f2") (map-of 0 0) (Var 0))))) (map-empty) (Sym "arr")))
 
 (run-schedule (saturate (run slotted))
               (repeat 12 (seq (run) (saturate (run slotted)))))
@@ -676,7 +678,7 @@
 (push)
 
 ;; map-fission
-(rule ((= V3 (App2 "app" p1 L4 p2 C5))
+(rule ((= V3 (App p1 L4 p2 C5))
        (RenamesToLeader (Sym "map") ml6 L4)
        (= dom7 (map-union (map-image p1) (map-image p2)))
        (= mp8 dom7)
@@ -684,7 +686,7 @@
        (= m10 (compose mp8 p2))
        (= cs11 (ClassSlots C5))
        (= cs12 (ClassSlots V3))
-       (= C5 (App2 "lambda" p13 (Var 0) p14 C16))
+       (= C5 (Lam p13 (Var 0) p14 C16))
        (= dom17 (map-union (map-image p13) (map-image p14)))
        (RenamesToLeader C5 sym18 C5)
        (= mp19 (find-mapping-total idm9 dom17 (compose (compose m10 cs11) sym18) (map-domain (compose m10 cs11))))
@@ -693,7 +695,7 @@
        (= s_x (map-get (compose mp19 p13) 0))
        (= m22 (compose mp19 p14))
        (= cs23 (ClassSlots C16))
-       (= C16 (App2 "app" p24 C27 p25 C28))
+       (= C16 (App p24 C27 p25 C28))
        (= dom29 (map-union (map-image p24) (map-image p25)))
        (RenamesToLeader C16 sym30 C16)
        (= mp31 (find-mapping-total av21 dom29 (compose (compose m22 cs23) sym30) (map-domain (compose m22 cs23))))
@@ -707,18 +709,18 @@
        (= s_in (map-get fm38 0))
        (= av39 (map-union av33 (map-image fm38)))
        (map-not-contains (map-image (compose m34 cs35)) s_x))
-      ((let _rhs40 (App2 "app" (map-empty) (Sym "map") (compose m34 cs35) C27))
-       (let _rhs41 (App2 "lambda" (map-insert (map-empty) 0 s_x) (Var 0) (compose m36 cs37) C28))
-       (let _rhs42 (App2 "app" (map-empty) (Sym "map") (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-image (compose m36 cs37))) s_x) _rhs41))
-       (let _rhs43 (App2 "app" (map-union (map-image (map-empty)) (map-image (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-image (compose m36 cs37))) s_x))) _rhs42 (map-insert (map-empty) 0 s_in) (Var 0)))
-       (let _rhs44 (App2 "app" (map-union (map-image (map-empty)) (map-image (compose m34 cs35))) _rhs40 (map-union (map-image (map-union (map-image (map-empty)) (map-image (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-image (compose m36 cs37))) s_x)))) (map-image (map-insert (map-empty) 0 s_in))) _rhs43))
-       (let _rhs45 (App2 "lambda" (map-insert (map-empty) 0 s_in) (Var 0) (map-union (map-image (map-union (map-image (map-empty)) (map-image (compose m34 cs35)))) (map-image (map-union (map-image (map-union (map-image (map-empty)) (map-image (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-image (compose m36 cs37))) s_x)))) (map-image (map-insert (map-empty) 0 s_in))))) _rhs44))
+      ((let _rhs40 (App (map-empty) (Sym "map") (compose m34 cs35) C27))
+       (let _rhs41 (Lam (map-insert (map-empty) 0 s_x) (Var 0) (compose m36 cs37) C28))
+       (let _rhs42 (App (map-empty) (Sym "map") (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-image (compose m36 cs37))) s_x) _rhs41))
+       (let _rhs43 (App (map-union (map-image (map-empty)) (map-image (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-image (compose m36 cs37))) s_x))) _rhs42 (map-insert (map-empty) 0 s_in) (Var 0)))
+       (let _rhs44 (App (map-union (map-image (map-empty)) (map-image (compose m34 cs35))) _rhs40 (map-union (map-image (map-union (map-image (map-empty)) (map-image (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-image (compose m36 cs37))) s_x)))) (map-image (map-insert (map-empty) 0 s_in))) _rhs43))
+       (let _rhs45 (Lam (map-insert (map-empty) 0 s_in) (Var 0) (map-union (map-image (map-union (map-image (map-empty)) (map-image (compose m34 cs35)))) (map-image (map-union (map-image (map-union (map-image (map-empty)) (map-image (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-image (compose m36 cs37))) s_x)))) (map-image (map-insert (map-empty) 0 s_in))))) _rhs44))
        (Equated _rhs45 (compose mp8 cs12) V3)))
 
 ;; (app map (lam $0 (app f1 (app f2 (var $0)))))
-(let $p0 (App2 "app" (map-empty) (Sym "map") (map-empty) (App2 "lambda" (map-of 0 0) (Var 0) (map-of 0 0) (App2 "app" (map-empty) (Sym "f1") (map-of 0 0) (App2 "app" (map-empty) (Sym "f2") (map-of 0 0) (Var 0))))))
+(let $p0 (App (map-empty) (Sym "map") (map-empty) (Lam (map-of 0 0) (Var 0) (map-of 0 0) (App (map-empty) (Sym "f1") (map-of 0 0) (App (map-empty) (Sym "f2") (map-of 0 0) (Var 0))))))
 ;; (lam $1 (app (app map f1) (app (app map (lam $0 (app f2 (var $0)))) (var $1))))
-(let $p1 (App2 "lambda" (map-of 0 1) (Var 0) (map-of 1 1) (App2 "app" (map-empty) (App2 "app" (map-empty) (Sym "map") (map-empty) (Sym "f1")) (map-of 1 1) (App2 "app" (map-empty) (App2 "app" (map-empty) (Sym "map") (map-empty) (App2 "lambda" (map-of 0 0) (Var 0) (map-of 0 0) (App2 "app" (map-empty) (Sym "f2") (map-of 0 0) (Var 0)))) (map-of 0 1) (Var 0)))))
+(let $p1 (Lam (map-of 0 1) (Var 0) (map-of 1 1) (App (map-empty) (App (map-empty) (Sym "map") (map-empty) (Sym "f1")) (map-of 1 1) (App (map-empty) (App (map-empty) (Sym "map") (map-empty) (Lam (map-of 0 0) (Var 0) (map-of 0 0) (App (map-empty) (Sym "f2") (map-of 0 0) (Var 0)))) (map-of 0 1) (Var 0)))))
 
 (run-schedule (saturate (run slotted))
               (repeat 9 (seq (run) (saturate (run slotted)))))
@@ -734,7 +736,7 @@
 (push)
 
 ;; map-fission
-(rule ((= V3 (App2 "app" p1 L4 p2 C5))
+(rule ((= V3 (App p1 L4 p2 C5))
        (RenamesToLeader (Sym "map") ml6 L4)
        (= dom7 (map-union (map-image p1) (map-image p2)))
        (= mp8 dom7)
@@ -742,7 +744,7 @@
        (= m10 (compose mp8 p2))
        (= cs11 (ClassSlots C5))
        (= cs12 (ClassSlots V3))
-       (= C5 (App2 "lambda" p13 (Var 0) p14 C16))
+       (= C5 (Lam p13 (Var 0) p14 C16))
        (= dom17 (map-union (map-image p13) (map-image p14)))
        (RenamesToLeader C5 sym18 C5)
        (= mp19 (find-mapping-total idm9 dom17 (compose (compose m10 cs11) sym18) (map-domain (compose m10 cs11))))
@@ -751,7 +753,7 @@
        (= s_x (map-get (compose mp19 p13) 0))
        (= m22 (compose mp19 p14))
        (= cs23 (ClassSlots C16))
-       (= C16 (App2 "app" p24 C27 p25 C28))
+       (= C16 (App p24 C27 p25 C28))
        (= dom29 (map-union (map-image p24) (map-image p25)))
        (RenamesToLeader C16 sym30 C16)
        (= mp31 (find-mapping-total av21 dom29 (compose (compose m22 cs23) sym30) (map-domain (compose m22 cs23))))
@@ -765,18 +767,18 @@
        (= s_in (map-get fm38 0))
        (= av39 (map-union av33 (map-image fm38)))
        (map-not-contains (map-image (compose m34 cs35)) s_x))
-      ((let _rhs40 (App2 "app" (map-empty) (Sym "map") (compose m34 cs35) C27))
-       (let _rhs41 (App2 "lambda" (map-insert (map-empty) 0 s_x) (Var 0) (compose m36 cs37) C28))
-       (let _rhs42 (App2 "app" (map-empty) (Sym "map") (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-image (compose m36 cs37))) s_x) _rhs41))
-       (let _rhs43 (App2 "app" (map-union (map-image (map-empty)) (map-image (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-image (compose m36 cs37))) s_x))) _rhs42 (map-insert (map-empty) 0 s_in) (Var 0)))
-       (let _rhs44 (App2 "app" (map-union (map-image (map-empty)) (map-image (compose m34 cs35))) _rhs40 (map-union (map-image (map-union (map-image (map-empty)) (map-image (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-image (compose m36 cs37))) s_x)))) (map-image (map-insert (map-empty) 0 s_in))) _rhs43))
-       (let _rhs45 (App2 "lambda" (map-insert (map-empty) 0 s_in) (Var 0) (map-union (map-image (map-union (map-image (map-empty)) (map-image (compose m34 cs35)))) (map-image (map-union (map-image (map-union (map-image (map-empty)) (map-image (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-image (compose m36 cs37))) s_x)))) (map-image (map-insert (map-empty) 0 s_in))))) _rhs44))
+      ((let _rhs40 (App (map-empty) (Sym "map") (compose m34 cs35) C27))
+       (let _rhs41 (Lam (map-insert (map-empty) 0 s_x) (Var 0) (compose m36 cs37) C28))
+       (let _rhs42 (App (map-empty) (Sym "map") (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-image (compose m36 cs37))) s_x) _rhs41))
+       (let _rhs43 (App (map-union (map-image (map-empty)) (map-image (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-image (compose m36 cs37))) s_x))) _rhs42 (map-insert (map-empty) 0 s_in) (Var 0)))
+       (let _rhs44 (App (map-union (map-image (map-empty)) (map-image (compose m34 cs35))) _rhs40 (map-union (map-image (map-union (map-image (map-empty)) (map-image (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-image (compose m36 cs37))) s_x)))) (map-image (map-insert (map-empty) 0 s_in))) _rhs43))
+       (let _rhs45 (Lam (map-insert (map-empty) 0 s_in) (Var 0) (map-union (map-image (map-union (map-image (map-empty)) (map-image (compose m34 cs35)))) (map-image (map-union (map-image (map-union (map-image (map-empty)) (map-image (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-image (compose m36 cs37))) s_x)))) (map-image (map-insert (map-empty) 0 s_in))))) _rhs44))
        (Equated _rhs45 (compose mp8 cs12) V3)))
 
 ;; (app map (lam $0 (app (app f1 (var $0)) f2)))
-(let $p0 (App2 "app" (map-empty) (Sym "map") (map-empty) (App2 "lambda" (map-of 0 0) (Var 0) (map-of 0 0) (App2 "app" (map-of 0 0) (App2 "app" (map-empty) (Sym "f1") (map-of 0 0) (Var 0)) (map-empty) (Sym "f2")))))
+(let $p0 (App (map-empty) (Sym "map") (map-empty) (Lam (map-of 0 0) (Var 0) (map-of 0 0) (App (map-of 0 0) (App (map-empty) (Sym "f1") (map-of 0 0) (Var 0)) (map-empty) (Sym "f2")))))
 ;; (lam $1 (app (app map (app f1 (var $0))) (app (app map (lam $0 f2)) (var $1))))
-(let $p1 (App2 "lambda" (map-of 0 1) (Var 0) (map-of 0 0 1 1) (App2 "app" (map-of 0 0) (App2 "app" (map-empty) (Sym "map") (map-of 0 0) (App2 "app" (map-empty) (Sym "f1") (map-of 0 0) (Var 0))) (map-of 1 1) (App2 "app" (map-empty) (App2 "app" (map-empty) (Sym "map") (map-empty) (App2 "lambda" (map-of 0 0) (Var 0) (map-empty) (Sym "f2"))) (map-of 0 1) (Var 0)))))
+(let $p1 (Lam (map-of 0 1) (Var 0) (map-of 0 0 1 1) (App (map-of 0 0) (App (map-empty) (Sym "map") (map-of 0 0) (App (map-empty) (Sym "f1") (map-of 0 0) (Var 0))) (map-of 1 1) (App (map-empty) (App (map-empty) (Sym "map") (map-empty) (Lam (map-of 0 0) (Var 0) (map-empty) (Sym "f2"))) (map-of 0 1) (Var 0)))))
 
 (run-schedule (saturate (run slotted))
               (repeat 9 (seq (run) (saturate (run slotted)))))
@@ -793,7 +795,7 @@
 (push)
 
 ;; map-fission
-(rule ((= V3 (App2 "app" p1 L4 p2 C5))
+(rule ((= V3 (App p1 L4 p2 C5))
        (RenamesToLeader (Sym "map") ml6 L4)
        (= dom7 (map-union (map-image p1) (map-image p2)))
        (= mp8 dom7)
@@ -801,7 +803,7 @@
        (= m10 (compose mp8 p2))
        (= cs11 (ClassSlots C5))
        (= cs12 (ClassSlots V3))
-       (= C5 (App2 "lambda" p13 (Var 0) p14 C16))
+       (= C5 (Lam p13 (Var 0) p14 C16))
        (= dom17 (map-union (map-image p13) (map-image p14)))
        (RenamesToLeader C5 sym18 C5)
        (= mp19 (find-mapping-total idm9 dom17 (compose (compose m10 cs11) sym18) (map-domain (compose m10 cs11))))
@@ -810,7 +812,7 @@
        (= s_x (map-get (compose mp19 p13) 0))
        (= m22 (compose mp19 p14))
        (= cs23 (ClassSlots C16))
-       (= C16 (App2 "app" p24 C27 p25 C28))
+       (= C16 (App p24 C27 p25 C28))
        (= dom29 (map-union (map-image p24) (map-image p25)))
        (RenamesToLeader C16 sym30 C16)
        (= mp31 (find-mapping-total av21 dom29 (compose (compose m22 cs23) sym30) (map-domain (compose m22 cs23))))
@@ -823,18 +825,18 @@
        (= fm38 (find-mapping-total av33 (map-of 0 0) (map-empty) (map-empty)))
        (= s_in (map-get fm38 0))
        (= av39 (map-union av33 (map-image fm38))))
-      ((let _rhs40 (App2 "app" (map-empty) (Sym "map") (compose m34 cs35) C27))
-       (let _rhs41 (App2 "lambda" (map-insert (map-empty) 0 s_x) (Var 0) (compose m36 cs37) C28))
-       (let _rhs42 (App2 "app" (map-empty) (Sym "map") (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-image (compose m36 cs37))) s_x) _rhs41))
-       (let _rhs43 (App2 "app" (map-union (map-image (map-empty)) (map-image (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-image (compose m36 cs37))) s_x))) _rhs42 (map-insert (map-empty) 0 s_in) (Var 0)))
-       (let _rhs44 (App2 "app" (map-union (map-image (map-empty)) (map-image (compose m34 cs35))) _rhs40 (map-union (map-image (map-union (map-image (map-empty)) (map-image (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-image (compose m36 cs37))) s_x)))) (map-image (map-insert (map-empty) 0 s_in))) _rhs43))
-       (let _rhs45 (App2 "lambda" (map-insert (map-empty) 0 s_in) (Var 0) (map-union (map-image (map-union (map-image (map-empty)) (map-image (compose m34 cs35)))) (map-image (map-union (map-image (map-union (map-image (map-empty)) (map-image (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-image (compose m36 cs37))) s_x)))) (map-image (map-insert (map-empty) 0 s_in))))) _rhs44))
+      ((let _rhs40 (App (map-empty) (Sym "map") (compose m34 cs35) C27))
+       (let _rhs41 (Lam (map-insert (map-empty) 0 s_x) (Var 0) (compose m36 cs37) C28))
+       (let _rhs42 (App (map-empty) (Sym "map") (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-image (compose m36 cs37))) s_x) _rhs41))
+       (let _rhs43 (App (map-union (map-image (map-empty)) (map-image (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-image (compose m36 cs37))) s_x))) _rhs42 (map-insert (map-empty) 0 s_in) (Var 0)))
+       (let _rhs44 (App (map-union (map-image (map-empty)) (map-image (compose m34 cs35))) _rhs40 (map-union (map-image (map-union (map-image (map-empty)) (map-image (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-image (compose m36 cs37))) s_x)))) (map-image (map-insert (map-empty) 0 s_in))) _rhs43))
+       (let _rhs45 (Lam (map-insert (map-empty) 0 s_in) (Var 0) (map-union (map-image (map-union (map-image (map-empty)) (map-image (compose m34 cs35)))) (map-image (map-union (map-image (map-union (map-image (map-empty)) (map-image (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-image (compose m36 cs37))) s_x)))) (map-image (map-insert (map-empty) 0 s_in))))) _rhs44))
        (Equated _rhs45 (compose mp8 cs12) V3)))
 
 ;; (app map (lam $0 (app (app f1 (var $0)) f2)))
-(let $p0 (App2 "app" (map-empty) (Sym "map") (map-empty) (App2 "lambda" (map-of 0 0) (Var 0) (map-of 0 0) (App2 "app" (map-of 0 0) (App2 "app" (map-empty) (Sym "f1") (map-of 0 0) (Var 0)) (map-empty) (Sym "f2")))))
+(let $p0 (App (map-empty) (Sym "map") (map-empty) (Lam (map-of 0 0) (Var 0) (map-of 0 0) (App (map-of 0 0) (App (map-empty) (Sym "f1") (map-of 0 0) (Var 0)) (map-empty) (Sym "f2")))))
 ;; (lam $1 (app (app map (app f1 (var $0))) (app (app map (lam $0 f2)) (var $1))))
-(let $p1 (App2 "lambda" (map-of 0 1) (Var 0) (map-of 0 0 1 1) (App2 "app" (map-of 0 0) (App2 "app" (map-empty) (Sym "map") (map-of 0 0) (App2 "app" (map-empty) (Sym "f1") (map-of 0 0) (Var 0))) (map-of 1 1) (App2 "app" (map-empty) (App2 "app" (map-empty) (Sym "map") (map-empty) (App2 "lambda" (map-of 0 0) (Var 0) (map-empty) (Sym "f2"))) (map-of 0 1) (Var 0)))))
+(let $p1 (Lam (map-of 0 1) (Var 0) (map-of 0 0 1 1) (App (map-of 0 0) (App (map-empty) (Sym "map") (map-of 0 0) (App (map-empty) (Sym "f1") (map-of 0 0) (Var 0))) (map-of 1 1) (App (map-empty) (App (map-empty) (Sym "map") (map-empty) (Lam (map-of 0 0) (Var 0) (map-empty) (Sym "f2"))) (map-of 0 1) (Var 0)))))
 
 (run-schedule (saturate (run slotted))
               (repeat 9 (seq (run) (saturate (run slotted)))))
@@ -851,7 +853,7 @@
 (push)
 
 ;; map-fission
-(rule ((= V3 (App2 "app" p1 C4 p2 C5))
+(rule ((= V3 (App p1 C4 p2 C5))
        (= dom6 (map-union (map-image p1) (map-image p2)))
        (= mp7 dom6)
        (= idm8 (map-image mp7))
@@ -860,7 +862,7 @@
        (= m11 (compose mp7 p2))
        (= cs12 (ClassSlots C5))
        (= cs13 (ClassSlots V3))
-       (= V16 (App2 "lambda" p14 (Var 0) p15 V3))
+       (= V16 (Lam p14 (Var 0) p15 V3))
        (= dom18 (map-union (map-image p14) (map-image p15)))
        (RenamesToLeader V3 sym19 V3)
        (= mp20 (find-mapping-total idm8 dom18 (compose (compose mp7 cs13) sym19) p15))
@@ -868,7 +870,7 @@
        (= av22 (map-union idm8 idm21))
        (= s_x (map-get (compose mp20 p14) 0))
        (= cs23 (ClassSlots V16))
-       (= V26 (App2 "app" p24 L27 p25 V16))
+       (= V26 (App p24 L27 p25 V16))
        (RenamesToLeader (Sym "map") ml29 L27)
        (= dom30 (map-union (map-image p24) (map-image p25)))
        (RenamesToLeader V16 sym31 V16)
@@ -880,18 +882,18 @@
        (= s_in (map-get fm36 0))
        (= av37 (map-union av34 (map-image fm36)))
        (map-not-contains (map-image (compose m9 cs10)) s_x))
-      ((let _rhs38 (App2 "app" (map-empty) (Sym "map") (compose m9 cs10) C4))
-       (let _rhs39 (App2 "lambda" (map-insert (map-empty) 0 s_x) (Var 0) (compose m11 cs12) C5))
-       (let _rhs40 (App2 "app" (map-empty) (Sym "map") (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-image (compose m11 cs12))) s_x) _rhs39))
-       (let _rhs41 (App2 "app" (map-union (map-image (map-empty)) (map-image (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-image (compose m11 cs12))) s_x))) _rhs40 (map-insert (map-empty) 0 s_in) (Var 0)))
-       (let _rhs42 (App2 "app" (map-union (map-image (map-empty)) (map-image (compose m9 cs10))) _rhs38 (map-union (map-image (map-union (map-image (map-empty)) (map-image (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-image (compose m11 cs12))) s_x)))) (map-image (map-insert (map-empty) 0 s_in))) _rhs41))
-       (let _rhs43 (App2 "lambda" (map-insert (map-empty) 0 s_in) (Var 0) (map-union (map-image (map-union (map-image (map-empty)) (map-image (compose m9 cs10)))) (map-image (map-union (map-image (map-union (map-image (map-empty)) (map-image (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-image (compose m11 cs12))) s_x)))) (map-image (map-insert (map-empty) 0 s_in))))) _rhs42))
+      ((let _rhs38 (App (map-empty) (Sym "map") (compose m9 cs10) C4))
+       (let _rhs39 (Lam (map-insert (map-empty) 0 s_x) (Var 0) (compose m11 cs12) C5))
+       (let _rhs40 (App (map-empty) (Sym "map") (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-image (compose m11 cs12))) s_x) _rhs39))
+       (let _rhs41 (App (map-union (map-image (map-empty)) (map-image (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-image (compose m11 cs12))) s_x))) _rhs40 (map-insert (map-empty) 0 s_in) (Var 0)))
+       (let _rhs42 (App (map-union (map-image (map-empty)) (map-image (compose m9 cs10))) _rhs38 (map-union (map-image (map-union (map-image (map-empty)) (map-image (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-image (compose m11 cs12))) s_x)))) (map-image (map-insert (map-empty) 0 s_in))) _rhs41))
+       (let _rhs43 (Lam (map-insert (map-empty) 0 s_in) (Var 0) (map-union (map-image (map-union (map-image (map-empty)) (map-image (compose m9 cs10)))) (map-image (map-union (map-image (map-union (map-image (map-empty)) (map-image (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-image (compose m11 cs12))) s_x)))) (map-image (map-insert (map-empty) 0 s_in))))) _rhs42))
        (Equated _rhs43 (compose mp32 cs35) V26)))
 
 ;; (app map (lam $0 (app f1 (app f2 (var $0)))))
-(let $p0 (App2 "app" (map-empty) (Sym "map") (map-empty) (App2 "lambda" (map-of 0 0) (Var 0) (map-of 0 0) (App2 "app" (map-empty) (Sym "f1") (map-of 0 0) (App2 "app" (map-empty) (Sym "f2") (map-of 0 0) (Var 0))))))
+(let $p0 (App (map-empty) (Sym "map") (map-empty) (Lam (map-of 0 0) (Var 0) (map-of 0 0) (App (map-empty) (Sym "f1") (map-of 0 0) (App (map-empty) (Sym "f2") (map-of 0 0) (Var 0))))))
 ;; (lam $1 (app (app map f1) (app (app map (lam $0 (app f2 (var $0)))) (var $1))))
-(let $p1 (App2 "lambda" (map-of 0 1) (Var 0) (map-of 1 1) (App2 "app" (map-empty) (App2 "app" (map-empty) (Sym "map") (map-empty) (Sym "f1")) (map-of 1 1) (App2 "app" (map-empty) (App2 "app" (map-empty) (Sym "map") (map-empty) (App2 "lambda" (map-of 0 0) (Var 0) (map-of 0 0) (App2 "app" (map-empty) (Sym "f2") (map-of 0 0) (Var 0)))) (map-of 0 1) (Var 0)))))
+(let $p1 (Lam (map-of 0 1) (Var 0) (map-of 1 1) (App (map-empty) (App (map-empty) (Sym "map") (map-empty) (Sym "f1")) (map-of 1 1) (App (map-empty) (App (map-empty) (Sym "map") (map-empty) (Lam (map-of 0 0) (Var 0) (map-of 0 0) (App (map-empty) (Sym "f2") (map-of 0 0) (Var 0)))) (map-of 0 1) (Var 0)))))
 
 (run-schedule (saturate (run slotted))
               (repeat 9 (seq (run) (saturate (run slotted)))))
@@ -909,7 +911,7 @@
 (push)
 
 ;; eta
-(rule ((= V3 (App2 "lambda" p1 (Var 0) p2 C4))
+(rule ((= V3 (Lam p1 (Var 0) p2 C4))
        (= dom5 (map-union (map-image p1) (map-image p2)))
        (= mp6 dom5)
        (= idm7 (map-image mp6))
@@ -917,7 +919,7 @@
        (= m8 (compose mp6 p2))
        (= cs9 (ClassSlots C4))
        (= cs10 (ClassSlots V3))
-       (= C4 (App2 "app" p11 C14 p12 (Var 0)))
+       (= C4 (App p11 C14 p12 (Var 0)))
        (= dom15 (map-union (map-image p11) (map-image p12)))
        (RenamesToLeader C4 sym16 C4)
        (= mp17 (find-mapping-total idm7 dom15 (compose (compose m8 cs9) sym16) (map-insert (map-empty) 0 s_x) (map-domain (compose m8 cs9)) p12))
@@ -930,7 +932,7 @@
       ((Equated V3 (compose (inverse (compose mp6 cs10)) (compose m20 cs21)) C14)))
 
 ;; let-intro
-(rule ((= V3 (App2 "app" p1 C4 p2 C5))
+(rule ((= V3 (App p1 C4 p2 C5))
        (= dom6 (map-union (map-image p1) (map-image p2)))
        (= mp7 dom6)
        (= idm8 (map-image mp7))
@@ -939,7 +941,7 @@
        (= m11 (compose mp7 p2))
        (= cs12 (ClassSlots C5))
        (= cs13 (ClassSlots V3))
-       (= C4 (App2 "lambda" p14 (Var 0) p15 C17))
+       (= C4 (Lam p14 (Var 0) p15 C17))
        (= dom18 (map-union (map-image p14) (map-image p15)))
        (RenamesToLeader C4 sym19 C4)
        (= mp20 (find-mapping-total idm8 dom18 (compose (compose m9 cs10) sym19) (map-domain (compose m9 cs10))))
@@ -948,11 +950,11 @@
        (= s_x (map-get (compose mp20 p14) 0))
        (= m23 (compose mp20 p15))
        (= cs24 (ClassSlots C17)))
-      ((let _rhs25 (App3 "let" (map-insert (map-empty) 0 s_x) (Var 0) (compose m23 cs24) C17 (compose m11 cs12) C5))
+      ((let _rhs25 (Let (map-insert (map-empty) 0 s_x) (Var 0) (compose m23 cs24) C17 (compose m11 cs12) C5))
        (Equated _rhs25 (compose mp7 cs13) V3)))
 
 ;; let-unused
-(rule ((= V4 (App3 "let" p1 (Var 0) p2 C5 p3 C6))
+(rule ((= V4 (Let p1 (Var 0) p2 C5 p3 C6))
        (= dom7 (map-union (map-image p1) (map-union (map-image p2) (map-image p3))))
        (= mp8 dom7)
        (= idm9 (map-image mp8))
@@ -966,7 +968,7 @@
       ((Equated V4 (compose (inverse (compose mp8 cs14)) (compose m10 cs11)) C5)))
 
 ;; let-var-same
-(rule ((= V4 (App3 "let" p1 (Var 0) p2 (Var 0) p3 C5))
+(rule ((= V4 (Let p1 (Var 0) p2 (Var 0) p3 C5))
        (= dom6 (map-union (map-image p1) (map-union (map-image p2) (map-image p3))))
        (= mp7 dom6)
        (= idm8 (map-image mp7))
@@ -978,7 +980,7 @@
       ((Equated V4 (compose (inverse (compose mp7 cs11)) (compose m9 cs10)) C5)))
 
 ;; let-app
-(rule ((= V4 (App3 "let" p1 (Var 0) p2 C5 p3 C6))
+(rule ((= V4 (Let p1 (Var 0) p2 C5 p3 C6))
        (= dom7 (map-union (map-image p1) (map-union (map-image p2) (map-image p3))))
        (= mp8 dom7)
        (= idm9 (map-image mp8))
@@ -988,7 +990,7 @@
        (= m12 (compose mp8 p3))
        (= cs13 (ClassSlots C6))
        (= cs14 (ClassSlots V4))
-       (= C5 (App2 "app" p15 C18 p16 C19))
+       (= C5 (App p15 C18 p16 C19))
        (= dom20 (map-union (map-image p15) (map-image p16)))
        (RenamesToLeader C5 sym21 C5)
        (= mp22 (find-mapping-total idm9 dom20 (compose (compose m10 cs11) sym21) (map-domain (compose m10 cs11))))
@@ -999,13 +1001,13 @@
        (= m27 (compose mp22 p16))
        (= cs28 (ClassSlots C19))
        (guard (or (bool-map-contains (map-image (compose m25 cs26)) s_x) (bool-map-contains (map-image (compose m27 cs28)) s_x))))
-      ((let _rhs29 (App3 "let" (map-insert (map-empty) 0 s_x) (Var 0) (compose m25 cs26) C18 (compose m12 cs13) C6))
-       (let _rhs30 (App3 "let" (map-insert (map-empty) 0 s_x) (Var 0) (compose m27 cs28) C19 (compose m12 cs13) C6))
-       (let _rhs31 (App2 "app" (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-union (map-image (compose m25 cs26)) (map-image (compose m12 cs13)))) s_x) _rhs29 (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-union (map-image (compose m27 cs28)) (map-image (compose m12 cs13)))) s_x) _rhs30))
+      ((let _rhs29 (Let (map-insert (map-empty) 0 s_x) (Var 0) (compose m25 cs26) C18 (compose m12 cs13) C6))
+       (let _rhs30 (Let (map-insert (map-empty) 0 s_x) (Var 0) (compose m27 cs28) C19 (compose m12 cs13) C6))
+       (let _rhs31 (App (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-union (map-image (compose m25 cs26)) (map-image (compose m12 cs13)))) s_x) _rhs29 (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-union (map-image (compose m27 cs28)) (map-image (compose m12 cs13)))) s_x) _rhs30))
        (Equated _rhs31 (compose mp8 cs14) V4)))
 
 ;; let-lam-diff
-(rule ((= V4 (App3 "let" p1 (Var 0) p2 C5 p3 C6))
+(rule ((= V4 (Let p1 (Var 0) p2 C5 p3 C6))
        (= dom7 (map-union (map-image p1) (map-union (map-image p2) (map-image p3))))
        (= mp8 dom7)
        (= idm9 (map-image mp8))
@@ -1015,7 +1017,7 @@
        (= m12 (compose mp8 p3))
        (= cs13 (ClassSlots C6))
        (= cs14 (ClassSlots V4))
-       (= C5 (App2 "lambda" p15 (Var 0) p16 C18))
+       (= C5 (Lam p15 (Var 0) p16 C18))
        (= dom19 (map-union (map-image p15) (map-image p16)))
        (RenamesToLeader C5 sym20 C5)
        (= mp21 (find-mapping-total idm9 dom19 (compose (compose m10 cs11) sym20) (map-domain (compose m10 cs11))))
@@ -1025,12 +1027,12 @@
        (= m24 (compose mp21 p16))
        (= cs25 (ClassSlots C18))
        (map-contains (map-image (compose m24 cs25)) s_x))
-      ((let _rhs26 (App3 "let" (map-insert (map-empty) 0 s_x) (Var 0) (compose m24 cs25) C18 (compose m12 cs13) C6))
-       (let _rhs27 (App2 "lambda" (map-insert (map-empty) 0 s_y) (Var 0) (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-union (map-image (compose m24 cs25)) (map-image (compose m12 cs13)))) s_x) _rhs26))
+      ((let _rhs26 (Let (map-insert (map-empty) 0 s_x) (Var 0) (compose m24 cs25) C18 (compose m12 cs13) C6))
+       (let _rhs27 (Lam (map-insert (map-empty) 0 s_y) (Var 0) (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-union (map-image (compose m24 cs25)) (map-image (compose m12 cs13)))) s_x) _rhs26))
        (Equated _rhs27 (compose mp8 cs14) V4)))
 
 ;; map-fusion
-(rule ((= V3 (App2 "app" p1 C4 p2 C5))
+(rule ((= V3 (App p1 C4 p2 C5))
        (= dom6 (map-union (map-image p1) (map-image p2)))
        (= mp7 dom6)
        (= idm8 (map-image mp7))
@@ -1039,7 +1041,7 @@
        (= m11 (compose mp7 p2))
        (= cs12 (ClassSlots C5))
        (= cs13 (ClassSlots V3))
-       (= C4 (App2 "app" p14 L17 p15 C18))
+       (= C4 (App p14 L17 p15 C18))
        (RenamesToLeader (Sym "map") ml19 L17)
        (= dom20 (map-union (map-image p14) (map-image p15)))
        (RenamesToLeader C4 sym21 C4)
@@ -1048,7 +1050,7 @@
        (= av24 (map-union idm8 idm23))
        (= m25 (compose mp22 p15))
        (= cs26 (ClassSlots C18))
-       (= C5 (App2 "app" p27 C30 p28 C31))
+       (= C5 (App p27 C30 p28 C31))
        (= dom32 (map-union (map-image p27) (map-image p28)))
        (RenamesToLeader C5 sym33 C5)
        (= mp34 (find-mapping-total av24 dom32 (compose (compose m11 cs12) sym33) (map-domain (compose m11 cs12))))
@@ -1058,7 +1060,7 @@
        (= cs38 (ClassSlots C30))
        (= m39 (compose mp34 p28))
        (= cs40 (ClassSlots C31))
-       (= C30 (App2 "app" p41 L44 p42 C45))
+       (= C30 (App p41 L44 p42 C45))
        (RenamesToLeader (Sym "map") ml46 L44)
        (= dom47 (map-union (map-image p41) (map-image p42)))
        (RenamesToLeader C30 sym48 C30)
@@ -1070,15 +1072,15 @@
        (= fm54 (find-mapping-total av51 (map-of 0 0) (map-empty) (map-empty)))
        (= s_fu (map-get fm54 0))
        (= av55 (map-union av51 (map-image fm54))))
-      ((let _rhs56 (App2 "app" (compose m52 cs53) C45 (map-insert (map-empty) 0 s_fu) (Var 0)))
-       (let _rhs57 (App2 "app" (compose m25 cs26) C18 (map-union (map-image (compose m52 cs53)) (map-image (map-insert (map-empty) 0 s_fu))) _rhs56))
-       (let _rhs58 (App2 "lambda" (map-insert (map-empty) 0 s_fu) (Var 0) (map-union (map-image (compose m25 cs26)) (map-image (map-union (map-image (compose m52 cs53)) (map-image (map-insert (map-empty) 0 s_fu))))) _rhs57))
-       (let _rhs59 (App2 "app" (map-empty) (Sym "map") (map-remove (map-union (map-image (map-insert (map-empty) 0 s_fu)) (map-image (map-union (map-image (compose m25 cs26)) (map-image (map-union (map-image (compose m52 cs53)) (map-image (map-insert (map-empty) 0 s_fu))))))) s_fu) _rhs58))
-       (let _rhs60 (App2 "app" (map-union (map-image (map-empty)) (map-image (map-remove (map-union (map-image (map-insert (map-empty) 0 s_fu)) (map-image (map-union (map-image (compose m25 cs26)) (map-image (map-union (map-image (compose m52 cs53)) (map-image (map-insert (map-empty) 0 s_fu))))))) s_fu))) _rhs59 (compose m39 cs40) C31))
+      ((let _rhs56 (App (compose m52 cs53) C45 (map-insert (map-empty) 0 s_fu) (Var 0)))
+       (let _rhs57 (App (compose m25 cs26) C18 (map-union (map-image (compose m52 cs53)) (map-image (map-insert (map-empty) 0 s_fu))) _rhs56))
+       (let _rhs58 (Lam (map-insert (map-empty) 0 s_fu) (Var 0) (map-union (map-image (compose m25 cs26)) (map-image (map-union (map-image (compose m52 cs53)) (map-image (map-insert (map-empty) 0 s_fu))))) _rhs57))
+       (let _rhs59 (App (map-empty) (Sym "map") (map-remove (map-union (map-image (map-insert (map-empty) 0 s_fu)) (map-image (map-union (map-image (compose m25 cs26)) (map-image (map-union (map-image (compose m52 cs53)) (map-image (map-insert (map-empty) 0 s_fu))))))) s_fu) _rhs58))
+       (let _rhs60 (App (map-union (map-image (map-empty)) (map-image (map-remove (map-union (map-image (map-insert (map-empty) 0 s_fu)) (map-image (map-union (map-image (compose m25 cs26)) (map-image (map-union (map-image (compose m52 cs53)) (map-image (map-insert (map-empty) 0 s_fu))))))) s_fu))) _rhs59 (compose m39 cs40) C31))
        (Equated _rhs60 (compose mp7 cs13) V3)))
 
 ;; map-fission
-(rule ((= V3 (App2 "app" p1 L4 p2 C5))
+(rule ((= V3 (App p1 L4 p2 C5))
        (RenamesToLeader (Sym "map") ml6 L4)
        (= dom7 (map-union (map-image p1) (map-image p2)))
        (= mp8 dom7)
@@ -1086,7 +1088,7 @@
        (= m10 (compose mp8 p2))
        (= cs11 (ClassSlots C5))
        (= cs12 (ClassSlots V3))
-       (= C5 (App2 "lambda" p13 (Var 0) p14 C16))
+       (= C5 (Lam p13 (Var 0) p14 C16))
        (= dom17 (map-union (map-image p13) (map-image p14)))
        (RenamesToLeader C5 sym18 C5)
        (= mp19 (find-mapping-total idm9 dom17 (compose (compose m10 cs11) sym18) (map-domain (compose m10 cs11))))
@@ -1095,7 +1097,7 @@
        (= s_x (map-get (compose mp19 p13) 0))
        (= m22 (compose mp19 p14))
        (= cs23 (ClassSlots C16))
-       (= C16 (App2 "app" p24 C27 p25 C28))
+       (= C16 (App p24 C27 p25 C28))
        (= dom29 (map-union (map-image p24) (map-image p25)))
        (RenamesToLeader C16 sym30 C16)
        (= mp31 (find-mapping-total av21 dom29 (compose (compose m22 cs23) sym30) (map-domain (compose m22 cs23))))
@@ -1109,18 +1111,18 @@
        (= s_in (map-get fm38 0))
        (= av39 (map-union av33 (map-image fm38)))
        (map-not-contains (map-image (compose m34 cs35)) s_x))
-      ((let _rhs40 (App2 "app" (map-empty) (Sym "map") (compose m34 cs35) C27))
-       (let _rhs41 (App2 "lambda" (map-insert (map-empty) 0 s_x) (Var 0) (compose m36 cs37) C28))
-       (let _rhs42 (App2 "app" (map-empty) (Sym "map") (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-image (compose m36 cs37))) s_x) _rhs41))
-       (let _rhs43 (App2 "app" (map-union (map-image (map-empty)) (map-image (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-image (compose m36 cs37))) s_x))) _rhs42 (map-insert (map-empty) 0 s_in) (Var 0)))
-       (let _rhs44 (App2 "app" (map-union (map-image (map-empty)) (map-image (compose m34 cs35))) _rhs40 (map-union (map-image (map-union (map-image (map-empty)) (map-image (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-image (compose m36 cs37))) s_x)))) (map-image (map-insert (map-empty) 0 s_in))) _rhs43))
-       (let _rhs45 (App2 "lambda" (map-insert (map-empty) 0 s_in) (Var 0) (map-union (map-image (map-union (map-image (map-empty)) (map-image (compose m34 cs35)))) (map-image (map-union (map-image (map-union (map-image (map-empty)) (map-image (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-image (compose m36 cs37))) s_x)))) (map-image (map-insert (map-empty) 0 s_in))))) _rhs44))
+      ((let _rhs40 (App (map-empty) (Sym "map") (compose m34 cs35) C27))
+       (let _rhs41 (Lam (map-insert (map-empty) 0 s_x) (Var 0) (compose m36 cs37) C28))
+       (let _rhs42 (App (map-empty) (Sym "map") (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-image (compose m36 cs37))) s_x) _rhs41))
+       (let _rhs43 (App (map-union (map-image (map-empty)) (map-image (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-image (compose m36 cs37))) s_x))) _rhs42 (map-insert (map-empty) 0 s_in) (Var 0)))
+       (let _rhs44 (App (map-union (map-image (map-empty)) (map-image (compose m34 cs35))) _rhs40 (map-union (map-image (map-union (map-image (map-empty)) (map-image (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-image (compose m36 cs37))) s_x)))) (map-image (map-insert (map-empty) 0 s_in))) _rhs43))
+       (let _rhs45 (Lam (map-insert (map-empty) 0 s_in) (Var 0) (map-union (map-image (map-union (map-image (map-empty)) (map-image (compose m34 cs35)))) (map-image (map-union (map-image (map-union (map-image (map-empty)) (map-image (map-remove (map-union (map-image (map-insert (map-empty) 0 s_x)) (map-image (compose m36 cs37))) s_x)))) (map-image (map-insert (map-empty) 0 s_in))))) _rhs44))
        (Equated _rhs45 (compose mp8 cs12) V3)))
 
 ;; (app (app map (lam $30 (app f2 (app f1 (var $30))))) arr)
-(let $p0 (App2 "app" (map-empty) (App2 "app" (map-empty) (Sym "map") (map-empty) (App2 "lambda" (map-of 0 30) (Var 0) (map-of 30 30) (App2 "app" (map-empty) (Sym "f2") (map-of 30 30) (App2 "app" (map-empty) (Sym "f1") (map-of 0 30) (Var 0))))) (map-empty) (Sym "arr")))
+(let $p0 (App (map-empty) (App (map-empty) (Sym "map") (map-empty) (Lam (map-of 0 30) (Var 0) (map-of 30 30) (App (map-empty) (Sym "f2") (map-of 30 30) (App (map-empty) (Sym "f1") (map-of 0 30) (Var 0))))) (map-empty) (Sym "arr")))
 ;; (app (app map (lam $30 (app f2 (var $30)))) (app (app map (lam $30 (app f1 (var $30)))) arr))
-(let $p1 (App2 "app" (map-empty) (App2 "app" (map-empty) (Sym "map") (map-empty) (App2 "lambda" (map-of 0 30) (Var 0) (map-of 30 30) (App2 "app" (map-empty) (Sym "f2") (map-of 0 30) (Var 0)))) (map-empty) (App2 "app" (map-empty) (App2 "app" (map-empty) (Sym "map") (map-empty) (App2 "lambda" (map-of 0 30) (Var 0) (map-of 30 30) (App2 "app" (map-empty) (Sym "f1") (map-of 0 30) (Var 0)))) (map-empty) (Sym "arr"))))
+(let $p1 (App (map-empty) (App (map-empty) (Sym "map") (map-empty) (Lam (map-of 0 30) (Var 0) (map-of 30 30) (App (map-empty) (Sym "f2") (map-of 0 30) (Var 0)))) (map-empty) (App (map-empty) (App (map-empty) (Sym "map") (map-empty) (Lam (map-of 0 30) (Var 0) (map-of 30 30) (App (map-empty) (Sym "f1") (map-of 0 30) (Var 0)))) (map-empty) (Sym "arr"))))
 
 (run-schedule (saturate (run slotted))
               (repeat 30 (seq (run) (saturate (run slotted)))))
