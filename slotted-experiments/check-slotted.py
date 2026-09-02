@@ -32,6 +32,7 @@ GENERATED = {
     "tests/slotted-node-rules.egg": ("slotted-experiments/gen-node-rules.py",),
     "tests/slotted-lang-lambda.egg": ("slotted-experiments/gen-node-rules.py",),
     "tests/slotted-lang-sdql.egg": ("slotted-experiments/gen-node-rules.py",),
+    "tests/slotted-lang-toy.egg": ("slotted-experiments/gen-node-rules.py",),
     "tests/slotted-sdql-rules.egg": ("slotted-experiments/gen-sdql-rules.py",),
     "tests/slotted-array-rules.egg": ("slotted-experiments/xdiff/xarray.py", "egg"),
 }

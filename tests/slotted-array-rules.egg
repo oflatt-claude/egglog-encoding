@@ -1147,8 +1147,8 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
 
-(let $B (App2 "app" (map-empty) (Sym "f1") (map-of 0 0) (Var 0)))
-(let $L (App3 "let" (map-of 0 0) (Var 0) (map-of 0 0) $B (map-of 0 0) (Var 0)))
+(let $B (App (map-empty) (Sym "f1") (map-of 0 0) (Var 0)))
+(let $L (Let (map-of 0 0) (Var 0) (map-of 0 0) $B (map-of 0 0) (Var 0)))
 (run-schedule (saturate (run slotted)))
 
 ;; the value's occurrence keeps the slot free, so the class has exactly one
@@ -1157,8 +1157,8 @@
 
 ;; and the two applications below stay apart, as they do in the reference
 ;; the edge to $L must cover its slot now that it has one
-(let $a0 (App2 "app" (map-of 0 0) $L (map-of 0 0) (Var 0)))
-(let $a1 (App2 "app" (map-of 0 0) $L (map-of 0 1) (Var 0)))
+(let $a0 (App (map-of 0 0) $L (map-of 0 0) (Var 0)))
+(let $a1 (App (map-of 0 0) $L (map-of 0 1) (Var 0)))
 (run-schedule (saturate (run slotted)))
 (fail (check (RenamesToLeader $a0 m1 l) (RenamesToLeader $a1 m2 l)))
 

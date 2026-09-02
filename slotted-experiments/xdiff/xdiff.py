@@ -33,9 +33,9 @@ sys.path.insert(0, str(ROOT / "slotted-experiments"))
 slotenc = __import__("slotted-encoder")
 EGGLOG = ROOT / "target" / "debug" / "egglog"
 XMULTI = ROOT / "slotted-experiments" / "xmulti"
-MACHINERY = "tests/slotted-node-rules.egg"
+MACHINERY = "tests/slotted-lang-toy.egg"
 
-BINOPS = ["f", "g", "h", "k", "sub", "sub2", "add"]
+BINOPS = ["add", "f", "g", "h", "k", "sub", "sub2"]
 
 # Permutations tried per case in the order-independence check. Each costs a full
 # saturation on both sides, so this is the main knob on runtime.
@@ -66,17 +66,17 @@ LAM_PROB = float(os.environ.get("XDIFF_LAM", "0.2"))
 # ---------------------------------------------------------------- neutral terms
 # term := ('var', n) | ('null',) | (op, t1, t2) | ('lam', ('var', n), body)
 #
-# The toy language IS the generic, string-headed encoding: every operator is a head
-# string in `App2`'s payload column, and `lam` is the `lambda` that encoding already
-# declares a binder -- which is what `string_headed` reads off `GENERIC_BINDERS`, so
-# this cannot disagree with the rules generated for it. The machinery's rule names
-# the literal string "lambda", so the binder is spelled differently on each side.
-LANG = slotenc.TermLang(
-    {
-        **{op: slotenc.string_headed(op, "App2") for op in BINOPS},
-        "lam": slotenc.string_headed("lambda", "App2", ref="lam"),
-        "null": slotenc.Op("null", "Null", ref="null"),
-    }
+# The language is `slotted-experiments/languages/toy.egg`, one constructor per
+# operator, with `toy.ref` beside it saying what the reference calls each one. Nothing
+# here restates a signature or a binder column: `Lam` binds its column 0 because that
+# file's `:binder` says so, so this cannot disagree with the rules generated for it.
+LANG_DIR = ROOT / "slotted-experiments" / "languages"
+LANG = slotenc.language(LANG_DIR / "toy.egg", LANG_DIR / "toy.ref")
+
+# `BINOPS` is what generated terms are built from, so it must be every operator that
+# takes two children and binds neither -- read off the language rather than restated.
+assert sorted(op for op, o in LANG.ops.items() if len(o.kid_cols) == 2 and not o.binders) == BINOPS, (
+    f"BINOPS and toy.egg disagree: {BINOPS}"
 )
 
 slots, enc, sexpr, shift_term = LANG.slots, LANG.enc, LANG.sexpr, LANG.shift

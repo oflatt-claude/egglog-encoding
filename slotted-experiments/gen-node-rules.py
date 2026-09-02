@@ -37,6 +37,7 @@ enc = __import__("slotted-encoder")
 # for `HANDWRITTEN` and `handwritten_region()`.
 CHILD, BINDER = enc.CHILD, enc.BINDER
 GENERIC, GENERIC_BINDERS, HANDWRITTEN = enc.GENERIC, enc.GENERIC_BINDERS, enc.HANDWRITTEN
+CORE = enc.CORE
 MACHINERY, GENERIC_FILE = enc.MACHINERY, enc.GENERIC_FILE
 read_language, emit = enc.read_language, enc.emit
 handwritten_region = enc.handwritten_region
@@ -61,11 +62,16 @@ def main():
     )
     print(f"wrote {generic} ({len(GENERIC)} constructors, string-headed)")
 
+    # A language file includes the hand-written half DIRECTLY, not the generic
+    # encoding: none of them uses a string-headed `App<n>`, so including it would
+    # declare a whole constructor family none of their rules can name. `CORE` is what
+    # the hand-written half does provide -- `Var` and `Null` -- so a language may
+    # still declare those for the record.
     for lang, spec in LANGUAGES.items():
         p = pathlib.Path(f"tests/slotted-lang-{lang}.egg")
         body = (
             enc.MACHINERY_HEADER + f";;;\n;;; Language: {lang}\n\n"
-            f'(include "{GENERIC_FILE}")\n\n' + "\n".join(emit(spec, provided=GENERIC))
+            f'(include "{MACHINERY}")\n\n' + "\n".join(emit(spec, provided=CORE))
         )
         p.write_text(enc.in_slotted_ruleset(body))
         print(f"wrote {p} ({len(spec)} constructors, one per operator)")

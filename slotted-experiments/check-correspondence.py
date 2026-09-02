@@ -73,10 +73,11 @@ def main():
         if missing:
             bad.append(ref.name)
 
-    print(f"\n{'OK: ' if not bad else 'FAIL: '}"
-          f"{len(list(LANG_DIR.glob('*.ref'))) - len(bad)}/{len(list(LANG_DIR.glob('*.ref')))}"
-          " correspondence files agree with the oracle"
-          + (f"   FAILED: {', '.join(bad)}" if bad else ""))
+    print(
+        f"\n{'OK: ' if not bad else 'FAIL: '}"
+        f"{len(list(LANG_DIR.glob('*.ref'))) - len(bad)}/{len(list(LANG_DIR.glob('*.ref')))}"
+        " correspondence files agree with the oracle" + (f"   FAILED: {', '.join(bad)}" if bad else "")
+    )
     return 1 if bad else 0
 
 

@@ -203,6 +203,13 @@ GENERIC_BINDERS = (("lambda", "App2"), ("let", "App3"))
 # `handwritten_region()` below.
 HANDWRITTEN = ("App2",)
 
+# The two constructors `tests/slotted-egraph-encoding-11.egg` declares and writes the
+# rules for itself, because both are constructor-independent: `Var` is normalised into
+# a renaming so one value stands for every variable, and `Null` is the nullary object.
+# A language file may declare either for the record -- so that it names every
+# constructor a program in it can contain -- and its rules are already there.
+CORE = {"Var": ["i64"], "Null": []}
+
 # The hand-written half, and the generated file that includes it. A language file
 # includes the generated one, so it gets both.
 MACHINERY = "tests/slotted-egraph-encoding-11.egg"
@@ -478,9 +485,9 @@ def emit(language, binders=(), provided=None, omit=()):
     operator is a payload rather than the constructor. A `BINDER` column declares
     one structurally and needs no entry.
 
-    `provided` names constructors the generic encoding already declares. A language
-    file includes that encoding, so re-declaring one is a duplicate binding; its
-    signature must match, and then its rules are already there too.
+    `provided` names constructors the machinery a language file includes already
+    declares -- `GENERIC` and `CORE`. Re-declaring one is a duplicate binding, so its
+    signature must match and then its rules are already there too.
 
     `omit` names constructors written out by hand in the file this output includes,
     so emitting them would be a duplicate binding too. Binders over them are left
@@ -495,8 +502,10 @@ def emit(language, binders=(), provided=None, omit=()):
             continue
         if provided and name in provided:
             if provided[name] != sig:
-                raise SystemExit(f"{name} clashes with the generic encoding at a different signature")
-            out += banner(f"{name} :: {' '.join(shape_of(c) for c in sig)} -- declared by the generic encoding")
+                raise SystemExit(f"{name} clashes with the machinery at a different signature")
+            out += banner(
+                f"{name} :: {' '.join(shape_of(c) for c in sig)} -- declared by the machinery this file includes"
+            )
             continue
         _, edges, kids, _ = cols_of(sig)
         out += banner(f"{name} :: {' '.join(shape_of(c) for c in sig)}")

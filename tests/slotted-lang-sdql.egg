@@ -14,7 +14,7 @@
 ;;;
 ;;; Language: sdql
 
-(include "tests/slotted-node-rules.egg")
+(include "tests/slotted-egraph-encoding-11.egg")
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Lambda :: binder child
@@ -1465,8 +1465,19 @@
        (delete (Let m1 c1 m2 c2 m3 c3))) :ruleset slotted)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Num :: i64 -- declared by the generic encoding
+;;; Num :: i64
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(constructor Num (i64) U)
+
+;; an upper bound on the class's slots; the merge narrows it
+(rule ((= e1 (Num p1)))
+      ((set (ClassSlots e1) (map-empty))) :ruleset slotted)
+
+;; every class holding a node has a self-loop, so a query can reach it
+(rule ((= e1 (Num p1))
+       (= m (map-empty)))
+      ((RenamesToLeader e1 m e1)) :ruleset slotted)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Symbol :: String

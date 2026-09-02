@@ -337,28 +337,30 @@ def build_encoding_graph(doc):
 
 
 # ------------------------------------------------------- the encoding's own ops
-#: The node constructors to read, mapped to what the reference calls each. `None`
-#: means the constructor is payload-headed -- the generic encoding's `App2 "app"` --
-#: so a row names itself by its payload, which is already the reference's tag.
-NODE_OPS = {"App2": None, "App3": None, "App4": None, "Num": None, "Sym": None, "Scale": None}
-
-#: A row's name mapped to what the reference calls it, for the BINDER operators. A
-#: binder's bound slot rides in child column 0 as an edge to the var class, where the
-#: reference has a `Bind`, i.e. a slot literal in that position.
-ENC_BINDERS = {"lambda": "lam", "let": "let"}
+#: The node constructors to read, mapped to what the reference calls each, and the
+#: BINDER rows mapped to the same. Both are read off a language rather than written
+#: here, so there is no list of constructor names to go stale. A binder's bound slot
+#: rides in child column 0 as an edge to the var class, where the reference has a
+#: `Bind`, i.e. a slot literal in that position.
+NODE_OPS: dict = {}
+ENC_BINDERS: dict = {}
 
 
 def use_language(lang):
     """Read the two tables above off a `TermLang`.
 
-    The defaults are the generic string-headed encoding, which the toy corpus uses. A
-    per-constructor language names a row by its CONSTRUCTOR and the reference names it
-    by its own tag, so the tag has to become the row's name for the two to line up --
-    which is what a `None` entry cannot express and a tag entry does.
+    A `None` in `NODE_OPS` marks a payload-headed constructor -- the generic
+    encoding's `App2 "app"` -- whose rows name themselves by their payload, which is
+    already the reference's tag. A per-constructor language names a row by its
+    CONSTRUCTOR while the reference names it by its own tag, so there the tag has to
+    become the row's name for the two to line up.
     """
     global NODE_OPS, ENC_BINDERS
     NODE_OPS = {op.ctor: op.ref for op in lang.ops.values()}
     ENC_BINDERS = {op.ref or op.ctor: op.ref for op in lang.ops.values() if op.binders}
+
+
+use_language(X.LANG)  # the toy language; `xarray.py` passes its own
 
 
 def to_reference_shape(g, var_class=None):
