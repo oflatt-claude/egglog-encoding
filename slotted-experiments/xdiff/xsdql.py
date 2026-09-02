@@ -236,6 +236,8 @@ RULES = {
     "unique-app1": Rule("unique-app1", "(unique ?a)", "(apply uniquef ?a)"),
     "get-range": Rule("get-range", "(get (range ?st ?en) ?idx)", "(+ ?idx (- ?st 1))"),
     "let-binop3": Rule("let-binop3", "(let ?e1 $x (binop ?f ?e2 ?e3))", "(binop ?f (let ?e1 $x ?e2) (let ?e1 $x ?e3))"),
+    # `$x` for two SIBLING binders -- see the two recorded divergences below
+    "let-binop4": Rule("let-binop4", "(binop ?f (let ?e1 $x ?e2) (let ?e1 $x ?e3))", "(let ?e1 $x (binop ?f ?e2 ?e3))"),
     "sum-sing": Rule("sum-sing", "(sum ?e1 $k $v (sing (var $k) (var $v)))", "?e1"),
     "sum-fact-inv-1": Rule("sum-fact-inv-1", "(* ?e1 (sum ?R $k $v ?e2))", "(sum ?R $k $v (* ?e1 ?e2))"),
     "sum-merge": Rule(
@@ -284,7 +286,7 @@ def egg_rule(name):
 
 # ---------------------------------------------------------------------- the cases
 class Case:
-    def __init__(self, name, rule, terms, probes, want, rounds=3):
+    def __init__(self, name, rule, terms, probes, want, rounds=3, ref_want=None, why=None):
         self.name = name
         self.rule = rule
         self.terms = list(terms)
@@ -293,6 +295,13 @@ class Case:
         # collapsed or empty answer still fails
         self.want = want
         self.rounds = rounds
+        # A RECORDED DIVERGENCE: the reference is expected to answer `ref_want`
+        # while the encoding answers `want`, for the reason in `why`. Both sides
+        # are pinned, so either one moving is still a failure -- this documents a
+        # known difference, it does not stop comparing.
+        self.ref_want = ref_want
+        self.why = why
+        assert (ref_want is None) == (why is None), "a divergence needs its reason"
         for t in self.terms + self.probes:
             check_term(t)
 
@@ -312,6 +321,8 @@ class Case:
             [shift(t, k) for t in self.probes],
             self.want,
             self.rounds,
+            self.ref_want,
+            self.why,
         )
 
 
@@ -414,15 +425,18 @@ def check_case(case, shift_check=True):
         return [f"{case.name}: reference crashed: {rv}"]
     if es != "OK":
         return fails + [f"{case.name}: encoding crashed: {ev}"]
-    if rv != ev:
+    recorded = case.ref_want is not None
+    if rv != ev and not (recorded and rv == case.ref_want and ev == case.want):
         fails.append(f"{case.name}: MISMATCH vs reference\n    ref {rv}\n    enc {ev}")
-    if case.want is not None and rv != case.want and not fails:
+    if recorded and rv == ev:
+        fails.append(f"{case.name}: the recorded divergence is GONE -- both sides now say {rv}")
+    if case.want is not None and ev != case.want and not fails:
         fails.append(
-            f"{case.name}: both sides agree, but not on the expected partition\n    want {case.want}\n    got  {rv}"
+            f"{case.name}: the encoding agrees, but not on the expected partition\n    want {case.want}\n    got  {ev}"
         )
     # A case whose rule never changed the partition compared the machinery, not the
     # rule -- and a "blocked" case that changed it never blocked anything.
-    fired = rv != baseline
+    fired = ev != baseline
     if not fails and (case.want == FIRED) != fired:
         fails.append(
             f"{case.name}: the rule "
@@ -452,7 +466,8 @@ def check_case(case, shift_check=True):
         if ys == "OK" and yv != ev:
             fails.append(f"{case.name}: ENCODING not slot-renaming invariant\n    {ev}\n    {yv}")
     if not fails:
-        print(f"  ok  {case.name:<24} {'fired' if fired else 'NO-OP':<6} {rv}")
+        tag = f"  DIVERGES, ref {rv}" if recorded else ""
+        print(f"  ok  {case.name:<24} {'fired' if fired else 'NO-OP':<6} {ev}{tag}")
     return fails
 
 
@@ -588,6 +603,57 @@ def cases():
                 ("binop", ("sym", "add"), ("let", V(1), 2, V(2)), ("let", V(1), 2, V(3))),
             ],
             FIRED,
+        )
+    )
+
+    # --- `let-binop4`: `$x` written for two SIBLING binders. Two RECORDED
+    # DIVERGENCES: the reference does not fire, the encoding does.
+    #
+    # The reference's nested matcher gives each `let` node's bound slot its own
+    # fresh name and then cannot match the pattern's single `$x` against both, so
+    # it reports no match. Its own `tests/multipat/known_bugs.rs` documents this as
+    # `lambda::redundancy_matching_bug` and says a flattener "would need to reject or
+    # rename patterns that reuse a bound slot outside its binder" -- adding that no
+    # rule in that repo has the shape, which `let_binop4` in its own `benches/sdql.rs`
+    # contradicts. Flattening asks the weaker, and here the intended, question: two
+    # `let`s whose bound slots are IDENTIFIED, which is the only reading that means
+    # anything when a binder is alpha-renameable.
+    #
+    # The encoding's answer is sound, which is the second case's job to show.
+    out.append(
+        Case(
+            "let-binop4-fires",
+            RULES["let-binop4"],
+            [("binop", ("sym", "mult"), ("let", V(1), 2, V(2)), ("let", V(1), 2, V(1)))],
+            [
+                ("binop", ("sym", "mult"), ("let", V(1), 2, V(2)), ("let", V(1), 2, V(1))),
+                ("let", V(1), 2, ("binop", ("sym", "mult"), V(2), V(1))),
+                ("let", V(1), 2, ("binop", ("sym", "add"), V(2), V(1))),
+            ],
+            FIRED,
+            ref_want=BLOCKED,
+            why="the nested matcher cannot unify one $x with two freshened binder slots",
+        )
+    )
+    # The capture case: the FIRST `let` binds $2 and the SECOND one's body has $2
+    # FREE. Identifying the two binders on the name $2 would capture it and give
+    # `mult (var $1) (var $1)`; a name free in neither body is sound. Probe 1 is the
+    # sound answer and probe 2 is the captured one, so the partition says which the
+    # encoding picked -- and it picks the sound one, because the minted binder avoids
+    # the accumulated slots.
+    out.append(
+        Case(
+            "let-binop4-no-capture",
+            RULES["let-binop4"],
+            [("binop", ("sym", "mult"), ("let", V(1), 2, V(2)), ("let", V(1), 3, V(2)))],
+            [
+                ("binop", ("sym", "mult"), ("let", V(1), 2, V(2)), ("let", V(1), 3, V(2))),
+                ("let", V(1), 9, ("binop", ("sym", "mult"), V(9), V(2))),
+                ("let", V(1), 2, ("binop", ("sym", "mult"), V(2), V(2))),
+            ],
+            FIRED,
+            ref_want=BLOCKED,
+            why="same divergence; here the encoding must also avoid capturing the free $2",
         )
     )
 

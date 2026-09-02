@@ -143,7 +143,7 @@ CHECKS = [
         False,
     ),
     ("array-iso", ("slotted-experiments/xdiff/xarray.py", "iso"), ratio(r"(\d+)/(\d+) isomorphic", 15), False),
-    ("sdql", ("slotted-experiments/xdiff/xsdql.py",), ratio(r"(\d+)/(\d+) cases agree", 16), False),
+    ("sdql", ("slotted-experiments/xdiff/xsdql.py",), ratio(r"(\d+)/(\d+) cases agree", 18), False),
     (
         "iso-fuzz",
         ("slotted-experiments/xdiff/isomorphism.py", "fuzz", "60"),
