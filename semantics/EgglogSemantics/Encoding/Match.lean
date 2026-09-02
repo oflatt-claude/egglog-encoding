@@ -1137,6 +1137,27 @@ its variables are the query's or globals).
 `hval` is what the target wrote, read off the encoder: `encodeBuild`'s naming expression *is*
 `.app f args` (`encodeBuild_fst`), so the value column is that expression evaluated in the
 target and the key is its arguments'. -/
+theorem entrySound_headBuild_post {src src' tgt : Database} (hw : src'.WF)
+    (hb : src.TermsBuild) (hs : tgt.ViewsSound src) (hd : tgt.Diag)
+    (hsc : ∀ t ∈ tgt.terms, t.subterms ⊆ tgt.terms) {q : Query} {n : Nat} {σ : Env}
+    (hglob : src.GlobalsAgree (tgt.env ++ σ)) (hnv : ∀ p ∈ q, p.NoValues)
+    (hgr : ∀ p ∈ q, p.Grounded) (hk : Query.VarsKeyed q)
+    (hmatch : ValidQuerySubst tgt (encodeQuery q n).1 σ)
+    {f : FnName} {args : List Expr} {is : List Term} {m : Nat}
+    (hctor : ∀ g ∈ (Expr.app f args).fns, tgt.sig.IsCtor g → src.sig.IsCtor g)
+    (hvars : ∀ v ∈ (Expr.app f args).vars, v ∈ Query.vars q ∨ (Env.lookup v src.env).isSome)
+    (hval : (encodeBuild (.app f args) m).1.eval tgt.sig (tgt.env ++ σ) = some (.app f is))
+    (hfired : ∀ τ, ValidQuerySubst src q τ →
+      (Expr.app f args).eval src.sig (src.env ++ τ) = some (.app f is) →
+      Term.app f is ∈ src'.terms) :
+    EntrySound src' f is (.app f is) := by
+  rw [encodeBuild_fst] at hval
+  have hread := patternReads_of_encodeQuery hd hsc hnv hk hmatch
+  obtain ⟨τ, hv, hτ⟩ := exists_validQuerySubst_at_ids hb hs hglob hgr hk hread
+  exact entrySound_build hw (hfired τ hv (Expr.eval_transport _ hctor
+    (fun v hvv => lookup_eq_of_at_ids hs hglob hk hread hτ (hvars v hvv)) hval))
+
+@[inherit_doc entrySound_headBuild_post]
 theorem entrySound_headBuild {src tgt : Database} (hw : src.WF) (hb : src.TermsBuild)
     (hs : tgt.ViewsSound src) (hd : tgt.Diag)
     (hsc : ∀ t ∈ tgt.terms, t.subterms ⊆ tgt.terms) {q : Query} {n : Nat} {σ : Env}
@@ -1150,19 +1171,16 @@ theorem entrySound_headBuild {src tgt : Database} (hw : src.WF) (hb : src.TermsB
     (hfired : ∀ τ, ValidQuerySubst src q τ →
       (Expr.app f args).eval src.sig (src.env ++ τ) = some (.app f is) →
       Term.app f is ∈ src.terms) :
-    EntrySound src f is (.app f is) := by
-  rw [encodeBuild_fst] at hval
-  have hread := patternReads_of_encodeQuery hd hsc hnv hk hmatch
-  obtain ⟨τ, hv, hτ⟩ := exists_validQuerySubst_at_ids hb hs hglob hgr hk hread
-  exact entrySound_build hw (hfired τ hv (Expr.eval_transport _ hctor
-    (fun v hvv => lookup_eq_of_at_ids hs hglob hk hread hτ (hvars v hvv)) hval))
+    EntrySound src f is (.app f is) :=
+  entrySound_headBuild_post hw hb hs hd hsc hglob hnv hgr hk hmatch hctor hvars hval hfired
 
 /-- **And a rule head's `union` writes a sound edge.** The `Database.EdgesSound` counterpart:
 `encodeAction` writes `@UF (ordering-max x₁ x₂) ↦ (ordering-min x₁ x₂, pf)` over the two
 operands' naming expressions, which are the operands themselves, so the pair the edge relates
 is the pair the source's own `union` asserted. `ho` absorbs whichever order `ordering-max`
 picked, as `cong_of_eqs` does for a top-level `union`. -/
-theorem cong_headUnion {src tgt : Database} (hb : src.TermsBuild) (hs : tgt.ViewsSound src)
+theorem cong_headUnion_post {src src' tgt : Database} (hb : src.TermsBuild)
+    (hs : tgt.ViewsSound src)
     (hd : tgt.Diag) (hsc : ∀ t ∈ tgt.terms, t.subterms ⊆ tgt.terms) {q : Query} {n : Nat}
     {σ : Env} (hglob : src.GlobalsAgree (tgt.env ++ σ)) (hnv : ∀ p ∈ q, p.NoValues)
     (hgr : ∀ p ∈ q, p.Grounded) (hk : Query.VarsKeyed q)
@@ -1173,8 +1191,8 @@ theorem cong_headUnion {src tgt : Database} (hb : src.TermsBuild) (hs : tgt.View
     (hv₁ : (encodeBuild e₁ m₁).1.eval tgt.sig (tgt.env ++ σ) = some t₁)
     (hv₂ : (encodeBuild e₂ m₂).1.eval tgt.sig (tgt.env ++ σ) = some t₂)
     (hfired : ∀ τ, ValidQuerySubst src q τ → e₁.eval src.sig (src.env ++ τ) = some t₁ →
-      e₂.eval src.sig (src.env ++ τ) = some t₂ → (t₁, t₂) ∈ src.eqs)
-    {t p : Term} (ho : (t = t₁ ∧ p = t₂) ∨ (t = t₂ ∧ p = t₁)) : Cong src t p := by
+      e₂.eval src.sig (src.env ++ τ) = some t₂ → (t₁, t₂) ∈ src'.eqs)
+    {t p : Term} (ho : (t = t₁ ∧ p = t₂) ∨ (t = t₂ ∧ p = t₁)) : Cong src' t p := by
   rw [encodeBuild_fst] at hv₁
   rw [encodeBuild_fst] at hv₂
   have hread := patternReads_of_encodeQuery hd hsc hnv hk hmatch
@@ -1187,6 +1205,22 @@ theorem cong_headUnion {src tgt : Database} (hb : src.TermsBuild) (hs : tgt.View
       (fun v hvv => hlk v (by simp [hvv])) hv₁)
     (Expr.eval_transport _ (fun g hg => hctor g (by simp [hg]))
       (fun v hvv => hlk v (by simp [hvv])) hv₂)) ho
+
+@[inherit_doc cong_headUnion_post]
+theorem cong_headUnion {src tgt : Database} (hb : src.TermsBuild) (hs : tgt.ViewsSound src)
+    (hd : tgt.Diag) (hsc : ∀ t ∈ tgt.terms, t.subterms ⊆ tgt.terms) {q : Query} {n : Nat}
+    {σ : Env} (hglob : src.GlobalsAgree (tgt.env ++ σ)) (hnv : ∀ p ∈ q, p.NoValues)
+    (hgr : ∀ p ∈ q, p.Grounded) (hk : Query.VarsKeyed q)
+    (hmatch : ValidQuerySubst tgt (encodeQuery q n).1 σ)
+    {e₁ e₂ : Expr} {t₁ t₂ : Term} {m₁ m₂ : Nat}
+    (hctor : ∀ g ∈ e₁.fns ∪ e₂.fns, tgt.sig.IsCtor g → src.sig.IsCtor g)
+    (hvars : ∀ v ∈ e₁.vars ∪ e₂.vars, v ∈ Query.vars q ∨ (Env.lookup v src.env).isSome)
+    (hv₁ : (encodeBuild e₁ m₁).1.eval tgt.sig (tgt.env ++ σ) = some t₁)
+    (hv₂ : (encodeBuild e₂ m₂).1.eval tgt.sig (tgt.env ++ σ) = some t₂)
+    (hfired : ∀ τ, ValidQuerySubst src q τ → e₁.eval src.sig (src.env ++ τ) = some t₁ →
+      e₂.eval src.sig (src.env ++ τ) = some t₂ → (t₁, t₂) ∈ src.eqs)
+    {t p : Term} (ho : (t = t₁ ∧ p = t₂) ∨ (t = t₂ ∧ p = t₁)) : Cong src t p :=
+  cong_headUnion_post hb hs hd hsc hglob hnv hgr hk hmatch hctor hvars hv₁ hv₂ hfired ho
 
 /-! ### The refutation: `encodeQuery` drops a leaf pattern
 

@@ -4970,6 +4970,58 @@ theorem ncTgt_sameClass_cong : Cong ncSrc.toDatabase ncFA ncFB :=
   sameClass_cong_of_state (ncProgram_programStep.wf Database.WF.empty) ncTgt_viewsSound
     ncSrc_mem_FA (ncSrc_memD ncSrc_mem_FB) ncTgt_sameClass_FA_FB
 
+/-! #### The source's own firing, reached
+
+`hfired`'s cheap part, proved: a firing of the round's **pre**-state writes into the round's
+**post**-state. `RunRules` is a `Database.sUnion` over the rule results, so one result's
+equations are among the round's; `MergeClosure` only grows `eqs`, so the merge phase keeps
+them; and `Cmd.saturate`'s extra rounds only grow it further. Stated over both firing commands,
+since `encodeCmd` gives them the same block.
+
+What these do **not** give is that the source's block evaluates at all. `RuleResults` asks
+`evalLocalActions` for a `some`, and a stuck head is exactly the two refutations at the end of
+this file — so `evalLocalActions … = some d` is a hypothesis here, and discharging it from
+`EncodeDomain.noLitUnion` and `EncodeDomain.headCtorsDeclared` is what is left of `hfired`. -/
+
+/-- **The round's rule-firing half is contained in the round's post-state.** One `MergeClosure`
+for a `.run`; for a `.saturate`, the first round's phase and then every round after it — or,
+at zero rounds, `RunSaturated`'s own fixpoint. -/
+theorem runRules_eqs_subset_of_cmdStep {R : RulesetName} {c : Cmd} {sd sd' : Database}
+    (hc : c = Cmd.run R ∨ c = Cmd.saturate R) (hstep : CmdStep sd c sd') :
+    (RunRules R sd).eqs ⊆ sd'.eqs := by
+  rcases hc with rfl | rfl
+  · obtain ⟨e, hreach, hcl⟩ := hstep
+    have he : some (RunRules R sd) = some e := hreach
+    obtain rfl : RunRules R sd = e := Option.some.inj he
+    exact (MergeClosure.contained hcl).eqs
+  · obtain ⟨hreach, hsat⟩ := cmdStep_saturate_iff.mp hstep
+    rcases Relation.ReflTransGen.cases_head hreach with rfl | ⟨x, hstep₁, hrest⟩
+    · rw [hsat.1]
+    · exact ((MergeClosure.contained hstep₁).trans (RunReach.contained hrest)).eqs
+
+/-- **Every equation one firing asserts is one the round's post-state asserts.** -/
+theorem mem_eqs_of_ruleFired {R : RulesetName} {c : Cmd} {sd sd' d : Database} {r : Rule}
+    (hc : c = Cmd.run R ∨ c = Cmd.saturate R) (hstep : CmdStep sd c sd')
+    (hr : r ∈ sd.rules) (hrs : r.ruleset = R) {τ : Env}
+    (hv : ValidQuerySubst sd r.query τ) (hd : evalLocalActions sd r.actions τ = some d)
+    {p : Term × Term} (hp : p ∈ d.eqs) : p ∈ sd'.eqs := by
+  refine runRules_eqs_subset_of_cmdStep hc hstep ?_
+  rw [RunRules, Database.sUnion_eqs]
+  exact Or.inr (Set.mem_biUnion (show d ∈ _ from ⟨r, hr, hrs, τ, hv, hd⟩) hp)
+
+/-- **And every term one firing builds is one the round's post-state holds.** This is the shape
+`entrySound_headBuild_post` asks `hfired` for, with `src` the round's pre-state and `src'` its
+post-state — the two `FDatabase.SoundTerms.mono_src` cannot bridge, since the term is in
+neither `sd.terms` nor a clause about it. -/
+theorem mem_terms_of_ruleFired {R : RulesetName} {c : Cmd} {sd sd' d : Database} {r : Rule}
+    (hc : c = Cmd.run R ∨ c = Cmd.saturate R) (hstep : CmdStep sd c sd')
+    (hr : r ∈ sd.rules) (hrs : r.ruleset = R) {τ : Env}
+    (hv : ValidQuerySubst sd r.query τ) (hd : evalLocalActions sd r.actions τ = some d)
+    {t : Term} (ht : t ∈ d.terms) : t ∈ sd'.terms := by
+  refine Database.mem_terms_of_eqs (runRules_eqs_subset_of_cmdStep hc hstep) ?_
+  rw [RunRules, Database.sUnion_terms]
+  exact Or.inr (Set.mem_biUnion (show d ∈ _ from ⟨r, hr, hrs, τ, hv, hd⟩) ht)
+
 /-- **The residue of the completeness half. Not proved.**
 
 **It was false, twice over, and the domain now excludes both.** A source rule head that gets
@@ -5015,20 +5067,24 @@ obligation is discharged, one per writer `encode` emits — `entrySound_build`,
   delivers the substitution and nothing more; a valid substitution is therefore *not* a
   firing, and the two refutations above are exactly the gap. Three parts, in increasing
   order of cost:
-  * *A firing's writes reach the post-state.* `RunRules` is a `Database.sUnion` over the
-    results and `MergeClosure` only grows `eqs`, so a term the firing's own `evalActions`
-    recorded is one the round's post-state holds. Self-contained, and the cheap part.
+  * *A firing's writes reach the post-state.* **Proved**: `mem_terms_of_ruleFired` and
+    `mem_eqs_of_ruleFired` above, off `runRules_eqs_subset_of_cmdStep`. `RunRules` is a
+    `Database.sUnion` over the results and `MergeClosure` only grows `eqs`.
   * *Two states, not one.* `Database.ViewsSound` is available at the round's **pre**-state,
     which is the state the encoded rule read its rows off; the term the source's firing builds
     lands in the **post**-state. `FDatabase.SoundTerms.mono_src` does not bridge that — it
     moves a clause along `src.eqs ⊆ src'.eqs`, and `Term.app f is ∈ sd.terms` is not a clause
-    at `sd` at all — so `entrySound_headBuild` and `cong_headUnion` want a two-source form:
-    the reading at `sd`, the conclusion at `sd'`. A small generalisation, and a real one.
-  * *The block evaluates at all.* This is what the two new domain clauses buy, and what has
-    to be proved from them: that a source head over the substitution the correspondence
-    returns evaluates whenever the encoded head did. `Expr.eval` has exactly two failure
-    modes on a head — an undeclared name and, through `evalAction`, a `union` whose operand
-    is a literal — and a clause answers each.
+    at `sd` at all. **Done**: `entrySound_headBuild_post` and `cong_headUnion_post` are the
+    two-source forms — the reading at `sd`, the conclusion at `sd'` — and the old names are
+    their `src' := src` instances.
+  * *The block evaluates at all.* **Open, and the whole of what is left of `hfired`.** This is
+    what the two new domain clauses buy and what has to be proved from them: that a source head
+    over the substitution the correspondence returns evaluates whenever the encoded head did.
+    `Expr.eval` has exactly two failure modes on a head — an undeclared name and, through
+    `evalAction`, a `union` whose operand is a literal — and one clause answers each. What it
+    also needs, and no clause yet states, is that the head's own evaluation happens at the
+    block's *initial* environment: an earlier `letBind` in the same block extends it, and
+    `hfired` is stated at `src.env ++ τ`.
 
   It is still the mirror of `unionsJoined_fire`, a source firing behind the target's where
   that one needs a target firing behind the source's; what it is not is free.
