@@ -14,12 +14,14 @@
 ;;; well-formedness probe over arbitrary nodes.
 ;;;
 ;;; Layout: one outer (push)/(pop) per tutorial section, one inner (push)/(pop) per case, so
-;;; one case's terms never reach another's.  The tutorial's rules, by contrast, are all live
-;;; throughout -- that is what including it means.  Six of them are real rewrites and so
-;;; carry real operator names, and the overlaps are the source languages' own: `app` is in
-;;; M9's `eta` and M11's `let-app`, and the two stay out of each other's way because eta
-;;; needs a `lambda` and let-app a `let`, and neither section's terms contain the other's.
-;;; The synthetic sections spell their operators `fN`, `gN`, `hN`, `kN`.
+;;; one case's terms never reach another's.  The rules, by contrast, are all live throughout
+;;; -- the tutorial's eleven and the fixtures below -- so a case has to be built so that no
+;;; other rule can reach its terms.  All eleven tutorial rules are real rewrites and so share
+;;; the source languages' operator names: `let` is in M7, M8 and M11, `app` in M5, M6, M9 and
+;;; M11, and `+` and `-` are written by M3's action and matched by M10 and M2.  Where two
+;;; could meet, the case keeps them apart by shape -- the terms of one section do not contain
+;;; the operator the other needs -- and a section masked by another rule firing would show up
+;;; as an assertion that still passes when flipped, which is checked.
 ;;;
 ;;; A COUNTER-EXAMPLE block sits at the end of the section it justifies, and concludes for
 ;;; real too -- comparing a real conclusion against a witness would compare two different
@@ -33,6 +35,165 @@
 ;;; ever matches nodes that are already canonical.
 
 (include "tests/slotted-user-rules.egg")
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Fixtures: the shapes to build by hand.
+;;;
+;;; Every rule in the tutorial is now a real rewrite -- from `benches/sdql.rs` or
+;;; `tests/array/mod.rs` -- compiled by `slotted-encoder.py`, and
+;;; `slotted-experiments/check-tutorial.py` asserts exactly that, up to a renaming of the
+;;; variables.  What a real rule cannot do is guarantee a particular state on demand, so the
+;;; shapes below are built here instead, on plain operators `fN`/`gN`/`hN`/`kN`:
+;;;
+;;;   * a multi-rooted left-hand side -- a fresh root without choosing a
+;;;     non-default atom order, which no rewrite has (M3)
+;;;   * two ATOM mints in one match, so the accumulation shows without leaning on
+;;;     the right-hand side's mint (M5)
+;;;   * a join that enumerates TWO groups at once (M6)
+;;;   * the same composition as M7, on operators no other rule is watching
+;;;   * a CHILD wider than its class, which needs a merge and not a rule's shape (M8)
+;;;
+;;; Each is the encoder's own output for its atoms, so a fixture demonstrates the same
+;;; compilation the tutorial states -- it is the E-GRAPH that is hand-built, never the rule.
+;;; They live here and not in the tutorial because a reader learning the encoding should see
+;;; the rules people actually run.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; the M3 shape
+(rule ((= p (App2 "f3" p1 x q1 y))
+       (= dom1 (map-union (map-image p1) (map-image q1)))
+       (= mp1 dom1)
+       (= avoid1 (map-image mp1))
+       (= mx (compose mp1 p1))
+       (= csx (ClassSlots x))
+       (= my (compose mp1 q1))
+       (= csy (ClassSlots y))
+       (= csp (ClassSlots p))
+       ;; atom 2 -- its root is fresh, so `?x` is the only constraint, and `?z`'s slot is
+       ;; named by nothing.  `find-mapping-total` mints there rather than dropping it.
+       (= q (App2 "g3" p2 x q2 z))
+       (= dom2 (map-union (map-image p2) (map-image q2)))
+       (RenamesToLeader x symx x)
+       (= mp2 (find-mapping-total avoid1 dom2 (compose (compose mx csx) symx) p2))
+       (= im2 (map-image mp2))
+       (= avoid2 (map-union avoid1 im2))
+       (= mz (compose mp2 q2))
+       (= csz (ClassSlots z))
+       (= csq (ClassSlots q)))                 ; `?q`'s own narrowing; this action has no use
+      ((let rhs (App2 "h3" (compose my csy) y (compose mz csz) z))
+       (Equated rhs (compose mp1 csp) p)))
+
+;; the M5 shape
+(rule ((= p (App2 "f5" p1 a q1 b))
+       (= dom1 (map-union (map-image p1) (map-image q1)))
+       (= mp1 dom1)
+       (= avoid1 (map-image mp1))
+       (= ma (compose mp1 p1))
+       (= csa (ClassSlots a))
+       (= mb (compose mp1 q1))
+       (= csb (ClassSlots b))
+       (= csp (ClassSlots p))
+       ;; atom 2 -- chained under `?a`, and minting for whatever that leaves unnamed
+       (= a (App2 "g5" p2 u q2 u))
+       (= dom2 (map-union (map-image p2) (map-image q2)))
+       (RenamesToLeader a syma a)
+       (= mp2 (find-mapping-total avoid1 dom2 (compose (compose ma csa) syma)
+                                  (map-domain (compose ma csa))))
+       (= im2 (map-image mp2))
+       (= avoid2 (map-union avoid1 im2))       ; accumulate
+       (= mu (compose mp2 p2))
+       (= csu (ClassSlots u))
+       (RenamesToLeader u symu u)              ; Def. 6 for `?u`'s repeat, as in M2
+       (= (compose mp2 q2) (compose (compose mu csu) symu))
+       ;; atom 3 -- the same again, and it may not mint over anything atom 2 took
+       (= b (App2 "h5" p3 v q3 v))
+       (= dom3 (map-union (map-image p3) (map-image q3)))
+       (RenamesToLeader b symb b)
+       (= mp3 (find-mapping-total avoid2 dom3 (compose (compose mb csb) symb)
+                                  (map-domain (compose mb csb))))
+       (= im3 (map-image mp3))
+       (= avoid3 (map-union avoid2 im3))
+       (= mv (compose mp3 p3))
+       (= csv (ClassSlots v))
+       (RenamesToLeader v symv v)
+       (= (compose mp3 q3) (compose (compose mv csv) symv)))
+      ((let rhs (App2 "k5" (compose mu csu) u (compose mv csv) v))
+       (Equated rhs (compose mp1 csp) p)))
+
+;; the M6 shape
+(rule ((= p (App2 "f6" p1 x q1 y))
+       (= dom1 (map-union (map-image p1) (map-image q1)))
+       (= mp1 dom1)
+       (= avoid1 (map-image mp1))
+       (= mx (compose mp1 p1))
+       (= csx (ClassSlots x))
+       (= my (compose mp1 q1))
+       (= csy (ClassSlots y))
+       (= csp (ClassSlots p))
+       ;; atom 2 -- root fresh, so every shared child both constrains mp2 and contributes
+       ;; part of it, in one call
+       (= q (App2 "g6" p2 x q2 y))
+       (= dom2 (map-union (map-image p2) (map-image q2)))
+       (RenamesToLeader x symx x)
+       (RenamesToLeader y symy y)
+       (= mp2 (find-mapping-total avoid1 dom2
+                                  (compose (compose mx csx) symx)      ; firsts
+                                  (compose (compose my csy) symy)
+                                  p2 q2))                              ; seconds
+       (= im2 (map-image mp2))
+       (= avoid2 (map-union avoid1 im2))
+       (= csq (ClassSlots q)))
+      ((Equated p (compose (inverse (compose mp1 csp)) (compose mp2 csq)) q)))
+
+;; the M7 shape
+(rule ((= p (App2 "f7" p1 a q1 b))
+       (= dom1 (map-union (map-image p1) (map-image q1)))
+       (= mp1 dom1)
+       (= avoid1 (map-image mp1))
+       (= ma (compose mp1 p1))
+       (= csa (ClassSlots a))
+       (= mb (compose mp1 q1))
+       (= csb (ClassSlots b))
+       (= csp (ClassSlots p))
+       ;; atom 2 -- constrained by its root `?b`
+       (= b (App2 "g7" p2 c q2 d))
+       (= dom2 (map-union (map-image p2) (map-image q2)))
+       (RenamesToLeader b symb b)
+       (= mp2 (find-mapping-total avoid1 dom2 (compose (compose mb csb) symb)
+                                  (map-domain (compose mb csb))))
+       (= im2 (map-image mp2))
+       (= avoid2 (map-union avoid1 im2))       ; atom 3 may not mint over these
+       (= mc (compose mp2 p2))
+       (= csc (ClassSlots c))
+       (= md (compose mp2 q2))
+       (= csd (ClassSlots d))
+       ;; atom 3 -- root fresh, constrained through `?c` (depth 2) and `?a` (depth 1)
+       (= q (App2 "h7" p3 c q3 a))
+       (= dom3 (map-union (map-image p3) (map-image q3)))
+       (RenamesToLeader c symc c)
+       (RenamesToLeader a syma a)
+       (= mp3 (find-mapping-total avoid2 dom3
+                                  (compose (compose mc csc) symc)
+                                  (compose (compose ma csa) syma)
+                                  p3 q3))
+       (= im3 (map-image mp3))
+       (= avoid3 (map-union avoid2 im3))
+       (= csq (ClassSlots q)))
+      ((Equated p (compose (inverse (compose mp1 csp)) (compose mp3 csq)) q)))
+
+;; the M8 shape
+(rule ((= x3 (App2 "f8" p1 x1 q1 x2))
+       (= dom1 (map-union (map-image p1) (map-image q1)))
+       (= mp1 dom1)
+       (= avoid1 (map-image mp1))
+       (= mx1 (compose mp1 p1))
+       (= csx1 (ClassSlots x1))
+       (= mx2 (compose mp1 q1))
+       (= csx2 (ClassSlots x2))
+       (= csx3 (ClassSlots x3)))
+      ((let rhs (App2 "f8" (compose mx2 csx2) x2 (compose mx1 csx1) x1))
+       (Equated rhs (compose mx1 csx1) x1)))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

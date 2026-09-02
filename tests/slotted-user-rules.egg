@@ -39,19 +39,29 @@
 ;;; the counter-examples live -- for each construction, the spelling it rules out together
 ;;; with the e-graph that tells the two apart.
 ;;;
+;;; EVERY RULE HERE IS A REAL ONE.  All eleven are rewrites from `benches/sdql.rs` or
+;;; `tests/array/mod.rs`, and each is what `slotted-encoder.py` emits for it -- checked, not
+;;; claimed: `slotted-experiments/check-tutorial.py` compares every rule below against the
+;;; encoder's own output and allows only a renaming of the variables, which is done here for
+;;; readability.  A tutorial rule is therefore the committed generated rule without its
+;;; `:ruleset` tail.  Two sections quote the SAME rule at two atom orders (M6 and M9, both
+;;; `eta`), which is the clearest way to see that the lead is a compile-time choice.
+;;;
+;;; The shapes no rewrite produces on demand -- a multi-rooted left-hand side, two mints in
+;;; one match, a child wider than its class -- are built by hand in the tests file instead,
+;;; where the fixture block says why.  What is hand-built there is the e-graph; the rule is
+;;; still the encoder's output.
+;;;
 ;;; OPERATOR NAMES.  Every rule below is live at once, so a term built for one section can
-;;; in principle match another section's rule.  A real rule brings the real operator, so
-;;; the overlaps are the ones the source languages have: `app` is in M9 and M11, and
-;;; `(Num 0)` is written by M2 and read by M10.  `eq`, `*`, `-`, `+`, `lambda` and `let`
-;;; each occur in one section only, so what has to hold is that M9's terms contain no `let`
-;;; and M11's no `lambda`, and that neither M2's nor M10's terms contain the other's
-;;; operator -- none of them do.  Checked by flipping every assertion in the tests file, not
-;;; assumed.  The five synthetic sections take the reference's own multipattern operators
-;;; (`f`, `g`, `h`, `k` in `tests/multipat/mod.rs`) with the section number appended --
-;;; `f3`, `g5`, `h7` -- since their shapes are alike and all five are live together.  A
-;;; counter-example over in the tests file takes a further letter where it would otherwise
-;;; collide with the rule it is contrasted with -- `-a`, `f3a`, `f3b`, `*a`, `f5a`, `f6a`,
-;;; `f6b`, `f8a`, `+a` -- so that rule cannot mask it.
+;;; in principle match another's rule, and now that all eleven are real the operators are
+;;; genuinely shared: `let` is in M7, M8 and M11, `app` in M5, M6, M9 and M11, and `+` and
+;;; `-` are written by M3's action and matched by M10 and M2.  What has to hold is that no
+;;; case's terms contain the operator another section's rule needs, and a section masked by
+;;; another rule firing would show up as an assertion that still passes when flipped.
+;;; Checked by flipping all 49, not assumed.  A counter-example over in the tests file takes
+;;; a further letter where it would otherwise collide with the rule it is contrasted with --
+;;; `-a`, `f3a`, `f3b`, `*a`, `f5a`, `f6a`, `f6b`, `f8a`, `+a` -- so that rule cannot mask
+;;; it.
 ;;;
 ;;; Conventions:
 ;;;   (compose a b)           = a . b, b first, and TRUNCATES: keys b sends outside dom(a)
@@ -85,13 +95,13 @@
 ;;; harness cases covering it, and `slotted-user-rules.md` refers to these labels.
 ;;;   M1   one atom, nothing shared             sdql   eq-comm
 ;;;   M2   a repeated variable, Def. 6           sdql   sub-identity
-;;;   M3   why an atom's renaming is total       --     synthetic: a multipattern
+;;;   M3   why an atom's renaming is total     sdql   get-range, at a non-default lead
 ;;;   M4   two atoms, chained                    sdql   mult-assoc1
-;;;   M5   the avoid-set, and why it accumulates  --    synthetic: two redundant slots
-;;;   M6   two atoms, joined on a fresh root      --    synthetic: a multipattern
-;;;   M7   three atoms, the cases compose         --    synthetic: a multipattern
-;;;   M8   a variable wider than its class        --    synthetic: a redundant slot
-;;;   M9   a slot literal                        array  eta
+;;;   M5   the avoid-set, and why it accumulates array map-fission
+;;;   M6   two atoms, joined on a fresh root    array  eta, at the default lead
+;;;   M7   three atoms, the cases compose       sdql   let-binop4
+;;;   M8   a node wider than its class          array  let-var-same
+;;;   M9   a slot literal                       array  eta, at the shipped lead
 ;;;   M10  actions: concluding over renamed ids   sdql   add-zero
 ;;;   M11  a nested right-hand side              array  let-app
 ;;;
@@ -180,21 +190,23 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; M3.  Why an atom's renaming has to be TOTAL.
 ;;;
-;;;     ?p == (f3 ?x ?y),  ?q == (g3 ?x ?z)   =>   ?p = (h3 ?y ?z)
+;;;     sdql get-range:   (get (range ?st ?en) ?idx)  =>  (+ ?idx (- ?st 1))
 ;;;
-;;; SYNTHETIC, and this is the shape that has to be.  Atom 2's root `?q` is a variable no
-;;; earlier atom bound, which only a MULTIPATTERN can produce: a rewrite's left-hand side is
-;;; a single-rooted tree, so every atom but the first is a child of an earlier one and has
-;;; its root already bound.  None of the three corpora -- the array language, rise, sdql --
-;;; has a multi-rooted rule, and the reference's own multipattern suite is synthetic for the
-;;; same reason: `tests/multipat/mod.rs` declares a language of `f`, `g`, `h`, `k`, `p`, `q`
-;;; for exactly this purpose, and the operators here are its, numbered.
+;;; Two atoms, with the `range` one LEADING.  A FRESH ROOT -- an atom whose root no earlier
+;;; atom bound -- is a property of the atom ORDER, not of a multi-rooted left-hand side.
+;;; `connected_order` may start from any atom, and the atoms ABOVE the lead on the pattern's
+;;; tree then come out child-before-parent, so each of those parents has a root nothing has
+;;; bound yet.  Here that is the `get` node.  This is not a curiosity: `connected_order`'s
+;;; DEFAULT leads with the first non-binder atom, which for a binder-rooted rule is not the
+;;; tree root, so eleven of the sdql rules and both `eta` and `let-app` get a fresh root
+;;; under it.  The lead is a compile-time choice and the answer may not depend on it --
+;;; `xarray.py` varies it against the reference -- but the shipped generators pin `first=0`,
+;;; so this exact text is not in a committed generated file.
 ;;;
-;;; The smallest shape whose renamings are not determined, and the reason every atom from M4
-;;; on is solved with `find-mapping-total`.  Only `?x` is shared, so atom 2's renaming is
-;;; pinned on im(p2) and nowhere else: a slot of `?q` outside it gets NO name in
-;;; slots(pattern).  S3.6 asks for the *minimal* renaming carrying the node into pattern
-;;; slots, and a minimal one simply omits that slot.
+;;; With `get`'s root unbound, only the `range` child constrains `mp2`, and `?idx`'s slots
+;;; are named by NOTHING: they are in the node and not in im(p2).  S3.6 asks for the
+;;; *minimal* renaming carrying the node into pattern slots, and a minimal one simply omits
+;;; them.
 ;;;
 ;;; An EDGE may not omit a slot.  Def. 5 makes `dom(m) = slots(a)` the leader condition on a
 ;;; renamed id `m*a`, and Def. 7 requires every renamed id inside a shape to be a leader, so
@@ -215,39 +227,45 @@
 ;;; every section below uses.
 ;;;
 ;;; Declining to fire instead -- `compose-total` in place of `compose` -- is sound but
-;;; incomplete; that is counter-example (b).  Note that `?p` losing a slot is NOT the
-;;; symptom: `f3(?x,?y) = h3(?y,?z)` genuinely says `f3` does not depend on `?x`, so the
-;;; redundancy is derived by the fixed rule too.
+;;; incomplete; that is counter-example (b).  Note that the ROOT losing a slot is NOT the
+;;; symptom: the conclusion genuinely says the `get` class does not depend on `?en`, which
+;;; the fixed rule derives too.
 ;;;
-;;; The redundant-slot half of the same story is real, and M4's counter-example is it: in a
-;;; CHAIN the constraint pins atom 2 on its child class's slots, so a node carrying a slot
-;;; the class does not still leaves one unnamed, and `mult-assoc1` mints there.
-;;;
-;;; Covered by: M3-one-shared-var-two-ops, U1.
+;;; Covered by: `get-range` in xsdql.py, which runs this rule against the reference at the
+;;; shipped lead; M3-one-shared-var-two-ops and U1-two-pairings-across-two-lookups in
+;;; xdiff.py for the fresh root itself; and the tests file's M3 fixture, the same shape on
+;;; plain operators so the state can be built by hand.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(rule ((= p (App2 "f3" p1 x q1 y))
+(rule ((= rng (App2 "range" p1 st q1 en))
        (= dom1 (map-union (map-image p1) (map-image q1)))
        (= mp1 dom1)
        (= avoid1 (map-image mp1))
-       (= mx (compose mp1 p1))
-       (= csx (ClassSlots x))
-       (= my (compose mp1 q1))
-       (= csy (ClassSlots y))
-       (= csp (ClassSlots p))
-       ;; atom 2 -- its root is fresh, so `?x` is the only constraint, and `?z`'s slot is
-       ;; named by nothing.  `find-mapping-total` mints there rather than dropping it.
-       (= q (App2 "g3" p2 x q2 z))
+       (= mst (compose mp1 p1))
+       (= csst (ClassSlots st))
+       (= men (compose mp1 q1))
+       (= csen (ClassSlots en))
+       (= csrng (ClassSlots rng))
+       ;; atom 2 -- its root is FRESH, so the `range` child is the only constraint and
+       ;; `?idx`'s slots are named by nothing.  `find-mapping-total` mints there rather
+       ;; than dropping them, which an edge may not do.
+       (= g (App2 "get" p2 rng q2 idx))
        (= dom2 (map-union (map-image p2) (map-image q2)))
-       (RenamesToLeader x symx x)
-       (= mp2 (find-mapping-total avoid1 dom2 (compose (compose mx csx) symx) p2))
+       (RenamesToLeader rng symrng rng)
+       (= mp2 (find-mapping-total avoid1 dom2 (compose (compose mp1 csrng) symrng) p2))
        (= im2 (map-image mp2))
        (= avoid2 (map-union avoid1 im2))
-       (= mz (compose mp2 q2))
-       (= csz (ClassSlots z))
-       (= csq (ClassSlots q)))                 ; `?q`'s own narrowing; this action has no use
-      ((let rhs (App2 "h3" (compose my csy) y (compose mz csz) z))
-       (Equated rhs (compose mp1 csp) p)))
+       (= midx (compose mp2 q2))
+       (= csidx (ClassSlots idx))
+       (= csg (ClassSlots g)))
+      ((let sub (App2 "-" (compose mst csst) st (map-empty) (Num 1)))
+        (let rhs
+             (App2 "+"
+                   (compose midx csidx)
+                   idx
+                   (map-union (map-image (compose mst csst)) (map-image (map-empty)))
+                   sub))
+        (Equated rhs (compose mp2 csg) g)))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -311,18 +329,24 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; M5.  The avoid-set, and why it accumulates.
 ;;;
-;;;     ?p == (f5 ?a ?b),  ?a == (g5 ?u ?u),  ?b == (h5 ?v ?v)   =>   ?p = (k5 ?u ?v)
+;;;     the array language's map-fission:
+;;;         (app map (lam $x (app ?f ?gx)))
+;;;           =>  (lam $in (app (app map ?f) (app (app map (lam $x ?gx)) (var $in))))
+;;;              if $x not free in ?f
 ;;;
-;;; SYNTHETIC, and for the reason the section is about: the avoid-set matters only when TWO
-;;; atoms mint, and an atom mints only for a slot its own node carries and the constraints
-;;; do not reach -- a redundant slot (M3, M8).  A redundant slot comes from a MERGE that
-;;; narrowed a class below one of its nodes; no rewrite's shape produces one, so no rule can
-;;; be quoted whose match is guaranteed to mint twice.  The real rules do mint when the data
-;;; hands them a redundant slot, and the shape that most invites it is a root whose two
-;;; children share nothing -- the array language's `map-fusion`, `(app (app map ?f) (app
-;;; (app map ?g) ?arg))`, whose atoms 2 and 3 are each constrained by their root alone.  It
-;;; is compiled in `tests/slotted-array-rules.egg`; its five-node right-hand side is why the
-;;; shape is shown here on three small atoms instead.
+;;; Three atoms and two mints, which is what the avoid-set is for.
+;;;
+;;; Atom 2 is the `lam`, and a BINDER NODE always carries a slot its class does not:
+;;; `class_slots` offers the node's own slots, binder columns included, and the binder rule
+;;; then strips the bound one from the edge to the leader, so the class ends up without it.
+;;; Atom 2's constraints reach only its class, so the bound slot is named by nothing and
+;;; `mp2` MINTS it -- that is `sx`.  The right-hand side then binds a slot of its own,
+;;; `$in`, which no atom mentions at all, and `fmin` mints that against everything
+;;; accumulated so far.  Drop the accumulation and `$in` is free to land on `sx`.
+;;;
+;;; So minting comes from SHAPE, not only from a merge: every rule with a binder below its
+;;; root mints that binder's slot.  What does need a merge is a CHILD wider than its class,
+;;; which is M8.
 ;;;
 ;;; `find-mapping-total` is a pure function of its arguments: one call sees one atom's
 ;;; constraints, and nothing of what another atom invented.  The avoid-set threads that
@@ -339,212 +363,347 @@
 ;;; what the atoms before it accumulated -- exactly `avoid` plus `find-mapping`'s injectivity
 ;;; check.  Identity maps never conflict under `map-union`, so the union is always defined.
 ;;;
-;;; Drop the accumulation and two atoms that both invent pick the same slot, each choosing
-;;; the smallest it believes to be free -- here that identifies `?u` with `?v`, so the `k5`
-;;; the rule builds has one slot where it should have two.  `f5a` in the tests file is that
-;;; rule.  The accumulation is what smallest-unused minting costs: it reuses low names, so
-;;; it has to be told which are taken.  `slotted-user-rules.md` records the measurements
-;;; behind that policy choice and what the alternative was.
-;;;
-;;; Covered by: C7-redundant-distinct-vars, which without the accumulation goes order
-;;; dependent and loses a match.
+;;; Covered by: `map-fission-fires` and `map-fission-blocked` in xarray.py -- the same rule,
+;;; so this section and `tests/slotted-array-rules.egg` hold the same compiled body -- and
+;;; `map-fission-fires-from-atom-2`, which is this rule at another lead.  C5-redundant-same-node
+;;; through C9-redundancy-and-live are the minting cases in xdiff.py.  The tests file's M5
+;;; fixture makes two ATOM mints visible in one match, and its counter-example drops the
+;;; accumulation.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(rule ((= p (App2 "f5" p1 a q1 b))
+(rule ((= p (App2 "app" p1 lmap q1 l))
+       (RenamesToLeader (Sym "map") mlmap lmap)
        (= dom1 (map-union (map-image p1) (map-image q1)))
        (= mp1 dom1)
        (= avoid1 (map-image mp1))
-       (= ma (compose mp1 p1))
-       (= csa (ClassSlots a))
-       (= mb (compose mp1 q1))
-       (= csb (ClassSlots b))
+       (= ml (compose mp1 q1))
+       (= csl (ClassSlots l))
        (= csp (ClassSlots p))
-       ;; atom 2 -- chained under `?a`, and minting for whatever that leaves unnamed
-       (= a (App2 "g5" p2 u q2 u))
+       ;; atom 2 -- the binder.  Its constraints reach only its class, and a binder's
+       ;; class does not carry the bound slot, so `mp2` MINTS it: that is `sx`.
+       (= l (App2 "lambda" p2 (Var 0) q2 fgx))
        (= dom2 (map-union (map-image p2) (map-image q2)))
-       (RenamesToLeader a syma a)
-       (= mp2 (find-mapping-total avoid1 dom2 (compose (compose ma csa) syma)
-                                  (map-domain (compose ma csa))))
+       (RenamesToLeader l syml l)
+       (= mp2 (find-mapping-total avoid1 dom2
+                                  (compose (compose ml csl) syml)
+                                  (map-domain (compose ml csl))))
        (= im2 (map-image mp2))
-       (= avoid2 (map-union avoid1 im2))       ; accumulate
-       (= mu (compose mp2 p2))
-       (= csu (ClassSlots u))
-       (RenamesToLeader u symu u)              ; Def. 6 for `?u`'s repeat, as in M2
-       (= (compose mp2 q2) (compose (compose mu csu) symu))
-       ;; atom 3 -- the same again, and it may not mint over anything atom 2 took
-       (= b (App2 "h5" p3 v q3 v))
+       (= avoid2 (map-union avoid1 im2))
+       (= sx (map-get (compose mp2 p2) 0))
+       (= mfgx (compose mp2 q2))
+       (= csfgx (ClassSlots fgx))
+       (= fgx (App2 "app" p3 f q3 gx))
        (= dom3 (map-union (map-image p3) (map-image q3)))
-       (RenamesToLeader b symb b)
-       (= mp3 (find-mapping-total avoid2 dom3 (compose (compose mb csb) symb)
-                                  (map-domain (compose mb csb))))
+       (RenamesToLeader fgx symfgx fgx)
+       (= mp3 (find-mapping-total avoid2 dom3
+                                  (compose (compose mfgx csfgx) symfgx)
+                                  (map-domain (compose mfgx csfgx))))
        (= im3 (map-image mp3))
        (= avoid3 (map-union avoid2 im3))
-       (= mv (compose mp3 p3))
-       (= csv (ClassSlots v))
-       (RenamesToLeader v symv v)
-       (= (compose mp3 q3) (compose (compose mv csv) symv)))
-      ((let rhs (App2 "k5" (compose mu csu) u (compose mv csv) v))
-       (Equated rhs (compose mp1 csp) p)))
+       (= mf (compose mp3 p3))
+       (= csf (ClassSlots f))
+       (= mgx (compose mp3 q3))
+       (= csgx (ClassSlots gx))
+       ;; the right-hand side's own binder `$in`, which no atom mentions: the second
+       ;; mint, and the one that needs everything accumulated so far
+       (= fmin (find-mapping-total avoid3 (map-of 0 0) (map-empty) (map-empty)))
+       (= sin (map-get fmin 0))
+       (= avoid4 (map-union avoid3 (map-image fmin)))
+       (map-not-contains (map-image (compose mf csf)) sx))
+      ((let mapf (App2 "app" (map-empty) (Sym "map") (compose mf csf) f))
+        (let lamgx (App2 "lambda" (map-insert (map-empty) 0 sx) (Var 0) (compose mgx csgx) gx))
+        (let mapgx
+             (App2 "app"
+                   (map-empty)
+                   (Sym "map")
+                   (map-remove
+                               (map-union
+                                          (map-image (map-insert (map-empty) 0 sx))
+                                          (map-image (compose mgx csgx)))
+                               sx)
+                   lamgx))
+        (let inner
+             (App2 "app"
+                   (map-union
+                              (map-image (map-empty))
+                              (map-image
+                                         (map-remove
+                                                     (map-union
+                                                                (map-image
+                                                                           (map-insert
+                                                                             (map-empty)
+                                                                             0
+                                                                             sx))
+                                                                (map-image (compose mgx csgx)))
+                                                     sx)))
+                   mapgx
+                   (map-insert (map-empty) 0 sin)
+                   (Var 0)))
+        (let outer
+             (App2 "app"
+                   (map-union (map-image (map-empty)) (map-image (compose mf csf)))
+                   mapf
+                   (map-union
+                              (map-image
+                                         (map-union
+                                                    (map-image (map-empty))
+                                                    (map-image
+                                                               (map-remove
+                                                                 (map-union
+                                                                            (map-image
+                                                                              (map-insert
+                                                                                (map-empty)
+                                                                                0
+                                                                                sx))
+                                                                            (map-image
+                                                                                       (compose
+                                                                                         mgx
+                                                                                         csgx)))
+                                                                 sx))))
+                              (map-image (map-insert (map-empty) 0 sin)))
+                   inner))
+        (let rhs
+             (App2 "lambda"
+                   (map-insert (map-empty) 0 sin)
+                   (Var 0)
+                   (map-union
+                     (map-image
+                       (map-union (map-image (map-empty)) (map-image (compose mf csf))))
+                     (map-image
+                                (map-union
+                                           (map-image
+                                                      (map-union
+                                                                 (map-image (map-empty))
+                                                                 (map-image
+                                                                   (map-remove
+                                                                               (map-union
+                                                                                 (map-image
+                                                                                   (map-insert
+                                                                                     (map-empty)
+                                                                                     0
+                                                                                     sx))
+                                                                                 (map-image
+                                                                                   (compose mgx
+                                                                                     csgx)))
+                                                                               sx))))
+                                           (map-image (map-insert (map-empty) 0 sin)))))
+                   outer))
+        (Equated rhs (compose mp1 csp) p)))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; M6.  Two atoms, joined on a fresh root.
 ;;;
-;;;     ?p == (f6 ?x ?y),  ?q == (g6 ?x ?y)   =>   ?p = ?q
+;;;     the array language's eta:   (lam $x (app ?f (var $x)))  =>  ?f
+;;;                                  if $x not free in ?f
 ;;;
-;;; SYNTHETIC, by M3's reason: a fresh root is a multipattern, and no rewrite has one.  This
-;;; is the case the reference's `multi_ematch` exists for, and the `f`/`g` are its own test
-;;; language's.
+;;; The same rule as M9, compiled with the `app` atom LEADING instead of the `lam`.  That is
+;;; `connected_order`'s own default for it, and one of the orders `xarray.py`'s order check
+;;; runs against the reference; M9 shows the lead the generator ships.  Reversing the lead
+;;; makes the `lam`'s root fresh, and the two sections are otherwise the same rule, which is
+;;; the cleanest way to see that the lead is a choice and not part of the rule.
 ;;;
-;;; Atom 2's root is fresh, so `mp2` is entirely unknown and every shared variable both
-;;; constrains it and contributes part of it: all the pairs go into ONE
-;;; `find-mapping-total`.  `symx` and `symy` are free variables, so the join enumerates G(x)
-;;; and G(y) -- as it does for `symab` in M4, but several groups at once, and every element
-;;; feeds the same call.  M2 is the contrast: there both edges come off one matched row, so
-;;; the group element is determined and the `RenamesToLeader` atom is a lookup.
+;;; With `e` fresh, `mp2` is entirely unknown, so everything atom 1 fixed has to constrain it
+;;; AT ONCE -- the shared child `b`, which is this atom's second column, and the slot literal
+;;; `$x`, which atom 1 pinned to `sx`.  Both pairs go into ONE `find-mapping-total`.
 ;;;
-;;; The tempting demotion is `f6a` in the tests file: solve `mp2` from `?x` alone, giving
-;;; `p1 . symx . p2^-1`, and require `?y` to agree with THAT.  That map is defined only on
-;;; im(p2), the slots `?x`'s edge reaches, so `(compose mp2 q2)` truncates wherever `?y`'s
-;;; edge leaves im(p2): the agreement it asks of `?y` is about a map that does not cover
-;;; `?y`'s slots.  One call over all the pairs states a single condition instead, with no
-;;; operand partial.  Whether im(p2) happens to cover the whole node is a property of the
-;;; data, not of the rule.
+;;; `symb` is a free variable, so the join ENUMERATES G(b) -- as `symab` does in M4 -- and
+;;; every element feeds the same call.  M2 is the contrast: there both edges come off one
+;;; matched row, so the group element is determined and the `RenamesToLeader` atom is a
+;;; lookup.  M7 is this with two groups enumerated at once.
+;;;
+;;; The tempting demotion is to solve `mp2` from the root pair alone and then require the
+;;; slot literal to agree with the result.  That map is defined only on the slots the root's
+;;; edge reaches, so the agreement it asks for is about a map that need not cover the atom's
+;;; slots -- and a call that does not carry the literal is free to mint a fresh name for it,
+;;; leaving `mp2` a map no later equality can repair.  That is the `slot-late` mutant, which
+;;; `mutations.py` still catches.  One call over all the pairs states a single condition
+;;; instead, with no operand partial.
 ;;;
 ;;; The conclusion is a bare variable, so it is M10's case: two renamed ids, neither at the
 ;;; identity, solved into one `Equated`.
 ;;;
-;;; Covered by: C3-join.
+;;; Covered by: `eta-fires` and `eta-blocked` in xarray.py, whose order check runs exactly
+;;; this lead against the reference; C3-join and C10-chain-then-join in xdiff.py; and the
+;;; tests file's M6 fixture, which enumerates two groups at once rather than one.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(rule ((= p (App2 "f6" p1 x q1 y))
+(rule ((= b (App2 "app" p1 f q1 (Var 0)))
        (= dom1 (map-union (map-image p1) (map-image q1)))
        (= mp1 dom1)
        (= avoid1 (map-image mp1))
-       (= mx (compose mp1 p1))
-       (= csx (ClassSlots x))
-       (= my (compose mp1 q1))
-       (= csy (ClassSlots y))
-       (= csp (ClassSlots p))
-       ;; atom 2 -- root fresh, so every shared child both constrains mp2 and contributes
-       ;; part of it, in one call
-       (= q (App2 "g6" p2 x q2 y))
+       (= sx (map-get (compose mp1 q1) 0))
+       (= mf (compose mp1 p1))
+       (= csf (ClassSlots f))
+       (= csb (ClassSlots b))
+       ;; atom 2 -- root FRESH, so everything atom 1 fixed constrains `mp2` at once: the
+       ;; shared child `b` AND the slot literal `$x` pinned to `sx`, in ONE call, with
+       ;; `symb` free so the join enumerates G(b).
+       (= e (App2 "lambda" p2 (Var 0) q2 b))
        (= dom2 (map-union (map-image p2) (map-image q2)))
-       (RenamesToLeader x symx x)
-       (RenamesToLeader y symy y)
+       (RenamesToLeader b symb b)
        (= mp2 (find-mapping-total avoid1 dom2
-                                  (compose (compose mx csx) symx)      ; firsts
-                                  (compose (compose my csy) symy)
-                                  p2 q2))                              ; seconds
+                                  (compose (compose mp1 csb) symb)
+                                  (map-insert (map-empty) 0 sx)
+                                  q2
+                                  p2))
        (= im2 (map-image mp2))
        (= avoid2 (map-union avoid1 im2))
-       (= csq (ClassSlots q)))
-      ((Equated p (compose (inverse (compose mp1 csp)) (compose mp2 csq)) q)))
+       (= sx (map-get (compose mp2 p2) 0))
+       (= cse (ClassSlots e))
+       (map-not-contains (map-image (compose mf csf)) sx))
+      ((Equated e (compose (inverse (compose mp2 cse)) (compose mf csf)) f)))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; M7.  Three atoms -- the cases compose.
 ;;;
-;;;     ?p == (f7 ?a ?b),  ?b == (g7 ?c ?d),  ?q == (h7 ?c ?a)   =>   ?p = ?q
+;;;     sdql let-binop4:  (binop ?f (let $x ?e2 ?e1) (let $x ?e3 ?e1))
+;;;                         =>  (let $x (binop ?f ?e2 ?e3) ?e1)
 ;;;
-;;; SYNTHETIC, again because atom 3 is joined on a fresh root.  Three- and four-atom
-;;; left-hand sides are ordinary -- the array language's `map-fission` has three, sdql's
-;;; `sum-merge` four -- but they are CHAINS, so what they compose is M4 with M4 and M9, and
-;;; both are compiled in `tests/slotted-array-rules.egg` and `tests/slotted-sdql-rules.egg`.
-;;; What no rewrite composes is a chain with a JOIN, which is this section, so the operators
-;;; stay the reference multipattern language's.  (`sum-merge` could not be shown here in any
-;;; case: its right-hand side is a six-child `merge`, and the generic encoding stops at
-;;; `App4`.)
+;;; Written with this file's `let`, whose columns are binder, body, value.  sdql's own `let`
+;;; puts the value first, so `benches/sdql.rs` writes the same rule as
+;;; `(binop ?f (let ?e1 $x ?e2) (let ?e1 $x ?e3))`.
 ;;;
-;;; Atom 2 is M4's chain, atom 3 is M6's join, and every renaming they produce lives in one
-;;; slot space -- the one atom 1 fixed.  Atom 3 is constrained through `?c`, reached via the
-;;; chain two atoms deep, and through `?a`, reached straight from atom 1: the case no
-;;; two-atom test can exercise.  The avoid-set accumulates across all three (M5).
+;;; Atom 3 is where every earlier case meets.  Its one call carries THREE constraint pairs,
+;;; reaching TWO different earlier atoms:
 ;;;
-;;; Covered by: C10-chain-then-join.
+;;;     its own root `lb`, bound at atom 1          the chain          (M4)
+;;;     the child `?e1`, bound at atom 2            a join             (M6)
+;;;     the slot literal `$x`, pinned at atom 2     a pinned literal   (M9)
+;;;
+;;; and TWO groups are enumerated at once, `symlb` and `syme1`, both feeding that call.  A
+;;; compiler needs no case analysis for this: each pair is emitted by the same rule -- if an
+;;; earlier atom bound it, constrain on it -- and they accumulate into one argument list.
+;;;
+;;; This rule is also where flattening and the reference part company, and the encoding is
+;;; the more complete side.  `$x` is written for two INDEPENDENT SIBLING binders.  The
+;;; reference's nested matcher gives each `let` node's bound slot its own fresh name and then
+;;; cannot match one `$x` against both, so it never fires; its `tests/multipat/known_bugs.rs`
+;;; calls that `lambda::redundancy_matching_bug`.  Flattening asks the weaker, and here
+;;; intended, question -- two `let`s whose bound slots are IDENTIFIED, the only reading that
+;;; means anything when a binder is alpha-renameable -- and that identification is exactly
+;;; the third pair above.
+;;;
+;;; Covered by: `let-binop4-fires` and `let-binop4-no-capture` in xsdql.py, both RECORDED
+;;; DIVERGENCES that pin the reference's answer as well as the encoding's.  The second is the
+;;; soundness half: there the first `let` binds a slot that is FREE in the other body, so
+;;; identifying the two binders on that name would capture it, and the case checks that the
+;;; minted binder avoids it instead.  C10-chain-then-join and C13-binder-chain-and-join in
+;;; xdiff.py are the composition without the sibling binders, and the tests file's M7
+;;; fixture is it on plain operators.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(rule ((= p (App2 "f7" p1 a q1 b))
-       (= dom1 (map-union (map-image p1) (map-image q1)))
+(rule ((= p (App3 "binop" p1 f q1 la r1 lb))
+       (= dom1 (map-union (map-image p1) (map-union (map-image q1) (map-image r1))))
        (= mp1 dom1)
        (= avoid1 (map-image mp1))
-       (= ma (compose mp1 p1))
-       (= csa (ClassSlots a))
-       (= mb (compose mp1 q1))
-       (= csb (ClassSlots b))
+       (= mf (compose mp1 p1))
+       (= csf (ClassSlots f))
+       (= mla (compose mp1 q1))
+       (= csla (ClassSlots la))
+       (= mlb (compose mp1 r1))
+       (= cslb (ClassSlots lb))
        (= csp (ClassSlots p))
-       ;; atom 2 -- constrained by its root `?b`
-       (= b (App2 "g7" p2 c q2 d))
-       (= dom2 (map-union (map-image p2) (map-image q2)))
-       (RenamesToLeader b symb b)
-       (= mp2 (find-mapping-total avoid1 dom2 (compose (compose mb csb) symb)
-                                  (map-domain (compose mb csb))))
+       (= la (App3 "let" p2 (Var 0) q2 e2 r2 e1))
+       (= dom2 (map-union (map-image p2) (map-union (map-image q2) (map-image r2))))
+       (RenamesToLeader la symla la)
+       (= mp2 (find-mapping-total avoid1 dom2
+                                  (compose (compose mla csla) symla)
+                                  (map-domain (compose mla csla))))
        (= im2 (map-image mp2))
-       (= avoid2 (map-union avoid1 im2))       ; atom 3 may not mint over these
-       (= mc (compose mp2 p2))
-       (= csc (ClassSlots c))
-       (= md (compose mp2 q2))
-       (= csd (ClassSlots d))
-       ;; atom 3 -- root fresh, constrained through `?c` (depth 2) and `?a` (depth 1)
-       (= q (App2 "h7" p3 c q3 a))
-       (= dom3 (map-union (map-image p3) (map-image q3)))
-       (RenamesToLeader c symc c)
-       (RenamesToLeader a syma a)
+       (= avoid2 (map-union avoid1 im2))
+       (= sx (map-get (compose mp2 p2) 0))
+       (= me2 (compose mp2 q2))
+       (= cse2 (ClassSlots e2))
+       (= me1 (compose mp2 r2))
+       (= cse1 (ClassSlots e1))
+       ;; atom 3 -- where the cases meet.  THREE pairs reaching TWO earlier atoms: its
+       ;; own root (the chain), the child `?e1` (a join), and the literal `$x` pinned at
+       ;; atom 2.  Two groups, `symlb` and `syme1`, are enumerated into the one call.
+       (= lb (App3 "let" p3 (Var 0) q3 e3 r3 e1))
+       (= dom3 (map-union (map-image p3) (map-union (map-image q3) (map-image r3))))
+       (RenamesToLeader lb symlb lb)
+       (RenamesToLeader e1 syme1 e1)
        (= mp3 (find-mapping-total avoid2 dom3
-                                  (compose (compose mc csc) symc)
-                                  (compose (compose ma csa) syma)
-                                  p3 q3))
+                                  (compose (compose mlb cslb) symlb)
+                                  (compose (compose me1 cse1) syme1)
+                                  (map-insert (map-empty) 0 sx)
+                                  (map-domain (compose mlb cslb))
+                                  r3
+                                  p3))
        (= im3 (map-image mp3))
        (= avoid3 (map-union avoid2 im3))
-       (= csq (ClassSlots q)))
-      ((Equated p (compose (inverse (compose mp1 csp)) (compose mp3 csq)) q)))
+       (= sx (map-get (compose mp3 p3) 0))
+       (= me3 (compose mp3 q3))
+       (= cse3 (ClassSlots e3)))
+      ((let bin (App3 "binop" (compose mf csf) f (compose me2 cse2) e2 (compose me3 cse3) e3))
+        (let rhs
+             (App3 "let"
+                   (map-insert (map-empty) 0 sx)
+                   (Var 0)
+                   (map-union
+                              (map-image (compose mf csf))
+                              (map-union
+                                         (map-image (compose me2 cse2))
+                                         (map-image (compose me3 cse3))))
+                   bin
+                   (compose me1 cse1)
+                   e1))
+        (Equated rhs (compose mp1 csp) p)))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; M8.  A variable wider than its class -- the ClassSlots narrowing.
+;;; M8.  A node wider than its class -- the ClassSlots narrowing.
 ;;;
-;;;     ?x3 == (f8 ?x1 ?x2)   =>   ?x1 = (f8 ?x2 ?x1)
+;;;     the array language's let-var-same:   (let $x (var $x) ?e)  =>  ?e
 ;;;
-;;; SYNTHETIC, for M5's reason and not M3's: the narrowing bites only on a node carrying a
-;;; slot its class does not, which a merge produces and a rewrite's shape never does.  Every
-;;; real rule above is compiled with the narrowing on every variable -- it is one `compose`
-;;; per use, unconditional -- but the e-graph that shows it is load-bearing has to be built
-;;; by hand, and this rule is shaped to be the smallest one that does.
-;;;
-;;; The other way to break the edge condition, needing no minting and no chain -- one atom
-;;; does it.  A renaming is read off a matched NODE, so its domain is the node's slots, and
-;;; Def. 4 permits a node to carry slots its class does not: it requires only `S` included in
-;;; `im(m)`, and calls the extras redundant.  An edge has no such slack (M3).  A variable
-;;; stands for a CLASS, so writing a renaming read off a node straight into a built node would
-;;; name a slot the child does not have.
+;;; One atom, and the smallest rule in the file.  A renaming is read off a matched NODE, so
+;;; its domain is the node's slots, and Def. 4 permits a node to carry slots its class does
+;;; not: it requires only `S` included in `im(m)`, and calls the extras redundant.  An edge
+;;; has no such slack (M3).  A variable stands for a CLASS, so writing a renaming read off a
+;;; node straight into a built node would name a slot the child does not have.
 ;;;
 ;;; The fix is one atom per variable -- `(= csX (ClassSlots X))` -- and `(compose mX csX)`
 ;;; wherever the renaming is used or written.  A symmetry is NOT a substitute: the self-loop
 ;;; the machinery stores for a node is the identity on that NODE's slot set, so it can be
 ;;; exactly as wide as the renaming it was meant to narrow.
 ;;;
-;;; The action's root `?x1` is a child variable and so is the other child `?x2`, so both
-;;; renamings come off the matched node and both need narrowing -- and the root's renaming
-;;; being a child's is also why the conclusion is `Equated` at `(compose mx1 csx1)` rather
-;;; than anything simpler (M10).
+;;; This rule's root is a `let`, and a binder node is ALWAYS wider than its class -- the
+;;; binder rule strips the bound slot from the edge to the leader, which is what makes two
+;;; spellings of one binder alpha-equivalent.  So `mp1`'s domain contains `sx` and `csp` does
+;;; not, and the narrowing on a ROOT is load-bearing BY SHAPE: here, in M9 and M11, and in
+;;; every `sum-*` and `let-*` rule.
 ;;;
-;;; Covered by: C15-action-child-narrowed-to-its-class.  The un-narrowed spelling was the
-;;; `wide-kids` mutant, removed from `XDIFF_BUGS` once it stopped discriminating -- the
-;;; property is checked directly by `def4-edges.py` instead.  The tests file keeps the
-;;; spelling as a counter-example.
+;;; A CHILD wider than its class is the other half, and that one does need a MERGE: a
+;;; canonical stored edge's domain already IS its child class's slot set (Def. 5), so
+;;; `(compose mX csX)` is a no-op on a child unless a merge shrank the class below an edge
+;;; migration has not caught up with.  That is why the un-narrowed child spelling stopped
+;;; discriminating as a mutation and is checked by `def4-edges.py` directly instead.
+;;;
+;;; Both slot literals are the same `$x`, so the second is an equality on one slot: the body
+;;; must be the bound variable and not some other one.  And the action's root is the child
+;;; `?e`, so the conclusion is `Equated` over two renamed ids with neither at the identity
+;;; (M10).
+;;;
+;;; Covered by: `let-var-same-fires` and `let-var-same-blocked` in xarray.py -- the same
+;;; rule, so this section and `tests/slotted-array-rules.egg` hold the same compiled body --
+;;; C14-action-root-with-a-nonidentity-renaming and
+;;; C15-action-child-narrowed-to-its-class in xdiff.py, and the tests file's M8 fixture for
+;;; the child case, with the un-narrowed spelling kept there as a counter-example.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(rule ((= x3 (App2 "f8" p1 x1 q1 x2))
-       (= dom1 (map-union (map-image p1) (map-image q1)))
+(rule ((= p (App3 "let" p1 (Var 0) q1 (Var 0) r1 e))
+       (= dom1 (map-union (map-image p1) (map-union (map-image q1) (map-image r1))))
        (= mp1 dom1)
        (= avoid1 (map-image mp1))
-       (= mx1 (compose mp1 p1))
-       (= csx1 (ClassSlots x1))
-       (= mx2 (compose mp1 q1))
-       (= csx2 (ClassSlots x2))
-       (= csx3 (ClassSlots x3)))
-      ((let rhs (App2 "f8" (compose mx2 csx2) x2 (compose mx1 csx1) x1))
-       (Equated rhs (compose mx1 csx1) x1)))
+       (= sx (map-get (compose mp1 p1) 0))     ; the bound slot, in pattern slots
+       (= sx (map-get (compose mp1 q1) 0))     ; the same `sx`: an EQUALITY, so the body
+                                               ; must be the bound variable
+       (= me (compose mp1 r1))
+       (= cse (ClassSlots e))
+       (= csp (ClassSlots p)))
+      ((Equated p (compose (inverse (compose mp1 csp)) (compose me cse)) e)))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -568,9 +727,10 @@
 ;;; and every literal pinned.
 ;;;
 ;;; Covered by: `eta-fires` and `eta-blocked` in xarray.py -- the same rule, so this section
-;;; and `tests/slotted-array-rules.egg` hold the same compiled body -- whose `vac` mode also confirms
-;;; the side condition changes the answer on both sides; the same mechanism on binder shapes
-;;; is B3, B4 and the `slot-late` mutant, and the slot side condition is CD1-CD4.  xdiff.py's
+;;; and `tests/slotted-array-rules.egg` hold the same compiled body -- whose `vac` mode
+;;; also confirms the side condition changes the answer on both sides; the same mechanism
+;;; on binder shapes is B3, B4 and the `slot-late` mutant, and the slot side condition is
+;;; CD1-CD4.  xdiff.py's
 ;;; `atom` form cannot express this shape: two children only, and a slot literal there needs
 ;;; `Bind` or a unary `Var(Slot)`.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

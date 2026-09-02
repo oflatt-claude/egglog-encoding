@@ -122,6 +122,12 @@ CHECKS = [
     ("generated-drift", check_generated, None, False),
     ("handwritten-drift", ("slotted-experiments/check-handwritten-encoding.py",), starts_ok, False),
     (
+        "tutorial-drift",
+        ("slotted-experiments/check-tutorial.py",),
+        ratio(r"(\d+)/(\d+) sections are the encoder's own output", 11),
+        False,
+    ),
+    (
         "curated",
         ("slotted-experiments/xdiff/xdiff.py",),
         both(ratio(r"(\d+)/(\d+) had a usable baseline", 44), zero_categories),
