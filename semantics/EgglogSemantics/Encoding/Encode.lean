@@ -1236,6 +1236,11 @@ rule head's names are among `Program.ctors`. -/
   | [], _ => True
   | c :: cs, sig => c.HeadsDeclared sig ∧ Program.HeadsDeclared cs (c.sigBind sig)
 
+/-! Given `noPrim` this is equivalent to the `Bool` accumulator it replaced —
+`Program.HeadsDeclared P (fun _ => none) ↔ headCtorsDeclaredB [] P` — for **every** program and
+not only the corpus, checked out of tree and left there, since stating it in the build needs
+that `Bool` back. In tree the evidence is `encodeDomainB_iff` and the census pins. -/
+
 /-! #### Deciding the two checks the domain takes from `Spec/Scope.lean`
 
 Both read a signature entry, and `FnDecl` carries no `DecidableEq`, so the instances go

@@ -51,7 +51,7 @@ what egglog means* is the deliverable, not a convenience.
 comment line per two of code. It got there by deletion — a row set, a term field, a second
 congruence relation, a functional command semantics and a generic front-end walk all came out —
 and the standard for putting anything back is that a reimplementer would get it wrong without it.
-One thing has gone back in since: `Spec/Scope.lean`'s sixth check, `WidthOk`, which four separate
+One thing has gone back in since: `Spec/Scope.lean`'s `WidthOk`, which four separate
 pieces of work independently needed. Rationale, egglog citations and design history live in these
 documents, not in its comments.
 
@@ -923,15 +923,15 @@ Other omissions, unaddressed since the port: schedules, extraction, containers.
 - `Tests/Examples.lean` compiling *is* the M7 suite — each check is a closed proof or a
   `#guard`.
 
-## The front end's six checks
+## The front end's seven checks
 
-`Spec/Scope.lean` holds `Scoped`, `Evaluable`, `SetLegal`, `WidthOk`, `DeclsFresh` and
-`MergeDeclared`. They are **six separate predicates**, and each threads exactly what it needs:
-`Scoped` a `Scope`, extended by a `let` and by a query; the other five a `Signature`, moved only by
-`Cmd.sigBind`. Folding the signature ones into `Scoped` would put a signature argument on
-every lemma in `Proofs/Scope.lean` that none of them would use, and the theorems take
-different subsets anyway — `programStep_isSome` wants `Scoped` and `Evaluable`, the state
-invariants want `SetLegal`, `WidthOk` and `DeclsFresh`.
+`Spec/Scope.lean` holds `Scoped`, `Evaluable`, `UnionLegal`, `SetLegal`, `WidthOk`, `DeclsFresh`
+and `MergeDeclared`. They are **seven separate predicates**, and each threads exactly what it
+needs: `Scoped` a `Scope`, extended by a `let` and by a query; `UnionLegal` nothing at all; the
+other five a `Signature`, moved only by `Cmd.sigBind`. Folding the signature ones into `Scoped`
+would put a signature argument on every lemma in `Proofs/Scope.lean` that none of them would use,
+and the theorems take different subsets anyway — `programStep_isSome` wants `Scoped` and
+`Evaluable`, the state invariants want `SetLegal`, `WidthOk` and `DeclsFresh`.
 
 **They are written out, not generated.** A `Check` record used to parameterise one traversal
 by three questions and three context binders, with four instances and fourteen `inherit_doc`
@@ -950,19 +950,19 @@ keeps that out, and its condition is `mergeOf f ≠ none`: it admits `:no-merge`
 undeclared name, and rejects a constructor, all checked against the binary. egglog restricts `set`
 the same way, as a type error (`egglog/src/constraint.rs`).
 
-**`SetLegal` alone does not make the entry-width claim**, and `WidthOk` is why it is a sixth check
-rather than a clause of an existing one. `SetLegal` decides *which* width an entry is held to —
-`FnDecl.entryWidth` is `arity` for a constructor and `arity + outArity` otherwise — and `WidthOk`
-supplies the counts; only the two together say every entry has its declaration's width, and alone
-`SetLegal` says nothing about an entry no `set` wrote. Four independent needs forced it:
+**`SetLegal` alone does not make the entry-width claim**, and `WidthOk` is why it is a check of
+its own rather than a clause of an existing one. `SetLegal` decides *which* width an entry is held
+to — `FnDecl.entryWidth` is `arity` for a constructor and `arity + outArity` otherwise — and
+`WidthOk` supplies the counts; only the two together say every entry has its declaration's width,
+and alone `SetLegal` says nothing about an entry no `set` wrote. Four independent needs forced it:
 `DeclaredTerms` is **false** without it, `FDatabase.IndexOk.width` has nothing funding it,
 `MergeStep.collide`'s two `arity` premises are unfunded, and `Proofs/Merge.lean` had re-introduced
-a local copy. It sits beside `SetLegal` and not inside `Evaluable` because egglog raises arity as a
-*type* error on the same AST node, in the same pass, that raises `SetConstructorDisallowed`
+a local copy. It sits beside `SetLegal` and not inside `Evaluable` because egglog raises arity as
+a *type* error on the same AST node, in the same pass, that raises `SetConstructorDisallowed`
 (`constraint.rs:924-938`, `TypeError::Arity`; the parser holds no `TypeInfo`), and because
 `Evaluable` structurally could not say it — it quantifies over `Expr.fns`, a list of *names* that
-has lost the application structure. It is also the second check that walks into a `:merge`, since
-`res` is what `MergeStep` writes into the value columns.
+has lost the application structure. It is also one of the three checks that walk into a
+`:merge`, since `res` is what `MergeStep` writes into the value columns.
 
 *What they buy, and what they do not.* Neither is a hypothesis of the refinement theorem — see M10,
 where `SetLegal` was removed. They maintain a state invariant (`DeclaredTerms`, the entry widths)

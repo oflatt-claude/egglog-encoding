@@ -93,7 +93,7 @@ constructor entry bare is what lets `FnDecl.entryWidth` be a *function of the de
 `arity` for a constructor, `arity + outArity` for a merge function — and `Database.DeclaredTerms`
 then says every application the database holds has its declaration's head and its declaration's
 width. That predicate is what replaced `Database.CtorTerms`, and it is the invariant a `set` on a
-constructor would break (`PLAN.md`, "The front end's six checks").
+constructor would break (`PLAN.md`, "The front end's seven checks").
 
 **Why the entries do not need a set of their own.** `eqs` already carries existence: `t = t`
 records that `t` was built, `Database.terms` is `{t | Cong db t t}`, and `addTerm` writes one
@@ -728,7 +728,7 @@ constructor": the proof encoding declares its proof nodes with `:no-merge` (`Enc
   sorts, which is why it landed first. It now exists in three places, and the three are *not* one
   definition — a drift risk worth naming.
   - `Impl/Check.lean`'s `arityOk` and `Spec/Scope.lean`'s `WidthOk` — the `Bool` the difftest
-    enforces before writing a case, and the front end's sixth check. `PLAN.md`, "Arity checking",
+    enforces before writing a case, and the front end's width check. `PLAN.md`, "Arity checking",
     has what each demands and where they can drift.
   - `Proofs/Merge.lean` carries `Action.SetWidthOk` — `WidthOk`'s `set` clause and nothing else —
     bundled with `SetLegal` into `Action.WriteLegal`, and that is what funds `IndexOk.width` and
@@ -1190,7 +1190,7 @@ bugs is outside its reach, and reading the typechecker is the only way in.
    The other half of the old answer — that a `Check` record ran the checks over one walk, so the
    sharing bundling would buy was already there — is **superseded**: `Check` is deleted and
    `Spec/Scope.lean` writes its checks out directly, because nothing was ever generic over the
-   record (`PLAN.md`, "The front end's six checks"). That strengthens the conclusion rather than
+   record (`PLAN.md`, "The front end's seven checks"). That strengthens the conclusion rather than
    weakening it. They stay separate predicates because the theorems take different subsets, and
    `MergeDeclared` shows why bundling would have been actively wrong: it is asked of the signature
    *after* `sigBind` where `DeclsFresh` is asked before, so one walk could not have carried both.
