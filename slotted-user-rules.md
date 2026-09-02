@@ -5,7 +5,7 @@ Companion to seven runnable files:
 | file | what it is |
 | --- | --- |
 | `tests/slotted-egraph-encoding-11.egg` | the machinery: union, congruence, redundancy, symmetry |
-| `tests/slotted-user-rules.egg` | the tutorial: one shape of user rule per section — M1–M11 — each stated as prose plus the single rule a compiler emits, and nothing else |
+| `tests/slotted-user-rules.egg` | the tutorial: one shape of user rule per section — M1–M11 — each stated as prose plus the single rule a compiler emits, and nothing else. Six of the eleven are a real rewrite, from `sdql_rules()` or the paper's §4.1 array language, and each is the same compiled body as in the generated file for that language; the other five shapes need a multipattern or a redundant slot, which no rewrite produces, and say so |
 | `tests/slotted-user-rules-tests.egg` | the cases for it: it includes the tutorial, then adds the terms, schedules, assertions and counter-examples |
 | `slotted-experiments/slotted-encoder.py` | the recipe as code: the machinery emitter, the term encoding and the rule compiler, which every generator below goes through |
 | `slotted-experiments/xdiff/xdiff.py` | differential tests against the reference implementation |
@@ -139,23 +139,28 @@ one row per symmetry and discard all but one:
 (= (compose mp p) (compose mx sym))
 ```
 
-`M2` runs both and checks they agree, including on a case needing a real swap.
+The enumerate-and-compare form is what the encoder emits, so it is the one `M2`
+shows — on sdql's `sub-identity`, `(- ?e ?e) => 0`, which is this shape. The lookup
+form states the same condition and is what an optimiser would turn it into; both
+are here because the reading matters more than the spelling.
 
-Add one guard to either spelling:
+Either spelling needs `mx` to be no wider than the class:
 
 ```text
-(= (map-length sym) (map-length mx))
+(compose mx (ClassSlots X))
 ```
 
 Composition truncates silently, and a redundant slot is stored as a *partial*
-self-loop, so a short symmetry could match one of those and be accepted wrongly.
-The guard rules that out without relying on the e-graph being saturated — which
-matters, because user rules share a ruleset with the machinery and can therefore
-match mid-repair. It costs nothing on the test corpus.
+self-loop, so a short symmetry could match a renaming read off a wider node and be
+accepted wrongly. Narrowing by `ClassSlots` rules that out at the source, and it is
+what the encoder emits — one `compose` per use of a variable, unconditional (M8). An
+earlier version guarded with `(= (map-length sym) (map-length mx))` instead, which
+compares the two lengths after the fact rather than fixing the domain; the narrowing
+subsumes it.
 
 **Neither may be weakened to `(= (compose mp p) mx)`.** Equality of renamings is
 strictly weaker than equality of invocations, and the difference shows: `M2(c)`
-matches `f(?x, ?x)` against `f(a[$0,$1], a[$1,$0])` where `a` is symmetric. The two
+matches `(- ?e ?e)` against `(- a[$0,$1] a[$1,$0])` where `a` is symmetric. The two
 occurrences *are* the same invocation, the symmetry-aware rule fires, and the naive
 one does not. The machinery will not normalise the two edges to be equal either, so
 this is not a case you can pre-process away.
@@ -226,15 +231,19 @@ pattern slots.
 **`union` is only correct at the identity.** The paper's union takes invocations,
 and whether it produces a redundancy, a new symmetry, or a class merge depends on
 their renamings. egglog's `union` takes classes, i.e. only the case where both
-renamings are the identity. So:
-
-* the action's root is the first atom's root → plain `(union A B)` is fine;
-* anywhere else → build the node and assert the fact instead:
+renamings are the identity. A compiler cannot know that they are, so it does not
+try: `slotted-encoder.py` emits `Equated` for every action, and so does every rule
+in the tutorial. Build the node and assert the fact:
 
   ```text
   (let _hn (App2 "h" ma A mb B))
   (Equated _hn mp_root Root)
   ```
+
+  Concluding `(union Root built)` instead is the encoder's `union-id` mutant. Where
+  the action's root is the first atom's root and its class carries no redundant slot
+  the two coincide, but nothing in the rule establishes that, and off the identity
+  the union is a different and false claim.
 
   `Equated` is the machinery's orientation-free form: it states `_hn = mp_root * Root`
   without saying which of the two is the leader, and the machinery derives the oriented
