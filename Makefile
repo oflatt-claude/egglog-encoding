@@ -1,6 +1,6 @@
 .PHONY: \
 	check nits test python-check python-nits rust-check rust-nits \
-	proof-tests benchmark-smoke nightly nightly-local nightly-uv nightly-rustup \
+	proof-tests slotted-check benchmark-smoke nightly nightly-local nightly-uv nightly-rustup \
 	update-snapshots format \
 	python-lock python-format-check python-lint python-typecheck python-test \
 	rust-format-check rust-clippy rust-doc-links rust-test
@@ -69,6 +69,15 @@ rust-doc-links:
 # This is a name-filtered subset of rust-test, useful for proof iteration.
 proof-tests:
 	cargo test --workspace --test files 'proofs/'
+
+# The slotted-e-graph encoding: its .egg files, the committed generated files'
+# drift, the differential suites against the slotted-egraphs reference, and the
+# mutation gate. Kept out of `check` because the fuzzers dominate its runtime;
+# `--quick` drops them. xmulti is the reference-side oracle the suites compare to.
+slotted-check:
+	cargo build
+	cargo build --manifest-path slotted-experiments/xmulti/Cargo.toml
+	python3 slotted-experiments/check-slotted.py
 
 # Use a disposable report path, keeping the default report cache untouched.
 benchmark-smoke:
