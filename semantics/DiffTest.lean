@@ -1867,7 +1867,9 @@ theorem Cmd.noLeafPatternB_iff (c : Cmd) : c.noLeafPatternB = true ↔ c.NoLeafP
     simp [Cmd.noLeafPatternB, Cmd.NoLeafPattern, List.all_eq_true, Pattern.groundedB_iff,
       Query.varsKeyedB_iff]
 
-/-- `Program.EncodeDomain`, computed. -/
+/-- `Program.EncodeDomain`, computed. `EncodeDomain.noLitUnion` and
+`EncodeDomain.headCtorsDeclared` are `Bool` at the source, so the last two conjuncts are the
+clauses themselves rather than a mirror of them. -/
 def Program.encodeDomainB (p : Program) : Bool :=
   p.all Cmd.ctorDeclB && p.all Cmd.noSetB
     && p.ctors.all (fun fk => (Prim.ofName fk.1).isNone)
@@ -1875,17 +1877,19 @@ def Program.encodeDomainB (p : Program) : Bool :=
     && p.vars.all (fun v => !"@".isPrefixOf v)
     && p.rulesets.all (fun R => !"@".isPrefixOf R)
     && p.all Cmd.noLeafPatternB
+    && (p.all Cmd.ruleUnionFreeB || p.all Cmd.litFreeB)
+    && Program.headCtorsDeclaredB [] p
 
 /-- **The census below counts exactly `EncodeDomain`.** -/
 theorem Program.encodeDomainB_iff (p : Program) :
     p.encodeDomainB = true ↔ p.EncodeDomain := by
-  simp only [Program.encodeDomainB, Bool.and_eq_true, List.all_eq_true, Cmd.ctorDeclB_iff,
-    Cmd.noSetB_iff, Cmd.noLeafPatternB_iff, Option.isNone_iff_eq_none,
+  simp only [Program.encodeDomainB, Bool.and_eq_true, Bool.or_eq_true, List.all_eq_true,
+    Cmd.ctorDeclB_iff, Cmd.noSetB_iff, Cmd.noLeafPatternB_iff, Option.isNone_iff_eq_none,
     Bool.not_eq_eq_eq_not, Bool.not_true, Bool.eq_false_iff, ne_eq]
-  exact ⟨fun h => ⟨h.1.1.1.1.1.1, h.1.1.1.1.1.2, h.1.1.1.1.2, h.1.1.1.2, h.1.1.2,
-      h.1.2, h.2⟩,
-    fun h => ⟨⟨⟨⟨⟨⟨h.ctorsOnly, h.noSet⟩, h.noPrim⟩, h.noAt⟩, h.noAtVar⟩,
-      h.noAtRuleset⟩, h.noLeafPattern⟩⟩
+  exact ⟨fun h => ⟨h.1.1.1.1.1.1.1.1, h.1.1.1.1.1.1.1.2, h.1.1.1.1.1.1.2, h.1.1.1.1.1.2,
+      h.1.1.1.1.2, h.1.1.1.2, h.1.1.2, h.1.2, h.2⟩,
+    fun h => ⟨⟨⟨⟨⟨⟨⟨⟨h.ctorsOnly, h.noSet⟩, h.noPrim⟩, h.noAt⟩, h.noAtVar⟩,
+      h.noAtRuleset⟩, h.noLeafPattern⟩, h.noLitUnion⟩, h.headCtorsDeclared⟩⟩
 
 /-! #### Running the encoded program
 
@@ -2919,6 +2923,34 @@ def correspondSelfTests : List (String × (Unit → Bool)) :=
           && sameClassF e witnessAddOneOne witnessAddOneOne
           && !decide ((witnessAddOneOne, witnessAddOneOne) ∈ d.closureF)
       | _, _ => false),
+    -- **The two refutations the domain's last two clauses answer, run.**
+    -- `encode_corresponds_unions_literals` takes the facts below as hypotheses. A `union` on
+    -- literals in a *rule head* is not the case the control above pins: `evalLocalActions`
+    -- returns `none`, so `RuleResults` is empty and the source keeps running — where the
+    -- top-level `union` of `litUnionCase` makes the whole run `sourceStuck`. The encoded head
+    -- writes the edge anyway, and the rebuild's column rule re-keys `@FView(2)` along it, so
+    -- the target puts `(F 1)` and `(F 2)` in one class and the source relates no two
+    -- literals. That refutes `encode_corresponds_complete` itself, at a pair of source
+    -- e-nodes, which is why `EncodeDomain.noLitUnion` is a clause.
+    ("the literal-union refutation runs", fun _ =>
+      match exec luProgram, execM (encode luProgram) with
+      | some d, some e =>
+        e.subtermClosedB && e.eqsReflB
+          && d.terms.contains luF1 && d.terms.contains luF2
+          && sameClassF e luF1 luF2
+          && !decide ((luF1, luF2) ∈ d.closureF)
+          && !luProgram.encodeDomainB
+      | _, _ => false),
+    -- `execM_soundTerms_false` takes the last two: `Expr.eval` needs `Signature.IsCtor`, so
+    -- the source head applying an undeclared `Z` is stuck, while `encodePrelude` declares a
+    -- skolem for every name `Program.ctors` reads off the *uses*. The encoded head builds
+    -- `(Z (A))` and writes its view entry, which claims a source term the source has not
+    -- got. `EncodeDomain.headCtorsDeclared` is the clause.
+    ("the undeclared-head refutation runs", fun _ =>
+      match exec udProgram, execM (encode udProgram) with
+      | some d, some e =>
+        e.terms.contains udEntry && d.terms.all udNoZ && !udProgram.encodeDomainB
+      | _, _ => false),
     -- **The state the sweep reads holds `@UF` entries.**
     -- That used to be the refutation: `MergeSaturated` counted the proof column, so no such
     -- state was one the specification's `Cmd.saturate` could step to. `Spec/Step.lean`'s
@@ -3036,12 +3068,14 @@ set_option linter.hashCommand false in
 one of the 96 declares a `:merge` function, so it is `EncodeDomain.ctorsOnly` that fails and
 not a generated-name clash or a shadowed primitive.
 
-That is also what says the newest clause, `EncodeDomain.noLeafPattern`, **costs the corpus
-nothing**: the count is 70 with it as it was without, and the 70 pinned above is what would
-move if a generated program ever wrote a bare-leaf pattern. What the clause does exclude is
-`Encoding/Match.lean`'s `litProgram`, a program the domain used to admit and the encoder gets
-wrong — so the clause is not decoration, it is the only thing standing between the domain and
-a refuted case. -/
+That is also what says the three newest clauses — `EncodeDomain.noLeafPattern`,
+`noLitUnion` and `headCtorsDeclared` — **cost the corpus nothing**: the count is 70 with them
+as it was without, and the 70 pinned above is what would move if a generated program ever
+wrote a bare-leaf pattern, built a literal under a rule that unions, or applied a name it does
+not declare. What each clause excludes is a program the domain used to admit and the encoder
+gets wrong: `Encoding/Match.lean`'s `litProgram` for the first, and
+`Encoding/Correspond.lean`'s `luProgram` and `udProgram` for the other two — so none of them
+is decoration, each is the only thing standing between the domain and a refuted case. -/
 set_option linter.hashCommand false in
 #guard (allCases.filter fun c => !(c.2.declared).encodeDomainB).all fun c =>
   !((c.2.declared).all Cmd.ctorDeclB)

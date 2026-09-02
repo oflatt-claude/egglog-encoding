@@ -1966,6 +1966,9 @@ theorem litBuildProgram_encodeDomain : litBuildProgram.EncodeDomain where
     simp [litBuildProgram, Program.vars, Cmd.vars, Action.vars, Expr.vars]
   noAtRuleset := by simp [litBuildProgram, Program.rulesets, Cmd.rulesets]
   noLeafPattern := by simp [litBuildProgram, Cmd.NoLeafPattern]
+  -- No `union`, so the literal it builds is never one.
+  noLitUnion := Or.inl (by decide)
+  headCtorsDeclared := by decide
 
 /-- The state the one action reaches: the literal, and nothing else. -/
 def litBuildSrc : Database := Database.empty.addTerm (.lit (.int 5))
@@ -3553,6 +3556,8 @@ theorem ncProgram_encodeDomain : ncProgram.EncodeDomain where
     · exact ncRule_noLeafPattern
     · trivial
     · exact absurd h (by simp)
+  noLitUnion := Or.inr (by decide)
+  headCtorsDeclared := by decide +kernel
 
 /-! ##### The source side, in the kernel
 
@@ -4967,6 +4972,16 @@ theorem ncTgt_sameClass_cong : Cong ncSrc.toDatabase ncFA ncFB :=
 
 /-- **The residue of the completeness half. Not proved.**
 
+**It was false, twice over, and the domain now excludes both.** A source rule head that gets
+*stuck* contributes nothing — `RuleResults` asks `evalLocalActions` for a `some` — and its
+encoding's head, which is `.set`s, writes anyway. `execM_soundTerms_false` at the end of this
+file is a head applying a constructor nobody declared, and
+`encode_corresponds_unions_literals` is a head unioning two literals; the second refutes not
+this residue but `encode_corresponds_complete` **itself**, at a pair of terms the source holds
+and the two membership hypotheses are satisfied at. So `EncodeDomain.noLitUnion` and
+`EncodeDomain.headCtorsDeclared` are load-bearing for the conclusion and not only for the
+proof, and everything below is stated under them.
+
 `Database.ViewsSound` and `Database.EdgesSound` at the state `execM` returned, in the term-list
 form the run can carry (`viewsSound_of_soundTerms` is the step back). Every *per-entry*
 obligation is discharged, one per writer `encode` emits — `entrySound_build`,
@@ -4993,15 +5008,30 @@ obligation is discharged, one per writer `encode` emits — `entrySound_build`,
   `FDatabase.IndexCurrent` is its converse, and `cxTgt_not_indexCurrent` refutes *that*; so the
   refutation that blocks `execM_viewLeaderRows` does not block this residue, which is why the
   two are separate holes.
-* **`hfired`, and it is a per-command alignment.** `entrySound_headBuild` and `cong_headUnion`
-  ask that the *source* rule fired at the substitution the correspondence returns.
-  `exists_validQuerySubst_of_encodeQuery` delivers the substitution, valid in whatever source
-  state the clause is instantiated at; what is missing is that the source's own `RunRules` ran
-  it. `encodeCmd` gives `.run R` and `.saturate R` the same round structure they have on the
-  source, so this is round-by-round and the clause has to be instantiated at the round's
-  *pre-state*, with `EntrySound` transported forward along the source's growth. It is the
-  mirror of `unionsJoined_fire` — a source firing behind the target's, where that one needs a
-  target firing behind the source's.
+* **`hfired` is where the falsity was, and it is not a state alignment.**
+  `entrySound_headBuild` and `cong_headUnion` ask that the *source* rule fired at the
+  substitution the correspondence returns, and `RuleResults` makes a firing a valid
+  substitution **plus a block that evaluates**. `exists_validQuerySubst_of_encodeQuery`
+  delivers the substitution and nothing more; a valid substitution is therefore *not* a
+  firing, and the two refutations above are exactly the gap. Three parts, in increasing
+  order of cost:
+  * *A firing's writes reach the post-state.* `RunRules` is a `Database.sUnion` over the
+    results and `MergeClosure` only grows `eqs`, so a term the firing's own `evalActions`
+    recorded is one the round's post-state holds. Self-contained, and the cheap part.
+  * *Two states, not one.* `Database.ViewsSound` is available at the round's **pre**-state,
+    which is the state the encoded rule read its rows off; the term the source's firing builds
+    lands in the **post**-state. `FDatabase.SoundTerms.mono_src` does not bridge that — it
+    moves a clause along `src.eqs ⊆ src'.eqs`, and `Term.app f is ∈ sd.terms` is not a clause
+    at `sd` at all — so `entrySound_headBuild` and `cong_headUnion` want a two-source form:
+    the reading at `sd`, the conclusion at `sd'`. A small generalisation, and a real one.
+  * *The block evaluates at all.* This is what the two new domain clauses buy, and what has
+    to be proved from them: that a source head over the substitution the correspondence
+    returns evaluates whenever the encoded head did. `Expr.eval` has exactly two failure
+    modes on a head — an undeclared name and, through `evalAction`, a `union` whose operand
+    is a literal — and a clause answers each.
+
+  It is still the mirror of `unionsJoined_fire`, a source firing behind the target's where
+  that one needs a target firing behind the source's; what it is not is free.
 
 **No fixpoint is needed on the target.** `FDatabase.RoundClosed` was named as this residue's
 third missing piece; it is not one. Soundness is indifferent to under-firing — `execM_contained`
@@ -5150,6 +5180,8 @@ theorem witnessProgram_encodeDomain : witnessProgram.EncodeDomain where
     intro c hc
     simp only [witnessProgram, List.mem_cons] at hc
     rcases hc with rfl | rfl | rfl | rfl | rfl | rfl | h <;> trivial
+  noLitUnion := Or.inr (by decide)
+  headCtorsDeclared := by decide
 
 /-- **The hypotheses of `encode_corresponds` are simultaneously satisfiable, and both sides
 of its conclusion are inhabited and refutable at the witness.**
@@ -5199,5 +5231,187 @@ theorem encode_corresponds_invents_enode {d e : FDatabase}
   · exact (exec_programStep witnessProgram_encodeDomain.ctorDecls
       (Or.inr (by rw [hd]; simp))).mp (by rw [hd]; rfl)
   · exact FDatabase.mem_closureF_iff.mpr hmem
+
+/-! ### The two refutations the domain's last two clauses answer
+
+`Program.EncodeDomain` gained `noLitUnion` and `headCtorsDeclared` because the completeness
+half is **false** without them, and these are the two programs. Both are one defect:
+`RuleResults` asks `evalLocalActions` for a `some`, so a source rule head that gets *stuck*
+drops the firing silently, while the encoded head — which `encodeAction` emits as `.set`s —
+writes anyway. A stuck **top-level** action costs nothing, because it drops `ProgramStep` and
+makes the claim vacuous; a stuck rule head leaves the source running and the target one entry
+ahead.
+
+Same discipline as the witnesses above: every hypothesis is a *decidable* fact about one
+concrete program's two runs, and `difftest correspond-selftest` evaluates them. -/
+
+/-- A rule head that unions two **literals**. `evalAction` refuses it — egglog's type checker
+rejects `union` on a non-eq-sort and this untyped model cannot see it until the operands are
+values — so the source rule never fires and the source asserts nothing. `encodeAction` emits
+`.set @UF [ordering-max 1 2] [ordering-min 1 2, @Rule_0 …]`, which `execAction` does not
+refuse, and the `@UF` edge between the two literals is then what a rebuild **column** rule
+re-keys `@FView(2)` along — putting `(F 1)` and `(F 2)` in one e-class. -/
+def luProgram : Program :=
+  [.decl "F" { arity := 1, outArity := 1, merge := none },
+   .action (.expr (.app "F" [.lit (.int 1)])),
+   .action (.expr (.app "F" [.lit (.int 2)])),
+   .rule { query := [.expr (.app "F" [.lit (.int 1)])],
+           actions := [.union (.lit (.int 1)) (.lit (.int 2))], ruleset := "r" },
+   .run "r"]
+
+/-- `(F 1)`, a source e-node. -/
+def luF1 : Term := .app "F" [.lit (.int 1)]
+
+/-- `(F 2)`, the other, which the source never equates to `luF1`. -/
+def luF2 : Term := .app "F" [.lit (.int 2)]
+
+theorem luProgram_ctorDecls : luProgram.CtorDecls := by
+  intro c hc
+  simp only [luProgram, List.mem_cons] at hc
+  rcases hc with rfl | rfl | rfl | rfl | rfl | h <;> simp_all [Cmd.CtorDecl]
+
+/-- **`noLitUnion` is the clause it fails**, and it fails both ways round: the program has a
+`union` and it builds literals. -/
+theorem luProgram_not_noLitUnion :
+    ¬ ((∀ c ∈ luProgram, c.ruleUnionFreeB = true) ∨ ∀ c ∈ luProgram, c.litFreeB = true) := by
+  decide
+
+theorem luProgram_not_encodeDomain : ¬ luProgram.EncodeDomain :=
+  fun h => luProgram_not_noLitUnion h.noLitUnion
+
+/-- **And every other clause holds of it**, which is what makes it a program the encoder
+claimed before `noLitUnion` was folded in — the same standing `litProgram` had before
+`noLeafPattern` was. -/
+theorem luProgram_encodeDomain_but_noLitUnion :
+    (∀ c ∈ luProgram, ∀ f dc, c = Cmd.decl f dc → dc.merge = none) ∧
+      (∀ c ∈ luProgram, c.NoSet) ∧ (∀ fk ∈ luProgram.ctors, Prim.ofName fk.1 = none) ∧
+      (∀ fk ∈ luProgram.ctors, ¬ "@".isPrefixOf fk.1) ∧
+      (∀ v ∈ luProgram.vars, ¬ "@".isPrefixOf v) ∧
+      (∀ R ∈ luProgram.rulesets, ¬ "@".isPrefixOf R) ∧
+      (∀ c ∈ luProgram, c.NoLeafPattern) ∧
+      Program.headCtorsDeclaredB [] luProgram = true := by
+  refine ⟨?_, ?_, by decide, by decide +kernel, by decide +kernel, by decide +kernel, ?_,
+    by decide +kernel⟩
+  · intro c hc f dc heq
+    subst heq
+    simp only [luProgram, List.mem_cons] at hc
+    rcases hc with h | h | h | h | h | h <;> simp_all
+  · intro c hc
+    simp only [luProgram, List.mem_cons] at hc
+    rcases hc with rfl | rfl | rfl | rfl | rfl | h <;>
+      simp_all [Cmd.NoSet, Action.NoSet, Pattern.NoValues]
+  · intro c hc
+    simp only [luProgram, List.mem_cons] at hc
+    rcases hc with rfl | rfl | rfl | rfl | rfl | h <;>
+      simp_all [Cmd.NoLeafPattern, Pattern.Grounded, Query.VarsKeyed, Query.vars,
+        Pattern.vars, Expr.vars]
+
+/-- **The encoding equates two source e-nodes the source does not, so
+`encode_corresponds_complete` is false without `noLitUnion`.**
+
+Not the residue and not a membership side condition: `luF1` and `luF2` are both source
+e-nodes — the two hypotheses `encode_corresponds_complete` carries are *satisfied* — the
+target puts them in one class, and the source derives no equation between them. The pair
+`encode_corresponds_invents_enode` refutes the unrestricted `iff` at is a term the source does
+not hold; this one is inside the restriction. -/
+theorem encode_corresponds_unions_literals {d e : FDatabase}
+    (hd : exec luProgram = some d) (he : execM (encode luProgram) = some e)
+    (hsc : e.SubtermClosed) (hr : e.EqsRefl) (hm₁ : luF1 ∈ d.terms) (hm₂ : luF2 ∈ d.terms)
+    (hyes : sameClassF e luF1 luF2 = true) (hno : (luF1, luF2) ∉ d.closureF) :
+    ∃ src, ProgramStep Database.empty luProgram src ∧
+      execM (encode luProgram) = some e ∧
+      luF1 ∈ src.terms ∧ luF2 ∈ src.terms ∧
+      SameClass e.toDatabase luF1 luF2 ∧ ¬ Cong src luF1 luF2 := by
+  refine ⟨d.toDatabase, ?_, he, ?_, ?_, (sameClassF_iff hsc hr _ _).mp hyes, ?_⟩
+  · exact (exec_programStep luProgram_ctorDecls
+      (Or.inr (by rw [hd]; simp))).mp (by rw [hd]; rfl)
+  · rw [FDatabase.toDatabase_terms]; exact hm₁
+  · rw [FDatabase.toDatabase_terms]; exact hm₂
+  · exact fun h => hno (FDatabase.mem_closureF_iff.mpr h)
+
+/-- A rule head applying a constructor the program never **declares**. `Expr.eval` needs
+`Signature.IsCtor`, so the source head is stuck and the source holds no `Z`-application at
+all; `encodePrelude` emits `.decl f (skolemDecl k)` for every `fk ∈ Program.ctors`, which is
+read off the *uses*, so the encoded head builds `(Z (A))` and writes the view entry for it. -/
+def udProgram : Program :=
+  [.decl "A" { arity := 0, outArity := 1, merge := none },
+   .decl "F" { arity := 1, outArity := 1, merge := none },
+   .action (.expr (.app "F" [.app "A" []])),
+   .rule { query := [.expr (.app "F" [.var "x"])],
+           actions := [.expr (.app "Z" [.var "x"])], ruleset := "r" },
+   .run "r"]
+
+/-- `(Z (A))`, the term only the encoded head builds. -/
+def udZA : Term := .app "Z" [.app "A" []]
+
+/-- The view entry the encoded head writes for it. -/
+def udEntry : Term := .app (viewName "Z") ([.app "A" []] ++ [udZA, .app fiatName []])
+
+/-- Whether a term is *not* a `Z`-application, so that `terms.all` says the source holds
+none. -/
+def udNoZ (t : Term) : Bool :=
+  match t with
+  | .app f _ => f != "Z"
+  | .lit _ => true
+
+theorem udProgram_ctorDecls : udProgram.CtorDecls := by
+  intro c hc
+  simp only [udProgram, List.mem_cons] at hc
+  rcases hc with rfl | rfl | rfl | rfl | rfl | h <;> simp_all [Cmd.CtorDecl]
+
+/-- **`headCtorsDeclared` is the clause it fails.** -/
+theorem udProgram_not_headCtorsDeclared :
+    Program.headCtorsDeclaredB [] udProgram = false := by decide +kernel
+
+theorem udProgram_not_encodeDomain : ¬ udProgram.EncodeDomain := by
+  intro h
+  have hb := h.headCtorsDeclared
+  rw [udProgram_not_headCtorsDeclared] at hb
+  exact absurd hb (by simp)
+
+/-- **And every other clause holds of it.** -/
+theorem udProgram_encodeDomain_but_headCtorsDeclared :
+    (∀ c ∈ udProgram, ∀ f dc, c = Cmd.decl f dc → dc.merge = none) ∧
+      (∀ c ∈ udProgram, c.NoSet) ∧ (∀ fk ∈ udProgram.ctors, Prim.ofName fk.1 = none) ∧
+      (∀ fk ∈ udProgram.ctors, ¬ "@".isPrefixOf fk.1) ∧
+      (∀ v ∈ udProgram.vars, ¬ "@".isPrefixOf v) ∧
+      (∀ R ∈ udProgram.rulesets, ¬ "@".isPrefixOf R) ∧
+      (∀ c ∈ udProgram, c.NoLeafPattern) ∧
+      (∀ c ∈ udProgram, c.ruleUnionFreeB = true) := by
+  refine ⟨?_, ?_, by decide, by decide +kernel, by decide +kernel, by decide +kernel, ?_,
+    by decide⟩
+  · intro c hc f dc heq
+    subst heq
+    simp only [udProgram, List.mem_cons] at hc
+    rcases hc with h | h | h | h | h | h <;> simp_all
+  · intro c hc
+    simp only [udProgram, List.mem_cons] at hc
+    rcases hc with rfl | rfl | rfl | rfl | rfl | h <;>
+      simp_all [Cmd.NoSet, Action.NoSet, Pattern.NoValues]
+  · intro c hc
+    simp only [udProgram, List.mem_cons] at hc
+    rcases hc with rfl | rfl | rfl | rfl | rfl | h <;>
+      simp_all [Cmd.NoLeafPattern, Pattern.Grounded, Query.VarsKeyed, Query.vars,
+        Pattern.vars, Expr.vars, Pattern.ArgVar, Expr.ArgVar]
+
+/-- **`FDatabase.SoundTerms` is false at an `execM` target, so `execM_soundTerms` needs
+`headCtorsDeclared`.** The view entry the encoded head wrote claims `∃ as, (Z as)` is a
+source term, and the source holds no `Z`-application whatever.
+
+Weaker than the refutation above — it does not reach `SameClass`, since `(Z (A))` is not a
+source e-node and the sweep never puts it on a pair — and that is why it refutes the residue
+rather than the conclusion. -/
+theorem execM_soundTerms_false {d e : FDatabase}
+    (hd : exec udProgram = some d) (he : execM (encode udProgram) = some e)
+    (hmem : udEntry ∈ e.terms) (hno : d.terms.all udNoZ = true) :
+    ∃ src, ProgramStep Database.empty udProgram src ∧
+      execM (encode udProgram) = some e ∧ ¬ e.SoundTerms src := by
+  refine ⟨d.toDatabase, (exec_programStep udProgram_ctorDecls
+    (Or.inr (by rw [hd]; simp))).mp (by rw [hd]; rfl), he, ?_⟩
+  intro hs
+  obtain ⟨as, ham, -, -⟩ := hs.1 "Z" [.app "A" []] udZA (.app fiatName []) hmem
+  rw [FDatabase.toDatabase_terms] at ham
+  have hz := List.all_eq_true.mp hno _ ham
+  simp [udNoZ] at hz
 
 end Egglog

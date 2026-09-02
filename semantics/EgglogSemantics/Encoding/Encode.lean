@@ -1080,6 +1080,103 @@ def Cmd.NoLeafPattern : Cmd → Prop
   | .rule r => (∀ p ∈ r.query, p.Grounded) ∧ Query.VarsKeyed r.query
   | _ => True
 
+/-! ### The heads the source cannot run
+
+A source rule head that gets **stuck** contributes nothing and its encoding's head writes
+anyway. `RuleResults` asks `evalLocalActions` for a `some`, so a stuck block silently drops
+the firing — where a stuck *top-level* action drops `ProgramStep` and makes the claim
+vacuous, a stuck rule head leaves the source running and the target one entry ahead. Two
+shapes do it, and each of the two clauses below excludes one:
+
+* **A `union` on a literal.** `evalAction` refuses it — egglog's type checker does, and this
+  untyped model cannot see it until the operands are values — while `encodeAction` emits
+  `.set @UF [ordering-max …] […]`, which `execAction` never refuses. Only a **rule head**
+  needs excluding, and either by having no `union` or by the program building no literal at
+  all: a bare variable operand can be bound to a literal too, and it is bound to a term the
+  source holds.
+  `encode_corresponds_unions_literals` is the program, and it refutes the *conclusion*
+  rather than only its residue: the bogus edge is what a rebuild column rule then re-keys a
+  view entry along.
+* **An application of a name nobody declared.** `Expr.eval` needs `Signature.IsCtor`, so the
+  source head is stuck, while `encodePrelude` declares a skolem constructor for **every**
+  name `Program.ctors` reads off the uses — declared or not. `execM_soundTerms_false` is that
+  program.
+
+Both are conditions on the source program's text and both are `Bool`, so a witness discharges
+them by `decide` and `difftest`'s census counts exactly them. Neither costs the corpus
+anything: all seventy in-domain cases are literal-free and are run with their constructors
+declared up front (`Program.declared`). -/
+
+mutual
+
+/-- No literal occurs in the expression. -/
+def Expr.litFreeB : Expr → Bool
+  | .lit _ => false
+  | .var _ => true
+  | .app _ args => Expr.litFreeListB args
+
+/-- `Expr.litFreeB` over an argument list. -/
+def Expr.litFreeListB : List Expr → Bool
+  | [] => true
+  | e :: es => Expr.litFreeB e && Expr.litFreeListB es
+
+end
+
+/-- No literal occurs in an expression the action **evaluates**. Patterns are not read: a
+literal in a query builds nothing, and a variable is only ever bound to a term the source
+holds. -/
+def Action.litFreeB : Action → Bool
+  | .expr e => e.litFreeB
+  | .letBind _ e => e.litFreeB
+  | .union e₁ e₂ => e₁.litFreeB && e₂.litFreeB
+  | .set _ args out => Expr.litFreeListB args && Expr.litFreeListB out
+
+/-- `Action.litFreeB` at every action a command runs. -/
+def Cmd.litFreeB : Cmd → Bool
+  | .action a => a.litFreeB
+  | .rule r => r.actions.all Action.litFreeB
+  | _ => true
+
+/-- `Action.UnionFree`, computed. -/
+def Action.unionFreeB : Action → Bool
+  | .union _ _ => false
+  | _ => true
+
+theorem Action.unionFreeB_iff (a : Action) : a.unionFreeB = true ↔ a.UnionFree := by
+  cases a <;> simp [Action.unionFreeB, Action.UnionFree]
+
+theorem Actions.unionFreeB_iff : ∀ as : List Action,
+    as.all Action.unionFreeB = true ↔ Actions.UnionFree as
+  | [] => by simp
+  | a :: as => by
+      simp only [List.all_cons, Bool.and_eq_true, Actions.UnionFree, Action.unionFreeB_iff,
+        Actions.unionFreeB_iff as]
+
+/-- No **rule head** asserts a `union`. A top-level `union` needs no clause: on a literal it
+sticks the source run outright, and `ProgramStep` then has no state for the correspondence to
+be about — which is what `difftest`'s `litUnionCase` reports as `sourceStuck`. -/
+def Cmd.ruleUnionFreeB : Cmd → Bool
+  | .rule r => r.actions.all Action.unionFreeB
+  | _ => true
+
+@[inherit_doc Cmd.ruleUnionFreeB]
+theorem Cmd.ruleUnionFreeB_iff (r : Rule) :
+    (Cmd.rule r).ruleUnionFreeB = true ↔ r.UnionFree :=
+  Actions.unionFreeB_iff r.actions
+
+/-- **Every constructor a rule head applies is declared before the rule.** The accumulator
+is the names declared so far, so this is "declared *earlier in the program*" and not merely
+"declared somewhere": a declaration after the run that fires the rule is not in the signature
+the firing reads, and a declaration is the only thing that grows it. A rule cannot fire before
+its own `Cmd.rule`, so declared-before-the-rule is declared-before-every-firing. -/
+def Program.headCtorsDeclaredB : List FnName → Program → Bool
+  | _, [] => true
+  | ds, .decl f _ :: cs => Program.headCtorsDeclaredB (f :: ds) cs
+  | ds, .rule r :: cs =>
+      (r.actions.all fun a => a.ctors.all fun fk => ds.contains fk.1)
+        && Program.headCtorsDeclaredB ds cs
+  | ds, _ :: cs => Program.headCtorsDeclaredB ds cs
+
 /-- Constructors only, and no name that would collide with a generated one. -/
 structure Program.EncodeDomain (P : Program) : Prop where
   /-- Every declared function is a constructor. -/
@@ -1111,6 +1208,15 @@ structure Program.EncodeDomain (P : Program) : Prop where
   `litProgram_not_encodeDomain` is that recorded — and it costs the corpus nothing: all
   seventy in-domain cases satisfy it. -/
   noLeafPattern : ∀ c ∈ P, c.NoLeafPattern
+  /-- **No `union` is handed a literal.** Either the program asserts no `union` at all, or
+  it builds no literal — and then no term it holds is one, so no operand can evaluate to
+  one. `encode_corresponds_unions_literals` is the program this excludes, and it refutes
+  `encode_corresponds_complete` rather than only its residue. -/
+  noLitUnion : (∀ c ∈ P, c.ruleUnionFreeB = true) ∨ ∀ c ∈ P, c.litFreeB = true
+  /-- **Every constructor a rule head applies is declared before the rule**, so the source's
+  head builds wherever the encoded head does. `execM_soundTerms_false` is the program this
+  excludes: `encodePrelude` declares a skolem for every applied name, declared or not. -/
+  headCtorsDeclared : Program.headCtorsDeclaredB [] P = true
 
 /-! ### Reading the target
 

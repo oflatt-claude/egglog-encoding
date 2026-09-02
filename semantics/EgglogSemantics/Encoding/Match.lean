@@ -1955,6 +1955,8 @@ theorem wProgram_encodeDomain : wProgram.EncodeDomain where
     · exact ⟨wSrcRule_grounded, wSrcRule_varsKeyed⟩
     · trivial
     · exact absurd h (by simp)
+  noLitUnion := Or.inr (by decide)
+  headCtorsDeclared := by decide +kernel
 
 /-- **The correspondence, run end to end at the composed case.**
 
@@ -2526,6 +2528,8 @@ theorem uProgram_encodeDomain : uProgram.EncodeDomain where
     · exact ⟨uSrcRule_grounded, uSrcRule_varsKeyed⟩
     · trivial
     · exact absurd h (by simp)
+  noLitUnion := Or.inr (by decide)
+  headCtorsDeclared := by decide +kernel
 
 /-- **`cong_headUnion` at a non-reflexive equation.**
 
