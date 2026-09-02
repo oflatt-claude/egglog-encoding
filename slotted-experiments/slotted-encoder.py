@@ -832,10 +832,11 @@ class TermLang:
 #   ("sl",  "$x")   a slot literal -- a binder column, or the reference's `(var $x)`
 #                   in an ordinary column. Both are the class `(Var 0)` reached by an
 #                   edge `0 -> $x`
-#   ("lit", term)   a ground leaf node, written straight into the child column
-#   ("cls", term)   a ground leaf node's CLASS, reached through `RenamesToLeader`.
-#                   Its row is never deleted or migrated, so it is a stable handle,
-#                   but the class's canonical value need not be that row
+#   ("cls", term)   a ground leaf node, matched through `RenamesToLeader` so the
+#                   column is compared against the leaf's CLASS. Writing the leaf
+#                   into the column instead matches the same rows -- a slotless class
+#                   is unioned with its leader -- but this is the one spelling
+#                   `flatten` emits, so a rule reads the same however it was written
 #
 # A RIGHT-HAND SIDE is a `("pv", name)`, a `("sl", "$x")`, or `(op, arg...)` to build
 # a node -- its arguments right-hand sides for the slotted columns and plain values
@@ -845,8 +846,7 @@ class TermLang:
 # `rhs_of` converts a plain nested term into that grammar for a caller that writes
 # its variables as bare strings.
 #
-# The markers are read as markers, so no operator may be named `pv`, `sl`, `lit` or
-# `cls`.
+# The markers are read as markers, so no operator may be named `pv`, `sl` or `cls`.
 
 
 def pvars_of(atom):
@@ -946,7 +946,7 @@ def pat_sexpr(lang, t, binder=False):
         return f"?{t[1]}"
     if t[0] == "sl":
         return t[1] if binder else f"(var {t[1]})"
-    if t[0] in ("lit", "cls"):
+    if t[0] == "cls":
         return lang.sexpr(t[1])
     op = lang[t[0]]
     kids, pays = op.split(t[1:])
@@ -1057,8 +1057,6 @@ def compile_rule(lang, atoms, action, conds=(), fresh=(), bugs=frozenset(),
                 cols.append(cls_of.setdefault(k[1], new("C")))
             elif k[0] == "sl":
                 cols.append("(Var 0)")
-            elif k[0] == "lit":
-                cols.append(lang.enc(k[1]))
             else:
                 cv = new("L")
                 cols.append(cv)

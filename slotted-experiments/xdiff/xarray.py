@@ -81,7 +81,7 @@ class Rule:
     """One rewrite, in the encoder's grammar.
 
     `atoms` are `(root, op, [child...])` with each child `("pv", name)`,
-    `("sl", "$x")` or `("lit", term)`; a right-hand side is one of those or
+    `("sl", "$x")` or `("cls", term)`; a right-hand side is one of those or
     `(op, arg...)` to build a node. `conds` are `(want, "$slot", [pvar...])`, and
     `fresh` names slots the right-hand side binds that the pattern never mentions.
     """
@@ -353,9 +353,9 @@ def map_fusion():
     return Rule(
         "map-fusion",
         [("p", "app", [("pv", "mf"), ("pv", "mgarg")]),
-         ("mf", "app", [("lit", MAP), ("pv", "f")]),
+         ("mf", "app", [("cls", MAP), ("pv", "f")]),
          ("mgarg", "app", [("pv", "mg"), ("pv", "arg")]),
-         ("mg", "app", [("lit", MAP), ("pv", "g")])],
+         ("mg", "app", [("cls", MAP), ("pv", "g")])],
         "p",
         ("app", ("app", MAP,
                  ("lambda", ("sl", "$fu"),
@@ -368,7 +368,7 @@ def map_fusion():
 def map_fission():
     return Rule(
         "map-fission",
-        [("p", "app", [("lit", MAP), ("pv", "l")]),
+        [("p", "app", [("cls", MAP), ("pv", "l")]),
          ("l", "lambda", [("sl", "$x"), ("pv", "fgx")]),
          ("fgx", "app", [("pv", "f"), ("pv", "gx")])],
         "p",
