@@ -395,9 +395,10 @@ part way. Two cases are still open — a `set`'s row and a `union`'s edge carry
 proofs of their own and escape that check, and `(extract e)` of a term not
 already present has the same shape (egraphs-good/egglog-encoding#80).
 
-Two raw nodes have no converted counterpart at all. `@ProjPrim_<k>` becomes the
-`@Proj` at the position its validator's result occupies, and `@CongrAll` becomes
-the positional `@Congr` steps it stands for, expanded against the term.
+Two raw nodes are desugared during conversion rather than kept as proof nodes of
+their own. `@ProjPrim_<k>` becomes the `@Proj` at the position its validator's
+result occupies, and `@CongrAll` becomes the positional `@Congr` steps it stands
+for, expanded against the term.
 
 With proofs enabled the encoding first emits a header defining the format (see
 [`crate::proofs::proof_format`] and `proof_encoding_helpers.rs`): the `@Proof`

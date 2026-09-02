@@ -1183,7 +1183,7 @@ impl<'a> ProofInstrumentor<'a> {
     /// reflexive regardless, so calling this at an equality — a `union`'s — would
     /// have the compositions built on it silently drop a real proof.
     fn reflexive_for_justification(&mut self, emit: &mut Emit) -> String {
-        let node = emit.at.node;
+        let node = Some(emit.at.node);
         self.reflexive_at(emit, node)
     }
 
@@ -1191,14 +1191,14 @@ impl<'a> ProofInstrumentor<'a> {
     /// the term a custom function's view proof is about and which no expression
     /// of the action denotes.
     fn reflexive_for_row(&mut self, emit: &mut Emit) -> String {
-        let node = emit
-            .at
-            .row
-            .expect("a custom function's row is written by a `set`, which has one");
+        let node = emit.at.row;
         self.reflexive_at(emit, node)
     }
 
-    fn reflexive_at(&mut self, emit: &mut Emit, node: usize) -> String {
+    /// `node` is only read by a fiat, which is the one justification stating a
+    /// position; a rule proof takes its conclusion from its column and a merge
+    /// justification reconstructs its own, so neither needs one.
+    fn reflexive_at(&mut self, emit: &mut Emit, node: Option<usize>) -> String {
         match emit.justification {
             // The head's own conclusion here is that the term exists; the
             // proposition comes from the column.
@@ -1209,6 +1209,8 @@ impl<'a> ProofInstrumentor<'a> {
             }
             Justification::Fiat => {
                 let fiat_term = self.proof_names().fiat_term_constructor.clone();
+                let node =
+                    node.expect("a fiat states a position, so it is written where there is one");
                 let at = self.global_action;
                 let proof = self.mint(emit.stmts, &fiat_term, &format!("{at} {node}"));
                 self.mark_reflexive(&proof);

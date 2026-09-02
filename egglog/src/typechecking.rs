@@ -1038,7 +1038,7 @@ impl TypeInfo {
             && fdecl.schema.input.is_empty()
             && !fdecl.schema.is_tuple_output()
         {
-            return Err(TypeError::TermConstructorNoInputs(
+            return Err(TypeError::ViewTableNoInputs(
                 fdecl.name.clone(),
                 fdecl.span.clone(),
             ));
@@ -1623,10 +1623,8 @@ pub enum TypeError {
     NonEqsortUnion(ArcSort, Span),
     #[error("{}\nCannot union values of sort {} because it is marked as non-unionable (e.g. from a relation)", .1, .0.name())]
     NonUnionableSort(ArcSort, Span),
-    #[error(
-        "{1}\nView table {0} with :internal-term-constructor must have at least one input (the e-class)."
-    )]
-    TermConstructorNoInputs(String, Span),
+    #[error("{1}\nView table {0} with :internal-view must have at least one input (the e-class).")]
+    ViewTableNoInputs(String, Span),
     #[error(
         "{span}\nNon-global variable `{name}` must not start with `{}`.",
         crate::GLOBAL_NAME_PREFIX

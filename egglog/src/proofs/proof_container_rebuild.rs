@@ -355,14 +355,8 @@ impl FullPrim for ContainerRebuildProof {
     }
 }
 
-/// Rebuild `value` (of container sort `sort`) and produce a proof that
-/// `value = rebuilt`. Returns `(rebuilt_value, proof)`. `base` proves
-/// `value = value`.
-///
-/// The proof is one `CongrAll` step per distinct changed eq-sort element, at any
-/// depth, folded onto `base` and closed with the container normalization. A
-/// nested container needs no step of its own: proof conversion expands
-/// `CongrAll` against the term, where positions are known.
+/// Rebuild `value` (of container sort `sort`), returning it with a proof that
+/// `value = rebuilt` folded onto `base`, which proves `value = value`.
 fn rebuild_container_proof(
     state: &mut FullState,
     prim: &ContainerRebuildProof,

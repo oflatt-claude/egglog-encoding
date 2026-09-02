@@ -1234,24 +1234,31 @@ impl ProofStore {
                 let element = self.run_body_primitive(prog, rule, *body_index, &arg_terms);
                 // The element is a child of the container the read took it out
                 // of, which is whichever argument's term holds it.
-                let (container_raw, container_id, child_index) = arg_raws
-                    .iter()
-                    .zip(&arg_ids)
-                    .zip(&arg_terms)
-                    .find_map(|((raw, id), term)| {
+                let mut holders = arg_raws.iter().zip(&arg_ids).zip(&arg_terms).filter_map(
+                    |((raw, id), term)| {
                         let Term::App(_, children) = self.term_dag.get(*term) else {
                             return None;
                         };
                         let at = children.iter().position(|child| *child == element)?;
                         Some((*raw, *id, at))
-                    })
-                    .unwrap_or_else(|| {
+                    },
+                );
+                let (container_raw, container_id, child_index) =
+                    holders.next().unwrap_or_else(|| {
                         panic!(
                             "primitive projection: body node {body_index} of rule {rule} read \
                              {} out of no argument of its own",
                             self.term_dag.to_string(element)
                         )
                     });
+                // `ElementFromSeveralContainers` rejects a rule whose element is
+                // reachable from more than one argument, so the holder is unique.
+                assert!(
+                    holders.next().is_none(),
+                    "primitive projection: body node {body_index} of rule {rule} read {} out of \
+                     several arguments, which the encoding should have rejected",
+                    self.term_dag.to_string(element)
+                );
                 let positional = RawProof::Proj(container_raw, child_index);
                 let projected = match self.proof_id.get(&positional) {
                     Some(&id) => id,

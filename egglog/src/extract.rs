@@ -766,9 +766,9 @@ impl Function {
         (self.decl.internal_view.is_some() && !self.is_fd_view()) || self.is_proof_node_relation()
     }
 
-    /// For view tables (with term_constructor), the effective output sort is the last input column
-    /// (old form) or the first output column (FD tuple view). For regular tables, it's the output.
-    /// This is used by extraction to determine which sort a table produces values for.
+    /// The sort this table produces values for during extraction: the first
+    /// output column for an FD tuple view, the last input column for the older
+    /// view form, and the declared output otherwise.
     pub(crate) fn extraction_output_sort(&self) -> &ArcSort {
         if self.is_fd_view() {
             self.schema.output()

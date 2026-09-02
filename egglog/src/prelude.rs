@@ -801,7 +801,6 @@ pub fn add_constructor(
         unextractable,
         hidden: false,
         let_binding: false,
-        internal_view: None,
     }])
 }
 

@@ -625,7 +625,7 @@ impl Parser {
                 // (constructor <name> (<input sort>*) <output sort>)
                 // (constructor <name> (<input sort>*) <output sort> :cost <cost>)
                 // (constructor <name> (<input sort>*) <output sort> :unextractable)
-                // (constructor <name> (<input sort>*) <output sort> :internal-view <kind>)
+                // (constructor <name> (<input sort>*) <output sort>)
                 match tail {
                     [name, inputs, output, rest @ ..] => {
                         let mut cost = None;
@@ -650,7 +650,6 @@ impl Parser {
                             unextractable,
                             hidden,
                             let_binding,
-                            internal_view: None,
                         }]
                     }
                     _ => {
@@ -1564,6 +1563,17 @@ mod tests {
         let s = r#"(f (g a 3) 4.0 (H "hello"))"#;
         let e = Parser::default().get_expr_from_string(None, s).unwrap();
         assert_eq!(format!("{e}"), s);
+    }
+
+    /// The proof encoding declares its views with `:internal-view`, and
+    /// round-tripping a program through `Display` has to preserve them.
+    #[test]
+    fn a_view_declaration_round_trips_through_display() {
+        for kind in ["constructor", "function"] {
+            let s = format!("(function V (i64) i64 :no-merge :internal-view {kind})");
+            let parsed = Parser::default().get_program_from_string(None, &s).unwrap();
+            assert_eq!(format!("{}", parsed[0]), s);
+        }
     }
 
     #[test]

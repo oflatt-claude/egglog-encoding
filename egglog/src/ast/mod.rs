@@ -209,7 +209,6 @@ where
                     unextractable: f.unextractable,
                     hidden: f.internal_hidden,
                     let_binding: f.internal_let,
-                    internal_view: f.internal_view,
                 },
                 FunctionSubtype::Custom => GenericCommand::Function {
                     span: f.span.clone(),
@@ -779,9 +778,6 @@ where
         /// Internal-let constructors are let bindings, excluded from print-size output.
         /// Used for global let bindings that are converted to constructors.
         let_binding: bool,
-        /// Internal-only metadata for proof-encoding view tables.
-        /// Parsed user syntax only supports `:internal-view` on `function`.
-        internal_view: Option<ViewKind>,
     },
 
     /// The `relation` command declares a named relation
@@ -1245,7 +1241,6 @@ where
                 unextractable,
                 hidden,
                 let_binding,
-                internal_view,
             } => {
                 write!(f, "(constructor {name} {schema}")?;
                 if let Some(cost) = cost {
@@ -1259,9 +1254,6 @@ where
                 }
                 if *let_binding {
                     write!(f, " :internal-let")?;
-                }
-                if let Some(kind) = internal_view {
-                    write!(f, " :internal-view {kind}")?;
                 }
                 write!(f, ")")
             }
@@ -1530,8 +1522,9 @@ where
     /// This is used by visualization to handle globals differently.
     pub internal_let: bool,
     pub span: Span,
-    /// For view tables in proof encoding: the constructor to use for building
-    /// terms from the first n-1 children during extraction.
+    /// `:internal-view <kind>`: this table is the proof encoding's view of a
+    /// user table, and `kind` is the subtype that user table was declared with.
+    /// `None` for every table that is not a view.
     pub internal_view: Option<ViewKind>,
     /// `:internal-identity-vals k`: the first `k` value columns are identity
     /// columns — a merge that leaves them unchanged is skipped and the existing
@@ -2081,7 +2074,6 @@ where
                 unextractable,
                 hidden,
                 let_binding,
-                internal_view,
             } => GenericCommand::Constructor {
                 span,
                 name: fun(name),
@@ -2093,7 +2085,6 @@ where
                 unextractable,
                 hidden,
                 let_binding,
-                internal_view,
             },
             GenericCommand::Relation { span, name, inputs } => GenericCommand::Relation {
                 span,
@@ -2364,7 +2355,6 @@ where
                 unextractable,
                 hidden,
                 let_binding,
-                internal_view,
             } => GenericCommand::Constructor {
                 span,
                 name,
@@ -2373,7 +2363,6 @@ where
                 unextractable,
                 hidden,
                 let_binding,
-                internal_view,
             },
             GenericCommand::Relation { span, name, inputs } => {
                 GenericCommand::Relation { span, name, inputs }

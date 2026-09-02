@@ -22,8 +22,9 @@ Two guardrails:
 ## Process
 
 1. Collect the changed comments: `git diff main...HEAD` (or the working /
-   staged diff under review). Look at every added or modified `///`, `//!`,
-   and `//` line.
+   staged diff under review). Look at every added or modified comment: the
+   line forms `///`, `//!` and `//`, and the block forms `/** … */`,
+   `/*! … */` and `/* … */`, including multi-line spans.
 2. For each one, apply the rules below.
 3. Re-run `make nits` and the relevant tests. Intra-doc links such as
    `` [`Foo`] `` must still resolve after the edits.
@@ -89,5 +90,6 @@ After:
 
 ```rust
 /// One enode from [`Read::constructor_enodes`]. Columns are raw
-/// [`Value`]s; convert with [`Core::value_to_base`].
+/// [`Value`]s borrowed for the duration of the callback; convert with
+/// [`Core::value_to_base`].
 ```

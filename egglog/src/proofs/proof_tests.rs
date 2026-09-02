@@ -1723,6 +1723,77 @@ mod tests {
     // and a failed command is not one proof checking reads, so there is no
     // global action for that term's fiat to name. Rejected up front rather than
     // left to name whichever action comes next.
+    /// Proof conversion projects an element out of exactly one container, so a
+    /// primitive that could have read it out of either of two is rejected. No
+    /// builtin takes two containers of its own output sort, so this registers one.
+    #[test]
+    fn proof_mode_rejects_an_element_read_from_several_containers() {
+        use crate::constraint::{SimpleTypeConstraint, TypeConstraint};
+        use crate::{
+            ArcSort, Primitive, PrimitiveValidator, PurePrim, PureState, Span, TermDag, TermId,
+            Value,
+        };
+
+        #[derive(Clone)]
+        struct EitherGet {
+            vn: ArcSort,
+            n: ArcSort,
+        }
+        impl Primitive for EitherGet {
+            fn name(&self) -> &str {
+                "either-get"
+            }
+            fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+                SimpleTypeConstraint::new(
+                    self.name(),
+                    vec![self.vn.clone(), self.vn.clone(), self.n.clone()],
+                    span.clone(),
+                )
+                .into_box()
+            }
+        }
+        impl PurePrim for EitherGet {
+            fn apply<'a, 'db>(&self, _state: PureState<'a, 'db>, _args: &[Value]) -> Option<Value> {
+                None
+            }
+        }
+
+        let mut egraph = EGraph::new_with_proofs();
+        egraph
+            .parse_and_run_program(
+                None,
+                "(datatype N (Z) (S N)) (sort VN (Vec N)) (relation holds (VN))",
+            )
+            .unwrap();
+        let vn = egraph.get_sort_by_name("VN").unwrap().clone();
+        let n = egraph.get_sort_by_name("N").unwrap().clone();
+        // Present only so the rule reaches the several-containers check.
+        let validator: PrimitiveValidator =
+            std::sync::Arc::new(|_: &mut TermDag, _: &[TermId]| None);
+        egraph.add_pure_primitive(EitherGet { vn, n }, Some(validator));
+
+        let err = egraph
+            .parse_and_run_program(
+                None,
+                r#"
+                (relation seen (N))
+                (rule ((holds v1) (holds v2) (= x (either-get v1 v2)))
+                      ((seen x)))
+                "#,
+            )
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                Error::UnsupportedProofCommand {
+                    reason: ProofEncodingUnsupportedReason::ElementFromSeveralContainers,
+                    ..
+                }
+            ),
+            "expected ElementFromSeveralContainers, got {err:?}"
+        );
+    }
+
     #[test]
     fn proof_mode_rejects_a_fail_wrapping_an_action_that_builds_a_term() {
         let err = EGraph::new_with_proofs()
