@@ -880,6 +880,12 @@ pub enum ProofEncodingUnsupportedReason {
     )]
     EqSortPrimitiveResultWithoutContainer,
     #[error(
+        "a primitive whose result could come from more than one of its container arguments is \
+         not supported by proof encoding. The proof projects the element out of one container, \
+         so which one has to be unambiguous."
+    )]
+    ElementFromSeveralContainers,
+    #[error(
         "sort has a presort (custom sort container implementation). Custom sorts are not supported by proof encoding."
     )]
     SortWithPresort,
@@ -1382,6 +1388,15 @@ impl BodyAnchorScan {
 /// the reflexive anchor of a value the query computed, which no view row names.
 fn body_premise_without_anchor(body: &[ResolvedFact]) -> Option<ProofEncodingUnsupportedReason> {
     let scan = BodyAnchorScan::scan(body);
+    // Proof conversion projects an element out of one container, so a read whose
+    // result could have come from several has no one container to name.
+    if scan
+        .elements
+        .values()
+        .any(|containers| containers.len() > 1)
+    {
+        return Some(ProofEncodingUnsupportedReason::ElementFromSeveralContainers);
+    }
     scan.requests
         .iter()
         .find(|(value, _)| !scan.anchored(value, &mut HashSet::default()))
@@ -1851,8 +1866,11 @@ impl crate::constraint::TypeConstraint for DropReflexiveStepTypeConstraint {
     }
 }
 
-/// Whether `action` interns a term, which is what a failed command can leave
-/// behind with nothing to justify it.
+/// Whether `action` interns a term, which a failed command can leave behind
+/// with no action of its own for its fiat to name.
+///
+/// This does not catch a `set`'s row or a `union`'s edge, which carry proofs of
+/// their own — see the `fail` limitation noted in `proof_encoding.md`.
 fn builds_a_term(action: &ResolvedAction) -> bool {
     action_nodes(action).into_iter().any(|node| match node {
         ActionNode::Expr(expr) => {

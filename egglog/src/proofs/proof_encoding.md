@@ -131,8 +131,7 @@ The running example's `rewrite` matches `(Add a b)` into `rewrite_var` and build
 ```text
 (rule ((= (values e p) (Add a b))
        (= rewrite_var e))
-      ((set (Add b a rewrite_var) ())
-       (set (Add b a) (values rewrite_var ())))
+      ((set (Add b a) (values rewrite_var ())))
         :name "(rewrite (Add a b) (Add b a))")
 ```
 
@@ -387,6 +386,14 @@ evaluate:
 | `@ProjPrim_<k>` | the rule and the index of a call in its body | running that primitive's validator on the argument terms |
 | `@MergeIdx` / `@MergeRow` | a function and a subexpression of its merge body | running the merge body on the premise outputs |
 | `@Trans`, `@Sym`, `@Congr`, `@Proj`, … | only other proofs | composing their conclusions |
+
+Naming a position means every proof row needs an action to name, so an action
+the checker's program does not record cannot have one. That is why an action
+inside `(fail …)` that builds a term is rejected: a failed command is not one
+proof checking reads, and the action can leave the term behind when it errors
+part way. Two cases are still open — a `set`'s row and a `union`'s edge carry
+proofs of their own and escape that check, and `(extract e)` of a term not
+already present has the same shape (egraphs-good/egglog-encoding#80).
 
 Two raw nodes have no converted counterpart at all. `@ProjPrim_<k>` becomes the
 `@Proj` at the position its validator's result occupies, and `@CongrAll` becomes
@@ -692,7 +699,7 @@ A nested head chains. For
 ```
 
 the walk numbers `(Num 1)` at columns 0–2, `(Num 2)` at 3–5, and the guest
-`(Add …)` at 6–9, and the head writes three rows (term rows elided):
+`(Add …)` at 6–9, and the head writes three rows:
 
 ```text
 (let num1_pf1   (mint-@Rule_1! rule_name prems 1))       ;; (Num 1) over canonical children

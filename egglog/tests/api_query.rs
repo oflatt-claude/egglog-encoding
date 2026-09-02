@@ -282,3 +282,22 @@ fn the_introspection_apis_split_the_same_way_under_the_encoding() -> Result<(), 
     }
     Ok(())
 }
+
+/// A custom function's value can itself be an eq-sort, so the split between
+/// e-nodes and entries cannot be read off the view's output sort — the view
+/// records which it stands in for.
+#[test]
+fn a_function_returning_an_eq_sort_is_not_a_constructor_under_the_encoding() -> Result<(), Error> {
+    const PROGRAM: &str = "
+        (datatype Math (Num))
+        (function f () Math :merge old)
+        (set (f) (Num))
+    ";
+    for mut egraph in [EGraph::default(), EGraph::new_with_proofs()] {
+        egraph.parse_and_run_program(None, PROGRAM)?;
+        assert!(egraph.function_entries("f", |_| {}).is_ok());
+        assert!(egraph.constructor_enodes("f", |_| {}).is_err());
+        assert!(egraph.constructor_enodes("Num", |_| {}).is_ok());
+    }
+    Ok(())
+}

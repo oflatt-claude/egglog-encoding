@@ -509,7 +509,7 @@ impl Parser {
                     let mut merge = None;
                     let mut hidden = false;
                     let mut let_binding = false;
-                    let mut internal_view = false;
+                    let mut internal_view = None;
                     let mut unextractable = false;
                     let mut identity_vals = None;
                     let mut cost = None;
@@ -567,7 +567,20 @@ impl Parser {
                             (":internal-hidden", []) => hidden = true,
                             (":internal-let", []) => let_binding = true,
                             (":unextractable", []) => unextractable = true,
-                            (":internal-view", []) => internal_view = true,
+                            (":internal-view", [kind]) => {
+                                internal_view =
+                                    Some(match kind.expect_atom("view kind")?.as_str() {
+                                        "constructor" => ViewKind::Constructor,
+                                        "function" => ViewKind::Function,
+                                        other => {
+                                            return error!(
+                                                span,
+                                                "unknown :internal-view kind {other}, expected \
+                                             `constructor` or `function`"
+                                            );
+                                        }
+                                    })
+                            }
                             (":internal-identity-vals", [k]) => {
                                 identity_vals =
                                     Some(k.expect_uint::<usize>("identity value column count")?)
@@ -612,7 +625,7 @@ impl Parser {
                 // (constructor <name> (<input sort>*) <output sort>)
                 // (constructor <name> (<input sort>*) <output sort> :cost <cost>)
                 // (constructor <name> (<input sort>*) <output sort> :unextractable)
-                // (constructor <name> (<input sort>*) <output sort> :internal-view)
+                // (constructor <name> (<input sort>*) <output sort> :internal-view <kind>)
                 match tail {
                     [name, inputs, output, rest @ ..] => {
                         let mut cost = None;
@@ -637,7 +650,7 @@ impl Parser {
                             unextractable,
                             hidden,
                             let_binding,
-                            internal_view: false,
+                            internal_view: None,
                         }]
                     }
                     _ => {

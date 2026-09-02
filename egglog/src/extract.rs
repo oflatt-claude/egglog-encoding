@@ -165,7 +165,7 @@ impl<C: Cost + Ord + Eq + Clone + Debug> Extractor<C> {
             if !unextractable
                 && !hidden
                 && (func.1.decl.subtype == FunctionSubtype::Constructor
-                    || func.1.decl.internal_view)
+                    || func.1.decl.internal_view.is_some())
             {
                 let func_name = func.0.clone();
                 // For view tables, the e-class is the first output column
@@ -728,14 +728,14 @@ impl Function {
     pub(crate) fn rows_are_enodes(&self) -> bool {
         match self.decl.subtype {
             FunctionSubtype::Constructor => true,
-            FunctionSubtype::Custom => self.is_fd_view() && self.schema.outputs[0].is_eq_sort(),
+            FunctionSubtype::Custom => self.decl.internal_view == Some(ViewKind::Constructor),
         }
     }
 
     /// Whether this is the functional-dependency view `(children) -> (eclass, {Unit|Proof})`,
     /// where the e-class is the first output column rather than the last input column.
     pub(crate) fn is_fd_view(&self) -> bool {
-        self.decl.internal_view && self.schema.outputs.len() > 1
+        self.decl.internal_view.is_some() && self.schema.outputs.len() > 1
     }
 
     /// A proof-node relation created by the proof encoding, marked
@@ -763,7 +763,7 @@ impl Function {
     /// True when the id is the last input column (old-form views and encoding
     /// relations), rather than a real output column.
     fn id_is_last_input(&self) -> bool {
-        (self.decl.internal_view && !self.is_fd_view()) || self.is_proof_node_relation()
+        (self.decl.internal_view.is_some() && !self.is_fd_view()) || self.is_proof_node_relation()
     }
 
     /// For view tables (with term_constructor), the effective output sort is the last input column

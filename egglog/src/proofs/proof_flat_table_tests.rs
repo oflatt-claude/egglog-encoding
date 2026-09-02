@@ -63,7 +63,7 @@ fn only_proof_node_relations_use_flat_storage() {
                 function.name()
             );
             assert!(function.decl.merge.is_none(), "{}", function.name());
-            assert!(!function.decl.internal_view, "{}", function.name());
+            assert!(function.decl.internal_view.is_none(), "{}", function.name());
             assert!(
                 function
                     .schema
@@ -129,7 +129,7 @@ fn proof_node_storage_rejects_merge_semantics() {
 fn proof_node_storage_rejects_view_semantics() {
     let (mut egraph, mut decl) = egraph_and_proof_node_decl();
     decl.name = "invalid-proof-view".into();
-    decl.internal_view = true;
+    decl.internal_view = Some(crate::ast::ViewKind::Constructor);
     egraph.declare_function(&decl).unwrap();
 }
 

@@ -94,7 +94,7 @@ fn desugar_fresh_rule(
         unextractable: first_opts.unextractable,
         hidden: false,
         let_binding: false,
-        internal_view: false,
+        internal_view: None,
     };
 
     // Get just the variable names for rewriting

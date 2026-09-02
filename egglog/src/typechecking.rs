@@ -555,7 +555,7 @@ impl EGraph {
                 // proof-column reader) so the encoding can canonicalize a term to
                 // the view's e-class at insertion time. Registered here so it
                 // survives re-parse of the desugared program.
-                if resolved.internal_view
+                if resolved.internal_view.is_some()
                     && let ResolvedCall::Func(ft) = &resolved.resolved_schema
                     && ft.outputs.len() >= 2
                 {
@@ -1034,7 +1034,10 @@ impl TypeInfo {
         // View tables must have at least one input (the e-class), except the
         // proof-mode functional-dependency tuple view `(children) -> (eclass, proof)`, which keys on
         // children only (a 0-arg constructor's view then has no inputs).
-        if fdecl.internal_view && fdecl.schema.input.is_empty() && !fdecl.schema.is_tuple_output() {
+        if fdecl.internal_view.is_some()
+            && fdecl.schema.input.is_empty()
+            && !fdecl.schema.is_tuple_output()
+        {
             return Err(TypeError::TermConstructorNoInputs(
                 fdecl.name.clone(),
                 fdecl.span.clone(),

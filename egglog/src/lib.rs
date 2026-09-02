@@ -396,7 +396,7 @@ impl Function {
     /// Whether this table is a view created by the term/proof encoding: the
     /// function's own rows, keyed on canonicalized children.
     pub fn is_view(&self) -> bool {
-        self.decl.internal_view
+        self.decl.internal_view.is_some()
     }
 }
 
@@ -1086,7 +1086,7 @@ impl EGraph {
         let can_subsume = match decl.subtype {
             FunctionSubtype::Constructor => true,
             // View tables need subsumption support
-            FunctionSubtype::Custom => decl.internal_view,
+            FunctionSubtype::Custom => decl.internal_view.is_some(),
         };
 
         use egglog_bridge::{DefaultVal, MergeFn};
@@ -1123,7 +1123,7 @@ impl EGraph {
                 decl.name
             );
             assert!(
-                !decl.internal_view,
+                decl.internal_view.is_none(),
                 "proof-node relation `{}` cannot be an FD view",
                 decl.name
             );
@@ -2563,11 +2563,10 @@ impl EGraph {
         // Proofs are on for this relation iff the view's proof column (its last
         // output) is not `Unit`; term-encoding-only mode uses `Unit` there.
         let proofs = view.schema.outputs.last().unwrap().name() != "Unit";
-        // A CSV column is always a base value, so a base-sorted view output is
-        // one the rows carry; an e-class one is minted by the load instead. That
-        // is the same split as `rows_are_enodes`, and it has to agree with the
-        // one `input_actions` made when it built the per-row actions a fiat now
-        // names.
+        // A constructor's and a relation's output is the e-class the load mints;
+        // a function's is a value the rows carry. That is the split the view
+        // records, and it has to agree with the one `input_actions` made when it
+        // built the per-row actions a fiat now names.
         let output_is_minted = view.rows_are_enodes();
         // The CSV columns: the view's children, plus any output they carry.
         let mut csv_sorts: Vec<ArcSort> = view.schema.input.clone();

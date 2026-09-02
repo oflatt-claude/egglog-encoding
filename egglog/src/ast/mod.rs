@@ -781,7 +781,7 @@ where
         let_binding: bool,
         /// Internal-only metadata for proof-encoding view tables.
         /// Parsed user syntax only supports `:internal-view` on `function`.
-        internal_view: bool,
+        internal_view: Option<ViewKind>,
     },
 
     /// The `relation` command declares a named relation
@@ -849,7 +849,7 @@ where
         merge: Option<GenericMerge<Head, Leaf>>,
         hidden: bool,
         let_binding: bool,
-        internal_view: bool,
+        internal_view: Option<ViewKind>,
         unextractable: bool,
         /// Marks the first `k` value columns as identity columns: a merge that
         /// leaves them unchanged is skipped and the existing row kept. Only
@@ -1223,8 +1223,8 @@ where
                 if *let_binding {
                     write!(f, " :internal-let")?;
                 }
-                if *internal_view {
-                    write!(f, " :internal-view")?;
+                if let Some(kind) = internal_view {
+                    write!(f, " :internal-view {kind}")?;
                 }
                 if let Some(k) = identity_vals {
                     write!(f, " :internal-identity-vals {k}")?;
@@ -1260,8 +1260,8 @@ where
                 if *let_binding {
                     write!(f, " :internal-let")?;
                 }
-                if *internal_view {
-                    write!(f, " :internal-view")?;
+                if let Some(kind) = internal_view {
+                    write!(f, " :internal-view {kind}")?;
                 }
                 write!(f, ")")
             }
@@ -1469,6 +1469,27 @@ where
 pub type FunctionDecl = GenericFunctionDecl<String, String>;
 pub(crate) type ResolvedFunctionDecl = GenericFunctionDecl<ResolvedCall, ResolvedVar>;
 
+/// What an encoded view stands in for. A constructor and a custom function get
+/// the same table shape, so the distinction has to be recorded: a constructor's
+/// first output is the e-class it minted, a function's is the value it was set
+/// to, and those two read differently even when both are eq-sorts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ViewKind {
+    /// A constructor, a relation, or an encoded global: the rows are e-nodes.
+    Constructor,
+    /// A custom function: the rows are its entries.
+    Function,
+}
+
+impl Display for ViewKind {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        match self {
+            ViewKind::Constructor => write!(f, "constructor"),
+            ViewKind::Function => write!(f, "function"),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum FunctionSubtype {
     Constructor,
@@ -1511,7 +1532,7 @@ where
     pub span: Span,
     /// For view tables in proof encoding: the constructor to use for building
     /// terms from the first n-1 children during extraction.
-    pub internal_view: bool,
+    pub internal_view: Option<ViewKind>,
     /// `:internal-identity-vals k`: the first `k` value columns are identity
     /// columns — a merge that leaves them unchanged is skipped and the existing
     /// row kept. Only valid for merges that are idempotent on equal inputs.
@@ -1618,7 +1639,7 @@ impl FunctionDecl {
             internal_hidden: false,
             internal_let: false,
             span,
-            internal_view: false,
+            internal_view: None,
             identity_vals: None,
             internal_term_node: false,
         }
@@ -1644,7 +1665,7 @@ impl FunctionDecl {
             internal_hidden: hidden,
             internal_let: false,
             span,
-            internal_view: false,
+            internal_view: None,
             identity_vals: None,
             internal_term_node: false,
         }

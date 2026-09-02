@@ -32,7 +32,7 @@ pub(crate) fn desugar_command(
             fdecl.cost = cost;
             fdecl.internal_term_node = term_node;
             // A view table is extractable unless explicitly marked unextractable
-            if fdecl.internal_view {
+            if fdecl.internal_view.is_some() {
                 fdecl.unextractable = unextractable;
             } else if unextractable {
                 fdecl.unextractable = true;

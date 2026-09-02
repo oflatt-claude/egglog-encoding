@@ -188,7 +188,7 @@ impl EqStage {
             // skipped.
             if (func.decl.subtype != FunctionSubtype::Constructor && !func.is_proof_node_relation())
                 || func.extraction_output_sort().name() != sort.name()
-                || func.decl.internal_view
+                || func.decl.internal_view.is_some()
             {
                 continue;
             }

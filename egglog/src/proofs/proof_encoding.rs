@@ -462,8 +462,8 @@ impl<'a> ProofInstrumentor<'a> {
         // Where this program's global actions start in the one proof checking
         // reads, which is what a fiat names instead of naming its endpoints. The
         // instrumentor is rebuilt for each command, so the count carries across
-        // them in the e-graph; `pop` restores the whole e-graph, so it rolls back
-        // with the checker's program rather than drifting from it.
+        // them in the e-graph, and `pop` preserves it along with that program —
+        // a position a fiat already named has to keep meaning the same thing.
         let global_action = egraph.proof_state.global_actions_numbered;
         Self {
             global_action,
@@ -1026,14 +1026,14 @@ impl<'a> ProofInstrumentor<'a> {
                 .ordered_union_merge(&uf_name, Skeleton::Leaf(0).trans(Skeleton::Leaf(1).sym()));
             packed_decl = decl;
             format!(
-                "(function {view_name} ({in_sorts}) ({out_type} {proof_type}) :merge {congruence_merge} :internal-view{view_flags} :internal-identity-vals 1)"
+                "(function {view_name} ({in_sorts}) ({out_type} {proof_type}) :merge {congruence_merge} :internal-view constructor{view_flags} :internal-identity-vals 1)"
             )
         } else if fdecl.merge.is_some() {
             // Custom function with a `:merge`: the view `:merge` runs the user
             // merge once (see `custom_view_merge`). No `@UF` union.
             let custom_merge = self.custom_view_merge(fdecl);
             format!(
-                "(function {view_name} ({in_sorts}) ({out_type} {proof_type}) :merge {custom_merge} :internal-view{view_flags} :internal-identity-vals 1)"
+                "(function {view_name} ({in_sorts}) ({out_type} {proof_type}) :merge {custom_merge} :internal-view function{view_flags} :internal-identity-vals 1)"
             )
         } else {
             // Primitive/`Unit`-output `:no-merge` custom: the view is declared native
@@ -1047,7 +1047,7 @@ impl<'a> ProofInstrumentor<'a> {
                 "eq-sort `:no-merge` must be rejected by command_supports_proof_encoding"
             );
             format!(
-                "(function {view_name} ({in_sorts}) ({out_type} {proof_type}) :no-merge :internal-view{view_flags} :internal-identity-vals 1)"
+                "(function {view_name} ({in_sorts}) ({out_type} {proof_type}) :no-merge :internal-view function{view_flags} :internal-identity-vals 1)"
             )
         };
         // `fresh_sort` is the term's e-class sort only for a custom function whose

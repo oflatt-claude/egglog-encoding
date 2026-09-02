@@ -264,13 +264,14 @@ impl ProofInstrumentor<'_> {
                             let Some(&container_index) = holders.first() else {
                                 return (fv.clone(), self.request_anchor(&fv));
                             };
-                            // Proof conversion projects the element out of one
-                            // container, so which one it is has to be unambiguous.
-                            assert_eq!(
+                            // One container, guaranteed by the support gate's
+                            // `ElementFromSeveralContainers`, which runs the same
+                            // `holds_sort` filter over the same signature.
+                            debug_assert_eq!(
                                 holders.len(),
                                 1,
                                 "`{}` reads an element of `{}` out of {} of its arguments; \
-                                 proofs need exactly one",
+                                 proof support should have rejected this rule",
                                 specialized_primitive.name(),
                                 out.name(),
                                 holders.len(),
