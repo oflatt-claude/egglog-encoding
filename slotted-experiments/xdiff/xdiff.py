@@ -29,6 +29,8 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "slotted-experiments"))
+slotenc = __import__("slotted-encoder")
 EGGLOG = ROOT / "target" / "debug" / "egglog"
 XMULTI = ROOT / "slotted-experiments" / "xmulti"
 MACHINERY = "tests/slotted-node-rules.egg"
@@ -62,83 +64,20 @@ BUGS = {b for b in os.environ.get("XDIFF_BUGS", "").split(",") if b}
 LAM_PROB = float(os.environ.get("XDIFF_LAM", "0.2"))
 
 # ---------------------------------------------------------------- neutral terms
-# term := ('var', n) | ('null',) | (op, t1, t2)
+# term := ('var', n) | ('null',) | (op, t1, t2) | ('lam', ('var', n), body)
+#
+# The toy language IS the generic, string-headed encoding: every operator is a head
+# string in `App2`'s payload column, and `lam` is the `lambda` that encoding already
+# declares a binder -- which is what `string_headed` reads off `GENERIC_BINDERS`, so
+# this cannot disagree with the rules generated for it. The machinery's rule names
+# the literal string "lambda", so the binder is spelled differently on each side.
+LANG = slotenc.TermLang({
+    **{op: slotenc.string_headed(op, "App2") for op in BINOPS},
+    "lam": slotenc.string_headed("lambda", "App2", ref="lam"),
+    "null": slotenc.Op("null", "Null", ref="null"),
+})
 
-
-def slots(t):
-    if t[0] == "var":
-        return {t[1]}
-    if t[0] == "null":
-        return set()
-    if t[0] == "lam":
-        return slots(t[2]) - {t[1][1]}      # the bound slot is not free
-    return slots(t[1]) | slots(t[2])
-
-
-def sexpr(t):
-    """Reference/spec syntax."""
-    if t[0] == "var":
-        return f"(var ${t[1]})"
-    if t[0] == "null":
-        return "null"
-    if t[0] == "lam":
-        return f"(lam ${t[1][1]} {sexpr(t[2])})"
-    return f"({t[0]} {sexpr(t[1])} {sexpr(t[2])})"
-
-
-def enc_op(op):
-    """The operator name the encoding uses. The machinery's alpha-equivalence
-    rule is written against the literal string "lambda", so the binder has a
-    different name on each side."""
-    return "lambda" if op == "lam" else op
-
-
-def mapof(d):
-    if not d:
-        return "(map-empty)"
-    body = " ".join(f"{k} {v}" for k, v in sorted(d.items()))
-    return f"(map-of {body})"
-
-
-def edge(t):
-    """The stored renaming from a child's slots into its parent's slot space.
-
-    A leaf is stored as the canonical `(Var 0)`, so its edge names slot 0; any
-    other subterm is built at its own slot names, so its edge is the identity.
-    """
-    if t[0] == "var":
-        return {0: t[1]}
-    if t[0] == "null":
-        return {}
-    return {s: s for s in slots(t)}
-
-
-def enc(t):
-    """Encoding syntax."""
-    if t[0] == "var":
-        return "(Var 0)"
-    if t[0] == "null":
-        return "(Null)"
-    if t[0] == "lam":
-        # The body's edge is the identity on the body's slots -- which still
-        # contains the bound slot, since the lambda *node* carries it and only
-        # the class drops it.
-        x, body = t[1][1], t[2]
-        return (f'(App2 "lambda" {mapof({0: x})} (Var 0) '
-                f"{mapof(edge(body))} {enc(body)})")
-    op, a, b = t
-    return f'(App2 "{enc_op(op)}" {mapof(edge(a))} {enc(a)} {mapof(edge(b))} {enc(b)})'
-
-
-def shift_term(t, k):
-    """Add `k` to every slot in a term."""
-    if t[0] == "var":
-        return ("var", t[1] + k)
-    if t[0] == "null":
-        return t
-    if t[0] == "lam":
-        return ("lam", shift_term(t[1], k), shift_term(t[2], k))
-    return (t[0], shift_term(t[1], k), shift_term(t[2], k))
+slots, enc, sexpr, shift_term = LANG.slots, LANG.enc, LANG.sexpr, LANG.shift
 
 
 def shift_case(case, k):
@@ -224,16 +163,9 @@ class Case:
         return "\n".join(out) + "\n"
 
 
-def enc_op_ref(op):
-    """The operator name the reference uses; only `lam` differs on our side."""
-    return op
-
-
 def rhs_text(t):
     """An RHS tree as reference pattern text: `(h (g ?a ?b) ?b)`."""
-    if isinstance(t, str):
-        return t if t.startswith("$") else f"?{t}"
-    return "({} {})".format(t[0], " ".join(rhs_text(k) for k in t[1:]))
+    return slotenc.pat_sexpr(LANG, slotenc.rhs_of(LANG, t))
 
 
 # Cases with an accepted invariant violation, and how many. Def. 4 says an edge's
@@ -325,308 +257,36 @@ def check_encodable(case):
 
 
 # -------------------------------------------------------------- rule compiler
-def order_atoms(atoms):
-    """Reorder so every atom after the first shares a variable with the prefix.
-
-    Required, not an optimisation. An atom sharing nothing has no constraint on
-    its `mp`, so every slot it needs is *minted* -- and the mint is a commitment
-    the encoding cannot revisit. If a later atom then shows that a minted slot is
-    really one the pattern already named, the two disagree and `find-mapping`
-    fails, losing a match the reference finds. `multi_ematch` does not have this
-    problem: it keeps such a slot flexible and lets `unify` merge it later.
-
-    The first atom fixes slots(pattern), and those are the pattern's *free* slots. A binder's
-    bound slot is not free, so a binder cannot be the atom that fixes them: that follows from
-    what the terms mean, not from a measurement, which is why no case observes it and why
-    there is no mutation for it. Otherwise the caller's preference is kept, since callers vary
-    the first atom deliberately.
-    """
-    atoms = list(atoms)
-    if "unordered" in BUGS:
-        return atoms
-    first = next((j for j, a in enumerate(atoms) if a[1] != "lam"), 0)
-    atoms = [atoms[first]] + atoms[:first] + atoms[first + 1:]
-
-    rest = list(atoms[1:])
-    out = [atoms[0]]
-    seen = pvars_of(atoms[0])
-    while rest:
-        i = next((j for j, a in enumerate(rest)
-                  if pvars_of(a) & seen), 0)
-        a = rest.pop(i)
-        out.append(a)
-        seen |= pvars_of(a)
-    return out
-
-
-def pvars_of(atom):
-    """An atom's pattern variables. A slot literal is excluded: its constraint is
-    an equality on one slot, applied after `mp` is solved, so it does not help
-    pin `mp` down and does not count as connectivity."""
-    return {v for v in (atom[0], atom[2], atom[3]) if not v.startswith("$")}
+def _child(c):
+    """An atom's child, in the encoder's grammar. A child written `$v` is a slot
+    literal, not a pattern variable: the encoding stores a binder's slot as an edge
+    to `(Var 0)`, so the child position is that literal class."""
+    return ("sl", c) if c.startswith("$") else ("pv", c)
 
 
 def compile_rule(atoms, action, conds=()):
-    """Compile a flattened multipattern into an egglog rule body + action.
+    """Compile a flattened multipattern into an egglog rule, through the encoder.
 
-    Atoms are processed in the given order. Each atom's `mp` is solved from
-    EVERY constraint available at that point -- its root if already bound, and
-    every child bound by an earlier atom -- with `find-mapping-total` so slots
-    the constraints do not reach are minted rather than dropped.
+    Nothing here is the recipe -- `slotted-encoder.compile_rule` is. This is the
+    harness's spelling of a rule translated into the encoder's: an atom is written
+    `(root, op, c1, c2)` over bare names, and an action either `(root, rhs-tree)` or
+    the flat `(root, op, a, b)`, whose `=` equates two variables.
 
-    `conds` are side conditions `(want, slot, pvars)`, compiled last so that every
-    variable they mention is bound and every slot literal is pinned.
+    The flat form is the one action that does not conclude with `Equated`: it asserts
+    the oriented `RenamesToLeader` row directly, and `union-id` is the mutation of it.
     """
-    atoms = order_atoms(atoms)
-    body, uid = [], [0]
-
-    def fresh(p):
-        uid[0] += 1
-        return f"{p}{uid[0]}"
-
-    mp_of = {}      # pvar -> egglog var holding its renaming into slots(pattern)
-    cls_of = {}     # pvar -> egglog var holding its leader
-    slot_of = {}    # "$v" -> egglog i64 var holding that pattern slot
-    sym_of = {}     # pvar -> its symmetry variable, under `per-class`
-    pat = None      # identity on slots(pattern)
-
-    def narrow(m, cls):
-        """Cut `m` down from the matched node's slots to its class's.
-
-        A renaming read off a node has the *node's* slots for its domain, and a node
-        may carry slots its class does not depend on. A variable stands for a class, so
-        using the wider map writes a slot into a built node that the child does not
-        have, breaking Def. 4.
-
-        Restricting by `ClassSlots` rather than by a symmetry: a symmetry is whichever
-        self-loop the join happens to bind, and one of those can itself be wider than
-        the class, in which case it narrows nothing.
-        """
-        cs = fresh("cs")
-        body.append(f"(= {cs} (ClassSlots {cls}))")
-        return f"(compose {m} {cs})"
-
-    def sym_for(pvar):
-        """A symmetry of `pvar`'s class, joined from RenamesToLeader.
-
-        One per class, shared by every use, so all uses must agree on it -- which is also
-        what makes restricting a root's renaming by the live slot set affordable.
-        """
-        if pvar in sym_of:
-            return sym_of[pvar]
-        sv = fresh("sym")
-        body.append(f"(RenamesToLeader {cls_of[pvar]} {sv} {cls_of[pvar]})")
-        sym_of[pvar] = sv
-        return sv
-
-    for idx, (root, op, c1, c2) in enumerate(atoms):
-        e1, e2 = fresh("p"), fresh("p")
-        rv = cls_of.setdefault(root, fresh("V"))
-        # A child written `$v` is a slot literal, not a pattern variable. The
-        # encoding stores a binder's slot as an edge to `(Var 0)`, so the child
-        # position is that literal class and the slot itself is read out of the
-        # edge below.
-        kids = []
-        for cp in (c1, c2):
-            kids.append("(Var 0)" if cp.startswith("$")
-                        else cls_of.setdefault(cp, fresh("C")))
-        body.append(f'(= {rv} (App2 "{enc_op(op)}" {e1} {kids[0]} {e2} {kids[1]}))')
-
-        dom = fresh("dom")
-        body.append(f"(= {dom} (map-union (map-image {e1}) (map-image {e2})))")
-
-        firsts, seconds = [], []
-
-        # the root, if an earlier atom already named its slots
-        if root in mp_of:
-            mv = mp_of[root]
-            sym = sym_for(root)
-            firsts.append(f"(compose {mv} {sym})")
-            seconds.append(f"(map-domain {mv})")
-
-        # every child an earlier atom already named
-        bound_before = set(mp_of)
-        for cp, e in ((c1, e1), (c2, e2)):
-            if cp.startswith("$"):
-                continue
-            if "root-only" in BUGS:
-                continue
-            if cp in bound_before:
-                mx = mp_of[cp]
-                sym = sym_for(cp)
-                firsts.append(f"(compose {mx} {sym})")
-                seconds.append(e)
-
-        # A slot literal an earlier atom already pinned constrains this atom's mp
-        # too: `mp . edge = {0 -> that slot}`. Checking it afterwards instead is
-        # too late -- mp would already have minted a different slot for the same
-        # binder, and nothing can revise a mint.
-        for cp, e in ((c1, e1), (c2, e2)):
-            if cp.startswith("$") and cp in slot_of and "slot-late" not in BUGS:
-                firsts.append(f"(map-insert (map-empty) 0 {slot_of[cp]})")
-                seconds.append(e)
-
-        mp = fresh("mp")
-        if idx == 0:
-            # the initial atom fixes slots(pattern); its mp is the identity
-            body.append(f"(= {mp} {dom})")
-            pat = mp
-        elif firsts:
-            args = " ".join(firsts + seconds)
-            body.append(f"(= {mp} (find-mapping-total {pat} {dom} {args}))")
-        else:
-            # nothing constrains this atom: every slot is minted
-            body.append(
-                f"(= {mp} (find-mapping-total {pat} {dom} (map-empty) (map-empty)))"
-            )
-
-        # Accumulate the avoid-set. Passing only the initial atom's slots would
-        # let two atoms that both mint choose the same slot, since the primitive
-        # is pure and sees one atom at a time. Identity maps never conflict under
-        # map-union, so the running union is always well defined.
-        idm = fresh("idm")
-        body.append(f"(= {idm} (map-image {mp}))")
-        if idx == 0:
-            pat = idm
-        else:
-            nxt = fresh("av")
-            body.append(f"(= {nxt} (map-union {pat} {idm}))")
-            pat = nxt
-
-        # A slot literal names one slot in pattern space. `(= v ...)` binds it on
-        # first use and constrains it on every later one, which is how the same
-        # `$v` written twice forces the two slots to agree.
-        for cp, e in ((c1, e1), (c2, e2)):
-            if cp.startswith("$"):
-                sv = slot_of.setdefault(cp, "s" + cp[1:])
-                body.append(f"(= {sv} (map-get (compose {mp} {e}) 0))")
-
-        # walk the children: bind the new ones, check the ones bound in THIS atom
-        for cp, e in ((c1, e1), (c2, e2)):
-            if cp.startswith("$"):
-                continue
-            if cp in mp_of:
-                # A child bound by an EARLIER atom is already handled: it went
-                # into the renaming as a constraint, so the equation holds by
-                # construction. One bound in THIS atom still needs checking.
-                # Under `root-only` the constraint was skipped, so the check is
-                # what the original bug had in its place -- emitting neither
-                # would be a different, more permissive mutant.
-                if cp not in bound_before or "root-only" in BUGS:
-                    # compare against the class's one symmetry rather than solving for
-                    # the symmetry this pair would need
-                    sym = sym_for(cp)
-                    body.append(
-                        f"(= (compose {mp} {e}) (compose {mp_of[cp]} {sym}))")
-            else:
-                m = fresh("m")
-                body.append(f"(= {m} (compose {mp} {e}))")
-                mp_of[cp] = narrow(m, cls_of[cp])
-        if root not in mp_of:
-            mp_of[root] = narrow(mp, rv)
-
-    # Side conditions. A variable's slots in pattern space are the image of its
-    # renaming, so `$s in slots(?x)` is membership in `(map-image mx)`. With one
-    # variable that is a fact; with several the disjunction has to be a value, since
-    # a fact cannot be combined with `or`.
-    for want, slot, pvars in conds:
-        sv = slot_of[slot]
-        images = [f"(map-image {mp_of[v]})" for v in pvars]
-        if len(images) == 1:
-            kind = "map-contains" if want else "map-not-contains"
-            body.append(f"({kind} {images[0]} {sv})")
-        else:
-            any_of = " ".join(f"(bool-map-contains {im} {sv})" for im in images)
-            expr = f"(or {any_of})"
-            body.append(f"(guard {expr})" if want
-                        else f"(guard (bool= {expr} false))")
-
-    def rhs_sexpr(t):
-        """The RHS as reference pattern text, for the spec's `rhs` line."""
-        if isinstance(t, str):
-            return t if t.startswith("$") else f"?{t}"
-        return "({} {})".format(enc_op_ref(t[0]),
-                                " ".join(rhs_sexpr(k) for k in t[1:]))
-
-    def build_rhs(t, lets):
-        """Edge and class for an RHS term, emitting one `let` per built node.
-
-        Everything in an action is already in pattern slot space, so a built node's
-        edge to another built node is the identity on that child's slots: there is
-        no renaming between them. A built node's slots are the union of its edges'
-        images, which is what makes this a bottom-up walk.
-        """
-        if isinstance(t, str):
-            if t.startswith("$"):
-                # the machinery carries a bound slot as an edge to `(Var 0)`
-                return f"(map-insert (map-empty) 0 {slot_of[t]})", "(Var 0)"
-            return mp_of[t], cls_of[t]
-        kids = [build_rhs(k, lets) for k in t[1:]]
-        node = fresh("_rhs")
-        cols = " ".join(f"{e} {c}" for e, c in kids)
-        lets.append(f'(let {node} (App{len(kids)} "{enc_op(t[0])}" {cols}))')
-        slots = "(map-empty)"
-        for e, _ in reversed(kids):
-            slots = (f"(map-image {e})" if slots == "(map-empty)"
-                     else f"(map-union (map-image {e}) {slots})")
-        if t[0] == "lam":
-            # A binder's bound slot is on the node but not on the class, so the
-            # parent's edge must not name it -- an edge naming a slot its child
-            # does not have breaks Def. 4. No case here builds a binder (the
-            # fuzzer excludes them and no curated action nests one), so this is
-            # correctness for the compiler rather than something a case observes;
-            # `xarray.py` builds binders and needs it.
-            slots = f"(map-remove {slots} {slot_of[t[1]]})"
-        return slots, node
-
-    # A two-element action is `(root, rhs-tree)`; the four-element forms are the
-    # flat build and the equate.
+    atoms = slotenc.connected_order(
+        LANG, [(r, o, [_child(c1), _child(c2)]) for r, o, c1, c2 in atoms],
+        bugs=BUGS)
     if len(action) == 2:
         root, rhs = action
-        mr = mp_of[root]
-        if isinstance(rhs, str) and not rhs.startswith("$"):
-            action = (root, "=", rhs, rhs)          # a bare variable is an equate
-        else:
-            lets = []
-            _, built = build_rhs(rhs, lets)
-            act = "\n       ".join(
-                lets + [f"(Equated {built} {mr} {cls_of[root]})"])
-            return "(rule (" + "\n       ".join(body) + f")\n      ({act}))"
-
-    root, op, a, b = action
-    # egglog's `union` equates e-classes, i.e. it can only assert an equation
-    # whose two renamings are the identity. The root's renaming `mp_of[root]`
-    # generally is NOT: it carries the matched node's slots into the pattern's.
-    # Unioning the built node with the root as-is therefore asserts a *false*
-    # equation whenever they differ, which shows up as spurious redundancy.
-    #
-    # So build the node in the root's own slot space instead, by pulling every
-    # child renaming back through `inverse mp_root`, and guard that doing so
-    # keeps all of the child's slots -- `compose` truncates silently, and a
-    # dropped slot asserts that slot is redundant.
-    # The built node lives in pattern slots, so the equation to assert is
-    # `built = mp_root * X_root` -- a union over *renamed ids*, which egglog's
-    # `union` cannot express (it equates e-classes, i.e. only the case where
-    # both renamings are the identity). Insert the RenamesToLeader fact instead
-    # and let the machinery's transitivity / single-parent rules re-orient it.
-    mr = mp_of[root]
-    if op == "=":
-        # Equate two variables. Both carry a renaming into pattern slots and
-        # neither need be the identity, which is the one action egglog's `union`
-        # cannot express: it would assert the equation at the identity. Solve
-        # instead -- from mr*Root = ma*A follows Root = (mr^-1 . ma) * A.
-        return ("(rule (" + "\n       ".join(body) + ")\n"
-                f"      ((Equated {cls_of[root]} "
-                f"(compose (inverse {mr}) {mp_of[a]}) {cls_of[a]})))")
-    if "union-id" in BUGS:
-        act = (f'(union {cls_of[root]} (App2 "{enc_op(op)}" '
-               f"{mp_of[a]} {cls_of[a]} {mp_of[b]} {cls_of[b]}))")
+        act = ("build", root, slotenc.rhs_of(LANG, rhs))
+    elif action[1] == "=":
+        act = ("build", action[0], ("pv", action[2]))
     else:
-        act = (
-            f'(let _hn (App2 "{enc_op(op)}" {mp_of[a]} {cls_of[a]} {mp_of[b]} {cls_of[b]}))\n'
-            f"       (RenamesToLeader _hn {mr} {cls_of[root]})"
-        )
-    return "(rule (" + "\n       ".join(body) + f")\n      ({act}))"
+        root, op, a, b = action
+        act = ("row", root, op, [a, b])
+    return slotenc.compile_rule(LANG, atoms, act, conds=conds, bugs=BUGS)
 
 
 # -------------------------------------------------------------- egg generation
@@ -1036,7 +696,7 @@ def curated():
     # C13 -- a three-atom body mixing a binder, a chain and a join.
     #
     # Found as a witness that the first atom must not be a binder, and
-    # `order_atoms` still avoids choosing one. It is NOT that witness any more,
+    # `connected_order` still avoids choosing one. It is NOT that witness any more,
     # and probably never was a clean one: its discrimination came from a union
     # whose operand was a bare leaf, which the encoding cannot represent
     # faithfully. With the leaf replaced no ordering disagrees, and 200

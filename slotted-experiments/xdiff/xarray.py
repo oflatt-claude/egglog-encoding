@@ -19,8 +19,8 @@ The two sides:
               non-binding `Lam(Slot, AppliedId)` and a `slot_free_in` helper that
               returns "NOT free in", which inverts every guard in that file.
   encoding    a generated .egg file, each rule flattened into depth-1 atoms and
-              compiled by `compile_array_rule` below, following the recipe in
-              `tests/slotted-user-rules.egg`.
+              compiled by `slotted-experiments/slotted-encoder.py`, which is the
+              recipe in `tests/slotted-user-rules.egg`.
 
 Usage:
     ./xarray.py                each of the 8 rules firing, and each guard blocking
@@ -40,7 +40,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from xdiff import EGGLOG, MACHINERY, ROOT, XMULTI, parse_same_class   # noqa: E402
+from xdiff import (EGGLOG, MACHINERY, ROOT, XMULTI,   # noqa: E402
+                   parse_same_class, slotenc)
 
 RUN_TIMEOUT = int(os.environ.get("XARRAY_TIMEOUT", "120"))
 
@@ -48,119 +49,43 @@ RUN_TIMEOUT = int(os.environ.get("XARRAY_TIMEOUT", "120"))
 # term := ('var', slot) | ('sym', name) | ('num', n)
 #       | ('app', a, b) | ('lam', slot, body) | ('let', slot, body, val)
 #
-# `let` takes its columns in the reference's order -- binder, body, value --
-# which is also the encoding's `App3 "let"`. The paper's Listing 1 writes the
-# same constructor as `Let(RenamedId, Bind<RenamedId>)`, i.e. `(let ?e $x ?body)`.
+# No new language is needed: the array language IS the generic, string-headed
+# encoding, so every operator is a head string in an `App<n>` payload column and
+# `lambda`/`let` are the two binders that encoding already declares -- which is what
+# `string_headed` reads off `GENERIC_BINDERS`, so this cannot disagree with the rules
+# generated for them.
+#
+# `let` takes its columns in the reference's order -- binder, body, value -- which is
+# also `App3 "let"`. The paper's Listing 1 writes the same constructor as
+# `Let(RenamedId, Bind<RenamedId>)`, i.e. `(let ?e $x ?body)`.
+#
+# `lam` is the tag a term carries and `lambda` the operator a rule atom names; both
+# are the same `Op`, whose `ref` is the reference's `lam`.
+_LAMBDA = slotenc.string_headed("lambda", "App2", ref="lam")
+LANG = slotenc.TermLang({
+    "app": slotenc.string_headed("app", "App2"),
+    "lambda": _LAMBDA,
+    "lam": _LAMBDA,
+    "let": slotenc.string_headed("let", "App3"),
+    "sym": slotenc.Op("sym", "Sym", ["String"]),
+    "num": slotenc.Op("num", "Num", ["i64"]),
+})
+
+enc, sexpr, shift = LANG.enc, LANG.sexpr, LANG.shift
 
 MAP = ("sym", "map")
 
 
-def slots(t):
-    """The term's FREE slots."""
-    k = t[0]
-    if k == "var":
-        return {t[1]}
-    if k in ("sym", "num"):
-        return set()
-    if k == "app":
-        return slots(t[1]) | slots(t[2])
-    if k == "lam":
-        return slots(t[2]) - {t[1]}
-    if k == "let":
-        # `Bind` hides the bound slot from the BODY's public slots only, so a
-        # value that mentions it keeps it free. The encoding's binder rule drops
-        # it from the whole node, so the two only agree when the value does not
-        # mention it -- which is true of everything these rules build.
-        return (slots(t[2]) - {t[1]}) | slots(t[3])
-    raise AssertionError(t)
-
-
-def sexpr(t):
-    """Reference / spec syntax."""
-    k = t[0]
-    if k == "var":
-        return f"(var ${t[1]})"
-    if k == "sym":
-        return t[1]
-    if k == "num":
-        return str(t[1])
-    if k == "app":
-        return f"(app {sexpr(t[1])} {sexpr(t[2])})"
-    if k == "lam":
-        return f"(lam ${t[1]} {sexpr(t[2])})"
-    return f"(let ${t[1]} {sexpr(t[2])} {sexpr(t[3])})"
-
-
-def mapof(d):
-    if not d:
-        return "(map-empty)"
-    return "(map-of " + " ".join(f"{k} {v}" for k, v in sorted(d.items())) + ")"
-
-
-def edge(t):
-    """The stored renaming from a child's slots into its parent's slot space.
-
-    A var leaf is stored as the canonical `(Var 0)`, so its edge names slot 0.
-    Everything else is built at its own slot names, so its edge is the identity
-    on its free slots -- for a binder that is the node's slots minus the bound
-    one, which is what the class has.
-    """
-    if t[0] == "var":
-        return {0: t[1]}
-    return {s: s for s in slots(t)}
-
-
-def enc(t):
-    """Encoding syntax."""
-    k = t[0]
-    if k == "var":
-        return "(Var 0)"
-    if k == "sym":
-        return f'(Sym "{t[1]}")'
-    if k == "num":
-        return f"(Num {t[1]})"
-    if k == "app":
-        a, b = t[1], t[2]
-        return f'(App2 "app" {mapof(edge(a))} {enc(a)} {mapof(edge(b))} {enc(b)})'
-    if k == "lam":
-        x, body = t[1], t[2]
-        # the body's edge is read off the body's OWN slots, which still contain
-        # the bound slot: the lambda node carries it, only the class drops it
-        return (f'(App2 "lambda" {mapof({0: x})} (Var 0) '
-                f"{mapof(edge(body))} {enc(body)})")
-    x, body, val = t[1], t[2], t[3]
-    return (f'(App3 "let" {mapof({0: x})} (Var 0) '
-            f"{mapof(edge(body))} {enc(body)} "
-            f"{mapof(edge(val))} {enc(val)})")
-
-
-def shift(t, k):
-    """Add `k` to every slot in a term. Slot names carry no meaning, so no
-    answer may change."""
-    if t[0] == "var":
-        return ("var", t[1] + k)
-    if t[0] in ("sym", "num"):
-        return t
-    if t[0] == "app":
-        return ("app", shift(t[1], k), shift(t[2], k))
-    if t[0] == "lam":
-        return ("lam", t[1] + k, shift(t[2], k))
-    return ("let", t[1] + k, shift(t[2], k), shift(t[3], k))
-
-
 # ------------------------------------------------------------- rule descriptions
-# An atom is (root, op, [child...]); a child is
-#   ('pv', name)   a pattern variable
-#   ('sl', '$x')   a slot literal -- the encoding stores one as an edge to (Var 0)
-#   ('c',  term)   a constant leaf, e.g. MAP
-# A right-hand side is a child, or (op, child...) to build a node.
-# `conds` are (want, '$slot', [pvar...]); `fresh` names slots the RHS binds that
-# the left-hand side never mentions.
-
-BINDER_OPS = {"lambda": 0, "let": 0}     # op -> which child is the binder
-
-
 class Rule:
+    """One rewrite, in the encoder's grammar.
+
+    `atoms` are `(root, op, [child...])` with each child `("pv", name)`,
+    `("sl", "$x")` or `("lit", term)`; a right-hand side is one of those or
+    `(op, arg...)` to build a node. `conds` are `(want, "$slot", [pvar...])`, and
+    `fresh` names slots the right-hand side binds that the pattern never mentions.
+    """
+
     def __init__(self, name, atoms, rhs_root, rhs, conds=(), fresh=()):
         self.name = name
         self.atoms = list(atoms)
@@ -170,23 +95,6 @@ class Rule:
         self.fresh = list(fresh)
 
     # ---- the reference side: one nested pattern and one nested right-hand side
-    #
-    # A slot literal renders two different ways: in a binder column it is the
-    # bare `$x` that `Bind` holds, and anywhere else it is the term `(var $x)`.
-    # The encoding stores both as an edge to `(Var 0)`, which is why one child
-    # kind covers both here.
-    def _pat(self, x, binder=False):
-        if x[0] == "pv":
-            return f"?{x[1]}"
-        if x[0] == "sl":
-            return x[1] if binder else f"(var {x[1]})"
-        if x[0] == "c":
-            return sexpr(x[1])
-        op = x[0]
-        b = BINDER_OPS.get(op)
-        return "({} {})".format(REF_OP[op], " ".join(
-            self._pat(k, binder=(i == b)) for i, k in enumerate(x[1:])))
-
     def nested_lhs(self):
         """The atoms re-nested into the single pattern they came from.
 
@@ -199,240 +107,46 @@ class Rule:
 
         def go(root):
             _, op, kids = by_root[root]
-            b = BINDER_OPS.get(op)
+            binders = LANG[op].binders
             parts = []
             for i, k in enumerate(kids):
                 if k[0] == "pv" and k[1] in inner:
                     parts.append(go(k[1]))
                 else:
-                    parts.append(self._pat(k, binder=(i == b)))
-            return "({} {})".format(REF_OP[op], " ".join(parts))
+                    parts.append(slotenc.pat_sexpr(LANG, k, binder=(i in binders)))
+            return "({} {})".format(LANG[op].ref, " ".join(parts))
 
         return go(self.atoms[0][0])
 
     def spec_lines(self):
         out = ["rule", f"nested {self.nested_lhs()}",
-               f"rhs {self.rhs_root} {self._pat(self.rhs)}"]
+               f"rhs {self.rhs_root} {slotenc.pat_sexpr(LANG, self.rhs)}"]
         for want, slot, pvars in self.conds:
             out.append(f"cond {'in' if want else 'notin'} {slot} {' '.join(pvars)}")
         return out
 
 
-REF_OP = {"app": "app", "lambda": "lam", "let": "let"}
-
-
-def pvars_of(atom):
-    """An atom's pattern variables. A slot literal is not one: its constraint is an
-    equality on a single slot, so it does not help connect an atom to the prefix."""
-    return {atom[0]} | {k[1] for k in atom[2] if k[0] == "pv"}
-
-
-def connected_order(atoms, first=0):
-    """`atoms` with `atoms[first]` leading, then every remaining atom placed as soon
-    as it shares a variable with the prefix.
-
-    Connectivity is required, not an optimisation: an atom sharing nothing with the
-    prefix has no constraint on its `mp`, so every slot it needs is minted -- and a
-    mint is a commitment nothing can revise, so a later atom showing the slot was
-    already named loses the match.
-    """
-    out = [atoms[first]]
-    rest = [a for i, a in enumerate(atoms) if i != first]
-    seen = pvars_of(atoms[first])
-    while rest:
-        i = next((j for j, a in enumerate(rest) if pvars_of(a) & seen), 0)
-        a = rest.pop(i)
-        out.append(a)
-        seen |= pvars_of(a)
-    return out
-
-
 def compile_array_rule(rule, atom_order=None):
-    """Compile one array rule into an egglog rule, following the recipe in
+    """One array rule, through the encoder, which is the recipe in
     `tests/slotted-user-rules.egg`.
 
-    Each atom's `mp` is solved from EVERY constraint available at that point --
-    its root if an earlier atom bound it, every child an earlier atom bound, and
-    every slot literal an earlier atom pinned -- with `find-mapping-total`, so a
-    slot the constraints do not reach is minted rather than dropped (M3). Every
-    variable is narrowed to its class's slots before use (M8), and the action
-    asserts `Equated`, never `RenamesToLeader` (M10).
+    `atom_order` names the atom that leads; the encoding's answer must not depend on
+    which, and `check_case` varies it. The leader is named rather than inferred
+    because `atoms[0]` -- the pattern's outermost node -- is a binder for most of
+    these rules, and taking it first pins the bound slot off its own edge.
+
+    The slot variables are `s_x` rather than `sx`, and a minted right-hand side slot
+    gets a solve of its own with the avoid-set growing after it, rather than one solve
+    over the whole batch. Both are spellings, not constructions:
+    `tests/slotted-array-rules.egg` is committed, so they are kept as they were
+    written.
     """
     lead = 0 if atom_order is None else min(atom_order, len(rule.atoms) - 1)
-    atoms = connected_order(rule.atoms, lead)
-    body, uid = [], [0]
-
-    def fresh_var(p):
-        uid[0] += 1
-        return f"{p}{uid[0]}"
-
-    mp_of, cls_of, slot_of, sym_of = {}, {}, {}, {}
-    pat = None                       # identity on every pattern slot named so far
-
-    def union_images(es):
-        out = f"(map-image {es[-1]})"
-        for e in reversed(es[:-1]):
-            out = f"(map-union (map-image {e}) {out})"
-        return out
-
-    def narrow(m, cls):
-        cs = fresh_var("cs")
-        body.append(f"(= {cs} (ClassSlots {cls}))")
-        return f"(compose {m} {cs})"
-
-    def sym_for(pv):
-        if pv not in sym_of:
-            sv = fresh_var("sym")
-            body.append(f"(RenamesToLeader {cls_of[pv]} {sv} {cls_of[pv]})")
-            sym_of[pv] = sv
-        return sym_of[pv]
-
-    for idx, (root, op, kids) in enumerate(atoms):
-        es = [fresh_var("p") for _ in kids]
-        rv = cls_of.setdefault(root, fresh_var("V"))
-        cols = []
-        for k, e in zip(kids, es):
-            if k[0] == "pv":
-                cols.append(f"{e} {cls_of.setdefault(k[1], fresh_var('C'))}")
-            elif k[0] == "sl":
-                cols.append(f"{e} (Var 0)")
-            else:
-                cols.append(f"{e} {enc(k[1])}")
-        body.append(f'(= {rv} (App{len(kids)} "{op}" ' + " ".join(cols) + "))")
-
-        dom = fresh_var("dom")
-        body.append(f"(= {dom} {union_images(es)})")
-
-        firsts, seconds = [], []
-        if root in mp_of:
-            firsts.append(f"(compose {mp_of[root]} {sym_for(root)})")
-            seconds.append(f"(map-domain {mp_of[root]})")
-        bound_before = set(mp_of)
-        for k, e in zip(kids, es):
-            if k[0] == "pv" and k[1] in bound_before:
-                firsts.append(f"(compose {mp_of[k[1]]} {sym_for(k[1])})")
-                seconds.append(e)
-        # A slot literal an earlier atom pinned constrains this atom's mp too:
-        # checking it afterwards is too late, mp would already have minted a
-        # different name for the same slot and nothing can revise a mint.
-        for k, e in zip(kids, es):
-            if k[0] == "sl" and k[1] in slot_of:
-                firsts.append(f"(map-insert (map-empty) 0 {slot_of[k[1]]})")
-                seconds.append(e)
-
-        mp = fresh_var("mp")
-        if idx == 0:
-            body.append(f"(= {mp} {dom})")
-        elif firsts:
-            body.append(f"(= {mp} (find-mapping-total {pat} {dom} "
-                        + " ".join(firsts + seconds) + "))")
-        else:
-            body.append(f"(= {mp} (find-mapping-total {pat} {dom} "
-                        "(map-empty) (map-empty)))")
-
-        # the avoid-set accumulates: an atom may not mint over anything an
-        # earlier atom already named (M5)
-        idm = fresh_var("idm")
-        body.append(f"(= {idm} (map-image {mp}))")
-        if idx == 0:
-            pat = idm
-        else:
-            nxt = fresh_var("av")
-            body.append(f"(= {nxt} (map-union {pat} {idm}))")
-            pat = nxt
-
-        for k, e in zip(kids, es):
-            if k[0] == "sl":
-                sv = slot_of.setdefault(k[1], "s_" + k[1][1:])
-                body.append(f"(= {sv} (map-get (compose {mp} {e}) 0))")
-
-        for k, e in zip(kids, es):
-            if k[0] != "pv":
-                continue
-            if k[1] in mp_of:
-                if k[1] not in bound_before:
-                    # bound in THIS atom, so it went in as no constraint; check it
-                    body.append(f"(= (compose {mp} {e}) "
-                                f"(compose {mp_of[k[1]]} {sym_for(k[1])}))")
-            else:
-                m = fresh_var("m")
-                body.append(f"(= {m} (compose {mp} {e}))")
-                mp_of[k[1]] = narrow(m, cls_of[k[1]])
-        if root not in mp_of:
-            mp_of[root] = narrow(mp, rv)
-
-    # Slots the right-hand side binds that the left-hand side never named. The
-    # reference writes a literal `$x` there; on this side a name has to be minted,
-    # avoiding every pattern slot in play and every earlier mint.
-    for f in rule.fresh:
-        # a fresh name reusing a left-hand literal's would silently constrain it
-        assert f not in slot_of, f"{f} is already pinned by the pattern"
-        fm = fresh_var("fm")
-        body.append(f"(= {fm} (find-mapping-total {pat} (map-of 0 0) "
-                    "(map-empty) (map-empty)))")
-        sv = "s_" + f[1:]
-        slot_of[f] = sv
-        body.append(f"(= {sv} (map-get {fm} 0))")
-        nxt = fresh_var("av")
-        body.append(f"(= {nxt} (map-union {pat} (map-image {fm})))")
-        pat = nxt
-
-    # Side conditions, last, so every variable is bound and every literal pinned.
-    # A variable's slots in pattern space are the image of its renaming.
-    for want, slot, pvars in rule.conds:
-        sv = slot_of[slot]
-        images = [f"(map-image {mp_of[v]})" for v in pvars]
-        if len(images) == 1:
-            kind = "map-contains" if want else "map-not-contains"
-            body.append(f"({kind} {images[0]} {sv})")
-        else:
-            expr = "(or " + " ".join(f"(bool-map-contains {im} {sv})"
-                                    for im in images) + ")"
-            body.append(f"(guard {expr})" if want
-                        else f"(guard (bool= {expr} false))")
-
-    # ---- the action
-    lets = []
-
-    def build(t):
-        """(edge, class) for a right-hand side, one `let` per built node.
-
-        An action is already in pattern slot space, so the edge from one built
-        node to another is the identity on that child's slots -- and for a binder
-        that is the node's slots WITHOUT the bound one, since the class drops it.
-        """
-        if t[0] == "pv":
-            return mp_of[t[1]], cls_of[t[1]]
-        if t[0] == "sl":
-            return f"(map-insert (map-empty) 0 {slot_of[t[1]]})", "(Var 0)"
-        if t[0] == "c":
-            return mapof(edge(t[1])), enc(t[1])
-        op, kids = t[0], [build(k) for k in t[1:]]
-        node = fresh_var("_rhs")
-        lets.append(f'(let {node} (App{len(kids)} "{op}" '
-                    + " ".join(f"{e} {c}" for e, c in kids) + "))")
-        ident = "(map-empty)"
-        for e, _ in reversed(kids):
-            ident = (f"(map-image {e})" if ident == "(map-empty)"
-                     else f"(map-union (map-image {e}) {ident})")
-        if op in BINDER_OPS:
-            # the bound slot is on the node but not on the class, so the parent's
-            # edge must not name it
-            bound = t[1 + BINDER_OPS[op]]
-            assert bound[0] == "sl", f"{op}'s binder column must be a slot literal"
-            ident = f"(map-remove {ident} {slot_of[bound[1]]})"
-        return ident, node
-
-    mr = mp_of[rule.rhs_root]
-    if rule.rhs[0] == "pv":
-        # equate two variables: both carry a renaming into pattern slots and
-        # neither need be the identity, which egglog's `union` cannot express
-        act = (f"(Equated {cls_of[rule.rhs_root]} "
-               f"(compose (inverse {mr}) {mp_of[rule.rhs[1]]}) {cls_of[rule.rhs[1]]})")
-    else:
-        _, built = build(rule.rhs)
-        act = "\n       ".join(lets + [f"(Equated {built} {mr} {cls_of[rule.rhs_root]})"])
-    return "(rule (" + "\n       ".join(body) + f")\n      ({act}))"
+    return slotenc.compile_rule(
+        LANG, slotenc.connected_order(LANG, rule.atoms, first=lead),
+        ("build", rule.rhs_root, rule.rhs),
+        conds=rule.conds, fresh=rule.fresh,
+        slot_prefix="s_", fresh_batch=False)
 
 
 # ----------------------------------------------------------------------- cases
@@ -639,11 +353,11 @@ def map_fusion():
     return Rule(
         "map-fusion",
         [("p", "app", [("pv", "mf"), ("pv", "mgarg")]),
-         ("mf", "app", [("c", MAP), ("pv", "f")]),
+         ("mf", "app", [("lit", MAP), ("pv", "f")]),
          ("mgarg", "app", [("pv", "mg"), ("pv", "arg")]),
-         ("mg", "app", [("c", MAP), ("pv", "g")])],
+         ("mg", "app", [("lit", MAP), ("pv", "g")])],
         "p",
-        ("app", ("app", ("c", MAP),
+        ("app", ("app", MAP,
                  ("lambda", ("sl", "$fu"),
                   ("app", ("pv", "f"),
                    ("app", ("pv", "g"), ("sl", "$fu"))))),
@@ -654,13 +368,13 @@ def map_fusion():
 def map_fission():
     return Rule(
         "map-fission",
-        [("p", "app", [("c", MAP), ("pv", "l")]),
+        [("p", "app", [("lit", MAP), ("pv", "l")]),
          ("l", "lambda", [("sl", "$x"), ("pv", "fgx")]),
          ("fgx", "app", [("pv", "f"), ("pv", "gx")])],
         "p",
         ("lambda", ("sl", "$in"),
-         ("app", ("app", ("c", MAP), ("pv", "f")),
-          ("app", ("app", ("c", MAP), ("lambda", ("sl", "$x"), ("pv", "gx"))),
+         ("app", ("app", MAP, ("pv", "f")),
+          ("app", ("app", MAP, ("lambda", ("sl", "$x"), ("pv", "gx"))),
            ("sl", "$in")))),
         conds=[(False, "$x", ["f"])], fresh=["$in"])
 

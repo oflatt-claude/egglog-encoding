@@ -1,12 +1,13 @@
 # Compiling user rules into the slotted encoding
 
-Companion to six runnable files:
+Companion to seven runnable files:
 
 | file | what it is |
 | --- | --- |
 | `tests/slotted-egraph-encoding-11.egg` | the machinery: union, congruence, redundancy, symmetry |
 | `tests/slotted-user-rules.egg` | the tutorial: one shape of user rule per section — M1–M11 — each stated as prose plus the single rule a compiler emits, and nothing else |
 | `tests/slotted-user-rules-tests.egg` | the cases for it: it includes the tutorial, then adds the terms, schedules, assertions and counter-examples |
+| `slotted-experiments/slotted-encoder.py` | the recipe as code: the machinery emitter, the term encoding and the rule compiler, which every generator below goes through |
 | `slotted-experiments/xdiff/xdiff.py` | differential tests against the reference implementation |
 | `tests/slotted-array-rules.egg` | the paper's §4.1 array language, 8 rules, self-checking |
 | `slotted-experiments/xdiff/xarray.py` | the same 8 rules, differentially tested |
@@ -85,7 +86,7 @@ it.** This is a correctness condition, not a heuristic. An atom sharing nothing
 has no constraint on its renaming, so every slot it needs is *invented* — and an
 invented slot cannot be revised later. If a following atom then shows that slot is
 really one the pattern already named, the two disagree and the match is lost.
-`order_atoms` in `xdiff.py` does the reordering; `C12` is the case that motivated
+`connected_order` in `slotted-encoder.py` does the reordering; `C12` is the case that motivated
 it. A body no ordering can connect has to invent slots, and there the gap is real.
 
 **Step 3 — give each atom a renaming.** One rule:

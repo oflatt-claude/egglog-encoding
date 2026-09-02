@@ -18,7 +18,7 @@ sys.path.insert(0, "slotted-experiments/xdiff")
 import xdiff as X
 
 SKIP = {"var", "null"}
-# the encoding's name for the binder differs; see `enc_op`
+# the encoding's name for the binder differs; see `LANG` in xdiff.py
 UNMAP = {"lambda": "lam"}
 
 

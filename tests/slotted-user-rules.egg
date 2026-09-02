@@ -3,10 +3,10 @@
 ;;; THE ENCODING, one shape of user rule per section: the problem the shape poses, the
 ;;; construction that solves it, and then the rule -- the one a compiler emits, one per
 ;;; section and nothing else.  Read it top to bottom.  `slotted-user-rules.md` is the prose
-;;; version; three compilers emit this same recipe and must stay in step with it --
-;;; `xdiff.py compile_rule` (the toy language, checked against the reference),
-;;; `xarray.py compile_array_rule` (the paper's array language, likewise) and
-;;; `gen-sdql-rules.py` (SDQL, self-checked only so far).
+;;; version, and `slotted-experiments/slotted-encoder.py` is this same recipe as code --
+;;; one implementation, which every generator goes through: `xdiff.py` (the toy language,
+;;; checked against the reference), `xarray.py` (the paper's array language, likewise)
+;;; and `gen-sdql-rules.py` (SDQL).
 ;;;
 ;;; THE REFERENCE, wherever one is mentioned below, is `memoryleak47/slotted-egraphs` --
 ;;; the Rust implementation from the PLDI 2025 paper -- on its PR #45.  The multipattern

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Compile the reference `sdql` rewrite rules into the slotted encoding.
 
-The recipe is the one `tests/slotted-user-rules.egg` documents and
-`slotted-experiments/xdiff/xdiff.py`'s `compile_rule` implements, generalised from
-the harness's two-child `App2`/`App3` atoms to the per-language constructors of
-`slotted-experiments/languages/sdql.egg`, which have one to six children and
-payload columns.  The renaming solve is unchanged; the column walk and four cases
-`sdql` needs and the harness's corpus does not are new:
+The rules are the table below; the recipe that compiles them is
+`slotted-experiments/slotted-encoder.py`, which `tests/slotted-user-rules.egg`
+documents.  What `sdql` adds over the differential harness's two-child `App2`/`App3`
+atoms is the per-language constructors of `slotted-experiments/languages/sdql.egg`,
+which have one to six children and payload columns, and with them four cases the
+harness's corpus does not reach:
 
   * a PAYLOAD LEAF in a child position -- `0`, `mult`.  Its row is never deleted
     or migrated, so it is a stable handle, but its class's canonical value need
@@ -20,26 +20,13 @@ payload columns.  The renaming solve is unchanged; the column walk and four case
   * an arity other than two, everywhere.
 
 Atoms are compiled in pre-order from the LHS root, which is already the
-connectivity the recipe requires.  `order_atoms`'s further preference -- a binder
-is not the atom that fixes slots(pattern) -- is not followed: most `sdql` rules
-are rooted at a binder, and taking the root first pins each bound slot off its
-own edge instead of minting a name for it.  M7 in `tests/slotted-user-rules.egg`
-is the same shape.
+connectivity the recipe requires.  `connected_order`'s further preference -- a
+binder is not the atom that fixes slots(pattern) -- is not followed: most `sdql`
+rules are rooted at a binder, and taking the root first pins each bound slot off
+its own edge instead of minting a name for it.  M7 in
+`tests/slotted-user-rules.egg` is the same shape.
 
-Per atom, in order, so each shares a variable with the prefix:
-
-  * `(= V (Op m1 c1 ...))`, one egglog atom per e-node of the flattened LHS;
-  * `dom`, the identity on the atom's node slots;
-  * `mp`, the least renaming total on `dom` agreeing with everything already
-    known -- the root if an earlier atom bound it, every child an earlier atom
-    bound, every slot literal an earlier atom pinned.  The initial atom is the
-    degenerate case, where `mp` is the identity on `dom`;
-  * the avoid-set, accumulated so two atoms that both mint cannot collide;
-  * each slot literal read out of its edge, binding on first use and
-    constraining on every later one;
-  * each child's renaming into pattern slots, narrowed by `ClassSlots` (M6b).
-
-Terms in the tables below:
+Terms in the table below:
 
     "?x"            a pattern variable
     "$x"            a slot literal -- a binder column, or the reference's
@@ -56,16 +43,16 @@ import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-gen = __import__("gen-node-rules")
-CHILD, BINDER = gen.CHILD, gen.BINDER
+enc = __import__("slotted-encoder")
 
-LANG = gen.read_language(pathlib.Path("slotted-experiments/languages/sdql.egg"))
+LANG = enc.TermLang.from_language(
+    enc.read_language(pathlib.Path("slotted-experiments/languages/sdql.egg")))
 
 OUT = pathlib.Path(os.environ.get("SDQL_OUT", "tests/slotted-sdql-rules.egg"))
 
 # Re-introducible bugs, so the checks in `tests/slotted-sdql-rewrites.egg` can be
-# shown to test what they were written for.  Same names and same meanings as
-# `XDIFF_BUGS` in `slotted-experiments/xdiff/xdiff.py`.
+# shown to test what they were written for.  The encoder's flags, under the same
+# names `XDIFF_BUGS` takes in `slotted-experiments/xdiff/xdiff.py`.
 #   SDQL_BUGS=slot-late   a slot literal checked after the renaming, not with it
 #   SDQL_BUGS=root-only   an atom's renaming solved from its root alone
 #   SDQL_BUGS=wide-kids   a variable used at the matched node's slots, not its class's
@@ -186,279 +173,6 @@ RULES = [
 ]
 
 
-# ------------------------------------------------------------------ term shapes
-def is_pvar(t):
-    return isinstance(t, str) and t.startswith("?")
-
-
-def is_slot(t):
-    return isinstance(t, str) and t.startswith("$")
-
-
-def is_node(t):
-    return isinstance(t, tuple)
-
-
-def child_terms(t):
-    """The child arguments of a node, dropping payload columns."""
-    args, out, i = list(t[1:]), [], 0
-    for col in LANG[t[0]]:
-        if col in (CHILD, BINDER):
-            out.append(args[i])
-        i += 1
-    return out
-
-
-def payloads_of(t):
-    """A node's payload columns, already spelled as egglog literals."""
-    args, out, i = list(t[1:]), [], 0
-    for col in LANG[t[0]]:
-        if col not in (CHILD, BINDER):
-            out.append(f'"{args[i]}"' if col == "String" else str(args[i]))
-        i += 1
-    return out
-
-
-def binder_positions(op):
-    return [i for i, c in enumerate(k for k in LANG[op] if k in (CHILD, BINDER))
-            if c is BINDER]
-
-
-def is_leaf_node(t):
-    """A node with no slotted children -- `Num` and `Symbol`, the payload leaves."""
-    return is_node(t) and not child_terms(t)
-
-
-def node_expr(op, edges, kids, pays=()):
-    """`(Op p1 m1 c1 ...)`, interleaving payloads back into their columns."""
-    cols, ci, pi = [], 0, 0
-    for col in LANG[op]:
-        if col in (CHILD, BINDER):
-            cols += [edges[ci], kids[ci]]
-            ci += 1
-        else:
-            cols.append(pays[pi])
-            pi += 1
-    return f"({op} {' '.join(cols)})"
-
-
-def union_images(edges):
-    if not edges:
-        return "(map-empty)"
-    out = f"(map-image {edges[-1]})"
-    for e in reversed(edges[:-1]):
-        out = f"(map-union (map-image {e}) {out})"
-    return out
-
-
-# --------------------------------------------------------------- flattening
-def flatten(term):
-    """The LHS as depth-1 atoms, pre-order, so every atom's root is a child of an
-    earlier one -- which is the connectivity the recipe requires.
-
-    Returns `(root, atoms)` with each atom `(root_pvar, Op, [(kind, value)])`,
-    `kind` one of `var`, `slot`, `lit`.
-    """
-    atoms, ctr = [], [0]
-
-    def go(t, name):
-        descs, nested = [], []
-        for c in child_terms(t):
-            if is_slot(c):
-                descs.append(("slot", c))
-            elif is_pvar(c):
-                descs.append(("var", c))
-            elif is_leaf_node(c):
-                descs.append(("lit", c))
-            else:
-                ctr[0] += 1
-                nm = f"?_t{ctr[0]}"
-                descs.append(("var", nm))
-                nested.append((c, nm))
-        atoms.append((name, t[0], descs))
-        for c, nm in nested:
-            go(c, nm)
-
-    go(term, "?_p")
-    return "?_p", atoms
-
-
-# ---------------------------------------------------------------- the compiler
-def compile_rule(name, lhs, rhs, conds=(), fresh=()):
-    root, atoms = flatten(lhs)
-    body, uid = [], [0]
-
-    def new(p):
-        uid[0] += 1
-        return f"{p}{uid[0]}"
-
-    mp_of, cls_of, slot_of, sym_of = {}, {}, {}, {}
-    pat = None
-
-    def narrow(m, cls):
-        """Cut a renaming read off a node down to its class's slots -- M6b.
-
-        A node may carry a slot its class does not depend on, and a pattern variable
-        stands for the class, so the wider map would write a slot into a built node
-        that the child does not have.
-        """
-        if "wide-kids" in BUGS:
-            return m
-        cs = new("cs")
-        body.append(f"(= {cs} (ClassSlots {cls}))")
-        return f"(compose {m} {cs})"
-
-    def sym_for(pvar):
-        if pvar not in sym_of:
-            sv = new("sym")
-            body.append(f"(RenamesToLeader {cls_of[pvar]} {sv} {cls_of[pvar]})")
-            sym_of[pvar] = sv
-        return sym_of[pvar]
-
-    for idx, (aroot, op, descs) in enumerate(atoms):
-        edges = [new("p") for _ in descs]
-        rv = cls_of.setdefault(aroot, new("V"))
-        kids, lits = [], []
-        for (kind, val), e in zip(descs, edges):
-            if kind == "slot":
-                kids.append("(Var 0)")
-            elif kind == "lit":
-                cv = new("L")
-                kids.append(cv)
-                lits.append((val, cv))
-            else:
-                kids.append(cls_of.setdefault(val, new("C")))
-        # No `sdql` constructor mixes a payload with a child, and an atom always has
-        # children, so an atom never carries a payload column.
-        body.append(f"(= {rv} {node_expr(op, edges, kids)})")
-        # A payload leaf is never deleted or migrated, so its row is a stable
-        # handle on its class -- but the class's canonical value need not be that
-        # row, so reach the child through `RenamesToLeader` rather than writing
-        # the leaf into the child column.
-        for lit, cv in lits:
-            body.append(f"(RenamesToLeader {node_expr(lit[0], [], [], payloads_of(lit))} "
-                        f"{new('ml')} {cv})")
-
-        dom = new("dom")
-        body.append(f"(= {dom} {union_images(edges)})")
-
-        firsts, seconds = [], []
-        if aroot in mp_of:
-            mv = mp_of[aroot]
-            firsts.append(f"(compose {mv} {sym_for(aroot)})")
-            seconds.append(f"(map-domain {mv})")
-        bound_before = set(mp_of)
-        for (kind, val), e in zip(descs, edges):
-            if kind == "var" and val in bound_before and "root-only" not in BUGS:
-                firsts.append(f"(compose {mp_of[val]} {sym_for(val)})")
-                seconds.append(e)
-        for (kind, val), e in zip(descs, edges):
-            # A slot literal an earlier atom pinned constrains this atom's `mp`.
-            # Checking it afterwards is too late: `mp` would already have minted a
-            # different name for the same binder, and nothing revises a mint.
-            if kind == "slot" and val in slot_of and "slot-late" not in BUGS:
-                firsts.append(f"(map-insert (map-empty) 0 {slot_of[val]})")
-                seconds.append(e)
-
-        mp = new("mp")
-        if idx == 0:
-            body.append(f"(= {mp} {dom})")
-        elif firsts:
-            body.append(f"(= {mp} (find-mapping-total {pat} {dom} "
-                        f"{' '.join(firsts + seconds)}))")
-        else:
-            body.append(f"(= {mp} (find-mapping-total {pat} {dom} "
-                        f"(map-empty) (map-empty)))")
-
-        idm = new("idm")
-        body.append(f"(= {idm} (map-image {mp}))")
-        if idx == 0:
-            pat = idm
-        else:
-            av = new("av")
-            body.append(f"(= {av} (map-union {pat} {idm}))")
-            pat = av
-
-        for (kind, val), e in zip(descs, edges):
-            if kind == "slot":
-                sv = slot_of.setdefault(val, "s" + val[1:])
-                body.append(f"(= {sv} (map-get (compose {mp} {e}) 0))")
-
-        for (kind, val), e in zip(descs, edges):
-            if kind != "var":
-                continue
-            if val in mp_of:
-                if val not in bound_before or "root-only" in BUGS:
-                    # a repeat within THIS atom: the Def. 6 check, against the
-                    # class's one symmetry
-                    body.append(
-                        f"(= (compose {mp} {e}) (compose {mp_of[val]} {sym_for(val)}))")
-            else:
-                m = new("m")
-                body.append(f"(= {m} (compose {mp} {e}))")
-                mp_of[val] = narrow(m, cls_of[val])
-        if aroot not in mp_of:
-            mp_of[aroot] = narrow(mp, rv)
-
-    # RHS slots the LHS never pinned: mint them, avoiding every slot named so far.
-    if fresh:
-        fs = new("fs")
-        dm = " ".join(f"{i} {i}" for i in range(len(fresh)))
-        body.append(f"(= {fs} (find-mapping-total {pat} (map-of {dm}) "
-                    f"(map-empty) (map-empty)))")
-        for i, s in enumerate(fresh):
-            sv = slot_of.setdefault(s, "s" + s[1:])
-            body.append(f"(= {sv} (map-get {fs} {i}))")
-
-    # A variable's slots in pattern space are the image of its renaming, so the
-    # reference's `!subst[v].slots().contains($s)` is a `map-not-contains`.
-    for slot, pvar in conds:
-        if "no-guard" in BUGS:
-            continue
-        body.append(f"(map-not-contains (map-image {mp_of[pvar]}) {slot_of[slot]})")
-
-    lets = []
-
-    def build(t):
-        """`(edge, class)` for an RHS term, one `let` per built node.
-
-        An action is already in pattern slot space, so the edge from a built node
-        to a built child is the identity on the child's slots -- no renaming
-        between them.  A built binder node's slots are its edges' images MINUS the
-        slots it binds, which is what keeps the parent's edge inside Def. 4.
-        """
-        if is_pvar(t):
-            return mp_of[t], cls_of[t]
-        if is_slot(t):
-            return f"(map-insert (map-empty) 0 {slot_of[t]})", "(Var 0)"
-        kids = [build(c) for c in child_terms(t)]
-        node = node_expr(t[0], [e for e, _ in kids], [c for _, c in kids],
-                         payloads_of(t))
-        if not kids:
-            return "(map-empty)", node          # a payload leaf has no slots
-        nv = new("_rhs")
-        lets.append(f"(let {nv} {node})")
-        slots = union_images([e for e, _ in kids])
-        for i in binder_positions(t[0]):
-            slots = f"(map-remove {slots} {slot_of[child_terms(t)[i]]})"
-        return slots, nv
-
-    mr = mp_of[root]
-    if is_pvar(rhs):
-        # Equate two variables.  Both carry a renaming into pattern slots and
-        # neither need be the identity, which is the one action egglog's `union`
-        # cannot express -- so solve: from mr*Root = ma*A follows
-        # Root = (mr^-1 . ma) * A, and let the machinery re-orient it.
-        act = [f"(Equated {cls_of[root]} "
-               f"(compose (inverse {mr}) {mp_of[rhs]}) {cls_of[rhs]})"]
-    else:
-        _, built = build(rhs)
-        act = lets + [f"(Equated {built} {mr} {cls_of[root]})"]
-
-    return ("(rule (" + "\n       ".join(body) + ")\n      ("
-            + "\n       ".join(act) + f")\n      :ruleset sdql :name \"{name}\")")
-
-
 HEADER = '''\
 ;;; GENERATED by slotted-experiments/gen-sdql-rules.py -- do not edit.
 ;;;
@@ -481,6 +195,19 @@ HEADER = '''\
 
 (ruleset sdql)
 '''
+
+
+# ---------------------------------------------------------------- the compiler
+def compile_rule(name, lhs, rhs, conds=(), fresh=()):
+    """One rule, through the encoder.  Every `sdql` side condition is negative and
+    names one variable, which is the only shape of the encoder's `(want, slot,
+    pvars)` this needs."""
+    root, atoms = enc.flatten(LANG, lhs)
+    atoms = enc.connected_order(LANG, atoms, first=0)
+    return enc.compile_rule(
+        LANG, atoms, ("build", root, enc.rhs_of(LANG, rhs)),
+        conds=[(False, slot, [pvar]) for slot, pvar in conds], fresh=fresh,
+        bugs=BUGS, tail=f'\n      :ruleset sdql :name "{name}")')
 
 
 def main():
