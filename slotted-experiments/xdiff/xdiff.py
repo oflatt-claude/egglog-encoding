@@ -272,8 +272,9 @@ def compile_rule(atoms, action, conds=()):
     `(root, op, c1, c2)` over bare names, and an action either `(root, rhs-tree)` or
     the flat `(root, op, a, b)`, whose `=` equates two variables.
 
-    The flat form is the one action that does not conclude with `Equated`: it asserts
-    the oriented `RenamesToLeader` row directly, and `union-id` is the mutation of it.
+    The flat form builds one depth-1 node over bound variables; `union-id` is the
+    mutation that concludes it with egglog's `union` instead, which is only correct
+    when both renamings are the identity.
     """
     atoms = slotenc.connected_order(
         LANG, [(r, o, [_child(c1), _child(c2)]) for r, o, c1, c2 in atoms],

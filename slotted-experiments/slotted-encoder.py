@@ -1229,12 +1229,17 @@ def compile_rule(lang, atoms, action, conds=(), fresh=(), bugs=frozenset(),
             _, built = build(rhs)
             act = lets + [f"(Equated {built} {mr} {cls_of[root]})"]
     else:
-        # The flat build: one depth-1 node over bound variables, concluded as the
-        # ORIENTED row rather than as `Equated`. The built node lives in pattern
-        # slots, so the equation to assert is `built = mr * Root` -- a union over
-        # renamed ids, which egglog's `union` cannot express, since it equates
+        # The flat build: one depth-1 node over bound variables. The built node lives
+        # in pattern slots, so the equation to assert is `built = mr * Root` -- a union
+        # over renamed ids, which egglog's `union` cannot express, since it equates
         # e-classes, i.e. only the case where both renamings are the identity. That
         # union is the `union-id` mutant, and it shows up as spurious redundancy.
+        #
+        # `Equated`, not `RenamesToLeader`, for the reason M10 gives. This one used to
+        # write the oriented row directly, and `let` is lookup-or-insert: when the node
+        # already exists it can sort BELOW the root, which makes the row backwards, and
+        # the stale-row deleter then removes a fact with no `Equated` behind it to
+        # re-derive. The corpus never built that state, so nothing caught it.
         pvs = action[3]
         node = node_expr(lang[action[2]], [mp_of[v] for v in pvs],
                          [cls_of[v] for v in pvs], lang[action[2]].pays)
@@ -1242,7 +1247,7 @@ def compile_rule(lang, atoms, action, conds=(), fresh=(), bugs=frozenset(),
             act = [f"(union {cls_of[root]} {node})"]
         else:
             act = [f"(let _hn {node})",
-                   f"(RenamesToLeader _hn {mr} {cls_of[root]})"]
+                   f"(Equated _hn {mr} {cls_of[root]})"]
 
     return ("(rule (" + "\n       ".join(body) + ")\n      ("
             + "\n       ".join(act) + ")" + tail)
