@@ -41,46 +41,39 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from xdiff import EGGLOG, ROOT, XMULTI, parse_same_class  # noqa: E402
+from xdiff import EGGLOG, ROOT, XMULTI, parse_same_class, slotenc  # noqa: E402
 
 RUN_TIMEOUT = int(os.environ.get("XSDQL_TIMEOUT", "180"))
 
 # The generated encoding rules. Lifted by `:name`, never rewritten.
 RULES_EGG = ROOT / "tests" / "slotted-sdql-rules.egg"
 # `tests/slotted-lang-sdql.egg` is the SDQL language plus the machinery it includes.
-LANG = "tests/slotted-lang-sdql.egg"
+MACHINERY = "tests/slotted-lang-sdql.egg"
 
 
 # --------------------------------------------------------------------- sdql terms
 # term := ('var', slot) | ('num', n) | ('sym', name)
-#       | (op, a, b)                  for op in BIN
-#       | (op, a, b, c)               for op in TRI
-#       | ('unique', a)
+#       | (op, kid...)                for an ordinary operator
 #       | ('lambda', slot, body)
 #       | ('sum', range, slot, slot, body)
 #       | ('merge', range1, range2, slot, slot, slot, body)
 #       | ('let', value, slot, body)
 #
-# `sum`, `merge` and `let` take their columns in the reference's surface order,
-# which is where its `Bind<>` layers put the bound slots:
-# `Sum(AppliedId, Bind<Bind<AppliedId>>)` prints as `(sum ?R $k $v ?body)`.
-
-# op -> (reference tag, encoding constructor)
-BIN = {
-    "sing": ("sing", "Sing"),
-    "add": ("+", "Add"),
-    "mult": ("*", "Mult"),
-    "sub": ("-", "Sub"),
-    "eq": ("eq", "Equality"),
-    "get": ("get", "Get"),
-    "range": ("range", "Range"),
-    "apply": ("apply", "App"),
-    "ifthen": ("ifthen", "IfThen"),
-}
-TRI = {
-    "binop": ("binop", "Binop"),
-    "subarray": ("subarray", "SubArray"),
-}
+# The encoding of one is NOT written here: `slotted-encoder.py` owns `slots` /
+# `edge` / `enc` / `sexpr` / `shift`, and the columns it walks are read off
+# `slotted-experiments/languages/sdql.egg` -- the same file `gen-sdql-rules.py`
+# compiles the rules against. So a term cannot come to disagree with the rule that
+# has to match it about a node's arity, its payload columns, or which of its
+# children it binds: `sum`, `merge` and `let` bind their columns 1&2, 2&3&4 and 1
+# because that file's `:binder` says they do, and nothing here restates it.
+#
+# Terms take their columns in the reference's surface order, which is where its
+# `Bind<>` layers put the bound slots: `Sum(AppliedId, Bind<Bind<AppliedId>>)`
+# prints as `(sum ?R $k $v ?body)`.
+#
+# What that file does not say in machine-readable form is the NAMING -- its tags
+# are in comments, `; Add(A, A)  "+"` -- so the operator table below is written
+# out, and asserted against the file so a renamed constructor is an error here.
 
 # `let` is the one tag the oracle could not keep: `xmulti`'s language already has
 # the array `Let(Bind<AppliedId>, AppliedId) = "let"`, a different node, and
@@ -111,30 +104,56 @@ LET_TAG = "sdql-let"
 # and the probe partitions stay comparable.
 SYM_PREFIX = "sym:"
 
+# operator -> (constructor, the reference's tag). A tag of `None` marks a payload
+# leaf, which the reference writes as the payload itself.
+OPS = {
+    "lambda": ("Lambda", "lambda"),
+    "sing": ("Sing", "sing"),
+    "add": ("Add", "+"),
+    "mult": ("Mult", "*"),
+    "sub": ("Sub", "-"),
+    "eq": ("Equality", "eq"),
+    "get": ("Get", "get"),
+    "range": ("Range", "range"),
+    "apply": ("App", "apply"),
+    "ifthen": ("IfThen", "ifthen"),
+    "binop": ("Binop", "binop"),
+    "subarray": ("SubArray", "subarray"),
+    "unique": ("Unique", "unique"),
+    "sum": ("Sum", "sum"),
+    "merge": ("Merge", "merge"),
+    "let": ("Let", LET_TAG),
+    "num": ("Num", None),
+    "sym": ("Symbol", None),
+}
 
-def slots(t):
-    """The term's FREE slots."""
-    k = t[0]
-    if k == "var":
-        return {t[1]}
-    if k in ("num", "sym"):
-        return set()
-    if k == "lambda":
-        return slots(t[2]) - {t[1]}
-    if k == "sum":
-        return slots(t[1]) | (slots(t[4]) - {t[2], t[3]})
-    if k == "merge":
-        return (slots(t[1]) | slots(t[2])
-                | (slots(t[6]) - {t[3], t[4], t[5]}))
-    if k == "let":
-        return slots(t[1]) | (slots(t[3]) - {t[2]})
-    if k in BIN:
-        return slots(t[1]) | slots(t[2])
-    if k in TRI:
-        return slots(t[1]) | slots(t[2]) | slots(t[3])
-    if k == "unique":
-        return slots(t[1])
-    raise AssertionError(t)
+SIGS = slotenc.read_language(ROOT / "slotted-experiments" / "languages" / "sdql.egg")
+# The table above is the one thing not read off that file, so it is checked against
+# it: a constructor renamed, added or dropped there is an error here rather than a
+# corpus that quietly stops covering the language the rules were compiled from.
+assert {ctor for ctor, _ in OPS.values()} == set(SIGS), \
+    "the operator table and languages/sdql.egg name different constructors"
+
+
+class SdqlTerms(slotenc.TermLang):
+    """The shared term language, plus the one thing the two sides spell differently.
+
+    A payload leaf is written as its payload, which for a `Symbol` is the same
+    spelling on both sides EXCEPT for `SYM_PREFIX`. That is the reference's parser
+    working around itself, not part of the encoding, so it is overridden here rather
+    than given a hook in the encoder.
+    """
+
+    def sexpr(self, t):
+        if t[0] == "sym":
+            return SYM_PREFIX + t[1]
+        return super().sexpr(t)
+
+
+LANG = SdqlTerms({op: slotenc.Op(op, ctor, SIGS[ctor], ref=ref)
+                  for op, (ctor, ref) in OPS.items()})
+
+enc, sexpr, shift = LANG.enc, LANG.sexpr, LANG.shift
 
 
 def check_term(t):
@@ -148,100 +167,16 @@ def check_term(t):
     """
     k = t[0]
     if k == "sum":
-        assert not (slots(t[1]) & {t[2], t[3]}), f"range mentions a bound slot: {t}"
+        assert not (LANG.slots(t[1]) & {t[2], t[3]}), \
+            f"range mentions a bound slot: {t}"
     if k == "merge":
-        assert not ((slots(t[1]) | slots(t[2])) & {t[3], t[4], t[5]}), \
+        assert not ((LANG.slots(t[1]) | LANG.slots(t[2])) & {t[3], t[4], t[5]}), \
             f"a range mentions a bound slot: {t}"
     if k == "let":
-        assert not (slots(t[1]) & {t[2]}), f"value mentions the bound slot: {t}"
+        assert not (LANG.slots(t[1]) & {t[2]}), f"value mentions the bound slot: {t}"
     for x in t[1:]:
         if isinstance(x, tuple):
             check_term(x)
-
-
-def sexpr(t):
-    """Reference / spec syntax."""
-    k = t[0]
-    if k == "var":
-        return f"(var ${t[1]})"
-    if k == "num":
-        return str(t[1])
-    if k == "sym":
-        return SYM_PREFIX + t[1]
-    if k == "lambda":
-        return f"(lambda ${t[1]} {sexpr(t[2])})"
-    if k == "sum":
-        return f"(sum {sexpr(t[1])} ${t[2]} ${t[3]} {sexpr(t[4])})"
-    if k == "merge":
-        return (f"(merge {sexpr(t[1])} {sexpr(t[2])} "
-                f"${t[3]} ${t[4]} ${t[5]} {sexpr(t[6])})")
-    if k == "let":
-        return f"({LET_TAG} {sexpr(t[1])} ${t[2]} {sexpr(t[3])})"
-    tag = (BIN.get(k) or TRI.get(k) or {"unique": ("unique", None)}[k])[0]
-    kids = " ".join(sexpr(x) for x in t[1:])
-    return f"({tag} {kids})"
-
-
-def mapof(d):
-    if not d:
-        return "(map-empty)"
-    return "(map-of " + " ".join(f"{k} {v}" for k, v in sorted(d.items())) + ")"
-
-
-def edge(t):
-    """The stored renaming from a child's slots into its parent's slot space.
-
-    A var leaf is the canonical `(Var 0)`, so its edge names slot 0. Everything
-    else is built at its own slot names, so the edge is the identity on its free
-    slots -- for a binder's body those still include the bound slot, since only
-    the class drops it.
-    """
-    if t[0] == "var":
-        return {0: t[1]}
-    return {s: s for s in slots(t)}
-
-
-def _kid(t):
-    return f"{mapof(edge(t))} {enc(t)}"
-
-
-def _binder(s):
-    return f"{mapof({0: s})} (Var 0)"
-
-
-def enc(t):
-    """Encoding syntax: one `Renaming U` column pair per child."""
-    k = t[0]
-    if k == "var":
-        return "(Var 0)"
-    if k == "num":
-        return f"(Num {t[1]})"
-    if k == "sym":
-        return f'(Symbol "{t[1]}")'
-    if k == "lambda":
-        return f"(Lambda {_binder(t[1])} {_kid(t[2])})"
-    if k == "sum":
-        return f"(Sum {_kid(t[1])} {_binder(t[2])} {_binder(t[3])} {_kid(t[4])})"
-    if k == "merge":
-        return (f"(Merge {_kid(t[1])} {_kid(t[2])} {_binder(t[3])} "
-                f"{_binder(t[4])} {_binder(t[5])} {_kid(t[6])})")
-    if k == "let":
-        return f"(Let {_kid(t[1])} {_binder(t[2])} {_kid(t[3])})"
-    ctor = (BIN.get(k) or TRI.get(k) or {"unique": (None, "Unique")}[k])[1]
-    kids = " ".join(_kid(x) for x in t[1:])
-    return f"({ctor} {kids})"
-
-
-def shift(t, k):
-    """Add `k` to every slot. Slot names carry no meaning, so no answer may change."""
-    if t[0] == "var":
-        return ("var", t[1] + k)
-    if t[0] in ("num", "sym"):
-        return t
-    out = [t[0]]
-    for x in t[1:]:
-        out.append(shift(x, k) if isinstance(x, tuple) else x + k)
-    return tuple(out)
 
 
 # ---------------------------------------------------------------------- the rules
@@ -382,7 +317,7 @@ def schedule(steps):
 
 
 def egg_program(case, with_rule=True, mult=3):
-    out = [f'(include "{LANG}")', "(ruleset sdql)"]
+    out = [f'(include "{MACHINERY}")', "(ruleset sdql)"]
     if with_rule:
         out.append(f";; {case.rule.name}")
         out.append(egg_rule(case.rule.name))
