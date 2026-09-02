@@ -46,26 +46,27 @@ handwritten_region = enc.handwritten_region
 # produces, with no head to indirect through.
 LANG_DIR = pathlib.Path("slotted-experiments/languages")
 
-LANGUAGES = {p.stem: read_language(p)
-             for p in sorted(LANG_DIR.glob("*.egg"))} if LANG_DIR.is_dir() else {}
+LANGUAGES = {p.stem: read_language(p) for p in sorted(LANG_DIR.glob("*.egg"))} if LANG_DIR.is_dir() else {}
 
 
 def main():
     generic = pathlib.Path(GENERIC_FILE)
-    generic.write_text(enc.in_slotted_ruleset(
-        enc.MACHINERY_HEADER
-        + ';;;\n;;; The generic, string-headed encoding: one constructor per'
-        ' arity, the operator in a\n;;; payload column. Arity 2 is hand-written in the'
-        ' file included below.\n\n'
-        f'(include "{MACHINERY}")\n\n'
-        + "\n".join(emit(GENERIC, GENERIC_BINDERS, omit=HANDWRITTEN))))
+    generic.write_text(
+        enc.in_slotted_ruleset(
+            enc.MACHINERY_HEADER + ";;;\n;;; The generic, string-headed encoding: one constructor per"
+            " arity, the operator in a\n;;; payload column. Arity 2 is hand-written in the"
+            " file included below.\n\n"
+            f'(include "{MACHINERY}")\n\n' + "\n".join(emit(GENERIC, GENERIC_BINDERS, omit=HANDWRITTEN))
+        )
+    )
     print(f"wrote {generic} ({len(GENERIC)} constructors, string-headed)")
 
     for lang, spec in LANGUAGES.items():
         p = pathlib.Path(f"tests/slotted-lang-{lang}.egg")
-        body = enc.MACHINERY_HEADER + f';;;\n;;; Language: {lang}\n\n' \
-            f'(include "{GENERIC_FILE}")\n\n' \
-            + "\n".join(emit(spec, provided=GENERIC))
+        body = (
+            enc.MACHINERY_HEADER + f";;;\n;;; Language: {lang}\n\n"
+            f'(include "{GENERIC_FILE}")\n\n' + "\n".join(emit(spec, provided=GENERIC))
+        )
         p.write_text(enc.in_slotted_ruleset(body))
         print(f"wrote {p} ({len(spec)} constructors, one per operator)")
 

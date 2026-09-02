@@ -19,10 +19,11 @@ counts too. This is the cheap version of the isomorphism check's class bijection
     python3 slotted-experiments/xdiff/class-count.py            curated
     python3 slotted-experiments/xdiff/class-count.py fuzz 250   generated
 """
+
 import random
-import re
 import subprocess
 import sys
+
 sys.path.insert(0, "slotted-experiments/xdiff")
 import xdiff as X
 
@@ -47,8 +48,7 @@ def encoding_classes(case):
     p = X.ROOT / f"xdiff-tmp-cc-{abs(hash(case.name)) % 99999}.egg"
     p.write_text(prog)
     try:
-        r = subprocess.run([str(X.EGGLOG), str(p)], capture_output=True,
-                           text=True, cwd=X.ROOT, timeout=120)
+        r = subprocess.run([str(X.EGGLOG), str(p)], capture_output=True, text=True, cwd=X.ROOT, timeout=120)
     except subprocess.TimeoutExpired:
         return None
     finally:
@@ -60,20 +60,23 @@ def encoding_classes(case):
 
 
 def reference_classes(case):
-    r = subprocess.run([str(X.XMULTI / "target" / "debug" / "xmulti")],
-                       input=case.spec() + "term (null)\nterm (var $0)\ndump\n",
-                       capture_output=True, text=True, timeout=X.RUN_TIMEOUT)
+    r = subprocess.run(
+        [str(X.XMULTI / "target" / "debug" / "xmulti")],
+        input=case.spec() + "term (null)\nterm (var $0)\ndump\n",
+        capture_output=True,
+        text=True,
+        timeout=X.RUN_TIMEOUT,
+    )
     if r.returncode != 0:
         return None
-    if any(l.startswith("SATURATED no") for l in r.stdout.splitlines()):
+    if any(line.startswith("SATURATED no") for line in r.stdout.splitlines()):
         return None
-    return sum(1 for l in r.stdout.splitlines() if l.startswith("CLASS "))
+    return sum(1 for line in r.stdout.splitlines() if line.startswith("CLASS "))
 
 
 if len(sys.argv) > 1 and sys.argv[1] == "fuzz":
     rng = random.Random(0)
-    cases = [X.rand_case(rng, i)
-             for i in range(int(sys.argv[2]) if len(sys.argv) > 2 else 250)]
+    cases = [X.rand_case(rng, i) for i in range(int(sys.argv[2]) if len(sys.argv) > 2 else 250)]
 else:
     cases = X.curated()
 

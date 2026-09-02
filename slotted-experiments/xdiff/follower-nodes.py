@@ -12,10 +12,11 @@ is not the test: `RenamesToLeader` holds both directions for a pair, so that is 
 the leader as well, and an earlier version of this probe counted both -- reporting a
 follower holding a node where the node was on the leader.
 """
+
 import random
-import re
 import subprocess
 import sys
+
 sys.path.insert(0, "slotted-experiments/xdiff")
 import xdiff as X
 
@@ -32,9 +33,7 @@ def obs():
     out = [OBS_HEAD]
     for n in (2, 3, 4):
         cols = " ".join(f"m{i} c{i}" for i in range(1, n + 1))
-        out.append(f"(rule ((= v (App{n} f {cols}))\n"
-                   f"       (Follower v))\n"
-                   f"      ((FollowerWithNode v)) :ruleset obs)")
+        out.append(f"(rule ((= v (App{n} f {cols}))\n       (Follower v))\n      ((FollowerWithNode v)) :ruleset obs)")
     out += ["(run obs 2)", "(print-size Follower)", "(print-size FollowerWithNode)"]
     return "\n".join(out)
 
@@ -56,8 +55,7 @@ for c in cases:
     p = X.ROOT / f"fn-{abs(hash(c.name)) % 99999}.egg"
     p.write_text(prog)
     try:
-        r = subprocess.run([str(X.EGGLOG), str(p)], capture_output=True,
-                           text=True, timeout=X.RUN_TIMEOUT, cwd=X.ROOT)
+        r = subprocess.run([str(X.EGGLOG), str(p)], capture_output=True, text=True, timeout=X.RUN_TIMEOUT, cwd=X.ROOT)
     except subprocess.TimeoutExpired:
         print(f"  {c.name:38} timeout")
         continue
@@ -71,8 +69,6 @@ for c in cases:
     total_followers += followers
     total_with_nodes += with_nodes
     if with_nodes:
-        print(f"  {c.name:38} followers {followers}, of those holding a node "
-              f"{with_nodes}")
+        print(f"  {c.name:38} followers {followers}, of those holding a node {with_nodes}")
 
-print(f"\n{total_followers} follower classes over {len(cases)} cases, "
-      f"{total_with_nodes} of them holding an e-node")
+print(f"\n{total_followers} follower classes over {len(cases)} cases, {total_with_nodes} of them holding an e-node")

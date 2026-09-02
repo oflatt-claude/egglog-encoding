@@ -57,9 +57,9 @@ def split_at_markers(text):
     if len(starts) != 1 or len(ends) != 1 or ends[0] < starts[0]:
         raise SystemExit(
             f"{HANDWRITTEN}: expected exactly one `{BEGIN}` line followed by one "
-            f"`{END}` line, found {len(starts)} and {len(ends)}")
-    return ("\n".join(lines[starts[0] + 1:ends[0]]),
-            "\n".join(lines[:starts[0]] + lines[ends[0] + 1:]))
+            f"`{END}` line, found {len(starts)} and {len(ends)}"
+        )
+    return ("\n".join(lines[starts[0] + 1 : ends[0]]), "\n".join(lines[: starts[0]] + lines[ends[0] + 1 :]))
 
 
 def strip_comment(line):
@@ -93,8 +93,7 @@ def normalise(text):
 def strays(outside, names):
     """Rules outside the region that are about what the region is supposed to own."""
     watched = (*names, "ClassSlots")
-    return [form for form in normalise(outside)
-            if form.startswith("(rule") and any(n in form for n in watched)]
+    return [form for form in normalise(outside) if form.startswith("(rule") and any(n in form for n in watched)]
 
 
 def main():
@@ -105,26 +104,32 @@ def main():
 
     loose = strays(outside, gen.HANDWRITTEN)
     if loose:
-        print(f"OUTSIDE THE REGION: {HANDWRITTEN.relative_to(ROOT)} has "
-              f"{len(loose)} rule(s) about "
-              f"{', '.join((*gen.HANDWRITTEN, 'ClassSlots'))} that the check cannot "
-              "compare, because they are not between the markers:\n")
+        print(
+            f"OUTSIDE THE REGION: {HANDWRITTEN.relative_to(ROOT)} has "
+            f"{len(loose)} rule(s) about "
+            f"{', '.join((*gen.HANDWRITTEN, 'ClassSlots'))} that the check cannot "
+            "compare, because they are not between the markers:\n"
+        )
         for form in loose:
             print(f"  {form}")
         return 1
 
     if want == got:
-        print(f"OK: {HANDWRITTEN.relative_to(ROOT)} holds the {len(got)} forms "
-              f"gen-node-rules.py emits for {', '.join(gen.HANDWRITTEN)} "
-              f"(plus the shared ClassSlots block)")
+        print(
+            f"OK: {HANDWRITTEN.relative_to(ROOT)} holds the {len(got)} forms "
+            f"gen-node-rules.py emits for {', '.join(gen.HANDWRITTEN)} "
+            f"(plus the shared ClassSlots block)"
+        )
         return 0
 
-    print(f"MISMATCH: the region marked in {HANDWRITTEN.relative_to(ROOT)} is not what "
-          f"gen-node-rules.py emits for {', '.join(gen.HANDWRITTEN)}.\n"
-          "  `-` is what the generator emits, `+` what the file says.\n")
-    for line in difflib.unified_diff(want, got, "gen-node-rules.py",
-                                     str(HANDWRITTEN.relative_to(ROOT)), lineterm="",
-                                     n=1):
+    print(
+        f"MISMATCH: the region marked in {HANDWRITTEN.relative_to(ROOT)} is not what "
+        f"gen-node-rules.py emits for {', '.join(gen.HANDWRITTEN)}.\n"
+        "  `-` is what the generator emits, `+` what the file says.\n"
+    )
+    for line in difflib.unified_diff(
+        want, got, "gen-node-rules.py", str(HANDWRITTEN.relative_to(ROOT)), lineterm="", n=1
+    ):
         print(line)
     return 1
 

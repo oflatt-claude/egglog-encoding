@@ -10,10 +10,12 @@ own class; the encoding holds it as the nullary constructor `(Var 0)`, which is 
 value rather than an `App` row. Both are canonical singletons, so counting them would
 compare bookkeeping rather than content.
 """
+
 import collections
 import re
 import subprocess
 import sys
+
 sys.path.insert(0, "slotted-experiments/xdiff")
 import xdiff as X
 
@@ -23,9 +25,13 @@ UNMAP = {"lambda": "lam"}
 
 
 def reference_counts(case):
-    r = subprocess.run([str(X.XMULTI / "target" / "debug" / "xmulti")],
-                       input="dump\n" + case.spec(), capture_output=True,
-                       text=True, timeout=X.RUN_TIMEOUT)
+    r = subprocess.run(
+        [str(X.XMULTI / "target" / "debug" / "xmulti")],
+        input="dump\n" + case.spec(),
+        capture_output=True,
+        text=True,
+        timeout=X.RUN_TIMEOUT,
+    )
     if r.returncode != 0:
         return None, "crash"
     if "SATURATED no" in r.stdout:
@@ -42,13 +48,12 @@ def reference_counts(case):
 
 def encoding_counts(case):
     prog = X.egg_program(case).replace(
-        "(print-function SameClass 100000)",
-        "\n".join(f"(print-function App{n} 100000)" for n in (2, 3, 4)))
+        "(print-function SameClass 100000)", "\n".join(f"(print-function App{n} 100000)" for n in (2, 3, 4))
+    )
     p = X.ROOT / f"nc-{abs(hash(case.name)) % 99999}.egg"
     p.write_text(prog)
     try:
-        r = subprocess.run([str(X.EGGLOG), str(p)], capture_output=True,
-                           text=True, cwd=X.ROOT, timeout=X.RUN_TIMEOUT)
+        r = subprocess.run([str(X.EGGLOG), str(p)], capture_output=True, text=True, cwd=X.ROOT, timeout=X.RUN_TIMEOUT)
     except subprocess.TimeoutExpired:
         return None, "timeout"
     finally:
@@ -73,9 +78,9 @@ agree = differ = skipped = 0
 #     python3 slotted-experiments/xdiff/nodecounts.py fuzz 250   generated
 if len(sys.argv) > 1 and sys.argv[1] == "fuzz":
     import random
+
     _rng = random.Random(0)
-    _cases = [X.rand_case(_rng, i)
-              for i in range(int(sys.argv[2]) if len(sys.argv) > 2 else 250)]
+    _cases = [X.rand_case(_rng, i) for i in range(int(sys.argv[2]) if len(sys.argv) > 2 else 250)]
 else:
     _cases = X.curated()
 

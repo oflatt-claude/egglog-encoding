@@ -131,8 +131,9 @@ SIGS = slotenc.read_language(ROOT / "slotted-experiments" / "languages" / "sdql.
 # The table above is the one thing not read off that file, so it is checked against
 # it: a constructor renamed, added or dropped there is an error here rather than a
 # corpus that quietly stops covering the language the rules were compiled from.
-assert {ctor for ctor, _ in OPS.values()} == set(SIGS), \
+assert {ctor for ctor, _ in OPS.values()} == set(SIGS), (
     "the operator table and languages/sdql.egg name different constructors"
+)
 
 
 class SdqlTerms(slotenc.TermLang):
@@ -150,8 +151,7 @@ class SdqlTerms(slotenc.TermLang):
         return super().sexpr(t)
 
 
-LANG = SdqlTerms({op: slotenc.Op(op, ctor, SIGS[ctor], ref=ref)
-                  for op, (ctor, ref) in OPS.items()})
+LANG = SdqlTerms({op: slotenc.Op(op, ctor, SIGS[ctor], ref=ref) for op, (ctor, ref) in OPS.items()})
 
 enc, sexpr, shift = LANG.enc, LANG.sexpr, LANG.shift
 
@@ -167,11 +167,9 @@ def check_term(t):
     """
     k = t[0]
     if k == "sum":
-        assert not (LANG.slots(t[1]) & {t[2], t[3]}), \
-            f"range mentions a bound slot: {t}"
+        assert not (LANG.slots(t[1]) & {t[2], t[3]}), f"range mentions a bound slot: {t}"
     if k == "merge":
-        assert not ((LANG.slots(t[1]) | LANG.slots(t[2])) & {t[3], t[4], t[5]}), \
-            f"a range mentions a bound slot: {t}"
+        assert not ((LANG.slots(t[1]) | LANG.slots(t[2])) & {t[3], t[4], t[5]}), f"a range mentions a bound slot: {t}"
     if k == "let":
         assert not (LANG.slots(t[1]) & {t[2]}), f"value mentions the bound slot: {t}"
     for x in t[1:]:
@@ -187,6 +185,7 @@ def check_term(t):
 # every SDQL guard is `!subst[v].slots().contains(&Slot::named(s))`, so `notin`
 # with one variable, and two of them conjoined for the two bound slots.
 
+
 class Rule:
     def __init__(self, name, lhs, rhs, conds=()):
         self.name = name
@@ -197,8 +196,7 @@ class Rule:
     def spec_lines(self):
         # `rhs <root> <pattern>`: on the nested path the root is unused (the whole
         # pattern is the root), so it is written `_`.
-        out = ["rule", f"nested {ref_text(self.lhs)}",
-               f"rhs _ {ref_text(self.rhs)}"]
+        out = ["rule", f"nested {ref_text(self.lhs)}", f"rhs _ {ref_text(self.rhs)}"]
         for want, slot, pvars in self.conds:
             out.append(f"cond {'in' if want else 'notin'} {slot} {' '.join(pvars)}")
         return out
@@ -236,20 +234,21 @@ RULES = {
     "mult-app2": Rule("mult-app2", "(binop mult ?a ?b)", "(* ?a ?b)"),
     "add-zero": Rule("add-zero", "(+ ?e 0)", "?e"),
     "unique-app1": Rule("unique-app1", "(unique ?a)", "(apply uniquef ?a)"),
-    "get-range": Rule("get-range", "(get (range ?st ?en) ?idx)",
-                      "(+ ?idx (- ?st 1))"),
-    "let-binop3": Rule("let-binop3", "(let ?e1 $x (binop ?f ?e2 ?e3))",
-                       "(binop ?f (let ?e1 $x ?e2) (let ?e1 $x ?e3))"),
+    "get-range": Rule("get-range", "(get (range ?st ?en) ?idx)", "(+ ?idx (- ?st 1))"),
+    "let-binop3": Rule("let-binop3", "(let ?e1 $x (binop ?f ?e2 ?e3))", "(binop ?f (let ?e1 $x ?e2) (let ?e1 $x ?e3))"),
     "sum-sing": Rule("sum-sing", "(sum ?e1 $k $v (sing (var $k) (var $v)))", "?e1"),
-    "sum-fact-inv-1": Rule("sum-fact-inv-1", "(* ?e1 (sum ?R $k $v ?e2))",
-                           "(sum ?R $k $v (* ?e1 ?e2))"),
+    "sum-fact-inv-1": Rule("sum-fact-inv-1", "(* ?e1 (sum ?R $k $v ?e2))", "(sum ?R $k $v (* ?e1 ?e2))"),
     "sum-merge": Rule(
         "sum-merge",
         "(sum ?R $k1 $v1 (sum ?S $k2 $v2 (ifthen (eq (var $v1) (var $v2)) ?body)))",
-        "(merge ?R ?S $k1 $k2 $v1 (let (var $v1) $v2 ?body))"),
-    "sum-fact-1": Rule("sum-fact-1", "(sum ?R $x $y (* ?e1 ?e2))",
-                       "(* ?e1 (sum ?R $x $y ?e2))",
-                       conds=[(False, "$x", ["e1"]), (False, "$y", ["e1"])]),
+        "(merge ?R ?S $k1 $k2 $v1 (let (var $v1) $v2 ?body))",
+    ),
+    "sum-fact-1": Rule(
+        "sum-fact-1",
+        "(sum ?R $x $y (* ?e1 ?e2))",
+        "(* ?e1 (sum ?R $x $y ?e2))",
+        conds=[(False, "$x", ["e1"]), (False, "$y", ["e1"])],
+    ),
 }
 
 
@@ -277,7 +276,7 @@ def egg_rule(name):
                 if depth == 0:
                     break
             k += 1
-        block = text[j:k + 1]
+        block = text[j : k + 1]
         if block.endswith(f':name "{name}")'):
             return block
         i = k + 1
@@ -306,14 +305,21 @@ class Case:
         return "\n".join(out) + "\n"
 
     def shifted(self, k):
-        return Case(self.name + f"+{k}", self.rule,
-                    [shift(t, k) for t in self.terms],
-                    [shift(t, k) for t in self.probes], self.want, self.rounds)
+        return Case(
+            self.name + f"+{k}",
+            self.rule,
+            [shift(t, k) for t in self.terms],
+            [shift(t, k) for t in self.probes],
+            self.want,
+            self.rounds,
+        )
 
 
 def schedule(steps):
-    return (f"(run-schedule (saturate (run slotted))\n"
-            f"              (repeat {steps} (seq (run sdql) (saturate (run slotted)))))")
+    return (
+        f"(run-schedule (saturate (run slotted))\n"
+        f"              (repeat {steps} (seq (run sdql) (saturate (run slotted)))))"
+    )
 
 
 def egg_program(case, with_rule=True, mult=3):
@@ -323,12 +329,14 @@ def egg_program(case, with_rule=True, mult=3):
         out.append(egg_rule(case.rule.name))
     # A slotted e-class is not one egglog e-class: two probes are in the same
     # slotted class when they reach a common leader.
-    out += ["(ruleset probe)",
-            "(relation ProbeId (U i64))",
-            "(relation SameClass (i64 i64))",
-            "(rule ((ProbeId a i) (ProbeId b j)\n"
-            "       (RenamesToLeader a m1 l) (RenamesToLeader b m2 l))\n"
-            "      ((SameClass i j)) :ruleset probe)"]
+    out += [
+        "(ruleset probe)",
+        "(relation ProbeId (U i64))",
+        "(relation SameClass (i64 i64))",
+        "(rule ((ProbeId a i) (ProbeId b j)\n"
+        "       (RenamesToLeader a m1 l) (RenamesToLeader b m2 l))\n"
+        "      ((SameClass i j)) :ruleset probe)",
+    ]
     for i, t in enumerate(case.terms):
         out.append(f"(let _t{i} {enc(t)})")
     for i, t in enumerate(case.probes):
@@ -344,9 +352,13 @@ def egg_program(case, with_rule=True, mult=3):
 
 def run_reference(case, with_rule=True):
     try:
-        r = subprocess.run([str(XMULTI / "target" / "debug" / "xmulti")],
-                           input=case.spec(with_rule), capture_output=True,
-                           text=True, timeout=RUN_TIMEOUT)
+        r = subprocess.run(
+            [str(XMULTI / "target" / "debug" / "xmulti")],
+            input=case.spec(with_rule),
+            capture_output=True,
+            text=True,
+            timeout=RUN_TIMEOUT,
+        )
     except subprocess.TimeoutExpired:
         return ("TIMEOUT", f">{RUN_TIMEOUT}s")
     if r.returncode != 0:
@@ -354,7 +366,7 @@ def run_reference(case, with_rule=True):
     part, sat = None, True
     for line in r.stdout.splitlines():
         if line.startswith("PARTITION "):
-            part = line[len("PARTITION "):].strip()
+            part = line[len("PARTITION ") :].strip()
         elif line.startswith("SATURATED "):
             sat = line.split()[1] == "yes"
     if part is None:
@@ -367,8 +379,7 @@ def run_encoding(case, with_rule=True, keep=None, mult=3):
     path = keep or (ROOT / f"xsdql-tmp-{os.getpid()}-{mult}.egg")
     path.write_text(prog)
     try:
-        r = subprocess.run([str(EGGLOG), str(path)], capture_output=True,
-                           text=True, timeout=RUN_TIMEOUT, cwd=ROOT)
+        r = subprocess.run([str(EGGLOG), str(path)], capture_output=True, text=True, timeout=RUN_TIMEOUT, cwd=ROOT)
     except subprocess.TimeoutExpired:
         return ("TIMEOUT", f">{RUN_TIMEOUT}s (kept at {path})")
     if r.returncode != 0:
@@ -390,8 +401,7 @@ def check_case(case, shift_check=True):
     if rs != "OK" or es != "OK":
         return [f"{case.name}: baseline ref={rs}:{rv} enc={es}:{ev}"]
     if rv != ev:
-        return [f"{case.name}: BASELINE differs (machinery, not the rule)\n"
-                f"    ref {rv}\n    enc {ev}"]
+        return [f"{case.name}: BASELINE differs (machinery, not the rule)\n    ref {rv}\n    enc {ev}"]
     baseline = rv
 
     rs, rv = run_reference(case)
@@ -405,28 +415,32 @@ def check_case(case, shift_check=True):
     if es != "OK":
         return fails + [f"{case.name}: encoding crashed: {ev}"]
     if rv != ev:
-        fails.append(f"{case.name}: MISMATCH vs reference\n"
-                     f"    ref {rv}\n    enc {ev}")
+        fails.append(f"{case.name}: MISMATCH vs reference\n    ref {rv}\n    enc {ev}")
     if case.want is not None and rv != case.want and not fails:
-        fails.append(f"{case.name}: both sides agree, but not on the expected "
-                     f"partition\n    want {case.want}\n    got  {rv}")
+        fails.append(
+            f"{case.name}: both sides agree, but not on the expected partition\n    want {case.want}\n    got  {rv}"
+        )
     # A case whose rule never changed the partition compared the machinery, not the
     # rule -- and a "blocked" case that changed it never blocked anything.
     fired = rv != baseline
     if not fails and (case.want == FIRED) != fired:
-        fails.append(f"{case.name}: the rule "
-                     f"{'fired' if fired else 'did not fire'}, which is not what "
-                     f"the case tests\n    baseline  {baseline}\n"
-                     f"    with rule {rv}")
+        fails.append(
+            f"{case.name}: the rule "
+            f"{'fired' if fired else 'did not fire'}, which is not what "
+            f"the case tests\n    baseline  {baseline}\n"
+            f"    with rule {rv}"
+        )
 
     # 2. the encoding at twice the steps: a moving answer means it had not settled,
     #    so the comparison was between two different amounts of work.
     if not fails:
         ds, dv = run_encoding(case, mult=6)
         if ds == "OK" and dv != ev:
-            fails.append(f"{case.name}: encoding not settled or nondeterministic\n"
-                         f"    {case.rounds * 3} steps {ev}\n"
-                         f"    {case.rounds * 6} steps {dv}")
+            fails.append(
+                f"{case.name}: encoding not settled or nondeterministic\n"
+                f"    {case.rounds * 3} steps {ev}\n"
+                f"    {case.rounds * 6} steps {dv}"
+            )
 
     # 3. slot-renaming invariance, per side.
     if shift_check and not fails:
@@ -434,11 +448,9 @@ def check_case(case, shift_check=True):
         xs, xv = run_reference(sh)
         ys, yv = run_encoding(sh)
         if xs in ("OK", "UNSATURATED") and xv != rv:
-            fails.append(f"{case.name}: REFERENCE not slot-renaming invariant\n"
-                         f"    {rv}\n    {xv}")
+            fails.append(f"{case.name}: REFERENCE not slot-renaming invariant\n    {rv}\n    {xv}")
         if ys == "OK" and yv != ev:
-            fails.append(f"{case.name}: ENCODING not slot-renaming invariant\n"
-                         f"    {ev}\n    {yv}")
+            fails.append(f"{case.name}: ENCODING not slot-renaming invariant\n    {ev}\n    {yv}")
     if not fails:
         print(f"  ok  {case.name:<24} {'fired' if fired else 'NO-OP':<6} {rv}")
     return fails
@@ -461,152 +473,205 @@ def cases():
     # (var $2))` and `(eq (var $2) (var $1))` are ONE class before any rule runs,
     # since swapping two free slots is a renaming and the partition compares class
     # identity. That case tests nothing, so the children are made distinguishable.
-    out.append(Case(
-        "eq-comm", RULES["eq-comm"],
-        [("eq", V(1), ("num", 5))],
-        [("eq", V(1), ("num", 5)), ("eq", ("num", 5), V(1)),
-         ("get", V(1), ("num", 5))],
-        FIRED))
+    out.append(
+        Case(
+            "eq-comm",
+            RULES["eq-comm"],
+            [("eq", V(1), ("num", 5))],
+            [("eq", V(1), ("num", 5)), ("eq", ("num", 5), V(1)), ("get", V(1), ("num", 5))],
+            FIRED,
+        )
+    )
 
     # --- a payload literal the RIGHT-hand side builds: `(binop mult ?a ?b)`
-    out.append(Case(
-        "mult-app1", RULES["mult-app1"],
-        [("mult", V(1), V(2))],
-        [("mult", V(1), V(2)),
-         ("binop", ("sym", "mult"), V(1), V(2)),
-         ("binop", ("sym", "add"), V(1), V(2))],
-        FIRED))
+    out.append(
+        Case(
+            "mult-app1",
+            RULES["mult-app1"],
+            [("mult", V(1), V(2))],
+            [("mult", V(1), V(2)), ("binop", ("sym", "mult"), V(1), V(2)), ("binop", ("sym", "add"), V(1), V(2))],
+            FIRED,
+        )
+    )
 
     # --- the payload symbol `add`, which is also an operator tag in `xmulti`'s
     # array language: without `SYM_PREFIX` the reference cannot parse this rule.
-    out.append(Case(
-        "add-app1", RULES["add-app1"],
-        [("add", V(1), V(2))],
-        [("add", V(1), V(2)),
-         ("binop", ("sym", "add"), V(1), V(2)),
-         ("binop", ("sym", "sub"), V(1), V(2))],
-        FIRED))
+    out.append(
+        Case(
+            "add-app1",
+            RULES["add-app1"],
+            [("add", V(1), V(2))],
+            [("add", V(1), V(2)), ("binop", ("sym", "add"), V(1), V(2)), ("binop", ("sym", "sub"), V(1), V(2))],
+            FIRED,
+        )
+    )
 
     # --- a payload literal in a LEFT-hand child position, on a 3-child node
-    out.append(Case(
-        "mult-app2", RULES["mult-app2"],
-        [("binop", ("sym", "mult"), V(1), V(2))],
-        [("binop", ("sym", "mult"), V(1), V(2)),
-         ("mult", V(1), V(2)),
-         ("binop", ("sym", "add"), V(1), V(2))],
-        FIRED))
+    out.append(
+        Case(
+            "mult-app2",
+            RULES["mult-app2"],
+            [("binop", ("sym", "mult"), V(1), V(2))],
+            [("binop", ("sym", "mult"), V(1), V(2)), ("mult", V(1), V(2)), ("binop", ("sym", "add"), V(1), V(2))],
+            FIRED,
+        )
+    )
 
     # --- and the same rule blocked by the payload: `add` is not `mult`.
     # The control cannot be the `mult` binop -- the rule fires on that one and it
     # would land in probe 1's class.
-    out.append(Case(
-        "mult-app2-blocked", RULES["mult-app2"],
-        [("binop", ("sym", "add"), V(1), V(2))],
-        [("binop", ("sym", "add"), V(1), V(2)),
-         ("mult", V(1), V(2)),
-         ("binop", ("sym", "sub"), V(1), V(2))],
-        BLOCKED))
+    out.append(
+        Case(
+            "mult-app2-blocked",
+            RULES["mult-app2"],
+            [("binop", ("sym", "add"), V(1), V(2))],
+            [("binop", ("sym", "add"), V(1), V(2)), ("mult", V(1), V(2)), ("binop", ("sym", "sub"), V(1), V(2))],
+            BLOCKED,
+        )
+    )
 
     # --- a `Num` literal in a left-hand child position, firing and blocked
-    out.append(Case(
-        "add-zero", RULES["add-zero"],
-        [("add", V(1), ("num", 0))],
-        [("add", V(1), ("num", 0)), V(1), ("add", V(1), ("num", 1))],
-        FIRED))
-    out.append(Case(
-        "add-zero-blocked", RULES["add-zero"],
-        [("add", V(1), ("num", 1))],
-        [("add", V(1), ("num", 1)), V(1), ("add", V(1), ("num", 2))],
-        BLOCKED))
+    out.append(
+        Case(
+            "add-zero",
+            RULES["add-zero"],
+            [("add", V(1), ("num", 0))],
+            [("add", V(1), ("num", 0)), V(1), ("add", V(1), ("num", 1))],
+            FIRED,
+        )
+    )
+    out.append(
+        Case(
+            "add-zero-blocked",
+            RULES["add-zero"],
+            [("add", V(1), ("num", 1))],
+            [("add", V(1), ("num", 1)), V(1), ("add", V(1), ("num", 2))],
+            BLOCKED,
+        )
+    )
 
     # --- arity 1, and a `Symbol` the right-hand side builds
-    out.append(Case(
-        "unique-app1", RULES["unique-app1"],
-        [("unique", V(1))],
-        [("unique", V(1)),
-         ("apply", ("sym", "uniquef"), V(1)),
-         ("apply", ("sym", "uniquefx"), V(1))],
-        FIRED))
+    out.append(
+        Case(
+            "unique-app1",
+            RULES["unique-app1"],
+            [("unique", V(1))],
+            [("unique", V(1)), ("apply", ("sym", "uniquef"), V(1)), ("apply", ("sym", "uniquefx"), V(1))],
+            FIRED,
+        )
+    )
 
     # --- a nested left-hand side and a nested right-hand side over a `Num`
-    out.append(Case(
-        "get-range", RULES["get-range"],
-        [("get", ("range", V(3), V(4)), V(7))],
-        [("get", ("range", V(3), V(4)), V(7)),
-         ("add", V(7), ("sub", V(3), ("num", 1))),
-         ("add", V(7), ("sub", ("num", 1), V(3)))],
-        FIRED))
+    out.append(
+        Case(
+            "get-range",
+            RULES["get-range"],
+            [("get", ("range", V(3), V(4)), V(7))],
+            [
+                ("get", ("range", V(3), V(4)), V(7)),
+                ("add", V(7), ("sub", V(3), ("num", 1))),
+                ("add", V(7), ("sub", ("num", 1), V(3))),
+            ],
+            FIRED,
+        )
+    )
 
     # --- a binder on the left AND two on the right, with `?f` over a payload class
-    out.append(Case(
-        "let-binop3", RULES["let-binop3"],
-        [("let", V(1), 2, ("binop", ("sym", "mult"), V(2), V(3)))],
-        [("let", V(1), 2, ("binop", ("sym", "mult"), V(2), V(3))),
-         ("binop", ("sym", "mult"),
-          ("let", V(1), 2, V(2)), ("let", V(1), 2, V(3))),
-         ("binop", ("sym", "add"),
-          ("let", V(1), 2, V(2)), ("let", V(1), 2, V(3)))],
-        FIRED))
+    out.append(
+        Case(
+            "let-binop3",
+            RULES["let-binop3"],
+            [("let", V(1), 2, ("binop", ("sym", "mult"), V(2), V(3)))],
+            [
+                ("let", V(1), 2, ("binop", ("sym", "mult"), V(2), V(3))),
+                ("binop", ("sym", "mult"), ("let", V(1), 2, V(2)), ("let", V(1), 2, V(3))),
+                ("binop", ("sym", "add"), ("let", V(1), 2, V(2)), ("let", V(1), 2, V(3))),
+            ],
+            FIRED,
+        )
+    )
 
     # --- `Sum`: two binders on one node, and slot literals in child positions.
     # The control swaps the two `(var $)` children, which is a DIFFERENT term:
     # the bound slots are ordered, so no renaming turns one into the other.
-    out.append(Case(
-        "sum-sing", RULES["sum-sing"],
-        [("sum", V(9), 5, 6, ("sing", V(5), V(6)))],
-        [("sum", V(9), 5, 6, ("sing", V(5), V(6))),
-         V(9),
-         ("sum", V(9), 5, 6, ("sing", V(6), V(5)))],
-        FIRED))
+    out.append(
+        Case(
+            "sum-sing",
+            RULES["sum-sing"],
+            [("sum", V(9), 5, 6, ("sing", V(5), V(6)))],
+            [("sum", V(9), 5, 6, ("sing", V(5), V(6))), V(9), ("sum", V(9), 5, 6, ("sing", V(6), V(5)))],
+            FIRED,
+        )
+    )
 
     # --- a right-hand side that builds a `Sum`, i.e. re-binds its two slots
-    out.append(Case(
-        "sum-fact-inv-1", RULES["sum-fact-inv-1"],
-        [("mult", V(7), ("sum", V(1), 2, 3, ("get", V(2), V(3))))],
-        [("mult", V(7), ("sum", V(1), 2, 3, ("get", V(2), V(3)))),
-         ("sum", V(1), 2, 3, ("mult", V(7), ("get", V(2), V(3)))),
-         ("sum", V(1), 2, 3, ("mult", ("get", V(2), V(3)), V(7)))],
-        FIRED))
+    out.append(
+        Case(
+            "sum-fact-inv-1",
+            RULES["sum-fact-inv-1"],
+            [("mult", V(7), ("sum", V(1), 2, 3, ("get", V(2), V(3))))],
+            [
+                ("mult", V(7), ("sum", V(1), 2, 3, ("get", V(2), V(3)))),
+                ("sum", V(1), 2, 3, ("mult", V(7), ("get", V(2), V(3)))),
+                ("sum", V(1), 2, 3, ("mult", ("get", V(2), V(3)), V(7))),
+            ],
+            FIRED,
+        )
+    )
 
     # --- `Merge`: three binders on one node, six children, and a built `let`
-    lhs = ("sum", V(1), 2, 3,
-           ("sum", V(4), 5, 6,
-            ("ifthen", ("eq", V(3), V(6)), ("get", V(2), V(5)))))
-    rhs = ("merge", V(1), V(4), 2, 5, 3,
-           ("let", V(3), 6, ("get", V(2), V(5))))
+    lhs = ("sum", V(1), 2, 3, ("sum", V(4), 5, 6, ("ifthen", ("eq", V(3), V(6)), ("get", V(2), V(5)))))
+    rhs = ("merge", V(1), V(4), 2, 5, 3, ("let", V(3), 6, ("get", V(2), V(5))))
     # NOT the two ranges swapped: that is the free-slot renaming $1 <-> $4 of
     # probe 1, i.e. the same class. The two key binders swapped reorders the bound
     # slots against the body, which no renaming undoes.
-    ctl = ("merge", V(1), V(4), 5, 2, 3,
-           ("let", V(3), 6, ("get", V(2), V(5))))
+    ctl = ("merge", V(1), V(4), 5, 2, 3, ("let", V(3), 6, ("get", V(2), V(5))))
     out.append(Case("sum-merge", RULES["sum-merge"], [lhs], [lhs, rhs, ctl], FIRED))
 
     # --- a slot-conditional rule, firing: `$x`,`$y` are not in `?e1`'s slots
-    out.append(Case(
-        "sum-fact-1-fires", RULES["sum-fact-1"],
-        [("sum", V(1), 2, 3, ("mult", V(7), V(2)))],
-        [("sum", V(1), 2, 3, ("mult", V(7), V(2))),
-         ("mult", V(7), ("sum", V(1), 2, 3, V(2))),
-         ("mult", V(2), ("sum", V(1), 2, 3, V(7)))],
-        FIRED))
+    out.append(
+        Case(
+            "sum-fact-1-fires",
+            RULES["sum-fact-1"],
+            [("sum", V(1), 2, 3, ("mult", V(7), V(2)))],
+            [
+                ("sum", V(1), 2, 3, ("mult", V(7), V(2))),
+                ("mult", V(7), ("sum", V(1), 2, 3, V(2))),
+                ("mult", V(2), ("sum", V(1), 2, 3, V(7))),
+            ],
+            FIRED,
+        )
+    )
 
     # --- and blocked: `?e1` is the first bound slot's variable
-    out.append(Case(
-        "sum-fact-1-blocked", RULES["sum-fact-1"],
-        [("sum", V(1), 2, 3, ("mult", V(2), V(7)))],
-        [("sum", V(1), 2, 3, ("mult", V(2), V(7))),
-         ("mult", V(2), ("sum", V(1), 2, 3, V(7))),
-         ("mult", V(7), ("sum", V(1), 2, 3, V(2)))],
-        BLOCKED))
+    out.append(
+        Case(
+            "sum-fact-1-blocked",
+            RULES["sum-fact-1"],
+            [("sum", V(1), 2, 3, ("mult", V(2), V(7)))],
+            [
+                ("sum", V(1), 2, 3, ("mult", V(2), V(7))),
+                ("mult", V(2), ("sum", V(1), 2, 3, V(7))),
+                ("mult", V(7), ("sum", V(1), 2, 3, V(2))),
+            ],
+            BLOCKED,
+        )
+    )
 
     # --- blocked on the SECOND bound slot, which is the one an off-by-one misses
-    out.append(Case(
-        "sum-fact-1-blocked-y", RULES["sum-fact-1"],
-        [("sum", V(1), 2, 3, ("mult", V(3), V(7)))],
-        [("sum", V(1), 2, 3, ("mult", V(3), V(7))),
-         ("mult", V(3), ("sum", V(1), 2, 3, V(7))),
-         ("mult", V(7), ("sum", V(1), 2, 3, V(3)))],
-        BLOCKED))
+    out.append(
+        Case(
+            "sum-fact-1-blocked-y",
+            RULES["sum-fact-1"],
+            [("sum", V(1), 2, 3, ("mult", V(3), V(7)))],
+            [
+                ("sum", V(1), 2, 3, ("mult", V(3), V(7))),
+                ("mult", V(3), ("sum", V(1), 2, 3, V(7))),
+                ("mult", V(7), ("sum", V(1), 2, 3, V(3))),
+            ],
+            BLOCKED,
+        )
+    )
 
     return out
 
@@ -616,8 +681,7 @@ def main():
     if argv and argv[0] == "list":
         for c in cases():
             print(f"{c.name:<24} {c.want}")
-            print(f"    {c.rule.name:<16} {ref_text(c.rule.lhs)}"
-                  f"  ->  {ref_text(c.rule.rhs)}")
+            print(f"    {c.rule.name:<16} {ref_text(c.rule.lhs)}  ->  {ref_text(c.rule.rhs)}")
         return 0
     if argv and argv[0] == "show":
         c = next(x for x in cases() if x.name == argv[1])

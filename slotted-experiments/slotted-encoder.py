@@ -44,11 +44,10 @@ literals folded into the renaming rather than checked after it, and an `Equated`
 conclusion.
 """
 
-import pathlib
 import re
 
-CHILD = object()          # a slotted child: `Renaming U`
-BINDER = object()         # a slotted child that also binds its slot
+CHILD = object()  # a slotted child: `Renaming U`
+BINDER = object()  # a slotted child that also binds its slot
 
 SLOTTED = (CHILD, BINDER)
 
@@ -56,6 +55,7 @@ SLOTTED = (CHILD, BINDER)
 ###############################################################################
 # language specs
 ###############################################################################
+
 
 def read_language(path):
     """Parse annotated constructor declarations.
@@ -76,7 +76,7 @@ def read_language(path):
         line = raw.split(";")[0].strip()
         if not line.startswith("(constructor "):
             continue
-        head, _, rest = line[len("(constructor "):].partition("(")
+        head, _, rest = line[len("(constructor ") :].partition("(")
         name = head.strip()
         cols_text, _, tail = rest.partition(")")
         binders = []
@@ -97,7 +97,7 @@ def read_language(path):
 def cols_of(sig):
     """Column names for a signature: payload vars, and (edge, child) per child."""
     payloads, edges, kids, order = [], [], [], []
-    for i, col in enumerate(sig):
+    for _i, col in enumerate(sig):
         if col in SLOTTED:
             e, k = f"m{len(kids) + 1}", f"c{len(kids) + 1}"
             edges.append(e)
@@ -143,7 +143,7 @@ GENERIC = {
     "App4": ["String", CHILD, CHILD, CHILD, CHILD],
     "Num": ["i64"],
     "Sym": ["String"],
-    "Scale": ["i64", CHILD],       # keeps the mixed payload/child case exercised
+    "Scale": ["i64", CHILD],  # keeps the mixed payload/child case exercised
 }
 
 # There the operator is in the head, so a binder cannot be declared structurally and
@@ -167,6 +167,7 @@ GENERIC_FILE = "tests/slotted-node-rules.egg"
 # machinery: the per-constructor maintenance rules
 ###############################################################################
 
+
 def fold(op, xs, empty):
     if not xs:
         return empty
@@ -185,8 +186,7 @@ def lex_greater(a, b, i=0):
     gt = f"(and (bool= (ordering-max {a[i]} {b[i]}) {b[i]}) (bool-!= {a[i]} {b[i]}))"
     if i == len(a) - 1:
         return gt
-    return (f"(or {gt}\n              (and (bool= {a[i]} {b[i]})\n"
-            f"                   {lex_greater(a, b, i + 1)}))")
+    return f"(or {gt}\n              (and (bool= {a[i]} {b[i]})\n                   {lex_greater(a, b, i + 1)}))"
 
 
 def class_slots(name, sig):
@@ -234,17 +234,15 @@ def alpha_finder(name, sig):
     a_o = [f"{e}_o" for e in edges]
     a, b = list(edges), [f"b{i + 1}" for i in range(len(edges))]
     syms = [f"sym{i + 1}" for i in range(len(kids))]
-    loops = "\n       ".join(
-        f"(RenamesToLeader {kids[i]} {syms[i]} {kids[i]})" for i in range(len(kids)))
-    composed = "\n       ".join(
-        f"(= {a[i]} (compose {a_o[i]} {syms[i]}))" for i in range(len(edges)))
+    loops = "\n       ".join(f"(RenamesToLeader {kids[i]} {syms[i]} {kids[i]})" for i in range(len(kids)))
+    composed = "\n       ".join(f"(= {a[i]} (compose {a_o[i]} {syms[i]}))" for i in range(len(edges)))
     return f"""\
 (rule ((= e1 {pattern(name, sig, edges=a_o)})
        (= e2 {pattern(name, sig, edges=b)})
        (= e1 (ordering-max e1 e2))
        {loops}
        {composed}
-       (= m (find-mapping {' '.join(a)} {' '.join(b)}))
+       (= m (find-mapping {" ".join(a)} {" ".join(b)}))
        (guard
          (or (bool-!= e1 e2)
              (and (bool= e1 e2)
@@ -271,15 +269,13 @@ def symmetry_finder(name, sig):
     a_o = [f"{e}_o" for e in edges]
     a = list(edges)
     syms = [f"sym{i + 1}" for i in range(len(kids))]
-    loops = "\n       ".join(
-        f"(RenamesToLeader {kids[i]} {syms[i]} {kids[i]})" for i in range(len(kids)))
-    composed = "\n       ".join(
-        f"(= {a[i]} (compose {a_o[i]} {syms[i]}))" for i in range(len(edges)))
+    loops = "\n       ".join(f"(RenamesToLeader {kids[i]} {syms[i]} {kids[i]})" for i in range(len(kids)))
+    composed = "\n       ".join(f"(= {a[i]} (compose {a_o[i]} {syms[i]}))" for i in range(len(edges)))
     return f"""\
 (rule ((= e {pattern(name, sig, edges=a_o)})
        {loops}
        {composed}
-       (= sym_out (find-mapping {' '.join(a_o)} {' '.join(a)}))
+       (= sym_out (find-mapping {" ".join(a_o)} {" ".join(a)}))
        (= cs (ClassSlots e)))
       ((RenamesToLeader e (compose cs (compose sym_out cs)) e)))
 """
@@ -309,11 +305,14 @@ def migration(name, sig):
     ns = [f"n{i + 1}" for i in range(len(edges))]
     node_slots = fold("map-union", [f"(map-image {m})" for m in edges], "(map-empty)")
     pulled = "\n       ".join(
-        [f"(= nodeslots {node_slots})",
-         "; R takes the node's slots to the leader's, agreeing with m inverse where",
-         "; that is defined and minting a name where it is not",
-         "(= R (find-mapping-total (map-domain m) nodeslots (map-domain m) m))"]
-        + [f"(= {ns[i]} (compose R {edges[i]}))" for i in range(len(edges))])
+        [
+            f"(= nodeslots {node_slots})",
+            "; R takes the node's slots to the leader's, agreeing with m inverse where",
+            "; that is defined and minting a name where it is not",
+            "(= R (find-mapping-total (map-domain m) nodeslots (map-domain m) m))",
+        ]
+        + [f"(= {ns[i]} (compose R {edges[i]}))" for i in range(len(edges))]
+    )
     return f"""\
 (rule ((RenamesToLeader e2 m e1)
        (= e2 {pattern(name, sig)})
@@ -386,9 +385,7 @@ def binder(name, sig, positions, head=None):
 
     rules = []
     for n, pos in enumerate(positions):
-        free_elsewhere = "".join(
-            f"\n       (map-not-contains (map-image {edges[u]}) v{n})"
-            for u in uncovered)
+        free_elsewhere = "".join(f"\n       (map-not-contains (map-image {edges[u]}) v{n})" for u in uncovered)
         rules.append(f"""\
 (rule ((RenamesToLeader {node} ml l)
        (= v{n} (map-get mvar{n} 0)){free_elsewhere})
@@ -407,9 +404,7 @@ def binder(name, sig, positions, head=None):
         for u in uncovered:
             fresh_e = list(e)
             fresh_e[pos] = f"(map-of 0 w{n})"
-            fresh_e[covered] = (
-                f"(compose (map-insert (map-image {edges[covered]}) v{n} w{n})"
-                f" {edges[covered]})")
+            fresh_e[covered] = f"(compose (map-insert (map-image {edges[covered]}) v{n} w{n}) {edges[covered]})"
             renamed = pattern(name, sig, edges=fresh_e, kids=k, payloads=payloads)
             rules.append(f"""\
 (rule ((= node {node})
@@ -448,31 +443,34 @@ def emit(language, binders=(), provided=None, omit=()):
     out = []
     for name, sig in language.items():
         if name in omit:
-            out += banner(f"{name} :: {' '.join(shape_of(c) for c in sig)}"
-                          " -- hand-written in slotted-egraph-encoding-11.egg")
+            out += banner(
+                f"{name} :: {' '.join(shape_of(c) for c in sig)} -- hand-written in slotted-egraph-encoding-11.egg"
+            )
             continue
         if provided and name in provided:
             if provided[name] != sig:
-                raise SystemExit(
-                    f"{name} clashes with the generic encoding at a different signature")
-            out += banner(f"{name} :: {' '.join(shape_of(c) for c in sig)}"
-                          " -- declared by the generic encoding")
+                raise SystemExit(f"{name} clashes with the generic encoding at a different signature")
+            out += banner(f"{name} :: {' '.join(shape_of(c) for c in sig)} -- declared by the generic encoding")
             continue
         _, edges, kids, _ = cols_of(sig)
         out += banner(f"{name} :: {' '.join(shape_of(c) for c in sig)}")
-        out += [declare(name, sig),
-                ";; an upper bound on the class's slots; the merge narrows it",
-                class_slots(name, sig),
-                ";; every class holding a node has a self-loop, so a query can reach it",
-                self_loop(name, sig)]
+        out += [
+            declare(name, sig),
+            ";; an upper bound on the class's slots; the merge narrows it",
+            class_slots(name, sig),
+            ";; every class holding a node has a self-loop, so a query can reach it",
+            self_loop(name, sig),
+        ]
         if not kids:
-            continue          # nothing below touches a child
-        out += [";; alpha-finder: two nodes equal up to renaming, one eliminated",
-                alpha_finder(name, sig),
-                ";; the same solve kept as a symmetry, non-destructively",
-                symmetry_finder(name, sig),
-                ";; migration: move a follower's node into the leader's frame",
-                migration(name, sig)]
+            continue  # nothing below touches a child
+        out += [
+            ";; alpha-finder: two nodes equal up to renaming, one eliminated",
+            alpha_finder(name, sig),
+            ";; the same solve kept as a symmetry, non-destructively",
+            symmetry_finder(name, sig),
+            ";; migration: move a follower's node into the leader's frame",
+            migration(name, sig),
+        ]
         for pos in range(len(kids)):
             out += [f";; child-update, child {pos + 1}", child_update(name, sig, pos)]
 
@@ -482,14 +480,11 @@ def emit(language, binders=(), provided=None, omit=()):
         bound = [i for i, c in enumerate(kid_cols) if c is BINDER]
         if bound and name not in omit:
             which = ", ".join(str(i + 1) for i in bound)
-            binder_rules.append(
-                (f";; `{name}` binds child {which}, one rule per bound slot",
-                 binder(name, sig, bound)))
+            binder_rules.append((f";; `{name}` binds child {which}, one rule per bound slot", binder(name, sig, bound)))
     for head, name in binders:
         if name in omit:
             continue
-        binder_rules.append((f';; `{head}` binds its first child\'s slot',
-                             binder(name, language[name], [0], head=head)))
+        binder_rules.append((f";; `{head}` binds its first child's slot", binder(name, language[name], [0], head=head)))
     if binder_rules:
         out += banner("binders")
         for comment, rule in binder_rules:
@@ -563,7 +558,7 @@ def in_slotted_ruleset(text):
             head = body.lstrip()[:6]
             if head in ("(rule ", "(rule\n") and ":ruleset" not in body:
                 i = body.rindex(")")
-                body = body[:i] + " :ruleset slotted)" + body[i + 1:]
+                body = body[:i] + " :ruleset slotted)" + body[i + 1 :]
             out.append("".join(buf) + body)
             buf, form, depth = [], [], 0
     return "".join(out) + "".join(buf)
@@ -578,14 +573,14 @@ def handwritten_region():
     comparing.
     """
     lang = {name: GENERIC[name] for name in HANDWRITTEN}
-    binders = tuple((head, name) for head, name in GENERIC_BINDERS
-                    if name in HANDWRITTEN)
+    binders = tuple((head, name) for head, name in GENERIC_BINDERS if name in HANDWRITTEN)
     return in_slotted_ruleset(SHARED + "\n" + "\n".join(emit(lang, binders)))
 
 
 ###############################################################################
 # terms
 ###############################################################################
+
 
 def map_of(d):
     """A renaming literal, from a dict."""
@@ -699,8 +694,7 @@ def string_headed(head, ctor, ref=None):
     sig = list(GENERIC[ctor])
     if (head, ctor) in GENERIC_BINDERS:
         sig[next(i for i, c in enumerate(sig) if c in SLOTTED)] = BINDER
-    return Op(head, ctor, sig, pays=[f'"{head}"'],
-              ref=head if ref is None else ref)
+    return Op(head, ctor, sig, pays=[f'"{head}"'], ref=head if ref is None else ref)
 
 
 class TermLang:
@@ -724,8 +718,7 @@ class TermLang:
         """One `Op` per constructor of a `read_language` signature table -- the shape
         the reference crate's `define_language!` produces, with no head to indirect
         through, so the operator IS the constructor."""
-        return cls({name: Op(name, name, sig, ref=name)
-                    for name, sig in language.items()})
+        return cls({name: Op(name, name, sig, ref=name) for name, sig in language.items()})
 
     def __getitem__(self, name):
         return self.ops[name]
@@ -798,11 +791,9 @@ class TermLang:
         op = self.ops[t[0]]
         kids, pays = op.split(t[1:])
         if op.ref is None:
-            return pays[0].strip('"')       # a payload leaf, written as its payload
-        assert not (kids and None in op.pays), \
-            f"{op.name}: no oracle syntax for a payload argument beside a child"
-        parts = [f"${self.slot(k)}" if i in op.binders else self.sexpr(k)
-                 for i, k in enumerate(kids)]
+            return pays[0].strip('"')  # a payload leaf, written as its payload
+        assert not (kids and None in op.pays), f"{op.name}: no oracle syntax for a payload argument beside a child"
+        parts = [f"${self.slot(k)}" if i in op.binders else self.sexpr(k) for i, k in enumerate(kids)]
         return f"({op.ref} {' '.join(parts)})" if parts else op.ref
 
     def shift(self, t, k):
@@ -811,7 +802,7 @@ class TermLang:
         if t[0] == self.VAR:
             return (t[0], t[1] + k)
         out = []
-        for kind, a in zip(self.ops[t[0]].arg_kinds(), t[1:]):
+        for kind, a in zip(self.ops[t[0]].arg_kinds(), t[1:], strict=True):
             if kind is CHILD:
                 out.append(self.shift(a, k))
             elif kind is BINDER:
@@ -929,8 +920,7 @@ def rhs_of(lang, t):
     alone."""
     if isinstance(t, str):
         return ("sl", t) if t.startswith("$") else ("pv", t)
-    out = [rhs_of(lang, a) if kind in SLOTTED else a
-           for kind, a in zip(lang[t[0]].arg_kinds(), t[1:])]
+    out = [rhs_of(lang, a) if kind in SLOTTED else a for kind, a in zip(lang[t[0]].arg_kinds(), t[1:], strict=True)]
     return (t[0], *out)
 
 
@@ -952,15 +942,14 @@ def pat_sexpr(lang, t, binder=False):
     kids, pays = op.split(t[1:])
     if op.ref is None:
         return pays[0].strip('"')
-    assert not (kids and None in op.pays), \
-        f"{op.name}: no oracle syntax for a payload argument beside a child"
-    parts = [pat_sexpr(lang, k, binder=(i in op.binders))
-             for i, k in enumerate(kids)]
+    assert not (kids and None in op.pays), f"{op.name}: no oracle syntax for a payload argument beside a child"
+    parts = [pat_sexpr(lang, k, binder=(i in op.binders)) for i, k in enumerate(kids)]
     return f"({op.ref} {' '.join(parts)})" if parts else op.ref
 
 
-def compile_rule(lang, atoms, action, conds=(), fresh=(), bugs=frozenset(),
-                 slot_prefix="s", fresh_batch=True, tail=")"):
+def compile_rule(
+    lang, atoms, action, conds=(), fresh=(), bugs=frozenset(), slot_prefix="s", fresh_batch=True, tail=")"
+):
     """Compile a flattened multipattern and its action into one egglog rule.
 
     The recipe `tests/slotted-user-rules.egg` states. Atoms are taken in the order
@@ -1010,11 +999,11 @@ def compile_rule(lang, atoms, action, conds=(), fresh=(), bugs=frozenset(),
         uid[0] += 1
         return f"{p}{uid[0]}"
 
-    mp_of = {}      # pvar -> egglog var holding its renaming into slots(pattern)
-    cls_of = {}     # pvar -> egglog var holding its leader
-    slot_of = {}    # "$v" -> egglog i64 var holding that pattern slot
-    sym_of = {}     # pvar -> its symmetry variable
-    pat = None      # identity on the pattern slots named so far
+    mp_of = {}  # pvar -> egglog var holding its renaming into slots(pattern)
+    cls_of = {}  # pvar -> egglog var holding its leader
+    slot_of = {}  # "$v" -> egglog i64 var holding that pattern slot
+    sym_of = {}  # pvar -> its symmetry variable
+    pat = None  # identity on the pattern slots named so far
 
     def narrow(m, cls):
         """Cut `m` down from the matched node's slots to its class's -- M8.
@@ -1076,7 +1065,7 @@ def compile_rule(lang, atoms, action, conds=(), fresh=(), bugs=frozenset(),
             seconds.append(f"(map-domain {mv})")
         # every child an earlier atom already named
         bound_before = set(mp_of)
-        for k, e in zip(kids, edges):
+        for k, e in zip(kids, edges, strict=True):
             if k[0] == "pv" and k[1] in bound_before and "root-only" not in bugs:
                 firsts.append(f"(compose {mp_of[k[1]]} {sym_for(k[1])})")
                 seconds.append(e)
@@ -1084,7 +1073,7 @@ def compile_rule(lang, atoms, action, conds=(), fresh=(), bugs=frozenset(),
         # `mp . edge = {0 -> that slot}`. Checking it afterwards instead is too late --
         # `mp` would already have minted a different name for the same binder, and
         # nothing revises a mint.
-        for k, e in zip(kids, edges):
+        for k, e in zip(kids, edges, strict=True):
             if k[0] == "sl" and k[1] in slot_of and "slot-late" not in bugs:
                 firsts.append(f"(map-insert (map-empty) 0 {slot_of[k[1]]})")
                 seconds.append(e)
@@ -1094,12 +1083,10 @@ def compile_rule(lang, atoms, action, conds=(), fresh=(), bugs=frozenset(),
             # the leading atom fixes slots(pattern); its `mp` is the identity
             body.append(f"(= {mp} {dom})")
         elif firsts:
-            body.append(f"(= {mp} (find-mapping-total {pat} {dom} "
-                        f"{' '.join(firsts + seconds)}))")
+            body.append(f"(= {mp} (find-mapping-total {pat} {dom} {' '.join(firsts + seconds)}))")
         else:
             # nothing constrains this atom: every slot is minted
-            body.append(f"(= {mp} (find-mapping-total {pat} {dom} "
-                        f"(map-empty) (map-empty)))")
+            body.append(f"(= {mp} (find-mapping-total {pat} {dom} (map-empty) (map-empty)))")
 
         # Accumulate the avoid-set. Passing only the leading atom's slots would let
         # two atoms that both mint choose the same slot, since the primitive is pure
@@ -1117,13 +1104,13 @@ def compile_rule(lang, atoms, action, conds=(), fresh=(), bugs=frozenset(),
         # A slot literal names one slot in pattern space. `(= v ...)` binds it on
         # first use and constrains it on every later one, which is how the same `$v`
         # written twice forces the two slots to agree.
-        for k, e in zip(kids, edges):
+        for k, e in zip(kids, edges, strict=True):
             if k[0] == "sl":
                 sv = slot_of.setdefault(k[1], slot_prefix + k[1][1:])
                 body.append(f"(= {sv} (map-get (compose {mp} {e}) 0))")
 
         # walk the children: bind the new ones, check the ones bound in THIS atom
-        for k, e in zip(kids, edges):
+        for k, e in zip(kids, edges, strict=True):
             if k[0] != "pv":
                 continue
             if k[1] in mp_of:
@@ -1134,8 +1121,7 @@ def compile_rule(lang, atoms, action, conds=(), fresh=(), bugs=frozenset(),
                 # place -- emitting neither would be a different, more permissive
                 # mutant.
                 if k[1] not in bound_before or "root-only" in bugs:
-                    body.append(f"(= (compose {mp} {e}) "
-                                f"(compose {mp_of[k[1]]} {sym_for(k[1])}))")
+                    body.append(f"(= (compose {mp} {e}) (compose {mp_of[k[1]]} {sym_for(k[1])}))")
             else:
                 m = new("m")
                 body.append(f"(= {m} (compose {mp} {e}))")
@@ -1152,8 +1138,7 @@ def compile_rule(lang, atoms, action, conds=(), fresh=(), bugs=frozenset(),
     for group in groups:
         fm = new("fs" if fresh_batch else "fm")
         domain = " ".join(f"{i} {i}" for i in range(len(group)))
-        body.append(f"(= {fm} (find-mapping-total {pat} (map-of {domain}) "
-                    f"(map-empty) (map-empty)))")
+        body.append(f"(= {fm} (find-mapping-total {pat} (map-of {domain}) (map-empty) (map-empty)))")
         for i, s in enumerate(group):
             # a fresh name reusing a pattern literal's would silently constrain it
             assert s not in slot_of, f"{s} is already pinned by the pattern"
@@ -1177,10 +1162,8 @@ def compile_rule(lang, atoms, action, conds=(), fresh=(), bugs=frozenset(),
             kind = "map-contains" if want else "map-not-contains"
             body.append(f"({kind} {images[0]} {sv})")
         else:
-            expr = "(or " + " ".join(f"(bool-map-contains {im} {sv})"
-                                     for im in images) + ")"
-            body.append(f"(guard {expr})" if want
-                        else f"(guard (bool= {expr} false))")
+            expr = "(or " + " ".join(f"(bool-map-contains {im} {sv})" for im in images) + ")"
+            body.append(f"(guard {expr})" if want else f"(guard (bool= {expr} false))")
 
     lets = []
 
@@ -1202,11 +1185,10 @@ def compile_rule(lang, atoms, action, conds=(), fresh=(), bugs=frozenset(),
         op = lang[t[0]]
         args, pays = op.split(t[1:])
         if not args:
-            return map_of(lang.edge(t)), lang.enc(t)   # a leaf node has no slots
+            return map_of(lang.edge(t)), lang.enc(t)  # a leaf node has no slots
         kids = [build(a) for a in args]
         nv = new("_rhs")
-        lets.append(f"(let {nv} "
-                    f"{node_expr(op, [e for e, _ in kids], [c for _, c in kids], pays)})")
+        lets.append(f"(let {nv} {node_expr(op, [e for e, _ in kids], [c for _, c in kids], pays)})")
         slots = union_images([e for e, _ in kids])
         for i in op.binders:
             slots = f"(map-remove {slots} {slot_of[args[i][1]]})"
@@ -1221,8 +1203,7 @@ def compile_rule(lang, atoms, action, conds=(), fresh=(), bugs=frozenset(),
             # neither need be the identity, which is the one action egglog's `union`
             # cannot express -- so solve: from mr*Root = ma*A follows
             # Root = (mr^-1 . ma) * A, and let the machinery re-orient it (M10).
-            act = [f"(Equated {cls_of[root]} "
-                   f"(compose (inverse {mr}) {mp_of[rhs[1]]}) {cls_of[rhs[1]]})"]
+            act = [f"(Equated {cls_of[root]} (compose (inverse {mr}) {mp_of[rhs[1]]}) {cls_of[rhs[1]]})"]
         else:
             _, built = build(rhs)
             act = lets + [f"(Equated {built} {mr} {cls_of[root]})"]
@@ -1239,13 +1220,10 @@ def compile_rule(lang, atoms, action, conds=(), fresh=(), bugs=frozenset(),
         # the stale-row deleter then removes a fact with no `Equated` behind it to
         # re-derive. The corpus never built that state, so nothing caught it.
         pvs = action[3]
-        node = node_expr(lang[action[2]], [mp_of[v] for v in pvs],
-                         [cls_of[v] for v in pvs], lang[action[2]].pays)
+        node = node_expr(lang[action[2]], [mp_of[v] for v in pvs], [cls_of[v] for v in pvs], lang[action[2]].pays)
         if "union-id" in bugs:
             act = [f"(union {cls_of[root]} {node})"]
         else:
-            act = [f"(let _hn {node})",
-                   f"(Equated _hn {mr} {cls_of[root]})"]
+            act = [f"(let _hn {node})", f"(Equated _hn {mr} {cls_of[root]})"]
 
-    return ("(rule (" + "\n       ".join(body) + ")\n      ("
-            + "\n       ".join(act) + ")" + tail)
+    return "(rule (" + "\n       ".join(body) + ")\n      (" + "\n       ".join(act) + ")" + tail

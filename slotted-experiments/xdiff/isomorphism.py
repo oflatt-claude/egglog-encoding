@@ -26,17 +26,17 @@ away:
 
 Run: `python3 slotted-experiments/xdiff/isomorphism.py [name-prefix|fuzz N [seed]]`
 """
+
 import itertools
 import json
 import random
-import re
 import subprocess
 import sys
+
 sys.path.insert(0, "slotted-experiments/xdiff")
 import xdiff as X
 
-TABLES = ["IsVarClass", "IsNullClass", "ClassSlots", "RenamesToLeader",
-          "App2", "App3", "App4", "Num", "Sym", "Scale"]
+TABLES = ["IsVarClass", "IsNullClass", "ClassSlots", "RenamesToLeader", "App2", "App3", "App4", "Num", "Sym", "Scale"]
 
 # `Var` and `Null` are constructors, not rows, so which class holds one cannot be read
 # off the tables -- and it cannot be recovered from the printed name either: a value
@@ -72,7 +72,7 @@ def parse_sexpr(s, i=0):
             out.append(child)
     if s[i] == '"':
         j = s.index('"', i + 1)
-        return s[i:j + 1], j + 1
+        return s[i : j + 1], j + 1
     j = i
     while j < len(s) and not s[j].isspace() and s[j] not in "()":
         j += 1
@@ -90,7 +90,7 @@ def as_map(t):
     if isinstance(t, str) or t[0] == "map-empty":
         return {}
     xs = [int(v) for v in t[1:]]
-    return dict(zip(xs[0::2], xs[1::2]))
+    return dict(zip(xs[0::2], xs[1::2], strict=False))
 
 
 # ------------------------------------------------------------------ the graphs
@@ -102,9 +102,9 @@ class Graph:
     """
 
     def __init__(self):
-        self.slots = {}      # cid -> tuple of slot names
-        self.group = {}      # cid -> set of permutations, each a frozenset of pairs
-        self.nodes = {}      # cid -> list of nodes
+        self.slots = {}  # cid -> tuple of slot names
+        self.group = {}  # cid -> set of permutations, each a frozenset of pairs
+        self.nodes = {}  # cid -> list of nodes
 
     def add_class(self, cid, slots):
         self.slots.setdefault(cid, tuple(slots))
@@ -158,8 +158,7 @@ def parse_reference(out):
                     elems.append(("slot", rest))
                 elif kind == "c":
                     child, _, mtext = rest.partition(":")
-                    m = tuple(sorted(tuple(x.split(">"))
-                                     for x in mtext.split("|") if x))
+                    m = tuple(sorted(tuple(x.split(">")) for x in mtext.split("|") if x))
                     elems.append(("child", child, m))
             g.nodes[cid].append((op, tuple(elems)))
     g.close_groups()
@@ -188,7 +187,7 @@ def read_json_graph(doc):
     for n in nodes.values():
         if n.get("op") == "map-of" and n["eclass"].startswith("Renaming-"):
             xs = [int(nodes[c]["op"]) for c in n.get("children", [])]
-            maps[n["eclass"]] = dict(zip(xs[0::2], xs[1::2]))
+            maps[n["eclass"]] = dict(zip(xs[0::2], xs[1::2], strict=False))
 
     def as_renaming(node_id):
         return maps.get(cls(node_id), {})
@@ -231,7 +230,7 @@ def rename_image(u, m):
     `u` and a plain compose drops them. They are node-local and quantified per node when nodes
     are matched, so they only need a name that cannot collide with a class slot, an int here.
     """
-    return {k: u[v] if v in u else f"~{v}" for k, v in m.items()}
+    return {k: u.get(v, f"~{v}") for k, v in m.items()}
 
 
 def invert_map(m):
@@ -248,8 +247,8 @@ def build_encoding_graph(doc):
     slot set. `class-count.py` is the independent check on that reading.
     """
     slots_of, loops, rows, leaf = read_json_graph(doc)
-    values = set(slots_of) | {c for _, _, c in rows} | {l for l in leaf.values()}
-    for a, m, b in loops:
+    values = set(slots_of) | {c for _, _, c in rows} | set(leaf.values())
+    for a, _m, b in loops:
         values |= {a, b}
 
     parent = {v: v for v in values}
@@ -261,7 +260,7 @@ def build_encoding_graph(doc):
         return x
 
     linked = [(a, m, b) for a, m, b in loops if a != b]
-    for a, m, b in linked:
+    for a, _m, b in linked:
         ra, rb = find(a), find(b)
         if ra != rb:
             parent[ra] = rb
@@ -311,16 +310,16 @@ def build_encoding_graph(doc):
         if v is None or v in unplaced:
             continue
         u = up(v)
-        elems = ((("slot", u[0] if 0 in u else "~0"),) if kind == "var" else ())
+        elems = (("slot", u.get(0, "~0")),) if kind == "var" else ()
         g.nodes[rep_of[v]].append((op, elems))
 
     for name, elems, cid in rows:
         if cid in unplaced or any(c in unplaced for _, c, _ in elems):
             continue
         u = up(cid)
-        moved = tuple(("child", rep_of[c], tuple(sorted(
-            rename_image(u, compose_maps(m, frame[c])).items())))
-            for _, c, m in elems)
+        moved = tuple(
+            ("child", rep_of[c], tuple(sorted(rename_image(u, compose_maps(m, frame[c])).items()))) for _, c, m in elems
+        )
         g.nodes[rep_of[cid]].append((name, moved))
 
     # rows that coincide after translating are one node, as in the reference, whose class
@@ -384,9 +383,7 @@ def to_reference_shape(g, var_class=None):
             fixed = []
             for e in elems:
                 if e[0] == "child":
-                    fixed.append(("child", e[1],
-                                  tuple(sorted(e[2].items()))
-                                  if isinstance(e[2], dict) else e[2]))
+                    fixed.append(("child", e[1], tuple(sorted(e[2].items())) if isinstance(e[2], dict) else e[2]))
                 else:
                     fixed.append(e)
             out.nodes[cid].append((op, tuple(fixed)))
@@ -420,9 +417,7 @@ def apply_node(node, pmap, cmap, smap):
         else:
             cid = cmap[e[1]]
             sm = smap[e[1]]
-            out.append(("child", cid,
-                        tuple(sorted((sm.get(cs, cs), pmap.get(ps, ps))
-                                     for cs, ps in e[2]))))
+            out.append(("child", cid, tuple(sorted((sm.get(cs, cs), pmap.get(ps, ps)) for cs, ps in e[2]))))
     return (node[0], tuple(out))
 
 
@@ -436,8 +431,7 @@ def group_variants(node, gp, groups):
     child_ids = [e[1] for e in node[1] if e[0] == "child"]
     # `sorted` on frozensets would use subset order, which is partial; sort by contents
     # so the enumeration is deterministic run to run
-    per_child = [sorted(groups.get(c) or {frozenset()}, key=lambda p: sorted(map(str, p)))
-                 for c in child_ids]
+    per_child = [sorted(groups.get(c) or {frozenset()}, key=lambda p: sorted(map(str, p))) for c in child_ids]
     for g in sorted(gp or {frozenset()}, key=lambda p: sorted(map(str, p))):
         gd = dict(g)
         for combo in itertools.product(*per_child) if per_child else [()]:
@@ -473,7 +467,7 @@ def match_nodes(src, dst, src_slots, dst_slots, pmap, cmap, smap, dst_groups):
             return False
         for perm in itertools.permutations(dextra):
             full = dict(pmap)
-            full.update(dict(zip(extra, perm)))
+            full.update(dict(zip(extra, perm, strict=True)))
             if apply_node(n, full, cmap, smap) in variants[j]:
                 return True
         return False
@@ -491,28 +485,26 @@ def match_nodes(src, dst, src_slots, dst_slots, pmap, cmap, smap, dst_groups):
                 return True
         return False
 
-    for i in range(len(src)):
-        if not augment(i, set()):
-            return False
-    return True
+    return all(augment(i, set()) for i in range(len(src)))
 
 
 # --------------------------------------------------------------- the refinement
 def colors(g, rounds=6):
-    col = {c: (len(g.slots[c]), len(g.group[c]),
-               tuple(sorted((n[0], tuple(e[0] for e in n[1])) for n in g.nodes[c])))
-           for c in g.ids()}
+    col = {
+        c: (len(g.slots[c]), len(g.group[c]), tuple(sorted((n[0], tuple(e[0] for e in n[1])) for n in g.nodes[c])))
+        for c in g.ids()
+    }
     for _ in range(rounds):
         nxt = {}
         for c in g.ids():
             sig = []
             for op, elems in g.nodes[c]:
-                sig.append((op, tuple(e[0] if e[0] == "slot" else col[e[1]]
-                                      for e in elems)))
+                sig.append((op, tuple(e[0] if e[0] == "slot" else col[e[1]] for e in elems)))
             nxt[c] = (col[c], tuple(sorted(sig)))
-        if all(len({nxt[a] for a in g.ids() if col[a] == col[c]})
-               == len({col[a] for a in g.ids() if col[a] == col[c]})
-               for c in g.ids()):
+        if all(
+            len({nxt[a] for a in g.ids() if col[a] == col[c]}) == len({col[a] for a in g.ids() if col[a] == col[c]})
+            for c in g.ids()
+        ):
             return nxt
         col = nxt
     return col
@@ -525,6 +517,7 @@ def find_isomorphism(ga, gb):
         return None, (f"class count {len(ga.ids())} vs {len(gb.ids())}")
     ca, cb = colors(ga), colors(gb)
     from collections import Counter
+
     if Counter(ca.values()) != Counter(cb.values()):
         only_a = Counter(ca.values()) - Counter(cb.values())
         return None, f"refinement colors differ ({len(only_a)} class shapes unmatched)"
@@ -538,7 +531,7 @@ def find_isomorphism(ga, gb):
         if len(sa) != len(sb):
             return
         for perm in itertools.permutations(sb):
-            m = dict(zip(sa, perm))
+            m = dict(zip(sa, perm, strict=True))
             # the group has to correspond too, not just the slot count
             mapped = {frozenset((m[x], m[y]) for x, y in p) for p in ga.group[a]}
             if mapped == gb.group[b]:
@@ -561,13 +554,14 @@ def find_isomorphism(ga, gb):
                     return False
                 phi[a], sig[a] = b, m
                 # check now if every child of every node of `a` is already assigned
-                ready = all(e[0] == "slot" or e[1] in phi
-                            for n in ga.nodes[a] for e in n[1])
-                if not ready or match_nodes(
-                        ga.nodes[a], gb.nodes[b], ga.slots[a], gb.slots[b], m, phi,
-                        sig, (gb.group, gb.group[b])):
-                    if rec(k + 1):
-                        return True
+                ready = all(e[0] == "slot" or e[1] in phi for n in ga.nodes[a] for e in n[1])
+                if (
+                    not ready
+                    or match_nodes(
+                        ga.nodes[a], gb.nodes[b], ga.slots[a], gb.slots[b], m, phi, sig, (gb.group, gb.group[b])
+                    )
+                ) and rec(k + 1):
+                    return True
                 del phi[a], sig[a]
         return False
 
@@ -586,13 +580,13 @@ def verify(ga, gb, phi, sig):
         b = phi[a]
         if len(ga.slots[a]) != len(gb.slots[b]):
             return f"{a}: slot count"
-        mapped = {frozenset((sig[a][x], sig[a][y]) for x, y in p)
-                  for p in ga.group[a]}
+        mapped = {frozenset((sig[a][x], sig[a][y]) for x, y in p) for p in ga.group[a]}
         if mapped != gb.group[b]:
             return f"{a}: symmetry group ({len(ga.group[a])} vs {len(gb.group[b])})"
-        if not match_nodes(ga.nodes[a], gb.nodes[b], ga.slots[a], gb.slots[b],
-                           sig[a], phi, sig, (gb.group, gb.group[b])):
-            return (f"{a}: node sets ({len(ga.nodes[a])} vs {len(gb.nodes[b])})")
+        if not match_nodes(
+            ga.nodes[a], gb.nodes[b], ga.slots[a], gb.slots[b], sig[a], phi, sig, (gb.group, gb.group[b])
+        ):
+            return f"{a}: node sets ({len(ga.nodes[a])} vs {len(gb.nodes[b])})"
     return None
 
 
@@ -613,20 +607,23 @@ EGG_PROGRAM = None
 
 def reference_graph(case):
     spec = case.spec() + SEED + "dump\n"
-    r = subprocess.run([str(X.XMULTI / "target" / "debug" / "xmulti")],
-                       input=spec, capture_output=True, text=True,
-                       timeout=X.RUN_TIMEOUT)
+    r = subprocess.run(
+        [str(X.XMULTI / "target" / "debug" / "xmulti")],
+        input=spec,
+        capture_output=True,
+        text=True,
+        timeout=X.RUN_TIMEOUT,
+    )
     if r.returncode != 0:
         return None, f"reference error: {(r.stderr or '?').strip().splitlines()[-1]}"
-    if any(l.startswith("SATURATED no") for l in r.stdout.splitlines()):
+    if any(line.startswith("SATURATED no") for line in r.stdout.splitlines()):
         return None, "reference did not saturate"
     return parse_reference(r.stdout), None
 
 
 def canonical(g):
     """A string that determines the graph, for comparing two runs of one case."""
-    return repr([(c, g.slots[c], sorted(map(sorted, g.group[c])), sorted(map(str, g.nodes[c])))
-                 for c in g.ids()])
+    return repr([(c, g.slots[c], sorted(map(sorted, g.group[c])), sorted(map(str, g.nodes[c]))) for c in g.ids()])
 
 
 def _dump(case, mult, timeout):
@@ -643,15 +640,16 @@ def _dump(case, mult, timeout):
     j = p.with_suffix(".json")
     p.write_text(prog)
     try:
-        r = subprocess.run([str(X.EGGLOG), "--to-json", str(p)], capture_output=True,
-                           text=True, cwd=X.ROOT, timeout=timeout)
+        r = subprocess.run(
+            [str(X.EGGLOG), "--to-json", str(p)], capture_output=True, text=True, cwd=X.ROOT, timeout=timeout
+        )
     except subprocess.TimeoutExpired:
         return None, "timeout"
     finally:
         p.unlink(missing_ok=True)
     try:
         if r.returncode != 0:
-            err = [l for l in r.stderr.splitlines() if "ERROR" in l]
+            err = [line for line in r.stderr.splitlines() if "ERROR" in line]
             return None, f"encoding error: {err[-1] if err else r.stderr[:120]}"
         if not j.exists():
             return None, "encoding produced no serialized e-graph"
@@ -659,8 +657,7 @@ def _dump(case, mult, timeout):
     finally:
         j.unlink(missing_ok=True)
     if unplaced:
-        return None, ("limit", f"{len(unplaced)} value(s) could not be placed in a frame: "
-                               f"{unplaced[:2]}")
+        return None, ("limit", f"{len(unplaced)} value(s) could not be placed in a frame: {unplaced[:2]}")
     leaf = {"var": None}
     for cid in g.ids():
         if any(n[0] == "var" for n in g.nodes[cid]):
@@ -685,8 +682,7 @@ def encoding_graph(case):
         return g, err
     a, e1 = _dump(case, 6, timeout=180)
     if e1:
-        return None, ("limit" if e1 == "timeout" else "FAIL",
-                      "encoding too slow to settle") if e1 == "timeout" else e1
+        return None, ("limit" if e1 == "timeout" else "FAIL", "encoding too slow to settle") if e1 == "timeout" else e1
     b, e2 = _dump(case, 12, timeout=180)
     if e2:
         return None, e2 if e2 != "timeout" else ("limit", "encoding too slow to settle")
@@ -727,6 +723,7 @@ def selftest():
     two subtlest ways to differ -- a missing symmetry, and one edge moved -- must be
     *rejected*. No egglog and no reference, so this stays honest if either changes.
     """
+
     def build(spec):
         g = Graph()
         for cid, (slots, perms, nodes) in spec.items():
@@ -741,23 +738,43 @@ def selftest():
         return ("k", tuple(("child", child, (p,)) for p in pairs))
 
     swap = [[("a", "b"), ("b", "a")]]
-    base = build({"v": (("x",), [], [("var", (("slot", "x"),))]),
-                  "K": (("a", "b"), swap, [kn("v", ("x", "a"), ("x", "b"))])})
+    base = build(
+        {"v": (("x",), [], [("var", (("slot", "x"),))]), "K": (("a", "b"), swap, [kn("v", ("x", "a"), ("x", "b"))])}
+    )
     cases = [
         # the same graph with every slot renamed
-        ("relabelled", True,
-         build({"w": (("q",), [], [("var", (("slot", "q"),))]),
-                "J": (("m", "n"), [[("m", "n"), ("n", "m")]],
-                      [kn("w", ("q", "m"), ("q", "n"))])})),
+        (
+            "relabelled",
+            True,
+            build(
+                {
+                    "w": (("q",), [], [("var", (("slot", "q"),))]),
+                    "J": (("m", "n"), [[("m", "n"), ("n", "m")]], [kn("w", ("q", "m"), ("q", "n"))]),
+                }
+            ),
+        ),
         # identical nodes, but the class does not prove the swap
-        ("symmetry dropped", False,
-         build({"w": (("q",), [], [("var", (("slot", "q"),))]),
-                "J": (("m", "n"), [], [kn("w", ("q", "m"), ("q", "n"))])})),
+        (
+            "symmetry dropped",
+            False,
+            build(
+                {
+                    "w": (("q",), [], [("var", (("slot", "q"),))]),
+                    "J": (("m", "n"), [], [kn("w", ("q", "m"), ("q", "n"))]),
+                }
+            ),
+        ),
         # the swap, but both edges land on one slot
-        ("edge moved", False,
-         build({"w": (("q",), [], [("var", (("slot", "q"),))]),
-                "J": (("m", "n"), [[("m", "n"), ("n", "m")]],
-                      [kn("w", ("q", "m"), ("q", "m"))])})),
+        (
+            "edge moved",
+            False,
+            build(
+                {
+                    "w": (("q",), [], [("var", (("slot", "q"),))]),
+                    "J": (("m", "n"), [[("m", "n"), ("n", "m")]], [kn("w", ("q", "m"), ("q", "m"))]),
+                }
+            ),
+        ),
     ]
     bad = 0
     for name, want, other in cases:
@@ -766,9 +783,11 @@ def selftest():
         if got is not None and verify(base, other, got[0], got[1]) is not None:
             ok = False
         bad += not ok
-        print(f"  {'ok  ' if ok else 'FAIL'} {name:20} "
-              f"isomorphic={got is not None}, expected={want}"
-              f"{'' if got else '  (' + (why or '') + ')'}")
+        print(
+            f"  {'ok  ' if ok else 'FAIL'} {name:20} "
+            f"isomorphic={got is not None}, expected={want}"
+            f"{'' if got else '  (' + (why or '') + ')'}"
+        )
     print(f"\n{len(cases) - bad}/{len(cases)} self-tests pass")
     return 1 if bad else 0
 
@@ -792,19 +811,22 @@ def main():
         verdict, detail = check(c)
         tally[verdict] += 1
         if verdict == "ok":
-            totals = [a + b for a, b in zip(totals, detail)]
+            totals = [a + b for a, b in zip(totals, detail, strict=True)]
         else:
             print(f"  {verdict:4} {c.name:44} {detail}", flush=True)
     # the sizes are part of the result: a checker comparing nothing would also pass
-    print(f"\n{tally['ok']}/{len(cases)} isomorphic"
-          f"   ({tally['FAIL']} differ, {tally['skip']} skipped,"
-          f" {tally['limit']} not comparable)")
-    print(f"matched {totals[0]} e-classes, {totals[1]} e-nodes, "
-          f"{totals[2]} symmetries")
+    print(
+        f"\n{tally['ok']}/{len(cases)} isomorphic"
+        f"   ({tally['FAIL']} differ, {tally['skip']} skipped,"
+        f" {tally['limit']} not comparable)"
+    )
+    print(f"matched {totals[0]} e-classes, {totals[1]} e-nodes, {totals[2]} symmetries")
     if UNSATURATED:
-        print(f"{len(UNSATURATED)} compared at a database fixpoint, not a rule "
-              f"fixpoint: {', '.join(UNSATURATED[:6])}"
-              f"{' ...' if len(UNSATURATED) > 6 else ''}")
+        print(
+            f"{len(UNSATURATED)} compared at a database fixpoint, not a rule "
+            f"fixpoint: {', '.join(UNSATURATED[:6])}"
+            f"{' ...' if len(UNSATURATED) > 6 else ''}"
+        )
     return 1 if tally["FAIL"] else 0
 
 

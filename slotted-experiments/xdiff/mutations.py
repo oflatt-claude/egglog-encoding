@@ -12,28 +12,35 @@ rule it violated is definitional rather than empirical.
 
     python3 slotted-experiments/xdiff/mutations.py
 """
+
 import os
 import re
 import subprocess
 import sys
+
 sys.path.insert(0, "slotted-experiments/xdiff")
 import xdiff as X
 
 #: mutation -> cases of the curated corpus that must disagree with the reference
 EXPECTED = {
-    "root-only": 11,   # an atom's renaming solved from its root alone
-    "union-id": 2,     # the action unions classes instead of invocations
-    "unordered": 1,    # atoms compiled in the order written
-    "slot-late": 1,    # a slot literal checked after the renaming, not with it
+    "root-only": 11,  # an atom's renaming solved from its root alone
+    "union-id": 2,  # the action unions classes instead of invocations
+    "unordered": 1,  # atoms compiled in the order written
+    "slot-late": 1,  # a slot literal checked after the renaming, not with it
 }
 
 
 def mismatches(bugs):
     """Curated cases whose matching disagrees with the reference, under `bugs`."""
     env = dict(os.environ, XDIFF_BUGS=bugs)
-    r = subprocess.run([sys.executable, "slotted-experiments/xdiff/xdiff.py"],
-                       capture_output=True, text=True, cwd=X.ROOT, env=env,
-                       timeout=3600)
+    r = subprocess.run(
+        [sys.executable, "slotted-experiments/xdiff/xdiff.py"],
+        capture_output=True,
+        text=True,
+        cwd=X.ROOT,
+        env=env,
+        timeout=3600,
+    )
     m = re.search(r"^\s*(\d+)\s+MATCHING mismatch", r.stdout, re.M)
     return int(m.group(1)) if m else None
 
@@ -46,15 +53,16 @@ if clean != 0:
 
 for bug, want in EXPECTED.items():
     got = mismatches(bug)
-    note = "" if got == want else (
-        "  <-- STOPPED DISCRIMINATING" if got is not None and got < want
-        else "  <-- more than recorded")
+    note = (
+        ""
+        if got == want
+        else ("  <-- STOPPED DISCRIMINATING" if got is not None and got < want else "  <-- more than recorded")
+    )
     print(f"  {bug:14} {got} mismatches, expected {want}{note}", flush=True)
     if got != want:
         bad.append(f"{bug}: {got} != {want}")
 
-print(f"\n{len(EXPECTED) - len([b for b in bad if not b.startswith('the')])}"
-      f"/{len(EXPECTED)} mutations still caught")
+print(f"\n{len(EXPECTED) - len([b for b in bad if not b.startswith('the')])}/{len(EXPECTED)} mutations still caught")
 for b in bad:
     print(f"  FAIL {b}")
 sys.exit(1 if bad else 0)

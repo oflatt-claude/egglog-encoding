@@ -40,8 +40,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from xdiff import (EGGLOG, MACHINERY, ROOT, XMULTI,   # noqa: E402
-                   parse_same_class, slotenc)
+from xdiff import EGGLOG, MACHINERY, ROOT, XMULTI, parse_same_class, slotenc  # noqa: E402
 
 RUN_TIMEOUT = int(os.environ.get("XARRAY_TIMEOUT", "120"))
 
@@ -62,14 +61,16 @@ RUN_TIMEOUT = int(os.environ.get("XARRAY_TIMEOUT", "120"))
 # `lam` is the tag a term carries and `lambda` the operator a rule atom names; both
 # are the same `Op`, whose `ref` is the reference's `lam`.
 _LAMBDA = slotenc.string_headed("lambda", "App2", ref="lam")
-LANG = slotenc.TermLang({
-    "app": slotenc.string_headed("app", "App2"),
-    "lambda": _LAMBDA,
-    "lam": _LAMBDA,
-    "let": slotenc.string_headed("let", "App3"),
-    "sym": slotenc.Op("sym", "Sym", ["String"]),
-    "num": slotenc.Op("num", "Num", ["i64"]),
-})
+LANG = slotenc.TermLang(
+    {
+        "app": slotenc.string_headed("app", "App2"),
+        "lambda": _LAMBDA,
+        "lam": _LAMBDA,
+        "let": slotenc.string_headed("let", "App3"),
+        "sym": slotenc.Op("sym", "Sym", ["String"]),
+        "num": slotenc.Op("num", "Num", ["i64"]),
+    }
+)
 
 enc, sexpr, shift = LANG.enc, LANG.sexpr, LANG.shift
 
@@ -119,8 +120,7 @@ class Rule:
         return go(self.atoms[0][0])
 
     def spec_lines(self):
-        out = ["rule", f"nested {self.nested_lhs()}",
-               f"rhs {self.rhs_root} {slotenc.pat_sexpr(LANG, self.rhs)}"]
+        out = ["rule", f"nested {self.nested_lhs()}", f"rhs {self.rhs_root} {slotenc.pat_sexpr(LANG, self.rhs)}"]
         for want, slot, pvars in self.conds:
             out.append(f"cond {'in' if want else 'notin'} {slot} {' '.join(pvars)}")
         return out
@@ -143,10 +143,14 @@ def compile_array_rule(rule, atom_order=None):
     """
     lead = 0 if atom_order is None else min(atom_order, len(rule.atoms) - 1)
     return slotenc.compile_rule(
-        LANG, slotenc.connected_order(LANG, rule.atoms, first=lead),
+        LANG,
+        slotenc.connected_order(LANG, rule.atoms, first=lead),
         ("build", rule.rhs_root, rule.rhs),
-        conds=rule.conds, fresh=rule.fresh,
-        slot_prefix="s_", fresh_batch=False)
+        conds=rule.conds,
+        fresh=rule.fresh,
+        slot_prefix="s_",
+        fresh_batch=False,
+    )
 
 
 # ----------------------------------------------------------------------- cases
@@ -169,23 +173,31 @@ class Case:
         return "\n".join(out) + "\n"
 
     def shifted(self, k):
-        return Case(self.name + f"+{k}", [shift(t, k) for t in self.terms],
-                    self.rules, [shift(t, k) for t in self.probes], self.rounds,
-                    [(shift(a, k), shift(b, k)) for a, b in self.unions])
+        return Case(
+            self.name + f"+{k}",
+            [shift(t, k) for t in self.terms],
+            self.rules,
+            [shift(t, k) for t in self.probes],
+            self.rounds,
+            [(shift(a, k), shift(b, k)) for a, b in self.unions],
+        )
 
 
 def schedule(steps):
-    return (f"(run-schedule (saturate (run slotted))\n"
-            f"              (repeat {steps} (seq (run) (saturate (run slotted)))))")
+    return (
+        f"(run-schedule (saturate (run slotted))\n              (repeat {steps} (seq (run) (saturate (run slotted)))))"
+    )
 
 
 def egg_program(case, atom_order=None, mult=3):
-    out = [f'(include "{MACHINERY}")',
-           "(relation ProbeId (U i64))",
-           "(relation SameClass (i64 i64))",
-           "(rule ((ProbeId a i) (ProbeId b j)\n"
-           "       (RenamesToLeader a m1 l) (RenamesToLeader b m2 l))\n"
-           "      ((SameClass i j)))"]
+    out = [
+        f'(include "{MACHINERY}")',
+        "(relation ProbeId (U i64))",
+        "(relation SameClass (i64 i64))",
+        "(rule ((ProbeId a i) (ProbeId b j)\n"
+        "       (RenamesToLeader a m1 l) (RenamesToLeader b m2 l))\n"
+        "      ((SameClass i j)))",
+    ]
     for r in case.rules:
         out.append(f";; {r.name}")
         out.append(compile_array_rule(r, atom_order))
@@ -207,9 +219,13 @@ def egg_program(case, atom_order=None, mult=3):
 
 def run_reference(case):
     try:
-        r = subprocess.run([str(XMULTI / "target" / "debug" / "xmulti")],
-                           input=case.spec(), capture_output=True, text=True,
-                           timeout=RUN_TIMEOUT)
+        r = subprocess.run(
+            [str(XMULTI / "target" / "debug" / "xmulti")],
+            input=case.spec(),
+            capture_output=True,
+            text=True,
+            timeout=RUN_TIMEOUT,
+        )
     except subprocess.TimeoutExpired:
         return ("TIMEOUT", f">{RUN_TIMEOUT}s")
     if r.returncode != 0:
@@ -217,7 +233,7 @@ def run_reference(case):
     part, sat = None, True
     for line in r.stdout.splitlines():
         if line.startswith("PARTITION "):
-            part = line[len("PARTITION "):].strip()
+            part = line[len("PARTITION ") :].strip()
         elif line.startswith("SATURATED "):
             sat = line.split()[1] == "yes"
     if part is None:
@@ -230,12 +246,11 @@ def run_encoding(case, atom_order=None, keep=None, mult=3):
     path = keep or (ROOT / f"xarray-tmp-{os.getpid()}-{mult}.egg")
     path.write_text(prog)
     try:
-        r = subprocess.run([str(EGGLOG), str(path)], capture_output=True,
-                           text=True, timeout=RUN_TIMEOUT, cwd=ROOT)
+        r = subprocess.run([str(EGGLOG), str(path)], capture_output=True, text=True, timeout=RUN_TIMEOUT, cwd=ROOT)
     except subprocess.TimeoutExpired:
         return ("TIMEOUT", f">{RUN_TIMEOUT}s (kept at {path})")
     if r.returncode != 0:
-        err = [l for l in r.stderr.splitlines() if "ERROR" in l]
+        err = [line for line in r.stderr.splitlines() if "ERROR" in line]
         msg = err[-1] if err else r.stderr.strip()[:600]
         return ("ERROR", f"{msg}\n    (kept at {path})")
     if not keep:
@@ -254,8 +269,7 @@ def check_case(case, order_check=True, shift_check=True):
     if rs != "OK" or es != "OK":
         return [f"{case.name}: baseline ref={rs}:{rv} enc={es}:{ev}"]
     if rv != ev:
-        return [f"{case.name}: BASELINE differs (machinery, not matching)\n"
-                f"    ref {rv}\n    enc {ev}"]
+        return [f"{case.name}: BASELINE differs (machinery, not matching)\n    ref {rv}\n    enc {ev}"]
     baseline = rv
 
     rs, rv = run_reference(case)
@@ -269,8 +283,7 @@ def check_case(case, order_check=True, shift_check=True):
     if es != "OK":
         return fails + [f"{case.name}: encoding crashed: {ev}"]
     if rv != ev:
-        fails.append(f"{case.name}: MISMATCH vs reference\n"
-                     f"    ref {rv}\n    enc {ev}")
+        fails.append(f"{case.name}: MISMATCH vs reference\n    ref {rv}\n    enc {ev}")
     fired = rv != baseline
     if not fails:
         print(f"  ok  {case.name:<44} {'fired' if fired else 'NO-OP'}  {rv}")
@@ -281,8 +294,10 @@ def check_case(case, order_check=True, shift_check=True):
         for k in range(1, max(len(r.atoms) for r in case.rules)):
             ys, y = run_encoding(case, atom_order=k)
             if ys == "OK" and y != ev:
-                fails.append(f"{case.name}: ENCODING depends on the leading atom "
-                             f"({k})\n    atom 0 first {ev}\n    atom {k} first {y}")
+                fails.append(
+                    f"{case.name}: ENCODING depends on the leading atom "
+                    f"({k})\n    atom 0 first {ev}\n    atom {k} first {y}"
+                )
 
     # 3. slot-renaming invariance, per side.
     if shift_check and not fails:
@@ -290,11 +305,9 @@ def check_case(case, order_check=True, shift_check=True):
         xs, xv = run_reference(sh)
         ys, yv = run_encoding(sh)
         if xs in ("OK", "UNSATURATED") and xv != rv:
-            fails.append(f"{case.name}: REFERENCE not slot-renaming invariant\n"
-                         f"    {rv}\n    {xv}")
+            fails.append(f"{case.name}: REFERENCE not slot-renaming invariant\n    {rv}\n    {xv}")
         if ys == "OK" and yv != ev:
-            fails.append(f"{case.name}: ENCODING not slot-renaming invariant\n"
-                         f"    {ev}\n    {yv}")
+            fails.append(f"{case.name}: ENCODING not slot-renaming invariant\n    {ev}\n    {yv}")
     return fails
 
 
@@ -302,85 +315,99 @@ def check_case(case, order_check=True, shift_check=True):
 def eta():
     return Rule(
         "eta",
-        [("e", "lambda", [("sl", "$x"), ("pv", "b")]),
-         ("b", "app", [("pv", "f"), ("sl", "$x")])],
-        "e", ("pv", "f"), conds=[(False, "$x", ["f"])])
+        [("e", "lambda", [("sl", "$x"), ("pv", "b")]), ("b", "app", [("pv", "f"), ("sl", "$x")])],
+        "e",
+        ("pv", "f"),
+        conds=[(False, "$x", ["f"])],
+    )
 
 
 def let_intro():
     return Rule(
         "let-intro",
-        [("p", "app", [("pv", "l"), ("pv", "e")]),
-         ("l", "lambda", [("sl", "$x"), ("pv", "body")])],
-        "p", ("let", ("sl", "$x"), ("pv", "body"), ("pv", "e")))
+        [("p", "app", [("pv", "l"), ("pv", "e")]), ("l", "lambda", [("sl", "$x"), ("pv", "body")])],
+        "p",
+        ("let", ("sl", "$x"), ("pv", "body"), ("pv", "e")),
+    )
 
 
 def let_unused():
     return Rule(
         "let-unused",
         [("p", "let", [("sl", "$x"), ("pv", "b"), ("pv", "e")])],
-        "p", ("pv", "b"), conds=[(False, "$x", ["b"])])
+        "p",
+        ("pv", "b"),
+        conds=[(False, "$x", ["b"])],
+    )
 
 
 def let_var_same():
-    return Rule(
-        "let-var-same",
-        [("p", "let", [("sl", "$x"), ("sl", "$x"), ("pv", "e")])],
-        "p", ("pv", "e"))
+    return Rule("let-var-same", [("p", "let", [("sl", "$x"), ("sl", "$x"), ("pv", "e")])], "p", ("pv", "e"))
 
 
 def let_app():
     return Rule(
         "let-app",
-        [("p", "let", [("sl", "$x"), ("pv", "ab"), ("pv", "e")]),
-         ("ab", "app", [("pv", "a"), ("pv", "b")])],
-        "p", ("app", ("let", ("sl", "$x"), ("pv", "a"), ("pv", "e")),
-                     ("let", ("sl", "$x"), ("pv", "b"), ("pv", "e"))),
-        conds=[(True, "$x", ["a", "b"])])
+        [("p", "let", [("sl", "$x"), ("pv", "ab"), ("pv", "e")]), ("ab", "app", [("pv", "a"), ("pv", "b")])],
+        "p",
+        ("app", ("let", ("sl", "$x"), ("pv", "a"), ("pv", "e")), ("let", ("sl", "$x"), ("pv", "b"), ("pv", "e"))),
+        conds=[(True, "$x", ["a", "b"])],
+    )
 
 
 def let_lam_diff():
     return Rule(
         "let-lam-diff",
-        [("p", "let", [("sl", "$x"), ("pv", "l"), ("pv", "e")]),
-         ("l", "lambda", [("sl", "$y"), ("pv", "body")])],
-        "p", ("lambda", ("sl", "$y"),
-              ("let", ("sl", "$x"), ("pv", "body"), ("pv", "e"))),
-        conds=[(True, "$x", ["body"])])
+        [("p", "let", [("sl", "$x"), ("pv", "l"), ("pv", "e")]), ("l", "lambda", [("sl", "$y"), ("pv", "body")])],
+        "p",
+        ("lambda", ("sl", "$y"), ("let", ("sl", "$x"), ("pv", "body"), ("pv", "e"))),
+        conds=[(True, "$x", ["body"])],
+    )
 
 
 def map_fusion():
     return Rule(
         "map-fusion",
-        [("p", "app", [("pv", "mf"), ("pv", "mgarg")]),
-         ("mf", "app", [("cls", MAP), ("pv", "f")]),
-         ("mgarg", "app", [("pv", "mg"), ("pv", "arg")]),
-         ("mg", "app", [("cls", MAP), ("pv", "g")])],
+        [
+            ("p", "app", [("pv", "mf"), ("pv", "mgarg")]),
+            ("mf", "app", [("cls", MAP), ("pv", "f")]),
+            ("mgarg", "app", [("pv", "mg"), ("pv", "arg")]),
+            ("mg", "app", [("cls", MAP), ("pv", "g")]),
+        ],
         "p",
-        ("app", ("app", MAP,
-                 ("lambda", ("sl", "$fu"),
-                  ("app", ("pv", "f"),
-                   ("app", ("pv", "g"), ("sl", "$fu"))))),
-         ("pv", "arg")),
-        fresh=["$fu"])
+        (
+            "app",
+            ("app", MAP, ("lambda", ("sl", "$fu"), ("app", ("pv", "f"), ("app", ("pv", "g"), ("sl", "$fu"))))),
+            ("pv", "arg"),
+        ),
+        fresh=["$fu"],
+    )
 
 
 def map_fission():
     return Rule(
         "map-fission",
-        [("p", "app", [("cls", MAP), ("pv", "l")]),
-         ("l", "lambda", [("sl", "$x"), ("pv", "fgx")]),
-         ("fgx", "app", [("pv", "f"), ("pv", "gx")])],
+        [
+            ("p", "app", [("cls", MAP), ("pv", "l")]),
+            ("l", "lambda", [("sl", "$x"), ("pv", "fgx")]),
+            ("fgx", "app", [("pv", "f"), ("pv", "gx")]),
+        ],
         "p",
-        ("lambda", ("sl", "$in"),
-         ("app", ("app", MAP, ("pv", "f")),
-          ("app", ("app", MAP, ("lambda", ("sl", "$x"), ("pv", "gx"))),
-           ("sl", "$in")))),
-        conds=[(False, "$x", ["f"])], fresh=["$in"])
+        (
+            "lambda",
+            ("sl", "$in"),
+            (
+                "app",
+                ("app", MAP, ("pv", "f")),
+                ("app", ("app", MAP, ("lambda", ("sl", "$x"), ("pv", "gx"))), ("sl", "$in")),
+            ),
+        ),
+        conds=[(False, "$x", ["f"])],
+        fresh=["$in"],
+    )
 
 
-ALL_RULES = [eta, let_intro, let_unused, let_var_same, let_app, let_lam_diff,
-             map_fusion, map_fission]
+ALL_RULES = [eta, let_intro, let_unused, let_var_same, let_app, let_lam_diff, map_fusion, map_fission]
 
 
 # ------------------------------------------------------------------ the corpus
@@ -417,127 +444,177 @@ def per_rule_cases():
 
     # -- eta ---------------------------------------------------------------
     #  (lam $0 (app f1 (var $0))) = f1
-    cs.append(Case(
-        "eta-fires",
-        [("lam", 0, ("app", S("f1"), V(0)))],
-        [eta()],
-        [("lam", 0, ("app", S("f1"), V(0))), S("f1"), S("f2")]))
+    cs.append(
+        Case(
+            "eta-fires",
+            [("lam", 0, ("app", S("f1"), V(0)))],
+            [eta()],
+            [("lam", 0, ("app", S("f1"), V(0))), S("f1"), S("f2")],
+        )
+    )
     # blocked: the bound slot is free in the function position, so eta would
     # capture it
-    cs.append(Case(
-        "eta-blocked",
-        [("lam", 0, ("app", ("app", S("f1"), V(0)), V(0)))],
-        [eta()],
-        [("lam", 0, ("app", ("app", S("f1"), V(0)), V(0))),
-         ("app", S("f1"), V(0)), ("app", S("f1"), S("cc"))]))
+    cs.append(
+        Case(
+            "eta-blocked",
+            [("lam", 0, ("app", ("app", S("f1"), V(0)), V(0)))],
+            [eta()],
+            [("lam", 0, ("app", ("app", S("f1"), V(0)), V(0))), ("app", S("f1"), V(0)), ("app", S("f1"), S("cc"))],
+        )
+    )
 
     # -- let-intro ---------------------------------------------------------
-    cs.append(Case(
-        "let-intro",
-        [("app", ("lam", 0, ("app", S("f1"), V(0))), S("aa"))],
-        [let_intro()],
-        [("app", ("lam", 0, ("app", S("f1"), V(0))), S("aa")),
-         ("let", 0, ("app", S("f1"), V(0)), S("aa")),
-         ("let", 0, ("app", S("f1"), V(0)), S("bb"))]))
+    cs.append(
+        Case(
+            "let-intro",
+            [("app", ("lam", 0, ("app", S("f1"), V(0))), S("aa"))],
+            [let_intro()],
+            [
+                ("app", ("lam", 0, ("app", S("f1"), V(0))), S("aa")),
+                ("let", 0, ("app", S("f1"), V(0)), S("aa")),
+                ("let", 0, ("app", S("f1"), V(0)), S("bb")),
+            ],
+        )
+    )
 
     # -- let-unused --------------------------------------------------------
-    cs.append(Case(
-        "let-unused-fires",
-        [("let", 0, ("app", S("f1"), S("cc")), S("aa"))],
-        [let_unused()],
-        [("let", 0, ("app", S("f1"), S("cc")), S("aa")),
-         ("app", S("f1"), S("cc")), ("app", S("f1"), S("dd"))]))
-    cs.append(Case(
-        "let-unused-blocked",
-        [("let", 0, ("app", S("f1"), V(0)), S("aa"))],
-        [let_unused()],
-        [("let", 0, ("app", S("f1"), V(0)), S("aa")),
-         ("app", S("f1"), V(0)), ("app", S("f1"), S("cc"))]))
+    cs.append(
+        Case(
+            "let-unused-fires",
+            [("let", 0, ("app", S("f1"), S("cc")), S("aa"))],
+            [let_unused()],
+            [("let", 0, ("app", S("f1"), S("cc")), S("aa")), ("app", S("f1"), S("cc")), ("app", S("f1"), S("dd"))],
+        )
+    )
+    cs.append(
+        Case(
+            "let-unused-blocked",
+            [("let", 0, ("app", S("f1"), V(0)), S("aa"))],
+            [let_unused()],
+            [("let", 0, ("app", S("f1"), V(0)), S("aa")), ("app", S("f1"), V(0)), ("app", S("f1"), S("cc"))],
+        )
+    )
 
     # -- let-var-same ------------------------------------------------------
-    cs.append(Case(
-        "let-var-same-fires",
-        [("let", 0, V(0), S("aa"))],
-        [let_var_same()],
-        [("let", 0, V(0), S("aa")), S("aa"), S("bb")]))
+    cs.append(
+        Case(
+            "let-var-same-fires",
+            [("let", 0, V(0), S("aa"))],
+            [let_var_same()],
+            [("let", 0, V(0), S("aa")), S("aa"), S("bb")],
+        )
+    )
     # blocked: `$x` is written twice, so the binder and the body's variable have
     # to be the same slot -- here they are not
-    cs.append(Case(
-        "let-var-same-blocked",
-        [("lam", 1, ("let", 0, V(1), S("aa")))],
-        [let_var_same()],
-        [("lam", 1, ("let", 0, V(1), S("aa"))), ("lam", 1, S("aa")),
-         ("lam", 1, V(1))]))
+    cs.append(
+        Case(
+            "let-var-same-blocked",
+            [("lam", 1, ("let", 0, V(1), S("aa")))],
+            [let_var_same()],
+            [("lam", 1, ("let", 0, V(1), S("aa"))), ("lam", 1, S("aa")), ("lam", 1, V(1))],
+        )
+    )
 
     # -- let-app -----------------------------------------------------------
-    cs.append(Case(
-        "let-app-fires",
-        [("let", 0, ("app", V(0), S("cc")), S("aa"))],
-        [let_app()],
-        [("let", 0, ("app", V(0), S("cc")), S("aa")),
-         ("app", ("let", 0, V(0), S("aa")), ("let", 0, S("cc"), S("aa"))),
-         ("app", S("cc"), S("aa"))]))
+    cs.append(
+        Case(
+            "let-app-fires",
+            [("let", 0, ("app", V(0), S("cc")), S("aa"))],
+            [let_app()],
+            [
+                ("let", 0, ("app", V(0), S("cc")), S("aa")),
+                ("app", ("let", 0, V(0), S("aa")), ("let", 0, S("cc"), S("aa"))),
+                ("app", S("cc"), S("aa")),
+            ],
+        )
+    )
     # blocked: the bound slot is free in NEITHER child of the application
-    cs.append(Case(
-        "let-app-blocked",
-        [("let", 0, ("app", S("dd"), S("cc")), S("aa"))],
-        [let_app()],
-        [("let", 0, ("app", S("dd"), S("cc")), S("aa")),
-         ("app", ("let", 0, S("dd"), S("aa")), ("let", 0, S("cc"), S("aa"))),
-         ("app", S("dd"), S("cc"))]))
+    cs.append(
+        Case(
+            "let-app-blocked",
+            [("let", 0, ("app", S("dd"), S("cc")), S("aa"))],
+            [let_app()],
+            [
+                ("let", 0, ("app", S("dd"), S("cc")), S("aa")),
+                ("app", ("let", 0, S("dd"), S("aa")), ("let", 0, S("cc"), S("aa"))),
+                ("app", S("dd"), S("cc")),
+            ],
+        )
+    )
 
     # -- let-lam-diff ------------------------------------------------------
-    cs.append(Case(
-        "let-lam-diff-fires",
-        [("let", 0, ("lam", 1, ("app", V(1), V(0))), S("aa"))],
-        [let_lam_diff()],
-        [("let", 0, ("lam", 1, ("app", V(1), V(0))), S("aa")),
-         ("lam", 1, ("let", 0, ("app", V(1), V(0)), S("aa"))),
-         ("lam", 1, ("app", V(1), S("aa")))]))
+    cs.append(
+        Case(
+            "let-lam-diff-fires",
+            [("let", 0, ("lam", 1, ("app", V(1), V(0))), S("aa"))],
+            [let_lam_diff()],
+            [
+                ("let", 0, ("lam", 1, ("app", V(1), V(0))), S("aa")),
+                ("lam", 1, ("let", 0, ("app", V(1), V(0)), S("aa"))),
+                ("lam", 1, ("app", V(1), S("aa"))),
+            ],
+        )
+    )
     # blocked: the outer bound slot is not free in the inner lambda's body
-    cs.append(Case(
-        "let-lam-diff-blocked",
-        [("let", 0, ("lam", 1, ("app", V(1), S("cc"))), S("aa"))],
-        [let_lam_diff()],
-        [("let", 0, ("lam", 1, ("app", V(1), S("cc"))), S("aa")),
-         ("lam", 1, ("let", 0, ("app", V(1), S("cc")), S("aa"))),
-         ("lam", 1, ("app", V(1), S("cc")))]))
+    cs.append(
+        Case(
+            "let-lam-diff-blocked",
+            [("let", 0, ("lam", 1, ("app", V(1), S("cc"))), S("aa"))],
+            [let_lam_diff()],
+            [
+                ("let", 0, ("lam", 1, ("app", V(1), S("cc"))), S("aa")),
+                ("lam", 1, ("let", 0, ("app", V(1), S("cc")), S("aa"))),
+                ("lam", 1, ("app", V(1), S("cc"))),
+            ],
+        )
+    )
 
     # -- map-fusion --------------------------------------------------------
-    cs.append(Case(
-        "map-fusion",
-        [MAPPED(S("f1"), MAPPED(S("f2"), S("arr")))],
-        [map_fusion()],
-        [MAPPED(S("f1"), MAPPED(S("f2"), S("arr"))),
-         MAPPED(("lam", 0, ("app", S("f1"), ("app", S("f2"), V(0)))), S("arr")),
-         MAPPED(("lam", 0, ("app", S("f2"), ("app", S("f1"), V(0)))), S("arr"))],
-        rounds=4))
+    cs.append(
+        Case(
+            "map-fusion",
+            [MAPPED(S("f1"), MAPPED(S("f2"), S("arr")))],
+            [map_fusion()],
+            [
+                MAPPED(S("f1"), MAPPED(S("f2"), S("arr"))),
+                MAPPED(("lam", 0, ("app", S("f1"), ("app", S("f2"), V(0)))), S("arr")),
+                MAPPED(("lam", 0, ("app", S("f2"), ("app", S("f1"), V(0)))), S("arr")),
+            ],
+            rounds=4,
+        )
+    )
 
     # -- map-fission -------------------------------------------------------
-    cs.append(Case(
-        "map-fission-fires",
-        [("app", MAP, ("lam", 0, ("app", S("f1"), ("app", S("f2"), V(0)))))],
-        [map_fission()],
-        [("app", MAP, ("lam", 0, ("app", S("f1"), ("app", S("f2"), V(0))))),
-         ("lam", 1, MAPPED(S("f1"),
-                           MAPPED(("lam", 0, ("app", S("f2"), V(0))), V(1)))),
-         ("lam", 1, MAPPED(S("f2"),
-                           MAPPED(("lam", 0, ("app", S("f1"), V(0))), V(1))))],
-        rounds=3))
+    cs.append(
+        Case(
+            "map-fission-fires",
+            [("app", MAP, ("lam", 0, ("app", S("f1"), ("app", S("f2"), V(0)))))],
+            [map_fission()],
+            [
+                ("app", MAP, ("lam", 0, ("app", S("f1"), ("app", S("f2"), V(0))))),
+                ("lam", 1, MAPPED(S("f1"), MAPPED(("lam", 0, ("app", S("f2"), V(0))), V(1)))),
+                ("lam", 1, MAPPED(S("f2"), MAPPED(("lam", 0, ("app", S("f1"), V(0))), V(1)))),
+            ],
+            rounds=3,
+        )
+    )
     # blocked: the lambda's bound slot is free in ?f, so fissioning there would
     # let it escape -- probe 1 is exactly the term with the escaped slot
-    cs.append(Case(
-        "map-fission-blocked",
-        [("app", MAP, ("lam", 0, ("app", ("app", S("f1"), V(0)), S("f2"))))],
-        [map_fission()],
-        [("app", MAP, ("lam", 0, ("app", ("app", S("f1"), V(0)), S("f2")))),
-         ("lam", 1, MAPPED(("app", S("f1"), V(0)),
-                           MAPPED(("lam", 0, S("f2")), V(1)))),
-         ("app", MAP, ("lam", 0, ("app", ("app", S("f1"), V(0)), S("f3"))))],
-        rounds=3))
+    cs.append(
+        Case(
+            "map-fission-blocked",
+            [("app", MAP, ("lam", 0, ("app", ("app", S("f1"), V(0)), S("f2"))))],
+            [map_fission()],
+            [
+                ("app", MAP, ("lam", 0, ("app", ("app", S("f1"), V(0)), S("f2")))),
+                ("lam", 1, MAPPED(("app", S("f1"), V(0)), MAPPED(("lam", 0, S("f2")), V(1)))),
+                ("app", MAP, ("lam", 0, ("app", ("app", S("f1"), V(0)), S("f3")))),
+            ],
+            rounds=3,
+        )
+    )
 
     return cs
-
 
 
 def _chain(fs, arg):
@@ -582,10 +659,9 @@ def goal_cases(n_params=(0, 1), rounds=8, wrap_lams=True, nfun=4, dims=2):
             return ("app", g, arg)
 
         a_body = maps(("lam", 30, _chain(f, x)), mat)
-        b_body = maps(("lam", 30, _chain(f[half:], x)),
-                      maps(("lam", 30, _chain(f[:half], x)), mat))
+        b_body = maps(("lam", 30, _chain(f[half:], x)), maps(("lam", 30, _chain(f[:half], x)), mat))
 
-        def wrap(t):
+        def wrap(t, n=n):
             if not wrap_lams:
                 return t
             t = ("lam", 20, t)
@@ -598,8 +674,7 @@ def goal_cases(n_params=(0, 1), rounds=8, wrap_lams=True, nfun=4, dims=2):
         A_, B_ = wrap(a_body), wrap(b_body)
         tag = "" if wrap_lams else "-free"
         nm = f"goal{tag}-{dims}d-{nfun}f-N{n}"
-        cs.append(Case(nm, [A_], [r() for r in ALL_RULES], [A_, B_],
-                       rounds=rounds))
+        cs.append(Case(nm, [A_], [r() for r in ALL_RULES], [A_, B_], rounds=rounds))
     return cs
 
 
@@ -620,12 +695,10 @@ def report_goal(case):
 
     r_ok, e_ok = reached(rs, rv), reached(es, ev)
     agree = "AGREE" if r_ok == e_ok else "DISAGREE"
-    print(f"  {case.name:<26} rounds={case.rounds:<3} "
-          f"ref {rs}/{r_ok:<7} enc {es}/{e_ok:<7} {agree}")
+    print(f"  {case.name:<26} rounds={case.rounds:<3} ref {rs}/{r_ok:<7} enc {es}/{e_ok:<7} {agree}")
     if r_ok in ("TIMEOUT", "ERROR") or e_ok in ("TIMEOUT", "ERROR"):
         print(f"      ref {rv}\n      enc {ev}")
     return agree == "AGREE"
-
 
 
 def unbound_cases():
@@ -644,11 +717,14 @@ def unbound_cases():
     # `let`'s slot and the argument's slot coincide.
     B = ("app", S("f1"), V(0))
     L = ("let", 0, B, V(0))
-    cs.append(Case(
-        "let-slot-free-in-value",
-        [("app", L, V(0)), ("app", L, V(1))],
-        [let_unused()],
-        [("app", L, V(0)), ("app", L, V(1)), ("app", L, S("cc"))]))
+    cs.append(
+        Case(
+            "let-slot-free-in-value",
+            [("app", L, V(0)), ("app", L, V(1))],
+            [let_unused()],
+            [("app", L, V(0)), ("app", L, V(1)), ("app", L, S("cc"))],
+        )
+    )
     return cs
 
 
@@ -680,22 +756,21 @@ def rand_term(rng, depth, pool, ctr):
     # actually reaches the rules instead of generating terms none of them match.
     if rng.random() < 0.5:
         which = rng.randrange(6)
-        if which == 0:                                    # map-fusion
-            return ("app", ("app", MAP, sub()),
-                    ("app", ("app", MAP, sub()), sub()))
-        if which == 1:                                    # map-fission
+        if which == 0:  # map-fusion
+            return ("app", ("app", MAP, sub()), ("app", ("app", MAP, sub()), sub()))
+        if which == 1:  # map-fission
             s = slot()
             return ("app", MAP, ("lam", s, ("app", sub(), sub([s]))))
-        if which == 2:                                    # let-intro / beta shape
+        if which == 2:  # let-intro / beta shape
             s = slot()
             return ("app", ("lam", s, sub([s])), sub())
-        if which == 3:                                    # eta
+        if which == 3:  # eta
             s = slot()
             return ("lam", s, ("app", sub(), ("var", s)))
-        if which == 4:                                    # let-var-same
+        if which == 4:  # let-var-same
             s = slot()
             return ("let", s, ("var", s), sub())
-        s = slot()                                        # a plain let
+        s = slot()  # a plain let
         return ("let", s, sub([s]), sub())
 
     r = rng.random()
@@ -750,12 +825,10 @@ def check_vacuity(case):
     Returns a failure string when it does not -- i.e. when the case would pass
     just as well with the condition deleted, which means it is testing nothing.
     """
-    stripped = [Rule(r.name, r.atoms, r.rhs_root, r.rhs, conds=(), fresh=r.fresh)
-                for r in case.rules]
+    stripped = [Rule(r.name, r.atoms, r.rhs_root, r.rhs, conds=(), fresh=r.fresh) for r in case.rules]
     if not any(r.conds for r in case.rules):
         return f"{case.name}: no condition to drop"
-    off = Case(case.name, case.terms, stripped, case.probes, case.rounds,
-               case.unions)
+    off = Case(case.name, case.terms, stripped, case.probes, case.rounds, case.unions)
     _, rv = run_reference(case)
     _, ev = run_encoding(case)
     xs, xv = run_reference(off)
@@ -767,13 +840,12 @@ def check_vacuity(case):
         bad.append(f"encoding unchanged without the guard ({ev})")
     if bad:
         return f"{case.name}: VACUOUS -- " + "; ".join(bad)
-    print(f"  ok  {case.name:<44} guard matters: "
-          f"ref {rv} -> {xv}   enc {ev} -> {yv}")
+    print(f"  ok  {case.name:<44} guard matters: ref {rv} -> {xv}   enc {ev} -> {yv}")
     return None
 
 
 # ------------------------------------------------------- the runnable .egg form
-EGG_HEADER = ''';;; GENERATED by `python3 slotted-experiments/xdiff/xarray.py egg` -- do not edit.
+EGG_HEADER = """;;; GENERATED by `python3 slotted-experiments/xdiff/xarray.py egg` -- do not edit.
 ;;;
 ;;; The paper's S4.1 functional array language (Listing 1) and 8 of its 9 rules,
 ;;; compiled into the encoding by the recipe in `tests/slotted-user-rules.egg`.
@@ -799,7 +871,7 @@ EGG_HEADER = ''';;; GENERATED by `python3 slotted-experiments/xdiff/xarray.py eg
 ;;; they reach a common leader, which is what every `check` below asks.
 
 (include "tests/slotted-node-rules.egg")
-'''
+"""
 
 
 def egg_section(title, comment, case, want, atom_order=None):
@@ -815,7 +887,7 @@ def egg_section(title, comment, case, want, atom_order=None):
         out.append("")
     for i, t in enumerate(case.terms):
         if t in case.probes[:2]:
-            continue                      # already added below, under its own name
+            continue  # already added below, under its own name
         out.append(f";; {sexpr(t)}")
         out.append(f"(let $t{i} {enc(t)})")
     for i, t in enumerate(case.probes[:2]):
@@ -830,45 +902,66 @@ def egg_section(title, comment, case, want, atom_order=None):
 
 
 def drop_conds(case):
-    return Case(case.name, case.terms,
-                [Rule(r.name, r.atoms, r.rhs_root, r.rhs, (), r.fresh)
-                 for r in case.rules],
-                case.probes, case.rounds, case.unions)
+    return Case(
+        case.name,
+        case.terms,
+        [Rule(r.name, r.atoms, r.rhs_root, r.rhs, (), r.fresh) for r in case.rules],
+        case.probes,
+        case.rounds,
+        case.unions,
+    )
 
 
 def emit_egg():
     out = [EGG_HEADER]
     for c in per_rule_cases():
         blocked = c.name.endswith("blocked")
-        out.append(egg_section(
-            c.name,
-            "probe 0 is the rule's left-hand side, probe 1 what it produces."
-            if not blocked else
-            "the rule must NOT fire here, so the two probes stay apart.",
-            c, want=not blocked))
+        out.append(
+            egg_section(
+                c.name,
+                "probe 0 is the rule's left-hand side, probe 1 what it produces."
+                if not blocked
+                else "the rule must NOT fire here, so the two probes stay apart.",
+                c,
+                want=not blocked,
+            )
+        )
         if blocked and any(r.conds for r in c.rules):
             # the negative above is only a test if the guard is what stops it
-            out.append(egg_section(
-                c.name + "-without-the-guard",
-                "the same e-graph with the side condition deleted: now it does\n"
-                "fire, which is what makes the negative above non-vacuous.",
-                drop_conds(c), want=True))
+            out.append(
+                egg_section(
+                    c.name + "-without-the-guard",
+                    "the same e-graph with the side condition deleted: now it does\n"
+                    "fire, which is what makes the negative above non-vacuous.",
+                    drop_conds(c),
+                    want=True,
+                )
+            )
     # the leading atom must not matter
     c = next(x for x in per_rule_cases() if x.name == "map-fission-fires")
-    out.append(egg_section(
-        "map-fission-fires-from-atom-2",
-        "the same rule flattened with a different atom leading. The reference\n"
-        "matches one nested pattern, so its answer cannot depend on this.",
-        c, want=True, atom_order=2))
+    out.append(
+        egg_section(
+            "map-fission-fires-from-atom-2",
+            "the same rule flattened with a different atom leading. The reference\n"
+            "matches one nested pattern, so its answer cannot depend on this.",
+            c,
+            want=True,
+            atom_order=2,
+        )
+    )
     # the paper's transformation, on the smallest program that needs all 8 rules
     g = goal_cases([0], 10, wrap_lams=False, nfun=2, dims=1)[0]
-    out.append(egg_section(
-        g.name,
-        "the paper's (A) -> (B): map over a fused pipeline becomes two maps with\n"
-        "an intermediate. Needs all 8 rules -- fission introduces the binder and\n"
-        "the let-rules push the resulting application through it.",
-        g, want=True))
-    out.append('''
+    out.append(
+        egg_section(
+            g.name,
+            "the paper's (A) -> (B): map over a fused pipeline becomes two maps with\n"
+            "an intermediate. Needs all 8 rules -- fission introduces the binder and\n"
+            "the let-rules push the resulting application through it.",
+            g,
+            want=True,
+        )
+    )
+    out.append("""
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; A `let` whose bound slot is also free in its VALUE.
 ;;;
@@ -901,7 +994,7 @@ def emit_egg():
 (fail (check (RenamesToLeader $a0 m1 l) (RenamesToLeader $a1 m2 l)))
 
 (pop)
-''')
+""")
     return "\n".join(out) + "\n"
 
 
@@ -909,10 +1002,13 @@ def emit_egg():
 def main():
     args = sys.argv[1:]
     if args and args[0] == "show":
-        cases = (per_rule_cases() + unbound_cases()
-                 + goal_cases([0], 10, wrap_lams=False, nfun=2, dims=1)
-                 + goal_cases([0], 10, wrap_lams=False, nfun=4, dims=2)
-                 + goal_cases([0, 1], 10, wrap_lams=True, nfun=4, dims=2))
+        cases = (
+            per_rule_cases()
+            + unbound_cases()
+            + goal_cases([0], 10, wrap_lams=False, nfun=2, dims=1)
+            + goal_cases([0], 10, wrap_lams=False, nfun=4, dims=2)
+            + goal_cases([0, 1], 10, wrap_lams=True, nfun=4, dims=2)
+        )
         case = next(c for c in cases if c.name.startswith(args[1]))
         print("=== spec ===")
         print(case.spec(), end="")
@@ -926,6 +1022,7 @@ def main():
 
     if args and args[0] == "fuzz":
         import random
+
         n = int(args[1]) if len(args) > 1 else 40
         rng = random.Random(int(args[2]) if len(args) > 2 else 0)
         fails, ok, skipped = [], 0, 0
@@ -954,6 +1051,7 @@ def main():
         # isomorphism of the two final e-graphs, which also compares class slot
         # sets and symmetry groups.
         import isomorphism as I
+
         I.EGG_PROGRAM = egg_program
         cases = per_rule_cases() + unbound_cases()
         if len(args) > 1:
@@ -963,9 +1061,11 @@ def main():
             verdict, detail = I.check(c)
             tally[verdict] += 1
             print(f"  {verdict:4} {c.name:36} {detail}", flush=True)
-        print(f"\n{tally['ok']}/{len(cases)} isomorphic   "
-              f"({tally['FAIL']} differ, {tally['skip']} skipped, "
-              f"{tally['limit']} not comparable)")
+        print(
+            f"\n{tally['ok']}/{len(cases)} isomorphic   "
+            f"({tally['FAIL']} differ, {tally['skip']} skipped, "
+            f"{tally['limit']} not comparable)"
+        )
         return 1 if tally["FAIL"] else 0
 
     if args and args[0] == "egg":
@@ -975,8 +1075,7 @@ def main():
         return 0
 
     if args and args[0] == "vac":
-        cases = [c for c in per_rule_cases()
-                 if c.name.endswith("blocked") and any(r.conds for r in c.rules)]
+        cases = [c for c in per_rule_cases() if c.name.endswith("blocked") and any(r.conds for r in c.rules)]
         fails = [f for f in (check_vacuity(c) for c in cases) if f]
         for f in fails:
             print("FAIL " + f)
@@ -997,10 +1096,7 @@ def main():
         agree = sum(1 for c in cases if report_goal(c))
         print(f"\n{agree}/{len(cases)} goal cases agree")
         return 0 if agree == len(cases) else 1
-    if args and args[0] == "extra":
-        cases = unbound_cases()
-    else:
-        cases = per_rule_cases()
+    cases = unbound_cases() if args and args[0] == "extra" else per_rule_cases()
 
     fails, ok = [], 0
     for c in cases:

@@ -10,9 +10,11 @@ This decides that question by pairing each invisible row against every visible o
 and searching for such a renaming. An empty report means the invariant holds on
 this case: every fact on a self-loop-less class is also on a self-looped one.
 """
+
 import re
 import subprocess
 import sys
+
 sys.path.insert(0, "slotted-experiments/xdiff")
 import xdiff as X
 
@@ -51,7 +53,7 @@ def split_args(s):
 def parse_map(s):
     """`(map-of 0 2 1 1)` -> {0: 2, 1: 1}; `(map-of)` -> {}."""
     ns = [int(x) for x in re.findall(r"-?\d+", s)]
-    return dict(zip(ns[0::2], ns[1::2]))
+    return dict(zip(ns[0::2], ns[1::2], strict=False))
 
 
 def parse_row(args):
@@ -68,7 +70,7 @@ def slots_of(term):
     if term.startswith("(Null"):
         return set()
     if term.startswith("(App2 "):
-        a = split_args(term[len("(App2 "):-1])
+        a = split_args(term[len("(App2 ") : -1])
         out = set()
         for m, c in ((parse_map(a[1]), a[2]), (parse_map(a[3]), a[4])):
             cs = slots_of(c)
@@ -76,7 +78,7 @@ def slots_of(term):
                 return None
             out |= {m[k] for k in cs if k in m}
         return out
-    return None                                    # e.g. `Unextractable`
+    return None  # e.g. `Unextractable`
 
 
 def alpha_eq(x, y):
@@ -90,7 +92,7 @@ def alpha_eq(x, y):
     if x[0] != y[0] or x[2] != y[2] or x[4] != y[4]:
         return False
     rho = {}
-    for (mx, my, child) in ((x[1], y[1], x[2]), (x[3], y[3], x[4])):
+    for mx, my, child in ((x[1], y[1], x[2]), (x[3], y[3], x[4])):
         cs = slots_of(child)
         if cs is None:
             return False
@@ -100,7 +102,7 @@ def alpha_eq(x, y):
         for k in kx:
             if rho.setdefault(kx[k], ky[k]) != ky[k]:
                 return False
-    return len(set(rho.values())) == len(rho)      # injective
+    return len(set(rho.values())) == len(rho)  # injective
 
 
 def run_case(case, machinery=None):
@@ -110,18 +112,20 @@ def run_case(case, machinery=None):
     p = X.ROOT / f"inv2-{abs(hash(case.name)) % 99999}.egg"
     p.write_text(prog)
     try:
-        r = subprocess.run([str(X.EGGLOG), str(p)], capture_output=True,
-                           text=True, cwd=X.ROOT, timeout=600)
+        r = subprocess.run([str(X.EGGLOG), str(p)], capture_output=True, text=True, cwd=X.ROOT, timeout=600)
     except subprocess.TimeoutExpired:
         return None
     finally:
         p.unlink(missing_ok=True)
 
     def rows(tag):
-        return [l.strip().split(" -> ")[0][len(tag) + 2:-1]
-                for l in r.stdout.splitlines() if l.strip().startswith(f"({tag} ")]
+        return [
+            line.strip().split(" -> ")[0][len(tag) + 2 : -1]
+            for line in r.stdout.splitlines()
+            if line.strip().startswith(f"({tag} ")
+        ]
 
-    sizes = [int(l.strip()) for l in r.stdout.splitlines() if l.strip().isdigit()]
+    sizes = [int(line.strip()) for line in r.stdout.splitlines() if line.strip().isdigit()]
     fix = len(sizes) > 1 and sizes[0] == sizes[1]
     vis, allr = set(rows("WithSym")), rows("NoSym")
     return fix, [x for x in allr if x not in vis], vis
@@ -143,8 +147,7 @@ def report(case, machinery=None):
         p = parse_row(row)
         if not any(alpha_eq(p, q) for q in vparsed):
             lost.append(row)
-    print(f"{case.name:34} [{tag}] stranded {len(invisible)}, "
-          f"of those with no visible alpha-variant: {len(lost)}")
+    print(f"{case.name:34} [{tag}] stranded {len(invisible)}, of those with no visible alpha-variant: {len(lost)}")
     for row in lost:
         print(f"     UNIQUE: {row[:200]}")
 

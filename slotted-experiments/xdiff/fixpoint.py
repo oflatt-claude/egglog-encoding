@@ -13,10 +13,11 @@ the leader and straight back, forever. `MR1` was the only case that showed it, w
 why this runs the whole corpus -- the five hand-picked cases it used to check did not
 include it.
 """
-import re
+
 import subprocess
 import sys
 import time
+
 sys.path.insert(0, "slotted-experiments/xdiff")
 import xdiff as X
 
@@ -28,9 +29,9 @@ TIMEOUT = 60
 #     python3 slotted-experiments/xdiff/fixpoint.py fuzz 250    generated
 if len(sys.argv) > 1 and sys.argv[1] == "fuzz":
     import random
+
     rng = random.Random(0)
-    cases = [X.rand_case(rng, i)
-             for i in range(int(sys.argv[2]) if len(sys.argv) > 2 else 250)]
+    cases = [X.rand_case(rng, i) for i in range(int(sys.argv[2]) if len(sys.argv) > 2 else 250)]
 else:
     cases = X.curated()
 
@@ -45,8 +46,7 @@ for case in cases:
     p.write_text(prog)
     t = time.time()
     try:
-        r = subprocess.run([str(X.EGGLOG), str(p)], capture_output=True,
-                           text=True, cwd=X.ROOT, timeout=TIMEOUT)
+        r = subprocess.run([str(X.EGGLOG), str(p)], capture_output=True, text=True, cwd=X.ROOT, timeout=TIMEOUT)
         verdict = None if r.returncode == 0 else f"error: {r.stderr.strip()[:70]}"
     except subprocess.TimeoutExpired:
         verdict = f"DOES NOT TERMINATE under saturate ({TIMEOUT}s)"

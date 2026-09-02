@@ -45,8 +45,7 @@ import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 enc = __import__("slotted-encoder")
 
-LANG = enc.TermLang.from_language(
-    enc.read_language(pathlib.Path("slotted-experiments/languages/sdql.egg")))
+LANG = enc.TermLang.from_language(enc.read_language(pathlib.Path("slotted-experiments/languages/sdql.egg")))
 
 OUT = pathlib.Path(os.environ.get("SDQL_OUT", "tests/slotted-sdql-rules.egg"))
 
@@ -69,15 +68,12 @@ BUGS = {b for b in os.environ.get("SDQL_BUGS", "").split(",") if b}
 #
 # Ported from `sdql_rules()` in `slotted-egraphs/benches/sdql.rs`, minus `beta`.
 RULES = [
-    ("mult-assoc1", ("Mult", ("Mult", "?a", "?b"), "?c"),
-                    ("Mult", "?a", ("Mult", "?b", "?c"))),
-    ("mult-assoc2", ("Mult", "?a", ("Mult", "?b", "?c")),
-                    ("Mult", ("Mult", "?a", "?b"), "?c")),
+    ("mult-assoc1", ("Mult", ("Mult", "?a", "?b"), "?c"), ("Mult", "?a", ("Mult", "?b", "?c"))),
+    ("mult-assoc2", ("Mult", "?a", ("Mult", "?b", "?c")), ("Mult", ("Mult", "?a", "?b"), "?c")),
     ("sub-identity", ("Sub", "?e", "?e"), ("Num", 0)),
     ("add-zero", ("Add", "?e", ("Num", 0)), "?e"),
     ("sub-zero", ("Sub", "?e", ("Num", 0)), "?e"),
     ("eq-comm", ("Equality", "?a", "?b"), ("Equality", "?b", "?a")),
-
     ("mult-app1", ("Mult", "?a", "?b"), ("Binop", ("Symbol", "mult"), "?a", "?b")),
     ("mult-app2", ("Binop", ("Symbol", "mult"), "?a", "?b"), ("Mult", "?a", "?b")),
     ("add-app1", ("Add", "?a", "?b"), ("Binop", ("Symbol", "add"), "?a", "?b")),
@@ -90,90 +86,99 @@ RULES = [
     ("sing-app2", ("Binop", ("Symbol", "singf"), "?a", "?b"), ("Sing", "?a", "?b")),
     ("unique-app1", ("Unique", "?a"), ("App", ("Symbol", "uniquef"), "?a")),
     ("unique-app2", ("App", ("Symbol", "uniquef"), "?a"), ("Unique", "?a")),
-
-    ("let-binop3", ("Let", "?e1", "$x", ("Binop", "?f", "?e2", "?e3")),
-                   ("Binop", "?f", ("Let", "?e1", "$x", "?e2"),
-                                   ("Let", "?e1", "$x", "?e3"))),
-    ("let-binop4", ("Binop", "?f", ("Let", "?e1", "$x", "?e2"),
-                                   ("Let", "?e1", "$x", "?e3")),
-                   ("Let", "?e1", "$x", ("Binop", "?f", "?e2", "?e3"))),
-    ("let-apply1", ("Let", "?e1", "$x", ("App", "?e2", "?e3")),
-                   ("App", "?e2", ("Let", "?e1", "$x", "?e3"))),
-    ("let-apply2", ("App", "?e2", ("Let", "?e1", "$x", "?e3")),
-                   ("Let", "?e1", "$x", ("App", "?e2", "?e3"))),
-
-    ("if-mult2", ("Mult", "?e1", ("IfThen", "?e2", "?e3")),
-                 ("IfThen", "?e2", ("Mult", "?e1", "?e3"))),
+    (
+        "let-binop3",
+        ("Let", "?e1", "$x", ("Binop", "?f", "?e2", "?e3")),
+        ("Binop", "?f", ("Let", "?e1", "$x", "?e2"), ("Let", "?e1", "$x", "?e3")),
+    ),
+    (
+        "let-binop4",
+        ("Binop", "?f", ("Let", "?e1", "$x", "?e2"), ("Let", "?e1", "$x", "?e3")),
+        ("Let", "?e1", "$x", ("Binop", "?f", "?e2", "?e3")),
+    ),
+    ("let-apply1", ("Let", "?e1", "$x", ("App", "?e2", "?e3")), ("App", "?e2", ("Let", "?e1", "$x", "?e3"))),
+    ("let-apply2", ("App", "?e2", ("Let", "?e1", "$x", "?e3")), ("Let", "?e1", "$x", ("App", "?e2", "?e3"))),
+    ("if-mult2", ("Mult", "?e1", ("IfThen", "?e2", "?e3")), ("IfThen", "?e2", ("Mult", "?e1", "?e3"))),
     ("if-to-mult", ("IfThen", "?e1", "?e2"), ("Mult", "?e1", "?e2")),
-    ("mult-to-if", ("Mult", ("Equality", "?e1_1", "?e1_2"), "?e2"),
-                   ("IfThen", ("Equality", "?e1_1", "?e1_2"), "?e2")),
-
-    ("sum-fact-1", ("Sum", "?R", "$x", "$y", ("Mult", "?e1", "?e2")),
-                   ("Mult", "?e1", ("Sum", "?R", "$x", "$y", "?e2")),
-     [("$x", "?e1"), ("$y", "?e1")]),
-    ("sum-fact-2", ("Sum", "?R", "$x", "$y", ("Mult", "?e1", "?e2")),
-                   ("Mult", ("Sum", "?R", "$x", "$y", "?e1"), "?e2"),
-     [("$x", "?e2"), ("$y", "?e2")]),
-    ("sum-fact-3", ("Sum", "?R", "$x", "$y", ("Sing", "?e1", "?e2")),
-                   ("Sing", "?e1", ("Sum", "?R", "$x", "$y", "?e2")),
-     [("$x", "?e1"), ("$y", "?e1")]),
-
-    ("sing-mult-1", ("Sing", "?e1", ("Mult", "?e2", "?e3")),
-                    ("Mult", ("Sing", "?e1", "?e2"), "?e3")),
-    ("sing-mult-2", ("Sing", "?e1", ("Mult", "?e2", "?e3")),
-                    ("Mult", "?e2", ("Sing", "?e1", "?e3"))),
-    ("sing-mult-3", ("Mult", ("Sing", "?e1", "?e2"), "?e3"),
-                    ("Sing", "?e1", ("Mult", "?e2", "?e3"))),
-    ("sing-mult-4", ("Mult", "?e2", ("Sing", "?e1", "?e3")),
-                    ("Sing", "?e1", ("Mult", "?e2", "?e3"))),
-
-    ("sum-fact-inv-1", ("Mult", "?e1", ("Sum", "?R", "$k", "$v", "?e2")),
-                       ("Sum", "?R", "$k", "$v", ("Mult", "?e1", "?e2"))),
-    ("sum-fact-inv-3", ("Sing", "?e1", ("Sum", "?R", "$k", "$v", "?e2")),
-                       ("Sum", "?R", "$k", "$v", ("Sing", "?e1", "?e2"))),
-
-    ("sum-sum-vert-fuse-1",
-     ("Sum", ("Sum", "?R", "$k2", "$v2", ("Sing", "$k2", "?body1")),
-      "$k1", "$v1", "?body2"),
-     ("Sum", "?R", "$k2", "$v2",
-      ("Let", "$k2", "$k1", ("Let", "?body1", "$v1", "?body2")))),
-    ("sum-sum-vert-fuse-2",
-     ("Sum", ("Sum", "?R", "$k2", "$v2",
-              ("Sing", ("Unique", "?key"), "?body1")), "$k1", "$v1", "?body2"),
-     ("Sum", "?R", "$k2", "$v2",
-      ("Let", ("Unique", "?key"), "$k1", ("Let", "?body1", "$v1", "?body2")))),
-
-    ("sum-range-1",
-     ("Sum", ("Range", "?st", "?en"), "$k", "$v",
-      ("IfThen", ("Equality", "$v", "?key"), "?body")),
-     ("Sum", ("Range", "?st", "?en"), "$k", "$v",
-      ("IfThen", ("Equality", "$k", ("Sub", "?key", ("Sub", "?st", ("Num", 1)))),
-       "?body"))),
-
-    ("sum-merge",
-     ("Sum", "?R", "$k1", "$v1",
-      ("Sum", "?S", "$k2", "$v2",
-       ("IfThen", ("Equality", "$v1", "$v2"), "?body"))),
-     ("Merge", "?R", "?S", "$k1", "$k2", "$v1", ("Let", "$v1", "$v2", "?body"))),
-
-    ("get-to-sum", ("Get", "?dict", "?key"),
-     ("Sum", "?dict", "$k", "$v",
-      ("IfThen", ("Equality", "$k", "?key"), "$v")),
-     [], ["$k", "$v"]),
-    ("sum-to-get",
-     ("Sum", "?dict", "$k", "$v",
-      ("IfThen", ("Equality", "$k", "?key"), "?body")),
-     ("Let", "?key", "$k", ("Let", ("Get", "?dict", "$k"), "$v", "?body")),
-     [("$k", "?key"), ("$v", "?key")]),
-
-    ("get-range", ("Get", ("Range", "?st", "?en"), "?idx"),
-                  ("Add", "?idx", ("Sub", "?st", ("Num", 1)))),
+    ("mult-to-if", ("Mult", ("Equality", "?e1_1", "?e1_2"), "?e2"), ("IfThen", ("Equality", "?e1_1", "?e1_2"), "?e2")),
+    (
+        "sum-fact-1",
+        ("Sum", "?R", "$x", "$y", ("Mult", "?e1", "?e2")),
+        ("Mult", "?e1", ("Sum", "?R", "$x", "$y", "?e2")),
+        [("$x", "?e1"), ("$y", "?e1")],
+    ),
+    (
+        "sum-fact-2",
+        ("Sum", "?R", "$x", "$y", ("Mult", "?e1", "?e2")),
+        ("Mult", ("Sum", "?R", "$x", "$y", "?e1"), "?e2"),
+        [("$x", "?e2"), ("$y", "?e2")],
+    ),
+    (
+        "sum-fact-3",
+        ("Sum", "?R", "$x", "$y", ("Sing", "?e1", "?e2")),
+        ("Sing", "?e1", ("Sum", "?R", "$x", "$y", "?e2")),
+        [("$x", "?e1"), ("$y", "?e1")],
+    ),
+    ("sing-mult-1", ("Sing", "?e1", ("Mult", "?e2", "?e3")), ("Mult", ("Sing", "?e1", "?e2"), "?e3")),
+    ("sing-mult-2", ("Sing", "?e1", ("Mult", "?e2", "?e3")), ("Mult", "?e2", ("Sing", "?e1", "?e3"))),
+    ("sing-mult-3", ("Mult", ("Sing", "?e1", "?e2"), "?e3"), ("Sing", "?e1", ("Mult", "?e2", "?e3"))),
+    ("sing-mult-4", ("Mult", "?e2", ("Sing", "?e1", "?e3")), ("Sing", "?e1", ("Mult", "?e2", "?e3"))),
+    (
+        "sum-fact-inv-1",
+        ("Mult", "?e1", ("Sum", "?R", "$k", "$v", "?e2")),
+        ("Sum", "?R", "$k", "$v", ("Mult", "?e1", "?e2")),
+    ),
+    (
+        "sum-fact-inv-3",
+        ("Sing", "?e1", ("Sum", "?R", "$k", "$v", "?e2")),
+        ("Sum", "?R", "$k", "$v", ("Sing", "?e1", "?e2")),
+    ),
+    (
+        "sum-sum-vert-fuse-1",
+        ("Sum", ("Sum", "?R", "$k2", "$v2", ("Sing", "$k2", "?body1")), "$k1", "$v1", "?body2"),
+        ("Sum", "?R", "$k2", "$v2", ("Let", "$k2", "$k1", ("Let", "?body1", "$v1", "?body2"))),
+    ),
+    (
+        "sum-sum-vert-fuse-2",
+        ("Sum", ("Sum", "?R", "$k2", "$v2", ("Sing", ("Unique", "?key"), "?body1")), "$k1", "$v1", "?body2"),
+        ("Sum", "?R", "$k2", "$v2", ("Let", ("Unique", "?key"), "$k1", ("Let", "?body1", "$v1", "?body2"))),
+    ),
+    (
+        "sum-range-1",
+        ("Sum", ("Range", "?st", "?en"), "$k", "$v", ("IfThen", ("Equality", "$v", "?key"), "?body")),
+        (
+            "Sum",
+            ("Range", "?st", "?en"),
+            "$k",
+            "$v",
+            ("IfThen", ("Equality", "$k", ("Sub", "?key", ("Sub", "?st", ("Num", 1)))), "?body"),
+        ),
+    ),
+    (
+        "sum-merge",
+        ("Sum", "?R", "$k1", "$v1", ("Sum", "?S", "$k2", "$v2", ("IfThen", ("Equality", "$v1", "$v2"), "?body"))),
+        ("Merge", "?R", "?S", "$k1", "$k2", "$v1", ("Let", "$v1", "$v2", "?body")),
+    ),
+    (
+        "get-to-sum",
+        ("Get", "?dict", "?key"),
+        ("Sum", "?dict", "$k", "$v", ("IfThen", ("Equality", "$k", "?key"), "$v")),
+        [],
+        ["$k", "$v"],
+    ),
+    (
+        "sum-to-get",
+        ("Sum", "?dict", "$k", "$v", ("IfThen", ("Equality", "$k", "?key"), "?body")),
+        ("Let", "?key", "$k", ("Let", ("Get", "?dict", "$k"), "$v", "?body")),
+        [("$k", "?key"), ("$v", "?key")],
+    ),
+    ("get-range", ("Get", ("Range", "?st", "?en"), "?idx"), ("Add", "?idx", ("Sub", "?st", ("Num", 1)))),
     ("sum-sing", ("Sum", "?e1", "$k", "$v", ("Sing", "$k", "$v")), "?e1"),
     ("unique-rm", ("Unique", "?e"), "?e"),
 ]
 
 
-HEADER = '''\
+HEADER = """\
 ;;; GENERATED by slotted-experiments/gen-sdql-rules.py -- do not edit.
 ;;;
 ;;; The reference `sdql` rewrite rules -- `sdql_rules()` in
@@ -194,7 +199,7 @@ HEADER = '''\
 (include "tests/slotted-lang-sdql.egg")
 
 (ruleset sdql)
-'''
+"""
 
 
 # ---------------------------------------------------------------- the compiler
@@ -205,9 +210,14 @@ def compile_rule(name, lhs, rhs, conds=(), fresh=()):
     root, atoms = enc.flatten(LANG, lhs)
     atoms = enc.connected_order(LANG, atoms, first=0)
     return enc.compile_rule(
-        LANG, atoms, ("build", root, enc.rhs_of(LANG, rhs)),
-        conds=[(False, slot, [pvar]) for slot, pvar in conds], fresh=fresh,
-        bugs=BUGS, tail=f'\n      :ruleset sdql :name "{name}")')
+        LANG,
+        atoms,
+        ("build", root, enc.rhs_of(LANG, rhs)),
+        conds=[(False, slot, [pvar]) for slot, pvar in conds],
+        fresh=fresh,
+        bugs=BUGS,
+        tail=f'\n      :ruleset sdql :name "{name}")',
+    )
 
 
 def main():

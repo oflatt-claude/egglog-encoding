@@ -20,8 +20,10 @@ bad edges.
 The too-narrow direction is not checked here: it is what `compose-total` now
 prevents where it was reachable.
 """
+
 import subprocess
 import sys
+
 sys.path.insert(0, "slotted-experiments/xdiff")
 import xdiff as X
 
@@ -65,16 +67,17 @@ def probe(case):
     p = X.ROOT / f"inv-{abs(hash(case.name)) % 99999}.egg"
     p.write_text(prog)
     try:
-        r = subprocess.run([str(X.EGGLOG), str(p)], capture_output=True,
-                           text=True, cwd=X.ROOT, timeout=300)
+        r = subprocess.run([str(X.EGGLOG), str(p)], capture_output=True, text=True, cwd=X.ROOT, timeout=300)
     except subprocess.TimeoutExpired:
         return None
     finally:
         p.unlink(missing_ok=True)
-    ni = next((int(x.strip()) for x in r.stdout.splitlines()
-               if x.strip().isdigit()), None)
-    wide = [l.strip().split(" -> ")[0][len("(WideEdge "):-1]
-            for l in r.stdout.splitlines() if l.strip().startswith("(WideEdge ")]
+    ni = next((int(x.strip()) for x in r.stdout.splitlines() if x.strip().isdigit()), None)
+    wide = [
+        line.strip().split(" -> ")[0][len("(WideEdge ") : -1]
+        for line in r.stdout.splitlines()
+        if line.strip().startswith("(WideEdge ")
+    ]
     return ni, wide
 
 

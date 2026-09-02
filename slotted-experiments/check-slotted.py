@@ -39,6 +39,7 @@ GENERATED = {
 
 def ratio(pattern, floor):
     """`n/m <something>` with n == m, and m at least `floor`."""
+
     def check(out):
         m = re.search(pattern, out, re.M)
         if not m:
@@ -49,20 +50,24 @@ def ratio(pattern, floor):
         if tot < floor:
             return f"only {tot} cases, expected at least {floor}"
         return None
+
     return check
 
 
 def zero_categories(out):
     """xdiff prints one line per disagreement category; all must be 0."""
-    bad = [line.strip() for line in out.splitlines()
-           if re.match(r"^\s+[1-9]\d*\s+[a-zA-Z]", line)
-           and "of those" not in line and "usable baseline" not in line]
+    bad = [
+        line.strip()
+        for line in out.splitlines()
+        if re.match(r"^\s+[1-9]\d*\s+[a-zA-Z]", line) and "of those" not in line and "usable baseline" not in line
+    ]
     return f"non-zero categories: {'; '.join(bad)}" if bad else None
 
 
 def both(*fns):
     def check(out):
         return next((r for r in (f(out) for f in fns) if r), None)
+
     return check
 
 
@@ -77,8 +82,7 @@ def run_egg_files():
         return f"only {len(files)} slotted .egg files found"
     bad = []
     for f in files:
-        r = subprocess.run([str(EGGLOG), f], capture_output=True, text=True,
-                           timeout=1800, cwd=ROOT)
+        r = subprocess.run([str(EGGLOG), f], capture_output=True, text=True, timeout=1800, cwd=ROOT)
         if r.returncode != 0:
             err = [line for line in r.stderr.splitlines() if "ERROR" in line]
             bad.append(f"{Path(f).name}: {(err[-1] if err else '?')[:120]}")
@@ -99,13 +103,10 @@ def check_generated():
             shutil.copy2(ROOT / rel, Path(tmp) / Path(rel).name)
         try:
             for cmd in sorted(set(GENERATED.values())):
-                r = subprocess.run([sys.executable, *cmd], capture_output=True,
-                                   text=True, timeout=1800, cwd=ROOT)
+                r = subprocess.run([sys.executable, *cmd], capture_output=True, text=True, timeout=1800, cwd=ROOT)
                 if r.returncode != 0:
                     return f"{cmd[0]} failed: {r.stderr.strip()[:200]}"
-            stale = [rel for rel in GENERATED
-                     if (ROOT / rel).read_bytes()
-                     != (Path(tmp) / Path(rel).name).read_bytes()]
+            stale = [rel for rel in GENERATED if (ROOT / rel).read_bytes() != (Path(tmp) / Path(rel).name).read_bytes()]
         finally:
             for rel in GENERATED:
                 shutil.copy2(Path(tmp) / Path(rel).name, ROOT / rel)
@@ -119,65 +120,72 @@ def check_generated():
 CHECKS = [
     ("egg-files", run_egg_files, None, False),
     ("generated-drift", check_generated, None, False),
-    ("handwritten-drift",
-     ("slotted-experiments/check-handwritten-encoding.py",), starts_ok, False),
-    ("curated", ("slotted-experiments/xdiff/xdiff.py",),
-     both(ratio(r"(\d+)/(\d+) had a usable baseline", 44), zero_categories), False),
-    ("mutations", ("slotted-experiments/xdiff/mutations.py",),
-     ratio(r"(\d+)/(\d+) mutations still caught", 4), False),
-    ("iso-selftest", ("slotted-experiments/xdiff/isomorphism.py", "selftest"),
-     ratio(r"(\d+)/(\d+) self-tests pass", 3), False),
-    ("iso-curated", ("slotted-experiments/xdiff/isomorphism.py",),
-     ratio(r"(\d+)/(\d+) isomorphic", 44), False),
-    ("array", ("slotted-experiments/xdiff/xarray.py",),
-     ratio(r"(\d+)/(\d+) cases agree", 14), False),
-    ("array-guards", ("slotted-experiments/xdiff/xarray.py", "vac"),
-     ratio(r"(\d+)/(\d+) guards are load-bearing", 5), False),
-    ("array-iso", ("slotted-experiments/xdiff/xarray.py", "iso"),
-     ratio(r"(\d+)/(\d+) isomorphic", 15), False),
-    ("sdql", ("slotted-experiments/xdiff/xsdql.py",),
-     ratio(r"(\d+)/(\d+) cases agree", 16), False),
-    ("iso-fuzz", ("slotted-experiments/xdiff/isomorphism.py", "fuzz", "60"),
-     ratio(r"(\d+)/(\d+) isomorphic", 60), True),
+    ("handwritten-drift", ("slotted-experiments/check-handwritten-encoding.py",), starts_ok, False),
+    (
+        "curated",
+        ("slotted-experiments/xdiff/xdiff.py",),
+        both(ratio(r"(\d+)/(\d+) had a usable baseline", 44), zero_categories),
+        False,
+    ),
+    ("mutations", ("slotted-experiments/xdiff/mutations.py",), ratio(r"(\d+)/(\d+) mutations still caught", 4), False),
+    (
+        "iso-selftest",
+        ("slotted-experiments/xdiff/isomorphism.py", "selftest"),
+        ratio(r"(\d+)/(\d+) self-tests pass", 3),
+        False,
+    ),
+    ("iso-curated", ("slotted-experiments/xdiff/isomorphism.py",), ratio(r"(\d+)/(\d+) isomorphic", 44), False),
+    ("array", ("slotted-experiments/xdiff/xarray.py",), ratio(r"(\d+)/(\d+) cases agree", 14), False),
+    (
+        "array-guards",
+        ("slotted-experiments/xdiff/xarray.py", "vac"),
+        ratio(r"(\d+)/(\d+) guards are load-bearing", 5),
+        False,
+    ),
+    ("array-iso", ("slotted-experiments/xdiff/xarray.py", "iso"), ratio(r"(\d+)/(\d+) isomorphic", 15), False),
+    ("sdql", ("slotted-experiments/xdiff/xsdql.py",), ratio(r"(\d+)/(\d+) cases agree", 16), False),
+    (
+        "iso-fuzz",
+        ("slotted-experiments/xdiff/isomorphism.py", "fuzz", "60"),
+        ratio(r"(\d+)/(\d+) isomorphic", 60),
+        True,
+    ),
 ]
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--quick", action="store_true", help="skip the fuzzers")
-    ap.add_argument("-k", metavar="SUBSTRING",
-                    help="only checks whose name contains this")
+    ap.add_argument("-k", metavar="SUBSTRING", help="only checks whose name contains this")
     args = ap.parse_args()
 
-    for tool, hint in ((EGGLOG, "cargo build"),
-                       (XMULTI, "cargo build in slotted-experiments/xmulti")):
+    for tool, hint in ((EGGLOG, "cargo build"), (XMULTI, "cargo build in slotted-experiments/xmulti")):
         if not tool.exists():
             print(f"missing {tool.relative_to(ROOT)} -- run `{hint}`")
             return 2
 
-    picked = [c for c in CHECKS
-              if not (args.quick and c[3]) and (not args.k or args.k in c[0])]
+    picked = [c for c in CHECKS if not (args.quick and c[3]) and (not args.k or args.k in c[0])]
     failed = []
     for name, cmd, expect, _ in picked:
         print(f"  .... {name}", flush=True)
         if callable(cmd):
             why = cmd()
         else:
-            r = subprocess.run([sys.executable, *cmd], capture_output=True,
-                               text=True, timeout=7200, cwd=ROOT)
+            r = subprocess.run([sys.executable, *cmd], capture_output=True, text=True, timeout=7200, cwd=ROOT)
             why = expect(r.stdout) if expect else None
             if why is None and r.returncode != 0:
                 why = f"exit {r.returncode}: {r.stderr.strip()[:200]}"
             if why:
                 tail = [line for line in r.stdout.splitlines() if line.strip()][-6:]
                 why += "\n       " + "\n       ".join(tail)
-        print(f"  {'ok  ' if why is None else 'FAIL'} {name}"
-              + (f"  {why}" if why else ""), flush=True)
+        print(f"  {'ok  ' if why is None else 'FAIL'} {name}" + (f"  {why}" if why else ""), flush=True)
         if why:
             failed.append(name)
 
-    print(f"\n{len(picked) - len(failed)}/{len(picked)} checks pass"
-          + (f"   FAILED: {', '.join(failed)}" if failed else ""))
+    print(
+        f"\n{len(picked) - len(failed)}/{len(picked)} checks pass"
+        + (f"   FAILED: {', '.join(failed)}" if failed else "")
+    )
     return 1 if failed else 0
 
 

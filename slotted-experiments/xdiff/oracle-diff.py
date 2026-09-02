@@ -6,11 +6,11 @@ original. PR #45 adds the one-line fix. The encoding is compared against the fix
 version, so this asks which of our cases can tell the two apart: those are the ones
 whose agreement is evidence about the *fixed* semantics rather than either.
 """
+
 import subprocess
 import sys
-sys.path.insert(0, "slotted-experiments/xdiff")
-import xdiff as X
 
+sys.path.insert(0, "slotted-experiments/xdiff")
 # A second oracle built against another slotted-egraphs revision. To make one:
 #
 #   D=/tmp/slotted-main
@@ -22,6 +22,8 @@ import xdiff as X
 # then point OTHER_XMULTI at its binary.
 import os
 
+import xdiff as X
+
 OTHER = os.environ.get("OTHER_XMULTI")
 if not OTHER:
     sys.exit("set OTHER_XMULTI to a second oracle binary (see the comment above)")
@@ -29,8 +31,7 @@ if not OTHER:
 
 def run(binary, case):
     try:
-        r = subprocess.run([binary], input=case.spec(), capture_output=True,
-                           text=True, timeout=X.RUN_TIMEOUT)
+        r = subprocess.run([binary], input=case.spec(), capture_output=True, text=True, timeout=X.RUN_TIMEOUT)
     except subprocess.TimeoutExpired:
         return "TIMEOUT"
     if r.returncode != 0:

@@ -10,8 +10,10 @@ single patterns while this encoding matches the flattened form. This measures wh
 that actually diverges: for every curated case whose atoms reconstruct into one
 nested pattern, run the reference both ways and compare.
 """
+
 import subprocess
 import sys
+
 sys.path.insert(0, "slotted-experiments/xdiff")
 import xdiff as X
 
@@ -28,20 +30,20 @@ def nest(atoms, action):
     by_root = {}
     for a in atoms:
         if a[0] in by_root:
-            return None                     # two atoms on one root
+            return None  # two atoms on one root
         by_root[a[0]] = a
     used = [c for a in atoms for c in a[2:]]
     tops = [a[0] for a in atoms if a[0] not in used]
     if len(tops) != 1 or action[0] != tops[0]:
         return None
     if any(used.count(r) > 1 for r in by_root):
-        return None                         # a shared subterm
+        return None  # a shared subterm
 
     def build(name, seen):
         if name not in by_root:
             return name if name.startswith("$") else f"?{name}"
         if name in seen:
-            return None                     # cyclic
+            return None  # cyclic
         a = by_root[name]
         kids = [build(c, seen | {name}) for c in a[2:]]
         if any(k is None for k in kids):
@@ -66,23 +68,26 @@ def spec_with(case, rules, nested_for):
     out = [f"rounds {case.rounds}"]
     out += [f"term {X.sexpr(t)}" for t in case.terms]
     out += [f"union {X.sexpr(a)} {X.sexpr(b)}" for a, b in case.unions]
-    for i, (atoms, action, _) in enumerate(rules):
+    for i, (_atoms, action, _) in enumerate(rules):
         out.append("rule")
         out.append(f"nested {nested_for[i]}")
-        rhs = (X.rhs_text(action[1]) if len(action) == 2
-               else f"({action[1]} ?{action[2]} ?{action[3]})")
+        rhs = X.rhs_text(action[1]) if len(action) == 2 else f"({action[1]} ?{action[2]} ?{action[3]})"
         out.append(f"rhs {action[0]} {rhs}")
     out += [f"probe {X.sexpr(t)}" for t in case.probes]
     return "\n".join(out) + "\n"
 
 
 def run(text):
-    r = subprocess.run([str(X.XMULTI / "target" / "debug" / "xmulti")],
-                       input=text, capture_output=True, text=True,
-                       timeout=X.RUN_TIMEOUT)
+    r = subprocess.run(
+        [str(X.XMULTI / "target" / "debug" / "xmulti")],
+        input=text,
+        capture_output=True,
+        text=True,
+        timeout=X.RUN_TIMEOUT,
+    )
     if r.returncode != 0:
         return "CRASH " + r.stderr.strip().splitlines()[-1][:70]
-    return next((l for l in r.stdout.splitlines() if l.startswith("PARTITION")), "?")
+    return next((line for line in r.stdout.splitlines() if line.startswith("PARTITION")), "?")
 
 
 eligible = differ = 0
@@ -102,10 +107,8 @@ for c in X.curated():
             break
         # Nesting absorbs the intermediate atom roots, so an action naming one has
         # no variable to refer to -- the RHS would be unbound.
-        bound = {w[1:] for w in n.replace("(", " ").replace(")", " ").split()
-                 if w.startswith("?")}
-        used = ({action[2], action[3]} if len(action) == 4
-                else set(_rhs_vars(action[1])))
+        bound = {w[1:] for w in n.replace("(", " ").replace(")", " ").split() if w.startswith("?")}
+        used = {action[2], action[3]} if len(action) == 4 else set(_rhs_vars(action[1]))
         if not used <= bound:
             ok = False
             break
@@ -123,5 +126,4 @@ for c in X.curated():
         print(f"      single nested {single}")
 
 print(f"\n{eligible} cases run both ways, {differ} differ")
-print(f"{len(skipped)} not expressible as one nested pattern "
-      f"(shared subterm, side condition, or an `=` action)")
+print(f"{len(skipped)} not expressible as one nested pattern (shared subterm, side condition, or an `=` action)")
