@@ -569,6 +569,19 @@ def goal_cases(n_params=(0, 1), rounds=8, wrap_lams=True, nfun=4, dims=2):
     `wrap_lams=False` leaves the functions and the matrix as free symbols instead of
     binding them at the top, which is the same rewriting problem with fewer binders
     around it; `nfun`/`dims` shrink it further.
+
+    MEASURED, and the one case the encoding does not carry is worth being exact about.
+    `goal-2d-4f-N0` is the full shape with the functions and the matrix lambda-bound at
+    the top. The reference gets there -- `[0,1]`, without saturating -- and the encoding
+    does not finish in 1500s, so raising the budget is not the answer; the earlier 120s
+    reading was not a budget that was merely too small.
+
+    The neighbour says where the cost is. `goal-free-2d-4f-N0` is THE SAME REWRITING
+    PROBLEM at the same size, differing only in that the functions and the matrix stay
+    free symbols, and the encoding finishes it. So what the encoding is paying for is
+    the top-level binders, not the depth of the rewrite -- which is the part of the
+    slotted machinery this whole comparison exists to exercise, and makes this case the
+    interesting one to profile rather than an unexplained timeout.
     """
     cs = []
     for n in n_params:
