@@ -12,7 +12,7 @@
 ;;; collide the bound slot is first renamed to one the node does not use, which keeps
 ;;; it alpha-renameable.
 ;;;
-;;; Language: lambda
+;;; Language: array
 
 (include "slotted-tests/slotted-egraph-encoding-11.egg")
 

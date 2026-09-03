@@ -47,12 +47,12 @@ handwritten_region = enc.handwritten_region
 #
 # A language's constructors are declared WHERE ITS RULES ARE where it has rules, so
 # there is one place for them: `sdql` is declared at the top of its slotted source, and
-# only the languages with no rules of their own -- the paper's bare `lambda`, and the
-# neutral language the fuzzer generates terms in -- still have a file to themselves.
+# only the neutral language the fuzzer generates terms in, which has no rules at all,
+# still has a file to itself.
 LANG_DIR = pathlib.Path("slotted-experiments/languages")
 SOURCES = {
     "sdql": pathlib.Path("slotted-tests/sdql.egg"),
-    "lambda": LANG_DIR / "lambda.egg",
+    "array": pathlib.Path("slotted-tests/array.egg"),
     "toy": LANG_DIR / "toy.egg",
 }
 

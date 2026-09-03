@@ -5,9 +5,10 @@
 ;;; `slotted-experiments/xdiff/xarray.py` runs the same rules against the reference
 ;;; `slotted-egraphs` crate; this file is the runnable, self-checking half.
 ;;;
-;;; The language is `slotted-experiments/languages/lambda.egg`, one constructor per
-;;; operator -- the shape the reference's `define_language!` produces -- with
-;;; `lambda.ref` beside it saying what the reference calls each one:
+;;; The language and the rules are `slotted-tests/array.egg`, written in the slotted
+;;; language -- one constructor per operator, the shape the reference's
+;;; `define_language!` produces -- with `array.ref` beside it saying what the reference
+;;; calls each one:
 ;;;
 ;;;   Lam(Bind<body>)          (lam $x b)      (Lam {0->x} (Var 0) mb b)
 ;;;   App(a, b)                (app a b)       (App ma a mb b)
@@ -25,7 +26,7 @@
 ;;; Each section is its own (push)/(pop). Two terms are in one slotted e-class when
 ;;; they reach a common leader, which is what every `check` below asks.
 
-(include "slotted-tests/generated/slotted-lang-lambda.egg")
+(include "slotted-tests/generated/slotted-lang-array.egg")
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

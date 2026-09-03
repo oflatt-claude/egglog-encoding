@@ -75,7 +75,9 @@ LANG = slotenc.language(LANG_DIR / "toy.egg", LANG_DIR / "toy.ref")
 
 # `BINOPS` is what generated terms are built from, so it must be every operator that
 # takes two children and binds neither -- read off the language rather than restated.
-assert sorted(op for op, o in LANG.ops.items() if len(o.kid_cols) == 2 and not o.binders) == BINOPS, (
+# `op == o.name` skips the constructor aliases `language()` adds, so this compares
+# operator names with operator names.
+assert sorted(op for op, o in LANG.ops.items() if op == o.name and len(o.kid_cols) == 2 and not o.binders) == BINOPS, (
     f"BINOPS and toy.egg disagree: {BINOPS}"
 )
 

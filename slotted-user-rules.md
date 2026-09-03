@@ -10,8 +10,10 @@ Companion to these runnable files:
 | `slotted-experiments/slotted-compile.py` | compiles a test written in the SLOTTED language — its own `(constructor ... :binder ...)` declarations, then terms, `rewrite`s and `(check (same a b))` — into a self-contained egglog program: the hand-written core, the machinery for exactly the constructors declared, and the compiled body. It includes no generated file, so nothing sits between a test and running it. `same` rather than `=` because two values are one slotted class when they reach a common leader, which is not egglog equality |
 | `slotted-experiments/slotted-encoder.py` | the recipe as code: the machinery emitter, the term encoding and the rule compiler, which every generator below goes through |
 | `slotted-experiments/xdiff/xdiff.py` | differential tests against the reference implementation |
-| `slotted-tests/generated/slotted-array-rules.egg` | the paper's §4.1 array language, 8 rules, self-checking |
-| `slotted-experiments/xdiff/xarray.py` | the same 8 rules, differentially tested |
+| `slotted-tests/sdql.egg` | the paper's `sdql` language and all 43 of its rewrite rules, in the SLOTTED language. `gen-sdql-rules.py` compiles them for the .egg tests and the differential harness, and `slotted-compile.py` compiles the same file to run it; neither restates a rule |
+| `slotted-tests/array.egg` | the same, for the paper's §4.1 array language and its 8 rules. `xarray.py` builds its rule objects from this file |
+| `slotted-tests/generated/slotted-array-rules.egg` | what those 8 compile to, self-checking |
+| `slotted-experiments/xdiff/xarray.py` | the same 8 rules, differentially tested against the reference |
 
 Semantics come from Schneider et al., *Slotted E-Graphs*, PLDI 2025
 ([PDF](https://steuwer.info/files/publications/2025/PLDI-Slotted-E-Graphs.pdf),

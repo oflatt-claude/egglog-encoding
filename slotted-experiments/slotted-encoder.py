@@ -150,9 +150,14 @@ def language(spec, ref):
         f"{spec.name} declares {sorted(set(sigs) - named)} that {ref.name} does not name, "
         f"and {ref.name} names {sorted(named - set(sigs))} that it does not declare"
     )
-    return TermLang(
-        {op: Op(op, ctor, sigs[ctor], ref=tag, ref_prefix=prefix) for op, (ctor, tag, prefix) in corr.items()}
-    )
+    ops = {op: Op(op, ctor, sigs[ctor], ref=tag, ref_prefix=prefix) for op, (ctor, tag, prefix) in corr.items()}
+    # Also reachable by CONSTRUCTOR name. A slotted `.egg` writes the constructor it
+    # declared, `(App ?a ?b)`, while a corpus written in Python names the operator,
+    # `("app", a, b)`; both denote the same node, and the `.ref` already gives one
+    # operator two names where a language wants them.
+    for op in list(ops.values()):
+        ops.setdefault(op.ctor, op)
+    return TermLang(ops)
 
 
 def cols_of(sig):

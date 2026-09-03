@@ -42,15 +42,17 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from xdiff import EGGLOG, ROOT, XMULTI, parse_same_class, slotenc  # noqa: E402
 
+sc = __import__("slotted-compile")
+
 RUN_TIMEOUT = int(os.environ.get("XARRAY_TIMEOUT", "120"))
 
 # ---------------------------------------------------------------- array terms
 # term := ('var', slot) | ('sym', name) | ('num', n)
 #       | ('app', a, b) | ('lam', slot, body) | ('let', slot, body, val)
 #
-# The language is `slotted-experiments/languages/lambda.egg` -- the paper's Listing 1,
+# The language is `slotted-tests/array.egg` -- the paper's Listing 1,
 # one constructor per operator, the shape `define_language!` produces -- with
-# `lambda.ref` beside it saying what the reference calls each one. Nothing here
+# `array.ref` beside it saying what the reference calls each one. Nothing here
 # restates a signature or a binder column: `Lam` and `Let` bind their column 0 because
 # that file's `:binder` says so, so this cannot disagree with the rules generated for
 # them.
@@ -58,11 +60,13 @@ RUN_TIMEOUT = int(os.environ.get("XARRAY_TIMEOUT", "120"))
 # `let` takes its columns in the reference's order -- binder, body, value. The paper's
 # Listing 1 writes the same constructor as `Let(RenamedId, Bind<RenamedId>)`, i.e.
 # `(let ?e $x ?body)`.
-LANG_DIR = ROOT / "slotted-experiments" / "languages"
-LANG = slotenc.language(LANG_DIR / "lambda.egg", LANG_DIR / "lambda.ref")
+# The language is declared where its rules are: `slotted-tests/array.egg` holds
+# both, and `array.ref` beside it says what the reference calls each constructor.
+ARRAY_SRC = ROOT / "slotted-tests" / "array.egg"
+LANG = slotenc.language(ARRAY_SRC, ARRAY_SRC.with_suffix(".ref"))
 
 # the per-language machinery, not the generic string-headed one
-MACHINERY = "slotted-tests/generated/slotted-lang-lambda.egg"
+MACHINERY = "slotted-tests/generated/slotted-lang-array.egg"
 
 enc, sexpr, shift = LANG.enc, LANG.sexpr, LANG.shift
 
@@ -304,102 +308,31 @@ def check_case(case, order_check=True, shift_check=True):
 
 
 # ------------------------------------------------------------------- the 8 rules
-def eta():
-    return Rule(
-        "eta",
-        [("e", "lambda", [("sl", "$x"), ("pv", "b")]), ("b", "app", [("pv", "f"), ("sl", "$x")])],
-        "e",
-        ("pv", "f"),
-        conds=[(False, "$x", ["f"])],
-    )
+#
+# Read from `slotted-tests/array.egg`, written in the slotted language, so the rules a
+# reader sees are the rules that run here. `slotted-compile.py` compiles the same file
+# for `run-slotted-tests.py`; neither restates a rule.
+#
+# The atoms come from `flatten`, which emits the pattern's outermost node first -- the
+# order `nested_lhs` needs to put the pattern back together for the reference.
+def _load_rules():
+    src = sc.Source(ARRAY_SRC)
+    out = []
+    for form in sc.parse(ARRAY_SRC.read_text()):
+        if not (isinstance(form, list) and form and form[0] == "rewrite"):
+            continue
+        r = sc.rewrite_parts(src, form)
+        assert r["name"], f"a rewrite with no :name in {ARRAY_SRC.name}"
+        root, atoms = slotenc.flatten(LANG, src.term(r["lhs"], ground=False))
+        rhs = slotenc.rhs_of(LANG, src.term(r["rhs"], ground=False))
+        out.append(Rule(r["name"], atoms, root, rhs, conds=r["conds"], fresh=r["fresh"]))
+    return out
 
 
-def let_intro():
-    return Rule(
-        "let-intro",
-        [("p", "app", [("pv", "l"), ("pv", "e")]), ("l", "lambda", [("sl", "$x"), ("pv", "body")])],
-        "p",
-        ("let", ("sl", "$x"), ("pv", "body"), ("pv", "e")),
-    )
-
-
-def let_unused():
-    return Rule(
-        "let-unused",
-        [("p", "let", [("sl", "$x"), ("pv", "b"), ("pv", "e")])],
-        "p",
-        ("pv", "b"),
-        conds=[(False, "$x", ["b"])],
-    )
-
-
-def let_var_same():
-    return Rule("let-var-same", [("p", "let", [("sl", "$x"), ("sl", "$x"), ("pv", "e")])], "p", ("pv", "e"))
-
-
-def let_app():
-    return Rule(
-        "let-app",
-        [("p", "let", [("sl", "$x"), ("pv", "ab"), ("pv", "e")]), ("ab", "app", [("pv", "a"), ("pv", "b")])],
-        "p",
-        ("app", ("let", ("sl", "$x"), ("pv", "a"), ("pv", "e")), ("let", ("sl", "$x"), ("pv", "b"), ("pv", "e"))),
-        conds=[(True, "$x", ["a", "b"])],
-    )
-
-
-def let_lam_diff():
-    return Rule(
-        "let-lam-diff",
-        [("p", "let", [("sl", "$x"), ("pv", "l"), ("pv", "e")]), ("l", "lambda", [("sl", "$y"), ("pv", "body")])],
-        "p",
-        ("lambda", ("sl", "$y"), ("let", ("sl", "$x"), ("pv", "body"), ("pv", "e"))),
-        conds=[(True, "$x", ["body"])],
-    )
-
-
-def map_fusion():
-    return Rule(
-        "map-fusion",
-        [
-            ("p", "app", [("pv", "mf"), ("pv", "mgarg")]),
-            ("mf", "app", [("cls", MAP), ("pv", "f")]),
-            ("mgarg", "app", [("pv", "mg"), ("pv", "arg")]),
-            ("mg", "app", [("cls", MAP), ("pv", "g")]),
-        ],
-        "p",
-        (
-            "app",
-            ("app", MAP, ("lambda", ("sl", "$fu"), ("app", ("pv", "f"), ("app", ("pv", "g"), ("sl", "$fu"))))),
-            ("pv", "arg"),
-        ),
-        fresh=["$fu"],
-    )
-
-
-def map_fission():
-    return Rule(
-        "map-fission",
-        [
-            ("p", "app", [("cls", MAP), ("pv", "l")]),
-            ("l", "lambda", [("sl", "$x"), ("pv", "fgx")]),
-            ("fgx", "app", [("pv", "f"), ("pv", "gx")]),
-        ],
-        "p",
-        (
-            "lambda",
-            ("sl", "$in"),
-            (
-                "app",
-                ("app", MAP, ("pv", "f")),
-                ("app", ("app", MAP, ("lambda", ("sl", "$x"), ("pv", "gx"))), ("sl", "$in")),
-            ),
-        ),
-        conds=[(False, "$x", ["f"])],
-        fresh=["$in"],
-    )
-
-
-ALL_RULES = [eta, let_intro, let_unused, let_var_same, let_app, let_lam_diff, map_fusion, map_fission]
+#: name -> rule, and the same rules as a list. The per-rule cases below ask for one by
+#: name, which reads as the rule it is rather than as an index.
+RULES = {r.name: r for r in _load_rules()}
+ALL_RULES = list(RULES.values())
 
 
 # ------------------------------------------------------------------ the corpus
@@ -440,7 +373,7 @@ def per_rule_cases():
         Case(
             "eta-fires",
             [("lam", 0, ("app", S("f1"), V(0)))],
-            [eta()],
+            [RULES["eta"]],
             [("lam", 0, ("app", S("f1"), V(0))), S("f1"), S("f2")],
         )
     )
@@ -450,7 +383,7 @@ def per_rule_cases():
         Case(
             "eta-blocked",
             [("lam", 0, ("app", ("app", S("f1"), V(0)), V(0)))],
-            [eta()],
+            [RULES["eta"]],
             [("lam", 0, ("app", ("app", S("f1"), V(0)), V(0))), ("app", S("f1"), V(0)), ("app", S("f1"), S("cc"))],
         )
     )
@@ -460,7 +393,7 @@ def per_rule_cases():
         Case(
             "let-intro",
             [("app", ("lam", 0, ("app", S("f1"), V(0))), S("aa"))],
-            [let_intro()],
+            [RULES["let-intro"]],
             [
                 ("app", ("lam", 0, ("app", S("f1"), V(0))), S("aa")),
                 ("let", 0, ("app", S("f1"), V(0)), S("aa")),
@@ -474,7 +407,7 @@ def per_rule_cases():
         Case(
             "let-unused-fires",
             [("let", 0, ("app", S("f1"), S("cc")), S("aa"))],
-            [let_unused()],
+            [RULES["let-unused"]],
             [("let", 0, ("app", S("f1"), S("cc")), S("aa")), ("app", S("f1"), S("cc")), ("app", S("f1"), S("dd"))],
         )
     )
@@ -482,7 +415,7 @@ def per_rule_cases():
         Case(
             "let-unused-blocked",
             [("let", 0, ("app", S("f1"), V(0)), S("aa"))],
-            [let_unused()],
+            [RULES["let-unused"]],
             [("let", 0, ("app", S("f1"), V(0)), S("aa")), ("app", S("f1"), V(0)), ("app", S("f1"), S("cc"))],
         )
     )
@@ -492,7 +425,7 @@ def per_rule_cases():
         Case(
             "let-var-same-fires",
             [("let", 0, V(0), S("aa"))],
-            [let_var_same()],
+            [RULES["let-var-same"]],
             [("let", 0, V(0), S("aa")), S("aa"), S("bb")],
         )
     )
@@ -502,7 +435,7 @@ def per_rule_cases():
         Case(
             "let-var-same-blocked",
             [("lam", 1, ("let", 0, V(1), S("aa")))],
-            [let_var_same()],
+            [RULES["let-var-same"]],
             [("lam", 1, ("let", 0, V(1), S("aa"))), ("lam", 1, S("aa")), ("lam", 1, V(1))],
         )
     )
@@ -512,7 +445,7 @@ def per_rule_cases():
         Case(
             "let-app-fires",
             [("let", 0, ("app", V(0), S("cc")), S("aa"))],
-            [let_app()],
+            [RULES["let-app"]],
             [
                 ("let", 0, ("app", V(0), S("cc")), S("aa")),
                 ("app", ("let", 0, V(0), S("aa")), ("let", 0, S("cc"), S("aa"))),
@@ -525,7 +458,7 @@ def per_rule_cases():
         Case(
             "let-app-blocked",
             [("let", 0, ("app", S("dd"), S("cc")), S("aa"))],
-            [let_app()],
+            [RULES["let-app"]],
             [
                 ("let", 0, ("app", S("dd"), S("cc")), S("aa")),
                 ("app", ("let", 0, S("dd"), S("aa")), ("let", 0, S("cc"), S("aa"))),
@@ -539,7 +472,7 @@ def per_rule_cases():
         Case(
             "let-lam-diff-fires",
             [("let", 0, ("lam", 1, ("app", V(1), V(0))), S("aa"))],
-            [let_lam_diff()],
+            [RULES["let-lam-diff"]],
             [
                 ("let", 0, ("lam", 1, ("app", V(1), V(0))), S("aa")),
                 ("lam", 1, ("let", 0, ("app", V(1), V(0)), S("aa"))),
@@ -552,7 +485,7 @@ def per_rule_cases():
         Case(
             "let-lam-diff-blocked",
             [("let", 0, ("lam", 1, ("app", V(1), S("cc"))), S("aa"))],
-            [let_lam_diff()],
+            [RULES["let-lam-diff"]],
             [
                 ("let", 0, ("lam", 1, ("app", V(1), S("cc"))), S("aa")),
                 ("lam", 1, ("let", 0, ("app", V(1), S("cc")), S("aa"))),
@@ -566,7 +499,7 @@ def per_rule_cases():
         Case(
             "map-fusion",
             [MAPPED(S("f1"), MAPPED(S("f2"), S("arr")))],
-            [map_fusion()],
+            [RULES["map-fusion"]],
             [
                 MAPPED(S("f1"), MAPPED(S("f2"), S("arr"))),
                 MAPPED(("lam", 0, ("app", S("f1"), ("app", S("f2"), V(0)))), S("arr")),
@@ -581,7 +514,7 @@ def per_rule_cases():
         Case(
             "map-fission-fires",
             [("app", MAP, ("lam", 0, ("app", S("f1"), ("app", S("f2"), V(0)))))],
-            [map_fission()],
+            [RULES["map-fission"]],
             [
                 ("app", MAP, ("lam", 0, ("app", S("f1"), ("app", S("f2"), V(0))))),
                 ("lam", 1, MAPPED(S("f1"), MAPPED(("lam", 0, ("app", S("f2"), V(0))), V(1)))),
@@ -596,7 +529,7 @@ def per_rule_cases():
         Case(
             "map-fission-blocked",
             [("app", MAP, ("lam", 0, ("app", ("app", S("f1"), V(0)), S("f2"))))],
-            [map_fission()],
+            [RULES["map-fission"]],
             [
                 ("app", MAP, ("lam", 0, ("app", ("app", S("f1"), V(0)), S("f2")))),
                 ("lam", 1, MAPPED(("app", S("f1"), V(0)), MAPPED(("lam", 0, S("f2")), V(1)))),
@@ -666,7 +599,7 @@ def goal_cases(n_params=(0, 1), rounds=8, wrap_lams=True, nfun=4, dims=2):
         A_, B_ = wrap(a_body), wrap(b_body)
         tag = "" if wrap_lams else "-free"
         nm = f"goal{tag}-{dims}d-{nfun}f-N{n}"
-        cs.append(Case(nm, [A_], [r() for r in ALL_RULES], [A_, B_], rounds=rounds))
+        cs.append(Case(nm, [A_], list(ALL_RULES), [A_, B_], rounds=rounds))
     return cs
 
 
@@ -713,7 +646,7 @@ def unbound_cases():
         Case(
             "let-slot-free-in-value",
             [("app", L, V(0)), ("app", L, V(1))],
-            [let_unused()],
+            [RULES["let-unused"]],
             [("app", L, V(0)), ("app", L, V(1)), ("app", L, S("cc"))],
         )
     )
@@ -808,7 +741,7 @@ def rand_case(rng, i):
         if len(probes) == 9:
             break
     probes += [("lam", 90, ("app", S("f1"), V(90))), S("f1")]
-    return Case(f"fuzz{i}", [t], [r() for r in rules], probes, rounds=3)
+    return Case(f"fuzz{i}", [t], list(rules), probes, rounds=3)
 
 
 def check_vacuity(case):
@@ -844,9 +777,10 @@ EGG_HEADER = """;;; GENERATED by `python3 slotted-experiments/xdiff/xarray.py eg
 ;;; `slotted-experiments/xdiff/xarray.py` runs the same rules against the reference
 ;;; `slotted-egraphs` crate; this file is the runnable, self-checking half.
 ;;;
-;;; The language is `slotted-experiments/languages/lambda.egg`, one constructor per
-;;; operator -- the shape the reference's `define_language!` produces -- with
-;;; `lambda.ref` beside it saying what the reference calls each one:
+;;; The language and the rules are `slotted-tests/array.egg`, written in the slotted
+;;; language -- one constructor per operator, the shape the reference's
+;;; `define_language!` produces -- with `array.ref` beside it saying what the reference
+;;; calls each one:
 ;;;
 ;;;   Lam(Bind<body>)          (lam $x b)      (Lam {0->x} (Var 0) mb b)
 ;;;   App(a, b)                (app a b)       (App ma a mb b)

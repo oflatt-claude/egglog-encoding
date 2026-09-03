@@ -143,7 +143,10 @@ class Source:
             if form in self.spec:  # a nullary constructor, written bare
                 return (form,)
             if form.startswith("?"):
-                return form
+                # a pattern variable. Its NAME is the identifier without the sigil,
+                # which is the convention `flatten` keys atoms by and `pat_sexpr`
+                # renders back with the `?`, so the reference side reads it too.
+                return form[1:]
             assert form in self.lang.bound, f"{self.path.name}: {form!r} is not bound"
             return ("name", form)
         head, args = form[0], form[1:]
@@ -227,7 +230,7 @@ def keywords(src, rest):
     return out
 
 
-def compile_rewrite(src, form, tail=")", bugs=frozenset()):
+def compile_rewrite(src, form, tail=")", bugs=frozenset(), **kw):
     """`(rewrite lhs rhs [:name n] [:when c] [:lead N] [:fresh $s...])`.
 
     `:lead` names the atom the query starts from, counting over the flattened pattern.
@@ -243,20 +246,9 @@ def compile_rewrite(src, form, tail=")", bugs=frozenset()):
     `tail` closes the rule and is where a ruleset and a name go, so it carries the
     closing paren -- the generated `sdql` file wants one, a compiled test does not.
     """
-    _, lhs, rhs, *rest = form
-    conds, fresh, lead = [], [], 0
-    for kw, vals in keywords(src, rest):
-        if kw == ":lead":
-            lead = int(vals[0])
-        elif kw == ":fresh":
-            fresh += list(vals)
-        elif kw == ":when":
-            want, slot, *pvars = vals[0]
-            assert want in ("free", "not-free"), f"unknown condition {want!r}"
-            # a pattern variable is named by the string the pattern writes, `?` and
-            # all, because that is what `flatten` keys the atoms by
-            conds.append((want == "free", slot, list(pvars)))
-        # `:name` is for the reader and for the generated file's tail, not the rule
+    parts = rewrite_parts(src, form)
+    conds, fresh, lead = parts["conds"], parts["fresh"], parts["lead"]
+    lhs, rhs = parts["lhs"], parts["rhs"]
     root, atoms = enc.flatten(src.lang, src.term(lhs, ground=False))
     order = enc.connected_order(src.lang, atoms, first=lead)
     return enc.compile_rule(
@@ -267,15 +259,37 @@ def compile_rewrite(src, form, tail=")", bugs=frozenset()):
         fresh=fresh,
         bugs=bugs,
         tail=tail,
+        # a caller's own spellings -- `slot_prefix`, `fresh_batch` -- so a generator
+        # that already committed its output can keep emitting the same text
+        **kw,
     )
+
+
+def rewrite_parts(src, form):
+    """One `(rewrite ...)` broken out, so nothing parses these keywords twice.
+
+    `xarray.py` needs the same pieces to build its own rule objects, and a second
+    reading of `:when` is a second place for the two to disagree.
+    """
+    assert form[0] == "rewrite", form[:1]
+    out = {"name": None, "lhs": form[1], "rhs": form[2], "conds": [], "fresh": [], "lead": 0}
+    for key, vals in keywords(src, form[3:]):
+        if key == ":name":
+            out["name"] = vals[0]
+        elif key == ":lead":
+            out["lead"] = int(vals[0])
+        elif key == ":fresh":
+            out["fresh"] += list(vals)
+        elif key == ":when":
+            want, slot, *pvars = vals[0]
+            assert want in ("free", "not-free"), f"unknown condition {want!r}"
+            out["conds"].append((want == "free", slot, [v.lstrip("?") for v in pvars]))
+    return out
 
 
 def rule_name(src, form):
     """A rewrite's `:name`, or None."""
-    for kw, vals in keywords(src, form[3:]):
-        if kw == ":name":
-            return vals[0]
-    return None
+    return rewrite_parts(src, form)["name"]
 
 
 def compile_check(src, form):

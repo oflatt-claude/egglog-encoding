@@ -31,7 +31,7 @@ XMULTI = ROOT / "slotted-experiments" / "xmulti" / "target" / "debug" / "xmulti"
 # hand. `--update` rewrites them; `generated-drift` fails if they are stale.
 GENERATED = {
     "slotted-tests/generated/slotted-node-rules.egg": ("slotted-experiments/gen-node-rules.py",),
-    "slotted-tests/generated/slotted-lang-lambda.egg": ("slotted-experiments/gen-node-rules.py",),
+    "slotted-tests/generated/slotted-lang-array.egg": ("slotted-experiments/gen-node-rules.py",),
     "slotted-tests/generated/slotted-lang-sdql.egg": ("slotted-experiments/gen-node-rules.py",),
     "slotted-tests/generated/slotted-lang-toy.egg": ("slotted-experiments/gen-node-rules.py",),
     "slotted-tests/generated/slotted-sdql-rules.egg": ("slotted-experiments/gen-sdql-rules.py",),
