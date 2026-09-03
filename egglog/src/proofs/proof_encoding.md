@@ -390,21 +390,18 @@ evaluate:
 Naming a position means every proof row needs an action to name, so a command
 the checker's program does not record cannot leave proof-bearing state behind.
 Proof mode therefore rejects proof-producing operations inside `(fail …)`:
-`set`, `union`, an eq-sort `let` even over an existing value, any action
-expression containing a term-building eq-sort call, and `extract` when its
-expression contains such a call. An extract may read an existing global, which
-creates no state. Output of an eq-sort value is conservatively unsupported,
-including an existing global whose encoded view has a reshaped signature. Proof
-mode also rejects `push`/`pop`, plus a rule or function with `:merge` even in the
-leading position. Checks and base-only actions such as `log` remain allowed.
+`set`, `union`, term-building actions, `extract` expressions that build terms,
+and any eq-sort `output`. It also rejects `push`/`pop`; term- and proof-encoded
+modes reject `input`. Checks, existing-global extracts, and base-only actions
+such as `log` remain allowed.
 
-Both term- and proof-encoded modes reject an `input` inside `fail` and restrict
-definitions to a leading safe prefix. Once that prefix ends, a sort,
-constructor, function, rule, ruleset, `unstable-combined-ruleset`, or global
-`let` definition is rejected: eager typechecking could retain a definition that
-short-circuiting execution skips. Safe leading declarations remain allowed,
-including a sole base-output `:no-merge` function. A leading global `let` is
-reachable but ends that guaranteed prefix because evaluating it can fail.
+Every mode rejects `include` and persistent definitions inside `fail`, including
+nested `fail`: sorts, datatypes, constructors, relations, functions, indexes,
+rules and rulesets, rewrites, top-level `let`, and `prove`. User-defined commands
+are also rejected because their effects are not statically known. Such commands
+could be resolved eagerly even though execution skips them after an earlier
+failure. During proof testing, allowed checks inside `fail` remain negative
+assertions.
 
 The separate top-level `(extract e)` case for a term not already present remains
 open ([issue #80](https://github.com/saulshanabrook/egglog-encoding/issues/80)).
@@ -426,9 +423,7 @@ the site rather than by the format, so each is declared where it is first needed
 rather than in the header: `@Rule_<k>`, a rule proof carrying its `k` body
 premises inline; `@Packed_<k>`, one row standing for a whole composition over
 `k` proofs (see [Packed rows](#packed-rows)); and `@ProjPrim_<k>`, a body call
-reading an element out of a container, carrying a proof per argument. Conversion
-derives the container argument from the resolved specialized primitive's
-signature.
+reading an element out of a container, carrying a proof per argument.
 
 The union-find and view proof columns become real:
 

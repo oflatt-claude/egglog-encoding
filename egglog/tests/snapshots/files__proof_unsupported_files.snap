@@ -5,7 +5,6 @@ expression: snapshot
 before-proofs.egg
 begin-block.egg
 bignum.egg
-combined-nested.egg
 complex-merge-prim.egg
 container-query-built-read.egg
 container-rebuild.egg

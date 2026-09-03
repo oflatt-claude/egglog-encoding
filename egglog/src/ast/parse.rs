@@ -625,6 +625,7 @@ impl Parser {
                 // (constructor <name> (<input sort>*) <output sort>)
                 // (constructor <name> (<input sort>*) <output sort> :cost <cost>)
                 // (constructor <name> (<input sort>*) <output sort> :unextractable)
+                // (constructor <name> (<input sort>*) <output sort>)
                 match tail {
                     [name, inputs, output, rest @ ..] => {
                         let mut cost = None;

@@ -940,27 +940,18 @@ impl EGraph {
         kind: TableKind,
         input_arity: usize,
         output_arity: usize,
-        output_index: usize,
     ) {
         let info = &self.funcs[function];
+        let projection = TableReadProjection {
+            kind,
+            input_arity,
+            output_arity,
+        };
         assert!(
-            input_arity <= output_index,
-            "table `{}` read inputs must be a prefix before its selected output",
-            info.name
-        );
-        assert!(
-            output_arity > 0,
-            "table `{}` must expose at least one output column",
-            info.name
-        );
-        assert!(
-            output_index + output_arity <= info.schema.len(),
-            "table `{}` read projection exceeds its physical schema",
-            info.name
-        );
-        assert!(
-            kind != TableKind::Constructor || output_arity == 1,
-            "constructor `{}` must expose exactly one eclass output",
+            projection.output_arity > 0
+                && projection.input_arity + projection.output_arity <= info.schema.len()
+                && (projection.kind != TableKind::Constructor || projection.output_arity == 1),
+            "invalid read projection for table `{}`",
             info.name
         );
 
@@ -973,12 +964,7 @@ impl EGraph {
             action.table, info.table,
             "action registry entry points at the wrong physical table"
         );
-        action.read_projection = TableReadProjection {
-            kind,
-            input_arity,
-            output_arity,
-            output_index,
-        };
+        action.read_projection = projection;
     }
 
     /// Run the given rules, returning whether the database changed.
@@ -2028,7 +2014,6 @@ struct TableReadProjection {
     kind: TableKind,
     input_arity: usize,
     output_arity: usize,
-    output_index: usize,
 }
 
 /// A requested read operation does not apply to the table's visible shape.
@@ -2078,7 +2063,6 @@ impl TableAction {
                 kind,
                 input_arity: func_info.n_keys,
                 output_arity: func_info.schema.len() - func_info.n_keys,
-                output_index: func_info.n_keys,
             },
         }
     }
@@ -2126,14 +2110,8 @@ impl TableAction {
     pub fn lookup_visible(&self, state: &ExecutionState, key: &[Value]) -> Option<Value> {
         debug_assert_eq!(key.len(), self.read_projection.input_arity);
         let physical_input_arity = self.table_math.num_keys();
-        if physical_input_arity == self.read_projection.input_arity
-            && self.read_projection.output_index >= physical_input_arity
-        {
-            return self.lookup_value_col(
-                state,
-                key,
-                self.read_projection.output_index - physical_input_arity,
-            );
+        if physical_input_arity == self.read_projection.input_arity {
+            return self.lookup_value_col(state, key, 0);
         }
 
         let mut found = None;
@@ -2244,11 +2222,10 @@ impl TableAction {
         mut f: impl FnMut(&[Value], Value, bool) -> bool,
     ) {
         let input_arity = self.read_projection.input_arity;
-        let output_index = self.read_projection.output_index;
         self.for_each_while(state, |row| {
             f(
                 &row.vals[..input_arity],
-                row.vals[output_index],
+                row.vals[input_arity],
                 row.subsumed,
             )
         });

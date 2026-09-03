@@ -210,7 +210,7 @@ pub(crate) fn desugar_command(
             // one `fail`, so the assertion covers all of them.
             let mut desugared = vec![];
             for cmd in cmds {
-                if let Command::Include(..) = cmd {
+                if matches!(&cmd, Command::Include(..)) {
                     // `include` is expanded before desugaring, so it never reaches
                     // here from a top-level program; only a wrapped one can.
                     return Err(Error::DesugarError(
@@ -218,15 +218,32 @@ pub(crate) fn desugar_command(
                         "include is not allowed inside (fail ...)".to_string(),
                     ));
                 }
-                match cmd {
-                    Command::Check(check_span, facts) if proof_testing => {
-                        // A check under `fail` is a negative assertion. Turning it into a
-                        // proof-testing rule would make this non-mutating command leave a hidden
-                        // definition behind, so keep it as a check.
-                        desugared.push(NCommand::Check(check_span, facts));
-                    }
-                    cmd => desugared.extend(desugar_command(cmd, parser, proof_testing)?),
+                if matches!(
+                    &cmd,
+                    Command::Sort { .. }
+                        | Command::Datatype { .. }
+                        | Command::Datatypes { .. }
+                        | Command::Constructor { .. }
+                        | Command::Relation { .. }
+                        | Command::Function { .. }
+                        | Command::Index { .. }
+                        | Command::AddRuleset(..)
+                        | Command::UnstableCombinedRuleset(..)
+                        | Command::Rule { .. }
+                        | Command::Rewrite(..)
+                        | Command::BiRewrite(..)
+                        | Command::Prove(..)
+                        | Command::Action(Action::Let(..))
+                        | Command::LetBegin(..)
+                        | Command::UserDefined(..)
+                ) {
+                    return Err(Error::DesugarError(
+                        span.clone(),
+                        "definitions and user-defined commands are not allowed inside (fail ...)"
+                            .to_string(),
+                    ));
                 }
+                desugared.extend(desugar_command(cmd, parser, false)?);
             }
             if desugared.is_empty() {
                 return Err(Error::DesugarError(

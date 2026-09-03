@@ -905,12 +905,6 @@ pub enum ProofEncodingUnsupportedReason {
     )]
     FailActionCommand,
     #[error(
-        "`fail` wrapping this definition is not supported by the term/proof encoding. A \
-         definition after a potentially failing command may be skipped at execution despite \
-         being typechecked; merge-bearing functions and rules are also hidden from proof checking."
-    )]
-    FailDefinitionCommand,
-    #[error(
         "`fail` wrapping `push` or `pop` is not supported in proof mode. The scope change can \
          survive the wrapper, but proof checking does not replay commands inside `fail`."
     )]
@@ -962,7 +956,7 @@ pub fn program_supports_proofs(commands: &[ResolvedCommand], type_info: &TypeInf
         .collect();
     for command in commands {
         if let Err(reason) =
-            command_supports_proof_encoding_impl(command, type_info, &let_globals, true, true)
+            command_supports_proof_encoding_impl(command, type_info, &let_globals, true)
         {
             let cmd = command.to_string();
             log::debug!(
@@ -1423,13 +1417,7 @@ pub(crate) fn command_supports_proof_encoding(
     type_info: &TypeInfo,
     proofs_enabled: bool,
 ) -> Result<(), ProofEncodingUnsupportedReason> {
-    command_supports_proof_encoding_impl(
-        command,
-        type_info,
-        &HashSet::default(),
-        proofs_enabled,
-        true,
-    )
+    command_supports_proof_encoding_impl(command, type_info, &HashSet::default(), proofs_enabled)
 }
 
 /// [`command_supports_proof_encoding`] with `extra_globals`: let-bound names
@@ -1440,7 +1428,6 @@ fn command_supports_proof_encoding_impl(
     type_info: &TypeInfo,
     extra_globals: &HashSet<String>,
     proofs_enabled: bool,
-    definition_prefix_reachable: bool,
 ) -> Result<(), ProofEncodingUnsupportedReason> {
     // `:unsafe-seminaive` rules perform arbitrary reads against the live
     // database; the term/proof encoding can't represent that.
@@ -1604,34 +1591,9 @@ fn command_supports_proof_encoding_impl(
             }
         }
         GenericCommand::Fail(_, commands) => {
-            let mut definition_prefix_reachable = definition_prefix_reachable;
             for command in commands {
-                let prefix_preserving_definition = matches!(
-                    command,
-                    GenericCommand::Sort { .. }
-                        | GenericCommand::Constructor { .. }
-                        | GenericCommand::Function { .. }
-                        | GenericCommand::Index { .. }
-                        | GenericCommand::AddRuleset(..)
-                );
-                // A combined ruleset or rule can fail while being installed, so neither can
-                // guarantee that a following definition will execute.
-                let definition = prefix_preserving_definition
-                    || matches!(
-                        command,
-                        GenericCommand::Rule { .. }
-                            | GenericCommand::UnstableCombinedRuleset(..)
-                            | GenericCommand::Action(ResolvedAction::Let(..))
-                    );
-                if definition && !definition_prefix_reachable {
-                    return Err(ProofEncodingUnsupportedReason::FailDefinitionCommand);
-                }
                 if proofs_enabled {
                     match command {
-                        GenericCommand::Function { merge: Some(_), .. }
-                        | GenericCommand::Rule { .. } => {
-                            return Err(ProofEncodingUnsupportedReason::FailDefinitionCommand);
-                        }
                         GenericCommand::Action(action)
                             if fail_action_produces_proof(action, type_info) =>
                         {
@@ -1646,13 +1608,13 @@ fn command_supports_proof_encoding_impl(
                             return Err(ProofEncodingUnsupportedReason::FailActionCommand);
                         }
                         GenericCommand::Extract(_, expr, variants)
-                            if expr_interns_non_global_term(expr, type_info)
-                                || expr_interns_non_global_term(variants, type_info) =>
+                            if expr_interns_term(expr, Some(type_info))
+                                || expr_interns_term(variants, Some(type_info)) =>
                         {
                             return Err(ProofEncodingUnsupportedReason::FailActionCommand);
                         }
                         GenericCommand::Output { exprs, .. }
-                            if exprs.iter().any(expr_interns_term) =>
+                            if exprs.iter().any(|expr| expr_interns_term(expr, None)) =>
                         {
                             return Err(ProofEncodingUnsupportedReason::FailActionCommand);
                         }
@@ -1670,11 +1632,7 @@ fn command_supports_proof_encoding_impl(
                     type_info,
                     extra_globals,
                     proofs_enabled,
-                    definition_prefix_reachable,
                 )?;
-                if !prefix_preserving_definition {
-                    definition_prefix_reachable = false;
-                }
             }
             Ok(())
         }
@@ -1955,44 +1913,24 @@ fn fail_action_produces_proof(action: &ResolvedAction, type_info: &TypeInfo) -> 
         ResolvedAction::Let(_, _, expr) if expr.output_type().is_eq_sort()
     ) || matches!(action, ResolvedAction::Set(..) | ResolvedAction::Union(..))
         || action_nodes(action).into_iter().any(|node| match node {
-            ActionNode::Expr(expr) => expr_interns_non_global_term(expr, type_info),
+            ActionNode::Expr(expr) => is_term_call(expr, Some(type_info)),
             ActionNode::Row(_) => false,
         })
 }
 
-/// Whether evaluating `expr` can intern an equality-sort term whose existence
-/// proof would outlive a failing command.
-fn expr_interns_term(expr: &ResolvedExpr) -> bool {
-    expr.find(&mut |expr| {
-        (matches!(expr, ResolvedExpr::Call(..)) && expr.output_type().is_eq_sort()).then_some(())
-    })
-    .is_some()
+fn expr_interns_term(expr: &ResolvedExpr, type_info: Option<&TypeInfo>) -> bool {
+    expr.find(&mut |expr| is_term_call(expr, type_info).then_some(()))
+        .is_some()
 }
 
-/// Like [`expr_interns_term`], except a known global's nullary custom call is
-/// only a lookup of its existing value. Static proof-support checking sees
-/// globals in this post-`remove_globals` form, while live source checking sees
-/// the same expression as a variable. This intentionally uses the current
-/// type information rather than the whole-program `extra_globals`: that set can
-/// contain a popped global whose name a later ordinary function reuses. A
-/// static file check may therefore conservatively reject a lookup inside a
-/// scope that has since been popped.
-fn expr_interns_non_global_term(expr: &ResolvedExpr, type_info: &TypeInfo) -> bool {
-    expr.find(&mut |expr| {
-        let ResolvedExpr::Call(_, call, _) = expr else {
-            return None;
-        };
-        if !expr.output_type().is_eq_sort() {
-            return None;
-        }
-        if let ResolvedCall::Func(func_type) = call
-            && type_info.is_global(&func_type.name)
-        {
-            return None;
-        }
-        Some(())
-    })
-    .is_some()
+/// A known global's nullary call only reads an existing term. Use current type
+/// information so a popped global does not hide a later function of the same name.
+fn is_term_call(expr: &ResolvedExpr, type_info: Option<&TypeInfo>) -> bool {
+    let ResolvedExpr::Call(_, call, _) = expr else {
+        return false;
+    };
+    expr.output_type().is_eq_sort()
+        && !matches!((type_info, call), (Some(info), ResolvedCall::Func(func)) if info.is_global(&func.name))
 }
 
 /// Every expression node of a rule body, in a canonical pre-order: the facts in

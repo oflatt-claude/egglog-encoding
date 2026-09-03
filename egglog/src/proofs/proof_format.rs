@@ -275,8 +275,7 @@ pub(crate) enum SynthKey {
     Sym(ProofId),
     Trans(ProofId, ProofId),
     Congr(ProofId, usize, ProofId),
-    /// A positional projection synthesized while expanding a nested
-    /// [`RawProof::ProjPrim`].
+    /// A positional projection from an existing proof.
     Proj(ProofId, usize),
     /// A premise the encoding stored no row for (see [`recomputable_premises`]).
     Fiat(TermId, TermId),
@@ -798,25 +797,11 @@ impl ProofStore {
         let ResolvedExpr::Call(_, ResolvedCall::Primitive(prim), _) = expr else {
             panic!("body node {body_index} of rule {rule} is not a primitive call");
         };
-        let mut typed_holders =
-            prim.input().iter().enumerate().filter_map(|(index, sort)| {
-                holds_sort(sort, prim.output().name()).then_some(index)
-            });
-        let typed_container_index = typed_holders.next().unwrap_or_else(|| {
-            panic!(
-                "primitive {} at body node {body_index} of rule {rule} has no input sort holding \
-                 its output sort {}",
-                prim.name(),
-                prim.output().name()
-            )
-        });
-        assert!(
-            typed_holders.next().is_none(),
-            "primitive {} at body node {body_index} of rule {rule} has several input sorts \
-             holding its output sort {}, which proof support should have rejected",
-            prim.name(),
-            prim.output().name()
-        );
+        let typed_container_index = prim
+            .input()
+            .iter()
+            .position(|sort| holds_sort(sort, prim.output().name()))
+            .expect("proof support should have found one container for a primitive projection");
         let validator = prim
             .validator()
             .unwrap_or_else(|| {
@@ -1234,14 +1219,9 @@ impl ProofStore {
             }
             RawProof::Proj(inner_raw, child_index) => {
                 let inner_id = self.convert_raw_proof(prog, globals, raw_store, *inner_raw);
-                let child = self.term_child(self.id_to_proof[inner_id].rhs(), *child_index);
-                Proof {
-                    proposition: Proposition::new(child, child),
-                    justification: Justification::Proj {
-                        proof: inner_id,
-                        child_index: *child_index,
-                    },
-                }
+                let projected = self.push_projection(inner_id, *child_index);
+                self.proof_id.insert(raw_proof.clone(), projected);
+                return projected;
             }
             RawProof::ProjPrim(rule, body_index, arg_raws) => {
                 let arg_ids: Vec<ProofId> = arg_raws
@@ -1260,14 +1240,6 @@ impl ProofStore {
                 // The resolved signature identifies the one argument whose sort
                 // can hold the result. An unrelated argument term may contain the
                 // same child, so term occurrence alone is not provenance.
-                let container_raw = *arg_raws.get(container_index).unwrap_or_else(|| {
-                    panic!(
-                        "primitive projection: the resolved primitive at body node {body_index} \
-                         of rule {rule} identifies container argument {container_index}, but the \
-                         projection has {} argument proofs",
-                        arg_raws.len()
-                    )
-                });
                 let container_id = arg_ids[container_index];
                 let container_term = arg_terms[container_index];
                 let path = self
@@ -1280,31 +1252,8 @@ impl ProofStore {
                         )
                     });
                 let mut projected = container_id;
-                for (depth, child_index) in path.into_iter().enumerate() {
-                    let child = self.term_child(self.id_to_proof[projected].rhs(), child_index);
-                    let proof = Proof {
-                        proposition: Proposition::new(child, child),
-                        justification: Justification::Proj {
-                            proof: projected,
-                            child_index,
-                        },
-                    };
-                    projected = if depth == 0 {
-                        // Preserve sharing with an explicit projection of the
-                        // typed container argument when one exists elsewhere in
-                        // the extracted raw proof.
-                        let positional = RawProof::Proj(container_raw, child_index);
-                        match self.proof_id.get(&positional) {
-                            Some(&id) => id,
-                            None => {
-                                let id = self.id_to_proof.push(proof);
-                                self.proof_id.insert(positional, id);
-                                id
-                            }
-                        }
-                    } else {
-                        self.push_shared_proof(SynthKey::Proj(projected, child_index), proof)
-                    };
+                for child_index in path {
+                    projected = self.push_projection(projected, child_index);
                 }
                 self.proof_id.insert(raw_proof.clone(), projected);
                 return projected;
@@ -1754,6 +1703,19 @@ impl ProofStore {
         })
     }
 
+    /// Construct a positional projection, sharing it with every projection
+    /// from the same proof and child index.
+    fn push_projection(&mut self, proof: ProofId, child_index: usize) -> ProofId {
+        let child = self.term_child(self.id_to_proof[proof].rhs(), child_index);
+        self.push_shared_proof(
+            SynthKey::Proj(proof, child_index),
+            Proof {
+                proposition: Proposition::new(child, child),
+                justification: Justification::Proj { proof, child_index },
+            },
+        )
+    }
+
     /// The positional projection indexes from `ancestor` to a proper descendant
     /// equal to `target`, choosing the first depth-first occurrence. The
     /// explicit stack keeps deeply nested proof terms off the Rust call stack.
@@ -1773,9 +1735,7 @@ impl ProofStore {
             };
             let Some(child) = child else {
                 stack.pop();
-                if !stack.is_empty() {
-                    path.pop();
-                }
+                path.pop();
                 continue;
             };
 
@@ -1784,11 +1744,7 @@ impl ProofStore {
             if child == target {
                 return Some(path);
             }
-            if !visited.insert(child) {
-                path.pop();
-                continue;
-            }
-            if matches!(self.term_dag.get(child), Term::App(..)) {
+            if visited.insert(child) && matches!(self.term_dag.get(child), Term::App(..)) {
                 stack.push((child, 0));
             } else {
                 path.pop();

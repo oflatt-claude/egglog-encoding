@@ -361,14 +361,6 @@ pub struct Function {
     backend_id: egglog_bridge::FunctionId,
 }
 
-#[derive(Clone, Copy)]
-struct VisibleRowLayout {
-    kind: TableKind,
-    input_arity: usize,
-    output_arity: usize,
-    output_index: usize,
-}
-
 impl Function {
     /// Get the name of the function.
     pub fn name(&self) -> &str {
@@ -408,32 +400,28 @@ impl Function {
     }
 
     /// The source-level row layout exposed by the Rust APIs. Encoded views use
-    /// physical function tables with internal output columns, but retain their
+    /// physical function tables with an internal row layout, but retain their
     /// source constructor/function kind and select only the source output.
-    fn visible_row_layout(&self) -> VisibleRowLayout {
+    fn table_read_projection(&self) -> (TableKind, usize, usize) {
         let rows_are_enodes = self.rows_are_enodes();
-        let (input_arity, output_index) = if rows_are_enodes {
-            (
-                self.extraction_num_children(),
-                self.extraction_output_index(),
-            )
+        let input_arity = if rows_are_enodes {
+            self.extraction_layout().1
         } else {
-            (self.schema.input.len(), self.schema.input.len())
+            self.schema.input.len()
         };
-        VisibleRowLayout {
-            kind: if rows_are_enodes {
+        (
+            if rows_are_enodes {
                 TableKind::Constructor
             } else {
                 TableKind::Function
             },
             input_arity,
-            output_arity: if rows_are_enodes {
+            if rows_are_enodes {
                 1
             } else {
                 self.schema.outputs.len() - usize::from(self.is_fd_view())
             },
-            output_index,
-        }
+        )
     }
 }
 
@@ -638,36 +626,6 @@ struct ResolvedNCommandsWithOutput {
     resolved: Vec<ResolvedNCommand>,
     /// In proof mode, populated with the desugared program before instrumented with proofs
     resolved_before_proofs: Vec<ResolvedNCommand>,
-}
-
-/// Whether resolving this encoded command needs to be atomic. Definitions and
-/// global lets inside `fail` are typechecked eagerly even though execution may
-/// stop before reaching them, and the later encoding/shadowing passes can still
-/// reject the command after that eager state has been updated.
-fn fail_resolution_may_define(command: &Command) -> bool {
-    let Command::Fail(_, commands) = command else {
-        return false;
-    };
-    commands.iter().any(|command| {
-        matches!(
-            command,
-            Command::Sort { .. }
-                | Command::Datatype { .. }
-                | Command::Datatypes { .. }
-                | Command::Constructor { .. }
-                | Command::Relation { .. }
-                | Command::Function { .. }
-                | Command::Index { .. }
-                | Command::AddRuleset(..)
-                | Command::UnstableCombinedRuleset(..)
-                | Command::Rule { .. }
-                | Command::Rewrite(..)
-                | Command::BiRewrite(..)
-                | Command::Prove(..)
-                | Command::Action(Action::Let(..))
-                | Command::LetBegin(..)
-        ) || fail_resolution_may_define(command)
-    })
 }
 
 #[derive(Debug, Error)]
@@ -1235,14 +1193,9 @@ impl EGraph {
             can_subsume,
             backend_id,
         };
-        let visible = function.visible_row_layout();
-        self.backend.set_table_read_projection(
-            backend_id,
-            visible.kind,
-            visible.input_arity,
-            visible.output_arity,
-            visible.output_index,
-        );
+        let (kind, input_arity, output_arity) = function.table_read_projection();
+        self.backend
+            .set_table_read_projection(backend_id, kind, input_arity, output_arity);
 
         let old = self.functions.insert(decl.name.clone(), function);
         if old.is_some() {
@@ -1676,8 +1629,8 @@ impl EGraph {
                 .ok_or_else(|| crate::api::ApiError::MissingTable {
                     name: name.to_owned(),
                 })?;
-        let visible = function.visible_row_layout();
-        if visible.kind == TableKind::Constructor {
+        let (kind, input_arity, output_arity) = function.table_read_projection();
+        if kind == TableKind::Constructor {
             return Err(crate::api::ApiError::WrongSubtype {
                 name: name.to_owned(),
                 expected: "function",
@@ -1685,7 +1638,7 @@ impl EGraph {
             }
             .into());
         }
-        if visible.output_arity != 1 {
+        if output_arity != 1 {
             return Err(crate::api::ApiError::TupleOutputUnsupported {
                 name: name.to_owned(),
                 method: "function_entries",
@@ -1694,8 +1647,8 @@ impl EGraph {
         }
         self.backend.for_each_while(function.backend_id, |row| {
             f(FunctionEntry {
-                inputs: &row.vals[..visible.input_arity],
-                output: row.vals[visible.output_index],
+                inputs: &row.vals[..input_arity],
+                output: row.vals[input_arity],
                 subsumed: row.subsumed,
             })
         });
@@ -1728,8 +1681,8 @@ impl EGraph {
                 .ok_or_else(|| crate::api::ApiError::MissingTable {
                     name: name.to_owned(),
                 })?;
-        let visible = function.visible_row_layout();
-        if visible.kind != TableKind::Constructor {
+        let (kind, input_arity, _) = function.table_read_projection();
+        if kind != TableKind::Constructor {
             return Err(crate::api::ApiError::WrongSubtype {
                 name: name.to_owned(),
                 expected: "constructor",
@@ -1739,8 +1692,8 @@ impl EGraph {
         }
         self.backend.for_each_while(function.backend_id, |row| {
             f(Enode {
-                children: &row.vals[..visible.input_arity],
-                eclass: row.vals[visible.output_index],
+                children: &row.vals[..input_arity],
+                eclass: row.vals[input_arity],
                 subsumed: row.subsumed,
             })
         });
@@ -2352,31 +2305,13 @@ impl EGraph {
                 return Ok(vec![res]);
             }
             ResolvedNCommand::Fail(span, cmds) => {
-                let mut any_failed = false;
                 for c in cmds {
-                    let named_definition = matches!(
-                        &c,
-                        ResolvedNCommand::Sort { .. }
-                            | ResolvedNCommand::Function(_)
-                            | ResolvedNCommand::Index { .. }
-                            | ResolvedNCommand::AddRuleset(..)
-                            | ResolvedNCommand::UnstableCombinedRuleset(..)
-                    )
-                    .then(|| c.clone());
                     if let Err(e) = self.run_command(c) {
                         log::info!("Command failed as expected: {e}");
-                        any_failed = true;
-                        break;
-                    }
-                    // Shadowing checks use a tentative name scope for `fail`, because later
-                    // commands may never run. Commit only definitions that actually completed.
-                    if let Some(command) = named_definition {
-                        self.names.check_shadowing(&command)?;
+                        return Ok(vec![]);
                     }
                 }
-                if !any_failed {
-                    return Err(Error::ExpectFail(span));
-                }
+                return Err(Error::ExpectFail(span));
             }
             ResolvedNCommand::Input {
                 span,
@@ -2778,28 +2713,7 @@ impl EGraph {
     fn resolve_command(&mut self, command: Command) -> Result<ResolvedNCommands, Error> {
         let lowering_timer = Instant::now();
         let nested_before = self.overall_report.process_time();
-        let resolve_atomically = self.proof_state.original_typechecking.is_some()
-            && fail_resolution_may_define(&command);
-        let resolved = if resolve_atomically {
-            // Backend clones share their action registry so primitive callbacks can keep using
-            // live table handles. Snapshot that one shared component explicitly; every other
-            // resolution mutation stays isolated in the tentative e-graph.
-            let registry = self.backend.action_registry().clone();
-            let registry_before = registry.read().unwrap().clone();
-            let mut tentative = self.clone();
-            match tentative.resolve_command_inner(command) {
-                Ok(resolved) => {
-                    *self = tentative;
-                    Ok(resolved)
-                }
-                Err(error) => {
-                    *registry.write().unwrap() = registry_before;
-                    Err(error)
-                }
-            }
-        } else {
-            self.resolve_command_inner(command)
-        };
+        let resolved = self.resolve_command_inner(command);
         let nested = self
             .overall_report
             .process_time()
@@ -4115,70 +4029,34 @@ mod tests {
     }
 
     #[test]
-    fn proof_support_accepts_fail_wrapped_existing_global_lookups() {
-        let mut egraph = EGraph::default();
-        let resolved = egraph
-            .resolve_program(
-                None,
-                r#"
-                (datatype N (A))
-                (let $a (A))
-                (fail (extract $a -1))
-                "#,
-            )
-            .unwrap();
-        assert!(program_supports_proofs(&resolved, &egraph.type_info));
-
-        let mut egraph = EGraph::default();
-        let resolved = egraph
-            .resolve_program(
-                None,
-                r#"
-                (datatype N (A))
-                (relation R (N))
-                (let $a (A))
-                (R $a)
-                (fail (delete (R $a)) (panic "stop"))
-                "#,
-            )
-            .unwrap();
-        assert!(program_supports_proofs(&resolved, &egraph.type_info));
-    }
-
-    #[test]
-    fn proof_support_rejects_fail_wrapped_output_of_existing_global() {
-        let mut egraph = EGraph::default();
-        let resolved = egraph
-            .resolve_program(
-                None,
-                r#"
-                (datatype N (A))
-                (let $a (A))
-                (fail (output "term.txt" $a) (panic "stop"))
-                "#,
-            )
-            .unwrap();
-        assert!(!program_supports_proofs(&resolved, &egraph.type_info));
-    }
-
-    #[test]
-    fn proof_support_does_not_confuse_popped_global_with_later_function() {
-        let mut egraph = EGraph::default();
-        let resolved = egraph
-            .resolve_program(
-                None,
-                r#"
-                (datatype N (A))
-                (push)
-                (let x (A))
-                (pop)
-                (function x () N :merge old)
-                (set (x) (A))
-                (fail (extract (x) -1))
-                "#,
-            )
-            .unwrap();
-        assert!(!program_supports_proofs(&resolved, &egraph.type_info));
+    fn proof_support_classifies_fail_wrapped_term_reads() {
+        for (source, expected) in [
+            ("(datatype N (A)) (let $a (A)) (fail (extract $a -1))", true),
+            (
+                "(datatype N (A)) (relation R (N)) (let $a (A)) \
+                 (R $a) (fail (delete (R $a)) (panic \"stop\"))",
+                true,
+            ),
+            (
+                "(datatype N (A)) (let $a (A)) \
+                 (fail (output \"term.txt\" $a) (panic \"stop\"))",
+                false,
+            ),
+            (
+                "(datatype N (A)) (push) (let x (A)) (pop) \
+                 (function x () N :merge old) (set (x) (A)) \
+                 (fail (extract (x) -1))",
+                false,
+            ),
+        ] {
+            let mut egraph = EGraph::default();
+            let resolved = egraph.resolve_program(None, source).unwrap();
+            assert_eq!(
+                program_supports_proofs(&resolved, &egraph.type_info),
+                expected,
+                "{source}"
+            );
+        }
     }
 
     #[test]
@@ -4554,6 +4432,28 @@ mod tests {
             .parse_and_run_program(None, "(unstable-combined-ruleset combined missing)")
             .unwrap_err();
         assert!(matches!(err, Error::NoSuchRuleset(name, _) if name == "missing"));
+    }
+
+    #[test]
+    fn test_rule_rejects_combined_and_unbound_rulesets() {
+        let mut egraph = EGraph::default();
+        egraph
+            .parse_and_run_program(
+                None,
+                "(relation number (i64)) (ruleset base) \
+                 (unstable-combined-ruleset rules1and2 base)",
+            )
+            .unwrap();
+
+        let err = egraph
+            .parse_and_run_program(None, "(rule () ((number 1)) :ruleset rules1and2)")
+            .unwrap_err();
+        assert!(matches!(err, Error::CombinedRulesetError(name, _) if name == "rules1and2"));
+
+        let err = egraph
+            .parse_and_run_program(None, "(rule () ((number 2)) :ruleset unboundruleset)")
+            .unwrap_err();
+        assert!(matches!(err, Error::NoSuchRuleset(name, _) if name == "unboundruleset"));
     }
 
     #[test]
