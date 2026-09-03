@@ -11,7 +11,7 @@
 //! term   <sexpr>              add a term
 //! union  <sexpr> <sexpr>      union two terms
 //! rule                        start a new rule (the first `atom` opens one)
-//! atom   <root> <op> <c1> <c2>    one depth-1 multipattern atom (pvar names)
+//! atom   <root> <op> <c>...      one depth-1 multipattern atom (pvar names)
 //! cond   in|notin $<slot> <pvar>...   side condition on the match
 //! action <root> <op> <a> <b>  union ?root with (op ?a ?b)
 //! rhs    <root> <pattern>    union ?root with a nested right-hand side
@@ -23,11 +23,11 @@
 //!
 //! Two limits of that language, both about payload leaves:
 //!
-//! * `atom` is exactly two children and every child that does not start with `$`
-//!   becomes a *pattern variable*, so `atom p add e 0` is `?p == (add ?e ?0)` and
-//!   matches any second child rather than the literal `0`. A rule over a payload
-//!   literal, or over a node of any other arity, goes through `nested`/`rhs`,
-//!   which hand the pattern to the reference's own parser.
+//! * every `atom` child that does not start with `$` becomes a *pattern variable*, so
+//!   `atom p add e 0` is `?p == (add ?e ?0)` and matches any second child rather than
+//!   the literal `0`. A rule over a payload literal still goes through `nested`/`rhs`,
+//!   which hand the pattern to the reference's own parser. The child count is free:
+//!   the atoms are handed to `MultiPattern::parse`, which takes any arity.
 //! * On that path a payload leaf is only a payload if its spelling is not also an
 //!   operator tag. `from_syntax` matches the tags first, so `add` and `sub` are
 //!   the array language's binary nodes here (and fail to parse, having no
@@ -212,9 +212,12 @@ fn parse_spec(src: &str) -> Spec {
                 if s.rules.is_empty() {
                     s.rules.push(RuleSpec::default());
                 }
+                let kids: Vec<String> = w[2..].iter().map(|c| kid(c)).collect();
                 s.rules.last_mut().unwrap().atoms.push(format!(
-                    "?{} == ({} {} {})",
-                    w[0], w[1], kid(w[2]), kid(w[3])
+                    "?{} == ({} {})",
+                    w[0],
+                    w[1],
+                    kids.join(" ")
                 ));
             }
             // `nested <pattern>` runs the rule through the single-pattern matcher

@@ -166,16 +166,57 @@ class Rule:
     with the rules that actually run.
     """
 
-    def __init__(self, name, lhs, rhs, conds=()):
+    def __init__(self, name, lhs, rhs, conds=(), atoms=None):
         self.name = name
         self.lhs = lhs
         self.rhs = rhs
         self.conds = list(conds)
+        #: `(root, atoms)` from `slotenc.flatten`, or None where the pattern has no
+        #: atom spelling; see `atom_lines`.
+        self.flat = atoms
 
-    def spec_lines(self):
+    def atom_lines(self):
+        """The pattern as `atom` lines, or None if it cannot be written that way.
+
+        An atom's children are pattern variables and slot literals. A child reached
+        through its own class -- a payload leaf written literally, like `sym:mult` --
+        is neither, so such a rule has no atom spelling.
+        """
+        if self.flat is None:
+            return None
+        root, atoms = self.flat
+        out, extra = [], [0]
+        for name, op, kids in atoms:
+            binders = set(LANG[op].binders)
+            spelled = []
+            for i, (kind, c) in enumerate(kids):
+                if kind == "pv":
+                    spelled.append(c.lstrip("?"))
+                elif kind == "sl" and i in binders:
+                    # a binder column holds the bare slot, which is what `Bind` stores
+                    spelled.append(c)
+                elif kind == "sl":
+                    # anywhere else a slot literal is the TERM `(var $x)`, so it needs an
+                    # atom of its own: an atom's child has to be a pattern variable
+                    extra[0] += 1
+                    v = f"_sl{extra[0]}"
+                    out.append(f"atom {v} var {c}")
+                    spelled.append(v)
+                else:
+                    return None  # reached through its class: no atom spelling
+            ref = LANG[op].ref or op
+            out.append(f"atom {name.lstrip('?')} {ref} {' '.join(spelled)}")
+        return root.lstrip("?"), out
+
+    def spec_lines(self, flat=False):
         # `rhs <root> <pattern>`: on the nested path the root is unused (the whole
         # pattern is the root), so it is written `_`.
-        out = ["rule", f"nested {self.lhs}", f"rhs _ {self.rhs}"]
+        spelled = self.atom_lines() if flat else None
+        if spelled is None:
+            out = ["rule", f"nested {self.lhs}", f"rhs _ {self.rhs}"]
+        else:
+            root, atoms = spelled
+            out = ["rule", *atoms, f"rhs {root} {self.rhs}"]
         for want, slot, pvars in self.conds:
             out.append(f"cond {'in' if want else 'notin'} {slot} {' '.join(pvars)}")
         return out
@@ -191,14 +232,41 @@ def _load_rules():
         if not (isinstance(form, list) and form and form[0] == "rewrite"):
             continue
         r = sc.rewrite_parts(src, form)
-        lhs, rhs = (
-            slotenc.pat_sexpr(LANG, slotenc.rhs_of(LANG, src.term(side, ground=False))) for side in (r["lhs"], r["rhs"])
-        )
-        out[r["name"]] = Rule(r["name"], lhs, rhs, conds=r["conds"])
+        lhs_term, rhs_term = (src.term(side, ground=False) for side in (r["lhs"], r["rhs"]))
+        lhs, rhs = (slotenc.pat_sexpr(LANG, slotenc.rhs_of(LANG, t)) for t in (lhs_term, rhs_term))
+        # the same flattening the encoder does, so the reference can be asked the
+        # flattened question rather than the nested one
+        try:
+            atoms = slotenc.flatten(LANG, lhs_term)
+        except Exception:
+            atoms = None
+        out[r["name"]] = Rule(r["name"], lhs, rhs, conds=r["conds"], atoms=atoms)
     return out
 
 
+#: Rules whose flat comparison is contaminated by upstream issue #48 -- they bind a
+#: slot and reuse it inside the body, and a flat pattern cannot say which variables sit
+#: under the binder, so the two sides identify slots differently. Reported by the `iso`
+#: mode rather than compared: finding no isomorphism between two graphs that answer
+#: different questions says nothing. They must still DIFFER -- an agreement means #48
+#: moved and this record is stale.
+ISSUE48_GAP = {
+    "sum-fact-inv-1": "binds $k/$v and reuses them in the body",
+    "sum-merge": "two nested sums, each binding a slot the body reuses",
+}
+
 RULES = _load_rules()
+
+#: Ask the reference the FLATTENED question, which is the like-for-like comparison: the
+#: encoding flattens every rule, and the two pattern languages are not the same one -- a
+#: nested pattern records which variables sit under a binder and a multipattern does not
+#: (upstream issue #48). Comparing our flat encoding against the reference's NESTED
+#: matcher therefore attributes that difference to the encoding.
+#:
+#: `XSDQL_FLAT=0` restores the nested comparison, which is what shows that the nested
+#: matcher does not fire `let-binop4` -- a fault in that matcher, fixed in upstream
+#: PR #46.
+FLAT = os.environ.get("XSDQL_FLAT", "1") == "1"
 
 
 @functools.cache
@@ -256,7 +324,7 @@ class Case:
         out = [f"rounds {self.rounds}"]
         out += [f"term {sexpr(t)}" for t in self.terms]
         if with_rule:
-            out += self.rule.spec_lines()
+            out += self.rule.spec_lines(flat=FLAT)
         out += [f"probe {sexpr(t)}" for t in self.probes]
         return "\n".join(out) + "\n"
 
@@ -553,8 +621,17 @@ def cases():
         )
     )
 
-    # --- `let-binop4`: `$x` written for two SIBLING binders. Two RECORDED
-    # DIVERGENCES: the reference does not fire, the encoding does.
+    # --- `let-binop4`: `$x` written for two SIBLING binders, which the two matchers
+    # read differently. Asked the FLATTENED question -- the one the encoding actually
+    # compiles -- the reference fires it and agrees, on both cases below. Asked the
+    # NESTED one (`XSDQL_FLAT=0`) it does not fire at all: the nested matcher gives each
+    # binder's bound slot its own fresh name and cannot match a single `$x` against
+    # both. That is a fault in the nested matcher, not a fact about the encoding, and
+    # upstream PR #46 fixes it -- it makes upstream's own
+    # `lambda::redundancy_matching_bug` pass.
+    #
+    # Its own `tests/lambda/mod.rs` documents the shape, and `let_binop4` in
+    # `benches/sdql.rs` has it, so a rule that ships there never fires.
     #
     # The reference's nested matcher gives each `let` node's bound slot its own
     # fresh name and then cannot match the pattern's single `$x` against both, so
@@ -578,8 +655,6 @@ def cases():
                 ("let", V(1), 2, ("binop", ("sym", "add"), V(2), V(1))),
             ],
             FIRED,
-            ref_want=BLOCKED,
-            why="the nested matcher cannot unify one $x with two freshened binder slots",
         )
     )
     # The capture case: the FIRST `let` binds $2 and the SECOND one's body has $2
@@ -599,8 +674,6 @@ def cases():
                 ("let", V(1), 2, ("binop", ("sym", "mult"), V(2), V(2))),
             ],
             FIRED,
-            ref_want=BLOCKED,
-            why="same divergence; here the encoding must also avoid capturing the free $2",
         )
     )
 
@@ -700,7 +773,9 @@ def run_iso(args):
 
     A RECORDED DIVERGENCE cannot be compared this way. Those cases disagree on
     purpose, so an isomorphism is not expected to exist and finding none says nothing;
-    they are reported as such rather than skipped silently.
+    they are reported as such rather than skipped silently. `ISSUE48_GAP` is the same
+    idea for rules where the FLAT comparison is contaminated: they must keep differing,
+    so a fix upstream shows up here rather than passing unnoticed.
     """
     import isomorphism as I
 
@@ -715,6 +790,18 @@ def run_iso(args):
             diverging.append(c.name)
             continue
         verdict, detail = I.check(c)
+        if c.name in ISSUE48_GAP:
+            # Contaminated by upstream #48, so no isomorphism is expected. It must
+            # still DIFFER: agreement means #48 moved and the record is stale.
+            if verdict == "ok":
+                tally["FAIL"] += 1
+                print(
+                    f"  FAIL {c.name:24} recorded as an issue-48 gap but AGREES now -- remove it from ISSUE48_GAP",
+                    flush=True,
+                )
+            else:
+                diverging.append(f"{c.name} (#48: {ISSUE48_GAP[c.name]})")
+            continue
         tally[verdict] += 1
         print(f"  {verdict:4} {c.name:24} {detail}", flush=True)
     n = sum(tally.values())
