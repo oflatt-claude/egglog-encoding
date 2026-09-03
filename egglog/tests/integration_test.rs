@@ -905,6 +905,18 @@ fn test_print_function() {
 }
 
 #[test]
+fn function_to_dag_uses_logical_view_layout() {
+    let s = "(datatype N (n :cost 0))
+             (function f (i64 N) Unit :no-merge :internal-view constructor)
+             (set (f 1 (n)) ())";
+    let mut egraph = EGraph::default();
+    egraph.parse_and_run_program(None, s).unwrap();
+    let (inputs, outputs, termdag) = egraph.function_to_dag("f", 1, true).unwrap();
+    assert_eq!(termdag.to_string(inputs[0]), "(f 1)");
+    assert_eq!(termdag.to_string(outputs.unwrap()[0]), "(n)");
+}
+
+#[test]
 fn test_print_function_csv() {
     let s = "(function f () i64 :no-merge) (set (f) 2) (print-function f :mode csv)";
     let outputs = EGraph::default().parse_and_run_program(None, s).unwrap();

@@ -825,16 +825,17 @@ impl EGraph {
             .functions
             .get(sym)
             .ok_or(TypeError::UnboundFunction(sym.to_owned(), span!()))?;
-        // A view stands in for the function the user named, and its last output
-        // is the row's proof — an internal column, and not extractable.
-        let outputs = if func.is_fd_view() {
-            &func.schema.outputs[..func.schema.outputs.len() - 1]
+        let (_, input_arity, output_arity) = func.table_read_projection();
+        let input_sorts = &func.schema.input[..input_arity];
+        // Logical columns are a prefix of the physical inputs-then-outputs row.
+        let output_sorts = if input_arity < func.schema.input.len() {
+            &func.schema.input[input_arity..input_arity + output_arity]
         } else {
-            &func.schema.outputs[..]
+            &func.schema.outputs[..output_arity]
         };
-        let mut rootsorts = func.schema.input.clone();
+        let mut rootsorts = input_sorts.to_vec();
         if include_output {
-            rootsorts.extend(outputs.iter().cloned());
+            rootsorts.extend_from_slice(output_sorts);
         }
         let extractor = Extractor::compute_costs_from_rootsorts(
             Some(rootsorts),
@@ -854,7 +855,7 @@ impl EGraph {
             if inputs.len() < n {
                 // include subsumed rows
                 let mut children: Vec<TermId> = Vec::new();
-                for (value, sort) in row.vals.iter().zip(&func.schema.input) {
+                for (value, sort) in row.vals.iter().zip(input_sorts) {
                     let (_, term_id) = extractor
                         .extract_best_with_sort(self, &mut termdag, *value, sort.clone())
                         .unwrap_or_else(|| (0, termdag.var("Unextractable".into())));
@@ -866,8 +867,8 @@ impl EGraph {
                     // one; we display them wrapped in a `(values ...)` term to mirror the surface
                     // syntax.
                     let mut out_terms = Vec::new();
-                    for (i, sort) in outputs.iter().enumerate() {
-                        let value = row.vals[func.schema.input.len() + i];
+                    for (i, sort) in output_sorts.iter().enumerate() {
+                        let value = row.vals[input_arity + i];
                         let (_, term) = extractor
                             .extract_best_with_sort(self, &mut termdag, value, sort.clone())
                             .unwrap_or_else(|| (0, termdag.var("Unextractable".into())));
