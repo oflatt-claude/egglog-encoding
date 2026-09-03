@@ -1103,7 +1103,16 @@ def pat_sexpr(lang, t, binder=False):
 
 
 def compile_rule(
-    lang, atoms, action, conds=(), fresh=(), bugs=frozenset(), slot_prefix="s", fresh_batch=True, tail=")"
+    lang,
+    atoms,
+    action,
+    conds=(),
+    fresh=(),
+    bugs=frozenset(),
+    slot_prefix="s",
+    fresh_batch=True,
+    tail=")",
+    namings=False,
 ):
     """Compile a flattened multipattern and its action into one egglog rule.
 
@@ -1234,14 +1243,21 @@ def compile_rule(
                 seconds.append(e)
 
         mp = new("mp")
+        pairs = " ".join(firsts + seconds) if firsts else "(map-empty) (map-empty)"
         if idx == 0:
             # the leading atom fixes slots(pattern); its `mp` is the identity
             body.append(f"(= {mp} {dom})")
-        elif firsts:
-            body.append(f"(= {mp} (find-mapping-total {pat} {dom} {' '.join(firsts + seconds)}))")
+        elif namings:
+            # Every naming rather than the minting one. `vec-get` is partial, so the
+            # `Idx` join stops at the end of the vector without anything saying how long
+            # it is, and index 0 is the minting solution -- so reaching only `(Idx 0)`
+            # reproduces the single-valued behaviour exactly.
+            alts, i = new("alts"), new("ix")
+            body.append(f"(= {alts} (find-mappings-total {pat} {dom} {pairs}))")
+            body.append(f"(Idx {i})")
+            body.append(f"(= {mp} (vec-get {alts} {i}))")
         else:
-            # nothing constrains this atom: every slot is minted
-            body.append(f"(= {mp} (find-mapping-total {pat} {dom} (map-empty) (map-empty)))")
+            body.append(f"(= {mp} (find-mapping-total {pat} {dom} {pairs}))")
 
         # Accumulate the avoid-set. Passing only the leading atom's slots would let
         # two atoms that both mint choose the same slot, since the primitive is pure

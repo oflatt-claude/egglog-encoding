@@ -59,6 +59,15 @@ RUN_TIMEOUT = 25
 # slot space), which violates a definition rather than an observable.
 BUGS = {b for b in os.environ.get("XDIFF_BUGS", "").split(",") if b}
 
+# Compile rules that try EVERY naming rather than only the minting one -- the gap
+# upstream's `final_refine` closes on its side. `XDIFF_NAMINGS=1`.
+NAMINGS = os.environ.get("XDIFF_NAMINGS") == "1"
+
+# How many namings a rule may reach. `vec-get` is partial, so an index past the end of
+# the vector simply does not match, and over-seeding costs join attempts rather than
+# correctness; under-seeding loses the namings past it.
+NAMINGS_MAX = int(os.environ.get("XDIFF_NAMINGS_MAX", "8"))
+
 #: Cases where the REFERENCE is right and the encoding is incomplete, for one reason:
 #: upstream's `final_refine` (multipat.rs) takes every slot pair whose equality
 #: e-matching left undecided and branches on BOTH readings -- once with the slots
@@ -331,7 +340,7 @@ def compile_rule(atoms, action, conds=()):
     else:
         root, op, a, b = action
         act = ("row", root, op, [a, b])
-    return slotenc.compile_rule(LANG, atoms, act, conds=conds, bugs=BUGS)
+    return slotenc.compile_rule(LANG, atoms, act, conds=conds, bugs=BUGS, namings=NAMINGS)
 
 
 # -------------------------------------------------------------- egg generation
@@ -359,6 +368,13 @@ def egg_program(case, rules=None, mult=3):
     # reach a common leader, which is also what the machinery's own tests check.
     out.append("(relation ProbeId (U i64))")
     out.append("(relation SameClass (i64 i64))")
+    if NAMINGS:
+        # what an every-naming rule reads: the vector `find-mappings-total` returns, and
+        # the indices to read it at. `vec-get` is partial, so the indices past a given
+        # vector's end match nothing.
+        out.append("(sort Namings (Vec Renaming))")
+        out.append("(relation Idx (i64))")
+        out += [f"(Idx {i})" for i in range(NAMINGS_MAX)]
     out.append(
         "(rule ((ProbeId a i) (ProbeId b j)\n"
         "       (RenamesToLeader a m1 l) (RenamesToLeader b m2 l))\n"
