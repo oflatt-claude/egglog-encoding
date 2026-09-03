@@ -1019,6 +1019,375 @@ def Program.AritiesAgree (P : Program) : Prop :=
   ∀ fk ∈ P.ctors, ∀ gl ∈ P.ctors, fk.1 = gl.1 → fk.2 = gl.2
 
 
+
+/-! ## The prelude's table triples, read back
+
+`FDatabase.Inv.execCmdM` asks `Actions.WriteLegal` of every rule the state holds, so the
+whole of `EncodeDomain`'s remaining bill is what the prelude declared each name as. The
+declarations are the three per entry of `Program.ctors`, and a name that occurs there twice
+is declared twice — which is exactly what `Program.AritiesAgree` rules out. -/
+
+theorem isPrefixOf_at_viewName (f : FnName) : "@".isPrefixOf (viewName f) = true := by
+  simp [viewName, String.isPrefixOf]
+
+theorem isPrefixOf_at_termName (f : FnName) : "@".isPrefixOf (termName f) = true := by
+  simp [termName, String.isPrefixOf]
+
+/-- A fold over commands none of which declares `g` leaves `g` where it was. -/
+theorem foldl_sigBind_of_ne {g : FnName} : ∀ (p : Program),
+    (∀ c ∈ p, ∀ f dc, c = Cmd.decl f dc → f ≠ g) →
+    ∀ (sig : Signature), (p.foldl (fun s c => c.sigBind s) sig) g = sig g := by
+  intro p
+  induction p with
+  | nil => intro _ sig; rfl
+  | cons c cs ih =>
+    intro hp sig
+    rw [List.foldl_cons, ih (fun c' hc' => hp c' (List.mem_cons_of_mem c hc'))]
+    cases c with
+    | decl f dc =>
+      change Function.update sig f (some dc) g = sig g
+      rw [Function.update_of_ne (fun hc => hp _ List.mem_cons_self f dc rfl hc.symm)]
+    | _ => rfl
+
+/-- The three declarations `encodePrelude` emits per entry of `Program.ctors`. -/
+def ctorTriple (fk : FnName × Nat) : Program :=
+  [.decl fk.1 (skolemDecl fk.2), .decl (viewName fk.1) (viewDecl fk.2),
+   .decl (termName fk.1) (termDecl fk.2)]
+
+theorem ctorTriples_eq (P : Program) :
+    (P.ctors.flatMap fun fk =>
+        [Cmd.decl fk.1 (skolemDecl fk.2), Cmd.decl (viewName fk.1) (viewDecl fk.2),
+         Cmd.decl (termName fk.1) (termDecl fk.2)])
+      = P.ctors.flatMap ctorTriple := rfl
+
+/-- One entry's triple, at that entry's own view name and at another's. -/
+theorem foldl_ctorTriple_view {f : FnName} (fk : FnName × Nat)
+    (hat : ¬ "@".isPrefixOf fk.1) (sig : Signature) :
+    ((ctorTriple fk).foldl (fun s c => c.sigBind s) sig) (viewName f)
+      = if fk.1 = f then some (viewDecl fk.2) else sig (viewName f) := by
+  have hs : ((ctorTriple fk).foldl (fun s c => c.sigBind s) sig)
+      = Function.update (Function.update (Function.update sig
+          fk.1 (some (skolemDecl fk.2))) (viewName fk.1) (some (viewDecl fk.2)))
+          (termName fk.1) (some (termDecl fk.2)) := rfl
+  have h1 : viewName f ≠ termName fk.1 := viewName_ne_termName
+  rw [hs, Function.update_of_ne h1]
+  by_cases hfk : fk.1 = f
+  · subst hfk
+    rw [Function.update_self, if_pos rfl]
+  · have h2 : viewName f ≠ viewName fk.1 := fun hc => hfk (viewName_inj hc).symm
+    have h3 : viewName f ≠ fk.1 := fun hc => hat (hc ▸ isPrefixOf_at_viewName f)
+    rw [Function.update_of_ne h2, Function.update_of_ne h3, if_neg hfk]
+
+@[inherit_doc foldl_ctorTriple_view]
+theorem foldl_ctorTriple_term {f : FnName} (fk : FnName × Nat)
+    (hat : ¬ "@".isPrefixOf fk.1) (sig : Signature) :
+    ((ctorTriple fk).foldl (fun s c => c.sigBind s) sig) (termName f)
+      = if fk.1 = f then some (termDecl fk.2) else sig (termName f) := by
+  have hs : ((ctorTriple fk).foldl (fun s c => c.sigBind s) sig)
+      = Function.update (Function.update (Function.update sig
+          fk.1 (some (skolemDecl fk.2))) (viewName fk.1) (some (viewDecl fk.2)))
+          (termName fk.1) (some (termDecl fk.2)) := rfl
+  rw [hs]
+  by_cases hfk : fk.1 = f
+  · subst hfk
+    rw [Function.update_self, if_pos rfl]
+  · have h1 : termName f ≠ termName fk.1 := by
+      intro hc
+      refine hfk ?_
+      have h2 := congrArg String.toList hc
+      rw [termName, termName, String.toList_append, String.toList_append,
+        String.toList_append, String.toList_append] at h2
+      exact (String.toList_inj.mp (List.append_cancel_left (List.append_cancel_right h2))).symm
+    have h3 : termName f ≠ viewName fk.1 := fun hc => viewName_ne_termName hc.symm
+    have h4 : termName f ≠ fk.1 := fun hc => hat (hc ▸ isPrefixOf_at_termName f)
+    rw [Function.update_of_ne h1, Function.update_of_ne h3, Function.update_of_ne h4,
+      if_neg hfk]
+
+/-- **Later triples do not disturb the answer**, where the arities agree: another entry of
+the same name declares the same triple. -/
+theorem foldl_ctorTriples_preserve : ∀ (l : List (FnName × Nat)) {f : FnName} {k : Nat},
+    (∀ gl ∈ l, gl.1 = f → gl.2 = k) → (∀ gl ∈ l, ¬ "@".isPrefixOf gl.1) →
+    ∀ {sig : Signature}, sig (viewName f) = some (viewDecl k) →
+      sig (termName f) = some (termDecl k) →
+      ((l.flatMap ctorTriple).foldl (fun s c => c.sigBind s) sig) (viewName f)
+          = some (viewDecl k) ∧
+        ((l.flatMap ctorTriple).foldl (fun s c => c.sigBind s) sig) (termName f)
+          = some (termDecl k) := by
+  intro l
+  induction l with
+  | nil => intro _ _ _ _ sig hv ht; exact ⟨hv, ht⟩
+  | cons gl l ih =>
+    intro f k hag hat sig hv ht
+    rw [List.flatMap_cons, List.foldl_append]
+    refine ih (fun x hx => hag x (List.mem_cons_of_mem gl hx))
+      (fun x hx => hat x (List.mem_cons_of_mem gl hx)) ?_ ?_
+    · rw [foldl_ctorTriple_view gl (hat gl List.mem_cons_self)]
+      by_cases hg : gl.1 = f
+      · rw [if_pos hg, hag gl List.mem_cons_self hg]
+      · rw [if_neg hg]; exact hv
+    · rw [foldl_ctorTriple_term gl (hat gl List.mem_cons_self)]
+      by_cases hg : gl.1 = f
+      · rw [if_pos hg, hag gl List.mem_cons_self hg]
+      · rw [if_neg hg]; exact ht
+
+/-- **The triple of the entry that is there.** -/
+theorem foldl_ctorTriples_found : ∀ (l : List (FnName × Nat)) {f : FnName} {k : Nat},
+    (f, k) ∈ l → (∀ gl ∈ l, gl.1 = f → gl.2 = k) → (∀ gl ∈ l, ¬ "@".isPrefixOf gl.1) →
+    ∀ (sig : Signature),
+      ((l.flatMap ctorTriple).foldl (fun s c => c.sigBind s) sig) (viewName f)
+          = some (viewDecl k) ∧
+        ((l.flatMap ctorTriple).foldl (fun s c => c.sigBind s) sig) (termName f)
+          = some (termDecl k) := by
+  intro l
+  induction l with
+  | nil => intro _ _ hm; exact absurd hm (by simp)
+  | cons gl l ih =>
+    intro f k hm hag hat sig
+    rw [List.flatMap_cons, List.foldl_append]
+    rcases List.mem_cons.mp hm with rfl | hm'
+    · refine foldl_ctorTriples_preserve l (fun x hx => hag x (List.mem_cons_of_mem _ hx))
+        (fun x hx => hat x (List.mem_cons_of_mem _ hx)) ?_ ?_
+      · rw [foldl_ctorTriple_view (f, k) (hat _ List.mem_cons_self), if_pos rfl]
+      · rw [foldl_ctorTriple_term (f, k) (hat _ List.mem_cons_self), if_pos rfl]
+    · exact ih hm' (fun x hx => hag x (List.mem_cons_of_mem gl hx))
+        (fun x hx => hat x (List.mem_cons_of_mem gl hx)) _
+
+/-- A source name is not in the generated namespace. -/
+theorem noAt_of_mem_ctors {P : Program} (hdom : P.EncodeDomain) {fk : FnName × Nat}
+    (h : fk ∈ P.ctors) : ¬ "@".isPrefixOf fk.1 :=
+  hdom.noAt fk.1 (by
+    rw [Program.names]
+    exact List.mem_append.mpr (Or.inl (List.mem_append.mpr (Or.inl
+      (List.mem_map.mpr ⟨fk, h, rfl⟩)))))
+
+/-- **The view and term declarations the prelude installs**, at each entry of
+`Program.ctors`. `Program.AritiesAgree` is what makes the answer that entry's own arity: a
+name occurring twice is declared twice and the second declaration wins. -/
+theorem encodeSig_tables {P : Program} (hdom : P.EncodeDomain) (hag : P.AritiesAgree)
+    {f : FnName} {k : Nat} (h : (f, k) ∈ P.ctors) :
+    encodeSig P (viewName f) = some (viewDecl k) ∧
+      encodeSig P (termName f) = some (termDecl k) := by
+  have hrules : ∀ c ∈ (maintenanceRules P).map Cmd.rule, ∀ g dc, c = Cmd.decl g dc → g ≠ g := by
+    intro c hc g dc hcd
+    obtain ⟨r, -, hr⟩ := List.mem_map.mp hc
+    rw [← hr] at hcd
+    exact absurd hcd (by simp)
+  constructor <;>
+  · rw [encodeSig, encodePrelude, List.foldl_append, List.foldl_append, List.foldl_cons,
+      foldl_sigBind_of_ne _ (fun c hc g dc hcd => by
+        obtain ⟨r, -, hr⟩ := List.mem_map.mp hc
+        rw [← hr] at hcd
+        exact absurd hcd (by simp)), ctorTriples_eq]
+    first
+    | exact (foldl_ctorTriples_found P.ctors h
+        (fun gl hgl hg => (hag (f, k) h gl hgl hg.symm).symm)
+        (fun gl hgl => noAt_of_mem_ctors hdom hgl) _).1
+    | exact (foldl_ctorTriples_found P.ctors h
+        (fun gl hgl hg => (hag (f, k) h gl hgl hg.symm).symm)
+        (fun gl hgl => noAt_of_mem_ctors hdom hgl) _).2
+
+
+/-! ## `EncodedWriteLegal` and its maintenance counterpart, under the missing clause
+
+Every `set` the encoding emits writes `@UF` or a view, at the widths the prelude declared —
+provided the prelude declared each name once, which is `Program.AritiesAgree`. -/
+
+/-- One `set`, at a declaration that carries a `:merge` and whose widths it matches. -/
+theorem writeLegal_set {sig : Signature} {g : FnName} {dc : FnDecl}
+    (hsig : sig g = some dc) (hm : dc.merge ≠ none) {args out : List Expr}
+    (ha : args.length = dc.arity) (ho : out.length = dc.outArity) :
+    Actions.WriteLegal [Action.set g args out] sig := by
+  refine ⟨⟨?_, trivial⟩, ?_, trivial⟩
+  · change sig.mergeOf g ≠ none
+    rw [Signature.mergeOf, hsig]
+    exact fun hc => hm (by simpa using hc)
+  · intro dc' hdc'
+    obtain rfl : dc' = dc := Option.some.inj (hdc'.symm.trans hsig)
+    exact ⟨ha, ho⟩
+
+theorem Actions.WriteLegal.append {sig : Signature} : ∀ {as bs : List Action},
+    Actions.WriteLegal as sig → Actions.WriteLegal bs sig →
+      Actions.WriteLegal (as ++ bs) sig
+  | [], _, _, hb => hb
+  | _ :: as, bs, ha, hb =>
+      ⟨⟨ha.1.1, (Actions.WriteLegal.append (as := as) ⟨ha.1.2, ha.2.2⟩ hb).1⟩,
+        ha.2.1, (Actions.WriteLegal.append (as := as) ⟨ha.1.2, ha.2.2⟩ hb).2⟩
+
+/-- An action that is not a `set` writes legally, whatever the signature. -/
+theorem writeLegal_of_noSet {sig : Signature} {a : Action} (h : a.NoSet) :
+    Actions.WriteLegal [a] sig := by
+  cases a with
+  | set f args out => exact (h : False).elim
+  | _ => exact ⟨⟨trivial, trivial⟩, trivial, trivial⟩
+
+mutual
+
+/-- **A build block writes legally.** Each application emits its term row and its view entry,
+at the widths the prelude declared for that name and arity. -/
+theorem writeLegal_encodeBuild {P : Program} (hdom : P.EncodeDomain) (hag : P.AritiesAgree) :
+    ∀ (e : Expr) (m : Nat), (∀ fk ∈ e.ctors, fk ∈ P.ctors) →
+      Actions.WriteLegal (encodeBuild e m).2.1 (encodeSig P)
+  | .lit _, _, _ => ⟨trivial, trivial⟩
+  | .var _, _, _ => ⟨trivial, trivial⟩
+  | .app f args, m, hc => by
+      have hfk : (f, args.length) ∈ P.ctors := hc _ (by rw [Expr.ctors]; exact List.mem_cons_self)
+      obtain ⟨hview, hterm⟩ := encodeSig_tables hdom hag hfk
+      rw [encodeBuild_app_actions_eq]
+      refine Actions.WriteLegal.append
+        (writeLegal_encodeBuildArgs hdom hag args m
+          (fun fk hfk' => hc fk (by rw [Expr.ctors]; exact List.mem_cons_of_mem _ hfk'))) ?_
+      exact Actions.WriteLegal.append
+        (writeLegal_set hterm (by simp [termDecl]) (by simp [termDecl]) (by simp [termDecl]))
+        (writeLegal_set hview (by simp [viewDecl]) rfl rfl)
+
+@[inherit_doc writeLegal_encodeBuild]
+theorem writeLegal_encodeBuildArgs {P : Program} (hdom : P.EncodeDomain)
+    (hag : P.AritiesAgree) :
+    ∀ (es : List Expr) (m : Nat), (∀ fk ∈ Expr.ctorsList es, fk ∈ P.ctors) →
+      Actions.WriteLegal (encodeBuildArgs es m).2.1 (encodeSig P)
+  | [], _, _ => ⟨trivial, trivial⟩
+  | e :: es, m, hc => by
+      rw [encodeBuildArgs_cons_actions]
+      exact Actions.WriteLegal.append
+        (writeLegal_encodeBuild hdom hag e m
+          (fun fk h => hc fk (by rw [Expr.ctorsList]; exact List.mem_append_left _ h)))
+        (writeLegal_encodeBuildArgs hdom hag es _
+          (fun fk h => hc fk (by rw [Expr.ctorsList]; exact List.mem_append_right _ h)))
+
+end
+
+/-- **One head action's block writes legally.** A source `set` is out of the fragment
+(`EncodeDomain.setLegal` under `ctorsOnly`), which is why it is excluded rather than
+encoded. -/
+theorem writeLegal_encodeAction {P : Program} (hdom : P.EncodeDomain) (hag : P.AritiesAgree)
+    (pf : Expr) : ∀ (a : Action) (m : Nat), a.NoSet → (∀ fk ∈ a.ctors, fk ∈ P.ctors) →
+      Actions.WriteLegal (encodeAction pf a m).1 (encodeSig P) := by
+  rintro (e | ⟨v, e⟩ | ⟨e₁, e₂⟩ | ⟨f, args, out⟩) m hns hc
+  · rw [encodeAction_expr_actions]
+    exact writeLegal_encodeBuild hdom hag e m hc
+  · rw [encodeAction_letBind_actions]
+    exact Actions.WriteLegal.append (writeLegal_encodeBuild hdom hag e m hc)
+      (writeLegal_of_noSet trivial)
+  · rw [encodeAction_union_actions]
+    refine Actions.WriteLegal.append (Actions.WriteLegal.append
+      (writeLegal_encodeBuild hdom hag e₁ m
+        (fun fk h => hc fk (by rw [Action.ctors]; exact List.mem_append_left _ h)))
+      (writeLegal_encodeBuild hdom hag e₂ _
+        (fun fk h => hc fk (by rw [Action.ctors]; exact List.mem_append_right _ h)))) ?_
+    exact writeLegal_set (encodeSig_ufName hdom) (by simp [ufDecl]) rfl rfl
+  · exact (hns : False).elim
+
+@[inherit_doc writeLegal_encodeAction]
+theorem writeLegal_encodeActions {P : Program} (hdom : P.EncodeDomain) (hag : P.AritiesAgree)
+    (pf : Expr) : ∀ (as : List Action) (m : Nat), (∀ a ∈ as, a.NoSet) →
+      (∀ a ∈ as, ∀ fk ∈ a.ctors, fk ∈ P.ctors) →
+      Actions.WriteLegal (encodeActions pf as m).1 (encodeSig P)
+  | [], _, _, _ => ⟨trivial, trivial⟩
+  | a :: as, m, hns, hc => by
+      rw [encodeActions_cons_actions]
+      exact Actions.WriteLegal.append
+        (writeLegal_encodeAction hdom hag pf a m (hns a List.mem_cons_self)
+          (hc a List.mem_cons_self))
+        (writeLegal_encodeActions hdom hag pf as _
+          (fun b hb => hns b (List.mem_cons_of_mem a hb))
+          (fun b hb => hc b (List.mem_cons_of_mem a hb)))
+
+/-- Every `(name, arity)` pair a source command mentions is one the prelude declared. -/
+theorem mem_ctors_of_cmd {P : Program} {c : Cmd} (hc : c ∈ P) {fk : FnName × Nat}
+    (h : fk ∈ c.ctors) : fk ∈ P.ctors :=
+  List.mem_dedup.mpr (List.mem_flatMap.mpr ⟨c, hc, h⟩)
+
+/-- **`EncodedWriteLegal`, under the missing clause.** -/
+theorem encodedWriteLegal {P : Program} (hdom : P.EncodeDomain) (hag : P.AritiesAgree) :
+    EncodedWriteLegal P (encodeSig P) := by
+  have hnoset : ∀ c ∈ P, c.NoSet :=
+    (Program.setLegal_iff_noSet (fun _ => rfl) hdom.ctorsOnly).mp hdom.setLegal
+  intro c hcP n i c' hc'
+  have hns := hnoset c hcP
+  have hct : ∀ fk ∈ c.ctors, fk ∈ P.ctors := fun fk hfk => mem_ctors_of_cmd hcP hfk
+  cases c with
+  | decl f dc =>
+    have h : c' ∈ ([] : Program) := hc'
+    simp at h
+  | run R =>
+    have h : c' ∈ [Cmd.run R, Cmd.saturate rebuildRuleset] := hc'
+    have h2 : c' = Cmd.run R ∨ c' = Cmd.saturate rebuildRuleset := by simpa using h
+    rcases h2 with rfl | rfl <;> trivial
+  | saturate R =>
+    have h : c' ∈ [Cmd.saturate R, Cmd.saturate rebuildRuleset] := hc'
+    have h2 : c' = Cmd.saturate R ∨ c' = Cmd.saturate rebuildRuleset := by simpa using h
+    rcases h2 with rfl | rfl <;> trivial
+  | action a =>
+    have h : c' ∈ (encodeAction fiatE a n).1.map Cmd.action ++ [Cmd.saturate rebuildRuleset] :=
+      hc'
+    rcases List.mem_append.mp h with h₁ | h₁
+    · obtain ⟨b, hb, rfl⟩ := List.mem_map.mp h₁
+      have hall := writeLegal_encodeAction hdom hag fiatE a n hns hct
+      have : ∀ (bs : List Action), Actions.WriteLegal bs (encodeSig P) →
+          ∀ b ∈ bs, Actions.WriteLegal [b] (encodeSig P) := by
+        intro bs
+        induction bs with
+        | nil => intro _ b hb; exact absurd hb (by simp)
+        | cons x xs ih =>
+          intro hx b hb
+          rcases List.mem_cons.mp hb with rfl | hb'
+          · exact ⟨⟨hx.1.1, trivial⟩, hx.2.1, trivial⟩
+          · exact ih ⟨hx.1.2, hx.2.2⟩ b hb'
+      exact ⟨(this _ hall b hb).1.1, (this _ hall b hb).2.1⟩
+    · obtain rfl : c' = Cmd.saturate rebuildRuleset := by simpa using h₁
+      trivial
+  | rule r =>
+    have h : c' ∈ [Cmd.rule (encodeRule i r n).1] := hc'
+    obtain rfl : c' = Cmd.rule (encodeRule i r n).1 := by simpa using h
+    exact writeLegal_encodeActions hdom hag _ r.actions _ hns
+      (fun a ha fk hfk => hct fk (by
+        rw [Cmd.ctors]
+        exact List.mem_append_right _ (List.mem_flatMap.mpr ⟨a, ha, hfk⟩)))
+
+/-- **The maintenance rules write legally too**, under the same clause: each rebuild rule
+keys its view at the arity of the entry it came from. -/
+theorem maintenance_writeLegal {P : Program} (hdom : P.EncodeDomain) (hag : P.AritiesAgree) :
+    ∀ r ∈ maintenanceRules P, Actions.WriteLegal r.actions (encodeSig P) := by
+  intro r hr
+  rw [maintenanceRules, List.mem_cons] at hr
+  rcases hr with rfl | hr
+  · exact writeLegal_set (encodeSig_ufName hdom) (by simp [ufDecl]) rfl rfl
+  · obtain ⟨fk, hfk, hmem⟩ := List.mem_flatMap.mp hr
+    have hview : encodeSig P (viewName fk.1) = some (viewDecl fk.2) :=
+      (encodeSig_tables hdom hag (by simpa using hfk)).1
+    rw [rebuildRules, List.mem_cons] at hmem
+    rcases hmem with rfl | hmem
+    · exact writeLegal_set hview (by simp [viewDecl])
+        (by simp [rebuildVars, viewDecl]) rfl
+    · obtain ⟨j, -, rfl⟩ := List.mem_map.mp hmem
+      exact writeLegal_set hview (by simp [viewDecl])
+        (by simp [rebuildVars, viewDecl]) rfl
+
+
+/-- **The residue, reduced to two firings and one missing clause.**
+
+`execM_soundTerms_of_obligations` with its two legality conditions discharged, so what is
+left of the completeness half is exactly:
+
+* `EncodedHeadSound` — one firing of one encoded **source rule**, which is
+  `entrySound_headBuild_post` and `cong_headUnion_post` at the writes `encodeActions` emits,
+  with `Rule.HeadScoped` and `hlet` the two conditions still to be arranged;
+* `EncodedActionSound` — one **top-level** action's block, which is `entrySound_build` and
+  `cong_of_eqs` at the same writes, over the source's own `evalAction`;
+* `Program.AritiesAgree` — a clause `Program.EncodeDomain` does not have, whose necessity
+  `adProgram_not_maintenance_writeLegal` records.
+
+Everything else — the per-command induction, the merge phase, the firing fold, the three
+maintenance families, the rebuild rounds, the saturating case and both legality
+conditions — is proved, and this theorem is `sorryAx`-free. -/
+theorem execM_soundTerms_of_firings {P : Program} (hdom : P.EncodeDomain)
+    (hag : P.AritiesAgree) (hhead : EncodedHeadSound P (encodeSig P))
+    (hact : EncodedActionSound P (encodeSig P))
+    {src : Database} (hsrc : ProgramStep Database.empty P src)
+    {tgt : FDatabase} (htgt : execM (encode P) = some tgt) : tgt.SoundTerms src :=
+  execM_soundTerms_of_obligations hdom hhead hact (encodedWriteLegal hdom hag)
+    (maintenance_writeLegal hdom hag) hsrc htgt
+
 /-! ### The clause is needed, at a program the domain admits
 
 `ENCODING.md`'s discipline for a clause as much as for a lemma: a condition that nothing
