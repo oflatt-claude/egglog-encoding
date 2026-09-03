@@ -197,9 +197,17 @@ both are decided at the witness at the end of this file.
   **merge phase**: `mergeSaturateF_soundTerms` is every term a merge pass adds, justified,
   which is half the writer enumeration and the half the two named obstacles stood in front of
   (`Signature.MergeShape` for the body's shape, `eq_of_congrKeys` for the keys being equal
-  rather than merely congruent). What is left is the fold over **rule firings**, which wants a
-  rule invariant of the same shape as `mergeShapeOk_encodePrelude`; no target fixpoint, since
-  soundness is indifferent to the under-firing `execM_contained` records.
+  rather than merely congruent). The fold over **rule firings** is now proved too —
+  `execRunRules_soundTerms` through `fireRule_soundTerms` and `fireInto_soundTerms`, and
+  `runRoundM_soundTerms` with the merge phase after it — as is the **rule invariant** it needed
+  (`execM_encode_rules`, `mergeShapeOk_encodePrelude`'s shape one level up: every rule a target
+  holds is an `encodeRule` of a source rule or one of `maintenanceRules`) and the three
+  **maintenance families** the invariant splits off (`maintenance_soundTerms`, out of
+  `pathCompressRule_soundTerms`, `eclassRule_soundTerms` and `columnRule_soundTerms`).
+  `firingsSound_of_rulesEncoded` is the factorisation those leave: what is unproved is one
+  firing of one **encoded source rule**, plus the per-command induction that aligns the source
+  run with the target's. No target fixpoint enters, since soundness is indifferent to the
+  under-firing `execM_contained` records.
   `ncTgt_soundTerms` is both clauses at the state the two refuted forward clauses fail at, with
   a real `@UF` edge and positive arity. `execM_viewLeader`, `execM_viewsCover`,
   `execM_viewsCover_shared`, `execM_unionsJoined` and `execM_unionsRead` are assembled from
@@ -6979,6 +6987,1108 @@ theorem mem_eqs_of_headUnion_witness :
       (by simp [vuProgram]) vuRule_headScoped vuPre_validQuerySubst
       (by simp [vuRule]) (by simp [vuRule, Actions.letVars, Action.letVars])
       vuPre_head_eval₁ vuPre_head_eval₂
+
+/-! #### The rules an encoded target holds
+
+The declaration invariant one level up. `Signature.MergeShape` had to be established at the
+prelude and carried because `encodeCmds` emits no declaration; the same two-part shape works
+for rules, because the two places a rule can come from are `encodePrelude`'s maintenance
+families and `encodeCmd`'s `.rule` case, and no other command the encoding emits ever extends
+`rules`. What it buys is the case split the rule-firing fold is: a firing is either an encoded
+source rule's or a maintenance rule's, and there is no third kind. -/
+
+/-- **Every rule an encoded program's state can hold.** Either the encoding of a source rule
+of `P` — at whichever counters `encodeCmds` reached it with, which nothing below reads — or
+one of `maintenanceRules P`. -/
+def Rule.EncodedIn (P : Program) (r : Rule) : Prop :=
+  (∃ (s : Rule) (i n : Nat), Cmd.rule s ∈ P ∧ r = (encodeRule i s n).1) ∨
+    r ∈ maintenanceRules P
+
+/-- The rule invariant, as a property of the state. -/
+def FDatabase.RulesEncoded (d : FDatabase) (P : Program) : Prop :=
+  ∀ r ∈ d.rules, r.EncodedIn P
+
+/-- A command that cannot break it: anything but a `.rule`, whose rule has to be one. -/
+def Cmd.RulesEncodedOk (P : Program) : Cmd → Prop
+  | .rule r => r.EncodedIn P
+  | _ => True
+
+/-- **One command: only `Cmd.rule` extends `rules`.** Every other case is one of the three
+`rules` field equations `Proofs/Merge.lean` already has. -/
+theorem FDatabase.execCmdM_rulesEncoded {P : Program} {d d' : FDatabase} {c : Cmd}
+    (hc : Cmd.RulesEncodedOk P c) (h : d.RulesEncoded P) (hs : d.execCmdM c = some d') :
+    d'.RulesEncoded P := by
+  cases c with
+  | action a =>
+      rw [FDatabase.execCmdM] at hs
+      obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp hs
+      intro r hr
+      rw [(FDatabase.mergeSaturateF_fields h₂).2.2, FDatabase.execAction_rules h₁] at hr
+      exact h r hr
+  | rule r =>
+      rw [FDatabase.execCmdM, Option.some.injEq] at hs
+      subst hs
+      intro r' hr'
+      rcases List.mem_cons.mp hr' with rfl | hr''
+      · exact hc
+      · exact h r' hr''
+  | run R =>
+      rw [FDatabase.execCmdM] at hs
+      intro r hr
+      rw [(FDatabase.runRoundM_fields hs).2.2] at hr
+      exact h r hr
+  | saturate R =>
+      rw [FDatabase.execCmdM] at hs
+      intro r hr
+      rw [(FDatabase.runSaturateM_fields runFuel hs).2.2] at hr
+      exact h r hr
+  | decl f dc =>
+      rw [FDatabase.execCmdM, Option.some.injEq] at hs
+      subst hs
+      exact h
+
+@[inherit_doc FDatabase.execCmdM_rulesEncoded]
+theorem FDatabase.execProgramM_rulesEncoded {P : Program} {p : Program}
+    (hp : ∀ c ∈ p, Cmd.RulesEncodedOk P c) :
+    ∀ {d D : FDatabase}, d.RulesEncoded P → d.execProgramM p = some D → D.RulesEncoded P := by
+  induction p with
+  | nil =>
+    intro d D h hrun
+    rw [FDatabase.execProgramM, Option.some.injEq] at hrun
+    exact hrun ▸ h
+  | cons c cs ih =>
+    intro d D h hrun
+    rw [FDatabase.execProgramM] at hrun
+    obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp hrun
+    exact ih (fun c' hc' => hp c' (List.mem_cons_of_mem c hc'))
+      (FDatabase.execCmdM_rulesEncoded (hp c List.mem_cons_self) h h₁) h₂
+
+/-! ##### The two halves of the encoded program, again
+
+`encodePrelude` is where every maintenance rule is; `encodeCmd`'s `.rule` case is where every
+encoded source rule is; and every other command either declares, acts, runs or saturates. -/
+
+/-- The per-rule proof constructors are declarations. -/
+theorem rulesEncodedOk_ruleProofDecls (P : Program) : ∀ (rs : List Rule) (i : Nat),
+    ∀ c ∈ ruleProofDecls rs i, Cmd.RulesEncodedOk P c
+  | [], _ => by simp [ruleProofDecls]
+  | r :: rs, i => by
+      intro c hc
+      rw [ruleProofDecls, List.mem_cons] at hc
+      rcases hc with rfl | hc
+      · trivial
+      · exact rulesEncodedOk_ruleProofDecls P rs (i + 1) c hc
+
+/-- **The prelude's rules, enumerated.** Everything before them declares, and the rules are
+exactly `maintenanceRules P` mapped into commands. -/
+theorem rulesEncodedOk_encodePrelude (P : Program) :
+    ∀ c ∈ encodePrelude P, Cmd.RulesEncodedOk P c := by
+  intro c hc
+  rw [encodePrelude] at hc
+  rcases List.mem_append.mp hc with h | h
+  · rcases List.mem_append.mp h with h₁ | h₁
+    · rw [proofDecls] at h₁
+      rcases List.mem_append.mp h₁ with h₂ | h₂
+      · rcases List.mem_append.mp h₂ with h₃ | h₃
+        · have h₄ : c = Cmd.decl fiatName (proofDecl 0) ∨ c = Cmd.decl symName (proofDecl 1) ∨
+              c = Cmd.decl transName (proofDecl 2) := by simpa using h₃
+          rcases h₄ with rfl | rfl | rfl <;> trivial
+        · obtain ⟨k, -, rfl⟩ := List.mem_map.mp h₃
+          trivial
+      · exact rulesEncodedOk_ruleProofDecls P _ _ c h₂
+    · rcases List.mem_cons.mp h₁ with rfl | h₂
+      · trivial
+      · obtain ⟨fk, -, h₃⟩ := List.mem_flatMap.mp h₂
+        have h₄ : c = Cmd.decl fk.1 (skolemDecl fk.2) ∨
+            c = Cmd.decl (viewName fk.1) (viewDecl fk.2) ∨
+            c = Cmd.decl (termName fk.1) (termDecl fk.2) := by simpa using h₃
+        rcases h₄ with rfl | rfl | rfl <;> trivial
+  · obtain ⟨r, hr, rfl⟩ := List.mem_map.mp h
+    exact Or.inr hr
+
+/-- **`encodeCmd` emits one rule and only for a source rule**, which is what makes the
+invariant's first disjunct the *whole* of what a non-maintenance firing can be. -/
+theorem rulesEncodedOk_encodeCmd {P : Program} {c : Cmd} (hc : c ∈ P) (n i : Nat) :
+    ∀ c' ∈ (encodeCmd c n i).1, Cmd.RulesEncodedOk P c' := by
+  intro c' hc'
+  cases c with
+  | action a =>
+      have h : c' ∈ (encodeAction fiatE a n).1.map Cmd.action ++ [Cmd.saturate rebuildRuleset] :=
+        hc'
+      rcases List.mem_append.mp h with h₁ | h₁
+      · obtain ⟨b, -, rfl⟩ := List.mem_map.mp h₁
+        trivial
+      · obtain rfl : c' = Cmd.saturate rebuildRuleset := by simpa using h₁
+        trivial
+  | rule r =>
+      have h : c' ∈ [Cmd.rule (encodeRule i r n).1] := hc'
+      obtain rfl : c' = Cmd.rule (encodeRule i r n).1 := by simpa using h
+      exact Or.inl ⟨r, i, n, hc, rfl⟩
+  | run R =>
+      have h : c' ∈ [Cmd.run R, Cmd.saturate rebuildRuleset] := hc'
+      have h2 : c' = Cmd.run R ∨ c' = Cmd.saturate rebuildRuleset := by simpa using h
+      rcases h2 with rfl | rfl <;> trivial
+  | saturate R =>
+      have h : c' ∈ [Cmd.saturate R, Cmd.saturate rebuildRuleset] := hc'
+      have h2 : c' = Cmd.saturate R ∨ c' = Cmd.saturate rebuildRuleset := by simpa using h
+      rcases h2 with rfl | rfl <;> trivial
+  | decl f dc =>
+      have h : c' ∈ ([] : Program) := hc'
+      simp at h
+
+@[inherit_doc rulesEncodedOk_encodeCmd]
+theorem rulesEncodedOk_encodeCmds {P : Program} : ∀ (p : Program), (∀ c ∈ p, c ∈ P) →
+    ∀ (n i : Nat), ∀ c' ∈ (encodeCmds p n i).1, Cmd.RulesEncodedOk P c'
+  | [], _, _, _ => by simp [encodeCmds]
+  | c :: cs, hp, n, i => by
+      intro c' hc'
+      have hsplit : (encodeCmds (c :: cs) n i).1
+          = (encodeCmd c n i).1
+            ++ (encodeCmds cs (encodeCmd c n i).2.1 (encodeCmd c n i).2.2).1 := rfl
+      rw [hsplit] at hc'
+      rcases List.mem_append.mp hc' with h | h
+      · exact rulesEncodedOk_encodeCmd (hp c List.mem_cons_self) n i c' h
+      · exact rulesEncodedOk_encodeCmds cs
+          (fun x hx => hp x (List.mem_cons_of_mem c hx)) _ _ c' h
+
+/-- **The rule invariant at the state `execM` returned.** The shape
+`execM_encode_mergeShape` has for declarations. -/
+theorem execM_encode_rules {P : Program} {tgt : FDatabase}
+    (htgt : execM (encode P) = some tgt) : tgt.RulesEncoded P := by
+  rw [execM, encode] at htgt
+  refine FDatabase.execProgramM_rulesEncoded
+    (p := encodePrelude P ++ (encodeCmds P 0 0).1) (fun c hc => ?_) ?_ htgt
+  · rcases List.mem_append.mp hc with h | h
+    · exact rulesEncodedOk_encodePrelude P c h
+    · exact rulesEncodedOk_encodeCmds P (fun _ hc' => hc') 0 0 c h
+  · intro r hr
+    exact absurd hr (by simp [FDatabase.empty])
+
+/-- **A matched row atom's instance is a term the state holds.** -/
+theorem mem_terms_of_patternHolds_values {d : FDatabase} (hr : d.EqsRefl) (hidx : d.IndexOk)
+    {vs as : List Expr} {f : FnName} {σ : Env}
+    (h : patternHolds d (.values vs f as) σ = true) :
+    ∃ ts us, Expr.evalList d.sig as (d.env ++ σ) = some ts ∧
+      Expr.evalList d.sig vs (d.env ++ σ) = some us ∧
+      Term.app f (ts ++ us) ∈ d.terms := by
+  cases hv : Expr.evalList d.sig vs (d.env ++ σ) with
+  | none => simp only [patternHolds, hv, Bool.false_eq_true] at h
+  | some us =>
+    cases ha : Expr.evalList d.sig as (d.env ++ σ) with
+    | none => simp only [patternHolds, hv, ha, Bool.false_eq_true] at h
+    | some ts =>
+      refine ⟨ts, us, rfl, rfl, ?_⟩
+      by_cases hmg : (d.sig.mergeOf f).isSome = true
+      · simp only [patternHolds, hv, ha, hmg, if_true, List.any_eq_true,
+          Bool.and_eq_true_iff, decide_eq_true_eq] at h
+        obtain ⟨r, hmem, ⟨⟨hfn, hargs⟩, hout⟩⟩ := h
+        have hcl : ∀ p ∈ ((d.addTerms ts).addTerms us).closureF, p.1 = p.2 := by
+          refine fun p hp => diag_closureF (fun q hq => ?_) hp
+          rw [FDatabase.addTerms_eqs, FDatabase.addTerms_eqs] at hq
+          exact hr q hq
+        obtain rfl : ts = r.args := eq_of_congrKeys hcl hargs
+        obtain rfl : us = r.out := eq_of_congrKeys hcl hout
+        have hmt := mem_terms_of_indexOk hr hidx hmem
+          (by rw [hfn]; intro hc; rw [hc] at hmg; simp at hmg)
+        rw [hfn] at hmt
+        exact hmt
+      · rw [Bool.not_eq_true] at hmg
+        simp only [patternHolds, hv, ha, hmg, Bool.false_eq_true, if_false,
+          decide_eq_true_eq] at h
+        obtain ⟨w, hw, hcl⟩ := h
+        have hdiag : ∀ p ∈ (d.addTerm (Term.app f (ts ++ us))).closureF, p.1 = p.2 :=
+          fun p hp => diag_closureF
+            (fun q hq => hr q (by rw [FDatabase.addTerm_eqs] at hq; exact hq)) hp
+        obtain rfl : w = Term.app f (ts ++ us) := hdiag (w, Term.app f (ts ++ us)) hcl
+        exact hw
+
+/-! ##### The substitution a pattern was checked at, and the one the head runs under -/
+
+/-- A binding a restricted substitution answers with is one the full substitution answers
+with, the globals shadowing both alike. -/
+theorem lookup_append_of_refines {env ρ σ : Env} (hr : Env.Refines ρ σ) {v : Var} {t : Term}
+    (h : Env.lookup v (env ++ ρ) = some t) : Env.lookup v (env ++ σ) = some t := by
+  by_cases hv : v ∈ Env.dom env
+  · rw [Env.lookup_append_of_mem hv]
+    rw [Env.lookup_append_of_mem hv] at h
+    exact h
+  · rw [Env.lookup_append_of_not_mem hv]
+    rw [Env.lookup_append_of_not_mem hv] at h
+    exact hr (v, t) (Env.mem_of_lookup h)
+
+mutual
+
+/-- **An evaluation survives un-restricting the substitution.** `Expr.eval` reads the
+environment only through `Env.lookup`, so what the pattern's own restriction pinned down the
+whole match pins down too — which is what lets a query atom's reading be used at the
+environment the *head* runs in. -/
+theorem Expr.eval_of_refines {sig : Signature} {env ρ σ : Env} (hr : Env.Refines ρ σ) :
+    ∀ (e : Expr) {t : Term}, e.eval sig (env ++ ρ) = some t → e.eval sig (env ++ σ) = some t
+  | .lit _, _, h => h
+  | .var _, _, h => by
+      rw [Expr.eval] at h ⊢
+      exact lookup_append_of_refines hr h
+  | .app f args, _, h => by
+      cases hp : Prim.ofName f with
+      | some p =>
+        simp only [Expr.eval, hp] at h ⊢
+        obtain ⟨ts, hts, hap⟩ := Option.bind_eq_some_iff.mp h
+        rw [Expr.evalList_of_refines hr args hts]
+        exact hap
+      | none =>
+        simp only [Expr.eval, hp] at h ⊢
+        by_cases hct : sig.IsCtor f
+        · rw [if_pos hct] at h ⊢
+          obtain ⟨ts, hts, hap⟩ := Option.map_eq_some_iff.mp h
+          rw [Expr.evalList_of_refines hr args hts]
+          exact congrArg some hap
+        · rw [if_neg hct] at h
+          exact absurd h (by simp)
+
+@[inherit_doc Expr.eval_of_refines]
+theorem Expr.evalList_of_refines {sig : Signature} {env ρ σ : Env} (hr : Env.Refines ρ σ) :
+    ∀ (es : List Expr) {ts : List Term},
+      Expr.evalList sig es (env ++ ρ) = some ts → Expr.evalList sig es (env ++ σ) = some ts
+  | [], _, h => h
+  | e :: es, _, h => by
+      rw [Expr.evalList] at h ⊢
+      obtain ⟨t, ht, hrest⟩ := Option.bind_eq_some_iff.mp h
+      obtain ⟨ts, hts, hcons⟩ := Option.map_eq_some_iff.mp hrest
+      rw [Expr.eval_of_refines hr e ht, Expr.evalList_of_refines hr es hts]
+      exact congrArg some hcons
+
+end
+
+/-- Every pattern of a matched query holds, at its own restriction of the substitution. -/
+theorem patternHolds_of_mem_matchQuery {d : FDatabase} {q : Query} {σ : Env}
+    (h : σ ∈ matchQuery d q) {p : Pattern} (hp : p ∈ q) :
+    patternHolds d p (Env.canon (p.freeVars d.env) σ) = true := by
+  rw [matchQuery, List.mem_filter] at h
+  exact List.all_eq_true.mp h.2 p hp
+
+/-- **A matched query's row atom, read at the substitution its head runs under.** -/
+theorem mem_terms_of_mem_matchQuery_values {d : FDatabase} (hr : d.EqsRefl) (hidx : d.IndexOk)
+    {q : Query} {σ : Env} (hσ : σ ∈ matchQuery d q) {vs as : List Expr} {f : FnName}
+    (hp : Pattern.values vs f as ∈ q) :
+    ∃ ts us, Expr.evalList d.sig as (d.env ++ σ) = some ts ∧
+      Expr.evalList d.sig vs (d.env ++ σ) = some us ∧
+      Term.app f (ts ++ us) ∈ d.terms := by
+  obtain ⟨ts, us, ha, hv, hmem⟩ :=
+    mem_terms_of_patternHolds_values hr hidx (patternHolds_of_mem_matchQuery hσ hp)
+  exact ⟨ts, us, Expr.evalList_of_refines Env.refines_canon as ha,
+    Expr.evalList_of_refines Env.refines_canon vs hv, hmem⟩
+
+/-! ##### The one `set` a maintenance head is -/
+
+/-- **A block that is one `set`, read back.** The environment and rule list come back from the
+pre-state, so what the firing contributes to `terms` is exactly the entry the `set` recorded. -/
+theorem execLocalActions_set {d d' : FDatabase} {g : FnName} {args out : List Expr} {σ : Env}
+    (h : execLocalActions d [.set g args out] σ = some d') :
+    ∃ es vs, Expr.evalList d.sig args (d.env ++ σ) = some es ∧
+      Expr.evalList d.sig out (d.env ++ σ) = some vs ∧
+      ∀ t ∈ d'.terms, t ∈ (FDatabase.addRow g es vs d).terms := by
+  rw [execLocalActions] at h
+  obtain ⟨e, he, rfl⟩ := Option.map_eq_some_iff.mp h
+  rw [execActions] at he
+  obtain ⟨e₁, he₁, he₂⟩ := Option.bind_eq_some_iff.mp he
+  rw [execActions, Option.some.injEq] at he₂
+  subst he₂
+  rw [execAction] at he₁
+  obtain ⟨es, hes, he₁⟩ := Option.bind_eq_some_iff.mp he₁
+  obtain ⟨vs, hvs, rfl⟩ := Option.map_eq_some_iff.mp he₁
+  exact ⟨es, vs, hes, hvs, fun t ht => ht⟩
+
+/-! ##### The proof shells a maintenance head mints -/
+
+/-- **A view is never a congruence head**, whatever the constructor and whatever the arity:
+`Nat.isDigit_of_mem_toDigits` is what says the arity suffix carries no `'w'`. -/
+theorem viewName_ne_congrName {f : FnName} {k : Nat} : viewName f ≠ congrName k := by
+  intro h
+  have hw : 'w' ∈ (viewName f).toList := by
+    rw [viewName, String.toList_append]
+    exact List.mem_append_right _ (by decide)
+  rw [h, congrName, String.toList_append] at hw
+  rcases List.mem_append.mp hw with h1 | h1
+  · exact absurd h1 (by decide)
+  · have hd := Nat.isDigit_of_mem_toDigits (b := 10) (by decide) (by decide)
+      (show 'w' ∈ Nat.toDigits 10 k by rw [Nat.toString_eq_repr, Nat.toList_repr] at h1; exact h1)
+    simp at hd
+
+@[inherit_doc viewName_ne_congrName]
+theorem ufName_ne_congrName {k : Nat} : ufName ≠ congrName k := by
+  intro h
+  have hw : 'U' ∈ ufName.toList := by rw [ufName]; decide
+  rw [h, congrName, String.toList_append] at hw
+  rcases List.mem_append.mp hw with h1 | h1
+  · exact absurd h1 (by decide)
+  · have hd := Nat.isDigit_of_mem_toDigits (b := 10) (by decide) (by decide)
+      (show 'U' ∈ Nat.toDigits 10 k by rw [Nat.toString_eq_repr, Nat.toList_repr] at h1; exact h1)
+    simp at hd
+
+/-- `@Congr_k` is neither shape, which is what a column rule's proof column costs. -/
+theorem not_entryShaped_congr {k : Nat} {as : List Term} :
+    ¬ (Term.app (congrName k) as).EntryShaped :=
+  not_entryShaped_of_ne (fun _ h => viewName_ne_congrName h.symm)
+    (fun h => ufName_ne_congrName h.symm)
+
+/-- **A minted shell of neither shape, at any depth.** `entryShaped_mem_of_columns` with the
+"is not the written term" side condition replaced by the shape refutation, so that the
+encoding's nested proof nodes can be peeled one at a time. -/
+theorem entryShaped_mem_of_shell {d : FDatabase} {g : FnName} {as : List Term}
+    (hsh : ¬ (Term.app g as).EntryShaped)
+    (ha : ∀ a ∈ as, ∀ s ∈ a.subtermList, s.EntryShaped → s ∈ d.terms) :
+    ∀ s ∈ (Term.app g as).subtermList, s.EntryShaped → s ∈ d.terms := by
+  intro s hs hshaped
+  rw [Term.subtermList, List.mem_cons] at hs
+  rcases hs with rfl | hs
+  · exact absurd hshaped hsh
+  · obtain ⟨c, hc, hsub⟩ := (Term.mem_subtermListL _).mp hs
+    exact ha c hc s ((Term.mem_subtermList c).mpr hsub) hshaped
+
+/-! ##### Three list facts about `Expr.evalList` -/
+
+/-- Every value an operand list evaluates to is some operand's. -/
+theorem Expr.exists_of_mem_evalList {sig : Signature} {ρ : Env} :
+    ∀ {es : List Expr} {ts : List Term}, Expr.evalList sig es ρ = some ts →
+      ∀ t ∈ ts, ∃ e ∈ es, e.eval sig ρ = some t
+  | [], _, h, t, ht => by
+      rw [Expr.evalList, Option.some.injEq] at h
+      cases h
+      simp at ht
+  | e :: es, _, h, t, ht => by
+      rw [Expr.evalList] at h
+      obtain ⟨u, hu, hrest⟩ := Option.bind_eq_some_iff.mp h
+      obtain ⟨us, hus, rfl⟩ := Option.map_eq_some_iff.mp hrest
+      rcases List.mem_cons.mp ht with rfl | ht'
+      · exact ⟨e, List.mem_cons_self, hu⟩
+      · obtain ⟨e', he', hev⟩ := Expr.exists_of_mem_evalList hus t ht'
+        exact ⟨e', List.mem_cons_of_mem _ he', hev⟩
+
+/-- The value at one position is that operand's. -/
+theorem Expr.getElem?_of_evalList {sig : Signature} {ρ : Env} :
+    ∀ {es : List Expr} {ts : List Term}, Expr.evalList sig es ρ = some ts →
+      ∀ (i : Nat) {e : Expr}, es[i]? = some e →
+        ∃ t, ts[i]? = some t ∧ e.eval sig ρ = some t
+  | [], _, _, i, _, hi => by simp at hi
+  | e :: es, _, h, 0, e', hi => by
+      rw [Expr.evalList] at h
+      obtain ⟨u, hu, hrest⟩ := Option.bind_eq_some_iff.mp h
+      obtain ⟨us, hus, rfl⟩ := Option.map_eq_some_iff.mp hrest
+      obtain rfl : e = e' := by simpa using hi
+      exact ⟨u, by simp, hu⟩
+  | e :: es, _, h, i + 1, e', hi => by
+      rw [Expr.evalList] at h
+      obtain ⟨u, hu, hrest⟩ := Option.bind_eq_some_iff.mp h
+      obtain ⟨us, hus, rfl⟩ := Option.map_eq_some_iff.mp hrest
+      obtain ⟨t, ht, hev⟩ := Expr.getElem?_of_evalList hus i (by simpa using hi)
+      exact ⟨t, by simpa using ht, hev⟩
+
+/-- Replacing one operand replaces one value: what a column rule's key expression is. -/
+theorem Expr.evalList_set {sig : Signature} {ρ : Env} :
+    ∀ {es : List Expr} {ts : List Term}, Expr.evalList sig es ρ = some ts →
+      ∀ (i : Nat) {e : Expr} {t : Term}, e.eval sig ρ = some t →
+        Expr.evalList sig (es.set i e) ρ = some (ts.set i t)
+  | [], _, h, _, _, _, _ => by
+      rw [Expr.evalList, Option.some.injEq] at h
+      cases h
+      simp
+  | a :: as, _, h, 0, e, t, he => by
+      rw [Expr.evalList] at h
+      obtain ⟨u, hu, hrest⟩ := Option.bind_eq_some_iff.mp h
+      obtain ⟨us, hus, rfl⟩ := Option.map_eq_some_iff.mp hrest
+      rw [List.set_cons_zero, List.set_cons_zero, Expr.evalList, he, Option.bind_some, hus]
+      rfl
+  | a :: as, _, h, i + 1, e, t, he => by
+      rw [Expr.evalList] at h
+      obtain ⟨u, hu, hrest⟩ := Option.bind_eq_some_iff.mp h
+      obtain ⟨us, hus, rfl⟩ := Option.map_eq_some_iff.mp hrest
+      rw [List.set_cons_succ, List.set_cons_succ, Expr.evalList, hu, Option.bind_some,
+        Expr.evalList_set hus i he]
+      rfl
+
+/-- A singleton operand list. -/
+theorem Expr.evalList_single {sig : Signature} {ρ : Env} {e : Expr} {ts : List Term}
+    (h : Expr.evalList sig [e] ρ = some ts) : ∃ t, e.eval sig ρ = some t ∧ ts = [t] := by
+  rw [Expr.evalList] at h
+  obtain ⟨t, ht, hrest⟩ := Option.bind_eq_some_iff.mp h
+  obtain ⟨us, hus, rfl⟩ := Option.map_eq_some_iff.mp hrest
+  rw [Expr.evalList, Option.some.injEq] at hus
+  exact ⟨t, ht, by rw [← hus]⟩
+
+/-! ##### The value a minted proof term has
+
+The clause `FDatabase.SoundTerms.addTerm_top` asks at a written term's *subterms* is answered
+at a proof column by the shape of the vocabulary that built it: no head the encoding applies
+inside a proof is a view or `@UF`, and a primitive answers with a literal or with one of its
+own operands, so what the clause has to answer for under a proof node is what its leaves —
+the columns the match bound — already answer. -/
+
+/-- A view is never `@Sym`, by the last character. -/
+theorem viewName_ne_symName {f : FnName} : viewName f ≠ symName := by
+  intro h
+  have h2 := congrArg (fun s => (String.toList s).reverse) h
+  simp [viewName, symName, String.toList_append, List.reverse_append] at h2
+
+/-- A view is never `@Fiat`, by the last character. -/
+theorem viewName_ne_fiatName {f : FnName} : viewName f ≠ fiatName := by
+  intro h
+  have h2 := congrArg (fun s => (String.toList s).reverse) h
+  simp [viewName, fiatName, String.toList_append, List.reverse_append] at h2
+
+/-- A literal is of neither shape. -/
+theorem not_entryShaped_lit {l : Lit} : ¬ (Term.lit l).EntryShaped := by
+  rintro (⟨f, cs, e, pf, h⟩ | ⟨x, p, pf, h⟩) <;> exact absurd h (by simp)
+
+/-- A name that no entry term can be headed by. -/
+def NotEntryHead (g : FnName) : Prop := (∀ f, g ≠ viewName f) ∧ g ≠ ufName
+
+theorem notEntryHead_transName : NotEntryHead transName :=
+  ⟨fun _ h => viewName_ne_transName h.symm, by decide⟩
+
+theorem notEntryHead_symName : NotEntryHead symName :=
+  ⟨fun _ h => viewName_ne_symName h.symm, by decide⟩
+
+theorem notEntryHead_fiatName : NotEntryHead fiatName :=
+  ⟨fun _ h => viewName_ne_fiatName h.symm, by decide⟩
+
+theorem notEntryHead_congrName {k : Nat} : NotEntryHead (congrName k) :=
+  ⟨fun _ h => viewName_ne_congrName h.symm, fun h => ufName_ne_congrName h.symm⟩
+
+/-- **A primitive answers with a literal or with one of its operands.** `ordering-gt`, `min`
+and `max` compute a literal; `if` selects between two values it was given. -/
+theorem prim_apply_cases {p : Prim} {ts : List Term} {t : Term} (h : p.apply ts = some t) :
+    (∃ l, t = Term.lit l) ∨ t ∈ ts := by
+  unfold Prim.apply at h
+  split at h
+  · exact Or.inl ⟨_, (Option.some.inj h).symm⟩
+  · rename_i c a b
+    rw [Option.some.injEq] at h
+    subst h
+    by_cases hc : c <;> simp [hc]
+  · exact Or.inl ⟨_, (Option.some.inj h).symm⟩
+  · exact Or.inl ⟨_, (Option.some.inj h).symm⟩
+  · exact absurd h (by simp)
+
+mutual
+
+/-- **Every view- or `@UF`-shaped subterm of a proof term's value is one the state holds.**
+The two hypotheses are the whole of it: no head applied is an entry head, and the variables
+the expression reads are bound to terms whose own entries the state holds. -/
+theorem entryShaped_mem_of_eval {d : FDatabase} {sig : Signature} {ρ : Env} :
+    ∀ (e : Expr), (∀ g ∈ e.fns, NotEntryHead g) →
+      (∀ v ∈ e.vars, ∀ u, Env.lookup v ρ = some u →
+        ∀ s ∈ u.subtermList, s.EntryShaped → s ∈ d.terms) →
+      ∀ {t : Term}, e.eval sig ρ = some t →
+        ∀ s ∈ t.subtermList, s.EntryShaped → s ∈ d.terms
+  | .lit l, _, _, t, h => by
+      obtain rfl : t = Term.lit l := (Option.some.inj h).symm
+      intro s hs hsh
+      rw [Term.subtermList_lit, List.mem_singleton] at hs
+      exact absurd (hs ▸ hsh) not_entryShaped_lit
+  | .var v, _, hb, t, h => by
+      rw [Expr.eval] at h
+      exact hb v (by simp [Expr.vars]) t h
+  | .app f args, hf, hb, t, h => by
+      have hfl : ∀ g ∈ Expr.fnsList args, NotEntryHead g :=
+        fun g hg => hf g (by rw [Expr.fns, List.mem_cons]; exact Or.inr hg)
+      have hbl : ∀ v ∈ Expr.varsList args, ∀ u, Env.lookup v ρ = some u →
+          ∀ s ∈ u.subtermList, s.EntryShaped → s ∈ d.terms :=
+        fun v hv => hb v (by rw [Expr.vars]; exact hv)
+      cases hp : Prim.ofName f with
+      | some p =>
+          simp only [Expr.eval, hp] at h
+          obtain ⟨ts, hargs, hap⟩ := Option.bind_eq_some_iff.mp h
+          have hts := entryShaped_mem_of_evalList args hfl hbl hargs
+          rcases prim_apply_cases hap with ⟨l, rfl⟩ | hmem
+          · intro s hs hsh
+            rw [Term.subtermList_lit, List.mem_singleton] at hs
+            exact absurd (hs ▸ hsh) not_entryShaped_lit
+          · exact hts t hmem
+      | none =>
+          simp only [Expr.eval, hp] at h
+          by_cases hct : sig.IsCtor f
+          · rw [if_pos hct] at h
+            obtain ⟨ts, hargs, happ⟩ := Option.map_eq_some_iff.mp h
+            have hts := entryShaped_mem_of_evalList args hfl hbl hargs
+            obtain rfl : Term.app f ts = t := happ
+            exact entryShaped_mem_of_shell
+              (not_entryShaped_of_ne (hf f (by simp [Expr.fns])).1
+                (hf f (by simp [Expr.fns])).2) hts
+          · rw [if_neg hct] at h
+            exact absurd h (by simp)
+
+@[inherit_doc entryShaped_mem_of_eval]
+theorem entryShaped_mem_of_evalList {d : FDatabase} {sig : Signature} {ρ : Env} :
+    ∀ (es : List Expr), (∀ g ∈ Expr.fnsList es, NotEntryHead g) →
+      (∀ v ∈ Expr.varsList es, ∀ u, Env.lookup v ρ = some u →
+        ∀ s ∈ u.subtermList, s.EntryShaped → s ∈ d.terms) →
+      ∀ {ts : List Term}, Expr.evalList sig es ρ = some ts →
+        ∀ u ∈ ts, ∀ s ∈ u.subtermList, s.EntryShaped → s ∈ d.terms
+  | [], _, _, ts, h => by
+      rw [Expr.evalList, Option.some.injEq] at h
+      subst h
+      intro u hu
+      simp at hu
+  | e :: es, hf, hb, ts, h => by
+      rw [Expr.evalList] at h
+      obtain ⟨t, ht, hrest⟩ := Option.bind_eq_some_iff.mp h
+      obtain ⟨us, hus, rfl⟩ := Option.map_eq_some_iff.mp hrest
+      intro u hu
+      rcases List.mem_cons.mp hu with rfl | hu'
+      · exact entryShaped_mem_of_eval e
+          (fun g hg => hf g (by rw [Expr.fnsList]; simp [hg]))
+          (fun v hv => hb v (by rw [Expr.varsList]; simp [hv])) ht
+      · exact entryShaped_mem_of_evalList es
+          (fun g hg => hf g (by rw [Expr.fnsList]; simp [hg]))
+          (fun v hv => hb v (by rw [Expr.varsList]; simp [hv])) hus u hu'
+
+end
+
+/-! ##### Two more list facts -/
+
+/-- A member of a list one position was replaced in is a member or the replacement. -/
+theorem mem_or_eq_of_mem_set {α : Type _} {l : List α} {i : Nat} {b a : α}
+    (h : a ∈ l.set i b) : a ∈ l ∨ a = b := by
+  induction l generalizing i with
+  | nil => simp at h
+  | cons c cs ih =>
+    cases i with
+    | zero =>
+      rw [List.set_cons_zero, List.mem_cons] at h
+      rcases h with rfl | h
+      · exact Or.inr rfl
+      · exact Or.inl (List.mem_cons_of_mem _ h)
+    | succ j =>
+      rw [List.set_cons_succ, List.mem_cons] at h
+      rcases h with rfl | h
+      · exact Or.inl List.mem_cons_self
+      · exact (ih h).imp (List.mem_cons_of_mem _) id
+
+/-! ##### The three families, one firing each
+
+Each rule's query is two row atoms and its head is one `set`, so each proof is the same three
+moves: read the two atoms back as entry terms (`mem_terms_of_mem_matchQuery_values`), justify
+them against the invariant, and hand the written entry to the one lemma its family is
+(`EntrySound.eclass`, `EntrySound.column`, `cong_of_pathCompress`). -/
+
+/-- **`pathCompressRule`'s firing.** Two `@UF` edges compose. -/
+theorem pathCompressRule_soundTerms {src : Database} {d d' : FDatabase} {σ : Env}
+    (hr : d.EqsRefl) (hidx : d.IndexOk) (hsc : d.SubtermClosed) (h : d.SoundTerms src)
+    (hσ : σ ∈ matchQuery d pathCompressRule.query)
+    (hf : execLocalActions d pathCompressRule.actions σ = some d') : d'.SoundTerms src := by
+  obtain ⟨ts₁, us₁, ha₁, hv₁, hm₁⟩ := mem_terms_of_mem_matchQuery_values hr hidx hσ
+    (vs := [Expr.var "@b", Expr.var "@p"]) (f := ufName) (as := [Expr.var "@a"])
+    (by simp [pathCompressRule])
+  obtain ⟨a, hla, rfl⟩ := Expr.evalList_single ha₁
+  obtain ⟨b, p, hlb, hlp, rfl⟩ := Expr.evalList_pair hv₁
+  obtain ⟨ts₂, us₂, ha₂, hv₂, hm₂⟩ := mem_terms_of_mem_matchQuery_values hr hidx hσ
+    (vs := [Expr.var "@c", Expr.var "@q"]) (f := ufName) (as := [Expr.var "@b"])
+    (by simp [pathCompressRule])
+  obtain ⟨b', hlb', rfl⟩ := Expr.evalList_single ha₂
+  obtain ⟨c, q, hlc, hlq, rfl⟩ := Expr.evalList_pair hv₂
+  obtain rfl : b = b' := Option.some.inj (hlb.symm.trans hlb')
+  have hab : Cong src a b := h.2 a b p hm₁
+  have hbc : Cong src b c := h.2 b c q hm₂
+  have ham : a ∈ d.terms := FDatabase.mem_terms_of_column hsc hm₁ (by simp)
+  have hpm : p ∈ d.terms := FDatabase.mem_terms_of_column hsc hm₁ (by simp)
+  have hcm : c ∈ d.terms := FDatabase.mem_terms_of_column hsc hm₂ (by simp)
+  have hqm : q ∈ d.terms := FDatabase.mem_terms_of_column hsc hm₂ (by simp)
+  obtain ⟨esh, vsh, hesh, hvsh, hterms⟩ := execLocalActions_set hf
+  obtain ⟨a', hla', rfl⟩ := Expr.evalList_single hesh
+  obtain rfl : a = a' := Option.some.inj (hla.symm.trans hla')
+  obtain ⟨c', pf, hlc', hpf, rfl⟩ := Expr.evalList_pair hvsh
+  obtain rfl : c = c' := Option.some.inj (hlc.symm.trans hlc')
+  refine FDatabase.SoundTerms.mono_terms hterms (h.addRow_top ?_ ?_ ?_)
+  · refine entryShaped_mem_of_columns (fun z hz => ?_)
+    have hz2 : z = a ∨ z = c ∨ z = pf := by simpa using hz
+    rcases hz2 with rfl | rfl | rfl
+    · exact entryShaped_mem_of_held hsc ham
+    · exact entryShaped_mem_of_held hsc hcm
+    · refine entryShaped_mem_of_eval (transE (Expr.var "@p") (Expr.var "@q")) ?_ ?_ hpf
+      · intro g hg
+        obtain rfl : g = transName := by simpa [transE, Expr.fns, Expr.fnsList] using hg
+        exact notEntryHead_transName
+      · intro v hv u hu
+        have hv2 : v = "@p" ∨ v = "@q" := by
+          simpa [transE, Expr.vars, Expr.varsList] using hv
+        rcases hv2 with rfl | rfl
+        · obtain rfl : u = p := Option.some.inj (hu.symm.trans hlp)
+          exact entryShaped_mem_of_held hsc hpm
+        · obtain rfl : u = q := Option.some.inj (hu.symm.trans hlq)
+          exact entryShaped_mem_of_held hsc hqm
+  · intro f' cs' e' pf' hq
+    exact absurd (Term.app.inj hq).1 (fun hz => viewName_ne_ufName hz.symm)
+  · intro y z pf' hq
+    obtain ⟨-, hcols⟩ := Term.app.inj hq
+    have h3 : [a, c, pf] = [y, z, pf'] := hcols
+    obtain rfl : a = y := (List.cons.inj h3).1
+    obtain rfl : c = z := (List.cons.inj (List.cons.inj h3).2).1
+    exact cong_of_pathCompress hab hbc
+
+/-- **The e-class rebuild rule's firing.** The entry keeps its key and its e-class moves along
+the edge the second atom matched, which is `EntrySound.eclass`. The key expression list is
+whatever the rule was built over — nothing here reads `rebuildVars`. -/
+theorem eclassRule_soundTerms {src : Database} {d d' : FDatabase} {σ : Env} {f : FnName}
+    {cs : List Expr}
+    (hr : d.EqsRefl) (hidx : d.IndexOk) (hsc : d.SubtermClosed) (h : d.SoundTerms src)
+    (hσ : σ ∈ matchQuery d
+      [Pattern.values [.var "@e", .var "@p"] (viewName f) cs,
+       Pattern.values [.var "@x", .var "@q"] ufName [.var "@e"]])
+    (hf : execLocalActions d
+      [Action.set (viewName f) cs [.var "@x", transE (.var "@p") (.var "@q")]] σ = some d') :
+    d'.SoundTerms src := by
+  obtain ⟨ts, us, hats, hvus, hmv⟩ := mem_terms_of_mem_matchQuery_values hr hidx hσ
+    (vs := [Expr.var "@e", Expr.var "@p"]) (f := viewName f) (as := cs) (by simp)
+  obtain ⟨e, p, hle, hlp, rfl⟩ := Expr.evalList_pair hvus
+  have hes : EntrySound src f ts e := h.1 f ts e p hmv
+  obtain ⟨ts₂, us₂, hats₂, hvus₂, hmu⟩ := mem_terms_of_mem_matchQuery_values hr hidx hσ
+    (vs := [Expr.var "@x", Expr.var "@q"]) (f := ufName) (as := [Expr.var "@e"]) (by simp)
+  obtain ⟨e', hle', rfl⟩ := Expr.evalList_single hats₂
+  obtain ⟨x, q, hlx, hlq, rfl⟩ := Expr.evalList_pair hvus₂
+  obtain rfl : e = e' := Option.some.inj (hle.symm.trans hle')
+  have hex : Cong src e x := h.2 e x q hmu
+  have hcol : ∀ z ∈ ts, z ∈ d.terms :=
+    fun z hz => FDatabase.mem_terms_of_column hsc hmv (List.mem_append_left _ hz)
+  have hpm : p ∈ d.terms := FDatabase.mem_terms_of_column hsc hmv (by simp)
+  have hxm : x ∈ d.terms := FDatabase.mem_terms_of_column hsc hmu (by simp)
+  have hqm : q ∈ d.terms := FDatabase.mem_terms_of_column hsc hmu (by simp)
+  obtain ⟨esh, vsh, hesh, hvsh, hterms⟩ := execLocalActions_set hf
+  obtain rfl : esh = ts := Option.some.inj (hesh.symm.trans hats)
+  obtain ⟨x', pf, hlx', hpf, rfl⟩ := Expr.evalList_pair hvsh
+  obtain rfl : x = x' := Option.some.inj (hlx.symm.trans hlx')
+  refine FDatabase.SoundTerms.mono_terms hterms (h.addRow_top ?_ ?_ ?_)
+  · refine entryShaped_mem_of_columns (fun z hz => ?_)
+    rcases List.mem_append.mp hz with hz' | hz'
+    · exact entryShaped_mem_of_held hsc (hcol z hz')
+    · have hz2 : z = x ∨ z = pf := by simpa using hz'
+      rcases hz2 with rfl | rfl
+      · exact entryShaped_mem_of_held hsc hxm
+      · refine entryShaped_mem_of_eval (transE (Expr.var "@p") (Expr.var "@q")) ?_ ?_ hpf
+        · intro g hg
+          obtain rfl : g = transName := by simpa [transE, Expr.fns, Expr.fnsList] using hg
+          exact notEntryHead_transName
+        · intro v hv u hu
+          have hv2 : v = "@p" ∨ v = "@q" := by
+            simpa [transE, Expr.vars, Expr.varsList] using hv
+          rcases hv2 with rfl | rfl
+          · obtain rfl : u = p := Option.some.inj (hu.symm.trans hlp)
+            exact entryShaped_mem_of_held hsc hpm
+          · obtain rfl : u = q := Option.some.inj (hu.symm.trans hlq)
+            exact entryShaped_mem_of_held hsc hqm
+  · intro f' cs' e'' pf' hq
+    obtain ⟨hfname, hcols⟩ := Term.app.inj hq
+    obtain rfl : f' = f := viewName_inj hfname.symm
+    obtain ⟨rfl, hlast⟩ := List.append_inj' hcols rfl
+    obtain rfl : x = e'' := (List.cons.inj hlast).1
+    exact hes.eclass hex
+  · intro y z pf' hq
+    exact absurd (Term.app.inj hq).1 viewName_ne_ufName
+
+/-- **A column rebuild rule's firing.** Column `i` of the key moves along the edge and the
+e-class stays, which is `EntrySound.column`. The proof column is the one that mints a
+`@Congr_k`, and `entryShaped_mem_of_eval` is what makes that cost nothing. -/
+theorem columnRule_soundTerms {src : Database} {d d' : FDatabase} {σ : Env} {f : FnName}
+    {k i : Nat} {cs : List Expr} {cv : Var} (hcv : cs[i]? = some (.var cv))
+    (hr : d.EqsRefl) (hidx : d.IndexOk) (hsc : d.SubtermClosed) (h : d.SoundTerms src)
+    (hσ : σ ∈ matchQuery d
+      [Pattern.values [.var "@e", .var "@p"] (viewName f) cs,
+       Pattern.values [.var "@x", .var "@q"] ufName [.var cv]])
+    (hf : execLocalActions d
+      [Action.set (viewName f) (cs.set i (.var "@x"))
+        [.var "@e", transE (symE (congrE (congrChildren k i))) (.var "@p")]] σ = some d') :
+    d'.SoundTerms src := by
+  obtain ⟨ts, us, hats, hvus, hmv⟩ := mem_terms_of_mem_matchQuery_values hr hidx hσ
+    (vs := [Expr.var "@e", Expr.var "@p"]) (f := viewName f) (as := cs) (by simp)
+  obtain ⟨e, p, hle, hlp, rfl⟩ := Expr.evalList_pair hvus
+  have hes : EntrySound src f ts e := h.1 f ts e p hmv
+  obtain ⟨ts₂, us₂, hats₂, hvus₂, hmu⟩ := mem_terms_of_mem_matchQuery_values hr hidx hσ
+    (vs := [Expr.var "@x", Expr.var "@q"]) (f := ufName) (as := [Expr.var cv]) (by simp)
+  obtain ⟨c₀, hlc₀, rfl⟩ := Expr.evalList_single hats₂
+  obtain ⟨x, q, hlx, hlq, rfl⟩ := Expr.evalList_pair hvus₂
+  have hcx : Cong src c₀ x := h.2 c₀ x q hmu
+  obtain ⟨t₀, ht₀, hev₀⟩ := Expr.getElem?_of_evalList hats i hcv
+  obtain rfl : t₀ = c₀ := Option.some.inj (hev₀.symm.trans hlc₀)
+  have hcol : ∀ z ∈ ts, z ∈ d.terms :=
+    fun z hz => FDatabase.mem_terms_of_column hsc hmv (List.mem_append_left _ hz)
+  have hem : e ∈ d.terms := FDatabase.mem_terms_of_column hsc hmv (by simp)
+  have hpm : p ∈ d.terms := FDatabase.mem_terms_of_column hsc hmv (by simp)
+  have hxm : x ∈ d.terms := FDatabase.mem_terms_of_column hsc hmu (by simp)
+  have hqm : q ∈ d.terms := FDatabase.mem_terms_of_column hsc hmu (by simp)
+  obtain ⟨esh, vsh, hesh, hvsh, hterms⟩ := execLocalActions_set hf
+  obtain rfl : esh = ts.set i x :=
+    Option.some.inj (hesh.symm.trans (Expr.evalList_set hats i hlx))
+  obtain ⟨e'', pf, hle'', hpf, rfl⟩ := Expr.evalList_pair hvsh
+  obtain rfl : e = e'' := Option.some.inj (hle.symm.trans hle'')
+  refine FDatabase.SoundTerms.mono_terms hterms (h.addRow_top ?_ ?_ ?_)
+  · refine entryShaped_mem_of_columns (fun z hz => ?_)
+    rcases List.mem_append.mp hz with hz' | hz'
+    · rcases mem_or_eq_of_mem_set hz' with hz'' | rfl
+      · exact entryShaped_mem_of_held hsc (hcol z hz'')
+      · exact entryShaped_mem_of_held hsc hxm
+    · have hz2 : z = e ∨ z = pf := by simpa using hz'
+      rcases hz2 with rfl | rfl
+      · exact entryShaped_mem_of_held hsc hem
+      · refine entryShaped_mem_of_eval
+          (transE (symE (congrE (congrChildren k i))) (Expr.var "@p")) ?_ ?_ hpf
+        · intro g hg
+          have hg2 : g = transName ∨ g = symName ∨ g = congrName (congrChildren k i).length ∨
+              g = fiatName := by
+            rw [transE, Expr.fns, List.mem_cons] at hg
+            rcases hg with rfl | hg
+            · exact Or.inl rfl
+            · obtain ⟨e₀, he₀, hg⟩ := Expr.mem_fnsList hg
+              have he₁ : e₀ = symE (congrE (congrChildren k i)) ∨ e₀ = Expr.var "@p" := by
+                simpa using he₀
+              rcases he₁ with rfl | rfl
+              · rw [symE, Expr.fns, List.mem_cons] at hg
+                rcases hg with rfl | hg
+                · exact Or.inr (Or.inl rfl)
+                · obtain ⟨e₂, he₂, hg⟩ := Expr.mem_fnsList hg
+                  obtain rfl : e₂ = congrE (congrChildren k i) := by simpa using he₂
+                  rw [congrE, Expr.fns, List.mem_cons] at hg
+                  rcases hg with rfl | hg
+                  · exact Or.inr (Or.inr (Or.inl rfl))
+                  · obtain ⟨e₃, he₃, hg⟩ := Expr.mem_fnsList hg
+                    rw [congrChildren, List.mem_map] at he₃
+                    obtain ⟨j, -, rfl⟩ := he₃
+                    by_cases hj : j = i
+                    · rw [if_pos hj, Expr.fns] at hg; simp at hg
+                    · rw [if_neg hj, fiatE, Expr.fns, List.mem_cons] at hg
+                      rcases hg with rfl | hg
+                      · exact Or.inr (Or.inr (Or.inr rfl))
+                      · rw [Expr.fnsList] at hg; simp at hg
+              · rw [Expr.fns] at hg; simp at hg
+          rcases hg2 with rfl | rfl | rfl | rfl
+          · exact notEntryHead_transName
+          · exact notEntryHead_symName
+          · exact notEntryHead_congrName
+          · exact notEntryHead_fiatName
+        · intro v hv u hu
+          have hv2 : v = "@q" ∨ v = "@p" := by
+            rw [transE, Expr.vars] at hv
+            obtain ⟨e₀, he₀, hv⟩ := Expr.mem_varsList hv
+            have he₁ : e₀ = symE (congrE (congrChildren k i)) ∨ e₀ = Expr.var "@p" := by
+              simpa using he₀
+            rcases he₁ with rfl | rfl
+            · rw [symE, Expr.vars] at hv
+              obtain ⟨e₂, he₂, hv⟩ := Expr.mem_varsList hv
+              obtain rfl : e₂ = congrE (congrChildren k i) := by simpa using he₂
+              rw [congrE, Expr.vars] at hv
+              obtain ⟨e₃, he₃, hv⟩ := Expr.mem_varsList hv
+              rw [congrChildren, List.mem_map] at he₃
+              obtain ⟨j, -, rfl⟩ := he₃
+              by_cases hj : j = i
+              · rw [if_pos hj, Expr.vars, List.mem_singleton] at hv
+                exact Or.inl hv
+              · rw [if_neg hj, fiatE, Expr.vars, Expr.varsList] at hv
+                simp at hv
+            · rw [Expr.vars, List.mem_singleton] at hv
+              exact Or.inr hv
+          rcases hv2 with rfl | rfl
+          · obtain rfl : u = q := Option.some.inj (hu.symm.trans hlq)
+            exact entryShaped_mem_of_held hsc hqm
+          · obtain rfl : u = p := Option.some.inj (hu.symm.trans hlp)
+            exact entryShaped_mem_of_held hsc hpm
+  · intro f' cs' e₄ pf' hq
+    obtain ⟨hfname, hcols⟩ := Term.app.inj hq
+    obtain rfl : f' = f := viewName_inj hfname.symm
+    obtain ⟨rfl, hlast⟩ := List.append_inj' hcols rfl
+    obtain rfl : e = e₄ := (List.cons.inj hlast).1
+    exact hes.column ht₀ hcx
+  · intro y z pf' hq
+    exact absurd (Term.app.inj hq).1 viewName_ne_ufName
+
+/-! ##### Any maintenance rule at all
+
+The case split the rule invariant delivers, on the maintenance side: `maintenanceRules` is
+`pathCompressRule` and, per source constructor, one e-class rule and one column rule per
+column. -/
+
+/-- The `i`th column variable of a `k`-ary rebuild rule's key. -/
+theorem getElem?_rebuildVars {k i : Nat} (hi : i < k) :
+    (rebuildVars k)[i]? = some (Expr.var ("@c" ++ toString i)) := by
+  simp [rebuildVars, hi]
+
+/-- **Every maintenance rule's firing preserves the invariant.** Nothing beyond the state is
+asked: the two atoms the query matched are entry terms the state holds, and the invariant
+justifies them. -/
+theorem maintenance_soundTerms {P : Program} {src : Database} {d d' : FDatabase} {r : Rule}
+    {σ : Env} (hmem : r ∈ maintenanceRules P)
+    (hr : d.EqsRefl) (hidx : d.IndexOk) (hsc : d.SubtermClosed) (h : d.SoundTerms src)
+    (hσ : σ ∈ matchQuery d r.query) (hf : execLocalActions d r.actions σ = some d') :
+    d'.SoundTerms src := by
+  rw [maintenanceRules, List.mem_cons] at hmem
+  rcases hmem with rfl | hmem
+  · exact pathCompressRule_soundTerms hr hidx hsc h hσ hf
+  · obtain ⟨fk, -, hmem⟩ := List.mem_flatMap.mp hmem
+    rw [rebuildRules] at hmem
+    simp only [List.mem_cons, List.mem_map, List.mem_range] at hmem
+    rcases hmem with rfl | ⟨i, hi, rfl⟩
+    · exact eclassRule_soundTerms hr hidx hsc h hσ hf
+    · exact columnRule_soundTerms (getElem?_rebuildVars hi) hr hidx hsc h hσ hf
+
+/-! #### The fold over rule firings
+
+`execRunRules` is a fold of `fireRule` over the ruleset's rules and `fireRule` a fold of
+`fireInto` over the matches, all read off the **pre**-state — so what a round owes the
+invariant is one obligation per firing *at that one state*, which is what
+`FDatabase.FiringsSound` names. Soundness is indifferent to under-firing, so no fixpoint enters:
+a round that fires a subset of the source's firings writes a subset of justified terms. -/
+
+/-- **What a round's firings owe the invariant.** Stated at the state the round reads its rules
+and matches off, which is the only state `execRunRules` consults. -/
+def FDatabase.FiringsSound (d : FDatabase) (src : Database) : Prop :=
+  ∀ r ∈ d.rules, ∀ σ ∈ matchQuery d r.query, ∀ e : FDatabase,
+    execLocalActions d r.actions σ = some e → e.SoundTerms src
+
+/-- One firing, unioned into the accumulator. A stuck head contributes nothing. -/
+theorem fireInto_soundTerms {src : Database} {d acc : FDatabase} {r : Rule} {σ : Env}
+    (hr : r ∈ d.rules) (hσ : σ ∈ matchQuery d r.query) (hfire : d.FiringsSound src)
+    (ha : acc.SoundTerms src) : (fireInto d r acc σ).SoundTerms src := by
+  rw [fireInto]
+  cases hx : execLocalActions d r.actions σ with
+  | none => exact ha
+  | some e => exact ha.union (hfire r hr σ hσ e hx)
+
+/-- Every match of one rule. -/
+theorem foldl_fireInto_soundTerms {src : Database} {d : FDatabase} {r : Rule}
+    (hr : r ∈ d.rules) (hfire : d.FiringsSound src) :
+    ∀ (σs : List Env), (∀ σ ∈ σs, σ ∈ matchQuery d r.query) →
+      ∀ {acc : FDatabase}, acc.SoundTerms src → (σs.foldl (fireInto d r) acc).SoundTerms src
+  | [], _, _, ha => ha
+  | σ :: σs, hsub, _, ha =>
+      foldl_fireInto_soundTerms hr hfire σs (fun τ hτ => hsub τ (List.mem_cons_of_mem _ hτ))
+        (fireInto_soundTerms hr (hsub σ List.mem_cons_self) hfire ha)
+
+@[inherit_doc foldl_fireInto_soundTerms]
+theorem fireRule_soundTerms {src : Database} {d acc : FDatabase} {r : Rule}
+    (hr : r ∈ d.rules) (hfire : d.FiringsSound src) (ha : acc.SoundTerms src) :
+    (fireRule d acc r).SoundTerms src :=
+  foldl_fireInto_soundTerms hr hfire _ (fun _ h => h) ha
+
+/-- The round's fold, with the accumulator generalized; the pre-state the matches are read off
+is fixed. -/
+theorem foldl_fireRule_soundTerms {src : Database} {d : FDatabase} (hfire : d.FiringsSound src) :
+    ∀ (rs : List Rule), (∀ r ∈ rs, r ∈ d.rules) →
+      ∀ {acc : FDatabase}, acc.SoundTerms src → (rs.foldl (fireRule d) acc).SoundTerms src
+  | [], _, _, ha => ha
+  | r :: rs, hsub, _, ha =>
+      foldl_fireRule_soundTerms hfire rs (fun r' hr' => hsub r' (List.mem_cons_of_mem _ hr'))
+        (fireRule_soundTerms (hsub r List.mem_cons_self) hfire ha)
+
+/-- **One round of rule firing preserves the invariant**, given that each of its firings does.
+Every rule of the ruleset is one the state holds, so `rules` covers them. -/
+theorem execRunRules_soundTerms {src : Database} {R : RulesetName} {d : FDatabase}
+    (hfire : d.FiringsSound src) (h : d.SoundTerms src) : (execRunRules R d).SoundTerms src :=
+  foldl_fireRule_soundTerms hfire _ (fun _ hr => List.mem_of_mem_filter hr) h
+
+/-- **And so does a whole round**, rule firing followed by the merge phase to a fixpoint. -/
+theorem runRoundM_soundTerms {src : Database} {R : RulesetName} {d e : FDatabase}
+    (hshape : Signature.MergeShape d.sig) (hlegal : Signature.MergesLegal d.sig)
+    (hinv : d.Inv) (hn : d.NoUnions)
+    (hwl : ∀ r ∈ d.rules, Actions.WriteLegal r.actions d.sig)
+    (hfire : d.FiringsSound src) (h : d.SoundTerms src)
+    (hrun : d.runRoundM R = some e) : e.SoundTerms src := by
+  rw [FDatabase.runRoundM] at hrun
+  refine mergeSaturateF_soundTerms mergeFuel ?_ ?_ ?_ ?_ (execRunRules_soundTerms hfire h) hrun
+  · rw [FDatabase.execRunRules_fields.1]; exact hshape
+  · rw [FDatabase.execRunRules_fields.1]; exact hlegal
+  · exact hinv.execRunRules hwl
+  · exact execRunRules_noUnions hn
+
+/-- **The rule invariant applied to the fold.** At a state whose rules are all encoded, a
+firing is either an encoded source rule's or a maintenance rule's, and the second kind is
+discharged outright — so what is left of `FDatabase.FiringsSound` at an encoded target is
+exactly the one hypothesis below, about a head `encodeActions` emitted.
+
+This is the factorisation `execM_soundTerms` is reduced to: the fold, the merge phase and the
+three maintenance families are proved, and the source-rule head is what is not. -/
+theorem firingsSound_of_rulesEncoded {P : Program} {src : Database} {d : FDatabase}
+    (hrules : d.RulesEncoded P) (hr : d.EqsRefl) (hidx : d.IndexOk) (hsc : d.SubtermClosed)
+    (h : d.SoundTerms src)
+    (hsrc : ∀ (s : Rule) (i n : Nat), Cmd.rule s ∈ P → (encodeRule i s n).1 ∈ d.rules →
+      ∀ σ ∈ matchQuery d (encodeRule i s n).1.query, ∀ e : FDatabase,
+        execLocalActions d (encodeRule i s n).1.actions σ = some e → e.SoundTerms src) :
+    d.FiringsSound src := by
+  intro r hrm σ hσ e he
+  rcases hrules r hrm with ⟨s, i, n, hmem, rfl⟩ | hmaint
+  · exact hsrc s i n hmem hrm σ hσ e he
+  · exact maintenance_soundTerms hmaint hr hidx hsc h hσ he
+
+/-! ###### The maintenance firing is real
+
+`ENCODING.md`'s discipline, at the hypothesis that could have made all three families vacuous:
+`hσ` asks the encoded query to have *matched*, and `matchQuery` is exactly what the kernel
+cannot run — `closureF` is well-founded-recursive and so irreducible, the same limit every
+other target-side witness here works around. So the match is **proved** rather than decided,
+through `patternHolds_values_of_mem_rows`: a row of a `:merge` function makes its own atom
+hold, at the values its own columns are, and the only closure facts needed are reflexive ones.
+
+The state is `cxPre` **without its third `set`** — and that third `set` *is* this firing: the
+e-class rule at the nullary `B` reads `@BView() ↦ ((B), @Fiat)` and the edge
+`@UF((B)) ↦ ((A), @Fiat)`, and re-keys the entry onto `(A)` with the composed proof. So the
+merge-phase witness `cxPre` above is the state this firing produced. -/
+
+/-- A pair of a list zipped with itself is diagonal. -/
+private theorem mem_zip_self {α : Type _} : ∀ {xs : List α} {q : α × α},
+    q ∈ xs.zip xs → q.1 = q.2 ∧ q.1 ∈ xs
+  | [], _, h => by simp at h
+  | x :: xs, q, h => by
+      rw [List.zip_cons_cons, List.mem_cons] at h
+      rcases h with rfl | h
+      · exact ⟨rfl, List.mem_cons_self⟩
+      · exact ⟨(mem_zip_self h).1, List.mem_cons_of_mem _ (mem_zip_self h).2⟩
+
+/-- **A row of a `:merge` function makes its own atom hold**, at the values its columns are.
+The converse of `mem_terms_of_patternHolds_values`, and what says that lemma — and the three
+families over it — is not vacuous. The only closure facts it needs are reflexive, so nothing
+here asks the kernel for a congruence closure. -/
+theorem patternHolds_values_of_mem_rows {d : FDatabase} {vs as : List Expr} {f : FnName}
+    {σ : Env} {ts us : List Term} (hmg : (d.sig.mergeOf f).isSome = true)
+    (hats : Expr.evalList d.sig as (d.env ++ σ) = some ts)
+    (hvus : Expr.evalList d.sig vs (d.env ++ σ) = some us)
+    (hrow : (⟨f, ts, us⟩ : Row) ∈ d.rows) (hcol : ∀ c ∈ ts ++ us, c ∈ d.terms) :
+    patternHolds d (.values vs f as) σ = true := by
+  have hrefl : ∀ c ∈ ts ++ us, (c, c) ∈ ((d.addTerms ts).addTerms us).closureF := by
+    intro c hc
+    exact FDatabase.mem_closureF_iff.mpr (Cong.assert (Or.inl ⟨rfl,
+      FDatabase.mem_addTerms_terms (FDatabase.mem_addTerms_terms (hcol c hc))⟩))
+  have hct : ∀ (xs : List Term),
+      (∀ c ∈ xs, (c, c) ∈ ((d.addTerms ts).addTerms us).closureF) →
+      FDatabase.congrTuple ((d.addTerms ts).addTerms us).closureF xs xs = true := by
+    intro xs hxs
+    refine Bool.and_eq_true_iff.mpr ⟨by simp, List.all_eq_true.mpr (fun q hq => ?_)⟩
+    obtain ⟨a, b⟩ := q
+    obtain ⟨heq, hmem⟩ := mem_zip_self hq
+    simp only at heq hmem
+    subst heq
+    simpa using hxs a hmem
+  simp only [patternHolds, hvus, hats, hmg, if_true, List.any_eq_true]
+  refine ⟨⟨f, ts, us⟩, hrow, Bool.and_eq_true_iff.mpr
+    ⟨Bool.and_eq_true_iff.mpr ⟨by simp, ?_⟩, ?_⟩⟩
+  · exact hct ts (fun c hc => hrefl c (List.mem_append_left _ hc))
+  · exact hct us (fun c hc => hrefl c (List.mem_append_right _ hc))
+
+/-- The state `cxPre`'s first two `set`s leave: `(B)`'s view entry and the `union`'s edge. -/
+def cxRb : FDatabase :=
+  (cxBase.addRow (viewName "B") [] [cxB, cxFiat]).addRow ufName [cxB] [cxA, cxFiat]
+
+/-- `rebuildRules "B" 0`'s e-class rule, query and head. -/
+def cxRbQuery : Query :=
+  [Pattern.values [.var "@e", .var "@p"] (viewName "B") [],
+   Pattern.values [.var "@x", .var "@q"] ufName [.var "@e"]]
+
+@[inherit_doc cxRbQuery]
+def cxRbActions : List Action :=
+  [Action.set (viewName "B") [] [.var "@x", transE (.var "@p") (.var "@q")]]
+
+/-- The match, in the order `Query.freeVars` produces it. -/
+def cxRbSubst : Env := [("@p", cxFiat), ("@x", cxA), ("@q", cxFiat), ("@e", cxB)]
+
+set_option maxRecDepth 100000 in
+/-- **The two atoms match.** Proved, not decided: `matchQuery` computes a closure. -/
+theorem cxRb_mem_matchQuery : cxRbSubst ∈ matchQuery cxRb cxRbQuery := by
+  rw [matchQuery, List.mem_filter]
+  refine ⟨mem_assignments.mpr ⟨by decide, by decide⟩, List.all_eq_true.mpr ?_⟩
+  intro p hp
+  have hp2 : p = Pattern.values [.var "@e", .var "@p"] (viewName "B") [] ∨
+      p = Pattern.values [.var "@x", .var "@q"] ufName [.var "@e"] := by
+    simpa [cxRbQuery] using hp
+  rcases hp2 with rfl | rfl
+  · exact patternHolds_values_of_mem_rows (ts := []) (us := [cxB, cxFiat])
+      (by decide) rfl rfl (by decide) (by decide)
+  · exact patternHolds_values_of_mem_rows (ts := [cxB]) (us := [cxA, cxFiat])
+      (by decide) rfl rfl (by decide) (by decide)
+
+set_option maxRecDepth 100000 in
+/-- **And the head writes**, an entry the state did not hold — which is `cxPre`'s third
+`set`. -/
+theorem cxRb_eclassRule_writes :
+    (execLocalActions cxRb cxRbActions cxRbSubst).isSome = true ∧
+      ((execLocalActions cxRb cxRbActions cxRbSubst).getD FDatabase.empty).terms.contains
+        (Term.app (viewName "B") ([] ++ [cxA, cxTransFiat])) = true ∧
+      cxRb.terms.contains (Term.app (viewName "B") ([] ++ [cxA, cxTransFiat])) = false := by
+  decide
+
+set_option maxRecDepth 100000 in
+/-- The two decidable state facts the family asks for. -/
+theorem cxRb_eqsRefl : cxRb.EqsRefl := (FDatabase.eqsReflB_iff cxRb).mp (by decide)
+
+set_option maxRecDepth 100000 in
+@[inherit_doc cxRb_eqsRefl]
+theorem cxRb_subtermClosed : cxRb.SubtermClosed :=
+  (FDatabase.subtermClosedB_iff cxRb).mp (by decide)
+
+/-- The prelude's state satisfies the interpreter's invariant: it holds no term, no row and no
+equation, and a declaration is all that separates it from `FDatabase.empty`. -/
+theorem cxBase_inv : cxBase.Inv where
+  wf := FDatabase.empty_wf.congr rfl rfl
+  eqs := by intro p hp; exact absurd hp (by simp [cxBase, FDatabase.empty])
+  index := ⟨by intro r hr; exact absurd hr (by simp [cxBase, FDatabase.empty]),
+    by intro r hr; exact absurd hr (by simp [cxBase, FDatabase.empty]),
+    by intro r hr; exact absurd hr (by simp [cxBase, FDatabase.empty])⟩
+
+/-- And so does the state two `set`s leave, which is `FDatabase.IndexOk` where the family
+reads its rows. -/
+theorem cxRb_inv : cxRb.Inv :=
+  ((cxBase_inv.addRow (f := viewName "B") (as := []) (vs := [cxB, cxFiat])
+      (by decide) (by decide)).addRow (f := ufName) (as := [cxB]) (vs := [cxA, cxFiat])
+    (by decide) (by decide))
+
+/-- The source the firing is justified against: it holds `(B)` and asserts `(B) = (A)`, which
+is the source `union` `cxPre`'s second `set` encoded. -/
+def cxRbSrc : Database := Database.empty.addEq cxB cxA
+
+/-- The equation, which is what the edge the second atom matched owes. -/
+theorem cxRbSrc_cong : Cong cxRbSrc cxB cxA :=
+  Cong.assert (by rw [cxRbSrc, Database.addEq_eqs]; exact Set.mem_insert _ _)
+
+theorem cxRbSrc_mem_B : cxB ∈ cxRbSrc.terms := cxRbSrc_cong.mem_left
+
+/-- And the view entry, which is what the first atom owes. -/
+theorem cxRbSrc_entrySound : EntrySound cxRbSrc "B" [] cxB :=
+  ⟨[], cxRbSrc_mem_B, CongList.refl (fun a ha => absurd ha (by simp)), cxRbSrc_mem_B⟩
+
+set_option maxRecDepth 100000 in
+/-- The five terms two `set`s recorded. -/
+private theorem cxRb_mem_cases : ∀ t ∈ cxRb.terms,
+    t = Term.app ufName [cxB, cxA, cxFiat] ∨ t = cxFiat ∨ t = cxA ∨ t = cxB ∨
+      t = Term.app (viewName "B") [cxB, cxFiat] := by decide
+
+/-- **The invariant holds at `cxRb`, against that source.** The two clauses are asked at the
+one view entry and the one `@UF` edge two `set`s wrote, so neither is carried by its vacuous
+case. -/
+theorem cxRb_soundTerms : cxRb.SoundTerms cxRbSrc := by
+  refine ⟨fun f cs e pf hm => ?_, fun t p pf hm => ?_⟩
+  · rcases cxRb_mem_cases _ hm with h | h | h | h | h
+    · exact absurd (Term.app.inj h).1 viewName_ne_ufName
+    · exact absurd (Term.app.inj h).2 (by simp)
+    · exact absurd (Term.app.inj h).2 (by simp)
+    · exact absurd (Term.app.inj h).2 (by simp)
+    · obtain ⟨hfname, hcols⟩ := Term.app.inj h
+      obtain rfl : f = "B" := viewName_inj hfname
+      obtain ⟨rfl, hlast⟩ :=
+        List.append_inj' (show cs ++ [e, pf] = [] ++ [cxB, cxFiat] from hcols) rfl
+      obtain rfl : e = cxB := (List.cons.inj hlast).1
+      exact cxRbSrc_entrySound
+  · rcases cxRb_mem_cases _ hm with h | h | h | h | h
+    · obtain ⟨-, hcols⟩ := Term.app.inj h
+      have h3 : [t, p, pf] = [cxB, cxA, cxFiat] := hcols
+      obtain rfl : t = cxB := (List.cons.inj h3).1
+      obtain rfl : p = cxA := (List.cons.inj (List.cons.inj h3).2).1
+      exact cxRbSrc_cong
+    · exact absurd (Term.app.inj h).2 (by simp)
+    · exact absurd (Term.app.inj h).2 (by simp)
+    · exact absurd (Term.app.inj h).2 (by simp)
+    · exact absurd (Term.app.inj h).1.symm viewName_ne_ufName
+
+/-- **Every hypothesis of `eclassRule_soundTerms` holds together**, at a firing that writes an
+entry the state did not hold, over a source that really derives the equation the edge
+carries. -/
+theorem cxRb_eclassRule_soundTerms : ∀ e : FDatabase,
+    execLocalActions cxRb cxRbActions cxRbSubst = some e → e.SoundTerms cxRbSrc :=
+  fun _ hf => eclassRule_soundTerms (f := "B") (cs := []) cxRb_eqsRefl cxRb_inv.index
+    cxRb_subtermClosed cxRb_soundTerms cxRb_mem_matchQuery hf
 
 /-! #### The residue itself is in `Encoding/Complete.lean`
 

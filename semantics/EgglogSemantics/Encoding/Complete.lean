@@ -40,10 +40,11 @@ obligation is discharged, one per writer `encode` emits — `entrySound_build`,
 `EntrySound.eclass`, `EntrySound.column`, `EntrySound.select`, `cong_of_entrySound_collide`,
 `cong_of_eqs`, `cong_of_pathCompress` here, and `entrySound_headBuild`/`cong_headUnion` in
 `Encoding/Match.lean` for the two writers a rule head has — so what is missing is the
-*induction that applies them*, and three things it needs.
+*induction that applies them*, and what that still needs.
 
-* **The interpreter's writers, enumerated. The merge phase is done; the rule firings are
-  not.** `unionsInv_step`'s five closed cases only ever need the terms a block of `set`s wrote,
+* **The interpreter's writers, enumerated. The merge phase and the rule-firing fold are both
+  done; the source rule's *head* is not.** `unionsInv_step`'s five closed cases only ever need
+  the terms a block of `set`s wrote,
   which `holdsBuild_of_execProgramM` reads back off `execActions`. This invariant owes *every*
   term the run adds, and every command `encodeCmd` emits for a writing source command ends in
   `Cmd.saturate rebuildRuleset` — so no case closes without "every term `execRunRules` and
@@ -70,22 +71,54 @@ obligation is discharged, one per writer `encode` emits — `entrySound_build`,
   `FDatabase.IndexOk.entry` read at a diagonal state. `cxPre_mergeOneOriented_writes` is the
   firing happening at a state a program reaches, writing an edge the state did not hold.
 
-  **What is left is the fold over rule firings**, `execRunRules` through `fireRule`,
-  `fireInto` and `execLocalActions`. Two things it needs that do not exist. A **rule
-  invariant** — every rule in `tgt.rules` is an `encodeRule` of a source rule or one of
-  `maintenanceRules`, which is the same read-off-the-prelude argument
-  `mergeShapeOk_encodePrelude` runs for declarations. And the per-rule head obligations, one
-  per family: `entrySound_headBuild`/`cong_headUnion` for an encoded source rule (whose
-  `hfired` is discharged, and whose two remaining conditions are below), and
-  `EntrySound.eclass`, `EntrySound.column` and `cong_of_pathCompress` for the three
-  maintenance families. `FDatabase.Inv.execCmdM` and `Signature.MergesLegal` at the encoded
-  signature are the two side conditions `mergeSaturateF_soundTerms` then wants per command.
-* **The row-to-entry direction, which is the one that is *not* refuted.** A rule fires off
-  `d.rows` (`patternHolds`), and turning a matched row into a `Database.Out` is
-  `FDatabase.IndexOk.entry` — a row is an entry term. That is the direction soundness needs.
+  **The fold over rule firings is now proved too, and so are the three maintenance
+  families.** `execRunRules` is a fold of `fireRule` over the ruleset's rules and `fireRule` a
+  fold of `fireInto` over the matches, *all read off the round's pre-state* — so what a round
+  owes is one obligation per firing at that one state, which is `FDatabase.FiringsSound`, and
+  `fireInto_soundTerms`, `fireRule_soundTerms`, `execRunRules_soundTerms` and
+  `runRoundM_soundTerms` are the fold and the merge phase after it. The **rule invariant** it
+  needed is `execM_encode_rules`: every rule a target holds is `(encodeRule i s n).1` for a
+  source rule `s` of `P`, or one of `maintenanceRules P` (`Rule.EncodedIn`,
+  `FDatabase.RulesEncoded`), established at the prelude and carried because `encodeCmd` emits a
+  rule only for a source `.rule` — `mergeShapeOk_encodePrelude`'s shape one level up. And the
+  **maintenance side of the split is discharged**: `maintenance_soundTerms`, out of
+  `pathCompressRule_soundTerms` (`cong_of_pathCompress`), `eclassRule_soundTerms`
+  (`EntrySound.eclass`) and `columnRule_soundTerms` (`EntrySound.column`). Three things paid
+  for those. `mem_terms_of_patternHolds_values` reads a matched row atom back as an entry term
+  at **either** of `patternHolds`' branches — the index one through
+  `FDatabase.IndexOk.entry`, the constructor one off `terms` — so the two never have to be told
+  apart. `Expr.eval_of_refines` moves a reading from the substitution the *pattern* was checked
+  at (`Env.canon` of the pattern's own free variables) to the one the *head* runs under.
+  And `entryShaped_mem_of_eval` is what makes a minted proof column cost nothing: no head the
+  encoding applies inside a proof is a view or `@UF` — `viewName_ne_congrName` is the last
+  separation that was missing, and `Nat.isDigit_of_mem_toDigits` is what pays for it — while a
+  *primitive* answers with a literal or with one of its own operands (`prim_apply_cases`), so
+  the clause under a proof node is answered by the columns the match bound.
+
+  **`firingsSound_of_rulesEncoded` is the factorisation those leave.** What is unproved is one
+  firing of one **encoded source rule** — `entrySound_headBuild`/`cong_headUnion`, whose
+  `hfired` is discharged and whose two remaining conditions are below — and the per-command
+  induction that aligns the source run with the target's, since the head's reading is at the
+  *contemporaneous* source state and `FDatabase.SoundTerms.mono_src` is what carries it to the
+  end. `FDatabase.Inv.execCmdM` and `Signature.MergesLegal` at the encoded signature are the
+  two side conditions `mergeSaturateF_soundTerms` and `runRoundM_soundTerms` then want per
+  command, and a `.saturate` needs `FDatabase.FiringsSound` at every round it passes through
+  rather than only at the first.
+* **The row-to-entry direction, which is the one that is *not* refuted, and it is proved.** A
+  rule fires off `d.rows` (`patternHolds`), and turning a matched row into a `Database.Out` is
+  `FDatabase.IndexOk.entry` — a row is an entry term. That is the direction soundness needs,
+  and `mem_terms_of_patternHolds_values` is it.
   `FDatabase.IndexCurrent` is its converse, and `cxTgt_not_indexCurrent` refutes *that*; so the
   refutation that blocks `execM_viewLeaderRows` does not block this residue, which is why the
-  two are separate holes.
+  two are separate holes. `patternHolds_values_of_mem_rows` is the *converse* of the reading —
+  a row makes its own atom hold, at the values its own columns are — and it is what says the
+  three families are not vacuous: `cxRb_mem_matchQuery` is a maintenance rule's query really
+  matching at a state two `set`s leave, **proved rather than decided**, since `matchQuery`
+  computes a closure and `closureF` does not reduce in the kernel. `cxRb_eclassRule_writes` is
+  the head writing an entry the state did not hold — it is `cxPre`'s third `set`, so the
+  merge-phase witness above is the state this firing produced — and
+  `cxRb_eclassRule_soundTerms` is every hypothesis of `eclassRule_soundTerms` holding together
+  there, over a source (`cxRbSrc`) that really derives the equation the matched edge carries.
 * **`hfired` was where the falsity was, and it is now discharged.**
   `entrySound_headBuild` and `cong_headUnion` ask that the *source* rule fired at the
   substitution the correspondence returns, and `RuleResults` makes a firing a valid
