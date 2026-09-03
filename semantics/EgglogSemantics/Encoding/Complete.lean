@@ -1209,7 +1209,7 @@ theorem Actions.WriteLegal.append {sig : Signature} : ∀ {as bs : List Action},
     Actions.WriteLegal as sig → Actions.WriteLegal bs sig →
       Actions.WriteLegal (as ++ bs) sig
   | [], _, _, hb => hb
-  | _ :: as, bs, ha, hb =>
+  | _ :: as, _, ha, hb =>
       ⟨⟨ha.1.1, (Actions.WriteLegal.append (as := as) ⟨ha.1.2, ha.2.2⟩ hb).1⟩,
         ha.2.1, (Actions.WriteLegal.append (as := as) ⟨ha.1.2, ha.2.2⟩ hb).2⟩
 
@@ -1373,7 +1373,8 @@ left of the completeness half is exactly:
   `entrySound_headBuild_post` and `cong_headUnion_post` at the writes `encodeActions` emits,
   with `Rule.HeadScoped` and `hlet` the two conditions still to be arranged;
 * `EncodedActionSound` — one **top-level** action's block, which is `entrySound_build` and
-  `cong_of_eqs` at the same writes, over the source's own `evalAction`;
+  `cong_of_eqs` at the same writes, over the source's own `evalAction`. **Proved** below,
+  as `encodedActionSound`; `execM_soundTerms_of_head` is this theorem with it discharged;
 * `Program.AritiesAgree` — a clause `Program.EncodeDomain` does not have, whose necessity
   `adProgram_not_maintenance_writeLegal` records.
 
@@ -1387,6 +1388,736 @@ theorem execM_soundTerms_of_firings {P : Program} (hdom : P.EncodeDomain)
     {tgt : FDatabase} (htgt : execM (encode P) = some tgt) : tgt.SoundTerms src :=
   execM_soundTerms_of_obligations hdom hhead hact (encodedWriteLegal hdom hag)
     (maintenance_writeLegal hdom hag) hsrc htgt
+
+
+/-! ## A block of `set`s, against the invariant
+
+Both remaining obligations are about the same thing: the block `encodeActions` emits, run
+either as a rule head (`execLocalActions` *is* `execActions`) or as a run of top-level
+`Cmd.action`s. A build's block is `set`s only (`encodeBuild_isSet`), so neither the signature
+nor the environment moves inside it and every one of its writes evaluates its operands in the
+state the block started from — which is what makes the obligations a fixed list, one per
+application the built expression applies. -/
+
+/-- **What one block of `set`s owes the invariant**, at the values it computes in the state
+the block starts from: the recorded-subterm clause at each column, `EntrySound` where the
+write is a view entry, and `Cong` where it is an `@UF` edge. -/
+def WritesJustified (src : Database) (d₀ : FDatabase) (bs : List Action) : Prop :=
+  ∀ g args out, Action.set g args out ∈ bs → ∀ is vs,
+    Expr.evalList d₀.sig args d₀.env = some is →
+    Expr.evalList d₀.sig out d₀.env = some vs →
+    (∀ c ∈ is ++ vs, ∀ s ∈ c.subtermList, s.EntryShaped → s ∈ d₀.terms) ∧
+    (∀ f cs x pf, Term.app g (is ++ vs) = Term.app (viewName f) (cs ++ [x, pf]) →
+      EntrySound src f cs x) ∧
+    (∀ x p pf, Term.app g (is ++ vs) = Term.app ufName [x, p, pf] → Cong src x p)
+
+theorem WritesJustified.append {src : Database} {d₀ : FDatabase} {as bs : List Action}
+    (ha : WritesJustified src d₀ as) (hb : WritesJustified src d₀ bs) :
+    WritesJustified src d₀ (as ++ bs) := by
+  intro g args out hmem
+  rcases List.mem_append.mp hmem with h | h
+  · exact ha g args out h
+  · exact hb g args out h
+
+theorem WritesJustified.mono {src : Database} {d₀ : FDatabase} {as bs : List Action}
+    (hsub : ∀ b ∈ as, b ∈ bs) (h : WritesJustified src d₀ bs) : WritesJustified src d₀ as :=
+  fun g args out hmem => h g args out (hsub _ hmem)
+
+/-- **A block of `set`s preserves the invariant**, given that each write is justified at the
+values it computes in the state the block starts from. The recorded-subterm clause is paid
+once per column by `entryShaped_mem_of_columns`. -/
+theorem execActions_soundTerms_of_sets {src : Database} {d₀ : FDatabase} :
+    ∀ (bs : List Action), (∀ b ∈ bs, b.IsSet) → WritesJustified src d₀ bs →
+      ∀ {d d' : FDatabase}, d.sig = d₀.sig → d.env = d₀.env →
+        (∀ t ∈ d₀.terms, t ∈ d.terms) → d.SoundTerms src →
+        execActions d bs = some d' → d'.SoundTerms src := by
+  intro bs
+  induction bs with
+  | nil =>
+    intro _ _ d d' _ _ _ hs hrun
+    rw [execActions, Option.some.injEq] at hrun
+    exact hrun ▸ hs
+  | cons b bs ih =>
+    intro hset hjust d d' hsig henv hmono hs hrun
+    cases hb : execAction d b with
+    | none => rw [execActions, hb] at hrun; simp at hrun
+    | some d₁ =>
+      rw [execActions, hb, Option.bind_some] at hrun
+      have hbset : b.IsSet := hset b List.mem_cons_self
+      obtain ⟨g, args, out, rfl⟩ : ∃ g args out, b = Action.set g args out := by
+        cases b with
+        | set g args out => exact ⟨g, args, out, rfl⟩
+        | _ => exact (hbset : False).elim
+      obtain ⟨is, vs, has, hvs, rfl⟩ := execAction_set hb
+      rw [hsig, henv] at has hvs
+      obtain ⟨hsub, hview, huf⟩ := hjust g args out List.mem_cons_self is vs has hvs
+      refine ih (fun b' hb' => hset b' (List.mem_cons_of_mem _ hb'))
+        (fun g' a' o' h' => hjust g' a' o' (List.mem_cons_of_mem _ h'))
+        (d := FDatabase.addRow g is vs d) hsig henv
+        (fun t ht => FDatabase.mem_addRow_terms.mpr (Or.inr (hmono t ht)))
+        (hs.addRow_top (entryShaped_mem_of_columns
+          (fun c hc s hsm hshaped => hmono s (hsub c hc s hsm hshaped))) hview huf) hrun
+
+/-! ### What a build's block writes
+
+One term row and one view entry per application, keyed on the arguments' own naming
+expressions — which `encodeBuild_fst` says are the arguments themselves. -/
+
+mutual
+
+/-- **Every action a build emits is one of its applications' two `set`s.** -/
+theorem mem_encodeBuild_actions : ∀ (e : Expr) (m : Nat), ∀ b ∈ (encodeBuild e m).2.1,
+    ∃ f args, (f, args) ∈ e.apps ∧
+      (b = Action.set (termName f) (args ++ [.app f args]) [] ∨
+        b = Action.set (viewName f) args [.app f args, fiatE])
+  | .lit _, _, _, hb => absurd hb (by simp [encodeBuild])
+  | .var _, _, _, hb => absurd hb (by simp [encodeBuild])
+  | .app f args, m, b, hb => by
+      rw [encodeBuild_app_actions_eq] at hb
+      rcases List.mem_append.mp hb with h | h
+      · obtain ⟨g, gargs, hga, hb'⟩ := mem_encodeBuildArgs_actions args m b h
+        exact ⟨g, gargs, by rw [Expr.apps]; exact List.mem_cons_of_mem _ hga, hb'⟩
+      · have h2 : b = Action.set (termName f) (args ++ [.app f args]) [] ∨
+            b = Action.set (viewName f) args [.app f args, fiatE] := by simpa using h
+        exact ⟨f, args, by rw [Expr.apps]; exact List.mem_cons_self, h2⟩
+
+@[inherit_doc mem_encodeBuild_actions]
+theorem mem_encodeBuildArgs_actions : ∀ (es : List Expr) (m : Nat),
+    ∀ b ∈ (encodeBuildArgs es m).2.1,
+      ∃ f args, (f, args) ∈ Expr.appsList es ∧
+        (b = Action.set (termName f) (args ++ [.app f args]) [] ∨
+          b = Action.set (viewName f) args [.app f args, fiatE])
+  | [], _, _, hb => absurd hb (by simp [encodeBuildArgs])
+  | e :: es, m, b, hb => by
+      rw [encodeBuildArgs_cons_actions] at hb
+      rcases List.mem_append.mp hb with h | h
+      · obtain ⟨g, gargs, hga, hb'⟩ := mem_encodeBuild_actions e m b h
+        exact ⟨g, gargs, by rw [Expr.appsList]; exact List.mem_append_left _ hga, hb'⟩
+      · obtain ⟨g, gargs, hga, hb'⟩ := mem_encodeBuildArgs_actions es _ b h
+        exact ⟨g, gargs, by rw [Expr.appsList]; exact List.mem_append_right _ hga, hb'⟩
+
+end
+
+
+mutual
+
+/-- An application a build emits actions for is one whose names the expression applies. -/
+theorem fns_of_mem_apps : ∀ (e : Expr) {f : FnName} {args : List Expr},
+    (f, args) ∈ e.apps → f ∈ e.fns ∧ ∀ g ∈ Expr.fnsList args, g ∈ e.fns
+  | .lit _, _, _, h => absurd h (by simp [Expr.apps])
+  | .var _, _, _, h => absurd h (by simp [Expr.apps])
+  | .app g gargs, f, args, h => by
+      rw [Expr.apps, List.mem_cons] at h
+      rcases h with h | h
+      · obtain ⟨rfl, rfl⟩ : f = g ∧ args = gargs := by
+          exact ⟨(Prod.mk.inj h).1, (Prod.mk.inj h).2⟩
+        exact ⟨by rw [Expr.fns]; exact List.mem_cons_self,
+          fun x hx => by rw [Expr.fns]; exact List.mem_cons_of_mem _ hx⟩
+      · obtain ⟨h₁, h₂⟩ := fnsList_of_mem_appsList gargs h
+        exact ⟨by rw [Expr.fns]; exact List.mem_cons_of_mem _ h₁,
+          fun x hx => by rw [Expr.fns]; exact List.mem_cons_of_mem _ (h₂ x hx)⟩
+
+@[inherit_doc fns_of_mem_apps]
+theorem fnsList_of_mem_appsList : ∀ (es : List Expr) {f : FnName} {args : List Expr},
+    (f, args) ∈ Expr.appsList es →
+      f ∈ Expr.fnsList es ∧ ∀ g ∈ Expr.fnsList args, g ∈ Expr.fnsList es
+  | [], _, _, h => absurd h (by simp [Expr.appsList])
+  | e :: es, f, args, h => by
+      rw [Expr.appsList] at h
+      rcases List.mem_append.mp h with h' | h'
+      · obtain ⟨h₁, h₂⟩ := fns_of_mem_apps e h'
+        exact ⟨by rw [Expr.fnsList]; exact List.mem_union_iff.mpr (Or.inl h₁),
+          fun x hx => by rw [Expr.fnsList]; exact List.mem_union_iff.mpr (Or.inl (h₂ x hx))⟩
+      · obtain ⟨h₁, h₂⟩ := fnsList_of_mem_appsList es h'
+        exact ⟨by rw [Expr.fnsList]; exact List.mem_union_iff.mpr (Or.inr h₁),
+          fun x hx => by rw [Expr.fnsList]; exact List.mem_union_iff.mpr (Or.inr (h₂ x hx))⟩
+
+end
+
+/-- **One build's block, against the invariant.** Its `set`s are one term row and one view
+entry per application, so the whole of what the block owes is `EntrySound` at each
+application's own value — and `entrySound_build` makes that "the source holds it", which is
+`hheld` and the only place either remaining obligation differs.
+
+`hne` and `hprim` are `Program.EncodeDomain.noAt` and `.noPrim` at the built expression: a
+head in the generated namespace could mint a view entry the invariant would then have to
+justify twice, and a head shadowing a primitive would make the value column the primitive's
+result rather than the application. -/
+theorem encodeBuild_writesJustified {src : Database} (hw : src.WF) {d₀ : FDatabase}
+    (hsc : d₀.SubtermClosed) (henvm : ∀ b ∈ d₀.env, b.2 ∈ d₀.terms) (e : Expr) (m : Nat)
+    (hne : ∀ g ∈ e.fns, NotEntryHead g) (hprim : ∀ g ∈ e.fns, Prim.ofName g = none)
+    (hheld : ∀ (f : FnName) (args : List Expr), (f, args) ∈ e.apps → ∀ is,
+      Expr.evalList d₀.sig args d₀.env = some is → Term.app f is ∈ src.terms) :
+    WritesJustified src d₀ (encodeBuild e m).2.1 := by
+  have hbind : ∀ (v : Var), ∀ u, Env.lookup v d₀.env = some u →
+      ∀ s ∈ u.subtermList, s.EntryShaped → s ∈ d₀.terms :=
+    fun v u hu => entryShaped_mem_of_held hsc (henvm (v, u) (Env.mem_of_lookup hu))
+  intro g args out hmem is vs has hvs
+  obtain ⟨f, fargs, hfa, hshape⟩ := mem_encodeBuild_actions e m _ hmem
+  obtain ⟨hfmem, hfargs⟩ := fns_of_mem_apps e hfa
+  have hevArgs : ∀ {fis : List Term}, Expr.evalList d₀.sig fargs d₀.env = some fis →
+      ∀ u ∈ fis, ∀ s ∈ u.subtermList, s.EntryShaped → s ∈ d₀.terms := by
+    intro fis hfis
+    exact entryShaped_mem_of_evalList fargs (fun x hx => hne x (hfargs x hx))
+      (fun v _ => hbind v) hfis
+  have hevApp : ∀ {v : Term}, (Expr.app f fargs).eval d₀.sig d₀.env = some v →
+      ∀ s ∈ v.subtermList, s.EntryShaped → s ∈ d₀.terms := by
+    intro v hv
+    refine entryShaped_mem_of_eval (Expr.app f fargs) (fun x hx => ?_) (fun w _ => hbind w) hv
+    rw [Expr.fns, List.mem_cons] at hx
+    rcases hx with rfl | hx
+    · exact hne x hfmem
+    · exact hne x (hfargs x hx)
+  rcases hshape with h | h
+  · -- the term row: of neither shape, so only the recorded-subterm clause is live
+    injection h with hg ha ho
+    subst hg; subst ha; subst ho
+    obtain ⟨fis, vs', hfis, hvs', rfl⟩ := Expr.evalList_append has
+    obtain ⟨v, hv, rfl⟩ := Expr.evalList_single hvs'
+    obtain rfl : vs = [] := by
+      rw [Expr.evalList, Option.some.injEq] at hvs; exact hvs.symm
+    refine ⟨fun c hc s hsm hshaped => ?_, fun f' cs x pf hq => ?_, fun x p pf hq => ?_⟩
+    · rw [List.append_nil, List.mem_append] at hc
+      rcases hc with hc | hc
+      · exact hevArgs hfis c hc s hsm hshaped
+      · obtain rfl : c = v := by simpa using hc
+        exact hevApp hv s hsm hshaped
+    · exact absurd (Term.app.inj hq).1 (fun hz => viewName_ne_termName hz.symm)
+    · exact absurd (Term.app.inj hq).1 termName_ne_ufName
+  · -- the view entry: `entrySound_build` at the application's own value
+    injection h with hg ha ho
+    subst hg; subst ha; subst ho
+    obtain ⟨v, pfv, hv, hpf, rfl⟩ := Expr.evalList_pair hvs
+    obtain ⟨fis, hfis, hveq⟩ := Expr.eval_app_of_noPrim (hprim f hfmem) hv
+    have hfeq : fis = is := Option.some.inj (hfis.symm.trans has)
+    subst hfeq
+    subst hveq
+    refine ⟨fun c hc s hsm hshaped => ?_, fun f' cs x pf hq => ?_, fun x p pf hq => ?_⟩
+    · rcases List.mem_append.mp hc with hc | hc
+      · exact hevArgs hfis c hc s hsm hshaped
+      · have hc2 : c = Term.app f fis ∨ c = pfv := by simpa using hc
+        rcases hc2 with rfl | rfl
+        · exact hevApp hv s hsm hshaped
+        · refine entryShaped_mem_of_eval fiatE (fun x hx => ?_) (fun w _ => hbind w) hpf
+            s hsm hshaped
+          obtain rfl : x = fiatName := by simpa [fiatE, Expr.fns, Expr.fnsList] using hx
+          exact notEntryHead_fiatName
+    · obtain ⟨hfname, hcols⟩ := Term.app.inj hq
+      have hff : f' = f := viewName_inj hfname.symm
+      obtain ⟨hcs, hlast⟩ := List.append_inj' hcols rfl
+      have hxe : Term.app f fis = x := (List.cons.inj hlast).1
+      rw [hff, ← hcs, ← hxe]
+      exact entrySound_build hw (hheld f args hfa fis hfis)
+    · exact absurd (Term.app.inj hq).1 viewName_ne_ufName
+
+
+/-! ### What the source's own evaluation delivers
+
+A top-level action's block is justified against the source's `evalAction`, and three facts
+about a successful `Expr.eval` are the whole of what that gives: every variable it reads is
+bound, every name it applies is a declared constructor, and every *sub*application's value is
+a subterm of the value — which is what `Database.addTerm` then records. -/
+
+mutual
+
+/-- A successful evaluation binds every variable and declares every applied name. -/
+theorem bound_ctor_of_eval {sig : Signature} {ρ : Env} :
+    ∀ (e : Expr), (∀ g ∈ e.fns, Prim.ofName g = none) → ∀ {t : Term}, e.eval sig ρ = some t →
+      (∀ v ∈ e.vars, (Env.lookup v ρ).isSome) ∧ ∀ g ∈ e.fns, sig.IsCtor g
+  | .lit _, _, _, _ => ⟨fun v hv => absurd hv (by simp [Expr.vars]),
+      fun g hg => absurd hg (by simp [Expr.fns])⟩
+  | .var w, _, t, h => by
+      rw [Expr.eval] at h
+      refine ⟨fun v hv => ?_, fun g hg => absurd hg (by simp [Expr.fns])⟩
+      obtain rfl : v = w := by simpa [Expr.vars] using hv
+      rw [h]; rfl
+  | .app f args, hp, t, h => by
+      have hpf : Prim.ofName f = none := hp f (by rw [Expr.fns]; exact List.mem_cons_self)
+      have hpl : ∀ g ∈ Expr.fnsList args, Prim.ofName g = none :=
+        fun g hg => hp g (by rw [Expr.fns]; exact List.mem_cons_of_mem _ hg)
+      simp only [Expr.eval, hpf] at h
+      split at h
+      · next hct =>
+        obtain ⟨is, his, -⟩ := Option.map_eq_some_iff.mp h
+        obtain ⟨hv, hc⟩ := boundList_ctorList_of_evalList args hpl his
+        refine ⟨fun v hvv => hv v (by rwa [Expr.vars] at hvv), fun g hg => ?_⟩
+        rw [Expr.fns, List.mem_cons] at hg
+        rcases hg with rfl | hg
+        · exact hct
+        · exact hc g hg
+      · exact absurd h (by simp)
+
+@[inherit_doc bound_ctor_of_eval]
+theorem boundList_ctorList_of_evalList {sig : Signature} {ρ : Env} :
+    ∀ (es : List Expr), (∀ g ∈ Expr.fnsList es, Prim.ofName g = none) →
+      ∀ {ts : List Term}, Expr.evalList sig es ρ = some ts →
+        (∀ v ∈ Expr.varsList es, (Env.lookup v ρ).isSome) ∧
+          ∀ g ∈ Expr.fnsList es, sig.IsCtor g
+  | [], _, _, _ => ⟨fun v hv => absurd hv (by simp [Expr.varsList]),
+      fun g hg => absurd hg (by simp [Expr.fnsList])⟩
+  | e :: es, hp, ts, h => by
+      rw [Expr.evalList] at h
+      obtain ⟨t, ht, h'⟩ := Option.bind_eq_some_iff.mp h
+      obtain ⟨us, hus, -⟩ := Option.map_eq_some_iff.mp h'
+      obtain ⟨hv₁, hc₁⟩ := bound_ctor_of_eval e
+        (fun g hg => hp g (by rw [Expr.fnsList]; exact List.mem_union_iff.mpr (Or.inl hg))) ht
+      obtain ⟨hv₂, hc₂⟩ := boundList_ctorList_of_evalList es
+        (fun g hg => hp g (by rw [Expr.fnsList]; exact List.mem_union_iff.mpr (Or.inr hg))) hus
+      refine ⟨fun v hvv => ?_, fun g hg => ?_⟩
+      · rw [Expr.varsList] at hvv
+        rcases List.mem_union_iff.mp hvv with hvv | hvv
+        · exact hv₁ v hvv
+        · exact hv₂ v hvv
+      · rw [Expr.fnsList] at hg
+        rcases List.mem_union_iff.mp hg with hg | hg
+        · exact hc₁ g hg
+        · exact hc₂ g hg
+
+end
+
+mutual
+
+/-- **Every subapplication's value is a subterm of the value.** -/
+theorem exists_subterm_of_mem_apps {sig : Signature} {ρ : Env} :
+    ∀ (e : Expr), (∀ g ∈ e.fns, Prim.ofName g = none) → ∀ {t : Term}, e.eval sig ρ = some t →
+      ∀ (f : FnName) (args : List Expr), (f, args) ∈ e.apps →
+        ∃ is, Expr.evalList sig args ρ = some is ∧ Term.app f is ∈ t.subterms
+  | .lit _, _, _, _, _, _, hm => absurd hm (by simp [Expr.apps])
+  | .var _, _, _, _, _, _, hm => absurd hm (by simp [Expr.apps])
+  | .app g gargs, hp, t, h, f, args, hm => by
+      have hpf : Prim.ofName g = none := hp g (by rw [Expr.fns]; exact List.mem_cons_self)
+      obtain ⟨gis, hgis, rfl⟩ := Expr.eval_app_of_noPrim hpf h
+      rw [Expr.apps, List.mem_cons] at hm
+      rcases hm with hm | hm
+      · obtain ⟨rfl, rfl⟩ : f = g ∧ args = gargs := ⟨(Prod.mk.inj hm).1, (Prod.mk.inj hm).2⟩
+        exact ⟨gis, hgis, Term.self_mem_subterms _⟩
+      · obtain ⟨is, his, u, hu, hsub⟩ := exists_subterm_of_mem_appsList gargs
+          (fun x hx => hp x (by rw [Expr.fns]; exact List.mem_cons_of_mem _ hx)) hgis f args hm
+        exact ⟨is, his, Term.arg_subterms hu hsub⟩
+
+@[inherit_doc exists_subterm_of_mem_apps]
+theorem exists_subterm_of_mem_appsList {sig : Signature} {ρ : Env} :
+    ∀ (es : List Expr), (∀ g ∈ Expr.fnsList es, Prim.ofName g = none) →
+      ∀ {ts : List Term}, Expr.evalList sig es ρ = some ts →
+      ∀ (f : FnName) (args : List Expr), (f, args) ∈ Expr.appsList es →
+        ∃ is, Expr.evalList sig args ρ = some is ∧ ∃ u ∈ ts, Term.app f is ∈ u.subterms
+  | [], _, _, _, _, _, hm => absurd hm (by simp [Expr.appsList])
+  | e :: es, hp, ts, h, f, args, hm => by
+      rw [Expr.evalList] at h
+      obtain ⟨t, ht, h'⟩ := Option.bind_eq_some_iff.mp h
+      obtain ⟨us, hus, rfl⟩ := Option.map_eq_some_iff.mp h'
+      rw [Expr.appsList] at hm
+      rcases List.mem_append.mp hm with hm | hm
+      · obtain ⟨is, his, hsub⟩ := exists_subterm_of_mem_apps e
+          (fun x hx => hp x (by rw [Expr.fnsList]; exact List.mem_union_iff.mpr (Or.inl hx)))
+          ht f args hm
+        exact ⟨is, his, t, List.mem_cons_self, hsub⟩
+      · obtain ⟨is, his, u, hu, hsub⟩ := exists_subterm_of_mem_appsList es
+          (fun x hx => hp x (by rw [Expr.fnsList]; exact List.mem_union_iff.mpr (Or.inr hx)))
+          hus f args hm
+        exact ⟨is, his, u, List.mem_cons_of_mem _ hu, hsub⟩
+
+end
+
+
+mutual
+
+/-- A name an expression applies is one `Expr.ctors` records, at that occurrence's arity. -/
+theorem exists_ctor_of_mem_fns : ∀ (e : Expr) {g : FnName}, g ∈ e.fns → ∃ k, (g, k) ∈ e.ctors
+  | .lit _, _, h => absurd h (by simp [Expr.fns])
+  | .var _, _, h => absurd h (by simp [Expr.fns])
+  | .app f args, g, h => by
+      rw [Expr.fns, List.mem_cons] at h
+      rcases h with rfl | h
+      · exact ⟨args.length, by rw [Expr.ctors]; exact List.mem_cons_self⟩
+      · obtain ⟨k, hk⟩ := exists_ctor_of_mem_fnsList args h
+        exact ⟨k, by rw [Expr.ctors]; exact List.mem_cons_of_mem _ hk⟩
+
+@[inherit_doc exists_ctor_of_mem_fns]
+theorem exists_ctor_of_mem_fnsList : ∀ (es : List Expr) {g : FnName},
+    g ∈ Expr.fnsList es → ∃ k, (g, k) ∈ Expr.ctorsList es
+  | [], _, h => absurd h (by simp [Expr.fnsList])
+  | e :: es, g, h => by
+      rw [Expr.fnsList] at h
+      rcases List.mem_union_iff.mp h with h | h
+      · obtain ⟨k, hk⟩ := exists_ctor_of_mem_fns e h
+        exact ⟨k, by rw [Expr.ctorsList]; exact List.mem_append_left _ hk⟩
+      · obtain ⟨k, hk⟩ := exists_ctor_of_mem_fnsList es h
+        exact ⟨k, by rw [Expr.ctorsList]; exact List.mem_append_right _ hk⟩
+
+end
+
+mutual
+
+/-- The variables a subapplication reads are the expression's own. -/
+theorem vars_of_mem_apps : ∀ (e : Expr) {f : FnName} {args : List Expr},
+    (f, args) ∈ e.apps → ∀ v ∈ Expr.varsList args, v ∈ e.vars
+  | .lit _, _, _, h => absurd h (by simp [Expr.apps])
+  | .var _, _, _, h => absurd h (by simp [Expr.apps])
+  | .app g gargs, f, args, h => by
+      rw [Expr.apps, List.mem_cons] at h
+      rcases h with h | h
+      · obtain ⟨rfl, rfl⟩ : f = g ∧ args = gargs := ⟨(Prod.mk.inj h).1, (Prod.mk.inj h).2⟩
+        exact fun v hv => by rw [Expr.vars]; exact hv
+      · exact fun v hv => by rw [Expr.vars]; exact varsList_of_mem_appsList gargs h v hv
+
+@[inherit_doc vars_of_mem_apps]
+theorem varsList_of_mem_appsList : ∀ (es : List Expr) {f : FnName} {args : List Expr},
+    (f, args) ∈ Expr.appsList es → ∀ v ∈ Expr.varsList args, v ∈ Expr.varsList es
+  | [], _, _, h => absurd h (by simp [Expr.appsList])
+  | e :: es, f, args, h => by
+      rw [Expr.appsList] at h
+      rcases List.mem_append.mp h with h' | h'
+      · exact fun v hv => by
+          rw [Expr.varsList]; exact List.mem_union_iff.mpr (Or.inl (vars_of_mem_apps e h' v hv))
+      · exact fun v hv => by
+          rw [Expr.varsList]
+          exact List.mem_union_iff.mpr (Or.inr (varsList_of_mem_appsList es h' v hv))
+
+end
+
+/-! ### The block a top-level action runs, merge phases included
+
+`FDatabase.execCmdM` runs a merge phase after **each** top-level action, so the block is not
+one `execActions` run but a chain of them — which costs nothing, since
+`mergeSaturateF_soundTerms` is proved and neither the signature nor the environment moves
+across a `set`. -/
+
+/-- **A block of `Cmd.action`s whose actions are `set`s.** -/
+theorem execProgramM_sets_soundTerms {P : Program} {sg : Signature} {src : Database}
+    {d₀ : FDatabase} :
+    ∀ (bs : List Action), (∀ b ∈ bs, b.IsSet) → (∀ b ∈ bs, b.UnionFree) →
+      (∀ b ∈ bs, Actions.WriteLegal [b] sg) → WritesJustified src d₀ bs →
+      ∀ {d D : FDatabase}, d.EncBase P sg → d.sig = d₀.sig → d.env = d₀.env →
+        (∀ t ∈ d₀.terms, t ∈ d.terms) → d.SoundTerms src →
+        d.execProgramM (bs.map Cmd.action) = some D →
+        D.EncBase P sg ∧ D.SoundTerms src ∧ D.env = d.env ∧ (∀ t ∈ d.terms, t ∈ D.terms) := by
+  intro bs
+  induction bs with
+  | nil =>
+    intro _ _ _ _ d D hb _ _ _ hs hrun
+    rw [List.map_nil, FDatabase.execProgramM, Option.some.injEq] at hrun
+    exact ⟨hrun ▸ hb, hrun ▸ hs, by rw [← hrun], fun t ht => by rw [← hrun]; exact ht⟩
+  | cons b bs ih =>
+    intro hset huf hwl hjust d D hb hsig henv hmono hs hrun
+    rw [List.map_cons, FDatabase.execProgramM] at hrun
+    obtain ⟨d₂, h₂, hrest⟩ := Option.bind_eq_some_iff.mp hrun
+    have h₂c : d.execCmdM (Cmd.action b) = some d₂ := h₂
+    rw [FDatabase.execCmdM] at h₂
+    obtain ⟨d₁, hact, hmerge⟩ := Option.bind_eq_some_iff.mp h₂
+    have hbset : b.IsSet := hset b List.mem_cons_self
+    have hwlb : b.WriteLegal d.sig := by
+      rw [hb.sig]; exact ⟨(hwl b List.mem_cons_self).1.1, (hwl b List.mem_cons_self).2.1⟩
+    have hs₁ : d₁.SoundTerms src :=
+      execActions_soundTerms_of_sets [b] (fun _ hb' => by
+          obtain rfl : _ = b := by simpa using hb'
+          exact hbset)
+        (hjust.mono (fun x hx => by
+          obtain rfl : x = b := by simpa using hx
+          exact List.mem_cons_self)) hsig henv hmono hs
+        (by rw [execActions, hact, Option.bind_some]; rfl)
+    have hinv₁ : d₁.Inv := hb.inv.execAction hwlb hact
+    have hsig₁ : d₁.sig = sg := by rw [FDatabase.execAction_sig hact]; exact hb.sig
+    have hs₂ : d₂.SoundTerms src :=
+      mergeSaturateF_soundTerms mergeFuel (by rw [hsig₁]; exact hb.shape)
+        (by rw [hsig₁]; exact hb.merges) hinv₁
+        (execAction_noUnions (huf b List.mem_cons_self) hb.nounions hact) hs₁ hmerge
+    have hb₂ : d₂.EncBase P sg :=
+      hb.execCmdM (c := Cmd.action b) trivial (huf b List.mem_cons_self) trivial
+        ⟨(hwl b List.mem_cons_self).1.1, (hwl b List.mem_cons_self).2.1⟩ h₂c
+    have henv₂ : d₂.env = d.env := FDatabase.execCmdM_env h₂c hbset
+    have hsig₂ : d₂.sig = d.sig :=
+      FDatabase.execCmdM_sig_of_noDecl (c := Cmd.action b) h₂c trivial
+    have hmono₂ : ∀ t ∈ d.terms, t ∈ d₂.terms := FDatabase.execCmdM_terms h₂c
+    obtain ⟨hbD, hsD, henvD, hmonoD⟩ :=
+      ih (fun x hx => hset x (List.mem_cons_of_mem _ hx))
+        (fun x hx => huf x (List.mem_cons_of_mem _ hx))
+        (fun x hx => hwl x (List.mem_cons_of_mem _ hx))
+        (hjust.mono (fun x hx => List.mem_cons_of_mem _ hx)) hb₂
+        (hsig₂.trans hsig) (henv₂.trans henv) (fun t ht => hmono₂ t (hmono t ht)) hs₂ hrest
+    exact ⟨hbD, hsD, henvD.trans henv₂, fun t ht => hmonoD t (hmono₂ t ht)⟩
+
+
+/-- A source name is no entry head: it is not in the generated namespace. -/
+theorem notEntryHead_of_mem_ctors {P : Program} (hdom : P.EncodeDomain) {fk : FnName × Nat}
+    (h : fk ∈ P.ctors) : NotEntryHead fk.1 :=
+  ⟨fun g hg => noAt_of_mem_ctors hdom h (hg ▸ isPrefixOf_at_viewName g),
+    fun hg => noAt_of_mem_ctors hdom h
+      (hg ▸ (by decide +kernel : "@".isPrefixOf ufName = true))⟩
+
+/-- The two conditions `encodeBuild_writesJustified` asks of an expression's heads, from the
+domain. -/
+theorem head_conditions_of_ctors {P : Program} (hdom : P.EncodeDomain) {e : Expr}
+    (hc : ∀ fk ∈ e.ctors, fk ∈ P.ctors) :
+    (∀ g ∈ e.fns, NotEntryHead g) ∧ ∀ g ∈ e.fns, Prim.ofName g = none := by
+  constructor <;>
+  · intro g hg
+    obtain ⟨k, hk⟩ := exists_ctor_of_mem_fns e hg
+    first
+    | exact notEntryHead_of_mem_ctors (fk := (g, k)) hdom (hc _ hk)
+    | exact hdom.noPrim (g, k) (hc _ hk)
+
+/-- **`hheld` for a top-level action.** The source's own evaluation built the value, and
+`Database.addTerm` recorded every subterm, so each subapplication's value is one the
+post-state holds. The target computes the same values: `encodeBuild_fst` says the encoded
+expression *is* the source expression, and `Database.GlobalsAgree` plus the source's own
+success make the two environments agree on everything it reads. -/
+theorem held_of_evalAction {P : Program} (hdom : P.EncodeDomain) {sd sd' : Database}
+    {d : FDatabase} (hwf' : sd'.WF) (hglob : sd.GlobalsAgree d.env)
+    (e : Expr) (hc : ∀ fk ∈ e.ctors, fk ∈ P.ctors)
+    {t : Term} (hev : e.eval sd.sig sd.env = some t) (hmem : t ∈ sd'.terms) :
+    ∀ (f : FnName) (args : List Expr), (f, args) ∈ e.apps → ∀ is,
+      Expr.evalList d.sig args d.env = some is → Term.app f is ∈ sd'.terms := by
+  obtain ⟨-, hprim⟩ := head_conditions_of_ctors hdom hc
+  obtain ⟨hbound, hctor⟩ := bound_ctor_of_eval e hprim hev
+  intro f args hfa is histgt
+  have hfns : ∀ g ∈ Expr.fnsList args, g ∈ e.fns := (fns_of_mem_apps e hfa).2
+  have hlk : ∀ v ∈ Expr.varsList args, Env.lookup v d.env = Env.lookup v sd.env := by
+    intro v hv
+    obtain ⟨u, hu⟩ := Option.isSome_iff_exists.mp (hbound v (vars_of_mem_apps e hfa v hv))
+    rw [hu, hglob v u hu]
+  have hsrcList : Expr.evalList sd.sig args sd.env = some is :=
+    Expr.evalList_transport args (fun g hg _ => hctor g (hfns g hg)) hlk histgt
+  obtain ⟨is', his', hsub⟩ := exists_subterm_of_mem_apps e hprim hev f args hfa
+  obtain rfl : is' = is := Option.some.inj (his'.symm.trans hsrcList)
+  exact hwf'.subtermClosed t hmem hsub
+
+/-- **The target evaluates a source expression to the source's own value.** `encodeBuild`
+hands the expression back unchanged, so the only gap is the two environments, and
+`Database.GlobalsAgree` closes it wherever the source's evaluation succeeded. -/
+theorem eval_target_of_source {P : Program} (hdom : P.EncodeDomain) {sd : Database}
+    {d : FDatabase} (hglob : sd.GlobalsAgree d.env) (e : Expr)
+    (hc : ∀ fk ∈ e.ctors, fk ∈ P.ctors) {t t' : Term}
+    (hsrc : e.eval sd.sig sd.env = some t) (htgt : e.eval d.sig d.env = some t') : t = t' := by
+  obtain ⟨-, hprim⟩ := head_conditions_of_ctors hdom hc
+  obtain ⟨hbound, hctor⟩ := bound_ctor_of_eval e hprim hsrc
+  have hlk : ∀ v ∈ e.vars, Env.lookup v d.env = Env.lookup v sd.env := by
+    intro v hv
+    obtain ⟨u, hu⟩ := Option.isSome_iff_exists.mp (hbound v hv)
+    rw [hu, hglob v u hu]
+  exact Option.some.inj (hsrc.symm.trans
+    (Expr.eval_transport e (fun g hg _ => hctor g hg) hlk htgt))
+
+
+/-! ### The top-level action case, discharged
+
+`encodeAction` has three shapes to answer for at top level — a build, a build with a `let`
+after it, and two builds with an `@UF` edge after them. A source `set` is out of the fragment
+(`EncodeDomain.setLegal` under `ctorsOnly`). The build's own writes are
+`encodeBuild_writesJustified`; the `let` writes a term whose entry-shaped subterms the block
+already recorded, and re-establishes the globals; the edge is `cong_of_eqs` at the pair the
+source's own `union` asserted, in whichever order `ordering-max` picked. -/
+
+/-- One action of an encoded block, on its own. -/
+private theorem writeLegal_singleton {sg : Signature} : ∀ (bs : List Action),
+    Actions.WriteLegal bs sg → ∀ x ∈ bs, Actions.WriteLegal [x] sg
+  | [], _, _, hx => absurd hx (by simp)
+  | y :: ys, hy, x, hx => by
+      rcases List.mem_cons.mp hx with rfl | hx'
+      · exact ⟨⟨hy.1.1, trivial⟩, hy.2.1, trivial⟩
+      · exact writeLegal_singleton ys ⟨hy.1.2, hy.2.2⟩ x hx'
+
+/-- **`EncodedActionSound`, proved.** -/
+theorem encodedActionSound {P : Program} (hdom : P.EncodeDomain) (hag : P.AritiesAgree) :
+    EncodedActionSound P (encodeSig P) := by
+  intro pre q a hP sd sd' hpre hstep n d D hok hblock hbD
+  have hcP : Cmd.action a ∈ P := by rw [hP]; exact List.mem_append_right _ List.mem_cons_self
+  have hctors : ∀ fk ∈ a.ctors, fk ∈ P.ctors := fun fk hfk => mem_ctors_of_cmd hcP hfk
+  have hstate : sd.CtorState :=
+    hpre.ctorState Database.CtorState.empty
+      fun c' hc' => hdom.ctorsOnly c' (by rw [hP]; exact List.mem_append_left _ hc')
+  have hev : evalAction sd a = some sd' := cmdStep_action_eq hstate.sig hstep
+  have hwf' : sd'.WF := hstep.wf hstate.wf
+  have hsc : d.SubtermClosed := hok.base.subtermClosed
+  have henvm : ∀ b ∈ d.env, b.2 ∈ d.terms := fun b hb =>
+    FDatabase.mem_toDatabase_terms.mp (hok.base.inv.wf.envInTerms b hb)
+  have hnoset : ∀ c ∈ P, c.NoSet :=
+    (Program.setLegal_iff_noSet (fun _ => rfl) hdom.ctorsOnly).mp hdom.setLegal
+  have hufb : ∀ b ∈ (encodeAction fiatE a n).1, b.UnionFree :=
+    fun b hb => encodeAction_unionFree fiatE a n b hb
+  have hwlb : ∀ b ∈ (encodeAction fiatE a n).1, Actions.WriteLegal [b] (encodeSig P) :=
+    writeLegal_singleton _ (writeLegal_encodeAction hdom hag fiatE a n (hnoset _ hcP) hctors)
+  have hsound' : d.SoundTerms sd' := hok.sound.mono_src (CmdStep.contained hstep).eqs
+  rcases evalAction_eq_some hev with ⟨e, t, rfl, hsrcev, hsd'⟩ | ⟨v, e, t, rfl, hsrcev, hsd'⟩ |
+      ⟨e₁, e₂, t₁, t₂, rfl, hsrc₁, hsrc₂, -, hsd'⟩ | ⟨f, args, out, as, vs, rfl, -, -, -⟩
+  · -- `.expr e`
+    obtain ⟨hne, hprim⟩ := head_conditions_of_ctors hdom hctors
+    have hmemt : t ∈ sd'.terms := by
+      rw [hsd', Database.addTerm_terms]; exact Or.inr (Term.self_mem_subterms t)
+    have hjust := encodeBuild_writesJustified hwf' hsc henvm e n hne hprim
+      (held_of_evalAction hdom hwf' hok.glob e hctors hsrcev hmemt)
+    obtain ⟨-, hsD, henvD, -⟩ :=
+      execProgramM_sets_soundTerms (encodeBuild e n).2.1 (encodeBuild_isSet e n) hufb hwlb
+        hjust hok.base rfl rfl (fun _ ht => ht) hsound' hblock
+    refine ⟨hbD, fun w u hu => ?_, hsD⟩
+    rw [henvD]
+    exact hok.glob w u (by rw [hsd'] at hu; exact hu)
+  · -- `.letBind v e`
+    obtain ⟨hne, hprim⟩ := head_conditions_of_ctors hdom hctors
+    have hmemt : t ∈ sd'.terms := by
+      rw [hsd', Database.terms_setEnvRules, Database.addTerm_terms]
+      exact Or.inr (Term.self_mem_subterms t)
+    have hjust := encodeBuild_writesJustified hwf' hsc henvm e n hne hprim
+      (held_of_evalAction hdom hwf' hok.glob e hctors hsrcev hmemt)
+    have hsplit : ((encodeAction fiatE (Action.letBind v e) n).1).map Cmd.action
+        = ((encodeBuild e n).2.1).map Cmd.action ++ [Cmd.action (.letBind v e)] := by
+      rw [encodeAction_letBind_actions, encodeBuild_fst, List.map_append, List.map_cons,
+        List.map_nil]
+    rw [hsplit] at hblock
+    obtain ⟨D₁, hb₁, hafter⟩ := FDatabase.execProgramM_append hblock
+    obtain ⟨hbD₁, hsD₁, henvD₁, hmonoD₁⟩ :=
+      execProgramM_sets_soundTerms (encodeBuild e n).2.1 (encodeBuild_isSet e n)
+        (fun b hb => hufb b (by rw [encodeAction_letBind_actions]; exact List.mem_append_left _ hb))
+        (fun b hb => hwlb b (by
+          rw [encodeAction_letBind_actions]; exact List.mem_append_left _ hb))
+        hjust hok.base rfl rfl (fun _ ht => ht) hsound' hb₁
+    have hlast : D₁.execCmdM (Cmd.action (.letBind v e)) = some D := execProgramM_single hafter
+    rw [FDatabase.execCmdM] at hlast
+    obtain ⟨D₂, hact, hmerge⟩ := Option.bind_eq_some_iff.mp hlast
+    obtain ⟨t', htgtev, hD₂⟩ : ∃ t', e.eval D₁.sig D₁.env = some t' ∧
+        D₂ = { D₁.addTerm t' with env := (v, t') :: D₁.env } := by
+      rw [execAction] at hact
+      obtain ⟨t', ht', hD₂'⟩ := Option.map_eq_some_iff.mp hact
+      exact ⟨t', ht', hD₂'.symm⟩
+    obtain rfl : t = t' := eval_target_of_source hdom
+      (fun w u hu => by rw [henvD₁]; exact hok.glob w u hu) e hctors hsrcev htgtev
+    have hent : ∀ s ∈ t.subtermList, s.EntryShaped → s ∈ D₁.terms :=
+      entryShaped_mem_of_eval e hne (fun w _ u hu =>
+        entryShaped_mem_of_held hbD₁.subtermClosed (FDatabase.mem_toDatabase_terms.mp
+          (hbD₁.inv.wf.envInTerms (w, u) (Env.mem_of_lookup hu)))) htgtev
+    have hs₂ : D₂.SoundTerms sd' := by
+      rw [hD₂]
+      refine FDatabase.SoundTerms.mono_terms (fun x hx => hx)
+        (hsD₁.addTerm (fun g cs x pf hm => ?_) (fun x p pf hm => ?_))
+      · exact hsD₁.1 g cs x pf (hent _ hm (Or.inl ⟨g, cs, x, pf, rfl⟩))
+      · exact hsD₁.2 x p pf (hent _ hm (Or.inr ⟨x, p, pf, rfl⟩))
+    have hinv₂ : D₂.Inv :=
+      hbD₁.inv.execAction (a := Action.letBind v e)
+        (by rw [hbD₁.sig]; exact ⟨trivial, trivial⟩) hact
+    have hsig₂ : D₂.sig = encodeSig P := by
+      rw [FDatabase.execAction_sig hact]; exact hbD₁.sig
+    have hsD : D.SoundTerms sd' :=
+      mergeSaturateF_soundTerms mergeFuel (by rw [hsig₂]; exact hbD₁.shape)
+        (by rw [hsig₂]; exact hbD₁.merges) hinv₂
+        (execAction_noUnions (a := Action.letBind v e) trivial hbD₁.nounions hact) hs₂ hmerge
+    refine ⟨hbD, ?_, hsD⟩
+    intro w u hu
+    rw [(FDatabase.mergeSaturateF_fields hmerge).2.1, hD₂]
+    change Env.lookup w ((v, t) :: D₁.env) = some u
+    rw [henvD₁]
+    have hu' : Env.lookup w ((v, t) :: sd.env) = some u := by rw [hsd'] at hu; exact hu
+    rw [Env.lookup_cons] at hu'
+    rw [Env.lookup_cons]
+    by_cases hwv : w = v
+    · rw [if_pos hwv] at hu' ⊢; exact hu'
+    · rw [if_neg hwv] at hu' ⊢; exact hok.glob w u hu'
+  · -- `.union e₁ e₂`
+    have hc₁ : ∀ fk ∈ e₁.ctors, fk ∈ P.ctors :=
+      fun fk hfk => hctors fk (by rw [Action.ctors]; exact List.mem_append_left _ hfk)
+    have hc₂ : ∀ fk ∈ e₂.ctors, fk ∈ P.ctors :=
+      fun fk hfk => hctors fk (by rw [Action.ctors]; exact List.mem_append_right _ hfk)
+    obtain ⟨hne₁, hprim₁⟩ := head_conditions_of_ctors hdom hc₁
+    obtain ⟨hne₂, hprim₂⟩ := head_conditions_of_ctors hdom hc₂
+    have hm₁ : t₁ ∈ sd'.terms := by
+      rw [hsd', Database.addEq_terms]; exact Or.inl (Or.inr (Term.self_mem_subterms t₁))
+    have hm₂ : t₂ ∈ sd'.terms := by
+      rw [hsd', Database.addEq_terms]; exact Or.inr (Term.self_mem_subterms t₂)
+    have heq : (t₁, t₂) ∈ sd'.eqs := by
+      rw [hsd', Database.addEq_eqs]; exact Set.mem_insert _ _
+    have hbind : ∀ (w : Var), ∀ u, Env.lookup w d.env = some u →
+        ∀ s ∈ u.subtermList, s.EntryShaped → s ∈ d.terms :=
+      fun w u hu => entryShaped_mem_of_held hsc (henvm (w, u) (Env.mem_of_lookup hu))
+    have hjust₁ := encodeBuild_writesJustified hwf' hsc henvm e₁ n hne₁ hprim₁
+      (held_of_evalAction hdom hwf' hok.glob e₁ hc₁ hsrc₁ hm₁)
+    have hjust₂ := encodeBuild_writesJustified hwf' hsc henvm e₂ (encodeBuild e₁ n).2.2
+      hne₂ hprim₂ (held_of_evalAction hdom hwf' hok.glob e₂ hc₂ hsrc₂ hm₂)
+    have hjust₃ : WritesJustified sd' d
+        [Action.set ufName [maxE e₁ e₂] [minE e₁ e₂, fiatE]] := by
+      intro g args out hmem is vs has hvs
+      have hme : Action.set g args out
+          = Action.set ufName [maxE e₁ e₂] [minE e₁ e₂, fiatE] := by simpa using hmem
+      injection hme with hg ha ho
+      subst hg; subst ha; subst ho
+      obtain ⟨mx, hmx, rfl⟩ := Expr.evalList_single has
+      obtain ⟨mn, pfv, hmn, hpf, rfl⟩ := Expr.evalList_pair hvs
+      have hval : ∀ {z : Term}, e₁.eval d.sig d.env = some z ∨ e₂.eval d.sig d.env = some z →
+          z = t₁ ∨ z = t₂ := by
+        rintro z (hz | hz)
+        · exact Or.inl (eval_target_of_source hdom hok.glob e₁ hc₁ hsrc₁ hz).symm
+        · exact Or.inr (eval_target_of_source hdom hok.glob e₂ hc₂ hsrc₂ hz).symm
+      have hsubx : ∀ {z : Term},
+          e₁.eval d.sig d.env = some z ∨ e₂.eval d.sig d.env = some z →
+          ∀ s ∈ z.subtermList, s.EntryShaped → s ∈ d.terms := by
+        rintro z (hz | hz)
+        · exact entryShaped_mem_of_eval e₁ hne₁ (fun w _ => hbind w) hz
+        · exact entryShaped_mem_of_eval e₂ hne₂ (fun w _ => hbind w) hz
+      refine ⟨fun c hc s hsm hshaped => ?_, fun f' cs x pf hq => ?_, fun x p pf hq => ?_⟩
+      · have hc2 : c = mx ∨ c = mn ∨ c = pfv := by simpa using hc
+        rcases hc2 with rfl | rfl | rfl
+        · exact hsubx (eval_ifGt_inv hmx) s hsm hshaped
+        · exact hsubx (Or.symm (eval_ifGt_inv hmn)) s hsm hshaped
+        · refine entryShaped_mem_of_eval fiatE (fun y hy => ?_) (fun w _ => hbind w) hpf
+            s hsm hshaped
+          obtain rfl : y = fiatName := by simpa [fiatE, Expr.fns, Expr.fnsList] using hy
+          exact notEntryHead_fiatName
+      · exact absurd (Term.app.inj hq).1 (fun hz => viewName_ne_ufName hz.symm)
+      · obtain ⟨-, hcols⟩ := Term.app.inj hq
+        have h3 : [mx, mn, pfv] = [x, p, pf] := hcols
+        obtain rfl : mx = x := (List.cons.inj h3).1
+        obtain rfl : mn = p := (List.cons.inj (List.cons.inj h3).2).1
+        rcases hval (eval_ifGt_inv hmx) with rfl | rfl <;>
+          rcases hval (Or.symm (eval_ifGt_inv hmn)) with rfl | rfl
+        · exact Cong.assert (hwf'.eqsRefl _ hm₁)
+        · exact Cong.assert heq
+        · exact (Cong.assert heq).symm
+        · exact Cong.assert (hwf'.eqsRefl _ hm₂)
+    have hjust : WritesJustified sd' d (encodeAction fiatE (.union e₁ e₂) n).1 := by
+      rw [encodeAction_union_actions, encodeBuild_fst, encodeBuild_fst]
+      exact (hjust₁.append hjust₂).append hjust₃
+    have hset : ∀ b ∈ (encodeAction fiatE (.union e₁ e₂) n).1, b.IsSet := by
+      intro b hb
+      rw [encodeAction_union_actions] at hb
+      rcases List.mem_append.mp hb with hb' | hb'
+      · rcases List.mem_append.mp hb' with hb'' | hb''
+        · exact encodeBuild_isSet e₁ n b hb''
+        · exact encodeBuild_isSet e₂ _ b hb''
+      · obtain rfl : b = Action.set ufName [maxE (encodeBuild e₁ n).1
+            (encodeBuild e₂ (encodeBuild e₁ n).2.2).1]
+            [minE (encodeBuild e₁ n).1 (encodeBuild e₂ (encodeBuild e₁ n).2.2).1, fiatE] := by
+          simpa using hb'
+        trivial
+    obtain ⟨-, hsD, henvD, -⟩ :=
+      execProgramM_sets_soundTerms _ hset hufb hwlb hjust hok.base rfl rfl (fun _ ht => ht)
+        hsound' hblock
+    refine ⟨hbD, fun w u hu => ?_, hsD⟩
+    rw [henvD]
+    exact hok.glob w u (by rw [hsd'] at hu; exact hu)
+  · -- a source `set` is out of the fragment
+    exact absurd (hnoset _ hcP) (fun h => (h : False))
+
+
+/-- **The residue, reduced to one firing and one missing clause.**
+
+`execM_soundTerms_of_firings` with `EncodedActionSound` discharged, so what is left of the
+completeness half is:
+
+* `EncodedHeadSound` — one firing of one encoded **source rule**, which is
+  `entrySound_headBuild_post` and `cong_headUnion_post` at the writes `encodeActions` emits.
+  The block read-back it needs is here already (`encodeBuild_writesJustified`,
+  `execActions_soundTerms_of_sets`) and so is the substitution
+  (`validQuerySubst_of_mem_matchQuery_diag`); what is missing is the source-side reading at
+  a rule's *nested* applications — `entrySound_headBuild_post` fixes the reading τ per
+  application and a head's subapplications have to share it — together with `Rule.HeadScoped`
+  and `hlet`.
+* `Program.AritiesAgree` — a clause `Program.EncodeDomain` does not have, whose necessity
+  `adProgram_not_maintenance_writeLegal` records.
+
+Everything else is proved. -/
+theorem execM_soundTerms_of_head {P : Program} (hdom : P.EncodeDomain) (hag : P.AritiesAgree)
+    (hhead : EncodedHeadSound P (encodeSig P))
+    {src : Database} (hsrc : ProgramStep Database.empty P src)
+    {tgt : FDatabase} (htgt : execM (encode P) = some tgt) : tgt.SoundTerms src :=
+  execM_soundTerms_of_firings hdom hag hhead (encodedActionSound hdom hag) hsrc htgt
 
 /-! ### The clause is needed, at a program the domain admits
 
@@ -1554,8 +2285,12 @@ obligation is discharged, one per writer `encode` emits — `entrySound_build`,
   that into a `CmdStep sd' (.saturate R) sd'`, and every target round then reads and
   concludes there (`FDatabase.EncOk.saturate_src`). `runSaturateM_closed` is the iteration.
 
-  **What is left is `EncodedHeadSound` and `EncodedActionSound`**, and two legality
-  conditions. `execM_soundTerms_of_obligations` is the reduction, and it is `sorryAx`-free.
+  **What is left is `EncodedHeadSound` and one missing domain clause.**
+  `execM_soundTerms_of_obligations` is the reduction and it is `sorryAx`-free;
+  `execM_soundTerms_of_head` is it with the two legality conditions
+  (`encodedWriteLegal`, `maintenance_writeLegal`) and the top-level action case
+  (`encodedActionSound`) all discharged, leaving `EncodedHeadSound` and
+  `Program.AritiesAgree`.
 * **The row-to-entry direction, which is the one that is *not* refuted, and it is proved.** A
   rule fires off `d.rows` (`patternHolds`), and turning a matched row into a `Database.Out` is
   `FDatabase.IndexOk.entry` — a row is an entry term. That is the direction soundness needs,
