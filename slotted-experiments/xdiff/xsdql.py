@@ -35,7 +35,6 @@ Usage:
 
 import functools
 import os
-import re
 import subprocess
 import sys
 from pathlib import Path
@@ -120,6 +119,8 @@ assert SYM_PREFIX and LET_TAG != "let", "sdql.ref lost one of the two workaround
 
 enc, sexpr, shift = LANG.enc, LANG.sexpr, LANG.shift
 
+sc = __import__("slotted-compile")
+
 
 def check_term(t):
     """Reject terms where the reference and the encoding disagree on a node's slots.
@@ -143,15 +144,26 @@ def check_term(t):
 
 
 # ---------------------------------------------------------------------- the rules
-# LHS / RHS text copied from `sdql_rules()` in `slotted-egraphs/benches/sdql.rs`,
-# byte for byte; `ref_text` applies the two spelling rewrites above and nothing
-# else. A cond is (want, '$slot', [pvar...]) and reads "the slot is / is not among
-# the slots of any listed variable", which is what the reference's guards test:
-# every SDQL guard is `!subst[v].slots().contains(&Slot::named(s))`, so `notin`
-# with one variable, and two of them conjoined for the two bound slots.
+# Read from `slotted-tests/sdql.egg` and rendered in the oracle's syntax, which is
+# where the two spelling workarounds above come from -- `Let`'s tag and `Symbol`'s
+# prefix are in `sdql.ref`, so neither is applied by hand here.
+#
+# A cond is (want, '$slot', [pvar...]) and reads "the slot is / is not among the slots
+# of any listed variable", which is what the reference's guards test: every SDQL guard
+# is `!subst[v].slots().contains(&Slot::named(s))`, so `notin` with one variable, and
+# two of them conjoined for the two bound slots.
 
 
 class Rule:
+    """One rewrite, with each side already in the oracle's own syntax.
+
+    Derived from `slotted-tests/sdql.egg` rather than restated: `pat_sexpr` renders a
+    pattern with `op.ref` for every operator and `op.ref_prefix` for a payload leaf,
+    which is where `sdql-let` and the `sym:` prefix come from. A hand-written copy of
+    these 13 patterns used to live here, one token-rewriting pass away from disagreeing
+    with the rules that actually run.
+    """
+
     def __init__(self, name, lhs, rhs, conds=()):
         self.name = name
         self.lhs = lhs
@@ -161,62 +173,30 @@ class Rule:
     def spec_lines(self):
         # `rhs <root> <pattern>`: on the nested path the root is unused (the whole
         # pattern is the root), so it is written `_`.
-        out = ["rule", f"nested {ref_text(self.lhs)}", f"rhs _ {ref_text(self.rhs)}"]
+        out = ["rule", f"nested {self.lhs}", f"rhs _ {self.rhs}"]
         for want, slot, pvars in self.conds:
             out.append(f"cond {'in' if want else 'notin'} {slot} {' '.join(pvars)}")
         return out
 
 
-def ref_text(s):
-    """The reference's own pattern text in `xmulti`'s spellings.
-
-    Two mechanical rewrites, and nothing else: the operator `let` becomes
-    `sdql-let`, and a payload symbol in a child position gets `SYM_PREFIX`. A
-    token is an operator exactly when it follows `(`; a child token is a pattern
-    variable (`?x`), a slot (`$x`), an integer, or a payload symbol. `list` prints
-    the result for every rule, so the rewrite is auditable rather than trusted.
-    """
-    out, op_next = [], False
-    for tok in re.findall(r"[()]|[^\s()]+", s):
-        if tok in ("(", ")"):
-            out.append(tok)
-            op_next = tok == "("
-        elif op_next:
-            out.append(LET_TAG if tok == "let" else tok)
-            op_next = False
-        elif tok[0] in "?$" or re.fullmatch(r"-?\d+", tok):
-            out.append(tok)
-        else:
-            out.append(SYM_PREFIX + tok)
-    # the reference's tokenizer splits on parens, so spacing is free
-    return " ".join(out)
+#: The rules, read from `slotted-tests/sdql.egg` -- the same file `gen-sdql-rules.py`
+#: compiles -- with each side rendered in the oracle's syntax. The cases below ask for
+#: one by name.
+def _load_rules():
+    src = sc.Source(SDQL_SRC)
+    out = {}
+    for form in sc.parse(SDQL_SRC.read_text()):
+        if not (isinstance(form, list) and form and form[0] == "rewrite"):
+            continue
+        r = sc.rewrite_parts(src, form)
+        lhs, rhs = (
+            slotenc.pat_sexpr(LANG, slotenc.rhs_of(LANG, src.term(side, ground=False))) for side in (r["lhs"], r["rhs"])
+        )
+        out[r["name"]] = Rule(r["name"], lhs, rhs, conds=r["conds"])
+    return out
 
 
-RULES = {
-    "eq-comm": Rule("eq-comm", "(eq ?a ?b)", "(eq ?b ?a)"),
-    "mult-app1": Rule("mult-app1", "(* ?a ?b)", "(binop mult ?a ?b)"),
-    "add-app1": Rule("add-app1", "(+ ?a ?b)", "(binop add ?a ?b)"),
-    "mult-app2": Rule("mult-app2", "(binop mult ?a ?b)", "(* ?a ?b)"),
-    "add-zero": Rule("add-zero", "(+ ?e 0)", "?e"),
-    "unique-app1": Rule("unique-app1", "(unique ?a)", "(apply uniquef ?a)"),
-    "get-range": Rule("get-range", "(get (range ?st ?en) ?idx)", "(+ ?idx (- ?st 1))"),
-    "let-binop3": Rule("let-binop3", "(let ?e1 $x (binop ?f ?e2 ?e3))", "(binop ?f (let ?e1 $x ?e2) (let ?e1 $x ?e3))"),
-    # `$x` for two SIBLING binders -- see the two recorded divergences below
-    "let-binop4": Rule("let-binop4", "(binop ?f (let ?e1 $x ?e2) (let ?e1 $x ?e3))", "(let ?e1 $x (binop ?f ?e2 ?e3))"),
-    "sum-sing": Rule("sum-sing", "(sum ?e1 $k $v (sing (var $k) (var $v)))", "?e1"),
-    "sum-fact-inv-1": Rule("sum-fact-inv-1", "(* ?e1 (sum ?R $k $v ?e2))", "(sum ?R $k $v (* ?e1 ?e2))"),
-    "sum-merge": Rule(
-        "sum-merge",
-        "(sum ?R $k1 $v1 (sum ?S $k2 $v2 (ifthen (eq (var $v1) (var $v2)) ?body)))",
-        "(merge ?R ?S $k1 $k2 $v1 (let (var $v1) $v2 ?body))",
-    ),
-    "sum-fact-1": Rule(
-        "sum-fact-1",
-        "(sum ?R $x $y (* ?e1 ?e2))",
-        "(* ?e1 (sum ?R $x $y ?e2))",
-        conds=[(False, "$x", ["e1"]), (False, "$y", ["e1"])],
-    ),
-}
+RULES = _load_rules()
 
 
 @functools.cache
@@ -712,7 +692,7 @@ def main():
     if argv and argv[0] == "list":
         for c in cases():
             print(f"{c.name:<24} {c.want}")
-            print(f"    {c.rule.name:<16} {ref_text(c.rule.lhs)}  ->  {ref_text(c.rule.rhs)}")
+            print(f"    {c.rule.name:<16} {c.rule.lhs}  ->  {c.rule.rhs}")
         return 0
     if argv and argv[0] == "show":
         c = next(x for x in cases() if x.name == argv[1])

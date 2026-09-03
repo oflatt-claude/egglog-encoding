@@ -1,15 +1,22 @@
 #!/usr/bin/env python3
 """The slotted encoding, in one place.
 
-Four programs encode slotted rules and terms, and the recipe they encode is one
+Several programs encode slotted rules and terms, and the recipe they encode is one
 recipe: `slotted-tests/slotted-user-rules.egg` states it, section by section, and
 `slotted-user-rules.md` argues it. This module is that recipe as code, so there is
-one place for it to be right and one place to fix. The four are front-ends:
+one place for it to be right and one place to fix. The front-ends:
 
+    slotted-compile.py    a test written in the slotted language, compiled to run
     gen-node-rules.py     writes the machinery files
     gen-sdql-rules.py     the reference `sdql` rewrite rules
     xdiff/xdiff.py        the differential harness, toy language
     xdiff/xarray.py       the differential harness, the paper's array language
+    xdiff/xsdql.py        the differential harness, `sdql`
+
+None of them holds a rule. The rules live in `slotted-tests/sdql.egg` and
+`slotted-tests/array.egg`, written in the slotted language, and each front-end reads
+one -- so a rule has one spelling and the several things done with it cannot disagree
+about what it says.
 
 Four layers, in the order they build on each other.
 
@@ -1021,7 +1028,11 @@ def pat_sexpr(lang, t, binder=False):
     op = lang[t[0]]
     kids, pays = op.split(t[1:])
     if op.ref is None:
-        return pays[0].strip('"')
+        # a payload leaf, written as its payload -- with the prefix the oracle needs to
+        # read it as a payload rather than a tag, exactly as `TermLang.sexpr` does for
+        # a ground term. The two renderers have to agree: one writes a rule's pattern
+        # and the other the terms that rule has to match.
+        return op.ref_prefix + pays[0].strip('"')
     assert not (kids and None in op.pays), f"{op.name}: no oracle syntax for a payload argument beside a child"
     parts = [pat_sexpr(lang, k, binder=(i in op.binders)) for i, k in enumerate(kids)]
     return f"({op.ref} {' '.join(parts)})" if parts else op.ref
