@@ -2119,6 +2119,39 @@ theorem execM_soundTerms_of_head {P : Program} (hdom : P.EncodeDomain) (hag : P.
     {tgt : FDatabase} (htgt : execM (encode P) = some tgt) : tgt.SoundTerms src :=
   execM_soundTerms_of_firings hdom hag hhead (encodedActionSound hdom hag) hsrc htgt
 
+
+/-- **`FDatabase.EncOk` is inhabited**, at the state the prelude of any in-domain program
+whose arities agree leaves. Both legality conditions are discharged here, so this asks
+nothing beyond the domain and the missing clause. -/
+theorem encOk_preludeState {P : Program} (hdom : P.EncodeDomain) (hag : P.AritiesAgree)
+    {d₀ : FDatabase} (hprel : FDatabase.empty.execProgramM (encodePrelude P) = some d₀) :
+    d₀.EncOk P (encodeSig P) Database.empty :=
+  preludeState_encOk (encodeSig_mergesLegal hdom) (maintenance_writeLegal hdom hag) hprel
+
+/-! ### And at a program, concretely
+
+`ENCODING.md`'s discipline for the bundle the induction carries: `wProgram` is
+`Encoding/Match.lean`'s witness program, its prelude **runs in the kernel** — it is
+declarations and rules, so none of the irreducible machinery is reached — and the state it
+leaves satisfies every field. -/
+
+/-- The state `encode wProgram`'s prelude leaves. -/
+def wPreludeState : FDatabase :=
+  (FDatabase.empty.execProgramM (encodePrelude wProgram)).getD FDatabase.empty
+
+theorem wPreludeState_eq :
+    FDatabase.empty.execProgramM (encodePrelude wProgram) = some wPreludeState := rfl
+
+/-- `wProgram` mentions `F` at one arity and `A` at one arity. -/
+theorem wProgram_aritiesAgree : wProgram.AritiesAgree := by
+  change ∀ fk ∈ wProgram.ctors, ∀ gl ∈ wProgram.ctors, fk.1 = gl.1 → fk.2 = gl.2
+  decide +kernel
+
+/-- **The bundle, at a state a real encoded program reaches.** -/
+theorem wPreludeState_encOk :
+    wPreludeState.EncOk wProgram (encodeSig wProgram) Database.empty :=
+  encOk_preludeState wProgram_encodeDomain wProgram_aritiesAgree wPreludeState_eq
+
 /-! ### The clause is needed, at a program the domain admits
 
 `ENCODING.md`'s discipline for a clause as much as for a lemma: a condition that nothing
@@ -2398,7 +2431,29 @@ namespace where a *head*'s skolem has to be told apart from an entry.
 
 At a program with no rule the hypothesis is the source's own `evalAction`, and
 `satTarget_viewsSound` is that case discharged; `ncTgt_soundTerms` is both clauses at a state
-an encoded program reaches with a rule, a non-leader firing and a real `@UF` edge. -/
+an encoded program reaches with a rule, a non-leader firing and a real `@UF` edge.
+
+**What is left, exactly.** `execM_soundTerms_of_head` is the reduction and it is
+`sorryAx`-free; two things stand between it and this statement.
+
+* `EncodedHeadSound`, one firing of one encoded source rule. Four things it still needs, and
+  none of them is the block read-back, which is done: `Rule.HeadScoped` as a **case split**
+  (a head variable neither the query nor a global binds sticks the encoded head too, and
+  that firing writes on neither side); `hlet`, where a block's `let`s shadow the head and the
+  shared prefix has to be carried on both sides — `execActions_soundTerms_of_sets` is stated
+  for a block of `set`s and a head with a `let` is not one; `Database.TermsBuild` as an
+  invariant of the source run, which `entrySound_headBuild_post` asks and nothing yet
+  establishes along `ProgramStep`; and the reading τ shared across a head's **nested**
+  applications, since `entrySound_headBuild_post` picks one per application and `hfired` at a
+  subapplication is `mem_terms_of_headBuild_of_domain` composed with
+  `exists_subterm_of_mem_apps` at that same τ.
+* `Program.AritiesAgree`, a clause `Program.EncodeDomain` does not have.
+
+**Neither the bundle nor the reduction is vacuous.** `wPreludeState_encOk` is
+`FDatabase.EncOk` at the state `encode wProgram`'s prelude really leaves — the prelude is
+declarations and rules, so it reduces in the kernel — and
+`adProgram_not_maintenance_writeLegal` is the missing clause's necessity, at a two-command
+program the domain admits. -/
 theorem execM_soundTerms {P : Program} {src : Database} {tgt : FDatabase}
     (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
     (htgt : execM (encode P) = some tgt) : tgt.SoundTerms src := by
