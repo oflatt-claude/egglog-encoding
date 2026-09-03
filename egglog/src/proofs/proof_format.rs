@@ -8,7 +8,7 @@ use crate::{
         proof_checker::{
             ProofCheckError, ProofCheckErrorKind, eval_expr_with_subst, gather_globals, run_merge,
         },
-        proof_encoding_helpers::{EncodingNames, Skeleton, recomputable_premises},
+        proof_encoding_helpers::{EncodingNames, Skeleton, holds_sort, recomputable_premises},
         proof_head::{Firing, HeadPlan, HeadWalk, ProofAlgebra},
     },
     typechecking::{FuncType, PrimitiveValidator},
@@ -210,8 +210,8 @@ enum RawProof {
     /// The call is named by where it sits rather than by the primitive's name,
     /// which would not pin down a validator since primitives are overloaded.
     /// [`ProofStore::from_raw`] runs that validator on the argument terms and
-    /// desugars this into the [`RawProof::Proj`] at the position the result
-    /// occupies.
+    /// desugars this into one or more [`RawProof::Proj`] steps along the path to
+    /// the result.
     ProjPrim(String, usize, Vec<RawProofId>),
     /// Given a proof that `t1 = c` for a container term `c`, produces a proof of
     /// `t1 = normalize(c)` — the container's canonicalization (reorder/dedup/
@@ -275,6 +275,9 @@ pub(crate) enum SynthKey {
     Sym(ProofId),
     Trans(ProofId, ProofId),
     Congr(ProofId, usize, ProofId),
+    /// A positional projection synthesized while expanding a nested
+    /// [`RawProof::ProjPrim`].
+    Proj(ProofId, usize),
     /// A premise the encoding stored no row for (see [`recomputable_premises`]).
     Fiat(TermId, TermId),
 }
@@ -769,16 +772,17 @@ impl ProofStore {
         validator(&mut self.term_dag, &args).unwrap_or(term_id)
     }
 
-    /// The term a rule body's element read produces: the resolved primitive at
-    /// `body_index` of `rule`'s body, run on `arg_terms` through its validator,
-    /// which is the same one the checker runs when it re-evaluates a body.
+    /// The term a rule body's element read produces and the resolved signature's
+    /// unique argument capable of holding it: the primitive at `body_index` of
+    /// `rule`'s body, run on `arg_terms` through the same validator the checker
+    /// uses when it re-evaluates a body.
     fn run_body_primitive(
         &mut self,
         prog: &[ResolvedNCommand],
         rule: &str,
         body_index: usize,
         arg_terms: &[TermId],
-    ) -> TermId {
+    ) -> (TermId, usize) {
         let at = self
             .rule_at
             .get(rule)
@@ -794,6 +798,25 @@ impl ProofStore {
         let ResolvedExpr::Call(_, ResolvedCall::Primitive(prim), _) = expr else {
             panic!("body node {body_index} of rule {rule} is not a primitive call");
         };
+        let mut typed_holders =
+            prim.input().iter().enumerate().filter_map(|(index, sort)| {
+                holds_sort(sort, prim.output().name()).then_some(index)
+            });
+        let typed_container_index = typed_holders.next().unwrap_or_else(|| {
+            panic!(
+                "primitive {} at body node {body_index} of rule {rule} has no input sort holding \
+                 its output sort {}",
+                prim.name(),
+                prim.output().name()
+            )
+        });
+        assert!(
+            typed_holders.next().is_none(),
+            "primitive {} at body node {body_index} of rule {rule} has several input sorts \
+             holding its output sort {}, which proof support should have rejected",
+            prim.name(),
+            prim.output().name()
+        );
         let validator = prim
             .validator()
             .unwrap_or_else(|| {
@@ -803,12 +826,13 @@ impl ProofStore {
                 )
             })
             .clone();
-        validator(&mut self.term_dag, arg_terms).unwrap_or_else(|| {
+        let element = validator(&mut self.term_dag, arg_terms).unwrap_or_else(|| {
             panic!(
                 "validator for {} rejected the argument terms of body node {body_index} in rule {rule}",
                 prim.name()
             )
-        })
+        });
+        (element, typed_container_index)
     }
 
     /// The equality the `at`th global action of `prog` states, oriented the way
@@ -1231,49 +1255,57 @@ impl ProofStore {
                 // The resolved call, not just the primitive's name: egglog
                 // overloads names across sorts, and only the resolved call fixes
                 // which validator states what the read means on terms.
-                let element = self.run_body_primitive(prog, rule, *body_index, &arg_terms);
-                // The element is a child of the container the read took it out
-                // of, which is whichever argument's term holds it.
-                let mut holders = arg_raws.iter().zip(&arg_ids).zip(&arg_terms).filter_map(
-                    |((raw, id), term)| {
-                        let Term::App(_, children) = self.term_dag.get(*term) else {
-                            return None;
-                        };
-                        let at = children.iter().position(|child| *child == element)?;
-                        Some((*raw, *id, at))
-                    },
-                );
-                let (container_raw, container_id, child_index) =
-                    holders.next().unwrap_or_else(|| {
+                let (element, container_index) =
+                    self.run_body_primitive(prog, rule, *body_index, &arg_terms);
+                // The resolved signature identifies the one argument whose sort
+                // can hold the result. An unrelated argument term may contain the
+                // same child, so term occurrence alone is not provenance.
+                let container_raw = *arg_raws.get(container_index).unwrap_or_else(|| {
+                    panic!(
+                        "primitive projection: the resolved primitive at body node {body_index} \
+                         of rule {rule} identifies container argument {container_index}, but the \
+                         projection has {} argument proofs",
+                        arg_raws.len()
+                    )
+                });
+                let container_id = arg_ids[container_index];
+                let container_term = arg_terms[container_index];
+                let path = self
+                    .projection_path_to_descendant(container_term, element)
+                    .unwrap_or_else(|| {
                         panic!(
                             "primitive projection: body node {body_index} of rule {rule} read \
-                             {} out of no argument of its own",
+                             {} out of no descendant of container argument {container_index}",
                             self.term_dag.to_string(element)
                         )
                     });
-                // `ElementFromSeveralContainers` rejects a rule whose element is
-                // reachable from more than one argument, so the holder is unique.
-                assert!(
-                    holders.next().is_none(),
-                    "primitive projection: body node {body_index} of rule {rule} read {} out of \
-                     several arguments, which the encoding should have rejected",
-                    self.term_dag.to_string(element)
-                );
-                let positional = RawProof::Proj(container_raw, child_index);
-                let projected = match self.proof_id.get(&positional) {
-                    Some(&id) => id,
-                    None => {
-                        let id = self.id_to_proof.push(Proof {
-                            proposition: Proposition::new(element, element),
-                            justification: Justification::Proj {
-                                proof: container_id,
-                                child_index,
-                            },
-                        });
-                        self.proof_id.insert(positional, id);
-                        id
-                    }
-                };
+                let mut projected = container_id;
+                for (depth, child_index) in path.into_iter().enumerate() {
+                    let child = self.term_child(self.id_to_proof[projected].rhs(), child_index);
+                    let proof = Proof {
+                        proposition: Proposition::new(child, child),
+                        justification: Justification::Proj {
+                            proof: projected,
+                            child_index,
+                        },
+                    };
+                    projected = if depth == 0 {
+                        // Preserve sharing with an explicit projection of the
+                        // typed container argument when one exists elsewhere in
+                        // the extracted raw proof.
+                        let positional = RawProof::Proj(container_raw, child_index);
+                        match self.proof_id.get(&positional) {
+                            Some(&id) => id,
+                            None => {
+                                let id = self.id_to_proof.push(proof);
+                                self.proof_id.insert(positional, id);
+                                id
+                            }
+                        }
+                    } else {
+                        self.push_shared_proof(SynthKey::Proj(projected, child_index), proof)
+                    };
+                }
                 self.proof_id.insert(raw_proof.clone(), projected);
                 return projected;
             }
@@ -1720,6 +1752,49 @@ impl ProofStore {
                 args.len()
             )
         })
+    }
+
+    /// The positional projection indexes from `ancestor` to a proper descendant
+    /// equal to `target`, choosing the first depth-first occurrence. The
+    /// explicit stack keeps deeply nested proof terms off the Rust call stack.
+    fn projection_path_to_descendant(
+        &self,
+        ancestor: TermId,
+        target: TermId,
+    ) -> Option<Vec<usize>> {
+        let mut stack = vec![(ancestor, 0)];
+        let mut path = Vec::new();
+        let mut visited = HashSet::default();
+        visited.insert(ancestor);
+        while let Some(&(term, child_index)) = stack.last() {
+            let child = match self.term_dag.get(term) {
+                Term::App(_, children) => children.get(child_index).copied(),
+                Term::Lit(_) | Term::Var(_) => None,
+            };
+            let Some(child) = child else {
+                stack.pop();
+                if !stack.is_empty() {
+                    path.pop();
+                }
+                continue;
+            };
+
+            stack.last_mut().unwrap().1 += 1;
+            path.push(child_index);
+            if child == target {
+                return Some(path);
+            }
+            if !visited.insert(child) {
+                path.pop();
+                continue;
+            }
+            if matches!(self.term_dag.get(child), Term::App(..)) {
+                stack.push((child, 0));
+            } else {
+                path.pop();
+            }
+        }
+        None
     }
 
     pub(super) fn replace_term_child(

@@ -929,6 +929,58 @@ impl EGraph {
         &self.action_registry
     }
 
+    /// Set the user-visible row layout for a table whose physical schema carries
+    /// internal columns. The egglog crate uses this after installing an encoded
+    /// view, so name-indexed reads classify and project the view as the source
+    /// constructor or function it represents.
+    #[doc(hidden)]
+    pub fn set_table_read_projection(
+        &mut self,
+        function: FunctionId,
+        kind: TableKind,
+        input_arity: usize,
+        output_arity: usize,
+        output_index: usize,
+    ) {
+        let info = &self.funcs[function];
+        assert!(
+            input_arity <= output_index,
+            "table `{}` read inputs must be a prefix before its selected output",
+            info.name
+        );
+        assert!(
+            output_arity > 0,
+            "table `{}` must expose at least one output column",
+            info.name
+        );
+        assert!(
+            output_index + output_arity <= info.schema.len(),
+            "table `{}` read projection exceeds its physical schema",
+            info.name
+        );
+        assert!(
+            kind != TableKind::Constructor || output_arity == 1,
+            "constructor `{}` must expose exactly one eclass output",
+            info.name
+        );
+
+        let mut registry = self.action_registry.write().unwrap();
+        let action = registry
+            .table_actions
+            .get_mut(info.name.as_ref())
+            .expect("newly added table is missing from the action registry");
+        assert_eq!(
+            action.table, info.table,
+            "action registry entry points at the wrong physical table"
+        );
+        action.read_projection = TableReadProjection {
+            kind,
+            input_arity,
+            output_arity,
+            output_index,
+        };
+    }
+
     /// Run the given rules, returning whether the database changed.
     ///
     /// If the given rules are malformed, this method can return an error.
@@ -1970,6 +2022,23 @@ pub enum TableKind {
     Constructor,
 }
 
+/// User-visible table shape used by read-only, name-indexed APIs.
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+struct TableReadProjection {
+    kind: TableKind,
+    input_arity: usize,
+    output_arity: usize,
+    output_index: usize,
+}
+
+/// A requested read operation does not apply to the table's visible shape.
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+#[doc(hidden)]
+pub enum TableReadProjectionError {
+    WrongKind { actual: TableKind },
+    MultipleOutputs,
+}
+
 /// This is an intern-able struct that holds all the data needed
 /// to do table operations with an [`ExecutionState`], assuming
 /// that the [`FunctionId`] for the table is known ahead of time.
@@ -1979,7 +2048,11 @@ pub struct TableAction {
     table_math: SchemaMath,
     default: Option<MergeVal>,
     timestamp: CounterId,
+    /// Physical classification used by write operations.
     kind: TableKind,
+    /// User-visible row projection. This equals the physical layout unless the
+    /// table is an encoded view with internal columns.
+    read_projection: TableReadProjection,
 }
 
 impl TableAction {
@@ -2001,23 +2074,78 @@ impl TableAction {
             },
             timestamp: egraph.timestamp_counter,
             kind,
+            read_projection: TableReadProjection {
+                kind,
+                input_arity: func_info.n_keys,
+                output_arity: func_info.schema.len() - func_info.n_keys,
+                output_index: func_info.n_keys,
+            },
         }
     }
 
-    /// Whether this table is a `Function` (no auto-insert) or a
+    /// Whether this physical table is a `Function` (no auto-insert) or a
     /// `Constructor` (mints a fresh eclass id on miss).
     pub fn kind(&self) -> TableKind {
         self.kind
     }
 
-    /// Number of input (key) columns.
+    /// Number of physical input (key) columns.
     pub fn input_arity(&self) -> usize {
         self.table_math.num_keys()
     }
 
-    /// Number of output (value) columns.
+    /// Number of physical output (value) columns.
     pub fn output_arity(&self) -> usize {
         self.table_math.n_vals()
+    }
+
+    /// Validate a read operation against the user-visible kind and output
+    /// shape, returning the input arity needed for its arity check. Physical
+    /// kind/arity remain available separately for write operations.
+    #[doc(hidden)]
+    pub fn validate_read_projection(
+        &self,
+        expected_kind: Option<TableKind>,
+        require_single_output: bool,
+    ) -> std::result::Result<usize, TableReadProjectionError> {
+        if expected_kind.is_some_and(|expected| expected != self.read_projection.kind) {
+            return Err(TableReadProjectionError::WrongKind {
+                actual: self.read_projection.kind,
+            });
+        }
+        if require_single_output && self.read_projection.output_arity != 1 {
+            return Err(TableReadProjectionError::MultipleOutputs);
+        }
+        Ok(self.read_projection.input_arity)
+    }
+
+    /// Look up the output selected by the user-visible row projection. The
+    /// common layout remains a direct keyed lookup; layouts whose visible key
+    /// differs from the physical key fall back to a projected scan.
+    #[doc(hidden)]
+    pub fn lookup_visible(&self, state: &ExecutionState, key: &[Value]) -> Option<Value> {
+        debug_assert_eq!(key.len(), self.read_projection.input_arity);
+        let physical_input_arity = self.table_math.num_keys();
+        if physical_input_arity == self.read_projection.input_arity
+            && self.read_projection.output_index >= physical_input_arity
+        {
+            return self.lookup_value_col(
+                state,
+                key,
+                self.read_projection.output_index - physical_input_arity,
+            );
+        }
+
+        let mut found = None;
+        self.for_each_visible_while(state, |inputs, output, _| {
+            if inputs == key {
+                found = Some(output);
+                false
+            } else {
+                true
+            }
+        });
+        found
     }
 
     /// Look up value column `col_idx` for `key`, or `None` if the key is absent.
@@ -2105,6 +2233,25 @@ impl TableAction {
             cur = next;
         }
         drain_buf!(buf);
+    }
+
+    /// Iterate rows after applying the user-visible prefix/output projection,
+    /// excluding internal columns such as an encoded view's proof.
+    #[doc(hidden)]
+    pub fn for_each_visible_while(
+        &self,
+        state: &ExecutionState,
+        mut f: impl FnMut(&[Value], Value, bool) -> bool,
+    ) {
+        let input_arity = self.read_projection.input_arity;
+        let output_index = self.read_projection.output_index;
+        self.for_each_while(state, |row| {
+            f(
+                &row.vals[..input_arity],
+                row.vals[output_index],
+                row.subsumed,
+            )
+        });
     }
 
     /// Look up a row, inserting the configured default value if absent.

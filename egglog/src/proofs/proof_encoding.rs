@@ -967,8 +967,8 @@ impl<'a> ProofInstrumentor<'a> {
         }
     }
 
-    /// Each function/constructor gets a view table.
-    /// The view table stores child terms and their eclass.
+    /// Each encoded function/constructor becomes one source-named FD view,
+    /// keyed by its arguments and carrying its output plus a proof column.
     fn term_and_view(&mut self, fdecl: &ResolvedFunctionDecl) -> Vec<Command> {
         let schema = &fdecl.schema;
         let out_type = schema.output().clone();
@@ -978,9 +978,10 @@ impl<'a> ProofInstrumentor<'a> {
         let in_sorts = ListDisplay(schema.input.clone(), " ");
         let fresh_sort = self.egraph.parser.symbol_gen.fresh("view");
         let index_decls = self.declare_view_indexes(fdecl);
-        // Constructors and encoded globals give the term row `(children eclass)`;
-        // a Custom function returning a distinct value (e.g. `-> i64`) keeps an
-        // output column plus a fresh eclass column.
+        // Constructor and encoded-global views carry the term's e-class in output
+        // column 0. A custom function returning a distinct value (e.g. `-> i64`)
+        // carries that value there and uses a separate fresh e-class sort for its
+        // encoded term.
         let output_is_eclass = self.output_is_eclass(fdecl);
 
         let view_sort = if output_is_eclass {
@@ -1066,8 +1067,7 @@ impl<'a> ProofInstrumentor<'a> {
         ))
     }
 
-    // Actions need to be instrumented to add to the view
-    // as well as to the terms tables.
+    // Actions need to be instrumented to update the encoded views.
     //
     // Every proof minted here is named by the column the walk is at, so an
     // action's operands are instrumented before the columns the action itself
@@ -1289,9 +1289,9 @@ impl<'a> ProofInstrumentor<'a> {
         }
     }
 
-    /// Write a row into a functional-dependency view
-    /// `(set (@FView children) (values eclass proof))`. Re-setting an existing `children` key with a
-    /// different `eclass` triggers the view's `:merge`.
+    /// Write a row into a source-named functional-dependency view:
+    /// `(set (F children) (values value proof))`. Re-setting an existing
+    /// `children` key is handled by the view's declared collision policy.
     pub(super) fn update_fd_view(
         &mut self,
         fname: &str,
@@ -1791,7 +1791,7 @@ impl<'a> ProofInstrumentor<'a> {
             .clone()
     }
 
-    /// Add to the term and view tables, returning the created term. For
+    /// Record a function application in its view, returning the encoded term. For
     /// constructors, `args` excludes the eclass of the resulting term (it may not
     /// exist yet); for custom functions, `args` includes all arguments, output
     /// included.
@@ -2008,10 +2008,10 @@ impl<'a> ProofInstrumentor<'a> {
         decls
     }
 
-    /// Query a functional-dependency view by its `children` key, binding fresh
-    /// variables for the value and proof output columns:
-    /// `(= (values v pf) (@FView children))`. The value is the e-class for
-    /// constructors/globals and the function output for custom `:merge` views.
+    /// Query a source-named functional-dependency view by its `children` key,
+    /// binding fresh variables for the value and proof output columns:
+    /// `(= (values v pf) (F children))`. The value is the e-class for
+    /// constructors/globals and the function output for custom views.
     /// Returns `(query, value_var, proof_var)`.
     pub(super) fn query_fd_view(
         &mut self,
@@ -2262,10 +2262,9 @@ impl<'a> ProofInstrumentor<'a> {
         res
     }
 
-    /// Instrument a rule to use term encoding: the body reads the view tables,
-    /// and the actions write the term and view rows. With proofs enabled the
-    /// actions also build the rule's proofs, one of which fills each written
-    /// row's proof column.
+    /// Instrument a rule to use term encoding: the body reads the views, and the
+    /// actions update the encoded tables. With proofs enabled, the actions also
+    /// build the rule's proofs, one of which fills each proof-bearing row.
     fn instrument_rule(&mut self, rule: &ResolvedRule) -> Vec<Command> {
         // The reflexive-proof names are globally fresh, so keeping earlier rules'
         // would be harmless but unbounded.

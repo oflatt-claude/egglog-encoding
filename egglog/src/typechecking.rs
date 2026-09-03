@@ -563,20 +563,20 @@ impl EGraph {
                         (resolved.name.clone(), ft.input.clone(), ft.outputs.clone());
                     crate::proofs::proof_fresh::register_set_if_empty(self, &name, input, outputs);
                 }
-                // A term-node relation (a term or proof node, whose last input is
-                // the minted id) gets a mint primitive, so the encoding writes a
-                // node in one statement. Registered here for the same reason as
-                // `set-if-empty` above.
+                // An internal proof-node relation (whose last input is the minted
+                // id) gets a mint primitive, so the encoding writes a node in one
+                // statement. Registered here for the same reason as `set-if-empty`
+                // above.
                 if resolved.internal_term_node
                     && let ResolvedCall::Func(ft) = &resolved.resolved_schema
                     && let Some((id_sort, arg_sorts)) = ft.input.split_last()
                     && id_sort.is_eq_sort()
                 {
-                    // `register_mint` stages one `Unit` value column, so a term-node
+                    // `register_mint` stages one `Unit` value column, so a proof-node
                     // relation must declare exactly that.
                     debug_assert!(
                         matches!(ft.outputs.as_slice(), [out] if out.name() == "Unit"),
-                        "term-node relation `{}` must declare one `Unit` value column, got {:?}",
+                        "proof-node relation `{}` must declare one `Unit` value column, got {:?}",
                         resolved.name,
                         ft.outputs.iter().map(|out| out.name()).collect::<Vec<_>>(),
                     );
@@ -1060,9 +1060,8 @@ impl TypeInfo {
 
         // Tuple outputs are only meaningful for custom functions (which carry a functional
         // dependency from keys to a tuple of values). Constructors mint a single e-class id, so they
-        // may not be tuple-output. Term-constructor *views* may be tuple-output: the proof-mode
-        // encoder emits `(children) -> (eclass, proof)` views (an internal-only annotation, so this
-        // can't be reached by user input).
+        // may not be tuple-output. The proof encoder declares its internal views as functions with
+        // `(children) -> (source output, proof)`, so those views may be tuple-output.
         if is_tuple && fdecl.subtype == FunctionSubtype::Constructor {
             return Err(TypeError::TupleOutputNotAllowed(
                 fdecl.name.clone(),

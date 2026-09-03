@@ -2,7 +2,7 @@
 //! and `EGraph::query`.
 
 use egglog::prelude::*;
-use egglog::{Error, Value};
+use egglog::{Error, RawValues, Value};
 
 /// `function_entries` calls the callback once per entry of a function
 /// table with its `inputs` and `output`.
@@ -299,5 +299,127 @@ fn a_function_returning_an_eq_sort_is_not_a_constructor_under_the_encoding() -> 
         assert!(egraph.constructor_enodes("f", |_| {}).is_err());
         assert!(egraph.constructor_enodes("Num", |_| {}).is_ok());
     }
+    Ok(())
+}
+
+/// The read callback exposes the same logical rows as the top-level
+/// introspection methods, including when those rows are stored in encoded
+/// views with an additional proof column.
+#[test]
+fn read_callback_introspection_apis_split_the_same_way_under_the_encoding() -> Result<(), Error> {
+    const PROGRAM: &str = "
+        (datatype Math (Num i64) (Add Math Math))
+        (function f (i64) i64 :no-merge)
+        (relation R (i64))
+        (set (f 1) 2)
+        (Add (Num 1) (Num 2))
+        (R 3)
+    ";
+    for mut egraph in [EGraph::default(), EGraph::new_with_proofs()] {
+        egraph.parse_and_run_program(None, PROGRAM)?;
+        egraph.read(|state| -> Result<(), Error> {
+            let mut add_rows = 0;
+            let mut add_key = Vec::new();
+            let mut add_eclass = None;
+            state.constructor_enodes("Add", |enode| {
+                assert_eq!(enode.children.len(), 2);
+                add_key = enode.children.to_vec();
+                add_eclass = Some(enode.eclass);
+                add_rows += 1;
+            })?;
+            assert_eq!(add_rows, 1);
+            assert_eq!(state.eclass_of("Add", RawValues(add_key))?, add_eclass);
+
+            let mut relation_rows = 0;
+            let mut relation_eclass = None;
+            state.constructor_enodes("R", |enode| {
+                assert_eq!(enode.children.len(), 1);
+                assert_eq!(state.value_to_base::<i64>(enode.children[0]), 3);
+                relation_eclass = Some(enode.eclass);
+                relation_rows += 1;
+            })?;
+            assert_eq!(relation_rows, 1);
+            assert_eq!(state.eclass_of("R", 3_i64)?, relation_eclass);
+            assert!(state.contains("R", 3_i64)?);
+
+            let mut function_rows = 0;
+            let mut function_output = None;
+            state.function_entries("f", |entry| {
+                assert_eq!(entry.inputs.len(), 1);
+                assert_eq!(state.value_to_base::<i64>(entry.inputs[0]), 1);
+                assert_eq!(state.value_to_base::<i64>(entry.output), 2);
+                function_output = Some(entry.output);
+                function_rows += 1;
+            })?;
+            assert_eq!(function_rows, 1);
+            assert_eq!(state.lookup("f", 1_i64)?, function_output);
+            assert!(state.contains("f", 1_i64)?);
+
+            assert!(state.constructor_enodes("f", |_| {}).is_err());
+            assert!(state.function_entries("Add", |_| {}).is_err());
+            assert!(state.function_entries("R", |_| {}).is_err());
+            Ok(())
+        })?;
+    }
+    Ok(())
+}
+
+/// The read callback uses the view's recorded kind rather than guessing from
+/// an equality-sort output.
+#[test]
+fn read_callback_function_returning_an_eq_sort_is_not_a_constructor_under_the_encoding()
+-> Result<(), Error> {
+    const PROGRAM: &str = "
+        (datatype Math (Num))
+        (function f () Math :merge old)
+        (set (f) (Num))
+    ";
+    for mut egraph in [EGraph::default(), EGraph::new_with_proofs()] {
+        egraph.parse_and_run_program(None, PROGRAM)?;
+        egraph.read(|state| -> Result<(), Error> {
+            let mut rows = 0;
+            state.function_entries("f", |entry| {
+                assert!(entry.inputs.is_empty());
+                rows += 1;
+            })?;
+            assert_eq!(rows, 1);
+            assert!(state.constructor_enodes("f", |_| {}).is_err());
+            assert!(state.constructor_enodes("Num", |_| {}).is_ok());
+            Ok(())
+        })?;
+    }
+    Ok(())
+}
+
+/// A constructor view has one public e-class output even when its physical
+/// table carries more than one internal output column.
+#[test]
+fn read_callback_constructor_view_hides_all_internal_outputs() -> Result<(), Error> {
+    let mut egraph = EGraph::default();
+    egraph.parse_and_run_program(
+        None,
+        "
+        (datatype N (n))
+        (function f (i64) (N Unit Unit) :no-merge :internal-view constructor)
+        (set (f 1) (values (n) () ()))
+        ",
+    )?;
+
+    egraph.read(|state| -> Result<(), Error> {
+        let mut rows = 0;
+        let mut key = Vec::new();
+        let mut eclass = None;
+        state.constructor_enodes("f", |enode| {
+            assert_eq!(enode.children.len(), 1);
+            assert_eq!(state.value_to_base::<i64>(enode.children[0]), 1);
+            key = enode.children.to_vec();
+            eclass = Some(enode.eclass);
+            rows += 1;
+        })?;
+        assert_eq!(rows, 1);
+        assert_eq!(state.eclass_of("f", RawValues(key))?, eclass);
+        assert!(state.function_entries("f", |_| {}).is_err());
+        Ok(())
+    })?;
     Ok(())
 }

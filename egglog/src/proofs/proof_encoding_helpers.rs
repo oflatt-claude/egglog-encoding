@@ -808,8 +808,9 @@ impl ProofInstrumentor<'_> {
 ;; reads an element out of a container, produces a justification that the element
 ;; equals itself. The call is named by its rule and its index in that rule's body
 ;; rather than by the primitive's name, which would not pin down a validator
-;; since primitives are overloaded. Proof conversion runs that primitive's
-;; validator on the argument terms and projects the result out of the container
+;; since primitives are overloaded. Proof conversion resolves the typed
+;; container argument from that primitive's signature, runs its validator on the
+;; argument terms, and projects along the term path to the result only from that
 ;; argument, so the row stores no term. There is a `ProjPrim_<k>` per argument
 ;; count (see `ProofInstrumentor::proj_prim_constructor`):
 ;;   (ProjPrim_<k> <rule name> <body index> <one proof per argument> <proof>)
@@ -898,11 +899,22 @@ pub enum ProofEncodingUnsupportedReason {
     #[error("`fail` wrapping an `input` command is not supported by proof encoding.")]
     FailInputCommand,
     #[error(
-        "`fail` wrapping an action is not supported by proof encoding. The action can leave a \
-         the term behind when it errors part way, and a failed command is not one the proof \
-         checker reads, so there is nothing for that term's proof to name."
+        "`fail` wrapping a proof-producing operation is not supported by proof encoding. The \
+         operation can leave proof-bearing state behind, but a failed command is not one the \
+         proof checker reads, so the proof has no source action to name."
     )]
     FailActionCommand,
+    #[error(
+        "`fail` wrapping this definition is not supported by the term/proof encoding. A \
+         definition after a potentially failing command may be skipped at execution despite \
+         being typechecked; merge-bearing functions and rules are also hidden from proof checking."
+    )]
+    FailDefinitionCommand,
+    #[error(
+        "`fail` wrapping `push` or `pop` is not supported in proof mode. The scope change can \
+         survive the wrapper, but proof checking does not replay commands inside `fail`."
+    )]
+    FailScopeCommand,
     #[error(
         "let binding with a primitive in the body. For silly internal reasons, we don't support primitive bindings for proofs at the moment, sorry."
     )]
@@ -949,7 +961,8 @@ pub fn program_supports_proofs(commands: &[ResolvedCommand], type_info: &TypeInf
         })
         .collect();
     for command in commands {
-        if let Err(reason) = command_supports_proof_encoding_impl(command, type_info, &let_globals)
+        if let Err(reason) =
+            command_supports_proof_encoding_impl(command, type_info, &let_globals, true, true)
         {
             let cmd = command.to_string();
             log::debug!(
@@ -1403,13 +1416,20 @@ fn body_premise_without_anchor(body: &[ResolvedFact]) -> Option<ProofEncodingUns
         .map(|(_, reason)| reason.clone())
 }
 
-/// Checks whether a resolved command supports proof encoding.
-/// Returns Ok(()) if supported, or Err with the reason if not.
+/// Checks the constraints shared by term/proof encoding. `proofs_enabled`
+/// additionally checks commands that only become unsafe when proofs are recorded.
 pub(crate) fn command_supports_proof_encoding(
     command: &ResolvedCommand,
     type_info: &TypeInfo,
+    proofs_enabled: bool,
 ) -> Result<(), ProofEncodingUnsupportedReason> {
-    command_supports_proof_encoding_impl(command, type_info, &HashSet::default())
+    command_supports_proof_encoding_impl(
+        command,
+        type_info,
+        &HashSet::default(),
+        proofs_enabled,
+        true,
+    )
 }
 
 /// [`command_supports_proof_encoding`] with `extra_globals`: let-bound names
@@ -1419,6 +1439,8 @@ fn command_supports_proof_encoding_impl(
     command: &ResolvedCommand,
     type_info: &TypeInfo,
     extra_globals: &HashSet<String>,
+    proofs_enabled: bool,
+    definition_prefix_reachable: bool,
 ) -> Result<(), ProofEncodingUnsupportedReason> {
     // `:unsafe-seminaive` rules perform arbitrary reads against the live
     // database; the term/proof encoding can't represent that.
@@ -1582,20 +1604,77 @@ fn command_supports_proof_encoding_impl(
             }
         }
         GenericCommand::Fail(_, commands) => {
+            let mut definition_prefix_reachable = definition_prefix_reachable;
             for command in commands {
-                match command {
-                    GenericCommand::Input { .. } => {
-                        return Err(ProofEncodingUnsupportedReason::FailInputCommand);
-                    }
-                    GenericCommand::Action(action) if builds_a_term(action) => {
-                        return Err(ProofEncodingUnsupportedReason::FailActionCommand);
-                    }
-                    GenericCommand::Actions(actions) if actions.0.iter().any(builds_a_term) => {
-                        return Err(ProofEncodingUnsupportedReason::FailActionCommand);
-                    }
-                    _ => {}
+                let prefix_preserving_definition = matches!(
+                    command,
+                    GenericCommand::Sort { .. }
+                        | GenericCommand::Constructor { .. }
+                        | GenericCommand::Function { .. }
+                        | GenericCommand::Index { .. }
+                        | GenericCommand::AddRuleset(..)
+                );
+                // A combined ruleset or rule can fail while being installed, so neither can
+                // guarantee that a following definition will execute.
+                let definition = prefix_preserving_definition
+                    || matches!(
+                        command,
+                        GenericCommand::Rule { .. }
+                            | GenericCommand::UnstableCombinedRuleset(..)
+                            | GenericCommand::Action(ResolvedAction::Let(..))
+                    );
+                if definition && !definition_prefix_reachable {
+                    return Err(ProofEncodingUnsupportedReason::FailDefinitionCommand);
                 }
-                command_supports_proof_encoding(command, type_info)?;
+                if proofs_enabled {
+                    match command {
+                        GenericCommand::Function { merge: Some(_), .. }
+                        | GenericCommand::Rule { .. } => {
+                            return Err(ProofEncodingUnsupportedReason::FailDefinitionCommand);
+                        }
+                        GenericCommand::Action(action)
+                            if fail_action_produces_proof(action, type_info) =>
+                        {
+                            return Err(ProofEncodingUnsupportedReason::FailActionCommand);
+                        }
+                        GenericCommand::Actions(actions)
+                            if actions
+                                .0
+                                .iter()
+                                .any(|action| fail_action_produces_proof(action, type_info)) =>
+                        {
+                            return Err(ProofEncodingUnsupportedReason::FailActionCommand);
+                        }
+                        GenericCommand::Extract(_, expr, variants)
+                            if expr_interns_non_global_term(expr, type_info)
+                                || expr_interns_non_global_term(variants, type_info) =>
+                        {
+                            return Err(ProofEncodingUnsupportedReason::FailActionCommand);
+                        }
+                        GenericCommand::Output { exprs, .. }
+                            if exprs.iter().any(expr_interns_term) =>
+                        {
+                            return Err(ProofEncodingUnsupportedReason::FailActionCommand);
+                        }
+                        GenericCommand::Push(..) | GenericCommand::Pop(..) => {
+                            return Err(ProofEncodingUnsupportedReason::FailScopeCommand);
+                        }
+                        _ => {}
+                    }
+                }
+                if matches!(command, GenericCommand::Input { .. }) {
+                    return Err(ProofEncodingUnsupportedReason::FailInputCommand);
+                }
+                command_supports_proof_encoding_impl(
+                    command,
+                    type_info,
+                    extra_globals,
+                    proofs_enabled,
+                    definition_prefix_reachable,
+                )?;
+                if !prefix_preserving_definition {
+                    definition_prefix_reachable = false;
+                }
             }
             Ok(())
         }
@@ -1866,18 +1945,54 @@ impl crate::constraint::TypeConstraint for DropReflexiveStepTypeConstraint {
     }
 }
 
-/// Whether `action` interns a term, which a failed command can leave behind
-/// with no action of its own for its fiat to name.
-///
-/// This does not catch a `set`'s row or a `union`'s edge, which carry proofs of
-/// their own — see the `fail` limitation noted in `proof_encoding.md`.
-fn builds_a_term(action: &ResolvedAction) -> bool {
-    action_nodes(action).into_iter().any(|node| match node {
-        ActionNode::Expr(expr) => {
-            matches!(expr, ResolvedExpr::Call(..)) && expr.output_type().is_eq_sort()
-        }
-        ActionNode::Row(_) => false,
+/// Whether `action` can leave proof-bearing state behind a `fail` wrapper.
+/// An eq-sort `let`, plus every `set` and `union`, records its own proof even
+/// when its operands are existing values; any action can also intern a term
+/// through an eq-sort call in one of its expressions.
+fn fail_action_produces_proof(action: &ResolvedAction, type_info: &TypeInfo) -> bool {
+    matches!(
+        action,
+        ResolvedAction::Let(_, _, expr) if expr.output_type().is_eq_sort()
+    ) || matches!(action, ResolvedAction::Set(..) | ResolvedAction::Union(..))
+        || action_nodes(action).into_iter().any(|node| match node {
+            ActionNode::Expr(expr) => expr_interns_non_global_term(expr, type_info),
+            ActionNode::Row(_) => false,
+        })
+}
+
+/// Whether evaluating `expr` can intern an equality-sort term whose existence
+/// proof would outlive a failing command.
+fn expr_interns_term(expr: &ResolvedExpr) -> bool {
+    expr.find(&mut |expr| {
+        (matches!(expr, ResolvedExpr::Call(..)) && expr.output_type().is_eq_sort()).then_some(())
     })
+    .is_some()
+}
+
+/// Like [`expr_interns_term`], except a known global's nullary custom call is
+/// only a lookup of its existing value. Static proof-support checking sees
+/// globals in this post-`remove_globals` form, while live source checking sees
+/// the same expression as a variable. This intentionally uses the current
+/// type information rather than the whole-program `extra_globals`: that set can
+/// contain a popped global whose name a later ordinary function reuses. A
+/// static file check may therefore conservatively reject a lookup inside a
+/// scope that has since been popped.
+fn expr_interns_non_global_term(expr: &ResolvedExpr, type_info: &TypeInfo) -> bool {
+    expr.find(&mut |expr| {
+        let ResolvedExpr::Call(_, call, _) = expr else {
+            return None;
+        };
+        if !expr.output_type().is_eq_sort() {
+            return None;
+        }
+        if let ResolvedCall::Func(func_type) = call
+            && type_info.is_global(&func_type.name)
+        {
+            return None;
+        }
+        Some(())
+    })
+    .is_some()
 }
 
 /// Every expression node of a rule body, in a canonical pre-order: the facts in

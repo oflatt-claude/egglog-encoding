@@ -218,7 +218,15 @@ pub(crate) fn desugar_command(
                         "include is not allowed inside (fail ...)".to_string(),
                     ));
                 }
-                desugared.extend(desugar_command(cmd, parser, proof_testing)?);
+                match cmd {
+                    Command::Check(check_span, facts) if proof_testing => {
+                        // A check under `fail` is a negative assertion. Turning it into a
+                        // proof-testing rule would make this non-mutating command leave a hidden
+                        // definition behind, so keep it as a check.
+                        desugared.push(NCommand::Check(check_span, facts));
+                    }
+                    cmd => desugared.extend(desugar_command(cmd, parser, proof_testing)?),
+                }
             }
             if desugared.is_empty() {
                 return Err(Error::DesugarError(

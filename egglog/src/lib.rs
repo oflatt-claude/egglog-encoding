@@ -39,7 +39,7 @@ pub use egglog_add_primitive::add_primitive_with_validator;
 use egglog_ast::generic_ast::{Change, GenericExpr, Literal};
 use egglog_ast::span::Span;
 use egglog_ast::util::ListDisplay;
-use egglog_bridge::{ColumnTy, QueryEntry};
+use egglog_bridge::{ColumnTy, QueryEntry, TableKind};
 use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
 use egglog_reports::{
@@ -361,6 +361,14 @@ pub struct Function {
     backend_id: egglog_bridge::FunctionId,
 }
 
+#[derive(Clone, Copy)]
+struct VisibleRowLayout {
+    kind: TableKind,
+    input_arity: usize,
+    output_arity: usize,
+    output_index: usize,
+}
+
 impl Function {
     /// Get the name of the function.
     pub fn name(&self) -> &str {
@@ -397,6 +405,35 @@ impl Function {
     /// function's own rows, keyed on canonicalized children.
     pub fn is_view(&self) -> bool {
         self.decl.internal_view.is_some()
+    }
+
+    /// The source-level row layout exposed by the Rust APIs. Encoded views use
+    /// physical function tables with internal output columns, but retain their
+    /// source constructor/function kind and select only the source output.
+    fn visible_row_layout(&self) -> VisibleRowLayout {
+        let rows_are_enodes = self.rows_are_enodes();
+        let (input_arity, output_index) = if rows_are_enodes {
+            (
+                self.extraction_num_children(),
+                self.extraction_output_index(),
+            )
+        } else {
+            (self.schema.input.len(), self.schema.input.len())
+        };
+        VisibleRowLayout {
+            kind: if rows_are_enodes {
+                TableKind::Constructor
+            } else {
+                TableKind::Function
+            },
+            input_arity,
+            output_arity: if rows_are_enodes {
+                1
+            } else {
+                self.schema.outputs.len() - usize::from(self.is_fd_view())
+            },
+            output_index,
+        }
     }
 }
 
@@ -603,6 +640,36 @@ struct ResolvedNCommandsWithOutput {
     resolved_before_proofs: Vec<ResolvedNCommand>,
 }
 
+/// Whether resolving this encoded command needs to be atomic. Definitions and
+/// global lets inside `fail` are typechecked eagerly even though execution may
+/// stop before reaching them, and the later encoding/shadowing passes can still
+/// reject the command after that eager state has been updated.
+fn fail_resolution_may_define(command: &Command) -> bool {
+    let Command::Fail(_, commands) = command else {
+        return false;
+    };
+    commands.iter().any(|command| {
+        matches!(
+            command,
+            Command::Sort { .. }
+                | Command::Datatype { .. }
+                | Command::Datatypes { .. }
+                | Command::Constructor { .. }
+                | Command::Relation { .. }
+                | Command::Function { .. }
+                | Command::Index { .. }
+                | Command::AddRuleset(..)
+                | Command::UnstableCombinedRuleset(..)
+                | Command::Rule { .. }
+                | Command::Rewrite(..)
+                | Command::BiRewrite(..)
+                | Command::Prove(..)
+                | Command::Action(Action::Let(..))
+                | Command::LetBegin(..)
+        ) || fail_resolution_may_define(command)
+    })
+}
+
 #[derive(Debug, Error)]
 #[error("Not found: {0}")]
 pub struct NotFoundError(String);
@@ -619,7 +686,7 @@ impl EGraph {
     /// Create a new e-graph with the term-encoding pipeline enabled.
     ///
     /// In term-encoding mode the e-graph eagerly instruments every constructor
-    /// and function with auxiliary view tables and per-sort
+    /// and function with source-named views and per-sort
     /// union-finds so that canonical representatives and their justifications are
     /// materialized explicitly.  This makes it possible to record and emit
     /// equality proofs while preserving the observable behaviour of supported
@@ -666,7 +733,8 @@ impl EGraph {
         self
     }
 
-    /// Enable testing of getting proofs for all `check` commands.
+    /// Enable testing of getting proofs for every `check` outside `fail`.
+    /// Checks inside `fail` remain negative assertions.
     pub fn with_proof_testing(mut self) -> Self {
         self.proof_state.proof_testing = true;
         self
@@ -1167,6 +1235,14 @@ impl EGraph {
             can_subsume,
             backend_id,
         };
+        let visible = function.visible_row_layout();
+        self.backend.set_table_read_projection(
+            backend_id,
+            visible.kind,
+            visible.input_arity,
+            visible.output_arity,
+            visible.output_index,
+        );
 
         let old = self.functions.insert(decl.name.clone(), function);
         if old.is_some() {
@@ -1221,7 +1297,8 @@ impl EGraph {
 
     /// Provide a program for use in proof checking.
     /// This enables testing of a desugared egglog proof program outside of proof mode.
-    /// When proof_testing is true, turns all the `check` commands into `prove` commands.
+    /// When proof_testing is true, turns every `check` outside `fail` into a `prove` command.
+    /// Checks inside `fail` remain negative assertions.
     /// Not intended for general use but needed in files.rs, so public but hidden.
     #[doc(hidden)]
     pub fn set_proof_checking_program(
@@ -1599,11 +1676,8 @@ impl EGraph {
                 .ok_or_else(|| crate::api::ApiError::MissingTable {
                     name: name.to_owned(),
                 })?;
-        // A view stands in for the function the user named. Its output columns
-        // are that function's output followed by the row's proof, which is
-        // internal, so an entry reads the first and stops.
-        let is_view = function.is_fd_view();
-        if function.rows_are_enodes() {
+        let visible = function.visible_row_layout();
+        if visible.kind == TableKind::Constructor {
             return Err(crate::api::ApiError::WrongSubtype {
                 name: name.to_owned(),
                 expected: "function",
@@ -1611,23 +1685,17 @@ impl EGraph {
             }
             .into());
         }
-        let n_outputs = if is_view {
-            function.schema.outputs.len() - 1
-        } else {
-            function.schema.outputs.len()
-        };
-        if n_outputs != 1 {
+        if visible.output_arity != 1 {
             return Err(crate::api::ApiError::TupleOutputUnsupported {
                 name: name.to_owned(),
                 method: "function_entries",
             }
             .into());
         }
-        let n_inputs = function.schema.input.len();
         self.backend.for_each_while(function.backend_id, |row| {
             f(FunctionEntry {
-                inputs: &row.vals[..n_inputs],
-                output: row.vals[n_inputs],
+                inputs: &row.vals[..visible.input_arity],
+                output: row.vals[visible.output_index],
                 subsumed: row.subsumed,
             })
         });
@@ -1660,7 +1728,8 @@ impl EGraph {
                 .ok_or_else(|| crate::api::ApiError::MissingTable {
                     name: name.to_owned(),
                 })?;
-        if !function.rows_are_enodes() {
+        let visible = function.visible_row_layout();
+        if visible.kind != TableKind::Constructor {
             return Err(crate::api::ApiError::WrongSubtype {
                 name: name.to_owned(),
                 expected: "constructor",
@@ -1668,12 +1737,10 @@ impl EGraph {
             }
             .into());
         }
-        let num_children = function.extraction_num_children();
-        let eclass_idx = function.extraction_output_index();
         self.backend.for_each_while(function.backend_id, |row| {
             f(Enode {
-                children: &row.vals[..num_children],
-                eclass: row.vals[eclass_idx],
+                children: &row.vals[..visible.input_arity],
+                eclass: row.vals[visible.output_index],
                 subsumed: row.subsumed,
             })
         });
@@ -2287,10 +2354,24 @@ impl EGraph {
             ResolvedNCommand::Fail(span, cmds) => {
                 let mut any_failed = false;
                 for c in cmds {
+                    let named_definition = matches!(
+                        &c,
+                        ResolvedNCommand::Sort { .. }
+                            | ResolvedNCommand::Function(_)
+                            | ResolvedNCommand::Index { .. }
+                            | ResolvedNCommand::AddRuleset(..)
+                            | ResolvedNCommand::UnstableCombinedRuleset(..)
+                    )
+                    .then(|| c.clone());
                     if let Err(e) = self.run_command(c) {
                         log::info!("Command failed as expected: {e}");
                         any_failed = true;
                         break;
+                    }
+                    // Shadowing checks use a tentative name scope for `fail`, because later
+                    // commands may never run. Commit only definitions that actually completed.
+                    if let Some(command) = named_definition {
+                        self.names.check_shadowing(&command)?;
                     }
                 }
                 if !any_failed {
@@ -2655,6 +2736,7 @@ impl EGraph {
         command: Command,
     ) -> Result<Vec<ResolvedNCommand>, Error> {
         let desugared = desugar_command(command, &mut self.parser, self.proof_state.proof_testing)?;
+        let proofs_enabled = self.proof_state.proofs_enabled;
         if let Some(original_typechecking) = self.proof_state.original_typechecking.as_mut() {
             // Typecheck using the original egraph
             // TODO this is ugly- we don't need an entire e-graph just for type information.
@@ -2666,6 +2748,7 @@ impl EGraph {
                 if let Err(reason) = command_supports_proof_encoding(
                     &command.to_command(),
                     &original_typechecking.type_info,
+                    proofs_enabled,
                 ) {
                     let command_text = format!("{}", command.to_command());
                     return Err(Error::UnsupportedProofCommand {
@@ -2695,7 +2778,28 @@ impl EGraph {
     fn resolve_command(&mut self, command: Command) -> Result<ResolvedNCommands, Error> {
         let lowering_timer = Instant::now();
         let nested_before = self.overall_report.process_time();
-        let resolved = self.resolve_command_inner(command);
+        let resolve_atomically = self.proof_state.original_typechecking.is_some()
+            && fail_resolution_may_define(&command);
+        let resolved = if resolve_atomically {
+            // Backend clones share their action registry so primitive callbacks can keep using
+            // live table handles. Snapshot that one shared component explicitly; every other
+            // resolution mutation stays isolated in the tentative e-graph.
+            let registry = self.backend.action_registry().clone();
+            let registry_before = registry.read().unwrap().clone();
+            let mut tentative = self.clone();
+            match tentative.resolve_command_inner(command) {
+                Ok(resolved) => {
+                    *self = tentative;
+                    Ok(resolved)
+                }
+                Err(error) => {
+                    *registry.write().unwrap() = registry_before;
+                    Err(error)
+                }
+            }
+        } else {
+            self.resolve_command_inner(command)
+        };
         let nested = self
             .overall_report
             .process_time()
@@ -4008,6 +4112,73 @@ mod tests {
             .resolve_program(None, "(datatype X (x))\n(sort XFn (UnstableFn (X) X))")
             .unwrap();
         assert!(program_supports_proofs(&resolved, &egraph.type_info));
+    }
+
+    #[test]
+    fn proof_support_accepts_fail_wrapped_existing_global_lookups() {
+        let mut egraph = EGraph::default();
+        let resolved = egraph
+            .resolve_program(
+                None,
+                r#"
+                (datatype N (A))
+                (let $a (A))
+                (fail (extract $a -1))
+                "#,
+            )
+            .unwrap();
+        assert!(program_supports_proofs(&resolved, &egraph.type_info));
+
+        let mut egraph = EGraph::default();
+        let resolved = egraph
+            .resolve_program(
+                None,
+                r#"
+                (datatype N (A))
+                (relation R (N))
+                (let $a (A))
+                (R $a)
+                (fail (delete (R $a)) (panic "stop"))
+                "#,
+            )
+            .unwrap();
+        assert!(program_supports_proofs(&resolved, &egraph.type_info));
+    }
+
+    #[test]
+    fn proof_support_rejects_fail_wrapped_output_of_existing_global() {
+        let mut egraph = EGraph::default();
+        let resolved = egraph
+            .resolve_program(
+                None,
+                r#"
+                (datatype N (A))
+                (let $a (A))
+                (fail (output "term.txt" $a) (panic "stop"))
+                "#,
+            )
+            .unwrap();
+        assert!(!program_supports_proofs(&resolved, &egraph.type_info));
+    }
+
+    #[test]
+    fn proof_support_does_not_confuse_popped_global_with_later_function() {
+        let mut egraph = EGraph::default();
+        let resolved = egraph
+            .resolve_program(
+                None,
+                r#"
+                (datatype N (A))
+                (push)
+                (let x (A))
+                (pop)
+                (function x () N :merge old)
+                (set (x) (A))
+                (fail (extract (x) -1))
+                "#,
+            )
+            .unwrap();
+        assert!(!program_supports_proofs(&resolved, &egraph.type_info));
     }
 
     #[test]

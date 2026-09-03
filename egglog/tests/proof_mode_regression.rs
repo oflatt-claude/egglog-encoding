@@ -119,11 +119,9 @@ fn proof_mode_rejects_fail_wrapped_input() {
 }
 
 #[test]
-fn proof_mode_allows_fail_wrapping_set() {
-    // A `(fail (set …))` is accepted by proof encoding (it used to be rejected as a
-    // non-atomic wrapped command). The set succeeds, so `fail` reports that its
-    // wrapped command did not fail.
-    let error = EGraph::new_with_proofs()
+fn proof_mode_rejects_fail_wrapped_set_before_mutation() {
+    let mut egraph = EGraph::new_with_proofs();
+    let error = egraph
         .parse_and_run_program(
             None,
             r#"
@@ -133,33 +131,471 @@ fn proof_mode_allows_fail_wrapping_set() {
         )
         .unwrap_err();
 
-    assert!(matches!(error, Error::ExpectFail(..)));
+    assert!(matches!(error, Error::UnsupportedProofCommand { .. }));
+    assert!(
+        error
+            .to_string()
+            .contains("`fail` wrapping a proof-producing operation")
+    );
+    egraph
+        .parse_and_run_program(None, "(fail (check (= (score) 1)))")
+        .unwrap();
+    egraph
+        .parse_and_run_program(None, "(set (score) 1) (prove (= (score) 1))")
+        .unwrap();
 }
 
 #[test]
-fn proof_mode_allows_fail_wrapping_multi_operation_encoding() {
-    // A wrapped command that encodes to several commands is now accepted;
-    // declaring the function succeeds, so `fail` reports it did not fail.
-    let error = EGraph::new_with_proofs()
-        .parse_and_run_program(None, "(fail (function score () i64 :merge old))")
-        .unwrap_err();
-
-    assert!(matches!(error, Error::ExpectFail(..)));
-}
-
-#[test]
-fn proof_mode_fail_catches_failure_among_wrapped_commands() {
-    // `fail` runs the wrapped commands in order and succeeds at the first failure:
-    // the set succeeds and the mismatched check fails, so the `fail` passes.
-    EGraph::new_with_proofs()
+fn term_mode_preserves_fail_wrapped_mutation_and_merge_declaration() {
+    let mut egraph = EGraph::new_with_term_encoding();
+    egraph
         .parse_and_run_program(
             None,
             r#"
             (function score () i64 :merge old)
             (fail (set (score) 1) (check (= (score) 2)))
+            (check (= (score) 1))
             "#,
         )
         .unwrap();
+
+    let error = egraph
+        .parse_and_run_program(None, "(fail (function other () i64 :merge old))")
+        .unwrap_err();
+    assert!(matches!(error, Error::ExpectFail(..)));
+    egraph
+        .parse_and_run_program(None, "(set (other) 2) (check (= (other) 2))")
+        .unwrap();
+}
+
+#[test]
+fn term_mode_preserves_fail_wrapped_rule_errors() {
+    let mut egraph = EGraph::new_with_term_encoding();
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
+            (relation number (i64))
+            (ruleset base)
+            (unstable-combined-ruleset combo base)
+            (fail
+              (rule () ((number 1)) :ruleset combo :name "bad-combined"))
+            (fail
+              (rule () ((number 2)) :ruleset missing :name "bad-missing"))
+            (rule () ((number 3)) :ruleset base :name "good")
+            (run-schedule (run base))
+            (check (number 3))
+            "#,
+        )
+        .unwrap();
+}
+
+#[test]
+fn term_mode_rejects_skipped_fail_wrapped_definition_without_leaking_type_state() {
+    let mut egraph = EGraph::new_with_term_encoding();
+    let error = egraph
+        .parse_and_run_program(
+            None,
+            "(fail (check (= 1 2)) (function score () i64 :no-merge))",
+        )
+        .unwrap_err();
+
+    assert!(matches!(error, Error::UnsupportedProofCommand { .. }));
+    egraph
+        .parse_and_run_program(
+            None,
+            "(function score () i64 :no-merge) (set (score) 1) (check (= (score) 1))",
+        )
+        .unwrap();
+}
+
+#[test]
+fn term_mode_rejects_skipped_fail_wrapped_global_without_leaking_type_state() {
+    let mut egraph = EGraph::new_with_term_encoding();
+    egraph
+        .parse_and_run_program(None, "(datatype N (A))")
+        .unwrap();
+    let error = egraph
+        .parse_and_run_program(None, "(fail (let $leading (A)))")
+        .unwrap_err();
+    assert!(matches!(error, Error::ExpectFail(..)));
+    egraph
+        .parse_and_run_program(None, "(check (= $leading (A)))")
+        .unwrap();
+
+    let error = egraph
+        .parse_and_run_program(None, "(fail (check (= 1 2)) (let $n (A)))")
+        .unwrap_err();
+    assert!(matches!(error, Error::UnsupportedProofCommand { .. }));
+
+    egraph
+        .parse_and_run_program(None, "(let $n (A)) (check (= $n (A)))")
+        .unwrap();
+}
+
+#[test]
+fn proof_mode_rejects_fail_wrapped_union_before_mutation() {
+    let mut egraph = EGraph::new_with_proofs();
+    let error = egraph
+        .parse_and_run_program(
+            None,
+            r#"
+            (datatype N (A) (B))
+            (let a (A))
+            (let b (B))
+            (fail (union a b))
+            "#,
+        )
+        .unwrap_err();
+
+    assert!(matches!(error, Error::UnsupportedProofCommand { .. }));
+    egraph
+        .parse_and_run_program(None, "(fail (check (= a b)))")
+        .unwrap();
+    egraph
+        .parse_and_run_program(None, "(union a b) (prove (= a b))")
+        .unwrap();
+}
+
+#[test]
+fn proof_mode_rejects_fail_wrapped_extract_before_term_interning() {
+    let mut egraph = EGraph::new_with_proofs();
+    let error = egraph
+        .parse_and_run_program(
+            None,
+            r#"
+            (datatype N (A))
+            (fail (extract (A) -1))
+            "#,
+        )
+        .unwrap_err();
+
+    assert!(matches!(error, Error::UnsupportedProofCommand { .. }));
+    egraph
+        .parse_and_run_program(None, "(A) (prove (= (A) (A)))")
+        .unwrap();
+}
+
+#[test]
+fn proof_mode_allows_fail_wrapped_extract_of_existing_global() {
+    let mut egraph = EGraph::new_with_proofs();
+    egraph
+        .parse_and_run_program(None, "(datatype N (A)) (let a (A))")
+        .unwrap();
+    egraph
+        .parse_and_run_program(None, "(fail (extract a -1))")
+        .unwrap();
+    egraph
+        .parse_and_run_program(None, "(prove (= a (A)))")
+        .unwrap();
+}
+
+#[test]
+fn proof_mode_rejects_fail_wrapped_output_before_term_interning() {
+    let directory = std::env::temp_dir().join(format!("egglog_fail_output_{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let output = directory.join("term.txt");
+    let mut egraph = EGraph::new_with_proofs();
+    egraph.fact_directory = Some(directory.clone());
+    let error = egraph
+        .parse_and_run_program(
+            None,
+            r#"
+            (datatype N (A))
+            (fail (output "term.txt" (A)) (panic "stop"))
+            "#,
+        )
+        .unwrap_err();
+
+    assert!(matches!(error, Error::UnsupportedProofCommand { .. }));
+    assert!(!output.exists());
+    egraph
+        .parse_and_run_program(None, "(A) (prove (= (A) (A)))")
+        .unwrap();
+    std::fs::remove_dir_all(directory).ok();
+}
+
+#[test]
+fn proof_mode_rejects_fail_wrapped_output_of_existing_global() {
+    let directory =
+        std::env::temp_dir().join(format!("egglog_fail_global_output_{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let output = directory.join("term.txt");
+    let mut egraph = EGraph::new_with_proofs();
+    egraph.fact_directory = Some(directory.clone());
+    egraph
+        .parse_and_run_program(None, "(datatype N (A)) (let $a (A))")
+        .unwrap();
+    let error = egraph
+        .parse_and_run_program(None, "(fail (output \"term.txt\" $a) (panic \"stop\"))")
+        .unwrap_err();
+
+    assert!(matches!(error, Error::TypeError(..)));
+    assert!(error.to_string().contains("Arity mismatch"));
+    assert!(!output.exists());
+    egraph
+        .parse_and_run_program(None, "(prove (= $a (A)))")
+        .unwrap();
+    std::fs::remove_dir_all(directory).ok();
+}
+
+#[test]
+fn proof_mode_rejects_fail_wrapped_scope_changes_before_execution() {
+    let mut egraph = EGraph::new_with_proofs();
+    egraph
+        .parse_and_run_program(None, "(datatype N (A)) (A)")
+        .unwrap();
+    let error = egraph
+        .parse_and_run_program(None, "(fail (push) (panic \"stop\"))")
+        .unwrap_err();
+    assert!(matches!(error, Error::UnsupportedProofCommand { .. }));
+    egraph
+        .parse_and_run_program(None, "(prove (= (A) (A)))")
+        .unwrap();
+
+    let mut egraph = EGraph::new_with_proofs();
+    egraph
+        .parse_and_run_program(None, "(datatype N (A)) (A) (push)")
+        .unwrap();
+    let error = egraph
+        .parse_and_run_program(None, "(fail (pop) (panic \"stop\"))")
+        .unwrap_err();
+    assert!(matches!(error, Error::UnsupportedProofCommand { .. }));
+    egraph
+        .parse_and_run_program(None, "(pop) (A) (prove (= (A) (A)))")
+        .unwrap();
+}
+
+#[test]
+fn proof_mode_rejects_fail_wrapped_merge_function_before_declaration() {
+    let mut egraph = EGraph::new_with_proofs();
+    let error = egraph
+        .parse_and_run_program(
+            None,
+            r#"
+            (datatype N (A) (B) (C N N))
+            (fail (function score () N :merge (C old new)))
+            "#,
+        )
+        .unwrap_err();
+
+    assert!(matches!(error, Error::UnsupportedProofCommand { .. }));
+    assert!(error.to_string().contains("wrapping this definition"));
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
+            (function score () N :merge (C old new))
+            (set (score) (A))
+            (set (score) (B))
+            (prove (= (score) (C (A) (B))))
+            "#,
+        )
+        .unwrap();
+}
+
+#[test]
+fn proof_mode_allows_leading_fail_wrapped_proof_inert_definitions() {
+    let mut egraph = EGraph::new_with_proofs();
+    let error = egraph
+        .parse_and_run_program(
+            None,
+            r#"
+            (fail
+              (datatype N (A) (B))
+              (ruleset prefix)
+              (function score () i64 :no-merge))
+            "#,
+        )
+        .unwrap_err();
+
+    assert!(matches!(error, Error::ExpectFail(..)));
+    let error = egraph
+        .parse_and_run_program(None, "(ruleset prefix)")
+        .unwrap_err();
+    assert!(matches!(error, Error::Shadowing(..)));
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
+            (A)
+            (rule ((= x (A))) ((union x (B))) :ruleset prefix :name "prefix-rule")
+            (run-schedule (run prefix))
+            (set (score) 1)
+            (prove (= (A) (B)))
+            (prove (= (score) 1))
+            "#,
+        )
+        .unwrap();
+}
+
+#[test]
+fn proof_mode_rejects_skipped_fail_wrapped_no_merge_function() {
+    let mut egraph = EGraph::new_with_proofs();
+    let error = egraph
+        .parse_and_run_program(
+            None,
+            "(fail (check (= 1 2)) (function score () i64 :no-merge))",
+        )
+        .unwrap_err();
+
+    assert!(matches!(error, Error::UnsupportedProofCommand { .. }));
+    assert!(error.to_string().contains("wrapping this definition"));
+    egraph
+        .parse_and_run_program(
+            None,
+            "(function score () i64 :no-merge) (set (score) 1) (prove (= (score) 1))",
+        )
+        .unwrap();
+}
+
+#[test]
+fn proof_mode_rejects_skipped_fail_wrapped_datatype() {
+    let mut egraph = EGraph::new_with_proofs();
+    let error = egraph
+        .parse_and_run_program(None, "(fail (check (= 1 2)) (datatype N (A)))")
+        .unwrap_err();
+
+    assert!(matches!(error, Error::UnsupportedProofCommand { .. }));
+    egraph
+        .parse_and_run_program(None, "(datatype N (A)) (A) (prove (= (A) (A)))")
+        .unwrap();
+}
+
+#[test]
+fn encoded_modes_roll_back_definitions_when_fail_resolution_fails_late() {
+    for mut egraph in [EGraph::new_with_term_encoding(), EGraph::new_with_proofs()] {
+        let error = egraph
+            .parse_and_run_program(None, "(fail (datatype N (A)) (check (= A (A))))")
+            .unwrap_err();
+        assert!(matches!(error, Error::Shadowing(..)));
+
+        egraph
+            .parse_and_run_program(None, "(datatype N (A)) (A)")
+            .unwrap();
+    }
+
+    let directory =
+        std::env::temp_dir().join(format!("egglog_fail_resolution_{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    for mut egraph in [EGraph::new_with_term_encoding(), EGraph::new_with_proofs()] {
+        egraph.fact_directory = Some(directory.clone());
+        egraph
+            .parse_and_run_program(None, "(datatype N (A)) (let $a (A))")
+            .unwrap();
+        let error = egraph
+            .parse_and_run_program(None, "(fail (datatype M (B)) (output \"term.txt\" $a))")
+            .unwrap_err();
+        assert!(matches!(error, Error::TypeError(..)));
+
+        egraph
+            .parse_and_run_program(None, "(datatype M (B)) (B)")
+            .unwrap();
+    }
+    assert!(!directory.join("term.txt").exists());
+    std::fs::remove_dir_all(directory).ok();
+}
+
+#[test]
+fn proof_mode_rejects_skipped_fail_wrapped_ruleset_definitions() {
+    let mut egraph = EGraph::new_with_proofs();
+    let error = egraph
+        .parse_and_run_program(None, "(fail (check (= 1 2)) (ruleset hidden))")
+        .unwrap_err();
+    assert!(matches!(error, Error::UnsupportedProofCommand { .. }));
+    egraph
+        .parse_and_run_program(None, "(ruleset hidden)")
+        .unwrap();
+
+    let mut egraph = EGraph::new_with_proofs();
+    egraph
+        .parse_and_run_program(None, "(ruleset base)")
+        .unwrap();
+    let error = egraph
+        .parse_and_run_program(
+            None,
+            "(fail (check (= 1 2)) (unstable-combined-ruleset combo base))",
+        )
+        .unwrap_err();
+    assert!(matches!(error, Error::UnsupportedProofCommand { .. }));
+    egraph
+        .parse_and_run_program(None, "(unstable-combined-ruleset combo base)")
+        .unwrap();
+}
+
+#[test]
+fn proof_mode_rejects_fail_wrapped_rule_before_declaration() {
+    let mut egraph = EGraph::new_with_proofs();
+    let error = egraph
+        .parse_and_run_program(
+            None,
+            r#"
+            (datatype N (A) (B))
+            (ruleset hidden)
+            (A)
+            (fail
+              (rule ((= x (A)))
+                    ((union x (B)))
+                    :ruleset hidden
+                    :name "hidden-rule"))
+            "#,
+        )
+        .unwrap_err();
+
+    assert!(matches!(error, Error::UnsupportedProofCommand { .. }));
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
+            (rule ((= x (A)))
+                  ((union x (B)))
+                  :ruleset hidden
+                  :name "hidden-rule")
+            (run-schedule (run hidden))
+            (prove (= (A) (B)))
+            "#,
+        )
+        .unwrap();
+}
+
+#[test]
+fn proof_mode_rejects_fail_wrapped_eq_globals_without_leaking_type_state() {
+    for fail_command in ["(fail (let b a))", "(fail (let b (begin (A))))"] {
+        let mut egraph = EGraph::new_with_proofs();
+        let program = format!("(datatype N (A)) (let a (A)) {fail_command}");
+        let error = egraph.parse_and_run_program(None, &program).unwrap_err();
+
+        assert!(matches!(error, Error::UnsupportedProofCommand { .. }));
+        // An unregistered `b` is a local query variable here. A leaked global instead makes proof
+        // conversion treat it as a missing nullary function and panic.
+        egraph
+            .parse_and_run_program(None, "(prove (= b a))")
+            .unwrap();
+        egraph
+            .parse_and_run_program(None, "(prove (= a a))")
+            .unwrap();
+    }
+}
+
+#[test]
+fn proof_mode_fail_catches_failure_among_wrapped_commands() {
+    // `fail` runs the wrapped commands in order and succeeds at the first failure:
+    // the first check succeeds and the second fails, so the `fail` passes.
+    for mut egraph in [
+        EGraph::new_with_proofs(),
+        EGraph::new_with_proofs().with_proof_testing(),
+    ] {
+        egraph
+            .parse_and_run_program(
+                None,
+                r#"
+            (datatype N (A) (B))
+            (A)
+            (fail (check (A)) (check (B)))
+            "#,
+            )
+            .unwrap();
+    }
 }
 
 /// A set element is reshaped (`(Id (N 1))` → `(N 1)`) and then collapses into
