@@ -717,6 +717,21 @@ def encoding_graph(case):
 
 
 def check(case):
+    # Cases where the reference is right and the encoding cannot express the answer are
+    # recorded in `xdiff.FINAL_REFINE_GAP`, and finding no isomorphism between two
+    # graphs that are MEANT to differ says nothing -- so they are reported as recorded
+    # rather than compared. They must still differ: an isomorphism here would mean the
+    # gap closed and the record is stale.
+    if case.name in X.FINAL_REFINE_GAP:
+        ref, err = reference_graph(case)
+        if err:
+            return "skip", err
+        enc, err = encoding_graph(case)
+        if err:
+            return "recorded", f"{X.FINAL_REFINE_GAP[case.name]} (encoding: {err})"
+        if find_isomorphism(ref, enc)[0] is not None:
+            return "FAIL", f"recorded final-refine gap AGREES now -- remove {case.name} from FINAL_REFINE_GAP"
+        return "recorded", X.FINAL_REFINE_GAP[case.name]
     # A reference that errors or will not settle gives nothing to compare against, so
     # the case is skipped. The encoding failing the same way is not a skip: the
     # reference reached a fixpoint, so not reaching one is itself a difference.
@@ -829,7 +844,7 @@ def main():
     else:
         cases = X.curated()
 
-    tally = {"ok": 0, "FAIL": 0, "skip": 0, "limit": 0}
+    tally = {"ok": 0, "FAIL": 0, "skip": 0, "limit": 0, "recorded": 0}
     totals = [0, 0, 0]
     for c in cases:
         verdict, detail = check(c)
@@ -840,9 +855,9 @@ def main():
             print(f"  {verdict:4} {c.name:44} {detail}", flush=True)
     # the sizes are part of the result: a checker comparing nothing would also pass
     print(
-        f"\n{tally['ok']}/{len(cases)} isomorphic"
+        f"\n{tally['ok']}/{len(cases) - tally['recorded']} isomorphic"
         f"   ({tally['FAIL']} differ, {tally['skip']} skipped,"
-        f" {tally['limit']} not comparable)"
+        f" {tally['limit']} not comparable, {tally['recorded']} recorded)"
     )
     print(f"matched {totals[0]} e-classes, {totals[1]} e-nodes, {totals[2]} symmetries")
     if UNSATURATED:

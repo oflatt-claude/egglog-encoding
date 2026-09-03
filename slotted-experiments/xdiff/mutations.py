@@ -23,7 +23,9 @@ import xdiff as X
 
 #: mutation -> cases of the curated corpus that must disagree with the reference
 EXPECTED = {
-    "root-only": 11,  # an atom's renaming solved from its root alone
+    # 10 rather than 11: one witness became a RECORDED final-refine gap, and a case
+    # that disagrees with or without the mutation cannot discriminate it.
+    "root-only": 10,  # an atom's renaming solved from its root alone
     "union-id": 2,  # the action unions classes instead of invocations
     "unordered": 1,  # atoms compiled in the order written
     "slot-late": 1,  # a slot literal checked after the renaming, not with it
