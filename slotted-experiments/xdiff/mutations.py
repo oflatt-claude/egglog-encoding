@@ -10,6 +10,11 @@ is not kept as decoration -- `wide-kids` and `binder-1st` were both removed once
 the first because `def4-edges.py` checks the property it stood for and the second because the
 rule it violated is definitional rather than empirical.
 
+`unordered` went the same way, and for a better reason than the others: compiling the atoms
+in the order written used to lose matches, and a rule that tries every naming recovers them,
+so the mutation no longer breaks a single case. That is the property `order-independence.py`
+measures directly, which is where it is checked now.
+
     python3 slotted-experiments/xdiff/mutations.py
 """
 
@@ -23,11 +28,11 @@ import xdiff as X
 
 #: mutation -> cases of the curated corpus that must disagree with the reference
 EXPECTED = {
-    # 10 rather than 11: one witness became a RECORDED final-refine gap, and a case
-    # that disagrees with or without the mutation cannot discriminate it.
-    "root-only": 10,  # an atom's renaming solved from its root alone
+    # 2 rather than 10: a rule now tries every naming an atom's renaming could take,
+    # so solving one from its root alone loses far fewer matches -- most of the corpus
+    # recovers on another index. It still discriminates, so it stays.
+    "root-only": 2,  # an atom's renaming solved from its root alone
     "union-id": 2,  # the action unions classes instead of invocations
-    "unordered": 1,  # atoms compiled in the order written
     "slot-late": 1,  # a slot literal checked after the renaming, not with it
 }
 

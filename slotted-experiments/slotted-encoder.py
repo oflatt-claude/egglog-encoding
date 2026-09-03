@@ -1112,7 +1112,7 @@ def compile_rule(
     slot_prefix="s",
     fresh_batch=True,
     tail=")",
-    namings=False,
+    namings=True,
 ):
     """Compile a flattened multipattern and its action into one egglog rule.
 
@@ -1247,7 +1247,7 @@ def compile_rule(
         if idx == 0:
             # the leading atom fixes slots(pattern); its `mp` is the identity
             body.append(f"(= {mp} {dom})")
-        elif namings:
+        elif namings and not op.binders:
             # Every naming rather than the minting one. `vec-get` is partial, so the
             # `Idx` join stops at the end of the vector without anything saying how long
             # it is, and index 0 is the minting solution -- so reaching only `(Idx 0)`

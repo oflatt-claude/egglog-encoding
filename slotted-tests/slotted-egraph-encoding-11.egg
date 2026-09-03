@@ -26,6 +26,34 @@
 ;; A renaming is a partial injection on slots.
 (sort Renaming (Map i64 i64))
 
+;; EVERY naming an atom's renaming could take, and the indices to read one at.
+;;
+;; Solving an atom leaves some of its slots unnamed -- the constraints from the atoms
+;; before it do not reach them -- and `find-mapping-total` MINTS a fresh name there. A
+;; fresh name differs from everything, so that quietly decides the slot is not any slot
+;; already in play, and nothing revisits the choice: the match where it coincides with
+;; one is lost. `find-mappings-total` returns all of them, the minting one first, and a
+;; rule reads one with `vec-get`.
+;;
+;; `vec-get` is PARTIAL, so an index past a vector's end matches nothing and the join
+;; stops on its own -- no rule has to know how long the vector is. Seeding more indices
+;; than any atom needs therefore costs join attempts and not correctness; seeding fewer
+;; loses the namings past the last one. Eight covers every rule in this tree by a wide
+;; margin: the count is one for a fully constrained atom, and grows with the slots left
+;; unnamed, which is at most two in the languages here.
+;; `find-mappings-total-count` reports what a call would have offered before the
+;; primitive's own cap, for anyone checking that.
+(sort Namings (Vec Renaming))
+(relation Idx (i64))
+(Idx 0)
+(Idx 1)
+(Idx 2)
+(Idx 3)
+(Idx 4)
+(Idx 5)
+(Idx 6)
+(Idx 7)
+
 ;; One `U` value per e-node and per class; a slotted class spans several of them.
 (sort U)
 

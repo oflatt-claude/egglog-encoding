@@ -290,6 +290,14 @@ child's slot set, which Definition 4 forbids. The paper's §3.6 handles this by
 picking any fresh slot; the crate does it in `enodes_applied`, so it never has an
 unnamed slot to drop.
 
+A slot the constraints do not reach is MINTED, and that is not the end of the story:
+a fresh name differs from everything, so minting decides the slot is not any slot
+already in play, and nothing revisits it — so the match where it coincides with one is
+lost. The compiler therefore asks `find-mappings-total` for every naming and reads one
+at an index, which is [`the per-atom step`](#m4) below; minting is element 0, so a
+program reaching only index 0 answers as one compiled before this did. A BINDER atom
+still mints, because a bound slot named onto a slot already in play captures it.
+
 `find-mapping-total` ports that: same constraints and same one-to-one check as
 `find-mapping`, plus a fresh name for every domain slot left unnamed.
 

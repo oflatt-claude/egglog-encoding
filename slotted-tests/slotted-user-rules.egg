@@ -76,7 +76,16 @@
 ;;;   (map-image m)           = identity on im(m);  (map-domain m) = identity on dom(m)
 ;;;   (find-mapping-total avoid domain first... second...)
 ;;;                           = least injective m with m . second_i = first_i, made total on
-;;;                             the keys of `domain`, minting outside `avoid`'s slots (M3)
+;;;                             the keys of `domain`, MINTING outside `avoid`'s slots (M3)
+;;;   (find-mappings-total ...)  the same arguments, and EVERY naming rather than the
+;;;                             minting one: a domain key the constraints leave unnamed
+;;;                             may take a fresh slot, or one already in `avoid`.  The
+;;;                             minting solution is element 0
+;;;   (vec-get v i)           = element i of a vector, UNDEFINED past its end, which is
+;;;                             what stops the `Idx` join without any rule knowing how
+;;;                             long the vector is
+;;;   (Idx i)                 = an index to read a naming at; the core seeds enough of
+;;;                             them (M4)
 ;;;   (App2 f m1 c1 m2 c2)    = f(m1*c1, m2*c2),  mi : slots(ci) -> slots(node)
 ;;;   (App3 f m1 c1 m2 c2 m3 c3)  the same at arity 3; `let` is the one used here
 ;;;   (Num n), (Sym s)        payload leaves, depending on no slots
@@ -90,6 +99,7 @@
 ;;;   pN, qN, rN  atom N's own stored edges, one per child column
 ;;;   domN        identity on atom N's node's slots (the union of its edge images)
 ;;;   mpN         atom N's renaming, taking its node's slots into pattern slots
+;;;   altsN, ixN  every naming atom N's renaming could take, and the index read at
 ;;;   imN         identity on the slots mpN named;  avoidN accumulates those up to atom N
 ;;;   mX          variable X's renaming into slots(pattern), as read off the node
 ;;;   csX         (ClassSlots X); `(compose mX csX)` is X's renaming narrowed to its own
@@ -306,7 +316,9 @@
        (= g (App2 "get" p2 rng q2 idx))
        (= dom2 (map-union (map-image p2) (map-image q2)))
        (RenamesToLeader rng symrng rng)
-       (= mp2 (find-mapping-total avoid1 dom2 (compose (compose mp1 csrng) symrng) p2))
+       (= alts2 (find-mappings-total avoid1 dom2 (compose (compose mp1 csrng) symrng) p2))
+       (Idx ix2)
+       (= mp2 (vec-get alts2 ix2))
        (= im2 (map-image mp2))
        (= avoid2 (map-union avoid1 im2))
        (= midx (compose mp2 q2))
@@ -333,10 +345,35 @@
 ;;; atoms in a connected order -- that is compile time, not an order egglog evaluates the
 ;;; finished body in -- and for atom N it emits:
 ;;;
-;;;     mpN is the least renaming, total on atom N's node slots, agreeing with every
-;;;     constraint the atoms before it left -- its root if one of them bound it, every child
-;;;     one of them bound, every slot literal one of them pinned.  One `find-mapping-total`,
-;;;     avoiding the slots named so far.
+;;;     mpN is a renaming, total on atom N's node slots, agreeing with every constraint
+;;;     the atoms before it left -- its root if one of them bound it, every child one of
+;;;     them bound, every slot literal one of them pinned -- avoiding the slots named so
+;;;     far.
+;;;
+;;; The constraints do not always reach every slot, and what happens to the rest is the
+;;; whole of M3 and this section.  `find-mapping-total` MINTS there, and a fresh name
+;;; differs from everything, so minting decides the slot is not any slot already in play
+;;; -- and nothing revisits it, so the match where it coincides with one is lost.  So the
+;;; rule asks for EVERY naming and reads one:
+;;;
+;;;     (= altsN (find-mappings-total avoidN-1 domN <constraints>))
+;;;     (Idx ixN)
+;;;     (= mpN (vec-get altsN ixN))
+;;;
+;;; `vec-get` is undefined past the end of the vector, so the `Idx` join stops there on
+;;; its own and no rule has to know how long it is.  Each atom draws its OWN index, so
+;;; the join takes the product across atoms -- and since an atom's chosen name joins the
+;;; avoid-set before the next atom is solved, a later atom can coincide with it.  That is
+;;; how a chain reaches every way the atoms' slots could agree without any rule revising
+;;; an earlier choice.  Element 0 is the minting solution, so a program reaching only
+;;; `(Idx 0)` answers exactly as one compiled before this did.
+;;;
+;;; A BINDER ATOM KEEPS MINTING, which is why M5's `lam` and M7's two `let`s still read
+;;; `find-mapping-total`.  A bound slot named onto a slot already in play captures it, and
+;;; the same is true of a right-hand side's `:fresh` slot, which is fresh by definition.
+;;; Offering those alternatives fires rules that must not fire: `let-lam-diff`'s guard
+;;; asks whether the bound `$x` is free in the body, and a naming that puts `$x` on one of
+;;; the body's slots passes a guard that should block.
 ;;;
 ;;; The cases -- first atom / root known / children known -- are only which constraints
 ;;; happen to exist, not three different rules.  Taking one constraint per case is
@@ -364,9 +401,11 @@
        (= ab (App2 "*" p2 a q2 b))
        (= dom2 (map-union (map-image p2) (map-image q2)))
        (RenamesToLeader ab symab ab)
-       (= mp2 (find-mapping-total avoid1 dom2
+       (= alts2 (find-mappings-total avoid1 dom2
                                   (compose (compose mab csab) symab)   ; first
-                                  (map-domain (compose mab csab))))    ; second: id on its dom
+                                  (map-domain (compose mab csab))))
+       (Idx ix2)
+       (= mp2 (vec-get alts2 ix2))    ; second: id on its dom
        (= im2 (map-image mp2))
        (= avoid2 (map-union avoid1 im2))
        (= ma (compose mp2 p2))
@@ -449,9 +488,11 @@
        (= fgx (App2 "app" p3 f q3 gx))
        (= dom3 (map-union (map-image p3) (map-image q3)))
        (RenamesToLeader fgx symfgx fgx)
-       (= mp3 (find-mapping-total avoid2 dom3
+       (= alts3 (find-mappings-total avoid2 dom3
                                   (compose (compose mfgx csfgx) symfgx)
                                   (map-domain (compose mfgx csfgx))))
+       (Idx ix3)
+       (= mp3 (vec-get alts3 ix3))
        (= im3 (map-image mp3))
        (= avoid3 (map-union avoid2 im3))
        (= mf (compose mp3 p3))
@@ -805,11 +846,13 @@
        (= b (App2 "app" p2 f q2 (Var 0)))
        (= dom2 (map-union (map-image p2) (map-image q2)))
        (RenamesToLeader b symb b)
-       (= mp2 (find-mapping-total avoid1 dom2
+       (= alts2 (find-mappings-total avoid1 dom2
                                   (compose (compose mb csb) symb)
                                   (map-insert (map-empty) 0 sx)
                                   (map-domain (compose mb csb))
                                   q2))
+       (Idx ix2)
+       (= mp2 (vec-get alts2 ix2))
        (= im2 (map-image mp2))
        (= avoid2 (map-union avoid1 im2))
        (= sx (map-get (compose mp2 q2) 0))     ; the literal's second use: a constraint
@@ -928,8 +971,10 @@
        (= ab (App2 "app" p2 a q2 b))
        (= dom2 (map-union (map-image p2) (map-image q2)))
        (RenamesToLeader ab symab ab)
-       (= mp2 (find-mapping-total avoid1 dom2 (compose (compose mab csab) symab)
+       (= alts2 (find-mappings-total avoid1 dom2 (compose (compose mab csab) symab)
                                   (map-domain (compose mab csab))))
+       (Idx ix2)
+       (= mp2 (vec-get alts2 ix2))
        (= im2 (map-image mp2))
        (= avoid2 (map-union avoid1 im2))
        (= ma (compose mp2 p2))
