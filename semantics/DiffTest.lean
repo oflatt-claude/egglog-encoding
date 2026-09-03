@@ -1860,17 +1860,19 @@ def Program.encodeDomainB (p : Program) : Bool :=
     && p.all Cmd.queryEncodableB
     && (p.all Cmd.ruleUnionFreeB || p.all Cmd.litFreeB)
     && decide (Program.HeadsDeclared p (fun _ => none))
+    && p.arityConflicts.isEmpty
 
 /-- **The census below counts exactly `EncodeDomain`.** -/
 theorem Program.encodeDomainB_iff (p : Program) :
     p.encodeDomainB = true ↔ p.EncodeDomain := by
   simp only [Program.encodeDomainB, Bool.and_eq_true, Bool.or_eq_true, List.all_eq_true,
     Cmd.ctorDeclB_iff, Cmd.queryEncodableB_iff, Option.isNone_iff_eq_none,
-    Bool.not_eq_eq_eq_not, Bool.not_true, Bool.eq_false_iff, ne_eq, decide_eq_true_eq]
-  exact ⟨fun h => ⟨h.1.1.1.1.1.1, h.1.1.1.1.1.2, h.1.1.1.1.2, h.1.1.1.2, h.1.1.2, h.1.2,
-      h.2⟩,
-    fun h => ⟨⟨⟨⟨⟨⟨h.ctorsOnly, h.setLegal⟩, h.noPrim⟩, h.noAt⟩, h.queryEncodable⟩,
-      h.noLitUnion⟩, h.headsDeclared⟩⟩
+    Bool.not_eq_eq_eq_not, Bool.not_true, Bool.eq_false_iff, ne_eq, decide_eq_true_eq,
+    List.isEmpty_iff]
+  exact ⟨fun h => ⟨h.1.1.1.1.1.1.1, h.1.1.1.1.1.1.2, h.1.1.1.1.1.2, h.1.1.1.1.2, h.1.1.1.2,
+      h.1.1.2, h.1.2, h.2⟩,
+    fun h => ⟨⟨⟨⟨⟨⟨⟨h.ctorsOnly, h.setLegal⟩, h.noPrim⟩, h.noAt⟩, h.queryEncodable⟩,
+      h.noLitUnion⟩, h.headsDeclared⟩, h.aritiesAgree⟩⟩
 
 /-! #### Running the encoded program
 
@@ -2932,6 +2934,23 @@ def correspondSelfTests : List (String × (Unit → Bool)) :=
       | some d, some e =>
         e.terms.contains udEntry && d.terms.all udNoZ && !udProgram.encodeDomainB
       | _, _ => false),
+    -- **The third shape of stuck head, and the one the domain does *not* exclude.**
+    -- `bare_build_invents_equality` takes the facts below as hypotheses. `encodeBuild` emits
+    -- no action at all for a **leaf**, so a head that builds a bare variable the query does
+    -- not bind stops the source block there and the encoded block skips it and runs on: the
+    -- source rule never fires and the encoded one asserts its `union` anyway. `A` and `B` are
+    -- both source e-nodes, so this refutes `encode_corresponds_complete` itself.
+    -- The last line is the point: unlike the two above, `bareProgram.encodeDomainB` is
+    -- **true**. `Program.HeadsScoped` is the clause that would exclude it.
+    ("the bare-build refutation runs, in the domain", fun _ =>
+      match exec bareProgram, execM (encode bareProgram) with
+      | some d, some e =>
+        e.subtermClosedB && e.eqsReflB
+          && d.terms.contains bareA && d.terms.contains bareB
+          && sameClassF e bareA bareB
+          && !decide ((bareA, bareB) ∈ d.closureF)
+          && bareProgram.encodeDomainB
+      | _, _ => false),
     -- **The state the sweep reads holds `@UF` entries.**
     -- That used to be the refutation: `MergeSaturated` counted the proof column, so no such
     -- state was one the specification's `Cmd.saturate` could step to. `Spec/Step.lean`'s
@@ -3060,6 +3079,17 @@ is decoration, each is the only thing standing between the domain and a refuted 
 set_option linter.hashCommand false in
 #guard (allCases.filter fun c => !(c.2.declared).encodeDomainB).all fun c =>
   !((c.2.declared).all Cmd.ctorDeclB)
+
+/-! **And what the clause the domain still lacks would cost: nothing.**
+`Encoding/Correspond.lean`'s `bare_build_invents_equality` refutes
+`encode_corresponds_complete` inside `Program.EncodeDomain`, and `Program.HeadsScoped` — every
+variable a rule head reads is one its own query binds — is the clause that excludes it. It is
+reported rather than added, and this is the measurement that says adding it would move no
+number here: all seventy in-domain cases satisfy it, so `encode_corresponds_complete_of_scoped`
+is a statement about the same 42% of the suite that the sweep measures. -/
+set_option linter.hashCommand false in
+#guard ((allCases.filter fun c => (c.2.declared).encodeDomainB).filter fun c =>
+  decide (c.2.declared).HeadsScoped).length = 70
 
 /-! **`encode` runs.** It did not while `encodeBuild` read its view back to get the
 canonical member: `(let x (@fView c…))` is a lookup, which `Program.illegalReads` rejects

@@ -135,13 +135,16 @@ nightly-local: nightly-uv nightly-rustup
 # left: `execM_viewLeaderRows` is the whole run-wide index argument (the rebuild's e-class rule,
 # its column rules, and path compression), `unionsJoined_fire` is a target firing behind a source
 # firing — the one command case the read-back does not reach, and it carries both of the
-# induction's data clauses — and `execM_soundTerms` is the completeness half, now stated on the
-# *term list*: `execM_encode_eqsRefl` proves an encoded run asserts no equation, so
-# `Database.ViewsSound` and `Database.EdgesSound` there are two membership clauses and
-# `viewsSound_of_soundTerms` is the step back. What that one still needs is the interpreter's
-# writers enumerated — every term `execRunRules` and `mergeRound` add — and a *source* firing
-# behind the target's, the mirror of `unionsJoined_fire`; no target fixpoint, since soundness is
-# indifferent to the under-firing `execM_contained` records. The rule-head match
+# induction's data clauses — and `execM_soundTerms` is the completeness half, which is
+# **refuted**: `bare_build_invents_equality` is a program in `Program.EncodeDomain` whose rule
+# head builds a bare variable the query does not bind, which `encodeBuild` emits no action for
+# at all, so the source block stops there and the encoded block runs on and asserts an equation
+# the source never derives. That refutes `encode_corresponds_complete` itself, at a pair of
+# source e-nodes. `Program.HeadsScoped` is the clause that closes it and it is reported rather
+# than added: `execM_soundTerms_of_scoped` and `encode_corresponds_complete_of_scoped` are the
+# two statements with it, both `sorryAx`-free, and everything else the half needed — the
+# per-command induction, the merge phase, the firing fold, the maintenance families, the head
+# obligation `encodedHeadSound` — is proved. The rule-head match
 # correspondence of `Encoding/Match.lean` is proved outright, encoder read-back included, and so
 # is the rule-head build case it feeds (`entrySound_headBuild`). Everywhere outside `Encoding/` a
 # `sorry` is a regression, and a new one inside it changes the count.

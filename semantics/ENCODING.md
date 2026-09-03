@@ -25,8 +25,20 @@ e-class rule, its column rules and path compression), and one is the completenes
 source). The **merge phase** of that last one is proved — `mergeSaturateF_soundTerms`, out of
 `mergeOneOriented_soundTerms` — and so are the two facts it needed, `Signature.MergeShape` (only
 `@UF` and the views carry a `:merge` body, and both carry `mergeBody`) and `eq_of_congrKeys`
-(against a diagonal closure, congruent keys are equal keys); what remains there is the fold over
-**rule firings**.
+(against a diagonal closure, congruent keys are equal keys); the fold over **rule firings** and
+the head obligation under it are proved too (`FDatabase.EncOk.stepCmds`, `encodedHeadSound`).
+
+**That third one is not open but *refuted*.** `encodeBuild` emits no action at all for a
+**leaf**, so a rule head that builds a bare variable the query does not bind stops the *source*
+block at that action while the encoded block skips it and runs the rest of the head — a third
+shape of stuck head beside the two `Encoding/Encode.lean` names, and one no clause of
+`Program.EncodeDomain` excludes. `bare_build_invents_equality` is that at `bareProgram`, which
+the domain admits: the source relates `(A)` and `(B)` in no way and the encoded run puts them in
+one class, so `encode_corresponds_complete` **itself** is false there, at a pair of source
+e-nodes. `Program.HeadsScoped` — every variable a rule head reads is one its own query binds —
+is the clause that closes it; it is reported rather than added, and
+`execM_soundTerms_of_scoped` and `encode_corresponds_complete_of_scoped` are the two statements
+carrying it, both `sorryAx`-free.
 **Two clauses this factorisation used to run through are
 refuted** and kept as records — `Database.ReadsSelf` (every source term is an id of itself) and
 `Database.ViewsProduct` (a view entry at every id tuple the children form), both false at

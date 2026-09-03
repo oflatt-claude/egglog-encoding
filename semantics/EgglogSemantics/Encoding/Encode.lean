@@ -1,4 +1,5 @@
 import EgglogSemantics.Proofs.Step
+import EgglogSemantics.Tests.Egg
 
 /-!
 # The proof encoding, as a program transformation
@@ -1136,8 +1137,10 @@ def Cmd.QueryEncodable : Cmd → Prop
 A source rule head that gets **stuck** contributes nothing and its encoding's head writes
 anyway. `RuleResults` asks `evalLocalActions` for a `some`, so a stuck block silently drops
 the firing — where a stuck *top-level* action drops `ProgramStep` and makes the claim
-vacuous, a stuck rule head leaves the source running and the target one entry ahead. Two
-shapes do it, and each of the two clauses below excludes one:
+vacuous, a stuck rule head leaves the source running and the target one entry ahead. **Three**
+shapes do it; the two clauses below exclude two of them, and the third is not excluded by any
+clause — see `Encoding/Correspond.lean`'s `bare_build_invents_equality`, a head that builds a
+bare variable the query does not bind, which `encodeBuild` emits no action for at all:
 
 * **A `union` on a literal.** `evalAction` refuses it — egglog's type checker does, and this
   untyped model cannot see it until the operands are values — while `encodeAction` emits
@@ -1365,6 +1368,18 @@ structure Program.EncodeDomain (P : Program) : Prop where
   `Cmd.sigBind`. `execM_soundTerms_false` is the program this excludes: `encodePrelude`
   declares a skolem for every applied name, declared or not. -/
   headsDeclared : Program.HeadsDeclared P (fun _ => none)
+  /-- **No name is used at two arities.** `Tests/Egg.lean`'s `Program.arityConflicts`, which
+  is what `Impl/Check.lean` and this file already cite as egglog's own rule: `typechecking.rs`
+  raises "Function already bound" and `lib.rs` asserts that typechecking caught it, so a
+  program with a conflict is one egglog rejects and one the emitter cannot even write down.
+
+  It is a **faithfulness** clause rather than a narrowing, and it costs the corpus nothing —
+  the census is 70 with it as it was without. What needs it is `Actions.WriteLegal` at the
+  maintenance rules: `Program.ctors` is read off the *syntax*, so a name at two arities gets
+  two table triples and the later declaration wins, and the losing arity's rebuild rules then
+  `set` a view at the wrong key width (`Program.AritiesAgree`,
+  `adProgram_not_maintenance_writeLegal`). -/
+  aritiesAgree : P.arityConflicts = []
 
 /-! #### The `union` legality the clause implies
 
