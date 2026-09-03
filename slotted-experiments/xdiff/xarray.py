@@ -121,8 +121,20 @@ class Rule:
 
         return go(self.atoms[0][0])
 
+    def atom_lines(self):
+        """The pattern as `atom` lines, or None where it has no atom spelling."""
+        return slotenc.atom_lines(LANG, self.atoms[0][0], self.atoms)
+
     def spec_lines(self):
-        out = ["rule", f"nested {self.nested_lhs()}", f"rhs {self.rhs_root} {slotenc.pat_sexpr(LANG, self.rhs)}"]
+        pat = slotenc.pat_sexpr(LANG, self.rhs)
+        spelled = self.atom_lines() if FLAT else None
+        if spelled is None:
+            # On the nested path the root is unused -- the whole pattern is the root --
+            # so `rhs_root` keeping its `?` there was harmless.
+            out = ["rule", f"nested {self.nested_lhs()}", f"rhs {self.rhs_root} {pat}"]
+        else:
+            # an `atom`/`rhs` root is written bare; xmulti supplies the `?`
+            out = ["rule", *spelled[1], f"rhs {self.rhs_root.lstrip('?')} {pat}"]
         for want, slot, pvars in self.conds:
             out.append(f"cond {'in' if want else 'notin'} {slot} {' '.join(pvars)}")
         return out
