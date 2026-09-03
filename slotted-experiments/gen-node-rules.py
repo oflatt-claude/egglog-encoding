@@ -42,12 +42,21 @@ MACHINERY, GENERIC_FILE = enc.MACHINERY, enc.GENERIC_FILE
 read_language, emit = enc.read_language, enc.emit
 handwritten_region = enc.handwritten_region
 
-# Per-language encodings are read from `slotted-experiments/languages/*.egg`, one
-# constructor per operator -- the shape the reference crate's `define_language!`
-# produces, with no head to indirect through.
+# Per-language encodings: one constructor per operator, the shape the reference crate's
+# `define_language!` produces, with no head to indirect through.
+#
+# A language's constructors are declared WHERE ITS RULES ARE where it has rules, so
+# there is one place for them: `sdql` is declared at the top of its slotted source, and
+# only the languages with no rules of their own -- the paper's bare `lambda`, and the
+# neutral language the fuzzer generates terms in -- still have a file to themselves.
 LANG_DIR = pathlib.Path("slotted-experiments/languages")
+SOURCES = {
+    "sdql": pathlib.Path("slotted-tests/sdql.egg"),
+    "lambda": LANG_DIR / "lambda.egg",
+    "toy": LANG_DIR / "toy.egg",
+}
 
-LANGUAGES = {p.stem: read_language(p) for p in sorted(LANG_DIR.glob("*.egg"))} if LANG_DIR.is_dir() else {}
+LANGUAGES = {name: read_language(p) for name, p in SOURCES.items()}
 
 
 def main():

@@ -45,6 +45,10 @@ def main():
     if not srcs:
         print("no slotted sources found")
         return 1
+    # A source with no claim in it is a rule LIBRARY, not a test. It is still compiled
+    # and run, so its rules have to load, but counting it as a passing test would
+    # inflate the number with something that asserts nothing.
+    libs = {p.name for p in srcs if "(check" not in p.read_text()}
 
     if args.emit:
         SNAPSHOTS.mkdir(exist_ok=True)
@@ -52,7 +56,10 @@ def main():
     bad = []
     for src in srcs:
         cmd = [sys.executable, str(COMPILE), str(src), "--run"]
-        if args.emit:
+        # A library's rules are already snapshotted by the generator that emits them
+        # into `slotted-tests/generated/`, so snapshotting its compiled program too
+        # would commit the same 43 rules twice.
+        if args.emit and src.name not in libs:
             cmd += ["-o", str(SNAPSHOTS / src.name)]
         r = subprocess.run(cmd, capture_output=True, text=True, cwd=ROOT, timeout=1800)
         line = (r.stdout.strip().splitlines() or [""])[0]
@@ -60,7 +67,12 @@ def main():
         if r.returncode != 0:
             bad.append(src.name)
 
-    print(f"\n{len(srcs) - len(bad)}/{len(srcs)} slotted tests pass" + (f"   FAILED: {', '.join(bad)}" if bad else ""))
+    tests = [p for p in srcs if p.name not in libs]
+    print(
+        f"\n{len(tests) - len([b for b in bad if b not in libs])}/{len(tests)} slotted tests pass"
+        + (f", {len(libs)} rule librar{'y loads' if len(libs) == 1 else 'ies load'}" if libs else "")
+        + (f"   FAILED: {', '.join(bad)}" if bad else "")
+    )
     return 1 if bad else 0
 
 

@@ -97,6 +97,15 @@ class Terms(enc.TermLang):
         return f"${t[1]}" if t[0] == "name" else super().enc(t)
 
 
+def payload(tok):
+    """A payload argument as the encoder wants it: the value, not its egglog spelling.
+
+    A source writes a string payload quoted, because that is what egglog syntax is, and
+    `Op.split` quotes it again on the way out -- so the quotes come off here.
+    """
+    return tok[1:-1] if len(tok) >= 2 and tok.startswith('"') and tok.endswith('"') else tok
+
+
 class Source:
     """One slotted test: its language, and its body in order."""
 
@@ -143,7 +152,7 @@ class Source:
         assert len(args) == len(kinds), f"{self.path.name}: {head} takes {len(kinds)} arguments, given {len(args)}"
         return (
             head,
-            *(self.term(a, k, ground) if k in enc.SLOTTED else a for a, k in zip(args, kinds, strict=True)),
+            *(self.term(a, k, ground) if k in enc.SLOTTED else payload(a) for a, k in zip(args, kinds, strict=True)),
         )
 
     def encode(self, form, column=enc.CHILD):
@@ -197,8 +206,29 @@ def schedule(steps, rules):
     )
 
 
-def compile_rewrite(src, form):
-    """`(rewrite lhs rhs [:when (cond ...)] [:lead N])` through the encoder's recipe.
+KEYWORDS = (":name", ":when", ":lead", ":fresh")
+
+
+def keywords(src, rest):
+    """`:kw value...` pairs, where a keyword may take more than one value.
+
+    `:fresh $k $v` is the reason this is not a walk in twos.
+    """
+    out = []
+    while rest:
+        kw = rest[0]
+        if kw not in KEYWORDS:
+            raise SystemExit(f"{src.path.name}: expected one of {KEYWORDS}, got {kw!r}")
+        i = 1
+        while i < len(rest) and rest[i] not in KEYWORDS:
+            i += 1
+        out.append((kw, rest[1:i]))
+        rest = rest[i:]
+    return out
+
+
+def compile_rewrite(src, form, tail=")", bugs=frozenset()):
+    """`(rewrite lhs rhs [:name n] [:when c] [:lead N] [:fresh $s...])`.
 
     `:lead` names the atom the query starts from, counting over the flattened pattern.
     It defaults to 0 -- the pattern's outermost node -- which is what every shipped
@@ -206,24 +236,46 @@ def compile_rewrite(src, form):
     one. The answer may not depend on the lead, and a test can say another to check
     that: leading anywhere below the root makes the atoms above it come out
     child-before-parent, which is the fresh-root case.
+
+    `:fresh` names the slots the right-hand side binds that the pattern never mentions,
+    so the compiler mints them against everything the match already used.
+
+    `tail` closes the rule and is where a ruleset and a name go, so it carries the
+    closing paren -- the generated `sdql` file wants one, a compiled test does not.
     """
     _, lhs, rhs, *rest = form
-    conds, lead = [], 0
-    while rest:
-        if rest[0] == ":lead":
-            lead = int(rest[1])
-        elif rest[0] == ":when":
-            want, slot, *pvars = rest[1]
+    conds, fresh, lead = [], [], 0
+    for kw, vals in keywords(src, rest):
+        if kw == ":lead":
+            lead = int(vals[0])
+        elif kw == ":fresh":
+            fresh += list(vals)
+        elif kw == ":when":
+            want, slot, *pvars = vals[0]
             assert want in ("free", "not-free"), f"unknown condition {want!r}"
-            conds.append((want == "free", slot, [p.lstrip("?") for p in pvars]))
-        else:
-            raise SystemExit(f"{src.path.name}: expected :when or :lead, got {rest[0]!r}")
-        rest = rest[2:]
+            # a pattern variable is named by the string the pattern writes, `?` and
+            # all, because that is what `flatten` keys the atoms by
+            conds.append((want == "free", slot, list(pvars)))
+        # `:name` is for the reader and for the generated file's tail, not the rule
     root, atoms = enc.flatten(src.lang, src.term(lhs, ground=False))
     order = enc.connected_order(src.lang, atoms, first=lead)
     return enc.compile_rule(
-        src.lang, order, ("build", root, enc.rhs_of(src.lang, src.term(rhs, ground=False))), conds=conds
+        src.lang,
+        order,
+        ("build", root, enc.rhs_of(src.lang, src.term(rhs, ground=False))),
+        conds=conds,
+        fresh=fresh,
+        bugs=bugs,
+        tail=tail,
     )
+
+
+def rule_name(src, form):
+    """A rewrite's `:name`, or None."""
+    for kw, vals in keywords(src, form[3:]):
+        if kw == ":name":
+            return vals[0]
+    return None
 
 
 def compile_check(src, form):

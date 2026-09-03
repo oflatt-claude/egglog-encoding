@@ -20,7 +20,9 @@ import re
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-LANG_DIR = ROOT / "slotted-experiments" / "languages"
+# A `.ref` sits beside the file that declares its language, which is the slotted source
+# where the language has rules and `languages/` where it does not.
+REF_DIRS = (ROOT / "slotted-experiments" / "languages", ROOT / "slotted-tests")
 ORACLE = ROOT / "slotted-experiments" / "xmulti" / "src" / "main.rs"
 
 sys.path.insert(0, str(ROOT / "slotted-experiments"))
@@ -54,7 +56,8 @@ def main():
     print(f"  oracle: {len(tags)} tagged, {len(untagged)} untagged ({', '.join(sorted(untagged))})")
 
     bad = []
-    for ref in sorted(LANG_DIR.glob("*.ref")):
+    refs = sorted(r for d in REF_DIRS for r in d.glob("*.ref"))
+    for ref in refs:
         corr = enc.read_correspondence(ref)
         spec = enc.read_language(ref.with_suffix(".egg"))
         missing = sorted({t for _, t, _ in corr.values() if t and t not in tags})
@@ -75,7 +78,7 @@ def main():
 
     print(
         f"\n{'OK: ' if not bad else 'FAIL: '}"
-        f"{len(list(LANG_DIR.glob('*.ref'))) - len(bad)}/{len(list(LANG_DIR.glob('*.ref')))}"
+        f"{len(refs) - len(bad)}/{len(refs)}"
         " correspondence files agree with the oracle" + (f"   FAILED: {', '.join(bad)}" if bad else "")
     )
     return 1 if bad else 0

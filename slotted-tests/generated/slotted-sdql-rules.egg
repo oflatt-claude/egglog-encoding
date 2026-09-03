@@ -4,6 +4,9 @@
 ;;; `slotted-egraphs/benches/sdql.rs` -- compiled into the slotted encoding by the
 ;;; recipe in `slotted-tests/slotted-user-rules.egg`.
 ;;;
+;;; The rules themselves are `slotted-tests/sdql.egg`, written in the slotted language;
+;;; read them there. This file is what they compile to.
+;;;
 ;;; `beta` is NOT here: it substitutes, which needs `slotted-subst` and frame
 ;;; plumbing rather than this compiler.  The other 43 are.
 ;;;

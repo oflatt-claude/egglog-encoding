@@ -102,15 +102,17 @@ MACHINERY = "slotted-tests/generated/slotted-lang-sdql.egg"
 # `Symbol(x) == Symbol(y)` is ever asked -- and the prefix is applied to every
 # symbol on that side, terms and rules alike, so the two e-graphs stay isomorphic
 # and the probe partitions stay comparable.
-LANG_DIR = ROOT / "slotted-experiments" / "languages"
+# The language is declared where its rules are: `slotted-tests/sdql.egg` holds both,
+# and `sdql.ref` beside it says what the reference calls each constructor.
+SDQL_SRC = ROOT / "slotted-tests" / "sdql.egg"
 # The language file says what the constructors are; the `.ref` beside it says what the
 # reference calls them, including the two workarounds above. `slotenc.language` checks
 # that the two name the same constructors, so an operator added to one and not the other
 # is an error here rather than a corpus that quietly stops covering the language the
 # rules were compiled from.
-LANG = slotenc.language(LANG_DIR / "sdql.egg", LANG_DIR / "sdql.ref")
+LANG = slotenc.language(SDQL_SRC, SDQL_SRC.with_suffix(".ref"))
 
-CORR = slotenc.read_correspondence(LANG_DIR / "sdql.ref")
+CORR = slotenc.read_correspondence(SDQL_SRC.with_suffix(".ref"))
 OPS = {op: (ctor, tag) for op, (ctor, tag, _) in CORR.items()}
 SYM_PREFIX = CORR["sym"][2]
 LET_TAG = CORR["let"][1]
