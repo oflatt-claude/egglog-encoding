@@ -843,6 +843,50 @@ mod naming_tests {
         assert_eq!(all[0], renaming_find_mapping_total(&m3_args()).unwrap());
     }
 
+    /// The chain, not one call: each atom's avoid-set is the previous atoms' image,
+    /// so a later atom may name a slot an earlier one minted. This is the claim the
+    /// per-atom design rests on -- that composing the choices reaches every way the
+    /// atoms' slots could coincide, without any call refining an earlier answer.
+    #[test]
+    fn chaining_reaches_every_partition_of_three_slots() {
+        // three atoms, each with a single unconstrained node slot and no pairs
+        fn step(avoid: &BTreeMap<i64, i64>) -> Vec<BTreeMap<i64, i64>> {
+            renaming_find_mappings_total(&[avoid.clone(), m(&[(0, 0)])], 64)
+        }
+
+        let mut partitions: BTreeSet<Vec<usize>> = BTreeSet::new();
+        for a in step(&m(&[])) {
+            let sa = a[&0];
+            let avoid_b: BTreeMap<i64, i64> = [(sa, sa)].into_iter().collect();
+            for b in step(&avoid_b) {
+                let sb = b[&0];
+                let mut avoid_c = avoid_b.clone();
+                avoid_c.insert(sb, sb);
+                for c in step(&avoid_c) {
+                    let sc = c[&0];
+                    // the partition the three choices induce, as block indices
+                    let mut blocks = Vec::new();
+                    let mut seen: Vec<i64> = Vec::new();
+                    for s in [sa, sb, sc] {
+                        let idx = seen.iter().position(|x| *x == s).unwrap_or_else(|| {
+                            seen.push(s);
+                            seen.len() - 1
+                        });
+                        blocks.push(idx);
+                    }
+                    partitions.insert(blocks);
+                }
+            }
+        }
+        // Bell(3) = 5: all distinct, any one pair together (three ways), all together
+        assert_eq!(partitions.len(), 5, "reached {partitions:?}");
+        assert!(partitions.contains(&vec![0, 1, 2]));
+        assert!(partitions.contains(&vec![0, 0, 0]));
+        assert!(partitions.contains(&vec![0, 0, 1]));
+        assert!(partitions.contains(&vec![0, 1, 0]));
+        assert!(partitions.contains(&vec![0, 1, 1]));
+    }
+
     #[test]
     fn unsatisfiable_constraints_give_nothing() {
         let avoid = m(&[(0, 0)]);
