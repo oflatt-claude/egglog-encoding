@@ -246,6 +246,145 @@ fn renaming_find_mapping_total(maps: &[BTreeMap<i64, i64>]) -> Option<BTreeMap<i
     Some(mapping)
 }
 
+/// Most namings `find-mappings-total` will build. Beyond this it truncates, so a
+/// caller that must not miss one compares [`renaming_naming_total_count`] against
+/// the vector's length.
+pub(crate) const FIND_MAPPINGS_CAP: usize = 1024;
+
+/// How many namings [`renaming_find_mappings_total`] would produce for `unnamed`
+/// domain keys and `avail` reusable slots, without building any of them.
+pub(crate) fn renaming_naming_count(unnamed: usize, avail: usize) -> u128 {
+    // One key at a time: it either takes a fresh name, leaving the candidates
+    // untouched, or one of the `avail` slots, leaving one fewer for the keys after it.
+    match unnamed {
+        0 => 1,
+        u => renaming_naming_count(u - 1, avail).saturating_add(
+            (avail as u128).saturating_mul(renaming_naming_count(u - 1, avail.saturating_sub(1))),
+        ),
+    }
+}
+
+/// What a naming chooses between: the mapping the constraints force, the domain
+/// keys they leave unnamed, the slots those keys may reuse, and every slot already
+/// spoken for.
+///
+/// Shared so the count and the enumeration cannot drift apart; a count that
+/// disagreed with what was built would be worse than no count at all.
+fn renaming_naming_parts(
+    maps: &[BTreeMap<i64, i64>],
+) -> Option<(BTreeMap<i64, i64>, Vec<i64>, Vec<i64>, BTreeSet<i64>)> {
+    let (head, pairs) = maps.split_at_checked(2)?;
+    let (avoid, domain) = (&head[0], &head[1]);
+    let solved = renaming_find_mapping(pairs)?;
+
+    let unnamed: Vec<i64> = domain
+        .keys()
+        .filter(|k| !solved.contains_key(k))
+        .copied()
+        .collect();
+    let spoken_for: BTreeSet<i64> = solved
+        .values()
+        .chain(avoid.keys())
+        .chain(avoid.values())
+        .copied()
+        .collect();
+    // Reusing a slot this mapping already assigned would break injectivity, so the
+    // candidates are the slots spoken for elsewhere.
+    let candidates: Vec<i64> = spoken_for
+        .iter()
+        .filter(|s| !solved.values().any(|v| v == *s))
+        .copied()
+        .collect();
+    Some((solved, unnamed, candidates, spoken_for))
+}
+
+/// How many namings [`renaming_find_mappings_total`] has to choose from, ignoring
+/// its cap. Compare against the vector's length to see whether the cap truncated.
+///
+/// `None` on the same conditions as [`renaming_find_mapping`].
+pub(crate) fn renaming_naming_total_count(maps: &[BTreeMap<i64, i64>]) -> Option<u128> {
+    let (_, unnamed, candidates, _) = renaming_naming_parts(maps)?;
+    Some(renaming_naming_count(unnamed.len(), candidates.len()))
+}
+
+/// [`renaming_find_mapping_total`] with every naming it could have chosen, not
+/// only the minting one.
+///
+/// Minting decides that an unnamed domain key is DIFFERENT from every slot
+/// already spoken for, since a fresh name differs from everything. That is one
+/// branch of a choice, and the other -- the key naming a slot the pattern
+/// already used -- is a match the minting solution cannot express. Each unnamed
+/// key may therefore take a fresh name, or any slot in `avoid` this mapping has
+/// not already used; results stay injective, as a renaming must be.
+///
+/// Element 0 is the minting solution, so reading index 0 is exactly
+/// [`renaming_find_mapping_total`]. The order of the rest is deterministic: an
+/// index is only meaningful if it names the same mapping every run.
+///
+/// Empty when the constraints are unsatisfiable. At most `cap` elements are
+/// built; compare against [`renaming_naming_total_count`] to detect that a
+/// caller's index space is too small to reach them all.
+pub(crate) fn renaming_find_mappings_total(
+    maps: &[BTreeMap<i64, i64>],
+    cap: usize,
+) -> Vec<BTreeMap<i64, i64>> {
+    let Some((solved, unnamed, candidates, spoken_for)) = renaming_naming_parts(maps) else {
+        return Vec::new();
+    };
+
+    let mut out = Vec::new();
+    let mut mapping = solved;
+    let mut used = spoken_for;
+    // Depth-first over the keys in order, taking the fresh name first at every
+    // level, which puts the all-minting solution at index 0.
+    fn walk(
+        keys: &[i64],
+        candidates: &[i64],
+        mapping: &mut BTreeMap<i64, i64>,
+        used: &mut BTreeSet<i64>,
+        cap: usize,
+        out: &mut Vec<BTreeMap<i64, i64>>,
+    ) {
+        if out.len() >= cap {
+            return;
+        }
+        let Some((&k, rest)) = keys.split_first() else {
+            out.push(mapping.clone());
+            return;
+        };
+        let mut fresh = 0;
+        while used.contains(&fresh) {
+            fresh += 1;
+        }
+        // `fresh` is the smallest slot not spoken for, so it is never a candidate and
+        // the choices cannot repeat. Injectivity is the only thing left to check.
+        for choice in std::iter::once(fresh).chain(candidates.iter().copied()) {
+            if mapping.values().any(|v| *v == choice) {
+                continue;
+            }
+            let added = used.insert(choice);
+            mapping.insert(k, choice);
+            walk(rest, candidates, mapping, used, cap, out);
+            mapping.remove(&k);
+            if added {
+                used.remove(&choice);
+            }
+            if out.len() >= cap {
+                return;
+            }
+        }
+    }
+    walk(
+        &unnamed,
+        &candidates,
+        &mut mapping,
+        &mut used,
+        cap,
+        &mut out,
+    );
+    out
+}
+
 /// A map from a key type to a value type supporting these primitives:
 /// - `map-empty`
 /// - `map-insert`
@@ -481,6 +620,17 @@ impl ContainerSort for MapSort {
                     })
                 }});
 
+                // How many namings `find-mappings-total` chooses between, before its
+                // cap. A rule comparing this against `vec-length` sees that the cap
+                // truncated, which silently losing namings would not show.
+                add_primitive!(eg, "find-mappings-total-count" = {self.clone(): MapSort} [xs: @MapContainer (arc)] -?> i64 {{
+                    let bv = state.base_values();
+                    let maps: Vec<BTreeMap<i64, i64>> = xs
+                        .map(|m| m.data.iter().map(|(k, v)| (bv.unwrap::<i64>(*k), bv.unwrap::<i64>(*v))).collect())
+                        .collect();
+                    renaming_naming_total_count(&maps).map(|n| n.min(i64::MAX as u128) as i64)
+                }});
+
                 // Substitution needs both a read (to extract a term) and a
                 // write (to add the substituted one), so it is registered as a
                 // `FullPrim`: see `crate::sort::slotted_subst`. Its result is an
@@ -615,5 +765,90 @@ impl TypeConstraint for MapOfTypeConstraint {
             cs.push(constraint::assign(arg.clone(), sort));
         }
         cs
+    }
+}
+
+#[cfg(test)]
+mod naming_tests {
+    use super::*;
+
+    fn m(pairs: &[(i64, i64)]) -> BTreeMap<i64, i64> {
+        pairs.iter().copied().collect()
+    }
+
+    /// The shape of the `M3` divergence: two atoms share one slot, and the second
+    /// atom's other slot may either take a fresh name or the one the first atom's
+    /// other child already occupies.
+    fn m3_args() -> Vec<BTreeMap<i64, i64>> {
+        let avoid = m(&[(0, 0), (1, 1)]); // pattern slots already named
+        let domain = m(&[(0, 0), (2, 2)]); // this atom's node slots
+        let first = m(&[(0, 0)]); // pattern side of the shared-variable constraint
+        let second = m(&[(0, 0)]); // node side
+        vec![avoid, domain, first, second]
+    }
+
+    #[test]
+    fn index_zero_is_the_minting_solution() {
+        let args = m3_args();
+        let all = renaming_find_mappings_total(&args, 64);
+        assert_eq!(all[0], renaming_find_mapping_total(&args).unwrap());
+    }
+
+    #[test]
+    fn the_identification_is_offered() {
+        let all = renaming_find_mappings_total(&m3_args(), 64);
+        // node slot 2 takes a fresh name, or pattern slot 1
+        assert_eq!(all, vec![m(&[(0, 0), (2, 2)]), m(&[(0, 0), (2, 1)])]);
+    }
+
+    #[test]
+    fn every_naming_stays_injective() {
+        for naming in renaming_find_mappings_total(&m3_args(), 64) {
+            let vals: BTreeSet<i64> = naming.values().copied().collect();
+            assert_eq!(vals.len(), naming.len(), "not injective: {naming:?}");
+        }
+    }
+
+    #[test]
+    fn the_order_is_stable() {
+        let a = renaming_find_mappings_total(&m3_args(), 64);
+        let b = renaming_find_mappings_total(&m3_args(), 64);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn the_count_matches_what_is_enumerated() {
+        // one unnamed key, one reusable slot
+        assert_eq!(renaming_naming_count(1, 1), 2);
+        assert_eq!(renaming_find_mappings_total(&m3_args(), 64).len(), 2);
+        assert_eq!(renaming_naming_count(0, 5), 1);
+        // These are injective assignments, not set partitions. Two keys over two
+        // reusable slots: fresh/fresh, fresh/a, fresh/b, a/fresh, b/fresh, a/b, b/a.
+        assert_eq!(renaming_naming_count(2, 2), 7);
+
+        // and the formula agrees with what is actually built
+        let avoid = m(&[(0, 0), (1, 1), (2, 2)]);
+        let domain = m(&[(5, 5), (6, 6), (7, 7)]);
+        // paired maps share the edge position as key; the values are the two sides'
+        // slots, so this pins node slot 5 onto pattern slot 0
+        let args = vec![avoid, domain, m(&[(0, 0)]), m(&[(0, 5)])];
+        let all = renaming_find_mappings_total(&args, 999);
+        assert_eq!(all.len() as u128, renaming_naming_count(2, 2));
+    }
+
+    #[test]
+    fn the_cap_truncates_rather_than_lying() {
+        let all = renaming_find_mappings_total(&m3_args(), 1);
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0], renaming_find_mapping_total(&m3_args()).unwrap());
+    }
+
+    #[test]
+    fn unsatisfiable_constraints_give_nothing() {
+        let avoid = m(&[(0, 0)]);
+        let domain = m(&[(0, 0)]);
+        // the same node slot forced onto two different pattern slots
+        let args = vec![avoid, domain, m(&[(0, 0), (1, 1)]), m(&[(0, 5), (1, 5)])];
+        assert!(renaming_find_mappings_total(&args, 64).is_empty());
     }
 }

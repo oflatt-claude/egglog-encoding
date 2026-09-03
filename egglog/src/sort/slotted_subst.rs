@@ -455,7 +455,10 @@ impl FullPrim for SlottedSubst {
         let t_ren: Ren = state
             .value_to_container::<MapContainer>(*t_ren)
             .unwrap_or_else(|| {
-                panic!("{}'s type constraint admits only renaming values", self.name())
+                panic!(
+                    "{}'s type constraint admits only renaming values",
+                    self.name()
+                )
             })
             .data
             .iter()
