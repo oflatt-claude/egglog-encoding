@@ -6,19 +6,33 @@ other checks. Sixty is not a confidence statement, and treating it as one was th
 this exists to close: at 60 the sweep is clean, and the divergences below start at
 case 66.
 
-WHAT A DEEP RUN FOUND (24000 cases, 48 seeds, `iso` mode):
+WHAT A DEEP RUN FINDS (24000 cases, 48 seeds, `iso` mode), and WHICH ORACLE MATTERS.
 
-    23976/24000 isomorphic -- 17 structural divergences, in three families
+Against upstream b90adca, the oracle we pin, which HAS `final_refine`:
 
-      12  the encoding built FEWER nodes: a rule fired on the reference and not on us
-       5  same nodes, the encoding has MORE classes: a union we did not make
-       5  the encoding built MORE nodes: a rule fired on us and not on the reference
+    23707/24000 isomorphic -- 278 divergences
 
-    The 17 are not 17 bugs. Every one examined traced to the same cause, which
-    `connected_order` documents: the encoding compiles a pattern into a chain, a slot
-    no earlier atom constrains is MINTED, and the mint cannot be revisited. The
-    reference keeps such a slot flexible and unifies at the end. `order-independence.py`
-    isolates that without needing the reference at all.
+      202  the encoding built FEWER nodes: a rule fired on the reference, not on us
+       39  same counts, the SHAPE differs: slot sets or symmetry groups
+       27  same nodes, the encoding has MORE classes: a union we did not make
+       10  the encoding built MORE nodes: a rule fired on us, not on the reference
+
+    229 of the 278 are clearly ours. Against the PREVIOUS oracle -- PR #45 before
+    `final_refine` landed -- the same 24000 cases gave 23976/24000 and 17 divergences,
+    12 of them ours. Nothing in the encoding changed between those two numbers. The
+    oracle got sharper and revealed a gap that was always there, so the jump from 12 to
+    229 is the SIZE of the gap rather than a regression.
+
+    They are also not 278 bugs. Every one examined traced to the same cause, which
+    `connected_order` documents and `xdiff.FINAL_REFINE_GAP` explains in full: the
+    encoding compiles a pattern into a chain, a slot no earlier atom constrains is
+    MINTED, and the mint cannot be revisited. A fresh name differs from everything, so
+    the encoding only ever takes the "these slots are apart" branch. `final_refine`
+    takes both. `order-independence.py` isolates the same cause without any oracle.
+
+    The 39 shape-only divergences are the family the symmetry-generating unions
+    exposed; before those existed the corpus had only identity groups and could not
+    state such a case at all.
 
     Also measured, and NOT a divergence: ten cases died with egglog's "Rule ... was
     already present". The generator draws each rule independently and two can compile
