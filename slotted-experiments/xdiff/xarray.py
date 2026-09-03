@@ -337,6 +337,12 @@ def _load_rules():
 
 #: name -> rule, and the same rules as a list. The per-rule cases below ask for one by
 #: name, which reads as the rule it is rather than as an index.
+#: Ask the reference the FLATTENED question, which is the like-for-like comparison: the
+#: encoding compiles rules by flattening them, and a nested pattern is not the same
+#: pattern -- it records which variables sit under a binder and a multipattern does not
+#: (upstream issue #48). `XARRAY_FLAT=0` restores the nested comparison.
+FLAT = os.environ.get("XARRAY_FLAT", "1") == "1"
+
 RULES = {r.name: r for r in _load_rules()}
 ALL_RULES = list(RULES.values())
 

@@ -1039,6 +1039,42 @@ def rhs_of(lang, t):
     return (t[0], *out)
 
 
+def atom_lines(lang, root, atoms, var="var"):
+    """A flattened pattern as the oracle's `atom` lines, or `None` if it has none.
+
+    `(root_name, lines)`, with the leading `?` stripped as those lines want. An atom's
+    children are pattern variables and slot literals, so:
+
+      * a slot literal in a BINDER column is the bare `$x` that `Bind` holds;
+      * anywhere else it is the TERM `(var $x)`, which needs an atom of its own, since
+        an atom's child has to be a pattern variable;
+      * a child reached through its own class -- a payload leaf written literally --
+        is neither, and the pattern has no atom spelling at all.
+
+    Asking the reference the FLATTENED question is what makes the comparison
+    like-for-like: the encoding compiles rules by flattening them, and a nested pattern
+    is not the same pattern (it records which variables sit under a binder).
+    """
+    out, extra = [], [0]
+    for name, op, kids in atoms:
+        binders = set(lang[op].binders)
+        spelled = []
+        for i, (kind, c) in enumerate(kids):
+            if kind == "pv":
+                spelled.append(c.lstrip("?"))
+            elif kind == "sl" and i in binders:
+                spelled.append(c)
+            elif kind == "sl":
+                extra[0] += 1
+                v = f"_sl{extra[0]}"
+                out.append(f"atom {v} {var} {c}")
+                spelled.append(v)
+            else:
+                return None
+        out.append(f"atom {name.lstrip('?')} {lang[op].ref or op} {' '.join(spelled)}")
+    return root.lstrip("?"), out
+
+
 def pat_sexpr(lang, t, binder=False):
     """A pattern term -- an atom's child, or a right-hand side -- in the oracle's
     syntax.

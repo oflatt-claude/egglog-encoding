@@ -176,37 +176,10 @@ class Rule:
         self.flat = atoms
 
     def atom_lines(self):
-        """The pattern as `atom` lines, or None if it cannot be written that way.
-
-        An atom's children are pattern variables and slot literals. A child reached
-        through its own class -- a payload leaf written literally, like `sym:mult` --
-        is neither, so such a rule has no atom spelling.
-        """
+        """The pattern as `atom` lines, or None where it has no atom spelling."""
         if self.flat is None:
             return None
-        root, atoms = self.flat
-        out, extra = [], [0]
-        for name, op, kids in atoms:
-            binders = set(LANG[op].binders)
-            spelled = []
-            for i, (kind, c) in enumerate(kids):
-                if kind == "pv":
-                    spelled.append(c.lstrip("?"))
-                elif kind == "sl" and i in binders:
-                    # a binder column holds the bare slot, which is what `Bind` stores
-                    spelled.append(c)
-                elif kind == "sl":
-                    # anywhere else a slot literal is the TERM `(var $x)`, so it needs an
-                    # atom of its own: an atom's child has to be a pattern variable
-                    extra[0] += 1
-                    v = f"_sl{extra[0]}"
-                    out.append(f"atom {v} var {c}")
-                    spelled.append(v)
-                else:
-                    return None  # reached through its class: no atom spelling
-            ref = LANG[op].ref or op
-            out.append(f"atom {name.lstrip('?')} {ref} {' '.join(spelled)}")
-        return root.lstrip("?"), out
+        return slotenc.atom_lines(LANG, *self.flat)
 
     def spec_lines(self, flat=False):
         # `rhs <root> <pattern>`: on the nested path the root is unused (the whole
