@@ -137,7 +137,10 @@ both are decided at the witness at the end of this file.
   every block `encodeCmd` emits for a writing command. It is the only fixpoint available —
   `execM_contained` says the enumerator under-fires, so `RunSaturated`, and `Rebuilt` with it,
   is not a consequence — and it is a `terms` fact, because a round adds terms and *deletes*
-  rows, so the sandwich that closes over the first does not close over the second.
+  rows, so the sandwich that closes over the first does not close over the second. The
+  **rows** are settled all the same, and by the test rather than by the sandwich:
+  `FDatabase.RowsClosed` and `rowsClosed_of_execProgramM` read the other conjunct of
+  `FDatabase.sameData`, which pins a further round's row list *equal* to the pre-state's.
 * **Refuted, and it is why the fixpoint closes neither target-side residue**:
   `FDatabase.IndexCurrent`,
   the converse of `FDatabase.IndexOk.entry` — every entry term still current in the index.
@@ -146,8 +149,12 @@ both are decided at the witness at the end of this file.
   `mergeOneOriented` deletes the displaced row, and `Database.Out` still reads its entry term.
   A rebuild rule's *conclusion* is a `terms` fact the fixpoint supplies; its *premise* is a
   `rows` fact only this would, so `IndexOk` needs a companion rather than a fourth field, and
-  the companion is false. What survives is the same claim up to the union-find
-  (`cxTgt_out_uf`), which does not compose with the clauses as stated.
+  the companion is false. What survives is the same claim **up to the union-find**, and
+  `cxTgt_currentUF` is that at the refuting state itself: the entry's own value columns are in
+  no row any more, and the row the merge kept sits at the `@UF` parent of the e-class column it
+  displaced. That weakened claim is what `execM_rebuildClosed` is left waiting on, and it is
+  still a `rows` fact wanted from a `terms` fact — `Database.Absorbs` weakened the residue's
+  conclusion and not its hypothesis, which quantifies over every term that reads an id.
 * **Refuted, and it is what the fixpoint was being sought for**: `Database.ReadsSelf` and
   `Database.ViewsProduct`, the two over-strong clauses this file used to factor the forward half
   through. `ncTgt_not_readsSelf` and `ncTgt_not_viewsProduct` are a compiled source state a
@@ -195,9 +202,11 @@ both are decided at the witness at the end of this file.
   `FDatabase.addRow`/`addTerm` (the `cexD` idiom) or take the run as a hypothesis; witnesses on
   the *source* side run in the kernel outright (`ncSrc_exec`).
 * **`sorry`**, three, and they are three *mechanisms* rather than three clauses — which is
-  what the factorisation above bought. `execM_viewJoined` is the whole of the run-wide
-  **index** argument: `rebuildRules`' e-class rule in `ids` and `ufJoin`, and its column rules
-  in `rowShared`. `pathCompressRule` is no longer part of it — it was carried solely to make
+  what the factorisation above bought. `execM_rebuildClosed` is the whole of the run-wide
+  **index** argument, now stated per rule rather than per clause: `Database.RebuildClosed` is
+  `rebuildRules`' e-class rule (`eclass`), its column rules (`column`) and the `@UF` edge a
+  collision writes (`edged`), and `Database.RebuildClosed.toViewJoined` is what `execM_viewJoined`
+  now is. `pathCompressRule` is no longer part of it — it was carried solely to make
   `lead` a *function*, and no consumer spends that. `unionsJoined_fire` is the
   whole of a **target firing behind a source firing** — the one command case the read-back does
   not reach — and it now carries both of the command induction's data clauses, `joined` and
@@ -1260,6 +1269,122 @@ theorem Database.ViewsCover.of_viewJoined {src d : Database} (h : d.ViewJoined)
     match he with
     | @ViewRepr.app _ _ _ es _ pf hes ho => exact h.rowShared f as bs es e pf hes ho hl
 
+/-! #### And the three maintenance closures those three clauses reduce to
+
+`Database.ViewJoined` is stated at what its *consumers* spend. Its own content is the
+maintenance ruleset, one mechanism per clause — `ufJoin` is the e-class rebuild rule
+(`uTgt_not_viewJoined` is that clause failing one firing before it runs), `rowShared` is the
+column rules, and `ids` is the `@UF` edge `mergeBody` writes between two entries that collide
+at one view key. `Database.RebuildClosed` below is that reading, as three properties named
+after the rules rather than after the consumers, and `Database.RebuildClosed.toViewJoined` is
+the reduction.
+
+**Everything here is stated over `Database.Out`, and so over `terms`.** No row, no choice
+function, no leader. That is what makes the reduction independent of the index question — and
+it is also why it does not *close* the residue: each of the three is a rule's **conclusion**,
+and the premise of each is a row. -/
+
+/-- **One `@UF` edge, as `Database.Out` reads it.** `UFEdge` is the same relation with the
+self-loops taken out; nothing below needs an edge to move, so nothing below takes them out. -/
+def Database.UFStep (d : Database) (a b : Term) : Prop := ∃ pf, d.Out ufName [a] [b, pf]
+
+/-- Reachability along those edges: the chain a run of rebuild firings walks. -/
+def Database.UFReach (d : Database) (a b : Term) : Prop :=
+  Relation.ReflTransGen d.UFStep a b
+
+/-- One edge is a chain. -/
+theorem Database.UFStep.toReach {d : Database} {a b : Term} (h : d.UFStep a b) :
+    d.UFReach a b := Relation.ReflTransGen.single h
+
+/-- **The maintenance ruleset's three closures, at a state.**
+
+Read off `rebuildRules` and `mergeBody`, one clause each:
+
+* `eclass` is the e-class rebuild rule. Its head re-`set`s a view entry at the `@UF` parent of
+  the e-class column it read, so at a state where it has run everywhere, an id's parent is
+  read by every term that reads the id — which is `Database.Absorbs` along one edge.
+* `edged` is not a rule but the `:merge` body: two entries that collide at one view key leave
+  an `@UF` edge between their e-class columns, so two ids of one term are joined in the
+  union-find even when neither absorbs the other.
+* `column` is the column rebuild rules, one per child position, each moving its column to the
+  `@UF` parent it read. Stated at a whole tuple because that is how `rowShared` consumes it;
+  the pointwise form is the rules and `List.Forall₂` is the iteration.
+
+**`pathCompressRule` is absent**, and so is any function on `Term`: the reduction below walks
+`Database.UFReach` by induction where `Database.ViewLeaderRows` named a representative. -/
+structure Database.RebuildClosed (d : Database) : Prop where
+  /-- The e-class rebuild rule: an id's `@UF` parent is read by everything that reads the id. -/
+  eclass : ∀ a b, d.UFStep a b → d.Absorbs a b
+  /-- The edge a collision writes: two ids of one term reach a common id. -/
+  edged : ∀ t e₁ e₂, ViewRepr d t e₁ → ViewRepr d t e₂ →
+    ∃ e, d.UFReach e₁ e ∧ d.UFReach e₂ e
+  /-- The column rebuild rules: a row's key may be moved along the union-find, column by
+  column. -/
+  column : ∀ f es ds e pf, d.Out (viewName f) es [e, pf] → List.Forall₂ d.UFReach es ds →
+    ∃ e' pf', d.Out (viewName f) ds [e', pf']
+
+/-- **Absorption along a chain**, by induction on the chain: `eclass` is one edge and
+`Database.Absorbs.trans` composes. This is the step where a *representative* would have been
+needed had the clauses still asked for one — an upper bound composes and a choice function
+does not. -/
+theorem Database.RebuildClosed.absorbs {d : Database} (h : d.RebuildClosed) {a b : Term}
+    (hr : d.UFReach a b) : d.Absorbs a b := by
+  induction hr with
+  | refl => exact Database.Absorbs.refl d a
+  | tail _ hstep ih => exact ih.trans (h.eclass _ _ hstep)
+
+/-- **A pointwise-congruent pair of argument lists reaches a common id tuple**, and both lists
+read it: `edged` at each position gives the tuple and `absorbs` puts both lists on it. This is
+what `Database.ViewLeaderRows` did with `viewReprList_map_lead_of_forall₂`, without the
+function. -/
+theorem Database.RebuildClosed.reach_of_forall₂ {d : Database} (h : d.RebuildClosed) :
+    ∀ {as bs : List Term}, List.Forall₂ (SameClass d) as bs →
+      ∀ {es : List Term}, ViewReprList d as es →
+        ∃ ds, List.Forall₂ d.UFReach es ds ∧ ViewReprList d as ds ∧ ViewReprList d bs ds
+  | [], [], .nil, [], .nil => ⟨[], .nil, .nil, .nil⟩
+  | a :: _, b :: _, .cons hab hl, e :: _, .cons hae hes => by
+      obtain ⟨c, hac, hbc⟩ := hab
+      obtain ⟨x, r₁, r₂⟩ := h.edged a e c hae hac
+      obtain ⟨ds, hr, h₁, h₂⟩ := h.reach_of_forall₂ hl hes
+      exact ⟨x :: ds, .cons r₁ hr, .cons (h.absorbs r₁ a hae) h₁,
+        .cons (h.absorbs r₂ b hbc) h₂⟩
+
+/-- **The three closures answer the three clauses**, one apiece and with nothing left over.
+
+`ids` is `edged` followed by `absorbs` on both legs; `ufJoin` is `eclass` at the edge it is
+handed, and the absorber is the edge's own far end, so the clause costs one firing and no
+join at all; `rowShared` is `reach_of_forall₂` for the tuple and `column` for the row on it.
+
+The **diagonal** instance of `rowShared` (`as = bs`) still costs nothing here in the sense
+that mattered: `reach_of_forall₂` answers it with reflexivity at each position when the two
+readings coincide, and `column` is then asked at `ds = es`. What the strong form demanded
+there — `rowLead` moving every key to the leader tuple — is not asked at all. -/
+theorem Database.RebuildClosed.toViewJoined {d : Database} (h : d.RebuildClosed) :
+    d.ViewJoined where
+  ids t e₁ e₂ h₁ h₂ := by
+    obtain ⟨e, r₁, r₂⟩ := h.edged t e₁ e₂ h₁ h₂
+    exact ⟨e, h.absorbs r₁, h.absorbs r₂⟩
+  ufJoin x y pf ho := ⟨y, h.eclass x y ⟨pf, ho⟩, Database.Absorbs.refl d y⟩
+  rowShared f as bs es e pf hes ho hl := by
+    obtain ⟨ds, hr, h₁, h₂⟩ := h.reach_of_forall₂ hl hes
+    obtain ⟨e', pf', ho'⟩ := h.column f es ds e pf ho hr
+    exact ⟨ds, e', pf', h₁, h₂, ho'⟩
+
+/-- **A state with no `@UF` entry has no chain either**, which is what makes the two clauses
+that read one vacuous at a union-free target. -/
+theorem Database.UFReach.eq_of_no_uf {d : Database}
+    (hno : ∀ a b, ¬ d.UFStep a b) {a b : Term} (h : d.UFReach a b) : a = b := by
+  induction h with
+  | refl => rfl
+  | tail _ hstep ih => exact absurd hstep (hno _ _)
+
+/-- A `List.Forall₂` over a relation that forces equality is equality. -/
+theorem Database.forall₂_ufReach_eq {d : Database} (hno : ∀ a b, ¬ d.UFStep a b) :
+    ∀ {es ds : List Term}, List.Forall₂ d.UFReach es ds → es = ds
+  | [], [], .nil => rfl
+  | _ :: _, _ :: _, .cons h hl => by
+      rw [Database.UFReach.eq_of_no_uf hno h, Database.forall₂_ufReach_eq hno hl]
+
 /-- **`Database.ViewJoined` at `satTarget`**, out of the reduction. The degenerate case: one
 nullary constructor, no `union`, so `ufJoin` is vacuous, `ids` is answered by reflexivity and
 `rowShared` by the row already in hand. `Encoding/Match.lean`'s `uRebuilt_viewJoined` is the
@@ -1267,6 +1392,29 @@ first two clauses doing work and `ncTgt_viewJoined` the third. -/
 theorem satTarget_viewJoined : satTarget.ViewJoined :=
   satTarget_viewLeaderRows.toViewJoined
 
+/-- **And `Database.RebuildClosed` at `satTarget`, out of the definition rather than through
+the strong form** — the strong form does not imply it, since `Database.ViewLeaderRows` says
+nothing about which ids the union-find joins.
+
+The degenerate case again, and every clause is degenerate for its own reason: `satTarget` has
+no `@UF` entry (`satTarget_no_uf`), so `eclass` is vacuous and `Database.UFReach` is equality
+(`Database.UFReach.eq_of_no_uf`); `edged` is then two ids of one term being *equal*, which
+`satTarget_viewRepr` gives; and `column` is asked at `ds = es`, where the row handed in is the
+answer. `Encoding/Match.lean`'s `uRebuilt_rebuildClosed` is the same property where the edge is
+real. -/
+theorem satTarget_rebuildClosed : satTarget.RebuildClosed := by
+  have hno : ∀ a b, ¬ satTarget.UFStep a b := by
+    rintro a b ⟨pf, bs, -, hmem⟩
+    exact satTarget_no_uf _ hmem
+  refine ⟨fun a b h => absurd h (hno a b), fun t e₁ e₂ h₁ h₂ => ⟨e₁, .refl, ?_⟩,
+    fun f es ds e pf ho hl => ?_⟩
+  · obtain rfl : e₂ = e₁ := by
+      cases t with
+      | lit l => rw [h₁.eq_of_lit, h₂.eq_of_lit]
+      | app g bs => rw [satTarget_viewRepr h₁, satTarget_viewRepr h₂]
+    exact .refl
+  · obtain rfl : es = ds := Database.forall₂_ufReach_eq hno hl
+    exact ⟨e, pf, ho⟩
 
 /-- **Obligation `congr` reduces to `Database.ViewsCover.shared`.** The clause *is* that
 obligation with the target's side spelled out — one shared id tuple and an entry keyed at it —
@@ -3418,6 +3566,20 @@ theorem roundClosed_of_execProgramM {R : RulesetName} {d D : FDatabase} {p : Pro
     rw [FDatabase.execProgramM, Option.some.injEq] at he'; exact he'
   exact FDatabase.runSaturateM_roundClosed he
 
+/-- **And the same state's rows, exactly.** `FDatabase.RowsClosed` is the other conjunct of the
+`sameData` test `runSaturateM` returned from, and it says a further round of `R` here leaves
+the row list *equal* — so any row a rebuild firing would add is one the same round's merge
+phase would then delete. Located at the same place and by the same argument as
+`roundClosed_of_execProgramM`. -/
+theorem rowsClosed_of_execProgramM {R : RulesetName} {d D : FDatabase} {p : Program}
+    (h : d.execProgramM (p ++ [Cmd.saturate R]) = some D) : D.RowsClosed R := by
+  obtain ⟨td, -, hlast⟩ := FDatabase.execProgramM_append h
+  rw [FDatabase.execProgramM] at hlast
+  obtain ⟨e, he, he'⟩ := Option.bind_eq_some_iff.mp hlast
+  obtain rfl : e = D := by
+    rw [FDatabase.execProgramM, Option.some.injEq] at he'; exact he'
+  exact FDatabase.runSaturateM_rowsClosed he
+
 /-- **And that its hypothesis is the shape `encodeCmd` emits.** A `Cmd.run`'s block is the
 source round followed by the rebuild; the `.saturate` and top-level-action blocks are the same
 shape (`encodeCmd`). -/
@@ -3528,6 +3690,32 @@ theorem cxTgt_not_indexCurrent : ¬ cxTgt.IndexCurrent := by
   rw [cxTgt_rows_view r hr hfn] at hout
   exact absurd hout (by decide)
 
+set_option maxRecDepth 100000 in
+/-- The survivor is a row and not merely the unique candidate `cxTgt_rows_view` names. -/
+theorem cxTgt_mem_row_view :
+    (⟨viewName "B", [], [cxA, cxTransFiat]⟩ : Row) ∈ cxTgt.rows := by decide
+
+/-- **And the union-find weakening of it survives, at the very state that refutes it.**
+
+Three facts at one instance: the entry term is read (`cxTgt_out_view`), **no** row carries its
+value columns any more — which is `FDatabase.IndexCurrent` failing here — and the row the merge
+kept instead sits at `(A)`, which is the `@UF` parent of the displaced entry's e-class column
+`(B)`. So "every merge-function entry term has a current row whose e-class column is
+`@UF`-reachable from its own" is not refuted by this counterexample, and it is what
+`execM_rebuildClosed` is left waiting on. `mergeResult` keeping `ordering-min` and `mergeBody`
+writing `@UF (ordering-max) ↦ (ordering-min, …)` are the two halves of why: the survivor is the
+smaller e-class and the larger one gets the edge to it. -/
+theorem cxTgt_currentUF :
+    cxTgt.toDatabase.Out (viewName "B") [] [cxB, cxFiat] ∧
+      (¬ ∃ r ∈ cxTgt.rows, r.fn = viewName "B" ∧ r.out = [cxB, cxFiat]) ∧
+      (⟨viewName "B", [], [cxA, cxTransFiat]⟩ : Row) ∈ cxTgt.rows ∧
+      cxTgt.toDatabase.UFStep cxB cxA :=
+  ⟨cxTgt_out_view,
+    fun ⟨r, hr, hfn, hout⟩ => by
+      rw [cxTgt_rows_view r hr hfn] at hout
+      exact absurd hout (by decide),
+    cxTgt_mem_row_view, ⟨cxFiat, cxTgt_out_uf⟩⟩
+
 /-! ##### What restores it, and what that costs
 
 **The row the merge kept is not arbitrary.** It carries the `@UF` *parent* of the e-class
@@ -3538,19 +3726,36 @@ the edge — written by the `union` and written again by `mergeBody`. So the rep
 is *current up to the union-find*: for every merge-function entry term there is a row at a
 congruent key whose e-class column is `@UF`-reachable from the entry's.
 
-**That weakening does not close the residues as they stand.** `Database.ViewJoined.ufJoin`
-is handed an edge out of an id and would be handed a row at some `u` further down the chain;
-the two do not compose, and the entry its conclusion needs is one an *earlier* round wrote and
-only `terms` remembers. The mechanism is therefore run-wide — each writing block's rows are
-current at the `Cmd.saturate rebuildRuleset` that immediately follows it, and `terms` carries the
-result forward past every later merge — and not a property of the final index.
+**What the absorber weakening changed, and what it did not.** The clause is no longer handed
+an edge and asked for a *leader*: `Database.ViewJoined.ufJoin` wants an upper bound, and a
+surviving row anywhere above the entry's e-class column is one — so the **conclusion** half of
+"current up to the union-find" composes now where the leader form did not, and
+`Database.RebuildClosed.absorbs` is that composition, an induction along the chain with no
+representative anywhere in it.
+
+The **hypothesis** half is untouched. `Database.Absorbs` quantifies over every term that reads
+the id, so the absorber has to be chosen before the reader is seen, while currency delivers one
+landing site per *entry* and two readers of one id are two rows displaced independently. What
+makes their landing sites agree is each of them being the union-find **leader** and not merely
+a point above the entry.
+
+**And the last hop to the leader is no longer an induction.** `FDatabase.RowsClosed` pins a
+rebuild fixpoint's row list *equal* to the round's, so a surviving view row whose e-class
+column still had an outgoing `@UF` row would be displaced by the e-class rule's own firing and
+the list would move. That argument is one step, and what it spends is a `matchQuery`
+completeness lemma of `cxRb_mem_matchQuery`'s shape together with `mergeResult`'s
+`ordering-min` — not the chain walk this paragraph used to ask for. What is left is the
+currency claim itself, and it is run-wide — each writing block's rows are current at the
+`Cmd.saturate rebuildRuleset` that immediately follows it, and `terms` carries the result
+forward past every later merge — and not a property of the final index.
 
 **And it would not close `unionsJoined_fire`, because nothing about currency would.** The next
 section is the counterexample the induction's old invariant died on: the row a firing needs was
 never written at any state, so no statement about which rows are *current* reaches it. The
-run-wide argument is what `execM_viewJoined` still wants — its `rowShared` clause as much as
-its `ufJoin` one, since `Database.ViewsCover` is now derived from those
-(`Database.ViewsCover.of_viewJoined`) — and it is not what the command induction wants.
+run-wide argument is what `execM_rebuildClosed` still wants — its `column` clause as much as
+its `eclass` one, since `Database.ViewsCover` is derived from those
+(`Database.RebuildClosed.toViewJoined`, `Database.ViewsCover.of_viewJoined`) — and it is not
+what the command induction wants.
 
 **Restoring `IndexCurrent` outright is not a side condition worth having.** What it needs is
 that the source assert no equation between distinct terms (`Database.Diag`), decidable on the
@@ -4060,6 +4265,18 @@ theorem ncLead_ncB : ncLead ncB = ncA := by simp [ncLead]
 
 theorem ncLead_of_ne {t : Term} (h : t ≠ ncB) : ncLead t = t := by simp [ncLead, h]
 
+/-- **Two ids of one term have the same representative here.** The second clause of
+`ncTgt_viewLeaderRows`, extracted because `ncTgt_rebuildClosed` wants it at the *named*
+`ncLead` and the bundle only offers it at an opaque one. -/
+private theorem ncTgt_lead_uniq (t e₁ e₂ : Term) (h₁ : ViewRepr ncTgt.toDatabase t e₁)
+    (h₂ : ViewRepr ncTgt.toDatabase t e₂) : ncLead e₁ = ncLead e₂ := by
+  cases t with
+  | lit l => rw [h₁.eq_of_lit, h₂.eq_of_lit]
+  | app g bs =>
+      rcases ncTgt_viewRepr_cases h₁ with ⟨rfl, rfl⟩ | ⟨rfl, -, (rfl | rfl)⟩ | ⟨rfl, rfl⟩ <;>
+          rcases ncTgt_viewRepr_cases h₂ with ⟨h', rfl⟩ | ⟨h', -, (rfl | rfl)⟩ | ⟨h', rfl⟩ <;>
+        simp_all [ncLead, ncA, ncB, ncFA]
+
 /-- **`Database.ViewLeaderRows` holds at `ncTgt`, with every clause doing work**, and `rowLead`
 at a *key* column for the first time: `@FView` is keyed at `((A))`, which is where `((B))` —
 the tuple the source's own build over the non-leader member would name — goes under `lead`.
@@ -4078,13 +4295,7 @@ theorem ncTgt_viewLeaderRows : ncTgt.toDatabase.ViewLeaderRows := by
         · rwa [ncLead_of_ne (by simp [ncA, ncB])]
         · rw [ncLead_ncB]; exact ncTgt_viewRepr_B_A
         · rwa [ncLead_of_ne (by simp [ncFA, ncB])]
-  · intro t e₁ e₂ h₁ h₂
-    cases t with
-    | lit l => rw [h₁.eq_of_lit, h₂.eq_of_lit]
-    | app g bs =>
-        rcases ncTgt_viewRepr_cases h₁ with ⟨rfl, rfl⟩ | ⟨rfl, -, (rfl | rfl)⟩ | ⟨rfl, rfl⟩ <;>
-            rcases ncTgt_viewRepr_cases h₂ with ⟨h', rfl⟩ | ⟨h', -, (rfl | rfl)⟩ | ⟨h', rfl⟩ <;>
-          simp_all [ncLead, ncA, ncB, ncFA]
+  · exact ncTgt_lead_uniq
   · intro x y pf ho
     obtain ⟨rfl, rfl⟩ := ncTgt_out_uf_cases ho
     rw [ncLead_ncB, ncLead_of_ne (by simp [ncA, ncB])]
@@ -4099,6 +4310,53 @@ with two ids; `ncTgt_rowShared_FB_FA` is `rowShared` at an instance with two *di
 argument lists, which is where `Database.ViewsProduct` failed. -/
 theorem ncTgt_viewJoined : ncTgt.toDatabase.ViewJoined :=
   ncTgt_viewLeaderRows.toViewJoined
+
+/-- **And `Database.RebuildClosed` too, at the state with a positive-arity key.**
+
+`eclass` at the `union`'s own edge, `edged` at `(B)`'s two ids — `ncTgt_lead_uniq` says the two
+have one representative, and `(B)` reaches it in one edge — and `column` asked at `@FView`'s key
+`((A))`, where it is answered by the row already in hand: `(A)` is the leader, so no `@UF` entry
+leaves it and the only tuple `Database.UFReach` reaches from `((A))` is `((A))` itself. That is
+the honest reading of the third clause at every state this file builds — a key column that has
+to move is a state where the *column* rebuild rules have not run yet, and every state here is
+past them. -/
+theorem ncTgt_rebuildClosed : ncTgt.toDatabase.RebuildClosed := by
+  have hBA : ncTgt.toDatabase.UFStep ncB ncA := ⟨ncFiat, ncTgt_out_uf⟩
+  have hnoA : ∀ b, ¬ ncTgt.toDatabase.UFStep ncA b := by
+    rintro b ⟨pf, ho⟩
+    exact absurd (ncTgt_out_uf_cases ho).1 (by simp [ncA, ncB])
+  have hfixA : ∀ x, ncTgt.toDatabase.UFReach ncA x → x = ncA := by
+    intro x hx
+    induction hx with
+    | refl => rfl
+    | tail _ hs ih => exact absurd (ih ▸ hs) (hnoA _)
+  have hlead : ∀ e : Term, ncTgt.toDatabase.UFReach e (ncLead e) := by
+    intro e
+    by_cases h : e = ncB
+    · subst h; rw [ncLead_ncB]; exact hBA.toReach
+    · rw [ncLead_of_ne h]; exact .refl
+  refine ⟨?_, ?_, ?_⟩
+  · rintro a b ⟨pf, ho⟩
+    obtain ⟨rfl, rfl⟩ := ncTgt_out_uf_cases ho
+    intro t ht
+    cases t with
+    | lit l => exact absurd ht.eq_of_lit (by simp [ncB])
+    | app g bs =>
+        rcases ncTgt_viewRepr_cases ht with ⟨-, h'⟩ | ⟨rfl, rfl, -⟩ | ⟨-, h'⟩
+        · exact absurd h' (by simp [ncA, ncB])
+        · exact ncTgt_viewRepr_B_A
+        · exact absurd h' (by simp [ncB, ncFA])
+  · exact fun t e₁ e₂ h₁ h₂ =>
+      ⟨ncLead e₁, hlead e₁, (ncTgt_lead_uniq t e₂ e₁ h₂ h₁) ▸ hlead e₂⟩
+  · intro f es ds e pf ho hl
+    rcases ncTgt_out_view ho with ⟨-, rfl, -⟩ | ⟨-, rfl, -⟩ | ⟨-, rfl, -⟩
+    · cases hl; exact ⟨e, pf, ho⟩
+    · cases hl; exact ⟨e, pf, ho⟩
+    · cases hl with
+      | cons hx hrest =>
+          cases hrest
+          obtain rfl := hfixA _ hx
+          exact ⟨e, pf, ho⟩
 
 /-- **`Database.ViewJoined.rowShared` at a positive-arity key, non-vacuously**: the row is
 `@FView((A)) ↦ ((F (A)), @Fiat)`, the list that read its key is `((A))` and the list handed in
@@ -4417,15 +4675,74 @@ theorem encode_viewsProduct_false {e : FDatabase}
 /-! #### The two target-side residues, by clause -/
 
 /-- **The residue of obligation `trans`, of the rebuild half of obligation `assert`'s `union`
-case, and of the *key* half of obligation `congr`. Not proved.**
+case, and of the *key* half of obligation `congr`, at the rules it is waiting on. Not
+proved.**
 
-What is missing: that the ids a source term reads to at an `execM` target have a common
-**absorber**, and that a row's key does too. Two entries at one view key collide, and
-`mergeBody` writes the edge between their e-class columns; `rebuildRules`' e-class rule follows
-an edge, so an id's parent is read by every term that reads the id. Those are *specification*
-rules fired to saturation, and the hypothesis here is an `execM` target — so what it has to be
-proved from is `FDatabase.runSaturateM`'s own fixpoint, and that is strictly weaker than
-`RunSaturated` (`execM_contained`: the enumerator under-fires).
+`Database.RebuildClosed` is `Database.ViewJoined` restated per *mechanism* instead of per
+consumer — `eclass` the e-class rebuild rule, `column` the column rules, `edged` the `@UF`
+edge `mergeBody` writes between two entries that collide at one view key — and
+`Database.RebuildClosed.toViewJoined` is the reduction. Stating the residue here rather than
+at the clauses is what lets the two questions below be asked separately, because all three
+clauses turn out to want the same one thing.
+
+**Does currency up to the union-find compose with the weakened clauses? The conclusion half
+does; the hypothesis half does not.**
+
+`Database.Absorbs` weakened the *conclusion* the residue owes. Where `Database.ViewLeaderRows`
+named `lead e` and forced it constant across a whole closure, an absorber is any upper bound —
+so a surviving row sitting anywhere above the displaced entry's e-class column answers it, and
+`Database.RebuildClosed.absorbs` walks a whole `Database.UFReach` chain by composing
+`Database.Absorbs.trans`. That half genuinely composes, and it is why nothing above names a
+function and why `pathCompressRule` — carried solely to make `lead` one — has dropped out.
+
+What the weakening did not touch is the *hypothesis*. `d.Absorbs e e'` quantifies over **every
+term that reads `e`**, and reading is `Database.Out`, which reads `terms`. So the absorber has
+to be produced before the reader is seen, uniformly in it, while a currency claim delivers one
+landing site per *entry*: two terms reading one id read it through two rows, and those rows
+are displaced independently. Making the landing sites agree is making each of them the
+union-find **leader** and not merely some point above the entry — and putting an entry term at
+its leader's row is once more a `rows` fact wanted from a `terms` fact.
+
+**So the refuted bridge is still needed, in weakened form.** What remains is exactly: every
+merge-function entry term has a current row at a key congruent to its own whose e-class column
+is `@UF`-reachable from the entry's. `FDatabase.IndexCurrent` is that claim without the "up to
+`@UF`", and `cxTgt_not_indexCurrent` refutes it; the weakened claim survives that state, and
+`cxTgt_currentUF` is the compiled instance — the row the merge kept sits at the `@UF` parent of
+the entry it displaced. Nothing here proves it: it is run-wide, for the reason recorded at
+"What restores it, and what that costs".
+
+**What is no longer needed is the induction up the chain.** `FDatabase.RowsClosed`
+(`Proofs/Merge.lean`) pins a rebuild fixpoint's row list *equal* to the round's, not merely
+inside it — so a surviving view row whose e-class column still had an outgoing `@UF` row would
+be displaced by the e-class rule's own firing and the list would move. That is one step and not
+a chain induction, and it is what would carry a landing site the rest of the way to the leader.
+It is a closure property of the row list, though, and not a way to get a row out of an entry
+term, so it is a lever and not the bridge.
+
+**This is strictly stronger than `Database.ViewJoined`, deliberately, and here is the
+separation.** `chainD` satisfies the clauses (`chainD_viewJoined`) with no `@UF` entry at all —
+its ids absorb each other by having no other reader — and `edged` fails there. So the residue
+below asks for more than its consumer does. What justifies asking for it is that it is what the
+*rules* deliver: every id a view entry ever carried at a key is one a `set` wrote, and two `set`s
+at one key are a collision, and a collision is an `@UF` edge. The one shape that would separate
+`eclass` from `Database.ViewJoined.ufJoin` — two edges out of one id, with a reader that
+followed only the other — is closed by the index itself, since `@UF` is a merge function too:
+its own two rows at that key collide and `mergeBody` writes the edge between *their* far ends.
+
+**Non-vacuous, and still failing where it must**: `satTarget_rebuildClosed` is the degenerate
+state, `Encoding/Match.lean`'s `uRebuilt_rebuildClosed` the one with a real `@UF` edge — where
+`eclass` and `edged` both do work — `ncTgt_rebuildClosed` the one with a positive-arity key in
+`column`, and `uTgt_not_rebuildClosed` is the same property one rebuild firing earlier, where it
+fails because `uTgt_not_viewJoined` does. The strong form does *not* imply this one
+(`Database.ViewLeaderRows` says nothing about which ids the union-find joins), so all three
+positive witnesses are proved from the definition. -/
+theorem execM_rebuildClosed {P : Program} {tgt : FDatabase} (hdom : P.EncodeDomain)
+    (htgt : execM (encode P) = some tgt) : tgt.toDatabase.RebuildClosed := by
+  sorry
+
+/-- **The residue of obligation `trans`, of the rebuild half of obligation `assert`'s `union`
+case, and of the *key* half of obligation `congr`**, through
+`Database.RebuildClosed.toViewJoined`.
 
 **Stated at what the three reductions spend, and that is one mechanism fewer than the four
 clauses this replaces.** `Database.ViewLeaderRows` asked for a *choice function* `lead`, total
@@ -4451,8 +4768,9 @@ split is `Database.ViewsCover.of_viewJoined`, and the *diagonal* instance — al
 **The fixpoint is proved and is not enough.** `FDatabase.RoundClosed` gives every term one more
 rebuild round would derive, which is the *conclusion* of each of those rules; their *premise* is
 a row, and `cxTgt_not_indexCurrent` is the compiled statement that the index need not hold every
-entry term `Database.Out` reads. What is left is the run-wide index argument described at "What
-restores it, and what that costs" — and now only that, since path compression has dropped out.
+entry term `Database.Out` reads. `execM_rebuildClosed` is where what is left is written down,
+and it is the same run-wide index argument, now weakened to "up to the union-find" and stated
+per rule rather than per clause.
 
 **Non-vacuous at three states, with every clause doing work at one of them**:
 `satTarget_viewJoined` (the degenerate one), `Encoding/Match.lean`'s `uRebuilt_viewJoined` (a
@@ -4460,8 +4778,8 @@ real `@UF` edge in `ufJoin`, two ids for one term in `ids`) and `ncTgt_viewJoine
 arity in `rowShared`, at the key the `union` moved) — with `ncTgt_rowShared_FB_FA` and
 `ncTgt_ids_B` the two clauses at named instances with every hypothesis inhabited. -/
 theorem execM_viewJoined {P : Program} {tgt : FDatabase} (hdom : P.EncodeDomain)
-    (htgt : execM (encode P) = some tgt) : tgt.toDatabase.ViewJoined := by
-  sorry
+    (htgt : execM (encode P) = some tgt) : tgt.toDatabase.ViewJoined :=
+  (execM_rebuildClosed hdom htgt).toViewJoined
 
 /-- **`Database.ViewsCover.shared`, at an `execM` target. Not proved.**
 

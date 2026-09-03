@@ -5745,15 +5745,21 @@ firing: `execM_contained` says the enumerator under-fires, so `RunSaturated` is 
 consequence, and `Encoding/Encode.lean`'s `Rebuilt` — which is `RunSaturated rebuildRuleset`
 — is out of reach at an `execM` target for that reason and refuted there for another.
 
-**The fixpoint is a statement about `terms`, and it cannot be made one about `rows`.** A
+**The fixpoint is a monotone statement about `terms` and an *exact* one about `rows`.** A
 round is `execRunRules`, which unions each firing into the accumulator and so only ever
 adds, followed by `mergeSaturateF`, which adds terms (`mergeRound_confined`) and *deletes*
 rows — `mergeOneOriented` drops the row a collision displaced. So the round's output holds
 the pre-state's terms, the fixpoint pins the two term lists equal, and `execRunRules`' terms
-are sandwiched between them; the same sandwich does not close over `rows`, since the merge
-phase is free to remove what the rule phase added. `Database.Out` reads `terms` and
-`patternHolds` reads `rows`, so this fixpoint is exactly as strong as the *conclusions* of
-`Encoding/Correspond.lean`'s residues and says nothing about their *premises*.
+are sandwiched between them; the same **sandwich** does not close over `rows`, since the
+merge phase is free to remove what the rule phase added. What closes over `rows` is the
+fixpoint **test** instead: `FDatabase.sameData` compares `rows` as well as `terms`, and
+`runSaturateM_settled` hands that test back, so `RowsClosed` below pins the round's row list
+*equal* to the pre-state's — every row a round adds is one its own merge phase then deletes.
+
+`Database.Out` reads `terms` and `patternHolds` reads `rows`, so `RoundClosed` is exactly as
+strong as the *conclusions* of `Encoding/Correspond.lean`'s residues and says nothing about
+their *premises*. `RowsClosed` is not the bridge between the two either: it is a closure
+property of the row list and no way to get a row out of an entry term.
 `Encoding/Correspond.lean`'s `cxTgt_not_indexCurrent` is the compiled statement of that gap. -/
 /-- **A merge phase removes no term.** `mergeRound_confined`'s first clause along the fuel. -/
 theorem mergeSaturateF_terms {n : Nat} : ∀ {d e : FDatabase},
@@ -5817,6 +5823,27 @@ theorem runSaturateM_roundClosed {R : RulesetName} {n : Nat} {d e : FDatabase}
   intro t ht
   have hround' : (execRunRules R e).mergeSaturateF mergeFuel = some e' := hround
   exact hterms ▸ mergeSaturateF_terms hround' t ht
+
+/-- **The same fixpoint, on the field the sandwich does not reach.** A round of `R` here
+leaves the row list it started from — not a superset of it, and not a subset: an equality.
+
+Available because `FDatabase.sameData` is what `runSaturateM` tests and it compares `rows`,
+which the monotone reading of the fixpoint (`RoundClosed`) throws away. Stated over
+`runRoundM` — the rule phase *and* its merge phase — because that is the composite the test
+runs on; over `execRunRules` alone there is no such equality, since the rows a firing adds
+are exactly what the merge phase is then free to delete. -/
+def RowsClosed (R : RulesetName) (d : FDatabase) : Prop :=
+  ∀ e, d.runRoundM R = some e → e.rows = d.rows
+
+/-- **`Cmd.saturate R` delivers it too**, with no hypothesis at all: it is the branch
+condition `runSaturateM` returned from, read at its second conjunct instead of its first. -/
+theorem runSaturateM_rowsClosed {R : RulesetName} {n : Nat} {d e : FDatabase}
+    (h : d.runSaturateM R n = some e) : e.RowsClosed R := by
+  obtain ⟨e', hround, hsame⟩ := runSaturateM_settled n h
+  intro x hx
+  obtain rfl : x = e' := Option.some.inj (hx.symm.trans hround)
+  simp only [FDatabase.sameData, Bool.and_eq_true, beq_iff_eq] at hsame
+  exact hsame.1.2
 
 /-- **What a `RoundClosed` state already holds**: every term one firing of one rule of `R`
 would build, at any substitution the enumerator finds.

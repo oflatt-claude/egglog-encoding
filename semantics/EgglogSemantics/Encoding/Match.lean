@@ -2830,6 +2830,47 @@ theorem uRebuilt_ids_B :
    uRebuilt_viewJoined.ids uB uB uA (.app .nil ⟨[], .nil, uRebuilt_mem_viewB⟩)
      (.app .nil ⟨[], .nil, Database.mem_addTerm _ _⟩)⟩
 
+/-- **`Database.RebuildClosed` at `uRebuilt`, with two of its three clauses doing work.**
+
+`eclass` at the one `@UF` edge: `(A)` is read by `(B)`, which is what the rebuild's single
+firing put there. `edged` at the one term with two ids, joined by that same edge — the clause
+that `Database.ViewLeaderRows` has no counterpart for, which is why this is proved from the
+definition and not through `Database.ViewLeaderRows.toViewJoined`. `column` is degenerate for
+the reason `rowLead` is: both source terms are nullary, so every key is the empty tuple and
+there is no column to move.
+
+`Encoding/Correspond.lean`'s `satTarget_rebuildClosed` is the state with no edge at all, and
+`uTgt_not_rebuildClosed` is this one firing earlier. -/
+theorem uRebuilt_rebuildClosed : uRebuilt.RebuildClosed := by
+  have hstep : uRebuilt.UFStep uB uA :=
+    ⟨Term.app fiatName [], ⟨[uB], .cons uRebuilt_mem_B .nil, uRebuilt_mem_uf⟩⟩
+  have hBA : ViewRepr uRebuilt uB uA := .app .nil ⟨[], .nil, Database.mem_addTerm _ _⟩
+  refine ⟨?_, ?_, ?_⟩
+  · rintro a b ⟨pf, ho⟩
+    obtain ⟨rfl, rfl⟩ := uRebuilt_out_uf ho
+    intro t ht
+    cases t with
+    | lit l => exact absurd ht.eq_of_lit (by simp [uB])
+    | app g bs =>
+        rcases uRebuilt_viewRepr ht with ⟨-, h'⟩ | ⟨h', -⟩
+        · exact absurd h'.symm uA_ne_uB
+        · rw [h']; exact hBA
+  · intro t e₁ e₂ h₁ h₂
+    cases t with
+    | lit l =>
+        refine ⟨e₁, .refl, ?_⟩
+        rw [h₂.eq_of_lit, h₁.eq_of_lit]
+        exact .refl
+    | app g bs =>
+        refine ⟨uA, ?_, ?_⟩
+        · rcases uRebuilt_viewRepr h₁ with ⟨-, rfl⟩ | ⟨-, (rfl | rfl)⟩
+          exacts [.refl, hstep.toReach, .refl]
+        · rcases uRebuilt_viewRepr h₂ with ⟨-, rfl⟩ | ⟨-, (rfl | rfl)⟩
+          exacts [.refl, hstep.toReach, .refl]
+  · intro f es ds e pf ho hl
+    rcases uRebuilt_out_view ho with ⟨-, rfl, -⟩ | ⟨-, rfl, -⟩ <;>
+      (cases hl; exact ⟨e, pf, ho⟩)
+
 /-- **And `Database.ViewLeader` fails at `uTgt`**, which is where `Database.UnionsRead` fails
 too: the edge is written and unfollowed, so `(A)`'s only `lead` is `(A)` and `(B)`'s is `(B)`,
 and `ufClosed` asks the two to be equal. This is the clause the rebuild discharges, isolated
@@ -2870,6 +2911,14 @@ theorem uTgt_not_viewJoined : ¬ uTgt.ViewJoined := by
     · exact h'
     · exact absurd h' uA_ne_uB
   exact uA_ne_uB (heA.symm.trans heB)
+
+/-- **And so does `Database.RebuildClosed`**, through the reduction: `eclass` at the edge the
+`union` wrote is exactly the firing that has not happened yet, and `Database.ViewJoined.ufJoin`
+is that clause with the absorber read off the edge's far end. This is the check that the
+per-rule restatement of the residue is not vacuous either — one rebuild firing later
+`uRebuilt_rebuildClosed` holds, and here it cannot. -/
+theorem uTgt_not_rebuildClosed : ¬ uTgt.RebuildClosed :=
+  fun h => uTgt_not_viewJoined h.toViewJoined
 
 /-- **`Database.ViewsCover` holds at `uRebuilt` too**, so all three of the forward half's
 properties are discharged at one state, and at the state with the `union` rather than at the
