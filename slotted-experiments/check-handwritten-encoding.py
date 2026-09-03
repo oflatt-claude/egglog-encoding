@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Assert the hand-written node machinery is what the generator would emit.
 
-`tests/slotted-egraph-encoding-11.egg` writes out one constructor family -- arity 2 --
+`slotted-tests/slotted-egraph-encoding-11.egg` writes out one constructor family -- arity 2 --
 by hand, so a reader gets a whole constructor's machinery in one file, and
-`gen-node-rules.py` leaves that family out of `tests/slotted-node-rules.egg` so each is
+`gen-node-rules.py` leaves that family out of `slotted-tests/generated/slotted-node-rules.egg` so each is
 declared once. Two copies of the same rules is how they drift apart, so this compares
 them: the hand-written region, marked off by
 
@@ -36,7 +36,7 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 GEN = ROOT / "slotted-experiments" / "gen-node-rules.py"
-HANDWRITTEN = ROOT / "tests" / "slotted-egraph-encoding-11.egg"
+HANDWRITTEN = ROOT / "slotted-tests" / "slotted-egraph-encoding-11.egg"
 
 BEGIN = ";;; BEGIN generated-equivalent region"
 END = ";;; END generated-equivalent region"

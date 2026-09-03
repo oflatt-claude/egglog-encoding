@@ -14,7 +14,7 @@
 ;;; node. Compression deletes a non-canonical node, so a rule should reach the
 ;;; class's canonical member through `RenamesToLeader` first.
 
-(include "tests/slotted-egraph-encoding-11.egg")
+(include "slotted-tests/slotted-egraph-encoding-11.egg")
 
 
 ;;; Case 1- a slot that occurs: h($0, $1)[$0 := null] = h(null, $1)

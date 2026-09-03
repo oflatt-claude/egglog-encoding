@@ -2,7 +2,7 @@
 ;;;
 ;;; The reference `sdql` rewrite rules -- `sdql_rules()` in
 ;;; `slotted-egraphs/benches/sdql.rs` -- compiled into the slotted encoding by the
-;;; recipe in `tests/slotted-user-rules.egg`.
+;;; recipe in `slotted-tests/slotted-user-rules.egg`.
 ;;;
 ;;; `beta` is NOT here: it substitutes, which needs `slotted-subst` and frame
 ;;; plumbing rather than this compiler.  The other 43 are.
@@ -13,9 +13,9 @@
 ;;;     (run-schedule (saturate (run slotted))
 ;;;                   (repeat N (seq (run sdql 1) (saturate (run slotted)))))
 ;;;
-;;; `tests/slotted-sdql-rewrites.egg` is what checks them.
+;;; `slotted-tests/slotted-sdql-rewrites.egg` is what checks them.
 
-(include "tests/slotted-lang-sdql.egg")
+(include "slotted-tests/generated/slotted-lang-sdql.egg")
 
 (ruleset sdql)
 

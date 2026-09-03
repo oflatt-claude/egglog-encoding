@@ -1,4 +1,4 @@
-;;; Cases for `tests/slotted-user-rules.egg`.
+;;; Cases for `slotted-tests/slotted-user-rules.egg`.
 ;;;
 ;;; The tutorial states the encoding and holds the rules -- one per shape, the one a compiler
 ;;; emits.  This file holds everything that exercises them: the e-graphs, the schedules, the
@@ -34,7 +34,7 @@
 ;;; The schedule saturates the invariant rules between user-rule steps, so a user rule only
 ;;; ever matches nodes that are already canonical.
 
-(include "tests/slotted-user-rules.egg")
+(include "slotted-tests/slotted-user-rules.egg")
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -791,7 +791,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; M9.  A slot literal -- the array language's `eta`.
 ;;;
-;;; The terms are `tests/slotted-array-rules.egg`'s own `eta-fires` and `eta-blocked`.
+;;; The terms are `slotted-tests/generated/slotted-array-rules.egg`'s own `eta-fires` and `eta-blocked`.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
 
@@ -928,7 +928,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; M11.  A nested right-hand side -- the array language's `let-app`.
 ;;;
-;;; The terms are `tests/slotted-array-rules.egg`'s own `let-app-fires` and
+;;; The terms are `slotted-tests/generated/slotted-array-rules.egg`'s own `let-app-fires` and
 ;;; `let-app-blocked`.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)

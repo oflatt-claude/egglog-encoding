@@ -15,7 +15,7 @@
 ;;; The generic, string-headed encoding: one constructor per arity, the operator in a
 ;;; payload column. Arity 2 is hand-written in the file included below.
 
-(include "tests/slotted-egraph-encoding-11.egg")
+(include "slotted-tests/slotted-egraph-encoding-11.egg")
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; App2 :: String child child -- hand-written in slotted-egraph-encoding-11.egg

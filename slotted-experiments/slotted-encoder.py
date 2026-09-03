@@ -2,7 +2,7 @@
 """The slotted encoding, in one place.
 
 Four programs encode slotted rules and terms, and the recipe they encode is one
-recipe: `tests/slotted-user-rules.egg` states it, section by section, and
+recipe: `slotted-tests/slotted-user-rules.egg` states it, section by section, and
 `slotted-user-rules.md` argues it. This module is that recipe as code, so there is
 one place for it to be right and one place to fix. The four are front-ends:
 
@@ -77,21 +77,36 @@ def read_language(path):
         if not line.startswith("(constructor "):
             continue
         head, _, rest = line[len("(constructor ") :].partition("(")
-        name = head.strip()
         cols_text, _, tail = rest.partition(")")
-        binders = []
-        if ":binder" in tail:
-            # the closing paren sticks to the last index, so scan for integers
-            binders = [int(x) for x in re.findall(r"\d+", tail.split(":binder")[1])]
-        sig, seen_kids = [], 0
-        for col in cols_text.split():
-            if col == "U":
-                sig.append(BINDER if seen_kids in binders else CHILD)
-                seen_kids += 1
-            else:
-                sig.append(col)
-        language[name] = sig
+        # the closing paren sticks to the last index, so scan for integers
+        binders = [int(x) for x in re.findall(r"\d+", tail.split(":binder")[1])] if ":binder" in tail else []
+        language[head.strip()] = signature(cols_text.split(), binders)
     return language
+
+
+def signature(cols, binders):
+    """Columns and the binding child positions as the encoder's signature."""
+    sig, seen_kids = [], 0
+    for col in cols:
+        if col == "U":
+            sig.append(BINDER if seen_kids in binders else CHILD)
+            seen_kids += 1
+        else:
+            sig.append(col)
+    return sig
+
+
+def read_language_form(form):
+    """One parsed `(constructor Name (U U) U :binder 0)` as `{name: signature}`.
+
+    The list form, for a test that declares its language inline rather than pointing
+    at a file. Same syntax, same meaning.
+    """
+    assert form[0] == "constructor" and isinstance(form[2], list), form
+    name, cols = form[1], form[2]
+    tail = form[4:]
+    binders = [int(x) for x in tail[1:]] if tail and tail[0] == ":binder" else []
+    return {name: signature(cols, binders)}
 
 
 def read_correspondence(path):
@@ -196,14 +211,14 @@ GENERIC = {
 # has to name the string: (head, constructor).
 GENERIC_BINDERS = (("lambda", "App2"), ("let", "App3"))
 
-# Constructors whose rules `tests/slotted-egraph-encoding-11.egg` hand-writes, along
+# Constructors whose rules `slotted-tests/slotted-egraph-encoding-11.egg` hand-writes, along
 # with any binder over them and the SHARED block below. They are left out of the
 # generated file, which includes that one, so each is declared exactly once.
 # `check-handwritten-encoding.py` compares the hand-written text against
 # `handwritten_region()` below.
 HANDWRITTEN = ("App2",)
 
-# The two constructors `tests/slotted-egraph-encoding-11.egg` declares and writes the
+# The two constructors `slotted-tests/slotted-egraph-encoding-11.egg` declares and writes the
 # rules for itself, because both are constructor-independent: `Var` is normalised into
 # a renaming so one value stands for every variable, and `Null` is the nullary object.
 # A language file may declare either for the record -- so that it names every
@@ -212,8 +227,8 @@ CORE = {"Var": ["i64"], "Null": []}
 
 # The hand-written half, and the generated file that includes it. A language file
 # includes the generated one, so it gets both.
-MACHINERY = "tests/slotted-egraph-encoding-11.egg"
-GENERIC_FILE = "tests/slotted-node-rules.egg"
+MACHINERY = "slotted-tests/slotted-egraph-encoding-11.egg"
+GENERIC_FILE = "slotted-tests/generated/slotted-node-rules.egg"
 
 
 ###############################################################################
@@ -548,7 +563,7 @@ def emit(language, binders=(), provided=None, omit=()):
 
 
 # The constructor-independent half of the node machinery. Hand-written in
-# `tests/slotted-egraph-encoding-11.egg` along with the HANDWRITTEN family, and kept
+# `slotted-tests/slotted-egraph-encoding-11.egg` along with the HANDWRITTEN family, and kept
 # here so `handwritten_region()` can state what that text has to say.
 SHARED = """\
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -620,7 +635,7 @@ def in_slotted_ruleset(text):
 
 
 def handwritten_region():
-    """What `tests/slotted-egraph-encoding-11.egg` has to hold, rules only.
+    """What `slotted-tests/slotted-egraph-encoding-11.egg` has to hold, rules only.
 
     The SHARED block plus the HANDWRITTEN constructors and their binders: everything
     this encoder knows how to emit but leaves to that file. Comments and blank lines
@@ -1012,7 +1027,7 @@ def compile_rule(
 ):
     """Compile a flattened multipattern and its action into one egglog rule.
 
-    The recipe `tests/slotted-user-rules.egg` states. Atoms are taken in the order
+    The recipe `slotted-tests/slotted-user-rules.egg` states. Atoms are taken in the order
     given, which must be connected (see `connected_order`). Per atom, in order:
 
       * one egglog atom per e-node, `(= V (Op m1 c1 ...))`;

@@ -9,7 +9,7 @@
 ;;; *and* takes two children -- three positions where `App2` offers two -- so they
 ;;; are not portable without an n-ary constructor.
 
-(include "tests/slotted-egraph-encoding-11.egg")
+(include "slotted-tests/slotted-egraph-encoding-11.egg")
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

@@ -9,7 +9,7 @@
 ;;;
 ;;; with the bound slot `x = mx(0)` named in the node's frame.
 
-(include "tests/slotted-lang-sdql.egg")
+(include "slotted-tests/generated/slotted-lang-sdql.egg")
 
 (ruleset sdql-beta)
 

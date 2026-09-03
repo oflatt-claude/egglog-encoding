@@ -1,6 +1,6 @@
 ;;; The compiled `sdql` rewrite rules, checked.
 ;;;
-;;; `tests/slotted-sdql-rules.egg` is generated from
+;;; `slotted-tests/generated/slotted-sdql-rules.egg` is generated from
 ;;; `slotted-experiments/gen-sdql-rules.py`; this is what pins its behaviour. Each
 ;;; section is its own `(push)`/`(pop)`, and each runs the phased schedule the
 ;;; encoding requires: the machinery saturated, then finitely many `sdql` steps with
@@ -12,7 +12,7 @@
 ;;; a `(fail (check ...))` over many steps only says the rules did not eventually
 ;;; find another route.
 
-(include "tests/slotted-sdql-rules.egg")
+(include "slotted-tests/generated/slotted-sdql-rules.egg")
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

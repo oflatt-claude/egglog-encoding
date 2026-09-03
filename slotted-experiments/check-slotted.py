@@ -26,16 +26,24 @@ ROOT = Path(__file__).resolve().parents[1]
 EGGLOG = ROOT / "target" / "debug" / "egglog"
 XMULTI = ROOT / "slotted-experiments" / "xmulti" / "target" / "debug" / "xmulti"
 
-# One entry per generated file: the command that writes it. Regenerating into a
-# snapshot and diffing is what makes the committed copies trustworthy.
+# One entry per generated file: the command that writes it. These are SNAPSHOTS --
+# committed so that a change in the encoder shows up as a diff, and never edited by
+# hand. `--update` rewrites them; `generated-drift` fails if they are stale.
 GENERATED = {
-    "tests/slotted-node-rules.egg": ("slotted-experiments/gen-node-rules.py",),
-    "tests/slotted-lang-lambda.egg": ("slotted-experiments/gen-node-rules.py",),
-    "tests/slotted-lang-sdql.egg": ("slotted-experiments/gen-node-rules.py",),
-    "tests/slotted-lang-toy.egg": ("slotted-experiments/gen-node-rules.py",),
-    "tests/slotted-sdql-rules.egg": ("slotted-experiments/gen-sdql-rules.py",),
-    "tests/slotted-array-rules.egg": ("slotted-experiments/xdiff/xarray.py", "egg"),
+    "slotted-tests/generated/slotted-node-rules.egg": ("slotted-experiments/gen-node-rules.py",),
+    "slotted-tests/generated/slotted-lang-lambda.egg": ("slotted-experiments/gen-node-rules.py",),
+    "slotted-tests/generated/slotted-lang-sdql.egg": ("slotted-experiments/gen-node-rules.py",),
+    "slotted-tests/generated/slotted-lang-toy.egg": ("slotted-experiments/gen-node-rules.py",),
+    "slotted-tests/generated/slotted-sdql-rules.egg": ("slotted-experiments/gen-sdql-rules.py",),
+    "slotted-tests/generated/slotted-array-rules.egg": ("slotted-experiments/xdiff/xarray.py", "egg"),
 }
+
+
+#: Compiled slotted tests. Each is what running that test runs, committed so a change
+#: in the compiler shows up as a diff -- the same reason the proof encoding snapshots
+#: its generated program.
+SNAPSHOT_DIR = ROOT / "slotted-tests" / "snapshots"
+EMIT_SNAPSHOTS = ("slotted-experiments/run-slotted-tests.py", "--emit")
 
 
 def ratio(pattern, floor):
@@ -78,8 +86,10 @@ def starts_ok(out):
 
 def run_egg_files():
     """Every slotted .egg file loads and runs clean."""
-    files = sorted(glob.glob(str(ROOT / "tests" / "slotted-*.egg")))
-    if len(files) < 19:
+    files = sorted(glob.glob(str(ROOT / "slotted-tests" / "**" / "slotted-*.egg"), recursive=True))
+    # A test ported to the slotted language leaves this set and joins `slotted-tests`,
+    # so this floor drops as that one rises; neither may fall on its own.
+    if len(files) < 18:
         return f"only {len(files)} slotted .egg files found"
     bad = []
     for f in files:
@@ -117,9 +127,42 @@ def check_generated():
     return None
 
 
+def check_snapshots():
+    """The committed compiled programs match what the compiler emits now."""
+    before = {p.name: p.read_bytes() for p in SNAPSHOT_DIR.glob("*.egg")}
+    if not before:
+        return "no compiled snapshots committed"
+    try:
+        r = subprocess.run([sys.executable, *EMIT_SNAPSHOTS], capture_output=True, text=True, timeout=3600, cwd=ROOT)
+        if r.returncode != 0:
+            return f"the compiler failed: {(r.stdout + r.stderr).strip()[-300:]}"
+        now = {p.name: p.read_bytes() for p in SNAPSHOT_DIR.glob("*.egg")}
+        stale = sorted(set(now) - set(before)) + sorted(n for n in before if before[n] != now.get(n))
+    finally:
+        for name, text in before.items():
+            (SNAPSHOT_DIR / name).write_bytes(text)
+    if stale:
+        return "stale, rerun with --update: " + ", ".join(stale)
+    print(f"       {len(before)} compiled programs byte-identical")
+    return None
+
+
 # name, argv or a callable, what its output must say, and whether --quick skips it
 CHECKS = [
     ("egg-files", run_egg_files, None, False),
+    (
+        "slotted-tests",
+        ("slotted-experiments/run-slotted-tests.py",),
+        ratio(r"(\d+)/(\d+) slotted tests pass", 3),
+        False,
+    ),
+    ("snapshot-drift", check_snapshots, None, False),
+    (
+        "front-ends",
+        ("slotted-experiments/check-front-ends.py",),
+        ratio(r"OK: (\d+)/(\d+) rules compile the same", 1),
+        False,
+    ),
     ("generated-drift", check_generated, None, False),
     ("handwritten-drift", ("slotted-experiments/check-handwritten-encoding.py",), starts_ok, False),
     (
@@ -169,6 +212,11 @@ CHECKS = [
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--quick", action="store_true", help="skip the fuzzers")
+    ap.add_argument(
+        "--update",
+        action="store_true",
+        help="rewrite the generated snapshots and report which changed, then stop",
+    )
     ap.add_argument("-k", metavar="SUBSTRING", help="only checks whose name contains this")
     args = ap.parse_args()
 
@@ -176,6 +224,23 @@ def main():
         if not tool.exists():
             print(f"missing {tool.relative_to(ROOT)} -- run `{hint}`")
             return 2
+
+    if args.update:
+        before = {rel: (ROOT / rel).read_bytes() for rel in GENERATED}
+        before |= {str(q.relative_to(ROOT)): q.read_bytes() for q in SNAPSHOT_DIR.glob("*.egg")}
+        for cmd in sorted(set(GENERATED.values())) + [EMIT_SNAPSHOTS]:
+            r = subprocess.run([sys.executable, *cmd], capture_output=True, text=True, timeout=3600, cwd=ROOT)
+            if r.returncode != 0:
+                print(f"{cmd[0]} failed: {r.stderr.strip()[:300]}")
+                return 1
+        changed = [rel for rel in before if not (ROOT / rel).exists() or (ROOT / rel).read_bytes() != before[rel]]
+        changed += [
+            str(q.relative_to(ROOT)) for q in SNAPSHOT_DIR.glob("*.egg") if str(q.relative_to(ROOT)) not in before
+        ]
+        for rel in changed:
+            print(f"  updated {rel}")
+        print(f"\n{len(changed)}/{len(before)} snapshots changed")
+        return 0
 
     picked = [c for c in CHECKS if not (args.quick and c[3]) and (not args.k or args.k in c[0])]
     failed = []

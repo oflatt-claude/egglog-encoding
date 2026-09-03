@@ -4,7 +4,7 @@
 The 44-rule SDQL port had no external validation: every other differential check
 in `slotted-experiments/` runs on the toy language or on the paper's array
 language, and the SDQL rules were only ever self-checked against
-`tests/slotted-sdql-rewrites.egg`. This compares them against the reference
+`slotted-tests/slotted-sdql-rewrites.egg`. This compares them against the reference
 `slotted-egraphs` implementation, the same way `xarray.py` does for the array
 language.
 
@@ -17,12 +17,12 @@ The two sides:
               benchmark itself runs them. Every SDQL rule is a single-pattern
               rewrite, so no multipattern flattening happens on this side.
   encoding    the compiled rule LIFTED VERBATIM out of
-              `tests/slotted-sdql-rules.egg` by its `:name`, so what runs is the
+              `slotted-tests/generated/slotted-sdql-rules.egg` by its `:name`, so what runs is the
               generated artifact and not a re-derivation of it.
 
 `beta` is not here. It rewrites to `?body[(var $x) := ?t]`, which the encoding
 answers with `slotted-subst` and frame plumbing rather than with a compiled rule,
-so `tests/slotted-sdql-rules.egg` has no `beta` to lift. (The reference side
+so `slotted-tests/generated/slotted-sdql-rules.egg` has no `beta` to lift. (The reference side
 could express it: `rhs` hands its text to `Pattern::parse`, which builds
 `Pattern::Subst` for the `[_ := _]` form. There is simply nothing to compare it
 against.)
@@ -46,9 +46,9 @@ from xdiff import EGGLOG, ROOT, XMULTI, parse_same_class, slotenc  # noqa: E402
 RUN_TIMEOUT = int(os.environ.get("XSDQL_TIMEOUT", "180"))
 
 # The generated encoding rules. Lifted by `:name`, never rewritten.
-RULES_EGG = ROOT / "tests" / "slotted-sdql-rules.egg"
-# `tests/slotted-lang-sdql.egg` is the SDQL language plus the machinery it includes.
-MACHINERY = "tests/slotted-lang-sdql.egg"
+RULES_EGG = ROOT / "slotted-tests" / "generated" / "slotted-sdql-rules.egg"
+# `slotted-tests/generated/slotted-lang-sdql.egg` is the SDQL language plus the machinery it includes.
+MACHINERY = "slotted-tests/generated/slotted-lang-sdql.egg"
 
 
 # --------------------------------------------------------------------- sdql terms
@@ -125,7 +125,7 @@ def check_term(t):
     `Bind<T>` hides the bound slot from that ONE column; the encoding's `:binder`
     drops it from the whole node. The two agree only when no uncovered column
     mentions a bound slot, so a term that does is out of scope for a comparison
-    rather than a mismatch to report -- `tests/slotted-lang-sdql.egg` says the
+    rather than a mismatch to report -- `slotted-tests/generated/slotted-lang-sdql.egg` says the
     encoding renames such a collision away, which is a different node.
     """
     k = t[0]

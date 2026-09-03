@@ -17,7 +17,7 @@
 ;;; the machinery stopped saturating at step 6; none at any step after, and it
 ;;; saturates through step 10.
 
-(include "tests/slotted-egraph-encoding-11.egg")
+(include "slotted-tests/slotted-egraph-encoding-11.egg")
 
 ;; Creation order fixes the value order, so $y is smallest and $f largest.
 (let $y (App2 "y" (map-of 0 1) (Var 0) (map-of 0 2) (Var 0)))

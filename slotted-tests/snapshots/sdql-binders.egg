@@ -1,0 +1,278 @@
+;;; COMPILED from slotted-tests/sdql-binders.egg by slotted-experiments/slotted-compile.py.
+;;;
+;;; A SNAPSHOT: committed so a change in the compiler shows up as a diff, never
+;;; edited by hand, and rewritten by `check-slotted.py --update`. This is what
+;;; running that test runs, and the only file it includes is the hand-written core.
+
+(include "slotted-tests/slotted-egraph-encoding-11.egg")
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Sing :: child child
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(constructor Sing (Renaming U Renaming U) U)
+
+;; an upper bound on the class's slots; the merge narrows it
+(rule ((= e1 (Sing m1 c1 m2 c2)))
+      ((set (ClassSlots e1) (map-union (map-image m1) (map-image m2)))) :ruleset slotted)
+
+;; every class holding a node has a self-loop, so a query can reach it
+(rule ((= e1 (Sing m1 c1 m2 c2))
+       (= m (map-union (map-image m1) (map-image m2))))
+      ((RenamesToLeader e1 m e1)) :ruleset slotted)
+
+;; alpha-finder: two nodes equal up to renaming, one eliminated
+(rule ((= e1 (Sing m1_o c1 m2_o c2))
+       (= e2 (Sing b1 c1 b2 c2))
+       (= e1 (ordering-max e1 e2))
+       (RenamesToLeader c1 sym1 c1)
+       (RenamesToLeader c2 sym2 c2)
+       (= m1 (compose m1_o sym1))
+       (= m2 (compose m2_o sym2))
+       (= m (find-mapping m1 m2 b1 b2))
+       (guard
+         (or (bool-!= e1 e2)
+             (and (bool= e1 e2)
+                  (or (and (bool= (ordering-max m1_o b1) b1) (bool-!= m1_o b1))
+              (and (bool= m1_o b1)
+                   (and (bool= (ordering-max m2_o b2) b2) (bool-!= m2_o b2))))))))
+      ((Equated e1 m e2)
+       (delete (Sing m1_o c1 m2_o c2))) :ruleset slotted)
+
+;; the same solve kept as a symmetry, non-destructively
+(rule ((= e (Sing m1_o c1 m2_o c2))
+       (RenamesToLeader c1 sym1 c1)
+       (RenamesToLeader c2 sym2 c2)
+       (= m1 (compose m1_o sym1))
+       (= m2 (compose m2_o sym2))
+       (= sym_out (find-mapping m1_o m2_o m1 m2))
+       (= cs (ClassSlots e)))
+      ((RenamesToLeader e (compose cs (compose sym_out cs)) e)) :ruleset slotted)
+
+;; migration: move a follower's node into the leader's frame
+(rule ((RenamesToLeader e2 m e1)
+       (= e2 (Sing m1 c1 m2 c2))
+       (!= e1 e2)
+       (= e2 (ordering-max e1 e2))       ; toward the leader only
+       (= nodeslots (map-union (map-image m1) (map-image m2)))
+       ; R takes the node's slots to the leader's, agreeing with m inverse where
+       ; that is defined and minting a name where it is not
+       (= R (find-mapping-total (map-domain m) nodeslots (map-domain m) m))
+       (= n1 (compose R m1))
+       (= n2 (compose R m2)))
+      ((union e1 (Sing n1 c1 n2 c2))
+       (delete (Sing m1 c1 m2 c2))) :ruleset slotted)
+
+;; child-update, child 1
+(rule ((RenamesToLeader c1 m c')
+       (= node (Sing m1 c1 m2 c2))
+       (= c1 (ordering-max c1 c'))    ; toward the leader only
+       ; if the class is unchanged then m must be idempotent: no self-symmetries
+       (guard (or (bool-!= c1 c') (bool= (compose m m) m)))
+       ; and the new node must differ from the old one
+       (guard (or (bool-!= c1 c')
+                  (bool-!= (compose m1 m) m1))))
+      ((union node (Sing (compose m1 m) c' m2 c2))
+       (delete (Sing m1 c1 m2 c2))) :ruleset slotted)
+
+;; child-update, child 2
+(rule ((RenamesToLeader c2 m c')
+       (= node (Sing m1 c1 m2 c2))
+       (= c2 (ordering-max c2 c'))    ; toward the leader only
+       ; if the class is unchanged then m must be idempotent: no self-symmetries
+       (guard (or (bool-!= c2 c') (bool= (compose m m) m)))
+       ; and the new node must differ from the old one
+       (guard (or (bool-!= c2 c')
+                  (bool-!= (compose m2 m) m2))))
+      ((union node (Sing m1 c1 (compose m2 m) c'))
+       (delete (Sing m1 c1 m2 c2))) :ruleset slotted)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Sum :: child binder binder child
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(constructor Sum (Renaming U Renaming U Renaming U Renaming U) U)
+
+;; an upper bound on the class's slots; the merge narrows it
+(rule ((= e1 (Sum m1 c1 m2 c2 m3 c3 m4 c4)))
+      ((set (ClassSlots e1) (map-union (map-image m1) (map-union (map-image m2) (map-union (map-image m3) (map-image m4)))))) :ruleset slotted)
+
+;; every class holding a node has a self-loop, so a query can reach it
+(rule ((= e1 (Sum m1 c1 m2 c2 m3 c3 m4 c4))
+       (= m (map-union (map-image m1) (map-union (map-image m2) (map-union (map-image m3) (map-image m4))))))
+      ((RenamesToLeader e1 m e1)) :ruleset slotted)
+
+;; alpha-finder: two nodes equal up to renaming, one eliminated
+(rule ((= e1 (Sum m1_o c1 m2_o c2 m3_o c3 m4_o c4))
+       (= e2 (Sum b1 c1 b2 c2 b3 c3 b4 c4))
+       (= e1 (ordering-max e1 e2))
+       (RenamesToLeader c1 sym1 c1)
+       (RenamesToLeader c2 sym2 c2)
+       (RenamesToLeader c3 sym3 c3)
+       (RenamesToLeader c4 sym4 c4)
+       (= m1 (compose m1_o sym1))
+       (= m2 (compose m2_o sym2))
+       (= m3 (compose m3_o sym3))
+       (= m4 (compose m4_o sym4))
+       (= m (find-mapping m1 m2 m3 m4 b1 b2 b3 b4))
+       (guard
+         (or (bool-!= e1 e2)
+             (and (bool= e1 e2)
+                  (or (and (bool= (ordering-max m1_o b1) b1) (bool-!= m1_o b1))
+              (and (bool= m1_o b1)
+                   (or (and (bool= (ordering-max m2_o b2) b2) (bool-!= m2_o b2))
+              (and (bool= m2_o b2)
+                   (or (and (bool= (ordering-max m3_o b3) b3) (bool-!= m3_o b3))
+              (and (bool= m3_o b3)
+                   (and (bool= (ordering-max m4_o b4) b4) (bool-!= m4_o b4))))))))))))
+      ((Equated e1 m e2)
+       (delete (Sum m1_o c1 m2_o c2 m3_o c3 m4_o c4))) :ruleset slotted)
+
+;; the same solve kept as a symmetry, non-destructively
+(rule ((= e (Sum m1_o c1 m2_o c2 m3_o c3 m4_o c4))
+       (RenamesToLeader c1 sym1 c1)
+       (RenamesToLeader c2 sym2 c2)
+       (RenamesToLeader c3 sym3 c3)
+       (RenamesToLeader c4 sym4 c4)
+       (= m1 (compose m1_o sym1))
+       (= m2 (compose m2_o sym2))
+       (= m3 (compose m3_o sym3))
+       (= m4 (compose m4_o sym4))
+       (= sym_out (find-mapping m1_o m2_o m3_o m4_o m1 m2 m3 m4))
+       (= cs (ClassSlots e)))
+      ((RenamesToLeader e (compose cs (compose sym_out cs)) e)) :ruleset slotted)
+
+;; migration: move a follower's node into the leader's frame
+(rule ((RenamesToLeader e2 m e1)
+       (= e2 (Sum m1 c1 m2 c2 m3 c3 m4 c4))
+       (!= e1 e2)
+       (= e2 (ordering-max e1 e2))       ; toward the leader only
+       (= nodeslots (map-union (map-image m1) (map-union (map-image m2) (map-union (map-image m3) (map-image m4)))))
+       ; R takes the node's slots to the leader's, agreeing with m inverse where
+       ; that is defined and minting a name where it is not
+       (= R (find-mapping-total (map-domain m) nodeslots (map-domain m) m))
+       (= n1 (compose R m1))
+       (= n2 (compose R m2))
+       (= n3 (compose R m3))
+       (= n4 (compose R m4)))
+      ((union e1 (Sum n1 c1 n2 c2 n3 c3 n4 c4))
+       (delete (Sum m1 c1 m2 c2 m3 c3 m4 c4))) :ruleset slotted)
+
+;; child-update, child 1
+(rule ((RenamesToLeader c1 m c')
+       (= node (Sum m1 c1 m2 c2 m3 c3 m4 c4))
+       (= c1 (ordering-max c1 c'))    ; toward the leader only
+       ; if the class is unchanged then m must be idempotent: no self-symmetries
+       (guard (or (bool-!= c1 c') (bool= (compose m m) m)))
+       ; and the new node must differ from the old one
+       (guard (or (bool-!= c1 c')
+                  (bool-!= (compose m1 m) m1))))
+      ((union node (Sum (compose m1 m) c' m2 c2 m3 c3 m4 c4))
+       (delete (Sum m1 c1 m2 c2 m3 c3 m4 c4))) :ruleset slotted)
+
+;; child-update, child 2
+(rule ((RenamesToLeader c2 m c')
+       (= node (Sum m1 c1 m2 c2 m3 c3 m4 c4))
+       (= c2 (ordering-max c2 c'))    ; toward the leader only
+       ; if the class is unchanged then m must be idempotent: no self-symmetries
+       (guard (or (bool-!= c2 c') (bool= (compose m m) m)))
+       ; and the new node must differ from the old one
+       (guard (or (bool-!= c2 c')
+                  (bool-!= (compose m2 m) m2))))
+      ((union node (Sum m1 c1 (compose m2 m) c' m3 c3 m4 c4))
+       (delete (Sum m1 c1 m2 c2 m3 c3 m4 c4))) :ruleset slotted)
+
+;; child-update, child 3
+(rule ((RenamesToLeader c3 m c')
+       (= node (Sum m1 c1 m2 c2 m3 c3 m4 c4))
+       (= c3 (ordering-max c3 c'))    ; toward the leader only
+       ; if the class is unchanged then m must be idempotent: no self-symmetries
+       (guard (or (bool-!= c3 c') (bool= (compose m m) m)))
+       ; and the new node must differ from the old one
+       (guard (or (bool-!= c3 c')
+                  (bool-!= (compose m3 m) m3))))
+      ((union node (Sum m1 c1 m2 c2 (compose m3 m) c' m4 c4))
+       (delete (Sum m1 c1 m2 c2 m3 c3 m4 c4))) :ruleset slotted)
+
+;; child-update, child 4
+(rule ((RenamesToLeader c4 m c')
+       (= node (Sum m1 c1 m2 c2 m3 c3 m4 c4))
+       (= c4 (ordering-max c4 c'))    ; toward the leader only
+       ; if the class is unchanged then m must be idempotent: no self-symmetries
+       (guard (or (bool-!= c4 c') (bool= (compose m m) m)))
+       ; and the new node must differ from the old one
+       (guard (or (bool-!= c4 c')
+                  (bool-!= (compose m4 m) m4))))
+      ((union node (Sum m1 c1 m2 c2 m3 c3 (compose m4 m) c'))
+       (delete (Sum m1 c1 m2 c2 m3 c3 m4 c4))) :ruleset slotted)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Null ::  -- declared by the machinery this file includes
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; binders
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; `Sum` binds child 2, 3, one rule per bound slot
+(rule ((RenamesToLeader (Sum m1 c1 mvar0 (Var 0) mvar1 (Var 0) m4 c4) ml l)
+       (= v0 (map-get mvar0 0))
+       (map-not-contains (map-image m1) v0))
+      ((Equated (Sum m1 c1 mvar0 (Var 0) mvar1 (Var 0) m4 c4) (inverse (map-remove (inverse ml) v0)) l)) :ruleset slotted)
+
+(rule ((= node (Sum m1 c1 mvar0 (Var 0) mvar1 (Var 0) m4 c4))
+       (= v0 (map-get mvar0 0))
+       (map-contains (map-image m1) v0)   ; bound slot is free here too
+       (= used (map-union (map-union (map-union (map-image m1) (map-image mvar0)) (map-image mvar1)) (map-image m4)))
+       ; the smallest slot the node does not use
+       (= fresh0 (find-mapping-total used (map-of 0 0) (map-empty) (map-empty)))
+       (= w0 (map-get fresh0 0)))
+      ((union node (Sum m1 c1 (map-of 0 w0) (Var 0) mvar1 (Var 0) (compose (map-insert (map-image m4) v0 w0) m4) c4))
+       (delete (Sum m1 c1 mvar0 (Var 0) mvar1 (Var 0) m4 c4))) :ruleset slotted)
+
+(rule ((RenamesToLeader (Sum m1 c1 mvar0 (Var 0) mvar1 (Var 0) m4 c4) ml l)
+       (= v1 (map-get mvar1 0))
+       (map-not-contains (map-image m1) v1))
+      ((Equated (Sum m1 c1 mvar0 (Var 0) mvar1 (Var 0) m4 c4) (inverse (map-remove (inverse ml) v1)) l)) :ruleset slotted)
+
+(rule ((= node (Sum m1 c1 mvar0 (Var 0) mvar1 (Var 0) m4 c4))
+       (= v1 (map-get mvar1 0))
+       (map-contains (map-image m1) v1)   ; bound slot is free here too
+       (= used (map-union (map-union (map-union (map-image m1) (map-image mvar0)) (map-image mvar1)) (map-image m4)))
+       ; the smallest slot the node does not use
+       (= fresh1 (find-mapping-total used (map-of 0 0) (map-empty) (map-empty)))
+       (= w1 (map-get fresh1 0)))
+      ((union node (Sum m1 c1 mvar0 (Var 0) (map-of 0 w1) (Var 0) (compose (map-insert (map-image m4) v1 w1) m4) c4))
+       (delete (Sum m1 c1 mvar0 (Var 0) mvar1 (Var 0) m4 c4))) :ruleset slotted)
+
+(push)
+(let $r (Sing (map-empty) (Null) (map-empty) (Null)))
+(let $a (Sum (map-empty) $r (map-of 0 5) (Var 0) (map-of 0 6) (Var 0) (map-empty) (Null)))
+(let $b (Sum (map-empty) $r (map-of 0 7) (Var 0) (map-of 0 8) (Var 0) (map-empty) (Null)))
+(run-schedule (saturate (run slotted)))
+(check (RenamesToLeader $a _m1 _l) (RenamesToLeader $b _m2 _l))
+(check (= (ClassSlots $a) (map-empty)))
+(pop)
+(push)
+(let $r (Sing (map-empty) (Null) (map-empty) (Null)))
+(let $kv (Sum (map-empty) $r (map-of 0 5) (Var 0) (map-of 0 6) (Var 0) (map-of 5 5 6 6) (Sing (map-of 0 5) (Var 0) (map-of 0 6) (Var 0))))
+(let $vk (Sum (map-empty) $r (map-of 0 5) (Var 0) (map-of 0 6) (Var 0) (map-of 5 5 6 6) (Sing (map-of 0 6) (Var 0) (map-of 0 5) (Var 0))))
+(run-schedule (saturate (run slotted)))
+(fail (check (RenamesToLeader $kv _m1 _l) (RenamesToLeader $vk _m2 _l)))
+(check (= (ClassSlots $kv) (map-empty)))
+(check (= (ClassSlots $vk) (map-empty)))
+(pop)
+(push)
+(let $first (Sum (map-empty) (Null) (map-of 0 5) (Var 0) (map-of 0 6) (Var 0) (map-of 0 5) (Var 0)))
+(let $second (Sum (map-empty) (Null) (map-of 0 5) (Var 0) (map-of 0 6) (Var 0) (map-of 0 6) (Var 0)))
+(run-schedule (saturate (run slotted)))
+(fail (check (RenamesToLeader $first _m1 _l) (RenamesToLeader $second _m2 _l)))
+(check (= (ClassSlots $first) (map-empty)))
+(check (= (ClassSlots $second) (map-empty)))
+(pop)
+(push)
+(let $r (Sing (map-empty) (Null) (map-empty) (Null)))
+(let $free (Sum (map-empty) $r (map-of 0 5) (Var 0) (map-of 0 6) (Var 0) (map-of 5 5 9 9) (Sing (map-of 0 5) (Var 0) (map-of 0 9) (Var 0))))
+(run-schedule (saturate (run slotted)))
+(check (= (ClassSlots $free) (map-of 9 9)))
+(pop)

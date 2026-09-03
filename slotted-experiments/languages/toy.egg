@@ -8,7 +8,7 @@
 ;;; over generated terms, and a neutral language is the point: seven arity-2 operators
 ;;; with no rewrite rules and no algebra, so a disagreement is about the ENCODING and
 ;;; never about a rule being wrong. `Lam` is the one binder, and `Null` comes from
-;;; `tests/slotted-egraph-encoding-11.egg` along with `Var`.
+;;; `slotted-tests/slotted-egraph-encoding-11.egg` along with `Var`.
 ;;;
 ;;; `sub2` exists because `sub` is a reference tag in more than one of the oracle's
 ;;; languages; see `toy.ref`.

@@ -1,11 +1,11 @@
 ;;; Cases for the arities the generator emits: `App3`, `Scale` and `Num`.
 ;;;
-;;; `tests/slotted-egraph-encoding-11.egg` hand-writes arity 2 and works its 15 cases
+;;; `slotted-tests/slotted-egraph-encoding-11.egg` hand-writes arity 2 and works its 15 cases
 ;;; through that one family. These are the cases for the rest of the generated
 ;;; encoding, so they include the generated file, which includes the hand-written one.
 ;;; They keep their numbering from there, since they carry on where its list stops.
 
-(include "tests/slotted-node-rules.egg")
+(include "slotted-tests/generated/slotted-node-rules.egg")
 
 
 ;;; Case 16- a ternary node, alpha-equivalent up to renaming.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Assert every rule in `tests/slotted-user-rules.egg` is the encoder's own output.
+"""Assert every rule in `slotted-tests/slotted-user-rules.egg` is the encoder's own output.
 
 The tutorial claims each section shows what a compiler emits for a real rule. This
 checks it: comments and line breaks are dropped, and then structure, constructor
@@ -25,7 +25,7 @@ os.chdir(ROOT)
 sys.path.insert(0, str(ROOT / "slotted-experiments"))
 enc = __import__("slotted-encoder")
 
-TUTORIAL = ROOT / "tests" / "slotted-user-rules.egg"
+TUTORIAL = ROOT / "slotted-tests" / "slotted-user-rules.egg"
 
 # The tutorial's language IS the generic, string-headed encoding it includes, so every
 # rule here is one expressible with `App2`/`App3` and a head string.

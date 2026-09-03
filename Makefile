@@ -70,10 +70,12 @@ rust-doc-links:
 proof-tests:
 	cargo test --workspace --test files 'proofs/'
 
-# The slotted-e-graph encoding: its .egg files, the committed generated files'
-# drift, the differential suites against the slotted-egraphs reference, and the
-# mutation gate. Kept out of `check` because the fuzzers dominate its runtime;
-# `--quick` drops them. xmulti is the reference-side oracle the suites compare to.
+# The slotted-e-graph encoding: the tests written in the slotted language and the
+# ones written against the encoding, the snapshots of what the compiler and the
+# generators emit, the differential suites against the slotted-egraphs reference, and
+# the mutation gate. Kept out of `check` because the fuzzers dominate its runtime;
+# `--quick` drops them, and `--update` rewrites the snapshots. xmulti is the
+# reference-side oracle the suites compare to.
 slotted-check:
 	cargo build
 	cargo build --manifest-path slotted-experiments/xmulti/Cargo.toml

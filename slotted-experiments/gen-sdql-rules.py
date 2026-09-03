@@ -2,7 +2,7 @@
 """Compile the reference `sdql` rewrite rules into the slotted encoding.
 
 The rules are the table below; the recipe that compiles them is
-`slotted-experiments/slotted-encoder.py`, which `tests/slotted-user-rules.egg`
+`slotted-experiments/slotted-encoder.py`, which `slotted-tests/slotted-user-rules.egg`
 documents.  What `sdql` adds over the differential harness's two-child `App2`/`App3`
 atoms is the per-language constructors of `slotted-experiments/languages/sdql.egg`,
 which have one to six children and payload columns, and with them four cases the
@@ -24,7 +24,7 @@ connectivity the recipe requires.  `connected_order`'s further preference -- a
 binder is not the atom that fixes slots(pattern) -- is not followed: most `sdql`
 rules are rooted at a binder, and taking the root first pins each bound slot off
 its own edge instead of minting a name for it.  M7 in
-`tests/slotted-user-rules.egg` is the same shape.
+`slotted-tests/slotted-user-rules.egg` is the same shape.
 
 Terms in the table below:
 
@@ -47,9 +47,9 @@ enc = __import__("slotted-encoder")
 
 LANG = enc.TermLang.from_language(enc.read_language(pathlib.Path("slotted-experiments/languages/sdql.egg")))
 
-OUT = pathlib.Path(os.environ.get("SDQL_OUT", "tests/slotted-sdql-rules.egg"))
+OUT = pathlib.Path(os.environ.get("SDQL_OUT", "slotted-tests/generated/slotted-sdql-rules.egg"))
 
-# Re-introducible bugs, so the checks in `tests/slotted-sdql-rewrites.egg` can be
+# Re-introducible bugs, so the checks in `slotted-tests/slotted-sdql-rewrites.egg` can be
 # shown to test what they were written for.  The encoder's flags, under the same
 # names `XDIFF_BUGS` takes in `slotted-experiments/xdiff/xdiff.py`.
 #   SDQL_BUGS=slot-late   a slot literal checked after the renaming, not with it
@@ -183,7 +183,7 @@ HEADER = """\
 ;;;
 ;;; The reference `sdql` rewrite rules -- `sdql_rules()` in
 ;;; `slotted-egraphs/benches/sdql.rs` -- compiled into the slotted encoding by the
-;;; recipe in `tests/slotted-user-rules.egg`.
+;;; recipe in `slotted-tests/slotted-user-rules.egg`.
 ;;;
 ;;; `beta` is NOT here: it substitutes, which needs `slotted-subst` and frame
 ;;; plumbing rather than this compiler.  The other 43 are.
@@ -194,9 +194,9 @@ HEADER = """\
 ;;;     (run-schedule (saturate (run slotted))
 ;;;                   (repeat N (seq (run sdql 1) (saturate (run slotted)))))
 ;;;
-;;; `tests/slotted-sdql-rewrites.egg` is what checks them.
+;;; `slotted-tests/slotted-sdql-rewrites.egg` is what checks them.
 
-(include "tests/slotted-lang-sdql.egg")
+(include "slotted-tests/generated/slotted-lang-sdql.egg")
 
 (ruleset sdql)
 """

@@ -21,8 +21,8 @@
 ;;; All eleven are the encoder's own output, variable names, line breaks and comments aside.
 ;;; What they are not is byte-identical to the committed generated files, and the reason is
 ;;; worth stating.  Each of those gives its language its OWN constructors -- sdql's
-;;; `Equality`/`Sub`/`Mult`/`Add` in `tests/slotted-sdql-rules.egg`, the array language's
-;;; `App`/`Lam`/`Let` in `tests/slotted-array-rules.egg` -- while this file uses the generic
+;;; `Equality`/`Sub`/`Mult`/`Add` in `slotted-tests/generated/slotted-sdql-rules.egg`, the array language's
+;;; `App`/`Lam`/`Let` in `slotted-tests/generated/slotted-array-rules.egg` -- while this file uses the generic
 ;;; string-headed `(App2 "eq" ...)`, with the operator in a payload column.
 ;;;
 ;;; It has to.  This file draws rules from BOTH languages, and the two disagree about `Let`:
@@ -39,7 +39,7 @@
 ;;; the branch this encoding is differentially tested against.
 ;;;
 ;;; No terms, no schedules, no assertions, no wrong versions.
-;;; `tests/slotted-user-rules-tests.egg` includes this file and supplies all of those, so
+;;; `slotted-tests/slotted-user-rules-tests.egg` includes this file and supplies all of those, so
 ;;; the rules below are the ones under test rather than a copy of them, and it is also where
 ;;; the counter-examples live -- for each construction, the spelling it rules out together
 ;;; with the e-graph that tells the two apart.
@@ -117,7 +117,7 @@
 ;;;     (run-schedule (saturate (run slotted))
 ;;;                   (repeat N (seq (run) (saturate (run slotted)))))
 
-(include "tests/slotted-node-rules.egg")
+(include "slotted-tests/generated/slotted-node-rules.egg")
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -369,7 +369,7 @@
 ;;; check.  Identity maps never conflict under `map-union`, so the union is always defined.
 ;;;
 ;;; Covered by: `map-fission-fires` and `map-fission-blocked` in xarray.py -- the same rule,
-;;; so this section and `tests/slotted-array-rules.egg` compile the same rule -- and
+;;; so this section and `slotted-tests/generated/slotted-array-rules.egg` compile the same rule -- and
 ;;; `map-fission-fires-from-atom-2`, which is this rule at another lead.  C5-redundant-same-node
 ;;; through C9-redundancy-and-live are the minting cases in xdiff.py.  The tests file's M5
 ;;; fixture makes two ATOM mints visible in one match, and its counter-example drops the
@@ -692,7 +692,7 @@
 ;;; (M10).
 ;;;
 ;;; Covered by: `let-var-same-fires` and `let-var-same-blocked` in xarray.py -- the same
-;;; rule, so this section and `tests/slotted-array-rules.egg` compile the same one --
+;;; rule, so this section and `slotted-tests/generated/slotted-array-rules.egg` compile the same one --
 ;;; C14-action-root-with-a-nonidentity-renaming and
 ;;; C15-action-child-narrowed-to-its-class in xdiff.py, and the tests file's M8 fixture for
 ;;; the child case, with the un-narrowed spelling kept there as a counter-example.
@@ -732,7 +732,7 @@
 ;;; and every literal pinned.
 ;;;
 ;;; Covered by: `eta-fires` and `eta-blocked` in xarray.py -- the same rule, so this section
-;;; and `tests/slotted-array-rules.egg` compile the same rule -- whose `vac` mode
+;;; and `slotted-tests/generated/slotted-array-rules.egg` compile the same rule -- whose `vac` mode
 ;;; also confirms the side condition changes the answer on both sides; the same mechanism
 ;;; on binder shapes is B3, B4 and the `slot-late` mutant, and the slot side condition is
 ;;; CD1-CD4.  xdiff.py's
@@ -861,7 +861,7 @@
 ;;; step.
 ;;;
 ;;; Covered by: NR1-nested-build, NR2, NR3-assoc, and `let-app-fires` / `let-app-blocked`
-;;; in xarray.py -- again the same rule, which `tests/slotted-array-rules.egg` compiles in
+;;; in xarray.py -- again the same rule, which `slotted-tests/generated/slotted-array-rules.egg` compiles in
 ;;; the array language's own constructors.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 

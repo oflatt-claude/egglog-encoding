@@ -33,7 +33,7 @@ sys.path.insert(0, str(ROOT / "slotted-experiments"))
 slotenc = __import__("slotted-encoder")
 EGGLOG = ROOT / "target" / "debug" / "egglog"
 XMULTI = ROOT / "slotted-experiments" / "xmulti"
-MACHINERY = "tests/slotted-lang-toy.egg"
+MACHINERY = "slotted-tests/generated/slotted-lang-toy.egg"
 
 BINOPS = ["add", "f", "g", "h", "k", "sub", "sub2"]
 
@@ -1139,7 +1139,7 @@ def curated():
         )
     )
 
-    # ---- shapes taught by tests/slotted-user-rules.egg -----------------------
+    # ---- shapes taught by slotted-tests/slotted-user-rules.egg -----------------------
     # That file is the readable form of this compiler's recipe, so every shape it
     # teaches should be checked here too. The mapping is in its header; these two
     # were the shapes it had that nothing here covered.

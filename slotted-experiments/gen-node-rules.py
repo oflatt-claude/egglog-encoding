@@ -7,11 +7,11 @@ written once for all shapes in egglog. It *can* be written once, and it is:
 emit and where it goes.
 
 Two kinds of output. `GENERIC` is the string-headed encoding in
-`tests/slotted-node-rules.egg`, where the operator is a payload column so any
+`slotted-tests/generated/slotted-node-rules.egg`, where the operator is a payload column so any
 operator can be written without regenerating. Each `slotted-experiments/languages/*.egg`
 gets a per-language encoding with one constructor per operator, the shape the
 reference crate's `define_language!` produces. Both include
-`tests/slotted-egraph-encoding-11.egg`, which is hand-written and holds the
+`slotted-tests/slotted-egraph-encoding-11.egg`, which is hand-written and holds the
 constructor-independent half -- the sorts, the union-find rules, `Var` normalisation --
 plus the ONE constructor family it works through as a worked example.
 
@@ -68,7 +68,7 @@ def main():
     # the hand-written half does provide -- `Var` and `Null` -- so a language may
     # still declare those for the record.
     for lang, spec in LANGUAGES.items():
-        p = pathlib.Path(f"tests/slotted-lang-{lang}.egg")
+        p = pathlib.Path(f"slotted-tests/generated/slotted-lang-{lang}.egg")
         body = (
             enc.MACHINERY_HEADER + f";;;\n;;; Language: {lang}\n\n"
             f'(include "{MACHINERY}")\n\n' + "\n".join(emit(spec, provided=CORE))

@@ -35,7 +35,7 @@
 ;;; as the leader, and a backwards row let transitivity and single parent disagree
 ;;; forever -- the tables stationary at 648 rows while `saturate` reported progress,
 ;;; four edges swapped every iteration, period two. Backwards rows by user step were
-;;; 0 0 0 0 2 7; they are 0 at every step now. `tests/slotted-orientation.egg` is the
+;;; 0 0 0 0 2 7; they are 0 at every step now. `slotted-tests/slotted-orientation.egg` is the
 ;;; regression test and `slotted-egraph-encoding-11.egg` has the fix: `Equated`, the
 ;;; unoriented form of the relation, from which the oriented rows are derived.
 ;;;
@@ -45,7 +45,7 @@
 ;;; `sum-to-get` alone loop -- so a step count that runs forever is not by itself a
 ;;; defect. Two steps is what this file runs.
 
-(include "tests/slotted-sdql-rules.egg")
+(include "slotted-tests/generated/slotted-sdql-rules.egg")
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; the term, bottom up
