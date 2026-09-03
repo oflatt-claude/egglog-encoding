@@ -4,7 +4,7 @@
 The 44-rule SDQL port had no external validation: every other differential check
 in `slotted-experiments/` runs on the toy language or on the paper's array
 language, and the SDQL rules were only ever self-checked against
-`slotted-tests/slotted-sdql-rewrites.egg`. This compares them against the reference
+`slotted-tests/sdql-rewrites.egg`. This compares them against the reference
 `slotted-egraphs` implementation, the same way `xarray.py` does for the array
 language.
 

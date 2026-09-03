@@ -39,3 +39,4 @@ merge       Merge       merge
 let         Let         sdql-let
 num         Num         =payload
 sym         Symbol      =payload sym:
+null        Null        null

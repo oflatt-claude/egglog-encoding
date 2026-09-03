@@ -50,7 +50,7 @@ sc = __import__("slotted-compile")
 
 OUT = pathlib.Path(os.environ.get("SDQL_OUT", "slotted-tests/generated/slotted-sdql-rules.egg"))
 
-# Re-introducible bugs, so the checks in `slotted-tests/slotted-sdql-rewrites.egg` can be
+# Re-introducible bugs, so the checks in `slotted-tests/sdql-rewrites.egg` can be
 # shown to test what they were written for.  The encoder's flags, under the same
 # names `XDIFF_BUGS` takes in `slotted-experiments/xdiff/xdiff.py`.
 #   SDQL_BUGS=slot-late   a slot literal checked after the renaming, not with it
@@ -89,7 +89,8 @@ HEADER = """\
 ;;;     (run-schedule (saturate (run slotted))
 ;;;                   (repeat N (seq (run sdql 1) (saturate (run slotted)))))
 ;;;
-;;; `slotted-tests/slotted-sdql-rewrites.egg` is what checks them.
+;;; `slotted-tests/sdql-rewrites.egg` is what checks them -- written in the slotted
+;;; language over the same rules, and compiled at test time.
 
 (include "slotted-tests/generated/slotted-lang-sdql.egg")
 

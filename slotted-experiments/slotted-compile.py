@@ -27,6 +27,11 @@ THE LANGUAGE
     (check (same a b))                          a and b are ONE slotted class
     (check (not-same a b))                      and are not
     (check (slots a $5 $6))                     a's class depends on exactly these
+    (check (holds a Mult))                      a's class contains a Mult node
+    (check (not-holds a Mult))                  and does not
+
+    (sizes)                                     print the table sizes: a measurement,
+                                                not a claim
 
     (push) (pop)                                scope terms, as in egglog
 
@@ -141,7 +146,7 @@ class Source:
             elif isinstance(form, list) and form and form[0] == "constructor":
                 self.spec.update(enc.read_language_form(form))
             else:
-                self.body.append(form)
+                self.body.append((form, path))
 
     # ------------------------------------------------------------------ terms
     def term(self, form, column=enc.CHILD, ground=True):
@@ -184,7 +189,13 @@ class Source:
         return "(Var 0)" if t[0] == "var" else self.lang.enc(t)
 
 
-def compile_source(src):
+def compile_source(src, own_only=False):
+    """The whole program, or -- for a snapshot -- only what this file contributes.
+
+    `own_only` drops the machinery and anything an included library brought, because
+    both are already snapshotted by the generator that emits them. What is left is the
+    forms this test wrote, which is the part no other snapshot covers.
+    """
     out = [
         f";;; COMPILED from {src.relpath} by slotted-experiments/slotted-compile.py.",
         ";;;",
@@ -194,27 +205,46 @@ def compile_source(src):
         "",
         f'(include "{CORE_FILE}")',
         "",
-        enc.in_slotted_ruleset("\n".join(enc.emit(src.spec, provided=enc.CORE))),
     ]
+    if own_only:
+        out[2:5] = [
+            f";;; Only the forms THIS file contributes. The machinery for its {len(src.spec)} constructors,",
+            ";;; and anything an included library brought, are snapshotted by the generators",
+            ";;; that emit them -- committing them again per test would be the same thousands",
+            ";;; of lines over and over.",
+        ]
+    else:
+        out.append(enc.in_slotted_ruleset("\n".join(enc.emit(src.spec, provided=enc.CORE))))
     rules = 0
-    for form in src.body:
+    for form, origin in src.body:
         head = form[0] if isinstance(form, list) else form
+        mine = origin == src.path
+        keep = mine or not own_only
         if head in ("push", "pop"):
-            out.append(f"({head})")
+            _emit(out, keep, f"({head})")
         elif head == "let":
             _, name, body = form
-            out.append(f"(let ${name} {src.encode(body)})")
+            _emit(out, keep, f"(let ${name} {src.encode(body)})")
             src.lang.bound[name] = src.term(body)
         elif head == "rewrite":
-            out.append(compile_rewrite(src, form))
+            _emit(out, keep, compile_rewrite(src, form))
             rules += 1
         elif head == "run":
-            out.append(schedule(int(form[1]), rules))
+            _emit(out, keep, schedule(int(form[1]), rules))
+        elif head == "sizes":
+            # diagnostic, not a claim: how big the tables got, which is how the
+            # e-node counts a test records in its header were measured
+            _emit(out, keep, "(print-size)")
         elif head in ("check", "fail"):
-            out.append(compile_check(src, form))
+            _emit(out, keep, compile_check(src, form))
         else:
             raise SystemExit(f"{src.path.name}: cannot compile {head!r}")
     return "\n".join(out) + "\n"
+
+
+def _emit(out, keep, text):
+    if keep:
+        out.append(text)
 
 
 def schedule(steps, rules):
@@ -326,6 +356,22 @@ def compile_check(src, form):
         if (kind == "not-same") != negated:
             return f"(fail {body})"
         return body
+    if kind in ("holds", "not-holds"):
+        # "this class contains an application of this operator", which is what a rule
+        # having fired looks like when the built term is not worth writing out -- or,
+        # negated, what a guard refusing looks like: nothing of that shape appeared.
+        a = src.encode(args[0])
+        ctor = args[1]
+        assert ctor in src.spec, f"{src.path.name}: unknown constructor {ctor!r}"
+        ncols = sum(2 if c in enc.SLOTTED else 1 for c in src.spec[ctor])
+        cols = " ".join(f"_c{i}" for i in range(ncols))
+        body = (
+            f"(check (RenamesToLeader {a} _m1 _l) (RenamesToLeader _n _m2 _l)"
+            f" (= _n ({ctor}{' ' + cols if cols else ''})))"
+        )
+        if (kind == "not-holds") != negated:
+            return f"(fail {body})"
+        return body
     if kind == "slots":
         a = src.encode(args[0])
         slots = " ".join(f"{s[1:]} {s[1:]}" for s in args[1:])
@@ -341,11 +387,17 @@ def main():
     ap.add_argument("src", type=pathlib.Path)
     ap.add_argument("-o", "--out", type=pathlib.Path)
     ap.add_argument("--run", action="store_true", help="compile and run egglog on it")
+    ap.add_argument(
+        "--own-only",
+        action="store_true",
+        help="for -o: write only the forms this file contributes, not its library's",
+    )
     args = ap.parse_args()
 
-    text = compile_source(Source(args.src))
+    src = Source(args.src)
+    text = compile_source(src)
     if args.out:
-        args.out.write_text(text)
+        args.out.write_text(compile_source(src, own_only=args.own_only) if args.own_only else text)
     elif not args.run:
         sys.stdout.write(text)
 

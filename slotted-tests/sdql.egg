@@ -41,6 +41,11 @@
 (constructor Num (i64) U)                         ; Num(u32)
 (constructor Symbol (String) U)                   ; Symbol(Symbol)
 
+;;; Declared for the record: `Null` already exists in the hand-written half of the
+;;; machinery, so `emit` skips its rules -- but a program in this language can contain
+;;; it, and this file names every constructor that can appear in one.
+(constructor Null () U)                           ; Null()                        "null"
+
 (rewrite (Mult (Mult ?a ?b) ?c)
          (Mult ?a (Mult ?b ?c))
          :name mult-assoc1)

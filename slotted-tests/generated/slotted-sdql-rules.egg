@@ -16,7 +16,8 @@
 ;;;     (run-schedule (saturate (run slotted))
 ;;;                   (repeat N (seq (run sdql 1) (saturate (run slotted)))))
 ;;;
-;;; `slotted-tests/slotted-sdql-rewrites.egg` is what checks them.
+;;; `slotted-tests/sdql-rewrites.egg` is what checks them -- written in the slotted
+;;; language over the same rules, and compiled at test time.
 
 (include "slotted-tests/generated/slotted-lang-sdql.egg")
 

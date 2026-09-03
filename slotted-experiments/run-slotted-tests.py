@@ -9,13 +9,14 @@ machinery tests -- and is run directly by `check-slotted.py`'s `egg-files`.
 Usage:
     ./run-slotted-tests.py            compile and run each
     ./run-slotted-tests.py -k sdql    only those whose name contains `sdql`
-    ./run-slotted-tests.py --emit     also write each compiled program to
+    ./run-slotted-tests.py --emit     also write each test's own compiled forms to
                                       slotted-tests/snapshots/, so a change in the
                                       encoder shows up as a diff
 """
 
 import argparse
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -31,8 +32,42 @@ CORE = "slotted-egraph-encoding-11.egg"
 
 
 def slotted_sources():
-    """The tests written in the slotted language: the ones that include nothing."""
-    return [p for p in sorted(SRC_DIR.glob("*.egg")) if p.name != CORE and "(include" not in p.read_text()]
+    """The tests written in the slotted language.
+
+    Told apart by WHAT they include, not by whether they include anything: a slotted
+    source may include another slotted source -- that is how a test over the sdql rules
+    gets them without restating 43 -- but never the hand-written core and never a
+    generated file, because the compiler supplies the first and generates the second. A
+    test written against the encoding includes one of those, which is what makes it not
+    a source.
+    """
+    seen = {}
+
+    def is_source(q):
+        """Transitively: everything it reaches has to be a source too.
+
+        The tutorial's test file includes the tutorial, which includes a generated
+        machinery file -- so neither is a source, and only following the chain says so.
+        """
+        key = q.name
+        if key in seen:
+            return seen[key]
+        seen[key] = False  # a cycle is not a source
+        if key == CORE:
+            return False
+        ok = True
+        for t in re.findall(r'\(include "([^"]*)"\)', q.read_text()):
+            target = ROOT / t
+            if not t.startswith("slotted-tests/") or "generated/" in t or not target.exists():
+                ok = False
+                break
+            if not is_source(target):
+                ok = False
+                break
+        seen[key] = ok
+        return ok
+
+    return [q for q in sorted(SRC_DIR.glob("*.egg")) if is_source(q)]
 
 
 def main():
@@ -60,7 +95,10 @@ def main():
         # into `slotted-tests/generated/`, so snapshotting its compiled program too
         # would commit the same 43 rules twice.
         if args.emit and src.name not in libs:
-            cmd += ["-o", str(SNAPSHOTS / src.name)]
+            # `--own-only`: the machinery and any included library are snapshotted by
+            # the generators that emit them, so a test's snapshot is its own compiled
+            # terms, rules and claims -- the part nothing else covers.
+            cmd += ["--own-only", "-o", str(SNAPSHOTS / src.name)]
         r = subprocess.run(cmd, capture_output=True, text=True, cwd=ROOT, timeout=1800)
         line = (r.stdout.strip().splitlines() or [""])[0]
         print(f"  {line or r.stderr.strip()[:160]}")
