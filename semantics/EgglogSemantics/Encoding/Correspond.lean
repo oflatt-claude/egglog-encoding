@@ -185,16 +185,21 @@ both are decided at the witness at the end of this file.
   whole of a **target firing behind a source firing** — the one command case the read-back does
   not reach — and it now carries both of the command induction's data clauses, `joined` and
   `reads`, because a rule head builds as well as unions and one firing answers both.
-  `execM_soundTerms` is the completeness half, and the state's own equations are no longer part
-  of it: `execM_encode_eqsRefl` makes the target's `Cong` the identity, so
-  `Database.ViewsSound` and `Database.EdgesSound` there are two clauses about the **term list**
-  (`viewsSound_of_soundTerms` is the step back, `soundTerms_of_viewsSound` the step out), which
-  is the form that is monotone along a run and so the form an induction can carry. The *source*
-  firing behind the target's is now proved — `mem_terms_of_headBuild_of_domain` and
-  `mem_eqs_of_headUnion_of_domain` are `hfired`'s two shapes, out of `EncodeDomain.headsDeclared`
-  and `EncodeDomain.noLitUnion` — so what it still needs is the interpreter's writers enumerated,
-  every term `execRunRules` and `FDatabase.mergeRound` add; no target fixpoint, since soundness
-  is indifferent to the under-firing `execM_contained` records.
+  `Encoding/Complete.lean`'s `execM_soundTerms` is the completeness half — it is stated there
+  and not here because it consumes `Encoding/Match.lean`'s two head writers, which are
+  downstream — and the state's own equations are no longer part of it: `execM_encode_eqsRefl`
+  makes the target's `Cong` the identity, so `Database.ViewsSound` and `Database.EdgesSound`
+  there are two clauses about the **term list** (`viewsSound_of_soundTerms` is the step back,
+  `soundTerms_of_viewsSound` the step out), which is the form that is monotone along a run and
+  so the form an induction can carry. The *source* firing behind the target's is proved —
+  `mem_terms_of_headBuild_of_domain` and `mem_eqs_of_headUnion_of_domain` are `hfired`'s two
+  shapes, out of `EncodeDomain.headsDeclared` and `EncodeDomain.noLitUnion` — and so is the
+  **merge phase**: `mergeSaturateF_soundTerms` is every term a merge pass adds, justified,
+  which is half the writer enumeration and the half the two named obstacles stood in front of
+  (`Signature.MergeShape` for the body's shape, `eq_of_congrKeys` for the keys being equal
+  rather than merely congruent). What is left is the fold over **rule firings**, which wants a
+  rule invariant of the same shape as `mergeShapeOk_encodePrelude`; no target fixpoint, since
+  soundness is indifferent to the under-firing `execM_contained` records.
   `ncTgt_soundTerms` is both clauses at the state the two refuted forward clauses fail at, with
   a real `@UF` edge and positive arity. `execM_viewLeader`, `execM_viewsCover`,
   `execM_viewsCover_shared`, `execM_unionsJoined` and `execM_unionsRead` are assembled from
@@ -204,8 +209,9 @@ both are decided at the witness at the end of this file.
   `uTgt_not_viewLeader` are the conclusion and the responsible clause failing one rebuild
   firing earlier; `ncTgt_viewLeaderRows` is the fourth clause at positive arity, where the
   three earlier witnesses have only the empty key. `encode_assert`, `encode_trans`,
-  `encode_congr`, `encode_corresponds_forward`, `encode_corresponds_complete` and
-  `encode_corresponds` are assembled from them and carry `sorryAx` through them.
+  `encode_congr`, `encode_corresponds_forward` and — in `Encoding/Complete.lean` —
+  `encode_corresponds_complete` and `encode_corresponds` are assembled from them and carry
+  `sorryAx` through them.
 * **Refuted, and it was the *reading* that was wrong**: two of those clauses were once false
   at `litBuildProgram`, one `.action (.expr (.lit 5))`, whose build emits no action at all, and
   `Program.EncodeDomain.noBareBuild` was the repair. The defect was `ViewRepr`'s literal clause
@@ -4870,6 +4876,825 @@ theorem FDatabase.empty_soundTerms {src : Database} : FDatabase.empty.SoundTerms
   ⟨fun _ _ _ _ hm => absurd hm (by simp [FDatabase.empty]),
     fun _ _ _ hm => absurd hm (by simp [FDatabase.empty])⟩
 
+/-! ##### The obligations collapse to the written term
+
+`addTerm` records every **subterm**, so `FDatabase.SoundTerms.addTerm` asks for a
+justification at every view- and `@UF`-shaped subterm of what a writer wrote — for every id
+and every proof node the encoding mints, and not only for the entry. It does not have to be
+paid twice. A recorded subterm the state **already holds** is discharged by
+`FDatabase.SoundTerms` itself, and the shells the encoding mints around terms the state holds
+— a proof node, an id — are of neither shape. So the obligation is at the written term and
+nowhere else, which is what the two lemmas below say and the two after them supply the
+hypothesis of. -/
+
+/-- **The two shapes `FDatabase.SoundTerms` reads.** A recorded subterm of neither shape costs
+the invariant nothing, however deep. -/
+def Term.EntryShaped (t : Term) : Prop :=
+  (∃ f cs e pf, t = Term.app (viewName f) (cs ++ [e, pf])) ∨
+    (∃ x p pf, t = Term.app ufName [x, p, pf])
+
+/-- **One `addTerm`, with its recorded subterms discharged by the invariant.** The two
+obligations are at `t` alone; `hsub` is what pays for the rest, and
+`FDatabase.subterms_of_columns` and `not_entryShaped_of_ne` are the two ways it is paid. -/
+theorem FDatabase.SoundTerms.addTerm_top {src : Database} {d : FDatabase} {t : Term}
+    (h : d.SoundTerms src)
+    (hsub : ∀ s ∈ t.subtermList, s ≠ t → s.EntryShaped → s ∈ d.terms)
+    (hv : ∀ f cs e pf, t = Term.app (viewName f) (cs ++ [e, pf]) → EntrySound src f cs e)
+    (hu : ∀ x p pf, t = Term.app ufName [x, p, pf] → Cong src x p) :
+    (d.addTerm t).SoundTerms src := by
+  refine h.addTerm (fun f cs e pf hm => ?_) (fun x p pf hm => ?_)
+  · by_cases he : Term.app (viewName f) (cs ++ [e, pf]) = t
+    · exact hv f cs e pf he.symm
+    · exact h.1 f cs e pf (hsub _ hm he (Or.inl ⟨f, cs, e, pf, rfl⟩))
+  · by_cases he : Term.app ufName [x, p, pf] = t
+    · exact hu x p pf he.symm
+    · exact h.2 x p pf (hsub _ hm he (Or.inr ⟨x, p, pf, rfl⟩))
+
+/-- **One `set`**, at the entry term it records. -/
+theorem FDatabase.SoundTerms.addRow_top {src : Database} {d : FDatabase} {g : FnName}
+    {as vs : List Term} (h : d.SoundTerms src)
+    (hsub : ∀ s ∈ (Term.app g (as ++ vs)).subtermList, s ≠ Term.app g (as ++ vs) →
+      s.EntryShaped → s ∈ d.terms)
+    (hv : ∀ f cs e pf, Term.app g (as ++ vs) = Term.app (viewName f) (cs ++ [e, pf]) →
+      EntrySound src f cs e)
+    (hu : ∀ x p pf, Term.app g (as ++ vs) = Term.app ufName [x, p, pf] → Cong src x p) :
+    (d.addRow g as vs).SoundTerms src := h.addTerm_top hsub hv hu
+
+/-- **Every proper subterm of an entry term is held**, where the state is subterm-closed and
+holds the columns. This is `addTerm_top`'s hypothesis at every writer whose columns are terms
+the state already has, which is every `set` the encoding emits over ids the state built. -/
+theorem FDatabase.subterms_of_columns {d : FDatabase} (hsc : d.SubtermClosed) {g : FnName}
+    {cols : List Term} (hcol : ∀ c ∈ cols, c ∈ d.terms) :
+    ∀ s ∈ (Term.app g cols).subtermList, s ≠ Term.app g cols → s ∈ d.terms := by
+  intro s hs hne
+  rw [Term.subtermList, List.mem_cons] at hs
+  rcases hs with rfl | hs
+  · exact absurd rfl hne
+  · obtain ⟨a, ha, hsa⟩ := (Term.mem_subtermListL cols).mp hs
+    exact hsc a (hcol a ha) s ((Term.mem_subtermList a).mpr hsa)
+
+/-- **A shell of neither shape.** The freshly minted terms a writer wraps around held ones —
+a proof node, a skolem id — are applications of a name that is no view and not `@UF`, so
+`addTerm_top`'s `hsub` is vacuous at them. -/
+theorem not_entryShaped_of_ne {g : FnName} (hv : ∀ f, g ≠ viewName f) (hu : g ≠ ufName)
+    {as : List Term} : ¬ (Term.app g as).EntryShaped := by
+  rintro (⟨f, cs, e, pf, h⟩ | ⟨x, p, pf, h⟩)
+  · exact hv f (Term.app.inj h).1
+  · exact hu (Term.app.inj h).1
+
+/-- **A shell of the wrong width.** Both shapes carry at least two value columns, so an
+application of arity below two is of neither. `@Fiat` and `@Sym` are the two the encoding
+mints. -/
+theorem not_entryShaped_of_length {g : FnName} {as : List Term} (h : as.length < 2) :
+    ¬ (Term.app g as).EntryShaped := by
+  rintro (⟨f, cs, e, pf, hq⟩ | ⟨x, p, pf, hq⟩) <;>
+    · have := congrArg List.length (Term.app.inj hq).2
+      simp at this
+      omega
+
+/-- `@Trans` is neither shape: it is no view (`viewName_ne_transName`), it is not `@UF`, and
+its width would make the key empty either way. -/
+theorem not_entryShaped_trans {a b : Term} : ¬ (Term.app transName [a, b]).EntryShaped :=
+  not_entryShaped_of_ne (fun _ h => viewName_ne_transName h.symm) (by decide)
+
+/-- `@Sym` is neither shape, by width. -/
+theorem not_entryShaped_sym {a : Term} : ¬ (Term.app symName [a]).EntryShaped :=
+  not_entryShaped_of_length (by simp)
+
+/-- `@Fiat` is neither shape, by width. -/
+theorem not_entryShaped_fiat : ¬ (Term.app fiatName []).EntryShaped :=
+  not_entryShaped_of_length (by simp)
+
+/-! ##### What a `:merge` body can be, at an encoded target
+
+`FDatabase.mergeRound` reads `d.sig.mergeOf` at a colliding row's function and runs whatever
+body it finds, so "what a merge firing writes" is an open family until the signature is
+pinned. At an encoded target it is not open: `encode` declares exactly two kinds of merge
+function — `@UF` and the views — and gives them the **same** body and the same result
+expressions. That is the sig-shape invariant the enumeration of `FDatabase.mergeRound`'s
+writers needs, and it survives the whole run for one reason: `encodeCmds` emits no
+declaration at all, so nothing after the prelude moves the signature. -/
+
+/-- **Only `@UF` and the views carry a `:merge` body, and both carry `mergeBody`.** A
+`.noMerge` function — the term relations — and a constructor are excluded by the hypothesis
+rather than by a disjunct.
+
+The two **widths** come with it, because a merge firing's writes are read at them: both
+declarations have `outArity 2`, an e-class column and its proof, and `@UF` is unary. -/
+def Signature.MergeShape (sig : Signature) : Prop :=
+  ∀ f dc, sig f = some dc → ∀ body res, dc.merge = some (.merge body res) →
+    (f = ufName ∨ ∃ g, f = viewName g) ∧ body = mergeBody ∧ res = mergeResult ∧
+      dc.outArity = 2 ∧ (f = ufName → dc.arity = 1)
+
+theorem Signature.mergeShape_empty : Signature.MergeShape (fun _ => none) := by
+  intro f dc h
+  exact absurd h (by simp)
+
+/-- One declaration, which is the only thing that moves a signature. -/
+theorem Signature.MergeShape.update {sig : Signature} (h : sig.MergeShape) {f : FnName}
+    {dc : FnDecl}
+    (hdc : ∀ body res, dc.merge = some (.merge body res) →
+      (f = ufName ∨ ∃ g, f = viewName g) ∧ body = mergeBody ∧ res = mergeResult ∧
+        dc.outArity = 2 ∧ (f = ufName → dc.arity = 1)) :
+    Signature.MergeShape (Function.update sig f (some dc)) := by
+  intro g dcg hg
+  rw [Function.update_apply] at hg
+  by_cases hfg : g = f
+  · subst hfg
+    obtain rfl : dcg = dc := by simpa [eq_comm] using hg
+    exact hdc
+  · rw [if_neg hfg] at hg
+    exact h g dcg hg
+
+/-- A command that cannot break the shape: anything but a declaration, or a declaration whose
+own `:merge` fits. -/
+def Cmd.MergeShapeOk : Cmd → Prop
+  | .decl f dc => ∀ body res, dc.merge = some (.merge body res) →
+      (f = ufName ∨ ∃ g, f = viewName g) ∧ body = mergeBody ∧ res = mergeResult ∧
+        dc.outArity = 2 ∧ (f = ufName → dc.arity = 1)
+  | _ => True
+
+/-- One command: only a declaration moves the signature, and a legal one keeps the shape. -/
+theorem FDatabase.execCmdM_mergeShape {d d' : FDatabase} {c : Cmd} (hc : c.MergeShapeOk)
+    (h : d.sig.MergeShape) (hs : d.execCmdM c = some d') : d'.sig.MergeShape := by
+  rw [FDatabase.execCmdM_sig hs]
+  cases c with
+  | decl f dc => exact h.update hc
+  | _ => exact h
+
+@[inherit_doc FDatabase.execCmdM_mergeShape]
+theorem FDatabase.execProgramM_mergeShape {p : Program} (hp : ∀ c ∈ p, c.MergeShapeOk) :
+    ∀ {d D : FDatabase}, d.sig.MergeShape → d.execProgramM p = some D → D.sig.MergeShape := by
+  induction p with
+  | nil =>
+    intro d D h hrun
+    rw [FDatabase.execProgramM, Option.some.injEq] at hrun
+    exact hrun ▸ h
+  | cons c cs ih =>
+    intro d D h hrun
+    rw [FDatabase.execProgramM] at hrun
+    obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp hrun
+    exact ih (fun c' hc' => hp c' (List.mem_cons_of_mem c hc'))
+      (FDatabase.execCmdM_mergeShape (hp c List.mem_cons_self) h h₁) h₂
+
+/-! ###### The two halves of the encoded program
+
+The prelude is where every declaration is, and `encodeCmds` is where none is. -/
+
+theorem mergeShapeOk_ruleProofDecls : ∀ (rs : List Rule) (i : Nat),
+    ∀ c ∈ ruleProofDecls rs i, c.MergeShapeOk
+  | [], _ => by simp [ruleProofDecls]
+  | r :: rs, i => by
+      intro c hc
+      rw [ruleProofDecls, List.mem_cons] at hc
+      rcases hc with rfl | hc
+      · intro body res hb
+        exact absurd hb (by simp [proofDecl])
+      · exact mergeShapeOk_ruleProofDecls rs (i + 1) c hc
+
+/-- **The prelude's declarations, enumerated.** The proof vocabulary and the skolem
+constructors have no `:merge`; a term relation has `.noMerge`; `@UF` and the views have
+`mergeBody`, which is what the two disjuncts record. -/
+theorem mergeShapeOk_encodePrelude (P : Program) : ∀ c ∈ encodePrelude P, c.MergeShapeOk := by
+  intro c hc
+  rw [encodePrelude] at hc
+  rcases List.mem_append.mp hc with h | h
+  · rcases List.mem_append.mp h with h₁ | h₁
+    · rw [proofDecls] at h₁
+      rcases List.mem_append.mp h₁ with h₂ | h₂
+      · rcases List.mem_append.mp h₂ with h₃ | h₃
+        · have h₄ : c = Cmd.decl fiatName (proofDecl 0) ∨ c = Cmd.decl symName (proofDecl 1) ∨
+              c = Cmd.decl transName (proofDecl 2) := by simpa using h₃
+          rcases h₄ with rfl | rfl | rfl <;>
+            exact fun body res hb => absurd hb (by simp [proofDecl])
+        · obtain ⟨k, -, rfl⟩ := List.mem_map.mp h₃
+          exact fun body res hb => absurd hb (by simp [proofDecl])
+      · exact mergeShapeOk_ruleProofDecls _ _ c h₂
+    · rcases List.mem_cons.mp h₁ with rfl | h₂
+      · intro body res hb
+        obtain ⟨rfl, rfl⟩ : mergeBody = body ∧ mergeResult = res := by
+          simpa [ufDecl] using hb
+        exact ⟨Or.inl rfl, rfl, rfl, rfl, fun _ => rfl⟩
+      · obtain ⟨fk, -, h₃⟩ := List.mem_flatMap.mp h₂
+        have h₄ : c = Cmd.decl fk.1 (skolemDecl fk.2) ∨
+            c = Cmd.decl (viewName fk.1) (viewDecl fk.2) ∨
+            c = Cmd.decl (termName fk.1) (termDecl fk.2) := by simpa using h₃
+        rcases h₄ with rfl | rfl | rfl
+        · exact fun body res hb => absurd hb (by simp [skolemDecl])
+        · intro body res hb
+          obtain ⟨rfl, rfl⟩ : mergeBody = body ∧ mergeResult = res := by
+            simpa [viewDecl] using hb
+          exact ⟨Or.inr ⟨fk.1, rfl⟩, rfl, rfl, rfl, fun hu => absurd hu viewName_ne_ufName⟩
+        · exact fun body res hb => absurd hb (by simp [termDecl])
+  · obtain ⟨r, -, rfl⟩ := List.mem_map.mp h
+    trivial
+
+/-- **`encodeCmd` emits no declaration**, which is why the shape is fixed once the prelude has
+run. -/
+theorem mergeShapeOk_encodeCmd (c : Cmd) (n i : Nat) :
+    ∀ c' ∈ (encodeCmd c n i).1, c'.MergeShapeOk := by
+  intro c' hc'
+  cases c with
+  | action a =>
+      have h : c' ∈ (encodeAction fiatE a n).1.map Cmd.action ++ [Cmd.saturate rebuildRuleset] :=
+        hc'
+      rcases List.mem_append.mp h with h₁ | h₁
+      · obtain ⟨b, -, rfl⟩ := List.mem_map.mp h₁
+        trivial
+      · obtain rfl : c' = Cmd.saturate rebuildRuleset := by simpa using h₁
+        trivial
+  | rule r =>
+      have h : c' ∈ [Cmd.rule (encodeRule i r n).1] := hc'
+      obtain rfl : c' = Cmd.rule (encodeRule i r n).1 := by simpa using h
+      trivial
+  | run R =>
+      have h : c' ∈ [Cmd.run R, Cmd.saturate rebuildRuleset] := hc'
+      have h2 : c' = Cmd.run R ∨ c' = Cmd.saturate rebuildRuleset := by simpa using h
+      rcases h2 with rfl | rfl <;> trivial
+  | saturate R =>
+      have h : c' ∈ [Cmd.saturate R, Cmd.saturate rebuildRuleset] := hc'
+      have h2 : c' = Cmd.saturate R ∨ c' = Cmd.saturate rebuildRuleset := by simpa using h
+      rcases h2 with rfl | rfl <;> trivial
+  | decl f dc =>
+      have h : c' ∈ ([] : Program) := hc'
+      simp at h
+
+@[inherit_doc mergeShapeOk_encodeCmd]
+theorem mergeShapeOk_encodeCmds : ∀ (p : Program) (n i : Nat),
+    ∀ c ∈ (encodeCmds p n i).1, c.MergeShapeOk
+  | [], _, _ => by simp [encodeCmds]
+  | c :: cs, n, i => by
+      intro c' hc'
+      have hsplit : (encodeCmds (c :: cs) n i).1
+          = (encodeCmd c n i).1
+            ++ (encodeCmds cs (encodeCmd c n i).2.1 (encodeCmd c n i).2.2).1 := rfl
+      rw [hsplit] at hc'
+      rcases List.mem_append.mp hc' with h | h
+      · exact mergeShapeOk_encodeCmd c n i c' h
+      · exact mergeShapeOk_encodeCmds cs _ _ c' h
+
+/-- **The sig-shape invariant at the state `execM` returned.** -/
+theorem execM_encode_mergeShape {P : Program} {tgt : FDatabase}
+    (htgt : execM (encode P) = some tgt) : tgt.sig.MergeShape := by
+  rw [execM, encode] at htgt
+  refine FDatabase.execProgramM_mergeShape (p := encodePrelude P ++ (encodeCmds P 0 0).1)
+    (fun c hc => ?_) ?_ htgt
+  · rcases List.mem_append.mp hc with h | h
+    · exact mergeShapeOk_encodePrelude P c h
+    · exact mergeShapeOk_encodeCmds P 0 0 c h
+  · exact Signature.mergeShape_empty
+
+/-! ##### And what a collision compares
+
+`mergeOneOriented` fires on rows whose keys are **congruent**, read through the pre-pass
+`closureF`. At an encoded target `Cong` is the identity (`execM_encode_eqsRefl`), so
+congruent keys are equal keys and the two entry terms a firing combines are entries at one
+key — which is exactly `cong_of_entrySound_collide`'s hypothesis. -/
+
+/-- **The closure of a state that asserts nothing is the diagonal.** -/
+theorem diag_closureF {d : FDatabase} (hr : d.EqsRefl) {p : Term × Term}
+    (hp : p ∈ d.closureF) : p.1 = p.2 :=
+  Cong.eq_of_eqsRefl hr.toDatabase (FDatabase.mem_closureF_iff.mp (by
+    rw [show (p.1, p.2) = p from rfl]; exact hp))
+
+/-- **Congruent key tuples are equal, against a diagonal closure.** Stated at the closure and
+not at a state, because `FDatabase.mergeRound` compares against the closure of its
+**pre-pass** state while the accumulator has moved on. -/
+theorem eq_of_congrKeys {cl : Finset (Term × Term)} (hcl : ∀ p ∈ cl, p.1 = p.2) :
+    ∀ {as bs : List Term}, FDatabase.congrKeys cl as bs = true → as = bs := by
+  intro as
+  induction as with
+  | nil =>
+    intro bs h
+    have hlen := (Bool.and_eq_true_iff.mp h).1
+    have h0 : (0 : Nat) = bs.length := by simpa using hlen
+    exact (List.eq_nil_of_length_eq_zero h0.symm).symm
+  | cons a as ih =>
+    intro bs h
+    obtain ⟨hlen, hall⟩ := Bool.and_eq_true_iff.mp h
+    match bs with
+    | [] => simp at hlen
+    | b :: bs' =>
+      have hlen' : (as.length == bs'.length) = true := by simpa using hlen
+      have hall' := List.all_eq_true.mp hall
+      have hab : (a, b) ∈ cl := by
+        have hq := hall' (a, b) (by rw [List.zip_cons_cons]; exact List.mem_cons_self)
+        simpa using hq
+      have hrest : FDatabase.congrKeys cl as bs' = true :=
+        Bool.and_eq_true_iff.mpr ⟨hlen', List.all_eq_true.mpr (fun q hq =>
+          hall' q (by rw [List.zip_cons_cons]; exact List.mem_cons_of_mem _ hq))⟩
+      have heq : a = b := hcl (a, b) hab
+      rw [heq, ih hrest]
+
+
+/-! ##### What a merge firing writes
+
+`FDatabase.mergeRound` is a rebuild and then a fold of `FDatabase.mergeOneWith` over row
+pairs, and only one of those touches `terms`: `FDatabase.rebuild` re-keys rows, the
+`noConflict` branch drops one, and neither writes the list. What is left is
+`FDatabase.mergeOneOriented`'s other branch, which writes exactly twice — the `@UF` edge
+`mergeBody` `set`s between the two colliding rows' e-class columns, and the surviving entry
+`mergeResult` computes. With `Signature.MergeShape` pinning the body, both are enumerated
+below and then discharged against the two rows the firing combined. -/
+
+/-- A non-primitive application, inverted: the value is the application of the head to the
+operands' values. -/
+theorem Expr.eval_app_inv {sig : Signature} {σ : Env} {f : FnName} {args : List Expr}
+    {t : Term} (hp : Prim.ofName f = none) (h : (Expr.app f args).eval sig σ = some t) :
+    ∃ ts, Expr.evalList sig args σ = some ts ∧ t = .app f ts := by
+  rw [Expr.eval, hp] at h
+  by_cases hc : sig.IsCtor f
+  · rw [if_pos hc] at h
+    obtain ⟨ts, hts, rfl⟩ := Option.map_eq_some_iff.mp h
+    exact ⟨ts, hts, rfl⟩
+  · rw [if_neg hc] at h
+    exact absurd h (by simp)
+
+/-- **`(if (ordering-gt _ _) ea eb)` answers with one of its two branches**, whichever way the
+tie-break went. The four selectors `mergeBody` and `mergeResult` are built from are all of
+this shape, and which branch each takes is not what the invariant reads — only that the
+answer is one of the two columns it was given. -/
+theorem eval_ifGt_inv {sig : Signature} {σ : Env} {e₁ e₂ ea eb : Expr} {t : Term}
+    (h : (ifE (gtE e₁ e₂) ea eb).eval sig σ = some t) :
+    ea.eval sig σ = some t ∨ eb.eval sig σ = some t := by
+  rw [ifE, Expr.eval, show Prim.ofName "if" = some Prim.ifThenElse from rfl] at h
+  obtain ⟨ts, hts, happ⟩ := Option.bind_eq_some_iff.mp h
+  rw [Expr.evalList] at hts
+  obtain ⟨c, -, hts⟩ := Option.bind_eq_some_iff.mp hts
+  obtain ⟨us, hus, rfl⟩ := Option.map_eq_some_iff.mp hts
+  obtain ⟨ta, tb, ha, hb, rfl⟩ := Expr.evalList_pair hus
+  match c with
+  | .app _ _ => exact absurd happ (by simp [Prim.apply])
+  | .lit (.int _) => exact absurd happ (by simp [Prim.apply])
+  | .lit (.bool b) =>
+    rw [Prim.apply, Option.some.injEq] at happ
+    cases b with
+    | true => exact Or.inl (by rw [ha, ← happ]; simp)
+    | false => exact Or.inr (by rw [hb, ← happ]; simp)
+
+/-- The environment a two-column collision runs the body in. -/
+theorem mergeEnv_pair (o0 o1 n0 n1 : Term) :
+    mergeEnv [o0, o1] [n0, n1]
+      = [("old0", o0), ("new0", n0), ("old1", o1), ("new1", n1)] := rfl
+
+@[inherit_doc mergeEnv_pair]
+theorem eval_mergeEnv_old0 {sig : Signature} {o0 o1 n0 n1 : Term} :
+    (Expr.var "old0").eval sig (mergeEnv [o0, o1] [n0, n1]) = some o0 := by
+  rw [Expr.eval, mergeEnv_pair]; simp [Env.lookup]
+
+@[inherit_doc mergeEnv_pair]
+theorem eval_mergeEnv_new0 {sig : Signature} {o0 o1 n0 n1 : Term} :
+    (Expr.var "new0").eval sig (mergeEnv [o0, o1] [n0, n1]) = some n0 := by
+  rw [Expr.eval, mergeEnv_pair]; simp [Env.lookup]
+
+@[inherit_doc mergeEnv_pair]
+theorem eval_mergeEnv_old1 {sig : Signature} {o0 o1 n0 n1 : Term} :
+    (Expr.var "old1").eval sig (mergeEnv [o0, o1] [n0, n1]) = some o1 := by
+  rw [Expr.eval, mergeEnv_pair]; simp [Env.lookup]
+
+@[inherit_doc mergeEnv_pair]
+theorem eval_mergeEnv_new1 {sig : Signature} {o0 o1 n0 n1 : Term} :
+    (Expr.var "new1").eval sig (mergeEnv [o0, o1] [n0, n1]) = some n1 := by
+  rw [Expr.eval, mergeEnv_pair]; simp [Env.lookup]
+
+/-- Each of the four selectors answers with one of the two columns it chose between. -/
+theorem mergeSelector_cases {sig : Signature} {o0 o1 n0 n1 t : Term} :
+    (minE (.var "old0") (.var "new0")).eval sig (mergeEnv [o0, o1] [n0, n1]) = some t →
+      t = o0 ∨ t = n0 := by
+  intro h
+  rcases eval_ifGt_inv h with h' | h'
+  · exact Or.inr (Option.some.inj (h'.symm.trans eval_mergeEnv_new0))
+  · exact Or.inl (Option.some.inj (h'.symm.trans eval_mergeEnv_old0))
+
+@[inherit_doc mergeSelector_cases]
+theorem mergeSelectorMax_cases {sig : Signature} {o0 o1 n0 n1 t : Term} :
+    (maxE (.var "old0") (.var "new0")).eval sig (mergeEnv [o0, o1] [n0, n1]) = some t →
+      t = o0 ∨ t = n0 := by
+  intro h
+  rcases eval_ifGt_inv h with h' | h'
+  · exact Or.inl (Option.some.inj (h'.symm.trans eval_mergeEnv_old0))
+  · exact Or.inr (Option.some.inj (h'.symm.trans eval_mergeEnv_new0))
+
+@[inherit_doc mergeSelector_cases]
+theorem mergeProof_cases {sig : Signature} {o0 o1 n0 n1 t : Term} {e₁ e₂ : Expr}
+    (h : (ifE (gtE e₁ e₂) (.var "old1") (.var "new1")).eval sig
+        (mergeEnv [o0, o1] [n0, n1]) = some t) : t = o1 ∨ t = n1 := by
+  rcases eval_ifGt_inv h with h' | h'
+  · exact Or.inl (Option.some.inj (h'.symm.trans eval_mergeEnv_old1))
+  · exact Or.inr (Option.some.inj (h'.symm.trans eval_mergeEnv_new1))
+
+/-- **`mergeBody`, run and inverted.** One `set` of a `@UF` edge whose key and value are the
+two rows' e-class columns and whose proof column is `@Trans (@Sym _) _` over their proof
+columns. Which of the two goes where is the tie-break's business and not the invariant's. -/
+theorem execActions_mergeBody_inv {m m' : FDatabase} {o0 o1 n0 n1 : Term}
+    (henv : m.env = mergeEnv [o0, o1] [n0, n1])
+    (h : execActions m mergeBody = some m') :
+    ∃ mx mn a b : Term, (mx = o0 ∨ mx = n0) ∧ (mn = o0 ∨ mn = n0) ∧
+      (a = o1 ∨ a = n1) ∧ (b = o1 ∨ b = n1) ∧
+      m' = m.addRow ufName [mx] [mn, .app transName [.app symName [a], b]] := by
+  rw [mergeBody, execActions] at h
+  obtain ⟨m₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp h
+  rw [execActions, Option.some.injEq] at h₂
+  subst h₂
+  obtain ⟨as, vs, has, hvs, rfl⟩ := execAction_set h₁
+  rw [henv] at has hvs
+  obtain ⟨mx, hmx, rfl⟩ := Expr.evalList_singleton has
+  obtain ⟨mn, pf, hmn, hpf, rfl⟩ := Expr.evalList_pair hvs
+  obtain ⟨ts, hts, rfl⟩ := Expr.eval_app_inv (f := transName) (by decide) hpf
+  obtain ⟨sy, lo, hsy, hlo, rfl⟩ := Expr.evalList_pair hts
+  obtain ⟨us, hus, rfl⟩ := Expr.eval_app_inv (f := symName) (by decide) hsy
+  obtain ⟨hi, hhi, rfl⟩ := Expr.evalList_singleton hus
+  exact ⟨mx, mn, hi, lo, mergeSelectorMax_cases hmx, mergeSelector_cases hmn,
+    mergeProof_cases hhi, mergeProof_cases hlo, rfl⟩
+
+/-- **`mergeResult`, run and inverted.** The surviving row's value tuple is one of the two
+e-class columns and one of the two proof columns. -/
+theorem evalList_mergeResult_inv {sig : Signature} {o0 o1 n0 n1 : Term} {vs : List Term}
+    (h : Expr.evalList sig mergeResult (mergeEnv [o0, o1] [n0, n1]) = some vs) :
+    ∃ mn lo, (mn = o0 ∨ mn = n0) ∧ (lo = o1 ∨ lo = n1) ∧ vs = [mn, lo] := by
+  obtain ⟨mn, lo, hmn, hlo, rfl⟩ := Expr.evalList_pair h
+  exact ⟨mn, lo, mergeSelector_cases hmn, mergeProof_cases hlo, rfl⟩
+
+
+/-! ###### The state facts a firing reads
+
+Three, each named: the two rows are **entry terms** (`FDatabase.IndexOk.entry`, read at a
+diagonal state), their columns are terms the state holds (subterm closure), and their widths
+are the declaration's (`FDatabase.IndexOk.width`). -/
+
+/-- `FDatabase.SoundTerms` reads `terms` and nothing else. -/
+theorem FDatabase.SoundTerms.mono_terms {src : Database} {d e : FDatabase}
+    (ht : ∀ t ∈ e.terms, t ∈ d.terms) (h : d.SoundTerms src) : e.SoundTerms src :=
+  ⟨fun f cs x pf hm => h.1 f cs x pf (ht _ hm), fun x p pf hm => h.2 x p pf (ht _ hm)⟩
+
+/-- A term the list held it still holds. -/
+theorem FDatabase.mem_addTerm_of_mem {d : FDatabase} {t s : Term} (hs : s ∈ d.terms) :
+    s ∈ (d.addTerm t).terms := by
+  simp only [FDatabase.addTerm, List.mem_dedup, List.mem_append]
+  exact Or.inr hs
+
+/-- Subterm closure survives an `addTerm`: what the list records is closed under subterms
+already. -/
+theorem FDatabase.SubtermClosed.addTerm {d : FDatabase} (h : d.SubtermClosed) (t : Term) :
+    (d.addTerm t).SubtermClosed := by
+  intro u hu s hs
+  simp only [FDatabase.addTerm, List.mem_dedup, List.mem_append] at hu ⊢
+  rcases hu with hu | hu
+  · exact Or.inl ((Term.mem_subtermList t).mpr
+      (((Term.mem_subtermList u).mp hs).trans ((Term.mem_subtermList t).mp hu)))
+  · exact Or.inr (h u hu s hs)
+
+@[inherit_doc FDatabase.SubtermClosed.addTerm]
+theorem FDatabase.SubtermClosed.addRow {d : FDatabase} (h : d.SubtermClosed) (g : FnName)
+    (as vs : List Term) : (FDatabase.addRow g as vs d).SubtermClosed :=
+  h.addTerm (.app g (as ++ vs))
+
+/-- A column of a term the list holds is a term the list holds. -/
+theorem FDatabase.mem_terms_of_column {d : FDatabase} (hsc : d.SubtermClosed) {g : FnName}
+    {cols : List Term} (hmem : Term.app g cols ∈ d.terms) {c : Term} (hc : c ∈ cols) :
+    c ∈ d.terms :=
+  hsc _ hmem c ((Term.mem_subtermList _).mpr
+    (Term.arg_subterms hc (Term.self_mem_subterms c)))
+
+/-- **A row is an entry term**, where the state asserts nothing: `FDatabase.IndexOk.entry`
+reads the key up to a congruence that is the identity there. This is the direction soundness
+needs, and the one `cxTgt_not_indexCurrent` does *not* refute — its converse
+`FDatabase.IndexCurrent` is what that refutes, which is why this residue and
+`execM_viewLeaderRows` are separate holes. -/
+theorem mem_terms_of_indexOk {d : FDatabase} (hr : d.EqsRefl) (hidx : d.IndexOk)
+    {r : Row} (hm : r ∈ d.rows) (hmg : d.sig.mergeOf r.fn ≠ none) :
+    Term.app r.fn (r.args ++ r.out) ∈ d.terms := by
+  obtain ⟨bs, hcl, hmem⟩ := hidx.entry r hm hmg
+  obtain rfl : r.args = bs := CongList.eq_of_eqsRefl hr.toDatabase hcl
+  rw [FDatabase.toDatabase_terms] at hmem
+  exact hmem
+
+/-- `FDatabase.SoundTerms.addTerm_top`'s hypothesis, one column at a time. -/
+theorem entryShaped_mem_of_columns {d : FDatabase} {g : FnName} {cols : List Term}
+    (hcol : ∀ c ∈ cols, ∀ s ∈ c.subtermList, s.EntryShaped → s ∈ d.terms) :
+    ∀ s ∈ (Term.app g cols).subtermList, s ≠ Term.app g cols →
+      s.EntryShaped → s ∈ d.terms := by
+  intro s hs hne hshaped
+  rw [Term.subtermList, List.mem_cons] at hs
+  rcases hs with rfl | hs
+  · exact absurd rfl hne
+  · obtain ⟨c, hc, hsub⟩ := (Term.mem_subtermListL _).mp hs
+    exact hcol c hc s ((Term.mem_subtermList c).mpr hsub) hshaped
+
+/-- A column the state already holds. -/
+theorem entryShaped_mem_of_held {d : FDatabase} (hsc : d.SubtermClosed) {c : Term}
+    (hc : c ∈ d.terms) : ∀ s ∈ c.subtermList, s.EntryShaped → s ∈ d.terms :=
+  fun s hs _ => hsc c hc s hs
+
+/-- **The proof node a merge body mints.** `@Trans (@Sym a) b` is of neither shape and neither
+is its `@Sym`, so everything the clause has to answer for under it is a subterm of `a` or of
+`b` — and those are the two colliding rows' proof columns, which the state holds. This is the
+whole of what "no proof term is view- or `@UF`-shaped" costs at this writer. -/
+theorem entryShaped_mem_of_transSym {d : FDatabase} (hsc : d.SubtermClosed) {a b : Term}
+    (ha : a ∈ d.terms) (hb : b ∈ d.terms) :
+    ∀ s ∈ (Term.app transName [Term.app symName [a], b]).subtermList,
+      s.EntryShaped → s ∈ d.terms := by
+  intro s hs hshaped
+  rw [Term.subtermList, List.mem_cons] at hs
+  rcases hs with rfl | hs
+  · exact absurd hshaped not_entryShaped_trans
+  · obtain ⟨c, hc, hsub⟩ := (Term.mem_subtermListL _).mp hs
+    have hc2 : c = Term.app symName [a] ∨ c = b := by simpa using hc
+    have hsl : s ∈ c.subtermList := (Term.mem_subtermList c).mpr hsub
+    rcases hc2 with rfl | rfl
+    · rw [Term.subtermList, List.mem_cons] at hsl
+      rcases hsl with rfl | hsl
+      · exact absurd hshaped not_entryShaped_sym
+      · obtain ⟨z, hz, hsub2⟩ := (Term.mem_subtermListL _).mp hsl
+        obtain rfl : z = a := by simpa using hz
+        exact hsc z ha s ((Term.mem_subtermList z).mpr hsub2)
+    · exact hsc c hb s hsl
+
+/-- **The `@UF` edge a merge body writes, against the invariant.** Its key and value are the
+two colliding rows' e-class columns and its proof column is the minted `@Trans (@Sym _) _`, so
+the only obligation is the edge itself. -/
+theorem soundTerms_addRow_uf {src : Database} {d : FDatabase} (hsc : d.SubtermClosed)
+    (h : d.SoundTerms src) {mx mn a b : Term}
+    (hmx : mx ∈ d.terms) (hmn : mn ∈ d.terms) (ha : a ∈ d.terms) (hb : b ∈ d.terms)
+    (hcong : Cong src mx mn) :
+    (FDatabase.addRow ufName [mx] [mn, .app transName [.app symName [a], b]] d).SoundTerms
+      src := by
+  refine h.addRow_top (entryShaped_mem_of_columns (fun c hc => ?_)) (fun f cs x q hq => ?_)
+    (fun x p q hq => ?_)
+  · have hc2 : c = mx ∨ c = mn ∨ c = Term.app transName [Term.app symName [a], b] := by
+      simpa using hc
+    rcases hc2 with rfl | rfl | rfl
+    · exact entryShaped_mem_of_held hsc hmx
+    · exact entryShaped_mem_of_held hsc hmn
+    · exact entryShaped_mem_of_transSym hsc ha hb
+  · exact absurd (Term.app.inj hq).1 (fun hz => viewName_ne_ufName hz.symm)
+  · obtain ⟨-, hcols⟩ := Term.app.inj hq
+    have h3 : [mx, mn, Term.app transName [Term.app symName [a], b]] = [x, p, q] := hcols
+    obtain rfl : mx = x := (List.cons.inj h3).1
+    obtain rfl : mn = p := (List.cons.inj (List.cons.inj h3).2).1
+    exact hcong
+
+/-- **One merge firing preserves the invariant, and asks nothing beyond the state.**
+
+Two writes and no others: the `@UF` edge `mergeBody` `set`s between the two colliding rows'
+e-class columns, and the entry `mergeResult` leaves at the resident row's key. Both are
+justified against the **two rows the firing combined**, which `mem_terms_of_indexOk` reads
+back as entry terms and `FDatabase.SoundTerms` then justifies — `cong_of_entrySound_collide`
+for the edge and `EntrySound.select` for the survivor at a view, the `edges` clause twice over
+at `@UF`. Which column each selector picked is not part of it: `mergeSelector_cases` says every
+selector answers with one of the two it chose between, and both are justified.
+
+The state facts are `FDatabase.IndexOk`'s two clauses, subterm closure and `EqsRefl`; the
+body's shape is `Signature.MergeShape`; and `hcl` is the pass's closure being the diagonal,
+which at an encoded target `execM_encode_eqsRefl` supplies. `cl` is a parameter and not
+`d.closureF` because `FDatabase.mergeRound` compares against the closure of its **pre-pass**
+state while the accumulator has moved on. -/
+theorem mergeOneOriented_soundTerms {src : Database} {cl : Finset (Term × Term)}
+    {d e : FDatabase} {r₁ r₂ : Row}
+    (hshape : Signature.MergeShape d.sig) (hr : d.EqsRefl) (hsc : d.SubtermClosed)
+    (hidx : d.IndexOk) (hcl : ∀ p ∈ cl, p.1 = p.2) (h : d.SoundTerms src)
+    (hfire : d.mergeOneOriented cl r₁ r₂ = some e) : e.SoundTerms src := by
+  rw [FDatabase.mergeOneOriented] at hfire
+  split at hfire
+  next body res hms =>
+      obtain ⟨dc, hdc, hmergedc⟩ := Option.bind_eq_some_iff.mp hms
+      obtain ⟨hname, rfl, rfl, hout2, huf1⟩ := hshape r₁.fn dc hdc body res hmergedc
+      split at hfire
+      next hg =>
+        obtain ⟨⟨⟨hfn, hkeys⟩, hmem₁⟩, hmem₂⟩ : ((r₁.fn = r₂.fn ∧
+            FDatabase.congrKeys cl r₁.args r₂.args = true) ∧ r₁ ∈ d.rows) ∧ r₂ ∈ d.rows := by
+          simpa only [Bool.and_eq_true, decide_eq_true_eq, List.contains_iff_mem] using hg
+        have hmg1 : d.sig.mergeOf r₁.fn ≠ none := by rw [hms]; simp
+        have hmg2 : d.sig.mergeOf r₂.fn ≠ none := by rw [← hfn]; exact hmg1
+        have hE1 := mem_terms_of_indexOk hr hidx hmem₁ hmg1
+        have hE2 := mem_terms_of_indexOk hr hidx hmem₂ hmg2
+        have hargs : r₁.args = r₂.args := eq_of_congrKeys hcl hkeys
+        obtain ⟨hk1, hw1⟩ := hidx.width r₁ hmem₁ dc hdc hmg1
+        obtain ⟨-, hw2⟩ := hidx.width r₂ hmem₂ dc (by rw [← hfn]; exact hdc) hmg2
+        rw [hout2] at hw1 hw2
+        obtain ⟨n0, n1, hr1out⟩ := List.length_eq_two.mp hw1
+        obtain ⟨o0, o1, hr2out⟩ := List.length_eq_two.mp hw2
+        have hcol₁ : ∀ c ∈ r₁.args ++ r₁.out, c ∈ d.terms :=
+          fun c hc => FDatabase.mem_terms_of_column hsc hE1 hc
+        have hcol₂ : ∀ c ∈ r₂.args ++ r₂.out, c ∈ d.terms :=
+          fun c hc => FDatabase.mem_terms_of_column hsc hE2 hc
+        have hn0 : n0 ∈ d.terms := hcol₁ n0 (by rw [hr1out]; simp)
+        have hn1 : n1 ∈ d.terms := hcol₁ n1 (by rw [hr1out]; simp)
+        have ho0 : o0 ∈ d.terms := hcol₂ o0 (by rw [hr2out]; simp)
+        have ho1 : o1 ∈ d.terms := hcol₂ o1 (by rw [hr2out]; simp)
+        have hE1' : Term.app r₁.fn (r₁.args ++ [n0, n1]) ∈ d.terms := by
+          rw [← hr1out]; exact hE1
+        have hE2' : Term.app r₂.fn (r₂.args ++ [o0, o1]) ∈ d.terms := by
+          rw [← hr2out]; exact hE2
+        -- the two writes, justified against the two rows the firing combined
+        have hobl : Cong src o0 n0 ∧ ∀ v, (v = o0 ∨ v = n0) → ∀ lo,
+            (∀ f cs x pf, Term.app r₂.fn (r₂.args ++ [v, lo])
+                = Term.app (viewName f) (cs ++ [x, pf]) → EntrySound src f cs x) ∧
+              (∀ x p pf, Term.app r₂.fn (r₂.args ++ [v, lo])
+                = Term.app ufName [x, p, pf] → Cong src x p) := by
+          have hfn2 : r₂.fn = r₁.fn := hfn.symm
+          rcases hname with hn | ⟨g, hn⟩
+          · -- the union-find table: the two rows are two parents of one key
+            obtain ⟨x0, hx0⟩ : ∃ x0, r₁.args = [x0] := by
+              rw [huf1 hn] at hk1; exact List.length_eq_one_iff.mp hk1
+            have hu1 : Cong src x0 n0 := by
+              refine h.2 x0 n0 n1 ?_
+              have := hE1'
+              rw [hn, hx0] at this
+              exact this
+            have hu2 : Cong src x0 o0 := by
+              refine h.2 x0 o0 o1 ?_
+              have := hE2'
+              rw [hfn2, hn, ← hargs, hx0] at this
+              exact this
+            refine ⟨hu2.symm.trans hu1, fun v hv0 lo => ⟨fun f cs x pf hq => ?_, ?_⟩⟩
+            · exact absurd ((Term.app.inj hq).1.symm.trans (hfn2.trans hn))
+                (fun hz => viewName_ne_ufName hz)
+            · intro x p pf hq
+              obtain ⟨-, hcols⟩ := Term.app.inj hq
+              rw [← hargs, hx0] at hcols
+              have h3 : [x0, v, lo] = [x, p, pf] := hcols
+              obtain rfl : x0 = x := (List.cons.inj h3).1
+              obtain rfl : v = p := (List.cons.inj (List.cons.inj h3).2).1
+              rcases hv0 with rfl | rfl
+              · exact hu2
+              · exact hu1
+          · -- a view: the two rows are two e-classes at one key
+            have hv1 : EntrySound src g r₂.args n0 := by
+              refine h.1 g r₂.args n0 n1 ?_
+              rw [← hargs, ← hn]; exact hE1'
+            have hv2 : EntrySound src g r₂.args o0 := by
+              refine h.1 g r₂.args o0 o1 ?_
+              rw [← hn, ← hfn2]; exact hE2'
+            refine ⟨cong_of_entrySound_collide hv2 hv1, fun v hv0 lo => ⟨?_, fun x p pf hq => ?_⟩⟩
+            · intro f cs x pf hq
+              obtain ⟨hfname, hcols⟩ := Term.app.inj hq
+              obtain rfl : f = g :=
+                (viewName_inj ((hfn2.trans hn).symm.trans hfname)).symm
+              obtain ⟨rfl, hlast⟩ := List.append_inj' hcols rfl
+              obtain rfl : v = x := (List.cons.inj hlast).1
+              exact EntrySound.select hv2 hv1 hv0
+            · exact absurd ((Term.app.inj hq).1.symm.trans (hfn2.trans hn)).symm
+                viewName_ne_ufName
+        obtain ⟨hcong, hsurv⟩ := hobl
+        split at hfire
+        next =>
+          rw [Option.some.injEq] at hfire
+          exact h.mono_terms (fun t ht => by rw [← hfire] at ht; exact ht)
+        next =>
+          obtain ⟨m, hm, hfire⟩ := Option.bind_eq_some_iff.mp hfire
+          obtain ⟨vs, hvs, rfl⟩ := Option.map_eq_some_iff.mp hfire
+          have henv : ({ d with env := mergeEnv r₂.out r₁.out } : FDatabase).env
+              = mergeEnv [o0, o1] [n0, n1] := by rw [hr1out, hr2out]
+          obtain ⟨mx, mn, a, b, hmx, hmn, ha, hb, rfl⟩ := execActions_mergeBody_inv henv hm
+          have hmxm : mx ∈ d.terms := by rcases hmx with rfl | rfl <;> assumption
+          have hmnm : mn ∈ d.terms := by rcases hmn with rfl | rfl <;> assumption
+          have ham : a ∈ d.terms := by rcases ha with rfl | rfl <;> assumption
+          have hbm : b ∈ d.terms := by rcases hb with rfl | rfl <;> assumption
+          have hcongmm : Cong src mx mn := by
+            rcases hmx with rfl | rfl <;> rcases hmn with rfl | rfl
+            · exact hcong.trans hcong.symm
+            · exact hcong
+            · exact hcong.symm
+            · exact hcong.symm.trans hcong
+          have hstep₁ := soundTerms_addRow_uf
+            (d := ({ d with env := mergeEnv r₂.out r₁.out } : FDatabase)) hsc h
+            hmxm hmnm ham hbm hcongmm
+          have hsc₁ := (hsc : ({ d with env := mergeEnv r₂.out r₁.out } : FDatabase).SubtermClosed
+            ).addRow ufName [mx] [mn, Term.app transName [Term.app symName [a], b]]
+          obtain ⟨v, lo, hv0, hlo0, rfl⟩ :=
+            evalList_mergeResult_inv (o0 := o0) (o1 := o1) (n0 := n0) (n1 := n1)
+              (by rw [show (FDatabase.addRow ufName [mx]
+                    [mn, Term.app transName [Term.app symName [a], b]]
+                    { d with env := mergeEnv r₂.out r₁.out } : FDatabase).env
+                  = mergeEnv [o0, o1] [n0, n1] from henv] at hvs; exact hvs)
+          obtain ⟨hvv, huu⟩ := hsurv v hv0 lo
+          refine FDatabase.SoundTerms.mono_terms (fun t ht => ht)
+            (hstep₁.addTerm_top (entryShaped_mem_of_columns (fun c hc => ?_)) hvv huu)
+          rcases List.mem_append.mp hc with hc' | hc'
+          · exact entryShaped_mem_of_held hsc₁
+              (FDatabase.mem_addTerm_of_mem (hcol₂ c (List.mem_append_left _ hc')))
+          · have hc2 : c = v ∨ c = lo := by simpa using hc'
+            refine entryShaped_mem_of_held hsc₁ (FDatabase.mem_addTerm_of_mem ?_)
+            rcases hc2 with rfl | rfl
+            · rcases hv0 with rfl | rfl <;> assumption
+            · rcases hlo0 with rfl | rfl <;> assumption
+      next => exact absurd hfire (by simp)
+  next => exact absurd hfire (by simp)
+
+
+
+/-! ###### The pass, and the phase
+
+`FDatabase.mergeRound_induction` is the rebuild and the two folds, factored; the invariant it
+carries here is the one `mergeOneOriented_soundTerms` reads, plus `sig = d.sig` so that the two
+*signature* hypotheses — which are statements about the pre-pass signature — apply at every
+accumulator. `FDatabase.Inv.mergeRound_of_legalMerges` is what re-establishes
+`FDatabase.IndexOk` at each step and `Signature.MergesLegal` is what it costs;
+`Proofs/Counterexamples.lean`'s `cexSig_not_mergesLegal` is that hypothesis being load-bearing
+rather than decorative. -/
+
+/-- A state that asserts nothing asserts nothing non-reflexive. -/
+theorem FDatabase.NoUnions.eqsRefl {d : FDatabase} (h : d.NoUnions) : d.EqsRefl := by
+  intro p hp
+  rw [h.eqs] at hp
+  exact absurd hp (by simp)
+
+/-- **One merge firing, at whichever orientation `mergeOneWith` chose.** -/
+theorem mergeOneWith_soundTerms {src : Database} {cl : Finset (Term × Term)}
+    {d e : FDatabase} {r₁ r₂ : Row}
+    (hshape : Signature.MergeShape d.sig) (hr : d.EqsRefl) (hsc : d.SubtermClosed)
+    (hidx : d.IndexOk) (hcl : ∀ p ∈ cl, p.1 = p.2) (h : d.SoundTerms src)
+    (hm : d.mergeOneWith cl r₁ r₂ = some e) : e.SoundTerms src := by
+  rcases FDatabase.mergeOneWith_eq_oriented (cl := cl) (d := d) r₁ r₂ with he | he <;>
+    exact mergeOneOriented_soundTerms hshape hr hsc hidx hcl h (he ▸ hm)
+
+/-- **A merge pass preserves the invariant.** The rebuild writes `rows` only, so it costs
+nothing; every firing is `mergeOneWith_soundTerms`. -/
+theorem mergeRound_soundTerms {src : Database} {d : FDatabase}
+    (hshape : Signature.MergeShape d.sig) (hlegal : Signature.MergesLegal d.sig)
+    (hinv : d.Inv) (hn : d.NoUnions) (h : d.SoundTerms src) :
+    d.mergeRound.SoundTerms src := by
+  have hdiag : ∀ p ∈ d.closureF, p.1 = p.2 := fun _ hp => diag_closureF hn.eqsRefl hp
+  have key : d.mergeRound.Inv ∧ d.mergeRound.sig = d.sig ∧ d.mergeRound.NoUnions ∧
+      d.mergeRound.SoundTerms src := by
+    refine FDatabase.mergeRound_induction
+      (P := fun x => x.Inv ∧ x.sig = d.sig ∧ x.NoUnions ∧ x.SoundTerms src)
+      ⟨hinv, rfl, hn, h⟩
+      ⟨FDatabase.Inv.rebuild hinv FDatabase.closureSound_closureF, rfl, rebuild_noUnions hn,
+        h.mono_terms (fun t ht => ht)⟩ ?_
+    intro x y r₁ r₂ hx hy
+    refine ⟨FDatabase.mergeOneWith_inv hx.1 (by rw [hx.2.1]; exact hlegal) hy,
+      ((FDatabase.mergeOneWith_confined hy).2.2.1).trans hx.2.1,
+      mergeOneWith_noUnions hx.2.2.1 hy, ?_⟩
+    exact mergeOneWith_soundTerms (by rw [hx.2.1]; exact hshape) hx.2.2.1.eqsRefl
+      (FDatabase.SubtermClosed.of_wf hx.1.wf) hx.1.index hdiag hx.2.2.2 hy
+  exact key.2.2.2
+
+/-- **The whole merge phase preserves the invariant**, which is what `FDatabase.execCmdM` runs
+after every top-level action and at the end of every round. -/
+theorem mergeSaturateF_soundTerms {src : Database} : ∀ (n : Nat) {d e : FDatabase},
+    Signature.MergeShape d.sig → Signature.MergesLegal d.sig → d.Inv → d.NoUnions →
+    d.SoundTerms src → FDatabase.mergeSaturateF n d = some e → e.SoundTerms src
+  | 0, d, e, _, _, _, _, h, hrun => by
+      rw [FDatabase.mergeSaturateF] at hrun
+      split at hrun
+      · rw [Option.some.injEq] at hrun; exact hrun ▸ h
+      · exact absurd hrun (by simp)
+  | n + 1, d, e, hshape, hlegal, hinv, hn, h, hrun => by
+      rw [FDatabase.mergeSaturateF] at hrun
+      split at hrun
+      · rw [Option.some.injEq] at hrun; exact hrun ▸ h
+      · have hsig : d.mergeRound.sig = d.sig := FDatabase.mergeRound_confined.2.2.1
+        exact mergeSaturateF_soundTerms n (by rw [hsig]; exact hshape)
+          (by rw [hsig]; exact hlegal) (FDatabase.Inv.mergeRound_of_legalMerges hinv hlegal)
+          (mergeRound_noUnions hn) (mergeRound_soundTerms hshape hlegal hinv hn h) hrun
+
+/-! ###### The firing is real
+
+`ENCODING.md`'s discipline: a lemma about a step nothing takes proves nothing. `cxPre` is the
+state three `set`s leave — a view entry, the `union`'s `@UF` edge, and the entry the e-class
+rebuild rule re-keyed onto `(A)` — and its two `@BView` rows collide at the one (empty) key.
+That collision is the firing `mergeOneOriented_soundTerms` is about, `cxTgt` is what the pass
+around it produced, and the `@UF` edge below is what the body wrote. -/
+
+/-- The re-keyed row: `@BView() ↦ ((A), @Trans @Fiat @Fiat)`, the arriving one. -/
+def cxViewRowA : Row := ⟨viewName "B", [], [cxA, cxTransFiat]⟩
+
+/-- The resident row: `@BView() ↦ ((B), @Fiat)`. -/
+def cxViewRowB : Row := ⟨viewName "B", [], [cxB, cxFiat]⟩
+
+/-- The edge `mergeBody` writes between the two rows' e-class columns, with the proof node it
+mints: `@Trans (@Sym @Fiat) (@Trans @Fiat @Fiat)`, exactly the shape
+`execActions_mergeBody_inv` reads back. -/
+def cxUFmerged : Term :=
+  .app ufName [cxB, cxA,
+    .app transName [.app symName [cxFiat], cxTransFiat]]
+
+set_option maxRecDepth 100000 in
+/-- **The collision fires, and it writes.** Three terms more than `cxPre` had, and the edge is
+one of them — so `mergeOneOriented_soundTerms`'s conclusion is about a state strictly larger
+than its hypothesis's, and its `hedge` obligation is asked at an entry the state did not
+hold. -/
+theorem cxPre_mergeOneOriented_writes :
+    (cxPre.mergeOneOriented cxPre.closureF cxViewRowA cxViewRowB).isSome = true ∧
+      ((cxPre.mergeOneOriented cxPre.closureF cxViewRowA cxViewRowB).getD
+        FDatabase.empty).terms.contains cxUFmerged = true ∧
+      cxPre.terms.contains cxUFmerged = false := by decide
+
+set_option maxRecDepth 100000 in
+/-- And the three decidable hypotheses hold there. -/
+theorem cxPre_eqsRefl : cxPre.EqsRefl := (FDatabase.eqsReflB_iff cxPre).mp (by decide)
+
+set_option maxRecDepth 100000 in
+@[inherit_doc cxPre_eqsRefl]
+theorem cxPre_subtermClosed : cxPre.SubtermClosed :=
+  (FDatabase.subtermClosedB_iff cxPre).mp (by decide)
+
+@[inherit_doc cxPre_eqsRefl]
+theorem cxPre_diag_closureF : ∀ p ∈ cxPre.closureF, p.1 = p.2 :=
+  fun _ hp => diag_closureF cxPre_eqsRefl hp
+
 /-! #### Both clauses at the state the forward half's two clauses fail at
 
 `ncTgt_not_readsSelf` and `ncTgt_not_viewsProduct` are the two over-strong forward clauses
@@ -6155,170 +6980,14 @@ theorem mem_eqs_of_headUnion_witness :
       (by simp [vuRule]) (by simp [vuRule, Actions.letVars, Action.letVars])
       vuPre_head_eval₁ vuPre_head_eval₂
 
-/-- **The residue of the completeness half. Not proved.**
+/-! #### The residue itself is in `Encoding/Complete.lean`
 
-**It was false, twice over, and the domain now excludes both.** A source rule head that gets
-*stuck* contributes nothing — `RuleResults` asks `evalLocalActions` for a `some` — and its
-encoding's head, which is `.set`s, writes anyway. `execM_soundTerms_false` at the end of this
-file is a head applying a constructor nobody declared, and
-`encode_corresponds_unions_literals` is a head unioning two literals; the second refutes not
-this residue but `encode_corresponds_complete` **itself**, at a pair of terms the source holds
-and the two membership hypotheses are satisfied at. So `EncodeDomain.noLitUnion` and
-`EncodeDomain.headsDeclared` are load-bearing for the conclusion and not only for the
-proof, and everything below is stated under them.
-
-`Database.ViewsSound` and `Database.EdgesSound` at the state `execM` returned, in the term-list
-form the run can carry (`viewsSound_of_soundTerms` is the step back). Every *per-entry*
-obligation is discharged, one per writer `encode` emits — `entrySound_build`,
-`EntrySound.eclass`, `EntrySound.column`, `EntrySound.select`, `cong_of_entrySound_collide`,
-`cong_of_eqs`, `cong_of_pathCompress` here, and `entrySound_headBuild`/`cong_headUnion` in
-`Encoding/Match.lean` for the two writers a rule head has — so what is missing is the
-*induction that applies them*, and three things it needs.
-
-* **The interpreter's writers, enumerated.** `unionsInv_step`'s five closed cases only ever
-  need the terms a block of `set`s wrote, which `holdsBuild_of_execProgramM` reads back off
-  `execActions`. This invariant owes *every* term the run adds, and every command `encodeCmd`
-  emits for a writing source command ends in `Cmd.saturate rebuildRuleset` — so no case closes
-  without "every term `execRunRules` and `FDatabase.mergeRound` add is one of these `set`s'".
-  That lemma does not exist, and it is the bulk of what is left: a fold over rule firings and
-  a double fold over row pairs, with `mergeOneOriented`'s two branches — the surviving entry
-  term and whatever `mergeBody` writes — as the two shapes at the bottom. What the fold has to
-  compose is settled: `FDatabase.SoundTerms.addTerm`, `.addRow` and `.union` are the three
-  writers of `terms` there are, `FDatabase.empty_soundTerms` is the base case, and
-  `FDatabase.SoundTerms.mono_src` is what carries a clause proved at a command's pre-state
-  onto the source the whole run finishes at.
-* **The row-to-entry direction, which is the one that is *not* refuted.** A rule fires off
-  `d.rows` (`patternHolds`), and turning a matched row into a `Database.Out` is
-  `FDatabase.IndexOk.entry` — a row is an entry term. That is the direction soundness needs.
-  `FDatabase.IndexCurrent` is its converse, and `cxTgt_not_indexCurrent` refutes *that*; so the
-  refutation that blocks `execM_viewLeaderRows` does not block this residue, which is why the
-  two are separate holes.
-* **`hfired` was where the falsity was, and it is now discharged.**
-  `entrySound_headBuild` and `cong_headUnion` ask that the *source* rule fired at the
-  substitution the correspondence returns, and `RuleResults` makes a firing a valid
-  substitution **plus a block that evaluates**. `exists_validQuerySubst_of_encodeQuery`
-  delivers the substitution and nothing more; a valid substitution is therefore *not* a
-  firing, and the two refutations above are exactly the gap. Three parts, all three **proved**,
-  and `mem_terms_of_headBuild_of_domain`/`mem_eqs_of_headUnion_of_domain` are the two shapes
-  composed:
-  * *A firing's writes reach the post-state.* `mem_terms_of_ruleFired` and
-    `mem_eqs_of_ruleFired` above, off `runRules_eqs_subset_of_cmdStep`. `RunRules` is a
-    `Database.sUnion` over the results and `MergeClosure` only grows `eqs`.
-  * *Two states, not one.* `Database.ViewsSound` is available at the round's **pre**-state,
-    which is the state the encoded rule read its rows off; the term the source's firing builds
-    lands in the **post**-state. `FDatabase.SoundTerms.mono_src` does not bridge that — it
-    moves a clause along `src.eqs ⊆ src'.eqs`, and `Term.app f is ∈ sd.terms` is not a clause
-    at `sd` at all. `entrySound_headBuild_post` and `cong_headUnion_post` are the
-    two-source forms — the reading at `sd`, the conclusion at `sd'` — and the old names are
-    their `src' := src` instances.
-  * *The block evaluates at all*, which is what the two domain clauses buy.
-    `evalLocalActions_isSome_of_builds` is the fold: `headsDeclared` gives every applied name a
-    source constructor (`Actions.Builds.of_declared`, carried on the state as
-    `Database.HeadsBuild`), and `noLitUnion` gives `evalAction`'s own `union` check
-    (`Actions.UnionRunnable`, whose two arms are the clause's two disjuncts). The second arm is
-    the one that is not syntactic — `Spec/Scope.lean`'s `Action.Evaluable` asks a `union`
-    operand to be an *application*, and a lit-free program's **variable** operand is not one —
-    so it is carried as the source-run invariant `Database.NoLits`, whose data clause
-    `Database.LitFree` says no term the source holds is a literal.
-    `exists_step_of_mem_evalActions` is the environment part the old text called for: an action
-    after a `letBind` runs at `src.env ++ τ` extended by the block's own binders, and where the
-    head mentions none of them (`hlet`) the extension drops out by `Expr.eval_agreeOn`, which is
-    the shape `hfired` is stated in.
-
-  **Two conditions on the firing remain, and neither is a domain clause.** `Rule.HeadScoped` —
-  every head variable is the query's, a global, or the block's own `let` — is not one because
-  it costs nothing: `encodeBuild` keeps a source variable as itself and the encoded query binds
-  no name the source query does not, so a head variable neither the query nor a global binds
-  sticks the **encoded** head too and that firing writes on neither side; what is missing is
-  the lemma that says so. `hlet` is not one either: where the block's `let`s *do* shadow the
-  head, the encoded block performs the same `let`s, so `entrySound_headBuild`'s own `hval` is
-  stated at the wrong environment as well, and the repair is to carry the shared prefix on both
-  sides rather than to restrict the source.
-
-  It is still the mirror of `unionsJoined_fire`, a source firing behind the target's where
-  that one needs a target firing behind the source's; what it is no longer is open.
-
-**No fixpoint is needed on the target.** `FDatabase.RoundClosed` was named as this residue's
-third missing piece; it is not one. Soundness is indifferent to under-firing — `execM_contained`
-says the encoded round fires a subset, and a subset of justified writes is justified — so what
-this needs is the *containment*, not the fixpoint. The fixpoint is what `execM_viewLeaderRows`
-and `unionsJoined_fire` want, where a firing has to be shown to have *happened*.
-
-**The rule head is closed, and was the case worth doubting.** `encodeBuild` mints its skolem
-over the arguments' *ids*, so `mem_terms_of_entrySound_skolem` makes the head's obligation
-equivalent to the minted id being a source term — which, read off the key, is the fact
-`encode_corresponds_invents_enode` refutes. It is not needed: the source reading the
-correspondence delivers is a *choice*, and taking it to be the ids themselves is legitimate
-because `Database.ViewsSound` reads a key column back as something congruent to the id and both
-endpoints of a congruence are present. `Encoding/Match.lean`'s `exists_validQuerySubst_at_ids`
-is that reading, `Expr.eval_transport` is why the source's head evaluation then gives the same
-term rather than a congruent one, and `entrySound_headBuild` is the case — with `hfired` as its
-only residue. `entrySound_headBuild_witness` is all of its hypotheses holding together at
-`wProgram`, at the view entry that run really wrote.
-
-**`addTerm` records every subterm**, so the induction also owes that no *id* and no *proof*
-term is view- or `@UF`-shaped. The names are already separated (`viewName_inj`,
-`viewName_ne_ufName`, `viewName_ne_termName`, `viewName_ne_transName`) and
-`Program.EncodeDomain.noAt` keeps every source constructor out of the generated namespace; what
-is missing is the invariant that says an id is a source application and a proof is built from
-the proof vocabulary.
-
-At a program with no rule the hypothesis is the source's own `evalAction`, and
-`satTarget_viewsSound` is that case discharged; `ncTgt_soundTerms` is both clauses at a state
-an encoded program reaches with a rule, a non-leader firing and a real `@UF` edge. -/
-theorem execM_soundTerms {P : Program} {src : Database} {tgt : FDatabase}
-    (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
-    (htgt : execM (encode P) = some tgt) : tgt.SoundTerms src := by
-  sorry
-
-/-- **The completeness half's invariant at the state `execM` returned.** `execM_soundTerms` is
-the residue; the step from it is `viewsSound_of_soundTerms`, whose hypothesis
-`execM_encode_eqsRefl` discharges. -/
-theorem execM_viewsSound {P : Program} {src : Database} {tgt : FDatabase}
-    (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
-    (htgt : execM (encode P) = some tgt) :
-    tgt.toDatabase.ViewsSound src ∧ tgt.toDatabase.EdgesSound src :=
-  viewsSound_of_soundTerms (execM_encode_eqsRefl htgt) (execM_soundTerms hdom hsrc htgt)
-
-/-- **No equality is invented, at the source's own e-nodes.** Proved from
-`execM_viewsSound`, through `sameClass_cong_of_state` — the target-side half needs no
-induction, only the invariant.
-
-**The two membership hypotheses are not bookkeeping and cannot be dropped**: without them the
-statement is false at `witnessProgram`, where the rebuild gives `(Add One One)` an e-class and
-the source has no e-node for it (`encode_corresponds_invents_enode`). `Cong src a b` implies
-both, so the forward half pays nothing for them, and `difftest correspond`'s universe is the
-two term sets, so the corpus result is a measurement of exactly this restricted claim. -/
-theorem encode_corresponds_complete {P : Program} {src : Database} {tgt : FDatabase}
-    (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
-    (htgt : execM (encode P) = some tgt) {a b : Term} (ha : a ∈ src.terms)
-    (hb : b ∈ src.terms) (h : SameClass tgt.toDatabase a b) : Cong src a b :=
-  sameClass_cong_of_state (hsrc.wf Database.WF.empty)
-    (execM_viewsSound hdom hsrc htgt).1 ha hb h
-
-/-- **The correspondence.** `difftest correspond 64` runs exactly this claim over the 70
-in-domain cases and the seventeen probes, through `sameClassF` and `closureF`, and reports
-70 agreeing, 0 LOST, 0 INVENTED — and `link-diff` 0, which is what says the swept relation
-is this one.
-
-`EncodeDomain` is still needed: outside it `encode` is not defined for the program at all —
-a `:merge` declaration has no table triple to emit, and a source name in the generated
-namespace collides with one. `Rebuilt` is *not* a hypothesis: it is a postcondition of the
-specification's rebuild command (`cmdStep_rebuilt`), and the hypothesis here names an
-`execM` target, so what the two unproved halves have to lean on is the interpreter's own
-`mergeSaturateF` fixpoint instead.
-
-**Stated at the source's e-nodes**, which is where the encoding is faithful and where the
-corpus sweep measures it. The two membership hypotheses cost the forward direction nothing —
-`Cong src a b` implies both — and the backward direction cannot do without them:
-`encode_corresponds_invents_enode` refutes the unrestricted `iff` at this file's own witness
-program. -/
-theorem encode_corresponds {P : Program} {src : Database} {tgt : FDatabase}
-    (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
-    (htgt : execM (encode P) = some tgt) (a b : Term) (ha : a ∈ src.terms)
-    (hb : b ∈ src.terms) :
-    Cong src a b ↔ SameClass tgt.toDatabase a b :=
-  ⟨encode_corresponds_forward hdom hsrc htgt, encode_corresponds_complete hdom hsrc htgt ha hb⟩
+`execM_soundTerms` consumes `entrySound_headBuild` and `cong_headUnion`, the two writers a
+rule head has, and those need the query-to-substitution correspondence — which is
+`Encoding/Match.lean`, downstream of this file. So the residue and the three theorems built
+on it (`execM_viewsSound`, `encode_corresponds_complete`, `encode_corresponds`) are stated
+there instead. Everything else the completeness half needs is above, and the witnesses that
+pin the statement are below. -/
 
 /-! ### The witness
 

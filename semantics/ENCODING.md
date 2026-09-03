@@ -5,8 +5,8 @@ witnesses are **deleted**; this file is what survives of them, and it exists so 
 not re-attempted with the same defects.
 
 **One statement is back, and it is stated where it can be measured.**
-`Encoding/Correspond.lean` has `encode_corresponds` — `Cong src a b ↔ SameClass tgt a b` —
-together with the decision procedure `sameClassF`, the proof that the two agree
+`Encoding/Complete.lean` has `encode_corresponds` — `Cong src a b ↔ SameClass tgt a b` —
+over `Encoding/Correspond.lean`'s decision procedure `sameClassF`, the proof that the two agree
 (`sameClassF_iff`, both directions, no `sorry`), and a compiled witness that its hypotheses
 are jointly satisfiable at a state where both sides of the `iff` are non-trivial
 (`encode_corresponds_witness`). `difftest correspond 64` sweeps exactly that relation over
@@ -20,7 +20,13 @@ totality `Database.ViewsCover` is derived from. Of the three left, one is that i
 open case (`unionsJoined_fire`: a source command that fires rules needs a target firing behind
 the source's, and one step below that the premise row must be current in the *index*, not merely
 an entry term), one is the run-wide index argument itself (`execM_viewLeaderRows`: the rebuild's
-e-class rule, its column rules and path compression), and one is the completeness half.
+e-class rule, its column rules and path compression), and one is the completeness half
+(`Encoding/Complete.lean`'s `execM_soundTerms`: every term the run adds, justified against the
+source). The **merge phase** of that last one is proved — `mergeSaturateF_soundTerms`, out of
+`mergeOneOriented_soundTerms` — and so are the two facts it needed, `Signature.MergeShape` (only
+`@UF` and the views carry a `:merge` body, and both carry `mergeBody`) and `eq_of_congrKeys`
+(against a diagonal closure, congruent keys are equal keys); what remains there is the fold over
+**rule firings**.
 **Two clauses this factorisation used to run through are
 refuted** and kept as records — `Database.ReadsSelf` (every source term is an id of itself) and
 `Database.ViewsProduct` (a view entry at every id tuple the children form), both false at

@@ -32,9 +32,11 @@ Two things worth knowing before reading any of it.
 the whole library builds and **`Spec/`, `Impl/` and `Proofs/` carry no `sorry`**. What is open
 there is coverage rather than proof: `PLAN.md`, "What is covered, and what is not", has the one
 combination — a `union` together with a `:merge` function — that neither top-level theorem
-reaches, and which difftest exercises. The four `sorry`s in the library are all in parked M11's
-`Encoding/Correspond.lean`, one per named property of the state `execM` returned that
-`encode_corresponds` is reduced to, and `make lean-check` pins their number and their file.
+reaches, and which difftest exercises. The three `sorry`s in the library are all in parked M11's
+`Encoding/`, one per named property of the state `execM` returned that `encode_corresponds`
+is reduced to — two in `Correspond.lean` and one in `Complete.lean`, which is where the
+completeness half is assembled because it consumes `Match.lean` — and `make lean-check` pins
+their number and their directory.
 
 **`Spec/` is append-only and `Impl/` is not.** Nothing is ever removed from `Database.eqs`,
 where a function's whole table lives as terms; `Impl/` keeps a `Row` index it re-keys and
