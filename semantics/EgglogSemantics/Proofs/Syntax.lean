@@ -31,6 +31,15 @@ theorem Signature.AllConstructors.elim {sig : Signature} (h : sig.AllConstructor
   rw [h f] at hm; exact absurd hm (by simp)
 
 namespace Expr
+/-- Structural induction over `Expr`, with the induction hypothesis given for every element
+of an application's argument list. `Term.recTerm`'s twin. -/
+@[elab_as_elim]
+theorem recExpr {motive : Expr → Prop} (lit : ∀ l, motive (.lit l)) (var : ∀ v, motive (.var v))
+    (app : ∀ f args, (∀ a ∈ args, motive a) → motive (.app f args)) (e : Expr) : motive e :=
+  Expr.rec (motive_1 := motive) (motive_2 := fun args => ∀ a ∈ args, motive a) lit var
+    (fun f args ih => app f args ih) (fun a ha => by simp at ha)
+    (fun _ _ iht ihts a ha => (List.mem_cons.mp ha).elim (fun h => h ▸ iht) (ihts a)) e
+
 @[simp] theorem vars_lit {l : Lit} : (Expr.lit l).vars = [] := rfl
 
 @[simp] theorem vars_var {v : Var} : (Expr.var v).vars = [v] := rfl
@@ -66,6 +75,14 @@ theorem mem_varsList {v : Var} {es : List Expr} (h : v ∈ Expr.varsList es) :
 
 @[simp] theorem fnsList_cons {e : Expr} {es : List Expr} :
     Expr.fnsList (e :: es) = e.fns ∪ Expr.fnsList es := rfl
+
+/-- An argument's own function names are among the list's: `mem_fnsList`'s converse, and the
+direction a hypothesis about the whole application is consumed in. -/
+theorem fns_subset_fnsList {e : Expr} : ∀ {es : List Expr}, e ∈ es → e.fns ⊆ Expr.fnsList es
+  | x :: xs, h => by
+    rcases List.mem_cons.mp h with rfl | h'
+    · exact fun _ hx => List.mem_union_iff.mpr (Or.inl hx)
+    · exact fun _ hx => List.mem_union_iff.mpr (Or.inr (fns_subset_fnsList h' hx))
 
 /-- A function name of an argument list is a function name of one of its arguments. -/
 theorem mem_fnsList {f : FnName} {es : List Expr} (h : f ∈ Expr.fnsList es) :

@@ -594,17 +594,12 @@ theorem staleProgram_head_stuck {C : Database}
 /-! ## `MergeDeclared` is what makes a `.decl`'s merge phase neutral
 
 `CmdStep` runs a merge phase after **every** command, where `.rule` and `.decl` previously
-took none. Both additions are neutral — `Scratch/CmdMergePhase.lean` has `ruleStep_iff` and
+took none. Both additions are neutral — `Proofs/Step.lean` has `ruleStep_iff` and
 `declStep_iff` — but `.decl` is neutral only *once `Spec/Scope.lean`'s `MergeDeclared` is
 asked*, because a `:merge` result may name a function declared later. This is the witness
 that the check cannot be dropped: `g` is a merge function whose result names `f`, `f` is
 declared afterwards, and the declaration turns a state where nothing merges into one where
 a step applies. -/
-
-/-- The state-level reading of `Program.MergeDeclared`: every declared merge function's body
-and result name only functions the signature already has. -/
-def SigMergeDeclared (sig : Signature) : Prop :=
-  ∀ g d ms, sig g = some d → d.merge = some ms → ms.Declared sig
 
 /-- `(function g (Math) i64 :merge (f))` — a `:merge` whose result names `f`. -/
 def gdecl : FnDecl := { arity := 1, outArity := 1, merge := some (.merge [] [.app "f" []]) }
@@ -729,8 +724,8 @@ theorem gdecl_not_mergeDeclared (sig : Signature) (h : sig "f" = none) :
   · exact hs (show Function.update sig "g" (some gdecl) "f" = none by
       rw [Function.update_of_ne (by simp)]; exact h)
 
-/-- `Scratch/CmdMergePhase.lean`'s `declStep_iff` does not apply to `db₀`, and this is the
-hypothesis it fails. -/
+/-- `Proofs/Step.lean`'s `declStep_iff` does not apply to `db₀`, and this is the hypothesis
+it fails. -/
 theorem db₀_not_sigMergeDeclared : ¬ SigMergeDeclared db₀.sig := by
   intro h
   rcases (h "g" gdecl (.merge [] [.app "f" []]) (by simp [db₀]) rfl).2 (.app "f" [])

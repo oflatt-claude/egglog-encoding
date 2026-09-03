@@ -54,7 +54,6 @@ read closely and the second skimmed.
 | `EgglogSemantics/Proofs/` | everything proved about the two, one file per subject |
 | `EgglogSemantics/Tests/` | example programs as proofs and `#guard`s, and the `.egg` emitter |
 | `EgglogSemantics/Encoding/` | **parked M11** — the encoder `encode`, the proof checker, and `Correspond.lean`: the correspondence `difftest correspond` measures, the decision procedure proved equal to it, and the vacuity results. Its original theorems were deleted; [`ENCODING.md`](ENCODING.md) is what survives them |
-| `Scratch/` | one surviving witness file, outside the library and so outside `lake build` — which is how the others were lost; `PLAN.md`, "Checking a change" |
 
 `Spec/` and `Impl/` are **definitions**, with what the language forces inlined rather than
 named: `decreasing_by` on `Impl/Closure.lean`'s `closure`, decidability instances. Two

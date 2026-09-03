@@ -1117,11 +1117,12 @@ in `Expr.fns` and `evalAction` never consults the signature for it, so without t
 plant colliding entries during the closure, and the declaration then turns them into a merge step
 that no pre-state closure reaches.
 
-Two facts carry the neutrality argument, both compiled in `Scratch/CmdMergePhase.lean`:
-`MergeDeclared` plus `DeclsFresh` put the fresh name outside every *existing* merge body, so bodies
-evaluate identically before and after the declaration; and `DeclaredTerms` plus `WF` give
-`Avoids f db` — no term of `db` mentions `f` — preserved across the whole closure, which is needed
-because step *k* could otherwise plant an `f`-headed entry for step *k+1*. `decl_enables_merge` is
+Two facts carry the neutrality argument, both compiled in `Proofs/Step.lean` beside
+`ruleStep_iff` and `declStep_iff` themselves: `MergeDeclared` plus `DeclsFresh` put the fresh name
+outside every *existing* merge body, so bodies evaluate identically before and after the
+declaration (`evalActions_update`); and `DeclaredTerms` plus `WF` give `Database.Avoids db f` — no
+term of `db` mentions `f` — preserved across the whole closure (`mergeClosure_avoids`), which is
+needed because step *k* could otherwise plant an `f`-headed entry for step *k+1*. `decl_enables_merge` is
 kept as the justification for the check rather than deleted, beside `db₀_not_sigMergeDeclared`
 recording why it no longer contradicts `declStep_iff`.
 

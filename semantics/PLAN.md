@@ -260,10 +260,12 @@ the other documents cite by name are in neither file and in no file at all**: th
 scratch probes and the scratch was not kept. That is the work queue's second row, and it is worse
 than "unhomed" — `no_stable_choice`, `fst_stable`, `const_stable`, `orderingMin_not_stable`,
 `cmin_not_stable`, `mergeRound_contained_needs_recorded` and `spec_never_distA` are prose now. Two
-separate sessions have found a scratch file silently red, so this is a known failure mode rather
-than bad luck. `transport_recorded_false`, `recorded_iff_subset` and `encode_unionFree` came back in
-— the first two in `Proofs/Counterexamples.lean`, the third in `Encoding/Encode.lean` — so
-`lake build` checks them.
+separate sessions found the last scratch file silently red, so this is a known failure mode rather
+than bad luck, and **there is no `Scratch/` any more**: a tracked file no gate checks is worse than
+no file. `transport_recorded_false`, `recorded_iff_subset` and `encode_unionFree` came back in
+— the first two in `Proofs/Counterexamples.lean`, the third in `Encoding/Encode.lean` — and
+`ruleStep_iff` and `declStep_iff` came back in `Proofs/Step.lean`, so `lake build` checks them
+all.
 
 Two traps that a green build will not catch. Writing `h.ge` for a set inclusion silently
 pulls `Classical.choice` into every downstream axiom set. And `lake build` does not rebuild
@@ -344,7 +346,6 @@ Proofs/    one file per Spec/ or Impl/ subject, plus:
 Tests/     Examples  worked examples, as proofs and as #guards
            Egg       renders a Program as egglog source, for differential testing
 Encoding/  Encode                         — parked M11; see ENCODING.md
-Scratch/   one surviving witness file; outside the library, so outside `lake build`
 ```
 
 `Spec/Eval.lean` is what a command *computes* and is `Option`-valued; `Spec/Step.lean` is

@@ -5589,50 +5589,10 @@ theorem mem_eqs_of_headUnion {R : RulesetName} {c : Cmd} {sd sd' : Database}
 
 `EncodeDomain.headsDeclared` is `Actions.Declared` at the signature the source program's
 prefix has installed, and the state a firing reads is later than that — `Cmd.sigBind` only
-ever writes a `some`, so a name declared before the rule is declared at the firing.
+ever writes a `some`, so a name declared before the rule is declared at the firing
+(`Proofs/Step.lean`'s `Signature.extends_sigBind` and `Actions.Declared.mono`).
 `EncodeDomain.noPrim` and `ctorsOnly` then turn declaredness into `Signature.IsCtor`, which is
 what `Expr.eval` needs. -/
-
-/-- One signature declares everything another does. `Cmd.sigBind` writes only a `some`, so
-this is what a command leaves. -/
-def Signature.Extends (sig' sig : Signature) : Prop := ∀ f, sig f ≠ none → sig' f ≠ none
-
-theorem Signature.Extends.refl (sig : Signature) : sig.Extends sig := fun _ h => h
-
-theorem Signature.Extends.trans {s₁ s₂ s₃ : Signature} (h₁ : s₂.Extends s₁)
-    (h₂ : s₃.Extends s₂) : s₃.Extends s₁ := fun f h => h₂ f (h₁ f h)
-
-theorem Signature.extends_sigBind (sig : Signature) (c : Cmd) :
-    (c.sigBind sig).Extends sig := by
-  cases c with
-  | decl f d =>
-      intro g hg
-      rw [Cmd.sigBind]
-      by_cases h : g = f
-      · subst h; rw [Function.update_self]; simp
-      · rw [Function.update_of_ne h]; exact hg
-  | _ => exact fun _ h => h
-
-/-- Declaredness is monotone in the signature, which is what carries a clause asked before
-the rule to the state the rule fires at. -/
-theorem Expr.Declared.mono {e : Expr} {sig sig' : Signature} (hs : sig'.Extends sig)
-    (h : e.Declared sig) : e.Declared sig' :=
-  fun f hf => (h f hf).imp id (hs f)
-
-theorem Action.Declared.mono {a : Action} {sig sig' : Signature} (hs : sig'.Extends sig)
-    (h : a.Declared sig) : a.Declared sig' := by
-  cases a with
-  | expr e => exact Expr.Declared.mono hs h
-  | letBind v e => exact Expr.Declared.mono hs h
-  | union e₁ e₂ => exact ⟨Expr.Declared.mono hs h.1, Expr.Declared.mono hs h.2⟩
-  | set f args out =>
-      exact ⟨hs f h.1, fun e he => Expr.Declared.mono hs (h.2.1 e he),
-        fun e he => Expr.Declared.mono hs (h.2.2 e he)⟩
-
-theorem Actions.Declared.mono : ∀ {as : List Action} {sig sig' : Signature},
-    sig'.Extends sig → Actions.Declared as sig → Actions.Declared as sig'
-  | [], _, _, _, _ => trivial
-  | _ :: _, _, _, hs, h => ⟨h.1.mono hs, Actions.Declared.mono hs h.2⟩
 
 /-- An expression's own `Expr.ctors` are among the list's. -/
 theorem Expr.mem_ctorsList {es : List Expr} {e : Expr} (he : e ∈ es) {p : FnName × Nat}

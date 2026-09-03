@@ -2708,34 +2708,6 @@ to "the merge result is a term the database already holds", under which `addRow`
 class anywhere. Every generated merge case satisfies it, results being `i64` literals. -/
 
 /-! ### Well-formedness -/
-/-- Every binding a merge body's environment provides is one of the two colliding rows'
-outputs. `MergeStep.wf` and `mergeOneOriented_inv` both need it, because `WF.envInTerms`
-has to hold of `mergeEnv a b` before the body runs — and an entry is a term now, so
-`WF.subtermClosed` supplies the outputs where `RowsWF` used to. -/
-theorem mem_mergeEnvIdx {i : Nat} {os ns : List Term} {p : Var × Term}
-    (h : p ∈ mergeEnvIdx i os ns) : p.2 ∈ os ∨ p.2 ∈ ns := by
-  induction os generalizing i ns with
-  | nil => simp [mergeEnvIdx] at h
-  | cons o os ih =>
-    cases ns with
-    | nil => simp [mergeEnvIdx] at h
-    | cons n ns =>
-      simp only [mergeEnvIdx, List.mem_cons] at h
-      rcases h with rfl | rfl | h
-      · exact Or.inl (by simp)
-      · exact Or.inr (by simp)
-      · exact (ih h).imp (fun hm => by simp [hm]) fun hm => by simp [hm]
-
-theorem mem_mergeEnv {os ns : List Term} {p : Var × Term} (h : p ∈ mergeEnv os ns) :
-    p.2 ∈ os ∨ p.2 ∈ ns := by
-  unfold mergeEnv at h
-  split at h
-  · simp only [List.mem_cons, List.not_mem_nil, or_false] at h
-    rcases h with rfl | rfl
-    · exact Or.inl (by simp)
-    · exact Or.inr (by simp)
-  · exact mem_mergeEnvIdx h
-
 /-- Every declared `:merge` obeys the discipline every other action block obeys — its body
 writes only legal `set`s, at the declared column widths — and its result has one expression
 per value column.
