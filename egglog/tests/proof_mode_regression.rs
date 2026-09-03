@@ -141,23 +141,104 @@ fn fail_rejects_definitions_and_user_commands() {
 }
 
 #[test]
-fn proof_mode_rejects_unsupported_fail_effects() {
+fn proof_mode_fail_keeps_provable_action_effects() {
     for source in [
-        "(relation R (i64)) (fail (input R \"missing.tsv\"))",
-        "(function f () i64 :merge old) (fail (set (f) 1))",
-        "(datatype N (A) (B)) (fail (union (A) (B)))",
-        "(datatype N (A)) (fail (A))",
-        "(datatype N (A)) (fail (extract (A) -1))",
-        "(fail (push))",
+        r#"
+        (function score () i64 :merge old)
+        (fail (set (score) 1) (panic "stop"))
+        (prove (= (score) 1))
+        "#,
+        r#"
+        (datatype N (A) (B))
+        (let a (A))
+        (let b (B))
+        (fail (union a b) (panic "stop"))
+        (prove (= a b))
+        "#,
+        r#"
+        (datatype N (A))
+        (fail (A) (panic "stop"))
+        (prove (= (A) (A)))
+        "#,
     ] {
-        let error = EGraph::new_with_proofs()
+        EGraph::new_with_proofs()
             .parse_and_run_program(None, source)
-            .unwrap_err();
-        assert!(
-            matches!(&error, Error::UnsupportedProofCommand { .. }),
-            "{source}: {error:?}"
-        );
+            .unwrap_or_else(|error| panic!("{source}: {error:?}"));
     }
+}
+
+#[test]
+fn proof_mode_fail_catches_input_errors() {
+    EGraph::new_with_proofs()
+        .parse_and_run_program(
+            None,
+            r#"
+            (relation R (i64))
+            (fail (input R "missing.tsv"))
+            "#,
+        )
+        .unwrap();
+}
+
+#[test]
+fn proof_mode_fail_keeps_successful_scope_changes() {
+    EGraph::new_with_proofs()
+        .parse_and_run_program(
+            None,
+            r#"
+            (push)
+            (fail (pop) (panic "stop"))
+            (push)
+            (pop)
+            "#,
+        )
+        .unwrap();
+}
+
+#[test]
+fn proof_mode_fail_keeps_provable_input_rows() {
+    let directory =
+        std::env::temp_dir().join(format!("egglog_proof_fail_input_{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(directory.join("rows.tsv"), "1\n").unwrap();
+
+    let mut egraph = EGraph::new_with_proofs();
+    egraph.fact_directory = Some(directory.clone());
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
+            (relation R (i64))
+            (fail (input R "rows.tsv") (panic "stop"))
+            (prove (R 1))
+            "#,
+        )
+        .unwrap();
+
+    std::fs::remove_dir_all(directory).ok();
+}
+
+#[test]
+fn proof_mode_fail_numbers_skipped_actions_before_later_fiats() {
+    EGraph::new_with_proofs()
+        .parse_and_run_program(
+            None,
+            r#"
+            (datatype N (A) (B))
+            (fail (check (= (A) (B))) (union (A) (B)))
+            (union (A) (B))
+            (prove (= (A) (B)))
+            "#,
+        )
+        .unwrap();
+}
+
+#[test]
+fn proof_mode_still_rejects_fail_command_expressions_that_build_terms() {
+    let error = EGraph::new_with_proofs()
+        .parse_and_run_program(None, "(datatype N (A)) (fail (extract (A) -1))")
+        .unwrap_err();
+    assert!(matches!(error, Error::UnsupportedProofCommand { .. }));
 }
 
 #[test]

@@ -387,21 +387,13 @@ evaluate:
 | `@MergeIdx` / `@MergeRow` | a function and a subexpression of its merge body | running the merge body on the premise outputs |
 | `@Trans`, `@Sym`, `@Congr`, `@Proj`, … | only other proofs | composing their conclusions |
 
-Naming a position means every proof row needs an action to name, so a command
-the checker's program does not record cannot leave proof-bearing state behind.
-Proof mode therefore rejects proof-producing operations inside `(fail …)`:
-`set`, `union`, term-building actions, `extract` expressions that build terms,
-and any eq-sort `output`. It also rejects `push`/`pop`; term- and proof-encoded
-modes reject `input`. Checks, existing-global extracts, and base-only actions
-such as `log` remain allowed.
-
-Every mode rejects `include` and persistent definitions inside `fail`, including
-nested `fail`: sorts, datatypes, constructors, relations, functions, indexes,
-rules and rulesets, rewrites, top-level `let`, and `prove`. User-defined commands
-are also rejected because their effects are not statically known. Such commands
-could be resolved eagerly even though execution skips them after an earlier
-failure. During proof testing, allowed checks inside `fail` remain negative
-assertions.
+Actions inside `(fail …)` keep their ordinary top-level effects. Each action's
+instrumentation runs as one local block, and actions in the proof-checking
+program are numbered through the wrapper in source order. A skipped action can
+mint no proof, but retaining its position keeps later `@FiatUnion` and
+`@FiatTerm` references stable. Term-building `extract` and `output` expressions
+remain unsupported here for the same reason as the separate top-level case
+below: those command expressions do not yet have source-action positions.
 
 The separate top-level `(extract e)` case for a term not already present remains
 open ([issue #80](https://github.com/saulshanabrook/egglog-encoding/issues/80)).

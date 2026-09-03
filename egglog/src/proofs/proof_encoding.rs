@@ -500,27 +500,68 @@ impl<'a> ProofInstrumentor<'a> {
             ResolvedNCommand::Input {
                 span, name, file, ..
             } => Self::input_actions(self.egraph, span, name, file)?.len(),
+            ResolvedNCommand::Fail(_, commands) => {
+                let mut count = 0;
+                for command in commands {
+                    count += self.global_actions_in(command)?;
+                }
+                count
+            }
             _ => 0,
         })
+    }
+
+    /// [`Self::global_actions_in`] for a command guarded by `fail`. An input
+    /// error belongs to execution so that `fail` can catch it; in that case no
+    /// rows, and therefore no source actions, exist to number.
+    fn global_actions_in_fail(&self, command: &ResolvedNCommand) -> Result<usize, Error> {
+        match command {
+            ResolvedNCommand::Input {
+                span, name, file, ..
+            } => Ok(Self::input_actions(self.egraph, span, name, file)
+                .map(|actions| actions.len())
+                .unwrap_or(0)),
+            _ => self.global_actions_in(command),
+        }
     }
 
     pub(crate) fn lower_inputs(
         egraph: &EGraph,
         program: Vec<ResolvedNCommand>,
     ) -> Result<Vec<ResolvedNCommand>, Error> {
+        Self::lower_inputs_inner(egraph, program, false)
+    }
+
+    fn lower_inputs_inner(
+        egraph: &EGraph,
+        program: Vec<ResolvedNCommand>,
+        inside_fail: bool,
+    ) -> Result<Vec<ResolvedNCommand>, Error> {
         let mut lowered = Vec::with_capacity(program.len());
         for command in program {
-            if let ResolvedNCommand::Input {
-                span, name, file, ..
-            } = &command
-            {
-                lowered.extend(
-                    Self::input_actions(egraph, span, name, file)?
-                        .into_iter()
-                        .map(ResolvedNCommand::CoreAction),
-                );
-            } else {
-                lowered.push(command);
+            match command {
+                ResolvedNCommand::Input {
+                    span,
+                    name,
+                    file,
+                    proof_base,
+                } => match Self::input_actions(egraph, &span, &name, &file) {
+                    Ok(actions) => {
+                        lowered.extend(actions.into_iter().map(ResolvedNCommand::CoreAction))
+                    }
+                    Err(_) if inside_fail => lowered.push(ResolvedNCommand::Input {
+                        span,
+                        name,
+                        file,
+                        proof_base,
+                    }),
+                    Err(error) => return Err(error),
+                },
+                ResolvedNCommand::Fail(span, commands) => lowered.push(ResolvedNCommand::Fail(
+                    span,
+                    Self::lower_inputs_inner(egraph, commands, true)?,
+                )),
+                command => lowered.push(command),
             }
         }
         Ok(lowered)
@@ -2538,11 +2579,24 @@ impl<'a> ProofInstrumentor<'a> {
                 res.push(Command::RunSchedule(self.instrument_schedule(schedule)));
             }
             ResolvedNCommand::Fail(span, cmds) => {
-                // Encode every wrapped command and keep the whole flattened result
-                // inside one `fail` (a single command can encode to several).
+                // Keep each source action's generated statements in the local
+                // action block produced by `term_encode_command`, and keep every
+                // generated command inside this `fail`. Number potential actions
+                // in source order even when an earlier command will skip them;
+                // proof checking retains the same positions, while only actions
+                // that actually run can mint fiats.
                 let mut encoded = vec![];
                 for cmd in cmds {
+                    let global_actions = if matches!(cmd, ResolvedNCommand::Fail(..)) {
+                        0
+                    } else {
+                        self.global_actions_in_fail(cmd)?
+                    };
                     self.term_encode_command(cmd, &mut encoded)?;
+                    self.global_action += global_actions;
+                    if !command_skips_rebuild(cmd) {
+                        encoded.push(Command::RunSchedule(self.rebuild()));
+                    }
                 }
                 res.push(Command::Fail(span.clone(), encoded));
             }
@@ -2649,7 +2703,13 @@ impl<'a> ProofInstrumentor<'a> {
 
         for command in program {
             let at = res.len();
-            let global_actions = self.global_actions_in(&command)?;
+            let global_actions = if matches!(command, ResolvedNCommand::Fail(..)) {
+                // `term_encode_command` advances between the nested actions so
+                // each block receives its own position.
+                0
+            } else {
+                self.global_actions_in(&command)?
+            };
             self.term_encode_command(&command, &mut res)?;
             self.global_action += global_actions;
             self.egraph.proof_state.global_actions_numbered = self.global_action;

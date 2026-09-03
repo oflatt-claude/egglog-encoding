@@ -896,19 +896,12 @@ pub enum ProofEncodingUnsupportedReason {
     SortWithUfAnnotation,
     #[error("user-defined commands are not supported.")]
     UserDefinedCommand,
-    #[error("`fail` wrapping an `input` command is not supported by proof encoding.")]
-    FailInputCommand,
     #[error(
-        "`fail` wrapping a proof-producing operation is not supported by proof encoding. The \
-         operation can leave proof-bearing state behind, but a failed command is not one the \
-         proof checker reads, so the proof has no source action to name."
+        "`fail` wrapping an `extract` or `output` expression that builds a term is not supported \
+         by proof encoding. Such command expressions do not yet have source-action positions \
+         for their term proofs."
     )]
-    FailActionCommand,
-    #[error(
-        "`fail` wrapping `push` or `pop` is not supported in proof mode. The scope change can \
-         survive the wrapper, but proof checking does not replay commands inside `fail`."
-    )]
-    FailScopeCommand,
+    FailTermBuildingCommandExpression,
     #[error(
         "let binding with a primitive in the body. For silly internal reasons, we don't support primitive bindings for proofs at the moment, sorry."
     )]
@@ -1594,38 +1587,23 @@ fn command_supports_proof_encoding_impl(
             for command in commands {
                 if proofs_enabled {
                     match command {
-                        GenericCommand::Action(action)
-                            if fail_action_produces_proof(action, type_info) =>
-                        {
-                            return Err(ProofEncodingUnsupportedReason::FailActionCommand);
-                        }
-                        GenericCommand::Actions(actions)
-                            if actions
-                                .0
-                                .iter()
-                                .any(|action| fail_action_produces_proof(action, type_info)) =>
-                        {
-                            return Err(ProofEncodingUnsupportedReason::FailActionCommand);
-                        }
                         GenericCommand::Extract(_, expr, variants)
                             if expr_interns_term(expr, Some(type_info))
                                 || expr_interns_term(variants, Some(type_info)) =>
                         {
-                            return Err(ProofEncodingUnsupportedReason::FailActionCommand);
+                            return Err(
+                                ProofEncodingUnsupportedReason::FailTermBuildingCommandExpression,
+                            );
                         }
                         GenericCommand::Output { exprs, .. }
                             if exprs.iter().any(|expr| expr_interns_term(expr, None)) =>
                         {
-                            return Err(ProofEncodingUnsupportedReason::FailActionCommand);
-                        }
-                        GenericCommand::Push(..) | GenericCommand::Pop(..) => {
-                            return Err(ProofEncodingUnsupportedReason::FailScopeCommand);
+                            return Err(
+                                ProofEncodingUnsupportedReason::FailTermBuildingCommandExpression,
+                            );
                         }
                         _ => {}
                     }
-                }
-                if matches!(command, GenericCommand::Input { .. }) {
-                    return Err(ProofEncodingUnsupportedReason::FailInputCommand);
                 }
                 command_supports_proof_encoding_impl(
                     command,
@@ -1903,21 +1881,7 @@ impl crate::constraint::TypeConstraint for DropReflexiveStepTypeConstraint {
     }
 }
 
-/// Whether `action` can leave proof-bearing state behind a `fail` wrapper.
-/// An eq-sort `let`, plus every `set` and `union`, records its own proof even
-/// when its operands are existing values; any action can also intern a term
-/// through an eq-sort call in one of its expressions.
-fn fail_action_produces_proof(action: &ResolvedAction, type_info: &TypeInfo) -> bool {
-    matches!(
-        action,
-        ResolvedAction::Let(_, _, expr) if expr.output_type().is_eq_sort()
-    ) || matches!(action, ResolvedAction::Set(..) | ResolvedAction::Union(..))
-        || action_nodes(action).into_iter().any(|node| match node {
-            ActionNode::Expr(expr) => is_term_call(expr, Some(type_info)),
-            ActionNode::Row(_) => false,
-        })
-}
-
+/// Whether evaluating `expr` can intern an equality-sort term.
 fn expr_interns_term(expr: &ResolvedExpr, type_info: Option<&TypeInfo>) -> bool {
     expr.find(&mut |expr| is_term_call(expr, type_info).then_some(()))
         .is_some()
