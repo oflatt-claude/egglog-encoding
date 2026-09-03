@@ -1,5 +1,5 @@
 ;;; A slotted e-graph in egglog, hand-written for one binary constructor so that the whole
-;;; machinery reads in one place. `slotted-experiments/gen-node-rules.py` emits the same
+;;; machinery reads in one place. `slotted/gen-node-rules.py` emits the same
 ;;; rules for the other arities and the payload leaves.
 ;;;
 ;;; A class is a connected component of `RenamesToLeader`: `(RenamesToLeader a m b)` is

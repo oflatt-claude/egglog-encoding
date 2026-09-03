@@ -42,7 +42,7 @@
 ;;;
 ;;; Every rule in the tutorial is now a real rewrite -- from `benches/sdql.rs` or
 ;;; `tests/array/mod.rs` -- compiled by `slotted-encoder.py`, and
-;;; `slotted-experiments/check-tutorial.py` asserts exactly that, up to a renaming of the
+;;; `slotted/check-tutorial.py` asserts exactly that, up to a renaming of the
 ;;; variables.  What a real rule cannot do is guarantee a particular state on demand, so the
 ;;; shapes below are built here instead, on plain operators `fN`/`gN`/`hN`/`kN`:
 ;;;

@@ -2,8 +2,8 @@
 ;;;
 ;;; `slotted-egraphs/tests/array/mod.rs` and `tests/rise/rewrite.rs`, which share this
 ;;; language. Written at the slotted level, so a rule says what it rewrites and nothing
-;;; about renamings -- `slotted-experiments/slotted-compile.py` turns it into egglog,
-;;; and `slotted-experiments/xdiff/xarray.py` compiles these same rules for the
+;;; about renamings -- `slotted/slotted-compile.py` turns it into egglog,
+;;; and `slotted/xdiff/xarray.py` compiles these same rules for the
 ;;; differential comparison against the reference. Both read THIS file.
 ;;;
 ;;; `Lam` and `Let` bind their column 0, so `(Lam $x ?b)` is `lam $x. b` and

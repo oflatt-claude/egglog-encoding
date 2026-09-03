@@ -5,15 +5,15 @@ Companion to these runnable files:
 | file | what it is |
 | --- | --- |
 | `slotted-tests/slotted-egraph-encoding-11.egg` | the machinery: union, congruence, redundancy, symmetry |
-| `slotted-tests/slotted-user-rules.egg` | the tutorial: one shape of user rule per section — M1–M11 — each stated as prose plus the single rule a compiler emits, and nothing else. All eleven are a real rewrite, from `sdql_rules()` or the paper's §4.1 array language, and each is exactly what `slotted-encoder.py` emits for it: `slotted-experiments/check-tutorial.py` compares every one against the encoder's output and allows only a renaming of the variables. M6 and M9 are the same rule (`eta`) at two atom orders, since the lead is a compile-time choice. The shapes no rewrite produces on demand — a multi-rooted left-hand side, two mints in one match, a child wider than its class — are hand-built e-graphs in the fixture block of `slotted-tests/slotted-user-rules-tests.egg`, whose rules are still the encoder's output |
+| `slotted-tests/slotted-user-rules.egg` | the tutorial: one shape of user rule per section — M1–M11 — each stated as prose plus the single rule a compiler emits, and nothing else. All eleven are a real rewrite, from `sdql_rules()` or the paper's §4.1 array language, and each is exactly what `slotted-encoder.py` emits for it: `slotted/check-tutorial.py` compares every one against the encoder's output and allows only a renaming of the variables. M6 and M9 are the same rule (`eta`) at two atom orders, since the lead is a compile-time choice. The shapes no rewrite produces on demand — a multi-rooted left-hand side, two mints in one match, a child wider than its class — are hand-built e-graphs in the fixture block of `slotted-tests/slotted-user-rules-tests.egg`, whose rules are still the encoder's output |
 | `slotted-tests/slotted-user-rules-tests.egg` | the cases for it: it includes the tutorial, then adds the terms, schedules, assertions and counter-examples |
-| `slotted-experiments/slotted-compile.py` | compiles a test written in the SLOTTED language — its own `(constructor ... :binder ...)` declarations, then terms, `rewrite`s and `(check (same a b))` — into a self-contained egglog program: the hand-written core, the machinery for exactly the constructors declared, and the compiled body. It includes no generated file, so nothing sits between a test and running it. `same` rather than `=` because two values are one slotted class when they reach a common leader, which is not egglog equality |
-| `slotted-experiments/slotted-encoder.py` | the recipe as code: the machinery emitter, the term encoding and the rule compiler, which every generator below goes through |
-| `slotted-experiments/xdiff/xdiff.py` | differential tests against the reference implementation |
+| `slotted/slotted-compile.py` | compiles a test written in the SLOTTED language — its own `(constructor ... :binder ...)` declarations, then terms, `rewrite`s and `(check (same a b))` — into a self-contained egglog program: the hand-written core, the machinery for exactly the constructors declared, and the compiled body. It includes no generated file, so nothing sits between a test and running it. `same` rather than `=` because two values are one slotted class when they reach a common leader, which is not egglog equality |
+| `slotted/slotted-encoder.py` | the recipe as code: the machinery emitter, the term encoding and the rule compiler, which every generator below goes through |
+| `slotted/xdiff/xdiff.py` | differential tests against the reference implementation |
 | `slotted-tests/sdql.egg` | the paper's `sdql` language and all 43 of its rewrite rules, in the SLOTTED language. `gen-sdql-rules.py` compiles them for the .egg tests and the differential harness, and `slotted-compile.py` compiles the same file to run it; neither restates a rule |
 | `slotted-tests/array.egg` | the same, for the paper's §4.1 array language and its 8 rules. `xarray.py` builds its rule objects from this file |
 | `slotted-tests/generated/slotted-array-rules.egg` | what those 8 compile to, self-checking |
-| `slotted-experiments/xdiff/xarray.py` | the same 8 rules, differentially tested against the reference |
+| `slotted/xdiff/xarray.py` | the same 8 rules, differentially tested against the reference |
 
 Semantics come from Schneider et al., *Slotted E-Graphs*, PLDI 2025
 ([PDF](https://steuwer.info/files/publications/2025/PLDI-Slotted-E-Graphs.pdf),
@@ -713,7 +713,7 @@ h( {1→1,2→2}·B,  {1→1,2→2}·h( {0→1}·Var0, {1→1,2→2}·B ) )
         where  B = h( {0→2}·Var0, {0→1}·Var0 )
 ```
 
-`slotted-experiments/xdiff/stranded.py` reproduces this. It works in two steps:
+`slotted/xdiff/stranded.py` reproduces this. It works in two steps:
 
 1. Declare two observer relations *after* the machinery reaches a fixpoint, one
    joining `RenamesToLeader V s V` and one not, both keyed on the whole `App` row.
@@ -923,7 +923,7 @@ Two things this cost before it was found:
 
 * **A stable row count is not a fixpoint.** Every probe here reads the state after
   `(run N)`, which cannot see a rule that deletes what another rebuilds.
-  `slotted-experiments/xdiff/saturates.py` now checks the corpus with `saturate`, and
+  `slotted/xdiff/saturates.py` now checks the corpus with `saturate`, and
   it is the only check that would have caught this.
 * **"Has an edge to a different value" is not "is a follower".** Since the relation
   holds both directions, that test is true of the leader too, and the probe reported a
@@ -1053,7 +1053,7 @@ two-child format cannot express.
 A probe partition only sees what someone thought to probe. Counting e-nodes per
 operator sees the whole e-graph, so a spurious node, a missing one, or a merge that
 should not have happened shows up whether or not a probe was aimed at it.
-`slotted-experiments/xdiff/nodecounts.py` does that: the oracle grows a `dump` line
+`slotted/xdiff/nodecounts.py` does that: the oracle grows a `dump` line
 that prints every class and node through `to_syntax` -- operator, children with their
 slotmaps, slot literals -- and the encoding side counts `App{n}` rows by operator.
 
@@ -1110,7 +1110,7 @@ cases, `union-id` 2, `unordered` 1, `slot-late` 1).
 ### The whole e-graph, not a projection of it
 
 Node counts and the probe partition are both *projections*: two different e-graphs can
-agree on either. `slotted-experiments/xdiff/isomorphism.py` compares the thing itself,
+agree on either. `slotted/xdiff/isomorphism.py` compares the thing itself,
 by constructing a witness — a bijection between the two sides' e-classes, and one
 between each matched pair's slots, under which the node sets are equal. The witness is
 then re-checked, so a pass is a proof; a failure to find one is reported as "none found"
@@ -1449,7 +1449,7 @@ checkable this way" and left to `compose-total`. Both are one comparison against
 ```
 
 — since `map-domain` and `ClassSlots` are both identity maps, so comparing them is set
-equality. `slotted-experiments/xdiff/def4-edges.py` reports **0 over 44 curated and 250
+equality. `slotted/xdiff/def4-edges.py` reports **0 over 44 curated and 250
 generated cases**.
 
 **This is what makes `wide-kids` benign rather than luckily undetected.** An action reads
@@ -1598,7 +1598,7 @@ settle it.
 
 ### Which slotted-egraphs is this compared against?
 
-Upstream `main`, pinned to `b90adca` in `slotted-experiments/xmulti/Cargo.toml` --
+Upstream `main`, pinned to `b90adca` in `slotted/xmulti/Cargo.toml` --
 a rev rather than a local checkout, so a CI runner can build the oracle. That is `main`
 after PR #45 was merged, and two things in it matter.
 
@@ -1610,7 +1610,7 @@ no such branch: an unconstrained slot is minted, a fresh name differs from every
 so it only ever takes the "apart" one. Moving to this base took the deep sweep from 17
 divergences to 278, 229 of them ours, with nothing in the encoding changed -- the
 oracle got sharper and showed a gap that was always there. `FINAL_REFINE_GAP` in
-`slotted-experiments/xdiff/xdiff.py` pins the two curated cases that show it.
+`slotted/xdiff/xdiff.py` pins the two curated cases that show it.
 
 On PR #45's own contribution: `multipat.rs` is in `main` too, so the multipattern
 matcher is not new; what that PR added was the one-line fix.
@@ -1637,7 +1637,7 @@ condition asks about the body's slots, which is exactly what the bug corrupts. U
 the buggy version `notin` wrongly succeeds, so `CD1` and `CD2` over-fire, and `in`
 wrongly fails, so `CD3` and `CD4` never fire at all.
 
-`slotted-experiments/xdiff/oracle-diff.py` runs the corpus through two oracle
+`slotted/xdiff/oracle-diff.py` runs the corpus through two oracle
 binaries and reports which cases separate them. Worth running whenever the reference
 is bumped: a case that stops distinguishing them has lost coverage, and a new
 disagreement is either a fix or a regression upstream.
@@ -1651,7 +1651,7 @@ nested form proves must also be proved by the flattened one, and "the converse i
 deliberately not required: the depth-1 matcher sees through redundant slots that
 `ematch_all` does not, which is the point of it".
 
-Measured, rather than assumed. `slotted-experiments/xdiff/nested-vs-multi.py`
+Measured, rather than assumed. `slotted/xdiff/nested-vs-multi.py`
 reconstructs a nested pattern from a case's atoms where they form a tree, runs the
 reference both ways, and compares: **27 of the curated cases run both ways, and 3
 differ** -- and in each the multipattern proves more, never less.
@@ -1964,7 +1964,7 @@ flavour of `find-mapping` (a different representation).
    `compose m (compose m1 m)` is the narrow one, so the rule deletes `m1`. In the
    eight-line case above the wide loop is derived and then gone. Under
    `run-schedule (saturate (run))` all 44 curated cases now reach a genuine fixpoint,
-   `X1` included. `slotted-experiments/xdiff/fixpoint.py` is the check, and it runs
+   `X1` included. `slotted/xdiff/fixpoint.py` is the check, and it runs
    the whole corpus — it used to check five hand-picked cases and so missed the one
    case that did not terminate.
 
@@ -1996,7 +1996,7 @@ flavour of `find-mapping` (a different representation).
    still strands one row via the shrinking rule deleting a too-wide identity
    self-loop — question 2 above. That row is harmless (it has a visible α-variant),
    so the open part is whether the shrinking rule can strand a row that does not.
-   `slotted-experiments/xdiff/stranded.py` is the detector: it reports, per case, how
+   `slotted/xdiff/stranded.py` is the detector: it reports, per case, how
    many rows no symmetry-joining rule can see and how many of those are α-variants
    of nothing visible. Worth running after any change to the maintenance rules.
 
@@ -2071,7 +2071,7 @@ under "Do follower classes need self-loops at all?" above.
 ## Machine-checked invariants
 
 Def. 4 — an edge's domain is exactly its child's slot set — used to be maintained by
-discipline alone. `slotted-experiments/xdiff/invariants.py` checks the half that is
+discipline alone. `slotted/xdiff/invariants.py` checks the half that is
 provable, plus the precondition `inverse` relies on:
 
 * **An edge wider than its child.** An idempotent self-loop `s` on the child is a

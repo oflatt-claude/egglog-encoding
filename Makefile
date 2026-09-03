@@ -78,8 +78,8 @@ proof-tests:
 # reference-side oracle the suites compare to.
 slotted-check:
 	cargo build
-	cargo build --manifest-path slotted-experiments/xmulti/Cargo.toml
-	python3 slotted-experiments/check-slotted.py
+	cargo build --manifest-path slotted/xmulti/Cargo.toml
+	python3 slotted/check-slotted.py
 
 # The half of the above that CI can run. The rest compares against `xmulti`, which
 # depends on a LOCAL checkout of `slotted-egraphs`, so no runner can build it; when that
@@ -90,14 +90,14 @@ slotted-check:
 # Takes minutes and many cores; `campaign.py`'s header records what a deep run found.
 slotted-campaign:
 	cargo build --release --bin egglog
-	cargo build --manifest-path slotted-experiments/xmulti/Cargo.toml
-	python3 slotted-experiments/xdiff/campaign.py iso --cases 500 --seeds 32
-	python3 slotted-experiments/xdiff/campaign.py order --cases 100 --seeds 32
-	python3 slotted-experiments/xdiff/campaign.py checker --cases 200 --seeds 8
+	cargo build --manifest-path slotted/xmulti/Cargo.toml
+	python3 slotted/xdiff/campaign.py iso --cases 500 --seeds 32
+	python3 slotted/xdiff/campaign.py order --cases 100 --seeds 32
+	python3 slotted/xdiff/campaign.py checker --cases 200 --seeds 8
 
 slotted-check-no-oracle:
 	cargo build
-	python3 slotted-experiments/check-slotted.py --no-oracle
+	python3 slotted/check-slotted.py --no-oracle
 
 # Use a disposable report path, keeping the default report cache untouched.
 benchmark-smoke:

@@ -1,7 +1,7 @@
 ;;; Differential cases against the reference `multi_ematch`
 ;;; (memoryleak47/slotted-egraphs, PR #45 @ e3efcdd).
 ;;;
-;;; The oracle lives in `slotted-experiments/xmulti`; `cargo run` from that
+;;; The oracle lives in `slotted/xmulti`; `cargo run` from that
 ;;; directory reproduces the reference answers quoted below.  This file runs the
 ;;; encoded form of the same patterns.
 ;;;
@@ -84,7 +84,7 @@
 ;;; atoms here mint the same name and the root-only rule fires too. The defect is
 ;;; still real -- it is under-constrained whenever a node carries slots the root's
 ;;; renaming does not cover -- and the coverage that still catches it is `C6` and
-;;; `C12` in `slotted-experiments/xdiff/xdiff.py`, which are checked against the
+;;; `C12` in `slotted/xdiff/xdiff.py`, which are checked against the
 ;;; reference rather than against hand-written expectations. This file is kept as
 ;;; a compact runnable illustration of the shape.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

@@ -3,7 +3,7 @@
 ;;; THE ENCODING, one shape of user rule per section: the problem the shape poses, the
 ;;; construction that solves it, and then the rule -- the one a compiler emits, one per
 ;;; section and nothing else.  Read it top to bottom.  `slotted-user-rules.md` is the prose
-;;; version, and `slotted-experiments/slotted-encoder.py` is this same recipe as code --
+;;; version, and `slotted/slotted-encoder.py` is this same recipe as code --
 ;;; one implementation, which every generator goes through: `xdiff.py` (the toy language,
 ;;; checked against the reference), `xarray.py` (the paper's array language, likewise)
 ;;; and `gen-sdql-rules.py` (SDQL).
@@ -26,7 +26,7 @@
 ;;; sdql's binds its column 1 and the array language's its column 0, so no one file can
 ;;; declare both per-constructor.  The generic encoding is what lets eleven rules from two
 ;;; languages sit in one tutorial.  Nothing about the recipe depends on the spelling, and
-;;; `slotted-experiments/check-tutorial.py` compiles each rule the way this file writes it,
+;;; `slotted/check-tutorial.py` compiles each rule the way this file writes it,
 ;;; so the check is exact either way.
 ;;;
 ;;; THE REFERENCE, wherever one is mentioned below, is `memoryleak47/slotted-egraphs` --
@@ -36,7 +36,7 @@
 ;;; `src/rewrite/multipat.rs`, which branches on both readings of a slot pair e-matching
 ;;; left undecided.  The encoding has no such branch -- an unconstrained slot is MINTED,
 ;;; and a fresh name differs from everything, so it only ever takes the "apart" reading.
-;;; `FINAL_REFINE_GAP` in `slotted-experiments/xdiff/xdiff.py` records the two curated
+;;; `FINAL_REFINE_GAP` in `slotted/xdiff/xdiff.py` records the two curated
 ;;; cases where that costs a match, and explains one of them in full.
 ;;;
 ;;; No terms, no schedules, no assertions, no wrong versions.
@@ -47,7 +47,7 @@
 ;;;
 ;;; EVERY RULE HERE IS A REAL ONE.  All eleven are rewrites from `benches/sdql.rs` or
 ;;; `tests/array/mod.rs`, and each is what `slotted-encoder.py` emits for it -- checked, not
-;;; claimed: `slotted-experiments/check-tutorial.py` compares every rule below against the
+;;; claimed: `slotted/check-tutorial.py` compares every rule below against the
 ;;; encoder's own output and allows only a renaming of the variables, which is done here for
 ;;; readability.  A tutorial rule is therefore the committed generated rule without its
 ;;; `:ruleset` tail.  Two sections quote the SAME rule at two atom orders (M6 and M9, both
