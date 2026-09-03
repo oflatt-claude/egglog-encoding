@@ -142,7 +142,7 @@ class Source:
             if isinstance(form, list) and form and form[0] == "include":
                 inc = ROOT / form[1].strip('"')
                 assert inc.exists(), f"{path.name}: no such file {form[1]}"
-                assert "generated/" not in inc.as_posix() and inc.name != CORE_FILE.split("/")[-1], (
+                assert "target/" not in inc.as_posix() and inc.name != CORE_FILE.split("/")[-1], (
                     f"{path.name}: a slotted source may only include another slotted source, not {form[1]}"
                 )
                 self.includes.append(inc)

@@ -791,7 +791,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; M9.  A slot literal -- the array language's `eta`.
 ;;;
-;;; The terms are `slotted-tests/generated/slotted-array-rules.egg`'s own `eta-fires` and `eta-blocked`.
+;;; The terms are `target/slotted/slotted-array-rules.egg`'s own `eta-fires` and `eta-blocked`.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
 
@@ -928,7 +928,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; M11.  A nested right-hand side -- the array language's `let-app`.
 ;;;
-;;; The terms are `slotted-tests/generated/slotted-array-rules.egg`'s own `let-app-fires` and
+;;; The terms are `target/slotted/slotted-array-rules.egg`'s own `let-app-fires` and
 ;;; `let-app-blocked`.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)

@@ -12,7 +12,7 @@ Companion to these runnable files:
 | `slotted/xdiff/xdiff.py` | differential tests against the reference implementation |
 | `slotted-tests/sdql.egg` | the paper's `sdql` language and all 43 of its rewrite rules, in the SLOTTED language. `gen-sdql-rules.py` compiles them for the .egg tests and the differential harness, and `slotted-egglog.py` compiles the same file to run it; neither restates a rule |
 | `slotted-tests/array.egg` | the same, for the paper's §4.1 array language and its 8 rules. `xarray.py` builds its rule objects from this file |
-| `slotted-tests/generated/slotted-array-rules.egg` | what those 8 compile to, self-checking |
+| `target/slotted/slotted-array-rules.egg` | what those 8 compile to, self-checking |
 | `slotted/xdiff/xarray.py` | the same 8 rules, differentially tested against the reference |
 
 Semantics come from Schneider et al., *Slotted E-Graphs*, PLDI 2025
@@ -500,7 +500,7 @@ nested pattern while the encoding sees it flattened into depth-1 atoms.
                                                                      known difference)
 ./xarray.py fuzz 60    random array terms, two seeds                 60/60 and 59/59 agree
 ./xarray.py goal       (A) → (B), the paper's transformation           see below
-./xarray.py egg        regenerate slotted-tests/generated/slotted-array-rules.egg
+./xarray.py egg        regenerate target/slotted/slotted-array-rules.egg
 ```
 
 Flattening is safe for these eight even though it is not safe in general. The one

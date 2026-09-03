@@ -92,7 +92,7 @@ def main():
     for src in srcs:
         cmd = [sys.executable, str(COMPILE), str(src), "--run"]
         # A library's rules are already snapshotted by the generator that emits them
-        # into `slotted-tests/generated/`, so snapshotting its compiled program too
+        # into `target/slotted/`, so snapshotting its compiled program too
         # would commit the same 43 rules twice.
         if args.emit and src.name not in libs:
             # `--own-only`: the machinery and any included library are snapshotted by

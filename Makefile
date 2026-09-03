@@ -79,6 +79,9 @@ proof-tests:
 slotted-check:
 	cargo build
 	cargo build --manifest-path slotted/xmulti/Cargo.toml
+	python3 slotted/gen-node-rules.py
+	python3 slotted/gen-sdql-rules.py
+	python3 slotted/xdiff/xarray.py egg
 	python3 slotted/check-slotted.py
 
 # The half of the above that CI can run. The rest compares against `xmulti`, which

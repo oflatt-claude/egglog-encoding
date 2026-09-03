@@ -28,7 +28,7 @@ _spec.loader.exec_module(ct)
 
 #: the rule each slotted test shares with a generated file, and where to find it
 SHARED = [
-    ("sdql-sum-sing.egg", "slotted-tests/generated/slotted-sdql-rules.egg", "sum-sing"),
+    ("sdql-sum-sing.egg", "target/slotted/slotted-sdql-rules.egg", "sum-sing"),
 ]
 
 

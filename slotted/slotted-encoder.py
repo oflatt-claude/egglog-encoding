@@ -266,7 +266,7 @@ CORE = {"Var": ["i64"], "Null": []}
 # The hand-written half, and the generated file that includes it. A language file
 # includes the generated one, so it gets both.
 MACHINERY = "slotted-tests/slotted-egraph-encoding-11.egg"
-GENERIC_FILE = "slotted-tests/generated/slotted-node-rules.egg"
+GENERIC_FILE = "target/slotted/slotted-node-rules.egg"
 
 
 ###############################################################################

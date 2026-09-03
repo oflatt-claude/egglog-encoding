@@ -15,7 +15,7 @@
 ;;; language that hides renamings. `slotted-egglog.py` deliberately cannot express it,
 ;;; and that is the right answer rather than a gap.
 
-(include "slotted-tests/generated/slotted-lang-sdql.egg")
+(include "target/slotted/slotted-lang-sdql.egg")
 
 (ruleset sdql-beta)
 

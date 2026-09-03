@@ -29,7 +29,7 @@
 ;;; the two mints apart, and `f5a` in `slotted-user-rules-tests.egg` is the same e-graph
 ;;; against a rule that does not accumulate, where `?u` and `?v` collapse onto one slot.
 
-(include "slotted-tests/generated/slotted-node-rules.egg")
+(include "target/slotted/slotted-node-rules.egg")
 
 (relation Step (String Renaming Renaming))
 (relation Child (String Renaming))

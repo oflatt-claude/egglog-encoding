@@ -36,7 +36,7 @@ Usage:
     ./xarray.py iso [prefix]   the stronger check: a witnessed isomorphism of the two
                                final e-graphs, via `isomorphism.py`
     ./xarray.py goal [N...]    the paper's (A) -> (B), with N extra parameters
-    ./xarray.py egg            regenerate `slotted-tests/generated/slotted-array-rules.egg`
+    ./xarray.py egg            regenerate `target/slotted/slotted-array-rules.egg`
     ./xarray.py show <name>    one case's spec, its compiled rules, and both answers
 """
 
@@ -72,7 +72,7 @@ ARRAY_SRC = ROOT / "slotted-tests" / "array.egg"
 LANG = slotenc.language(ARRAY_SRC, ARRAY_SRC.with_suffix(".ref"))
 
 # the per-language machinery, not the generic string-headed one
-MACHINERY = "slotted-tests/generated/slotted-lang-array.egg"
+MACHINERY = "target/slotted/slotted-lang-array.egg"
 
 enc, sexpr, shift = LANG.enc, LANG.sexpr, LANG.shift
 
@@ -152,7 +152,7 @@ def compile_array_rule(rule, atom_order=None):
     The slot variables are `s_x` rather than `sx`, and a minted right-hand side slot
     gets a solve of its own with the avoid-set growing after it, rather than one solve
     over the whole batch. Both are spellings, not constructions:
-    `slotted-tests/generated/slotted-array-rules.egg` is committed, so they are kept as they were
+    `target/slotted/slotted-array-rules.egg` is build output, so they are kept as they were
     written.
     """
     lead = 0 if atom_order is None else min(atom_order, len(rule.atoms) - 1)
@@ -1036,7 +1036,8 @@ def main():
         return 1 if tally["FAIL"] else 0
 
     if args and args[0] == "egg":
-        dest = ROOT / "slotted-tests" / "generated" / "slotted-array-rules.egg"
+        dest = ROOT / "target" / "slotted" / "slotted-array-rules.egg"
+        dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(emit_egg())
         print(f"wrote {dest}")
         return 0

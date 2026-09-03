@@ -18,26 +18,25 @@ Usage:
 import argparse
 import glob
 import re
-import shutil
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 EGGLOG = ROOT / "target" / "debug" / "egglog"
 XMULTI = ROOT / "slotted" / "xmulti" / "target" / "debug" / "xmulti"
 
-# One entry per generated file: the command that writes it. These are SNAPSHOTS --
-# committed so that a change in the encoder shows up as a diff, and never edited by
-# hand. `--update` rewrites them; `generated-drift` fails if they are stale.
+# One entry per generated file: the command that writes it. These are BUILD OUTPUT,
+# under `target/`, so nothing here is committed -- the tests include them, and
+# `make slotted-check` builds them first. `slotted-tests/snapshots/` is the committed
+# derived artifact.
 GENERATED = {
-    "slotted-tests/generated/slotted-node-rules.egg": ("slotted/gen-node-rules.py",),
-    "slotted-tests/generated/slotted-lang-array.egg": ("slotted/gen-node-rules.py",),
-    "slotted-tests/generated/slotted-lang-sdql.egg": ("slotted/gen-node-rules.py",),
-    "slotted-tests/generated/slotted-lang-toy.egg": ("slotted/gen-node-rules.py",),
-    "slotted-tests/generated/slotted-sdql-rules.egg": ("slotted/gen-sdql-rules.py",),
-    "slotted-tests/generated/slotted-array-rules.egg": ("slotted/xdiff/xarray.py", "egg"),
+    "target/slotted/slotted-node-rules.egg": ("slotted/gen-node-rules.py",),
+    "target/slotted/slotted-lang-array.egg": ("slotted/gen-node-rules.py",),
+    "target/slotted/slotted-lang-sdql.egg": ("slotted/gen-node-rules.py",),
+    "target/slotted/slotted-lang-toy.egg": ("slotted/gen-node-rules.py",),
+    "target/slotted/slotted-sdql-rules.egg": ("slotted/gen-sdql-rules.py",),
+    "target/slotted/slotted-array-rules.egg": ("slotted/xdiff/xarray.py", "egg"),
 }
 
 
@@ -90,8 +89,10 @@ def run_egg_files():
     """Every slotted .egg file loads and runs clean."""
     files = sorted(glob.glob(str(ROOT / "slotted-tests" / "**" / "slotted-*.egg"), recursive=True))
     # A test ported to the slotted language leaves this set and joins `slotted-tests`,
-    # so this floor drops as that one rises; neither may fall on its own.
-    if len(files) < 17:
+    # so this floor drops as that one rises; neither may fall on its own. It also
+    # dropped by six when the generated machinery moved to `target/`, which is build
+    # output and not a file anyone wrote.
+    if len(files) < 11:
         return f"only {len(files)} slotted .egg files found"
     bad = []
     for f in files:
@@ -106,26 +107,33 @@ def run_egg_files():
 
 
 def check_generated():
-    """The committed generated files match what the generators emit now.
+    """Build the machinery the tests include, and require the generators to be
+    deterministic.
 
-    The originals are restored either way, so a stale file is reported rather than
-    silently rewritten.
+    Nothing generated is committed, so there is nothing to be stale against. What is
+    still worth holding is that a compiled program is a function of the encoder rather
+    than of iteration order -- so each generator runs twice and the output has to match.
+    A set or dict iteration creeping in would otherwise surface much later as a
+    confusing diff.
     """
-    with tempfile.TemporaryDirectory() as tmp:
-        for rel in GENERATED:
-            shutil.copy2(ROOT / rel, Path(tmp) / Path(rel).name)
-        try:
-            for cmd in sorted(set(GENERATED.values())):
-                r = subprocess.run([sys.executable, *cmd], capture_output=True, text=True, timeout=1800, cwd=ROOT)
-                if r.returncode != 0:
-                    return f"{cmd[0]} failed: {r.stderr.strip()[:200]}"
-            stale = [rel for rel in GENERATED if (ROOT / rel).read_bytes() != (Path(tmp) / Path(rel).name).read_bytes()]
-        finally:
-            for rel in GENERATED:
-                shutil.copy2(Path(tmp) / Path(rel).name, ROOT / rel)
-    if stale:
-        return "stale, rerun its generator: " + ", ".join(stale)
-    print(f"       {len(GENERATED)} files byte-identical")
+
+    def build():
+        for cmd in sorted(set(GENERATED.values())):
+            r = subprocess.run([sys.executable, *cmd], capture_output=True, text=True, timeout=1800, cwd=ROOT)
+            if r.returncode != 0:
+                return f"{cmd[0]} failed: {r.stderr.strip()[:200]}"
+        missing = [rel for rel in GENERATED if not (ROOT / rel).exists()]
+        return f"not written: {', '.join(missing)}" if missing else None
+
+    if err := build():
+        return err
+    first = {rel: (ROOT / rel).read_bytes() for rel in GENERATED}
+    if err := build():
+        return err
+    unstable = [rel for rel in GENERATED if (ROOT / rel).read_bytes() != first[rel]]
+    if unstable:
+        return "generator is not deterministic: " + ", ".join(unstable)
+    print(f"       {len(GENERATED)} files built, identical across two runs")
     return None
 
 
@@ -155,6 +163,8 @@ def check_snapshots():
 # only exercises the encoding against itself -- which is what `--no-oracle` is for, and
 # what CI runs until that dependency is fetchable.
 CHECKS = [
+    # First: the machinery under `target/` is build output, and five tests include it.
+    ("generators", check_generated, None, False, False),
     ("egg-files", run_egg_files, None, False, False),
     (
         "slotted-tests",
@@ -171,7 +181,6 @@ CHECKS = [
         False,
         False,
     ),
-    ("generated-drift", check_generated, None, False, False),
     ("handwritten-drift", ("slotted/check-handwritten-encoding.py",), starts_ok, False, False),
     (
         "correspondence",

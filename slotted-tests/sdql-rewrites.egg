@@ -2,7 +2,7 @@
 ;;;
 ;;; `(include "slotted-tests/sdql.egg")` brings the language and all 43 rules, so this
 ;;; file adds only terms and claims. `gen-sdql-rules.py` compiles the same rules into
-;;; `slotted-tests/generated/slotted-sdql-rules.egg`, and `check-front-ends.py` holds
+;;; `target/slotted/slotted-sdql-rules.egg`, and `check-front-ends.py` holds
 ;;; the two together, so pinning behaviour here pins that file's behaviour too.
 ;;;
 ;;; The step counts are deliberately small. The rules are not confluent --

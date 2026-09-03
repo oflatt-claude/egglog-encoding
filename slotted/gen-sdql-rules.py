@@ -48,7 +48,7 @@ enc = __import__("slotted-encoder")
 sc = __import__("slotted-egglog")
 
 
-OUT = pathlib.Path(os.environ.get("SDQL_OUT", "slotted-tests/generated/slotted-sdql-rules.egg"))
+OUT = pathlib.Path(os.environ.get("SDQL_OUT", "target/slotted/slotted-sdql-rules.egg"))
 
 # Re-introducible bugs, so the checks in `slotted-tests/sdql-rewrites.egg` can be
 # shown to test what they were written for.  The encoder's flags, under the same
@@ -92,7 +92,7 @@ HEADER = """\
 ;;; `slotted-tests/sdql-rewrites.egg` is what checks them -- written in the slotted
 ;;; language over the same rules, and compiled at test time.
 
-(include "slotted-tests/generated/slotted-lang-sdql.egg")
+(include "target/slotted/slotted-lang-sdql.egg")
 
 (ruleset sdql)
 """
@@ -118,6 +118,7 @@ def main():
             f"\n;; {name}\n" + sc.compile_rewrite(src, form, tail=f'\n      :ruleset sdql :name "{name}")', bugs=BUGS)
         )
         n += 1
+    OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text("\n".join(out) + "\n")
     print(f"wrote {OUT} ({n} rules)")
 

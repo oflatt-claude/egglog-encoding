@@ -33,7 +33,7 @@ sys.path.insert(0, str(ROOT / "slotted"))
 slotenc = __import__("slotted-encoder")
 EGGLOG = ROOT / "target" / "debug" / "egglog"
 XMULTI = ROOT / "slotted" / "xmulti"
-MACHINERY = "slotted-tests/generated/slotted-lang-toy.egg"
+MACHINERY = "target/slotted/slotted-lang-toy.egg"
 
 BINOPS = ["add", "f", "g", "h", "k", "sub", "sub2"]
 

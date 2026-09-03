@@ -7,7 +7,7 @@ written once for all shapes in egglog. It *can* be written once, and it is:
 emit and where it goes.
 
 Two kinds of output. `GENERIC` is the string-headed encoding in
-`slotted-tests/generated/slotted-node-rules.egg`, where the operator is a payload column so any
+`target/slotted/slotted-node-rules.egg`, where the operator is a payload column so any
 operator can be written without regenerating. Each `slotted/languages/*.egg`
 gets a per-language encoding with one constructor per operator, the shape the
 reference crate's `define_language!` produces. Both include
@@ -61,6 +61,7 @@ LANGUAGES = {name: read_language(p) for name, p in SOURCES.items()}
 
 def main():
     generic = pathlib.Path(GENERIC_FILE)
+    generic.parent.mkdir(parents=True, exist_ok=True)
     generic.write_text(
         enc.in_slotted_ruleset(
             enc.MACHINERY_HEADER + ";;;\n;;; The generic, string-headed encoding: one constructor per"
@@ -77,11 +78,12 @@ def main():
     # the hand-written half does provide -- `Var` and `Null` -- so a language may
     # still declare those for the record.
     for lang, spec in LANGUAGES.items():
-        p = pathlib.Path(f"slotted-tests/generated/slotted-lang-{lang}.egg")
+        p = pathlib.Path(f"target/slotted/slotted-lang-{lang}.egg")
         body = (
             enc.MACHINERY_HEADER + f";;;\n;;; Language: {lang}\n\n"
             f'(include "{MACHINERY}")\n\n' + "\n".join(emit(spec, provided=CORE))
         )
+        p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(enc.in_slotted_ruleset(body))
         print(f"wrote {p} ({len(spec)} constructors, one per operator)")
 

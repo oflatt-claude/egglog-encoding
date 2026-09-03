@@ -5,7 +5,7 @@
 ;;; encoding, so they include the generated file, which includes the hand-written one.
 ;;; They keep their numbering from there, since they carry on where its list stops.
 
-(include "slotted-tests/generated/slotted-node-rules.egg")
+(include "target/slotted/slotted-node-rules.egg")
 
 
 ;;; Case 16- a ternary node, alpha-equivalent up to renaming.
