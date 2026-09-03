@@ -207,10 +207,10 @@ both are decided at the witness at the end of this file.
   `firingsSound_of_rulesEncoded` is the factorisation those leave, and both halves of it are
   now proved: `FDatabase.EncOk.stepCmds` is the per-command induction that aligns the source
   run with the target's, and `encodedHeadSound` is one firing of one **encoded source rule** —
-  under `Program.HeadsScoped`, which `Program.EncodeDomain` does not imply.
-  `bare_build_invents_equality` below is why it does not, and it is what
-  `Encoding/Complete.lean`'s `execM_soundTerms` is refuted by. No target fixpoint enters, since
-  soundness is indifferent to the under-firing `execM_contained` records.
+  under `Program.HeadsScoped`, which is `EncodeDomain.headsScoped`.
+  `bare_build_invents_equality` below is why that had to become a clause, and
+  `Encoding/Complete.lean`'s `execM_soundTerms` is proved with it. No target fixpoint enters,
+  since soundness is indifferent to the under-firing `execM_contained` records.
   `ncTgt_soundTerms` is both clauses at the state the two refuted forward clauses fail at, with
   a real `@UF` edge and positive arity. `execM_viewLeader`, `execM_viewsCover`,
   `execM_viewsCover_shared`, `execM_unionsJoined` and `execM_unionsRead` are assembled from
@@ -221,19 +221,21 @@ both are decided at the witness at the end of this file.
   firing earlier; `ncTgt_viewLeaderRows` is the fourth clause at positive arity, where the
   three earlier witnesses have only the empty key. `encode_assert`, `encode_trans`,
   `encode_congr`, `encode_corresponds_forward` and — in `Encoding/Complete.lean` —
-  `encode_corresponds_complete` and `encode_corresponds` are assembled from them and carry
-  `sorryAx` through them.
-* **Refuted, and it is the completeness half itself.** `bare_build_invents_equality`:
-  `encodeBuild` emits **no action** for a leaf, so a rule head that builds a bare variable the
-  query does not bind stops the *source* block there and the encoded block skips it and runs
-  on — a third shape of stuck head beside `noLitUnion`'s and `headsDeclared`', and one no
-  clause of `Program.EncodeDomain` excludes (`bareProgram_encodeDomain`). At `bareProgram` the
-  source relates `(A)` and `(B)` in no way and the encoded run puts them in one class, so
-  `encode_corresponds_complete` is false there, at a pair of source e-nodes.
-  `Program.HeadsScoped` is the clause that would exclude it and
-  `bareProgram_not_headsScoped` is that program failing it; it is **reported rather than
-  added**, and `Encoding/Complete.lean`'s `execM_soundTerms_of_scoped` and
-  `encode_corresponds_complete_of_scoped` are the two statements with it, both `sorryAx`-free.
+  `encode_corresponds` are assembled from them and carry `sorryAx` through them.
+  `Encoding/Complete.lean`'s `encode_corresponds_complete` does **not**: the completeness half
+  is proved.
+* **Refuted without a clause, and the clause is now the domain's.**
+  `bare_build_invents_equality`: `encodeBuild` emits **no action** for a leaf, so a rule head
+  that builds a bare variable the query does not bind stops the *source* block there and the
+  encoded block skips it and runs on — a third shape of stuck head beside `noLitUnion`'s and
+  `headsDeclared`'s. At `bareProgram` the source relates `(A)` and `(B)` in no way and the
+  encoded run puts them in one class, so `encode_corresponds_complete` is false there, at a
+  pair of source e-nodes. `EncodeDomain.headsScoped` is the clause that excludes it,
+  `bareProgram_not_headsScoped` is that program failing it and
+  `bareProgram_encodeDomain_but_headsScoped` is every other clause holding, so the clause is
+  the only thing between the domain and the refutation. It is faithfulness rather than a
+  narrowing — egglog raises `TypeError::Unbound` for an action's unbound variable in
+  `to_core_actions` (`egglog/src/core.rs:663-670`) — and the census is unmoved at 70 of 166.
 * **Refuted, and it was the *reading* that was wrong**: two of those clauses were once false
   at `litBuildProgram`, one `.action (.expr (.lit 5))`, whose build emits no action at all, and
   `Program.EncodeDomain.noBareBuild` was the repair. The defect was `ViewRepr`'s literal clause
@@ -1998,6 +2000,7 @@ theorem litBuildProgram_encodeDomain : litBuildProgram.EncodeDomain where
   noLitUnion := Or.inl (by decide)
   headsDeclared := by decide
   aritiesAgree := by decide
+  headsScoped := by decide
 
 /-- The state the one action reaches: the literal, and nothing else. -/
 def litBuildSrc : Database := Database.empty.addTerm (.lit (.int 5))
@@ -3566,6 +3569,7 @@ theorem ncProgram_encodeDomain : ncProgram.EncodeDomain where
   noLitUnion := Or.inr (by decide)
   headsDeclared := by decide
   aritiesAgree := by decide
+  headsScoped := by decide
 
 /-! ##### The source side, in the kernel
 
@@ -6329,9 +6333,9 @@ head too" — and that is true wherever the encoded head **reads** the variable,
 position but one: `encodeBuild` emits no action at all for a *leaf*, so `.expr (.var v)`
 stops the source block at an unbound `v` and the encoded block skips it and runs the rest of
 the head. `bareProgram` is that, and `bare_build_invents_equality` is
-`encode_corresponds_complete` failing there — inside `Program.EncodeDomain`.
-`Program.HeadsScoped` below is the program-level form, and `encodedHeadSound` is what it
-buys. -/
+`encode_corresponds_complete` failing at it under every *other* clause of the domain.
+`EncodeDomain.headsScoped` — `Program.HeadsScoped`, on the program's text — is the clause
+that excludes it, and `encodedHeadSound` is what it buys. -/
 def Rule.HeadScoped (r : Rule) (db : Database) : Prop :=
   Actions.Scoped r.actions (Query.bind r.query (Env.dom db.env))
 
@@ -6368,57 +6372,6 @@ theorem Actions.Scoped.mono : ∀ (as : List Action) {Γ Γ' : Scope}, (∀ v �
     | expr e => exact hsub
     | union e₁ e₂ => exact hsub
     | set f args out => exact hsub
-
-/-- **The clause `Program.EncodeDomain` still lacks**, and the one `bare_build_invents_equality`
-shows it needs: every variable a rule head reads is one the rule's own query binds.
-
-Stated on the program's text, and *stronger* than `Rule.HeadScoped` at the source state, which
-would also let a head read a **global**. The weaker form is what the proof spends; this is what
-a witness can decide. `Actions.Scoped`'s own `Expr.IsApp` at a bare build is part of it, and it
-is the half `bareProgram` fails.
-
-**It is reported rather than added, and it would cost the corpus nothing**: all seventy
-in-domain cases satisfy it, which `DiffTest.lean` pins beside the 70 itself. -/
-def Cmd.HeadScoped : Cmd → Prop
-  | .rule r => Actions.Scoped r.actions (Query.vars r.query)
-  | _ => True
-
-@[inherit_doc Cmd.HeadScoped]
-def Program.HeadsScoped (P : Program) : Prop := ∀ c ∈ P, c.HeadScoped
-
-/-! The clause is decidable, so a witness discharges it by `decide` and `difftest`'s census
-counts exactly it — which is what says it would cost the corpus nothing. -/
-
-instance Expr.decidableIsApp : ∀ e : Expr, Decidable e.IsApp
-  | .app _ _ => .isTrue trivial
-  | .lit _ => .isFalse (fun h => (h : False))
-  | .var _ => .isFalse (fun h => (h : False))
-
-instance Expr.decidableScoped (e : Expr) (Γ : Scope) : Decidable (e.Scoped Γ) :=
-  inferInstanceAs (Decidable (∀ v ∈ e.vars, v ∈ Γ))
-
-instance Action.decidableScoped : ∀ (a : Action) (Γ : Scope), Decidable (a.Scoped Γ)
-  | .expr e, Γ => inferInstanceAs (Decidable (e.IsApp ∧ e.Scoped Γ))
-  | .letBind _ e, Γ => inferInstanceAs (Decidable (e.Scoped Γ))
-  | .union e₁ e₂, Γ => inferInstanceAs (Decidable (e₁.Scoped Γ ∧ e₂.Scoped Γ))
-  | .set _ args out, Γ =>
-      inferInstanceAs (Decidable ((∀ e ∈ args, e.Scoped Γ) ∧ ∀ e ∈ out, e.Scoped Γ))
-
-instance Actions.decidableScoped : ∀ (as : List Action) (Γ : Scope),
-    Decidable (Actions.Scoped as Γ)
-  | [], _ => .isTrue trivial
-  | a :: as, Γ => @instDecidableAnd _ _ (Action.decidableScoped a Γ)
-      (Actions.decidableScoped as (a.bind Γ))
-
-instance Cmd.decidableHeadScoped : ∀ c : Cmd, Decidable c.HeadScoped
-  | .rule r => inferInstanceAs (Decidable (Actions.Scoped r.actions (Query.vars r.query)))
-  | .action _ => .isTrue trivial
-  | .run _ => .isTrue trivial
-  | .saturate _ => .isTrue trivial
-  | .decl _ _ => .isTrue trivial
-
-instance Program.decidableHeadsScoped (P : Program) : Decidable P.HeadsScoped :=
-  inferInstanceAs (Decidable (∀ c ∈ P, c.HeadScoped))
 
 /-- And it gives `Rule.HeadScoped` at any state, since a state's globals only widen the
 scope. -/
@@ -7010,6 +6963,7 @@ theorem vuProgram_encodeDomain : vuProgram.EncodeDomain where
   noLitUnion := Or.inr (by decide)
   headsDeclared := by decide
   aritiesAgree := by decide
+  headsScoped := by decide
 
 /-- **And the first arm really fails here**, so the witness below runs the second and not a
 disjunction it satisfies twice over. -/
@@ -8276,6 +8230,7 @@ theorem witnessProgram_encodeDomain : witnessProgram.EncodeDomain where
   noLitUnion := Or.inr (by decide)
   headsDeclared := by decide
   aritiesAgree := by decide
+  headsScoped := by decide
 
 /-- **The hypotheses of `encode_corresponds` are simultaneously satisfiable, and both sides
 of its conclusion are inhabited and refutable at the witness.**
@@ -8381,8 +8336,9 @@ theorem luProgram_encodeDomain_but_noLitUnion :
       (∀ fk ∈ luProgram.ctors, Prim.ofName fk.1 = none) ∧
       (∀ n ∈ luProgram.names, ¬ "@".isPrefixOf n) ∧
       (∀ c ∈ luProgram, c.QueryEncodable) ∧
-      Program.HeadsDeclared luProgram (fun _ => none) ∧ luProgram.arityConflicts = [] := by
-  refine ⟨?_, by decide, by decide, by decide +kernel, ?_, by decide, by decide⟩
+      Program.HeadsDeclared luProgram (fun _ => none) ∧ luProgram.arityConflicts = [] ∧
+      luProgram.HeadsScoped := by
+  refine ⟨?_, by decide, by decide, by decide +kernel, ?_, by decide, by decide, by decide⟩
   · intro c hc
     simp only [luProgram, List.mem_cons] at hc
     rcases hc with rfl | rfl | rfl | rfl | rfl | h <;> simp_all [Cmd.CtorDecl]
@@ -8458,8 +8414,9 @@ theorem udProgram_encodeDomain_but_headsDeclared :
       (∀ fk ∈ udProgram.ctors, Prim.ofName fk.1 = none) ∧
       (∀ n ∈ udProgram.names, ¬ "@".isPrefixOf n) ∧
       (∀ c ∈ udProgram, c.QueryEncodable) ∧
-      (∀ c ∈ udProgram, c.ruleUnionFreeB = true) ∧ udProgram.arityConflicts = [] := by
-  refine ⟨?_, by decide, by decide, by decide +kernel, ?_, by decide, by decide⟩
+      (∀ c ∈ udProgram, c.ruleUnionFreeB = true) ∧ udProgram.arityConflicts = [] ∧
+      udProgram.HeadsScoped := by
+  refine ⟨?_, by decide, by decide, by decide +kernel, ?_, by decide, by decide, by decide⟩
   · intro c hc
     simp only [udProgram, List.mem_cons] at hc
     rcases hc with rfl | rfl | rfl | rfl | rfl | h <;> simp_all [Cmd.CtorDecl]
@@ -8491,26 +8448,31 @@ theorem execM_soundTerms_false {d e : FDatabase}
 
 /-! ## The clause is needed, and this is what it costs
 
-**A third shape of stuck head, and the one `Program.EncodeDomain` does not exclude.**
-`Encoding/Encode.lean` names two — a `union` on a literal, and an application of an undeclared
-name — and says a head variable neither the query nor a global binds is not a third because it
-"sticks the encoded head too". That is true wherever the encoded head **reads** the variable,
-and `encodeBuild` reads a source variable at every position but one: `.expr (.var v)` is a
-build of a *leaf*, and `encodeBuild` emits **no action at all** for a leaf. So the source
-block stops at the unbound variable and contributes nothing, while the encoded block skips
-that action and runs the rest of the head.
+**A third shape of stuck head, and the one `EncodeDomain.headsScoped` excludes.**
+`Encoding/Encode.lean` names two others — a `union` on a literal, and an application of an
+undeclared name — and it long said a head variable neither the query nor a global binds is not
+a third because it "sticks the encoded head too". That is true wherever the encoded head
+**reads** the variable, and `encodeBuild` reads a source variable at every position but one:
+`.expr (.var v)` is a build of a *leaf*, and `encodeBuild` emits **no action at all** for a
+leaf. So the source block stops at the unbound variable and contributes nothing, while the
+encoded block skips that action and runs the rest of the head.
 
 `bareProgram` is that, with a `union` after the bare build: the source rule never fires, so
 its two operands stay in different classes, and the encoded rule fires and writes the `@UF`
 edge between them. That is an equality the target has and the source has not, **at a pair of
 source e-nodes** — so it refutes `encode_corresponds_complete` itself and not only the
 invariant behind it, exactly as `encode_corresponds_unions_literals` does for `noLitUnion`.
+Every *other* clause of the domain holds of it (`bareProgram_encodeDomain_but_headsScoped`),
+which is what makes `headsScoped` load-bearing for the conclusion rather than for the proof.
+egglog rejects the program outright — an action's unbound variable is `TypeError::Unbound` in
+`to_core_actions` (`egglog/src/core.rs:663-670`) — so the clause is faithfulness and not a
+narrowing.
 
 Everything below is compiled and `sorry`-free; the run itself is a hypothesis, for the reason
 every other target-side witness here takes one. -/
 
 /-- A rule head that reads an unbound variable **before** asserting an equation. Every clause
-of `Program.EncodeDomain` holds of it. -/
+of `Program.EncodeDomain` but `headsScoped` holds of it. -/
 def bareRule : Rule where
   query := [.expr (.app "G" [])]
   actions := [.expr (.var "z"), .union (.app "A" []) (.app "B" [])]
@@ -8546,40 +8508,48 @@ private theorem bareRule_queryEncodable : (Cmd.rule bareRule).QueryEncodable := 
   · intro v hv
     exact absurd hv (by simp [bareRule, Query.vars, Pattern.vars, Expr.vars, Expr.varsList])
 
-/-- **`bareProgram` is in the domain.** Every clause, and no scoping among them. -/
-theorem bareProgram_encodeDomain : bareProgram.EncodeDomain where
-  ctorsOnly := bareProgram_ctorDecls
-  setLegal := by decide
-  noPrim := by decide
-  -- `String.isPrefixOf` does not reduce under `decide`'s evaluator; the kernel's does.
-  noAt := by decide +kernel
-  queryEncodable := by
-    intro c hc
-    simp only [bareProgram, List.mem_cons] at hc
-    rcases hc with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | h
-    · trivial
-    · trivial
-    · trivial
-    · trivial
-    · trivial
-    · trivial
-    · exact bareRule_queryEncodable
-    · trivial
-    · exact absurd h (by simp)
-  noLitUnion := Or.inr (by decide)
-  headsDeclared := by decide
-  aritiesAgree := by decide
-
-/-- **And `Program.HeadsScoped` is the clause it fails**, at `z`. -/
+/-- **`EncodeDomain.headsScoped` is the clause it fails**, at `z` — the head's first action
+builds the bare variable, and the query binds only `G`'s nothing. -/
 theorem bareProgram_not_headsScoped : ¬ bareProgram.HeadsScoped := by
   intro h
   have hr : Cmd.rule bareRule ∈ bareProgram := by simp [bareProgram]
   have hz := (h _ hr : Actions.Scoped bareRule.actions _).1.2 "z" (by simp)
   exact absurd hz (by simp [bareRule, Query.vars, Pattern.vars, Expr.vars])
 
-/-- **The completeness half is false at it.** `A` and `B` are both source e-nodes, the source
-relates them in no way — its rule is stuck at `z` before it reaches the `union` — and the
-encoded run puts them in one class.
+theorem bareProgram_not_encodeDomain : ¬ bareProgram.EncodeDomain :=
+  fun h => bareProgram_not_headsScoped h.headsScoped
+
+/-- **And every other clause holds of it**, which is what says `headsScoped` is not
+decoration: it is the only thing standing between the domain and the refutation below, as
+`noLitUnion` is at `luProgram` and `headsDeclared` at `udProgram`. -/
+theorem bareProgram_encodeDomain_but_headsScoped :
+    bareProgram.CtorDecls ∧ Program.SetLegal bareProgram (fun _ => none) ∧
+      (∀ fk ∈ bareProgram.ctors, Prim.ofName fk.1 = none) ∧
+      (∀ n ∈ bareProgram.names, ¬ "@".isPrefixOf n) ∧
+      (∀ c ∈ bareProgram, c.QueryEncodable) ∧
+      (∀ c ∈ bareProgram, c.litFreeB = true) ∧
+      Program.HeadsDeclared bareProgram (fun _ => none) ∧
+      bareProgram.arityConflicts = [] := by
+  refine ⟨bareProgram_ctorDecls, by decide, by decide, by decide +kernel, ?_, by decide,
+    by decide, by decide⟩
+  intro c hc
+  simp only [bareProgram, List.mem_cons] at hc
+  rcases hc with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | h
+  · trivial
+  · trivial
+  · trivial
+  · trivial
+  · trivial
+  · trivial
+  · exact bareRule_queryEncodable
+  · trivial
+  · exact absurd h (by simp)
+
+/-- **The completeness half is false without `headsScoped`.** `A` and `B` are both source
+e-nodes, the source relates them in no way — its rule is stuck at `z` before it reaches the
+`union` — and the encoded run puts them in one class. Every other clause of the domain holds
+(`bareProgram_encodeDomain_but_headsScoped`), so this is the clause's necessity and not a
+statement about a program the encoder was excused from.
 
 Compiled, and with no `sorry` anywhere under it. The four hypotheses are decidable facts about
 the two runs, checked by `difftest encode-selftest`; `sameClassF_iff`'s two side conditions
@@ -8588,11 +8558,11 @@ theorem bare_build_invents_equality {d e : FDatabase}
     (hd : exec bareProgram = some d) (he : execM (encode bareProgram) = some e)
     (hsc : e.SubtermClosed) (hr : e.EqsRefl) (hm₁ : bareA ∈ d.terms) (hm₂ : bareB ∈ d.terms)
     (hyes : sameClassF e bareA bareB = true) (hno : (bareA, bareB) ∉ d.closureF) :
-    ∃ src, bareProgram.EncodeDomain ∧ ProgramStep Database.empty bareProgram src ∧
+    ∃ src, ProgramStep Database.empty bareProgram src ∧
       execM (encode bareProgram) = some e ∧
       bareA ∈ src.terms ∧ bareB ∈ src.terms ∧
       SameClass e.toDatabase bareA bareB ∧ ¬ Cong src bareA bareB := by
-  refine ⟨d.toDatabase, bareProgram_encodeDomain, ?_, he, ?_, ?_,
+  refine ⟨d.toDatabase, ?_, he, ?_, ?_,
     (sameClassF_iff hsc hr _ _).mp hyes, ?_⟩
   · exact (exec_programStep bareProgram_ctorDecls
       (Or.inr (by rw [hd]; simp))).mp (by rw [hd]; rfl)

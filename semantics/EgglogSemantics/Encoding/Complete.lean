@@ -2390,8 +2390,8 @@ theorem adProgram_encodeDomain_but_arities :
       (∀ n ∈ adProgram.names, ¬ "@".isPrefixOf n) ∧
       (∀ c ∈ adProgram, c.QueryEncodable) ∧
       (∀ c ∈ adProgram, c.ruleUnionFreeB = true) ∧
-      Program.HeadsDeclared adProgram (fun _ => none) := by
-  refine ⟨?_, by decide, by decide, by decide +kernel, ?_, by decide, by decide⟩
+      Program.HeadsDeclared adProgram (fun _ => none) ∧ adProgram.HeadsScoped := by
+  refine ⟨?_, by decide, by decide, by decide +kernel, ?_, by decide, by decide, by decide⟩
   · intro c hc
     simp only [adProgram, List.mem_cons] at hc
     rcases hc with rfl | rfl | h <;> simp_all [Cmd.CtorDecl]
@@ -3136,14 +3136,17 @@ theorem encodedHeadSound {P : Program} (hdom : P.EncodeDomain) (hag : P.AritiesA
   exact hgoal
 
 
-/-! ## What the head obligation closes, and what it does not
+/-! ## What the head obligation closes
 
 `execM_soundTerms_of_head` with `EncodedHeadSound` discharged is the whole of the
 completeness half **under `Program.HeadsScoped`**, and the three theorems below are it,
-carried up to the statement `encode_corresponds` is one half of. Under the domain *alone*
-they are false, and `bare_build_invents_equality` is the refutation. -/
+carried up to the statement `encode_corresponds` is one half of. The clause is
+`EncodeDomain.headsScoped`, so these three are the domain's own statements with it spelled
+out — the form that says what the domain is buying, and `bare_build_invents_equality` is what
+says it has to buy it. -/
 
-/-- **The invariant, at the state `execM` returned** — under the missing clause. -/
+/-- **The invariant, at the state `execM` returned** — with the clause spelled out.
+`execM_soundTerms` is this at `hdom.headsScoped`. -/
 theorem execM_soundTerms_of_scoped {P : Program} (hdom : P.EncodeDomain)
     (hhs : P.HeadsScoped) {src : Database} (hsrc : ProgramStep Database.empty P src)
     {tgt : FDatabase} (htgt : execM (encode P) = some tgt) : tgt.SoundTerms src :=
@@ -3158,8 +3161,8 @@ theorem execM_viewsSound_of_scoped {P : Program} (hdom : P.EncodeDomain)
   viewsSound_of_soundTerms (execM_encode_eqsRefl htgt)
     (execM_soundTerms_of_scoped hdom hhs hsrc htgt)
 
-/-- **The completeness half, under the missing clause.** `encode_corresponds_complete` is this
-theorem with `Program.HeadsScoped` dropped, and dropping it is what
+/-- **The completeness half, with the clause spelled out.** `encode_corresponds_complete` is
+this theorem at `hdom.headsScoped`; dropping the clause from the domain is what
 `bare_build_invents_equality` refutes. -/
 theorem encode_corresponds_complete_of_scoped {P : Program} (hdom : P.EncodeDomain)
     (hhs : P.HeadsScoped) {src : Database}
@@ -3169,15 +3172,16 @@ theorem encode_corresponds_complete_of_scoped {P : Program} (hdom : P.EncodeDoma
   sameClass_cong_of_state (hsrc.wf Database.WF.empty)
     (execM_viewsSound_of_scoped hdom hhs hsrc htgt).1 ha hb h
 
-/-! ### And the conditional statement is not vacuous
+/-! ### And the clause is not vacuous
 
 `ENCODING.md`'s discipline at a hypothesis as much as at a lemma: `Program.HeadsScoped` has to
-hold of a program with a rule that really fires, or `execM_soundTerms_of_scoped` would be a
-statement about nothing. `ncProgram` is the one the forward half's two refuted clauses are
-pinned at — a unary constructor, a `union` between two nullary ones, and a rule that fires once
-per class member — and `vuProgram` is the `union`-head one, whose head unions a **variable**
-with an application and so takes `noLitUnion`'s second arm. Both are head-scoped, and
-`ncProgram`'s source run is compiled. -/
+hold of a program with a rule that really fires, or `EncodeDomain.headsScoped` would empty the
+domain of the cases the statement is about. `ncProgram` is the one the forward half's two
+refuted clauses are pinned at — a unary constructor, a `union` between two nullary ones, and a
+rule that fires once per class member — and `vuProgram` is the `union`-head one, whose head
+unions a **variable** with an application and so takes `noLitUnion`'s second arm. Both are
+head-scoped, and `ncProgram`'s source run is compiled. The corpus measurement is
+`DiffTest.lean`'s census: 70 of 166 in domain, the same 70 as before the clause. -/
 
 /-- `ncRule`'s head reads only `x`, which its query binds. -/
 theorem ncProgram_headsScoped : ncProgram.HeadsScoped := by decide
@@ -3193,6 +3197,15 @@ theorem execM_soundTerms_of_scoped_witness {tgt : FDatabase}
   execM_soundTerms_of_scoped ncProgram_encodeDomain ncProgram_headsScoped
     ncProgram_programStep htgt
 
+/-- `ncProgram` builds `(F (A))`, and its rule builds `(F (B))` off the `union`. -/
+theorem ncSrc_mem_FA' : ncFA ∈ ncSrc.toDatabase.terms := by
+  rw [FDatabase.toDatabase_terms, ncSrc_terms_eq]
+  exact List.mem_cons_of_mem _ (List.mem_cons_of_mem _ List.mem_cons_self)
+
+@[inherit_doc ncSrc_mem_FA']
+theorem ncSrc_mem_FB' : ncFB ∈ ncSrc.toDatabase.terms := by
+  rw [FDatabase.toDatabase_terms]; exact ncSrc_mem_FB
+
 @[inherit_doc execM_soundTerms_of_scoped_witness]
 theorem encode_corresponds_complete_of_scoped_witness {tgt : FDatabase}
     (htgt : execM (encode ncProgram) = some tgt) {a b : Term}
@@ -3201,29 +3214,23 @@ theorem encode_corresponds_complete_of_scoped_witness {tgt : FDatabase}
   encode_corresponds_complete_of_scoped ncProgram_encodeDomain ncProgram_headsScoped
     ncProgram_programStep htgt ha hb h
 
-/-- **The residue of the completeness half. Refuted.**
+/-- **The completeness half's invariant. Proved.**
 
-**This statement is false**, and `bare_build_invents_equality` is the compiled refutation —
-of `encode_corresponds_complete` below, which is stronger than refuting this. `bareProgram`
-is in `Program.EncodeDomain` (`bareProgram_encodeDomain`), its rule head builds a bare
-variable the query does not bind and then `union`s two constructors, the source block stops
-at the variable and fires nothing, and the encoded block — which `encodeBuild` emits nothing
-at all for at a leaf — skips that action and asserts the `union` anyway. What closes it is
-one further clause, `Program.HeadsScoped`, and `execM_soundTerms_of_scoped` is this theorem
-with it: everything else this file proves is spent there, `sorryAx`-free. The clause is
-reported rather than added.
+`Program.EncodeDomain` carries `headsScoped`, so this is `execM_soundTerms_of_scoped` at
+`hdom.headsScoped` and there is no residue left. Everything this file proves is spent there.
 
-The rest of the text below is the state of the reduction and stands unchanged.
-
-**It was false, twice over, and the domain now excludes both.** A source rule head that gets
-*stuck* contributes nothing — `RuleResults` asks `evalLocalActions` for a `some` — and its
+**It was false, three times over, and the domain excludes all three.** A source rule head that
+gets *stuck* contributes nothing — `RuleResults` asks `evalLocalActions` for a `some` — and its
 encoding's head, which is `.set`s, writes anyway. `Encoding/Correspond.lean`'s
-`execM_soundTerms_false` is a head applying a constructor nobody declared, and its
-`encode_corresponds_unions_literals` is a head unioning two literals; the second refutes not
-this residue but `encode_corresponds_complete` **itself**, at a pair of terms the source holds
-and the two membership hypotheses are satisfied at. So `EncodeDomain.noLitUnion` and
-`EncodeDomain.headsDeclared` are load-bearing for the conclusion and not only for the
-proof, and everything below is stated under them.
+`execM_soundTerms_false` is a head applying a constructor nobody declared, its
+`encode_corresponds_unions_literals` is a head unioning two literals, and its
+`bare_build_invents_equality` is a head *building* a variable nothing binds — which
+`encodeBuild` emits no action at all for, so the encoded block skips it and runs on where the
+source block stops. The last two refute not this residue but `encode_corresponds_complete`
+**itself**, at a pair of terms the source holds and the two membership hypotheses are
+satisfied at. So `EncodeDomain.noLitUnion`, `EncodeDomain.headsDeclared` and
+`EncodeDomain.headsScoped` are load-bearing for the conclusion and not only for the proof, and
+everything below is stated under them.
 
 `Database.ViewsSound` and `Database.EdgesSound` at the state `execM` returned, in the term-list
 form the run can carry (`viewsSound_of_soundTerms` is the step back). Every *per-entry*
@@ -3309,15 +3316,16 @@ obligation is discharged, one per writer `encode` emits — `entrySound_build`,
   that into a `CmdStep sd' (.saturate R) sd'`, and every target round then reads and
   concludes there (`FDatabase.EncOk.saturate_src`). `runSaturateM_closed` is the iteration.
 
-  **`EncodedHeadSound` is discharged too, and the statement it leaves is `Program.HeadsScoped`.**
+  **`EncodedHeadSound` is discharged too, and the clause it wanted is the domain's.**
   `execM_soundTerms_of_obligations` is the reduction and it is `sorryAx`-free;
   `execM_soundTerms_of_head` is it with the two legality conditions
   (`encodedWriteLegal`, `maintenance_writeLegal`) and the top-level action case
   (`encodedActionSound`) all discharged; `encodedHeadSound` is the head case, under
-  `Program.HeadsScoped`. `Program.AritiesAgree` is no longer missing — it is
-  `EncodeDomain.aritiesAgree`, stated over `Program.arityConflicts`. What `Program.HeadsScoped`
-  is *not* is a consequence of the domain: `bare_build_invents_equality` refutes
-  `encode_corresponds_complete` itself without it.
+  `Program.HeadsScoped`. Neither clause it asked for is missing now: `Program.AritiesAgree` is
+  `EncodeDomain.aritiesAgree` over `Program.arityConflicts`, and `Program.HeadsScoped` is
+  `EncodeDomain.headsScoped`. Neither follows from the others —
+  `adProgram_not_maintenance_writeLegal` and `bare_build_invents_equality` are the two
+  necessities, each at a program every *other* clause admits.
 * **The row-to-entry direction, which is the one that is *not* refuted, and it is proved.** A
   rule fires off `d.rows` (`patternHolds`), and turning a matched row into a `Database.Out` is
   `FDatabase.IndexOk.entry` — a row is an entry term. That is the direction soundness needs,
@@ -3365,33 +3373,33 @@ obligation is discharged, one per writer `encode` emits — `entrySound_build`,
     head mentions none of them (`hlet`) the extension drops out by `Expr.eval_agreeOn`, which is
     the shape `hfired` is stated in.
 
-  **Two conditions on the firing remain, and neither is a domain clause.** `Rule.HeadScoped` —
-  every head variable is the query's, a global, or the block's own `let` — is not one because
-  it costs nothing: `encodeBuild` keeps a source variable as itself and the encoded query binds
-  no name the source query does not, so a head variable neither the query nor a global binds
-  sticks the **encoded** head too and that firing writes on neither side; what is missing is
-  the lemma that says so. `hlet` is not one either: where the block's `let`s *do* shadow the
-  head, the encoded block performs the same `let`s, so `entrySound_headBuild`'s own `hval` is
-  stated at the wrong environment as well, and the repair is to carry the shared prefix on both
-  sides rather than to restrict the source.
+  **Two conditions on the firing were named here, and both are settled.** `Rule.HeadScoped` —
+  every head variable is the query's, a global, or the block's own `let` — was recorded as
+  costing nothing, on the reading that an unbound head variable sticks the **encoded** head
+  too. That reading is wrong at a *leaf*, which is `bareProgram`, so it is a real condition and
+  it is a domain clause: `EncodeDomain.headsScoped` on the program's text,
+  `Program.HeadsScoped.headScoped` for the state form the proof spends. `hlet` is gone
+  outright: `headActions_soundTerms` runs the two blocks in lockstep, so each action is read at
+  the environment it actually ran under and the `let` prefix is shared by construction.
 
-  These two are what `EncodedHeadSound` still has to be proved from, at the substitution
+  `EncodedHeadSound` is proved from those at the substitution
   `validQuerySubst_of_mem_matchQuery_diag` delivers — `validQuerySubst_of_mem_matchQuery`
   with `Signature.AllConstructors`, which no encoded target has, traded for
   `FDatabase.EqsRefl` and `FDatabase.IndexOk`, which every one of them has.
 
-  It is still the mirror of `unionsJoined_fire`, a source firing behind the target's where
-  that one needs a target firing behind the source's; what it is no longer is open.
+  It is the mirror of `unionsJoined_fire`, a source firing behind the target's where that one
+  needs a target firing behind the source's; what it is no longer is open.
 
 **The two legality conditions are `EncodedWriteLegal` and its maintenance counterpart, and
-they need a domain clause `Program.EncodeDomain` does not have.** `Program.AritiesAgree`
-records it: `Program.ctors` is read off the syntax, one `(name, arity)` pair per application
-and per declaration, so a program applying one name at two arities gets two table triples and
-the later declaration wins — and the losing arity's rebuild rules then `set` a view at the
-wrong key width, which is what `Actions.SetWidthOk` forbids and `FDatabase.Inv.execCmdM` asks
-of every rule the state holds, fired or not. It is reported rather than added. The third
-condition, `Signature.MergesLegal` at the encoded signature, **is** a consequence and is
-proved: `encodeSig_mergesLegal`, out of `encodeSig_mergeShape` and `encodeSig_ufName`.
+the domain clause they need is `EncodeDomain.aritiesAgree`.** `Program.AritiesAgree` is the
+form they consume: `Program.ctors` is read off the syntax, one `(name, arity)` pair per
+application and per declaration, so a program applying one name at two arities gets two table
+triples and the later declaration wins — and the losing arity's rebuild rules then `set` a
+view at the wrong key width, which is what `Actions.SetWidthOk` forbids and
+`FDatabase.Inv.execCmdM` asks of every rule the state holds, fired or not.
+`Program.EncodeDomain.aritiesAgree'` is the bridge. The third condition,
+`Signature.MergesLegal` at the encoded signature, **is** a consequence and is proved:
+`encodeSig_mergesLegal`, out of `encodeSig_mergeShape` and `encodeSig_ufName`.
 
 **No fixpoint is needed on the target.** `FDatabase.RoundClosed` was named as this residue's
 third missing piece; it is not one. Soundness is indifferent to under-firing — `execM_contained`
@@ -3427,37 +3435,34 @@ At a program with no rule the hypothesis is the source's own `evalAction`, and
 `satTarget_viewsSound` is that case discharged; `ncTgt_soundTerms` is both clauses at a state
 an encoded program reaches with a rule, a non-leader firing and a real `@UF` edge.
 
-**What is left, exactly: one clause, and it is not derivable.** `execM_soundTerms_of_scoped`
-is this statement with `Program.HeadsScoped` added, and it is `sorryAx`-free —
-`encodedHeadSound` is the head obligation discharged and every one of the four things it
-needed is done. `hlet` is gone: `headActions_soundTerms` runs the two blocks in lockstep, one
-source action at a time, so each action is read at the environment it actually ran under and
-the `let` prefix is shared by construction rather than excluded. `Database.TermsBuild` is
-`termsBuild_of_programStep`, an induction through `evalAction`, `RunRules` and `ProgramStep`.
-The reading τ is taken **once**, before that induction, so a head's nested applications all
-read at the same one, and `held_of_evalAction` composed with `exists_subterm_of_mem_apps`
-answers a subapplication there.
+**Nothing is left.** `encodedHeadSound` is the head obligation discharged and every one of
+the four things it needed is done. `hlet` is gone: `headActions_soundTerms` runs the two blocks
+in lockstep, one source action at a time, so each action is read at the environment it actually
+ran under and the `let` prefix is shared by construction rather than excluded.
+`Database.TermsBuild` is `termsBuild_of_programStep`, an induction through `evalAction`,
+`RunRules` and `ProgramStep`. The reading τ is taken **once**, before that induction, so a
+head's nested applications all read at the same one, and `held_of_evalAction` composed with
+`exists_subterm_of_mem_apps` answers a subapplication there. And `Rule.HeadScoped` is not a
+case split but a hypothesis, because the statement is false without it — which is why it is a
+domain clause and not a lemma.
 
-**The one that is not done is `Rule.HeadScoped`, and the reason is that it is not a case
-split: the statement below is false without it.** `encodeBuild` emits **no action at all**
-for a *leaf*, so a head that builds a bare variable the query does not bind stops the source
-block at that action and the encoded block skips it and runs the rest of the head. That is a
-third shape of stuck head beside the two `Encoding/Encode.lean` names, and
-`Program.EncodeDomain` excludes it in no clause: `bareProgram` satisfies every one of them,
-and `bare_build_invents_equality` is `encode_corresponds_complete` **itself** failing there,
-at a pair of source e-nodes the encoded run puts in one class and the source relates in no
-way. `bareProgram_not_headsScoped` is the clause that would exclude it. It is **reported
-rather than added**.
+**The clause is faithfulness, not a narrowing.** egglog rejects a rule head that reads an
+unbound variable outright: `to_core_actions`, the lowering for *actions*, resolves a
+`GenericExpr::Var` only when `ctx.binding` holds it or it is a global, and raises
+`TypeError::Unbound` otherwise (`egglog/src/core.rs:663-670`) — the same shape the clause has.
+The census is unmoved: 70 of 166 in domain, as before it was added.
 
 **Neither the bundle nor the reduction is vacuous.** `wPreludeState_encOk` is
 `FDatabase.EncOk` at the state `encode wProgram`'s prelude really leaves — the prelude is
-declarations and rules, so it reduces in the kernel — and
-`adProgram_not_maintenance_writeLegal` is `EncodeDomain.aritiesAgree`'s necessity, at a
-two-command program every other clause admits. -/
+declarations and rules, so it reduces in the kernel — `adProgram_not_maintenance_writeLegal`
+is `EncodeDomain.aritiesAgree`'s necessity and `bare_build_invents_equality` is
+`EncodeDomain.headsScoped`'s, each at a program every *other* clause admits, and
+`execM_soundTerms_witness` is every hypothesis of this theorem holding together at a program
+whose rule really fires. -/
 theorem execM_soundTerms {P : Program} {src : Database} {tgt : FDatabase}
     (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
-    (htgt : execM (encode P) = some tgt) : tgt.SoundTerms src := by
-  sorry
+    (htgt : execM (encode P) = some tgt) : tgt.SoundTerms src :=
+  execM_soundTerms_of_scoped hdom hdom.headsScoped hsrc htgt
 
 /-- **The completeness half's invariant at the state `execM` returned.** `execM_soundTerms` is
 the residue; the step from it is `viewsSound_of_soundTerms`, whose hypothesis
@@ -3468,9 +3473,10 @@ theorem execM_viewsSound {P : Program} {src : Database} {tgt : FDatabase}
     tgt.toDatabase.ViewsSound src ∧ tgt.toDatabase.EdgesSound src :=
   viewsSound_of_soundTerms (execM_encode_eqsRefl htgt) (execM_soundTerms hdom hsrc htgt)
 
-/-- **No equality is invented, at the source's own e-nodes.** Proved from
+/-- **No equality is invented, at the source's own e-nodes. Proved.** From
 `execM_viewsSound`, through `sameClass_cong_of_state` — the target-side half needs no
-induction, only the invariant.
+induction, only the invariant. `encode_corresponds_complete_witness` is it at a pair both
+sides really relate.
 
 **The two membership hypotheses are not bookkeeping and cannot be dropped**: without them the
 statement is false at `witnessProgram`, where the rebuild gives `(Add One One)` an e-class and
@@ -3484,6 +3490,40 @@ theorem encode_corresponds_complete {P : Program} {src : Database} {tgt : FDatab
   sameClass_cong_of_state (hsrc.wf Database.WF.empty)
     (execM_viewsSound hdom hsrc htgt).1 ha hb h
 
+/-! ### Both halves, at a program that exercises them
+
+`ENCODING.md`'s discipline for a conclusion as much as for a hypothesis: the two theorems
+above are conditionals, so each is exhibited at a program whose rule really fires, at a pair
+of source e-nodes the two sides really relate. `ncProgram` is that program — its source run is
+compiled (`ncProgram_programStep`) and only the encoded run is a hypothesis, for the reason
+every other target-side witness here takes one, since `execM` on an encoded program does not
+reduce in the kernel. -/
+
+/-- **Every hypothesis of `execM_soundTerms` holding together**, at `ncProgram`. -/
+theorem execM_soundTerms_witness {tgt : FDatabase}
+    (htgt : execM (encode ncProgram) = some tgt) : tgt.SoundTerms ncSrc.toDatabase :=
+  execM_soundTerms ncProgram_encodeDomain ncProgram_programStep htgt
+
+/-- **`encode_corresponds_complete` at a pair both sides really relate.**
+
+`(F (A))` and `(F (B))` are two *distinct* source e-nodes of `ncProgram`: the source derives
+the equation (`ncSrc_cong_FA_FB`, off the `union` its rule fires on) and the encoded run
+shares an id for it (`ncTgt_sameClass_FA_FB`, at the state the run is transcribed to), so
+neither side of the conclusion is empty and neither is the diagonal. The theorem itself is
+then applied at the state `execM` really returns, whose `SameClass` — like every other
+target-side fact here — is a decidable hypothesis, since the kernel cannot run an encoded
+program. What comes back is a congruence between two distinct source terms. -/
+theorem encode_corresponds_complete_witness {tgt : FDatabase}
+    (htgt : execM (encode ncProgram) = some tgt) (hsc : tgt.SubtermClosed) (hr : tgt.EqsRefl)
+    (hyes : sameClassF tgt ncFA ncFB = true) :
+    ncFA ≠ ncFB ∧ Cong ncSrc.toDatabase ncFA ncFB ∧
+      SameClass ncTgt.toDatabase ncFA ncFB ∧ SameClass tgt.toDatabase ncFA ncFB :=
+  have hsame : SameClass tgt.toDatabase ncFA ncFB := (sameClassF_iff hsc hr _ _).mp hyes
+  ⟨by decide,
+    encode_corresponds_complete ncProgram_encodeDomain ncProgram_programStep htgt
+      ncSrc_mem_FA' ncSrc_mem_FB' hsame,
+    ncTgt_sameClass_FA_FB, hsame⟩
+
 /-- **The correspondence.** `difftest correspond 64` runs exactly this claim over the 70
 in-domain cases and the seventeen probes, through `sameClassF` and `closureF`, and reports
 70 agreeing, 0 LOST, 0 INVENTED — and `link-diff` 0, which is what says the swept relation
@@ -3493,8 +3533,8 @@ is this one.
 a `:merge` declaration has no table triple to emit, and a source name in the generated
 namespace collides with one. `Rebuilt` is *not* a hypothesis: it is a postcondition of the
 specification's rebuild command (`cmdStep_rebuilt`), and the hypothesis here names an
-`execM` target, so what the two unproved halves have to lean on is the interpreter's own
-`mergeSaturateF` fixpoint instead.
+`execM` target, so what both halves lean on is the interpreter's own `mergeSaturateF`
+fixpoint instead.
 
 **Stated at the source's e-nodes**, which is where the encoding is faithful and where the
 corpus sweep measures it. The two membership hypotheses cost the forward direction nothing —

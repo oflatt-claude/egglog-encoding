@@ -10,35 +10,45 @@ over `Encoding/Correspond.lean`'s decision procedure `sameClassF`, the proof tha
 (`sameClassF_iff`, both directions, no `sorry`), and a compiled witness that its hypotheses
 are jointly satisfiable at a state where both sides of the `iff` are non-trivial
 (`encode_corresponds_witness`). `difftest correspond 64` sweeps exactly that relation over
-the corpus and reports 70 of 70 agreeing, 0 LOST, 0 INVENTED, 0 `link-diff`. The theorem
-itself carries `sorry`, in three named properties of the state the run reached — and they are
-three *mechanisms* rather than three clauses, because the clauses are derived from one another.
+the corpus and reports 70 of 70 agreeing, 0 LOST, 0 INVENTED, 0 `link-diff`. **One half of the
+`iff` is proved outright** — `encode_corresponds_complete`, no `sorryAx` — and the theorem
+carries `sorry` only through the *forward* half, in two named properties of the state the run
+reached; they are two *mechanisms* rather than two clauses, because the clauses are derived
+from one another.
 The **action read-back** is proved (`holdsBuild_of_execProgramM`,
 `viewRepr_self_of_execProgramM`) and so is the **induction over `encode P`'s commands** built
 on it (`UnionsInv`, `unionsInv_execM`), which closes `execM_unionsJoined` and supplies the
-totality `Database.ViewsCover` is derived from. Of the three left, one is that induction's own
+totality `Database.ViewsCover` is derived from. Of the two left, one is that induction's own
 open case (`unionsJoined_fire`: a source command that fires rules needs a target firing behind
 the source's, and one step below that the premise row must be current in the *index*, not merely
-an entry term), one is the run-wide index argument itself (`execM_viewLeaderRows`: the rebuild's
-e-class rule, its column rules and path compression), and one is the completeness half
-(`Encoding/Complete.lean`'s `execM_soundTerms`: every term the run adds, justified against the
-source). The **merge phase** of that last one is proved — `mergeSaturateF_soundTerms`, out of
-`mergeOneOriented_soundTerms` — and so are the two facts it needed, `Signature.MergeShape` (only
-`@UF` and the views carry a `:merge` body, and both carry `mergeBody`) and `eq_of_congrKeys`
-(against a diagonal closure, congruent keys are equal keys); the fold over **rule firings** and
-the head obligation under it are proved too (`FDatabase.EncOk.stepCmds`, `encodedHeadSound`).
+an entry term) and one is the run-wide index argument itself (`execM_viewLeaderRows`: the
+rebuild's e-class rule, its column rules and path compression).
 
-**That third one is not open but *refuted*.** `encodeBuild` emits no action at all for a
-**leaf**, so a rule head that builds a bare variable the query does not bind stops the *source*
-block at that action while the encoded block skips it and runs the rest of the head — a third
-shape of stuck head beside the two `Encoding/Encode.lean` names, and one no clause of
-`Program.EncodeDomain` excludes. `bare_build_invents_equality` is that at `bareProgram`, which
-the domain admits: the source relates `(A)` and `(B)` in no way and the encoded run puts them in
-one class, so `encode_corresponds_complete` **itself** is false there, at a pair of source
-e-nodes. `Program.HeadsScoped` — every variable a rule head reads is one its own query binds —
-is the clause that closes it; it is reported rather than added, and
-`execM_soundTerms_of_scoped` and `encode_corresponds_complete_of_scoped` are the two statements
-carrying it, both `sorryAx`-free.
+**The completeness half is closed.** `Encoding/Complete.lean`'s `execM_soundTerms` — every term
+the run adds, justified against the source — is proved, and `encode_corresponds_complete` with
+it. The **merge phase** is `mergeSaturateF_soundTerms`, out of `mergeOneOriented_soundTerms`,
+with the two facts it needed: `Signature.MergeShape` (only `@UF` and the views carry a `:merge`
+body, and both carry `mergeBody`) and `eq_of_congrKeys` (against a diagonal closure, congruent
+keys are equal keys). The fold over **rule firings**, the per-command induction and the head
+obligation under it are `execRunRules_soundTerms`, `FDatabase.EncOk.stepCmds` and
+`encodedHeadSound`. `encode_corresponds_complete_witness` is the closed statement at a pair
+both sides really relate — `(F (A))` and `(F (B))` at `ncProgram`, two distinct source e-nodes.
+
+**It took one further domain clause, and the clause is faithfulness rather than a narrowing.**
+`encodeBuild` emits no action at all for a **leaf**, so a rule head that builds a bare variable
+the query does not bind stops the *source* block at that action while the encoded block skips it
+and runs the rest of the head — a third shape of stuck head beside the two
+`Encoding/Encode.lean` names. `bare_build_invents_equality` is that at `bareProgram`: the source
+relates `(A)` and `(B)` in no way and the encoded run puts them in one class, so
+`encode_corresponds_complete` **itself** was false there, at a pair of source e-nodes.
+`EncodeDomain.headsScoped` — `Program.HeadsScoped`, every variable a rule head reads is one its
+own query binds — is the clause that excludes it, and
+`bareProgram_encodeDomain_but_headsScoped` is every *other* clause holding of that program, so
+the clause is the only thing standing between the domain and the refutation. egglog rejects
+exactly this: `to_core_actions`, the lowering for actions, resolves a `GenericExpr::Var` only
+when `ctx.binding` holds it or it is a global, and raises `TypeError::Unbound` otherwise
+(`egglog/src/core.rs:663-670`) — a different error from `UnboundFunction`. The census is
+unmoved: still 70 of 166 in domain, and `DiffTest.lean` pins that.
 **Two clauses this factorisation used to run through are
 refuted** and kept as records — `Database.ReadsSelf` (every source term is an id of itself) and
 `Database.ViewsProduct` (a view entry at every id tuple the children form), both false at

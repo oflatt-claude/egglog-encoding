@@ -1849,10 +1849,10 @@ theorem Cmd.queryEncodableB_iff (c : Cmd) : c.queryEncodableB = true ↔ c.Query
     simp [Cmd.queryEncodableB, Cmd.QueryEncodable, List.all_eq_true, Pattern.groundedB_iff,
       Pattern.noValuesB_iff, Query.varsKeyedB_iff]
 
-/-- `Program.EncodeDomain`, computed. `EncodeDomain.setLegal` and
-`EncodeDomain.headsDeclared` are `Spec/Scope.lean` checks with `Decidable` instances, so those
-two conjuncts are `decide` of the clause itself; `EncodeDomain.noLitUnion` is `Bool` at the
-source. -/
+/-- `Program.EncodeDomain`, computed. `EncodeDomain.setLegal`, `EncodeDomain.headsDeclared`
+and `EncodeDomain.headsScoped` are `Spec/Scope.lean` checks with `Decidable` instances, so
+those three conjuncts are `decide` of the clause itself; `EncodeDomain.noLitUnion` is `Bool`
+at the source. -/
 def Program.encodeDomainB (p : Program) : Bool :=
   p.all Cmd.ctorDeclB && decide (Program.SetLegal p (fun _ => none))
     && p.ctors.all (fun fk => (Prim.ofName fk.1).isNone)
@@ -1861,6 +1861,7 @@ def Program.encodeDomainB (p : Program) : Bool :=
     && (p.all Cmd.ruleUnionFreeB || p.all Cmd.litFreeB)
     && decide (Program.HeadsDeclared p (fun _ => none))
     && p.arityConflicts.isEmpty
+    && decide p.HeadsScoped
 
 /-- **The census below counts exactly `EncodeDomain`.** -/
 theorem Program.encodeDomainB_iff (p : Program) :
@@ -1869,10 +1870,10 @@ theorem Program.encodeDomainB_iff (p : Program) :
     Cmd.ctorDeclB_iff, Cmd.queryEncodableB_iff, Option.isNone_iff_eq_none,
     Bool.not_eq_eq_eq_not, Bool.not_true, Bool.eq_false_iff, ne_eq, decide_eq_true_eq,
     List.isEmpty_iff]
-  exact ⟨fun h => ⟨h.1.1.1.1.1.1.1, h.1.1.1.1.1.1.2, h.1.1.1.1.1.2, h.1.1.1.1.2, h.1.1.1.2,
-      h.1.1.2, h.1.2, h.2⟩,
-    fun h => ⟨⟨⟨⟨⟨⟨⟨h.ctorsOnly, h.setLegal⟩, h.noPrim⟩, h.noAt⟩, h.queryEncodable⟩,
-      h.noLitUnion⟩, h.headsDeclared⟩, h.aritiesAgree⟩⟩
+  exact ⟨fun h => ⟨h.1.1.1.1.1.1.1.1, h.1.1.1.1.1.1.1.2, h.1.1.1.1.1.1.2, h.1.1.1.1.1.2,
+      h.1.1.1.1.2, h.1.1.1.2, h.1.1.2, h.1.2, h.2⟩,
+    fun h => ⟨⟨⟨⟨⟨⟨⟨⟨h.ctorsOnly, h.setLegal⟩, h.noPrim⟩, h.noAt⟩, h.queryEncodable⟩,
+      h.noLitUnion⟩, h.headsDeclared⟩, h.aritiesAgree⟩, h.headsScoped⟩⟩
 
 /-! #### Running the encoded program
 
@@ -2934,22 +2935,23 @@ def correspondSelfTests : List (String × (Unit → Bool)) :=
       | some d, some e =>
         e.terms.contains udEntry && d.terms.all udNoZ && !udProgram.encodeDomainB
       | _, _ => false),
-    -- **The third shape of stuck head, and the one the domain does *not* exclude.**
+    -- **The third shape of stuck head, and the one `EncodeDomain.headsScoped` excludes.**
     -- `bare_build_invents_equality` takes the facts below as hypotheses. `encodeBuild` emits
     -- no action at all for a **leaf**, so a head that builds a bare variable the query does
     -- not bind stops the source block there and the encoded block skips it and runs on: the
     -- source rule never fires and the encoded one asserts its `union` anyway. `A` and `B` are
     -- both source e-nodes, so this refutes `encode_corresponds_complete` itself.
-    -- The last line is the point: unlike the two above, `bareProgram.encodeDomainB` is
-    -- **true**. `Program.HeadsScoped` is the clause that would exclude it.
-    ("the bare-build refutation runs, in the domain", fun _ =>
+    -- The last line is the point, and it is the clause doing the work: every *other* clause
+    -- holds of `bareProgram` (`bareProgram_encodeDomain_but_headsScoped`), so `headsScoped`
+    -- is the only thing putting it out.
+    ("the bare-build refutation runs, out of the domain", fun _ =>
       match exec bareProgram, execM (encode bareProgram) with
       | some d, some e =>
         e.subtermClosedB && e.eqsReflB
           && d.terms.contains bareA && d.terms.contains bareB
           && sameClassF e bareA bareB
           && !decide ((bareA, bareB) ∈ d.closureF)
-          && bareProgram.encodeDomainB
+          && !bareProgram.encodeDomainB
       | _, _ => false),
     -- **The state the sweep reads holds `@UF` entries.**
     -- That used to be the refutation: `MergeSaturated` counted the proof column, so no such
@@ -3068,25 +3070,29 @@ set_option linter.hashCommand false in
 one of the 96 declares a `:merge` function, so it is `EncodeDomain.ctorsOnly` that fails and
 not a generated-name clash or a shadowed primitive.
 
-That is also what says the three newest clauses — `EncodeDomain.queryEncodable`,
-`noLitUnion` and `headsDeclared` — **cost the corpus nothing**: the count is 70 with them
-as it was without, and the 70 pinned above is what would move if a generated program ever
-wrote a bare-leaf pattern, built a literal under a rule that unions, or applied a name it does
-not declare. What each clause excludes is a program the domain used to admit and the encoder
-gets wrong: `Encoding/Match.lean`'s `litProgram` for the first, and
-`Encoding/Correspond.lean`'s `luProgram` and `udProgram` for the other two — so none of them
-is decoration, each is the only thing standing between the domain and a refuted case. -/
+That is also what says the four newest clauses — `EncodeDomain.queryEncodable`,
+`noLitUnion`, `headsDeclared` and `headsScoped` — **cost the corpus nothing**: the count is 70
+with them as it was without, and the 70 pinned above is what would move if a generated program
+ever wrote a bare-leaf pattern, built a literal under a rule that unions, applied a name it
+does not declare, or read a head variable nothing binds. What each clause excludes is a
+program the domain used to admit and the encoder gets wrong: `Encoding/Match.lean`'s
+`litProgram` for the first, and `Encoding/Correspond.lean`'s `luProgram`, `udProgram` and
+`bareProgram` for the other three — so none of them is decoration, each is the only thing
+standing between the domain and a refuted case. -/
 set_option linter.hashCommand false in
 #guard (allCases.filter fun c => !(c.2.declared).encodeDomainB).all fun c =>
   !((c.2.declared).all Cmd.ctorDeclB)
 
-/-! **And what the clause the domain still lacks would cost: nothing.**
-`Encoding/Correspond.lean`'s `bare_build_invents_equality` refutes
-`encode_corresponds_complete` inside `Program.EncodeDomain`, and `Program.HeadsScoped` — every
-variable a rule head reads is one its own query binds — is the clause that excludes it. It is
-reported rather than added, and this is the measurement that says adding it would move no
-number here: all seventy in-domain cases satisfy it, so `encode_corresponds_complete_of_scoped`
-is a statement about the same 42% of the suite that the sweep measures. -/
+/-! **And what the newest clause costs: nothing.** `EncodeDomain.headsScoped` —
+`Program.HeadsScoped`, every variable a rule head reads is one its own query binds — is what
+puts `Encoding/Correspond.lean`'s `bareProgram` out, and `bare_build_invents_equality` is
+`encode_corresponds_complete` failing there under every other clause. It is a faithfulness
+clause: egglog raises `TypeError::Unbound` for exactly this, in the lowering for actions
+(`egglog/src/core.rs:663-670`). This is the measurement that says adding it moved no number
+here — all seventy in-domain cases satisfy it, so `encode_corresponds_complete` is a
+statement about the same 42% of the suite that the sweep measures. `encodeDomainB` now
+includes the clause, so the guard below is the redundant half of the count and is kept as the
+record of what was measured before it was folded in. -/
 set_option linter.hashCommand false in
 #guard ((allCases.filter fun c => (c.2.declared).encodeDomainB).filter fun c =>
   decide (c.2.declared).HeadsScoped).length = 70

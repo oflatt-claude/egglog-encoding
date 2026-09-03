@@ -1311,11 +1311,63 @@ instance Program.decidableSetLegal : ∀ (P : Program) (sig : Signature),
   | c :: cs, sig => @instDecidableAnd _ _ (Cmd.decidableSetLegal c sig)
       (Program.decidableSetLegal cs (c.sigBind sig))
 
+/-! #### The head-scope check, and deciding it
+
+`Spec/Scope.lean`'s `Actions.Scoped` at a rule's own query variables. The scope grows along
+the block, so a head may read what an earlier `let` of the same block bound; what it may not
+read is a variable nothing binds. `Rule.HeadScoped` (`Encoding/Correspond.lean`) is the same
+notion at a source *state*, which also admits a global. -/
+
+/-- **Every variable a rule head reads is one the rule's own query binds.**
+`Actions.Scoped`'s own `Expr.IsApp` at a bare build is part of it.
+
+Stated on the program's text, and *stronger* than `Rule.HeadScoped` at the source state,
+which would also let a head read a global. The weaker form is what the proofs spend; this is
+what a witness can decide. -/
+def Cmd.HeadScoped : Cmd → Prop
+  | .rule r => Actions.Scoped r.actions (Query.vars r.query)
+  | _ => True
+
+@[inherit_doc Cmd.HeadScoped]
+def Program.HeadsScoped (P : Program) : Prop := ∀ c ∈ P, c.HeadScoped
+
+instance Expr.decidableIsApp : ∀ e : Expr, Decidable e.IsApp
+  | .app _ _ => .isTrue trivial
+  | .lit _ => .isFalse (fun h => (h : False))
+  | .var _ => .isFalse (fun h => (h : False))
+
+instance Expr.decidableScoped (e : Expr) (Γ : Scope) : Decidable (e.Scoped Γ) :=
+  inferInstanceAs (Decidable (∀ v ∈ e.vars, v ∈ Γ))
+
+instance Action.decidableScoped : ∀ (a : Action) (Γ : Scope), Decidable (a.Scoped Γ)
+  | .expr e, Γ => inferInstanceAs (Decidable (e.IsApp ∧ e.Scoped Γ))
+  | .letBind _ e, Γ => inferInstanceAs (Decidable (e.Scoped Γ))
+  | .union e₁ e₂, Γ => inferInstanceAs (Decidable (e₁.Scoped Γ ∧ e₂.Scoped Γ))
+  | .set _ args out, Γ =>
+      inferInstanceAs (Decidable ((∀ e ∈ args, e.Scoped Γ) ∧ ∀ e ∈ out, e.Scoped Γ))
+
+instance Actions.decidableScoped : ∀ (as : List Action) (Γ : Scope),
+    Decidable (Actions.Scoped as Γ)
+  | [], _ => .isTrue trivial
+  | a :: as, Γ => @instDecidableAnd _ _ (Action.decidableScoped a Γ)
+      (Actions.decidableScoped as (a.bind Γ))
+
+instance Cmd.decidableHeadScoped : ∀ c : Cmd, Decidable c.HeadScoped
+  | .rule r => inferInstanceAs (Decidable (Actions.Scoped r.actions (Query.vars r.query)))
+  | .action _ => .isTrue trivial
+  | .run _ => .isTrue trivial
+  | .saturate _ => .isTrue trivial
+  | .decl _ _ => .isTrue trivial
+
+instance Program.decidableHeadsScoped (P : Program) : Decidable P.HeadsScoped :=
+  inferInstanceAs (Decidable (∀ c ∈ P, c.HeadScoped))
+
 /-- **Legality plus the encoding-specific residue.** Three clauses are `Spec`'s own static
 checks — `Program.CtorDecls`, `Program.SetLegal`, and `Action.Declared` threaded along
-`Cmd.sigBind` — and four are conditions only the encoding needs: the generated namespace has
-to be fresh, the query flattening has to be total, and a rule head has to be one the source
-can run. -/
+`Cmd.sigBind` — and six are conditions only the encoding needs: no source name may shadow a
+primitive or sit in the generated namespace, the query flattening has to be total, no name may
+be applied at two arities, and a rule head has to be one the source can run (`noLitUnion` and
+`headsScoped`). -/
 structure Program.EncodeDomain (P : Program) : Prop where
   /-- Every declared function is a constructor: `Spec/Syntax.lean`'s own
   `Program.CtorDecls`, which is what `exec_programStep` asks for. -/
@@ -1380,6 +1432,24 @@ structure Program.EncodeDomain (P : Program) : Prop where
   `set` a view at the wrong key width (`Program.AritiesAgree`,
   `adProgram_not_maintenance_writeLegal`). -/
   aritiesAgree : P.arityConflicts = []
+  /-- **Every variable a rule head reads is one its own query binds.**
+  `Program.HeadsScoped`, over `Spec/Scope.lean`'s `Actions.Scoped`.
+
+  A **faithfulness** clause rather than a narrowing, and it costs the corpus nothing — the
+  census is 70 with it as it was without. egglog rejects exactly this, in `to_core_actions`,
+  the lowering for *actions*: a `GenericExpr::Var` resolves only when `ctx.binding` holds it
+  or it is a global, and is `TypeError::Unbound` — "Unbound symbol", a different error from
+  `UnboundFunction` — otherwise (`egglog/src/core.rs:663-670`). The clause's own shape is
+  that one: query-bound, or (at a state) a global.
+
+  What needs it is the rule-head obligation, and this is a **third** shape of stuck head
+  beside `noLitUnion`'s and `headsDeclared`'s. `encodeBuild` emits **no action at all** for a
+  *leaf*, so `.expr (.var v)` at an unbound `v` stops the source block there while the
+  encoded block skips it and runs the rest of the head — an equality in the target the source
+  never derives. `bareProgram` is that program, `bare_build_invents_equality` is
+  `encode_corresponds_complete` failing at it under every other clause, and `encodedHeadSound`
+  is what the clause buys. -/
+  headsScoped : P.HeadsScoped
 
 /-! #### The `union` legality the clause implies
 

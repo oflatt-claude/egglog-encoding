@@ -133,22 +133,24 @@ nightly-local: nightly-uv nightly-rustup
 # `Database.ViewsCover.of_viewLeaderRows` gets it from a row-transport clause plus totality, with
 # `ncTgt_viewsCover` running that reduction at the very state the product form fails at. What is
 # left: `execM_viewLeaderRows` is the whole run-wide index argument (the rebuild's e-class rule,
-# its column rules, and path compression), `unionsJoined_fire` is a target firing behind a source
-# firing — the one command case the read-back does not reach, and it carries both of the
-# induction's data clauses — and `execM_soundTerms` is the completeness half, which is
-# **refuted**: `bare_build_invents_equality` is a program in `Program.EncodeDomain` whose rule
-# head builds a bare variable the query does not bind, which `encodeBuild` emits no action for
-# at all, so the source block stops there and the encoded block runs on and asserts an equation
-# the source never derives. That refutes `encode_corresponds_complete` itself, at a pair of
-# source e-nodes. `Program.HeadsScoped` is the clause that closes it and it is reported rather
-# than added: `execM_soundTerms_of_scoped` and `encode_corresponds_complete_of_scoped` are the
-# two statements with it, both `sorryAx`-free, and everything else the half needed — the
-# per-command induction, the merge phase, the firing fold, the maintenance families, the head
-# obligation `encodedHeadSound` — is proved. The rule-head match
-# correspondence of `Encoding/Match.lean` is proved outright, encoder read-back included, and so
-# is the rule-head build case it feeds (`entrySound_headBuild`). Everywhere outside `Encoding/` a
-# `sorry` is a regression, and a new one inside it changes the count.
-LEAN_OPEN_SORRIES = 3
+# its column rules, and path compression), and `unionsJoined_fire` is a target firing behind a
+# source firing — the one command case the read-back does not reach, and it carries both of the
+# induction's data clauses. Both are the **forward** half's.
+#
+# **The completeness half is closed.** `execM_soundTerms` is proved and so is
+# `encode_corresponds_complete`, the half `encode_corresponds` states over the source's own
+# e-nodes. It took one further domain clause, `EncodeDomain.headsScoped`: `encodeBuild` emits no
+# action at all for a leaf, so a rule head that builds a bare variable the query does not bind
+# stops the source block there while the encoded block runs on and asserts an equation the source
+# never derives (`bare_build_invents_equality`, at a program every other clause admits). The
+# clause is faithfulness, not a narrowing — egglog raises `TypeError::Unbound` for exactly this
+# in `to_core_actions` (`egglog/src/core.rs:663-670`) — and the census is unmoved at 70 of 166.
+# Everything else the half needed — the per-command induction, the merge phase, the firing fold,
+# the maintenance families, the head obligation `encodedHeadSound` — was already proved. The
+# rule-head match correspondence of `Encoding/Match.lean` is proved outright, encoder read-back
+# included, and so is the rule-head build case it feeds (`entrySound_headBuild`). Everywhere
+# outside `Encoding/` a `sorry` is a regression, and a new one inside it changes the count.
+LEAN_OPEN_SORRIES = 2
 LEAN_OPEN_SORRY_DIR = semantics/EgglogSemantics/Encoding
 
 lean-check:

@@ -1989,6 +1989,7 @@ theorem wProgram_encodeDomain : wProgram.EncodeDomain where
   noLitUnion := Or.inr (by decide)
   headsDeclared := by decide
   aritiesAgree := by decide
+  headsScoped := by decide
 
 /-- **The correspondence, run end to end at the composed case.**
 
@@ -2556,6 +2557,7 @@ theorem uProgram_encodeDomain : uProgram.EncodeDomain where
   noLitUnion := Or.inr (by decide)
   headsDeclared := by decide
   aritiesAgree := by decide
+  headsScoped := by decide
 
 /-- **`cong_headUnion` at a non-reflexive equation.**
 
