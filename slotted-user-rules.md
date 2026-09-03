@@ -1590,9 +1590,22 @@ settle it.
 
 ### Which slotted-egraphs is this compared against?
 
-`memoryleak47/slotted-egraphs` PR #45, and the distinction matters. `multipat.rs` is
-in `main` too, so the multipattern matcher is not new; what the PR adds is a one-line
-fix, `extend_subst` canonicalising the child `AppliedId` through the slot union-find.
+Upstream `main`, pinned to `b90adca` in `slotted-experiments/xmulti/Cargo.toml` --
+a rev rather than a local checkout, so a CI runner can build the oracle. That is `main`
+after PR #45 was merged, and two things in it matter.
+
+The first is the fix PR #45 carried: `extend_subst` canonicalising the child
+`AppliedId` through the slot union-find. The second is newer and costs us matches --
+`final_refine`, which takes every slot pair e-matching left undecided and branches on
+BOTH readings, once with the slots unified and once with them apart. The encoding has
+no such branch: an unconstrained slot is minted, a fresh name differs from everything,
+so it only ever takes the "apart" one. Moving to this base took the deep sweep from 17
+divergences to 278, 229 of them ours, with nothing in the encoding changed -- the
+oracle got sharper and showed a gap that was always there. `FINAL_REFINE_GAP` in
+`slotted-experiments/xdiff/xdiff.py` pins the two curated cases that show it.
+
+On PR #45's own contribution: `multipat.rs` is in `main` too, so the multipattern
+matcher is not new; what that PR added was the one-line fix.
 Without it a child bound after the matcher merges a freshened bound slot keeps the
 pre-merge name -- surviving into the returned `Subst` only when the child binding is
 the last thing to happen, so a single-atom pattern or the last child of the last atom.

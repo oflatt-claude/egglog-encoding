@@ -108,7 +108,7 @@ def run_egg_files():
     files = sorted(glob.glob(str(ROOT / "slotted-tests" / "**" / "slotted-*.egg"), recursive=True))
     # A test ported to the slotted language leaves this set and joins `slotted-tests`,
     # so this floor drops as that one rises; neither may fall on its own.
-    if len(files) < 16:
+    if len(files) < 17:
         return f"only {len(files)} slotted .egg files found"
     bad = []
     for f in files:

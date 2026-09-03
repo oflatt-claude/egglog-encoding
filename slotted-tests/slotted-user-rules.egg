@@ -8,15 +8,12 @@
 ;;; checked against the reference), `xarray.py` (the paper's array language, likewise)
 ;;; and `gen-sdql-rules.py` (SDQL).
 ;;;
-;;; EVERY RULE BELOW IS A RULE.  Six of the eleven are a rewrite someone actually wrote --
-;;; four from `sdql_rules()` in `slotted-egraphs/benches/sdql.rs`, two from the paper's S4.1
-;;; array language (`tests/array/mod.rs`, whose guard polarity `tests/rise/rewrite.rs` states
-;;; correctly) -- and each section names which.  The other five shapes have no real instance:
-;;; three of them need a MULTIPATTERN, which no single-rooted rewrite produces, and two need
-;;; a REDUNDANT SLOT, which comes from a merge and not from a rule's shape.  Those sections
-;;; say so and say why.  No section concludes into a witness relation: the conclusion is the
-;;; `Equated` the encoder emits, so what the tests observe is what the rule DOES.  There is
-;;; no `relation` declaration in this file.
+;;; EVERY RULE BELOW IS A RULE someone actually wrote -- from `sdql_rules()` in
+;;; `slotted-egraphs/benches/sdql.rs`, or the paper's S4.1 array language
+;;; (`tests/array/mod.rs`, whose guard polarity `tests/rise/rewrite.rs` states correctly)
+;;; -- and each section names which.  No section concludes into a witness relation: the
+;;; conclusion is the `Equated` the encoder emits, so what the tests observe is what the
+;;; rule DOES.  There is no `relation` declaration in this file.
 ;;;
 ;;; All eleven are the encoder's own output, variable names, line breaks and comments aside.
 ;;; What they are not is byte-identical to the committed generated files, and the reason is
@@ -33,10 +30,14 @@
 ;;; so the check is exact either way.
 ;;;
 ;;; THE REFERENCE, wherever one is mentioned below, is `memoryleak47/slotted-egraphs` --
-;;; the Rust implementation from the PLDI 2025 paper -- on its PR #45.  The multipattern
-;;; e-matcher (`src/rewrite/multipat.rs`) is already in that crate's `main`; what #45 adds
-;;; is a canonicalisation fix in `extend_subst` plus a multipattern test suite, and it is
-;;; the branch this encoding is differentially tested against.
+;;; the Rust implementation from the PLDI 2025 paper -- pinned to upstream `b90adca`, which
+;;; is `main` after PR #45 was merged.  Two things in it bear on this file: the
+;;; canonicalisation fix in `extend_subst`, and `final_refine` in
+;;; `src/rewrite/multipat.rs`, which branches on both readings of a slot pair e-matching
+;;; left undecided.  The encoding has no such branch -- an unconstrained slot is MINTED,
+;;; and a fresh name differs from everything, so it only ever takes the "apart" reading.
+;;; `FINAL_REFINE_GAP` in `slotted-experiments/xdiff/xdiff.py` records the two curated
+;;; cases where that costs a match, and explains one of them in full.
 ;;;
 ;;; No terms, no schedules, no assertions, no wrong versions.
 ;;; `slotted-tests/slotted-user-rules-tests.egg` includes this file and supplies all of those, so
@@ -118,6 +119,54 @@
 ;;;                   (repeat N (seq (run) (saturate (run slotted)))))
 
 (include "slotted-tests/generated/slotted-node-rules.egg")
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; A WORKED MATCH, before any of the shapes.  The sections below say what each
+;;; scaffolding variable MEANS; this says what they HOLD, on one e-graph, so there is
+;;; something concrete to read the rest against.  Every value here is printed by
+;;; `slotted-tests/slotted-user-rules-trace.egg`, which asserts each one, so these are
+;;; measured rather than illustrated -- change the encoding and that file fails.
+;;;
+;;; The shape is M5's, two atom mints in one match, because that is where the
+;;; accumulating avoid-set is the whole point.  The e-graph:
+;;;
+;;;     g5t = g5t(var[0->0], var[0->0])   union Null      ; names slot 0
+;;;     h5t = h5t(var[0->1], var[0->1])   union Null      ; names slot 1
+;;;     p   = f5t({}, Null, {}, Null)                     ; reaches both, knowing nothing
+;;;
+;;; Each inner node is unioned with `Null`, which is SLOTLESS, so each carries a slot its
+;;; class does not -- the redundancy of Def. 4.  The root's edges are therefore empty, and
+;;; the match runs:
+;;;
+;;;     atom 1   f5t     dom1 = {}            mp1 = {}            avoid1 = {}
+;;;              the root's node names no slots, so its renaming is empty and nothing
+;;;              is spoken for.  `?a` and `?b` both land on a class with no slots:
+;;;                  ma . csa = {}        mb . csb = {}
+;;;
+;;;     atom 2   g5t     dom2 = {0->0}        mp2 = {0->0}        avoid2 = {0->0}
+;;;              its node names slot 0 and NO constraint reaches it -- the root knew
+;;;              nothing -- so `find-mapping-total` MINTS: the smallest slot nothing has
+;;;              taken, which is 0.
+;;;
+;;;     atom 3   h5t     dom3 = {1->1}        mp3 = {1->1}        avoid3 = {0->0, 1->1}
+;;;              its node names slot 1, again unconstrained, so it mints too -- but the
+;;;              avoid-set now holds 0, so it takes 1.  THIS is the accumulation.  With an
+;;;              empty avoid-set it would have taken 0 as well and the two variables would
+;;;              have collapsed onto one slot; `f5a` in the tests file is that rule, on
+;;;              this same e-graph, and it does collapse.
+;;;
+;;; So the two variables come out on different pattern slots:
+;;;
+;;;     mu . csu = {0->0}          mv . csv = {0->1}
+;;;
+;;; and the conclusion is built in the root's frame, which names nothing:
+;;;
+;;;     mp1 . csp = {}
+;;;
+;;; Read `{0->1}` as "this child's slot 0 is the pattern's slot 1".  A renaming is a
+;;; partial injection, so a child's edge is exactly the naming of its slots in its
+;;; parent's frame, and every `m` below is one of those.
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

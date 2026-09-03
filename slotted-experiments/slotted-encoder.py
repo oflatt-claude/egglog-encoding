@@ -49,6 +49,29 @@ order them so each shares a variable with the ones before, one
 for a repeat inside one atom, `(compose m (ClassSlots X))` on every variable, slot
 literals folded into the renaming rather than checked after it, and an `Equated`
 conclusion.
+
+WHERE THINGS ARE, since the layers do not sit in four contiguous blocks:
+
+    language specs   `Op`, `CHILD`/`BINDER`, `signature`, `read_language`,
+                     `read_language_form`, `language`, `string_headed`, `GENERIC`,
+                     `read_correspondence`
+    machinery        `emit` drives it; one function per maintenance rule --
+                     `class_slots`, `self_loop`, `alpha_finder`, `symmetry_finder`,
+                     `migration`, `child_update`, `binder` -- plus `declare` and
+                     `pattern` for the shapes they all need
+    terms            `TermLang`: `node_expr`, `slots`, `edge`, `enc`, `sexpr`,
+                     `shift`; `pat_sexpr` and `rhs_of` for the pattern side
+    rules            `flatten` (nested pattern -> atoms), `connected_order` (the
+                     order they are emitted in), `compile_rule` (the emission
+                     itself), `in_slotted_ruleset`
+
+READING `compile_rule` AGAINST THE TUTORIAL. Its per-atom steps are the tutorial's
+sections, and its docstring names which: the degenerate leading atom is M1, the
+repeat-inside-one-atom check is M2, minting is M3, the chain is M4, the accumulating
+avoid-set is M5, `narrow` is M8, and the conclusion is M10. A worked match with real
+values for every one of those variables is at the top of
+`slotted-tests/slotted-user-rules.egg`, asserted by
+`slotted-tests/slotted-user-rules-trace.egg`.
 """
 
 import re
@@ -199,11 +222,14 @@ def pattern(name, sig, edges=None, kids=None, payloads=None):
 
 
 def declare(name, sig):
+    """The `(constructor ...)` line for one signature: a slotted column becomes the
+    two egglog columns `Renaming U`, a payload column stays as it is."""
     cols = " ".join("Renaming U" if c in SLOTTED else c for c in sig)
     return f"(constructor {name} ({cols}) U)\n"
 
 
 def shape_of(col):
+    """A column's kind as it is written in a generated file's comments."""
     return {CHILD: "child", BINDER: "binder"}.get(col, str(col))
 
 
@@ -249,6 +275,7 @@ GENERIC_FILE = "slotted-tests/generated/slotted-node-rules.egg"
 
 
 def fold(op, xs, empty):
+    """`xs` combined right-to-left with a binary egglog operator; `empty` for none."""
     if not xs:
         return empty
     out = xs[-1]
@@ -501,6 +528,7 @@ def binder(name, sig, positions, head=None):
 
 
 def banner(text):
+    """A section header for a generated file."""
     bar = ";" * 78
     return [bar, f";;; {text}", bar, ""]
 
