@@ -23,11 +23,13 @@
 //!
 //! Two limits of that language, both about payload leaves:
 //!
-//! * every `atom` child that does not start with `$` becomes a *pattern variable*, so
-//!   `atom p add e 0` is `?p == (add ?e ?0)` and matches any second child rather than
-//!   the literal `0`. A rule over a payload literal still goes through `nested`/`rhs`,
-//!   which hand the pattern to the reference's own parser. The child count is free:
-//!   the atoms are handed to `MultiPattern::parse`, which takes any arity.
+//! * an `atom` child starting with `$` is a slot, one starting with `#` is a PAYLOAD
+//!   literal, and anything else becomes a *pattern variable* -- so `atom p add e 0` is
+//!   `?p == (add ?e ?0)` and matches any second child, where `atom p add e #0` asks for
+//!   the literal. The child count is free: the atoms are handed to
+//!   `MultiPattern::parse`, which takes any arity.
+//! * a leaf needs an atom of its own, since an atom's child has to be a pattern
+//!   variable: `atom c sym:mult` then `atom p binop c a b`.
 //! * On that path a payload leaf is only a payload if its spelling is not also an
 //!   operator tag. `from_syntax` matches the tags first, so `add` and `sub` are
 //!   the array language's binary nodes here (and fail to parse, having no
@@ -207,7 +209,14 @@ fn parse_spec(src: &str) -> Spec {
             "atom" => {
                 let w: Vec<&str> = rest.split_whitespace().collect();
                 let kid = |c: &str| {
-                    if c.starts_with('$') { c.to_string() } else { format!("?{c}") }
+                    if let Some(payload) = c.strip_prefix('#') {
+                        // a payload literal, not a pattern variable
+                        payload.to_string()
+                    } else if c.starts_with('$') {
+                        c.to_string()
+                    } else {
+                        format!("?{c}")
+                    }
                 };
                 if s.rules.is_empty() {
                     s.rules.push(RuleSpec::default());

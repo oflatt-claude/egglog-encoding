@@ -1049,7 +1049,12 @@ def atom_lines(lang, root, atoms, var="var"):
       * anywhere else it is the TERM `(var $x)`, which needs an atom of its own, since
         an atom's child has to be a pattern variable;
       * a child reached through its own class -- a payload leaf written literally --
-        is neither, and the pattern has no atom spelling at all.
+        gets an ATOM OF ITS OWN, since it cannot sit in a child position either, and the
+        child refers to that; its payload is marked `#` so it stays a payload.
+
+    `None` is not returned today, but the caller still handles it: a shape with no
+    spelling would have to fall back to the nested matcher, which answers a different
+    question.
 
     Asking the reference the FLATTENED question is what makes the comparison
     like-for-like: the encoding compiles rules by flattening them, and a nested pattern
@@ -1070,7 +1075,19 @@ def atom_lines(lang, root, atoms, var="var"):
                 out.append(f"atom {v} {var} {c}")
                 spelled.append(v)
             else:
-                return None
+                # a leaf reached through its own class. It cannot sit in a child position
+                # either -- an atom's child has to be a pattern variable -- so it gets an
+                # atom of its own and the child refers to that. Its payload is marked `#`
+                # so it stays a payload rather than becoming a variable.
+                extra[0] += 1
+                v = f"_cl{extra[0]}"
+                leaf = lang.sexpr(c)
+                if leaf.startswith("("):
+                    head, *pays = leaf[1:-1].split()
+                    out.append(f"atom {v} {head} " + " ".join(f"#{x}" for x in pays))
+                else:
+                    out.append(f"atom {v} {leaf}")
+                spelled.append(v)
         out.append(f"atom {name.lstrip('?')} {lang[op].ref or op} {' '.join(spelled)}")
     return root.lstrip("?"), out
 
