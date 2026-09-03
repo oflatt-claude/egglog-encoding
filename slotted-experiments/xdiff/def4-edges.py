@@ -20,6 +20,7 @@ this ever reports a violation, that mutation becomes live again.
     python3 slotted-experiments/xdiff/def4-edges.py fuzz 250   generated
 """
 
+import os
 import random
 import subprocess
 import sys
@@ -57,7 +58,7 @@ else:
 total, bad = 0, []
 for c in cases:
     prog = X.egg_program(c).replace("(print-function SameClass 100000)", obs())
-    p = X.ROOT / f"xdiff-tmp-def4-{abs(hash(c.name)) % 99999}.egg"
+    p = X.ROOT / f"xdiff-tmp-def4-{os.getpid()}.egg"
     p.write_text(prog)
     try:
         r = subprocess.run([str(X.EGGLOG), str(p)], capture_output=True, text=True, cwd=X.ROOT, timeout=120)

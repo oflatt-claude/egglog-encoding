@@ -29,6 +29,7 @@ Run: `python3 slotted-experiments/xdiff/isomorphism.py [name-prefix|fuzz N [seed
 
 import itertools
 import json
+import os
 import random
 import subprocess
 import sys
@@ -659,7 +660,7 @@ def _dump(case, mult, timeout):
     """
     prog = (EGG_PROGRAM or X.egg_program)(case, mult=mult)
     prog = prog.replace("(print-function SameClass 100000)", "")
-    p = X.ROOT / f"xdiff-tmp-iso-{abs(hash(case.name)) % 99999}-{mult}.egg"
+    p = X.ROOT / f"xdiff-tmp-iso-{os.getpid()}-{mult}.egg"
     j = p.with_suffix(".json")
     p.write_text(prog)
     try:

@@ -20,6 +20,7 @@ counts too. This is the cheap version of the isomorphism check's class bijection
     python3 slotted-experiments/xdiff/class-count.py fuzz 250   generated
 """
 
+import os
 import random
 import subprocess
 import sys
@@ -45,7 +46,7 @@ OBS = """
 
 def encoding_classes(case):
     prog = X.egg_program(case).replace("(print-function SameClass 100000)", OBS)
-    p = X.ROOT / f"xdiff-tmp-cc-{abs(hash(case.name)) % 99999}.egg"
+    p = X.ROOT / f"xdiff-tmp-cc-{os.getpid()}.egg"
     p.write_text(prog)
     try:
         r = subprocess.run([str(X.EGGLOG), str(p)], capture_output=True, text=True, cwd=X.ROOT, timeout=120)

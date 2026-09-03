@@ -1,6 +1,6 @@
 .PHONY: \
 	check nits test python-check python-nits rust-check rust-nits \
-	proof-tests slotted-check slotted-check-no-oracle benchmark-smoke nightly nightly-local nightly-uv nightly-rustup \
+	proof-tests slotted-check slotted-campaign slotted-check-no-oracle benchmark-smoke nightly nightly-local nightly-uv nightly-rustup \
 	update-snapshots format \
 	python-lock python-format-check python-lint python-typecheck python-test \
 	rust-format-check rust-clippy rust-doc-links rust-test
@@ -85,6 +85,16 @@ slotted-check:
 # depends on a LOCAL checkout of `slotted-egraphs`, so no runner can build it; when that
 # dependency becomes something a runner can fetch, this target should become the whole
 # `slotted-check`.
+# A deep sweep, for when the 60-case `iso-fuzz` in `slotted-check` is not enough --
+# it is sized to run beside eighteen other checks, not to be a confidence statement.
+# Takes minutes and many cores; `campaign.py`'s header records what a deep run found.
+slotted-campaign:
+	cargo build --release --bin egglog
+	cargo build --manifest-path slotted-experiments/xmulti/Cargo.toml
+	python3 slotted-experiments/xdiff/campaign.py iso --cases 500 --seeds 32
+	python3 slotted-experiments/xdiff/campaign.py order --cases 100 --seeds 32
+	python3 slotted-experiments/xdiff/campaign.py checker --cases 200 --seeds 8
+
 slotted-check-no-oracle:
 	cargo build
 	python3 slotted-experiments/check-slotted.py --no-oracle

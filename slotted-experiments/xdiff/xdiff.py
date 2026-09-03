@@ -63,6 +63,10 @@ BUGS = {b for b in os.environ.get("XDIFF_BUGS", "").split(",") if b}
 # ground: XDIFF_LAM=0.55
 LAM_PROB = float(os.environ.get("XDIFF_LAM", "0.2"))
 
+# How often a union equates a term with its own slot-swap, which is what gives a class
+# a non-trivial symmetry group. Raise it to search symmetry-heavy ground: XDIFF_SYM=0.9
+SYM_PROB = float(os.environ.get("XDIFF_SYM", "0.35"))
+
 # ---------------------------------------------------------------- neutral terms
 # term := ('var', n) | ('null',) | (op, t1, t2) | ('lam', ('var', n), body)
 #
@@ -82,6 +86,15 @@ assert sorted(op for op, o in LANG.ops.items() if op == o.name and len(o.kid_col
 )
 
 slots, enc, sexpr, shift_term = LANG.slots, LANG.enc, LANG.sexpr, LANG.shift
+
+
+def swap_slots(t, s1, s2):
+    """`t` with slots `s1` and `s2` exchanged."""
+    if t[0] == "var":
+        return ("var", s2 if t[1] == s1 else s1 if t[1] == s2 else t[1])
+    if t[0] == "null":
+        return t
+    return (t[0], *(swap_slots(x, s1, s2) for x in t[1:]))
 
 
 def shift_case(case, k):
@@ -328,9 +341,18 @@ def egg_program(case, rules=None, mult=3):
         "       (RenamesToLeader a m1 l) (RenamesToLeader b m2 l))\n"
         "      ((SameClass i j)))"
     )
+    # Two of a case's rules can compile to the SAME text -- the generator draws each
+    # independently -- and egglog rejects a rule it already has, panicking with "was
+    # already present" and taking the whole case down. A repeated rule means nothing
+    # extra anyway, so emit each once.
+    seen_rules = set()
     for atoms, action, conds in rules:
-        if atoms:
-            out.append(compile_rule(atoms, action, conds))
+        if not atoms:
+            continue
+        text = compile_rule(atoms, action, conds)
+        if text not in seen_rules:
+            seen_rules.add(text)
+            out.append(text)
     for i, t in enumerate(case.terms):
         out.append(f"(let _t{i} {enc(t)})")
     for i, (a, b) in enumerate(case.unions):
@@ -1464,7 +1486,15 @@ def rand_case(rng, i):
     unions = []
     for _ in range(rng.randrange(0, 3)):
         a = rand_top(rng, rng.randrange(1, 3))
-        if rng.random() < 0.5 and slots(a):
+        sa = sorted(slots(a))
+        if len(sa) >= 2 and rng.random() < SYM_PROB:
+            # A term equated with its own slot-swap: the class then proves a
+            # permutation of its own slots, which is the symmetry group of Def. 6.
+            # Without this the generated corpus has only identity groups, so the
+            # group half of the machinery -- and of the checker -- goes untested.
+            s1, s2 = rng.sample(sa, 2)
+            b = swap_slots(a, s1, s2)
+        elif rng.random() < 0.5 and sa:
             # `LEAF0` rather than a bare `(var $0)`: a bare leaf loses its slot
             # (see check_encodable), and although slot 0 happens to survive, the
             # slot-renaming check shifts it to one that would not.
