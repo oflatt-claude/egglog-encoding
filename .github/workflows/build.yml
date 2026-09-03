@@ -40,6 +40,25 @@ jobs:
       - run: make rust-nits
       - run: make rust-test
 
+  slotted:
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - run: echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      # The differential half of `make slotted-check` compares against `xmulti`, which
+      # depends on a local checkout of the `slotted-egraphs` reference, so it cannot run
+      # here yet. This is everything that exercises the encoding against itself: the
+      # .egg files, the slotted-language tests, and the four drift gates that keep the
+      # generated files, the compiled snapshots, the tutorial and the correspondence
+      # files honest.
+      - run: make slotted-check-no-oracle
+
   benchmark-smoke:
     permissions:
       contents: read

@@ -36,17 +36,6 @@ import sys
 sys.path.insert(0, "slotted-experiments/xdiff")
 import xdiff as X
 
-# `Var` and `Null` are constructors, not rows, so which class holds one cannot be read
-# off the tables -- and it cannot be recovered from the printed name either: a value
-# prints as *some* term of its class, so once `(Var 0)` is unioned with `(Null)` the var
-# class prints as `(Null)` and its `var` node silently disappears. Asking egglog which
-# class each one landed in is the only reliable way.
-MARKERS = """
-(relation IsVarClass (U))
-(relation IsNullClass (U))
-(IsVarClass (Var 0))
-(IsNullClass (Null))
-"""
 SEARCH_CAP = 200_000
 
 #: cases compared at a database fixpoint because the rules never stop firing
@@ -210,9 +199,13 @@ def read_json_graph(doc):
                 else:
                     payloads.append(nodes[kids[i]]["op"].strip('"'))
                     i += 1
-            # a payload-headed row is named by its payload, which is already the
-            # reference's tag; a per-constructor row is named by the tag itself
-            name = "/".join(payloads) if payloads else (NODE_OPS[op] or op)
+            # A payload-headed row is named by its payload and a per-constructor row
+            # by its tag. The payload needs the operator's `ref_prefix` in front of it,
+            # because that is the spelling the REFERENCE writes and these two names are
+            # about to be compared: sdql's symbols are `sym:mult` there and `mult` here,
+            # and without the prefix two identical graphs refine to different colours.
+            o = NODE_OPS[op]
+            name = o.ref_prefix + "/".join(payloads) if payloads else (o.ref or o.ctor)
             rows.append((name, elems, n["eclass"]))
     return slots_of, loops, rows, leaf
 
@@ -337,11 +330,11 @@ def build_encoding_graph(doc):
 
 
 # ------------------------------------------------------- the encoding's own ops
-#: The node constructors to read, mapped to what the reference calls each, and the
-#: BINDER rows mapped to the same. Both are read off a language rather than written
-#: here, so there is no list of constructor names to go stale. A binder's bound slot
-#: rides in child column 0 as an edge to the var class, where the reference has a
-#: `Bind`, i.e. a slot literal in that position.
+#: The node constructors to read, mapped to the operator each belongs to, and the
+#: BINDER rows mapped to what the reference calls them. Both are read off a language
+#: rather than written here, so there is no list of constructor names to go stale. A
+#: binder's bound slot rides in child column 0 as an edge to the var class, where the
+#: reference has a `Bind`, i.e. a slot literal in that position.
 NODE_OPS: dict = {}
 ENC_BINDERS: dict = {}
 
@@ -349,15 +342,15 @@ ENC_BINDERS: dict = {}
 def use_language(lang):
     """Read the two tables above off a `TermLang`.
 
-    A `None` in `NODE_OPS` marks a payload-headed constructor -- the generic
-    encoding's `App2 "app"` -- whose rows name themselves by their payload, which is
-    already the reference's tag. A per-constructor language names a row by its
-    CONSTRUCTOR while the reference names it by its own tag, so there the tag has to
-    become the row's name for the two to line up.
+    An operator with `ref is None` is a payload leaf, whose rows name themselves by
+    their payload; anything else names itself by its tag, because a per-constructor
+    language calls a row by its CONSTRUCTOR while the reference calls it by the tag.
     """
     global NODE_OPS, ENC_BINDERS
-    NODE_OPS = {op.ctor: op.ref for op in lang.ops.values()}
-    ENC_BINDERS = {op.ref or op.ctor: op.ref for op in lang.ops.values() if op.binders}
+    NODE_OPS = {op.ctor: op for op in lang.ops.values()}
+    # keyed by the row NAME `read_json_graph` gives a node of this operator, and
+    # holding the operator itself because the rewrite needs its binder POSITIONS
+    ENC_BINDERS = {op.ref or op.ctor: op for op in lang.ops.values() if op.binders}
 
 
 use_language(X.LANG)  # the toy language; `xarray.py` passes its own
@@ -370,8 +363,11 @@ def to_reference_shape(g, var_class=None):
     where they are built (`enc` in xdiff.py / xarray.py, `define_language!` in
     xmulti):
 
-      * a binder -- `lambda` is `lam` -- has its bound slot in a child edge to the
-        var class rather than as a slot literal on the node.
+      * a binder -- `lambda` is `lam` -- has each bound slot in a child edge to the
+        var class rather than as a slot literal on the node. A node may bind SEVERAL,
+        at positions the language declares: sdql's `Sum` binds its children 1 and 2 and
+        its `Merge` binds 2, 3 and 4, so neither the count nor the position can be
+        assumed.
       * a child edge is a dict here and a sorted pair tuple there.
     """
     out = Graph()
@@ -382,24 +378,31 @@ def to_reference_shape(g, var_class=None):
     unfaithful = []
     for cid in g.ids():
         for op, elems in g.nodes[cid]:
-            if op in ENC_BINDERS and elems and elems[0][0] == "child":
-                child, m = elems[0][1], dict(elems[0][2])
-                # The bound slot rides in this edge. It can have been dropped -- a
-                # binder whose slot nothing uses -- and then there is no name left to
-                # carry over; any fresh one does, because a slot the node's class does
-                # not have is renamed freely when nodes are matched.
-                if 0 in m:
-                    bound = m[0]
-                elif len(m) == 1:
-                    bound = next(iter(m.values()))
-                else:
-                    bound = f"_b{next(fresh)}"
-                # the position is the binder by the encoding's convention, but it still
-                # has to be the variable class, or the convention is not being followed
-                if var_class is not None and child != var_class:
-                    unfaithful.append((cid, child))
-                elems = (("slot", bound),) + elems[1:]
-                op = ENC_BINDERS[op]
+            binder_op = ENC_BINDERS.get(op)
+            if binder_op is not None:
+                elems = list(elems)
+                for i in binder_op.binders:
+                    if i >= len(elems) or elems[i][0] != "child":
+                        continue
+                    child, m = elems[i][1], dict(elems[i][2])
+                    # The bound slot rides in this edge. It can have been dropped -- a
+                    # binder whose slot nothing uses -- and then there is no name left
+                    # to carry over; any fresh one does, because a slot the node's
+                    # class does not have is renamed freely when nodes are matched.
+                    if 0 in m:
+                        bound = m[0]
+                    elif len(m) == 1:
+                        bound = next(iter(m.values()))
+                    else:
+                        bound = f"_b{next(fresh)}"
+                    # the position is a binder by the encoding's convention, but it
+                    # still has to be the variable class, or the convention is not
+                    # being followed
+                    if var_class is not None and child != var_class:
+                        unfaithful.append((cid, child))
+                    elems[i] = ("slot", bound)
+                elems = tuple(elems)
+                op = binder_op.ref or binder_op.ctor
             fixed = []
             for e in elems:
                 if e[0] == "child":

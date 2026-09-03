@@ -11,6 +11,8 @@ Usage:
     ./check-slotted.py           everything
     ./check-slotted.py --quick   skip the fuzzers
     ./check-slotted.py -k iso    only checks whose name contains `iso`
+    ./check-slotted.py --no-oracle
+                                 only what needs no reference build
 """
 
 import argparse
@@ -147,28 +149,35 @@ def check_snapshots():
     return None
 
 
-# name, argv or a callable, what its output must say, and whether --quick skips it
+# name, argv or a callable, what its output must say, whether --quick skips it, and
+# whether it needs the reference ORACLE. The oracle is `xmulti`, which links a local
+# checkout of `slotted-egraphs`, so a machine without one can still run everything that
+# only exercises the encoding against itself -- which is what `--no-oracle` is for, and
+# what CI runs until that dependency is fetchable.
 CHECKS = [
-    ("egg-files", run_egg_files, None, False),
+    ("egg-files", run_egg_files, None, False, False),
     (
         "slotted-tests",
         ("slotted-experiments/run-slotted-tests.py",),
         ratio(r"(\d+)/(\d+) slotted tests pass", 3),
         False,
+        False,
     ),
-    ("snapshot-drift", check_snapshots, None, False),
+    ("snapshot-drift", check_snapshots, None, False, False),
     (
         "front-ends",
         ("slotted-experiments/check-front-ends.py",),
         ratio(r"OK: (\d+)/(\d+) rules compile the same", 1),
         False,
+        False,
     ),
-    ("generated-drift", check_generated, None, False),
-    ("handwritten-drift", ("slotted-experiments/check-handwritten-encoding.py",), starts_ok, False),
+    ("generated-drift", check_generated, None, False, False),
+    ("handwritten-drift", ("slotted-experiments/check-handwritten-encoding.py",), starts_ok, False, False),
     (
         "correspondence",
         ("slotted-experiments/check-correspondence.py",),
         ratio(r"OK: (\d+)/(\d+) correspondence files", 2),
+        False,
         False,
     ),
     (
@@ -176,34 +185,63 @@ CHECKS = [
         ("slotted-experiments/check-tutorial.py",),
         ratio(r"(\d+)/(\d+) sections are the encoder's own output", 11),
         False,
+        False,
     ),
     (
         "curated",
         ("slotted-experiments/xdiff/xdiff.py",),
         both(ratio(r"(\d+)/(\d+) had a usable baseline", 44), zero_categories),
         False,
+        True,
     ),
-    ("mutations", ("slotted-experiments/xdiff/mutations.py",), ratio(r"(\d+)/(\d+) mutations still caught", 4), False),
+    (
+        "mutations",
+        ("slotted-experiments/xdiff/mutations.py",),
+        ratio(r"(\d+)/(\d+) mutations still caught", 4),
+        False,
+        True,
+    ),
     (
         "iso-selftest",
         ("slotted-experiments/xdiff/isomorphism.py", "selftest"),
         ratio(r"(\d+)/(\d+) self-tests pass", 3),
         False,
+        True,
     ),
-    ("iso-curated", ("slotted-experiments/xdiff/isomorphism.py",), ratio(r"(\d+)/(\d+) isomorphic", 44), False),
-    ("array", ("slotted-experiments/xdiff/xarray.py",), ratio(r"(\d+)/(\d+) cases agree", 14), False),
+    ("iso-curated", ("slotted-experiments/xdiff/isomorphism.py",), ratio(r"(\d+)/(\d+) isomorphic", 44), False, True),
+    ("array", ("slotted-experiments/xdiff/xarray.py",), ratio(r"(\d+)/(\d+) cases agree", 14), False, True),
     (
         "array-guards",
         ("slotted-experiments/xdiff/xarray.py", "vac"),
         ratio(r"(\d+)/(\d+) guards are load-bearing", 5),
         False,
+        True,
     ),
-    ("array-iso", ("slotted-experiments/xdiff/xarray.py", "iso"), ratio(r"(\d+)/(\d+) isomorphic", 15), False),
-    ("sdql", ("slotted-experiments/xdiff/xsdql.py",), ratio(r"(\d+)/(\d+) cases agree", 18), False),
+    ("array-iso", ("slotted-experiments/xdiff/xarray.py", "iso"), ratio(r"(\d+)/(\d+) isomorphic", 15), False, True),
+    # shapes beside the 8 rules, where the two sides could differ and must not
+    (
+        "array-extra",
+        ("slotted-experiments/xdiff/xarray.py", "extra"),
+        ratio(r"(\d+)/(\d+) cases agree", 1),
+        False,
+        True,
+    ),
+    ("sdql", ("slotted-experiments/xdiff/xsdql.py",), ratio(r"(\d+)/(\d+) cases agree", 18), False, True),
+    # the stronger sdql check: a witnessed isomorphism, not just the probe partition.
+    # The two recorded divergences are excluded by the mode itself -- they disagree on
+    # purpose, so finding no isomorphism between them would say nothing.
+    (
+        "sdql-iso",
+        ("slotted-experiments/xdiff/xsdql.py", "iso"),
+        ratio(r"(\d+)/(\d+) isomorphic", 16),
+        False,
+        True,
+    ),
     (
         "iso-fuzz",
         ("slotted-experiments/xdiff/isomorphism.py", "fuzz", "60"),
         ratio(r"(\d+)/(\d+) isomorphic", 60),
+        True,
         True,
     ),
 ]
@@ -218,9 +256,17 @@ def main():
         help="rewrite the generated snapshots and report which changed, then stop",
     )
     ap.add_argument("-k", metavar="SUBSTRING", help="only checks whose name contains this")
+    ap.add_argument(
+        "--no-oracle",
+        action="store_true",
+        help="skip the checks that need the reference implementation built",
+    )
     args = ap.parse_args()
 
-    for tool, hint in ((EGGLOG, "cargo build"), (XMULTI, "cargo build in slotted-experiments/xmulti")):
+    needed = [(EGGLOG, "cargo build")]
+    if not args.no_oracle:
+        needed.append((XMULTI, "cargo build in slotted-experiments/xmulti"))
+    for tool, hint in needed:
         if not tool.exists():
             print(f"missing {tool.relative_to(ROOT)} -- run `{hint}`")
             return 2
@@ -242,9 +288,13 @@ def main():
         print(f"\n{len(changed)}/{len(before)} snapshots changed")
         return 0
 
-    picked = [c for c in CHECKS if not (args.quick and c[3]) and (not args.k or args.k in c[0])]
+    picked = [
+        c
+        for c in CHECKS
+        if not (args.quick and c[3]) and not (args.no_oracle and c[4]) and (not args.k or args.k in c[0])
+    ]
     failed = []
-    for name, cmd, expect, _ in picked:
+    for name, cmd, expect, _, _needs_oracle in picked:
         print(f"  .... {name}", flush=True)
         if callable(cmd):
             why = cmd()

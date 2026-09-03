@@ -1,6 +1,6 @@
 .PHONY: \
 	check nits test python-check python-nits rust-check rust-nits \
-	proof-tests slotted-check benchmark-smoke nightly nightly-local nightly-uv nightly-rustup \
+	proof-tests slotted-check slotted-check-no-oracle benchmark-smoke nightly nightly-local nightly-uv nightly-rustup \
 	update-snapshots format \
 	python-lock python-format-check python-lint python-typecheck python-test \
 	rust-format-check rust-clippy rust-doc-links rust-test
@@ -80,6 +80,14 @@ slotted-check:
 	cargo build
 	cargo build --manifest-path slotted-experiments/xmulti/Cargo.toml
 	python3 slotted-experiments/check-slotted.py
+
+# The half of the above that CI can run. The rest compares against `xmulti`, which
+# depends on a LOCAL checkout of `slotted-egraphs`, so no runner can build it; when that
+# dependency becomes something a runner can fetch, this target should become the whole
+# `slotted-check`.
+slotted-check-no-oracle:
+	cargo build
+	python3 slotted-experiments/check-slotted.py --no-oracle
 
 # Use a disposable report path, keeping the default report cache untouched.
 benchmark-smoke:

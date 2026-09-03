@@ -115,13 +115,33 @@ class Source:
         self.relpath = path.resolve().relative_to(ROOT).as_posix()
         self.spec = {}
         self.body = []
+        self.includes = []
+        self._read(path)
+        assert self.spec, f"{path.name}: no (constructor ...) declaration"
+        self.lang = Terms({c: enc.Op(c, c, sig) for c, sig in self.spec.items()})
+
+    def _read(self, path):
+        """This file's declarations and body, with any included source read first.
+
+        `(include "...")` in a slotted source names ANOTHER SLOTTED SOURCE, and pulls in
+        its constructors and its rules -- so a test over the sdql rules says
+        `(include "slotted-tests/sdql.egg")` instead of restating 43 of them. A slotted
+        source never includes the hand-written core or a generated file: the compiler
+        supplies the core and generates the machinery, which is the whole point.
+        """
         for form in parse(path.read_text()):
-            if isinstance(form, list) and form and form[0] == "constructor":
+            if isinstance(form, list) and form and form[0] == "include":
+                inc = ROOT / form[1].strip('"')
+                assert inc.exists(), f"{path.name}: no such file {form[1]}"
+                assert "generated/" not in inc.as_posix() and inc.name != CORE_FILE.split("/")[-1], (
+                    f"{path.name}: a slotted source may only include another slotted source, not {form[1]}"
+                )
+                self.includes.append(inc)
+                self._read(inc)
+            elif isinstance(form, list) and form and form[0] == "constructor":
                 self.spec.update(enc.read_language_form(form))
             else:
                 self.body.append(form)
-        assert self.spec, f"{path.name}: no (constructor ...) declaration"
-        self.lang = Terms({c: enc.Op(c, c, sig) for c, sig in self.spec.items()})
 
     # ------------------------------------------------------------------ terms
     def term(self, form, column=enc.CHILD, ground=True):

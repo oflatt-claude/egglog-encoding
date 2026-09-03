@@ -29,6 +29,8 @@ against.)
 
 Usage:
     ./xsdql.py                every case: each rule firing, and each guard blocking
+    ./xsdql.py iso [prefix]   the stronger check: a witnessed isomorphism of the two
+                              final e-graphs, via `isomorphism.py`
     ./xsdql.py show <name>    one case's spec, its egg program, and both answers
     ./xsdql.py list           the cases and the rules they exercise
 """
@@ -687,8 +689,48 @@ def cases():
     return out
 
 
+def run_iso(args):
+    """A witnessed isomorphism of the two final e-graphs, not just the partition.
+
+    The partition check compares what the PROBES say about each other; this compares
+    the whole graph -- every class's slot set, every symmetry group, and a witness
+    mapping that has to survive `verify`. sdql is where it matters most: its nodes
+    have up to six children and two bound slots, so a structural difference has more
+    room to hide behind a probe answer that happens to agree.
+
+    A RECORDED DIVERGENCE cannot be compared this way. Those cases disagree on
+    purpose, so an isomorphism is not expected to exist and finding none says nothing;
+    they are reported as such rather than skipped silently.
+    """
+    import isomorphism as I
+
+    I.EGG_PROGRAM = egg_program
+    I.use_language(LANG)
+
+    cases_ = [c for c in cases() if not args or c.name.startswith(args[0])]
+    tally = {"ok": 0, "FAIL": 0, "skip": 0, "limit": 0}
+    diverging = []
+    for c in cases_:
+        if c.ref_want is not None:
+            diverging.append(c.name)
+            continue
+        verdict, detail = I.check(c)
+        tally[verdict] += 1
+        print(f"  {verdict:4} {c.name:24} {detail}", flush=True)
+    n = sum(tally.values())
+    print(
+        f"\n{tally['ok']}/{n} isomorphic   ({tally['FAIL']} differ, {tally['skip']} skipped,"
+        f" {tally['limit']} not comparable)"
+        + (f"\n{len(diverging)} recorded divergence(s) not comparable: {', '.join(diverging)}" if diverging else "")
+    )
+    return 1 if tally["FAIL"] else 0
+
+
 def main():
     argv = sys.argv[1:]
+    if argv and argv[0] == "iso":
+        return run_iso(argv[1:])
+
     if argv and argv[0] == "list":
         for c in cases():
             print(f"{c.name:<24} {c.want}")
