@@ -2802,6 +2802,34 @@ theorem uRebuilt_viewLeaderRows : uRebuilt.ViewLeaderRows := by
 @[inherit_doc uRebuilt_viewLeaderRows]
 theorem uRebuilt_viewLeader : uRebuilt.ViewLeader := uRebuilt_viewLeaderRows.toViewLeader
 
+/-- **And `Database.ViewJoined` holds here**, out of the reduction: the weakened form of the
+four clauses above, at the state with the real `@UF` edge. `uRebuilt_ufJoin_BA` and
+`uRebuilt_ids_B` are its two interesting clauses at named instances, and `uTgt_not_viewJoined`
+is `ufJoin` failing one firing earlier — so the weakening still needs the rebuild. -/
+theorem uRebuilt_viewJoined : uRebuilt.ViewJoined := uRebuilt_viewLeaderRows.toViewJoined
+
+/-- **`Database.ViewJoined.ufJoin` at a real `@UF` edge**: the `union`'s own write runs between
+two *distinct* terms and the absorber is `(A)`, which the rebuild's one firing put in `(B)`'s
+reading. Every hypothesis is inhabited and the two ends are not equal, so the clause is not
+answered by reflexivity. -/
+theorem uRebuilt_ufJoin_BA :
+    uRebuilt.Out ufName [uB] [uA, Term.app fiatName []] ∧ uB ≠ uA ∧
+      ∃ e, uRebuilt.Absorbs uB e ∧ uRebuilt.Absorbs uA e :=
+  ⟨⟨[uB], .cons uRebuilt_mem_B .nil, uRebuilt_mem_uf⟩, fun h => uA_ne_uB h.symm,
+   uRebuilt_viewJoined.ufJoin uB uA (Term.app fiatName [])
+     ⟨[uB], .cons uRebuilt_mem_B .nil, uRebuilt_mem_uf⟩⟩
+
+/-- **`Database.ViewJoined.ids` at the one term with two ids**: `(B)` reads its own build entry
+and the leader's, and they are distinct — which is the instance the degenerate witness
+`satTarget_viewJoined` cannot exhibit. -/
+theorem uRebuilt_ids_B :
+    ViewRepr uRebuilt uB uB ∧ ViewRepr uRebuilt uB uA ∧ uB ≠ uA ∧
+      ∃ e, uRebuilt.Absorbs uB e ∧ uRebuilt.Absorbs uA e :=
+  ⟨.app .nil ⟨[], .nil, uRebuilt_mem_viewB⟩, .app .nil ⟨[], .nil, Database.mem_addTerm _ _⟩,
+   fun h => uA_ne_uB h.symm,
+   uRebuilt_viewJoined.ids uB uB uA (.app .nil ⟨[], .nil, uRebuilt_mem_viewB⟩)
+     (.app .nil ⟨[], .nil, Database.mem_addTerm _ _⟩)⟩
+
 /-- **And `Database.ViewLeader` fails at `uTgt`**, which is where `Database.UnionsRead` fails
 too: the edge is written and unfollowed, so `(A)`'s only `lead` is `(A)` and `(B)`'s is `(B)`,
 and `ufClosed` asks the two to be equal. This is the clause the rebuild discharges, isolated
@@ -2820,6 +2848,28 @@ theorem uTgt_not_viewLeader : ¬ uTgt.ViewLeader := by
     · exact h
   exact uA_ne_uB ((hlB.symm.trans (huf uB uA (Term.app fiatName [])
     ⟨[uB], .cons uTgt_mem_B .nil, uTgt_mem_uf⟩)).trans hlA).symm
+
+/-- **And so does the weakened form**, which is what says the weakening is not into vacuity:
+`Database.ViewJoined.ufJoin` asks only for a common *absorber* of the edge's two ends, and one
+firing before the rebuild there is none. `(A)` reads only `(A)` and `(B)` only `(B)`, so an
+absorber of `(A)` is `(A)` — read off the clause at `(A)` itself — and an absorber of `(B)` is
+`(B)`. The e-class rebuild rule is therefore still the whole content of the clause after the
+weakening, and it is `pathCompressRule` and nothing else that dropped out. -/
+theorem uTgt_not_viewJoined : ¬ uTgt.ViewJoined := by
+  intro h
+  have hA : ViewRepr uTgt uA uA := .app .nil ⟨[], .nil, uTgt_mem_viewA⟩
+  have hB : ViewRepr uTgt uB uB := .app .nil ⟨[], .nil, uTgt_mem_viewB⟩
+  obtain ⟨e, kA, kB⟩ := h.ufJoin uB uA (Term.app fiatName [])
+    ⟨[uB], .cons uTgt_mem_B .nil, uTgt_mem_uf⟩
+  have heB : e = uB := by
+    rcases uTgt_viewRepr (kA uB hB) with ⟨h', -⟩ | ⟨-, h'⟩
+    · exact absurd h'.symm uA_ne_uB
+    · exact h'
+  have heA : e = uA := by
+    rcases uTgt_viewRepr (kB uA hA) with ⟨-, h'⟩ | ⟨h', -⟩
+    · exact h'
+    · exact absurd h' uA_ne_uB
+  exact uA_ne_uB (heA.symm.trans heB)
 
 /-- **`Database.ViewsCover` holds at `uRebuilt` too**, so all three of the forward half's
 properties are discharged at one state, and at the state with the `union` rather than at the

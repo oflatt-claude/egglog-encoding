@@ -3331,7 +3331,7 @@ obligation is discharged, one per writer `encode` emits — `entrySound_build`,
   `FDatabase.IndexOk.entry` — a row is an entry term. That is the direction soundness needs,
   and `mem_terms_of_patternHolds_values` is it.
   `FDatabase.IndexCurrent` is its converse, and `cxTgt_not_indexCurrent` refutes *that*; so the
-  refutation that blocks `execM_viewLeaderRows` does not block this residue, which is why the
+  refutation that blocks `execM_viewJoined` does not block this residue, which is why the
   two are separate holes. `patternHolds_values_of_mem_rows` is the *converse* of the reading —
   a row makes its own atom hold, at the values its own columns are — and it is what says the
   three families are not vacuous: `cxRb_mem_matchQuery` is a maintenance rule's query really
@@ -3404,7 +3404,7 @@ view at the wrong key width, which is what `Actions.SetWidthOk` forbids and
 **No fixpoint is needed on the target.** `FDatabase.RoundClosed` was named as this residue's
 third missing piece; it is not one. Soundness is indifferent to under-firing — `execM_contained`
 says the encoded round fires a subset, and a subset of justified writes is justified — so what
-this needs is the *containment*, not the fixpoint. The fixpoint is what `execM_viewLeaderRows`
+this needs is the *containment*, not the fixpoint. The fixpoint is what `execM_viewJoined`
 and `unionsJoined_fire` want, where a firing has to be shown to have *happened*.
 
 **The rule head is closed, and was the case worth doubting.** `encodeBuild` mints its skolem

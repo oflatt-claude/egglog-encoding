@@ -163,6 +163,22 @@ both are decided at the witness at the end of this file.
   agrees on all seventy in-domain cases: the sweep measures the conclusion, and it was the
   *factorisation* that was false.
 
+* **Weakened, and the strong form kept with a separation against it**:
+  `Database.ViewLeaderRows`. Its four clauses were assembled before that lesson and are
+  over-strong in the same way: every consumer spends them through the *choice function* `lead`,
+  and only ever to name one id it then hands to `hmem`. `Database.ViewJoined` is the three
+  things actually spent — `ids` for `SameClass.trans_of_viewJoined`, `ufJoin` for
+  `unionsRead_of_viewJoined`, `rowShared` for `Database.ViewsCover.of_viewJoined` — each an
+  **upper bound** in `Database.Absorbs` rather than a representative.
+  `Database.ViewLeaderRows.toViewJoined` is the check that this is a weakening, and `chainD` is
+  the check that it is a *strict* one: an ascending chain of ids with upper bounds everywhere
+  and no top, at which `chainD_viewJoined` holds and `chainD_not_viewLeader` fails. What that
+  buys is a whole mechanism — `pathCompressRule` was in that residue only to make
+  `lead` a function — and the diagonal instance of `rowShared`, which is all `viewRepr_total`
+  spends, is now answered by the row already in hand rather than by the column rules.
+  `uTgt_not_viewJoined` is the weakened clause still **failing** one rebuild firing early, at
+  the state `uTgt_not_viewLeader` fails at, so the weakening is not into vacuity.
+
   **So the clauses are now stated at what their consumers spend**, each derived from the
   consumer and not guessed: `Database.ViewsCover.shared` at *one* id tuple shared by both
   argument lists, which is all `sameClass_congr_of_shared` reads and, at the diagonal, all
@@ -179,9 +195,10 @@ both are decided at the witness at the end of this file.
   `FDatabase.addRow`/`addTerm` (the `cexD` idiom) or take the run as a hypothesis; witnesses on
   the *source* side run in the kernel outright (`ncSrc_exec`).
 * **`sorry`**, three, and they are three *mechanisms* rather than three clauses — which is
-  what the factorisation above bought. `execM_viewLeaderRows` is the whole of the run-wide
-  **index** argument: `rebuildRules`' e-class rule in `ufClosed`, its column rules in
-  `rowLead`, and `pathCompressRule` for `lead` being a function. `unionsJoined_fire` is the
+  what the factorisation above bought. `execM_viewJoined` is the whole of the run-wide
+  **index** argument: `rebuildRules`' e-class rule in `ids` and `ufJoin`, and its column rules
+  in `rowShared`. `pathCompressRule` is no longer part of it — it was carried solely to make
+  `lead` a *function*, and no consumer spends that. `unionsJoined_fire` is the
   whole of a **target firing behind a source firing** — the one command case the read-back does
   not reach — and it now carries both of the command induction's data clauses, `joined` and
   `reads`, because a rule head builds as well as unions and one firing answers both.
@@ -212,14 +229,15 @@ both are decided at the witness at the end of this file.
   `Encoding/Complete.lean`'s `execM_soundTerms` is proved with it. No target fixpoint enters,
   since soundness is indifferent to the under-firing `execM_contained` records.
   `ncTgt_soundTerms` is both clauses at the state the two refuted forward clauses fail at, with
-  a real `@UF` edge and positive arity. `execM_viewLeader`, `execM_viewsCover`,
+  a real `@UF` edge and positive arity. `execM_viewsCover`,
   `execM_viewsCover_shared`, `execM_unionsJoined` and `execM_unionsRead` are assembled from
-  them, proved. `Encoding/Match.lean`'s `uRebuilt_unionsJoined`, `uRebuilt_viewLeaderRows` and
-  `uRebuilt_viewsCover` are the properties at a state a program reaches, with
-  `uRebuilt_cong_sameClass` running the forward half there; `uTgt_not_unionsRead` and
-  `uTgt_not_viewLeader` are the conclusion and the responsible clause failing one rebuild
-  firing earlier; `ncTgt_viewLeaderRows` is the fourth clause at positive arity, where the
-  three earlier witnesses have only the empty key. `encode_assert`, `encode_trans`,
+  them, proved. `Encoding/Match.lean`'s `uRebuilt_unionsJoined`, `uRebuilt_viewLeaderRows`,
+  `uRebuilt_viewJoined` and `uRebuilt_viewsCover` are the properties at a state a program
+  reaches, with `uRebuilt_cong_sameClass` running the forward half there; `uTgt_not_unionsRead`,
+  `uTgt_not_viewLeader` and `uTgt_not_viewJoined` are the conclusion and the responsible clause
+  — strong form and weak — failing one rebuild firing earlier; `ncTgt_viewLeaderRows` is the
+  fourth clause at positive arity, where the three earlier witnesses have only the empty key.
+  `encode_assert`, `encode_trans`,
   `encode_congr`, `encode_corresponds_forward` and — in `Encoding/Complete.lean` —
   `encode_corresponds` are assembled from them and carry `sorryAx` through them.
   `Encoding/Complete.lean`'s `encode_corresponds_complete` does **not**: the completeness half
@@ -966,6 +984,81 @@ theorem Database.ViewLeaderRows.toViewLeader {d : Database} (h : d.ViewLeaderRow
   obtain ⟨lead, hmem, huniq, huf, -⟩ := h
   exact ⟨lead, hmem, huniq, huf⟩
 
+/-! #### And the same four clauses, at what their consumers spend
+
+`Database.ViewLeaderRows` was assembled before `Database.ViewsCover` and
+`Database.UnionsJoined` were cut down to their consumers, and it is over-strong in the same
+way they were. Every one of its four clauses is spent through a *choice function* — `lead` is
+total on `Term` and `huniq` forces it constant across the whole "some term reads both"
+closure — while each of the three reductions downstream (`SameClass.trans_of_viewLeader`,
+`unionsRead_of_unionsJoined`, `Database.ViewsCover.of_viewLeaderRows`) uses that function only
+to name **one** id it then hands to `hmem`. What is spent is therefore a *join*, not a
+representative, and `Database.ViewJoined` below is that. -/
+
+/-- **`e'` absorbs `e`**: every source term that reads `e` also reads `e'`.
+
+This is what `Database.ViewLeaderRows`' first clause says of `lead e`, and it is the only
+shape in which the other three are consumed: each of them produces an id and then hands it to
+`hmem` at a term that read the id it started from. A preorder rather than a function, which is
+the whole of the weakening — `Database.ViewJoined` asks for upper bounds in it and never for a
+representative. -/
+def Database.Absorbs (d : Database) (e e' : Term) : Prop :=
+  ∀ t, ViewRepr d t e → ViewRepr d t e'
+
+/-- Absorption is reflexive and transitive; both are one unfolding. -/
+theorem Database.Absorbs.refl (d : Database) (e : Term) : d.Absorbs e e := fun _ h => h
+
+@[inherit_doc Database.Absorbs.refl]
+theorem Database.Absorbs.trans {d : Database} {e₁ e₂ e₃ : Term} (h₁ : d.Absorbs e₁ e₂)
+    (h₂ : d.Absorbs e₂ e₃) : d.Absorbs e₁ e₃ := fun t h => h₂ t (h₁ t h)
+
+/-- **What the forward half's three reductions actually spend of `Database.ViewLeaderRows`.**
+
+Three clauses, each read off one consumer and nothing else:
+
+* `ids` is `SameClass.trans_of_viewLeader`. Two ids of one term have a common **absorber** —
+  not a common `lead`. The choice function is what `pathCompressRule` was being sought for
+  (`lead` a function rather than a relation), and no consumer asks for it: `trans` needs one id
+  the outer two terms both reach, and an upper bound of the middle term's two ids is one.
+* `ufJoin` is `unionsRead_of_unionsJoined`, at `Database.ViewLeader.ufClosed`'s own instance:
+  an `@UF` edge's two ends have a common absorber. Same weakening — the reduction rewrites
+  `lead x = lead y` and then applies `hmem` twice, which is an upper bound and nothing more.
+* `rowShared` is `Database.ViewsCover.of_viewLeaderRows`, at `rowLead`'s own instance: a row
+  and a pointwise-congruent argument list give **some** tuple both lists read that carries a
+  row. Not the *leader* tuple — the tuple `Database.ViewsCover.shared` answers with is
+  existential, so the answer need not move the key at all. In particular the diagonal
+  (`as = bs`), which is all `viewRepr_total` spends, is answered by the row already in hand,
+  where `rowLead` demanded the column rules even there.
+
+`Database.ViewLeaderRows.toViewJoined` is the check that this is a weakening rather than a
+different claim, and it uses all four of the strong clauses. `uTgt_not_viewJoined` is the
+weakened form still **failing** one rebuild firing early, at the state
+`uTgt_not_viewLeader` fails at — so the e-class rebuild rule is still load-bearing here and the
+weakening is not into vacuity. What has dropped out is `pathCompressRule`: nothing below names
+a function. -/
+structure Database.ViewJoined (d : Database) : Prop where
+  /-- Two ids of one term have a common absorber. -/
+  ids : ∀ t e₁ e₂, ViewRepr d t e₁ → ViewRepr d t e₂ →
+    ∃ e, d.Absorbs e₁ e ∧ d.Absorbs e₂ e
+  /-- An `@UF` edge's two ends have a common absorber. -/
+  ufJoin : ∀ x y pf, d.Out ufName [x] [y, pf] → ∃ e, d.Absorbs x e ∧ d.Absorbs y e
+  /-- A row, and an argument list pointwise in one class with the one that read its key, share
+  a tuple that carries a row. -/
+  rowShared : ∀ f as bs es e pf, ViewReprList d as es → d.Out (viewName f) es [e, pf] →
+    List.Forall₂ (SameClass d) as bs →
+    ∃ es' e' pf', ViewReprList d as es' ∧ ViewReprList d bs es' ∧
+      d.Out (viewName f) es' [e', pf']
+
+/-- **Obligation `trans` reduces to `Database.ViewJoined.ids`**, which is the whole of what
+`SameClass.trans_of_viewLeader` spends: the middle term's two ids have an absorber, and an
+absorber of an id is read by everything that reads the id. -/
+theorem SameClass.trans_of_viewJoined {d : Database} (h : d.ViewJoined) {a b c : Term}
+    (hab : SameClass d a b) (hbc : SameClass d b c) : SameClass d a c := by
+  obtain ⟨e₁, ha₁, hb₁⟩ := hab
+  obtain ⟨e₂, hb₂, hc₂⟩ := hbc
+  obtain ⟨e, k₁, k₂⟩ := h.ids b e₁ e₂ hb₁ hb₂
+  exact ⟨e, k₁ a ha₁, k₂ c hc₂⟩
+
 
 /-! #### And at a state a program reaches
 
@@ -1131,6 +1224,49 @@ theorem Database.ViewsCover.of_viewLeaderRows {src d : Database} (h : d.ViewLead
       exact ⟨es.map lead, e', pf', viewReprList_map_lead hmem hes,
         viewReprList_map_lead_of_forall₂ hmem huniq hl hes, ho'⟩
 
+/-- **The strong form implies the weak one**, and this is the check that `Database.ViewJoined`
+is a weakening of `Database.ViewLeaderRows` rather than a different claim — the same discipline
+`Database.ViewsCover.of_viewsProduct` and `Database.UnionsJoined.of_readsSelf` are.
+
+All four strong clauses are used: `hmem` in each of the three, `huniq` in `ids` and in the row
+transport, `huf` in `ufJoin`, `hrow` in `rowShared`. Each absorber is `lead` of the *first* id,
+and the second is carried onto it by `huniq`/`huf` — which is exactly the rewriting the three
+reductions did by hand, now done once. -/
+theorem Database.ViewLeaderRows.toViewJoined {d : Database} (h : d.ViewLeaderRows) :
+    d.ViewJoined := by
+  obtain ⟨lead, hmem, huniq, huf, hrow⟩ := h
+  refine ⟨fun t e₁ e₂ h₁ h₂ => ⟨lead e₁, fun s hs => hmem s e₁ hs, fun s hs => ?_⟩,
+    fun x y pf ho => ⟨lead x, fun s hs => hmem s x hs, fun s hs => ?_⟩,
+    fun f as bs es e pf hes ho hl => ?_⟩
+  · rw [← huniq t e₂ e₁ h₂ h₁]; exact hmem s e₂ hs
+  · rw [huf x y pf ho]; exact hmem s y hs
+  · obtain ⟨e', pf', ho'⟩ := hrow f es e pf ho
+    exact ⟨es.map lead, e', pf', viewReprList_map_lead hmem hes,
+      viewReprList_map_lead_of_forall₂ hmem huniq hl hes, ho'⟩
+
+/-- **The weak form answers the clause too, and in one step.** `rowShared` *is* obligation
+`congr`'s target side, stated at a row rather than at a source term, so the only thing this
+reduction adds is the source term's own reading — which is the command induction's `reads`,
+exactly as in `Database.ViewsCover.of_viewLeaderRows`.
+
+No transport: where the strong reduction moved both argument lists onto `es.map lead`, the
+clause here hands back a tuple both already read, so `viewReprList_map_lead` and
+`viewReprList_map_lead_of_forall₂` are spent inside `Database.ViewLeaderRows.toViewJoined`
+and nowhere else. -/
+theorem Database.ViewsCover.of_viewJoined {src d : Database} (h : d.ViewJoined)
+    (ht : ∀ t ∈ src.terms, ∃ e, ViewRepr d t e) : d.ViewsCover src where
+  shared f as bs ha hl := by
+    obtain ⟨e, he⟩ := ht _ ha
+    match he with
+    | @ViewRepr.app _ _ _ es _ pf hes ho => exact h.rowShared f as bs es e pf hes ho hl
+
+/-- **`Database.ViewJoined` at `satTarget`**, out of the reduction. The degenerate case: one
+nullary constructor, no `union`, so `ufJoin` is vacuous, `ids` is answered by reflexivity and
+`rowShared` by the row already in hand. `Encoding/Match.lean`'s `uRebuilt_viewJoined` is the
+first two clauses doing work and `ncTgt_viewJoined` the third. -/
+theorem satTarget_viewJoined : satTarget.ViewJoined :=
+  satTarget_viewLeaderRows.toViewJoined
+
 
 /-- **Obligation `congr` reduces to `Database.ViewsCover.shared`.** The clause *is* that
 obligation with the target's side spelled out — one shared id tuple and an entry keyed at it —
@@ -1267,6 +1403,20 @@ theorem unionsRead_of_unionsJoined {src d : Database} (hlead : d.ViewLeader)
   · rw [huf e₁ e₂ pf ho]; exact hmem b e₂ h₂
   · rw [← huf e₂ e₁ pf ho]; exact hmem b e₂ h₂
 
+/-- **The same reduction at what it spends**: `Database.ViewJoined.ufJoin` in place of
+`Database.ViewLeader`. The edge's two ends have an absorber and each endpoint's own id reaches
+it, so the absorber is the shared id — the orientation is answered by taking the join in the
+other order, since a common absorber is symmetric in the two ends. -/
+theorem unionsRead_of_viewJoined {src d : Database} (hj : d.ViewJoined)
+    (h : d.UnionsJoined src) : d.UnionsRead src := by
+  intro a b hab hne
+  obtain ⟨e₁, e₂, pf, h₁, h₂, ho⟩ := h a b hab hne
+  rcases ho with ho | ho
+  · obtain ⟨e, k₁, k₂⟩ := hj.ufJoin e₁ e₂ pf ho
+    exact ⟨e, k₁ a h₁, k₂ b h₂⟩
+  · obtain ⟨e, k₂, k₁⟩ := hj.ufJoin e₂ e₁ pf ho
+    exact ⟨e, k₁ a h₁, k₂ b h₂⟩
+
 /-- **The whole forward half, from three properties of the target and nothing else.**
 
 No `execM`, no `encode`, no `sorry`: `Cong src a b → SameClass d a b` at any target with
@@ -1281,6 +1431,25 @@ theorem cong_sameClass_of_state {src d : Database} (hw : src.WF) (hlead : d.View
     ⟨fun x y hxy => if hxyeq : x = y then hxyeq ▸ sameClass_self_of_viewsCover hcov hw
         (hxyeq ▸ hxy) else hun x y hxy hxyeq,
      fun _ _ _ => SameClass.trans_of_viewLeader hlead,
+     fun _ _ _ ha _ hl => sameClass_congr_of_shared hcov ha hl⟩ h
+
+/-- **The whole forward half again, at what the three obligations spend.** One target property
+where `cong_sameClass_of_state` takes three, because `Database.ViewsCover` and
+`Database.UnionsRead` are each `Database.ViewJoined` plus one of the *data* clauses the command
+induction carries: `ht` (`UnionsInv.reads`, every source term having an id) and
+`Database.UnionsJoined` (the `union`'s own write, at ids).
+
+So the forward half is now `Database.ViewJoined` at an `execM` target plus `unionsJoined_fire`,
+and nothing else. `cong_sameClass_of_state` stays because it is the statement the three
+*named* properties support and `Encoding/Match.lean`'s `uRebuilt_cong_sameClass` runs it. -/
+theorem cong_sameClass_of_joined {src d : Database} (hw : src.WF) (hj : d.ViewJoined)
+    (ht : ∀ t ∈ src.terms, ∃ e, ViewRepr d t e) (hun : d.UnionsJoined src)
+    {a b : Term} (h : Cong src a b) : SameClass d a b :=
+  have hcov : d.ViewsCover src := Database.ViewsCover.of_viewJoined hj ht
+  cong_sameClass
+    ⟨fun x y hxy => if hxyeq : x = y then hxyeq ▸ sameClass_self_of_viewsCover hcov hw
+        (hxyeq ▸ hxy) else unionsRead_of_viewJoined hj hun x y hxy hxyeq,
+     fun _ _ _ => SameClass.trans_of_viewJoined hj,
      fun _ _ _ ha _ hl => sameClass_congr_of_shared hcov ha hl⟩ h
 
 /-! ### The action read-back
@@ -2646,15 +2815,15 @@ build read-back (`viewReprAll_self_of_execProgramM`), discharged in `unionsInv_s
 head **builds** as well as unions, and the term it builds at a non-leader substitution is a
 term no block ran a `set` for; the id it has is the leader's row, and the leader's row is the
 target's own firing. One firing answers both clauses, which is why they are one residue rather
-than two: `Database.ViewsCover` is now `Database.ViewLeaderRows` plus `reads`
-(`Database.ViewsCover.of_viewLeaderRows`), so this residue and `execM_viewLeaderRows` between
+than two: `Database.ViewsCover` is now `Database.ViewJoined` plus `reads`
+(`Database.ViewsCover.of_viewJoined`), so this residue and `execM_viewJoined` between
 them are the whole forward half.
 
 **What it was blamed on before, and what that turned out to be.** `FDatabase.IndexCurrent`
 (`Proofs/Merge.lean`, refuted by `cxTgt_not_indexCurrent`) and the run-wide index argument that
 would replace it are about the row a *rebuild* displaced. They are real, and they are not this:
 here the row was never written, at any state, by any block. That argument is
-`execM_viewLeaderRows`'s, and this residue does not share it — a target firing is a `rows`
+`execM_viewJoined`'s, and this residue does not share it — a target firing is a `rows`
 fact about the state the encoded rule ran at, not about a row the rebuild moved.
 
 Stated over both firing commands at once, because `encodeCmd` gives them the same block:
@@ -3369,7 +3538,7 @@ the edge — written by the `union` and written again by `mergeBody`. So the rep
 is *current up to the union-find*: for every merge-function entry term there is a row at a
 congruent key whose e-class column is `@UF`-reachable from the entry's.
 
-**That weakening does not close the residues as they stand.** `Database.ViewLeader.ufClosed`
+**That weakening does not close the residues as they stand.** `Database.ViewJoined.ufJoin`
 is handed an edge out of an id and would be handed a row at some `u` further down the chain;
 the two do not compose, and the entry its conclusion needs is one an *earlier* round wrote and
 only `terms` remembers. The mechanism is therefore run-wide — each writing block's rows are
@@ -3379,9 +3548,9 @@ result forward past every later merge — and not a property of the final index.
 **And it would not close `unionsJoined_fire`, because nothing about currency would.** The next
 section is the counterexample the induction's old invariant died on: the row a firing needs was
 never written at any state, so no statement about which rows are *current* reaches it. The
-run-wide argument is what `execM_viewLeaderRows` still wants — its `rowLead` clause as much as
-its `ufClosed` one, since `Database.ViewsCover` is now derived from those
-(`Database.ViewsCover.of_viewLeaderRows`) — and it is not what the command induction wants.
+run-wide argument is what `execM_viewJoined` still wants — its `rowShared` clause as much as
+its `ufJoin` one, since `Database.ViewsCover` is now derived from those
+(`Database.ViewsCover.of_viewJoined`) — and it is not what the command induction wants.
 
 **Restoring `IndexCurrent` outright is not a side condition worth having.** What it needs is
 that the source assert no equation between distinct terms (`Database.Diag`), decidable on the
@@ -3924,6 +4093,225 @@ theorem ncTgt_viewLeaderRows : ncTgt.toDatabase.ViewLeaderRows := by
     rcases ncTgt_out_view ho with ⟨-, rfl, -⟩ | ⟨-, rfl, -⟩ | ⟨-, rfl, -⟩ <;>
       simpa [ncLead, ncA, ncB] using ho
 
+/-- **And so does `Database.ViewJoined`**, out of the reduction. `rowShared` is the clause with
+positive arity here — `@FView` is keyed at `((A))` — and `ids` is asked at `(B)`, the one term
+with two ids; `ncTgt_rowShared_FB_FA` is `rowShared` at an instance with two *distinct*
+argument lists, which is where `Database.ViewsProduct` failed. -/
+theorem ncTgt_viewJoined : ncTgt.toDatabase.ViewJoined :=
+  ncTgt_viewLeaderRows.toViewJoined
+
+/-- **`Database.ViewJoined.rowShared` at a positive-arity key, non-vacuously**: the row is
+`@FView((A)) ↦ ((F (A)), @Fiat)`, the list that read its key is `((A))` and the list handed in
+is `((B))` — a *different* list, in one class with it through the `union` — and the tuple the
+clause answers with carries the row. Every hypothesis is inhabited and the conclusion is a real
+row, which is what says the weakened clause is not vacuous at the state whose non-leader firing
+refutes `Database.ViewsProduct`. -/
+theorem ncTgt_rowShared_FB_FA :
+    ViewReprList ncTgt.toDatabase [ncA] [ncA] ∧
+      ncTgt.toDatabase.Out (viewName "F") [ncA] [ncFA, ncFiat] ∧
+      List.Forall₂ (SameClass ncTgt.toDatabase) [ncA] [ncB] ∧ [ncA] ≠ [ncB] ∧
+      ∃ es' e' pf', ViewReprList ncTgt.toDatabase [ncA] es' ∧
+        ViewReprList ncTgt.toDatabase [ncB] es' ∧
+          ncTgt.toDatabase.Out (viewName "F") es' [e', pf'] :=
+  ⟨.cons ncTgt_viewRepr_A .nil, ncTgt_out_fview,
+   .cons ⟨ncA, ncTgt_viewRepr_A, ncTgt_viewRepr_B_A⟩ .nil, by simp [ncA, ncB],
+   ncTgt_viewJoined.rowShared "F" [ncA] [ncB] [ncA] ncFA ncFiat
+     (.cons ncTgt_viewRepr_A .nil) ncTgt_out_fview
+     (.cons ⟨ncA, ncTgt_viewRepr_A, ncTgt_viewRepr_B_A⟩ .nil)⟩
+
+/-- **`Database.ViewJoined.ids` at the one term with two ids**, and both of them real: `(B)`'s
+own build entry, which the collision displaced but did not delete, and the leader's, which the
+e-class rebuild rule wrote. The absorber is `(A)`. -/
+theorem ncTgt_ids_B :
+    ViewRepr ncTgt.toDatabase ncB ncB ∧ ViewRepr ncTgt.toDatabase ncB ncA ∧ ncB ≠ ncA ∧
+      ∃ e, ncTgt.toDatabase.Absorbs ncB e ∧ ncTgt.toDatabase.Absorbs ncA e :=
+  ⟨ncTgt_viewRepr_B, ncTgt_viewRepr_B_A, by simp [ncA, ncB],
+   ncTgt_viewJoined.ids ncB ncB ncA ncTgt_viewRepr_B ncTgt_viewRepr_B_A⟩
+
+/-! ##### And the strong form is strictly stronger
+
+`Database.ViewsProduct` and `Database.ReadsSelf` were kept because a state an encoded program
+reaches **refutes** them, which is what said the weakening had to happen.
+`Database.ViewLeaderRows` is not in that position — nothing refutes it at an `execM` target, and
+`ncTgt_viewLeaderRows` is it holding at the hardest state this file has. So the evidence that it
+is over-strong has to be of the other kind: a database at which the *weak* form holds and the
+strong one **fails**, which is what says `Database.ViewJoined` is a genuine weakening and not a
+re-spelling.
+
+The separation is exactly the choice function. `Database.ViewJoined.ids` asks two ids of one
+term for an upper bound in `Database.Absorbs`; `Database.ViewLeader` asks for one id that is
+`lead` of *every* id any term co-reads with it, and an ascending chain with no top has upper
+bounds everywhere and no such representative. `chainD` is that chain — not a state a program
+reaches, and it is not offered as one: it separates the two properties, which is a statement
+about the two definitions and not about the encoding. -/
+
+/-- An injective family of function names: `n` copies of `'a'`. -/
+def chainName (n : Nat) : FnName := String.ofList (List.replicate n 'a')
+
+@[inherit_doc chainName]
+theorem chainName_inj {n m : Nat} (h : chainName n = chainName m) : n = m := by
+  have h2 := congrArg String.toList h
+  rw [chainName, chainName, String.toList_ofList, String.toList_ofList] at h2
+  simpa using congrArg List.length h2
+
+/-- The proof column every row of `chainD` carries. -/
+def chainPf : Term := .app "pf" []
+
+/-- The `n`-th term: a nullary constructor, so its view key is empty and `rowShared` has
+nothing to move. -/
+def chainT (n : Nat) : Term := .app (chainName n) []
+
+/-- The `n`-th id. A **positive-arity** application, so it is neither a `chainT` nor a literal:
+a literal is an id of itself (`ViewRepr.lit`), and that alone would refute every absorption
+below. -/
+def chainId (n : Nat) : Term := .app (chainName n) [chainPf]
+
+@[inherit_doc chainId]
+theorem chainId_inj {n m : Nat} (h : chainId n = chainId m) : n = m := by
+  rw [chainId, chainId, Term.app.injEq] at h
+  exact chainName_inj h.1
+
+/-- **The chain**: `chainT n`'s view carries `chainId j` for every `j ≥ n`, so a term's set of
+ids is an up-set and the up-sets shrink as `n` grows. Nothing else is a term — no `@UF` row, no
+positive-arity key. -/
+def chainS : Set Term :=
+  {t | ∃ n j, n ≤ j ∧ t = Term.app (viewName (chainName n)) [chainId j, chainPf]}
+
+/-- The database those rows make, with nothing else in it: the diagonal of `chainS` as its
+equations, so `Cong` is equality and `Database.Out` reads `chainS` directly. -/
+def chainD : Database where
+  sig := fun _ => none
+  eqs := {p | p.1 = p.2 ∧ p.1 ∈ chainS}
+  env := []
+  rules := ∅
+
+theorem chainD_diag : chainD.Diag := fun _ hp => hp.1
+
+private theorem chainD_cong_mem {a b : Term} (h : Cong chainD a b) :
+    a ∈ chainS ∧ b ∈ chainS := by
+  induction h using Cong.rec (motive_2 := fun _ _ _ => True) with
+  | @assert a' b' hab =>
+      have heq : a' = b' := hab.1
+      have hm : a' ∈ chainS := hab.2
+      exact ⟨hm, by rw [← heq]; exact hm⟩
+  | symm _ ih => exact ⟨ih.2, ih.1⟩
+  | trans _ _ ih₁ ih₂ => exact ⟨ih₁.1, ih₂.2⟩
+  | congr _ _ _ iha ihb _ => exact ⟨iha.1, ihb.1⟩
+  | nil => trivial
+  | cons _ _ _ _ => trivial
+
+/-- `chainD` holds exactly `chainS`: `Cong.assert` one way, and the induction above the
+other. -/
+theorem chainD_mem_terms {t : Term} : t ∈ chainD.terms ↔ t ∈ chainS :=
+  ⟨fun h => (chainD_cong_mem h).1, fun h => Cong.assert ⟨rfl, h⟩⟩
+
+private theorem chainD_congList_eq : ∀ {as bs : List Term}, CongList chainD as bs → as = bs
+  | [], [], .nil => rfl
+  | _ :: _, _ :: _, .cons hab hl => by
+      rw [Cong.eq_of_diag chainD_diag hab, chainD_congList_eq hl]
+
+private theorem chainD_out {f : FnName} {as vs : List Term} (h : chainD.Out f as vs) :
+    Term.app f (as ++ vs) ∈ chainS := by
+  obtain ⟨bs, hcl, hmem⟩ := h
+  obtain rfl : as = bs := chainD_congList_eq hcl
+  exact chainD_mem_terms.mp hmem
+
+/-- **What reads what at `chainD`**: only a nullary `chainT`, and only the ids above it. -/
+private theorem chainD_viewRepr_cases {g : FnName} {bs : List Term} {e : Term}
+    (h : ViewRepr chainD (.app g bs) e) :
+    ∃ n j, n ≤ j ∧ g = chainName n ∧ bs = [] ∧ e = chainId j := by
+  match h with
+  | @ViewRepr.app _ f as es e pf hes ho =>
+    obtain ⟨n, j, hnj, heq⟩ := chainD_out ho
+    rw [Term.app.injEq] at heq
+    obtain rfl : f = chainName n := viewName_inj heq.1
+    obtain rfl : es = [] := by
+      have hl := congrArg List.length heq.2
+      simp only [List.length_append, List.length_cons, List.length_nil] at hl
+      exact List.eq_nil_of_length_eq_zero (by omega)
+    obtain rfl : as = [] := by cases hes with | nil => rfl
+    exact ⟨n, j, hnj, rfl, rfl, (show e = chainId j ∧ pf = chainPf by simpa using heq.2).1⟩
+
+@[inherit_doc chainD_viewRepr_cases]
+private theorem chainD_viewRepr_chainT {k : Nat} {e : Term}
+    (h : ViewRepr chainD (chainT k) e) : ∃ j, k ≤ j ∧ e = chainId j := by
+  rw [chainT] at h
+  obtain ⟨n, j, hnj, hg, -, he⟩ := chainD_viewRepr_cases h
+  obtain rfl : k = n := chainName_inj hg
+  exact ⟨j, hnj, he⟩
+
+@[inherit_doc chainD_viewRepr_cases]
+theorem chainD_viewRepr_of_le {n j : Nat} (h : n ≤ j) : ViewRepr chainD (chainT n) (chainId j) :=
+  .app .nil ⟨[], .nil, chainD_mem_terms.mpr ⟨n, j, h, rfl⟩⟩
+
+/-- **Absorption at `chainD` is `≤`**: everything that reads `chainId i` reads `chainId m`
+whenever `i ≤ m`, because the terms reading `chainId i` are the `chainT n` with `n ≤ i` and
+their id sets are up-sets. -/
+theorem chainD_absorbs {i m : Nat} (h : i ≤ m) : chainD.Absorbs (chainId i) (chainId m) := by
+  intro t ht
+  cases t with
+  | lit l => exact absurd ht.eq_of_lit (by simp [chainId])
+  | app g bs =>
+      obtain ⟨n, j, hnj, rfl, rfl, hej⟩ := chainD_viewRepr_cases ht
+      obtain rfl : i = j := chainId_inj hej
+      exact chainD_viewRepr_of_le (hnj.trans h)
+
+/-- **`Database.ViewJoined` holds at `chainD`**, and `ids` is the clause doing the work: a term
+here has *infinitely* many ids and any two of them have an upper bound, which is the larger.
+`ufJoin` and `rowShared` are vacuous and degenerate respectively — no `@UF` row exists and every
+key is empty — which is the point: the separation is about `ids` alone. -/
+theorem chainD_viewJoined : chainD.ViewJoined where
+  ids t e₁ e₂ h₁ h₂ := by
+    cases t with
+    | lit l =>
+        rw [h₁.eq_of_lit, h₂.eq_of_lit]
+        exact ⟨.lit l, Database.Absorbs.refl _ _, Database.Absorbs.refl _ _⟩
+    | app g bs =>
+        obtain ⟨n₁, j₁, -, -, -, rfl⟩ := chainD_viewRepr_cases h₁
+        obtain ⟨n₂, j₂, -, -, -, rfl⟩ := chainD_viewRepr_cases h₂
+        exact ⟨chainId (max j₁ j₂), chainD_absorbs (Nat.le_max_left _ _),
+          chainD_absorbs (Nat.le_max_right _ _)⟩
+  ufJoin x y pf ho := by
+    obtain ⟨n, j, -, heq⟩ := chainD_out ho
+    rw [Term.app.injEq] at heq
+    exact absurd heq.1.symm viewName_ne_ufName
+  rowShared f as bs es e pf hes ho hl := by
+    obtain ⟨n, j, -, heq⟩ := chainD_out ho
+    rw [Term.app.injEq] at heq
+    obtain rfl : es = [] := by
+      have hl' := congrArg List.length heq.2
+      simp only [List.length_append, List.length_cons, List.length_nil] at hl'
+      exact List.eq_nil_of_length_eq_zero (by omega)
+    obtain rfl : as = [] := by cases hes with | nil => rfl
+    obtain rfl : bs = [] := by cases hl with | nil => rfl
+    exact ⟨[], e, pf, .nil, .nil, ho⟩
+
+/-- **And `Database.ViewLeader` fails there.** `chainT 0` reads every id, so `huniq` makes
+`lead` constant on the whole family; `hmem` at `chainT 0` puts that constant at some `chainId m`;
+and `hmem` at `chainT (m+1)`, which reads only ids above `m`, then asks for `m + 1 ≤ m`.
+
+So the choice function is what `Database.ViewLeaderRows` asks for over and above what its three
+consumers spend, and `pathCompressRule` — carried in the residue solely to supply it — is what
+`execM_viewJoined` no longer needs. -/
+theorem chainD_not_viewLeader : ¬ chainD.ViewLeader := by
+  rintro ⟨lead, hmem, huniq, -⟩
+  have h0 : ViewRepr chainD (chainT 0) (chainId 0) := chainD_viewRepr_of_le (Nat.le_refl 0)
+  obtain ⟨m, -, hLm⟩ := chainD_viewRepr_chainT (hmem _ _ h0)
+  have hup : ViewRepr chainD (chainT 0) (chainId (m + 1)) :=
+    chainD_viewRepr_of_le (Nat.zero_le _)
+  have huq : lead (chainId (m + 1)) = lead (chainId 0) :=
+    huniq (chainT 0) (chainId (m + 1)) (chainId 0) hup h0
+  have hnext : ViewRepr chainD (chainT (m + 1)) (lead (chainId (m + 1))) :=
+    hmem _ _ (chainD_viewRepr_of_le (Nat.le_refl _))
+  rw [huq, hLm] at hnext
+  obtain ⟨j, hj, hej⟩ := chainD_viewRepr_chainT hnext
+  obtain rfl : m = j := chainId_inj hej
+  omega
+
+@[inherit_doc chainD_not_viewLeader]
+theorem chainD_not_viewLeaderRows : ¬ chainD.ViewLeaderRows :=
+  fun h => chainD_not_viewLeader h.toViewLeader
+
 set_option maxRecDepth 100000 in
 unseal Egglog.closure in
 /-- The four terms the source run leaves. -/
@@ -4031,49 +4419,49 @@ theorem encode_viewsProduct_false {e : FDatabase}
 /-- **The residue of obligation `trans`, of the rebuild half of obligation `assert`'s `union`
 case, and of the *key* half of obligation `congr`. Not proved.**
 
-What is missing: that the ids a source term reads to at an `execM` target are `@UF`-connected
-and that the connection has a unique endpoint. Two entries at one view key collide, and
-`mergeBody` writes the edge between their e-class columns; `rebuildRules`' e-class rule
-follows an edge, so an id's `lead` is read by every term that reads the id;
-`pathCompressRule` is what makes the endpoint unique. All three are *specification* rules
-fired to saturation, and the hypothesis here is an `execM` target — so what it has to be
+What is missing: that the ids a source term reads to at an `execM` target have a common
+**absorber**, and that a row's key does too. Two entries at one view key collide, and
+`mergeBody` writes the edge between their e-class columns; `rebuildRules`' e-class rule follows
+an edge, so an id's parent is read by every term that reads the id. Those are *specification*
+rules fired to saturation, and the hypothesis here is an `execM` target — so what it has to be
 proved from is `FDatabase.runSaturateM`'s own fixpoint, and that is strictly weaker than
 `RunSaturated` (`execM_contained`: the enumerator under-fires).
 
-**`ufClosed` is the third clause and it is the same mechanism**, which is why the clause that
-used to stand beside it — a source term reading its own `@UF` parent — is gone rather than
-restated: the edge-following the `union` half needs is edge-following *between ids*, and the
-`lead` this residue already has to produce is what carries it. One residue where there were
-two, and no weaker for it: `uTgt_not_viewLeader` is `ufClosed` failing one rebuild firing
-early, at the state where `Database.UnionsRead` fails with it.
+**Stated at what the three reductions spend, and that is one mechanism fewer than the four
+clauses this replaces.** `Database.ViewLeaderRows` asked for a *choice function* `lead`, total
+on `Term` and constant across the whole "some term reads both" closure; every consumer used it
+only to name one id it then handed to `hmem`. So `Database.ViewJoined` asks for joins instead —
+`ids` for `SameClass.trans_of_viewJoined`, `ufJoin` for `unionsRead_of_viewJoined`, `rowShared`
+for `Database.ViewsCover.of_viewJoined` — and `pathCompressRule`, which was carried solely to
+make `lead` a function rather than a relation, is no longer part of this residue.
+`Database.ViewLeaderRows.toViewJoined` is the check that the weakening is a weakening, and it
+is where the strong form's four clauses are still spent.
 
-**`rowLead` is the fourth clause and it is the *column* rules, same mechanism one step over**,
-which is why `execM_viewsCover_shared` is no longer a residue of its own: obligation `congr`
+**`ufJoin` is the e-class rule and it is load-bearing after the weakening too**:
+`uTgt_not_viewJoined` is this clause failing one rebuild firing early, at the state where
+`Database.UnionsRead` fails with it — so the weakening did not weaken into vacuity.
+
+**`rowShared` is the column rules, and only where the key has to move**: obligation `congr`
 splits into an id for the source's own term — the command induction's `reads`, whose one open
-case is `unionsJoined_fire` — and a row at the leader tuple, which is this. The split is
-`Database.ViewsCover.of_viewLeaderRows`, and `ncTgt_viewsCover` is it run at the state whose
-non-leader firing refutes `Database.ViewsProduct`.
+case is `unionsJoined_fire` — and a row at a tuple both argument lists read, which is this. The
+split is `Database.ViewsCover.of_viewJoined`, and the *diagonal* instance — all
+`viewRepr_total` spends — is answered by the row already in hand, where the strong form's
+`rowLead` demanded the column rules even there.
 
-**That fixpoint is now proved and is not enough.** `FDatabase.RoundClosed` gives every term one
-more rebuild round would derive, which is the *conclusion* of each of those four rules; their
-*premise* is a row, and `cxTgt_not_indexCurrent` is the compiled statement that the index need
-not hold every entry term `Database.Out` reads. What is left is the
-run-wide index argument described at "What restores it, and what that costs", plus — for `lead`
-being a *function* rather than a relation — `pathCompressRule`'s own fixpoint, which is a
-second, independent use of it.
+**The fixpoint is proved and is not enough.** `FDatabase.RoundClosed` gives every term one more
+rebuild round would derive, which is the *conclusion* of each of those rules; their *premise* is
+a row, and `cxTgt_not_indexCurrent` is the compiled statement that the index need not hold every
+entry term `Database.Out` reads. What is left is the run-wide index argument described at "What
+restores it, and what that costs" — and now only that, since path compression has dropped out.
 
 **Non-vacuous at three states, with every clause doing work at one of them**:
-`satTarget_viewLeaderRows` (the degenerate one), `Encoding/Match.lean`'s
-`uRebuilt_viewLeaderRows` (a real `@UF` edge, two ids for one term) and `ncTgt_viewLeaderRows`
-(positive arity, and `rowLead` at a key column the `union` moved). -/
-theorem execM_viewLeaderRows {P : Program} {tgt : FDatabase} (hdom : P.EncodeDomain)
-    (htgt : execM (encode P) = some tgt) : tgt.toDatabase.ViewLeaderRows := by
+`satTarget_viewJoined` (the degenerate one), `Encoding/Match.lean`'s `uRebuilt_viewJoined` (a
+real `@UF` edge in `ufJoin`, two ids for one term in `ids`) and `ncTgt_viewJoined` (positive
+arity in `rowShared`, at the key the `union` moved) — with `ncTgt_rowShared_FB_FA` and
+`ncTgt_ids_B` the two clauses at named instances with every hypothesis inhabited. -/
+theorem execM_viewJoined {P : Program} {tgt : FDatabase} (hdom : P.EncodeDomain)
+    (htgt : execM (encode P) = some tgt) : tgt.toDatabase.ViewJoined := by
   sorry
-
-/-- **The three clauses obligation `trans` spends**, out of the four above. -/
-theorem execM_viewLeader {P : Program} {tgt : FDatabase} (hdom : P.EncodeDomain)
-    (htgt : execM (encode P) = some tgt) : tgt.toDatabase.ViewLeader :=
-  (execM_viewLeaderRows hdom htgt).toViewLeader
 
 /-- **`Database.ViewsCover.shared`, at an `execM` target. Not proved.**
 
@@ -4089,16 +4477,16 @@ uses the clause only at an id tuple *shared* by both argument lists, and `viewRe
 at the diagonal — neither asks for the product. `ncTgt_shared_FB` is the surviving instance at
 the failing key: `(F (B))` and `(F (B))` share the tuple `((A))`, and `@FView((A))` is keyed.
 
-**And that instance generalises, so this is no longer a residue.** The tuple the clause answers
-with is the *leader* tuple, and the two things needed to produce it are already residues of
-their own: an id for the source's own term, which is the command induction's `reads`, and a row
-at the leader tuple, which is `Database.ViewLeaderRows`' `rowLead`.
-`Database.ViewsCover.of_viewLeaderRows` is the assembly and it spends nothing else — in
-particular no run-wide index argument beyond the one `execM_viewLeaderRows` already carries. -/
+**And that instance generalises, so this is no longer a residue.** The two things needed to
+produce a shared tuple are already residues of their own: an id for the source's own term, which
+is the command induction's `reads`, and a row at a tuple both argument lists read, which is
+`Database.ViewJoined`' `rowShared`. `Database.ViewsCover.of_viewJoined` is the assembly and it
+spends nothing else — in particular no run-wide index argument beyond the one `execM_viewJoined`
+already carries, and none at all at the diagonal. -/
 theorem execM_viewsCover {P : Program} {src : Database} {tgt : FDatabase}
     (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
     (htgt : execM (encode P) = some tgt) : tgt.toDatabase.ViewsCover src :=
-  Database.ViewsCover.of_viewLeaderRows (execM_viewLeaderRows hdom htgt)
+  Database.ViewsCover.of_viewJoined (execM_viewJoined hdom htgt)
     (unionsInv_execM hdom hsrc htgt).reads
 
 @[inherit_doc execM_viewsCover]
@@ -4124,7 +4512,7 @@ does make ids of themselves (`viewReprAll_self_of_execProgramM`); a head `union`
 **It holds at a state a program reaches, non-vacuously**: `uRebuilt_unionsJoined` in
 `Encoding/Match.lean`, over `uProgram`, whose rule head unions two distinct terms.
 `uTgt_not_unionsRead` there is the conclusion failing one rebuild firing *earlier*, where this
-clause holds and `Database.ViewLeader.ufClosed` does not — so the two are load-bearing
+clause holds and `Database.ViewJoined.ufJoin` does not — so the two are load-bearing
 separately. -/
 theorem execM_unionsJoined {P : Program} {src : Database} {tgt : FDatabase}
     (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
@@ -4138,7 +4526,7 @@ what `ncTgt_not_readsSelf` costs. `UnionsRead` itself holds at that counterexamp
 theorem execM_unionsRead {P : Program} {src : Database} {tgt : FDatabase}
     (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
     (htgt : execM (encode P) = some tgt) : tgt.toDatabase.UnionsRead src :=
-  unionsRead_of_unionsJoined (execM_viewLeader hdom htgt) (execM_unionsJoined hdom hsrc htgt)
+  unionsRead_of_viewJoined (execM_viewJoined hdom htgt) (execM_unionsJoined hdom hsrc htgt)
 
 /-- **Obligation `assert`, at the encoding**, split by writer. `Database.addTerm` writes a
 reflexive equation per subterm built, and `sameClass_self_of_viewsCover` discharges those out
@@ -4153,14 +4541,15 @@ theorem encode_assert {P : Program} {src : Database} {tgt : FDatabase} (hdom : P
       (hsrc.wf Database.WF.empty) h
   · exact execM_unionsRead hdom hsrc htgt a b h hab
 
-/-- **Obligation `trans`, at the encoding. Proved from `execM_viewLeader`.** Not from the
+/-- **Obligation `trans`, at the encoding. Proved from `execM_viewJoined`.** Not from the
 view's functional dependency, which is false at this file's own witness — the section header
-above has the refutation. -/
+above has the refutation. And not from a union-find *representative* either: what the reduction
+spends is a common absorber of the middle term's two ids, which is `Database.ViewJoined.ids`. -/
 theorem encode_trans {P : Program} {src : Database} {tgt : FDatabase} (hdom : P.EncodeDomain)
     (_hsrc : ProgramStep Database.empty P src) (htgt : execM (encode P) = some tgt)
     (a b c : Term) (hab : SameClass tgt.toDatabase a b) (hbc : SameClass tgt.toDatabase b c) :
     SameClass tgt.toDatabase a c :=
-  SameClass.trans_of_viewLeader (execM_viewLeader hdom htgt) hab hbc
+  SameClass.trans_of_viewJoined (execM_viewJoined hdom htgt) hab hbc
 
 /-- **Obligation `congr`, at the encoding. Proved from `execM_viewsCover`.** The pointwise
 hypothesis is one shared id tuple, and `ViewsCover.shared` is the view entry at it — the
@@ -5388,7 +5777,7 @@ theorem FDatabase.mem_terms_of_column {d : FDatabase} (hsc : d.SubtermClosed) {g
 reads the key up to a congruence that is the identity there. This is the direction soundness
 needs, and the one `cxTgt_not_indexCurrent` does *not* refute — its converse
 `FDatabase.IndexCurrent` is what that refutes, which is why this residue and
-`execM_viewLeaderRows` are separate holes. -/
+`execM_viewJoined` are separate holes. -/
 theorem mem_terms_of_indexOk {d : FDatabase} (hr : d.EqsRefl) (hidx : d.IndexOk)
     {r : Row} (hm : r ∈ d.rows) (hmg : d.sig.mergeOf r.fn ≠ none) :
     Term.app r.fn (r.args ++ r.out) ∈ d.terms := by

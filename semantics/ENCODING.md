@@ -21,8 +21,10 @@ on it (`UnionsInv`, `unionsInv_execM`), which closes `execM_unionsJoined` and su
 totality `Database.ViewsCover` is derived from. Of the two left, one is that induction's own
 open case (`unionsJoined_fire`: a source command that fires rules needs a target firing behind
 the source's, and one step below that the premise row must be current in the *index*, not merely
-an entry term) and one is the run-wide index argument itself (`execM_viewLeaderRows`: the
-rebuild's e-class rule, its column rules and path compression).
+an entry term) and one is the run-wide index argument itself (`execM_viewJoined`: the
+rebuild's e-class rule and its column rules — path compression dropped out when the clause was
+cut down to what its consumers spend, `Database.ViewLeaderRows.toViewJoined` being the check
+that the cut is a weakening and `chainD_not_viewLeader` that it is a strict one).
 
 **The completeness half is closed.** `Encoding/Complete.lean`'s `execM_soundTerms` — every term
 the run adds, justified against the source — is proved, and `encode_corresponds_complete` with
