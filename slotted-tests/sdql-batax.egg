@@ -30,6 +30,12 @@
 ;;;     0    21      1    44      2    62      3    90      4   132      5   187
 ;;;     6   255      7   338      8   430     10   922
 ;;;
+;;; The table stops at ten because that is as far as it was MEASURED, not because
+;;; anything fails there -- the machinery saturated after every step listed. Extending
+;;; it is just slow: the count grows about 1.4x per step, and a debug build asked for
+;;; fourteen steps was still running after four minutes, so it was cut off rather than
+;;; reported. `(run N)` below is the knob.
+;;;
 ;;; It used to stop saturating at six. The cause was an orientation bug, now fixed:
 ;;; `union` could leave a `RenamesToLeader` row naming the LARGER of its two values as
 ;;; the leader, and a backwards row let transitivity and single parent disagree forever

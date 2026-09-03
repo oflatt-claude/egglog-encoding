@@ -116,8 +116,12 @@ class Source:
 
     def __init__(self, path):
         self.path = path
-        # repo-relative, so a snapshot does not carry the checkout it was built in
-        self.relpath = path.resolve().relative_to(ROOT).as_posix()
+        # repo-relative, so a snapshot does not carry the checkout it was built in --
+        # falling back to the name for a one-off probe compiled from outside the tree
+        try:
+            self.relpath = path.resolve().relative_to(ROOT).as_posix()
+        except ValueError:
+            self.relpath = path.name
         self.spec = {}
         self.body = []
         self.includes = []

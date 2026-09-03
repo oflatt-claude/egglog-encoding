@@ -20,7 +20,8 @@
 ;;; binder rules below are generated from the same declaration these terms are.
 ;;;
 ;;; `beta` is left out: it rewrites to `?body[(var $x) := ?e]`, and the differential
-;;; oracle's spec language cannot say "substitute", so it could not be compared. The
+;;; rule compiler has no substitution, so there is no compiled rule to compare -- the
+;;; oracle itself handles `b[x := t]` fine. The
 ;;; paper's own benchmarks use the let-based rules instead (footnote 4).
 ;;;
 ;;; Each section is its own (push)/(pop). Two terms are in one slotted e-class when
