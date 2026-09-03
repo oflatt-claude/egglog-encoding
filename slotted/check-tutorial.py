@@ -24,15 +24,16 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 os.chdir(ROOT)
 sys.path.insert(0, str(ROOT / "slotted"))
 enc = __import__("slotted-encoder")
+gen = __import__("gen-node-rules")  # the generic, string-headed family lives there
 
 TUTORIAL = ROOT / "slotted-tests" / "slotted-user-rules.egg"
 
 # The tutorial's language IS the generic, string-headed encoding it includes, so every
 # rule here is one expressible with `App2`/`App3` and a head string.
-_OPS = {op: enc.string_headed(op, "App2") for op in ["eq", "-", "*", "+", "app", "get", "range"]}
-_OPS["lambda"] = enc.string_headed("lambda", "App2", ref="lam")
-_OPS["binop"] = enc.string_headed("binop", "App3")
-_OPS["let"] = enc.string_headed("let", "App3", ref="let")
+_OPS = {op: gen.string_headed(op, "App2") for op in ["eq", "-", "*", "+", "app", "get", "range"]}
+_OPS["lambda"] = gen.string_headed("lambda", "App2", ref="lam")
+_OPS["binop"] = gen.string_headed("binop", "App3")
+_OPS["let"] = gen.string_headed("let", "App3", ref="let")
 _OPS["sym"] = enc.Op("sym", "Sym", ["String"])
 _OPS["num"] = enc.Op("num", "Num", ["i64"])
 LANG = enc.TermLang(_OPS)

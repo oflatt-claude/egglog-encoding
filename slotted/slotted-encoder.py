@@ -53,8 +53,7 @@ conclusion.
 WHERE THINGS ARE, since the layers do not sit in four contiguous blocks:
 
     language specs   `Op`, `CHILD`/`BINDER`, `signature`, `read_language`,
-                     `read_language_form`, `language`, `string_headed`, `GENERIC`,
-                     `read_correspondence`
+                     `read_language_form`, `language`, `read_correspondence`
     machinery        `emit` drives it; one function per maintenance rule --
                      `class_slots`, `self_loop`, `alpha_finder`, `symmetry_finder`,
                      `migration`, `child_update`, `binder` -- plus `declare` and
@@ -233,29 +232,6 @@ def shape_of(col):
     return {CHILD: "child", BINDER: "binder"}.get(col, str(col))
 
 
-# The generic, string-headed encoding: what the differential harness and the
-# per-language files use. One constructor per arity with the operator in a payload
-# column, so any operator can be written without regenerating anything.
-GENERIC = {
-    "App2": ["String", CHILD, CHILD],
-    "App3": ["String", CHILD, CHILD, CHILD],
-    "App4": ["String", CHILD, CHILD, CHILD, CHILD],
-    "Num": ["i64"],
-    "Sym": ["String"],
-    "Scale": ["i64", CHILD],  # keeps the mixed payload/child case exercised
-}
-
-# There the operator is in the head, so a binder cannot be declared structurally and
-# has to name the string: (head, constructor).
-GENERIC_BINDERS = (("lambda", "App2"), ("let", "App3"))
-
-# Constructors whose rules `slotted-tests/slotted-egraph-encoding-11.egg` hand-writes, along
-# with any binder over them and the SHARED block below. They are left out of the
-# generated file, which includes that one, so each is declared exactly once.
-# `check-handwritten-encoding.py` compares the hand-written text against
-# `handwritten_region()` below.
-HANDWRITTEN = ("App2",)
-
 # The two constructors `slotted-tests/slotted-egraph-encoding-11.egg` declares and writes the
 # rules for itself, because both are constructor-independent: `Var` is normalised into
 # a renaming so one value stands for every variable, and `Null` is the nullary object.
@@ -266,7 +242,6 @@ CORE = {"Var": ["i64"], "Null": []}
 # The hand-written half, and the generated file that includes it. A language file
 # includes the generated one, so it gets both.
 MACHINERY = "slotted-tests/slotted-egraph-encoding-11.egg"
-GENERIC_FILE = "target/slotted/slotted-node-rules.egg"
 
 
 ###############################################################################
@@ -541,8 +516,9 @@ def emit(language, binders=(), provided=None, omit=()):
     one structurally and needs no entry.
 
     `provided` names constructors the machinery a language file includes already
-    declares -- `GENERIC` and `CORE`. Re-declaring one is a duplicate binding, so its
-    signature must match and then its rules are already there too.
+    declares -- `CORE`, and whatever family that file holds. Re-declaring one is a
+    duplicate binding, so its signature must match and then its rules are already there
+    too.
 
     `omit` names constructors written out by hand in the file this output includes,
     so emitting them would be a duplicate binding too. Binders over them are left
@@ -603,8 +579,8 @@ def emit(language, binders=(), provided=None, omit=()):
 
 
 # The constructor-independent half of the node machinery. Hand-written in
-# `slotted-tests/slotted-egraph-encoding-11.egg` along with the HANDWRITTEN family, and kept
-# here so `handwritten_region()` can state what that text has to say.
+# `slotted-tests/slotted-egraph-encoding-11.egg` along with a constructor or two, and kept
+# here so a generator can state what that text has to say.
 SHARED = """\
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; a class's slot set, held once
@@ -672,19 +648,6 @@ def in_slotted_ruleset(text):
             out.append("".join(buf) + body)
             buf, form, depth = [], [], 0
     return "".join(out) + "".join(buf)
-
-
-def handwritten_region():
-    """What `slotted-tests/slotted-egraph-encoding-11.egg` has to hold, rules only.
-
-    The SHARED block plus the HANDWRITTEN constructors and their binders: everything
-    this encoder knows how to emit but leaves to that file. Comments and blank lines
-    are part of the string; `check-handwritten-encoding.py` strips them before
-    comparing.
-    """
-    lang = {name: GENERIC[name] for name in HANDWRITTEN}
-    binders = tuple((head, name) for head, name in GENERIC_BINDERS if name in HANDWRITTEN)
-    return in_slotted_ruleset(SHARED + "\n" + "\n".join(emit(lang, binders)))
 
 
 ###############################################################################
@@ -795,20 +758,6 @@ class Op:
                 pi += 1
         assert ai == len(args), f"{self.name}: {len(args)} argument(s) for {ai} column(s)"
         return kids, pays
-
-
-def string_headed(head, ctor, ref=None):
-    """The `Op` for one operator of the generic, string-headed encoding.
-
-    There the operator is `App<n>`'s payload column rather than the constructor, so a
-    binder cannot be declared structurally: `GENERIC_BINDERS` pins it by head string,
-    and reading the same table here is what keeps a term language from disagreeing
-    with the rules the generic encoding emits.
-    """
-    sig = list(GENERIC[ctor])
-    if (head, ctor) in GENERIC_BINDERS:
-        sig[next(i for i, c in enumerate(sig) if c in SLOTTED)] = BINDER
-    return Op(head, ctor, sig, pays=[f'"{head}"'], ref=head if ref is None else ref)
 
 
 class TermLang:
