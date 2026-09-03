@@ -45,7 +45,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 enc = __import__("slotted-encoder")
-sc = __import__("slotted-compile")
+sc = __import__("slotted-egglog")
 
 
 OUT = pathlib.Path(os.environ.get("SDQL_OUT", "slotted-tests/generated/slotted-sdql-rules.egg"))
@@ -100,7 +100,7 @@ HEADER = """\
 
 # ---------------------------------------------------------------- the compiler
 #: The rules, in the slotted language. One source for both this file and
-#: `slotted-compile.py`, so the .egg tests and the differential harness cannot be
+#: `slotted-egglog.py`, so the .egg tests and the differential harness cannot be
 #: running different rules from each other.
 SOURCE = pathlib.Path("slotted-tests/sdql.egg")
 

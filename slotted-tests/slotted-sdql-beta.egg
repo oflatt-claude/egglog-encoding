@@ -12,7 +12,7 @@
 ;;; WRITTEN AT THE ENCODED LEVEL ON PURPOSE, unlike `sdql-rewrites.egg` and
 ;;; `sdql-batax.egg` beside it. What this file is about IS the frame plumbing -- two
 ;;; renamings meeting around a primitive -- so there is nothing here to say in a
-;;; language that hides renamings. `slotted-compile.py` deliberately cannot express it,
+;;; language that hides renamings. `slotted-egglog.py` deliberately cannot express it,
 ;;; and that is the right answer rather than a gap.
 
 (include "slotted-tests/generated/slotted-lang-sdql.egg")

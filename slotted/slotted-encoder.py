@@ -6,7 +6,7 @@ recipe: `slotted-tests/slotted-user-rules.egg` states it, section by section, an
 `slotted-user-rules.md` argues it. This module is that recipe as code, so there is
 one place for it to be right and one place to fix. The front-ends:
 
-    slotted-compile.py    a test written in the slotted language, compiled to run
+    slotted-egglog.py    a test written in the slotted language, compiled to run
     gen-node-rules.py     writes the machinery files
     gen-sdql-rules.py     the reference `sdql` rewrite rules
     xdiff/xdiff.py        the differential harness, toy language

@@ -2,7 +2,7 @@
 """Two ways into the encoder must produce the same rule.
 
 `gen-sdql-rules.py` compiles a rule from a Python table against a language SPEC file;
-`slotted-compile.py` compiles it from a slotted SOURCE that declares its own
+`slotted-egglog.py` compiles it from a slotted SOURCE that declares its own
 constructors. Both call `slotted-encoder.py`, so a rule that exists on both sides is a
 free cross-check on the two front-ends -- and on the claim that a slotted test is not
 a second, quietly diverging encoder.

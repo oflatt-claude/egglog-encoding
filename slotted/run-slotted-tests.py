@@ -23,7 +23,7 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SRC_DIR = ROOT / "slotted-tests"
 SNAPSHOTS = SRC_DIR / "snapshots"
-COMPILE = ROOT / "slotted" / "slotted-compile.py"
+COMPILE = ROOT / "slotted" / "slotted-egglog.py"
 
 
 #: The hand-written core. It includes nothing because everything else includes IT, so

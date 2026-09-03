@@ -2,7 +2,7 @@
 ;;;
 ;;; `slotted-egraphs/tests/array/mod.rs` and `tests/rise/rewrite.rs`, which share this
 ;;; language. Written at the slotted level, so a rule says what it rewrites and nothing
-;;; about renamings -- `slotted/slotted-compile.py` turns it into egglog,
+;;; about renamings -- `slotted/slotted-egglog.py` turns it into egglog,
 ;;; and `slotted/xdiff/xarray.py` compiles these same rules for the
 ;;; differential comparison against the reference. Both read THIS file.
 ;;;

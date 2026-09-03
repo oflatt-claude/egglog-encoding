@@ -41,9 +41,9 @@ stay distinct values. Writing `(= a b)` would test the wrong thing, so it is not
 offered.
 
 Usage:
-    ./slotted-compile.py SRC.egg              write the compiled program to stdout
-    ./slotted-compile.py SRC.egg -o OUT.egg   ... or to a file
-    ./slotted-compile.py SRC.egg --run        compile to a temp file and run egglog
+    ./slotted-egglog.py SRC.egg              write the compiled program to stdout
+    ./slotted-egglog.py SRC.egg -o OUT.egg   ... or to a file
+    ./slotted-egglog.py SRC.egg --run        compile to a temp file and run egglog
 """
 
 import argparse
@@ -201,7 +201,7 @@ def compile_source(src, own_only=False):
     forms this test wrote, which is the part no other snapshot covers.
     """
     out = [
-        f";;; COMPILED from {src.relpath} by slotted/slotted-compile.py.",
+        f";;; COMPILED from {src.relpath} by slotted/slotted-egglog.py.",
         ";;;",
         ";;; A SNAPSHOT: committed so a change in the compiler shows up as a diff, never",
         ";;; edited by hand, and rewritten by `check-slotted.py --update`. This is what",
@@ -390,7 +390,7 @@ def main():
     ap = argparse.ArgumentParser(
         description="Run a program written in the slotted language.",
         epilog=(
-            "Reads like egglog: `slotted-compile.py prog.egg` runs it, and --desugar asks "
+            "Reads like egglog: `slotted-egglog.py prog.egg` runs it, and --desugar asks "
             "for the egglog program it compiles to instead of running it."
         ),
     )

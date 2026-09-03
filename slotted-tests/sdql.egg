@@ -2,7 +2,7 @@
 ;;;
 ;;; `slotted-egraphs/benches/sdql.rs` column for column, and rule for rule: this is the
 ;;; suite the paper's evaluation runs. Written at the slotted level, so a rule says what
-;;; it rewrites and nothing about renamings -- `slotted/slotted-compile.py`
+;;; it rewrites and nothing about renamings -- `slotted/slotted-egglog.py`
 ;;; turns it into egglog, and `slotted/gen-sdql-rules.py` compiles these
 ;;; same rules into `slotted-tests/generated/slotted-sdql-rules.egg` for the .egg tests
 ;;; and the differential harness. Both read THIS file, so they cannot disagree.

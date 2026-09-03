@@ -48,7 +48,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from xdiff import EGGLOG, ROOT, XMULTI, parse_same_class, slotenc  # noqa: E402
 
-sc = __import__("slotted-compile")
+sc = __import__("slotted-egglog")
 
 RUN_TIMEOUT = int(os.environ.get("XARRAY_TIMEOUT", "120"))
 
@@ -328,7 +328,7 @@ def check_case(case, order_check=True, shift_check=True):
 # ------------------------------------------------------------------- the 8 rules
 #
 # Read from `slotted-tests/array.egg`, written in the slotted language, so the rules a
-# reader sees are the rules that run here. `slotted-compile.py` compiles the same file
+# reader sees are the rules that run here. `slotted-egglog.py` compiles the same file
 # for `run-slotted-tests.py`; neither restates a rule.
 #
 # The atoms come from `flatten`, which emits the pattern's outermost node first -- the

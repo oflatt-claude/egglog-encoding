@@ -1,4 +1,4 @@
-;;; COMPILED from slotted-tests/sdql-batax.egg by slotted/slotted-compile.py.
+;;; COMPILED from slotted-tests/sdql-batax.egg by slotted/slotted-egglog.py.
 ;;;
 ;;; Only the forms THIS file contributes. The machinery for its 19 constructors,
 ;;; and anything an included library brought, are snapshotted by the generators

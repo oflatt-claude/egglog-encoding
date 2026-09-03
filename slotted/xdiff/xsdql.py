@@ -121,7 +121,7 @@ assert SYM_PREFIX and LET_TAG != "let", "sdql.ref lost one of the two workaround
 
 enc, sexpr, shift = LANG.enc, LANG.sexpr, LANG.shift
 
-sc = __import__("slotted-compile")
+sc = __import__("slotted-egglog")
 
 
 def check_term(t):

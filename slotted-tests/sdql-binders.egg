@@ -1,7 +1,7 @@
 ;;; `Sum` binds TWO slots on one node.
 ;;;
 ;;; Written in the SLOTTED language and compiled by
-;;; `slotted/slotted-compile.py`, so nothing below mentions a renaming, an
+;;; `slotted/slotted-egglog.py`, so nothing below mentions a renaming, an
 ;;; edge or `(Var 0)`: those are the encoding, and the point of a test at this level is
 ;;; that it reads the way the paper does.
 ;;;
