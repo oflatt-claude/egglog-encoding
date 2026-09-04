@@ -225,6 +225,15 @@ CHECKS = [
         False,
         True,
     ),
+    (
+        # Both READERS, not the comparison: the mutation suite damages a graph after
+        # extraction, so a blind spot shared by the two sides is what it cannot see.
+        "iso-groups",
+        ("slotted/xdiff/isomorphism.py", "known-groups"),
+        ratio(r"(\d+)/(\d+) groups recovered", 2),
+        False,
+        True,
+    ),
     ("iso-curated", ("slotted/xdiff/isomorphism.py",), ratio(r"(\d+)/(\d+) isomorphic", 44), False, True),
     ("array", ("slotted/xdiff/xarray.py",), ratio(r"(\d+)/(\d+) cases agree", 14), False, True),
     (

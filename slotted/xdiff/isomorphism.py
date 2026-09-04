@@ -604,6 +604,11 @@ def verify(ga, gb, phi, sig):
         b = phi[a]
         if len(ga.slots[a]) != len(gb.slots[b]):
             return f"{a}: slot count"
+        # Checked rather than trusted: this is the proof step, and every claim it
+        # rests on should be its own. A non-injective map here would let two of one
+        # side's slots collapse onto one of the other's and still match nodes.
+        if sorted(sig[a]) != sorted(ga.slots[a]) or sorted(sig[a].values()) != sorted(gb.slots[b]):
+            return f"{a}: slot map is not a bijection"
         mapped = {frozenset((sig[a][x], sig[a][y]) for x, y in p) for p in ga.group[a]}
         if mapped != gb.group[b]:
             return f"{a}: symmetry group ({len(ga.group[a])} vs {len(gb.group[b])})"
@@ -816,10 +821,69 @@ def selftest():
     return 1 if bad else 0
 
 
+def known_groups():
+    """Do BOTH readers recover a group whose size is known by hand?
+
+    `checker-mutations.py` damages a graph AFTER it is extracted, so it shows the
+    comparison discriminates -- not that either side read the graph right. A blind spot
+    shared by the two readers is what it cannot see: if both lost a class's symmetries
+    the checker would compare two trivial groups and pass. The corpus does not cover
+    this well either. A 300-case fuzz run matches 2298 classes and 2314 group elements,
+    and the identity is in every group, so only SIXTEEN non-identity permutations are
+    ever compared.
+
+    So: cases whose group is known, asked of each reader separately.
+    """
+    v0, v1, v2 = ("var", 0), ("var", 1), ("var", 2)
+
+    def g(a, b):
+        return ("g", a, b)
+
+    cases = [
+        # f($0,$1) = f($1,$0) -- the group is {id, swap}
+        ("swap", 2, X.Case("swap", [("f", v0, v1), ("f", v1, v0)], [(("f", v0, v1), ("f", v1, v0))], [], None, [], rounds=0)),
+        # g(g($0,$1),$2) = g(g($1,$2),$0) -- a 3-cycle generates three elements
+        (
+            "3-cycle",
+            3,
+            X.Case(
+                "3cycle",
+                [g(g(v0, v1), v2), g(g(v1, v2), v0)],
+                [(g(g(v0, v1), v2), g(g(v1, v2), v0))],
+                [],
+                None,
+                [],
+                rounds=0,
+            ),
+        ),
+    ]
+    bad = 0
+    for name, want, case in cases:
+        ref, err = reference_graph(case)
+        if err:
+            print(f"  FAIL {name:9} reference: {err}")
+            bad += 1
+            continue
+        enc, err = encoding_graph(case)
+        if err:
+            print(f"  FAIL {name:9} encoding: {err}")
+            bad += 1
+            continue
+        rmax = max((len(v) for v in ref.group.values()), default=0)
+        emax = max((len(v) for v in enc.group.values()), default=0)
+        ok = rmax == want == emax
+        bad += not ok
+        print(f"  {'ok  ' if ok else 'FAIL'} {name:9} largest group: reference {rmax}, encoding {emax}, want {want}")
+    print(f"\n{len(cases) - bad}/{len(cases)} groups recovered by both readers")
+    return 1 if bad else 0
+
+
 def main():
     args = sys.argv[1:]
     if args and args[0] == "selftest":
         return selftest()
+    if args and args[0] == "known-groups":
+        return known_groups()
     if args and args[0] == "fuzz":
         n = int(args[1]) if len(args) > 1 else 100
         rng = random.Random(int(args[2]) if len(args) > 2 else 0)
