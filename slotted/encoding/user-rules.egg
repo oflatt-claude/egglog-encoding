@@ -77,15 +77,17 @@
 ;;;   (find-mapping-total avoid domain first... second...)
 ;;;                           = least injective m with m . second_i = first_i, made total on
 ;;;                             the keys of `domain`, MINTING outside `avoid`'s slots (M3)
-;;;   (find-mappings-total ...)  the same arguments, and EVERY naming rather than the
-;;;                             minting one: a domain key the constraints leave unnamed
-;;;                             may take a fresh slot, or one already in `avoid`.  The
-;;;                             minting solution is element 0
+;;;   (refine-namings all pattern group...)
+;;;                           = every way the match's slots may be MERGED, once the whole
+;;;                             match is fixed.  Read by key set: every slot in play, the
+;;;                             ones the pattern itself writes, and one group per atom
+;;;                             whose slots are pairwise distinct.  Element 0 is the
+;;;                             identity, i.e. no merging (M4)
 ;;;   (vec-get v i)           = element i of a vector, UNDEFINED past its end, which is
 ;;;                             what stops the `Idx` join without any rule knowing how
 ;;;                             long the vector is
-;;;   (Idx i)                 = an index to read a naming at; the core seeds enough of
-;;;                             them (M4)
+;;;   (Idx i)                 = an index to read one of those at; the core seeds enough
+;;;                             of them (M4)
 ;;;   (App2 f m1 c1 m2 c2)    = f(m1*c1, m2*c2),  mi : slots(ci) -> slots(node)
 ;;;   (App3 f m1 c1 m2 c2 m3 c3)  the same at arity 3; `let` is the one used here
 ;;;   (Num n), (Sym s)        payload leaves, depending on no slots
@@ -99,7 +101,10 @@
 ;;;   pN, qN, rN  atom N's own stored edges, one per child column
 ;;;   domN        identity on atom N's node's slots (the union of its edge images)
 ;;;   mpN         atom N's renaming, taking its node's slots into pattern slots
-;;;   altsN, ixN  every naming atom N's renaming could take, and the index read at
+;;;   alts, ix    every merging the match admits, and the index one is read at.  One per
+;;;               rule, not one per atom: the merging is chosen once, after every atom
+;;;   mrg         the merging chosen -- pattern slots to their representatives.  Every
+;;;               renaming below is read through it
 ;;;   imN         identity on the slots mpN named;  avoidN accumulates those up to atom N
 ;;;   mX          variable X's renaming into slots(pattern), as read off the node
 ;;;   csX         (ClassSlots X); `(compose mX csX)` is X's renaming narrowed to its own
@@ -196,15 +201,18 @@
 
 (rule ((= e (App2 "eq" p1 a q1 b))
        (= dom1 (map-union (map-image p1) (map-image q1)))
-       (= mp1 dom1)                            ; atom 1: the identity on its node's slots
-       (= avoid1 (map-image mp1))              ; and those slots ARE slots(pattern)
+       (= mp1 dom1)
+       (= avoid1 (map-image mp1))
        (= ma (compose mp1 p1))
        (= csa (ClassSlots a))
        (= mb (compose mp1 q1))
        (= csb (ClassSlots b))
-       (= cse (ClassSlots e)))
-      ((let rhs (App2 "eq" (compose mb csb) b (compose ma csa) a))
-       (Equated rhs (compose mp1 cse) e)))
+       (= cse (ClassSlots e))
+       (= alts (refine-namings avoid1 (map-empty) avoid1))
+       (Idx ix)
+       (= mrg (vec-get alts ix)))
+      ((let _rhs17 (App2 "eq" (compose mrg (compose mb csb)) b (compose mrg (compose ma csa)) a))
+       (Equated _rhs17 (compose mrg (compose mp1 cse)) e)))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -243,12 +251,13 @@
        (= avoid1 (map-image mp1))
        (= mx (compose mp1 p1))
        (= csx (ClassSlots x))
-       ;; Def. 6 for the second occurrence: some symmetry of `x` carries one edge to the
-       ;; other.  Determined, since both edges come off the matched row.
        (RenamesToLeader x symx x)
        (= (compose mp1 q1) (compose (compose mx csx) symx))
-       (= cse (ClassSlots e)))
-      ((Equated (Num 0) (compose mp1 cse) e)))
+       (= cse (ClassSlots e))
+       (= alts (refine-namings avoid1 (map-empty) avoid1))
+       (Idx ix)
+       (= mrg (vec-get alts ix)))
+      ((Equated (Num 0) (compose mrg (compose mp1 cse)) e)))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -310,28 +319,21 @@
        (= men (compose mp1 q1))
        (= csen (ClassSlots en))
        (= csrng (ClassSlots rng))
-       ;; atom 2 -- its root is FRESH, so the `range` child is the only constraint and
-       ;; `?idx`'s slots are named by nothing.  `find-mapping-total` mints there rather
-       ;; than dropping them, which an edge may not do.
        (= g (App2 "get" p2 rng q2 idx))
        (= dom2 (map-union (map-image p2) (map-image q2)))
        (RenamesToLeader rng symrng rng)
-       (= alts2 (find-mappings-total avoid1 dom2 (compose (compose mp1 csrng) symrng) p2))
-       (Idx ix2)
-       (= mp2 (vec-get alts2 ix2))
+       (= mp2 (find-mapping-total avoid1 dom2 (compose (compose mp1 csrng) symrng) p2))
        (= im2 (map-image mp2))
        (= avoid2 (map-union avoid1 im2))
        (= midx (compose mp2 q2))
        (= csidx (ClassSlots idx))
-       (= csg (ClassSlots g)))
-      ((let sub (App2 "-" (compose mst csst) st (map-empty) (Num 1)))
-        (let rhs
-             (App2 "+"
-                   (compose midx csidx)
-                   idx
-                   (map-union (map-image (compose mst csst)) (map-image (map-empty)))
-                   sub))
-        (Equated rhs (compose mp2 csg) g)))
+       (= csg (ClassSlots g))
+       (= alts (refine-namings avoid2 (map-empty) avoid1 im2))
+       (Idx ix)
+       (= mrg (vec-get alts ix)))
+      ((let _rhs30 (App2 "-" (compose mrg (compose mst csst)) st (map-empty) (Num 1)))
+       (let _rhs31 (App2 "+" (compose mrg (compose midx csidx)) idx (map-union (map-image (compose mrg (compose mst csst))) (map-image (map-empty))) _rhs30))
+       (Equated _rhs31 (compose mrg (compose mp2 csg)) g)))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -352,21 +354,35 @@
 ;;;
 ;;; The constraints do not always reach every slot, and what happens to the rest is the
 ;;; whole of M3 and this section.  `find-mapping-total` MINTS there, and a fresh name
-;;; differs from everything, so minting decides the slot is not any slot already in play
-;;; -- and nothing revisits it, so the match where it coincides with one is lost.  So the
-;;; rule asks for EVERY naming and reads one:
+;;; differs from everything, so minting decides the slot is not any slot already in play.
+;;; That is one reading of a choice.  The others -- where the slot IS one already in use
+;;; -- are matches too, and they build different e-nodes.
 ;;;
-;;;     (= altsN (find-mappings-total avoidN-1 domN <constraints>))
-;;;     (Idx ixN)
-;;;     (= mpN (vec-get altsN ixN))
+;;; So the naming is chosen ONCE, after every atom has been read:
 ;;;
-;;; `vec-get` is undefined past the end of the vector, so the `Idx` join stops there on
-;;; its own and no rule has to know how long it is.  Each atom draws its OWN index, so
-;;; the join takes the product across atoms -- and since an atom's chosen name joins the
-;;; avoid-set before the next atom is solved, a later atom can coincide with it.  That is
-;;; how a chain reaches every way the atoms' slots could agree without any rule revising
-;;; an earlier choice.  Element 0 is the minting solution, so a program reaching only
-;;; `(Idx 0)` answers exactly as one compiled before this did.
+;;;     (= alts (refine-namings avoidN patternslots dom1 ... domN))
+;;;     (Idx ix)
+;;;     (= mrg (vec-get alts ix))
+;;;
+;;; and from there on every renaming is read through `mrg` -- the side conditions and the
+;;; action both.  `vec-get` is undefined past the end of the vector, so the `Idx` join
+;;; stops there on its own and no rule has to know how long it is.  Element 0 is the
+;;; identity, so a program reaching only `(Idx 0)` answers exactly as one compiled before
+;;; this did.
+;;;
+;;; AFTER the atoms, not during them, and that placement is the point.  Two slots may be
+;;; merged only if neither reason below forbids it:
+;;;
+;;;   * a slot the PATTERN itself writes is never merged with another one.  The pattern
+;;;     asked for two names; merging them would let `:when (not-free $x ?b)` hold by
+;;;     renaming its two slots together, which is capture rather than alpha-equivalence.
+;;;     Deciding atom by atom cannot see this, because the pattern's slots are not all
+;;;     known until the last atom has been read.
+;;;   * the slots of one atom's node are never merged with each other, since a node's
+;;;     slots are distinct.  That is what keeps every renaming below injective.
+;;;
+;;; This is `final_refine` in the reference implementation, and the two bounds are its
+;;; `allows_directed_union` and `add_disjointness_constraint`.
 ;;;
 ;;; A BINDER ATOM KEEPS MINTING, which is why M5's `lam` and M7's two `let`s still read
 ;;; `find-mapping-total`.  A bound slot named onto a slot already in play captures it, and
@@ -389,34 +405,29 @@
 
 (rule ((= p (App2 "*" p1 ab q1 c))
        (= dom1 (map-union (map-image p1) (map-image q1)))
-       (= mp1 dom1)                            ; atom 1 -- nothing known, so the identity
-       (= avoid1 (map-image mp1))              ; slots already spoken for
+       (= mp1 dom1)
+       (= avoid1 (map-image mp1))
        (= mab (compose mp1 p1))
        (= csab (ClassSlots ab))
        (= mc (compose mp1 q1))
        (= csc (ClassSlots c))
        (= csp (ClassSlots p))
-       ;; atom 2 -- its root `?ab` is the only constraint there is, and that one G-join is
-       ;; also the Def. 6 check for `?ab`'s second occurrence
        (= ab (App2 "*" p2 a q2 b))
        (= dom2 (map-union (map-image p2) (map-image q2)))
        (RenamesToLeader ab symab ab)
-       (= alts2 (find-mappings-total avoid1 dom2
-                                  (compose (compose mab csab) symab)   ; first
-                                  (map-domain (compose mab csab))))
-       (Idx ix2)
-       (= mp2 (vec-get alts2 ix2))    ; second: id on its dom
+       (= mp2 (find-mapping-total avoid1 dom2 (compose (compose mab csab) symab) (map-domain (compose mab csab))))
        (= im2 (map-image mp2))
        (= avoid2 (map-union avoid1 im2))
        (= ma (compose mp2 p2))
        (= csa (ClassSlots a))
        (= mb (compose mp2 q2))
-       (= csb (ClassSlots b)))
-      ((let inner (App2 "*" (compose mb csb) b (compose mc csc) c))
-       (let outer (App2 "*" (compose ma csa) a
-                            (map-union (map-image (compose mb csb))
-                                       (map-image (compose mc csc))) inner))
-       (Equated outer (compose mp1 csp) p)))
+       (= csb (ClassSlots b))
+       (= alts (refine-namings avoid2 (map-empty) avoid1 im2))
+       (Idx ix)
+       (= mrg (vec-get alts ix)))
+      ((let _rhs31 (App2 "*" (compose mrg (compose mb csb)) b (compose mrg (compose mc csc)) c))
+       (let _rhs32 (App2 "*" (compose mrg (compose ma csa)) a (map-union (map-image (compose mrg (compose mb csb))) (map-image (compose mrg (compose mc csc)))) _rhs31))
+       (Equated _rhs32 (compose mrg (compose mp1 csp)) p)))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -472,14 +483,10 @@
        (= ml (compose mp1 q1))
        (= csl (ClassSlots l))
        (= csp (ClassSlots p))
-       ;; atom 2 -- the binder.  Its constraints reach only its class, and a binder's
-       ;; class does not carry the bound slot, so `mp2` MINTS it: that is `sx`.
        (= l (App2 "lambda" p2 (Var 0) q2 fgx))
        (= dom2 (map-union (map-image p2) (map-image q2)))
        (RenamesToLeader l syml l)
-       (= mp2 (find-mapping-total avoid1 dom2
-                                  (compose (compose ml csl) syml)
-                                  (map-domain (compose ml csl))))
+       (= mp2 (find-mapping-total avoid1 dom2 (compose (compose ml csl) syml) (map-domain (compose ml csl))))
        (= im2 (map-image mp2))
        (= avoid2 (map-union avoid1 im2))
        (= sx (map-get (compose mp2 p2) 0))
@@ -488,102 +495,27 @@
        (= fgx (App2 "app" p3 f q3 gx))
        (= dom3 (map-union (map-image p3) (map-image q3)))
        (RenamesToLeader fgx symfgx fgx)
-       (= alts3 (find-mappings-total avoid2 dom3
-                                  (compose (compose mfgx csfgx) symfgx)
-                                  (map-domain (compose mfgx csfgx))))
-       (Idx ix3)
-       (= mp3 (vec-get alts3 ix3))
+       (= mp3 (find-mapping-total avoid2 dom3 (compose (compose mfgx csfgx) symfgx) (map-domain (compose mfgx csfgx))))
        (= im3 (map-image mp3))
        (= avoid3 (map-union avoid2 im3))
        (= mf (compose mp3 p3))
        (= csf (ClassSlots f))
        (= mgx (compose mp3 q3))
        (= csgx (ClassSlots gx))
-       ;; the right-hand side's own binder `$in`, which no atom mentions: the second
-       ;; mint, and the one that needs everything accumulated so far
-       (= fmin (find-mapping-total avoid3 (map-of 0 0) (map-empty) (map-empty)))
+       (= alts (refine-namings avoid3 (map-of sx sx) avoid1 im2 im3))
+       (Idx ix)
+       (= mrg (vec-get alts ix))
+       (= fmin (find-mapping-total (map-image mrg) (map-of 0 0) (map-empty) (map-empty)))
        (= sin (map-get fmin 0))
-       (= avoid4 (map-union avoid3 (map-image fmin)))
-       (map-not-contains (map-image (compose mf csf)) sx))
-      ((let mapf (App2 "app" (map-empty) (Sym "map") (compose mf csf) f))
-        (let lamgx (App2 "lambda" (map-insert (map-empty) 0 sx) (Var 0) (compose mgx csgx) gx))
-        (let mapgx
-             (App2 "app"
-                   (map-empty)
-                   (Sym "map")
-                   (map-remove
-                               (map-union
-                                          (map-image (map-insert (map-empty) 0 sx))
-                                          (map-image (compose mgx csgx)))
-                               sx)
-                   lamgx))
-        (let inner
-             (App2 "app"
-                   (map-union
-                              (map-image (map-empty))
-                              (map-image
-                                         (map-remove
-                                                     (map-union
-                                                                (map-image
-                                                                           (map-insert
-                                                                             (map-empty)
-                                                                             0
-                                                                             sx))
-                                                                (map-image (compose mgx csgx)))
-                                                     sx)))
-                   mapgx
-                   (map-insert (map-empty) 0 sin)
-                   (Var 0)))
-        (let outer
-             (App2 "app"
-                   (map-union (map-image (map-empty)) (map-image (compose mf csf)))
-                   mapf
-                   (map-union
-                              (map-image
-                                         (map-union
-                                                    (map-image (map-empty))
-                                                    (map-image
-                                                               (map-remove
-                                                                 (map-union
-                                                                            (map-image
-                                                                              (map-insert
-                                                                                (map-empty)
-                                                                                0
-                                                                                sx))
-                                                                            (map-image
-                                                                                       (compose
-                                                                                         mgx
-                                                                                         csgx)))
-                                                                 sx))))
-                              (map-image (map-insert (map-empty) 0 sin)))
-                   inner))
-        (let rhs
-             (App2 "lambda"
-                   (map-insert (map-empty) 0 sin)
-                   (Var 0)
-                   (map-union
-                     (map-image
-                       (map-union (map-image (map-empty)) (map-image (compose mf csf))))
-                     (map-image
-                                (map-union
-                                           (map-image
-                                                      (map-union
-                                                                 (map-image (map-empty))
-                                                                 (map-image
-                                                                   (map-remove
-                                                                               (map-union
-                                                                                 (map-image
-                                                                                   (map-insert
-                                                                                     (map-empty)
-                                                                                     0
-                                                                                     sx))
-                                                                                 (map-image
-                                                                                   (compose mgx
-                                                                                     csgx)))
-                                                                               sx))))
-                                           (map-image (map-insert (map-empty) 0 sin)))))
-                   outer))
-        (Equated rhs (compose mp1 csp) p)))
+       (= av1 (map-union (map-image mrg) (map-image fmin)))
+       (map-not-contains (map-image (compose mrg (compose mf csf))) (map-get mrg sx)))
+      ((let _rhs43 (App2 "app" (map-empty) (Sym "map") (compose mrg (compose mf csf)) f))
+       (let _rhs44 (App2 "lambda" (map-insert (map-empty) 0 (map-get mrg sx)) (Var 0) (compose mrg (compose mgx csgx)) gx))
+       (let _rhs45 (App2 "app" (map-empty) (Sym "map") (map-remove (map-union (map-image (map-insert (map-empty) 0 (map-get mrg sx))) (map-image (compose mrg (compose mgx csgx)))) (map-get mrg sx)) _rhs44))
+       (let _rhs46 (App2 "app" (map-union (map-image (map-empty)) (map-image (map-remove (map-union (map-image (map-insert (map-empty) 0 (map-get mrg sx))) (map-image (compose mrg (compose mgx csgx)))) (map-get mrg sx)))) _rhs45 (map-insert (map-empty) 0 sin) (Var 0)))
+       (let _rhs47 (App2 "app" (map-union (map-image (map-empty)) (map-image (compose mrg (compose mf csf)))) _rhs43 (map-union (map-image (map-union (map-image (map-empty)) (map-image (map-remove (map-union (map-image (map-insert (map-empty) 0 (map-get mrg sx))) (map-image (compose mrg (compose mgx csgx)))) (map-get mrg sx))))) (map-image (map-insert (map-empty) 0 sin))) _rhs46))
+       (let _rhs48 (App2 "lambda" (map-insert (map-empty) 0 sin) (Var 0) (map-union (map-image (map-union (map-image (map-empty)) (map-image (compose mrg (compose mf csf))))) (map-image (map-union (map-image (map-union (map-image (map-empty)) (map-image (map-remove (map-union (map-image (map-insert (map-empty) 0 (map-get mrg sx))) (map-image (compose mrg (compose mgx csgx)))) (map-get mrg sx))))) (map-image (map-insert (map-empty) 0 sin))))) _rhs47))
+       (Equated _rhs48 (compose mrg (compose mp1 csp)) p)))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -631,23 +563,19 @@
        (= mf (compose mp1 p1))
        (= csf (ClassSlots f))
        (= csb (ClassSlots b))
-       ;; atom 2 -- root FRESH, so everything atom 1 fixed constrains `mp2` at once: the
-       ;; shared child `b` AND the slot literal `$x` pinned to `sx`, in ONE call, with
-       ;; `symb` free so the join enumerates G(b).
        (= e (App2 "lambda" p2 (Var 0) q2 b))
        (= dom2 (map-union (map-image p2) (map-image q2)))
        (RenamesToLeader b symb b)
-       (= mp2 (find-mapping-total avoid1 dom2
-                                  (compose (compose mp1 csb) symb)
-                                  (map-insert (map-empty) 0 sx)
-                                  q2
-                                  p2))
+       (= mp2 (find-mapping-total avoid1 dom2 (compose (compose mp1 csb) symb) (map-insert (map-empty) 0 sx) q2 p2))
        (= im2 (map-image mp2))
        (= avoid2 (map-union avoid1 im2))
        (= sx (map-get (compose mp2 p2) 0))
        (= cse (ClassSlots e))
-       (map-not-contains (map-image (compose mf csf)) sx))
-      ((Equated e (compose (inverse (compose mp2 cse)) (compose mf csf)) f)))
+       (= alts (refine-namings avoid2 (map-of sx sx) avoid1 im2))
+       (Idx ix)
+       (= mrg (vec-get alts ix))
+       (map-not-contains (map-image (compose mrg (compose mf csf))) (map-get mrg sx)))
+      ((Equated e (compose (inverse (compose mrg (compose mp2 cse))) (compose mrg (compose mf csf))) f)))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -703,9 +631,7 @@
        (= la (App3 "let" p2 (Var 0) q2 e2 r2 e1))
        (= dom2 (map-union (map-image p2) (map-union (map-image q2) (map-image r2))))
        (RenamesToLeader la symla la)
-       (= mp2 (find-mapping-total avoid1 dom2
-                                  (compose (compose mla csla) symla)
-                                  (map-domain (compose mla csla))))
+       (= mp2 (find-mapping-total avoid1 dom2 (compose (compose mla csla) symla) (map-domain (compose mla csla))))
        (= im2 (map-image mp2))
        (= avoid2 (map-union avoid1 im2))
        (= sx (map-get (compose mp2 p2) 0))
@@ -713,39 +639,22 @@
        (= cse2 (ClassSlots e2))
        (= me1 (compose mp2 r2))
        (= cse1 (ClassSlots e1))
-       ;; atom 3 -- where the cases meet.  THREE pairs reaching TWO earlier atoms: its
-       ;; own root (the chain), the child `?e1` (a join), and the literal `$x` pinned at
-       ;; atom 2.  Two groups, `symlb` and `syme1`, are enumerated into the one call.
        (= lb (App3 "let" p3 (Var 0) q3 e3 r3 e1))
        (= dom3 (map-union (map-image p3) (map-union (map-image q3) (map-image r3))))
        (RenamesToLeader lb symlb lb)
        (RenamesToLeader e1 syme1 e1)
-       (= mp3 (find-mapping-total avoid2 dom3
-                                  (compose (compose mlb cslb) symlb)
-                                  (compose (compose me1 cse1) syme1)
-                                  (map-insert (map-empty) 0 sx)
-                                  (map-domain (compose mlb cslb))
-                                  r3
-                                  p3))
+       (= mp3 (find-mapping-total avoid2 dom3 (compose (compose mlb cslb) symlb) (compose (compose me1 cse1) syme1) (map-insert (map-empty) 0 sx) (map-domain (compose mlb cslb)) r3 p3))
        (= im3 (map-image mp3))
        (= avoid3 (map-union avoid2 im3))
        (= sx (map-get (compose mp3 p3) 0))
        (= me3 (compose mp3 q3))
-       (= cse3 (ClassSlots e3)))
-      ((let bin (App3 "binop" (compose mf csf) f (compose me2 cse2) e2 (compose me3 cse3) e3))
-        (let rhs
-             (App3 "let"
-                   (map-insert (map-empty) 0 sx)
-                   (Var 0)
-                   (map-union
-                              (map-image (compose mf csf))
-                              (map-union
-                                         (map-image (compose me2 cse2))
-                                         (map-image (compose me3 cse3))))
-                   bin
-                   (compose me1 cse1)
-                   e1))
-        (Equated rhs (compose mp1 csp) p)))
+       (= cse3 (ClassSlots e3))
+       (= alts (refine-namings avoid3 (map-of sx sx) avoid1 im2 im3))
+       (Idx ix)
+       (= mrg (vec-get alts ix)))
+      ((let _rhs50 (App3 "binop" (compose mrg (compose mf csf)) f (compose mrg (compose me2 cse2)) e2 (compose mrg (compose me3 cse3)) e3))
+       (let _rhs51 (App3 "let" (map-insert (map-empty) 0 (map-get mrg sx)) (Var 0) (map-union (map-image (compose mrg (compose mf csf))) (map-union (map-image (compose mrg (compose me2 cse2))) (map-image (compose mrg (compose me3 cse3))))) _rhs50 (compose mrg (compose me1 cse1)) e1))
+       (Equated _rhs51 (compose mrg (compose mp1 csp)) p)))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -792,13 +701,15 @@
        (= dom1 (map-union (map-image p1) (map-union (map-image q1) (map-image r1))))
        (= mp1 dom1)
        (= avoid1 (map-image mp1))
-       (= sx (map-get (compose mp1 p1) 0))     ; the bound slot, in pattern slots
-       (= sx (map-get (compose mp1 q1) 0))     ; the same `sx`: an EQUALITY, so the body
-                                               ; must be the bound variable
+       (= sx (map-get (compose mp1 p1) 0))
+       (= sx (map-get (compose mp1 q1) 0))
        (= me (compose mp1 r1))
        (= cse (ClassSlots e))
-       (= csp (ClassSlots p)))
-      ((Equated p (compose (inverse (compose mp1 csp)) (compose me cse)) e)))
+       (= csp (ClassSlots p))
+       (= alts (refine-namings avoid1 (map-of sx sx) avoid1))
+       (Idx ix)
+       (= mrg (vec-get alts ix)))
+      ((Equated p (compose (inverse (compose mrg (compose mp1 csp))) (compose mrg (compose me cse))) e)))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -834,32 +745,24 @@
        (= dom1 (map-union (map-image p1) (map-image q1)))
        (= mp1 dom1)
        (= avoid1 (map-image mp1))
-       (= sx (map-get (compose mp1 p1) 0))     ; the bound slot, in pattern slots
+       (= sx (map-get (compose mp1 p1) 0))
        (= mb (compose mp1 q1))
        (= csb (ClassSlots b))
        (= cse (ClassSlots e))
-       ;; atom 2 -- constrained by its root `?b` AND by the slot literal `$x`, which atom 1
-       ;; pinned to `sx`.  The pinning has to be one of `find-mapping-total`'s constraints --
-       ;; `mp2 . q2 = {0 -> sx}` -- and not a test on its result: a call that does not carry
-       ;; it is free to mint a fresh name for that slot, and `mp2` is then a map no later
-       ;; equality can repair.  That is the `slot-late` mutant.
        (= b (App2 "app" p2 f q2 (Var 0)))
        (= dom2 (map-union (map-image p2) (map-image q2)))
        (RenamesToLeader b symb b)
-       (= alts2 (find-mappings-total avoid1 dom2
-                                  (compose (compose mb csb) symb)
-                                  (map-insert (map-empty) 0 sx)
-                                  (map-domain (compose mb csb))
-                                  q2))
-       (Idx ix2)
-       (= mp2 (vec-get alts2 ix2))
+       (= mp2 (find-mapping-total avoid1 dom2 (compose (compose mb csb) symb) (map-insert (map-empty) 0 sx) (map-domain (compose mb csb)) q2))
        (= im2 (map-image mp2))
        (= avoid2 (map-union avoid1 im2))
-       (= sx (map-get (compose mp2 q2) 0))     ; the literal's second use: a constraint
+       (= sx (map-get (compose mp2 q2) 0))
        (= mf (compose mp2 p2))
        (= csf (ClassSlots f))
-       (map-not-contains (map-image (compose mf csf)) sx))   ; $x not free in ?f
-      ((Equated e (compose (inverse (compose mp1 cse)) (compose mf csf)) f)))
+       (= alts (refine-namings avoid2 (map-of sx sx) avoid1 im2))
+       (Idx ix)
+       (= mrg (vec-get alts ix))
+       (map-not-contains (map-image (compose mrg (compose mf csf))) (map-get mrg sx)))
+      ((Equated e (compose (inverse (compose mrg (compose mp1 cse))) (compose mrg (compose mf csf))) f)))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -901,14 +804,17 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (rule ((= e (App2 "+" p1 x q1 zero))
-       (RenamesToLeader (Num 0) mzero zero)    ; the literal, through its class
+       (RenamesToLeader (Num 0) mzero zero)
        (= dom1 (map-union (map-image p1) (map-image q1)))
        (= mp1 dom1)
        (= avoid1 (map-image mp1))
        (= mx (compose mp1 p1))
        (= csx (ClassSlots x))
-       (= cse (ClassSlots e)))
-      ((Equated e (compose (inverse (compose mp1 cse)) (compose mx csx)) x)))
+       (= cse (ClassSlots e))
+       (= alts (refine-namings avoid1 (map-empty) avoid1))
+       (Idx ix)
+       (= mrg (vec-get alts ix)))
+      ((Equated e (compose (inverse (compose mrg (compose mp1 cse))) (compose mrg (compose mx csx))) x)))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -967,36 +873,21 @@
        (= me (compose mp1 r1))
        (= cse (ClassSlots e))
        (= csp (ClassSlots p))
-       ;; atom 2 -- the chain again
        (= ab (App2 "app" p2 a q2 b))
        (= dom2 (map-union (map-image p2) (map-image q2)))
        (RenamesToLeader ab symab ab)
-       (= alts2 (find-mappings-total avoid1 dom2 (compose (compose mab csab) symab)
-                                  (map-domain (compose mab csab))))
-       (Idx ix2)
-       (= mp2 (vec-get alts2 ix2))
+       (= mp2 (find-mapping-total avoid1 dom2 (compose (compose mab csab) symab) (map-domain (compose mab csab))))
        (= im2 (map-image mp2))
        (= avoid2 (map-union avoid1 im2))
        (= ma (compose mp2 p2))
        (= csa (ClassSlots a))
        (= mb (compose mp2 q2))
        (= csb (ClassSlots b))
-       ;; the side condition: `$x` free in `?a` or in `?b`.  A disjunction cannot be a fact,
-       ;; so it is a value and `guard` reads it.
-       (guard (or (bool-map-contains (map-image (compose ma csa)) sx)
-                  (bool-map-contains (map-image (compose mb csb)) sx))))
-      ;; innermost first: the two `let`s, then the `app` over them
-      ((let leta (App3 "let" (map-insert (map-empty) 0 sx) (Var 0)
-                             (compose ma csa) a (compose me cse) e))
-       (let letb (App3 "let" (map-insert (map-empty) 0 sx) (Var 0)
-                             (compose mb csb) b (compose me cse) e))
-       (let rhs (App2 "app"
-                      (map-remove (map-union (map-image (map-insert (map-empty) 0 sx))
-                                             (map-union (map-image (compose ma csa))
-                                                        (map-image (compose me cse)))) sx)
-                      leta
-                      (map-remove (map-union (map-image (map-insert (map-empty) 0 sx))
-                                             (map-union (map-image (compose mb csb))
-                                                        (map-image (compose me cse)))) sx)
-                      letb))
-       (Equated rhs (compose mp1 csp) p)))
+       (= alts (refine-namings avoid2 (map-of sx sx) avoid1 im2))
+       (Idx ix)
+       (= mrg (vec-get alts ix))
+       (guard (or (bool-map-contains (map-image (compose mrg (compose ma csa))) (map-get mrg sx)) (bool-map-contains (map-image (compose mrg (compose mb csb))) (map-get mrg sx)))))
+      ((let _rhs32 (App3 "let" (map-insert (map-empty) 0 (map-get mrg sx)) (Var 0) (compose mrg (compose ma csa)) a (compose mrg (compose me cse)) e))
+       (let _rhs33 (App3 "let" (map-insert (map-empty) 0 (map-get mrg sx)) (Var 0) (compose mrg (compose mb csb)) b (compose mrg (compose me cse)) e))
+       (let _rhs34 (App2 "app" (map-remove (map-union (map-image (map-insert (map-empty) 0 (map-get mrg sx))) (map-union (map-image (compose mrg (compose ma csa))) (map-image (compose mrg (compose me cse))))) (map-get mrg sx)) _rhs32 (map-remove (map-union (map-image (map-insert (map-empty) 0 (map-get mrg sx))) (map-union (map-image (compose mrg (compose mb csb))) (map-image (compose mrg (compose me cse))))) (map-get mrg sx)) _rhs33))
+       (Equated _rhs34 (compose mrg (compose mp1 csp)) p)))

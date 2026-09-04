@@ -36,7 +36,7 @@
 (push)
 (let a (Let (Num 0) $5 $5))
 (run 2)
-(check (same a (Num 0)))
+(check (renaming-= a (Num 0)))
 (pop)
 
 
@@ -50,9 +50,9 @@
 (push)
 (let b (Let $7 $5 $5))
 (run 2)
-(check (same b $7))
+(check (renaming-= b $7))
 ;; and not the answer a dropped renaming would give
-(check (not-same b $5))
+(check (renaming-!= b $5))
 (pop)
 
 
@@ -67,7 +67,7 @@
 (push)
 (let c (Let (Num 0) $5 $9))
 (run 2)
-(check (same c $9))
+(check (renaming-= c $9))
 (pop)
 
 
@@ -80,5 +80,5 @@
 (let d (Let (Num 0) $5 (Add $5 $9)))
 (let want (Add (Num 0) $9))
 (run 2)
-(check (same d want))
+(check (renaming-= d want))
 (pop)

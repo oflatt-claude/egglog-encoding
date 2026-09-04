@@ -31,7 +31,10 @@ EXPECTED = {
     # 2 rather than 10: a rule now tries every naming an atom's renaming could take,
     # so solving one from its root alone loses far fewer matches -- most of the corpus
     # recovers on another index. It still discriminates, so it stays.
-    "root-only": 2,  # an atom's renaming solved from its root alone
+    # 2 before the end-of-rule refinement. With minting single-valued again, solving
+    # an atom's renaming from its root alone genuinely under-constrains, and the
+    # refinement no longer papers over it -- so the mutant is MORE visible, not less.
+    "root-only": 11,  # an atom's renaming solved from its root alone
     "union-id": 2,  # the action unions classes instead of invocations
     "slot-late": 1,  # a slot literal checked after the renaming, not with it
 }

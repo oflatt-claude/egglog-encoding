@@ -25,7 +25,7 @@
 (let s (Sum r $5 $6 (Sing $5 $6)))
 (run 2)
 
-(check (same s r))
+(check (renaming-= s r))
 
 (pop)
 
@@ -38,6 +38,6 @@
 (let swapped (Sum r $5 $6 (Sing $6 $5)))
 (run 2)
 
-(check (not-same swapped r))
+(check (renaming-!= swapped r))
 
 (pop)

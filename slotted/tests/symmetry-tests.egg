@@ -2,9 +2,9 @@
 ;;;
 ;;; A class's symmetry group is the content slotted e-graphs add over ordinary ones,
 ;;; and Def. 6 is what it buys: two invocations of a class AGREE when the renaming
-;;; between them lies in that group. So `same` here is rarely bookkeeping -- in most
+;;; between them lies in that group. So `renaming-=` here is rarely bookkeeping -- in most
 ;;; sections it holds only because a union or a rule put the right renaming in the
-;;; group, and the `not-same` beside it is the renaming that stayed out.
+;;; group, and the `renaming-!=` beside it is the renaming that stayed out.
 ;;;
 ;;; Standalone: run it as it stands.
 ;;;
@@ -35,13 +35,13 @@
 
 (run 0)
 
-(check (same a a2))
-(check (not-same a b))
-(check (same-class a b))
+(check (renaming-= a a2))
+(check (renaming-!= a b))
+(check (eclass-= a b))
 
-(check (same $3 $3))
-(check (not-same $3 $4))
-(check (same-class $3 $4))
+(check (renaming-= $3 $3))
+(check (renaming-!= $3 $4))
+(check (eclass-= $3 $4))
 
 (pop)
 
@@ -62,8 +62,8 @@
 
 (run 10)
 
-(check (same a b))
-(check (not-same a c))
+(check (renaming-= a b))
+(check (renaming-!= a c))
 
 (pop)
 
@@ -85,8 +85,8 @@
 
 (run 0)
 
-(check (same a0 a2))
-(check (not-same a0 a3))
+(check (renaming-= a0 a2))
+(check (renaming-!= a0 a3))
 
 (pop)
 
@@ -108,8 +108,8 @@
 
 (run 0)
 
-(check (same f43 h34))
-(check (not-same f43 h43))
+(check (renaming-= f43 h34))
+(check (renaming-!= f43 h43))
 
 (pop)
 
@@ -135,10 +135,10 @@
 
 (run 0)
 
-(check (same f12 f21))
-(check (same g12 g21))
-(check (same p1 p2))
-(check (not-same f12 f13))
+(check (renaming-= f12 f21))
+(check (renaming-= g12 g21))
+(check (renaming-= p1 p2))
+(check (renaming-!= f12 f13))
 
 (pop)
 
@@ -156,8 +156,8 @@
 
 (run 0)
 
-(check (not-same a b))
-(check (not-same-class a b))
+(check (renaming-!= a b))
+(check (eclass-!= a b))
 
 (pop)
 
@@ -182,8 +182,8 @@
 
 (run 10)
 
-(check (same t a01))
-(check (not-same s a01))
+(check (renaming-= t a01))
+(check (renaming-!= s a01))
 
 (pop)
 
@@ -205,8 +205,8 @@
 
 (run 10)
 
-(check (same u a01))
-(check (not-same t a01))
+(check (renaming-= u a01))
+(check (renaming-!= t a01))
 
 (pop)
 
@@ -229,8 +229,8 @@
 
 (run 10)
 
-(check (same e a01))
-(check (not-same s a01))
+(check (renaming-= e a01))
+(check (renaming-!= s a01))
 
 (pop)
 
@@ -253,8 +253,8 @@
 
 (run 10)
 
-(check (same a b))
-(check (same c d))
-(check (not-same a e))
+(check (renaming-= a b))
+(check (renaming-= c d))
+(check (renaming-!= a e))
 
 (pop)

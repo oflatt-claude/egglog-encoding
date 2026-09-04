@@ -7,7 +7,8 @@ Companion to these runnable files:
 | `slotted/encoding/egraph-encoding-11.egg` | the machinery: union, congruence, redundancy, symmetry |
 | `slotted/tests/user-rules.egg` | the tutorial: one shape of user rule per section — M1–M11 — each stated as prose plus the single rule a compiler emits, and nothing else. All eleven are a real rewrite, from `sdql_rules()` or the paper's §4.1 array language, and each is exactly what `slotted-encoder.py` emits for it: `slotted/check-tutorial.py` compares every one against the encoder's output and allows only a renaming of the variables. M6 and M9 are the same rule (`eta`) at two atom orders, since the lead is a compile-time choice. The shapes no rewrite produces on demand — a multi-rooted left-hand side, two mints in one match, a child wider than its class — are hand-built e-graphs in the fixture block of `slotted/tests/user-rules-tests.egg`, whose rules are still the encoder's output |
 | `slotted/tests/user-rules-tests.egg` | the cases for it: it includes the tutorial, then adds the terms, schedules, assertions and counter-examples |
-| `slotted/slotted-egglog.py` | compiles a test written in the SLOTTED language — its own `(constructor ... :binder ...)` declarations, then terms, `rewrite`s and `(check (same a b))` — into a self-contained egglog program: the hand-written core, the machinery for exactly the constructors declared, and the compiled body. It includes no generated file, so nothing sits between a test and running it. `same` rather than `=` because slotted equality is not egglog equality: `(RenamesToLeader f m l)` is `f = m*l`, and two terms are equal when ONE renaming reaches both from the leader -- Def. 6, two invocations agree when the renaming between them is a symmetry of the class. Landing in the same class by *some* renaming is weaker and is spelled `same-class`; the pair that separates them is two alpha-variants whose free slot is renamed, one class but not equal |
+| `slotted/LANGUAGE.md` | the slotted language as a reference: every form it adds to egglog and why, including the two kinds of equality and the example that separates them |
+| `slotted/slotted-egglog.py` | compiles a test written in the SLOTTED language — its own `(constructor ... :binder ...)` declarations, then terms, `rewrite`s and `(check (renaming-= a b))` — into a self-contained egglog program: the hand-written core, the machinery for exactly the constructors declared, and the compiled body. It includes no generated file, so nothing sits between a test and running it. `renaming-=` rather than `=` because slotted equality is not egglog equality: `(RenamesToLeader f m l)` is `f = m*l`, and two terms are equal when ONE renaming reaches both from the leader -- Def. 6, two invocations agree when the renaming between them is a symmetry of the class. Landing in the same class by *some* renaming is weaker and is spelled `eclass-=`; the pair that separates them is two alpha-variants whose free slot is renamed, one class but not equal |
 | `slotted/slotted-encoder.py` | the recipe as code: the machinery emitter, the term encoding and the rule compiler, which every generator below goes through |
 | `slotted/xdiff/xdiff.py` | differential tests against the reference implementation |
 | `slotted/tests/sdql.egg` | the paper's `sdql` language and all 43 of its rewrite rules, in the SLOTTED language. `gen-sdql-rules.py` compiles them for the .egg tests and the differential harness, and `slotted-egglog.py` compiles the same file to run it; neither restates a rule |
@@ -297,11 +298,24 @@ unnamed slot to drop.
 
 A slot the constraints do not reach is MINTED, and that is not the end of the story:
 a fresh name differs from everything, so minting decides the slot is not any slot
-already in play, and nothing revisits it — so the match where it coincides with one is
-lost. The compiler therefore asks `find-mappings-total` for every naming and reads one
-at an index, which is [`the per-atom step`](#m4) below; minting is element 0, so a
-program reaching only index 0 answers as one compiled before this did. A BINDER atom
-still mints, because a bound slot named onto a slot already in play captures it.
+already in play. That is one reading of a choice; the others, where the slot IS one
+already in use, are matches too, and they build different e-nodes.
+
+The compiler makes that choice ONCE, after every atom has been read, with
+`refine-namings` — [`M4`](#m4) below. Two slots may be merged unless the pattern itself
+writes both of them, or they are two slots of the same node. The first would let a
+`not-free` side condition hold by renaming its two slots together, which is capture; the
+second would stop a renaming being one-to-one. This is `final_refine` in the reference,
+and those two bounds are its `allows_directed_union` and `add_disjointness_constraint`.
+The identity is element 0, so a program reaching only index 0 answers as one compiled
+before this did.
+
+Choosing per atom instead does not work, and it is worth saying why: offering every
+naming for an atom makes the rule insensitive to how that atom's renaming was
+constrained, and two of the three compiler mutants the corpus carries stopped being
+detected. Deciding after the match keeps minting meaningful — and the pattern's own
+slots are not all known until the last atom has been read, which is what the first bound
+above needs.
 
 `find-mapping-total` ports that: same constraints and same one-to-one check as
 `find-mapping`, plus a fresh name for every domain slot left unnamed.

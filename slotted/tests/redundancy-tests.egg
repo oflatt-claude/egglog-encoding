@@ -45,7 +45,7 @@
 
 (run 10)
 
-(check (same x y))
+(check (renaming-= x y))
 
 (pop)
 
@@ -68,9 +68,9 @@
 
 (run 10)
 
-(check (same a b))
-(check (same a c))
-(check (not-same a d))
+(check (renaming-= a b))
+(check (renaming-= a c))
+(check (renaming-!= a d))
 
 (pop)
 
@@ -97,9 +97,9 @@
 
 (run 10)
 
-(check (same s0 z))
-(check (same s0 s1))
-(check (same w h))
+(check (renaming-= s0 z))
+(check (renaming-= s0 s1))
+(check (renaming-= w h))
 
 (pop)
 
@@ -122,7 +122,7 @@
 
 (run 8)
 
-(check (same a b))
+(check (renaming-= a b))
 
 (pop)
 
@@ -140,7 +140,7 @@
 ;;;     (let k5 (K $5 (Null)))
 ;;;     (let k6 (K $6 (Null)))
 ;;;     (run 10)
-;;;     (check (not-same k5 k6))            ;; fails: they come out equal
+;;;     (check (renaming-!= k5 k6))            ;; fails: they come out equal
 ;;;
 ;;; `k5` and `k6` are unrelated to any of it, so the encoding is collapsing the
 ;;; variable class: every slot becomes interchangeable. The cause is that the
@@ -155,6 +155,6 @@
 ;;; the use of an unpinned variable in the action is.
 ;;;
 ;;; Both slot choices fail now. `$9` used to pass, which was an artifact of the
-;;; weaker `same`: the two were not egglog-equal but WERE the same invocation, and
-;;; only `same` sharing its renaming makes that visible.
+;;; weaker `renaming-=`: the two were not egglog-equal but WERE the same invocation, and
+;;; only `renaming-=` sharing its renaming makes that visible.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

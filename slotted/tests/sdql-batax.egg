@@ -64,7 +64,7 @@
 ;; a lambda over six binders has no free slots left
 (check (slots prog))
 ;; and the two inner sums are distinct terms, sharing the subarray range
-(check (not-same t7 t10))
+(check (renaming-!= t7 t10))
 (print-size)
 
 ;;; two user steps, the machinery saturated after each

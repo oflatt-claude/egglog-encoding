@@ -28,14 +28,17 @@ THE LANGUAGE
     (run 3)                                     three user-rule steps, with the
                                                 machinery saturated around each
 
-    (check (same a b))                          a and b are ONE slotted class
-    (check (not-same a b))                      and are not
+    (check (renaming-= a b))                    a and b are EQUAL -- the same term, once
+                                                renamings are taken into account
+    (check (renaming-!= a b))                   and are not
+    (check (eclass-= a b))                      a and b are in one E-CLASS, but not
+                                                necessarily at the same slots
+    (check (eclass-!= a b))                     and are not
     (check (slots a $5 $6))                     a's class depends on exactly these
     (check (holds a Mult))                      a's class contains a Mult node
     (check (not-holds a Mult))                  and does not
 
-    (check (same-class a b))                    one class, by SOME renaming -- weaker
-    (check (not-same-class a b))                than `same`, which pins the renaming
+`slotted/LANGUAGE.md` is the reference for all of these, with the reason each exists.
 
 EVERYTHING ELSE IS EGGLOG'S
 
@@ -51,15 +54,13 @@ node as the encoding STORES it, renamings and all.
 A check whose claim is none of the ones above is egglog's too, so a test can drop to
 the encoded level -- `(check (RenamesToLeader a m l))` -- without leaving the language.
 
-WHAT `same` MEANS
+WHY NOT JUST `=`
 
-`(RenamesToLeader f m l)` is `f = m*l`, so two terms are EQUAL when one renaming
-reaches both from the leader. That is Def. 6: two invocations of a class agree when the
-renaming between them is a symmetry of the class. Landing in one class by *some*
-renaming is weaker, and is `same-class` -- the pair that separates them is two
-alpha-variants whose free slot is renamed, which are one class but not equal. Egglog's
-own `(= a b)` is a third thing, finer than both, and testing it would test the
-encoding rather than the language.
+Egglog's `=` compares two values. A slotted term is not a value: it is a class TOGETHER
+WITH a renaming, so two terms can be the same term while being different values, and
+different terms while being the same class. `renaming-=` is the equality that takes the
+renaming into account, and `eclass-=` is the weaker question of whether the classes
+coincide at all. `LANGUAGE.md` gives the example that separates them.
 
 Usage:
     ./slotted-egglog.py SRC.egg              run it
@@ -411,7 +412,7 @@ def compile_check(src, form):
         form = form[1]
     claim = form[1]
     kind, args = claim[0], claim[1:]
-    if kind in ("same", "not-same"):
+    if kind in ("renaming-=", "renaming-!="):
         # ONE renaming, not two. `(RenamesToLeader f m l)` is `f = m*l`, so two terms
         # are equal when they are the same INVOCATION -- reached from the leader by the
         # same renaming -- and not merely when they land in the same class. The paper's
@@ -433,17 +434,17 @@ def compile_check(src, form):
                 atoms.append(f"(RenamesToLeader {src.encode(x)} {m} _l)")
                 maps.append(m)
         body = f"(check {' '.join(atoms)} (= {maps[0]} {maps[1]}))"
-        if (kind == "not-same") != negated:
+        if (kind == "renaming-!=") != negated:
             return f"(fail {body})"
         return body
-    if kind in ("same-class", "not-same-class"):
-        # Same CLASS, by SOME renaming -- strictly weaker than `same`, which pins the
+    if kind in ("eclass-=", "eclass-!="):
+        # Same CLASS, by SOME renaming -- strictly weaker than `renaming-=`, which pins the
         # renaming down. The pair it exists for is two terms that are alpha-variants
         # of each other with a free slot renamed: they are not equal, because no one
         # renaming reaches both, yet they are the same class.
         a, b = (src.encode(x) for x in args)
         body = f"(check (RenamesToLeader {a} _m1 _l) (RenamesToLeader {b} _m2 _l))"
-        if (kind == "not-same-class") != negated:
+        if (kind == "eclass-!=") != negated:
             return f"(fail {body})"
         return body
     if kind in ("holds", "not-holds"):

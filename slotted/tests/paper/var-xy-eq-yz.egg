@@ -22,6 +22,6 @@
 (run 0)
 
 ;; one class ...
-(check (same f01 f12))
+(check (renaming-= f01 f12))
 ;; ... with no slots left
 (check (slots f01))

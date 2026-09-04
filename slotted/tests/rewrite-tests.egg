@@ -32,7 +32,7 @@
 
 (run 10)
 
-(check (same a b))
+(check (renaming-= a b))
 
 (pop)
 
@@ -53,7 +53,7 @@
 
 (run 10)
 
-(check (same a b))
+(check (renaming-= a b))
 
 (pop)
 
@@ -78,9 +78,9 @@
 
 (run 10)
 
-(check (same a b))
-(check (same c d))
-(check (not-same a c))
+(check (renaming-= a b))
+(check (renaming-= c d))
+(check (renaming-!= a c))
 
 (pop)
 
@@ -104,6 +104,6 @@
 
 (run 10)
 
-(check (same x y))
+(check (renaming-= x y))
 
 (pop)
