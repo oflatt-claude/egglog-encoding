@@ -142,6 +142,35 @@ After `f($1,$2) = g($2,$1)` and `g($1,$2) = h($1,$2)`, the terms `f($1,$2)` and
 `h($1,$2)` are in one class but differ by the swap, so they are `eclass-=` and
 `renaming-!=`, while `f($1,$2)` and `h($2,$1)` are `renaming-=`.
 
+### How they desugar
+
+The difference is one line. Both ask for a common leader; only `renaming-=` also asks
+that the two renamings agree.
+
+```
+(eclass-=   p q)    (check (RenamesToLeader $p _m1 _l) (RenamesToLeader $q _m2 _l))
+(renaming-= p q)    (check (RenamesToLeader $p _m0 _l) (RenamesToLeader $q _m1 _l)
+                           (= _m0 _m1))
+```
+
+`(RenamesToLeader f m l)` is `f = m*l`. A class is a connected component of that
+relation and its leader is the component's canonical member, so *sharing a leader* is
+exactly *being in one e-class*. `eclass-=` says only that; `renaming-=` adds that one
+renaming reaches both, which is what makes it equality of terms.
+
+**A trap.** `eclass-=` between two bare slots is always true, because every variable is
+one e-class:
+
+```
+(check (eclass-= $3 $4))      ; holds -- both are the variable class
+(check (renaming-!= $3 $4))   ; also holds -- they are different variables
+```
+
+Both desugar with the class `(Var 0)` on each side; `renaming-=` recovers *which* slot
+by composing `{0 -> 3}` and `{0 -> 4}` onto the two renamings, and `eclass-=` has
+nothing to compose onto. So `(eclass-= a $5)` does **not** say "a is the variable `$5`"
+— it says only "a is a variable". Use `renaming-=` for that.
+
 ### Dropping to the encoded level
 
 A `check` whose claim is none of the above is passed through to egglog, so a test can
