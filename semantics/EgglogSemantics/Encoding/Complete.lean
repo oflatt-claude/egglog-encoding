@@ -1045,7 +1045,7 @@ theorem encodeSig_mergesLegal {P : Program} (hdom : P.EncodeDomain) :
     Signature.MergesLegal (encodeSig P) := by
   have huf := encodeSig_ufName hdom
   intro g dc body res hg hm
-  obtain ⟨-, rfl, rfl, hout, -⟩ := encodeSig_mergeShape P g dc hg body res hm
+  obtain ⟨-, rfl, rfl, hout, -, -⟩ := encodeSig_mergeShape P g dc hg body res hm
   refine ⟨⟨⟨?_, trivial⟩, ⟨?_, trivial⟩⟩, by rw [hout]; rfl⟩
   · change (encodeSig P).mergeOf ufName ≠ none
     rw [Signature.mergeOf, huf]

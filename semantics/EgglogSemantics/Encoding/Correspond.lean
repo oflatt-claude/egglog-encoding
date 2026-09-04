@@ -4719,6 +4719,49 @@ a chain induction, and it is what would carry a landing site the rest of the way
 It is a closure property of the row list, though, and not a way to get a row out of an entry
 term, so it is a lever and not the bridge.
 
+**The merge case of that bridge is discharged, and by construction rather than by luck.**
+`FDatabase.mergeOneOriented` is the interpreter's only writer that removes a row, so it is the
+only one that can break the claim; `mergeOneOriented_survivorUF` is that step verified, and
+`mergeOneWith_survivorUF` is it at the orientation the pass actually calls. The two selectors
+are complementary at one comparison — `mergeResult` keeps `ordering-min old0 new0` and
+`mergeBody` writes `@UF (ordering-max old0 new0) ↦ (ordering-min old0 new0, …)` — so the
+surviving row's e-class column is `Database.UFReach`-reachable from *both* colliding columns in
+the state the firing itself returns: reflexivity on one side, the edge the firing just wrote on
+the other. `mergeBody_result_paired` is the complementarity, and it is why no `Term.blt`
+survives into the statement. The skip branch is the same fact degenerately, and it is what
+`Signature.MergeShape`'s `identityVals = some 1` clause is for: at width one
+`FDatabase.noConflict` compares exactly the e-class columns, so a collision runs no body only
+when they are **equal**, where a width of zero would skip every collision and drop rows with no
+edge behind them.
+
+**And the rest of the bridge is inductive for free**, which is why this was the case worth
+checking: every other writer only adds. `FDatabase.addRow` writes the row for the entry term it
+mints, so a new entry is current reflexively; `execRunRules` unions firings in and removes
+nothing; `FDatabase.union` and `FDatabase.addTerm` touch no row. So the bridge is a per-command
+induction whose one hard case is now closed.
+
+**What still does not go through is the reduction from the bridge to `eclass`, and the reason
+is `terms` never shrinking.** `Database.UFStep a b` is an `@UF` *entry term*, so it ranges over
+every edge the run ever wrote, including the ones the index has since superseded — a second
+`union` re-points `a`'s row at a smaller class and `mergeOneOriented` deletes the row that
+carried `b`, while `Database.Out` still reads `@UF(a) ↦ (b, …)` forever. Every mechanism that
+could discharge `d.Absorbs a b` fires from a **row**: the e-class rebuild rule joins a view row
+against a `@UF` row at its e-class column, and the bridge hands over a row whose e-class column
+is only `@UF`-*reachable* from the entry's, so what one firing at the fixpoint delivers is a
+view entry at `a`'s **current** parent and not at `b`. Closing the gap is therefore a claim
+about *when* each entry was written — the entry at `b` exists because the edge `a → b` was a
+row at the rebuild that followed the block writing it — and that is a history obligation, which
+neither `FDatabase.RoundClosed`, `FDatabase.RowsClosed` nor the bridge is.
+
+**If the strong form does not hold, `eclass` is the clause to weaken and `Database.ViewJoined`
+says how far.** `Database.ViewJoined.ufJoin` asks only for a **common absorber** of the edge's
+two ends, and a stale edge has one — everything reading `a` and everything reading `b` reaches
+`a`'s current leader — where `d.Absorbs a b` itself can fail. What that costs is the chain walk:
+`Database.RebuildClosed.absorbs` composes `eclass` along `Database.UFReach` and is what
+`reach_of_forall₂`, and through it `ids` and `rowShared`, spend. A join-shaped `eclass` composes
+`ufJoin` and not `absorbs`, so `edged` and `column` would have to be restated with it. That
+restatement is the fallback and it has not been taken here: the statement below is unchanged.
+
 **This is strictly stronger than `Database.ViewJoined`, deliberately, and here is the
 separation.** `chainD` satisfies the clauses (`chainD_viewJoined`) with no `@UF` entry at all —
 its ids absorb each other by having no other reader — and `edged` fails there. So the residue
@@ -5715,11 +5758,18 @@ declaration at all, so nothing after the prelude moves the signature. -/
 rather than by a disjunct.
 
 The two **widths** come with it, because a merge firing's writes are read at them: both
-declarations have `outArity 2`, an e-class column and its proof, and `@UF` is unary. -/
+declarations have `outArity 2`, an e-class column and its proof, and `@UF` is unary.
+
+So does the **identity width**, `identityVals = some 1`, which is what decides whether a
+collision runs the body at all: `FDatabase.noConflict` compares that many value columns, and
+at one column it compares exactly the e-class columns. Without it the shape would admit
+`identityVals = some 0`, where every collision skips the body and `mergeOneOriented` drops the
+displaced row leaving no `@UF` edge behind — which is precisely the case
+`mergeOneOriented_survivorUF` has to exclude. -/
 def Signature.MergeShape (sig : Signature) : Prop :=
   ∀ f dc, sig f = some dc → ∀ body res, dc.merge = some (.merge body res) →
     (f = ufName ∨ ∃ g, f = viewName g) ∧ body = mergeBody ∧ res = mergeResult ∧
-      dc.outArity = 2 ∧ (f = ufName → dc.arity = 1)
+      dc.outArity = 2 ∧ (f = ufName → dc.arity = 1) ∧ dc.identityVals = some 1
 
 theorem Signature.mergeShape_empty : Signature.MergeShape (fun _ => none) := by
   intro f dc h
@@ -5730,7 +5780,7 @@ theorem Signature.MergeShape.update {sig : Signature} (h : sig.MergeShape) {f : 
     {dc : FnDecl}
     (hdc : ∀ body res, dc.merge = some (.merge body res) →
       (f = ufName ∨ ∃ g, f = viewName g) ∧ body = mergeBody ∧ res = mergeResult ∧
-        dc.outArity = 2 ∧ (f = ufName → dc.arity = 1)) :
+        dc.outArity = 2 ∧ (f = ufName → dc.arity = 1) ∧ dc.identityVals = some 1) :
     Signature.MergeShape (Function.update sig f (some dc)) := by
   intro g dcg hg
   rw [Function.update_apply] at hg
@@ -5746,7 +5796,7 @@ own `:merge` fits. -/
 def Cmd.MergeShapeOk : Cmd → Prop
   | .decl f dc => ∀ body res, dc.merge = some (.merge body res) →
       (f = ufName ∨ ∃ g, f = viewName g) ∧ body = mergeBody ∧ res = mergeResult ∧
-        dc.outArity = 2 ∧ (f = ufName → dc.arity = 1)
+        dc.outArity = 2 ∧ (f = ufName → dc.arity = 1) ∧ dc.identityVals = some 1
   | _ => True
 
 /-- One command: only a declaration moves the signature, and a legal one keeps the shape. -/
@@ -5809,7 +5859,7 @@ theorem mergeShapeOk_encodePrelude (P : Program) : ∀ c ∈ encodePrelude P, c.
       · intro body res hb
         obtain ⟨rfl, rfl⟩ : mergeBody = body ∧ mergeResult = res := by
           simpa [ufDecl] using hb
-        exact ⟨Or.inl rfl, rfl, rfl, rfl, fun _ => rfl⟩
+        exact ⟨Or.inl rfl, rfl, rfl, rfl, fun _ => rfl, rfl⟩
       · obtain ⟨fk, -, h₃⟩ := List.mem_flatMap.mp h₂
         have h₄ : c = Cmd.decl fk.1 (skolemDecl fk.2) ∨
             c = Cmd.decl (viewName fk.1) (viewDecl fk.2) ∨
@@ -5819,7 +5869,7 @@ theorem mergeShapeOk_encodePrelude (P : Program) : ∀ c ∈ encodePrelude P, c.
         · intro body res hb
           obtain ⟨rfl, rfl⟩ : mergeBody = body ∧ mergeResult = res := by
             simpa [viewDecl] using hb
-          exact ⟨Or.inr ⟨fk.1, rfl⟩, rfl, rfl, rfl, fun hu => absurd hu viewName_ne_ufName⟩
+          exact ⟨Or.inr ⟨fk.1, rfl⟩, rfl, rfl, rfl, fun hu => absurd hu viewName_ne_ufName, rfl⟩
         · exact fun body res hb => absurd hb (by simp [termDecl])
   · obtain ⟨r, -, rfl⟩ := List.mem_map.mp h
     trivial
@@ -6193,7 +6243,7 @@ theorem mergeOneOriented_soundTerms {src : Database} {cl : Finset (Term × Term)
   split at hfire
   next body res hms =>
       obtain ⟨dc, hdc, hmergedc⟩ := Option.bind_eq_some_iff.mp hms
-      obtain ⟨hname, rfl, rfl, hout2, huf1⟩ := hshape r₁.fn dc hdc body res hmergedc
+      obtain ⟨hname, rfl, rfl, hout2, huf1, -⟩ := hshape r₁.fn dc hdc body res hmergedc
       split at hfire
       next hg =>
         obtain ⟨⟨⟨hfn, hkeys⟩, hmem₁⟩, hmem₂⟩ : ((r₁.fn = r₂.fn ∧
@@ -6317,6 +6367,234 @@ theorem mergeOneOriented_soundTerms {src : Database} {cl : Finset (Term × Term)
       next => exact absurd hfire (by simp)
   next => exact absurd hfire (by simp)
 
+
+/-! ###### The one row a firing deletes, and the edge that replaces it
+
+`FDatabase.mergeOneOriented` is the only writer in the interpreter that **removes** a row, so
+it is the only one that can break "every merge-function entry term has a current row at a
+congruent key whose e-class column is `@UF`-reachable from the entry's" — the claim
+`execM_rebuildClosed` is left waiting on, and the one `cxTgt_currentUF` is a compiled instance
+of.
+
+**It does not break it, and not by accident: it repairs it in the same step.** The two
+selectors are complementary at *one* comparison — `mergeResult` keeps `ordering-min old0 new0`
+and `mergeBody` writes `@UF (ordering-max old0 new0) ↦ (ordering-min old0 new0, …)`, both
+under `Term.blt new0 old0` — so the surviving row's e-class column is whichever of the two
+collided columns the tie-break calls smaller, and the other one is handed an `@UF` edge to it
+in the very state the firing returns. `Database.UFReach` is then reflexivity on one side and a
+single step on the other, whichever way the tie-break went. `mergeBody_result_paired` is that
+complementarity, and it is why no `Term.blt` survives into `mergeOneOriented_survivorUF`.
+
+The skip branch is the same statement degenerately: `identityVals = some 1` puts the e-class
+column inside `FDatabase.noConflict`'s comparison, so a collision runs no body exactly when the
+two e-class columns are **equal**, and the row that stays carries the column the dropped row
+carried. That clause of `Signature.MergeShape` is what rules out the one shape that would break
+this — a width of zero would skip every collision and drop rows with no edge at all. -/
+
+/-- `ordering-max old0 new0`, evaluated. -/
+theorem eval_mergeEnv_maxE {sig : Signature} {o0 o1 n0 n1 : Term} :
+    (maxE (.var "old0") (.var "new0")).eval sig (mergeEnv [o0, o1] [n0, n1])
+      = some (if Term.blt n0 o0 then o0 else n0) := by
+  rw [maxE]
+  exact eval_ifGt eval_mergeEnv_old0 eval_mergeEnv_new0 eval_mergeEnv_old0 eval_mergeEnv_new0
+
+/-- `ordering-min old0 new0`, evaluated — the complement of `eval_mergeEnv_maxE` at the same
+comparison, which is the whole of why the two writes fit together. -/
+theorem eval_mergeEnv_minE {sig : Signature} {o0 o1 n0 n1 : Term} :
+    (minE (.var "old0") (.var "new0")).eval sig (mergeEnv [o0, o1] [n0, n1])
+      = some (if Term.blt n0 o0 then n0 else o0) := by
+  rw [minE]
+  exact eval_ifGt eval_mergeEnv_old0 eval_mergeEnv_new0 eval_mergeEnv_new0 eval_mergeEnv_old0
+
+/-- **`mergeBody`, run and computed.** `execActions_mergeBody_inv` says each column is one of
+the two it chose between; this says *which*, which is what a reachability claim needs. -/
+theorem execActions_mergeBody_eq {m m' : FDatabase} {o0 o1 n0 n1 : Term}
+    (henv : m.env = mergeEnv [o0, o1] [n0, n1])
+    (h : execActions m mergeBody = some m') :
+    ∃ pf, m' = FDatabase.addRow ufName [if Term.blt n0 o0 then o0 else n0]
+      [if Term.blt n0 o0 then n0 else o0, pf] m := by
+  rw [mergeBody, execActions] at h
+  obtain ⟨m₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp h
+  rw [execActions, Option.some.injEq] at h₂
+  subst h₂
+  obtain ⟨as, vs, has, hvs, rfl⟩ := execAction_set h₁
+  rw [henv] at has hvs
+  obtain ⟨mx, hmx, rfl⟩ := Expr.evalList_singleton has
+  obtain ⟨mn, pf, hmn, -, rfl⟩ := Expr.evalList_pair hvs
+  obtain rfl : mx = (if Term.blt n0 o0 then o0 else n0) :=
+    Option.some.inj (hmx.symm.trans eval_mergeEnv_maxE)
+  obtain rfl : mn = (if Term.blt n0 o0 then n0 else o0) :=
+    Option.some.inj (hmn.symm.trans eval_mergeEnv_minE)
+  exact ⟨pf, rfl⟩
+
+/-- **`mergeResult`, run and computed.** The survivor's e-class column is the *same*
+expression the edge points at, so no second comparison enters. -/
+theorem evalList_mergeResult_eq {sig : Signature} {o0 o1 n0 n1 : Term} {vs : List Term}
+    (h : Expr.evalList sig mergeResult (mergeEnv [o0, o1] [n0, n1]) = some vs) :
+    ∃ lo, vs = [if Term.blt n0 o0 then n0 else o0, lo] := by
+  rw [mergeResult] at h
+  obtain ⟨mn, lo, hmn, -, rfl⟩ := Expr.evalList_pair h
+  exact ⟨lo, by rw [Option.some.inj (hmn.symm.trans eval_mergeEnv_minE)]⟩
+
+/-- **The two writes of one firing, paired.** The edge runs from one of the two colliding
+e-class columns to the other, and the row that survives carries the *edge's own target*. Which
+way round is the tie-break's business; that the two agree is not, and it is the whole content
+of this lemma. -/
+theorem mergeBody_result_paired {m m' : FDatabase} {o0 o1 n0 n1 : Term} {vs : List Term}
+    (henv : m.env = mergeEnv [o0, o1] [n0, n1])
+    (hbody : execActions m mergeBody = some m')
+    (hres : Expr.evalList m'.sig mergeResult m'.env = some vs) :
+    ∃ mx mn pf lo, ((mx = o0 ∧ mn = n0) ∨ (mx = n0 ∧ mn = o0)) ∧ vs = [mn, lo] ∧
+      m' = FDatabase.addRow ufName [mx] [mn, pf] m := by
+  obtain ⟨pf, rfl⟩ := execActions_mergeBody_eq henv hbody
+  rw [FDatabase.addRow_env, henv] at hres
+  obtain ⟨lo, rfl⟩ := evalList_mergeResult_eq hres
+  by_cases hb : Term.blt n0 o0
+  · exact ⟨o0, n0, pf, lo, Or.inl ⟨rfl, rfl⟩, by simp [hb], by simp [hb]⟩
+  · exact ⟨n0, o0, pf, lo, Or.inr ⟨rfl, rfl⟩, by simp [hb], by simp [hb]⟩
+
+/-- A row the firing leaves alone is a row of the state its `set` returns. -/
+theorem mem_addRow_rows {d : FDatabase} {f : FnName} {as vs : List Term} {r : Row}
+    (h : r ∈ d.rows) : r ∈ (FDatabase.addRow f as vs d).rows := by
+  simp only [FDatabase.addRow, List.mem_dedup, List.mem_cons, FDatabase.mem_addTerm_rows]
+  exact Or.inr (Or.inr h)
+
+/-- **The edge a `set` writes is an `@UF` step at the state it returns.** `addRow` records the
+entry term and every subterm of it, so the key column is a term the state holds and
+`Database.out_self` reads the edge back. -/
+theorem ufStep_addRow {d : FDatabase} {mx mn pf : Term} :
+    (FDatabase.addRow ufName [mx] [mn, pf] d).toDatabase.UFStep mx mn := by
+  have hsub : ∀ s ∈ (Term.app ufName [mx, mn, pf]).subtermList,
+      s ∈ (FDatabase.addRow ufName [mx] [mn, pf] d).toDatabase.terms := by
+    intro s hs
+    rw [FDatabase.toDatabase_terms]
+    exact FDatabase.mem_addTerm_terms.mpr (Or.inl hs)
+  refine ⟨pf, Database.out_self (hsub _ ?_) (fun a ha => ?_)⟩
+  · rw [Term.subtermList]; exact List.mem_cons_self
+  · obtain rfl : a = mx := by simpa using ha
+    refine hsub _ ?_
+    rw [Term.subtermList]
+    exact List.mem_cons_of_mem _ ((Term.mem_subtermListL _).mpr
+      ⟨a, List.mem_cons_self, Term.self_mem_subterms a⟩)
+
+/-- **`Database.UFStep` only grows with the term and equation lists**, which is what lets an
+edge written at one point of a firing be read at the state the firing ends in. -/
+theorem Database.UFStep.mono {d e : FDatabase} (ht : ∀ t ∈ d.terms, t ∈ e.terms)
+    (he : ∀ p ∈ d.eqs, p ∈ e.eqs) {a b : Term} (h : d.toDatabase.UFStep a b) :
+    e.toDatabase.UFStep a b := by
+  obtain ⟨pf, bs, hcl, hmem⟩ := h
+  refine ⟨pf, bs, hcl.mono ⟨fun p hp => ?_⟩, ?_⟩
+  · rcases FDatabase.mem_toDatabase_eqs.mp hp with ⟨h₁, h₂⟩ | ⟨h₁, h₂, h₃⟩
+    · exact FDatabase.mem_toDatabase_eqs.mpr (Or.inl ⟨h₁, ht _ h₂⟩)
+    · exact FDatabase.mem_toDatabase_eqs.mpr (Or.inr ⟨he _ h₁, ht _ h₂, ht _ h₃⟩)
+  · rw [FDatabase.toDatabase_terms] at hmem ⊢
+    exact ht _ hmem
+
+/-- The edge, read at a state the firing's later writes reach: `addTerm` grows `terms` and no
+component of a firing touches `eqs`. -/
+theorem ufStep_of_addRow_mono {M E : FDatabase} {mx mn pf : Term}
+    (ht : ∀ t ∈ (FDatabase.addRow ufName [mx] [mn, pf] M).terms, t ∈ E.terms)
+    (he : ∀ p ∈ (FDatabase.addRow ufName [mx] [mn, pf] M).eqs, p ∈ E.eqs) :
+    E.toDatabase.UFStep mx mn :=
+  Database.UFStep.mono ht he ufStep_addRow
+
+/-- **One merge firing keeps the entry it displaced `@UF`-reachable from a row it leaves.**
+
+The claim checked at the one writer that can break it: whichever of the two colliding rows the
+firing removes, the row it leaves at `r₂`'s key carries an e-class column that
+`Database.UFReach` reaches from **both** of the colliding e-class columns, in the state the
+firing itself returns. Reflexivity on the survivor's own side and one edge on the other — the
+edge `mergeBody` wrote, `ordering-max` to `ordering-min`, in that same step.
+
+`hne` is `FDatabase.mergeRound`'s own guard: the pass skips a row against itself, and without
+it the deletion would take the survivor with it.
+
+**This is the merge case of `execM_rebuildClosed`'s residue, and it is discharged.** It is not
+the residue: what is left is the transport of this fact along a whole pass and across the rule
+phases between passes, which is run-wide and is not a statement about one firing. -/
+theorem mergeOneOriented_survivorUF {cl : Finset (Term × Term)} {d e : FDatabase} {r₁ r₂ : Row}
+    (hshape : Signature.MergeShape d.sig) (hidx : d.IndexOk) (hcl : ∀ p ∈ cl, p.1 = p.2)
+    (hne : r₁ ≠ r₂) (hfire : d.mergeOneOriented cl r₁ r₂ = some e) :
+    ∃ n0 n1 o0 o1 v lo : Term, r₁.out = [n0, n1] ∧ r₂.out = [o0, o1] ∧ r₁.args = r₂.args ∧
+      r₁.fn = r₂.fn ∧ (⟨r₂.fn, r₂.args, [v, lo]⟩ : Row) ∈ e.rows ∧
+      e.toDatabase.UFReach n0 v ∧ e.toDatabase.UFReach o0 v := by
+  rw [FDatabase.mergeOneOriented] at hfire
+  split at hfire
+  next body res hms =>
+    obtain ⟨dc, hdc, hmergedc⟩ := Option.bind_eq_some_iff.mp hms
+    obtain ⟨-, rfl, rfl, hout2, -, hid⟩ := hshape r₁.fn dc hdc body res hmergedc
+    split at hfire
+    next hg =>
+      obtain ⟨⟨⟨hfn, hkeys⟩, hmem₁⟩, hmem₂⟩ : ((r₁.fn = r₂.fn ∧
+          FDatabase.congrKeys cl r₁.args r₂.args = true) ∧ r₁ ∈ d.rows) ∧ r₂ ∈ d.rows := by
+        simpa only [Bool.and_eq_true, decide_eq_true_eq, List.contains_iff_mem] using hg
+      have hmg1 : d.sig.mergeOf r₁.fn ≠ none := by rw [hms]; simp
+      have hmg2 : d.sig.mergeOf r₂.fn ≠ none := by rw [← hfn]; exact hmg1
+      have hargs : r₁.args = r₂.args := eq_of_congrKeys hcl hkeys
+      obtain ⟨-, hw1⟩ := hidx.width r₁ hmem₁ dc hdc hmg1
+      obtain ⟨-, hw2⟩ := hidx.width r₂ hmem₂ dc (by rw [← hfn]; exact hdc) hmg2
+      rw [hout2] at hw1 hw2
+      obtain ⟨n0, n1, hr1out⟩ := List.length_eq_two.mp hw1
+      obtain ⟨o0, o1, hr2out⟩ := List.length_eq_two.mp hw2
+      have hr₂ : (⟨r₂.fn, r₂.args, [o0, o1]⟩ : Row) = r₂ := by rw [← hr2out]
+      have hwidth : (d.sig r₁.fn).bind (·.unchangedWidth mergeBody) = some 1 := by
+        simp [hdc, FnDecl.unchangedWidth, hid]
+      split at hfire
+      next hskip =>
+        rw [hwidth] at hskip
+        have hn0o0 : n0 = o0 := by
+          simp only [FDatabase.noConflict, hr1out, hr2out, List.take_succ_cons, List.take_zero,
+            beq_iff_eq, List.cons.injEq, and_true] at hskip
+          exact hskip
+        rw [Option.some.injEq] at hfire
+        subst hfire
+        exact ⟨n0, n1, o0, o1, o0, o1, hr1out, hr2out, hargs, hfn,
+          by rw [hr₂]; exact List.mem_filter.mpr ⟨hmem₂, by simpa using Ne.symm hne⟩,
+          by rw [hn0o0]; exact .refl, .refl⟩
+      next =>
+        obtain ⟨m, hm, hfire⟩ := Option.bind_eq_some_iff.mp hfire
+        obtain ⟨vs, hvs, he⟩ := Option.map_eq_some_iff.mp hfire
+        have henv : ({ d with env := mergeEnv r₂.out r₁.out } : FDatabase).env
+            = mergeEnv [o0, o1] [n0, n1] := by rw [hr1out, hr2out]
+        obtain ⟨mx, mn, pf, lo, hswap, rfl, rfl⟩ := mergeBody_result_paired henv hm hvs
+        have hedge : e.toDatabase.UFStep mx mn := by
+          refine ufStep_of_addRow_mono (M := { d with env := mergeEnv r₂.out r₁.out })
+            (pf := pf) ?_ ?_
+          · rw [← he]; exact fun t ht => FDatabase.mem_addTerm_of_mem ht
+          · rw [← he]; exact fun p hp => hp
+        have hrow : (⟨r₂.fn, r₂.args, [mn, lo]⟩ : Row) ∈ e.rows := by
+          rw [← he]
+          exact List.mem_map.mpr ⟨r₂, List.mem_filter.mpr
+            ⟨FDatabase.mem_addTerm_rows.mpr (Or.inr (mem_addRow_rows hmem₂)),
+              by simpa using Ne.symm hne⟩, by simp⟩
+        refine ⟨n0, n1, o0, o1, mn, lo, hr1out, hr2out, hargs, hfn, hrow, ?_, ?_⟩
+        · rcases hswap with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩
+          · exact .refl
+          · exact hedge.toReach
+        · rcases hswap with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩
+          · exact hedge.toReach
+          · exact .refl
+    next => exact absurd hfire (by simp)
+  next => exact absurd hfire (by simp)
+
+/-- **The same, at whichever orientation `FDatabase.mergeOneWith` chose.** The conclusion is
+symmetric in the two rows — both e-class columns reach the survivor's — so the orientation the
+rebuild's `swapForCanon` picks costs nothing, and the surviving row can be named at `r₁`'s own
+key because a firing's two keys are equal against a diagonal closure. -/
+theorem mergeOneWith_survivorUF {cl : Finset (Term × Term)} {d e : FDatabase} {r₁ r₂ : Row}
+    (hshape : Signature.MergeShape d.sig) (hidx : d.IndexOk) (hcl : ∀ p ∈ cl, p.1 = p.2)
+    (hne : r₁ ≠ r₂) (hm : d.mergeOneWith cl r₁ r₂ = some e) :
+    ∃ n0 n1 o0 o1 v lo : Term, r₁.out = [n0, n1] ∧ r₂.out = [o0, o1] ∧ r₁.args = r₂.args ∧
+      r₁.fn = r₂.fn ∧ (⟨r₁.fn, r₁.args, [v, lo]⟩ : Row) ∈ e.rows ∧
+      e.toDatabase.UFReach n0 v ∧ e.toDatabase.UFReach o0 v := by
+  rcases FDatabase.mergeOneWith_eq_oriented (cl := cl) (d := d) r₁ r₂ with he | he
+  · obtain ⟨o0, o1, n0, n1, v, lo, hr2out, hr1out, hargs, hfn, hrow, ho, hn⟩ :=
+      mergeOneOriented_survivorUF hshape hidx hcl (Ne.symm hne) (he ▸ hm)
+    exact ⟨n0, n1, o0, o1, v, lo, hr1out, hr2out, hargs.symm, hfn.symm, hrow, hn, ho⟩
+  · obtain ⟨n0, n1, o0, o1, v, lo, hr1out, hr2out, hargs, hfn, hrow, hn, ho⟩ :=
+      mergeOneOriented_survivorUF hshape hidx hcl hne (he ▸ hm)
+    exact ⟨n0, n1, o0, o1, v, lo, hr1out, hr2out, hargs, hfn, by rw [hfn, hargs]; exact hrow,
+      hn, ho⟩
 
 
 /-! ###### The pass, and the phase
