@@ -1242,7 +1242,7 @@ def compile_rule(
         if idx == 0:
             # the leading atom fixes slots(pattern); its `mp` is the identity
             body.append(f"(= {mp} {dom})")
-        elif namings and not op.binders:
+        elif namings:
             # Every naming rather than the minting one. `vec-get` is partial, so the
             # `Idx` join stops at the end of the vector without anything saying how long
             # it is, and index 0 is the minting solution -- so reaching only `(Idx 0)`
@@ -1251,6 +1251,24 @@ def compile_rule(
             body.append(f"(= {alts} (find-mappings-total {pat} {dom} {pairs}))")
             body.append(f"(Idx {i})")
             body.append(f"(= {mp} (vec-get {alts} {i}))")
+            if op.binders and slot_of:
+                # The reference's `allows_directed_union`: a slot the PATTERN writes may
+                # be merged only with a slot that is not itself one. A binder's bound
+                # slot IS written by the pattern, so a naming that sends it onto another
+                # pattern slot is capture, not alpha-equivalence -- it makes a
+                # `not-free` guard pass by renaming the two together. Slots an earlier
+                # atom MINTED are not pattern slots and stay mergeable, which is the
+                # whole difference between the two cases.
+                pinned = "(map-of " + " ".join(f"{v} {v}" for v in slot_of.values()) + ")"
+                for b in op.binders:
+                    k = kids[b]
+                    if k[0] == "sl" and k[1] in slot_of:
+                        # This binder writes a literal an EARLIER atom already pinned, so
+                        # the pattern is asking for exactly that slot and the constraint
+                        # pairs above already say so. Upstream refuses to merge two
+                        # DIFFERENT pattern slots; a pattern slot with itself is fine.
+                        continue
+                    body.append(f"(map-not-contains {pinned} (map-get {mp} (map-get {edges[b]} 0)))")
         else:
             body.append(f"(= {mp} (find-mapping-total {pat} {dom} {pairs}))")
 
