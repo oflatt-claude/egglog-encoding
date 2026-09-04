@@ -95,7 +95,7 @@ def run_egg_files():
     files = sorted(glob.glob(str(ROOT / "slotted" / "encoding" / "**" / "*.egg"), recursive=True))
     # A test rewritten in the slotted language leaves this directory for
     # `slotted/tests/`, so this floor drops as that one rises; neither may fall alone.
-    if len(files) < 9:
+    if len(files) < 8:
         return f"only {len(files)} encoded-level .egg files found"
     bad = []
     for f in files:

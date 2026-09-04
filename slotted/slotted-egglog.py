@@ -206,6 +206,11 @@ class Source:
             assert form in self.lang.bound, f"{self.path.name}: {form!r} is not bound"
             return ("name", form)
         head, args = form[0], form[1:]
+        if head == enc.SUBST:
+            # Not a constructor: a call, and only legal on a right-hand side. Its
+            # arguments are read like any others so that `?b` and `$x` mean here what
+            # they mean everywhere else.
+            return (head, *(self.term(a, ground=ground) for a in args))
         assert head in self.spec, f"{self.path.name}: unknown constructor {head!r}"
         kinds = self.lang[head].arg_kinds()
         assert len(args) == len(kinds), f"{self.path.name}: {head} takes {len(kinds)} arguments, given {len(args)}"
@@ -246,6 +251,11 @@ def compile_source(src, own_only=False):
         ]
     else:
         out.append(enc.in_slotted_ruleset("\n".join(enc.emit(src.spec, provided=enc.CORE))))
+        if any(uses_subst(rewrite_parts(src, f)["rhs"]) for f, _ in src.body
+               if isinstance(f, list) and f and f[0] == "rewrite"):
+            # The half a `subst` rule needs and does not carry itself: the
+            # relation it writes into, and the one phase-two rule that reads it.
+            out.append(enc.SUBST_MACHINERY)
     rules = 0
     for form, origin in src.body:
         head = form[0] if isinstance(form, list) else form
@@ -340,6 +350,11 @@ def compile_rewrite(src, form, tail=")", bugs=frozenset(), **kw):
     parts = rewrite_parts(src, form)
     conds, fresh, lead = parts["conds"], parts["fresh"], parts["lead"]
     lhs, rhs = parts["lhs"], parts["rhs"]
+    if uses_subst(rhs):
+        # `slotted-subst` extracts a term and adds the result back, so it both reads
+        # and writes tables: callable from the head of a `:naive` rule, not a seminaive
+        # one.
+        tail = " :naive" + tail
     root, atoms = enc.flatten(src.lang, src.term(lhs, ground=False))
     order = enc.connected_order(src.lang, atoms, first=lead)
     return enc.compile_rule(
@@ -354,6 +369,11 @@ def compile_rewrite(src, form, tail=")", bugs=frozenset(), **kw):
         # that already committed its output can keep emitting the same text
         **kw,
     )
+
+
+def uses_subst(form):
+    """Whether a right-hand side calls the substitution primitive."""
+    return isinstance(form, list) and (form[0] == enc.SUBST or any(uses_subst(a) for a in form))
 
 
 def rewrite_parts(src, form):

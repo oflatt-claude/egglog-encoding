@@ -578,6 +578,28 @@ def emit(language, binders=(), provided=None, omit=()):
     return out
 
 
+#: The right-hand side head that is a call rather than a node.
+SUBST = "subst"
+
+#: What a `subst` right-hand side needs alongside the rules that use it, emitted once.
+#:
+#: The primitive answers with an INVOCATION -- `slotted-subst` the class and
+#: `slotted-subst-frame` the renaming into the body's frame -- and the result's own
+#: slots are not known until the machinery has seen its node. So the narrowing that M8
+#: does inside one rule happens here instead, one phase later, and `Equated` lets the
+#: machinery pick the orientation (M10).
+SUBST_MACHINERY = """\
+;; A substitution in flight: the class it answered with, the renaming into the body's
+;; frame, and `q` carrying that frame into the root's own slots.
+(relation SubstPending (U Renaming Renaming U))
+
+(rule ((SubstPending root q mr r)
+       (= cs (ClassSlots r)))
+      ((Equated root (compose q (compose mr cs)) r))
+      :ruleset slotted)
+"""
+
+
 # The constructor-independent half of the node machinery. Hand-written in
 # `slotted/encoding/egraph-encoding-11.egg` along with a constructor or two, and kept
 # here so a generator can state what that text has to say.
@@ -981,9 +1003,16 @@ def flatten(lang, term, root="?_p", tmp="?_t"):
 def rhs_of(lang, t):
     """A plain nested term as a right-hand side in the grammar above: a bare string
     is a pattern variable unless it starts with `$`, and a payload argument is left
-    alone."""
+    alone.
+
+    `(subst body $x t)` is the one head that is not a constructor. It is a call, not a
+    node, so it cannot be built -- see `compile_rule`.
+    """
     if isinstance(t, str):
         return ("sl", t) if t.startswith("$") else ("pv", t)
+    if t[0] == SUBST:
+        assert len(t) == 4, f"{SUBST} takes a body, a slot and a term: {t}"
+        return (SUBST, *(rhs_of(lang, a) for a in t[1:]))
     out = [rhs_of(lang, a) if kind in SLOTTED else a for kind, a in zip(lang[t[0]].arg_kinds(), t[1:], strict=True)]
     return (t[0], *out)
 
@@ -1341,6 +1370,32 @@ def compile_rule(
             # cannot express -- so solve: from mr*Root = ma*A follows
             # Root = (mr^-1 . ma) * A, and let the machinery re-orient it (M10).
             act = [f"(Equated {cls_of[root]} (compose (inverse {mr}) {mp_of[rhs[1]]}) {cls_of[rhs[1]]})"]
+        elif rhs[0] == SUBST:
+            # A call, not a node, so there is nothing to build. Everything below is in
+            # PATTERN slots; the primitive works in the body's own frame, so a bridge
+            # between the two is the whole of the work.
+            b, sl, tt = rhs[1:]
+            assert b[0] == "pv" and tt[0] == "pv", f"{SUBST}: body and term must be variables, got {b}, {tt}"
+            assert sl[0] == "sl", f"{SUBST}: the slot must be a slot literal, got {sl}"
+            mb, mt, x = mp_of[b[1]], mp_of[tt[1]], slot_of[sl[1]]
+            need, rb, xb, tren, q = (new(p) for p in ("need", "rb", "xb", "tren", "q"))
+            call = f"{cls_of[b[1]]} {xb} (Var 0) {tren} {cls_of[tt[1]]}"
+            act = [
+                # the pattern slots that must have a name in the body's frame. `t`'s
+                # slots are the ones the body may not use, which is why a bridge is
+                # needed at all -- `(compose (inverse mb) mt)` would drop them, since
+                # `compose` truncates.
+                f"(let {need} (map-union (map-image {mb}) (map-union (map-image {mt}) (map-of {x} {x}))))",
+                # `rb . mb = id`, so `rb` runs pattern slots into the body's frame,
+                # minting a name for each one the body does not use.
+                f"(let {rb} (find-mapping-total (map-domain {mb}) {need} (map-domain {mb}) {mb}))",
+                f"(let {xb} (map-get {rb} {x}))",
+                # total, not truncating: this asserts the bridge is wide enough for `t`
+                # rather than silently dropping one of its slots.
+                f"(let {tren} (compose-total {rb} {mt}))",
+                f"(let {q} (compose (inverse {mr}) (inverse {rb})))",
+                f"(SubstPending {cls_of[root]} {q} (slotted-subst-frame {call}) (slotted-subst {call}))",
+            ]
         else:
             _, built = build(rhs)
             act = lets + [f"(Equated {built} {mr} {cls_of[root]})"]
