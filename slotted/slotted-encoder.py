@@ -1108,6 +1108,7 @@ def compile_rule(
     fresh_batch=True,
     tail=")",
     namings=True,
+    refine=True,
 ):
     """Compile a flattened multipattern and its action into one egglog rule.
 
@@ -1158,6 +1159,7 @@ def compile_rule(
         uid[0] += 1
         return f"{p}{uid[0]}"
 
+    slot_groups = []  # one per atom: the pattern slots its node occupies, pairwise apart
     mp_of = {}  # pvar -> egglog var holding its renaming into slots(pattern)
     cls_of = {}  # pvar -> egglog var holding its leader
     slot_of = {}  # "$v" -> egglog i64 var holding that pattern slot
@@ -1242,7 +1244,7 @@ def compile_rule(
         if idx == 0:
             # the leading atom fixes slots(pattern); its `mp` is the identity
             body.append(f"(= {mp} {dom})")
-        elif namings and not op.binders:
+        elif namings and not op.binders and not refine:
             # Every naming rather than the minting one. `vec-get` is partial, so the
             # `Idx` join stops at the end of the vector without anything saying how long
             # it is, and index 0 is the minting solution -- so reaching only `(Idx 0)`
@@ -1260,6 +1262,7 @@ def compile_rule(
         # so the running union is always well defined.
         idm = new("idm")
         body.append(f"(= {idm} (map-image {mp}))")
+        slot_groups.append(idm)
         if idx == 0:
             pat = idm
         else:
@@ -1295,6 +1298,38 @@ def compile_rule(
         if aroot not in mp_of:
             mp_of[aroot] = narrow(mp, rv)
 
+    if refine:
+        # `final_refine`: every way the match's slots may be merged, decided once the
+        # whole match is fixed rather than atom by atom. Minting above committed each
+        # unreached slot to being apart from everything; this is where that is revisited.
+        #
+        # Two bounds come from the primitive, and both need what is in hand only once
+        # every atom has been read: the slots the PATTERN writes are never merged with
+        # each other, and each atom's own slots are pairwise apart, which is what keeps
+        # every renaming below injective.
+        #
+        # This sits BEFORE the right-hand side's fresh slots on purpose. A `:fresh` slot
+        # is fresh by definition, so it is not a candidate for merging and must not be
+        # in the domain at all.
+        #
+        # Everything after this point -- the side conditions and the action -- reads the
+        # REFINED renamings. The reference does the same: it applies a rewrite's
+        # condition to the substitutions `multi_ematch` returns, which are the refined
+        # ones. Nothing is lost by that, because the pattern-slot rule is what keeps a
+        # condition honest, not the order.
+        pinned = "(map-of " + " ".join(f"{v} {v}" for v in slot_of.values()) + ")" if slot_of else "(map-empty)"
+        alts, i, mrg = new("alts"), new("ix"), new("mrg")
+        body.append(f"(= {alts} (refine-namings {pat} {pinned} {' '.join(slot_groups)}))")
+        body.append(f"(Idx {i})")
+        body.append(f"(= {mrg} (vec-get {alts} {i}))")
+        # Index 0 is the identity, so a rule reaching only `(Idx 0)` answers as it did
+        # before refinement existed.
+        mp_of = {k: f"(compose {mrg} {v})" for k, v in mp_of.items()}
+        slot_of = {k: f"(map-get {mrg} {v})" for k, v in slot_of.items()}
+        # Two slots that merged no longer occupy two names, so a fresh slot minted
+        # below avoids the refined set rather than the pre-merge one.
+        pat = f"(map-image {mrg})"
+
     # Right-hand side slots the pattern never pinned: mint them, avoiding every slot
     # named so far. The reference writes a literal `$x` there; on this side a name has
     # to be invented.
@@ -1316,6 +1351,7 @@ def compile_rule(
             pat = av
 
     # A variable's slots in pattern space are the image of its renaming, so
+
     # `$s in slots(?x)` is membership in `(map-image mx)`. With one variable that is a
     # fact; with several the disjunction has to be a value, since a fact cannot be
     # combined with `or`.

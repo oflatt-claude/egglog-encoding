@@ -223,8 +223,10 @@ def _load_rules():
 #: mode rather than compared: finding no isomorphism between two graphs that answer
 #: different questions says nothing. They must still DIFFER -- an agreement means #48
 #: moved and this record is stale.
+#: `sum-fact-inv-1` used to be here and AGREES now: the end-of-rule refinement
+#: reaches the naming that identifies the two sides, so for that rule the flattened
+#: question and the nested one land on the same graph. `sum-merge` still differs.
 ISSUE48_GAP = {
-    "sum-fact-inv-1": "binds $k/$v and reuses them in the body",
     "sum-merge": "two nested sums, each binding a slot the body reuses",
 }
 
