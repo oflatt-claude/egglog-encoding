@@ -219,7 +219,9 @@ both are decided at the witness at the end of this file.
   of an encoded target having a live row at its own key whose e-class column the union-find
   reaches from the entry's — `FDatabase.IndexCurrent` weakened by exactly what
   `cxTgt_not_indexCurrent` refutes, `cxTgt_currentUF` being the compiled instance. What is left
-  of the residue is the **fixpoint's roots**. `unionsJoined_fire` is the
+  of the residue is the **fixpoint's roots**, and `no_ufRowEdge_of_eclassFired` is that with the
+  e-class rule's own firing as its one hypothesis: the merge phase's survival fact
+  (`mergeSaturateF_rowsDescendCarry`) and `row_unique_of_settled` do the rest. `unionsJoined_fire` is the
   whole of a **target firing behind a source firing** — the one command case the read-back does
   not reach — and it now carries both of the command induction's data clauses, `joined` and
   `reads`, because a rule head builds as well as unions and one firing answers both.
@@ -5020,14 +5022,24 @@ and the first both spend.** Two blocks below, at the merge phase:
   needed `ufMeasure`, since `mergeBody` writes into `@UF` and the per-key count is therefore no
   measure there.
 
-**What the second obligation still needs, precisely, and it is now the only one.** The e-class
-rule has to have *fired*, which is a `matchQuery` completeness lemma — `cxRb_mem_matchQuery`
-proved at one instance, and the general form has to name `Query.freeVars`' order, compose
-`Env.canon` with itself and place the columns in `FDatabase.valueTerms`. It also needs the
-maintenance rules to be rules the target **holds**, which is the converse of
-`FDatabase.RulesEncoded` and is not among the invariants the run carries. That yields the
-rule's conclusion; the row for it is the first obligation and is now `execM_entryRowsUF`, so
-what is left is the firing itself.
+**The second obligation is now the only one, and it is reduced to the firing.**
+`Encoding/Complete.lean`'s `no_ufRowEdge_of_eclassFired` is it with the firing as a hypothesis:
+given the e-class rule's conclusion as a row of the round's rule phase, the merge phase leaves a
+row at that key whose e-class column is `Term.blt`-at or below the one the firing wrote
+(`mergeSaturateF_rowsDescendCarry`, `mergeResult`'s `ordering-min` carried across a pass and
+across the phase), `FDatabase.RowsClosed` and `row_unique_of_settled` identify that row with the
+one the fixpoint started from, and `FDatabase.UFRowsDescend` plus `Term.blt_asymm` close it.
+`FDatabase.UFRowEdge` excludes a self-loop, which is what `(union a a)` writes and what the
+claim would otherwise be false at.
+
+**What the firing costs, precisely.** Three things, none of them available: `matchQuery`
+completeness in general form — `cxRb_mem_matchQuery` is one instance, and the general form has
+to name `Query.freeVars`' order, compose `Env.canon` with itself and place the columns in
+`FDatabase.valueTerms`; the **converse** of `FDatabase.RulesEncoded`, that the maintenance rules
+are rules the target *holds*, which no invariant the run carries says; and that the target's
+environment binds no `@`-prefixed variable, so that `Query.freeVars` is the whole of the query's
+variables — which `Program.EncodeDomain.noAt` supplies at the source (`Program.names` includes
+`P.vars`) but which still has to be carried along the run.
 
 **And a side condition that turned out to be load-bearing rather than bookkeeping**: the merge
 body only runs if the signature declares `@Sym` and `@Trans` (`Expr.eval` reads
@@ -12031,6 +12043,182 @@ theorem mergeSaturateF_entryRowsUF : ∀ (n : Nat) {d e : FDatabase},
         exact mergeSaturateF_entryRowsUF n (by rw [hsig]; exact hshape)
           (by rw [hsig]; exact hlegal) (FDatabase.Inv.mergeRound_of_legalMerges hinv hlegal)
           (mergeRound_noUnions hn) (mergeRound_entryRowsUF hshape hlegal hinv hn h) hrun
+
+/-! #### The other thing the fixpoint's roots want: the survivor descends
+
+`FDatabase.RowsCarryUF` is the bridge's reading of what a merge firing leaves at a key. The
+second obligation wants the *other* reading of the same fact: `mergeResult` keeps
+`ordering-min old0 new0`, so the row that stays at a key carries an e-class column `Term.blt`-at
+or below **both** the columns that key carried — and a whole pass, and a whole phase, therefore
+only ever move a key's e-class column down. -/
+
+/-- **The surviving row's e-class column is `ordering-min` of the two**, which is the
+`Term.blt` reading of `mergeOneOriented_survivorUF`'s conclusion. The skip branch is the
+degenerate case: `identityVals = some 1` makes a body-free collision one where the two columns
+are equal. -/
+theorem mergeOneOriented_survivorBlt {cl : Finset (Term × Term)} {d e : FDatabase} {r₁ r₂ : Row}
+    (hshape : Signature.MergeShape d.sig) (hidx : d.IndexOk) (hcl : ∀ p ∈ cl, p.1 = p.2)
+    (hne : r₁ ≠ r₂) (hfire : d.mergeOneOriented cl r₁ r₂ = some e) :
+    ∃ n0 n1 o0 o1 v lo : Term, r₁.out = [n0, n1] ∧ r₂.out = [o0, o1] ∧ r₁.args = r₂.args ∧
+      r₁.fn = r₂.fn ∧ (⟨r₂.fn, r₂.args, [v, lo]⟩ : Row) ∈ e.rows ∧
+      (v = n0 ∨ Term.blt v n0 = true) ∧ (v = o0 ∨ Term.blt v o0 = true) := by
+  rw [FDatabase.mergeOneOriented] at hfire
+  split at hfire
+  next body res hms =>
+    obtain ⟨dc, hdc, hmergedc⟩ := Option.bind_eq_some_iff.mp hms
+    obtain ⟨-, rfl, rfl, hout2, -, hid⟩ := hshape r₁.fn dc hdc body res hmergedc
+    split at hfire
+    next hg =>
+      obtain ⟨⟨⟨hfn, hkeys⟩, hmem₁⟩, hmem₂⟩ : ((r₁.fn = r₂.fn ∧
+          FDatabase.congrKeys cl r₁.args r₂.args = true) ∧ r₁ ∈ d.rows) ∧ r₂ ∈ d.rows := by
+        simpa only [Bool.and_eq_true, decide_eq_true_eq, List.contains_iff_mem] using hg
+      have hmg1 : d.sig.mergeOf r₁.fn ≠ none := by rw [hms]; simp
+      have hmg2 : d.sig.mergeOf r₂.fn ≠ none := by rw [← hfn]; exact hmg1
+      have hargs : r₁.args = r₂.args := eq_of_congrKeys hcl hkeys
+      obtain ⟨-, hw1⟩ := hidx.width r₁ hmem₁ dc hdc hmg1
+      obtain ⟨-, hw2⟩ := hidx.width r₂ hmem₂ dc (by rw [← hfn]; exact hdc) hmg2
+      rw [hout2] at hw1 hw2
+      obtain ⟨n0, n1, hr1out⟩ := List.length_eq_two.mp hw1
+      obtain ⟨o0, o1, hr2out⟩ := List.length_eq_two.mp hw2
+      have hr₂ : (⟨r₂.fn, r₂.args, [o0, o1]⟩ : Row) = r₂ := by rw [← hr2out]
+      have hwidth : (d.sig r₁.fn).bind (·.unchangedWidth mergeBody) = some 1 := by
+        simp [hdc, FnDecl.unchangedWidth, hid]
+      split at hfire
+      next hskip =>
+        rw [hwidth] at hskip
+        have hn0o0 : n0 = o0 := by
+          simp only [FDatabase.noConflict, hr1out, hr2out, List.take_succ_cons, List.take_zero,
+            beq_iff_eq, List.cons.injEq, and_true] at hskip
+          exact hskip
+        rw [Option.some.injEq] at hfire
+        subst hfire
+        exact ⟨n0, n1, o0, o1, o0, o1, hr1out, hr2out, hargs, hfn,
+          by rw [hr₂]; exact List.mem_filter.mpr ⟨hmem₂, by simpa using Ne.symm hne⟩,
+          Or.inl hn0o0.symm, Or.inl rfl⟩
+      next =>
+        obtain ⟨m, hm, hfire⟩ := Option.bind_eq_some_iff.mp hfire
+        obtain ⟨vs, hvs, he⟩ := Option.map_eq_some_iff.mp hfire
+        have henv : ({ d with env := mergeEnv r₂.out r₁.out } : FDatabase).env
+            = mergeEnv [o0, o1] [n0, n1] := by rw [hr1out, hr2out]
+        obtain ⟨pf, rfl⟩ := execActions_mergeBody_eq henv hm
+        rw [FDatabase.addRow_env, henv] at hvs
+        obtain ⟨lo, rfl⟩ := evalList_mergeResult_eq hvs
+        have hrow : (⟨r₂.fn, r₂.args,
+            [if Term.blt n0 o0 then n0 else o0, lo]⟩ : Row) ∈ e.rows := by
+          rw [← he]
+          exact List.mem_map.mpr ⟨r₂, List.mem_filter.mpr
+            ⟨FDatabase.mem_addTerm_rows.mpr (Or.inr (mem_addRow_rows hmem₂)),
+              by simpa using Ne.symm hne⟩, by simp⟩
+        refine ⟨n0, n1, o0, o1, if Term.blt n0 o0 then n0 else o0, lo, hr1out, hr2out, hargs,
+          hfn, hrow, ?_, ?_⟩
+        · by_cases hb : Term.blt n0 o0 = true
+          · rw [if_pos hb]; exact Or.inl rfl
+          · rw [if_neg hb]
+            rcases eq_or_ne o0 n0 with hq | hq
+            · exact Or.inl hq
+            · exact Or.inr ((Term.blt_total o0 n0 hq).elim id fun hc => absurd hc hb)
+        · by_cases hb : Term.blt n0 o0 = true
+          · rw [if_pos hb]; exact Or.inr hb
+          · rw [if_neg hb]; exact Or.inl rfl
+    next => exact absurd hfire (by simp)
+  next => exact absurd hfire (by simp)
+
+/-- **What one step owes a key's e-class column**: the row it leaves there carries one at or
+below it in `Term.blt`. Reflexive for a step that only adds; `mergeOneOriented` is the one that
+is not, and `mergeResult`'s `ordering-min` is why it descends. -/
+def FDatabase.RowsDescendCarry (d e : FDatabase) : Prop :=
+  ∀ (f : FnName) (as : List Term) (c0 c1 : Term), (⟨f, as, [c0, c1]⟩ : Row) ∈ d.rows →
+    ∃ v lo, (⟨f, as, [v, lo]⟩ : Row) ∈ e.rows ∧ (v = c0 ∨ Term.blt v c0 = true)
+
+/-- A step that removes no row carries them all, at the columns they already have. -/
+theorem FDatabase.RowsDescendCarry.of_subset {d e : FDatabase} (h : ∀ r ∈ d.rows, r ∈ e.rows) :
+    d.RowsDescendCarry e := fun _ _ c0 c1 hm => ⟨c0, c1, h _ hm, Or.inl rfl⟩
+
+/-- Two steps compose, `Term.blt` being transitive. -/
+theorem FDatabase.RowsDescendCarry.trans {d e g : FDatabase} (h₁ : d.RowsDescendCarry e)
+    (h₂ : e.RowsDescendCarry g) : d.RowsDescendCarry g := by
+  intro f as c0 c1 hm
+  obtain ⟨v, lo, hv, hd₁⟩ := h₁ f as c0 c1 hm
+  obtain ⟨w, lo', hw, hd₂⟩ := h₂ f as v lo hv
+  refine ⟨w, lo', hw, ?_⟩
+  rcases hd₂ with rfl | hd₂ <;> rcases hd₁ with rfl | hd₁
+  · exact Or.inl rfl
+  · exact Or.inr hd₁
+  · exact Or.inr hd₂
+  · exact Or.inr (Term.blt_trans _ _ _ hd₂ hd₁)
+
+/-- **One merge firing's key descends.** -/
+theorem mergeOneOriented_rowsDescendCarry {cl : Finset (Term × Term)} {d e : FDatabase}
+    {r₁ r₂ : Row} (hshape : Signature.MergeShape d.sig) (hidx : d.IndexOk)
+    (hcl : ∀ p ∈ cl, p.1 = p.2) (hne : r₁ ≠ r₂)
+    (hfire : d.mergeOneOriented cl r₁ r₂ = some e) : d.RowsDescendCarry e := by
+  obtain ⟨n0, n1, o0, o1, v, lo, hr1out, hr2out, hargs, hfn, hrow, hnv, hov⟩ :=
+    mergeOneOriented_survivorBlt hshape hidx hcl hne hfire
+  intro f as c0 c1 hm
+  by_cases h₁ : (⟨f, as, [c0, c1]⟩ : Row) = r₁
+  · have hf : f = r₂.fn := by rw [← hfn]; exact congrArg Row.fn h₁
+    have ha : as = r₂.args := by rw [← hargs]; exact congrArg Row.args h₁
+    have hc : [c0, c1] = [n0, n1] := by rw [← hr1out]; exact congrArg Row.out h₁
+    exact ⟨v, lo, by rw [hf, ha]; exact hrow,
+      by rw [show c0 = n0 from (List.cons.inj hc).1]; exact hnv⟩
+  · by_cases h₂ : (⟨f, as, [c0, c1]⟩ : Row) = r₂
+    · have hf : f = r₂.fn := congrArg Row.fn h₂
+      have ha : as = r₂.args := congrArg Row.args h₂
+      have hc : [c0, c1] = [o0, o1] := by rw [← hr2out]; exact congrArg Row.out h₂
+      exact ⟨v, lo, by rw [hf, ha]; exact hrow,
+        by rw [show c0 = o0 from (List.cons.inj hc).1]; exact hov⟩
+    · exact ⟨c0, c1, mem_rows_of_mergeOneOriented hfire hm h₁ h₂, Or.inl rfl⟩
+
+/-- **The same, at whichever orientation `FDatabase.mergeOneWith` chose.** -/
+theorem mergeOneWith_rowsDescendCarry {cl : Finset (Term × Term)} {d e : FDatabase} {r₁ r₂ : Row}
+    (hshape : Signature.MergeShape d.sig) (hidx : d.IndexOk) (hcl : ∀ p ∈ cl, p.1 = p.2)
+    (hne : r₁ ≠ r₂) (hm : d.mergeOneWith cl r₁ r₂ = some e) : d.RowsDescendCarry e := by
+  rcases FDatabase.mergeOneWith_eq_oriented (cl := cl) (d := d) r₁ r₂ with he | he
+  · exact mergeOneOriented_rowsDescendCarry hshape hidx hcl (Ne.symm hne) (he ▸ hm)
+  · exact mergeOneOriented_rowsDescendCarry hshape hidx hcl hne (he ▸ hm)
+
+/-- **A merge pass's keys descend.** -/
+theorem mergeRound_rowsDescendCarry {d : FDatabase} (hshape : Signature.MergeShape d.sig)
+    (hlegal : Signature.MergesLegal d.sig) (hinv : d.Inv) (hn : d.NoUnions) :
+    d.RowsDescendCarry d.mergeRound := by
+  have hdiag : ∀ p ∈ d.closureF, p.1 = p.2 := fun _ hp => diag_closureF hn.eqsRefl hp
+  have key : d.mergeRound.Inv ∧ d.mergeRound.sig = d.sig ∧ d.mergeRound.NoUnions ∧
+      d.RowsDescendCarry d.mergeRound := by
+    refine FDatabase.mergeRound_induction_ne
+      (P := fun x => x.Inv ∧ x.sig = d.sig ∧ x.NoUnions ∧ d.RowsDescendCarry x)
+      ⟨hinv, rfl, hn, FDatabase.RowsDescendCarry.of_subset fun _ hr => hr⟩
+      ⟨FDatabase.Inv.rebuild hinv FDatabase.closureSound_closureF, rfl, rebuild_noUnions hn,
+        FDatabase.RowsDescendCarry.of_subset fun r hr => by
+          rw [FDatabase.rebuild_diag hdiag, List.mem_dedup]; exact hr⟩ ?_
+    intro x y r₁ r₂ hne hx hy
+    refine ⟨FDatabase.mergeOneWith_inv hx.1 (by rw [hx.2.1]; exact hlegal) hy,
+      ((FDatabase.mergeOneWith_confined hy).2.2.1).trans hx.2.1,
+      mergeOneWith_noUnions hx.2.2.1 hy, hx.2.2.2.trans ?_⟩
+    exact mergeOneWith_rowsDescendCarry (by rw [hx.2.1]; exact hshape) hx.1.index hdiag hne hy
+  exact key.2.2.2
+
+/-- **And a whole merge phase's.** This is the survival fact the fixpoint's roots spend:
+whatever a rule firing wrote at a key, the phase leaves a row there whose e-class column is
+`Term.blt`-at or below it. -/
+theorem mergeSaturateF_rowsDescendCarry : ∀ (n : Nat) {d e : FDatabase},
+    Signature.MergeShape d.sig → Signature.MergesLegal d.sig → d.Inv → d.NoUnions →
+    FDatabase.mergeSaturateF n d = some e → d.RowsDescendCarry e
+  | 0, d, e, _, _, _, _, hrun => by
+      rw [FDatabase.mergeSaturateF] at hrun
+      split at hrun
+      · rw [Option.some.injEq] at hrun
+        exact hrun ▸ FDatabase.RowsDescendCarry.of_subset fun _ hr => hr
+      · exact absurd hrun (by simp)
+  | n + 1, d, e, hshape, hlegal, hinv, hn, hrun => by
+      rw [FDatabase.mergeSaturateF] at hrun
+      split at hrun
+      · rw [Option.some.injEq] at hrun
+        exact hrun ▸ FDatabase.RowsDescendCarry.of_subset fun _ hr => hr
+      · have hsig : d.mergeRound.sig = d.sig := FDatabase.mergeRound_confined.2.2.1
+        exact (mergeRound_rowsDescendCarry hshape hlegal hinv hn).trans
+          (mergeSaturateF_rowsDescendCarry n (by rw [hsig]; exact hshape)
+            (by rw [hsig]; exact hlegal) (FDatabase.Inv.mergeRound_of_legalMerges hinv hlegal)
+            (mergeRound_noUnions hn) hrun)
 
 /-! #### The writers that only add
 

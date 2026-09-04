@@ -4290,4 +4290,75 @@ theorem execM_entryRow_of_out {P : Program} (hdom : P.EncodeDomain) {tgt : FData
     ∃ v lo, (⟨f, as, [v, lo]⟩ : Row) ∈ tgt.rows ∧ tgt.toDatabase.UFReach x v :=
   (execM_entryRowsUF hdom htgt).out (execM_encode_eqsRefl htgt) hdc hm hlen ho
 
+
+/-! ## The fixpoint's roots, reduced to the firing
+
+The residue's second obligation is that at a rebuild fixpoint no surviving view row's e-class
+column has an outgoing `@UF` row — `FDatabase.UFRowEdge`, so a self-loop, which `(union a a)`
+really does write, is not one. The argument is three facts and one hole:
+
+* the e-class rule **fires** there, at the view row and the `@UF` row: its conclusion is a row
+  of the round's rule phase. This is the hole;
+* the round's **merge phase** then leaves a row at that key whose e-class column is
+  `Term.blt`-at or below the one the firing wrote — `mergeResult`'s `ordering-min`, carried
+  across a pass and across `FDatabase.mergeSaturateF` (`mergeSaturateF_rowsDescendCarry`);
+* `FDatabase.RowsClosed` says the round's row list is the state's back, and
+  `FDatabase.row_unique_of_settled` says a settled state carries at most one row per view key —
+  so that row *is* the one the fixpoint started with, and its e-class column is therefore at or
+  below the one the `@UF` row points at;
+* `FDatabase.UFRowsDescend` says the `@UF` row points strictly *below*, and `Term.blt_asymm`
+  closes it.
+
+**What the hole costs, precisely.** Three things, none of them available:
+`matchQuery` completeness in general form — `cxRb_mem_matchQuery` is one instance, and the
+general form has to name `Query.freeVars`' order, compose `Env.canon` with itself and place the
+columns in `FDatabase.valueTerms`; the **converse** of `FDatabase.RulesEncoded`, that the
+maintenance rules are rules the target *holds*, which no invariant the run carries says; and
+that the target's environment binds no `@`-prefixed variable, so that `Query.freeVars` is the
+whole of the query's variables — which `Program.EncodeDomain.noAt` supplies at the source
+(`Program.names` includes `P.vars`) but which still has to be carried along the run. -/
+
+/-- **The fixpoint's roots, given the e-class rule's own firing.** Everything but the firing is
+discharged. -/
+theorem no_ufRowEdge_of_eclassFired {P : Program} {d d' : FDatabase}
+    (hb : d.EncBase P (encodeSig P)) (hsy : (encodeSig P).IsCtor symName)
+    (htr : (encodeSig P).IsCtor transName) (hset : d.settled = true) (hdes : d.UFRowsDescend)
+    (hclosed : d.RowsClosed rebuildRuleset) (hround : d.runRoundM rebuildRuleset = some d')
+    {f : FnName} {dc : FnDecl} (hdecl : (encodeSig P) (viewName f) = some dc)
+    (hdcm : dc.merge = some (MergeSpec.merge mergeBody mergeResult))
+    {as : List Term} {e pf x q : Term}
+    (hrow : (⟨viewName f, as, [e, pf]⟩ : Row) ∈ d.rows) (hedge : d.UFRowEdge e x)
+    (hfired : (⟨viewName f, as, [x, Term.app transName [pf, q]]⟩ : Row) ∈
+      (execRunRules rebuildRuleset d).rows) :
+    False := by
+  have hsigd : d.sig = encodeSig P := hb.sig
+  have hshape : Signature.MergeShape d.sig := by rw [hsigd]; exact hb.shape
+  have hlegal : Signature.MergesLegal d.sig := by rw [hsigd]; exact hb.merges
+  have hsigR : (execRunRules rebuildRuleset d).sig = d.sig := FDatabase.execRunRules_fields.1
+  -- the merge phase leaves a row at the key, at or below the column the firing wrote
+  rw [FDatabase.runRoundM] at hround
+  have hcarry := mergeSaturateF_rowsDescendCarry mergeFuel
+    (by rw [hsigR]; exact hshape) (by rw [hsigR]; exact hlegal)
+    (hb.inv.execRunRules hb.wl') (execRunRules_noUnions hb.nounions) hround
+  obtain ⟨v, lo, hv, hle⟩ := hcarry (viewName f) as x (Term.app transName [pf, q]) hfired
+  rw [hclosed d' (by rw [FDatabase.runRoundM]; exact hround)] at hv
+  -- and a settled state carries at most one row per view key
+  have hmg : d.sig.mergeOf (viewName f) ≠ none := by
+    rw [Signature.mergeOf, hsigd, hdecl, Option.bind_some, hdcm]; simp
+  have hout : ([e, pf] : List Term) = [v, lo] :=
+    FDatabase.row_unique_of_settled hset hshape hlegal hb.inv
+      (fun p hp => diag_closureF hb.eqsRefl hp) (by rw [hsigd]; exact hsy)
+      (by rw [hsigd]; exact htr) (by rw [hsigd]; exact hdecl) hdcm
+      (fun hc => viewName_ne_ufName hc)
+      (rowArgs_mem_closureF hb.eqsRefl hb.inv.index hb.subtermClosed
+        ⟨viewName f, as, [e, pf]⟩ hrow hmg)
+      hrow hv
+  obtain rfl : e = v := (List.cons.inj hout).1
+  -- the edge descends, and the survivor does not
+  have hxe : Term.blt x e = true := hdes e x hedge
+  rcases hle with rfl | hlt
+  · exact hedge.2 rfl
+  · rw [Term.blt_asymm x e hxe] at hlt
+    exact absurd hlt (by simp)
+
 end Egglog
