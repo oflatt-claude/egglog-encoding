@@ -20,7 +20,7 @@ import re
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-SNAPSHOTS = ROOT / "slotted-tests" / "snapshots"
+SNAPSHOTS = ROOT / "slotted" / "tests" / "snapshots"
 
 _spec = importlib.util.spec_from_file_location("ct", ROOT / "slotted" / "check-tutorial.py")
 ct = importlib.util.module_from_spec(_spec)

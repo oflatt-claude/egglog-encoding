@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Compile the reference `sdql` rewrite rules into the slotted encoding.
 
-The rules are `slotted-tests/sdql.egg`, written in the slotted language and read from
+The rules are `slotted/tests/sdql.egg`, written in the slotted language and read from
 there rather than restated here; the recipe that compiles them is
-`slotted/slotted-encoder.py`, which `slotted-tests/slotted-user-rules.egg`
+`slotted/slotted-encoder.py`, which `slotted/tests/slotted-user-rules.egg`
 documents.  What `sdql` adds over the differential harness's two-child `App2`/`App3`
 atoms is the per-language constructors of `slotted/languages/sdql.egg`,
 which have one to six children and payload columns, and with them four cases the
@@ -25,7 +25,7 @@ connectivity the recipe requires.  `connected_order`'s further preference -- a
 binder is not the atom that fixes slots(pattern) -- is not followed: most `sdql`
 rules are rooted at a binder, and taking the root first pins each bound slot off
 its own edge instead of minting a name for it.  M7 in
-`slotted-tests/slotted-user-rules.egg` is the same shape.
+`slotted/tests/slotted-user-rules.egg` is the same shape.
 
 Terms in the table below:
 
@@ -50,7 +50,7 @@ sc = __import__("slotted-egglog")
 
 OUT = pathlib.Path(os.environ.get("SDQL_OUT", "target/slotted/slotted-sdql-rules.egg"))
 
-# Re-introducible bugs, so the checks in `slotted-tests/sdql-rewrites.egg` can be
+# Re-introducible bugs, so the checks in `slotted/tests/sdql-rewrites.egg` can be
 # shown to test what they were written for.  The encoder's flags, under the same
 # names `XDIFF_BUGS` takes in `slotted/xdiff/xdiff.py`.
 #   SDQL_BUGS=slot-late   a slot literal checked after the renaming, not with it
@@ -75,9 +75,9 @@ HEADER = """\
 ;;;
 ;;; The reference `sdql` rewrite rules -- `sdql_rules()` in
 ;;; `slotted-egraphs/benches/sdql.rs` -- compiled into the slotted encoding by the
-;;; recipe in `slotted-tests/slotted-user-rules.egg`.
+;;; recipe in `slotted/tests/slotted-user-rules.egg`.
 ;;;
-;;; The rules themselves are `slotted-tests/sdql.egg`, written in the slotted language;
+;;; The rules themselves are `slotted/tests/sdql.egg`, written in the slotted language;
 ;;; read them there. This file is what they compile to.
 ;;;
 ;;; `beta` is NOT here: it substitutes, which needs `slotted-subst` and frame
@@ -89,7 +89,7 @@ HEADER = """\
 ;;;     (run-schedule (saturate (run slotted))
 ;;;                   (repeat N (seq (run sdql 1) (saturate (run slotted)))))
 ;;;
-;;; `slotted-tests/sdql-rewrites.egg` is what checks them -- written in the slotted
+;;; `slotted/tests/sdql-rewrites.egg` is what checks them -- written in the slotted
 ;;; language over the same rules, and compiled at test time.
 
 (include "target/slotted/slotted-lang-sdql.egg")
@@ -102,7 +102,7 @@ HEADER = """\
 #: The rules, in the slotted language. One source for both this file and
 #: `slotted-egglog.py`, so the .egg tests and the differential harness cannot be
 #: running different rules from each other.
-SOURCE = pathlib.Path("slotted-tests/sdql.egg")
+SOURCE = pathlib.Path("slotted/tests/sdql.egg")
 
 
 def main():

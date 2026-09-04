@@ -11,7 +11,7 @@ Two kinds of output. `GENERIC` is the string-headed encoding in
 operator can be written without regenerating. Each `slotted/languages/*.egg`
 gets a per-language encoding with one constructor per operator, the shape the
 reference crate's `define_language!` produces. Both include
-`slotted-tests/slotted-egraph-encoding-11.egg`, which is hand-written and holds the
+`slotted/tests/slotted-egraph-encoding-11.egg`, which is hand-written and holds the
 constructor-independent half -- the sorts, the union-find rules, `Var` normalisation --
 plus the ONE constructor family it works through as a worked example.
 
@@ -56,7 +56,7 @@ GENERIC_FILE = "target/slotted/slotted-node-rules.egg"
 # pairs and pins them by head string.
 GENERIC_BINDERS = (("lambda", "App2"), ("let", "App3"))
 
-# Constructors whose rules `slotted-tests/slotted-egraph-encoding-11.egg` hand-writes, along
+# Constructors whose rules `slotted/tests/slotted-egraph-encoding-11.egg` hand-writes, along
 # with any binder over them and the machinery's SHARED block. They are left out of the
 # generated file, which includes that one, so each is declared exactly once.
 HANDWRITTEN = ("App2",)
@@ -76,7 +76,7 @@ def string_headed(head, ctor, ref=None):
 
 
 def handwritten_region():
-    """What `slotted-tests/slotted-egraph-encoding-11.egg` has to hold, rules only.
+    """What `slotted/tests/slotted-egraph-encoding-11.egg` has to hold, rules only.
 
     The machinery's SHARED block plus the `HANDWRITTEN` constructors and their binders:
     everything this generator could emit but leaves to that file. Comments and blank
@@ -96,8 +96,8 @@ def handwritten_region():
 # still has a file to itself.
 LANG_DIR = pathlib.Path("slotted/languages")
 SOURCES = {
-    "sdql": pathlib.Path("slotted-tests/sdql.egg"),
-    "array": pathlib.Path("slotted-tests/array.egg"),
+    "sdql": pathlib.Path("slotted/tests/sdql.egg"),
+    "array": pathlib.Path("slotted/tests/array.egg"),
     "toy": LANG_DIR / "toy.egg",
 }
 

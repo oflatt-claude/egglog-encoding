@@ -28,7 +28,7 @@ XMULTI = ROOT / "slotted" / "xmulti" / "target" / "debug" / "xmulti"
 
 # One entry per generated file: the command that writes it. These are BUILD OUTPUT,
 # under `target/`, so nothing here is committed -- the tests include them, and
-# `make slotted-check` builds them first. `slotted-tests/snapshots/` is the committed
+# `make slotted-check` builds them first. `slotted/tests/snapshots/` is the committed
 # derived artifact.
 GENERATED = {
     "target/slotted/slotted-node-rules.egg": ("slotted/gen-node-rules.py",),
@@ -43,7 +43,7 @@ GENERATED = {
 #: Compiled slotted tests. Each is what running that test runs, committed so a change
 #: in the compiler shows up as a diff -- the same reason the proof encoding snapshots
 #: its generated program.
-SNAPSHOT_DIR = ROOT / "slotted-tests" / "snapshots"
+SNAPSHOT_DIR = ROOT / "slotted" / "tests" / "snapshots"
 EMIT_SNAPSHOTS = ("slotted/run-slotted-tests.py", "--emit")
 
 
@@ -87,7 +87,7 @@ def starts_ok(out):
 
 def run_egg_files():
     """Every slotted .egg file loads and runs clean."""
-    files = sorted(glob.glob(str(ROOT / "slotted-tests" / "**" / "slotted-*.egg"), recursive=True))
+    files = sorted(glob.glob(str(ROOT / "slotted" / "tests" / "**" / "slotted-*.egg"), recursive=True))
     # A test ported to the slotted language leaves this set and joins `slotted-tests`,
     # so this floor drops as that one rises; neither may fall on its own. It also
     # dropped by six when the generated machinery moved to `target/`, which is build

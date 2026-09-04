@@ -4,19 +4,19 @@ Companion to these runnable files:
 
 | file | what it is |
 | --- | --- |
-| `slotted-tests/slotted-egraph-encoding-11.egg` | the machinery: union, congruence, redundancy, symmetry |
-| `slotted-tests/slotted-user-rules.egg` | the tutorial: one shape of user rule per section — M1–M11 — each stated as prose plus the single rule a compiler emits, and nothing else. All eleven are a real rewrite, from `sdql_rules()` or the paper's §4.1 array language, and each is exactly what `slotted-encoder.py` emits for it: `slotted/check-tutorial.py` compares every one against the encoder's output and allows only a renaming of the variables. M6 and M9 are the same rule (`eta`) at two atom orders, since the lead is a compile-time choice. The shapes no rewrite produces on demand — a multi-rooted left-hand side, two mints in one match, a child wider than its class — are hand-built e-graphs in the fixture block of `slotted-tests/slotted-user-rules-tests.egg`, whose rules are still the encoder's output |
-| `slotted-tests/slotted-user-rules-tests.egg` | the cases for it: it includes the tutorial, then adds the terms, schedules, assertions and counter-examples |
+| `slotted/tests/slotted-egraph-encoding-11.egg` | the machinery: union, congruence, redundancy, symmetry |
+| `slotted/tests/slotted-user-rules.egg` | the tutorial: one shape of user rule per section — M1–M11 — each stated as prose plus the single rule a compiler emits, and nothing else. All eleven are a real rewrite, from `sdql_rules()` or the paper's §4.1 array language, and each is exactly what `slotted-encoder.py` emits for it: `slotted/check-tutorial.py` compares every one against the encoder's output and allows only a renaming of the variables. M6 and M9 are the same rule (`eta`) at two atom orders, since the lead is a compile-time choice. The shapes no rewrite produces on demand — a multi-rooted left-hand side, two mints in one match, a child wider than its class — are hand-built e-graphs in the fixture block of `slotted/tests/slotted-user-rules-tests.egg`, whose rules are still the encoder's output |
+| `slotted/tests/slotted-user-rules-tests.egg` | the cases for it: it includes the tutorial, then adds the terms, schedules, assertions and counter-examples |
 | `slotted/slotted-egglog.py` | compiles a test written in the SLOTTED language — its own `(constructor ... :binder ...)` declarations, then terms, `rewrite`s and `(check (same a b))` — into a self-contained egglog program: the hand-written core, the machinery for exactly the constructors declared, and the compiled body. It includes no generated file, so nothing sits between a test and running it. `same` rather than `=` because slotted equality is not egglog equality: `(RenamesToLeader f m l)` is `f = m*l`, and two terms are equal when ONE renaming reaches both from the leader -- Def. 6, two invocations agree when the renaming between them is a symmetry of the class. Landing in the same class by *some* renaming is weaker and is spelled `same-class`; the pair that separates them is two alpha-variants whose free slot is renamed, one class but not equal |
 | `slotted/slotted-encoder.py` | the recipe as code: the machinery emitter, the term encoding and the rule compiler, which every generator below goes through |
 | `slotted/xdiff/xdiff.py` | differential tests against the reference implementation |
-| `slotted-tests/sdql.egg` | the paper's `sdql` language and all 43 of its rewrite rules, in the SLOTTED language. `gen-sdql-rules.py` compiles them for the .egg tests and the differential harness, and `slotted-egglog.py` compiles the same file to run it; neither restates a rule |
-| `slotted-tests/array.egg` | the same, for the paper's §4.1 array language and its 8 rules. `xarray.py` builds its rule objects from this file |
-| `slotted-tests/paper/` | the reference crate's own suites, in the SLOTTED language and standalone, one file per test there so the two diff side by side: `var-xy-eq-yz`, `fgh-transitive-symmetry`, `enode-collisions` (3.4), `figure-3`, `redundancy-orbit` (3.5 step 1) and `two-redundant-slots` (Def. 8) |
-| `slotted-tests/symmetry-tests.egg` | where a class's symmetry group comes from and what has to follow: closure, composition down a union chain, congruence to a parent, and matching a repeated pattern variable up to a symmetry |
-| `slotted-tests/binder-tests.egg` | rules that reach under a binder, whose pattern IS a binder, and that introduce one with `:fresh` -- each paired with the shape that must not fire |
-| `slotted-tests/redundancy-tests.egg` | redundancy from a rewrite rather than a union, and a match that only exists after one. Ends with the shape that still fails, written out |
-| `slotted-tests/rewrite-tests.egg` | the project's original tests, ported off the pre-compiler encoded form |
+| `slotted/tests/sdql.egg` | the paper's `sdql` language and all 43 of its rewrite rules, in the SLOTTED language. `gen-sdql-rules.py` compiles them for the .egg tests and the differential harness, and `slotted-egglog.py` compiles the same file to run it; neither restates a rule |
+| `slotted/tests/array.egg` | the same, for the paper's §4.1 array language and its 8 rules. `xarray.py` builds its rule objects from this file |
+| `slotted/tests/paper/` | the reference crate's own suites, in the SLOTTED language and standalone, one file per test there so the two diff side by side: `var-xy-eq-yz`, `fgh-transitive-symmetry`, `enode-collisions` (3.4), `figure-3`, `redundancy-orbit` (3.5 step 1) and `two-redundant-slots` (Def. 8) |
+| `slotted/tests/symmetry-tests.egg` | where a class's symmetry group comes from and what has to follow: closure, composition down a union chain, congruence to a parent, and matching a repeated pattern variable up to a symmetry |
+| `slotted/tests/binder-tests.egg` | rules that reach under a binder, whose pattern IS a binder, and that introduce one with `:fresh` -- each paired with the shape that must not fire |
+| `slotted/tests/redundancy-tests.egg` | redundancy from a rewrite rather than a union, and a match that only exists after one. Ends with the shape that still fails, written out |
+| `slotted/tests/rewrite-tests.egg` | the project's original tests, ported off the pre-compiler encoded form |
 | `target/slotted/slotted-array-rules.egg` | what those 8 compile to, self-checking |
 | `slotted/xdiff/xarray.py` | the same 8 rules, differentially tested against the reference |
 
@@ -107,8 +107,8 @@ it. A body no ordering can connect has to invent slots, and there the gap is rea
 
 It is tempting to read this as three separate cases — first atom, root known,
 children known — and that reading caused three of the four bugs listed at the end.
-`slotted-tests/slotted-user-rules.egg` had drifted back to it and has been brought into
-line; the counter-example under `M4` in `slotted-tests/slotted-user-rules-tests.egg` is an
+`slotted/tests/slotted-user-rules.egg` had drifted back to it and has been brought into
+line; the counter-example under `M4` in `slotted/tests/slotted-user-rules-tests.egg` is an
 e-graph where the two readings visibly disagree, the short one computing an *empty*
 renaming for a child that has a slot.
 The cases are only *which* constraints happen to exist:
@@ -605,7 +605,7 @@ the class's slot set and stopped being renameable, which separates two terms the
 reference *identifies* — the opposite error. A colliding bound slot is therefore
 renamed to a slot the node does not use before the strip applies. Both halves were
 needed: `xarray.py iso` went 8-vs-9 classes, to 9-vs-9 but non-isomorphic, to 15/15.
-`slotted-tests/slotted-binder-scope.egg` is the pair of cases, and `xarray.py extra` the
+`slotted/tests/slotted-binder-scope.egg` is the pair of cases, and `xarray.py extra` the
 comparison.
 
 ### Two discrepancies in the reference checkout, one now fixed upstream
@@ -660,7 +660,7 @@ self-loops does not help, and neither does guarding transitivity.
 
 Fixed by minting a name for the uncovered slot instead of dropping it: migration
 composes through a renaming that is total on the node's slots, which is
-`find-mapping-total` in `slotted-tests/slotted-egraph-encoding-11.egg`. The alternative —
+`find-mapping-total` in `slotted/tests/slotted-egraph-encoding-11.egg`. The alternative —
 declining to migrate whenever an edge would narrow — was in the tree for a while and is
 measured in the next section.
 
@@ -779,7 +779,7 @@ so it is worth fixing on its own.
 ### The fix: don't delete a self-loop that a class still needs
 
 The two-rule interaction reduces to four lines of machinery, with no user rule
-involved — `Case 14` in `slotted-tests/slotted-egraph-encoding-11.egg`:
+involved — `Case 14` in `slotted/tests/slotted-egraph-encoding-11.egg`:
 
 ```lisp
 (let $B (App2 "h" (map-of 0 2) (Var 0) (map-of 0 1) (Var 0)))     ; h($2,$1), slots {1,2}
@@ -1042,9 +1042,9 @@ Curated cases, and what each is for:
 | `S1`,`S1b` | the stored symmetries are closed, so a lookup finds a composite element |
 | `S2` | a symmetry and a redundancy in play at once |
 | `B1`–`B4` | binders: chaining through one, α-equivalence, the same slot literal on two binders |
-| `M1`,`M3` | shapes `slotted-tests/slotted-user-rules.egg` teaches that nothing else covered: a swapped action, and one shared variable across two operators |
+| `M1`,`M3` | shapes `slotted/tests/slotted-user-rules.egg` teaches that nothing else covered: a swapped action, and one shared variable across two operators |
 
-`slotted-tests/slotted-user-rules.egg` is the readable form of this same recipe, so each of
+`slotted/tests/slotted-user-rules.egg` is the readable form of this same recipe, so each of
 its sections names the case above that covers its shape. Keep the
 two in step — the hand-written file passing its own assertions only says it does
 what it expects, and it had drifted to the three-case reading once already. One
@@ -1750,7 +1750,7 @@ Two things this was worth doing for.
 witness for the only unsoundness found — stop testing what it was written for,
 because under the new policy its root renaming comes out as the identity, and at
 the identity the right and wrong spellings agree. The same happened to `R2` in
-`slotted-tests/slotted-multipat-diff.egg`. For a while nothing anywhere caught `union-id`.
+`slotted/tests/slotted-multipat-diff.egg`. For a while nothing anywhere caught `union-id`.
 `C14` replaces `C11`, with the action rooted at a *child* variable so its renaming
 is a stored edge rather than the identity.
 

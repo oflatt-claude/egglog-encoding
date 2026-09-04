@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compile every slotted-language test and run it.
 
-A test in `slotted-tests/` is a SLOTTED source when it includes nothing: it declares
+A test in `slotted/tests/` is a SLOTTED source when it includes nothing: it declares
 its own constructors and the compiler supplies the core and the machinery. A test that
 `(include ...)`s something is written in plain egglog against the encoding -- the
 machinery tests -- and is run directly by `check-slotted.py`'s `egg-files`.
@@ -10,7 +10,7 @@ Usage:
     ./run-slotted-tests.py            compile and run each
     ./run-slotted-tests.py -k sdql    only those whose name contains `sdql`
     ./run-slotted-tests.py --emit     also write each test's own compiled forms to
-                                      slotted-tests/snapshots/, so a change in the
+                                      slotted/tests/snapshots/, so a change in the
                                       encoder shows up as a diff
 """
 
@@ -21,7 +21,7 @@ import subprocess
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-SRC_DIR = ROOT / "slotted-tests"
+SRC_DIR = ROOT / "slotted" / "tests"
 SNAPSHOTS = SRC_DIR / "snapshots"
 COMPILE = ROOT / "slotted" / "slotted-egglog.py"
 
@@ -58,7 +58,7 @@ def slotted_sources():
         ok = True
         for t in re.findall(r'\(include "([^"]*)"\)', q.read_text()):
             target = ROOT / t
-            if not t.startswith("slotted-tests/") or "generated/" in t or not target.exists():
+            if not t.startswith("slotted/tests/") or "generated/" in t or not target.exists():
                 ok = False
                 break
             if not is_source(target):

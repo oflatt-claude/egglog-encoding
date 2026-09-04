@@ -18,6 +18,10 @@ THE LANGUAGE
                                                 slot; in any other child column it is
                                                 a variable occurrence
 
+    (union a b)                                 assert an equation instead of deriving
+                                                one -- how a class gets a symmetry, and
+                                                how a slot becomes redundant
+
     (rewrite (Sum ?e1 $k $v (Sing $k $v)) ?e1)  a rule, in terms
     (rewrite lhs rhs :when (not-free $x ?f))    ... with a slot side condition
 
@@ -30,20 +34,37 @@ THE LANGUAGE
     (check (holds a Mult))                      a's class contains a Mult node
     (check (not-holds a Mult))                  and does not
 
-    (sizes)                                     print the table sizes: a measurement,
-                                                not a claim
+    (check (same-class a b))                    one class, by SOME renaming -- weaker
+    (check (not-same-class a b))                than `same`, which pins the renaming
 
-    (push) (pop)                                scope terms, as in egglog
+EVERYTHING ELSE IS EGGLOG'S
 
-`same` is the point of the whole exercise: two values are one slotted class when they
-reach a common leader, which is not egglog equality -- classes equal up to a renaming
-stay distinct values. Writing `(= a b)` would test the wrong thing, so it is not
-offered.
+Only a form that NAMES A SLOTTED TERM needs compiling, because only a term has to be
+encoded. Every other command means the same thing here as it does in egglog and goes
+through as written -- `(push)`, `(pop)`, `(print-size)`, `(print-function F 10)`,
+`(query-extract ...)`, and whatever egglog gains next. `(extract a)` is the one in
+between: its argument is a term, so it is encoded, and what egglog then prints is the
+node as the encoding STORES it, renamings and all.
+
+    (extract a)             (F (map-of 0 2) (Var 0) (map-of 0 1) (Var 0))
+
+A check whose claim is none of the ones above is egglog's too, so a test can drop to
+the encoded level -- `(check (RenamesToLeader a m l))` -- without leaving the language.
+
+WHAT `same` MEANS
+
+`(RenamesToLeader f m l)` is `f = m*l`, so two terms are EQUAL when one renaming
+reaches both from the leader. That is Def. 6: two invocations of a class agree when the
+renaming between them is a symmetry of the class. Landing in one class by *some*
+renaming is weaker, and is `same-class` -- the pair that separates them is two
+alpha-variants whose free slot is renamed, which are one class but not equal. Egglog's
+own `(= a b)` is a third thing, finer than both, and testing it would test the
+encoding rather than the language.
 
 Usage:
-    ./slotted-egglog.py SRC.egg              write the compiled program to stdout
+    ./slotted-egglog.py SRC.egg              run it
+    ./slotted-egglog.py SRC.egg --desugar    write the compiled program to stdout
     ./slotted-egglog.py SRC.egg -o OUT.egg   ... or to a file
-    ./slotted-egglog.py SRC.egg --run        compile to a temp file and run egglog
 """
 
 import argparse
@@ -57,7 +78,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "slotted"))
 enc = __import__("slotted-encoder")
 
-CORE_FILE = "slotted-tests/slotted-egraph-encoding-11.egg"
+CORE_FILE = "slotted/tests/slotted-egraph-encoding-11.egg"
 TOKEN = re.compile(r'\(|\)|"[^"]*"|;[^\n]*|[^\s()]+')
 SLOT = re.compile(r"\$\w+\Z")
 
@@ -81,6 +102,11 @@ def parse(text):
     while pos[0] < len(toks):
         out.append(go())
     return out
+
+
+def render(form):
+    """A parsed form back as text, unchanged."""
+    return "(" + " ".join(render(x) for x in form) + ")" if isinstance(form, list) else form
 
 
 class Terms(enc.TermLang):
@@ -134,7 +160,7 @@ class Source:
 
         `(include "...")` in a slotted source names ANOTHER SLOTTED SOURCE, and pulls in
         its constructors and its rules -- so a test over the sdql rules says
-        `(include "slotted-tests/sdql.egg")` instead of restating 43 of them. A slotted
+        `(include "slotted/tests/sdql.egg")` instead of restating 43 of them. A slotted
         source never includes the hand-written core or a generated file: the compiler
         supplies the core and generates the machinery, which is the whole point.
         """
@@ -224,9 +250,7 @@ def compile_source(src, own_only=False):
         head = form[0] if isinstance(form, list) else form
         mine = origin == src.path
         keep = mine or not own_only
-        if head in ("push", "pop"):
-            _emit(out, keep, f"({head})")
-        elif head == "let":
+        if head == "let":
             _, name, body = form
             _emit(out, keep, f"(let ${name} {src.encode(body)})")
             src.lang.bound[name] = src.term(body)
@@ -242,14 +266,19 @@ def compile_source(src, own_only=False):
             rules += 1
         elif head == "run":
             _emit(out, keep, schedule(int(form[1]), rules))
-        elif head == "sizes":
-            # diagnostic, not a claim: how big the tables got, which is how the
-            # e-node counts a test records in its header were measured
-            _emit(out, keep, "(print-size)")
+        elif head == "extract":
+            # What is actually in the class, printed as the encoding stores it: a node
+            # with its edges' renamings spelled out. Reading it is how you see that a
+            # slot is redundant, or which invocation a class settled on.
+            _emit(out, keep, f"(extract {src.encode(form[1])})")
         elif head in ("check", "fail"):
             _emit(out, keep, compile_check(src, form))
         else:
-            raise SystemExit(f"{src.path.name}: cannot compile {head!r}")
+            # Everything else is egglog's, and means the same thing here: a command
+            # that names no slotted term needs no compiling. `print-size`,
+            # `print-function`, `query-extract`, `push`/`pop`, and whatever egglog
+            # gains next all work without this file learning about them.
+            _emit(out, keep, render(form))
     return "\n".join(out) + "\n"
 
 
@@ -419,7 +448,39 @@ def compile_check(src, form):
             f"(check (= (ClassSlots {a}) (map-of {slots})))" if slots else f"(check (= (ClassSlots {a}) (map-empty)))"
         )
         return f"(fail {body})" if negated else body
-    raise SystemExit(f"{src.path.name}: unknown claim {kind!r}")
+    # Not one of the slotted claims, so it is an ordinary egglog check about the
+    # encoding -- `(check (RenamesToLeader ...))` and the like. It names no slotted
+    # term, so it goes through as written.
+    return render(form)
+
+
+def tally(src):
+    """What the program actually did, for the line printed after it runs.
+
+    `ok` on its own only ever meant "egglog exited 0", which is a different claim for
+    each kind of file: for one with claims it means they all held, and for a rule
+    library -- constructors and rewrites, no terms and nothing asked -- it means the
+    file loaded and NOTHING was checked. Saying which is which is the point.
+    """
+    n = {}
+    for form, _ in src.body:
+        head = form[0] if isinstance(form, list) else form
+        n[head] = n.get(head, 0) + 1
+    claims = n.get("check", 0) + n.get("fail", 0)
+    parts = []
+    for count, word in (
+        (n.get("let", 0), "term"),
+        (n.get("union", 0), "union"),
+        (n.get("rewrite", 0), "rule"),
+        (claims, "claim"),
+    ):
+        if count:
+            parts.append(f"{count} {word}{'s' if count != 1 else ''}")
+    if not claims:
+        # The case worth spelling out: nothing was asked, so nothing was checked.
+        library = n.get("rewrite", 0) and not n.get("let", 0)
+        parts.append("nothing asked -- a rule library, included by other files" if library else "nothing asked")
+    return ", ".join(parts) if parts else "empty"
 
 
 def main():
@@ -476,7 +537,11 @@ def main():
         print(f"     compiled program kept at {path}")
         return 1
     pathlib.Path(path).unlink(missing_ok=True)
-    print(f"ok   {args.src.name}")
+    if r.stdout.strip():
+        # Whatever the program itself printed -- `extract`, `sizes`. It used to be
+        # captured and dropped, so a file could ask for output and get none.
+        sys.stdout.write(r.stdout)
+    print(f"ok   {args.src.name}   {tally(src)}")
     return 0
 
 

@@ -2,7 +2,7 @@
 """The slotted encoding, in one place.
 
 Several programs encode slotted rules and terms, and the recipe they encode is one
-recipe: `slotted-tests/slotted-user-rules.egg` states it, section by section, and
+recipe: `slotted/tests/slotted-user-rules.egg` states it, section by section, and
 `slotted-user-rules.md` argues it. This module is that recipe as code, so there is
 one place for it to be right and one place to fix. The front-ends:
 
@@ -13,8 +13,8 @@ one place for it to be right and one place to fix. The front-ends:
     xdiff/xarray.py       the differential harness, the paper's array language
     xdiff/xsdql.py        the differential harness, `sdql`
 
-None of them holds a rule. The rules live in `slotted-tests/sdql.egg` and
-`slotted-tests/array.egg`, written in the slotted language, and each front-end reads
+None of them holds a rule. The rules live in `slotted/tests/sdql.egg` and
+`slotted/tests/array.egg`, written in the slotted language, and each front-end reads
 one -- so a rule has one spelling and the several things done with it cannot disagree
 about what it says.
 
@@ -69,8 +69,8 @@ sections, and its docstring names which: the degenerate leading atom is M1, the
 repeat-inside-one-atom check is M2, minting is M3, the chain is M4, the accumulating
 avoid-set is M5, `narrow` is M8, and the conclusion is M10. A worked match with real
 values for every one of those variables is at the top of
-`slotted-tests/slotted-user-rules.egg`, asserted by
-`slotted-tests/slotted-user-rules-trace.egg`.
+`slotted/tests/slotted-user-rules.egg`, asserted by
+`slotted/tests/slotted-user-rules-trace.egg`.
 """
 
 import re
@@ -232,7 +232,7 @@ def shape_of(col):
     return {CHILD: "child", BINDER: "binder"}.get(col, str(col))
 
 
-# The two constructors `slotted-tests/slotted-egraph-encoding-11.egg` declares and writes the
+# The two constructors `slotted/tests/slotted-egraph-encoding-11.egg` declares and writes the
 # rules for itself, because both are constructor-independent: `Var` is normalised into
 # a renaming so one value stands for every variable, and `Null` is the nullary object.
 # A language file may declare either for the record -- so that it names every
@@ -241,7 +241,7 @@ CORE = {"Var": ["i64"], "Null": []}
 
 # The hand-written half, and the generated file that includes it. A language file
 # includes the generated one, so it gets both.
-MACHINERY = "slotted-tests/slotted-egraph-encoding-11.egg"
+MACHINERY = "slotted/tests/slotted-egraph-encoding-11.egg"
 
 
 ###############################################################################
@@ -579,7 +579,7 @@ def emit(language, binders=(), provided=None, omit=()):
 
 
 # The constructor-independent half of the node machinery. Hand-written in
-# `slotted-tests/slotted-egraph-encoding-11.egg` along with a constructor or two, and kept
+# `slotted/tests/slotted-egraph-encoding-11.egg` along with a constructor or two, and kept
 # here so a generator can state what that text has to say.
 SHARED = """\
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -1082,7 +1082,7 @@ def compile_rule(
 ):
     """Compile a flattened multipattern and its action into one egglog rule.
 
-    The recipe `slotted-tests/slotted-user-rules.egg` states. Atoms are taken in the order
+    The recipe `slotted/tests/slotted-user-rules.egg` states. Atoms are taken in the order
     given, which must be connected (see `connected_order`). Per atom, in order:
 
       * one egglog atom per e-node, `(= V (Op m1 c1 ...))`;
