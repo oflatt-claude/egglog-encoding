@@ -17,10 +17,7 @@
 ;;; the machinery stopped saturating at step 6; none at any step after, and it
 ;;; saturates through step 10.
 
-;; Written at the ENCODED level -- the renamings are spelled out -- so this names a
-;; shape to write raw egglog with, not a constructor for slotted terms. The core the
-;; compiler supplies already declares it, so nothing extra is emitted for it.
-(machinery App2 (String U U) U)
+(include "slotted/encoding/egraph-encoding-11.egg")
 
 ;; Creation order fixes the value order, so $y is smallest and $f largest.
 (let $y (App2 "y" (map-of 0 1) (Var 0) (map-of 0 2) (Var 0)))

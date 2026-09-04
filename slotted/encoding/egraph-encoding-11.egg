@@ -236,7 +236,7 @@
 ;; makes two spellings of the same binder alpha-equivalent. A binder covers ONE column,
 ;; the one after its own -- `Bind<T>` around a single child -- which at arity 2 leaves no
 ;; other column, so there is nothing to check for a free occurrence and nothing to rename
-;; apart. Both appear from arity 3 on; `slotted/tests/slotted-binder-scope.egg` has those cases.
+;; apart. Both appear from arity 3 on; `slotted/encoding/binder-scope.egg` has those cases.
 (rule ((RenamesToLeader (App2 "lambda" mvar0 (Var 0) m2 c2) ml l)
        (= v0 (map-get mvar0 0)))
       ((Equated (App2 "lambda" mvar0 (Var 0) m2 c2) (inverse (map-remove (inverse ml) v0)) l)) :ruleset slotted)

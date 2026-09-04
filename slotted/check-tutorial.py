@@ -26,7 +26,7 @@ sys.path.insert(0, str(ROOT / "slotted"))
 enc = __import__("slotted-encoder")
 gen = __import__("gen-node-rules")  # the generic, string-headed family lives there
 
-TUTORIAL = ROOT / "slotted" / "tests" / "user-rules.egg"
+TUTORIAL = ROOT / "slotted" / "encoding" / "user-rules.egg"
 
 # The tutorial's language IS the generic, string-headed encoding it includes, so every
 # rule here is one expressible with `App2`/`App3` and a head string.

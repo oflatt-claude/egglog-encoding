@@ -1,6 +1,6 @@
 ;;; One match, every intermediate value asserted.
 ;;;
-;;; The tutorial in `user-rules.egg` says what each scaffolding variable MEANS.
+;;; The tutorial in `slotted-user-rules.egg` says what each scaffolding variable MEANS.
 ;;; This file says what they HOLD, on one concrete e-graph, so the worked example quoted
 ;;; at the top of the tutorial is executed rather than described. If a value changes, this
 ;;; fails and the tutorial's numbers are known to be stale.
@@ -26,13 +26,10 @@
 ;;;
 ;;; So nothing the root knows constrains either inner atom: `?a` and `?b` both land on a
 ;;; class with no slots, and both inner atoms have to MINT. The accumulation is what keeps
-;;; the two mints apart, and `f5a` in `user-rules-tests.egg` is the same e-graph
+;;; the two mints apart, and `f5a` in `slotted-user-rules-tests.egg` is the same e-graph
 ;;; against a rule that does not accumulate, where `?u` and `?v` collapse onto one slot.
 
-;; Written at the ENCODED level -- the renamings are spelled out -- so this names a
-;; shape to write raw egglog with, not a constructor for slotted terms. The core the
-;; compiler supplies already declares it, so no rules are emitted for it here.
-(machinery App2 (String U U) U)
+(include "target/slotted/slotted-node-rules.egg")
 
 (relation Step (String Renaming Renaming))
 (relation Child (String Renaming))

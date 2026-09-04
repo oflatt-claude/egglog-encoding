@@ -5,7 +5,7 @@
 ;;; that emit them -- committing them again per test would be the same thousands
 ;;; of lines over and over.
 
-(include "slotted/tests/slotted-egraph-encoding-11.egg")
+(include "slotted/encoding/egraph-encoding-11.egg")
 
 (push)
 (let $i0 (Lam (map-of 0 0) (Var 0) (map-of 0 0) (Var 0)))

@@ -1,4 +1,4 @@
-;;; Cases for `slotted/tests/user-rules.egg`.
+;;; Cases for `slotted/encoding/user-rules.egg`.
 ;;;
 ;;; The tutorial states the encoding and holds the rules -- one per shape, the one a compiler
 ;;; emits.  This file holds everything that exercises them: the e-graphs, the schedules, the
@@ -34,7 +34,7 @@
 ;;; The schedule saturates the invariant rules between user-rule steps, so a user rule only
 ;;; ever matches nodes that are already canonical.
 
-(include "slotted/tests/user-rules.egg")
+(include "slotted/encoding/user-rules.egg")
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

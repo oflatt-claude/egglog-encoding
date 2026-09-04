@@ -86,15 +86,17 @@ def starts_ok(out):
 
 
 def run_egg_files():
-    """Every slotted .egg file loads and runs clean."""
-    files = sorted(glob.glob(str(ROOT / "slotted" / "tests" / "**" / "slotted-*.egg"), recursive=True))
-    # A test ported to the slotted language leaves this set and joins `slotted-tests`,
-    # so this floor drops as that one rises; neither may fall on its own. What is left
-    # is the hand-written core itself, which has nothing to include and no compiler to
-    # go through -- everything else now declares its shapes with `machinery` and is
-    # compiled, so the set has one member and this is really a floor of one.
-    if len(files) < 1:
-        return f"only {len(files)} slotted .egg files found"
+    """Every hand-written encoded-level file loads and runs clean.
+
+    `slotted/encoding/` is the hand-written half -- the encoding itself, the tutorial
+    that explains it, and the tests that poke at the machinery directly. They are plain
+    egglog, written with the renamings spelled out, so they run as they are.
+    """
+    files = sorted(glob.glob(str(ROOT / "slotted" / "encoding" / "**" / "*.egg"), recursive=True))
+    # A test rewritten in the slotted language leaves this directory for
+    # `slotted/tests/`, so this floor drops as that one rises; neither may fall alone.
+    if len(files) < 10:
+        return f"only {len(files)} encoded-level .egg files found"
     bad = []
     for f in files:
         r = subprocess.run([str(EGGLOG), f], capture_output=True, text=True, timeout=1800, cwd=ROOT)

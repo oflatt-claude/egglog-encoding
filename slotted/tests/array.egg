@@ -12,7 +12,7 @@
 ;;;
 ;;; `beta` is left out. It rewrites to `?body[(var $x) := ?e]`, and substitution is a
 ;;; primitive rather than a rule, so the compiler cannot emit it -- the encoding does
-;;; have `slotted-subst`, and `slotted/tests/slotted-sdql-beta.egg` plumbs the two
+;;; have `slotted-subst`, and `slotted/encoding/sdql-beta.egg` plumbs the two
 ;;; renaming frames around it by hand, which is what a compiled form would have to do.
 ;;; The reference has no trouble with it either way. The paper's own benchmarks use the
 ;;; let-based rules instead (footnote 4). The other 8 are all of them.

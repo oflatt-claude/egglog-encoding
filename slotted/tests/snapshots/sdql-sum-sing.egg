@@ -5,7 +5,7 @@
 ;;; that emit them -- committing them again per test would be the same thousands
 ;;; of lines over and over.
 
-(include "slotted/tests/slotted-egraph-encoding-11.egg")
+(include "slotted/encoding/egraph-encoding-11.egg")
 
 (rule ((= V5 (Sum p1 C6 p2 (Var 0) p3 (Var 0) p4 C7))
        (= dom8 (map-union (map-image p1) (map-union (map-image p2) (map-union (map-image p3) (map-image p4)))))

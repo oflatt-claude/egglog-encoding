@@ -21,12 +21,7 @@
 ;;; each edge's domain is exactly the body's slot set. Written with two different
 ;;; body classes instead, the edges violate Def. 4 and the case proves nothing.
 
-;; Written at the ENCODED level -- the renamings are spelled out -- so these name
-;; shapes to emit machinery for rather than constructors to write slotted terms with.
-;; `App2` needs no line: the core the compiler supplies hand-writes it as its worked
-;; example, so its rules are already here.
-(machinery App3 (String U U U) U :binder 0)
-(machinery Sym (String) U)
+(include "target/slotted/slotted-node-rules.egg")
 
 ;; the body `f1 (var .)`, one class, slots {0}
 (let $b (App2 "app" (map-empty) (Sym "f1") (map-of 0 0) (Var 0)))

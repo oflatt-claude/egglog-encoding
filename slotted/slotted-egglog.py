@@ -13,9 +13,6 @@ THE LANGUAGE
                                                 a slotted child; `:binder` names the
                                                 child positions whose slot it binds.
 
-    (machinery App3 (String U U U) U :binder 0) the machinery for a shape, WITHOUT
-                                                claiming the name. See below.
-
     (let r (Sing Null Null))                    name a term
     (let a (Sum r $5 $6 Null))                  a `$n` in a binder column is the bound
                                                 slot; in any other child column it is
@@ -39,29 +36,6 @@ THE LANGUAGE
 
     (check (same-class a b))                    one class, by SOME renaming -- weaker
     (check (not-same-class a b))                than `same`, which pins the renaming
-
-WRITING AT THE ENCODED LEVEL
-
-A test of the MACHINERY writes its nodes the way the encoding stores them, with the
-renamings spelled out -- seven arguments where the language writes four:
-
-    (App3 "let" (map-of 0 0) (Var 0) (map-of 0 0) $b (map-of 0 0) (Var 0))
-
-So it cannot say `constructor`, which does two jobs at once: emit the rules for the
-shape, AND claim the name, so that every `(App3 ...)` below is read as a slotted term.
-Such a file wants the first and not the second -- with `constructor` it gets
-`App3 takes 4 arguments, given 7`.
-
-`machinery` is the first without the second. The compiler emits the rules for the
-shape and passes the file's body through as written. Declaring one puts the whole file
-in that mode, since a file writing encoded nodes writes them throughout.
-
-`:binder-head "let"` is for a family whose operator rides in a payload rather than the
-constructor, where a binder cannot be named by column: `App3` is not a binder,
-`App3 "let"` is, and `App3 "binop"` in the same file is not.
-
-A shape the core already declares needs no line -- and must not have one, or egglog
-sees a duplicate binding.
 
 EVERYTHING ELSE IS EGGLOG'S
 
@@ -104,20 +78,8 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "slotted"))
 enc = __import__("slotted-encoder")
 
-CORE_FILE = "slotted/tests/slotted-egraph-encoding-11.egg"
+CORE_FILE = "slotted/encoding/egraph-encoding-11.egg"
 
-
-def core_provides():
-    """The constructors `CORE_FILE` declares, read from it rather than restated.
-
-    Every compiled program includes that file, so emitting a constructor it already
-    declares is a duplicate binding. It holds `Var` and `Null` -- both
-    constructor-independent -- and the ONE family it works through as a worked example,
-    which is a property of that file and not of this one.
-    """
-    return {name for form in parse((ROOT / CORE_FILE).read_text())
-            if isinstance(form, list) and form and form[0] == "constructor"
-            for name in [form[1]]}
 TOKEN = re.compile(r'\(|\)|"[^"]*"|;[^\n]*|[^\s()]+')
 SLOT = re.compile(r"\$\w+\Z")
 
@@ -190,12 +152,6 @@ class Source:
         self.spec = {}
         self.body = []
         self.includes = []
-        #: Shapes declared with `machinery`: their rules are emitted, but a form that
-        #: mentions one is passed through as written rather than read as a slotted term.
-        self.raw_heads = set()
-        #: (head, constructor) pairs from `:binder-head`, for a family that pins its
-        #: binder by a payload string rather than by column.
-        self.machinery_binders = []
         self._read(path)
         assert self.spec, f"{path.name}: no (constructor ...) declaration"
         self.lang = Terms({c: enc.Op(c, c, sig) for c, sig in self.spec.items()})
@@ -220,18 +176,6 @@ class Source:
                 self._read(inc)
             elif isinstance(form, list) and form and form[0] == "constructor":
                 self.spec.update(enc.read_language_form(form))
-            elif isinstance(form, list) and form and form[0] == "machinery":
-                # The rules for a shape, without claiming the name for slotted terms.
-                tail = form[4:]
-                if tail and tail[0] == ":binder-head":
-                    # A family whose operator rides in a payload cannot declare a binder
-                    # by column -- `App3` is not a binder, `App3 "let"` is -- so the head
-                    # string pins it and the columns stay plain.
-                    self.machinery_binders += [(h.strip('"'), form[1]) for h in tail[1:]]
-                    self.spec.update(enc.read_language_form(["constructor", *form[1:4]]))
-                else:
-                    self.spec.update(enc.read_language_form(["constructor", *form[1:]]))
-                self.raw_heads.add(form[1])
             else:
                 self.body.append((form, path))
 
@@ -301,19 +245,12 @@ def compile_source(src, own_only=False):
             ";;; of lines over and over.",
         ]
     else:
-        out.append(enc.in_slotted_ruleset("\n".join(enc.emit(src.spec, src.machinery_binders, provided=core_provides()))))
+        out.append(enc.in_slotted_ruleset("\n".join(enc.emit(src.spec, provided=enc.CORE))))
     rules = 0
     for form, origin in src.body:
         head = form[0] if isinstance(form, list) else form
         mine = origin == src.path
         keep = mine or not own_only
-        if src.raw_heads:
-            # A file that declares `machinery` is written at the encoded level
-            # throughout: the renamings are spelled out, so its body is already egglog
-            # and there is no slotted term anywhere in it to compile. It asked for the
-            # machinery, not for the language.
-            _emit(out, keep, render(form))
-            continue
         if head == "let":
             _, name, body = form
             _emit(out, keep, f"(let ${name} {src.encode(body)})")

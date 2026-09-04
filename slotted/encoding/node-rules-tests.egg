@@ -1,17 +1,11 @@
 ;;; Cases for the arities the generator emits: `App3`, `Scale` and `Num`.
 ;;;
-;;; `slotted/tests/slotted-egraph-encoding-11.egg` hand-writes arity 2 and works its 15 cases
+;;; `slotted/encoding/egraph-encoding-11.egg` hand-writes arity 2 and works its 15 cases
 ;;; through that one family. These are the cases for the rest of the generated
 ;;; encoding, so they include the generated file, which includes the hand-written one.
 ;;; They keep their numbering from there, since they carry on where its list stops.
 
-;; Written at the ENCODED level -- the renamings are spelled out -- so these name
-;; shapes to emit machinery for rather than constructors to write slotted terms with.
-;; `App2`, `Var` and `Null` need no line: the core the compiler supplies has them.
-(machinery App2 (String U U) U)
-(machinery App3 (String U U U) U :binder 0)
-(machinery Num (i64) U)
-(machinery Scale (i64 U) U)
+(include "target/slotted/slotted-node-rules.egg")
 
 
 ;;; Case 16- a ternary node, alpha-equivalent up to renaming.

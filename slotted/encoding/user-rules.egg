@@ -40,7 +40,7 @@
 ;;; cases where that costs a match, and explains one of them in full.
 ;;;
 ;;; No terms, no schedules, no assertions, no wrong versions.
-;;; `slotted/tests/user-rules-tests.egg` includes this file and supplies all of those, so
+;;; `slotted/encoding/user-rules-tests.egg` includes this file and supplies all of those, so
 ;;; the rules below are the ones under test rather than a copy of them, and it is also where
 ;;; the counter-examples live -- for each construction, the spelling it rules out together
 ;;; with the e-graph that tells the two apart.
@@ -128,22 +128,14 @@
 ;;;     (run-schedule (saturate (run slotted))
 ;;;                   (repeat N (seq (run) (saturate (run slotted)))))
 
-;; Written at the ENCODED level -- each rule below IS the compiler's output, renamings
-;; and all -- so these name shapes to emit machinery for rather than constructors to
-;; write slotted terms with. `App2` needs no binder line: the core hand-writes it along
-;; with its `lambda` rule. `App3` does, because the operator rides in a payload here:
-;; `App3 "let"` binds and `App3 "binop"`, in this same file, does not.
-(machinery App2 (String U U) U)
-(machinery App3 (String U U U) U :binder-head "let")
-(machinery Num (i64) U)
-(machinery Sym (String) U)
+(include "target/slotted/slotted-node-rules.egg")
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; A WORKED MATCH, before any of the shapes.  The sections below say what each
 ;;; scaffolding variable MEANS; this says what they HOLD, on one e-graph, so there is
 ;;; something concrete to read the rest against.  Every value here is printed by
-;;; `slotted/tests/slotted-user-rules-trace.egg`, which asserts each one, so these are
+;;; `slotted/encoding/user-rules-trace.egg`, which asserts each one, so these are
 ;;; measured rather than illustrated -- change the encoding and that file fails.
 ;;;
 ;;; The shape is M5's, two atom mints in one match, because that is where the

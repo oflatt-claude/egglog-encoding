@@ -28,7 +28,7 @@ COMPILE = ROOT / "slotted" / "slotted-egglog.py"
 
 #: The hand-written core. It includes nothing because everything else includes IT, so
 #: it is the one file the rule below would otherwise misread as a slotted source.
-CORE = "slotted-egraph-encoding-11.egg"
+CORE = "egraph-encoding-11.egg"
 
 
 def slotted_sources():

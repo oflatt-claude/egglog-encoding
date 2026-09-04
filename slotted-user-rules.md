@@ -4,7 +4,7 @@ Companion to these runnable files:
 
 | file | what it is |
 | --- | --- |
-| `slotted/tests/slotted-egraph-encoding-11.egg` | the machinery: union, congruence, redundancy, symmetry |
+| `slotted/encoding/egraph-encoding-11.egg` | the machinery: union, congruence, redundancy, symmetry |
 | `slotted/tests/user-rules.egg` | the tutorial: one shape of user rule per section — M1–M11 — each stated as prose plus the single rule a compiler emits, and nothing else. All eleven are a real rewrite, from `sdql_rules()` or the paper's §4.1 array language, and each is exactly what `slotted-encoder.py` emits for it: `slotted/check-tutorial.py` compares every one against the encoder's output and allows only a renaming of the variables. M6 and M9 are the same rule (`eta`) at two atom orders, since the lead is a compile-time choice. The shapes no rewrite produces on demand — a multi-rooted left-hand side, two mints in one match, a child wider than its class — are hand-built e-graphs in the fixture block of `slotted/tests/user-rules-tests.egg`, whose rules are still the encoder's output |
 | `slotted/tests/user-rules-tests.egg` | the cases for it: it includes the tutorial, then adds the terms, schedules, assertions and counter-examples |
 | `slotted/slotted-egglog.py` | compiles a test written in the SLOTTED language — its own `(constructor ... :binder ...)` declarations, then terms, `rewrite`s and `(check (same a b))` — into a self-contained egglog program: the hand-written core, the machinery for exactly the constructors declared, and the compiled body. It includes no generated file, so nothing sits between a test and running it. `same` rather than `=` because slotted equality is not egglog equality: `(RenamesToLeader f m l)` is `f = m*l`, and two terms are equal when ONE renaming reaches both from the leader -- Def. 6, two invocations agree when the renaming between them is a symmetry of the class. Landing in the same class by *some* renaming is weaker and is spelled `same-class`; the pair that separates them is two alpha-variants whose free slot is renamed, one class but not equal |
@@ -381,7 +381,7 @@ This is the shape egglog's own proof encoding uses for its maintenance rulesets:
 `(seq <that run> <rebuild>)`, where `rebuild` saturates the proof rulesets. Since `(run N)`
 is `(repeat N (run))`, instrumenting it gives exactly the alternation above.
 
-A file with no user rules of its own — `slotted-egraph-encoding-11.egg` and the per-language
+A file with no user rules of its own — `egraph-encoding-11.egg` and the per-language
 files — only needs `(saturate (run slotted))`, which also reads better than the iteration
 counts it replaced.
 
@@ -605,7 +605,7 @@ the class's slot set and stopped being renameable, which separates two terms the
 reference *identifies* — the opposite error. A colliding bound slot is therefore
 renamed to a slot the node does not use before the strip applies. Both halves were
 needed: `xarray.py iso` went 8-vs-9 classes, to 9-vs-9 but non-isomorphic, to 15/15.
-`slotted/tests/slotted-binder-scope.egg` is the pair of cases, and `xarray.py extra` the
+`slotted/encoding/binder-scope.egg` is the pair of cases, and `xarray.py extra` the
 comparison.
 
 ### Two discrepancies in the reference checkout, one now fixed upstream
@@ -660,7 +660,7 @@ self-loops does not help, and neither does guarding transitivity.
 
 Fixed by minting a name for the uncovered slot instead of dropping it: migration
 composes through a renaming that is total on the node's slots, which is
-`find-mapping-total` in `slotted/tests/slotted-egraph-encoding-11.egg`. The alternative —
+`find-mapping-total` in `slotted/encoding/egraph-encoding-11.egg`. The alternative —
 declining to migrate whenever an edge would narrow — was in the tree for a while and is
 measured in the next section.
 
@@ -779,7 +779,7 @@ so it is worth fixing on its own.
 ### The fix: don't delete a self-loop that a class still needs
 
 The two-rule interaction reduces to four lines of machinery, with no user rule
-involved — `Case 14` in `slotted/tests/slotted-egraph-encoding-11.egg`:
+involved — `Case 14` in `slotted/encoding/egraph-encoding-11.egg`:
 
 ```lisp
 (let $B (App2 "h" (map-of 0 2) (Var 0) (map-of 0 1) (Var 0)))     ; h($2,$1), slots {1,2}
@@ -1750,7 +1750,7 @@ Two things this was worth doing for.
 witness for the only unsoundness found — stop testing what it was written for,
 because under the new policy its root renaming comes out as the identity, and at
 the identity the right and wrong spellings agree. The same happened to `R2` in
-`slotted/tests/slotted-multipat-diff.egg`. For a while nothing anywhere caught `union-id`.
+`slotted/encoding/multipat-diff.egg`. For a while nothing anywhere caught `union-id`.
 `C14` replaces `C11`, with the action rooted at a *child* variable so its renaming
 is a stored edge rather than the identity.
 

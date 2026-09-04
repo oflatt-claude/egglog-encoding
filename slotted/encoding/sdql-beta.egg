@@ -15,12 +15,7 @@
 ;;; language that hides renamings. `slotted-egglog.py` deliberately cannot express it,
 ;;; and that is the right answer rather than a gap.
 
-;; Written at the ENCODED level, so these name shapes to emit machinery for
-;; rather than constructors to write slotted terms with. `Let` binds its second
-;; child, which is sdql's own column order.
-(machinery Let (U U U) U :binder 1)
-(machinery Add (U U) U)
-(machinery Num (i64) U)
+(include "target/slotted/slotted-lang-sdql.egg")
 
 (ruleset sdql-beta)
 

@@ -11,7 +11,7 @@ accepts `b[x := t]` and builds a `Pattern::Subst`, and a spec whose `rhs` line i
 `?body[(var $x) := ?e]` reduces and saturates. What is missing is on THIS side --
 the rule compiler has no substitution, so there is no compiled rule to compare. The
 encoding can do it, with `slotted-subst` and the frame plumbing
-`slotted/tests/slotted-sdql-beta.egg` writes by hand; teaching the compiler to emit
+`slotted/encoding/sdql-beta.egg` writes by hand; teaching the compiler to emit
 that is the open piece. The paper's own benchmarks use the let-based rules instead
 (footnote 4), so the remaining 8 are the set that matters.
 

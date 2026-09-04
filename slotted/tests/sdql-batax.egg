@@ -41,8 +41,8 @@
 ;;; the leader, and a backwards row let transitivity and single parent disagree forever
 ;;; -- the tables stationary at 648 rows while `saturate` reported progress, four edges
 ;;; swapped every iteration, period two. Backwards rows by user step were 0 0 0 0 2 7;
-;;; they are 0 at every step now. `slotted/tests/slotted-orientation.egg` is the
-;;; regression test and `slotted-egraph-encoding-11.egg` has the fix: `Equated`, the
+;;; they are 0 at every step now. `slotted/encoding/orientation.egg` is the
+;;; regression test and `egraph-encoding-11.egg` has the fix: `Equated`, the
 ;;; unoriented form of the relation, from which the oriented rows are derived.
 
 (include "slotted/tests/sdql.egg")

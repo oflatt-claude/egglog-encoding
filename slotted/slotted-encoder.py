@@ -70,7 +70,7 @@ repeat-inside-one-atom check is M2, minting is M3, the chain is M4, the accumula
 avoid-set is M5, `narrow` is M8, and the conclusion is M10. A worked match with real
 values for every one of those variables is at the top of
 `slotted/tests/user-rules.egg`, asserted by
-`slotted/tests/slotted-user-rules-trace.egg`.
+`slotted/encoding/user-rules-trace.egg`.
 """
 
 import re
@@ -232,7 +232,7 @@ def shape_of(col):
     return {CHILD: "child", BINDER: "binder"}.get(col, str(col))
 
 
-# The two constructors `slotted/tests/slotted-egraph-encoding-11.egg` declares and writes the
+# The two constructors `slotted/encoding/egraph-encoding-11.egg` declares and writes the
 # rules for itself, because both are constructor-independent: `Var` is normalised into
 # a renaming so one value stands for every variable, and `Null` is the nullary object.
 # A language file may declare either for the record -- so that it names every
@@ -241,7 +241,7 @@ CORE = {"Var": ["i64"], "Null": []}
 
 # The hand-written half, and the generated file that includes it. A language file
 # includes the generated one, so it gets both.
-MACHINERY = "slotted/tests/slotted-egraph-encoding-11.egg"
+MACHINERY = "slotted/encoding/egraph-encoding-11.egg"
 
 
 ###############################################################################
@@ -528,14 +528,11 @@ def emit(language, binders=(), provided=None, omit=()):
     for name, sig in language.items():
         if name in omit:
             out += banner(
-                f"{name} :: {' '.join(shape_of(c) for c in sig)} -- hand-written in slotted-egraph-encoding-11.egg"
+                f"{name} :: {' '.join(shape_of(c) for c in sig)} -- hand-written in egraph-encoding-11.egg"
             )
             continue
         if provided and name in provided:
-            # A mapping checks the signature too. A bare set of names is what a caller
-            # passes when it read them off an already-COMPILED file, where the
-            # signatures are the encoded ones and would never match a slotted one.
-            if isinstance(provided, dict) and provided[name] != sig:
+            if provided[name] != sig:
                 raise SystemExit(f"{name} clashes with the machinery at a different signature")
             out += banner(
                 f"{name} :: {' '.join(shape_of(c) for c in sig)} -- declared by the machinery this file includes"
@@ -582,7 +579,7 @@ def emit(language, binders=(), provided=None, omit=()):
 
 
 # The constructor-independent half of the node machinery. Hand-written in
-# `slotted/tests/slotted-egraph-encoding-11.egg` along with a constructor or two, and kept
+# `slotted/encoding/egraph-encoding-11.egg` along with a constructor or two, and kept
 # here so a generator can state what that text has to say.
 SHARED = """\
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -632,7 +629,7 @@ def in_slotted_ruleset(text):
     These rules maintain the encoding's invariants, and they have to be *saturated*
     between the user's rule steps: a user rule that matches a node before the alpha- and
     slot-canonicalisation of that node has finished sees a spelling that is about to
-    change, and then matches again when it does. `slotted-egraph-encoding-11.egg` says
+    change, and then matches again when it does. `egraph-encoding-11.egg` says
     what schedule to write; this only puts the rules where a schedule can name them.
     """
     out, depth, form, buf = [], 0, [], []
