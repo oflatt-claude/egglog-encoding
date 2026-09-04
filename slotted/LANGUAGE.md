@@ -171,10 +171,30 @@ by composing `{0 -> 3}` and `{0 -> 4}` onto the two renamings, and `eclass-=` ha
 nothing to compose onto. So `(eclass-= a $5)` does **not** say "a is the variable `$5`"
 — it says only "a is a variable". Use `renaming-=` for that.
 
+### Egglog's own `=` is refused
+
+`(check (= a b))` is an error here, and the message points at the two claims above.
+It asks whether two terms are the same egglog **value**, and a slotted class spans
+several of those — one per invocation — so it can answer *no* for two terms that are
+equal:
+
+```
+(rewrite (F ?x ?x) ?x :name idem)
+(let a (F $9 $9))            ; a's class becomes the variable class, at $9
+(check (renaming-= a $9))    ; holds
+(check (= $a (Var 0)))       ; FAILS: (Var 0) is that class at slot 0, not at $9
+```
+
+Three notions, coarsest first: `eclass-=` (same class), `renaming-=` (same term), and
+egglog's `=` (same stored value). The encoding deliberately does not union two
+invocations of one class — an action writes `Equated`, not `union` — and the mutation
+corpus carries `union-id` for exactly that mistake, so this is not an accident of the
+implementation.
+
 ### Dropping to the encoded level
 
-A `check` whose claim is none of the above is passed through to egglog, so a test can
-ask about the encoding itself without leaving the language:
+A `check` whose claim is neither the slotted ones nor `=` is passed through to egglog,
+so a test can ask about the encoding itself without leaving the language:
 
 ```
 (check (RenamesToLeader a m l))
@@ -183,18 +203,35 @@ ask about the encoding itself without leaving the language:
 `(RenamesToLeader f m l)` is `f = m*l`, with `m` carrying `l`'s slots to `f`'s. That
 relation is what `renaming-=` and `eclass-=` are defined in terms of: `renaming-=` asks
 for **one** renaming reaching both terms from the leader, `eclass-=` lets each have its
-own.
+own. Unlike `=`, it says plainly that it is dropping a level.
 
 ## Extraction and printing
 
-`(extract a)` encodes its argument and hands it to egglog, so what you see is the node
-as the encoding **stores** it — renamings spelled out:
+`(extract a)` gives a term from `a`'s **class**, printed as the encoding stores it —
+renamings spelled out:
 
 ```
 (extract a)     (F (map-of 0 2) (Var 0) (map-of 0 1) (Var 0))
 ```
 
 That is `f($2,$1)`. There is no pretty-printer back to slotted syntax yet.
+
+It goes through the class's **leader**, and has to. A slotted class spans several egglog
+values, related by `RenamesToLeader` rather than by egglog's union, and the machinery
+deletes the non-canonical ones — so asking egglog to extract the term's own value fails
+outright whenever the class settled on a different invocation:
+
+```
+(let p (Lam $0 $3))
+(let q (Lam $0 $4))
+(extract q)      ; used to be: extraction failure -- q's node was canonicalised away
+```
+
+Since egglog's `extract` takes an expression and `RenamesToLeader` is a relation, the
+compiler declares a one-off function, lets one rule set it to the leader, runs that
+rule, and extracts the function. The answer is therefore in the LEADER's frame, not
+necessarily the frame of the term you asked about: `(extract q)` above prints
+`lam $0. $3`.
 
 ## What `ok` tells you
 

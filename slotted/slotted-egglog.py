@@ -258,6 +258,7 @@ def compile_source(src, own_only=False):
             # relation it writes into, and the one phase-two rule that reads it.
             out.append(enc.SUBST_MACHINERY)
     rules = 0
+    extracts = 0
     for form, origin in src.body:
         head = form[0] if isinstance(form, list) else form
         mine = origin == src.path
@@ -279,10 +280,32 @@ def compile_source(src, own_only=False):
         elif head == "run":
             _emit(out, keep, schedule(int(form[1]), rules))
         elif head == "extract":
-            # What is actually in the class, printed as the encoding stores it: a node
-            # with its edges' renamings spelled out. Reading it is how you see that a
-            # slot is redundant, or which invocation a class settled on.
-            _emit(out, keep, f"(extract {src.encode(form[1])})")
+            # What is in the CLASS, printed as the encoding stores it: a node with its
+            # edges' renamings spelled out. Reading it is how you see that a slot is
+            # redundant, or which invocation a class settled on.
+            #
+            # Extracting the term's own value does not work. A slotted class spans
+            # several egglog values -- one per invocation, related by `RenamesToLeader`
+            # and NOT by egglog's union -- and the machinery deletes the non-canonical
+            # ones, so a term whose class settled elsewhere has no node left to extract.
+            # egglog's `extract` takes an expression while `RenamesToLeader` is a
+            # relation, so a one-off function is what bridges them: set it to the
+            # leader, run that one rule, extract the function.
+            extracts += 1
+            fn, rs = f"_leader{extracts}", f"_extract{extracts}"
+            # `:merge new` rather than no merge: a term reaches its leader by every
+            # renaming in the orbit, so the rule fires once per row and sets the same
+            # leader each time.
+            _emit(out, keep, f"(function {fn} () U :merge new)")
+            _emit(out, keep, f"(ruleset {rs})")
+            _emit(
+                out,
+                keep,
+                f"(rule ((RenamesToLeader {src.encode(form[1])} _m _l))"
+                f" ((set ({fn}) _l)) :ruleset {rs})",
+            )
+            _emit(out, keep, f"(run-schedule (saturate (run {rs})))")
+            _emit(out, keep, f"(extract ({fn}))")
         elif head in ("check", "fail"):
             _emit(out, keep, compile_check(src, form))
         else:
@@ -470,10 +493,28 @@ def compile_check(src, form):
             f"(check (= (ClassSlots {a}) (map-of {slots})))" if slots else f"(check (= (ClassSlots {a}) (map-empty)))"
         )
         return f"(fail {body})" if negated else body
+    if kind == "=":
+        raise SystemExit(
+            "\n".join(
+                [
+                    f"{src.path.name}: `(check (= a b))` asks whether two terms are the same",
+                    "egglog VALUE, and a slotted class spans several of those -- one per",
+                    "invocation -- so it can answer no for two terms that are equal. Say which",
+                    "you mean:",
+                    "    (renaming-= a b)   they are the same term",
+                    "    (eclass-= a b)     they are in one e-class, at possibly different slots",
+                    "A test that really is about the encoding's own tables belongs in",
+                    "slotted/encoding/, which runs as plain egglog.",
+                ]
+            )
+        )
     # Not one of the slotted claims, so it is an ordinary egglog check about the
     # encoding -- `(check (RenamesToLeader ...))` and the like. It names no slotted
     # term, so it goes through as written.
-    return render(form)
+    #
+    # `form` is the inner check by now, so a `(fail ...)` around it has to be put back:
+    # dropping it turned a negative claim into the positive one, silently.
+    return f"(fail {render(form)})" if negated else render(form)
 
 
 def tally(src):
