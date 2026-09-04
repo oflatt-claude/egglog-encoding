@@ -10,13 +10,13 @@
 ;;; `(Let $x ?b ?e)` is `let x = e in b` -- the reference's own column order, which its
 ;;; `tests/rise` and `tests/array` use.
 ;;;
-;;; `beta` is left out, but no longer because the compiler cannot emit it: it rewrites
-;;; to `?body[(var $x) := ?e]`, which is `(subst ?body $x ?e)` -- see
-;;; `slotted/tests/sdql-beta.egg`. It stays out of THIS file because `xarray.py` reads
-;;; it to build the reference's own `Rewrite` objects, and the oracle's spec language
-;;; has no substitution, so a beta here would be compared against nothing. The paper's
-;;; own benchmarks use the let-based rules instead (footnote 4). The other 8 are all of
-;;; them.
+;;; `beta` is left out, and NEITHER side is what blocks it any more. It rewrites to
+;;; `?body[(var $x) := ?e]`: our compiler emits that from `(subst ?body $x ?e)` (see
+;;; `slotted/tests/sdql-beta.egg`), and the reference parses the `b[x := t]` spelling
+;;; into a `Pattern::Subst` (`src/rewrite/pattern.rs`). What is missing is only that
+;;; the differential comparison has never been run on it -- adding it here changes what
+;;; `xarray.py` compares, which is its own piece of work. The paper's own benchmarks use
+;;; the let-based rules instead (footnote 4). The other 8 are all of them.
 
 (constructor Lam (U U) U :binder 0)
 (constructor App (U U) U)
