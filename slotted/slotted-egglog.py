@@ -230,6 +230,13 @@ def compile_source(src, own_only=False):
             _, name, body = form
             _emit(out, keep, f"(let ${name} {src.encode(body)})")
             src.lang.bound[name] = src.term(body)
+        elif head == "union":
+            # Asserting an equation between two terms rather than deriving it. The
+            # machinery takes it from there: a union between invocations with
+            # different slots is what forces slots redundant and what records a
+            # class's symmetries.
+            _, a, b = form
+            _emit(out, keep, f"(union {src.encode(a)} {src.encode(b)})")
         elif head == "rewrite":
             _emit(out, keep, compile_rewrite(src, form))
             rules += 1
@@ -355,9 +362,38 @@ def compile_check(src, form):
     claim = form[1]
     kind, args = claim[0], claim[1:]
     if kind in ("same", "not-same"):
+        # ONE renaming, not two. `(RenamesToLeader f m l)` is `f = m*l`, so two terms
+        # are equal when they are the same INVOCATION -- reached from the leader by the
+        # same renaming -- and not merely when they land in the same class. The paper's
+        # `fgh::transitive_symmetry` is the case that separates them: after
+        # f($1,$2) = g($2,$1) and g($1,$2) = h($1,$2) the terms f($1,$2) and h($1,$2)
+        # share a class but differ by the swap, so they are NOT equal, while f($1,$2)
+        # and h($2,$1) are.
+        atoms, maps = [], []
+        for i, x in enumerate(args):
+            t = src.term(x, enc.CHILD)
+            m = f"_m{i}"
+            if t[0] == "var":
+                # A bare slot is not a node: it is the variable class under a renaming.
+                # Its invocation is `(Var 0)`'s with that one slot sent to this one, so
+                # WHICH slot it names lives in the composition rather than in the value.
+                atoms.append(f"(RenamesToLeader (Var 0) {m} _l)")
+                maps.append(f"(compose (map-of 0 {t[1]}) {m})")
+            else:
+                atoms.append(f"(RenamesToLeader {src.encode(x)} {m} _l)")
+                maps.append(m)
+        body = f"(check {' '.join(atoms)} (= {maps[0]} {maps[1]}))"
+        if (kind == "not-same") != negated:
+            return f"(fail {body})"
+        return body
+    if kind in ("same-class", "not-same-class"):
+        # Same CLASS, by SOME renaming -- strictly weaker than `same`, which pins the
+        # renaming down. The pair it exists for is two terms that are alpha-variants
+        # of each other with a free slot renamed: they are not equal, because no one
+        # renaming reaches both, yet they are the same class.
         a, b = (src.encode(x) for x in args)
         body = f"(check (RenamesToLeader {a} _m1 _l) (RenamesToLeader {b} _m2 _l))"
-        if (kind == "not-same") != negated:
+        if (kind == "not-same-class") != negated:
             return f"(fail {body})"
         return body
     if kind in ("holds", "not-holds"):

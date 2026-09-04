@@ -13,7 +13,7 @@
 (let $prog (Lambda (map-of 0 1) (Var 0) (map-of 1 1) (Lambda (map-of 0 2) (Var 0) (map-of 1 1 2 2) (Lambda (map-of 0 3) (Var 0) (map-of 1 1 2 2 3 3) (Lambda (map-of 0 4) (Var 0) (map-of 1 1 2 2 3 3 4 4) (Lambda (map-of 0 5) (Var 0) (map-of 1 1 2 2 3 3 4 4 5 5) (Lambda (map-of 0 6) (Var 0) (map-of 1 1 2 2 3 3 4 4 5 5) (Mult (map-of 0 1) (Var 0) (map-of 2 2 3 3 4 4 5 5) (Sum (map-of 0 2) (Var 0) (map-of 0 7) (Var 0) (map-of 0 8) (Var 0) (map-of 2 2 3 3 4 4 5 5 7 7 8 8) (Mult (map-of 2 2 3 3 4 4 7 7 8 8) $t7 (map-of 2 2 3 3 4 4 5 5 7 7 8 8) $t10))))))))))
 (run-schedule (saturate (run slotted)))
 (check (= (ClassSlots $prog) (map-empty)))
-(fail (check (RenamesToLeader $t7 _m1 _l) (RenamesToLeader $t10 _m2 _l)))
+(fail (check (RenamesToLeader $t7 _m0 _l) (RenamesToLeader $t10 _m1 _l) (= _m0 _m1)))
 (print-size)
 (run-schedule (saturate (run slotted))
               (repeat 2 (seq (run) (saturate (run slotted)))))

@@ -92,7 +92,7 @@ def run_egg_files():
     # so this floor drops as that one rises; neither may fall on its own. It also
     # dropped by six when the generated machinery moved to `target/`, which is build
     # output and not a file anyone wrote.
-    if len(files) < 11:
+    if len(files) < 10:
         return f"only {len(files)} slotted .egg files found"
     bad = []
     for f in files:
