@@ -13,6 +13,9 @@ THE LANGUAGE
                                                 a slotted child; `:binder` names the
                                                 child positions whose slot it binds.
 
+    (machinery App3 (String U U U) U :binder 0) the machinery for a shape, WITHOUT
+                                                claiming the name. See below.
+
     (let r (Sing Null Null))                    name a term
     (let a (Sum r $5 $6 Null))                  a `$n` in a binder column is the bound
                                                 slot; in any other child column it is
@@ -36,6 +39,29 @@ THE LANGUAGE
 
     (check (same-class a b))                    one class, by SOME renaming -- weaker
     (check (not-same-class a b))                than `same`, which pins the renaming
+
+WRITING AT THE ENCODED LEVEL
+
+A test of the MACHINERY writes its nodes the way the encoding stores them, with the
+renamings spelled out -- seven arguments where the language writes four:
+
+    (App3 "let" (map-of 0 0) (Var 0) (map-of 0 0) $b (map-of 0 0) (Var 0))
+
+So it cannot say `constructor`, which does two jobs at once: emit the rules for the
+shape, AND claim the name, so that every `(App3 ...)` below is read as a slotted term.
+Such a file wants the first and not the second -- with `constructor` it gets
+`App3 takes 4 arguments, given 7`.
+
+`machinery` is the first without the second. The compiler emits the rules for the
+shape and passes the file's body through as written. Declaring one puts the whole file
+in that mode, since a file writing encoded nodes writes them throughout.
+
+`:binder-head "let"` is for a family whose operator rides in a payload rather than the
+constructor, where a binder cannot be named by column: `App3` is not a binder,
+`App3 "let"` is, and `App3 "binop"` in the same file is not.
+
+A shape the core already declares needs no line -- and must not have one, or egglog
+sees a duplicate binding.
 
 EVERYTHING ELSE IS EGGLOG'S
 
