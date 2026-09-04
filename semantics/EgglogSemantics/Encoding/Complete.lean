@@ -3922,4 +3922,372 @@ theorem encode_corresponds {P : Program} {src : Database} {tgt : FDatabase}
   ⟨encode_corresponds_forward hdom hsrc htgt, encode_corresponds_complete hdom hsrc htgt ha hb⟩
 
 
+
+/-! ## The bridge, run-wide
+
+**`FDatabase.EntryRowsUF` at the state `execM` returned.** The state-level halves are
+`Encoding/Correspond.lean`'s — the four writers, the firing fold, the merge pass and the merge
+phase — and what is left here is the run: the prelude, whose state holds no term at all, and
+then `encodeCmds`' blocks carried command by command against `FDatabase.EncBase`.
+
+Like `execM_ufRowsDescend` and unlike `execM_soundTerms`, this owes nothing to a source rule's
+head. `Action.EntrySafe` is a condition on the *heads a block applies*, and the only thing the
+domain is spent on is that a source constructor is not in the generated namespace
+(`notEntryHead_of_mem_ctors`) — so neither `EncodedHeadSound` nor `Program.HeadsScoped` enters,
+and the whole obligation at a rule firing is syntactic in its actions. -/
+
+/-- **A name outside the generated namespace heads no entry term.** Both shapes are `@`-prefixed
+(`isPrefixOf_at_viewName`), which is what makes the primitive heads a `union` compiles to free. -/
+theorem notEntryHead_of_not_at {g : FnName} (h : ¬ "@".isPrefixOf g = true) : NotEntryHead g :=
+  ⟨fun f hf => h (hf ▸ isPrefixOf_at_viewName f),
+    fun hf => h (hf ▸ (by decide +kernel : "@".isPrefixOf ufName = true))⟩
+
+/-- The two primitives `maxE` and `minE` compile to. -/
+theorem notEntryHead_ifName : NotEntryHead "if" := notEntryHead_of_not_at (by decide +kernel)
+
+@[inherit_doc notEntryHead_ifName]
+theorem notEntryHead_gtName : NotEntryHead "ordering-gt" :=
+  notEntryHead_of_not_at (by decide +kernel)
+
+/-- `@Fiat` heads no entry term, and it is the only head a build's proof column carries. -/
+theorem notEntryHead_fiatE : ∀ g ∈ fiatE.fns, NotEntryHead g := by
+  intro g hg
+  have hg2 : g = fiatName := by simpa [fiatE, Expr.fns, Expr.fnsList] using hg
+  exact hg2 ▸ notEntryHead_fiatName
+
+/-- **The two `set`s a build emits for one application are entry-safe.** Their operands are the
+application's own naming expressions, which `encodeBuild_fst` says are the source's. -/
+theorem entrySafe_buildSets {f : FnName} {args : List Expr} (hf : NotEntryHead f)
+    (hargs : ∀ g ∈ Expr.fnsList args, NotEntryHead g) {a : Action}
+    (h : a = Action.set (termName f) (args ++ [.app f args]) [] ∨
+      a = Action.set (viewName f) args [.app f args, fiatE]) : a.EntrySafe := by
+  have hel : ∀ b ∈ args, ∀ g ∈ b.fns, NotEntryHead g :=
+    fun b hb g hg => hargs g (mem_fnsList_of_mem hb g hg)
+  have happ : ∀ g ∈ (Expr.app f args).fns, NotEntryHead g := by
+    intro g hg
+    rw [Expr.fns, List.mem_cons] at hg
+    rcases hg with rfl | hg
+    · exact hf
+    · exact hargs g hg
+  rcases h with rfl | rfl
+  · refine ⟨notEntryHead_fnsList (fun b hb => ?_), fun g hg => by simp [Expr.fnsList] at hg⟩
+    rcases List.mem_append.mp hb with hb' | hb'
+    · exact hel b hb'
+    · obtain rfl : b = Expr.app f args := by simpa using hb'
+      exact happ
+  · refine ⟨notEntryHead_fnsList hel, notEntryHead_fnsList (fun b hb => ?_)⟩
+    have hb2 : b = Expr.app f args ∨ b = fiatE := by simpa using hb
+    rcases hb2 with rfl | rfl
+    · exact happ
+    · exact notEntryHead_fiatE
+
+/-- **A build's block is entry-safe**, given that no head the built expression applies is an
+entry head. -/
+theorem encodeBuild_entrySafe {e : Expr} (hne : ∀ g ∈ e.fns, NotEntryHead g) (m : Nat) :
+    ∀ a ∈ (encodeBuild e m).2.1, a.EntrySafe := by
+  intro a ha
+  obtain ⟨f, args, hfa, hshape⟩ := mem_encodeBuild_actions e m a ha
+  obtain ⟨hfmem, hfargs⟩ := fns_of_mem_apps e hfa
+  exact entrySafe_buildSets (hne f hfmem) (fun g hg => hne g (hfargs g hg)) hshape
+
+@[inherit_doc encodeBuild_entrySafe]
+theorem encodeBuildArgs_entrySafe {es : List Expr}
+    (hne : ∀ g ∈ Expr.fnsList es, NotEntryHead g) (m : Nat) :
+    ∀ a ∈ (encodeBuildArgs es m).2.1, a.EntrySafe := by
+  intro a ha
+  obtain ⟨f, args, hfa, hshape⟩ := mem_encodeBuildArgs_actions es m a ha
+  obtain ⟨hfmem, hfargs⟩ := fnsList_of_mem_appsList es hfa
+  exact entrySafe_buildSets (hne f hfmem) (fun g hg => hne g (hfargs g hg)) hshape
+
+/-- **The `union` head is entry-safe.** `ordering-max`, `ordering-min` and the conditional they
+compile to are primitives, and a primitive's name is not `@`-prefixed. -/
+theorem entrySafe_unionHead {x y pf : Expr} (hx : ∀ g ∈ x.fns, NotEntryHead g)
+    (hy : ∀ g ∈ y.fns, NotEntryHead g) (hpf : ∀ g ∈ pf.fns, NotEntryHead g) :
+    (Action.set ufName [maxE x y] [minE x y, pf]).EntrySafe := by
+  have hgt : ∀ (a b : Expr), (∀ g ∈ a.fns, NotEntryHead g) → (∀ g ∈ b.fns, NotEntryHead g) →
+      ∀ g ∈ (gtE a b).fns, NotEntryHead g := by
+    intro a b ha hb g hg
+    rw [gtE, Expr.fns, List.mem_cons] at hg
+    rcases hg with rfl | hg
+    · exact notEntryHead_gtName
+    · refine notEntryHead_fnsList (fun z hz => ?_) g hg
+      have hz2 : z = a ∨ z = b := by simpa using hz
+      rcases hz2 with rfl | rfl
+      exacts [ha, hb]
+  have hif : ∀ (a b c : Expr), (∀ g ∈ a.fns, NotEntryHead g) → (∀ g ∈ b.fns, NotEntryHead g) →
+      (∀ g ∈ c.fns, NotEntryHead g) → ∀ g ∈ (ifE a b c).fns, NotEntryHead g := by
+    intro a b c ha hb hc g hg
+    rw [ifE, Expr.fns, List.mem_cons] at hg
+    rcases hg with rfl | hg
+    · exact notEntryHead_ifName
+    · refine notEntryHead_fnsList (fun z hz => ?_) g hg
+      have hz2 : z = a ∨ z = b ∨ z = c := by simpa using hz
+      rcases hz2 with rfl | rfl | rfl
+      exacts [ha, hb, hc]
+  refine ⟨notEntryHead_fnsList (fun z hz => ?_), notEntryHead_fnsList (fun z hz => ?_)⟩
+  · obtain rfl : z = maxE x y := by simpa using hz
+    exact hif _ _ _ (hgt x y hx hy) hx hy
+  · have hz2 : z = minE x y ∨ z = pf := by simpa using hz
+    rcases hz2 with rfl | rfl
+    · exact hif _ _ _ (hgt x y hx hy) hy hx
+    · exact hpf
+
+/-- **One source action's block is entry-safe.** The domain is spent once, on
+`notEntryHead_of_mem_ctors`: a source constructor is not in the generated namespace. -/
+theorem encodeAction_entrySafe {P : Program} (hdom : P.EncodeDomain) {pf : Expr}
+    (hpf : ∀ g ∈ pf.fns, NotEntryHead g) {a : Action}
+    (hctors : ∀ fk ∈ a.ctors, fk ∈ P.ctors) (m : Nat) :
+    ∀ b ∈ (encodeAction pf a m).1, b.EntrySafe := by
+  cases a with
+  | expr e =>
+    intro b hb
+    exact encodeBuild_entrySafe (head_conditions_of_ctors hdom hctors).1 m b
+      (encodeAction_expr_actions .. ▸ hb)
+  | letBind v e =>
+    intro b hb
+    have hne : ∀ g ∈ e.fns, NotEntryHead g := (head_conditions_of_ctors hdom hctors).1
+    rw [encodeAction_letBind_actions] at hb
+    rcases List.mem_append.mp hb with h | h
+    · exact encodeBuild_entrySafe hne m b h
+    · obtain rfl : b = Action.letBind v (encodeBuild e m).1 := by simpa using h
+      rw [encodeBuild_fst]
+      exact hne
+  | union e₁ e₂ =>
+    intro b hb
+    have hc₁ : ∀ fk ∈ e₁.ctors, fk ∈ P.ctors :=
+      fun fk hfk => hctors fk (by rw [Action.ctors]; exact List.mem_append_left _ hfk)
+    have hc₂ : ∀ fk ∈ e₂.ctors, fk ∈ P.ctors :=
+      fun fk hfk => hctors fk (by rw [Action.ctors]; exact List.mem_append_right _ hfk)
+    have hne₁ : ∀ g ∈ e₁.fns, NotEntryHead g := (head_conditions_of_ctors hdom hc₁).1
+    have hne₂ : ∀ g ∈ e₂.fns, NotEntryHead g := (head_conditions_of_ctors hdom hc₂).1
+    rw [encodeAction_union_actions] at hb
+    rcases List.mem_append.mp hb with h | h
+    · rcases List.mem_append.mp h with h' | h'
+      · exact encodeBuild_entrySafe hne₁ m b h'
+      · exact encodeBuild_entrySafe hne₂ _ b h'
+    · obtain rfl : b = Action.set ufName
+          [maxE (encodeBuild e₁ m).1 (encodeBuild e₂ (encodeBuild e₁ m).2.2).1]
+          [minE (encodeBuild e₁ m).1 (encodeBuild e₂ (encodeBuild e₁ m).2.2).1, pf] := by
+        simpa using h
+      rw [encodeBuild_fst, encodeBuild_fst]
+      exact entrySafe_unionHead hne₁ hne₂ hpf
+  | set f args out =>
+    intro b hb
+    have hc₁ : ∀ g ∈ Expr.fnsList args, NotEntryHead g := by
+      intro g hg
+      obtain ⟨k, hk⟩ := exists_ctor_of_mem_fnsList args hg
+      exact notEntryHead_of_mem_ctors (fk := (g, k)) hdom (hctors _ (by
+        rw [Action.ctors]
+        exact List.mem_cons_of_mem _ (List.mem_append_left _ hk)))
+    have hc₂ : ∀ g ∈ Expr.fnsList out, NotEntryHead g := by
+      intro g hg
+      obtain ⟨k, hk⟩ := exists_ctor_of_mem_fnsList out hg
+      exact notEntryHead_of_mem_ctors (fk := (g, k)) hdom (hctors _ (by
+        rw [Action.ctors]
+        exact List.mem_cons_of_mem _ (List.mem_append_right _ hk)))
+    rw [encodeAction_set_actions] at hb
+    rcases List.mem_append.mp hb with h | h
+    · rcases List.mem_append.mp h with h' | h'
+      · exact encodeBuildArgs_entrySafe hc₁ m b h'
+      · exact encodeBuildArgs_entrySafe hc₂ _ b h'
+    · obtain rfl : b = Action.set (viewName f) (encodeBuildArgs args m).1
+          ((encodeBuildArgs out (encodeBuildArgs args m).2.2).1 ++ [pf]) := by simpa using h
+      rw [encodeBuildArgs_fst, encodeBuildArgs_fst]
+      refine ⟨hc₁, notEntryHead_fnsList (fun z hz => ?_)⟩
+      rcases List.mem_append.mp hz with hz' | hz'
+      · exact fun g hg => hc₂ g (mem_fnsList_of_mem hz' g hg)
+      · obtain rfl : z = pf := by simpa using hz'
+        exact hpf
+
+@[inherit_doc encodeAction_entrySafe]
+theorem encodeActions_entrySafe {P : Program} (hdom : P.EncodeDomain) {pf : Expr}
+    (hpf : ∀ g ∈ pf.fns, NotEntryHead g) : ∀ (as : List Action),
+    (∀ a ∈ as, ∀ fk ∈ a.ctors, fk ∈ P.ctors) → ∀ (m : Nat),
+      ∀ b ∈ (encodeActions pf as m).1, b.EntrySafe
+  | [], _, _ => by simp [encodeActions]
+  | a :: as, hc, m => by
+      intro b hb
+      rw [encodeActions_cons_actions] at hb
+      rcases List.mem_append.mp hb with h | h
+      · exact encodeAction_entrySafe hdom hpf (hc a List.mem_cons_self) m b h
+      · exact encodeActions_entrySafe hdom hpf as
+          (fun x hx => hc x (List.mem_cons_of_mem _ hx)) _ b h
+
+/-- **An encoded source rule's head is entry-safe.** Its proof column is `@Rule_i` over the
+query's proof variables (`notEntryHead_ruleE`); everything else is the source's own vocabulary. -/
+theorem encodeRule_entrySafe {P : Program} (hdom : P.EncodeDomain) {s : Rule}
+    (hmem : Cmd.rule s ∈ P) (i n : Nat) :
+    ∀ a ∈ (encodeRule i s n).1.actions, a.EntrySafe := by
+  obtain ⟨-, hnv, -⟩ := hdom.queryEncodable_of_mem hmem
+  rw [encodeRule_actions]
+  refine encodeActions_entrySafe hdom
+    (notEntryHead_ruleE (queryProofs_var (encodeQuery_valueVars s.query hnv n))) s.actions
+    (fun a ha fk hfk => ?_) _
+  exact mem_ctors_of_cmd hmem (by
+    rw [Cmd.ctors]
+    exact List.mem_append_right _ (List.mem_flatMap.mpr ⟨a, ha, hfk⟩))
+
+/-- **Every firing of an encoded target keeps the bridge**, whether it is a source rule's or a
+maintenance rule's. Unlike `firingsSound_of_rulesEncoded` this owes nothing: both families are
+discharged, the first by `encodeRule_entrySafe` and the second by `maintenance_entrySafe`. -/
+theorem FDatabase.EncBase.firingsEntryRows {P : Program} (hdom : P.EncodeDomain)
+    {d : FDatabase} (hb : d.EncBase P (encodeSig P)) (h : d.EntryRowsUF) :
+    d.FiringsEntryRows := by
+  intro r hrm σ hσ e he
+  have hshape : Signature.MergeShape d.sig := by rw [hb.sig]; exact encodeSig_mergeShape P
+  refine execLocalActions_entryRowsUF hshape hb.inv (hb.wl' r hrm) ?_
+    (mem_terms_of_mem_matchQuery hσ) h he
+  rcases hb.rules r hrm with ⟨s, i, n, hmem, rfl⟩ | hmaint
+  · exact encodeRule_entrySafe hdom hmem i n
+  · exact maintenance_entrySafe hmaint
+
+/-- **Whether a command can record an entry term the bridge would have to answer for.** Only a
+top-level action can; a `.rule`, a `.run` and a `.saturate` write through `d.rules`, which
+`FDatabase.RulesEncoded` covers, and a `.decl` writes no data. -/
+def Cmd.EntryWriteOk : Cmd → Prop
+  | .action a => a.EntrySafe
+  | _ => True
+
+/-- **Every action an encoded block emits is entry-safe.** -/
+theorem entryWriteOk_encodeCmd {P : Program} (hdom : P.EncodeDomain) (c : Cmd) (hc : c ∈ P)
+    (n i : Nat) : ∀ c' ∈ (encodeCmd c n i).1, c'.EntryWriteOk := by
+  intro c' hc'
+  cases c with
+  | action a =>
+      rw [encodeCmd_action_fst] at hc'
+      rcases List.mem_append.mp hc' with h | h
+      · obtain ⟨b, hb, rfl⟩ := List.mem_map.mp h
+        exact encodeAction_entrySafe hdom notEntryHead_fiatE
+          (fun fk hfk => mem_ctors_of_cmd hc hfk) n b hb
+      · simp only [List.mem_cons, List.not_mem_nil, or_false] at h
+        rcases h with rfl; trivial
+  | rule r =>
+      rw [encodeCmd_rule_fst] at hc'
+      simp only [List.mem_cons, List.not_mem_nil, or_false] at hc'
+      rcases hc' with rfl; trivial
+  | run R =>
+      simp only [encodeCmd, List.mem_cons, List.not_mem_nil, or_false] at hc'
+      rcases hc' with rfl | rfl <;> trivial
+  | saturate R =>
+      simp only [encodeCmd, List.mem_cons, List.not_mem_nil, or_false] at hc'
+      rcases hc' with rfl | rfl <;> trivial
+  | decl f dc => simp [encodeCmd] at hc'
+
+/-- **Rounds of one ruleset keep the bridge.** -/
+theorem FDatabase.EncBase.runSaturateM_entryRowsUF {P : Program} (hdom : P.EncodeDomain)
+    {R : RulesetName} :
+    ∀ (n : Nat) {d d' : FDatabase}, d.EncBase P (encodeSig P) → d.EntryRowsUF →
+      d.runSaturateM R n = some d' → d'.EntryRowsUF := by
+  intro n d d' hb h hrun
+  refine (runSaturateM_closed (R := R)
+    (Φ := fun x => x.EncBase P (encodeSig P) ∧ x.EntryRowsUF) ?_ n ⟨hb, h⟩ hrun).2
+  intro x y hx hstep
+  have hstep' : x.execCmdM (Cmd.run R) = some y := hstep
+  refine ⟨hx.1.execCmdM (c := Cmd.run R) trivial trivial trivial trivial hstep', ?_⟩
+  exact runRoundM_entryRowsUF (by rw [hx.1.sig]; exact hx.1.shape)
+    (by rw [hx.1.sig]; exact hx.1.merges) hx.1.inv hx.1.nounions hx.1.wl'
+    (FDatabase.EncBase.firingsEntryRows hdom hx.1 hx.2) hx.2 hstep
+
+/-- **One command of the aligned run keeps the bridge.** -/
+theorem FDatabase.EncBase.execCmdM_entryRowsUF {P : Program} (hdom : P.EncodeDomain)
+    {d d' : FDatabase} {c : Cmd} (hb : d.EncBase P (encodeSig P))
+    (huf : c.UnionFree) (hnd : c.NoDecl) (hwl : c.WriteLegal (encodeSig P))
+    (hok : c.EntryWriteOk) (h : d.EntryRowsUF) (hs : d.execCmdM c = some d') :
+    d'.EntryRowsUF := by
+  have hshape : Signature.MergeShape d.sig := by rw [hb.sig]; exact hb.shape
+  cases c with
+  | action a =>
+    rw [FDatabase.execCmdM] at hs
+    obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp hs
+    have hsig₁ : d₁.sig = d.sig := FDatabase.execAction_sig h₁
+    refine mergeSaturateF_entryRowsUF mergeFuel ?_ ?_ ?_ ?_
+      (execAction_entryRowsUF hshape hb.inv hok (by rw [hb.sig]; exact hwl) h h₁) h₂
+    · rw [hsig₁]; exact hshape
+    · rw [hsig₁, hb.sig]; exact hb.merges
+    · exact hb.inv.execAction (by rw [hb.sig]; exact hwl) h₁
+    · exact execAction_noUnions huf hb.nounions h₁
+  | rule r =>
+    rw [FDatabase.execCmdM, Option.some.injEq] at hs
+    exact hs ▸ h.setEnvRules d.env (r :: d.rules)
+  | run R =>
+    rw [FDatabase.execCmdM] at hs
+    exact runRoundM_entryRowsUF hshape (by rw [hb.sig]; exact hb.merges) hb.inv hb.nounions
+      hb.wl' (FDatabase.EncBase.firingsEntryRows hdom hb h) h hs
+  | saturate R =>
+    rw [FDatabase.execCmdM] at hs
+    exact FDatabase.EncBase.runSaturateM_entryRowsUF hdom runFuel hb h hs
+  | decl f dc => exact (hnd : False).elim
+
+/-- **A block of them.** -/
+theorem FDatabase.EncBase.execProgramM_entryRowsUF {P : Program} (hdom : P.EncodeDomain)
+    {p : Program} (hro : ∀ c ∈ p, Cmd.RulesEncodedOk P c) (huf : ∀ c ∈ p, c.UnionFree)
+    (hnd : ∀ c ∈ p, c.NoDecl) (hwl : ∀ c ∈ p, c.WriteLegal (encodeSig P))
+    (hok : ∀ c ∈ p, c.EntryWriteOk) :
+    ∀ {d D : FDatabase}, d.EncBase P (encodeSig P) → d.EntryRowsUF →
+      d.execProgramM p = some D → D.EntryRowsUF := by
+  induction p with
+  | nil =>
+    intro d D _ h hs
+    rw [FDatabase.execProgramM, Option.some.injEq] at hs
+    exact hs ▸ h
+  | cons c cs ih =>
+    intro d D hb h hs
+    rw [FDatabase.execProgramM] at hs
+    obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp hs
+    refine ih (fun c' hc' => hro c' (List.mem_cons_of_mem c hc'))
+      (fun c' hc' => huf c' (List.mem_cons_of_mem c hc'))
+      (fun c' hc' => hnd c' (List.mem_cons_of_mem c hc'))
+      (fun c' hc' => hwl c' (List.mem_cons_of_mem c hc'))
+      (fun c' hc' => hok c' (List.mem_cons_of_mem c hc'))
+      (hb.execCmdM (hro c List.mem_cons_self) (huf c List.mem_cons_self)
+        (hnd c List.mem_cons_self) (hwl c List.mem_cons_self) h₁)
+      (hb.execCmdM_entryRowsUF hdom (huf c List.mem_cons_self) (hnd c List.mem_cons_self)
+        (hwl c List.mem_cons_self) (hok c List.mem_cons_self) h h₁) h₂
+
+/-- **The bridge at the state `execM` returned: every merge-function entry term the target holds
+has a row at its own key whose e-class column the union-find reaches from the entry's.**
+
+This is what the three clauses of `Database.RebuildClosed` were left waiting on, and it is now
+a theorem rather than a hypothesis. `FDatabase.IndexCurrent` is the same claim without the
+`Database.UFReach` and is refuted (`cxTgt_not_indexCurrent`); `cxTgt_currentUF` is the compiled
+instance of what survives.
+
+The arity clause is named for the same reason the completeness half names it: only the prelude's
+`FDatabase.EncBase` spends it. -/
+theorem execM_encode_entryRowsUF {P : Program} (hdom : P.EncodeDomain) (hag : P.AritiesAgree)
+    {tgt : FDatabase} (htgt : execM (encode P) = some tgt) : tgt.EntryRowsUF := by
+  rw [execM, encode] at htgt
+  obtain ⟨d₀, hprel, hcmds⟩ := FDatabase.execProgramM_append htgt
+  have hb₀ : d₀.EncBase P (encodeSig P) := (encOk_preludeState hdom hag hprel).base
+  have h₀ : d₀.EntryRowsUF := by
+    have hterms := (execProgramM_data_of_declOrRule (declOrRule_encodePrelude P) hprel).1
+    intro f dc hdc body res hm as x pf hlen hmem
+    rw [hterms, show FDatabase.empty.terms = ([] : List Term) from rfl] at hmem
+    exact absurd hmem (by simp)
+  refine FDatabase.EncBase.execProgramM_entryRowsUF hdom
+    (rulesEncodedOk_encodeCmds P (fun _ hc => hc) 0 0) (encodeCmds_unionFree P 0 0)
+    (fun c hc => ?_) (fun c hc => ?_) (fun c hc => ?_) hb₀ h₀ hcmds
+  · obtain ⟨c₀, -, m, j, hmem⟩ := mem_encodeCmd_of_mem_encodeCmds P (fun _ h => h) 0 0 c hc
+    exact noDecl_encodeCmd c₀ m j c hmem
+  · obtain ⟨c₀, hc₀, m, j, hmem⟩ := mem_encodeCmd_of_mem_encodeCmds P (fun _ h => h) 0 0 c hc
+    exact encodedWriteLegal hdom hag c₀ hc₀ m j c hmem
+  · obtain ⟨c₀, hc₀, m, j, hmem⟩ := mem_encodeCmd_of_mem_encodeCmds P (fun _ h => h) 0 0 c hc
+    exact entryWriteOk_encodeCmd hdom c₀ hc₀ m j c hmem
+
+/-- **The bridge, with the arity clause read off the domain.** -/
+theorem execM_entryRowsUF {P : Program} (hdom : P.EncodeDomain) {tgt : FDatabase}
+    (htgt : execM (encode P) = some tgt) : tgt.EntryRowsUF :=
+  execM_encode_entryRowsUF hdom hdom.aritiesAgree' htgt
+
+/-- **The bridge as `Database.Out` reads it**, which is the form the rebuild residue's three
+clauses consume: an entry term the target's *denotation* holds is answered by a live row at the
+same key, up to the union-find. -/
+theorem execM_entryRow_of_out {P : Program} (hdom : P.EncodeDomain) {tgt : FDatabase}
+    (htgt : execM (encode P) = some tgt) {f : FnName} {dc : FnDecl}
+    (hdc : tgt.sig f = some dc) {body : List Action} {res : List Expr}
+    (hm : dc.merge = some (MergeSpec.merge body res)) {as : List Term} {x pf : Term}
+    (hlen : as.length = dc.arity) (ho : tgt.toDatabase.Out f as [x, pf]) :
+    ∃ v lo, (⟨f, as, [v, lo]⟩ : Row) ∈ tgt.rows ∧ tgt.toDatabase.UFReach x v :=
+  (execM_entryRowsUF hdom htgt).out (execM_encode_eqsRefl htgt) hdc hm hlen ho
+
 end Egglog

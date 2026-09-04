@@ -214,8 +214,12 @@ both are decided at the witness at the end of this file.
   that the weakening is one. Its **forest** obligation is now discharged outright:
   `execM_ufRowsDescend` is every live `@UF` row running `ordering-max ↦ ordering-min`,
   `execM_encode_ufRowsForest` is one outgoing edge per key, and `execM_ufRowRoot_unique` is the
-  two together — every id of an encoded target reaches a unique `@UF` row root. What is left of
-  the residue is the **bridge** and the fixpoint's roots. `unionsJoined_fire` is the
+  two together — every id of an encoded target reaches a unique `@UF` row root. So is its
+  **bridge**: `Encoding/Complete.lean`'s `execM_entryRowsUF` is every merge-function entry term
+  of an encoded target having a live row at its own key whose e-class column the union-find
+  reaches from the entry's — `FDatabase.IndexCurrent` weakened by exactly what
+  `cxTgt_not_indexCurrent` refutes, `cxTgt_currentUF` being the compiled instance. What is left
+  of the residue is the **fixpoint's roots**. `unionsJoined_fire` is the
   whole of a **target firing behind a source firing** — the one command case the read-back does
   not reach — and it now carries both of the command induction's data clauses, `joined` and
   `reads`, because a rule head builds as well as unions and one firing answers both.
@@ -4976,11 +4980,12 @@ exhibits at the refuting state.
 `Database.Out`, an entry, and the only thing that writes one is a firing, whose premise is a
 **row**. So what the residue reduces to is three obligations, in this order:
 
-* **The bridge**, run-wide: every merge-function entry term has a current row at a key
-  congruent to its own whose e-class column is `@UF`-reachable from the entry's.
-  `FDatabase.IndexCurrent` is that claim without the "up to `@UF`", and `cxTgt_not_indexCurrent`
-  refutes it; the weakened claim survives that very state, and `cxTgt_currentUF` is the compiled
-  instance — the row the merge kept sits at the `@UF` parent of the entry it displaced.
+* **The bridge**, run-wide: every merge-function entry term has a current row at its own key
+  whose e-class column is `@UF`-reachable from the entry's. **Proved**, as
+  `Encoding/Complete.lean`'s `execM_entryRowsUF`. `FDatabase.IndexCurrent` is that claim without
+  the "up to `@UF`", and `cxTgt_not_indexCurrent` refutes it; the weakened claim survives that
+  very state, and `cxTgt_currentUF` is the compiled instance — the row the merge kept sits at
+  the `@UF` parent of the entry it displaced.
 * **The fixpoint's roots**: at a `FDatabase.RowsClosed` state no surviving view row's e-class
   column has an outgoing `@UF` row, since the e-class rule's own firing would displace it and
   the row list would move. One step, and what it spends is a `matchQuery` completeness lemma of
@@ -5015,14 +5020,14 @@ and the first both spend.** Two blocks below, at the merge phase:
   needed `ufMeasure`, since `mergeBody` writes into `@UF` and the per-key count is therefore no
   measure there.
 
-**What the second obligation still needs, precisely.** The e-class rule has to have *fired*,
-which is a `matchQuery` completeness lemma — `cxRb_mem_matchQuery` proved at one instance, and
-the general form has to name `Query.freeVars`' order, compose `Env.canon` with itself and place
-the columns in `FDatabase.valueTerms`. That yields the rule's conclusion; turning it into the
-contradiction then wants either a **row** for it, which is the first obligation, or the
-merge phase's own survival fact — some row stays at the key and its e-class column is
-`blt`-below every column the key carried, which is `mergeResult`'s `ordering-min` carried
-across a pass and across `FDatabase.mergeSaturateF`. Neither is one step.
+**What the second obligation still needs, precisely, and it is now the only one.** The e-class
+rule has to have *fired*, which is a `matchQuery` completeness lemma — `cxRb_mem_matchQuery`
+proved at one instance, and the general form has to name `Query.freeVars`' order, compose
+`Env.canon` with itself and place the columns in `FDatabase.valueTerms`. It also needs the
+maintenance rules to be rules the target **holds**, which is the converse of
+`FDatabase.RulesEncoded` and is not among the invariants the run carries. That yields the
+rule's conclusion; the row for it is the first obligation and is now `execM_entryRowsUF`, so
+what is left is the firing itself.
 
 **And a side condition that turned out to be load-bearing rather than bookkeeping**: the merge
 body only runs if the signature declares `@Sym` and `@Trans` (`Expr.eval` reads
@@ -5045,11 +5050,13 @@ survives into the statement. The skip branch is the same fact degenerately, and 
 when they are **equal**, where a width of zero would skip every collision and drop rows with no
 edge behind them.
 
-**And the rest of the bridge is inductive for free**, which is why this was the case worth
-checking: every other writer only adds. `FDatabase.addRow` writes the row for the entry term it
-mints, so a new entry is current reflexively; `execRunRules` unions firings in and removes
-nothing; `FDatabase.union` and `FDatabase.addTerm` touch no row. So the bridge is a per-command
-induction whose one hard case is now closed.
+**And the rest of the bridge was inductive**, which is why this was the case worth checking:
+every other writer only adds. `FDatabase.addRow` writes the row for the entry term it mints, so
+a new entry is current reflexively; `execRunRules` unions firings in and removes nothing;
+`FDatabase.union` and `FDatabase.addTerm` touch no row. What those writers *do* owe is that they
+record no entry term they write no row for, and that is syntactic in the action
+(`Action.EntrySafe`) — so the bridge is a per-command induction over `FDatabase.EncBase`, and
+`execM_entryRowsUF` is it run.
 
 **Stating `Database.UFStep` over `FDatabase.rows` instead of over entry terms does not help.**
 It would take the staleness out of `eclass`'s *hypothesis* — the clause would range over live
@@ -11488,6 +11495,845 @@ rule head has, and those need the query-to-substitution correspondence — which
 on it (`execM_viewsSound`, `encode_corresponds_complete`, `encode_corresponds`) are stated
 there instead. Everything else the completeness half needs is above, and the witnesses that
 pin the statement are below. -/
+
+/-! ### The bridge: an entry term's current row, up to `@UF`
+
+**What all three clauses of `Database.RebuildClosed` are waiting on.** Each of them is a
+maintenance rule's *conclusion*, and the premise of each is a **row**: `matchQuery` reads
+`d.rows` at a `.merge` function (`patternHolds`, `mem_rows_of_patternHolds_values`) while
+`Database.Out` reads `d.terms`, and the two part company at the first collision —
+`FDatabase.mergeOneOriented` deletes the row it displaced and `terms` keeps its entry term
+forever. `FDatabase.IndexCurrent` is the claim that they do not part company, and
+`cxTgt_not_indexCurrent` refutes it.
+
+**The bridge is that claim with the e-class column read up to the union-find**, which is what
+survives the refutation: at the very state that refutes `FDatabase.IndexCurrent` the row the
+merge kept sits at the `@UF` parent of the entry it displaced, which is what `cxTgt_currentUF`
+exhibits.
+
+Run-wide, and every writer but one only *adds*: `FDatabase.addRow` writes the row for the entry
+term it mints, `FDatabase.addTerm` and `FDatabase.union` remove nothing, and `execRunRules`
+unions firings in. The one writer that removes a row is `FDatabase.mergeOneOriented`, and
+`mergeOneOriented_survivorUF` is that step verified. What the other writers owe instead is that
+they mint no entry term *except* the one they write a row for — the shells the encoding wraps
+around held terms are of neither shape (`Term.EntryShaped`, `not_entryShaped_of_ne`), which is
+the same obligation `FDatabase.SoundTerms.addTerm_top` pays and is paid here by the same
+lemmas. -/
+
+/-- **Reachability only grows with the term and equation lists**, since `Database.UFStep`
+does. -/
+theorem Database.UFReach.mono {d e : FDatabase} (ht : ∀ t ∈ d.terms, t ∈ e.terms)
+    (he : ∀ p ∈ d.eqs, p ∈ e.eqs) {a b : Term} (h : d.toDatabase.UFReach a b) :
+    e.toDatabase.UFReach a b := by
+  induction h with
+  | refl => exact .refl
+  | tail _ hstep ih => exact ih.tail (Database.UFStep.mono ht he hstep)
+
+/-- **The bridge, at a state.** Every `:merge` entry term the state holds — at the declared
+key width, which is the only decomposition a `set` can have written — has a **row** at its own
+key whose e-class column the union-find reaches from the entry's.
+
+`FDatabase.IndexCurrent` is this without the `Database.UFReach`, and is false. The key is asked
+for on the nose rather than up to congruence because an encoded target asserts nothing
+(`execM_encode_eqsRefl`); `FDatabase.EntryRowsUF.out` is the reading `Database.Out` wants. -/
+def FDatabase.EntryRowsUF (d : FDatabase) : Prop :=
+  ∀ (f : FnName) (dc : FnDecl), d.sig f = some dc → ∀ body res,
+    dc.merge = some (MergeSpec.merge body res) → ∀ (as : List Term) (x pf : Term),
+      as.length = dc.arity → Term.app f (as ++ [x, pf]) ∈ d.terms →
+      ∃ v lo, (⟨f, as, [v, lo]⟩ : Row) ∈ d.rows ∧ d.toDatabase.UFReach x v
+
+/-- **The bridge as `Database.Out` reads it**, where the state asserts nothing: the key is read
+up to a congruence that is the identity there, so the row it answers with sits at the key the
+entry term carries. -/
+theorem FDatabase.EntryRowsUF.out {d : FDatabase} (h : d.EntryRowsUF) (hr : d.EqsRefl)
+    {f : FnName} {dc : FnDecl} (hdc : d.sig f = some dc) {body : List Action} {res : List Expr}
+    (hm : dc.merge = some (MergeSpec.merge body res)) {as : List Term} {x pf : Term}
+    (hlen : as.length = dc.arity) (ho : d.toDatabase.Out f as [x, pf]) :
+    ∃ v lo, (⟨f, as, [v, lo]⟩ : Row) ∈ d.rows ∧ d.toDatabase.UFReach x v := by
+  obtain ⟨bs, hcl, hmem⟩ := ho
+  obtain rfl : as = bs := CongList.eq_of_eqsRefl hr.toDatabase hcl
+  exact h f dc hdc body res hm as x pf hlen
+    (by rw [FDatabase.toDatabase_terms] at hmem; exact hmem)
+
+/-- **The bridge's subject terms are exactly the two shapes `Term.EntryShaped` names**, where
+the signature is the encoding's: a `:merge` function is `@UF` or a view (`Signature.MergeShape`),
+and `@UF` is unary. This is what lets the `addTerm` obligation be paid by the lemmas
+`FDatabase.SoundTerms.addTerm_top`'s already is. -/
+theorem entryShaped_of_mergeShape {sig : Signature} (hshape : Signature.MergeShape sig)
+    {f : FnName} {dc : FnDecl} (hdc : sig f = some dc) {body : List Action} {res : List Expr}
+    (hm : dc.merge = some (MergeSpec.merge body res)) {as : List Term} {x pf : Term}
+    (hlen : as.length = dc.arity) : (Term.app f (as ++ [x, pf])).EntryShaped := by
+  obtain ⟨hname, -, -, -, huf, -⟩ := hshape f dc hdc body res hm
+  rcases hname with rfl | ⟨g, rfl⟩
+  · obtain ⟨a, ha⟩ : ∃ a, as = [a] := List.length_eq_one_iff.mp (by rw [hlen, huf rfl])
+    exact Or.inr ⟨a, x, pf, by rw [ha]; rfl⟩
+  · exact Or.inl ⟨g, as, x, pf, rfl⟩
+
+/-- **What one step owes the bridge's rows**: every `:merge` row of the state it started from
+has a row at the same key in the state it ends at, whose e-class column the union-find reaches
+from the one it started with.
+
+Reflexive for a step that only adds; the one step that is not is `FDatabase.mergeOneOriented`,
+where `mergeOneOriented_survivorUF` supplies it. -/
+def FDatabase.RowsCarryUF (d e : FDatabase) : Prop :=
+  ∀ (f : FnName) (as : List Term) (c0 c1 : Term), (⟨f, as, [c0, c1]⟩ : Row) ∈ d.rows →
+    ∃ v lo, (⟨f, as, [v, lo]⟩ : Row) ∈ e.rows ∧ e.toDatabase.UFReach c0 v
+
+/-- A step that removes no row carries them all, at the columns they already have. -/
+theorem FDatabase.RowsCarryUF.of_subset {d e : FDatabase} (h : ∀ r ∈ d.rows, r ∈ e.rows) :
+    d.RowsCarryUF e := fun _ _ c0 c1 hm => ⟨c0, c1, h _ hm, .refl⟩
+
+@[inherit_doc FDatabase.RowsCarryUF.of_subset]
+theorem FDatabase.RowsCarryUF.refl (d : FDatabase) : d.RowsCarryUF d :=
+  FDatabase.RowsCarryUF.of_subset fun _ h => h
+
+/-- Two steps compose, the first step's reachability carried onto the second's state. -/
+theorem FDatabase.RowsCarryUF.trans {d e g : FDatabase} (h₁ : d.RowsCarryUF e)
+    (h₂ : e.RowsCarryUF g) (ht : ∀ t ∈ e.terms, t ∈ g.terms) (hq : ∀ p ∈ e.eqs, p ∈ g.eqs) :
+    d.RowsCarryUF g := by
+  intro f as c0 c1 hm
+  obtain ⟨v, lo, hv, hreach⟩ := h₁ f as c0 c1 hm
+  obtain ⟨w, lo', hw, hreach'⟩ := h₂ f as v lo hv
+  exact ⟨w, lo', hw, (Database.UFReach.mono ht hq hreach).trans hreach'⟩
+
+/-- **The bridge along one step.** The obligation is at the entry terms the step *added*:
+everything the state already held is answered by the bridge there and carried forward by
+`FDatabase.RowsCarryUF`. -/
+theorem FDatabase.EntryRowsUF.step {d e : FDatabase} (h : d.EntryRowsUF) (hsig : e.sig = d.sig)
+    (ht : ∀ t ∈ d.terms, t ∈ e.terms) (hq : ∀ p ∈ d.eqs, p ∈ e.eqs)
+    (hcarry : d.RowsCarryUF e)
+    (hnew : ∀ (f : FnName) (dc : FnDecl), d.sig f = some dc → ∀ body res,
+      dc.merge = some (MergeSpec.merge body res) → ∀ (as : List Term) (x pf : Term),
+        as.length = dc.arity → Term.app f (as ++ [x, pf]) ∈ e.terms →
+        Term.app f (as ++ [x, pf]) ∈ d.terms ∨
+          ∃ v lo, (⟨f, as, [v, lo]⟩ : Row) ∈ e.rows ∧ e.toDatabase.UFReach x v) :
+    e.EntryRowsUF := by
+  intro f dc hdc body res hm as x pf hlen hmem
+  rw [hsig] at hdc
+  rcases hnew f dc hdc body res hm as x pf hlen hmem with hold | hdone
+  · obtain ⟨v, lo, hv, hreach⟩ := h f dc hdc body res hm as x pf hlen hold
+    obtain ⟨w, lo', hw, hreach'⟩ := hcarry f as v lo hv
+    exact ⟨w, lo', hw, (Database.UFReach.mono ht hq hreach).trans hreach'⟩
+  · exact hdone
+
+/-- **One `addTerm`.** It writes no row of a `:merge` function, so what it owes is that it
+records no *new* entry term — which is `FDatabase.SoundTerms.addTerm_top`'s `hsub`, at the same
+lemmas. -/
+theorem FDatabase.EntryRowsUF.addTerm {d : FDatabase} (hshape : Signature.MergeShape d.sig)
+    (h : d.EntryRowsUF) {t : Term}
+    (hsub : ∀ s ∈ t.subtermList, s.EntryShaped → s ∈ d.terms) :
+    (d.addTerm t).EntryRowsUF := by
+  refine h.step rfl (fun s hs => FDatabase.mem_addTerm_of_mem hs) (fun p hp => hp)
+    (FDatabase.RowsCarryUF.of_subset fun r hr => FDatabase.mem_addTerm_rows.mpr (Or.inr hr)) ?_
+  intro f dc hdc body res hm as x pf hlen hmem
+  refine Or.inl ?_
+  rcases FDatabase.mem_addTerm_terms.mp hmem with hm' | hm'
+  · exact hsub _ hm' (entryShaped_of_mergeShape hshape hdc hm hlen)
+  · exact hm'
+
+/-- **One `set`.** The entry term it mints is the row it writes, at the width the declaration
+gives (`Action.SetWidthOk`); every other entry term it records is a subterm of a column, and
+`hsub` is what says those are held already. -/
+theorem FDatabase.EntryRowsUF.addRow {d : FDatabase} (hshape : Signature.MergeShape d.sig)
+    (h : d.EntryRowsUF) {g : FnName} {as vs : List Term}
+    (hw : ∀ dc, d.sig g = some dc → as.length = dc.arity)
+    (hsub : ∀ c ∈ as ++ vs, ∀ s ∈ c.subtermList, s.EntryShaped → s ∈ d.terms) :
+    (FDatabase.addRow g as vs d).EntryRowsUF := by
+  refine h.step rfl (fun s hs => FDatabase.mem_addRow_terms.mpr (Or.inr hs)) (fun p hp => hp)
+    (FDatabase.RowsCarryUF.of_subset fun r hr => mem_addRow_rows hr) ?_
+  intro f dc hdc body res hm bs x pf hlen hmem
+  rcases FDatabase.mem_addRow_terms.mp hmem with hm' | hm'
+  · by_cases hq : Term.app f (bs ++ [x, pf]) = Term.app g (as ++ vs)
+    · obtain ⟨rfl, hcols⟩ := Term.app.inj hq
+      obtain ⟨rfl, rfl⟩ := List.append_inj hcols (by rw [hlen, hw dc hdc])
+      exact Or.inr ⟨x, pf, FDatabase.mem_addRow_rows_iff.mpr (Or.inl rfl), .refl⟩
+    · exact Or.inl (entryShaped_mem_of_columns hsub _ hm' hq
+        (entryShaped_of_mergeShape hshape hdc hm hlen))
+  · exact Or.inl hm'
+
+/-- **One firing, unioned into the accumulator.** Both operands' rows and terms survive, so
+each side answers its own entry terms. -/
+theorem FDatabase.EntryRowsUF.union {d₁ d₂ : FDatabase} (h₁ : d₁.EntryRowsUF)
+    (h₂ : d₂.EntryRowsUF) (hsig : d₂.sig = d₁.sig) : (d₁.union d₂).EntryRowsUF := by
+  intro f dc hdc body res hm as x pf hlen hmem
+  have hrow₁ : ∀ r ∈ d₁.rows, r ∈ (d₁.union d₂).rows :=
+    fun r hr => FDatabase.mem_rows_union.mpr (Or.inl hr)
+  have hrow₂ : ∀ r ∈ d₂.rows, r ∈ (d₁.union d₂).rows :=
+    fun r hr => FDatabase.mem_rows_union.mpr (Or.inr hr)
+  have hterm₁ : ∀ t ∈ d₁.terms, t ∈ (d₁.union d₂).terms :=
+    fun t ht => FDatabase.mem_terms_union.mpr (Or.inl ht)
+  have hterm₂ : ∀ t ∈ d₂.terms, t ∈ (d₁.union d₂).terms :=
+    fun t ht => FDatabase.mem_terms_union.mpr (Or.inr ht)
+  have heq₁ : ∀ p ∈ d₁.eqs, p ∈ (d₁.union d₂).eqs :=
+    fun p hp => FDatabase.mem_eqs_union.mpr (Or.inl hp)
+  have heq₂ : ∀ p ∈ d₂.eqs, p ∈ (d₁.union d₂).eqs :=
+    fun p hp => FDatabase.mem_eqs_union.mpr (Or.inr hp)
+  rcases FDatabase.mem_terms_union.mp hmem with hm' | hm'
+  · obtain ⟨v, lo, hv, hreach⟩ := h₁ f dc hdc body res hm as x pf hlen hm'
+    exact ⟨v, lo, hrow₁ _ hv, Database.UFReach.mono hterm₁ heq₁ hreach⟩
+  · obtain ⟨v, lo, hv, hreach⟩ :=
+      h₂ f dc (by rw [hsig]; exact hdc) body res hm as x pf hlen hm'
+    exact ⟨v, lo, hrow₂ _ hv, Database.UFReach.mono hterm₂ heq₂ hreach⟩
+
+/-! #### The one writer that removes a row
+
+`FDatabase.mergeOneOriented` deletes the row it displaced, so it is the only step that can
+break the bridge. `mergeOneOriented_survivorUF` is the repair — the row it leaves at the key
+carries an e-class column both colliding columns reach — and what is added here is the rest of
+the step: the rows it did *not* touch, and the two entry terms it records. -/
+
+/-- The two rows a firing that ran collided, read off its own guard. -/
+theorem mergeOneOriented_mem_rows {cl : Finset (Term × Term)} {d e : FDatabase} {r₁ r₂ : Row}
+    (hfire : d.mergeOneOriented cl r₁ r₂ = some e) :
+    r₁ ∈ d.rows ∧ r₂ ∈ d.rows ∧ r₁.fn = r₂.fn ∧ d.sig.mergeOf r₁.fn ≠ none := by
+  rw [FDatabase.mergeOneOriented] at hfire
+  split at hfire
+  next body res hms =>
+    split at hfire
+    next hg =>
+      obtain ⟨⟨⟨hfn, -⟩, hm₁⟩, hm₂⟩ : ((r₁.fn = r₂.fn ∧
+          FDatabase.congrKeys cl r₁.args r₂.args = true) ∧ r₁ ∈ d.rows) ∧ r₂ ∈ d.rows := by
+        simpa only [Bool.and_eq_true, decide_eq_true_eq, List.contains_iff_mem] using hg
+      exact ⟨hm₁, hm₂, hfn, by rw [hms]; simp⟩
+    next => exact absurd hfire (by simp)
+  next => exact absurd hfire (by simp)
+
+/-- **No action removes a row.** `FDatabase.addTerm`, `FDatabase.addEq` and `FDatabase.addRow`
+are the three writers, and all three only add. -/
+theorem mem_rows_execAction {m m' : FDatabase} {a : Action} (h : execAction m a = some m')
+    {r : Row} (hr : r ∈ m.rows) : r ∈ m'.rows := by
+  cases a with
+  | expr e =>
+    simp only [execAction] at h
+    obtain ⟨t, -, rfl⟩ := Option.map_eq_some_iff.mp h
+    exact FDatabase.mem_addTerm_rows.mpr (Or.inr hr)
+  | letBind v e =>
+    simp only [execAction] at h
+    obtain ⟨t, -, rfl⟩ := Option.map_eq_some_iff.mp h
+    exact FDatabase.mem_addTerm_rows.mpr (Or.inr hr)
+  | union e₁ e₂ =>
+    simp only [execAction] at h
+    obtain ⟨t₁, -, h⟩ := Option.bind_eq_some_iff.mp h
+    obtain ⟨t₂, -, h⟩ := Option.bind_eq_some_iff.mp h
+    split at h
+    · exact absurd h (by simp)
+    · rw [Option.some.injEq] at h
+      subst h
+      exact FDatabase.mem_addTerm_rows.mpr (Or.inr (FDatabase.mem_addTerm_rows.mpr (Or.inr hr)))
+  | set f args out =>
+    obtain ⟨as, vs, -, -, rfl⟩ := execAction_set h
+    exact mem_addRow_rows hr
+
+@[inherit_doc mem_rows_execAction]
+theorem mem_rows_execActions : ∀ (bs : List Action) {m m' : FDatabase},
+    execActions m bs = some m' → ∀ r ∈ m.rows, r ∈ m'.rows
+  | [], _, _, h, _, hr => by
+      rw [execActions, Option.some.injEq] at h; exact h ▸ hr
+  | b :: bs, _, _, h, r, hr => by
+      rw [execActions] at h
+      obtain ⟨m₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp h
+      exact mem_rows_execActions bs h₂ r (mem_rows_execAction h₁ hr)
+
+/-- **A row a firing neither displaced nor rewrote is a row of its result.** The skip branch
+filters `r₁` out and moves nothing else; the body branch filters `r₁` and rewrites `r₂`. -/
+theorem mem_rows_of_mergeOneOriented {cl : Finset (Term × Term)} {d e : FDatabase}
+    {r₁ r₂ r : Row} (hfire : d.mergeOneOriented cl r₁ r₂ = some e) (hm : r ∈ d.rows)
+    (h₁ : r ≠ r₁) (h₂ : r ≠ r₂) : r ∈ e.rows := by
+  rw [FDatabase.mergeOneOriented] at hfire
+  split at hfire
+  next body res hms =>
+    split at hfire
+    next hg =>
+      split at hfire
+      next =>
+        rw [Option.some.injEq] at hfire
+        subst hfire
+        exact List.mem_filter.mpr ⟨hm, by simpa using h₁⟩
+      next =>
+        obtain ⟨m, hmb, hfire⟩ := Option.bind_eq_some_iff.mp hfire
+        obtain ⟨vs, hvs, he⟩ := Option.map_eq_some_iff.mp hfire
+        subst he
+        refine List.mem_map.mpr ⟨r, List.mem_filter.mpr
+          ⟨FDatabase.mem_addTerm_rows.mpr (Or.inr ?_), by simpa using h₁⟩, by simp [h₂]⟩
+        exact mem_rows_execActions body hmb r hm
+    next => exact absurd hfire (by simp)
+  next => exact absurd hfire (by simp)
+
+/-- **Rows carry across one merge firing.** The row the firing keeps at the colliding key
+answers for both rows it combined (`mergeOneOriented_survivorUF`); every other row is one it
+left alone. -/
+theorem mergeOneOriented_rowsCarryUF {cl : Finset (Term × Term)} {d e : FDatabase} {r₁ r₂ : Row}
+    (hshape : Signature.MergeShape d.sig) (hidx : d.IndexOk) (hcl : ∀ p ∈ cl, p.1 = p.2)
+    (hne : r₁ ≠ r₂) (hfire : d.mergeOneOriented cl r₁ r₂ = some e) : d.RowsCarryUF e := by
+  obtain ⟨n0, n1, o0, o1, v, lo, hr1out, hr2out, hargs, hfn, hrow, hnv, hov⟩ :=
+    mergeOneOriented_survivorUF hshape hidx hcl hne hfire
+  intro f as c0 c1 hm
+  by_cases h₁ : (⟨f, as, [c0, c1]⟩ : Row) = r₁
+  · have hf : f = r₂.fn := by rw [← hfn]; exact congrArg Row.fn h₁
+    have ha : as = r₂.args := by rw [← hargs]; exact congrArg Row.args h₁
+    have hc : [c0, c1] = [n0, n1] := by rw [← hr1out]; exact congrArg Row.out h₁
+    exact ⟨v, lo, by rw [hf, ha]; exact hrow,
+      by rw [show c0 = n0 from (List.cons.inj hc).1]; exact hnv⟩
+  · by_cases h₂ : (⟨f, as, [c0, c1]⟩ : Row) = r₂
+    · have hf : f = r₂.fn := congrArg Row.fn h₂
+      have ha : as = r₂.args := congrArg Row.args h₂
+      have hc : [c0, c1] = [o0, o1] := by rw [← hr2out]; exact congrArg Row.out h₂
+      exact ⟨v, lo, by rw [hf, ha]; exact hrow,
+        by rw [show c0 = o0 from (List.cons.inj hc).1]; exact hov⟩
+    · exact ⟨c0, c1, mem_rows_of_mergeOneOriented hfire hm h₁ h₂, .refl⟩
+
+/-- **The entry terms one merge firing records that the state did not hold**, each with the row
+that answers for it: the survivor's own entry at the colliding key, and the `@UF` edge the body
+wrote at its own. Every other subterm either was held already or is a column of the two rows
+the firing combined — a proof node the body minted is of neither shape
+(`entryShaped_mem_of_transSym`).
+
+The `@UF` edge is the case that needs the survivor as well: if the row it writes *is* one of
+the two colliding rows, the firing rewrites or drops it, and what stands at its key is the
+survivor — whose e-class column that row's own column reaches. -/
+theorem mergeOneOriented_newEntryRow {cl : Finset (Term × Term)} {d e : FDatabase} {r₁ r₂ : Row}
+    (hshape : Signature.MergeShape d.sig) (hr : d.EqsRefl) (hsc : d.SubtermClosed)
+    (hidx : d.IndexOk) (hcl : ∀ p ∈ cl, p.1 = p.2) (hne : r₁ ≠ r₂)
+    (hfire : d.mergeOneOriented cl r₁ r₂ = some e) :
+    ∀ (g : FnName) (as : List Term) (x pf : Term), Term.app g (as ++ [x, pf]) ∈ e.terms →
+      (Term.app g (as ++ [x, pf])).EntryShaped →
+      Term.app g (as ++ [x, pf]) ∈ d.terms ∨
+        ∃ w lo', (⟨g, as, [w, lo']⟩ : Row) ∈ e.rows ∧ e.toDatabase.UFReach x w := by
+  obtain ⟨n0, n1, o0, o1, v, lo, hr1out, hr2out, hargs, hfn, hrow, hnv, hov⟩ :=
+    mergeOneOriented_survivorUF hshape hidx hcl hne hfire
+  obtain ⟨hmem₁, hmem₂, -, hmg1⟩ := mergeOneOriented_mem_rows hfire
+  have hmg2 : d.sig.mergeOf r₂.fn ≠ none := by rw [← hfn]; exact hmg1
+  have hE1 := mem_terms_of_indexOk hr hidx hmem₁ hmg1
+  have hE2 := mem_terms_of_indexOk hr hidx hmem₂ hmg2
+  have hcol₁ : ∀ c ∈ r₁.args ++ r₁.out, c ∈ d.terms :=
+    fun c hc => FDatabase.mem_terms_of_column hsc hE1 hc
+  have hcol₂ : ∀ c ∈ r₂.args ++ r₂.out, c ∈ d.terms :=
+    fun c hc => FDatabase.mem_terms_of_column hsc hE2 hc
+  have hn0 : n0 ∈ d.terms := hcol₁ n0 (by rw [hr1out]; simp)
+  have hn1 : n1 ∈ d.terms := hcol₁ n1 (by rw [hr1out]; simp)
+  have ho0 : o0 ∈ d.terms := hcol₂ o0 (by rw [hr2out]; simp)
+  have ho1 : o1 ∈ d.terms := hcol₂ o1 (by rw [hr2out]; simp)
+  have hargs₂ : ∀ c ∈ r₂.args, c ∈ d.terms := fun c hc => hcol₂ c (List.mem_append_left _ hc)
+  intro g as x pf hmem hshaped
+  rw [FDatabase.mergeOneOriented] at hfire
+  split at hfire
+  next body res hms =>
+    obtain ⟨dc, hdc, hmergedc⟩ := Option.bind_eq_some_iff.mp hms
+    obtain ⟨-, rfl, rfl, -, -, -⟩ := hshape r₁.fn dc hdc body res hmergedc
+    split at hfire
+    next hg =>
+      split at hfire
+      next =>
+        rw [Option.some.injEq] at hfire
+        subst hfire
+        exact Or.inl hmem
+      next =>
+        obtain ⟨m, hmb, hfire⟩ := Option.bind_eq_some_iff.mp hfire
+        obtain ⟨vs, hvs, he⟩ := Option.map_eq_some_iff.mp hfire
+        have henv : ({ d with env := mergeEnv r₂.out r₁.out } : FDatabase).env
+            = mergeEnv [o0, o1] [n0, n1] := by rw [hr1out, hr2out]
+        obtain ⟨mx, mn, a, b, hmx, hmn, ha, hb, rfl⟩ := execActions_mergeBody_inv henv hmb
+        have hmxm : mx ∈ d.terms := by rcases hmx with rfl | rfl <;> assumption
+        have hmnm : mn ∈ d.terms := by rcases hmn with rfl | rfl <;> assumption
+        have ham : a ∈ d.terms := by rcases ha with rfl | rfl <;> assumption
+        have hbm : b ∈ d.terms := by rcases hb with rfl | rfl <;> assumption
+        obtain ⟨w, lo', hw0, hlo0, rfl⟩ := evalList_mergeResult_inv (o0 := o0) (o1 := o1)
+          (n0 := n0) (n1 := n1) (by
+            rw [show (FDatabase.addRow ufName [mx]
+                [mn, Term.app transName [Term.app symName [a], b]]
+                { d with env := mergeEnv r₂.out r₁.out } : FDatabase).env
+              = mergeEnv [o0, o1] [n0, n1] from henv] at hvs
+            exact hvs)
+        have hwm : w ∈ d.terms := by rcases hw0 with rfl | rfl <;> assumption
+        have hlom : lo' ∈ d.terms := by rcases hlo0 with rfl | rfl <;> assumption
+        subst he
+        have hsubU : ∀ c ∈ [mx, mn, Term.app transName [Term.app symName [a], b]],
+            ∀ s ∈ c.subtermList, s.EntryShaped → s ∈ d.terms := by
+          intro c hc
+          have hc2 : c = mx ∨ c = mn ∨
+              c = Term.app transName [Term.app symName [a], b] := by simpa using hc
+          rcases hc2 with rfl | rfl | rfl
+          · exact entryShaped_mem_of_held hsc hmxm
+          · exact entryShaped_mem_of_held hsc hmnm
+          · exact entryShaped_mem_of_transSym hsc ham hbm
+        have hsubT : ∀ c ∈ r₂.args ++ [w, lo'],
+            ∀ s ∈ c.subtermList, s.EntryShaped → s ∈ d.terms := by
+          intro c hc
+          rcases List.mem_append.mp hc with hc' | hc'
+          · exact entryShaped_mem_of_held hsc (hargs₂ c hc')
+          · have hc2 : c = w ∨ c = lo' := by simpa using hc'
+            rcases hc2 with rfl | rfl
+            · exact entryShaped_mem_of_held hsc hwm
+            · exact entryShaped_mem_of_held hsc hlom
+        rcases FDatabase.mem_addTerm_terms.mp hmem with hmt | hmt
+        · -- the survivor's own entry, or a column of it
+          by_cases hq : Term.app g (as ++ [x, pf]) = Term.app r₂.fn (r₂.args ++ [w, lo'])
+          · obtain ⟨rfl, hcols⟩ := Term.app.inj hq
+            obtain ⟨rfl, hlast⟩ := List.append_inj' hcols rfl
+            obtain rfl : x = w := (List.cons.inj hlast).1
+            refine Or.inr ⟨v, lo, hrow, ?_⟩
+            rcases hw0 with rfl | rfl
+            · exact hov
+            · exact hnv
+          · exact Or.inl (entryShaped_mem_of_columns hsubT _ hmt hq hshaped)
+        · rcases FDatabase.mem_addRow_terms.mp hmt with hmu | hmu
+          · -- the `@UF` edge the body wrote, or a column of it
+            rw [List.singleton_append] at hmu
+            by_cases hq : Term.app g (as ++ [x, pf])
+                = Term.app ufName [mx, mn, Term.app transName [Term.app symName [a], b]]
+            · obtain ⟨rfl, hcols⟩ := Term.app.inj hq
+              obtain ⟨rfl, hlast⟩ := List.append_inj'
+                (show as ++ [x, pf]
+                  = [mx] ++ [mn, Term.app transName [Term.app symName [a], b]] from hcols) rfl
+              have hxmn : x = mn := (List.cons.inj hlast).1
+              by_cases hu₁ : (⟨ufName, [mx],
+                  [mn, Term.app transName [Term.app symName [a], b]]⟩ : Row) = r₁
+              · have hfeq : r₂.fn = ufName := by rw [← hfn]; exact (congrArg Row.fn hu₁).symm
+                have haeq : r₂.args = [mx] := by
+                  rw [← hargs]; exact (congrArg Row.args hu₁).symm
+                have hoeq : [mn, Term.app transName [Term.app symName [a], b]] = [n0, n1] := by
+                  rw [← hr1out]; exact congrArg Row.out hu₁
+                have hEq : (⟨ufName, [mx], [v, lo]⟩ : Row) = ⟨r₂.fn, r₂.args, [v, lo]⟩ := by
+                  rw [hfeq, haeq]
+                refine Or.inr ⟨v, lo, by rw [hEq]; exact hrow, ?_⟩
+                rw [show x = n0 from hxmn.trans (List.cons.inj hoeq).1]
+                exact hnv
+              · by_cases hu₂ : (⟨ufName, [mx],
+                    [mn, Term.app transName [Term.app symName [a], b]]⟩ : Row) = r₂
+                · have hfeq : r₂.fn = ufName := (congrArg Row.fn hu₂).symm
+                  have haeq : r₂.args = [mx] := (congrArg Row.args hu₂).symm
+                  have hoeq : [mn, Term.app transName [Term.app symName [a], b]]
+                      = [o0, o1] := by rw [← hr2out]; exact congrArg Row.out hu₂
+                  have hEq : (⟨ufName, [mx], [v, lo]⟩ : Row) = ⟨r₂.fn, r₂.args, [v, lo]⟩ := by
+                    rw [hfeq, haeq]
+                  refine Or.inr ⟨v, lo, by rw [hEq]; exact hrow, ?_⟩
+                  rw [show x = o0 from hxmn.trans (List.cons.inj hoeq).1]
+                  exact hov
+                · refine Or.inr ⟨mn, Term.app transName [Term.app symName [a], b], ?_, ?_⟩
+                  · refine List.mem_map.mpr ⟨_, List.mem_filter.mpr
+                      ⟨FDatabase.mem_addTerm_rows.mpr (Or.inr
+                        (FDatabase.mem_addRow_rows_iff.mpr (Or.inl rfl))),
+                        by simpa using hu₁⟩, by simp [hu₂]⟩
+                  · rw [hxmn]
+                    exact .refl
+            · exact Or.inl (entryShaped_mem_of_columns hsubU _ hmu hq hshaped)
+          · exact Or.inl hmu
+    next => exact absurd hfire (by simp)
+  next => exact absurd hfire (by simp)
+
+/-- **One merge firing keeps the bridge.** -/
+theorem mergeOneOriented_entryRowsUF {cl : Finset (Term × Term)} {d e : FDatabase} {r₁ r₂ : Row}
+    (hshape : Signature.MergeShape d.sig) (hr : d.EqsRefl) (hsc : d.SubtermClosed)
+    (hidx : d.IndexOk) (hcl : ∀ p ∈ cl, p.1 = p.2) (hne : r₁ ≠ r₂) (h : d.EntryRowsUF)
+    (hfire : d.mergeOneOriented cl r₁ r₂ = some e) : e.EntryRowsUF := by
+  obtain ⟨htm, heq, hsg, -⟩ := FDatabase.mergeOneOriented_confined hfire
+  refine h.step hsg htm heq (mergeOneOriented_rowsCarryUF hshape hidx hcl hne hfire) ?_
+  intro f dc hdc body res hm as x pf hlen hmem
+  exact mergeOneOriented_newEntryRow hshape hr hsc hidx hcl hne hfire f as x pf hmem
+    (entryShaped_of_mergeShape hshape hdc hm hlen)
+
+/-- **The same, at whichever orientation `FDatabase.mergeOneWith` chose.** -/
+theorem mergeOneWith_entryRowsUF {cl : Finset (Term × Term)} {d e : FDatabase} {r₁ r₂ : Row}
+    (hshape : Signature.MergeShape d.sig) (hr : d.EqsRefl) (hsc : d.SubtermClosed)
+    (hidx : d.IndexOk) (hcl : ∀ p ∈ cl, p.1 = p.2) (hne : r₁ ≠ r₂) (h : d.EntryRowsUF)
+    (hm : d.mergeOneWith cl r₁ r₂ = some e) : e.EntryRowsUF := by
+  rcases FDatabase.mergeOneWith_eq_oriented (cl := cl) (d := d) r₁ r₂ with he | he
+  · exact mergeOneOriented_entryRowsUF hshape hr hsc hidx hcl (Ne.symm hne) h (he ▸ hm)
+  · exact mergeOneOriented_entryRowsUF hshape hr hsc hidx hcl hne h (he ▸ hm)
+
+/-- **`FDatabase.mergeRound_induction` with the pass's own guard kept.** The fold skips a row
+against itself, and `mergeOneOriented_survivorUF` needs that: a firing at `r₁ = r₂` drops the
+row and leaves nothing at its key. -/
+theorem FDatabase.mergeRound_induction_ne {d : FDatabase} {P : FDatabase → Prop} (hinit : P d)
+    (hreb : P (FDatabase.rebuild d.closureF d))
+    (hstep : ∀ x y : FDatabase, ∀ r₁ r₂ : Row, r₁ ≠ r₂ → P x →
+      FDatabase.mergeOneWith d.closureF x r₁ r₂ = some y → P y) :
+    P d.mergeRound := by
+  have hstep' : ∀ (x : FDatabase) (r₁ r₂ : Row), r₁ ≠ r₂ → P x →
+      P (match FDatabase.mergeOneWith d.closureF x r₁ r₂ with
+         | some y => y
+         | none => x) := by
+    intro x r₁ r₂ hne hx
+    cases hy : FDatabase.mergeOneWith d.closureF x r₁ r₂ with
+    | none => simpa [hy] using hx
+    | some y => simpa [hy] using hstep x y r₁ r₂ hne hx hy
+  have hfold : ∀ (l : List Row) (r₁ : Row) (x : FDatabase), P x →
+      P (l.foldl (fun acc' r₂ =>
+          if r₁ == r₂ then acc'
+          else match FDatabase.mergeOneWith d.closureF acc' r₁ r₂ with
+            | some acc'' => acc''
+            | none => acc') x) := by
+    intro l
+    induction l with
+    | nil => intro _ x hx; exact hx
+    | cons r₂ l ih =>
+      intro r₁ x hx
+      refine ih r₁ _ ?_
+      by_cases hbe : r₁ == r₂
+      · simpa [hbe] using hx
+      · exact by simpa [hbe] using hstep' x r₁ r₂ (by simpa using hbe) hx
+  have houter : ∀ (m l : List Row) (x : FDatabase), P x →
+      P (l.foldl (fun acc r₁ =>
+          m.foldl (fun acc' r₂ =>
+            if r₁ == r₂ then acc'
+            else match FDatabase.mergeOneWith d.closureF acc' r₁ r₂ with
+              | some acc'' => acc''
+              | none => acc') acc) x) := by
+    intro m l
+    induction l with
+    | nil => intro _ hx; exact hx
+    | cons r₁ l ih => intro x hx; exact ih _ (hfold m r₁ x hx)
+  unfold FDatabase.mergeRound
+  split
+  · exact hinit
+  · exact houter _ _ _ hreb
+
+/-- **A merge pass keeps the bridge.** At a diagonal closure the rebuild moves nothing
+(`rebuild_diag`), so the pass fires on the rows it started with and every firing is
+`mergeOneWith_entryRowsUF`. -/
+theorem mergeRound_entryRowsUF {d : FDatabase} (hshape : Signature.MergeShape d.sig)
+    (hlegal : Signature.MergesLegal d.sig) (hinv : d.Inv) (hn : d.NoUnions)
+    (h : d.EntryRowsUF) : d.mergeRound.EntryRowsUF := by
+  have hdiag : ∀ p ∈ d.closureF, p.1 = p.2 := fun _ hp => diag_closureF hn.eqsRefl hp
+  have key : d.mergeRound.Inv ∧ d.mergeRound.sig = d.sig ∧ d.mergeRound.NoUnions ∧
+      d.mergeRound.EntryRowsUF := by
+    refine FDatabase.mergeRound_induction_ne
+      (P := fun x => x.Inv ∧ x.sig = d.sig ∧ x.NoUnions ∧ x.EntryRowsUF)
+      ⟨hinv, rfl, hn, h⟩
+      ⟨FDatabase.Inv.rebuild hinv FDatabase.closureSound_closureF, rfl, rebuild_noUnions hn, ?_⟩ ?_
+    · refine h.step rfl (fun t ht => ht) (fun p hp => hp)
+        (FDatabase.RowsCarryUF.of_subset fun r hrm => ?_)
+        (fun _ _ _ _ _ _ _ _ _ _ hmem => Or.inl hmem)
+      rw [FDatabase.rebuild_diag hdiag, List.mem_dedup]
+      exact hrm
+    · intro x y r₁ r₂ hne hx hy
+      refine ⟨FDatabase.mergeOneWith_inv hx.1 (by rw [hx.2.1]; exact hlegal) hy,
+        ((FDatabase.mergeOneWith_confined hy).2.2.1).trans hx.2.1,
+        mergeOneWith_noUnions hx.2.2.1 hy, ?_⟩
+      exact mergeOneWith_entryRowsUF (by rw [hx.2.1]; exact hshape) hx.2.2.1.eqsRefl
+        (FDatabase.SubtermClosed.of_wf hx.1.wf) hx.1.index hdiag hne hx.2.2.2 hy
+  exact key.2.2.2
+
+/-- **And the whole merge phase.** -/
+theorem mergeSaturateF_entryRowsUF : ∀ (n : Nat) {d e : FDatabase},
+    Signature.MergeShape d.sig → Signature.MergesLegal d.sig → d.Inv → d.NoUnions →
+    d.EntryRowsUF → FDatabase.mergeSaturateF n d = some e → e.EntryRowsUF
+  | 0, d, e, _, _, _, _, h, hrun => by
+      rw [FDatabase.mergeSaturateF] at hrun
+      split at hrun
+      · rw [Option.some.injEq] at hrun; exact hrun ▸ h
+      · exact absurd hrun (by simp)
+  | n + 1, d, e, hshape, hlegal, hinv, hn, h, hrun => by
+      rw [FDatabase.mergeSaturateF] at hrun
+      split at hrun
+      · rw [Option.some.injEq] at hrun; exact hrun ▸ h
+      · have hsig : d.mergeRound.sig = d.sig := FDatabase.mergeRound_confined.2.2.1
+        exact mergeSaturateF_entryRowsUF n (by rw [hsig]; exact hshape)
+          (by rw [hsig]; exact hlegal) (FDatabase.Inv.mergeRound_of_legalMerges hinv hlegal)
+          (mergeRound_noUnions hn) (mergeRound_entryRowsUF hshape hlegal hinv hn h) hrun
+
+/-! #### The writers that only add
+
+`FDatabase.addTerm`, `FDatabase.addEq` and `FDatabase.addRow` are the three, and what they owe
+the bridge is that no term of either entry shape reaches `terms` except the one a `set` writes a
+row for. That is syntactic in the action: the heads a block applies are the encoding's own
+vocabulary, none of which is a view or `@UF`, and a variable is bound to a term the state
+already holds — for a rule head because `matchQuery` enumerates `FDatabase.valueTerms`, and for
+the ambient environment because `Database.WF` says so. -/
+
+/-- **Whether an action can record a view- or `@UF`-shaped term other than the entry its own
+`set` writes.** `Action.UFWriteSafe`'s counterpart for the bridge, and syntactic in the same
+way. -/
+def Action.EntrySafe : Action → Prop
+  | .expr e => ∀ g ∈ e.fns, NotEntryHead g
+  | .letBind _ e => ∀ g ∈ e.fns, NotEntryHead g
+  | .union e₁ e₂ => (∀ g ∈ e₁.fns, NotEntryHead g) ∧ (∀ g ∈ e₂.fns, NotEntryHead g)
+  | .set _ args out =>
+      (∀ g ∈ Expr.fnsList args, NotEntryHead g) ∧ (∀ g ∈ Expr.fnsList out, NotEntryHead g)
+
+/-- The heads an operand list applies are the heads its operands apply. -/
+theorem notEntryHead_fnsList : ∀ {es : List Expr},
+    (∀ e ∈ es, ∀ g ∈ e.fns, NotEntryHead g) → ∀ g ∈ Expr.fnsList es, NotEntryHead g
+  | [], _, g, hg => by simp [Expr.fnsList] at hg
+  | e :: es, h, g, hg => by
+      rw [Expr.fnsList] at hg
+      rcases List.mem_union_iff.mp hg with h' | h'
+      · exact h e List.mem_cons_self g h'
+      · exact notEntryHead_fnsList (fun x hx => h x (List.mem_cons_of_mem _ hx)) g h'
+
+/-- A variable applies no head at all. -/
+theorem notEntryHead_var {v : Var} : ∀ g ∈ (Expr.var v).fns, NotEntryHead g := by
+  intro g hg; simp [Expr.fns] at hg
+
+/-- And an operand's own heads are among them. -/
+theorem mem_fnsList_of_mem : ∀ {es : List Expr} {e : Expr}, e ∈ es →
+    ∀ g ∈ e.fns, g ∈ Expr.fnsList es
+  | [], _, h, _, _ => absurd h (by simp)
+  | _ :: es, x, hx, g, hg => by
+      rw [Expr.fnsList]
+      rcases List.mem_cons.mp hx with rfl | hx'
+      · exact List.mem_union_iff.mpr (Or.inl hg)
+      · exact List.mem_union_iff.mpr (Or.inr (mem_fnsList_of_mem hx' g hg))
+
+/-- **`FDatabase.EntryRowsUF` reads neither the environment nor the rule list.** -/
+theorem FDatabase.EntryRowsUF.setEnvRules {d : FDatabase} (h : d.EntryRowsUF) (σ : Env)
+    (rs : List Rule) : ({ d with env := σ, rules := rs } : FDatabase).EntryRowsUF :=
+  h.step rfl (fun _ ht => ht) (fun _ hp => hp)
+    (FDatabase.RowsCarryUF.of_subset fun _ hr => hr)
+    (fun _ _ _ _ _ _ _ _ _ _ hmem => Or.inl hmem)
+
+/-- **One action keeps the bridge.** Three of the four record terms and no row, and their whole
+obligation is `Action.EntrySafe`; the `set` writes the row for the entry it mints, at the width
+`Action.SetWidthOk` declares (`evalList_length` is what turns the operand count into the column
+count). -/
+theorem execAction_entryRowsUF {d d' : FDatabase} {a : Action}
+    (hshape : Signature.MergeShape d.sig) (hinv : d.Inv) (hsafe : a.EntrySafe)
+    (hwl : a.WriteLegal d.sig) (h : d.EntryRowsUF)
+    (hrun : execAction d a = some d') : d'.EntryRowsUF := by
+  have hsc : d.SubtermClosed := FDatabase.SubtermClosed.of_wf hinv.wf
+  have henv : ∀ b ∈ d.env, b.2 ∈ d.terms := by
+    intro b hb
+    have hb' := hinv.wf.envInTerms b (by rw [FDatabase.toDatabase_env]; exact hb)
+    rwa [FDatabase.mem_toDatabase_terms] at hb'
+  have hbind : ∀ (v : Var) (u : Term), Env.lookup v d.env = some u →
+      ∀ s ∈ u.subtermList, s.EntryShaped → s ∈ d.terms :=
+    fun v u hu => entryShaped_mem_of_held hsc (henv (v, u) (Env.mem_of_lookup hu))
+  cases a with
+  | expr e =>
+    simp only [execAction, Option.map_eq_some_iff] at hrun
+    obtain ⟨t, ht, rfl⟩ := hrun
+    exact h.addTerm hshape (entryShaped_mem_of_eval e hsafe (fun w _ => hbind w) ht)
+  | letBind v e =>
+    simp only [execAction, Option.map_eq_some_iff] at hrun
+    obtain ⟨t, ht, rfl⟩ := hrun
+    exact (h.addTerm hshape
+      (entryShaped_mem_of_eval e hsafe (fun w _ => hbind w) ht)).setEnvRules _ _
+  | union e₁ e₂ =>
+    simp only [execAction] at hrun
+    obtain ⟨t₁, ht₁, hrun⟩ := Option.bind_eq_some_iff.mp hrun
+    obtain ⟨t₂, ht₂, hrun⟩ := Option.bind_eq_some_iff.mp hrun
+    split at hrun
+    · exact absurd hrun (by simp)
+    · rw [Option.some.injEq] at hrun
+      subst hrun
+      have h₁ : (d.addTerm t₁).EntryRowsUF :=
+        h.addTerm hshape (entryShaped_mem_of_eval e₁ hsafe.1 (fun w _ => hbind w) ht₁)
+      have h₂ : ((d.addTerm t₁).addTerm t₂).EntryRowsUF :=
+        h₁.addTerm (d := FDatabase.addTerm t₁ d) hshape
+          (fun s hs hsh => FDatabase.mem_addTerm_of_mem (t := t₁)
+            (entryShaped_mem_of_eval e₂ hsafe.2 (fun w _ => hbind w) ht₂ s hs hsh))
+      exact h₂.step rfl (fun _ ht => ht)
+        (fun _ hp => List.mem_dedup.mpr (List.mem_cons_of_mem _ hp))
+        (FDatabase.RowsCarryUF.of_subset fun _ hrw => hrw)
+        (fun _ _ _ _ _ _ _ _ _ _ hmem => Or.inl hmem)
+  | set f args out =>
+    obtain ⟨as, vs, has, hvs, rfl⟩ := execAction_set hrun
+    refine h.addRow hshape (fun dc hdc => ?_) (fun c hc => ?_)
+    · rw [Expr.evalList_length has]
+      exact (hwl.2 dc hdc).1
+    · rcases List.mem_append.mp hc with hc' | hc'
+      · exact entryShaped_mem_of_evalList args hsafe.1 (fun w _ => hbind w) has c hc'
+      · exact entryShaped_mem_of_evalList out hsafe.2 (fun w _ => hbind w) hvs c hc'
+
+/-- **A block of them.** -/
+theorem execActions_entryRowsUF : ∀ (as : List Action), (∀ a ∈ as, a.EntrySafe) →
+    ∀ {d d' : FDatabase}, Signature.MergeShape d.sig → d.Inv → Actions.WriteLegal as d.sig →
+      d.EntryRowsUF → execActions d as = some d' → d'.EntryRowsUF
+  | [], _, _, _, _, _, _, h, hrun => by
+      rw [execActions, Option.some.injEq] at hrun; exact hrun ▸ h
+  | a :: as, hsafe, d, d', hshape, hinv, hwl, h, hrun => by
+      rw [execActions] at hrun
+      obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp hrun
+      have hsig : d₁.sig = d.sig := FDatabase.execAction_sig h₁
+      exact execActions_entryRowsUF as (fun b hb => hsafe b (List.mem_cons_of_mem _ hb))
+        (by rw [hsig]; exact hshape) (hinv.execAction hwl.head h₁)
+        (by rw [hsig]; exact hwl.tail)
+        (execAction_entryRowsUF hshape hinv (hsafe a List.mem_cons_self) hwl.head h h₁) h₂
+
+/-- A block's signature is the state's: no action declares. -/
+theorem execLocalActions_sig {d e : FDatabase} {as : List Action} {σ : Env}
+    (h : execLocalActions d as σ = some e) : e.sig = d.sig := by
+  rw [execLocalActions] at h
+  obtain ⟨m, hm, he⟩ := Option.map_eq_some_iff.mp h
+  have hs : m.sig = ({ d with env := d.env ++ σ } : FDatabase).sig :=
+    FDatabase.execActions_sig hm
+  rw [← he]
+  exact hs
+
+/-- **One firing.** The substitution's bindings are terms the state holds, which is what makes
+the recorded-subterm obligation free at every variable a head reads. -/
+theorem execLocalActions_entryRowsUF {d d' : FDatabase} {as : List Action} {σ : Env}
+    (hshape : Signature.MergeShape d.sig) (hinv : d.Inv) (hwl : Actions.WriteLegal as d.sig)
+    (hsafe : ∀ a ∈ as, a.EntrySafe) (hσ : ∀ b ∈ σ, b.2 ∈ d.terms) (h : d.EntryRowsUF)
+    (hrun : execLocalActions d as σ = some d') : d'.EntryRowsUF := by
+  rw [execLocalActions] at hrun
+  obtain ⟨m, hm, rfl⟩ := Option.map_eq_some_iff.mp hrun
+  have hinv' : ({ d with env := d.env ++ σ } : FDatabase).Inv := by
+    refine hinv.setEnv (fun b hb => ?_)
+    rw [FDatabase.mem_toDatabase_terms]
+    rcases List.mem_append.mp hb with hb' | hb'
+    · have hb'' := hinv.wf.envInTerms b (by rw [FDatabase.toDatabase_env]; exact hb')
+      rwa [FDatabase.mem_toDatabase_terms] at hb''
+    · exact hσ b hb'
+  exact (execActions_entryRowsUF as hsafe (d := { d with env := d.env ++ σ })
+    hshape hinv' hwl (h.setEnvRules _ _) hm).setEnvRules _ _
+
+/-- **Every binding a matched substitution makes is a term the state holds**: `matchQuery`
+enumerates `FDatabase.valueTerms`, which is `terms` filtered. -/
+theorem mem_terms_of_mem_matchQuery {d : FDatabase} {q : Query} {σ : Env}
+    (hσ : σ ∈ matchQuery d q) : ∀ b ∈ σ, b.2 ∈ d.terms :=
+  fun b hb => FDatabase.mem_terms_of_mem_valueTerms
+    ((mem_assignments.mp (List.mem_of_mem_filter hσ)).2 b hb)
+
+/-! #### The fold over rule firings, at the bridge -/
+
+/-- **What a round's firings owe the bridge**, at the state the round reads its rules and
+matches off. -/
+def FDatabase.FiringsEntryRows (d : FDatabase) : Prop :=
+  ∀ r ∈ d.rules, ∀ σ ∈ matchQuery d r.query, ∀ e : FDatabase,
+    execLocalActions d r.actions σ = some e → e.EntryRowsUF
+
+/-- One firing, unioned into the accumulator. The signature is carried along because
+`FDatabase.EntryRowsUF.union` reads both operands' declarations. -/
+theorem fireInto_entryRowsUF {d acc : FDatabase} {r : Rule} {σ : Env} (hr : r ∈ d.rules)
+    (hσ : σ ∈ matchQuery d r.query) (hfire : d.FiringsEntryRows) (hsig : acc.sig = d.sig)
+    (ha : acc.EntryRowsUF) :
+    (fireInto d r acc σ).sig = d.sig ∧ (fireInto d r acc σ).EntryRowsUF := by
+  rw [fireInto]
+  cases hx : execLocalActions d r.actions σ with
+  | none => exact ⟨hsig, ha⟩
+  | some e =>
+    exact ⟨hsig, ha.union (hfire r hr σ hσ e hx) ((execLocalActions_sig hx).trans hsig.symm)⟩
+
+/-- Every match of one rule. -/
+theorem foldl_fireInto_entryRowsUF {d : FDatabase} {r : Rule} (hr : r ∈ d.rules)
+    (hfire : d.FiringsEntryRows) :
+    ∀ (σs : List Env), (∀ σ ∈ σs, σ ∈ matchQuery d r.query) →
+      ∀ {acc : FDatabase}, acc.sig = d.sig → acc.EntryRowsUF →
+        (σs.foldl (fireInto d r) acc).sig = d.sig ∧
+          (σs.foldl (fireInto d r) acc).EntryRowsUF
+  | [], _, _, hsig, ha => ⟨hsig, ha⟩
+  | σ :: σs, hsub, _, hsig, ha =>
+      foldl_fireInto_entryRowsUF hr hfire σs
+        (fun τ hτ => hsub τ (List.mem_cons_of_mem _ hτ))
+        (fireInto_entryRowsUF hr (hsub σ List.mem_cons_self) hfire hsig ha).1
+        (fireInto_entryRowsUF hr (hsub σ List.mem_cons_self) hfire hsig ha).2
+
+@[inherit_doc foldl_fireInto_entryRowsUF]
+theorem fireRule_entryRowsUF {d acc : FDatabase} {r : Rule} (hr : r ∈ d.rules)
+    (hfire : d.FiringsEntryRows) (hsig : acc.sig = d.sig) (ha : acc.EntryRowsUF) :
+    (fireRule d acc r).sig = d.sig ∧ (fireRule d acc r).EntryRowsUF :=
+  foldl_fireInto_entryRowsUF hr hfire _ (fun _ h => h) hsig ha
+
+/-- The round's fold. -/
+theorem foldl_fireRule_entryRowsUF {d : FDatabase} (hfire : d.FiringsEntryRows) :
+    ∀ (rs : List Rule), (∀ r ∈ rs, r ∈ d.rules) →
+      ∀ {acc : FDatabase}, acc.sig = d.sig → acc.EntryRowsUF →
+        (rs.foldl (fireRule d) acc).sig = d.sig ∧ (rs.foldl (fireRule d) acc).EntryRowsUF
+  | [], _, _, hsig, ha => ⟨hsig, ha⟩
+  | r :: rs, hsub, _, hsig, ha =>
+      foldl_fireRule_entryRowsUF hfire rs (fun r' hr' => hsub r' (List.mem_cons_of_mem _ hr'))
+        (fireRule_entryRowsUF (hsub r List.mem_cons_self) hfire hsig ha).1
+        (fireRule_entryRowsUF (hsub r List.mem_cons_self) hfire hsig ha).2
+
+/-- **One round of rule firing keeps the bridge.** -/
+theorem execRunRules_entryRowsUF {R : RulesetName} {d : FDatabase}
+    (hfire : d.FiringsEntryRows) (h : d.EntryRowsUF) : (execRunRules R d).EntryRowsUF :=
+  (foldl_fireRule_entryRowsUF hfire _ (fun _ hr => List.mem_of_mem_filter hr) rfl h).2
+
+/-- **And a whole round**, rule firing followed by the merge phase. -/
+theorem runRoundM_entryRowsUF {R : RulesetName} {d e : FDatabase}
+    (hshape : Signature.MergeShape d.sig) (hlegal : Signature.MergesLegal d.sig)
+    (hinv : d.Inv) (hn : d.NoUnions)
+    (hwl : ∀ r ∈ d.rules, Actions.WriteLegal r.actions d.sig)
+    (hfire : d.FiringsEntryRows) (h : d.EntryRowsUF)
+    (hrun : d.runRoundM R = some e) : e.EntryRowsUF := by
+  rw [FDatabase.runRoundM] at hrun
+  refine mergeSaturateF_entryRowsUF mergeFuel ?_ ?_ ?_ ?_ (execRunRules_entryRowsUF hfire h) hrun
+  · rw [FDatabase.execRunRules_fields.1]; exact hshape
+  · rw [FDatabase.execRunRules_fields.1]; exact hlegal
+  · exact hinv.execRunRules hwl
+  · exact execRunRules_noUnions hn
+
+/-! #### The maintenance families are entry-safe
+
+Every maintenance head is one `set` whose key operands are the query's own variables and whose
+value operands are a variable and a proof node built from `@Trans`, `@Sym`, `@Congr_k` and
+`@Fiat`. None of those is a view and none is `@UF`. -/
+
+/-- The four proof heads and the variables, in one list. -/
+theorem entrySafe_maintenance_out₁ {u w : Var} :
+    ∀ g ∈ Expr.fnsList [Expr.var u, transE (Expr.var w) (Expr.var "@q")], NotEntryHead g := by
+  refine notEntryHead_fnsList (fun e he => ?_)
+  have he2 : e = Expr.var u ∨ e = transE (Expr.var w) (Expr.var "@q") := by simpa using he
+  rcases he2 with rfl | rfl
+  · exact notEntryHead_var
+  · intro g hg
+    have hg2 : g = transName := by simpa [transE, Expr.fns, Expr.fnsList] using hg
+    exact hg2 ▸ notEntryHead_transName
+
+/-- **Every maintenance rule's head is entry-safe.** -/
+theorem maintenance_entrySafe {P : Program} {r : Rule} (hmem : r ∈ maintenanceRules P) :
+    ∀ a ∈ r.actions, a.EntrySafe := by
+  have hvarlist : ∀ (es : List Expr), (∀ e ∈ es, ∃ v, e = Expr.var v) →
+      ∀ g ∈ Expr.fnsList es, NotEntryHead g := by
+    intro es hv
+    refine notEntryHead_fnsList (fun e he => ?_)
+    obtain ⟨v, rfl⟩ := hv e he
+    exact notEntryHead_var
+  have hrb : ∀ k : Nat, ∀ e ∈ rebuildVars k, ∃ v, e = Expr.var v := by
+    intro k e he
+    obtain ⟨i, -, rfl⟩ := List.mem_map.mp he
+    exact ⟨_, rfl⟩
+  rw [maintenanceRules, List.mem_cons] at hmem
+  rcases hmem with rfl | hmem
+  · intro a ha
+    obtain rfl : a = Action.set ufName [Expr.var "@a"]
+        [Expr.var "@c", transE (Expr.var "@p") (Expr.var "@q")] := by
+      simpa [pathCompressRule] using ha
+    exact ⟨hvarlist _ (by intro e he; exact ⟨_, by simpa using he⟩),
+      entrySafe_maintenance_out₁⟩
+  · obtain ⟨fk, -, hmem⟩ := List.mem_flatMap.mp hmem
+    rw [rebuildRules] at hmem
+    simp only [List.mem_cons, List.mem_map, List.mem_range] at hmem
+    rcases hmem with rfl | ⟨i, hi, rfl⟩
+    · intro a ha
+      obtain rfl : a = Action.set (viewName fk.1) (rebuildVars fk.2)
+          [Expr.var "@x", transE (Expr.var "@p") (Expr.var "@q")] := by simpa using ha
+      exact ⟨hvarlist _ (hrb fk.2), entrySafe_maintenance_out₁⟩
+    · intro a ha
+      obtain rfl : a = Action.set (viewName fk.1)
+          ((rebuildVars fk.2).set i (Expr.var "@x"))
+          [Expr.var "@e", transE (symE (congrE (congrChildren fk.2 i))) (Expr.var "@p")] := by
+        simpa using ha
+      refine ⟨hvarlist _ (fun e he => ?_), ?_⟩
+      · rcases mem_or_eq_of_mem_set he with he' | rfl
+        · exact hrb fk.2 e he'
+        · exact ⟨_, rfl⟩
+      · refine notEntryHead_fnsList (fun e he => ?_)
+        have he2 : e = Expr.var "@e" ∨
+            e = transE (symE (congrE (congrChildren fk.2 i))) (Expr.var "@p") := by
+          simpa using he
+        rcases he2 with rfl | rfl
+        · exact notEntryHead_var
+        · intro g hg
+          have hg2 : g = transName ∨ g = symName ∨
+              g = congrName (congrChildren fk.2 i).length ∨
+              g ∈ Expr.fnsList (congrChildren fk.2 i) := by
+            simpa [transE, symE, congrE, Expr.fns, Expr.fnsList] using hg
+          rcases hg2 with rfl | rfl | rfl | hg3
+          · exact notEntryHead_transName
+          · exact notEntryHead_symName
+          · exact notEntryHead_congrName
+          · refine notEntryHead_fnsList (fun x hx => ?_) g hg3
+            obtain ⟨j, -, rfl⟩ := List.mem_map.mp hx
+            by_cases hj : j = i
+            · rw [if_pos hj]; exact notEntryHead_var
+            · rw [if_neg hj]
+              intro y hy
+              have hy2 : y = fiatName := by simpa [fiatE, Expr.fns, Expr.fnsList] using hy
+              exact hy2 ▸ notEntryHead_fiatName
+
 
 /-! ### The witness
 
