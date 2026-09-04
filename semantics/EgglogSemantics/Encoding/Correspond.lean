@@ -219,9 +219,12 @@ both are decided at the witness at the end of this file.
   of an encoded target having a live row at its own key whose e-class column the union-find
   reaches from the entry's — `FDatabase.IndexCurrent` weakened by exactly what
   `cxTgt_not_indexCurrent` refutes, `cxTgt_currentUF` being the compiled instance. What is left
-  of the residue is the **fixpoint's roots**, and `no_ufRowEdge_of_eclassFired` is that with the
-  e-class rule's own firing as its one hypothesis: the merge phase's survival fact
-  (`mergeSaturateF_rowsDescendCarry`) and `row_unique_of_settled` do the rest. `unionsJoined_fire` is the
+  of the residue is the **fixpoint's roots**, and `no_ufRowEdge_of_rowsClosed` is that with the
+  e-class rule's own firing *discharged* (`eclassRule_fires`, over `mem_matchQuery_of_lookup`):
+  the merge phase's survival fact (`mergeSaturateF_rowsDescendCarry`) and `row_unique_of_settled`
+  do the rest, and its one remaining hypothesis is `FDatabase.RowColumnsValued` — `matchQuery`
+  assigns out of `FDatabase.valueTerms`, so a rule re-reads only a row whose columns are of that
+  kind, and no invariant the run carries says so. `unionsJoined_fire` is the
   whole of a **target firing behind a source firing** — the one command case the read-back does
   not reach — and it now carries both of the command induction's data clauses, `joined` and
   `reads`, because a rule head builds as well as unions and one firing answers both.
@@ -4989,9 +4992,11 @@ exhibits at the refuting state.
   very state, and `cxTgt_currentUF` is the compiled instance — the row the merge kept sits at
   the `@UF` parent of the entry it displaced.
 * **The fixpoint's roots**: at a `FDatabase.RowsClosed` state no surviving view row's e-class
-  column has an outgoing `@UF` row, since the e-class rule's own firing would displace it and
-  the row list would move. One step, and what it spends is a `matchQuery` completeness lemma of
-  `cxRb_mem_matchQuery`'s shape together with `mergeResult`'s `ordering-min`.
+  column has an outgoing `@UF` row, since the e-class rule's own firing displaces it and the row
+  list would move. One step, and the firing is now exhibited — `eclassRule_fires`, over
+  `mem_matchQuery_of_lookup`, which is `cxRb_mem_matchQuery` generalised — together with
+  `mergeResult`'s `ordering-min`. `no_ufRowEdge_of_rowsClosed`'s one remaining hypothesis is
+  `FDatabase.RowColumnsValued`.
 * **The `@UF` rows are a forest**, so that root is *unique* and every reader of an id therefore
   lands on the same one. `ufDecl`'s `identityVals := some 1` makes two rows at one key agree in
   their e-class column at a merge fixpoint, and every edge a `union` or `mergeBody` writes runs
@@ -5023,23 +5028,28 @@ and the first both spend.** Two blocks below, at the merge phase:
   measure there.
 
 **The second obligation is now the only one, and it is reduced to the firing.**
-`Encoding/Complete.lean`'s `no_ufRowEdge_of_eclassFired` is it with the firing as a hypothesis:
-given the e-class rule's conclusion as a row of the round's rule phase, the merge phase leaves a
-row at that key whose e-class column is `Term.blt`-at or below the one the firing wrote
-(`mergeSaturateF_rowsDescendCarry`, `mergeResult`'s `ordering-min` carried across a pass and
-across the phase), `FDatabase.RowsClosed` and `row_unique_of_settled` identify that row with the
-one the fixpoint started from, and `FDatabase.UFRowsDescend` plus `Term.blt_asymm` close it.
-`FDatabase.UFRowEdge` excludes a self-loop, which is what `(union a a)` writes and what the
+`Encoding/Complete.lean`'s `no_ufRowEdge_of_rowsClosed` is it, and **the firing is discharged**:
+`eclassRule_fires` exhibits the e-class rule's conclusion as a row of the round's rule phase, the
+merge phase leaves a row at that key whose e-class column is `Term.blt`-at or below the one the
+firing wrote (`mergeSaturateF_rowsDescendCarry`, `mergeResult`'s `ordering-min` carried across a
+pass and across the phase), `FDatabase.RowsClosed` and `row_unique_of_settled` identify that row
+with the one the fixpoint started from, and `FDatabase.UFRowsDescend` plus `Term.blt_asymm` close
+it. `FDatabase.UFRowEdge` excludes a self-loop, which is what `(union a a)` writes and what the
 claim would otherwise be false at.
 
-**What the firing costs, precisely.** Three things, none of them available: `matchQuery`
-completeness in general form — `cxRb_mem_matchQuery` is one instance, and the general form has
-to name `Query.freeVars`' order, compose `Env.canon` with itself and place the columns in
-`FDatabase.valueTerms`; the **converse** of `FDatabase.RulesEncoded`, that the maintenance rules
-are rules the target *holds*, which no invariant the run carries says; and that the target's
-environment binds no `@`-prefixed variable, so that `Query.freeVars` is the whole of the query's
-variables — which `Program.EncodeDomain.noAt` supplies at the source (`Program.names` includes
-`P.vars`) but which still has to be carried along the run.
+**What the firing cost, and what is left.** Three of the four are now paid.
+`mem_matchQuery_of_lookup` is `matchQuery` completeness in general form —
+`cxRb_mem_matchQuery`'s one instance generalised, naming `Query.freeVars`' order and composing
+`Env.canon` with itself (`Env.canon_canon`), with `toString_nat_inj` for the key variables being
+distinct. `FDatabase.EncBase.held` is the **converse** of `FDatabase.RulesEncoded`, that the
+maintenance rules are rules the target holds, carried along the run by
+`FDatabase.execProgramM_mem_rules` and the monotonicity of `rules`.
+`FDatabase.EncBase.noAtEnv` is that the target's environment binds no `@`-prefixed variable, so
+that `Query.freeVars` is the whole of the query's variables — `Program.EncodeDomain.noAt` at the
+source (`Program.names` includes `P.vars`), `noAtLet_encodeCmd` at each emitted command, and
+`FDatabase.execCmdM_noAtEnv` along the run. What is **not** paid is the fourth: placing the
+columns in `FDatabase.valueTerms`. `FDatabase.RowColumnsValued` names it, and it is the one
+hypothesis `no_ufRowEdge_of_rowsClosed` still takes.
 
 **And a side condition that turned out to be load-bearing rather than bookkeeping**: the merge
 body only runs if the signature declares `@Sym` and `@Trans` (`Expr.eval` reads
@@ -5088,6 +5098,14 @@ its ids absorb each other by having no other reader — and `edged` fails there,
 more than its consumer does. What justifies asking for it is that it is what the *rules*
 deliver: every id a view entry ever carried at a key is one a `set` wrote, and two `set`s at one
 key are a collision, and a collision is an `@UF` edge.
+
+**And where it is stated is now the second obstruction.** Every piece of the residue —
+`execM_entryRowsUF`, `execM_ufRowRoot_unique`, `no_ufRowEdge_of_rowsClosed`, and `encodeSig`
+itself — is in `Encoding/Complete.lean`, which is **downstream** of this file (through
+`Encoding/Match.lean`). So even with the three obligations discharged this theorem cannot be
+closed where it stands: it and its four consumers (`execM_viewJoined`, `execM_viewsCover`,
+`execM_unionsRead`, `execM_sameClass_trans`) would have to move there, which is the same reason
+`execM_soundTerms` is stated there and not here.
 
 **Non-vacuous, and still failing where it must**: `satTarget_rebuildClosed` is the degenerate
 state, `Encoding/Match.lean`'s `uRebuilt_rebuildClosed` the one with a real `@UF` edge — where
