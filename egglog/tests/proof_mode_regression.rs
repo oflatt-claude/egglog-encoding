@@ -107,7 +107,7 @@ fn term_and_proof_modes_reject_eq_sort_no_merge_functions() {
 }
 
 #[test]
-fn fail_rejects_definitions_and_user_commands() {
+fn fail_rejects_definitions_user_commands_and_scope_commands() {
     let rejected = [
         "(fail (sort S))",
         "(fail (datatype D (D0)))",
@@ -121,9 +121,10 @@ fn fail_rejects_definitions_and_user_commands() {
         "(fail (rule () ((panic \"unused\"))))",
         "(fail (rewrite 1 2))",
         "(fail (birewrite 1 2))",
-        "(fail (prove (= 1 1)))",
         "(fail (let value 1))",
         "(fail (let value (begin (+ 1 1))))",
+        "(fail (push))",
+        "(fail (pop))",
         "(fail (fail (sort Nested)))",
         "(fail (define-sort) (panic \"stop\"))",
     ];
@@ -141,24 +142,41 @@ fn fail_rejects_definitions_and_user_commands() {
 }
 
 #[test]
-fn proof_mode_fail_keeps_provable_action_effects() {
+fn fail_rejects_proof_commands_in_all_modes() {
+    for mut egraph in [
+        EGraph::default(),
+        EGraph::new_with_term_encoding(),
+        EGraph::new_with_proofs(),
+    ] {
+        for source in ["(fail (prove (= 1 1)))", "(fail (prove-exists Missing))"] {
+            let error = egraph.parse_and_run_program(None, source).unwrap_err();
+            assert!(
+                matches!(&error, Error::DesugarError(..)),
+                "{source}: {error:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn proof_mode_fail_rolls_back_action_effects() {
     for source in [
         r#"
         (function score () i64 :merge old)
         (fail (set (score) 1) (panic "stop"))
-        (prove (= (score) 1))
+        (fail (check (= (score) 1)))
         "#,
         r#"
         (datatype N (A) (B))
         (let a (A))
         (let b (B))
         (fail (union a b) (panic "stop"))
-        (prove (= a b))
+        (fail (check (= a b)))
         "#,
         r#"
         (datatype N (A))
         (fail (A) (panic "stop"))
-        (prove (= (A) (A)))
+        (fail (check (A)))
         "#,
     ] {
         EGraph::new_with_proofs()
@@ -181,22 +199,7 @@ fn proof_mode_fail_catches_input_errors() {
 }
 
 #[test]
-fn proof_mode_fail_keeps_successful_scope_changes() {
-    EGraph::new_with_proofs()
-        .parse_and_run_program(
-            None,
-            r#"
-            (push)
-            (fail (pop) (panic "stop"))
-            (push)
-            (pop)
-            "#,
-        )
-        .unwrap();
-}
-
-#[test]
-fn proof_mode_fail_keeps_provable_input_rows() {
+fn proof_mode_fail_rolls_back_input_rows() {
     let directory =
         std::env::temp_dir().join(format!("egglog_proof_fail_input_{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
@@ -210,7 +213,7 @@ fn proof_mode_fail_keeps_provable_input_rows() {
             r#"
             (relation R (i64))
             (fail (input R "rows.tsv") (panic "stop"))
-            (prove (R 1))
+            (fail (check (R 1)))
             "#,
         )
         .unwrap();
@@ -219,7 +222,7 @@ fn proof_mode_fail_keeps_provable_input_rows() {
 }
 
 #[test]
-fn proof_mode_fail_numbers_skipped_actions_before_later_fiats() {
+fn proof_mode_fail_does_not_offset_later_fiats() {
     EGraph::new_with_proofs()
         .parse_and_run_program(
             None,
@@ -234,25 +237,97 @@ fn proof_mode_fail_numbers_skipped_actions_before_later_fiats() {
 }
 
 #[test]
-fn proof_mode_still_rejects_fail_command_expressions_that_build_terms() {
-    let error = EGraph::new_with_proofs()
-        .parse_and_run_program(None, "(datatype N (A)) (fail (extract (A) -1))")
-        .unwrap_err();
-    assert!(matches!(error, Error::UnsupportedProofCommand { .. }));
+fn fail_with_term_building_extract_has_the_same_behavior_in_all_modes() {
+    for mut egraph in [
+        EGraph::default(),
+        EGraph::new_with_term_encoding(),
+        EGraph::new_with_proofs(),
+    ] {
+        egraph
+            .parse_and_run_program(None, "(datatype N (A))")
+            .unwrap();
+        let error = egraph
+            .parse_and_run_program(None, "(fail (extract (A)))")
+            .unwrap_err();
+        assert!(matches!(error, Error::ExpectFail(_)));
+        egraph
+            .parse_and_run_program(None, "(fail (check (A)))")
+            .unwrap();
+    }
 }
 
 #[test]
-fn term_mode_fail_keeps_successful_mutations_before_failure() {
-    EGraph::new_with_term_encoding()
-        .parse_and_run_program(
-            None,
-            r#"
+fn fail_output_of_an_existing_term_has_the_same_behavior_in_all_modes() {
+    let directory =
+        std::env::temp_dir().join(format!("egglog_proof_fail_output_{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+
+    for (index, mut egraph) in [
+        EGraph::default(),
+        EGraph::new_with_term_encoding(),
+        EGraph::new_with_proofs(),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        egraph.fact_directory = Some(directory.clone());
+        let filename = format!("term-{index}.txt");
+        egraph
+            .parse_and_run_program(
+                None,
+                &format!(
+                    r#"
+            (datatype N (A))
+            (let $a (A))
+            (fail (output "{filename}" $a) (panic "stop"))
+            "#
+                ),
+            )
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(directory.join(filename)).unwrap(),
+            "(A)\n"
+        );
+    }
+
+    std::fs::remove_dir_all(directory).ok();
+}
+
+#[test]
+fn fail_rolls_back_successful_mutations_in_all_modes() {
+    for mut egraph in [
+        EGraph::default(),
+        EGraph::new_with_term_encoding(),
+        EGraph::new_with_proofs(),
+    ] {
+        egraph
+            .parse_and_run_program(
+                None,
+                r#"
             (function score () i64 :merge old)
             (fail (set (score) 1) (check (= (score) 2)))
-            (check (= (score) 1))
+            (fail (check (= (score) 1)))
             "#,
-        )
-        .unwrap();
+            )
+            .unwrap();
+    }
+}
+
+#[test]
+fn fail_rolls_back_when_every_wrapped_command_succeeds() {
+    for mut egraph in [
+        EGraph::default(),
+        EGraph::new_with_term_encoding(),
+        EGraph::new_with_proofs(),
+    ] {
+        let error = egraph
+            .parse_and_run_program(None, "(relation R (i64)) (fail (R 1))")
+            .unwrap_err();
+        assert!(matches!(error, Error::ExpectFail(_)));
+        egraph
+            .parse_and_run_program(None, "(fail (check (R 1)))")
+            .unwrap();
+    }
 }
 
 /// A set element is reshaped (`(Id (N 1))` → `(N 1)`) and then collapses into

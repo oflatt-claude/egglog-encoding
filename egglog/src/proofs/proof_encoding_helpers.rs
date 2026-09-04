@@ -897,12 +897,6 @@ pub enum ProofEncodingUnsupportedReason {
     #[error("user-defined commands are not supported.")]
     UserDefinedCommand,
     #[error(
-        "`fail` wrapping an `extract` or `output` expression that builds a term is not supported \
-         by proof encoding. Such command expressions do not yet have source-action positions \
-         for their term proofs."
-    )]
-    FailTermBuildingCommandExpression,
-    #[error(
         "let binding with a primitive in the body. For silly internal reasons, we don't support primitive bindings for proofs at the moment, sorry."
     )]
     LetBindingWithNonEqSort,
@@ -948,8 +942,7 @@ pub fn program_supports_proofs(commands: &[ResolvedCommand], type_info: &TypeInf
         })
         .collect();
     for command in commands {
-        if let Err(reason) =
-            command_supports_proof_encoding_impl(command, type_info, &let_globals, true)
+        if let Err(reason) = command_supports_proof_encoding_impl(command, type_info, &let_globals)
         {
             let cmd = command.to_string();
             log::debug!(
@@ -1403,14 +1396,12 @@ fn body_premise_without_anchor(body: &[ResolvedFact]) -> Option<ProofEncodingUns
         .map(|(_, reason)| reason.clone())
 }
 
-/// Checks the constraints shared by term/proof encoding. `proofs_enabled`
-/// additionally checks commands that only become unsafe when proofs are recorded.
+/// Checks the constraints shared by term/proof encoding.
 pub(crate) fn command_supports_proof_encoding(
     command: &ResolvedCommand,
     type_info: &TypeInfo,
-    proofs_enabled: bool,
 ) -> Result<(), ProofEncodingUnsupportedReason> {
-    command_supports_proof_encoding_impl(command, type_info, &HashSet::default(), proofs_enabled)
+    command_supports_proof_encoding_impl(command, type_info, &HashSet::default())
 }
 
 /// [`command_supports_proof_encoding`] with `extra_globals`: let-bound names
@@ -1420,7 +1411,6 @@ fn command_supports_proof_encoding_impl(
     command: &ResolvedCommand,
     type_info: &TypeInfo,
     extra_globals: &HashSet<String>,
-    proofs_enabled: bool,
 ) -> Result<(), ProofEncodingUnsupportedReason> {
     // `:unsafe-seminaive` rules perform arbitrary reads against the live
     // database; the term/proof encoding can't represent that.
@@ -1585,32 +1575,7 @@ fn command_supports_proof_encoding_impl(
         }
         GenericCommand::Fail(_, commands) => {
             for command in commands {
-                if proofs_enabled {
-                    match command {
-                        GenericCommand::Extract(_, expr, variants)
-                            if expr_interns_term(expr, Some(type_info))
-                                || expr_interns_term(variants, Some(type_info)) =>
-                        {
-                            return Err(
-                                ProofEncodingUnsupportedReason::FailTermBuildingCommandExpression,
-                            );
-                        }
-                        GenericCommand::Output { exprs, .. }
-                            if exprs.iter().any(|expr| expr_interns_term(expr, None)) =>
-                        {
-                            return Err(
-                                ProofEncodingUnsupportedReason::FailTermBuildingCommandExpression,
-                            );
-                        }
-                        _ => {}
-                    }
-                }
-                command_supports_proof_encoding_impl(
-                    command,
-                    type_info,
-                    extra_globals,
-                    proofs_enabled,
-                )?;
+                command_supports_proof_encoding_impl(command, type_info, extra_globals)?;
             }
             Ok(())
         }
@@ -1879,22 +1844,6 @@ impl crate::constraint::TypeConstraint for DropReflexiveStepTypeConstraint {
         }
         constraints
     }
-}
-
-/// Whether evaluating `expr` can intern an equality-sort term.
-fn expr_interns_term(expr: &ResolvedExpr, type_info: Option<&TypeInfo>) -> bool {
-    expr.find(&mut |expr| is_term_call(expr, type_info).then_some(()))
-        .is_some()
-}
-
-/// A known global's nullary call only reads an existing term. Use current type
-/// information so a popped global does not hide a later function of the same name.
-fn is_term_call(expr: &ResolvedExpr, type_info: Option<&TypeInfo>) -> bool {
-    let ResolvedExpr::Call(_, call, _) = expr else {
-        return false;
-    };
-    expr.output_type().is_eq_sort()
-        && !matches!((type_info, call), (Some(info), ResolvedCall::Func(func)) if info.is_global(&func.name))
 }
 
 /// Every expression node of a rule body, in a canonical pre-order: the facts in

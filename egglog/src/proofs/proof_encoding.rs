@@ -500,68 +500,27 @@ impl<'a> ProofInstrumentor<'a> {
             ResolvedNCommand::Input {
                 span, name, file, ..
             } => Self::input_actions(self.egraph, span, name, file)?.len(),
-            ResolvedNCommand::Fail(_, commands) => {
-                let mut count = 0;
-                for command in commands {
-                    count += self.global_actions_in(command)?;
-                }
-                count
-            }
             _ => 0,
         })
-    }
-
-    /// [`Self::global_actions_in`] for a command guarded by `fail`. An input
-    /// error belongs to execution so that `fail` can catch it; in that case no
-    /// rows, and therefore no source actions, exist to number.
-    fn global_actions_in_fail(&self, command: &ResolvedNCommand) -> Result<usize, Error> {
-        match command {
-            ResolvedNCommand::Input {
-                span, name, file, ..
-            } => Ok(Self::input_actions(self.egraph, span, name, file)
-                .map(|actions| actions.len())
-                .unwrap_or(0)),
-            _ => self.global_actions_in(command),
-        }
     }
 
     pub(crate) fn lower_inputs(
         egraph: &EGraph,
         program: Vec<ResolvedNCommand>,
     ) -> Result<Vec<ResolvedNCommand>, Error> {
-        Self::lower_inputs_inner(egraph, program, false)
-    }
-
-    fn lower_inputs_inner(
-        egraph: &EGraph,
-        program: Vec<ResolvedNCommand>,
-        inside_fail: bool,
-    ) -> Result<Vec<ResolvedNCommand>, Error> {
         let mut lowered = Vec::with_capacity(program.len());
         for command in program {
-            match command {
-                ResolvedNCommand::Input {
-                    span,
-                    name,
-                    file,
-                    proof_base,
-                } => match Self::input_actions(egraph, &span, &name, &file) {
-                    Ok(actions) => {
-                        lowered.extend(actions.into_iter().map(ResolvedNCommand::CoreAction))
-                    }
-                    Err(_) if inside_fail => lowered.push(ResolvedNCommand::Input {
-                        span,
-                        name,
-                        file,
-                        proof_base,
-                    }),
-                    Err(error) => return Err(error),
-                },
-                ResolvedNCommand::Fail(span, commands) => lowered.push(ResolvedNCommand::Fail(
-                    span,
-                    Self::lower_inputs_inner(egraph, commands, true)?,
-                )),
-                command => lowered.push(command),
+            if let ResolvedNCommand::Input {
+                span, name, file, ..
+            } = &command
+            {
+                lowered.extend(
+                    Self::input_actions(egraph, span, name, file)?
+                        .into_iter()
+                        .map(ResolvedNCommand::CoreAction),
+                );
+            } else {
+                lowered.push(command);
             }
         }
         Ok(lowered)
@@ -2579,22 +2538,22 @@ impl<'a> ProofInstrumentor<'a> {
                 res.push(Command::RunSchedule(self.instrument_schedule(schedule)));
             }
             ResolvedNCommand::Fail(span, cmds) => {
-                // Keep each source action's generated statements in the local
-                // action block produced by `term_encode_command`, and keep every
-                // generated command inside this `fail`. Number potential actions
-                // in source order even when an earlier command will skip them;
-                // proof checking retains the same positions, while only actions
-                // that actually run can mint fiats.
+                // Encode every wrapped command and keep the whole flattened
+                // result inside one `fail`. Each source action stays in the
+                // local action block `term_encode_command` produces. Its state
+                // is transient because `fail` rolls the e-graph back.
                 let mut encoded = vec![];
                 for cmd in cmds {
-                    let global_actions = if matches!(cmd, ResolvedNCommand::Fail(..)) {
-                        0
+                    if let ResolvedNCommand::Output { span, file, exprs } = cmd {
+                        self.term_encode_transient_output(span, file, exprs, &mut encoded);
                     } else {
-                        self.global_actions_in_fail(cmd)?
-                    };
-                    self.term_encode_command(cmd, &mut encoded)?;
-                    self.global_action += global_actions;
-                    if !command_skips_rebuild(cmd) {
+                        self.term_encode_command(cmd, &mut encoded)?;
+                    }
+                    if !matches!(
+                        cmd,
+                        ResolvedNCommand::Check(..) | ResolvedNCommand::Output { .. }
+                    ) && !command_skips_rebuild(cmd)
+                    {
                         encoded.push(Command::RunSchedule(self.rebuild()));
                     }
                 }
@@ -2682,6 +2641,50 @@ impl<'a> ProofInstrumentor<'a> {
         Ok(())
     }
 
+    /// Encode an `output` whose expression setup is transient. Ordinary
+    /// top-level output stays untouched: term-building output still lacks a
+    /// source-action position there. Inside `fail`, rollback guarantees that
+    /// the generated view/proof rows cannot escape or be referenced later.
+    fn term_encode_transient_output(
+        &mut self,
+        span: &Span,
+        file: &str,
+        exprs: &[ResolvedExpr],
+        res: &mut Vec<Command>,
+    ) {
+        let mut action_stmts = vec![];
+        let scope = Scope::default();
+        let mut head = Head::composed();
+        let fiat = Justification::Fiat;
+        let mut emit = Emit {
+            stmts: &mut action_stmts,
+            head: &mut head,
+            justification: &fiat,
+            at: ActionNodes::default(),
+        };
+        let mut instrumented_exprs = Vec::with_capacity(exprs.len());
+        for expr in exprs {
+            instrumented_exprs.push(self.instrument_action_expr(expr, &mut emit, &scope).value);
+        }
+        // Output binds nothing that a later command can compose with.
+        self.drop_pending_lookups();
+
+        for stmt in action_stmts {
+            res.extend(self.parse_program(&stmt));
+        }
+        res.push(Command::RunSchedule(self.rebuild()));
+
+        let mut parsed_exprs = Vec::with_capacity(instrumented_exprs.len());
+        for expr in instrumented_exprs {
+            parsed_exprs.push(self.parse_expr(&expr));
+        }
+        res.push(Command::Output {
+            span: span.clone(),
+            file: file.to_owned(),
+            exprs: parsed_exprs,
+        });
+    }
+
     pub(crate) fn add_term_encoding_helper(
         &mut self,
         program: Vec<ResolvedNCommand>,
@@ -2703,13 +2706,7 @@ impl<'a> ProofInstrumentor<'a> {
 
         for command in program {
             let at = res.len();
-            let global_actions = if matches!(command, ResolvedNCommand::Fail(..)) {
-                // `term_encode_command` advances between the nested actions so
-                // each block receives its own position.
-                0
-            } else {
-                self.global_actions_in(&command)?
-            };
+            let global_actions = self.global_actions_in(&command)?;
             self.term_encode_command(&command, &mut res)?;
             self.global_action += global_actions;
             self.egraph.proof_state.global_actions_numbered = self.global_action;
@@ -2729,7 +2726,8 @@ impl<'a> ProofInstrumentor<'a> {
 
 /// Whether no maintenance rebuild is needed after `command`.
 ///
-/// Declarations (sorts, functions, rules) run no actions. A `set` (including a
+/// Declarations (sorts, functions, rules) and `fail` run no persistent actions.
+/// A `set` (including a
 /// global-let's `(set (g) e)`), a `let`, or a top-level expression over
 /// non-container sorts builds and dedups terms via `set-if-empty` without
 /// merging e-classes or deferring work, so no maintenance rebuild is needed
@@ -2757,7 +2755,8 @@ fn command_skips_rebuild(command: &ResolvedNCommand) -> bool {
     match command {
         ResolvedNCommand::Function(..)
         | ResolvedNCommand::NormRule { .. }
-        | ResolvedNCommand::Sort { .. } => true,
+        | ResolvedNCommand::Sort { .. }
+        | ResolvedNCommand::Fail(..) => true,
         ResolvedNCommand::CoreAction(action) => action_skips_rebuild(action),
         ResolvedNCommand::CoreActions(actions) => actions.0.iter().all(action_skips_rebuild),
         _ => false,

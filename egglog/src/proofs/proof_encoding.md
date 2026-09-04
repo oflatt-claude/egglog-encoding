@@ -387,13 +387,13 @@ evaluate:
 | `@MergeIdx` / `@MergeRow` | a function and a subexpression of its merge body | running the merge body on the premise outputs |
 | `@Trans`, `@Sym`, `@Congr`, `@Proj`, … | only other proofs | composing their conclusions |
 
-Actions inside `(fail …)` keep their ordinary top-level effects. Each action's
-instrumentation runs as one local block, and actions in the proof-checking
-program are numbered through the wrapper in source order. A skipped action can
-mint no proof, but retaining its position keeps later `@FiatUnion` and
-`@FiatTerm` references stable. Term-building `extract` and `output` expressions
-remain unsupported here for the same reason as the separate top-level case
-below: those command expressions do not yet have source-action positions.
+Each action inside `(fail …)` is instrumented as one local block inside the
+wrapper. General `fail` execution restores its e-graph snapshot after either a
+command fails or every command succeeds, so none of its transient proof rows
+can escape and the proof checker ignores its actions. The common single-`check`
+form is read-only and runs without taking a snapshot. `prove` and `prove-exists`
+are disallowed inside `fail`; otherwise the wrapper adds no proof-specific
+restriction to a command the term/proof encoding already supports.
 
 The separate top-level `(extract e)` case for a term not already present remains
 open ([issue #80](https://github.com/saulshanabrook/egglog-encoding/issues/80)).

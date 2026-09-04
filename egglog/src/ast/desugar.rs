@@ -218,28 +218,41 @@ pub(crate) fn desugar_command(
                         "include is not allowed inside (fail ...)".to_string(),
                     ));
                 }
-                if matches!(
+                // Term/proof encoding reparses its own generated bindings. They
+                // use the parser's reserved prefix, so they cannot be written by
+                // a user, and must stay inside the transaction with the command
+                // that consumes them.
+                let is_user_let = matches!(
                     &cmd,
-                    Command::Sort { .. }
-                        | Command::Datatype { .. }
-                        | Command::Datatypes { .. }
-                        | Command::Constructor { .. }
-                        | Command::Relation { .. }
-                        | Command::Function { .. }
-                        | Command::Index { .. }
-                        | Command::AddRuleset(..)
-                        | Command::UnstableCombinedRuleset(..)
-                        | Command::Rule { .. }
-                        | Command::Rewrite(..)
-                        | Command::BiRewrite(..)
-                        | Command::Prove(..)
-                        | Command::Action(Action::Let(..))
-                        | Command::LetBegin(..)
-                        | Command::UserDefined(..)
-                ) {
+                    Command::Action(Action::Let(_, name, _))
+                        if !parser.symbol_gen.is_reserved(name)
+                );
+                if is_user_let
+                    || matches!(
+                        &cmd,
+                        Command::Sort { .. }
+                            | Command::Datatype { .. }
+                            | Command::Datatypes { .. }
+                            | Command::Constructor { .. }
+                            | Command::Relation { .. }
+                            | Command::Function { .. }
+                            | Command::Index { .. }
+                            | Command::AddRuleset(..)
+                            | Command::UnstableCombinedRuleset(..)
+                            | Command::Rule { .. }
+                            | Command::Rewrite(..)
+                            | Command::BiRewrite(..)
+                            | Command::Prove(..)
+                            | Command::ProveExists(..)
+                            | Command::LetBegin(..)
+                            | Command::Push(..)
+                            | Command::Pop(..)
+                            | Command::UserDefined(..)
+                    )
+                {
                     return Err(Error::DesugarError(
                         span.clone(),
-                        "definitions and user-defined commands are not allowed inside (fail ...)"
+                        "prove, prove-exists, definitions, user-defined commands, push, and pop are not allowed inside (fail ...)"
                             .to_string(),
                     ));
                 }

@@ -49,41 +49,18 @@ pub(crate) struct ActionContext {
     pub propositions: HashSet<Proposition>,
 }
 
-/// Gather the actions that can run as global actions, in program order.
-///
-/// Actions wrapped in `fail` still run at top level: `fail` only changes how an
-/// error is handled, and successful actions before that error keep their
-/// effects. Include every potential action in the numbering. An action skipped
-/// after the first error cannot mint a proof, but retaining its position keeps
-/// later fiats aligned without having to predict which check will fail.
+/// Gathers all global CoreActions from a program.
+/// This extracts all actions that occur at the top level, filtering out NormRule and other commands.
 pub(crate) fn gather_global_actions(
     prog: &[ResolvedNCommand],
 ) -> impl Iterator<Item = &GenericAction<ResolvedCall, crate::ast::ResolvedVar>> {
-    struct GlobalActions<'a> {
-        commands: Vec<std::slice::Iter<'a, ResolvedNCommand>>,
-    }
-
-    impl<'a> Iterator for GlobalActions<'a> {
-        type Item = &'a GenericAction<ResolvedCall, crate::ast::ResolvedVar>;
-
-        fn next(&mut self) -> Option<Self::Item> {
-            loop {
-                let commands = self.commands.last_mut()?;
-                match commands.next() {
-                    Some(GenericNCommand::CoreAction(action)) => return Some(action),
-                    Some(GenericNCommand::Fail(_, nested)) => self.commands.push(nested.iter()),
-                    Some(_) => {}
-                    None => {
-                        self.commands.pop();
-                    }
-                }
-            }
+    prog.iter().filter_map(|cmd| {
+        if let GenericNCommand::CoreAction(action) = cmd {
+            Some(action)
+        } else {
+            None
         }
-    }
-
-    GlobalActions {
-        commands: vec![prog.iter()],
-    }
+    })
 }
 
 /// Run a merge function and return the resulting term, as well as a set of propositions learned.
@@ -288,76 +265,9 @@ pub(crate) fn gather_globals(
     prog: &[ResolvedNCommand],
     term_dag: &mut TermDag,
 ) -> Result<HashMap<String, TermId>, ProofCheckError> {
-    Ok(process_global_actions(prog, term_dag).var_bindings)
-}
-
-/// Evaluate independently meaningful global actions while retaining the slots
-/// of actions guarded by `fail`. A partial primitive in such an action is the
-/// expected failure, not a failure to gather the surrounding program; any
-/// earlier successful action has already contributed its own propositions.
-fn process_global_actions(prog: &[ResolvedNCommand], term_dag: &mut TermDag) -> ActionContext {
-    fn collect_evaluable_subterms(
-        expr: &ResolvedExpr,
-        bindings: &HashMap<String, TermId>,
-        term_dag: &mut TermDag,
-        propositions: &mut HashSet<Proposition>,
-    ) {
-        match eval_expr_with_subst("global_action", expr, term_dag, bindings) {
-            Ok((_, subterms)) => propositions.extend(subterms),
-            Err(_) => {
-                if let ResolvedExpr::Call(_, _, args) = expr {
-                    for arg in args {
-                        collect_evaluable_subterms(arg, bindings, term_dag, propositions);
-                    }
-                }
-            }
-        }
-    }
-
-    fn collect_action_subterms(
-        action: &GenericAction<ResolvedCall, crate::ast::ResolvedVar>,
-        context: &mut ActionContext,
-        term_dag: &mut TermDag,
-    ) {
-        let expressions: Vec<&ResolvedExpr> = match action {
-            GenericAction::Let(_, _, expr) | GenericAction::Expr(_, expr) => vec![expr],
-            GenericAction::Union(_, lhs, rhs) => vec![lhs, rhs],
-            GenericAction::Set(_, _, args, rhs) => args.iter().chain([rhs]).collect(),
-            GenericAction::Change(_, _, _, args) => args.iter().collect(),
-            GenericAction::Panic(..) => vec![],
-        };
-        for expr in expressions {
-            collect_evaluable_subterms(
-                expr,
-                &context.var_bindings,
-                term_dag,
-                &mut context.propositions,
-            );
-        }
-    }
-
-    let mut context = ActionContext {
-        var_bindings: HashMap::default(),
-        propositions: HashSet::default(),
-    };
-    for action in gather_global_actions(prog) {
-        let actions = [action];
-        if let Ok(next) = process_actions(
-            "global_action",
-            context.var_bindings.clone(),
-            &actions,
-            term_dag,
-        ) {
-            context.var_bindings = next.var_bindings;
-            context.propositions.extend(next.propositions);
-        } else {
-            // A failing primitive may come after its arguments have already
-            // interned terms. Those successful nodes can have fiats even though
-            // the action as a whole is the error `fail` swallows.
-            collect_action_subterms(action, &mut context, term_dag);
-        }
-    }
-    context
+    let actions: Vec<_> = gather_global_actions(prog).collect();
+    let ctx = process_actions("global_action", HashMap::default(), &actions, term_dag)?;
+    Ok(ctx.var_bindings)
 }
 
 /// Errors that can occur during proof checking.
@@ -656,7 +566,9 @@ impl ProofCheckContext {
             }
         }
 
-        let action_ctx = process_global_actions(prog, term_dag);
+        // Use the new refactored functions
+        let actions: Vec<_> = gather_global_actions(prog).collect();
+        let action_ctx = process_actions("global_actions", HashMap::default(), &actions, term_dag)?;
 
         Ok(ProofCheckContext {
             global_equalities: action_ctx.propositions,

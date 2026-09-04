@@ -1180,22 +1180,20 @@ impl EGraph {
             name: decl.name.to_string(),
             can_subsume,
         };
-        let backend_id = if is_proof_node {
-            self.backend.add_internal_flat_table(config)
-        } else {
-            self.backend.add_table(config)
-        };
-        assert_eq!(backend_id, own_id);
-
         let function = Function {
             decl: decl.clone(),
             schema: ResolvedSchema { input, outputs },
             can_subsume,
-            backend_id,
+            backend_id: own_id,
         };
         let (kind, input_arity, output_arity) = function.table_read_projection();
-        self.backend
-            .set_table_read_projection(backend_id, kind, input_arity, output_arity);
+        let backend_id = if is_proof_node {
+            self.backend.add_internal_flat_table(config)
+        } else {
+            self.backend
+                .add_table_with_read_projection(config, kind, input_arity, output_arity)
+        };
+        assert_eq!(backend_id, function.backend_id);
 
         let old = self.functions.insert(decl.name.clone(), function);
         if old.is_some() {
@@ -2305,13 +2303,32 @@ impl EGraph {
                 return Ok(vec![res]);
             }
             ResolvedNCommand::Fail(span, cmds) => {
-                for c in cmds {
-                    if let Err(e) = self.run_command(c) {
-                        log::info!("Command failed as expected: {e}");
-                        return Ok(vec![]);
-                    }
+                // A single check is read-only, so avoid cloning the e-graph for
+                // the overwhelmingly common negative-assertion form.
+                if matches!(cmds.as_slice(), [ResolvedNCommand::Check(..)]) {
+                    let check = cmds.into_iter().next().unwrap();
+                    return match self.run_command(check) {
+                        Err(error) => {
+                            log::info!("Command failed as expected: {error}");
+                            Ok(vec![])
+                        }
+                        Ok(_) => Err(Error::ExpectFail(span)),
+                    };
                 }
-                return Err(Error::ExpectFail(span));
+
+                self.push();
+                let failure = cmds
+                    .into_iter()
+                    .find_map(|command| self.run_command(command).err());
+                self.pop()
+                    .expect("the snapshot pushed for `fail` must still be present");
+                return match failure {
+                    Some(error) => {
+                        log::info!("Command failed as expected: {error}");
+                        Ok(vec![])
+                    }
+                    None => Err(Error::ExpectFail(span)),
+                };
             }
             ResolvedNCommand::Input {
                 span,
@@ -2671,7 +2688,6 @@ impl EGraph {
         command: Command,
     ) -> Result<Vec<ResolvedNCommand>, Error> {
         let desugared = desugar_command(command, &mut self.parser, self.proof_state.proof_testing)?;
-        let proofs_enabled = self.proof_state.proofs_enabled;
         if let Some(original_typechecking) = self.proof_state.original_typechecking.as_mut() {
             // Typecheck using the original egraph
             // TODO this is ugly- we don't need an entire e-graph just for type information.
@@ -2683,7 +2699,6 @@ impl EGraph {
                 if let Err(reason) = command_supports_proof_encoding(
                     &command.to_command(),
                     &original_typechecking.type_info,
-                    proofs_enabled,
                 ) {
                     let command_text = format!("{}", command.to_command());
                     return Err(Error::UnsupportedProofCommand {
@@ -4029,31 +4044,18 @@ mod tests {
     }
 
     #[test]
-    fn proof_support_classifies_fail_wrapped_term_reads() {
-        for (source, expected) in [
-            ("(datatype N (A)) (let $a (A)) (fail (extract $a -1))", true),
-            (
-                "(datatype N (A)) (relation R (N)) (let $a (A)) \
-                 (R $a) (fail (delete (R $a)) (panic \"stop\"))",
-                true,
-            ),
-            (
-                "(datatype N (A)) (let $a (A)) \
-                 (fail (output \"term.txt\" $a) (panic \"stop\"))",
-                false,
-            ),
-            (
-                "(datatype N (A)) (push) (let x (A)) (pop) \
-                 (function x () N :merge old) (set (x) (A)) \
-                 (fail (extract (x) -1))",
-                false,
-            ),
+    fn proof_support_adds_no_fail_specific_term_read_restrictions() {
+        for source in [
+            "(datatype N (A)) (let $a (A)) (fail (extract $a -1))",
+            "(datatype N (A)) (relation R (N)) (let $a (A)) \
+             (R $a) (fail (delete (R $a)) (panic \"stop\"))",
+            "(datatype N (A)) (let $a (A)) \
+             (fail (output \"term.txt\" $a) (panic \"stop\"))",
         ] {
             let mut egraph = EGraph::default();
             let resolved = egraph.resolve_program(None, source).unwrap();
-            assert_eq!(
+            assert!(
                 program_supports_proofs(&resolved, &egraph.type_info),
-                expected,
                 "{source}"
             );
         }
