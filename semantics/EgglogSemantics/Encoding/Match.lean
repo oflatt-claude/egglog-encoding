@@ -2830,7 +2830,8 @@ theorem uRebuilt_ids_B :
    uRebuilt_viewJoined.ids uB uB uA (.app .nil ⟨[], .nil, uRebuilt_mem_viewB⟩)
      (.app .nil ⟨[], .nil, Database.mem_addTerm _ _⟩)⟩
 
-/-- **`Database.RebuildClosed` at `uRebuilt`, with two of its three clauses doing work.**
+/-- **`Database.RebuildClosedStrong` at `uRebuilt`, with two of its three clauses doing work**,
+and `Database.RebuildClosed.of_strong` carrying it to the residue's own form.
 
 `eclass` at the one `@UF` edge: `(A)` is read by `(B)`, which is what the rebuild's single
 firing put there. `edged` at the one term with two ids, joined by that same edge — the clause
@@ -2839,9 +2840,10 @@ definition and not through `Database.ViewLeaderRows.toViewJoined`. `column` is d
 the reason `rowLead` is: both source terms are nullary, so every key is the empty tuple and
 there is no column to move.
 
-`Encoding/Correspond.lean`'s `satTarget_rebuildClosed` is the state with no edge at all, and
-`uTgt_not_rebuildClosed` is this one firing earlier. -/
-theorem uRebuilt_rebuildClosed : uRebuilt.RebuildClosed := by
+`Encoding/Correspond.lean`'s `satTarget_rebuildClosedStrong` is the state with no edge at all,
+`uTgt_not_rebuildClosed` is this one firing earlier, and `cxStale_not_rebuildClosedStrong` is
+the state where `eclass` separates the two forms — a superseded edge, which this one is not. -/
+theorem uRebuilt_rebuildClosedStrong : uRebuilt.RebuildClosedStrong := by
   have hstep : uRebuilt.UFStep uB uA :=
     ⟨Term.app fiatName [], ⟨[uB], .cons uRebuilt_mem_B .nil, uRebuilt_mem_uf⟩⟩
   have hBA : ViewRepr uRebuilt uB uA := .app .nil ⟨[], .nil, Database.mem_addTerm _ _⟩
@@ -2870,6 +2872,10 @@ theorem uRebuilt_rebuildClosed : uRebuilt.RebuildClosed := by
   · intro f es ds e pf ho hl
     rcases uRebuilt_out_view ho with ⟨-, rfl, -⟩ | ⟨-, rfl, -⟩ <;>
       (cases hl; exact ⟨e, pf, ho⟩)
+
+@[inherit_doc uRebuilt_rebuildClosedStrong]
+theorem uRebuilt_rebuildClosed : uRebuilt.RebuildClosed :=
+  Database.RebuildClosed.of_strong uRebuilt_rebuildClosedStrong
 
 /-- **And `Database.ViewLeader` fails at `uTgt`**, which is where `Database.UnionsRead` fails
 too: the edge is written and unfollowed, so `(A)`'s only `lead` is `(A)` and `(B)`'s is `(B)`,
@@ -2919,6 +2925,14 @@ per-rule restatement of the residue is not vacuous either — one rebuild firing
 `uRebuilt_rebuildClosed` holds, and here it cannot. -/
 theorem uTgt_not_rebuildClosed : ¬ uTgt.RebuildClosed :=
   fun h => uTgt_not_viewJoined h.toViewJoined
+
+/-- **And so does the strong form**, through the weakening: `Database.RebuildClosed.of_strong`
+is the reduction, so the state that refutes the weak clause refutes the strong one too. This
+is what keeps `Database.RebuildClosedStrong` on record as a *strengthening* — it is refuted
+here for the reason the weak form is, one rebuild firing early, and separately at an `execM`
+target for a reason the weak form survives (`execM_rebuildClosed`). -/
+theorem uTgt_not_rebuildClosedStrong : ¬ uTgt.RebuildClosedStrong :=
+  fun h => uTgt_not_rebuildClosed (Database.RebuildClosed.of_strong h)
 
 /-- **`Database.ViewsCover` holds at `uRebuilt` too**, so all three of the forward half's
 properties are discharged at one state, and at the state with the `union` rather than at the
