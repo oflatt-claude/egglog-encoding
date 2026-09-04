@@ -12,6 +12,11 @@ Companion to these runnable files:
 | `slotted/xdiff/xdiff.py` | differential tests against the reference implementation |
 | `slotted-tests/sdql.egg` | the paper's `sdql` language and all 43 of its rewrite rules, in the SLOTTED language. `gen-sdql-rules.py` compiles them for the .egg tests and the differential harness, and `slotted-egglog.py` compiles the same file to run it; neither restates a rule |
 | `slotted-tests/array.egg` | the same, for the paper's §4.1 array language and its 8 rules. `xarray.py` builds its rule objects from this file |
+| `slotted-tests/paper-tests.egg` | the reference crate's own suites, in the SLOTTED language and standalone: 3.4 e-node collisions within e-classes, Figure 3, 3.5 step 1, Def. 8, `var::xy_eq_yz_causes_redundancy` and `fgh::transitive_symmetry` |
+| `slotted-tests/symmetry-tests.egg` | where a class's symmetry group comes from and what has to follow: closure, composition down a union chain, congruence to a parent, and matching a repeated pattern variable up to a symmetry |
+| `slotted-tests/binder-tests.egg` | rules that reach under a binder, whose pattern IS a binder, and that introduce one with `:fresh` -- each paired with the shape that must not fire |
+| `slotted-tests/redundancy-tests.egg` | redundancy from a rewrite rather than a union, and a match that only exists after one. Ends with the shape that still fails, written out |
+| `slotted-tests/rewrite-tests.egg` | the project's original tests, ported off the pre-compiler encoded form |
 | `target/slotted/slotted-array-rules.egg` | what those 8 compile to, self-checking |
 | `slotted/xdiff/xarray.py` | the same 8 rules, differentially tested against the reference |
 
