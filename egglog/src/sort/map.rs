@@ -385,6 +385,119 @@ pub(crate) fn renaming_find_mappings_total(
     out
 }
 
+/// Every way the slots of one match may be merged: the reference's `final_refine`
+/// (`slotted-egraphs/src/rewrite/multipat.rs`) as a pure function.
+///
+/// `maps` is `[all, pattern, group...]`, read by KEY set:
+/// - `all` — every slot in play, which each result is total on;
+/// - `pattern` — the slots the PATTERN writes, as opposed to the ones minted for a
+///   class's own slots;
+/// - each remaining map — a set of slots known pairwise apart. One per matched e-node,
+///   because a node's slots are distinct. This is what keeps a result injective: two
+///   slots of one node can never merge, so composing a merge map onto a renaming
+///   cannot collapse two of its keys.
+///
+/// Two slots the pattern writes are never merged. The pattern asked for two names, and
+/// merging them would let a `not-free` side condition pass by renaming its two slots
+/// together — capture rather than alpha-equivalence.
+///
+/// ELEMENT 0 IS THE IDENTITY, which is the one place this deliberately differs from
+/// the reference: it recurses into the merged branch first, and order does not matter
+/// there because every state is returned. Here the caller reads a result by INDEX out
+/// of a finite relation, so putting the all-apart solution first means an index space
+/// too small to reach the rest degrades to not refining at all, rather than to an
+/// arbitrary merge.
+///
+/// At most `cap` results are built.
+pub(crate) fn renaming_refine_namings(
+    maps: &[BTreeMap<i64, i64>],
+    cap: usize,
+) -> Vec<BTreeMap<i64, i64>> {
+    let Some((all_map, rest)) = maps.split_first() else {
+        return Vec::new();
+    };
+    let Some((pattern_map, groups)) = rest.split_first() else {
+        return Vec::new();
+    };
+    let all: Vec<i64> = all_map.keys().copied().collect();
+    let pattern: BTreeSet<i64> = pattern_map.keys().copied().collect();
+
+    // One disequality per pair within a group, so a node's slots stay apart.
+    let mut diseq: BTreeSet<(i64, i64)> = BTreeSet::new();
+    for g in groups {
+        let ks: Vec<i64> = g.keys().copied().collect();
+        for (i, &x) in ks.iter().enumerate() {
+            for &y in &ks[i + 1..] {
+                diseq.insert((x.min(y), x.max(y)));
+            }
+        }
+    }
+
+    fn find(uf: &BTreeMap<i64, i64>, mut x: i64) -> i64 {
+        while let Some(&p) = uf.get(&x) {
+            if p == x {
+                break;
+            }
+            x = p;
+        }
+        x
+    }
+
+    fn apart(uf: &BTreeMap<i64, i64>, diseq: &BTreeSet<(i64, i64)>, x: i64, y: i64) -> bool {
+        diseq.iter().any(|&(p, q)| {
+            let (p, q) = (find(uf, p), find(uf, q));
+            (p == x && q == y) || (p == y && q == x)
+        })
+    }
+
+    fn walk(
+        all: &[i64],
+        pattern: &BTreeSet<i64>,
+        uf: BTreeMap<i64, i64>,
+        diseq: BTreeSet<(i64, i64)>,
+        cap: usize,
+        out: &mut Vec<BTreeMap<i64, i64>>,
+    ) {
+        if out.len() >= cap {
+            return;
+        }
+        for (i, &a) in all.iter().enumerate() {
+            for &b in &all[i + 1..] {
+                let (x, y) = (find(&uf, a), find(&uf, b));
+                if x == y || apart(&uf, &diseq, x, y) {
+                    continue;
+                }
+                // `allows_directed_union`: the slot being REPLACED may not be one the
+                // pattern writes. Try either direction, and if both are pattern slots
+                // this pair is simply not decidable -- the reference's `continue`.
+                let redirect = if !pattern.contains(&x) {
+                    Some((x, y))
+                } else if !pattern.contains(&y) {
+                    Some((y, x))
+                } else {
+                    None
+                };
+                let Some((from, to)) = redirect else { continue };
+
+                // apart first, so the identity lands at index 0
+                let mut d = diseq.clone();
+                d.insert((x.min(y), x.max(y)));
+                walk(all, pattern, uf.clone(), d, cap, out);
+
+                let mut u = uf.clone();
+                u.insert(from, to);
+                walk(all, pattern, u, diseq, cap, out);
+                return;
+            }
+        }
+        out.push(all.iter().map(|&s| (s, find(&uf, s))).collect());
+    }
+
+    let mut out = Vec::new();
+    walk(&all, &pattern, BTreeMap::new(), diseq, cap, &mut out);
+    out
+}
+
 /// A map from a key type to a value type supporting these primitives:
 /// - `map-empty`
 /// - `map-insert`
@@ -774,6 +887,96 @@ mod naming_tests {
 
     fn m(pairs: &[(i64, i64)]) -> BTreeMap<i64, i64> {
         pairs.iter().copied().collect()
+    }
+
+    fn ident(slots: &[i64]) -> BTreeMap<i64, i64> {
+        slots.iter().map(|&s| (s, s)).collect()
+    }
+
+    /// Reading index 0 must mean "did not refine", so that an index space too small to
+    /// reach the rest degrades to today's behaviour rather than to an arbitrary merge.
+    #[test]
+    fn refine_element_zero_is_the_identity() {
+        let out = renaming_refine_namings(&[ident(&[0, 1]), ident(&[]), ident(&[])], 64);
+        assert_eq!(out[0], ident(&[0, 1]));
+    }
+
+    /// `allows_directed_union`: the slot being replaced may not be one the pattern
+    /// writes, so two pattern slots have no direction available and never merge.
+    #[test]
+    fn refine_never_merges_two_pattern_slots() {
+        let out = renaming_refine_namings(&[ident(&[0, 1]), ident(&[0, 1]), ident(&[])], 64);
+        assert_eq!(
+            out,
+            vec![ident(&[0, 1])],
+            "two pattern slots must stay apart"
+        );
+    }
+
+    /// A node's slots are pairwise distinct, so a group forbids merging within it --
+    /// which is what keeps a merge map composable with a renaming without collapsing
+    /// two of its keys.
+    #[test]
+    fn refine_never_merges_two_slots_of_one_node() {
+        let out = renaming_refine_namings(&[ident(&[0, 1]), ident(&[]), ident(&[0, 1])], 64);
+        assert_eq!(
+            out,
+            vec![ident(&[0, 1])],
+            "one node's slots must stay apart"
+        );
+    }
+
+    /// The case the whole thing exists for: a minted slot may be identified with a
+    /// pattern slot, and the pattern slot must be the one that survives.
+    #[test]
+    fn refine_merges_a_minted_slot_into_a_pattern_slot() {
+        // 0 is the pattern's, 7 was minted, and nothing says they are apart
+        let out = renaming_refine_namings(&[ident(&[0, 7]), ident(&[0]), ident(&[])], 64);
+        assert_eq!(out.len(), 2, "apart and merged");
+        assert_eq!(out[0], ident(&[0, 7]));
+        assert_eq!(
+            out[1],
+            m(&[(0, 0), (7, 0)]),
+            "the pattern slot survives, per `allows_directed_union`"
+        );
+    }
+
+    /// Two minted slots have both directions available, so they merge; which of the
+    /// two survives is not observable, but the partition is.
+    #[test]
+    fn refine_merges_two_minted_slots() {
+        let out = renaming_refine_namings(&[ident(&[5, 9]), ident(&[]), ident(&[])], 64);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0], ident(&[5, 9]));
+        let merged = &out[1];
+        assert_eq!(merged[&5], merged[&9], "one class");
+    }
+
+    /// Three free slots give the five partitions of a 3-set (Bell(3)), and the first
+    /// is the all-apart one.
+    #[test]
+    fn refine_reaches_every_partition_of_three_free_slots() {
+        let out = renaming_refine_namings(&[ident(&[1, 2, 3]), ident(&[]), ident(&[])], 64);
+        let partitions: BTreeSet<Vec<Vec<i64>>> = out
+            .iter()
+            .map(|mp| {
+                let mut by_rep: BTreeMap<i64, Vec<i64>> = BTreeMap::new();
+                for (&k, &v) in mp {
+                    by_rep.entry(v).or_default().push(k);
+                }
+                by_rep.into_values().collect()
+            })
+            .collect();
+        assert_eq!(partitions.len(), 5, "Bell(3) = 5, got {out:?}");
+        assert_eq!(out[0], ident(&[1, 2, 3]));
+    }
+
+    /// The cap truncates rather than growing without bound, and index 0 survives it.
+    #[test]
+    fn refine_respects_the_cap() {
+        let out = renaming_refine_namings(&[ident(&[1, 2, 3]), ident(&[]), ident(&[])], 2);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0], ident(&[1, 2, 3]));
     }
 
     /// The shape of the `M3` divergence: two atoms share one slot, and the second

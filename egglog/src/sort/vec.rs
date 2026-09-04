@@ -230,6 +230,34 @@ impl ContainerSort for VecSort {
                     .collect();
                 Some(VecContainer { do_rebuild: false, data })
             }});
+            add_primitive!(eg, "refine-namings" = {self.clone(): VecSort} [xs: # (self.element())] -?> @VecContainer (arc) {{
+                let bv = state.base_values();
+                let cv = state.container_values();
+                let mut maps: Vec<BTreeMap<i64, i64>> = Vec::new();
+                for v in xs {
+                    let m = cv.get_val::<MapContainer>(v)?.clone();
+                    maps.push(
+                        m.data
+                            .iter()
+                            .map(|(k, val)| (bv.unwrap::<i64>(*k), bv.unwrap::<i64>(*val)))
+                            .collect(),
+                    );
+                }
+                let merges: Vec<BTreeMap<Value, Value>> =
+                    renaming_refine_namings(&maps, FIND_MAPPINGS_CAP)
+                        .into_iter()
+                        .map(|n| {
+                            n.into_iter()
+                                .map(|(k, v)| (bv.get::<i64>(k), bv.get::<i64>(v)))
+                                .collect()
+                        })
+                        .collect();
+                let data = merges
+                    .into_iter()
+                    .map(|n| state.register_container::<MapContainer>(MapContainer::renaming(n)))
+                    .collect();
+                Some(VecContainer { do_rebuild: false, data })
+            }});
         }
         if self.element.is_eq_sort() {
             eg.add_write_primitive(
