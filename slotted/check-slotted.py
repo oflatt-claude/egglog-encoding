@@ -89,10 +89,11 @@ def run_egg_files():
     """Every slotted .egg file loads and runs clean."""
     files = sorted(glob.glob(str(ROOT / "slotted" / "tests" / "**" / "slotted-*.egg"), recursive=True))
     # A test ported to the slotted language leaves this set and joins `slotted-tests`,
-    # so this floor drops as that one rises; neither may fall on its own. It also
-    # dropped by six when the generated machinery moved to `target/`, which is build
-    # output and not a file anyone wrote.
-    if len(files) < 10:
+    # so this floor drops as that one rises; neither may fall on its own. It dropped by
+    # six when the generated machinery moved to `target/`, which is build output and not
+    # a file anyone wrote, and by four more when `machinery` let an encoded-level test
+    # declare the shapes it needs instead of including a compiled file.
+    if len(files) < 6:
         return f"only {len(files)} slotted .egg files found"
     bad = []
     for f in files:

@@ -1,0 +1,16 @@
+;;; COMPILED from slotted/tests/binder-scope.egg by slotted/slotted-egglog.py.
+;;;
+;;; Only the forms THIS file contributes. The machinery for its 2 constructors,
+;;; and anything an included library brought, are snapshotted by the generators
+;;; that emit them -- committing them again per test would be the same thousands
+;;; of lines over and over.
+
+(include "slotted/tests/slotted-egraph-encoding-11.egg")
+
+(let $b (App2 "app" (map-empty) (Sym "f1") (map-of 0 0) (Var 0)))
+(let $l0 (App3 "let" (map-of 0 0) (Var 0) (map-of 0 0) $b (map-of 0 0) (Var 0)))
+(let $l1 (App3 "let" (map-of 0 1) (Var 0) (map-of 0 1) $b (map-of 0 0) (Var 0)))
+(run-schedule (saturate (run slotted)))
+(check (= (ClassSlots $l0) (map-of 0 0)))
+(check (= (ClassSlots $l1) (map-of 0 0)))
+(check (RenamesToLeader $l0 m1 leader) (RenamesToLeader $l1 m2 leader))

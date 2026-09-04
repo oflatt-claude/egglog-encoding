@@ -532,7 +532,10 @@ def emit(language, binders=(), provided=None, omit=()):
             )
             continue
         if provided and name in provided:
-            if provided[name] != sig:
+            # A mapping checks the signature too. A bare set of names is what a caller
+            # passes when it read them off an already-COMPILED file, where the
+            # signatures are the encoded ones and would never match a slotted one.
+            if isinstance(provided, dict) and provided[name] != sig:
                 raise SystemExit(f"{name} clashes with the machinery at a different signature")
             out += banner(
                 f"{name} :: {' '.join(shape_of(c) for c in sig)} -- declared by the machinery this file includes"

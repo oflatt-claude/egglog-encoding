@@ -1,0 +1,35 @@
+;;; COMPILED from slotted/tests/sdql-beta.egg by slotted/slotted-egglog.py.
+;;;
+;;; Only the forms THIS file contributes. The machinery for its 3 constructors,
+;;; and anything an included library brought, are snapshotted by the generators
+;;; that emit them -- committing them again per test would be the same thousands
+;;; of lines over and over.
+
+(include "slotted/tests/slotted-egraph-encoding-11.egg")
+
+(ruleset sdql-beta)
+(relation SdqlBetaPending (U Renaming Renaming U))
+(rule ((= e (Let mt t mx v0 mb body)) (= v0 (Var 0)) (= x (map-get mx 0)) (= needed (map-union (map-image mb) (map-union (map-image mt) (map-of x x)))) (= Rb (find-mapping-total (map-domain mb) needed (map-domain mb) mb)) (= xb (map-get Rb x)) (= tren (compose-total Rb mt))) ((SdqlBetaPending e Rb (slotted-subst-frame body xb v0 tren t) (slotted-subst body xb v0 tren t))) :ruleset sdql-beta :naive)
+(rule ((SdqlBetaPending e Rb mr r) (= cs (ClassSlots r))) ((Equated e (compose (inverse Rb) (compose mr cs)) r)) :ruleset slotted)
+(push)
+(let $a (Let (map-empty) (Num 0) (map-of 0 5) (Var 0) (map-of 0 5) (Var 0)))
+(run-schedule (saturate (run slotted)) (repeat 2 (seq (run sdql-beta) (saturate (run slotted)))))
+(check (RenamesToLeader $a (map-empty) (Num 0)))
+(pop)
+(push)
+(let $b (Let (map-of 0 7) (Var 0) (map-of 0 5) (Var 0) (map-of 0 5) (Var 0)))
+(run-schedule (saturate (run slotted)) (repeat 2 (seq (run sdql-beta) (saturate (run slotted)))))
+(check (RenamesToLeader $b (map-of 0 7) (Var 0)))
+(fail (check (RenamesToLeader $b (map-of 0 5) (Var 0))))
+(pop)
+(push)
+(let $c (Let (map-empty) (Num 0) (map-of 0 5) (Var 0) (map-of 0 9) (Var 0)))
+(run-schedule (saturate (run slotted)) (repeat 2 (seq (run sdql-beta) (saturate (run slotted)))))
+(check (RenamesToLeader $c (map-of 0 9) (Var 0)))
+(pop)
+(push)
+(let $dbody (Add (map-of 0 5) (Var 0) (map-of 0 9) (Var 0)))
+(let $d (Let (map-empty) (Num 0) (map-of 0 5) (Var 0) (map-of 5 5 9 9) $dbody))
+(run-schedule (saturate (run slotted)) (repeat 2 (seq (run sdql-beta) (saturate (run slotted)))))
+(check (RenamesToLeader $d (map-of 9 9) (Add (map-empty) (Num 0) (map-of 0 9) (Var 0))))
+(pop)

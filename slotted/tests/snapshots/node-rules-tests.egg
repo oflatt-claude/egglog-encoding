@@ -1,0 +1,48 @@
+;;; COMPILED from slotted/tests/node-rules-tests.egg by slotted/slotted-egglog.py.
+;;;
+;;; Only the forms THIS file contributes. The machinery for its 4 constructors,
+;;; and anything an included library brought, are snapshotted by the generators
+;;; that emit them -- committing them again per test would be the same thousands
+;;; of lines over and over.
+
+(include "slotted/tests/slotted-egraph-encoding-11.egg")
+
+(push)
+(let $f3a (App3 "f3" (map-of 0 0) (Var 0) (map-of 0 1) (Var 0) (map-of 0 2) (Var 0)))
+(let $f3b (App3 "f3" (map-of 0 3) (Var 0) (map-of 0 4) (Var 0) (map-of 0 5) (Var 0)))
+(run-schedule (saturate (run slotted)))
+(check (RenamesToLeader $f3a m1 leader) (RenamesToLeader $f3b m2 leader))
+(let $f3c (App3 "f3" (map-of 0 0) (Var 0) (map-of 0 0) (Var 0) (map-of 0 2) (Var 0)))
+(run-schedule (saturate (run slotted)))
+(fail (check (= $f3a $f3c)))
+(pop)
+(push)
+(let $let5 (App3 "let" (map-of 0 5) (Var 0) (map-of 0 5) (Var 0) (map-empty) (Null)))
+(let $let6 (App3 "let" (map-of 0 6) (Var 0) (map-of 0 6) (Var 0) (map-empty) (Null)))
+(run-schedule (saturate (run slotted)))
+(check (= $let5 $let6))
+(check (RenamesToLeader $let5 (map-empty) $let5))
+(pop)
+(push)
+(let $one (Num 1))
+(let $two (Num 2))
+(run-schedule (saturate (run slotted)))
+(check (RenamesToLeader $one (map-empty) $one))
+(fail (check (= $one $two)))
+(let $f1a (App2 "f" (map-empty) $one (map-of 0 0) (Var 0)))
+(let $f1b (App2 "f" (map-empty) $one (map-of 0 1) (Var 0)))
+(run-schedule (saturate (run slotted)))
+(check (RenamesToLeader $f1a m1 leader) (RenamesToLeader $f1b m2 leader))
+(let $f2a (App2 "f" (map-empty) $two (map-of 0 0) (Var 0)))
+(run-schedule (saturate (run slotted)))
+(fail (check (= $f1a $f2a)))
+(pop)
+(push)
+(let $s2a (Scale 2 (map-of 0 0) (Var 0)))
+(let $s2b (Scale 2 (map-of 0 1) (Var 0)))
+(let $s3a (Scale 3 (map-of 0 0) (Var 0)))
+(run-schedule (saturate (run slotted)))
+(check (RenamesToLeader $s2a m1 leader) (RenamesToLeader $s2b m2 leader))
+(fail (check (= $s2a $s3a)))
+(check (RenamesToLeader $s2a (map-of 0 0) $s2a))
+(pop)
