@@ -3,7 +3,7 @@
 
 The rules are `slotted/tests/sdql.egg`, written in the slotted language and read from
 there rather than restated here; the recipe that compiles them is
-`slotted/slotted-encoder.py`, which `slotted/tests/slotted-user-rules.egg`
+`slotted/slotted-encoder.py`, which `slotted/tests/user-rules.egg`
 documents.  What `sdql` adds over the differential harness's two-child `App2`/`App3`
 atoms is the per-language constructors of `slotted/languages/sdql.egg`,
 which have one to six children and payload columns, and with them four cases the
@@ -25,7 +25,7 @@ connectivity the recipe requires.  `connected_order`'s further preference -- a
 binder is not the atom that fixes slots(pattern) -- is not followed: most `sdql`
 rules are rooted at a binder, and taking the root first pins each bound slot off
 its own edge instead of minting a name for it.  M7 in
-`slotted/tests/slotted-user-rules.egg` is the same shape.
+`slotted/tests/user-rules.egg` is the same shape.
 
 Terms in the table below:
 
@@ -75,7 +75,7 @@ HEADER = """\
 ;;;
 ;;; The reference `sdql` rewrite rules -- `sdql_rules()` in
 ;;; `slotted-egraphs/benches/sdql.rs` -- compiled into the slotted encoding by the
-;;; recipe in `slotted/tests/slotted-user-rules.egg`.
+;;; recipe in `slotted/tests/user-rules.egg`.
 ;;;
 ;;; The rules themselves are `slotted/tests/sdql.egg`, written in the slotted language;
 ;;; read them there. This file is what they compile to.

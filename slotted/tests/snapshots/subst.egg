@@ -1,0 +1,43 @@
+;;; COMPILED from slotted/tests/subst.egg by slotted/slotted-egglog.py.
+;;;
+;;; Only the forms THIS file contributes. The machinery for its 1 constructors,
+;;; and anything an included library brought, are snapshotted by the generators
+;;; that emit them -- committing them again per test would be the same thousands
+;;; of lines over and over.
+
+(include "slotted/tests/slotted-egraph-encoding-11.egg")
+
+(push)
+(let $body (App2 "h" (map-of 0 0) (Var 0) (map-of 0 1) (Var 0)))
+(run-schedule (saturate (run slotted)))
+(let $out (slotted-subst $body 0 (Var 0) (map-empty) (Null)))
+(check (= $out (App2 "h" (map-empty) (Null) (map-of 0 1) (Var 0))))
+(fail (check (= $out $body)))
+(pop)
+(push)
+(let $body (App2 "h" (map-of 0 1) (Var 0) (map-of 0 2) (Var 0)))
+(run-schedule (saturate (run slotted)))
+(let $out (slotted-subst $body 0 (Var 0) (map-empty) (Null)))
+(check (= $out $body))
+(pop)
+(push)
+(let $inner (App2 "h" (map-of 0 0) (Var 0) (map-of 0 1) (Var 0)))
+(let $body (App2 "g" (map-of 0 0 1 1) $inner (map-of 0 2) (Var 0)))
+(let $out (slotted-subst $body 0 (Var 0) (map-empty) (Null)))
+(check (= $out (App2 "g" (map-of 1 1) (App2 "h" (map-empty) (Null) (map-of 0 1) (Var 0)) (map-of 0 2) (Var 0))))
+(pop)
+(push)
+(let $c (App2 "h" (map-of 0 0) (Var 0) (map-of 0 7) (Var 0)))
+(let $body (App2 "g" (map-of 0 5) $c (map-of 0 6) (Var 0)))
+(let $out (slotted-subst $body 5 (Var 0) (map-empty) (Null)))
+(check (= x (App2 "h" (map-empty) (Null) (map-of 0 7) (Var 0))))
+(fail (check (= x (App2 "h" (map-empty) (Null) (map-empty) (Var 0)))))
+(pop)
+(push)
+(let $b (App2 "h" (map-of 0 0) (Var 0) (map-of 0 1) (Var 0)))
+(let $lam (App2 "lambda" (map-of 0 0) (Var 0) (map-of 0 0 1 1) $b))
+(let $redex (App2 "app" (map-of 1 1) $lam (map-empty) (Null)))
+(rule ((= e (App2 "app" ml l mt t)) (= l (App2 "lambda" mx (Var 0) mb bod)) (= x (map-get mx 0))) ((union e (slotted-subst bod x (Var 0) mt t))) :naive)
+(run 1)
+(check (= $redex (App2 "h" (map-empty) (Null) (map-of 0 1) (Var 0))))
+(pop)

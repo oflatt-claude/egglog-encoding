@@ -2,7 +2,7 @@
 """The slotted encoding, in one place.
 
 Several programs encode slotted rules and terms, and the recipe they encode is one
-recipe: `slotted/tests/slotted-user-rules.egg` states it, section by section, and
+recipe: `slotted/tests/user-rules.egg` states it, section by section, and
 `slotted-user-rules.md` argues it. This module is that recipe as code, so there is
 one place for it to be right and one place to fix. The front-ends:
 
@@ -69,7 +69,7 @@ sections, and its docstring names which: the degenerate leading atom is M1, the
 repeat-inside-one-atom check is M2, minting is M3, the chain is M4, the accumulating
 avoid-set is M5, `narrow` is M8, and the conclusion is M10. A worked match with real
 values for every one of those variables is at the top of
-`slotted/tests/slotted-user-rules.egg`, asserted by
+`slotted/tests/user-rules.egg`, asserted by
 `slotted/tests/slotted-user-rules-trace.egg`.
 """
 
@@ -1085,7 +1085,7 @@ def compile_rule(
 ):
     """Compile a flattened multipattern and its action into one egglog rule.
 
-    The recipe `slotted/tests/slotted-user-rules.egg` states. Atoms are taken in the order
+    The recipe `slotted/tests/user-rules.egg` states. Atoms are taken in the order
     given, which must be connected (see `connected_order`). Per atom, in order:
 
       * one egglog atom per e-node, `(= V (Op m1 c1 ...))`;

@@ -506,17 +506,19 @@ def tally(src):
         n[head] = n.get(head, 0) + 1
     claims = n.get("check", 0) + n.get("fail", 0)
     parts = []
+    # `rewrite` at the slotted level, `rule` at the encoded one -- both are rules.
+    rules = n.get("rewrite", 0) + n.get("rule", 0)
     for count, word in (
         (n.get("let", 0), "term"),
         (n.get("union", 0), "union"),
-        (n.get("rewrite", 0), "rule"),
+        (rules, "rule"),
         (claims, "claim"),
     ):
         if count:
             parts.append(f"{count} {word}{'s' if count != 1 else ''}")
     if not claims:
         # The case worth spelling out: nothing was asked, so nothing was checked.
-        library = n.get("rewrite", 0) and not n.get("let", 0)
+        library = rules and not n.get("let", 0)
         parts.append("nothing asked -- a rule library, included by other files" if library else "nothing asked")
     return ", ".join(parts) if parts else "empty"
 

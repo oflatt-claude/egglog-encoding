@@ -14,7 +14,10 @@
 ;;; node. Compression deletes a non-canonical node, so a rule should reach the
 ;;; class's canonical member through `RenamesToLeader` first.
 
-(include "slotted/tests/slotted-egraph-encoding-11.egg")
+;; Written at the ENCODED level -- the renamings are spelled out -- so this names a
+;; shape to write raw egglog with, not a constructor for slotted terms. The core the
+;; compiler supplies already declares it, so nothing extra is emitted for it.
+(machinery App2 (String U U) U)
 
 
 ;;; Case 1- a slot that occurs: h($0, $1)[$0 := null] = h(null, $1)

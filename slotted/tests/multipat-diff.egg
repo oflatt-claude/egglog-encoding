@@ -26,7 +26,10 @@
 ;;; IS construction, and constraints computed in earlier atoms thread into later
 ;;; ones as ordinary values.
 
-(include "slotted/tests/slotted-egraph-encoding-11.egg")
+;; Written at the ENCODED level -- the renamings are spelled out -- so this names a
+;; shape to write raw egglog with, not a constructor for slotted terms. The core the
+;; compiler supplies already declares it, so nothing extra is emitted for it.
+(machinery App2 (String U U) U)
 
 (relation Mu (String Renaming))
 (relation Hit (String U))

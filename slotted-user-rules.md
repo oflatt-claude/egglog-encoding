@@ -5,8 +5,8 @@ Companion to these runnable files:
 | file | what it is |
 | --- | --- |
 | `slotted/tests/slotted-egraph-encoding-11.egg` | the machinery: union, congruence, redundancy, symmetry |
-| `slotted/tests/slotted-user-rules.egg` | the tutorial: one shape of user rule per section — M1–M11 — each stated as prose plus the single rule a compiler emits, and nothing else. All eleven are a real rewrite, from `sdql_rules()` or the paper's §4.1 array language, and each is exactly what `slotted-encoder.py` emits for it: `slotted/check-tutorial.py` compares every one against the encoder's output and allows only a renaming of the variables. M6 and M9 are the same rule (`eta`) at two atom orders, since the lead is a compile-time choice. The shapes no rewrite produces on demand — a multi-rooted left-hand side, two mints in one match, a child wider than its class — are hand-built e-graphs in the fixture block of `slotted/tests/slotted-user-rules-tests.egg`, whose rules are still the encoder's output |
-| `slotted/tests/slotted-user-rules-tests.egg` | the cases for it: it includes the tutorial, then adds the terms, schedules, assertions and counter-examples |
+| `slotted/tests/user-rules.egg` | the tutorial: one shape of user rule per section — M1–M11 — each stated as prose plus the single rule a compiler emits, and nothing else. All eleven are a real rewrite, from `sdql_rules()` or the paper's §4.1 array language, and each is exactly what `slotted-encoder.py` emits for it: `slotted/check-tutorial.py` compares every one against the encoder's output and allows only a renaming of the variables. M6 and M9 are the same rule (`eta`) at two atom orders, since the lead is a compile-time choice. The shapes no rewrite produces on demand — a multi-rooted left-hand side, two mints in one match, a child wider than its class — are hand-built e-graphs in the fixture block of `slotted/tests/user-rules-tests.egg`, whose rules are still the encoder's output |
+| `slotted/tests/user-rules-tests.egg` | the cases for it: it includes the tutorial, then adds the terms, schedules, assertions and counter-examples |
 | `slotted/slotted-egglog.py` | compiles a test written in the SLOTTED language — its own `(constructor ... :binder ...)` declarations, then terms, `rewrite`s and `(check (same a b))` — into a self-contained egglog program: the hand-written core, the machinery for exactly the constructors declared, and the compiled body. It includes no generated file, so nothing sits between a test and running it. `same` rather than `=` because slotted equality is not egglog equality: `(RenamesToLeader f m l)` is `f = m*l`, and two terms are equal when ONE renaming reaches both from the leader -- Def. 6, two invocations agree when the renaming between them is a symmetry of the class. Landing in the same class by *some* renaming is weaker and is spelled `same-class`; the pair that separates them is two alpha-variants whose free slot is renamed, one class but not equal |
 | `slotted/slotted-encoder.py` | the recipe as code: the machinery emitter, the term encoding and the rule compiler, which every generator below goes through |
 | `slotted/xdiff/xdiff.py` | differential tests against the reference implementation |
@@ -107,8 +107,8 @@ it. A body no ordering can connect has to invent slots, and there the gap is rea
 
 It is tempting to read this as three separate cases — first atom, root known,
 children known — and that reading caused three of the four bugs listed at the end.
-`slotted/tests/slotted-user-rules.egg` had drifted back to it and has been brought into
-line; the counter-example under `M4` in `slotted/tests/slotted-user-rules-tests.egg` is an
+`slotted/tests/user-rules.egg` had drifted back to it and has been brought into
+line; the counter-example under `M4` in `slotted/tests/user-rules-tests.egg` is an
 e-graph where the two readings visibly disagree, the short one computing an *empty*
 renaming for a child that has a slot.
 The cases are only *which* constraints happen to exist:
@@ -1042,9 +1042,9 @@ Curated cases, and what each is for:
 | `S1`,`S1b` | the stored symmetries are closed, so a lookup finds a composite element |
 | `S2` | a symmetry and a redundancy in play at once |
 | `B1`–`B4` | binders: chaining through one, α-equivalence, the same slot literal on two binders |
-| `M1`,`M3` | shapes `slotted/tests/slotted-user-rules.egg` teaches that nothing else covered: a swapped action, and one shared variable across two operators |
+| `M1`,`M3` | shapes `slotted/tests/user-rules.egg` teaches that nothing else covered: a swapped action, and one shared variable across two operators |
 
-`slotted/tests/slotted-user-rules.egg` is the readable form of this same recipe, so each of
+`slotted/tests/user-rules.egg` is the readable form of this same recipe, so each of
 its sections names the case above that covers its shape. Keep the
 two in step — the hand-written file passing its own assertions only says it does
 what it expects, and it had drifted to the three-case reading once already. One
