@@ -39,7 +39,7 @@ pub use egglog_add_primitive::add_primitive_with_validator;
 use egglog_ast::generic_ast::{Change, GenericExpr, Literal};
 use egglog_ast::span::Span;
 use egglog_ast::util::ListDisplay;
-use egglog_bridge::{ColumnTy, QueryEntry};
+use egglog_bridge::{ColumnTy, QueryEntry, TableKind};
 use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
 use egglog_reports::{
@@ -393,11 +393,35 @@ impl Function {
         self.decl.internal_hidden
     }
 
-    /// The term-constructor name associated with this function table, if
-    /// any. Set on view tables created by the term/proof encoding to refer
-    /// back to the user-visible constructor name.
-    pub fn term_constructor(&self) -> Option<&str> {
-        self.decl.term_constructor.as_deref()
+    /// Whether this table is a view created by the term/proof encoding: the
+    /// function's own rows, keyed on canonicalized children.
+    pub fn is_view(&self) -> bool {
+        self.decl.internal_view.is_some()
+    }
+
+    /// The source-level row layout exposed by the Rust APIs. Encoded views use
+    /// physical function tables with an internal row layout, but retain their
+    /// source constructor/function kind and select only the source output.
+    fn table_read_projection(&self) -> (TableKind, usize, usize) {
+        let rows_are_enodes = self.rows_are_enodes();
+        let input_arity = if rows_are_enodes {
+            self.extraction_layout().1
+        } else {
+            self.schema.input.len()
+        };
+        (
+            if rows_are_enodes {
+                TableKind::Constructor
+            } else {
+                TableKind::Function
+            },
+            input_arity,
+            if rows_are_enodes {
+                1
+            } else {
+                self.schema.outputs.len() - usize::from(self.is_fd_view())
+            },
+        )
     }
 }
 
@@ -524,6 +548,13 @@ impl EGraph {
         add_primitive!(&mut eg, "ordering-max" = |a: #, b: #| -> # {
             if a > b { a } else { b }
         });
+        // Whether `ordering-min`/`ordering-max` swap their arguments: 0 when `a`
+        // is the max, 1 when `b` is. A top-level `union`'s fiat records this so
+        // proof conversion can orient the action's two operands the way the
+        // encoding did, without the row naming either of them.
+        add_primitive!(&mut eg, "ordering-swapped" = |a: #, b: #| -> i64 {
+            if a > b { 0 } else { 1 }
+        });
 
         // Orientation helpers for the proof-encoding UF/view merges; see
         // [`crate::proofs::proof_encoding_helpers::OrientProof`].
@@ -613,7 +644,7 @@ impl EGraph {
     /// Create a new e-graph with the term-encoding pipeline enabled.
     ///
     /// In term-encoding mode the e-graph eagerly instruments every constructor
-    /// and function with auxiliary term tables, view tables, and per-sort
+    /// and function with source-named views and per-sort
     /// union-finds so that canonical representatives and their justifications are
     /// materialized explicitly.  This makes it possible to record and emit
     /// equality proofs while preserving the observable behaviour of supported
@@ -660,7 +691,8 @@ impl EGraph {
         self
     }
 
-    /// Enable testing of getting proofs for all `check` commands.
+    /// Enable testing of getting proofs for every `check` outside `fail`.
+    /// Checks inside `fail` remain negative assertions.
     pub fn with_proof_testing(mut self) -> Self {
         self.proof_state.proof_testing = true;
         self
@@ -852,6 +884,17 @@ impl EGraph {
                 // Preserve the symbol generator so that fresh symbols
                 // generated after pop don't collide with ones generated before pop.
                 std::mem::swap(&mut self.parser.symbol_gen, &mut e.parser.symbol_gen);
+                // Likewise the global-action numbering a fiat names: the program
+                // proof checking reads keeps what the popped scope contributed,
+                // so the count it is an index into must not go back either.
+                std::mem::swap(
+                    &mut self.proof_state.global_actions_numbered,
+                    &mut e.proof_state.global_actions_numbered,
+                );
+                // And the program itself, for the same reason: a command that
+                // ran is one proof checking has to know about, and dropping it
+                // would renumber everything a later fiat names.
+                std::mem::swap(&mut self.proof_check_program, &mut e.proof_check_program);
                 *self = *e;
                 Ok(())
             }
@@ -1068,8 +1111,8 @@ impl EGraph {
 
         let can_subsume = match decl.subtype {
             FunctionSubtype::Constructor => true,
-            // View tables (functions with term_constructor) need subsumption support
-            FunctionSubtype::Custom => decl.term_constructor.is_some(),
+            // View tables need subsumption support
+            FunctionSubtype::Custom => decl.internal_view.is_some(),
         };
 
         use egglog_bridge::{DefaultVal, MergeFn};
@@ -1088,9 +1131,7 @@ impl EGraph {
             },
         };
         // Proof-node relations are write-once records identified by a freshly
-        // minted final id; extraction only scans them. Keep ordinary term-node
-        // relations keyed in this rollout to preserve their existing exact-row
-        // deduplication and public function compatibility.
+        // minted final id; extraction only scans them.
         let is_proof_node = decl.internal_term_node
             && input
                 .last()
@@ -1108,7 +1149,7 @@ impl EGraph {
                 decl.name
             );
             assert!(
-                decl.term_constructor.is_none(),
+                decl.internal_view.is_none(),
                 "proof-node relation `{}` cannot be an FD view",
                 decl.name
             );
@@ -1139,19 +1180,20 @@ impl EGraph {
             name: decl.name.to_string(),
             can_subsume,
         };
-        let backend_id = if is_proof_node {
-            self.backend.add_internal_flat_table(config)
-        } else {
-            self.backend.add_table(config)
-        };
-        assert_eq!(backend_id, own_id);
-
         let function = Function {
             decl: decl.clone(),
             schema: ResolvedSchema { input, outputs },
             can_subsume,
-            backend_id,
+            backend_id: own_id,
         };
+        let (kind, input_arity, output_arity) = function.table_read_projection();
+        let backend_id = if is_proof_node {
+            self.backend.add_internal_flat_table(config)
+        } else {
+            self.backend
+                .add_table_with_read_projection(config, kind, input_arity, output_arity)
+        };
+        assert_eq!(backend_id, function.backend_id);
 
         let old = self.functions.insert(decl.name.clone(), function);
         if old.is_some() {
@@ -1164,11 +1206,8 @@ impl EGraph {
         Ok(())
     }
 
-    /// Extract rows of a table using the default cost model with name sym
-    /// The `include_output` parameter controls whether the output column is always extracted
-    /// For functions, the output column is usually useful
-    /// Print up to `n` the tuples in a given function.
-    /// Print all tuples if `n` is not provided.
+    /// Print up to `n` of a function's tuples, or all of them when `n` is
+    /// `None`.
     pub fn print_function(
         &mut self,
         sym: &str,
@@ -1192,7 +1231,7 @@ impl EGraph {
         let f = self
             .functions
             .get(sym)
-            // function_to_dag should have checked this
+            // function_to_dag resolved the same name, so this cannot miss
             .unwrap();
         let terms_and_outputs: Vec<_> = terms.into_iter().zip(outputs.unwrap()).collect();
         let output = CommandOutput::PrintFunction(f.clone(), termdag, terms_and_outputs, mode);
@@ -1209,7 +1248,8 @@ impl EGraph {
 
     /// Provide a program for use in proof checking.
     /// This enables testing of a desugared egglog proof program outside of proof mode.
-    /// When proof_testing is true, turns all the `check` commands into `prove` commands.
+    /// When proof_testing is true, turns every `check` outside `fail` into a `prove` command.
+    /// Checks inside `fail` remain negative assertions.
     /// Not intended for general use but needed in files.rs, so public but hidden.
     #[doc(hidden)]
     pub fn set_proof_checking_program(
@@ -1236,14 +1276,9 @@ impl EGraph {
     /// `(name size)` pairs, e.g. `((name size) ...)`.
     pub fn print_size(&self, sym: Option<&str>) -> Result<CommandOutput, Error> {
         if let Some(sym) = sym {
-            // In proof mode, we have view tables instead of term tables.
-            // So we do a linear scan to find the view table first, falling back on the normal table otherwise.
-            // (We don't check the proof mode flag so that this still works after desugaring)
             let f = self
                 .functions
-                .values()
-                .find(|f| f.decl.term_constructor.as_deref() == Some(sym))
-                .or_else(|| self.functions.get(sym))
+                .get(sym)
                 .ok_or(TypeError::UnboundFunction(sym.to_owned(), span!()))?;
             // Skip hidden and let_binding functions
             if f.decl.internal_hidden || f.decl.internal_let {
@@ -1254,19 +1289,11 @@ impl EGraph {
             Ok(CommandOutput::PrintFunctionSize(size))
         } else {
             // Print size of all non-hidden, non-let_binding functions
-            // For view tables, use the term_constructor name instead
             let mut lens = self
                 .functions
                 .iter()
                 .filter(|(_, f)| !f.decl.internal_hidden && !f.decl.internal_let)
-                .map(|(sym, f)| {
-                    let name = f
-                        .decl
-                        .term_constructor
-                        .clone()
-                        .unwrap_or_else(|| sym.clone());
-                    (name, self.backend.table_size(f.backend_id))
-                })
+                .map(|(sym, f)| (sym.clone(), self.backend.table_size(f.backend_id)))
                 .collect::<Vec<_>>();
 
             // Function name's alphabetical order
@@ -1600,10 +1627,8 @@ impl EGraph {
                 .ok_or_else(|| crate::api::ApiError::MissingTable {
                     name: name.to_owned(),
                 })?;
-        // An internal term relation (under term encoding) has `Custom` subtype but
-        // is not a user-facing function table — it reads as enodes via
-        // `constructor_enodes`, so reject it here.
-        if function.subtype() != FunctionSubtype::Custom || function.is_relation_term() {
+        let (kind, input_arity, output_arity) = function.table_read_projection();
+        if kind == TableKind::Constructor {
             return Err(crate::api::ApiError::WrongSubtype {
                 name: name.to_owned(),
                 expected: "function",
@@ -1611,7 +1636,7 @@ impl EGraph {
             }
             .into());
         }
-        if function.schema.outputs.len() != 1 {
+        if output_arity != 1 {
             return Err(crate::api::ApiError::TupleOutputUnsupported {
                 name: name.to_owned(),
                 method: "function_entries",
@@ -1619,13 +1644,9 @@ impl EGraph {
             .into());
         }
         self.backend.for_each_while(function.backend_id, |row| {
-            let (output, inputs) = row
-                .vals
-                .split_last()
-                .expect("function row has at least an output column");
             f(FunctionEntry {
-                inputs,
-                output: *output,
+                inputs: &row.vals[..input_arity],
+                output: row.vals[input_arity],
                 subsumed: row.subsumed,
             })
         });
@@ -1658,12 +1679,8 @@ impl EGraph {
                 .ok_or_else(|| crate::api::ApiError::MissingTable {
                     name: name.to_owned(),
                 })?;
-        // A real constructor, or (under term encoding) an internal term relation,
-        // reads as enodes. The eclass id is the row's output column for a real
-        // constructor, or the last input column for a term relation (whose trailing
-        // `Unit` output is then ignored) — `extraction_output_index` picks the right
-        // one and `extraction_num_children` the matching children count.
-        if function.subtype() != FunctionSubtype::Constructor && !function.is_relation_term() {
+        let (kind, input_arity, _) = function.table_read_projection();
+        if kind != TableKind::Constructor {
             return Err(crate::api::ApiError::WrongSubtype {
                 name: name.to_owned(),
                 expected: "constructor",
@@ -1671,12 +1688,10 @@ impl EGraph {
             }
             .into());
         }
-        let num_children = function.extraction_num_children();
-        let eclass_idx = function.extraction_output_index();
         self.backend.for_each_while(function.backend_id, |row| {
             f(Enode {
-                children: &row.vals[..num_children],
-                eclass: row.vals[eclass_idx],
+                children: &row.vals[..input_arity],
+                eclass: row.vals[input_arity],
                 subsumed: row.subsumed,
             })
         });
@@ -2125,7 +2140,7 @@ impl EGraph {
                     // proofs when replaying an encoded program in a fresh e-graph.
                     names.fiat_prefix = pc.fiat;
                     names.proj_constructor = pc.proj;
-                    names.proj_all_prefix = pc.proj_all;
+                    names.proj_prim_prefix = pc.proj_prim;
                 }
                 log::info!("Declared sort {name}.")
             }
@@ -2288,29 +2303,46 @@ impl EGraph {
                 return Ok(vec![res]);
             }
             ResolvedNCommand::Fail(span, cmds) => {
-                let mut any_failed = false;
-                for c in cmds {
-                    if let Err(e) = self.run_command(c) {
-                        log::info!("Command failed as expected: {e}");
-                        any_failed = true;
-                        break;
+                // A single check is read-only, so avoid cloning the e-graph for
+                // the overwhelmingly common negative-assertion form.
+                if matches!(cmds.as_slice(), [ResolvedNCommand::Check(..)]) {
+                    let check = cmds.into_iter().next().unwrap();
+                    return match self.run_command(check) {
+                        Err(error) => {
+                            log::info!("Command failed as expected: {error}");
+                            Ok(vec![])
+                        }
+                        Ok(_) => Err(Error::ExpectFail(span)),
+                    };
+                }
+
+                self.push();
+                let failure = cmds
+                    .into_iter()
+                    .find_map(|command| self.run_command(command).err());
+                self.pop()
+                    .expect("the snapshot pushed for `fail` must still be present");
+                return match failure {
+                    Some(error) => {
+                        log::info!("Command failed as expected: {error}");
+                        Ok(vec![])
                     }
-                }
-                if !any_failed {
-                    return Err(Error::ExpectFail(span));
-                }
+                    None => Err(Error::ExpectFail(span)),
+                };
             }
-            ResolvedNCommand::Input { span, name, file } => {
+            ResolvedNCommand::Input {
+                span,
+                name,
+                file,
+                proof_base,
+            } => {
                 // An encoded program (term/proof mode, or a replayed desugared
-                // program) keeps `(input …)` targeting the encoded *term relation*,
-                // loaded natively into the encoded tables; a plain program targets a
-                // user relation/constructor loaded by the relation loader.
-                if self
-                    .functions
-                    .get(&name)
-                    .is_some_and(|f| f.is_relation_term())
-                {
-                    self.native_input(span, &name, file)?;
+                // program) declares nothing under the function's own name, so the
+                // name resolving to a view is what says the rows go into the
+                // encoded tables; a plain program targets a user
+                // relation/constructor loaded by the relation loader.
+                if self.functions.get(&name).is_some_and(|f| f.is_fd_view()) {
+                    self.native_input(span, &name, file, proof_base)?;
                 } else {
                     self.input_file(span, &name, file)?;
                 }
@@ -2538,54 +2570,42 @@ impl EGraph {
         Ok(())
     }
 
-    /// Load `(input …)` facts natively into the term/proof encoding's tables. For
-    /// each row we mint a term id (and, when the encoding carries proofs, its
-    /// fiat-proof id) and insert the encoded term-relation, view, and proof rows
-    /// directly. Rows are plain-inserted (no get-or-insert): a duplicate view key
-    /// is left to the view's merge/no-merge handling. The proof checker keeps using
-    /// the per-row top-level fiat actions (`desugared_before_proofs`); this just
-    /// materializes the same table state.
+    /// Load `(input …)` facts natively into the encoding's tables. Each row gets
+    /// a fresh e-class and goes straight into the function's view, with the fiat
+    /// justifying it when the encoding carries proofs. Rows are plain-inserted
+    /// (no get-or-insert): a duplicate view key is left to the view's
+    /// merge/no-merge handling.
     ///
-    /// Everything is derived from the encoded schema + annotations (never the
-    /// pre-encoding `FuncType`), so it also works when a desugared program is
-    /// replayed in a fresh e-graph. `func_name` names the encoded *term relation*;
-    /// the encoded shape is read off the term and view schemas:
-    /// * constructor / relation (`term_inputs == view_inputs + 1`) — term row
-    ///   `(F children… term-id) Unit` and FD view `(children…) -> (term-id,
-    ///   proof)`.
-    /// * custom `:merge` / `:no-merge` (`term_inputs == view_inputs + 2`) — term
-    ///   row `(f children… output term-id) Unit` and view row `(children… output
-    ///   proof)`.
-    fn native_input(&mut self, span: Span, func_name: &str, file: String) -> Result<(), Error> {
-        // The encoded term relation keeps the user's original name. Its last input
-        // column is the minted term id; the columns before it are the CSV base
-        // columns (children, plus a custom function's output value).
-        let term = self
+    /// The row shape is read off the view, so this also works when a desugared
+    /// program is replayed in a fresh e-graph. `proof_base` is where
+    /// `lower_inputs` put this input's per-row actions in the program proof
+    /// checking reads: row `i` is justified by naming the action at
+    /// `proof_base + i`.
+    fn native_input(
+        &mut self,
+        span: Span,
+        func_name: &str,
+        file: String,
+        proof_base: Option<usize>,
+    ) -> Result<(), Error> {
+        let view = self
             .functions
             .get(func_name)
             .unwrap_or_else(|| panic!("Unrecognized function name {func_name}"));
-        let f_id = term.backend_id;
-        let term_input = term.schema.input.clone();
-        let n_term_input = term_input.len();
-        let term_id_sort = term_input[n_term_input - 1].name().to_string();
-        let csv_sorts: Vec<ArcSort> = term_input[..n_term_input - 1].to_vec();
-
-        // Locate the view by its `:internal-term-constructor` back-reference (as
-        // extraction / print-size do) and read the encoded shape off it.
-        let view = self
-            .functions
-            .values()
-            .find(|g| g.decl.term_constructor.as_deref() == Some(func_name))
-            .unwrap_or_else(|| panic!("no encoded view for {func_name}"));
         let view_id = view.backend_id;
-        let view_n_inputs = view.schema.input.len();
         // Proofs are on for this relation iff the view's proof column (its last
         // output) is not `Unit`; term-encoding-only mode uses `Unit` there.
         let proofs = view.schema.outputs.last().unwrap().name() != "Unit";
-        // Constructor iff the FD view keys on all children and the term relation
-        // adds exactly the term id; a custom's (`:merge` or `:no-merge`) term
-        // relation also carries the output column.
-        let is_constructor = view.is_fd_view() && n_term_input == view_n_inputs + 1;
+        // A constructor's and a relation's output is the e-class the load mints;
+        // a function's is a value the rows carry. That is the split the view
+        // records, and it has to agree with the one `input_actions` made when it
+        // built the per-row actions a fiat now names.
+        let output_is_minted = view.rows_are_enodes();
+        // The CSV columns: the view's children, plus any output they carry.
+        let mut csv_sorts: Vec<ArcSort> = view.schema.input.clone();
+        if !output_is_minted {
+            csv_sorts.push(view.schema.outputs[0].clone());
+        }
 
         let rows = Self::read_input_rows(self.fact_directory.as_deref(), &csv_sorts, &span, &file)?;
         let unit_val = self.backend.base_values().get(());
@@ -2608,31 +2628,36 @@ impl EGraph {
             })
             .collect();
 
-        // The term-id sort's fiat relation, named off the prefix the `Proof`
-        // sort's `:internal-proof-names` records.
-        let fiat_table = proofs.then(|| {
-            let fiat = self.proof_state.proof_names.fiat(&term_id_sort);
-            self.functions
-                .get(&fiat)
-                .unwrap_or_else(|| panic!("no fiat relation for sort {term_id_sort}"))
-                .backend_id
+        // Each row's existence is justified by the per-row action `lower_inputs`
+        // put in the program proof checking reads, named by position like every
+        // other fiat, so nothing here names the term the row built. The encoder
+        // stamped where those actions start onto the command.
+        let fiat_term = proofs.then(|| {
+            let relation = self.proof_state.proof_names.fiat_term_constructor.clone();
+            let table = self
+                .functions
+                .get(&relation)
+                .unwrap_or_else(|| panic!("no fiat-term relation"))
+                .backend_id;
+            let base = proof_base.expect("an encoded input carries where its rows start");
+            // A constructor row is the whole per-row action; a custom row is the
+            // `set`'s row node, which follows its argument and value nodes — one
+            // literal each, so one per CSV column.
+            let node = if output_is_minted { 0 } else { csv_sorts.len() };
+            (table, base, node)
         });
 
         let num_facts = value_rows.len();
         let mut batch: Vec<(egglog_bridge::FunctionId, Vec<Value>)> = Vec::new();
-        for value_row in value_rows {
+        for (row_index, value_row) in value_rows.into_iter().enumerate() {
             let fv = self.backend.fresh_id();
-            // Term-relation row: CSV columns (children [+ output]) + term id + Unit.
-            let mut frow = value_row.clone();
-            frow.push(fv);
-            frow.push(unit_val);
-            batch.push((f_id, frow));
 
-            let view_proof = if let Some(fiat_id) = fiat_table {
-                // Fiat proof of the base fact: `@Fiat_<Sort>(fv, fv)` (see
-                // `fiat_reflexive_proof`).
+            let view_proof = if let Some((fiat_id, base, node)) = fiat_term {
+                // `(FiatTerm <this row's action> <node> pf)`.
                 let pf = self.backend.fresh_id();
-                batch.push((fiat_id, vec![fv, fv, pf, unit_val]));
+                let at = self.backend.base_values().get((base + row_index) as i64);
+                let node = self.backend.base_values().get(node as i64);
+                batch.push((fiat_id, vec![at, node, pf, unit_val]));
                 pf
             } else {
                 unit_val
@@ -2642,7 +2667,7 @@ impl EGraph {
             // custom view stores the base output (already in `value_row`). The
             // proof column follows (`Unit` when the encoding carries no proofs).
             let mut vrow = value_row;
-            if is_constructor {
+            if output_is_minted {
                 vrow.push(fv);
             }
             vrow.push(view_proof);
@@ -2663,6 +2688,7 @@ impl EGraph {
         command: Command,
     ) -> Result<Vec<ResolvedNCommand>, Error> {
         let desugared = desugar_command(command, &mut self.parser, self.proof_state.proof_testing)?;
+        let proofs_enabled = self.proof_state.proofs_enabled;
         if let Some(original_typechecking) = self.proof_state.original_typechecking.as_mut() {
             // Typecheck using the original egraph
             // TODO this is ugly- we don't need an entire e-graph just for type information.
@@ -2674,6 +2700,7 @@ impl EGraph {
                 if let Err(reason) = command_supports_proof_encoding(
                     &command.to_command(),
                     &original_typechecking.type_info,
+                    proofs_enabled,
                 ) {
                     let command_text = format!("{}", command.to_command());
                     return Err(Error::UnsupportedProofCommand {
@@ -2749,8 +2776,20 @@ impl EGraph {
                 self.names.check_shadowing(command)?;
             }
 
+            let numbered_before = self.proof_state.global_actions_numbered;
             let term_encoding_added =
                 ProofInstrumentor::add_term_encoding(self, typechecked_no_globals)?;
+            // A fiat names a global action by index, so the encoder's numbering
+            // has to be the one `gather_global_actions` will walk. It counts the
+            // encoded program's commands while the checker walks the lowered
+            // one; the two agree only because neither lowering changes how many
+            // global actions a command contributes.
+            debug_assert_eq!(
+                self.proof_state.global_actions_numbered - numbered_before,
+                crate::proofs::proof_checker::gather_global_actions(&per_row_before_proofs).count(),
+                "the encoder numbered a different number of global actions than this command \
+                 contributes to the program proof checking reads"
+            );
             let mut new_typechecked = vec![];
             for new_cmd in term_encoding_added {
                 let desugared =
@@ -4007,6 +4046,28 @@ mod tests {
     }
 
     #[test]
+    fn proof_support_adds_no_fail_specific_term_read_restrictions() {
+        for source in [
+            "(datatype N (A)) (let $a (A)) (fail (extract $a -1))",
+            "(datatype N (A)) (relation R (N)) (let $a (A)) \
+             (R $a) (fail (delete (R $a)) (panic \"stop\"))",
+        ] {
+            let mut egraph = EGraph::default();
+            let resolved = egraph.resolve_program(None, source).unwrap();
+            assert!(
+                program_supports_proofs(&resolved, &egraph.type_info),
+                "{source}"
+            );
+        }
+
+        let source = "(datatype N (A)) (let $a (A)) \
+                      (fail (output \"term.txt\" $a) (panic \"stop\"))";
+        let mut egraph = EGraph::default();
+        let resolved = egraph.resolve_program(None, source).unwrap();
+        assert!(!program_supports_proofs(&resolved, &egraph.type_info));
+    }
+
+    #[test]
     fn proof_support_rejects_unstable_fn_primitives_without_validators() {
         let mut egraph = EGraph::default();
         let resolved = egraph
@@ -4379,6 +4440,28 @@ mod tests {
             .parse_and_run_program(None, "(unstable-combined-ruleset combined missing)")
             .unwrap_err();
         assert!(matches!(err, Error::NoSuchRuleset(name, _) if name == "missing"));
+    }
+
+    #[test]
+    fn test_rule_rejects_combined_and_unbound_rulesets() {
+        let mut egraph = EGraph::default();
+        egraph
+            .parse_and_run_program(
+                None,
+                "(relation number (i64)) (ruleset base) \
+                 (unstable-combined-ruleset rules1and2 base)",
+            )
+            .unwrap();
+
+        let err = egraph
+            .parse_and_run_program(None, "(rule () ((number 1)) :ruleset rules1and2)")
+            .unwrap_err();
+        assert!(matches!(err, Error::CombinedRulesetError(name, _) if name == "rules1and2"));
+
+        let err = egraph
+            .parse_and_run_program(None, "(rule () ((number 2)) :ruleset unboundruleset)")
+            .unwrap_err();
+        assert!(matches!(err, Error::NoSuchRuleset(name, _) if name == "unboundruleset"));
     }
 
     #[test]
