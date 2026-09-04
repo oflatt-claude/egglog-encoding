@@ -963,12 +963,6 @@ plus one fact the shape does not carry: what `@UF` is declared as. Both merge bo
 `mergeBody`, whose single `set` writes `@UF` at one key column and two value columns, so the
 condition is `ufDecl`'s own widths. -/
 
-/-- **A term relation is never the union-find table**, by the last character. -/
-theorem termName_ne_ufName {f : FnName} : termName f ≠ ufName := by
-  intro h
-  have h2 := congrArg (fun s => (String.toList s).reverse) h
-  simp [termName, ufName, String.toList_append, List.reverse_append] at h2
-
 /-- `Signature.MergeShape` along the fold a program's declarations perform. -/
 theorem mergeShape_foldl {p : Program} (hp : ∀ c ∈ p, c.MergeShapeOk) :
     ∀ {sig : Signature}, sig.MergeShape →
@@ -2317,6 +2311,354 @@ theorem encOk_preludeState {P : Program} (hdom : P.EncodeDomain) (hag : P.Aritie
     d₀.EncOk P (encodeSig P) Database.empty :=
   preludeState_encOk (encodeSig_mergesLegal hdom) (maintenance_writeLegal hdom hag) hprel
 
+/-! ## Descent, run-wide
+
+**`FDatabase.UFRowsDescend` at the state `execM` returned, proved.** The state-level halves are
+`Encoding/Correspond.lean`'s — the three writers, the firing fold, the merge pass and the merge
+phase — and what is left here is the run: the prelude, whose state holds **no row at all**, and
+then `encodeCmds`' blocks carried command by command against `FDatabase.EncBase`.
+
+Unlike `execM_soundTerms` this owes nothing to a source-rule head: descent is a condition on
+the `@UF` writes an action *syntactically* performs (`Action.UFWriteSafe`), and the one write
+that is not syntactic — `pathCompressRule`'s — reads only the rows its own query matched. So
+the induction needs neither `EncodedHeadSound` nor `Program.HeadsScoped`, and the only clause
+beyond the domain it spends is `Program.AritiesAgree`, and that solely to inhabit
+`FDatabase.EncBase` at the prelude (`encOk_preludeState`).
+
+`hufsg` is the one fact about the signature the argument cannot do without: `@UF` has to carry
+a `:merge`, or `patternHolds` would read a path-compression premise out of `terms` — where
+superseded edges live forever — instead of out of `rows`. `encodeSig_ufName` is it discharged
+at the prelude's own signature. -/
+
+/-- **Whether a command can write an `@UF` row the invariant would have to check.** Only a
+top-level action can; a `.rule`, a `.run` and a `.saturate` write through `d.rules`, which
+`FDatabase.RulesEncoded` covers, and a `.decl` writes no data. -/
+def Cmd.UFWriteOk : Cmd → Prop
+  | .action a => a.UFWriteSafe
+  | _ => True
+
+/-- The `@UF` declaration, as the merge-function test the row-valued reading needs. -/
+theorem encodeSig_mergeOf_ufName {P : Program} (hdom : P.EncodeDomain) :
+    (encodeSig P).mergeOf ufName ≠ none := by
+  rw [Signature.mergeOf, encodeSig_ufName hdom]
+  exact fun hc => absurd hc (by simp [ufDecl])
+
+/-- **Rounds of one ruleset descend**, given the bundle at each round's own start. -/
+theorem FDatabase.EncBase.runSaturateM_ufRowsDescend {P : Program} {sg : Signature}
+    (hufsg : sg.mergeOf ufName ≠ none) {R : RulesetName} :
+    ∀ (n : Nat) {d d' : FDatabase}, d.EncBase P sg → d.UFRowsDescend →
+      d.runSaturateM R n = some d' → d'.UFRowsDescend := by
+  intro n d d' hb hdes hrun
+  refine (runSaturateM_closed (R := R) (Φ := fun x => x.EncBase P sg ∧ x.UFRowsDescend)
+    ?_ n ⟨hb, hdes⟩ hrun).2
+  intro x y hx hstep
+  have hstep' : x.execCmdM (Cmd.run R) = some y := hstep
+  refine ⟨hx.1.execCmdM (c := Cmd.run R) trivial trivial trivial trivial hstep', ?_⟩
+  refine runRoundM_ufRowsDescend (by rw [hx.1.sig]; exact hx.1.shape)
+    (by rw [hx.1.sig]; exact hx.1.merges) hx.1.inv hx.1.nounions hx.1.wl' ?_ hx.2 hstep
+  exact firingsUFDescend_of_rulesEncoded hx.1.rules hx.1.eqsRefl
+    (by rw [hx.1.sig]; exact hufsg) hx.2
+
+/-- **One command of the aligned run.** The same five side conditions
+`FDatabase.EncBase.execCmdM` takes, plus the one about `@UF` writes. -/
+theorem FDatabase.EncBase.execCmdM_ufRowsDescend {P : Program} {sg : Signature}
+    (hufsg : sg.mergeOf ufName ≠ none) {d d' : FDatabase} {c : Cmd} (hb : d.EncBase P sg)
+    (huf : c.UnionFree) (hnd : c.NoDecl) (hwl : c.WriteLegal sg) (hok : c.UFWriteOk)
+    (hdes : d.UFRowsDescend) (hs : d.execCmdM c = some d') : d'.UFRowsDescend := by
+  have hmg : d.sig.mergeOf ufName ≠ none := by rw [hb.sig]; exact hufsg
+  have hfire : d.FiringsUFDescend :=
+    firingsUFDescend_of_rulesEncoded hb.rules hb.eqsRefl hmg hdes
+  cases c with
+  | action a =>
+    rw [FDatabase.execCmdM] at hs
+    obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp hs
+    refine mergeSaturateF_ufRowsDescend mergeFuel ?_ ?_ ?_ ?_
+      (execAction_ufRowsDescend hok hdes h₁) h₂
+    · rw [FDatabase.execAction_sig h₁, hb.sig]; exact hb.shape
+    · rw [FDatabase.execAction_sig h₁, hb.sig]; exact hb.merges
+    · exact hb.inv.execAction (by rw [hb.sig]; exact hwl) h₁
+    · exact execAction_noUnions huf hb.nounions h₁
+  | rule r =>
+    rw [FDatabase.execCmdM, Option.some.injEq] at hs
+    exact hs ▸ hdes.mono fun _ hr => hr
+  | run R =>
+    rw [FDatabase.execCmdM] at hs
+    exact runRoundM_ufRowsDescend (by rw [hb.sig]; exact hb.shape)
+      (by rw [hb.sig]; exact hb.merges) hb.inv hb.nounions hb.wl' hfire hdes hs
+  | saturate R =>
+    rw [FDatabase.execCmdM] at hs
+    exact FDatabase.EncBase.runSaturateM_ufRowsDescend hufsg runFuel hb hdes hs
+  | decl f dc => exact (hnd : False).elim
+
+/-- **A block of them.** -/
+theorem FDatabase.EncBase.execProgramM_ufRowsDescend {P : Program} {sg : Signature}
+    (hufsg : sg.mergeOf ufName ≠ none) {p : Program}
+    (hro : ∀ c ∈ p, Cmd.RulesEncodedOk P c) (huf : ∀ c ∈ p, c.UnionFree)
+    (hnd : ∀ c ∈ p, c.NoDecl) (hwl : ∀ c ∈ p, c.WriteLegal sg) (hok : ∀ c ∈ p, c.UFWriteOk) :
+    ∀ {d D : FDatabase}, d.EncBase P sg → d.UFRowsDescend → d.execProgramM p = some D →
+      D.UFRowsDescend := by
+  induction p with
+  | nil =>
+    intro d D _ hdes hs
+    rw [FDatabase.execProgramM, Option.some.injEq] at hs
+    exact hs ▸ hdes
+  | cons c cs ih =>
+    intro d D hb hdes hs
+    rw [FDatabase.execProgramM] at hs
+    obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp hs
+    refine ih (fun c' hc' => hro c' (List.mem_cons_of_mem c hc'))
+      (fun c' hc' => huf c' (List.mem_cons_of_mem c hc'))
+      (fun c' hc' => hnd c' (List.mem_cons_of_mem c hc'))
+      (fun c' hc' => hwl c' (List.mem_cons_of_mem c hc'))
+      (fun c' hc' => hok c' (List.mem_cons_of_mem c hc'))
+      (hb.execCmdM (hro c List.mem_cons_self) (huf c List.mem_cons_self)
+        (hnd c List.mem_cons_self) (hwl c List.mem_cons_self) h₁)
+      (hb.execCmdM_ufRowsDescend hufsg (huf c List.mem_cons_self) (hnd c List.mem_cons_self)
+        (hwl c List.mem_cons_self) (hok c List.mem_cons_self) hdes h₁) h₂
+
+/-- **A command of `encodeCmds`' output is a command of some `encodeCmd`'s**, which is what
+lets the per-command read-backs stated over `encodeCmd` be applied along the block. -/
+theorem mem_encodeCmd_of_mem_encodeCmds {P : Program} : ∀ (p : Program), (∀ c ∈ p, c ∈ P) →
+    ∀ (n i : Nat), ∀ c' ∈ (encodeCmds p n i).1,
+      ∃ c, c ∈ P ∧ ∃ (m j : Nat), c' ∈ (encodeCmd c m j).1
+  | [], _, _, _ => by simp [encodeCmds]
+  | c :: cs, hp, n, i => by
+      intro c' hc'
+      rw [encodeCmds_cons_fst] at hc'
+      rcases List.mem_append.mp hc' with h | h
+      · exact ⟨c, hp c List.mem_cons_self, n, i, h⟩
+      · exact mem_encodeCmd_of_mem_encodeCmds cs
+          (fun x hx => hp x (List.mem_cons_of_mem c hx)) _ _ c' h
+
+/-- **The `union` head is the only `set` at `@UF` a block emits.** -/
+theorem ufWriteOk_encodeCmd (c : Cmd) (n i : Nat) : ∀ c' ∈ (encodeCmd c n i).1, c'.UFWriteOk := by
+  intro c' hc'
+  cases c with
+  | action a =>
+      rw [encodeCmd_action_fst] at hc'
+      rcases List.mem_append.mp hc' with h | h
+      · obtain ⟨b, hb, rfl⟩ := List.mem_map.mp h
+        exact encodeAction_ufWriteSafe fiatE a n b hb
+      · simp only [List.mem_cons, List.not_mem_nil, or_false] at h
+        rcases h with rfl; trivial
+  | rule r =>
+      rw [encodeCmd_rule_fst] at hc'
+      simp only [List.mem_cons, List.not_mem_nil, or_false] at hc'
+      rcases hc' with rfl; trivial
+  | run R =>
+      simp only [encodeCmd, List.mem_cons, List.not_mem_nil, or_false] at hc'
+      rcases hc' with rfl | rfl <;> trivial
+  | saturate R =>
+      simp only [encodeCmd, List.mem_cons, List.not_mem_nil, or_false] at hc'
+      rcases hc' with rfl | rfl <;> trivial
+  | decl f dc => simp [encodeCmd] at hc'
+
+/-- **`FDatabase.UFRowsDescend` at the state `execM` returned.** Every live `@UF` row of an
+encoded run's target runs `ordering-max ↦ ordering-min`, so `FDatabase.exists_ufRowRoot` applies
+there: every id reaches a point with no outgoing row, along a path that strictly descends
+`Term.blt` inside a finite list.
+
+**This is one of the two hypotheses the rebuild residue's forest argument rests on**, and it is
+now a theorem rather than a hypothesis. What is still a hypothesis is
+`FDatabase.UFRowsForest` — one outgoing edge per key — which is the merge fixpoint at `@UF`'s
+own table and wants a lexicographic measure, since `mergeBody` writes into `@UF` and the
+per-key count there can grow inside the very pass that shrinks a view key's
+(`FDatabase.mergeRound_countP_lt` is the view half). -/
+theorem execM_encode_ufRowsDescend {P : Program} (hdom : P.EncodeDomain) (hag : P.AritiesAgree)
+    {tgt : FDatabase} (htgt : execM (encode P) = some tgt) : tgt.UFRowsDescend := by
+  rw [execM, encode] at htgt
+  obtain ⟨d₀, hprel, hcmds⟩ := FDatabase.execProgramM_append htgt
+  have hb₀ : d₀.EncBase P (encodeSig P) := (encOk_preludeState hdom hag hprel).base
+  have hdes₀ : d₀.UFRowsDescend := by
+    have hrows := (execProgramM_data_of_declOrRule (declOrRule_encodePrelude P) hprel).2.1
+    refine FDatabase.ufRowsDescend_iff.mpr fun a b pf hmem => ?_
+    rw [hrows, show FDatabase.empty.rows = ([] : List Row) from rfl] at hmem
+    exact absurd hmem (by simp)
+  refine FDatabase.EncBase.execProgramM_ufRowsDescend (encodeSig_mergeOf_ufName hdom)
+    (rulesEncodedOk_encodeCmds P (fun _ hc => hc) 0 0) (encodeCmds_unionFree P 0 0)
+    (fun c hc => ?_) (fun c hc => ?_) (fun c hc => ?_) hb₀ hdes₀ hcmds
+  · obtain ⟨c₀, -, m, j, hmem⟩ := mem_encodeCmd_of_mem_encodeCmds P (fun _ h => h) 0 0 c hc
+    exact noDecl_encodeCmd c₀ m j c hmem
+  · obtain ⟨c₀, hc₀, m, j, hmem⟩ := mem_encodeCmd_of_mem_encodeCmds P (fun _ h => h) 0 0 c hc
+    exact encodedWriteLegal hdom hag c₀ hc₀ m j c hmem
+  · obtain ⟨c₀, -, m, j, hmem⟩ := mem_encodeCmd_of_mem_encodeCmds P (fun _ h => h) 0 0 c hc
+    exact ufWriteOk_encodeCmd c₀ m j c hmem
+
+/-- **Descent with the arity clause spelled out.** `Program.EncodeDomain` implies it
+(`Program.EncodeDomain.aritiesAgree'`); it is named here for the same reason the completeness
+half names it. -/
+theorem execM_ufRowsDescend {P : Program} (hdom : P.EncodeDomain) {tgt : FDatabase}
+    (htgt : execM (encode P) = some tgt) : tgt.UFRowsDescend :=
+  execM_encode_ufRowsDescend hdom hdom.aritiesAgree' htgt
+
+/-- **Every id of an encoded target reaches an `@UF` row root**, with no hypothesis about the
+state left over: `FDatabase.exists_ufRowRoot` at `execM_ufRowsDescend`. Uniqueness of that root
+is `FDatabase.ufRowRoot_unique` and still wants `FDatabase.UFRowsForest`. -/
+theorem execM_exists_ufRowRoot {P : Program} (hdom : P.EncodeDomain) {tgt : FDatabase}
+    (htgt : execM (encode P) = some tgt) (a : Term) :
+    ∃ r, tgt.UFRowReach a r ∧ tgt.UFRowRoot r :=
+  FDatabase.exists_ufRowRoot (execM_ufRowsDescend hdom htgt) a
+
+
+/-! ## The forest, run-wide
+
+`FDatabase.ufRowsForest_of_settled` is a statement about a merge **fixpoint**, and every
+command of an encoded run but one ends at a fixpoint: `Cmd.action` and `Cmd.run` end in
+`FDatabase.mergeSaturateF`, and `Cmd.saturate` returns either the state it started at or a
+round's output, which is one. The exception is `Cmd.rule`, which writes no row at all — so the
+clause is carried across it rather than re-established, and that is why the induction carries
+`FDatabase.UFRowsForest` itself instead of `FDatabase.settled`.
+
+`hsy` and `htr` are the side condition `mergeOneWith_isSome_of_collide` records: `mergeBody`
+mints `@Trans (@Sym _) _`, so a signature that does not declare those two heads leaves every
+collision standing at what would otherwise be a fixpoint. The prelude's `proofDecls` declares
+both; they are hypotheses here for the same reason they are hypotheses there. -/
+
+/-- **The forest clause at a merge fixpoint of an encoded run**, with everything but the
+fixpoint read off `FDatabase.EncBase`. -/
+theorem FDatabase.EncBase.ufRowsForest {P : Program} {sg : Signature}
+    (hufsg : sg ufName = some ufDecl) (hsy : sg.IsCtor symName) (htr : sg.IsCtor transName)
+    {d : FDatabase} (hb : d.EncBase P sg) (hdes : d.UFRowsDescend) (hset : d.settled = true) :
+    d.UFRowsForest :=
+  FDatabase.ufRowsForest_of_settled hset (by rw [hb.sig]; exact hb.shape)
+    (by rw [hb.sig]; exact hb.merges) hb.inv (fun p hp => diag_closureF hb.eqsRefl hp)
+    (by rw [hb.sig]; exact hsy) (by rw [hb.sig]; exact htr)
+    (by rw [hb.sig]; exact hufsg) rfl hdes
+    (rowArgs_mem_closureF hb.eqsRefl hb.inv.index hb.subtermClosed)
+
+/-- **Rounds of one ruleset keep the forest**: each round ends in a merge phase, and the
+alternative the fixpoint test takes is the state the rounds started at. -/
+theorem FDatabase.EncBase.runSaturateM_ufRowsForest {P : Program} {sg : Signature}
+    (hufsg : sg ufName = some ufDecl) (hsy : sg.IsCtor symName) (htr : sg.IsCtor transName)
+    {R : RulesetName} :
+    ∀ (n : Nat) {d d' : FDatabase}, d.EncBase P sg → d.UFRowsDescend → d.UFRowsForest →
+      d.runSaturateM R n = some d' → d'.UFRowsForest := by
+  intro n d d' hb hdes hfor hrun
+  have hufsgne : sg.mergeOf ufName ≠ none := by
+    rw [Signature.mergeOf, hufsg]; simp [ufDecl]
+  refine (runSaturateM_closed (R := R)
+    (Φ := fun x => x.EncBase P sg ∧ x.UFRowsDescend ∧ x.UFRowsForest) ?_ n
+    ⟨hb, hdes, hfor⟩ hrun).2.2
+  intro x y hx hstep
+  have hstep' : x.execCmdM (Cmd.run R) = some y := hstep
+  have hby : y.EncBase P sg := hx.1.execCmdM (c := Cmd.run R) trivial trivial trivial trivial hstep'
+  have hdesy : y.UFRowsDescend := by
+    refine runRoundM_ufRowsDescend (by rw [hx.1.sig]; exact hx.1.shape)
+      (by rw [hx.1.sig]; exact hx.1.merges) hx.1.inv hx.1.nounions hx.1.wl' ?_ hx.2.1 hstep
+    exact firingsUFDescend_of_rulesEncoded hx.1.rules hx.1.eqsRefl
+      (by rw [hx.1.sig]; exact hufsgne) hx.2.1
+  refine ⟨hby, hdesy, ?_⟩
+  rw [FDatabase.runRoundM] at hstep
+  exact FDatabase.EncBase.ufRowsForest hufsg hsy htr hby hdesy
+    (FDatabase.mergeSaturateF_settled mergeFuel hstep)
+
+/-- **One command of the aligned run keeps the forest.** -/
+theorem FDatabase.EncBase.execCmdM_ufRowsForest {P : Program} {sg : Signature}
+    (hufsg : sg ufName = some ufDecl) (hsy : sg.IsCtor symName) (htr : sg.IsCtor transName)
+    {d d' : FDatabase} {c : Cmd} (hb : d.EncBase P sg)
+    (huf : c.UnionFree) (hnd : c.NoDecl) (hwl : c.WriteLegal sg) (hok : c.UFWriteOk)
+    (hdes : d.UFRowsDescend) (hfor : d.UFRowsForest) (hs : d.execCmdM c = some d') :
+    d'.UFRowsForest := by
+  have hufsgne : sg.mergeOf ufName ≠ none := by
+    rw [Signature.mergeOf, hufsg]; simp [ufDecl]
+  have hbd' : ∀ (hro : Cmd.RulesEncodedOk P c), d'.EncBase P sg := fun hro =>
+    hb.execCmdM hro huf hnd hwl hs
+  have hdes' : d'.UFRowsDescend :=
+    hb.execCmdM_ufRowsDescend hufsgne huf hnd hwl hok hdes hs
+  cases c with
+  | action a =>
+    have hb' : d'.EncBase P sg := hbd' trivial
+    rw [FDatabase.execCmdM] at hs
+    obtain ⟨d₁, -, h₂⟩ := Option.bind_eq_some_iff.mp hs
+    exact FDatabase.EncBase.ufRowsForest hufsg hsy htr hb' hdes'
+      (FDatabase.mergeSaturateF_settled mergeFuel h₂)
+  | rule r =>
+    rw [FDatabase.execCmdM, Option.some.injEq] at hs
+    exact hs ▸ (show ({ d with rules := r :: d.rules } : FDatabase).UFRowsForest from hfor)
+  | run R =>
+    have hb' : d'.EncBase P sg := hbd' trivial
+    rw [FDatabase.execCmdM, FDatabase.runRoundM] at hs
+    exact FDatabase.EncBase.ufRowsForest hufsg hsy htr hb' hdes'
+      (FDatabase.mergeSaturateF_settled mergeFuel hs)
+  | saturate R =>
+    rw [FDatabase.execCmdM] at hs
+    exact FDatabase.EncBase.runSaturateM_ufRowsForest hufsg hsy htr runFuel hb hdes hfor hs
+  | decl f dc => exact (hnd : False).elim
+
+/-- **A block of them.** -/
+theorem FDatabase.EncBase.execProgramM_ufRowsForest {P : Program} {sg : Signature}
+    (hufsg : sg ufName = some ufDecl) (hsy : sg.IsCtor symName) (htr : sg.IsCtor transName)
+    {p : Program} (hro : ∀ c ∈ p, Cmd.RulesEncodedOk P c) (huf : ∀ c ∈ p, c.UnionFree)
+    (hnd : ∀ c ∈ p, c.NoDecl) (hwl : ∀ c ∈ p, c.WriteLegal sg) (hok : ∀ c ∈ p, c.UFWriteOk) :
+    ∀ {d D : FDatabase}, d.EncBase P sg → d.UFRowsDescend → d.UFRowsForest →
+      d.execProgramM p = some D → D.UFRowsForest := by
+  have hufsgne : sg.mergeOf ufName ≠ none := by
+    rw [Signature.mergeOf, hufsg]; simp [ufDecl]
+  induction p with
+  | nil =>
+    intro d D _ _ hfor hs
+    rw [FDatabase.execProgramM, Option.some.injEq] at hs
+    exact hs ▸ hfor
+  | cons c cs ih =>
+    intro d D hb hdes hfor hs
+    rw [FDatabase.execProgramM] at hs
+    obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp hs
+    refine ih (fun c' hc' => hro c' (List.mem_cons_of_mem c hc'))
+      (fun c' hc' => huf c' (List.mem_cons_of_mem c hc'))
+      (fun c' hc' => hnd c' (List.mem_cons_of_mem c hc'))
+      (fun c' hc' => hwl c' (List.mem_cons_of_mem c hc'))
+      (fun c' hc' => hok c' (List.mem_cons_of_mem c hc'))
+      (hb.execCmdM (hro c List.mem_cons_self) (huf c List.mem_cons_self)
+        (hnd c List.mem_cons_self) (hwl c List.mem_cons_self) h₁)
+      (hb.execCmdM_ufRowsDescend hufsgne (huf c List.mem_cons_self) (hnd c List.mem_cons_self)
+        (hwl c List.mem_cons_self) (hok c List.mem_cons_self) hdes h₁)
+      (hb.execCmdM_ufRowsForest hufsg hsy htr (huf c List.mem_cons_self)
+        (hnd c List.mem_cons_self) (hwl c List.mem_cons_self) (hok c List.mem_cons_self)
+        hdes hfor h₁) h₂
+
+/-- **`FDatabase.UFRowsForest` at the state `execM` returned.** Together with
+`execM_ufRowsDescend` this is both hypotheses of the rebuild residue's forest argument, so
+`FDatabase.exists_ufRowRoot` and `FDatabase.ufRowRoot_unique` apply at an encoded target
+outright: every id reaches an `@UF` row root, and the root is unique. -/
+theorem execM_encode_ufRowsForest {P : Program} (hdom : P.EncodeDomain) (hag : P.AritiesAgree)
+    (hsy : (encodeSig P).IsCtor symName) (htr : (encodeSig P).IsCtor transName)
+    {tgt : FDatabase} (htgt : execM (encode P) = some tgt) : tgt.UFRowsForest := by
+  rw [execM, encode] at htgt
+  obtain ⟨d₀, hprel, hcmds⟩ := FDatabase.execProgramM_append htgt
+  have hb₀ : d₀.EncBase P (encodeSig P) := (encOk_preludeState hdom hag hprel).base
+  have hrows := (execProgramM_data_of_declOrRule (declOrRule_encodePrelude P) hprel).2.1
+  have hdes₀ : d₀.UFRowsDescend := by
+    refine FDatabase.ufRowsDescend_iff.mpr fun a b pf hmem => ?_
+    rw [hrows, show FDatabase.empty.rows = ([] : List Row) from rfl] at hmem
+    exact absurd hmem (by simp)
+  have hfor₀ : d₀.UFRowsForest := by
+    intro a b c hb _
+    obtain ⟨pf, hmem⟩ := hb.1
+    rw [hrows, show FDatabase.empty.rows = ([] : List Row) from rfl] at hmem
+    exact absurd hmem (by simp)
+  refine FDatabase.EncBase.execProgramM_ufRowsForest (encodeSig_ufName hdom) hsy htr
+    (rulesEncodedOk_encodeCmds P (fun _ hc => hc) 0 0) (encodeCmds_unionFree P 0 0)
+    (fun c hc => ?_) (fun c hc => ?_) (fun c hc => ?_) hb₀ hdes₀ hfor₀ hcmds
+  · obtain ⟨c₀, -, m, j, hmem⟩ := mem_encodeCmd_of_mem_encodeCmds P (fun _ h => h) 0 0 c hc
+    exact noDecl_encodeCmd c₀ m j c hmem
+  · obtain ⟨c₀, hc₀, m, j, hmem⟩ := mem_encodeCmd_of_mem_encodeCmds P (fun _ h => h) 0 0 c hc
+    exact encodedWriteLegal hdom hag c₀ hc₀ m j c hmem
+  · obtain ⟨c₀, -, m, j, hmem⟩ := mem_encodeCmd_of_mem_encodeCmds P (fun _ h => h) 0 0 c hc
+    exact ufWriteOk_encodeCmd c₀ m j c hmem
+
+/-- **Every id of an encoded target has a unique `@UF` row root.** `exists_ufRowRoot` and
+`ufRowRoot_unique` at `execM_ufRowsDescend` and `execM_encode_ufRowsForest`: the two hypotheses
+the rebuild residue's forest argument was left waiting on, both discharged. -/
+theorem execM_ufRowRoot_unique {P : Program} (hdom : P.EncodeDomain)
+    (hsy : (encodeSig P).IsCtor symName) (htr : (encodeSig P).IsCtor transName)
+    {tgt : FDatabase} (htgt : execM (encode P) = some tgt) (a : Term) :
+    ∃ r, tgt.UFRowReach a r ∧ tgt.UFRowRoot r ∧
+      ∀ s, tgt.UFRowReach a s → tgt.UFRowRoot s → s = r := by
+  obtain ⟨r, hr, hrr⟩ := FDatabase.exists_ufRowRoot (execM_ufRowsDescend hdom htgt) a
+  exact ⟨r, hr, hrr, fun s hs hsr =>
+    FDatabase.ufRowRoot_unique
+      (execM_encode_ufRowsForest hdom hdom.aritiesAgree' hsy htr htgt) hs hsr hr hrr⟩
+
 /-! ### And at a program, concretely
 
 `ENCODING.md`'s discipline for the bundle the induction carries: `wProgram` is
@@ -3503,6 +3845,37 @@ reduce in the kernel. -/
 theorem execM_soundTerms_witness {tgt : FDatabase}
     (htgt : execM (encode ncProgram) = some tgt) : tgt.SoundTerms ncSrc.toDatabase :=
   execM_soundTerms ncProgram_encodeDomain ncProgram_programStep htgt
+
+/-! ### The two proof heads are really declared
+
+`ENCODING.md`'s discipline at a hypothesis: `execM_encode_ufRowsForest` carries `hsy` and `htr`
+for the reason `mergeOneWith_isSome_of_collide` does — a signature that does not declare `@Sym`
+and `@Trans` leaves every collision standing at what would otherwise be a fixpoint, and the
+forest is then false. They are not vacuous: the prelude of any in-domain program declares both,
+and at `ncProgram` — the program whose rule really fires — that reduces in the kernel. -/
+
+set_option maxRecDepth 100000 in
+/-- `ncProgram`'s prelude declares `@Sym`. -/
+theorem ncProgram_isCtor_symName : (encodeSig ncProgram).IsCtor symName := by decide
+
+set_option maxRecDepth 100000 in
+@[inherit_doc ncProgram_isCtor_symName]
+theorem ncProgram_isCtor_transName : (encodeSig ncProgram).IsCtor transName := by decide
+
+/-- **Every hypothesis of `execM_encode_ufRowsForest` holding together**, at a program whose
+rule really fires. -/
+theorem execM_ufRowsForest_witness {tgt : FDatabase}
+    (htgt : execM (encode ncProgram) = some tgt) : tgt.UFRowsForest :=
+  execM_encode_ufRowsForest ncProgram_encodeDomain ncProgram_encodeDomain.aritiesAgree'
+    ncProgram_isCtor_symName ncProgram_isCtor_transName htgt
+
+@[inherit_doc execM_ufRowsForest_witness]
+theorem execM_ufRowRoot_unique_witness {tgt : FDatabase}
+    (htgt : execM (encode ncProgram) = some tgt) (a : Term) :
+    ∃ r, tgt.UFRowReach a r ∧ tgt.UFRowRoot r ∧
+      ∀ s, tgt.UFRowReach a s → tgt.UFRowRoot s → s = r :=
+  execM_ufRowRoot_unique ncProgram_encodeDomain ncProgram_isCtor_symName
+    ncProgram_isCtor_transName htgt a
 
 /-- **`encode_corresponds_complete` at a pair both sides really relate.**
 
