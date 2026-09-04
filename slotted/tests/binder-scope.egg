@@ -17,26 +17,33 @@
 ;;;     fires at most once per collision: the slot it picks is by construction absent
 ;;;     from the uncovered column's image.
 ;;;
-;;; Both spellings below share one body class and differ only in their edges, so
-;;; each edge's domain is exactly the body's slot set. Written with two different
-;;; body classes instead, the edges violate Def. 4 and the case proves nothing.
+;;; Written in the SLOTTED language. The claim is about CLASSES -- which slots one
+;;; depends on, and whether two are equal -- and neither needs a renaming spelled
+;;; out. The encoded version of this file had to share one body class by hand, or
+;;; its edges would violate Def. 4 and the case would prove nothing; the compiler
+;;; cannot emit an edge whose domain is not its child's slot set, so here that is
+;;; not a thing to get right.
+;;;
+;;;     python3 slotted/slotted-egglog.py slotted/tests/binder-scope.egg
 
-(include "target/slotted/slotted-node-rules.egg")
+(constructor Let (U U U) U :binder 0)
+(constructor App (U U) U)
+(constructor Sym (String) U)
 
-;; the body `f1 (var .)`, one class, slots {0}
-(let $b (App2 "app" (map-empty) (Sym "f1") (map-of 0 0) (Var 0)))
+;; `let` binds its column 0 and COVERS column 1, its body; column 2, the value, is
+;; uncovered, so a slot occurring there stays free.
 
 ;; let $0 = (var $0) in f1 (var $0) -- the bound slot collides with the value's
-(let $l0 (App3 "let" (map-of 0 0) (Var 0) (map-of 0 0) $b (map-of 0 0) (Var 0)))
+(let l0 (Let $0 (App (Sym "f1") $0) $0))
 
 ;; let $1 = (var $0) in f1 (var $1) -- the same term, bound slot renamed
-(let $l1 (App3 "let" (map-of 0 1) (Var 0) (map-of 0 1) $b (map-of 0 0) (Var 0)))
+(let l1 (Let $1 (App (Sym "f1") $1) $0))
 
-(run-schedule (saturate (run slotted)))
+(run 0)
 
 ;; the value's occurrence keeps slot 0 free in both, and only that one
-(check (= (ClassSlots $l0) (map-of 0 0)))
-(check (= (ClassSlots $l1) (map-of 0 0)))
+(check (slots l0 $0))
+(check (slots l1 $0))
 
-;; and renaming a bound slot changes nothing, so the two are one class
-(check (RenamesToLeader $l0 m1 leader) (RenamesToLeader $l1 m2 leader))
+;; and renaming a bound slot changes nothing, so the two are equal
+(check (same l0 l1))
