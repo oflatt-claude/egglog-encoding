@@ -39,7 +39,7 @@ pub use egglog_add_primitive::add_primitive_with_validator;
 use egglog_ast::generic_ast::{Change, GenericExpr, Literal};
 use egglog_ast::span::Span;
 use egglog_ast::util::ListDisplay;
-use egglog_bridge::{ColumnTy, QueryEntry};
+use egglog_bridge::{ColumnTy, QueryEntry, TableKind};
 use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
 use egglog_reports::{
@@ -398,6 +398,31 @@ impl Function {
     pub fn is_view(&self) -> bool {
         self.decl.internal_view.is_some()
     }
+
+    /// The source-level row layout exposed by the Rust APIs. Encoded views use
+    /// physical function tables with an internal row layout, but retain their
+    /// source constructor/function kind and select only the source output.
+    fn table_read_projection(&self) -> (TableKind, usize, usize) {
+        let rows_are_enodes = self.rows_are_enodes();
+        let input_arity = if rows_are_enodes {
+            self.extraction_layout().1
+        } else {
+            self.schema.input.len()
+        };
+        (
+            if rows_are_enodes {
+                TableKind::Constructor
+            } else {
+                TableKind::Function
+            },
+            input_arity,
+            if rows_are_enodes {
+                1
+            } else {
+                self.schema.outputs.len() - usize::from(self.is_fd_view())
+            },
+        )
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -619,7 +644,7 @@ impl EGraph {
     /// Create a new e-graph with the term-encoding pipeline enabled.
     ///
     /// In term-encoding mode the e-graph eagerly instruments every constructor
-    /// and function with auxiliary view tables and per-sort
+    /// and function with source-named views and per-sort
     /// union-finds so that canonical representatives and their justifications are
     /// materialized explicitly.  This makes it possible to record and emit
     /// equality proofs while preserving the observable behaviour of supported
@@ -666,7 +691,8 @@ impl EGraph {
         self
     }
 
-    /// Enable testing of getting proofs for all `check` commands.
+    /// Enable testing of getting proofs for every `check` outside `fail`.
+    /// Checks inside `fail` remain negative assertions.
     pub fn with_proof_testing(mut self) -> Self {
         self.proof_state.proof_testing = true;
         self
@@ -1154,19 +1180,20 @@ impl EGraph {
             name: decl.name.to_string(),
             can_subsume,
         };
-        let backend_id = if is_proof_node {
-            self.backend.add_internal_flat_table(config)
-        } else {
-            self.backend.add_table(config)
-        };
-        assert_eq!(backend_id, own_id);
-
         let function = Function {
             decl: decl.clone(),
             schema: ResolvedSchema { input, outputs },
             can_subsume,
-            backend_id,
+            backend_id: own_id,
         };
+        let (kind, input_arity, output_arity) = function.table_read_projection();
+        let backend_id = if is_proof_node {
+            self.backend.add_internal_flat_table(config)
+        } else {
+            self.backend
+                .add_table_with_read_projection(config, kind, input_arity, output_arity)
+        };
+        assert_eq!(backend_id, function.backend_id);
 
         let old = self.functions.insert(decl.name.clone(), function);
         if old.is_some() {
@@ -1221,7 +1248,8 @@ impl EGraph {
 
     /// Provide a program for use in proof checking.
     /// This enables testing of a desugared egglog proof program outside of proof mode.
-    /// When proof_testing is true, turns all the `check` commands into `prove` commands.
+    /// When proof_testing is true, turns every `check` outside `fail` into a `prove` command.
+    /// Checks inside `fail` remain negative assertions.
     /// Not intended for general use but needed in files.rs, so public but hidden.
     #[doc(hidden)]
     pub fn set_proof_checking_program(
@@ -1599,11 +1627,8 @@ impl EGraph {
                 .ok_or_else(|| crate::api::ApiError::MissingTable {
                     name: name.to_owned(),
                 })?;
-        // A view stands in for the function the user named. Its output columns
-        // are that function's output followed by the row's proof, which is
-        // internal, so an entry reads the first and stops.
-        let is_view = function.is_fd_view();
-        if function.rows_are_enodes() {
+        let (kind, input_arity, output_arity) = function.table_read_projection();
+        if kind == TableKind::Constructor {
             return Err(crate::api::ApiError::WrongSubtype {
                 name: name.to_owned(),
                 expected: "function",
@@ -1611,23 +1636,17 @@ impl EGraph {
             }
             .into());
         }
-        let n_outputs = if is_view {
-            function.schema.outputs.len() - 1
-        } else {
-            function.schema.outputs.len()
-        };
-        if n_outputs != 1 {
+        if output_arity != 1 {
             return Err(crate::api::ApiError::TupleOutputUnsupported {
                 name: name.to_owned(),
                 method: "function_entries",
             }
             .into());
         }
-        let n_inputs = function.schema.input.len();
         self.backend.for_each_while(function.backend_id, |row| {
             f(FunctionEntry {
-                inputs: &row.vals[..n_inputs],
-                output: row.vals[n_inputs],
+                inputs: &row.vals[..input_arity],
+                output: row.vals[input_arity],
                 subsumed: row.subsumed,
             })
         });
@@ -1660,7 +1679,8 @@ impl EGraph {
                 .ok_or_else(|| crate::api::ApiError::MissingTable {
                     name: name.to_owned(),
                 })?;
-        if !function.rows_are_enodes() {
+        let (kind, input_arity, _) = function.table_read_projection();
+        if kind != TableKind::Constructor {
             return Err(crate::api::ApiError::WrongSubtype {
                 name: name.to_owned(),
                 expected: "constructor",
@@ -1668,12 +1688,10 @@ impl EGraph {
             }
             .into());
         }
-        let num_children = function.extraction_num_children();
-        let eclass_idx = function.extraction_output_index();
         self.backend.for_each_while(function.backend_id, |row| {
             f(Enode {
-                children: &row.vals[..num_children],
-                eclass: row.vals[eclass_idx],
+                children: &row.vals[..input_arity],
+                eclass: row.vals[input_arity],
                 subsumed: row.subsumed,
             })
         });
@@ -2285,17 +2303,32 @@ impl EGraph {
                 return Ok(vec![res]);
             }
             ResolvedNCommand::Fail(span, cmds) => {
-                let mut any_failed = false;
-                for c in cmds {
-                    if let Err(e) = self.run_command(c) {
-                        log::info!("Command failed as expected: {e}");
-                        any_failed = true;
-                        break;
+                // A single check is read-only, so avoid cloning the e-graph for
+                // the overwhelmingly common negative-assertion form.
+                if matches!(cmds.as_slice(), [ResolvedNCommand::Check(..)]) {
+                    let check = cmds.into_iter().next().unwrap();
+                    return match self.run_command(check) {
+                        Err(error) => {
+                            log::info!("Command failed as expected: {error}");
+                            Ok(vec![])
+                        }
+                        Ok(_) => Err(Error::ExpectFail(span)),
+                    };
+                }
+
+                self.push();
+                let failure = cmds
+                    .into_iter()
+                    .find_map(|command| self.run_command(command).err());
+                self.pop()
+                    .expect("the snapshot pushed for `fail` must still be present");
+                return match failure {
+                    Some(error) => {
+                        log::info!("Command failed as expected: {error}");
+                        Ok(vec![])
                     }
-                }
-                if !any_failed {
-                    return Err(Error::ExpectFail(span));
-                }
+                    None => Err(Error::ExpectFail(span)),
+                };
             }
             ResolvedNCommand::Input {
                 span,
@@ -2655,6 +2688,7 @@ impl EGraph {
         command: Command,
     ) -> Result<Vec<ResolvedNCommand>, Error> {
         let desugared = desugar_command(command, &mut self.parser, self.proof_state.proof_testing)?;
+        let proofs_enabled = self.proof_state.proofs_enabled;
         if let Some(original_typechecking) = self.proof_state.original_typechecking.as_mut() {
             // Typecheck using the original egraph
             // TODO this is ugly- we don't need an entire e-graph just for type information.
@@ -2666,6 +2700,7 @@ impl EGraph {
                 if let Err(reason) = command_supports_proof_encoding(
                     &command.to_command(),
                     &original_typechecking.type_info,
+                    proofs_enabled,
                 ) {
                     let command_text = format!("{}", command.to_command());
                     return Err(Error::UnsupportedProofCommand {
@@ -4011,6 +4046,28 @@ mod tests {
     }
 
     #[test]
+    fn proof_support_adds_no_fail_specific_term_read_restrictions() {
+        for source in [
+            "(datatype N (A)) (let $a (A)) (fail (extract $a -1))",
+            "(datatype N (A)) (relation R (N)) (let $a (A)) \
+             (R $a) (fail (delete (R $a)) (panic \"stop\"))",
+        ] {
+            let mut egraph = EGraph::default();
+            let resolved = egraph.resolve_program(None, source).unwrap();
+            assert!(
+                program_supports_proofs(&resolved, &egraph.type_info),
+                "{source}"
+            );
+        }
+
+        let source = "(datatype N (A)) (let $a (A)) \
+                      (fail (output \"term.txt\" $a) (panic \"stop\"))";
+        let mut egraph = EGraph::default();
+        let resolved = egraph.resolve_program(None, source).unwrap();
+        assert!(!program_supports_proofs(&resolved, &egraph.type_info));
+    }
+
+    #[test]
     fn proof_support_rejects_unstable_fn_primitives_without_validators() {
         let mut egraph = EGraph::default();
         let resolved = egraph
@@ -4383,6 +4440,28 @@ mod tests {
             .parse_and_run_program(None, "(unstable-combined-ruleset combined missing)")
             .unwrap_err();
         assert!(matches!(err, Error::NoSuchRuleset(name, _) if name == "missing"));
+    }
+
+    #[test]
+    fn test_rule_rejects_combined_and_unbound_rulesets() {
+        let mut egraph = EGraph::default();
+        egraph
+            .parse_and_run_program(
+                None,
+                "(relation number (i64)) (ruleset base) \
+                 (unstable-combined-ruleset rules1and2 base)",
+            )
+            .unwrap();
+
+        let err = egraph
+            .parse_and_run_program(None, "(rule () ((number 1)) :ruleset rules1and2)")
+            .unwrap_err();
+        assert!(matches!(err, Error::CombinedRulesetError(name, _) if name == "rules1and2"));
+
+        let err = egraph
+            .parse_and_run_program(None, "(rule () ((number 2)) :ruleset unboundruleset)")
+            .unwrap_err();
+        assert!(matches!(err, Error::NoSuchRuleset(name, _) if name == "unboundruleset"));
     }
 
     #[test]

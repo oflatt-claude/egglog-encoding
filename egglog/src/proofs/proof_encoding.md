@@ -76,7 +76,7 @@ A constructor becomes an e-node table — its **view** — plus a rebuild index:
 (function Add (Math Math) (Math Unit)
     :merge ((set (@UF_Math (ordering-max old0 new0)) (values (ordering-min old0 new0) ()))
             (values (ordering-min old0 new0) ()))
-    :internal-view :internal-identity-vals 1)
+    :internal-view constructor :internal-identity-vals 1)
 (index @AddOcc_Math Add (any 0 1 2))
 ```
 
@@ -383,20 +383,25 @@ evaluate:
 | `@Rule_<k>` / `@RuleLink` | the rule, and which of the head's proofs this is | replaying the head — see the two layers below |
 | `@FiatUnion` | a global action | evaluating that action's two operands |
 | `@FiatTerm` | a global action and one of its nodes | evaluating that node |
-| `@ProjPrim_<k>` | the rule and the index of a call in its body | running that primitive's validator on the argument terms |
+| `@ProjPrim_<k>` | the rule and the index of a call in its body | resolving that specialized primitive, deriving its unique container argument from the input/output sorts, running its validator, and projecting along the term path from that argument to the result |
 | `@MergeIdx` / `@MergeRow` | a function and a subexpression of its merge body | running the merge body on the premise outputs |
 | `@Trans`, `@Sym`, `@Congr`, `@Proj`, … | only other proofs | composing their conclusions |
 
-Naming a position means every proof row needs an action to name, so an action
-the checker's program does not record cannot have one. That is why an action
-inside `(fail …)` that builds a term is rejected: a failed command is not one
-proof checking reads, and the action can leave the term behind when it errors
-part way. Two cases are still open — a `set`'s row and a `union`'s edge carry
-proofs of their own and escape that check, and `(extract e)` of a term not
-already present has the same shape (egraphs-good/egglog-encoding#80).
+Each action inside `(fail …)` is instrumented as one local block inside the
+wrapper. General `fail` execution restores its e-graph snapshot after either a
+command fails or every command succeeds, so none of its transient proof rows
+can escape and the proof checker ignores its actions. The common single-`check`
+form is read-only and runs without taking a snapshot. `prove` and `prove-exists`
+are disallowed inside `fail`; otherwise the wrapper adds no proof-specific
+restriction to a command the term/proof encoding already supports. Proof mode
+does not currently support `output`, whether or not it is inside `fail`.
+
+The separate top-level `(extract e)` case for a term not already present remains
+open ([issue #80](https://github.com/saulshanabrook/egglog-encoding/issues/80)).
 
 Two raw nodes are desugared during conversion rather than kept as proof nodes of
-their own. `@ProjPrim_<k>` becomes the `@Proj` at the position its validator's
+their own. `@ProjPrim_<k>` becomes a chain of one or more `@Proj` steps from the
+resolved call's unique typed container argument to the position its validator's
 result occupies, and `@CongrAll` becomes the positional `@Congr` steps it stands
 for, expanded against the term.
 
@@ -446,7 +451,9 @@ row's proof states an equality whose right-hand side is the row's term, so:
 * a term the row mentions as a child is `@Proj(row, i)`;
 * an element a body call read out of a container, whose position in the term
   form is not known at the site, is `@ProjPrim_<k>(rule, body index, arg
-  proofs…)`, which conversion resolves by running that call's validator.
+  proofs…)`, which conversion resolves by finding that specialized call's unique
+  typed container argument, running its validator, and projecting the result
+  from that argument through one or more positional steps.
 
 That covers every anchor the encoding wants: the reflexive base a container
 rebuild composes from, and a rule body's eq-sort or container variable. Which

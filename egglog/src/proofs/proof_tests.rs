@@ -1795,29 +1795,18 @@ mod tests {
     }
 
     #[test]
-    fn proof_mode_rejects_a_fail_wrapping_an_action_that_builds_a_term() {
-        let err = EGraph::new_with_proofs()
+    fn proof_mode_rolls_back_a_fail_action_that_partially_builds_terms() {
+        EGraph::new_with_proofs()
             .parse_and_run_program(
                 None,
                 r#"
                 (datatype N (Z) (S N))
                 (sort VN (Vec N))
-                (fail (vec-get (vec-of (Z)) 5))
-                (let a (S (Z)))
-                (check (Z))
+                (fail (vec-get (vec-of (Z)) 5) (panic "stop"))
+                (fail (check (Z)))
                 "#,
             )
-            .unwrap_err();
-        assert!(
-            matches!(
-                err,
-                Error::UnsupportedProofCommand {
-                    reason: ProofEncodingUnsupportedReason::FailActionCommand,
-                    ..
-                }
-            ),
-            "expected FailActionCommand, got {err:?}"
-        );
+            .unwrap();
     }
 
     // Only when the action builds one: a `fail` over a base-sorted computation

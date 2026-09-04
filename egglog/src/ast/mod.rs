@@ -1104,6 +1104,7 @@ where
     /// The argument specifies how many egraphs to pop.
     Pop(Span, usize),
     /// Assert that at least one of the wrapped commands fails with an error.
+    /// Includes, persistent definitions, and user-defined commands are not allowed inside `fail`.
     Fail(Span, Vec<GenericCommand<Head, Leaf>>),
     /// Include another egglog file directly as text and run it.
     Include(Span, String),

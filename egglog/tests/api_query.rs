@@ -279,6 +279,18 @@ fn the_introspection_apis_split_the_same_way_under_the_encoding() -> Result<(), 
         assert!(egraph.function_entries("f", |_| {}).is_ok());
         assert!(egraph.function_entries("Add", |_| {}).is_err());
         assert!(egraph.function_entries("R", |_| {}).is_err());
+        egraph.read(|state| -> Result<(), Error> {
+            let mut add_arity = None;
+            state.constructor_enodes("Add", |row| add_arity = Some(row.children.len()))?;
+            assert_eq!(add_arity, Some(2));
+            assert!(state.eclass_of("R", 3_i64)?.is_some());
+            let mut f_row = None;
+            state.function_entries("f", |row| {
+                f_row = Some((row.inputs.len(), state.value_to_base::<i64>(row.output)))
+            })?;
+            assert_eq!(f_row, Some((1, 2)));
+            Ok(())
+        })?;
     }
     Ok(())
 }

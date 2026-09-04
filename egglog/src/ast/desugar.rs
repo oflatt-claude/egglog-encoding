@@ -210,7 +210,7 @@ pub(crate) fn desugar_command(
             // one `fail`, so the assertion covers all of them.
             let mut desugared = vec![];
             for cmd in cmds {
-                if let Command::Include(..) = cmd {
+                if matches!(&cmd, Command::Include(..)) {
                     // `include` is expanded before desugaring, so it never reaches
                     // here from a top-level program; only a wrapped one can.
                     return Err(Error::DesugarError(
@@ -218,7 +218,45 @@ pub(crate) fn desugar_command(
                         "include is not allowed inside (fail ...)".to_string(),
                     ));
                 }
-                desugared.extend(desugar_command(cmd, parser, proof_testing)?);
+                // Term/proof encoding reparses its own generated bindings. They
+                // use the parser's reserved prefix, so they cannot be written by
+                // a user, and must stay inside the transaction with the command
+                // that consumes them.
+                let is_user_let = matches!(
+                    &cmd,
+                    Command::Action(Action::Let(_, name, _))
+                        if !parser.symbol_gen.is_reserved(name)
+                );
+                if is_user_let
+                    || matches!(
+                        &cmd,
+                        Command::Sort { .. }
+                            | Command::Datatype { .. }
+                            | Command::Datatypes { .. }
+                            | Command::Constructor { .. }
+                            | Command::Relation { .. }
+                            | Command::Function { .. }
+                            | Command::Index { .. }
+                            | Command::AddRuleset(..)
+                            | Command::UnstableCombinedRuleset(..)
+                            | Command::Rule { .. }
+                            | Command::Rewrite(..)
+                            | Command::BiRewrite(..)
+                            | Command::Prove(..)
+                            | Command::ProveExists(..)
+                            | Command::LetBegin(..)
+                            | Command::Push(..)
+                            | Command::Pop(..)
+                            | Command::UserDefined(..)
+                    )
+                {
+                    return Err(Error::DesugarError(
+                        span.clone(),
+                        "prove, prove-exists, definitions, user-defined commands, push, and pop are not allowed inside (fail ...)"
+                            .to_string(),
+                    ));
+                }
+                desugared.extend(desugar_command(cmd, parser, false)?);
             }
             if desugared.is_empty() {
                 return Err(Error::DesugarError(

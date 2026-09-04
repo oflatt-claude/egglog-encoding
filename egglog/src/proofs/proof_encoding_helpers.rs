@@ -808,8 +808,9 @@ impl ProofInstrumentor<'_> {
 ;; reads an element out of a container, produces a justification that the element
 ;; equals itself. The call is named by its rule and its index in that rule's body
 ;; rather than by the primitive's name, which would not pin down a validator
-;; since primitives are overloaded. Proof conversion runs that primitive's
-;; validator on the argument terms and projects the result out of the container
+;; since primitives are overloaded. Proof conversion resolves the typed
+;; container argument from that primitive's signature, runs its validator on the
+;; argument terms, and projects along the term path to the result only from that
 ;; argument, so the row stores no term. There is a `ProjPrim_<k>` per argument
 ;; count (see `ProofInstrumentor::proj_prim_constructor`):
 ;;   (ProjPrim_<k> <rule name> <body index> <one proof per argument> <proof>)
@@ -895,14 +896,8 @@ pub enum ProofEncodingUnsupportedReason {
     SortWithUfAnnotation,
     #[error("user-defined commands are not supported.")]
     UserDefinedCommand,
-    #[error("`fail` wrapping an `input` command is not supported by proof encoding.")]
-    FailInputCommand,
-    #[error(
-        "`fail` wrapping an action is not supported by proof encoding. The action can leave a \
-         the term behind when it errors part way, and a failed command is not one the proof \
-         checker reads, so there is nothing for that term's proof to name."
-    )]
-    FailActionCommand,
+    #[error("`output` commands are not supported when proofs are enabled.")]
+    OutputCommand,
     #[error(
         "let binding with a primitive in the body. For silly internal reasons, we don't support primitive bindings for proofs at the moment, sorry."
     )]
@@ -949,7 +944,8 @@ pub fn program_supports_proofs(commands: &[ResolvedCommand], type_info: &TypeInf
         })
         .collect();
     for command in commands {
-        if let Err(reason) = command_supports_proof_encoding_impl(command, type_info, &let_globals)
+        if let Err(reason) =
+            command_supports_proof_encoding_impl(command, type_info, &let_globals, true)
         {
             let cmd = command.to_string();
             log::debug!(
@@ -1403,13 +1399,14 @@ fn body_premise_without_anchor(body: &[ResolvedFact]) -> Option<ProofEncodingUns
         .map(|(_, reason)| reason.clone())
 }
 
-/// Checks whether a resolved command supports proof encoding.
-/// Returns Ok(()) if supported, or Err with the reason if not.
+/// Checks the constraints shared by term/proof encoding. `proofs_enabled`
+/// additionally checks commands that are unsupported only when recording proofs.
 pub(crate) fn command_supports_proof_encoding(
     command: &ResolvedCommand,
     type_info: &TypeInfo,
+    proofs_enabled: bool,
 ) -> Result<(), ProofEncodingUnsupportedReason> {
-    command_supports_proof_encoding_impl(command, type_info, &HashSet::default())
+    command_supports_proof_encoding_impl(command, type_info, &HashSet::default(), proofs_enabled)
 }
 
 /// [`command_supports_proof_encoding`] with `extra_globals`: let-bound names
@@ -1419,6 +1416,7 @@ fn command_supports_proof_encoding_impl(
     command: &ResolvedCommand,
     type_info: &TypeInfo,
     extra_globals: &HashSet<String>,
+    proofs_enabled: bool,
 ) -> Result<(), ProofEncodingUnsupportedReason> {
     // `:unsafe-seminaive` rules perform arbitrary reads against the live
     // database; the term/proof encoding can't represent that.
@@ -1569,6 +1567,9 @@ fn command_supports_proof_encoding_impl(
             Err(ProofEncodingUnsupportedReason::SortWithUfAnnotation)
         }
         GenericCommand::UserDefined(..) => Err(ProofEncodingUnsupportedReason::UserDefinedCommand),
+        GenericCommand::Output { .. } if proofs_enabled => {
+            Err(ProofEncodingUnsupportedReason::OutputCommand)
+        }
         // Extract commands can't have non-global function lookups
         // because instrument_action_expr doesn't support them
         // (global function calls are fine - they get desugared to constructors)
@@ -1583,19 +1584,12 @@ fn command_supports_proof_encoding_impl(
         }
         GenericCommand::Fail(_, commands) => {
             for command in commands {
-                match command {
-                    GenericCommand::Input { .. } => {
-                        return Err(ProofEncodingUnsupportedReason::FailInputCommand);
-                    }
-                    GenericCommand::Action(action) if builds_a_term(action) => {
-                        return Err(ProofEncodingUnsupportedReason::FailActionCommand);
-                    }
-                    GenericCommand::Actions(actions) if actions.0.iter().any(builds_a_term) => {
-                        return Err(ProofEncodingUnsupportedReason::FailActionCommand);
-                    }
-                    _ => {}
-                }
-                command_supports_proof_encoding(command, type_info)?;
+                command_supports_proof_encoding_impl(
+                    command,
+                    type_info,
+                    extra_globals,
+                    proofs_enabled,
+                )?;
             }
             Ok(())
         }
@@ -1864,20 +1858,6 @@ impl crate::constraint::TypeConstraint for DropReflexiveStepTypeConstraint {
         }
         constraints
     }
-}
-
-/// Whether `action` interns a term, which a failed command can leave behind
-/// with no action of its own for its fiat to name.
-///
-/// This does not catch a `set`'s row or a `union`'s edge, which carry proofs of
-/// their own — see the `fail` limitation noted in `proof_encoding.md`.
-fn builds_a_term(action: &ResolvedAction) -> bool {
-    action_nodes(action).into_iter().any(|node| match node {
-        ActionNode::Expr(expr) => {
-            matches!(expr, ResolvedExpr::Call(..)) && expr.output_type().is_eq_sort()
-        }
-        ActionNode::Row(_) => false,
-    })
 }
 
 /// Every expression node of a rule body, in a canonical pre-order: the facts in
