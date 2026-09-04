@@ -896,6 +896,8 @@ pub enum ProofEncodingUnsupportedReason {
     SortWithUfAnnotation,
     #[error("user-defined commands are not supported.")]
     UserDefinedCommand,
+    #[error("`output` commands are not supported when proofs are enabled.")]
+    OutputCommand,
     #[error(
         "let binding with a primitive in the body. For silly internal reasons, we don't support primitive bindings for proofs at the moment, sorry."
     )]
@@ -942,7 +944,8 @@ pub fn program_supports_proofs(commands: &[ResolvedCommand], type_info: &TypeInf
         })
         .collect();
     for command in commands {
-        if let Err(reason) = command_supports_proof_encoding_impl(command, type_info, &let_globals)
+        if let Err(reason) =
+            command_supports_proof_encoding_impl(command, type_info, &let_globals, true)
         {
             let cmd = command.to_string();
             log::debug!(
@@ -1396,12 +1399,14 @@ fn body_premise_without_anchor(body: &[ResolvedFact]) -> Option<ProofEncodingUns
         .map(|(_, reason)| reason.clone())
 }
 
-/// Checks the constraints shared by term/proof encoding.
+/// Checks the constraints shared by term/proof encoding. `proofs_enabled`
+/// additionally checks commands that are unsupported only when recording proofs.
 pub(crate) fn command_supports_proof_encoding(
     command: &ResolvedCommand,
     type_info: &TypeInfo,
+    proofs_enabled: bool,
 ) -> Result<(), ProofEncodingUnsupportedReason> {
-    command_supports_proof_encoding_impl(command, type_info, &HashSet::default())
+    command_supports_proof_encoding_impl(command, type_info, &HashSet::default(), proofs_enabled)
 }
 
 /// [`command_supports_proof_encoding`] with `extra_globals`: let-bound names
@@ -1411,6 +1416,7 @@ fn command_supports_proof_encoding_impl(
     command: &ResolvedCommand,
     type_info: &TypeInfo,
     extra_globals: &HashSet<String>,
+    proofs_enabled: bool,
 ) -> Result<(), ProofEncodingUnsupportedReason> {
     // `:unsafe-seminaive` rules perform arbitrary reads against the live
     // database; the term/proof encoding can't represent that.
@@ -1561,6 +1567,9 @@ fn command_supports_proof_encoding_impl(
             Err(ProofEncodingUnsupportedReason::SortWithUfAnnotation)
         }
         GenericCommand::UserDefined(..) => Err(ProofEncodingUnsupportedReason::UserDefinedCommand),
+        GenericCommand::Output { .. } if proofs_enabled => {
+            Err(ProofEncodingUnsupportedReason::OutputCommand)
+        }
         // Extract commands can't have non-global function lookups
         // because instrument_action_expr doesn't support them
         // (global function calls are fine - they get desugared to constructors)
@@ -1575,7 +1584,12 @@ fn command_supports_proof_encoding_impl(
         }
         GenericCommand::Fail(_, commands) => {
             for command in commands {
-                command_supports_proof_encoding_impl(command, type_info, extra_globals)?;
+                command_supports_proof_encoding_impl(
+                    command,
+                    type_info,
+                    extra_globals,
+                    proofs_enabled,
+                )?;
             }
             Ok(())
         }

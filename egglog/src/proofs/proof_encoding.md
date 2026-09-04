@@ -393,7 +393,8 @@ command fails or every command succeeds, so none of its transient proof rows
 can escape and the proof checker ignores its actions. The common single-`check`
 form is read-only and runs without taking a snapshot. `prove` and `prove-exists`
 are disallowed inside `fail`; otherwise the wrapper adds no proof-specific
-restriction to a command the term/proof encoding already supports.
+restriction to a command the term/proof encoding already supports. Proof mode
+does not currently support `output`, whether or not it is inside `fail`.
 
 The separate top-level `(extract e)` case for a term not already present remains
 open ([issue #80](https://github.com/saulshanabrook/egglog-encoding/issues/80)).

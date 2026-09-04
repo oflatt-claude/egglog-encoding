@@ -257,40 +257,14 @@ fn fail_with_term_building_extract_has_the_same_behavior_in_all_modes() {
 }
 
 #[test]
-fn fail_output_of_an_existing_term_has_the_same_behavior_in_all_modes() {
-    let directory =
-        std::env::temp_dir().join(format!("egglog_proof_fail_output_{}", std::process::id()));
-    std::fs::create_dir_all(&directory).unwrap();
-
-    for (index, mut egraph) in [
-        EGraph::default(),
-        EGraph::new_with_term_encoding(),
-        EGraph::new_with_proofs(),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        egraph.fact_directory = Some(directory.clone());
-        let filename = format!("term-{index}.txt");
-        egraph
-            .parse_and_run_program(
-                None,
-                &format!(
-                    r#"
-            (datatype N (A))
-            (let $a (A))
-            (fail (output "{filename}" $a) (panic "stop"))
-            "#
-                ),
-            )
-            .unwrap();
-        assert_eq!(
-            std::fs::read_to_string(directory.join(filename)).unwrap(),
-            "(A)\n"
-        );
+fn proof_mode_rejects_output_at_top_level_and_inside_fail() {
+    for source in ["(output \"term.txt\" 1)", "(fail (output \"term.txt\" 1))"] {
+        let error = EGraph::new_with_proofs()
+            .parse_and_run_program(None, source)
+            .unwrap_err();
+        assert!(matches!(error, Error::UnsupportedProofCommand { .. }));
+        assert!(error.to_string().contains("`output`"));
     }
-
-    std::fs::remove_dir_all(directory).ok();
 }
 
 #[test]

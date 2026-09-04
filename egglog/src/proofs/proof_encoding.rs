@@ -2544,16 +2544,8 @@ impl<'a> ProofInstrumentor<'a> {
                 // is transient because `fail` rolls the e-graph back.
                 let mut encoded = vec![];
                 for cmd in cmds {
-                    if let ResolvedNCommand::Output { span, file, exprs } = cmd {
-                        self.term_encode_transient_output(span, file, exprs, &mut encoded);
-                    } else {
-                        self.term_encode_command(cmd, &mut encoded)?;
-                    }
-                    if !matches!(
-                        cmd,
-                        ResolvedNCommand::Check(..) | ResolvedNCommand::Output { .. }
-                    ) && !command_skips_rebuild(cmd)
-                    {
+                    self.term_encode_command(cmd, &mut encoded)?;
+                    if !matches!(cmd, ResolvedNCommand::Check(..)) && !command_skips_rebuild(cmd) {
                         encoded.push(Command::RunSchedule(self.rebuild()));
                     }
                 }
@@ -2639,50 +2631,6 @@ impl<'a> ProofInstrumentor<'a> {
             }
         }
         Ok(())
-    }
-
-    /// Encode an `output` whose expression setup is transient. Ordinary
-    /// top-level output stays untouched: term-building output still lacks a
-    /// source-action position there. Inside `fail`, rollback guarantees that
-    /// the generated view/proof rows cannot escape or be referenced later.
-    fn term_encode_transient_output(
-        &mut self,
-        span: &Span,
-        file: &str,
-        exprs: &[ResolvedExpr],
-        res: &mut Vec<Command>,
-    ) {
-        let mut action_stmts = vec![];
-        let scope = Scope::default();
-        let mut head = Head::composed();
-        let fiat = Justification::Fiat;
-        let mut emit = Emit {
-            stmts: &mut action_stmts,
-            head: &mut head,
-            justification: &fiat,
-            at: ActionNodes::default(),
-        };
-        let mut instrumented_exprs = Vec::with_capacity(exprs.len());
-        for expr in exprs {
-            instrumented_exprs.push(self.instrument_action_expr(expr, &mut emit, &scope).value);
-        }
-        // Output binds nothing that a later command can compose with.
-        self.drop_pending_lookups();
-
-        for stmt in action_stmts {
-            res.extend(self.parse_program(&stmt));
-        }
-        res.push(Command::RunSchedule(self.rebuild()));
-
-        let mut parsed_exprs = Vec::with_capacity(instrumented_exprs.len());
-        for expr in instrumented_exprs {
-            parsed_exprs.push(self.parse_expr(&expr));
-        }
-        res.push(Command::Output {
-            span: span.clone(),
-            file: file.to_owned(),
-            exprs: parsed_exprs,
-        });
     }
 
     pub(crate) fn add_term_encoding_helper(

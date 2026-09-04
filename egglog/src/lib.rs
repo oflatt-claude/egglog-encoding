@@ -2688,6 +2688,7 @@ impl EGraph {
         command: Command,
     ) -> Result<Vec<ResolvedNCommand>, Error> {
         let desugared = desugar_command(command, &mut self.parser, self.proof_state.proof_testing)?;
+        let proofs_enabled = self.proof_state.proofs_enabled;
         if let Some(original_typechecking) = self.proof_state.original_typechecking.as_mut() {
             // Typecheck using the original egraph
             // TODO this is ugly- we don't need an entire e-graph just for type information.
@@ -2699,6 +2700,7 @@ impl EGraph {
                 if let Err(reason) = command_supports_proof_encoding(
                     &command.to_command(),
                     &original_typechecking.type_info,
+                    proofs_enabled,
                 ) {
                     let command_text = format!("{}", command.to_command());
                     return Err(Error::UnsupportedProofCommand {
@@ -4049,8 +4051,6 @@ mod tests {
             "(datatype N (A)) (let $a (A)) (fail (extract $a -1))",
             "(datatype N (A)) (relation R (N)) (let $a (A)) \
              (R $a) (fail (delete (R $a)) (panic \"stop\"))",
-            "(datatype N (A)) (let $a (A)) \
-             (fail (output \"term.txt\" $a) (panic \"stop\"))",
         ] {
             let mut egraph = EGraph::default();
             let resolved = egraph.resolve_program(None, source).unwrap();
@@ -4059,6 +4059,12 @@ mod tests {
                 "{source}"
             );
         }
+
+        let source = "(datatype N (A)) (let $a (A)) \
+                      (fail (output \"term.txt\" $a) (panic \"stop\"))";
+        let mut egraph = EGraph::default();
+        let resolved = egraph.resolve_program(None, source).unwrap();
+        assert!(!program_supports_proofs(&resolved, &egraph.type_info));
     }
 
     #[test]
