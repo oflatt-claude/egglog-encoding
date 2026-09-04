@@ -28,12 +28,12 @@ THE LANGUAGE
     (run 3)                                     three user-rule steps, with the
                                                 machinery saturated around each
 
-    (check (renaming-= a b))                    a and b are EQUAL -- the same term, once
+    (check (= a b))                    a and b are EQUAL -- the same term, once
                                                 renamings are taken into account
-    (check (renaming-!= a b))                   and are not
-    (check (eclass-= a b))                      a and b are in one E-CLASS, but not
+    (check (!= a b))                   and are not
+    (check (renaming-= a b))                      a and b are in one E-CLASS, but not
                                                 necessarily at the same slots
-    (check (eclass-!= a b))                     and are not
+    (check (renaming-!= a b))                     and are not
     (check (slots a $5 $6))                     a's class depends on exactly these
     (check (holds a Mult))                      a's class contains a Mult node
     (check (not-holds a Mult))                  and does not
@@ -54,13 +54,13 @@ node as the encoding STORES it, renamings and all.
 A check whose claim is none of the ones above is egglog's too, so a test can drop to
 the encoded level -- `(check (RenamesToLeader a m l))` -- without leaving the language.
 
-WHY NOT JUST `=`
+WHAT `=` MEANS HERE
 
 Egglog's `=` compares two values. A slotted term is not a value: it is a class TOGETHER
-WITH a renaming, so two terms can be the same term while being different values, and
-different terms while being the same class. `renaming-=` is the equality that takes the
-renaming into account, and `eclass-=` is the weaker question of whether the classes
-coincide at all. `LANGUAGE.md` gives the example that separates them.
+WITH a renaming, so `=` here is compiled, not passed through -- it asks whether the two
+terms are the SAME TERM. `renaming-=` is the weaker question of whether they are equal
+modulo some renaming, which is what two alpha-variants with a renamed free slot are.
+`LANGUAGE.md` gives the example that separates them.
 
 Usage:
     ./slotted-egglog.py SRC.egg              run it
@@ -435,7 +435,7 @@ def compile_check(src, form):
         form = form[1]
     claim = form[1]
     kind, args = claim[0], claim[1:]
-    if kind in ("renaming-=", "renaming-!="):
+    if kind in ("=", "!="):
         # ONE renaming, not two. `(RenamesToLeader f m l)` is `f = m*l`, so two terms
         # are equal when they are the same INVOCATION -- reached from the leader by the
         # same renaming -- and not merely when they land in the same class. The paper's
@@ -457,17 +457,17 @@ def compile_check(src, form):
                 atoms.append(f"(RenamesToLeader {src.encode(x)} {m} _l)")
                 maps.append(m)
         body = f"(check {' '.join(atoms)} (= {maps[0]} {maps[1]}))"
-        if (kind == "renaming-!=") != negated:
+        if (kind == "!=") != negated:
             return f"(fail {body})"
         return body
-    if kind in ("eclass-=", "eclass-!="):
-        # Same CLASS, by SOME renaming -- strictly weaker than `renaming-=`, which pins the
+    if kind in ("renaming-=", "renaming-!="):
+        # Same CLASS, by SOME renaming -- strictly weaker than `=`, which pins the
         # renaming down. The pair it exists for is two terms that are alpha-variants
         # of each other with a free slot renamed: they are not equal, because no one
         # renaming reaches both, yet they are the same class.
         a, b = (src.encode(x) for x in args)
         body = f"(check (RenamesToLeader {a} _m1 _l) (RenamesToLeader {b} _m2 _l))"
-        if (kind == "eclass-!=") != negated:
+        if (kind == "renaming-!=") != negated:
             return f"(fail {body})"
         return body
     if kind in ("holds", "not-holds"):
@@ -493,21 +493,6 @@ def compile_check(src, form):
             f"(check (= (ClassSlots {a}) (map-of {slots})))" if slots else f"(check (= (ClassSlots {a}) (map-empty)))"
         )
         return f"(fail {body})" if negated else body
-    if kind == "=":
-        raise SystemExit(
-            "\n".join(
-                [
-                    f"{src.path.name}: `(check (= a b))` asks whether two terms are the same",
-                    "egglog VALUE, and a slotted class spans several of those -- one per",
-                    "invocation -- so it can answer no for two terms that are equal. Say which",
-                    "you mean:",
-                    "    (renaming-= a b)   they are the same term",
-                    "    (eclass-= a b)     they are in one e-class, at possibly different slots",
-                    "A test that really is about the encoding's own tables belongs in",
-                    "slotted/encoding/, which runs as plain egglog.",
-                ]
-            )
-        )
     # Not one of the slotted claims, so it is an ordinary egglog check about the
     # encoding -- `(check (RenamesToLeader ...))` and the like. It names no slotted
     # term, so it goes through as written.

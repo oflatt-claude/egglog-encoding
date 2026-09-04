@@ -46,4 +46,4 @@
 (check (slots l1 $0))
 
 ;; and renaming a bound slot changes nothing, so the two are equal
-(check (renaming-= l0 l1))
+(check (= l0 l1))

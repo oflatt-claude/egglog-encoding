@@ -7,7 +7,7 @@
 ;;;
 ;;; The step counts are deliberately small. The rules are not confluent --
 ;;; `get-to-sum` and `sum-to-get` alone loop -- so a section that needs N steps asks
-;;; for N and no more, which also keeps the negative claims sharp: a `renaming-!=` over
+;;; for N and no more, which also keeps the negative claims sharp: a `!=` over
 ;;; many steps only says the rules did not eventually find another route.
 
 (include "slotted/tests/sdql.egg")
@@ -24,7 +24,7 @@
 
 (let b (Binop (Symbol "mult") $5 $6))
 (run 0)
-(check (renaming-= m b))
+(check (= m b))
 
 (pop)
 
@@ -43,11 +43,11 @@
 (let mixed (Sub $5 $6))
 (run 2)
 
-(check (renaming-= dup zero))
+(check (= dup zero))
 ;; `0` has no slots, so the class loses the one it had
 (check (slots dup))
 ;; two distinct slots are two distinct renamed ids: no match
-(check (renaming-!= mixed zero))
+(check (!= mixed zero))
 
 (pop)
 
@@ -67,7 +67,7 @@
 (run 2)
 
 ;; the sum IS the variable at $5
-(check (renaming-= a $5))
+(check (= a $5))
 (check (slots a $5))
 
 (pop)
@@ -84,7 +84,7 @@
 
 (let built (Add $7 (Sub $3 (Num 1))))
 (run 0)
-(check (renaming-= g built))
+(check (= g built))
 
 (pop)
 
@@ -103,14 +103,14 @@
 (run 2)
 
 ;; the whole sum is the variable at $9
-(check (renaming-= s $9))
+(check (= s $9))
 (check (slots s $9))
 
 ;; and it does not fire when the two `sing` children are the SAME slot: that would
 ;; need `$k` and `$v` to be one slot, which the binder columns forbid
 (let s2 (Sum $8 $5 $6 (Sing $5 $5)))
 (run 2)
-(check (renaming-!= s2 $8))
+(check (!= s2 $8))
 
 (pop)
 
@@ -133,7 +133,7 @@
 ;; body is the first of them, so it has no free slots at all
 (let out (Mult $7 (Sum Null $5 $6 $5)))
 (run 0)
-(check (renaming-= s out))
+(check (= s out))
 
 (pop)
 

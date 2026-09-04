@@ -13,7 +13,7 @@
 ;;; `f($1,$2) = h($2,$1)`; here the claim is that equation itself, plus the one that
 ;;; makes it content rather than bookkeeping -- f($1,$2) is NOT h($1,$2). Both terms
 ;;; sit in the one class either way, and the swap is what tells them apart. This is
-;;; the test that separates `renaming-=` from `eclass-=`.
+;;; the test that separates `=` from `renaming-=`.
 
 (constructor F (U U) U)
 (constructor G (U U) U)
@@ -31,6 +31,6 @@
 (run 0)
 
 ;; the swap carried through both equations
-(check (renaming-= f12 h21))
+(check (= f12 h21))
 ;; and it really is the swap: the identity does not relate them
-(check (renaming-!= f12 h12))
+(check (!= f12 h12))

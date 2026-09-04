@@ -23,7 +23,7 @@
 ;;;
 ;;; Every identity lambda is one class; every constant lambda over the SAME free
 ;;; slot is one class; a different free slot is only equal up to renaming, which
-;;; is the pair that `renaming-=` and `eclass-=` disagree about.
+;;; is the pair that `=` and `renaming-=` disagree about.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
 
@@ -36,11 +36,11 @@
 
 (run 0)
 
-(check (renaming-= i0 i5))
-(check (renaming-= k3a k3b))
-(check (renaming-!= k3a k4))
-(check (eclass-= k3a k4))
-(check (renaming-!= i0 k3a))
+(check (= i0 i5))
+(check (= k3a k3b))
+(check (!= k3a k4))
+(check (renaming-= k3a k4))
+(check (!= i0 k3a))
 
 ;; the identity binds its only slot, the constant keeps $3 free
 (check (slots i0))
@@ -68,10 +68,10 @@
 
 (run 0)
 
-(check (renaming-= a b))
-(check (renaming-!= a c))
-(check (renaming-!= p q))
-(check (eclass-= p q))
+(check (= a b))
+(check (!= a c))
+(check (!= p q))
+(check (renaming-= p q))
 
 (pop)
 
@@ -98,10 +98,10 @@
 
 (run 10)
 
-(check (renaming-= a b))
-(check (renaming-= a c))
-(check (renaming-= m z))
-(check (renaming-!= m n))
+(check (= a b))
+(check (= a c))
+(check (= m z))
+(check (!= m n))
 
 (pop)
 
@@ -123,8 +123,8 @@
 
 (run 10)
 
-(check (renaming-= l r))
-(check (renaming-!= l w))
+(check (= l r))
+(check (!= l w))
 
 (pop)
 
@@ -150,9 +150,9 @@
 
 (run 10)
 
-(check (renaming-= a b))
-(check (renaming-= c d))
-(check (renaming-!= e b))
+(check (= a b))
+(check (= c d))
+(check (!= e b))
 
 (pop)
 
@@ -176,8 +176,8 @@
 
 (run 10)
 
-(check (renaming-= a b))
-(check (renaming-!= c d))
+(check (= a b))
+(check (!= c d))
 
 (pop)
 
@@ -201,7 +201,7 @@
 
 (run 1)
 
-(check (renaming-= a b))
-(check (renaming-!= a c))
+(check (= a b))
+(check (!= a c))
 
 (pop)

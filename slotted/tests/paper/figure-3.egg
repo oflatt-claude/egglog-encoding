@@ -25,6 +25,6 @@
 
 (run 0)
 
-(check (renaming-= m9 zero))
-(check (renaming-= m7 m9))
-(check (renaming-!= m97 zero))
+(check (= m9 zero))
+(check (= m7 m9))
+(check (!= m97 zero))

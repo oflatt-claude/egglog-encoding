@@ -29,7 +29,7 @@
 
 (run 0)
 
-(check (renaming-= g0 g5))
-(check (renaming-= f01 f78))
+(check (= g0 g5))
+(check (= f01 f78))
 (check (slots f01))
-(check (renaming-!= f01 (Null)))
+(check (!= f01 (Null)))

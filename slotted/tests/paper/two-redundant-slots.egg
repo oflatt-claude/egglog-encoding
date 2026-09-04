@@ -29,6 +29,6 @@
 
 (run 10)
 
-(check (renaming-= s12 z))
-(check (renaming-= s12 s21))
-(check (renaming-!= k12 z))
+(check (= s12 z))
+(check (= s12 s21))
+(check (!= k12 z))

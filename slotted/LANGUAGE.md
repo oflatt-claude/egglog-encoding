@@ -102,10 +102,10 @@ Egglog's `check` asks about values. These ask about terms.
 
 | claim | means |
 | --- | --- |
-| `(renaming-= a b)` | `a` and `b` are **equal** — the same term, once renamings are taken into account |
+| `(= a b)` | `a` and `b` are **equal** — the same term, once renamings are taken into account |
+| `(!= a b)` | they are not |
+| `(renaming-= a b)` | `a` and `b` are equal **modulo some renaming** — one e-class, but not necessarily at the same slots |
 | `(renaming-!= a b)` | they are not |
-| `(eclass-= a b)` | `a` and `b` are in one **e-class**, but not necessarily at the same slots |
-| `(eclass-!= a b)` | they are not |
 | `(slots a $5 $6)` | `a`'s class depends on exactly these slots (`(slots a)` means none) |
 | `(holds a Mult)` | `a`'s class contains a `Mult` node |
 | `(not-holds a Mult)` | it does not |
@@ -118,19 +118,19 @@ alpha-variants whose free slot is renamed:
 ```
 (let p (Lam $0 $3))
 (let q (Lam $0 $4))
-(check (eclass-= p q))        ; one class: both are "a constant function"
-(check (renaming-!= p q))     ; not equal: one returns $3, the other $4
+(check (renaming-= p q))   ; equal modulo a renaming: both are "a constant function"
+(check (!= p q))           ; but not equal: one returns $3, the other $4
 ```
 
-`eclass-=` holds and `renaming-=` does not. The e-class is the same shape; the terms are
-not the same term.
+Rename `$3` to `$4` and `p` becomes `q`, which is what `renaming-=` says. They are still
+different terms.
 
-The other direction matters too. `renaming-=` is not "syntactically identical" — it is
-equality *modulo* everything the e-graph knows, including a class's symmetries. If
-commutativity has put the swap in `f`'s group, then
+The other direction matters too. `=` is not "syntactically identical" either — it is
+equality modulo everything the e-graph already knows, including a class's symmetries.
+If commutativity has put the swap in `f`'s group, then
 
 ```
-(check (renaming-= (F $1 $2) (F $2 $1)))
+(check (= (F $1 $2) (F $2 $1)))
 ```
 
 holds, because by Def. 6 two invocations of a class agree when the renaming between
@@ -139,57 +139,65 @@ them lies in that group.
 The case that pins the distinction down is the reference's own
 `fgh::transitive_symmetry` — see `slotted/tests/paper/fgh-transitive-symmetry.egg`.
 After `f($1,$2) = g($2,$1)` and `g($1,$2) = h($1,$2)`, the terms `f($1,$2)` and
-`h($1,$2)` are in one class but differ by the swap, so they are `eclass-=` and
-`renaming-!=`, while `f($1,$2)` and `h($2,$1)` are `renaming-=`.
+`h($1,$2)` are in one class but differ by the swap, so they are `renaming-=` and
+`!=`, while `f($1,$2)` and `h($2,$1)` are `=`.
 
 ### How they desugar
 
-The difference is one line. Both ask for a common leader; only `renaming-=` also asks
+The difference is one line. Both ask for a common leader; only `=` also asks
 that the two renamings agree.
 
 ```
-(eclass-=   p q)    (check (RenamesToLeader $p _m1 _l) (RenamesToLeader $q _m2 _l))
-(renaming-= p q)    (check (RenamesToLeader $p _m0 _l) (RenamesToLeader $q _m1 _l)
+(renaming-=   p q)    (check (RenamesToLeader $p _m1 _l) (RenamesToLeader $q _m2 _l))
+(= p q)    (check (RenamesToLeader $p _m0 _l) (RenamesToLeader $q _m1 _l)
                            (= _m0 _m1))
 ```
 
 `(RenamesToLeader f m l)` is `f = m*l`. A class is a connected component of that
 relation and its leader is the component's canonical member, so *sharing a leader* is
-exactly *being in one e-class*. `eclass-=` says only that; `renaming-=` adds that one
+exactly *being in one e-class*. `renaming-=` says only that; `=` adds that one
 renaming reaches both, which is what makes it equality of terms.
 
-**A trap.** `eclass-=` between two bare slots is always true, because every variable is
+**A trap.** `renaming-=` between two bare slots is always true, because every variable is
 one e-class:
 
 ```
-(check (eclass-= $3 $4))      ; holds -- both are the variable class
-(check (renaming-!= $3 $4))   ; also holds -- they are different variables
+(check (renaming-= $3 $4))      ; holds -- both are the variable class
+(check (!= $3 $4))   ; also holds -- they are different variables
 ```
 
-Both desugar with the class `(Var 0)` on each side; `renaming-=` recovers *which* slot
-by composing `{0 -> 3}` and `{0 -> 4}` onto the two renamings, and `eclass-=` has
-nothing to compose onto. So `(eclass-= a $5)` does **not** say "a is the variable `$5`"
-— it says only "a is a variable". Use `renaming-=` for that.
+Both desugar with the class `(Var 0)` on each side; `=` recovers *which* slot
+by composing `{0 -> 3}` and `{0 -> 4}` onto the two renamings, and `renaming-=` has
+nothing to compose onto. So `(renaming-= a $5)` does **not** say "a is the variable `$5`"
+— it says only "a is a variable". Use `=` for that.
 
-### Egglog's own `=` is refused
+### What happened to egglog's `=`
 
-`(check (= a b))` is an error here, and the message points at the two claims above.
-It asks whether two terms are the same egglog **value**, and a slotted class spans
-several of those — one per invocation — so it can answer *no* for two terms that are
-equal:
+A slotted file's `=` is the one above: it compiles to the shared-renaming check, not to
+egglog's comparison of two stored values. That third notion is no longer reachable from
+here, and nothing is lost by it.
+
+For two **nodes** it was not a different question anyway. The machinery has a rule that
+unions two values reaching their leader by the same renaming, up to a symmetry of the
+class, so term equality already implied it — checked, with no explicit union in either
+case:
 
 ```
-(rewrite (F ?x ?x) ?x :name idem)
-(let a (F $9 $9))            ; a's class becomes the variable class, at $9
-(check (renaming-= a $9))    ; holds
-(check (= $a (Var 0)))       ; FAILS: (Var 0) is that class at slot 0, not at $9
+(rewrite (F ?x ?y) (F ?y ?x) :name comm)
+(let f12 (F $1 $2))
+(let f21 (F $2 $1))
+(let i0 (Lam $0 $0))
+(let i5 (Lam $5 $5))
+(run 5)
+;; both hold, at the encoded level: the swap is in the group, and alpha-variants merge
 ```
 
-Three notions, coarsest first: `eclass-=` (same class), `renaming-=` (same term), and
-egglog's `=` (same stored value). The encoding deliberately does not union two
-invocations of one class — an action writes `Equated`, not `union` — and the mutation
-corpus carries `union-id` for exactly that mistake, so this is not an accident of the
-implementation.
+For a **bare slot** it could not express the claim at all. A slot's identity lives in
+the renaming, not in the value: `$9` and `$0` are the same value `(Var 0)` and different
+terms, so `(= a $9)` has no stored-value spelling.
+
+A test that really is about the encoding's own tables belongs in `slotted/encoding/`,
+which runs as plain egglog and can say whatever it likes.
 
 ### Dropping to the encoded level
 
@@ -201,8 +209,8 @@ so a test can ask about the encoding itself without leaving the language:
 ```
 
 `(RenamesToLeader f m l)` is `f = m*l`, with `m` carrying `l`'s slots to `f`'s. That
-relation is what `renaming-=` and `eclass-=` are defined in terms of: `renaming-=` asks
-for **one** renaming reaching both terms from the leader, `eclass-=` lets each have its
+relation is what `=` and `renaming-=` are defined in terms of: `=` asks
+for **one** renaming reaching both terms from the leader, `renaming-=` lets each have its
 own. Unlike `=`, it says plainly that it is dropping a level.
 
 ## Extraction and printing

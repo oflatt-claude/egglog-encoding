@@ -32,7 +32,7 @@
 
 (run 0)
 
-(check (renaming-= i01 i10))
-(check (renaming-!= i01 i02))
-(check (renaming-= n1 n2))
-(check (renaming-= n1 n3))
+(check (= i01 i10))
+(check (!= i01 i02))
+(check (= n1 n2))
+(check (= n1 n3))

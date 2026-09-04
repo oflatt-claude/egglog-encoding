@@ -25,7 +25,7 @@
 (let id6 (Lam $6 $6))
 (run 0)
 
-(check (renaming-= id5 id6))
+(check (= id5 id6))
 ;; the bound slot is not free, so the class depends on nothing
 (check (slots id5))
 
@@ -40,7 +40,7 @@
 (let const (Lam $5 $7))
 (run 0)
 
-(check (renaming-!= id5 const))
+(check (!= id5 const))
 ;; and the constant function keeps $7 free
 (check (slots const $7))
 
@@ -58,7 +58,7 @@
 (let l6 (Let $6 $6 f))
 (run 0)
 
-(check (renaming-= l5 l6))
+(check (= l5 l6))
 (check (slots l5))
 
 (pop)
@@ -72,7 +72,7 @@
 (let l (Lam $5 $5))
 (run 0)
 
-(check (renaming-!= a l))
+(check (!= a l))
 ;; `App` binds nothing, so $5 stays free
 (check (slots a $5))
 

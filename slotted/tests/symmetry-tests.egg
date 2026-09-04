@@ -2,9 +2,9 @@
 ;;;
 ;;; A class's symmetry group is the content slotted e-graphs add over ordinary ones,
 ;;; and Def. 6 is what it buys: two invocations of a class AGREE when the renaming
-;;; between them lies in that group. So `renaming-=` here is rarely bookkeeping -- in most
+;;; between them lies in that group. So `=` here is rarely bookkeeping -- in most
 ;;; sections it holds only because a union or a rule put the right renaming in the
-;;; group, and the `renaming-!=` beside it is the renaming that stayed out.
+;;; group, and the `!=` beside it is the renaming that stayed out.
 ;;;
 ;;; Standalone: run it as it stands.
 ;;;
@@ -35,13 +35,13 @@
 
 (run 0)
 
-(check (renaming-= a a2))
-(check (renaming-!= a b))
-(check (eclass-= a b))
+(check (= a a2))
+(check (!= a b))
+(check (renaming-= a b))
 
-(check (renaming-= $3 $3))
-(check (renaming-!= $3 $4))
-(check (eclass-= $3 $4))
+(check (= $3 $3))
+(check (!= $3 $4))
+(check (renaming-= $3 $4))
 
 (pop)
 
@@ -62,8 +62,8 @@
 
 (run 10)
 
-(check (renaming-= a b))
-(check (renaming-!= a c))
+(check (= a b))
+(check (!= a c))
 
 (pop)
 
@@ -85,8 +85,8 @@
 
 (run 0)
 
-(check (renaming-= a0 a2))
-(check (renaming-!= a0 a3))
+(check (= a0 a2))
+(check (!= a0 a3))
 
 (pop)
 
@@ -108,8 +108,8 @@
 
 (run 0)
 
-(check (renaming-= f43 h34))
-(check (renaming-!= f43 h43))
+(check (= f43 h34))
+(check (!= f43 h43))
 
 (pop)
 
@@ -135,10 +135,10 @@
 
 (run 0)
 
-(check (renaming-= f12 f21))
-(check (renaming-= g12 g21))
-(check (renaming-= p1 p2))
-(check (renaming-!= f12 f13))
+(check (= f12 f21))
+(check (= g12 g21))
+(check (= p1 p2))
+(check (!= f12 f13))
 
 (pop)
 
@@ -156,8 +156,8 @@
 
 (run 0)
 
+(check (!= a b))
 (check (renaming-!= a b))
-(check (eclass-!= a b))
 
 (pop)
 
@@ -182,8 +182,8 @@
 
 (run 10)
 
-(check (renaming-= t a01))
-(check (renaming-!= s a01))
+(check (= t a01))
+(check (!= s a01))
 
 (pop)
 
@@ -205,8 +205,8 @@
 
 (run 10)
 
-(check (renaming-= u a01))
-(check (renaming-!= t a01))
+(check (= u a01))
+(check (!= t a01))
 
 (pop)
 
@@ -229,8 +229,8 @@
 
 (run 10)
 
-(check (renaming-= e a01))
-(check (renaming-!= s a01))
+(check (= e a01))
+(check (!= s a01))
 
 (pop)
 
@@ -253,8 +253,8 @@
 
 (run 10)
 
-(check (renaming-= a b))
-(check (renaming-= c d))
-(check (renaming-!= a e))
+(check (= a b))
+(check (= c d))
+(check (!= a e))
 
 (pop)

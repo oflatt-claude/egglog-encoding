@@ -24,7 +24,7 @@
 (run 0)
 
 ;; the body uses neither bound slot, so the two spellings are one class
-(check (renaming-= a b))
+(check (= a b))
 ;; and that class depends on nothing
 (check (slots a))
 
@@ -40,7 +40,7 @@
 (let vk (Sum r $5 $6 (Sing $6 $5)))
 (run 0)
 
-(check (renaming-!= kv vk))
+(check (!= kv vk))
 ;; both bound slots are consumed by the body, so neither escapes
 (check (slots kv))
 (check (slots vk))
@@ -61,7 +61,7 @@
 (let second (Sum Null $5 $6 $6))
 (run 0)
 
-(check (renaming-!= first second))
+(check (!= first second))
 (check (slots first))
 (check (slots second))
 
