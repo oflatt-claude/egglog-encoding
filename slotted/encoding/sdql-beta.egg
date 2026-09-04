@@ -9,11 +9,27 @@
 ;;;
 ;;; with the bound slot `x = mx(0)` named in the node's frame.
 ;;;
-;;; WRITTEN AT THE ENCODED LEVEL ON PURPOSE, unlike `sdql-rewrites.egg` and
-;;; `sdql-batax.egg` beside it. What this file is about IS the frame plumbing -- two
-;;; renamings meeting around a primitive -- so there is nothing here to say in a
-;;; language that hides renamings. `slotted-egglog.py` deliberately cannot express it,
-;;; and that is the right answer rather than a gap.
+;;; WRITTEN AT THE ENCODED LEVEL, unlike `sdql-rewrites.egg` and `sdql-batax.egg`
+;;; beside it -- and that is a GAP in `slotted-egglog.py` rather than a limit of the
+;;; slotted language. Three things are missing, and the frame bridge below is NOT one
+;;; of them: minting a name for a slot the constraints do not reach is
+;;; `find-mapping-total`, which the compiler emits already.
+;;;
+;;;   * a right-hand side cannot say "body with x replaced by t". Its grammar is a
+;;;     term built from declared constructors, and a substitution is not one.
+;;;
+;;;   * a substitution's answer is an INVOCATION, so reading it takes two calls with
+;;;     identical arguments -- `slotted-subst` for the class, `slotted-subst-frame`
+;;;     for the renaming. The compiler has no notion of a result that is not simply a
+;;;     class.
+;;;
+;;;   * it needs TWO rules. The result's own slots are not known until the machinery
+;;;     has seen its node, so the narrowing M8 does inside one rule has to happen in a
+;;;     later one, through the relation below. Every rule the compiler emits is one
+;;;     rule in one phase.
+;;;
+;;; `compose-total` is a fourth and smaller one: the compiler never emits it, and the
+;;; bridge needs it to refuse rather than truncate.
 
 (include "target/slotted/slotted-lang-sdql.egg")
 
