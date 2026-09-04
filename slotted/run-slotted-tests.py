@@ -67,7 +67,9 @@ def slotted_sources():
         seen[key] = ok
         return ok
 
-    return [q for q in sorted(SRC_DIR.glob("*.egg")) if is_source(q)]
+    # Recursive: `paper/` holds one file per reference test. `snapshots/` is compiled
+    # output rather than a source, and is excluded by name rather than by reading it.
+    return [q for q in sorted(SRC_DIR.rglob("*.egg")) if SNAPSHOTS not in q.parents and is_source(q)]
 
 
 def main():
