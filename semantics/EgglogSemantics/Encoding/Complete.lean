@@ -5866,6 +5866,21 @@ more than its consumer does. What justifies asking for it is that it is what the
 deliver: every id a view entry ever carried at a key is one a `set` wrote, and two `set`s at one
 key are a collision, and a collision is an `@UF` edge.
 
+**The source run is a hypothesis because the property is false without it, and
+`ltuProgram` is the program.** `Program.EncodeDomain.noLitUnion` reads rule heads only — a
+*top-level* `union` on a literal was left to the source run, which sticks on it — while
+`encodeBuild` gives a literal itself as its id, so `encodeAction`'s `union` head writes an `@UF`
+entry between two distinct literals and `execM` returns. `ViewRepr d (.lit l) (.lit l)` holds at
+every state with no premise, so `Database.Absorbs (.lit l) e` forces `e = .lit l` and `eclass`
+asks for a point that is two different literals at once:
+`Encoding/Correspond.lean`'s `not_rebuildClosed_of_out_uf_lits` is the clause against that entry
+and `execM_viewJoined_false` is it at the target of a program every clause of the domain admits.
+`ProgramStep Database.empty P src` is the repair rather than a tenth domain clause, since it is
+what every consumer of this theorem already carries and what the encoder was excused from
+checking. **What it now owes the proof** is the target-side reading of `Database.WF.litsIsolated`
+— that no `@UF` entry of the target is keyed on a literal it does not equal — which the source
+run's refusal supplies and which is not yet written down.
+
 **Non-vacuous, and still failing where it must**: `satTarget_rebuildClosed` is the degenerate
 state, `Encoding/Match.lean`'s `uRebuilt_rebuildClosed` the one with a real `@UF` edge — where
 `eclass` and `edged` both do work — `ncTgt_rebuildClosed` the one with a positive-arity key in
@@ -5874,7 +5889,8 @@ fails because `uTgt_not_viewJoined` does. All three positive witnesses are prove
 `Database.RebuildClosedStrong` and transported by `Database.RebuildClosed.of_strong`, which is
 what says the weakening is a weakening; `cxStale_not_rebuildClosedStrong` is where the two come
 apart. -/
-theorem execM_rebuildClosed {P : Program} {tgt : FDatabase} (hdom : P.EncodeDomain)
+theorem execM_rebuildClosed {P : Program} {src : Database} {tgt : FDatabase}
+    (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
     (htgt : execM (encode P) = some tgt) : tgt.toDatabase.RebuildClosed := by
   sorry
 
@@ -5910,14 +5926,19 @@ entry term `Database.Out` reads. `execM_rebuildClosed` is where what is left is 
 and it is the same run-wide index argument, now weakened to "up to the union-find" and stated
 per rule rather than per clause.
 
+**And the source run, for the reason `execM_rebuildClosed` takes it**: `ufJoin` is false at an
+`@UF` entry between two distinct literals, which a top-level `union` on literals writes and
+which `Program.EncodeDomain` does not exclude (`execM_viewJoined_false`).
+
 **Non-vacuous at three states, with every clause doing work at one of them**:
 `satTarget_viewJoined` (the degenerate one), `Encoding/Match.lean`'s `uRebuilt_viewJoined` (a
 real `@UF` edge in `ufJoin`, two ids for one term in `ids`) and `ncTgt_viewJoined` (positive
 arity in `rowShared`, at the key the `union` moved) — with `ncTgt_rowShared_FB_FA` and
 `ncTgt_ids_B` the two clauses at named instances with every hypothesis inhabited. -/
-theorem execM_viewJoined {P : Program} {tgt : FDatabase} (hdom : P.EncodeDomain)
+theorem execM_viewJoined {P : Program} {src : Database} {tgt : FDatabase}
+    (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
     (htgt : execM (encode P) = some tgt) : tgt.toDatabase.ViewJoined :=
-  (execM_rebuildClosed hdom htgt).toViewJoined
+  (execM_rebuildClosed hdom hsrc htgt).toViewJoined
 
 /-- **`Database.ViewsCover.shared`, at an `execM` target. Not proved.**
 
@@ -5942,7 +5963,7 @@ already carries, and none at all at the diagonal. -/
 theorem execM_viewsCover {P : Program} {src : Database} {tgt : FDatabase}
     (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
     (htgt : execM (encode P) = some tgt) : tgt.toDatabase.ViewsCover src :=
-  Database.ViewsCover.of_viewJoined (execM_viewJoined hdom htgt)
+  Database.ViewsCover.of_viewJoined (execM_viewJoined hdom hsrc htgt)
     (unionsInv_execM hdom hsrc htgt).reads
 
 @[inherit_doc execM_viewsCover]
@@ -5961,7 +5982,8 @@ what `ncTgt_not_readsSelf` costs. `UnionsRead` itself holds at that counterexamp
 theorem execM_unionsRead {P : Program} {src : Database} {tgt : FDatabase}
     (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
     (htgt : execM (encode P) = some tgt) : tgt.toDatabase.UnionsRead src :=
-  unionsRead_of_viewJoined (execM_viewJoined hdom htgt) (execM_unionsJoined hdom hsrc htgt)
+  unionsRead_of_viewJoined (execM_viewJoined hdom hsrc htgt)
+    (execM_unionsJoined hdom hsrc htgt)
 
 /-- **Obligation `assert`, at the encoding**, split by writer. `Database.addTerm` writes a
 reflexive equation per subterm built, and `sameClass_self_of_viewsCover` discharges those out
@@ -5981,10 +6003,10 @@ view's functional dependency, which is false at this file's own witness — the 
 above has the refutation. And not from a union-find *representative* either: what the reduction
 spends is a common absorber of the middle term's two ids, which is `Database.ViewJoined.ids`. -/
 theorem encode_trans {P : Program} {src : Database} {tgt : FDatabase} (hdom : P.EncodeDomain)
-    (_hsrc : ProgramStep Database.empty P src) (htgt : execM (encode P) = some tgt)
+    (hsrc : ProgramStep Database.empty P src) (htgt : execM (encode P) = some tgt)
     (a b c : Term) (hab : SameClass tgt.toDatabase a b) (hbc : SameClass tgt.toDatabase b c) :
     SameClass tgt.toDatabase a c :=
-  SameClass.trans_of_viewJoined (execM_viewJoined hdom htgt) hab hbc
+  SameClass.trans_of_viewJoined (execM_viewJoined hdom hsrc htgt) hab hbc
 
 /-- **Obligation `congr`, at the encoding. Proved from `execM_viewsCover`.** The pointwise
 hypothesis is one shared id tuple, and `ViewsCover.shared` is the view entry at it — the

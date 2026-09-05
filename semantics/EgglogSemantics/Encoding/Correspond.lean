@@ -1464,6 +1464,27 @@ theorem Database.RebuildClosed.toViewJoined {d : Database} (h : d.RebuildClosed)
     obtain ⟨e', pf', ho'⟩ := h.column f es ds e pf ho hr
     exact ⟨ds, e', pf', h₁, h₂, ho'⟩
 
+/-! #### The one shape both properties are false at
+
+`ViewRepr d (.lit l) (.lit l)` holds at **every** state and with no premise — a literal is its
+own id and the encoding emits no view entry for one — so `Database.Absorbs (.lit l) e` forces
+`e = .lit l`. An `@UF` entry between two *distinct* literals therefore asks `ufJoin` for a point
+that is both, and there is none. The clause is not repairable at the state: it is the entry that
+must not be there. -/
+
+/-- **An `@UF` entry between two distinct literals refutes `Database.ViewJoined`.** -/
+theorem not_viewJoined_of_out_uf_lits {d : Database} {l₁ l₂ : Lit} {pf : Term}
+    (hne : l₁ ≠ l₂) (h : d.Out ufName [.lit l₁] [.lit l₂, pf]) : ¬ d.ViewJoined := by
+  intro hvj
+  obtain ⟨e, ha, hb⟩ := hvj.ufJoin _ _ _ h
+  exact hne (Term.lit.inj ((ViewRepr.eq_of_lit (ha _ ViewRepr.lit)).symm.trans
+    (ViewRepr.eq_of_lit (hb _ ViewRepr.lit))))
+
+@[inherit_doc not_viewJoined_of_out_uf_lits]
+theorem not_rebuildClosed_of_out_uf_lits {d : Database} {l₁ l₂ : Lit} {pf : Term}
+    (hne : l₁ ≠ l₂) (h : d.Out ufName [.lit l₁] [.lit l₂, pf]) : ¬ d.RebuildClosed :=
+  fun hrc => not_viewJoined_of_out_uf_lits hne h hrc.toViewJoined
+
 /-- **A state with no `@UF` entry has no chain either**, which is what makes the two clauses
 that read one vacuous at a union-free target. -/
 theorem Database.UFReach.eq_of_no_uf {d : Database}
@@ -12662,6 +12683,109 @@ theorem bare_build_invents_equality {d e : FDatabase}
   · rw [FDatabase.toDatabase_terms]; exact hm₁
   · rw [FDatabase.toDatabase_terms]; exact hm₂
   · exact fun h => hno (FDatabase.mem_closureF_iff.mpr h)
+
+
+/-! ## The residue is false without the source run, and this is the program
+
+`Program.EncodeDomain.noLitUnion` reads **rule heads** — a *top-level* `union` on a literal
+needs no clause there, because the source run sticks at it and `ProgramStep` then has no state
+for the correspondence to be about. The encoder is not stuck: `encodeBuild` gives a literal
+itself as its id, so `encodeAction`'s `union` head emits
+`.set @UF [ordering-max 1 2] [ordering-min 1 2, @Fiat]` and the target holds an `@UF` entry
+between two distinct literals. `not_viewJoined_of_out_uf_lits` is that entry against `ufJoin`.
+
+So the residue's two `execM` forms are false with `Program.EncodeDomain` and the run as their
+only hypotheses, and `ltuProgram` below is the program. The repair is the hypothesis every
+consumer already carries — `ProgramStep Database.empty P src`, which `ltuProgram` has not got —
+and not a domain clause: `Encoding/Encode.lean`'s `noLitUnion` docstring is the record that a
+top-level `union` was left to the source run on purpose.
+
+`ltuProgram` is minimal on purpose: one command, and every clause of the domain holds of it. -/
+
+/-- **A top-level `union` on two literals.** In `encode`'s domain — `noLitUnion`'s first
+disjunct reads `Cmd.rule` and this program has none — and stuck at the source
+(`Spec/Eval.lean`'s `evalAction` returns `none` when either operand is a literal). -/
+def ltuProgram : Program := [.action (.union (.lit (.int 1)) (.lit (.int 2)))]
+
+/-- **Every clause of the domain holds of it.** -/
+theorem ltuProgram_encodeDomain : ltuProgram.EncodeDomain where
+  ctorsOnly := by
+    intro c hc
+    simp only [ltuProgram, List.mem_cons] at hc
+    rcases hc with rfl | h <;> simp_all [Cmd.CtorDecl]
+  setLegal := by decide
+  noPrim := by decide
+  noAt := by decide +kernel
+  queryEncodable := by
+    intro c hc
+    simp only [ltuProgram, List.mem_cons] at hc
+    rcases hc with rfl | h <;> trivial
+  noLitUnion := Or.inl (by decide)
+  headsDeclared := by decide
+  aritiesAgree := by decide
+  headsScoped := by decide
+
+/-- `ordering-gt` at the two operands, which is what picks the edge's direction. -/
+theorem blt_lit_two_one : Term.blt (Term.lit (.int 2)) (Term.lit (.int 1)) = false := by decide
+
+/-- **The one `@UF` write the program encodes to**, ahead of the trailing rebuild. -/
+theorem ltuProgram_encodeCmds : (encodeCmds ltuProgram 0 0).1 =
+    [Cmd.action (.set ufName [maxE (.lit (.int 1)) (.lit (.int 2))]
+        [minE (.lit (.int 1)) (.lit (.int 2)), fiatE]),
+     Cmd.saturate rebuildRuleset] := rfl
+
+/-- **And the entry it leaves in the target**, proved rather than assumed: the `set` runs on
+literals, so `eval_ifGt` names both endpoints, `FDatabase.addRow` mints the entry term, and no
+writer downstream removes a term (`FDatabase.mergeSaturateF_terms`,
+`FDatabase.execProgramM_terms`). -/
+theorem execM_encode_ltu_uf {e : FDatabase} (htgt : execM (encode ltuProgram) = some e) :
+    ∃ pf : Term, Term.app ufName [.lit (.int 2), .lit (.int 1), pf] ∈ e.terms ∧
+      Term.lit (.int 2) ∈ e.terms := by
+  rw [execM, encode] at htgt
+  obtain ⟨d₀, -, hcmds⟩ := FDatabase.execProgramM_append htgt
+  rw [ltuProgram_encodeCmds, FDatabase.execProgramM] at hcmds
+  obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp hcmds
+  rw [FDatabase.execCmdM] at h₁
+  obtain ⟨d₂, ha, hm⟩ := Option.bind_eq_some_iff.mp h₁
+  obtain ⟨as, vs, has, hvs, rfl⟩ := execAction_set ha
+  have hl1 : (Expr.lit (.int 1)).eval d₀.sig d₀.env = some (Term.lit (.int 1)) := rfl
+  have hl2 : (Expr.lit (.int 2)).eval d₀.sig d₀.env = some (Term.lit (.int 2)) := rfl
+  have hmax : (maxE (.lit (.int 1)) (.lit (.int 2))).eval d₀.sig d₀.env
+      = some (Term.lit (.int 2)) := by
+    rw [maxE, eval_ifGt hl1 hl2 hl1 hl2, blt_lit_two_one]; rfl
+  have hmin : (minE (.lit (.int 1)) (.lit (.int 2))).eval d₀.sig d₀.env
+      = some (Term.lit (.int 1)) := by
+    rw [minE, eval_ifGt hl1 hl2 hl2 hl1, blt_lit_two_one]; rfl
+  obtain ⟨mx, hmx, rfl⟩ := Expr.evalList_singleton has
+  obtain ⟨mn, pv, hmn, -, rfl⟩ := Expr.evalList_pair hvs
+  obtain rfl : mx = Term.lit (.int 2) := Option.some.inj (hmx.symm.trans hmax)
+  obtain rfl : mn = Term.lit (.int 1) := Option.some.inj (hmn.symm.trans hmin)
+  have hcarry : ∀ t ∈ (FDatabase.addRow ufName [Term.lit (.int 2)]
+      [Term.lit (.int 1), pv] d₀).terms, t ∈ e.terms := fun t ht =>
+    FDatabase.execProgramM_terms h₂ _ (FDatabase.mergeSaturateF_terms hm _ ht)
+  exact ⟨pv, hcarry _ (FDatabase.mem_addRow_terms.mpr (Or.inl (by simp [Term.subtermList]))),
+    hcarry _ (FDatabase.mem_addRow_terms.mpr
+      (Or.inl (by simp [Term.subtermList, Term.subtermListL])))⟩
+
+/-- **`Database.ViewJoined` and `Database.RebuildClosed` are both false at an `execM` target of
+a program in `encode`'s domain.** So `execM_viewJoined` and `execM_rebuildClosed` are false as
+they were stated — with `Program.EncodeDomain` and the encoded run as their only hypotheses —
+and `Encoding/Complete.lean` states them at the source run as well.
+
+The run is a hypothesis for the reason every other target-side witness here takes one; it is
+satisfied, since `execM (encode ltuProgram)` is `some` — the encoder has nothing to stick on. -/
+theorem execM_viewJoined_false {e : FDatabase}
+    (htgt : execM (encode ltuProgram) = some e) :
+    ltuProgram.EncodeDomain ∧ ¬ e.toDatabase.ViewJoined ∧ ¬ e.toDatabase.RebuildClosed := by
+  obtain ⟨pf, hmem, hl2⟩ := execM_encode_ltu_uf htgt
+  have hout : e.toDatabase.Out ufName [.lit (.int 2)] [.lit (.int 1), pf] := by
+    refine ⟨[Term.lit (.int 2)], CongList.refl ?_, ?_⟩
+    · intro a ha
+      obtain rfl : a = Term.lit (.int 2) := by simpa using ha
+      rw [FDatabase.toDatabase_terms]; exact hl2
+    · rw [FDatabase.toDatabase_terms]; exact hmem
+  exact ⟨ltuProgram_encodeDomain, not_viewJoined_of_out_uf_lits (by decide) hout,
+    not_rebuildClosed_of_out_uf_lits (by decide) hout⟩
 
 
 end Egglog
