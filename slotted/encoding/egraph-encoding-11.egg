@@ -45,11 +45,20 @@
 ;;
 ;; How many are there? The number of ways the match's slots can be partitioned, minus
 ;; those two slots of one node or two slots the pattern writes rule out. That is
-;; Bell-numbered in the worst case, so eight is not the wide margin it was when this
-;; was a per-atom count. MEASURED, on this tree: raising the seeding to 64 changes
-;; nothing -- the array and sdql suites, the curated corpus and a 200-case
-;; symmetry-heavy fuzz run all give identical answers. Eight is enough for the
-;; languages here and is not a bound anyone proved.
+;; Bell-numbered in the worst case, so it grows fast: three free slots give five, four
+;; give fifteen.
+;;
+;; EIGHT WAS NOT ENOUGH, and the way that was found is worth repeating. Eight was first
+;; kept because raising it to 64 changed no answer -- on the corpus known at the time.
+;; A symmetry-heavy sweep then reached past it: `XDIFF_SYM=0.95 isomorphism.py fuzz 1200
+;; 101` has a case whose class count is 9 against the reference's 6 at eight indices and
+;; 8 at sixty-four, so one union was being lost to truncation alone. 256 finds nothing
+;; more than 64.
+;;
+;; Truncation is silent and always in one direction: element 0 is the identity, so
+;; running out degrades to NOT REFINING, and the cost is a match missed rather than one
+;; invented. That is why it took a sweep to notice, and why "changing no answer" is weak
+;; evidence for a bound -- it only says the corpus did not reach it.
 (sort Namings (Vec Renaming))
 (relation Idx (i64))
 (Idx 0)
@@ -60,6 +69,62 @@
 (Idx 5)
 (Idx 6)
 (Idx 7)
+(Idx 8)
+(Idx 9)
+(Idx 10)
+(Idx 11)
+(Idx 12)
+(Idx 13)
+(Idx 14)
+(Idx 15)
+(Idx 16)
+(Idx 17)
+(Idx 18)
+(Idx 19)
+(Idx 20)
+(Idx 21)
+(Idx 22)
+(Idx 23)
+(Idx 24)
+(Idx 25)
+(Idx 26)
+(Idx 27)
+(Idx 28)
+(Idx 29)
+(Idx 30)
+(Idx 31)
+(Idx 32)
+(Idx 33)
+(Idx 34)
+(Idx 35)
+(Idx 36)
+(Idx 37)
+(Idx 38)
+(Idx 39)
+(Idx 40)
+(Idx 41)
+(Idx 42)
+(Idx 43)
+(Idx 44)
+(Idx 45)
+(Idx 46)
+(Idx 47)
+(Idx 48)
+(Idx 49)
+(Idx 50)
+(Idx 51)
+(Idx 52)
+(Idx 53)
+(Idx 54)
+(Idx 55)
+(Idx 56)
+(Idx 57)
+(Idx 58)
+(Idx 59)
+(Idx 60)
+(Idx 61)
+(Idx 62)
+(Idx 63)
 
 ;; One `U` value per e-node and per class; a slotted class spans several of them.
 (sort U)
