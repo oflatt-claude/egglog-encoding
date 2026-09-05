@@ -1,6 +1,6 @@
 ;;; The `sdql` rewrite rules, checked -- at the level they are written.
 ;;;
-;;; `(include "slotted/tests/sdql.egg")` brings the language and all 43 rules, so this
+;;; `(include "slotted/languages/sdql.egg")` brings the language and all 43 rules, so this
 ;;; file adds only terms and claims. `gen-sdql-rules.py` compiles the same rules into
 ;;; `target/slotted/slotted-sdql-rules.egg`, and `check-front-ends.py` holds
 ;;; the two together, so pinning behaviour here pins that file's behaviour too.
@@ -10,7 +10,7 @@
 ;;; for N and no more, which also keeps the negative claims sharp: a `!=` over
 ;;; many steps only says the rules did not eventually find another route.
 
-(include "slotted/tests/sdql.egg")
+(include "slotted/languages/sdql.egg")
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; A plain rule, and the `Symbol` payload leaf it builds.

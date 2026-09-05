@@ -45,7 +45,7 @@
 ;;; regression test and `egraph-encoding-11.egg` has the fix: `Equated`, the
 ;;; unoriented form of the relation, from which the oriented rows are derived.
 
-(include "slotted/tests/sdql.egg")
+(include "slotted/languages/sdql.egg")
 
 ;;; the CSR range, shared by both inner sums
 (let subarr (SubArray $3 $8 (Sub (Get $2 (Add $7 (Num 1))) (Num 1))))

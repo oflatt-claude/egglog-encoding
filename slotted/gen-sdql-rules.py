@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compile the reference `sdql` rewrite rules into the slotted encoding.
 
-The rules are `slotted/tests/sdql.egg`, written in the slotted language and read from
+The rules are `slotted/languages/sdql.egg`, written in the slotted language and read from
 there rather than restated here; the recipe that compiles them is
 `slotted/slotted-encoder.py`, which `slotted/tests/user-rules.egg`
 documents.  What `sdql` adds over the differential harness's two-child `App2`/`App3`
@@ -77,7 +77,7 @@ HEADER = """\
 ;;; `slotted-egraphs/benches/sdql.rs` -- compiled into the slotted encoding by the
 ;;; recipe in `slotted/tests/user-rules.egg`.
 ;;;
-;;; The rules themselves are `slotted/tests/sdql.egg`, written in the slotted language;
+;;; The rules themselves are `slotted/languages/sdql.egg`, written in the slotted language;
 ;;; read them there. This file is what they compile to.
 ;;;
 ;;; `beta` is NOT here: it substitutes, which needs `slotted-subst` and frame
@@ -102,7 +102,7 @@ HEADER = """\
 #: The rules, in the slotted language. One source for both this file and
 #: `slotted-egglog.py`, so the .egg tests and the differential harness cannot be
 #: running different rules from each other.
-SOURCE = pathlib.Path("slotted/tests/sdql.egg")
+SOURCE = pathlib.Path("slotted/languages/sdql.egg")
 
 
 def main():

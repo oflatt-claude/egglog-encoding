@@ -103,9 +103,9 @@ MACHINERY = "target/slotted/slotted-lang-sdql.egg"
 # `Symbol(x) == Symbol(y)` is ever asked -- and the prefix is applied to every
 # symbol on that side, terms and rules alike, so the two e-graphs stay isomorphic
 # and the probe partitions stay comparable.
-# The language is declared where its rules are: `slotted/tests/sdql.egg` holds both,
+# The language is declared where its rules are: `slotted/languages/sdql.egg` holds both,
 # and `sdql.ref` beside it says what the reference calls each constructor.
-SDQL_SRC = ROOT / "slotted" / "tests" / "sdql.egg"
+SDQL_SRC = ROOT / "slotted" / "languages" / "sdql.egg"
 # The language file says what the constructors are; the `.ref` beside it says what the
 # reference calls them, including the two workarounds above. `slotenc.language` checks
 # that the two name the same constructors, so an operator added to one and not the other
@@ -146,7 +146,7 @@ def check_term(t):
 
 
 # ---------------------------------------------------------------------- the rules
-# Read from `slotted/tests/sdql.egg` and rendered in the oracle's syntax, which is
+# Read from `slotted/languages/sdql.egg` and rendered in the oracle's syntax, which is
 # where the two spelling workarounds above come from -- `Let`'s tag and `Symbol`'s
 # prefix are in `sdql.ref`, so neither is applied by hand here.
 #
@@ -159,7 +159,7 @@ def check_term(t):
 class Rule:
     """One rewrite, with each side already in the oracle's own syntax.
 
-    Derived from `slotted/tests/sdql.egg` rather than restated: `pat_sexpr` renders a
+    Derived from `slotted/languages/sdql.egg` rather than restated: `pat_sexpr` renders a
     pattern with `op.ref` for every operator and `op.ref_prefix` for a payload leaf,
     which is where `sdql-let` and the `sym:` prefix come from. A hand-written copy of
     these 13 patterns used to live here, one token-rewriting pass away from disagreeing
@@ -195,7 +195,7 @@ class Rule:
         return out
 
 
-#: The rules, read from `slotted/tests/sdql.egg` -- the same file `gen-sdql-rules.py`
+#: The rules, read from `slotted/languages/sdql.egg` -- the same file `gen-sdql-rules.py`
 #: compiles -- with each side rendered in the oracle's syntax. The cases below ask for
 #: one by name.
 def _load_rules():

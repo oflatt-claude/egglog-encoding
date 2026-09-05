@@ -69,7 +69,13 @@ def slotted_sources():
 
     # Recursive: `paper/` holds one file per reference test. `snapshots/` is compiled
     # output rather than a source, and is excluded by name rather than by reading it.
-    return [q for q in sorted(SRC_DIR.rglob("*.egg")) if SNAPSHOTS not in q.parents and is_source(q)]
+    # `slotted/languages/` holds a language and its rules -- no terms, nothing asked --
+    # so those come out as the rule libraries the count line reports. They are compiled
+    # and loaded here so a broken one is caught where it lives, not in a test that
+    # happens to include it.
+    files = [q for q in sorted(SRC_DIR.rglob("*.egg")) if SNAPSHOTS not in q.parents]
+    files += sorted((ROOT / "slotted" / "languages").glob("*.egg"))
+    return [q for q in files if is_source(q)]
 
 
 def main():

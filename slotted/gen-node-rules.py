@@ -96,8 +96,8 @@ def handwritten_region():
 # still has a file to itself.
 LANG_DIR = pathlib.Path("slotted/languages")
 SOURCES = {
-    "sdql": pathlib.Path("slotted/tests/sdql.egg"),
-    "array": pathlib.Path("slotted/tests/array.egg"),
+    "sdql": pathlib.Path("slotted/languages/sdql.egg"),
+    "array": pathlib.Path("slotted/languages/array.egg"),
     "toy": LANG_DIR / "toy.egg",
 }
 

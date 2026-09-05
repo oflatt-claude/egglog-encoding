@@ -22,7 +22,7 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 # A `.ref` sits beside the file that declares its language, which is the slotted source
 # where the language has rules and `languages/` where it does not.
-REF_DIRS = (ROOT / "slotted" / "languages", ROOT / "slotted" / "tests")
+REF_DIRS = (ROOT / "slotted" / "languages",)
 ORACLE = ROOT / "slotted" / "xmulti" / "src" / "main.rs"
 
 sys.path.insert(0, str(ROOT / "slotted"))

@@ -162,7 +162,7 @@ class Source:
 
         `(include "...")` in a slotted source names ANOTHER SLOTTED SOURCE, and pulls in
         its constructors and its rules -- so a test over the sdql rules says
-        `(include "slotted/tests/sdql.egg")` instead of restating 43 of them. A slotted
+        `(include "slotted/languages/sdql.egg")` instead of restating 43 of them. A slotted
         source never includes the hand-written core or a generated file: the compiler
         supplies the core and generates the machinery, which is the whole point.
         """

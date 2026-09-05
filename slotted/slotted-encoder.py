@@ -13,8 +13,8 @@ one place for it to be right and one place to fix. The front-ends:
     xdiff/xarray.py       the differential harness, the paper's array language
     xdiff/xsdql.py        the differential harness, `sdql`
 
-None of them holds a rule. The rules live in `slotted/tests/sdql.egg` and
-`slotted/tests/array.egg`, written in the slotted language, and each front-end reads
+None of them holds a rule. The rules live in `slotted/languages/sdql.egg` and
+`slotted/languages/array.egg`, written in the slotted language, and each front-end reads
 one -- so a rule has one spelling and the several things done with it cannot disagree
 about what it says.
 

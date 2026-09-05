@@ -279,7 +279,9 @@ necessarily the frame of the term you asked about: `(extract q)` above prints
 
 ## What `ok` tells you
 
-A run reports what it did, because "ok" means different things for different files:
+A run reports what it did, because "ok" means different things for different files.
+A file under `slotted/tests/` asks something; a file under `slotted/languages/` is a
+language and its rules, so running it only says that it loaded:
 
 ```
 ok   figure-3.egg   4 terms, 1 union, 3 claims
@@ -292,8 +294,9 @@ The second has no terms and no claims, so nothing was checked — it only loaded
 
 | path | what it is |
 | --- | --- |
-| `slotted/tests/` | programs in this language, run by `slotted/run-slotted-tests.py` |
+| `slotted/tests/` | programs in this language that ASK something: terms, and claims about them. Run by `slotted/run-slotted-tests.py` |
 | `slotted/tests/paper/` | one file per test in the reference's own suites |
+| `slotted/languages/` | a language and its rewrite rules, with no terms and nothing asked — `toy`, `array`, `sdql`, each an `.egg` beside a `.ref` saying how the reference spells its operators. Included by the tests that exercise them, and loaded on their own so a broken one is caught here |
 | `slotted/encoding/` | the encoding itself, written by hand at the encoded level, plus the tutorial that explains it. `value-equality.egg` is where this file's claims about `=` are checked |
 | `slotted/slotted-egglog.py` | the compiler; its module docstring is the short form of this file |
 | `slotted-user-rules.md` | how a rule is compiled, and why each piece is there |
