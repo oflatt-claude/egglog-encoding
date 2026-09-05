@@ -5777,6 +5777,14 @@ and the first both spend.** In `Encoding/Correspond.lean`, at the merge phase:
   needed `ufMeasure`, since `mergeBody` writes into `@UF` and the per-key count is therefore no
   measure there.
 
+**And one condition the three obligations do not name**: `no_ufRowEdge_of_rowsClosed` reads a
+rebuild **fixpoint** — `FDatabase.RowsClosed`, `FDatabase.settled`, and a round that returns —
+and `encode` emits `Cmd.saturate rebuildRuleset` after an action, a run and a saturate but after
+neither a `Cmd.rule` nor a `Cmd.decl` (`encodeCmd`). So a program whose last command is one of
+those two leaves a target the fixpoint lemmas do not reach directly. Neither writer changes a row
+or a term, and `Program.EncodeDomain.noAt` keeps a source rule out of `@rebuild`, so it is to be
+carried rather than re-established — but it is carried by nothing yet.
+
 **The second obligation is discharged, and it is reduced to the firing.**
 `no_ufRowEdge_of_rowsClosed` is it, and **the firing is discharged**:
 `eclassRule_fires` exhibits the e-class rule's conclusion as a row of the round's rule phase, the
@@ -5813,10 +5821,21 @@ and why the bridge is stated this way. The fixpoint's roots and the forest are s
 reaches by *entries*, `execM_ufRowRoot_unique` makes the root reachable by *rows* unique, and
 nothing yet identifies the two. `Database.Absorbs` is where that bites: it quantifies over every
 term that reads the id, so one landing site has to answer for all of them, and each reader's is
-produced by the bridge at its own view key. Closing it wants either the `terms` analogue of
-`execM_ufRowsDescend` — every `@UF` entry term running `ordering-max ↦ ordering-min`, so that
-`Database.UFReach` is well-founded and can be inducted along — or a confluence of
-`Database.UFReach` onto row roots.
+produced by the bridge at its own view key.
+
+**The identification is proved, and it costs exactly one thing.**
+`FDatabase.ufRowRoot_of_ufStep` and `ufRowRoot_of_ufReach` are it: entry reachability and row
+reachability reach the *same* `@UF` row root. What they spend is `FDatabase.UFTermsDescend` —
+the `terms` analogue of `execM_ufRowsDescend`, every `@UF` entry term running
+`ordering-max ↦ ordering-min` whether or not its row survived — and nothing else.
+**Confluence is not needed on top of descent**: the bridge already answers each entry with a row
+at the entry's own key, so the induction only has to walk the chain the bridge hands back, and
+`FDatabase.UFTermEdge.measure_lt` is what bounds that walk inside the finite list `terms`.
+Mathlib carries no Newman's lemma over a well-founded relation, and `Relation.church_rosser` is
+the strong `ReflGen` diamond; neither is wanted here. So `FDatabase.UFTermsDescend`, run-wide, is
+what is left of the identification — a per-writer induction of the shape
+`execM_encode_ufRowsDescend` already has, with `pathCompressRule` reading rows there as it does
+here.
 
 **And a side condition that turned out to be load-bearing rather than bookkeeping**: the merge
 body only runs if the signature declares `@Sym` and `@Trans` (`Expr.eval` reads

@@ -12282,6 +12282,202 @@ theorem maintenance_entrySafe {P : Program} {r : Rule} (hmem : r ∈ maintenance
               exact hy2 ▸ notEntryHead_fiatName
 
 
+/-! ### The identification: entry reachability lands on the row root
+
+`Database.UFStep` reads an **entry term** and `FDatabase.UFRowEdge` reads a **row**, and the
+rebuild residue needs the two to agree: the bridge (`FDatabase.EntryRowsUF`) answers a reader
+with a row whose column the union-find reaches from the entry's, while the fixpoint's roots and
+the forest are stated over rows. `Database.Absorbs` is where that bites — it quantifies over
+*every* term reading an id, so one landing site has to answer for all of them.
+
+**What closes it is descent on the entry side, and nothing else.** Confluence is not needed on
+top of it: `FDatabase.EntryRowsUF` already answers each entry with a **row** at the entry's own
+key, so the only thing left is to walk the chain the bridge hands back, and descent is what
+bounds that walk. `Mathlib`'s `Relation.church_rosser` is the strong (`ReflGen`) diamond and
+Mathlib carries no Newman's lemma over a well-founded relation; neither is wanted here.
+
+`FDatabase.UFTermsDescend` is the hypothesis, and it is the one thing this section does not
+prove: it is a run-wide induction over the writers of an `@UF` *term*, the counterpart of
+`execM_ufRowsDescend` for `terms`, and it is true for the reason that one is — every `@UF`
+write is `ordering-max ↦ ordering-min` whether or not the row survives, since descent is a
+property of the write. `pathCompressRule` is the one writer whose descent is not syntactic, and
+it reads **rows** (`mem_rows_of_patternHolds_values`), so its case still runs off
+`FDatabase.UFRowsDescend` as it does for rows. -/
+
+namespace FDatabase
+
+/-- **One `@UF` entry term that moves**, read off `terms` rather than off `rows`. Self-loops
+are excluded for the reason `FDatabase.UFRowEdge` excludes them: `(union a a)` writes
+`@UF(x) ↦ (x, @Fiat)`. -/
+def UFTermEdge (d : FDatabase) (a b : Term) : Prop :=
+  (∃ pf, Term.app ufName [a, b, pf] ∈ d.terms) ∧ b ≠ a
+
+/-- Every entry edge descends: `FDatabase.UFRowsDescend` over `terms`. -/
+def UFTermsDescend (d : FDatabase) : Prop :=
+  ∀ a b, d.UFTermEdge a b → Term.blt b a = true
+
+/-- Descent in the form a writer is checked against, equality included. -/
+theorem ufTermsDescend_iff {d : FDatabase} : d.UFTermsDescend ↔
+    ∀ a b pf, Term.app ufName [a, b, pf] ∈ d.terms → b = a ∨ Term.blt b a = true := by
+  constructor
+  · intro h a b pf hmem
+    rcases eq_or_ne b a with rfl | hne
+    · exact Or.inl rfl
+    · exact Or.inr (h a b ⟨⟨pf, hmem⟩, hne⟩)
+  · intro h a b hedge
+    obtain ⟨pf, hmem⟩ := hedge.1
+    rcases h a b pf hmem with hba | hlt
+    · exact absurd hba hedge.2
+    · exact hlt
+
+/-- Whether `t` applies a head to a first argument at or below `a`. The entry-side counterpart
+of `FDatabase.rowKeyLe`, and it needs no name test: what the measure counts is bounded above by
+the `@UF` entry at the key, and every other term it counts it counts on both sides. -/
+def firstArgLe (a : Term) (t : Term) : Bool :=
+  match t with
+  | .app _ (k :: _) => Term.blt k a || k == a
+  | _ => false
+
+/-- The filter only grows as its bound does. -/
+theorem firstArgLe_mono {a b : Term} (hba : Term.blt b a = true) {t : Term}
+    (h : firstArgLe b t = true) : firstArgLe a t = true := by
+  cases t with
+  | lit l => exact absurd h (by simp [firstArgLe])
+  | app f args =>
+      cases args with
+      | nil => exact absurd h (by simp [firstArgLe])
+      | cons k ks =>
+          simp only [firstArgLe, Bool.or_eq_true, beq_iff_eq] at h ⊢
+          rcases h with hkb | rfl
+          · exact Or.inl (Term.blt_trans k b a hkb hba)
+          · exact Or.inl hba
+
+@[inherit_doc firstArgLe_mono]
+theorem filter_firstArgLe_le {d : FDatabase} {a b : Term}
+    (h : b = a ∨ Term.blt b a = true) :
+    (d.terms.filter (firstArgLe b)).length ≤ (d.terms.filter (firstArgLe a)).length := by
+  rcases h with rfl | hlt
+  · exact le_refl _
+  · exact (List.monotone_filter_right _ fun t ht => firstArgLe_mono hlt ht).length_le
+
+/-- **An entry edge strictly shrinks the measure**, which is what bounds a walk along entries
+inside the finite list `terms`. `FDatabase.UFRowEdge.measure_lt` is the same at the rows. -/
+theorem UFTermEdge.measure_lt {d : FDatabase} (hdes : d.UFTermsDescend) {a b : Term}
+    (h : d.UFTermEdge a b) :
+    (d.terms.filter (firstArgLe b)).length < (d.terms.filter (firstArgLe a)).length := by
+  have hba : Term.blt b a = true := hdes a b h
+  have hsub : List.Sublist (d.terms.filter (firstArgLe b)) (d.terms.filter (firstArgLe a)) :=
+    List.monotone_filter_right _ fun t ht => firstArgLe_mono hba ht
+  obtain ⟨pf, hmem⟩ := h.1
+  have hin : Term.app ufName [a, b, pf] ∈ d.terms.filter (firstArgLe a) :=
+    List.mem_filter.mpr ⟨hmem, by simp [firstArgLe]⟩
+  have hout : Term.app ufName [a, b, pf] ∉ d.terms.filter (firstArgLe b) := by
+    intro hc
+    have hk := (List.mem_filter.mp hc).2
+    simp only [firstArgLe, Bool.or_eq_true, beq_iff_eq] at hk
+    rcases hk with hab | hab
+    · rw [Term.blt_asymm b a hba] at hab; exact absurd hab (by simp)
+    · exact h.2 hab.symm
+  rcases Nat.lt_or_ge (d.terms.filter (firstArgLe b)).length
+      (d.terms.filter (firstArgLe a)).length with hlt | hge
+  · exact hlt
+  · exact absurd (hsub.eq_of_length_le hge ▸ hin) hout
+
+/-- **At a state that asserts nothing an `@UF` edge is its own entry term**, so
+`Database.UFStep` is `FDatabase.UFTermEdge` up to the self-loop a `(union a a)` writes. -/
+theorem ufTermEdge_of_ufStep {d : FDatabase} (hr : d.EqsRefl) {a b : Term}
+    (h : d.toDatabase.UFStep a b) : b = a ∨ d.UFTermEdge a b := by
+  obtain ⟨pf, bs, hcl, hmem⟩ := h
+  obtain rfl : [a] = bs := CongList.eq_of_eqsRefl hr.toDatabase hcl
+  rw [FDatabase.toDatabase_terms] at hmem
+  rcases eq_or_ne b a with rfl | hne
+  · exact Or.inl rfl
+  · exact Or.inr ⟨⟨pf, by simpa using hmem⟩, hne⟩
+
+/-- **Descent along a whole entry chain**, which is what says a chain never returns. -/
+theorem ufReach_le {d : FDatabase} (hr : d.EqsRefl) (hdes : d.UFTermsDescend) {a b : Term}
+    (h : d.toDatabase.UFReach a b) : b = a ∨ Term.blt b a = true := by
+  induction h with
+  | refl => exact Or.inl rfl
+  | tail _ hstep ih =>
+      rcases ufTermEdge_of_ufStep hr hstep with rfl | hedge
+      · exact ih
+      · rcases ih with rfl | hlt
+        · exact Or.inr (hdes _ _ hedge)
+        · exact Or.inr (Term.blt_trans _ _ _ (hdes _ _ hedge) hlt)
+
+/-- **The identification, at one edge**: the two ends of an `@UF` entry have the *same* `@UF`
+row root.
+
+The bridge answers the edge with a row at its own key, so the key reaches that row's column by
+**rows**; what is left is the chain the bridge hands back on the other side, from the entry's
+far end to the same column, and every node of it sits strictly below the key in `Term.blt`. So
+one strong induction on the measure `FDatabase.UFTermEdge.measure_lt` shrinks does it, with
+`FDatabase.ufRowRoot_unique` naming the root at each step. -/
+theorem ufRowRoot_of_ufStep {d : FDatabase} (hr : d.EqsRefl) (hbr : d.EntryRowsUF)
+    (hdc : d.sig ufName = some ufDecl) (hrd : d.UFRowsDescend) (hfor : d.UFRowsForest)
+    (htd : d.UFTermsDescend) :
+    ∀ a b, d.toDatabase.UFStep a b → ∀ r s, d.UFRowReach a r → d.UFRowRoot r →
+      d.UFRowReach b s → d.UFRowRoot s → r = s := by
+  have key : ∀ n : Nat, ∀ a : Term, (d.terms.filter (firstArgLe a)).length = n →
+      ∀ b, d.toDatabase.UFStep a b → ∀ r s, d.UFRowReach a r → d.UFRowRoot r →
+        d.UFRowReach b s → d.UFRowRoot s → r = s := by
+    intro n
+    induction n using Nat.strong_induction_on with
+    | _ n ih =>
+      intro a hn b hstep r s har hrr hbs hsr
+      rcases ufTermEdge_of_ufStep hr hstep with rfl | hedge
+      · exact ufRowRoot_unique hfor har hrr hbs hsr
+      · obtain ⟨pf, hmem⟩ := hedge.1
+        obtain ⟨v, lo, hv, hbv⟩ := hbr ufName ufDecl hdc mergeBody mergeResult rfl [a] b pf
+          rfl (by simpa using hmem)
+        have hva : d.UFRowReach a v := by
+          rcases eq_or_ne v a with rfl | hne
+          · exact .refl
+          · exact .single ⟨⟨lo, hv⟩, hne⟩
+        obtain ⟨t, hvt, htr⟩ := exists_ufRowRoot hrd v
+        have hvr : d.UFRowReach v r :=
+          ufRowRoot_unique hfor (hva.trans hvt) htr har hrr ▸ hvt
+        have hbnd : ∀ c, d.toDatabase.UFReach b c →
+            (d.terms.filter (firstArgLe c)).length < n := by
+          intro c hbc
+          have h1 : (d.terms.filter (firstArgLe c)).length
+              ≤ (d.terms.filter (firstArgLe b)).length :=
+            filter_firstArgLe_le (ufReach_le hr htd hbc)
+          have h2 : (d.terms.filter (firstArgLe b)).length < n := hn ▸ hedge.measure_lt htd
+          omega
+        have chain : ∀ y, d.toDatabase.UFReach b y →
+            ∀ q, d.UFRowReach y q → d.UFRowRoot q → q = s := by
+          intro y hby
+          induction hby with
+          | refl => intro q hq hqr; exact ufRowRoot_unique hfor hq hqr hbs hsr
+          | @tail c y' hbc hstep2 ihc =>
+              intro q hq hqr
+              obtain ⟨u, hcu, hur⟩ := exists_ufRowRoot hrd c
+              have hus : u = s := ihc u hcu hur
+              have huq : u = q := ih _ (hbnd c hbc) c rfl y' hstep2 u q hcu hur hq hqr
+              rw [← huq]; exact hus
+        exact chain v hbv r hvr hrr
+  exact fun a b hstep r s har hrr hbs hsr => key _ a rfl b hstep r s har hrr hbs hsr
+
+/-- **And along a whole chain of them**, which is the form `Database.Absorbs` consumes: every
+reader of an id is answered by the bridge at its own view key, and all of those answers are the
+one row root. -/
+theorem ufRowRoot_of_ufReach {d : FDatabase} (hr : d.EqsRefl) (hbr : d.EntryRowsUF)
+    (hdc : d.sig ufName = some ufDecl) (hrd : d.UFRowsDescend) (hfor : d.UFRowsForest)
+    (htd : d.UFTermsDescend) {a b : Term} (h : d.toDatabase.UFReach a b) :
+    ∀ r s, d.UFRowReach a r → d.UFRowRoot r → d.UFRowReach b s → d.UFRowRoot s → r = s := by
+  induction h with
+  | refl => intro r s har hrr has hsr; exact ufRowRoot_unique hfor har hrr has hsr
+  | @tail c b hac hstep ihc =>
+      intro r s har hrr hbs hsr
+      obtain ⟨u, hcu, hur⟩ := exists_ufRowRoot hrd c
+      exact (ihc r u har hrr hcu hur).trans
+        (ufRowRoot_of_ufStep hr hbr hdc hrd hfor htd c b hstep u s hcu hur hbs hsr)
+
+end FDatabase
+
+
 /-! ### The witness
 
 `ENCODING.md`: two of thirteen previous M11 statements were vacuous and nobody noticed,
