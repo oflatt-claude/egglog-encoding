@@ -1084,6 +1084,12 @@ def pat_sexpr(lang, t, binder=False):
         return t[1] if binder else f"(var {t[1]})"
     if t[0] == "cls":
         return lang.sexpr(t[1])
+    if t[0] == SUBST:
+        # The reference's own spelling of a substitution, `b[x := t]`, which its
+        # `Pattern::parse` accepts on a right-hand side (`src/rewrite/pattern.rs`).
+        # Not a constructor, so `lang[...]` below would not find it.
+        b, sl, tt = t[1:]
+        return f"{pat_sexpr(lang, b)}[(var {sl[1]}) := {pat_sexpr(lang, tt)}]"
     op = lang[t[0]]
     kids, pays = op.split(t[1:])
     if op.ref is None:

@@ -527,9 +527,11 @@ def tally(src):
         if count:
             parts.append(f"{count} {word}{'s' if count != 1 else ''}")
     if not claims:
-        # The case worth spelling out: nothing was asked, so nothing was checked.
+        # The case worth spelling out: nothing was asked, so nothing was checked. Only
+        # that -- who reads the file is not something this can see, and guessing it
+        # ("included by other files") was wrong for `array.egg`, which nothing includes.
         library = rules and not n.get("let", 0)
-        parts.append("nothing asked -- a rule library, included by other files" if library else "nothing asked")
+        parts.append("nothing asked -- a language and its rules, not a test" if library else "nothing asked")
     return ", ".join(parts) if parts else "empty"
 
 
