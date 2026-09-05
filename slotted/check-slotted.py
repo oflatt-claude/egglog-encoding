@@ -226,6 +226,14 @@ CHECKS = [
         True,
     ),
     (
+        # A language file's claim to carry the reference's rules, checked name for name.
+        "reference-rules",
+        ("slotted/check-reference-rules.py",),
+        ratio(r"(\d+)/(\d+) rule sets match", 2),
+        False,
+        True,
+    ),
+    (
         # An example nobody runs is an example nobody checked.
         "language-doc",
         ("slotted/check-language-doc.py",),

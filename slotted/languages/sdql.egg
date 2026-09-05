@@ -7,14 +7,16 @@
 ;;; `target/slotted/slotted-sdql-rules.egg` for the .egg tests and the differential
 ;;; harness. Both read THIS file, so they cannot disagree.
 ;;;
-;;; THE COUNT, because "rule for rule" was claimed here and was not true. The bench
-;;; defines 46 and this file carries 45 of them:
+;;; THE COUNT. The bench DEFINES 46 rules and RUNS 44; this file carries those 44, and
+;;; `slotted/check-reference-rules.py` compares the two name for name, so the claim is
+;;; no longer one anybody takes on trust.
 ;;;
-;;;   * `get-sum-vert-fuse-1` is `#[allow(unused)]` in the bench -- the reference does
-;;;     not run it either, so leaving it out matches rather than diverges.
-;;;   * everything else is here, `sum-range-2` included -- its guard is two `not-free`
-;;;     conditions and its right-hand side does slot arithmetic,
-;;;     `(+ (var $k) (- ?st 1))`, both of which the language already had.
+;;; Counting definitions is the trap, and it caught this file twice: it once claimed
+;;; "rule for rule" while missing `beta`, and was then given `sum-range-2` to close a gap
+;;; that did not exist. `sum-range-2` and `get-sum-vert-fuse-1` are both defined and
+;;; never reached -- the second is even marked `#[allow(unused)]` -- so carrying either
+;;; would DIVERGE from the reference rather than match it. Both are expressible here if
+;;; the reference ever starts running them.
 ;;;
 ;;; `check-front-ends.py` is the cross-check that remains: `sdql-sum-sing.egg` writes
 ;;; `sum-sing` by hand in the slotted language, and its compiled form has to match the
@@ -216,13 +218,6 @@
          (Sum (Range ?st ?en) $k $v (IfThen (Equality $k (Sub ?key (Sub ?st (Num 1)))) ?body))
          :name sum-range-1)
 
-;; The guard is the bench's closure: `key`'s slots contain neither `k` nor `v`, which
-;; is what makes the equality a lookup of a constant rather than of the summand.
-(rewrite (Sum (Range ?st ?en) $k $v (IfThen (Equality $k ?key) ?body))
-         (Let ?key $k (Let (Add $k (Sub ?st (Num 1))) $v ?body))
-         :name sum-range-2
-         :when (not-free $k ?key)
-         :when (not-free $v ?key))
 
 (rewrite (Sum ?R $k1 $v1 (Sum ?S $k2 $v2 (IfThen (Equality $v1 $v2) ?body)))
          (Merge ?R ?S $k1 $k2 $v1 (Let $v1 $v2 ?body))
