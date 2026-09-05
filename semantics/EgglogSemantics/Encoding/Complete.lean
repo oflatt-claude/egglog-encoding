@@ -5702,6 +5702,213 @@ theorem execM_rowColumnsValued {P : Program} (hdom : P.EncodeDomain) {tgt : FDat
     hb.subtermClosed hb.inv.index
 
 
+
+/-! ## The fixpoint's roots, run-wide
+
+`no_ufRowEdge_of_rowsClosed` reads a rebuild **fixpoint**, and `encodeCmd` emits
+`Cmd.saturate rebuildRuleset` after an action, a run and a saturate but after neither a
+`Cmd.rule` nor a `Cmd.decl`. So `FDatabase.ViewRowsRooted` is *established* at the end of the
+first three blocks and *carried* across the other two, which change no row at all — and the
+carry is one rewrite, since the property reads `rows` and nothing else.
+
+**`FDatabase.settled` costs the carry nothing.** `FDatabase.runSaturateM_settled'` reads the
+merge fixpoint off the branch the saturating run returned from, with no hypothesis about the
+state that run started at — which is what keeps `settled` off the block induction, where a
+`Cmd.rule` would have had to be shown to preserve it through `FDatabase.mergeRound`. -/
+
+/-- **A saturating run returns a merge-settled state.** The branch `FDatabase.runSaturateM`
+returns from tests the state it returns against a round's output on the three fields a round
+can change (`FDatabase.sameData`) and `FDatabase.runRoundM_fields` gives the other three, so
+the state returned **is** that output — and a round ends in `FDatabase.mergeSaturateF`. -/
+theorem FDatabase.runSaturateM_settled' {R : RulesetName} : ∀ (n : Nat) {d e : FDatabase},
+    d.runSaturateM R n = some e → e.settled = true := by
+  intro n d e hs
+  obtain ⟨e', hround, hsame⟩ := FDatabase.runSaturateM_settled n hs
+  obtain ⟨hsig, henv, hrules⟩ := FDatabase.runRoundM_fields hround
+  simp only [FDatabase.sameData, Bool.and_eq_true, beq_iff_eq] at hsame
+  obtain ⟨⟨hterms, hrows⟩, heqs⟩ := hsame
+  obtain rfl : e' = e := by cases e'; cases e; simp_all
+  rw [FDatabase.runRoundM] at hround
+  exact FDatabase.mergeSaturateF_settled mergeFuel hround
+
+/-- **The fixpoint's roots as a property of a state**: no e-class column a live view row
+records has an outgoing `@UF` row. `no_ufRowEdge_of_rowsClosed` is this at one rebuild
+fixpoint; `execM_viewRowsRooted` is it at the state `execM` returned. -/
+def FDatabase.ViewRowsRooted (d : FDatabase) (P : Program) : Prop :=
+  ∀ (f : FnName) (k : Nat), (f, k) ∈ P.ctors → ∀ (as : List Term) (e pf : Term),
+    (⟨viewName f, as, [e, pf]⟩ : Row) ∈ d.rows → d.UFRowRoot e
+
+/-- **A writer that changes no row carries it**, hypothesis and conclusion alike: both read
+`rows`. This is the whole of the `Cmd.rule` and `Cmd.decl` cases. -/
+theorem FDatabase.ViewRowsRooted.of_rows_eq {d D : FDatabase} {P : Program}
+    (h : d.ViewRowsRooted P) (hrows : D.rows = d.rows) : D.ViewRowsRooted P := by
+  intro f k hfk as e pf hrow y hedge
+  obtain ⟨⟨q, hq⟩, hne⟩ := hedge
+  exact h f k hfk as e pf (hrows ▸ hrow) y ⟨⟨q, hrows ▸ hq⟩, hne⟩
+
+/-- **What the fixpoint's roots argument asks of the state a block starts at**, bundled so
+that the block induction carries one thing. Each field is already run-wide on its own
+(`execM_encode_encBase`, `execM_encode_valued`, `execM_ufRowsDescend`); what the bundle buys
+is that the induction below does not have to re-derive them at every intermediate state. -/
+structure FDatabase.RebuildBase (d : FDatabase) (P : Program) : Prop where
+  /-- The structural half of an aligned run. -/
+  base : d.EncBase P (encodeSig P)
+  /-- Every term the state holds is one a rule variable may be bound to. -/
+  valued : d.Valued
+  /-- Every live `@UF` row runs `ordering-max ↦ ordering-min`. -/
+  descend : d.UFRowsDescend
+
+/-- The fourth cost of the e-class rule's firing, out of the bundle. -/
+theorem FDatabase.RebuildBase.rowColumnsValued {d : FDatabase} {P : Program}
+    (h : d.RebuildBase P) : d.RowColumnsValued :=
+  h.valued.rowColumnsValued h.base.eqsRefl h.base.subtermClosed h.base.inv.index
+
+/-- **A block of encoded commands keeps the bundle**, one `execProgramM` lemma per field. -/
+theorem FDatabase.RebuildBase.execProgramM {P : Program} (hdom : P.EncodeDomain) {p : Program}
+    (hro : ∀ c ∈ p, Cmd.RulesEncodedOk P c) (huf : ∀ c ∈ p, c.UnionFree)
+    (hnd : ∀ c ∈ p, c.NoDecl) (hwl : ∀ c ∈ p, c.WriteLegal (encodeSig P))
+    (hok : ∀ c ∈ p, c.UFWriteOk) (hlet : ∀ c ∈ p, c.NoAtLet)
+    {d D : FDatabase} (h : d.RebuildBase P) (hs : d.execProgramM p = some D) :
+    D.RebuildBase P where
+  base := FDatabase.EncBase.execProgramM hro huf hnd hwl hlet h.base hs
+  valued := FDatabase.EncBase.execProgramM_valued hro huf hnd hwl hlet h.base h.valued hs
+  descend := FDatabase.EncBase.execProgramM_ufRowsDescend (encodeSig_mergeOf_ufName hdom)
+    hro huf hnd hwl hok hlet h.base h.descend hs
+
+/-- **The bundle across any part of one source command's block.** Stated over a sublist so
+that the action case, whose block is a run of `Cmd.action`s followed by the rebuild, can use
+it at the prefix as well as at the whole. -/
+theorem rebuildBase_encodeCmd {P : Program} (hdom : P.EncodeDomain) {c : Cmd} (hc : c ∈ P)
+    {n i : Nat} {q : Program} (hq : ∀ c' ∈ q, c' ∈ (encodeCmd c n i).1)
+    {d D : FDatabase} (h : d.RebuildBase P) (hs : d.execProgramM q = some D) :
+    D.RebuildBase P :=
+  FDatabase.RebuildBase.execProgramM hdom
+    (fun c' hc' => rulesEncodedOk_encodeCmd hc n i c' (hq c' hc'))
+    (fun c' hc' => encodeCmd_unionFree c n i c' (hq c' hc'))
+    (fun c' hc' => noDecl_encodeCmd c n i c' (hq c' hc'))
+    (fun c' hc' => encodedWriteLegal hdom hdom.aritiesAgree' c hc n i c' (hq c' hc'))
+    (fun c' hc' => ufWriteOk_encodeCmd c n i c' (hq c' hc'))
+    (fun c' hc' => noAtLet_encodeCmd hdom c hc n i c' (hq c' hc')) h hs
+
+/-- **One rebuild fixpoint delivers the roots.** `no_ufRowEdge_of_rowsClosed` at the state
+`Cmd.saturate rebuildRuleset` returned: `FDatabase.runSaturateM_rowsClosed` is the fixpoint on
+`rows`, `FDatabase.runSaturateM_settled` the round it still has to run, and
+`FDatabase.runSaturateM_settled'` the merge fixpoint the row-uniqueness half wants. -/
+theorem viewRowsRooted_of_runSaturateM {P : Program} (hdom : P.EncodeDomain)
+    (hsy : (encodeSig P).IsCtor symName) (htr : (encodeSig P).IsCtor transName)
+    {d e : FDatabase} (h : d.RebuildBase P)
+    (hs : d.execCmdM (Cmd.saturate rebuildRuleset) = some e) : e.ViewRowsRooted P := by
+  have hs' : d.runSaturateM rebuildRuleset runFuel = some e := hs
+  have hbe : e.EncBase P (encodeSig P) :=
+    h.base.execCmdM (c := Cmd.saturate rebuildRuleset) trivial trivial trivial trivial trivial hs
+  have hve : e.Valued := FDatabase.EncBase.runSaturateM_valued runFuel h.base h.valued hs'
+  have hdese : e.UFRowsDescend :=
+    h.base.execCmdM_ufRowsDescend (encodeSig_mergeOf_ufName hdom)
+      (c := Cmd.saturate rebuildRuleset) trivial trivial trivial trivial h.descend hs
+  obtain ⟨e', hround, -⟩ := FDatabase.runSaturateM_settled runFuel hs'
+  intro f k hfk as x pf hrow y hedge
+  exact no_ufRowEdge_of_rowsClosed hdom hbe hsy htr
+    (hve.rowColumnsValued hbe.eqsRefl hbe.subtermClosed hbe.inv.index)
+    (FDatabase.runSaturateM_settled' runFuel hs') hdese
+    (FDatabase.runSaturateM_rowsClosed hs') hround hfk hrow hedge
+
+/-- **The two shapes a source command's block has.** Three of the five end with
+`Cmd.saturate rebuildRuleset`; the other two change no row — a `Cmd.rule` only registers
+itself and a `Cmd.decl` emits nothing at all. -/
+theorem encodeCmd_rebuilds_or_rowsFixed (c : Cmd) (n i : Nat) :
+    (∃ q, (encodeCmd c n i).1 = q ++ [Cmd.saturate rebuildRuleset]) ∨
+      ∀ {d D : FDatabase}, d.execProgramM (encodeCmd c n i).1 = some D → D.rows = d.rows := by
+  cases c with
+  | action a => exact Or.inl ⟨_, encodeCmd_action_fst a n i⟩
+  | run R => exact Or.inl ⟨[Cmd.run R], rfl⟩
+  | saturate R => exact Or.inl ⟨[Cmd.saturate R], rfl⟩
+  | rule r =>
+      refine Or.inr fun {d D} hs => ?_
+      rw [encodeCmd_rule_fst, FDatabase.execProgramM, FDatabase.execCmdM, Option.bind_some,
+        FDatabase.execProgramM, Option.some.injEq] at hs
+      exact hs ▸ rfl
+  | decl f dc =>
+      refine Or.inr fun {d D} hs => ?_
+      rw [show (encodeCmd (Cmd.decl f dc) n i).1 = ([] : Program) from rfl,
+        FDatabase.execProgramM, Option.some.injEq] at hs
+      exact hs ▸ rfl
+
+/-- **One source command's block keeps the roots.** -/
+theorem viewRowsRooted_encodeCmd {P : Program} (hdom : P.EncodeDomain)
+    (hsy : (encodeSig P).IsCtor symName) (htr : (encodeSig P).IsCtor transName)
+    {c : Cmd} (hc : c ∈ P) (n i : Nat) {d D : FDatabase} (h : d.RebuildBase P)
+    (hr : d.ViewRowsRooted P) (hs : d.execProgramM (encodeCmd c n i).1 = some D) :
+    D.ViewRowsRooted P := by
+  rcases encodeCmd_rebuilds_or_rowsFixed c n i with ⟨q, hq⟩ | hfix
+  · rw [hq] at hs
+    obtain ⟨d₂, h₂, h₃⟩ := FDatabase.execProgramM_append hs
+    have hbase₂ : d₂.RebuildBase P :=
+      rebuildBase_encodeCmd hdom hc
+        (fun c' hc' => by rw [hq]; exact List.mem_append_left _ hc') h h₂
+    have hsat : d₂.execCmdM (Cmd.saturate rebuildRuleset) = some D := by
+      rw [FDatabase.execProgramM] at h₃
+      obtain ⟨x, hx, hx'⟩ := Option.bind_eq_some_iff.mp h₃
+      rw [FDatabase.execProgramM, Option.some.injEq] at hx'
+      exact hx' ▸ hx
+    exact viewRowsRooted_of_runSaturateM hdom hsy htr hbase₂ hsat
+  · exact hr.of_rows_eq (hfix hs)
+
+/-- **And the whole aligned run.** -/
+theorem viewRowsRooted_encodeCmds {P : Program} (hdom : P.EncodeDomain)
+    (hsy : (encodeSig P).IsCtor symName) (htr : (encodeSig P).IsCtor transName) :
+    ∀ (p : Program), (∀ c ∈ p, c ∈ P) → ∀ (n i : Nat) {d D : FDatabase},
+      d.RebuildBase P → d.ViewRowsRooted P →
+      d.execProgramM (encodeCmds p n i).1 = some D → D.ViewRowsRooted P := by
+  intro p
+  induction p with
+  | nil =>
+    intro _ n i d D _ hr hs
+    rw [show (encodeCmds ([] : Program) n i).1 = ([] : Program) from rfl,
+      FDatabase.execProgramM, Option.some.injEq] at hs
+    exact hs ▸ hr
+  | cons c cs ih =>
+    intro hp n i d D h hr hs
+    rw [encodeCmds_cons_fst] at hs
+    obtain ⟨d₁, h₁, h₂⟩ := FDatabase.execProgramM_append hs
+    exact ih (fun c' hc' => hp c' (List.mem_cons_of_mem c hc')) _ _
+      (rebuildBase_encodeCmd hdom (hp c List.mem_cons_self) (fun _ hc' => hc') h h₁)
+      (viewRowsRooted_encodeCmd hdom hsy htr (hp c List.mem_cons_self) n i h hr h₁) h₂
+
+/-- **The fixpoint's roots at the state `execM` returned**: no e-class column a view row of an
+encoded run's target records has an outgoing `@UF` row.
+
+This is `no_ufRowEdge_of_rowsClosed` with its three fixpoint hypotheses discharged, and it is
+the condition the residue's second obligation was left carrying: the encoding emits a rebuild
+after an action, a run and a saturate and after neither a `Cmd.rule` nor a `Cmd.decl`, so a
+program ending in one of those two leaves a target no fixpoint lemma reaches directly.
+Neither writer changes a row, and `Program.EncodeDomain.noAt` keeps a source rule out of
+`@rebuild`, so the property is carried across them rather than re-established. -/
+theorem execM_viewRowsRooted {P : Program} (hdom : P.EncodeDomain)
+    (hsy : (encodeSig P).IsCtor symName) (htr : (encodeSig P).IsCtor transName)
+    {tgt : FDatabase} (htgt : execM (encode P) = some tgt) : tgt.ViewRowsRooted P := by
+  rw [execM, encode] at htgt
+  obtain ⟨d₀, hprel, hcmds⟩ := FDatabase.execProgramM_append htgt
+  have hb₀ : d₀.EncBase P (encodeSig P) :=
+    (encOk_preludeState hdom hdom.aritiesAgree' hprel).base
+  have hdata := execProgramM_data_of_declOrRule (declOrRule_encodePrelude P) hprel
+  have hrows₀ : d₀.rows = [] := by
+    rw [hdata.2.1]; rfl
+  have h₀ : d₀.RebuildBase P := by
+    refine ⟨hb₀, ⟨fun t ht => ?_, fun b hb => ?_⟩, ?_⟩
+    · rw [hdata.1, show FDatabase.empty.terms = ([] : List Term) from rfl] at ht
+      exact absurd ht (by simp)
+    · rw [hdata.2.2.2, show FDatabase.empty.env = ([] : Env) from rfl] at hb
+      exact absurd hb (by simp)
+    · refine FDatabase.ufRowsDescend_iff.mpr fun a b pf hmem => ?_
+      rw [hrows₀] at hmem
+      exact absurd hmem (by simp)
+  have hr₀ : d₀.ViewRowsRooted P := by
+    intro f k _ as e pf hrow
+    rw [hrows₀] at hrow
+    exact absurd hrow (by simp)
+  exact viewRowsRooted_encodeCmds hdom hsy htr P (fun _ hc => hc) 0 0 h₀ hr₀ hcmds
+
+
 /-! ## The forward half's residue, and the correspondence
 
 `Database.RebuildClosed` and its four consumers are stated here and not in
