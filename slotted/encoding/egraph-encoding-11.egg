@@ -26,23 +26,30 @@
 ;; A renaming is a partial injection on slots.
 (sort Renaming (Map i64 i64))
 
-;; EVERY naming an atom's renaming could take, and the indices to read one at.
+;; EVERY way a match's slots may be merged, and the indices to read one at.
 ;;
 ;; Solving an atom leaves some of its slots unnamed -- the constraints from the atoms
 ;; before it do not reach them -- and `find-mapping-total` MINTS a fresh name there. A
-;; fresh name differs from everything, so that quietly decides the slot is not any slot
-;; already in play, and nothing revisits the choice: the match where it coincides with
-;; one is lost. `find-mappings-total` returns all of them, the minting one first, and a
-;; rule reads one with `vec-get`.
+;; fresh name differs from everything, so minting quietly decides the slot is not any
+;; slot already in play. The other readings are matches too, and they build different
+;; e-nodes, so a compiled rule asks `refine-namings` for all of them ONCE, after every
+;; atom is solved, and reads one with `vec-get`. That is the reference's `final_refine`;
+;; `slotted/tests/sdql-beta.egg` and `slotted-user-rules.md` say why it happens there
+;; rather than per atom.
 ;;
 ;; `vec-get` is PARTIAL, so an index past a vector's end matches nothing and the join
 ;; stops on its own -- no rule has to know how long the vector is. Seeding more indices
-;; than any atom needs therefore costs join attempts and not correctness; seeding fewer
-;; loses the namings past the last one. Eight covers every rule in this tree by a wide
-;; margin: the count is one for a fully constrained atom, and grows with the slots left
-;; unnamed, which is at most two in the languages here.
-;; `find-mappings-total-count` reports what a call would have offered before the
-;; primitive's own cap, for anyone checking that.
+;; than a rule needs costs join attempts and not correctness. Seeding FEWER loses the
+;; answers past the last one, and since element 0 is the identity, running out degrades
+;; to not refining: matches are missed, never invented.
+;;
+;; How many are there? The number of ways the match's slots can be partitioned, minus
+;; those two slots of one node or two slots the pattern writes rule out. That is
+;; Bell-numbered in the worst case, so eight is not the wide margin it was when this
+;; was a per-atom count. MEASURED, on this tree: raising the seeding to 64 changes
+;; nothing -- the array and sdql suites, the curated corpus and a 200-case
+;; symmetry-heavy fuzz run all give identical answers. Eight is enough for the
+;; languages here and is not a bound anyone proved.
 (sort Namings (Vec Renaming))
 (relation Idx (i64))
 (Idx 0)

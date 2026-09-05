@@ -9,12 +9,14 @@
 ;;; accumulating avoid-set is the whole point. Operators are suffixed `t` so no other
 ;;; rule in the tree is watching them.
 ;;;
-;;; IT TRACES THE MINTING NAMING, and spells it `find-mapping-total` for that reason.
-;;; What the compiler emits is `find-mappings-total` read at an `(Idx i)` -- every naming
-;;; the renaming could take, minting among them -- and that is one row per index, which
-;;; is not a worked example any more. Minting is element 0, so every value below is what
-;;; index 0 gives; the other indices are where the atom's slot coincides with one already
-;;; named instead.
+;;; IT TRACES THE MINTING NAMING, which is what each atom really does: solve, and mint a
+;;; fresh name for any slot the constraints leave unreached. Every value below is that.
+;;;
+;;; What the compiler emits AFTER the atoms is a `refine-namings` read at an `(Idx i)` --
+;;; every way the match's slots may then be merged, the identity among them -- and that
+;;; is one row per index, which is not a worked example any more. The identity is element
+;;; 0, so these values are what index 0 gives; the other indices are where two of the
+;;; slots named below turn out to be one.
 ;;;
 ;;; THE E-GRAPH. `g5t` names slot 0, `h5t` names slot 1, and each is unioned with `Null`,
 ;;; which is SLOTLESS -- so each node carries a slot its class does not, the redundancy of
