@@ -5703,6 +5703,682 @@ theorem execM_rowColumnsValued {P : Program} (hdom : P.EncodeDomain) {tgt : FDat
 
 
 
+
+/-! ## Descent over entry terms, run-wide
+
+`FDatabase.ufRowRoot_of_ufReach` — the identification the residue's three clauses spend, entry
+reachability and row reachability landing on one `@UF` row root — rests on one thing this file
+does not yet supply: `FDatabase.UFTermsDescend`, the `terms` counterpart of
+`execM_ufRowsDescend`. It is true for the reason that one is, and the reason is that **descent
+is a property of the write and not of currency**: `FDatabase.addRow` mints the entry term for
+the very row it writes, and no writer removes a term, so an edge that descended when it was
+written descends forever.
+
+The induction is `execM_ufRowsDescend`'s, writer for writer, with one obligation added at each:
+an action records the *subterms* of what it evaluates as well as the term itself, so the entry
+terms it records other than the one its own `set` writes have to be ones the state already
+holds. That obligation is `Action.EntrySafe`, and it is the one `FDatabase.EntryRowsUF`'s run
+already carries — `entryShaped_mem_of_eval` and `entryShaped_mem_of_evalList` are how it is
+paid, at exactly the sites they are paid there.
+
+`pathCompressRule` is the one writer whose descent is not syntactic, and it reads **rows**
+(`mem_rows_of_patternHolds_values`), so its case runs off `FDatabase.UFRowsDescend` exactly as
+it does for rows. That is why the induction carries both. -/
+
+namespace FDatabase
+
+/-- **Descent reads `terms` and nothing else.** -/
+theorem UFTermsDescend.of_terms_sub {d e : FDatabase} (h : d.UFTermsDescend)
+    (hsub : ∀ t ∈ e.terms, t ∈ d.terms) : e.UFTermsDescend := by
+  intro a b hedge
+  obtain ⟨pf, hmem⟩ := hedge.1
+  exact h a b ⟨⟨pf, hsub _ hmem⟩, hedge.2⟩
+
+/-- **One `addTerm`.** It writes no entry term of its own, so the whole obligation is that the
+`@UF`-shaped subterms it records are ones the state already holds. -/
+theorem UFTermsDescend.addTerm' {d : FDatabase} (h : d.UFTermsDescend) {t : Term}
+    (hsub : ∀ s ∈ t.subtermList, s.EntryShaped → s ∈ d.terms) :
+    (d.addTerm t).UFTermsDescend := by
+  refine ufTermsDescend_iff.mpr fun a b pf hmem => ?_
+  rcases FDatabase.mem_addTerm_terms.mp hmem with hm | hm
+  · exact ufTermsDescend_iff.mp h a b pf (hsub _ hm (Or.inr ⟨a, b, pf, rfl⟩))
+  · exact ufTermsDescend_iff.mp h a b pf hm
+
+/-- **One `set`, checked at the entry term it mints.** The key/value split is recovered from the
+column count rather than assumed, since the entry term has lost it. -/
+theorem UFTermsDescend.addRow' {d : FDatabase} {f : FnName} {as vs : List Term}
+    (h : d.UFTermsDescend)
+    (hnew : ∀ a b pf, Term.app f (as ++ vs) = Term.app ufName [a, b, pf] →
+      b = a ∨ Term.blt b a = true)
+    (hsub : ∀ c ∈ as ++ vs, ∀ s ∈ c.subtermList, s.EntryShaped → s ∈ d.terms) :
+    (FDatabase.addRow f as vs d).UFTermsDescend := by
+  refine ufTermsDescend_iff.mpr fun a b pf hmem => ?_
+  rcases FDatabase.mem_addRow_terms.mp hmem with hm | hm
+  · by_cases hq : Term.app ufName [a, b, pf] = Term.app f (as ++ vs)
+    · exact hnew a b pf hq.symm
+    · exact ufTermsDescend_iff.mp h a b pf
+        (entryShaped_mem_of_columns hsub _ hm hq (Or.inr ⟨a, b, pf, rfl⟩))
+  · exact ufTermsDescend_iff.mp h a b pf hm
+
+/-- **A union of two descending states descends**, which is what `fireInto` costs. -/
+theorem UFTermsDescend.union {d₁ d₂ : FDatabase} (h₁ : d₁.UFTermsDescend)
+    (h₂ : d₂.UFTermsDescend) : (d₁.union d₂).UFTermsDescend := by
+  refine ufTermsDescend_iff.mpr fun a b pf hmem => ?_
+  rcases FDatabase.mem_terms_union.mp hmem with hm | hm
+  · exact ufTermsDescend_iff.mp h₁ a b pf hm
+  · exact ufTermsDescend_iff.mp h₂ a b pf hm
+
+end FDatabase
+
+/-- **The bindings an action reads are terms the state holds**, which is what makes the
+recorded-subterm obligation free at every variable. `execAction_entryRowsUF` pays it the same
+way; it is named here because the descent induction pays it at the same four sites. -/
+theorem entryShaped_bind_of_inv {d : FDatabase} (hinv : d.Inv) :
+    ∀ (v : Var) (u : Term), Env.lookup v d.env = some u →
+      ∀ s ∈ u.subtermList, s.EntryShaped → s ∈ d.terms := by
+  have hsc : d.SubtermClosed := FDatabase.SubtermClosed.of_wf hinv.wf
+  intro v u hu
+  have hb : (v, u).2 ∈ d.terms := by
+    have h := hinv.wf.envInTerms (v, u)
+      (by rw [FDatabase.toDatabase_env]; exact Env.mem_of_lookup hu)
+    rwa [FDatabase.mem_toDatabase_terms] at h
+  exact entryShaped_mem_of_held hsc hb
+
+/-- **One action.** The three that record a term owe `Action.EntrySafe` alone; the `set` owes
+that and the shape of its own write, which is `Action.UFWriteSafe`. -/
+theorem execAction_ufTermsDescend {d e : FDatabase} {a : Action} (hinv : d.Inv)
+    (hsafe : a.UFWriteSafe) (hentry : a.EntrySafe) (h : d.UFTermsDescend)
+    (hs : execAction d a = some e) : e.UFTermsDescend := by
+  have hbind := entryShaped_bind_of_inv hinv
+  cases a with
+  | expr e₀ =>
+    simp only [execAction, Option.map_eq_some_iff] at hs
+    obtain ⟨t, ht, rfl⟩ := hs
+    exact h.addTerm' (entryShaped_mem_of_eval e₀ hentry (fun w _ => hbind w) ht)
+  | letBind v e₀ =>
+    simp only [execAction, Option.map_eq_some_iff] at hs
+    obtain ⟨t, ht, rfl⟩ := hs
+    exact (h.addTerm' (entryShaped_mem_of_eval e₀ hentry (fun w _ => hbind w) ht)).of_terms_sub
+      (fun _ ht' => ht')
+  | union e₁ e₂ =>
+    simp only [execAction] at hs
+    obtain ⟨t₁, ht₁, hs⟩ := Option.bind_eq_some_iff.mp hs
+    obtain ⟨t₂, ht₂, hs⟩ := Option.bind_eq_some_iff.mp hs
+    split at hs
+    · exact absurd hs (by simp)
+    · rw [Option.some.injEq] at hs
+      subst hs
+      have h₁ : (d.addTerm t₁).UFTermsDescend :=
+        h.addTerm' (entryShaped_mem_of_eval e₁ hentry.1 (fun w _ => hbind w) ht₁)
+      have h₂ : ((d.addTerm t₁).addTerm t₂).UFTermsDescend :=
+        h₁.addTerm' (d := FDatabase.addTerm t₁ d)
+          (fun s hs' hsh => FDatabase.mem_addTerm_of_mem (t := t₁)
+            (entryShaped_mem_of_eval e₂ hentry.2 (fun w _ => hbind w) ht₂ s hs' hsh))
+      exact h₂.of_terms_sub (fun _ ht' => ht')
+  | set f args out =>
+    obtain ⟨as, vs, has, hvs, rfl⟩ := execAction_set hs
+    refine h.addRow' (fun a₀ b₀ pf₀ heq => ?_) (fun c hc => ?_)
+    · rcases (hsafe : f ≠ ufName ∨ ∃ x y pf, args = [maxE x y] ∧ out = [minE x y, pf]) with
+        hne | ⟨x, y, pfe, rfl, rfl⟩
+      · exact absurd (Term.app.inj heq).1 hne
+      · obtain ⟨mx, hmx, rfl⟩ := Expr.evalList_singleton has
+        obtain ⟨mn, pv, hmn, -, rfl⟩ := Expr.evalList_pair hvs
+        have hcols : [mx, mn, pv] = [a₀, b₀, pf₀] := (Term.app.inj heq).2
+        obtain rfl : mx = a₀ := (List.cons.inj hcols).1
+        obtain rfl : mn = b₀ := (List.cons.inj (List.cons.inj hcols).2).1
+        exact minE_le_maxE hmx hmn
+    · rcases List.mem_append.mp hc with hc' | hc'
+      · exact entryShaped_mem_of_evalList args hentry.1 (fun w _ => hbind w) has c hc'
+      · exact entryShaped_mem_of_evalList out hentry.2 (fun w _ => hbind w) hvs c hc'
+
+/-- **A block of them.** -/
+theorem execActions_ufTermsDescend : ∀ (as : List Action), (∀ a ∈ as, a.UFWriteSafe) →
+    (∀ a ∈ as, a.EntrySafe) → ∀ {d e : FDatabase}, d.Inv → Actions.WriteLegal as d.sig →
+      d.UFTermsDescend → execActions d as = some e → e.UFTermsDescend
+  | [], _, _, _, _, _, _, h, hs => by
+      rw [execActions, Option.some.injEq] at hs; exact hs ▸ h
+  | a :: as, hsafe, hentry, d, e, hinv, hwl, h, hs => by
+      rw [execActions] at hs
+      obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp hs
+      have hsig : d₁.sig = d.sig := FDatabase.execAction_sig h₁
+      exact execActions_ufTermsDescend as (fun b hb => hsafe b (List.mem_cons_of_mem _ hb))
+        (fun b hb => hentry b (List.mem_cons_of_mem _ hb)) (hinv.execAction hwl.head h₁)
+        (by rw [hsig]; exact hwl.tail)
+        (execAction_ufTermsDescend hinv (hsafe a List.mem_cons_self)
+          (hentry a List.mem_cons_self) h h₁) h₂
+
+/-- **And one firing of a rule whose head is a block of them.** -/
+theorem execLocalActions_ufTermsDescend {d e : FDatabase} {as : List Action} {σ : Env}
+    (hinv : d.Inv) (hwl : Actions.WriteLegal as d.sig) (hsafe : ∀ a ∈ as, a.UFWriteSafe)
+    (hentry : ∀ a ∈ as, a.EntrySafe) (hσ : ∀ b ∈ σ, b.2 ∈ d.terms) (h : d.UFTermsDescend)
+    (hs : execLocalActions d as σ = some e) : e.UFTermsDescend := by
+  rw [execLocalActions] at hs
+  obtain ⟨m, hm, rfl⟩ := Option.map_eq_some_iff.mp hs
+  have hinv' : ({ d with env := d.env ++ σ } : FDatabase).Inv := by
+    refine hinv.setEnv (fun b hb => ?_)
+    rw [FDatabase.mem_toDatabase_terms]
+    rcases List.mem_append.mp hb with hb' | hb'
+    · have h' := hinv.wf.envInTerms b (by rw [FDatabase.toDatabase_env]; exact hb')
+      rwa [FDatabase.mem_toDatabase_terms] at h'
+    · exact hσ b hb'
+  exact (execActions_ufTermsDescend as hsafe hentry (d := { d with env := d.env ++ σ })
+    hinv' hwl (h.of_terms_sub fun _ ht => ht) hm).of_terms_sub fun _ ht => ht
+
+
+/-- **The bindings a firing reads**, at the environment a rule head runs in. -/
+theorem entryShaped_bind_of_match {d : FDatabase} (hinv : d.Inv) {σ : Env}
+    (hσ : ∀ b ∈ σ, b.2 ∈ d.terms) :
+    ∀ (v : Var) (u : Term), Env.lookup v (d.env ++ σ) = some u →
+      ∀ s ∈ u.subtermList, s.EntryShaped → s ∈ d.terms := by
+  have hsc : d.SubtermClosed := FDatabase.SubtermClosed.of_wf hinv.wf
+  intro v u hu
+  refine entryShaped_mem_of_held hsc ?_
+  rcases List.mem_append.mp (Env.mem_of_lookup hu) with hb | hb
+  · have h := hinv.wf.envInTerms (v, u) (by rw [FDatabase.toDatabase_env]; exact hb)
+    rwa [FDatabase.mem_toDatabase_terms] at h
+  · exact hσ (v, u) hb
+
+/-- **`pathCompressRule`'s firing descends over entry terms too**, by the same composition of
+the two **rows** its query matched — `mem_rows_of_patternHolds_values` is what makes the reading
+a live edge — with `Action.EntrySafe` for the subterms the head records. -/
+theorem pathCompressRule_ufTermsDescend {d e : FDatabase} {σ : Env} (hinv : d.Inv)
+    (hr : d.EqsRefl) (hmg : d.sig.mergeOf ufName ≠ none)
+    (hentry : ∀ a ∈ pathCompressRule.actions, a.EntrySafe)
+    (hdes : d.UFRowsDescend) (h : d.UFTermsDescend)
+    (hσ : σ ∈ matchQuery d pathCompressRule.query)
+    (hf : execLocalActions d pathCompressRule.actions σ = some e) : e.UFTermsDescend := by
+  have hbind := entryShaped_bind_of_match hinv (mem_terms_of_mem_matchQuery hσ)
+  obtain ⟨ts₁, us₁, ha₁, hv₁, hm₁⟩ := mem_rows_of_mem_matchQuery_values hr hσ
+    (vs := [Expr.var "@b", Expr.var "@p"]) (f := ufName) (as := [Expr.var "@a"]) hmg
+    (by simp [pathCompressRule])
+  obtain ⟨va, hla, rfl⟩ := Expr.evalList_single ha₁
+  obtain ⟨vb, vp, hlb, -, rfl⟩ := Expr.evalList_pair hv₁
+  obtain ⟨ts₂, us₂, ha₂, hv₂, hm₂⟩ := mem_rows_of_mem_matchQuery_values hr hσ
+    (vs := [Expr.var "@c", Expr.var "@q"]) (f := ufName) (as := [Expr.var "@b"]) hmg
+    (by simp [pathCompressRule])
+  obtain ⟨vb', hlb', rfl⟩ := Expr.evalList_single ha₂
+  obtain ⟨vc, vq, hlc, -, rfl⟩ := Expr.evalList_pair hv₂
+  obtain rfl : vb = vb' := Option.some.inj (hlb.symm.trans hlb')
+  have hba : vb = va ∨ Term.blt vb va = true := FDatabase.ufRowsDescend_iff.mp hdes va vb vp hm₁
+  have hcb : vc = vb ∨ Term.blt vc vb = true := FDatabase.ufRowsDescend_iff.mp hdes vb vc vq hm₂
+  have hca : vc = va ∨ Term.blt vc va = true := by
+    rcases hba with rfl | hba' <;> rcases hcb with rfl | hcb'
+    · exact Or.inl rfl
+    · exact Or.inr hcb'
+    · exact Or.inr hba'
+    · exact Or.inr (Term.blt_trans _ _ _ hcb' hba')
+  have hact : pathCompressRule.actions
+      = [Action.set ufName [Expr.var "@a"]
+          [Expr.var "@c", transE (Expr.var "@p") (Expr.var "@q")]] := rfl
+  have hsafe : (Action.set ufName [Expr.var "@a"]
+      [Expr.var "@c", transE (Expr.var "@p") (Expr.var "@q")]).EntrySafe :=
+    hentry _ (by rw [hact]; exact List.mem_cons_self)
+  rw [hact, execLocalActions] at hf
+  obtain ⟨m, hm, rfl⟩ := Option.map_eq_some_iff.mp hf
+  rw [execActions] at hm
+  obtain ⟨m₁, hm₁', hm₂'⟩ := Option.bind_eq_some_iff.mp hm
+  rw [execActions, Option.some.injEq] at hm₂'
+  subst hm₂'
+  obtain ⟨es, vsh, hes, hvsh, rfl⟩ := execAction_set hm₁'
+  obtain ⟨va', hla', rfl⟩ := Expr.evalList_singleton hes
+  obtain rfl : va = va' := Option.some.inj (hla.symm.trans hla')
+  obtain ⟨vc', pf, hlc', -, rfl⟩ := Expr.evalList_pair hvsh
+  obtain rfl : vc = vc' := Option.some.inj (hlc.symm.trans hlc')
+  refine (FDatabase.UFTermsDescend.addRow' (d := { d with env := d.env ++ σ })
+    (h.of_terms_sub fun _ hx => hx) ?_ ?_).of_terms_sub fun _ hx => hx
+  · intro a₀ b₀ pf₀ heq
+    have hcols : [va, vc, pf] = [a₀, b₀, pf₀] := (Term.app.inj heq).2
+    obtain rfl : va = a₀ := (List.cons.inj hcols).1
+    obtain rfl : vc = b₀ := (List.cons.inj (List.cons.inj hcols).2).1
+    exact hca
+  · intro c hc
+    rcases List.mem_append.mp hc with hc' | hc'
+    · exact entryShaped_mem_of_evalList [Expr.var "@a"] hsafe.1 (fun w _ => hbind w) hes c hc'
+    · exact entryShaped_mem_of_evalList
+        [Expr.var "@c", transE (Expr.var "@p") (Expr.var "@q")] hsafe.2
+        (fun w _ => hbind w) hvsh c hc'
+
+/-- **Every maintenance rule's firing descends over entry terms.** -/
+theorem maintenance_ufTermsDescend {P : Program} {d e : FDatabase} {r : Rule} {σ : Env}
+    (hmem : r ∈ maintenanceRules P) (hinv : d.Inv) (hr : d.EqsRefl)
+    (hmg : d.sig.mergeOf ufName ≠ none) (hwl : Actions.WriteLegal r.actions d.sig)
+    (hdes : d.UFRowsDescend) (h : d.UFTermsDescend) (hσ : σ ∈ matchQuery d r.query)
+    (hf : execLocalActions d r.actions σ = some e) : e.UFTermsDescend := by
+  have hentry := maintenance_entrySafe hmem
+  rw [maintenanceRules, List.mem_cons] at hmem
+  rcases hmem with rfl | hmem
+  · exact pathCompressRule_ufTermsDescend hinv hr hmg hentry hdes h hσ hf
+  · obtain ⟨fk, -, hmem⟩ := List.mem_flatMap.mp hmem
+    exact execLocalActions_ufTermsDescend hinv hwl (rebuildRules_ufWriteSafe fk.1 fk.2 r hmem)
+      hentry (mem_terms_of_mem_matchQuery hσ) h hf
+
+/-- **What a round's firings owe entry-term descent.** -/
+def FDatabase.FiringsUFTermsDescend (d : FDatabase) : Prop :=
+  ∀ r ∈ d.rules, ∀ σ ∈ matchQuery d r.query, ∀ e : FDatabase,
+    execLocalActions d r.actions σ = some e → e.UFTermsDescend
+
+/-- **At an aligned state every firing descends over entry terms**: a source rule's head is
+`encodeActions_ufWriteSafe` and `encodeRule_entrySafe`, a maintenance rule's is
+`maintenance_ufTermsDescend`. -/
+theorem FDatabase.EncBase.firingsUFTermsDescend {P : Program} (hdom : P.EncodeDomain)
+    {d : FDatabase} (hb : d.EncBase P (encodeSig P)) (hdes : d.UFRowsDescend)
+    (h : d.UFTermsDescend) : d.FiringsUFTermsDescend := by
+  have hmg : d.sig.mergeOf ufName ≠ none := by
+    rw [hb.sig]; exact encodeSig_mergeOf_ufName hdom
+  intro r hrm σ hσ e he
+  rcases hb.rules r hrm with ⟨s, i, n, hmem, rfl⟩ | hmaint
+  · refine execLocalActions_ufTermsDescend hb.inv (hb.wl' _ hrm) ?_
+      (encodeRule_entrySafe hdom hmem i n) (mem_terms_of_mem_matchQuery hσ) h he
+    rw [encodeRule_actions]
+    exact encodeActions_ufWriteSafe _ s.actions _
+  · exact maintenance_ufTermsDescend hmaint hb.inv hb.eqsRefl hmg (hb.wl' r hrm) hdes h hσ he
+
+/-- One firing, unioned into the accumulator. -/
+theorem fireInto_ufTermsDescend {d acc : FDatabase} {r : Rule} {σ : Env} (hr : r ∈ d.rules)
+    (hσ : σ ∈ matchQuery d r.query) (hfire : d.FiringsUFTermsDescend)
+    (ha : acc.UFTermsDescend) : (fireInto d r acc σ).UFTermsDescend := by
+  rw [fireInto]
+  cases hx : execLocalActions d r.actions σ with
+  | none => exact ha
+  | some e => exact ha.union (hfire r hr σ hσ e hx)
+
+/-- Every match of one rule. -/
+theorem foldl_fireInto_ufTermsDescend {d : FDatabase} {r : Rule} (hr : r ∈ d.rules)
+    (hfire : d.FiringsUFTermsDescend) :
+    ∀ (σs : List Env), (∀ σ ∈ σs, σ ∈ matchQuery d r.query) →
+      ∀ {acc : FDatabase}, acc.UFTermsDescend → (σs.foldl (fireInto d r) acc).UFTermsDescend
+  | [], _, _, ha => ha
+  | σ :: σs, hsub, _, ha =>
+      foldl_fireInto_ufTermsDescend hr hfire σs
+        (fun τ hτ => hsub τ (List.mem_cons_of_mem _ hτ))
+        (fireInto_ufTermsDescend hr (hsub σ List.mem_cons_self) hfire ha)
+
+@[inherit_doc foldl_fireInto_ufTermsDescend]
+theorem fireRule_ufTermsDescend {d acc : FDatabase} {r : Rule} (hr : r ∈ d.rules)
+    (hfire : d.FiringsUFTermsDescend) (ha : acc.UFTermsDescend) :
+    (fireRule d acc r).UFTermsDescend :=
+  foldl_fireInto_ufTermsDescend hr hfire _ (fun _ h => h) ha
+
+/-- The round's fold. -/
+theorem foldl_fireRule_ufTermsDescend {d : FDatabase} (hfire : d.FiringsUFTermsDescend) :
+    ∀ (rs : List Rule), (∀ r ∈ rs, r ∈ d.rules) →
+      ∀ {acc : FDatabase}, acc.UFTermsDescend → (rs.foldl (fireRule d) acc).UFTermsDescend
+  | [], _, _, ha => ha
+  | r :: rs, hsub, _, ha =>
+      foldl_fireRule_ufTermsDescend hfire rs
+        (fun r' hr' => hsub r' (List.mem_cons_of_mem _ hr'))
+        (fireRule_ufTermsDescend (hsub r List.mem_cons_self) hfire ha)
+
+/-- **One round of rule firing descends over entry terms.** -/
+theorem execRunRules_ufTermsDescend {R : RulesetName} {d : FDatabase}
+    (hfire : d.FiringsUFTermsDescend) (h : d.UFTermsDescend) :
+    (execRunRules R d).UFTermsDescend :=
+  foldl_fireRule_ufTermsDescend hfire _ (fun _ hr => List.mem_of_mem_filter hr) h
+
+
+/-- **One `addTerm`, checked at the recorded term's top.** `FDatabase.addRow` mints its entry
+term this way, and so does the survivor of a merge firing. -/
+theorem FDatabase.UFTermsDescend.addTerm_top {d : FDatabase} (h : d.UFTermsDescend) {t : Term}
+    (hnew : ∀ a b pf, t = Term.app ufName [a, b, pf] → b = a ∨ Term.blt b a = true)
+    (hsub : ∀ s ∈ t.subtermList, s ≠ t → s.EntryShaped → s ∈ d.terms) :
+    (d.addTerm t).UFTermsDescend := by
+  refine FDatabase.ufTermsDescend_iff.mpr fun a b pf hmem => ?_
+  rcases FDatabase.mem_addTerm_terms.mp hmem with hm | hm
+  · by_cases hq : Term.app ufName [a, b, pf] = t
+    · exact hnew a b pf hq.symm
+    · exact FDatabase.ufTermsDescend_iff.mp h a b pf (hsub _ hm hq (Or.inr ⟨a, b, pf, rfl⟩))
+  · exact FDatabase.ufTermsDescend_iff.mp h a b pf hm
+
+/-- The heads the proof node a merge body mints applies: `@Trans`, `@Sym` and the two
+primitives its two selectors compile to. -/
+theorem notEntryHead_mergePfE : ∀ g ∈ (transE (symE hiPfE) loPfE).fns, NotEntryHead g := by
+  intro g hg
+  have hg2 : g = transName ∨ g = symName ∨ g = "if" ∨ g = "ordering-gt" := by
+    simpa [transE, symE, hiPfE, loPfE, ifE, gtE, Expr.fns, Expr.fnsList] using hg
+  rcases hg2 with rfl | rfl | rfl | rfl
+  exacts [notEntryHead_transName, notEntryHead_symName, notEntryHead_ifName, notEntryHead_gtName]
+
+/-- **`mergeBody` is the `union` head's own shape**, so both syntactic conditions hold of it:
+`Action.UFWriteSafe` because it writes `ordering-max ↦ ordering-min`, and `Action.EntrySafe`
+because every head it applies is `if`, `ordering-gt`, `@Sym` or `@Trans`. -/
+theorem mergeBody_ufWriteSafe : ∀ a ∈ mergeBody, a.UFWriteSafe := by
+  intro a ha
+  obtain rfl : a = Action.set ufName [maxE (.var "old0") (.var "new0")]
+      [minE (.var "old0") (.var "new0"), transE (symE hiPfE) loPfE] := by
+    simpa [mergeBody] using ha
+  exact Or.inr ⟨_, _, _, rfl, rfl⟩
+
+@[inherit_doc mergeBody_ufWriteSafe]
+theorem mergeBody_entrySafe : ∀ a ∈ mergeBody, a.EntrySafe := by
+  intro a ha
+  obtain rfl : a = Action.set ufName [maxE (.var "old0") (.var "new0")]
+      [minE (.var "old0") (.var "new0"), transE (symE hiPfE) loPfE] := by
+    simpa [mergeBody] using ha
+  exact entrySafe_unionHead notEntryHead_var notEntryHead_var notEntryHead_mergePfE
+
+/-- **One merge firing descends over entry terms.** The body's own write is `mergeBody`, which
+is `Action.UFWriteSafe` and `Action.EntrySafe`, so it goes through `execActions_ufTermsDescend`
+unchanged; what is left is the survivor's entry term, whose e-class column is one of the two
+colliding ones and so is below the key both of them were below. -/
+theorem mergeOneOriented_ufTermsDescend {cl : Finset (Term × Term)} {d e : FDatabase}
+    {r₁ r₂ : Row} (hshape : Signature.MergeShape d.sig) (hlegal : Signature.MergesLegal d.sig)
+    (hr : d.EqsRefl) (hinv : d.Inv) (hcl : ∀ p ∈ cl, p.1 = p.2) (hdes : d.UFRowsDescend)
+    (h : d.UFTermsDescend) (hfire : d.mergeOneOriented cl r₁ r₂ = some e) : e.UFTermsDescend := by
+  have hsc : d.SubtermClosed := FDatabase.SubtermClosed.of_wf hinv.wf
+  rw [FDatabase.mergeOneOriented] at hfire
+  split at hfire
+  next body res hms =>
+    obtain ⟨dc, hdc, hmergedc⟩ := Option.bind_eq_some_iff.mp hms
+    obtain ⟨-, rfl, rfl, hout2, -, -⟩ := hshape r₁.fn dc hdc body res hmergedc
+    split at hfire
+    next hg =>
+      obtain ⟨⟨⟨hfn, hargs'⟩, hmem₁⟩, hmem₂⟩ : ((r₁.fn = r₂.fn ∧
+          FDatabase.congrKeys cl r₁.args r₂.args = true) ∧ r₁ ∈ d.rows) ∧ r₂ ∈ d.rows := by
+        simpa only [Bool.and_eq_true, decide_eq_true_eq, List.contains_iff_mem] using hg
+      have hargs : r₁.args = r₂.args := eq_of_congrKeys hcl hargs'
+      split at hfire
+      next =>
+        rw [Option.some.injEq] at hfire
+        subst hfire
+        exact h.of_terms_sub fun _ ht => ht
+      next =>
+        obtain ⟨m, hm, hfire⟩ := Option.bind_eq_some_iff.mp hfire
+        obtain ⟨vs, hvs, he⟩ := Option.map_eq_some_iff.mp hfire
+        have hmg1 : d.sig.mergeOf r₁.fn ≠ none := by rw [hms]; simp
+        have hmg2 : d.sig.mergeOf r₂.fn ≠ none := by rw [← hfn]; exact hmg1
+        obtain ⟨-, hw1⟩ := hinv.index.width r₁ hmem₁ dc hdc hmg1
+        obtain ⟨-, hw2⟩ := hinv.index.width r₂ hmem₂ dc (by rw [← hfn]; exact hdc) hmg2
+        rw [hout2] at hw1 hw2
+        obtain ⟨n0, n1, hr1out⟩ := List.length_eq_two.mp hw1
+        obtain ⟨o0, o1, hr2out⟩ := List.length_eq_two.mp hw2
+        have hcol₁ : ∀ c ∈ r₁.args ++ r₁.out, c ∈ d.terms := fun c hc =>
+          FDatabase.mem_terms_of_column hsc (mem_terms_of_indexOk hr hinv.index hmem₁ hmg1) hc
+        have hcol₂ : ∀ c ∈ r₂.args ++ r₂.out, c ∈ d.terms := fun c hc =>
+          FDatabase.mem_terms_of_column hsc (mem_terms_of_indexOk hr hinv.index hmem₂ hmg2) hc
+        have hn0 : n0 ∈ d.terms := hcol₁ n0 (List.mem_append_right _ (by rw [hr1out]; simp))
+        have hn1 : n1 ∈ d.terms := hcol₁ n1 (List.mem_append_right _ (by rw [hr1out]; simp))
+        have ho0 : o0 ∈ d.terms := hcol₂ o0 (List.mem_append_right _ (by rw [hr2out]; simp))
+        have ho1 : o1 ∈ d.terms := hcol₂ o1 (List.mem_append_right _ (by rw [hr2out]; simp))
+        have henv : ({ d with env := mergeEnv r₂.out r₁.out } : FDatabase).env
+            = mergeEnv [o0, o1] [n0, n1] := by rw [hr1out, hr2out]
+        have hinv' : ({ d with env := mergeEnv r₂.out r₁.out } : FDatabase).Inv := by
+          refine hinv.setEnv (fun b hb => ?_)
+          rw [FDatabase.mem_toDatabase_terms]
+          rw [hr2out, hr1out, mergeEnv_pair] at hb
+          have hb2 : b = ("old0", o0) ∨ b = ("new0", n0) ∨ b = ("old1", o1) ∨
+              b = ("new1", n1) := by simpa using hb
+          rcases hb2 with rfl | rfl | rfl | rfl
+          exacts [ho0, hn0, ho1, hn1]
+        have hmdes : m.UFTermsDescend :=
+          execActions_ufTermsDescend mergeBody mergeBody_ufWriteSafe mergeBody_entrySafe
+            hinv' (hlegal r₁.fn dc mergeBody mergeResult hdc hmergedc).1
+            (h.of_terms_sub fun _ ht => ht) hm
+        obtain ⟨mx, mn, pa, pb, -, -, -, -, rfl⟩ := execActions_mergeBody_inv henv hm
+        have hmono : ∀ t ∈ d.terms, t ∈ (FDatabase.addRow ufName [mx]
+            [mn, Term.app transName [Term.app symName [pa], pb]]
+            ({ d with env := mergeEnv r₂.out r₁.out } : FDatabase)).terms :=
+          fun t ht => FDatabase.mem_addRow_terms.mpr (Or.inr ht)
+        rw [FDatabase.addRow_env, henv] at hvs
+        obtain ⟨w, lo, hw0, hlo0, rfl⟩ := evalList_mergeResult_inv hvs
+        subst he
+        refine (FDatabase.UFTermsDescend.addTerm_top hmdes ?_ ?_).of_terms_sub fun _ ht => ht
+        · intro a₀ b₀ pf₀ heq
+          obtain ⟨hfeq, hcols⟩ := Term.app.inj heq
+          obtain ⟨hka, hva⟩ := List.append_inj'
+            (show r₂.args ++ [w, lo] = [a₀] ++ [b₀, pf₀] from hcols) rfl
+          obtain rfl : w = b₀ := (List.cons.inj hva).1
+          have hrow₂ : (⟨ufName, [a₀], [o0, o1]⟩ : Row) ∈ d.rows := by
+            rw [show ufName = r₂.fn from hfeq.symm, show [a₀] = r₂.args from hka.symm, ← hr2out]
+            exact hmem₂
+          have hrow₁ : (⟨ufName, [a₀], [n0, n1]⟩ : Row) ∈ d.rows := by
+            rw [show ufName = r₁.fn from (hfn.trans hfeq).symm,
+              show [a₀] = r₁.args from (hargs.trans hka).symm, ← hr1out]
+            exact hmem₁
+          have ho : o0 = a₀ ∨ Term.blt o0 a₀ = true :=
+            FDatabase.ufRowsDescend_iff.mp hdes a₀ o0 o1 hrow₂
+          have hn : n0 = a₀ ∨ Term.blt n0 a₀ = true :=
+            FDatabase.ufRowsDescend_iff.mp hdes a₀ n0 n1 hrow₁
+          rcases hw0 with rfl | rfl
+          exacts [ho, hn]
+        · refine entryShaped_mem_of_columns (fun c hc => ?_)
+          have hcm : c ∈ d.terms := by
+            rcases List.mem_append.mp hc with hc' | hc'
+            · exact hcol₂ c (List.mem_append_left _ hc')
+            · have hc2 : c = w ∨ c = lo := by simpa using hc'
+              rcases hc2 with rfl | rfl
+              · rcases hw0 with rfl | rfl
+                exacts [ho0, hn0]
+              · rcases hlo0 with rfl | rfl
+                exacts [ho1, hn1]
+          exact fun s hs hsh => hmono _ (entryShaped_mem_of_held hsc hcm s hs hsh)
+    next => exact absurd hfire (by simp)
+  next => exact absurd hfire (by simp)
+
+/-- **The same, at whichever orientation the pass chose.** -/
+theorem mergeOneWith_ufTermsDescend {cl : Finset (Term × Term)} {d e : FDatabase} {r₁ r₂ : Row}
+    (hshape : Signature.MergeShape d.sig) (hlegal : Signature.MergesLegal d.sig)
+    (hr : d.EqsRefl) (hinv : d.Inv) (hcl : ∀ p ∈ cl, p.1 = p.2) (hdes : d.UFRowsDescend)
+    (h : d.UFTermsDescend) (hm : d.mergeOneWith cl r₁ r₂ = some e) : e.UFTermsDescend := by
+  rcases FDatabase.mergeOneWith_eq_oriented (cl := cl) (d := d) r₁ r₂ with he | he <;>
+    exact mergeOneOriented_ufTermsDescend hshape hlegal hr hinv hcl hdes h (he ▸ hm)
+
+/-- **A merge pass descends over entry terms.** The rebuild writes `rows` alone, so it costs
+this nothing at all. -/
+theorem mergeRound_ufTermsDescend {d : FDatabase} (hshape : Signature.MergeShape d.sig)
+    (hlegal : Signature.MergesLegal d.sig) (hinv : d.Inv) (hn : d.NoUnions)
+    (hdes : d.UFRowsDescend) (h : d.UFTermsDescend) : d.mergeRound.UFTermsDescend := by
+  have hdiag : ∀ p ∈ d.closureF, p.1 = p.2 := fun _ hp => diag_closureF hn.eqsRefl hp
+  have key : d.mergeRound.Inv ∧ d.mergeRound.sig = d.sig ∧ d.mergeRound.NoUnions ∧
+      d.mergeRound.UFRowsDescend ∧ d.mergeRound.UFTermsDescend := by
+    refine FDatabase.mergeRound_induction
+      (P := fun x => x.Inv ∧ x.sig = d.sig ∧ x.NoUnions ∧ x.UFRowsDescend ∧ x.UFTermsDescend)
+      ⟨hinv, rfl, hn, hdes, h⟩
+      ⟨FDatabase.Inv.rebuild hinv FDatabase.closureSound_closureF, rfl, rebuild_noUnions hn,
+        hdes.mono (fun r hr' => by
+          rw [FDatabase.rebuild_diag hdiag, List.mem_dedup] at hr'; exact hr'),
+        h.of_terms_sub fun _ ht => ht⟩ ?_
+    intro x y r₁ r₂ hx hy
+    refine ⟨FDatabase.mergeOneWith_inv hx.1 (by rw [hx.2.1]; exact hlegal) hy,
+      ((FDatabase.mergeOneWith_confined hy).2.2.1).trans hx.2.1,
+      mergeOneWith_noUnions hx.2.2.1 hy,
+      mergeOneWith_ufRowsDescend (by rw [hx.2.1]; exact hshape) hx.1.index hdiag hx.2.2.2.1 hy,
+      mergeOneWith_ufTermsDescend (by rw [hx.2.1]; exact hshape)
+        (by rw [hx.2.1]; exact hlegal) hx.2.2.1.eqsRefl hx.1 hdiag hx.2.2.2.1 hx.2.2.2.2 hy⟩
+  exact key.2.2.2.2
+
+/-- **And the whole merge phase.** -/
+theorem mergeSaturateF_ufTermsDescend : ∀ (n : Nat) {d e : FDatabase},
+    Signature.MergeShape d.sig → Signature.MergesLegal d.sig → d.Inv → d.NoUnions →
+    d.UFRowsDescend → d.UFTermsDescend → FDatabase.mergeSaturateF n d = some e →
+      e.UFTermsDescend
+  | 0, d, e, _, _, _, _, _, h, hrun => by
+      rw [FDatabase.mergeSaturateF] at hrun
+      split at hrun
+      · rw [Option.some.injEq] at hrun; exact hrun ▸ h
+      · exact absurd hrun (by simp)
+  | n + 1, d, e, hshape, hlegal, hinv, hn, hdes, h, hrun => by
+      rw [FDatabase.mergeSaturateF] at hrun
+      split at hrun
+      · rw [Option.some.injEq] at hrun; exact hrun ▸ h
+      · have hsig : d.mergeRound.sig = d.sig := FDatabase.mergeRound_confined.2.2.1
+        exact mergeSaturateF_ufTermsDescend n (by rw [hsig]; exact hshape)
+          (by rw [hsig]; exact hlegal) (FDatabase.Inv.mergeRound_of_legalMerges hinv hlegal)
+          (mergeRound_noUnions hn) (mergeRound_ufRowsDescend hshape hlegal hinv hn hdes)
+          (mergeRound_ufTermsDescend hshape hlegal hinv hn hdes h) hrun
+
+/-- **A whole round**: rule firing followed by the merge phase. -/
+theorem runRoundM_ufTermsDescend {R : RulesetName} {d e : FDatabase}
+    (hshape : Signature.MergeShape d.sig) (hlegal : Signature.MergesLegal d.sig)
+    (hinv : d.Inv) (hn : d.NoUnions)
+    (hwl : ∀ r ∈ d.rules, Actions.WriteLegal r.actions d.sig)
+    (hfireR : d.FiringsUFDescend) (hfireT : d.FiringsUFTermsDescend)
+    (hdes : d.UFRowsDescend) (h : d.UFTermsDescend)
+    (hrun : d.runRoundM R = some e) : e.UFTermsDescend := by
+  rw [FDatabase.runRoundM] at hrun
+  refine mergeSaturateF_ufTermsDescend mergeFuel ?_ ?_ ?_ ?_
+    (execRunRules_ufRowsDescend hfireR hdes) (execRunRules_ufTermsDescend hfireT h) hrun
+  · rw [FDatabase.execRunRules_fields.1]; exact hshape
+  · rw [FDatabase.execRunRules_fields.1]; exact hlegal
+  · exact hinv.execRunRules hwl
+  · exact execRunRules_noUnions hn
+
+
+/-- **Rounds of one ruleset descend over entry terms**, given the bundle at each round's own
+start. `FDatabase.UFRowsDescend` rides along because `pathCompressRule` reads rows. -/
+theorem FDatabase.EncBase.runSaturateM_ufTermsDescend {P : Program} (hdom : P.EncodeDomain)
+    {R : RulesetName} :
+    ∀ (n : Nat) {d d' : FDatabase}, d.EncBase P (encodeSig P) → d.UFRowsDescend →
+      d.UFTermsDescend → d.runSaturateM R n = some d' → d'.UFTermsDescend := by
+  intro n d d' hb hdes h hrun
+  refine (runSaturateM_closed (R := R)
+    (Φ := fun x => x.EncBase P (encodeSig P) ∧ x.UFRowsDescend ∧ x.UFTermsDescend)
+    ?_ n ⟨hb, hdes, h⟩ hrun).2.2
+  intro x y hx hstep
+  have hstep' : x.execCmdM (Cmd.run R) = some y := hstep
+  have hmg : x.sig.mergeOf ufName ≠ none := by
+    rw [hx.1.sig]; exact encodeSig_mergeOf_ufName hdom
+  have hfireR : x.FiringsUFDescend :=
+    firingsUFDescend_of_rulesEncoded hx.1.rules hx.1.eqsRefl hmg hx.2.1
+  refine ⟨hx.1.execCmdM (c := Cmd.run R) trivial trivial trivial trivial trivial hstep',
+    runRoundM_ufRowsDescend (by rw [hx.1.sig]; exact hx.1.shape)
+      (by rw [hx.1.sig]; exact hx.1.merges) hx.1.inv hx.1.nounions hx.1.wl' hfireR hx.2.1 hstep,
+    ?_⟩
+  exact runRoundM_ufTermsDescend (by rw [hx.1.sig]; exact hx.1.shape)
+    (by rw [hx.1.sig]; exact hx.1.merges) hx.1.inv hx.1.nounions hx.1.wl' hfireR
+    (hx.1.firingsUFTermsDescend hdom hx.2.1 hx.2.2) hx.2.1 hx.2.2 hstep
+
+/-- **One command of the aligned run descends over entry terms.** The same conditions
+`FDatabase.EncBase.execCmdM_ufRowsDescend` takes, plus the entry-write one the recorded
+subterms cost. -/
+theorem FDatabase.EncBase.execCmdM_ufTermsDescend {P : Program} (hdom : P.EncodeDomain)
+    {d d' : FDatabase} {c : Cmd} (hb : d.EncBase P (encodeSig P))
+    (huf : c.UnionFree) (hnd : c.NoDecl) (hwl : c.WriteLegal (encodeSig P))
+    (hok : c.UFWriteOk) (hent : c.EntryWriteOk) (hdes : d.UFRowsDescend)
+    (h : d.UFTermsDescend) (hs : d.execCmdM c = some d') : d'.UFTermsDescend := by
+  have hmg : d.sig.mergeOf ufName ≠ none := by
+    rw [hb.sig]; exact encodeSig_mergeOf_ufName hdom
+  have hfireR : d.FiringsUFDescend :=
+    firingsUFDescend_of_rulesEncoded hb.rules hb.eqsRefl hmg hdes
+  cases c with
+  | action a =>
+    rw [FDatabase.execCmdM] at hs
+    obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp hs
+    refine mergeSaturateF_ufTermsDescend mergeFuel ?_ ?_ ?_ ?_
+      (execAction_ufRowsDescend hok hdes h₁)
+      (execAction_ufTermsDescend hb.inv hok hent h h₁) h₂
+    · rw [FDatabase.execAction_sig h₁, hb.sig]; exact hb.shape
+    · rw [FDatabase.execAction_sig h₁, hb.sig]; exact hb.merges
+    · exact hb.inv.execAction (by rw [hb.sig]; exact hwl) h₁
+    · exact execAction_noUnions huf hb.nounions h₁
+  | rule r =>
+    rw [FDatabase.execCmdM, Option.some.injEq] at hs
+    exact hs ▸ h.of_terms_sub fun _ ht => ht
+  | run R =>
+    rw [FDatabase.execCmdM] at hs
+    exact runRoundM_ufTermsDescend (by rw [hb.sig]; exact hb.shape)
+      (by rw [hb.sig]; exact hb.merges) hb.inv hb.nounions hb.wl' hfireR
+      (hb.firingsUFTermsDescend hdom hdes h) hdes h hs
+  | saturate R =>
+    rw [FDatabase.execCmdM] at hs
+    exact FDatabase.EncBase.runSaturateM_ufTermsDescend hdom runFuel hb hdes h hs
+  | decl f dc => exact (hnd : False).elim
+
+/-- **A block of them.** -/
+theorem FDatabase.EncBase.execProgramM_ufTermsDescend {P : Program} (hdom : P.EncodeDomain)
+    {p : Program} (hro : ∀ c ∈ p, Cmd.RulesEncodedOk P c) (huf : ∀ c ∈ p, c.UnionFree)
+    (hnd : ∀ c ∈ p, c.NoDecl) (hwl : ∀ c ∈ p, c.WriteLegal (encodeSig P))
+    (hok : ∀ c ∈ p, c.UFWriteOk) (hent : ∀ c ∈ p, c.EntryWriteOk)
+    (hlet : ∀ c ∈ p, c.NoAtLet) :
+    ∀ {d D : FDatabase}, d.EncBase P (encodeSig P) → d.UFRowsDescend → d.UFTermsDescend →
+      d.execProgramM p = some D → D.UFTermsDescend := by
+  induction p with
+  | nil =>
+    intro d D _ _ h hs
+    rw [FDatabase.execProgramM, Option.some.injEq] at hs
+    exact hs ▸ h
+  | cons c cs ih =>
+    intro d D hb hdes h hs
+    rw [FDatabase.execProgramM] at hs
+    obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp hs
+    refine ih (fun c' hc' => hro c' (List.mem_cons_of_mem c hc'))
+      (fun c' hc' => huf c' (List.mem_cons_of_mem c hc'))
+      (fun c' hc' => hnd c' (List.mem_cons_of_mem c hc'))
+      (fun c' hc' => hwl c' (List.mem_cons_of_mem c hc'))
+      (fun c' hc' => hok c' (List.mem_cons_of_mem c hc'))
+      (fun c' hc' => hent c' (List.mem_cons_of_mem c hc'))
+      (fun c' hc' => hlet c' (List.mem_cons_of_mem c hc'))
+      (hb.execCmdM (hro c List.mem_cons_self) (huf c List.mem_cons_self)
+        (hnd c List.mem_cons_self) (hwl c List.mem_cons_self) (hlet c List.mem_cons_self) h₁)
+      (hb.execCmdM_ufRowsDescend (encodeSig_mergeOf_ufName hdom) (huf c List.mem_cons_self)
+        (hnd c List.mem_cons_self) (hwl c List.mem_cons_self) (hok c List.mem_cons_self)
+        hdes h₁)
+      (hb.execCmdM_ufTermsDescend hdom (huf c List.mem_cons_self) (hnd c List.mem_cons_self)
+        (hwl c List.mem_cons_self) (hok c List.mem_cons_self) (hent c List.mem_cons_self)
+        hdes h h₁) h₂
+
+/-- **`FDatabase.UFTermsDescend` at the state `execM` returned**: every `@UF` **entry term** an
+encoded run's target holds runs `ordering-max ↦ ordering-min`, whether or not the row that
+carried it survived.
+
+This is the sole cost of `FDatabase.ufRowRoot_of_ufReach` — the identification of entry
+reachability with row reachability that all three clauses of `Database.RebuildClosed` spend —
+and it is now a theorem rather than a hypothesis. `execM_ufRowsDescend` is the same fact at the
+rows; the two are one induction apart, and the extra obligation at each writer is
+`Action.EntrySafe`, that no action records an entry-shaped term except the one its own `set`
+writes a row for. -/
+theorem execM_encode_ufTermsDescend {P : Program} (hdom : P.EncodeDomain) (hag : P.AritiesAgree)
+    {tgt : FDatabase} (htgt : execM (encode P) = some tgt) : tgt.UFTermsDescend := by
+  rw [execM, encode] at htgt
+  obtain ⟨d₀, hprel, hcmds⟩ := FDatabase.execProgramM_append htgt
+  have hb₀ : d₀.EncBase P (encodeSig P) := (encOk_preludeState hdom hag hprel).base
+  have hdata := execProgramM_data_of_declOrRule (declOrRule_encodePrelude P) hprel
+  have hdes₀ : d₀.UFRowsDescend := by
+    refine FDatabase.ufRowsDescend_iff.mpr fun a b pf hmem => ?_
+    rw [hdata.2.1, show FDatabase.empty.rows = ([] : List Row) from rfl] at hmem
+    exact absurd hmem (by simp)
+  have h₀ : d₀.UFTermsDescend := by
+    refine FDatabase.ufTermsDescend_iff.mpr fun a b pf hmem => ?_
+    rw [hdata.1, show FDatabase.empty.terms = ([] : List Term) from rfl] at hmem
+    exact absurd hmem (by simp)
+  refine FDatabase.EncBase.execProgramM_ufTermsDescend hdom
+    (rulesEncodedOk_encodeCmds P (fun _ hc => hc) 0 0) (encodeCmds_unionFree P 0 0)
+    (fun c hc => ?_) (fun c hc => ?_) (fun c hc => ?_) (fun c hc => ?_) (fun c hc => ?_)
+    hb₀ hdes₀ h₀ hcmds
+  · obtain ⟨c₀, -, m, j, hmem⟩ := mem_encodeCmd_of_mem_encodeCmds P (fun _ h => h) 0 0 c hc
+    exact noDecl_encodeCmd c₀ m j c hmem
+  · obtain ⟨c₀, hc₀, m, j, hmem⟩ := mem_encodeCmd_of_mem_encodeCmds P (fun _ h => h) 0 0 c hc
+    exact encodedWriteLegal hdom hag c₀ hc₀ m j c hmem
+  · obtain ⟨c₀, -, m, j, hmem⟩ := mem_encodeCmd_of_mem_encodeCmds P (fun _ h => h) 0 0 c hc
+    exact ufWriteOk_encodeCmd c₀ m j c hmem
+  · obtain ⟨c₀, hc₀, m, j, hmem⟩ := mem_encodeCmd_of_mem_encodeCmds P (fun _ h => h) 0 0 c hc
+    exact entryWriteOk_encodeCmd hdom c₀ hc₀ m j c hmem
+  · obtain ⟨c₀, hc₀, m, j, hmem⟩ := mem_encodeCmd_of_mem_encodeCmds P (fun _ h => h) 0 0 c hc
+    exact noAtLet_encodeCmd hdom c₀ hc₀ m j c hmem
+
+/-- **Entry-term descent, with the arity clause read off the domain.** -/
+theorem execM_ufTermsDescend {P : Program} (hdom : P.EncodeDomain) {tgt : FDatabase}
+    (htgt : execM (encode P) = some tgt) : tgt.UFTermsDescend :=
+  execM_encode_ufTermsDescend hdom hdom.aritiesAgree' htgt
+
+/-- **The identification, at the state `execM` returned**: entry reachability and row
+reachability land on the *same* `@UF` row root, so the row a reader of an id is answered with
+by the bridge is the one every other reader of that id is answered with too.
+
+`FDatabase.ufRowRoot_of_ufReach` with all four of its hypotheses discharged —
+`execM_encode_eqsRefl`, `execM_entryRowsUF`, `execM_ufRowsDescend`,
+`execM_encode_ufRowsForest` and `execM_ufTermsDescend`. -/
+theorem execM_ufRowRoot_of_ufReach {P : Program} (hdom : P.EncodeDomain)
+    (hsy : (encodeSig P).IsCtor symName) (htr : (encodeSig P).IsCtor transName)
+    {tgt : FDatabase} (htgt : execM (encode P) = some tgt) {a b : Term}
+    (hreach : tgt.toDatabase.UFReach a b) :
+    ∀ r s, tgt.UFRowReach a r → tgt.UFRowRoot r → tgt.UFRowReach b s → tgt.UFRowRoot s →
+      r = s :=
+  FDatabase.ufRowRoot_of_ufReach (execM_encode_eqsRefl htgt) (execM_entryRowsUF hdom htgt)
+    (by rw [(execM_encode_encBase hdom hdom.aritiesAgree' htgt).sig]; exact encodeSig_ufName hdom)
+    (execM_ufRowsDescend hdom htgt)
+    (execM_encode_ufRowsForest hdom hdom.aritiesAgree' hsy htr htgt)
+    (execM_ufTermsDescend hdom htgt) hreach
+
 /-! ## The fixpoint's roots, run-wide
 
 `no_ufRowEdge_of_rowsClosed` reads a rebuild **fixpoint**, and `encodeCmd` emits
