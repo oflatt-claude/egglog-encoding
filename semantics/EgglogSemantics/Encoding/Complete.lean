@@ -4167,31 +4167,6 @@ theorem encode_corresponds_complete_witness {tgt : FDatabase}
       ncSrc_mem_FA' ncSrc_mem_FB' hsame,
     ncTgt_sameClass_FA_FB, hsame⟩
 
-/-- **The correspondence.** `difftest correspond 64` runs exactly this claim over the 70
-in-domain cases and the seventeen probes, through `sameClassF` and `closureF`, and reports
-70 agreeing, 0 LOST, 0 INVENTED — and `link-diff` 0, which is what says the swept relation
-is this one.
-
-`EncodeDomain` is still needed: outside it `encode` is not defined for the program at all —
-a `:merge` declaration has no table triple to emit, and a source name in the generated
-namespace collides with one. `Rebuilt` is *not* a hypothesis: it is a postcondition of the
-specification's rebuild command (`cmdStep_rebuilt`), and the hypothesis here names an
-`execM` target, so what both halves lean on is the interpreter's own `mergeSaturateF`
-fixpoint instead.
-
-**Stated at the source's e-nodes**, which is where the encoding is faithful and where the
-corpus sweep measures it. The two membership hypotheses cost the forward direction nothing —
-`Cong src a b` implies both — and the backward direction cannot do without them:
-`encode_corresponds_invents_enode` refutes the unrestricted `iff` at the witness program
-`Encoding/Correspond.lean` keeps for it. -/
-theorem encode_corresponds {P : Program} {src : Database} {tgt : FDatabase}
-    (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
-    (htgt : execM (encode P) = some tgt) (a b : Term) (ha : a ∈ src.terms)
-    (hb : b ∈ src.terms) :
-    Cong src a b ↔ SameClass tgt.toDatabase a b :=
-  ⟨encode_corresponds_forward hdom hsrc htgt, encode_corresponds_complete hdom hsrc htgt ha hb⟩
-
-
 
 /-! ## The bridge, run-wide
 
@@ -4590,8 +4565,8 @@ target *holds*), and that the target's environment binds no `@`-prefixed variabl
 (`FDatabase.EncBase.noAtEnv`, `Program.EncodeDomain.noAt` carried along the run), so that
 `Query.freeVars` is the whole of the query's variables. The fourth is the one still open:
 placing the columns in `FDatabase.valueTerms`, which `FDatabase.RowColumnsValued` names and
-which nothing here establishes — it would be a per-command induction of
-`FDatabase.EntryRowsUF`'s shape, over the same writers. -/
+`execM_rowColumnsValued` discharges run-wide, by a per-command induction of
+`FDatabase.EntryRowsUF`'s shape over the same writers. -/
 
 /-! ### `matchQuery` completeness in general form, and the e-class rule's own firing
 
@@ -4620,9 +4595,10 @@ key back, and that is `Nat`'s decimal representation being injective (`toString_
 core's `Nat.ofDigitChars_toDigits`). It is a real side condition and not bookkeeping: a rule
 whose key pattern repeated a variable would match only the rows whose two columns agree.
 
-**What is left is one state property**, `FDatabase.RowColumnsValued`: `matchQuery` assigns from
+**One state property is left over**, `FDatabase.RowColumnsValued`: `matchQuery` assigns from
 `FDatabase.valueTerms` and not from `terms`, so a rule can only re-read a row whose columns are
-of that kind. It is not carried by `FDatabase.EncBase`, and nothing below establishes it. -/
+of that kind. It is not carried by `FDatabase.EncBase`; `execM_rowColumnsValued`, two blocks
+below, is it run-wide. -/
 
 theorem toString_nat_inj {i j : Nat} (h : toString i = toString j) : i = j := by
   have hd : Nat.toDigits 10 i = Nat.toDigits 10 j := by
@@ -4780,7 +4756,7 @@ theorem mem_matchQuery_of_lookup {d : FDatabase} {q : Query} {τ : Env}
 
 /-- **Every column a row records is a value `matchQuery` will assign.** `matchQuery` enumerates
 `FDatabase.valueTerms` and not `terms`, so a rule can only re-read a row whose columns are of
-that kind. -/
+that kind. `execM_rowColumnsValued` is this at an `execM` target. -/
 def FDatabase.RowColumnsValued (d : FDatabase) : Prop :=
   ∀ r ∈ d.rows, ∀ t ∈ r.args ++ r.out, t ∈ d.valueTerms
 
@@ -5111,8 +5087,10 @@ theorem eclassRule_fires {P : Program} {d : FDatabase} (hb : d.EncBase P (encode
   rw [eclassRule, execLocalActions]
   simp only [execActions, Egglog.execAction, hcs, Option.bind_some, hout, Option.map_some]
 
-/-- **The fixpoint's roots.** The firing is discharged (`eclassRule_fires`); what is left of the
-hole is `FDatabase.RowColumnsValued`, that a row's columns are terms `matchQuery` will assign. -/
+/-- **The fixpoint's roots**: at a rebuild fixpoint no surviving view row's e-class column has an
+outgoing `@UF` row. The firing is `eclassRule_fires`, and `FDatabase.RowColumnsValued` — that a
+row's columns are terms `matchQuery` will assign — is `execM_rowColumnsValued` at an `execM`
+target. -/
 theorem no_ufRowEdge_of_rowsClosed {P : Program} {d d' : FDatabase} (hdom : P.EncodeDomain)
     (hb : d.EncBase P (encodeSig P)) (hsy : (encodeSig P).IsCtor symName)
     (htr : (encodeSig P).IsCtor transName) (hcv : d.RowColumnsValued)
@@ -5167,5 +5145,889 @@ theorem no_ufRowEdge_of_rowsClosed {P : Program} {d d' : FDatabase} (hdom : P.En
   · exact hedge.2 rfl
   · rw [Term.blt_asymm x e hxe] at hlt
     exact absurd hlt (by simp)
+
+
+/-! ## The columns a row records, run-wide
+
+`FDatabase.RowColumnsValued` is the fourth cost of the e-class rule's firing and the one
+hypothesis `no_ufRowEdge_of_rowsClosed` still carries. What places a column in
+`FDatabase.valueTerms` is a fact about `terms` alone, and it needs nothing syntactic: a
+`Term.app` only ever reaches `terms` through `Expr.eval`, whose application case is guarded by
+`Signature.IsCtor` — a *declared* name with no `:merge`. So every term any action evaluates is
+a value, and an entry term reaches `terms` only as the top of what `FDatabase.addRow` mints.
+`FDatabase.Valued` is that invariant, and it is carried over the same writers
+`FDatabase.EntryRowsUF` is. -/
+
+/-- **A term a rule variable may be bound to**: a literal, or an application of a name that
+carries no `:merge`. `FDatabase.valueTerms` is this test over `terms`. -/
+def Term.IsValue (sig : Signature) : Term → Prop
+  | .lit _ => True
+  | .app f _ => sig.mergeOf f = none
+
+@[simp] theorem Term.isValue_lit {sig : Signature} {l : Lit} : Term.IsValue sig (.lit l) := trivial
+
+@[simp] theorem Term.isValue_app {sig : Signature} {f : FnName} {as : List Term} :
+    Term.IsValue sig (.app f as) ↔ sig.mergeOf f = none := Iff.rfl
+
+/-- **No argument of any subterm of `t` is an entry term.** Stated over `Term.subtermList`
+rather than by recursion, for the reason `Term.LitFree` is: the argument list makes a direct
+recursion on `Term` awkward and every consumer reads it at a subterm anyway. -/
+def Term.ArgsValue (sig : Signature) (t : Term) : Prop :=
+  ∀ s ∈ t.subtermList, ∀ f as, s = Term.app f as → ∀ a ∈ as, Term.IsValue sig a
+
+theorem Term.argsValue_lit {sig : Signature} {l : Lit} : Term.ArgsValue sig (.lit l) := by
+  intro s hs f as hsf a ha
+  rw [Term.subtermList_lit, List.mem_singleton] at hs
+  exact absurd (hs ▸ hsf) (by simp)
+
+/-- An application whose arguments are values with valued arguments. -/
+theorem Term.argsValue_app {sig : Signature} {f : FnName} {ts : List Term}
+    (hv : ∀ a ∈ ts, Term.IsValue sig a) (ha : ∀ a ∈ ts, Term.ArgsValue sig a) :
+    Term.ArgsValue sig (Term.app f ts) := by
+  intro s hs g bs hsg a hab
+  rw [Term.subtermList_app, List.mem_cons] at hs
+  rcases hs with rfl | hs
+  · obtain ⟨rfl, rfl⟩ : f = g ∧ ts = bs := by
+      injection hsg with h₁ h₂; exact ⟨h₁, h₂⟩
+    exact hv a hab
+  · obtain ⟨u, hu, hsub⟩ := (Term.mem_subtermListL ts).mp hs
+    exact ha u hu s ((Term.mem_subtermList u).mpr hsub) g bs hsg a hab
+
+/-- A subterm of a term with valued arguments has them too. -/
+theorem Term.ArgsValue.subterm {sig : Signature} {t s : Term} (h : Term.ArgsValue sig t)
+    (hs : s ∈ t.subtermList) : Term.ArgsValue sig s :=
+  fun u hu => h u ((Term.mem_subtermList t).mpr
+    (((Term.mem_subtermList s).mp hu).trans ((Term.mem_subtermList t).mp hs)))
+
+/-- The arguments themselves, read off the top. -/
+theorem Term.ArgsValue.args {sig : Signature} {f : FnName} {as : List Term}
+    (h : Term.ArgsValue sig (Term.app f as)) : ∀ a ∈ as, Term.IsValue sig a :=
+  fun a ha => h _ ((Term.mem_subtermList _).mpr (.refl _)) f as rfl a ha
+
+/-- `FDatabase.valueTerms` split into its two conditions. -/
+theorem FDatabase.mem_valueTerms_iff {d : FDatabase} {t : Term} :
+    t ∈ d.valueTerms ↔ t ∈ d.terms ∧ Term.IsValue d.sig t := by
+  rw [FDatabase.valueTerms, List.mem_filter]
+  constructor
+  · rintro ⟨hm, hb⟩
+    refine ⟨hm, ?_⟩
+    cases t with
+    | lit l => trivial
+    | app f as => exact Option.isNone_iff_eq_none.mp (by simpa using hb)
+  · rintro ⟨hm, hv⟩
+    refine ⟨hm, ?_⟩
+    cases t with
+    | lit l => rfl
+    | app f as =>
+      change (d.sig.mergeOf f).isNone = true
+      rw [Term.isValue_app.mp hv]
+      rfl
+
+/-- **Every argument of every term the state holds is a value, and so is every term its
+environment binds.** The invariant `FDatabase.RowColumnsValued` is read off. -/
+structure FDatabase.Valued (d : FDatabase) : Prop where
+  /-- No argument of a term the state holds is an entry term. -/
+  terms : ∀ t ∈ d.terms, Term.ArgsValue d.sig t
+  /-- Nor is anything the environment binds. -/
+  env : ∀ b ∈ d.env, Term.IsValue d.sig b.2 ∧ Term.ArgsValue d.sig b.2
+
+/-! ### Evaluation lands in the values
+
+No syntactic hypothesis on the expression: `Expr.eval`'s application case demands
+`Signature.IsCtor`, which is a declaration whose `merge` is `none`, and its primitive case
+answers with a literal or with an operand (`prim_apply_cases`). -/
+
+mutual
+
+/-- **An expression evaluates to a value with valued arguments**, in an environment that binds
+only such terms. -/
+theorem isValue_of_eval {sig : Signature} {ρ : Env}
+    (hρ : ∀ b ∈ ρ, Term.IsValue sig b.2 ∧ Term.ArgsValue sig b.2) :
+    ∀ (e : Expr) {t : Term}, e.eval sig ρ = some t →
+      Term.IsValue sig t ∧ Term.ArgsValue sig t
+  | .lit l, t, h => by
+      obtain rfl : t = Term.lit l := (Option.some.inj h).symm
+      exact ⟨Term.isValue_lit, Term.argsValue_lit⟩
+  | .var v, t, h => by
+      rw [Expr.eval] at h
+      exact hρ (v, t) (Env.mem_of_lookup h)
+  | .app f args, t, h => by
+      cases hp : Prim.ofName f with
+      | some p =>
+          simp only [Expr.eval, hp] at h
+          obtain ⟨ts, hargs, hap⟩ := Option.bind_eq_some_iff.mp h
+          have hts := isValue_of_evalList hρ args hargs
+          rcases prim_apply_cases hap with ⟨l, rfl⟩ | hmem
+          · exact ⟨Term.isValue_lit, Term.argsValue_lit⟩
+          · exact hts t hmem
+      | none =>
+          simp only [Expr.eval, hp] at h
+          by_cases hct : sig.IsCtor f
+          · rw [if_pos hct] at h
+            obtain ⟨ts, hargs, happ⟩ := Option.map_eq_some_iff.mp h
+            have hts := isValue_of_evalList hρ args hargs
+            obtain rfl : Term.app f ts = t := happ
+            obtain ⟨dc, hdc, hmg⟩ := hct
+            exact ⟨Term.isValue_app.mpr (by rw [Signature.mergeOf, hdc, Option.bind_some, hmg]),
+              Term.argsValue_app (fun a ha => (hts a ha).1) (fun a ha => (hts a ha).2)⟩
+          · rw [if_neg hct] at h
+            exact absurd h (by simp)
+
+@[inherit_doc isValue_of_eval]
+theorem isValue_of_evalList {sig : Signature} {ρ : Env}
+    (hρ : ∀ b ∈ ρ, Term.IsValue sig b.2 ∧ Term.ArgsValue sig b.2) :
+    ∀ (es : List Expr) {ts : List Term}, Expr.evalList sig es ρ = some ts →
+      ∀ u ∈ ts, Term.IsValue sig u ∧ Term.ArgsValue sig u
+  | [], ts, h => by
+      rw [Expr.evalList, Option.some.injEq] at h
+      subst h
+      intro u hu
+      simp at hu
+  | e :: es, ts, h => by
+      rw [Expr.evalList] at h
+      obtain ⟨t, ht, hrest⟩ := Option.bind_eq_some_iff.mp h
+      obtain ⟨us, hus, rfl⟩ := Option.map_eq_some_iff.mp hrest
+      intro u hu
+      rcases List.mem_cons.mp hu with rfl | hu'
+      · exact isValue_of_eval hρ e ht
+      · exact isValue_of_evalList hρ es hus u hu'
+
+end
+
+/-! ### The writers -/
+
+/-- `FDatabase.Valued` reads `sig`, `terms` and `env`; the rule list may be replaced freely. -/
+theorem FDatabase.Valued.setRules {d : FDatabase} (h : d.Valued) (rs : List Rule) :
+    ({ d with rules := rs } : FDatabase).Valued where
+  terms := h.terms
+  env := h.env
+
+/-- **And the environment may be replaced by any binding of values.** -/
+theorem FDatabase.Valued.setEnv {d : FDatabase} (h : d.Valued) {σ : Env} {rs : List Rule}
+    (hσ : ∀ b ∈ σ, Term.IsValue d.sig b.2 ∧ Term.ArgsValue d.sig b.2) :
+    ({ d with env := σ, rules := rs } : FDatabase).Valued where
+  terms := h.terms
+  env := hσ
+
+/-- **One `addTerm`**: the terms it records are subterms of one whose arguments are values. -/
+theorem FDatabase.Valued.addTerm {d : FDatabase} (h : d.Valued) {t : Term}
+    (ht : Term.ArgsValue d.sig t) : (d.addTerm t).Valued where
+  terms := by
+    intro s hs
+    rcases FDatabase.mem_addTerm_terms.mp hs with hs' | hs'
+    · exact ht.subterm hs'
+    · exact h.terms s hs'
+  env := h.env
+
+/-- **One `addRow`**: the entry term it mints has the written columns as its arguments. -/
+theorem FDatabase.Valued.addRow {d : FDatabase} (h : d.Valued) {g : FnName} {as vs : List Term}
+    (hc : ∀ c ∈ as ++ vs, Term.IsValue d.sig c ∧ Term.ArgsValue d.sig c) :
+    (FDatabase.addRow g as vs d).Valued :=
+  let h' := h.addTerm (t := Term.app g (as ++ vs))
+    (Term.argsValue_app (fun a ha => (hc a ha).1) (fun a ha => (hc a ha).2))
+  ⟨h'.terms, h'.env⟩
+
+/-- **The firing fold's union.** -/
+theorem FDatabase.Valued.union {d₁ d₂ : FDatabase} (h₁ : d₁.Valued) (h₂ : d₂.Valued)
+    (hsig : d₂.sig = d₁.sig) : (d₁.union d₂).Valued where
+  terms := by
+    intro t ht
+    rcases FDatabase.mem_terms_union.mp ht with ht' | ht'
+    · exact h₁.terms t ht'
+    · exact hsig ▸ h₂.terms t ht'
+  env := h₁.env
+
+/-- **One action.** `expr`, `letBind` and `union` record evaluated terms; the `set` records the
+entry term for the columns it evaluated. -/
+theorem execAction_valued {d d' : FDatabase} {a : Action} (h : d.Valued)
+    (hrun : execAction d a = some d') : d'.Valued := by
+  cases a with
+  | expr e =>
+    simp only [execAction, Option.map_eq_some_iff] at hrun
+    obtain ⟨t, ht, rfl⟩ := hrun
+    exact h.addTerm (isValue_of_eval h.env e ht).2
+  | letBind v e =>
+    simp only [execAction, Option.map_eq_some_iff] at hrun
+    obtain ⟨t, ht, rfl⟩ := hrun
+    have hv := isValue_of_eval h.env e ht
+    refine ⟨(h.addTerm hv.2).terms, fun b hb => ?_⟩
+    rcases List.mem_cons.mp hb with rfl | hb'
+    · exact hv
+    · exact h.env b hb'
+  | union e₁ e₂ =>
+    simp only [execAction] at hrun
+    obtain ⟨t₁, ht₁, hrun⟩ := Option.bind_eq_some_iff.mp hrun
+    obtain ⟨t₂, ht₂, hrun⟩ := Option.bind_eq_some_iff.mp hrun
+    split at hrun
+    · exact absurd hrun (by simp)
+    · rw [Option.some.injEq] at hrun
+      subst hrun
+      have h₁ : (d.addTerm t₁).Valued := h.addTerm (isValue_of_eval h.env e₁ ht₁).2
+      have h₂ : ((d.addTerm t₁).addTerm t₂).Valued :=
+        h₁.addTerm (d := FDatabase.addTerm t₁ d) (isValue_of_eval h.env e₂ ht₂).2
+      exact ⟨h₂.terms, h₂.env⟩
+  | set f args out =>
+    obtain ⟨as, vs, has, hvs, rfl⟩ := execAction_set hrun
+    refine h.addRow (fun c hc => ?_)
+    rcases List.mem_append.mp hc with hc' | hc'
+    · exact isValue_of_evalList h.env args has c hc'
+    · exact isValue_of_evalList h.env out hvs c hc'
+
+/-- **A block of them.** -/
+theorem execActions_valued : ∀ (as : List Action) {d d' : FDatabase}, d.Valued →
+    execActions d as = some d' → d'.Valued
+  | [], _, _, h, hrun => by
+      rw [execActions, Option.some.injEq] at hrun; exact hrun ▸ h
+  | a :: as, d, d', h, hrun => by
+      rw [execActions] at hrun
+      obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp hrun
+      exact execActions_valued as (execAction_valued h h₁) h₂
+
+/-- **One firing.** The substitution binds only `FDatabase.valueTerms`, which is exactly the
+condition the environment owes. -/
+theorem execLocalActions_valued {d d' : FDatabase} {as : List Action} {σ : Env} (h : d.Valued)
+    (hσ : ∀ b ∈ σ, Term.IsValue d.sig b.2 ∧ Term.ArgsValue d.sig b.2)
+    (hrun : execLocalActions d as σ = some d') : d'.Valued := by
+  rw [execLocalActions] at hrun
+  obtain ⟨m, hm, rfl⟩ := Option.map_eq_some_iff.mp hrun
+  have hd : ({ d with env := d.env ++ σ } : FDatabase).Valued := by
+    refine ⟨h.terms, fun b hb => ?_⟩
+    rcases List.mem_append.mp hb with hb' | hb'
+    · exact h.env b hb'
+    · exact hσ b hb'
+  have hm' := execActions_valued as hd hm
+  have hsig : m.sig = d.sig := FDatabase.execActions_sig (d := { d with env := d.env ++ σ }) hm
+  refine hm'.setEnv (fun b hb => ?_)
+  rw [hsig]
+  exact h.env b hb
+
+/-- **Every binding a matched substitution makes is a value whose arguments are values**: the
+first is what `matchQuery` enumerates, the second is the invariant at the term it picked. -/
+theorem matchQuery_valued {d : FDatabase} {q : Query} {σ : Env} (h : d.Valued)
+    (hσ : σ ∈ matchQuery d q) :
+    ∀ b ∈ σ, Term.IsValue d.sig b.2 ∧ Term.ArgsValue d.sig b.2 := by
+  intro b hb
+  have hv := (mem_assignments.mp (List.mem_of_mem_filter hσ)).2 b hb
+  obtain ⟨hmem, hval⟩ := FDatabase.mem_valueTerms_iff.mp hv
+  exact ⟨hval, h.terms _ hmem⟩
+
+/-- One firing, unioned into the accumulator. -/
+theorem fireInto_valued {d acc : FDatabase} {r : Rule} {σ : Env} (h : d.Valued)
+    (hσ : σ ∈ matchQuery d r.query) (hsig : acc.sig = d.sig) (ha : acc.Valued) :
+    (fireInto d r acc σ).sig = d.sig ∧ (fireInto d r acc σ).Valued := by
+  rw [fireInto]
+  cases hx : execLocalActions d r.actions σ with
+  | none => exact ⟨hsig, ha⟩
+  | some e =>
+    exact ⟨hsig, ha.union (execLocalActions_valued h (matchQuery_valued h hσ) hx)
+      ((execLocalActions_sig hx).trans hsig.symm)⟩
+
+/-- Every match of one rule. -/
+theorem foldl_fireInto_valued {d : FDatabase} {r : Rule} (h : d.Valued) :
+    ∀ (σs : List Env), (∀ σ ∈ σs, σ ∈ matchQuery d r.query) →
+      ∀ {acc : FDatabase}, acc.sig = d.sig → acc.Valued →
+        (σs.foldl (fireInto d r) acc).sig = d.sig ∧ (σs.foldl (fireInto d r) acc).Valued
+  | [], _, _, hsig, ha => ⟨hsig, ha⟩
+  | σ :: σs, hsub, _, hsig, ha =>
+      foldl_fireInto_valued h σs (fun τ hτ => hsub τ (List.mem_cons_of_mem _ hτ))
+        (fireInto_valued h (hsub σ List.mem_cons_self) hsig ha).1
+        (fireInto_valued h (hsub σ List.mem_cons_self) hsig ha).2
+
+@[inherit_doc foldl_fireInto_valued]
+theorem fireRule_valued {d acc : FDatabase} {r : Rule} (h : d.Valued) (hsig : acc.sig = d.sig)
+    (ha : acc.Valued) : (fireRule d acc r).sig = d.sig ∧ (fireRule d acc r).Valued :=
+  foldl_fireInto_valued h _ (fun _ hm => hm) hsig ha
+
+/-- The round's fold. -/
+theorem foldl_fireRule_valued {d : FDatabase} (h : d.Valued) :
+    ∀ (rs : List Rule) {acc : FDatabase}, acc.sig = d.sig → acc.Valued →
+      (rs.foldl (fireRule d) acc).sig = d.sig ∧ (rs.foldl (fireRule d) acc).Valued
+  | [], _, hsig, ha => ⟨hsig, ha⟩
+  | _ :: rs, _, hsig, ha =>
+      foldl_fireRule_valued h rs (fireRule_valued h hsig ha).1 (fireRule_valued h hsig ha).2
+
+/-- **One round of rule firing.** -/
+theorem execRunRules_valued {R : RulesetName} {d : FDatabase} (h : d.Valued) :
+    (execRunRules R d).Valued :=
+  (foldl_fireRule_valued h _ rfl h).2
+
+/-! ### The merge phase -/
+
+/-- **Every row is the argument tuple of a term the state holds**, whether it is a constructor
+row (`FDatabase.IndexOk.ctor`, whose value columns are empty) or an entry row
+(`mem_terms_of_indexOk`, read at a state that asserts nothing). -/
+theorem mem_terms_of_row {d : FDatabase} (hr : d.EqsRefl) (hidx : d.IndexOk) {r : Row}
+    (hm : r ∈ d.rows) : Term.app r.fn (r.args ++ r.out) ∈ d.terms := by
+  by_cases hmg : d.sig.mergeOf r.fn = none
+  · obtain ⟨hout, hmem⟩ := hidx.ctor r hm hmg
+    rw [hout]
+    simpa using hmem
+  · exact mem_terms_of_indexOk hr hidx hm hmg
+
+/-- **A row's columns are values whose arguments are values.** Both halves come off that term:
+the columns are its arguments. -/
+theorem FDatabase.Valued.rowColumns {d : FDatabase} (h : d.Valued) (hr : d.EqsRefl)
+    (hidx : d.IndexOk) {r : Row} (hm : r ∈ d.rows) :
+    ∀ c ∈ r.args ++ r.out, Term.IsValue d.sig c ∧ Term.ArgsValue d.sig c := by
+  have key := mem_terms_of_row hr hidx hm
+  intro c hc
+  exact ⟨(h.terms _ key).args c hc,
+    (h.terms _ key).subterm ((Term.mem_subtermList _).mpr (Term.IsSubterm.arg hc (.refl c)))⟩
+
+/-- **The invariant in the form the e-class rule's firing consumes.** -/
+theorem FDatabase.Valued.rowColumnsValued {d : FDatabase} (h : d.Valued) (hr : d.EqsRefl)
+    (hsc : d.SubtermClosed) (hidx : d.IndexOk) : d.RowColumnsValued := fun _ hm c hc =>
+  FDatabase.mem_valueTerms_iff.mpr
+    ⟨FDatabase.mem_terms_of_column hsc (mem_terms_of_row hr hidx hm) hc,
+      (h.rowColumns hr hidx hm c hc).1⟩
+
+/-- **One merge firing.** The skip branch writes nothing; the body runs in an environment the
+two colliding rows' value columns make, and the survivor's entry term is the resident row's key
+with whatever `res` evaluated to. -/
+theorem mergeOneOriented_valued {cl : Finset (Term × Term)} {d e : FDatabase} {r₁ r₂ : Row}
+    (hr : d.EqsRefl) (hidx : d.IndexOk) (h : d.Valued)
+    (hfire : d.mergeOneOriented cl r₁ r₂ = some e) : e.Valued := by
+  obtain ⟨hmem₁, hmem₂, -, -⟩ := mergeOneOriented_mem_rows hfire
+  have hcol₁ := h.rowColumns hr hidx hmem₁
+  have hcol₂ := h.rowColumns hr hidx hmem₂
+  rw [FDatabase.mergeOneOriented] at hfire
+  split at hfire
+  next body res hms =>
+    split at hfire
+    next =>
+      split at hfire
+      next =>
+        rw [Option.some.injEq] at hfire
+        subst hfire
+        exact ⟨h.terms, h.env⟩
+      next =>
+        obtain ⟨m, hmb, hfire⟩ := Option.bind_eq_some_iff.mp hfire
+        obtain ⟨vs, hvs, he⟩ := Option.map_eq_some_iff.mp hfire
+        subst he
+        have hd : ({ d with env := mergeEnv r₂.out r₁.out } : FDatabase).Valued := by
+          refine ⟨h.terms, fun b hb => ?_⟩
+          rcases mem_mergeEnv hb with hb' | hb'
+          · exact hcol₂ b.2 (List.mem_append_right _ hb')
+          · exact hcol₁ b.2 (List.mem_append_right _ hb')
+        have hm' := execActions_valued body hd hmb
+        have hsig : m.sig = d.sig :=
+          FDatabase.execActions_sig (d := { d with env := mergeEnv r₂.out r₁.out }) hmb
+        have hvsv : ∀ c ∈ vs, Term.IsValue m.sig c ∧ Term.ArgsValue m.sig c :=
+          isValue_of_evalList hm'.env res hvs
+        have hcols : ∀ c ∈ r₂.args ++ vs,
+            Term.IsValue m.sig c ∧ Term.ArgsValue m.sig c := by
+          intro c hc
+          rcases List.mem_append.mp hc with hc' | hc'
+          · rw [hsig]
+            exact hcol₂ c (List.mem_append_left _ hc')
+          · exact hvsv c hc'
+        have hadd : (m.addTerm (.app r₂.fn (r₂.args ++ vs))).Valued :=
+          hm'.addTerm (Term.argsValue_app (fun a ha => (hcols a ha).1)
+            (fun a ha => (hcols a ha).2))
+        refine ⟨hadd.terms, fun b hb => ?_⟩
+        exact (show m.sig = d.sig from hsig) ▸ h.env b hb
+    next => exact absurd hfire (by simp)
+  next => exact absurd hfire (by simp)
+
+/-- **The same, at whichever orientation `FDatabase.mergeOneWith` chose.** -/
+theorem mergeOneWith_valued {cl : Finset (Term × Term)} {d e : FDatabase} {r₁ r₂ : Row}
+    (hr : d.EqsRefl) (hidx : d.IndexOk) (h : d.Valued)
+    (hm : d.mergeOneWith cl r₁ r₂ = some e) : e.Valued := by
+  rcases FDatabase.mergeOneWith_eq_oriented (cl := cl) (d := d) r₁ r₂ with he | he
+  · exact mergeOneOriented_valued hr hidx h (he ▸ hm)
+  · exact mergeOneOriented_valued hr hidx h (he ▸ hm)
+
+/-- **A merge pass.** The rebuild writes `rows` alone, so it costs nothing here. -/
+theorem mergeRound_valued {d : FDatabase} (hlegal : Signature.MergesLegal d.sig) (hinv : d.Inv)
+    (hn : d.NoUnions) (h : d.Valued) : d.mergeRound.Valued := by
+  have key : d.mergeRound.Inv ∧ d.mergeRound.sig = d.sig ∧ d.mergeRound.NoUnions ∧
+      d.mergeRound.Valued := by
+    refine FDatabase.mergeRound_induction_ne
+      (P := fun x => x.Inv ∧ x.sig = d.sig ∧ x.NoUnions ∧ x.Valued)
+      ⟨hinv, rfl, hn, h⟩
+      ⟨FDatabase.Inv.rebuild hinv FDatabase.closureSound_closureF, rfl, rebuild_noUnions hn,
+        ⟨h.terms, h.env⟩⟩ ?_
+    intro x y r₁ r₂ _ hx hy
+    refine ⟨FDatabase.mergeOneWith_inv hx.1 (by rw [hx.2.1]; exact hlegal) hy,
+      ((FDatabase.mergeOneWith_confined hy).2.2.1).trans hx.2.1,
+      mergeOneWith_noUnions hx.2.2.1 hy, ?_⟩
+    exact mergeOneWith_valued hx.2.2.1.eqsRefl hx.1.index hx.2.2.2 hy
+  exact key.2.2.2
+
+/-- **And the whole merge phase.** -/
+theorem mergeSaturateF_valued : ∀ (n : Nat) {d e : FDatabase},
+    Signature.MergesLegal d.sig → d.Inv → d.NoUnions → d.Valued →
+      FDatabase.mergeSaturateF n d = some e → e.Valued
+  | 0, d, e, _, _, _, h, hrun => by
+      rw [FDatabase.mergeSaturateF] at hrun
+      split at hrun
+      · rw [Option.some.injEq] at hrun; exact hrun ▸ h
+      · exact absurd hrun (by simp)
+  | n + 1, d, e, hlegal, hinv, hn, h, hrun => by
+      rw [FDatabase.mergeSaturateF] at hrun
+      split at hrun
+      · rw [Option.some.injEq] at hrun; exact hrun ▸ h
+      · have hsig : d.mergeRound.sig = d.sig := FDatabase.mergeRound_confined.2.2.1
+        exact mergeSaturateF_valued n (by rw [hsig]; exact hlegal)
+          (FDatabase.Inv.mergeRound_of_legalMerges hinv hlegal) (mergeRound_noUnions hn)
+          (mergeRound_valued hlegal hinv hn h) hrun
+
+/-- **And a whole round**, rule firing followed by the merge phase. -/
+theorem runRoundM_valued {R : RulesetName} {d e : FDatabase}
+    (hlegal : Signature.MergesLegal d.sig) (hinv : d.Inv) (hn : d.NoUnions)
+    (hwl : ∀ r ∈ d.rules, Actions.WriteLegal r.actions d.sig) (h : d.Valued)
+    (hrun : d.runRoundM R = some e) : e.Valued := by
+  rw [FDatabase.runRoundM] at hrun
+  refine mergeSaturateF_valued mergeFuel ?_ ?_ ?_ (execRunRules_valued h) hrun
+  · rw [FDatabase.execRunRules_fields.1]; exact hlegal
+  · exact hinv.execRunRules hwl
+  · exact execRunRules_noUnions hn
+
+/-! ### The run -/
+
+/-- **Rounds of one ruleset.** -/
+theorem FDatabase.EncBase.runSaturateM_valued {P : Program} {R : RulesetName} :
+    ∀ (n : Nat) {d d' : FDatabase}, d.EncBase P (encodeSig P) → d.Valued →
+      d.runSaturateM R n = some d' → d'.Valued := by
+  intro n d d' hb h hrun
+  refine (runSaturateM_closed (R := R)
+    (Φ := fun x => x.EncBase P (encodeSig P) ∧ x.Valued) ?_ n ⟨hb, h⟩ hrun).2
+  intro x y hx hstep
+  have hstep' : x.execCmdM (Cmd.run R) = some y := hstep
+  refine ⟨hx.1.execCmdM (c := Cmd.run R) trivial trivial trivial trivial trivial hstep', ?_⟩
+  exact runRoundM_valued (by rw [hx.1.sig]; exact hx.1.merges) hx.1.inv hx.1.nounions hx.1.wl'
+    hx.2 hstep
+
+/-- **One command of the aligned run.** -/
+theorem FDatabase.EncBase.execCmdM_valued {P : Program} {d d' : FDatabase} {c : Cmd}
+    (hb : d.EncBase P (encodeSig P)) (huf : c.UnionFree) (hnd : c.NoDecl)
+    (hwl : c.WriteLegal (encodeSig P)) (h : d.Valued) (hs : d.execCmdM c = some d') :
+    d'.Valued := by
+  cases c with
+  | action a =>
+    rw [FDatabase.execCmdM] at hs
+    obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp hs
+    have hsig₁ : d₁.sig = d.sig := FDatabase.execAction_sig h₁
+    refine mergeSaturateF_valued mergeFuel ?_ ?_ ?_ (execAction_valued h h₁) h₂
+    · rw [hsig₁, hb.sig]; exact hb.merges
+    · exact hb.inv.execAction (by rw [hb.sig]; exact hwl) h₁
+    · exact execAction_noUnions huf hb.nounions h₁
+  | rule r =>
+    rw [FDatabase.execCmdM, Option.some.injEq] at hs
+    exact hs ▸ h.setRules (r :: d.rules)
+  | run R =>
+    rw [FDatabase.execCmdM] at hs
+    exact runRoundM_valued (by rw [hb.sig]; exact hb.merges) hb.inv hb.nounions hb.wl' h hs
+  | saturate R =>
+    rw [FDatabase.execCmdM] at hs
+    exact FDatabase.EncBase.runSaturateM_valued runFuel hb h hs
+  | decl f dc => exact (hnd : False).elim
+
+/-- **A block of them.** -/
+theorem FDatabase.EncBase.execProgramM_valued {P : Program} {p : Program}
+    (hro : ∀ c ∈ p, Cmd.RulesEncodedOk P c) (huf : ∀ c ∈ p, c.UnionFree)
+    (hnd : ∀ c ∈ p, c.NoDecl) (hwl : ∀ c ∈ p, c.WriteLegal (encodeSig P))
+    (hlet : ∀ c ∈ p, c.NoAtLet) :
+    ∀ {d D : FDatabase}, d.EncBase P (encodeSig P) → d.Valued →
+      d.execProgramM p = some D → D.Valued := by
+  induction p with
+  | nil =>
+    intro d D _ h hs
+    rw [FDatabase.execProgramM, Option.some.injEq] at hs
+    exact hs ▸ h
+  | cons c cs ih =>
+    intro d D hb h hs
+    rw [FDatabase.execProgramM] at hs
+    obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp hs
+    refine ih (fun c' hc' => hro c' (List.mem_cons_of_mem c hc'))
+      (fun c' hc' => huf c' (List.mem_cons_of_mem c hc'))
+      (fun c' hc' => hnd c' (List.mem_cons_of_mem c hc'))
+      (fun c' hc' => hwl c' (List.mem_cons_of_mem c hc'))
+      (fun c' hc' => hlet c' (List.mem_cons_of_mem c hc'))
+      (hb.execCmdM (hro c List.mem_cons_self) (huf c List.mem_cons_self)
+        (hnd c List.mem_cons_self) (hwl c List.mem_cons_self) (hlet c List.mem_cons_self) h₁)
+      (hb.execCmdM_valued (huf c List.mem_cons_self) (hnd c List.mem_cons_self)
+        (hwl c List.mem_cons_self) h h₁) h₂
+
+/-- **The invariant at the state `execM` returned.** The prelude declares and asserts nothing,
+so it starts at a state with no term and no binding at all. -/
+theorem execM_encode_valued {P : Program} (hdom : P.EncodeDomain) (hag : P.AritiesAgree)
+    {tgt : FDatabase} (htgt : execM (encode P) = some tgt) : tgt.Valued := by
+  rw [execM, encode] at htgt
+  obtain ⟨d₀, hprel, hcmds⟩ := FDatabase.execProgramM_append htgt
+  have hb₀ : d₀.EncBase P (encodeSig P) := (encOk_preludeState hdom hag hprel).base
+  have hdata := execProgramM_data_of_declOrRule (declOrRule_encodePrelude P) hprel
+  have h₀ : d₀.Valued := by
+    refine ⟨fun t ht => ?_, fun b hb => ?_⟩
+    · rw [hdata.1, show FDatabase.empty.terms = ([] : List Term) from rfl] at ht
+      exact absurd ht (by simp)
+    · rw [hdata.2.2.2, show FDatabase.empty.env = ([] : Env) from rfl] at hb
+      exact absurd hb (by simp)
+  refine FDatabase.EncBase.execProgramM_valued
+    (rulesEncodedOk_encodeCmds P (fun _ hc => hc) 0 0) (encodeCmds_unionFree P 0 0)
+    (fun c hc => ?_) (fun c hc => ?_) (fun c hc => ?_) hb₀ h₀ hcmds
+  · obtain ⟨c₀, -, m, j, hmem⟩ := mem_encodeCmd_of_mem_encodeCmds P (fun _ h => h) 0 0 c hc
+    exact noDecl_encodeCmd c₀ m j c hmem
+  · obtain ⟨c₀, hc₀, m, j, hmem⟩ := mem_encodeCmd_of_mem_encodeCmds P (fun _ h => h) 0 0 c hc
+    exact encodedWriteLegal hdom hag c₀ hc₀ m j c hmem
+  · obtain ⟨c₀, hc₀, m, j, hmem⟩ := mem_encodeCmd_of_mem_encodeCmds P (fun _ h => h) 0 0 c hc
+    exact noAtLet_encodeCmd hdom c₀ hc₀ m j c hmem
+
+/-- **`FDatabase.EncBase` at the state `execM` returned**, which is the prelude's instance
+carried along `encodeCmds` by `FDatabase.EncBase.execProgramM`. -/
+theorem execM_encode_encBase {P : Program} (hdom : P.EncodeDomain) (hag : P.AritiesAgree)
+    {tgt : FDatabase} (htgt : execM (encode P) = some tgt) : tgt.EncBase P (encodeSig P) := by
+  rw [execM, encode] at htgt
+  obtain ⟨d₀, hprel, hcmds⟩ := FDatabase.execProgramM_append htgt
+  have hb₀ : d₀.EncBase P (encodeSig P) := (encOk_preludeState hdom hag hprel).base
+  refine FDatabase.EncBase.execProgramM
+    (rulesEncodedOk_encodeCmds P (fun _ hc => hc) 0 0) (encodeCmds_unionFree P 0 0)
+    (fun c hc => ?_) (fun c hc => ?_) (fun c hc => ?_) hb₀ hcmds
+  · obtain ⟨c₀, -, m, j, hmem⟩ := mem_encodeCmd_of_mem_encodeCmds P (fun _ h => h) 0 0 c hc
+    exact noDecl_encodeCmd c₀ m j c hmem
+  · obtain ⟨c₀, hc₀, m, j, hmem⟩ := mem_encodeCmd_of_mem_encodeCmds P (fun _ h => h) 0 0 c hc
+    exact encodedWriteLegal hdom hag c₀ hc₀ m j c hmem
+  · obtain ⟨c₀, hc₀, m, j, hmem⟩ := mem_encodeCmd_of_mem_encodeCmds P (fun _ h => h) 0 0 c hc
+    exact noAtLet_encodeCmd hdom c₀ hc₀ m j c hmem
+
+/-- **The fourth cost of the e-class rule's firing, discharged run-wide**: every column an
+`execM` target's rows record is a term `matchQuery` will assign, so a rebuild rule can re-read
+the rows the fixpoint's roots argument contradicts against.
+
+`cxRb_rowColumnsValued` is the same property decided at the state the one-off match runs at. -/
+theorem execM_rowColumnsValued {P : Program} (hdom : P.EncodeDomain) {tgt : FDatabase}
+    (htgt : execM (encode P) = some tgt) : tgt.RowColumnsValued :=
+  have hb := execM_encode_encBase hdom hdom.aritiesAgree' htgt
+  (execM_encode_valued hdom hdom.aritiesAgree' htgt).rowColumnsValued hb.eqsRefl
+    hb.subtermClosed hb.inv.index
+
+
+/-! ## The forward half's residue, and the correspondence
+
+`Database.RebuildClosed` and its four consumers are stated here and not in
+`Encoding/Correspond.lean` because their proof reads this file: the bridge
+(`execM_entryRowsUF`), the forest (`execM_ufRowRoot_unique`), the fixpoint's roots
+(`no_ufRowEdge_of_rowsClosed`) and `encodeSig` itself. The definitions they are stated over,
+the state-level reductions and the refutations stay upstream, which is why
+`Encoding/Correspond.lean` is still all `DiffTest.lean` imports. -/
+
+/-- **The residue of obligation `trans`, of the rebuild half of obligation `assert`'s `union`
+case, and of the *key* half of obligation `congr`, at the rules it is waiting on. Not
+proved.**
+
+`Database.RebuildClosed` is `Database.ViewJoined` restated per *mechanism* instead of per
+consumer — `eclass` the e-class rebuild rule, `column` the column rules, `edged` the `@UF`
+edge `mergeBody` writes between two entries that collide at one view key — and
+`Database.RebuildClosed.toViewJoined` is the reduction. Stating the residue here rather than
+at the clauses is what lets the questions below be asked separately, because all three
+clauses turn out to want the same one thing.
+
+**The clause that asked for absorption along the edge is false, and `cxStale` is why.** Two
+`union`s in one block that share their `ordering-max` endpoint collide in that block's *own*
+merge phase, so the edge the collision displaces was never a row at any rebuild:
+`cxStale_not_absorbs_CB` is `(C)` reading its own build entry and not reading `(B)`, and
+`cxStale_not_rebuildClosedStrong` is `Database.RebuildClosedStrong` failing on it. So the
+clause is stated at a common `Database.Lands` — the point both ends still reach and that
+absorbs both — which is what `Database.ViewJoined.ufJoin` consumes and what `cxStale_lands_CA`
+exhibits at the refuting state.
+
+**What the weakening does not do is produce the landing site.** Absorption's conclusion is a
+`Database.Out`, an entry, and the only thing that writes one is a firing, whose premise is a
+**row**. So what the residue reduces to is three obligations, in this order:
+
+* **The bridge**, run-wide: every merge-function entry term has a current row at its own key
+  whose e-class column is `@UF`-reachable from the entry's. **Proved**, as `execM_entryRowsUF`.
+  `FDatabase.IndexCurrent` is that claim without
+  the "up to `@UF`", and `cxTgt_not_indexCurrent` refutes it; the weakened claim survives that
+  very state, and `cxTgt_currentUF` is the compiled instance — the row the merge kept sits at
+  the `@UF` parent of the entry it displaced.
+* **The fixpoint's roots**: at a `FDatabase.RowsClosed` state no surviving view row's e-class
+  column has an outgoing `@UF` row, since the e-class rule's own firing displaces it and the row
+  list would move. One step, and the firing is now exhibited — `eclassRule_fires`, over
+  `mem_matchQuery_of_lookup`, which is `cxRb_mem_matchQuery` generalised — together with
+  `mergeResult`'s `ordering-min`. `no_ufRowEdge_of_rowsClosed`'s fourth hypothesis,
+  `FDatabase.RowColumnsValued`, is `execM_rowColumnsValued`.
+* **The `@UF` rows are a forest**, so that root is *unique* and every reader of an id therefore
+  lands on the same one. `ufDecl`'s `identityVals := some 1` makes two rows at one key agree in
+  their e-class column at a merge fixpoint, and every edge a `union` or `mergeBody` writes runs
+  `ordering-max ↦ ordering-min`, so a row path strictly descends `Term.blt` inside a finite
+  list.
+
+The third is what the leader form of the clause had no way to reach and the landing-site form
+does: two terms reading one id are two rows displaced independently, but at a fixpoint over a
+forest both displacements end at the same root, and that root is a `Database.Lands` of the id.
+
+**The third obligation's own argument is proved, and so is the fixpoint mechanism the second
+and the first both spend.** In `Encoding/Correspond.lean`, at the merge phase:
+
+* `FDatabase.exists_ufRowRoot` and `ufRowRoot_unique` are the forest: descent along
+  `FDatabase.UFRowEdge` bounds a path by the `@UF` rows below its start and `rows` is a finite
+  list, so a root exists; one outgoing edge per key makes it unique.
+* **Both hypotheses are discharged**, at the state `execM` returns.
+  `FDatabase.UFRowsDescend` is `execM_ufRowsDescend`, the run-wide induction over the three
+  writers of an `@UF` row; `FDatabase.UFRowsForest` is `execM_encode_ufRowsForest`, whose
+  state-level content is `ufRowsForest_of_settled`. `execM_ufRowRoot_unique` is the two of them
+  together: every id of an encoded target reaches a **unique** `@UF` row root.
+* `FDatabase.row_unique_of_settled` is the same fixpoint argument at the **views**: a
+  `FDatabase.settled` state carries at most one row per view key, because
+  `FDatabase.mergeOneOriented` deletes the arriving row of a collision whether or not the body
+  runs, no firing anywhere adds a row at a view key, and `rebuild_diag` says the pass fires on
+  the rows it started with. This is what identifies the two rows the bridge produces for two
+  entries at **one** key, and what the second obligation contradicts against; the `@UF` version
+  needed `ufMeasure`, since `mergeBody` writes into `@UF` and the per-key count is therefore no
+  measure there.
+
+**The second obligation is discharged, and it is reduced to the firing.**
+`no_ufRowEdge_of_rowsClosed` is it, and **the firing is discharged**:
+`eclassRule_fires` exhibits the e-class rule's conclusion as a row of the round's rule phase, the
+merge phase leaves a row at that key whose e-class column is `Term.blt`-at or below the one the
+firing wrote (`mergeSaturateF_rowsDescendCarry`, `mergeResult`'s `ordering-min` carried across a
+pass and across the phase), `FDatabase.RowsClosed` and `row_unique_of_settled` identify that row
+with the one the fixpoint started from, and `FDatabase.UFRowsDescend` plus `Term.blt_asymm` close
+it. `FDatabase.UFRowEdge` excludes a self-loop, which is what `(union a a)` writes and what the
+claim would otherwise be false at.
+
+**What the firing cost.** All four are now paid.
+`mem_matchQuery_of_lookup` is `matchQuery` completeness in general form —
+`cxRb_mem_matchQuery`'s one instance generalised, naming `Query.freeVars`' order and composing
+`Env.canon` with itself (`Env.canon_canon`), with `toString_nat_inj` for the key variables being
+distinct. `FDatabase.EncBase.held` is the **converse** of `FDatabase.RulesEncoded`, that the
+maintenance rules are rules the target holds, carried along the run by
+`FDatabase.execProgramM_mem_rules` and the monotonicity of `rules`.
+`FDatabase.EncBase.noAtEnv` is that the target's environment binds no `@`-prefixed variable, so
+that `Query.freeVars` is the whole of the query's variables — `Program.EncodeDomain.noAt` at the
+source (`Program.names` includes `P.vars`), `noAtLet_encodeCmd` at each emitted command, and
+`FDatabase.execCmdM_noAtEnv` along the run. The fourth is placing the columns in
+`FDatabase.valueTerms`, which `FDatabase.RowColumnsValued` names and `execM_rowColumnsValued`
+discharges: a `Term.app` reaches `terms` only through `Expr.eval`, whose application case is
+guarded by `Signature.IsCtor` — a declared name with no `:merge` — so every term an action
+evaluates is a value, and `FDatabase.Valued` carries that over the writers `FDatabase.addRow`
+mints entry terms with.
+
+**All three obligations hold, and what is left is the assembly — one identification.** The
+bridge answers a view entry with a live row whose e-class column the union-find reaches from the
+entry's, and that reach is `Database.UFReach`, over `@UF` **entry terms**: the row that
+witnessed a step may since have been displaced, which is what `cxTgt_not_indexCurrent` refutes
+and why the bridge is stated this way. The fixpoint's roots and the forest are stated over
+`FDatabase.UFRowEdge`, over `@UF` **rows**. So the bridge hands each reader of an id a root it
+reaches by *entries*, `execM_ufRowRoot_unique` makes the root reachable by *rows* unique, and
+nothing yet identifies the two. `Database.Absorbs` is where that bites: it quantifies over every
+term that reads the id, so one landing site has to answer for all of them, and each reader's is
+produced by the bridge at its own view key. Closing it wants either the `terms` analogue of
+`execM_ufRowsDescend` — every `@UF` entry term running `ordering-max ↦ ordering-min`, so that
+`Database.UFReach` is well-founded and can be inducted along — or a confluence of
+`Database.UFReach` onto row roots.
+
+**And a side condition that turned out to be load-bearing rather than bookkeeping**: the merge
+body only runs if the signature declares `@Sym` and `@Trans` (`Expr.eval` reads
+`Signature.IsCtor`), so a signature that does not leaves every collision standing at what would
+otherwise be a fixpoint. `mergeOneWith_isSome_of_collide` carries the two hypotheses; the
+prelude's `proofDecls` is what supplies them.
+
+**The merge case of the bridge is discharged, and by construction rather than by luck.**
+`FDatabase.mergeOneOriented` is the interpreter's only writer that removes a row, so it is the
+only one that can break the claim; `mergeOneOriented_survivorUF` is that step verified, and
+`mergeOneWith_survivorUF` is it at the orientation the pass actually calls. The two selectors
+are complementary at one comparison — `mergeResult` keeps `ordering-min old0 new0` and
+`mergeBody` writes `@UF (ordering-max old0 new0) ↦ (ordering-min old0 new0, …)` — so the
+surviving row's e-class column is `Database.UFReach`-reachable from *both* colliding columns in
+the state the firing itself returns: reflexivity on one side, the edge the firing just wrote on
+the other. `mergeBody_result_paired` is the complementarity, and it is why no `Term.blt`
+survives into the statement. The skip branch is the same fact degenerately, and it is what
+`Signature.MergeShape`'s `identityVals = some 1` clause is for: at width one
+`FDatabase.noConflict` compares exactly the e-class columns, so a collision runs no body only
+when they are **equal**, where a width of zero would skip every collision and drop rows with no
+edge behind them.
+
+**And the rest of the bridge was inductive**, which is why this was the case worth checking:
+every other writer only adds. `FDatabase.addRow` writes the row for the entry term it mints, so
+a new entry is current reflexively; `execRunRules` unions firings in and removes nothing;
+`FDatabase.union` and `FDatabase.addTerm` touch no row. What those writers *do* owe is that they
+record no entry term they write no row for, and that is syntactic in the action
+(`Action.EntrySafe`) — so the bridge is a per-command induction over `FDatabase.EncBase`, and
+`execM_entryRowsUF` is it run.
+
+**Stating `Database.UFStep` over `FDatabase.rows` instead of over entry terms does not help.**
+It would take the staleness out of `eclass`'s *hypothesis* — the clause would range over live
+edges only — but `Database.ViewJoined.ufJoin`, which is what the residue exists to answer, is
+stated over an `@UF` **entry**, so `Database.RebuildClosed.toViewJoined` would no longer close
+and the superseded edge would have to be handled anyway, by the bridge applied to `@UF`'s own
+table. What is left after that is the *conclusion* half, which is where the `rows`/`terms` gap
+actually bites and which a rows-valued hypothesis does not touch: absorption still has to
+produce an entry for a reader that reads through a displaced row. `Database.Lands` absorbs the
+stale hypothesis without moving the residue into `FDatabase`, so the entry-valued statement is
+kept.
+
+**This is strictly stronger than `Database.ViewJoined`, deliberately, and here is the
+separation.** `chainD` satisfies the clauses (`chainD_viewJoined`) with no `@UF` entry at all —
+its ids absorb each other by having no other reader — and `edged` fails there, since its
+`Database.Lands` carries a `Database.UFReach` no edge can supply. So the residue below asks for
+more than its consumer does. What justifies asking for it is that it is what the *rules*
+deliver: every id a view entry ever carried at a key is one a `set` wrote, and two `set`s at one
+key are a collision, and a collision is an `@UF` edge.
+
+**Non-vacuous, and still failing where it must**: `satTarget_rebuildClosed` is the degenerate
+state, `Encoding/Match.lean`'s `uRebuilt_rebuildClosed` the one with a real `@UF` edge — where
+`eclass` and `edged` both do work — `ncTgt_rebuildClosed` the one with a positive-arity key in
+`column`, and `uTgt_not_rebuildClosed` is the same property one rebuild firing earlier, where it
+fails because `uTgt_not_viewJoined` does. All three positive witnesses are proved at
+`Database.RebuildClosedStrong` and transported by `Database.RebuildClosed.of_strong`, which is
+what says the weakening is a weakening; `cxStale_not_rebuildClosedStrong` is where the two come
+apart. -/
+theorem execM_rebuildClosed {P : Program} {tgt : FDatabase} (hdom : P.EncodeDomain)
+    (htgt : execM (encode P) = some tgt) : tgt.toDatabase.RebuildClosed := by
+  sorry
+
+/-- **The residue of obligation `trans`, of the rebuild half of obligation `assert`'s `union`
+case, and of the *key* half of obligation `congr`**, through
+`Database.RebuildClosed.toViewJoined`.
+
+**Stated at what the three reductions spend, and that is one mechanism fewer than the four
+clauses this replaces.** `Database.ViewLeaderRows` asked for a *choice function* `lead`, total
+on `Term` and constant across the whole "some term reads both" closure; every consumer used it
+only to name one id it then handed to `hmem`. So `Database.ViewJoined` asks for joins instead —
+`ids` for `SameClass.trans_of_viewJoined`, `ufJoin` for `unionsRead_of_viewJoined`, `rowShared`
+for `Database.ViewsCover.of_viewJoined` — and `pathCompressRule`, which was carried solely to
+make `lead` a function rather than a relation, is no longer part of this residue.
+`Database.ViewLeaderRows.toViewJoined` is the check that the weakening is a weakening, and it
+is where the strong form's four clauses are still spent.
+
+**`ufJoin` is the e-class rule and it is load-bearing after the weakening too**:
+`uTgt_not_viewJoined` is this clause failing one rebuild firing early, at the state where
+`Database.UnionsRead` fails with it — so the weakening did not weaken into vacuity.
+
+**`rowShared` is the column rules, and only where the key has to move**: obligation `congr`
+splits into an id for the source's own term — the command induction's `reads`, whose one open
+case is `unionsJoined_fire` — and a row at a tuple both argument lists read, which is this. The
+split is `Database.ViewsCover.of_viewJoined`, and the *diagonal* instance — all
+`viewRepr_total` spends — is answered by the row already in hand, where the strong form's
+`rowLead` demanded the column rules even there.
+
+**The fixpoint is proved and is not enough.** `FDatabase.RoundClosed` gives every term one more
+rebuild round would derive, which is the *conclusion* of each of those rules; their *premise* is
+a row, and `cxTgt_not_indexCurrent` is the compiled statement that the index need not hold every
+entry term `Database.Out` reads. `execM_rebuildClosed` is where what is left is written down,
+and it is the same run-wide index argument, now weakened to "up to the union-find" and stated
+per rule rather than per clause.
+
+**Non-vacuous at three states, with every clause doing work at one of them**:
+`satTarget_viewJoined` (the degenerate one), `Encoding/Match.lean`'s `uRebuilt_viewJoined` (a
+real `@UF` edge in `ufJoin`, two ids for one term in `ids`) and `ncTgt_viewJoined` (positive
+arity in `rowShared`, at the key the `union` moved) — with `ncTgt_rowShared_FB_FA` and
+`ncTgt_ids_B` the two clauses at named instances with every hypothesis inhabited. -/
+theorem execM_viewJoined {P : Program} {tgt : FDatabase} (hdom : P.EncodeDomain)
+    (htgt : execM (encode P) = some tgt) : tgt.toDatabase.ViewJoined :=
+  (execM_rebuildClosed hdom htgt).toViewJoined
+
+/-- **`Database.ViewsCover.shared`, at an `execM` target. Not proved.**
+
+The *product* form of this clause is refuted — `ncTgt_not_viewsProduct`,
+`encode_viewsProduct_false` — by the same counterexample that kills `Database.ReadsSelf`: it
+asks for an entry at every tuple of ids the children are given, and after `(union (A) (B))` the
+term `(B)` is an id of itself while no `@FView` row is keyed there, the rows sitting at the
+leader `(A)`. `(F (B))` is a source term because a rule fired at `x := (B)`, so the hypothesis
+holds and the conclusion does not.
+
+**What the consumers spend is this, and it survives that state**: `sameClass_congr_of_shared`
+uses the clause only at an id tuple *shared* by both argument lists, and `viewRepr_total` only
+at the diagonal — neither asks for the product. `ncTgt_shared_FB` is the surviving instance at
+the failing key: `(F (B))` and `(F (B))` share the tuple `((A))`, and `@FView((A))` is keyed.
+
+**And that instance generalises, so this is no longer a residue.** The two things needed to
+produce a shared tuple are already residues of their own: an id for the source's own term, which
+is the command induction's `reads`, and a row at a tuple both argument lists read, which is
+`Database.ViewJoined`' `rowShared`. `Database.ViewsCover.of_viewJoined` is the assembly and it
+spends nothing else — in particular no run-wide index argument beyond the one `execM_viewJoined`
+already carries, and none at all at the diagonal. -/
+theorem execM_viewsCover {P : Program} {src : Database} {tgt : FDatabase}
+    (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
+    (htgt : execM (encode P) = some tgt) : tgt.toDatabase.ViewsCover src :=
+  Database.ViewsCover.of_viewJoined (execM_viewJoined hdom htgt)
+    (unionsInv_execM hdom hsrc htgt).reads
+
+@[inherit_doc execM_viewsCover]
+theorem execM_viewsCover_shared {P : Program} {src : Database} {tgt : FDatabase}
+    (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
+    (htgt : execM (encode P) = some tgt) :
+    ∀ f as bs, Term.app f as ∈ src.terms → List.Forall₂ (SameClass tgt.toDatabase) as bs →
+      ∃ es e pf, ViewReprList tgt.toDatabase as es ∧ ViewReprList tgt.toDatabase bs es ∧
+        tgt.toDatabase.Out (viewName f) es [e, pf] :=
+  (execM_viewsCover hdom hsrc htgt).shared
+
+/-- **The residue of obligation `assert`'s `union` half**, assembled from the `union`'s own
+write and the rebuild that follows it — and from nothing about the source's terms, which is
+what `ncTgt_not_readsSelf` costs. `UnionsRead` itself holds at that counterexample
+(`ncTgt_unionsRead`); it is the factorisation through `Database.ReadsSelf` that did not. -/
+theorem execM_unionsRead {P : Program} {src : Database} {tgt : FDatabase}
+    (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
+    (htgt : execM (encode P) = some tgt) : tgt.toDatabase.UnionsRead src :=
+  unionsRead_of_viewJoined (execM_viewJoined hdom htgt) (execM_unionsJoined hdom hsrc htgt)
+
+/-- **Obligation `assert`, at the encoding**, split by writer. `Database.addTerm` writes a
+reflexive equation per subterm built, and `sameClass_self_of_viewsCover` discharges those out
+of `execM_viewsCover`; `evalAction`'s `union` is the only other writer the source fragment
+has, and `execM_unionsRead` is it. **Proved from the two residues.** -/
+theorem encode_assert {P : Program} {src : Database} {tgt : FDatabase} (hdom : P.EncodeDomain)
+    (hsrc : ProgramStep Database.empty P src) (htgt : execM (encode P) = some tgt)
+    (a b : Term) (h : (a, b) ∈ src.eqs) : SameClass tgt.toDatabase a b := by
+  by_cases hab : a = b
+  · subst hab
+    exact sameClass_self_of_viewsCover (execM_viewsCover hdom hsrc htgt)
+      (hsrc.wf Database.WF.empty) h
+  · exact execM_unionsRead hdom hsrc htgt a b h hab
+
+/-- **Obligation `trans`, at the encoding. Proved from `execM_viewJoined`.** Not from the
+view's functional dependency, which is false at this file's own witness — the section header
+above has the refutation. And not from a union-find *representative* either: what the reduction
+spends is a common absorber of the middle term's two ids, which is `Database.ViewJoined.ids`. -/
+theorem encode_trans {P : Program} {src : Database} {tgt : FDatabase} (hdom : P.EncodeDomain)
+    (_hsrc : ProgramStep Database.empty P src) (htgt : execM (encode P) = some tgt)
+    (a b c : Term) (hab : SameClass tgt.toDatabase a b) (hbc : SameClass tgt.toDatabase b c) :
+    SameClass tgt.toDatabase a c :=
+  SameClass.trans_of_viewJoined (execM_viewJoined hdom htgt) hab hbc
+
+/-- **Obligation `congr`, at the encoding. Proved from `execM_viewsCover`.** The pointwise
+hypothesis is one shared id tuple, and `ViewsCover.shared` is the view entry at it — the
+rebuild's whole contribution, isolated. The second self-congruence premise is unused. -/
+theorem encode_congr {P : Program} {src : Database} {tgt : FDatabase} (hdom : P.EncodeDomain)
+    (hsrc : ProgramStep Database.empty P src) (htgt : execM (encode P) = some tgt)
+    (f : FnName) (as bs : List Term) (ha : Cong src (.app f as) (.app f as))
+    (_hb : Cong src (.app f bs) (.app f bs))
+    (hl : List.Forall₂ (SameClass tgt.toDatabase) as bs) :
+    SameClass tgt.toDatabase (.app f as) (.app f bs) :=
+  sameClass_congr_of_shared (execM_viewsCover hdom hsrc htgt) ha hl
+
+
+/-- **No equality is lost**: assembled from the three obligations, with `symm` free. -/
+theorem encode_corresponds_forward {P : Program} {src : Database} {tgt : FDatabase}
+    (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
+    (htgt : execM (encode P) = some tgt) {a b : Term} (h : Cong src a b) :
+    SameClass tgt.toDatabase a b :=
+  cong_sameClass ⟨encode_assert hdom hsrc htgt, encode_trans hdom hsrc htgt,
+    encode_congr hdom hsrc htgt⟩ h
+
+/-- **The correspondence.** `difftest correspond 64` runs exactly this claim over the 70
+in-domain cases and the seventeen probes, through `sameClassF` and `closureF`, and reports
+70 agreeing, 0 LOST, 0 INVENTED — and `link-diff` 0, which is what says the swept relation
+is this one.
+
+`EncodeDomain` is still needed: outside it `encode` is not defined for the program at all —
+a `:merge` declaration has no table triple to emit, and a source name in the generated
+namespace collides with one. `Rebuilt` is *not* a hypothesis: it is a postcondition of the
+specification's rebuild command (`cmdStep_rebuilt`), and the hypothesis here names an
+`execM` target, so what both halves lean on is the interpreter's own `mergeSaturateF`
+fixpoint instead.
+
+**Stated at the source's e-nodes**, which is where the encoding is faithful and where the
+corpus sweep measures it. The two membership hypotheses cost the forward direction nothing —
+`Cong src a b` implies both — and the backward direction cannot do without them:
+`encode_corresponds_invents_enode` refutes the unrestricted `iff` at the witness program
+`Encoding/Correspond.lean` keeps for it. -/
+theorem encode_corresponds {P : Program} {src : Database} {tgt : FDatabase}
+    (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
+    (htgt : execM (encode P) = some tgt) (a b : Term) (ha : a ∈ src.terms)
+    (hb : b ∈ src.terms) :
+    Cong src a b ↔ SameClass tgt.toDatabase a b :=
+  ⟨encode_corresponds_forward hdom hsrc htgt, encode_corresponds_complete hdom hsrc htgt ha hb⟩
 
 end Egglog

@@ -102,7 +102,7 @@ and `uTgt_saturate_infinite` is the compiled reason: `encode`'s rebuild has **no
 after a `union` between distinct built terms, so `ProgramStep Database.empty (encode P) tgt`
 — satisfiable at a program that only builds (`satProgram_programStep`) — is satisfiable at no
 program that asserts an equation. `Database.UnionsJoined` and `Database.ViewLeader`, which is
-what `Encoding/Correspond.lean` now reduces `execM_unionsRead` to, are witnessed there too:
+what `Encoding/Complete.lean` now reduces `execM_unionsRead` to, are witnessed there too:
 `uTgt_not_unionsRead` is the obligation failing before the rebuild's one firing,
 `uTgt_not_viewLeader` is which of the two properties fails there, and
 `uRebuilt_unionsJoined`/`uRebuilt_viewLeader` are both holding after it — the second with all
