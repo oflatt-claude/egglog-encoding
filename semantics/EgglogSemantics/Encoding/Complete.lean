@@ -6585,6 +6585,88 @@ theorem execM_viewRowsRooted {P : Program} (hdom : P.EncodeDomain)
   exact viewRowsRooted_encodeCmds hdom hsy htr P (fun _ hc => hc) 0 0 h₀ hr₀ hcmds
 
 
+
+/-! ## What the source run owes the literal exclusion
+
+`execM_viewJoined_false` is `Database.RebuildClosed` **false** at an `execM` target of a program
+every clause of `Program.EncodeDomain` admits: `ltuProgram` is a top-level `union` on two
+literals, `encodeAction` writes `@UF (ordering-max 1 2) ↦ (ordering-min 1 2, @Fiat)`, and
+`Database.RebuildClosed.eclass` asks the edge's two ends for a common landing site that would
+have to be two different literals at once. `ProgramStep Database.empty P src` is the repair, and
+what it owes the proof is the target-side reading of `Database.WF.litsIsolated`.
+
+**The mechanism is vacuity at the source, and it is checked below.** `evalAction` refuses a
+`union` on a literal, so `ltuProgram` has no source state at all — `ltuProgram_no_programStep`
+— and the claim is about nothing there.
+
+**And half of what the target side owes is already paid, by descent.**
+`Term.blt` puts every literal below every application, so an `@UF` entry out of a literal points
+at a term strictly below it and nothing below a literal is an application: the clause reduces to
+"no `@UF` entry between two **distinct** literals" (`ufLitsIsolated_of_no_lit_lit`). That is the
+form `execM_ufTermsDescend` buys, and it leaves one obligation rather than two — the *value*
+clause, at the four writers of an `@UF` entry rather than at the key. -/
+
+/-- **A top-level `union` on a literal has no source step at all.** `evalAction`'s `union` case
+returns `none` when either operand is a literal, and `cmdReach` at a `Cmd.action` *is*
+`evalAction`, so `CmdStep` is uninhabited there and so is `ProgramStep`. -/
+theorem ltuProgram_no_programStep {src : Database} :
+    ¬ ProgramStep Database.empty ltuProgram src := by
+  intro h
+  obtain ⟨d, hstep, -⟩ := h.cons_inv
+  obtain ⟨m, hreach, -⟩ := hstep
+  have hd : evalAction Database.empty
+      (Action.union (.lit (.int 1)) (.lit (.int 2))) = some m := hreach
+  simp [evalAction, Expr.eval, Term.isLit] at hd
+
+/-- **And the operands of one that does are not literals**, which is the same refusal read
+forwards: it is what the encoded `@UF` write's two endpoints are, since `encodeBuild_fst` makes
+the target evaluate the source's own expressions. -/
+theorem cmdStep_union_notLit {sd sd' : Database} {e₁ e₂ : Expr}
+    (hstep : CmdStep sd (Cmd.action (Action.union e₁ e₂)) sd') :
+    ∃ t₁ t₂, e₁.eval sd.sig sd.env = some t₁ ∧ e₂.eval sd.sig sd.env = some t₂ ∧
+      t₁.isLit = false ∧ t₂.isLit = false := by
+  obtain ⟨m, hreach, -⟩ := hstep
+  have hd : evalAction sd (Action.union e₁ e₂) = some m := hreach
+  rcases evalAction_eq_some hd with ⟨e, t, hc, -, -⟩ | ⟨v, e, t, hc, -, -⟩ |
+    ⟨f₁, f₂, t₁, t₂, hc, h₁, h₂, hnl, -⟩ | ⟨f, args, out, as, vs, hc, -, -, -⟩
+  · exact absurd hc (by simp)
+  · exact absurd hc (by simp)
+  · obtain ⟨rfl, rfl⟩ : e₁ = f₁ ∧ e₂ = f₂ := by
+      constructor <;> [exact (Action.union.inj hc).1; exact (Action.union.inj hc).2]
+    exact ⟨t₁, t₂, h₁, h₂, by simpa using (not_or.mp hnl).1, by simpa using (not_or.mp hnl).2⟩
+  · exact absurd hc (by simp)
+
+/-- **The target-side reading of `Database.WF.litsIsolated`**: no `@UF` entry of the target is
+keyed on a literal it does not equal. This is what `Database.RebuildClosed.eclass` consumes at a
+literal — `ViewRepr d (.lit l) e` forces `e = .lit l`, so a landing site of a literal is that
+literal and an edge out of one has nowhere else to go. -/
+def FDatabase.UFLitsIsolated (d : FDatabase) : Prop :=
+  ∀ (l : Lit) (b pf : Term), Term.app ufName [Term.lit l, b, pf] ∈ d.terms → b = Term.lit l
+
+/-- **Descent pays the key half.** `Term.blt` orders literals below applications, so an `@UF`
+entry out of a literal points at a literal: what is left is that the two are the same one. -/
+theorem ufLitsIsolated_of_no_lit_lit {d : FDatabase} (hdes : d.UFTermsDescend)
+    (h : ∀ (l m : Lit) (pf : Term),
+      Term.app ufName [Term.lit l, Term.lit m, pf] ∈ d.terms → m = l) :
+    d.UFLitsIsolated := by
+  intro l b pf hmem
+  rcases FDatabase.ufTermsDescend_iff.mp hdes (Term.lit l) b pf hmem with hb | hlt
+  · exact hb
+  · cases b with
+    | lit m => exact congrArg Term.lit (h l m pf hmem)
+    | app g bs => exact absurd hlt (by simp [Term.blt])
+
+/-- **A literal is its own `@UF` row root**, which is the form `Database.Absorbs` consumes: a
+row is an entry (`FDatabase.IndexOk.entry`), so the entry-valued clause covers the rows too. -/
+theorem FDatabase.UFLitsIsolated.ufRowRoot {d : FDatabase} (h : d.UFLitsIsolated)
+    (hr : d.EqsRefl) (hidx : d.IndexOk) (hmg : d.sig.mergeOf ufName ≠ none) (l : Lit) :
+    d.UFRowRoot (Term.lit l) := by
+  intro b hedge
+  obtain ⟨pf, hmem⟩ := hedge.1
+  have hterm : Term.app ufName ([Term.lit l] ++ [b, pf]) ∈ d.terms :=
+    mem_terms_of_indexOk hr hidx (r := ⟨ufName, [Term.lit l], [b, pf]⟩) hmem hmg
+  exact hedge.2 (h l b pf (by simpa using hterm))
+
 /-! ## The forward half's residue, and the correspondence
 
 `Database.RebuildClosed` and its four consumers are stated here and not in
@@ -6660,13 +6742,16 @@ and the first both spend.** In `Encoding/Correspond.lean`, at the merge phase:
   needed `ufMeasure`, since `mergeBody` writes into `@UF` and the per-key count is therefore no
   measure there.
 
-**And one condition the three obligations do not name**: `no_ufRowEdge_of_rowsClosed` reads a
-rebuild **fixpoint** — `FDatabase.RowsClosed`, `FDatabase.settled`, and a round that returns —
-and `encode` emits `Cmd.saturate rebuildRuleset` after an action, a run and a saturate but after
-neither a `Cmd.rule` nor a `Cmd.decl` (`encodeCmd`). So a program whose last command is one of
-those two leaves a target the fixpoint lemmas do not reach directly. Neither writer changes a row
-or a term, and `Program.EncodeDomain.noAt` keeps a source rule out of `@rebuild`, so it is to be
-carried rather than re-established — but it is carried by nothing yet.
+**And one condition the three obligations do not name, now carried**:
+`no_ufRowEdge_of_rowsClosed` reads a rebuild **fixpoint** — `FDatabase.RowsClosed`,
+`FDatabase.settled`, and a round that returns — and `encode` emits `Cmd.saturate rebuildRuleset`
+after an action, a run and a saturate but after neither a `Cmd.rule` nor a `Cmd.decl`
+(`encodeCmd`), so a program ending in one of those two leaves a target no fixpoint lemma reaches
+directly. `FDatabase.ViewRowsRooted` is the property stated over `rows` alone, which is what the
+two writers with no rebuild after them carry by a rewrite, and `execM_viewRowsRooted` is it at
+the state `execM` returned. `FDatabase.settled` costs the carry nothing:
+`FDatabase.runSaturateM_settled'` reads the merge fixpoint off the branch a saturating run
+returned from, with no hypothesis about the state that run started at.
 
 **The second obligation is discharged, and it is reduced to the firing.**
 `no_ufRowEdge_of_rowsClosed` is it, and **the firing is discharged**:
@@ -6695,30 +6780,31 @@ guarded by `Signature.IsCtor` — a declared name with no `:merge` — so every 
 evaluates is a value, and `FDatabase.Valued` carries that over the writers `FDatabase.addRow`
 mints entry terms with.
 
-**All three obligations hold, and what is left is the assembly — one identification.** The
+**All three obligations hold, and the identification they were waiting on is discharged.** The
 bridge answers a view entry with a live row whose e-class column the union-find reaches from the
 entry's, and that reach is `Database.UFReach`, over `@UF` **entry terms**: the row that
 witnessed a step may since have been displaced, which is what `cxTgt_not_indexCurrent` refutes
 and why the bridge is stated this way. The fixpoint's roots and the forest are stated over
 `FDatabase.UFRowEdge`, over `@UF` **rows**. So the bridge hands each reader of an id a root it
-reaches by *entries*, `execM_ufRowRoot_unique` makes the root reachable by *rows* unique, and
-nothing yet identifies the two. `Database.Absorbs` is where that bites: it quantifies over every
-term that reads the id, so one landing site has to answer for all of them, and each reader's is
-produced by the bridge at its own view key.
+reaches by *entries* and `execM_ufRowRoot_unique` makes the root reachable by *rows* unique;
+`execM_ufRowRoot_of_ufReach` is what identifies the two, and `Database.Absorbs` is where that
+bites, since it quantifies over every term that reads the id.
 
-**The identification is proved, and it costs exactly one thing.**
-`FDatabase.ufRowRoot_of_ufStep` and `ufRowRoot_of_ufReach` are it: entry reachability and row
-reachability reach the *same* `@UF` row root. What they spend is `FDatabase.UFTermsDescend` —
-the `terms` analogue of `execM_ufRowsDescend`, every `@UF` entry term running
-`ordering-max ↦ ordering-min` whether or not its row survived — and nothing else.
+**What the identification cost was `FDatabase.UFTermsDescend`, and it is now a theorem.**
+`execM_ufTermsDescend` is it: every `@UF` entry term of the target runs
+`ordering-max ↦ ordering-min` whether or not its row survived, because **descent is a property
+of the write and not of currency** — `FDatabase.addRow` mints the entry term for the very row it
+writes and no writer removes a term. The induction is `execM_ufRowsDescend`'s writer for writer,
+with `Action.EntrySafe` added at each: an action records the *subterms* of what it evaluates, so
+the entry terms it records other than its own `set`'s have to be ones the state already holds.
+`mergeBody` needs no case of its own — it **is** the `union` head's shape
+(`mergeBody_ufWriteSafe`, `mergeBody_entrySafe`) — and `pathCompressRule` reads rows, so the
+induction carries `FDatabase.UFRowsDescend` alongside.
 **Confluence is not needed on top of descent**: the bridge already answers each entry with a row
 at the entry's own key, so the induction only has to walk the chain the bridge hands back, and
 `FDatabase.UFTermEdge.measure_lt` is what bounds that walk inside the finite list `terms`.
 Mathlib carries no Newman's lemma over a well-founded relation, and `Relation.church_rosser` is
-the strong `ReflGen` diamond; neither is wanted here. So `FDatabase.UFTermsDescend`, run-wide, is
-what is left of the identification — a per-writer induction of the shape
-`execM_encode_ufRowsDescend` already has, with `pathCompressRule` reading rows there as it does
-here.
+the strong `ReflGen` diamond; neither is wanted here.
 
 **And a side condition that turned out to be load-bearing rather than bookkeeping**: the merge
 body only runs if the signature declares `@Sym` and `@Trans` (`Expr.eval` reads
@@ -6779,9 +6865,47 @@ asks for a point that is two different literals at once:
 and `execM_viewJoined_false` is it at the target of a program every clause of the domain admits.
 `ProgramStep Database.empty P src` is the repair rather than a tenth domain clause, since it is
 what every consumer of this theorem already carries and what the encoder was excused from
-checking. **What it now owes the proof** is the target-side reading of `Database.WF.litsIsolated`
-— that no `@UF` entry of the target is keyed on a literal it does not equal — which the source
-run's refusal supplies and which is not yet written down.
+checking. **What it owes the proof** is `FDatabase.UFLitsIsolated`, the target-side reading of
+`Database.WF.litsIsolated`: no `@UF` entry of the target is keyed on a literal it does not equal.
+
+**The vacuity mechanism is checked and half the clause is paid.** `ltuProgram_no_programStep` is
+the mechanism — `evalAction` refuses a `union` on a literal, `cmdReach` at a `Cmd.action` *is*
+`evalAction`, so `ltuProgram` has no source state and the claim is about nothing there — and
+`cmdStep_union_notLit` is the same refusal read forwards at any successful step.
+`ufLitsIsolated_of_no_lit_lit` pays the **key** half out of `execM_ufTermsDescend`: `Term.blt`
+orders literals below applications, so an `@UF` entry out of a literal points at a literal and
+the clause reduces to "no `@UF` entry between two **distinct** literals".
+`FDatabase.UFLitsIsolated.ufRowRoot` is the reading `Database.Absorbs` consumes at a literal.
+
+**What is left of it is the *value* half, and the writers to check are four rather than three.**
+An `@UF` entry between two literals could come from a top-level source `union` (excluded by
+`hsrc`, through `cmdStep_union_notLit` and the environment alignment that makes the target
+evaluate the source's own expressions — `encodeBuild_fst`), from a rule head (excluded by
+`Program.EncodeDomain.noLitUnion`), from `mergeBody`, or — the writer the three-way reading
+misses — from `pathCompressRule`, whose head copies an existing row's value. And `mergeBody`
+runs at `@UF`'s own table as well as at a view's, so "the e-class column is always the skolem
+`.app f es`" covers one of its two instances and not the other. So the residual obligation is a
+run-wide invariant with two clauses — no `@UF` row records a literal value, and no view row
+records a literal e-class column — which are mutually recursive across `mergeBody` and the
+e-class rebuild rule, plus the source-to-target environment alignment `UnionsInv.env` carries
+and which this proof may not borrow, since `unionsJoined_fire` is still open.
+
+**And what `edged` and `column` still owe is one mechanism, the column rules at the fixpoint.**
+With the identification in hand every clause answers with the **`@UF` row root** of the id it is
+given: `Database.Lands a (root a)` is `FDatabase.UFRowEdge.toUFStep` for the reachability and,
+for the absorption, the bridge at each reader's own view key — the live row it answers with has
+an e-class column that `execM_viewRowsRooted` makes a root and `execM_ufRowRoot_of_ufReach`
+identifies with `root a`. `eclass` is then immediate, since an `@UF` entry's two ends have one
+root. `edged` is not: two readings of one source term sit at two id tuples `es₁` and `es₂` that
+agree **rootwise**, and identifying the two rows' e-class columns needs both keys moved onto the
+common root tuple — which is the column rebuild rules firing along the *live* `@UF` rows, then
+`FDatabase.RowsClosed` and `row_unique_of_settled`, the shape `eclassRule_fires` and
+`no_ufRowEdge_of_rowsClosed` have at the e-class rule. `column` is the same mechanism at the
+clause's own statement, and it is **not** answered by "a key column is a root": rows at
+superseded keys are never deleted — only a collision at *one* key removes one — so a live view
+row's key column need not be a root, and the column rule's conclusion sits at a *different* key
+from its premise, where the e-class rule's sits at the same one. That is why the descent
+contradiction that closes `no_ufRowEdge_of_rowsClosed` has no counterpart here.
 
 **Non-vacuous, and still failing where it must**: `satTarget_rebuildClosed` is the degenerate
 state, `Encoding/Match.lean`'s `uRebuilt_rebuildClosed` the one with a real `@UF` edge — where
