@@ -28,12 +28,12 @@ THE LANGUAGE
     (run 3)                                     three user-rule steps, with the
                                                 machinery saturated around each
 
-    (check (= a b))                    a and b are EQUAL -- the same term, once
+    (check (= a b))                             a and b are EQUAL: the same term, once
                                                 renamings are taken into account
-    (check (!= a b))                   and are not
-    (check (renaming-= a b))                      a and b are in one E-CLASS, but not
-                                                necessarily at the same slots
-    (check (renaming-!= a b))                     and are not
+    (check (!= a b))                            and are not
+    (check (renaming-= a b))                    equal MODULO SOME RENAMING -- one class,
+                                                not necessarily at the same slots
+    (check (renaming-!= a b))                   and are not
     (check (slots a $5 $6))                     a's class depends on exactly these
     (check (holds a Mult))                      a's class contains a Mult node
     (check (not-holds a Mult))                  and does not

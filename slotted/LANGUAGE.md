@@ -110,14 +110,35 @@ Egglog's `check` asks about values. These ask about terms.
 | `(holds a Mult)` | `a`'s class contains a `Mult` node |
 | `(not-holds a Mult)` | it does not |
 
+All of them at once:
+
+```slotted
+(constructor Lam (U U) U :binder 0)
+(constructor Mult (U U) U)
+(constructor Null () U)
+
+(let k (Lam $0 $3))              ; lam $0. $3 -- returns $3, ignores its argument
+(let id (Lam $0 $0))             ; lam $0. $0
+(let m (Mult $1 (Null)))
+(run 0)
+
+(check (slots k $3))             ; k depends on $3, and on nothing else
+(check (slots id))               ; the identity depends on no slot: its own is bound
+(check (holds m Mult))           ; m's class contains a Mult node
+(check (not-holds k Mult))       ; k's class does not
+(check (renaming-!= k m))        ; and they are not equal, under any renaming
+```
+
 ### Why two kinds of equality
 
 Because a term is a class *and* a renaming, and the two questions come apart. Take two
 alpha-variants whose free slot is renamed:
 
-```
+```slotted
+(constructor Lam (U U) U :binder 0)
 (let p (Lam $0 $3))
 (let q (Lam $0 $4))
+(run 0)
 (check (renaming-= p q))   ; equal modulo a renaming: both are "a constant function"
 (check (!= p q))           ; but not equal: one returns $3, the other $4
 ```
@@ -129,8 +150,13 @@ The other direction matters too. `=` is not "syntactically identical" either —
 equality modulo everything the e-graph already knows, including a class's symmetries.
 If commutativity has put the swap in `f`'s group, then
 
-```
-(check (= (F $1 $2) (F $2 $1)))
+```slotted
+(constructor F (U U) U)
+(rewrite (F ?x ?y) (F ?y ?x) :name comm)
+(let a (F $1 $2))
+(let b (F $2 $1))
+(run 5)
+(check (= a b))
 ```
 
 holds, because by Def. 6 two invocations of a class agree when the renaming between
@@ -148,9 +174,10 @@ The difference is one line. Both ask for a common leader; only `=` also asks
 that the two renamings agree.
 
 ```
-(renaming-=   p q)    (check (RenamesToLeader $p _m1 _l) (RenamesToLeader $q _m2 _l))
-(= p q)    (check (RenamesToLeader $p _m0 _l) (RenamesToLeader $q _m1 _l)
-                           (= _m0 _m1))
+(renaming-= p q)   (check (RenamesToLeader $p _m1 _l) (RenamesToLeader $q _m2 _l))
+
+(= p q)            (check (RenamesToLeader $p _m0 _l) (RenamesToLeader $q _m1 _l)
+                          (= _m0 _m1))
 ```
 
 `(RenamesToLeader f m l)` is `f = m*l`. A class is a connected component of that
@@ -161,9 +188,12 @@ renaming reaches both, which is what makes it equality of terms.
 **A trap.** `renaming-=` between two bare slots is always true, because every variable is
 one e-class:
 
-```
-(check (renaming-= $3 $4))      ; holds -- both are the variable class
-(check (!= $3 $4))   ; also holds -- they are different variables
+```slotted
+(constructor F (U U) U)
+(let a (F $1 $2))                 ; something for the graph to hold
+(run 0)
+(check (renaming-= $3 $4))        ; holds -- both are the variable class
+(check (!= $3 $4))                ; also holds -- they are different variables
 ```
 
 Both desugar with the class `(Var 0)` on each side; `=` recovers *which* slot
@@ -195,6 +225,10 @@ case:
 For a **bare slot** it could not express the claim at all. A slot's identity lives in
 the renaming, not in the value: `$9` and `$0` are the same value `(Var 0)` and different
 terms, so `(= a $9)` has no stored-value spelling.
+
+Both halves of that are checked in `slotted/encoding/value-equality.egg`, which runs at
+the encoded level where both questions can be asked at once: alpha-variants and a
+symmetry each end up as ONE egglog value, while two invocations of one class stay two.
 
 A test that really is about the encoding's own tables belongs in `slotted/encoding/`,
 which runs as plain egglog and can say whatever it likes.
@@ -229,9 +263,11 @@ values, related by `RenamesToLeader` rather than by egglog's union, and the mach
 deletes the non-canonical ones — so asking egglog to extract the term's own value fails
 outright whenever the class settled on a different invocation:
 
-```
+```slotted
+(constructor Lam (U U) U :binder 0)
 (let p (Lam $0 $3))
 (let q (Lam $0 $4))
+(run 0)
 (extract q)      ; used to be: extraction failure -- q's node was canonicalised away
 ```
 
@@ -247,7 +283,7 @@ A run reports what it did, because "ok" means different things for different fil
 
 ```
 ok   figure-3.egg   4 terms, 1 union, 3 claims
-ok   array.egg      8 rules, nothing asked -- a rule library, included by other files
+ok   array.egg   8 rules, nothing asked -- a rule library, included by other files
 ```
 
 The second has no terms and no claims, so nothing was checked — it only loaded.
@@ -258,6 +294,6 @@ The second has no terms and no claims, so nothing was checked — it only loaded
 | --- | --- |
 | `slotted/tests/` | programs in this language, run by `slotted/run-slotted-tests.py` |
 | `slotted/tests/paper/` | one file per test in the reference's own suites |
-| `slotted/encoding/` | the encoding itself, written by hand at the encoded level, plus the tutorial that explains it |
+| `slotted/encoding/` | the encoding itself, written by hand at the encoded level, plus the tutorial that explains it. `value-equality.egg` is where this file's claims about `=` are checked |
 | `slotted/slotted-egglog.py` | the compiler; its module docstring is the short form of this file |
 | `slotted-user-rules.md` | how a rule is compiled, and why each piece is there |

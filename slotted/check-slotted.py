@@ -95,7 +95,7 @@ def run_egg_files():
     files = sorted(glob.glob(str(ROOT / "slotted" / "encoding" / "**" / "*.egg"), recursive=True))
     # A test rewritten in the slotted language leaves this directory for
     # `slotted/tests/`, so this floor drops as that one rises; neither may fall alone.
-    if len(files) < 8:
+    if len(files) < 9:
         return f"only {len(files)} encoded-level .egg files found"
     bad = []
     for f in files:
@@ -222,6 +222,14 @@ CHECKS = [
         "iso-selftest",
         ("slotted/xdiff/isomorphism.py", "selftest"),
         ratio(r"(\d+)/(\d+) self-tests pass", 3),
+        False,
+        True,
+    ),
+    (
+        # An example nobody runs is an example nobody checked.
+        "language-doc",
+        ("slotted/check-language-doc.py",),
+        ratio(r"(\d+)/(\d+) examples run", 5),
         False,
         True,
     ),
