@@ -312,11 +312,6 @@ theorem noAtLet_encodeCmd {P : Program} (hdom : P.EncodeDomain) (G : List (Var �
       rcases hc' with rfl | rfl <;> trivial
   | decl f dc => simp [encodeCmd] at hc'
 
-/-- **The environment binds no generated variable.** What it buys is `Query.freeVars`: a query
-variable the environment already binds is not one `matchQuery` assigns, and every variable of a
-maintenance rule's query is `@`-prefixed. -/
-def FDatabase.NoAtEnv (d : FDatabase) : Prop := ∀ b ∈ d.env, ¬ "@".isPrefixOf b.1
-
 namespace FDatabase
 
 /-- **And every `Cmd.rule` of the block registers its rule.** With
@@ -943,36 +938,6 @@ saturation followed by a rebuild for the two firing commands, and the action blo
 by a rebuild for a top-level action. The induction below is over that alignment, carrying
 `FDatabase.EncOk` at the **contemporaneous** source state, and it lifts to the run's final
 source only at the last step. -/
-
-/-- `encodeCmd` emits no declaration, which is what fixes the signature for the whole
-aligned run. -/
-theorem noDecl_encodeCmd (G : List (Var × Expr)) (c : Cmd) (n i : Nat) :
-    ∀ c' ∈ (encodeCmd G c n i).1, c'.NoDecl := by
-  intro c' hc'
-  cases c with
-  | action a =>
-      have h : c' ∈ (encodeAction fiatE a n).1.map Cmd.action ++ [Cmd.saturate rebuildRuleset] :=
-        hc'
-      rcases List.mem_append.mp h with h₁ | h₁
-      · obtain ⟨b, -, rfl⟩ := List.mem_map.mp h₁
-        trivial
-      · obtain rfl : c' = Cmd.saturate rebuildRuleset := by simpa using h₁
-        trivial
-  | rule r =>
-      have h : c' ∈ [Cmd.rule (encodeRule i (r.substGlobals G) n).1] := hc'
-      obtain rfl : c' = Cmd.rule (encodeRule i (r.substGlobals G) n).1 := by simpa using h
-      trivial
-  | run R =>
-      have h : c' ∈ [Cmd.run R, Cmd.saturate rebuildRuleset] := hc'
-      have h2 : c' = Cmd.run R ∨ c' = Cmd.saturate rebuildRuleset := by simpa using h
-      rcases h2 with rfl | rfl <;> trivial
-  | saturate R =>
-      have h : c' ∈ [Cmd.saturate R, Cmd.saturate rebuildRuleset] := hc'
-      have h2 : c' = Cmd.saturate R ∨ c' = Cmd.saturate rebuildRuleset := by simpa using h
-      rcases h2 with rfl | rfl <;> trivial
-  | decl f dc =>
-      have h : c' ∈ ([] : Program) := hc'
-      simp at h
 
 /-- A one-command run is that command. -/
 theorem execProgramM_single {d D : FDatabase} {c : Cmd}
@@ -5096,12 +5061,6 @@ theorem mem_matchQuery_of_lookup {d : FDatabase} {q : Query} {τ : Env}
 
 
 
-/-- **Every column a row records is a value `matchQuery` will assign.** `matchQuery` enumerates
-`FDatabase.valueTerms` and not `terms`, so a rule can only re-read a row whose columns are of
-that kind. `execM_rowColumnsValued` is this at an `execM` target. -/
-def FDatabase.RowColumnsValued (d : FDatabase) : Prop :=
-  ∀ r ∈ d.rows, ∀ t ∈ r.args ++ r.out, t ∈ d.valueTerms
-
 set_option maxRecDepth 100000 in
 /-- **Non-vacuous**, at the state the one-off instance matches at: `cxRb` is `cxPre` without the
 third `set`, and every column its two rows record is a value the enumerator would assign. -/
@@ -9112,7 +9071,12 @@ theorem patternRowRead_of_matches {sd : Database} {td : FDatabase} {σ ρt : Env
 
 /-! #### The head the target cannot run
 
-`Egglog.UnionsFire` quantifies over an arbitrary `td` under ten hypotheses, and **not one of
+**Fixed.** What follows is the refutation that fixed it, kept as the record: `UnionsFireWeak`
+below is the clause set `Egglog.UnionsFire` used to have, `unionsFire_of_weak` says it is the
+stronger claim, and `cxfTgt_not_sigMono` and `cxpSrc_not_queriesEncodable` name the clause each
+witness violates. The reading below is of that old statement.
+
+`UnionsFireWeak` quantifies over an arbitrary `td` under ten hypotheses, and **not one of
 them is about `td.sig`**. Step 5 of the assembly — the encoded rule's block *evaluating* — is
 the one that reads the target's signature: `Expr.eval` returns `none` at a name the signature
 does not make a constructor, `execLocalActions` propagates that `none`, and `fireInto` then
@@ -9164,7 +9128,42 @@ each identified by following the assembly's own route rather than compiled here:
   `UnionsFire` never sees the program.
 
 `Egglog.unionsFireClaim_false` is the same finding one round earlier, at the clauses' *state*
-rather than at the target's signature. -/
+rather than at the target's signature. All four are now clauses of `Egglog.UnionsFire`, plus
+the `@Rule_i` one the same reading gives at a `union` head; `Egglog.RowMech` discharges four of
+them and `Egglog.RuleNameMech` the fifth. -/
+
+/-- **The clause set the two refutations below kill**: `Egglog.UnionsFire` with its clauses
+about names dropped — the target's signature declaring the source's constructors and `@Fiat`,
+the `@Rule_i` of the index `hrules` names, the source rules' queries being ones the flattening
+handles, and the two the enumerator reads (`FDatabase.RowColumnsValued`,
+`FDatabase.NoAtEnv`). Kept as the record of the refuted statement, the way
+`Egglog.UnionsInvD` keeps the first one.
+
+Strictly the stronger claim (`unionsFire_of_weak`), so refuting it says nothing against the
+repaired statement — which is the point: `cxfTgt_not_sigMono` and
+`cxpSrc_not_queriesEncodable` are the clauses the two witnesses violate. -/
+def UnionsFireWeak : Prop :=
+  ∀ {R : RulesetName} {c : Cmd} {sd sd' : Database} {td td' : FDatabase},
+    (c = Cmd.run R ∨ c = Cmd.saturate R) → CmdStep sd c sd' →
+    td.execProgramM [c, Cmd.saturate rebuildRuleset] = some td' →
+    td.env = sd.env → sd.CtorState →
+    (∀ r ∈ sd.rules, ∃ (G : List (Var × Expr)) (i n : Nat),
+      (encodeRule i (r.substGlobals G) n).1 ∈ td.rules) →
+    (∀ t ∈ sd.terms, ∃ e, ViewRepr td.toDatabase t e) →
+    td.toDatabase.UnionsJoined sd →
+    (∀ t ∈ sd.terms, ∃ r, RowRepr td t r) →
+    td.RowJoined →
+    (∀ t r : Term, RowRepr td' t r → ViewRepr td'.toDatabase t r) →
+    td'.toDatabase.UnionsJoined sd' ∧ ∀ t ∈ sd'.terms, ∃ e, ViewRepr td'.toDatabase t e
+
+/-- **The weak statement implies the repaired one**, by dropping hypotheses — so the two
+refutations below bracket the repair from above and refute nothing it says. -/
+theorem unionsFire_of_weak (hw : UnionsFireWeak) : UnionsFire := by
+  intro R c sd sd' td td' hc hstep hrun henv hstate _ _ hrules _ _ _ hreads hjoin hrow hrj hback
+  refine hw hc hstep hrun henv hstate ?_ hreads hjoin hrow hrj hback
+  intro r hr
+  obtain ⟨G, i, n, hm, -⟩ := hrules r hr
+  exact ⟨G, i, n, hm⟩
 
 /-- The rule the refutation fires: an **empty** query, so both the source's `ValidQuerySubst`
 and the target's `matchQuery` are the empty substitution, and a head that builds `(H)`. -/
@@ -9289,17 +9288,16 @@ theorem cxfTgt_viewRepr_of_rowRepr {t r : Term} (h : RowRepr cxfTgt t r) :
   ViewRepr.of_rowRepr_of_rowTerms (fun _ hr => absurd hr (by simp [cxfTgt]))
     (fun _ hr => absurd hr (by simp [cxfTgt])) h
 
-/-- **`Egglog.UnionsFire` is false.** Ten hypotheses, all of them satisfied, and the `reads`
-half of the conclusion failing at `(H)` — the term the source's own firing built and the
-target's could not, because nothing in the residue's statement makes the encoded head
-evaluate.
+/-- **`Egglog.UnionsFireWeak` is false.** Ten hypotheses, all of them satisfied, and the
+`reads` half of the conclusion failing at `(H)` — the term the source's own firing built and
+the target's could not, because nothing in that clause set makes the encoded head evaluate.
 
 Not a refutation of `encode`: the missing fact is `FDatabase.EncBase`'s `sig` clause, which
-every state an encoded run reaches carries (`encReached_encBase`). It is a refutation of the
-residue as stated, and `unionsJoined_fire`'s `sorry` therefore stands at a **false**
-obligation until the clause — and the three the docstring above names beside it — are threaded
-in as derived clauses, the way `Egglog.RowMech` is. -/
-theorem unionsFire_false : ¬ UnionsFire := by
+every state an encoded run reaches carries (`encReached_encBase`). It was a refutation of the
+residue **as it was then stated**, and the clause — with the three the docstring above names
+beside it — is now among `Egglog.UnionsFire`'s own, discharged by `Egglog.encStep_rowMech` the
+way `Egglog.RowMech`'s row clauses are. `cxfTgt_not_sigMono` is this witness failing it. -/
+theorem unionsFire_false : ¬ UnionsFireWeak := by
   intro h
   obtain ⟨-, hreads⟩ :=
     h (R := "r") (c := Cmd.run "r") (Or.inl rfl) cxfSrc_cmdStep cxfTgt_execProgramM rfl
@@ -9313,6 +9311,41 @@ theorem unionsFire_false : ¬ UnionsFire := by
       (fun _ _ hr => cxfTgt_viewRepr_of_rowRepr hr)
   obtain ⟨e, he⟩ := hreads _ cxfSrc'_mem_H
   exact cxfTgt_no_viewRepr e he
+
+/-! ##### And the clause that kills it
+
+`Egglog.UnionsFire` asks the target's signature to declare every constructor the source's
+does. `cxfTgt` is the encoder's own signature with `H` withdrawn, so it does not — and that is
+the whole of what the witness violates: its query is empty, so the source-rules clause holds
+at it outright, and its rows and environment are empty, so the two the enumerator reads hold
+too. -/
+
+/-- **The clause `cxfTgt` violates.** `cxfSrcSig` makes `H` a constructor and `cxfTgt.sig`
+withholds it, which is exactly why the encoded head does not evaluate. -/
+theorem cxfTgt_not_sigMono : ¬ ∀ f, cxfSrc.sig.IsCtor f → cxfTgt.sig.IsCtor f := by
+  intro h
+  obtain ⟨dc, hdc, -⟩ := h "H" ⟨{ arity := 0, outArity := 1, merge := none }, rfl, rfl⟩
+  exact absurd hdc (by simp [cxfTgt])
+
+set_option maxRecDepth 10000 in
+/-- **And the source-rules clause holds at it**, so the two refutations violate *different*
+clauses: an empty query is `Cmd.QueryEncodable` and applies no name at all. -/
+theorem cxfSrc_queriesEncodable : ∀ r ∈ cxfSrc.rules, (Cmd.rule r).QueryEncodable ∧
+    ∀ p ∈ r.query, ∀ fk ∈ p.ctors, Prim.ofName fk.1 = none := by
+  intro r hr
+  obtain rfl : r = cxfRule := hr
+  exact ⟨⟨by simp [cxfRule], by intro v hv; exact absurd hv (by simp [cxfRule])⟩,
+    by intro p hp; exact absurd hp (by simp [cxfRule])⟩
+
+set_option maxRecDepth 10000 in
+/-- **As do the other three**: `@Fiat` and `@Rule_0` are declared — only `H` was withdrawn —
+and the target holds no row and binds nothing. -/
+theorem cxfTgt_other_clauses :
+    cxfTgt.sig.IsCtor fiatName ∧ cxfTgt.sig.IsCtor (ruleName 0) ∧
+      cxfTgt.RowColumnsValued ∧ cxfTgt.NoAtEnv :=
+  ⟨by decide, by decide,
+    fun r hr => absurd hr (by simp [cxfTgt]),
+    fun b hb => absurd hb (by simp [cxfTgt])⟩
 
 /-! #### And a second one, at the encoder's own signature
 
@@ -9470,12 +9503,15 @@ theorem cxpTgt_viewRepr_of_rowRepr {t r : Term} (h : RowRepr cxpTgt t r) :
   ViewRepr.of_rowRepr_of_rowTerms (fun _ hr => absurd hr (by simp [cxpTgt]))
     (fun _ hr => absurd hr (by simp [cxpTgt])) h
 
-/-- **`Egglog.UnionsFire` is false a second time, at a target the encoder's own signature and
-provenance would supply.** So the repair is not one derived clause but at least two, on
-opposite sides of the correspondence: the target's signature, which `FDatabase.EncBase` has,
-and the source rules' encodability, which `Program.EncodeDomain.noPrim` and `queryEncodable`
-have and which no target-side clause can reach. -/
-theorem unionsFire_false_encodeSig : ¬ UnionsFire := by
+/-- **`Egglog.UnionsFireWeak` is false a second time, at a target the encoder's own signature
+and provenance would supply.** So the repair was not one derived clause but two, on opposite
+sides of the correspondence: the target's signature, which `FDatabase.EncBase` has, and the
+source rules' encodability, which `Program.EncodeDomain.noPrim` and `queryEncodable` have and
+which no target-side clause can reach — `queriesIn_of_prefixStep` is that one carried by the
+source run instead, since `Egglog.UnionsFire` is given no program.
+`cxpSrc_not_queriesEncodable` is this witness failing it, and `cxpTgt_name_clauses` is every
+clause about names holding at its target. -/
+theorem unionsFire_false_encodeSig : ¬ UnionsFireWeak := by
   intro h
   obtain ⟨-, hreads⟩ :=
     h (R := "r") (c := Cmd.run "r") (Or.inl rfl) cxpSrc_cmdStep cxpTgt_execProgramM rfl
@@ -9491,11 +9527,51 @@ theorem unionsFire_false_encodeSig : ¬ UnionsFire := by
   exact cxpTgt_no_viewRepr e he
 
 
-/-- **The command induction's rule-firing case. REFUTED, twice, and no longer at `Cmd.saturate`.**
+/-! ##### And the clause that kills the second one
 
-Its statement, its five closed siblings and the refutation that fixed its hypotheses are in
-`Encoding/Correspond.lean` (`Egglog.UnionsFire`, `unionsInv_step`, `unionsFireClaim_false`).
-What is recorded here is what the route through this file settles and what it does not.
+The target here is the encoder's own signature on the nose, so every clause about names holds
+at it; what fails is the clause about the **source's** rules, and it fails at the same name
+`Program.EncodeDomain.noPrim` rejects the program for. -/
+
+/-- **The clause `cxpSrc` violates.** `Pattern.ctors` records `("min", 2)` and `min` is a
+primitive, so the source query evaluates through `Prim.apply` where the encoded one reads a
+table nothing writes. -/
+theorem cxpSrc_not_queriesEncodable : ¬ ∀ r ∈ cxpSrc.rules, (Cmd.rule r).QueryEncodable ∧
+    ∀ p ∈ r.query, ∀ fk ∈ p.ctors, Prim.ofName fk.1 = none := by
+  intro h
+  have := (h cxpRule rfl).2 (Pattern.expr (.app "min" [.var "x", .var "x"]))
+    (by simp [cxpRule]) ("min", 2) (by decide)
+  exact absurd this (by decide)
+
+set_option maxRecDepth 10000 in
+/-- **And every clause about names holds at `cxpTgt`**, which is what says the repair is not
+one clause but two on opposite sides: `cxpSrc`'s one constructor is `H` and `encodeSig` makes
+it a skolem, `@Fiat` and `@Rule_0` are the prelude's own, and the target holds no row and
+binds nothing. -/
+theorem cxpTgt_name_clauses :
+    (∀ f, cxpSrc.sig.IsCtor f → cxpTgt.sig.IsCtor f) ∧
+      cxpTgt.sig.IsCtor fiatName ∧ cxpTgt.sig.IsCtor (ruleName 0) ∧
+      cxpTgt.RowColumnsValued ∧ cxpTgt.NoAtEnv := by
+  refine ⟨?_, by decide, by decide,
+    fun r hr => absurd hr (by simp [cxpTgt]),
+    fun b hb => absurd hb (by simp [cxpTgt])⟩
+  intro f hf
+  by_cases hH : f = "H"
+  · rw [hH]; exact (by decide : cxpTgt.sig.IsCtor "H")
+  · obtain ⟨dc, hdc, -⟩ := hf
+    have hnone : cxfSrcSig f = none := by rw [cxfSrcSig, if_neg hH]
+    have hdc' : cxfSrcSig f = some dc := hdc
+    rw [hnone] at hdc'
+    exact absurd hdc' (by simp)
+
+/-- **The command induction's rule-firing case. Open — and, after two refutations and their
+repair, no longer standing at a false statement.**
+
+Its statement, its five closed siblings and the three refutations that fixed its hypotheses are
+in `Encoding/Correspond.lean` (`Egglog.UnionsFire`, `unionsInv_step`, `unionsFireClaim_false`)
+and above in this file (`Egglog.UnionsFireWeak`, `unionsFire_false`,
+`unionsFire_false_encodeSig`). What is recorded here is what the route through this file settles
+and what it does not.
 
 **The route is the enumerator's own, and no general converse is wanted.**
 `execRunRules_RunRules` needs `Signature.AllConstructors`, which an encoded target fails at
@@ -9698,11 +9774,11 @@ nothing is written — and that is `execRunRules_RunRules`, which wants
 `Signature.AllConstructors` and is unavailable at a target whose `@UF` and every `@fView` carry
 `:merge`. The kernel cannot run the encoded program either.
 
-**A valid substitution is still not a firing, and that is what refutes this.** `RuleResults` is
+**A valid substitution is still not a firing, and that is what refuted this.** `RuleResults` is
 a substitution *and* a block that evaluates, which is the falsity
 `mem_terms_of_ruleFired`/`mem_eqs_of_ruleFired` already cost once. `ncTgt_encRule_fired` is that
 half exhibited on the target side, and `mem_rows_execRunRules` is where the head's writes are
-read back. On the target the same gap is a *hole in this statement*: `Expr.eval` returns `none`
+read back. On the target the same gap was a *hole in the statement*: `Expr.eval` returns `none`
 at a name the signature does not make a constructor, `execLocalActions` propagates it, and
 `fireInto` answers a stuck firing by returning the accumulator unchanged — so `unionsFire_false`
 runs the encoded rule at a `td` whose signature withholds the head's skolem and the round writes
@@ -9710,30 +9786,60 @@ nothing. `unionsFire_false_encodeSig` is the same conclusion at `encodeSig` itse
 source query that applies a primitive, so the second missing clause is on the **source** side
 and no target-side provenance reaches it.
 
-**What the repair is.** Four derived clauses, à la carte and threaded the way `Egglog.RowMech`
-is — never as provenance, which `unionsJoined_fire_satisfiable` would not survive:
+**What the repair is, and it is now in the statement.** Five derived clauses, à la carte and
+threaded the way `Egglog.RowMech` is — never as provenance, which
+`unionsJoined_fire_satisfiable` would not survive:
 
-* the target's signature, in the form `∀ f, sd.sig.IsCtor f → td.sig.IsCtor f`,
-  `td.sig.IsCtor fiatName`, and `td.sig.IsCtor (ruleName i)` at the index `hrules` names —
-  `FDatabase.EncBase`'s `sig` clause and `encodeSig_isCtor_*` are where an encoded run has them
-  (`encReached_encBase`), and each is decidable at `rbState2`;
+* the target's signature, in the form `∀ f, sd.sig.IsCtor f → td.sig.IsCtor f` and
+  `td.sig.IsCtor fiatName`. `FDatabase.EncBase`'s `sig` clause is where an encoded run has
+  them, `encodeSig_isCtor_of_mem_ctors` and `encodeSig_isCtor_fiatName` are the two readings,
+  and `sigIn_of_prefixStep` carries the source signature onto `Program.ctors`. Both are
+  decidable at `rbState2` (`rbState2_sig_mono`, `rbState2_isCtor_fiatName`), at a source
+  constructor of positive arity;
+* `td.sig.IsCtor (ruleName i)` **at the index `hrules` names**, bundled into `hrules` because
+  `ruleProofDecls` declares only the indices the encoder's own numbering reaches and
+  `encodeRule` is a function of an arbitrary one. `Egglog.RuleNameMech` is how the numbering is
+  threaded — `Program.RuleNamesDeclared` walks the program with `Cmd.ruleStep`, which
+  `encodeCmd_ruleStep` says is `encodeCmds`' own counter — and `ruleNamesDeclared_encodeSig`
+  reads it off `ruleProofDecls`;
 * `FDatabase.RowColumnsValued` at `td`, which `mem_matchQuery_of_rows` and
   `mem_matchQuery_encodeQuery` both take: `matchQuery` draws its candidates from
-  `FDatabase.valueTerms`, so a row column outside it is a row no substitution can name;
+  `FDatabase.valueTerms`, so a row column outside it is a row no substitution can name.
+  `encReached_rowColumnsValued` is the discharge;
 * `FDatabase.NoAtEnv` at `td`, with `hnoAtVar` and `hglob` at the source rule's own variables:
   `Query.freeVars` drops a variable the environment binds, so an `@`-prefixed binding reroutes
-  a *generated* variable to the environment's value;
-* the source rules' encodability — `Pattern.NoValues` and `∀ g ∈ p.fns, Prim.ofName g = none` at
-  every pattern of every rule `sd.rules` holds, which `patternRowRead_of_matches` takes and
-  which `Program.EncodeDomain.queryEncodable` and `noPrim` pay for at the program. This one
-  wants a **source-run** invariant, since `UnionsFire` is given no program.
+  a *generated* variable to the environment's value. `FDatabase.EncBase.noAtEnv` is the
+  discharge;
+* the source rules' encodability — `Cmd.QueryEncodable` and
+  `∀ fk ∈ p.ctors, Prim.ofName fk.1 = none` at every pattern of every rule `sd.rules` holds,
+  which `patternRowRead_of_matches` takes and which `Program.EncodeDomain.queryEncodable` and
+  `noPrim` pay for at the program. This one is a **source-run** invariant, since `UnionsFire`
+  is given no program: `Database.QueriesIn` is the property and `queriesIn_of_prefixStep` the
+  induction, over the commands the chain has already run.
 
-The `Cmd.saturate` half wants one thing more, and it is structural rather than a clause: the
-source's rounds and the target's do not align, and the row clauses this residue is handed live
-at `td` alone. The target's `.saturate R` fixpoint is where they would have to be re-established
-— it is the only state in the block that is rebuild-closed, since a round fires the maintenance
-rules against its own pre-state — and `FDatabase.ViewRowUnique` is established by a trailing
-`Cmd.saturate rebuildRuleset` and by nothing in the middle of a block. -/
+**Both refutations are accounted for, each by a different clause.** `cxfTgt_not_sigMono` is
+the first witness failing the signature clause, with every other new clause holding at it
+(`cxfSrc_queriesEncodable`, `cxfTgt_other_clauses`); `cxpSrc_not_queriesEncodable` is the
+second failing the source-rules clause, with every clause about names holding at its target
+(`cxpTgt_name_clauses`). `unionsFire_of_weak` is the implication that says what they refute —
+`Egglog.UnionsFireWeak` — is strictly the stronger claim.
+
+**The one structural item left is the `Cmd.saturate` half's alone, and the encoder fix did not
+close it.** A `Cmd.run` block is `[.run R, Cmd.saturate rebuildRuleset]` and `.run R` is a
+*single* round, fired at `td` itself — `allMaintenanceRules` joins the maintenance rules only to
+the rulesets a source `Cmd.saturate` names (`Program.saturateRulesets`), so a source `.run R`
+runs `R`'s rules alone at the state this residue is handed, and every clause above is at exactly
+the state the encoded rule runs at. There is no mid-block gap there.
+
+A `Cmd.saturate` block saturates, and its rounds two onward fire at states strictly inside the
+block. `allMaintenanceRules` does make each of those rounds rebuild — that is what stopped
+`sat-hit` losing a term — but `execRunRules` reads *every* rule of a round off the same
+pre-state, so a round's maintenance firings chase the previous round's `@UF` edges and not its
+own. The fixpoint the block ends at is therefore rebuild-closed, since nothing changes there
+and the maintenance rules are among what fires; the rounds in between are one round behind, and
+`FDatabase.ViewRowUnique` holds at neither `td` nor a mid-block state for them. That is the
+lag a further clause — or a per-round induction — would have to speak about, and it is
+structural rather than one of the five above. -/
 theorem unionsJoined_fire : UnionsFire := by
   sorry
 
@@ -10226,6 +10332,80 @@ theorem encodeSig_isCtor_congrName {P : Program} {g : FnName} {k : Nat}
     (fun hc => ufName_ne_congrName hc.symm)
     (fun _ h' => viewName_ne_congrName h'.symm) (fun _ h' => termName_ne_congrName h'.symm)
 
+/-! ### The three clauses about names, `@Rule_i` among them
+
+`Egglog.UnionsFire`'s head has to *evaluate*, and `Expr.eval` is `none` at a name the
+signature does not make a constructor. Three families of name reach it: the source
+constructors a build applies, `@Fiat`, and the `@Rule_i` a `union` head names as its
+justification. The first two are one lemma each; the third has to be threaded, because
+`ruleProofDecls` declares `@Rule_i` only at the indices the encoder's own numbering reaches
+and `encodeRule` is a function of an arbitrary one. -/
+
+/-- **A source constructor is a constructor of `encodeSig P`.** `encodePrelude` emits
+`.decl f (skolemDecl k)` per entry of `Program.ctors`, and a source name is `@`-free, so none
+of the prelude's `:merge`-carrying declarations can be at it. -/
+theorem encodeSig_isCtor_of_mem_ctors {P : Program} (hdom : P.EncodeDomain)
+    {fk : FnName × Nat} (h : fk ∈ P.ctors) : (encodeSig P).IsCtor fk.1 := by
+  have hat := noAt_of_mem_ctors hdom h
+  have huf : fk.1 ≠ ufName := fun hc =>
+    hat (by rw [hc]; exact (by decide +kernel : "@".isPrefixOf ufName = true))
+  have hv : ∀ g, fk.1 ≠ viewName g := fun g hc =>
+    hat (by rw [hc]; exact isPrefixOf_at_viewName g)
+  have ht : ∀ g, fk.1 ≠ termName g := fun g hc =>
+    hat (by rw [hc]; exact isPrefixOf_at_termName g)
+  have hmem : Cmd.decl fk.1 (skolemDecl fk.2) ∈ encodePrelude P := by
+    rw [encodePrelude]
+    refine List.mem_append_left _ (List.mem_append_right _ (List.mem_cons_of_mem _
+      (List.mem_flatMap.mpr ⟨fk, h, ?_⟩)))
+    exact List.mem_cons_self
+  rw [encodeSig]
+  exact isCtor_foldl_sigBind
+    (fun _ hdc' => merge_none_of_mem_encodePrelude huf hv ht hdc')
+    (Or.inr ⟨skolemDecl fk.2, hmem⟩)
+
+/-- **A term relation is never a rule's proof head**, by the `'m'` of its suffix. Mirrors
+`viewName_ne_ruleName`. -/
+theorem termName_ne_ruleName {f : FnName} {i : Nat} : termName f ≠ ruleName i := by
+  intro h
+  have hw : 'm' ∈ (termName f).toList := by
+    rw [termName, String.toList_append]
+    exact List.mem_append_right _ (by decide)
+  rw [h, ruleName, String.toList_append] at hw
+  rcases List.mem_append.mp hw with h1 | h1
+  · exact absurd h1 (by decide)
+  · have hd := Nat.isDigit_of_mem_toDigits (b := 10) (by decide) (by decide)
+      (show 'm' ∈ Nat.toDigits 10 i by rw [Nat.toString_eq_repr, Nat.toList_repr] at h1; exact h1)
+    simp at hd
+
+/-- **`@Rule_i` is a constructor of `encodeSig P`** wherever the vocabulary declares it. -/
+theorem encodeSig_isCtor_ruleName {P : Program} {i : Nat} {dc : FnDecl}
+    (h : Cmd.decl (ruleName i) dc ∈ proofDecls P) : (encodeSig P).IsCtor (ruleName i) :=
+  encodeSig_isCtor_of_mem_proofDecls h (fun hc => ufName_ne_ruleName hc.symm)
+    (fun _ h' => viewName_ne_ruleName h'.symm) (fun _ h' => termName_ne_ruleName h'.symm)
+
+/-- **The numbering, read off `ruleProofDecls` itself**: it walks the program with the same
+counter `encodeCmds` does and emits one `@Rule_i` declaration per rule command. -/
+theorem ruleNamesDeclared_of_mem {P : Program} {sg : Signature} :
+    ∀ (G : List (Var × Expr)) (p : Program) (i : Nat),
+      (∀ (j : Nat) (dc : FnDecl), Cmd.decl (ruleName j) dc ∈ ruleProofDecls P G p i →
+        sg.IsCtor (ruleName j)) →
+      Program.RuleNamesDeclared sg p i
+  | _, [], _, _ => trivial
+  | G, c :: cs, i, h => by
+      refine ⟨?_, ruleNamesDeclared_of_mem (c.globalBind P G) cs (c.ruleStep i)
+        (fun j dc hj => h j dc (by rw [ruleProofDecls]; exact List.mem_append_right _ hj))⟩
+      intro r hr
+      subst hr
+      refine h i (proofDecl (ruleProofArity (r.substGlobals G))) ?_
+      rw [ruleProofDecls]
+      exact List.mem_append_left _ (by rw [Cmd.proofDeclOf]; exact List.mem_cons_self)
+
+/-- **Every `@Rule_i` the encoder's numbering of `P` applies is declared by its prelude.** -/
+theorem ruleNamesDeclared_encodeSig {P : Program} :
+    Program.RuleNamesDeclared (encodeSig P) P 0 :=
+  ruleNamesDeclared_of_mem (P := P) [] P 0 fun _ _ hj =>
+    encodeSig_isCtor_ruleName (by rw [proofDecls]; exact List.mem_append_right _ hj)
+
 /-! ### The literal clause, out of the completeness half
 
 `FDatabase.SoundTerms`' second clause answers an `@UF` entry term with a source congruence,
@@ -10674,6 +10854,102 @@ theorem ctorsIn_of_prefixStep {P : Program} (hdom : P.EncodeDomain) {p : Program
     (fun c hc => Cmd.CtorsIn.of_domain hdom (hsub c hc))
     (fun c hc => hdom.ctorsOnly c (hsub c hc)) hstep).terms
 
+/-! #### Two source-run invariants the firing spends
+
+`Egglog.UnionsFire` is given no program, and two of the things a firing needs are facts about
+the *source*: that a rule it holds has a query the flattening handles, and that a constructor
+its signature declares is one the encoded signature declares too. Both are carried by the
+source run, from `Program.EncodeDomain` at the commands it has run, in the shape
+`ctorsIn_of_prefixStep` already has. -/
+
+/-- **The source rules' queries are ones the flattening handles**, as a property of the state:
+`Cmd.QueryEncodable` at each, and no name a query applies is a primitive. The first is what
+`Program.EncodeDomain.queryEncodable` pays and the second what `noPrim` does — over
+`Program.ctors`, which reads a rule's *query* names as well as its head's. -/
+def Database.QueriesIn (db : Database) : Prop :=
+  ∀ r ∈ db.rules, (Cmd.rule r).QueryEncodable ∧
+    ∀ p ∈ r.query, ∀ fk ∈ p.ctors, Prim.ofName fk.1 = none
+
+/-- **One command keeps it**: only `Cmd.rule` extends `rules`, and its rule is the program's
+own. -/
+theorem cmdStep_queriesIn {P : Program} (hdom : P.EncodeDomain) {db db' : Database}
+    (hsig : db.sig.AllConstructors) (h : db.QueriesIn) {c : Cmd} (hc : c ∈ P)
+    (hstep : CmdStep db c db') : db'.QueriesIn := by
+  cases c with
+  | action a =>
+      intro r hr
+      exact h r (by rw [evalAction_rules (cmdStep_action_eq hsig hstep)] at hr; exact hr)
+  | rule r =>
+      obtain ⟨-, -, hrules⟩ := cmdStep_rule_fields hsig hstep
+      intro s hs
+      rw [hrules] at hs
+      rcases Set.mem_insert_iff.mp hs with rfl | hs'
+      · refine ⟨hdom.queryEncodable _ hc, fun p hp fk hk => hdom.noPrim fk ?_⟩
+        refine mem_program_ctors hc ?_
+        rw [Cmd.ctors]
+        exact List.mem_append_left _ (List.mem_flatMap.mpr ⟨p, hp, hk⟩)
+      · exact h s hs'
+  | run R => intro r hr; exact h r (by rw [cmdStep_rules_of_run hstep] at hr; exact hr)
+  | saturate R => intro r hr; exact h r (by rw [cmdStep_rules_of_saturate hstep] at hr; exact hr)
+  | decl f dc =>
+      obtain ⟨-, -, hrules⟩ := cmdStep_decl_fields hsig (hdom.ctorsOnly _ hc) hstep
+      intro r hr
+      exact h r (by rw [hrules] at hr; exact hr)
+
+/-- **And every constructor the source signature declares is one the program's census
+names**, since only `Cmd.decl` writes the signature and `Cmd.ctors` records its pair. -/
+def Database.SigIn (db : Database) (P : Program) : Prop :=
+  ∀ f, db.sig.IsCtor f → ∃ k, (f, k) ∈ P.ctors
+
+@[inherit_doc cmdStep_queriesIn]
+theorem cmdStep_sigIn {P : Program} {db db' : Database} (h : db.SigIn P) {c : Cmd} (hc : c ∈ P)
+    (hstep : CmdStep db c db') : db'.SigIn P := by
+  intro f hf
+  rw [CmdStep.sig hstep] at hf
+  cases c with
+  | decl g dc =>
+      by_cases hg : f = g
+      · subst hg
+        exact ⟨dc.arity, mem_program_ctors hc (by rw [Cmd.ctors]; exact List.mem_cons_self)⟩
+      · refine h f ?_
+        obtain ⟨e, he, hm⟩ := hf
+        exact ⟨e, by rw [Cmd.sigBind, Function.update_of_ne hg] at he; exact he, hm⟩
+  | _ => exact h f hf
+
+/-- **Both, off a prefix of the program.** -/
+theorem queriesIn_sigIn_of_prefixStep {P : Program} (hdom : P.EncodeDomain) :
+    ∀ {p : Program} {db db' : Database}, (∀ c ∈ p, c ∈ P) → db.CtorState →
+      db.QueriesIn → db.SigIn P → ProgramStep db p db' → db'.QueriesIn ∧ db'.SigIn P := by
+  intro p
+  induction p with
+  | nil =>
+      intro db db' _ _ hq hs hstep
+      obtain rfl := hstep.nil_inv
+      exact ⟨hq, hs⟩
+  | cons c cs ih =>
+      intro db db' hsub hcs hq hs hstep
+      obtain ⟨db₁, hstep₁, hrest⟩ := hstep.cons_inv
+      exact ih (fun c' hc' => hsub c' (List.mem_cons_of_mem c hc'))
+        (hstep₁.ctorState hcs (hdom.ctorsOnly c (hsub c List.mem_cons_self)))
+        (cmdStep_queriesIn hdom hcs.sig hq (hsub c List.mem_cons_self) hstep₁)
+        (cmdStep_sigIn hs (hsub c List.mem_cons_self) hstep₁) hrest
+
+@[inherit_doc queriesIn_sigIn_of_prefixStep]
+theorem queriesIn_of_prefixStep {P : Program} (hdom : P.EncodeDomain) {p : Program}
+    (hsub : ∀ c ∈ p, c ∈ P) {sd : Database} (hstep : ProgramStep Database.empty p sd) :
+    sd.QueriesIn :=
+  (queriesIn_sigIn_of_prefixStep hdom hsub Database.CtorState.empty
+    (fun r hr => absurd hr (by simp [Database.empty]))
+    (fun f hf => absurd hf (by simp [Database.empty, Signature.IsCtor])) hstep).1
+
+@[inherit_doc queriesIn_sigIn_of_prefixStep]
+theorem sigIn_of_prefixStep {P : Program} (hdom : P.EncodeDomain) {p : Program}
+    (hsub : ∀ c ∈ p, c ∈ P) {sd : Database} (hstep : ProgramStep Database.empty p sd) :
+    sd.SigIn P :=
+  (queriesIn_sigIn_of_prefixStep hdom hsub Database.CtorState.empty
+    (fun r hr => absurd hr (by simp [Database.empty]))
+    (fun f hf => absurd hf (by simp [Database.empty, Signature.IsCtor])) hstep).2
+
 /-- The commands already run are the program's own. -/
 theorem EncStep.mem {P pre suf : Program} {sd : Database} {d : FDatabase}
     {G : List (Var × Expr)} (h : EncStep P pre suf sd d G) : ∀ c ∈ pre, c ∈ P :=
@@ -10910,23 +11186,48 @@ theorem encStep_rowJoined {P : Program} (hdom : P.EncodeDomain) {pre suf : Progr
       (encodeSig_isCtor_transName P) h.reached
       (Database.UFStep.toReach ⟨pf, hout⟩) ρx ρy hρx hρxr hρy hρyr
 
-/-- **`Egglog.RowMech`, discharged.** The three clauses `Egglog.UnionsFire` takes about rows, at
-every state one encoded run passes through: `encStep_exists_rowRepr` is the tuple choice — a
-reading is a row reading, at the pointwise `@UF` row root — `ViewRepr.of_rowRepr_of_indexOk`
-is the way back, off `FDatabase.IndexOk` alone, and `encStep_rowJoined` is the reading being a
-function that collapses an `@UF` edge.
+/-- **`Egglog.RowMech`, discharged.** The clauses `Egglog.UnionsFire` takes besides its
+provenance-free hypotheses, at every state one encoded run passes through.
+
+Three about rows: `encStep_exists_rowRepr` is the tuple choice — a reading is a row reading, at
+the pointwise `@UF` row root — `ViewRepr.of_rowRepr_of_indexOk` is the way back, off
+`FDatabase.IndexOk` alone, and `encStep_rowJoined` is the reading being a function that
+collapses an `@UF` edge.
+
+Four more, which are what `unionsFire_false` and `unionsFire_false_encodeSig` cost. The
+target's signature declares every source constructor (`encodeSig_isCtor_of_mem_ctors`, over
+`sigIn_of_prefixStep`) and `@Fiat` (`encodeSig_isCtor_fiatName`), so the encoded head
+evaluates; the source rules' queries are ones the flattening handles
+(`queriesIn_of_prefixStep`), which is what `Program.EncodeDomain.queryEncodable` and `noPrim`
+pay and what `UnionsFire` cannot ask of a program it is not given;
+`encReached_rowColumnsValued` is where `matchQuery` draws its candidates from, and
+`FDatabase.EncBase.noAtEnv` is the environment binding no generated variable.
 
 This is what `execM_rebuildClosed` could not be asked for. Its `edged` clause is stated at an
 `execM` target and `UnionsFire` quantifies over the state the *next* block runs at, so the
 mechanism had to be restated one block short of the end; `EncStep` is that restatement, and the
 `encReached_*` family is the block inductions consuming it. Nothing was added to `UnionsFire`
-that a firing cannot be handed — `unionsJoined_fire_satisfiable` carries all three clauses at
-the witness state, non-vacuously and at positive arity. -/
+that a firing cannot be handed — `unionsJoined_fire_satisfiable` carries every clause at the
+witness state, and all but the two about rules non-vacuously. -/
 theorem encStep_rowMech {P : Program} (hdom : P.EncodeDomain) : RowMech P :=
   fun h => ⟨fun _ _ hv => encStep_exists_rowRepr hdom h hv,
     fun _ _ hr =>
       ViewRepr.of_rowRepr_of_indexOk (encReached_encBase hdom h.reached).inv.index hr,
-    encStep_rowJoined hdom h⟩
+    encStep_rowJoined hdom h,
+    (fun f hf => by
+      obtain ⟨k, hk⟩ := sigIn_of_prefixStep hdom h.mem h.src f hf
+      rw [(encReached_encBase hdom h.reached).sig]
+      exact encodeSig_isCtor_of_mem_ctors (fk := (f, k)) hdom hk),
+    (by rw [(encReached_encBase hdom h.reached).sig]; exact encodeSig_isCtor_fiatName P),
+    queriesIn_of_prefixStep hdom h.mem h.src,
+    encReached_rowColumnsValued hdom h.reached,
+    (encReached_encBase hdom h.reached).noAtEnv⟩
+
+/-- **`Egglog.RuleNameMech`, discharged.** The prelude declares one `@Rule_i` per source rule,
+at the index `encodeCmds` reaches that rule with (`ruleNamesDeclared_encodeSig`), and the
+signature of a state the run passes through is the prelude's (`encReached_encBase`). -/
+theorem encReached_ruleNameMech {P : Program} (hdom : P.EncodeDomain) : RuleNameMech P :=
+  fun h => by rw [(encReached_encBase hdom h).sig]; exact ruleNamesDeclared_encodeSig
 
 /-- **The residue of obligation `trans`, of the rebuild half of obligation `assert`'s `union`
 case, and of the *key* half of obligation `congr`, at the rules it fires.**
@@ -11296,7 +11597,8 @@ theorem execM_viewsCover {P : Program} {src : Database} {tgt : FDatabase}
     (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
     (htgt : execM (encode P) = some tgt) : tgt.toDatabase.ViewsCover src :=
   Database.ViewsCover.of_viewJoined (execM_viewJoined hdom hsrc htgt)
-    (unionsInv_execM unionsJoined_fire hdom (encStep_rowMech hdom) hsrc htgt).reads
+    (unionsInv_execM unionsJoined_fire hdom (encStep_rowMech hdom)
+      (encReached_ruleNameMech hdom) hsrc htgt).reads
 
 @[inherit_doc execM_viewsCover]
 theorem execM_viewsCover_shared {P : Program} {src : Database} {tgt : FDatabase}
@@ -11315,7 +11617,8 @@ theorem execM_unionsRead {P : Program} {src : Database} {tgt : FDatabase}
     (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
     (htgt : execM (encode P) = some tgt) : tgt.toDatabase.UnionsRead src :=
   unionsRead_of_viewJoined (execM_viewJoined hdom hsrc htgt)
-    (execM_unionsJoined unionsJoined_fire hdom (encStep_rowMech hdom) hsrc htgt)
+    (execM_unionsJoined unionsJoined_fire hdom (encStep_rowMech hdom)
+      (encReached_ruleNameMech hdom) hsrc htgt)
 
 /-- **Obligation `assert`, at the encoding**, split by writer. `Database.addTerm` writes a
 reflexive equation per subterm built, and `sameClass_self_of_viewsCover` discharges those out

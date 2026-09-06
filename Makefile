@@ -138,7 +138,16 @@ nightly-local: nightly-uv nightly-rustup
 # reading through live rows, `encStep_exists_rowRepr` turns the induction's `ViewRepr` into one
 # at the pointwise `@UF` row root, and `encStep_rowMech` discharges the two row clauses
 # `UnionsFire` takes — at the state the *next* encoded block runs at (`EncReached`, `EncStep`),
-# which is where `execM_rebuildClosed` could not be asked. The forward half of
+# which is where `execM_rebuildClosed` could not be asked. And the residue's own clause list was
+# **too short**, twice: `unionsFire_false` and `unionsFire_false_encodeSig` refute the statement
+# that stood there (kept as `UnionsFireWeak`, with `unionsFire_of_weak` recording that it is the
+# stronger claim), because nothing in it made the encoded head evaluate and nothing constrained
+# the rules the source holds. Five clauses answer them — the target's signature declaring every
+# source constructor and `@Fiat`, the `@Rule_i` of the index `hrules` names (`RuleNameMech`),
+# the source rules' queries being ones the flattening handles (`Database.QueriesIn`, a
+# source-run invariant), `FDatabase.RowColumnsValued` and `FDatabase.NoAtEnv` — all discharged
+# from `EncStep`, with `cxfTgt_not_sigMono` and `cxpSrc_not_queriesEncodable` naming the clause
+# each witness now violates. The `sorry` is an open obligation again rather than a false one. The forward half of
 # `Encoding/Match.lean` is now written too: `mem_matchQuery_encodeQuery` turns a source reading
 # of a query into a substitution the *emitted* query matches at, over `encodeQuery`'s flattening
 # (`RowRead`, an id per subterm position through live rows) and its fresh-variable supply
