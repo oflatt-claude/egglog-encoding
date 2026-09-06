@@ -104,10 +104,9 @@ both are decided at the witness at the end of this file.
   the row a rebuild displaced is gone, the entry term is not.
 * **Proved, and what joins the read-back's blocks**: the **command induction**, and it is
   where the weakening pays. `UnionsInv` is the invariant it carries — `Database.UnionsJoined`
-  at the state the *whole* run finishes at, every global binding's value reading to itself
-  there, the two environments coinciding, and the source staying in the constructor fragment —
-  every source term having an id there, every global binding's value reading to itself there,
-  the two environments coinciding, and the source staying in the constructor fragment —
+  at the state the *whole* run finishes at, every source term having an id there, every global
+  binding's value reading to itself there, the two environments coinciding, and the source
+  staying in the constructor fragment —
   and `unionsInv_step` carries it across a source command in five of its six cases: `.decl`,
   `.rule`, a top-level build (whose `joined` clause is trivial, `addTerm` writing only
   reflexive equations, and whose `reads` clause is the block's own read-back), a top-level
@@ -124,6 +123,12 @@ both are decided at the witness at the end of this file.
   `hvar` composition read off it, `unionsJoined_fire_satisfiable` is the residue's five
   hypotheses holding together, and `uRebuilt_unionsJoined` is the data clause at a source with
   a real equation.
+
+  **The environment clause is no longer part of that residue.** `envAligned_step` and
+  `execM_env` prove it standalone — the same six commands, carrying `Database.CtorState` and
+  nothing about equalities — so a consumer that needs only the alignment (the literal-value
+  clause of `execM_rebuildClosed`) no longer waits on `unionsJoined_fire`. `unionsInv_step`
+  discharges its own `env` field with it, which is what says the two proofs are one.
 
   **The invariant this replaces was false.** It asked every source *term* to read to itself
   (`Database.ReadsSelf`, kept as the record) and every source equation to have a direct `@UF`
@@ -3048,6 +3053,158 @@ theorem mem_addEq_eqs {db : Database} {a b : Term} {p : Term × Term}
       · exact Or.inr (Or.inr h'')
     · exact Or.inr (Or.inr h')
 
+/-! ##### Source-to-target environment alignment, standalone
+
+**The environments coincide, and nothing about the equalities is needed to say so.** The
+alignment used to be a field of `UnionsInv` and so was hostage to `unionsJoined_fire`; here it
+is its own induction, over the same six commands, carrying `Database.CtorState` and nothing
+else. What makes it cheap is that `encodeCmd` emits exactly one action that is not a `set` —
+the `letBind` a source `let` becomes — and that action's operand is the *source expression
+itself* (`encodeBuild_fst`), so the two runs bind the same variable to the same term:
+`Expr.eval_sigIndep` says an expression that evaluates under two signatures evaluates to one
+value, and the signature is the only thing the two states disagree about.
+
+Two consumers: `unionsInv_step` discharges its `env` clause with it, and the literal-value
+clause of `Encoding/Complete.lean`'s rebuild residue needs it to push a source
+`Action.union`'s refusal of a literal (`cmdStep_union_notLit`) onto the `@UF` entry the
+encoded block writes. -/
+
+/-- **One command keeps the environments aligned.** The five non-`let` cases move neither
+environment: a source `addTerm`/`addEq` leaves `env` alone, a `Cmd.rule`/`Cmd.decl` leaves it
+alone by `cmdStep_rule_fields`/`cmdStep_decl_fields`, a run and a saturate by
+`MergeClosure.envRules`, and the encoded block is `Cmd.ActionsAreSets` throughout. The `let`
+case is the one with content, and it is the read-back `FDatabase.execCmdM_letBind` performs. -/
+theorem envAligned_step {Q : Program} (hQ : Q.EncodeDomain) {c : Cmd} (hc : c ∈ Q)
+    {n i : Nat} {sd sd' : Database} {td td' : FDatabase}
+    (hstate : sd.CtorState) (hstep : CmdStep sd c sd')
+    (hblock : td.execProgramM (encodeCmd c n i).1 = some td')
+    (henv : td.env = sd.env) : td'.env = sd'.env := by
+  cases c with
+  | decl f dc =>
+      obtain ⟨-, hsenv⟩ := cmdStep_decl_fields hstate.sig (hQ.ctorsOnly _ hc) hstep
+      obtain rfl : td' = td := by
+        rw [show (encodeCmd (Cmd.decl f dc) n i).1 = [] from rfl, FDatabase.execProgramM,
+          Option.some.injEq] at hblock
+        exact hblock.symm
+      rw [henv, hsenv]
+  | rule r =>
+      obtain ⟨-, hsenv⟩ := cmdStep_rule_fields hstate.sig hstep
+      have hsets : ∀ c' ∈ (encodeCmd (Cmd.rule r) n i).1, c'.ActionsAreSets := by
+        intro c' hc'
+        have hc2 : c' ∈ [Cmd.rule (encodeRule i r n).1] := hc'
+        obtain rfl : c' = Cmd.rule (encodeRule i r n).1 := by simpa using hc2
+        trivial
+      rw [FDatabase.execProgramM_env hsets hblock, henv, hsenv]
+  | run R =>
+      have hsets : ∀ c' ∈ (encodeCmd (Cmd.run R) n i).1, c'.ActionsAreSets := by
+        intro c' hc'
+        have hc2 : c' ∈ [Cmd.run R, Cmd.saturate rebuildRuleset] := hc'
+        have hd : c' = Cmd.run R ∨ c' = Cmd.saturate rebuildRuleset := by simpa using hc2
+        rcases hd with rfl | rfl <;> trivial
+      rw [FDatabase.execProgramM_env hsets hblock, henv, cmdStep_env_of_run hstep]
+  | saturate R =>
+      have hsets : ∀ c' ∈ (encodeCmd (Cmd.saturate R) n i).1, c'.ActionsAreSets := by
+        intro c' hc'
+        have hc2 : c' ∈ [Cmd.saturate R, Cmd.saturate rebuildRuleset] := hc'
+        have hd : c' = Cmd.saturate R ∨ c' = Cmd.saturate rebuildRuleset := by simpa using hc2
+        rcases hd with rfl | rfl <;> trivial
+      rw [FDatabase.execProgramM_env hsets hblock, henv, cmdStep_env_of_saturate hstep]
+  | action a =>
+      have hev : evalAction sd a = some sd' := cmdStep_action_eq hstate.sig hstep
+      rcases evalAction_eq_some hev with
+        ⟨e, tS, rfl, htS, rfl⟩ | ⟨v, e, tS, rfl, htS, rfl⟩ |
+        ⟨e₁, e₂, t₁, t₂, rfl, -, -, -, rfl⟩ | ⟨f, args, out, as, vs, rfl, -, -, -⟩
+      · have hsets : ∀ c' ∈ (encodeCmd (Cmd.action (Action.expr e)) n i).1,
+            c'.ActionsAreSets := by
+          change ∀ c' ∈ (encodeBuild e n).2.1.map Cmd.action
+            ++ [Cmd.saturate rebuildRuleset], c'.ActionsAreSets
+          exact actionsAreSets_block (encodeBuild_isSet e n)
+        rw [FDatabase.execProgramM_env hsets hblock, henv]
+        rfl
+      · -- a top-level `let`: the one encoded action that is not a `set`
+        have hb1 : (encodeAction fiatE (Action.letBind v e) n).1
+            = (encodeBuild e n).2.1 ++ [Action.letBind v e] := by
+          change (encodeBuild e n).2.1 ++ [Action.letBind v (encodeBuild e n).1] = _
+          rw [encodeBuild_fst]
+        have hblk : (encodeCmd (Cmd.action (Action.letBind v e)) n i).1
+            = (encodeBuild e n).2.1.map Cmd.action
+              ++ [Cmd.action (Action.letBind v e), Cmd.saturate rebuildRuleset] := by
+          change (encodeAction fiatE (Action.letBind v e) n).1.map Cmd.action
+            ++ [Cmd.saturate rebuildRuleset] = _
+          rw [hb1]; simp
+        rw [hblk] at hblock
+        have htS2 : e.eval sd.sig td.env = some tS := by rw [henv]; exact htS
+        obtain ⟨td₁, hbuilds, hlet⟩ := FDatabase.execProgramM_append hblock
+        have hsig₁ : td₁.sig = td.sig :=
+          FDatabase.execProgramM_sig_of_noDecl
+            (by intro c' hc'; obtain ⟨b, -, rfl⟩ := List.mem_map.mp hc'; trivial) hbuilds
+        have henv₁ : td₁.env = td.env :=
+          FDatabase.execProgramM_env
+            (by intro c' hc'; obtain ⟨b, hb, rfl⟩ := List.mem_map.mp hc'
+                exact encodeBuild_isSet e n b hb) hbuilds
+        rw [FDatabase.execProgramM] at hlet
+        obtain ⟨td₂, hcmd, hsat⟩ := Option.bind_eq_some_iff.mp hlet
+        obtain ⟨tL, htL, henv₂, -, -⟩ := FDatabase.execCmdM_letBind hcmd
+        rw [hsig₁, henv₁] at htL
+        rw [Expr.eval_sigIndep e htL htS2] at henv₂
+        rw [FDatabase.execProgramM_env
+            (by intro c' hc'
+                have hc2 : c' ∈ [Cmd.saturate rebuildRuleset] := hc'
+                obtain rfl : c' = Cmd.saturate rebuildRuleset := by simpa using hc2
+                trivial) hsat, henv₂, henv₁, henv]
+      · have hsetsA : ∀ b ∈ (encodeAction fiatE (Action.union e₁ e₂) n).1, b.IsSet := by
+          have hb1 : (encodeAction fiatE (Action.union e₁ e₂) n).1
+              = (encodeBuild e₁ n).2.1 ++ (encodeBuild e₂ (encodeBuild e₁ n).2.2).2.1
+                ++ [Action.set ufName [maxE e₁ e₂] [minE e₁ e₂, fiatE]] := by
+            change (encodeBuild e₁ n).2.1 ++ (encodeBuild e₂ (encodeBuild e₁ n).2.2).2.1
+              ++ [Action.set ufName
+                  [maxE (encodeBuild e₁ n).1 (encodeBuild e₂ (encodeBuild e₁ n).2.2).1]
+                  [minE (encodeBuild e₁ n).1 (encodeBuild e₂ (encodeBuild e₁ n).2.2).1,
+                   fiatE]] = _
+            rw [encodeBuild_fst, encodeBuild_fst]
+          rw [hb1]
+          intro b hb
+          rcases List.mem_append.mp hb with hb' | hb'
+          · rcases List.mem_append.mp hb' with hb'' | hb''
+            · exact encodeBuild_isSet e₁ n b hb''
+            · exact encodeBuild_isSet e₂ _ b hb''
+          · obtain rfl : b = Action.set ufName [maxE e₁ e₂] [minE e₁ e₂, fiatE] := by
+              simpa using hb'
+            trivial
+        have hsets : ∀ c' ∈ (encodeCmd (Cmd.action (Action.union e₁ e₂)) n i).1,
+            c'.ActionsAreSets := by
+          change ∀ c' ∈ (encodeAction fiatE (Action.union e₁ e₂) n).1.map Cmd.action
+            ++ [Cmd.saturate rebuildRuleset], c'.ActionsAreSets
+          exact actionsAreSets_block hsetsA
+        rw [FDatabase.execProgramM_env hsets hblock, henv]
+        rfl
+      · exact (show False from hQ.noSet _ hc).elim
+
+/-- **The alignment across a whole source program**, one `envAligned_step` per command. -/
+theorem envAligned_of_programStep {Q : Program} (hQ : Q.EncodeDomain) :
+    ∀ (p : Program) {n i : Nat} {sd sd' : Database} {td td' : FDatabase},
+      (∀ c ∈ p, c ∈ Q) → sd.CtorState → ProgramStep sd p sd' →
+      td.execProgramM (encodeCmds p n i).1 = some td' → td.env = sd.env → td'.env = sd'.env := by
+  intro p
+  induction p with
+  | nil =>
+    intro n i sd sd' td td' _ _ hsrc hrun henv
+    obtain rfl := hsrc.nil_inv
+    have h0 : td.execProgramM [] = some td' := hrun
+    rw [FDatabase.execProgramM, Option.some.injEq] at h0
+    rw [← h0]; exact henv
+  | cons c cs ih =>
+    intro n i sd sd' td td' hsub hstate hsrc hrun henv
+    obtain ⟨sd₁, hstep, hrest⟩ := hsrc.cons_inv
+    have hcmds : (encodeCmds (c :: cs) n i).1
+        = (encodeCmd c n i).1
+          ++ (encodeCmds cs (encodeCmd c n i).2.1 (encodeCmd c n i).2.2).1 := rfl
+    rw [hcmds] at hrun
+    obtain ⟨td₁, hb, hafter⟩ := FDatabase.execProgramM_append hrun
+    exact ih (fun c' hc' => hsub c' (List.mem_cons_of_mem c hc'))
+      (hstep.ctorState hstate (hQ.ctorsOnly c (hsub c List.mem_cons_self))) hrest hafter
+      (envAligned_step hQ (hsub c List.mem_cons_self) hstate hstep hb henv)
+
 /-! ##### The one case that does not close -/
 
 /-- **The command induction's rule-firing case. Not proved.**
@@ -3117,53 +3274,32 @@ theorem unionsInv_step {Q : Program} (hQ : Q.EncodeDomain) {c : Cmd} (hc : c ∈
   have hstate' : sd'.CtorState := hstep.ctorState hinv.state (hQ.ctorsOnly c hc)
   obtain ⟨td', hblock, hafter⟩ := FDatabase.execProgramM_append hrun
   have hmono : ∀ t ∈ td'.terms, t ∈ D.terms := FDatabase.execProgramM_terms hafter
+  have henvOut : td'.env = sd'.env :=
+    envAligned_step hQ hc hinv.state hstep hblock hinv.env
   refine ⟨td', hblock, ?_⟩
   cases c with
   | decl f dc =>
       obtain ⟨heqs, henv⟩ := cmdStep_decl_fields hinv.state.sig (hQ.ctorsOnly _ hc) hstep
-      obtain rfl : td' = td := by
-        rw [show (encodeCmd (Cmd.decl f dc) n i).1 = [] from rfl, FDatabase.execProgramM,
-          Option.some.injEq] at hblock
-        exact hblock.symm
       have hsub : sd'.eqs ⊆ sd.eqs := fun p hp => by rw [heqs] at hp; exact hp
       have hterms : sd'.terms = sd.terms := Database.terms_eq_of_eqs_eq heqs
       refine ⟨fun a b hab hne => hinv.joined a b (hsub hab) hne,
-        fun t ht => hinv.reads t (by rw [hterms] at ht; exact ht), ?_, ?_, hstate'⟩
-      · rw [henv]; exact hinv.envReads
-      · rw [hinv.env, henv]
+        fun t ht => hinv.reads t (by rw [hterms] at ht; exact ht), ?_, henvOut, hstate'⟩
+      rw [henv]; exact hinv.envReads
   | rule r =>
       obtain ⟨heqs, henv⟩ := cmdStep_rule_fields hinv.state.sig hstep
-      have hsets : ∀ c' ∈ (encodeCmd (Cmd.rule r) n i).1, c'.ActionsAreSets := by
-        intro c' hc'
-        have hc2 : c' ∈ [Cmd.rule (encodeRule i r n).1] := hc'
-        obtain rfl : c' = Cmd.rule (encodeRule i r n).1 := by simpa using hc2
-        trivial
       have hsub : sd'.eqs ⊆ sd.eqs := fun p hp => by rw [heqs] at hp; exact hp
       have hterms : sd'.terms = sd.terms := Database.terms_eq_of_eqs_eq heqs
       refine ⟨fun a b hab hne => hinv.joined a b (hsub hab) hne,
-        fun t ht => hinv.reads t (by rw [hterms] at ht; exact ht), ?_, ?_, hstate'⟩
-      · rw [henv]; exact hinv.envReads
-      · rw [FDatabase.execProgramM_env hsets hblock, hinv.env, henv]
+        fun t ht => hinv.reads t (by rw [hterms] at ht; exact ht), ?_, henvOut, hstate'⟩
+      rw [henv]; exact hinv.envReads
   | run R =>
       have hjoin := unionsJoined_fire (Or.inl rfl) hstep hblock hmono hinv
-      have hsets : ∀ c' ∈ (encodeCmd (Cmd.run R) n i).1, c'.ActionsAreSets := by
-        intro c' hc'
-        have hc2 : c' ∈ [Cmd.run R, Cmd.saturate rebuildRuleset] := hc'
-        have hd : c' = Cmd.run R ∨ c' = Cmd.saturate rebuildRuleset := by simpa using hc2
-        rcases hd with rfl | rfl <;> trivial
-      refine ⟨hjoin.1, hjoin.2, ?_, ?_, hstate'⟩
-      · rw [cmdStep_env_of_run hstep]; exact hinv.envReads
-      · rw [FDatabase.execProgramM_env hsets hblock, hinv.env, cmdStep_env_of_run hstep]
+      refine ⟨hjoin.1, hjoin.2, ?_, henvOut, hstate'⟩
+      rw [cmdStep_env_of_run hstep]; exact hinv.envReads
   | saturate R =>
       have hjoin := unionsJoined_fire (Or.inr rfl) hstep hblock hmono hinv
-      have hsets : ∀ c' ∈ (encodeCmd (Cmd.saturate R) n i).1, c'.ActionsAreSets := by
-        intro c' hc'
-        have hc2 : c' ∈ [Cmd.saturate R, Cmd.saturate rebuildRuleset] := hc'
-        have hd : c' = Cmd.saturate R ∨ c' = Cmd.saturate rebuildRuleset := by simpa using hc2
-        rcases hd with rfl | rfl <;> trivial
-      refine ⟨hjoin.1, hjoin.2, ?_, ?_, hstate'⟩
-      · rw [cmdStep_env_of_saturate hstep]; exact hinv.envReads
-      · rw [FDatabase.execProgramM_env hsets hblock, hinv.env, cmdStep_env_of_saturate hstep]
+      refine ⟨hjoin.1, hjoin.2, ?_, henvOut, hstate'⟩
+      rw [cmdStep_env_of_saturate hstep]; exact hinv.envReads
   | action a =>
       have hev : evalAction sd a = some sd' := cmdStep_action_eq hinv.state.sig hstep
       rcases evalAction_eq_some hev with
@@ -3174,11 +3310,6 @@ theorem unionsInv_step {Q : Program} (hQ : Q.EncodeDomain) {c : Cmd} (hc : c ∈
         -- block's own read-back, at every subterm `addTerm` recorded.
         have hprim : ∀ g ∈ e.fns, Prim.ofName g = none :=
           noPrim_of_mem_ctors hQ (fun p hp => mem_program_ctors hc hp)
-        have hsets : ∀ c' ∈ (encodeCmd (Cmd.action (Action.expr e)) n i).1,
-            c'.ActionsAreSets := by
-          change ∀ c' ∈ (encodeBuild e n).2.1.map Cmd.action
-            ++ [Cmd.saturate rebuildRuleset], c'.ActionsAreSets
-          exact actionsAreSets_block (encodeBuild_isSet e n)
         have hblk : (encodeCmd (Cmd.action (Action.expr e)) n i).1
             = (encodeBuild e n).2.1.map Cmd.action ++ [Cmd.saturate rebuildRuleset] := rfl
         have hrun' : td.execProgramM ((encodeBuild e n).2.1.map Cmd.action
@@ -3191,7 +3322,7 @@ theorem unionsInv_step {Q : Program} (hQ : Q.EncodeDomain) {c : Cmd} (hc : c ∈
           rw [htT, Expr.eval_sigIndep e htT htS2]
         have hall : ∀ s ∈ tS.subterms, ViewRepr D.toDatabase s s :=
           viewReprAll_self_of_execProgramM e n hrun' hprim (fun w _ u hu => hinv.hvar hu) htT2
-        refine ⟨?_, ?_, ?_, ?_, hstate'⟩
+        refine ⟨?_, ?_, hinv.envReads, henvOut, hstate'⟩
         · intro x y hxy hne
           rcases eq_of_mem_addTerm_eqs hxy with hxy' | hxy'
           · exact hinv.joined x y hxy' hne
@@ -3200,8 +3331,6 @@ theorem unionsInv_step {Q : Program} (hQ : Q.EncodeDomain) {c : Cmd} (hc : c ∈
           rcases Database.addTerm_terms ▸ ht with ht' | ht'
           · exact hinv.reads t ht'
           · exact ⟨t, hall t ht'⟩
-        · exact hinv.envReads
-        · rw [FDatabase.execProgramM_env hsets hblock]; exact hinv.env
       · -- a top-level let
         have hprim : ∀ g ∈ e.fns, Prim.ofName g = none :=
           noPrim_of_mem_ctors hQ (fun p hp => mem_program_ctors hc hp)
@@ -3226,27 +3355,7 @@ theorem unionsInv_step {Q : Program} (hQ : Q.EncodeDomain) {c : Cmd} (hc : c ∈
           rw [htT, Expr.eval_sigIndep e htT htS2]
         have hall : ∀ s ∈ tS.subterms, ViewRepr D.toDatabase s s :=
           viewReprAll_self_of_execProgramM e n hrun' hprim (fun w _ u hu => hinv.hvar hu) htT2
-        rw [hblk] at hblock
-        obtain ⟨td₁, hbuilds, hlet⟩ := FDatabase.execProgramM_append hblock
-        have hsig₁ : td₁.sig = td.sig :=
-          FDatabase.execProgramM_sig_of_noDecl
-            (by intro c' hc'; obtain ⟨b, -, rfl⟩ := List.mem_map.mp hc'; trivial) hbuilds
-        have henv₁ : td₁.env = td.env :=
-          FDatabase.execProgramM_env
-            (by intro c' hc'; obtain ⟨b, hb, rfl⟩ := List.mem_map.mp hc'
-                exact encodeBuild_isSet e n b hb) hbuilds
-        rw [FDatabase.execProgramM] at hlet
-        obtain ⟨td₂, hcmd, hsat⟩ := Option.bind_eq_some_iff.mp hlet
-        obtain ⟨tL, htL, henv₂, -, -⟩ := FDatabase.execCmdM_letBind hcmd
-        rw [hsig₁, henv₁] at htL
-        rw [Expr.eval_sigIndep e htL htS2] at henv₂
-        have henv' : td'.env = (v, tS) :: td.env := by
-          rw [FDatabase.execProgramM_env
-              (by intro c' hc'
-                  have hc2 : c' ∈ [Cmd.saturate rebuildRuleset] := hc'
-                  obtain rfl : c' = Cmd.saturate rebuildRuleset := by simpa using hc2
-                  trivial) hsat, henv₂, henv₁]
-        refine ⟨?_, ?_, ?_, ?_, hstate'⟩
+        refine ⟨?_, ?_, ?_, henvOut, hstate'⟩
         · intro x y hxy hne
           rcases eq_of_mem_addTerm_eqs (hxy : (x, y) ∈ (sd.addTerm tS).eqs) with hxy' | hxy'
           · exact hinv.joined x y hxy' hne
@@ -3260,7 +3369,6 @@ theorem unionsInv_step {Q : Program} (hQ : Q.EncodeDomain) {c : Cmd} (hc : c ∈
           rcases List.mem_cons.mp hb2 with rfl | hb'
           · exact hall s hs
           · exact hinv.envReads b hb' s hs
-        · rw [henv', hinv.env]
       · -- a top-level union
         have hprim₁ : ∀ g ∈ e₁.fns, Prim.ofName g = none :=
           noPrim_of_mem_ctors hQ (fun p hp => mem_program_ctors hc (List.mem_append_left _ hp))
@@ -3285,11 +3393,6 @@ theorem unionsInv_step {Q : Program} (hQ : Q.EncodeDomain) {c : Cmd} (hc : c ∈
           · obtain rfl : b = Action.set ufName [maxE e₁ e₂] [minE e₁ e₂, fiatE] := by
               simpa using hb'
             trivial
-        have hsets : ∀ c' ∈ (encodeCmd (Cmd.action (Action.union e₁ e₂)) n i).1,
-            c'.ActionsAreSets := by
-          change ∀ c' ∈ (encodeAction fiatE (Action.union e₁ e₂) n).1.map Cmd.action
-            ++ [Cmd.saturate rebuildRuleset], c'.ActionsAreSets
-          exact actionsAreSets_block hsetsA
         have hblk : (encodeCmd (Cmd.action (Action.union e₁ e₂)) n i).1
             = (encodeBuild e₁ n).2.1.map Cmd.action
               ++ ((encodeBuild e₂ (encodeBuild e₁ n).2.2).2.1.map Cmd.action
@@ -3345,7 +3448,7 @@ theorem unionsInv_step {Q : Program} (hQ : Q.EncodeDomain) {c : Cmd} (hc : c ∈
             (∃ pf, D.toDatabase.Out ufName [t₂] [t₁, pf]) :=
           out_uf_of_execProgramM hrest₂ (by rw [hsig₂, hsig₁, henv₂, henv₁]; exact htT1')
             (by rw [hsig₂, henv₂]; exact htT2')
-        refine ⟨?_, ?_, ?_, ?_, hstate'⟩
+        refine ⟨?_, ?_, hinv.envReads, henvOut, hstate'⟩
         · intro x y hxy hne
           rcases mem_addEq_eqs hxy with hxy' | hxy' | hxy'
           · obtain ⟨rfl, rfl⟩ : x = t₁ ∧ y = t₂ := by
@@ -3366,8 +3469,6 @@ theorem unionsInv_step {Q : Program} (hQ : Q.EncodeDomain) {c : Cmd} (hc : c ∈
             · exact hinv.reads t ht''
             · exact ⟨t, hall₁ t ht''⟩
           · exact ⟨t, hall₂ t ht'⟩
-        · exact hinv.envReads
-        · rw [FDatabase.execProgramM_env hsets hblock]; exact hinv.env
       · exact (show False from hQ.noSet _ hc).elim
 
 /-! ##### Every command
@@ -3464,6 +3565,25 @@ theorem actionsAreSets_encodePrelude (P : Program) :
         rcases h₄ with rfl | rfl | rfl <;> trivial
   · obtain ⟨r, -, rfl⟩ := List.mem_map.mp h
     trivial
+
+/-- **The environments coincide at the state `execM` returned.** Standalone: the only thing
+this shares with `UnionsInv` is the command induction's shape, and neither
+`unionsJoined_fire` nor any clause about equalities is spent. `encode P` is the prelude and
+then `encodeCmds P`; the prelude runs no action (`actionsAreSets_encodePrelude`), so it leaves
+the empty environment the source starts with, and `envAligned_of_programStep` carries the rest.
+
+`rbProgram_execM_env` is it non-vacuously, at a source a program reaches whose environment
+is *not* empty. -/
+theorem execM_env {P : Program} {src : Database} {tgt : FDatabase}
+    (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
+    (htgt : execM (encode P) = some tgt) : tgt.env = src.env := by
+  rw [execM, encode] at htgt
+  obtain ⟨td₀, hprel, hcmds⟩ := FDatabase.execProgramM_append htgt
+  have henv₀ : td₀.env = Database.empty.env := by
+    rw [FDatabase.execProgramM_env (actionsAreSets_encodePrelude P) hprel]
+    rfl
+  exact envAligned_of_programStep hdom P (fun c hc => hc) Database.CtorState.empty hsrc
+    hcmds henv₀
 
 /-- **The invariant at the state `execM` returned**, which is what `execM_unionsJoined` states.
 Both `td` and `D` are the final state: the induction started at the empty source database and
@@ -3576,6 +3696,45 @@ theorem rbProgram_programStep : ProgramStep Database.empty rbProgram rbSrc := by
   change cmdEffect _ (.action (.expr (.app "W" [.var "x"]))) = some rbSrc
   simp only [cmdEffect, evalAction, Expr.eval, Expr.evalList, rbSrc]
   rfl
+
+/-- **`rbProgram` is in the encoder's domain.** It declares two constructors, holds no rule,
+writes no table and names nothing generated, so eight of the nine clauses are decidable and
+`queryEncodable` is vacuous at every command. -/
+theorem rbProgram_encodeDomain : rbProgram.EncodeDomain where
+  ctorsOnly := by
+    intro c hc
+    simp only [rbProgram, List.mem_cons] at hc
+    rcases hc with rfl | rfl | rfl | rfl | h
+    · exact rfl
+    · exact rfl
+    · trivial
+    · trivial
+    · exact absurd h (by simp)
+  setLegal := by decide
+  noPrim := by decide
+  -- `String.isPrefixOf` does not reduce under `decide`'s evaluator; the kernel's does.
+  noAt := by decide +kernel
+  queryEncodable := by
+    intro c hc
+    simp only [rbProgram, List.mem_cons] at hc
+    rcases hc with rfl | rfl | rfl | rfl | h
+    · trivial
+    · trivial
+    · trivial
+    · trivial
+    · exact absurd h (by simp)
+  noLitUnion := Or.inl (by decide)
+  headsDeclared := by decide
+  aritiesAgree := by decide
+  headsScoped := by decide
+
+/-- **The environment alignment, non-vacuously.** The source state `rbProgram` reaches binds
+`x`, so what `execM_env` returns here is a *non-empty* environment at both ends rather than the
+`[]` the prelude leaves. The run is a hypothesis for the reason every target-side statement in
+this file takes one: the kernel does not reduce `execM` on an encoded program. -/
+theorem rbProgram_execM_env {tgt : FDatabase} (htgt : execM (encode rbProgram) = some tgt) :
+    tgt.env = rbEnv ∧ rbEnv ≠ [] :=
+  ⟨execM_env rbProgram_encodeDomain rbProgram_programStep htgt, by simp [rbEnv]⟩
 
 /-- **`UnionsInv` holds, with the clause that does work doing it.** `envReads` is asked at the
 one binding a top-level `let` made, and answered by the *earlier* build's own reading — which is

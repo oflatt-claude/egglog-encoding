@@ -6887,8 +6887,10 @@ runs at `@UF`'s own table as well as at a view's, so "the e-class column is alwa
 `.app f es`" covers one of its two instances and not the other. So the residual obligation is a
 run-wide invariant with two clauses — no `@UF` row records a literal value, and no view row
 records a literal e-class column — which are mutually recursive across `mergeBody` and the
-e-class rebuild rule, plus the source-to-target environment alignment `UnionsInv.env` carries
-and which this proof may not borrow, since `unionsJoined_fire` is still open.
+e-class rebuild rule. The source-to-target environment alignment the exclusion needs is no
+longer part of that: `execM_env` is it standalone — its own command induction, carrying
+`Database.CtorState` and nothing about equalities — so this residue no longer waits on
+`unionsJoined_fire`.
 
 **And what `edged` and `column` still owe is one mechanism, the column rules at the fixpoint.**
 With the identification in hand every clause answers with the **`@UF` row root** of the id it is
