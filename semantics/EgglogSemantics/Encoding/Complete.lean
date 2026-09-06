@@ -7617,34 +7617,21 @@ theorem mem_matchQuery_of_rows {d : FDatabase} (hcv : d.RowColumnsValued) {q : Q
 /-! ### The reading through rows
 
 `ViewRepr` ends in `Database.Out`, which reads entry **terms**; an encoded rule reads
-`FDatabase.rows`. The two are not the same reading, and this is the one the atoms above want. -/
-
-mutual
-
-/-- **The reading through live rows**: the parent's key columns are exactly the ids its
-children's own rows record. `ViewRepr.of_rowRepr` is the check that this is a strengthening of
-`UnionsInv.readsAt` rather than a different claim. -/
-inductive RowRepr (d : FDatabase) : Term → Term → Prop where
-  | lit {l : Lit} : RowRepr d (.lit l) (.lit l)
-  | app {f : FnName} {as es : List Term} {e pf : Term} :
-      RowReprList d as es → (⟨viewName f, es, [e, pf]⟩ : Row) ∈ d.rows →
-      RowRepr d (.app f as) e
-
-/-- `RowRepr` over an argument list. -/
-inductive RowReprList (d : FDatabase) : List Term → List Term → Prop where
-  | nil : RowReprList d [] []
-  | cons {a e : Term} {as es : List Term} :
-      RowRepr d a e → RowReprList d as es → RowReprList d (a :: as) (e :: es)
-
-end
+`FDatabase.rows`. The two are not the same reading, and this is the one the atoms above
+want. `Egglog.RowRepr` is stated in `Encoding/Correspond.lean`, where `Egglog.UnionsFire`
+can name it; what is checked here is that it is a strengthening of `UnionsInv.readsAt`. -/
 
 mutual
 
 /-- **A row reading is an entry reading.** `mem_terms_of_indexOk` is the row's own entry term
-and `FDatabase.EqsRefl` makes `Database.Out` read it at the key it sits at. The converse is what
-the residue is missing, and it does not hold: `FDatabase.EntryRowsUF` answers an entry with a
-row whose e-class column is only `Database.UFReach`-reachable from the entry's, while a parent
-read is keyed on its children's columns on the nose. -/
+and `FDatabase.EqsRefl` makes `Database.Out` read it at the key it sits at.
+`ViewRepr.of_rowRepr_of_indexOk` is the same reduction off `FDatabase.IndexOk` alone, which is
+the form `RowMech` spends.
+
+The converse does not hold at the same ids: `FDatabase.EntryRowsUF` answers an entry with a row
+whose e-class column is only `Database.UFReach`-reachable from the entry's, while a parent read
+is keyed on its children's columns on the nose. It holds at the pointwise `@UF` row **root**,
+which is `encReached_rowRepr_of_viewRepr`. -/
 theorem ViewRepr.of_rowRepr {d : FDatabase} (hr : d.EqsRefl) (hidx : d.IndexOk)
     (hcv : d.RowColumnsValued) (hmg : ∀ g : FnName, d.sig.mergeOf (viewName g) ≠ none) :
     ∀ {t e : Term}, RowRepr d t e → ViewRepr d.toDatabase t e
@@ -7802,33 +7789,51 @@ pair. `ncIdSubst` is that substitution at the instance: the source rule fired at
 the encoded one at the id `(A)`, because `mergeResult` keeps `ordering-min` and the `@FView` row
 sits at the leader.
 
-**What is missing is a `rows` reading, and it is `RowRepr`.** `UnionsInv.readsAt` is a `terms`
-fact — `ViewRepr` ends in `Database.Out` — while every atom above wants a live row.
-`ViewRepr.of_rowRepr` is the check that `RowRepr` is a strengthening of `readsAt` and not a
-different claim; `ncTgt_rowRepr_FB` is it holding at the term the source firing built, over the
-row `(B)`'s own entry was re-keyed to. The converse does not hold: `FDatabase.EntryRowsUF`
-(proved, `execM_entryRowsUF`) answers an entry with a row whose e-class column is only
-`Database.UFReach`-reachable from the entry's, and a parent read is keyed on its children's
-columns **on the nose** — there is no slack, because an encoded target asserts nothing
-(`execM_encode_eqsRefl`) and so `patternHolds`' congruence is the identity. So neither
-`execM_entryRowsUF` nor `execM_viewRowsRooted` — which roots a row's *value* column, not its
-key — converts `readsAt` into `RowRepr`.
+**The `rows` reading is no longer missing.** `UnionsInv.readsAt` is a `terms` fact — `ViewRepr`
+ends in `Database.Out` — while every atom above wants a live row, and `RowRepr` is that reading.
+It is not the same claim at the same ids: `FDatabase.EntryRowsUF` (proved, `execM_entryRowsUF`)
+answers an entry with a row whose e-class column is only `Database.UFReach`-reachable from the
+entry's, and a parent read is keyed on its children's columns **on the nose** — there is no
+slack, because an encoded target asserts nothing (`execM_encode_eqsRefl`) and so `patternHolds`'
+congruence is the identity.
 
-**And carrying `RowRepr` on the invariant re-couples with `execM_rebuildClosed`.** A block's
-trailing `Cmd.saturate rebuildRuleset` can move a *child*'s row: two `set`s at one view key
-collide, the merge keeps `ordering-min`, and the child's e-class column drops to the new leader.
-The parent's row still sits at the **old** key, and the row at the new key is what the **column**
-rebuild rules write.
+**It is the same claim at the pointwise `@UF` row root, and that was the choice of tuple.**
+`encReached_viewRow_at_root` answers the entry with a live row whose e-class column *is* the
+root of the id the entry recorded; `encReached_exists_rootList` names each key column's root;
+and `encReached_viewRow_of_rowReachList` walks the whole key onto that rooted tuple in one go,
+at the very e-class column the row started with. The child column is a root because it is the
+*value* column of a live view row, which is the instance `FDatabase.ViewRowsRooted` supplies —
+and the one an arbitrary reading does not, which is what made this a choice rather than a
+lemma. `encReached_rowRepr_of_viewRepr` is the induction and `encStep_exists_rowRepr` the form
+this residue is handed.
 
-**That mechanism is now landed**, and it is what this residue was waiting on:
-`execM_viewRow_of_rowReachList` moves a live view row's key onto any tuple its columns reach
-along live `@UF` rows, at the very e-class column the row started with. It is stated for a key
-tuple and not for an e-class column, which is the shape asked for. What it leaves this residue
-is the *choice* of tuple: the walk follows `FDatabase.UFRowReach`, so the tuple it can be pointed
-at is the pointwise-**root** one, and re-keying the parent's row onto the child's new column is
-that instance exactly when the child's new column is a root — which `execM_viewRowsRooted` gives
-for a child column that a view row's *value* column supplied, and does not give for one an
-arbitrary reading supplied. That is what is left, and it is no longer the fixpoint mechanism.
+**Stated one block short of the run's end, which is where the firing happens.**
+`execM_rebuildClosed` is the obvious supplier and does not typecheck here: it takes
+`execM (encode P) = some tgt` and `UnionsFire` quantifies over the state the *next* encoded
+block starts at. That is the hazard `unionsFireClaim_false` already recorded — a clause at a
+state the encoded rule does not run at — so the mechanism was restated at the state that does
+run it rather than the hypothesis being bent to reach it. `EncReached` is the target-side
+provenance, one whole `encodeCmd` block at a time (whole, because `FDatabase.ViewRowsRooted` is
+established by the `Cmd.saturate rebuildRuleset` a block ends with and is false in the middle of
+one); `EncStep` is the same chain with the source run alongside, which is what pays the two
+clauses `EncReached` does not carry — a literal's rootness (`encStep_ufLitRoots`) and a view
+entry's key width (`encStep_ctorsIn`), both through `FDatabase.SoundTerms`. `encStep_rowMech`
+is `RowMech` discharged, and `unionsInv_step` spends it.
+
+**The provenance itself is not a hypothesis of `UnionsFire`, and must not become one.**
+`unionsJoined_fire_satisfiable` exhibits the hypotheses at `rbState2`, a state written by
+`execActions` rather than by `encode`, and the kernel cannot run an encoded program — so
+`EncReached rbProgram rbState2` is not available and an `EncReached` hypothesis would empty the
+non-vacuity check. What `UnionsFire` takes is therefore the two *derived* clauses, `RowRepr`
+at `td` and the read-back at `td'`, both of which the witness state really satisfies
+(`rbState2_exists_rowRepr`, `rbState2_viewRepr_of_rowRepr`) and at positive arity.
+
+**What is left is the firing.** The route is the one worked at `ncTgt`: rows → `patternHolds` →
+`mem_matchQuery_of_rows` → the block evaluates → the head's writes read back, with `union`
+giving the `@UF` edge and `build`/`set` the id. What it needs and this file does not yet have is
+the *forward* half of `Encoding/Match.lean` — a source `ValidQuerySubst` turned into a match of
+the emitted query, over `encodeQuery`'s flattening and its fresh-variable supply. `ncIdSubst`
+is that substitution at one instance; the general construction is not written.
 
 **A valid substitution is still not a firing.** `RuleResults` is a substitution *and* a block
 that evaluates, which is the falsity `mem_terms_of_ruleFired`/`mem_eqs_of_ruleFired` already
@@ -8350,6 +8355,550 @@ theorem execM_ufLitRoots {P : Program} {src : Database} {tgt : FDatabase}
     (by rw [(execM_encode_encBase hdom hdom.aritiesAgree' htgt).sig]
         exact encodeSig_mergeOf_ufName hdom) l
 
+/-! ### The mechanism at a state the run passes through
+
+Everything above is stated at `execM (encode P) = some tgt`, and the residue's firing happens
+one block short of that — at the state the *next* encoded block starts at, which is what
+`Egglog.UnionsFire` quantifies over. The generalisation is not a different argument: each of
+these is already a block induction, and `EncReached` is exactly the provenance those inductions
+consume, one whole `encodeCmd` block at a time.
+
+**What does not generalise for free is the source side.** `execM_ufLitRoots` and
+`execM_ctorsIn_of_mem_terms` are the two facts the *source run* pays for, through
+`execM_soundTerms`, and a reached state does not carry them: it knows nothing of a source. They
+are hypotheses of this family, named where they are spent, and `EncStep` — the same chain with
+the source run alongside — is what pays them, in the section below. -/
+
+/-- **A run's own states are reached ones**, block by block. -/
+theorem encReached_encodeCmds {P : Program} :
+    ∀ (p : Program), (∀ c ∈ p, c ∈ P) → ∀ (n i : Nat) {d D : FDatabase},
+      EncReached P d → d.execProgramM (encodeCmds p n i).1 = some D → EncReached P D := by
+  intro p
+  induction p with
+  | nil =>
+    intro _ n i d D h hs
+    rw [show (encodeCmds ([] : Program) n i).1 = ([] : Program) from rfl,
+      FDatabase.execProgramM, Option.some.injEq] at hs
+    exact hs ▸ h
+  | cons c cs ih =>
+    intro hp n i d D h hs
+    rw [encodeCmds_cons_fst] at hs
+    obtain ⟨d₁, h₁, h₂⟩ := FDatabase.execProgramM_append hs
+    exact ih (fun c' hc' => hp c' (List.mem_cons_of_mem c hc')) _ _
+      (.block h (hp c List.mem_cons_self) h₁) h₂
+
+@[inherit_doc encReached_encodeCmds]
+theorem execM_encReached {P : Program} {tgt : FDatabase}
+    (htgt : execM (encode P) = some tgt) : EncReached P tgt := by
+  rw [execM, encode] at htgt
+  obtain ⟨d₀, hprel, hcmds⟩ := FDatabase.execProgramM_append htgt
+  exact encReached_encodeCmds P (fun _ hc => hc) 0 0 (.prelude hprel) hcmds
+
+/-- **The structural bundle at every reached state**: the prelude's own instance, carried one
+block at a time by `rebuildBase_encodeCmd`. -/
+theorem encReached_rebuildBase {P : Program} (hdom : P.EncodeDomain) {d : FDatabase}
+    (h : EncReached P d) : d.RebuildBase P := by
+  induction h with
+  | prelude hprel =>
+    have hb₀ := (encOk_preludeState hdom hdom.aritiesAgree' hprel).base
+    have hdata := execProgramM_data_of_declOrRule (declOrRule_encodePrelude P) hprel
+    refine ⟨hb₀, ⟨fun t ht => ?_, fun b hb => ?_⟩, ?_⟩
+    · rw [hdata.1, show FDatabase.empty.terms = ([] : List Term) from rfl] at ht
+      exact absurd ht (by simp)
+    · rw [hdata.2.2.2, show FDatabase.empty.env = ([] : Env) from rfl] at hb
+      exact absurd hb (by simp)
+    · refine FDatabase.ufRowsDescend_iff.mpr fun a b pf hmem => ?_
+      rw [hdata.2.1, show FDatabase.empty.rows = ([] : List Row) from rfl] at hmem
+      exact absurd hmem (by simp)
+  | block _ hc hb ih => exact rebuildBase_encodeCmd hdom hc (fun _ hc' => hc') ih hb
+
+@[inherit_doc encReached_rebuildBase]
+theorem encReached_encBase {P : Program} (hdom : P.EncodeDomain) {d : FDatabase}
+    (h : EncReached P d) : d.EncBase P (encodeSig P) := (encReached_rebuildBase hdom h).base
+
+@[inherit_doc encReached_rebuildBase]
+theorem encReached_eqsRefl {P : Program} (hdom : P.EncodeDomain) {d : FDatabase}
+    (h : EncReached P d) : d.EqsRefl := (encReached_encBase hdom h).eqsRefl
+
+@[inherit_doc encReached_rebuildBase]
+theorem encReached_rowColumnsValued {P : Program} (hdom : P.EncodeDomain) {d : FDatabase}
+    (h : EncReached P d) : d.RowColumnsValued := (encReached_rebuildBase hdom h).rowColumnsValued
+
+@[inherit_doc encReached_rebuildBase]
+theorem encReached_ufRowsDescend {P : Program} (hdom : P.EncodeDomain) {d : FDatabase}
+    (h : EncReached P d) : d.UFRowsDescend := (encReached_rebuildBase hdom h).descend
+
+@[inherit_doc encReached_rebuildBase]
+theorem encReached_exists_ufRowRoot {P : Program} (hdom : P.EncodeDomain) {d : FDatabase}
+    (h : EncReached P d) (a : Term) : ∃ r, d.UFRowReach a r ∧ d.UFRowRoot r :=
+  FDatabase.exists_ufRowRoot (encReached_ufRowsDescend hdom h) a
+
+/-- **The forest at every reached state.** -/
+theorem encReached_ufRowsForest {P : Program} (hdom : P.EncodeDomain)
+    (hsy : (encodeSig P).IsCtor symName) (htr : (encodeSig P).IsCtor transName)
+    {d : FDatabase} (h : EncReached P d) : d.UFRowsForest := by
+  induction h with
+  | prelude hprel =>
+    have hrows := (execProgramM_data_of_declOrRule (declOrRule_encodePrelude P) hprel).2.1
+    intro a b c hb _
+    obtain ⟨pf, hmem⟩ := hb.1
+    rw [hrows, show FDatabase.empty.rows = ([] : List Row) from rfl] at hmem
+    exact absurd hmem (by simp)
+  | block hr hc hb ih =>
+    exact FDatabase.EncBase.execProgramM_ufRowsForest (encodeSig_ufName hdom) hsy htr
+      (fun c' hc' => rulesEncodedOk_encodeCmd hc _ _ c' hc')
+      (fun c' hc' => encodeCmd_unionFree _ _ _ c' hc')
+      (fun c' hc' => noDecl_encodeCmd _ _ _ c' hc')
+      (fun c' hc' => encodedWriteLegal hdom hdom.aritiesAgree' _ hc _ _ c' hc')
+      (fun c' hc' => ufWriteOk_encodeCmd _ _ _ c' hc')
+      (fun c' hc' => noAtLet_encodeCmd hdom _ hc _ _ c' hc')
+      (encReached_rebuildBase hdom hr).base (encReached_rebuildBase hdom hr).descend ih hb
+
+/-- **The bridge at every reached state.** -/
+theorem encReached_entryRowsUF {P : Program} (hdom : P.EncodeDomain) {d : FDatabase}
+    (h : EncReached P d) : d.EntryRowsUF := by
+  induction h with
+  | prelude hprel =>
+    have hterms := (execProgramM_data_of_declOrRule (declOrRule_encodePrelude P) hprel).1
+    intro f dc hdc body res hm as x pf hlen hmem
+    rw [hterms, show FDatabase.empty.terms = ([] : List Term) from rfl] at hmem
+    exact absurd hmem (by simp)
+  | block hr hc hb ih =>
+    exact FDatabase.EncBase.execProgramM_entryRowsUF hdom
+      (fun c' hc' => rulesEncodedOk_encodeCmd hc _ _ c' hc')
+      (fun c' hc' => encodeCmd_unionFree _ _ _ c' hc')
+      (fun c' hc' => noDecl_encodeCmd _ _ _ c' hc')
+      (fun c' hc' => encodedWriteLegal hdom hdom.aritiesAgree' _ hc _ _ c' hc')
+      (fun c' hc' => entryWriteOk_encodeCmd hdom _ hc _ _ c' hc')
+      (fun c' hc' => noAtLet_encodeCmd hdom _ hc _ _ c' hc')
+      (encReached_rebuildBase hdom hr).base ih hb
+
+/-- **Entry-term descent at every reached state.** -/
+theorem encReached_ufTermsDescend {P : Program} (hdom : P.EncodeDomain) {d : FDatabase}
+    (h : EncReached P d) : d.UFTermsDescend := by
+  induction h with
+  | prelude hprel =>
+    have hterms := (execProgramM_data_of_declOrRule (declOrRule_encodePrelude P) hprel).1
+    refine FDatabase.ufTermsDescend_iff.mpr fun a b pf hmem => ?_
+    rw [hterms, show FDatabase.empty.terms = ([] : List Term) from rfl] at hmem
+    exact absurd hmem (by simp)
+  | block hr hc hb ih =>
+    exact FDatabase.EncBase.execProgramM_ufTermsDescend hdom
+      (fun c' hc' => rulesEncodedOk_encodeCmd hc _ _ c' hc')
+      (fun c' hc' => encodeCmd_unionFree _ _ _ c' hc')
+      (fun c' hc' => noDecl_encodeCmd _ _ _ c' hc')
+      (fun c' hc' => encodedWriteLegal hdom hdom.aritiesAgree' _ hc _ _ c' hc')
+      (fun c' hc' => ufWriteOk_encodeCmd _ _ _ c' hc')
+      (fun c' hc' => entryWriteOk_encodeCmd hdom _ hc _ _ c' hc')
+      (fun c' hc' => noAtLet_encodeCmd hdom _ hc _ _ c' hc')
+      (encReached_rebuildBase hdom hr).base (encReached_rebuildBase hdom hr).descend ih hb
+
+/-- **The identification at every reached state**: entry reachability and row reachability land
+on one `@UF` row root. -/
+theorem encReached_ufRowRoot_of_ufReach {P : Program} (hdom : P.EncodeDomain)
+    (hsy : (encodeSig P).IsCtor symName) (htr : (encodeSig P).IsCtor transName)
+    {d : FDatabase} (h : EncReached P d) {a b : Term} (hreach : d.toDatabase.UFReach a b) :
+    ∀ r s, d.UFRowReach a r → d.UFRowRoot r → d.UFRowReach b s → d.UFRowRoot s → r = s :=
+  FDatabase.ufRowRoot_of_ufReach (encReached_eqsRefl hdom h) (encReached_entryRowsUF hdom h)
+    (by rw [(encReached_encBase hdom h).sig]; exact encodeSig_ufName hdom)
+    (encReached_ufRowsDescend hdom h) (encReached_ufRowsForest hdom hsy htr h)
+    (encReached_ufTermsDescend hdom h) hreach
+
+/-- **The root is unique at every reached state.** -/
+theorem encReached_ufRowRoot_unique {P : Program} (hdom : P.EncodeDomain)
+    (hsy : (encodeSig P).IsCtor symName) (htr : (encodeSig P).IsCtor transName)
+    {d : FDatabase} (h : EncReached P d) (a : Term) :
+    ∃ r, d.UFRowReach a r ∧ d.UFRowRoot r ∧
+      ∀ s, d.UFRowReach a s → d.UFRowRoot s → s = r := by
+  obtain ⟨r, hr, hrr⟩ := FDatabase.exists_ufRowRoot (encReached_ufRowsDescend hdom h) a
+  exact ⟨r, hr, hrr, fun s hs hsr =>
+    FDatabase.ufRowRoot_unique (encReached_ufRowsForest hdom hsy htr h) hs hsr hr hrr⟩
+
+/-- **Pointwise roots of a tuple, at a reached state.** -/
+theorem encReached_exists_rootList {P : Program} (hdom : P.EncodeDomain) {d : FDatabase}
+    (h : EncReached P d) : ∀ (es : List Term),
+      ∃ rs, List.Forall₂ (fun a r => d.UFRowReach a r ∧ d.UFRowRoot r) es rs
+  | [] => ⟨[], .nil⟩
+  | a :: as => by
+      obtain ⟨r, hr, hrr⟩ := encReached_exists_ufRowRoot hdom h a
+      obtain ⟨rs, hrs⟩ := encReached_exists_rootList hdom h as
+      exact ⟨r :: rs, .cons ⟨hr, hrr⟩ hrs⟩
+
+/-- **The fixpoint's roots at every reached state.** -/
+theorem encReached_viewRowsRooted {P : Program} (hdom : P.EncodeDomain)
+    (hsy : (encodeSig P).IsCtor symName) (htr : (encodeSig P).IsCtor transName)
+    {d : FDatabase} (h : EncReached P d) : d.ViewRowsRooted P := by
+  induction h with
+  | prelude hprel =>
+    have hrows := (execProgramM_data_of_declOrRule (declOrRule_encodePrelude P) hprel).2.1
+    intro f k _ as e pf hrow
+    rw [hrows, show FDatabase.empty.rows = ([] : List Row) from rfl] at hrow
+    exact absurd hrow (by simp)
+  | block hr hc hb ih =>
+    exact viewRowsRooted_encodeCmd hdom hsy htr hc _ _ (encReached_rebuildBase hdom hr) ih hb
+
+/-- **The merge fixpoint at a view key, at every reached state.** -/
+theorem encReached_viewRowUnique {P : Program} (hdom : P.EncodeDomain)
+    (hsy : (encodeSig P).IsCtor symName) (htr : (encodeSig P).IsCtor transName)
+    {d : FDatabase} (h : EncReached P d) : d.ViewRowUnique P := by
+  induction h with
+  | prelude hprel =>
+    have hrows := (execProgramM_data_of_declOrRule (declOrRule_encodePrelude P) hprel).2.1
+    intro f k _ as vs ws hrow
+    rw [hrows, show FDatabase.empty.rows = ([] : List Row) from rfl] at hrow
+    exact absurd hrow (by simp)
+  | block hr hc hb ih =>
+    exact viewRowUnique_encodeCmd hdom hsy htr hc _ _ (encReached_rebuildBase hdom hr) ih hb
+
+/-- **The column rules' closure at every reached state.** -/
+theorem encReached_viewRowsColumnClosed {P : Program} (hdom : P.EncodeDomain)
+    (htr : (encodeSig P).IsCtor transName) (hsy : (encodeSig P).IsCtor symName)
+    (hfi : (encodeSig P).IsCtor fiatName)
+    (hcg : ∀ (g : FnName) (k : Nat), (g, k) ∈ P.ctors → k ≠ 0 → (encodeSig P).IsCtor (congrName k))
+    {d : FDatabase} (h : EncReached P d) : d.ViewRowsColumnClosed P := by
+  induction h with
+  | prelude hprel =>
+    have hrows := (execProgramM_data_of_declOrRule (declOrRule_encodePrelude P) hprel).2.1
+    intro f k _ as e pf hrow
+    rw [hrows, show FDatabase.empty.rows = ([] : List Row) from rfl] at hrow
+    exact absurd hrow (by simp)
+  | block hr hc hb ih =>
+    exact viewRowsColumnClosed_encodeCmd hdom htr hsy hfi hcg hc _ _
+      (encReached_rebuildBase hdom hr) ih hb
+
+/-- **One column step at a reached state.** -/
+theorem encReached_columnRow_step {P : Program} (hdom : P.EncodeDomain)
+    (htr : (encodeSig P).IsCtor transName) (hsy : (encodeSig P).IsCtor symName)
+    (hfi : (encodeSig P).IsCtor fiatName)
+    (hcg : ∀ (g : FnName) (k : Nat), (g, k) ∈ P.ctors → k ≠ 0 → (encodeSig P).IsCtor (congrName k))
+    {d : FDatabase} (h : EncReached P d)
+    {f : FnName} {k : Nat} (hfk : (f, k) ∈ P.ctors) {as : List Term} {e pf : Term}
+    (hrow : (⟨viewName f, as, [e, pf]⟩ : Row) ∈ d.rows) {i : Nat} {ci x : Term}
+    (hci : as[i]? = some ci) (hedge : d.UFRowEdge ci x) :
+    ∃ pf', (⟨viewName f, as.set i x, [e, pf']⟩ : Row) ∈ d.rows := by
+  obtain ⟨e', pf', hrow', hreach⟩ :=
+    encReached_viewRowsColumnClosed hdom htr hsy hfi hcg h f k hfk as e pf hrow i ci x hci hedge
+  have hre : d.UFRowRoot e := encReached_viewRowsRooted hdom hsy htr h f k hfk as e pf hrow
+  have hre' : d.UFRowRoot e' :=
+    encReached_viewRowsRooted hdom hsy htr h f k hfk (as.set i x) e' pf' hrow'
+  have heq : e = e' :=
+    encReached_ufRowRoot_of_ufReach hdom hsy htr h hreach e e' .refl hre .refl hre'
+  exact ⟨pf', heq ▸ hrow'⟩
+
+/-- **A whole chain of column steps, at a reached state.** -/
+theorem encReached_columnRow_walk {P : Program} (hdom : P.EncodeDomain)
+    (htr : (encodeSig P).IsCtor transName) (hsy : (encodeSig P).IsCtor symName)
+    (hfi : (encodeSig P).IsCtor fiatName)
+    (hcg : ∀ (g : FnName) (k : Nat), (g, k) ∈ P.ctors → k ≠ 0 → (encodeSig P).IsCtor (congrName k))
+    {d : FDatabase} (h : EncReached P d)
+    {f : FnName} {k : Nat} (hfk : (f, k) ∈ P.ctors) {as : List Term} {e pf : Term}
+    (hrow : (⟨viewName f, as, [e, pf]⟩ : Row) ∈ d.rows) {i : Nat} {ci r : Term}
+    (hci : as[i]? = some ci) (hreach : d.UFRowReach ci r) :
+    ∃ pf', (⟨viewName f, as.set i r, [e, pf']⟩ : Row) ∈ d.rows := by
+  induction hreach with
+  | refl =>
+    obtain ⟨hi, rfl⟩ := List.getElem?_eq_some_iff.mp hci
+    exact ⟨pf, by rw [List.set_getElem_self hi]; exact hrow⟩
+  | tail _ hstep ih =>
+    obtain ⟨pf', hrow'⟩ := ih
+    obtain ⟨hi, -⟩ := List.getElem?_eq_some_iff.mp hci
+    obtain ⟨pf'', hrow''⟩ :=
+      encReached_columnRow_step hdom htr hsy hfi hcg h hfk hrow' (i := i)
+        (List.getElem?_set_self hi) hstep
+    exact ⟨pf'', by rwa [List.set_set] at hrow''⟩
+
+/-- **Every column at once, at a reached state.** -/
+theorem encReached_columnRow_walkList {P : Program} (hdom : P.EncodeDomain)
+    (htr : (encodeSig P).IsCtor transName) (hsy : (encodeSig P).IsCtor symName)
+    (hfi : (encodeSig P).IsCtor fiatName)
+    (hcg : ∀ (g : FnName) (k : Nat), (g, k) ∈ P.ctors → k ≠ 0 → (encodeSig P).IsCtor (congrName k))
+    {d : FDatabase} (h : EncReached P d)
+    {f : FnName} {k : Nat} (hfk : (f, k) ∈ P.ctors) {e : Term} :
+    ∀ (ps as bs : List Term), bs.length = as.length →
+      (∀ (j : Nat) (hj : j < as.length) (hj' : j < bs.length), d.UFRowReach (as[j]) (bs[j])) →
+      (∃ pf, (⟨viewName f, ps ++ as, [e, pf]⟩ : Row) ∈ d.rows) →
+      ∃ pf, (⟨viewName f, ps ++ bs, [e, pf]⟩ : Row) ∈ d.rows
+  | _, [], [], _, _, hx => hx
+  | _, [], _ :: _, hlen, _, _ => by simp at hlen
+  | _, _ :: _, [], hlen, _, _ => by simp at hlen
+  | ps, a :: as, b :: bs, hlen, hj, ⟨pf, hrow⟩ => by
+      obtain ⟨pf', hrow'⟩ :=
+        encReached_columnRow_walk hdom htr hsy hfi hcg h hfk hrow (i := ps.length) (ci := a)
+          (by simp) (hj 0 (by simp) (by simp))
+      rw [show (b :: bs)[0] = b from rfl,
+        show (ps ++ a :: as).set ps.length b = ps ++ b :: as by simp] at hrow'
+      obtain ⟨pf'', hrow''⟩ :=
+        encReached_columnRow_walkList hdom htr hsy hfi hcg h hfk (ps ++ [b]) as bs
+          (by simpa using hlen)
+          (fun j hj' hj'' => hj (j + 1) (by simpa using hj') (by simpa using hj''))
+          ⟨pf', by simpa using hrow'⟩
+      exact ⟨pf'', by simpa using hrow''⟩
+
+/-- **The column rules at their fixpoint, for a key tuple, at a reached state.** -/
+theorem encReached_viewRow_of_rowReachList {P : Program} (hdom : P.EncodeDomain)
+    (htr : (encodeSig P).IsCtor transName) (hsy : (encodeSig P).IsCtor symName)
+    (hfi : (encodeSig P).IsCtor fiatName)
+    (hcg : ∀ (g : FnName) (k : Nat), (g, k) ∈ P.ctors → k ≠ 0 → (encodeSig P).IsCtor (congrName k))
+    {d : FDatabase} (h : EncReached P d)
+    {f : FnName} {k : Nat} (hfk : (f, k) ∈ P.ctors) {as bs : List Term} {e pf : Term}
+    (hrow : (⟨viewName f, as, [e, pf]⟩ : Row) ∈ d.rows) (hlen : bs.length = as.length)
+    (hj : ∀ (j : Nat) (hj : j < as.length) (hj' : j < bs.length), d.UFRowReach (as[j]) (bs[j])) :
+    ∃ pf', (⟨viewName f, bs, [e, pf']⟩ : Row) ∈ d.rows := by
+  obtain ⟨pf', hrow'⟩ :=
+    encReached_columnRow_walkList hdom htr hsy hfi hcg h hfk [] as bs hlen hj
+      ⟨pf, by simpa using hrow⟩
+  exact ⟨pf', by simpa using hrow'⟩
+
+/-- **The bridge's answer is the root itself, at a reached state.** -/
+theorem encReached_viewRow_at_root {P : Program} (hdom : P.EncodeDomain)
+    (hsy : (encodeSig P).IsCtor symName) (htr : (encodeSig P).IsCtor transName)
+    {d : FDatabase} (h : EncReached P d)
+    (hctors : ∀ (g : FnName) (cs : List Term) (v pv : Term),
+      Term.app (viewName g) (cs ++ [v, pv]) ∈ d.terms → (g, cs.length) ∈ P.ctors)
+    {f : FnName} {es : List Term} {x px r : Term}
+    (ho : d.toDatabase.Out (viewName f) es [x, px])
+    (hr : d.UFRowReach x r) (hrr : d.UFRowRoot r) :
+    ∃ lo, (f, es.length) ∈ P.ctors ∧ (⟨viewName f, es, [r, lo]⟩ : Row) ∈ d.rows := by
+  have hb : d.EncBase P (encodeSig P) := encReached_encBase hdom h
+  have hmem : Term.app (viewName f) (es ++ [x, px]) ∈ d.terms := by
+    obtain ⟨bs, hcl, hm⟩ := ho
+    obtain rfl : es = bs := CongList.eq_of_eqsRefl (encReached_eqsRefl hdom h).toDatabase hcl
+    rw [FDatabase.toDatabase_terms] at hm
+    exact hm
+  have hfk : (f, es.length) ∈ P.ctors := hctors f es x px hmem
+  obtain ⟨v, lo, hrow, hreach⟩ :=
+    (encReached_entryRowsUF hdom h).out (encReached_eqsRefl hdom h) (dc := viewDecl es.length)
+      (by rw [hb.sig]; exact (encodeSig_tables hdom hdom.aritiesAgree' hfk).1)
+      (body := mergeBody) (res := mergeResult) rfl rfl ho
+  have hvroot : d.UFRowRoot v :=
+    encReached_viewRowsRooted hdom hsy htr h f es.length hfk es v lo hrow
+  have heq : r = v :=
+    encReached_ufRowRoot_of_ufReach hdom hsy htr h hreach r v hr hrr .refl hvroot
+  rw [← heq] at hrow
+  exact ⟨lo, hfk, hrow⟩
+
+/-! ### The reading, at the pointwise root
+
+`RowRepr` is the reading through live **rows**, and the residue wants it where the invariant
+supplies `ViewRepr` — a reading through entry **terms**. The two are not the same claim at the
+same ids: `FDatabase.EntryRowsUF` answers an entry with a row whose e-class column is only
+`Database.UFReach`-reachable from the entry's, and a parent read is keyed on its children's
+columns on the nose.
+
+**They are the same claim at the pointwise `@UF` row root, and that is the choice of tuple.**
+`encReached_viewRow_at_root` answers the entry with a live row whose e-class column *is* the
+root of the id the entry recorded, at the entry's own key; `encReached_exists_rootList` names
+the root of each key column; and `encReached_viewRow_of_rowReachList` walks the whole key onto
+that rooted tuple in one go, leaving the e-class column where it was. So the row the parent ends
+at is keyed exactly on the roots its children's own rows sit at, which is what `RowRepr` demands
+— and the child column is a root because it is the *value* column of a live view row, which is
+the instance `FDatabase.ViewRowsRooted` supplies and the one an arbitrary reading does not.
+
+The literal case is where the source run is spent: a literal is its own root (`hlit`) and roots
+are unique, so a literal's rooted reading is the literal itself, which is the sole `RowRepr` a
+literal has. -/
+
+mutual
+
+/-- **Every reading is a row reading, at the root of the id it names.** -/
+theorem encReached_rowRepr_of_viewRepr {P : Program} (hdom : P.EncodeDomain)
+    (hsy : (encodeSig P).IsCtor symName) (htr : (encodeSig P).IsCtor transName)
+    (hfi : (encodeSig P).IsCtor fiatName)
+    (hcg : ∀ (g : FnName) (k : Nat), (g, k) ∈ P.ctors → k ≠ 0 → (encodeSig P).IsCtor (congrName k))
+    {d : FDatabase} (h : EncReached P d) (hlit : ∀ l : Lit, d.UFRowRoot (Term.lit l))
+    (hctors : ∀ (g : FnName) (cs : List Term) (v pv : Term),
+      Term.app (viewName g) (cs ++ [v, pv]) ∈ d.terms → (g, cs.length) ∈ P.ctors) :
+    ∀ {t e : Term}, ViewRepr d.toDatabase t e → ∀ {r : Term},
+      d.UFRowReach e r → d.UFRowRoot r → RowRepr d t r
+  | _, _, @ViewRepr.lit _ l, r, hr, hrr => by
+      obtain ⟨s, -, -, huniq⟩ := encReached_ufRowRoot_unique hdom hsy htr h (Term.lit l)
+      obtain rfl : r = Term.lit l :=
+        (huniq r hr hrr).trans (huniq (Term.lit l) .refl (hlit l)).symm
+      exact .lit
+  | _, _, @ViewRepr.app _ f as es _ _ hl ho, r, hr, hrr => by
+      obtain ⟨_, hfk, hrow⟩ := encReached_viewRow_at_root hdom hsy htr h hctors ho hr hrr
+      obtain ⟨rs, hrs⟩ := encReached_exists_rootList hdom h es
+      obtain ⟨_, hrow'⟩ :=
+        encReached_viewRow_of_rowReachList hdom htr hsy hfi hcg h hfk hrow
+          hrs.length_eq.symm (rootList_reach hrs)
+      exact .app
+        (encReached_rowReprList_of_viewReprList hdom hsy htr hfi hcg h hlit hctors hl hrs) hrow'
+
+@[inherit_doc encReached_rowRepr_of_viewRepr]
+theorem encReached_rowReprList_of_viewReprList {P : Program} (hdom : P.EncodeDomain)
+    (hsy : (encodeSig P).IsCtor symName) (htr : (encodeSig P).IsCtor transName)
+    (hfi : (encodeSig P).IsCtor fiatName)
+    (hcg : ∀ (g : FnName) (k : Nat), (g, k) ∈ P.ctors → k ≠ 0 → (encodeSig P).IsCtor (congrName k))
+    {d : FDatabase} (h : EncReached P d) (hlit : ∀ l : Lit, d.UFRowRoot (Term.lit l))
+    (hctors : ∀ (g : FnName) (cs : List Term) (v pv : Term),
+      Term.app (viewName g) (cs ++ [v, pv]) ∈ d.terms → (g, cs.length) ∈ P.ctors) :
+    ∀ {ts es : List Term}, ViewReprList d.toDatabase ts es → ∀ {rs : List Term},
+      List.Forall₂ (fun a r => d.UFRowReach a r ∧ d.UFRowRoot r) es rs → RowReprList d ts rs
+  | _, _, .nil, _, hx => by cases hx; exact .nil
+  | _, _, .cons ha hl, _, hx => by
+      cases hx with
+      | cons hh ht =>
+        exact .cons
+          (encReached_rowRepr_of_viewRepr hdom hsy htr hfi hcg h hlit hctors ha hh.1 hh.2)
+          (encReached_rowReprList_of_viewReprList hdom hsy htr hfi hcg h hlit hctors hl ht)
+
+end
+
+/-- **The tuple choice at the run's end**, where the source run pays the two clauses the reached
+state does not carry: `execM_ufLitRoots` for the literal and `execM_ctorsIn_of_mem_terms` for the
+key width. -/
+theorem execM_rowRepr_of_viewRepr {P : Program} {src : Database} {tgt : FDatabase}
+    (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
+    (hsy : (encodeSig P).IsCtor symName) (htr : (encodeSig P).IsCtor transName)
+    (hfi : (encodeSig P).IsCtor fiatName)
+    (hcg : ∀ (g : FnName) (k : Nat), (g, k) ∈ P.ctors → k ≠ 0 → (encodeSig P).IsCtor (congrName k))
+    (htgt : execM (encode P) = some tgt) {t e : Term} (hv : ViewRepr tgt.toDatabase t e)
+    {r : Term} (hr : tgt.UFRowReach e r) (hrr : tgt.UFRowRoot r) : RowRepr tgt t r :=
+  encReached_rowRepr_of_viewRepr hdom hsy htr hfi hcg (execM_encReached htgt)
+    (execM_ufLitRoots hdom hsrc htgt)
+    (fun _ _ _ _ hmem => execM_ctorsIn_of_mem_terms hdom hsrc htgt hmem) hv hr hrr
+
+/-! ### The two source-side clauses, at a state the run passes through
+
+`EncReached` carries everything the *target* invariants say and nothing the source run pays for.
+The two facts left over — a literal being its own `@UF` row root, and a view entry naming a
+source constructor at its own key width — both go through `FDatabase.SoundTerms`, and
+`FDatabase.EncOk.stepCmd` is what advances that in lockstep with the source. `EncStep` is that
+lockstep, and `EncStep.program` is exactly the `hP` the step lemma locates its command by. -/
+
+/-- **`Database.CtorsIn` off a prefix of the program**, which is `ctorsIn_of_programStep` with
+the run's own command list replaced by a sublist of it — `programStep_ctorsIn` was already
+stated that way. -/
+theorem ctorsIn_of_prefixStep {P : Program} (hdom : P.EncodeDomain) {p : Program}
+    (hsub : ∀ c ∈ p, c ∈ P) {sd : Database} (hstep : ProgramStep Database.empty p sd) :
+    sd.CtorsIn P :=
+  (programStep_ctorsIn Database.CtorState.empty Database.empty_ctorsInState
+    (fun c hc => Cmd.CtorsIn.of_domain hdom (hsub c hc))
+    (fun c hc => hdom.ctorsOnly c (hsub c hc)) hstep).terms
+
+/-- The commands already run are the program's own. -/
+theorem EncStep.mem {P pre suf : Program} {sd : Database} {d : FDatabase}
+    (h : EncStep P pre suf sd d) : ∀ c ∈ pre, c ∈ P :=
+  fun _ hc => by rw [h.program]; exact List.mem_append_left _ hc
+
+/-- **The completeness half's invariant at every state of the chain**, source and target
+together. -/
+theorem encStep_encOk {P : Program} (hdom : P.EncodeDomain) {pre suf : Program}
+    {sd : Database} {d : FDatabase} (h : EncStep P pre suf sd d) :
+    d.EncOk P (encodeSig P) sd := by
+  induction h with
+  | prelude hprel => exact encOk_preludeState hdom hdom.aritiesAgree' hprel
+  | block hs hstep hb ih =>
+    exact ih.stepCmd hdom (encodedHeadSound hdom hdom.aritiesAgree' hdom.headsScoped)
+      (encodedActionSound hdom hdom.aritiesAgree')
+      (encodedWriteLegal hdom hdom.aritiesAgree') hs.program hs.src hstep hb
+
+@[inherit_doc encStep_encOk]
+theorem encStep_soundTerms {P : Program} (hdom : P.EncodeDomain) {pre suf : Program}
+    {sd : Database} {d : FDatabase} (h : EncStep P pre suf sd d) : d.SoundTerms sd :=
+  (encStep_encOk hdom h).sound
+
+/-- **A view entry names a source constructor at its own key width**, at a state the run passes
+through. -/
+theorem encStep_ctorsIn {P : Program} (hdom : P.EncodeDomain) {pre suf : Program}
+    {sd : Database} {d : FDatabase} (h : EncStep P pre suf sd d)
+    {f : FnName} {es : List Term} {e pf : Term}
+    (hmem : Term.app (viewName f) (es ++ [e, pf]) ∈ d.terms) : (f, es.length) ∈ P.ctors := by
+  obtain ⟨as, hasrc, hcl, -⟩ := (encStep_soundTerms hdom h).1 f es e pf hmem
+  rw [← hcl.length_eq]
+  exact ctorsIn_of_prefixStep hdom h.mem h.src f as hasrc
+
+/-- **No `@UF` entry is keyed on a literal it does not equal**, at a state the run passes
+through. -/
+theorem encStep_ufLitsIsolated {P : Program} (hdom : P.EncodeDomain) {pre suf : Program}
+    {sd : Database} {d : FDatabase} (h : EncStep P pre suf sd d) : d.UFLitsIsolated := by
+  intro l b pf hmem
+  exact (((encStep_soundTerms hdom h).2 _ _ _ hmem).eq_of_isLit
+    (h.src.wf Database.WF.empty).litsIsolated (Or.inl rfl)).symm
+
+/-- **And so a literal is its own `@UF` row root there.** -/
+theorem encStep_ufLitRoots {P : Program} (hdom : P.EncodeDomain) {pre suf : Program}
+    {sd : Database} {d : FDatabase} (h : EncStep P pre suf sd d) (l : Lit) :
+    d.UFRowRoot (Term.lit l) :=
+  (encStep_ufLitsIsolated hdom h).ufRowRoot (encReached_eqsRefl hdom h.reached)
+    (encReached_encBase hdom h.reached).inv.index
+    (by rw [(encReached_encBase hdom h.reached).sig]; exact encodeSig_mergeOf_ufName hdom) l
+
+/-- **The tuple choice at a state the run passes through, with nothing left over.**
+
+This is what `Egglog.UnionsFire` is missing and what `execM_rebuildClosed` could not supply:
+`ViewRepr` is what the command induction carries and `RowRepr` is what a firing reads, and at
+the pointwise `@UF` row root they are the same claim. The four `Signature.IsCtor` carries are
+discharged from `encodePrelude`'s own vocabulary at an arbitrary program, so the whole thing
+asks for the domain and the chain and nothing else. -/
+theorem encStep_exists_rowRepr {P : Program} (hdom : P.EncodeDomain) {pre suf : Program}
+    {sd : Database} {d : FDatabase} (h : EncStep P pre suf sd d) {t e : Term}
+    (hv : ViewRepr d.toDatabase t e) : ∃ r, RowRepr d t r := by
+  obtain ⟨r, hr, hrr⟩ := encReached_exists_ufRowRoot hdom h.reached e
+  exact ⟨r, encReached_rowRepr_of_viewRepr hdom (encodeSig_isCtor_symName P)
+    (encodeSig_isCtor_transName P) (encodeSig_isCtor_fiatName P)
+    (fun _ _ hgk hk => encodeSig_isCtor_congrName hgk hk) h.reached
+    (encStep_ufLitRoots hdom h) (fun _ _ _ _ hmem => encStep_ctorsIn hdom h hmem) hv hr hrr⟩
+
+/-- **A run's own states are chain states**, source and target advancing together. -/
+theorem encStep_encodeCmds {P : Program} :
+    ∀ (p : Program) {pre : Program} {sd src : Database} {d D : FDatabase},
+      EncStep P pre p sd d → ProgramStep sd p src →
+      ∀ (n i : Nat), d.execProgramM (encodeCmds p n i).1 = some D →
+        EncStep P (pre ++ p) [] src D := by
+  intro p
+  induction p with
+  | nil =>
+    intro pre sd src d D h hsrc n i hrun
+    obtain rfl := hsrc.nil_inv
+    rw [show (encodeCmds ([] : Program) n i).1 = ([] : Program) from rfl,
+      FDatabase.execProgramM, Option.some.injEq] at hrun
+    rw [List.append_nil]
+    exact hrun ▸ h
+  | cons c cs ih =>
+    intro pre sd src d D h hsrc n i hrun
+    obtain ⟨sd', hstep, hrest⟩ := hsrc.cons_inv
+    rw [encodeCmds_cons_fst] at hrun
+    obtain ⟨d₁, hb, hafter⟩ := FDatabase.execProgramM_append hrun
+    have hnext := ih (.block h hstep hb) hrest _ _ hafter
+    rw [List.append_assoc, List.cons_append, List.nil_append] at hnext
+    exact hnext
+
+@[inherit_doc encStep_encodeCmds]
+theorem execM_encStep {P : Program} {src : Database} {tgt : FDatabase}
+    (hsrc : ProgramStep Database.empty P src) (htgt : execM (encode P) = some tgt) :
+    EncStep P P [] src tgt := by
+  rw [execM, encode] at htgt
+  obtain ⟨d₀, hprel, hcmds⟩ := FDatabase.execProgramM_append htgt
+  have h := encStep_encodeCmds P (.prelude hprel) hsrc 0 0 hcmds
+  rw [List.nil_append] at h
+  exact h
+
+/-- **Non-vacuous at the run**: the chain reaches the run's end, so every source term the
+invariant reads there has a row reading too — with the four `Signature.IsCtor` carries and both
+source-side clauses discharged, which is what `execM_rowRepr_of_viewRepr` still takes by hand. -/
+theorem execM_exists_rowRepr {P : Program} {src : Database} {tgt : FDatabase}
+    (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
+    (htgt : execM (encode P) = some tgt) {t e : Term} (hv : ViewRepr tgt.toDatabase t e) :
+    ∃ r, RowRepr tgt t r :=
+  encStep_exists_rowRepr hdom (execM_encStep hsrc htgt) hv
+
+/-- **`Egglog.RowMech`, discharged.** The two clauses `Egglog.UnionsFire` takes about rows, at
+every state one encoded run passes through: `encStep_exists_rowRepr` is the tuple choice — a
+reading is a row reading, at the pointwise `@UF` row root — and `ViewRepr.of_rowRepr_of_indexOk`
+is the way back, off `FDatabase.IndexOk` alone.
+
+This is what `execM_rebuildClosed` could not be asked for. Its `edged` clause is stated at an
+`execM` target and `UnionsFire` quantifies over the state the *next* block runs at, so the
+mechanism had to be restated one block short of the end; `EncStep` is that restatement, and the
+`encReached_*` family is the block inductions consuming it. Nothing was added to `UnionsFire`
+that a firing cannot be handed — `unionsJoined_fire_satisfiable` carries both clauses at the
+witness state, non-vacuously and at positive arity. -/
+theorem encStep_rowMech {P : Program} (hdom : P.EncodeDomain) : RowMech P :=
+  fun h => ⟨fun _ _ hv => encStep_exists_rowRepr hdom h hv,
+    fun _ _ hr =>
+      ViewRepr.of_rowRepr_of_indexOk (encReached_encBase hdom h.reached).inv.index hr⟩
+
 /-- **The residue of obligation `trans`, of the rebuild half of obligation `assert`'s `union`
 case, and of the *key* half of obligation `congr`, at the rules it fires.**
 
@@ -8718,7 +9267,7 @@ theorem execM_viewsCover {P : Program} {src : Database} {tgt : FDatabase}
     (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
     (htgt : execM (encode P) = some tgt) : tgt.toDatabase.ViewsCover src :=
   Database.ViewsCover.of_viewJoined (execM_viewJoined hdom hsrc htgt)
-    (unionsInv_execM unionsJoined_fire hdom hsrc htgt).reads
+    (unionsInv_execM unionsJoined_fire hdom (encStep_rowMech hdom) hsrc htgt).reads
 
 @[inherit_doc execM_viewsCover]
 theorem execM_viewsCover_shared {P : Program} {src : Database} {tgt : FDatabase}
@@ -8737,7 +9286,7 @@ theorem execM_unionsRead {P : Program} {src : Database} {tgt : FDatabase}
     (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
     (htgt : execM (encode P) = some tgt) : tgt.toDatabase.UnionsRead src :=
   unionsRead_of_viewJoined (execM_viewJoined hdom hsrc htgt)
-    (execM_unionsJoined unionsJoined_fire hdom hsrc htgt)
+    (execM_unionsJoined unionsJoined_fire hdom (encStep_rowMech hdom) hsrc htgt)
 
 /-- **Obligation `assert`, at the encoding**, split by writer. `Database.addTerm` writes a
 reflexive equation per subterm built, and `sameClass_self_of_viewsCover` discharges those out

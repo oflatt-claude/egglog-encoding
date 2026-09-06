@@ -134,7 +134,13 @@ nightly-local: nightly-uv nightly-rustup
 # `ncTgt_viewsCover` running that reduction at the very state the product form fails at. What is
 # left: `unionsJoined_fire` is a target firing behind a source firing — the one command case the
 # read-back does not reach, and it carries both of the induction's data clauses. It is the
-# **forward** half's. The run-wide index argument it used to sit beside is closed:
+# **forward** half's. The reading it fires on is now supplied rather than owed: `RowRepr` is the
+# reading through live rows, `encStep_exists_rowRepr` turns the induction's `ViewRepr` into one
+# at the pointwise `@UF` row root, and `encStep_rowMech` discharges the two row clauses
+# `UnionsFire` takes — at the state the *next* encoded block runs at (`EncReached`, `EncStep`),
+# which is where `execM_rebuildClosed` could not be asked. What is still open is the firing
+# itself: the forward half of `Encoding/Match.lean`, a source `ValidQuerySubst` turned into a
+# match of the emitted query. The run-wide index argument it used to sit beside is closed:
 # `execM_rebuildClosed` is `Database.ViewJoined` per mechanism (the e-class rule, the column
 # rules, the `@UF` edge a collision writes), proved outright — its four `Signature.IsCtor`
 # carries off `encodePrelude`'s own proof vocabulary (`encodeSig_isCtor_symName` and

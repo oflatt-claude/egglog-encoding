@@ -3657,6 +3657,94 @@ theorem unionsFireClaim_false : ¬ UnionsFireClaim := by
     obtain ⟨bs, -, hrow⟩ := ho
     exact absurd (FDatabase.mem_toDatabase_terms.mp hrow) (by simp [FDatabase.empty])
 
+/-! ##### The reading through live rows
+
+`ViewRepr` ends in `Database.Out`, which reads entry **terms**; an encoded rule's query reads
+`FDatabase.rows`, and the two are not the same reading. `RowRepr` is the second one, stated
+here because `UnionsFire` names it: the residue's firing wants rows and the invariant supplies
+entries. `Encoding/Complete.lean`'s `ViewRepr.of_rowRepr` is the check that this is a
+strengthening of `UnionsInv.readsAt` rather than a different claim, and its
+`encReached_rowRepr_of_viewRepr` is the converse, at the pointwise `@UF` row root. -/
+
+mutual
+
+/-- **The reading through live rows**: the parent's key columns are exactly the ids its
+children's own rows record. -/
+inductive RowRepr (d : FDatabase) : Term → Term → Prop where
+  | lit {l : Lit} : RowRepr d (.lit l) (.lit l)
+  | app {f : FnName} {as es : List Term} {e pf : Term} :
+      RowReprList d as es → (⟨viewName f, es, [e, pf]⟩ : Row) ∈ d.rows →
+      RowRepr d (.app f as) e
+
+/-- `RowRepr` over an argument list. -/
+inductive RowReprList (d : FDatabase) : List Term → List Term → Prop where
+  | nil : RowReprList d [] []
+  | cons {a e : Term} {as es : List Term} :
+      RowRepr d a e → RowReprList d as es → RowReprList d (a :: as) (e :: es)
+
+end
+
+/-! ##### The states one encoded run passes through
+
+The residue fires at a state *inside* the run — the one the next encoded block starts at — and
+every run-wide lemma a firing wants is a block induction whose statement was specialised to the
+run's **end**. `EncReached` is the provenance those inductions actually consume, and
+`Encoding/Complete.lean`'s `encReached_*` family is them stated over it.
+
+Whole blocks, and not `FDatabase.execProgramM` prefixes: `FDatabase.ViewRowsRooted` is
+established by the `Cmd.saturate rebuildRuleset` every writing block ends with, and is false in
+the middle of one.
+
+`EncStep` is the same chain with the **source** run alongside, which is what the two facts
+`EncReached` does not carry — a literal's rootness and a view entry's key width — are paid
+from: both go through `FDatabase.SoundTerms`, and `FDatabase.EncOk.stepCmd` advances source and
+target together. The two program indices are the commands already run and the ones still to
+come, and their concatenation is the program (`EncStep.program`), which is what
+`FDatabase.EncOk.stepCmd` asks of its `hP`. -/
+
+/-- **A state an encoded run passes through**: the one `encodePrelude` leaves, or one whole
+encoded block further on. -/
+inductive EncReached (P : Program) : FDatabase → Prop where
+  /-- The state the prelude leaves. -/
+  | prelude {d : FDatabase} :
+      FDatabase.empty.execProgramM (encodePrelude P) = some d → EncReached P d
+  /-- One source command's whole encoded block later. -/
+  | block {d D : FDatabase} {c : Cmd} {n i : Nat} :
+      EncReached P d → c ∈ P → d.execProgramM (encodeCmd c n i).1 = some D → EncReached P D
+
+/-- **The same chain with the source run alongside**, split at the command about to run. -/
+inductive EncStep (P : Program) : Program → Program → Database → FDatabase → Prop where
+  /-- Nothing run yet: the empty source state and the state the prelude leaves. -/
+  | prelude {d : FDatabase} :
+      FDatabase.empty.execProgramM (encodePrelude P) = some d →
+      EncStep P [] P Database.empty d
+  /-- One source command and its whole encoded block, on both sides at once. -/
+  | block {pre suf : Program} {sd sd' : Database} {d D : FDatabase} {c : Cmd} {n i : Nat} :
+      EncStep P pre (c :: suf) sd d → CmdStep sd c sd' →
+      d.execProgramM (encodeCmd c n i).1 = some D → EncStep P (pre ++ [c]) suf sd' D
+
+/-- **The two indices are the program**, which is the shape `FDatabase.EncOk.stepCmd` asks
+its command to be located by. -/
+theorem EncStep.program {P pre suf : Program} {sd : Database} {d : FDatabase}
+    (h : EncStep P pre suf sd d) : P = pre ++ suf := by
+  induction h with
+  | prelude _ => rw [List.nil_append]
+  | block _ _ _ ih => rw [List.append_assoc, List.cons_append, List.nil_append]; exact ih
+
+/-- **The source side of the chain.** -/
+theorem EncStep.src {P pre suf : Program} {sd : Database} {d : FDatabase}
+    (h : EncStep P pre suf sd d) : ProgramStep Database.empty pre sd := by
+  induction h with
+  | prelude _ => exact .nil
+  | block _ hstep _ ih => exact ih.append (.cons hstep .nil)
+
+/-- **The target side of the chain.** -/
+theorem EncStep.reached {P pre suf : Program} {sd : Database} {d : FDatabase}
+    (h : EncStep P pre suf sd d) : EncReached P d := by
+  induction h with
+  | prelude hprel => exact .prelude hprel
+  | block h _ hb ih => exact .block ih (by rw [h.program]; simp) hb
+
 /-! ##### The one case that does not close -/
 
 /-- **The command induction's rule-firing case, as a `Prop`.**
@@ -3685,6 +3773,21 @@ the encoded rule being one `td` holds — and the two data clauses at `td`; the 
 Stated over both firing commands at once, because `encodeCmd` gives them the same block:
 `[c, Cmd.saturate rebuildRuleset]`.
 
+**Two clauses about rows, because a firing reads rows and the invariant carries entries.**
+`readsAt` is a `terms` fact and `matchQuery` reads `FDatabase.rows`, so the residue is handed
+`RowRepr` at `td` — the reading through live rows, at the state the encoded block runs at — and
+the way back at `td'`. Both are derived rather than assumed: `RowMech` is what discharges them,
+threaded alongside `EncStep`, and `Encoding/Complete.lean`'s `encStep_rowMech` proves it. The
+tuple is the pointwise `@UF` row **root**, which is the only one the column rules' walk can be
+pointed at.
+
+**The provenance is deliberately not among them.** `EncStep Q pre (c :: suf) sd td` would say
+everything these two clauses say and more, and it is what `unionsInv_step` supplies — but
+`unionsJoined_fire_satisfiable` exhibits the hypotheses at `rbState2`, a state written by
+`execActions` and not by `encode`, and the kernel cannot run an encoded program. A provenance
+hypothesis would therefore empty the non-vacuity check, which is the second way a residue in
+this line has gone wrong; the derived clauses hold at that state outright.
+
 **A `Prop` here and discharged downstream.** The import chain is
 `Encode → Correspond → Match → Complete`, and everything a worked target firing reads is below
 this file: `patternHolds_values_of_mem_rows` is the only route from a row to an atom,
@@ -3692,7 +3795,7 @@ this file: `patternHolds_values_of_mem_rows` is the only route from a row to an 
 hypothesis through `unionsInv_step`, `unionsInv_of_programStep`, `unionsInv_execM` and
 `execM_unionsJoined`, and `Encoding/Complete.lean`'s `unionsJoined_fire` is where it is
 answered, with no duplication of `Encoding/Match.lean`'s expression induction and no
-restructuring of anything above. `unionsJoined_fire_satisfiable` is these seven hypotheses
+restructuring of anything above. `unionsJoined_fire_satisfiable` is these nine hypotheses
 holding together. -/
 def UnionsFire : Prop :=
   ∀ {R : RulesetName} {c : Cmd} {sd sd' : Database} {td td' : FDatabase},
@@ -3702,16 +3805,28 @@ def UnionsFire : Prop :=
     (∀ r ∈ sd.rules, ∃ i n, (encodeRule i r n).1 ∈ td.rules) →
     (∀ t ∈ sd.terms, ∃ e, ViewRepr td.toDatabase t e) →
     td.toDatabase.UnionsJoined sd →
+    (∀ t ∈ sd.terms, ∃ r, RowRepr td t r) →
+    (∀ t r : Term, RowRepr td' t r → ViewRepr td'.toDatabase t r) →
     td'.toDatabase.UnionsJoined sd' ∧ ∀ t ∈ sd'.terms, ∃ e, ViewRepr td'.toDatabase t e
+
+/-- **The two row clauses `UnionsFire` takes**, at every state one encoded run passes through.
+Threaded rather than proved here: `RowRepr` is the reading a firing produces and its two
+directions are `Encoding/Complete.lean`'s `encStep_exists_rowRepr` — the tuple choice, at the
+pointwise `@UF` row root — and `ViewRepr.of_rowRepr_of_indexOk`. -/
+def RowMech (Q : Program) : Prop :=
+  ∀ {sd : Database} {d : FDatabase} {pre suf : Program}, EncStep Q pre suf sd d →
+    (∀ t e : Term, ViewRepr d.toDatabase t e → ∃ r, RowRepr d t r) ∧
+    (∀ t r : Term, RowRepr d t r → ViewRepr d.toDatabase t r)
 
 /-! ##### One command -/
 
 /-- **The invariant survives one source command.** Six cases: five read-backs of the `set`s
 `encodeCmd` emitted for that command — `reads` off the build's own reading, `joined` off the
 `union`'s own `@UF` write — and `unionsJoined_fire`, which is both data clauses at once. -/
-theorem unionsInv_step (hfire : UnionsFire) {Q : Program} (hQ : Q.EncodeDomain) {c : Cmd}
-    (hc : c ∈ Q)
-    {n i : Nat} {sd sd' : Database} {td D : FDatabase} {rest : Program}
+theorem unionsInv_step (hfire : UnionsFire) {Q : Program} (hQ : Q.EncodeDomain)
+    (hmech : RowMech Q) {c : Cmd} (hc : c ∈ Q)
+    {n i : Nat} {pre suf : Program} {sd sd' : Database} {td D : FDatabase} {rest : Program}
+    (hchain : EncStep Q pre (c :: suf) sd td)
     (hstep : CmdStep sd c sd')
     (hrun : td.execProgramM ((encodeCmd c n i).1 ++ rest) = some D)
     (hinv : UnionsInv sd td D) :
@@ -3765,11 +3880,19 @@ theorem unionsInv_step (hfire : UnionsFire) {Q : Program} (hQ : Q.EncodeDomain) 
   | run R =>
       have hjoin := hfire (Or.inl rfl) hstep hblock hinv.env hinv.state
         hinv.rules hinv.readsAt hinv.joinedAt
+        (fun t ht => by
+          obtain ⟨e, he⟩ := hinv.readsAt t ht
+          exact (hmech hchain).1 t e he)
+        (hmech (.block hchain hstep hblock)).2
       exact ⟨hjoin.1, hjoin.2, by rw [cmdStep_env_of_run hstep]; exact hkeepE,
         by rw [cmdStep_rules_of_run hstep]; exact hkeepR, hcont, henvOut, hstate'⟩
   | saturate R =>
       have hjoin := hfire (Or.inr rfl) hstep hblock hinv.env hinv.state
         hinv.rules hinv.readsAt hinv.joinedAt
+        (fun t ht => by
+          obtain ⟨e, he⟩ := hinv.readsAt t ht
+          exact (hmech hchain).1 t e he)
+        (hmech (.block hchain hstep hblock)).2
       exact ⟨hjoin.1, hjoin.2, by rw [cmdStep_env_of_saturate hstep]; exact hkeepE,
         by rw [cmdStep_rules_of_saturate hstep]; exact hkeepR, hcont, henvOut, hstate'⟩
   | action a =>
@@ -3971,31 +4094,34 @@ theorem FDatabase.execProgramM_append' {p q : Program} : ∀ {d m D : FDatabase}
 
 /-- **The command induction.** One `unionsInv_step` per source command, threading the state
 the encoded block left. -/
-theorem unionsInv_of_programStep (hfire : UnionsFire) {Q : Program} (hQ : Q.EncodeDomain) :
-    ∀ (p : Program) {n i : Nat} {sd sd' : Database} {td D : FDatabase} {rest : Program},
-      (∀ c ∈ p, c ∈ Q) → ProgramStep sd p sd' →
+theorem unionsInv_of_programStep (hfire : UnionsFire) {Q : Program} (hQ : Q.EncodeDomain)
+    (hmech : RowMech Q) :
+    ∀ (p : Program) {pre : Program} {n i : Nat} {sd sd' : Database} {td D : FDatabase}
+      {rest : Program},
+      (∀ c ∈ p, c ∈ Q) → EncStep Q pre p sd td → ProgramStep sd p sd' →
       td.execProgramM ((encodeCmds p n i).1 ++ rest) = some D →
       UnionsInv sd td D →
       ∃ td', td.execProgramM (encodeCmds p n i).1 = some td' ∧ UnionsInv sd' td' D := by
   intro p
   induction p with
   | nil =>
-    intro n i sd sd' td D rest _ hsrc _ hinv
+    intro pre n i sd sd' td D rest _ _ hsrc _ hinv
     obtain rfl := hsrc.nil_inv
     exact ⟨td, rfl, hinv⟩
   | cons c cs ih =>
-    intro n i sd sd' td D rest hsub hsrc hrun hinv
+    intro pre n i sd sd' td D rest hsub hchain hsrc hrun hinv
     obtain ⟨sd₁, hstep, hrest⟩ := hsrc.cons_inv
     have hcmds : (encodeCmds (c :: cs) n i).1
         = (encodeCmd c n i).1
           ++ (encodeCmds cs (encodeCmd c n i).2.1 (encodeCmd c n i).2.2).1 := rfl
     rw [hcmds, List.append_assoc] at hrun
     obtain ⟨td₁, hb, hinv₁⟩ :=
-      unionsInv_step hfire hQ (hsub c List.mem_cons_self) hstep hrun hinv
+      unionsInv_step hfire hQ hmech (hsub c List.mem_cons_self) hchain hstep hrun hinv
     obtain ⟨m, hm, hafter⟩ := FDatabase.execProgramM_append hrun
     obtain rfl : m = td₁ := Option.some.inj (hm.symm.trans hb)
     obtain ⟨td₂, hb₂, hinv₂⟩ :=
-      ih (fun c' hc' => hsub c' (List.mem_cons_of_mem c hc')) hrest hafter hinv₁
+      ih (fun c' hc' => hsub c' (List.mem_cons_of_mem c hc'))
+        (.block hchain hstep hb) hrest hafter hinv₁
     exact ⟨td₂, by rw [hcmds]; exact FDatabase.execProgramM_append' hb hb₂, hinv₂⟩
 
 /-! ##### From the empty state
@@ -4064,7 +4190,7 @@ theorem execM_env {P : Program} {src : Database} {tgt : FDatabase}
 Both `td` and `D` are the final state: the induction started at the empty source database and
 the state the prelude left, and finished where the run did. -/
 theorem unionsInv_execM (hfire : UnionsFire) {P : Program} {src : Database} {tgt : FDatabase}
-    (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
+    (hdom : P.EncodeDomain) (hmech : RowMech P) (hsrc : ProgramStep Database.empty P src)
     (htgt : execM (encode P) = some tgt) : UnionsInv src tgt tgt := by
   rw [execM, encode] at htgt
   obtain ⟨td₀, hprel, hcmds⟩ := FDatabase.execProgramM_append htgt
@@ -4084,8 +4210,8 @@ theorem unionsInv_execM (hfire : UnionsFire) {P : Program} {src : Database} {tgt
       exact absurd hr (by simp [Database.empty])
     · rw [henv₀]
       rfl
-  obtain ⟨td', hb, hinv⟩ := unionsInv_of_programStep hfire hdom P (fun c hc => hc) hsrc
-    (by rw [List.append_nil]; exact hcmds) hinv₀
+  obtain ⟨td', hb, hinv⟩ := unionsInv_of_programStep hfire hdom hmech P (fun c hc => hc)
+    (.prelude hprel) hsrc (by rw [List.append_nil]; exact hcmds) hinv₀
   obtain rfl : td' = tgt := Option.some.inj (hb.symm.trans hcmds)
   exact hinv
 
@@ -4267,14 +4393,117 @@ encoding emits — the source's own, followed by the rebuild — leaves the stat
 theorem rbState2_execProgramM_run :
     rbState2.execProgramM [Cmd.run rbRuleset, Cmd.saturate rebuildRuleset] = some rbState2 := rfl
 
+/-! ##### A live row is an entry the denotation reads
+
+`RowRepr` is the reading a firing produces and `ViewRepr` the one the invariant carries, so the
+residue owes the conversion back. Two forms, because two states want it. `IndexOk` is the one an
+encoded run's states carry — its `entry` clause *is* the reading, and its `ctor` clause rules
+out the merge-free case by the value columns a view row has. The `rowTerms` form asks instead
+for two facts about the row list alone, which is what makes it decidable at a concrete state. -/
+
+mutual
+
+/-- **A row reading is an entry reading**, at any state whose index is sound. -/
+theorem ViewRepr.of_rowRepr_of_indexOk {d : FDatabase} (hidx : d.IndexOk) :
+    ∀ {t e : Term}, RowRepr d t e → ViewRepr d.toDatabase t e
+  | _, _, .lit => .lit
+  | _, _, @RowRepr.app _ f _ _ _ _ hl hrow => by
+      by_cases hmg : d.sig.mergeOf (viewName f) = none
+      · exact absurd (hidx.ctor _ hrow hmg).1 (by simp)
+      · exact .app (ViewReprList.of_rowReprList_of_indexOk hidx hl) (hidx.entry _ hrow hmg)
+
+@[inherit_doc ViewRepr.of_rowRepr_of_indexOk]
+theorem ViewReprList.of_rowReprList_of_indexOk {d : FDatabase} (hidx : d.IndexOk) :
+    ∀ {ts es : List Term}, RowReprList d ts es → ViewReprList d.toDatabase ts es
+  | _, _, .nil => .nil
+  | _, _, .cons h hl =>
+      .cons (ViewRepr.of_rowRepr_of_indexOk hidx h)
+        (ViewReprList.of_rowReprList_of_indexOk hidx hl)
+
+end
+
+mutual
+
+/-- **The same reading off the row list alone**, which is the decidable form. -/
+theorem ViewRepr.of_rowRepr_of_rowTerms {d : FDatabase}
+    (hcol : ∀ r ∈ d.rows, ∀ t ∈ r.args ++ r.out, t ∈ d.terms)
+    (hentry : ∀ r ∈ d.rows, Term.app r.fn (r.args ++ r.out) ∈ d.terms) :
+    ∀ {t e : Term}, RowRepr d t e → ViewRepr d.toDatabase t e
+  | _, _, .lit => .lit
+  | _, _, @RowRepr.app _ f _ es e pf hl hrow => by
+      have hout : d.toDatabase.Out (viewName f) es [e, pf] := by
+        refine ⟨es, CongList.refl (fun a ha => ?_), ?_⟩
+        · rw [FDatabase.toDatabase_terms]
+          exact hcol _ hrow a (List.mem_append_left _ ha)
+        · rw [FDatabase.toDatabase_terms]
+          exact hentry _ hrow
+      exact .app (ViewReprList.of_rowReprList_of_rowTerms hcol hentry hl) hout
+
+@[inherit_doc ViewRepr.of_rowRepr_of_rowTerms]
+theorem ViewReprList.of_rowReprList_of_rowTerms {d : FDatabase}
+    (hcol : ∀ r ∈ d.rows, ∀ t ∈ r.args ++ r.out, t ∈ d.terms)
+    (hentry : ∀ r ∈ d.rows, Term.app r.fn (r.args ++ r.out) ∈ d.terms) :
+    ∀ {ts es : List Term}, RowReprList d ts es → ViewReprList d.toDatabase ts es
+  | _, _, .nil => .nil
+  | _, _, .cons h hl =>
+      .cons (ViewRepr.of_rowRepr_of_rowTerms hcol hentry h)
+        (ViewReprList.of_rowReprList_of_rowTerms hcol hentry hl)
+
+end
+
+/-! ##### The two row clauses at the witness state
+
+`rbState2` is written by `execActions`, so its rows and its term list are computed lists and
+both clauses are decided against them. -/
+
+set_option maxRecDepth 100000 in
+theorem rbState2_rowColumns : ∀ r ∈ rbState2.rows, ∀ t ∈ r.args ++ r.out, t ∈ rbState2.terms := by
+  decide
+
+set_option maxRecDepth 100000 in
+theorem rbState2_rowEntries :
+    ∀ r ∈ rbState2.rows, Term.app r.fn (r.args ++ r.out) ∈ rbState2.terms := by decide
+
+/-- **A live row reads back as an entry, at the witness state.** -/
+theorem rbState2_viewRepr_of_rowRepr {t r : Term} (h : RowRepr rbState2 t r) :
+    ViewRepr rbState2.toDatabase t r :=
+  ViewRepr.of_rowRepr_of_rowTerms rbState2_rowColumns rbState2_rowEntries h
+
+set_option maxRecDepth 100000 in
+theorem rbState2_row_aview :
+    (⟨viewName "A", [], [Term.app "A" [], Term.app fiatName []]⟩ : Row) ∈ rbState2.rows := by
+  decide
+
+set_option maxRecDepth 100000 in
+theorem rbState2_row_wview :
+    (⟨viewName "W", [Term.app "A" []],
+      [Term.app "W" [Term.app "A" []], Term.app fiatName []]⟩ : Row) ∈ rbState2.rows := by decide
+
+/-- **Every source term has a row reading at the witness state**, which is the clause
+`unionsJoined_fire`'s tuple choice adds — non-vacuous at both of `rbSrc`'s terms, and at
+positive arity in the second. -/
+theorem rbState2_exists_rowRepr : ∀ t ∈ rbSrc.terms, ∃ r, RowRepr rbState2 t r := by
+  intro t ht
+  rw [rbSrc_terms] at ht
+  have ht' : t = Term.app "A" [] ∨ t = Term.app "W" [Term.app "A" []] := by
+    rcases ht with h | h
+    · exact Or.inl (by simpa using h)
+    · simpa [or_comm] using h
+  rcases ht' with rfl | rfl
+  · exact ⟨_, .app .nil rbState2_row_aview⟩
+  · exact ⟨_, .app (.cons (.app .nil rbState2_row_aview) .nil) rbState2_row_wview⟩
+
 /-- **`unionsJoined_fire`'s hypotheses are simultaneously satisfiable**, so the residue is not
 vacuous — `ENCODING.md`'s failure, twice.
 
-Satisfiable degenerately, and deliberately so: the source holds no rule, so the round adds
-nothing, the encoded round writes nothing either, and `hrules` is vacuous; the last three are
-`rbState2_unionsInv`'s own `td`-side clauses. The case with content is a round that fires a head
-`union` — or, for the `reads` half of the conclusion, one that fires a head **build** — and that
-is where it is open. `difftest correspond`'s **LOST** column — `Cong src a b` without
+Satisfiable degenerately in the *round*, and deliberately so: the source holds no rule, so the
+round adds nothing, the encoded round writes nothing either, and `hrules` is vacuous; three of
+the rest are `rbState2_unionsInv`'s own `td`-side clauses. The two row clauses are not
+degenerate — `rbState2_exists_rowRepr` reads both of `rbSrc`'s terms through live rows, the
+second at positive arity over the first's, and `rbState2_viewRepr_of_rowRepr` is the way back at
+every row the state holds. The case with content is a round that fires a head `union` — or, for
+the `reads` half of the conclusion, one that fires a head **build** — and that is where it is
+open. `difftest correspond`'s **LOST** column — `Cong src a b` without
 `SameClass tgt a b`, swept with the diagonal included over the 70 in-domain cases, rules and runs
 among them — is 0 and stays 0, which is the `reads` clause measured: every source term has *some*
 id in the target. Asking for that id to be the term itself is the stronger claim the
@@ -4286,10 +4515,13 @@ theorem unionsJoined_fire_satisfiable :
       rbState2.env = rbSrc.env ∧ rbSrc.CtorState ∧
       (∀ r ∈ rbSrc.rules, ∃ i n, (encodeRule i r n).1 ∈ rbState2.rules) ∧
       (∀ t ∈ rbSrc.terms, ∃ e, ViewRepr rbState2.toDatabase t e) ∧
-      rbState2.toDatabase.UnionsJoined rbSrc :=
+      rbState2.toDatabase.UnionsJoined rbSrc ∧
+      (∀ t ∈ rbSrc.terms, ∃ r, RowRepr rbState2 t r) ∧
+      (∀ t r : Term, RowRepr rbState2 t r → ViewRepr rbState2.toDatabase t r) :=
   ⟨rbSrc_cmdStep_run rbRuleset, rbState2_execProgramM_run, rbState2_unionsInv.env,
     rbState2_unionsInv.state, rbState2_unionsInv.rules, rbState2_unionsInv.readsAt,
-    rbState2_unionsInv.joinedAt⟩
+    rbState2_unionsInv.joinedAt, rbState2_exists_rowRepr,
+    fun _ _ h => rbState2_viewRepr_of_rowRepr h⟩
 
 /-! #### The rebuild fixpoint, and the row it does not reach
 
@@ -5663,9 +5895,9 @@ does make ids of themselves (`viewReprAll_self_of_execProgramM`); a head `union`
 clause holds and `Database.ViewJoined.ufJoin` does not — so the two are load-bearing
 separately. -/
 theorem execM_unionsJoined (hfire : UnionsFire) {P : Program} {src : Database} {tgt : FDatabase}
-    (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
+    (hdom : P.EncodeDomain) (hmech : RowMech P) (hsrc : ProgramStep Database.empty P src)
     (htgt : execM (encode P) = some tgt) : tgt.toDatabase.UnionsJoined src :=
-  (unionsInv_execM hfire hdom hsrc htgt).joined
+  (unionsInv_execM hfire hdom hmech hsrc htgt).joined
 
 /-! ### The completeness half
 
