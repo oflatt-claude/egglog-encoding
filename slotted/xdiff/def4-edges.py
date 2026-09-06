@@ -16,6 +16,16 @@ already have the child's slots for their domain -- which is what this checks. Th
 `XDIFF_BUGS=wide-kids` no longer discriminates: not luck, but a property checked here. If
 this ever reports a violation, that mutation becomes live again.
 
+A BINDER COLUMN IS EXEMPT, and is checked against its own invariant instead. What sits
+there is a name the node binds, not a use of its child, so its domain is always the one
+slot `0` however few slots the variable class has left -- which is exactly the point:
+tying it to `ClassSlots` is what used to destroy a bound slot the moment two variable
+invocations were equated. So for those columns this asserts `map-domain = {0}` and that
+the child is the variable class, the two things the binder rules read.
+
+The rules are built from `slotted/languages/toy.egg`, the language the harness runs, so a
+constructor added there is covered without touching this file.
+
     python3 slotted/xdiff/def4-edges.py            curated
     python3 slotted/xdiff/def4-edges.py fuzz 250   generated
 """
@@ -34,16 +44,35 @@ HEAD = """
 """
 
 
+enc = X.slotenc
+LANG = enc.read_language(X.LANG_DIR / "toy.egg")
+
+
 def obs():
     out = [HEAD]
-    for n in (2, 3, 4):
-        cols = " ".join(f"m{i} c{i}" for i in range(1, n + 1))
-        for i in range(1, n + 1):
+    for name, sig in LANG.items():
+        _, edges, kids, _ = enc.cols_of(sig)
+        kid_cols = [c for c in sig if c in enc.SLOTTED]
+        pat = enc.pattern(name, sig)
+        for i in range(len(kids)):
+            where = f'"{name} child {i + 1}"'
+            if kid_cols[i] is enc.BINDER:
+                out.append(
+                    f"(rule ((= v {pat})\n"
+                    f"       (!= (map-domain {edges[i]}) (map-of 0 0)))\n"
+                    f"      ((BadDomain {where} {edges[i]} (map-of 0 0))) :ruleset def4)"
+                )
+                out.append(
+                    f"(rule ((= v {pat})\n"
+                    f"       (!= {kids[i]} (Var 0)))\n"
+                    f"      ((BadDomain {where} {edges[i]} (map-of 0 0))) :ruleset def4)"
+                )
+                continue
             out.append(
-                f"(rule ((= v (App{n} f {cols}))\n"
-                f"       (= s (ClassSlots c{i}))\n"
-                f"       (!= (map-domain m{i}) s))\n"
-                f"      ((BadDomain f m{i} s)) :ruleset def4)"
+                f"(rule ((= v {pat})\n"
+                f"       (= s (ClassSlots {kids[i]}))\n"
+                f"       (!= (map-domain {edges[i]}) s))\n"
+                f"      ((BadDomain {where} {edges[i]} s)) :ruleset def4)"
             )
     out += ["(run def4 1)", "(print-size BadDomain)", "(print-function BadDomain 8)"]
     return "\n".join(out)

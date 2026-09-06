@@ -222,14 +222,49 @@
        (= m (map-union (map-image m1) (map-image m2))))
       ((RenamesToLeader e1 m e1)) :ruleset slotted)
 
+;; WHAT A BOUND NAME IS, and why the three rules below each have to know.
+;;
+;; `(App2 "lambda" [0 -> x] (Var 0) m2 c2)` is `lam $x. m2*c2`. That `[0 -> x]` is the
+;; name the node BINDS, and the `(Var 0)` under it is only how a slot is spelled here --
+;; not a child the node uses. Nothing in the columns says so, which is why it has to be
+;; written into every rule that rewrites them, and it matters because THE VARIABLE CLASS
+;; GOES SLOTLESS as soon as two of its invocations are equated. From then on every
+;; renaming it offers is the empty map, and composing a bound name with one erases it.
+;; Once erased, every later match of a `lam` pattern -- which reads the bound slot out of
+;; that edge -- silently fails, and the reference goes on making unions we no longer make.
+;; It cannot hit this itself: its `Bind` holds a `Slot` outright rather than an applied id.
+;;
+;; The rules that compose an edge do it for two different reasons, and so need two
+;; different answers:
+;;
+;;   the ALPHA- and SYMMETRY-FINDERS compose with a symmetry OF THE CHILD, to compare two
+;;      nodes up to what their children already prove. A bound name has no such other
+;;      spelling, so they leave that column as stored. Asking instead for the name to
+;;      survive would not work here: the shrinking rule deletes a slotless class's
+;;      identity self-loop, so the empty map is the only symmetry left to offer and the
+;;      rule would simply stop firing.
+;;
+;;   CHILD-UPDATE follows the child's renaming toward its LEADER, which a bound name does
+;;      need -- reaching `[0 -> 1] * (Var 0)` from `[1 -> 1] * (Var 1)` is how two
+;;      spellings of one binder are brought to a common form. So that rule stays, and asks
+;;      for the bound slot in the composed edge: renaming it passes, losing it does not.
+;;
+;; The operator rides in a payload here, so each of the three is two rules, one ruling
+;; `lambda` out and one with it pinned. Where a constructor binds structurally there is
+;; only the second. `slotted/xdiff/def4-edges.py` checks what replaces Def. 4 for such a
+;; column: its domain is `{0}` and its child is the variable class.
+
 ;; alpha-finder: two nodes equal up to renaming, one eliminated. For
 ;; `e1 = f(m1*c1, m2*c2)` and `e2 = f(b1*c1, b2*c2)`, `(find-mapping m1 m2 b1 b2)` is the
 ;; least `m` with `m*e2 = e1`. Each edge is first composed with a symmetry of its child,
 ;; so the two are compared up to what their children already prove. A payload column is
 ;; named by the same variable on both sides, so a difference there does not match.
+;;
+;; `lambda` gets its own copy below; see the note above.
 (rule ((= e1 (App2 p1 m1_o c1 m2_o c2))
        (= e2 (App2 p1 b1 c1 b2 c2))
        (= e1 (ordering-max e1 e2))
+       (!= p1 "lambda")
        (RenamesToLeader c1 sym1 c1)
        (RenamesToLeader c2 sym2 c2)
        (= m1 (compose m1_o sym1))
@@ -244,16 +279,45 @@
       ((Equated e1 m e2)
        (delete (App2 p1 m1_o c1 m2_o c2))) :ruleset slotted)
 
+;; The same, for `lambda`, whose child 1 is a bound name: that column is compared as it
+;; is stored. What the solve then has to find is the renaming carrying one bound name to
+;; the other, which is exactly what makes `lam $1. e` and `lam $2. e` alpha-equivalent
+;; once neither name is free in `e`.
+(rule ((= e1 (App2 "lambda" m1_o c1 m2_o c2))
+       (= e2 (App2 "lambda" b1 c1 b2 c2))
+       (= e1 (ordering-max e1 e2))
+       (RenamesToLeader c2 sym2 c2)
+       (= m2 (compose m2_o sym2))
+       (= m (find-mapping m1_o m2 b1 b2))
+       (guard
+         (or (bool-!= e1 e2)
+             (and (bool= e1 e2)
+                  (or (and (bool= (ordering-max m1_o b1) b1) (bool-!= m1_o b1))
+              (and (bool= m1_o b1)
+                   (and (bool= (ordering-max m2_o b2) b2) (bool-!= m2_o b2))))))))
+      ((Equated e1 m e2)
+       (delete (App2 "lambda" m1_o c1 m2_o c2))) :ruleset slotted)
+
 ;; The same solve kept as a symmetry, non-destructively, restricted to the class's slots
 ;; on both sides. `sym_out` comes from a NODE's edges, so unrestricted it would assert a
 ;; symmetry the class does not have; the shrinking rule below would delete that and this
 ;; rule would derive it again, forever.
 (rule ((= e (App2 p1 m1_o c1 m2_o c2))
+       (!= p1 "lambda")
        (RenamesToLeader c1 sym1 c1)
        (RenamesToLeader c2 sym2 c2)
        (= m1 (compose m1_o sym1))
        (= m2 (compose m2_o sym2))
        (= sym_out (find-mapping m1_o m2_o m1 m2))
+       (= cs (ClassSlots e)))
+      ((RenamesToLeader e (compose cs (compose sym_out cs)) e)) :ruleset slotted)
+
+;; and for `lambda`, leaving the bound name alone: a symmetry that moved it would say
+;; nothing, since `cs` has already had it removed by the binder rule below.
+(rule ((= e (App2 "lambda" m1_o c1 m2_o c2))
+       (RenamesToLeader c2 sym2 c2)
+       (= m2 (compose m2_o sym2))
+       (= sym_out (find-mapping m1_o m2_o m1_o m2))
        (= cs (ClassSlots e)))
       ((RenamesToLeader e (compose cs (compose sym_out cs)) e)) :ruleset slotted)
 
@@ -280,8 +344,12 @@
 ;; canonical `m*c'`, the stored edge composing with the child's renaming. Toward the
 ;; leader only, for the same reason migration needs it -- without an orientation the
 ;; child pointer follows an edge one way and is rewritten back the next round, forever.
+;;
+;; `lambda`'s child 1 is a bound name and takes its own rule below; see the note above
+;; the alpha-finder.
 (rule ((RenamesToLeader c1 m c')
        (= node (App2 p1 m1 c1 m2 c2))
+       (!= p1 "lambda")               ; column 1 is a bound name there, not a child
        (= c1 (ordering-max c1 c'))    ; toward the leader only
        ; if the class is unchanged then m must be idempotent: no self-symmetries
        (guard (or (bool-!= c1 c') (bool= (compose m m) m)))
@@ -290,6 +358,20 @@
                   (bool-!= (compose m1 m) m1))))
       ((union node (App2 p1 (compose m1 m) c' m2 c2))
        (delete (App2 p1 m1 c1 m2 c2))) :ruleset slotted)
+
+;; child-update, child 1 of `lambda` -- a bound name there
+(rule ((RenamesToLeader c1 m c')
+       (= node (App2 "lambda" m1 c1 m2 c2))
+       ; the bound name must survive: renaming it is fine, losing it is not
+       (= bound0 (map-get (compose m1 m) 0))
+       (= c1 (ordering-max c1 c'))    ; toward the leader only
+       ; if the class is unchanged then m must be idempotent: no self-symmetries
+       (guard (or (bool-!= c1 c') (bool= (compose m m) m)))
+       ; and the new node must differ from the old one
+       (guard (or (bool-!= c1 c')
+                  (bool-!= (compose m1 m) m1))))
+      ((union node (App2 "lambda" (compose m1 m) c' m2 c2))
+       (delete (App2 "lambda" m1 c1 m2 c2))) :ruleset slotted)
 
 ;; child-update, child 2
 (rule ((RenamesToLeader c2 m c')

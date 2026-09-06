@@ -271,6 +271,34 @@ def lex_greater(a, b, i=0):
     return f"(or {gt}\n              (and (bool= {a[i]} {b[i]})\n                   {lex_greater(a, b, i + 1)}))"
 
 
+#: WHAT A BINDER COLUMN IS, and why three rules have to know.
+#:
+#: `Lam([0 -> x] * Var, m2*c2)` is `lam $x. m2*c2`. The `[0 -> x]` is the name the node
+#: BINDS, and the `Var` under it is only how the encoding spells a slot -- not a child the
+#: node uses. That distinction is invisible in the columns, which is why it has to be
+#: written into the rules that rewrite them, and it matters because the variable class
+#: goes SLOTLESS as soon as two of its invocations are equated. From then on every
+#: renaming it offers is the empty map, and composing a binder edge with one erases the
+#: bound name. Once erased, every later match of a binder pattern -- which reads that slot
+#: out of the edge -- silently fails, and the reference, whose `Bind` holds a `Slot`
+#: outright, keeps making unions we no longer make.
+#:
+#: The two rules that compose an edge do it for different reasons, so they need different
+#: answers:
+#:
+#:   `child_update` follows the child's renaming toward its LEADER, which a binder column
+#:      does need -- reaching `[0 -> x] * Var(0)` from `[x -> x] * Var(x)` is how two
+#:      spellings of one binder are seen to be alpha-equivalent. So the rule stays and
+#:      asks for the bound name in the result: renaming it passes, losing it does not.
+#:
+#:   `alpha_finder` and `symmetry_finder` compose with the child's own SYMMETRY, to try
+#:      the other spellings of the same invocation. A binder column has no other
+#:      spelling, so they skip it. Asking for the name to survive would not do here: the
+#:      shrinking rule deletes a slotless class's identity self-loop, leaving the empty
+#:      map as the only symmetry on offer, and the rule would simply stop firing.
+BOUND_NAME_KEPT = "\n       ; a bound name may be renamed but not lost\n       (= bound{i} (map-get {edge} 0))"
+
+
 def class_slots(name, sig):
     """A node's own slots, offered as an upper bound on its class's.
 
@@ -299,7 +327,7 @@ def self_loop(name, sig):
 """
 
 
-def alpha_finder(name, sig):
+def alpha_finder(name, sig, bound=(), exempt=(), head=None):
     """Two nodes equal up to renaming: keep one, record how the other renames to it.
 
     For `e1 = f(m1*c1, m1'*c2)` and `e2 = f(m2*c1, m2'*c2)`, the solve
@@ -311,17 +339,31 @@ def alpha_finder(name, sig):
 
     Payload columns are named by the same variable on both sides, so a difference
     there simply does not match -- no separate check needed.
+
+    `bound` names binder columns, which are compared as stored rather than composed with a
+    symmetry of their child; see `BOUND_NAME_KEPT`. What the solve then has to find is the
+    renaming carrying one bound name to the other, which is what makes `lam $1. e` and
+    `lam $2. e` alpha-equivalent once neither name is free in `e`. `head` and `exempt`
+    split the rule by operator string, which the string-headed encoding needs and a
+    structural binder does not; see `emit`.
     """
     payloads, edges, kids, _ = cols_of(sig)
     a_o = [f"{e}_o" for e in edges]
-    a, b = list(edges), [f"b{i + 1}" for i in range(len(edges))]
+    a = [a_o[i] if i in bound else e for i, e in enumerate(edges)]
+    b = [f"b{i + 1}" for i in range(len(edges))]
     syms = [f"sym{i + 1}" for i in range(len(kids))]
-    loops = "\n       ".join(f"(RenamesToLeader {kids[i]} {syms[i]} {kids[i]})" for i in range(len(kids)))
-    composed = "\n       ".join(f"(= {a[i]} (compose {a_o[i]} {syms[i]}))" for i in range(len(edges)))
+    pays = [f'"{head}"'] if head is not None else None
+    loops = "\n       ".join(
+        f"(RenamesToLeader {kids[i]} {syms[i]} {kids[i]})" for i in range(len(kids)) if i not in bound
+    )
+    composed = "\n       ".join(
+        f"(= {a[i]} (compose {a_o[i]} {syms[i]}))" for i in range(len(edges)) if i not in bound
+    )
+    not_binder = "".join(f'\n       (!= {payloads[0]} "{h}")' for h in exempt)
     return f"""\
-(rule ((= e1 {pattern(name, sig, edges=a_o)})
-       (= e2 {pattern(name, sig, edges=b)})
-       (= e1 (ordering-max e1 e2))
+(rule ((= e1 {pattern(name, sig, edges=a_o, payloads=pays)})
+       (= e2 {pattern(name, sig, edges=b, payloads=pays)})
+       (= e1 (ordering-max e1 e2)){not_binder}
        {loops}
        {composed}
        (= m (find-mapping {" ".join(a)} {" ".join(b)}))
@@ -330,11 +372,11 @@ def alpha_finder(name, sig):
              (and (bool= e1 e2)
                   {lex_greater(a_o, b)}))))
       ((Equated e1 m e2)
-       (delete {pattern(name, sig, edges=a_o)})))
+       (delete {pattern(name, sig, edges=a_o, payloads=pays)})))
 """
 
 
-def symmetry_finder(name, sig):
+def symmetry_finder(name, sig, bound=(), exempt=(), head=None):
     """The same solve, kept non-destructively as a symmetry of the class.
 
     Restricted to the class's slots. `sym_out` is solved from a *node's* edges, so its
@@ -346,15 +388,24 @@ def symmetry_finder(name, sig):
 
     This is the same mistake as the self-loop rule's, and the same one open question 2
     warns about -- do not derive a class-level fact from a node.
+
+    `bound`, `head` and `exempt` mean what they do in `alpha_finder`. A symmetry that moved
+    a bound name would say nothing anyway: `cs` has had it removed by the binder rule.
     """
-    _, edges, kids, _ = cols_of(sig)
+    payloads, edges, kids, _ = cols_of(sig)
     a_o = [f"{e}_o" for e in edges]
-    a = list(edges)
+    a = [a_o[i] if i in bound else e for i, e in enumerate(edges)]
     syms = [f"sym{i + 1}" for i in range(len(kids))]
-    loops = "\n       ".join(f"(RenamesToLeader {kids[i]} {syms[i]} {kids[i]})" for i in range(len(kids)))
-    composed = "\n       ".join(f"(= {a[i]} (compose {a_o[i]} {syms[i]}))" for i in range(len(edges)))
+    pays = [f'"{head}"'] if head is not None else None
+    loops = "\n       ".join(
+        f"(RenamesToLeader {kids[i]} {syms[i]} {kids[i]})" for i in range(len(kids)) if i not in bound
+    )
+    composed = "\n       ".join(
+        f"(= {a[i]} (compose {a_o[i]} {syms[i]}))" for i in range(len(edges)) if i not in bound
+    )
+    not_binder = "".join(f'\n       (!= {payloads[0]} "{h}")' for h in exempt)
     return f"""\
-(rule ((= e {pattern(name, sig, edges=a_o)})
+(rule ((= e {pattern(name, sig, edges=a_o, payloads=pays)}){not_binder}
        {loops}
        {composed}
        (= sym_out (find-mapping {" ".join(a_o)} {" ".join(a)}))
@@ -406,11 +457,19 @@ def migration(name, sig):
 """
 
 
-def child_update(name, sig, pos):
+def child_update(name, sig, pos, exempt=(), head=None, bound_name=False):
     """Replace child `pos` with its more canonical `m*c'`.
 
     One rule per child position, canonicalising that child to the class's representative:
     the stored edge composes with the child's renaming, `m1` becoming `m1 . m`.
+
+    `bound_name` says this column holds a name the node binds rather than a child it uses,
+    and adds the one condition that makes the rewrite safe there: the bound slot must
+    survive the composition. See `BOUND_NAME_KEPT`.
+
+    `head` pins the operator string and `exempt` rules operator strings out, both for the
+    string-headed encoding, where one constructor serves every operator of an arity and
+    so a column is a bound name or not depending on the row's payload.
 
     Only ever toward the leader, for the same reason migration needs it: a slotted class
     spans several values and `RenamesToLeader` holds both directions between them, so
@@ -419,21 +478,25 @@ def child_update(name, sig, pos):
     the direction the single-parent rule already establishes. When the class is unchanged
     the atom holds trivially, so the self-symmetry case below is unaffected.
     """
-    _, edges, kids, _ = cols_of(sig)
+    payloads, edges, kids, _ = cols_of(sig)
     new_e, new_k = list(edges), list(kids)
     new_e[pos] = f"(compose {edges[pos]} m)"
     new_k[pos] = "c'"
+    pays = [f'"{head}"'] if head is not None else None
+    conds = "".join(f'\n       (!= {payloads[0]} "{h}")' for h in exempt)
+    if bound_name:
+        conds += BOUND_NAME_KEPT.format(i=pos, edge=new_e[pos])
     return f"""\
 (rule ((RenamesToLeader {kids[pos]} m c')
-       (= node {pattern(name, sig)})
+       (= node {pattern(name, sig, payloads=pays)}){conds}
        (= {kids[pos]} (ordering-max {kids[pos]} c'))    ; toward the leader only
        ; if the class is unchanged then m must be idempotent: no self-symmetries
        (guard (or (bool-!= {kids[pos]} c') (bool= (compose m m) m)))
        ; and the new node must differ from the old one
        (guard (or (bool-!= {kids[pos]} c')
                   (bool-!= (compose {edges[pos]} m) {edges[pos]}))))
-      ((union node {pattern(name, sig, edges=new_e, kids=new_k)})
-       (delete {pattern(name, sig)})))
+      ((union node {pattern(name, sig, edges=new_e, kids=new_k, payloads=pays)})
+       (delete {pattern(name, sig, payloads=pays)})))
 """
 
 
@@ -523,6 +586,16 @@ def emit(language, binders=(), provided=None, omit=()):
     `omit` names constructors written out by hand in the file this output includes,
     so emitting them would be a duplicate binding too. Binders over them are left
     out with them.
+
+    THREE RULES TREAT A BINDER COLUMN DIFFERENTLY -- the alpha-finder, the symmetry-finder
+    and child-update -- because a bound name is not a child. `BOUND_NAME_KEPT` above says
+    what goes wrong when they do not, and which answer each one needs.
+
+    Where the binder is declared by the head string rather than the signature -- the
+    string-headed encoding, where one constructor serves every operator of an arity -- the
+    same column is a bound name in some rows and a child in others, so each of the three
+    is emitted twice: once with those heads ruled out, once with the head pinned. A
+    structurally declared binder needs only the second.
     """
     out = []
     for name, sig in language.items():
@@ -549,16 +622,45 @@ def emit(language, binders=(), provided=None, omit=()):
         ]
         if not kids:
             continue  # nothing below touches a child
-        out += [
+        kid_cols = [c for c in sig if c in SLOTTED]
+        structural = tuple(i for i, c in enumerate(kid_cols) if c is BINDER)
+        # a head-pinned binder always covers the first slotted column
+        heads = [head for head, ctor in binders if ctor == name]
+        pinned = tuple(sorted({*structural, 0})) if heads else ()
+
+        def both(build, comment):
+            """A rule, plus the copy a string-headed binder needs with its head pinned."""
+            which = ", ".join(str(i + 1) for i in structural)
+            note = f", leaving child {which} alone -- a bound name has no other spelling" if structural else ""
+            rules = [comment + note, build(bound=structural, exempt=heads)]
+            for head in heads:
+                rules += [f"{comment}, for `{head}`, whose child 1 is a bound name",
+                          build(bound=pinned, head=head)]
+            return rules
+
+        out += both(
+            lambda **kw: alpha_finder(name, sig, **kw),
             ";; alpha-finder: two nodes equal up to renaming, one eliminated",
-            alpha_finder(name, sig),
+        )
+        out += both(
+            lambda **kw: symmetry_finder(name, sig, **kw),
             ";; the same solve kept as a symmetry, non-destructively",
-            symmetry_finder(name, sig),
-            ";; migration: move a follower's node into the leader's frame",
-            migration(name, sig),
-        ]
+        )
+        out += [";; migration: move a follower's node into the leader's frame", migration(name, sig)]
         for pos in range(len(kids)):
-            out += [f";; child-update, child {pos + 1}", child_update(name, sig, pos)]
+            if kid_cols[pos] is BINDER:
+                out += [
+                    f";; child-update, child {pos + 1} -- a bound name",
+                    child_update(name, sig, pos, bound_name=True),
+                ]
+                continue
+            exempt = heads if pos == 0 else ()
+            out += [f";; child-update, child {pos + 1}", child_update(name, sig, pos, exempt=exempt)]
+            for head in exempt:
+                out += [
+                    f";; child-update, child {pos + 1} of `{head}` -- a bound name there",
+                    child_update(name, sig, pos, head=head, bound_name=True),
+                ]
 
     binder_rules = []
     for name, sig in language.items():

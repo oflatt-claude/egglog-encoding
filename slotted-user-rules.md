@@ -1889,7 +1889,7 @@ site in the machinery, and checking on real cases which ones actually truncate:
 | site | truncation | why it is or is not a problem |
 | --- | --- | --- |
 | idempotence tests — `(bool= (compose m m) m)`, and the shrinking rule | intended | truncation *is* the test: it is how a non-permutation is detected |
-| child-update, `(compose m1 m)` | impossible | `m`'s image is inside `m1`'s domain by well-formedness |
+| child-update, `(compose m1 m)` | **observed on a binder column** | this row used to read *impossible*, on the argument that `m`'s image is inside `m1`'s domain by well-formedness. It is, for an edge that means a USE of its child. A BINDER column does not: what it holds is a name the node binds, and the variable class under it goes slotless as soon as two of its invocations are equated, so `m` is the empty map and the bound name is composed away. Nothing then matches a binder pattern over that node, and the missed unions look like an ordinary matching gap. The rule now asks for the bound slot in the result -- see `BOUND_NAME_KEPT` in `slotted-encoder.py` |
 | **migration**, `(compose (inverse m) m1)` | **observed** | **was unsound**: the narrowed edge is asserted as fact, claiming its child is slotless. Now `compose-total` |
 | single-parent, `(compose (inverse m1) m2)` | possible, never observed | lands in a `RenamesToLeader` row, where a partial map is meaningful. 0 occurrences across the corpus |
 | transitivity, `(compose m12 m23)` | observed on `X1` | same: narrowing through a partial self-loop says the slots are redundant, which is what a partial map means there |
@@ -1908,11 +1908,17 @@ matters is where the map lands:**
 | the input to a test | yes | failure just makes the rule decline |
 
 Only the first line needs anything from the primitives, and only two sites produce
-an edge from a composition: migration, and child-update where it cannot happen. So
-migration uses `compose-total`, which refuses to drop a key, and the guard that
-used to compare `map-length` by hand is gone — the invariant is stated once, in the
-name of the primitive, instead of re-derived per site. A narrowing composition can
-no longer reach an edge position by accident.
+an edge from a composition: migration, and child-update. Migration uses
+`compose-total`, which refuses to drop a key, so the guard that used to compare
+`map-length` by hand is gone — the invariant is stated once, in the name of the
+primitive, instead of re-derived per site.
+
+Child-update cannot use `compose-total`, because narrowing there is sometimes the
+point: an edge to a child that has just lost a slot *should* lose it too. So it
+carries a condition instead, and only on the columns where narrowing is never
+right. Reading a whole audit row as settled is what this cost: "impossible" was
+argued for edges that mean a use of their child, and the argument was then applied
+to a column that does not.
 
 ## Primitives
 

@@ -386,10 +386,20 @@ def to_reference_shape(g, var_class=None):
                     if i >= len(elems) or elems[i][0] != "child":
                         continue
                     child, m = elems[i][1], dict(elems[i][2])
-                    # The bound slot rides in this edge. It can have been dropped -- a
-                    # binder whose slot nothing uses -- and then there is no name left
-                    # to carry over; any fresh one does, because a slot the node's
-                    # class does not have is renamed freely when nodes are matched.
+                    # The bound slot rides in this edge, and may be gone by the time it
+                    # gets here -- so a fresh name stands in, which is sound because a
+                    # slot the node's class does not have is renamed freely when nodes
+                    # are matched.
+                    #
+                    # DO NOT read a missing name as an encoding bug. `build_encoding_graph`
+                    # translates every edge through its child's frame, which is empty
+                    # exactly when the variable class is slotless, so the rendering drops
+                    # the bound name on its own and cannot be told apart from an encoding
+                    # that lost it. Making this a failure turns ~30 of a 1200-case sweep
+                    # red for cases whose answers agree. The invariant is real, and
+                    # `slotted/xdiff/def4-edges.py` is where it can be seen: it reads the
+                    # raw rows, and asserts a binder column's domain is `{0}` and its
+                    # child the variable class.
                     if 0 in m:
                         bound = m[0]
                     elif len(m) == 1:
