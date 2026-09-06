@@ -3833,17 +3833,32 @@ theorem EncStep.reached {P pre suf : Program} {sd : Database} {d : FDatabase}
 
 /-! ##### The one case that does not close -/
 
-/-- **The command induction's rule-firing case, as a `Prop`. REFUTED at `Cmd.saturate`.**
+/-- **The command induction's rule-firing case, as a `Prop`. REFUTED — `Egglog.unionsFire_false`
+and `Egglog.unionsFire_false_encodeSig`, both `sorryAx`-free.**
 
-`Encoding/Complete.lean`'s `unionsJoined_fire` carries the counterexample and the measurement.
-In one line: `encodeCmd` gives a source `.saturate R` the block
-`[.saturate R, .saturate rebuildRuleset]`, so the target rebuilds **once, after** `R` has
-saturated, and its second round reads the first round's rows unre-keyed where the
-specification's second round sees the first round's `union` through `Cong`. The `Cmd.run` half
-is untouched — one source round against one target round and its own rebuild — and is what the
-corpus measures. Left stated over both commands, because narrowing it to `Cmd.run` would move
-the gap into `unionsInv_step` rather than close it, and because the repair belongs in
-`Encoding/Encode.lean` or in a domain clause.
+Not at `Cmd.saturate` any more: that writer was a defect in `encodeCmd`, it is fixed
+(`allMaintenanceRules`), and `sat-hit` and the other four `sat-*` cases agree. The refutations
+below are at `Cmd.run`, and they are refutations of **this statement** rather than of `encode`:
+the ten hypotheses say nothing about `td.sig` and nothing about the rules `sd` holds, so the
+encoded rule can match and still write nothing.
+
+* `unionsFire_false`: a rule with an **empty** query, whose encoded query is empty too, so the
+  enumerator offers the empty substitution and no row is read. `td.sig` is the encoder's own
+  with the head's skolem withdrawn, `Expr.eval` returns `none` there, `execLocalActions`
+  propagates it, and `fireInto` answers a stuck firing by returning the accumulator. The source
+  builds `(H)` and the target holds no `@HView` entry. Its program is **in `encode`'s domain**,
+  all nine clauses, so no narrowing of the source language reaches this.
+* `unionsFire_false_encodeSig`: the same conclusion at `td.sig = encodeSig cxpProgram` on the
+  nose, so no target-side clause repairs it. The source rule's query applies a **primitive**;
+  `Expr.eval` consults `Prim.ofName` first and `encodeQueryExpr` emits a view read of a table
+  nothing writes. `Program.EncodeDomain.noPrim` is what rejects such a program, and this `Prop`
+  is never given the program.
+
+`Encoding/Complete.lean`'s `unionsJoined_fire` carries both, and names the four derived clauses
+the repair wants — the target's signature, `FDatabase.RowColumnsValued`, `FDatabase.NoAtEnv`,
+and the source rules' encodability — each à la carte, in the shape `RowMech` already has, so
+that `unionsJoined_fire_satisfiable` survives them. Left stated over both firing commands,
+because narrowing it to `Cmd.run` would move the gap into `unionsInv_step` rather than close it.
 
 The five other commands are read-backs of `set`s the encoder emitted, and those read-backs are
 proved (`viewReprAll_self_of_execProgramM`, `out_uf_of_execProgramM`). A `Cmd.run` or a
@@ -3911,7 +3926,8 @@ hypothesis through `unionsInv_step`, `unionsInv_of_programStep`, `unionsInv_exec
 `execM_unionsJoined`, and `Encoding/Complete.lean`'s `unionsJoined_fire` is where it is
 answered, with no duplication of `Encoding/Match.lean`'s expression induction and no
 restructuring of anything above. `unionsJoined_fire_satisfiable` is these ten hypotheses
-holding together. -/
+holding together — and the two refutations above are those same ten holding at a state whose
+encoded rule cannot run, which is what says the list is too short. -/
 def UnionsFire : Prop :=
   ∀ {R : RulesetName} {c : Cmd} {sd sd' : Database} {td td' : FDatabase},
     (c = Cmd.run R ∨ c = Cmd.saturate R) → CmdStep sd c sd' →
