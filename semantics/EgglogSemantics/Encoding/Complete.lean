@@ -6742,6 +6742,254 @@ theorem uSrc_union_target_notLit :
   have hB : (Expr.app "B" []).eval uSig uSrcBase.env = some uB := rfl
   exact ⟨hA, hB, union_target_notLit uSrcBase_cmdStep_union rfl hA hB⟩
 
+/-! ## The command induction's rule-firing case
+
+`Egglog.UnionsFire` is stated in `Encoding/Correspond.lean`, where the invariant it feeds is,
+and answered here, because everything a worked target firing reads is below that file:
+`patternHolds_values_of_mem_rows` is the only route from a row to an atom,
+`mem_matchQuery_of_lookup` the only route from atoms to the enumerator, and `eclassRule_fires`
+the one worked composition of the two. Nothing above moved and `Encoding/Match.lean`'s
+expression induction is not duplicated. -/
+
+/-- **A query every atom of which is an entry read that a live row answers is one the
+enumerator offers**, at the substitution the rows' own columns determine. `eclassRule_fires` is
+this composition at a rule of fixed shape; here the shape is the hypothesis, so it applies to
+the view reads `encodeQueryExpr` emits for a source query as well as to a maintenance rule's.
+
+No congruence closure is asked of anything: `patternHolds_values_of_mem_rows` needs only
+reflexive pairs. That is what keeps `Signature.AllConstructors` — and with it
+`execRunRules_RunRules`, which an encoded target cannot satisfy — off the route entirely. -/
+theorem mem_matchQuery_of_rows {d : FDatabase} (hcv : d.RowColumnsValued) {q : Query} {τ : Env}
+    (hdef : ∀ v ∈ Query.freeVars q d.env, (Env.lookup v τ).isSome = true)
+    (hval : ∀ v ∈ Query.freeVars q d.env, ∀ t, Env.lookup v τ = some t → t ∈ d.valueTerms)
+    (hrow : ∀ p ∈ q, ∃ vs f as ts us, p = Pattern.values vs f as ∧
+      (d.sig.mergeOf f).isSome = true ∧
+      Expr.evalList d.sig as (d.env ++ Env.canon (p.freeVars d.env) τ) = some ts ∧
+      Expr.evalList d.sig vs (d.env ++ Env.canon (p.freeVars d.env) τ) = some us ∧
+      (⟨f, ts, us⟩ : Row) ∈ d.rows) :
+    Env.canon (Query.freeVars q d.env) τ ∈ matchQuery d q := by
+  refine mem_matchQuery_of_lookup hdef hval fun p hp => ?_
+  obtain ⟨vs, f, as, ts, us, rfl, hmg, hats, hvus, hr⟩ := hrow p hp
+  exact patternHolds_values_of_mem_rows hmg hats hvus hr
+    (fun c hc => FDatabase.mem_terms_of_mem_valueTerms (hcv _ hr c hc))
+
+/-! ### The reading through rows
+
+`ViewRepr` ends in `Database.Out`, which reads entry **terms**; an encoded rule reads
+`FDatabase.rows`. The two are not the same reading, and this is the one the atoms above want. -/
+
+mutual
+
+/-- **The reading through live rows**: the parent's key columns are exactly the ids its
+children's own rows record. `ViewRepr.of_rowRepr` is the check that this is a strengthening of
+`UnionsInv.readsAt` rather than a different claim. -/
+inductive RowRepr (d : FDatabase) : Term → Term → Prop where
+  | lit {l : Lit} : RowRepr d (.lit l) (.lit l)
+  | app {f : FnName} {as es : List Term} {e pf : Term} :
+      RowReprList d as es → (⟨viewName f, es, [e, pf]⟩ : Row) ∈ d.rows →
+      RowRepr d (.app f as) e
+
+/-- `RowRepr` over an argument list. -/
+inductive RowReprList (d : FDatabase) : List Term → List Term → Prop where
+  | nil : RowReprList d [] []
+  | cons {a e : Term} {as es : List Term} :
+      RowRepr d a e → RowReprList d as es → RowReprList d (a :: as) (e :: es)
+
+end
+
+mutual
+
+/-- **A row reading is an entry reading.** `mem_terms_of_indexOk` is the row's own entry term
+and `FDatabase.EqsRefl` makes `Database.Out` read it at the key it sits at. The converse is what
+the residue is missing, and it does not hold: `FDatabase.EntryRowsUF` answers an entry with a
+row whose e-class column is only `Database.UFReach`-reachable from the entry's, while a parent
+read is keyed on its children's columns on the nose. -/
+theorem ViewRepr.of_rowRepr {d : FDatabase} (hr : d.EqsRefl) (hidx : d.IndexOk)
+    (hcv : d.RowColumnsValued) (hmg : ∀ g : FnName, d.sig.mergeOf (viewName g) ≠ none) :
+    ∀ {t e : Term}, RowRepr d t e → ViewRepr d.toDatabase t e
+  | _, _, .lit => .lit
+  | _, _, @RowRepr.app _ f _ es e pf hl hrow => by
+      have hout : d.toDatabase.Out (viewName f) es [e, pf] := by
+        refine ⟨es, CongList.refl (fun a ha => ?_), ?_⟩
+        · rw [FDatabase.toDatabase_terms]
+          exact FDatabase.mem_terms_of_mem_valueTerms
+            (hcv _ hrow a (List.mem_append_left _ ha))
+        · rw [FDatabase.toDatabase_terms]
+          exact mem_terms_of_indexOk hr hidx hrow (hmg _)
+      exact .app (ViewReprList.of_rowReprList hr hidx hcv hmg hl) hout
+
+@[inherit_doc ViewRepr.of_rowRepr]
+theorem ViewReprList.of_rowReprList {d : FDatabase} (hr : d.EqsRefl) (hidx : d.IndexOk)
+    (hcv : d.RowColumnsValued) (hmg : ∀ g : FnName, d.sig.mergeOf (viewName g) ≠ none) :
+    ∀ {ts es : List Term}, RowReprList d ts es → ViewReprList d.toDatabase ts es
+  | _, _, .nil => .nil
+  | _, _, .cons h hl =>
+      .cons (ViewRepr.of_rowRepr hr hidx hcv hmg h)
+        (ViewReprList.of_rowReprList hr hidx hcv hmg hl)
+
+end
+
+/-! ### The chain, run end to end
+
+At `ncTgt`, which is the state `Database.ReadsSelf` is refuted at (`ncTgt_not_readsSelf`) and
+`Database.UnionsJoined` holds at (`ncTgt_unionsJoined`). The source rule fired at `x := (B)`
+and built `(F (B))`; the encoded rule fires at the **id** `(A)`, because `mergeResult` keeps
+`ordering-min` and the `@FView` row sits at the leader. Nothing here is decided: `closureF` does
+not reduce in the kernel, so the match is *proved*, through `mem_matchQuery_of_rows`. -/
+
+/-- The encoding of the source rule `ncProgram` installs. -/
+def ncEncRule : Rule := (encodeRule 0 ncRule 0).1
+
+/-- Its query: one view read, with the source variable in the key column and the read's two
+generated columns. -/
+theorem ncEncRule_query :
+    ncEncRule.query = [Pattern.values [.var "@v0", .var "@v1"] (viewName "F") [.var "x"]] := rfl
+
+/-- Its head: `encodeBuild`'s two `set`s for `(F x)`, the view entry under `@Fiat`. -/
+theorem ncEncRule_actions :
+    ncEncRule.actions
+      = [Action.set (termName "F") [.var "x", .app "F" [.var "x"]] [],
+         Action.set (viewName "F") [.var "x"] [.app "F" [.var "x"], fiatE]] := rfl
+
+theorem ncEncRule_mem : ncEncRule ∈ ncTgt.rules := List.mem_cons_self
+
+theorem ncTgt_env : ncTgt.env = [] := rfl
+
+theorem ncTgt_row_fview : (⟨viewName "F", [ncA], [ncFA, ncFiat]⟩ : Row) ∈ ncTgt.rows := by decide
+
+theorem ncTgt_row_bview : (⟨viewName "B", [], [ncA, ncTFF]⟩ : Row) ∈ ncTgt.rows := by decide
+
+theorem ncTgt_rowColumnsValued : ncTgt.RowColumnsValued := by
+  change ∀ r ∈ ncTgt.rows, ∀ t ∈ r.args ++ r.out, t ∈ ncTgt.valueTerms
+  decide
+
+/-- **The id substitution.** The source rule fired at `x := (B)`; the encoded one fires at the
+id `(A)` that `(B)`'s row records, and at the read's own two columns. -/
+def ncIdSubst : Env := [("@v0", ncFA), ("@v1", ncFiat), ("x", ncA)]
+
+theorem ncTgt_freeVars : Query.freeVars ncEncRule.query ncTgt.env = ["@v0", "@v1", "x"] := rfl
+
+theorem ncTgt_canon :
+    Env.canon (Query.freeVars ncEncRule.query ncTgt.env) ncIdSubst = ncIdSubst := rfl
+
+/-- **The encoded query matches at the id substitution.** -/
+theorem ncTgt_mem_matchQuery : ncIdSubst ∈ matchQuery ncTgt ncEncRule.query := by
+  rw [← ncTgt_canon]
+  refine mem_matchQuery_of_rows ncTgt_rowColumnsValued (fun v hv => ?_) (fun v hv t ht => ?_)
+    (fun p hp => ?_)
+  · rw [ncTgt_freeVars] at hv
+    rcases (by simpa using hv : v = "@v0" ∨ v = "@v1" ∨ v = "x") with rfl | rfl | rfl <;> rfl
+  · rw [ncTgt_freeVars] at hv
+    rcases (by simpa using hv : v = "@v0" ∨ v = "@v1" ∨ v = "x") with rfl | rfl | rfl <;>
+      · obtain rfl : t = _ := Option.some.inj ht.symm
+        decide
+  · obtain rfl : p = Pattern.values [.var "@v0", .var "@v1"] (viewName "F") [.var "x"] := by
+      simpa [ncEncRule_query] using hp
+    exact ⟨_, _, _, [ncA], [ncFA, ncFiat], rfl, by decide, rfl, rfl, ncTgt_row_fview⟩
+
+/-- **The row reading at the member whose own row moved**: `(B)`'s view row was re-keyed onto
+the leader `(A)`, so the id `(B)` reads to is `(A)`. -/
+theorem ncTgt_rowRepr_B : RowRepr ncTgt ncB ncA := .app .nil ncTgt_row_bview
+
+/-- **And the term the source's firing built reads through it**, at the state where
+`Database.ReadsSelf` fails: `(F (B))` reads to `(F (A))`, over `(B)`'s row and then the
+`@FView` row keyed at `(A)`. -/
+theorem ncTgt_rowRepr_FB : RowRepr ncTgt ncFB ncFA :=
+  .app (.cons ncTgt_rowRepr_B .nil) ncTgt_row_fview
+
+theorem ncTgt_isCtor_F : ncTgt.sig.IsCtor "F" := by decide
+
+/-- The head's key and skolem, evaluated at the id substitution. -/
+theorem ncTgt_evalList_head :
+    Expr.evalList ncTgt.sig [Expr.var "x", .app "F" [.var "x"]] (ncTgt.env ++ ncIdSubst)
+      = some [ncA, ncFA] := by
+  have hx : Expr.eval ncTgt.sig (.var "x") (ncTgt.env ++ ncIdSubst) = some ncA := rfl
+  simp only [Expr.evalList, hx, Option.bind_some, Option.map_some,
+    Expr.eval_app_ctor (show Prim.ofName "F" = none from rfl) ncTgt_isCtor_F]
+  rfl
+
+/-- The state the encoded rule's own firing returns: the two `set`s its head emitted, at the
+ids the match bound. -/
+def ncFired : FDatabase :=
+  { ((({ ncTgt with env := ncTgt.env ++ ncIdSubst } : FDatabase).addRow
+        (termName "F") [ncA, ncFA] []).addRow (viewName "F") [ncA] [ncFA, ncFiat]) with
+      env := ncTgt.env, rules := ncTgt.rules }
+
+theorem ncFired_row : (⟨viewName "F", [ncA], [ncFA, ncFiat]⟩ : Row) ∈ ncFired.rows :=
+  @mem_addRow_rows_self
+    ((({ ncTgt with env := ncTgt.env ++ ncIdSubst } : FDatabase).addRow
+      (termName "F") [ncA, ncFA] [])) (viewName "F") [ncA] [ncFA, ncFiat]
+
+/-- **The block evaluates**, which is the half of a firing a valid substitution is not. -/
+theorem ncTgt_encRule_fired : Fired ncTgt ncEncRule ncIdSubst ncFired := by
+  change execLocalActions ncTgt ncEncRule.actions ncIdSubst = some _
+  rw [execLocalActions, ncEncRule_actions]
+  simp only [execActions, Egglog.execAction, ncTgt_evalList_head, Option.bind_some]
+  rfl
+
+/-- **The chain, end to end**: the row makes the encoded atom hold, the atom makes the
+enumerator offer the id substitution, the block evaluates, and the head's row is one the
+round's post-state records. -/
+theorem ncTgt_encRule_fires :
+    (⟨viewName "F", [ncA], [ncFA, ncFiat]⟩ : Row) ∈ (execRunRules "r" ncTgt).rows :=
+  mem_rows_execRunRules.mpr (Or.inr ⟨ncEncRule, ncEncRule_mem, rfl, ncIdSubst,
+    ncTgt_mem_matchQuery, ncFired, ncTgt_encRule_fired, ncFired_row⟩)
+
+/-- **The command induction's rule-firing case. Not proved.**
+
+Its statement, its five closed siblings and the refutation that fixed its hypotheses are in
+`Encoding/Correspond.lean` (`Egglog.UnionsFire`, `unionsInv_step`, `unionsFireClaim_false`).
+What is recorded here is what the route through this file settles and what it does not.
+
+**The route is the enumerator's own, and no general converse is wanted.**
+`execRunRules_RunRules` needs `Signature.AllConstructors`, which an encoded target fails at
+`@UF` and at every view, so the two matchers do not coincide here and a `Spec/Match.lean`-level
+converse would not close this. It is also not needed. `mem_matchQuery_of_rows` is the enumerator
+lower bound directly, over `mem_matchQuery_of_lookup` and `patternHolds_values_of_mem_rows`, and
+it asks the closure for reflexive pairs only. `ncTgt_encRule_fires` is the whole chain — rows,
+`patternHolds`, `matchQuery`, the block evaluating (`ncTgt_encRule_fired`), the head's row in
+the round's post-state — run at a **source** rule's encoding, at the state where
+`Database.ReadsSelf` is refuted (`ncTgt_not_readsSelf`) and `Database.UnionsJoined` holds
+(`ncTgt_unionsJoined`). Proved, not decided: `closureF` does not reduce in the kernel.
+
+**And the enumerator's under-firing is not the obstruction.** The specification fires once per
+*member* of a premise's congruence class and the enumerator once per row; the substitution
+wanted is the row's. In the target rule the source's own variables *are* id variables —
+`encodeQueryExpr` returns a source variable unchanged as the expression naming its e-class — so
+what the match wants is an id per source variable and the read's own two columns per generated
+pair. `ncIdSubst` is that substitution at the instance: the source rule fired at `x := (B)` and
+the encoded one at the id `(A)`, because `mergeResult` keeps `ordering-min` and the `@FView` row
+sits at the leader.
+
+**What is missing is a `rows` reading, and it is `RowRepr`.** `UnionsInv.readsAt` is a `terms`
+fact — `ViewRepr` ends in `Database.Out` — while every atom above wants a live row.
+`ViewRepr.of_rowRepr` is the check that `RowRepr` is a strengthening of `readsAt` and not a
+different claim; `ncTgt_rowRepr_FB` is it holding at the term the source firing built, over the
+row `(B)`'s own entry was re-keyed to. The converse does not hold: `FDatabase.EntryRowsUF`
+(proved, `execM_entryRowsUF`) answers an entry with a row whose e-class column is only
+`Database.UFReach`-reachable from the entry's, and a parent read is keyed on its children's
+columns **on the nose** — there is no slack, because an encoded target asserts nothing
+(`execM_encode_eqsRefl`) and so `patternHolds`' congruence is the identity. So neither
+`execM_entryRowsUF` nor `execM_viewRowsRooted` — which roots a row's *value* column, not its
+key — converts `readsAt` into `RowRepr`.
+
+**And carrying `RowRepr` on the invariant re-couples with `execM_rebuildClosed`.** A block's
+trailing `Cmd.saturate rebuildRuleset` can move a *child*'s row: two `set`s at one view key
+collide, the merge keeps `ordering-min`, and the child's e-class column drops to the new leader.
+The parent's row still sits at the **old** key, and the row at the new key is what the **column**
+rebuild rules write — the same fixpoint mechanism `execM_rebuildClosed` is left owing, where its
+e-class half is already discharged (`eclassRule_fires`, `no_ufRowEdge_of_rowsClosed`). So this
+residue is not free of that one after all, and the two are left where they are rather than
+entangled: what this one needs is the column rules at their fixpoint, stated for a key tuple and
+not for an e-class column.
+
+**A valid substitution is still not a firing.** `RuleResults` is a substitution *and* a block
+that evaluates, which is the falsity `mem_terms_of_ruleFired`/`mem_eqs_of_ruleFired` already
+cost once. `ncTgt_encRule_fired` is that half exhibited on the target side, and
+`mem_rows_execRunRules` is where the head's writes are read back. -/
+theorem unionsJoined_fire : UnionsFire := by
+  sorry
+
 /-! ## The forward half's residue, and the correspondence
 
 `Database.RebuildClosed` and its four consumers are stated here and not in
@@ -7086,7 +7334,7 @@ theorem execM_viewsCover {P : Program} {src : Database} {tgt : FDatabase}
     (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
     (htgt : execM (encode P) = some tgt) : tgt.toDatabase.ViewsCover src :=
   Database.ViewsCover.of_viewJoined (execM_viewJoined hdom hsrc htgt)
-    (unionsInv_execM hdom hsrc htgt).reads
+    (unionsInv_execM unionsJoined_fire hdom hsrc htgt).reads
 
 @[inherit_doc execM_viewsCover]
 theorem execM_viewsCover_shared {P : Program} {src : Database} {tgt : FDatabase}
@@ -7105,7 +7353,7 @@ theorem execM_unionsRead {P : Program} {src : Database} {tgt : FDatabase}
     (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
     (htgt : execM (encode P) = some tgt) : tgt.toDatabase.UnionsRead src :=
   unionsRead_of_viewJoined (execM_viewJoined hdom hsrc htgt)
-    (execM_unionsJoined hdom hsrc htgt)
+    (execM_unionsJoined unionsJoined_fire hdom hsrc htgt)
 
 /-- **Obligation `assert`, at the encoding**, split by writer. `Database.addTerm` writes a
 reflexive equation per subterm built, and `sameClass_self_of_viewsCover` discharges those out

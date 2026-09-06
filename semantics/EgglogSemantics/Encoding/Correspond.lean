@@ -113,7 +113,11 @@ both are decided at the witness at the end of this file.
   reflexive equations, and whose `reads` clause is the block's own read-back), a top-level
   `let` (whose `hvar` obligation the invariant supplies, `UnionsInv.hvar`) and a top-level
   `union` (whose edge `out_uf_of_execProgramM` reads back off the emitted `set`, between ids
-  the same block's builds made). `unionsInv_execM` runs it from
+  the same block's builds made). Its sixth case is `Egglog.UnionsFire`, stated here and
+  **threaded as a hypothesis** through `unionsInv_step`, `unionsInv_of_programStep`,
+  `unionsInv_execM` and `execM_unionsJoined`, because what answers it is below
+  `Encoding/Match.lean`: `Encoding/Complete.lean`'s `unionsJoined_fire` is where it is
+  discharged. `unionsInv_execM` runs the induction from
   the empty source database and the state the prelude leaves, and `execM_unionsJoined` is its
   data clause. Three lemmas make it go through and each is worth naming:
   `Expr.eval_sigIndep` — two successful evaluations in one environment agree, whatever the two
@@ -238,10 +242,14 @@ both are decided at the witness at the end of this file.
   `Expr.eval`, whose application case demands `Signature.IsCtor`. What is left of that residue
   is the **assembly**: the bridge reaches a landing site through `Database.UFReach`, over `@UF`
   *entry* terms, and the forest is stated over `@UF` **rows**, so nothing yet identifies the
-  root a reader lands on with the root the union-find walks to. `unionsJoined_fire` is the
+  root a reader lands on with the root the union-find walks to. `Egglog.UnionsFire` is the
   whole of a **target firing behind a source firing** — the one command case the read-back does
   not reach — and it now carries both of the command induction's data clauses, `joined` and
-  `reads`, because a rule head builds as well as unions and one firing answers both.
+  `reads`, because a rule head builds as well as unions and one firing answers both. It is
+  stated here and answered in `Encoding/Complete.lean` (`unionsJoined_fire`), where the row
+  lemmas it runs on live; the route is `mem_matchQuery_of_rows` and `ncTgt_encRule_fires` is it
+  end to end at a source rule's encoding, and what is left of it is a **`rows` reading** of
+  every source term (`RowRepr`), which re-couples with `execM_rebuildClosed`'s column rules.
   `Encoding/Complete.lean`'s `execM_soundTerms` is the completeness half — it is stated there
   and not here because it consumes `Encoding/Match.lean`'s two head writers, which are
   downstream — and the state's own equations are no longer part of it: `execM_encode_eqsRefl`
@@ -3563,100 +3571,58 @@ theorem unionsFireClaim_false : ¬ UnionsFireClaim := by
 
 /-! ##### The one case that does not close -/
 
-/-- **The command induction's rule-firing case. Not proved.**
+/-- **The command induction's rule-firing case, as a `Prop`.**
 
 The five other commands are read-backs of `set`s the encoder emitted, and those read-backs are
 proved (`viewReprAll_self_of_execProgramM`, `out_uf_of_execProgramM`). A `Cmd.run` or a
 `Cmd.saturate` is not one: the equations it adds are the ones a **source rule firing**'s head
-`union` asserted, and to read one back the encoded rule has to have fired — at a substitution
-whose ids are ids of the terms the source's own firing built.
+`union` asserted and the terms it adds are the ones that firing's head **built**, so both data
+clauses want the encoded rule to have fired — at a substitution whose ids are ids of the terms
+the source's own firing built. One firing answers both, which is why they are one residue.
 
-**What this may not ask for, and what refutes the stronger form.** What it used to conclude was
-the pair `Database.UnionsJoined.of_readsSelf` takes: every source term reading to *itself*
-(`Database.ReadsSelf`), and a direct `@UF` edge between the two endpoints of every source
-equation. Both are false at the state an encoded run reaches
-(`ncTgt_not_readsSelf`, `Database.ReadsSelf`), and for one reason: a source rule fires once per
-*member* of a premise's congruence class — `Spec/Match.lean`'s `ValidEnv` binds a variable to
-any term the source holds and `Matches` reads the instance up to congruence — while the encoded
-rule reads `d.rows` at a `.merge` function (`patternHolds`) and the target holds one row per
-recorded key. The rows sit at the union-find *leader*, because `mergeResult` keeps
-`ordering-min` and `@UF`'s edges run max-to-min, so a source term built over a non-leader member
-is a term no view entry carries in its e-class column, and a head `union` over such a member is
-a source equation with no target edge between those two terms.
+**Not the pair `Database.UnionsJoined.of_readsSelf` takes.** That asks every source term to read
+to *itself* and every source equation to have a direct `@UF` edge between its endpoints; both
+fail at an encoded target (`ncTgt_not_readsSelf`), because a source rule fires once per member of
+a premise's congruence class while the rows sit at the union-find leader.
+`Database.UnionsJoined` asks instead for an id per endpoint and the edge between the **ids**,
+which holds at that very state (`ncTgt_unionsJoined`).
 
-`Database.UnionsJoined` asks for neither: an id for each endpoint, and the edge between the
-*ids*. At the very state the counterexample is built from that holds — `ncTgt_unionsJoined` —
-so this is a hole and not a falsity. What has to fill it is a target firing behind the source's,
-which is `Encoding/Match.lean`'s correspondence in the direction
-`exists_validQuerySubst_of_encodeQuery` does not run.
-
-**Stated at `td'` and not at `D`, and with the target's own state as a hypothesis.** The
-version that stood here took the invariant's clauses at `D` and `td'.terms ⊆ D.terms` as the
-only link, and it is **refuted** (`unionsFireClaim_false`): `patternHolds` reads the state the
-encoded rule runs at, and nothing in that version said anything about that state beyond its
-environment — not even that it held the encoded rule. So the hypotheses here are `hrules`, the
-encoded rule being one the target holds, and `hreads`/`hjoined`, the two data clauses at `td`;
-the conclusion is at `td'` and `unionsInv_step` moves it to `D` by `ViewRepr.mono`.
-
-**What is still missing after that repair, and it is not small.** `hreads` gives each source
-term an id through `Database.Out`, which reads `terms`; `patternHolds` at a view atom reads
-`d.rows`, and a term is not a row (`cxTgt_not_indexCurrent` is that gap, compiled). So these
-hypotheses are necessary and not yet known to be sufficient, and the next thing to settle is
-whether a *row*-level clause at `td` is what the five other cases would then have to pay — which
-is the rebuild's own argument and so `execM_rebuildClosed`'s, not this one's. What is *not* in
-doubt is that no clause stated at `D` can serve: that is what the refutation above settles.
-
-**And the firing wanted here is the interpreter's, not the specification's.** `hrun` is
-`FDatabase.execProgramM`, so what has to fire is `execRunRules`, which enumerates through
-`matchQuery`. The two matchers coincide only on the constructor fragment
-(`execRunRules_RunRules` takes `Signature.AllConstructors`), and an encoded target is not in it —
-`@UF` and every `@fView` carry a `:merge`. Off that fragment only `execRunRules_contained` is
-available, and it runs target-into-specification: the enumerator **under**-fires, because
-`FDatabase.valueTerms` is stricter than `Spec/Match.lean`'s `ValidEnv`. So a converse at the
-level of `Spec/Match.lean`'s `Matches` would not by itself close this; what is needed is a
-`matchQuery` membership, which is a `rows` fact and not a `terms` one.
-
-**Where the converse would have to live.** `Encoding/Match.lean` is downstream of this file, so
-`patternRead_of_matches` and everything around it is not in scope here; a worked target firing
-either moves this residue below that file or duplicates its expression induction. That is a
-file-order fact about the repository, not a mathematical one, and it is worth knowing before
-the next attempt spends anything.
-
-**Both data clauses at once, and for the same reason.** `reads` — every source term having
-*some* id — is the other half of the conclusion, and its five other command cases are the
-build read-back (`viewReprAll_self_of_execProgramM`), discharged in `unionsInv_step`. A rule
-head **builds** as well as unions, and the term it builds at a non-leader substitution is a
-term no block ran a `set` for; the id it has is the leader's row, and the leader's row is the
-target's own firing. One firing answers both clauses, which is why they are one residue rather
-than two: `Database.ViewsCover` is now `Database.ViewJoined` plus `reads`
-(`Database.ViewsCover.of_viewJoined`), so this residue and `execM_viewJoined` between
-them are the whole forward half.
-
-**What it was blamed on before, and what that turned out to be.** `FDatabase.IndexCurrent`
-(`Proofs/Merge.lean`, refuted by `cxTgt_not_indexCurrent`) and the run-wide index argument that
-would replace it are about the row a *rebuild* displaced. They are real, and they are not this:
-here the row was never written, at any state, by any block. That argument is
-`execM_viewJoined`'s, and this residue does not share it — a target firing is a `rows`
-fact about the state the encoded rule ran at, not about a row the rebuild moved.
+**Stated at `td'` and not at `D`, with the target's own state as a hypothesis.** The version
+that took the invariant's clauses at the run's final state and `td'.terms ⊆ D.terms` as the only
+link is **refuted** (`unionsFireClaim_false`): nothing it said constrained the state the encoded
+rule runs at, not even that the state held the encoded rule. So the hypotheses are `hrules` —
+the encoded rule being one `td` holds — and the two data clauses at `td`; the conclusion is at
+`td'`, and `unionsInv_step` moves it to `D` by `ViewRepr.mono`.
 
 Stated over both firing commands at once, because `encodeCmd` gives them the same block:
-`[c, Cmd.saturate rebuildRuleset]`. -/
-theorem unionsJoined_fire {R : RulesetName} {c : Cmd} {sd sd' : Database} {td td' : FDatabase}
-    (hfire : c = Cmd.run R ∨ c = Cmd.saturate R) (hstep : CmdStep sd c sd')
-    (hrun : td.execProgramM [c, Cmd.saturate rebuildRuleset] = some td')
-    (henv : td.env = sd.env) (hstate : sd.CtorState)
-    (hrules : ∀ r ∈ sd.rules, ∃ i n, (encodeRule i r n).1 ∈ td.rules)
-    (hreads : ∀ t ∈ sd.terms, ∃ e, ViewRepr td.toDatabase t e)
-    (hjoined : td.toDatabase.UnionsJoined sd) :
-    td'.toDatabase.UnionsJoined sd' ∧ ∀ t ∈ sd'.terms, ∃ e, ViewRepr td'.toDatabase t e := by
-  sorry
+`[c, Cmd.saturate rebuildRuleset]`.
+
+**A `Prop` here and discharged downstream.** The import chain is
+`Encode → Correspond → Match → Complete`, and everything a worked target firing reads is below
+this file: `patternHolds_values_of_mem_rows` is the only route from a row to an atom,
+`mem_matchQuery_of_lookup` the only route from atoms to the enumerator. So this is threaded as a
+hypothesis through `unionsInv_step`, `unionsInv_of_programStep`, `unionsInv_execM` and
+`execM_unionsJoined`, and `Encoding/Complete.lean`'s `unionsJoined_fire` is where it is
+answered, with no duplication of `Encoding/Match.lean`'s expression induction and no
+restructuring of anything above. `unionsJoined_fire_satisfiable` is these seven hypotheses
+holding together. -/
+def UnionsFire : Prop :=
+  ∀ {R : RulesetName} {c : Cmd} {sd sd' : Database} {td td' : FDatabase},
+    (c = Cmd.run R ∨ c = Cmd.saturate R) → CmdStep sd c sd' →
+    td.execProgramM [c, Cmd.saturate rebuildRuleset] = some td' →
+    td.env = sd.env → sd.CtorState →
+    (∀ r ∈ sd.rules, ∃ i n, (encodeRule i r n).1 ∈ td.rules) →
+    (∀ t ∈ sd.terms, ∃ e, ViewRepr td.toDatabase t e) →
+    td.toDatabase.UnionsJoined sd →
+    td'.toDatabase.UnionsJoined sd' ∧ ∀ t ∈ sd'.terms, ∃ e, ViewRepr td'.toDatabase t e
 
 /-! ##### One command -/
 
 /-- **The invariant survives one source command.** Six cases: five read-backs of the `set`s
 `encodeCmd` emitted for that command — `reads` off the build's own reading, `joined` off the
 `union`'s own `@UF` write — and `unionsJoined_fire`, which is both data clauses at once. -/
-theorem unionsInv_step {Q : Program} (hQ : Q.EncodeDomain) {c : Cmd} (hc : c ∈ Q)
+theorem unionsInv_step (hfire : UnionsFire) {Q : Program} (hQ : Q.EncodeDomain) {c : Cmd}
+    (hc : c ∈ Q)
     {n i : Nat} {sd sd' : Database} {td D : FDatabase} {rest : Program}
     (hstep : CmdStep sd c sd')
     (hrun : td.execProgramM ((encodeCmd c n i).1 ++ rest) = some D)
@@ -3709,12 +3675,12 @@ theorem unionsInv_step {Q : Program} (hQ : Q.EncodeDomain) {c : Cmd} (hc : c ∈
       · exact ⟨i, n, hnew⟩
       · exact hkeepR s hs'
   | run R =>
-      have hjoin := unionsJoined_fire (Or.inl rfl) hstep hblock hinv.env hinv.state
+      have hjoin := hfire (Or.inl rfl) hstep hblock hinv.env hinv.state
         hinv.rules hinv.readsAt hinv.joinedAt
       exact ⟨hjoin.1, hjoin.2, by rw [cmdStep_env_of_run hstep]; exact hkeepE,
         by rw [cmdStep_rules_of_run hstep]; exact hkeepR, hcont, henvOut, hstate'⟩
   | saturate R =>
-      have hjoin := unionsJoined_fire (Or.inr rfl) hstep hblock hinv.env hinv.state
+      have hjoin := hfire (Or.inr rfl) hstep hblock hinv.env hinv.state
         hinv.rules hinv.readsAt hinv.joinedAt
       exact ⟨hjoin.1, hjoin.2, by rw [cmdStep_env_of_saturate hstep]; exact hkeepE,
         by rw [cmdStep_rules_of_saturate hstep]; exact hkeepR, hcont, henvOut, hstate'⟩
@@ -3917,7 +3883,7 @@ theorem FDatabase.execProgramM_append' {p q : Program} : ∀ {d m D : FDatabase}
 
 /-- **The command induction.** One `unionsInv_step` per source command, threading the state
 the encoded block left. -/
-theorem unionsInv_of_programStep {Q : Program} (hQ : Q.EncodeDomain) :
+theorem unionsInv_of_programStep (hfire : UnionsFire) {Q : Program} (hQ : Q.EncodeDomain) :
     ∀ (p : Program) {n i : Nat} {sd sd' : Database} {td D : FDatabase} {rest : Program},
       (∀ c ∈ p, c ∈ Q) → ProgramStep sd p sd' →
       td.execProgramM ((encodeCmds p n i).1 ++ rest) = some D →
@@ -3937,7 +3903,7 @@ theorem unionsInv_of_programStep {Q : Program} (hQ : Q.EncodeDomain) :
           ++ (encodeCmds cs (encodeCmd c n i).2.1 (encodeCmd c n i).2.2).1 := rfl
     rw [hcmds, List.append_assoc] at hrun
     obtain ⟨td₁, hb, hinv₁⟩ :=
-      unionsInv_step hQ (hsub c List.mem_cons_self) hstep hrun hinv
+      unionsInv_step hfire hQ (hsub c List.mem_cons_self) hstep hrun hinv
     obtain ⟨m, hm, hafter⟩ := FDatabase.execProgramM_append hrun
     obtain rfl : m = td₁ := Option.some.inj (hm.symm.trans hb)
     obtain ⟨td₂, hb₂, hinv₂⟩ :=
@@ -4009,7 +3975,7 @@ theorem execM_env {P : Program} {src : Database} {tgt : FDatabase}
 /-- **The invariant at the state `execM` returned**, which is what `execM_unionsJoined` states.
 Both `td` and `D` are the final state: the induction started at the empty source database and
 the state the prelude left, and finished where the run did. -/
-theorem unionsInv_execM {P : Program} {src : Database} {tgt : FDatabase}
+theorem unionsInv_execM (hfire : UnionsFire) {P : Program} {src : Database} {tgt : FDatabase}
     (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
     (htgt : execM (encode P) = some tgt) : UnionsInv src tgt tgt := by
   rw [execM, encode] at htgt
@@ -4030,7 +3996,7 @@ theorem unionsInv_execM {P : Program} {src : Database} {tgt : FDatabase}
       exact absurd hr (by simp [Database.empty])
     · rw [henv₀]
       rfl
-  obtain ⟨td', hb, hinv⟩ := unionsInv_of_programStep hdom P (fun c hc => hc) hsrc
+  obtain ⟨td', hb, hinv⟩ := unionsInv_of_programStep hfire hdom P (fun c hc => hc) hsrc
     (by rw [List.append_nil]; exact hcmds) hinv₀
   obtain rfl : td' = tgt := Option.some.inj (hb.symm.trans hcmds)
   exact hinv
@@ -5595,10 +5561,10 @@ does make ids of themselves (`viewReprAll_self_of_execProgramM`); a head `union`
 `uTgt_not_unionsRead` there is the conclusion failing one rebuild firing *earlier*, where this
 clause holds and `Database.ViewJoined.ufJoin` does not — so the two are load-bearing
 separately. -/
-theorem execM_unionsJoined {P : Program} {src : Database} {tgt : FDatabase}
+theorem execM_unionsJoined (hfire : UnionsFire) {P : Program} {src : Database} {tgt : FDatabase}
     (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
     (htgt : execM (encode P) = some tgt) : tgt.toDatabase.UnionsJoined src :=
-  (unionsInv_execM hdom hsrc htgt).joined
+  (unionsInv_execM hfire hdom hsrc htgt).joined
 
 /-! ### The completeness half
 
