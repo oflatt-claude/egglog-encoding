@@ -1111,6 +1111,34 @@ theorem globalsInline_step {P : Program} (hdom : P.EncodeDomain) {pre q : Progra
           · rw [if_neg hg]
             exact ⟨hkeep, honce⟩
 
+/-- **The globals already carried survive one source command**, which is the half of
+`globalsInline_step` `Egglog.GlobalsMech` spends: `Egglog.UnionsInv.rules` names the `G` a
+rule was *encoded* through, and that one is fixed where `Cmd.globalBind`'s is still growing.
+
+The `.action` case is `globalsInline_action`; the other four move neither the environment nor
+what the signature builds, so `Cmd.globalBind` leaves `G` where it was. -/
+theorem globalsInline_keep {P : Program} (hdom : P.EncodeDomain) {pre q : Program} {c : Cmd}
+    (hP : P = pre ++ c :: q) {sd sd' : Database} (hstate : sd.CtorState)
+    (hpre : ProgramStep Database.empty pre sd) (hstep : CmdStep sd c sd')
+    {G : List (Var × Expr)} (hgi : sd.GlobalsInline G) (honce : P.GlobalsOnce G) :
+    sd'.GlobalsInline G := by
+  cases hc : c with
+  | action a =>
+      subst hc
+      exact globalsInline_action hP hpre hstep hgi honce
+  | decl f dc =>
+      subst hc
+      exact (globalsInline_step hdom hP hstate hpre hstep hgi honce).1
+  | rule r =>
+      subst hc
+      exact (globalsInline_step hdom hP hstate hpre hstep hgi honce).1
+  | run R =>
+      subst hc
+      exact (globalsInline_step hdom hP hstate hpre hstep hgi honce).1
+  | saturate R =>
+      subst hc
+      exact (globalsInline_step hdom hP hstate hpre hstep hgi honce).1
+
 /-- **One aligned command.** The five cases of `encodeCmd`, each carrying
 `FDatabase.EncOk` from the source command's pre-state to its post-state. -/
 theorem FDatabase.EncOk.stepCmd {P : Program} (hdom : P.EncodeDomain) {sg : Signature}
@@ -9564,14 +9592,378 @@ theorem cxpTgt_name_clauses :
     rw [hnone] at hdc'
     exact absurd hdc' (by simp)
 
-/-- **The command induction's rule-firing case. Open — and, after two refutations and their
-repair, no longer standing at a false statement.**
 
-Its statement, its five closed siblings and the three refutations that fixed its hypotheses are
+/-! #### The globals the encoded rule was compiled through
+
+**A fourth refutation, and the clause it evades is the one about `G`.** The three above all
+turned on a *name*: a skolem the target's signature withheld, a primitive the source's query
+applied, a rebuild the encoder did not emit between a saturation's rounds. This one turns on
+the **substitution** `Egglog.UnionsFire`'s `hrules` clause names.
+
+`UnionsInv.rules` says the target holds `encodeRule i (r.substGlobals G) n` for *some* `G`, and
+`Rule.substGlobals` rewrites the rule's **query**. With nothing said about `G`, that `G` may
+inline a variable the source rule's own query binds — so the encoded query binds it no longer,
+the encoded head reads a name no substitution the enumerator offers assigns, `Expr.eval` is
+`none` there, `execLocalActions` propagates it and `fireInto` returns the accumulator. Exactly
+the shape `unionsFire_false` had, one clause further in: this witness's target signature is the
+encoder's own with `@Rule_0` added, its source rules are encodable, its rows are the ones a
+real encoded run wrote, and it still writes nothing.
+
+`Database.GlobalsInline` is the missing clause and it is not a new obligation:
+`Cmd.globalBind`'s two guards are exactly it, `globalsInline_step` carries it along the source
+run, `encStep_globals` reads it off the chain, and `FDatabase.EncOk.srcRules` already carried
+it on the soundness side. `Egglog.GlobalsMech` is how it reaches the residue —
+`Egglog.UnionsInv.rules` carries it beside `Program.GlobalsOnce`, which is what a later `let`
+cannot invalidate — and `encStep_globalsMech` is the discharge.
+
+The witness reuses `rbState2`, the state `unionsJoined_fire_satisfiable` exhibits the clauses
+at, so the arithmetic is the same and the *only* difference is the rule: `rbSrc` with one rule
+added, and the target with that rule's encoding through a bad `G`. Everything below is
+compiled. -/
+
+/-- **The clause set the refutation below kills**: `Egglog.UnionsFire` with the
+`Database.GlobalsInline` conjunct of its `hrules` clause dropped, and nothing else changed.
+`unionsFire_of_anyG` says it is the stronger claim. -/
+def UnionsFireAnyG : Prop :=
+  ∀ {R : RulesetName} {c : Cmd} {sd sd' : Database} {td td' : FDatabase},
+    (c = Cmd.run R ∨ c = Cmd.saturate R) → CmdStep sd c sd' →
+    td.execProgramM [c, Cmd.saturate rebuildRuleset] = some td' →
+    td.env = sd.env → sd.CtorState →
+    (∀ f, sd.sig.IsCtor f → td.sig.IsCtor f) →
+    td.sig.IsCtor fiatName →
+    (∀ r ∈ sd.rules,
+      ∃ (G : List (Var × Expr)) (i n : Nat),
+        (encodeRule i (r.substGlobals G) n).1 ∈ td.rules ∧ td.sig.IsCtor (ruleName i)) →
+    (∀ r ∈ sd.rules, (Cmd.rule r).QueryEncodable ∧
+      ∀ p ∈ r.query, ∀ fk ∈ p.ctors, Prim.ofName fk.1 = none) →
+    td.RowColumnsValued →
+    td.NoAtEnv →
+    (∀ t ∈ sd.terms, ∃ e, ViewRepr td.toDatabase t e) →
+    td.toDatabase.UnionsJoined sd →
+    (∀ t ∈ sd.terms, ∃ r, RowRepr td t r) →
+    td.RowJoined →
+    (∀ t r : Term, RowRepr td' t r → ViewRepr td'.toDatabase t r) →
+    td'.toDatabase.UnionsJoined sd' ∧ ∀ t ∈ sd'.terms, ∃ e, ViewRepr td'.toDatabase t e
+
+/-- **And it implies the repaired statement**, by dropping the one conjunct — so the
+refutation below refutes nothing the repair says. -/
+theorem unionsFire_of_anyG (hw : UnionsFireAnyG) : UnionsFire := by
+  intro R c sd sd' td td' hc hstep hrun henv hstate hsig hfiat hrules hq hcv hno hreads hjoin
+    hrow hrj hback
+  refine hw hc hstep hrun henv hstate hsig hfiat ?_ hq hcv hno hreads hjoin hrow hrj hback
+  intro r hr
+  obtain ⟨G, i, n, hm, hct, -⟩ := hrules r hr
+  exact ⟨G, i, n, hm, hct⟩
+
+/-- The rule the fourth refutation fires: a query keyed on `y`, and a head that unions `y`
+with `(W y)`. Both are terms `rbProgram` already built, so the source's own firing runs. -/
+def gxRule : Rule :=
+  { query := [.expr (.app "W" [.var "y"])],
+    actions := [Action.union (.var "y") (.app "W" [.var "y"])],
+    ruleset := rbRuleset }
+
+/-- **The globals list that breaks it**: it inlines the rule's own query variable. Nothing in
+`Egglog.UnionsFireAnyG` says a `G` is one `Cmd.globalBind` produced, and this one is not —
+`rbProgram` binds `x`, not `y`. -/
+def gxG : List (Var × Expr) := [("y", .app "A" [])]
+
+/-- The encoded rule, at the counters a first rule gets. Its query reads `@AView` and `@WView`
+at four generated variables and binds `y` nowhere. -/
+def gxEncRule : Rule := (encodeRule 0 (gxRule.substGlobals gxG) 0).1
+
+/-- The prelude's signature with `@Rule_0` declared, which `rbProgram` — having no rule — does
+not declare. Every other clause about names holds at it unchanged. -/
+def gxSig : Signature := Function.update rbSig (ruleName 0) (some (skolemDecl 0))
+
+/-- **The target**: `rbState2`, the state `unionsJoined_fire_satisfiable` exhibits the clauses
+at, with the encoded rule installed and `@Rule_0` declared. -/
+def gxTgt : FDatabase := { rbState2 with sig := gxSig, rules := [gxEncRule] }
+
+/-- **The source**: `rbSrc` with the rule added, and nothing else. -/
+def gxSrc : Database := { rbSrc with rules := {gxRule} }
+
+/-- What the round reaches. -/
+def gxSrc' : Database := RunRules rbRuleset gxSrc
+
+/-- The substitution the source's own firing runs at. -/
+def gxSubst : Env := [("y", Term.app "A" [])]
+
+/-- The two terms the head's `union` relates, and they are distinct. -/
+def gxA : Term := Term.app "A" []
+
+@[inherit_doc gxA] def gxWA : Term := Term.app "W" [Term.app "A" []]
+
+/-- **Every substitution the enumerator produces binds exactly the query's free variables.**
+Off `assignments` alone, with no hypothesis on the state — which is what lets a firing be
+refuted at a target whose closure does not reduce in the kernel. -/
+theorem dom_of_mem_matchQuery {d : FDatabase} {q : Query} {σ : Env}
+    (h : σ ∈ matchQuery d q) : Env.dom σ = Query.freeVars q d.env := by
+  simp only [matchQuery, List.mem_filter, mem_assignments] at h
+  exact h.1.1
+
+/-- **The encoded head is stuck at `y`**, whatever the substitution binds: `encodeBuild` keeps
+a source variable as itself, and the first `set` the head emits reads it. -/
+theorem gx_stuck {σ : Env} (h : Env.lookup "y" (rbEnv ++ σ) = none) :
+    execLocalActions gxTgt gxEncRule.actions σ = none := by
+  obtain ⟨rest, hact⟩ := (⟨_, rfl⟩ :
+    ∃ rest, gxEncRule.actions
+      = Action.set (termName "W") [.var "y", .app "W" [.var "y"]] [] :: rest)
+  rw [execLocalActions, hact, execActions, execAction]
+  have hev : Expr.evalList gxTgt.sig [Expr.var "y", .app "W" [.var "y"]]
+      ({ gxTgt with env := gxTgt.env ++ σ } : FDatabase).env = none := by
+    change Expr.evalList gxTgt.sig [Expr.var "y", .app "W" [.var "y"]] (rbEnv ++ σ) = none
+    rw [Expr.evalList, Expr.eval, h]
+    rfl
+  simp [hev]
+
+/-- **And the enumerator never binds `y`**, because the *substituted* query does not mention
+it: `gxG` replaced it by `(A)` before `encodeQuery` ran. -/
+theorem gx_no_fire {σ : Env} (h : σ ∈ matchQuery gxTgt gxEncRule.query) :
+    execLocalActions gxTgt gxEncRule.actions σ = none := by
+  refine gx_stuck ?_
+  have h1 : Env.lookup "y" rbEnv = none := by decide +kernel
+  have h2 : Env.lookup "y" σ = none := by
+    refine Env.lookup_eq_none_iff.mpr ?_
+    rw [dom_of_mem_matchQuery h]
+    change "y" ∉ Query.freeVars gxEncRule.query rbEnv
+    decide +kernel
+  rw [Env.lookup_append_of_none h1, h2]
+
+/-- A round whose every firing is stuck is the identity, which is `fireInto`'s own answer to a
+head that does not evaluate. -/
+theorem foldl_fireInto_const {d : FDatabase} {r : Rule} :
+    ∀ (l : List Env), (∀ σ ∈ l, execLocalActions d r.actions σ = none) →
+      ∀ acc : FDatabase, l.foldl (fireInto d r) acc = acc
+  | [], _, _ => rfl
+  | σ :: l, h, acc => by
+      rw [List.foldl_cons, fireInto, h σ List.mem_cons_self,
+        foldl_fireInto_const l (fun τ hτ => h τ (List.mem_cons_of_mem _ hτ)) acc]
+
+theorem gx_execRunRules : execRunRules rbRuleset gxTgt = gxTgt := by
+  rw [execRunRules]
+  have hf : (gxTgt.rules.filter fun r => r.ruleset == rbRuleset) = [gxEncRule] := rfl
+  rw [hf, List.foldl_cons, List.foldl_nil, fireRule,
+    foldl_fireInto_const _ (fun σ hσ => gx_no_fire hσ)]
+
+set_option maxRecDepth 1000000 in
+theorem gx_settled : gxTgt.settled = true := by decide +kernel
+
+set_option maxRecDepth 1000000 in
+theorem gx_mergeSat : FDatabase.mergeSaturateF mergeFuel gxTgt = some gxTgt := by
+  rw [show mergeFuel = 63 + 1 from rfl, FDatabase.mergeSaturateF, if_pos gx_settled]
+
+set_option maxRecDepth 1000000 in
+theorem gx_rebuild_round : execRunRules rebuildRuleset gxTgt = gxTgt := rfl
+
+set_option maxRecDepth 1000000 in
+/-- **The encoded block runs, and writes nothing.** The round's one rule is stuck at every
+substitution, and the trailing rebuild fires nothing — the encoded rule joins the source's own
+ruleset. -/
+theorem gx_execProgramM :
+    gxTgt.execProgramM [Cmd.run rbRuleset, Cmd.saturate rebuildRuleset] = some gxTgt := by
+  rw [FDatabase.execProgramM, FDatabase.execCmdM, FDatabase.runRoundM, gx_execRunRules,
+    gx_mergeSat, Option.bind_some, FDatabase.execProgramM, FDatabase.execCmdM,
+    show runFuel = 63 + 1 from rfl, FDatabase.runSaturateM, FDatabase.runRoundM,
+    gx_rebuild_round, gx_mergeSat, Option.bind_some, if_pos (by decide +kernel :
+      gxTgt.sameData gxTgt = true), Option.bind_some, FDatabase.execProgramM]
+
+/-! ##### The source fires, and asserts an equation between distinct terms -/
+
+theorem gxSrc_terms : gxSrc.terms = rbSrc.terms := Database.terms_eq_of_eqs_eq rfl
+
+theorem gxSrc_ctorState : gxSrc.CtorState where
+  wf := rbSrc_ctorState.wf.congr rfl rfl
+  sig := rbSrc_ctorState.sig
+
+theorem gxSrc_cmdStep : CmdStep gxSrc (.run rbRuleset) gxSrc' := ⟨gxSrc', rfl, .refl⟩
+
+theorem gxSrc_mem_WA : gxWA ∈ gxSrc.terms := by
+  rw [gxSrc_terms, rbSrc_terms]
+  exact Or.inr (Term.self_mem_subterms _)
+
+theorem gxSrc_mem_A : gxA ∈ gxSrc.terms := by
+  rw [gxSrc_terms]; exact rbSrc_mem_A
+
+/-- **The source rule matches** at `y := (A)`, over the term `rbProgram`'s own build left. -/
+theorem gxSrc_validQuerySubst : ValidQuerySubst gxSrc gxRule.query gxSubst :=
+  ⟨[gxSubst], List.Forall₂.cons
+    ⟨⟨List.Perm.refl _, by
+        intro b hb
+        obtain rfl : b = ("y", gxA) := by simpa [gxSubst, gxA] using hb
+        exact gxSrc_mem_A⟩,
+      .expr gxSrc_mem_WA rfl (Database.mem_addTerms (by simp [gxWA]))⟩
+    List.Forall₂.nil, .single _⟩
+
+/-- The state the source's own firing returns: the `union`'s equation recorded. -/
+def gxFired : Database :=
+  { ({ gxSrc with env := gxSrc.env ++ gxSubst }).addEq gxA gxWA with
+      env := gxSrc.env, rules := gxSrc.rules }
+
+theorem gxFired_eq : evalLocalActions gxSrc gxRule.actions gxSubst = some gxFired := rfl
+
+theorem gxFired_mem : (gxA, gxWA) ∈ gxFired.eqs := Set.mem_insert _ _
+
+/-- **And the round's post-state asserts it.** -/
+theorem gxSrc'_mem_eq : (gxA, gxWA) ∈ gxSrc'.eqs :=
+  mem_eqs_of_ruleFired (R := rbRuleset) (Or.inl rfl) gxSrc_cmdStep (r := gxRule) rfl rfl
+    gxSrc_validQuerySubst gxFired_eq gxFired_mem
+
+/-! ##### And every clause the residue takes holds at the pair -/
+
+theorem gxTgt_contained : rbState2.toDatabase.Contained gxTgt.toDatabase := ⟨fun _ h => h⟩
+
+/-- No `@UF` entry at the target, since neither `rbProgram` nor the stuck round wrote one. -/
+theorem gxTgt_no_out_uf (x y pf : Term) : ¬ gxTgt.toDatabase.Out ufName [x] [y, pf] := by
+  rintro ⟨bs, -, hmem⟩
+  have hm : Term.app ufName (bs ++ [y, pf]) ∈ gxTgt.terms :=
+    FDatabase.mem_toDatabase_terms.mp hmem
+  have h' := List.all_eq_true.mp rbState2_noUFHead _ hm
+  rw [show noUFHead (Term.app ufName (bs ++ [y, pf])) = false from rfl] at h'
+  exact absurd h' (by simp)
+
+theorem gxTgt_rowJoined : gxTgt.RowJoined where
+  fn := fun _ _ _ h₁ h₂ =>
+    rowRepr_unique (fun _ _ _ _ _ _ hr₁ hr₂ => by
+      have h := rbState2_rowsUnique _ hr₁ _ hr₂ rfl rfl
+      exact (by simpa using h : _ ∧ _).1) h₁ h₂
+  edge := fun x y pf _ _ _ _ hout _ _ _ _ => absurd hout (gxTgt_no_out_uf x y pf)
+
+theorem gxTgt_viewRepr_of_rowRepr {t r : Term} (h : RowRepr gxTgt t r) :
+    ViewRepr gxTgt.toDatabase t r :=
+  ViewRepr.of_rowRepr_of_rowTerms (d := gxTgt) rbState2_rowColumns rbState2_rowEntries h
+
+theorem gxTgt_exists_rowRepr : ∀ t ∈ gxSrc.terms, ∃ r, RowRepr gxTgt t r := by
+  intro t ht
+  rw [gxSrc_terms, rbSrc_terms] at ht
+  have ht' : t = Term.app "A" [] ∨ t = Term.app "W" [Term.app "A" []] := by
+    rcases ht with h | h
+    · exact Or.inl (by simpa using h)
+    · simpa [or_comm] using h
+  rcases ht' with rfl | rfl
+  · exact ⟨_, .app .nil rbState2_row_aview⟩
+  · exact ⟨_, .app (.cons (.app .nil rbState2_row_aview) .nil) rbState2_row_wview⟩
+
+theorem gxTgt_readsAt : ∀ t ∈ gxSrc.terms, ∃ e, ViewRepr gxTgt.toDatabase t e := by
+  intro t ht
+  obtain ⟨e, he⟩ := rbState2_unionsInv.readsAt t (gxSrc_terms ▸ ht)
+  exact ⟨e, ViewRepr.mono gxTgt_contained he⟩
+
+theorem gxTgt_joinedAt : gxTgt.toDatabase.UnionsJoined gxSrc :=
+  rbState2_unionsInv.joinedAt.mono gxTgt_contained
+
+/-- **The clause `unionsFire_false` withdrew holds here**, at the encoder's own signature with
+one declaration added. -/
+theorem gxTgt_sig_mono : ∀ f, gxSrc.sig.IsCtor f → gxTgt.sig.IsCtor f :=
+  fun f hf => Signature.IsCtor.update rfl (rbState2_sig_mono f hf)
+
+theorem gxTgt_isCtor_fiatName : gxTgt.sig.IsCtor fiatName :=
+  Signature.IsCtor.update rfl rbState2_isCtor_fiatName
+
+theorem gxTgt_isCtor_ruleName : gxTgt.sig.IsCtor (ruleName 0) :=
+  ⟨skolemDecl 0, by
+    change Function.update rbSig (ruleName 0) (some (skolemDecl 0)) (ruleName 0)
+      = some (skolemDecl 0)
+    rw [Function.update_self], rfl⟩
+
+set_option maxRecDepth 1000000 in
+theorem gxTgt_rowColumnsValued : gxTgt.RowColumnsValued := by
+  change ∀ r ∈ gxTgt.rows, ∀ t ∈ r.args ++ r.out, t ∈ gxTgt.valueTerms
+  decide
+
+theorem gxTgt_noAtEnv : gxTgt.NoAtEnv := rbState2_noAtEnv
+
+/-- **And the clause `unionsFire_false_encodeSig` withdrew holds too**: the source rule's query
+is grounded, keyed at `y`, has no entry atom and applies no primitive. -/
+theorem gxSrc_queriesEncodable : ∀ r ∈ gxSrc.rules, (Cmd.rule r).QueryEncodable ∧
+    ∀ p ∈ r.query, ∀ fk ∈ p.ctors, Prim.ofName fk.1 = none := by
+  intro r hr
+  obtain rfl : r = gxRule := hr
+  refine ⟨⟨?_, ?_⟩, ?_⟩
+  · intro p hp
+    obtain rfl : p = Pattern.expr (.app "W" [.var "y"]) := by simpa [gxRule] using hp
+    exact ⟨by intro l h; exact absurd h (by simp), trivial⟩
+  · intro v hv
+    obtain rfl : v = "y" := by simpa [gxRule, Query.vars, Pattern.vars, Expr.vars,
+      Expr.varsList] using hv
+    exact ⟨Pattern.expr (.app "W" [.var "y"]), by simp [gxRule], Or.inl (by simp)⟩
+  · intro p hp fk hfk
+    obtain rfl : p = Pattern.expr (.app "W" [.var "y"]) := by simpa [gxRule] using hp
+    obtain rfl : fk = ("W", 1) := by simpa [Pattern.ctors, Expr.ctors, Expr.ctorsList] using hfk
+    rfl
+
+theorem gxTgt_rules_mem : gxEncRule ∈ gxTgt.rules := List.mem_cons_self
+
+/-- **The `hrules` clause, at the bad `G`.** This is the whole of what the refutation needs the
+clause set to allow, and the repaired statement does not. -/
+theorem gx_hrules : ∀ r ∈ gxSrc.rules,
+    ∃ (G : List (Var × Expr)) (i n : Nat),
+      (encodeRule i (r.substGlobals G) n).1 ∈ gxTgt.rules ∧ gxTgt.sig.IsCtor (ruleName i) := by
+  intro r hr
+  obtain rfl : r = gxRule := hr
+  exact ⟨gxG, 0, 0, gxTgt_rules_mem, gxTgt_isCtor_ruleName⟩
+
+/-- **`Egglog.UnionsFireAnyG` is false**, and the clause its witness violates is
+`Database.GlobalsInline` at the `G` its `hrules` names: `gxG` inlines `y`, which `rbProgram`
+never bound, so no source state realizes it (`gxSrc_not_globalsInline`). Every other clause
+holds — the target's signature is the encoder's own with `@Rule_0` added, its rows are the ones
+`rbProgram`'s own builds wrote, and the source rule's query is one the flattening handles.
+
+The conclusion fails on the `joined` half: the source's firing asserts `(A) = (W (A))` and the
+target holds no `@UF` entry at all. -/
+theorem unionsFire_false_globals : ¬ UnionsFireAnyG := by
+  intro h
+  obtain ⟨hjoin, -⟩ :=
+    h (R := rbRuleset) (c := Cmd.run rbRuleset) (Or.inl rfl) gxSrc_cmdStep gx_execProgramM rfl
+      gxSrc_ctorState gxTgt_sig_mono gxTgt_isCtor_fiatName gx_hrules gxSrc_queriesEncodable
+      gxTgt_rowColumnsValued gxTgt_noAtEnv gxTgt_readsAt gxTgt_joinedAt gxTgt_exists_rowRepr
+      gxTgt_rowJoined (fun _ _ hr => gxTgt_viewRepr_of_rowRepr hr)
+  obtain ⟨e₁, e₂, pf, -, -, hor⟩ := hjoin gxA gxWA gxSrc'_mem_eq (by simp [gxA, gxWA])
+  rcases hor with ho | ho
+  · exact gxTgt_no_out_uf _ _ _ ho
+  · exact gxTgt_no_out_uf _ _ _ ho
+
+/-- **The clause `gxG` violates.** `Database.GlobalsInline` asks the source's own environment
+to bind every name the substitution carries; `rbProgram` binds `x` and nothing else, so `y` is
+bound by nothing and the substituted query is one no source reading agrees with. -/
+theorem gxSrc_not_globalsInline : ¬ gxSrc.GlobalsInline gxG := by
+  intro h
+  obtain ⟨-, t, -, hlk⟩ := h "y" (.app "A" []) rfl
+  have hnone : Env.lookup "y" gxSrc.env = none := by decide +kernel
+  rw [hnone] at hlk
+  exact absurd hlk (by simp)
+
+/-- **The command induction's rule-firing case. Open — and, after four refutations and their
+repairs, no longer standing at a false statement.**
+
+Its statement, its five closed siblings and the four refutations that fixed its hypotheses are
 in `Encoding/Correspond.lean` (`Egglog.UnionsFire`, `unionsInv_step`, `unionsFireClaim_false`)
 and above in this file (`Egglog.UnionsFireWeak`, `unionsFire_false`,
-`unionsFire_false_encodeSig`). What is recorded here is what the route through this file settles
-and what it does not.
+`unionsFire_false_encodeSig`, `Egglog.UnionsFireAnyG`, `unionsFire_false_globals`). What is
+recorded here is what the route through this file settles and what it does not.
+
+**The fourth refutation is the most recent, and it is what the `Cmd.run` case ran into.** The
+assembly below reaches step 2 — "move to `s.substGlobals G`" — and there discovers that nothing
+in the clause set said which `G` that is. `Egglog.Matches.of_substGlobals` and the converse the
+forward direction wants are both stated under `Database.GlobalsInline`, and `hrules` did not
+carry it: `unionsFire_false_globals` runs a source rule whose query is keyed at `y` and whose
+encoding went through `gxG = [("y", (A))]`, so the encoded query binds `y` nowhere, the encoded
+head — `encodeBuild` keeps a source variable as itself — reads it anyway, `Expr.eval` is `none`,
+and `fireInto` returns the accumulator while the source's own firing asserts
+`(A) = (W (A))`. Every other clause holds at that witness: its target is `rbState2` with the
+encoded rule installed and `@Rule_0` declared, so its rows are ones a real encoded run wrote,
+its signature is the encoder's own, and its source rule's query is one the flattening handles.
+`gxSrc_not_globalsInline` is the clause it violates.
+
+**The repair is `Database.GlobalsInline` in `hrules`, and it is derived rather than assumed.**
+`Cmd.globalBind`'s two guards are exactly that clause, `globalsInline_step` carries it along the
+source run, `encStep_globals` reads it off the chain and `globalsInline_keep` moves an
+already-frozen `G` across one more source command; `Egglog.GlobalsMech` is the pair and
+`encStep_globalsMech` the discharge. `Egglog.UnionsInv.rules` carries `Program.GlobalsOnce`
+beside it — a fact about the program *text*, which is what a later `let` cannot invalidate —
+and only the `GlobalsInline` half reaches this `Prop`, since that is what a firing reads.
+`unionsJoined_fire_satisfiable` survives it and gains a sixteenth conjunct
+(`rbSrc_globalsInline`, at the substitution `rbProgram`'s own `let` freezes), because the
+`hrules` conjunct it rides in is vacuous at a source that holds no rule.
 
 **The route is the enumerator's own, and no general converse is wanted.**
 `execRunRules_RunRules` needs `Signature.AllConstructors`, which an encoded target fails at
@@ -10970,6 +11362,15 @@ theorem encStep_globals {P : Program} (hdom : P.EncodeDomain) {pre suf : Program
           (fun c' hc' => hdom.ctorsOnly c' (by rw [hs.program]; exact List.mem_append_left _ hc')))
         hs.src hstep ih.1 ih.2
 
+/-- **`Egglog.GlobalsMech`, discharged.** The two facts the residue's `hrules` clause needs
+about the globals a rule was encoded through: the chain's own are `Database.GlobalsInline` and
+`Program.GlobalsOnce` (`encStep_globals`), and a `G` already carried keeps both across one
+source command (`globalsInline_keep`). `unionsFire_false_globals` is the residue without
+them. -/
+theorem encStep_globalsMech {P : Program} (hdom : P.EncodeDomain) : GlobalsMech P :=
+  ⟨fun h => encStep_globals hdom h,
+    fun hP hpre hstate hstep hgi hgo => globalsInline_keep hdom hP hstate hpre hstep hgi hgo⟩
+
 /-- **The completeness half's invariant at every state of the chain**, source and target
 together. -/
 theorem encStep_encOk {P : Program} (hdom : P.EncodeDomain) {pre suf : Program}
@@ -11598,7 +11999,7 @@ theorem execM_viewsCover {P : Program} {src : Database} {tgt : FDatabase}
     (htgt : execM (encode P) = some tgt) : tgt.toDatabase.ViewsCover src :=
   Database.ViewsCover.of_viewJoined (execM_viewJoined hdom hsrc htgt)
     (unionsInv_execM unionsJoined_fire hdom (encStep_rowMech hdom)
-      (encReached_ruleNameMech hdom) hsrc htgt).reads
+      (encStep_globalsMech hdom) (encReached_ruleNameMech hdom) hsrc htgt).reads
 
 @[inherit_doc execM_viewsCover]
 theorem execM_viewsCover_shared {P : Program} {src : Database} {tgt : FDatabase}
@@ -11618,7 +12019,7 @@ theorem execM_unionsRead {P : Program} {src : Database} {tgt : FDatabase}
     (htgt : execM (encode P) = some tgt) : tgt.toDatabase.UnionsRead src :=
   unionsRead_of_viewJoined (execM_viewJoined hdom hsrc htgt)
     (execM_unionsJoined unionsJoined_fire hdom (encStep_rowMech hdom)
-      (encReached_ruleNameMech hdom) hsrc htgt)
+      (encStep_globalsMech hdom) (encReached_ruleNameMech hdom) hsrc htgt)
 
 /-- **Obligation `assert`, at the encoding**, split by writer. `Database.addTerm` writes a
 reflexive equation per subterm built, and `sameClass_self_of_viewsCover` discharges those out

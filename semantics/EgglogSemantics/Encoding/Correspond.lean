@@ -125,7 +125,7 @@ both are decided at the witness at the end of this file.
   strengthened to every *subterm*, which is what `Database.addTerm` records. And it is not
   vacuous: `rbState2_unionsInv` is the invariant at a source state a program reaches
   (`rbProgram_programStep`) with a non-empty environment, `rbState2_unionsInv_hvar` is the
-  `hvar` composition read off it, `unionsJoined_fire_satisfiable` is the residue's fifteen
+  `hvar` composition read off it, `unionsJoined_fire_satisfiable` is the residue's sixteen
   hypotheses holding together, and `uRebuilt_unionsJoined` is the data clause at a source with
   a real equation.
 
@@ -3266,7 +3266,7 @@ The last two are bookkeeping. `env` is what makes a source `let`'s value the enc
 value — `encodeBuild`'s naming expression *is* the source expression (`encodeBuild_fst`), and
 `Expr.eval_sigIndep` needs nothing of the two signatures. `state` is what makes every source
 command's merge phase empty. -/
-structure UnionsInv (sd : Database) (td D : FDatabase) : Prop where
+structure UnionsInv (Q : Program) (sd : Database) (td D : FDatabase) : Prop where
   /-- Every equation the source asserts between distinct terms has ids for both endpoints and
   a `@UF` edge between those — **at `td`**, the state the next encoded block runs at. -/
   joinedAt : td.toDatabase.UnionsJoined sd
@@ -3283,7 +3283,8 @@ structure UnionsInv (sd : Database) (td D : FDatabase) : Prop where
   `ruleProofDecls` declares only the indices the encoder's own numbering reaches and this
   existential is what names one. -/
   rules : ∀ r ∈ sd.rules, ∃ G i n,
-    (encodeRule i (r.substGlobals G) n).1 ∈ td.rules ∧ td.sig.IsCtor (ruleName i)
+    (encodeRule i (r.substGlobals G) n).1 ∈ td.rules ∧ td.sig.IsCtor (ruleName i) ∧
+      sd.GlobalsInline G ∧ Q.GlobalsOnce G
   /-- **And `td` is inside `D`**, which is the direction the run's containment actually runs
   in. Every clause above is therefore available at `D` as well (`UnionsInv.joined`,
   `UnionsInv.reads`, `UnionsInv.envReads`) and none of them is available at `td` *from* `D`. -/
@@ -3295,16 +3296,19 @@ structure UnionsInv (sd : Database) (td D : FDatabase) : Prop where
 
 /-- The `union` clause at the state the run finishes at, which is what the forward half
 consumes. -/
-theorem UnionsInv.joined {sd : Database} {td D : FDatabase} (h : UnionsInv sd td D) :
+theorem UnionsInv.joined {Q : Program} {sd : Database} {td D : FDatabase}
+    (h : UnionsInv Q sd td D) :
     D.toDatabase.UnionsJoined sd := h.joinedAt.mono h.cont
 
 /-- Every source term has an id at the state the run finishes at. -/
-theorem UnionsInv.reads {sd : Database} {td D : FDatabase} (h : UnionsInv sd td D) :
+theorem UnionsInv.reads {Q : Program} {sd : Database} {td D : FDatabase}
+    (h : UnionsInv Q sd td D) :
     ∀ t ∈ sd.terms, ∃ e, ViewRepr D.toDatabase t e :=
   fun t ht => (h.readsAt t ht).imp fun _ he => ViewRepr.mono h.cont he
 
 /-- And so does every subterm of an environment value, to itself. -/
-theorem UnionsInv.envReads {sd : Database} {td D : FDatabase} (h : UnionsInv sd td D) :
+theorem UnionsInv.envReads {Q : Program} {sd : Database} {td D : FDatabase}
+    (h : UnionsInv Q sd td D) :
     ∀ b ∈ sd.env, ∀ s ∈ b.2.subterms, ViewRepr D.toDatabase s s :=
   fun b hb s hs => ViewRepr.mono h.cont (h.envReadsAt b hb s hs)
 
@@ -3313,7 +3317,8 @@ reading of every subterm of the variable's value, which is `envReadsAt` at the b
 `Env.lookup` found. This is the shape `rbState2_viewRepr_W` exhibits at one command; here it is
 at every command. Stated at `td`, since that is where the read-back of the block about to run
 wants it. -/
-theorem UnionsInv.hvar {sd : Database} {td D : FDatabase} (h : UnionsInv sd td D)
+theorem UnionsInv.hvar {Q : Program} {sd : Database} {td D : FDatabase}
+    (h : UnionsInv Q sd td D)
     {w : Var} {u : Term} (hu : Env.lookup w td.env = some u) :
     ∀ s ∈ u.subterms, ViewRepr td.toDatabase s s := by
   intro s hs
@@ -3632,7 +3637,8 @@ structure UnionsInvD (sd : Database) (td D : FDatabase) : Prop where
 
 /-- **The present invariant implies the one that stood here**, so what follows is a
 strengthening and not a different claim. -/
-theorem UnionsInv.old {sd : Database} {td D : FDatabase} (h : UnionsInv sd td D) :
+theorem UnionsInv.old {Q : Program} {sd : Database} {td D : FDatabase}
+    (h : UnionsInv Q sd td D) :
     UnionsInvD sd td D :=
   ⟨h.joined, h.reads, h.envReads, h.env, h.state⟩
 
@@ -3937,7 +3943,19 @@ firing by returning the accumulator.
 Not at `Cmd.saturate` any more either: that writer was a defect in `encodeCmd`, it is fixed
 (`allMaintenanceRules`), and `sat-hit` and the other four `sat-*` cases agree.
 
-**The five clauses the repair adds**, each à la carte and in the shape `RowMech` already has,
+**A fourth refutation, and the clause it costs.** `unionsFire_false_globals` kills the clause
+set with `Database.GlobalsInline` dropped (`Encoding/Complete.lean`'s `UnionsFireAnyG`,
+`unionsFire_of_anyG`): `hrules` names `Rule.substGlobals G` and `Rule.substGlobals` rewrites
+the **query**, so a `G` no source state realizes may inline a variable the source query binds.
+The encoded query then binds it nowhere, the encoded head — which `encodeBuild` leaves reading
+the source's own variable — evaluates to `none`, and the round writes nothing while the source
+fires. `gxSrc_not_globalsInline` is the clause the witness violates and `Egglog.GlobalsMech`
+the threading; the `Program.GlobalsOnce` half of that pair rides in `Egglog.UnionsInv.rules`
+rather than here, because it is what keeps the clause alive across a later `let` and not what
+a firing reads.
+
+**The five clauses the earlier repair adds**, each à la carte and in the shape `RowMech`
+already has,
 so that `unionsJoined_fire_satisfiable` survives them: the target's signature declaring every
 source constructor and `@Fiat`; the `@Rule_i` of the index `hrules` names, bundled into
 `hrules` because `ruleProofDecls` declares only the indices the encoder's own numbering
@@ -4029,9 +4047,19 @@ this file: `patternHolds_values_of_mem_rows` is the only route from a row to an 
 hypothesis through `unionsInv_step`, `unionsInv_of_programStep`, `unionsInv_execM` and
 `execM_unionsJoined`, and `Encoding/Complete.lean`'s `unionsJoined_fire` is where it is
 answered, with no duplication of `Encoding/Match.lean`'s expression induction and no
-restructuring of anything above. `unionsJoined_fire_satisfiable` is these fifteen hypotheses
+restructuring of anything above. `unionsJoined_fire_satisfiable` is these sixteen hypotheses
 holding together — and the two refutations above are the *ten* they used to be, holding at a
-state whose encoded rule cannot run, which is what said the list was too short. -/
+state whose encoded rule cannot run, which is what said the list was too short.
+
+**And a fourth refutation moved the count from fifteen to sixteen.** The clause set with the
+`Database.GlobalsInline` conjunct dropped is `Encoding/Complete.lean`'s `UnionsFireAnyG` and
+`unionsFire_false_globals` refutes it: `Rule.substGlobals` rewrites the rule's **query**, and a
+`G` no source state realizes can inline a variable the source query binds, leaving the encoded
+head reading a name no substitution the enumerator offers assigns. `gxSrc_not_globalsInline` is
+the clause its witness violates, `unionsFire_of_anyG` is the implication that says the repair is
+a strengthening, and `Egglog.GlobalsMech` is how it is threaded — beside `Program.GlobalsOnce`,
+which is what a later `let` cannot invalidate, and which is why the pair rides in
+`Egglog.UnionsInv.rules` while only the `GlobalsInline` half reaches this `Prop`. -/
 def UnionsFire : Prop :=
   ∀ {R : RulesetName} {c : Cmd} {sd sd' : Database} {td td' : FDatabase},
     (c = Cmd.run R ∨ c = Cmd.saturate R) → CmdStep sd c sd' →
@@ -4041,7 +4069,8 @@ def UnionsFire : Prop :=
     td.sig.IsCtor fiatName →
     (∀ r ∈ sd.rules,
       ∃ (G : List (Var × Expr)) (i n : Nat),
-        (encodeRule i (r.substGlobals G) n).1 ∈ td.rules ∧ td.sig.IsCtor (ruleName i)) →
+        (encodeRule i (r.substGlobals G) n).1 ∈ td.rules ∧ td.sig.IsCtor (ruleName i) ∧
+          sd.GlobalsInline G) →
     (∀ r ∈ sd.rules, (Cmd.rule r).QueryEncodable ∧
       ∀ p ∈ r.query, ∀ fk ∈ p.ctors, Prim.ofName fk.1 = none) →
     td.RowColumnsValued →
@@ -4088,20 +4117,40 @@ signature of a reached state is identified with `encodeSig`. -/
 def RuleNameMech (Q : Program) : Prop :=
   ∀ {d : FDatabase}, EncReached Q d → Program.RuleNamesDeclared d.sig Q 0
 
+/-- **The globals a query was encoded through mean at every later state what they meant when
+the encoder froze them.** `Egglog.UnionsFire`'s `hrules` clause names `Rule.substGlobals G`,
+and nothing about the *state* says which `G` that is — `unionsFire_false_globals` is that gap
+refuting the residue for the fourth time, at a `G` that inlines the rule's own query variable
+and leaves the encoded head reading a name the encoded query does not bind. So the residue
+takes `Database.GlobalsInline` beside the encoded rule, `Egglog.UnionsInv.rules` carries it
+along with `Program.GlobalsOnce` — which is what a later `let` cannot invalidate — and this is
+the pair of facts that thread it.
+
+Threaded rather than proved here for `Egglog.RowMech`'s reason: `globalsInline_step` and
+`lookupG_eq_none_of_letBind` are in `Encoding/Complete.lean`, below this file.
+`encStep_globalsMech` is the discharge. -/
+def GlobalsMech (Q : Program) : Prop :=
+  (∀ {pre suf : Program} {sd : Database} {d : FDatabase} {G : List (Var × Expr)},
+      EncStep Q pre suf sd d G → sd.GlobalsInline G ∧ Q.GlobalsOnce G) ∧
+    (∀ {pre suf : Program} {c : Cmd} {sd sd' : Database} {G : List (Var × Expr)},
+      Q = pre ++ c :: suf → ProgramStep Database.empty pre sd → sd.CtorState →
+      CmdStep sd c sd' → sd.GlobalsInline G → Q.GlobalsOnce G → sd'.GlobalsInline G)
+
 /-! ##### One command -/
 
 /-- **The invariant survives one source command.** Six cases: five read-backs of the `set`s
 `encodeCmd` emitted for that command — `reads` off the build's own reading, `joined` off the
 `union`'s own `@UF` write — and `unionsJoined_fire`, which is both data clauses at once. -/
 theorem unionsInv_step (hfire : UnionsFire) {Q : Program} (hQ : Q.EncodeDomain)
-    (hmech : RowMech Q) {c : Cmd} (hc : c ∈ Q) {G : List (Var × Expr)}
+    (hmech : RowMech Q) (hglob : GlobalsMech Q) {c : Cmd} (hc : c ∈ Q)
+    {G : List (Var × Expr)}
     {n i : Nat} {pre suf : Program} {sd sd' : Database} {td D : FDatabase} {rest : Program}
     (hchain : EncStep Q pre (c :: suf) sd td G)
     (hri : ∀ r : Rule, c = Cmd.rule r → td.sig.IsCtor (ruleName i))
     (hstep : CmdStep sd c sd')
     (hrun : td.execProgramM ((encodeCmd G c n i).1 ++ rest) = some D)
-    (hinv : UnionsInv sd td D) :
-    ∃ td', td.execProgramM (encodeCmd G c n i).1 = some td' ∧ UnionsInv sd' td' D := by
+    (hinv : UnionsInv Q sd td D) :
+    ∃ td', td.execProgramM (encodeCmd G c n i).1 = some td' ∧ UnionsInv Q sd' td' D := by
   have hstate' : sd'.CtorState := hstep.ctorState hinv.state (hQ.ctorsOnly c hc)
   obtain ⟨td', hblock, hafter⟩ := FDatabase.execProgramM_append hrun
   -- the two containments the whole proof runs on: `td ⊆ td' ⊆ D`, and nothing in reverse
@@ -4117,12 +4166,15 @@ theorem unionsInv_step (hfire : UnionsFire) {Q : Program} (hQ : Q.EncodeDomain)
     fun b hb s hs => ViewRepr.mono hstep' (hinv.envReadsAt b hb s hs)
   have hsigEq : td'.sig = td.sig :=
     FDatabase.execProgramM_sig_of_noDecl (noDecl_encodeCmd G c n i) hblock
+  have hkeepGI : ∀ G' : List (Var × Expr), sd.GlobalsInline G' → Q.GlobalsOnce G' →
+      sd'.GlobalsInline G' :=
+    fun G' hgi hgo => hglob.2 hchain.program hchain.src hinv.state hstep hgi hgo
   have hkeepR : ∀ r ∈ sd.rules,
       ∃ G' i n, (encodeRule i (r.substGlobals G') n).1 ∈ td'.rules ∧
-        td'.sig.IsCtor (ruleName i) :=
+        td'.sig.IsCtor (ruleName i) ∧ sd'.GlobalsInline G' ∧ Q.GlobalsOnce G' :=
     fun r hr =>
-      let ⟨G', i', n', hm, hct⟩ := hinv.rules r hr
-      ⟨G', i', n', hrmono _ hm, by rw [hsigEq]; exact hct⟩
+      let ⟨G', i', n', hm, hct, hgi, hgo⟩ := hinv.rules r hr
+      ⟨G', i', n', hrmono _ hm, by rw [hsigEq]; exact hct, hkeepGI G' hgi hgo, hgo⟩
   have henvOut : td'.env = sd'.env :=
     envAligned_step hQ hc hinv.state hstep hblock hinv.env
   refine ⟨td', hblock, ?_⟩
@@ -4153,12 +4205,17 @@ theorem unionsInv_step (hfire : UnionsFire) {Q : Program} (hQ : Q.EncodeDomain)
       intro s hs
       rw [hrules] at hs
       rcases Set.mem_insert_iff.mp hs with rfl | hs'
-      · exact ⟨G, i, n, hnew, by rw [hsigEq]; exact hri _ rfl⟩
+      · obtain ⟨hgi, hgo⟩ := hglob.1 hchain
+        exact ⟨G, i, n, hnew, by rw [hsigEq]; exact hri _ rfl,
+          hkeepGI G hgi hgo, hgo⟩
       · exact hkeepR s hs'
   | run R =>
       have hjoin := hfire (Or.inl rfl) hstep hblock hinv.env hinv.state
         (hmech hchain).2.2.2.1 (hmech hchain).2.2.2.2.1
-        hinv.rules (hmech hchain).2.2.2.2.2.1
+        (fun r hr => by
+          obtain ⟨G', i', n', hm, hct, hgi, -⟩ := hinv.rules r hr
+          exact ⟨G', i', n', hm, hct, hgi⟩)
+        (hmech hchain).2.2.2.2.2.1
         (hmech hchain).2.2.2.2.2.2.1 (hmech hchain).2.2.2.2.2.2.2
         hinv.readsAt hinv.joinedAt
         (fun t ht => by
@@ -4171,7 +4228,10 @@ theorem unionsInv_step (hfire : UnionsFire) {Q : Program} (hQ : Q.EncodeDomain)
   | saturate R =>
       have hjoin := hfire (Or.inr rfl) hstep hblock hinv.env hinv.state
         (hmech hchain).2.2.2.1 (hmech hchain).2.2.2.2.1
-        hinv.rules (hmech hchain).2.2.2.2.2.1
+        (fun r hr => by
+          obtain ⟨G', i', n', hm, hct, hgi, -⟩ := hinv.rules r hr
+          exact ⟨G', i', n', hm, hct, hgi⟩)
+        (hmech hchain).2.2.2.2.2.1
         (hmech hchain).2.2.2.2.2.2.1 (hmech hchain).2.2.2.2.2.2.2
         hinv.readsAt hinv.joinedAt
         (fun t ht => by
@@ -4381,14 +4441,14 @@ theorem FDatabase.execProgramM_append' {p q : Program} : ∀ {d m D : FDatabase}
 /-- **The command induction.** One `unionsInv_step` per source command, threading the state
 the encoded block left. -/
 theorem unionsInv_of_programStep (hfire : UnionsFire) {Q : Program} (hQ : Q.EncodeDomain)
-    (hmech : RowMech Q) :
+    (hmech : RowMech Q) (hglob : GlobalsMech Q) :
     ∀ (p : Program) {pre : Program} {G : List (Var × Expr)} {n i : Nat}
       {sd sd' : Database} {td D : FDatabase} {rest : Program},
       (∀ c ∈ p, c ∈ Q) → EncStep Q pre p sd td G →
       Program.RuleNamesDeclared td.sig p i → ProgramStep sd p sd' →
       td.execProgramM ((encodeCmds Q G p n i).1 ++ rest) = some D →
-      UnionsInv sd td D →
-      ∃ td', td.execProgramM (encodeCmds Q G p n i).1 = some td' ∧ UnionsInv sd' td' D := by
+      UnionsInv Q sd td D →
+      ∃ td', td.execProgramM (encodeCmds Q G p n i).1 = some td' ∧ UnionsInv Q sd' td' D := by
   intro p
   induction p with
   | nil =>
@@ -4404,7 +4464,8 @@ theorem unionsInv_of_programStep (hfire : UnionsFire) {Q : Program} (hQ : Q.Enco
                 (encodeCmd G c n i).2.2).1 := rfl
     rw [hcmds, List.append_assoc] at hrun
     obtain ⟨td₁, hb, hinv₁⟩ :=
-      unionsInv_step hfire hQ hmech (hsub c List.mem_cons_self) hchain hri.1 hstep hrun hinv
+      unionsInv_step hfire hQ hmech hglob (hsub c List.mem_cons_self) hchain hri.1 hstep hrun
+        hinv
     have hsigEq : td₁.sig = td.sig :=
       FDatabase.execProgramM_sig_of_noDecl (noDecl_encodeCmd G c n i) hb
     have hri' : Program.RuleNamesDeclared td₁.sig cs (encodeCmd G c n i).2.2 := by
@@ -4484,15 +4545,15 @@ theorem execM_env {P : Program} {src : Database} {tgt : FDatabase}
 Both `td` and `D` are the final state: the induction started at the empty source database and
 the state the prelude left, and finished where the run did. -/
 theorem unionsInv_execM (hfire : UnionsFire) {P : Program} {src : Database} {tgt : FDatabase}
-    (hdom : P.EncodeDomain) (hmech : RowMech P) (hnames : RuleNameMech P)
+    (hdom : P.EncodeDomain) (hmech : RowMech P) (hglob : GlobalsMech P) (hnames : RuleNameMech P)
     (hsrc : ProgramStep Database.empty P src)
-    (htgt : execM (encode P) = some tgt) : UnionsInv src tgt tgt := by
+    (htgt : execM (encode P) = some tgt) : UnionsInv P src tgt tgt := by
   rw [execM, encode] at htgt
   obtain ⟨td₀, hprel, hcmds⟩ := FDatabase.execProgramM_append htgt
   have henv₀ : td₀.env = [] := by
     rw [FDatabase.execProgramM_env (actionsAreSets_encodePrelude P) hprel]
     rfl
-  have hinv₀ : UnionsInv Database.empty td₀ tgt := by
+  have hinv₀ : UnionsInv P Database.empty td₀ tgt := by
     refine ⟨?_, ?_, ?_, ?_, FDatabase.execProgramM_toDatabase_contained hcmds, ?_,
       Database.CtorState.empty⟩
     · intro a b hab
@@ -4505,7 +4566,7 @@ theorem unionsInv_execM (hfire : UnionsFire) {P : Program} {src : Database} {tgt
       exact absurd hr (by simp [Database.empty])
     · rw [henv₀]
       rfl
-  obtain ⟨td', hb, hinv⟩ := unionsInv_of_programStep hfire hdom hmech P (fun c hc => hc)
+  obtain ⟨td', hb, hinv⟩ := unionsInv_of_programStep hfire hdom hmech hglob P (fun c hc => hc)
     (.prelude hprel) (hnames (.prelude hprel)) hsrc
     (by rw [List.append_nil]; exact hcmds) hinv₀
   obtain rfl : td' = tgt := Option.some.inj (hb.symm.trans hcmds)
@@ -4641,7 +4702,7 @@ one binding a top-level `let` made, and answered by the *earlier* build's own re
 the composition the `let` case of `unionsInv_step` performs, and the only thing the induction
 still carries about terms. `joined` is vacuous here (`rbSrc_diag`); `uRebuilt_unionsJoined` is
 that clause at a source with a real equation. -/
-theorem rbState2_unionsInv : UnionsInv rbSrc rbState2 rbState2 where
+theorem rbState2_unionsInv : UnionsInv rbProgram rbSrc rbState2 rbState2 where
   joinedAt := fun a b hab hne => absurd (rbSrc_diag (a, b) hab) hne
   readsAt := by
     intro t ht
@@ -4869,6 +4930,21 @@ theorem rbState2_noAtEnv : rbState2.NoAtEnv := by
   obtain rfl : b = ("x", Term.app "A" []) := by simpa [rbEnv] using hb2
   decide +kernel
 
+/-- **The globals `rbProgram`'s own top-level `let` freezes**, at the state it leaves: `x`
+is bound to `(A)` and the stored definition is the closed application `(A)` itself.
+
+This is the clause `unionsFire_false_globals` refutes the residue for the want of, exhibited
+at a **non-empty** substitution — the `hrules` clause it rides in is vacuous here because
+`rbSrc` holds no rule, so it is carried separately rather than left to hold trivially. -/
+theorem rbSrc_globalsInline : rbSrc.GlobalsInline [("x", Expr.app "A" [])] := by
+  intro v e hv
+  obtain ⟨rfl, rfl⟩ : v = "x" ∧ e = Expr.app "A" [] := by
+    rw [Expr.lookupG] at hv
+    by_cases h : v = "x"
+    · subst h; exact ⟨rfl, (by simpa using hv : Expr.app "A" [] = e).symm⟩
+    · rw [if_neg h] at hv; exact absurd hv (by simp [Expr.lookupG])
+  exact ⟨rfl, Term.app "A" [], rfl, rfl⟩
+
 /-- The source holds no rule, so the encodability clause is vacuous here;
 `ncRule_queriesEncodable` is it at a query with content. -/
 theorem rbSrc_queriesEncodable : ∀ r ∈ rbSrc.rules, (Cmd.rule r).QueryEncodable ∧
@@ -4878,7 +4954,8 @@ theorem rbSrc_queriesEncodable : ∀ r ∈ rbSrc.rules, (Cmd.rule r).QueryEncoda
 /-- **`unionsJoined_fire`'s hypotheses are simultaneously satisfiable**, so the residue is not
 vacuous — `ENCODING.md`'s failure, twice.
 
-Fifteen conjuncts, in the order `UnionsFire` takes them.
+Sixteen conjuncts: the fifteen `UnionsFire` takes, in the order it takes them, and
+`rbSrc_globalsInline` beside them.
 
 Satisfiable degenerately in the *round*, and deliberately so: the source holds no rule, so the
 round adds nothing, the encoded round writes nothing either, and the two clauses about **rules**
@@ -4886,6 +4963,11 @@ round adds nothing, the encoded round writes nothing either, and the two clauses
 `ncRule_queriesEncodable` is the second of those at a rule with a real query, and
 `ncTgt_encRule_fires` at a real firing. Three of the rest are `rbState2_unionsInv`'s own
 `td`-side clauses.
+
+The clause about the **globals** is not degenerate either, and it is carried twice for that
+reason: the `hrules` conjunct it rides in is vacuous here, so `rbSrc_globalsInline` states it
+separately at the substitution `rbProgram`'s own top-level `let` freezes — `x` bound to `(A)`,
+at the closed definition `(A)`. `unionsFire_false_globals` is the residue without it.
 
 The clauses about **names and rows** are not degenerate. `rbState2_sig_mono` carries both of
 `rbSrc`'s constructors, `A` and the *unary* `W`, onto the skolems `encodePrelude` declared —
@@ -4917,20 +4999,24 @@ theorem unionsJoined_fire_satisfiable :
       rbState2.sig.IsCtor fiatName ∧
       (∀ r ∈ rbSrc.rules,
         ∃ G i n, (encodeRule i (r.substGlobals G) n).1 ∈ rbState2.rules ∧
-          rbState2.sig.IsCtor (ruleName i)) ∧
+          rbState2.sig.IsCtor (ruleName i) ∧ rbSrc.GlobalsInline G) ∧
       (∀ r ∈ rbSrc.rules, (Cmd.rule r).QueryEncodable ∧
         ∀ p ∈ r.query, ∀ fk ∈ p.ctors, Prim.ofName fk.1 = none) ∧
       rbState2.RowColumnsValued ∧ rbState2.NoAtEnv ∧
       (∀ t ∈ rbSrc.terms, ∃ e, ViewRepr rbState2.toDatabase t e) ∧
       rbState2.toDatabase.UnionsJoined rbSrc ∧
       (∀ t ∈ rbSrc.terms, ∃ r, RowRepr rbState2 t r) ∧ rbState2.RowJoined ∧
-      (∀ t r : Term, RowRepr rbState2 t r → ViewRepr rbState2.toDatabase t r) :=
+      (∀ t r : Term, RowRepr rbState2 t r → ViewRepr rbState2.toDatabase t r) ∧
+      rbSrc.GlobalsInline [("x", Expr.app "A" [])] :=
   ⟨rbSrc_cmdStep_run rbRuleset, rbState2_execProgramM_run, rbState2_unionsInv.env,
     rbState2_unionsInv.state, rbState2_sig_mono, rbState2_isCtor_fiatName,
-    rbState2_unionsInv.rules, rbSrc_queriesEncodable,
+    (fun r hr => by
+      obtain ⟨G, i, n, hm, hct, hgi, -⟩ := rbState2_unionsInv.rules r hr
+      exact ⟨G, i, n, hm, hct, hgi⟩),
+    rbSrc_queriesEncodable,
     rbState2_rowColumnsValued, rbState2_noAtEnv, rbState2_unionsInv.readsAt,
     rbState2_unionsInv.joinedAt, rbState2_exists_rowRepr, rbState2_rowJoined,
-    fun _ _ h => rbState2_viewRepr_of_rowRepr h⟩
+    fun _ _ h => rbState2_viewRepr_of_rowRepr h, rbSrc_globalsInline⟩
 
 /-! #### The rebuild fixpoint, and the row it does not reach
 
@@ -6318,10 +6404,10 @@ does make ids of themselves (`viewReprAll_self_of_execProgramM`); a head `union`
 clause holds and `Database.ViewJoined.ufJoin` does not — so the two are load-bearing
 separately. -/
 theorem execM_unionsJoined (hfire : UnionsFire) {P : Program} {src : Database} {tgt : FDatabase}
-    (hdom : P.EncodeDomain) (hmech : RowMech P) (hnames : RuleNameMech P)
+    (hdom : P.EncodeDomain) (hmech : RowMech P) (hglob : GlobalsMech P) (hnames : RuleNameMech P)
     (hsrc : ProgramStep Database.empty P src)
     (htgt : execM (encode P) = some tgt) : tgt.toDatabase.UnionsJoined src :=
-  (unionsInv_execM hfire hdom hmech hnames hsrc htgt).joined
+  (unionsInv_execM hfire hdom hmech hglob hnames hsrc htgt).joined
 
 /-! ### The completeness half
 
