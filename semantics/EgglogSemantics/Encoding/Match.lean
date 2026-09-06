@@ -671,6 +671,52 @@ theorem ValidQuerySubst.of_substGlobals {src : Database} {G : List (Var × Expr)
           exact .cons ⟨by rw [← Pattern.freeVars_substGlobals hG p]; exact hp.1,
             Matches.of_substGlobals hG hp.2⟩ (ih _ hrest)
 
+/-- **And a source match of the pattern is one of the substituted pattern.** The direction a
+*firing* needs: `encodeCmd` flattens `Rule.substGlobals G`, so the reading the target's own
+match has to mirror is the **substituted** query's, and the source's `ValidQuerySubst` is at the
+query it was written with. Both facts `Matches.of_substGlobals` runs on are equalities
+(`Expr.eval_substGlobals`, `Pattern.freeVars_substGlobals`), so the transfer runs both ways.
+
+`Database.GlobalsInline` is exactly what it costs, and `Encoding/Complete.lean`'s
+`unionsFire_false_globals` is the residue without it: at a `G` no source state realizes the two
+queries are not interchangeable at all, and the encoded rule reads a variable its own query no
+longer binds. -/
+theorem Matches.to_substGlobals {src : Database} {G : List (Var × Expr)}
+    (hG : src.GlobalsInline G) {p : Pattern} {σ : Env}
+    (h : Matches src p σ) : Matches src (p.substGlobals G) σ := by
+  have hlk : ∀ v t, Env.lookup v src.env = some t → Env.lookup v (src.env ++ σ) = some t :=
+    fun v t hv => Env.lookup_append_of_mem (Env.mem_dom_of_mem (Env.mem_of_lookup hv)) ▸ hv
+  have he := Expr.eval_substGlobals hG σ hlk
+  have hel := Expr.evalList_substGlobals hG σ hlk
+  cases p with
+  | expr e =>
+      cases h with
+      | expr hw hev hc => exact .expr hw ((he e).trans hev) hc
+  | eq e₁ e₂ =>
+      cases h with
+      | eq hw h₁ h₂ hc₁ hc₂ => exact .eq hw ((he e₁).trans h₁) ((he e₂).trans h₂) hc₁ hc₂
+  | values vs f as =>
+      cases h with
+      | values hw h₁ h₂ hc => exact .values hw ((hel as).trans h₁) ((hel vs).trans h₂) hc
+
+/-- **And so a valid substitution of the query is one of the substituted query**, which is the
+premise `mem_matchQuery_encodeQuery` is handed at `Query.substGlobals G s.query`. -/
+theorem ValidQuerySubst.to_substGlobals {src : Database} {G : List (Var × Expr)}
+    (hG : src.GlobalsInline G) {q : Query} {τ : Env}
+    (h : ValidQuerySubst src q τ) : ValidQuerySubst src (Query.substGlobals G q) τ := by
+  obtain ⟨σs, hall, hu⟩ := h
+  refine ⟨σs, ?_, hu⟩
+  rw [Query.substGlobals]
+  clear hu
+  induction q generalizing σs with
+  | nil => cases hall; exact .nil
+  | cons p ps ih =>
+      rw [List.map_cons]
+      cases hall with
+      | cons hp hrest =>
+          exact .cons ⟨by rw [Pattern.freeVars_substGlobals hG p]; exact hp.1,
+            Matches.to_substGlobals hG hp.2⟩ (ih _ hrest)
+
 /-- **The source-side reading exists.** One source term per query variable, congruent to the
 id the target read it as, and equal to the source's own binding wherever there is one.
 

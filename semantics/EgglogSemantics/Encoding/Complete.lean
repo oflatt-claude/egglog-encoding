@@ -10216,6 +10216,31 @@ second failing the source-rules clause, with every clause about names holding at
 (`cxpTgt_name_clauses`). `unionsFire_of_weak` is the implication that says what they refute —
 `Egglog.UnionsFireWeak` — is strictly the stronger claim.
 
+**What the repair lands, and what the `Cmd.run` half still owes.** Step 2 of the assembly is
+now written both ways: `Matches.to_substGlobals` and `ValidQuerySubst.to_substGlobals` turn the
+source firing's own `ValidQuerySubst` at `s.query` into one at `Query.substGlobals G s.query`,
+which is the query `mem_matchQuery_encodeQuery` is handed. What is left on that step is
+`mem_matchQuery_encodeQuery`'s `hglob`, at a variable the substituted query still names and the
+**environment** binds — a global `Cmd.globalBind` did *not* freeze, which by its two guards is
+one a top-level `let` binds twice (the open-definition guard only ever fails by cascading from
+such a name). `hglob` asks the target reading of that variable to be its own value, so
+`patternRowRead_of_matches` would need `RowRepr td t t`, and that is **false** at states an
+encoded run reaches. Measured, on
+
+```
+(let $g (Zz))  (let $g (Yy))  (F (Yy))  (Aa)  (union (Yy) (Aa))
+(rule ((F $g)) ((Hit)))  (run 1)
+```
+
+which is in `encode`'s domain: `execM (encode P)` holds `@YyView[] ↦ ((Aa), …)`, so `(Yy)` reads
+through rows to `(Aa)` and not to itself. The two sides **agree** there all the same — the run
+holds one `(Hit)` and one `@HitView` — because the column rule *adds* the re-keyed row rather
+than replacing it, and `@FView[(Yy)]` is still live beside `@FView[(Aa)]`. So this is a gap in
+the *route*, not a defect in `encode`: the reading a shadowed global needs is the surviving old
+row, which `RowRepr` at the leader does not name. egglog rejects the program outright
+("Shadowing is not allowed", `check_shadowing.rs`) and `Program.EncodeDomain` does not, so the
+alternatives are a tenth domain clause or a second reading, and neither is this change.
+
 **The one structural item left is the `Cmd.saturate` half's alone, and the encoder fix did not
 close it.** A `Cmd.run` block is `[.run R, Cmd.saturate rebuildRuleset]` and `.run R` is a
 *single* round, fired at `td` itself — `allMaintenanceRules` joins the maintenance rules only to
