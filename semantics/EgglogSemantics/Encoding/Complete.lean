@@ -7763,6 +7763,727 @@ theorem ncTgt_encRule_fires :
   mem_rows_execRunRules.mpr (Or.inr ⟨ncEncRule, ncEncRule_mem, rfl, ncIdSubst,
     ncTgt_mem_matchQuery, ncFired, ncTgt_encRule_fired, ncFired_row⟩)
 
+/-! ### The forward mirror of `Encoding/Match.lean`
+
+`Encoding/Match.lean` runs the query correspondence **target → source**: a match of the emitted
+query becomes a source `ValidQuerySubst`. What a firing needs is the other direction — a source
+reading, turned into a substitution the *emitted* query matches at — and that is this section.
+
+Two features of `encodeQuery` are the whole of it.
+
+**Flattening.** An application pattern becomes several atoms joined by intermediate variables,
+so the reading has to bind not only the source query's variables but every generated one, each
+to the id of the subterm at that position. `RowRead` is that reading, and it carries the ids
+through **live rows**, which is what a query reads (`RowRepr` is the same shape over a source
+term; `EncAtom` is what one emitted atom asks of a reading).
+
+**The fresh-variable supply.** `encodeQuery` threads a counter, and one reading has to answer
+every atom of the whole query at once. `FreshEnv` is the invariant that makes the blocks
+compose: a block's bindings are numbered inside *its own* stretch of the counter, so two blocks'
+domains are disjoint (`freshVar_inj`) and their concatenation binds each of them
+(`Env.lookup_of_mem_nodup`). Non-collision with the source's own variables is the `@` prefix —
+`atPrefix_freshVar` against `FDatabase.NoAtEnv` and the reading's own `hnoAtVar` — so the
+source bindings sit in front of the generated ones and neither shadows the other. -/
+
+/-- `encodeQueryExpr` returns a literal unchanged and emits no atom. -/
+theorem encodeQueryExpr_lit {l : Lit} {n : Nat} :
+    encodeQueryExpr (.lit l) n = (.lit l, [], n) := rfl
+
+/-- An application consumes two generated variables past its arguments': an e-class and a
+premise proof. -/
+theorem encodeQueryExpr_app_next {f : FnName} {args : List Expr} {n : Nat} :
+    (encodeQueryExpr (.app f args) n).2.2 = (encodeQueryArgs args n).2.2 + 2 := rfl
+
+theorem encodeQueryArgs_nil {n : Nat} : encodeQueryArgs [] n = ([], [], n) := rfl
+
+@[inherit_doc encodeQueryExpr_app_next]
+theorem encodeQueryArgs_cons_next {e : Expr} {es : List Expr} {n : Nat} :
+    (encodeQueryArgs (e :: es) n).2.2 = (encodeQueryArgs es (encodeQueryExpr e n).2.2).2.2 := rfl
+
+@[inherit_doc encodeQueryExpr_app_next]
+theorem encodePattern_expr_next {e : Expr} {n : Nat} :
+    (encodePattern (.expr e) n).2 = (encodeQueryExpr e n).2.2 := rfl
+
+@[inherit_doc encodeQueryExpr_app_next]
+theorem encodePattern_eq_next {e₁ e₂ : Expr} {n : Nat} :
+    (encodePattern (.eq e₁ e₂) n).2
+      = (encodeQueryExpr e₂ (encodeQueryExpr e₁ n).2.2).2.2 := rfl
+
+@[inherit_doc encodeQueryExpr_app_next]
+theorem encodeQuery_cons_next {p : Pattern} {ps : Query} {n : Nat} :
+    (encodeQuery (p :: ps) n).2 = (encodeQuery ps (encodePattern p n).2).2 := rfl
+
+mutual
+
+/-- **The counter only ever advances.** What makes one block's stretch of generated variables
+disjoint from the next's. -/
+theorem le_encodeQueryExpr_next : ∀ (e : Expr) (n : Nat), n ≤ (encodeQueryExpr e n).2.2
+  | .lit _, n => Nat.le_refl n
+  | .var _, n => Nat.le_refl n
+  | .app _ args, n => by
+      rw [encodeQueryExpr_app_next]
+      exact Nat.le_trans (le_encodeQueryArgs_next args n) (Nat.le_add_right _ 2)
+
+@[inherit_doc le_encodeQueryExpr_next]
+theorem le_encodeQueryArgs_next : ∀ (es : List Expr) (n : Nat), n ≤ (encodeQueryArgs es n).2.2
+  | [], n => Nat.le_refl n
+  | e :: es, n => by
+      rw [encodeQueryArgs_cons_next]
+      exact Nat.le_trans (le_encodeQueryExpr_next e n) (le_encodeQueryArgs_next es _)
+
+end
+
+@[inherit_doc le_encodeQueryExpr_next]
+theorem le_encodePattern_next : ∀ (p : Pattern) (n : Nat), n ≤ (encodePattern p n).2
+  | .values _ _ _, n => Nat.le_refl n
+  | .expr e, n => by rw [encodePattern_expr_next]; exact le_encodeQueryExpr_next e n
+  | .eq e₁ e₂, n => by
+      rw [encodePattern_eq_next]
+      exact Nat.le_trans (le_encodeQueryExpr_next e₁ n) (le_encodeQueryExpr_next e₂ _)
+
+@[inherit_doc le_encodeQueryExpr_next]
+theorem le_encodeQuery_next : ∀ (q : Query) (n : Nat), n ≤ (encodeQuery q n).2
+  | [], n => Nat.le_refl n
+  | p :: ps, n => by
+      rw [encodeQuery_cons_next]
+      exact Nat.le_trans (le_encodePattern_next p n) (le_encodeQuery_next ps _)
+
+/-- **The supply is injective**, so two blocks numbered apart bind different variables.
+`toString_nat_inj` is the digits, and `String.append` cancels the `"@v"`. -/
+theorem freshVar_inj {i j : Nat} (h : freshVar i = freshVar j) : i = j := by
+  have h2 : (freshVar i).toList = (freshVar j).toList := by rw [h]
+  rw [freshVar, freshVar, String.toList_append, String.toList_append] at h2
+  exact toString_nat_inj (String.toList_inj.mp (List.append_cancel_left h2))
+
+/-- **And it is in the generated namespace**, which is what keeps it clear of the source's own
+variables and of `FDatabase.NoAtEnv`'s environment. -/
+theorem atPrefix_freshVar (n : Nat) : "@".isPrefixOf (freshVar n) = true := by
+  rw [freshVar, String.isPrefixOf, String.startsWith_string_iff, String.toList_append,
+    show ("@v").toList = ['@', 'v'] from by decide]
+  exact ⟨'v' :: (toString n).toList, rfl⟩
+
+/-- A binding of an environment with distinct keys is the one `lookup` finds. -/
+theorem Env.lookup_of_mem_nodup : ∀ {σ : Env} {b : Var × Term}, b ∈ σ →
+    (Env.dom σ).Nodup → Env.lookup b.1 σ = some b.2
+  | [], _, hb, _ => absurd hb (by simp)
+  | c :: cs, b, hb, hnd => by
+      rw [Env.dom_cons, List.nodup_cons] at hnd
+      rcases List.mem_cons.mp hb with rfl | hb'
+      · rw [Env.lookup_cons, if_pos rfl]
+      · have hne : b.1 ≠ c.1 := fun hc => hnd.1 (hc ▸ Env.mem_dom_of_mem hb')
+        rw [Env.lookup_cons, if_neg hne]
+        exact Env.lookup_of_mem_nodup hb' hnd.2
+
+/-- **What one emitted atom asks of a reading.** A view read wants a live row at the ids its
+key columns evaluate to; an id comparison wants **one** id, because an encoded target asserts
+nothing (`execM_encode_eqsRefl`) and there congruence is equality. `.expr` never occurs:
+`encodePattern` emits only reads and comparisons. -/
+def EncAtom (d : FDatabase) (ρ : Env) : Pattern → Prop
+  | .values vs f as => (d.sig.mergeOf f).isSome = true ∧ ∃ ts us,
+      Expr.evalList d.sig as ρ = some ts ∧ Expr.evalList d.sig vs ρ = some us ∧
+      (⟨f, ts, us⟩ : Row) ∈ d.rows
+  | .eq e₁ e₂ => ∃ i, Expr.eval d.sig e₁ ρ = some i ∧ Expr.eval d.sig e₂ ρ = some i ∧
+      i ∈ d.terms
+  | .expr _ => False
+
+mutual
+
+/-- **The forward mirror of `QueryRead`**: under the source reading `ρs` and the target reading
+`ρt`, the source instance of `e` is `t` and the id the emitted reads bind it to is `i`, through
+**live rows**.
+
+`RowRepr` over the *shape of the pattern* rather than of a source term: the leaves are supplied
+by the two environments, and a variable's id is the target reading's, which is what keeps one id
+per variable across every atom that mentions it. -/
+inductive RowRead (sig : Signature) (d : FDatabase) (ρs ρt : Env) :
+    Expr → Term → Term → Prop where
+  | lit {l : Lit} : RowRead sig d ρs ρt (.lit l) (.lit l) (.lit l)
+  | var {v : Var} {t i : Term} :
+      Env.lookup v ρs = some t → Env.lookup v ρt = some i → RowRead sig d ρs ρt (.var v) t i
+  | app {f : FnName} {args : List Expr} {ts is : List Term} {i pf : Term} :
+      Prim.ofName f = none → sig.IsCtor f →
+      (d.sig.mergeOf (viewName f)).isSome = true →
+      RowReadList sig d ρs ρt args ts is →
+      (⟨viewName f, is, [i, pf]⟩ : Row) ∈ d.rows →
+      RowRead sig d ρs ρt (.app f args) (.app f ts) i
+
+/-- `RowRead` over an argument list. -/
+inductive RowReadList (sig : Signature) (d : FDatabase) (ρs ρt : Env) :
+    List Expr → List Term → List Term → Prop where
+  | nil : RowReadList sig d ρs ρt [] [] []
+  | cons {a : Expr} {t i : Term} {as : List Expr} {ts is : List Term} :
+      RowRead sig d ρs ρt a t i → RowReadList sig d ρs ρt as ts is →
+      RowReadList sig d ρs ρt (a :: as) (t :: ts) (i :: is)
+
+end
+
+/-- **The forward mirror of `PatternRead`.** A `.eq` reads **one** id for both sides, which is
+what the emitted `.eq` atom compares, and it asks the target to hold it — the witness
+`patternHolds` wants. There is no `.values` case: `Pattern.NoValues` is a domain condition and
+`encodePattern` passes a source entry atom through unchanged. -/
+inductive PatternRowRead (sig : Signature) (d : FDatabase) (ρs ρt : Env) : Pattern → Prop where
+  | expr {e : Expr} {t i : Term} :
+      RowRead sig d ρs ρt e t i → PatternRowRead sig d ρs ρt (.expr e)
+  | eq {e₁ e₂ : Expr} {t₁ t₂ i : Term} :
+      RowRead sig d ρs ρt e₁ t₁ i → RowRead sig d ρs ρt e₂ t₂ i → i ∈ d.terms →
+      PatternRowRead sig d ρs ρt (.eq e₁ e₂)
+
+mutual
+
+/-- **The source instance the reading carries is the one the source evaluates**, which is what
+ties a `RowRead` back to `Matches`. -/
+theorem RowRead.eval_src {sig : Signature} {d : FDatabase} {ρs ρt : Env} :
+    ∀ {e : Expr} {t i : Term}, RowRead sig d ρs ρt e t i → Expr.eval sig e ρs = some t
+  | _, _, _, .lit => rfl
+  | _, _, _, .var ht _ => by rw [Expr.eval_var]; exact ht
+  | _, _, _, .app hp hc _ hl _ => by
+      rw [Expr.eval, hp, if_pos hc, RowReadList.evalList_src hl]; rfl
+
+@[inherit_doc RowRead.eval_src]
+theorem RowReadList.evalList_src {sig : Signature} {d : FDatabase} {ρs ρt : Env} :
+    ∀ {es : List Expr} {ts is : List Term}, RowReadList sig d ρs ρt es ts is →
+      Expr.evalList sig es ρs = some ts
+  | _, _, _, .nil => rfl
+  | _, _, _, .cons h hl => by
+      rw [Expr.evalList_cons, h.eval_src, Option.bind_some, RowReadList.evalList_src hl]; rfl
+
+end
+
+/-- **The generated bindings one emitted block needs**: numbered inside the block's own stretch
+`[n, m)` of the counter, distinct, and drawn from where the enumerator assigns. The three
+clauses are what make the blocks compose — the range gives disjointness, `nodup` makes the
+concatenation bind each of them, and `valued` is `matchQuery`'s own universe. -/
+structure FreshEnv (d : FDatabase) (n m : Nat) (σ : Env) : Prop where
+  /-- Every key is a generated variable of this block's stretch. -/
+  fresh : ∀ b ∈ σ, ∃ k, n ≤ k ∧ k < m ∧ b.1 = freshVar k
+  /-- No key twice. -/
+  nodup : (Env.dom σ).Nodup
+  /-- Every value is one `matchQuery` assigns. -/
+  valued : ∀ b ∈ σ, b.2 ∈ d.valueTerms
+
+theorem FreshEnv.nil {d : FDatabase} {n m : Nat} : FreshEnv d n m [] :=
+  ⟨by simp, by simp [Env.dom], by simp⟩
+
+theorem FreshEnv.mono {d : FDatabase} {n m n' m' : Nat} {σ : Env} (h : FreshEnv d n m σ)
+    (hn : n' ≤ n) (hm : m ≤ m') : FreshEnv d n' m' σ :=
+  ⟨fun b hb => (h.fresh b hb).imp fun _ hk =>
+      ⟨Nat.le_trans hn hk.1, Nat.lt_of_lt_of_le hk.2.1 hm, hk.2.2⟩,
+    h.nodup, h.valued⟩
+
+/-- **Two adjacent blocks' bindings concatenate.** The `nodup` of the result is where
+`freshVar_inj` is spent: the left block's keys are numbered below `m` and the right block's at
+or above it, so no key of one is a key of the other. -/
+theorem FreshEnv.append {d : FDatabase} {n m k : Nat} {σ₁ σ₂ : Env}
+    (h₁ : FreshEnv d n m σ₁) (h₂ : FreshEnv d m k σ₂) (hnm : n ≤ m) (hmk : m ≤ k) :
+    FreshEnv d n k (σ₁ ++ σ₂) := by
+  refine ⟨fun b hb => ?_, ?_, fun b hb => ?_⟩
+  · rcases List.mem_append.mp hb with hb' | hb'
+    · exact (h₁.mono (Nat.le_refl n) hmk).fresh b hb'
+    · exact (h₂.mono hnm (Nat.le_refl k)).fresh b hb'
+  · rw [Env.dom, List.map_append]
+    refine List.Nodup.append h₁.nodup h₂.nodup ?_
+    intro v hv₁ hv₂
+    obtain ⟨b₁, hb₁, rfl⟩ := List.mem_map.mp hv₁
+    obtain ⟨b₂, hb₂, hb₂'⟩ := List.mem_map.mp hv₂
+    obtain ⟨k₁, -, hk₁, he₁⟩ := h₁.fresh b₁ hb₁
+    obtain ⟨k₂, hk₂, -, he₂⟩ := h₂.fresh b₂ hb₂
+    have : k₂ = k₁ := freshVar_inj (he₂.symm.trans (hb₂'.trans he₁))
+    omega
+  · rcases List.mem_append.mp hb with hb' | hb'
+    · exact h₁.valued b hb'
+    · exact h₂.valued b hb'
+
+mutual
+
+/-- **The flattening, mirrored.** One source expression's reading produces the generated
+bindings its emitted block wants, and then *any* reading extending them and the target
+substitution answers every atom of the block with a live row and evaluates the naming
+expression to the id.
+
+Quantifying over the extension rather than fixing it is what lets the blocks be glued: the
+whole query's reading is one environment, and each block only ever asks that its own bindings
+survive in it. -/
+theorem exists_freshEnv_encodeQueryExpr {sig : Signature} {d : FDatabase} {ρs ρt : Env}
+    (hcv : d.RowColumnsValued) :
+    ∀ {e : Expr} {t i : Term}, RowRead sig d ρs ρt e t i → ∀ n : Nat,
+      ∃ σ : Env, FreshEnv d n (encodeQueryExpr e n).2.2 σ ∧
+        ∀ ρ : Env, (∀ b ∈ σ, Env.lookup b.1 ρ = some b.2) →
+          (∀ (v : Var) (j : Term), Env.lookup v ρt = some j → Env.lookup v ρ = some j) →
+          Expr.eval d.sig (encodeQueryExpr e n).1 ρ = some i ∧
+          ∀ a ∈ (encodeQueryExpr e n).2.1, EncAtom d ρ a
+  | _, _, _, .lit, _ =>
+      ⟨[], FreshEnv.nil, fun _ _ _ => ⟨rfl, by intro a ha; cases ha⟩⟩
+  | _, _, _, .var _ hi, _ =>
+      ⟨[], FreshEnv.nil, fun _ _ hext => ⟨hext _ _ hi, by intro a ha; cases ha⟩⟩
+  | _, _, _, @RowRead.app _ _ _ _ f args ts is i pf _ _ hmg hl hrow, n => by
+      obtain ⟨σ₀, hf₀, hp₀⟩ := exists_freshEnv_encodeQueryArgs hcv hl n
+      set m := (encodeQueryArgs args n).2.2 with hm
+      have hcol : ∀ c ∈ is ++ [i, pf], c ∈ d.valueTerms := hcv _ hrow
+      have hne : freshVar m ≠ freshVar (m + 1) := fun hc => by
+        have := freshVar_inj hc; omega
+      have htail : FreshEnv d m (m + 2) [(freshVar m, i), (freshVar (m + 1), pf)] := by
+        refine ⟨fun b hb => ?_, ?_, fun b hb => ?_⟩
+        · rcases (by simpa using hb : b = (freshVar m, i) ∨ b = (freshVar (m+1), pf)) with rfl|rfl
+          · exact ⟨m, Nat.le_refl m, by omega, rfl⟩
+          · exact ⟨m + 1, by omega, by omega, rfl⟩
+        · simpa [Env.dom] using hne
+        · rcases (by simpa using hb : b = (freshVar m, i) ∨ b = (freshVar (m+1), pf)) with rfl|rfl
+          · exact hcol i (by simp)
+          · exact hcol pf (by simp)
+      refine ⟨σ₀ ++ [(freshVar m, i), (freshVar (m + 1), pf)], ?_, fun ρ hσ hext => ?_⟩
+      · rw [encodeQueryExpr_app_next, ← hm]
+        exact FreshEnv.append hf₀ htail (le_encodeQueryArgs_next args n) (by omega)
+      · have hσ₀ : ∀ b ∈ σ₀, Env.lookup b.1 ρ = some b.2 :=
+          fun b hb => hσ b (List.mem_append_left _ hb)
+        have him : Env.lookup (freshVar m) ρ = some i := hσ (freshVar m, i) (by simp)
+        have hpf : Env.lookup (freshVar (m + 1)) ρ = some pf := hσ (freshVar (m+1), pf) (by simp)
+        obtain ⟨hargs, hatoms⟩ := hp₀ ρ hσ₀ hext
+        refine ⟨by rw [encodeQueryExpr_app_expr, Expr.eval_var, ← hm]; exact him, fun a ha => ?_⟩
+        rw [encodeQueryExpr_app_atoms] at ha
+        rcases List.mem_append.mp ha with ha' | ha'
+        · exact hatoms a ha'
+        · obtain rfl : a = Pattern.values [.var (freshVar m), .var (freshVar (m + 1))]
+              (viewName f) (encodeQueryArgs args n).1 := by simpa [hm] using ha'
+          exact ⟨hmg, is, [i, pf], hargs, Expr.evalList_pair_var him hpf, hrow⟩
+
+@[inherit_doc exists_freshEnv_encodeQueryExpr]
+theorem exists_freshEnv_encodeQueryArgs {sig : Signature} {d : FDatabase} {ρs ρt : Env}
+    (hcv : d.RowColumnsValued) :
+    ∀ {es : List Expr} {ts is : List Term}, RowReadList sig d ρs ρt es ts is → ∀ n : Nat,
+      ∃ σ : Env, FreshEnv d n (encodeQueryArgs es n).2.2 σ ∧
+        ∀ ρ : Env, (∀ b ∈ σ, Env.lookup b.1 ρ = some b.2) →
+          (∀ (v : Var) (j : Term), Env.lookup v ρt = some j → Env.lookup v ρ = some j) →
+          Expr.evalList d.sig (encodeQueryArgs es n).1 ρ = some is ∧
+          ∀ a ∈ (encodeQueryArgs es n).2.1, EncAtom d ρ a
+  | _, _, _, .nil, _ =>
+      ⟨[], FreshEnv.nil, fun _ _ _ => ⟨rfl, by intro a ha; cases ha⟩⟩
+  | _, _, _, @RowReadList.cons _ _ _ _ a t i as ts is h hl, n => by
+      obtain ⟨σ₁, hf₁, hp₁⟩ := exists_freshEnv_encodeQueryExpr hcv h n
+      obtain ⟨σ₂, hf₂, hp₂⟩ := exists_freshEnv_encodeQueryArgs hcv hl (encodeQueryExpr a n).2.2
+      refine ⟨σ₁ ++ σ₂, ?_, fun ρ hσ hext => ?_⟩
+      · rw [encodeQueryArgs_cons_next]
+        exact FreshEnv.append hf₁ hf₂ (le_encodeQueryExpr_next a n)
+          (le_encodeQueryArgs_next as _)
+      · obtain ⟨he₁, ha₁⟩ := hp₁ ρ (fun b hb => hσ b (List.mem_append_left _ hb)) hext
+        obtain ⟨he₂, ha₂⟩ := hp₂ ρ (fun b hb => hσ b (List.mem_append_right _ hb)) hext
+        refine ⟨?_, fun x hx => ?_⟩
+        · rw [encodeQueryArgs_cons_exprs, Expr.evalList_cons, he₁, Option.bind_some, he₂]; rfl
+        · rw [encodeQueryArgs_cons_atoms] at hx
+          rcases List.mem_append.mp hx with hx' | hx'
+          · exact ha₁ x hx'
+          · exact ha₂ x hx'
+
+end
+
+/-- **One source pattern's block, mirrored.** A `.expr` is its expression's reads; a `.eq` is
+both sides' reads and then the comparison, which the single id `PatternRowRead.eq` carries
+answers. -/
+theorem exists_freshEnv_encodePattern {sig : Signature} {d : FDatabase} {ρs ρt : Env}
+    (hcv : d.RowColumnsValued) :
+    ∀ {p : Pattern}, PatternRowRead sig d ρs ρt p → ∀ n : Nat,
+      ∃ σ : Env, FreshEnv d n (encodePattern p n).2 σ ∧
+        ∀ ρ : Env, (∀ b ∈ σ, Env.lookup b.1 ρ = some b.2) →
+          (∀ (v : Var) (j : Term), Env.lookup v ρt = some j → Env.lookup v ρ = some j) →
+          ∀ a ∈ (encodePattern p n).1, EncAtom d ρ a
+  | _, @PatternRowRead.expr _ _ _ _ e _ _ h, n => by
+      obtain ⟨σ, hf, hp⟩ := exists_freshEnv_encodeQueryExpr hcv h n
+      refine ⟨σ, by rw [encodePattern_expr_next]; exact hf, fun ρ hσ hext a ha => ?_⟩
+      rw [encodePattern_expr_atoms] at ha
+      exact (hp ρ hσ hext).2 a ha
+  | _, @PatternRowRead.eq _ _ _ _ e₁ e₂ _ _ i h₁ h₂ hi, n => by
+      obtain ⟨σ₁, hf₁, hp₁⟩ := exists_freshEnv_encodeQueryExpr hcv h₁ n
+      obtain ⟨σ₂, hf₂, hp₂⟩ :=
+        exists_freshEnv_encodeQueryExpr hcv h₂ (encodeQueryExpr e₁ n).2.2
+      refine ⟨σ₁ ++ σ₂, ?_, fun ρ hσ hext a ha => ?_⟩
+      · rw [encodePattern_eq_next]
+        exact FreshEnv.append hf₁ hf₂ (le_encodeQueryExpr_next e₁ n)
+          (le_encodeQueryExpr_next e₂ _)
+      · obtain ⟨he₁, ha₁⟩ := hp₁ ρ (fun b hb => hσ b (List.mem_append_left _ hb)) hext
+        obtain ⟨he₂, ha₂⟩ := hp₂ ρ (fun b hb => hσ b (List.mem_append_right _ hb)) hext
+        rw [encodePattern_eq_atoms] at ha
+        rcases List.mem_append.mp ha with ha' | ha'
+        · rcases List.mem_append.mp ha' with ha'' | ha''
+          · exact ha₁ a ha''
+          · exact ha₂ a ha''
+        · obtain rfl : a = Pattern.eq (encodeQueryExpr e₁ n).1
+              (encodeQueryExpr e₂ (encodeQueryExpr e₁ n).2.2).1 := by simpa using ha'
+          exact ⟨i, he₁, he₂, hi⟩
+
+/-- **The whole query, mirrored**: one reading answering every emitted atom at once. -/
+theorem exists_freshEnv_encodeQuery {sig : Signature} {d : FDatabase} {ρs ρt : Env}
+    (hcv : d.RowColumnsValued) :
+    ∀ {q : Query}, (∀ p ∈ q, PatternRowRead sig d ρs ρt p) → ∀ n : Nat,
+      ∃ σ : Env, FreshEnv d n (encodeQuery q n).2 σ ∧
+        ∀ ρ : Env, (∀ b ∈ σ, Env.lookup b.1 ρ = some b.2) →
+          (∀ (v : Var) (j : Term), Env.lookup v ρt = some j → Env.lookup v ρ = some j) →
+          ∀ a ∈ (encodeQuery q n).1, EncAtom d ρ a
+  | [], _, _ => ⟨[], FreshEnv.nil, fun _ _ _ => by intro a ha; cases ha⟩
+  | p :: ps, hq, n => by
+      obtain ⟨σ₁, hf₁, hp₁⟩ := exists_freshEnv_encodePattern hcv (hq p List.mem_cons_self) n
+      obtain ⟨σ₂, hf₂, hp₂⟩ := exists_freshEnv_encodeQuery hcv
+        (fun x hx => hq x (List.mem_cons_of_mem _ hx)) (encodePattern p n).2
+      refine ⟨σ₁ ++ σ₂, ?_, fun ρ hσ hext a ha => ?_⟩
+      · rw [encodeQuery_cons_next]
+        exact FreshEnv.append hf₁ hf₂ (le_encodePattern_next p n) (le_encodeQuery_next ps _)
+      · rw [encodeQuery_cons_atoms] at ha
+        rcases List.mem_append.mp ha with ha' | ha'
+        · exact hp₁ ρ (fun b hb => hσ b (List.mem_append_left _ hb)) hext a ha'
+        · exact hp₂ ρ (fun b hb => hσ b (List.mem_append_right _ hb)) hext a ha'
+
+/-! #### From the atoms to the enumerator
+
+`mem_matchQuery_of_lookup` wants three things of the substitution — every free variable bound,
+every value one `assignments` draws, and `patternHolds` per atom under the atom's own
+restriction. All three come off `EncAtom`: the evaluations it carries bind the variables, the
+row columns are `FDatabase.RowColumnsValued`, and `Env.canon` is invisible to an atom because a
+variable it drops is one the environment already binds. -/
+
+mutual
+
+/-- **A variable of an expression that evaluates is bound.** `Expr.lookup_isSome_of_mem_evalList`
+at every variable rather than only at a top-level one. -/
+theorem Expr.lookup_isSome_of_mem_vars {sig : Signature} {ρ : Env} {v : Var} :
+    ∀ {e : Expr} {t : Term}, Expr.eval sig e ρ = some t → v ∈ e.vars →
+      (Env.lookup v ρ).isSome
+  | .lit _, _, _, hv => by simp [Expr.vars] at hv
+  | .var w, _, he, hv => by
+      obtain rfl : v = w := by simpa [Expr.vars] using hv
+      rw [Expr.eval_var] at he; rw [he]; rfl
+  | .app f args, t, he, hv => by
+      rw [Expr.vars] at hv
+      have hl : ∃ ts, Expr.evalList sig args ρ = some ts := by
+        rw [Expr.eval] at he
+        split at he
+        · obtain ⟨ts, hts, -⟩ := Option.bind_eq_some_iff.mp he; exact ⟨ts, hts⟩
+        · split at he
+          · obtain ⟨ts, hts, -⟩ := Option.map_eq_some_iff.mp he; exact ⟨ts, hts⟩
+          · exact absurd he (by simp)
+      obtain ⟨ts, hts⟩ := hl
+      exact Expr.lookup_isSome_of_mem_varsList hts hv
+
+@[inherit_doc Expr.lookup_isSome_of_mem_vars]
+theorem Expr.lookup_isSome_of_mem_varsList {sig : Signature} {ρ : Env} {v : Var} :
+    ∀ {es : List Expr} {ts : List Term}, Expr.evalList sig es ρ = some ts →
+      v ∈ Expr.varsList es → (Env.lookup v ρ).isSome
+  | [], _, _, hv => by simp [Expr.varsList] at hv
+  | e :: es, _, he, hv => by
+      rw [Expr.evalList_cons, Option.bind_eq_some_iff] at he
+      obtain ⟨t, ht, he'⟩ := he
+      obtain ⟨us, hus, -⟩ := Option.map_eq_some_iff.mp he'
+      rw [Expr.varsList, List.mem_union_iff] at hv
+      exact hv.elim (fun h => Expr.lookup_isSome_of_mem_vars ht h)
+        (fun h => Expr.lookup_isSome_of_mem_varsList hus h)
+
+end
+
+mutual
+
+/-- **A free variable is a variable the environment does not bind.** -/
+theorem Expr.mem_vars_of_mem_freeVars {σ : Env} :
+    ∀ {e : Expr} {v : Var}, v ∈ e.freeVars σ → v ∈ e.vars ∧ Env.lookup v σ = none
+  | .lit _, _, hv => by simp [Expr.freeVars] at hv
+  | .var w, v, hv => by
+      rw [Expr.freeVars] at hv
+      split at hv
+      · exact absurd hv (by simp)
+      · next hn =>
+        obtain rfl : v = w := by simpa using hv
+        exact ⟨by simp [Expr.vars], Option.not_isSome_iff_eq_none.mp hn⟩
+  | .app _ args, _, hv => Expr.mem_varsList_of_mem_freeVarsList hv
+
+@[inherit_doc Expr.mem_vars_of_mem_freeVars]
+theorem Expr.mem_varsList_of_mem_freeVarsList {σ : Env} :
+    ∀ {es : List Expr} {v : Var}, v ∈ Expr.freeVarsList es σ →
+      v ∈ Expr.varsList es ∧ Env.lookup v σ = none
+  | [], _, hv => by simp [Expr.freeVarsList] at hv
+  | e :: es, v, hv => by
+      rw [Expr.freeVarsList, List.mem_union_iff] at hv
+      rw [Expr.varsList]
+      rcases hv with hv | hv
+      · exact ⟨List.mem_union_iff.mpr (Or.inl (Expr.mem_vars_of_mem_freeVars hv).1),
+          (Expr.mem_vars_of_mem_freeVars hv).2⟩
+      · exact ⟨List.mem_union_iff.mpr (Or.inr (Expr.mem_varsList_of_mem_freeVarsList hv).1),
+          (Expr.mem_varsList_of_mem_freeVarsList hv).2⟩
+
+end
+
+@[inherit_doc Expr.mem_vars_of_mem_freeVars]
+theorem Pattern.mem_vars_of_mem_freeVars {σ : Env} :
+    ∀ {p : Pattern} {v : Var}, v ∈ p.freeVars σ → v ∈ p.vars ∧ Env.lookup v σ = none
+  | .expr _, _, hv => Expr.mem_vars_of_mem_freeVars hv
+  | .eq _ _, _, hv => by
+      rw [Pattern.freeVars, List.mem_union_iff] at hv
+      rw [Pattern.vars]
+      rcases hv with hv | hv
+      · exact ⟨List.mem_union_iff.mpr (Or.inl (Expr.mem_vars_of_mem_freeVars hv).1),
+          (Expr.mem_vars_of_mem_freeVars hv).2⟩
+      · exact ⟨List.mem_union_iff.mpr (Or.inr (Expr.mem_vars_of_mem_freeVars hv).1),
+          (Expr.mem_vars_of_mem_freeVars hv).2⟩
+  | .values _ _ _, _, hv => by
+      rw [Pattern.freeVars, List.mem_union_iff] at hv
+      rw [Pattern.vars]
+      rcases hv with hv | hv
+      · exact ⟨List.mem_union_iff.mpr (Or.inl (Expr.mem_varsList_of_mem_freeVarsList hv).1),
+          (Expr.mem_varsList_of_mem_freeVarsList hv).2⟩
+      · exact ⟨List.mem_union_iff.mpr (Or.inr (Expr.mem_varsList_of_mem_freeVarsList hv).1),
+          (Expr.mem_varsList_of_mem_freeVarsList hv).2⟩
+
+mutual
+
+/-- **And an unbound variable is free.** -/
+theorem Expr.mem_freeVars_of_mem_vars {σ : Env} :
+    ∀ {e : Expr} {v : Var}, v ∈ e.vars → Env.lookup v σ = none → v ∈ e.freeVars σ
+  | .lit _, _, hv, _ => by simp [Expr.vars] at hv
+  | .var w, v, hv, hn => by
+      obtain rfl : v = w := by simpa [Expr.vars] using hv
+      rw [Expr.freeVars, hn]; simp
+  | .app _ args, _, hv, hn => Expr.mem_freeVarsList_of_mem_varsList (by rwa [Expr.vars] at hv) hn
+
+@[inherit_doc Expr.mem_freeVars_of_mem_vars]
+theorem Expr.mem_freeVarsList_of_mem_varsList {σ : Env} :
+    ∀ {es : List Expr} {v : Var}, v ∈ Expr.varsList es → Env.lookup v σ = none →
+      v ∈ Expr.freeVarsList es σ
+  | [], _, hv, _ => by simp [Expr.varsList] at hv
+  | e :: es, _, hv, hn => by
+      rw [Expr.varsList, List.mem_union_iff] at hv
+      rw [Expr.freeVarsList, List.mem_union_iff]
+      exact hv.imp (fun h => Expr.mem_freeVars_of_mem_vars h hn)
+        (fun h => Expr.mem_freeVarsList_of_mem_varsList h hn)
+
+end
+
+@[inherit_doc Expr.mem_freeVars_of_mem_vars]
+theorem Pattern.mem_freeVars_of_mem_vars {σ : Env} :
+    ∀ {p : Pattern} {v : Var}, v ∈ p.vars → Env.lookup v σ = none → v ∈ p.freeVars σ
+  | .expr _, _, hv, hn => Expr.mem_freeVars_of_mem_vars hv hn
+  | .eq _ _, _, hv, hn => by
+      rw [Pattern.vars, List.mem_union_iff] at hv
+      rw [Pattern.freeVars, List.mem_union_iff]
+      exact hv.imp (fun h => Expr.mem_freeVars_of_mem_vars h hn)
+        (fun h => Expr.mem_freeVars_of_mem_vars h hn)
+  | .values _ _ _, _, hv, hn => by
+      rw [Pattern.vars, List.mem_union_iff] at hv
+      rw [Pattern.freeVars, List.mem_union_iff]
+      exact hv.imp (fun h => Expr.mem_freeVarsList_of_mem_varsList h hn)
+        (fun h => Expr.mem_freeVarsList_of_mem_varsList h hn)
+
+/-- **An answered atom binds every variable it mentions.** -/
+theorem EncAtom.lookup_isSome {d : FDatabase} {ρ : Env} {a : Pattern} (h : EncAtom d ρ a)
+    {v : Var} (hv : v ∈ a.vars) : (Env.lookup v ρ).isSome := by
+  cases a with
+  | expr _ => exact absurd h id
+  | eq e₁ e₂ =>
+      obtain ⟨i, h₁, h₂, -⟩ := h
+      rw [Pattern.vars, List.mem_union_iff] at hv
+      exact hv.elim (fun hx => Expr.lookup_isSome_of_mem_vars h₁ hx)
+        (fun hx => Expr.lookup_isSome_of_mem_vars h₂ hx)
+  | values vs f as =>
+      obtain ⟨-, ts, us, hts, hus, -⟩ := h
+      rw [Pattern.vars, List.mem_union_iff] at hv
+      exact hv.elim (fun hx => Expr.lookup_isSome_of_mem_varsList hus hx)
+        (fun hx => Expr.lookup_isSome_of_mem_varsList hts hx)
+
+/-- **Restricting the substitution is invisible where the environment answers or the
+restriction keeps.** The two cases of `Env.canon` under `d.env`: a variable the environment
+binds is read off the environment either way, and one it does not is one the restriction
+retains. -/
+theorem lookup_canon_agree {d : FDatabase} {τ : Env} {vs : List Var} (hnd : vs.Nodup)
+    {v : Var} (hv : Env.lookup v d.env = none → v ∈ vs) :
+    Env.lookup v (d.env ++ Env.canon vs τ) = Env.lookup v (d.env ++ τ) := by
+  cases hd : Env.lookup v d.env with
+  | some t => rw [Env.lookup_append_of_some hd, Env.lookup_append_of_some hd]
+  | none =>
+      rw [Env.lookup_append_of_none hd, Env.lookup_append_of_none hd,
+        Env.lookup_canon hnd (hv hd)]
+
+/-- **The link at the substitution the enumerator offers.** What a rule head reads is
+`Env.canon`-restricted, and this is `lookup_canon_agree` in the form the head consumes. -/
+theorem lookup_canon_of_mem_freeVars {d : FDatabase} {q : Query} {τ : Env} {v : Var} {j : Term}
+    (hv : (Env.lookup v d.env).isSome ∨ v ∈ Query.freeVars q d.env)
+    (h : Env.lookup v (d.env ++ τ) = some j) :
+    Env.lookup v (d.env ++ Env.canon (Query.freeVars q d.env) τ) = some j := by
+  rw [lookup_canon_agree (Query.freeVars_nodup q d.env)
+    (fun hd => hv.resolve_left (by rw [hd]; simp))]
+  exact h
+
+/-- **An answered atom is one `patternHolds` accepts.** A read is
+`patternHolds_values_of_mem_rows` at the row's own columns; a comparison is the one id, whose
+reflexive pair the target's own closure has because the target holds it. -/
+theorem patternHolds_of_encAtom {d : FDatabase} {τ : Env} {a : Pattern}
+    (hcv : d.RowColumnsValued) (h : EncAtom d (d.env ++ τ) a) :
+    patternHolds d a (Env.canon (a.freeVars d.env) τ) = true := by
+  have hagree : ∀ v ∈ a.vars, Env.lookup v (d.env ++ Env.canon (a.freeVars d.env) τ)
+      = Env.lookup v (d.env ++ τ) := fun v hv =>
+    lookup_canon_agree (Pattern.freeVars_nodup a d.env)
+      (fun hd => Pattern.mem_freeVars_of_mem_vars hv hd)
+  cases a with
+  | expr _ => exact absurd h id
+  | eq e₁ e₂ =>
+      obtain ⟨i, h₁, h₂, hi⟩ := h
+      have hv₁ : ∀ v ∈ e₁.vars, Env.lookup v (d.env ++ Env.canon _ τ)
+          = Env.lookup v (d.env ++ τ) :=
+        fun v hv => hagree v (by rw [Pattern.vars]; exact List.mem_union_iff.mpr (Or.inl hv))
+      have hv₂ : ∀ v ∈ e₂.vars, Env.lookup v (d.env ++ Env.canon _ τ)
+          = Env.lookup v (d.env ++ τ) :=
+        fun v hv => hagree v (by rw [Pattern.vars]; exact List.mem_union_iff.mpr (Or.inr hv))
+      have he₁ : Expr.eval d.sig e₁ (d.env ++ Env.canon ((Pattern.eq e₁ e₂).freeVars d.env) τ)
+          = some i := by rw [Expr.eval_agreeOn e₁ hv₁]; exact h₁
+      have he₂ : Expr.eval d.sig e₂ (d.env ++ Env.canon ((Pattern.eq e₁ e₂).freeVars d.env) τ)
+          = some i := by rw [Expr.eval_agreeOn e₂ hv₂]; exact h₂
+      have hmem : i ∈ ((d.addTerm i).addTerm i).terms := by
+        simp only [FDatabase.mem_addTerm_terms]; exact Or.inr (Or.inr hi)
+      have hcl : (i, i) ∈ ((d.addTerm i).addTerm i).closureF :=
+        FDatabase.mem_closureF_iff.mpr (Cong.assert (Or.inl ⟨rfl, hmem⟩))
+      simp only [patternHolds, he₁, he₂]
+      exact Bool.and_eq_true_iff.mpr ⟨decide_eq_true hcl, decide_eq_true ⟨i, hi, hcl⟩⟩
+  | values vs f as =>
+      obtain ⟨hmg, ts, us, hts, hus, hrow⟩ := h
+      have hva : ∀ v ∈ Expr.varsList as, Env.lookup v (d.env ++ Env.canon _ τ)
+          = Env.lookup v (d.env ++ τ) :=
+        fun v hv => hagree v (by rw [Pattern.vars]; exact List.mem_union_iff.mpr (Or.inr hv))
+      have hvv : ∀ v ∈ Expr.varsList vs, Env.lookup v (d.env ++ Env.canon _ τ)
+          = Env.lookup v (d.env ++ τ) :=
+        fun v hv => hagree v (by rw [Pattern.vars]; exact List.mem_union_iff.mpr (Or.inl hv))
+      refine patternHolds_values_of_mem_rows hmg ?_ ?_ hrow ?_
+      · rw [Expr.evalList_agreeOn as hva]; exact hts
+      · rw [Expr.evalList_agreeOn vs hvv]; exact hus
+      · exact fun c hc => FDatabase.mem_terms_of_mem_valueTerms (hcv _ hrow c hc)
+
+/-- **The forward mirror.** A source query read forward — one `PatternRowRead` per pattern —
+is a substitution the **emitted** query matches at, with the target reading of every source
+variable preserved.
+
+The substitution is the source variables' reading in front of the generated bindings, and it is
+consistent by construction: the generated ones are numbered per block and the source ones are
+not `@`-prefixed, so neither family shadows the other (`atPrefix_freshVar`,
+`FDatabase.NoAtEnv`, `hnoAtVar`).
+
+`hglob` is the one thing the *environment* has to say: `matchQuery` reads `d.env ++ σ`, so a
+source variable a global binds is read off the environment and not off the substitution, and
+the reading has to agree with it there. `lookup_canon_of_mem_freeVars` moves the link onto the
+restricted substitution a rule head runs at. -/
+theorem mem_matchQuery_encodeQuery {sig : Signature} {d : FDatabase} {ρs ρt : Env}
+    (hcv : d.RowColumnsValued) (hnoat : d.NoAtEnv)
+    (hnoAtVar : ∀ b ∈ ρt, ¬ "@".isPrefixOf b.1 = true)
+    (hglob : ∀ (v : Var) (j t : Term), Env.lookup v ρt = some j →
+      Env.lookup v d.env = some t → t = j)
+    (hvt : ∀ (v : Var) (j : Term), Env.lookup v ρt = some j → j ∈ d.valueTerms)
+    {q : Query} (hq : ∀ p ∈ q, PatternRowRead sig d ρs ρt p) (n : Nat) :
+    ∃ τ : Env,
+      Env.canon (Query.freeVars (encodeQuery q n).1 d.env) τ
+        ∈ matchQuery d (encodeQuery q n).1 ∧
+      ∀ (v : Var) (j : Term), Env.lookup v ρt = some j →
+        Env.lookup v (d.env ++ τ) = some j := by
+  obtain ⟨σ, hf, hp⟩ := exists_freshEnv_encodeQuery hcv hq n
+  have hext : ∀ (v : Var) (j : Term), Env.lookup v ρt = some j →
+      Env.lookup v (d.env ++ (ρt ++ σ)) = some j := by
+    intro v j hj
+    cases hd : Env.lookup v d.env with
+    | some t =>
+        obtain rfl : t = j := hglob v j t hj hd
+        exact Env.lookup_append_of_some hd
+    | none =>
+        rw [Env.lookup_append_of_none hd]
+        exact Env.lookup_append_of_some hj
+  have hσρ : ∀ b ∈ σ, Env.lookup b.1 (d.env ++ (ρt ++ σ)) = some b.2 := by
+    intro b hb
+    obtain ⟨k, -, -, hk⟩ := hf.fresh b hb
+    have hde : Env.lookup b.1 d.env = none :=
+      hk ▸ lookup_env_eq_none hnoat (atPrefix_freshVar k)
+    have hρt : Env.lookup b.1 ρt = none :=
+      Env.lookup_eq_none_iff.mpr fun hc => by
+        obtain ⟨t, ht⟩ := Env.mem_dom_iff.mp hc
+        exact hnoAtVar (b.1, t) ht (hk ▸ atPrefix_freshVar k)
+    rw [Env.lookup_append_of_none hde, Env.lookup_append_of_none hρt]
+    exact Env.lookup_of_mem_nodup hb hf.nodup
+  have hatoms := hp (d.env ++ (ρt ++ σ)) hσρ hext
+  refine ⟨ρt ++ σ, mem_matchQuery_of_lookup (fun v hv => ?_) (fun v hv t ht => ?_)
+    (fun a ha => patternHolds_of_encAtom hcv (hatoms a ha)), hext⟩
+  · obtain ⟨a, ha, hva⟩ := Query.mem_freeVars.mp hv
+    obtain ⟨hvars, hnone⟩ := Pattern.mem_vars_of_mem_freeVars hva
+    have := (hatoms a ha).lookup_isSome hvars
+    rwa [Env.lookup_append_of_none hnone] at this
+  · rcases hlk : Env.lookup v ρt with _ | j
+    · rw [Env.lookup_append_of_none hlk] at ht
+      exact hf.valued (v, t) (Env.mem_of_lookup ht)
+    · rw [Env.lookup_append_of_some hlk] at ht
+      exact (Option.some.inj ht) ▸ hvt v j hlk
+
+/-! #### The mirror, run at the instance
+
+At `ncTgt` again, and at the source rule's own query: the source read `x := (B)` and the
+target's reading of it is the id `(A)`, because `mergeResult` keeps `ordering-min` and the
+`@FView` row sits at the leader. `RowRead.eval_src` is the source instance the reading carries
+— `(F (B))`, the term the source's firing built — and `ncTgt_mirror` is the emitted query
+matching at the substitution the mirror produces, which is `ncIdSubst`. -/
+
+/-- The source signature `ncProgram` installs, as far as `Expr.eval` reads it. -/
+def ncSrcSig : Signature := fun f =>
+  if f = "F" then some { arity := 1, outArity := 1, merge := none }
+  else if f = "A" ∨ f = "B" then some { arity := 0, outArity := 1, merge := none }
+  else none
+
+/-- The source rule's own substitution: the class member `(B)`. -/
+def ncSrcSubst : Env := [("x", ncB)]
+
+/-- Its target reading: the leader's id `(A)`, which is where the row is. -/
+def ncTgtSubst : Env := [("x", ncA)]
+
+theorem ncSrcSig_isCtor_F : ncSrcSig.IsCtor "F" := by decide
+
+/-- **The reading, at the source rule's query expression.** -/
+theorem ncTgt_rowRead :
+    RowRead ncSrcSig ncTgt ncSrcSubst ncTgtSubst (.app "F" [.var "x"]) ncFB ncFA :=
+  .app rfl ncSrcSig_isCtor_F (by decide) (.cons (.var rfl rfl) .nil) ncTgt_row_fview
+
+/-- **And the source instance it carries is the term the source's firing built.** -/
+theorem ncTgt_rowRead_src :
+    Expr.eval ncSrcSig (.app "F" [.var "x"]) ncSrcSubst = some ncFB :=
+  ncTgt_rowRead.eval_src
+
+theorem ncTgt_patternRowRead : ∀ p ∈ ncRule.query,
+    PatternRowRead ncSrcSig ncTgt ncSrcSubst ncTgtSubst p := by
+  intro p hp
+  obtain rfl : p = Pattern.expr (.app "F" [.var "x"]) := by simpa [ncRule] using hp
+  exact .expr ncTgt_rowRead
+
+theorem ncEncRule_query_eq : (encodeQuery ncRule.query 0).1 = ncEncRule.query := rfl
+
+theorem ncTgt_noAtEnv : ncTgt.NoAtEnv := by
+  intro b hb; rw [ncTgt_env] at hb; cases hb
+
+theorem ncTgtSubst_noAt : ∀ b ∈ ncTgtSubst, ¬ "@".isPrefixOf b.1 = true := by
+  intro b hb
+  obtain rfl : b = ("x", ncA) := by simpa [ncTgtSubst] using hb
+  exact (by decide +kernel : ¬ "@".isPrefixOf "x" = true)
+
+theorem ncTgtSubst_glob : ∀ (v : Var) (j t : Term), Env.lookup v ncTgtSubst = some j →
+    Env.lookup v ncTgt.env = some t → t = j := by
+  intro v j t _ ht
+  rw [ncTgt_env] at ht
+  exact absurd ht (by simp [Env.lookup])
+
+theorem ncTgtSubst_valued : ∀ (v : Var) (j : Term), Env.lookup v ncTgtSubst = some j →
+    j ∈ ncTgt.valueTerms := by
+  intro v j hj
+  rw [ncTgtSubst, Env.lookup] at hj
+  split at hj
+  · obtain rfl : ncA = j := Option.some.inj hj
+    decide
+  · exact absurd hj (by simp [Env.lookup])
+
+/-- **The mirror at the instance, non-vacuously**: the encoded query matches at a substitution
+that binds the source rule's variable to the id its reading gave, and it is the one
+`ncTgt_mem_matchQuery` exhibits by hand. -/
+theorem ncTgt_mirror :
+    ∃ τ : Env, Env.canon (Query.freeVars ncEncRule.query ncTgt.env) τ
+        ∈ matchQuery ncTgt ncEncRule.query ∧
+      Env.lookup "x" (ncTgt.env ++ τ) = some ncA := by
+  obtain ⟨τ, hm, hx⟩ := mem_matchQuery_encodeQuery (sig := ncSrcSig) (ρs := ncSrcSubst)
+    ncTgt_rowColumnsValued ncTgt_noAtEnv ncTgtSubst_noAt ncTgtSubst_glob ncTgtSubst_valued
+    ncTgt_patternRowRead 0
+  exact ⟨τ, ncEncRule_query_eq ▸ hm, hx "x" ncA rfl⟩
+
 /-- **The command induction's rule-firing case. Not proved.**
 
 Its statement, its five closed siblings and the refutation that fixed its hypotheses are in
@@ -7828,12 +8549,38 @@ non-vacuity check. What `UnionsFire` takes is therefore the two *derived* clause
 at `td` and the read-back at `td'`, both of which the witness state really satisfies
 (`rbState2_exists_rowRepr`, `rbState2_viewRepr_of_rowRepr`) and at positive arity.
 
-**What is left is the firing.** The route is the one worked at `ncTgt`: rows → `patternHolds` →
-`mem_matchQuery_of_rows` → the block evaluates → the head's writes read back, with `union`
-giving the `@UF` edge and `build`/`set` the id. What it needs and this file does not yet have is
-the *forward* half of `Encoding/Match.lean` — a source `ValidQuerySubst` turned into a match of
-the emitted query, over `encodeQuery`'s flattening and its fresh-variable supply. `ncIdSubst`
-is that substitution at one instance; the general construction is not written.
+**The forward query mirror is written.** `mem_matchQuery_encodeQuery` turns a source reading of
+a query — one `PatternRowRead` per pattern — into a substitution the *emitted* query matches at,
+over both features of `encodeQuery`. The **flattening**: `RowRead` carries an id per subterm
+position through live rows, so the reading binds the generated variables as well as the
+source's. The **fresh-variable supply**: `FreshEnv` numbers a block's generated bindings inside
+its own stretch of the counter, so two blocks' domains are disjoint (`freshVar_inj`) and their
+concatenation binds each of them; non-collision with the source's own variables is the `@`
+prefix (`atPrefix_freshVar` against `FDatabase.NoAtEnv`), which is why the source bindings can
+sit in front of the generated ones and neither shadow the other. `ncTgt_mirror` runs it at the
+instance, and lands on the substitution `ncTgt_mem_matchQuery` exhibits by hand.
+
+**What is left is the reading, and it is not derivable from what this residue is handed.** The
+mirror's input is a `PatternRowRead`, and three things it wants are things `UnionsFire`'s
+clauses do not say.
+
+* **One id per source term.** `∀ t ∈ sd.terms, ∃ r, RowRepr td t r` chooses an id per term and
+  not a *function* of it, so a variable read at two atoms may be read at two ids. It is a
+  function at the state the block runs at, by `FDatabase.ViewRowUnique` (`execM_viewRowUnique`).
+* **One id per congruence class.** The emitted `.eq` atom compares ids, and at a target that
+  asserts nothing (`execM_encode_eqsRefl`) that comparison is *equality* — so two **congruent**
+  source terms have to read to one id. `Database.UnionsJoined` gives an `@UF` edge between the
+  two ids and not their equality; what closes the gap is `Database.ViewLeader`, which is not
+  among the hypotheses.
+* **The pattern instance, not only a source term.** `Matches` relates a pattern's instance to a
+  witness in `src.withOperands`, so the instance need not be in `sd.terms` at all — this side's
+  `CongUp`, and what the clause above would discharge it from.
+
+All three hold at the state the encoded block runs at, because a writing block ends with
+`Cmd.saturate rebuildRuleset`; none of them follows from what `UnionsFire` takes. So the next
+step is a further *derived* clause in the shape `RowMech` already has — threaded through
+`unionsInv_step` and discharged from `EncStep` — and not a provenance hypothesis, which would
+empty `unionsJoined_fire_satisfiable`.
 
 **A valid substitution is still not a firing.** `RuleResults` is a substitution *and* a block
 that evaluates, which is the falsity `mem_terms_of_ruleFired`/`mem_eqs_of_ruleFired` already

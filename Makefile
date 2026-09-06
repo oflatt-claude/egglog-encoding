@@ -138,9 +138,18 @@ nightly-local: nightly-uv nightly-rustup
 # reading through live rows, `encStep_exists_rowRepr` turns the induction's `ViewRepr` into one
 # at the pointwise `@UF` row root, and `encStep_rowMech` discharges the two row clauses
 # `UnionsFire` takes — at the state the *next* encoded block runs at (`EncReached`, `EncStep`),
-# which is where `execM_rebuildClosed` could not be asked. What is still open is the firing
-# itself: the forward half of `Encoding/Match.lean`, a source `ValidQuerySubst` turned into a
-# match of the emitted query. The run-wide index argument it used to sit beside is closed:
+# which is where `execM_rebuildClosed` could not be asked. The forward half of
+# `Encoding/Match.lean` is now written too: `mem_matchQuery_encodeQuery` turns a source reading
+# of a query into a substitution the *emitted* query matches at, over `encodeQuery`'s flattening
+# (`RowRead`, an id per subterm position through live rows) and its fresh-variable supply
+# (`FreshEnv` plus `freshVar_inj` and the `@` prefix), with `ncTgt_mirror` running it at the
+# instance. What is still open is the *reading* it consumes: `UnionsFire`'s clauses choose an id
+# per source term rather than a function of it, say nothing that makes two **congruent** source
+# terms read to one id — which is what the emitted `.eq` atom compares, since an encoded target
+# asserts nothing — and cover a source term rather than a pattern instance. All three hold at
+# the state an encoded block runs at and none is among the hypotheses, so what is wanted next is
+# a further derived clause in `RowMech`'s shape. The run-wide index argument it used to sit
+# beside is closed:
 # `execM_rebuildClosed` is `Database.ViewJoined` per mechanism (the e-class rule, the column
 # rules, the `@UF` edge a collision writes), proved outright — its four `Signature.IsCtor`
 # carries off `encodePrelude`'s own proof vocabulary (`encodeSig_isCtor_symName` and
