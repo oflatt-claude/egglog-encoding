@@ -132,10 +132,13 @@ nightly-local: nightly-uv nightly-rustup
 # clause is now *derived*: the tuple it answers with is always the union-find leader's, so
 # `Database.ViewsCover.of_viewLeaderRows` gets it from a row-transport clause plus totality, with
 # `ncTgt_viewsCover` running that reduction at the very state the product form fails at. What is
-# left: `execM_viewLeaderRows` is the whole run-wide index argument (the rebuild's e-class rule,
-# its column rules, and path compression), and `unionsJoined_fire` is a target firing behind a
-# source firing — the one command case the read-back does not reach, and it carries both of the
-# induction's data clauses. Both are the **forward** half's.
+# left: `unionsJoined_fire` is a target firing behind a source firing — the one command case the
+# read-back does not reach, and it carries both of the induction's data clauses. It is the
+# **forward** half's. The run-wide index argument it used to sit beside is closed:
+# `execM_rebuildClosed` is `Database.ViewJoined` per mechanism (the e-class rule, the column
+# rules, the `@UF` edge a collision writes), proved outright — its four `Signature.IsCtor`
+# carries off `encodePrelude`'s own proof vocabulary (`encodeSig_isCtor_symName` and
+# companions) and its literal clause off the completeness half (`execM_ufLitsIsolated`).
 #
 # **The completeness half is closed.** `execM_soundTerms` is proved and so is
 # `encode_corresponds_complete`, the half `encode_corresponds` states over the source's own
@@ -150,7 +153,7 @@ nightly-local: nightly-uv nightly-rustup
 # rule-head match correspondence of `Encoding/Match.lean` is proved outright, encoder read-back
 # included, and so is the rule-head build case it feeds (`entrySound_headBuild`). Everywhere
 # outside `Encoding/` a `sorry` is a regression, and a new one inside it changes the count.
-LEAN_OPEN_SORRIES = 2
+LEAN_OPEN_SORRIES = 1
 LEAN_OPEN_SORRY_DIR = semantics/EgglogSemantics/Encoding
 
 lean-check:

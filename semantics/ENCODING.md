@@ -12,21 +12,26 @@ are jointly satisfiable at a state where both sides of the `iff` are non-trivial
 (`encode_corresponds_witness`). `difftest correspond 64` sweeps exactly that relation over
 the corpus and reports 70 of 70 agreeing, 0 LOST, 0 INVENTED, 0 `link-diff`. **One half of the
 `iff` is proved outright** — `encode_corresponds_complete`, no `sorryAx` — and the theorem
-carries `sorry` only through the *forward* half, in two named properties of the state the run
-reached; they are two *mechanisms* rather than two clauses, because the clauses are derived
-from one another.
+carries `sorry` only through the *forward* half, in one named property of the state the run
+reached; it is one *mechanism* rather than a clause, because the clauses are derived from one
+another.
 The **action read-back** is proved (`holdsBuild_of_execProgramM`,
 `viewRepr_self_of_execProgramM`) and so is the **induction over `encode P`'s commands** built
 on it (`UnionsInv`, `unionsInv_execM`), which closes `execM_unionsJoined` and supplies the
-totality `Database.ViewsCover` is derived from. Of the two left, one is that induction's own
-open case (`unionsJoined_fire`: a source command that fires rules needs a target firing behind
-the source's, and one step below that the premise row must be current in the *index*, not merely
-an entry term; the version of it that stated the invariant's clauses at the run's **final** state
+totality `Database.ViewsCover` is derived from. The one left is that induction's own open case
+(`unionsJoined_fire`: a source command that fires rules needs a target firing behind the
+source's, and one step below that the premise row must be current in the *index*, not merely an
+entry term; the version of it that stated the invariant's clauses at the run's **final** state
 is refuted — `unionsFireClaim_false` — so `UnionsInv` now carries every clause at the state the
-next encoded block runs at, the encoded ruleset included, and a containment forward) and one is the run-wide index argument itself (`execM_viewJoined`: the
-rebuild's e-class rule and its column rules — path compression dropped out when the clause was
-cut down to what its consumers spend, `Database.ViewLeaderRows.toViewJoined` being the check
-that the cut is a weakening and `chainD_not_viewLeader` that it is a strict one).
+next encoded block runs at, the encoded ruleset included, and a containment forward). The
+run-wide index argument it used to sit beside is **closed**: `execM_rebuildClosed` is
+`Database.ViewJoined` restated per mechanism — the rebuild's e-class rule, its column rules and
+the `@UF` edge a view collision writes — proved outright, with `Database.RebuildClosed.toViewJoined`
+the reduction, `Database.ViewLeaderRows.toViewJoined` the check that the cut to what the consumers
+spend is a weakening and `chainD_not_viewLeader` that it is a strict one. Its four
+`Signature.IsCtor` carries come off `encodePrelude`'s own proof vocabulary at an arbitrary
+program (`encodeSig_isCtor_symName` and companions) and its literal clause off the completeness
+half (`execM_ufLitsIsolated`, out of `FDatabase.SoundTerms` and `Cong.eq_of_isLit`).
 
 **The completeness half is closed.** `Encoding/Complete.lean`'s `execM_soundTerms` — every term
 the run adds, justified against the source — is proved, and `encode_corresponds_complete` with

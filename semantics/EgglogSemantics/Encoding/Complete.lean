@@ -8120,9 +8120,238 @@ theorem execM_rebuildClosed_of_ufLitRoots_witness {tgt : FDatabase}
 the state-level reductions and the refutations stay upstream, which is why
 `Encoding/Correspond.lean` is still all `DiffTest.lean` imports. -/
 
+/-! ### The proof vocabulary is declared, at every program
+
+`Database.Absorbs` and the rebuild firings are all keyed on `Signature.IsCtor` at the four
+proof heads the maintenance rules apply, and `execM_rebuildClosed` cannot take those as
+hypotheses because `encode_corresponds` does not. It does not have to: the signature is
+`encodeSig P`, which `execM (encode P) = some tgt` pins, and `encodePrelude`'s `proofDecls`
+declares all four.
+
+**Shadowing is not an obstacle, because `Signature.IsCtor` reads only the `merge` field.**
+`encodeSig` folds over the prelude alone (`encodeCmds` emits no declaration), and of the
+prelude's declarations only `@UF` and each source constructor's view and term table carry a
+`:merge`. A later `proofDecl` or `skolemDecl` at a proof head's name would change its arity
+and leave it a constructor, so what has to be excluded is exactly `ufName`, `viewName f` and
+`termName f` — three name separations, and no clause of `Program.EncodeDomain` is spent. -/
+
+/-- **A term relation is never a fixed proof head**, by the last two characters — the
+counterpart of `viewName_ne_symName` and its companions. -/
+theorem termName_ne_symName {f : FnName} : termName f ≠ symName := by
+  intro h
+  have h2 := congrArg (fun s => (String.toList s).reverse) h
+  simp [termName, symName, String.toList_append, List.reverse_append] at h2
+
+@[inherit_doc termName_ne_symName]
+theorem termName_ne_transName {f : FnName} : termName f ≠ transName := by
+  intro h
+  have h2 := congrArg (fun s => (String.toList s).reverse) h
+  simp [termName, transName, String.toList_append, List.reverse_append] at h2
+
+@[inherit_doc termName_ne_symName]
+theorem termName_ne_fiatName {f : FnName} : termName f ≠ fiatName := by
+  intro h
+  have h2 := congrArg (fun s => (String.toList s).reverse) h
+  simp [termName, fiatName, String.toList_append, List.reverse_append] at h2
+
+/-- **A term relation is never a congruence head**, whatever the arity: `"@Term"` carries an
+`'m'`, `"@Congr_"` does not, and `Nat.isDigit_of_mem_toDigits` says the arity suffix does not
+either. Mirrors `viewName_ne_congrName`. -/
+theorem termName_ne_congrName {f : FnName} {k : Nat} : termName f ≠ congrName k := by
+  intro h
+  have hw : 'm' ∈ (termName f).toList := by
+    rw [termName, String.toList_append]
+    exact List.mem_append_right _ (by decide)
+  rw [h, congrName, String.toList_append] at hw
+  rcases List.mem_append.mp hw with h1 | h1
+  · exact absurd h1 (by decide)
+  · have hd := Nat.isDigit_of_mem_toDigits (b := 10) (by decide) (by decide)
+      (show 'm' ∈ Nat.toDigits 10 k by rw [Nat.toString_eq_repr, Nat.toList_repr] at h1; exact h1)
+    simp at hd
+
+/-- **A fold over declarations answers `Signature.IsCtor`** as soon as the list declares the
+name and no declaration of it carries a `:merge`: shadowing by a further constructor
+declaration only changes the arity, which `Signature.IsCtor` does not read. -/
+theorem isCtor_foldl_sigBind {n : FnName} : ∀ {p : Program},
+    (∀ dc : FnDecl, Cmd.decl n dc ∈ p → dc.merge = none) →
+    ∀ {sig : Signature}, (sig.IsCtor n ∨ ∃ dc, Cmd.decl n dc ∈ p) →
+      (p.foldl (fun s c => c.sigBind s) sig).IsCtor n := by
+  intro p
+  induction p with
+  | nil =>
+    intro _ sig h
+    exact h.resolve_right (by rintro ⟨dc, hdc⟩; exact absurd hdc (by simp))
+  | cons c cs ih =>
+    intro hp sig h
+    refine ih (fun dc hdc => hp dc (List.mem_cons_of_mem c hdc)) ?_
+    have hhere : ∀ dc, c = Cmd.decl n dc → (c.sigBind sig).IsCtor n := by
+      rintro dc rfl
+      exact ⟨dc, by simp [Cmd.sigBind], hp dc List.mem_cons_self⟩
+    by_cases hcs : ∃ dc, Cmd.decl n dc ∈ cs
+    · exact Or.inr hcs
+    · refine Or.inl ?_
+      rcases h with h | ⟨dc, hdc⟩
+      · cases c with
+        | decl f dc =>
+          by_cases hf : f = n
+          · exact hhere dc (by rw [hf])
+          · obtain ⟨d, hd, hm⟩ := h
+            refine ⟨d, ?_, hm⟩
+            change Function.update sig f (some dc) n = some d
+            rw [Function.update_of_ne (fun hc => hf hc.symm)]
+            exact hd
+        | _ => exact h
+      · rcases List.mem_cons.mp hdc with rfl | hm
+        · exact hhere dc rfl
+        · exact absurd ⟨dc, hm⟩ hcs
+
+/-- Every rule's justification head is declared as a `proofDecl`. -/
+theorem merge_none_of_mem_ruleProofDecls : ∀ (rs : List Rule) (i : Nat) (g : FnName)
+    (dc : FnDecl), Cmd.decl g dc ∈ ruleProofDecls rs i → dc.merge = none := by
+  intro rs
+  induction rs with
+  | nil => intro i g dc h; exact absurd h (by simp [ruleProofDecls])
+  | cons r rs ih =>
+    intro i g dc h
+    rw [ruleProofDecls, List.mem_cons] at h
+    rcases h with h | h
+    · injection h with _ h2; subst h2; rfl
+    · exact ih (i + 1) g dc h
+
+@[inherit_doc merge_none_of_mem_ruleProofDecls]
+theorem merge_none_of_mem_proofDecls {P : Program} {g : FnName} {dc : FnDecl}
+    (h : Cmd.decl g dc ∈ proofDecls P) : dc.merge = none := by
+  rw [proofDecls, List.mem_append, List.mem_append] at h
+  rcases h with (h | h) | h
+  · rcases List.mem_cons.mp h with h' | h'
+    · injection h' with _ h2; subst h2; rfl
+    rcases List.mem_cons.mp h' with h'' | h''
+    · injection h'' with _ h2; subst h2; rfl
+    rcases List.mem_cons.mp h'' with h''' | h'''
+    · injection h''' with _ h2; subst h2; rfl
+    · exact absurd h''' (by simp)
+  · obtain ⟨k, -, hk⟩ := List.mem_map.mp h
+    injection hk with _ h2; subst h2; rfl
+  · exact merge_none_of_mem_ruleProofDecls _ _ _ _ h
+
+/-- **The prelude's only `:merge`-carrying declarations are `@UF` and the two tables.** -/
+theorem merge_none_of_mem_encodePrelude {P : Program} {n : FnName} {dc : FnDecl}
+    (huf : n ≠ ufName) (hv : ∀ f, n ≠ viewName f) (ht : ∀ f, n ≠ termName f)
+    (h : Cmd.decl n dc ∈ encodePrelude P) : dc.merge = none := by
+  rw [encodePrelude] at h
+  rcases List.mem_append.mp h with h₁ | h₁
+  · rcases List.mem_append.mp h₁ with h₂ | h₂
+    · exact merge_none_of_mem_proofDecls h₂
+    · rcases List.mem_cons.mp h₂ with h₃ | h₃
+      · injection h₃ with h₄ _; exact absurd h₄ huf
+      · obtain ⟨fk, -, h₅⟩ := List.mem_flatMap.mp h₃
+        have h₆ : Cmd.decl n dc = Cmd.decl fk.1 (skolemDecl fk.2) ∨
+            Cmd.decl n dc = Cmd.decl (viewName fk.1) (viewDecl fk.2) ∨
+            Cmd.decl n dc = Cmd.decl (termName fk.1) (termDecl fk.2) := by simpa using h₅
+        rcases h₆ with h₇ | h₇ | h₇
+        · injection h₇ with _ h₈; subst h₈; rfl
+        · injection h₇ with h₈ _; exact absurd h₈ (hv fk.1)
+        · injection h₇ with h₈ _; exact absurd h₈ (ht fk.1)
+  · obtain ⟨r, -, hr⟩ := List.mem_map.mp h₁
+    exact absurd hr.symm (by simp)
+
+theorem mem_encodePrelude_of_mem_proofDecls {P : Program} {c : Cmd}
+    (h : c ∈ proofDecls P) : c ∈ encodePrelude P := by
+  rw [encodePrelude]
+  exact List.mem_append_left _ (List.mem_append_left _ h)
+
+/-- **A proof head the vocabulary declares is a constructor of `encodeSig P`**, provided it is
+neither `@UF` nor a table name. -/
+theorem encodeSig_isCtor_of_mem_proofDecls {P : Program} {n : FnName} {dc : FnDecl}
+    (hmem : Cmd.decl n dc ∈ proofDecls P)
+    (huf : n ≠ ufName) (hv : ∀ f, n ≠ viewName f) (ht : ∀ f, n ≠ termName f) :
+    (encodeSig P).IsCtor n := by
+  rw [encodeSig]
+  exact isCtor_foldl_sigBind (fun dc' hdc' => merge_none_of_mem_encodePrelude huf hv ht hdc')
+    (Or.inr ⟨dc, mem_encodePrelude_of_mem_proofDecls hmem⟩)
+
+/-- Each fixed proof head, and each congruence head at a declared arity, is in the
+vocabulary. -/
+theorem mem_proofDecls_fiatName {P : Program} :
+    Cmd.decl fiatName (proofDecl 0) ∈ proofDecls P := by
+  rw [proofDecls]
+  exact List.mem_append_left _ (List.mem_append_left _ (by simp))
+
+@[inherit_doc mem_proofDecls_fiatName]
+theorem mem_proofDecls_symName {P : Program} :
+    Cmd.decl symName (proofDecl 1) ∈ proofDecls P := by
+  rw [proofDecls]
+  exact List.mem_append_left _ (List.mem_append_left _ (by simp))
+
+@[inherit_doc mem_proofDecls_fiatName]
+theorem mem_proofDecls_transName {P : Program} :
+    Cmd.decl transName (proofDecl 2) ∈ proofDecls P := by
+  rw [proofDecls]
+  exact List.mem_append_left _ (List.mem_append_left _ (by simp))
+
+@[inherit_doc mem_proofDecls_fiatName]
+theorem mem_proofDecls_congrName {P : Program} {k : Nat} (hk : k ∈ congrArities P) :
+    Cmd.decl (congrName k) (proofDecl k) ∈ proofDecls P := by
+  rw [proofDecls]
+  exact List.mem_append_left _ (List.mem_append_right _ (List.mem_map_of_mem hk))
+
+/-- `congrArities` carries every positive arity of `Program.ctors`. -/
+theorem mem_congrArities_of_mem_ctors {P : Program} {g : FnName} {k : Nat}
+    (h : (g, k) ∈ P.ctors) (hk : k ≠ 0) : k ∈ congrArities P := by
+  rw [congrArities, List.mem_filter]
+  exact ⟨List.mem_dedup.mpr (List.mem_map.mpr ⟨(g, k), h, rfl⟩), by simpa using hk⟩
+
+/-- **`@Sym` is a constructor of `encodeSig P`, at every program.** -/
+theorem encodeSig_isCtor_symName (P : Program) : (encodeSig P).IsCtor symName :=
+  encodeSig_isCtor_of_mem_proofDecls mem_proofDecls_symName (by decide)
+    (fun _ h => viewName_ne_symName h.symm) (fun _ h => termName_ne_symName h.symm)
+
+@[inherit_doc encodeSig_isCtor_symName]
+theorem encodeSig_isCtor_transName (P : Program) : (encodeSig P).IsCtor transName :=
+  encodeSig_isCtor_of_mem_proofDecls mem_proofDecls_transName (by decide)
+    (fun _ h => viewName_ne_transName h.symm) (fun _ h => termName_ne_transName h.symm)
+
+@[inherit_doc encodeSig_isCtor_symName]
+theorem encodeSig_isCtor_fiatName (P : Program) : (encodeSig P).IsCtor fiatName :=
+  encodeSig_isCtor_of_mem_proofDecls mem_proofDecls_fiatName (by decide)
+    (fun _ h => viewName_ne_fiatName h.symm) (fun _ h => termName_ne_fiatName h.symm)
+
+/-- **And `@Congr_k` is one at each positive arity a source constructor has** — which is
+exactly the set `congrArities` declares. -/
+theorem encodeSig_isCtor_congrName {P : Program} {g : FnName} {k : Nat}
+    (h : (g, k) ∈ P.ctors) (hk : k ≠ 0) : (encodeSig P).IsCtor (congrName k) :=
+  encodeSig_isCtor_of_mem_proofDecls (mem_proofDecls_congrName (mem_congrArities_of_mem_ctors h hk))
+    (fun hc => ufName_ne_congrName hc.symm)
+    (fun _ h' => viewName_ne_congrName h'.symm) (fun _ h' => termName_ne_congrName h'.symm)
+
+/-! ### The literal clause, out of the completeness half
+
+`FDatabase.SoundTerms`' second clause answers an `@UF` entry term with a source congruence,
+and `Database.WF.litsIsolated` makes a literal's class a singleton there
+(`Cong.eq_of_isLit`). So the run-wide invariant the entry-valued clause was estimated to cost
+is already paid, by `execM_soundTerms` and the source run together, at all four writers at
+once: `mergeBody` and `pathCompressRule` write only what the source justifies. -/
+
+/-- **No `@UF` entry of the target is keyed on a literal it does not equal.** -/
+theorem execM_ufLitsIsolated {P : Program} {src : Database} {tgt : FDatabase}
+    (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
+    (htgt : execM (encode P) = some tgt) : tgt.UFLitsIsolated := by
+  intro l b pf hmem
+  exact (((execM_soundTerms hdom hsrc htgt).2 _ _ _ hmem).eq_of_isLit
+    (hsrc.wf Database.WF.empty).litsIsolated (Or.inl rfl)).symm
+
+/-- **A literal is its own `@UF` row root**, which is what `Database.Absorbs` asks at a
+literal reader. -/
+theorem execM_ufLitRoots {P : Program} {src : Database} {tgt : FDatabase}
+    (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
+    (htgt : execM (encode P) = some tgt) (l : Lit) : tgt.UFRowRoot (Term.lit l) :=
+  (execM_ufLitsIsolated hdom hsrc htgt).ufRowRoot (execM_encode_eqsRefl htgt)
+    (execM_encode_encBase hdom hdom.aritiesAgree' htgt).inv.index
+    (by rw [(execM_encode_encBase hdom hdom.aritiesAgree' htgt).sig]
+        exact encodeSig_mergeOf_ufName hdom) l
+
 /-- **The residue of obligation `trans`, of the rebuild half of obligation `assert`'s `union`
-case, and of the *key* half of obligation `congr`, at the rules it is waiting on. Not
-proved.**
+case, and of the *key* half of obligation `congr`, at the rules it fires.**
 
 `Database.RebuildClosed` is `Database.ViewJoined` restated per *mechanism* instead of per
 consumer — `eclass` the e-class rebuild rule, `column` the column rules, `edged` the `@UF`
@@ -8390,13 +8619,16 @@ run-wide merge-fixpoint carry, `FDatabase.row_unique_of_settled` pushed across t
 run no rebuild — identifying the rows there. `execM_rebuildClosed_of_ufLitRoots` is all three
 clauses assembled.
 
-**What is left is one hypothesis and the four carries.** The hypothesis is the *literal reader*:
-`ViewRepr d (.lit l) a` forces `a = .lit l` with no premise at all, so `Database.Absorbs` asks
-that a literal be its own root — `∀ l, tgt.UFRowRoot (.lit l)`, which is the literal clause read
-at the **rows** rather than the full run-wide entry-valued invariant, and which
-`FDatabase.UFLitsIsolated.ufRowRoot` produces from that invariant. The carries are
-`Signature.IsCtor` at `@Sym`, `@Trans`, `@Fiat` and `congrName k`, which every rebuild-firing
-lemma in this file takes and which this statement cannot, since `encode_corresponds` does not.
+**And its last hypothesis and its four carries are discharged, so nothing is left.** The
+hypothesis is the *literal reader*: `ViewRepr d (.lit l) a` forces `a = .lit l` with no premise
+at all, so `Database.Absorbs` asks that a literal be its own root, and `execM_ufLitRoots` is it
+— the entry-valued clause outright, not the rows-only weakening, since `FDatabase.SoundTerms`
+answers an `@UF` entry term with a source congruence and `Cong.eq_of_isLit` makes a literal's
+class a singleton there. That covers all four writers at once, `mergeBody` at both its tables
+and `pathCompressRule` included, and it is why no run-wide two-clause invariant was needed. The
+carries are `Signature.IsCtor` at `@Sym`, `@Trans`, `@Fiat` and `congrName k`, which
+`encode_corresponds` does not take and does not have to: `encodeSig_isCtor_symName` and its
+three companions read them off `encodePrelude`'s own vocabulary at an arbitrary program.
 
 **Non-vacuous, and still failing where it must**: `satTarget_rebuildClosed` is the degenerate
 state, `Encoding/Match.lean`'s `uRebuilt_rebuildClosed` the one with a real `@UF` edge — where
@@ -8410,8 +8642,11 @@ unrooted instance, which is the clause set before the restatement.
 `cxStale_not_rebuildClosedStrong` is where the two forms come apart. -/
 theorem execM_rebuildClosed {P : Program} {src : Database} {tgt : FDatabase}
     (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
-    (htgt : execM (encode P) = some tgt) : tgt.toDatabase.RebuildClosed tgt.UFRowRoot := by
-  sorry
+    (htgt : execM (encode P) = some tgt) : tgt.toDatabase.RebuildClosed tgt.UFRowRoot :=
+  execM_rebuildClosed_of_ufLitRoots hdom hsrc (encodeSig_isCtor_symName P)
+    (encodeSig_isCtor_transName P) (encodeSig_isCtor_fiatName P)
+    (fun _ _ hgk hk => encodeSig_isCtor_congrName hgk hk) htgt
+    (execM_ufLitRoots hdom hsrc htgt)
 
 /-- **The residue of obligation `trans`, of the rebuild half of obligation `assert`'s `union`
 case, and of the *key* half of obligation `congr`**, through
